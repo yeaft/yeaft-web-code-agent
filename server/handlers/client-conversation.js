@@ -1612,12 +1612,18 @@ export async function handleClientConversation(clientId, client, msg, checkAgent
       try {
         if (!client.userId) throw new Error('User identity is required');
         let result = null;
-        if (op === 'create') result = yeaftProjectDb.create(client.userId, msg.name);
+        if (op === 'create') result = yeaftProjectDb.create(client.userId, msg.name, msg.parentId ?? null);
         else if (op === 'rename') result = yeaftProjectDb.rename(client.userId, msg.projectId, msg.name);
         else if (op === 'update_instruction') {
           result = yeaftProjectDb.updateInstruction(client.userId, msg.projectId, msg.instruction);
         } else if (op === 'delete') result = yeaftProjectDb.delete(client.userId, msg.projectId);
         else if (op === 'reorder') result = yeaftProjectDb.reorder(client.userId, msg.projectIds);
+        else if (op === 'move_project') {
+          result = yeaftProjectDb.move(client.userId, msg.projectId, {
+            parentId: msg.parentId ?? null,
+            beforeProjectId: msg.beforeProjectId ?? null,
+          });
+        }
         else if (op === 'move_session') {
           const agentId = msg.targetAgentId || msg.agentId;
           const sessionId = typeof msg.sessionId === 'string' ? msg.sessionId.trim() : '';

@@ -17,7 +17,7 @@ Session metadata 和 history 位于所属 Agent 的 Yeaft 目录。`workDir` 是
 
 ## 侧栏显示偏好
 
-Project 文件夹及“项目／最近”分区的展开、收起状态按用户保存在 Server，与快捷入口布局和分区高度比例一起跨客户端复用。刷新、重新登录、窗口重新获得焦点或页面恢复可见时读取最新偏好；不会实时推送到其他窗口。不同文件夹分别保存，重命名不会重置状态，其他客户端修改不同文件夹不会互相覆盖。保存失败会显示提示并恢复已确认的状态，不会假装已经同步。
+文件夹（包括子文件夹）的展开、收起状态按用户保存在 Server，与快捷入口布局一起跨客户端复用。刷新、重新登录、窗口重新获得焦点或页面恢复可见时读取最新偏好；不会实时推送到其他窗口。不同文件夹分别保存，重命名不会重置状态，其他客户端修改不同文件夹不会互相覆盖。保存失败会显示提示并恢复已确认的状态，不会假装已经同步。
 
 旧浏览器本地保存的分区状态不作为用户级偏好的来源；首次使用默认展开，之后以 Server 中保存的状态为准。
 
@@ -149,16 +149,19 @@ VP 调用 `AskUser` 时会出现交互卡片。切换 Session 后返回，只要
 - 15 秒仍未收到确认时，可以检查连接并使用“重发回答”；重发沿用原问题身份，不会重复完成同一个提问。
 - Agent 暂不可用时显示可重试提示；问题已过期、执行已取消或 Agent 重启后等待请求已丢失时，需要让 VP 重新提问。重发不会复活已经结束的 turn。
 
-## 用 Project 组织 Session
+## 用文件夹组织 Session
 
-Project 是统一侧栏中面向用户的分组。你可以：
+文件夹（Project）像文件树一样在统一侧栏中组织 Session。你可以：
 
-- 创建、重命名与删除 Project；
-- 在 Project 与 **Recents** 之间拖动原生 Yeaft Session；
+- 用「新建文件夹」创建文件夹，或在文件夹菜单里新建子文件夹，最多嵌套五层；
+- 重命名、移动（拖拽，或文件夹菜单里的「移动到」）与删除文件夹；文件夹不能移进自己或自己的子文件夹；
+- 把原生 Yeaft Session 拖进文件夹，或拖到列表最下方移回顶层；
 - 在不丢失 cross-Agent identity 的前提下重排 Session；
-- 为 Project 设置一条 Project instruction。
+- 为每个文件夹设置一条指令。
 
-Project 不会合并 Session transcript 或 storage。对于运行在某个 Agent 上的 Session，Yeaft 可以把同一 Agent 的兄弟 Session ID 加入 scoped recall，并注入保留来源 Session identity 的只读 summary。其他 Agent 上的 Session 仍会显示在 browser catalog，但当前 runtime 不会把它们当成本机 memory scope。
+文件夹指令作用于这个文件夹及其所有子文件夹中的 Session。路径上有多个文件夹设置了指令时，Session 会按从外到内的顺序收到全部指令，并标出各自的文件夹路径；Agent 看到的 Project 名称就是文件夹路径（例如 `Sydney / Parental Control`）。删除文件夹会一并删除其子文件夹，但不会删除 Session：其中的 Session 都移到被删文件夹的上一级，没有上一级时回到顶层。
+
+文件夹不会合并 Session transcript 或 storage。对于运行在某个 Agent 上的 Session，Yeaft 可以把同一 Agent 的兄弟 Session ID 加入 scoped recall，并注入保留来源 Session identity 的只读 summary；同一顶层文件夹下（含所有子文件夹）的 Session 都算兄弟，因此把 Session 移进子文件夹不会缩小这个范围。其他 Agent 上的 Session 仍会显示在 browser catalog，但当前 runtime 不会把它们当成本机 memory scope。
 
 ## Memory 边界
 

@@ -70,7 +70,7 @@ Dream/H2-AMS is retired from the active runtime. Native turns use a bounded wind
 
 Beyond the native engine, the Web application provides:
 
-- a unified, Agent-aware Session catalog with Project and Recents sections;
+- a unified, Agent-aware Session catalog organized as a folder tree (nestable Project folders, then top-level Sessions);
 - terminal, Git status/diff, file browser/editor, and port proxy;
 - up to three side-by-side Claude Code/Copilot conversation panes;
 - an Expert Panel for Claude Code conversations;

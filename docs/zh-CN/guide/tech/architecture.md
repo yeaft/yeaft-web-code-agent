@@ -129,7 +129,7 @@ docs/                       中英文 VitePress 文档
 
 ## Project 与 memory flow
 
-Server catalog 给 Browser 一个 Agent-aware 的原生/CLI conversation 视图。Project membership 会同步给 Agent。Project instruction 可提供给成员 Session；兄弟 Session transcript 和旧 memory summary 不会自动召回或注入。
+Server catalog 给 Browser 一个 Agent-aware 的原生/CLI conversation 视图。Project membership 会同步给 Agent。Project 可以作为侧栏文件夹嵌套；Server 下发给 Agent 的 Project 名称是文件夹路径，instruction 是路径上从外到内的全部 instruction。Project instruction 可提供给成员 Session；兄弟 Session transcript 和旧 memory summary 不会自动召回或注入。
 
 这不是 transcript merging。User、VP、Session、Project-related Session、WorkItem 与 legacy compatibility scope 都保留明确所有权和 ACL rule。
 

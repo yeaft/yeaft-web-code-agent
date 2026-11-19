@@ -1,7 +1,7 @@
 import SidebarDigitalPerson from './SidebarDigitalPerson.js';
-import { confirmDialog, promptDialog } from '../utils/dialog.js';
+import { alertDialog, confirmDialog, promptDialog } from '../utils/dialog.js';
 import { useUserPreferences } from '../utils/user-preferences.js';
-import SidebarSectionResizeHandle from './SidebarSectionResizeHandle.js';
+import { buildProjectTree, MAX_PROJECT_DEPTH } from '../stores/helpers/project-tree.js';
 
 function timestampValue(value) {
   const parsed = typeof value === 'number' ? value : Date.parse(value || '');
@@ -33,15 +33,17 @@ function projectIdentityKey(project) {
   return project?.id || '';
 }
 
-export function reorderProjectRows(rows, movedId, targetId, position = 'before') {
-  const ordered = Array.isArray(rows) ? [...rows] : [];
-  const fromIndex = ordered.findIndex(row => projectIdentityKey(row) === movedId);
-  if (fromIndex < 0) return null;
-  const [moved] = ordered.splice(fromIndex, 1);
-  const targetIndex = ordered.findIndex(row => projectIdentityKey(row) === targetId);
-  if (targetIndex < 0) return null;
-  ordered.splice(targetIndex + (position === 'after' ? 1 : 0), 0, moved);
-  return ordered;
+/** Drag-target key of the top level (outside every folder). */
+const ROOT_DROP_KEY = '__root__';
+
+/** Where on a folder header the pointer is: near the edges places, the middle nests. */
+function folderHeaderZone(event) {
+  const rect = event?.currentTarget?.getBoundingClientRect?.();
+  if (!rect || !Number.isFinite(event?.clientY) || rect.height <= 0) return 'inside';
+  const ratio = (event.clientY - rect.top) / rect.height;
+  if (ratio < 0.3) return 'before';
+  if (ratio > 0.7) return 'after';
+  return 'inside';
 }
 
 function catalogOrderChanged(left, right) {
@@ -126,60 +128,12 @@ export function calculateFloatingSubmenuPosition(parentRect, menuSize, viewport 
 }
 
 
-// Recents use the same Session row behavior and actions as Project members.
-function sessionRowsTemplate(section, rows) {
-  return `          <div
-            v-for="row in (isSectionCollapsed('${section}') ? [] : ${rows})"
-            :key="row.catalogKey"
-            class="session-item sidebar-session-row"
-            :class="{ active: isActive(row), processing: isProcessing(row), dragging: draggedRow?.catalogKey === row.catalogKey, 'drag-before': dragTargetRowKey === row.catalogKey && dragTargetPosition === 'before', 'drag-after': dragTargetRowKey === row.catalogKey && dragTargetPosition === 'after', 'actions-suppressed': suppressedActionsKey === row.catalogKey }"
-            :draggable="canDragRow(row)"
-            role="button"
-            :tabindex="loading ? -1 : 0"
-            :aria-disabled="loading"
-            @dragstart="startDrag(row, $event)"
-            @dragover="dragOverRow(row, null, $event)"
-            @dragleave="dragLeaveRow(row, $event)"
-            @drop="dropOnRow(row, null, $event)"
-            @dragend="finishDrag"
-            @pointerleave="restoreRowActions(row)"
-            @click="selectRow(row, $event, { suppressActions: true })"
-            @keydown.enter="selectRowFromKeyboard(row, $event)"
-            @keydown.space="selectRowFromKeyboard(row, $event)"
-          >
-            <span v-if="row.pinned" class="session-pin-icon" :aria-label="$t('sidebar.sessions.pinned')"><svg viewBox="0 0 24 24" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" d="M8.5 3.5h7M10 3.5V10l-3 3v1.5h10V13l-3-3V3.5M12 14.5V21"/></svg></span>
-            <span class="sidebar-session-copy">
-              <span class="title" :title="row.title">
-                <span v-if="isProcessing(row)" class="processing-dot" :aria-label="$t('sidebar.sessions.processing')"></span>
-                <span class="sidebar-session-title-text">{{ row.title }}</span>
-                <span v-if="row.task" class="sidebar-session-task" role="img" :aria-label="$t('scheduledTasks.itemLabel')" :title="$t('scheduledTasks.itemLabel')">
-                  <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M12 6v6l4 2" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
-                </span>
-                <span v-if="isUnread(row)" class="sidebar-session-unread" :aria-label="$t('sidebar.sessions.unread')"></span>
-              </span>
-            </span>
-            <span v-if="canEditRow(row)" class="session-actions" :class="{ 'menu-open': openMenuKey === row.catalogKey }">
-              <button type="button" class="session-quick-action" @click.stop="runAction('pin', row)" :title="row.pinned ? $t('chat.sidebar.unpin') : $t('chat.sidebar.pin')" :aria-label="row.pinned ? $t('chat.sidebar.unpin') : $t('chat.sidebar.pin')">
-                <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" d="M8.5 3.5h7M10 3.5V10l-3 3v1.5h10V13l-3-3V3.5M12 14.5V21"/></svg>
-              </button>
-              <button type="button" class="session-quick-action" :disabled="!canRunAction(row, 'remove')" @click.stop="runAction('delete', row)" :title="canRunAction(row, 'remove') ? $t('sidebar.sessions.remove') : $t('sidebar.sessions.upgradeForAction')" :aria-label="$t('sidebar.sessions.remove')">
-                <svg class="session-remove-icon" viewBox="0 0 24 24" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" d="M4 7h16M9 7V4h6v3m3 0-1 13H7L6 7m4 4v5m4-5v5"/></svg>
-              </button>
-              <button type="button" class="session-dots-btn" :disabled="loading" :class="{ 'menu-open': openMenuKey === row.catalogKey }" @click.stop="toggleSessionMenu(row, false, $event)" :aria-label="$t('sidebar.sessions.menu')"><svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M6 10a2 2 0 1 0 0 4 2 2 0 0 0 0-4zm6 0a2 2 0 1 0 0 4 2 2 0 0 0 0-4zm6 0a2 2 0 1 0 0 4 2 2 0 0 0 0-4z"/></svg></button>
-            </span>
-          </div>
-`;
-}
 
 export default {
   name: 'UnifiedSessionList',
-  components: { SidebarSectionResizeHandle, SidebarDigitalPerson },
+  components: { SidebarDigitalPerson },
   setup() {
     const userPreferences = useUserPreferences();
-    const sectionRatioPreview = Vue.ref(null);
-    // A drag owns only its preview. Refreshes update the authoritative value
-    // underneath; commit saves the drag, while cancel exposes the latest value.
-    Vue.watch(userPreferences.ready, () => { sectionRatioPreview.value = null; }, { flush: 'sync' });
     Vue.onMounted(() => {
       window.addEventListener('focus', userPreferences.refresh);
       document.addEventListener('visibilitychange', refreshWhenVisible);
@@ -191,19 +145,11 @@ export default {
     function refreshWhenVisible() {
       if (document.visibilityState === 'visible') void userPreferences.refresh();
     }
-    function saveSectionRatio(ratio) {
-      sectionRatioPreview.value = null;
-      void userPreferences.saveSidebarProjectsRatio(ratio);
-    }
     return {
-      sectionRatioPreview, saveSectionRatio,
       collapsedProjects: Vue.computed(() => userPreferences.preferences.value.sidebarCollapsedProjects),
-      collapsedSections: Vue.computed(() => userPreferences.preferences.value.sidebarCollapsedSections),
       saveProjectCollapsed: userPreferences.saveSidebarProjectCollapsed,
-      saveSectionCollapsed: userPreferences.saveSidebarSectionCollapsed,
       actionsCompact: Vue.computed(() => userPreferences.preferences.value.sidebarActionsCompact),
       saveActionsCompact: userPreferences.saveSidebarActionsCompact,
-      sectionRatio: Vue.computed(() => sectionRatioPreview.value ?? userPreferences.preferences.value.sidebarProjectsRatio),
       preferencesReady: userPreferences.ready, preferencesError: userPreferences.error,
       refreshPreferences: userPreferences.refresh,
     };
@@ -239,6 +185,8 @@ export default {
       dragTargetProjectPosition: null,
       dragOperationPending: false,
       projectCreateOpen: false,
+      // The folder the inline "new folder" row is creating into; null = top level.
+      projectCreateParentId: null,
       projectCreateName: '',
       projectCreateSubmitting: false,
       projectInstructionOpen: false,
@@ -258,9 +206,7 @@ export default {
     window.addEventListener('resize', this.positionFloatingMenu);
     window.addEventListener('scroll', this.positionFloatingMenu, true);
     this.actionsResizeObserver = new ResizeObserver(this.scheduleOverflowCheck);
-    for (const element of [this.$el, this.$refs.sessionResults, ...this.$refs.sessionResults.querySelectorAll('.sidebar-section')]) {
-      this.actionsResizeObserver.observe(element);
-    }
+    for (const element of [this.$el, this.$refs.sessionResults]) this.actionsResizeObserver.observe(element);
     this.scheduleOverflowCheck();
   },
   updated() {
@@ -337,7 +283,8 @@ export default {
       }
       return out;
     },
-    recentRows() {
+    /** Sessions outside every folder, listed under the top-level folders. */
+    rootRows() {
       return sortRows(this.sessions.filter(row => {
         if (!this.isRowOnline(row)) return false;
         if (row.runtimeProvider === 'yeaft') {
@@ -346,6 +293,63 @@ export default {
         }
         return true;
       }), this.hasCompleteCatalogOrder);
+    },
+    projectTree() {
+      return buildProjectTree(this.projectRows);
+    },
+    maxProjectDepth() {
+      return MAX_PROJECT_DEPTH;
+    },
+    /** Online Sessions anywhere inside each folder, subfolders included. */
+    subtreeRowCounts() {
+      const counts = new Map();
+      const count = (id) => {
+        let total = (this.rowsByProject.get(id) || []).length;
+        for (const child of this.projectTree.childrenOf(id)) total += count(child.id);
+        counts.set(id, total);
+        return total;
+      };
+      for (const project of this.projectTree.childrenOf(null)) count(project.id);
+      return counts;
+    },
+    /**
+     * The sidebar as one file tree, flattened for rendering: each folder, then
+     * its subfolders, an inline "new folder" row, and its Sessions; the
+     * top-level Sessions come after the top-level folders.
+     */
+    treeItems() {
+      const tree = this.projectTree;
+      const items = [];
+      const createRow = (parentId, depth) => {
+        if (this.projectCreateOpen && this.projectCreateParentId === parentId) {
+          items.push({ kind: 'create', key: `create:${parentId || ''}`, depth });
+        }
+      };
+      const visit = (parentId, depth) => {
+        for (const project of tree.childrenOf(parentId)) {
+          const key = projectIdentityKey(project);
+          // A folder receiving a new subfolder stays open while the name is typed.
+          const creatingHere = this.projectCreateOpen && this.projectCreateParentId === project.id;
+          const collapsed = this.isProjectCollapsed(project) && !creatingHere;
+          items.push({ kind: 'folder', key: `folder:${key}`, project, depth, collapsed });
+          if (collapsed) continue;
+          visit(project.id, depth + 1);
+          createRow(project.id, depth + 1);
+          const rows = this.rowsByProject.get(key) || [];
+          for (const row of rows) items.push({ kind: 'session', key: row.catalogKey, row, project, depth: depth + 1 });
+          if (!this.loading && rows.length === 0 && !creatingHere && tree.childrenOf(project.id).length === 0) {
+            items.push({ kind: 'empty', key: `empty:${key}`, project, depth: depth + 1 });
+          }
+        }
+      };
+      visit(null, 0);
+      createRow(null, 0);
+      // The folders and the top-level Sessions read as two groups without a heading.
+      const afterFolders = items.length > 0;
+      this.rootRows.forEach((row, index) => items.push({
+        kind: 'session', key: row.catalogKey, row, project: null, depth: 0, groupStart: afterFolders && index === 0,
+      }));
+      return items;
     },
   },
   methods: {
@@ -361,8 +365,7 @@ export default {
       // A closed desktop rail / mobile drawer has no useful geometry. Keep
       // the last measurement until ResizeObserver sees it become visible.
       if (!results?.clientHeight || !results.clientWidth) return;
-      const sections = [...results.querySelectorAll('.sidebar-section:not(.is-collapsed)')];
-      this.sessionListOverflows = [results, ...sections].some(element => element.scrollHeight > element.clientHeight + 1);
+      this.sessionListOverflows = results.scrollHeight > results.clientHeight + 1;
       if (this.actionsTogglePending) {
         // Keep the focused toggle mounted while the new layout is measured.
         // If it genuinely disappears, move focus to a stable, visible action.
@@ -481,9 +484,25 @@ export default {
     isUnread(row) {
       return typeof this.isSessionUnread === 'function' ? !!this.isSessionUnread(row) : false;
     },
+    /** Unread anywhere inside, so a collapsed parent still surfaces it. */
     isProjectUnread(project) {
-      const rows = this.projectSessionRows.get(projectIdentityKey(project)) || [];
-      return rows.some(row => this.isUnread(row));
+      return this.projectTree.subtreeIds(projectIdentityKey(project))
+        .some(id => (this.projectSessionRows.get(id) || []).some(row => this.isUnread(row)));
+    },
+    projectSessionCount(project) {
+      return this.subtreeRowCounts.get(projectIdentityKey(project)) || 0;
+    },
+    /** "Outer / Inner" — names a nested folder unambiguously in menus. */
+    projectPathLabel(project) {
+      return this.projectTree.pathOf(projectIdentityKey(project)).map(item => item.name).join(' / ');
+    },
+    /** Folder nesting needs a Server-owned folder; Agent-local legacy ones stay flat. */
+    canNestProject(project) {
+      return this.canEditProject(project) && !project.legacyProjectId;
+    },
+    canCreateSubfolder(project) {
+      return this.canNestProject(project)
+        && this.projectTree.depthOf(projectIdentityKey(project)) < MAX_PROJECT_DEPTH;
     },
     projectKey(project) {
       return projectIdentityKey(project);
@@ -515,15 +534,30 @@ export default {
       if (!this.canEditProject(project)) return false;
       return !project.legacyAgentId || project.legacyAgentId === row.routeRef.agentId;
     },
+    /** Folders a Session can move into, in tree order with their depth. */
     projectMoveTargets(row, currentProject = null) {
       const currentProjectId = projectIdentityKey(currentProject);
-      return this.projectRows.filter(project => (
+      return this.projectTree.flatten().filter(({ project }) => (
         projectIdentityKey(project) !== currentProjectId
         && this.canMoveRowToProject(row, project)
       ));
     },
+    /** Where a folder can move: the top level, then every folder outside its own subtree. */
+    folderMoveTargets(project) {
+      if (!this.canNestProject(project)) return [];
+      const tree = this.projectTree;
+      const currentParentId = tree.parentOf(project.id);
+      const targets = currentParentId && tree.canMove(project.id, null)
+        ? [{ project: null, depth: 0 }]
+        : [];
+      for (const target of tree.flatten()) {
+        if (target.project.id === currentParentId || !this.canNestProject(target.project)) continue;
+        if (tree.canMove(project.id, target.project.id)) targets.push(target);
+      }
+      return targets;
+    },
     openProjectMoveList() {
-      if (!this.floatingMenu || this.floatingMenu.kind !== 'session') return;
+      if (!this.floatingMenu) return;
       this.projectSubmenuOpen = true;
       this.$nextTick(this.positionProjectSubmenu);
     },
@@ -548,14 +582,6 @@ export default {
         width: `${position.width}px`,
         maxHeight: `${position.maxHeight}px`,
       };
-    },
-    isSectionCollapsed(section) {
-      return this.collapsedSections?.[section] === true;
-    },
-    toggleSection(section) {
-      if (!this.preferencesReady || !['projects', 'recents'].includes(section)) return;
-      void this.saveSectionCollapsed(section, !this.isSectionCollapsed(section));
-      this.closeMenus();
     },
     isProjectCollapsed(project) {
       return this.collapsedProjects[projectIdentityKey(project)] === true;
@@ -656,7 +682,9 @@ export default {
       if (!store?.mutateProject) return true;
       const { action, project, row, name, catalogOrder, agentId: explicitAgentId } = payload;
       const agentId = explicitAgentId || row?.routeRef?.agentId || null;
-      if (action === 'create') return store.mutateProject('create', { name }, agentId);
+      if (action === 'create') {
+        return store.mutateProject('create', { name, ...(payload.parentId ? { parentId: payload.parentId } : {}) }, agentId);
+      }
       const projectId = project?.legacyProjectId || project?.id;
       if (action === 'rename') return store.mutateProject('rename', { projectId, name }, project?.legacyAgentId || agentId);
       if (action === 'update-instruction') {
@@ -666,9 +694,11 @@ export default {
         }, project?.legacyAgentId || agentId);
       }
       if (action === 'delete') return store.mutateProject('delete', { projectId }, project?.legacyAgentId || agentId);
-      if (action === 'reorder-projects') {
-        return store.mutateProject('reorder', {
-          projectIds: (payload.projects || []).map(item => item.id),
+      if (action === 'move-project') {
+        return store.mutateProject('move_project', {
+          projectId,
+          parentId: payload.parentId || null,
+          beforeProjectId: payload.beforeProjectId || null,
         });
       }
       if (action === 'move-session' && row?.routeRef?.sessionId) {
@@ -685,19 +715,34 @@ export default {
       }
       return false;
     },
-    createProject() {
-      if (this.loading) return;
-      if (this.projectCreateSubmitting) return;
-      if (this.isSectionCollapsed('projects')) {
-        void this.saveSectionCollapsed('projects', false);
+    /** Run a folder change and say so when the Server refuses it. */
+    async runFolderAction(payload) {
+      const result = await this.dispatchProjectAction(payload);
+      if (result && typeof result === 'object' && result.ok === false) {
+        const message = result.error?.message || result.error?.code || 'unknown';
+        await alertDialog(this.$t('sidebar.projects.actionFailed', { message }));
       }
+      return result;
+    },
+    /** Open the inline name row at the top level, or inside `parent`. */
+    createProject(parent = null) {
+      if (this.loading || this.projectCreateSubmitting) return;
+      if (parent && !this.canCreateSubfolder(parent)) return;
+      this.closeMenus();
       this.projectCreateOpen = true;
+      this.projectCreateParentId = parent ? parent.id : null;
       this.projectCreateName = '';
-      this.$nextTick(() => this.$refs.projectCreateInput?.focus?.());
+      if (parent && this.isProjectCollapsed(parent)) void this.saveProjectCollapsed(projectIdentityKey(parent), false);
+      this.$nextTick(() => {
+        const input = [].concat(this.$refs.projectCreateInput || [])[0];
+        input?.focus?.({ preventScroll: true });
+        input?.scrollIntoView?.({ block: 'nearest' });
+      });
     },
     cancelProjectCreate() {
       if (this.projectCreateSubmitting) return;
       this.projectCreateOpen = false;
+      this.projectCreateParentId = null;
       this.projectCreateName = '';
     },
     async submitProjectCreate() {
@@ -706,9 +751,10 @@ export default {
       if (!name || this.projectCreateSubmitting) return;
       this.projectCreateSubmitting = true;
       try {
-        const result = await this.dispatchProjectAction({ action: 'create', name });
+        const result = await this.runFolderAction({ action: 'create', name, parentId: this.projectCreateParentId });
         if (result?.ok !== false) {
           this.projectCreateOpen = false;
+          this.projectCreateParentId = null;
           this.projectCreateName = '';
         }
       } finally {
@@ -720,15 +766,25 @@ export default {
       const name = await promptDialog(this.$t('sidebar.projects.renamePrompt'), project.name);
       this.closeMenus();
       if (name?.trim() && name.trim() !== project.name) {
-        this.dispatchProjectAction({ action: 'rename', project, name: name.trim() });
+        void this.runFolderAction({ action: 'rename', project, name: name.trim() });
       }
     },
     async deleteProject(project) {
       if (!this.canEditProject(project)) return;
       this.closeMenus();
-      if (await confirmDialog(this.$t('sidebar.projects.deleteConfirm', { name: project.name }), { destructive: true })) {
-        this.dispatchProjectAction({ action: 'delete', project });
+      const subfolders = Math.max(0, this.projectTree.subtreeIds(projectIdentityKey(project)).length - 1);
+      const message = subfolders > 0
+        ? this.$t('sidebar.projects.deleteConfirmNested', { name: project.name, count: subfolders })
+        : this.$t('sidebar.projects.deleteConfirm', { name: project.name });
+      if (await confirmDialog(message, { destructive: true })) {
+        void this.runFolderAction({ action: 'delete', project });
       }
+    },
+    moveFolderTo(project, parent = null) {
+      this.closeMenus();
+      const parentId = parent ? parent.id : null;
+      if (!this.canNestProject(project) || !this.projectTree.canMove(project.id, parentId)) return false;
+      return this.runFolderAction({ action: 'move-project', project, parentId, beforeProjectId: null });
     },
     editProjectInstruction(project) {
       if (!this.canEditProject(project)) return;
@@ -790,14 +846,52 @@ export default {
         event.dataTransfer.setData('text/plain', `project:${this.draggedProjectId}`);
       }
     },
+    /**
+     * Resolve a folder dropped on `target`'s header: the top and bottom edges
+     * place it among target's siblings, the middle nests it inside target.
+     * Below an open folder the next row is its first child, so its bottom
+     * edge nests too. Null when the move would cycle or exceed the depth limit.
+     */
+    folderHeaderDrop(target, event) {
+      const movedId = this.draggedProjectId;
+      const tree = this.projectTree;
+      if (!movedId || !target?.id || movedId === target.id || !this.canNestProject(target)) return null;
+      const zone = folderHeaderZone(event);
+      const open = !this.isProjectCollapsed(target)
+        && (tree.childrenOf(target.id).length > 0 || (this.rowsByProject.get(target.id) || []).length > 0);
+      const position = zone === 'after' && open ? 'inside' : zone;
+      const parentId = position === 'inside' ? target.id : tree.parentOf(target.id);
+      if (!tree.canMove(movedId, parentId)) return null;
+      if (position === 'inside') return { position, parentId, beforeProjectId: null };
+      const siblings = tree.childrenOf(parentId).filter(item => item.id !== movedId);
+      const index = siblings.findIndex(item => item.id === target.id);
+      const beforeProjectId = position === 'before' ? target.id : (siblings[index + 1]?.id || null);
+      return { position, parentId, beforeProjectId };
+    },
+    /** Same parent and same slot: dropping there would change nothing. */
+    isFolderMoveNoop(movedId, parentId, beforeProjectId) {
+      const tree = this.projectTree;
+      if (tree.parentOf(movedId) !== parentId) return false;
+      const siblings = tree.childrenOf(parentId).map(item => item.id);
+      const remaining = siblings.filter(id => id !== movedId);
+      const index = beforeProjectId ? remaining.indexOf(beforeProjectId) : remaining.length;
+      return index === siblings.indexOf(movedId);
+    },
     dragOverProjectRow(project, event) {
-      const targetId = projectIdentityKey(project);
-      if (!this.draggedProjectId || targetId === this.draggedProjectId || !this.canDragProject(project)) return;
+      const drop = this.folderHeaderDrop(project, event);
+      if (!drop || this.isFolderMoveNoop(this.draggedProjectId, drop.parentId, drop.beforeProjectId)) {
+        if (this.dragTargetProjectRowId === projectIdentityKey(project)) {
+          this.dragTargetProjectRowId = null;
+          this.dragTargetProjectPosition = null;
+        }
+        return;
+      }
       event?.preventDefault?.();
       event?.stopPropagation?.();
       if (event?.dataTransfer) event.dataTransfer.dropEffect = 'move';
-      this.dragTargetProjectRowId = targetId;
-      this.dragTargetProjectPosition = this.dragPositionForEvent(event);
+      this.dragTargetProjectId = null;
+      this.dragTargetProjectRowId = projectIdentityKey(project);
+      this.dragTargetProjectPosition = drop.position;
     },
     dragLeaveProjectRow(project, event) {
       if (this.dragTargetProjectRowId !== projectIdentityKey(project)) return;
@@ -810,24 +904,59 @@ export default {
       event?.preventDefault?.();
       event?.stopPropagation?.();
       const movedId = this.draggedProjectId;
-      const targetId = projectIdentityKey(project);
-      const position = this.dragTargetProjectRowId === targetId
-        ? this.dragTargetProjectPosition
-        : this.dragPositionForEvent(event);
+      const drop = this.folderHeaderDrop(project, event);
       this.finishProjectDrag();
-      if (!movedId || !targetId || movedId === targetId || !position) return false;
-      const nextProjects = reorderProjectRows(this.projectRows, movedId, targetId, position);
-      if (!nextProjects) return false;
+      if (!drop || this.isFolderMoveNoop(movedId, drop.parentId, drop.beforeProjectId)) return false;
+      return this.applyFolderMove(movedId, drop.parentId, drop.beforeProjectId);
+    },
+    /** A folder dropped on a folder's contents nests in it; on the top-level area it moves to the top level. */
+    canDropFolderInto(parentId) {
+      const movedId = this.draggedProjectId;
+      if (!movedId || this.dragOperationPending) return false;
+      if (parentId && !this.canNestProject(this.projectTree.byId.get(parentId))) return false;
+      return this.projectTree.canMove(movedId, parentId) && !this.isFolderMoveNoop(movedId, parentId, null);
+    },
+    dragOverFolderInto(project, event) {
+      const parentId = project?.id || null;
+      if (!this.canDropFolderInto(parentId)) {
+        this.clearDragTarget();
+        return;
+      }
+      event?.preventDefault?.();
+      event?.stopPropagation?.();
+      if (event?.dataTransfer) event.dataTransfer.dropEffect = 'move';
+      this.dragTargetProjectRowId = null;
+      this.dragTargetProjectPosition = null;
+      this.dragTargetProjectId = parentId || ROOT_DROP_KEY;
+    },
+    async dropFolderInto(project, event) {
+      event?.preventDefault?.();
+      event?.stopPropagation?.();
+      const movedId = this.draggedProjectId;
+      const parentId = project?.id || null;
+      const allowed = this.canDropFolderInto(parentId);
+      this.finishAllDrag();
+      if (!allowed) return false;
+      return this.applyFolderMove(movedId, parentId, null);
+    },
+    async applyFolderMove(movedId, parentId, beforeProjectId) {
+      const project = this.projectTree.byId.get(movedId);
+      if (!project) return false;
       this.dragOperationPending = true;
       try {
-        const result = await this.dispatchProjectAction({
-          action: 'reorder-projects',
-          projects: nextProjects,
-        });
+        const result = await this.runFolderAction({ action: 'move-project', project, parentId, beforeProjectId });
         return result !== false && result?.ok !== false;
       } finally {
         this.dragOperationPending = false;
       }
+    },
+    isFolderDropInto(project) {
+      const key = projectIdentityKey(project);
+      return this.dragTargetProjectId === key
+        || (this.dragTargetProjectRowId === key && this.dragTargetProjectPosition === 'inside');
+    },
+    isRootDropTarget() {
+      return this.dragTargetProjectId === ROOT_DROP_KEY;
     },
     finishProjectDrag() {
       this.draggedProjectId = null;
@@ -867,6 +996,10 @@ export default {
       return event.clientY > rect.top + rect.height / 2 ? 'after' : 'before';
     },
     dragOverRow(row, project, event) {
+      if (this.draggedProjectId) {
+        this.dragOverFolderInto(project, event);
+        return;
+      }
       const moved = this.draggedRow;
       if (!this.canDropRow(moved, project)
           || !this.canRunAction(row, 'reorder')
@@ -879,7 +1012,11 @@ export default {
       this.dragTargetRowKey = row.catalogKey;
       this.dragTargetPosition = this.dragPositionForEvent(event);
     },
-    dragLeaveRow(row, event) {
+    dragLeaveRow(row, event, project = null) {
+      if (this.draggedProjectId) {
+        this.clearGroupDragTarget(projectIdentityKey(project) || ROOT_DROP_KEY, event);
+        return;
+      }
       if (this.dragTargetRowKey !== row?.catalogKey) return;
       const next = event?.relatedTarget;
       if (next && event?.currentTarget?.contains?.(next)) return;
@@ -887,6 +1024,7 @@ export default {
       this.dragTargetPosition = null;
     },
     async dropOnRow(row, project, event) {
+      if (this.draggedProjectId) return this.dropFolderInto(project, event);
       event?.preventDefault?.();
       event?.stopPropagation?.();
       const moved = this.draggedRow;
@@ -933,18 +1071,36 @@ export default {
       if (!this.canDropRow(moved, project)) return false;
       return this.applySessionDropAtEnd(moved, project);
     },
-    dragOverRecents(event) {
+    /** The empty-folder hint takes the same drops as the folder itself. */
+    dragOverFolderContents(project, event) {
+      if (this.draggedProjectId) {
+        this.dragOverFolderInto(project, event);
+        return;
+      }
+      this.dragOverProject(project, event);
+    },
+    dropOnFolderContents(project, event) {
+      if (this.draggedProjectId) return this.dropFolderInto(project, event);
+      return this.dropOnProject(project, event);
+    },
+    /** The space below the last row: drops land at the end of the top level. */
+    dragOverRoot(event) {
+      if (this.draggedProjectId) {
+        this.dragOverFolderInto(null, event);
+        return;
+      }
       if (!this.canDropRow(this.draggedRow, null)) {
         this.clearDragTarget();
         return;
       }
       event?.preventDefault?.();
       if (event?.dataTransfer) event.dataTransfer.dropEffect = 'move';
-      this.dragTargetProjectId = '__recents__';
+      this.dragTargetProjectId = ROOT_DROP_KEY;
       this.dragTargetRowKey = null;
       this.dragTargetPosition = null;
     },
-    async dropOnRecents(event) {
+    async dropOnRoot(event) {
+      if (this.draggedProjectId) return this.dropFolderInto(null, event);
       event?.preventDefault?.();
       const moved = this.draggedRow;
       this.finishDrag();
@@ -973,7 +1129,7 @@ export default {
     rowsForProject(project = null) {
       return project
         ? (this.rowsByProject.get(projectIdentityKey(project)) || [])
-        : this.recentRows;
+        : this.rootRows;
     },
     async applySessionDropAtEnd(moved, project = null) {
       const targetRows = this.rowsForProject(project)
@@ -1020,7 +1176,6 @@ export default {
   template: `
     <nav class="sidebar-navigation" :aria-busy="loading" :aria-label="$t('sidebar.surface.sessions')">
       <div class="sidebar-primary-actions" :class="{ 'is-compact': actionsCompact }">
-        <SidebarDigitalPerson :compact="actionsCompact" />
         <button type="button" class="btn-ghost sidebar-primary-action" :disabled="loading" @click="createSession" :title="$t('sidebar.sessions.newChat')" :aria-label="$t('sidebar.sessions.newChat')">
           <svg class="sidebar-primary-action-icon" viewBox="0 0 24 24" aria-hidden="true">
             <path class="sidebar-primary-action-frame" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" d="M12 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
@@ -1031,6 +1186,10 @@ export default {
         <button type="button" class="btn-ghost sidebar-primary-action sidebar-task-create" :disabled="loading" @click="createTask" :title="$t('scheduledTasks.new')" :aria-label="$t('scheduledTasks.new')">
           <svg class="sidebar-primary-action-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M12 6v6l4 2" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
           <span v-if="!actionsCompact">{{ $t('scheduledTasks.new') }}</span>
+        </button>
+        <button type="button" class="btn-ghost sidebar-primary-action sidebar-folder-create" :disabled="loading || projectCreateSubmitting" @click="createProject()" :title="$t('sidebar.projects.new')" :aria-label="$t('sidebar.projects.new')">
+          <svg class="sidebar-primary-action-icon" viewBox="0 0 24 24" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" d="M3 7a2 2 0 0 1 2-2h4l2 2.5h8a2 2 0 0 1 2 2V18a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"/><path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" d="M12 11v6M9 14h6"/></svg>
+          <span v-if="!actionsCompact">{{ $t('sidebar.projects.new') }}</span>
         </button>
         <slot name="after-create">
           <button v-if="resolvedProjectStore?.openPluginCenter" type="button"
@@ -1043,6 +1202,7 @@ export default {
             <span v-if="!actionsCompact">{{ $t('yeaft.plugins.title') }}</span>
           </button>
         </slot>
+        <SidebarDigitalPerson :compact="actionsCompact" />
         <button v-if="actionsCompact || sessionListOverflows || actionsTogglePending" ref="actionsToggle" type="button"
                 class="btn-ghost sidebar-actions-toggle" :aria-expanded="!actionsCompact"
                 :disabled="!preferencesReady"
@@ -1053,26 +1213,52 @@ export default {
         </button>
       </div>
 
-      <div ref="sessionResults" class="sidebar-session-results" :class="{ 'sections-resizable': !isSectionCollapsed('projects') && !isSectionCollapsed('recents'), 'projects-collapsed': isSectionCollapsed('projects'), 'recents-collapsed': isSectionCollapsed('recents') }" :style="{ '--sidebar-projects-track': (sectionRatio * 100) + 'fr', '--sidebar-recents-track': ((1 - sectionRatio) * 100) + 'fr' }">
-        <section class="sidebar-section projects-section" :class="{ 'is-collapsed': isSectionCollapsed('projects') }">
-          <div class="sidebar-section-heading">
-            <span class="sidebar-section-title">{{ $t('sidebar.projects.title') }}</span>
-            <button type="button" class="sidebar-tool-button sidebar-project-add-button" @click="createProject" :disabled="loading || projectCreateOpen" :title="$t('sidebar.projects.new')" :aria-label="$t('sidebar.projects.new')">
-              <svg class="sidebar-project-add-icon" viewBox="0 0 24 24" aria-hidden="true">
-                <path class="sidebar-project-add-mark" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M12 5v14M5 12h14"/>
+      <!-- One file tree: folders (nested) first, each with its subfolders and
+           Sessions; Sessions outside every folder follow at the top level. -->
+      <div ref="sessionResults" class="sidebar-session-results sidebar-tree">
+        <div v-if="loading" class="sidebar-section-empty sidebar-catalog-loading" role="status"><span class="spinner-mini" aria-hidden="true"></span>{{ $t('common.loading') }}</div>
+        <template v-for="item in treeItems" :key="item.key">
+          <div v-if="item.kind === 'folder'"
+            class="sidebar-project-header"
+            :class="{ 'menu-open': openProjectMenuKey === projectKey(item.project), 'drag-over': isFolderDropInto(item.project), dragging: draggedProjectId === projectKey(item.project), 'project-drag-before': dragTargetProjectRowId === projectKey(item.project) && dragTargetProjectPosition === 'before', 'project-drag-after': dragTargetProjectRowId === projectKey(item.project) && dragTargetProjectPosition === 'after' }"
+            :style="{ '--tree-depth': item.depth }"
+            :draggable="canDragProject(item.project)"
+            @dragstart="startProjectDrag(item.project, $event)"
+            @dragover="dragOverProjectHeader(item.project, $event)"
+            @dragleave="clearProjectHeaderDragTarget(item.project, $event)"
+            @drop="dropOnProjectHeader(item.project, $event)"
+            @dragend="finishAllDrag"
+          >
+            <button type="button" class="sidebar-project-toggle" :disabled="!preferencesReady" @click="toggleProject(item.project)" :aria-expanded="String(!item.collapsed)">
+              <svg v-if="item.collapsed" class="sidebar-project-icon sidebar-project-icon-closed" viewBox="0 0 20 24" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" d="M2.5 7.5a2 2 0 0 1 2-2h4l1.8 2H15.5a2 2 0 0 1 2 2V18h-15z"/></svg>
+              <svg v-else class="sidebar-project-icon sidebar-project-icon-open" viewBox="0 0 20 24" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" d="M2.5 9V7a2 2 0 0 1 2-2h4l1.8 2h5.2a2 2 0 0 1 2 2v1M3.5 10h15l-2 8h-15z"/></svg>
+              <span class="sidebar-project-name">{{ item.project.name }}</span>
+              <span class="sidebar-project-count">{{ projectSessionCount(item.project) }}</span>
+              <span v-if="isProjectUnread(item.project)" class="sidebar-session-unread sidebar-project-unread" :aria-label="$t('sidebar.sessions.unread')"></span>
+            </button>
+            <span v-if="canEditProject(item.project)" class="sidebar-folder-actions" :class="{ 'menu-open': openProjectMenuKey === projectKey(item.project) }">
+            <button type="button" class="sidebar-project-session-create" @click.stop="createSessionInProject(item.project)" :title="$t('sidebar.projects.newSession', { name: item.project.name })" :aria-label="$t('sidebar.projects.newSession', { name: item.project.name })">
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" d="M12 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
+                <path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" d="M18.375 2.625a1 1 0 0 1 3 3l-9.013 9.014a2 2 0 0 1-.853.505l-2.873.84a.5.5 0 0 1-.62-.62l.84-2.873a2 2 0 0 1 .506-.852Z"/>
               </svg>
             </button>
-            <button type="button" class="sidebar-section-toggle" :disabled="!preferencesReady" @click="toggleSection('projects')" :aria-expanded="String(!isSectionCollapsed('projects'))" :aria-label="$t('sidebar.projects.title')" :title="$t(isSectionCollapsed('projects') ? 'sidebar.sections.expand' : 'sidebar.sections.collapse', { name: $t('sidebar.projects.title') })">
-              <svg class="sidebar-section-chevron" :class="{ collapsed: isSectionCollapsed('projects') }" viewBox="0 0 24 24" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="m8 10 4 4 4-4"/></svg>
+            <button type="button" class="sidebar-project-session-create sidebar-project-task-create" @click.stop="createSessionInProject(item.project, { taskMode: true })" :title="$t('sidebar.projects.newTask', { name: item.project.name })" :aria-label="$t('sidebar.projects.newTask', { name: item.project.name })">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M12 6v6l4 2" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
             </button>
+            <button type="button" class="session-dots-btn" :class="{ 'menu-open': openProjectMenuKey === projectKey(item.project) }" @click.stop="toggleProjectMenu(item.project, $event)" :aria-label="$t('sidebar.projects.menu')">
+              <svg viewBox="0 0 24 24"><path fill="currentColor" d="M6 10a2 2 0 1 0 0 4 2 2 0 0 0 0-4zm6 0a2 2 0 1 0 0 4 2 2 0 0 0 0-4zm6 0a2 2 0 1 0 0 4 2 2 0 0 0 0-4z"/></svg>
+            </button>
+            </span>
           </div>
 
-          <form v-if="projectCreateOpen && !isSectionCollapsed('projects')" class="sidebar-project-create" @submit.prevent="submitProjectCreate" @keydown.escape.stop.prevent="cancelProjectCreate">
-            <svg class="sidebar-project-create-icon" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M3 6h7l2 2h9v10H3V6zm2 2v8h14v-6h-8l-2-2H5z"/></svg>
+          <form v-else-if="item.kind === 'create'" class="sidebar-project-create" :style="{ '--tree-depth': item.depth }" @submit.prevent="submitProjectCreate" @keydown.escape.stop.prevent="cancelProjectCreate">
+            <svg class="sidebar-project-create-icon" viewBox="0 0 20 24" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" d="M2.5 7.5a2 2 0 0 1 2-2h4l1.8 2H15.5a2 2 0 0 1 2 2V18h-15z"/></svg>
             <input
               ref="projectCreateInput"
               v-model="projectCreateName"
               type="text"
+              maxlength="120"
               :placeholder="$t('sidebar.projects.namePrompt')"
               :aria-label="$t('sidebar.projects.namePrompt')"
               :disabled="projectCreateSubmitting"
@@ -1085,119 +1271,70 @@ export default {
             </button>
           </form>
 
-          <div v-if="!isSectionCollapsed('projects') && loading" class="sidebar-section-empty sidebar-catalog-loading" role="status"><span class="spinner-mini" aria-hidden="true"></span>{{ $t('common.loading') }}</div>
-          <div v-else-if="!isSectionCollapsed('projects') && projectRows.length === 0 && !projectCreateOpen" class="sidebar-section-empty">{{ $t('sidebar.projects.empty') }}</div>
-          <div v-for="project in (isSectionCollapsed('projects') ? [] : projectRows)" :key="projectKey(project)" class="sidebar-project">
-            <div
-              class="sidebar-project-header"
-              :class="{ 'drag-over': !draggedProjectId && dragTargetProjectId === projectKey(project), dragging: draggedProjectId === projectKey(project), 'project-drag-before': dragTargetProjectRowId === projectKey(project) && dragTargetProjectPosition === 'before', 'project-drag-after': dragTargetProjectRowId === projectKey(project) && dragTargetProjectPosition === 'after' }"
-              :draggable="canDragProject(project)"
-              @dragstart="startProjectDrag(project, $event)"
-              @dragover="dragOverProjectHeader(project, $event)"
-              @dragleave="clearProjectHeaderDragTarget(project, $event)"
-              @drop="dropOnProjectHeader(project, $event)"
-              @dragend="finishAllDrag"
-            >
-              <button type="button" class="sidebar-project-toggle" :disabled="!preferencesReady" @click="toggleProject(project)" :aria-expanded="String(!isProjectCollapsed(project))">
-                <svg v-if="isProjectCollapsed(project)" class="sidebar-project-icon sidebar-project-icon-closed" viewBox="0 0 20 24" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" d="M2.5 7.5a2 2 0 0 1 2-2h4l1.8 2H15.5a2 2 0 0 1 2 2V18h-15z"/></svg>
-                <svg v-else class="sidebar-project-icon sidebar-project-icon-open" viewBox="0 0 20 24" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" d="M2.5 9V7a2 2 0 0 1 2-2h4l1.8 2h5.2a2 2 0 0 1 2 2v1M3.5 10h15l-2 8h-15z"/></svg>
-                <span class="sidebar-project-name">{{ project.name }}</span>
-                <span class="sidebar-project-count">{{ (rowsByProject.get(projectKey(project)) || []).length }}</span>
-                <span v-if="isProjectUnread(project)" class="sidebar-session-unread sidebar-project-unread" :aria-label="$t('sidebar.sessions.unread')"></span>
-              </button>
-              <button v-if="canEditProject(project)" type="button" class="sidebar-project-session-create" @click.stop="createSessionInProject(project)" :title="$t('sidebar.projects.newSession', { name: project.name })" :aria-label="$t('sidebar.projects.newSession', { name: project.name })">
-                <svg viewBox="0 0 24 24" aria-hidden="true">
-                  <path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" d="M12 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
-                  <path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" d="M18.375 2.625a1 1 0 0 1 3 3l-9.013 9.014a2 2 0 0 1-.853.505l-2.873.84a.5.5 0 0 1-.62-.62l.84-2.873a2 2 0 0 1 .506-.852Z"/>
-                </svg>
-              </button>
-              <button v-if="canEditProject(project)" type="button" class="sidebar-project-session-create sidebar-project-task-create" @click.stop="createSessionInProject(project, { taskMode: true })" :title="$t('sidebar.projects.newTask', { name: project.name })" :aria-label="$t('sidebar.projects.newTask', { name: project.name })">
-                <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M12 6v6l4 2" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
-              </button>
-              <button v-if="canEditProject(project)" type="button" class="session-dots-btn" :class="{ 'menu-open': openProjectMenuKey === projectKey(project) }" @click.stop="toggleProjectMenu(project, $event)" :aria-label="$t('sidebar.projects.menu')">
-                <svg viewBox="0 0 24 24"><path fill="currentColor" d="M6 10a2 2 0 1 0 0 4 2 2 0 0 0 0-4zm6 0a2 2 0 1 0 0 4 2 2 0 0 0 0-4zm6 0a2 2 0 1 0 0 4 2 2 0 0 0 0-4z"/></svg>
-              </button>
-            </div>
-            <div v-if="!isProjectCollapsed(project)" class="sidebar-project-sessions">
-              <div
-                v-for="row in rowsByProject.get(projectKey(project)) || []"
-                :key="row.catalogKey"
-                class="session-item sidebar-session-row"
-                :class="{ active: isActive(row), processing: isProcessing(row), dragging: draggedRow?.catalogKey === row.catalogKey, 'drag-before': dragTargetRowKey === row.catalogKey && dragTargetPosition === 'before', 'drag-after': dragTargetRowKey === row.catalogKey && dragTargetPosition === 'after', 'actions-suppressed': suppressedActionsKey === row.catalogKey }"
-                :draggable="canDragRow(row, project)"
-                role="button"
-                :tabindex="loading ? -1 : 0"
-                :aria-disabled="loading"
-                @dragstart="startDrag(row, $event)"
-                @dragover="dragOverRow(row, project, $event)"
-                @dragleave="dragLeaveRow(row, $event)"
-                @drop="dropOnRow(row, project, $event)"
-                @dragend="finishDrag"
-                @pointerleave="restoreRowActions(row)"
-                @click="selectRow(row, $event, { suppressActions: true })"
-                @keydown.enter="selectRowFromKeyboard(row, $event)"
-                @keydown.space="selectRowFromKeyboard(row, $event)"
-              >
-                <span v-if="row.pinned" class="session-pin-icon" :aria-label="$t('sidebar.sessions.pinned')"><svg viewBox="0 0 24 24" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" d="M8.5 3.5h7M10 3.5V10l-3 3v1.5h10V13l-3-3V3.5M12 14.5V21"/></svg></span>
-                <span class="sidebar-session-copy">
-                  <span class="title" :title="row.title">
-                    <span v-if="isProcessing(row)" class="processing-dot" :aria-label="$t('sidebar.sessions.processing')"></span>
-                    <span class="sidebar-session-title-text">{{ row.title }}</span>
-                    <span v-if="row.task" class="sidebar-session-task" role="img" :aria-label="$t('scheduledTasks.itemLabel')" :title="$t('scheduledTasks.itemLabel')">
-                      <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M12 6v6l4 2" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
-                    </span>
-                    <span v-if="isUnread(row)" class="sidebar-session-unread" :aria-label="$t('sidebar.sessions.unread')"></span>
-                  </span>
-                </span>
-                <span v-if="canEditRow(row)" class="session-actions" :class="{ 'menu-open': openMenuKey === row.catalogKey }">
-                  <button type="button" class="session-quick-action" @click.stop="runAction('pin', row)" :title="row.pinned ? $t('chat.sidebar.unpin') : $t('chat.sidebar.pin')" :aria-label="row.pinned ? $t('chat.sidebar.unpin') : $t('chat.sidebar.pin')">
-                    <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" d="M8.5 3.5h7M10 3.5V10l-3 3v1.5h10V13l-3-3V3.5M12 14.5V21"/></svg>
-                  </button>
-                  <button type="button" class="session-quick-action" :disabled="!canRunAction(row, 'remove')" @click.stop="runAction('delete', row)" :title="canRunAction(row, 'remove') ? $t('sidebar.sessions.remove') : $t('sidebar.sessions.upgradeForAction')" :aria-label="$t('sidebar.sessions.remove')">
-                    <svg class="session-remove-icon" viewBox="0 0 24 24" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" d="M4 7h16M9 7V4h6v3m3 0-1 13H7L6 7m4 4v5m4-5v5"/></svg>
-                  </button>
-                  <button type="button" class="session-dots-btn" :disabled="loading" :class="{ 'menu-open': openMenuKey === row.catalogKey }" @click.stop="toggleSessionMenu(row, true, $event)" :aria-label="$t('sidebar.sessions.menu')"><svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M6 10a2 2 0 1 0 0 4 2 2 0 0 0 0-4zm6 0a2 2 0 1 0 0 4 2 2 0 0 0 0-4zm6 0a2 2 0 1 0 0 4 2 2 0 0 0 0-4z"/></svg></button>
-                </span>
-              </div>
-              <div v-if="!loading && (rowsByProject.get(projectKey(project)) || []).length === 0" class="sidebar-section-empty">{{ $t('sidebar.projects.noSessions') }}</div>
-            </div>
-          </div>
-        </section>
+          <div v-else-if="item.kind === 'empty'" class="sidebar-section-empty sidebar-folder-empty" :style="{ '--tree-depth': item.depth }"
+               @dragover="dragOverFolderContents(item.project, $event)"
+               @dragleave="clearGroupDragTarget(projectKey(item.project), $event)"
+               @drop="dropOnFolderContents(item.project, $event)">{{ $t('sidebar.projects.noSessions') }}</div>
 
-        <SidebarSectionResizeHandle v-if="!isSectionCollapsed('projects') && !isSectionCollapsed('recents')"
-          :model-value="sectionRatio" :disabled="!preferencesReady" :label="$t('sidebar.sectionResize.label')"
-          @update:model-value="sectionRatioPreview = $event" @change="saveSectionRatio" @cancel="sectionRatioPreview = null" />
-        <section class="sidebar-section recents-section" :class="{ 'drag-over': dragTargetProjectId === '__recents__', 'is-collapsed': isSectionCollapsed('recents') }" @dragover="dragOverRecents" @dragleave="clearGroupDragTarget('__recents__', $event)" @drop="dropOnRecents">
-          <div class="sidebar-section-heading">
-            <span class="sidebar-section-title">{{ $t('sidebar.recents.title') }}</span>
-            <button type="button" class="sidebar-tool-button sidebar-recents-create" :disabled="loading" @click="createSession" :title="$t('sidebar.sessions.newChat')" :aria-label="$t('sidebar.sessions.newChat')">
-              <svg class="sidebar-recents-create-icon" viewBox="0 0 24 24" aria-hidden="true">
-                <path class="sidebar-recents-create-frame" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" d="M12 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
-                <path class="sidebar-recents-create-pen" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" d="M18.375 2.625a1 1 0 0 1 3 3l-9.013 9.014a2 2 0 0 1-.853.505l-2.873.84a.5.5 0 0 1-.62-.62l.84-2.873a2 2 0 0 1 .506-.852Z"/>
-              </svg>
-            </button>
-            <button type="button" class="sidebar-tool-button sidebar-recents-task-create" :disabled="loading" @click="createTask" :title="$t('scheduledTasks.new')" :aria-label="$t('scheduledTasks.new')">
-              <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M12 6v6l4 2" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
-            </button>
-            <button type="button" class="sidebar-section-toggle" :disabled="!preferencesReady" @click="toggleSection('recents')" :aria-expanded="String(!isSectionCollapsed('recents'))" :aria-label="$t('sidebar.recents.title')" :title="$t(isSectionCollapsed('recents') ? 'sidebar.sections.expand' : 'sidebar.sections.collapse', { name: $t('sidebar.recents.title') })">
-              <svg class="sidebar-section-chevron" :class="{ collapsed: isSectionCollapsed('recents') }" viewBox="0 0 24 24" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="m8 10 4 4 4-4"/></svg>
-            </button>
+          <div v-else
+            class="session-item sidebar-session-row"
+            :class="{ 'sidebar-tree-group-start': item.groupStart, active: isActive(item.row), processing: isProcessing(item.row), dragging: draggedRow?.catalogKey === item.row.catalogKey, 'drag-before': dragTargetRowKey === item.row.catalogKey && dragTargetPosition === 'before', 'drag-after': dragTargetRowKey === item.row.catalogKey && dragTargetPosition === 'after', 'actions-suppressed': suppressedActionsKey === item.row.catalogKey }"
+            :style="{ '--tree-depth': item.depth }"
+            :draggable="canDragRow(item.row, item.project)"
+            role="button"
+            :tabindex="loading ? -1 : 0"
+            :aria-disabled="loading"
+            @dragstart="startDrag(item.row, $event)"
+            @dragover="dragOverRow(item.row, item.project, $event)"
+            @dragleave="dragLeaveRow(item.row, $event, item.project)"
+            @drop="dropOnRow(item.row, item.project, $event)"
+            @dragend="finishDrag"
+            @pointerleave="restoreRowActions(item.row)"
+            @click="selectRow(item.row, $event, { suppressActions: true })"
+            @keydown.enter="selectRowFromKeyboard(item.row, $event)"
+            @keydown.space="selectRowFromKeyboard(item.row, $event)"
+          >
+            <span v-if="item.row.pinned" class="session-pin-icon" :aria-label="$t('sidebar.sessions.pinned')"><svg viewBox="0 0 24 24" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" d="M8.5 3.5h7M10 3.5V10l-3 3v1.5h10V13l-3-3V3.5M12 14.5V21"/></svg></span>
+            <span class="sidebar-session-copy">
+              <span class="title" :title="item.row.title">
+                <span v-if="isProcessing(item.row)" class="processing-dot" :aria-label="$t('sidebar.sessions.processing')"></span>
+                <span class="sidebar-session-title-text">{{ item.row.title }}</span>
+                <span v-if="item.row.task" class="sidebar-session-task" role="img" :aria-label="$t('scheduledTasks.itemLabel')" :title="$t('scheduledTasks.itemLabel')">
+                  <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M12 6v6l4 2" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+                </span>
+                <span v-if="isUnread(item.row)" class="sidebar-session-unread" :aria-label="$t('sidebar.sessions.unread')"></span>
+              </span>
+            </span>
+            <span v-if="canEditRow(item.row)" class="session-actions" :class="{ 'menu-open': openMenuKey === item.row.catalogKey }">
+              <button type="button" class="session-quick-action" @click.stop="runAction('pin', item.row)" :title="item.row.pinned ? $t('chat.sidebar.unpin') : $t('chat.sidebar.pin')" :aria-label="item.row.pinned ? $t('chat.sidebar.unpin') : $t('chat.sidebar.pin')">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" d="M8.5 3.5h7M10 3.5V10l-3 3v1.5h10V13l-3-3V3.5M12 14.5V21"/></svg>
+              </button>
+              <button type="button" class="session-quick-action" :disabled="!canRunAction(item.row, 'remove')" @click.stop="runAction('delete', item.row)" :title="canRunAction(item.row, 'remove') ? $t('sidebar.sessions.remove') : $t('sidebar.sessions.upgradeForAction')" :aria-label="$t('sidebar.sessions.remove')">
+                <svg class="session-remove-icon" viewBox="0 0 24 24" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" d="M4 7h16M9 7V4h6v3m3 0-1 13H7L6 7m4 4v5m4-5v5"/></svg>
+              </button>
+              <button type="button" class="session-dots-btn" :disabled="loading" :class="{ 'menu-open': openMenuKey === item.row.catalogKey }" @click.stop="toggleSessionMenu(item.row, !!item.project, $event)" :aria-label="$t('sidebar.sessions.menu')"><svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M6 10a2 2 0 1 0 0 4 2 2 0 0 0 0-4zm6 0a2 2 0 1 0 0 4 2 2 0 0 0 0-4zm6 0a2 2 0 1 0 0 4 2 2 0 0 0 0-4z"/></svg></button>
+            </span>
           </div>
-          ${sessionRowsTemplate('recents', 'recentRows')}
-          <div v-if="!isSectionCollapsed('recents') && loading" class="sidebar-section-empty sidebar-catalog-loading" role="status"><span class="spinner-mini" aria-hidden="true"></span>{{ $t('common.loading') }}</div>
-          <div v-else-if="!isSectionCollapsed('recents') && recentRows.length === 0" class="sidebar-section-empty">{{ $t('sidebar.recents.empty') }}</div>
-        </section>
+        </template>
+        <div v-if="!loading && treeItems.length === 0" class="sidebar-section-empty">{{ $t('sidebar.sessions.empty') }}</div>
+        <div class="sidebar-tree-end" :class="{ 'drag-over': isRootDropTarget() }" aria-hidden="true"
+             @dragover="dragOverRoot" @dragleave="clearGroupDragTarget('__root__', $event)" @drop="dropOnRoot"></div>
       </div>
 
       <div v-if="preferencesError" class="sidebar-preferences-error" role="status">
-        <span>{{ $t('sidebar.sectionResize.' + preferencesError + 'Error') }}</span>
+        <span>{{ $t('sidebar.preferences.' + preferencesError + 'Error') }}</span>
         <button v-if="preferencesError === 'load'" type="button" class="btn-ghost" @click="refreshPreferences">{{ $t('common.retry') }}</button>
       </div>
       <Teleport to="body">
         <div v-if="floatingMenu" ref="floatingMenu" class="session-menu session-menu-floating" :style="floatingMenuStyle">
           <template v-if="floatingMenu.kind === 'project'">
+            <button v-if="canNestProject(floatingMenu.project)" class="session-menu-item" :disabled="!canCreateSubfolder(floatingMenu.project)" :title="canCreateSubfolder(floatingMenu.project) ? '' : $t('sidebar.projects.depthLimit', { max: maxProjectDepth })" @click.stop="createProject(floatingMenu.project)">{{ $t('sidebar.projects.newSubfolder') }}</button>
             <button class="session-menu-item" @click.stop="editProjectInstruction(floatingMenu.project)">{{ $t('sidebar.projects.instructions') }}</button>
             <button class="session-menu-item" @click.stop="renameProject(floatingMenu.project)">{{ $t('sidebar.projects.rename') }}</button>
+            <button v-if="canNestProject(floatingMenu.project)" class="session-menu-item session-menu-parent" :class="{ active: projectSubmenuOpen }" aria-haspopup="menu" :aria-expanded="projectSubmenuOpen ? 'true' : 'false'" @click.stop="projectSubmenuOpen ? closeProjectMoveList() : openProjectMoveList()">
+              <span>{{ $t('sidebar.projects.moveFolder') }}</span>
+              <span aria-hidden="true">&rsaquo;</span>
+            </button>
             <button class="session-menu-item danger" @click.stop="deleteProject(floatingMenu.project)">{{ $t('sidebar.projects.delete') }}</button>
           </template>
           <template v-else>
@@ -1218,9 +1355,15 @@ export default {
             </div>
           </template>
         </div>
-        <div v-if="projectSubmenuOpen && floatingMenu?.kind === 'session'" ref="projectSubmenu" class="session-menu session-menu-floating session-submenu" :style="projectSubmenuStyle" role="menu">
-          <button v-for="project in projectMoveTargets(floatingMenu.row, floatingMenu.currentProject)" :key="project.id" class="session-menu-item" @click.stop="moveRow(floatingMenu.row, project)">{{ project.name }}</button>
-          <div v-if="projectMoveTargets(floatingMenu.row, floatingMenu.currentProject).length === 0" class="session-menu-empty">{{ $t('sidebar.projects.moveEmpty') }}</div>
+        <div v-if="projectSubmenuOpen && floatingMenu" ref="projectSubmenu" class="session-menu session-menu-floating session-submenu" :style="projectSubmenuStyle" role="menu">
+          <template v-if="floatingMenu.kind === 'session'">
+            <button v-for="target in projectMoveTargets(floatingMenu.row, floatingMenu.currentProject)" :key="target.project.id" class="session-menu-item sidebar-folder-menu-item" :style="{ '--tree-depth': target.depth }" :title="projectPathLabel(target.project)" @click.stop="moveRow(floatingMenu.row, target.project)">{{ target.project.name }}</button>
+            <div v-if="projectMoveTargets(floatingMenu.row, floatingMenu.currentProject).length === 0" class="session-menu-empty">{{ $t('sidebar.projects.moveEmpty') }}</div>
+          </template>
+          <template v-else>
+            <button v-for="target in folderMoveTargets(floatingMenu.project)" :key="target.project ? target.project.id : '__top__'" class="session-menu-item sidebar-folder-menu-item" :style="{ '--tree-depth': target.depth }" :title="target.project ? projectPathLabel(target.project) : $t('sidebar.projects.moveToTop')" @click.stop="moveFolderTo(floatingMenu.project, target.project)">{{ target.project ? target.project.name : $t('sidebar.projects.moveToTop') }}</button>
+            <div v-if="folderMoveTargets(floatingMenu.project).length === 0" class="session-menu-empty">{{ $t('sidebar.projects.moveEmpty') }}</div>
+          </template>
         </div>
       </Teleport>
 
@@ -1230,6 +1373,7 @@ export default {
             <div class="project-instruction-header">
               <div>
                 <h3>{{ $t('sidebar.projects.instructionsTitle', { name: projectInstructionProject?.name || '' }) }}</h3>
+                <p>{{ $t('sidebar.projects.instructionsHint') }}</p>
               </div>
               <button type="button" class="modal-close" :disabled="projectInstructionSubmitting" @click="closeProjectInstruction" :aria-label="$t('common.close')">&times;</button>
             </div>

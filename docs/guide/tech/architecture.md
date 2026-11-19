@@ -130,7 +130,7 @@ docs/                       Bilingual VitePress documentation
 
 ## Project and memory flow
 
-The Server catalog gives the browser one Agent-aware view of native and CLI conversations. Project membership is synchronized to Agents. Project instructions can be supplied to member Sessions. Sibling Session transcripts and legacy memory summaries are not automatically recalled or injected.
+The Server catalog gives the browser one Agent-aware view of native and CLI conversations. Project membership is synchronized to Agents. Projects nest as sidebar folders; the Server sends an Agent the folder path as the Project name and every instruction along that path, outermost first. Project instructions can be supplied to member Sessions. Sibling Session transcripts and legacy memory summaries are not automatically recalled or injected.
 
 This is not transcript merging. User, VP, Session, Project-related Session, WorkItem, and legacy compatibility scopes keep explicit ownership and ACL rules.
 
