@@ -4,6 +4,9 @@ import {
   isYeaftTurnDeletionFrameCurrent, settleYeaftTurnDeletion, YEAFT_DELETE_TURN_TIMEOUT_MS,
 } from './helpers/yeaft-turn-deletion.js';
 import { readPersonUiPreferences, writePersonUiPreferences } from './helpers/person-ui-preference.js';
+import {
+  applySessionSidebarWidth, clampSessionSidebarWidth, readSessionSidebarWidth, writeSessionSidebarWidth,
+} from './helpers/session-sidebar-width.js';
 import { availableDigitalPersonAgents, resolveDigitalPersonAgentId } from '../utils/digital-person-agent.js';
 import {
   currentWorkCenterBrowserOwner,
@@ -769,6 +772,8 @@ export const useChatStore = defineStore('chat', {
     // 桌面侧栏折叠与移动端抽屉开关由 Chat / Yeaft Session 共用。
     sidebarCollapsed: false,
     sessionSidebarOpen: false,
+    // Desktop sidebar width (px), shared by Session and Work Center sidebars.
+    sessionSidebarWidth: readSessionSidebarWidth(),
     // Context compact 状态: { conversationId, status: 'compacting'|'completed', message }
     compactStatus: null,
     // Context clear 状态: { conversationId, status: 'clearing'|'completed' }
@@ -9162,6 +9167,18 @@ export const useChatStore = defineStore('chat', {
 
     toggleSidebar() {
       this.sidebarCollapsed = !this.sidebarCollapsed;
+    },
+
+    initSessionSidebarWidth() {
+      applySessionSidebarWidth(this.sessionSidebarWidth);
+    },
+
+    setSessionSidebarWidth(width) {
+      const next = clampSessionSidebarWidth(width);
+      if (next === this.sessionSidebarWidth) return;
+      this.sessionSidebarWidth = next;
+      applySessionSidebarWidth(next);
+      writeSessionSidebarWidth(next);
     },
 
     toggleSessionSidebar() {

@@ -3453,7 +3453,7 @@
 .work-center-sidebar-create svg { flex-shrink: 0; }
 .work-center-sidebar.collapsed .work-center-sidebar-create { margin: 4px 6px 8px; padding: 8px 0; justify-content: center; }
 .work-center-sidebar-scroll { min-height: 0; overflow: auto; padding: var(--space-2) var(--space-2) var(--space-5); }
-.work-center-sidebar h2 { margin: 0; font-size: var(--font-size-xs); font-weight: 600; color: var(--text-muted); }
+.work-center-sidebar h2 { margin: 0; font-size: var(--font-size-md); font-weight: 600; color: var(--text-muted); }
 .work-center-agent-list > h2 { padding: 0 var(--space-2-5) var(--space-2); }
 .work-center-agent-row.session-tab {
   display: flex;
@@ -3482,7 +3482,7 @@
   border: 0; border-radius: var(--radius-sm); background: transparent;
   color: var(--text-muted); font: inherit; cursor: pointer;
 }
-.work-center-activity-disclosure { min-height: 28px; font-size: var(--font-size-xs); font-weight: 600; }
+.work-center-activity-disclosure { min-height: 28px; font-size: var(--font-size-md); font-weight: 600; }
 .work-center-activity-disclosure svg, .work-center-item-disclosure svg { flex: 0 0 auto; }
 .work-center-activity-disclosure svg.expanded, .work-center-item-disclosure svg.expanded { transform: rotate(90deg); }
 .work-center-activity-item-row { display: flex; align-items: stretch; border-radius: var(--radius-sm); }

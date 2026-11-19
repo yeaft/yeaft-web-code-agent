@@ -34,9 +34,12 @@ export default {
       const available = this.$el.parentElement.clientHeight - this.$el.offsetHeight;
       if (available <= 0) return;
       event.preventDefault();
+      // Focus keeps Escape-to-cancel working mid-drag. Focus taken only for the
+      // drag is released afterwards, so no ring is left behind for the mouse.
+      const releaseFocus = document.activeElement !== this.$el;
       this.$el.focus({ preventScroll: true });
       this.drag = {
-        id: event.pointerId, y: event.clientY, available,
+        id: event.pointerId, y: event.clientY, available, releaseFocus,
         initial: this.modelValue, ratio: this.modelValue,
         size: this.$el.previousElementSibling.getBoundingClientRect().height,
         cursor: document.body.style.cursor, userSelect: document.body.style.userSelect,
@@ -61,6 +64,7 @@ export default {
       document.body.style.cursor = drag.cursor;
       document.body.style.userSelect = drag.userSelect;
       if (this.$el.hasPointerCapture(drag.id)) this.$el.releasePointerCapture(drag.id);
+      if (drag.releaseFocus && document.activeElement === this.$el) this.$el.blur();
       if (commit && !this.disabled && drag.ratio !== drag.initial) this.$emit('change', drag.ratio);
       else this.$emit('cancel');
     },

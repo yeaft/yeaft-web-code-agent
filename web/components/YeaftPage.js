@@ -10,6 +10,7 @@ import MessageList from './MessageList.js';
 import SettingsPanel from './SettingsPanel.js';
 import AgentSettingsPanel from './AgentSettingsPanel.js';
 import YeaftSidebar from './YeaftSidebar.js';
+import SessionSidebarResizeHandle from './SessionSidebarResizeHandle.js';
 import SessionInviteModal from './SessionInviteModal.js';
 import SessionCreateModal from './SessionCreateModal.js';
 import SessionSceneSelect from './SessionSceneSelect.js';
@@ -106,7 +107,7 @@ export function visibleSessionStatusTasks(taskMap) {
 
 export default {
   name: 'YeaftPage',
-  components: { DigitalPersonPage, ScheduledTaskBar, ScheduledTaskNotifications, NavigationIcon, ChatInput, AgentInstaller, MessageList, SettingsPanel, AgentSettingsPanel, YeaftSidebar, SessionInviteModal, SessionCreateModal, SessionSceneSelect, SessionSettingsModal, PluginCenterPage, WorkbenchPanel, WorkCenterPage, YeaftDebugPanel, VpTimelinePane, YeaftSessionActions, YeaftConversationOutline },
+  components: { DigitalPersonPage, ScheduledTaskBar, ScheduledTaskNotifications, NavigationIcon, ChatInput, AgentInstaller, MessageList, SettingsPanel, AgentSettingsPanel, YeaftSidebar, SessionSidebarResizeHandle, SessionInviteModal, SessionCreateModal, SessionSceneSelect, SessionSettingsModal, PluginCenterPage, WorkbenchPanel, WorkCenterPage, YeaftDebugPanel, VpTimelinePane, YeaftSessionActions, YeaftConversationOutline },
   template: `
     <div class="yeaft-page" ref="pageRef">
       <!-- Mobile sidebar overlay -->
@@ -115,6 +116,7 @@ export default {
       <!-- Left Sidebar — V2 (task-341: V2 is the only sidebar now). -->
       <!-- Legacy sidebar event alias; canonical settings dialog uses session terminology. -->
       <YeaftSidebar
+        id="session-sidebar"
         :inert="store.digitalPersonOpen && digitalPersonModalOpen ? true : undefined"
         v-show="!store.workCenterOpen"
         :collapsed="effectiveSidebarCollapsed"
@@ -126,6 +128,8 @@ export default {
         @open-agent-settings="openAgentSettings"
         @open-group-settings="openSessionSettings"
       />
+      <SessionSidebarResizeHandle v-if="!store.workCenterOpen && !effectiveSidebarCollapsed && !isMobile"
+        :inert="store.digitalPersonOpen && digitalPersonModalOpen ? true : undefined" controls="session-sidebar" />
 
       <ScheduledTaskNotifications :store="store" />
       <DigitalPersonPage v-if="store.digitalPersonOpen" @toggle-sidebar="store.toggleSessionSidebar()" @interaction-blocked="digitalPersonModalOpen = $event" />

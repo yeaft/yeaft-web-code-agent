@@ -24,6 +24,77 @@
   border-right: 1px solid var(--border-color);
 }
 
+/* Width divider after a desktop sidebar (SessionSidebarResizeHandle). The hit
+   area straddles the seam with zero net width: 2px over the sidebar edge,
+   clear of its 8px scrollbar, and 6px over the content beside it. */
+.session-sidebar-resize-handle {
+  position: relative;
+  z-index: 20;
+  flex: 0 0 8px;
+  margin: 0 -6px 0 -2px;
+  cursor: col-resize;
+  touch-action: none;
+}
+
+.session-sidebar-resize-handle::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 1px;
+  width: 2px;
+  background: transparent;
+  transition: background-color var(--duration-fast) var(--ease-out);
+}
+
+/* Neutral feedback like the other Session dividers; the short delay keeps a
+   pointer that merely crosses the edge from flashing the line. */
+.session-sidebar-resize-handle:hover::after {
+  background: var(--text-muted);
+  transition-delay: 150ms;
+}
+
+.session-sidebar-resize-handle.is-dragging::after {
+  background: var(--text-secondary);
+  transition-delay: 0s;
+}
+
+.session-sidebar-resize-handle:focus-visible {
+  outline: none;
+}
+
+.session-sidebar-resize-handle:focus-visible::after {
+  background: var(--focus-ring-color);
+}
+
+/* Follow the pointer exactly while dragging. */
+.session-sidebar-shell:has(+ .session-sidebar-resize-handle.is-dragging) {
+  transition: none;
+}
+
+@media (pointer: coarse) {
+  .session-sidebar-resize-handle {
+    flex-basis: 16px;
+    margin: 0 -12px 0 -4px;
+  }
+
+  .session-sidebar-resize-handle::after {
+    left: 3px;
+  }
+}
+
+@media (max-width: 768px) {
+  .session-sidebar-resize-handle {
+    display: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .session-sidebar-resize-handle::after {
+    transition: none;
+  }
+}
+
 /* Sidebar / Workbench 分隔线 */
 .sidebar-workbench-divider {
   width: 1px;
