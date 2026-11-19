@@ -1,7 +1,7 @@
 import { useAuthStore } from './auth.js';
 import {
   persistedYeaftUserMessageId, yeaftTurnDeletionFence, isYeaftTurnDeletionFenceCurrent,
-  isYeaftTurnDeletionFrameCurrent, settleYeaftTurnDeletion, supportsYeaftTurnDeletion, YEAFT_DELETE_TURN_TIMEOUT_MS,
+  isYeaftTurnDeletionFrameCurrent, settleYeaftTurnDeletion, YEAFT_DELETE_TURN_TIMEOUT_MS,
 } from './helpers/yeaft-turn-deletion.js';
 import { readPersonUiPreferences, writePersonUiPreferences } from './helpers/person-ui-preference.js';
 import { availableDigitalPersonAgents, resolveDigitalPersonAgentId } from '../utils/digital-person-agent.js';
@@ -3909,8 +3909,7 @@ export const useChatStore = defineStore('chat', {
       const messageId = persistedYeaftUserMessageId(message);
       if (!messageId) return null;
       const { agentId, sessionId } = activeYeaftHistoryIdentity(this);
-      if (!agentId || !sessionId || !supportsYeaftTurnDeletion(this, this.agents.find(agent => agent.id === agentId))
-          || getSessionsStore()?.sessionById?.(sessionId, agentId)?.task
+      if (!agentId || !sessionId || getSessionsStore()?.sessionById?.(sessionId, agentId)?.task
           || (message.sessionId ?? message.groupId) !== sessionId
           || (message.agentId && message.agentId !== agentId)) return null;
       const key = yeaftHistoryIdentityKey(agentId, sessionId);
@@ -3923,10 +3922,11 @@ export const useChatStore = defineStore('chat', {
     yeaftTurnDeleteUnavailable(target) {
       const { agentId, sessionId } = target;
       const key = yeaftHistoryIdentityKey(agentId, sessionId);
-      if (this._yeaftTurnDeletePending[key]) return 'pending';
       const agent = this.agents.find(agent => agent.id === agentId);
-      if (this.connectionState !== 'connected' || !agent?.online) return 'offline';
-      if (!supportsYeaftTurnDeletion(this, agent)) return 'unsupported';
+      if (this.yeaftSessionDeleteTurnSupported !== true || !Array.isArray(agent?.capabilities)
+          || !agent.capabilities.includes('session_delete_turn')) return 'unsupported';
+      if (this._yeaftTurnDeletePending[key]) return 'pending';
+      if (this.connectionState !== 'connected' || !agent.online) return 'offline';
       if (this.yeaftTurnDeleteHistoryBySession?.[key]?.needsReplay
           || yeaftHistoryNeedsReconnectValidation(this, this.yeaftSessionHistoryState[key])) return 'refreshing';
       if (this.isYeaftSessionProcessing(sessionId, agentId)

@@ -46,7 +46,7 @@ Existing Sessions keep their complete messages, membership, and custom definitio
 
 ## 删除对话轮次
 
-新版 Agent 默认支持轮次删除，无须启动参数或设置。不支持删除的旧 Agent 可以继续连接同一个 Server，其会话不显示删除图标。旧版程序可能无法读取删除标记；不要用不识别删除标记的 Agent 或 CLI 打开同一份已执行删除的数据。
+新版 Agent 默认支持轮次删除，无须启动参数或设置。不支持删除的旧 Agent 可以继续连接同一个 Server，其会话不显示删除图标。如果多个进程共用同一份会话数据，请在首次删除前升级或停用不识别删除标记的旧 Agent 或 CLI，避免旧进程仍读取已删除的内容。
 
 在原生 Yeaft Session 空闲时，会话所有者可以在自己发送的消息下选择 **删除轮次** 并确认。选择原始提问或任意一条补充消息，删除的都是整个 Turn：所有用户输入、VP 回复、模型 Loop 及工具调用和返回结果。无法安全确定归属的旧记录不会删除。
 

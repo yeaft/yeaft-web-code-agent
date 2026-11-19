@@ -1129,7 +1129,9 @@ export default {
     Vue.onUnmounted(() => { deleteTurnNavigation += 1; });
     const deleteTurnActionFor = message => {
       const target = store.yeaftTurnDeleteTarget?.(message);
-      return target ? { target, reason: store.yeaftTurnDeleteUnavailable(target) } : null;
+      if (!target) return null;
+      const reason = store.yeaftTurnDeleteUnavailable(target);
+      return reason === 'unsupported' ? null : { target, reason };
     };
     const deleteTurn = async target => {
       if (deleteTurnDialogOpen || store.yeaftTurnDeleteUnavailable(target)) return;

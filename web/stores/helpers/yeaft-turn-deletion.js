@@ -2,11 +2,6 @@ import { yeaftHistoryIdentityKey } from './yeaft-history-identity.js';
 
 export const YEAFT_DELETE_TURN_TIMEOUT_MS = 15_000;
 
-export function supportsYeaftTurnDeletion(store, agent) {
-  return store.yeaftSessionDeleteTurnSupported === true && Array.isArray(agent?.capabilities)
-    && agent.capabilities.includes('session_delete_turn');
-}
-
 // Native history ids are mNNNN. UI keys, client ids and tool sub-row ids are
 // not valid boundaries. Live echoes can confirm persistence before a replay.
 export function persistedYeaftUserMessageId(row) {
