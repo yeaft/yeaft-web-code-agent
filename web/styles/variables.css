@@ -254,6 +254,15 @@ select option:checked {
   --cat-eye-fill: var(--bg-primary, #fff);
   --cat-pupil-fill: var(--text-primary);
 
+  /* Waiting scene: the basketball play drawn while a turn runs. Figures and
+     court use the text and border greys; the ball is the only colour. A host
+     on a different surface overrides --hoops-surface. */
+  --hoops-ink: var(--text-primary);
+  --hoops-soft: var(--text-muted);
+  --hoops-line: var(--border-color);
+  --hoops-ball: var(--status-busy);
+  --hoops-surface: var(--bg-main);
+
   /* ── Unified alias tokens (used by yeaft/* + git/* CSS) ── */
   /* Surfaces */
   --surface-0: var(--bg-main);
@@ -561,6 +570,13 @@ select option:checked {
   /* SVG cat typing indicator — visible eyes in dark mode (not too bright, not invisible) */
   --cat-eye-fill: rgba(255, 255, 255, 0.7);
   --cat-pupil-fill: #1a1a1a;
+
+  /* Waiting scene — dark: figures one step quieter than body text. */
+  --hoops-ink: var(--text-secondary);
+  --hoops-soft: var(--text-muted);
+  --hoops-line: var(--border-color);
+  --hoops-ball: var(--status-busy);
+  --hoops-surface: var(--bg-main);
 
   /* ── Unified alias tokens — dark theme overrides ── */
   --surface-0: var(--bg-main);

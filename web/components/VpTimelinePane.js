@@ -1,6 +1,12 @@
+import HoopsScene from './HoopsScene.js';
 import TerminalOutput from './TerminalOutput.js';
 import { formatElapsed } from '../stores/helpers/turn-timing.js';
+import { YEAFT_RUNNING_VP_STATES } from '../stores/helpers/yeaft-runtime-state.js';
 import { LIVE_SESSION_TURN_STATES } from '../stores/helpers/yeaft-session-turns.js';
+import { sessionWaitKey } from '../utils/wait-clock.js';
+
+/** Row statuses that mean a turn is executing right now, not queued, waiting or stopping. */
+const EXECUTING_STATES = new Set(['running', ...YEAFT_RUNNING_VP_STATES]);
 
 const tryParseJsonLine = (line) => {
   if (typeof line !== 'string') return null;
@@ -117,7 +123,7 @@ export function createSubAgentTaskDetailLines(task, translate) {
 /** Session execution activity, announcement and background tasks. */
 export default {
   name: 'VpTimelinePane',
-  components: { TerminalOutput },
+  components: { HoopsScene, TerminalOutput },
   emits: ['start-resize', 'stop-turn', 'edit-announcement', 'cancel-task', 'close'],
   props: {
     rows: { type: Array, required: true },
@@ -370,6 +376,12 @@ export default {
           </article>
         </div>
       </section>
+
+      <!-- Waiting scene: the play under the transcript, cut like a broadcast.
+           Shown only while a turn is executing, and kept to the lower half. -->
+      <div v-if="stageClockKey" class="yeaft-session-status-stage">
+        <HoopsScene view="broadcast" :clock-key="stageClockKey" />
+      </div>
     </aside>
   `,
   setup(props) {
@@ -511,7 +523,14 @@ export default {
     }, { immediate: true });
     const elapsed = row => canTime(row) ? formatElapsed(Math.max(0, now.value - row.startedAt)) : '';
 
+    // Same key as the strip under this Session's transcript, so both show one play.
+    const stageClockKey = Vue.computed(() => {
+      const row = props.visible && props.rows.find(candidate => EXECUTING_STATES.has(candidate.status) && !candidate.isStopping);
+      return row ? sessionWaitKey(row.agentId, row.sessionId) : '';
+    });
+
     return {
+      stageClockKey,
       hasAnnouncement,
       announcementPreview,
       statusLabel,
