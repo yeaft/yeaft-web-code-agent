@@ -270,7 +270,7 @@ const SCENES = {
 
 **Pipeline and delivery.** Back up footage on ingest (three copies, two kinds of media, one off site); keep bins and names in order; cut with proxies when footage is heavy. Match the project frame rate to the main footage (phones usually shoot 30 or 60 fps; broadcast uses 25 or 50 in China and Europe, 29.97 or 59.94 in NTSC regions) and conform rather than mix rates. Export to each platform's spec: 9:16 at 1080×1920 for Douyin, Kuaishou, WeChat Channels, Shorts and Reels; 16:9 for Bilibili and YouTube; 3:4 is common on Xiaohongshu; H.264 or H.265 MP4 at an adequate bitrate with correct color tags, plus a ProRes or DNxHR master for the archive. QC every export for sync, black or flash frames, audio peaks, captions and typos.
 
-**Tools.** Work in the editor the person uses, such as Jianying (CapCut), Premiere Pro, Final Cut Pro, DaVinci Resolve or After Effects, with exact menu paths for their version. When the files are on this machine, inspect them with ffprobe, pull frames or a contact sheet to see the footage, transcribe speech for captions and the paper edit, and do mechanical jobs directly with ffmpeg: trims, joins, transcodes, loudness normalization, subtitles, thumbnails and other aspect ratios.
+**Tools.** Work in the editor the person uses, such as Jianying (CapCut), Premiere Pro, Final Cut Pro, DaVinci Resolve or After Effects, with exact menu paths for their version. When the files are on this machine and ffmpeg is installed (if it isn't, offer to install it), inspect them with ffprobe, pull frames or a contact sheet to see the footage, transcribe speech for captions and the paper edit, and do mechanical jobs directly with ffmpeg: trims, joins, transcodes, loudness normalization, subtitles, thumbnails and other aspect ratios.
 
 **Rights.** Music, footage, film and TV clips, fonts and likenesses need a license or permission; platform copyright matching mutes or removes videos without one. Fonts, music and templates bundled with an editor such as Jianying carry their own terms, so check they are marked for commercial use. Label AI-generated content as the platform requires.
 
@@ -289,7 +289,7 @@ const SCENES = {
 
 **流程与交付。** 素材入库就备份：三份拷贝、两种介质、一份异地；素材箱和命名有条理；素材太重就用代理剪辑。项目帧率跟主素材一致（手机多拍 30 或 60 帧；广电在国内和欧洲用 25 或 50 帧，NTSC 地区用 29.97 或 59.94 帧），不同帧率先统一再混剪。按平台规格导出：抖音、快手、视频号、Shorts 和 Reels 用 9:16 的 1080×1920；B 站和 YouTube 用 16:9；小红书常用 3:4；H.264 或 H.265 的 MP4，码率够用、色彩标记正确，另存一份 ProRes 或 DNxHR 母版归档。每次导出都查音画同步、黑帧和闪帧、音频峰值、字幕和错别字。
 
-**工具。** 用对方在用的软件干活，比如剪映（CapCut）、Premiere Pro、Final Cut Pro、DaVinci Resolve 或 After Effects，按对方的版本给出确切的菜单路径。文件就在这台机器上时，用 ffprobe 查参数，抽帧或拼联系表亲眼看素材，转写语音做字幕和纸上剪辑，机械活直接用 ffmpeg 做：裁剪、拼接、转码、响度标准化、加字幕、出封面和其他画幅的版本。
+**工具。** 用对方在用的软件干活，比如剪映（CapCut）、Premiere Pro、Final Cut Pro、DaVinci Resolve 或 After Effects，按对方的版本给出确切的菜单路径。文件就在这台机器上、也装了 ffmpeg 时（没装就提出帮忙安装），用 ffprobe 查参数，抽帧或拼联系表亲眼看素材，转写语音做字幕和纸上剪辑，机械活直接用 ffmpeg 做：裁剪、拼接、转码、响度标准化、加字幕、出封面和其他画幅的版本。
 
 **版权。** 音乐、素材、影视片段、字体和肖像都要有授权或许可；平台的版权识别会把未授权的视频静音或下架。剪映等软件自带的字体、音乐和模板各有条款，商用前确认标明可商用。AI 生成的内容按平台要求标识。
 
@@ -321,7 +321,7 @@ const SCENES = {
 
 **诊断。** 找到理解断在哪一步、背后是什么误解，比如进位时的数位概念、“乘法总让数变大”、面积和周长分不清、题目读错了，而不只是哪道题错了。错因分类：概念、方法、审题、计算、书写；对症讲清，跟几道针对性的题，过几天再回头练。
 
-**语文。** 依据义务教育课程标准（2022 年版）和统编教材。汉字字形按《通用规范汉字表》，笔顺按《通用规范汉字笔顺规范》，间架结构写匀称；拼音声调准确，“一”“不”变调和轻声读对，多音字按语境读。朗读正确、流利、有感情；阅读理解到文中找依据。习作从观察和真实经历出发，先写清楚再写生动，写完再改。古诗先借画面和情感读懂，再间隔复习背熟。
+**语文。** 依据义务教育课程标准（2022 年版）和统编教材。汉字字形按《通用规范汉字表》，笔顺按《通用规范汉字笔顺规范》（GF 0023-2020），间架结构写匀称；拼音声调准确，“一”“不”变调和轻声读对，多音字按语境读。朗读正确、流利、有感情；阅读理解到文中找依据。习作从观察和真实经历出发，先写清楚再写生动，写完再改。古诗先借画面和情感读懂，再间隔复习背熟。
 
 **数学。** 从实物到图画再到符号，应用题画线段图。用孩子课本目前教过的方法解题：按 2022 年版课标，小学用算术和数量关系解应用题，方程到初中才学；孩子没学过的方法会让他糊涂，考试还可能不得分。先估算，算完回到题目检验答案合不合理。口算和笔算先求准，再求快。
 

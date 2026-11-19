@@ -55,7 +55,9 @@ export default {
   computed: {
     sceneIds() {
       const chat = Pinia.useChatStore();
-      return sessionScenesForAgent(capability => chat.hasAgentCapability?.(this.agentId, capability));
+      const offered = sessionScenesForAgent(capability => chat.hasAgentCapability?.(this.agentId, capability));
+      // Keep the Session's current scene listed and selected, e.g. while capabilities load.
+      return SESSION_SCENE_IDS.filter(sceneId => offered.includes(sceneId) || sceneId === this.session.sceneId);
     },
     pendingScene() {
       return this.requestedScene || Pinia.useChatStore().pendingSessionSceneSelectionFor?.(this.session.id, this.agentId) || '';

@@ -134,11 +134,17 @@ describe('Scenario VP catalog compatibility', () => {
     const advertised = new Set(Object.values(SESSION_SCENE_CAPABILITIES));
     chat.hasAgentCapability = (agentId, capability) => capability === 'session_scenes'
       || (agentId === 'b' && advertised.has(capability));
-    render(SessionSceneSelect, { session: Vue.reactive({ id: 'legacy', sceneId: 'general' }), agentId: 'b', open: true });
+    const session = Vue.reactive({ id: 'legacy', sceneId: 'general' });
+    render(SessionSceneSelect, { session, agentId: 'b', open: true });
     const listed = () => wrapper.findAll('[role="option"]').map(row => row.attributes('data-scene-id'));
     expect(listed()).toEqual(SESSION_SCENE_IDS);
     await wrapper.setProps({ agentId: 'a' });
     expect(listed()).toEqual(original);
+    // A Session already on a newer scene keeps it listed and selected.
+    session.sceneId = 'frontend';
+    await Vue.nextTick();
+    expect(listed()).toEqual(['general', 'software', 'frontend', 'writing', 'short-video', 'investment']);
+    expect(wrapper.get('[data-scene-id="frontend"]').attributes('aria-selected')).toBe('true');
     wrapper.unmount();
 
     render(SessionCreateModal, { initialAgentId: 'b' });
