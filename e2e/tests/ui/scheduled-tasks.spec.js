@@ -139,6 +139,11 @@ test('task editing preserves failed drafts for retry, then manually runs the sam
   active.task.revision = 'scheduled-task-pause-r1';
   state.publish();
   const savedTask = structuredClone(active.task);
+  // The Pause control can already be enabled for the preceding revision.
+  // Wait for this Agent-scoped update to reach the client before using it.
+  await expect.poll(() => page.evaluate(({ sessionId, agentId }) =>
+    window.Pinia.useSessionsStore().sessionById(sessionId, agentId)?.task?.revision,
+  { sessionId: TASK_SESSION_ID, agentId: mockAgent.agentId })).toBe(savedTask.revision);
   const stop = page.locator('.scheduled-task-stop');
   await expect(stop).toBeEnabled();
   await expect(stop).toHaveAccessibleName('Pause schedule');
@@ -215,8 +220,6 @@ test('task editing preserves failed drafts for retry, then manually runs the sam
   expect(state.requests.filter(request => request.type === 'yeaft_abort_all')).toHaveLength(0);
 
 });
-
-// Shell, footer and the column anchors must not move when changing trigger.
 
 test('Task reads synchronize across independent devices and survive clean storage reconnects without muting future runs', async ({ browser, page, serverUrl, mockAgent }) => {
   const state = scheduledTaskAgent(mockAgent);

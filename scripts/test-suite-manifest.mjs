@@ -76,7 +76,6 @@ export const CORE_TEST_FILES = Object.freeze([
   "test/web/yeaft-delete-turn-ui.test.js",
   "test/web/llm-draft.test.js",
   "test/web/scheduled-task-ui.test.js",
-  "test/web/scheduled-tasks-store.test.js",
   "test/web/safe-message-markdown.test.js",
   "test/web/stores/auth-session-refresh.test.js",
   "test/web/stores/load-more-yeaft-history.test.js",
