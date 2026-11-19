@@ -12,13 +12,61 @@ import { OTHER_SESSION, SESSION, pane, sessionTurnsFixture } from '../../helpers
 // Run the actual browser modules, not component stubs or injected message arrays.
 test.use({ serverEnv: { YEAFT_LOCAL_RUN: 'true', SERVE_DIST: process.env.SERVE_DIST || 'false' } });
 
-test('one native Session turn retains the ordinary transcript and merges appended tools across replay', async ({ chatPage: page, mockAgent }, info) => {
+// Ink on the basketball canvas: the play was drawn, not merely mounted.
+const drawnPixels = scene => scene.locator('canvas').evaluate((canvas) => {
+  const { data } = canvas.getContext('2d').getImageData(0, 0, canvas.width, canvas.height);
+  let count = 0;
+  for (let i = 3; i < data.length; i += 4) if (data[i] > 0) count += 1;
+  return count;
+});
+const drawnFrame = scene => scene.locator('canvas').evaluate(canvas => canvas.toDataURL());
+
+test('one native Session turn shows its waiting indicator, retains the ordinary transcript and merges appended tools across replay', async ({ chatPage: page, mockAgent }, info) => {
   const wire = await sessionTurnsFixture(page, mockAgent);
+  const indicator = page.locator('.typing-indicator');
+  const hoops = indicator.locator('.hoops-scene');
+  const cat = indicator.locator('.svg-running-cat');
+  const chooseWaitingAnimation = choice => page.evaluate(value => window.Pinia.useChatStore().setWaitingAnimation(value), choice);
+  // The default rotates between the candidates; pin one to assert on it.
+  await chooseWaitingAnimation('hoops');
   const turn = await wire.send('Single root question');
+  // Until text streams, the chosen waiting animation plays under the
+  // transcript, and only there.
+  await expect(hoops).toHaveAttribute('aria-hidden', 'true');
+  await expect(hoops).toHaveAttribute('data-held', 'false');
+  await expect.poll(() => drawnPixels(hoops)).toBeGreaterThan(200);
+  await expect(cat).toHaveCount(0);
+  await expect(page.locator('.yeaft-session-status-pane canvas')).toHaveCount(0);
+  // Reduced motion holds one frame and stills the dots; without it the play moves on.
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await expect(hoops).toHaveAttribute('data-held', 'true');
+  await expect(indicator.locator('> span').first()).toHaveCSS('animation-name', 'none');
+  const held = await drawnFrame(hoops);
+  await page.waitForTimeout(200);
+  expect(await drawnFrame(hoops)).toBe(held);
+  await page.emulateMedia({ reducedMotion: 'no-preference' });
+  await expect(hoops).toHaveAttribute('data-held', 'false');
+  await expect.poll(() => drawnFrame(hoops)).not.toBe(held);
+  // A new choice applies to the wait on screen: the cat is still a candidate,
+  // off leaves the dots alone, and random settles on exactly one candidate.
+  await chooseWaitingAnimation('cat');
+  await expect(cat).toBeVisible();
+  await expect(hoops).toHaveCount(0);
+  await chooseWaitingAnimation('off');
+  await expect(indicator).toBeVisible();
+  await expect(indicator.locator('.hoops-scene, .svg-running-cat')).toHaveCount(0);
+  await chooseWaitingAnimation('random');
+  const candidate = indicator.locator('.hoops-scene, .svg-running-cat');
+  await expect(candidate).toHaveCount(1);
+  const picked = await candidate.evaluate(element => (element.classList.contains('hoops-scene') ? '.hoops-scene' : '.svg-running-cat'));
   wire.delta(turn, 'Single answer begins');
   await expect(page.locator('.assistant-turn').filter({ hasText: 'Single answer begins' })).toBeVisible();
+  // Streaming text takes over from the indicator.
+  await expect(indicator).toHaveCount(0);
   await expect(page.locator('.parallel-turn-tabs')).toHaveCount(0);
   wire.tool(turn, 'before-append', 'Read');
+  // Back after the text, the turn keeps the animation it started with.
+  await expect(indicator.locator(picked)).toBeVisible();
   await wire.send('Extra detail for the same turn', turn);
   wire.tool(turn, 'after-append', 'Grep');
   // A new assistant row after a tool loop, not a delta into the old text row.
@@ -34,6 +82,8 @@ test('one native Session turn retains the ordinary transcript and merges appende
   await expect(page.locator('.message-user-block').filter({ hasText: 'Extra detail for the same turn' })).toHaveCount(1);
   wire.finish(turn);
   await expect(answer).not.toHaveClass(/streaming/);
+  // The wait ends with the turn.
+  await expect(indicator).toHaveCount(0);
   await page.reload();
   await page.waitForFunction(id => window.Pinia?.useChatStore?.().agents.some(agent => agent.id === id && agent.status === 'ready'), mockAgent.agentId);
   await wire.open();

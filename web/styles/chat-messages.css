@@ -443,6 +443,52 @@
   font-family: inherit;
 }
 
+/* ================================================================
+   BASKETBALL WAITING ANIMATION (HoopsScene) — a canvas that draws one
+   possession while a turn runs. Colours are the --hoops-* tokens.
+   ================================================================ */
+
+/* The row grows to the court's height and the dots sit on its floor line. */
+.typing-indicator.with-hoops {
+  align-items: flex-end;
+  padding: var(--space-1) 0;
+}
+.typing-indicator.with-hoops > span:nth-child(-n+3) { margin-bottom: var(--space-0-5); }
+
+/* A full court wide and two lines tall, so showing and hiding it between tool
+   calls moves the text as little as possible. The mask lets the floor line
+   fade out at both ends instead of stopping dead. */
+.hoops-scene {
+  flex: 0 1 320px;
+  min-width: 0;
+  height: 56px;
+  margin-left: var(--space-2);
+  -webkit-mask-image: linear-gradient(to right, transparent, #000 20px, #000 calc(100% - 12px), transparent);
+  mask-image: linear-gradient(to right, transparent, #000 20px, #000 calc(100% - 12px), transparent);
+}
+
+.hoops-scene-canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+/* The ball handler is tinted by the waiting status. */
+.hoops-scene.is-disconnected,
+.hoops-scene.is-agent-offline { --hoops-ink: var(--status-error); }
+.hoops-scene.is-compacting { --hoops-ink: var(--accent-blue); }
+.hoops-scene.is-session-lost,
+.hoops-scene.is-cli-exited { --hoops-ink: var(--warn-text); }
+
+/* With motion reduced the scene holds one frame, so its dots hold still too.
+   The selector repeats the dot rule's own so that it outranks it. */
+@media (prefers-reduced-motion: reduce) {
+  .typing-indicator.with-hoops > span:not(.typing-status-text):not(.svg-cat-walk):not(.svg-dog-scene) {
+    animation: none;
+    opacity: 0.7;
+  }
+}
+
 /* SVG Running Cat Animation */
 .svg-running-cat {
   display: inline-block;

@@ -77,6 +77,7 @@ import {
 import { createPerfTraceId, recordPerfTrace, measureNextPaint } from './helpers/perfTrace.js';
 import { normalizeSessionMessageQuote } from '../utils/session-message-quote.js';
 import { markTurnResponseKinds } from '../utils/turn-response.js';
+import { normalizeWaitingAnimation, readWaitingAnimationPreference, writeWaitingAnimationPreference } from '../utils/waiting-animations.js';
 import {
   workbenchRouteKey,
   workbenchWorkspaceGeneration,
@@ -735,6 +736,8 @@ export const useChatStore = defineStore('chat', {
     yeaftConversationCovered: false,
     theme: localStorage.getItem('theme') || (typeof window !== 'undefined' && window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'),
     themeFollowSystem: !localStorage.getItem('theme'),
+    // Which waiting animation the typing indicator plays: 'random', one id, or 'off'.
+    waitingAnimation: readWaitingAnimationPreference(),
     locale: localStorage.getItem('locale') || 'zh-CN',
     // Per-conversation 执行状态追踪：conversationId -> { currentTool, toolHistory, lastActivity }
     executionStatusMap: {},
@@ -8932,6 +8935,10 @@ export const useChatStore = defineStore('chat', {
       document.documentElement.classList.toggle('light', this.theme === 'light');
     },
 
+    setWaitingAnimation(choice) {
+      this.waitingAnimation = normalizeWaitingAnimation(choice);
+      writeWaitingAnimationPreference(this.waitingAnimation);
+    },
 
     initTheme() {
       document.documentElement.setAttribute('data-theme', this.theme);

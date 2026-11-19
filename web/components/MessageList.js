@@ -12,6 +12,9 @@ import MessageBlock from './MessageBlock.js';
 import ConcurrentUserTurns from './ConcurrentUserTurns.js';
 import { orderUserTurnMessages, partitionUserTurnBlocks, isPendingUserTurn } from '../utils/concurrent-user-turns.js';
 import { applyRunningCatFrame, createRunningCatLoop, resolveRunningCatFrame } from '../utils/running-cat.js';
+import HoopsScene from './HoopsScene.js';
+import { readWaitClock } from '../utils/wait-clock.js';
+import { pickWaitingAnimation } from '../utils/waiting-animations.js';
 import {
   orderYeaftVpTurnMessagesByExecution,
   shouldCloseYeaftVpTurn,
@@ -53,7 +56,7 @@ import { resolveLongResponseOrigin } from '../utils/response-origin-navigation.j
 
 export default {
   name: 'MessageList',
-  components: { AgentInstaller, MessageItem, AssistantTurn, VpTurnBlock, VpSpeakerHeader, ReflectionCard, SubAgentCard, UserTurnBlock, VirtualTranscript, MessageBlock, ConcurrentUserTurns },
+  components: { AgentInstaller, MessageItem, AssistantTurn, VpTurnBlock, VpSpeakerHeader, ReflectionCard, SubAgentCard, UserTurnBlock, VirtualTranscript, MessageBlock, ConcurrentUserTurns, HoopsScene },
   template: `
     <main class="chat-container virtual-transcript-scroller" ref="containerRef" tabindex="-1">
       <!-- Session Loading Overlay - only covers message area -->
@@ -201,7 +204,7 @@ export default {
           empty.
         -->
         <!-- Typing dots: visible when processing but not streaming text -->
-        <div v-if="previewShowTypingDots && !splitActive" class="typing-indicator" :class="waitingStatus ? ('status-' + waitingStatus) : ''">
+        <div v-if="previewShowTypingDots && !splitActive" class="typing-indicator" :class="[{ 'with-hoops': animationType === 'hoops' }, waitingStatus ? ('status-' + waitingStatus) : '']">
           <span></span><span></span><span></span>
           <template v-if="animationType === 'cat'">
           <span class="svg-cat-walk" ref="catWalkRef">
@@ -273,7 +276,8 @@ export default {
           </span>
           </span>
           </template>
-          <template v-else>
+          <HoopsScene v-else-if="animationType === 'hoops'" :clock-key="waitClockKey" :status="waitingStatus || ''" />
+          <template v-else-if="animationType === 'dog'">
           <span class="svg-dog-scene" :class="'dog-phase-' + dogPhase" aria-hidden="true">
             <svg viewBox="0 0 120 28" xmlns="http://www.w3.org/2000/svg">
               <!-- Left post -->
@@ -362,7 +366,7 @@ export default {
       </div>
 
       <!-- Preview mode: standalone typing indicator when no conversation -->
-      <div v-if="isPreviewMode && !store.currentConversation" class="typing-indicator preview-animation-indicator" style="position: fixed; bottom: 100px; left: 0; right: 0; padding: 16px 24px; z-index: 100;">
+      <div v-if="isPreviewMode && !store.currentConversation" class="typing-indicator preview-animation-indicator" :class="{ 'with-hoops': animationType === 'hoops' }" style="position: fixed; bottom: 100px; left: 0; right: 0; padding: 16px 24px; z-index: 100;">
         <span></span><span></span><span></span>
         <template v-if="animationType === 'cat'">
         <span class="svg-cat-walk" ref="catWalkRef">
@@ -420,7 +424,8 @@ export default {
         </span>
         </span>
         </template>
-        <template v-else>
+        <HoopsScene v-else-if="animationType === 'hoops'" :clock-key="waitClockKey" />
+        <template v-else-if="animationType === 'dog'">
         <span class="svg-dog-scene" :class="'dog-phase-' + dogPhase" aria-hidden="true">
           <svg viewBox="0 0 120 28" xmlns="http://www.w3.org/2000/svg">
             <rect class="svg-dog-post" x="1" y="18" width="2" height="8" rx="0.5"/>
@@ -1379,10 +1384,13 @@ export default {
     const catSpriteRef = Vue.ref(null);
     let typingTimer = null;
 
-    // Animation type: randomly chosen each time typing starts
+    // Animation showing in the indicator: one of the candidates in
+    // waiting-animations.js, picked once per turn ('none' shows the dots alone).
     const animationType = Vue.ref('cat');
-    // Check URL for preview mode (?preview=cat or ?preview=dog)
+    // Check URL for preview mode (?preview=cat, ?preview=hoops or ?preview=dog)
     const urlPreview = new URLSearchParams(window.location.search).get('preview');
+    // Identity of the wait this transcript shows; see wait-clock.js.
+    const waitClockKey = Vue.computed(() => virtualTranscriptIdentity.value);
 
     // Dog walk state
     const dogPosL = Vue.ref(5);
@@ -1537,7 +1545,7 @@ export default {
     const questionRX = Vue.computed(() => dogPosR.value * 1.2);
 
     // Preview mode: ?preview=cat|dog|animation forces typing indicator permanently
-    const isPreviewMode = urlPreview === 'cat' || urlPreview === 'dog' || urlPreview === 'animation';
+    const isPreviewMode = urlPreview === 'cat' || urlPreview === 'hoops' || urlPreview === 'dog' || urlPreview === 'animation';
 
     // ★ task-346: Minimum visibility window for the typing indicator.
     //
@@ -1564,6 +1572,35 @@ export default {
       return displayTypingDots.value;
     });
 
+    // The animation for the turn in progress, from the user's preference
+    // (Settings → General). It is picked when the turn's first indicator shows
+    // and kept until processing ends, so a turn does not change animation, and
+    // row height, between its tool calls. ?preview= forces one instead; the
+    // dog needs more polish and is only reachable that way.
+    const previewAnimation = urlPreview === 'dog' || urlPreview === 'hoops' ? urlPreview : 'cat';
+    let turnAnimation = null;
+    const startWaitingAnimation = () => {
+      catLoop.stop();
+      if (dogRafId) { cancelAnimationFrame(dogRafId); dogRafId = null; }
+      if (isPreviewMode) {
+        animationType.value = previewAnimation;
+      } else {
+        if (!turnAnimation) turnAnimation = pickWaitingAnimation(store.waitingAnimation, readWaitClock(waitClockKey.value));
+        animationType.value = turnAnimation;
+      }
+      dogPosL.value = 5; dogPosR.value = 95; dogPhase.value = 'bark-both';
+      dogFlipL.value = 1; dogFlipR.value = -1;
+      if (animationType.value === 'cat') catLoop.start();
+      else if (animationType.value === 'dog') dogRafId = requestAnimationFrame(updateDogWalk);
+    };
+    Vue.watch(() => store.isProcessing, (processing) => { if (!processing) turnAnimation = null; });
+    Vue.watch(waitClockKey, () => { turnAnimation = null; });
+    // A change in Settings applies to the wait already on screen.
+    Vue.watch(() => store.waitingAnimation, () => {
+      turnAnimation = null;
+      if (displayTypingDots.value) startWaitingAnimation();
+    });
+
     Vue.watch(showTypingDots, (show) => {
       if (show) {
         // Cancel any pending hide from a prior cycle — we're visible again.
@@ -1579,16 +1616,7 @@ export default {
             now.value = Date.now();
           }, 1000);
         }
-        // Always use cat for now; dog animation needs more polish
-        // Dog can still be previewed via ?preview=dog
-        animationType.value = 'cat';
-        dogPosL.value = 5; dogPosR.value = 95; dogPhase.value = 'bark-both';
-        dogFlipL.value = 1; dogFlipR.value = -1;
-        if (animationType.value === 'cat') {
-          catLoop.start();
-        } else {
-          dogRafId = requestAnimationFrame(updateDogWalk);
-        }
+        startWaitingAnimation();
       } else {
         const elapsed = typingStartTime.value ? (Date.now() - typingStartTime.value) : MIN_VISIBLE_MS;
         const remaining = Math.max(0, MIN_VISIBLE_MS - elapsed);
@@ -1613,20 +1641,7 @@ export default {
     if (isPreviewMode) {
       typingStartTime.value = Date.now();
       now.value = Date.now();
-      if (urlPreview === 'dog') {
-        animationType.value = 'dog';
-      } else if (urlPreview === 'cat') {
-        animationType.value = 'cat';
-      } else {
-        animationType.value = 'cat';
-      }
-      if (animationType.value === 'cat') {
-        catLoop.start();
-      } else {
-        dogPosL.value = 5; dogPosR.value = 95; dogPhase.value = 'bark-both';
-        dogFlipL.value = 1; dogFlipR.value = -1;
-        dogRafId = requestAnimationFrame(updateDogWalk);
-      }
+      startWaitingAnimation();
     }
 
     // Event-driven waiting status (replaces time-based waitingPhase)
@@ -2296,6 +2311,7 @@ export default {
       isPreviewMode,
       waitingStatus,
       animationType,
+      waitClockKey,
       catWalkRef,
       catSpriteRef,
       dogPhase,
