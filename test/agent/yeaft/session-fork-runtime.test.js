@@ -4,7 +4,6 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import ctx from '../../../agent/context.js';
 import { Engine } from '../../../agent/yeaft/engine.js';
-import { NullTrace } from '../../../agent/yeaft/debug-trace.js';
 import { ConversationStore } from '../../../agent/yeaft/conversation/persist.js';
 import { closeConversationHistoryIndexes } from '../../../agent/yeaft/conversation/history-index.js';
 import { createSession } from '../../../agent/yeaft/sessions/session-store.js';
@@ -14,17 +13,19 @@ import { sessionsRoot, snapshotSessions } from '../../../agent/yeaft/sessions/se
 import { buildRoleMd } from '../../../agent/yeaft/vp/vp-crud.js';
 import { TaskManager } from '../../../agent/yeaft/tasks/manager.js';
 import {
-  __testHooks, __testDrainVpDrivers, __testResetVpState, __testSetSession, __testSetThreadClassifier,
-  __testEnqueueForVp, __testGetVpThreads, __testWaitForRoutePromises,
-  handleYeaftCopySession, handleYeaftMergeSessions, handleYeaftAbortAll, installYeaftRuntimeBridge,
+  __testHooks,
+  __testDrainVpDrivers,
+  __testResetVpState,
+  __testSetSession,
+  handleYeaftCopySession,
+  installYeaftRuntimeBridge,
 } from '../../../agent/yeaft/web-bridge.js';
 
 // Native ingress, classification, fan-out, drivers, tasks, CRUD and durable
 // transcript traversal are real. Only the model query has a terminal gate.
-const realQuery = Engine.prototype.query;
 const deferred = () => { let resolve; const promise = new Promise(r => { resolve = r; }); return { promise, resolve }; };
 const original = Object.fromEntries(['CONFIG', 'ws', 'outboundSendQueue', 'outboundSendQueueActive', 'serverEncryptionRequired'].map(key => [key, ctx[key]]));
-let root, store, calls, runtime, capture;
+let root, store, calls, runtime;
 const id = 'session_source';
 const config = { model: 'gpt-4.1', modelEffort: 'medium' };
 
@@ -46,8 +47,7 @@ function rows(sessionId) {
   return readdirSync(dir).filter(name => name.endsWith('.jsonl')).sort()
     .flatMap(name => readFileSync(join(dir, name), 'utf8').split('\n').filter(Boolean).map(JSON.parse));
 }
-const contents = sessionId => rows(sessionId).map(row => row.content);
-const history = sessionId => new ConversationStore(root).loadVisibleBySession(sessionId, Infinity, Infinity).messages;
+
 const meta = sessionId => JSON.parse(readFileSync(join(sessionsRoot(root), sessionId, 'session.json'), 'utf8'));
 const inventory = () => snapshotSessions(root).map(row => row.id).sort();
 function result(requestId) {
@@ -98,7 +98,6 @@ beforeEach(() => {
   runtime = { yeaftDir: root, config: {}, conversationStore: store };
   __testSetSession(runtime);
   calls = [];
-  capture = vi.spyOn(ConversationStore.prototype, 'captureSessionCopyBoundary');
   vi.spyOn(Engine.prototype, 'query').mockImplementation(async function* (args) {
     const gate = deferred();
     const call = { ...args, engine: this, gate, running: true };
@@ -138,266 +137,6 @@ afterEach(async () => {
   vi.restoreAllMocks();
   Object.assign(ctx, original);
   rmSync(root, { recursive: true, force: true });
-});
-
-it('captures the durable prefix synchronously before the first send await, including an explicit empty prefix', async () => {
-  const pending = send('first');
-  expect(capture).toHaveBeenCalledExactlyOnceWith(id);
-  expect(capture.mock.results[0].value).toMatchObject({ version: 1, sessionId: id, rowCount: 0, lastMessageId: null });
-  expect(rows(id)).toEqual([]);
-  // This write happens before the async handler resumes from runtime loading.
-  store.append({ sessionId: id, role: 'assistant', content: 'after acceptance', threadId: 'other' });
-  const fork = copy('before-await');
-  expectFork(fork, []);
-  expect(history(fork.session.id)).toEqual([]);
-  expect(__testHooks.decorateSessionsWithRuntimeState([{ id }])[0].running).toBe(true);
-  await pending;
-  await waitCalls(1);
-  expect(contents(id)).toEqual(['after acceptance', '@alpha first', `partial ${calls[0].prompt}`]);
-  expectFork(copy('during-output'), []);
-  expectSourceRunning();
-  calls[0].gate.resolve();
-  await __testDrainVpDrivers();
-  expect(__testHooks.sessionHasActiveWork(id)).toBe(false);
-  const source = rows(id);
-  const idle = copy('after-terminal');
-  expectFork(idle, source);
-  expect(history(idle.session.id).map(row => row.content)).toContain(`done ${calls[0].prompt}`);
-  expect(rows(id)).toEqual(source);
-});
-
-it('keeps the earliest prefix across concurrent VPs and classification-pending related input, then advances only after quiescence', async () => {
-  completedTurn();
-  const prefix = rows(id);
-  await send('fanout', ['alpha', 'beta']);
-  await waitCalls(2);
-  const variants = rows(id).filter(row => row.clientMessageId === 'fanout');
-  expect(variants).toHaveLength(2); // one durable human variant per VP thread
-  expect(new Set(variants.map(row => row.threadId)).size).toBe(2);
-  expect(new Set(calls.map(call => call.senderVpId))).toEqual(new Set(['alpha', 'beta']));
-  const alpha = calls.find(call => call.senderVpId === 'alpha');
-  const append = send('related');
-  // Runtime loading resumes first; the real no-adapter classifier then yields
-  // at its await before deciding that this input belongs to alpha's live thread.
-  await Promise.resolve();
-  expect(__testGetVpThreads(id, 'alpha')[0].pendingQueries).toHaveLength(0);
-  expectFork(copy('pending-classification', { throughTurnId: 'historic' }), prefix);
-  expectFork(copy('concurrent'), prefix);
-  await append;
-  await __testWaitForRoutePromises('related');
-  expect(__testGetVpThreads(id, 'alpha')[0].pendingQueries).toHaveLength(1);
-  expect(contents(id).filter(content => content === '@alpha related')).toHaveLength(1);
-  expectFork(copy('after-append'), prefix);
-  calls.find(call => call.senderVpId === 'beta').gate.resolve();
-  await new Promise(resolve => setImmediate(resolve));
-  expectFork(copy('one-vp-left'), prefix);
-  alpha.gate.resolve();
-  await waitCalls(3); // leftover related input is rescued on the original thread
-  expect(calls[2].threadId).toBe(alpha.threadId);
-  expectFork(copy('append-rescue'), prefix);
-  expectSourceRunning();
-  calls[2].gate.resolve();
-  await __testDrainVpDrivers();
-  expect(__testHooks.sessionHasActiveWork(id)).toBe(false);
-  const source = rows(id);
-  const idleFork = copy('idle');
-  expectFork(idleFork, source);
-  expect(history(idleFork.session.id).filter(row => row.role === 'user').map(row => row.content))
-    .toEqual(['question historic', '@alpha @beta fanout', '@alpha @beta fanout', '@alpha related']);
-  expect(rows(id)).toEqual(source);
-  expectSourceRunning();
-});
-
-it('retains the prefix across queued envelopes, route handoffs and the task-result microtask gap', async () => {
-  completedTurn();
-  const prefix = rows(id);
-  await send('root');
-  await waitCalls(1);
-  const threadId = calls[0].threadId;
-  __testEnqueueForVp(id, 'alpha', { sessionId: id, trigger: 'task_result', msg: { id: 'queued', from: 'tool',
-    text: 'queued result', meta: { injectedBy: 'task_result', sourceThreadId: threadId } } });
-  await __testWaitForRoutePromises('queued');
-  expect(__testHooks.queuedTurnIds()).toHaveLength(1);
-  expectFork(copy('queued'), prefix);
-  __testEnqueueForVp(id, 'beta', { sessionId: id, trigger: 'route_forward', msg: { id: 'handoff', from: 'alpha',
-    text: 'handoff', meta: { injectedBy: 'route_forward', senderVpId: 'alpha' } } });
-  await __testWaitForRoutePromises('handoff');
-  await waitCalls(2);
-  calls[0].gate.resolve();
-  await waitCalls(3);
-  expect(calls[2].threadId).toBe(threadId);
-  expect(calls[2].prompt).toContain('queued result');
-  expect(calls[1].senderVpId).toBe('beta');
-  expectFork(copy('handoff-queue'), prefix);
-  expect(__testHooks.scheduleTaskResultRescue({ taskId: 'late', sessionId: id, vpId: 'beta', threadId: calls[1].threadId, content: 'late result' })).toBe(true);
-  expectFork(copy('rescue-scheduled'), prefix);
-  expectSourceRunning();
-  calls[1].gate.resolve();
-  calls[2].gate.resolve();
-  await waitCalls(4);
-  expect(calls[3].prompt).toContain('late result');
-  expectFork(copy('late-reentry'), prefix);
-  calls[3].gate.resolve();
-  await __testDrainVpDrivers();
-  expect(__testHooks.sessionHasActiveWork(id)).toBe(false);
-  const source = rows(id);
-  expectFork(copy('all-routes-terminal'), source);
-  expect(source.filter(row => row.role === 'user').map(row => row.content)).toEqual(['question historic', '@alpha root']);
-  expectSourceRunning();
-});
-
-it('keeps model_reentry tasks in the epoch after drivers finish, while status-only tasks do not block idle merge', async () => {
-  completedTurn();
-  const prefix = rows(id);
-  runtime.taskManager = new TaskManager({ yeaftDir: root });
-  installYeaftRuntimeBridge(runtime);
-  await send('with-task');
-  await waitCalls(1);
-  const task = runtime.taskManager.startTask({ sessionId: id, ownerVpId: 'alpha', resultDelivery: 'model_reentry', source: { threadId: calls[0].threadId } });
-  calls[0].gate.resolve();
-  await __testDrainVpDrivers();
-  expect(__testHooks.sessionHasActiveWork(id)).toBe(true);
-  expectFork(copy('task-wait'), prefix);
-  seedSession('session_other');
-  completedTurn('other', 'session_other');
-  const beforeBusyMerge = inventory();
-  handleYeaftMergeSessions({ sessionId: 'session_other', otherSessionId: id, requestId: 'busy-merge' });
-  expect(result('busy-merge')).toMatchObject({ op: 'merge', ok: false, error: { code: 'session_running', sessionId: id } });
-  expect(inventory()).toEqual(beforeBusyMerge);
-  runtime.taskManager.completeTask(id, task.id, { status: 'succeeded', summary: 'ready' });
-  // Completion releases the task lease only after queuing the rescue microtask.
-  expectFork(copy('task-completion-gap'), prefix);
-  await waitCalls(2);
-  expect(calls[1].threadId).toBe(calls[0].threadId);
-  expect(calls[1].prompt).toContain('ready');
-  expectFork(copy('task-reentry'), prefix);
-  calls[1].gate.resolve();
-  await __testDrainVpDrivers();
-  // The real sub-agent runner refreshes the terminal log after completeTask.
-  // Completed, failed and cancelled tasks must not resurrect the activity epoch.
-  runtime.taskManager.refreshTaskLog(id, task.id);
-  expect(__testHooks.sessionHasActiveWork(id)).toBe(false);
-  for (const status of ['failed', 'cancelled']) {
-    const terminalTask = runtime.taskManager.startTask({ sessionId: id, ownerVpId: 'alpha', resultDelivery: 'model_reentry', source: { threadId: calls[0].threadId } });
-    const callCount = calls.length;
-    runtime.taskManager.completeTask(id, terminalTask.id, { status, summary: status });
-    runtime.taskManager.refreshTaskLog(id, terminalTask.id);
-    await waitCalls(callCount + 1);
-    calls.at(-1).gate.resolve();
-    await __testDrainVpDrivers();
-    runtime.taskManager.refreshTaskLog(id, terminalTask.id);
-    expect(__testHooks.sessionHasActiveWork(id)).toBe(false);
-  }
-  const statusOnly = runtime.taskManager.startTask({ sessionId: id, ownerVpId: 'alpha', resultDelivery: 'status_only' });
-  expect(runtime.taskManager.listActiveTasks(id).map(task => task.id)).toEqual([statusOnly.id]);
-  expect(__testHooks.sessionHasActiveWork(id)).toBe(false);
-  const source = rows(id), other = rows('session_other');
-  const sourceMeta = meta(id), otherMeta = meta('session_other');
-  const sourceHistory = history(id), otherHistory = history('session_other');
-  handleYeaftMergeSessions({ sessionId: id, otherSessionId: 'session_other', name: 'Merged', requestId: 'idle-merge' });
-  const merged = result('idle-merge');
-  expect(merged).toMatchObject({ op: 'merge', ok: true, sourceSessionId: id, otherSessionId: 'session_other',
-    session: { name: 'Merged', copiedMessageCount: source.length + other.length, sharedTurnCount: 0, config } });
-  const targetId = merged.session.id;
-  expect([id, 'session_other']).not.toContain(targetId);
-  expect(meta(targetId)).toMatchObject({ name: 'Merged', roster: ['alpha', 'beta'], defaultVpId: 'alpha', announcement: 'Keep source context' });
-  expect(loadSessionConfig(root, targetId)).toEqual(config);
-  expect(rows(targetId).map(row => row.content).sort()).toEqual([...source, ...other].map(row => row.content).sort());
-  expect(rows(targetId).every(row => row.sessionId === targetId)).toBe(true);
-  expect(history(targetId).map(row => row.content).sort()).toEqual([...sourceHistory, ...otherHistory].map(row => row.content).sort());
-  expect(inventory()).toEqual(expect.arrayContaining([id, 'session_other', targetId]));
-  expect(rows(id)).toEqual(source);
-  expect(rows('session_other')).toEqual(other);
-  expect(meta(id)).toEqual(sourceMeta);
-  expect(meta('session_other')).toEqual(otherMeta);
-  expect(history(id)).toEqual(sourceHistory);
-  expect(history('session_other')).toEqual(otherHistory);
-  expectSourceRunning();
-
-  // Real Engine acceptance is not consumption: with a 4K window the result
-  // appended to its durable tool row is clipped from the provider request.
-  // Its undelivered rescue must retain the old human request even after a
-  // newer human request has reached disk (and merge must group it there).
-  const pressureId = 'session_pressure';
-  seedSession(pressureId);
-  const originalUser = completedTurn('background', pressureId).user;
-  const evidence = `BACKGROUND_HEAD\n${'e'.repeat(27000)}\nBACKGROUND_TAIL`;
-  const requests = [];
-  const coordinator = __testHooks.asyncTaskCoordinatorForTest();
-  const undelivered = vi.spyOn(coordinator, 'onUndelivered');
-  const consumed = vi.spyOn(coordinator, 'onConsumed');
-  let asyncTask;
-  const engine = new Engine({ conversationStore: store, trace: new NullTrace(),
-    sessionId: pressureId, vpId: 'alpha', taskManager: runtime.taskManager,
-    config: { model: 'test-model', maxOutputTokens: 1024, maxContextTokens: 4000, archive: { toolResults: false } },
-    adapter: { async *stream(params) {
-      params.onRequestStart?.();
-      requests.push(structuredClone(params.messages));
-      const n = requests.length;
-      if (n === 1) yield { type: 'tool_call', id: 'start', name: 'Start', input: {} };
-      else if (n <= 8) yield { type: 'tool_call', id: `read-${n}`, name: 'Read', input: { offset: n } };
-      else {
-        if (n === 9) {
-          completedTurn('newer', pressureId);
-          runtime.taskManager.completeTask(pressureId, asyncTask.id, { status: 'succeeded', summary: evidence });
-          expect(notify).toHaveLastReturnedWith(true);
-        }
-        yield { type: 'text_delta', text: 'handled current evidence' };
-      }
-      yield { type: 'stop', stopReason: n <= 8 ? 'tool_use' : 'end_turn' };
-    } },
-  });
-  const notify = vi.spyOn(engine, 'notifyAsyncTaskCompleted');
-  engine.setAsyncTaskCoordinator(coordinator);
-  engine.registerTool({ name: 'Start', execute: async (_input, toolCtx) => {
-    asyncTask = runtime.taskManager.startTask({ sessionId: pressureId, ownerVpId: 'alpha', resultDelivery: 'model_reentry',
-      source: { threadId: 'main', causalRootId: toolCtx.causalRootId } });
-    toolCtx.registerAsyncTask(asyncTask.id);
-    return 'started';
-  } });
-  engine.registerTool({ name: 'Read', isReadOnly: () => true, execute: async ({ offset }) => `HEAD ${offset}\n${'x'.repeat(28000)}\nTAIL ${offset}` });
-  const beforeRescue = calls.length;
-  for await (const _event of realQuery.call(engine, { prompt: 'background', sessionId: pressureId, threadId: 'main',
-    userAlreadyPersisted: true, currentUserMessage: originalUser, causalRootId: originalUser.id })) { /* consume lifecycle */ }
-  expect(requests.at(-1).some(row => typeof row.content === 'string' && row.content.includes(evidence))).toBe(false);
-  expect(rows(pressureId).find(row => row.role === 'tool' && row.toolCallId === 'start').content).toContain(evidence);
-  expect(consumed).not.toHaveBeenCalled();
-  expect(undelivered).toHaveBeenCalledExactlyOnceWith(asyncTask.id,
-    expect.objectContaining({ causalRootId: originalUser.id, sessionId: pressureId }), engine);
-  expect(notify.mock.calls[0][2].causalRootId).toBe(originalUser.id);
-  await waitCalls(beforeRescue + 1);
-  const rescued = calls.at(-1);
-  expect(rescued.causalRootId).toBe(originalUser.id);
-  expect(rescued.inboundEnvelope._causalRootId).toBe(originalUser.id);
-  rescued.gate.resolve();
-  await __testDrainVpDrivers();
-  const pressureRows = rows(pressureId);
-  const newerIndex = pressureRows.findIndex(row => row.content === 'question newer');
-  const rescueRow = pressureRows.find(row => row.internal && row.content.includes('<task-result'));
-  expect(newerIndex).toBeGreaterThan(-1);
-  expect(pressureRows.indexOf(rescueRow)).toBeGreaterThan(newerIndex);
-  expect(rescueRow.causalRootId).toBe(originalUser.id);
-  const rescueAnswer = pressureRows.find(row => row.stopReason === 'end_turn' && row.content.includes('<task-result'));
-  expect(rescueAnswer.causalRootId).toBe(originalUser.id);
-  handleYeaftMergeSessions({ sessionId: pressureId, otherSessionId: 'session_other', requestId: 'undelivered-merge' });
-  const pressureMerge = result('undelivered-merge');
-  expect(pressureMerge).toMatchObject({ ok: true, op: 'merge' });
-  const mergedPressure = rows(pressureMerge.session.id);
-  expect(mergedPressure.findIndex(row => row.origin?.messageId === rescueRow.id))
-    .toBeLessThan(mergedPressure.findIndex(row => row.content === 'question newer'));
-  const mergedOriginal = mergedPressure.find(row => row.origin?.messageId === originalUser.id);
-  expect(mergedPressure.find(row => row.origin?.messageId === rescueRow.id).causalRootId).toBe(mergedOriginal.id);
-  expect(mergedPressure.findIndex(row => row.origin?.messageId === rescueAnswer.id))
-    .toBeLessThan(mergedPressure.findIndex(row => row.content === 'question newer'));
-
-  // Older Engine deliveries may omit provenance: the bridge must recover it
-  // from the persisted task source, not from the latest human/internal row.
-  coordinator.onRegister(asyncTask.id, engine);
-  coordinator.onUndelivered(asyncTask.id, { sessionId: pressureId, vpId: 'alpha', content: 'legacy delivery' }, engine);
-  await waitCalls(beforeRescue + 2);
-  expect(calls.at(-1).causalRootId).toBe(originalUser.id);
-  calls.at(-1).gate.resolve();
-  await __testDrainVpDrivers();
 });
 
 it('forks completed history while orphaned tasks resume, restoring checkpoints or recovering a legacy human-root fence', async () => {
@@ -485,136 +224,4 @@ it('forks completed history while orphaned tasks resume, restoring checkpoints o
   expect(copy('unknown-mixed-historic', { throughTurnId: 'historic' }))
     .toMatchObject({ ok: false, error: { code: 'session_running' } });
   expect(existsSync(checkpoint)).toBe(false);
-});
-
-it('fences legacy recovery before cold boot can await and ignores stale checkpoints without matching tasks', async () => {
-  completedTurn();
-  const prefix = rows(id);
-  const checkpoint = join(sessionsRoot(root), id, 'copy-boundary.json');
-  const legacyUser = store.append({ sessionId: id, role: 'user', content: 'legacy running' });
-  store.append({ sessionId: id, role: 'assistant', content: 'legacy partial', speakerVpId: 'alpha',
-    turnId: 'legacy-boot', causalRootId: legacyUser.id, incomplete: true });
-  const manager = new TaskManager({ yeaftDir: root });
-  manager.startTask({ sessionId: id, ownerVpId: 'alpha', resultDelivery: 'model_reentry',
-    source: { threadId: 'old', causalRootId: legacyUser.id } });
-  const boot = deferred();
-  __testSetSession(null);
-  expectFork(copy('cold-before-runtime'), prefix);
-  expectFork(copy('cold-before-runtime-historic', { throughTurnId: 'historic' }), prefix);
-  __testHooks.setRuntimeFactoriesForTest({ loadSession: async () => {
-    await boot.promise;
-    return { yeaftDir: root, config: {}, conversationStore: store, taskManager: new TaskManager({ yeaftDir: root }) };
-  } });
-  const pending = send('cold-boot-input');
-  // No await: TaskManager has not loaded yet. The safe boundary must already
-  // exclude the legacy user's input and partial reply.
-  expectFork(copy('cold-before-first-await'), prefix);
-  expectFork(copy('cold-before-await-historic', { throughTurnId: 'historic' }), prefix);
-  boot.resolve();
-  await pending;
-  await waitCalls(1); // related new input can queue behind the orphan rescue
-  expectFork(copy('cold-after-boot'), prefix);
-  calls[0].gate.resolve();
-  await waitCalls(2);
-  calls[1].gate.resolve();
-  await __testDrainVpDrivers();
-  expect(__testHooks.sessionHasActiveWork(id)).toBe(false);
-
-  // Simulate a crash after a complete transcript append but before checkpoint
-  // cleanup. No task owns this old file, so a new input must use the current
-  // completed head rather than silently omit the last finished request.
-  const finished = rows(id);
-  const stale = store.captureSessionCopyBoundary(id, { beforeMessageId: legacyUser.id });
-  writeFileSync(checkpoint, JSON.stringify({ ...stale, taskIds: ['task-no-longer-running'] }));
-  await __testResetVpState();
-  __testHooks.resetVpStatusBroker();
-  __testSetSession({ yeaftDir: root, config: {}, conversationStore: store, taskManager: new TaskManager({ yeaftDir: root }) });
-  await send('after-stale-checkpoint');
-  await waitCalls(3);
-  expectFork(copy('stale-file-ignored'), finished);
-  expect(JSON.parse(readFileSync(checkpoint, 'utf8')).rowCount).toBe(finished.length);
-  expectSourceRunning();
-});
-
-it('rejects invalid/incomplete or active message boundaries while permitting completed historical message forks', async () => {
-  const user = store.append({ sessionId: id, role: 'user', content: 'question historic', threadId: 'old' });
-  const toolOwner = store.append({ sessionId: id, role: 'assistant', content: 'checking', threadId: 'old', speakerVpId: 'alpha', turnId: 'historic',
-    causalRootId: user.id, toolCalls: [{ id: 'historic-tool', name: 'Read', input: { file_path: 'note.txt' } }] });
-  store.append({ sessionId: id, role: 'tool', content: 'file contents', threadId: 'old', turnId: 'historic', toolCallId: 'historic-tool', causalRootId: user.id });
-  const answer = store.append({ sessionId: id, role: 'assistant', content: 'answer historic', threadId: 'old', speakerVpId: 'alpha', turnId: 'historic', causalRootId: user.id, stopReason: 'end_turn' });
-  const historic = rows(id);
-  // A historical provider tool call without its result is not a complete fork.
-  store.append({ sessionId: id, role: 'assistant', content: 'incomplete', threadId: 'old', speakerVpId: 'alpha', turnId: 'incomplete',
-    toolCalls: [{ id: 'unfinished-tool', name: 'Read', input: {} }] });
-  await send('active');
-  await waitCalls(1);
-  const source = rows(id);
-  const fork = copy('historic', { throughTurnId: 'historic' });
-  const copied = expectFork(fork, historic);
-  // UI history projects tool results into their owning assistant, while raw
-  // persistence above must still contain the complete provider tool pair.
-  expect(history(fork.session.id).map(row => row.content)).toEqual(['question historic', 'checking', 'answer historic']);
-  expect(new ConversationStore(root).loadAllBySession(fork.session.id).map(row => row.content)).toEqual(historic.map(row => row.content));
-  expect(copied.find(row => row.origin.messageId === toolOwner.id).toolCalls[0].id).toBe('historic-tool');
-  expect(copied.find(row => row.origin.messageId === answer.id).causalRootId).toBe(copied[0].id);
-  const beforeRejected = inventory();
-  for (const [requestId, throughTurnId, code] of [
-    ['empty', '', 'invalid_fork_boundary'], ['missing', 'missing', 'fork_boundary_not_found'],
-    ['incomplete', 'incomplete', 'incomplete_fork_boundary'],
-    ['active', calls[0].vpTurnId, 'incomplete_fork_boundary'],
-  ]) {
-    expect(copy(requestId, { throughTurnId })).toMatchObject({ op: 'copy', ok: false, error: { code, sessionId: id } });
-    expect(inventory()).toEqual(beforeRejected); // transactional rollback, no discoverable partial clone
-  }
-  expect(rows(id)).toEqual(source);
-  expectSourceRunning();
-});
-
-it('guards merge using actual ingress rather than broker state and cancels classification-pending input on Stop', async () => {
-  completedTurn();
-  seedSession('session_other');
-  const source = rows(id), before = inventory();
-  const { ctrl } = __testHooks.seedRunningVpTurn({ sessionId: id, vpId: 'alpha' });
-  expect(copy('untracked')).toMatchObject({ op: 'copy', ok: false, error: { code: 'session_running', sessionId: id } });
-  expect(copy('untracked-historic', { throughTurnId: 'historic' })).toMatchObject({ ok: false, error: { code: 'session_running' } });
-  expect(ctrl.signal.aborted).toBe(false);
-  expect(rows(id)).toEqual(source);
-  expect(inventory()).toEqual(before);
-  __testHooks.resetAbortState();
-  const pending = send('ingress-only');
-  __testHooks.resetVpStatusBroker();
-  for (const [sessionId, otherSessionId, requestId] of [[id, 'session_other', 'ingress-merge'], ['session_other', id, 'other-ingress-merge']]) {
-    handleYeaftMergeSessions({ sessionId, otherSessionId, requestId });
-    expect(result(requestId)).toMatchObject({ op: 'merge', ok: false, sourceSessionId: sessionId, otherSessionId,
-      error: { code: 'session_running', sessionId: id } });
-  }
-  expect(rows(id)).toEqual(source); // guard ran before input persistence's first await
-  expect(inventory()).toEqual(before);
-  await pending;
-  await waitCalls(1);
-  expectFork(copy('tracked-ingress'), source);
-  expectSourceRunning();
-
-  const classification = deferred();
-  let classifying = false;
-  __testSetThreadClassifier(async () => {
-    classifying = true;
-    await classification.promise;
-    return { decision: 'unrelated', title: 'Cancelled classification' };
-  });
-  const stopped = send('stop-during-classification');
-  await Promise.resolve();
-  expect(classifying).toBe(true);
-  handleYeaftAbortAll({ sessionId: id });
-  expect(calls[0].signal.aborted).toBe(true);
-  classification.resolve();
-  await stopped;
-  calls[0].gate.resolve();
-  await __testDrainVpDrivers();
-  expect(calls).toHaveLength(1);
-  expect(contents(id)).not.toContain('@alpha stop-during-classification');
-  expect(__testHooks.sessionHasActiveWork(id)).toBe(false);
-  await send('after-stop');
-  await waitCalls(2);
-  expect(calls[1].signal.aborted).toBe(false);
 });

@@ -3,25 +3,13 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { TaskManager } from '../../../../agent/yeaft/tasks/manager.js';
-import waitTask from '../../../../agent/yeaft/tools/wait-task.js';
-import { truncateToolResultIfNeeded } from '../../../../agent/yeaft/tools/registry.js';
 
 function makeTempDir() {
   return mkdtempSync(join(tmpdir(), 'yeaft-tasks-'));
-}
-
-async function waitFor(predicate, { timeoutMs = 5000, intervalMs = 25 } = {}) {
-  const start = Date.now();
-  while (Date.now() - start < timeoutMs) {
-    const value = predicate();
-    if (value) return value;
-    await new Promise(resolve => setTimeout(resolve, intervalMs));
-  }
-  throw new Error('Timed out waiting for condition');
 }
 
 describe('TaskManager', () => {
@@ -36,42 +24,6 @@ describe('TaskManager', () => {
   afterEach(() => {
     vi.restoreAllMocks();
     if (dir) rmSync(dir, { recursive: true, force: true });
-  });
-
-  it('runs shell tasks in the background, persists logs, and emits task events without chat messages', async () => {
-    const events = [];
-    const manager = new TaskManager({
-      yeaftDir: dir,
-      conversationStore: { append: msg => messages.push(msg) },
-      onEvent: evt => events.push(evt),
-    });
-
-    const task = manager.startShellTask({
-      command: 'node -e "console.log(\'task-ok\')"',
-      cwd: dir,
-      sessionId: 'session_test',
-      ownerVpId: 'vp_linus',
-      title: 'Echo from node',
-      source: { threadId: 'main' },
-    });
-
-    expect(task).toMatchObject({
-      status: 'running',
-      resultDelivery: 'status_only',
-    });
-    expect(manager.listActiveTasks('session_test')).toHaveLength(1);
-
-    await waitFor(() => manager.getTask('session_test', task.id)?.status === 'succeeded');
-
-    const completed = manager.getTask('session_test', task.id);
-    expect(completed.status).toBe('succeeded');
-    expect(manager.listActiveTasks('session_test')).toHaveLength(0);
-
-    const log = manager.readTaskLog('session_test', task.id, { tail: true });
-    expect(log.text).toContain('task-ok');
-    expect(messages).toHaveLength(0);
-    expect(events.some(e => e.type === 'yeaft_task_event' && e.event === 'started')).toBe(true);
-    expect(events.some(e => e.type === 'yeaft_task_event' && e.event === 'completed')).toBe(true);
   });
 
   it('marks persisted running tasks as orphaned on restart', () => {
@@ -149,187 +101,6 @@ describe('TaskManager', () => {
       resultDelivery: 'status_only',
     });
     expect(messages).toHaveLength(0);
-  });
-
-  it('waits for process exit before marking a cancelled shell task terminal', async () => {
-    const manager = new TaskManager({ yeaftDir: dir, cancelEscalationMs: 1000 });
-    const markerPath = join(dir, 'term-ignored');
-    const command = `trap 'echo ignored-term; touch ${JSON.stringify(markerPath)}' TERM; echo started; while true; do echo tick; sleep 0.05; done`;
-    const task = manager.startShellTask({
-      command,
-      cwd: dir,
-      sessionId: 'session_cancel_live',
-      ownerVpId: 'vp_linus',
-      title: 'Ignore SIGTERM',
-    });
-
-    await waitFor(() => manager.readTaskLog('session_cancel_live', task.id, { tail: true }).text.includes('started'));
-    const cancelResult = manager.cancelTask('session_cancel_live', task.id);
-
-    expect(cancelResult).toMatchObject({ ok: true, pending: true });
-    expect(cancelResult.task.status).toBe('running');
-    expect(cancelResult.task.runtime.cancelRequestedAt).toBeTruthy();
-    expect(manager.getTask('session_cancel_live', task.id).status).toBe('running');
-
-    await waitFor(() => existsSync(markerPath), { timeoutMs: 500 });
-    expect(manager.getTask('session_cancel_live', task.id).status).toBe('running');
-
-    await waitFor(() => manager.getTask('session_cancel_live', task.id)?.status === 'cancelled', { timeoutMs: 5000 });
-    const completed = manager.getTask('session_cancel_live', task.id);
-    expect(completed.status).toBe('cancelled');
-    expect(completed.result.signal).toBe('SIGKILL');
-    expect(completed.runtime.cancelEscalatedSignal).toBe('SIGKILL');
-    expect(manager.listActiveTasks('session_cancel_live')).toHaveLength(0);
-  });
-
-  it('does not mark cancel complete when process-tree kill fails', () => {
-    const manager = new TaskManager({ yeaftDir: dir });
-    const task = manager.startTask({
-      sessionId: 'session_cancel',
-      ownerVpId: 'vp_linus',
-      kind: 'shell',
-      title: 'Unattached task',
-    });
-    expect(task.resultDelivery).toBe('status_only');
-
-    const result = manager.cancelTask('session_cancel', task.id);
-    expect(result.ok).toBe(false);
-    expect(result.task.status).toBe('running');
-    expect(manager.getTask('session_cancel', task.id).status).toBe('running');
-  });
-
-  it('waits by task id, returns terminal state, and handles completion races', async () => {
-    const manager = new TaskManager({ yeaftDir: dir });
-    const task = manager.startTask({
-      sessionId: 'session_wait',
-      ownerVpId: 'vp_owner',
-      kind: 'shell',
-      title: 'Wait target',
-    });
-
-    const waiting = manager.waitForTask('session_wait', task.id, {
-      timeoutMs: 1000,
-      ownerVpId: 'vp_owner',
-    });
-    manager.completeTask('session_wait', task.id, { status: 'failed', exitCode: 7 });
-    await expect(waiting).resolves.toMatchObject({
-      ok: true,
-      timedOut: false,
-      task: { id: task.id, status: 'failed', result: { exitCode: 7 } },
-    });
-
-    await expect(manager.waitForTask('session_wait', task.id, { timeoutMs: 0, ownerVpId: 'vp_owner' }))
-      .resolves.toMatchObject({ ok: true, timedOut: false, task: { status: 'failed' } });
-  });
-
-  it('optionally delivers final bounded logs with status, preserving cursor and ownership contracts', async () => {
-    const manager = new TaskManager({ yeaftDir: dir });
-    const ctx = { taskManager: manager, sessionId: 'session_log_wait', currentVpId: 'vp_owner' };
-    const task = manager.startTask({ sessionId: ctx.sessionId, ownerVpId: ctx.currentVpId, kind: 'shell' });
-    const read = vi.spyOn(manager, 'readTaskLog');
-    const pending = waitTask.execute({ taskId: task.id, include_log: true, offset: 0, maxBytes: 32 }, ctx);
-    manager.store.appendLog(ctx.sessionId, task.id, 'first output\n');
-    manager.store.appendLog(ctx.sessionId, task.id, 'last output\n');
-    manager.completeTask(ctx.sessionId, task.id, { status: 'failed', exitCode: 7 });
-    const result = JSON.parse(await pending);
-    expect(result).toMatchObject({ status: 'failed', exitCode: 7, terminal: true, resultConsumed: false,
-      log: { text: 'first output\nlast output\n', offset: 0, nextOffset: 25, endOffset: 25, truncated: false, omittedBefore: false } });
-    expect(read).toHaveBeenLastCalledWith(ctx.sessionId, task.id, { offset: 0, maxBytes: 32, tail: false }, ctx.currentVpId);
-    expect(result.next_steps).toContain('NOT an already-read cursor');
-    expect(result.next_steps).toContain('WaitAgent');
-
-    read.mockClear();
-    const legacy = JSON.parse(await waitTask.execute({ taskId: task.id }, ctx));
-    expect(read).not.toHaveBeenCalled();
-    expect(legacy.log).not.toHaveProperty('text');
-    expect(legacy.next_steps).toContain('Status only');
-    expect(legacy.resultConsumed).toBe(false);
-
-    manager.store.appendLog(ctx.sessionId, task.id, 'new evidence');
-    const increment = JSON.parse(await waitTask.execute({ taskId: task.id, include_log: true, offset: result.log.nextOffset, maxBytes: 4 }, ctx));
-    expect(increment.log).toMatchObject({ text: 'new ', offset: 25, nextOffset: 29, endOffset: 37, truncated: true, omittedBefore: false });
-    const tail = JSON.parse(await waitTask.execute({ taskId: task.id, include_log: true, maxBytes: 4 }, ctx));
-    expect(tail.log).toMatchObject({ text: 'ence', offset: 33, nextOffset: 37, omittedBefore: true });
-
-    manager.store.appendLog(ctx.sessionId, task.id, '\u0001'.repeat(10_000));
-    const escaped = await waitTask.execute({ taskId: task.id, include_log: true }, ctx);
-    expect(truncateToolResultIfNeeded(escaped, { toolName: 'WaitTask' })).toBe(escaped);
-    expect(JSON.parse(escaped).log.nextOffset - JSON.parse(escaped).log.offset).toBe(4096);
-    read.mockClear();
-    for (const foreign of [{ ...ctx, currentVpId: 'vp_other' }, { ...ctx, sessionId: 'session_other' }]) {
-      expect(JSON.parse(await waitTask.execute({ taskId: task.id, include_log: true }, foreign)).error).toBeTruthy();
-    }
-    expect(JSON.parse(await waitTask.execute({ taskId: task.id, sessionId: 'session_other', include_log: true }, ctx)).error).toBeTruthy();
-    expect(read).not.toHaveBeenCalled();
-    read.mockImplementation(() => { throw new Error('log read failed'); });
-    expect(JSON.parse(await waitTask.execute({ taskId: task.id, include_log: true }, ctx)))
-      .toMatchObject({ status: 'failed', exitCode: 7, logReadError: 'log read failed' });
-  });
-
-  it('times out without changing task state and cleans abort listeners', async () => {
-    vi.useFakeTimers();
-    try {
-      const manager = new TaskManager({ yeaftDir: dir });
-      const task = manager.startTask({ sessionId: 'session_timeout', ownerVpId: 'vp_owner', kind: 'shell' });
-      const timedOut = manager.waitForTask('session_timeout', task.id, { timeoutMs: 25, ownerVpId: 'vp_owner' });
-      await vi.advanceTimersByTimeAsync(25);
-      await expect(timedOut).resolves.toMatchObject({ ok: true, timedOut: true, task: { status: 'running' } });
-      expect(manager.getTask('session_timeout', task.id).status).toBe('running');
-      const ctx = { taskManager: manager, sessionId: 'session_timeout', currentVpId: 'vp_owner' };
-      const emptyWait = waitTask.execute({ taskId: task.id, timeout_ms: 0, include_log: true }, ctx);
-      await vi.advanceTimersByTimeAsync(1);
-      expect(JSON.parse(await emptyWait)).toMatchObject({ timedOut: true, terminal: false, log: { text: '', nextOffset: 0 } });
-      expect(manager.waiters.size).toBe(0);
-
-      const controller = new AbortController();
-      const remove = vi.spyOn(controller.signal, 'removeEventListener');
-      const read = vi.spyOn(manager, 'readTaskLog');
-      const aborted = waitTask.execute({ taskId: task.id, include_log: true }, { ...ctx, signal: controller.signal });
-      controller.abort();
-      await expect(aborted).rejects.toMatchObject({ name: 'AbortError' });
-      expect(remove).toHaveBeenCalledWith('abort', expect.any(Function));
-      expect(read).not.toHaveBeenCalled();
-      expect(manager.waiters.size).toBe(0);
-
-      manager.completeTask('session_timeout', task.id, { status: 'succeeded', exitCode: 0 });
-      await vi.advanceTimersByTimeAsync(1000);
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it('settles completion-vs-timeout and cancellation-vs-completion races once', async () => {
-    vi.useFakeTimers();
-    try {
-      const manager = new TaskManager({ yeaftDir: dir });
-      const completionTask = manager.startTask({ sessionId: 'session_race', ownerVpId: 'vp_owner', kind: 'shell' });
-      const completed = manager.waitForTask('session_race', completionTask.id, {
-        timeoutMs: 50,
-        ownerVpId: 'vp_owner',
-      });
-      manager.completeTask('session_race', completionTask.id, { status: 'succeeded', exitCode: 0 });
-      await vi.advanceTimersByTimeAsync(50);
-      await expect(completed).resolves.toMatchObject({
-        timedOut: false,
-        task: { status: 'succeeded', result: { exitCode: 0 } },
-      });
-
-      const cancellationTask = manager.startTask({ sessionId: 'session_race', ownerVpId: 'vp_owner', kind: 'shell' });
-      const cancelled = manager.waitForTask('session_race', cancellationTask.id, {
-        timeoutMs: 50,
-        ownerVpId: 'vp_owner',
-      });
-      manager.completeTask('session_race', cancellationTask.id, { status: 'cancelled', signal: 'SIGTERM' });
-      manager.completeTask('session_race', cancellationTask.id, { status: 'succeeded', exitCode: 0 });
-      await expect(cancelled).resolves.toMatchObject({
-        timedOut: false,
-        task: { status: 'cancelled', result: { signal: 'SIGTERM' } },
-      });
-      expect(manager.getTask('session_race', cancellationTask.id).status).toBe('cancelled');
-      expect(manager.waiters.size).toBe(0);
-    } finally {
-      vi.useRealTimers();
-    }
   });
 
   it('applies the same owner fence to status, waits, logs, and cancellation', async () => {

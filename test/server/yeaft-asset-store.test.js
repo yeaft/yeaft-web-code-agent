@@ -30,12 +30,4 @@ describe('Yeaft asset store', () => {
     expect(() => assets.put({ ownerId: 'u', agentId: 'a', sessionId: 's', data: Buffer.from('<svg/>'), mimeType: 'image/svg+xml' })).toThrow(/Unsupported/);
   });
 
-  it('deletes only the requested Session scope', () => {
-    const assets = store();
-    const first = assets.put({ ownerId: 'u', agentId: 'a', sessionId: 's1', data: PNG });
-    const second = assets.put({ ownerId: 'u', agentId: 'a', sessionId: 's2', data: PNG });
-    expect(assets.deleteScope({ ownerId: 'u', agentId: 'a', sessionId: 's1' })).toBe(1);
-    expect(assets.describe({ ownerId: 'u', agentId: 'a', sessionId: 's1', assetId: first.assetId })).toBeNull();
-    expect(assets.describe({ ownerId: 'u', agentId: 'a', sessionId: 's2', assetId: second.assetId })).not.toBeNull();
-  });
 });

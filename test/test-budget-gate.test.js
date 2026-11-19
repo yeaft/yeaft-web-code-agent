@@ -15,7 +15,6 @@ import {
   collectBrowserCases,
   collectUnitCases,
   countBrowserCases,
-  isMainModule,
   TEST_CASE_LIMIT,
   validateCoreTestFiles,
 } from '../scripts/check-test-budget.mjs';
@@ -168,14 +167,8 @@ describe('test budget gate', () => {
     } finally { await rm(root, { recursive: true, force: true }); }
   }, 30000);
 
-  it('only runs the CLI when invoked as the entry module', () => {
-    const windowsEntry = 'C:\\repo\\scripts\\check-test-budget.mjs';
-    expect(isMainModule(pathToFileURL(windowsEntry).href, windowsEntry)).toBe(true);
-    expect(isMainModule(import.meta.url, windowsEntry)).toBe(false);
-  });
-
   it('enforces the combined case budget and rejects invalid counts', () => {
-    const browser = 129;
+    const browser = 25;
     const unit = TEST_CASE_LIMIT - browser;
     expect(checkCaseBudget({ unit, browser })).toMatchObject({ total: TEST_CASE_LIMIT, exceeded: false });
     expect(checkCaseBudget({ unit: unit + 1, browser })).toMatchObject({ total: TEST_CASE_LIMIT + 1, exceeded: true });

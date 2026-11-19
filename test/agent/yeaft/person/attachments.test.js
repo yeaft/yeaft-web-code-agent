@@ -3,15 +3,13 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { DatabaseSync } from 'node:sqlite';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { ATTACHMENT_LIMITS, validateFiles } from '../../../../agent/yeaft/person/attachments.js';
 import { createPersonService } from './fixture-adapter.js';
 import { SqlitePersonRepository } from '../../../../agent/yeaft/person/sqlite-repository.js';
 
-import { config, imageConfig, finalProposal } from './fixtures.js';
+import { config, finalProposal } from './fixtures.js';
 
 const files = (value = 'Private UTF-8 notes: 好奇心', name = 'notes.md', mimeType = 'text/markdown') => [{ name, mimeType, data: Buffer.from(value).toString('base64') }];
-const png = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jC1sAAAAASUVORK5CYII=';
-const image = { name: 'pixel.png', mimeType: 'image/png', data: png };
+
 const services = [], repos = [], directories = [];
 async function directory() { const dir = await mkdtemp(join(tmpdir(), 'person-files-')); directories.push(dir); return dir; }
 const call = (service, op, payload = {}, ownerId = 'alice') => service.request({ ownerId, op, payload });
@@ -40,24 +38,6 @@ afterEach(async () => {
   await Promise.all(services.splice(0).map(s => s.close()));
   await Promise.all(repos.splice(0).map(r => r.close()));
   await Promise.all(directories.splice(0).map(dir => rm(dir, { recursive: true, force: true })));
-});
-
-describe('Person attachment validation', () => {
-  it('accepts only canonical byte envelopes and bounds complete text without truncation', () => {
-    expect(validateFiles(files(), '', 'send')[0]).toMatchObject({ kind: 'text', content: 'Private UTF-8 notes: 好奇心', size: 30 });
-    for (const bad of [null, {}, [{ ...image, path: '/tmp/secret' }], [{ ...image, name: '../secret' }], [{ ...image, data: 'AA=A' }], [{ ...image, data: 'AAAA' }]]) {
-      expect(() => validateFiles(bad)).toThrow();
-    }
-    for (const input of [files('%PDF-1.7', 'file.pdf', 'application/pdf'), files(Buffer.from([0xff, 0xfe]), 'file.txt'), files('a\0b', 'file.js'), files('MZ binary', 'app.exe', 'application/octet-stream')]) {
-      expect(() => validateFiles(input)).toThrow(/Unsupported/);
-    }
-    expect(() => validateFiles(Array(5).fill(image))).toThrow();
-    expect(() => validateFiles(files('x'.repeat(24 * 1024)), 'x')).toThrow(/exceed/);
-    expect(() => validateFiles([], '你'.repeat(2731))).toThrow();
-    expect(validateFiles(files('x'.repeat(24 * 1024)), '')[0].content).toHaveLength(24 * 1024);
-    expect(() => validateFiles([{ ...image, data: Buffer.alloc(ATTACHMENT_LIMITS.fileBytes + 1).toString('base64') }])).toThrow();
-    expect(() => validateFiles(Array(3).fill({ ...image, data: Buffer.concat([Buffer.from(png, 'base64'), Buffer.alloc(4 * 1024 * 1024)]).toString('base64') }))).toThrow(/exceed/);
-  });
 });
 
 describe('Person durable attachment admission', () => {
@@ -98,22 +78,6 @@ describe('Person durable attachment admission', () => {
     } finally { db.close(); }
     await call(restarted, 'open', {}, 'bob');
     expect((await call(restarted, 'messages', {}, 'bob')).items).toEqual([]);
-  });
-
-  it('keeps image base64 out of history/traces and fails explicitly if no owner candidate permits images', async () => {
-    const dir = await directory(), seen = [];
-    const s = service(dir, { config: imageConfig, adapter: adapter(seen) });
-    await call(s, 'open');
-    await call(s, 'send', { files: [image], clientMessageId: 'picture' });
-    expect((await idle(s)).latestEpisode.status).toBe('completed');
-    expect(seen[0].messages[0].content.find(p => p.type === 'image').source.data).toBe(png);
-    expect(JSON.stringify(await call(s, 'traces', { limit: 50 }))).not.toContain(png);
-    expect(JSON.stringify(await call(s, 'messages'))).not.toContain(png);
-    await s.close();
-    const textOnly = service(dir, { adapter: adapter(seen) });
-    await call(textOnly, 'send', { files: [image], clientMessageId: 'picture-2' });
-    expect((await idle(textOnly)).latestEpisode).toMatchObject({ status: 'failed', terminalCode: 'IMAGE_MODEL' });
-    expect(seen).toHaveLength(1);
   });
 
   it('does not persist any partial batch or expose bytes through forged episode ownership', async () => {

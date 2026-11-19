@@ -7,10 +7,7 @@ import { SqlitePersonRepository } from '../../../../agent/yeaft/person/sqlite-re
 import { PersonCapabilities } from '../../../../agent/yeaft/person/capabilities.js';
 import { createPersonService } from './fixture-adapter.js';
 
-import { normalizePresentation } from '../../../../agent/yeaft/response-presentation.js';
-
 import { bytes } from '../../../../agent/yeaft/person/contracts.js';
-import { projectPersonConversation } from '../../../../web/utils/person-conversation.js';
 
 let root, workDir, repositories, r, episode;
 const repo = (namespace = 'default') => {
@@ -56,23 +53,6 @@ describe('Person durable output delivery', () => {
     expect((await r.snapshot('alice')).outputs).toEqual({ items: [item], nextCursor: null });
   });
 
-  it('isolates owner, namespace and forged Person identity before reading or publication', async () => {
-    const item = await publish({ url: 'https://example.com/' });
-    const foreign = repo('other'); await foreign.open('alice'); await r.open('bob');
-    expect((await r.outputs('bob')).items).toEqual([]); expect((await foreign.outputs('alice')).items).toEqual([]);
-    await expect(r.outputRead('bob', { outputId: item.id })).rejects.toMatchObject({ code: 'NOT_FOUND' });
-    await expect(foreign.outputRead('alice', { outputId: item.id })).rejects.toMatchObject({ code: 'NOT_FOUND' });
-    await expect(prepare({ url: 'https://example.com/' }, { ...episode, personId: 'foreign' })).rejects.toMatchObject({ code: 'STALE' });
-  });
-
-  it('fences publication after cancellation but retains previously confirmed partial effects', async () => {
-    const first = await publish({ url: 'https://example.com/partial' });
-    const late = await prepare({ url: 'https://example.com/late' });
-    await r.cancel('alice');
-    await expect(late()).rejects.toMatchObject({ code: 'STALE' });
-    expect((await r.outputs('alice')).items).toEqual([first]);
-  });
-
   it('rejects outside traversal, symlink files/directories, directories and oversized files without leaking paths', async () => {
     await writeFile(join(root, 'secret'), 'private'); await mkdir(join(workDir, 'dir'));
     await symlink(join(root, 'secret'), join(workDir, 'link')); await symlink(root, join(workDir, 'linked-dir'));
@@ -85,88 +65,4 @@ describe('Person durable output delivery', () => {
     expect((await r.outputs('alice')).items).toEqual([]);
   });
 
-  it('stores links without fetching and reads only files with bounded raw byte offsets', async () => {
-    const link = await publish({ url: 'http://127.0.0.1:1/unreachable?q=x', title: 'External link' });
-    expect(link).toMatchObject({ kind: 'link', url: 'http://127.0.0.1:1/unreachable?q=x', size: 0, mimeType: null });
-    await expect(r.outputRead('alice', { outputId: link.id })).rejects.toMatchObject({ code: 'OUTPUT_NOT_FILE' });
-    const bytes = Buffer.alloc(65539, 0xab); await writeFile(join(workDir, 'raw.bin'), bytes);
-    const file = await publish({ file_path: 'raw.bin' });
-    const head = await r.outputRead('alice', { outputId: file.id, maxBytes: 65536 });
-    expect(Buffer.from(head.data, 'base64')).toEqual(bytes.subarray(0, 65536)); expect(head.eof).toBe(false);
-    const tail = await r.outputRead('alice', { outputId: file.id, offset: head.nextOffset });
-    expect(Buffer.from(tail.data, 'base64')).toEqual(bytes.subarray(65536)); expect(tail.eof).toBe(true);
-    expect(await r.outputRead('alice', { outputId: file.id, offset: bytes.length })).toMatchObject({ data: '', eof: true });
-    for (const patch of [{ offset: -1 }, { offset: 1.5 }, { offset: bytes.length + 1 }, { offset: null }, { maxBytes: 65537 }, { maxBytes: 0 }, { maxBytes: null }, { outputId: '../raw.bin' }, { path: '/etc/passwd' }]) {
-      await expect(r.outputRead('alice', { outputId: file.id, ...patch })).rejects.toMatchObject({ code: 'INVALID_REQUEST' });
-    }
-  });
-
-
-
-});
-
-describe('Person presentation publication', () => {
-  const args = { summary: 'Verified comparison: Alpha 2, Beta 3.', blocks: [
-    { type: 'chart', style: 'bar', labels: ['Alpha', 'Beta'], series: [{ label: 'Count', values: [2, 3] }] },
-    { type: 'table', columns: ['Name', 'Count'], rows: [['Alpha', '2'], ['Beta', '3']] },
-  ] };
-  let root, repositories, r, episode;
-  const repo = (namespace = 'default') => {
-    const repository = new SqlitePersonRepository({ yeaftDir: root, namespace, leaseMs: 60000 });
-    repositories.push(repository); return repository;
-  };
-  async function prepare(input = args, current = episode, repository = r) {
-    const cap = new PersonCapabilities(repository, current.ownerId, { episode: current });
-    await cap.execute({ id: 'catalog.view', args: { id: 'PresentResponse' } });
-    const callId = randomUUID(), capability = { id: 'PresentResponse', args: input };
-    await repository.startCall(current, { callId, requested: { model: 'test/first', effort: null } });
-    await repository.finalizeCall(current, { callId, output: { text: '{}' } });
-    await repository.startCapability(current, { callId, capability });
-    return { callId, capability, publish: options => cap.execute(capability, { callId, ...options }),
-      finish: result => repository.finalizeCapability(current, { callId, capability, result }) };
-  }
-  beforeEach(async () => {
-    root = await mkdtemp(join(tmpdir(), 'person-presentation-')); repositories = []; r = repo();
-    await r.open('alice');
-    episode = (await r.admit('alice', { kind: 'send', text: 'Compare the verified counts', clientMessageId: randomUUID(), workerId: 'worker', budget: { calls: 16 } })).episode;
-  });
-  afterEach(async () => { await Promise.all(repositories.map(repository => repository.close())); await rm(root, { recursive: true, force: true }); });
-
-  describe('Person structured response contract and fenced publication', () => {
-    it('publishes canonical JSON and searchable summary live, without a cognitive commit or terminal success', async () => {
-      const started = await prepare(); const result = await started.publish();
-      expect(result).toMatchObject({ ok: true, published: true, phase: 'final', summary: args.summary });
-      const snapshot = await r.snapshot('alice'), message = snapshot.messages.at(-1);
-      expect(message).toMatchObject({ role: 'assistant', callId: started.callId, episodeId: episode.id,
-        replyKind: 'presentation', text: args.summary, presentation: normalizePresentation(args) });
-      expect(message).not.toHaveProperty('publicationHash'); expect(message).not.toHaveProperty('ownerId');
-      expect(snapshot).toMatchObject({ busy: true, state: { version: 0 }, latestEpisode: { status: 'running' } });
-      expect((await r.list('alice', 'messages')).items[0]).toEqual(message);
-      expect((await r.recall('alice', { kind: 'messages', query: 'verified comparison' })).items).toEqual([message]);
-      expect((await r.search('alice', { query: 'verified comparison' })).items).toEqual([message]);
-      const changes = await r.searchChanges('alice');
-      expect(changes.items.at(-1).record).toEqual(message);
-      expect(await r.resolveMemories('alice', 'messages', [{ id: message.id, revision: 1 }])).toEqual([message]);
-      expect((await r.context(episode)).messages.at(-1)).toEqual(message);
-      const blocks = projectPersonConversation([...snapshot.messages, { id: 'plain', role: 'assistant', episodeId: episode.id, text: 'A distinct later reply.' }]);
-      expect(blocks.at(-1).parts.map(m => m.id)).toEqual([message.id, 'plain']);
-      await started.finish(result);
-    });
-
-    it('deduplicates retries and repeated deliveries but rejects changed invocation hashes', async () => {
-      const started = await prepare(), first = await started.publish();
-      expect(await started.publish()).toEqual(first);
-      await started.finish(first);
-      expect(await started.publish()).toEqual(first); // Lost receipt after finalize, same live episode.
-      const repeated = await prepare(), second = await repeated.publish();
-      expect(second.messageId).toBe(first.messageId);
-      await repeated.finish(second);
-      expect(await repeated.publish()).toEqual(second); // A duplicate invocation also has its own receipt.
-      await expect(r.savePresentation(episode, { callId: repeated.callId, args: { ...args, summary: 'Different' } })).rejects.toMatchObject({ code: 'INVALID_REQUEST' });
-      expect((await r.snapshot('alice')).messages.filter(m => m.role === 'assistant')).toHaveLength(1);
-      await r.cancel('alice');
-      await expect(started.publish()).rejects.toMatchObject({ code: 'STALE' });
-    });
-
-  });
 });

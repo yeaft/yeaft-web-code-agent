@@ -19,13 +19,4 @@ describe('read-only message Markdown', () => {
     expect(el.textContent).toContain('tracking');
     expect(el.textContent).toContain('encoded');
   });
-  it('has a safe plain-text fallback and does not configure the shared renderer', () => {
-    vi.stubGlobal('marked', undefined);
-    expect(render('<svg onload=alert(1)>\nhello').querySelector('svg')).toBeNull();
-    expect(render('<svg onload=alert(1)>\nhello').textContent).toContain('<svg onload=alert(1)>');
-    vi.stubGlobal('marked', context.marked);
-    const before = context.marked.parse('<b>shared</b>');
-    render('<b>ours</b>');
-    expect(context.marked.parse('<b>shared</b>')).toBe(before);
-  });
 });

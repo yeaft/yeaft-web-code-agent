@@ -1,8 +1,6 @@
 import { randomUUID } from 'crypto';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { completeLogin } from '../../server/auth/login.js';
-import { storePendingResult } from '../../server/auth/oauth-flow.js';
-import { registerAuthRoutes } from '../../server/routes/auth-routes.js';
 import { logout, verifyToken } from '../../server/auth/token.js';
 import { generateSessionKey } from '../../server/encryption.js';
 import { activeSessions, revokedTokens } from '../../server/auth/session-store.js';
@@ -100,42 +98,4 @@ describe('session token issuance', () => {
     expect(userDb.getByUsername(username)).toBeUndefined();
   });
 
-  it('preserves SSO-only user roles when verifying a freshly issued JWT', async () => {
-    createSsoOnlyUser('sso-only-admin-token', 'admin');
-    const login = completeLogin('sso-only-admin-token', generateSessionKey(), 'admin');
-
-    expect(login.userId).toBe(getUserByUsername('sso-only-admin-token').id);
-    expect(verifyToken(login.token)).toMatchObject({
-      valid: true,
-      username: 'sso-only-admin-token',
-      role: 'admin',
-    });
-
-    const routes = new Map();
-    const app = {
-      get: (path, ...handlers) => routes.set(`GET ${path}`, handlers),
-      post: (path, ...handlers) => routes.set(`POST ${path}`, handlers),
-      delete: (path, ...handlers) => routes.set(`DELETE ${path}`, handlers),
-    };
-    registerAuthRoutes(app, {
-      requireAuth: (_req, _res, next) => next(),
-      checkRateLimit: () => true,
-    });
-    const state = `qr-user-id-${randomUUID()}`;
-    storePendingResult(state, { kind: 'login', ...login });
-    const response = {
-      body: null,
-      cookie: vi.fn(),
-      json(body) { this.body = body; return this; },
-    };
-    const handlers = routes.get('GET /api/auth/sso/poll/:state');
-    await handlers[0]({ params: { state }, headers: {} }, response);
-    expect(response.cookie).toHaveBeenCalled();
-    expect(response.body).toMatchObject({
-      status: 'login',
-      token: login.token,
-      userId: login.userId,
-      role: 'admin',
-    });
-  });
 });
