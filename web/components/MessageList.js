@@ -10,7 +10,7 @@ import UserTurnBlock from './UserTurnBlock.js';
 import VirtualTranscript from './VirtualTranscript.js';
 import MessageBlock from './MessageBlock.js';
 import ConcurrentUserTurns from './ConcurrentUserTurns.js';
-import { orderUserTurnMessages, partitionUserTurnBlocks, isPendingUserTurn, hasParallelUserTurns } from '../utils/concurrent-user-turns.js';
+import { orderUserTurnMessages, partitionUserTurnBlocks, isPendingUserTurn } from '../utils/concurrent-user-turns.js';
 import { applyRunningCatFrame, createRunningCatLoop, resolveRunningCatFrame } from '../utils/running-cat.js';
 import {
   orderYeaftVpTurnMessagesByExecution,
@@ -55,7 +55,7 @@ export default {
   name: 'MessageList',
   components: { AgentInstaller, MessageItem, AssistantTurn, VpTurnBlock, VpSpeakerHeader, ReflectionCard, SubAgentCard, UserTurnBlock, VirtualTranscript, MessageBlock, ConcurrentUserTurns },
   template: `
-    <main class="chat-container virtual-transcript-scroller" ref="containerRef">
+    <main class="chat-container virtual-transcript-scroller" ref="containerRef" tabindex="-1">
       <!-- Session Loading Overlay - only covers message area -->
       <div class="session-loading-overlay" v-if="showSessionLoadingOverlay">
         <div class="session-loading-content">
@@ -1162,9 +1162,9 @@ export default {
 
     const concurrentTurnsRef = Vue.ref(null);
     const currentPendingTurns = Vue.computed(() => currentSessionTurns.value.filter(isPendingUserTurn));
-    // Derived from the Agent snapshot rather than latched in this component, so
-    // a remaining lane survives Session navigation, reload and other tabs.
-    const splitActive = Vue.computed(() => hasParallelUserTurns(currentSessionTurns.value));
+    // Settled roots still determine history order, but cannot keep a single
+    // pending root in parallel layout. This also applies after navigation/reload.
+    const splitActive = Vue.computed(() => currentPendingTurns.value.length > 1);
     // Free reading width only when this conversation enters parallel layout.
     // A user may reopen Workbench; streaming/new siblings must not close it again.
     Vue.watch(() => [virtualTranscriptIdentity.value, splitActive.value], ([, active]) => {
@@ -1989,8 +1989,10 @@ export default {
       }
       clearUserScrollInteraction();
       resetHistoryPagination();
-      if (splitActive.value) pauseAutoFollow();
-      else resumeAutoFollow();
+      if (splitActive.value) {
+        resumeFollowingAfterSplit = true;
+        pauseAutoFollow({ forSplit: true });
+      } else resumeAutoFollow();
       Vue.nextTick(() => {
         if (splitActive.value) concurrentTurnsRef.value?.revealLatest?.();
         else scrollToBottom();
@@ -2045,15 +2047,27 @@ export default {
       { immediate: true }
     );
 
-    Vue.watch(splitActive, (active) => {
+    Vue.watch([virtualTranscriptIdentity, splitActive], ([identity, active], [previousIdentity, wasActive]) => {
       if (active) {
-        resumeFollowingAfterSplit = !autoFollowPaused.value;
+        resumeFollowingAfterSplit = (!!previousIdentity && identity !== previousIdentity) || !autoFollowPaused.value;
         pauseAutoFollow({ forSplit: true });
-      } else if (resumeFollowingAfterSplit) {
+      } else if (wasActive && identity === previousIdentity) {
+        const focused = document.activeElement;
+        const focusLeavingLane = focused && concurrentTurnsRef.value?.$el?.contains(focused);
+        if (resumeFollowingAfterSplit) {
+          resumeAutoFollow();
+          smartScrollToBottom();
+        }
         resumeFollowingAfterSplit = false;
-        resumeAutoFollow();
+        if (focusLeavingLane) Vue.nextTick(() => {
+          // A removed lane (e.g. its Stop button or selected tab) must not
+          // strand keyboard focus. Leave the composer/sidebar alone.
+          if (identity === virtualTranscriptIdentity.value && !focused.isConnected && document.activeElement === document.body) {
+            containerRef.value?.focus({ preventScroll: true });
+          }
+        });
       }
-    }, { flush: 'sync', immediate: true });
+    }, { immediate: true });
     Vue.watch(visibleTranscriptTailSignature, () => {
       if (!splitActive.value) smartScrollToBottom();
       Vue.nextTick(scheduleResponseNavigationUpdate);
@@ -2142,7 +2156,7 @@ export default {
       if (typeof ResizeObserver !== 'undefined') {
         responseNavigationResizeObserver = new ResizeObserver(scheduleResponseNavigationUpdate);
       }
-      if (splitActive.value) pauseAutoFollow();
+      if (splitActive.value) pauseAutoFollow({ forSplit: true });
       else scrollToBottom();
       Vue.nextTick(scheduleResponseNavigationUpdate);
       if (containerRef.value) {

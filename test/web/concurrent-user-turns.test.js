@@ -2,42 +2,11 @@
 import { describe, expect, it, vi } from 'vitest';
 import * as Vue from 'vue';
 import { mount } from '@vue/test-utils';
-import { orderUserTurnMessages, hasParallelUserTurns } from '../../web/utils/concurrent-user-turns.js';
+import { orderUserTurnMessages } from '../../web/utils/concurrent-user-turns.js';
 
 describe('concurrent user turn presentation', () => {
-  it('derives the parallel period from Agent times and settles finished roots in completion order', () => {
+  it('settles finished roots in completion order independently of live layout', () => {
     const turn = (userTurnId, state, startedAt, endedAt) => ({ userTurnId, state, startedAt, ...(endedAt ? { endedAt } : {}) });
-    expect(hasParallelUserTurns([])).toBe(false);
-    expect(hasParallelUserTurns([turn('a', 'running', 10)])).toBe(false);
-    expect(hasParallelUserTurns([turn('a', 'running', 10), turn('b', 'queued', 20)])).toBe(true);
-    // The remaining live root keeps its lane whichever overlapping root ended first.
-    expect(hasParallelUserTurns([turn('a', 'running', 10), turn('b', 'completed', 20, 30)])).toBe(true);
-    expect(hasParallelUserTurns([turn('a', 'completed', 10, 30), turn('b', 'running', 20)])).toBe(true);
-    // No overlap, an unknown end (older Agent) or an unknown start ends the period.
-    expect(hasParallelUserTurns([turn('a', 'completed', 10, 15), turn('b', 'running', 20)])).toBe(false);
-    expect(hasParallelUserTurns([turn('a', 'completed', 10), turn('b', 'running', 20)])).toBe(false);
-    expect(hasParallelUserTurns([turn('a', 'completed', 10, 30), turn('b', 'running', 0)])).toBe(false);
-    // An older Agent still keeps the lane when the later root ran during the live one.
-    expect(hasParallelUserTurns([turn('a', 'running', 10), { ...turn('b', 'completed', 20), executions: [{ vpId: 'v' }] }])).toBe(true);
-    // A task result reopening a root measures from the reopen: a root that ran
-    // in between is not parallel, one that runs during the new span is.
-    const reopened = { ...turn('a', 'running', 10), activeSince: 40 };
-    expect(hasParallelUserTurns([reopened, turn('b', 'completed', 20, 30)])).toBe(false);
-    expect(hasParallelUserTurns([reopened, turn('b', 'completed', 45, 50)])).toBe(true);
-    expect(hasParallelUserTurns([reopened, turn('b', 'running', 20)])).toBe(true);
-    // A routed root that never got an execution has nothing to overlap.
-    expect(hasParallelUserTurns([turn('a', 'running', 10), { ...turn('r', 'completed', 20), executions: [] }])).toBe(false);
-    // An older Agent reopens without activeSince. A live root that already
-    // finished an execution cannot use its question time against roots
-    // without an end time; one still in its first execution can. End times
-    // (newer Agents) are unaffected.
-    const ran = { ...turn('b', 'completed', 20), executions: [{ vpId: 'v', state: 'completed' }] };
-    const legacyReopened = { ...turn('a', 'running', 10), executions: [{ vpId: 'v', state: 'completed' }, { vpId: 'v', state: 'running' }] };
-    expect(hasParallelUserTurns([legacyReopened, ran])).toBe(false);
-    expect(hasParallelUserTurns([legacyReopened, turn('b', 'running', 20)])).toBe(true);
-    expect(hasParallelUserTurns([{ ...turn('a', 'running', 10), executions: [{ vpId: 'v', state: 'running' }] }, ran])).toBe(true);
-    expect(hasParallelUserTurns([legacyReopened, { ...ran, endedAt: 30 }])).toBe(true);
-
     const a = { id: 'a', type: 'user', content: 'earlier', timestamp: 10, userTurnId: 'a' };
     const b = { id: 'b', type: 'user', content: 'later', timestamp: 20, userTurnId: 'b' };
     const replyA = { id: 'ra', type: 'assistant', timestamp: 25, userTurnId: 'a' };
@@ -51,7 +20,7 @@ describe('concurrent user turn presentation', () => {
     expect(order([turn('a', 'completed', 10), turn('b', 'completed', 20)])).toEqual(['o', 'a', 'ra', 'b', 'rb', 'c']);
     // A later root that finished first settles above the live one; the unrouted
     // optimistic send and older history keep their own slots.
-    expect(order([turn('a', 'running', 10), turn('b', 'completed', 20, 30)])).toEqual(['o', 'b', 'rb', 'a', 'ra', 'c']);
+    expect(order([turn('a', 'running', 10), turn('b', 'aborted', 20, 30)])).toEqual(['o', 'b', 'rb', 'a', 'ra', 'c']);
     // Finishing the earlier root appends it after the already-settled answer.
     expect(order([turn('a', 'completed', 10, 50), turn('b', 'completed', 20, 30)])).toEqual(['o', 'b', 'rb', 'a', 'ra', 'c']);
     expect(rows.map(row => row.id)).toEqual(['o', 'a', 'b', 'ra', 'rb', 'c']);
@@ -111,6 +80,19 @@ describe('concurrent user turn presentation', () => {
       );
       await Vue.nextTick();
       expect(replies().map(item => [item.speakerVpId, item.userTurnId])).toEqual([['omni', 'root'], ['other', 'root'], ['omni', 'new']]);
+      store.yeaftSessionTurns = [
+        { userTurnId: 'root', state: 'running', startedAt: 10 },
+        { userTurnId: 'new', state: 'queued', startedAt: 20 },
+      ];
+      await Vue.nextTick();
+      expect(wrapper.vm.splitActive).toBe(true);
+      store.yeaftSessionTurns[1].state = 'cancelling';
+      await Vue.nextTick();
+      expect(wrapper.vm.splitActive).toBe(true);
+      Object.assign(store.yeaftSessionTurns[1], { state: 'aborted', endedAt: 30 });
+      await Vue.nextTick();
+      expect(wrapper.vm.splitActive).toBe(false);
+      expect(wrapper.vm.historyBlocks.map(block => block.userTurnId)).toEqual(['new', 'root']);
     } finally { wrapper.unmount(); vi.unstubAllGlobals(); }
   });
 });

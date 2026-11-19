@@ -346,10 +346,10 @@ test('ordinary Session scenes persist through a live switch and reload without e
   await expect(status('First scene question')).toHaveCount(0);
   await expect(status('Second scene question')).toContainText('2,222');
   await statusPane.getByRole('button', { name: 'Close Session status', exact: true }).click();
-  await expect(pane(page, first)).toHaveCount(0);
+  await expect(region).toHaveCount(0);
   await expect(firstAnswer).not.toHaveClass(/streaming/);
   wire.delta(second, ' continues after the first Turn finishes');
-  await expect(pane(page, second)).toContainText('Second scene answer continues after the first Turn finishes');
+  await expect(page.locator('.assistant-turn.streaming')).toContainText('Second scene answer continues after the first Turn finishes');
   wire.finish(second);
   await expect(region).toHaveCount(0);
   await expect(page.locator('.assistant-turn.streaming')).toHaveCount(0);

@@ -12,11 +12,11 @@ Session 和 turn 仍是用户概念，不增加 topic、panel 或第二个输入
 
 完成、停止或失败的 turn 离开分裂区，按结束先后接到单列历史末尾，执行中的 turn 始终在已结束的下方。Agent 持续运行期间，其他 turn 结束只会继续往后接，已结束的回复不会因此移位；已结束的 turn 被后台任务结果或遗留补充重新唤起时，作为执行中的回复移到最下方，结束后留在那里。Agent 重启后只从最近一段持久历史恢复结束时间（取每轮最后一条持久行的时间），更早曾经并行的 turn 回到按提问时间排列。
 
-分栏由 Agent 快照推导：只要还有执行中的 turn 与另一个实际执行过的 turn 在时间上重叠（同时执行，或对方在它这段执行期间开始或结束），即使只剩一栏也保持分栏，切换 Session、刷新或换浏览器打开得到相同布局。重新唤起的 turn 从唤起时刻算起，两段执行之间跑完的 turn 不算并行。保留其他 turn 和历史阅读位置；用户正在选择或操作内容时不抢焦点。分裂和排序只影响投影，不重写 transcript。
+分栏由 Agent 快照推导：普通 Session 只有两个及以上未结束的 turn（包含排队或停止中）才分栏。降到一个时恢复单列宽度，剩余 turn 接到已结束历史下方；分栏栏头和单独的停止按钮一起消失。切换 Session、刷新或换浏览器得到相同布局。用户正在读历史时不强制回到最新消息；若处于跟随最新的状态，收回分栏后恢复普通单列跟随。分栏和排序只影响投影，不重写 transcript。
 
 已确认的补充消息与根提问在展示时组成同一输入组，同一 VP execution 在补充前后的正文、工具活动保持一个回复块；未确认的乐观用户行仍保留独立边界。原始消息顺序、时间和身份不变，刷新历史使用相同投影；不同 VP、独立 turn 和真正的 execution 边界不因此合并。
 
-当前对话首次进入分裂区时自动收起 Workbench，让出阅读宽度；手动重新打开后，流式更新、补充和新增 sibling turn 不会再次收起。所有活动 turn 结束后下一次进入分栏，或切换到另一个已有分栏的对话时，重新应用一次默认收起。数字人遵循同样的展示原则，关闭自身检查／产物栏，不改变普通 Session 的 Workbench 偏好。
+当前对话首次进入分裂区时自动收起 Workbench，让出阅读宽度；手动重新打开后，流式更新、补充和新增 sibling turn 不会再次收起。恢复单列后下一次进入分栏，或切换到另一个已有分栏的对话时，重新应用一次默认收起。数字人遵循同样的展示原则，关闭自身检查／产物栏，不改变普通 Session 的 Workbench 偏好。
 
 ## 身份与兼容
 
@@ -28,7 +28,7 @@ Session 和 turn 仍是用户概念，不增加 topic、panel 或第二个输入
 - 持久用户消息附加 `relation: new | supplement`；Web 规范化为 `turnRelation`。
 - `session_turns { sessionId, turns: [{ userTurnId, userMessageId, startedAt, activeSince?, endedAt?, state, executions: [{ vpId, threadId, turnId, state }] }] }` 是 Session 级权威状态投影，正常运行和重连均发送。时间均使用 Agent 时钟：`endedAt` 只在该 turn 的全部 execution 结束后出现，从持久历史恢复的 turn 取其最后一条持久行的时间；`activeSince` 只在已结束的 turn 被重新唤起并仍在执行时出现，表示这段执行的开始时间。
 - `user_message_routed { sessionId, messageId, userTurnId, relation }` 更新尚未归属的乐观用户行。
-- Web 状态按 `(agentId, sessionId)` 隔离。旧 Agent 缺少新增字段时继续原单列展示；只缺 `endedAt` 和 `activeSince` 时，已结束 turn 按发起时间排列，较早发起的 turn 先结束后，剩下的 turn 回到单列末尾。执行中的 turn 已有结束过的 execution 时，可能是被重新唤起的，此时只有另一个 turn 也在执行才分栏，不按原提问时间把之后的提问都算作并行。
+- Web 状态按 `(agentId, sessionId)` 隔离。不发送 turn 快照的旧 Agent 继续单列展示。`endedAt` 仅用于已结束 turn 的展示顺序；没有结束时间的 turn 保留原来的提问顺序位置。
 
 ## 验证重点
 

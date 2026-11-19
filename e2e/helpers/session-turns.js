@@ -27,9 +27,9 @@ export function sessionTurnWire(page, agent, { sessionId = SESSION, vpId = VP, c
   };
   const send = async (text, supplement = null) => {
     const count = agent.messages('yeaft_session_send').length;
-    const composer = page.locator('[data-message-composer]').getByRole('textbox');
-    await composer.fill(text);
-    await composer.press('Enter');
+    const composer = page.locator('[data-message-composer]');
+    await composer.getByRole('textbox').fill(text);
+    await composer.getByRole('button', { name: 'Send', exact: true }).click();
     await expect.poll(() => agent.messages('yeaft_session_send').length).toBe(count + 1);
     const request = agent.messages('yeaft_session_send').at(-1);
     expect(request.sessionId).toBe(sessionId);
