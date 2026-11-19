@@ -6,6 +6,7 @@ import { test as base, TestServer, getAvailablePort, useTestServer, useMockAgent
 import { MockAgent } from '../../fixtures/mock-agent.js';
 import { pane, sessionTurnWire } from '../../helpers/session-turns.js';
 import { sessionConfigPath } from '../../../agent/yeaft/sessions/session-config.js';
+import { SESSION_SCENE_CAPABILITIES } from '../../../agent/yeaft/sessions/scene-ids.js';
 import { seedDefaultVps } from '../../../agent/yeaft/vp/seed-defaults.js';
 import { createVp } from '../../../agent/yeaft/vp/vp-crud.js';
 import { scanVpLibrary } from '../../../agent/yeaft/vp/vp-store.js';
@@ -112,6 +113,7 @@ const test = base.extend({
       await useMockAgent(agent, async () => {
         agent.send({ type: 'agent_capabilities_updated', capabilities: [
           'plaintext-ok', 'work_center', 'workbench_session_routes', 'scheduled_tasks', 'session_scenes',
+          ...Object.values(SESSION_SCENE_CAPABILITIES),
         ] });
         await use(agent);
       });
@@ -169,6 +171,9 @@ test('ordinary Session scenes persist through a live switch and reload without e
   const create = page.locator('.yeaft-session-create-modal');
   const createScene = create.getByRole('combobox', { name: 'Scene', exact: true });
   await expect(createScene).toHaveValue('general');
+  await expect(createScene.locator('option')).toHaveText([
+    'General', 'Software', 'Frontend', 'Writing', 'Content creation', 'Video editing', 'Primary education', 'Investment',
+  ]);
   await expect(create.locator('.yeaft-roster-trigger')).toHaveCount(0);
   await createScene.focus();
   await createScene.press('ArrowDown');
@@ -205,6 +210,9 @@ test('ordinary Session scenes persist through a live switch and reload without e
   await expect(software).toBeFocused();
   await expect(software).toHaveAttribute('aria-selected', 'true');
   await expect(software.locator('.yeaft-model-check')).toHaveText('✓');
+  await expect(sceneMenu.locator('.yeaft-model-option-label')).toHaveText([
+    'General', 'Software', 'Frontend', 'Writing', 'Content creation', 'Video editing', 'Primary education', 'Investment',
+  ]);
   await expectWithinViewport(sceneMenu, page);
   await software.press('Escape');
   await expect(sceneMenu).toHaveCount(0);
@@ -234,6 +242,9 @@ test('ordinary Session scenes persist through a live switch and reload without e
 
   await scene.press('ArrowDown');
   await software.press('ArrowDown');
+  const frontend = sceneMenu.getByRole('option', { name: 'Frontend', exact: true });
+  await expect(frontend).toBeFocused();
+  await frontend.press('ArrowDown');
   const writing = sceneMenu.getByRole('option', { name: 'Writing', exact: true });
   await expect(writing).toBeFocused();
   await writing.press('Enter');
@@ -389,5 +400,21 @@ test('ordinary Session scenes persist through a live switch and reload without e
   await expect(statusPane).not.toContainText(/\b(VPs?|Omni|Linus|Martin)\b/i);
   await expectAnonymous(page.locator('.chat-container'));
   converted.finish(convertedTurn);
+
+  // Newer scenes need an Agent that advertises them. Without those capabilities
+  // the menu keeps the original scenes plus the newer scene this Session uses.
+  await scene.click();
+  await sceneMenu.getByRole('option', { name: 'Primary education', exact: true }).click();
+  await expect(scene).toBeEnabled();
+  await expectScene('Primary education');
+  expect(fixture.session()).toMatchObject({ config: { sceneId: 'primary-education' } });
+  mockAgent.send({ type: 'agent_capabilities_updated', capabilities: [
+    'plaintext-ok', 'work_center', 'workbench_session_routes', 'scheduled_tasks', 'session_scenes',
+  ] });
+  await scene.click();
+  await expect(sceneMenu.locator('.yeaft-model-option-label')).toHaveText([
+    'General', 'Software', 'Writing', 'Content creation', 'Primary education', 'Investment',
+  ]);
+  await expect(sceneMenu.getByRole('option', { name: 'Primary education', exact: true })).toHaveAttribute('aria-selected', 'true');
   expect(fixture.errors).toEqual([]);
 });

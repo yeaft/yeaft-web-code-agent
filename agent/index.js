@@ -25,6 +25,7 @@ import {
 } from './upgrade-command.js';
 import { loadConfig as loadYeaftConfig } from './yeaft/config.js';
 import { initYeaftDir } from './yeaft/init.js';
+import { SESSION_SCENE_CAPABILITIES } from './yeaft/sessions/scene-ids.js';
 import { isWorkCenterEnabled, startWorkCenterFeature } from './yeaft/work-center/feature.js';
 import { supportsWorkItemAttachments } from './yeaft/work-center/attachment-platform.js';
 import { updateBrowserRuntimeSettings } from './yeaft/config-api.js';
@@ -180,6 +181,8 @@ async function detectCapabilities() {
   // to this peer. Old servers ignore the unknown capability token.
   const capabilities = ['scheduled_tasks', 'scheduled_task_month_days', 'background_tasks', 'file_editor', 'ping_session', 'plaintext-ok', 'workbench_session_routes', 'workbench_request_correlation', 'workbench_terminal_cleanup_fence', 'workbench_file_content_chunks', 'workbench_video_stream', 'session_history_search', 'session_history_outline', 'session_history_window_prefetch', 'session_fork_from_turn', 'session_fork_while_running', 'session_merge', 'session_delete_turn', 'session_scenes', 'file_reference_resolution', 'response_image_preview', 'yeaft_plugins', 'yeaft_managed_skills', 'settings_request_correlation', 'work_center_feature_settings'];
   capabilities.push('digital_person', getAgentUpgradeCapability());
+  // Scenes added after 'session_scenes' shipped are advertised one by one.
+  capabilities.push(...Object.values(SESSION_SCENE_CAPABILITIES));
   if (ctx.CONFIG?.workCenterEnabled === true) {
     capabilities.push('work_center', 'work_center_message_v2', 'work_center_workbench');
     if (supportsWorkItemAttachments()) capabilities.push('work_item_attachments');

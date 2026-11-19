@@ -26,7 +26,7 @@ Legacy browser-local section state is not imported into user preferences. The in
 1. Choose **New chat** in the unified sidebar and select **Yeaft** as the runtime.
 2. Select the Agent that owns the working directory.
 3. Set a Session name and working directory.
-4. Choose **General**, **Software**, **Writing**, **Short video**, or **Investment**. The default is General.
+4. Choose a scene: **General**, **Software**, **Frontend**, **Writing**, **Content creation**, **Video editing**, **Primary education**, or **Investment**. The default is General.
 5. Create the Session.
 6. After creation, choose model/effort in the composer and edit the announcement in Session settings, then send a message.
 
@@ -36,13 +36,15 @@ Legacy browser-local section state is not imported into user preferences. The in
 
 Open the scene menu using the chevron next to **Attach**; the current choice is checked. On phones, **Attach** and **Scene** are above the text box, while model, effort, Stop and Send remain below it. It saves to this Session without sending a message. The scene applies to new turns; running turns continue unchanged. For example, switch from Software to Writing to turn an earlier design discussion into an announcement without starting over. A scene guides the work, not which questions you may ask. It does not change model, effort, permissions, or workspace.
 
-Each scene brings the working standards of its field. Software thinks like a principal engineer across product, design, security, testing, data migrations and operations. Writing works like an editor, fact-checker and copy chief, following style guides such as Chicago or GB/T 15834. Short Video covers positioning, scripting, shooting, editing, operations, data, commerce and advertising rules. Investment Research works like a buy-side analyst and risk manager under the CFA Institute’s standards. The All-purpose Assistant holds specialist questions, such as health, law or safety, to that profession’s standard of care.
+Each scene brings the working standards of its field. Software thinks like a principal engineer across product, design, security, testing, data migrations and operations. Frontend works like a design lead, interaction designer and frontend engineer: interfaces that look good at first sight, are easy to use and stay consistent with the product's design system, checked in a real browser at phone and desktop widths. Writing works like an editor, fact-checker and copy chief, following style guides such as Chicago or GB/T 15834. Content creation covers positioning, topics, Xiaohongshu-style image posts, short-video scripts and shooting, operations, data, commerce and platform rules. Video editing works like a film editor, sound mixer and colorist, from story and cutting to loudness, color and delivery to each platform's spec; when the files are on the Agent's machine and ffmpeg is installed, it can inspect and process them directly. Primary education works like an experienced primary teacher of Chinese, math and English: it guides a child step by step instead of handing over answers, and gives parents and teachers the answer, the likely misconception and how to teach it. Investment works like a buy-side analyst and risk manager under the CFA Institute’s standards. General holds specialist questions, such as health, law or safety, to that profession’s standard of care.
 
 The assistant checks the whole field but raises only what matters to your request. When you ask what to do or which option is better, it recommends one and says why instead of listing conditions. Ask Software how drafts should reopen on another device, and it considers an unsaved edit open on both devices; ask it to change one word, and you still get a one-word edit. The scene changes what the assistant notices and the standard it works to, not the format you have to read.
 
 ### Compatibility with existing Sessions
 
 Existing Sessions keep their complete messages, membership, and custom definitions. Until you choose a scene, they continue to use their existing routing; settings such as title or model do not convert the Session. Choose a scene explicitly to use the single-assistant workflow on future messages. Saved role IDs are not deleted, but they no longer route messages in that Session. Legacy role settings are under **Compatibility**; replies in scene Sessions do not display role names. Existing scheduled tasks retain their configured targeting. Scene switching requires an updated Agent.
+
+Sessions that chose Short video now show Content creation: the short-video practices remain, and once the Agent is updated, image-and-text platforms such as Xiaohongshu are added. Frontend, Video editing and Primary education appear only when the Agent supports them; with an older Agent, the menu keeps the original scenes. If the Agent is rolled back, Sessions using these three scenes answer through their previous routing (new ones through the general assistant), and the scene returns when the Agent is updated again.
 
 ## 删除对话轮次
 
