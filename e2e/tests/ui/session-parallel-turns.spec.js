@@ -90,18 +90,21 @@ test('stopping a sibling restores the ordinary live Session transcript and compl
   await expect.poll(() => mockAgent.messages('yeaft_abort_turn')).toEqual([
     expect.objectContaining({ sessionId: SESSION, userTurnId: b.userTurnId }),
   ]);
+  wire.cancelling(b);
   await expect(region.locator('.parallel-turn-pane')).toHaveCount(2); // Wait for Agent confirmation.
+  await expect(siblingStop).toBeDisabled();
+  await expect(pane(page, b).locator('.concurrent-turn-body')).toBeFocused();
   wire.finish(b, 'aborted');
-  const expectOrdinaryLive = async (tail, order, width = originalWidth) => {
+  const questions = () => messages.locator('.message-user-block').allTextContents().then(rows => rows.map(row => row.trim()));
+  const expectOrdinaryLive = async (tail, { order, width = originalWidth } = {}) => {
     await expect(region).toHaveCount(0); // No lane header, status, tabs, or inline Stop.
     await expect.poll(ordinaryWidth).toBe(width);
     await expect(messages.locator('.assistant-turn').filter({ hasText: tail })).toBeVisible();
     await expect(stop).toBeEnabled();
-    const questions = () => messages.locator('.message-user-block').allTextContents().then(rows => rows.map(row => row.trim()));
-    await expect.poll(questions).toEqual(order);
+    if (order) await expect.poll(questions).toEqual(order);
   };
   const afterStop = ['Later quick question', 'Earlier long question'];
-  await expectOrdinaryLive('A is still researching', afterStop);
+  await expectOrdinaryLive('A is still researching', { order: afterStop });
   await expect(messages.getByText('B partial answer', { exact: true })).toBeVisible();
   await expect(status('Later quick question')).toHaveCount(0);
   await expect(status('Earlier long question').locator('.yeaft-vp-timeline-abort')).toBeEnabled();
@@ -116,12 +119,12 @@ test('stopping a sibling restores the ordinary live Session transcript and compl
   await expect(region).toHaveCount(0);
   wire.delta(a, ' while away');
   await wire.open(SESSION);
-  await expectOrdinaryLive('A is still researching after the split while away', afterStop);
+  await expectOrdinaryLive('A is still researching after the split while away', { order: afterStop });
   await page.reload();
   await page.waitForFunction(id => window.Pinia?.useChatStore?.().agents.some(agent => agent.id === id && agent.status === 'ready'), mockAgent.agentId);
   await wire.open(SESSION);
   wire.delta(a, ' after reload');
-  await expectOrdinaryLive('A is still researching after the split while away after reload', afterStop);
+  await expectOrdinaryLive('A is still researching after the split while away after reload', { order: afterStop });
 
   // A new sibling can split the UI again on mobile. Natural completion
   // also returns to single-column rather than waiting for the survivor to end.
@@ -129,16 +132,39 @@ test('stopping a sibling restores the ordinary live Session transcript and compl
   await page.evaluate(() => { document.documentElement.dataset.theme = 'dark'; });
   await page.evaluate(() => window.Pinia.useChatStore().closeSessionSidebar());
   const mobileWidth = await ordinaryWidth();
+  const longReply = Array.from({ length: 60 }, (_, i) => `\n\nReading marker ${i}: this part of the continuous response should stay in view when the two layouts change.`).join('');
+  wire.delta(a, longReply);
   const c = await wire.send('Mobile sibling');
   wire.delta(c, 'C quick answer');
   await expect(region.locator('.parallel-turn-pane')).toHaveCount(2);
   await expect(region.getByRole('tablist')).toBeVisible();
+  await region.getByRole('tab', { name: 'Earlier long question' }).click();
+  const readingPane = pane(page, a).locator('.concurrent-turn-body');
+  const scrollTop = () => readingPane.evaluate(node => node.scrollTop);
+  await expect.poll(scrollTop).toBeGreaterThan(800);
+  await readingPane.hover();
+  const priorTop = await scrollTop();
+  await page.mouse.wheel(0, -600);
+  await expect.poll(scrollTop).toBeLessThan(priorTop - 500);
+  const readingAnchor = await readingPane.evaluate(node => {
+    const top = node.getBoundingClientRect().top;
+    const paragraph = [...node.querySelectorAll('.turn-text > p')].find(p => p.getBoundingClientRect().bottom > top);
+    return { text: paragraph.textContent, offset: paragraph.getBoundingClientRect().top - top };
+  });
   const editor = composer.getByRole('textbox');
   await editor.fill('Unsent mobile draft');
   await page.screenshot({ path: info.outputPath('parallel-dark-320.png'), animations: 'disabled' });
   wire.finish(c);
   const settledOrder = ['Later quick question', 'Mobile sibling', 'Earlier long question'];
-  await expectOrdinaryLive('A is still researching after the split while away after reload', settledOrder, mobileWidth);
+  await expectOrdinaryLive('A is still researching after the split while away after reload', { width: mobileWidth });
+  const anchorError = () => messages.getByText(readingAnchor.text, { exact: true }).evaluate((p, offset) => {
+    const top = p.closest('.virtual-transcript-scroller').getBoundingClientRect().top;
+    return Math.abs(p.getBoundingClientRect().top - top - offset);
+  }, readingAnchor.offset);
+  await expect.poll(anchorError).toBeLessThan(4);
+  wire.delta(a, '\n\nMore streaming text below the reading position.');
+  await expect(messages.getByText('More streaming text below the reading position.', { exact: true })).toBeVisible();
+  await expect.poll(anchorError).toBeLessThan(4);
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(320);
   await expect(stop).toBeInViewport();
   await expect(editor).toBeFocused();
@@ -152,7 +178,11 @@ test('stopping a sibling restores the ordinary live Session transcript and compl
   await page.reload();
   await page.waitForFunction(id => window.Pinia?.useChatStore?.().agents.some(agent => agent.id === id && agent.status === 'ready'), mockAgent.agentId);
   await wire.open(SESSION);
-  await expect.poll(() => messages.locator('.message-user-block').allTextContents().then(rows => rows.map(row => row.trim()))).toEqual(settledOrder);
+  // The long surviving reply virtualizes older roots out of the tail window.
+  const scroller = page.locator('.yeaft-page .virtual-transcript-scroller');
+  await scroller.focus();
+  await scroller.press('Home');
+  await expect.poll(questions).toEqual(settledOrder);
 });
 
 test('Delete turn from a saved supplement replays the remaining Session in both tabs', async ({ chatPage: page, context, mockAgent, serverUrl }) => {

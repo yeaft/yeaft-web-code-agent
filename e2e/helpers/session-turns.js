@@ -18,7 +18,7 @@ export function sessionTurnWire(page, agent, { sessionId = SESSION, vpId = VP, c
     turnId: turn.executions[0].turnId, threadId: turn.executions[0].threadId, data });
   const snapshot = () => {
     event({ type: 'session_turns', sessionId, turns });
-    const live = turns.filter(turn => turn.state === 'running');
+    const live = turns.filter(turn => ['running', 'cancelling'].includes(turn.state));
     event({ type: 'vp_status_snapshot', sessionId, statuses: live.length ? [{
       sessionId, vpId, state: 'streaming', since: live[0].startedAt,
       turnId: live.at(-1).executions[0].turnId, runningThreadCount: live.length,
@@ -64,6 +64,11 @@ export function sessionTurnWire(page, agent, { sessionId = SESSION, vpId = VP, c
       turnId: turn.executions[0].turnId, threadId: turn.executions[0].threadId, ts: Date.now(),
       toolCalls: [{ id, name, input: { path: `${id}.js` } }] });
   };
+  const cancelling = (turn) => {
+    turn.state = 'cancelling';
+    turn.executions[0].state = 'cancelling';
+    snapshot();
+  };
   const finish = (turn, reason = 'end_turn') => {
     turn.state = reason === 'aborted' ? 'aborted' : 'completed';
     turn.executions[0].state = turn.state;
@@ -73,7 +78,7 @@ export function sessionTurnWire(page, agent, { sessionId = SESSION, vpId = VP, c
     event({ type: 'vp_turn_end', sessionId, userTurnId: turn.userTurnId, ...turn.executions[0], reason });
     snapshot();
   };
-  return { turns, history, send, delta, tool, finish, snapshot, event, frame };
+  return { turns, history, send, delta, tool, cancelling, finish, snapshot, event, frame };
 }
 
 export async function sessionTurnsFixture(page, agent) {

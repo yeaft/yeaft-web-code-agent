@@ -27,7 +27,7 @@ const test = base.extend({
     const root = mkdtempSync(join(tmpdir(), 'yeaft-vp-catalog-server-'));
     const server = new TestServer(await getAvailablePort());
     Object.assign(server.env, { HOME: root, YEAFT_DIR: join(root, 'yeaft'), TEST_DB_DIR: join(root, 'db'),
-      SERVE_DIST: 'false', YEAFT_LOCAL_RUN: 'true' });
+      SERVE_DIST: process.env.SERVE_DIST || 'false', YEAFT_LOCAL_RUN: 'true' });
     try { await useTestServer(server, use); }
     finally { rmSync(root, { recursive: true, force: true }); }
   }, { scope: 'worker' }],
@@ -142,10 +142,13 @@ async function expectWithinViewport(locator, page) {
 }
 
 async function showSidebar(page) {
-  if (!await page.locator('.sidebar-navigation:visible').count()) {
-    await page.locator('.header-sidebar-toggle:visible, .yeaft-topbar-sidebar-toggle:visible').first().click();
-  }
-  await expect(page.locator('.sidebar-navigation:visible')).toBeVisible();
+  const navigation = page.locator('.sidebar-navigation:visible');
+  const toggle = page.locator('.header-sidebar-toggle:visible, .yeaft-topbar-sidebar-toggle:visible').first();
+  // After reload the page can restore the desktop sidebar asynchronously and
+  // remove the toggle before it can be clicked. Wait for either usable state.
+  await expect(navigation.or(toggle).first()).toBeVisible();
+  if (!await navigation.isVisible() && await toggle.isVisible()) await toggle.click();
+  await expect(navigation).toBeVisible();
 }
 
 async function hideMobileSidebar(page) {

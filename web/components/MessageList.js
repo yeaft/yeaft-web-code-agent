@@ -1740,7 +1740,9 @@ export default {
         || after.firstBlockIdentity !== before.firstBlockIdentity;
     };
 
+    let readingTransferGeneration = 0;
     const resumeAutoFollow = () => {
+      readingTransferGeneration += 1;
       autoFollowPaused.value = false;
       isAtBottom.value = true;
       virtualTranscriptRef.value?.setBottomFollowEnabled?.(true);
@@ -1748,6 +1750,7 @@ export default {
 
     let resumeFollowingAfterSplit = false;
     const pauseAutoFollow = ({ forSplit = false } = {}) => {
+      readingTransferGeneration += 1;
       if (!forSplit) resumeFollowingAfterSplit = false;
       autoFollowPaused.value = true;
       isAtBottom.value = false;
@@ -2047,6 +2050,45 @@ export default {
       { immediate: true }
     );
 
+    // Transfer the surviving lane's reading position by stable row id. A
+    // visible Markdown block is a better anchor than a pixel offset when the
+    // same text reflows from a narrow lane to the wider transcript.
+    const laneRows = (root) => Array.from(root?.querySelectorAll('.virtual-transcript-item > .message-block > .msg-row, .virtual-transcript-item > .msg-row') || []);
+    const markdownBlocks = (row) => Array.from(row.querySelectorAll('.turn-text > *'));
+    const captureLaneReadingPosition = (body) => {
+      const { top, bottom } = body.getBoundingClientRect();
+      const visible = (el) => {
+        const rect = el.getBoundingClientRect();
+        return rect.bottom > top && rect.top < bottom;
+      };
+      const row = laneRows(body).find(visible);
+      if (!row?.dataset.msgId) return null;
+      const itemKey = row.closest('.virtual-transcript-item')?.dataset.virtualId;
+      if (!itemKey) return null;
+      const markdown = markdownBlocks(row);
+      const blockIndex = markdown.findIndex(visible);
+      const block = markdown[blockIndex];
+      const offsetFromTop = (el) => el.getBoundingClientRect().top - top;
+      return { itemKey, rowId: row.dataset.msgId, rowOffset: offsetFromTop(row), blockIndex,
+        blockPrefix: block?.textContent?.slice(0, 64), blockOffset: block ? offsetFromTop(block) : 0 };
+    };
+    const restoreLaneReadingPosition = async (position, identity, generation) => {
+      await Vue.nextTick();
+      const current = () => identity === virtualTranscriptIdentity.value && !splitActive.value
+        && generation === readingTransferGeneration && !!virtualTranscriptRef.value;
+      if (!current() || !await virtualTranscriptRef.value.scrollToKey(position.itemKey, { align: 'start' }) || !current()) return;
+      const findRow = () => laneRows(virtualTranscriptRef.value?.$el).find(el => el.dataset.msgId === position.rowId);
+      const findBlock = () => {
+        const row = findRow();
+        const block = row && markdownBlocks(row)[position.blockIndex];
+        return position.blockPrefix && block?.textContent?.startsWith(position.blockPrefix) ? block : null;
+      };
+      // Streaming may replace the Markdown DOM; resolve the anchor again after
+      // measurements instead of pinning a detached paragraph or its old offset.
+      if (findBlock()) virtualTranscriptRef.value.anchorTarget(position.itemKey, findBlock, { offset: position.blockOffset });
+      else if (findRow()) virtualTranscriptRef.value.anchorTarget(position.itemKey, findRow, { offset: position.rowOffset });
+    };
+
     Vue.watch([virtualTranscriptIdentity, splitActive], ([identity, active], [previousIdentity, wasActive]) => {
       if (active) {
         resumeFollowingAfterSplit = (!!previousIdentity && identity !== previousIdentity) || !autoFollowPaused.value;
@@ -2055,8 +2097,15 @@ export default {
         const focused = document.activeElement;
         const focusLeavingLane = focused && concurrentTurnsRef.value?.$el?.contains(focused);
         if (resumeFollowingAfterSplit) {
-          resumeAutoFollow();
-          smartScrollToBottom();
+          const survivor = currentPendingTurns.value[0];
+          const pausedPane = survivor && concurrentTurnsRef.value?.pausedPaneBody(survivor.userTurnId);
+          if (pausedPane) {
+            const position = captureLaneReadingPosition(pausedPane);
+            if (position) void restoreLaneReadingPosition(position, identity, ++readingTransferGeneration);
+          } else {
+            resumeAutoFollow();
+            smartScrollToBottom();
+          }
         }
         resumeFollowingAfterSplit = false;
         if (focusLeavingLane) Vue.nextTick(() => {

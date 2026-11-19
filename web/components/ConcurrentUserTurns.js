@@ -135,6 +135,18 @@ export default {
     });
     Vue.onBeforeUnmount(() => resizeObserver?.disconnect());
     const columnFor = id => Array.from(trackRef.value?.children || []).find(el => el.dataset.userTurnId === id);
+    const paneBody = id => columnFor(id)?.querySelector('.concurrent-turn-body');
+    Vue.onBeforeUpdate(() => {
+      const focused = document.activeElement;
+      if (!trackRef.value?.contains(focused) || !focused.matches('.concurrent-turn-stop')) return;
+      const id = focused.closest('.parallel-turn-pane')?.dataset.userTurnId;
+      const turn = props.turns.find(turn => turn.userTurnId === id);
+      // A focused native button loses focus when it becomes disabled.
+      if (turn && (turn.state === 'cancelling' || turn.disabled || props.stopDisabled)) {
+        paneBody(id)?.focus({ preventScroll: true });
+      }
+    });
+    const pausedPaneBody = id => paused.has(id) ? paneBody(id) : null;
     const scrollToTurn = id => {
       const track = trackRef.value;
       const column = columnFor(id);
@@ -185,7 +197,7 @@ export default {
       }
       trackRef.value?.scrollIntoView?.({ block: 'end', inline: 'nearest' });
     };
-    expose({ revealBlock, anchorRow, revealLatest });
+    expose({ revealBlock, anchorRow, revealLatest, pausedPaneBody });
     return { trackRef, tabsRef, tabsVisible, selectedId, onTrackScroll, onPaneWheel, onPanePointer, touchStart, touchMove, onPaneKey, setTranscript, panelId, label, scrollToTurn, onTabKey };
   },
 };
