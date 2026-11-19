@@ -1,6 +1,7 @@
 import WorkbenchCapabilityHost from './WorkbenchCapabilityHost.js';
 import BrowserPanel from './BrowserPanel.js';
 import { normalizeBrowserAddress } from '../utils/browser-address.js';
+import NavigationIcon from './NavigationIcon.js';
 import {
   workbenchConversationId,
   workbenchRouteKey,
@@ -9,7 +10,7 @@ import {
 
 export default {
   name: 'WorkbenchPanel',
-  components: { WorkbenchCapabilityHost, BrowserPanel },
+  components: { NavigationIcon, WorkbenchCapabilityHost, BrowserPanel },
   emits: ['expanded-change'],
   props: {
     ownerRoute: { type: Object, default: null },
@@ -62,7 +63,7 @@ export default {
                 @click.stop="toggleLauncher"
                 @keydown="handleLauncherButtonKeydown"
               >
-                <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/></svg>
+                <NavigationIcon name="add" :size="18" />
               </button>
               <div v-if="launcherOpen" ref="launcherMenu" class="ctx-menu workbench-add-menu" role="menu">
                 <button
@@ -113,7 +114,7 @@ export default {
             :title="$t('workbench.collapse')"
             :aria-label="$t('workbench.collapse')"
           >
-            <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+            <NavigationIcon name="close" :size="18" />
           </button>
         </header>
 

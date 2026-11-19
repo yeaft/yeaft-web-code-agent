@@ -19,10 +19,11 @@ import McpTab from './McpTab.js';
 import UserShortcutsSettings from './UserShortcutsSettings.js';
 import { loadSandboxState } from '../utils/sandbox-api.js';
 import { confirmDialog } from '../utils/dialog.js';
+import NavigationIcon from './NavigationIcon.js';
 
 export default {
   name: 'SettingsPanel',
-  components: { DashboardTab, AgentInstaller, VpCrudPanel, SearchSettingsTab, McpTab, UserShortcutsSettings },
+  components: { NavigationIcon, DashboardTab, AgentInstaller, VpCrudPanel, SearchSettingsTab, McpTab, UserShortcutsSettings },
   props: {
     visible: Boolean,
     initialTab: { type: String, default: '' },
@@ -42,7 +43,7 @@ export default {
       <div class="settings-dialog">
         <!-- Left Navigation -->
         <div class="settings-nav">
-          <div class="settings-nav-title">{{ $t('settings.close') }}</div>
+          <div class="settings-nav-title">{{ $t('chat.sidebar.settings') }}</div>
           <button
             v-for="tab in visibleTabs"
             :key="tab.key"
@@ -50,15 +51,15 @@ export default {
             :class="{ active: activeTab === tab.key }"
             @click="activeTab = tab.key"
           >
-            <svg v-if="tab.key === 'general'" viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58c.18-.14.23-.41.12-.61l-1.92-3.32c-.12-.22-.37-.29-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54c-.04-.24-.24-.41-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.07.62-.07.94s.02.64.07.94l-2.03 1.58c-.18.14-.23.41-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z"/></svg>
-            <svg v-else-if="tab.key === 'account'" viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z"/></svg>
-            <svg v-else-if="tab.key === 'security'" viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M18 8h-1V6c0-2.76-2.24-5-5-5S7 3.24 7 6v2H6c-1.1 0-2 .9-2 2v10c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V10c0-1.1-.9-2-2-2zm-6 9c-1.1 0-2-.9-2-2s.9-2 2-2 2 .9 2 2-.9 2-2 2zm3.1-9H8.9V6c0-1.71 1.39-3.1 3.1-3.1 1.71 0 3.1 1.39 3.1 3.1v2z"/></svg>
-            <svg v-else-if="tab.key === 'sandbox'" viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M7 2h10v2h-1v3h1.5A3.5 3.5 0 0 1 21 10.5v7a3.5 3.5 0 0 1-3.5 3.5h-11A3.5 3.5 0 0 1 3 17.5v-7A3.5 3.5 0 0 1 6.5 7H8V4H7V2zm3 2v3h4V4h-4zm-3.5 5A1.5 1.5 0 0 0 5 10.5v7A1.5 1.5 0 0 0 6.5 19h11a1.5 1.5 0 0 0 1.5-1.5v-7A1.5 1.5 0 0 0 17.5 9h-11zM8 12h2v2H8v-2zm6 0h2v2h-2v-2zm-6 4h8v2H8v-2z"/></svg>
-            <svg v-else-if="tab.key === 'invitations'" viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M15 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm-9-2V7H4v3H1v2h3v3h2v-3h3v-2H6zm9 4c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z"/></svg>
-            <svg v-else-if="tab.key === 'dashboard'" viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M3 13h8V3H3v10zm0 8h8v-6H3v6zm10 0h8V11h-8v10zm0-18v6h8V3h-8z"/></svg>
-            <svg v-else-if="tab.key === 'tools'" viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M22.7 19l-9.1-9.1c.9-2.3.4-5-1.5-6.9-2-2-5-2.4-7.4-1.3L9 6 6 9 1.6 4.7C.4 7.1.9 10.1 2.9 12.1c1.9 1.9 4.6 2.4 6.9 1.5l9.1 9.1c.4.4 1 .4 1.4 0l2.3-2.3c.5-.4.5-1.1.1-1.4z"/></svg>
-            <svg v-else-if="tab.key === 'llm'" viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M21 10.12h-6.78l2.74-2.82c-2.73-2.7-7.15-2.8-9.88-.1-2.73 2.71-2.73 7.08 0 9.79s7.15 2.71 9.88 0C18.32 15.65 19 14.08 19 12.1h2c0 1.98-.88 4.55-2.64 6.29-3.51 3.48-9.21 3.48-12.72 0-3.5-3.47-3.5-9.11 0-12.58 3.51-3.47 9.14-3.49 12.65-.06L21 3v7.12zM12.5 8v4.25l3.5 2.08-.72 1.21L11 13V8h1.5z"/></svg>
-            <svg v-else-if="tab.key === 'yeaft'" viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M12 2L2 7l10 5 10-5-10-5zm0 8L2 15l10 5 10-5-10-5z"/></svg>
+            <NavigationIcon v-if="tab.key === 'general'" class="settings-nav-icon" name="settings" :size="18" />
+            <svg v-else-if="tab.key === 'account'" class="settings-nav-icon" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="4"/><path d="M4 20a8 8 0 0 1 16 0"/></svg>
+            <svg v-else-if="tab.key === 'security'" class="settings-nav-icon" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="10" width="14" height="10" rx="2.5"/><path d="M8 10V7a4 4 0 0 1 8 0v3M12 14.5v2"/></svg>
+            <svg v-else-if="tab.key === 'sandbox'" class="settings-nav-icon" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="8" width="16" height="12" rx="3"/><path d="M9 8V4h6v4M9 13h.01M15 13h.01M9 16.5h6"/></svg>
+            <svg v-else-if="tab.key === 'invitations'" class="settings-nav-icon" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="10" cy="8" r="4"/><path d="M3 20a7 7 0 0 1 12.5-4.3M19 14v6M16 17h6"/></svg>
+            <svg v-else-if="tab.key === 'dashboard'" class="settings-nav-icon" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="3.5" width="7" height="9" rx="1.5"/><rect x="13.5" y="3.5" width="7" height="5" rx="1.5"/><rect x="13.5" y="11.5" width="7" height="9" rx="1.5"/><rect x="3.5" y="15.5" width="7" height="5" rx="1.5"/></svg>
+            <svg v-else-if="tab.key === 'tools'" class="settings-nav-icon" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg>
+            <svg v-else-if="tab.key === 'llm'" class="settings-nav-icon" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="6" width="12" height="12" rx="2.5"/><path d="M10 10h4v4h-4zM9 3v3M15 3v3M9 18v3M15 18v3M3 9h3M3 15h3M18 9h3M18 15h3"/></svg>
+            <svg v-else-if="tab.key === 'yeaft'" class="settings-nav-icon" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m12 3 9 5-9 5-9-5z"/><path d="m3 13 9 5 9-5"/></svg>
             <span>{{ tab.label }}</span>
           </button>
         </div>
@@ -68,7 +69,7 @@ export default {
           <div class="settings-content-header">
             <h2 class="settings-content-title">{{ currentTabLabel }}</h2>
             <button class="settings-close" @click="$emit('close')" :title="$t('settings.close')">
-              <svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+              <NavigationIcon name="close" :size="18" />
             </button>
           </div>
           <div class="settings-scroll" :class="{ 'settings-scroll-yeaft': activeTab === 'yeaft' }">

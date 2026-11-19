@@ -1,0 +1,157 @@
+/* ===========================================================================
+   Shared action buttons
+   One colour, radius and state model for `.btn-primary`, `.btn-secondary`,
+   `.btn-ghost` and `.btn-danger`. Loaded before module stylesheets so a module
+   can tune size or placement with a scoped rule; it should not restate
+   colours, radius, focus or disabled behaviour.
+
+   Layer 1 (every variant): border, radius, colours, type, motion, states.
+   Layer 2 (standard geometry): applied to `.btn` and to bare variants
+   (`class="btn-ghost"` with no module class). Combined variants such as
+   `btn-ghost sidebar-primary-action` keep the layout their module defines.
+
+   Sizes: default 32px, `.btn` 36px (dialog footers), `.btn-sm` 28px.
+   Settings and task dialogs keep the quieter text-only treatment from
+   settings-controls.css, which is scoped and therefore wins over this layer.
+   =========================================================================== */
+
+.btn,
+.btn-primary,
+.btn-secondary,
+.btn-ghost,
+.btn-danger {
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--text-primary);
+  font: inherit;
+  font-size: var(--font-size-sm);
+  line-height: 1.25;
+  text-decoration: none;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  transition:
+    background-color var(--duration-fast) var(--ease-out),
+    border-color var(--duration-fast) var(--ease-out),
+    color var(--duration-fast) var(--ease-out),
+    opacity var(--duration-fast) var(--ease-out);
+}
+
+.btn,
+.btn-sm,
+[class="btn-primary"],
+[class="btn-secondary"],
+[class="btn-ghost"],
+[class="btn-danger"] {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-1-5);
+  min-height: var(--control-height-md);
+  padding: 0 var(--space-3);
+  font-weight: 500;
+}
+
+.btn {
+  min-height: var(--control-height-lg);
+  padding: 0 var(--space-4);
+  font-size: var(--font-size-md);
+}
+
+.btn-sm {
+  min-height: var(--control-height-sm);
+  padding: 0 var(--space-2-5);
+  font-size: var(--font-size-xs);
+}
+
+.btn-block {
+  display: flex;
+  width: 100%;
+}
+
+.btn-primary {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: var(--accent-fg);
+}
+
+.btn-primary:hover:not(:disabled) {
+  border-color: var(--accent-hover);
+  background: var(--accent-hover);
+}
+
+.btn-secondary {
+  border-color: var(--border-color);
+  color: var(--text-primary);
+}
+
+.btn-secondary:hover:not(:disabled) {
+  background: var(--sidebar-hover);
+}
+
+.btn-ghost {
+  color: var(--text-secondary);
+}
+
+.btn-ghost:hover:not(:disabled) {
+  background: var(--sidebar-hover);
+  color: var(--text-primary);
+}
+
+.btn-danger {
+  color: var(--error);
+}
+
+.btn-danger:hover:not(:disabled) {
+  background: var(--error-bg);
+  color: var(--error);
+}
+
+:is(.btn, .btn-primary, .btn-secondary, .btn-ghost, .btn-danger):disabled,
+:is(.btn, .btn-primary, .btn-secondary, .btn-ghost, .btn-danger)[aria-disabled="true"] {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+:is(.btn, .btn-primary, .btn-secondary, .btn-ghost, .btn-danger):focus-visible {
+  outline: var(--focus-ring-width) solid var(--focus-ring-color);
+  outline-offset: var(--focus-ring-offset);
+}
+
+:is(.btn, .btn-primary, .btn-secondary, .btn-ghost, .btn-danger) > svg {
+  flex: 0 0 auto;
+}
+
+/* ===========================================================================
+   Elevated surfaces
+   Dialogs, menus and popovers sit one layer above the page: white in light,
+   a lighter warm grey in dark. Re-pointing --bg-main inside them keeps every
+   sticky header, footer and field that paints var(--bg-main) on the same
+   surface as its container, without restating each module's background.
+   Hover and selected tints move up with the surface so menu rows, including
+   the keyboard-active ModernSelect option, stay visible in dark.
+   =========================================================================== */
+:is(.modal, .modal-modern, .resume-modal, .settings-dialog, .agent-settings-dialog,
+    .expert-editor-modal, .folder-picker-dialog, .group-invite-modal, .work-center-modal,
+    .yeaft-llm-config-modal, .group-settings-modal, .llm-preset-modal,
+    .modern-select-menu, .agent-dropdown, .plugin-center-menu, .sp-custom-select-menu,
+    .ctx-menu, .session-menu, .work-center-header-popover, .yeaft-model-dropdown,
+    .yeaft-topbar-group-menu) {
+  --bg-main: var(--bg-elevated);
+  --sidebar-hover: var(--elevated-hover);
+  --bg-hover: var(--elevated-hover);
+  --hover-bg: var(--elevated-hover);
+  --surface-hover: var(--elevated-hover);
+  --session-active: var(--elevated-active);
+  --sidebar-selected: var(--elevated-active);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .btn,
+  .btn-primary,
+  .btn-secondary,
+  .btn-ghost,
+  .btn-danger {
+    transition: none;
+  }
+}

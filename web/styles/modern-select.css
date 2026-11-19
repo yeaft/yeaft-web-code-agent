@@ -38,7 +38,7 @@
 .modern-select.is-open .modern-select-trigger,
 .modern-select-trigger:focus-visible {
   border-color: var(--accent-blue);
-  box-shadow: 0 0 0 3px rgba(74, 124, 201, 0.14);
+  box-shadow: 0 0 0 3px var(--focus-ring);
 }
 
 .modern-select.is-disabled .modern-select-trigger,
@@ -102,13 +102,13 @@
   background: var(--bg-main);
   border: 1px solid var(--border-color);
   border-radius: 12px;
-  box-shadow: 0 12px 28px -8px rgba(0, 0, 0, 0.18), 0 4px 10px -4px rgba(0, 0, 0, 0.12);
+  box-shadow: var(--shadow-md);
   padding: 6px;
   overflow: hidden;
 }
 
 [data-theme="dark"] .modern-select-menu {
-  box-shadow: 0 12px 28px -8px rgba(0, 0, 0, 0.55), 0 4px 10px -4px rgba(0, 0, 0, 0.4);
+  box-shadow: var(--shadow-md);
 }
 
 .modern-select-search {
@@ -132,7 +132,7 @@
 
 .modern-select-search input:focus {
   border-color: var(--accent-blue);
-  box-shadow: 0 0 0 2px rgba(74, 124, 201, 0.14);
+  box-shadow: 0 0 0 2px var(--focus-ring);
 }
 
 .modern-select-list {

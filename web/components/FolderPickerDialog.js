@@ -106,7 +106,7 @@ export default {
             </div>
             <template v-else>
               <button v-for="entry in state.entries" :key="entry.name" class="folder-picker-item" type="button" @click="enter(entry)">
-                <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M10 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2h-8l-2-2z"/></svg>
+                <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>
                 <span>{{ entry.name }}</span><span aria-hidden="true">›</span>
               </button>
               <div class="folder-picker-state" v-if="!state.entries.length" role="status">{{ $t('common.noSubdirectories') }}</div>

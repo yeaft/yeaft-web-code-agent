@@ -37,12 +37,13 @@ import { getLastPathSegment, formatResumeDate } from '../utils/path-segments.js'
 import { buildVpDomainSections, isLegacyVp, selectVpCatalog } from '../utils/vp-domains.js';
 import { getSelectableModelEfforts, modelOptionMatchesRef, modelOptionRef } from '../utils/modelRefs.js';
 import { folderPickerData, folderPickerMethods, folderPickerComputed } from './mixins/folder-picker-mixin.js';
+import NavigationIcon from './NavigationIcon.js';
 
 // Both creation modes keep the same parent bindings and picker lifecycle.
 const creationControls = `
         <div class="resume-modal-controls">
           <button v-if="!taskMode" class="resume-close-btn" type="button" @click="requestClose" :aria-label="$t('yeaft.session.create.close')">
-            <svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+            <NavigationIcon name="close" :size="18" />
           </button>
 
           <header v-if="!taskMode" class="yeaft-session-create-heading">
@@ -218,7 +219,7 @@ const creationControls = `
                 :disabled="busy || !folderPickerAgentId"
                 :title="$t('modal.newConv.browse')"
               >
-                <svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M10 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2h-8l-2-2z"/></svg>
+                <svg viewBox="0 0 24 24" width="16" height="16"><path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>
               </button>
             </div>
             </div>
@@ -275,7 +276,7 @@ export function resolveVpRosterPopupLayout(anchorRect, boundaryRect, viewportRec
 
 export default {
   name: 'SessionCreateModal',
-  components: { FolderPickerDialog, VpAvatar, ModernSelect, ScheduledTaskEditor },
+  components: { NavigationIcon, FolderPickerDialog, VpAvatar, ModernSelect, ScheduledTaskEditor },
   props: {
     taskMode: { type: Boolean, default: false },
     initialProvider: { type: String, default: 'yeaft' },
@@ -317,15 +318,17 @@ export default {
               <span>{{ $t('yeaft.session.create.folderLabel') }}</span>
             </div>
             <div class="resume-panel-list">
-              <div
+              <button
                 v-for="folder in createFolderRows"
                 :key="folder.path"
+                type="button"
                 class="resume-list-item folder-item-compact"
+                :title="folder.path"
                 @click="selectFolder(folder.path)"
               >
-                <div class="item-path">{{ folder.path }}</div>
+                <span class="item-path">{{ folder.path }}</span>
                 <span class="item-badge">{{ folder.count }}</span>
-              </div>
+              </button>
               <div class="resume-panel-empty" v-if="createFolderRows.length === 0">
                 {{ $t('yeaft.session.create.noWorkDirs') }}
               </div>
@@ -339,7 +342,7 @@ export default {
             <div class="resume-panel-header">
               <div class="resume-panel-header-left">
                 <button class="refresh-btn-mini" @click="form.workDir = ''" :title="$t('yeaft.session.create.back')">
-                  <svg viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M20 11H7.83l5.59-5.59L12 4l-8 8 8 8 1.41-1.41L7.83 13H20v-2z"/></svg>
+                  <NavigationIcon name="back" :size="14" />
                 </button>
                 <span>{{ $t('yeaft.session.create.sessionLabel') }} <span class="header-tag">{{ getLastPathSegment(form.workDir) }}</span></span>
               </div>
@@ -356,16 +359,19 @@ export default {
             <div class="resume-panel-list">
               <div class="git-loading restore-loading" v-if="restoreScanning"><span class="spinner-mini"></span> {{ $t('common.loading') }}</div>
               <template v-else>
-                <div
+                <button
                   v-for="session in createSessionRows"
                   :key="session.id"
+                  type="button"
                   class="resume-list-item session-item-compact"
                   :class="{ 'is-busy': restoring === session.id, 'is-disabled': restoring && restoring !== session.id }"
+                  :disabled="!!restoring && restoring !== session.id"
+                  :aria-busy="restoring === session.id ? 'true' : null"
                   @click="selectSession(session)"
                 >
-                  <div class="item-name">{{ session.name || session.id }}</div>
-                  <div class="item-time">{{ formatDate(session.createdAt) }}</div>
-                </div>
+                  <span class="item-name">{{ session.name || session.id }}</span>
+                  <span class="item-time">{{ formatDate(session.createdAt) }}</span>
+                </button>
                 <div class="resume-panel-empty" v-if="createSessionRows.length === 0 && !restoreError">
                   {{ $t('yeaft.restore.modal.empty') }}
                 </div>

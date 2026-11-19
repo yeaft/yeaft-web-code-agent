@@ -225,13 +225,13 @@
   border-radius: 8px;
   overflow-x: auto;
   margin: 10px 0;
-  font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+  font-family: var(--font-mono);
   font-size: 13px;
   line-height: 1.5;
 }
 
 .message code {
-  font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+  font-family: var(--font-mono);
   background: var(--code-bg);
   padding: 2px 6px;
   border-radius: 4px;
@@ -1288,13 +1288,12 @@
   margin: 0.3em 0;
 }
 
+/* A quiet rule, not another tinted card inside the message. */
 .markdown-body blockquote {
   margin: 0.7em 0;
-  padding: 0.5em 1em;
+  padding: 0.1em 0 0.1em 1em;
   border-left: 3px solid var(--border-color);
-  background: var(--bg-user-msg);
   color: var(--text-secondary);
-  border-radius: 0 8px 8px 0;
 }
 
 .markdown-body hr {
@@ -1308,12 +1307,16 @@
   -webkit-overflow-scrolling: touch;
 }
 
+/* Tables read by row: one outer frame, horizontal hairlines, no zebra or
+   vertical grid competing with the content. */
 .markdown-body table {
-  border-collapse: collapse;
+  border-collapse: separate;
+  border-spacing: 0;
   width: 100%;
   margin: 1em 0;
   font-size: 0.9em;
-  border-radius: 8px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
   overflow: hidden;
   table-layout: fixed;
 }
@@ -1324,8 +1327,9 @@
 
 .markdown-body th,
 .markdown-body td {
-  border: 1px solid var(--border-color);
-  padding: 10px 14px;
+  border: 0;
+  border-bottom: 1px solid var(--border-light);
+  padding: 9px 14px;
   text-align: left;
   word-wrap: break-word;
   word-break: break-word;
@@ -1334,20 +1338,29 @@
 
 .markdown-body th {
   background: var(--bg-sidebar);
+  border-bottom-color: var(--border-color);
   font-weight: 600;
 }
 
-.markdown-body tr:nth-child(even) {
-  background: var(--bg-user-msg);
+.markdown-body tr:last-child > td {
+  border-bottom: 0;
 }
 
+.markdown-body td {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Links must read as links without relying on hue alone (dark accent is grey). */
 .markdown-body a {
-  color: var(--text-secondary);
-  text-decoration: none;
+  color: var(--link-color);
+  text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, currentColor 35%, transparent);
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
 }
 
 .markdown-body a:hover {
-  text-decoration: underline;
+  text-decoration-color: currentColor;
   color: var(--accent-blue-hover);
 }
 
@@ -1371,7 +1384,7 @@
 
 /* Inline Code - light colored */
 .markdown-body code {
-  font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+  font-family: var(--font-mono);
   background: var(--inline-code-bg);
   color: var(--text-primary);
   padding: 2px 6px;
@@ -1486,7 +1499,7 @@
 .code-lang {
   font-size: 12px;
   color: var(--text-muted);
-  font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+  font-family: var(--font-mono);
 }
 
 .code-copy-btn {
@@ -2179,7 +2192,7 @@
 .ask-q-chip {
   display: inline-block;
   background: var(--accent-blue);
-  color: #fff;
+  color: var(--accent-fg);
   font-size: 10px;
   font-weight: 700;
   padding: 1px 7px;
@@ -2296,7 +2309,7 @@
   gap: 6px;
   padding: 7px 18px;
   background: var(--accent-blue);
-  color: #fff;
+  color: var(--accent-fg);
   border: none;
   border-radius: 10px;
   font-size: 13px;
@@ -2341,7 +2354,7 @@
   border-radius: 8px;
   overflow: hidden;
   margin: 12px 0;
-  font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+  font-family: var(--font-mono);
   font-size: 12px;
   line-height: 1.5;
 }
@@ -2731,7 +2744,7 @@
   padding: 12px 16px;
   background: var(--code-bg);
   color: var(--code-text);
-  font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+  font-family: var(--font-mono);
   font-size: 12px;
   line-height: 1.5;
   overflow-x: auto;
@@ -2807,7 +2820,7 @@
 .exec-status-time {
   font-size: 11px;
   color: var(--text-muted);
-  font-family: 'SF Mono', Monaco, monospace;
+  font-family: var(--font-mono);
 }
 
 .exec-status-body {
@@ -2817,7 +2830,7 @@
 .exec-status-tool {
   font-size: 12px;
   color: var(--text-secondary);
-  font-family: 'SF Mono', Monaco, monospace;
+  font-family: var(--font-mono);
   word-break: break-all;
 }
 
@@ -2872,7 +2885,7 @@
 .tool-history-modern .history-time {
   font-size: 10px;
   color: var(--text-muted);
-  font-family: 'SF Mono', Monaco, monospace;
+  font-family: var(--font-mono);
 }
 
 
@@ -2904,8 +2917,17 @@
 }
 
 .tool-line-icon {
-  font-size: 12px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--icon-size-md);
+  height: var(--icon-size-md);
   flex-shrink: 0;
+  color: inherit;
+}
+
+.tool-line-icon svg {
+  display: block;
 }
 
 .tool-line-text {
@@ -2913,7 +2935,7 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+  font-family: var(--font-mono);
   font-size: 12px;
 }
 
@@ -3027,7 +3049,7 @@
 }
 
 .tool-expand-code code {
-  font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+  font-family: var(--font-mono);
   font-size: 12px;
   line-height: 1.5;
   color: var(--code-text);
@@ -3060,7 +3082,7 @@
 }
 
 .bash-output-content code {
-  font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+  font-family: var(--font-mono);
   font-size: 12px;
   line-height: 1.5;
   color: var(--code-text);
@@ -3072,7 +3094,7 @@
 
 /* Compact Diff View */
 .diff-compact {
-  font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+  font-family: var(--font-mono);
   font-size: 12px;
   line-height: 1.5;
 }

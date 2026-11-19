@@ -12,10 +12,11 @@
 import { formatRouteForwardToolLine } from '../utils/route-forward-display.js';
 import { normalizeTerminalOutput } from '../utils/terminal-output.js';
 import TerminalOutput from './TerminalOutput.js';
+import ToolGlyph from './ToolGlyph.js';
 
 export default {
   name: 'ToolLine',
-  components: { TerminalOutput },
+  components: { TerminalOutput, ToolGlyph },
   props: {
     toolName: { type: String, required: true },
     toolInput: { type: Object, default: null },
@@ -30,7 +31,7 @@ export default {
   template: `
     <div>
       <div class="tool-line" :class="{ expandable: hasExpandableContent, expanded: isExpanded, completed: hasResult && !isError, error: isError, running: !hasResult && !isError }" @click="toggle">
-        <span class="tool-line-icon">{{ getToolIcon(toolName) }}</span>
+        <span class="tool-line-icon"><ToolGlyph :name="toolName" /></span>
         <span class="tool-line-text">{{ getToolOneLine(toolName, toolInput) }}</span>
         <span class="tool-line-status error" v-if="isError">\u2715</span>
         <span class="tool-line-status completed" v-else-if="hasResult">\u2713</span>
@@ -139,18 +140,6 @@ export default {
       return text.slice(0, headLen) + '...' + text.slice(-tailLen);
     };
 
-    const getToolIcon = (name) => {
-      const icons = { Read: '\u{1F4D6}', Edit: '\u270F\uFE0F', Write: '\u{1F4DD}', Bash: '\u26A1', Glob: '\u{1F50D}', Grep: '\u{1F50E}', Task: '\u{1F4CB}', WebFetch: '\u{1F310}', WebSearch: '\u{1F50D}', TodoWrite: '\u2705', RouteForward: '@',
-        // Synthetic tools \u2014 the agent (agent/claude.js) rewrites Claude
-        // Code's "fake user messages" (<task-notification> sub-agent results
-        // and post-compaction summaries) into tool_use blocks using these
-        // names. Keep in sync with SYNTHETIC_TOOL_NAMES in
-        // agent/synthetic-tools.js \u2014 that file is the source of truth.
-        __SubagentResult: '\u{1F916}',  // robot
-        __CompactSummary: '\u{1F4DA}',  // books
-      };
-      return icons[name] || '\u2699\uFE0F';
-    };
 
     const cleanOneLine = (text) => normalizeTerminalOutput(text).replace(/\s+/g, ' ').trim();
 
@@ -233,7 +222,7 @@ export default {
     return {
       isExpanded, isEditTool, hasDiff, hasExpandableContent, bashOutput,
       syntheticResultOutput, compactSummaryOutput, formattedTime,
-      toggle, getToolIcon, getToolOneLine, renderDiff, formatInput
+      toggle, getToolOneLine, renderDiff, formatInput
     };
   }
 };

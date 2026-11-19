@@ -110,7 +110,7 @@
   border: none;
   border-radius: 4px;
   background: var(--accent-blue);
-  color: white;
+  color: var(--accent-fg);
   font-size: 13px;
   font-weight: 600;
   cursor: pointer;
@@ -258,7 +258,7 @@
 
 .file-ops-toolbar .wb-btn-sm.active {
   background: var(--accent-blue);
-  color: #fff;
+  color: var(--accent-fg);
 }
 
 .file-ops-toolbar .wb-btn-sm.file-op-danger {

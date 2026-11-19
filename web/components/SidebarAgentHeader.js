@@ -55,7 +55,7 @@ export default {
         aria-haspopup="menu"
       >
         <span class="status-dot" :class="{ online: onlineAgentCount > 0 }"></span>
-        <span class="brand-label">{{ tr('chat.agent.count', onlineAgentCount + ' agents', { count: onlineAgentCount }) }}</span>
+        <span class="brand-label">{{ onlineAgentCount === 1 ? tr('chat.agent.countOne', '1 agent', { count: 1 }) : tr('chat.agent.count', onlineAgentCount + ' agents', { count: onlineAgentCount }) }}</span>
         <span
           v-if="availableUpdateCount > 0"
           class="agent-update-notification"

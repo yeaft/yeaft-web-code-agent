@@ -244,12 +244,26 @@
   flex-direction: column;
   align-items: stretch;
   gap: var(--chat-composer-gap);
-  padding: var(--chat-composer-padding);
+  /* The hairline replaces 1px of padding so the outer size is unchanged. */
+  padding: calc(var(--chat-composer-padding) - 1px);
+  border: 1px solid var(--chat-composer-border);
   border-radius: var(--chat-composer-radius);
+  background: var(--chat-composer-bg);
+  box-shadow: var(--chat-composer-shadow);
+  transition:
+    border-color var(--duration-base) var(--ease-out),
+    box-shadow var(--duration-base) var(--ease-out);
 }
 
 .input-wrapper.chat-composer:focus-within {
-  box-shadow: 0 0 0 var(--chat-composer-focus-ring-width) var(--focus-ring);
+  border-color: var(--chat-composer-border-focus);
+  box-shadow:
+    var(--chat-composer-shadow-focus),
+    0 0 0 var(--chat-composer-focus-ring-width) var(--focus-ring);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .input-wrapper.chat-composer { transition: none; }
 }
 
 .input-wrapper.chat-composer.is-disabled {
@@ -360,7 +374,7 @@
   border: 1px solid var(--border-color);
   border-radius: 10px;
   padding: 4px;
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.15);
+  box-shadow: var(--shadow-md);
   z-index: 100;
 }
 
@@ -398,7 +412,7 @@
 }
 
 .slash-cmd-name {
-  font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+  font-family: var(--font-mono);
   font-weight: 500;
   flex-shrink: 0;
 }

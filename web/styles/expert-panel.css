@@ -168,7 +168,7 @@
 
 .expert-role-card.has-selection {
   border-color: var(--accent-blue);
-  background: rgba(74, 124, 201, 0.04);
+  background: color-mix(in srgb, var(--accent-blue) 4%, transparent);
 }
 
 .role-card-name {
@@ -187,7 +187,7 @@
 
 .role-card-name.selected {
   background: var(--accent-blue);
-  color: #fff;
+  color: var(--accent-fg);
 }
 
 .role-card-name.disabled {
@@ -222,7 +222,7 @@
 .role-action-btn.selected {
   background: var(--accent-blue);
   border-color: var(--accent-blue);
-  color: #fff;
+  color: var(--accent-fg);
 }
 
 .role-action-btn.disabled {
@@ -417,7 +417,7 @@
   margin: 0;
   white-space: pre-wrap;
   word-break: break-word;
-  font-family: 'SF Mono', 'Fira Code', 'Fira Mono', 'Roboto Mono', monospace;
+  font-family: var(--font-mono);
   max-height: 300px;
   overflow-y: auto;
 }
@@ -500,7 +500,7 @@
 
 .expert-custom-empty-btn {
   background: var(--accent-blue);
-  color: #fff;
+  color: var(--accent-fg);
   border: none;
   border-radius: 6px;
   padding: 6px 16px;
@@ -627,7 +627,7 @@
 }
 
 .expert-editor-field textarea {
-  font-family: 'SF Mono', 'Fira Code', 'Fira Mono', 'Roboto Mono', monospace;
+  font-family: var(--font-mono);
   font-size: 12px;
   line-height: 1.5;
   min-height: 50px;
@@ -719,7 +719,7 @@
 .expert-editor-save {
   background: var(--accent-blue);
   border: none;
-  color: #fff;
+  color: var(--accent-fg);
   border-radius: 6px;
   padding: 7px 20px;
   font-size: 13px;
@@ -859,7 +859,7 @@
 .expert-label {
   display: inline-block;
   padding: 1px 8px;
-  background: rgba(74, 124, 201, 0.12);
+  background: color-mix(in srgb, var(--accent-blue) 12%, transparent);
   color: var(--accent-blue);
   border-radius: 8px;
   font-size: 11px;
@@ -888,12 +888,12 @@
 [data-theme="dark"] .expert-role-card.has-selection,
 .dark .expert-role-card.has-selection {
   border-color: var(--accent-blue);
-  background: rgba(74, 124, 201, 0.08);
+  background: color-mix(in srgb, var(--accent-blue) 8%, transparent);
 }
 
 [data-theme="dark"] .expert-label,
 .dark .expert-label {
-  background: rgba(74, 124, 201, 0.18);
+  background: color-mix(in srgb, var(--accent-blue) 18%, transparent);
 }
 
 [data-theme="dark"] .expert-prompt-content,
