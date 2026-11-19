@@ -104,7 +104,9 @@
 /* Names a nested row's folder path for screen readers; indentation alone is visual. */
 .sidebar-sr-only { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0; }
 /* Folder actions float over the end of the row on hover, in the same column
-   as a Session's actions, so a resting folder name keeps the full width. */
+   as a Session's actions, so a resting folder name keeps the full width.
+   Like a Session's actions they stay hidden at rest on every device: touch
+   laptops report a coarse pointer yet are used with a mouse. */
 .sidebar-folder-actions { position: absolute; top: 50%; right: 6px; z-index: 1; display: flex; align-items: center; gap: 1px; padding-left: 22px; opacity: 0; pointer-events: none; transform: translateY(-50%); transition: opacity 0.12s ease; background: linear-gradient(90deg, transparent, var(--sidebar-hover) 22px); }
 .sidebar-project-header:hover > .sidebar-folder-actions,
 .sidebar-folder-actions:focus-within,
@@ -113,10 +115,9 @@
 .sidebar-folder-actions > button { display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; padding: 0; border: 0; border-radius: 6px; background: transparent; color: var(--text-secondary); cursor: pointer; opacity: 1; }
 .sidebar-folder-actions > button svg { width: 15px; height: 15px; }
 .sidebar-folder-actions > button:hover { background: var(--session-active); color: var(--text-primary); }
-/* Touch clients have no hover; keep the same actions directly discoverable. */
+/* Touch clients have no hover; keep the label toggle directly discoverable. */
 @media (hover: none), (pointer: coarse) {
   .sidebar-primary-actions > .sidebar-actions-toggle { opacity: 1; pointer-events: auto; }
-  .sidebar-folder-actions { position: static; flex: 0 0 auto; padding-left: 0; opacity: 1; pointer-events: auto; transform: none; background: none; }
 }
 /* The inline name row sits where the new folder will appear; its icon lines
    up with the sibling folders' icons. */
