@@ -168,7 +168,7 @@ export default {
         </template>
         </VirtualTranscript>
         <ConcurrentUserTurns v-if="splitActive" ref="concurrentTurnsRef" :turns="pendingTurns" :messages="store.messages"
-          :estimate-height="estimateMessageBlockHeight" @stop="stopUserTurn">
+          :estimate-height="estimateMessageBlockHeight" @stop="stopUserTurn" @read-pane="onReadPane">
           <template #default="{ block }">
             <MessageBlock :block="block" :context="blockRenderContext"
               @quote-message="$emit('quote-message', $event)"
@@ -1749,9 +1749,14 @@ export default {
     };
 
     let resumeFollowingAfterSplit = false;
+    let readingPaneId = null;
+    const onReadPane = id => { readingPaneId = id; };
     const pauseAutoFollow = ({ forSplit = false } = {}) => {
       readingTransferGeneration += 1;
-      if (!forSplit) resumeFollowingAfterSplit = false;
+      if (!forSplit) {
+        resumeFollowingAfterSplit = false;
+        readingPaneId = null;
+      }
       autoFollowPaused.value = true;
       isAtBottom.value = false;
       virtualTranscriptRef.value?.setBottomFollowEnabled?.(false);
@@ -1993,6 +1998,7 @@ export default {
       clearUserScrollInteraction();
       resetHistoryPagination();
       if (splitActive.value) {
+        readingPaneId = null;
         resumeFollowingAfterSplit = true;
         pauseAutoFollow({ forSplit: true });
       } else resumeAutoFollow();
@@ -2091,22 +2097,22 @@ export default {
 
     Vue.watch([virtualTranscriptIdentity, splitActive], ([identity, active], [previousIdentity, wasActive]) => {
       if (active) {
+        readingPaneId = null;
         resumeFollowingAfterSplit = (!!previousIdentity && identity !== previousIdentity) || !autoFollowPaused.value;
         pauseAutoFollow({ forSplit: true });
       } else if (wasActive && identity === previousIdentity) {
         const focused = document.activeElement;
         const focusLeavingLane = focused && concurrentTurnsRef.value?.$el?.contains(focused);
-        if (resumeFollowingAfterSplit) {
-          const survivor = currentPendingTurns.value[0];
-          const pausedPane = survivor && concurrentTurnsRef.value?.pausedPaneBody(survivor.userTurnId);
-          if (pausedPane) {
-            const position = captureLaneReadingPosition(pausedPane);
-            if (position) void restoreLaneReadingPosition(position, identity, ++readingTransferGeneration);
-          } else {
-            resumeAutoFollow();
-            smartScrollToBottom();
-          }
+        const survivor = currentPendingTurns.value[0];
+        const pausedPane = survivor?.userTurnId === readingPaneId
+          ? concurrentTurnsRef.value?.pausedPaneBody(readingPaneId) : null;
+        const position = pausedPane && captureLaneReadingPosition(pausedPane);
+        if (position) void restoreLaneReadingPosition(position, identity, ++readingTransferGeneration);
+        else if (resumeFollowingAfterSplit && !pausedPane) {
+          resumeAutoFollow();
+          smartScrollToBottom();
         }
+        readingPaneId = null;
         resumeFollowingAfterSplit = false;
         if (focusLeavingLane) Vue.nextTick(() => {
           // A removed lane (e.g. its Stop button or selected tab) must not
@@ -2308,7 +2314,7 @@ export default {
       welcomeSetupError,
       turnGroups,
       messageBlocks,
-      historyBlocks, pendingTurns, splitActive, concurrentTurnsRef, stopUserTurn, blockRenderContext,
+      historyBlocks, pendingTurns, splitActive, concurrentTurnsRef, stopUserTurn, onReadPane, blockRenderContext,
       virtualTranscriptIdentity,
       estimateMessageBlockHeight,
       visibleItemsForBlock,

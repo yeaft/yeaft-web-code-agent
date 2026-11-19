@@ -63,6 +63,7 @@ test('stopping a sibling restores the ordinary live Session transcript and compl
   const messages = page.locator('.yeaft-page .messages');
   const region = messages.locator('.parallel-turn-region');
   const activity = page.locator('.yeaft-session-status-toggle');
+  const scroller = page.locator('.yeaft-page .virtual-transcript-scroller');
   const status = label => page.locator('.yeaft-vp-timeline-row').filter({ hasText: label });
   if (await activity.getAttribute('aria-expanded') === 'false') await activity.click();
   const a = await wire.send('Earlier long question');
@@ -108,7 +109,7 @@ test('stopping a sibling restores the ordinary live Session transcript and compl
   await expect(messages.getByText('B partial answer', { exact: true })).toBeVisible();
   await expect(status('Later quick question')).toHaveCount(0);
   await expect(status('Earlier long question').locator('.yeaft-vp-timeline-abort')).toBeEnabled();
-  await expect(page.locator('.yeaft-page .virtual-transcript-scroller')).toBeFocused();
+  await expect(scroller).toBeFocused();
   await expect(page.locator('.yeaft-page .scroll-to-latest')).toHaveClass(/is-hidden/);
   wire.delta(a, ' after the split');
   await expect(messages.locator('.assistant-turn.streaming')).toContainText('A is still researching after the split');
@@ -155,11 +156,12 @@ test('stopping a sibling restores the ordinary live Session transcript and compl
   await editor.fill('Unsent mobile draft');
   await page.screenshot({ path: info.outputPath('parallel-dark-320.png'), animations: 'disabled' });
   wire.finish(c);
-  const settledOrder = ['Later quick question', 'Mobile sibling', 'Earlier long question'];
   await expectOrdinaryLive('A is still researching after the split while away after reload', { width: mobileWidth });
   const anchorError = () => messages.getByText(readingAnchor.text, { exact: true }).evaluate((p, offset) => {
-    const top = p.closest('.virtual-transcript-scroller').getBoundingClientRect().top;
-    return Math.abs(p.getBoundingClientRect().top - top - offset);
+    const container = p.closest('.virtual-transcript-scroller');
+    const rect = p.getBoundingClientRect();
+    const expected = Math.max(-Math.max(0, rect.height - 24), offset);
+    return Math.abs(rect.top - container.getBoundingClientRect().top - expected);
   }, readingAnchor.offset);
   await expect.poll(anchorError).toBeLessThan(4);
   wire.delta(a, '\n\nMore streaming text below the reading position.');
@@ -170,6 +172,50 @@ test('stopping a sibling restores the ordinary live Session transcript and compl
   await expect(editor).toBeFocused();
   await expect(editor).toHaveValue('Unsent mobile draft');
   await page.screenshot({ path: info.outputPath('single-dark-320-after-finish.png'), animations: 'disabled' });
+
+  await page.setViewportSize({ width: 1400, height: 900 });
+  if (await activity.getAttribute('aria-expanded') === 'false') await activity.click();
+  await page.locator('.yeaft-page .scroll-to-latest').click();
+  const wideParagraph = 'Reflow anchor. ' + 'The same reply gains horizontal space after the split, but the paragraph should not disappear from view. '.repeat(30).trim();
+  wire.delta(a, `\n\n${wideParagraph}\n\n${longReply.trim()}`.replaceAll('Reading marker', 'Desktop tail marker'));
+  const d = await wire.send('Desktop reflow sibling');
+  wire.delta(d, 'D quick answer');
+  await expect(region.locator('.parallel-turn-pane')).toHaveCount(2);
+  const narrowParagraph = pane(page, a).getByText(wideParagraph, { exact: true });
+  await expect(narrowParagraph).toBeVisible();
+  await readingPane.hover();
+  const beforeWheel = await scrollTop();
+  await page.mouse.wheel(0, -180);
+  await expect.poll(scrollTop).toBeLessThan(beforeWheel - 100);
+  const clipped = await narrowParagraph.evaluate(p => {
+    const body = p.closest('.concurrent-turn-body');
+    const rect = p.getBoundingClientRect();
+    const clip = rect.height - 36;
+    body.scrollTop += rect.top - body.getBoundingClientRect().top + clip;
+    return clip;
+  });
+  await expect.poll(() => narrowParagraph.evaluate(p => p.getBoundingClientRect().bottom
+    - p.closest('.concurrent-turn-body').getBoundingClientRect().top)).toBeCloseTo(36, 0);
+  wire.finish(d);
+  await expect(region).toHaveCount(0);
+  const restoredParagraph = messages.getByText(wideParagraph, { exact: true });
+  expect(await restoredParagraph.evaluate(p => p.getBoundingClientRect().height)).toBeLessThan(clipped);
+  await expect(restoredParagraph).toBeInViewport();
+
+  // Jumping to the active question pauses the outer transcript and the lane.
+  // The explicitly selected lane still owns the reading position on collapse.
+  const e = await wire.send('Desktop navigation sibling');
+  wire.delta(e, 'E quick answer');
+  await expect(region.locator('.parallel-turn-pane')).toHaveCount(2);
+  await page.locator('.yeaft-page .scroll-to-latest').click();
+  const origin = page.getByRole('button', { name: 'Back to this turn’s question' });
+  await origin.click();
+  const question = messages.getByText('Earlier long question', { exact: true });
+  await expect(region.locator('.msg-flash').getByText('Earlier long question', { exact: true })).toBeInViewport();
+  wire.finish(e);
+  await expect(region).toHaveCount(0);
+  await expect(question).toBeInViewport();
+
   await stop.click();
   await expect.poll(() => mockAgent.messages('yeaft_abort_all')).toEqual([expect.objectContaining({ sessionId: SESSION })]);
   wire.finish(a, 'aborted');
@@ -178,11 +224,13 @@ test('stopping a sibling restores the ordinary live Session transcript and compl
   await page.reload();
   await page.waitForFunction(id => window.Pinia?.useChatStore?.().agents.some(agent => agent.id === id && agent.status === 'ready'), mockAgent.agentId);
   await wire.open(SESSION);
-  // The long surviving reply virtualizes older roots out of the tail window.
-  const scroller = page.locator('.yeaft-page .virtual-transcript-scroller');
+  // Check the ends separately: the long reply virtualizes some rows out of
+  // each viewport, but the latest question must still follow the settled ones.
+  await expect.poll(async () => (await questions()).at(-1)).toBe('Earlier long question');
   await scroller.focus();
   await scroller.press('Home');
-  await expect.poll(questions).toEqual(settledOrder);
+  await expect.poll(async () => (await questions()).slice(0, 4))
+    .toEqual(['Later quick question', 'Mobile sibling', 'Desktop reflow sibling', 'Desktop navigation sibling']);
 });
 
 test('Delete turn from a saved supplement replays the remaining Session in both tabs', async ({ chatPage: page, context, mockAgent, serverUrl }) => {

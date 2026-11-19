@@ -371,7 +371,12 @@ export default {
         : align === 'end' && targetHeight <= scrollerHeight
           ? Number(scrollerRect.bottom) - targetHeight
           : scrollerTop;
-      const delta = Number(targetRect.top) - desiredTop - activeTargetOffset;
+      // A transferred anchor must remain visible after reflow: the old lane
+      // can clip more of a paragraph than its entire height in single-column.
+      const offset = typeof activeTargetElement === 'function'
+        ? Math.max(-Math.max(0, targetHeight - 24), Math.min(activeTargetOffset, Math.max(0, scrollerHeight - 24)))
+        : activeTargetOffset;
+      const delta = Number(targetRect.top) - desiredTop - offset;
       if (Math.abs(delta) >= HEIGHT_CHANGE_THRESHOLD) scroller.scrollTop += delta;
       readScrollState();
       return true;

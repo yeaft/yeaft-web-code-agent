@@ -6,7 +6,7 @@ export default {
   name: 'ConcurrentUserTurns',
   components: { VirtualTranscript },
   props: { turns: { type: Array, default: () => [] }, messages: { type: Array, default: () => [] }, estimateHeight: Function, itemGap: { type: Number, default: 18 }, stopDisabled: Boolean },
-  emits: ['stop', 'pane-scroll'],
+  emits: ['stop', 'pane-scroll', 'read-pane'],
   template: `
     <section class="concurrent-user-turns parallel-turn-region" :aria-label="$t('chat.concurrent.turns')">
       <!-- Tabs navigate lanes that are off screen; when every lane fits they only repeat the lane headers. -->
@@ -41,7 +41,7 @@ export default {
       </div>
     </section>
   `,
-  setup(props, { expose }) {
+  setup(props, { expose, emit }) {
     const trackRef = Vue.ref(null);
     const selectedId = Vue.ref(props.turns[0]?.userTurnId || '');
     const onTrackScroll = () => {
@@ -61,7 +61,11 @@ export default {
     const paused = new Set();
     const touchY = new Map();
     const followPane = (id, follow) => {
-      if (follow) paused.delete(id); else paused.add(id);
+      if (follow) paused.delete(id);
+      else {
+        paused.add(id);
+        emit('read-pane', id);
+      }
       transcripts.get(id)?.setBottomFollowEnabled?.(follow);
     };
     const onPanePointer = (event, id) => {
