@@ -286,8 +286,8 @@ export default {
     const catSpriteRef = Vue.ref(null);
     let typingTimer = null;
 
-    // Animation for the current wait, picked from the candidates in
-    // waiting-animations.js each time typing starts ('none' shows the dots alone).
+    // Animation showing in the indicator: one of the candidates in
+    // waiting-animations.js, picked once per turn ('none' shows the dots alone).
     const animationType = Vue.ref('cat');
     const urlPreview = new URLSearchParams(window.location.search).get('preview');
     // Identity of the wait this pane shows; see wait-clock.js.
