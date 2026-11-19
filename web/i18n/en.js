@@ -670,6 +670,8 @@ export default {
   'sidebar.projects.instructions': 'Folder instructions',
   'sidebar.projects.instructionsTitle': '{name} instructions',
   'sidebar.projects.instructionsHint': 'Applies to chats in this folder and all of its subfolders.',
+  'sidebar.projects.instructionsInherited': 'Chats here also get {count} characters of instructions from parent folders.',
+  'sidebar.projects.inFolder': ', in {path}',
   'sidebar.projects.instructionsPlaceholder': 'Add shared coding conventions, constraints, or workflow guidance...',
   'sidebar.preferences.loadError': 'Could not load sidebar layout.',
   'sidebar.preferences.saveError': 'Could not save sidebar layout. Previous settings restored; please try again.',

@@ -235,6 +235,12 @@ export default {
       this.closeMenus();
       this.finishAllDrag();
     },
+    // The parent of an open "new subfolder" row can disappear (deleted
+    // elsewhere); drop the row instead of leaving an invisible open state.
+    projectTree(tree) {
+      if (this.projectCreateOpen && this.projectCreateParentId && !this.projectCreateSubmitting
+          && !tree.byId.has(this.projectCreateParentId)) this.cancelProjectCreate();
+    },
   },
   computed: {
     resolvedProjectStore() {
@@ -299,6 +305,13 @@ export default {
     },
     maxProjectDepth() {
       return MAX_PROJECT_DEPTH;
+    },
+    /** Characters the edited folder's chats also receive from parent folders. */
+    inheritedInstructionLength() {
+      const project = this.projectInstructionProject;
+      if (!project) return 0;
+      return this.projectTree.pathOf(projectIdentityKey(project)).slice(0, -1)
+        .reduce((total, item) => total + (typeof item.instruction === 'string' ? item.instruction.trim().length : 0), 0);
     },
     /** Online Sessions anywhere inside each folder, subfolders included. */
     subtreeRowCounts() {
@@ -495,6 +508,10 @@ export default {
     /** "Outer / Inner" — names a nested folder unambiguously in menus. */
     projectPathLabel(project) {
       return this.projectTree.pathOf(projectIdentityKey(project)).map(item => item.name).join(' / ');
+    },
+    /** Screen readers hear where a nested row lives; indentation alone is visual only. */
+    parentPathLabel(project) {
+      return this.projectTree.pathOf(projectIdentityKey(project)).slice(0, -1).map(item => item.name).join(' / ');
     },
     /** Folder nesting needs a Server-owned folder; Agent-local legacy ones stay flat. */
     canNestProject(project) {
@@ -1233,6 +1250,7 @@ export default {
               <svg v-if="item.collapsed" class="sidebar-project-icon sidebar-project-icon-closed" viewBox="0 0 20 24" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" d="M2.5 7.5a2 2 0 0 1 2-2h4l1.8 2H15.5a2 2 0 0 1 2 2V18h-15z"/></svg>
               <svg v-else class="sidebar-project-icon sidebar-project-icon-open" viewBox="0 0 20 24" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" d="M2.5 9V7a2 2 0 0 1 2-2h4l1.8 2h5.2a2 2 0 0 1 2 2v1M3.5 10h15l-2 8h-15z"/></svg>
               <span class="sidebar-project-name">{{ item.project.name }}</span>
+              <span v-if="item.depth > 0" class="sidebar-sr-only">{{ $t('sidebar.projects.inFolder', { path: parentPathLabel(item.project) }) }}</span>
               <span class="sidebar-project-count">{{ projectSessionCount(item.project) }}</span>
               <span v-if="isProjectUnread(item.project)" class="sidebar-session-unread sidebar-project-unread" :aria-label="$t('sidebar.sessions.unread')"></span>
             </button>
@@ -1299,6 +1317,7 @@ export default {
               <span class="title" :title="item.row.title">
                 <span v-if="isProcessing(item.row)" class="processing-dot" :aria-label="$t('sidebar.sessions.processing')"></span>
                 <span class="sidebar-session-title-text">{{ item.row.title }}</span>
+                <span v-if="item.project" class="sidebar-sr-only">{{ $t('sidebar.projects.inFolder', { path: projectPathLabel(item.project) }) }}</span>
                 <span v-if="item.row.task" class="sidebar-session-task" role="img" :aria-label="$t('scheduledTasks.itemLabel')" :title="$t('scheduledTasks.itemLabel')">
                   <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M12 6v6l4 2" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
                 </span>
@@ -1374,6 +1393,7 @@ export default {
               <div>
                 <h3>{{ $t('sidebar.projects.instructionsTitle', { name: projectInstructionProject?.name || '' }) }}</h3>
                 <p>{{ $t('sidebar.projects.instructionsHint') }}</p>
+                <p v-if="inheritedInstructionLength > 0">{{ $t('sidebar.projects.instructionsInherited', { count: inheritedInstructionLength }) }}</p>
               </div>
               <button type="button" class="modal-close" :disabled="projectInstructionSubmitting" @click="closeProjectInstruction" :aria-label="$t('common.close')">&times;</button>
             </div>

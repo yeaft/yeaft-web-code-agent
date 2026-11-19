@@ -76,6 +76,9 @@ test('sidebar is one folder tree with nested folders, and its width follows poin
   expect(await title('Sydney-C1')).toBe(nestedIcon);
   expect(await title('Security Review')).toBe(await left(folderRow(page, 'Parental Control').locator('.sidebar-project-name')));
   expect(await title('Proxy-Server-C1')).toBe(sydneyIcon);
+  // Screen readers hear the folder path that the indentation shows.
+  await expect(page.getByRole('button', { name: /Security Review\s*, in Sydney \/ Parental Control/ })).toHaveCount(1);
+  await expect(page.getByRole('button', { name: /^Parental Control\s*, in Sydney\b/ })).toHaveCount(1);
   // Folder actions overlay on hover, so a resting name is not cut short for them.
   expect(await folderRow(page, 'Parental Control').locator('.sidebar-project-name')
     .evaluate(el => el.scrollWidth <= el.clientWidth)).toBe(true);
@@ -103,6 +106,15 @@ test('sidebar is one folder tree with nested folders, and its width follows poin
   // Dropping on the middle of a folder row nests the dragged folder inside it.
   await folderRow(page, 'Beta').dragTo(folderRow(page, 'Alpha'));
   await expect.poll(() => folders(page)).toContainEqual(expect.objectContaining({ name: 'Beta', parentId: alphaId }));
+
+  // A subfolder's chats inherit the parent's instruction; its dialog says how much.
+  await page.evaluate(id => window.Pinia.useChatStore()
+    .mutateProject('update_instruction', { projectId: id, instruction: 'Ship small PRs.' }), alphaId);
+  await openFolderMenu(page, 'Beta');
+  await page.getByRole('button', { name: 'Folder instructions' }).click();
+  await expect(page.locator('.project-instruction-modal')).toContainText('15 characters of instructions from parent folders');
+  await page.keyboard.press('Escape');
+  await expect(page.locator('.project-instruction-modal')).toHaveCount(0);
 
   await openFolderMenu(page, 'Alpha');
   await page.getByRole('button', { name: 'Delete folder' }).click();

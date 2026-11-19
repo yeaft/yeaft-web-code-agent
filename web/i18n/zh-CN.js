@@ -670,6 +670,8 @@ export default {
   'sidebar.projects.instructions': '文件夹指令',
   'sidebar.projects.instructionsTitle': '{name} 指令',
   'sidebar.projects.instructionsHint': '对这个文件夹及其所有子文件夹中的聊天生效。',
+  'sidebar.projects.instructionsInherited': '这里的聊天还会收到上级文件夹的 {count} 字指令。',
+  'sidebar.projects.inFolder': '，位于 {path}',
   'sidebar.projects.instructionsPlaceholder': '输入共享的编码规范、约束或工作流说明…',
   'sidebar.preferences.loadError': '无法加载侧栏布局。',
   'sidebar.preferences.saveError': '侧栏布局保存失败，已恢复之前的设置，请重试。',
