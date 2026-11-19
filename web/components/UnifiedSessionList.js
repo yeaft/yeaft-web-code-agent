@@ -151,6 +151,7 @@ export default {
       actionsCompact: Vue.computed(() => userPreferences.preferences.value.sidebarActionsCompact),
       saveActionsCompact: userPreferences.saveSidebarActionsCompact,
       preferencesReady: userPreferences.ready, preferencesError: userPreferences.error,
+      preferencesPending: userPreferences.pending,
       refreshPreferences: userPreferences.refresh,
     };
   },
@@ -331,6 +332,9 @@ export default {
      * top-level Sessions come after the top-level folders.
      */
     treeItems() {
+      // Until the saved folder state arrives the tree would draw every folder
+      // open and then snap shut; the loading row stands in for it instead.
+      if (this.preferencesPending) return [];
       const tree = this.projectTree;
       const items = [];
       const createRow = (parentId, depth) => {
@@ -1191,7 +1195,7 @@ export default {
     },
   },
   template: `
-    <nav class="sidebar-navigation" :aria-busy="loading" :aria-label="$t('sidebar.surface.sessions')">
+    <nav class="sidebar-navigation" :aria-busy="loading || preferencesPending" :aria-label="$t('sidebar.surface.sessions')">
       <div class="sidebar-primary-actions" :class="{ 'is-compact': actionsCompact }">
         <button type="button" class="btn-ghost sidebar-primary-action sidebar-chat-create" :disabled="loading" @click="createSession" :title="$t('sidebar.sessions.newChat')" :aria-label="$t('sidebar.sessions.newChat')">
           <svg class="sidebar-primary-action-icon" viewBox="0 0 24 24" aria-hidden="true">
@@ -1204,7 +1208,7 @@ export default {
           <svg class="sidebar-primary-action-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M12 6v6l4 2" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
           <span v-if="!actionsCompact">{{ $t('scheduledTasks.new') }}</span>
         </button>
-        <button type="button" class="btn-ghost sidebar-primary-action sidebar-folder-create" :disabled="loading || projectCreateSubmitting" @click="createProject()" :title="$t('sidebar.projects.new')" :aria-label="$t('sidebar.projects.new')">
+        <button type="button" class="btn-ghost sidebar-primary-action sidebar-folder-create" :disabled="loading || preferencesPending || projectCreateSubmitting" @click="createProject()" :title="$t('sidebar.projects.new')" :aria-label="$t('sidebar.projects.new')">
           <!-- The plus takes the folder's corner, as the pen does on New chat; its
                arms end flush with the folder's outline. -->
           <svg class="sidebar-primary-action-icon" viewBox="0 0 24 24" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" d="M12 20H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.93a2 2 0 0 1 1.66.9l.82 1.2a2 2 0 0 0 1.66.9H20a2 2 0 0 1 2 2v2"/><path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" d="M18.5 13v7M15 16.5h7"/></svg>
@@ -1235,7 +1239,7 @@ export default {
       <!-- One file tree: folders (nested) first, each with its subfolders and
            Sessions; Sessions outside every folder follow at the top level. -->
       <div ref="sessionResults" class="sidebar-session-results sidebar-tree">
-        <div v-if="loading" class="sidebar-section-empty sidebar-catalog-loading" role="status"><span class="spinner-mini" aria-hidden="true"></span>{{ $t('common.loading') }}</div>
+        <div v-if="loading || preferencesPending" class="sidebar-section-empty sidebar-catalog-loading" role="status"><span class="spinner-mini" aria-hidden="true"></span>{{ $t('common.loading') }}</div>
         <template v-for="item in treeItems" :key="item.key">
           <div v-if="item.kind === 'folder'"
             class="sidebar-project-header"
@@ -1337,7 +1341,7 @@ export default {
             </span>
           </div>
         </template>
-        <div v-if="!loading && treeItems.length === 0" class="sidebar-section-empty">{{ $t('sidebar.sessions.empty') }}</div>
+        <div v-if="!loading && !preferencesPending && treeItems.length === 0" class="sidebar-section-empty">{{ $t('sidebar.sessions.empty') }}</div>
         <div class="sidebar-tree-end" :class="{ 'drag-over': isRootDropTarget() }" aria-hidden="true"
              @dragover="dragOverRoot" @dragleave="clearGroupDragTarget('__root__', $event)" @drop="dropOnRoot"></div>
       </div>

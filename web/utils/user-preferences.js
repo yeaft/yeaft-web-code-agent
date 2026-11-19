@@ -10,6 +10,24 @@ const patchFieldKeys = patch => Object.entries(patch).flatMap(([field, value]) =
   collapseFields.includes(field) ? Object.keys(value).map(key => `${field}:${key}`) : [field]);
 const validProjectKey = key => typeof key === 'string' && key.length > 0 && key.length <= 200
   && !['__proto__', 'constructor', 'prototype'].includes(key);
+// The sidebar waits for the first load, so a stalled request falls back to the
+// defaults (with a retry) instead of holding the list; a stalled save must not
+// block the saves queued behind it.
+const LOAD_TIMEOUT_MS = 5000;
+const SAVE_TIMEOUT_MS = 10000;
+
+/** Aborts after `ms`, or with the auth generation's `parent` signal. */
+function timedSignal(parent, ms) {
+  const controller = new AbortController();
+  const abort = () => controller.abort();
+  const timer = setTimeout(abort, ms);
+  if (parent?.aborted) abort();
+  else parent?.addEventListener?.('abort', abort, { once: true });
+  return {
+    signal: controller.signal,
+    done() { clearTimeout(timer); parent?.removeEventListener?.('abort', abort); },
+  };
+}
 
 function normalizeCollapseMap(value) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
@@ -56,8 +74,8 @@ export function createUserPreferencesState(auth, { request = (...args) => fetch(
   let queue = Promise.resolve();
   let pendingWrites = 0;
 
-  const options = () => ({
-    signal: controller?.signal,
+  const options = signal => ({
+    signal,
     credentials: 'same-origin',
     headers: {
       'Content-Type': 'application/json',
@@ -65,14 +83,18 @@ export function createUserPreferencesState(auth, { request = (...args) => fetch(
     },
   });
   const authenticated = () => !!(auth?.isAuthenticated && auth?.userId);
+  // Signed in, but the saved state has neither arrived nor failed yet: the
+  // sidebar shows its loading row rather than folders in the default state.
+  const pending = scope.run(() => Vue.computed(() => authenticated() && !ready.value && !error.value));
   async function refresh() {
     if (!authenticated() || pendingWrites) return;
     if (loading) return loading;
     const expectedGeneration = generation;
     const expectedRevision = revision;
     const work = (async () => {
+      const { signal, done } = timedSignal(controller?.signal, LOAD_TIMEOUT_MS);
       try {
-        const response = await request('/api/user/preferences', { ...options(), cache: 'no-store' });
+        const response = await request('/api/user/preferences', { ...options(signal), cache: 'no-store' });
         if (!response.ok) throw new Error('load');
         const value = await response.json();
         if (generation !== expectedGeneration || revision !== expectedRevision) return;
@@ -83,6 +105,8 @@ export function createUserPreferencesState(auth, { request = (...args) => fetch(
         error.value = null;
       } catch {
         if (generation === expectedGeneration && revision === expectedRevision) error.value = 'load';
+      } finally {
+        done();
       }
     })();
     loading = work;
@@ -99,9 +123,10 @@ export function createUserPreferencesState(auth, { request = (...args) => fetch(
     pendingWrites++;
     const work = queue.then(async () => {
       if (generation !== expectedGeneration) return false;
+      const { signal, done } = timedSignal(controller?.signal, SAVE_TIMEOUT_MS);
       try {
         const response = await request('/api/user/preferences', {
-          ...options(), method: 'PATCH', body: JSON.stringify(patch),
+          ...options(signal), method: 'PATCH', body: JSON.stringify(patch),
         });
         if (!response.ok) throw new Error('save');
         const result = await response.json();
@@ -117,6 +142,7 @@ export function createUserPreferencesState(auth, { request = (...args) => fetch(
         }
         return false;
       } finally {
+        done();
         if (generation === expectedGeneration) {
           pendingWrites--;
           pendingPatches.delete(expectedRevision);
@@ -159,7 +185,7 @@ export function createUserPreferencesState(auth, { request = (...args) => fetch(
     { immediate: true, flush: 'sync' },
   ));
   return {
-    preferences: Vue.readonly(preferences), ready: Vue.readonly(ready), error: Vue.readonly(error),
+    preferences: Vue.readonly(preferences), ready: Vue.readonly(ready), error: Vue.readonly(error), pending,
     refresh, saveSidebarActionsCompact, saveSidebarProjectCollapsed,
     dispose() { generation++; controller?.abort(); scope.stop(); },
   };
