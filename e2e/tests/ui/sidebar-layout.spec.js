@@ -3,7 +3,8 @@ import { expect } from '@playwright/test';
 
 test.use({ serverEnv: { YEAFT_LOCAL_RUN: 'true', SERVE_DIST: 'false' } });
 
-async function seedProjectSidebar(page, agentId) {
+// Client-side seed for geometry only: Sydney > Parental Control, plus one top-level Session.
+async function seedFolderTree(page, agentId) {
   await page.evaluate(agentId => {
     const chat = window.Pinia.useChatStore();
     const now = Date.now();
@@ -13,21 +14,32 @@ async function seedProjectSidebar(page, agentId) {
       availability: 'online', createdAt: new Date(now - 86400000).toISOString(),
       metadataUpdatedAt: new Date(now - rank * 60000).toISOString(), sortRank: rank, pinned,
     });
+    const member = sessionId => ({ agentId, sessionId });
     chat.currentView = 'yeaft';
     chat.applySessionCatalogSnapshot([
-      row('project-pinned', 'Parental Control - Security Review', true, 0),
-      row('project-plain', 'Sydney-C1', false, 1),
-      row('recent-plain', 'Proxy-Server-C1', false, 2),
-    ], [{ id: 'project-sydney', name: 'Sydney', instruction: '', sortOrder: 0, members: [
-      { agentId, sessionId: 'project-pinned' }, { agentId, sessionId: 'project-plain' },
-    ] }]);
+      row('nested-pinned', 'Parental Control - Security Review', true, 0),
+      row('folder-plain', 'Sydney-C1', false, 1),
+      row('top-plain', 'Proxy-Server-C1', false, 2),
+    ], [
+      { id: 'folder-sydney', name: 'Sydney', instruction: '', sortOrder: 0, parentId: null, members: [member('folder-plain')] },
+      { id: 'folder-pc', name: 'Parental Control', instruction: '', sortOrder: 0, parentId: 'folder-sydney', members: [member('nested-pinned')] },
+    ]);
   }, agentId);
-  await expect(page.locator('.sidebar-project-header')).toBeVisible();
+  await expect(page.locator('.sidebar-project-header')).toHaveCount(2);
 }
 
 const left = locator => locator.evaluate(el => Math.round(el.getBoundingClientRect().left));
 const shellWidth = page => page.locator('.session-sidebar-shell').evaluate(el => el.getBoundingClientRect().width);
 const isFocused = locator => locator.evaluate(el => document.activeElement === el);
+const folders = page => page.evaluate(() => window.Pinia.useChatStore().sessionProjects
+  .map(({ id, name, parentId }) => ({ id, name, parentId: parentId || null })));
+const folderRow = (page, name) => page.locator('.sidebar-project-header')
+  .filter({ has: page.locator('.sidebar-project-name', { hasText: new RegExp(`^${name}$`) }) });
+
+async function openFolderMenu(page, name) {
+  await folderRow(page, name).hover();
+  await folderRow(page, name).getByRole('button', { name: 'Folder menu' }).click();
+}
 
 async function pointerDrag(page, locator, dx, dy) {
   const box = await locator.boundingBox();
@@ -40,21 +52,75 @@ async function pointerDrag(page, locator, dx, dy) {
   await page.mouse.move(x + 400, y);
 }
 
-test('sidebar width follows pointer and keyboard, persists per browser, and drags leave no focus ring', async ({ chatPage: page, mockAgent }) => {
+test('sidebar is one folder tree with nested folders, and its width follows pointer and keyboard', async ({ chatPage: page, mockAgent }) => {
   await page.setViewportSize({ width: 1280, height: 860 });
-  await seedProjectSidebar(page, mockAgent.agentId);
+  await seedFolderTree(page, mockAgent.agentId);
 
-  // Project children indent one step: a pinned title starts on the project name's edge.
-  const projectName = page.locator('.sidebar-project-name').first();
-  const projectRows = page.locator('.sidebar-project-sessions .sidebar-session-row .sidebar-session-title-text');
-  expect(await left(projectRows.filter({ hasText: 'Security Review' }))).toBe(await left(projectName));
-  expect(await left(projectRows.filter({ hasText: 'Sydney-C1' }))).toBeLessThan(await left(projectName));
+  // No Projects / Recents headings or split; actions run chat, task, folder, plugins.
+  await expect(page.locator('.sidebar-section-heading')).toHaveCount(0);
+  await expect(page.getByRole('separator', { name: /Projects and Recents/ })).toHaveCount(0);
+  const actions = await page.locator('.sidebar-primary-actions > button').evaluateAll(buttons => buttons.map(b => b.getAttribute('aria-label')));
+  expect(actions.slice(0, 4)).toEqual(['New chat', 'New task', 'New folder', 'Plugins']);
 
-  // A mouse drag on the Projects/Recents divider does not leave it focused.
-  const divider = page.getByRole('separator', { name: /^Resize Projects and Recents/ });
-  await expect(divider).toHaveAttribute('aria-disabled', 'false');
-  await pointerDrag(page, divider, 0, 40);
-  expect(await isFocused(divider)).toBe(false);
+  // Folders first, each followed by its subfolders and Sessions; top-level Sessions last.
+  const order = await page.locator('.sidebar-tree > .sidebar-project-header .sidebar-project-name, .sidebar-tree > .sidebar-session-row .sidebar-session-title-text')
+    .allTextContents();
+  expect(order).toEqual(['Sydney', 'Parental Control', 'Parental Control - Security Review', 'Sydney-C1', 'Proxy-Server-C1']);
+
+  // One 8px step per level: a folder's subfolders and Sessions share an edge,
+  // and a pinned title starts on its own folder's name.
+  const sydneyIcon = await left(folderRow(page, 'Sydney').locator('.sidebar-project-icon'));
+  const nestedIcon = await left(folderRow(page, 'Parental Control').locator('.sidebar-project-icon'));
+  const title = name => left(page.locator('.sidebar-session-title-text', { hasText: name }));
+  expect(nestedIcon).toBe(sydneyIcon + 8);
+  expect(await title('Sydney-C1')).toBe(nestedIcon);
+  expect(await title('Security Review')).toBe(await left(folderRow(page, 'Parental Control').locator('.sidebar-project-name')));
+  expect(await title('Proxy-Server-C1')).toBe(sydneyIcon);
+  // Screen readers hear the folder path that the indentation shows.
+  await expect(page.getByRole('button', { name: /Security Review\s*, in Sydney \/ Parental Control/ })).toHaveCount(1);
+  await expect(page.getByRole('button', { name: /^Parental Control\s*, in Sydney\b/ })).toHaveCount(1);
+  // Folder actions overlay on hover, so a resting name is not cut short for them.
+  expect(await folderRow(page, 'Parental Control').locator('.sidebar-project-name')
+    .evaluate(el => el.scrollWidth <= el.clientWidth)).toBe(true);
+
+  // Real Server folders: create, nest, move to the top level, drag back in, delete.
+  await page.getByRole('button', { name: 'New folder' }).click();
+  await page.getByRole('textbox', { name: 'Folder name' }).fill('Alpha');
+  await page.keyboard.press('Enter');
+  await expect.poll(() => folders(page)).toEqual([expect.objectContaining({ name: 'Alpha', parentId: null })]);
+  const alphaId = (await folders(page))[0].id;
+
+  await openFolderMenu(page, 'Alpha');
+  await page.getByRole('button', { name: 'New subfolder' }).click();
+  await page.getByRole('textbox', { name: 'Folder name' }).fill('Beta');
+  await page.keyboard.press('Enter');
+  await expect.poll(() => folders(page)).toContainEqual(expect.objectContaining({ name: 'Beta', parentId: alphaId }));
+  expect(await left(folderRow(page, 'Beta').locator('.sidebar-project-icon')))
+    .toBe(await left(folderRow(page, 'Alpha').locator('.sidebar-project-icon')) + 8);
+
+  await openFolderMenu(page, 'Beta');
+  await page.getByRole('button', { name: /^Move to\b/ }).click();
+  await page.getByRole('button', { name: 'Top level' }).click();
+  await expect.poll(() => folders(page)).toContainEqual(expect.objectContaining({ name: 'Beta', parentId: null }));
+
+  // Dropping on the middle of a folder row nests the dragged folder inside it.
+  await folderRow(page, 'Beta').dragTo(folderRow(page, 'Alpha'));
+  await expect.poll(() => folders(page)).toContainEqual(expect.objectContaining({ name: 'Beta', parentId: alphaId }));
+
+  // A subfolder's chats inherit the parent's instruction; its dialog says how much.
+  await page.evaluate(id => window.Pinia.useChatStore()
+    .mutateProject('update_instruction', { projectId: id, instruction: 'Ship small PRs.' }), alphaId);
+  await openFolderMenu(page, 'Beta');
+  await page.getByRole('button', { name: 'Folder instructions' }).click();
+  await expect(page.locator('.project-instruction-modal')).toContainText('15 characters of instructions from parent folders');
+  await page.keyboard.press('Escape');
+  await expect(page.locator('.project-instruction-modal')).toHaveCount(0);
+
+  await openFolderMenu(page, 'Alpha');
+  await page.getByRole('button', { name: 'Delete folder' }).click();
+  await expect(page.locator('.app-dialog')).toContainText('along with its subfolders (1)');
+  await page.locator('.app-dialog-confirm').click();
+  await expect.poll(() => folders(page)).toEqual([]);
 
   // Pointer resize of the sidebar itself, released focus, browser-local persistence.
   const handle = page.getByRole('separator', { name: /^Resize sidebar/ });

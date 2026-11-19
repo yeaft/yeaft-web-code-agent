@@ -70,7 +70,7 @@ Dream/H2-AMS 已从当前 runtime 退役。原生 turn 使用当前 Session 持�
 
 除了原生引擎，Web application 还提供：
 
-- Agent-aware 的统一 Session catalog，包含 Project 与 Recents；
+- Agent-aware 的统一 Session catalog，以文件夹树组织（可嵌套的 Project 文件夹，其后是顶层 Session）；
 - terminal、Git status/diff、file browser/editor 和 port proxy；
 - 最多三个并排的 Claude Code/Copilot conversation pane；
 - Claude Code conversation 的 Expert Panel；

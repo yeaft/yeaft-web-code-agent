@@ -225,16 +225,18 @@ select option:checked {
   --image-preview-focus-ring-offset: 2px;
   --image-preview-mobile-gutter: 16px;
   --image-preview-mobile-reserved-height: 112px;
-  --sidebar-section-heading-padding: 0 0 0 4px;
   --sidebar-section-toggle-gap: 5px;
-  --sidebar-section-toggle-height: 34px;
-  --sidebar-section-toggle-padding: 0 6px;
   --sidebar-section-toggle-radius: 8px;
   --sidebar-section-chevron-size: 14px;
   --sidebar-project-icon-width: 15px;
   --sidebar-project-icon-height: 18px;
   --sidebar-project-count-font-size: 10px;
   --sidebar-drag-indicator-width: 2px;
+  /* One folder level in the sidebar tree; matches the in-folder step so a
+     pinned title still starts on its folder name. */
+  --sidebar-tree-indent: 8px;
+  --sidebar-tree-end-min-height: 32px;
+  --sidebar-tree-group-gap: 12px;
   --sidebar-focus-ring-width: 2px;
   --sidebar-focus-ring-offset: -2px;
   --inline-code-bg: rgba(0, 0, 0, 0.05);
@@ -533,16 +535,18 @@ select option:checked {
   --image-preview-focus-ring-offset: 2px;
   --image-preview-mobile-gutter: 16px;
   --image-preview-mobile-reserved-height: 112px;
-  --sidebar-section-heading-padding: 0 0 0 4px;
   --sidebar-section-toggle-gap: 5px;
-  --sidebar-section-toggle-height: 34px;
-  --sidebar-section-toggle-padding: 0 6px;
   --sidebar-section-toggle-radius: 8px;
   --sidebar-section-chevron-size: 14px;
   --sidebar-project-icon-width: 15px;
   --sidebar-project-icon-height: 18px;
   --sidebar-project-count-font-size: 10px;
   --sidebar-drag-indicator-width: 2px;
+  /* One folder level in the sidebar tree; matches the in-folder step so a
+     pinned title still starts on its folder name. */
+  --sidebar-tree-indent: 8px;
+  --sidebar-tree-end-min-height: 32px;
+  --sidebar-tree-group-gap: 12px;
   --sidebar-focus-ring-width: 2px;
   --sidebar-focus-ring-offset: -2px;
   --inline-code-bg: rgba(255, 255, 255, 0.07);

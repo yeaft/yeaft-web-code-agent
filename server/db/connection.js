@@ -472,13 +472,16 @@ db.exec(`
     PRIMARY KEY (user_id, agent_id, session_id, run_id)
   );
 
-  -- Projects are user-owned organization metadata. Membership keeps the full
-  -- Agent + Session identity because Session ids are only unique per Agent.
+  -- Projects are user-owned organization metadata (sidebar folders). Membership
+  -- keeps the full Agent + Session identity because Session ids are only unique
+  -- per Agent. parent_id nests a folder under another folder of the same user;
+  -- NULL is the top level. yeaft-project-db.js owns the tree invariants.
   CREATE TABLE IF NOT EXISTS yeaft_projects (
     id TEXT NOT NULL,
     user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     name TEXT NOT NULL,
     instruction TEXT NOT NULL DEFAULT '',
+    parent_id TEXT,
     sort_order INTEGER NOT NULL,
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL,
@@ -565,6 +568,8 @@ for (const migration of yeaftMigrations) {
 
 const yeaftProjectMigrations = [
   `ALTER TABLE yeaft_projects ADD COLUMN instruction TEXT NOT NULL DEFAULT ''`,
+  // Expand-only: older Servers ignore the column and show every folder flat.
+  `ALTER TABLE yeaft_projects ADD COLUMN parent_id TEXT`,
 ];
 
 const sessionUiMetadataMigrations = [
@@ -573,6 +578,11 @@ const sessionUiMetadataMigrations = [
 for (const migration of yeaftProjectMigrations) {
   try { db.exec(migration); } catch (_) { /* column exists */ }
 }
+// Created after the parent_id migration so upgraded databases have the column.
+db.exec(`
+  CREATE INDEX IF NOT EXISTS idx_yeaft_projects_parent
+    ON yeaft_projects(user_id, parent_id, sort_order ASC);
+`);
 
 for (const migration of sessionUiMetadataMigrations) {
   try { db.exec(migration); } catch (_) { /* column exists */ }
@@ -1160,8 +1170,8 @@ export const stmts = {
   // Project organization metadata. Projects are server-owned and may contain
   // Sessions from multiple Agents; sharing still filters by agent_id.
   insertYeaftProject: db.prepare(`
-    INSERT INTO yeaft_projects (id, user_id, name, instruction, sort_order, created_at, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO yeaft_projects (id, user_id, name, instruction, parent_id, sort_order, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
   `),
   getYeaftProjectsByUser: db.prepare(`
     SELECT * FROM yeaft_projects WHERE user_id = ? ORDER BY sort_order ASC, created_at ASC
@@ -1177,6 +1187,15 @@ export const stmts = {
   `),
   updateYeaftProjectSortOrder: db.prepare(`
     UPDATE yeaft_projects SET sort_order = ?, updated_at = ? WHERE user_id = ? AND id = ?
+  `),
+  updateYeaftProjectParent: db.prepare(`
+    UPDATE yeaft_projects SET parent_id = ?, updated_at = ? WHERE user_id = ? AND id = ?
+  `),
+  moveYeaftProjectMemberships: db.prepare(`
+    UPDATE yeaft_project_sessions SET project_id = ? WHERE user_id = ? AND project_id = ?
+  `),
+  deleteYeaftProjectMemberships: db.prepare(`
+    DELETE FROM yeaft_project_sessions WHERE user_id = ? AND project_id = ?
   `),
   deleteYeaftProject: db.prepare(`
     DELETE FROM yeaft_projects WHERE user_id = ? AND id = ?
