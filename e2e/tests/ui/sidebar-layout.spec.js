@@ -78,6 +78,16 @@ test('sidebar width follows pointer and keyboard, persists per browser, and drag
   await expect(reloadedHandle).toHaveAttribute('aria-valuenow', '344');
   await page.keyboard.press('Shift+ArrowRight');
   await expect(reloadedHandle).toHaveAttribute('aria-valuenow', '408');
+
+  // A narrower window keeps 480px for the content; the rendered width, the
+  // reported value and the grow key agree instead of the sidebar jumping.
+  await page.setViewportSize({ width: 860, height: 860 });
+  await expect.poll(() => shellWidth(page)).toBe(380);
+  await expect(reloadedHandle).toHaveAttribute('aria-valuenow', '380');
+  await page.keyboard.press('ArrowRight');
+  await expect(reloadedHandle).toHaveAttribute('aria-valuenow', '380');
+  expect(await shellWidth(page)).toBe(380);
+
   await page.keyboard.press('Home');
   // Keyboard steps keep the sidebar's width transition; wait for it to settle.
   await expect.poll(() => shellWidth(page)).toBe(260);

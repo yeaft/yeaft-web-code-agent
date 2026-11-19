@@ -24,14 +24,24 @@
   border-right: 1px solid var(--border-color);
 }
 
-/* Width divider after a desktop sidebar (SessionSidebarResizeHandle). The hit
-   area straddles the seam with zero net width: 2px over the sidebar edge,
-   clear of its 8px scrollbar, and 6px over the content beside it. */
+/* Desktop: a width saved on a wide window still leaves the content its 480px
+   (SessionSidebarResizeHandle's min-remaining) when the window narrows, so
+   the rendered width, aria-valuenow and arrow keys always agree. */
+@media (min-width: 769px) {
+  .session-sidebar-shell:not(.collapsed) {
+    width: clamp(220px, var(--session-sidebar-width), max(220px, 100vw - 480px));
+    min-width: clamp(220px, var(--session-sidebar-width), max(220px, 100vw - 480px));
+  }
+}
+
+/* Width divider after a desktop sidebar (SessionSidebarResizeHandle). Zero net
+   width: the hit area overlays the first 8px of the content, leaving the
+   sidebar's 8px scrollbar alone; the line sits on the seam. */
 .session-sidebar-resize-handle {
   position: relative;
   z-index: 20;
   flex: 0 0 8px;
-  margin: 0 -6px 0 -2px;
+  margin: 0 -8px 0 0;
   cursor: col-resize;
   touch-action: none;
 }
@@ -41,7 +51,7 @@
   position: absolute;
   top: 0;
   bottom: 0;
-  left: 1px;
+  left: -1px;
   width: 2px;
   background: transparent;
   transition: background-color var(--duration-fast) var(--ease-out);
@@ -75,11 +85,7 @@
 @media (pointer: coarse) {
   .session-sidebar-resize-handle {
     flex-basis: 16px;
-    margin: 0 -12px 0 -4px;
-  }
-
-  .session-sidebar-resize-handle::after {
-    left: 3px;
+    margin-right: -16px;
   }
 }
 

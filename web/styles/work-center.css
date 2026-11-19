@@ -3531,7 +3531,7 @@
 .work-center-main .work-center-navigation-toggle { display: none; }
 .work-center-heading { font-size: 12px; font-weight: 500; color: var(--text-secondary); overflow: hidden; }
 .work-center-heading > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.work-center-main:has(> .workbench-panel.expanded.maximized) > .work-center-sidebar { display: none; }
+.work-center-main:has(> .workbench-panel.expanded.maximized) > :is(.work-center-sidebar, .session-sidebar-resize-handle) { display: none; }
 
 @media (max-width: 1100px) {
   .work-center-sidebar { position: absolute; z-index: 51; inset: 0 auto 0 0; width: min(var(--session-sidebar-width), calc(100% - 48px)); }
