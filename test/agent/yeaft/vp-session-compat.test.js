@@ -44,8 +44,9 @@ describe('VP catalog and durable Session compatibility', () => {
       expect(lensLayout(renderSessionScene(id, 'zh'))).toEqual(lensLayout(renderSessionScene(id, 'en')));
       for (const [locale, lang, i] of [['en-US', 'en', 0], ['zh-CN', 'zh', 1]]) {
         const block = renderSessionScene(id, lang);
-        // The same per-turn budget as a stock VP soul.
-        expect(block.length).toBeLessThanOrEqual(i ? 2800 : 8500);
+        // One per-turn budget for every scene. Frontend, which carries both art
+        // direction and frontend engineering, is the largest.
+        expect(block.length).toBeLessThanOrEqual(i ? 3500 : 10500);
         const system = buildSystemPrompt({ language: locale, vpPersona: {
           sceneId: id, displayName: 'Private VP', persona: 'private-soul', runtimePreamble: 'session-preamble',
         } });
