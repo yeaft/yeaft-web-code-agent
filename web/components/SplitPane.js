@@ -449,21 +449,33 @@ export default {
       return showTypingDots.value;
     });
 
-    // Pick this wait's animation from the user's preference (Settings →
-    // General) and run whatever loop it needs. A rotating pick is seeded by
-    // the wait clock, so it holds while the indicator comes and goes within
-    // one wait. The dog needs more polish and is only reachable via ?preview=dog.
+    // The animation for the turn in progress, from the user's preference
+    // (Settings → General). It is picked when the turn's first indicator shows
+    // and kept until processing ends, so a turn does not change animation, and
+    // row height, between its tool calls. ?preview= forces one instead; the
+    // dog needs more polish and is only reachable that way.
+    const previewAnimation = urlPreview === 'dog' || urlPreview === 'hoops' ? urlPreview : 'cat';
+    let turnAnimation = null;
     const startWaitingAnimation = () => {
       catLoop.stop();
       if (dogRafId) { cancelAnimationFrame(dogRafId); dogRafId = null; }
-      animationType.value = pickWaitingAnimation(store.waitingAnimation, readWaitClock(waitClockKey.value));
+      if (isPreviewMode) {
+        animationType.value = previewAnimation;
+      } else {
+        if (!turnAnimation) turnAnimation = pickWaitingAnimation(store.waitingAnimation, readWaitClock(waitClockKey.value));
+        animationType.value = turnAnimation;
+      }
       dogPosL.value = 5; dogPosR.value = 95; dogPhase.value = 'bark-both';
       dogFlipL.value = 1; dogFlipR.value = -1;
       if (animationType.value === 'cat') catLoop.start();
+      else if (animationType.value === 'dog') dogRafId = requestAnimationFrame(updateDogWalk);
     };
+    Vue.watch(() => isProcessing.value, (processing) => { if (!processing) turnAnimation = null; });
+    Vue.watch(waitClockKey, () => { turnAnimation = null; });
     // A change in Settings applies to the wait already on screen.
     Vue.watch(() => store.waitingAnimation, () => {
-      if (showTypingDots.value && !isPreviewMode) startWaitingAnimation();
+      turnAnimation = null;
+      if (showTypingDots.value) startWaitingAnimation();
     });
 
     Vue.watch(showTypingDots, (show) => {
@@ -473,8 +485,6 @@ export default {
         if (!typingTimer) {
           typingTimer = setInterval(() => {
             now.value = Date.now();
-            // Keep this wait's clock alive whichever animation is showing.
-            readWaitClock(waitClockKey.value);
           }, 1000);
         }
         startWaitingAnimation();
@@ -490,14 +500,7 @@ export default {
     if (isPreviewMode) {
       typingStartTime.value = Date.now();
       now.value = Date.now();
-      animationType.value = urlPreview === 'dog' || urlPreview === 'hoops' ? urlPreview : 'cat';
-      if (animationType.value === 'cat') {
-        catLoop.start();
-      } else if (animationType.value === 'dog') {
-        dogPosL.value = 5; dogPosR.value = 95; dogPhase.value = 'bark-both';
-        dogFlipL.value = 1; dogFlipR.value = -1;
-        dogRafId = requestAnimationFrame(updateDogWalk);
-      }
+      startWaitingAnimation();
     }
 
     Vue.onUnmounted(() => {

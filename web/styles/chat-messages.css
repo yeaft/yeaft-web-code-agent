@@ -480,9 +480,10 @@
 .hoops-scene.is-session-lost,
 .hoops-scene.is-cli-exited { --hoops-ink: var(--warn-text); }
 
-/* With motion reduced the scene holds one frame, so its dots hold still too. */
+/* With motion reduced the scene holds one frame, so its dots hold still too.
+   The selector repeats the dot rule's own so that it outranks it. */
 @media (prefers-reduced-motion: reduce) {
-  .typing-indicator.with-hoops > span:nth-child(-n+3) {
+  .typing-indicator.with-hoops > span:not(.typing-status-text):not(.svg-cat-walk):not(.svg-dog-scene) {
     animation: none;
     opacity: 0.7;
   }

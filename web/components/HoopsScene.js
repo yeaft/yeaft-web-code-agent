@@ -115,10 +115,11 @@ export default {
         sizeObserver = new ResizeObserver(resize);
         sizeObserver.observe(host);
       }
-      // Off-screen scenes neither draw nor keep the clock alive.
+      // An off-screen scene neither draws nor keeps its clock alive.
       if (typeof IntersectionObserver === 'function') {
         viewObserver = new IntersectionObserver((entries) => {
-          onScreen = entries.some(entry => entry.isIntersecting);
+          // Entries are in time order; the last one is the current state.
+          onScreen = entries[entries.length - 1].isIntersecting;
           refresh();
         });
         viewObserver.observe(host);

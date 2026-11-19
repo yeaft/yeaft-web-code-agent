@@ -6,7 +6,7 @@ Open via the **⚙ gear** at the bottom of the sidebar. Settings live in a **fix
 
 - **Theme** — Light / Dark
 - **Language** — 中文 / English (UI re-renders immediately)
-- **Waiting animation** — what plays under the conversation while a turn runs: Random (default; one of the candidates per wait), Basketball, Running cat, or Off (dots only). Saved in this browser. The basketball animation holds one frame when the system asks for reduced motion.
+- **Waiting animation** — what plays under the conversation while a turn runs: Random (default; one of the candidates for each turn), Basketball, Running cat, or Off (dots only). Saved in this browser. The basketball animation holds one frame when the system asks for reduced motion.
 - **Office preview mode** — how Office docs (doc/docx/xls/xlsx/ppt/pptx) preview:
   - **Local render** — built-in viewer, no network
   - **Office Online** — Microsoft's online viewer; requires the Agent file URL to be reachable from the public Internet

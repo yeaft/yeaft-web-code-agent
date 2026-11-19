@@ -34,10 +34,11 @@ export function writeWaitingAnimationPreference(value) {
 }
 
 /**
- * The animation for one wait.
+ * Resolve the preference to an animation. Callers pick once per turn and keep
+ * the result, so a turn does not change animation between its tool calls.
  * @param {string} preference A value from WAITING_ANIMATION_CHOICES.
- * @param {number} seed The wait's start time. A rotating pick is derived from
- *   it, so one wait keeps one animation however often its indicator re-renders.
+ * @param {number} seed Any integer that differs from turn to turn, such as the
+ *   time the wait began; a rotating pick is derived from it.
  * @returns {string} An id from WAITING_ANIMATIONS, or 'none' for the dots alone.
  */
 export function pickWaitingAnimation(preference, seed = 0) {

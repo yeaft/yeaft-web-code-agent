@@ -21,7 +21,7 @@ const drawnPixels = scene => scene.locator('canvas').evaluate((canvas) => {
 });
 const drawnFrame = scene => scene.locator('canvas').evaluate(canvas => canvas.toDataURL());
 
-test('one native Session turn retains the ordinary transcript and merges appended tools across replay', async ({ chatPage: page, mockAgent }, info) => {
+test('one native Session turn shows its waiting indicator, retains the ordinary transcript and merges appended tools across replay', async ({ chatPage: page, mockAgent }, info) => {
   const wire = await sessionTurnsFixture(page, mockAgent);
   const indicator = page.locator('.typing-indicator');
   const hoops = indicator.locator('.hoops-scene');
@@ -37,9 +37,10 @@ test('one native Session turn retains the ordinary transcript and merges appende
   await expect.poll(() => drawnPixels(hoops)).toBeGreaterThan(200);
   await expect(cat).toHaveCount(0);
   await expect(page.locator('.yeaft-session-status-pane canvas')).toHaveCount(0);
-  // Reduced motion holds one frame; without it the play moves on.
+  // Reduced motion holds one frame and stills the dots; without it the play moves on.
   await page.emulateMedia({ reducedMotion: 'reduce' });
   await expect(hoops).toHaveAttribute('data-held', 'true');
+  await expect(indicator.locator('> span').first()).toHaveCSS('animation-name', 'none');
   const held = await drawnFrame(hoops);
   await page.waitForTimeout(200);
   expect(await drawnFrame(hoops)).toBe(held);
@@ -55,13 +56,17 @@ test('one native Session turn retains the ordinary transcript and merges appende
   await expect(indicator).toBeVisible();
   await expect(indicator.locator('.hoops-scene, .svg-running-cat')).toHaveCount(0);
   await chooseWaitingAnimation('random');
-  await expect(indicator.locator('.hoops-scene, .svg-running-cat')).toHaveCount(1);
+  const candidate = indicator.locator('.hoops-scene, .svg-running-cat');
+  await expect(candidate).toHaveCount(1);
+  const picked = await candidate.evaluate(element => (element.classList.contains('hoops-scene') ? '.hoops-scene' : '.svg-running-cat'));
   wire.delta(turn, 'Single answer begins');
   await expect(page.locator('.assistant-turn').filter({ hasText: 'Single answer begins' })).toBeVisible();
   // Streaming text takes over from the indicator.
   await expect(indicator).toHaveCount(0);
   await expect(page.locator('.parallel-turn-tabs')).toHaveCount(0);
   wire.tool(turn, 'before-append', 'Read');
+  // Back after the text, the turn keeps the animation it started with.
+  await expect(indicator.locator(picked)).toBeVisible();
   await wire.send('Extra detail for the same turn', turn);
   wire.tool(turn, 'after-append', 'Grep');
   // A new assistant row after a tool loop, not a delta into the old text row.
