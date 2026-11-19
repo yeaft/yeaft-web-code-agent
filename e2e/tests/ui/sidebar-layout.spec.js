@@ -35,6 +35,7 @@ const folders = page => page.evaluate(() => window.Pinia.useChatStore().sessionP
   .map(({ id, name, parentId }) => ({ id, name, parentId: parentId || null })));
 const folderRow = (page, name) => page.locator('.sidebar-project-header')
   .filter({ has: page.locator('.sidebar-project-name', { hasText: new RegExp(`^${name}$`) }) });
+const folderToggle = (page, name) => folderRow(page, name).locator('.sidebar-project-toggle');
 
 async function openFolderMenu(page, name) {
   await folderRow(page, name).hover();
@@ -52,7 +53,7 @@ async function pointerDrag(page, locator, dx, dy) {
   await page.mouse.move(x + 400, y);
 }
 
-test('sidebar is one folder tree with nested folders, and its width follows pointer and keyboard', async ({ chatPage: page, mockAgent }) => {
+test('sidebar is one folder tree with nested folders kept open or closed per user, and its width follows pointer and keyboard', async ({ chatPage: page, mockAgent, browser, serverUrl }) => {
   await page.setViewportSize({ width: 1280, height: 860 });
   await seedFolderTree(page, mockAgent.agentId);
 
@@ -132,11 +133,10 @@ test('sidebar is one folder tree with nested folders, and its width follows poin
   await page.keyboard.press('Escape');
   await expect(page.locator('.project-instruction-modal')).toHaveCount(0);
 
-  await openFolderMenu(page, 'Alpha');
-  await page.getByRole('button', { name: 'Delete folder' }).click();
-  await expect(page.locator('.app-dialog')).toContainText('along with its subfolders (1)');
-  await page.locator('.app-dialog-confirm').click();
-  await expect.poll(() => folders(page)).toEqual([]);
+  // Open/closed is a per-user Server preference (checked after the reload below).
+  await folderToggle(page, 'Alpha').click();
+  await expect(folderToggle(page, 'Alpha')).toHaveAttribute('aria-expanded', 'false');
+  await expect(folderRow(page, 'Beta')).toHaveCount(0);
 
   // Pointer resize of the sidebar itself, released focus, browser-local persistence.
   const handle = page.getByRole('separator', { name: /^Resize sidebar/ });
@@ -148,10 +148,48 @@ test('sidebar is one folder tree with nested folders, and its width follows poin
   expect(await isFocused(handle)).toBe(false);
   expect(await page.evaluate(() => localStorage.getItem('session-sidebar-width'))).toBe('360');
 
+  // Reload with the preference response slower than the catalog: a closed
+  // folder is drawn closed from its first frame, never open and then shut.
+  await page.route('**/api/user/preferences', async route => {
+    if (route.request().method() === 'GET') await new Promise(resolve => setTimeout(resolve, 500));
+    await route.continue();
+  });
+  await page.addInitScript(() => {
+    window.__alphaStates = [];
+    new MutationObserver(() => {
+      for (const header of document.querySelectorAll('.sidebar-project-header')) {
+        if (header.querySelector('.sidebar-project-name')?.textContent !== 'Alpha') continue;
+        const state = header.querySelector('.sidebar-project-toggle')?.getAttribute('aria-expanded');
+        if (window.__alphaStates.at(-1) !== state) window.__alphaStates.push(state);
+      }
+    }).observe(document, { subtree: true, childList: true, attributes: true, attributeFilter: ['aria-expanded'] });
+  });
+
   // The width is applied before first paint on reload (the Chat host this time).
   await page.reload();
   await expect(page.locator('.session-sidebar-shell')).toBeVisible();
   expect(await shellWidth(page)).toBe(360);
+  await expect(folderToggle(page, 'Alpha')).toHaveAttribute('aria-expanded', 'false');
+  expect(await page.evaluate(() => window.__alphaStates)).toEqual(['false']);
+  await expect(folderRow(page, 'Beta')).toHaveCount(0);
+  await page.unroute('**/api/user/preferences');
+
+  // Another client (a fresh browser profile) gets the same state from the Server.
+  const otherClient = await browser.newContext();
+  try {
+    const otherPage = await otherClient.newPage();
+    await otherPage.goto(serverUrl);
+    await expect(folderToggle(otherPage, 'Alpha')).toHaveAttribute('aria-expanded', 'false');
+    await expect(folderRow(otherPage, 'Beta')).toHaveCount(0);
+  } finally {
+    await otherClient.close();
+  }
+
+  await openFolderMenu(page, 'Alpha');
+  await page.getByRole('button', { name: 'Delete folder' }).click();
+  await expect(page.locator('.app-dialog')).toContainText('along with its subfolders (1)');
+  await page.locator('.app-dialog-confirm').click();
+  await expect.poll(() => folders(page)).toEqual([]);
 
   // Keyboard: arrows move the divider the way they point; Home restores the default.
   const reloadedHandle = page.getByRole('separator', { name: /^Resize sidebar/ });

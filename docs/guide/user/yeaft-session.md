@@ -17,7 +17,7 @@ Session metadata and history live under the owning Agent's Yeaft directory. `wor
 
 ## Sidebar display preferences
 
-Folders, including subfolders, remember their expanded or collapsed state per user on the Server, alongside the shortcut layout. Reloading, signing in again, focusing the window, or making the page visible reads the latest preferences; changes are not pushed live to other windows. Folders are saved separately by stable Project ID, so renaming a folder does not reset it and changes to different folders on separate clients do not overwrite each other. Failed saves show a message and restore confirmed state rather than appearing synchronized.
+Folders, including subfolders, remember their expanded or collapsed state per user on the Server, alongside the shortcut layout. Reloading, signing in again, focusing the window, or making the page visible reads the latest preferences; changes are not pushed live to other windows. Folders are saved separately by stable Project ID, so renaming a folder does not reset it and changes to different folders on separate clients do not overwrite each other. Failed saves show a message and restore confirmed state rather than appearing synchronized. When a page opens, the list shows its loading row until the saved state arrives, so folders appear open or closed as saved instead of opening and then closing. If that state has not arrived within 5 seconds, folders show expanded with a **Retry** message.
 
 Legacy browser-local section state is not imported into user preferences. The initial default is expanded; subsequent visits use Server-saved state.
 
