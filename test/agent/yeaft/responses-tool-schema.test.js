@@ -131,7 +131,7 @@ describe('Responses strict tool boundary', () => {
     expect(replay.slice(4).map(item => item.call_id)).toEqual(toolCalls.map(call => call.id));
   });
 
-  it('fails malformed and withholds content-filtered tool batches without emitting executable calls (SSE, JSON, call, extraBody)', async () => {
+  it('fails malformed batches and runs only strictly complete content-filtered batches (SSE, JSON, call, extraBody)', async () => {
     const active = asFunction(tool('mcp__fixture__open', { type: 'object', additionalProperties: true }));
     const good = callItem(active.name, { argumentsJson: '{"id":"good"}' });
     const malformed = callItem(active.name, { argumentsJson: '{bad inner JSON' }, '2');
@@ -159,11 +159,31 @@ describe('Responses strict tool boundary', () => {
     vi.stubGlobal('fetch', vi.fn(async () => json(done([malformed]))));
     await expect(responses().call(options)).rejects.toBeInstanceOf(LLMToolInputError);
 
-    // A content filter withholds every exposed call exactly once, valid or not, keyed by call_id.
     const filtered = output => ({ id: 'response_filtered', status: 'incomplete', incomplete_details: { reason: 'content_filter' },
       output, usage: { input_tokens: 10, output_tokens: 8 } });
+    // A filter verdict alone does not withhold calls. llm-proxy marks every filtered item incomplete,
+    // so strict argument parsing proves completeness; the filtered items never become replay state.
+    const proxied = { ...good, status: 'incomplete' };
+    const cut = { ...proxied, arguments: good.arguments.slice(0, -3) };
+    const streamed = item => sse([{ type: 'response.output_item.added', output_index: 0, item: { ...item, arguments: '', status: 'in_progress' } },
+      { type: 'response.function_call_arguments.done', output_index: 0, arguments: item.arguments },
+      { type: 'response.output_item.done', output_index: 0, item },
+      { type: 'response.incomplete', response: filtered([item]) }]);
+    for (const reply of [() => streamed(proxied), () => json(filtered([proxied]))]) {
+      vi.stubGlobal('fetch', vi.fn(async () => reply()));
+      const result = await collect(responses().stream(options));
+      expect(result.filter(event => event.type === 'tool_call')).toEqual([expect.objectContaining({ id: good.call_id, name: active.name })]);
+      expect(result.some(event => event.type === 'provider_state' || event.type === 'error')).toBe(false);
+      expect(result.at(-1)).toEqual({ type: 'stop', stopReason: 'tool_use', stopDetails: { type: 'content_filter',
+        reason: 'content_filter', blocked: 'response', withheldToolCalls: 0 } });
+    }
+    // Any cut-off, malformed or inconsistent call withholds the whole batch, counting each exposed call once by call_id.
     const sibling = callItem('Unlisted', {}, '3');
     const filteredReplies = [
+      // llm-proxy relays cut-off arguments verbatim.
+      [() => streamed(cut), 1, [active.name]],
+      // One whole call does not license running a sibling that was cut off.
+      [() => json(filtered([proxied, { ...cut, id: 'fc_4', call_id: 'call_4' }])), 2, [active.name]],
       // The terminal projection omits a sibling the stream already completed.
       [() => sse([{ type: 'response.output_item.done', output_index: 0, item: good },
         { type: 'response.output_item.done', output_index: 1, item: sibling },

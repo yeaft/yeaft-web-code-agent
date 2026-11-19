@@ -37,6 +37,16 @@ export function projectGeminiToolCalls(items) {
   });
 }
 
+/** True when a function batch passes the same validation as a normal tool_use response. */
+function isCompleteGeminiBatch(parts) {
+  try {
+    return projectGeminiToolCalls(parts).length > 0;
+  } catch (error) {
+    if (error instanceof LLMToolInputError) return false;
+    throw error;
+  }
+}
+
 function imagePart(part) {
   if (part.type === 'image' && part.source?.type === 'base64') {
     return { inlineData: { mimeType: part.source.media_type, data: part.source.data } };
@@ -367,9 +377,13 @@ export class GeminiAdapter extends LLMAdapter {
       if (['MALFORMED_FUNCTION_CALL', 'UNEXPECTED_TOOL_CALL', 'TOO_MANY_TOOL_CALLS', 'MALFORMED_RESPONSE', 'MISSING_THOUGHT_SIGNATURE'].includes(finish)) {
         throw new LLMToolInputError(`Gemini rejected function batch (${finish})`);
       }
-      if (hasTools && reason !== 'tool_use') {
+      // A response filter verdict judges generated content, not whether a delivered call may run:
+      // complete calls stay under local tool permissions (relays such as llm-proxy drop cut-off
+      // arguments). Prompt blocks and invalid batches are still withheld as a refusal.
+      const runFiltered = reason === 'refusal' && hasTools && !promptBlocked && isCompleteGeminiBatch(parts);
+      if (hasTools && reason !== 'tool_use' && !runFiltered) {
         if (reason === 'max_tokens') throw new LLMToolInputError('Gemini function batch was truncated');
-      } else if (reason === 'end_turn' || reason === 'tool_use' || reason === 'max_tokens') {
+      } else if (reason === 'end_turn' || reason === 'tool_use' || reason === 'max_tokens' || runFiltered) {
         const toolCalls = projectGeminiToolCalls(parts); // Validate the ENTIRE batch before publishing any call.
         let callIndex = 0;
         const items = parts.map(part => ({ type: 'part', part, ...(part.functionCall ? { toolCallId: toolCalls[callIndex++].id } : {}) }));
@@ -383,9 +397,9 @@ export class GeminiAdapter extends LLMAdapter {
           yield { type: 'tool_call', ...tc };
         }
       }
-      // A filtered response can still carry complete calls: they are withheld, never dispatched.
-      yield { type: 'stop', stopReason: reason, ...(reason === 'refusal' ? { stopDetails: contentFilterStopDetails({ reason: finish,
-        blocked: promptBlocked ? 'prompt' : 'response', calledNames: parts.filter(part => part.functionCall).map(part => part.functionCall.name),
+      // The filter verdict stays in stopDetails either way; only calls that did not run count as withheld.
+      yield { type: 'stop', stopReason: runFiltered ? 'tool_use' : reason, ...(reason === 'refusal' ? { stopDetails: contentFilterStopDetails({ reason: finish,
+        blocked: promptBlocked ? 'prompt' : 'response', calledNames: runFiltered ? [] : parts.filter(part => part.functionCall).map(part => part.functionCall.name),
         declaredNames: (params.tools || []).map(tool => tool.name) }) } : {}) };
     } catch (error) {
       const classified = classifyFetchError(error, { providerLabel: 'Gemini', signal });
