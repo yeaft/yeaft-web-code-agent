@@ -1,36 +1,34 @@
 /**
- * Shared clocks for waiting animations. Views that show the same wait — the
- * strip under a transcript and the screen in its status pane — read the clock
- * by the same key and so agree on when it started. No view owns it.
+ * Wait clocks: when the wait a typing indicator is showing began.
  *
- * A clock lives for as long as something keeps reading it. Left unread for a
- * few seconds it is forgotten and the next reader starts a fresh one. A short
- * gap (text streaming between two tool calls) therefore resumes the play in
- * progress, while a new wait opens from the first beat.
+ * The indicator is removed and re-created whenever text streams between two
+ * tool calls, so the animation inside it cannot own its own start time. A
+ * clock is read by key (the conversation being waited on) instead and lives
+ * for as long as something keeps reading it. Left unread for a few seconds it
+ * is forgotten, and the next reader starts a fresh one. A short gap therefore
+ * resumes the play in progress, a new wait opens from the first beat, and any
+ * other view of the same wait would show the same moment.
  */
 const GRACE_MS = 4000;
 const MAX_CLOCKS = 32;
 const clocks = new Map();
 
-/** Key for a Yeaft Session's wait. Its transcript and its status pane both build it. */
-export const sessionWaitKey = (agentId, sessionId) => `session\u001f${agentId || ''}\u001f${sessionId || ''}`;
-
-/** Key for a CLI chat conversation's wait. */
-export const conversationWaitKey = conversationId => `chat\u001f${conversationId || ''}`;
-
 /**
- * @param {string} key Identity of the wait, e.g. agent + session.
+ * @param {string} key Identity of the wait, e.g. the conversation it belongs to.
  * @param {number} [now] Current time in ms.
  * @returns {number} Start time of the wait in ms.
  */
 export function readWaitClock(key, now = Date.now()) {
   let clock = clocks.get(key);
-  if (!clock || now - clock.readAt > GRACE_MS) {
+  // A clock from the future means the system time stepped back; start over
+  // rather than hold the first frame until time catches up.
+  if (!clock || now - clock.readAt > GRACE_MS || now < clock.startedAt) {
     clock = { startedAt: now, readAt: now };
-    clocks.delete(key);
-    clocks.set(key, clock);
-    if (clocks.size > MAX_CLOCKS) clocks.delete(clocks.keys().next().value);
   }
   clock.readAt = now;
+  // Re-insert so the map stays ordered by last read, and drop the stalest.
+  clocks.delete(key);
+  clocks.set(key, clock);
+  if (clocks.size > MAX_CLOCKS) clocks.delete(clocks.keys().next().value);
   return clock.startedAt;
 }

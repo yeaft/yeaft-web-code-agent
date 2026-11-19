@@ -1,9 +1,9 @@
 /**
- * Waiting-scene choreography: one basketball possession — bring the ball up,
- * shake the defender, step back, shoot from deep and walk away before it
- * drops — resolved as a pure function of elapsed time. Views keep no animation
- * state of their own, so every canvas reading the same clock shows the same
- * frame of the same play.
+ * Choreography of the basketball waiting animation: one possession — bring
+ * the ball up, shake the defender, step back, shoot from deep and walk away
+ * before it drops — resolved as a pure function of elapsed time. The view
+ * keeps no animation state of its own, so any canvas reading the same clock
+ * shows the same frame of the same play.
  *
  * World units are feet. x grows toward the hoop (rim centre at x = 0), y is
  * height above the floor, z is the lane toward (+) or away from (−) the viewer.
@@ -509,10 +509,10 @@ function planFor(possession) {
 
 /**
  * @param {number} elapsedMs Milliseconds since the shared wait clock started.
- * @returns Frame of the play: solved figures, ball, net and score. Pure.
+ * @returns Frame of the play: solved figures, ball and net. Pure.
  */
 export function resolveHoopsPlay(elapsedMs) {
-  const elapsed = Math.max(0, Number(elapsedMs) || 0);
+  const elapsed = Number.isFinite(Number(elapsedMs)) ? Math.max(0, Number(elapsedMs)) : 0;
   const possession = Math.floor(elapsed / HOOPS_POSSESSION_MS);
   const t = playSeconds((elapsed - possession * HOOPS_POSSESSION_MS) / 1000);
   const plan = planFor(possession);
@@ -555,7 +555,7 @@ export function resolveHoopsPlay(elapsedMs) {
     net: made ? Math.exp(-sinceMake * 4.2) : 0, netAge: made ? sinceMake : 0,
     pop: made && sinceMake < 1.25 ? sinceMake / 1.25 : -1,
     doze: plan.celebration === 'night' && t > PARTY_FROM + 0.2 && t < PARTY_TO ? t - PARTY_FROM - 0.2 : -1,
-    points: possession * 3 + (made ? 3 : 0),
+
     fade: Math.min(smooth(span(t, 0, 0.3)), 1 - smooth(span(t, PLAY_SECONDS - 0.45, PLAY_SECONDS - 0.05))),
   };
 }

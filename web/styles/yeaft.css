@@ -4677,21 +4677,6 @@
 /* Task controls share the existing status surface, never conversation height. */
 .yeaft-session-actions-scroll { display: flex; align-items: center; gap: inherit; min-width: 0; }
 .yeaft-vp-timeline > * { flex-shrink: 0; }
-/* Waiting-scene screen. It hangs in the lower part of the pane: pushed below
-   the sections by the auto margin and held off the bottom edge, so it stays
-   put while the sections above it grow. In a full pane it simply follows them. */
-.yeaft-session-status-stage {
-  margin-top: auto;
-  margin-bottom: clamp(var(--space-4), 12vh, 96px);
-  padding-top: var(--space-4);
-  animation: yeaft-session-status-stage-in var(--duration-slow) var(--ease-out);
-}
-@keyframes yeaft-session-status-stage-in {
-  from { opacity: 0; }
-}
-@media (prefers-reduced-motion: reduce) {
-  .yeaft-session-status-stage { animation: none; }
-}
 .scheduled-task-bar { min-width: 0; color: var(--text-secondary); }
 .scheduled-task-summary { display: grid; min-width: 0; padding: 0 8px; gap: var(--work-center-space-2); }
 .scheduled-task-runtime { display: grid; gap: var(--work-center-space-1); margin: 0; font-size: 12px; line-height: 1.55; }

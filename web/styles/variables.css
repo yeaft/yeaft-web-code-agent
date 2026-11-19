@@ -254,9 +254,9 @@ select option:checked {
   --cat-eye-fill: var(--bg-primary, #fff);
   --cat-pupil-fill: var(--text-primary);
 
-  /* Waiting scene: the basketball play drawn while a turn runs. Figures and
-     court use the text and border greys; the ball is the only colour. A host
-     on a different surface overrides --hoops-surface. */
+  /* Basketball waiting animation (HoopsScene). Figures and court use the text
+     and border greys; the ball is the only colour. --hoops-surface is the
+     background the scene sits on, which its lighter tones are mixed toward. */
   --hoops-ink: var(--text-primary);
   --hoops-soft: var(--text-muted);
   --hoops-line: var(--border-color);
@@ -571,7 +571,7 @@ select option:checked {
   --cat-eye-fill: rgba(255, 255, 255, 0.7);
   --cat-pupil-fill: #1a1a1a;
 
-  /* Waiting scene — dark: figures one step quieter than body text. */
+  /* Basketball waiting animation — dark: figures one step quieter than body text. */
   --hoops-ink: var(--text-secondary);
   --hoops-soft: var(--text-muted);
   --hoops-line: var(--border-color);

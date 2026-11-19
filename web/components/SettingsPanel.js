@@ -20,6 +20,7 @@ import UserShortcutsSettings from './UserShortcutsSettings.js';
 import { loadSandboxState } from '../utils/sandbox-api.js';
 import { confirmDialog } from '../utils/dialog.js';
 import NavigationIcon from './NavigationIcon.js';
+import { WAITING_ANIMATION_CHOICES } from '../utils/waiting-animations.js';
 
 export default {
   name: 'SettingsPanel',
@@ -258,6 +259,29 @@ export default {
                       >
                         {{ opt.label }}
                         <svg v-if="selectedLocale === opt.value" class="sp-custom-select-check" viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+                <div class="sp-row sp-general-select-row">
+                  <span class="sp-label">{{ $t('settings.general.waitingAnimation') }}</span>
+                  <div class="sp-custom-select" :class="{ open: openDropdown === 'waitingAnimation' }" v-click-outside="() => closeDropdown('waitingAnimation')">
+                    <button class="sp-custom-select-trigger" type="button"
+                            :aria-expanded="openDropdown === 'waitingAnimation'" :aria-label="$t('settings.general.waitingAnimation')"
+                            @click="toggleDropdown('waitingAnimation')">
+                      <span>{{ $t('settings.general.currentValue', { value: waitingAnimationOptions.find(o => o.value === chatStore.waitingAnimation)?.label }) }}</span>
+                      <svg class="sp-custom-select-chevron" viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M7 10l5 5 5-5z"/></svg>
+                    </button>
+                    <div class="sp-custom-select-menu" v-show="openDropdown === 'waitingAnimation'">
+                      <div
+                        class="sp-custom-select-option"
+                        :class="{ active: chatStore.waitingAnimation === opt.value }"
+                        v-for="opt in waitingAnimationOptions"
+                        :key="opt.value"
+                        @click="chatStore.setWaitingAnimation(opt.value); closeDropdown('waitingAnimation')"
+                      >
+                        {{ opt.label }}
+                        <svg v-if="chatStore.waitingAnimation === opt.value" class="sp-custom-select-check" viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg>
                       </div>
                     </div>
                   </div>
@@ -623,6 +647,10 @@ export default {
         { value: 'light', label: this.$t('settings.general.lightTheme') },
         { value: 'dark', label: this.$t('settings.general.darkTheme') }
       ];
+    },
+    // One entry per candidate in waiting-animations.js, plus rotate and off.
+    waitingAnimationOptions() {
+      return WAITING_ANIMATION_CHOICES.map(value => ({ value, label: this.$t('settings.general.waitingAnimationChoice.' + value) }));
     },
     yeaftSubTabs() {
       return [

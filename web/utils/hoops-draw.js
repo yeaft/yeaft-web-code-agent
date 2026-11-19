@@ -1,7 +1,7 @@
 /**
- * Canvas renderer for the waiting scene. Paints one solved play frame through
- * one camera; holds no state. Colours come from the `--hoops-*` tokens on the
- * host element so the scene follows the theme and the status tint.
+ * Canvas renderer for the basketball waiting scene. Paints one solved play
+ * frame through the camera; holds no state. Colours come from the `--hoops-*`
+ * tokens on the host element so the scene follows the theme and the status tint.
  */
 import { BALL_RADIUS, BODY, RIM } from './hoops-play.js';
 
@@ -16,6 +16,8 @@ const css = ([r, g, b]) => `rgb(${Math.round(r)}, ${Math.round(g)}, ${Math.round
 function parseColor(ctx, value, fallback) {
   if (!value) return fallback;
   // Let the canvas normalise any CSS colour syntax to #rrggbb or rgba().
+  // Alpha is ignored: the tokens are opaque in both themes, and every colour
+  // here is mixed against the surface in RGB rather than drawn translucent.
   ctx.fillStyle = '#000000';
   ctx.fillStyle = value;
   const normal = String(ctx.fillStyle);
@@ -79,10 +81,10 @@ function fillEllipse(ctx, x, y, rx, ry, color) {
 
 /**
  * @param {CanvasRenderingContext2D} ctx
- * @param {{ play: object, camera: object, width: number, height: number, dpr: number, palette: object, view: string }} frame
+ * @param {{ play: object, camera: object, width: number, height: number, dpr: number, palette: object }} frame
  *   `width`/`height` are CSS px; `dpr` scales the backing store.
  */
-export function drawHoopsFrame(ctx, { play, camera, width, height, dpr, palette, view }) {
+export function drawHoopsFrame(ctx, { play, camera, width, height, dpr, palette }) {
   const scale = camera.scale;
   const originX = width / 2 - camera.cx * scale;
   const originY = height / 2 + camera.cy * scale;
@@ -97,12 +99,6 @@ export function drawHoopsFrame(ctx, { play, camera, width, height, dpr, palette,
   ctx.clearRect(0, 0, width, height);
   ctx.lineCap = 'round';
   ctx.lineJoin = 'round';
-  ctx.save();
-  if (camera.roll) {
-    ctx.translate(width / 2, height / 2);
-    ctx.rotate(camera.roll);
-    ctx.translate(-width / 2, -height / 2);
-  }
 
   // Floor, with plank ticks so camera moves read as travel, and the arc.
   const floorY = Math.round(Y(0)) + 0.5;
@@ -237,15 +233,13 @@ export function drawHoopsFrame(ctx, { play, camera, width, height, dpr, palette,
   }
   strokePath(ctx, mids, netWidth, rig);
   strokePath(ctx, ends, netWidth, rig);
-  ctx.restore();
 
-  // Overlays stay level even when the camera rolls.
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
   if (play.pop >= 0) {
     const strength = clamp01(play.pop / 0.15) * clamp01((1 - play.pop) / 0.35) * play.fade;
     ctx.fillStyle = css(blend(palette.surface, palette.ball, strength));
-    ctx.font = `700 ${view === 'broadcast' ? 13 : 11}px ${palette.font}`;
+    ctx.font = `700 11px ${palette.font}`;
     ctx.fillText('+3', X(RIM.x - 1.6), Y(RIM.y + 1.5 + play.pop * 1.4));
   }
   if (play.doze >= 0) {
@@ -257,13 +251,5 @@ export function drawHoopsFrame(ctx, { play, camera, width, height, dpr, palette,
       ctx.font = `600 ${Math.round(Math.min(12, Math.max(7, (0.55 + 0.12 * i) * scale)))}px ${palette.font}`;
       ctx.fillText('z', X(play.hero.head.x + 0.9 + 0.55 * i + 0.25 * age), Y(play.hero.head.y + 0.6 + 0.5 * i + 0.9 * age, play.hero.z));
     }
-  }
-  if (view === 'broadcast' && play.points > 0) {
-    ctx.font = `600 11px ${palette.font}`;
-    ctx.textAlign = 'right';
-    ctx.fillStyle = css(palette.label);
-    ctx.fillText(String(play.points), width - 10, 13);
-    const textWidth = ctx.measureText(String(play.points)).width;
-    fillCircle(ctx, width - 10 - textWidth - 7, 13, 3, css(palette.ball));
   }
 }

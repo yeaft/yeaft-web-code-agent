@@ -12,7 +12,7 @@ import { OTHER_SESSION, SESSION, pane, sessionTurnsFixture } from '../../helpers
 // Run the actual browser modules, not component stubs or injected message arrays.
 test.use({ serverEnv: { YEAFT_LOCAL_RUN: 'true', SERVE_DIST: process.env.SERVE_DIST || 'false' } });
 
-// Ink on a waiting-scene canvas: the play was drawn, not merely mounted.
+// Ink on the basketball canvas: the play was drawn, not merely mounted.
 const drawnPixels = scene => scene.locator('canvas').evaluate((canvas) => {
   const { data } = canvas.getContext('2d').getImageData(0, 0, canvas.width, canvas.height);
   let count = 0;
@@ -23,37 +23,43 @@ const drawnFrame = scene => scene.locator('canvas').evaluate(canvas => canvas.to
 
 test('one native Session turn retains the ordinary transcript and merges appended tools across replay', async ({ chatPage: page, mockAgent }, info) => {
   const wire = await sessionTurnsFixture(page, mockAgent);
-  const strip = page.locator('.typing-indicator .hoops-scene-court');
-  const screen = page.locator('.yeaft-session-status-pane .hoops-scene-broadcast');
-  await expect(strip).toHaveCount(0);
-  await expect(screen).toHaveCount(0);
+  const indicator = page.locator('.typing-indicator');
+  const hoops = indicator.locator('.hoops-scene');
+  const cat = indicator.locator('.svg-running-cat');
+  const chooseWaitingAnimation = choice => page.evaluate(value => window.Pinia.useChatStore().setWaitingAnimation(value), choice);
+  // The default rotates between the candidates; pin one to assert on it.
+  await chooseWaitingAnimation('hoops');
   const turn = await wire.send('Single root question');
-  // Until text streams, the waiting scene plays under the transcript and, on
-  // the same clock, on the status-pane screen below every section.
-  for (const scene of [strip, screen]) {
-    await expect(scene).toHaveAttribute('aria-hidden', 'true');
-    await expect(scene).toHaveAttribute('data-beat', 'bringup');
-    await expect.poll(() => drawnPixels(scene)).toBeGreaterThan(200);
-  }
-  const stage = await page.locator('.yeaft-session-status-pane').evaluate((pane) => {
-    const sections = [...pane.querySelectorAll('.yeaft-session-status-section')].map(el => el.getBoundingClientRect().bottom);
-    const box = pane.querySelector('.yeaft-session-status-stage').getBoundingClientRect();
-    return { top: box.top, bottom: box.bottom, lastSection: Math.max(...sections), paneBottom: pane.getBoundingClientRect().bottom };
-  });
-  expect(stage.top).toBeGreaterThanOrEqual(stage.lastSection);
-  expect(stage.bottom).toBeLessThan(stage.paneBottom);
+  // Until text streams, the chosen waiting animation plays under the
+  // transcript, and only there.
+  await expect(hoops).toHaveAttribute('aria-hidden', 'true');
+  await expect(hoops).toHaveAttribute('data-held', 'false');
+  await expect.poll(() => drawnPixels(hoops)).toBeGreaterThan(200);
+  await expect(cat).toHaveCount(0);
+  await expect(page.locator('.yeaft-session-status-pane canvas')).toHaveCount(0);
   // Reduced motion holds one frame; without it the play moves on.
   await page.emulateMedia({ reducedMotion: 'reduce' });
-  const held = await drawnFrame(strip);
+  await expect(hoops).toHaveAttribute('data-held', 'true');
+  const held = await drawnFrame(hoops);
   await page.waitForTimeout(200);
-  expect(await drawnFrame(strip)).toBe(held);
+  expect(await drawnFrame(hoops)).toBe(held);
   await page.emulateMedia({ reducedMotion: 'no-preference' });
-  await expect.poll(() => drawnFrame(strip)).not.toBe(held);
+  await expect(hoops).toHaveAttribute('data-held', 'false');
+  await expect.poll(() => drawnFrame(hoops)).not.toBe(held);
+  // A new choice applies to the wait on screen: the cat is still a candidate,
+  // off leaves the dots alone, and random settles on exactly one candidate.
+  await chooseWaitingAnimation('cat');
+  await expect(cat).toBeVisible();
+  await expect(hoops).toHaveCount(0);
+  await chooseWaitingAnimation('off');
+  await expect(indicator).toBeVisible();
+  await expect(indicator.locator('.hoops-scene, .svg-running-cat')).toHaveCount(0);
+  await chooseWaitingAnimation('random');
+  await expect(indicator.locator('.hoops-scene, .svg-running-cat')).toHaveCount(1);
   wire.delta(turn, 'Single answer begins');
   await expect(page.locator('.assistant-turn').filter({ hasText: 'Single answer begins' })).toBeVisible();
-  // Streaming text takes over from the strip; the screen plays on while the turn executes.
-  await expect(strip).toHaveCount(0);
-  await expect(screen).toBeVisible();
+  // Streaming text takes over from the indicator.
+  await expect(indicator).toHaveCount(0);
   await expect(page.locator('.parallel-turn-tabs')).toHaveCount(0);
   wire.tool(turn, 'before-append', 'Read');
   await wire.send('Extra detail for the same turn', turn);
@@ -71,9 +77,8 @@ test('one native Session turn retains the ordinary transcript and merges appende
   await expect(page.locator('.message-user-block').filter({ hasText: 'Extra detail for the same turn' })).toHaveCount(1);
   wire.finish(turn);
   await expect(answer).not.toHaveClass(/streaming/);
-  // The play ends with the turn.
-  await expect(strip).toHaveCount(0);
-  await expect(screen).toHaveCount(0);
+  // The wait ends with the turn.
+  await expect(indicator).toHaveCount(0);
   await page.reload();
   await page.waitForFunction(id => window.Pinia?.useChatStore?.().agents.some(agent => agent.id === id && agent.status === 'ready'), mockAgent.agentId);
   await wire.open();
