@@ -151,9 +151,10 @@ export default {
     async changeScene(sceneId) {
       if (this.unavailable || !this.sceneIds.includes(sceneId)) return;
       this.closeToTrigger();
+      // Reselecting the displayed scene doesn't prove what the Agent saved.
+      if (sceneId === this.session.sceneId) return;
       this.errorKey = '';
       this.unconfirmedScene = '';
-      if (sceneId === this.session.sceneId) return;
       this.requestedScene = sceneId;
       try {
         const chat = Pinia.useChatStore();

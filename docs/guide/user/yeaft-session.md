@@ -34,7 +34,7 @@ Legacy browser-local section state is not imported into user preferences. The in
 
 ### Change the scene during a conversation
 
-If a scene change is slow, the page checks what the Agent saved before asking you to refresh. It doesn't submit the change again.
+If the page cannot confirm a scene change, refresh to check what the Agent saved before trying again. The page does not repeat the change or send a message waiting on it.
 
 Open the scene menu using the chevron next to **Attach**; the current choice is checked. On phones, **Attach** and **Scene** are above the text box, while model, effort, Stop and Send remain below it. It saves to this Session without sending a message. The scene applies to new turns; running turns continue unchanged. For example, switch from Software to Writing to turn an earlier design discussion into an announcement without starting over. A scene guides the work, not which questions you may ask. It does not change model, effort, permissions, or workspace.
 

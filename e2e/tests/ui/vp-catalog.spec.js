@@ -416,6 +416,13 @@ test('ordinary Session scenes persist through a live switch and reload without e
   const sceneError = composer.locator('.yeaft-composer-scene-error');
   await expect(sceneError).toHaveText('Scene change not confirmed. Refresh to check.', { timeout: 36_000 });
   await expect(legacyInput).toHaveValue('Keep this draft when the receipt is lost');
+  await expectScene('Investment');
+  const writesBeforeReselect = mockAgent.messages('yeaft_update_session_config').length;
+  await scene.click();
+  await sceneMenu.getByRole('option', { name: 'Investment', exact: true }).click();
+  await expect(sceneMenu).toHaveCount(0);
+  await expect(sceneError).toHaveText('Scene change not confirmed. Refresh to check.');
+  expect(mockAgent.messages('yeaft_update_session_config')).toHaveLength(writesBeforeReselect);
   expect(fixture.session()).toMatchObject({ config: { sceneId: 'frontend' } });
   expect(mockAgent.messages('yeaft_list_sessions')).toHaveLength(initialLists);
   expect(mockAgent.messages('yeaft_session_send')).toHaveLength(initialSends);
