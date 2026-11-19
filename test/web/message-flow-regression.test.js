@@ -241,6 +241,57 @@ describe('message flow regressions', () => {
     expect(rows()).toEqual([]);
   });
 
+  it('verifies a timed-out scene save against the same Agent before releasing a queued message', async () => {
+    vi.useFakeTimers();
+    const applyCrudResult = vi.fn();
+    runtimeSessionsStore.applyCrudResult = applyCrudResult;
+    runtimeSessionsStore.markPending = vi.fn();
+    try {
+      storeFactories.clear();
+      const store = useChatStore();
+      store.currentAgent = 'b';
+      store.yeaftSessionAgentById = { s: 'a' };
+      runtimeSessionsStore.sessionList = [{ id: 's', agentId: 'a', config: { sceneId: 'software' } }];
+      runtimeSessionsStore.setActive('s', 'a');
+      store.agents = ['a', 'b'].map(id => ({ id, online: true, capabilities: ['session_scenes'] }));
+      store.connectionState = 'connected';
+      store.sendWsMessage = vi.fn(() => true);
+      const frame = (agentId, event) => store.handleYeaftOutput({ agentId, event: { type: 'session_crud_result', ...event } });
+
+      const save = store.updateYeaftSessionScene('s', 'frontend', 'a');
+      const send = store.sendYeaftSessionMessage({ groupId: 's', text: 'Keep my draft' });
+      expect(store.pendingSessionSceneSelectionFor('s', 'a')).toBe('frontend');
+      await vi.advanceTimersByTimeAsync(10_000);
+      const [write, read] = store.sendWsMessage.mock.calls.map(([msg]) => msg);
+      expect(write).toMatchObject({ type: 'yeaft_update_session_config', agentId: 'a', sessionId: 's', config: { sceneId: 'frontend' } });
+      expect(read).toMatchObject({ type: 'yeaft_list_sessions', agentId: 'a' });
+      expect(read.requestId).not.toBe(write.requestId);
+      const snapshot = { requestId: read.requestId, op: 'list', ok: true,
+        sessions: [{ id: 's', config: { sceneId: 'frontend' } }] };
+      frame('b', snapshot);
+      expect(applyCrudResult).not.toHaveBeenCalled();
+      expect(store.sendWsMessage).toHaveBeenCalledTimes(2);
+      frame('a', snapshot);
+      expect(await save).toMatchObject({ ok: true, config: { sceneId: 'frontend' } });
+      await send;
+      expect(store.sendWsMessage.mock.calls.map(([msg]) => msg.type)).toEqual([
+        'yeaft_update_session_config', 'yeaft_list_sessions', 'yeaft_session_send',
+      ]);
+      expect(store.sendWsMessage.mock.lastCall[0]).toMatchObject({ agentId: 'a', sessionId: 's', text: 'Keep my draft' });
+      expect(store.pendingSessionSceneSelectionFor('s', 'a')).toBeNull();
+
+      const unconfirmed = store.updateYeaftSessionScene('s', 'writing', 'a');
+      await vi.advanceTimersByTimeAsync(10_000);
+      const confirmRead = store.sendWsMessage.mock.lastCall[0];
+      frame('a', { ...snapshot, requestId: confirmRead.requestId });
+      expect(await unconfirmed).toMatchObject({ ok: false, error: { code: 'scene_unconfirmed' } });
+    } finally {
+      delete runtimeSessionsStore.applyCrudResult;
+      delete runtimeSessionsStore.markPending;
+      vi.useRealTimers();
+    }
+  });
+
   it('previews model/effort immediately, serializes rapid changes, rolls back failures and fences owners', async () => {
     storeFactories.clear();
     const store = useChatStore();

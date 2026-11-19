@@ -97,7 +97,9 @@ const test = base.extend({
             case 'yeaft_update_session_config': {
               const { sessionId } = request;
               const config = updateSessionConfig(root, sessionId, request.config);
-              reply('update_config', { sessionId, config, session: snapshotSessions(root).find(row => row.id === sessionId) });
+              if (!agent.catalog.omitSceneReceipt) {
+                reply('update_config', { sessionId, config, session: snapshotSessions(root).find(row => row.id === sessionId) });
+              }
               return;
             }
             case 'yeaft_session_add_member': reply('add_member', { session: addMember(root, request.sessionId, request.vpId) }); break;
@@ -400,6 +402,22 @@ test('ordinary Session scenes persist through a live switch and reload without e
   await expect(statusPane).not.toContainText(/\b(VPs?|Omni|Linus|Martin)\b/i);
   await expectAnonymous(page.locator('.chat-container'));
   converted.finish(convertedTurn);
+
+  // Reproduce a committed scene whose receipt is lost: the browser must
+  // verify it from the Agent, rather than roll back or send a second write.
+  fixture.omitSceneReceipt = true;
+  const initialLists = mockAgent.messages('yeaft_list_sessions').length;
+  await scene.click();
+  await sceneMenu.getByRole('option', { name: 'Frontend', exact: true }).click();
+  await expect(scene).toHaveAttribute('aria-busy', 'true');
+  const sceneError = composer.locator('.yeaft-composer-scene-error');
+  await expect(scene).toHaveAttribute('aria-busy', 'false', { timeout: 20_000 });
+  await expectScene('Frontend');
+  await expect(sceneError).toHaveCount(0);
+  expect(fixture.session()).toMatchObject({ config: { sceneId: 'frontend' } });
+  expect(mockAgent.messages('yeaft_list_sessions')).toHaveLength(initialLists + 1);
+  expect(mockAgent.messages('yeaft_update_session_config').filter(msg => msg.config?.sceneId === 'frontend')).toHaveLength(1);
+  fixture.omitSceneReceipt = false;
 
   // Newer scenes need an Agent that advertises them. Without those capabilities
   // the menu keeps the original scenes plus the newer scene this Session uses.
