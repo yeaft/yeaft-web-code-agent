@@ -89,11 +89,13 @@ test('sidebar is one folder tree with nested folders, and its width follows poin
     const style = getComputedStyle(el);
     return `${style.opacity} ${style.pointerEvents}`;
   });
+  await page.mouse.move(900, 400); // rest: the pointer is over the content, not the sidebar
   const cdp = await page.context().newCDPSession(page);
   await cdp.send('Emulation.setTouchEmulationEnabled', { enabled: true, maxTouchPoints: 1 });
   expect(await page.evaluate(() => matchMedia('(pointer: coarse)').matches)).toBe(true);
   expect(await sydneyActionsState()).toBe('0 none');
   await cdp.send('Emulation.setTouchEmulationEnabled', { enabled: false });
+  await cdp.detach();
   await folderRow(page, 'Sydney').hover();
   await expect.poll(sydneyActionsState).toBe('1 auto');
 

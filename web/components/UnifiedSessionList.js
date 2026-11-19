@@ -1205,8 +1205,9 @@ export default {
           <span v-if="!actionsCompact">{{ $t('scheduledTasks.new') }}</span>
         </button>
         <button type="button" class="btn-ghost sidebar-primary-action sidebar-folder-create" :disabled="loading || projectCreateSubmitting" @click="createProject()" :title="$t('sidebar.projects.new')" :aria-label="$t('sidebar.projects.new')">
-          <!-- The plus breaks out of the folder's corner, as the pen does on New chat. -->
-          <svg class="sidebar-primary-action-icon" viewBox="0 0 24 24" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" d="M11.5 20H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.93a2 2 0 0 1 1.66.9l.82 1.2a2 2 0 0 0 1.66.9H20a2 2 0 0 1 2 2v3"/><path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" d="M18 14v7M14.5 17.5h7"/></svg>
+          <!-- The plus takes the folder's corner, as the pen does on New chat; its
+               arms end flush with the folder's outline. -->
+          <svg class="sidebar-primary-action-icon" viewBox="0 0 24 24" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" d="M12 20H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.93a2 2 0 0 1 1.66.9l.82 1.2a2 2 0 0 0 1.66.9H20a2 2 0 0 1 2 2v2"/><path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" d="M18.5 13v7M15 16.5h7"/></svg>
           <span v-if="!actionsCompact">{{ $t('sidebar.projects.new') }}</span>
         </button>
         <slot name="after-create">
