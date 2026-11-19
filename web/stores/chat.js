@@ -77,7 +77,7 @@ import {
 import { createPerfTraceId, recordPerfTrace, measureNextPaint } from './helpers/perfTrace.js';
 import { normalizeSessionMessageQuote } from '../utils/session-message-quote.js';
 import { markTurnResponseKinds } from '../utils/turn-response.js';
-import { normalizeWaitingAnimation, readWaitingAnimationPreference, writeWaitingAnimationPreference } from '../utils/waiting-animations.js';
+import { normalizeWaitingAnimation, readWaitingAnimationPreference, writeWaitingAnimationPreference } from '../components/waiting/index.js';
 import {
   workbenchRouteKey,
   workbenchWorkspaceGeneration,

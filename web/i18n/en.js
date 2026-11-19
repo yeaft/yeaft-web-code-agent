@@ -1054,6 +1054,7 @@ export default {
   'chat.waiting.cliExited': 'Claude process exited, refreshed, waiting for update...',
   'chat.waiting.refresh': 'Refresh',
   'chat.waiting.thinking': 'AI is thinking, please wait...',
+  'chat.waiting.stageIntro': 'Waiting',
 
   // ============ /btw Side Question ============
   'btw.placeholder': 'Ask a side question...',

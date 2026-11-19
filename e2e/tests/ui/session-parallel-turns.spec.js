@@ -12,7 +12,7 @@ import { OTHER_SESSION, SESSION, pane, sessionTurnsFixture } from '../../helpers
 // Run the actual browser modules, not component stubs or injected message arrays.
 test.use({ serverEnv: { YEAFT_LOCAL_RUN: 'true', SERVE_DIST: process.env.SERVE_DIST || 'false' } });
 
-// Ink on the basketball canvas: the play was drawn, not merely mounted.
+// Ink on a stage animation's canvas: the scene was drawn, not merely mounted.
 const drawnPixels = scene => scene.locator('canvas').evaluate((canvas) => {
   const { data } = canvas.getContext('2d').getImageData(0, 0, canvas.width, canvas.height);
   let count = 0;
@@ -26,39 +26,45 @@ test('one native Session turn shows its waiting indicator, retains the ordinary 
   const indicator = page.locator('.typing-indicator');
   const hoops = indicator.locator('.hoops-scene');
   const cat = indicator.locator('.svg-running-cat');
+  const dots = indicator.locator('> span:not(.svg-cat-walk)');
   const chooseWaitingAnimation = choice => page.evaluate(value => window.Pinia.useChatStore().setWaitingAnimation(value), choice);
-  // The default rotates between the candidates; pin one to assert on it.
+  // The default picks one at random; pin one to assert on it.
   await chooseWaitingAnimation('hoops');
   const turn = await wire.send('Single root question');
   // Until text streams, the chosen waiting animation plays under the
-  // transcript, and only there.
+  // transcript, and only there. It takes the place of the dots: the wait
+  // opens on a line of text and cuts to the scene.
   await expect(hoops).toHaveAttribute('aria-hidden', 'true');
+  await expect(hoops).toHaveClass(/is-open/);
+  await expect(hoops).toHaveClass(/is-cut/);
+  await expect(dots).toHaveCount(0);
   await expect(hoops).toHaveAttribute('data-held', 'false');
   await expect.poll(() => drawnPixels(hoops)).toBeGreaterThan(200);
   await expect(cat).toHaveCount(0);
   await expect(page.locator('.yeaft-session-status-pane canvas')).toHaveCount(0);
-  // Reduced motion holds one frame and stills the dots; without it the play moves on.
+  // Reduced motion holds one frame; without it the play moves on.
   await page.emulateMedia({ reducedMotion: 'reduce' });
   await expect(hoops).toHaveAttribute('data-held', 'true');
-  await expect(indicator.locator('> span').first()).toHaveCSS('animation-name', 'none');
   const held = await drawnFrame(hoops);
   await page.waitForTimeout(200);
   expect(await drawnFrame(hoops)).toBe(held);
   await page.emulateMedia({ reducedMotion: 'no-preference' });
   await expect(hoops).toHaveAttribute('data-held', 'false');
   await expect.poll(() => drawnFrame(hoops)).not.toBe(held);
-  // A new choice applies to the wait on screen: the cat is still a candidate,
-  // off leaves the dots alone, and random settles on exactly one candidate.
+  // A new choice applies to the wait on screen. Every animation offered in
+  // Settings plays without the dots, off leaves the dots alone, and random
+  // settles on exactly one animation.
   await chooseWaitingAnimation('cat');
   await expect(cat).toBeVisible();
-  await expect(hoops).toHaveCount(0);
+  await expect(indicator.locator('.waiting-stage')).toHaveCount(0);
+  await expect(dots).toHaveCount(0);
   await chooseWaitingAnimation('off');
-  await expect(indicator).toBeVisible();
-  await expect(indicator.locator('.hoops-scene, .svg-running-cat')).toHaveCount(0);
+  await expect(dots).toHaveCount(3);
+  await expect(indicator.locator('.waiting-stage, .svg-running-cat')).toHaveCount(0);
   await chooseWaitingAnimation('random');
-  const candidate = indicator.locator('.hoops-scene, .svg-running-cat');
+  const candidate = indicator.locator('.waiting-stage, .svg-running-cat');
   await expect(candidate).toHaveCount(1);
-  const picked = await candidate.evaluate(element => (element.classList.contains('hoops-scene') ? '.hoops-scene' : '.svg-running-cat'));
+  const picked = await candidate.evaluate(element => ['hoops-scene', 'dragon-scene', 'svg-running-cat'].map(name => '.' + name).find(selector => element.matches(selector)));
   wire.delta(turn, 'Single answer begins');
   await expect(page.locator('.assistant-turn').filter({ hasText: 'Single answer begins' })).toBeVisible();
   // Streaming text takes over from the indicator.
