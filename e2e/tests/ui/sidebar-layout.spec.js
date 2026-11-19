@@ -82,6 +82,22 @@ test('sidebar is one folder tree with nested folders, and its width follows poin
   // Folder actions overlay on hover, so a resting name is not cut short for them.
   expect(await folderRow(page, 'Parental Control').locator('.sidebar-project-name')
     .evaluate(el => el.scrollWidth <= el.clientWidth)).toBe(true);
+  // They stay hidden at rest on touch laptops too (coarse pointer, used with a mouse).
+  // Read after the opacity transition settles; a first frame of 0 proves nothing.
+  const sydneyActionsState = () => folderRow(page, 'Sydney').locator('.sidebar-folder-actions').evaluate(async el => {
+    await Promise.all(el.getAnimations().map(animation => animation.finished));
+    const style = getComputedStyle(el);
+    return `${style.opacity} ${style.pointerEvents}`;
+  });
+  await page.mouse.move(900, 400); // rest: the pointer is over the content, not the sidebar
+  const cdp = await page.context().newCDPSession(page);
+  await cdp.send('Emulation.setTouchEmulationEnabled', { enabled: true, maxTouchPoints: 1 });
+  expect(await page.evaluate(() => matchMedia('(pointer: coarse)').matches)).toBe(true);
+  expect(await sydneyActionsState()).toBe('0 none');
+  await cdp.send('Emulation.setTouchEmulationEnabled', { enabled: false });
+  await cdp.detach();
+  await folderRow(page, 'Sydney').hover();
+  await expect.poll(sydneyActionsState).toBe('1 auto');
 
   // Real Server folders: create, nest, move to the top level, drag back in, delete.
   await page.getByRole('button', { name: 'New folder' }).click();
