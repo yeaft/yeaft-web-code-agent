@@ -60,6 +60,7 @@ export default {
     const transcripts = new Map();
     const paused = new Set();
     const touchY = new Map();
+    const claimPausedPane = id => { if (paused.has(id)) emit('read-pane', id); };
     const followPane = (id, follow) => {
       if (follow) paused.delete(id);
       else {
@@ -77,6 +78,7 @@ export default {
       else {
         const body = event.currentTarget;
         if (body.scrollHeight - body.scrollTop - body.clientHeight < event.deltaY + 40) followPane(id, true);
+        else claimPausedPane(id);
       }
     };
     const touchStart = (event, id) => touchY.set(id, event.touches?.[0]?.clientY);
@@ -156,6 +158,7 @@ export default {
       const column = columnFor(id);
       if (!track || !column) return false;
       selectedId.value = id;
+      claimPausedPane(id);
       track.scrollTo({ left: column.offsetLeft - track.offsetLeft, behavior: 'instant' });
       return true;
     };

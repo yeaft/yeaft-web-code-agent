@@ -136,7 +136,7 @@ test('stopping a sibling restores the ordinary live Session transcript and compl
   const longReply = Array.from({ length: 60 }, (_, i) => `\n\nReading marker ${i}: this part of the continuous response should stay in view when the two layouts change.`).join('');
   wire.delta(a, longReply);
   const c = await wire.send('Mobile sibling');
-  wire.delta(c, 'C quick answer');
+  wire.delta(c, 'Mobile sibling response that wraps across several lines. '.repeat(64).trim());
   await expect(region.locator('.parallel-turn-pane')).toHaveCount(2);
   await expect(region.getByRole('tablist')).toBeVisible();
   await region.getByRole('tab', { name: 'Earlier long question' }).click();
@@ -147,6 +147,19 @@ test('stopping a sibling restores the ordinary live Session transcript and compl
   const priorTop = await scrollTop();
   await page.mouse.wheel(0, -600);
   await expect.poll(scrollTop).toBeLessThan(priorTop - 500);
+  const savedLaneTop = await scrollTop();
+  const siblingTab = region.getByRole('tab', { name: 'Mobile sibling' });
+  await siblingTab.click();
+  const siblingBody = pane(page, c).locator('.concurrent-turn-body');
+  const siblingTop = () => siblingBody.evaluate(node => node.scrollTop);
+  await expect.poll(siblingTop).toBeGreaterThan(240);
+  await siblingBody.hover();
+  const siblingBottom = await siblingTop();
+  await page.mouse.wheel(0, -180);
+  await expect.poll(siblingTop).toBeLessThan(siblingBottom - 120);
+  await siblingTab.press('ArrowLeft');
+  await expect(region.getByRole('tab', { name: 'Earlier long question' })).toBeFocused();
+  await expect.poll(scrollTop).toBeCloseTo(savedLaneTop, 0);
   const readingAnchor = await readingPane.evaluate(node => {
     const top = node.getBoundingClientRect().top;
     const paragraph = [...node.querySelectorAll('.turn-text > p')].find(p => p.getBoundingClientRect().bottom > top);
@@ -229,8 +242,9 @@ test('stopping a sibling restores the ordinary live Session transcript and compl
   await expect.poll(async () => (await questions()).at(-1)).toBe('Earlier long question');
   await scroller.focus();
   await scroller.press('Home');
-  await expect.poll(async () => (await questions()).slice(0, 4))
-    .toEqual(['Later quick question', 'Mobile sibling', 'Desktop reflow sibling', 'Desktop navigation sibling']);
+  await expect.poll(() => scroller.evaluate(el => el.scrollTop)).toBe(0);
+  await expect(messages.getByText('Later quick question', { exact: true })).toBeInViewport();
+  await expect.poll(async () => (await questions())[0]).toBe('Later quick question');
 });
 
 test('Delete turn from a saved supplement replays the remaining Session in both tabs', async ({ chatPage: page, context, mockAgent, serverUrl }) => {
