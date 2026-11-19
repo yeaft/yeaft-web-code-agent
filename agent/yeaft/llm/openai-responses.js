@@ -109,14 +109,22 @@ function isContentFilterStop(response, eventType) {
     && response?.incomplete_details?.reason === 'content_filter';
 }
 
-/** Filtered calls are withheld: report declared names only, never validate or dispatch them. */
-function contentFilterStop(items, wireTools) {
-  return { type: 'stop', stopReason: 'refusal', stopDetails: contentFilterStopDetails({ reason: 'content_filter',
-    calledNames: items.filter(item => item?.type === 'function_call').map(item => item.name),
+/**
+ * A filtered response either ran its strictly complete batch (`ran`) or withholds
+ * every exposed call; withheld calls report declared names only, never arguments.
+ */
+function contentFilterStop(items, wireTools, { ran = false } = {}) {
+  return { type: 'stop', stopReason: ran ? 'tool_use' : 'refusal', stopDetails: contentFilterStopDetails({ reason: 'content_filter',
+    calledNames: ran ? [] : items.filter(item => item?.type === 'function_call').map(item => item.name),
     declaredNames: (Array.isArray(wireTools) ? wireTools : []).map(tool => tool?.name) }) };
 }
 
-function projectToolCalls(items, incomplete, codecs) {
+/**
+ * @param {boolean} incomplete The response itself was truncated.
+ * @param {{ ignoreItemStatus?: boolean }} [options] A content filter marks items incomplete (llm-proxy marks
+ *   every item) without proving truncation; strict argument parsing then decides completeness.
+ */
+function projectToolCalls(items, incomplete, codecs, { ignoreItemStatus = false } = {}) {
   const calls = [];
   const ids = new Set();
   for (const item of items) {
@@ -124,7 +132,7 @@ function projectToolCalls(items, incomplete, codecs) {
     const id = validateToolCallId(item.call_id);
     if (ids.has(id)) throw new LLMToolInputError('OpenAI returned duplicate tool call identity');
     ids.add(id);
-    if (incomplete || item.status === 'incomplete') throw new LLMToolInputError('OpenAI tool response was truncated');
+    if (incomplete || (!ignoreItemStatus && item.status === 'incomplete')) throw new LLMToolInputError('OpenAI tool response was truncated');
     calls.push({ type: 'tool_call', id, name: item.name || '', input: parseToolInput(item.arguments, codecs.get(item.name)) });
   }
   return calls;
@@ -411,7 +419,12 @@ export class OpenAIResponsesAdapter extends LLMAdapter {
       if (result.status === 'failed') throw new LLMServerError('OpenAI JSON response failed', 0);
       const filtered = isContentFilterStop(result);
       let calls = [];
-      if (!filtered) try {
+      if (filtered) {
+        // Run a filtered batch only when every call parses strictly; otherwise withhold all of it.
+        try { calls = projectToolCalls(items, false, codecs, { ignoreItemStatus: true }); } catch (error) {
+          if (!(error instanceof LLMToolInputError)) throw error;
+        }
+      } else try {
         calls = projectToolCalls(items, result.status === 'incomplete', codecs);
       } catch (error) {
         if (!(error instanceof LLMToolInputError)) throw error;
@@ -429,6 +442,7 @@ export class OpenAIResponsesAdapter extends LLMAdapter {
         }
       }
       for (const call of calls) yield call;
+      // Filtered items (possibly marked incomplete) are never native replay state; run calls replay from history.
       if (!filtered && ['completed', 'incomplete'].includes(result.status)) {
         const state = createProviderState({ context, identity: requestIdentity, items, responseId: result.id, responsesArguments: responsesArgumentProjection(items, codecs) });
         if (state) yield { type: 'provider_state', providerState: state, providerStateBytes: providerStateBytes(state) };
@@ -439,7 +453,7 @@ export class OpenAIResponsesAdapter extends LLMAdapter {
         cacheTokensAreIncludedInInput: true,
               ...reasoningUsage(usage, 'openai-responses') };
       if (result.status === 'failed') throw new LLMServerError('OpenAI JSON response failed', 0);
-      yield filtered ? contentFilterStop(items, body.tools) : { type: 'stop', stopReason: this.#mapStopReason(result, false) };
+      yield filtered ? contentFilterStop(items, body.tools, { ran: calls.length > 0 }) : { type: 'stop', stopReason: this.#mapStopReason(result, false) };
       return;
     }
     const reader = response.body.getReader();
@@ -476,6 +490,9 @@ export class OpenAIResponsesAdapter extends LLMAdapter {
       toolIdSlots.set(id, index);
     };
     let toolInputError = null;
+    // Set for every tool error except an item merely marked incomplete, which a
+    // content filter verdict can still leave strictly complete.
+    let toolStructureError = false;
     let malformedStream = false;
     let sawToolCall = false;
     const completedItems = new Map();
@@ -534,11 +551,14 @@ export class OpenAIResponsesAdapter extends LLMAdapter {
             if (item?.type === 'function_call') {
               try {
                 registerToolSlot(idx, item.call_id);
-                const [call] = projectToolCalls([item], false, codecs);
+                const [call] = projectToolCalls([item], false, codecs, { ignoreItemStatus: true });
                 completeToolSlot(idx, call);
                 toolCallAccum.delete(idx);
+                // Decided at the terminal event: rejected unless a content filter ended the response.
+                if (item.status === 'incomplete') toolInputError = new LLMToolInputError('OpenAI tool response was truncated');
               } catch (error) {
                 toolInputError = error;
+                toolStructureError = true;
               }
             }
             if (Number.isSafeInteger(idx) && idx >= 0 && item) completedItems.set(idx, item);
@@ -555,6 +575,7 @@ export class OpenAIResponsesAdapter extends LLMAdapter {
                 });
               } catch (error) {
                 toolInputError = error;
+                toolStructureError = true;
               }
             }
           } else if (type === 'response.output_text.delta') {
@@ -567,6 +588,7 @@ export class OpenAIResponsesAdapter extends LLMAdapter {
             const accum = toolCallAccum.get(idx);
             if (!accum || typeof event.delta !== 'string') {
               toolInputError = new LLMToolInputError('OpenAI returned invalid or incomplete tool input');
+              toolStructureError = true;
             } else if (event.delta.length > 0) {
               accum.arguments += event.delta;
               yield { type: 'provider_activity' };
@@ -589,6 +611,7 @@ export class OpenAIResponsesAdapter extends LLMAdapter {
             } catch (error) {
               // Drain through final usage before rejecting every sibling.
               toolInputError = error;
+              toolStructureError = true;
             }
             toolCallAccum.delete(idx);
           } else if (type === 'response.completed' || type === 'response.incomplete') {
@@ -647,6 +670,29 @@ export class OpenAIResponsesAdapter extends LLMAdapter {
             };
 
             if (filtered) {
+              // A filter verdict judges generated content, not whether a delivered call may run.
+              // Run the batch only when every exposed call is strictly complete: no lost delta,
+              // no structural error, no arguments in flight and a consistent terminal projection.
+              // A bare terminal projection with no streamed call is deliberately not taken as proof.
+              let runnable = !malformedStream && !toolStructureError && toolCallAccum.size === 0 && completedToolCalls.size > 0;
+              if (runnable) try {
+                const toolSlots = outputSlots.filter(([, item]) => item?.type === 'function_call');
+                const calls = projectToolCalls(outputArr, false, codecs, { ignoreItemStatus: true });
+                for (const [idx, item] of toolSlots) registerToolSlot(idx, item.call_id);
+                calls.forEach((call, i) => completeToolSlot(toolSlots[i][0], call));
+              } catch (error) {
+                if (!(error instanceof LLMToolInputError)) throw error;
+                runnable = false;
+              }
+              if (runnable) {
+                // Filtered items are never native replay state; run calls replay from history.
+                for (const [, call] of [...completedToolCalls].sort(([a], [b]) => a - b)) {
+                  sawToolCall = true;
+                  yield call;
+                }
+                yield contentFilterStop([], body.tools, { ran: true });
+                return;
+              }
               // Count each exposed call once. Stream slots use output_index while the
               // terminal projection may omit siblings, so merge by call_id, not position.
               const withheld = new Map();

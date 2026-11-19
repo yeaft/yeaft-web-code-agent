@@ -63,7 +63,7 @@ describe('native Gemini adapter', () => {
     expect(events.at(-1)).toEqual({ type: 'stop', stopReason: 'end_turn' });
   });
 
-  it('rejects invalid, malformed, truncated or unfinished batches and withholds filtered calls without publishing tools', async () => {
+  it('rejects invalid, malformed, truncated or unfinished batches, runs complete filtered calls and withholds invalid ones', async () => {
     const valid = { functionCall: { name: 'read', args: {} } };
     const responses = [
       () => sse([candidate([valid, { functionCall: { name: 'read', args: '{bad' } }])]),
@@ -80,12 +80,18 @@ describe('native Gemini adapter', () => {
     }
     global.fetch = vi.fn(async () => json(candidate([{ functionCall: { name: 'read', args: [] } }])));
     await expect(adapter().call(params)).rejects.toBeInstanceOf(LLMToolInputError);
-    // Filter stops never echo provider-chosen names or arguments for undeclared functions.
-    global.fetch = vi.fn(async () => sse([candidate([{ functionCall: { name: '<img src=x>', args: { token: 'filtered' } } }], 'SAFETY')]));
+    // A response filter verdict alone does not withhold a complete call: it runs and the verdict is recorded.
+    global.fetch = vi.fn(async () => sse([candidate([{ functionCall: { id: 'call-safe', name: 'read', args: { path: 'a' } } }], 'SAFETY')]));
+    const ran = await collect(adapter().stream(params));
+    expect(ran.filter(e => e.type === 'tool_call')).toEqual([{ type: 'tool_call', id: 'call-safe', name: 'read', input: { path: 'a' } }]);
+    expect(ran.at(-1)).toEqual({ type: 'stop', stopReason: 'tool_use', stopDetails: { type: 'content_filter', reason: 'SAFETY',
+      blocked: 'response', withheldToolCalls: 0 } });
+    // An invalid filtered batch is withheld whole, never echoing provider-chosen names or arguments of undeclared functions.
+    global.fetch = vi.fn(async () => sse([candidate([valid, { functionCall: { name: '<img src=x>', args: ['filtered'] } }], 'SAFETY')]));
     const filtered = await collect(adapter().stream(params));
     expect(filtered.some(e => e.type === 'tool_call')).toBe(false);
     expect(filtered.at(-1)).toEqual({ type: 'stop', stopReason: 'refusal', stopDetails: { type: 'content_filter', reason: 'SAFETY',
-      blocked: 'response', withheldToolCalls: 1, withheldTools: ['undeclared tool'] } });
+      blocked: 'response', withheldToolCalls: 2, withheldTools: ['undeclared tool'] } });
     global.fetch = vi.fn(async () => sse([{ promptFeedback: { blockReason: 'PROHIBITED_CONTENT' } }]));
     expect((await collect(adapter().stream(params))).at(-1)).toEqual({ type: 'stop', stopReason: 'refusal',
       stopDetails: { type: 'content_filter', reason: 'PROHIBITED_CONTENT', blocked: 'prompt', withheldToolCalls: 0 } });
