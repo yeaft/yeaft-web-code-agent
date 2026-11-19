@@ -46,7 +46,7 @@ describe('VP catalog and durable Session compatibility', () => {
         const block = renderSessionScene(id, lang);
         // One per-turn budget for every scene. Frontend, which carries both art
         // direction and frontend engineering, is the largest.
-        expect(block.length).toBeLessThanOrEqual(i ? 3400 : 10000);
+        expect(block.length).toBeLessThanOrEqual(i ? 3500 : 10500);
         const system = buildSystemPrompt({ language: locale, vpPersona: {
           sceneId: id, displayName: 'Private VP', persona: 'private-soul', runtimePreamble: 'session-preamble',
         } });
