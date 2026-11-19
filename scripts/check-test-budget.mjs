@@ -225,6 +225,8 @@ import { CORE_TEST_FILES, E2E_TEST_FILES, REVIEWED_TEST_FILES, isTestFile, norma
 // +4 cases: legacy overlap, stale/late compaction, offline Session reopen and mixed-version UI.
 // +1 refusal of an unowned legacy execution that begins after a later input.
 // +1 message allocator recovery after offline pruning of Markdown-only history.
+// +1 Session scene catalog: newer scenes appear only on Agents that advertise them,
+// with the Web and Agent catalogs in step; existing scene cases cover all eight scenes.
 export const TEST_CASE_LIMIT = 1200;
 
 function walkFiles(directory) {

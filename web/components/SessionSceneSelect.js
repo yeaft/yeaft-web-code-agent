@@ -1,4 +1,27 @@
-export const SESSION_SCENE_IDS = Object.freeze(['general', 'software', 'writing', 'short-video', 'investment']);
+// Menu order. Mirrors agent/yeaft/sessions/scene-ids.js; 'short-video' is the
+// stored ID of the content creation scene.
+export const SESSION_SCENE_IDS = Object.freeze([
+  'general', 'software', 'frontend', 'writing', 'short-video', 'video-editing',
+  'primary-education', 'investment',
+]);
+
+// Scenes added after the original five are offered only when the Agent
+// advertises them, so an older Agent never receives a scene it would reject.
+export const SESSION_SCENE_CAPABILITIES = Object.freeze({
+  frontend: 'session_scene_frontend',
+  'video-editing': 'session_scene_video_editing',
+  'primary-education': 'session_scene_primary_education',
+});
+
+/**
+ * Scenes an Agent can run, in menu order.
+ * @param {(capability: string) => boolean|undefined} hasCapability
+ * @returns {string[]}
+ */
+export function sessionScenesForAgent(hasCapability) {
+  return SESSION_SCENE_IDS.filter(sceneId => !SESSION_SCENE_CAPABILITIES[sceneId]
+    || hasCapability(SESSION_SCENE_CAPABILITIES[sceneId]) === true);
+}
 
 const LEGACY_SCENES = new Map([
   ['omni', 'general'],
@@ -27,9 +50,13 @@ export default {
     return { listboxId: `session-scene-${Vue.useId()}` };
   },
   data() {
-    return { localOpen: false, requestedScene: '', error: false, sceneIds: SESSION_SCENE_IDS };
+    return { localOpen: false, requestedScene: '', error: false };
   },
   computed: {
+    sceneIds() {
+      const chat = Pinia.useChatStore();
+      return sessionScenesForAgent(capability => chat.hasAgentCapability?.(this.agentId, capability));
+    },
     pendingScene() {
       return this.requestedScene || Pinia.useChatStore().pendingSessionSceneSelectionFor?.(this.session.id, this.agentId) || '';
     },

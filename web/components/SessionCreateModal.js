@@ -1,6 +1,6 @@
 import ScheduledTaskEditor, { newScheduledTask } from './ScheduledTaskEditor.js';
 import FolderPickerDialog from './FolderPickerDialog.js';
-import { SESSION_SCENE_IDS } from './SessionSceneSelect.js';
+import { sessionScenesForAgent } from './SessionSceneSelect.js';
 /**
  * SessionCreateModal — chat-style "new session" modal.
  *
@@ -404,7 +404,6 @@ export default {
   `,
   data() {
     return {
-      sceneIds: SESSION_SCENE_IDS,
       taskDraft: newScheduledTask(),
       taskValid: false,
       form: {
@@ -478,6 +477,9 @@ export default {
     },
     isYeaftProvider() { return this.form.provider === 'yeaft'; },
     supportsSessionScenes() { return this.chat?.hasAgentCapability?.(this.form.agentId, 'session_scenes') !== false; },
+    sceneIds() {
+      return sessionScenesForAgent(capability => this.chat?.hasAgentCapability?.(this.form.agentId, capability));
+    },
     vpSnapshot() {
       const store = this.vpStore;
       return store?.snapshotForAgent ? store.snapshotForAgent(this.form.agentId) : store;
@@ -707,6 +709,8 @@ export default {
   },
   watch: {
     supportsSessionScenes(supported) { if (!supported) this.form.sceneId = 'general'; },
+    // Switching to an Agent without the chosen scene falls back to General.
+    sceneIds(ids) { if (!ids.includes(this.form.sceneId)) this.form.sceneId = 'general'; },
     folderPickerAgentId() { this.closeFolderPicker(); this.form.model = ''; this.form.modelEffort = ''; },
     taskSelectableEfforts(options) {
       if (!options.includes(this.form.modelEffort)) this.form.modelEffort = '';

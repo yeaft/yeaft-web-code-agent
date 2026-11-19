@@ -5,6 +5,7 @@ import { flushPromises, mount } from '@vue/test-utils';
 import { buildVpDomainSections, isLegacyVp, RECOMMENDED_VP_IDS, selectVpCatalog } from '../../web/utils/vp-domains.js';
 import { buildVpMentionSections, filterVpMentions, selectMentionCandidates } from '../../web/components/VpMentionAutocomplete.js';
 import { STOCK_VP_IDS } from '../../agent/yeaft/vp/stock-ids.js';
+import * as agentScenes from '../../agent/yeaft/sessions/scene-ids.js';
 import en from '../../web/i18n/en.js';
 import zh from '../../web/i18n/zh-CN.js';
 
@@ -25,7 +26,9 @@ const { useSessionsStore } = await import('../../web/stores/sessions.js');
 const { useChatStore } = await import('../../web/stores/chat.js');
 const { useAuthStore } = await import('../../web/stores/auth.js');
 const { default: VpCrudPanel } = await import('../../web/components/VpCrudPanel.js');
-const { default: SessionSceneSelect } = await import('../../web/components/SessionSceneSelect.js');
+const {
+  default: SessionSceneSelect, SESSION_SCENE_CAPABILITIES, SESSION_SCENE_IDS,
+} = await import('../../web/components/SessionSceneSelect.js');
 const { default: SessionCreateModal } = await import('../../web/components/SessionCreateModal.js');
 const { default: SessionSettingsModal } = await import('../../web/components/SessionSettingsModal.js');
 const { default: ChatInput } = await import('../../web/components/ChatInput.js');
@@ -117,6 +120,46 @@ describe('Scenario VP catalog compatibility', () => {
     expect(chat.createYeaftSession).toHaveBeenCalledWith({
       agentId: 'b', sceneId: 'short-video', workDir: '', displayName: en['yeaft.session.create.untitled'],
     });
+  });
+
+  it('offers newer scenes only on Agents that advertise them, in step with the Agent catalog', async () => {
+    expect(SESSION_SCENE_IDS).toEqual(agentScenes.SESSION_SCENE_IDS);
+    expect(SESSION_SCENE_CAPABILITIES).toEqual(agentScenes.SESSION_SCENE_CAPABILITIES);
+    for (const sceneId of SESSION_SCENE_IDS) {
+      expect(en[`yeaft.session.scene.${sceneId}`]).toBeTruthy();
+      expect(zh[`yeaft.session.scene.${sceneId}`]).toBeTruthy();
+    }
+    // Agent b is current; Agent a predates the newer scenes.
+    const original = ['general', 'software', 'writing', 'short-video', 'investment'];
+    const advertised = new Set(Object.values(SESSION_SCENE_CAPABILITIES));
+    chat.hasAgentCapability = (agentId, capability) => capability === 'session_scenes'
+      || (agentId === 'b' && advertised.has(capability));
+    render(SessionSceneSelect, { session: Vue.reactive({ id: 'legacy', sceneId: 'general' }), agentId: 'b', open: true });
+    const listed = () => wrapper.findAll('[role="option"]').map(row => row.attributes('data-scene-id'));
+    expect(listed()).toEqual(SESSION_SCENE_IDS);
+    await wrapper.setProps({ agentId: 'a' });
+    expect(listed()).toEqual(original);
+    wrapper.unmount();
+
+    render(SessionCreateModal, { initialAgentId: 'b' });
+    const scene = document.querySelector('.yeaft-create-scene-select');
+    const offered = () => [...scene.options].map(option => option.value);
+    const choose = async sceneId => {
+      scene.value = sceneId;
+      scene.dispatchEvent(new Event('change', { bubbles: true }));
+      await Vue.nextTick();
+    };
+    expect(offered()).toEqual(SESSION_SCENE_IDS);
+    await choose('primary-education');
+    wrapper.vm.form.agentId = 'a';
+    await flushPromises();
+    expect(offered()).toEqual(original);
+    expect(wrapper.vm.form.sceneId).toBe('general');
+    wrapper.vm.form.agentId = 'b';
+    await flushPromises();
+    await choose('primary-education');
+    await wrapper.vm.onSubmit();
+    expect(chat.createYeaftSession).toHaveBeenCalledWith(expect.objectContaining({ agentId: 'b', sceneId: 'primary-education' }));
   });
 
   it('opens resumed or restored native Sessions from a vendor view on the owning Agent', async () => {

@@ -6,6 +6,7 @@ import { test as base, TestServer, getAvailablePort, useTestServer, useMockAgent
 import { MockAgent } from '../../fixtures/mock-agent.js';
 import { pane, sessionTurnWire } from '../../helpers/session-turns.js';
 import { sessionConfigPath } from '../../../agent/yeaft/sessions/session-config.js';
+import { SESSION_SCENE_CAPABILITIES } from '../../../agent/yeaft/sessions/scene-ids.js';
 import { seedDefaultVps } from '../../../agent/yeaft/vp/seed-defaults.js';
 import { createVp } from '../../../agent/yeaft/vp/vp-crud.js';
 import { scanVpLibrary } from '../../../agent/yeaft/vp/vp-store.js';
@@ -113,6 +114,7 @@ const test = base.extend({
       await useMockAgent(agent, async () => {
         agent.send({ type: 'agent_capabilities_updated', capabilities: [
           'plaintext-ok', 'work_center', 'workbench_session_routes', 'scheduled_tasks', 'session_scenes',
+          ...Object.values(SESSION_SCENE_CAPABILITIES),
         ] });
         await use(agent);
       });
@@ -376,6 +378,9 @@ test('ordinary Session scenes persist through a live switch and reload without e
   await expect(software).toBeFocused();
   await expect(software).toHaveAttribute('aria-selected', 'true');
   await expect(software.locator('.yeaft-model-check')).toHaveText('✓');
+  await expect(sceneMenu.locator('.yeaft-model-option-label')).toHaveText([
+    'General', 'Software', 'Frontend', 'Writing', 'Content creation', 'Video editing', 'Primary education', 'Investment',
+  ]);
   await expectWithinViewport(sceneMenu, page);
   await software.press('Escape');
   await expect(sceneMenu).toHaveCount(0);
@@ -405,6 +410,9 @@ test('ordinary Session scenes persist through a live switch and reload without e
 
   await scene.press('ArrowDown');
   await software.press('ArrowDown');
+  const frontend = sceneMenu.getByRole('option', { name: 'Frontend', exact: true });
+  await expect(frontend).toBeFocused();
+  await frontend.press('ArrowDown');
   const writing = sceneMenu.getByRole('option', { name: 'Writing', exact: true });
   await expect(writing).toBeFocused();
   await writing.press('Enter');
