@@ -35,7 +35,7 @@ import {
 import { copyPersistedSessionAttachments, readPersistedAttachmentFile, persistYeaftAttachments, MAX_TOTAL_BYTES } from '../attachments.js';
 import { markConversationDirty } from './history-index-state.js';
 import { planTurnDeletion } from './delete-turn.js';
-import { commitSessionTurnDeletion, readSessionTurnDeletions, sessionDeletionProjection } from './turn-deletion-journal.js';
+import { commitSessionTurnDeletion, readSessionTurnDeletions, readSessionTurnDeletionsAt, SESSION_TURN_DELETION_FILE, sessionDeletionProjection } from './turn-deletion-journal.js';
 import { historyError, isHumanRequest, messageOrigin, planSessionMerge, materializeSessionMerge, materializeSessionCopy, sessionCopyOrigins } from './session-history.js';
 
 /**
@@ -2310,6 +2310,9 @@ export class ConversationStore {
   pruneDeletedSessionTurnRows(sessionId) {
     const { operations } = readSessionTurnDeletions(this.#dir, sessionId);
     if (!operations.length) return;
+    // Pin the high-water mark before unlinking the only durable copy of a
+    // legacy row. A failed reservation leaves every source file untouched.
+    this.#reserveSeqRange(1, { verifyAll: true });
     const projection = sessionDeletionProjection(operations);
     this.#segmentStoreForConversationDir(this.#sessionConversationDir(sessionId)).pruneTurnRows(sessionId, projection);
     for (const entry of this.#sessionFileEntries('all', sessionId)) {
@@ -3890,6 +3893,15 @@ export class ConversationStore {
    */
   #scanNextSeq({ verifyRows = false } = {}) {
     let maxSeq = 0;
+    // Deleted row IDs still participate in allocation, even after pruning
+    // or a restore that lost the allocator sidecar. Never resurrect one as
+    // the ID of an unrelated row (which the journal would then hide).
+    for (const dir of this.#sessionConversationDirs()) {
+      const { operations } = readSessionTurnDeletionsAt(join(dir, SESSION_TURN_DELETION_FILE));
+      for (const op of operations) {
+        for (const id of op.messageIds) maxSeq = Math.max(maxSeq, parseSeqFromId(id) || 0);
+      }
+    }
     for (const dir of [this.#chatDir, ...this.#chatConversationDirs(), ...this.#sessionConversationDirs({ primaryOnly: true })]) {
       const store = this.#segmentStoreForConversationDir(dir);
       if (store.hasData()) {
@@ -3923,15 +3935,16 @@ export class ConversationStore {
    * neither a cache epoch nor a scan can fence already in-flight writers.
    *
    * @param {number} count
+   * @param {{verifyAll?: boolean}} [options] Refresh the durable fence before offline pruning.
    * @returns {number} first reserved sequence
    */
-  #reserveSeqRange(count) {
+  #reserveSeqRange(count, { verifyAll = false } = {}) {
     const size = Math.max(1, Math.floor(Number(count) || 1));
     if (!Number.isSafeInteger(size)) throw new Error('Invalid conversation message id reservation');
     const rootKey = resolve(this.#dir);
     const sequencePath = join(this.#dir, MESSAGE_SEQUENCE_FILE);
     const cached = messageSequenceReservations.get(rootKey);
-    if (cached && cached.next + size <= cached.end) {
+    if (!verifyAll && cached && cached.next + size <= cached.end) {
       try {
         const recorded = JSON.parse(readFileSync(sequencePath, 'utf8'));
         const durableNext = Number(recorded?.nextSeq);
@@ -3945,8 +3958,8 @@ export class ConversationStore {
           return firstSeq;
         }
       } catch {}
-      messageSequenceReservations.delete(rootKey);
     }
+    messageSequenceReservations.delete(rootKey);
 
     // Small realtime appends amortize the cross-process lock and sidecar fsync.
     // Large transcript copies reserve exactly what they need to avoid stranding
@@ -3973,10 +3986,10 @@ export class ConversationStore {
         }
         // A syntactically valid sidecar can still be stale after a partial restore
         // or crash. Never trust it below the durable transcript high-water mark.
-        const scannedNext = this.#scanNextSeq({ verifyRows: !transcriptIdsVerified });
+        const scannedNext = this.#scanNextSeq({ verifyRows: verifyAll || !transcriptIdsVerified });
         const firstSeq = Math.max(recordedNext || 1, scannedNext);
         if (!Number.isSafeInteger(firstSeq + durableSize)) throw new Error('Conversation message id sequence exhausted');
-        epoch ||= randomUUID();
+        if (verifyAll || !epoch) epoch = randomUUID();
         writeAtomic(sequencePath, `${JSON.stringify({ version: 1, epoch, transcriptIdsVerified: true, nextSeq: firstSeq + durableSize })}\n`, { mode: 0o600 });
         messageSequenceReservations.set(rootKey, {
           epoch,

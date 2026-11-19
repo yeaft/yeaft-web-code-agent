@@ -658,4 +658,26 @@ describe('Session turn deletion', () => {
     expect(store.loadAllBySession(sessionId).map(row => row.id)).toEqual([a.id, b.id, lateA.id, lastB.id]);
   });
 
+  it('reserves deleted Markdown IDs durably before prune and recovers them without the sequence sidecar', () => {
+    const sessionId = 'session_markdown_prune';
+    const store = new ConversationStore(TEST_DIR);
+    const dir = join(TEST_DIR, 'sessions', sessionId, 'conversation', 'messages');
+    mkdirSync(dir, { recursive: true });
+    const old = join(dir, 'm0100.md');
+    writeFileSync(old, `---\nid: m0100\nrole: user\nsessionId: ${sessionId}\n---\n\nOld Markdown prompt`);
+    const sequencePath = join(TEST_DIR, 'message-sequence.json');
+    expect(existsSync(sequencePath)).toBe(false);
+    store.deleteSessionTurn(sessionId, 'm0100');
+    store.pruneDeletedSessionTurnRows(sessionId);
+    expect(existsSync(old)).toBe(false);
+    expect(JSON.parse(readFileSync(sequencePath, 'utf8')).nextSeq).toBeGreaterThan(100);
+    rmSync(sequencePath);
+    const reopened = new ConversationStore(TEST_DIR);
+    const kept = reopened.append({ sessionId, role: 'user', content: 'New unrelated prompt' });
+    expect(kept.seq).toBeGreaterThan(100);
+    reopened.pruneDeletedSessionTurnRows(sessionId);
+    expect(new ConversationStore(TEST_DIR).loadAllBySession(sessionId).map(row => [row.id, row.content]))
+      .toEqual([[kept.id, 'New unrelated prompt']]);
+  });
+
 });

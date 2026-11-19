@@ -1,5 +1,5 @@
 import { afterEach, expect, it } from 'vitest';
-import { mkdtempSync, rmSync, readdirSync, readFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import ctx from '../../../agent/context.js';
@@ -11,7 +11,7 @@ import { DebugTrace, NullTrace } from '../../../agent/yeaft/debug-trace.js';
 import { seedDefaultVps } from '../../../agent/yeaft/vp/seed-defaults.js';
 import { createSessionFromSpec, snapshotSessions } from '../../../agent/yeaft/sessions/session-crud.js';
 import { openSession } from '../../../agent/yeaft/sessions/session-store.js';
-import { confirmSessionTurnDeletionCutover, isSessionTurnDeletionCutoverConfirmed } from '../../../agent/yeaft/sessions/session-turn-cutover.js';
+import { SESSION_TURN_CUTOVER_ARG, sessionTurnDeletionCutoverRoots, isSessionTurnDeletionCutoverConfirmed } from '../../../agent/yeaft/sessions/session-turn-cutover.js';
 import { pruneDeletedSessionTurnsOffline } from '../../../agent/yeaft/cli.js';
 import { ToolRegistry } from '../../../agent/yeaft/tools/registry.js';
 
@@ -424,8 +424,17 @@ it('deletes a finished Session input, coordinator audit and raw loops, and exclu
   await handleMessage({ type: 'session_turn_delete_authorized', ...deletion, oldReadersStopped: true });
   expect(latestAck()).toMatchObject({ ok: false, errorCode: 'turn_deletion_cutover_required' });
   expect(store.loadAllBySession(sessionId).some(message => message.id === row.id)).toBe(true);
-  expect(() => confirmSessionTurnDeletionCutover(root)).toThrow('legacy readers');
-  confirmSessionTurnDeletionCutover(root, { oldReadersStopped: true });
+  // Neither a browser payload nor an on-disk marker in a Workbench-writable
+  // directory authorizes deletion. Only the Agent's startup roots do.
+  writeFileSync(join(root, 'session-turn-deletion-cutover.json'), JSON.stringify({
+    root, version: 1, minimumReader: 'session-turn-deletion-journal',
+  }));
+  await handleMessage({ type: 'session_turn_delete_authorized', ...deletion, sessionTurnDeletionCutoverRoots: [root] });
+  expect(latestAck()).toMatchObject({ ok: false, errorCode: 'turn_deletion_cutover_required' });
+  expect(sessionTurnDeletionCutoverRoots(['--secret', SESSION_TURN_CUTOVER_ARG, root])).toEqual([]);
+  expect(() => sessionTurnDeletionCutoverRoots([SESSION_TURN_CUTOVER_ARG, 'relative'])).toThrow('absolute');
+  ctx.CONFIG.sessionTurnDeletionCutoverRoots = sessionTurnDeletionCutoverRoots([SESSION_TURN_CUTOVER_ARG, root]);
+  expect(isSessionTurnDeletionCutoverConfirmed(root, ctx.CONFIG.sessionTurnDeletionCutoverRoots)).toBe(true);
   await handleMessage({ type: 'session_turn_delete_authorized', ...deletion });
   expect(latestAck()).toMatchObject({ ok: false, errorCode: 'session_running' });
   gate.resolve();

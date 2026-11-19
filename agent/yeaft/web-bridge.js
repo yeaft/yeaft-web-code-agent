@@ -4416,7 +4416,8 @@ export async function handleYeaftDeleteTurn(msg = {}) {
     const meta = loadSessionMeta(sessionDir);
     if (!meta || meta.id !== sessionId) throw historyError('session_not_found', 'Session not found.');
     if (meta.task) throw historyError('unsupported_session', 'Scheduled-task Session history cannot be deleted here.');
-    if (!isSessionTurnDeletionCutoverConfirmed(root) || !isSessionTurnDeletionCutoverConfirmed(ownerRoot)) {
+    const cutoverRoots = ctx.CONFIG?.sessionTurnDeletionCutoverRoots;
+    if (!isSessionTurnDeletionCutoverConfirmed(root, cutoverRoots) || !isSessionTurnDeletionCutoverConfirmed(ownerRoot, cutoverRoots)) {
       throw historyError('turn_deletion_cutover_required', 'Turn deletion requires an offline upgrade of all readers of the Session data root.');
     }
     if (turnDeletionsInProgress.has(sessionId) || sessionHasActiveWork(sessionId)

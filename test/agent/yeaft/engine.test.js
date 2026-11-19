@@ -138,7 +138,9 @@ describe('Engine', () => {
         const engine = new Engine({ adapter: mockAdapter, trace, conversationStore, yeaftDir,
           config: { model: 'test-model', modelInfo: { contextWindow: 50000, maxOutput: 1024 }, maxOutputTokens: 1024 } });
         const run = async (target, prompt) => {
-          for await (const event of target.query({ sessionId, senderVpId: 'omni', prompt })) {
+          const user = conversationStore.append({ sessionId, role: 'user', content: prompt, userAuthored: true });
+          for await (const event of target.query({ sessionId, senderVpId: 'omni', prompt,
+            userAlreadyPersisted: true, currentUserMessage: user, causalRootId: user.id })) {
             expect(event.type).not.toBe('error');
           }
         };
@@ -1768,6 +1770,7 @@ RELEASE_BODY`;
           }));
       } finally {
         globalThis.fetch = routerFetch;
+        await closeConversationHistoryIndexes();
         rmSync(routerDir, { recursive: true, force: true });
       }
 
@@ -1821,6 +1824,7 @@ RELEASE_BODY`;
           }),
         ]);
       } finally {
+        await closeConversationHistoryIndexes();
         rmSync(boundaryDir, { recursive: true, force: true });
       }
       const errorDir = mkdtempSync(join(tmpdir(), 'yeaft-engine-retry-final-partial-'));
@@ -1870,6 +1874,7 @@ RELEASE_BODY`;
           }),
         ]);
       } finally {
+        await closeConversationHistoryIndexes();
         rmSync(errorDir, { recursive: true, force: true });
       }
     });

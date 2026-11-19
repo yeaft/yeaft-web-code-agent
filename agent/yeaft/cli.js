@@ -39,7 +39,6 @@ import { ConversationStore } from './conversation/persist.js';
 import { readSessionTurnDeletions } from './conversation/turn-deletion-journal.js';
 import { removeConversationIndexScope } from './conversation/history-index-state.js';
 import { tryAcquireSessionTurnDeletion } from './sessions/session-turn-fence.js';
-import { confirmSessionTurnDeletionCutover } from './sessions/session-turn-cutover.js';
 import { sessionsRoot, snapshotSessions, findExistingSessionYeaftDir } from './sessions/session-crud.js';
 import { loadSessionConfig, resolveSessionConfig } from './sessions/session-config.js';
 import { createSession, loadSessionMeta, pruneDeletedCoordinatorMessages } from './sessions/session-store.js';
@@ -81,7 +80,6 @@ export function parseArgs(argv) {
     compactOrphans: false,
     compactOrphansDry: false,
     pruneDeletedSessionTurnsOffline: null,
-    confirmSessionTurnDeletionCutover: false,
     deleteSession: null,
     sessionId: null,
     workDir: null,
@@ -159,9 +157,6 @@ export function parseArgs(argv) {
         break;
       case '--compact-orphans-dry':
         args.compactOrphansDry = true;
-        break;
-      case '--confirm-offline-turn-deletion-cutover':
-        args.confirmSessionTurnDeletionCutover = true;
         break;
       case '--prune-deleted-session-turns-offline':
         args.pruneDeletedSessionTurnsOffline = rest[++i] || '';
@@ -1398,12 +1393,6 @@ export async function pruneDeletedSessionTurnsOffline(yeaftDir, sessionId) {
 
 async function main() {
   const args = parseArgs(process.argv);
-  if (args.confirmSessionTurnDeletionCutover) {
-    if (!process.env.YEAFT_DIR) throw new Error('Set YEAFT_DIR explicitly to the data root you have taken offline.');
-    confirmSessionTurnDeletionCutover(process.env.YEAFT_DIR, { oldReadersStopped: true });
-    console.log('Turn deletion cutover confirmed for this Yeaft data root. Use only updated readers.');
-    return;
-  }
   if (args.pruneDeletedSessionTurnsOffline !== null) {
     const count = await pruneDeletedSessionTurnsOffline(loadConfig().dir, args.pruneDeletedSessionTurnsOffline);
     console.log(`Pruned stored records for ${count} deleted Session turn(s).`);
@@ -1517,7 +1506,6 @@ async function main() {
   console.log('  node cli.js --trace recent            — Recent turns');
   console.log('  node cli.js --trace search "keyword"  — Search traces');
   console.log('  node cli.js --compact-orphans         — Delete orphan messages (no live group)');
-  console.log('  YEAFT_DIR=<path> node cli.js --confirm-offline-turn-deletion-cutover — Enable after upgrading and stopping all old readers');
   console.log('  node cli.js --prune-deleted-session-turns-offline <sessionId> — Remove already-deleted records after stopping ALL writers');
   console.log('  node cli.js --compact-orphans-dry     — Preview orphan sweep, no delete');
   console.log('  node cli.js --delete-group <id>       — Hard delete group + cascade messages');

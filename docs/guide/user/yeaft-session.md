@@ -46,7 +46,7 @@ Existing Sessions keep their complete messages, membership, and custom definitio
 
 ## 删除对话轮次
 
-轮次删除默认关闭。启用前，管理员须备份数据，停止此目录的所有 Agent、CLI 和维护进程，升级所有会读取该目录的程序（不再让旧版本访问），然后在离线状态用新版执行 `YEAFT_DIR=/path/to/data node agent/yeaft/cli.js --confirm-offline-turn-deletion-cutover`。重启新版 Agent 后入口才可用；独立存放的历史目录也需要单独确认。旧版不会识别删除标记，不能在同一数据目录混用；如果需要回滚，请使用隔离的数据目录，不要让旧版读取已启用删除的目录。
+轮次删除默认关闭。管理员须先备份并停掉这个数据目录的所有 Agent、CLI 和维护进程，升级所有会读取该目录的程序，再在 **Agent 启动命令**中加入 `--session-turn-deletion-cutover /absolute/data/dir`（例如 `yeaft-agent --yeaft-dir /absolute/data/dir --session-turn-deletion-cutover /absolute/data/dir`，其余连接参数保持原样）。独立存放的历史目录可重复传这个参数。只改磁盘上的配置或使用 Web 工作台不能开启正在运行的 Agent 的删除能力。旧版不会识别删除标记，同一数据目录不能再交给旧版；如需回滚，使用隔离的数据目录。
 
 在原生 Yeaft Session 空闲时，会话所有者可以在自己发送的消息下选择 **删除轮次** 并确认。选择原始提问或任意一条补充消息，删除的都是整个 Turn：所有用户输入、VP 回复、模型 Loop 及工具调用和返回结果。无法安全确定归属的旧记录不会删除。
 

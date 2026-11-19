@@ -13,6 +13,7 @@ import { readFileSync, mkdirSync } from 'fs';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 import { platform } from 'os';
+import { SESSION_TURN_CUTOVER_ARG } from './yeaft/sessions/session-turn-cutover.js';
 import {
   addOrUpdateProvider,
   formatLlmConfig,
@@ -171,6 +172,8 @@ function printHelp() {
     --secret <secret>   Agent secret for authentication
     --work-dir <dir>    Default working directory (default: cwd)
     --yeaft-dir <dir>   Yeaft data directory for this instance
+    --session-turn-deletion-cutover <absolute-dir>
+                        Enable deletion after upgrading all readers of the data directory
     --auto-upgrade      Check for updates on startup
 
   Browser options:
@@ -542,6 +545,9 @@ function parseAndStart(args) {
         break;
       case '--yeaft-dir':
         if (next) { process.env.YEAFT_DIR = process.env.YEAFT_DIR || next; i++; }
+        break;
+      case SESSION_TURN_CUTOVER_ARG:
+        if (next) i++; // index.js validates static arguments and root identity.
         break;
       case '--auto-upgrade':
         checkForUpdates();

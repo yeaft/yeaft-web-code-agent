@@ -13,8 +13,13 @@ function journalPath(root, sessionId) {
 }
 
 export function readSessionTurnDeletions(ownerRoot, sessionId) {
+  return readSessionTurnDeletionsAt(journalPath(ownerRoot, sessionId), sessionId);
+}
+
+/** Allocation recovery also considers archived journals whose directory was renamed. */
+export function readSessionTurnDeletionsAt(path, sessionId = null) {
   let raw;
-  try { raw = readFileSync(journalPath(ownerRoot, sessionId), 'utf8'); }
+  try { raw = readFileSync(path, 'utf8'); }
   catch (error) {
     if (error.code !== 'ENOENT') throw error;
     return { operations: [] };
@@ -22,7 +27,8 @@ export function readSessionTurnDeletions(ownerRoot, sessionId) {
   const operations = raw.split('\n').filter(Boolean).map(line => {
     const op = JSON.parse(line);
     const validIds = ids => Array.isArray(ids) && ids.every(id => typeof id === 'string' && id.length > 0);
-    if (op.version !== 1 || op.sessionId !== sessionId || typeof op.turnId !== 'string'
+    if (op?.version !== 1 || typeof op.sessionId !== 'string' || (sessionId !== null && op.sessionId !== sessionId)
+      || typeof op.turnId !== 'string'
       || !validIds(op.anchorMessageIds) || !validIds(op.messageIds)
       || !validIds(op.clientMessageIds) || !validIds(op.executionIds) || !validIds(op.referenceIds)) {
       throw new Error('Invalid Session turn deletion journal');
