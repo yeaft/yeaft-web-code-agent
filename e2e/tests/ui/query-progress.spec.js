@@ -33,7 +33,9 @@ test('native Session progress is ephemeral, scoped and readable in light/dark at
   const progress = progresses.filter({ hasText: '1,234,567' }).first();
   await expect(progress).toBeVisible();
   await expect(progress.locator('.yeaft-query-progress-failures-toggle')).toHaveCount(0);
-  await expect(progress.locator('.yeaft-query-progress-state')).toHaveCount(0);
+  const liveStatus = progress.getByRole('status');
+  await expect(liveStatus).toBeEmpty();
+  await expect(liveStatus).toHaveCSS('position', 'absolute');
   event.revision++;
   send({ ...event, text: 'PRIVATE_PROGRESS_TEXT', input: { secret: 'PRIVATE_PROGRESS_TEXT' } });
   await page.evaluate(agentId => window.Pinia.useVpStore().applySnapshot({ vps: [{
@@ -47,7 +49,8 @@ test('native Session progress is ephemeral, scoped and readable in light/dark at
   await expect(page.locator('.yeaft-session-status-pane')).not.toContainText('Software assistant');
   await expect(page.locator('.yeaft-session-activity-elapsed')).toContainText(/Elapsed .+s/);
   await expect(progress.getByRole('button', { name: 'Details', exact: true })).toHaveCount(0);
-  await expect(progress.getByRole('status')).toHaveText('Progress warning · Repeated tool results');
+  await expect(liveStatus).toHaveText('Progress warning · Repeated tool results');
+  await expect(liveStatus).toBeVisible();
   const usage = progress.getByRole('group', { name: 'This turn · current thread' });
   await expect(usage).toHaveAccessibleDescription(/not context size/);
   await expect(usage.getByText('1,234,567', { exact: true })).toHaveCSS('font-size', '12px');

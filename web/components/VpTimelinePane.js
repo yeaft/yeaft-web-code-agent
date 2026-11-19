@@ -253,8 +253,10 @@ export default {
             </section>
             <div v-for="(progress, observationIndex) in row.observations" :key="progress.turnId" class="yeaft-query-progress" :class="'is-' + progress.stage">
               <span v-if="row.observations.length > 1" class="yeaft-query-progress-label">{{ $t('yeaft.sessionStatus.executionNumber', { count: observationIndex + 1 }) }}</span>
-              <div v-if="progress.stage !== 'running'" class="yeaft-query-progress-state" role="status">
-                <span>{{ $t('yeaft.queryProgress.stage.' + progress.stage) }}</span><span v-if="progress.reason" class="yeaft-query-progress-reason"> · {{ $t('yeaft.queryProgress.reason.' + progress.reason) }}</span>
+              <div class="yeaft-query-progress-state" role="status">
+                <template v-if="progress.stage !== 'running'">
+                  <span>{{ $t('yeaft.queryProgress.stage.' + progress.stage) }}</span><span v-if="progress.reason" class="yeaft-query-progress-reason"> · {{ $t('yeaft.queryProgress.reason.' + progress.reason) }}</span>
+                </template>
               </div>
               <div class="yeaft-query-progress-usage" role="group" :aria-label="$t('yeaft.queryProgress.scopeLabel')" :title="$t('yeaft.queryProgress.tokenScope')">
                 <span class="yeaft-query-progress-label" aria-hidden="true">{{ $t('yeaft.queryProgress.scopeLabel') }}</span>

@@ -446,7 +446,9 @@ describe('message flow regressions', () => {
       expect(pane.get('.yeaft-query-progress-usage').attributes('aria-label')).toBe('This turn · current thread');
       expect(pane.get('.yeaft-query-progress-usage').attributes('title')).toContain('not context size');
       expect(pane.find('.yeaft-query-progress-details-toggle').exists()).toBe(false);
-      expect(pane.find('.yeaft-query-progress-state').exists()).toBe(false);
+      const liveStatus = pane.get('.yeaft-query-progress-state');
+      expect(liveStatus.attributes('role')).toBe('status');
+      expect(liveStatus.text()).toBe('');
       expect(pane.find('.yeaft-query-progress-failures').exists()).toBe(false);
       expect(pane.find('button button, [role="button"] button').exists()).toBe(false);
       await pane.get('.yeaft-query-progress-failures-toggle').trigger('click');
@@ -460,7 +462,8 @@ describe('message flow regressions', () => {
       expect(pane.emitted('mention-vp')).toBeUndefined();
       const recovering = { ...row, observations: [{ ...progress, stage: 'recovering', reason: 'repeated_failure' }] };
       await pane.setProps({ rows: [recovering] });
-      expect(pane.get('.yeaft-query-progress-state').text()).toBe('Recovering · Repeated tool failures');
+      expect(pane.get('.yeaft-query-progress-state').element).toBe(liveStatus.element);
+      expect(liveStatus.text()).toBe('Recovering · Repeated tool failures');
       expect(pane.get('.yeaft-query-progress-failures-toggle').attributes('aria-expanded')).toBe('true');
       expect(pane.get('.yeaft-query-progress').text()).not.toContain('Last new evidence');
       await pane.setProps({ rows: [{ ...row, isStopping: true }] });

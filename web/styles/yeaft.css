@@ -3618,6 +3618,8 @@
 }
 .yeaft-query-progress-label { font-weight: 500; }
 .yeaft-query-progress-state { color: color-mix(in srgb, var(--status-busy) 48%, var(--text-primary)); font-weight: 600; }
+/* An empty live region stays mounted without reserving a line during normal progress. */
+.yeaft-query-progress.is-running .yeaft-query-progress-state { position: absolute; }
 .yeaft-query-progress-reason { color: var(--progress-text); font-weight: 400; }
 .yeaft-query-progress-counts {
   display: flex;
