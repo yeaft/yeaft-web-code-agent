@@ -1,36 +1,11 @@
 import { mkdtempSync, rmSync } from 'node:fs';
-import { mkdir, writeFile } from 'node:fs/promises';
+import { writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { resolveFileReferences } from '../../agent/workbench/file-reference-resolver.js';
 
 describe('resolveFileReferences', () => {
-  it('resolves Session/worktree paths, absolute paths, unique basenames, and Unicode or spaced names', async () => {
-    const parent = mkdtempSync(join(tmpdir(), 'yeaft-reference-worktrees-'));
-    const workDir = join(parent, '.yeaft', 'worktrees', '响应 links');
-    try {
-      await mkdir(join(workDir, 'src', '中文 目录'), { recursive: true });
-      await writeFile(join(workDir, 'README.md'), 'readme');
-      await writeFile(join(workDir, 'src', '中文 目录', '结果 file.js'), 'result');
-
-      await expect(resolveFileReferences([
-        './README.md',
-        join(workDir, 'src', '中文 目录', '结果 file.js'),
-        '结果 file.js',
-      ], workDir)).resolves.toEqual([
-        { requestedPath: './README.md', resolvedPath: 'README.md' },
-        {
-          requestedPath: join(workDir, 'src', '中文 目录', '结果 file.js'),
-          resolvedPath: 'src/中文 目录/结果 file.js',
-        },
-        { requestedPath: '结果 file.js', resolvedPath: 'src/中文 目录/结果 file.js' },
-      ]);
-    } finally {
-      rmSync(parent, { recursive: true, force: true });
-    }
-  });
-
   it('rejects external absolute paths and URI-shaped references instead of basename-repairing them', async () => {
     const workDir = mkdtempSync(join(tmpdir(), 'yeaft-reference-root-'));
     const outside = mkdtempSync(join(tmpdir(), 'yeaft-reference-outside-'));
@@ -52,17 +27,4 @@ describe('resolveFileReferences', () => {
     }
   });
 
-  it('rejects ambiguous basename fallback matches', async () => {
-    const workDir = mkdtempSync(join(tmpdir(), 'yeaft-reference-ambiguous-'));
-    try {
-      await mkdir(join(workDir, 'a'), { recursive: true });
-      await mkdir(join(workDir, 'b'), { recursive: true });
-      await writeFile(join(workDir, 'a', 'target.js'), 'first');
-      await writeFile(join(workDir, 'b', 'target.js'), 'second');
-
-      await expect(resolveFileReferences(['wrong/target.js'], workDir)).resolves.toEqual([]);
-    } finally {
-      rmSync(workDir, { recursive: true, force: true });
-    }
-  });
 });

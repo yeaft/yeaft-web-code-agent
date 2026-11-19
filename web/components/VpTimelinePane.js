@@ -253,29 +253,30 @@ export default {
             </section>
             <div v-for="(progress, observationIndex) in row.observations" :key="progress.turnId" class="yeaft-query-progress" :class="'is-' + progress.stage">
               <span v-if="row.observations.length > 1" class="yeaft-query-progress-label">{{ $t('yeaft.sessionStatus.executionNumber', { count: observationIndex + 1 }) }}</span>
-              <div class="yeaft-query-progress-tokens" :aria-label="$t('yeaft.queryProgress.tokenScope')">
-                <span><span class="yeaft-query-progress-label">{{ $t('yeaft.queryProgress.inputTokens') }}</span><strong>{{ formatTokenCount(progress.inputTokens) }}</strong></span>
-                <span><span class="yeaft-query-progress-label">{{ $t('yeaft.queryProgress.outputTokens') }}</span><strong>{{ formatTokenCount(progress.outputTokens) }}</strong></span>
+              <div class="yeaft-query-progress-state" role="status">
+                <template v-if="progress.stage !== 'running'">
+                  <span>{{ $t('yeaft.queryProgress.stage.' + progress.stage) }}</span><span v-if="progress.reason" class="yeaft-query-progress-reason"> · {{ $t('yeaft.queryProgress.reason.' + progress.reason) }}</span>
+                </template>
+              </div>
+              <div class="yeaft-query-progress-usage" role="group" :aria-label="$t('yeaft.queryProgress.scopeLabel')" :title="$t('yeaft.queryProgress.tokenScope')">
+                <span class="yeaft-query-progress-label" aria-hidden="true">{{ $t('yeaft.queryProgress.scopeLabel') }}</span>
+                <dl class="yeaft-query-progress-tokens">
+                  <div><dt>{{ $t('yeaft.queryProgress.inputTokens') }}</dt><dd>{{ formatTokenCount(progress.inputTokens) }}</dd></div>
+                  <div><dt>{{ $t('yeaft.queryProgress.outputTokens') }}</dt><dd>{{ formatTokenCount(progress.outputTokens) }}</dd></div>
+                </dl>
               </div>
               <div class="yeaft-query-progress-counts">
                 <span>{{ $t('yeaft.queryProgress.requests', { count: formatCount(progress.modelRequests) }) }}</span>
                 <span>{{ $t('yeaft.queryProgress.tools', { count: formatCount(progress.toolExecutions) }) }}</span>
-                <button type="button" class="btn-ghost yeaft-query-progress-failures-toggle"
-                  :class="{ 'has-failures': progress.failedCalls > 0 }"
-                  :aria-expanded="isProgressExpanded(row, progress, 'failures')"
-                  :aria-label="$t('yeaft.queryProgress.failureToggle', { count: progress.failedCalls })"
-                  @click="toggleProgress(row, progress, 'failures')">
+                <button v-if="progress.failedCalls > 0" type="button" class="btn-ghost yeaft-query-progress-failures-toggle"
+                  :aria-expanded="areFailuresExpanded(row, progress)"
+                  :aria-label="$t('yeaft.queryProgress.failureToggle', { count: formatCount(progress.failedCalls) })"
+                  @click="toggleFailures(row, progress)">
                   {{ $t('yeaft.queryProgress.failed', { count: formatCount(progress.failedCalls) }) }}
-                  <span aria-hidden="true">{{ isProgressExpanded(row, progress, 'failures') ? '▾' : '▸' }}</span>
-                </button>
-                <button type="button" class="btn-ghost yeaft-query-progress-details-toggle" :aria-expanded="isProgressExpanded(row, progress, 'details')" @click="toggleProgress(row, progress, 'details')">
-                  {{ $t('yeaft.queryProgress.details') }} <span aria-hidden="true">{{ isProgressExpanded(row, progress, 'details') ? '▾' : '▸' }}</span>
+                  <span aria-hidden="true">{{ areFailuresExpanded(row, progress) ? '▾' : '▸' }}</span>
                 </button>
               </div>
-              <div v-if="progress.stage !== 'running'" class="yeaft-query-progress-footer">
-                <span class="yeaft-query-progress-state" role="status">{{ $t('yeaft.queryProgress.stage.' + progress.stage) }}</span>
-              </div>
-              <section v-if="isProgressExpanded(row, progress, 'failures')" class="yeaft-query-progress-failures" :aria-label="$t('yeaft.queryProgress.failureTitle')">
+              <section v-if="progress.failedCalls > 0 && areFailuresExpanded(row, progress)" class="yeaft-query-progress-failures" :aria-label="$t('yeaft.queryProgress.failureTitle')">
                 <p class="yeaft-query-progress-label">{{ $t('yeaft.queryProgress.failureTitle') }}</p>
                 <template v-if="Array.isArray(progress.toolStats)">
                   <div v-if="failedTools(progress).length" class="yeaft-query-progress-failure-list">
@@ -287,19 +288,12 @@ export default {
                       <code>{{ tool.name }}</code><span>{{ formatCount(tool.executions) }}</span><span>{{ formatCount(tool.failedCalls) }}</span><span>{{ formatCount(tool.blockedCalls) }}</span>
                     </div>
                   </div>
-                  <p v-else>{{ $t(progress.toolStatsTruncated ? 'yeaft.queryProgress.failuresNotListed' : 'yeaft.queryProgress.noFailures') }}</p>
+                  <p v-else>{{ $t('yeaft.queryProgress.failuresNotListed') }}</p>
                   <p class="yeaft-query-progress-label">{{ $t('yeaft.queryProgress.failureNote') }}</p>
                   <p v-if="progress.toolStatsTruncated">{{ $t('yeaft.queryProgress.statsTruncated') }}</p>
                 </template>
                 <p v-else>{{ $t('yeaft.queryProgress.statsUnavailable') }}</p>
               </section>
-              <div v-if="isProgressExpanded(row, progress, 'details')" class="yeaft-query-progress-details">
-                <span>{{ $t('yeaft.queryProgress.tokenScope') }}</span>
-                <span v-if="progress.reason">{{ $t('yeaft.queryProgress.reason.' + progress.reason) }}</span>
-                <span>{{ $t('yeaft.queryProgress.reused', { count: progress.reusedCalls }) }} · {{ $t('yeaft.queryProgress.repeated', { count: progress.repeatedCalls }) }}</span>
-                <span>{{ progress.lastEvidenceAt === null ? $t('yeaft.queryProgress.noEvidence') : $t('yeaft.queryProgress.lastEvidence', { time: formatTaskTime(progress.lastEvidenceAt) }) }}</span>
-                <span>{{ $t('yeaft.queryProgress.caveat') }}</span>
-              </div>
             </div>
           </li>
         </ul>
@@ -406,17 +400,16 @@ export default {
     });
     const formatErrorTime = value => new Date(value).toLocaleString();
 
-    const expandedProgress = Vue.ref({});
+    const expandedFailures = Vue.ref({});
     const progressKey = (row, progress) => JSON.stringify([row.agentId, row.sessionId, row.key, progress.turnId, progress.threadId]);
-    const isProgressExpanded = (row, progress, section) => !!expandedProgress.value[progressKey(row, progress)]?.[section];
-    const toggleProgress = (row, progress, section) => {
+    const areFailuresExpanded = (row, progress) => !!expandedFailures.value[progressKey(row, progress)];
+    const toggleFailures = (row, progress) => {
       const key = progressKey(row, progress);
-      expandedProgress.value = { ...expandedProgress.value, [key]: {
-        ...expandedProgress.value[key], [section]: !isProgressExpanded(row, progress, section),
-      } };
+      expandedFailures.value = { ...expandedFailures.value, [key]: !areFailuresExpanded(row, progress) };
     };
-    Vue.watch(() => props.rows.flatMap(row => (row.observations || []).map(progress => progressKey(row, progress))), keys => {
-      expandedProgress.value = Object.fromEntries(Object.entries(expandedProgress.value).filter(([key]) => keys.includes(key)));
+    Vue.watch(() => props.rows.flatMap(row => (row.observations || [])
+      .filter(progress => progress.failedCalls > 0).map(progress => progressKey(row, progress))), keys => {
+      expandedFailures.value = Object.fromEntries(Object.entries(expandedFailures.value).filter(([key]) => keys.includes(key)));
     });
     const formatCount = value => Number.isSafeInteger(value) && value >= 0 ? value.toLocaleString() : '—';
     const formatTokenCount = value => Number.isSafeInteger(value) && value >= 0 ? formatCount(value) : $t('yeaft.queryProgress.unavailable');
@@ -527,8 +520,8 @@ export default {
       formatErrorTime,
       turnLabel,
       elapsed,
-      isProgressExpanded,
-      toggleProgress,
+      areFailuresExpanded,
+      toggleFailures,
       formatCount,
       formatTokenCount,
       failedTools,

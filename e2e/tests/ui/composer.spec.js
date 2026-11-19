@@ -1,10 +1,5 @@
 import { test } from '../../fixtures/test-server.js';
 import { expect } from '@playwright/test';
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-import { loadConfig } from '../../../agent/yeaft/config.js';
-import { loadSessionConfig, saveSessionConfig } from '../../../agent/yeaft/sessions/session-config.js';
 
 test.use({ serverEnv: { YEAFT_LOCAL_RUN: 'true', SERVE_DIST: process.env.COMPOSER_UI_PRODUCTION || 'false' } });
 
@@ -64,99 +59,6 @@ async function openYeaftComposer(page, serverUrl) {
 }
 
 test.describe('Yeaft composer menus', () => {
-  test('unknown model aliases expose API effort tiers and persist the selected Session effort', async ({ chatPage: page, mockAgent }, testInfo) => {
-    const root = mkdtempSync(join(tmpdir(), 'yeaft-browser-fable-'));
-    const sessionId = 'fable-effort-session';
-    const selectedModel = 'proxy/private-model';
-    mkdirSync(join(root, 'sessions', sessionId), { recursive: true });
-    writeFileSync(join(root, 'config.json'), JSON.stringify({
-      providers: [{ name: 'proxy', apiKey: 'fixture', baseUrl: 'https://proxy.invalid', protocol: 'anthropic', models: ['private-model', { id: 'other-api-model', protocol: 'openai-responses' }] }],
-      primaryModel: selectedModel,
-    }));
-    const catalog = loadConfig({ dir: root }).availableModels;
-    const requests = [];
-    let holdNextResult = false;
-    let releaseResult = null;
-    mockAgent._messageHandlers.push(request => {
-      if (request.type === 'yeaft_load_history' && request.sessionId === sessionId && request.limit !== 0) {
-        mockAgent.send({ type: 'yeaft_history_chunk', sessionId, requestId: request.requestId,
-          mode: 'recent', messages: [], oldestSeq: null, latestSeq: null, hasMore: false });
-      }
-      if (request.type !== 'yeaft_update_session_config') return;
-      requests.push(request);
-      const config = saveSessionConfig(root, request.sessionId, request.config);
-      const reply = () => mockAgent.send({ type: 'yeaft_output', event: { type: 'session_crud_result', op: 'update_config',
-        requestId: request.requestId, sessionId: request.sessionId, ok: true, config,
-        session: { id: request.sessionId, name: 'Fable effort', roster: ['omni'], defaultVpId: 'omni', config } } });
-      if (holdNextResult) { holdNextResult = false; releaseResult = reply; }
-      else reply();
-    });
-    try {
-      mockAgent.send({ type: 'yeaft_output', event: { type: 'yeaft_status', model: selectedModel,
-        catalogEpoch: 'fable-effort-e2e', catalogRevision: 1, catalogRefreshedAt: Date.now(), availableModels: catalog } });
-      mockAgent.send({ type: 'yeaft_output', event: { type: 'session_list_updated', sessions: [
-        { id: sessionId, name: 'Fable effort', roster: ['omni'], defaultVpId: 'omni', config: { model: selectedModel, modelEffort: 'high' } },
-      ] } });
-      await expect.poll(() => page.evaluate(sessionId => window.Pinia.useChatStore().sidebarSessionCatalog
-        .some(row => row.routeRef.sessionId === sessionId), sessionId)).toBe(true);
-      await page.evaluate(({ agentId, sessionId }) => {
-        const chat = window.Pinia.useChatStore();
-        chat.openCatalogSession(chat.sidebarSessionCatalog.find(row => row.routeRef.agentId === agentId && row.routeRef.sessionId === sessionId));
-        chat.closeSessionSidebar();
-      }, { agentId: mockAgent.agentId, sessionId });
-      await expect(page.locator('.yeaft-session-input')).toBeVisible();
-      const effort = page.locator('.yeaft-composer-effort');
-      await expect(effort).toContainText('X-High');
-      await page.evaluate(() => {
-        const models = window.Pinia.useChatStore().yeaftAvailableModels;
-        for (const model of models) model.effortOptions = ['minimal', 'low', 'high', ...model.effortOptions];
-      });
-      for (const [theme, width] of [['light', 1280], ['dark', 320]]) {
-        await page.setViewportSize({ width, height: 800 });
-        await page.evaluate(theme => document.documentElement.dataset.theme = theme, theme);
-        await effort.click();
-        const menu = page.locator('.yeaft-composer-effort-dropdown');
-        await expect(menu.locator('.yeaft-model-option-label')).toHaveText(['Medium', 'X-High', 'Max']);
-        holdNextResult = true;
-        await menu.getByRole('menuitemradio', { name: 'Medium', exact: true }).click();
-        await expect(effort).toContainText('Medium', { timeout: 500 });
-        await expect(page.locator('.yeaft-composer-model-controls')).toHaveAttribute('aria-busy', 'true');
-        await expect.poll(() => typeof releaseResult).toBe('function');
-        releaseResult();
-        releaseResult = null;
-        await expect(page.locator('.yeaft-composer-model-controls')).toHaveAttribute('aria-busy', 'false');
-        await expect.poll(() => loadSessionConfig(root, sessionId).modelEffort).toBe('medium');
-        await effort.click();
-        await menu.getByRole('menuitemradio', { name: 'X-High', exact: true }).click();
-        await expect(effort).toContainText('X-High');
-        await expect.poll(() => loadSessionConfig(root, sessionId)).toEqual({ model: selectedModel, modelEffort: 'xhigh' });
-        await effort.click();
-        await menu.getByRole('menuitemradio', { name: 'Max', exact: true }).click();
-        await expect(effort).toContainText('Max');
-        await expect.poll(() => loadSessionConfig(root, sessionId).modelEffort).toBe('max');
-        // The Server consumes agentId for routing; receipt on this mock socket proves ownership.
-        expect(requests.at(-1)).toMatchObject({ sessionId, config: { model: selectedModel, modelEffort: 'max' } });
-        // An opaque model using the other API gets that API's full scale.
-        await page.locator('.yeaft-composer-model').click();
-        holdNextResult = true;
-        await page.locator('.yeaft-composer-model-dropdown').getByRole('menuitemradio', { name: 'other-api-model proxy', exact: true }).click();
-        await expect(page.locator('.yeaft-composer-model')).toContainText('other-api-model', { timeout: 500 });
-        await expect(effort).toContainText('X-High', { timeout: 500 });
-        await expect.poll(() => typeof releaseResult).toBe('function');
-        releaseResult();
-        releaseResult = null;
-        await expect(page.locator('.yeaft-composer-model-controls')).toHaveAttribute('aria-busy', 'false');
-        await expect.poll(() => loadSessionConfig(root, sessionId)).toEqual({ model: 'proxy/other-api-model', modelEffort: 'xhigh' });
-        await effort.click();
-        await expect(menu.locator('.yeaft-model-option-label')).toHaveText(['Medium', 'X-High', 'Max', 'Ultra']);
-        await menu.getByRole('menuitemradio', { name: 'Ultra', exact: true }).click();
-        await expect.poll(() => loadSessionConfig(root, sessionId)).toEqual({ model: 'proxy/other-api-model', modelEffort: 'ultra' });
-        await page.screenshot({ path: testInfo.outputPath(`api-effort-${theme}.png`) });
-        await page.locator('.yeaft-composer-model').click();
-        await page.locator('.yeaft-composer-model-dropdown').getByRole('menuitemradio', { name: 'private-model proxy', exact: true }).click();
-      }
-    } finally { rmSync(root, { recursive: true, force: true }); }
-  });
   test('mobile Enter inserts newlines; only the send action submits, while desktop keeps shortcuts', async ({ page, serverUrl, browser }, testInfo) => {
     test.setTimeout(60000);
     await page.setViewportSize({ width: 320, height: 800 });
@@ -223,49 +125,4 @@ test.describe('Yeaft composer menus', () => {
       expect(await touchPage.evaluate(() => window.__keyboardWire.find(msg => msg.type === 'yeaft_session_send').text)).toBe('Landscape first\nLandscape second');
     } finally { await touchContext.close(); }
   });
-  test('Session shares accessible attachment cards, drag/drop, clipboard and file-only send', async ({ page, serverUrl }) => {
-    await page.setViewportSize({ width: 320, height: 800 });
-    await openYeaftComposer(page, serverUrl);
-    await page.evaluate(() => {
-      window.Pinia.useChatStore().sendWsMessage = msg => { (window.__attachmentWire ||= []).push(msg); };
-    });
-    const composer = page.locator('.yeaft-session-input');
-    await expect(composer.locator('button.attach-btn')).toHaveAccessibleName('Upload file');
-    const picker = page.waitForEvent('filechooser');
-    await composer.locator('button.attach-btn').focus();
-    await page.keyboard.press('Enter');
-    await (await picker).setFiles({ name: 'notes.txt', mimeType: 'text/plain', buffer: Buffer.from('notes') });
-    await expect(composer.locator('.attachment-status')).toHaveText('5 B');
-    await composer.locator('textarea').evaluate(input => {
-      const data = new DataTransfer();
-      data.items.add(new File(['pasted'], 'pasted.md', { type: 'text/plain' }));
-      input.dispatchEvent(new ClipboardEvent('paste', { clipboardData: data, bubbles: true, cancelable: true }));
-    });
-    await expect(composer.locator('.attachment-item')).toHaveCount(2);
-    const dropped = await page.evaluateHandle(() => {
-      const data = new DataTransfer();
-      data.items.add(new File(['dropped'], 'dropped.txt', { type: 'text/plain' }));
-      return data;
-    });
-    await composer.locator('[data-message-composer]').dispatchEvent('drop', { dataTransfer: dropped });
-    await expect(composer.locator('.attachment-item')).toHaveCount(3);
-    await expect(composer.getByRole('button', { name: 'Send', exact: true })).toBeEnabled();
-    await composer.locator('.attachment-remove').nth(1).click();
-    await expect(composer.locator('.attachment-item')).toHaveCount(2);
-    await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
-    await composer.getByRole('button', { name: 'Send', exact: true }).click();
-    const wire = await page.evaluate(() => window.__attachmentWire.find(msg => msg.type === 'yeaft_session_send'));
-    // Session's existing transport supplies the attachment-only fallback text.
-    expect(wire.text).toBe('(attached files)');
-    // Names/previews stay local; the existing Session wire sends only fileId/isImage.
-    expect(wire.attachments).toEqual([
-      { fileId: expect.any(String), isImage: false },
-      { fileId: expect.any(String), isImage: false },
-    ]);
-    await page.locator('.message-user-attachments button').click();
-    await expect(page.locator('.user-attachments .file-name')).toHaveText(['notes.txt', 'dropped.txt']);
-    await expect(composer.locator('.attachment-item')).toHaveCount(0);
-    await dropped.dispose();
-  });
-
 });

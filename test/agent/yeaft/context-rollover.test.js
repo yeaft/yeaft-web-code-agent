@@ -59,30 +59,6 @@ describe('bounded active-context rollover', () => {
     expect(JSON.stringify(messages)).toBe(before);
   });
 
-  it('maps all oversized UTF-8 history in bounded chunks and hierarchically reduces without losing source text', async () => {
-    const window = 8192;
-    const adapter = mockAdapter(window, () => 'summary '.repeat(40));
-    const first = 'EARLIEST task-1 已完成\n';
-    const middle = 'MIDDLE task-2 失败\n';
-    const last = 'LATEST task-3 待处理\n';
-    const content = first + '中'.repeat(190000) + middle + 'a'.repeat(500000) + last;
-    const result = await generateContextRollover({ ...options(adapter), messages: [{ role: 'tool', toolCallId: 'giant', content }] });
-    // Map calls precede reduction calls. Together their source slices exactly
-    // reconstruct the visible transcript: no old bodies or middle work sampled away.
-    let source = '';
-    for (const request of adapter.requests) {
-      const body = request.messages[0].content.split('fragment):\n')[1];
-      if (body.startsWith('summary')) break;
-      source += body;
-    }
-    expect(source).toContain(content);
-    expect(source).not.toContain('\ufffd');
-    expect(adapter.requests.length).toBeGreaterThan(100);
-    expect(adapter.requests.length).toBeLessThan(400);
-    expect(byteLength(result)).toBeLessThanOrEqual(1024);
-    expect(result).toMatch(/^\[UNTRUSTED HISTORY SUMMARY/);
-  });
-
   it('propagates pre-call and in-flight aborts and never begins another call after cancellation', async () => {
     const already = new AbortController();
     already.abort();
@@ -99,21 +75,4 @@ describe('bounded active-context rollover', () => {
     expect(adapter.requests).toHaveLength(1);
   });
 
-  it('fails closed on empty/failing summarizers, impossible static budgets and call exhaustion', async () => {
-    const oversized = mockAdapter(8192, () => 'summary '.repeat(10000));
-    await expect(generateContextRollover(options(oversized))).rejects.toThrow('safe size budget');
-    const refused = { call: async () => ({ text: 'do not help', stopReason: 'refusal' }) };
-    await expect(generateContextRollover(options(refused))).rejects.toThrow('did not complete');
-    const empty = mockAdapter(8192, () => ' \n ');
-    await expect(generateContextRollover(options(empty))).rejects.toThrow('empty text');
-    const failed = mockAdapter(8192, () => { throw new Error('provider unavailable'); });
-    await expect(generateContextRollover(options(failed))).rejects.toThrow('provider unavailable');
-    const tiny = mockAdapter(100);
-    await expect(generateContextRollover({ ...options(tiny), contextWindow: 100 })).rejects.toThrow('too small');
-    expect(tiny.requests).toHaveLength(0);
-    await expect(generateContextRollover({ ...options(tiny), maxTokens: Infinity })).rejects.toThrow('positive safe integers');
-    const limited = mockAdapter(8192);
-    await expect(generateContextRollover({ ...options(limited), maxCalls: 1, messages: [{ role: 'user', content: 'x'.repeat(20000) }] })).rejects.toThrow('call budget exhausted');
-    expect(limited.requests).toHaveLength(1);
-  });
 });

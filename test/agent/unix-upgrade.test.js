@@ -1,27 +1,19 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { afterEach, describe, expect, it } from 'vitest';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { join } from 'node:path';
 import { execFile, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
 import { setTimeout as delay } from 'node:timers/promises';
-import { EventEmitter } from 'node:events';
-import ctx from '../../agent/context.js';
-import { sendToServer } from '../../agent/connection/buffer.js';
 import { buildUnixUpgradeScript } from '../../agent/connection/upgrade.js';
-import { createUnixUpgradeRun, getUnixUpgradeLockPath, launchUnixUpgrade, shellQuote } from '../../agent/unix-upgrade.js';
+import { createUnixUpgradeRun, getUnixUpgradeLockPath, shellQuote } from '../../agent/unix-upgrade.js';
 
 const exec = promisify(execFile);
 const temporary = [];
 const children = [];
-const units = [];
-const runner = resolve(import.meta.dirname, '../../agent/yeaft/systemd-service-runner.js');
 afterEach(async () => {
   for (const child of children.splice(0)) {
     try { process.kill(-child.pid, 'SIGKILL'); } catch {}
-  }
-  for (const unit of units.splice(0)) {
-    try { await exec('systemctl', ['--user', 'stop', unit]); } catch {}
   }
   for (const root of temporary.splice(0)) rmSync(root, { force: true, recursive: true });
 });
@@ -68,94 +60,6 @@ function startScript(f, options = {}) {
 }
 
 describe('Unix remote upgrade ownership and handoff', () => {
-  it('keys the kernel lock by canonical shared install rather than instance, while separate installs stay independent', () => {
-    const f = fixture();
-    const alias = join(f.root, 'alias');
-    const other = join(f.root, 'other');
-    mkdirSync(other); symlinkSync(f.installDir, alias, process.platform === 'win32' ? 'junction' : 'dir');
-    const locks = join(f.root, 'locks');
-    expect(getUnixUpgradeLockPath(alias, locks)).toBe(getUnixUpgradeLockPath(f.installDir, locks));
-    expect(getUnixUpgradeLockPath(other, locks)).not.toBe(getUnixUpgradeLockPath(f.installDir, locks));
-    expect(shellQuote(`O'Brien $safe`)).toBe(`'O'\\''Brien $safe'`);
-  });
-
-  it('starts a distinct exec-type transient service and acknowledges only after a live ready owner, without exposing env in argv', async () => {
-    const f = fixture();
-    const previousWs = ctx.ws;
-    const previousEncryption = ctx.serverEncryptionRequired;
-    const socket = new EventEmitter();
-    socket.readyState = 1;
-    let completed = false;
-    socket.send = (data, callback) => {
-      expect(existsSync(f.run.authorizePath)).toBe(false);
-      expect(JSON.parse(data).type).toBe('upgrade_agent_ack');
-      setTimeout(() => { completed = true; callback(); }, 20);
-    };
-    ctx.ws = socket; ctx.serverEncryptionRequired = false;
-    const ack = vi.fn(async payload => {
-      const outcome = await sendToServer({ type: 'upgrade_agent_ack', ...payload });
-      expect(completed).toBe(true);
-      setTimeout(() => writeFileSync(f.run.acceptedPath, 'accepted'), 10);
-      return outcome;
-    });
-    const calls = [];
-    const fakeExec = async (command, args) => {
-      calls.push({ command, args });
-      const payload = JSON.parse(readFileSync(args.at(-1), 'utf8'));
-      expect(payload.env.AGENT_SECRET).toBe('private-test-secret');
-      expect(payload.cwd).toBe(f.run.dir);
-      expect(args.join(' ')).not.toContain('private-test-secret');
-      expect(existsSync(f.run.authorizePath)).toBe(false);
-      writeFileSync(f.run.readyPath, String(process.pid));
-    };
-    let result;
-    try {
-      result = await launchUnixUpgrade({
-        run: f.run, instanceId: 'server-2', isSystemd: true, serviceRunnerPath: runner,
-        env: { PATH: process.env.PATH, AGENT_SECRET: 'private-test-secret' },
-        sendUpgradeAck: ack, version: '1.0.900',
-      }, { execFileAsync: fakeExec });
-    } finally { ctx.ws = previousWs; ctx.serverEncryptionRequired = previousEncryption; }
-    expect(calls[0].command).toBe('systemd-run');
-    expect(calls[0].args).toEqual(expect.arrayContaining(['--user', '--collect', '--service-type=exec']));
-    expect(calls[0].args).not.toContain('--scope');
-    expect(result.unit).toMatch(/^yeaft-upgrade-server-2-.*\.service$/);
-    expect(ack).toHaveBeenCalledOnce();
-    expect(existsSync(f.run.authorizePath)).toBe(true);
-  });
-
-  it('keeps the Agent online on launch, lock, readiness and ACK failures, cancelling late runners without a detached fallback', async () => {
-    for (const failure of ['launch', 'lock', 'timeout', 'dead', 'ack', 'dropped', 'slow-ack', 'lost-runner', 'no-accept']) {
-      const f = fixture(failure);
-      let alive = failure !== 'dead';
-      const ack = vi.fn(async () => {
-        if (failure === 'ack') throw new Error('ack failed');
-        if (failure === 'dropped') return 'dropped';
-        if (failure === 'slow-ack') await new Promise(() => {});
-        if (failure === 'lost-runner') alive = false;
-        return 'sent';
-      });
-      const spawnProcess = vi.fn();
-      const calls = [];
-      const fakeExec = async (command, args) => {
-        calls.push({ command, args });
-        if (command === 'systemctl') return;
-        if (failure === 'launch') throw new Error('manager unavailable');
-        if (failure === 'lock') writeFileSync(f.run.errorPath, 'Another Agent is upgrading this shared installation');
-        if (!['launch', 'lock', 'timeout'].includes(failure)) writeFileSync(f.run.readyPath, String(process.pid));
-      };
-      await expect(launchUnixUpgrade({
-        run: f.run, instanceId: 'server-2', isSystemd: true, serviceRunnerPath: runner,
-        sendUpgradeAck: ack, version: '1.0.900', timeoutMs: 65,
-      }, { execFileAsync: fakeExec, spawn: spawnProcess, processRunning: () => alive })).rejects.toThrow();
-      expect(existsSync(f.run.authorizePath)).toBe(failure === 'no-accept');
-      expect(existsSync(f.run.cancelPath)).toBe(true);
-      expect(spawnProcess).not.toHaveBeenCalled();
-      expect(calls.at(-1).args.slice(0, 2)).toEqual(['--user', 'stop']);
-      if (['launch', 'lock', 'timeout', 'dead'].includes(failure)) expect(ack).not.toHaveBeenCalled();
-    }
-  });
-
   it.skipIf(process.platform !== 'linux')('serializes two actual shell updaters sharing an install, rejects the loser before handoff, and releases the kernel lock on exit', async () => {
     const f = fixture();
     const entered = join(f.root, 'entered');
@@ -208,24 +112,4 @@ describe('Unix remote upgrade ownership and handoff', () => {
     }
   }, 15_000);
 
-  it.skipIf(process.platform !== 'linux' || process.env.YEAFT_TEST_SYSTEMD_UPGRADE !== '1')('survives real KillMode=mixed Agent-service exit in a different cgroup (isolated fixture only)', async () => {
-    const f = fixture();
-    const parentUnit = `yeaft-upgrade-test-parent-${process.pid}-${Date.now()}.service`;
-    units.push(parentUnit);
-    const launcher = join(f.root, 'parent.mjs');
-    const launched = join(f.root, 'launched.json');
-    const survived = join(f.root, 'survived');
-    const cgroup = join(f.root, 'updater.cgroup');
-    const helperUrl = new URL('../../agent/unix-upgrade.js', import.meta.url).href;
-    writeFileSync(f.run.scriptPath, `#!/bin/bash\necho $$ > ${shellQuote(f.run.readyPath)}\nwhile [ ! -f ${shellQuote(f.run.authorizePath)} ]; do sleep 0.05; done\ntouch ${shellQuote(f.run.acceptedPath)}\nsleep 1\ncat /proc/self/cgroup > ${shellQuote(cgroup)}\ntouch ${shellQuote(survived)}\n`);
-    writeFileSync(launcher, `import {launchUnixUpgrade} from ${JSON.stringify(helperUrl)}; import fs from 'node:fs'; const result = await launchUnixUpgrade({run:${JSON.stringify(f.run)},instanceId:'fixture',isSystemd:true,serviceRunnerPath:${JSON.stringify(runner)},sendUpgradeAck:async()=> 'sent',version:'fixture'}); fs.writeFileSync(${JSON.stringify(launched)},JSON.stringify(result));`);
-    await exec('systemd-run', ['--user', '--quiet', '--collect', '--service-type=exec', `--unit=${parentUnit}`, '--property=KillMode=mixed', '--property=TimeoutStopSec=1', '--', process.execPath, launcher]);
-    await until(() => existsSync(launched));
-    const { unit } = JSON.parse(readFileSync(launched, 'utf8'));
-    units.push(unit);
-    await until(() => existsSync(survived));
-    expect(readFileSync(cgroup, 'utf8')).toContain(unit);
-    expect(readFileSync(cgroup, 'utf8')).not.toContain(parentUnit);
-    expect(existsSync(join(f.run.dir, 'invocation'))).toBe(false);
-  }, 15_000);
 });

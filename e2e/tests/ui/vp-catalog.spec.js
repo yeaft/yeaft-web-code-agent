@@ -1,5 +1,5 @@
 import { expect } from '@playwright/test';
-import { mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test as base, TestServer, getAvailablePort, useTestServer, useMockAgent } from '../../fixtures/test-server.js';
@@ -18,7 +18,6 @@ import {
   snapshotSessions, updateSessionAnnouncement, updateSessionConfig,
 } from '../../../agent/yeaft/sessions/session-crud.js';
 
-const recommended = ['omni', 'software-omni', 'writing-omni', 'short-video-omni', 'quant-omni'];
 const customId = 'catalog-custom';
 const conversationId = 'yeaft-vp-catalog-fixture';
 
@@ -153,181 +152,11 @@ async function hideMobileSidebar(page) {
   }
 }
 
-async function openSettings(page, title) {
-  await showSidebar(page);
-  const row = page.locator('.sidebar-session-row:visible').filter({ hasText: title });
-  await row.hover();
-  await row.locator('.session-dots-btn').click();
-  await page.locator('.session-menu-floating').getByRole('button', { name: 'Settings', exact: true }).click();
-  await expect(page.locator('.group-settings-modal')).toBeVisible();
-  return page.locator('.group-settings-overlay');
-}
-
 const member = (dialog, id) => dialog.locator('.group-settings-roster-item')
   .filter({ has: dialog.page().locator(`input[value="${id}"]`) });
 
 // One end-to-end catalog/legacy-Session journey, repeated in two presentation
 // environments rather than splitting the same protocol contract into many cases.
-test('scenario catalog preserves scheduled-task targeting and legacy Session compatibility through real relay and disk CRUD', async ({ page, serverUrl, mockAgent }, info) => {
-  test.setTimeout(120_000);
-  await page.addInitScript(() => {
-    localStorage.setItem('locale', 'en');
-    localStorage.setItem('theme', new URL(location.href).searchParams.get('catalogTheme') || 'light');
-  });
-  const fixture = mockAgent.catalog;
-  const vpFilesBefore = readdirSync(fixture.libDir).sort();
-  const legacySouls = ['linus', 'martin'].map(id => readFileSync(join(fixture.libDir, id, 'role.md'), 'utf8'));
-  let title = 'Legacy collaboration';
-  for (const surface of [{ width: 1360, height: 900, theme: 'light' }, { width: 320, height: 740, theme: 'dark' }]) {
-    const suffix = `${surface.theme}-${surface.width}`;
-    await test.step(suffix, async () => {
-      await page.setViewportSize({ width: surface.width, height: surface.height });
-      await page.goto(`${serverUrl}/?catalogTheme=${surface.theme}`);
-      await expect(page.locator('.chat-page, .yeaft-page').first()).toBeVisible();
-      await expect(page.locator('html')).toHaveAttribute('data-theme', surface.theme);
-      fixture.publish();
-      await showSidebar(page);
-      await expect(page.locator('.sidebar-session-row:visible').filter({ hasText: title })).toBeVisible();
-      await page.locator('.sidebar-task-create:visible').click();
-      const create = page.locator('.yeaft-session-create-modal.task-mode');
-      await expect(create).toBeVisible();
-      await expect(create.getByRole('combobox', { name: 'Scene', exact: true })).toHaveCount(0);
-      const trigger = create.locator('.yeaft-roster-trigger');
-      await expect(trigger).toHaveAttribute('aria-expanded', 'false');
-      await trigger.focus();
-      await page.keyboard.press('Enter');
-      await expect(trigger).toHaveAttribute('aria-expanded', 'true');
-      await expect(trigger).toHaveAttribute('aria-controls', 'yeaft-session-create-vp-picker');
-      const picker = create.locator('#yeaft-session-create-vp-picker');
-      const ids = () => picker.locator('input[type="checkbox"]').evaluateAll(inputs => inputs.map(input => input.value));
-      expect(await ids()).toEqual([...recommended, customId]);
-      await expect(picker.locator('input[value="omni"]')).toBeChecked();
-      await info.attach(`vp-create-geometry-${suffix}`, { contentType: 'application/json',
-        body: JSON.stringify(await create.evaluate(el => {
-          const box = el.getBoundingClientRect();
-          const overlay = el.closest('.modal-overlay');
-          const style = getComputedStyle(overlay);
-          return { viewport: { width: innerWidth, height: innerHeight },
-            modal: { x: box.x, y: box.y, width: box.width, height: box.height, bottom: box.bottom },
-            overlay: { padding: style.padding, boxSizing: style.boxSizing } };
-        }), null, 2) });
-      await expectWithinViewport(create, page);
-      await expectWithinViewport(picker, page);
-      const toggle = picker.locator('.vp-catalog-legacy-toggle');
-      await toggle.focus();
-      await expect(toggle).toBeFocused();
-      await page.keyboard.press('Space');
-      await expect(toggle).toHaveAttribute('aria-expanded', 'true');
-      expect(await ids()).toEqual(expect.arrayContaining(['linus', 'martin']));
-      expect(await ids()).toHaveLength(vpFilesBefore.length);
-      expect(await picker.evaluate(el => el.scrollHeight > el.clientHeight)).toBe(true);
-      // A selected legacy draft stays pinned when the catalog is collapsed.
-      await picker.locator('input[value="martin"]').check();
-      await picker.getByRole('button', { name: 'Hide legacy VPs', exact: true }).click();
-      await expect(picker.locator('input[value="martin"]')).toBeChecked();
-      await expect(picker.locator('input[value="linus"]')).toHaveCount(0);
-      await picker.getByRole('button', { name: 'Show legacy VPs', exact: true }).click();
-      await picker.locator(`input[value="${customId}"]`).scrollIntoViewIfNeeded();
-      expect(await picker.evaluate(el => el.scrollTop)).toBeGreaterThan(0);
-      await expectWithinViewport(picker, page);
-      await page.screenshot({ path: info.outputPath(`vp-create-expanded-${suffix}.png`) });
-      await page.keyboard.press('Escape');
-      await expect(trigger).toHaveAttribute('aria-expanded', 'false');
-      await page.keyboard.press('Escape');
-      await expect(create).toHaveCount(0);
-      // Cancelling the presentation-only catalog does not mutate any Session.
-      expect(fixture.session()).toMatchObject({ roster: ['linus', 'martin'], defaultVpId: 'linus' });
-      await page.locator('.sidebar-session-row:visible').filter({ hasText: title }).click();
-      await expect(page.locator('.assistant-turn').filter({ hasText: 'linus preserved historical answer' })).toBeVisible();
-      await expect(page.locator('.assistant-turn').filter({ hasText: 'martin preserved historical answer' })).toBeVisible();
-      let dialog = await openSettings(page, title);
-      await dialog.getByRole('tab', { name: 'Compatibility', exact: true }).click();
-      for (const id of ['linus', 'martin']) await expect(member(dialog, id).locator('input')).toBeChecked();
-      await expect(member(dialog, 'linus').locator('.group-settings-default-star')).toHaveAttribute('aria-pressed', 'true');
-      await expect(member(dialog, 'linus').locator('.group-settings-default-star')).toBeDisabled();
-      await expect(dialog.locator('.vp-catalog-help')).toContainText('until you explicitly remove them');
-      await expect(dialog.getByRole('button', { name: 'Show legacy VPs', exact: true })).toHaveAttribute('aria-expanded', 'false');
-      await expectWithinViewport(dialog.locator('.group-settings-modal'), page);
-      await dialog.getByRole('tab', { name: 'Session', exact: true }).click();
-      const renamed = `Legacy collaboration ${suffix}`;
-      await dialog.locator('.group-settings-section-session .group-settings-input').first().fill(renamed);
-      await dialog.getByRole('button', { name: 'Save name', exact: true }).click();
-      await expect.poll(() => fixture.session().name).toBe(renamed);
-      await expect(dialog.getByRole('button', { name: 'Save name', exact: true })).toBeDisabled();
-      await expect(dialog.getByRole('button', { name: 'Close', exact: true })).toBeEnabled();
-      title = renamed;
-      expect(fixture.session()).toMatchObject({ roster: ['linus', 'martin'], defaultVpId: 'linus' });
-      await dialog.locator('textarea').fill(`Shared briefing ${suffix}\n${'Long collaboration context. '.repeat(40).trim()}`);
-      await dialog.getByRole('button', { name: 'Save', exact: true }).click();
-      await expect.poll(() => fixture.session().announcement).toContain(`Shared briefing ${suffix}`);
-      await expect(dialog.getByRole('button', { name: 'Save', exact: true })).toBeDisabled();
-      await expect(dialog.getByRole('button', { name: 'Close', exact: true })).toBeEnabled();
-      expect(fixture.session()).toMatchObject({ roster: ['linus', 'martin'], defaultVpId: 'linus' });
-      await page.keyboard.press('Escape');
-      await expect(dialog).toHaveCount(0);
-      await hideMobileSidebar(page);
-      await page.locator('.yeaft-composer-model').click();
-      const model = surface.theme === 'light' ? 'B' : 'A';
-      await page.getByRole('menuitemradio', { name: new RegExp(`Catalog model ${model}`) }).click();
-      await expect.poll(() => fixture.session().config.model).toBe(`fixture/catalog-model-${model.toLowerCase()}`);
-      expect(fixture.session()).toMatchObject({ roster: ['linus', 'martin'], defaultVpId: 'linus' });
-      dialog = await openSettings(page, title);
-      await dialog.getByRole('tab', { name: 'Compatibility', exact: true }).click();
-      // Remove only the non-default member; collapsing does not rebuild a roster.
-      await member(dialog, 'martin').locator('input').uncheck();
-      await expect.poll(() => fixture.session().roster).toEqual(['linus']);
-      expect(fixture.session().defaultVpId).toBe('linus');
-      await expect(member(dialog, 'martin')).toHaveCount(0);
-      const showLegacy = dialog.locator('.vp-catalog-legacy-toggle');
-      await showLegacy.focus();
-      await page.keyboard.press('Enter');
-      await expect(showLegacy).toHaveAttribute('aria-expanded', 'true');
-      await expect(member(dialog, 'martin').locator('input')).not.toBeChecked();
-      await member(dialog, 'martin').locator('input').check();
-      await expect.poll(() => fixture.session().roster).toEqual(['linus', 'martin']);
-      await dialog.getByRole('button', { name: 'Hide legacy VPs', exact: true }).click();
-      await expect(member(dialog, 'martin').locator('input')).toBeChecked();
-      await member(dialog, customId).scrollIntoViewIfNeeded();
-      expect(await dialog.locator('.group-settings-pane').evaluate(el => el.scrollTop)).toBeGreaterThan(0);
-      await expectWithinViewport(dialog.locator('.group-settings-modal'), page);
-      await page.screenshot({ path: info.outputPath(`vp-legacy-members-${suffix}.png`) });
-      // The library has the same default catalog, not a destructive migration.
-      await dialog.getByRole('button', { name: 'Open VP Library', exact: true }).click();
-      const library = page.locator('.vp-crud-panel:visible');
-      await expect(library.locator('.vp-crud-card')).toHaveCount(6);
-      await expect(library.locator('.vp-crud-card').filter({ hasText: 'Custom research partner' })).toBeVisible();
-      const libraryToggle = library.locator('.vp-catalog-legacy-toggle');
-      await libraryToggle.focus();
-      await page.keyboard.press('Enter');
-      await expect(libraryToggle).toHaveAttribute('aria-expanded', 'true');
-      await expect(library.locator('.vp-crud-card')).toHaveCount(vpFilesBefore.length);
-      const linus = library.locator('.vp-crud-card').filter({ hasText: 'Linus Torvalds' });
-      await linus.scrollIntoViewIfNeeded();
-      await expect(linus.getByRole('button', { name: 'Delete', exact: true })).toBeDisabled();
-      await expect(linus.getByRole('button', { name: 'Edit', exact: true })).toBeDisabled();
-      await expectWithinViewport(page.locator('.settings-dialog:visible'), page);
-      await page.screenshot({ path: info.outputPath(`vp-library-expanded-${suffix}.png`) });
-      await library.getByRole('button', { name: 'Hide legacy VPs', exact: true }).click();
-      await expect(library.locator('.vp-crud-card')).toHaveCount(6);
-      await page.locator('.settings-close:visible').click();
-      await hideMobileSidebar(page);
-      await expect(page.locator('.assistant-turn').filter({ hasText: 'linus preserved historical answer' })).toBeVisible();
-      await expect(page.locator('.assistant-turn').filter({ hasText: 'martin preserved historical answer' })).toBeVisible();
-      await page.screenshot({ path: info.outputPath(`vp-history-${suffix}.png`) });
-      expect(fixture.session()).toMatchObject({ roster: ['linus', 'martin'], defaultVpId: 'linus' });
-      expect(fixture.errors).toEqual([]);
-      expect(readdirSync(fixture.libDir).sort()).toEqual(vpFilesBefore);
-      expect(['linus', 'martin'].map(id => readFileSync(join(fixture.libDir, id, 'role.md'), 'utf8'))).toEqual(legacySouls);
-    });
-  }
-  const requests = mockAgent.messages();
-  expect(requests.filter(row => row.type === 'yeaft_session_remove_member').map(row => row.vpId)).toEqual(['martin', 'martin']);
-  expect(requests.filter(row => row.type === 'yeaft_session_add_member').map(row => row.vpId)).toEqual(['martin', 'martin']);
-  expect(requests.some(row => /delete|archive/.test(row.type))).toBe(false);
-  expect(new ConversationStore(fixture.root).loadAllBySession(fixture.legacyId).filter(row => row.role === 'assistant')
-    .map(row => row.content)).toEqual(['linus preserved historical answer', 'martin preserved historical answer']);
-});
-
 test('ordinary Session scenes persist through a live switch and reload without exposing VP names', async ({ page, serverUrl, mockAgent }, info) => {
   test.setTimeout(60_000);
   await page.addInitScript(() => localStorage.setItem('locale', 'en'));

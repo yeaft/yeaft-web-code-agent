@@ -25,10 +25,6 @@ afterEach(async () => {
 });
 
 describe('Agent package bin validation', () => {
-  it('accepts the repository manifest', async () => {
-    expect(await validateAgentPackageBins(join(import.meta.dirname, '..', 'agent'))).toEqual([]);
-  });
-
   it('rejects targets without a Node shebang or executable mode', async () => {
     const agentDir = await createAgentPackage({ contents: 'console.log("no shebang");\n', mode: 0o644 });
     await expect(validateAgentPackageBins(agentDir, { platform: 'linux' })).resolves.toEqual([

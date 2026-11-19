@@ -48,13 +48,13 @@ Sessions that chose Short video now show Content creation: the short-video pract
 
 ## 删除对话轮次
 
-轮次删除默认关闭。管理员须先备份并停掉这个数据目录的所有 Agent、CLI 和维护进程，升级所有会读取该目录的程序，再在 **Agent 启动命令**中加入 `--session-turn-deletion-cutover /absolute/data/dir`（例如 `yeaft-agent --yeaft-dir /absolute/data/dir --session-turn-deletion-cutover /absolute/data/dir`，其余连接参数保持原样）。独立存放的历史目录可重复传这个参数。只改磁盘上的配置或使用 Web 工作台不能开启正在运行的 Agent 的删除能力。旧版不会识别删除标记，同一数据目录不能再交给旧版；如需回滚，使用隔离的数据目录。
+新版 Agent 默认支持轮次删除，无须启动参数或设置。不支持删除的旧 Agent 可以继续连接同一个 Server，其会话不显示删除图标。如果多个进程共用同一份会话数据，请在首次删除前升级或停用不识别删除标记的旧 Agent 或 CLI，避免旧进程仍读取已删除的内容。
 
 在原生 Yeaft Session 空闲时，会话所有者可以在自己发送的消息下选择 **删除轮次** 并确认。选择原始提问或任意一条补充消息，删除的都是整个 Turn：所有用户输入、VP 回复、模型 Loop 及工具调用和返回结果。无法安全确定归属的旧记录不会删除。
 
 删除后，历史、搜索、调试面板和新的模型请求不再读取该轮次，独立的 Loop 与工具调试记录也会清理。为避免旧版进程正在写入时丢失其他消息，在线删除不会重写会话的追加日志：历史和模型已无法访问这些记录，但原始字节可能仍在本机。管理员需要进一步清理时，先备份并停止这个数据目录的所有 Agent、CLI 和维护进程，再针对准确的 Session ID 运行 `node agent/yeaft/cli.js --prune-deleted-session-turns-offline <sessionId>`。这不是安全擦除备份或后来请求中已经复制的内容。
 
-此操作不可撤销，不回滚工具已经执行的操作或工作区文件，也不修改已分叉的 Session 或其他回复里的转述。删除入口需要 Agent、Server 和 Web 同步更新，不适用于定时任务 Session、数字人或 CLI 对话。
+此操作不可撤销，不回滚工具已经执行的操作或工作区文件，也不修改已分叉的 Session 或其他回复里的转述。删除入口要求 Agent 和 Server 都支持轮次删除，且 Web 已更新。不适用于定时任务 Session、数字人或 CLI 对话。
 
 ## Fork the current Session
 

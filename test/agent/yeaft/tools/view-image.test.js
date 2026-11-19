@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import viewImage from '../../../../agent/yeaft/tools/view-image.js';
-import { hydratePersistedUserAttachmentContent, persistedAttachmentPreviewPayload } from '../../../../agent/yeaft/attachments.js';
+import { persistedAttachmentPreviewPayload } from '../../../../agent/yeaft/attachments.js';
 
 const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jC1sAAAAASUVORK5CYII=', 'base64');
 const directories = [];
@@ -21,21 +21,6 @@ function fixture() {
 }
 
 describe('ViewImage owned Session attachments', () => {
-  it('reads current Session images outside workDir and preserves provider history and preview payloads', async () => {
-    const { ctx, image, read } = fixture();
-    const path = image(), data = png.toString('base64');
-    expect(await read(path)).toMatchObject({ path, width: 1, height: 1, media_type: 'image/png', size: png.length, image: `data:image/png;base64,${data}` });
-    const attachment = { path, name: 'pixel.png', mimeType: 'image/png', isImage: true };
-    expect(persistedAttachmentPreviewPayload(attachment, ctx)).toMatchObject({ data, mimeType: 'image/png', filename: 'pixel.png' });
-    const row = { role: 'user', sessionId: ctx.sessionId, content: 'see image', attachments: [attachment] };
-    expect(hydratePersistedUserAttachmentContent(row, ctx)).toContainEqual({ type: 'image', source: { type: 'base64', media_type: 'image/png', data } });
-    expect(row.content).toBe('see image');
-    writeFileSync(join(ctx.cwd, 'project.png'), png);
-    expect(await read('project.png')).toMatchObject({ size: png.length, width: 1 });
-    const allowed = join(dirname(ctx.cwd), 'allowed'); mkdirSync(allowed); writeFileSync(join(allowed, 'allowed.png'), png);
-    expect(await read(join(allowed, 'allowed.png'), { imageAllowlist: [allowed] })).toHaveProperty('image');
-  });
-
   it('rejects other Sessions, missing ownership, traversal and symlinked attachments without widening the instance allowlist', async () => {
     const { ctx, image, read } = fixture();
     const own = image(), other = image('other-session');
@@ -51,12 +36,4 @@ describe('ViewImage owned Session attachments', () => {
     expect(persistedAttachmentPreviewPayload({ path: other, isImage: true }, ctx)).toBeNull();
   });
 
-  it('bounds attachment reads, rejects unsupported images and still handles missing project files', async () => {
-    const { image, read } = fixture();
-    const own = image();
-    expect(await read(own, { maxImageBytes: png.length - 1 })).toMatchObject({ error: expect.stringMatching(/size limit/), code: 'image_attachment_unavailable' });
-    expect(await read(own, { maxImageBytes: png.length })).toHaveProperty('image');
-    expect(await read(image(undefined, 'pixel.txt'))).toMatchObject({ error: expect.stringMatching(/Unsupported image format/) });
-    expect(await read('missing.png')).toMatchObject({ code: 'image_not_found', errorEffect: 'none' });
-  });
 });

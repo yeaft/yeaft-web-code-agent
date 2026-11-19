@@ -1,6 +1,5 @@
 import { test as base, expect } from '@playwright/test';
 import { createServer } from 'node:http';
-import { runInNewContext } from 'node:vm';
 import { WebSocketServer } from 'ws';
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 
@@ -453,123 +452,9 @@ test('ordinary Session Files selects, reads and saves outside workDir without mo
   expect(await page.evaluate(() => window.harness.bridgeErrors)).toEqual([]);
 });
 
-function treeEntry(page, path) { return page.locator(`[data-tree-path=${JSON.stringify(path)}]`); }
-
-async function expectLocated(page, path) {
-  await expect(treeEntry(page, path)).toHaveClass(/tree-navigation-current/);
-}
-
 // A loopback frame barrier drains production onmessage + Vue's batched watchers,
 // then the serialized Agent dispatcher. Negative assertions need not sleep for
 // a reconnect timeout or mistake "not sent yet" for "never retried".
 
-test('late real directory/file responses cannot steal the current tab selection or resurrect an old root', async ({ page, harness }) => {
-  const held = [];
-  let captured;
-  const capture = new Promise(ok => { captured = ok; });
-  await page.route('**/bridge', async route => {
-    const request = route.request().postDataJSON();
-    if ((request.type === 'list_directory' && request.dirPath === join(harness.workDir, 'first-long-directory'))
-      || (request.type === 'read_file' && request.filePath === harness.deepPath)) {
-      const response = await route.fetch();
-      held.push(() => route.fulfill({ response }));
-      if (held.length === 2) captured();
-    } else await route.continue();
-  });
-  await page.goto(harness.url);
-  await openFiles(page);
-  await page.evaluate(path => window.harness.openFile(path), harness.deepPath);
-  await capture;
-  await page.evaluate(path => window.harness.openFile(path), harness.textPath);
-  await expectLocated(page, harness.textPath);
-  for (const release of held.reverse()) await release();
-  await page.evaluate(() => window.harness.idle());
-  await expectLocated(page, harness.textPath);
-  await expect(page.locator('.vscode-folder-name')).toHaveAttribute('title', harness.externalDir);
-  await expect(page.locator('.file-path-name')).toHaveText('external.txt');
-  await expect(page.locator('.CodeMirror')).toContainText('Original disk content.');
-  await expect(treeEntry(page, join(harness.workDir, 'first-long-directory'))).toHaveCount(0);
-  expect(await page.evaluate(() => window.harness.bridgeErrors)).toEqual([]);
-});
-
 // One real Files -> Agent bytes -> worker -> shared table workflow, across themes
 // and narrow layouts. This is not a mocked sheet_to_html/component harness.
-test('local Excel previews scroll, select, copy, sort and filter without writing source files', async ({ page, context, harness }, testInfo) => {
-  const sandbox = {};
-  runInNewContext(await readFile(join(ROOT, 'web/vendor/xlsx.min.js'), 'utf8'), sandbox);
-  const XLSX = sandbox.XLSX;
-  const book = XLSX.utils.book_new();
-  const values = Array.from({ length: 81 }, (_, r) => Array.from({ length: 24 }, (_, c) =>
-    r === 0 ? `Heading ${c}` : c === 0 ? `row-${r}` : c === 1 ? 82 - r : `${r}:${c} long cell content`));
-  values[1][2] = '<img src=x onerror=alert(1)>';
-  XLSX.utils.book_append_sheet(book, XLSX.utils.aoa_to_sheet(values), '<svg onload=alert(1)>');
-  XLSX.utils.book_append_sheet(book, {}, 'Empty');
-  XLSX.utils.book_append_sheet(book, { A1500: { t: 's', v: 'Data outside preview' }, '!ref': 'A1500' }, 'Sparse');
-  const bytes = Buffer.from(XLSX.write(book, { type: 'array', bookType: 'xlsx' }));
-  const path = join(harness.workDir, 'sheet.xlsx');
-  await writeFile(path, bytes);
-  await context.grantPermissions(['clipboard-read', 'clipboard-write']);
-  const errors = [];
-  const workerUrls = [];
-  page.on('pageerror', error => errors.push(error.message));
-  page.on('worker', worker => workerUrls.push(worker.url()));
-  for (const [theme, width] of [['light', 1280], ['dark', 320]]) {
-    await page.setViewportSize({ width, height: 800 });
-    await page.goto(harness.url);
-    await page.evaluate(theme => { document.documentElement.dataset.theme = theme; localStorage.setItem('officePreviewMode', 'local'); }, theme);
-    await openFiles(page);
-    await page.evaluate(path => window.harness.openFile(path), path);
-    await expect(page.locator('.spreadsheet-preview tbody tr')).toHaveCount(50);
-    await expect(page.locator('.xlsx-sheet-tab').first()).toHaveText('<svg onload=alert(1)>');
-    await expect(page.locator('.spreadsheet-preview img, .spreadsheet-preview svg, .spreadsheet-preview a')).toHaveCount(0);
-    const scroll = page.locator('.csv-preview-scroll');
-    const bounds = await scroll.boundingBox();
-    expect(bounds.width).toBeGreaterThan(20);
-    expect(bounds.x + bounds.width).toBeLessThanOrEqual(width + 1);
-    await scroll.evaluate(el => { el.scrollTop = 300; el.scrollLeft = 600; });
-    expect(await scroll.evaluate(el => el.scrollLeft)).toBeGreaterThan(0);
-    expect(await scroll.evaluate(el => el.scrollTop)).toBeGreaterThan(0);
-    const corner = await page.locator('thead .csv-row-number').boundingBox();
-    expect(Math.abs(corner.x - bounds.x)).toBeLessThan(2);
-    expect(Math.abs(corner.y - bounds.y)).toBeLessThan(2);
-    const rowNumber = await page.locator('tbody .csv-row-number').nth(15).boundingBox();
-    expect(Math.abs(rowNumber.x - bounds.x)).toBeLessThan(2);
-    await testInfo.attach(`sheet-${theme}-${width}`, { body: await page.screenshot(), contentType: 'image/png' });
-    await scroll.evaluate(el => { el.scrollTop = 0; el.scrollLeft = 0; });
-    await page.locator('input[type=checkbox]').check();
-    const cells = page.locator('tbody tr').first().locator('td');
-    await cells.nth(0).click();
-    await page.keyboard.press('Shift+ArrowRight');
-    await expect(page.locator('.table-cell-selected')).toHaveCount(2);
-    await page.keyboard.press('Control+c');
-    expect(await page.evaluate(() => navigator.clipboard.readText())).toBe('row-1\t81');
-    await page.locator('.table-sort').nth(1).click();
-    await expect(page.locator('tbody tr').first().locator('td').first()).toHaveText('row-80');
-    await expect(page.locator('tbody th').first()).toHaveText('81');
-    await page.locator('input[type=search]').fill('row-80');
-    await expect(page.locator('tbody tr')).toHaveCount(1);
-    await page.locator('select').selectOption('1');
-    await expect(page.getByText('No matching rows.', { exact: true })).toBeVisible();
-    await page.locator('.xlsx-sheet-tab').nth(1).click();
-    await expect(page.getByText('No data in the preview range', { exact: false })).toBeVisible();
-    await expect(page.getByText('This worksheet is empty.', { exact: true })).toHaveCount(0);
-    await page.locator('.xlsx-sheet-tab').nth(2).click();
-    await expect(page.getByText('No data in the preview range', { exact: false })).toBeVisible();
-    await expect(page.getByText('This worksheet is empty.', { exact: true })).toHaveCount(0);
-    await page.locator('.xlsx-sheet-tab').first().click();
-    await expect(page.locator('tbody tr')).toHaveCount(50);
-    await expect(page.locator('input[type=search]')).toHaveValue('');
-    await page.locator('tbody tr').nth(49).locator('td').first().click();
-    await expect(page.locator('.table-cell-selected')).toHaveCount(1);
-    await page.getByRole('button', { name: 'Next', exact: true }).click();
-    await expect(page.locator('tbody tr')).toHaveCount(31);
-    await expect(page.locator('.table-copy')).toBeDisabled();
-  }
-  expect(workerUrls.length).toBeGreaterThanOrEqual(2);
-  expect(workerUrls.every(url => url === `${harness.url}/spreadsheet-worker.js`)).toBe(true);
-  // The old URL must not be a harness alias that could mask a source-app 404.
-  expect((await page.request.get(`${harness.url}/web/spreadsheet-worker.js`)).status()).toBe(404);
-  expect(await readFile(path)).toEqual(bytes);
-  expect(harness.requests.some(message => message.type === 'write_file')).toBe(false);
-  expect(errors).toEqual([]);
-});

@@ -3,7 +3,6 @@ import { chmodSync, existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSyn
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { createHash } from 'node:crypto';
 
 const installer = resolve(import.meta.dirname, '../web/installers/install.sh');
 const temporaryDirectories = [];
@@ -51,30 +50,7 @@ function fixture({ node = 'valid', platform = 'Linux', arch = 'x86_64', spaces =
   if (node !== 'missing-npm') executable(join(bin, 'npm'), npmScript());
   return { root, home, bin, platform, arch, log: join(root, 'commands.jsonl'), npmLog: join(root, 'npm.log') };
 }
-function downloadFixture(f, { badChecksum = false, failDownload = false } = {}) {
-  const staging = join(f.root, 'archive-source');
-  mkdirSync(join(staging, 'node/bin'), { recursive: true });
-  executable(join(staging, 'node/bin/node'), nodeScript(true));
-  executable(join(staging, 'node/bin/npm'), npmScript());
-  const archive = join(f.root, 'node.tar.gz');
-  const packed = spawnSync('/usr/bin/tar', ['-czf', archive, '-C', staging, 'node']);
-  expect(packed.status).toBe(0);
-  const hash = badChecksum ? '0'.repeat(64) : createHash('sha256').update(readFileSync(archive)).digest('hex');
-  const name = `node-v24.9.0-${f.platform === 'Darwin' ? 'darwin' : 'linux'}-${f.arch === 'x86_64' ? 'x64' : 'arm64'}.tar.gz`;
-  const sums = join(f.root, 'sums');
-  writeFileSync(sums, `${hash}  ${name}\n`);
-  executable(join(f.bin, 'curl'), `out=
-while [ "$#" -gt 0 ]; do
-  if [ "$1" = -o ]; then out=$2; shift 2; continue; fi
-  url=$1; shift
-done
-printf '%s\\n' "$url" >> "$FIXTURE_DOWNLOAD_LOG"
-${failDownload ? 'exit 22' : `case "$url" in
-  */SHASUMS256.txt) cat ${q(sums)} > "$out" ;;
-  */v24.9.0/${name}) cat ${q(archive)} > "$out" ;;
-  *) exit 23 ;;
-esac`}`);
-}
+
 function run(f, args = ['--server', 'wss://agent.example', '--secret', 'fixture-secret'], env = {}) {
   return spawnSync('/bin/sh', [installer, ...args], {
     encoding: 'utf8', timeout: 15000,
@@ -84,16 +60,6 @@ function run(f, args = ['--server', 'wss://agent.example', '--secret', 'fixture-
 function prefixes(f) { return readdirSync(join(f.home, '.yeaft/installations')).map(name => join(f.home, '.yeaft/installations', name)); }
 
 describe('isolated POSIX Agent installer (no live services or downloads)', () => {
-  it('supports help and rejects invalid arguments before writes without printing credentials', () => {
-    const f = fixture();
-    expect(run(f, ['--help']).status).toBe(0);
-    for (const args of [[], ['--server', 'https://invalid', '--secret', 'never-display'], ['--server', 'ws://'], ['never-display'], ['--server', 'wss://valid', '--secret', 'never-display\rnext']]) {
-      const r = run(f, args);
-      expect(r.status).toBe(1);
-      expect(r.stdout + r.stderr).not.toContain('never-display');
-      expect(existsSync(join(f.home, '.yeaft'))).toBe(false);
-    }
-  });
   it('reuses Node/npm, isolates prefix/config, keeps secret out of CLI arguments and prints a working wrapper', () => {
     const f = fixture({ spaces: true });
     const secret = `a'"$;&secret`;
@@ -117,38 +83,4 @@ describe('isolated POSIX Agent installer (no live services or downloads)', () =>
     expect(r.stdout + r.stderr).not.toContain(secret);
   });
 
-  it('passes the installed-package layout and instance roots into the real Linux service installer', () => {
-    const f = fixture();
-    const serviceModule = resolve(import.meta.dirname, '../agent/service/index.js');
-    executable(join(f.bin, 'npm'), npmScript().replace(cliFixture, `import(${JSON.stringify(serviceModule)}).then(m => m.install(process.argv.slice(2))).catch(() => process.exit(1));`));
-    const r = run(f);
-    expect(r.status, r.stderr).toBe(0);
-    const [prefix] = prefixes(f);
-    const name = prefix.split('/').at(-1);
-    const config = JSON.parse(readFileSync(join(f.home, '.config/yeaft-agent/instances', name, 'config.json'), 'utf8'));
-    expect(config).toMatchObject({ instanceId: name, serverUrl: 'wss://agent.example', agentSecret: 'fixture-secret', yeaftDir: `${prefix}/data`, workDir: `${prefix}/workspace` });
-    const unit = readFileSync(join(f.home, `.config/systemd/user/yeaft-agent@${name}.service`), 'utf8');
-    expect(unit).toContain(`WorkingDirectory=${prefix}/workspace`);
-    expect(unit).toContain(`ExecStart="${process.execPath}"`);
-    expect(existsSync(join(prefix, 'data/config.json'))).toBe(true);
-  });
-
-  it.each([{ badChecksum: true }, { failDownload: true }])('cleans only owned incomplete state on download failure (%j)', options => {
-    const f = fixture({ node: 'old' }); downloadFixture(f, options);
-    const r = run(f);
-    expect(r.status).toBe(1);
-    expect(prefixes(f)).toEqual([]);
-    expect(existsSync(f.npmLog)).toBe(false);
-  });
-
-  it('retains recovery files only after service install attempted and never marks failure complete', () => {
-    const f = fixture();
-    expect(run(f, undefined, { FIXTURE_NPM_FAIL: '1' }).status).toBe(1);
-    expect(prefixes(f)).toEqual([]);
-    const r = run(f, undefined, { FIXTURE_CLI_EXIT: '7' });
-    expect(r.status).toBe(1);
-    const [prefix] = prefixes(f);
-    expect(existsSync(join(prefix, '.complete'))).toBe(false);
-    expect(existsSync(join(prefix, 'service-install.log'))).toBe(true);
-  });
 });

@@ -3,42 +3,14 @@ import { afterEach, expect, it, vi } from 'vitest';
 import * as Vue from 'vue';
 import { flushPromises, mount } from '@vue/test-utils';
 import en from '../../web/i18n/en.js';
-import zh from '../../web/i18n/zh-CN.js';
 
 vi.stubGlobal('Vue', Vue);
 vi.stubGlobal('Pinia', { defineStore: () => () => ({}) });
 const { default: YeaftPage } = await import('../../web/components/YeaftPage.js');
-const { default: UserTurnBlock } = await import('../../web/components/UserTurnBlock.js');
 const { useDialogState, resolveDialog } = await import('../../web/utils/dialog.js');
 const translate = key => en[key] || key;
 let wrapper;
 afterEach(() => { wrapper?.unmount(); wrapper = null; });
-
-it('renders an accessible, localized and gated action on native user bubbles', async () => {
-  Pinia.useChatStore = () => ({});
-  const target = { agentId: 'a', sessionId: 's', messageId: 'm0002' };
-  wrapper = mount(UserTurnBlock, {
-    props: { message: { id: 'm0002', type: 'user', content: 'hello' } },
-    global: { provide: { t: translate }, config: { globalProperties: { $t: translate } } },
-  });
-  expect(wrapper.find('.message-delete-turn').exists()).toBe(false);
-  await wrapper.setProps({ deleteTurnAction: { target, reason: 'running' } });
-  const button = wrapper.get('.message-delete-turn');
-  expect(button.attributes('aria-label')).toBe('Delete turn');
-  expect(button.attributes('aria-disabled')).toBe('true');
-  await button.trigger('click');
-  expect(wrapper.emitted('delete-turn')).toBeUndefined();
-  await wrapper.setProps({ deleteTurnAction: { target, reason: 'unsupported' } });
-  expect(button.attributes('title')).toBe('Turn deletion requires an updated Server and Agent, and must be enabled for this data directory.');
-  expect(button.attributes('aria-disabled')).toBe('true');
-  await button.trigger('click');
-  expect(wrapper.emitted('delete-turn')).toBeUndefined();
-  expect(zh['yeaft.deleteTurn.unsupported']).toBe('请更新 Agent 和 Server，并为此数据目录启用轮次删除。');
-  await wrapper.setProps({ deleteTurnAction: { target } });
-  await button.trigger('click');
-  expect(wrapper.emitted('delete-turn')).toEqual([[target]]);
-  for (const key of Object.keys(en).filter(key => key.startsWith('yeaft.deleteTurn.'))) expect(zh[key]).toBeTruthy();
-});
 
 it('confirms the whole turn, ignores a confirmation after navigation, and localizes failures', async () => {
   const target = { agentId: 'a', sessionId: 's', messageId: 'm0002' };

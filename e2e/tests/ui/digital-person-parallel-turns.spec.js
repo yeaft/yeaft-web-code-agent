@@ -36,7 +36,8 @@ const test = base.extend({
 });
 test.use({ serverEnv: { SKIP_AUTH: 'false', TOTP_ENABLED: 'false', JWT_SECRET: 'isolated-person-parallel-browser-test-secret', SERVE_DIST: process.env.PERSON_UI_PRODUCTION || 'false' } });
 
-for (const scenario of [{ width: 1600, theme: 'light', panel: 'inside' }, { width: 1600, theme: 'dark', panel: 'outputs' }, { width: 320, theme: 'dark', panel: 'outputs' }]) {
+// Desktop verifies an open inspector is dismissed by the split; compact verifies modal and pane navigation.
+for (const scenario of [{ width: 1600, theme: 'light', panel: 'inside' }, { width: 320, theme: 'dark', panel: 'outputs' }]) {
   test(`Person parallel turns survive reload, independently stop and collapse only on split (${scenario.theme}, ${scenario.width}px)`, async ({ page, serverUrl, mockAgent, owner, testServer }, testInfo) => {
     test.setTimeout(90000);
     const browserLog = [], serverLog = [];

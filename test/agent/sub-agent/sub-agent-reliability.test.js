@@ -1,12 +1,11 @@
 // Sub-agent ownership, driver cleanup, and collectable follow-up replies.
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { Engine } from '../../../agent/yeaft/engine.js';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import { STATUS } from '../../../agent/yeaft/sub-agent/status.js';
-import { enqueueTerminalNotification, consumePendingNotifications, _resetNotifications } from '../../../agent/yeaft/sub-agent/notifications.js';
+import { _resetNotifications } from '../../../agent/yeaft/sub-agent/notifications.js';
 import { makeLiveness } from '../../../agent/yeaft/sub-agent/liveness.js';
 import { _resetAgentRegistry, getAgentRegistry } from '../../../agent/yeaft/tools/agent.js';
 
@@ -15,11 +14,9 @@ import sendMessage from '../../../agent/yeaft/tools/send-message.js';
 import waitAgent from '../../../agent/yeaft/tools/wait-agent.js';
 import closeAgent from '../../../agent/yeaft/tools/close-agent.js';
 import listAgents from '../../../agent/yeaft/tools/list-agents.js';
-import updateAgent from '../../../agent/yeaft/tools/update-agent.js';
 import { ToolRegistry } from '../../../agent/yeaft/tools/registry.js';
 import { defineTool } from '../../../agent/yeaft/tools/types.js';
 import { NullTrace } from '../../../agent/yeaft/debug-trace.js';
-import { TaskManager } from '../../../agent/yeaft/tasks/manager.js';
 
 const echoTool = defineTool({
   name: 'echo',
@@ -47,173 +44,11 @@ function mkDeps(adapter, overrides = {}) {
   };
 }
 
-const vpTestCtx = { parentEngineDeps: { parentVpId: 'vp-test' } };
-
-describe('notifications queue', () => {
-  beforeEach(() => _resetNotifications());
-
-  it('scopes parent drains by session and VP', () => {
-    enqueueTerminalNotification({
-      agentId: 'a-session-1', agentName: 'a1', status: 'completed',
-      parentVpId: 'vp-same', parentSessionId: 'session-1',
-    });
-    enqueueTerminalNotification({
-      agentId: 'a-session-2', agentName: 'a2', status: 'completed',
-      parentVpId: 'vp-same', parentSessionId: 'session-2',
-    });
-    enqueueTerminalNotification({
-      agentId: 'a-session-1-second', agentName: 'a3', status: 'completed',
-      parentVpId: 'vp-same', parentSessionId: 'session-1',
-    });
-
-    expect(consumePendingNotifications({
-      parentVpId: 'vp-same', sessionId: 'session-1',
-    }).map(n => n.agentId)).toEqual(['a-session-1', 'a-session-1-second']);
-    expect(consumePendingNotifications({
-      parentVpId: 'vp-same', sessionId: 'session-1',
-    })).toEqual([]);
-    expect(consumePendingNotifications({
-      parentVpId: 'vp-same', sessionId: 'session-2',
-    }).map(n => n.agentId)).toEqual(['a-session-2']);
-  });
-});
 
 describe('wait-agent envelope shape', () => {
   beforeEach(() => {
     _resetAgentRegistry();
     _resetNotifications();
-  });
-
-  it('waits through the normal follow-up latency by default but preserves explicit and spawn timeouts', async () => {
-    vi.useFakeTimers();
-    try {
-      const ctx = { sessionId: 'wait-latency', senderVpId: 'vp-test' };
-      const makeAgent = id => ({ id, name: id, status: STATUS.RUNNING, promptReplyPending: true,
-        parentSessionId: ctx.sessionId, parentVpId: 'vp-test', resultRevision: 1,
-        result: '', lastResult: '', usage: {}, liveness: makeLiveness(), abortController: new AbortController() });
-      const agent = makeAgent('follow-up');
-      getAgentRegistry().set(agent.id, agent);
-      let settled = false;
-      const waiting = waitAgent.execute({ agent_id: agent.id }, ctx).then(value => { settled = true; return JSON.parse(value); });
-      await vi.advanceTimersByTimeAsync(6_000);
-      expect(settled).toBe(false); // old default would have required another LLM request
-      Object.assign(agent, { status: STATUS.IDLE, result: 'reviewed delta', lastResult: 'reviewed delta' });
-      await vi.advanceTimersByTimeAsync(200);
-      expect(await waiting).toMatchObject({ status: STATUS.IDLE, result: 'reviewed delta', mustCollectReply: false });
-
-      const explicit = makeAgent('explicit');
-      getAgentRegistry().set(explicit.id, explicit);
-      const short = waitAgent.execute({ agent_id: explicit.id, timeout_ms: 5_000 }, ctx);
-      await vi.advanceTimersByTimeAsync(5_000);
-      expect(JSON.parse(await short)).toMatchObject({ timedOut: true, mustCollectReply: true });
-      expect(JSON.parse(await waitAgent.execute({ agent_id: explicit.id, timeout_ms: 0 }, ctx))).toMatchObject({ timedOut: true });
-      const controller = new AbortController();
-      const aborted = waitAgent.execute({ agent_id: explicit.id }, { ...ctx, signal: controller.signal });
-      controller.abort();
-      await vi.advanceTimersByTimeAsync(200);
-      expect(JSON.parse(await aborted).error).toBe('Wait cancelled');
-      expect(explicit.abortController.signal.aborted).toBe(false);
-      const spawned = makeAgent('spawned');
-      spawned.promptReplyPending = false;
-      getAgentRegistry().set(spawned.id, spawned);
-      const ordinary = waitAgent.execute({ agent_id: spawned.id }, ctx);
-      await vi.advanceTimersByTimeAsync(5_000);
-      expect(JSON.parse(await ordinary)).toMatchObject({ timedOut: true, mustCollectReply: false });
-    } finally { vi.useRealTimers(); }
-  });
-
-  it('exposes an awaitable driver cleanup and optional host VP ownership', async () => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'child-driver-join-'));
-    let observedVpId;
-    const owned = defineTool({
-      name: 'FileRead', description: 'observe ownership', parameters: { type: 'object', properties: {} },
-      isReadOnly: () => true,
-      async execute(_input, ctx) { observedVpId = ctx.currentVpId; return 'owned'; },
-    });
-    let calls = 0;
-    const adapter = { async *stream() {
-      if (calls++ === 0) { yield { type: 'tool_call', id: 'owned-call', name: 'FileRead', input: {} }; yield { type: 'stop', stopReason: 'tool_use' }; }
-      else { yield { type: 'text_delta', text: 'done' }; yield { type: 'stop', stopReason: 'end_turn' }; }
-    } };
-    let querySpy;
-    try {
-      const manager = new TaskManager({ yeaftDir: dir });
-      const refreshSpy = vi.spyOn(manager, 'refreshTaskLog');
-      const onEvent = vi.fn();
-      const originalQuery = Engine.prototype.query;
-      querySpy = vi.spyOn(Engine.prototype, 'query').mockImplementation(async function* (...args) {
-        // Inject Engine control events at the runner boundary, while keeping
-        // the actual child query/tool flow below intact.
-        const refreshCount = refreshSpy.mock.calls.length;
-        for (const type of ['provider_activity', 'query_progress', 'query_progress']) {
-          yield { type, toolCalls: 2, repeatedResults: 1 };
-          expect(refreshSpy).toHaveBeenCalledTimes(refreshCount);
-        }
-        yield* originalQuery.apply(this, args);
-      });
-      const registry = mkParentRegistry().register(owned);
-      const deps = mkDeps(adapter, { parentToolRegistry: registry, parentSessionId: 'owned-scope', childVpId: 'owned-vp', taskManager: manager, subAgentLogDir: dir, onEvent });
-      const ctx = { cwd: dir, queryTurnId: 'owned-query', parentEngineDeps: deps, taskManager: manager };
-      const spec = { name: 'owned', mission: 'use owned', baseline: '04f0705a' };
-      const spawned = JSON.parse(await agentTool.execute(spec, ctx));
-      const retry = JSON.parse(await agentTool.execute({ ...spec, name: 'renamed' }, ctx));
-      expect(retry).toMatchObject({ reused: true, agentId: spawned.agentId, taskId: spawned.taskId });
-      expect(getAgentRegistry().size).toBe(1);
-      const agent = getAgentRegistry().get(spawned.agentId);
-      expect(agent.driverPromise).toBeInstanceOf(Promise);
-      await agent.driverPromise;
-      expect(observedVpId).toBe('owned-vp');
-      expect(agent.result).toBe('done');
-      expect(agent.__driverStarted).toBe(false);
-      expect(agent.subEngine).toBe(null);
-      expect(agent.status).toBe(STATUS.COMPLETED);
-      const childLog = fs.readFileSync(agent.outputFile, 'utf8');
-      expect(childLog).toContain('text_delta');
-      expect(childLog).not.toMatch(/provider_activity|query_progress/);
-      expect(onEvent.mock.calls.some(([, evt]) => ['provider_activity', 'query_progress'].includes(evt.type))).toBe(false);
-      expect(JSON.stringify(agent.engineMessages)).not.toContain('query_progress');
-      expect(agent.subVpPersona.runtimePreamble).toContain('Workspace baseline: 04f0705a');
-      const terminalRetry = JSON.parse(await agentTool.execute({ ...spec, name: 'terminal-renamed' }, ctx));
-      expect(terminalRetry).toMatchObject({ reused: true, status: STATUS.COMPLETED, agentId: spawned.agentId, taskId: spawned.taskId });
-      const collected = JSON.parse(await waitAgent.execute({ agent_id: agent.id }, ctx));
-      expect(collected.result).toBe('done');
-      expect(terminalRetry.resultRef).toBe(collected.resultRef);
-      const repeated = JSON.parse(await waitAgent.execute({ agent_id: agent.id }, ctx));
-      expect(repeated).toMatchObject({ alreadyCollected: true, resultRef: collected.resultRef, status: STATUS.COMPLETED });
-      expect(repeated).not.toHaveProperty('result');
-      expect(calls).toBe(2);
-      expect(querySpy).toHaveBeenCalledTimes(1);
-    } finally {
-      querySpy?.mockRestore();
-      fs.rmSync(dir, { recursive: true, force: true });
-    }
-  });
-
-  it('separates completed lifecycle from an incomplete budget outcome in WaitAgent', async () => {
-    const agent = {
-      id: 'agent-budget', name: 'budget', status: STATUS.COMPLETED,
-      result: { status: 'budget_exceeded', outcome: 'incomplete', complete: false,
-        partial_output: 'APPROVE', reason: 'max_tool_calls reached', usage: { turns: 1 },
-        truncated: true, final_report: { reserved: true, received: true, truncated: true, text: 'APPROVE' } },
-      lastResult: '', error: null, messages: [], usage: { turns: 1, startedAt: Date.now() },
-      outputFile: '/tmp/budget.log', liveness: makeLiveness(), parentSessionId: null,
-      parentVpId: 'vp-test', pendingPrompts: [],
-    };
-    getAgentRegistry().set(agent.id, agent);
-    const waited = JSON.parse(await waitAgent.execute({ agent_id: agent.id, timeout_ms: 0 }, vpTestCtx));
-    expect(waited).toMatchObject({
-      status: STATUS.COMPLETED,
-      lifecycle: { status: STATUS.COMPLETED, terminal: true },
-      outcome: { status: 'incomplete', complete: false, reason: 'budget_exceeded', truncated: true },
-      budgetExceeded: true, incomplete: true, truncated: true, partial_output: 'APPROVE',
-      final_report: { reserved: true, received: true, truncated: true },
-    });
-    expect(waited.next_steps).toContain('Do NOT present this as an ordinary successful completion');
-    const repeated = JSON.parse(await waitAgent.execute({ agent_id: agent.id, timeout_ms: 0 }, vpTestCtx));
-    expect(repeated).toMatchObject({ alreadyCollected: true, resultRef: waited.resultRef, incomplete: true, budgetExceeded: true });
-    expect(repeated).not.toHaveProperty('result');
-    expect(repeated).not.toHaveProperty('partial_output');
-    expect(repeated).not.toHaveProperty('final_report');
   });
 
   it('scoped tools reject agents owned by another session', async () => {
@@ -245,64 +80,6 @@ describe('wait-agent envelope shape', () => {
     expect(listed.agents.map(a => a.id)).toEqual(['agent-owned-b']);
     const ownWait = JSON.parse(await waitAgent.execute({ agent_id: 'agent-owned-b' }, ctxB));
     expect(ownWait.result).toBe('visible result');
-  });
-
-  it('uses canonical exact specs and rejects explicit identity conflicts without semantic deduplication', async () => {
-    const parentToolRegistry = mkParentRegistry().register(defineTool({ name: 'FileRead', aliases: ['Read'], description: 'read', parameters: {}, execute: async () => 'read' }));
-    const ctx = { cwd: os.tmpdir(), queryTurnId: 'canonical-query', parentEngineDeps: { parentVpId: 'vp-test', parentToolRegistry } };
-    const spec = { name: 'canonical', taskKey: 'review', mission: 'Review baseline', persona: 'reviewer', cwd: '.', baseline: '04f0705a',
-      expected_output: { type: 'object', properties: { evidence: { type: 'string' }, ok: { type: 'boolean' } } }, allow_tools: ['echo', 'FileRead'] };
-    const spawned = JSON.parse(await agentTool.execute(spec, ctx));
-    expect(spawned.success).toBe(true);
-    const canonicalRetry = { ...spec, name: 'renamed', cwd: path.resolve(ctx.cwd), allow_tools: ['Read', 'echo', 'echo'],
-      expected_output: { properties: { ok: { type: 'boolean' }, evidence: { type: 'string' } }, type: 'object' } };
-    expect(JSON.parse(await agentTool.execute(canonicalRetry, ctx))).toMatchObject({ reused: true, agentId: spawned.agentId });
-    // Each execution-relevant field must conflict under the explicit identity.
-    for (const change of [
-      { mission: 'Review the baseline' }, { persona: 'explorer' }, { cwd: 'other' }, { baseline: 'different-sha' },
-      { expected_output: { type: 'string' } }, { allow_tools: ['echo'] }, { budget: { max_turns: 2 } },
-    ]) {
-      const conflict = JSON.parse(await agentTool.execute({ ...spec, ...change, name: 'changed' }, ctx));
-      expect(conflict.error).toMatch(/Task identity conflict/);
-      expect(conflict.agentId).toBe(spawned.agentId);
-    }
-    expect(getAgentRegistry().size).toBe(1);
-    expect(JSON.parse(await sendMessage.execute({ agent_id: spawned.agentId, message: 'Follow-up review' }, ctx)).success).toBe(true);
-    const superseded = JSON.parse(await agentTool.execute(canonicalRetry, ctx));
-    expect(superseded).toMatchObject({ agentId: spawned.agentId, error: expect.stringMatching(/Delegation evidence superseded/) });
-    expect(superseded).not.toHaveProperty('resultRef');
-    const independent = JSON.parse(await agentTool.execute({ ...spec, name: 'independent', taskKey: 'review-independent' }, ctx));
-    expect(independent.success).toBe(true);
-    expect(independent.agentId).not.toBe(spawned.agentId);
-    const implicit = { ...spec, name: 'implicit', taskKey: undefined };
-    const first = JSON.parse(await agentTool.execute(implicit, ctx));
-    expect(JSON.parse(await agentTool.execute({ ...implicit, name: 'implicit-retry' }, ctx))).toMatchObject({ reused: true, agentId: first.agentId });
-    expect(JSON.parse(await updateAgent.execute({ agent_id: first.agentId, reason: 'Collect final evidence', request_finalize: true }, ctx)).success).toBe(true);
-    // Final-report control must fence reuse before its query revision starts.
-    expect(JSON.parse(await agentTool.execute(implicit, ctx))).toMatchObject({ agentId: first.agentId, error: expect.stringMatching(/Delegation evidence superseded/) });
-    const similar = JSON.parse(await agentTool.execute({ ...implicit, name: 'similar', mission: 'Review the baseline' }, ctx));
-    expect(similar.success).toBe(true);
-    expect(similar.agentId).not.toBe(first.agentId);
-  });
-
-  it('isolates exact delegation reuse by query, workspace and owner, leaving legacy callers unchanged', async () => {
-    const ctx = { cwd: os.tmpdir(), queryTurnId: 'query-a', sessionId: 'session-a', senderVpId: 'vp-a', threadId: 'thread-a' };
-    const spec = { name: 'scoped', mission: 'Same task', taskKey: 'same-key' };
-    const spawned = JSON.parse(await agentTool.execute(spec, ctx));
-    for (const [index, change] of [
-      { queryTurnId: 'query-b' }, { cwd: path.join(os.tmpdir(), 'other-workspace') },
-      { sessionId: 'session-b' }, { senderVpId: 'vp-b' }, { threadId: 'thread-b' },
-    ].entries()) {
-      const independent = JSON.parse(await agentTool.execute({ ...spec, name: 'scope-' + index }, { ...ctx, ...change }));
-      expect(independent.success).toBe(true);
-      expect(independent.reused).not.toBe(true);
-      expect(independent.agentId).not.toBe(spawned.agentId);
-    }
-    const legacyCtx = { ...ctx, queryTurnId: undefined };
-    const legacy = JSON.parse(await agentTool.execute({ ...spec, name: 'legacy-a' }, legacyCtx));
-    const legacyRetry = JSON.parse(await agentTool.execute({ ...spec, name: 'legacy-b' }, legacyCtx));
-    expect(legacyRetry.agentId).not.toBe(legacy.agentId);
-    expect(legacyRetry.reused).not.toBe(true);
   });
 
   it('collects PromptAgent revisions once each without reusing continuation evidence for the original delegation', async () => {

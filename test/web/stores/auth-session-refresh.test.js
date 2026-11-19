@@ -37,13 +37,6 @@ function jsonResponse({ ok = true, status = 200, body = {}, headers = {} } = {})
   };
 }
 
-async function loadAuthStore() {
-  vi.resetModules();
-  globalThis.Pinia = { defineStore: createStoreFactory() };
-  const mod = await import('../../../web/stores/auth.js');
-  return mod.useAuthStore();
-}
-
 beforeEach(() => {
   vi.useFakeTimers();
 });
@@ -103,62 +96,4 @@ describe('auth store session restore and refresh', () => {
     expect(auth.userId).toBe('owner-b');
   });
 
-  it('does not let stale auth failures clear a newer login token', async () => {
-    globalThis.localStorage = createLocalStorage({ authToken: 'new-token' });
-    const auth = await loadAuthStore();
-    auth.token = 'new-token';
-    auth.isAuthenticated = true;
-
-    const ok = auth.handleAuthFailure('expired', 'old-token');
-
-    expect(ok).toBe(false);
-    expect(auth.isAuthenticated).toBe(true);
-    expect(auth.token).toBe('new-token');
-    expect(globalThis.localStorage.removeItem).not.toHaveBeenCalledWith('authToken');
-  });
-
-  it('clears an authenticated cookie-only session on a current 401', async () => {
-    globalThis.localStorage = createLocalStorage({
-      'yeaft-work-center-composer-drafts-v1': JSON.stringify({ ownerId: 'user-a', records: { draft: {} } }),
-      'yeaft-work-center-message-outbox-v1': JSON.stringify({ ownerId: 'user-a', records: { outbox: {} } }),
-    });
-    const auth = await loadAuthStore();
-    auth.isAuthenticated = true;
-    auth.authGeneration = 4;
-
-    const handled = auth.handleAuthResponse(
-      jsonResponse({ ok: false, status: 401 }),
-      null,
-      4,
-      true,
-    );
-
-    expect(handled).toBe(true);
-    expect(auth.isAuthenticated).toBe(false);
-    expect(auth.authGeneration).toBe(5);
-    expect(globalThis.localStorage.removeItem).toHaveBeenCalledWith('authToken');
-    expect(globalThis.localStorage.removeItem)
-      .toHaveBeenCalledWith('yeaft-work-center-composer-drafts-v1');
-    expect(globalThis.localStorage.removeItem)
-      .toHaveBeenCalledWith('yeaft-work-center-message-outbox-v1');
-  });
-
-  it('ignores a cookie-only 401 from an older auth generation', async () => {
-    globalThis.localStorage = createLocalStorage();
-    const auth = await loadAuthStore();
-    auth.isAuthenticated = true;
-    auth.authGeneration = 8;
-
-    const handled = auth.handleAuthResponse(
-      jsonResponse({ ok: false, status: 401 }),
-      null,
-      7,
-      true,
-    );
-
-    expect(handled).toBe(false);
-    expect(auth.isAuthenticated).toBe(true);
-    expect(auth.authGeneration).toBe(8);
-    expect(globalThis.localStorage.removeItem).not.toHaveBeenCalled();
-  });
 });

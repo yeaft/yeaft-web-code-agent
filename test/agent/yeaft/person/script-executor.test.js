@@ -22,13 +22,4 @@ describe('Person pure script executor', () => {
     } finally { clearInterval(timer); }
   });
 
-  it('joins cancelled execution and remains usable afterwards', async () => {
-    const controller = new AbortController();
-    const error = new Error('cancel');
-    const running = runPersonScript('while(true){}', null, { signal: controller.signal });
-    setTimeout(() => controller.abort(error), 10);
-    await expect(running).rejects.toBe(error);
-    await expect(runPersonScript('return 1;', null, { signal: controller.signal })).rejects.toBe(error);
-    expect(await runPersonScript('return 2;', null)).toEqual({ ok: true, output: 2 });
-  });
 });

@@ -3922,11 +3922,11 @@ export const useChatStore = defineStore('chat', {
     yeaftTurnDeleteUnavailable(target) {
       const { agentId, sessionId } = target;
       const key = yeaftHistoryIdentityKey(agentId, sessionId);
-      if (this._yeaftTurnDeletePending[key]) return 'pending';
       const agent = this.agents.find(agent => agent.id === agentId);
-      if (this.connectionState !== 'connected' || !agent?.online) return 'offline';
-      if (this.yeaftSessionDeleteTurnSupported !== true || !Array.isArray(agent.capabilities)
+      if (this.yeaftSessionDeleteTurnSupported !== true || !Array.isArray(agent?.capabilities)
           || !agent.capabilities.includes('session_delete_turn')) return 'unsupported';
+      if (this._yeaftTurnDeletePending[key]) return 'pending';
+      if (this.connectionState !== 'connected' || !agent.online) return 'offline';
       if (this.yeaftTurnDeleteHistoryBySession?.[key]?.needsReplay
           || yeaftHistoryNeedsReconnectValidation(this, this.yeaftSessionHistoryState[key])) return 'refreshing';
       if (this.isYeaftSessionProcessing(sessionId, agentId)

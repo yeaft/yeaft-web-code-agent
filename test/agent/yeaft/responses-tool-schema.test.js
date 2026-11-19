@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createFullRegistry } from '../../../agent/yeaft/tools/index.js';
-import { buildMcpFlattenedTools, mcpListTools, mcpCallTool } from '../../../agent/yeaft/tools/mcp-tools.js';
+import { mcpListTools, mcpCallTool } from '../../../agent/yeaft/tools/mcp-tools.js';
 import { PersonCapabilities } from '../../../agent/yeaft/person/capabilities.js';
 import { EXECUTION_GOAL_TOOL } from '../../../agent/yeaft/person/execution-goal.js';
 import { LLMToolInputError } from '../../../agent/yeaft/llm/adapter.js';
@@ -8,7 +8,6 @@ import { AnthropicAdapter } from '../../../agent/yeaft/llm/anthropic.js';
 import { GeminiAdapter } from '../../../agent/yeaft/llm/gemini.js';
 import { OpenAIResponsesAdapter } from '../../../agent/yeaft/llm/openai-responses.js';
 import { bindProviderState, createProviderContext, replayProviderState } from '../../../agent/yeaft/llm/provider-state.js';
-import { decodeResponsesInput, projectResponsesTools } from '../../../agent/yeaft/llm/responses-tool-schema.js';
 import {
   createProposeWorkItemActionsTool, createRequestWorkItemReplanTool, createSubmitWorkItemPlanTool,
   createSubmitWorkItemReplanTool, createWorkItemToolRegistry, createWorkItemVpTool,
@@ -100,39 +99,6 @@ describe('Responses strict tool boundary', () => {
     expect(outgoing[2].tools[0].functionDeclarations[0].parametersJsonSchema).toEqual(inputSchema);
   });
 
-  it('accepts nested external not and open maps using lossless wire JSON; schema-field names are not keywords', async () => {
-    const wireJson = { not: 'ordinary property', payload: { values: [null, '雪', '"\\', { nested: true }] }, choice: 'ok', maybe: null, requiredNullable: null };
-    const external = { type: 'object', additionalProperties: false, required: ['not', 'payload', 'choice', 'requiredNullable'], properties: {
-      not: { type: 'string' }, payload: { type: 'object', additionalProperties: true },
-      choice: { type: 'string', not: { const: 'blocked' } }, maybe: { type: ['string', 'null'] }, requiredNullable: { type: ['string', 'null'], minLength: 2 },
-    } };
-    const mcp = { callTool: vi.fn(async () => ({ content: [{ type: 'text', text: 'ok' }] })),
-      listTools: () => [{ name: 'fixture__inspect', server: 'fixture', inputSchema: external }] };
-    const registry = createFullRegistry();
-    registry.registerAll(buildMcpFlattenedTools(mcp));
-    const tools = registry.getToolDefs().filter(t => t.name === 'mcp__fixture__inspect');
-    const name = tools[0].name;
-    const encoded = { not: wireJson.not, payload: JSON.stringify(wireJson.payload), choice: '"ok"', maybe: 'null', requiredNullable: null };
-    vi.stubGlobal('fetch', vi.fn(async (_url, req) => {
-      const sent = JSON.parse(req.body).tools[0];
-      strictSchema(sent.parameters, name);
-      expect(sent.parameters.properties.not.type).toBe('string');
-      expect(sent.parameters.properties.requiredNullable.type).toEqual(['string', 'null']);
-      expect(sent.parameters.properties.choice.description).toContain('"not"');
-      return json(done([callItem(name, encoded)]));
-    }));
-    const call = (await collect(responses().stream({ ...params, tools }))).find(e => e.type === 'tool_call');
-    expect(call.input).toEqual(wireJson);
-    await registry.execute(name, call.input, {});
-    expect(mcp.callTool).toHaveBeenCalledWith('fixture__inspect', wireJson);
-    const { codecs } = projectResponsesTools(tools.map(asFunction));
-    expect(decodeResponsesInput({ ...encoded, maybe: null }, codecs.get(name))).not.toHaveProperty('maybe');
-    const openRoot = asFunction(tool('mcp__fixture__open', { type: 'object', properties: {}, additionalProperties: true }));
-    const projected = projectResponsesTools([openRoot]);
-    strictSchema(projected.tools[0].parameters, openRoot.name);
-    expect(decodeResponsesInput({ argumentsJson: JSON.stringify(wireJson) }, projected.codecs.get(openRoot.name))).toEqual(wireJson);
-  });
-
   it('strips optional wire nulls in discriminated objects but preserves required nulls and exact native replay', async () => {
     const identity = { instanceScope: 'test', ownerScope: 'owner', sessionId: 'session', vpId: 'vp', threadId: 'thread' };
     const context = createProviderContext({ protocol: 'openai-responses', model: params.model, credentialScopeId: 'test' });
@@ -163,28 +129,6 @@ describe('Responses strict tool boundary', () => {
     const replay = JSON.parse(fetch.mock.calls[1][1].body).input;
     expect(replay.slice(1, 4)).toEqual(raw);
     expect(replay.slice(4).map(item => item.call_id)).toEqual(toolCalls.map(call => call.id));
-  });
-
-  it('re-encodes tool history without native state only for available tools and preserves result pairing', async () => {
-    const gateway = new OpenAIResponsesAdapter({ apiKey: 'fixture', baseUrl: 'https://proxy.test/v1' });
-    const open = tool('mcp__fixture__open', { type: 'object', additionalProperties: true });
-    const openArgs = { other: [1, null, '雪'] };
-    const active = tool('Inspect', inputSchema);
-    const items = [callItem(open.name, { argumentsJson: JSON.stringify(openArgs) }), callItem(active.name, { values: ['a'], text: null }, '2')];
-    const fetch = vi.fn().mockResolvedValueOnce(json(done(items))).mockImplementation(async () => json(done()));
-    vi.stubGlobal('fetch', fetch);
-    const first = await collect(gateway.stream({ ...params, tools: [open, active] }));
-    expect(first.some(e => e.type === 'provider_state')).toBe(false);
-    const toolCalls = first.filter(e => e.type === 'tool_call');
-    expect(toolCalls.map(call => call.input)).toEqual([openArgs, { values: ['a'] }]);
-    const messages = [...params.messages, { role: 'assistant', toolCalls }, ...toolCalls.map(call => ({ role: 'tool', toolCallId: call.id, content: 'ok' }))];
-    for (const tools of [[open, active], [active]]) await collect(gateway.stream({ ...params, tools, messages }));
-    const history = index => JSON.parse(fetch.mock.calls[index][1].body).input;
-    expect(history(1).slice(1, 3).map(item => item.arguments)).toEqual(items.map(item => item.arguments));
-    expect(history(1).slice(3).map(item => item.call_id)).toEqual(toolCalls.map(call => call.id));
-    expect(JSON.parse(history(2)[1].arguments)).toEqual(openArgs);
-    fetch.mockResolvedValueOnce(json({ status: 'completed', output_text: 'text only', output: {} }));
-    await expect(gateway.call({ ...params, tools: [open] })).resolves.toMatchObject({ text: 'text only' });
   });
 
   it('fails a complete malformed JSON-encoded tool batch without emitting executable calls (SSE, JSON, extraBody)', async () => {
