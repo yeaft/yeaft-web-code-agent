@@ -1,4 +1,8 @@
 import { useAuthStore } from './auth.js';
+import {
+  persistedYeaftUserMessageId, yeaftTurnDeletionFence, isYeaftTurnDeletionFenceCurrent,
+  isYeaftTurnDeletionFrameCurrent, settleYeaftTurnDeletion, YEAFT_DELETE_TURN_TIMEOUT_MS,
+} from './helpers/yeaft-turn-deletion.js';
 import { readPersonUiPreferences, writePersonUiPreferences } from './helpers/person-ui-preference.js';
 import { availableDigitalPersonAgents, resolveDigitalPersonAgentId } from '../utils/digital-person-agent.js';
 import {
@@ -88,6 +92,7 @@ import {
   isCurrentYeaftHistoryResponse,
   syncActiveYeaftHistoryLoad,
   YEAFT_HISTORY_LOAD_TIMEOUT_MS,
+  yeaftHistoryNeedsReconnectValidation,
 } from './helpers/yeaft-history-load.js';
 import {
   yeaftAgentSessionIdentityPrefix,
@@ -626,6 +631,7 @@ export const useChatStore = defineStore('chat', {
     _hasHandledAgentList: false,
     _hasHandledYeaftSessionHydrate: false,
     yeaftSessionInventoryCompleteSupported: null,
+    yeaftSessionDeleteTurnSupported: false,
     workbenchRouteProtocolSupported: null,
     workCenterWorkbenchProtocolSupported: null,
     browserRuntimeProtocolSupported: null,
@@ -818,6 +824,10 @@ export const useChatStore = defineStore('chat', {
     // compatibility; this map is the source of truth across group switches.
     // Shape: { [groupId || '__all__']: { loaded, hasMore, loading, oldestSeq, count } }
     yeaftSessionHistoryState: {},
+    _yeaftTurnDeletePending: {},
+    // Per-session mutation epoch; also marks a required authoritative replay
+    // when the session is next opened (or a refresh must be retried).
+    yeaftTurnDeleteHistoryBySession: {},
     // Legacy per-Session reveal budget. The default is now unbounded because
     // VirtualTranscript already limits DOM work; explicit history navigation may
     // still record a larger value here without hiding resident rows on switches.
@@ -3174,6 +3184,9 @@ export const useChatStore = defineStore('chat', {
           requestId: request.requestId,
           error: 'history_load_timeout',
         })) {
+          if (this.yeaftTurnDeleteHistoryBySession?.[request.sessionKey]?.needsReplay) {
+            this.dropYeaftInvalidatedTranscript(agentId, sessionId);
+          }
           console.warn(`[Yeaft] history load timed out for ${agentId}/${sessionId}`);
         }
       }, YEAFT_HISTORY_LOAD_TIMEOUT_MS);
@@ -3337,15 +3350,20 @@ export const useChatStore = defineStore('chat', {
         && !!this.yeaftConversationId
         && Array.isArray(this.messagesMap?.[this.yeaftConversationId])
         && this.messagesMap[this.yeaftConversationId].some(row => row && (row.sessionId ?? row.groupId ?? null) === activeSessionId);
-      const needHistoryReplay = !!activeSessionId
-        && msgHelpers.shouldReplayYeaftSessionHistory({
-          sessionState,
-          hasCachedSessionRows,
-          force: !!forceHistoryReplay,
-        });
+      const deletionRefresh = this.yeaftTurnDeleteHistoryBySession?.[sessionKey];
+      const needsDeletionReplay = deletionRefresh?.needsReplay;
+      // Reconnect only fetches the active Session. Validate any other loaded
+      // Session against its durable identity when it is next opened.
+      const needsReconnectValidation = yeaftHistoryNeedsReconnectValidation(this, sessionState);
+      const canValidateWithDelta = typeof sessionState?.streamId === 'string'
+        && Number.isFinite(sessionState?.revision) && latestSeq !== null;
+      const mustReplay = needsDeletionReplay || (needsReconnectValidation && !canValidateWithDelta);
+      const needHistoryReplay = !!activeSessionId && (mustReplay
+        ? !sessionState?.loading
+        : msgHelpers.shouldReplayYeaftSessionHistory({ sessionState, hasCachedSessionRows, force: !!forceHistoryReplay }));
       const needHistoryCatchUp = !!activeSessionId
         && !needHistoryReplay
-        && msgHelpers.shouldCatchUpLoadedYeaftSession(sessionState, catchUpHistory);
+        && msgHelpers.shouldCatchUpLoadedYeaftSession(sessionState, catchUpHistory || needsReconnectValidation);
       if (!needSessionReady && !needHistoryReplay && !needHistoryCatchUp) return false;
       // Route session-scoped history through the single resolver (sessions
       // store → per-session cache → currentAgent), same as every other
@@ -3394,8 +3412,14 @@ export const useChatStore = defineStore('chat', {
         sessionId: activeSessionId,
         ...(historyRequest ? { requestId: historyRequest.requestId } : {}),
       };
-      if (needHistoryCatchUp) payload.afterSeq = latestSeq;
-      else payload.limit = needHistoryReplay ? YEAFT_RECENT_TURNS : 0;
+      if (needHistoryCatchUp) {
+        payload.afterSeq = latestSeq;
+        if (typeof sessionState.streamId === 'string') payload.streamId = sessionState.streamId;
+        if (Number.isFinite(sessionState.revision)) payload.revision = sessionState.revision;
+      } else {
+        payload.limit = needHistoryReplay
+          ? Math.max(YEAFT_RECENT_TURNS, needsDeletionReplay ? deletionRefresh.replayLimit : 0) : 0;
+      }
       const perfTraceId = createPerfTraceId();
       payload.perfTraceId = perfTraceId;
       const historyMode = needHistoryCatchUp ? 'delta' : (needHistoryReplay ? 'recent' : 'metadata');
@@ -3420,7 +3444,16 @@ export const useChatStore = defineStore('chat', {
           needSessionReady,
         },
       });
-      this.sendWsMessage(payload);
+      if (!this.sendWsMessage(payload)) {
+        if (metadataOnly) this.yeaftBootstrapMetaLoadingKey = null;
+        if (historyRequest) failYeaftHistoryLoad(this, {
+          agentId: targetAgentId,
+          sessionId: activeSessionId,
+          requestId: historyRequest.requestId,
+          error: 'history_load_send_failed',
+        });
+        return false;
+      }
       return true;
     },
     leaveYeaft() {
@@ -3832,7 +3865,7 @@ export const useChatStore = defineStore('chat', {
       if (!targetAgentId || !targetSessionId || !Number.isFinite(afterSeq)) return false;
       const sessionKey = yeaftHistoryIdentityKey(targetAgentId, targetSessionId);
       const current = this.yeaftSessionHistoryState?.[sessionKey] || null;
-      if (current?.loading) return false;
+      if (current?.loading || this.yeaftTurnDeleteHistoryBySession?.[sessionKey]?.needsReplay) return false;
       const historyRequest = this.beginYeaftHistoryLoad({
         agentId: targetAgentId,
         sessionId: targetSessionId,
@@ -3871,15 +3904,167 @@ export const useChatStore = defineStore('chat', {
       return true;
     },
 
+    yeaftTurnDeleteTarget(message) {
+      if (this.currentView !== 'yeaft' || this.yeaftConversationCovered || this.digitalPersonOpen || this.workCenterOpen || this.pluginCenterOpen) return null;
+      const messageId = persistedYeaftUserMessageId(message);
+      if (!messageId) return null;
+      const { agentId, sessionId } = activeYeaftHistoryIdentity(this);
+      if (!agentId || !sessionId || getSessionsStore()?.sessionById?.(sessionId, agentId)?.task
+          || (message.sessionId ?? message.groupId) !== sessionId
+          || (message.agentId && message.agentId !== agentId)) return null;
+      const key = yeaftHistoryIdentityKey(agentId, sessionId);
+      const { streamId, revision } = this.yeaftSessionHistoryState[key] || {};
+      return { agentId, sessionId, messageId, streamId, revision,
+        epoch: this.yeaftTurnDeleteHistoryBySession?.[key]?.epoch,
+        ...yeaftTurnDeletionFence(this, useAuthStore()) };
+    },
+
+    yeaftTurnDeleteUnavailable(target) {
+      const { agentId, sessionId } = target;
+      const key = yeaftHistoryIdentityKey(agentId, sessionId);
+      if (this._yeaftTurnDeletePending[key]) return 'pending';
+      const agent = this.agents.find(agent => agent.id === agentId);
+      if (this.connectionState !== 'connected' || !agent?.online) return 'offline';
+      if (this.yeaftSessionDeleteTurnSupported !== true || !Array.isArray(agent.capabilities)
+          || !agent.capabilities.includes('session_delete_turn')) return 'unsupported';
+      if (this.yeaftTurnDeleteHistoryBySession?.[key]?.needsReplay
+          || yeaftHistoryNeedsReconnectValidation(this, this.yeaftSessionHistoryState[key])) return 'refreshing';
+      if (this.isYeaftSessionProcessing(sessionId, agentId)
+          || this.sessionForkPendingKey === yeaftCatalogKey(agentId, sessionId)) return 'running';
+      return null;
+    },
+
+    deleteYeaftSessionTurn(target) {
+      const { agentId, sessionId, messageId } = target || {};
+      const key = yeaftHistoryIdentityKey(agentId, sessionId);
+      const conversationId = this.yeaftConversationIdsByAgent?.[agentId];
+      const resident = this.messagesMap[conversationId]?.find(row =>
+        (row?.sessionId ?? row?.groupId) === sessionId && persistedYeaftUserMessageId(row) === messageId);
+      const current = resident && this.yeaftTurnDeleteTarget(resident);
+      if (!current || current.agentId !== agentId || current.sessionId !== sessionId || !messageId
+          || current.epoch !== target.epoch || current.streamId !== target.streamId || current.revision !== target.revision
+          || !isYeaftTurnDeletionFenceCurrent(this, useAuthStore(), target)) {
+        return Promise.resolve({ ok: false, errorCode: 'stale' });
+      }
+      const unavailable = this.yeaftTurnDeleteUnavailable(target);
+      if (unavailable) return Promise.resolve({ ok: false, errorCode: unavailable });
+
+      const requestId = `yeaft_delete_turn_${crypto.randomUUID()}`;
+      return new Promise(resolve => {
+        const pending = { ...target, requestId, resolve, timer: setTimeout(() => {
+          if (settleYeaftTurnDeletion(this, pending, { ok: false, errorCode: 'unconfirmed' })
+              && isYeaftTurnDeletionFenceCurrent(this, useAuthStore(), pending)) {
+            this.invalidateYeaftDeletedTurn(pending);
+          }
+        }, YEAFT_DELETE_TURN_TIMEOUT_MS) };
+        this._yeaftTurnDeletePending = { ...this._yeaftTurnDeletePending, [key]: pending };
+        if (!this.sendWsMessage({ type: 'yeaft_session_delete_turn', agentId, sessionId, requestId, messageId })) {
+          settleYeaftTurnDeletion(this, pending, { ok: false, errorCode: 'offline' });
+        }
+      });
+    },
+
+    handleYeaftTurnDeletion(msg) {
+      const { agentId, sessionId } = msg;
+      if (typeof agentId !== 'string' || !agentId || typeof sessionId !== 'string' || !sessionId
+          || !isYeaftTurnDeletionFrameCurrent(msg, useAuthStore())) return;
+      if (msg.type === 'yeaft_session_turn_deleted') {
+        if (typeof msg.turnId !== 'string' || !msg.turnId) return;
+        this.invalidateYeaftDeletedTurn(msg);
+        return;
+      }
+      const key = yeaftHistoryIdentityKey(agentId, sessionId);
+      const pending = this._yeaftTurnDeletePending[key];
+      if (!pending || msg.requestId !== pending.requestId || typeof msg.ok !== 'boolean'
+          || !isYeaftTurnDeletionFenceCurrent(this, useAuthStore(), pending)) return;
+      if (msg.ok) this.invalidateYeaftDeletedTurn(msg);
+      settleYeaftTurnDeletion(this, pending, { ok: msg.ok, errorCode: msg.errorCode,
+        ...(msg.cleanupPending === true ? { cleanupPending: true } : {}) });
+    },
+
+    interruptYeaftTurnDeletions() {
+      for (const [key, refresh] of Object.entries(this.yeaftTurnDeleteHistoryBySession || {})) {
+        if (!refresh.needsReplay) continue;
+        const { agentId, sessionId } = refresh;
+        const requestId = this.yeaftSessionHistoryState[key]?.requestId;
+        failYeaftHistoryLoad(this, { agentId, sessionId, requestId, error: 'history_load_send_failed' });
+        this.dropYeaftInvalidatedTranscript(agentId, sessionId);
+      }
+      for (const pending of Object.values(this._yeaftTurnDeletePending || {})) {
+        settleYeaftTurnDeletion(this, pending, { ok: false, errorCode: 'unconfirmed' });
+        if (isYeaftTurnDeletionFenceCurrent(this, useAuthStore(), pending)) {
+          this.invalidateYeaftDeletedTurn(pending, { reload: false });
+        }
+      }
+    },
+
+    invalidateYeaftDeletedTurn({ agentId, sessionId, turnId }, { reload = true } = {}) {
+      const key = yeaftHistoryIdentityKey(agentId, sessionId);
+      const previous = this.yeaftTurnDeleteHistoryBySession?.[key];
+      if (turnId && previous?.lastDeletedTurnId === turnId) return;
+      const panel = this.yeaftDebugPanel;
+      if (panel?.agentId === agentId && panel.sessionId === sessionId) this.closeYeaftDebugPanel();
+      // Cached raw loops can contain the removed tool activity. Scope the
+      // eviction through their sessions, including list responses in flight.
+      const pendingDebug = this._yeaftDebugHistoryPending?.payload;
+      if (pendingDebug?.agentId === agentId && (!pendingDebug.sessionId || pendingDebug.sessionId === sessionId)) {
+        if (!panel?.open || panel.sessionId === sessionId) this.closeYeaftDebugPanel();
+      }
+      const debugTurns = this.yeaftDebugTurnsById || {};
+      const staleDebugIds = new Set(Object.keys(debugTurns).filter(id => {
+        const row = debugTurns[id];
+        return row?.sessionId === sessionId && (!row.agentId || row.agentId === agentId);
+      }));
+      if (staleDebugIds.size) {
+        this.yeaftDebugTurnsById = Object.fromEntries(Object.entries(debugTurns).filter(([id]) => !staleDebugIds.has(id)));
+        this.yeaftDebugTurnOrder = this.yeaftDebugTurnOrder.filter(id => !staleDebugIds.has(id));
+        this.yeaftDebugLoops = this.yeaftDebugLoops.filter(loop => !staleDebugIds.has(loop?.turnId));
+      }
+      const active = this.currentView === 'yeaft' && activeYeaftHistoryIdentity(this).sessionKey === key;
+      // Inactive sessions drop cached rows immediately. Keep the active
+      // projection until the replacement chunk so Vue can preserve anchors.
+      const conversationId = this.yeaftConversationIdsByAgent?.[agentId];
+      const residentTurns = new Set((this.messagesMap[conversationId] || []).flatMap(row => {
+        const id = persistedYeaftUserMessageId(row);
+        return id && (row.sessionId ?? row.groupId) === sessionId
+          && !row._historyWindowDetached && !row._historyWindowPrefetched ? [row.userTurnId || id] : [];
+      })).size;
+      this.clearYeaftHistoryMemory({ agentId, sessionId, preserveLiveRows: true,
+        preserveSessionOwner: true, preserveTranscript: true });
+      this.yeaftTurnDeleteHistoryBySession = {
+        ...this.yeaftTurnDeleteHistoryBySession,
+        [key]: { agentId, sessionId, epoch: crypto.randomUUID(), lastDeletedTurnId: turnId || previous?.lastDeletedTurnId,
+          needsReplay: true, replayLimit: Math.max(previous?.needsReplay ? previous.replayLimit : 0, Math.min(50, residentTurns + 1)) },
+      };
+      if (!active || !reload || !this.reloadYeaftMessages()) this.dropYeaftInvalidatedTranscript(agentId, sessionId);
+    },
+
+    dropYeaftInvalidatedTranscript(agentId, sessionId, conversationId = this.yeaftConversationIdsByAgent?.[agentId]
+      || (this.currentAgent === agentId ? this.yeaftConversationId : null)) {
+      if (!conversationId || !this.messagesMap[conversationId]) return;
+      const now = this.messagesMap[conversationId];
+      this.messagesMap = { ...this.messagesMap, [conversationId]: now.filter(row =>
+        (row?.sessionId ?? row?.groupId) !== sessionId
+        || (!isDurableYeaftHistoryRow(row) && (row.isStreaming || row.status === 'pending'
+          || (row.type === 'user' && row.clientMessageId && row.clientMessageId === row.messageId)))) };
+    },
+
     clearYeaftHistoryMemory({
       agentId = null,
       sessionId = null,
       preserveLiveRows = false,
       preserveSessionOwner = false,
+      preserveTranscript = false,
     } = {}) {
       const targetAgentId = agentId || null;
       const targetSessionId = sessionId || null;
       if (!preserveLiveRows) clearSessionTurns(this, targetAgentId, targetSessionId);
+      if (!targetAgentId && !targetSessionId) {
+        for (const pending of Object.values(this._yeaftTurnDeletePending || {})) {
+          settleYeaftTurnDeletion(this, pending, { ok: false, errorCode: 'stale' });
+        }
+        this.yeaftTurnDeleteHistoryBySession = {};
+      }
       const sessionKey = targetAgentId && targetSessionId
         ? yeaftHistoryIdentityKey(targetAgentId, targetSessionId)
         : null;
@@ -3926,12 +4111,12 @@ export const useChatStore = defineStore('chat', {
         ? this.yeaftConversationIdsByAgent?.[targetAgentId] || null
         : null;
       const conversationIds = sessionKey
-        ? new Set([scopedConversationId].filter(Boolean))
+        ? new Set([scopedConversationId || (targetAgentId === this.currentAgent ? this.yeaftConversationId : null)].filter(Boolean))
         : new Set(Object.values(this.yeaftConversationIdsByAgent || {}).filter(Boolean));
       if (!sessionKey && this.yeaftConversationId) conversationIds.add(this.yeaftConversationId);
       const nextMessagesMap = { ...(this.messagesMap || {}) };
       for (const conversationId of conversationIds) {
-        if (!Array.isArray(nextMessagesMap[conversationId])) continue;
+        if (preserveTranscript || !Array.isArray(nextMessagesMap[conversationId])) continue;
         nextMessagesMap[conversationId] = sessionKey
           ? nextMessagesMap[conversationId].filter(row => {
               if ((row?.sessionId ?? row?.groupId ?? null) !== targetSessionId) return true;
@@ -4310,6 +4495,7 @@ export const useChatStore = defineStore('chat', {
       const agentId = targetAgentId || resolveAgentIdForSession(this, sessionId);
       if (!sessionId || !agentId) return false;
       const key = yeaftHistoryIdentityKey(agentId, sessionId);
+      if (this.yeaftTurnDeleteHistoryBySession?.[key]?.needsReplay) return false;
       const previous = this.getYeaftHistoryOutlineState(sessionId, agentId);
       if (!append && previous.loaded && !force) return true;
       if (append && (!previous.hasMore || !Number.isFinite(previous.nextBeforeSeq))) return false;
@@ -4493,6 +4679,7 @@ export const useChatStore = defineStore('chat', {
         : '';
       const sessionId = this.yeaftActiveSessionFilter || null;
       const agentId = resolveAgentIdForSession(this, sessionId);
+      if (this.yeaftTurnDeleteHistoryBySession?.[yeaftHistoryIdentityKey(agentId, sessionId)]?.needsReplay) return false;
       if (this._yeaftHistorySearchTimeout) {
         clearTimeout(this._yeaftHistorySearchTimeout);
         this._yeaftHistorySearchTimeout = null;
@@ -4706,6 +4893,7 @@ export const useChatStore = defineStore('chat', {
       const sessionId = result?.sessionId || this.yeaftActiveSessionFilter || null;
       const agentId = result?.agentId || resolveAgentIdForSession(this, sessionId);
       const resultId = yeaftHistoryResultIdentity(result);
+      if (this.yeaftTurnDeleteHistoryBySession?.[yeaftHistoryIdentityKey(agentId, sessionId)]?.needsReplay) return Promise.resolve(false);
       if (!sessionId || !agentId || !result?.entryId
         || !Number.isFinite(result.indexGeneration)
         || !Number.isFinite(result.entryStartSeq)
@@ -4824,7 +5012,7 @@ export const useChatStore = defineStore('chat', {
           loaded = await windowLoad;
         }
       }
-      if (!loaded) {
+      if (!loaded || this._yeaftHistoryRevealLeases?.[lease.key]?.token !== lease.token) {
         this.finishYeaftHistoryReveal(lease);
         return false;
       }
@@ -5154,6 +5342,16 @@ export const useChatStore = defineStore('chat', {
       // ── Metadata events ──
       const event = msg.event;
       if (!event) return;
+      if (event.type === 'yeaft_session_delete_turn_result' || event.type === 'yeaft_session_turn_deleted') {
+        if (event.sessionId && msg.sessionId && event.sessionId !== msg.sessionId) return;
+        this.handleYeaftTurnDeletion({ ...event, agentId: msg.agentId, sessionId: event.sessionId || msg.sessionId,
+          requestId: event.requestId || msg.requestId,
+          ...(Object.hasOwn(msg, '_wsAuthGeneration') ? {
+            _wsAuthGeneration: msg._wsAuthGeneration, _wsAuthOwnerId: msg._wsAuthOwnerId,
+          } : {}),
+        });
+        return;
+      }
       const phaseEvent = {
         ...event,
         vpId: event.vpId || msg.vpId || null,
@@ -5837,7 +6035,8 @@ export const useChatStore = defineStore('chat', {
               agentId: msg.agentId || null,
               requestId: event.requestId || msg.requestId || null,
             };
-            if (historyResponse.requestId && !this.isCurrentYeaftHistoryResponse(historyResponse)) break;
+            if (!this.isCurrentYeaftHistoryResponse(historyResponse)
+                && (historyResponse.requestId || this.yeaftTurnDeleteHistoryBySession?.[yeaftHistoryIdentityKey(msg.agentId, event.sessionId)])) break;
             const responseAgentId = msg.agentId || null;
             const responseSessionId = event.sessionId ?? null;
             const sessionKey = yeaftHistoryIdentityKey(responseAgentId, responseSessionId);
@@ -6790,7 +6989,8 @@ export const useChatStore = defineStore('chat', {
           getSessionsStore()?.sessionById?.(next, targetAgentId)?.task?.lastRun);
       }
       this.syncActiveYeaftHistoryLoad();
-      if (next && targetAgentId && !repeatedSelection) {
+      const historyState = this.yeaftSessionHistoryState?.[yeaftHistoryIdentityKey(targetAgentId, next)];
+      if (next && targetAgentId && (!repeatedSelection || yeaftHistoryNeedsReconnectValidation(this, historyState))) {
         this.requestYeaftSessionBootstrap({
           forceSessionReady: true,
           forceHistoryReplay: true,
@@ -8511,7 +8711,7 @@ export const useChatStore = defineStore('chat', {
       const targetAgentId = resolveAgentIdForSession(this, sessionId);
       if (!targetAgentId) return false;
       const sessionKey = yeaftHistoryIdentityKey(targetAgentId, sessionId);
-      const convId = this.yeaftConversationId;
+      const deletionRefresh = this.yeaftTurnDeleteHistoryBySession?.[sessionKey];
 
       // Manual reload means "show me the persisted pane again", not a delta.
       // Do not blank the pane before the reply arrives: load-history also
@@ -8552,7 +8752,7 @@ export const useChatStore = defineStore('chat', {
       const payload = {
         type: 'yeaft_load_history',
         agentId: targetAgentId,
-        limit: YEAFT_RECENT_TURNS,
+        limit: Math.max(YEAFT_RECENT_TURNS, deletionRefresh?.needsReplay ? deletionRefresh.replayLimit : 0),
         sessionId,
         requestId: historyRequest.requestId,
         perfTraceId,
@@ -8564,7 +8764,7 @@ export const useChatStore = defineStore('chat', {
         sessionId,
         messageType: payload.type,
         bytes: JSON.stringify(payload).length,
-        detail: { mode: 'manual-reload', limit: YEAFT_RECENT_TURNS },
+        detail: { mode: 'manual-reload', limit: payload.limit },
       });
       if (!this.sendWsMessage(payload)) {
         failYeaftHistoryLoad(this, {
@@ -8589,6 +8789,7 @@ export const useChatStore = defineStore('chat', {
       if (!targetAgentId || !targetSessionId) return false;
       const sessionKey = yeaftHistoryIdentityKey(targetAgentId, targetSessionId);
       const previousState = this.yeaftSessionHistoryState?.[sessionKey] || {};
+      if (this.yeaftTurnDeleteHistoryBySession?.[sessionKey]?.needsReplay) return false;
       if (previousState.loading || !previousState.hasMore) return false;
       const requestedTurns = Math.min(
         50,

@@ -1,9 +1,10 @@
+import { yeaftHistoryIdentityKey } from '../stores/helpers/yeaft-history-identity.js';
 import DigitalPersonPage from './DigitalPersonPage.js';
 import ScheduledTaskBar from './ScheduledTaskBar.js';
 import ScheduledTaskNotifications from './ScheduledTaskNotifications.js';
 import NavigationIcon from './NavigationIcon.js';
 import ChatInput from './ChatInput.js';
-import { alertDialog } from '../utils/dialog.js';
+import { alertDialog, confirmDialog } from '../utils/dialog.js';
 import AgentInstaller from './AgentInstaller.js';
 import MessageList from './MessageList.js';
 import SettingsPanel from './SettingsPanel.js';
@@ -213,6 +214,7 @@ export default {
             <span>{{ $t(store.yeaftSessionHydrateError ? 'yeaft.sessionInventory.error' : 'yeaft.historyLoad.error') }}</span>
             <button type="button" class="btn-secondary" @click="store.yeaftSessionHydrateError ? retryConversationInventory() : reloadMessages()">{{ $t(store.yeaftSessionHydrateError ? 'yeaft.sessionInventory.retry' : 'yeaft.historyLoad.retry') }}</button>
           </div>
+        <p v-if="deleteTurnStatus" class="yeaft-delete-turn-status" role="status">{{ $t('yeaft.deleteTurn.' + deleteTurnStatus) }}</p>
         <!-- H2.f.6: YeaftFeatureDetailView removed — cross-thread aggregation
              retired with the multi-thread engine; the task-detail view had
              no message data source after H2.f.1, so it's been deleted.
@@ -298,6 +300,8 @@ export default {
           :fork-from-turn-enabled="forkFromTurnEnabled"
           :fork-from-turn-disabled="!!forkUnavailableReason"
           :fork-from-turn-title="forkUnavailableReason ? $t('yeaft.session.error.' + forkUnavailableReason) : $t('yeaft.session.forkFromTurnHint')"
+          :delete-turn-action-for="deleteTurnActionFor"
+          @delete-turn="deleteTurn"
           @fork-from-turn="forkFromTurn"
           @quote-message="setMessageQuote"
           @edit-message-as-new="editMessageAsNew"
@@ -1102,6 +1106,53 @@ export default {
       return typeof gs.sessionById === 'function' ? gs.sessionById('grp_default', store.currentAgent || null) : null;
     });
 
+    const deleteTurnHistory = Vue.computed(() => {
+      const { agentId, sessionId } = store.activeSessionRoute || {};
+      return agentId && sessionId ? store.yeaftTurnDeleteHistoryBySession?.[yeaftHistoryIdentityKey(agentId, sessionId)] : null;
+    });
+    const deleteTurnStatus = Vue.computed(() => {
+      const { agentId, sessionId } = store.activeSessionRoute || {};
+      const key = yeaftHistoryIdentityKey(agentId, sessionId);
+      if (store._yeaftTurnDeletePending?.[key]) return 'pending';
+      if (deleteTurnHistory.value?.needsReplay && store.activeYeaftHistoryState?.loading) return 'refreshing';
+      return null;
+    });
+    Vue.watch(() => deleteTurnHistory.value?.epoch, (epoch) => {
+      if (!epoch) return;
+      if (historySearchOpen.value) closeHistorySearch();
+      messageQuote.value = null;
+    });
+    let deleteTurnDialogOpen = false;
+    let deleteTurnNavigation = 0;
+    Vue.watch(() => [yeaftInputDraftKey.value, store.currentView, store.digitalPersonOpen,
+      store.workCenterOpen, store.pluginCenterOpen, showSettings.value], () => { deleteTurnNavigation += 1; }, { flush: 'sync' });
+    Vue.onUnmounted(() => { deleteTurnNavigation += 1; });
+    const deleteTurnActionFor = message => {
+      const target = store.yeaftTurnDeleteTarget?.(message);
+      return target ? { target, reason: store.yeaftTurnDeleteUnavailable(target) } : null;
+    };
+    const deleteTurn = async target => {
+      if (deleteTurnDialogOpen || store.yeaftTurnDeleteUnavailable(target)) return;
+      const navigation = deleteTurnNavigation;
+      deleteTurnDialogOpen = true;
+      const confirmed = await confirmDialog($t('yeaft.deleteTurn.confirm'), {
+        title: $t('yeaft.deleteTurn.action'), confirmLabel: $t('yeaft.deleteTurn.action'), destructive: true,
+      });
+      deleteTurnDialogOpen = false;
+      if (!confirmed || navigation !== deleteTurnNavigation) return;
+      const result = await store.deleteYeaftSessionTurn(target);
+      if (navigation !== deleteTurnNavigation) return;
+      if (result.ok) {
+        if (result.cleanupPending) await alertDialog($t('yeaft.deleteTurn.cleanupPending'), { title: $t('yeaft.deleteTurn.action') });
+        return;
+      }
+      const code = ({ session_running: 'running', turn_not_found: 'not_found', message_not_found: 'not_found',
+        agent_access_denied: 'denied', session_delete_turn_unsupported: 'unsupported', turn_deletion_cutover_required: 'unsupported', ambiguous_turn: 'ambiguous' })[result.errorCode] || result.errorCode;
+      const known = ['unconfirmed', 'stale', 'offline', 'running', 'not_found', 'denied', 'unsupported', 'ambiguous'];
+      const reason = known.includes(code) ? code : 'failed';
+      await alertDialog($t('yeaft.deleteTurn.' + reason), { title: $t('yeaft.deleteTurn.action') });
+    };
+
     const ordinarySession = Vue.computed(() => !topbarGroup.value?.task);
     const sceneSession = Vue.computed(() => ordinarySession.value && !!topbarGroup.value?.sceneId);
     const sceneAgentId = Vue.computed(() => topbarGroup.value?.agentId || store.currentAgent || null);
@@ -1577,6 +1628,9 @@ export default {
       forkUnavailableReason,
       forkCurrentSession,
       forkFromTurnEnabled,
+      deleteTurnActionFor,
+      deleteTurnStatus,
+      deleteTurn,
       forkFromTurn,
       topbarSessionTitle,
       topbarFolderPath,

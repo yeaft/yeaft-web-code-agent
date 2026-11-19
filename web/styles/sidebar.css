@@ -2153,6 +2153,32 @@
   outline: none;
 }
 
+.message-delete-turn:not([aria-disabled]):is(:hover, :focus-visible) {
+  color: var(--danger-color);
+}
+
+.message-delete-turn[aria-disabled] {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.message-delete-turn:focus-visible {
+  outline: 2px solid currentColor;
+  outline-offset: 1px;
+}
+
+@media (hover: none) {
+  .message-user-actions:has(.message-delete-turn) {
+    opacity: 1;
+  }
+}
+
+.yeaft-delete-turn-status {
+  margin: 4px 12px;
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
 .message-quoted-context {
   margin-bottom: 8px;
   padding: 7px 9px;

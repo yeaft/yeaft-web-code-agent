@@ -131,6 +131,7 @@ export function createCoordinator(group, options = {}) {
     }
     const stored = group.appendMessage({
       ...persistInput,
+      ...(ephemeral._userTurnId ? { userTurnId: ephemeral._userTurnId } : {}),
       mentions,
       role: input.role || (fromUser ? 'user' : 'assistant'),
     });

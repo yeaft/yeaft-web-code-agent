@@ -29,6 +29,7 @@ import {
   broadcastAgentList, resolveAgentAccessError
 } from './ws-utils.js';
 import { handleClientConversation } from './handlers/client-conversation.js';
+import { clearSessionTurnDeletesForClient } from './handlers/session-turn-delete.js';
 import { handleClientWorkbench } from './handlers/client-workbench.js';
 import { CLIENT_BROWSER_TYPES, handleClientBrowser } from './handlers/client-browser.js';
 import { handleClientMisc } from './handlers/client-misc.js';
@@ -143,6 +144,7 @@ export function handleWebConnection(ws, url, req = {}) {
       role,
       acceptPlaintext: true,
       yeaftSessionInventoryComplete: true,
+      yeaftSessionDeleteTurn: true,
       sessionCatalogProtocol: 1,
       scheduledTaskProtocol: 1,
       scheduledTaskReceiptProtocol: 1,
@@ -209,6 +211,7 @@ export function handleWebConnection(ws, url, req = {}) {
     clearPersonRequestsForClient(client);
     clearAgentSettingsRequestsForClient(clientId);
     clearYeaftDebugRequestsForClient(clientId);
+    clearSessionTurnDeletesForClient(clientId);
     const browserPeers = clearBrowserRuntimeForClient(client);
     for (const peer of browserPeers) {
       const agent = agents.get(peer.agentId);

@@ -16,6 +16,7 @@
 import { initYeaftDir, DEFAULT_YEAFT_DIR, isWritable } from './init.js';
 import { loadConfig, loadMCPConfig } from './config.js';
 import { createTrace } from './debug-trace.js';
+import { sessionTurnTraceTombstones } from './conversation/turn-deletion-journal.js';
 import { flushAgentPerfTrace } from './perf-trace.js';
 import { createLLMAdapter } from './llm/adapter.js';
 import { withUsageAccounting } from './llm/usage-accounting.js';
@@ -36,7 +37,7 @@ import { TaskManager } from './tasks/manager.js';
 // Dream memory remains archived on disk, but normal Session startup must not
 // open, migrate, reconcile, or inject it. Explicit memory tools own any direct
 // access requested by a user.
-import { ensureDefaultSessionIfEmpty, migrateRegisteredWorkDirSessions } from './sessions/session-crud.js';
+import { ensureDefaultSessionIfEmpty, migrateRegisteredWorkDirSessions, findExistingSessionYeaftDir } from './sessions/session-crud.js';
 import { seedDefaultVps } from './vp/seed-defaults.js';
 import { topUpDefaultVps } from './vp/seed-topup.js';
 import { isWorkCenterEnabled } from './work-center/feature.js';
@@ -231,6 +232,7 @@ export async function loadSession(options = {}) {
     enabled: config.debug === true,
     dirPath: yeaftDir,
     textMaxBytes: config.telemetry?.traceTextMaxBytes,
+    loadSessionTurnTombstones: sessionId => sessionTurnTraceTombstones(findExistingSessionYeaftDir(yeaftDir, sessionId), sessionId),
   });
 
   // ─── 4. Create LLM adapter ────────────────────────────

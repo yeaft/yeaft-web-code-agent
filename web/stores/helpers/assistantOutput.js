@@ -312,6 +312,8 @@ export function handleAssistantOutputFrame(store, conversationId, data, frameAge
       const route = userMessageRoute(store, frameAgentId, store._currentYeaftSessionId, echoClientMsgId || data.message?.id);
       const userTurnId = data.message?.userTurnId || store._currentYeaftUserTurnId || route?.userTurnId || null;
       const turnRelation = data.message?.turnRelation || data.message?.relation || route?.turnRelation || null;
+      const persistedId = frameAgentId && store._currentYeaftSessionId
+        && /^m\d+$/.test(data.message?.id || '') ? data.message.id : null;
       const echoCandidate = {
         type: 'user',
         content: userContent,
@@ -323,6 +325,7 @@ export function handleAssistantOutputFrame(store, conversationId, data, frameAge
         const persistedUserRow = store.addMessageToConversation(conversationId, {
           ...(data.message?.id ? { id: data.message.id, messageId: data.message.id } : {}),
           ...(data.ts ? { ts: data.ts } : {}),
+          ...(persistedId ? { persistedMessageId: persistedId } : {}),
           type: 'user',
           content: userContent,
           ...(userTurnId ? { userTurnId } : {}),
@@ -349,7 +352,10 @@ export function handleAssistantOutputFrame(store, conversationId, data, frameAge
         // previous comment made this look like a rare race-loser
         // branch — it isn't, every successful send hits it.
         for (let i = msgs.length - 1; i >= 0; i--) {
-          if (msgs[i].type === 'user' && msgs[i].clientMessageId === echoClientMsgId) {
+          if (msgs[i].type === 'user' && msgs[i].clientMessageId === echoClientMsgId
+              && (!frameAgentId || !store._currentYeaftSessionId
+                || (msgs[i].sessionId ?? msgs[i].groupId) === store._currentYeaftSessionId)) {
+            if (persistedId) msgs[i].persistedMessageId = persistedId;
             if (userTurnId) msgs[i].userTurnId = userTurnId;
             if (turnRelation) msgs[i].turnRelation = turnRelation;
             if (data.dbMessageId && !msgs[i].dbMessageId) msgs[i].dbMessageId = data.dbMessageId;

@@ -268,3 +268,144 @@ test('Session navigation and reconnect snapshots restore roots; stopping one exe
   await expect(page.locator('.parallel-turn-region')).toHaveCount(0);
   await expect(page.locator('.assistant-turn.streaming')).toHaveCount(0);
 });
+
+test('Delete turn from a saved supplement replays the remaining Session in both tabs', async ({ chatPage: page, context, mockAgent, serverUrl }) => {
+  const sessionId = 'session_delete_turn_e2e';
+  const name = 'Saved turn deletion';
+  const conversationId = 'yeaft-delete-turn-e2e';
+  const deletedTurn = { userTurnId: 'm1', turnId: 'execution-a', threadId: 'thread-a' };
+  const keptTurn = { userTurnId: 'm7', turnId: 'execution-b', threadId: 'thread-b' };
+  const ts = Date.now();
+  const user = (seq, content, turn, relation = 'new') => ({ id: `m${seq}`, seq, role: 'user',
+    content, sessionId, ts: ts + seq, userTurnId: turn.userTurnId, relation, clientMessageId: `send-${seq}` });
+  const assistant = (seq, content, turn, toolCalls) => ({ id: `m${seq}`, seq, role: 'assistant',
+    content, sessionId, ts: ts + seq, speakerVpId: 'omni', ...turn, ...(toolCalls ? { toolCalls } : {}) });
+  let rows = [
+    user(1, 'Prompt to remove', deletedTurn),
+    assistant(2, 'First reply to remove', deletedTurn),
+    assistant(3, '', deletedTurn, [{ id: 'tool-a', name: 'Read', input: { file_path: 'before.txt' } }]),
+    user(4, 'Supplement to remove', deletedTurn, 'supplement'),
+    assistant(5, '', deletedTurn, [{ id: 'tool-b', name: 'Grep', input: { pattern: 'after' } }]),
+    assistant(6, 'Final reply to remove', deletedTurn),
+    user(7, 'Prompt to keep', keptTurn),
+    assistant(8, 'Reply to keep', keptTurn),
+  ];
+  let revision = 1;
+  const loads = () => mockAgent.messages('yeaft_load_history').filter(request => request.sessionId === sessionId && request.limit !== 0);
+  const replyWithHistory = request => mockAgent.send({
+    type: 'yeaft_history_chunk', sessionId, conversationId, mode: 'recent',
+    requestId: request.requestId, _requestClientId: request._requestClientId,
+    messages: rows, oldestSeq: rows[0].seq, latestSeq: rows.at(-1).seq,
+    hasMore: false, streamId: 'delete-e2e-history', revision,
+  });
+  let holdHistory = false;
+  const authorized = () => mockAgent.messages('session_turn_delete_authorized');
+  let announcement;
+  mockAgent._messageHandlers.push(request => {
+    if (request.type === 'yeaft_load_history' && request.sessionId === sessionId && request.limit !== 0 && !holdHistory) {
+      replyWithHistory(request);
+    }
+    if (request.type !== 'session_turn_delete_authorized' || request.sessionId !== sessionId) return;
+    const target = rows.find(row => row.role === 'user' && row.id === request.messageId);
+    const result = { type: 'yeaft_session_delete_turn_result', sessionId, requestId: request.requestId };
+    if (!target) {
+      mockAgent.send({ ...result, ok: false, errorCode: 'message_not_found' });
+      return;
+    }
+    const deletedMessageIds = rows.filter(row => row.userTurnId === target.userTurnId).map(row => row.id);
+    rows = rows.filter(row => row.userTurnId !== target.userTurnId);
+    revision++;
+    const deletion = { sessionId, turnId: `deletion-${target.userTurnId}`, deletedMessageIds };
+    mockAgent.send({ ...result, ...deletion, ok: true });
+    // Release the broadcast separately to prove the requester reacts to the ACK
+    // and the other tab reacts to the broadcast, not a shared history response.
+    announcement = { type: 'yeaft_session_turn_deleted', ...deletion };
+  });
+  const openSession = async tab => {
+    await tab.waitForFunction(id => window.Pinia?.useChatStore?.().agents.some(agent => agent.id === id && agent.status === 'ready'), mockAgent.agentId);
+    mockAgent.send({ type: 'yeaft_output', event: { type: 'session_list_updated', sessions: [
+      { id: sessionId, name, roster: ['omni'], defaultVpId: 'omni', workDir: '/tmp/test' },
+    ] } });
+    const sidebarToggle = tab.locator('.yeaft-topbar-sidebar-toggle');
+    const sessionRow = tab.locator('.sidebar-session-row').filter({ hasText: name });
+    if (await sidebarToggle.isVisible() && !await sessionRow.isVisible()) await sidebarToggle.click();
+    await sessionRow.click();
+  };
+  const removedText = rows.filter(row => row.userTurnId === deletedTurn.userTurnId && row.content).map(row => row.content);
+  const expectKept = async tab => {
+    await expect(tab.getByText('Prompt to keep', { exact: true })).toBeVisible();
+    await expect(tab.getByText('Reply to keep', { exact: true })).toBeVisible();
+  };
+  const expectDeleted = async tab => {
+    await expectKept(tab);
+    for (const text of removedText) await expect(tab.getByText(text, { exact: true })).toHaveCount(0);
+    await expect(tab.locator('.tool-line')).toHaveCount(0);
+    await expect(tab.getByRole('button', { name: 'Delete turn', exact: true })).toHaveCount(1);
+  };
+
+  await openSession(page);
+  for (const text of removedText) await expect(page.getByText(text, { exact: true })).toBeVisible();
+  await page.getByRole('button', { name: '1 more', exact: true }).click();
+  await expect(page.locator('.tool-line')).toHaveCount(2);
+  await expectKept(page);
+  const peer = await context.newPage();
+  await peer.goto(serverUrl);
+  await openSession(peer);
+  await expectKept(peer);
+  await expect(peer.getByText('Supplement to remove', { exact: true })).toBeVisible();
+
+  await page.setViewportSize({ width: 320, height: 900 });
+  const supplement = page.locator('.message.user').filter({ hasText: 'Supplement to remove' });
+  const action = supplement.getByRole('button', { name: 'Delete turn', exact: true });
+  const dialog = page.getByRole('dialog', { name: 'Delete turn' });
+  const confirm = dialog.getByRole('button', { name: 'Delete turn', exact: true });
+  const cancel = dialog.getByRole('button', { name: 'Cancel', exact: true });
+  const openDialog = async () => {
+    await supplement.hover();
+    await action.click();
+    await expect(dialog).toContainText(/entire turn.*appended messages.*replies and tool activity.*cannot be undone/i);
+    await expect(confirm).toBeInViewport({ ratio: 1 });
+    await expect(cancel).toBeInViewport({ ratio: 1 });
+    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(320);
+  };
+  await openDialog();
+  const initialLoadCount = loads().length;
+  await cancel.click();
+  await expect(dialog).toBeHidden();
+  await expect(action).toBeFocused();
+  await expect(supplement).toBeVisible();
+  await expect(page.locator('.tool-line')).toHaveCount(2);
+  expect(authorized()).toHaveLength(0);
+
+  holdHistory = true;
+  await openDialog();
+  await confirm.click();
+  await expect.poll(authorized).toHaveLength(1);
+  expect(authorized()[0]).toMatchObject({ agentId: mockAgent.agentId, sessionId, messageId: 'm4' });
+  expect(mockAgent.messages('yeaft_session_delete_turn')).toHaveLength(0);
+  await expect.poll(() => loads().length).toBe(initialLoadCount + 1);
+  const requesterReplay = loads().at(-1);
+  expect(requesterReplay.afterSeq).toBeUndefined();
+  await expect(page.getByRole('status').filter({ hasText: 'Refreshing Session history' })).toBeVisible();
+  await expect(supplement).toBeVisible(); // No optimistic splice: wait for authoritative history.
+  replyWithHistory(requesterReplay);
+  await expectDeleted(page);
+  await expect(peer.getByText('Supplement to remove', { exact: true })).toBeVisible();
+  mockAgent.send(announcement);
+  await expect.poll(() => loads().length).toBe(initialLoadCount + 2);
+  const peerReplay = loads().at(-1);
+  expect(peerReplay.afterSeq).toBeUndefined();
+  expect(requesterReplay._requestClientId).toBeTruthy();
+  expect(peerReplay._requestClientId).toBeTruthy();
+  expect(peerReplay._requestClientId).not.toBe(requesterReplay._requestClientId);
+  await expect(peer.getByText('Supplement to remove', { exact: true })).toBeVisible();
+  replyWithHistory(peerReplay);
+  await expectDeleted(peer);
+  expect(loads()).toHaveLength(initialLoadCount + 2); // ACK and broadcast dedupe in the requester.
+
+  holdHistory = false;
+  await peer.reload();
+  await openSession(peer);
+  await expect.poll(() => loads().length).toBeGreaterThan(initialLoadCount + 2);
+  await expectDeleted(peer);
+});

@@ -163,6 +163,7 @@ export default {
           <MessageBlock :block="block" :context="blockRenderContext"
             @quote-message="$emit('quote-message', $event)"
             @edit-message-as-new="$emit('edit-message-as-new', $event)"
+            @delete-turn="$emit('delete-turn', $event)"
             @fork-from-turn="$emit('fork-from-turn', $event)" />
         </template>
         </VirtualTranscript>
@@ -172,6 +173,7 @@ export default {
             <MessageBlock :block="block" :context="blockRenderContext"
               @quote-message="$emit('quote-message', $event)"
               @edit-message-as-new="$emit('edit-message-as-new', $event)"
+              @delete-turn="$emit('delete-turn', $event)"
               @fork-from-turn="$emit('fork-from-turn', $event)" />
           </template>
         </ConcurrentUserTurns>
@@ -515,11 +517,12 @@ export default {
   `,
   props: {
     hideSpeakerIdentity: { type: Boolean, default: false },
+    deleteTurnActionFor: { type: Function, default: null },
     forkFromTurnEnabled: { type: Boolean, default: false },
     forkFromTurnDisabled: { type: Boolean, default: false },
     forkFromTurnTitle: { type: String, default: '' },
   },
-  emits: ['new-conversation', 'resume-conversation', 'open-settings', 'quote-message', 'edit-message-as-new', 'fork-from-turn'],
+  emits: ['new-conversation', 'resume-conversation', 'open-settings', 'quote-message', 'edit-message-as-new', 'fork-from-turn', 'delete-turn'],
   setup(_props, { expose }) {
     const store = Pinia.useChatStore();
     const authStore = useAuthStore();
@@ -2184,6 +2187,7 @@ export default {
 
     const blockRenderContext = Vue.computed(() => ({
       visibleItemsForBlock,
+      deleteTurnActionFor: _props.deleteTurnActionFor,
       flashMsgId: flashMsgId.value,
       useImStyleForUser: useImStyleForUser.value,
       hideSpeakerIdentity: _props.hideSpeakerIdentity,

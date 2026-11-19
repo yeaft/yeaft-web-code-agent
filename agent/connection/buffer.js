@@ -4,7 +4,7 @@ import { encrypt, decrypt, isEncrypted } from '../encryption.js';
 
 export const BUFFERABLE_TYPES = new Set([
   'claude_output', 'yeaft_output', 'yeaft_session_output', 'session_output',
-  'yeaft_history_chunk',
+  'yeaft_history_chunk', 'yeaft_session_turn_deleted',
   'turn_completed', 'conversation_closed',
   'session_id_update', 'compact_status', 'slash_commands_update',
   'background_task_started', 'background_task_output',

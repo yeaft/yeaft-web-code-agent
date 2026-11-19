@@ -22,6 +22,7 @@ export class MockAgent {
       'file_editor',
       'workbench_session_routes',
       'session_fork_from_turn',
+      'session_delete_turn',
       'work_center',
       'work_center_message_v2',
       'work_item_attachments',

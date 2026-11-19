@@ -34,6 +34,8 @@ import {
 } from './visible-entry.js';
 import { copyPersistedSessionAttachments, readPersistedAttachmentFile, persistYeaftAttachments, MAX_TOTAL_BYTES } from '../attachments.js';
 import { markConversationDirty } from './history-index-state.js';
+import { planTurnDeletion } from './delete-turn.js';
+import { commitSessionTurnDeletion, readSessionTurnDeletions, readSessionTurnDeletionsAt, SESSION_TURN_DELETION_FILE, sessionDeletionProjection } from './turn-deletion-journal.js';
 import { historyError, isHumanRequest, messageOrigin, planSessionMerge, materializeSessionMerge, materializeSessionCopy, sessionCopyOrigins } from './session-history.js';
 
 /**
@@ -1158,6 +1160,36 @@ class SegmentStore {
     for (const msg of (rows || []).filter(Boolean).sort(compareMessagesBySeq)) this.append(msg);
   }
 
+  // The journal has already committed visibility before any file is rewritten.
+  // Preserve untouched lines verbatim (including unfamiliar legacy records).
+  pruneTurnRows(sessionId, projection) {
+    if (!existsSync(this.segmentDir)) return;
+    const idx = this.loadIndex();
+    let changed = false;
+    for (const file of readdirSync(this.segmentDir).filter(name => /^\d+\.jsonl$/.test(name))) {
+      const path = join(this.segmentDir, file);
+      const raw = readFileSync(path, 'utf8');
+      const body = raw.split('\n').flatMap(line => {
+        let row;
+        try { row = JSON.parse(line); } catch { return [line]; }
+        if (row?.sessionId !== sessionId) return [line];
+        const kept = projection.scrub(row);
+        return kept === row ? [line] : kept ? [JSON.stringify(kept)] : [];
+      }).join('\n');
+      if (body === raw) continue;
+      if (body) writeAtomic(path, body);
+      else unlinkSync(path);
+      changed = true;
+    }
+    if (changed) {
+      const revision = (Number(idx.revision) || 0) + 1;
+      this.#writeLineage({ streamId: idx.streamId, revision, anchor: this.#currentLineageAnchor() });
+      this.index = this.#normalizeIndex({ ...this.#rebuildIndex(), streamId: idx.streamId,
+        revision, nextSeq: idx.nextSeq });
+      this.#saveRecoverableIndex();
+    }
+  }
+
   updateById(id, updater) {
     if (!id || typeof updater !== 'function' || !this.hasData()) return null;
     const targetSeq = parseSeqFromId(id);
@@ -1885,9 +1917,10 @@ export class ConversationStore {
     if (!sessionId) return null;
     const store = this.#segmentStoreForConversationDir(this.#sessionConversationDir(sessionId));
     const metadata = store.metadata();
+    const deletions = readSessionTurnDeletions(this.#dir, sessionId).operations.length;
     return {
       ...metadata,
-      streamId: `${metadata.streamId}:visible-v${VISIBLE_HISTORY_PROJECTION_VERSION}`,
+      streamId: `${metadata.streamId}:visible-v${VISIBLE_HISTORY_PROJECTION_VERSION}${deletions ? `:delete-${deletions}` : ''}`,
     };
   }
 
@@ -2256,9 +2289,51 @@ export class ConversationStore {
     return { copiedCount: written.length, idMap };
   }
 
+  /** Commit the exact root and its causal execution rows; the caller must own an idle Session. */
+  deleteSessionTurn(sessionId, messageId, { getRuntimeExecutionIds } = {}) {
+    const { operations } = readSessionTurnDeletions(this.#dir, sessionId);
+    const existing = operations.find(op => op.anchorMessageIds.includes(messageId));
+    if (existing) return existing;
+    const input = this.#loadDurableSession(sessionId, { allowDuplicateIds: true });
+    const operation = planTurnDeletion(input, messageId);
+    const safeRuntimeIds = operation.referenceIds.includes(operation.turnId)
+      ? getRuntimeExecutionIds?.(operation.turnId) || [] : [];
+    operation.executionIds = [...new Set([...operation.executionIds, ...safeRuntimeIds])];
+    operation.referenceIds = [...new Set([...operation.referenceIds, ...safeRuntimeIds])];
+    operation.deletionId = randomUUID();
+    commitSessionTurnDeletion(this.#dir, sessionId, operations, operation);
+    this.#markDirty({ sessionId }, 'delete-turn', operation.messageIds);
+    return operation;
+  }
+
+  /** Offline cleanup only; caller must stop all writers, including old versions. */
+  pruneDeletedSessionTurnRows(sessionId) {
+    const { operations } = readSessionTurnDeletions(this.#dir, sessionId);
+    if (!operations.length) return;
+    // Pin the high-water mark before unlinking the only durable copy of a
+    // legacy row. A failed reservation leaves every source file untouched.
+    this.#reserveSeqRange(1, { verifyAll: true });
+    const projection = sessionDeletionProjection(operations);
+    this.#segmentStoreForConversationDir(this.#sessionConversationDir(sessionId)).pruneTurnRows(sessionId, projection);
+    for (const entry of this.#sessionFileEntries('all', sessionId)) {
+      const row = this.readMessageFile(entry.path);
+      if (row?.sessionId !== sessionId) continue;
+      const kept = projection.scrub(row);
+      if (!kept) unlinkSync(entry.path);
+      else if (kept !== row) {
+        // Clear only quote frontmatter, retaining legacy fields verbatim.
+        const raw = readFileSync(entry.path, 'utf8');
+        const end = raw.startsWith('---\n') ? raw.indexOf('\n---', 4) : -1;
+        if (end > 0) writeAtomic(entry.path, raw.slice(0, end).replace(/^quoteB64:.*\n?/gm, '') + raw.slice(end));
+      }
+    }
+  }
+
   #loadDurableSession(sourceSessionId, { allowDuplicateIds = false } = {}) {
     const primary = this.#segmentStoreForConversationDir(this.#sessionConversationDir(sourceSessionId));
-    const segmentedRows = primary.readAllRaw({ includeCold: true, appendOrder: true });
+    const projection = sessionDeletionProjection(readSessionTurnDeletions(this.#dir, sourceSessionId).operations);
+    const project = row => row?.sessionId === sourceSessionId ? projection.scrub(row) : row;
+    const segmentedRows = primary.readAllRaw({ includeCold: true, appendOrder: true }).map(project).filter(Boolean);
     const segmentIds = new Set(segmentedRows.map(row => row.id));
     const hasDuplicates = segmentIds.size !== segmentedRows.length;
     if (hasDuplicates && !allowDuplicateIds) {
@@ -2266,7 +2341,7 @@ export class ConversationStore {
     }
     const legacyRows = this.#sessionFileEntries('all', sourceSessionId)
       .map(entry => {
-        try { return this.readMessageFile(entry.path); } catch (err) {
+        try { return project(this.readMessageFile(entry.path)); } catch (err) {
           if (isPermissionError(err)) return null;
           throw err;
         }
@@ -3284,7 +3359,7 @@ export class ConversationStore {
       const mb = b.f.match(/m(\d+)\.md$/);
       return (parseInt(ma?.[1] || '0', 10)) - (parseInt(mb?.[1] || '0', 10));
     });
-    return collected.map(x => x.msg);
+    return this.#projectGlobalSessionDeletions(collected.map(x => x.msg));
   }
 
   #chatConversationDir(chatId, { create = false } = {}) {
@@ -3614,13 +3689,21 @@ export class ConversationStore {
     const primaryDir = this.#sessionConversationDir(sessionId);
     const segmentStore = this.#segmentStoreForConversationDir(primaryDir);
     const legacyEntries = this.#sessionFileEntries('all', sessionId, opts);
+    const { operations } = readSessionTurnDeletions(this.#dir, sessionId);
+    const projection = sessionDeletionProjection(operations);
     // Interrupted migrations may leave a markdown copy of a folded JSONL row.
     // Apply the index's context-only tombstones to that copy too, including
     // when its reflection lies outside this page's sequence bounds. Legacy
     // markdown itself predates foldedMessageIds and has no fold metadata.
-    const foldedIds = new Set(opts.projection === 'transcript'
-      ? [] : segmentStore.loadIndex().foldedMessageIds || []);
-    const segments = segmentStore.scan({ includeCold: true, ...opts });
+    const context = opts.projection !== 'transcript';
+    const index = context ? segmentStore.loadIndex() : null;
+    const requiresFilter = !!index?.foldedMessageIds?.length && operations.some(op =>
+      op.reflectionSources?.some(id => index.foldedMessageIds.includes(id)));
+    const foldedIds = new Set(requiresFilter
+      ? foldedMessageIdsFrom(segmentStore.readAllRaw({ includeCold: true }).filter(row => !projection.deletedIds.has(row.id)))
+      : index?.foldedMessageIds || []);
+    // Use the effective fold set for both segment and legacy rows.
+    const segments = segmentStore.scan({ includeCold: true, ...opts, projection: 'transcript' });
     let segment = segments.next();
     let legacyIndex = 0;
     // Merge by sequence rather than concatenating formats. A delta cursor must
@@ -3630,7 +3713,10 @@ export class ConversationStore {
       const segmentSeq = segment.done ? null : parseSeqFromId(segment.value.id);
       if (!segment.done && (!entry || (opts.desc ? segmentSeq >= entry.seq : segmentSeq <= entry.seq))) {
         while (legacyEntries[legacyIndex]?.seq === segmentSeq) legacyIndex += 1;
-        if (!foldedIds.has(segment.value.id)) yield segment.value;
+        if (!foldedIds.has(segment.value.id)) {
+          const kept = projection.scrub(segment.value);
+          if (kept) yield kept;
+        }
         segment = segments.next();
         continue;
       }
@@ -3641,7 +3727,10 @@ export class ConversationStore {
         try { addScanMetric(opts.scanStats, 'bytes', statSync(entry.path).size); } catch {}
         if (msg) {
           addScanMetric(opts.scanStats, 'rows');
-          if (!foldedIds.has(msg.id)) yield msg;
+          if (!foldedIds.has(msg.id)) {
+            const kept = projection.scrub(msg);
+            if (kept) yield kept;
+          }
         }
       } catch (err) {
         if (isPermissionError(err)) continue;
@@ -3688,8 +3777,20 @@ export class ConversationStore {
     return entries;
   }
 
+  #projectGlobalSessionDeletions(rows) {
+    const projections = new Map();
+    return rows.flatMap(row => {
+      if (!row?.sessionId) return [row];
+      if (!projections.has(row.sessionId)) {
+        projections.set(row.sessionId, sessionDeletionProjection(readSessionTurnDeletions(this.#dir, row.sessionId).operations));
+      }
+      const kept = projections.get(row.sessionId).scrub(row);
+      return kept ? [kept] : [];
+    });
+  }
+
   #loadAllMessages() {
-    return [
+    return this.#projectGlobalSessionDeletions([
       ...this.#loadFromDir(this.#legacyColdDir, Infinity),
       ...this.#loadFromDir(this.#legacyMsgDir, Infinity),
       ...this.#loadFromDir(this.#chatColdDir, Infinity),
@@ -3698,17 +3799,17 @@ export class ConversationStore {
       ...this.#sessionConversationDirs({ primaryOnly: true }).flatMap(dir => this.#readSegmentRows(dir, { includeCold: true })),
       ...this.#sessionMessageDirs('cold').flatMap(dir => this.#loadFromDir(dir, Infinity)),
       ...this.#sessionMessageDirs('messages').flatMap(dir => this.#loadFromDir(dir, Infinity)),
-    ].sort(compareMessagesBySeq);
+    ]).sort(compareMessagesBySeq);
   }
 
   #loadHotMessages() {
-    return [
+    return this.#projectGlobalSessionDeletions([
       ...this.#loadFromDir(this.#legacyMsgDir, Infinity),
       ...this.#loadFromDir(this.#chatMsgDir, Infinity),
       ...this.#readSegmentRows(this.#chatDir),
       ...this.#sessionConversationDirs({ primaryOnly: true }).flatMap(dir => this.#readSegmentRows(dir)),
       ...this.#sessionMessageDirs('messages').flatMap(dir => this.#loadFromDir(dir, Infinity)),
-    ]
+    ])
       .filter(m => m && m.cold !== true)
       .sort(compareMessagesBySeq);
   }
@@ -3792,6 +3893,15 @@ export class ConversationStore {
    */
   #scanNextSeq({ verifyRows = false } = {}) {
     let maxSeq = 0;
+    // Deleted row IDs still participate in allocation, even after pruning
+    // or a restore that lost the allocator sidecar. Never resurrect one as
+    // the ID of an unrelated row (which the journal would then hide).
+    for (const dir of this.#sessionConversationDirs()) {
+      const { operations } = readSessionTurnDeletionsAt(join(dir, SESSION_TURN_DELETION_FILE));
+      for (const op of operations) {
+        for (const id of op.messageIds) maxSeq = Math.max(maxSeq, parseSeqFromId(id) || 0);
+      }
+    }
     for (const dir of [this.#chatDir, ...this.#chatConversationDirs(), ...this.#sessionConversationDirs({ primaryOnly: true })]) {
       const store = this.#segmentStoreForConversationDir(dir);
       if (store.hasData()) {
@@ -3825,15 +3935,16 @@ export class ConversationStore {
    * neither a cache epoch nor a scan can fence already in-flight writers.
    *
    * @param {number} count
+   * @param {{verifyAll?: boolean}} [options] Refresh the durable fence before offline pruning.
    * @returns {number} first reserved sequence
    */
-  #reserveSeqRange(count) {
+  #reserveSeqRange(count, { verifyAll = false } = {}) {
     const size = Math.max(1, Math.floor(Number(count) || 1));
     if (!Number.isSafeInteger(size)) throw new Error('Invalid conversation message id reservation');
     const rootKey = resolve(this.#dir);
     const sequencePath = join(this.#dir, MESSAGE_SEQUENCE_FILE);
     const cached = messageSequenceReservations.get(rootKey);
-    if (cached && cached.next + size <= cached.end) {
+    if (!verifyAll && cached && cached.next + size <= cached.end) {
       try {
         const recorded = JSON.parse(readFileSync(sequencePath, 'utf8'));
         const durableNext = Number(recorded?.nextSeq);
@@ -3847,8 +3958,8 @@ export class ConversationStore {
           return firstSeq;
         }
       } catch {}
-      messageSequenceReservations.delete(rootKey);
     }
+    messageSequenceReservations.delete(rootKey);
 
     // Small realtime appends amortize the cross-process lock and sidecar fsync.
     // Large transcript copies reserve exactly what they need to avoid stranding
@@ -3875,10 +3986,10 @@ export class ConversationStore {
         }
         // A syntactically valid sidecar can still be stale after a partial restore
         // or crash. Never trust it below the durable transcript high-water mark.
-        const scannedNext = this.#scanNextSeq({ verifyRows: !transcriptIdsVerified });
+        const scannedNext = this.#scanNextSeq({ verifyRows: verifyAll || !transcriptIdsVerified });
         const firstSeq = Math.max(recordedNext || 1, scannedNext);
         if (!Number.isSafeInteger(firstSeq + durableSize)) throw new Error('Conversation message id sequence exhausted');
-        epoch ||= randomUUID();
+        if (verifyAll || !epoch) epoch = randomUUID();
         writeAtomic(sequencePath, `${JSON.stringify({ version: 1, epoch, transcriptIdsVerified: true, nextSeq: firstSeq + durableSize })}\n`, { mode: 0o600 });
         messageSequenceReservations.set(rootKey, {
           epoch,

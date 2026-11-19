@@ -9,7 +9,7 @@ export default {
   name: 'MessageBlock',
   components: { MessageItem, AssistantTurn, VpTurnBlock, SubAgentCard, UserTurnBlock },
   props: { block: Object, context: Object },
-  emits: ['quote-message', 'edit-message-as-new', 'fork-from-turn'],
+  emits: ['quote-message', 'edit-message-as-new', 'fork-from-turn', 'delete-turn'],
   template: `
           <section
             v-if="block.type === 'message-block'"
@@ -29,6 +29,8 @@ export default {
                 <UserTurnBlock
                   v-if="item.type === 'user' && context.useImStyleForUser"
                   :message="item.message"
+                  :delete-turn-action="context.deleteTurnActionFor?.(item.message)"
+                  @delete-turn="$emit('delete-turn', $event)"
                   :hide-speaker-identity="context.hideSpeakerIdentity"
                   @quote="$emit('quote-message', $event)"
                   @edit-as-new="$emit('edit-message-as-new', $event)"
@@ -149,6 +151,8 @@ export default {
               <UserTurnBlock
                 v-if="block.type === 'user' && context.useImStyleForUser"
                 :message="block.message"
+                :delete-turn-action="context.deleteTurnActionFor?.(block.message)"
+                @delete-turn="$emit('delete-turn', $event)"
                 :hide-speaker-identity="context.hideSpeakerIdentity"
                 @quote="$emit('quote-message', $event)"
                 @edit-as-new="$emit('edit-message-as-new', $event)"
