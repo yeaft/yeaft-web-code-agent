@@ -160,7 +160,7 @@ const member = (dialog, id) => dialog.locator('.group-settings-roster-item')
 // One end-to-end catalog/legacy-Session journey, repeated in two presentation
 // environments rather than splitting the same protocol contract into many cases.
 test('ordinary Session scenes persist through a live switch and reload without exposing VP names', async ({ page, serverUrl, mockAgent }, info) => {
-  test.setTimeout(60_000);
+  test.setTimeout(90_000);
   await page.addInitScript(() => localStorage.setItem('locale', 'en'));
   await page.setViewportSize({ width: 1360, height: 900 });
   const fixture = mockAgent.catalog;
@@ -403,21 +403,30 @@ test('ordinary Session scenes persist through a live switch and reload without e
   await expectAnonymous(page.locator('.chat-container'));
   converted.finish(convertedTurn);
 
-  // Reproduce a committed scene whose receipt is lost: the browser must
-  // verify it from the Agent, rather than roll back or send a second write.
+  // Save the scene but deliberately drop its receipt. The page shouldn't
+  // report that the save failed, replay the write, or send an awaited draft.
   fixture.omitSceneReceipt = true;
   const initialLists = mockAgent.messages('yeaft_list_sessions').length;
+  const initialSends = mockAgent.messages('yeaft_session_send').length;
   await scene.click();
   await sceneMenu.getByRole('option', { name: 'Frontend', exact: true }).click();
   await expect(scene).toHaveAttribute('aria-busy', 'true');
+  await legacyInput.fill('Keep this draft when the receipt is lost');
+  await composer.getByRole('button', { name: 'Send', exact: true }).click();
   const sceneError = composer.locator('.yeaft-composer-scene-error');
-  await expect(scene).toHaveAttribute('aria-busy', 'false', { timeout: 20_000 });
+  await expect(sceneError).toHaveText('Scene change not confirmed. Refresh to check.', { timeout: 36_000 });
+  await expect(legacyInput).toHaveValue('Keep this draft when the receipt is lost');
+  expect(fixture.session()).toMatchObject({ config: { sceneId: 'frontend' } });
+  expect(mockAgent.messages('yeaft_list_sessions')).toHaveLength(initialLists);
+  expect(mockAgent.messages('yeaft_session_send')).toHaveLength(initialSends);
+  expect(mockAgent.messages('yeaft_update_session_config').filter(msg => msg.config?.sceneId === 'frontend')).toHaveLength(1);
+  await legacyInput.fill('');
+  fixture.omitSceneReceipt = false;
+  await page.reload();
+  await showSidebar(page);
+  await page.locator('.sidebar-session-row:visible').filter({ hasText: 'Legacy collaboration' }).click();
   await expectScene('Frontend');
   await expect(sceneError).toHaveCount(0);
-  expect(fixture.session()).toMatchObject({ config: { sceneId: 'frontend' } });
-  expect(mockAgent.messages('yeaft_list_sessions')).toHaveLength(initialLists + 1);
-  expect(mockAgent.messages('yeaft_update_session_config').filter(msg => msg.config?.sceneId === 'frontend')).toHaveLength(1);
-  fixture.omitSceneReceipt = false;
 
   // Newer scenes need an Agent that advertises them. Without those capabilities
   // the menu keeps the original scenes plus the newer scene this Session uses.

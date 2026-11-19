@@ -84,37 +84,6 @@ describe('Yeaft Session online Agent filtering', () => {
     expect(sendToWebClient).toHaveBeenLastCalledWith(client, client.sent[0]);
   };
 
-  it('relays a scene verification without rewriting Session inventory or accepting an older config', async () => {
-    CONFIG.skipAuth = false;
-    const owner = userDb.getOrCreate('scene-receipt-owner');
-    const otherOwner = userDb.getOrCreate('scene-receipt-other');
-    const ownerTab = { authenticated: true, userId: owner.id, sent: [] };
-    const otherTab = { authenticated: true, userId: otherOwner.id, sent: [] };
-    webClients.set('scene-owner-tab', ownerTab);
-    webClients.set('scene-other-tab', otherTab);
-    const agentId = 'scene-receipt-agent';
-    const agent = { ownerId: owner.id };
-    const saved = (sceneId, seconds) => ({ id: 'target', config: { sceneId },
-      metadataUpdatedAt: new Date(seconds * 1000).toISOString() });
-    const configResult = (requestId, session) => ({ type: 'session_crud_result', op: 'update_config',
-      requestId, ok: true, sessionId: session.id, config: session.config, session });
-    const emit = event => handleAgentOutput(agentId, agent, { type: 'yeaft_output', event });
-    const latest = saved('writing', 2);
-    const old = saved('frontend', 1);
-    sessions.upsertFromSnapshot(owner.id, agentId, { id: 'neighbor' });
-    await emit(configResult('write-latest', latest));
-    const probe = { type: 'session_crud_result', op: 'list', requestId: 'scene_config_read_earlier',
-      ok: true, sessions: [old] };
-    await emit(probe);
-    expect(ownerTab.sent.at(-1)).toMatchObject({ agentId, event: probe });
-    expect(ownerTab.sent.at(-1).event).not.toHaveProperty('projects');
-    await emit(configResult('write-old', old));
-    expect(sessions.getForAgent(owner.id, agentId, latest.id)).toMatchObject(latest);
-    expect(sessions.getForAgent(owner.id, agentId, 'neighbor')).not.toBeNull();
-    expect(agent.yeaftSessions.get(latest.id)).toMatchObject(latest);
-    expect(otherTab.sent).toEqual([]);
-  });
-
   it('rejects a foreign Session attachment atomically without consuming valid uploads', async () => {
     CONFIG.skipAuth = false;
     agents.set('agent-online', { ws: { readyState: 1 }, ownerId: 'user-1' });

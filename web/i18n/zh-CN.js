@@ -1351,7 +1351,7 @@ export default {
   'yeaft.session.scene.investment': '投资',
   'yeaft.session.scene.choose': '选择场景',
   'yeaft.session.scene.updateError': '无法更新场景，请重试。',
-  'yeaft.session.scene.unconfirmed': '暂时无法确认场景是否已保存，请刷新页面核对。',
+  'yeaft.session.scene.unconfirmed': '场景切换暂未确认，请刷新核对。',
   'yeaft.session.settings.nav.compatibility': '兼容设置',
   'yeaft.session.create.nameLabel': '名称',
   'yeaft.session.create.namePlaceholder': '会话名称（可选）',

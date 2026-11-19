@@ -722,18 +722,13 @@ export const useSessionsStore = defineStore('sessions', {
       }
       if (result.ok && result.op === 'update_config' && opSessionId) {
         const prev = opKey ? this.sessions[opKey] : null;
-        const updatedAt = session?.metadataUpdatedAt;
-        // Both replies describe the same Agent's clock. In particular, a
-        // scene write may post its acknowledgement after a later edit.
-        if (!prev) return;
-        if (Date.parse(updatedAt) < Date.parse(prev.metadataUpdatedAt)) return false;
-        this.sessions[opKey] = {
-          ...prev,
-          metadataUpdatedAt: updatedAt || prev.metadataUpdatedAt,
-          sceneId: result.config?.sceneId || null,
-          config: result.config && typeof result.config === 'object' ? { ...result.config } : {},
-        };
-        return true;
+        if (prev) {
+          this.sessions[opKey] = {
+            ...prev,
+            sceneId: result.config?.sceneId || null,
+            config: result.config && typeof result.config === 'object' ? { ...result.config } : {},
+          };
+        }
       }
     },
 
@@ -879,7 +874,6 @@ export const useSessionsStore = defineStore('sessions', {
         task: s.task && typeof s.task === 'object' ? JSON.parse(JSON.stringify(s.task)) : null,
         workDir: typeof s.workDir === 'string' ? s.workDir : '',
         createdAt: s.createdAt || null,
-        metadataUpdatedAt: s.metadataUpdatedAt || null,
         updatedAt: s.updatedAt || null,
         lastMessageAt: s.lastMessageAt || null,
         running: isRunningRow(s),

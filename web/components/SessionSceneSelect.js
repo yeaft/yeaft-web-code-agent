@@ -160,7 +160,7 @@ export default {
         const result = await chat.updateYeaftSessionScene(this.session.id, sceneId, this.agentId);
         if (result?.ok) return;
         if (result?.error?.code === 'scene_unconfirmed') {
-          // A late save acknowledgement can arrive during or after the check.
+          // A fresh Session snapshot may have confirmed the save in the meantime.
           if (this.session.sceneId !== sceneId) {
             this.unconfirmedScene = sceneId;
             this.errorKey = 'unconfirmed';

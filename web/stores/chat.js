@@ -244,9 +244,10 @@ const YEAFT_HISTORY_DELTA_ROWS = 100;
 const YEAFT_HISTORY_DELTA_BYTES = 512 * 1024;
 const YEAFT_SESSION_INVENTORY_TIMEOUT_MS = 15_000;
 const YEAFT_SESSION_CRUD_TIMEOUT_MS = 10_000;
-// The Agent echoes this ID via the existing list wire. Verification replies
-// are evidence for one scene switch, not authoritative inventory updates.
-const SCENE_CONFIG_READ_PREFIX = 'scene_config_read_';
+const YEAFT_SCENE_RECEIPT_TIMEOUT_MS = 30_000;
+// Other tabs still consume the Agent's broadcasts. This tab can recognize
+// its own expired scene writes without keeping request IDs forever.
+const LOCAL_SCENE_REQUEST_PREFIX = `grc_scene_${Math.random().toString(36).slice(2)}_`;
 const YEAFT_SESSION_COPY_SUCCESS_MS = 450;
 const YEAFT_HISTORY_OUTLINE_RETRY_DELAYS_MS = Object.freeze([150, 300, 600, 1_000]);
 const YEAFT_HISTORY_OUTLINE_RETRYABLE_ERRORS = new Set(['index_building', 'stale_result']);
@@ -6251,16 +6252,12 @@ export const useChatStore = defineStore('chat', {
           // and have no envelope context. Keep these two channels in sync
           // if you change the wire-stamping rule.
           const pending = this._sessionCrudPending && this._sessionCrudPending.get(event.requestId);
-          const sceneConfigRead = typeof event.requestId === 'string' && event.requestId.startsWith(SCENE_CONFIG_READ_PREFIX);
-          // This read is evidence only for the tab that issued it. Never apply
-          // the full inventory, including late replies or echoes to other tabs.
-          if (sceneConfigRead && !pending?.sceneConfigRead) break;
+          if (!pending && event.op === 'update_config'
+              && typeof event.requestId === 'string' && event.requestId.startsWith(LOCAL_SCENE_REQUEST_PREFIX)) break;
           // Branch acknowledgements are broadcast for inventory updates. Only
           // the initiating tab may focus it, and another Agent must not settle
           // this tab's request even if it echoes the same request id.
-          // Config writes and the read that verifies a timed-out write must be
-          // answered by the same Agent in the same authenticated connection.
-          if (pending && (event.op === 'update_config' || pending.op === 'update_config' || sceneConfigRead) && (
+          if (pending && (event.op === 'update_config' || pending.op === 'update_config') && (
             pending.op !== event.op || pending.agentId !== msg.agentId
             || (event.sessionId && event.sessionId !== pending.sessionId)
             || pending.connectionGeneration !== Number(this.chatHistoryConnectionGeneration || 0)
@@ -6291,13 +6288,13 @@ export const useChatStore = defineStore('chat', {
           if (isBranchResult && event.projectsAuthoritative === true && Array.isArray(event.projects)) {
             this.applySessionCatalogSnapshot(this.sessionCatalog, event.projects, null, { authoritative: false });
           }
-          if (!sceneConfigRead) {
-            const applied = gs?.applyCrudResult(event, msg.agentId || null, {
-              // Only the initiating branch action owns navigation.
-              activate: !isBranchResult,
-            });
-            if (applied !== false) handlerHelpers.bufferYeaftSessionConfigDelta(this, event, msg.agentId || null);
-          }
+          handlerHelpers.bufferYeaftSessionConfigDelta(this, event, msg.agentId || null);
+          if (gs) gs.applyCrudResult(event, msg.agentId || null, {
+            // The initiating branch action owns navigation so it can render a
+            // visible success state before entering the new Session. Other
+            // tabs still receive the inventory update without being redirected.
+            activate: !isBranchResult,
+          });
           if (event.ok && event.op === 'delete' && event.sessionId && msg.agentId) {
             this.clearYeaftHistoryMemory({
               agentId: msg.agentId,
@@ -6799,7 +6796,8 @@ export const useChatStore = defineStore('chat', {
       if (!this._sessionCrudPending || typeof this._sessionCrudPending.get !== 'function') {
         this._sessionCrudPending = new Map();
       }
-      const requestId = (opts.sceneConfigRead ? SCENE_CONFIG_READ_PREFIX : 'grc_')
+      const sceneWrite = op === 'update_config' && Object.hasOwn(data?.config || {}, 'sceneId');
+      const requestId = (sceneWrite ? LOCAL_SCENE_REQUEST_PREFIX : 'grc_')
         + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 8);
       const typeMap = {
         list: 'yeaft_list_sessions',
@@ -6849,33 +6847,34 @@ export const useChatStore = defineStore('chat', {
         // the correlated request open until its result or a real disconnect.
         const timeoutMs = Number.isFinite(opts.timeoutMs)
           ? Math.max(1, Number(opts.timeoutMs))
-          : (op === 'copy' || op === 'merge' ? null : YEAFT_SESSION_CRUD_TIMEOUT_MS);
-        const finish = result => {
-          if (timer) clearTimeout(timer);
-          opts.signal?.removeEventListener('abort', abort);
-          this._sessionCrudPending.delete(requestId);
-          if (gs?.pending) delete gs.pending[requestId];
-          resolve(result);
-        };
-        const abort = () => finish({ ok: false, op, error: { code: 'stale_request' } });
+          : (op === 'copy' || op === 'merge' ? null
+            : sceneWrite ? YEAFT_SCENE_RECEIPT_TIMEOUT_MS : YEAFT_SESSION_CRUD_TIMEOUT_MS);
         const timer = timeoutMs == null ? null : setTimeout(() => {
-          finish({ ok: false, op, error: { code: 'timeout', message: 'session_crud timeout' } });
+          if (this._sessionCrudPending && this._sessionCrudPending.has(requestId)) {
+            this._sessionCrudPending.delete(requestId);
+            if (gs?.pending) delete gs.pending[requestId];
+            resolve({ ok: false, op, error: { code: 'timeout', message: 'session_crud timeout' } });
+          }
         }, timeoutMs);
-        if (opts.signal?.aborted) { abort(); return; }
-        opts.signal?.addEventListener('abort', abort, { once: true });
         this._sessionCrudPending.set(requestId, {
           op,
           authGeneration: Number(useAuthStore().authGeneration || 0),
           sessionId: data?.sessionId || null,
           otherSessionId: data?.otherSessionId || null,
           agentId: overrideAgentId || this.currentAgent,
-          sceneConfigRead: opts.sceneConfigRead === true,
           connectionGeneration: Number(this.chatHistoryConnectionGeneration || 0),
-          resolve: finish,
+          resolve: (result) => {
+            if (timer) clearTimeout(timer);
+            if (gs?.pending) delete gs.pending[requestId];
+            resolve(result);
+          },
         });
         const sent = this.sendWsMessage(msg);
-        if ((opts.sceneConfigRead || ['create', 'copy', 'merge', 'update_config', 'update_task', 'run_task'].includes(op)) && !sent) {
-          finish({ ok: false, op, error: { code: 'agent_offline' } });
+        if (['create', 'copy', 'merge', 'update_config', 'update_task', 'run_task'].includes(op) && !sent) {
+          if (timer) clearTimeout(timer);
+          this._sessionCrudPending.delete(requestId);
+          if (gs?.pending) delete gs.pending[requestId];
+          resolve({ ok: false, op, error: { code: 'agent_offline' } });
         }
       });
     },
@@ -7035,50 +7034,20 @@ export const useChatStore = defineStore('chat', {
         connectionGeneration: Number(this.chatHistoryConnectionGeneration || 0),
       };
       this.yeaftSessionSceneSelections[key] = entry;
-      const isCurrent = () => entry.authGeneration === Number(useAuthStore().authGeneration || 0)
-        && entry.connectionGeneration === Number(this.chatHistoryConnectionGeneration || 0)
-        && this.connectionState === 'connected'
-        && this.agents.some(agent => agent.id === agentId && agent.online);
-      const unconfirmed = { ok: false, error: { code: 'scene_unconfirmed' } };
-      const controller = new AbortController();
-      const { signal } = controller;
-      // Keep the write receipt live while the read runs. Only a positive read
-      // can settle early; a missing or older scene may precede the write.
-      let checkTimer;
-      const verified = new Promise((resolve, reject) => {
-        checkTimer = setTimeout(async () => {
-          try {
-            if (!isCurrent()) return;
-            const inventory = await this.sessionCrudRequest('list', {}, { agentId, sceneConfigRead: true, signal });
-            if (signal.aborted || !isCurrent()) return;
-            const saved = inventory?.ok && Array.isArray(inventory.sessions)
-              ? inventory.sessions.find(session => session?.id === sessionId) : null;
-            if (saved?.config?.sceneId !== sceneId) return;
-            const sessions = getSessionsStore();
-            const verifiedConfig = { ok: true, op: 'update_config', sessionId, config: saved.config, session: saved };
-            if (sessions?.applyCrudResult(verifiedConfig, agentId) !== true) return;
-            handlerHelpers.bufferYeaftSessionConfigDelta(this, verifiedConfig, agentId);
-            resolve(verifiedConfig);
-          } catch (error) {
-            reject(error);
+      const promise = this.sessionCrudRequest('update_config', { sessionId, config: { sceneId } }, { agentId })
+        .then(result => {
+          // Losing the receipt does not undo an Agent write. Don't replay it
+          // or send a queued message under a scene we could not confirm.
+          if (result?.receiptInterrupted || result?.error?.code === 'timeout'
+              || (result?.ok && result.config?.sceneId !== sceneId)) {
+            return { ok: false, error: { code: 'scene_unconfirmed' } };
           }
-        }, YEAFT_SESSION_CRUD_TIMEOUT_MS);
-      });
-      const write = this.sessionCrudRequest('update_config', { sessionId, config: { sceneId } }, {
-        agentId, timeoutMs: 2 * YEAFT_SESSION_CRUD_TIMEOUT_MS, signal,
-      }).then(result => {
-        if (!isCurrent() || result?.receiptInterrupted || result?.error?.code === 'timeout') return unconfirmed;
-        if (!result?.ok) return result;
-        return result.config?.sceneId === sceneId && getSessionsStore()?.sessionById?.(sessionId, agentId)?.sceneId === sceneId
-          ? result : unconfirmed;
-      });
-      const promise = Promise.race([write, verified]);
+          return result;
+        });
       this._sessionSceneSwitches.set(key, { promise });
       try {
         return await promise;
       } finally {
-        clearTimeout(checkTimer);
-        controller.abort();
         if (this._sessionSceneSwitches.get(key)?.promise === promise) {
           this._sessionSceneSwitches.delete(key);
           delete this.yeaftSessionSceneSelections[key];

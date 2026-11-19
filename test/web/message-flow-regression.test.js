@@ -243,7 +243,7 @@ describe('message flow regressions', () => {
     expect(rows()).toEqual([]);
   });
 
-  it('confirms a slow scene switch before sending, without replay or stale config rollback', async () => {
+  it('waits for a slow scene receipt, retains an unconfirmed draft and ignores its stale receipt', async () => {
     vi.useFakeTimers();
     const mockedSessions = Pinia.useSessionsStore;
     Pinia.useSessionsStore = useSessionsStore;
@@ -251,86 +251,64 @@ describe('message flow regressions', () => {
       storeFactories.clear();
       const store = useChatStore();
       const sessions = useSessionsStore();
-      const row = (sceneId, revision, id = 's') => ({ id, config: { sceneId, model: 'test/model' },
-        metadataUpdatedAt: new Date(1000 * revision).toISOString() });
-      const current = () => sessions.sessionById('s', 'a').sceneId;
-      sessions.applySnapshot([row('software', 1), row('general', 1, 'neighbor')], 'a');
-      sessions.applySnapshot([row('investment', 1)], 'b');
+      sessions.applySnapshot([{ id: 's', config: { sceneId: 'software' } }], 'a');
+      sessions.applySnapshot([{ id: 's', config: { sceneId: 'investment' } }], 'b');
       sessions.setActive('s', 'a');
       store.currentAgent = 'b';
-      store.yeaftSessionAgentById = { s: 'a' };
       store.agents = ['a', 'b'].map(id => ({ id, online: true, capabilities: ['session_scenes'] }));
       store._hasHandledAgentList = true;
       store.connectionState = 'connected';
       store.sendWsMessage = vi.fn(() => true);
-      const sent = () => store.sendWsMessage.mock.calls.map(([msg]) => msg);
+      const sent = () => store.sendWsMessage.mock.calls.map(([msg]) => msg)
+        .filter(msg => msg.type !== 'perf_trace_events');
       const last = () => sent().at(-1);
-      const framesOf = type => sent().filter(msg => msg.type === type);
-      const frame = (agentId, event) => store.handleYeaftOutput({ agentId, event: { type: 'session_crud_result', ...event } });
-      const ack = (write, saved) => frame('a', { requestId: write.requestId, op: 'update_config', ok: true,
-        sessionId: 's', config: saved.config, session: saved });
-      const replyToRead = (read, saved, agentId = 'a') => frame(agentId, {
-        requestId: read.requestId, op: 'list', ok: true, sessions: [saved],
-      });
+      const ack = (request, agentId = 'a') => store.handleYeaftOutput({ agentId, event: {
+        type: 'session_crud_result', op: 'update_config', ok: true,
+        requestId: request.requestId, sessionId: 's', config: request.config,
+      } });
+      const scene = () => sessions.sessionById('s', 'a').sceneId;
+      const choose = sceneId => store.updateYeaftSessionScene('s', sceneId, 'a');
+      const send = text => store.sendYeaftSessionMessage({ groupId: 's', text });
 
-      const save = store.updateYeaftSessionScene('s', 'frontend', 'a');
-      const send = store.sendYeaftSessionMessage({ groupId: 's', text: 'Send once after confirmation' });
+      const slow = choose('frontend');
+      const first = last();
+      const queued = send('Send after confirmation');
+      await vi.advanceTimersByTimeAsync(12_000);
+      expect(first).toMatchObject({ type: 'yeaft_update_session_config', agentId: 'a', sessionId: 's', config: { sceneId: 'frontend' } });
+      expect(sent()).toEqual([first]);
       expect(store.pendingSessionSceneSelectionFor('s', 'a')).toBe('frontend');
-      await vi.advanceTimersByTimeAsync(10_000);
-      const [write, read] = sent();
-      expect(write).toMatchObject({ type: 'yeaft_update_session_config', agentId: 'a', sessionId: 's', config: { sceneId: 'frontend' } });
-      expect(read).toMatchObject({ type: 'yeaft_list_sessions', agentId: 'a' });
-      replyToRead(read, row('frontend', 2), 'b');
-      expect(current()).toBe('software');
+      ack(first, 'b');
       expect(sessions.sessionById('s', 'b').sceneId).toBe('investment');
-      expect(framesOf('yeaft_session_send')).toHaveLength(0);
-      replyToRead(read, row('frontend', 2));
-      expect(await save).toMatchObject({ ok: true, config: { sceneId: 'frontend' } });
-      await send;
-      expect(current()).toBe('frontend');
-      expect(sessions.sessionById('neighbor', 'a')).toBeTruthy();
-      expect(framesOf('yeaft_update_session_config')).toHaveLength(1);
-      expect(framesOf('yeaft_session_send')).toEqual([
-        expect.objectContaining({ agentId: 'a', sessionId: 's', text: 'Send once after confirmation' }),
-      ]);
-      expect(store.pendingSessionSceneSelectionFor('s', 'a')).toBeNull();
+      expect(scene()).toBe('software');
+      ack(first);
+      expect(await slow).toMatchObject({ ok: true });
+      await queued;
+      expect(scene()).toBe('frontend');
+      expect(sent()).toEqual([first, expect.objectContaining({ type: 'yeaft_session_send', agentId: 'a', text: 'Send after confirmation' })]);
 
-      const late = store.updateYeaftSessionScene('s', 'writing', 'a');
-      const lateWrite = last();
-      const lateSend = store.sendYeaftSessionMessage({ groupId: 's', text: 'Send on the late receipt' });
-      await vi.advanceTimersByTimeAsync(10_000);
-      const lateRead = last();
-      expect(lateRead.type).toBe('yeaft_list_sessions');
-      ack(lateWrite, row('writing', 3));
-      expect(await late).toMatchObject({ ok: true });
-      await lateSend;
-      expect(framesOf('yeaft_session_send')).toHaveLength(2);
-      expect(store._sessionCrudPending.size).toBe(0);
-      // A late read and a duplicate earlier write are both harmless even
-      // after the next selection has been confirmed.
-      const next = store.updateYeaftSessionScene('s', 'general', 'a');
-      ack(last(), row('general', 4));
-      expect(await next).toMatchObject({ ok: true });
-      replyToRead(lateRead, row('writing', 3));
-      ack(write, row('frontend', 2));
-      expect(current()).toBe('general');
-
-      const unconfirmed = store.updateYeaftSessionScene('s', 'frontend', 'a');
-      const retained = store.sendYeaftSessionMessage({ groupId: 's', text: 'Retain on unknown outcome' });
-      await vi.advanceTimersByTimeAsync(10_000);
-      replyToRead(last(), row('general', 4));
-      await vi.advanceTimersByTimeAsync(10_000);
-      expect(await unconfirmed).toMatchObject({ ok: false, error: { code: 'scene_unconfirmed' } });
+      const missing = choose('writing');
+      const expired = last();
+      const retained = send('Keep my draft');
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(await missing).toMatchObject({ ok: false, error: { code: 'scene_unconfirmed' } });
       expect(await retained).toBe(false);
-      expect(current()).toBe('general');
-      expect(framesOf('yeaft_session_send')).toHaveLength(2);
+      expect(sent()).toHaveLength(3);
+      expect(scene()).toBe('frontend');
 
-      const disconnected = store.updateYeaftSessionScene('s', 'frontend', 'a');
-      const disconnectedSend = store.sendYeaftSessionMessage({ groupId: 's', text: 'Do not send on disconnect' });
+      const newest = choose('general');
+      ack(last());
+      expect(await newest).toMatchObject({ ok: true });
+      ack(expired);
+      expect(scene()).toBe('general');
+      expect(sent()).toHaveLength(4);
+
+      const disconnected = choose('frontend');
+      const interruptedSend = send('Do not send on disconnect');
       handleAgentList(store, { agents: store.agents.map(agent => ({ ...agent, online: agent.id !== 'a' })) });
       expect(await disconnected).toMatchObject({ ok: false, error: { code: 'scene_unconfirmed' } });
-      expect(await disconnectedSend).toBe(false);
-      expect(framesOf('yeaft_session_send')).toHaveLength(2);
+      expect(await interruptedSend).toBe(false);
+      expect(sent()).toHaveLength(5);
+      expect(store._sessionCrudPending.size).toBe(0);
     } finally {
       Pinia.useSessionsStore = mockedSessions;
       vi.useRealTimers();
