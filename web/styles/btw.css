@@ -182,11 +182,6 @@
   30%           { opacity: 1; }
 }
 
-/* Input wrapper btw mode visual */
-.input-wrapper.btw-active {
-  background: var(--bg-input-wrapper);
-}
-
 /* BTW tag in input area */
 .btw-input-tag {
   display: inline-flex;

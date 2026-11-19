@@ -128,6 +128,8 @@
    a lighter warm grey in dark. Re-pointing --bg-main inside them keeps every
    sticky header, footer and field that paints var(--bg-main) on the same
    surface as its container, without restating each module's background.
+   Hover and selected tints move up with the surface so menu rows, including
+   the keyboard-active ModernSelect option, stay visible in dark.
    =========================================================================== */
 :is(.modal, .modal-modern, .resume-modal, .settings-dialog, .agent-settings-dialog,
     .expert-editor-modal, .folder-picker-dialog, .group-invite-modal, .work-center-modal,
@@ -136,6 +138,12 @@
     .ctx-menu, .session-menu, .work-center-header-popover, .yeaft-model-dropdown,
     .yeaft-topbar-group-menu) {
   --bg-main: var(--bg-elevated);
+  --sidebar-hover: var(--elevated-hover);
+  --bg-hover: var(--elevated-hover);
+  --hover-bg: var(--elevated-hover);
+  --surface-hover: var(--elevated-hover);
+  --session-active: var(--elevated-active);
+  --sidebar-selected: var(--elevated-active);
 }
 
 @media (prefers-reduced-motion: reduce) {

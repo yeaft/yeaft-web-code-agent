@@ -1264,8 +1264,8 @@
 }
 
 .chat-rename-input::selection {
-  background: var(--accent-blue, #3b82f6);
-  color: white;
+  background: var(--accent-blue);
+  color: var(--accent-fg);
 }
 
 .session-info {
@@ -2262,8 +2262,8 @@
   height: 14px;
   padding: 0 3px;
   border-radius: 7px;
-  background: var(--accent-blue, #3b82f6);
-  color: #fff;
+  background: var(--accent-blue);
+  color: var(--accent-fg);
   font-size: 9px;
   font-weight: 600;
   line-height: 14px;

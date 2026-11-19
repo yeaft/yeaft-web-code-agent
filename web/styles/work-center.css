@@ -3542,5 +3542,6 @@
   .work-center-item-disclosure, .work-center-item-disclosure-spacer { flex-basis: 44px; width: 44px; }
   .work-center-activity-disclosure { min-height: 44px; }
   .work-center-agent-row.session-tab, .work-center-activity-item, .work-center-activity-actions button { min-height: 44px; }
+  .work-center-sidebar:not(.collapsed) .work-center-sidebar-create.btn-ghost { min-height: 44px; }
   .work-center-header-main-inner { padding-left: 10px; }
 }

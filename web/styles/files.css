@@ -1510,8 +1510,8 @@
 }
 
 .folder-picker-selected {
-  background: var(--accent-blue, #4a9eff) !important;
-  color: #fff !important;
+  background: var(--accent-blue) !important;
+  color: var(--accent-fg) !important;
 }
 
 .folder-picker-footer {
