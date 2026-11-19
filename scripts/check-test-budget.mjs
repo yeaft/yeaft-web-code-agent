@@ -223,7 +223,8 @@ import { CORE_TEST_FILES, E2E_TEST_FILES, REVIEWED_TEST_FILES, isTestFile, norma
 // trace removal, stale browser replay fencing and narrow-screen confirmation.
 // +2 deletion storage regressions: idle audit handle and cross-process CLI admission.
 // +4 cases: legacy overlap, stale/late compaction, offline Session reopen and mixed-version UI.
-export const TEST_CASE_LIMIT = 1198;
+// +1 refusal of an unowned legacy execution that begins after a later input.
+export const TEST_CASE_LIMIT = 1199;
 
 function walkFiles(directory) {
   return readdirSync(directory, { withFileTypes: true }).flatMap(entry => {

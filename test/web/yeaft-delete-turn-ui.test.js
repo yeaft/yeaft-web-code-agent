@@ -29,11 +29,11 @@ it('renders an accessible, localized and gated action on native user bubbles', a
   await button.trigger('click');
   expect(wrapper.emitted('delete-turn')).toBeUndefined();
   await wrapper.setProps({ deleteTurnAction: { target, reason: 'unsupported' } });
-  expect(button.attributes('title')).toBe('Update the Agent and Server to delete Session turns.');
+  expect(button.attributes('title')).toBe('Turn deletion requires an updated Server and Agent, and must be enabled for this data directory.');
   expect(button.attributes('aria-disabled')).toBe('true');
   await button.trigger('click');
   expect(wrapper.emitted('delete-turn')).toBeUndefined();
-  expect(zh['yeaft.deleteTurn.unsupported']).toBe('请更新 Agent 和 Server 后再删除轮次。');
+  expect(zh['yeaft.deleteTurn.unsupported']).toBe('请更新 Agent 和 Server，并为此数据目录启用轮次删除。');
   await wrapper.setProps({ deleteTurnAction: { target } });
   await button.trigger('click');
   expect(wrapper.emitted('delete-turn')).toEqual([[target]]);

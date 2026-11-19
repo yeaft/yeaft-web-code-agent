@@ -644,4 +644,18 @@ describe('Session turn deletion', () => {
     expect(store.loadAllBySession(sessionId).map(row => row.id)).toEqual([a.id, first.id, b.id, late.id, last.id]);
   });
 
+  it('refuses deletion when a legacy execution starts emitting only after the next user question', () => {
+    const store = new ConversationStore(TEST_DIR);
+    const sessionId = 'session_delayed_legacy';
+    const push = (role, content, extra) => store.append({ sessionId, role, content, ...extra });
+    const a = push('user', 'first request');
+    const b = push('user', 'second request');
+    const lateA = push('assistant', 'A delayed output', { turnId: 'legacy-a', speakerVpId: 'omni' });
+    const lastB = push('assistant', 'B output', { turnId: 'legacy-b', speakerVpId: 'omni' });
+    for (const id of [a.id, b.id]) {
+      expect(() => store.deleteSessionTurn(sessionId, id)).toThrow(expect.objectContaining({ code: 'ambiguous_turn' }));
+    }
+    expect(store.loadAllBySession(sessionId).map(row => row.id)).toEqual([a.id, b.id, lateA.id, lastB.id]);
+  });
+
 });

@@ -108,6 +108,7 @@ import {
 } from './sessions/session-crud.js';
 import { openSession, loadSessionMeta, SESSION_META_FILE } from './sessions/session-store.js';
 import { tryAcquireSessionTurnDeletion } from './sessions/session-turn-fence.js';
+import { isSessionTurnDeletionCutoverConfirmed } from './sessions/session-turn-cutover.js';
 import { validateSessionId } from './sessions/ids.js';
 import { publicScheduledTask } from './sessions/scheduled-task-definition.js';
 import { ScheduledTaskScheduler, SCHEDULED_TASK_DISPATCH_GUARD } from './sessions/scheduled-task-scheduler.js';
@@ -4396,7 +4397,7 @@ export function handleYeaftCopySession(msg) {
 const turnDeletionsInProgress = new Set();
 const turnDeleteId = id => typeof id === 'string' && /^[A-Za-z0-9_.:-]{1,160}$/.test(id) && !/\s/.test(id);
 const TURN_DELETE_PUBLIC_ERRORS = new Set(['invalid_request', 'session_not_found', 'session_running',
-  'message_not_found', 'ambiguous_turn', 'unsupported_session']);
+  'message_not_found', 'ambiguous_turn', 'unsupported_session', 'turn_deletion_cutover_required']);
 
 /** Only dispatched by the Server's owner-authorized relay, never a generic Web frame. */
 export async function handleYeaftDeleteTurn(msg = {}) {
@@ -4415,6 +4416,9 @@ export async function handleYeaftDeleteTurn(msg = {}) {
     const meta = loadSessionMeta(sessionDir);
     if (!meta || meta.id !== sessionId) throw historyError('session_not_found', 'Session not found.');
     if (meta.task) throw historyError('unsupported_session', 'Scheduled-task Session history cannot be deleted here.');
+    if (!isSessionTurnDeletionCutoverConfirmed(root) || !isSessionTurnDeletionCutoverConfirmed(ownerRoot)) {
+      throw historyError('turn_deletion_cutover_required', 'Turn deletion requires an offline upgrade of all readers of the Session data root.');
+    }
     if (turnDeletionsInProgress.has(sessionId) || sessionHasActiveWork(sessionId)
       || sessionCopyRecoveryTasks(sessionId).length) {
       throw historyError('session_running', 'Stop all work in this Session before deleting a turn.');

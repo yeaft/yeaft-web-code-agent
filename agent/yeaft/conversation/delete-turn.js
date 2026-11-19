@@ -40,14 +40,18 @@ export function planTurnDeletion({ rows, sessionId, streamId }, messageId) {
   function explicit(row, seen = new Set()) {
     if (human.has(row.id)) return human.get(row.id);
     const root = scope(row, row.userTurnId);
-    if (root && knownRoots.has(root)) return root;
-    if (!row.causalRootId || seen.has(row.id)) return root;
+    const knownRoot = root && knownRoots.has(root) ? root : null;
+    if (!row.causalRootId || seen.has(row.id)) return knownRoot;
     seen.add(row.id);
     const parent = records.get(row.causalRootId);
-    if (parent) return explicit(parent, seen) || root;
-    const keys = clients.get(scope(row, row.causalRootId));
-    if (keys?.size > 1 && keys.has(target)) throw bad();
-    return (keys?.size === 1 ? keys.values().next().value : null) || root;
+    const causal = new Set(clients.get(scope(row, row.causalRootId)) || []);
+    // Materialized fork/merge references may explicitly link an internal row
+    // to a different origin via its stable local row ID.
+    const parentOwner = parent && explicit(parent, seen);
+    if (parentOwner) causal.add(parentOwner);
+    if (knownRoot) causal.add(knownRoot);
+    if (causal.size > 1 && causal.has(target)) throw bad();
+    return causal.size === 1 ? causal.values().next().value : knownRoot;
   }
   const direct = new Map();
   const executions = new Map();
@@ -61,58 +65,45 @@ export function planTurnDeletion({ rows, sessionId, streamId }, messageId) {
     if (keys.size > 1 && keys.has(target)) throw bad();
     executions.set(exec, keys);
   }
-  // Legacy executions can be interleaved even if their rows predate explicit
-  // causal IDs. Learn every observed boundary first, never choose the last one.
-  const boundaries = new Map();
-  const legacyExecutions = new Map();
-  let current = null;
-  for (const row of rows) {
-    if (interactive(row)) current = row;
-    if (!current || stream(current) !== stream(row)) continue;
-    const boundary = human.get(current.id);
-    boundaries.set(row.id, { boundary, legacy: !current.userTurnId });
-    const key = execution(row);
-    if (!key || direct.get(row.id)) continue;
-    const candidates = legacyExecutions.get(key) || new Set();
-    candidates.add(boundary);
-    legacyExecutions.set(key, candidates);
-  }
-  for (const [key, candidates] of legacyExecutions) {
-    if (executions.has(key)) continue; // An explicit root already owns the execution.
-    if (candidates.size > 1 && candidates.has(target)) throw bad();
-  }
+  // Append order is not ownership evidence: even an execution's first row
+  // can land after a newer human request. Order only rules out rows that
+  // predate the selected root. If later ownership is uncertain, fail closed.
+  const firstTarget = rows.findIndex(row => human.get(row.id) === target);
+  const potentiallyTarget = (row, index) => index >= firstTarget && stream(row) === stream(selected);
+  const idsFor = row => executions.get(execution(row));
+  const ownerOf = row => direct.get(row.id) || (idsFor(row)?.size === 1 ? idsFor(row).values().next().value : null);
   const removed = new Set();
   const byCall = new Map();
-  const unresolvedTools = [];
-  for (const row of rows) {
-    const key = execution(row);
-    const keys = executions.get(key);
-    const owner = direct.get(row.id) || (keys?.size === 1 ? keys.values().next().value : null);
-    const boundary = boundaries.get(row.id);
-    const plausibleLegacy = !owner && boundary?.boundary === target && !row.causalRootId
-      && (!key || legacyExecutions.get(key)?.size === 1) && ['assistant', 'tool', 'user'].includes(row.role);
-    if (owner === target || (plausibleLegacy && boundary.legacy)) removed.add(row.id);
-    else if (plausibleLegacy && row.role === 'assistant' && !row._reflection) throw bad();
+  for (const [index, row] of rows.entries()) {
+    const owner = ownerOf(row);
+    if (owner === target) removed.add(row.id);
     for (const call of Array.isArray(row.toolCalls) ? row.toolCalls : []) {
       if (!call?.id) continue;
       const key = scope(row, call.id);
       const calls = byCall.get(key) || [];
-      calls.push(row);
+      calls.push({ row, index });
       byCall.set(key, calls);
     }
-    if (row.role === 'tool' && row.toolCallId && !owner) {
-      const calls = (byCall.get(scope(row, row.toolCallId)) || []).filter(call =>
-        (!row.turnId || row.turnId === call.turnId)
-        && (!(row.speakerVpId || row.vpId) || (row.speakerVpId || row.vpId) === (call.speakerVpId || call.vpId))
-        && (!row.threadId || (call.threadId || 'main') === row.threadId));
-      unresolvedTools.push({ row, calls });
-    }
   }
-  for (const { row, calls } of unresolvedTools) {
-    if (calls.length > 1 && calls.some(call => removed.has(call.id)) && calls.some(call => !removed.has(call.id))) throw bad();
-    if (calls.length && calls.every(call => removed.has(call.id))) removed.add(row.id);
-    // Strong tool linkage to another request beats the legacy fallback.
-    if (calls.length && calls.every(call => !removed.has(call.id))) removed.delete(row.id);
+  for (const [index, row] of rows.entries()) {
+    const owner = ownerOf(row);
+    if (row.role === 'tool' && row.toolCallId) {
+      const calls = (byCall.get(scope(row, row.toolCallId)) || []).filter(call => call.index < index
+        && (!row.turnId || row.turnId === call.row.turnId)
+        && (!(row.speakerVpId || row.vpId) || (row.speakerVpId || row.vpId) === (call.row.speakerVpId || call.row.vpId))
+        && (!row.threadId || (call.row.threadId || 'main') === row.threadId));
+      if (calls.length > 0) {
+        const any = calls.some(call => removed.has(call.row.id));
+        const all = calls.every(call => removed.has(call.row.id));
+        if (any !== all || (owner && (owner === target) !== all)) throw bad();
+        if (all) removed.add(row.id);
+        else if (!owner && calls.some(call => !ownerOf(call.row) && potentiallyTarget(call.row, call.index))) throw bad();
+        continue;
+      }
+    }
+    if (owner || !potentiallyTarget(row, index) || !['assistant', 'tool', 'user'].includes(row.role)) continue;
+    if (row._reflection && Array.isArray(row.foldedMessageIds) && row.foldedMessageIds.length) continue;
+    throw bad();
   }
   // Reflections may carry earlier tool/user content into a later turn. Drop
   // the derived row, not that later turn; preserve all its original rows.

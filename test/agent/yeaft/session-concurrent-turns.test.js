@@ -11,6 +11,7 @@ import { DebugTrace, NullTrace } from '../../../agent/yeaft/debug-trace.js';
 import { seedDefaultVps } from '../../../agent/yeaft/vp/seed-defaults.js';
 import { createSessionFromSpec, snapshotSessions } from '../../../agent/yeaft/sessions/session-crud.js';
 import { openSession } from '../../../agent/yeaft/sessions/session-store.js';
+import { confirmSessionTurnDeletionCutover, isSessionTurnDeletionCutoverConfirmed } from '../../../agent/yeaft/sessions/session-turn-cutover.js';
 import { pruneDeletedSessionTurnsOffline } from '../../../agent/yeaft/cli.js';
 import { ToolRegistry } from '../../../agent/yeaft/tools/registry.js';
 
@@ -418,8 +419,15 @@ it('deletes a finished Session input, coordinator audit and raw loops, and exclu
   await until(() => requests.length === 1);
   const row = store.loadAllBySession(sessionId).find(row => row.clientMessageId === 'deleted-client-id');
   const deletion = { sessionId, messageId: row.id, requestId: 'delete-correlation' };
+  const latestAck = () => sent.filter(frame => frame.requestId === deletion.requestId).at(-1);
+  expect(isSessionTurnDeletionCutoverConfirmed(root)).toBe(false);
+  await handleMessage({ type: 'session_turn_delete_authorized', ...deletion, oldReadersStopped: true });
+  expect(latestAck()).toMatchObject({ ok: false, errorCode: 'turn_deletion_cutover_required' });
+  expect(store.loadAllBySession(sessionId).some(message => message.id === row.id)).toBe(true);
+  expect(() => confirmSessionTurnDeletionCutover(root)).toThrow('legacy readers');
+  confirmSessionTurnDeletionCutover(root, { oldReadersStopped: true });
   await handleMessage({ type: 'session_turn_delete_authorized', ...deletion });
-  expect(sent.find(frame => frame.requestId === deletion.requestId)).toMatchObject({ ok: false, errorCode: 'session_running' });
+  expect(latestAck()).toMatchObject({ ok: false, errorCode: 'session_running' });
   gate.resolve();
   await bridge.__testDrainVpDrivers();
   const traceId = store.loadAllBySession(sessionId).find(message => message.role === 'assistant').turnId;
