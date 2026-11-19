@@ -15,6 +15,7 @@ import ModernSelect from './ModernSelect.js';
 import WorkbenchPanel from './WorkbenchPanel.js';
 import PaneResizeHandle from './PaneResizeHandle.js';
 import WorkCenterSidebar from './WorkCenterSidebar.js';
+import SessionSidebarResizeHandle from './SessionSidebarResizeHandle.js';
 import WorkCenterScheduleEditor from './WorkCenterScheduleEditor.js';
 import { scheduleDraft, scheduleFormResult } from '../utils/work-center-schedule.js';
 import { createWorkCenterWorkbenchContext, workCenterOutputTarget } from '../utils/work-center-workbench.js';
@@ -45,7 +46,7 @@ export default {
   name: 'WorkCenterPage',
   components: { FolderPickerDialog, NavigationIcon,
     MessageComposer, UserTurnBlock, VpTurnBlock, WorkCenterActionDetail, WorkCenterActionReference,
-    WorkCenterSettingsModal, AgentSettingsPanel, ModernSelect, WorkCenterResourceControl, WorkbenchPanel, PaneResizeHandle, WorkCenterSidebar, WorkCenterScheduleEditor,
+    WorkCenterSettingsModal, AgentSettingsPanel, ModernSelect, WorkCenterResourceControl, WorkbenchPanel, PaneResizeHandle, WorkCenterSidebar, SessionSidebarResizeHandle, WorkCenterScheduleEditor,
   },
   mixins: [folderPickerMixin],
   provide() {
@@ -1837,6 +1838,7 @@ export default {
         <WorkCenterSidebar ref="navigation" :agents="sidebarAgents" :agent-id="agentId" :item-id="selectedId"
                            :action-id="selectedActionId" :expanded="sidebarExpanded"
                            @back="backToChat" @collapse="toggleNavigation" @create="openCreate" @select-agent="selectWorkCenterAgent" @select-item="selectActivity" />
+        <SessionSidebarResizeHandle v-if="sidebarExpanded && !mobileNavigation" controls="work-center-sidebar" />
         <button v-if="mobileNavigation && sidebarExpanded" class="work-center-sidebar-scrim" type="button" tabindex="-1"
                 :aria-label="$t('workCenter.hideNavigation')" @click="toggleNavigation"></button>
         <div ref="shell" class="work-center-shell" :inert="mobileNavigation && sidebarExpanded" :class="{ 'showing-detail': narrowPane !== 'items' }"

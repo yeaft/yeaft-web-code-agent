@@ -55,8 +55,9 @@ const App = {
       chatStore.sessionBranchNavigationGeneration++;
     }, { flush: 'sync' });
 
-    // Initialize theme
+    // Initialize theme and the saved sidebar width before first paint.
     chatStore.initTheme();
+    chatStore.initSessionSidebarWidth();
 
     // Setup visibility handler for mobile app switching
     chatStore.setupVisibilityHandler();

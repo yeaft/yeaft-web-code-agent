@@ -2197,6 +2197,12 @@
     box-shadow: 4px 0 16px rgba(0, 0, 0, 0.2);
   }
 
+  /* A desktop-resized width never covers the whole phone screen. */
+  .session-sidebar-shell.yeaft-sidebar:not(.collapsed) {
+    width: min(var(--session-sidebar-width), calc(100vw - 48px));
+    min-width: min(var(--session-sidebar-width), calc(100vw - 48px));
+  }
+
   .yeaft-sidebar.collapsed {
     width: 0;
     min-width: 0;

@@ -1324,8 +1324,9 @@
     top: 0;
     left: 0;
     bottom: 0;
-    width: var(--session-sidebar-width);
-    min-width: var(--session-sidebar-width);
+    /* A desktop-resized width never covers the whole phone screen. */
+    width: min(var(--session-sidebar-width), calc(100vw - 48px));
+    min-width: min(var(--session-sidebar-width), calc(100vw - 48px));
     z-index: 100;
     transform: translateX(-100%);
     transition: transform 0.3s ease;

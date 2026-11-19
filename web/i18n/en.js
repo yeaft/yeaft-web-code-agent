@@ -674,6 +674,7 @@ export default {
   'sidebar.sectionResize.label': 'Resize Projects and Recents (arrow keys to adjust, double-click to reset)',
   'sidebar.sectionResize.loadError': 'Could not load sidebar layout.',
   'sidebar.sectionResize.saveError': 'Could not save sidebar layout. Previous settings restored; please try again.',
+  'sidebar.widthResize.label': 'Resize sidebar (arrow keys to adjust, double-click to reset)',
 
   // ============ Yeaft Page ============
   'yeaft.back': 'Back',

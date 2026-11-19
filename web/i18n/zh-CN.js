@@ -674,6 +674,7 @@ export default {
   'sidebar.sectionResize.label': '调整项目与最近区域高度（方向键调整，双击重置）',
   'sidebar.sectionResize.loadError': '无法加载侧栏布局。',
   'sidebar.sectionResize.saveError': '侧栏布局保存失败，已恢复之前的设置，请重试。',
+  'sidebar.widthResize.label': '调整侧栏宽度（方向键调整，双击重置）',
 
   // ============ Yeaft 页面 ============
   'yeaft.back': '返回',
