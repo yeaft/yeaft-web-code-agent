@@ -24,7 +24,7 @@ import { promises as fsp } from 'fs';
 import { join, resolve as resolvePath } from 'path';
 import { buildSystemPrompt, buildWorkerPrompt } from './prompts.js';
 import { getRuntimePlatformInfo } from './runtime-platform.js';
-import { LLMAbortError, LLMAuthError, LLMContextError, LLMPolicyError, LLMRateLimitError, LLMServerError, LLMStreamIdleTimeoutError } from './llm/adapter.js';
+import { LLMAbortError, LLMAuthError, LLMContextError, LLMPolicyError, LLMRateLimitError, LLMServerError, LLMStreamIdleTimeoutError, isContentFilterStopDetails } from './llm/adapter.js';
 import { runMemoryPreflow, buildRelevantScopes, memoryScopeLabel } from './sessions/pre-flow.js';
 import {
   readProjectDoc,
@@ -120,7 +120,7 @@ const plural = (count, one, many) => `${count} ${count === 1 ? one : many}`;
  * @param {{ stopReason: string, stopDetails?: object|null, withheldToolCalls: number, earlierToolRuns: number }} input
  */
 function failedProviderStopMessage({ stopReason, stopDetails, withheldToolCalls, earlierToolRuns }) {
-  const filter = stopDetails?.type === 'content_filter' ? stopDetails : null;
+  const filter = isContentFilterStopDetails(stopDetails) ? stopDetails : null;
   const withheldCount = filter ? filter.withheldToolCalls : withheldToolCalls;
   const names = filter?.withheldTools?.length ? ` (${filter.withheldTools.join(', ')})` : '';
   const withheld = withheldCount > 0

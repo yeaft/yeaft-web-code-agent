@@ -89,6 +89,10 @@ describe('native Gemini adapter', () => {
     global.fetch = vi.fn(async () => sse([{ promptFeedback: { blockReason: 'PROHIBITED_CONTENT' } }]));
     expect((await collect(adapter().stream(params))).at(-1)).toEqual({ type: 'stop', stopReason: 'refusal',
       stopDetails: { type: 'content_filter', reason: 'PROHIBITED_CONTENT', blocked: 'prompt', withheldToolCalls: 0 } });
+    // A later candidate verdict describes the response, not the prompt.
+    global.fetch = vi.fn(async () => sse([{ promptFeedback: { blockReason: 'SAFETY' } }, candidate([{ text: 'partial' }], 'RECITATION')]));
+    expect((await collect(adapter().stream(params))).at(-1)).toMatchObject({ stopReason: 'refusal',
+      stopDetails: { reason: 'RECITATION', blocked: 'response', withheldToolCalls: 0 } });
   });
 
   it('preserves actual Gemini levels from the catalog through saved sessions and REST unary/SSE', async () => {

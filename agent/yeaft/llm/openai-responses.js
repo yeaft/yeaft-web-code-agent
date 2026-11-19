@@ -647,10 +647,15 @@ export class OpenAIResponsesAdapter extends LLMAdapter {
             };
 
             if (filtered) {
-              const slots = new Map();
-              for (const [idx, item] of [...outputSlots, ...completedItems]) if (!slots.has(idx)) slots.set(idx, item);
-              for (const [idx, accum] of toolCallAccum) if (!slots.has(idx)) slots.set(idx, { type: 'function_call', name: accum?.name });
-              yield contentFilterStop([...slots.values()], body.tools);
+              // Count each exposed call once. Stream slots use output_index while the
+              // terminal projection may omit siblings, so merge by call_id, not position.
+              const withheld = new Map();
+              const add = (key, name) => { if (!withheld.has(key)) withheld.set(key, { type: 'function_call', name }); };
+              for (const [idx, item] of completedItems) if (item?.type === 'function_call') add(item.call_id ?? `slot:${idx}`, item.name);
+              for (const [idx, call] of completedToolCalls) add(call?.id ?? `slot:${idx}`, call?.name);
+              for (const [idx, accum] of toolCallAccum) add(accum?.callId ?? `slot:${idx}`, accum?.name);
+              outputArr.forEach((item, position) => { if (item?.type === 'function_call') add(item.call_id ?? `output:${position}`, item.name); });
+              yield contentFilterStop([...withheld.values()], body.tools);
               return;
             }
             if (malformedStream) {
@@ -791,7 +796,9 @@ export class OpenAIResponsesAdapter extends LLMAdapter {
 
     const result = await response.json();
     const items = Array.isArray(result.output) ? result.output : [];
-    projectToolCalls(items, result.status === 'incomplete', codecs);
+    // A filtered response's calls are withheld: never validated or bound as replay state.
+    const filtered = isContentFilterStop(result);
+    if (!filtered) projectToolCalls(items, result.status === 'incomplete', codecs);
 
     // Prefer the `output_text` convenience field; fall back to output[].content[].text
     let text = '';
@@ -812,7 +819,7 @@ export class OpenAIResponsesAdapter extends LLMAdapter {
     const usage = result.usage || {};
     return {
       text,
-      providerState: ['completed', 'incomplete'].includes(result.status)
+      providerState: !filtered && ['completed', 'incomplete'].includes(result.status)
         ? createProviderState({ context, identity: requestIdentity, items, responseId: result.id,
           responsesArguments: responsesArgumentProjection(items, codecs) }) : null,
       stopReason: this.#mapStopReason(result, false),

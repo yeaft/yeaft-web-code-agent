@@ -59,19 +59,38 @@ import { utf8PrefixWithinBytes } from '../utf8.js';
  */
 
 const MAX_WITHHELD_TOOL_NAMES = 8;
+const FILTER_REASON_RE = /^[A-Za-z][A-Za-z0-9_]{0,63}$/;
+const TOOL_NAME_RE = /^[A-Za-z0-9_.:-]{1,64}$/;
+const UNDECLARED_TOOL = 'undeclared tool';
 
 /**
  * Describe a provider content filter stop without echoing filtered content.
  * Calls in a filtered response are withheld from execution; only names of
  * functions declared by this request are reported, never provider arguments.
- * @param {{ reason: string, blocked?: 'prompt'|'response', calledNames?: Array<unknown>, declaredNames?: Iterable<string> }} input
+ * @param {{ reason: string, blocked?: 'prompt'|'response', calledNames?: Array<unknown>, declaredNames?: Iterable<unknown> }} input
  * @returns {ContentFilterStopDetails}
  */
 export function contentFilterStopDetails({ reason, blocked = 'response', calledNames = [], declaredNames = [] }) {
   const declared = new Set(declaredNames);
-  const names = [...new Set(calledNames.map(name => (declared.has(name) ? name : 'undeclared tool')))];
+  const names = [...new Set(calledNames.map(name => (typeof name === 'string' && declared.has(name) && TOOL_NAME_RE.test(name)
+    ? name : UNDECLARED_TOOL)))];
   return { type: 'content_filter', reason, blocked, withheldToolCalls: calledNames.length,
     ...(names.length ? { withheldTools: names.slice(0, MAX_WITHHELD_TOOL_NAMES) } : {}) };
+}
+
+/**
+ * Accept only the bounded shape built by contentFilterStopDetails(). Native
+ * stop details forwarded by a provider or proxy are untrusted text.
+ * @param {unknown} details
+ * @returns {details is ContentFilterStopDetails}
+ */
+export function isContentFilterStopDetails(details) {
+  if (details?.type !== 'content_filter' || typeof details.reason !== 'string' || !FILTER_REASON_RE.test(details.reason)) return false;
+  if (!['prompt', 'response'].includes(details.blocked)
+    || !Number.isSafeInteger(details.withheldToolCalls) || details.withheldToolCalls < 0) return false;
+  const names = details.withheldTools;
+  return names === undefined || (Array.isArray(names) && names.length <= MAX_WITHHELD_TOOL_NAMES
+    && names.every(name => name === UNDECLARED_TOOL || (typeof name === 'string' && TOOL_NAME_RE.test(name))));
 }
 
 // contextOutputLimit is the remaining context space for output (not the configured
