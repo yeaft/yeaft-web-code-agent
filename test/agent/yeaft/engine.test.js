@@ -14,6 +14,8 @@ import { providerProjectionDigest } from '../../../agent/yeaft/llm/provider-stat
 import { defineTool } from '../../../agent/yeaft/tools/types.js';
 import { ToolRegistry } from '../../../agent/yeaft/tools/registry.js';
 import { AnthropicAdapter } from '../../../agent/yeaft/llm/anthropic.js';
+import { GeminiAdapter } from '../../../agent/yeaft/llm/gemini.js';
+import { OpenAIResponsesAdapter } from '../../../agent/yeaft/llm/openai-responses.js';
 
 /**
  * MockAdapter — emits pre-configured events for testing.
@@ -213,6 +215,58 @@ describe('Engine', () => {
       } finally {
         await closeConversationHistoryIndexes();
         rmSync(yeaftDir, { recursive: true, force: true });
+      }
+    });
+
+    it('withholds content-filtered tool calls and reports the filter without hiding earlier tool runs', async () => {
+      const sse = events => new Response(events.map(event => `data: ${JSON.stringify(event)}\n\n`).join(''),
+        { headers: { 'content-type': 'text/event-stream' } });
+      // Production shape: a Copilot content_filter relayed as Gemini SAFETY still carries a complete call.
+      const gemini = finishReason => sse([{ candidates: [{ index: 0, finishReason, content: { role: 'model',
+        parts: [{ functionCall: { id: `call-${finishReason}`, name: 'Probe', args: { step: finishReason } } }] } }],
+      usageMetadata: { promptTokenCount: 10, candidatesTokenCount: 2, totalTokenCount: 12 } }]);
+      const responses = status => {
+        const item = { type: 'function_call', id: `fc-${status}`, call_id: `call-${status}`, name: 'Probe',
+          arguments: JSON.stringify({ step: status }), status: 'completed' };
+        return sse([{ type: 'response.output_item.done', output_index: 0, item }, { type: `response.${status}`, response: {
+          id: `resp-${status}`, status, output: [item], usage: { input_tokens: 10, output_tokens: 2 },
+          ...(status === 'incomplete' ? { incomplete_details: { reason: 'content_filter' } } : {}) } }]);
+      };
+      const cases = [
+        { model: 'gemini-2.5-flash', reason: 'SAFETY', ran: 'STOP', replies: [gemini('STOP'), gemini('SAFETY')],
+          adapter: new GeminiAdapter({ apiKey: 'fixture', baseUrl: 'https://gemini.invalid/v1beta' }) },
+        { model: 'gpt-5', reason: 'content_filter', ran: 'completed', replies: [responses('completed'), responses('incomplete')],
+          adapter: new OpenAIResponsesAdapter({ apiKey: 'fixture', baseUrl: 'https://responses.invalid/v1' }) },
+      ];
+      for (const { model, reason, ran, replies, adapter } of cases) {
+        const yeaftDir = mkdtempSync(join(tmpdir(), 'yeaft-content-filter-'));
+        const executions = [];
+        const registry = new ToolRegistry();
+        registry.register(defineTool({ name: 'Probe', description: 'Record a step.',
+          parameters: { type: 'object', properties: { step: { type: 'string' } }, required: ['step'] },
+          execute: async ({ step }) => { executions.push(step); return 'recorded'; } }));
+        const fetch = vi.fn(async () => replies.shift());
+        vi.stubGlobal('fetch', fetch);
+        try {
+          const engine = new Engine({ adapter, trace, toolRegistry: registry, conversationStore: new ConversationStore(yeaftDir), yeaftDir,
+            config: { model, maxOutputTokens: 1024, projectDocMaxBytes: 0 } });
+          const events = [];
+          for await (const event of engine.query({ prompt: 'merge when ready', sessionId: `filter-${model}` })) events.push(event);
+          expect(fetch).toHaveBeenCalledTimes(2);
+          expect(executions).toEqual([ran]);
+          expect(events.filter(event => event.type === 'error')).toEqual([expect.objectContaining({ code: 'refusal', retryable: false,
+            error: `The provider's content filter stopped this response (${reason}). 1 tool call in this response (Probe) was not run. `
+              + '1 earlier tool call in this turn already ran; its result is kept. Send a follow-up to continue, or adjust the request.' })]);
+          expect(events.filter(event => event.type === 'turn_end').at(-1)).toMatchObject({ stopReason: 'refusal', terminal: true });
+          const refused = new ConversationStore(yeaftDir).loadRecentBySession(`filter-${model}`, 20).find(row => row.stopReason === 'refusal');
+          expect(refused).toMatchObject({ incomplete: true, providerMetadata: { stopReason: 'refusal', stopDetails: {
+            type: 'content_filter', reason, blocked: 'response', withheldToolCalls: 1, withheldTools: ['Probe'] } } });
+          expect(refused.toolCalls).toBeUndefined();
+        } finally {
+          vi.unstubAllGlobals();
+          await closeConversationHistoryIndexes();
+          rmSync(yeaftDir, { recursive: true, force: true });
+        }
       }
     });
   });

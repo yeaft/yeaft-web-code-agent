@@ -7,7 +7,7 @@ import {
   LLMAdapter, LLMRateLimitError, LLMServerError, LLMToolInputError, LLMContextError,
   LLMAbortError, classifyAuthError, classifyFetchError, retryAfterFromResponse,
   readStreamChunkWithIdleTimeout, resolveStreamIdleTimeoutMs, SseLineBuffer,
-  createBoundedTextAccumulator, redactRawRequest, safeHeaders, toWellFormedJson,
+  createBoundedTextAccumulator, redactRawRequest, safeHeaders, toWellFormedJson, contentFilterStopDetails,
 } from './adapter.js';
 import {
   createProviderContext, createProviderState, replayProviderState, providerStateBytes, hasSignedProviderState, ProviderStateError,
@@ -292,6 +292,7 @@ export class GeminiAdapter extends LLMAdapter {
     let reader;
     const parts = [];
     let finish;
+    let promptBlocked = false;
     let responseId;
     let modelVersion;
     let usage = {};
@@ -304,11 +305,12 @@ export class GeminiAdapter extends LLMAdapter {
       if (result.usageMetadata) usage = { ...usage, ...result.usageMetadata };
       if (result.promptFeedback?.blockReason && result.promptFeedback.blockReason !== 'BLOCK_REASON_UNSPECIFIED') {
         finish = refusalReasons.has(result.promptFeedback.blockReason) ? result.promptFeedback.blockReason : 'SAFETY';
+        promptBlocked = true;
       }
       const candidates = result.candidates || [];
       if (candidates.length > 1 || (candidates[0]?.index !== undefined && candidates[0].index !== 0)) throw new LLMServerError('Gemini returned unexpected multiple candidates', 0);
       const candidate = candidates[0];
-      if (candidate?.finishReason) finish = candidate.finishReason;
+      if (candidate?.finishReason) { finish = candidate.finishReason; promptBlocked = false; }
       for (const part of candidate?.content?.parts || []) {
         parts.push(structuredClone(part));
         if (typeof part.text === 'string' && part.text) yield { type: part.thought ? 'thinking_delta' : 'text_delta', text: part.text };
@@ -381,7 +383,10 @@ export class GeminiAdapter extends LLMAdapter {
           yield { type: 'tool_call', ...tc };
         }
       }
-      yield { type: 'stop', stopReason: reason };
+      // A filtered response can still carry complete calls: they are withheld, never dispatched.
+      yield { type: 'stop', stopReason: reason, ...(reason === 'refusal' ? { stopDetails: contentFilterStopDetails({ reason: finish,
+        blocked: promptBlocked ? 'prompt' : 'response', calledNames: parts.filter(part => part.functionCall).map(part => part.functionCall.name),
+        declaredNames: (params.tools || []).map(tool => tool.name) }) } : {}) };
     } catch (error) {
       const classified = classifyFetchError(error, { providerLabel: 'Gemini', signal });
       if (classified instanceof LLMToolInputError) yield { type: 'error', error: classified, retryable: false };

@@ -51,11 +51,28 @@ import { utf8PrefixWithinBytes } from '../utf8.js';
  * @typedef {'end_turn' | 'tool_use' | 'max_tokens' | 'stop_sequence' | 'refusal' | 'pause_turn' | 'model_context_window_exceeded' | 'unknown'} StopReason
  * @typedef {{ protocol?: string, responseId?: string, model?: string, stopReason?: string|null, stopDetails?: object|null, stopSequence?: string|null, inputTransformations?: object|Array<object>, container?: object|null, contentBlocks?: Array<object> }} ProviderMetadata Safe protocol bookkeeping only; no private reasoning, signatures or native response items.
  * @typedef {{ type: 'provider_metadata', metadata: ProviderMetadata }} ProviderMetadataEvent Internal metadata updates merged on the assistant history row and trace, not forwarded as visible content.
- * @typedef {{ type: 'stop', stopReason: StopReason, stopDetails?: object|null, stopSequence?: string|null }} StopEvent pause_turn requests bounded continuation of the exact assistant response; refusal/context overflow/unknown are not successful completions.
+ * @typedef {{ type: 'content_filter', reason: string, blocked: 'prompt'|'response', withheldToolCalls: number, withheldTools?: string[] }} ContentFilterStopDetails Provider-neutral record of a provider safety/content filter stop.
+ * @typedef {{ type: 'stop', stopReason: StopReason, stopDetails?: ContentFilterStopDetails|object|null, stopSequence?: string|null }} StopEvent pause_turn requests bounded continuation of the exact assistant response; refusal/context overflow/unknown are not successful completions.
  * @typedef {{ type: 'error', error: Error, retryable: boolean }} ErrorEvent
  *
  * @typedef {TextDeltaEvent | ThinkingDeltaEvent | ThinkingBlockEndEvent | ProviderActivityEvent | ProviderStateEvent | ProviderMetadataEvent | ToolCallEvent | UsageEvent | StopEvent | ErrorEvent} StreamEvent
  */
+
+const MAX_WITHHELD_TOOL_NAMES = 8;
+
+/**
+ * Describe a provider content filter stop without echoing filtered content.
+ * Calls in a filtered response are withheld from execution; only names of
+ * functions declared by this request are reported, never provider arguments.
+ * @param {{ reason: string, blocked?: 'prompt'|'response', calledNames?: Array<unknown>, declaredNames?: Iterable<string> }} input
+ * @returns {ContentFilterStopDetails}
+ */
+export function contentFilterStopDetails({ reason, blocked = 'response', calledNames = [], declaredNames = [] }) {
+  const declared = new Set(declaredNames);
+  const names = [...new Set(calledNames.map(name => (declared.has(name) ? name : 'undeclared tool')))];
+  return { type: 'content_filter', reason, blocked, withheldToolCalls: calledNames.length,
+    ...(names.length ? { withheldTools: names.slice(0, MAX_WITHHELD_TOOL_NAMES) } : {}) };
+}
 
 // contextOutputLimit is the remaining context space for output (not the configured
 // maxTokens target). Anthropic uses it to preflight signed continuations after

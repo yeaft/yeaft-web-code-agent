@@ -46,6 +46,7 @@ import {
   SseLineBuffer,
   createBoundedTextAccumulator,
   toWellFormedJson,
+  contentFilterStopDetails,
 } from './adapter.js';
 import {
   normalizeEffort,
@@ -100,6 +101,19 @@ function validateToolCallId(id) {
     throw new LLMToolInputError('OpenAI returned invalid tool call identity');
   }
   return id;
+}
+
+/** Responses reports a provider content filter as an incomplete response. */
+function isContentFilterStop(response, eventType) {
+  return (eventType === 'response.incomplete' || response?.status === 'incomplete')
+    && response?.incomplete_details?.reason === 'content_filter';
+}
+
+/** Filtered calls are withheld: report declared names only, never validate or dispatch them. */
+function contentFilterStop(items, wireTools) {
+  return { type: 'stop', stopReason: 'refusal', stopDetails: contentFilterStopDetails({ reason: 'content_filter',
+    calledNames: items.filter(item => item?.type === 'function_call').map(item => item.name),
+    declaredNames: (Array.isArray(wireTools) ? wireTools : []).map(tool => tool?.name) }) };
 }
 
 function projectToolCalls(items, incomplete, codecs) {
@@ -301,6 +315,8 @@ export class OpenAIResponsesAdapter extends LLMAdapter {
     if (response?.status === 'incomplete') {
       const r = response.incomplete_details?.reason;
       if (r === 'max_output_tokens') return 'max_tokens';
+      // A filtered answer is not a completion, even when its text looks whole.
+      if (r === 'content_filter') return 'refusal';
       return 'end_turn';
     }
     if (sawToolCall) return 'tool_use';
@@ -393,8 +409,9 @@ export class OpenAIResponsesAdapter extends LLMAdapter {
       const result = await response.json();
       const items = Array.isArray(result.output) ? result.output : [];
       if (result.status === 'failed') throw new LLMServerError('OpenAI JSON response failed', 0);
-      let calls;
-      try {
+      const filtered = isContentFilterStop(result);
+      let calls = [];
+      if (!filtered) try {
         calls = projectToolCalls(items, result.status === 'incomplete', codecs);
       } catch (error) {
         if (!(error instanceof LLMToolInputError)) throw error;
@@ -412,7 +429,7 @@ export class OpenAIResponsesAdapter extends LLMAdapter {
         }
       }
       for (const call of calls) yield call;
-      if (['completed', 'incomplete'].includes(result.status)) {
+      if (!filtered && ['completed', 'incomplete'].includes(result.status)) {
         const state = createProviderState({ context, identity: requestIdentity, items, responseId: result.id, responsesArguments: responsesArgumentProjection(items, codecs) });
         if (state) yield { type: 'provider_state', providerState: state, providerStateBytes: providerStateBytes(state) };
       }
@@ -422,7 +439,7 @@ export class OpenAIResponsesAdapter extends LLMAdapter {
         cacheTokensAreIncludedInInput: true,
               ...reasoningUsage(usage, 'openai-responses') };
       if (result.status === 'failed') throw new LLMServerError('OpenAI JSON response failed', 0);
-      yield { type: 'stop', stopReason: this.#mapStopReason(result, false) };
+      yield filtered ? contentFilterStop(items, body.tools) : { type: 'stop', stopReason: this.#mapStopReason(result, false) };
       return;
     }
     const reader = response.body.getReader();
@@ -577,6 +594,7 @@ export class OpenAIResponsesAdapter extends LLMAdapter {
           } else if (type === 'response.completed' || type === 'response.incomplete') {
             sawTerminalEvent = true;
             const respObj = event.response || {};
+            const filtered = isContentFilterStop(respObj, type);
 
             // Fallback: flush any function_call items in the final output that we
             // didn't see a .done event for (defensive against partial streams).
@@ -588,7 +606,8 @@ export class OpenAIResponsesAdapter extends LLMAdapter {
                 for (const part of item.content || []) if (part?.type === 'output_text') yield { type: 'text_delta', text: part.text };
               }
             }
-            try {
+            // The filter verdict outranks partial or malformed tool output below.
+            if (!filtered) try {
               // Validate all completed slots, even if a gateway omits a sibling
               // from its final output projection.
               projectToolCalls([...completedItems.values()], false, codecs);
@@ -627,6 +646,13 @@ export class OpenAIResponsesAdapter extends LLMAdapter {
               ...reasoningUsage(usage, 'openai-responses'),
             };
 
+            if (filtered) {
+              const slots = new Map();
+              for (const [idx, item] of [...outputSlots, ...completedItems]) if (!slots.has(idx)) slots.set(idx, item);
+              for (const [idx, accum] of toolCallAccum) if (!slots.has(idx)) slots.set(idx, { type: 'function_call', name: accum?.name });
+              yield contentFilterStop([...slots.values()], body.tools);
+              return;
+            }
             if (malformedStream) {
               if (toolInputError || hasToolItems()) {
                 toolInputError = new LLMToolInputError('OpenAI returned a malformed tool stream');
