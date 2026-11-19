@@ -101,7 +101,7 @@ describe('Yeaft Session online Agent filtering', () => {
     expect([...pendingFiles]).toEqual([['valid', valid], ['foreign', foreign]]);
   });
 
-  it('persists fork Project inheritance before replying, rolls back failures and fences owner/Agent scopes and replays', async () => {
+  it('persists fork Project inheritance before replying, rolls back failures, fences owner/Agent scopes and replays, and keeps nested folder context', async () => {
     CONFIG.skipAuth = false;
     const owner = userDb.getOrCreate('fork-db-owner');
     const other = userDb.getOrCreate('fork-db-other');
@@ -211,6 +211,45 @@ describe('Yeaft Session online Agent filtering', () => {
       projects.moveSession(owner.id, { agentId: 'agent-a', sessionId: 'merged', projectId: movedProject.id });
       await handleAgentOutput('agent-a', agent, mergeResult);
       expect(persistedSession.get(owner.id, 'agent-a', 'merged').projectId).toBe(movedProject.id);
+
+      // Nested folders: a fork joins its source's own folder, and the Agent
+      // context carries the folder path, every instruction on it (outermost
+      // first) and recall across the whole top-level folder.
+      const outer = projects.create(owner.id, 'Outer');
+      projects.updateInstruction(owner.id, outer.id, 'Outer rule');
+      projects.move(owner.id, project.id, { parentId: outer.id });
+      projects.moveSession(owner.id, { agentId: 'agent-a', sessionId: 'outer-sibling', projectId: outer.id });
+      await handleAgentOutput('agent-a', agent, forkResult('source', 'nested-fork'));
+      expect(persistedSession.get(owner.id, 'agent-a', 'nested-fork').projectId).toBe(project.id);
+      const nested = projects.contextForSession(owner.id, 'agent-a', 'nested-fork');
+      expect({ ...nested, sessionIds: [...nested.sessionIds].sort() }).toEqual({
+        projectId: project.id,
+        projectName: 'Outer / Fork Project',
+        projectInstruction: '[Outer]\nOuter rule\n\n[Outer / Fork Project]\nKeep instruction',
+        sessionIds: ['outer-sibling', 'source'],
+      });
+      // A single instruction on the path still reaches the Agent verbatim.
+      expect(projects.contextForSession(owner.id, 'agent-a', 'outer-sibling').projectInstruction).toBe('Outer rule');
+      // Cycles and trees deeper than five levels are refused before any write.
+      expect(() => projects.move(owner.id, outer.id, { parentId: project.id }))
+        .toThrow(expect.objectContaining({ code: 'project_cycle' }));
+      let deepest = project;
+      for (const name of ['Level 3', 'Level 4', 'Level 5']) deepest = projects.create(owner.id, name, deepest.id);
+      expect(() => projects.create(owner.id, 'Level 6', deepest.id))
+        .toThrow(expect.objectContaining({ code: 'project_depth_exceeded' }));
+      expect(() => projects.move(owner.id, movedProject.id, { parentId: deepest.id }))
+        .toThrow(expect.objectContaining({ code: 'project_depth_exceeded' }));
+      expect(projects.list(owner.id).find(row => row.id === movedProject.id).parentId).toBeNull();
+      // Deleting a folder removes its subfolders; its Sessions move up a level.
+      projects.moveSession(owner.id, { agentId: 'agent-a', sessionId: 'deep', projectId: deepest.id });
+      expect(projects.delete(owner.id, project.id)).toMatchObject({ parentId: outer.id });
+      expect(projects.list(owner.id).map(row => row.name)).not.toEqual(expect.arrayContaining(['Fork Project']));
+      expect(projects.list(owner.id).map(row => row.name)).not.toEqual(expect.arrayContaining(['Level 3']));
+      for (const sessionId of ['source', 'nested-fork', 'deep']) {
+        expect(projects.contextForSession(owner.id, 'agent-a', sessionId)).toMatchObject({
+          projectId: outer.id, projectName: 'Outer', projectInstruction: 'Outer rule',
+        });
+      }
     } finally {
       db.exec('DROP TRIGGER IF EXISTS fail_fork_inheritance');
       observer.close();

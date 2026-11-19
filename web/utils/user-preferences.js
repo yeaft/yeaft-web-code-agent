@@ -1,36 +1,27 @@
 const instances = new WeakMap();
-export const DEFAULT_SIDEBAR_PROJECTS_RATIO = 0.5;
-export const MIN_SIDEBAR_PROJECTS_RATIO = 0.15;
-export const MAX_SIDEBAR_PROJECTS_RATIO = 0.85;
+// The Server still stores the retired Projects/Recents split (ratio and
+// section collapse) for older pages; this client no longer reads or writes it.
 const defaultPreferences = () => ({
-  sidebarProjectsRatio: DEFAULT_SIDEBAR_PROJECTS_RATIO, sidebarActionsCompact: false,
-  sidebarCollapsedProjects: {}, sidebarCollapsedSections: {},
+  sidebarActionsCompact: false,
+  sidebarCollapsedProjects: {},
 });
-const collapseFields = ['sidebarCollapsedProjects', 'sidebarCollapsedSections'];
+const collapseFields = ['sidebarCollapsedProjects'];
 const patchFieldKeys = patch => Object.entries(patch).flatMap(([field, value]) =>
   collapseFields.includes(field) ? Object.keys(value).map(key => `${field}:${key}`) : [field]);
 const validProjectKey = key => typeof key === 'string' && key.length > 0 && key.length <= 200
   && !['__proto__', 'constructor', 'prototype'].includes(key);
 
-function normalizeCollapseMap(value, sections = false) {
+function normalizeCollapseMap(value) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
   return Object.fromEntries(Object.entries(value).filter(([key, collapsed]) =>
-    typeof collapsed === 'boolean' && (sections ? ['projects', 'recents'].includes(key) : validProjectKey(key))));
+    typeof collapsed === 'boolean' && validProjectKey(key)));
 }
 
 function normalizePreferences(value) {
   return {
-    sidebarProjectsRatio: clampSidebarProjectsRatio(value.sidebarProjectsRatio),
     sidebarActionsCompact: value.sidebarActionsCompact === true,
     sidebarCollapsedProjects: normalizeCollapseMap(value.sidebarCollapsedProjects),
-    sidebarCollapsedSections: normalizeCollapseMap(value.sidebarCollapsedSections, true),
   };
-}
-
-export function clampSidebarProjectsRatio(value) {
-  return Number.isFinite(value)
-    ? Math.round(Math.max(MIN_SIDEBAR_PROJECTS_RATIO, Math.min(MAX_SIDEBAR_PROJECTS_RATIO, value)) * 1000) / 1000
-    : DEFAULT_SIDEBAR_PROJECTS_RATIO;
 }
 
 /** Server-owned, authenticated user preferences. No device-local or Agent fallback.
@@ -137,10 +128,6 @@ export function createUserPreferencesState(auth, { request = (...args) => fetch(
     return work;
   }
 
-  function saveSidebarProjectsRatio(value) {
-    return savePatch({ sidebarProjectsRatio: clampSidebarProjectsRatio(value) });
-  }
-
   function saveSidebarActionsCompact(value) {
     if (typeof value !== 'boolean') return Promise.resolve(false);
     return savePatch({ sidebarActionsCompact: value });
@@ -149,11 +136,6 @@ export function createUserPreferencesState(auth, { request = (...args) => fetch(
   function saveSidebarProjectCollapsed(projectId, collapsed) {
     if (!validProjectKey(projectId) || typeof collapsed !== 'boolean') return Promise.resolve(false);
     return savePatch({ sidebarCollapsedProjects: { [projectId]: collapsed } });
-  }
-
-  function saveSidebarSectionCollapsed(section, collapsed) {
-    if (!['projects', 'recents'].includes(section) || typeof collapsed !== 'boolean') return Promise.resolve(false);
-    return savePatch({ sidebarCollapsedSections: { [section]: collapsed } });
   }
 
   scope.run(() => Vue.watch(
@@ -178,8 +160,7 @@ export function createUserPreferencesState(auth, { request = (...args) => fetch(
   ));
   return {
     preferences: Vue.readonly(preferences), ready: Vue.readonly(ready), error: Vue.readonly(error),
-    refresh, saveSidebarProjectsRatio, saveSidebarActionsCompact,
-    saveSidebarProjectCollapsed, saveSidebarSectionCollapsed,
+    refresh, saveSidebarActionsCompact, saveSidebarProjectCollapsed,
     dispose() { generation++; controller?.abort(); scope.stop(); },
   };
 }

@@ -50,127 +50,88 @@
 
 /* Mobile slide-away behavior. Width is owned exclusively by the shared
    SessionSidebarShell token so Chat and Yeaft stay identical. */
-/* Codex-style unified navigation: Projects group Yeaft Sessions; Recents keeps all providers. */
+/* Codex-style unified navigation: one file tree. Folders (Projects) come first
+   and nest; Sessions sit inside their folder, top-level Sessions follow. */
 .sidebar-primary-actions { position: relative; display: flex; flex: 0 0 auto; flex-direction: column; padding: 3px var(--work-center-space-2) var(--work-center-space-1); }
 .sidebar-primary-action { display: flex; align-items: center; gap: 10px; min-height: 34px; padding: 0 44px 0 10px; border: 0; border-radius: var(--agent-setup-control-radius); background: transparent; color: var(--text-primary); font: inherit; font-size: 14px; line-height: 20px; cursor: pointer; text-align: left; }
 .sidebar-primary-actions.is-compact { flex-direction: row; align-items: center; gap: var(--work-center-space-1); }
-.sidebar-primary-actions.is-compact > .sidebar-primary-action { flex: 0 0 34px; justify-content: center; width: 34px; height: 34px; padding: 0; }
+/* Icons shrink a little rather than overflow at the narrowest sidebar width. */
+.sidebar-primary-actions.is-compact > .sidebar-primary-action { flex: 0 1 34px; justify-content: center; width: 34px; min-width: 28px; height: 34px; padding: 0; }
 .sidebar-primary-action:hover:not(:disabled), .sidebar-primary-action.active { color: var(--text-primary); }
-.sidebar-primary-action:hover:not(:disabled), .sidebar-project-header:hover, .sidebar-project-header.drag-over, .recents-section.drag-over { background: var(--sidebar-hover); }
+.sidebar-primary-action:hover:not(:disabled), .sidebar-project-header:hover, .sidebar-project-header.drag-over { background: var(--sidebar-hover); }
 .sidebar-primary-action:disabled { cursor: not-allowed; color: var(--text-muted); }
 .sidebar-catalog-loading { display: flex; align-items: center; gap: 8px; }
 .sidebar-primary-action:focus-visible { outline: 2px solid var(--accent-blue); outline-offset: -2px; }
 .sidebar-primary-action-icon { display: block; width: 18px; height: 18px; flex: 0 0 auto; color: var(--text-secondary); }
 .sidebar-primary-action:disabled .sidebar-primary-action-icon { color: inherit; }
-.sidebar-actions-toggle { position: absolute; right: var(--work-center-space-2); bottom: var(--work-center-space-1); display: flex; flex: 0 0 34px; align-items: center; justify-content: center; width: 34px; height: 34px; padding: 0; border: 0; border-radius: var(--agent-setup-control-radius); background: transparent; color: var(--text-secondary); cursor: pointer; }
+.sidebar-actions-toggle { position: absolute; right: var(--work-center-space-2); bottom: var(--work-center-space-1); display: flex; flex: 0 1 34px; align-items: center; justify-content: center; width: 34px; min-width: 28px; height: 34px; padding: 0; border: 0; border-radius: var(--agent-setup-control-radius); background: transparent; color: var(--text-secondary); cursor: pointer; }
 .sidebar-primary-actions.is-compact > .sidebar-actions-toggle { position: static; margin-left: auto; }
 /* Reserve action space while hidden so hovering never shifts titles or rows.
    Opacity (rather than visibility) keeps keyboard navigation available. */
-.sidebar-primary-actions > .sidebar-actions-toggle,
-.sidebar-section-heading > .sidebar-tool-button,
-.sidebar-section-heading > .sidebar-section-toggle { opacity: 0; pointer-events: none; transition: opacity 0.12s ease; }
+.sidebar-primary-actions > .sidebar-actions-toggle { opacity: 0; pointer-events: none; transition: opacity 0.12s ease; }
 .sidebar-primary-actions:hover > .sidebar-actions-toggle,
-.sidebar-primary-actions:focus-within > .sidebar-actions-toggle,
-.sidebar-section-heading:hover > .sidebar-tool-button,
-.sidebar-section-heading:hover > .sidebar-section-toggle,
-.sidebar-section-heading:focus-within > .sidebar-tool-button,
-.sidebar-section-heading:focus-within > .sidebar-section-toggle { opacity: 1; pointer-events: auto; }
-.sidebar-section-heading:hover > .sidebar-tool-button:disabled,
-.sidebar-section-heading:focus-within > .sidebar-tool-button:disabled { opacity: 0.45; }
+.sidebar-primary-actions:focus-within > .sidebar-actions-toggle { opacity: 1; pointer-events: auto; }
 .sidebar-actions-toggle:disabled { cursor: not-allowed; color: var(--text-muted); }
 .sidebar-actions-toggle:hover { background: var(--sidebar-hover); color: var(--text-primary); }
 .sidebar-actions-toggle:focus-visible { outline: 2px solid var(--accent-blue); outline-offset: -2px; }
-.sidebar-section-heading > .sidebar-tool-button { flex: 0 0 28px; }
-.sidebar-project-add-button .sidebar-project-add-icon { width: 16px; height: 16px; }
-.sidebar-section { padding: 0 8px 10px; }
-.sidebar-session-results { display: flex; flex-direction: column; overflow: hidden; padding-bottom: 0; }
-.projects-section { flex: 0 0 auto; max-height: 50%; min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
-.recents-section { flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
-.sidebar-section + .sidebar-section { margin-top: 0; }
-.sidebar-section-heading { display: flex; align-items: center; min-height: 38px; padding: var(--sidebar-section-heading-padding); color: var(--text-muted); font-size: var(--font-size-md); font-weight: 600; }
-.projects-section > .sidebar-section-heading, .recents-section > .sidebar-section-heading { position: sticky; top: 0; z-index: 1; background: var(--bg-sidebar); }
-.sidebar-section-title { flex: 1 1 auto; min-width: 0; padding: var(--sidebar-section-toggle-padding); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.sidebar-section-toggle { display: flex; align-items: center; justify-content: center; flex: 0 0 34px; width: 34px; min-height: var(--sidebar-section-toggle-height); padding: 0; border: 0; border-radius: var(--sidebar-section-toggle-radius); background: transparent; color: var(--text-secondary); cursor: pointer; }
-.sidebar-section-toggle:hover { background: var(--sidebar-hover); color: var(--text-primary); }
-.sidebar-section-toggle:focus-visible { outline: var(--sidebar-focus-ring-width) solid var(--accent-blue); outline-offset: var(--sidebar-focus-ring-offset); }
 .sidebar-section-chevron { width: var(--sidebar-section-chevron-size); height: var(--sidebar-section-chevron-size); flex: 0 0 auto; transform: rotate(180deg); transition: transform 0.15s ease; }
 .sidebar-section-chevron.collapsed { transform: rotate(0deg); }
-.sidebar-section.is-collapsed { flex: 0 0 auto; max-height: none; overflow: visible; padding-bottom: 0; }
 .sidebar-preferences-error { flex: 0 0 auto; padding: 4px 12px; color: var(--text-muted); font-size: 12px; }
 .sidebar-preferences-error .btn-ghost { font: inherit; }
-/* Use the same account-owned split on desktop and in the mobile drawer. */
-.sections-resizable { display: grid; overflow-y: auto; grid-template-rows: minmax(48px, var(--sidebar-projects-track, 50fr)) auto minmax(48px, var(--sidebar-recents-track, 50fr)); }
-.sections-resizable > .projects-section { max-height: none; }
-.sections-resizable > .sidebar-section { min-height: 0; }
-.recents-collapsed > .projects-section:not(.is-collapsed) { flex: 1 1 0px; max-height: none; }
-.sidebar-section-resize-handle { display: flex; min-height: 10px; align-items: center; justify-content: center; margin: 0 12px; cursor: row-resize; touch-action: none; }
-.sidebar-section-resize-handle > span { width: 32px; height: 2px; border-radius: var(--radius-sm); background: var(--border-color); }
-.sidebar-section-resize-handle:hover > span, .sidebar-section-resize-handle.is-dragging > span { background: var(--text-secondary); }
-.sidebar-section-resize-handle:focus-visible { outline: var(--sidebar-focus-ring-width) solid var(--accent-blue); outline-offset: var(--sidebar-focus-ring-offset); border-radius: var(--radius-sm); }
-/* A pointer drag already lights the grip; the ring is for keyboard focus only. */
-.sidebar-section-resize-handle.is-dragging:focus-visible { outline: none; }
-.sidebar-section-resize-handle[aria-disabled="true"] { cursor: default; opacity: 0.45; }
-/* With a mouse, the grip appears once the pointer is over the section list,
-   so an idle sidebar has no stray mark between Projects and Recents. Touch
-   has no hover, so the grip stays visible there. */
-@media (hover: hover) and (pointer: fine) {
-  .sidebar-section-resize-handle > span { opacity: 0; transition: opacity var(--duration-base) var(--ease-out), background-color var(--duration-fast) var(--ease-out); }
-  :hover > .sidebar-section-resize-handle > span,
-  .sidebar-section-resize-handle:focus-visible > span,
-  .sidebar-section-resize-handle.is-dragging > span { opacity: 1; }
-}
-@media (prefers-reduced-motion: reduce) {
-  .sidebar-section-resize-handle > span { transition: none; }
-}
-@media (max-width: 768px), (pointer: coarse) {
-  /* A larger touch target, without enlarging the visible divider. Only the
-     handle captures touch gestures; each section still scrolls normally. */
-  .sidebar-section-resize-handle { min-height: 28px; }
-}
+
+/* The tree scrolls as one list. Every row indents one --sidebar-tree-indent
+   step per folder level (--tree-depth is set per row), so a folder's
+   subfolders and Sessions start on the same edge. */
+.sidebar-session-results.sidebar-tree { display: flex; flex-direction: column; padding: 0 8px; overscroll-behavior: contain; }
+.sidebar-tree > * { flex-shrink: 0; }
+/* Folders and top-level Sessions are two groups; a gap separates them instead of a heading. */
+.sidebar-tree > .sidebar-tree-group-start { margin-top: var(--sidebar-tree-group-gap); }
+/* Everything below the last row is the top level: drops there leave folders. */
+.sidebar-tree > .sidebar-tree-end { flex: 1 0 var(--sidebar-tree-end-min-height); border-radius: 8px; }
+.sidebar-tree-end.drag-over { box-shadow: inset 0 var(--sidebar-drag-indicator-width) 0 var(--accent-blue); }
 .sidebar-section-empty { padding: 8px 10px 12px; color: var(--text-muted); font-size: 12px; }
-.sidebar-project, .sidebar-project-header { position: relative; }
-.sidebar-project-header { display: flex; align-items: center; border-radius: 8px; }
+.sidebar-folder-empty { padding: 7px var(--space-2-5) 8px calc(var(--space-2-5) + var(--tree-depth, 0) * var(--sidebar-tree-indent)); }
+.sidebar-project-header { position: relative; display: flex; align-items: center; border-radius: 8px; }
 .sidebar-project-header[draggable="true"] { cursor: grab; user-select: none; }
 .sidebar-project-header[draggable="true"]:active { cursor: grabbing; }
 .sidebar-project-header.dragging { opacity: 0.55; }
 .sidebar-project-header.project-drag-before { box-shadow: inset 0 var(--sidebar-drag-indicator-width) 0 var(--accent-blue); }
 .sidebar-project-header.project-drag-after { box-shadow: inset 0 calc(-1 * var(--sidebar-drag-indicator-width)) 0 var(--accent-blue); }
-.sidebar-project-toggle { display: flex; align-items: center; gap: var(--space-2-5); min-width: 0; flex: 1; min-height: 34px; padding: 0 var(--space-1) 0 var(--space-2-5); border: 0; border-radius: inherit; background: transparent; color: var(--text-primary); font: inherit; font-size: var(--font-size-md); cursor: pointer; text-align: left; }
+.sidebar-project-toggle { display: flex; align-items: center; gap: var(--space-2-5); min-width: 0; flex: 1; min-height: 34px; padding: 0 var(--space-1) 0 calc(var(--space-2-5) + var(--tree-depth, 0) * var(--sidebar-tree-indent)); border: 0; border-radius: inherit; background: transparent; color: var(--text-primary); font: inherit; font-size: var(--font-size-md); cursor: pointer; text-align: left; }
 .sidebar-project-name { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sidebar-project-icon { width: var(--icon-size-lg); height: var(--sidebar-project-icon-height); flex: 0 0 auto; color: var(--text-secondary); }
 .sidebar-project-count { flex: 0 0 auto; color: var(--text-muted); font-size: var(--font-size-2xs); font-weight: 500; font-variant-numeric: tabular-nums; line-height: 1; }
-.sidebar-project-unread { margin-left: auto; }
-.sidebar-project-session-create { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; padding: 0; border: 0; border-radius: 6px; background: transparent; color: var(--text-secondary); cursor: pointer; opacity: 0; pointer-events: none; transition: opacity 0.12s ease, color 0.12s ease, background 0.12s ease; }
-.sidebar-project-session-create svg { width: 15px; height: 15px; }
-.sidebar-project-session-create:hover { background: var(--sidebar-hover); color: var(--text-primary); }
-.sidebar-project-header > .session-dots-btn { opacity: 0; }
-.sidebar-project-header:hover > .sidebar-project-session-create,
-.sidebar-project-header:focus-within > .sidebar-project-session-create { opacity: 1; pointer-events: auto; }
-.sidebar-project-header:hover > .session-dots-btn,
-.sidebar-project-header:focus-within > .session-dots-btn,
-.sidebar-project-header > .session-dots-btn.menu-open { opacity: 1; }
+/* Names a nested row's folder path for screen readers; indentation alone is visual. */
+.sidebar-sr-only { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0; }
+/* Folder actions float over the end of the row on hover, in the same column
+   as a Session's actions, so a resting folder name keeps the full width. */
+.sidebar-folder-actions { position: absolute; top: 50%; right: 6px; z-index: 1; display: flex; align-items: center; gap: 1px; padding-left: 22px; opacity: 0; pointer-events: none; transform: translateY(-50%); transition: opacity 0.12s ease; background: linear-gradient(90deg, transparent, var(--sidebar-hover) 22px); }
+.sidebar-project-header:hover > .sidebar-folder-actions,
+.sidebar-folder-actions:focus-within,
+.sidebar-folder-actions.menu-open { opacity: 1; pointer-events: auto; }
+.sidebar-project-header.menu-open { background: var(--sidebar-hover); }
+.sidebar-folder-actions > button { display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; padding: 0; border: 0; border-radius: 6px; background: transparent; color: var(--text-secondary); cursor: pointer; opacity: 1; }
+.sidebar-folder-actions > button svg { width: 15px; height: 15px; }
+.sidebar-folder-actions > button:hover { background: var(--session-active); color: var(--text-primary); }
 /* Touch clients have no hover; keep the same actions directly discoverable. */
 @media (hover: none), (pointer: coarse) {
-  .sidebar-primary-actions > .sidebar-actions-toggle,
-  .sidebar-section-heading > .sidebar-tool-button,
-  .sidebar-section-heading > .sidebar-section-toggle,
-  .sidebar-project-header > .sidebar-project-session-create { opacity: 1; pointer-events: auto; }
-  .sidebar-section-heading > .sidebar-tool-button:disabled { opacity: 0.45; }
-  .sidebar-project-header > .session-dots-btn { opacity: 1; }
+  .sidebar-primary-actions > .sidebar-actions-toggle { opacity: 1; pointer-events: auto; }
+  .sidebar-folder-actions { position: static; flex: 0 0 auto; padding-left: 0; opacity: 1; pointer-events: auto; transform: none; background: none; }
 }
-.sidebar-project-create { display: flex; align-items: center; gap: 4px; min-height: 36px; margin: 2px 4px 6px; padding: 3px 4px 3px 8px; border-radius: 8px; background: var(--bg-input-wrapper); }
-.sidebar-project-create-icon { width: 15px; height: 15px; flex: 0 0 auto; color: var(--text-muted); }
-.sidebar-project-create input[type="text"] { flex: 1; min-width: 0; height: 28px; padding: 0 4px; border: 0; border-radius: 0; background: transparent; color: var(--text-primary); font: inherit; font-size: 13px; outline: 0; box-shadow: none; }
+/* The inline name row sits where the new folder will appear; its icon lines
+   up with the sibling folders' icons. */
+.sidebar-project-create { display: flex; align-items: center; gap: var(--space-2-5); min-height: 34px; margin: 1px 0 3px; padding: 2px 3px 2px calc(var(--space-2-5) + var(--tree-depth, 0) * var(--sidebar-tree-indent)); border-radius: 8px; background: var(--bg-input-wrapper); }
+.sidebar-project-create-icon { width: var(--icon-size-lg); height: var(--sidebar-project-icon-height); flex: 0 0 auto; color: var(--text-secondary); }
+.sidebar-project-create input[type="text"] { flex: 1; min-width: 0; height: 28px; padding: 0; border: 0; border-radius: 0; background: transparent; color: var(--text-primary); font: inherit; font-size: var(--font-size-md); outline: 0; box-shadow: none; }
 .sidebar-project-create input[type="text"]:focus { border: 0; box-shadow: none; }
-.sidebar-project-create-confirm, .sidebar-project-create-cancel { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; padding: 0; border: 0; border-radius: 6px; background: transparent; color: var(--text-secondary); cursor: pointer; }
+.sidebar-project-create-confirm, .sidebar-project-create-cancel { display: inline-flex; flex: 0 0 auto; align-items: center; justify-content: center; width: 28px; height: 28px; padding: 0; border: 0; border-radius: 6px; background: transparent; color: var(--text-secondary); cursor: pointer; }
 .sidebar-project-create-confirm svg, .sidebar-project-create-cancel svg { width: 15px; height: 15px; }
 .sidebar-project-create-confirm:hover:not(:disabled), .sidebar-project-create-cancel:hover:not(:disabled) { background: var(--sidebar-hover); color: var(--text-primary); }
 .sidebar-project-create-confirm:disabled, .sidebar-project-create-cancel:disabled { opacity: 0.4; cursor: default; }
-.sidebar-project-sessions { padding-left: 0; }
-/* Children indent one 8px step: a pinned title starts on the project name's
-   edge, so titles keep as much width as possible. */
-.sidebar-project-sessions .sidebar-session-row { padding-left: calc(var(--space-2-5) + var(--space-2)); }
-.sidebar-session-row { position: relative; display: flex; align-items: center; gap: 8px; width: 100%; min-height: 34px; padding: 6px var(--space-2-5); border: 0; background: transparent; color: var(--text-primary); text-align: left; }
+/* Nested folders in "Move to" menus indent like the tree. */
+.session-menu-item.sidebar-folder-menu-item { padding-left: calc(12px + var(--tree-depth, 0) * 12px); }
+.session-menu-item.sidebar-folder-menu-item, .session-menu-item.sidebar-folder-menu-item span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sidebar-session-row { position: relative; display: flex; align-items: center; gap: 8px; width: 100%; min-height: 34px; padding: 6px var(--space-2-5) 6px calc(var(--space-2-5) + var(--tree-depth, 0) * var(--sidebar-tree-indent)); border: 0; background: transparent; color: var(--text-primary); text-align: left; }
 .sidebar-session-row[role="button"] { cursor: default; }
 .sidebar-session-row:focus-visible { outline: var(--sidebar-focus-ring-width) solid var(--accent-blue); outline-offset: var(--sidebar-focus-ring-offset); }
 .sidebar-session-row.processing .title { color: var(--text-primary); }

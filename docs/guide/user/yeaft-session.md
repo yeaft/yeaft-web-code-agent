@@ -17,7 +17,7 @@ Session metadata and history live under the owning Agent's Yeaft directory. `wor
 
 ## Sidebar display preferences
 
-Project folders and the Projects/Recents sections remember their expanded or collapsed state per user on the Server, alongside shortcut layout and section height ratio. Reloading, signing in again, focusing the window, or making the page visible reads the latest preferences; changes are not pushed live to other windows. Folders are saved separately by stable Project ID, so renaming a folder does not reset it and changes to different folders on separate clients do not overwrite each other. Failed saves show a message and restore confirmed state rather than appearing synchronized.
+Folders, including subfolders, remember their expanded or collapsed state per user on the Server, alongside the shortcut layout. Reloading, signing in again, focusing the window, or making the page visible reads the latest preferences; changes are not pushed live to other windows. Folders are saved separately by stable Project ID, so renaming a folder does not reset it and changes to different folders on separate clients do not overwrite each other. Failed saves show a message and restore confirmed state rather than appearing synchronized.
 
 Legacy browser-local section state is not imported into user preferences. The initial default is expanded; subsequent visits use Server-saved state.
 
@@ -151,16 +151,19 @@ A VP's `AskUser` call appears as an interactive card. You can switch Sessions an
 - If confirmation has not arrived after 15 seconds, check the connection and use **Resend answer**. A resend retains the original question identity and does not complete the same question twice.
 - An unavailable Agent produces a retryable notice. If the question expired, execution was cancelled, or an Agent restart lost the waiting request, ask the VP to pose the question again. Resending does not revive an ended turn.
 
-## Organize Sessions with Projects
+## Organize Sessions with folders
 
-Projects are user-visible groups in the unified sidebar. You can:
+Folders (Projects) organize Sessions in the unified sidebar like a file tree. You can:
 
-- create, rename, and delete a Project;
-- drag native Yeaft Sessions between a Project and **Recents**;
+- create a folder with **New folder**, or a subfolder from a folder's menu, up to five levels deep;
+- rename, move (drag, or **Move to** in the folder menu) and delete folders; a folder cannot move into itself or one of its subfolders;
+- drag native Yeaft Sessions into a folder, or below the last row back to the top level;
 - reorder Sessions without losing cross-Agent identity;
-- attach one Project instruction to the Project.
+- attach an instruction to each folder.
 
-A Project does not merge Session transcripts or storage. It supplies Project instructions to members, but the current runtime does not recall or inject sibling Session summaries.
+A folder's instruction applies to the Sessions in that folder and in all of its subfolders. When several folders on the path have instructions, the Session receives all of them, outermost first, each labeled with its folder path; the Agent sees the folder path (for example `Sydney / Parental Control`) as the Project name. Wherever Project siblings are used, such as Project-scoped history search, same-Agent Sessions anywhere under the same top-level folder count as siblings, so moving a Session into a subfolder never narrows that scope. Deleting a folder also deletes its subfolders but never Sessions: every Session inside moves to the deleted folder's parent, or to the top level.
+
+A folder does not merge Session transcripts or storage. It supplies Project instructions to members, but the current runtime does not recall or inject sibling Session summaries.
 
 ## Memory boundaries
 
