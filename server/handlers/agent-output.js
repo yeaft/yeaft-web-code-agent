@@ -70,6 +70,11 @@ function reconcileAuthoritativeSessionSnapshot(ownerId, agentId, sessions) {
   return rows;
 }
 
+function isSceneConfigReadResult(event) {
+  return event?.type === 'session_crud_result' && event.op === 'list'
+    && typeof event.requestId === 'string' && event.requestId.startsWith('scene_config_read_');
+}
+
 async function syncYeaftSessionMetadata(agentId, agent, event) {
   if (!event || typeof event !== 'object') return event;
   const ownerId = agent?.ownerId || null;
@@ -99,6 +104,9 @@ async function syncYeaftSessionMetadata(agentId, agent, event) {
   }
 
   if (event.type !== 'session_crud_result') return event;
+  // New Web uses the existing Agent list request to check a single scene.
+  // It is not a catalog refresh; an old probe can arrive after newer edits.
+  if (isSceneConfigReadResult(event)) return event;
   const op = event.op;
   const sessionId = event.sessionId;
   if (event.ok && op === 'list' && Array.isArray(event.sessions)) {
@@ -119,6 +127,8 @@ async function syncYeaftSessionMetadata(agentId, agent, event) {
         || (event.session.task && op !== 'copy' && op !== 'merge'))) {
     try {
       const existing = yeaftSessionDb.getForAgent(ownerId, agentId, event.session.id);
+      if (op === 'update_config'
+          && Date.parse(event.session.metadataUpdatedAt) < Date.parse(existing?.metadataUpdatedAt)) return event;
       yeaftSessionDb.upsertFromSnapshot(ownerId, agentId, { ...existing, ...event.session });
       agent.yeaftSessions ??= new Map();
       agent.yeaftSessions.set(event.session.id, { ...existing, ...event.session });
@@ -655,7 +665,8 @@ export async function handleAgentOutput(agentId, agent, msg) {
       scheduledTaskReceiptDb.recordNotificationRun(agent.ownerId, agentId, msg.event);
       const data = hydrateInlinePreviewData(msg.data);
       let event = await syncYeaftSessionMetadata(agentId, agent, msg.event);
-      if ((event?.type === 'session_list_updated' || event?.type === 'session_crud_result') && agent.ownerId) {
+      if ((event?.type === 'session_list_updated' || event?.type === 'session_crud_result')
+          && agent.ownerId && !isSceneConfigReadResult(event)) {
         event = {
           ...event,
           projects: yeaftProjectDb.listForAgent(agent.ownerId, agentId),
@@ -1099,13 +1110,16 @@ export async function handleAgentOutput(agentId, agent, msg) {
       // sessions, and that response must carry persisted server-side pin
       // state before it hits the web store.
       const syncedMsg = await syncYeaftSessionMetadata(agentId, agent, msg);
-      const outboundMsg = agent.ownerId
-        ? { ...syncedMsg, projects: yeaftProjectDb.listForAgent(agent.ownerId, agentId), projectsAuthoritative: true }
-        : { ...syncedMsg, projects: [], projectsAuthoritative: true };
+      const sceneConfigRead = isSceneConfigReadResult(syncedMsg);
+      const outboundMsg = sceneConfigRead ? syncedMsg : {
+        ...syncedMsg,
+        projects: agent.ownerId ? yeaftProjectDb.listForAgent(agent.ownerId, agentId) : [],
+        projectsAuthoritative: true,
+      };
       // CRUD acknowledgements are not authoritative catalog snapshots. The
       // agent emits session_list_updated after mutations; broadcast only after
       // that reconciliation so create/rename cannot briefly project stale data.
-      const catalogChanged = outboundMsg?.op === 'list'
+      const catalogChanged = (outboundMsg?.op === 'list' && !sceneConfigRead)
         || (outboundMsg?.op === 'update_config' && outboundMsg.ok && outboundMsg.session?.id);
       if (catalogChanged) await broadcastSessionCatalog(agent.ownerId);
       for (const [, c] of webClients) {
