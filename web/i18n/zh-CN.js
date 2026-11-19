@@ -2097,7 +2097,7 @@ export default {
   'yeaft.deleteTurn.not_found': '该轮次已不可用。',
   'yeaft.deleteTurn.cleanupPending': '该轮次已从历史与后续上下文移除，但部分存储文件未能清理。',
   'yeaft.deleteTurn.denied': '只有会话所有者可以删除轮次。',
-  'yeaft.deleteTurn.unsupported': '请更新 Agent 和 Server，并为此数据目录启用轮次删除。',
+  'yeaft.deleteTurn.unsupported': '当前 Server 或 Agent 不支持删除轮次。',
   'yeaft.deleteTurn.ambiguous': '无法安全识别这条旧轮次的全部记录，未执行删除。',
   'yeaft.deleteTurn.failed': '无法删除轮次。请刷新会话后再试。',
   'yeaft.session.forkFromTurnHint': '复制截至此条回复的历史到新会话，不包含后续消息。',

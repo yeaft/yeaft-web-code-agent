@@ -2100,7 +2100,7 @@ export default {
   'yeaft.deleteTurn.not_found': 'This turn is no longer available.',
   'yeaft.deleteTurn.cleanupPending': 'The turn is excluded from history and future context. Some stored files could not be removed.',
   'yeaft.deleteTurn.denied': 'Only the Session owner can delete a turn.',
-  'yeaft.deleteTurn.unsupported': 'Turn deletion requires an updated Server and Agent, and must be enabled for this data directory.',
+  'yeaft.deleteTurn.unsupported': 'This Server or Agent does not support deleting turns.',
   'yeaft.deleteTurn.ambiguous': 'This older turn cannot be safely separated from the surrounding history.',
   'yeaft.deleteTurn.failed': 'Could not delete the turn. Refresh the Session and try again.',
   'yeaft.session.forkFromTurnHint': 'Copy history through this response into a new Session; later messages are excluded.',

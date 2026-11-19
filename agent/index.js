@@ -25,7 +25,6 @@ import {
 } from './upgrade-command.js';
 import { loadConfig as loadYeaftConfig } from './yeaft/config.js';
 import { initYeaftDir } from './yeaft/init.js';
-import { isSessionTurnDeletionCutoverConfirmed, sessionTurnDeletionCutoverRoots } from './yeaft/sessions/session-turn-cutover.js';
 import { isWorkCenterEnabled, startWorkCenterFeature } from './yeaft/work-center/feature.js';
 import { supportsWorkItemAttachments } from './yeaft/work-center/attachment-platform.js';
 import { updateBrowserRuntimeSettings } from './yeaft/config-api.js';
@@ -97,7 +96,6 @@ function saveConfig(config) {
   writeFileSync(LOCAL_CONFIG_FILE, JSON.stringify(config, null, 2));
 }
 
-const turnDeletionCutoverRoots = sessionTurnDeletionCutoverRoots(process.argv.slice(2));
 const fileConfig = loadConfig();
 const { agentName: AGENT_NAME, instanceId: INSTANCE_ID } = resolveRuntimeIdentity(fileConfig);
 
@@ -141,7 +139,6 @@ const CONFIG = {
   agentName: AGENT_NAME,
   workDir: WORK_DIR,
   yeaftDir: YEAFT_DIR,
-  sessionTurnDeletionCutoverRoots: turnDeletionCutoverRoots,
   telemetry: loadYeaftConfig({ dir: YEAFT_DIR }).telemetry,
   workCenterEnabled: isWorkCenterEnabled(process.env, loadYeaftConfig({ dir: YEAFT_DIR })),
   reconnectInterval: fileConfig.reconnectInterval,
@@ -181,9 +178,8 @@ async function detectCapabilities() {
   // agent build can speak plaintext WS frames. New servers see this and
   // flip `agent.encryptOutbound = false`, stopping outbound encryption
   // to this peer. Old servers ignore the unknown capability token.
-  const capabilities = ['scheduled_tasks', 'scheduled_task_month_days', 'background_tasks', 'file_editor', 'ping_session', 'plaintext-ok', 'workbench_session_routes', 'workbench_request_correlation', 'workbench_terminal_cleanup_fence', 'workbench_file_content_chunks', 'workbench_video_stream', 'session_history_search', 'session_history_outline', 'session_history_window_prefetch', 'session_fork_from_turn', 'session_fork_while_running', 'session_merge', 'session_scenes', 'file_reference_resolution', 'response_image_preview', 'yeaft_plugins', 'yeaft_managed_skills', 'settings_request_correlation', 'work_center_feature_settings'];
+  const capabilities = ['scheduled_tasks', 'scheduled_task_month_days', 'background_tasks', 'file_editor', 'ping_session', 'plaintext-ok', 'workbench_session_routes', 'workbench_request_correlation', 'workbench_terminal_cleanup_fence', 'workbench_file_content_chunks', 'workbench_video_stream', 'session_history_search', 'session_history_outline', 'session_history_window_prefetch', 'session_fork_from_turn', 'session_fork_while_running', 'session_merge', 'session_delete_turn', 'session_scenes', 'file_reference_resolution', 'response_image_preview', 'yeaft_plugins', 'yeaft_managed_skills', 'settings_request_correlation', 'work_center_feature_settings'];
   capabilities.push('digital_person', getAgentUpgradeCapability());
-  if (isSessionTurnDeletionCutoverConfirmed(YEAFT_DIR, turnDeletionCutoverRoots)) capabilities.push('session_delete_turn');
   if (ctx.CONFIG?.workCenterEnabled === true) {
     capabilities.push('work_center', 'work_center_message_v2', 'work_center_workbench');
     if (supportsWorkItemAttachments()) capabilities.push('work_item_attachments');

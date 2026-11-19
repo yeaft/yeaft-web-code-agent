@@ -49,6 +49,17 @@ describe('native Session delete turn', () => {
     expect(store.yeaftTurnDeleteTarget(userRow('s', 'm0002', { clientMessageId: 'm0002' }))).toBeNull();
     expect(store.yeaftTurnDeleteTarget({ ...selected, type: 'assistant' })).toBeNull();
     expect(store.yeaftTurnDeleteTarget(userRow('s', 'optimistic'))).toBeNull();
+    store.currentAgent = 'b';
+    expect(store.yeaftTurnDeleteTarget(selected)).toBeNull(); // Same Session ID, unsupported Agent.
+    store.currentAgent = 'a';
+    store.yeaftSessionDeleteTurnSupported = false;
+    expect(store.yeaftTurnDeleteTarget(selected)).toBeNull();
+    store.yeaftSessionDeleteTurnSupported = true;
+    const capabilities = store.agents[0].capabilities;
+    store.agents[0].capabilities = [];
+    expect(store.yeaftTurnDeleteTarget(selected)).toBeNull();
+    expect((await store.deleteYeaftSessionTurn(target)).ok).toBe(false);
+    store.agents[0].capabilities = capabilities;
     store.digitalPersonOpen = true;
     expect(store.yeaftTurnDeleteTarget(selected)).toBeNull();
     store.digitalPersonOpen = false;

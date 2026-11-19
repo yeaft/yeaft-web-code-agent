@@ -1,9 +1,16 @@
+import { spawn } from 'node:child_process';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { ConversationStore } from '../../../agent/yeaft/conversation/persist.js';
+import { createSessionFromSpec } from '../../../agent/yeaft/sessions/session-crud.js';
 import { expect } from '@playwright/test';
 import { test } from '../../fixtures/test-server.js';
 import { OTHER_SESSION, SESSION, pane, sessionTurnsFixture } from '../../helpers/session-turns.js';
 
 // Run the actual browser modules, not component stubs or injected message arrays.
-test.use({ serverEnv: { YEAFT_LOCAL_RUN: 'true' } });
+test.use({ serverEnv: { YEAFT_LOCAL_RUN: 'true', SERVE_DIST: process.env.SERVE_DIST || 'false' } });
 
 test('one native Session turn retains the ordinary transcript and merges appended tools across replay', async ({ chatPage: page, mockAgent }, info) => {
   const wire = await sessionTurnsFixture(page, mockAgent);
@@ -408,4 +415,93 @@ test('Delete turn from a saved supplement replays the remaining Session in both 
   await openSession(peer);
   await expect.poll(() => loads().length).toBeGreaterThan(initialLoadCount + 2);
   await expectDeleted(peer);
+});
+
+test('Delete turn works without Agent options and is hidden on an older Agent', async ({ page, mockAgent, serverUrl }, info) => {
+  const root = await mkdtemp(join(tmpdir(), 'yeaft-delete-default-e2e-'));
+  let agent;
+  let agentClosed;
+  let log = '';
+  try {
+    // Avoid downloads, live configuration, API keys and provider startup calls.
+    const home = join(root, 'home');
+    const data = join(root, 'data');
+    await mkdir(join(home, '.claude', 'plugins'), { recursive: true });
+    await mkdir(data);
+    await writeFile(join(home, '.claude', 'plugins', 'installed_plugins.json'), '{}');
+    await writeFile(join(data, 'models_dev_cache.json'), '{}');
+    const { id: sessionId } = createSessionFromSpec(data, { name: 'Current Agent Session', roster: ['omni'] });
+    const store = new ConversationStore(data);
+    store.appendBatch([
+      { sessionId, role: 'user', content: 'Delete this turn', clientMessageId: 'remove-me', userTurnId: 'remove-me', relation: 'new' },
+      { sessionId, role: 'assistant', content: 'Remove this reply too', speakerVpId: 'omni', turnId: 'remove-reply', userTurnId: 'remove-me' },
+      { sessionId, role: 'user', content: 'Keep this turn', clientMessageId: 'keep-me', userTurnId: 'keep-me', relation: 'new' },
+    ]);
+    agent = spawn(process.execPath, [fileURLToPath(new URL('../../../agent/cli.js', import.meta.url))], {
+      cwd: root,
+      env: {
+        PATH: process.env.PATH, SystemRoot: process.env.SystemRoot,
+        HOME: home, USERPROFILE: home, YEAFT_DIR: data, WORK_DIR: root,
+        SERVER_URL: serverUrl.replace(/^http/, 'ws'), AGENT_NAME: 'current-agent',
+        YEAFT_LOCAL_RUN: 'true', YEAFT_SKIP_STARTUP_INSTALLS: 'true', DISALLOWED_TOOLS: 'none',
+      },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    agentClosed = new Promise(resolve => agent.once('close', resolve));
+    agent.on('error', error => { log += `${error.message}\n`; });
+    for (const stream of [agent.stdout, agent.stderr]) stream.on('data', chunk => { log = (log + chunk).slice(-6000); });
+
+    const oldSessionId = 'session_old_agent';
+    mockAgent.send({ type: 'agent_capabilities_updated', capabilities: ['file_editor', 'plaintext-ok'] });
+    mockAgent._messageHandlers.push(request => {
+      if (request.type === 'yeaft_load_history' && request.sessionId === oldSessionId && request.limit !== 0) {
+        mockAgent.send({ type: 'yeaft_history_chunk', sessionId: oldSessionId, mode: 'recent', requestId: request.requestId,
+          _requestClientId: request._requestClientId, hasMore: false, oldestSeq: 1, latestSeq: 1,
+          messages: [{ id: 'm1', seq: 1, role: 'user', sessionId: oldSessionId, content: 'Older Agent question' }] });
+      }
+    });
+    await page.goto(serverUrl);
+    await page.waitForFunction(id => window.Pinia?.useChatStore?.().agents
+      .some(agent => agent.id === id && !agent.capabilities?.includes('session_delete_turn')), mockAgent.agentId);
+    mockAgent.send({ type: 'yeaft_output', event: { type: 'session_list_updated', sessions: [
+      { id: oldSessionId, name: 'Older Agent Session', roster: ['omni'], defaultVpId: 'omni' },
+    ] } });
+    const open = async name => {
+      const row = page.locator('.sidebar-session-row').filter({ hasText: name });
+      if (!await row.isVisible()) {
+        const toggle = page.locator('.yeaft-topbar-sidebar-toggle');
+        if (await toggle.isVisible()) await toggle.click();
+      }
+      await row.click();
+    };
+    await open('Older Agent Session');
+    await expect(page.getByText('Older Agent question', { exact: true })).toBeVisible();
+    await page.locator('.message.user').filter({ hasText: 'Older Agent question' }).hover();
+    const buttons = page.locator('.message-delete-turn');
+    await expect(buttons).toHaveCount(0); // No disabled or visually hidden trash button either.
+
+    await open('Current Agent Session');
+    await expect(page.getByText('Remove this reply too', { exact: true })).toBeVisible();
+    const message = page.locator('.message.user').filter({ hasText: 'Delete this turn' });
+    await message.hover();
+    const action = message.getByRole('button', { name: 'Delete turn', exact: true });
+    await expect(action).toBeEnabled();
+    await action.click();
+    await page.getByRole('dialog', { name: 'Delete turn' }).getByRole('button', { name: 'Delete turn', exact: true }).click();
+    await expect(message).toHaveCount(0);
+    await expect(page.getByText('Remove this reply too', { exact: true })).toHaveCount(0);
+    await expect(page.getByText('Keep this turn', { exact: true })).toBeVisible();
+    expect(store.loadAllBySession(sessionId).map(row => row.content)).toEqual(['Keep this turn']);
+
+    await open('Older Agent Session');
+    await expect(page.getByText('Older Agent question', { exact: true })).toBeVisible();
+    await expect(buttons).toHaveCount(0);
+  } finally {
+    if (agent) {
+      agent.kill('SIGKILL');
+      await agentClosed;
+      await info.attach('isolated Agent log', { body: log, contentType: 'text/plain' });
+    }
+    await rm(root, { recursive: true, force: true });
+  }
 });
