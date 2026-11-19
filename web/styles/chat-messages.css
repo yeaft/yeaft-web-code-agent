@@ -284,18 +284,24 @@
   30% { transform: translateY(-8px); opacity: 1; }
 }
 
-/* Typing Health Status Styles */
-.typing-indicator.status-disconnected > span:nth-child(-n+3),
-.typing-indicator.status-agent-offline > span:nth-child(-n+3) { background: rgba(229, 57, 53, 0.6); }
-.typing-indicator.status-compacting > span:nth-child(-n+3) { background: rgba(91, 155, 213, 0.6); }
-.typing-indicator.status-session-lost > span:nth-child(-n+3),
-.typing-indicator.status-cli-exited > span:nth-child(-n+3) { background: rgba(229, 124, 35, 0.6); }
+/* Typing Health Status Styles: the dots take the status colour. The selector
+   is the dots' own, so an animation or status text standing in their place
+   is never painted. */
+.typing-indicator.status-disconnected > span:not(.typing-status-text):not(.svg-cat-walk):not(.svg-dog-scene),
+.typing-indicator.status-agent-offline > span:not(.typing-status-text):not(.svg-cat-walk):not(.svg-dog-scene) { background: rgba(229, 57, 53, 0.6); }
+.typing-indicator.status-compacting > span:not(.typing-status-text):not(.svg-cat-walk):not(.svg-dog-scene) { background: rgba(91, 155, 213, 0.6); }
+.typing-indicator.status-session-lost > span:not(.typing-status-text):not(.svg-cat-walk):not(.svg-dog-scene),
+.typing-indicator.status-cli-exited > span:not(.typing-status-text):not(.svg-cat-walk):not(.svg-dog-scene) { background: rgba(229, 124, 35, 0.6); }
 
 /* The indicator holds the waiting animation: a small one walks along the
    row, a stage animation gets a picture of its own. With animations off it
    holds the three dots. */
 .typing-indicator.is-inline { min-height: 8px; }
-.typing-indicator.is-stage { padding: var(--space-2) 0; }
+.typing-indicator.is-stage { flex-wrap: wrap; row-gap: var(--space-1); padding: var(--space-2) 0; }
+/* Status text keeps the place it had after the dots: clear of where a small
+   animation starts, and on a line of its own under a stage. */
+.typing-indicator.is-inline > .typing-status-text { margin-left: 44px; }
+.typing-indicator.is-stage > .typing-status-text { flex-basis: 100%; margin-left: 0; }
 
 /* Waiting status banner — shown at top of message area */
 .typing-status-banner {

@@ -134,8 +134,11 @@ export function createStageAnimation(scene) {
       const resize = () => {
         const canvas = canvasRef.value;
         if (disposed || !canvas || !host) return;
-        // The picture's height follows its width; the box's own height is
-        // still animating open when this first runs.
+        // The picture's height follows its width. The box's own height is
+        // still animating open when this first runs, and reports a resize on
+        // every frame of that; only a new width or pixel ratio needs a new
+        // backing store.
+        if (host.clientWidth === width && pixelRatio() === dpr) return;
         width = host.clientWidth;
         height = Math.round(width * STAGE_RATIO);
         dpr = pixelRatio();
@@ -162,11 +165,16 @@ export function createStageAnimation(scene) {
         if (open.value && onScreen && !held()) frameId = requestAnimationFrame(tick);
       }
 
-      /** Show the card until the wait is STAGE_INTRO_MS old, then the scene. */
+      /**
+       * Show the card until the wait is STAGE_INTRO_MS old, then the scene.
+       * Without a 2D context there is no scene, and the card stays.
+       */
       const syncOpen = () => {
         if (openTimer !== null) clearTimeout(openTimer);
         openTimer = null;
-        if (disposed) return;
+        if (disposed || !ctx) return;
+        // A held scene shows one frame whatever the clock says, so it stays open.
+        if (open.value && held()) return;
         const now = Date.now();
         const waited = now - readWaitClock(props.clockKey, now);
         if (waited >= STAGE_INTRO_MS) {
@@ -178,13 +186,21 @@ export function createStageAnimation(scene) {
         openTimer = setTimeout(syncOpen, STAGE_INTRO_MS - waited);
       };
 
+      // A scene that was held or off screen stopped reading its wait clock,
+      // and a clock left unread is forgotten. So whenever it may play again,
+      // check the wait first: a forgotten one starts over from the card
+      // rather than freezing on the scene's first frame.
+      const resume = () => {
+        syncOpen();
+        refresh();
+      };
       const recolor = () => {
         colors = null;
-        refresh();
+        resume();
       };
       const onMotionChange = (event) => {
         reducedMotion = event.matches;
-        refresh();
+        resume();
       };
 
       Vue.onMounted(() => {
@@ -204,7 +220,7 @@ export function createStageAnimation(scene) {
           viewObserver = new IntersectionObserver((entries) => {
             // Entries are in time order; the last one is the current state.
             onScreen = entries[entries.length - 1].isIntersecting;
-            refresh();
+            resume();
           });
           viewObserver.observe(host);
         } else {
@@ -219,7 +235,7 @@ export function createStageAnimation(scene) {
       // Post-flush watchers run after the classes are in the DOM, so the
       // colour tokens can be re-read and the opened picture measured.
       Vue.watch(() => props.status, recolor, { flush: 'post' });
-      Vue.watch(() => props.clockKey, () => { syncOpen(); refresh(); }, { flush: 'post' });
+      Vue.watch(() => props.clockKey, resume, { flush: 'post' });
       Vue.watch(open, resize, { flush: 'post' });
 
       Vue.onBeforeUnmount(() => {

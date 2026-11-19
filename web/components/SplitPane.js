@@ -47,6 +47,22 @@ export default {
                   <div v-if="previewShowTypingDots" class="typing-indicator" :class="[animation ? 'is-' + animation.layout : '', waitingStatus ? ('status-' + waitingStatus) : '']">
                     <component v-if="animation" :is="animation.component" :clock-key="waitClockKey" :status="waitingStatus || ''" />
                     <template v-else><span></span><span></span><span></span></template>
+                    <span v-if="waitingStatus === 'disconnected'" class="typing-status-text typing-status-error">
+                      {{ $t('chat.waiting.disconnected') }}
+                    </span>
+                    <span v-else-if="waitingStatus === 'compacting'" class="typing-status-text typing-status-compact">
+                      {{ $t('chat.waiting.compacting') }}
+                    </span>
+                    <span v-else-if="waitingStatus === 'agent-offline'" class="typing-status-text typing-status-error">
+                      {{ $t('chat.waiting.agentOffline') }}
+                      <button class="typing-refresh-btn" @click="refreshSession">{{ $t('chat.waiting.refresh') }}</button>
+                    </span>
+                    <span v-else-if="waitingStatus === 'session-lost'" class="typing-status-text typing-status-warn">
+                      {{ $t('chat.waiting.sessionLost') }}
+                    </span>
+                    <span v-else-if="waitingStatus === 'cli-exited'" class="typing-status-text typing-status-warn">
+                      {{ $t('chat.waiting.cliExited') }}
+                    </span>
                   </div>
                 </div>
               </main>

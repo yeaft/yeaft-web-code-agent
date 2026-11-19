@@ -7,6 +7,7 @@
 const PHASES = ['speed-napping', 'speed-normal', 'speed-fast', 'speed-turbo', 'speed-crazy', 'speed-tired', 'speed-petted'];
 /** Room kept clear at the far end of the indicator, in px: the cat's own length. */
 const TURNAROUND = 40;
+const REDUCED_MOTION = '(prefers-reduced-motion: reduce)';
 
 /**
  * Where the cat is and what it is doing after `elapsedMs` of its 19 s loop.
@@ -134,6 +135,7 @@ const component = {
     const spriteRef = Vue.ref(null);
     let startedAt = 0;
     let frameId = null;
+    let motionQuery = null;
 
     // Position and mood are written straight to the DOM. Driving them through
     // reactive state re-rendered the whole transcript sixty times a second.
@@ -142,7 +144,8 @@ const component = {
       const sprite = spriteRef.value;
       if (walk && sprite) {
         const travelPx = Math.max(0, (walk.parentElement?.clientWidth || 0) - TURNAROUND);
-        const frame = resolveRunningCatFrame(Date.now() - startedAt, travelPx);
+        // With motion reduced the cat stands where it starts; its CSS stills the rest.
+        const frame = resolveRunningCatFrame(motionQuery?.matches ? 0 : Date.now() - startedAt, travelPx);
         walk.style.transform = frame.transform;
         for (const phase of PHASES) sprite.classList.toggle(phase, phase === frame.phase);
       }
@@ -151,6 +154,7 @@ const component = {
 
     Vue.onMounted(() => {
       startedAt = Date.now();
+      motionQuery = window.matchMedia?.(REDUCED_MOTION) || null;
       frameId = requestAnimationFrame(tick);
     });
     Vue.onBeforeUnmount(() => {

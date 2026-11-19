@@ -64,8 +64,19 @@ test('one native Session turn shows its waiting indicator, retains the ordinary 
   await expect(cat).toBeVisible();
   await expect(indicator.locator('.waiting-stage')).toHaveCount(0);
   await expect(dots).toHaveCount(0);
+  // A waiting status colours the dots, not an animation standing in their place.
+  const setCompacting = on => page.evaluate((compacting) => {
+    const store = window.Pinia.useChatStore();
+    store.compactStatus = compacting ? { conversationId: store.currentConversation, status: 'compacting' } : null;
+  }, on);
+  await setCompacting(true);
+  await expect(indicator).toHaveClass(/status-compacting/);
+  await expect(indicator.locator('.svg-cat-walk')).toHaveCSS('background-color', 'rgba(0, 0, 0, 0)');
   await chooseWaitingAnimation('off');
   await expect(dots).toHaveCount(3);
+  await expect(dots.first()).toHaveCSS('background-color', 'rgba(91, 155, 213, 0.6)');
+  await setCompacting(false);
+  await expect(indicator).not.toHaveClass(/status-compacting/);
   await expect(indicator.locator('.waiting-stage, .svg-running-cat')).toHaveCount(0);
   await chooseWaitingAnimation('random');
   const candidate = indicator.locator('.waiting-stage, .svg-running-cat');
