@@ -244,6 +244,10 @@ const YEAFT_HISTORY_DELTA_ROWS = 100;
 const YEAFT_HISTORY_DELTA_BYTES = 512 * 1024;
 const YEAFT_SESSION_INVENTORY_TIMEOUT_MS = 15_000;
 const YEAFT_SESSION_CRUD_TIMEOUT_MS = 10_000;
+const YEAFT_SCENE_RECEIPT_TIMEOUT_MS = 30_000;
+// Other tabs still consume the Agent's broadcasts. This tab can recognize
+// its own expired scene writes without keeping request IDs forever.
+const LOCAL_SCENE_REQUEST_PREFIX = `grc_scene_${Math.random().toString(36).slice(2)}_`;
 const YEAFT_SESSION_COPY_SUCCESS_MS = 450;
 const YEAFT_HISTORY_OUTLINE_RETRY_DELAYS_MS = Object.freeze([150, 300, 600, 1_000]);
 const YEAFT_HISTORY_OUTLINE_RETRYABLE_ERRORS = new Set(['index_building', 'stale_result']);
@@ -6248,6 +6252,8 @@ export const useChatStore = defineStore('chat', {
           // and have no envelope context. Keep these two channels in sync
           // if you change the wire-stamping rule.
           const pending = this._sessionCrudPending && this._sessionCrudPending.get(event.requestId);
+          if (!pending && event.op === 'update_config'
+              && typeof event.requestId === 'string' && event.requestId.startsWith(LOCAL_SCENE_REQUEST_PREFIX)) break;
           // Branch acknowledgements are broadcast for inventory updates. Only
           // the initiating tab may focus it, and another Agent must not settle
           // this tab's request even if it echoes the same request id.
@@ -6790,7 +6796,9 @@ export const useChatStore = defineStore('chat', {
       if (!this._sessionCrudPending || typeof this._sessionCrudPending.get !== 'function') {
         this._sessionCrudPending = new Map();
       }
-      const requestId = 'grc_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 8);
+      const sceneWrite = op === 'update_config' && Object.hasOwn(data?.config || {}, 'sceneId');
+      const requestId = (sceneWrite ? LOCAL_SCENE_REQUEST_PREFIX : 'grc_')
+        + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 8);
       const typeMap = {
         list: 'yeaft_list_sessions',
         create: 'yeaft_create_session',
@@ -6839,7 +6847,8 @@ export const useChatStore = defineStore('chat', {
         // the correlated request open until its result or a real disconnect.
         const timeoutMs = Number.isFinite(opts.timeoutMs)
           ? Math.max(1, Number(opts.timeoutMs))
-          : (op === 'copy' || op === 'merge' ? null : YEAFT_SESSION_CRUD_TIMEOUT_MS);
+          : (op === 'copy' || op === 'merge' ? null
+            : sceneWrite ? YEAFT_SCENE_RECEIPT_TIMEOUT_MS : YEAFT_SESSION_CRUD_TIMEOUT_MS);
         const timer = timeoutMs == null ? null : setTimeout(() => {
           if (this._sessionCrudPending && this._sessionCrudPending.has(requestId)) {
             this._sessionCrudPending.delete(requestId);
@@ -7026,8 +7035,15 @@ export const useChatStore = defineStore('chat', {
       };
       this.yeaftSessionSceneSelections[key] = entry;
       const promise = this.sessionCrudRequest('update_config', { sessionId, config: { sceneId } }, { agentId })
-        .then(result => result?.ok && result.config?.sceneId !== sceneId
-          ? { ok: false, error: { code: 'scene_not_saved' } } : result);
+        .then(result => {
+          // Losing the receipt does not undo an Agent write. Don't replay it
+          // or send a queued message under a scene we could not confirm.
+          if (result?.receiptInterrupted || result?.error?.code === 'timeout'
+              || (result?.ok && result.config?.sceneId !== sceneId)) {
+            return { ok: false, error: { code: 'scene_unconfirmed' } };
+          }
+          return result;
+        });
       this._sessionSceneSwitches.set(key, { promise });
       try {
         return await promise;

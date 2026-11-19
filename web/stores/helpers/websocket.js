@@ -142,7 +142,7 @@ export function parseWsMessage(store, data) {
 function settleSessionCrudForConnection(store, connectionGeneration, code, message) {
   for (const [requestId, pending] of store._sessionCrudPending?.entries?.() || []) {
     if (Number(pending?.connectionGeneration || 0) !== Number(connectionGeneration || 0)) continue;
-    pending.resolve?.({ ok: false, requestId, error: { code, message } });
+    pending.resolve?.({ ok: false, requestId, receiptInterrupted: true, error: { code, message } });
     store._sessionCrudPending.delete(requestId);
   }
 }

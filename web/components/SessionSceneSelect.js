@@ -50,7 +50,7 @@ export default {
     return { listboxId: `session-scene-${Vue.useId()}` };
   },
   data() {
-    return { localOpen: false, requestedScene: '', error: false };
+    return { localOpen: false, requestedScene: '', errorKey: '', unconfirmedScene: '' };
   },
   computed: {
     sceneIds() {
@@ -73,6 +73,12 @@ export default {
       handler(open) {
         if (open) this.focusOption(this.displayedScene);
       },
+    },
+    'session.sceneId'(sceneId) {
+      if (sceneId && sceneId === this.unconfirmedScene) {
+        this.unconfirmedScene = '';
+        this.errorKey = '';
+      }
     },
     unavailable(value) {
       if (value) this.setOpen(false);
@@ -145,15 +151,26 @@ export default {
     async changeScene(sceneId) {
       if (this.unavailable || !this.sceneIds.includes(sceneId)) return;
       this.closeToTrigger();
+      // Reselecting the displayed scene doesn't prove what the Agent saved.
       if (sceneId === this.session.sceneId) return;
+      this.errorKey = '';
+      this.unconfirmedScene = '';
       this.requestedScene = sceneId;
-      this.error = false;
       try {
         const chat = Pinia.useChatStore();
         const result = await chat.updateYeaftSessionScene(this.session.id, sceneId, this.agentId);
-        this.error = !result?.ok;
+        if (result?.ok) return;
+        if (result?.error?.code === 'scene_unconfirmed') {
+          // A fresh Session snapshot may have confirmed the save in the meantime.
+          if (this.session.sceneId !== sceneId) {
+            this.unconfirmedScene = sceneId;
+            this.errorKey = 'unconfirmed';
+          }
+        } else {
+          this.errorKey = 'updateError';
+        }
       } catch (_) {
-        this.error = true;
+        this.errorKey = 'updateError';
       } finally {
         this.requestedScene = '';
       }
@@ -197,7 +214,7 @@ export default {
           <span class="yeaft-model-option-label">{{ $t('yeaft.session.scene.' + sceneId) }}</span>
         </button>
       </div>
-      <span v-if="error" class="yeaft-composer-scene-error" role="alert">{{ $t('yeaft.session.scene.updateError') }}</span>
+      <span v-if="errorKey" class="yeaft-composer-scene-error" role="alert">{{ $t('yeaft.session.scene.' + errorKey) }}</span>
     </div>
   `,
 };

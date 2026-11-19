@@ -51,6 +51,8 @@ globalThis.Pinia = {
   useSessionsStore: () => runtimeSessionsStore,
 };
 const { useChatStore } = await import('../../web/stores/chat.js');
+const { useSessionsStore } = await import('../../web/stores/sessions.js');
+const { handleAgentList } = await import('../../web/stores/helpers/handlers/agentHandler.js');
 
 describe('message flow regressions', () => {
   it('keeps concurrent user-turn identities, tools and terminal state isolated through live routing and replay', async () => {
@@ -239,6 +241,78 @@ describe('message flow regressions', () => {
     expect(errors()).toContain('engine-b');
     store.messagesMap.conv.push({ type: 'user', sessionId: 's', isHistory: true, timestamp: 250 });
     expect(rows()).toEqual([]);
+  });
+
+  it('waits for a slow scene receipt, retains an unconfirmed draft and ignores its stale receipt', async () => {
+    vi.useFakeTimers();
+    const mockedSessions = Pinia.useSessionsStore;
+    Pinia.useSessionsStore = useSessionsStore;
+    try {
+      storeFactories.clear();
+      const store = useChatStore();
+      const sessions = useSessionsStore();
+      sessions.applySnapshot([{ id: 's', config: { sceneId: 'software' } }], 'a');
+      sessions.applySnapshot([{ id: 's', config: { sceneId: 'investment' } }], 'b');
+      sessions.setActive('s', 'a');
+      store.currentAgent = 'b';
+      store.agents = ['a', 'b'].map(id => ({ id, online: true, capabilities: ['session_scenes'] }));
+      store._hasHandledAgentList = true;
+      store.connectionState = 'connected';
+      store.sendWsMessage = vi.fn(() => true);
+      const sent = () => store.sendWsMessage.mock.calls.map(([msg]) => msg)
+        .filter(msg => msg.type !== 'perf_trace_events');
+      const last = () => sent().at(-1);
+      const ack = (request, agentId = 'a') => store.handleYeaftOutput({ agentId, event: {
+        type: 'session_crud_result', op: 'update_config', ok: true,
+        requestId: request.requestId, sessionId: 's', config: request.config,
+      } });
+      const scene = () => sessions.sessionById('s', 'a').sceneId;
+      const choose = sceneId => store.updateYeaftSessionScene('s', sceneId, 'a');
+      const send = text => store.sendYeaftSessionMessage({ groupId: 's', text });
+
+      const slow = choose('frontend');
+      const first = last();
+      const queued = send('Send after confirmation');
+      await vi.advanceTimersByTimeAsync(12_000);
+      expect(first).toMatchObject({ type: 'yeaft_update_session_config', agentId: 'a', sessionId: 's', config: { sceneId: 'frontend' } });
+      expect(sent()).toEqual([first]);
+      expect(store.pendingSessionSceneSelectionFor('s', 'a')).toBe('frontend');
+      ack(first, 'b');
+      expect(sessions.sessionById('s', 'b').sceneId).toBe('investment');
+      expect(scene()).toBe('software');
+      ack(first);
+      expect(await slow).toMatchObject({ ok: true });
+      await queued;
+      expect(scene()).toBe('frontend');
+      expect(sent()).toEqual([first, expect.objectContaining({ type: 'yeaft_session_send', agentId: 'a', text: 'Send after confirmation' })]);
+
+      const missing = choose('writing');
+      const expired = last();
+      const retained = send('Keep my draft');
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(await missing).toMatchObject({ ok: false, error: { code: 'scene_unconfirmed' } });
+      expect(await retained).toBe(false);
+      expect(sent()).toHaveLength(3);
+      expect(scene()).toBe('frontend');
+
+      const newest = choose('general');
+      ack(last());
+      expect(await newest).toMatchObject({ ok: true });
+      ack(expired);
+      expect(scene()).toBe('general');
+      expect(sent()).toHaveLength(4);
+
+      const disconnected = choose('frontend');
+      const interruptedSend = send('Do not send on disconnect');
+      handleAgentList(store, { agents: store.agents.map(agent => ({ ...agent, online: agent.id !== 'a' })) });
+      expect(await disconnected).toMatchObject({ ok: false, error: { code: 'scene_unconfirmed' } });
+      expect(await interruptedSend).toBe(false);
+      expect(sent()).toHaveLength(5);
+      expect(store._sessionCrudPending.size).toBe(0);
+    } finally {
+      Pinia.useSessionsStore = mockedSessions;
+      vi.useRealTimers();
+    }
   });
 
   it('previews model/effort immediately, serializes rapid changes, rolls back failures and fences owners', async () => {

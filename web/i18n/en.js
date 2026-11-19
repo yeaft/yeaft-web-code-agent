@@ -1351,6 +1351,7 @@ export default {
   'yeaft.session.scene.investment': 'Investment',
   'yeaft.session.scene.choose': 'Choose scene',
   'yeaft.session.scene.updateError': 'Could not update the scene. Try again.',
+  'yeaft.session.scene.unconfirmed': 'Scene change not confirmed. Refresh to check.',
   'yeaft.session.settings.nav.compatibility': 'Compatibility',
   'yeaft.session.create.nameLabel': 'Name',
   'yeaft.session.create.namePlaceholder': 'Session name (optional)',

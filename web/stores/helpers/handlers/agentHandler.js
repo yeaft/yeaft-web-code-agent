@@ -103,6 +103,7 @@ export function handleAgentList(store, msg) {
     pending.resolve?.({
       ok: false,
       requestId,
+      receiptInterrupted: true,
       error: { code: 'agent_offline', message: 'Agent disconnected' },
     });
     store._sessionCrudPending.delete(requestId);
