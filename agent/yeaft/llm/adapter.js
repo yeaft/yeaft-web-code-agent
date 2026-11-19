@@ -51,11 +51,47 @@ import { utf8PrefixWithinBytes } from '../utf8.js';
  * @typedef {'end_turn' | 'tool_use' | 'max_tokens' | 'stop_sequence' | 'refusal' | 'pause_turn' | 'model_context_window_exceeded' | 'unknown'} StopReason
  * @typedef {{ protocol?: string, responseId?: string, model?: string, stopReason?: string|null, stopDetails?: object|null, stopSequence?: string|null, inputTransformations?: object|Array<object>, container?: object|null, contentBlocks?: Array<object> }} ProviderMetadata Safe protocol bookkeeping only; no private reasoning, signatures or native response items.
  * @typedef {{ type: 'provider_metadata', metadata: ProviderMetadata }} ProviderMetadataEvent Internal metadata updates merged on the assistant history row and trace, not forwarded as visible content.
- * @typedef {{ type: 'stop', stopReason: StopReason, stopDetails?: object|null, stopSequence?: string|null }} StopEvent pause_turn requests bounded continuation of the exact assistant response; refusal/context overflow/unknown are not successful completions.
+ * @typedef {{ type: 'content_filter', reason: string, blocked: 'prompt'|'response', withheldToolCalls: number, withheldTools?: string[] }} ContentFilterStopDetails Provider-neutral record of a provider safety/content filter stop.
+ * @typedef {{ type: 'stop', stopReason: StopReason, stopDetails?: ContentFilterStopDetails|object|null, stopSequence?: string|null }} StopEvent pause_turn requests bounded continuation of the exact assistant response; refusal/context overflow/unknown are not successful completions.
  * @typedef {{ type: 'error', error: Error, retryable: boolean }} ErrorEvent
  *
  * @typedef {TextDeltaEvent | ThinkingDeltaEvent | ThinkingBlockEndEvent | ProviderActivityEvent | ProviderStateEvent | ProviderMetadataEvent | ToolCallEvent | UsageEvent | StopEvent | ErrorEvent} StreamEvent
  */
+
+const MAX_WITHHELD_TOOL_NAMES = 8;
+const FILTER_REASON_RE = /^[A-Za-z][A-Za-z0-9_]{0,63}$/;
+const TOOL_NAME_RE = /^[A-Za-z0-9_.:-]{1,64}$/;
+const UNDECLARED_TOOL = 'undeclared tool';
+
+/**
+ * Describe a provider content filter stop without echoing filtered content.
+ * Calls in a filtered response are withheld from execution; only names of
+ * functions declared by this request are reported, never provider arguments.
+ * @param {{ reason: string, blocked?: 'prompt'|'response', calledNames?: Array<unknown>, declaredNames?: Iterable<unknown> }} input
+ * @returns {ContentFilterStopDetails}
+ */
+export function contentFilterStopDetails({ reason, blocked = 'response', calledNames = [], declaredNames = [] }) {
+  const declared = new Set(declaredNames);
+  const names = [...new Set(calledNames.map(name => (typeof name === 'string' && declared.has(name) && TOOL_NAME_RE.test(name)
+    ? name : UNDECLARED_TOOL)))];
+  return { type: 'content_filter', reason, blocked, withheldToolCalls: calledNames.length,
+    ...(names.length ? { withheldTools: names.slice(0, MAX_WITHHELD_TOOL_NAMES) } : {}) };
+}
+
+/**
+ * Accept only the bounded shape built by contentFilterStopDetails(). Native
+ * stop details forwarded by a provider or proxy are untrusted text.
+ * @param {unknown} details
+ * @returns {details is ContentFilterStopDetails}
+ */
+export function isContentFilterStopDetails(details) {
+  if (details?.type !== 'content_filter' || typeof details.reason !== 'string' || !FILTER_REASON_RE.test(details.reason)) return false;
+  if (!['prompt', 'response'].includes(details.blocked)
+    || !Number.isSafeInteger(details.withheldToolCalls) || details.withheldToolCalls < 0) return false;
+  const names = details.withheldTools;
+  return names === undefined || (Array.isArray(names) && names.length <= MAX_WITHHELD_TOOL_NAMES
+    && names.every(name => name === UNDECLARED_TOOL || (typeof name === 'string' && TOOL_NAME_RE.test(name))));
+}
 
 // contextOutputLimit is the remaining context space for output (not the configured
 // maxTokens target). Anthropic uses it to preflight signed continuations after

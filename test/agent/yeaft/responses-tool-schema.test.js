@@ -131,7 +131,7 @@ describe('Responses strict tool boundary', () => {
     expect(replay.slice(4).map(item => item.call_id)).toEqual(toolCalls.map(call => call.id));
   });
 
-  it('fails a complete malformed JSON-encoded tool batch without emitting executable calls (SSE, JSON, extraBody)', async () => {
+  it('fails malformed and withholds content-filtered tool batches without emitting executable calls (SSE, JSON, call, extraBody)', async () => {
     const active = asFunction(tool('mcp__fixture__open', { type: 'object', additionalProperties: true }));
     const good = callItem(active.name, { argumentsJson: '{"id":"good"}' });
     const malformed = callItem(active.name, { argumentsJson: '{bad inner JSON' }, '2');
@@ -158,5 +158,30 @@ describe('Responses strict tool boundary', () => {
     }
     vi.stubGlobal('fetch', vi.fn(async () => json(done([malformed]))));
     await expect(responses().call(options)).rejects.toBeInstanceOf(LLMToolInputError);
+
+    // A content filter withholds every exposed call exactly once, valid or not, keyed by call_id.
+    const filtered = output => ({ id: 'response_filtered', status: 'incomplete', incomplete_details: { reason: 'content_filter' },
+      output, usage: { input_tokens: 10, output_tokens: 8 } });
+    const sibling = callItem('Unlisted', {}, '3');
+    const filteredReplies = [
+      // The terminal projection omits a sibling the stream already completed.
+      [() => sse([{ type: 'response.output_item.done', output_index: 0, item: good },
+        { type: 'response.output_item.done', output_index: 1, item: sibling },
+        { type: 'response.incomplete', response: filtered([sibling]) }]), 2, [active.name, 'undeclared tool']],
+      // Arguments were still streaming when the filter stopped the response.
+      [() => sse([{ type: 'response.output_item.added', output_index: 0, item: { ...good, arguments: '', status: 'in_progress' } },
+        { type: 'response.function_call_arguments.delta', output_index: 0, delta: '{"argumentsJson":' },
+        { type: 'response.incomplete', response: filtered([]) }]), 1, [active.name]],
+      [() => json(filtered([good, malformed])), 2, [active.name]],
+    ];
+    for (const [reply, count, names] of filteredReplies) {
+      vi.stubGlobal('fetch', vi.fn(async () => reply()));
+      const result = await collect(responses().stream(options));
+      expect(result.some(event => event.type === 'tool_call' || event.type === 'provider_state')).toBe(false);
+      expect(result.at(-1)).toEqual({ type: 'stop', stopReason: 'refusal', stopDetails: { type: 'content_filter',
+        reason: 'content_filter', blocked: 'response', withheldToolCalls: count, withheldTools: names } });
+    }
+    vi.stubGlobal('fetch', vi.fn(async () => json(filtered([good]))));
+    expect(await responses().call(options)).toMatchObject({ stopReason: 'refusal', providerState: null });
   });
 });

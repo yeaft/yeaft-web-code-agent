@@ -63,7 +63,7 @@ describe('native Gemini adapter', () => {
     expect(events.at(-1)).toEqual({ type: 'stop', stopReason: 'end_turn' });
   });
 
-  it('rejects complete invalid batches, malformed JSON, truncated calls and unfinished EOF without publishing tools', async () => {
+  it('rejects invalid, malformed, truncated or unfinished batches and withholds filtered calls without publishing tools', async () => {
     const valid = { functionCall: { name: 'read', args: {} } };
     const responses = [
       () => sse([candidate([valid, { functionCall: { name: 'read', args: '{bad' } }])]),
@@ -80,6 +80,19 @@ describe('native Gemini adapter', () => {
     }
     global.fetch = vi.fn(async () => json(candidate([{ functionCall: { name: 'read', args: [] } }])));
     await expect(adapter().call(params)).rejects.toBeInstanceOf(LLMToolInputError);
+    // Filter stops never echo provider-chosen names or arguments for undeclared functions.
+    global.fetch = vi.fn(async () => sse([candidate([{ functionCall: { name: '<img src=x>', args: { token: 'filtered' } } }], 'SAFETY')]));
+    const filtered = await collect(adapter().stream(params));
+    expect(filtered.some(e => e.type === 'tool_call')).toBe(false);
+    expect(filtered.at(-1)).toEqual({ type: 'stop', stopReason: 'refusal', stopDetails: { type: 'content_filter', reason: 'SAFETY',
+      blocked: 'response', withheldToolCalls: 1, withheldTools: ['undeclared tool'] } });
+    global.fetch = vi.fn(async () => sse([{ promptFeedback: { blockReason: 'PROHIBITED_CONTENT' } }]));
+    expect((await collect(adapter().stream(params))).at(-1)).toEqual({ type: 'stop', stopReason: 'refusal',
+      stopDetails: { type: 'content_filter', reason: 'PROHIBITED_CONTENT', blocked: 'prompt', withheldToolCalls: 0 } });
+    // A later candidate verdict describes the response, not the prompt.
+    global.fetch = vi.fn(async () => sse([{ promptFeedback: { blockReason: 'SAFETY' } }, candidate([{ text: 'partial' }], 'RECITATION')]));
+    expect((await collect(adapter().stream(params))).at(-1)).toMatchObject({ stopReason: 'refusal',
+      stopDetails: { reason: 'RECITATION', blocked: 'response', withheldToolCalls: 0 } });
   });
 
   it('preserves actual Gemini levels from the catalog through saved sessions and REST unary/SSE', async () => {

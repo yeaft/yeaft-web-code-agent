@@ -24,7 +24,7 @@ import { promises as fsp } from 'fs';
 import { join, resolve as resolvePath } from 'path';
 import { buildSystemPrompt, buildWorkerPrompt } from './prompts.js';
 import { getRuntimePlatformInfo } from './runtime-platform.js';
-import { LLMAbortError, LLMAuthError, LLMContextError, LLMPolicyError, LLMRateLimitError, LLMServerError, LLMStreamIdleTimeoutError } from './llm/adapter.js';
+import { LLMAbortError, LLMAuthError, LLMContextError, LLMPolicyError, LLMRateLimitError, LLMServerError, LLMStreamIdleTimeoutError, isContentFilterStopDetails } from './llm/adapter.js';
 import { runMemoryPreflow, buildRelevantScopes, memoryScopeLabel } from './sessions/pre-flow.js';
 import {
   readProjectDoc,
@@ -111,6 +111,36 @@ const PROVIDER_STOP_REASONS = new Set([
 ]);
 const COMPLETED_STOP_REASONS = new Set(['end_turn', 'stop_sequence']);
 const FAILED_PROVIDER_STOPS = new Set(['refusal', 'model_context_window_exceeded', 'unknown']);
+
+const plural = (count, one, many) => `${count} ${count === 1 ? one : many}`;
+
+/**
+ * Explain a failed provider stop from runtime evidence. Only the failed response
+ * is withheld; tool results from earlier loops of the query stay in history.
+ * @param {{ stopReason: string, stopDetails?: object|null, withheldToolCalls: number, earlierToolRuns: number }} input
+ */
+function failedProviderStopMessage({ stopReason, stopDetails, withheldToolCalls, earlierToolRuns }) {
+  const filter = isContentFilterStopDetails(stopDetails) ? stopDetails : null;
+  const withheldCount = filter ? filter.withheldToolCalls : withheldToolCalls;
+  const names = filter?.withheldTools?.length ? ` (${filter.withheldTools.join(', ')})` : '';
+  const withheld = withheldCount > 0
+    ? ` ${plural(withheldCount, 'tool call', 'tool calls')} in this response${names} ${withheldCount === 1 ? 'was' : 'were'} not run.`
+    : '';
+  const earlier = earlierToolRuns > 0
+    ? ` ${plural(earlierToolRuns, 'earlier tool call', 'earlier tool calls')} in this turn already ran; ${earlierToolRuns === 1 ? 'its result is' : 'their results are'} kept.`
+    : '';
+  if (filter?.blocked === 'prompt') {
+    return `The provider's content filter blocked this request (${filter.reason}).${withheld}${earlier} Adjust the request before retrying.`;
+  }
+  if (filter) {
+    return `The provider's content filter stopped this response (${filter.reason}).${withheld}${earlier} Send a follow-up to continue, or adjust the request.`;
+  }
+  if (stopReason === 'refusal') return `The model refused this request.${withheld}${earlier} Revise the request before retrying.`;
+  if (stopReason === 'model_context_window_exceeded') {
+    return `The model reached its context window.${withheld}${earlier} Start a new turn with a smaller context.`;
+  }
+  return `The provider returned an unknown or missing stop reason; completion was not confirmed.${withheld}${earlier}`;
+}
 
 /**
  * Provider metadata is public protocol bookkeeping, never a second channel for
@@ -4240,7 +4270,8 @@ export class Engine {
       // The reporting allowance is exactly one provider response, not another
       // investigation loop. Ignore unsolicited calls even from a noncompliant
       // adapter, and never auto-continue a truncated reporting response.
-      yield queryProgress.snapshot(progressIdentity);
+      const loopProgress = queryProgress.snapshot(progressIdentity);
+      yield loopProgress;
       // Normal tool calls have already been persisted. On abort let that batch
       // reach the skipped-result path so every call remains durably paired.
       if (signal?.aborted && (toolCalls.length === 0 || executionPolicy?.finalize || progressReporting)) {
@@ -4252,11 +4283,9 @@ export class Engine {
       // permission. Handle before reporting, async waits, user-append recovery,
       // and duplicate/max-token continuation so none can mask the real reason.
       if (FAILED_PROVIDER_STOPS.has(stopReason)) {
-        const message = stopReason === 'refusal'
-          ? 'The model refused this request. No tools were executed; revise the request before retrying.'
-          : stopReason === 'model_context_window_exceeded'
-            ? 'The model reached its context window. No tools were executed; start a new turn with a smaller context.'
-            : 'The provider returned an unknown or missing stop reason. Completion was not confirmed and no tools were executed.';
+        // This loop's tools have not run yet, so the snapshot counts only earlier loops.
+        const message = failedProviderStopMessage({ stopReason, stopDetails: providerMetadata?.stopDetails,
+          withheldToolCalls: toolCalls.length, earlierToolRuns: loopProgress.toolExecutions });
         yield { type: 'error', error: message, code: stopReason, retryable: false, threadId };
         yield { type: 'turn_end', turnNumber, stopReason, threadId, terminal: true };
         break;
