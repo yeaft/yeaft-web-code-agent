@@ -26,7 +26,7 @@
  * The scene is a function of the wait clock (see wait-clock.js), not of this
  * component, so a re-created indicator resumes the scene in progress.
  */
-import { readWaitClock } from '../../utils/wait-clock.js';
+import { holdWaitClock, readWaitClock } from '../../utils/wait-clock.js';
 
 /** How long a wait shows the "waiting" card before the stage cuts to the scene. */
 export const STAGE_INTRO_MS = 900;
@@ -105,6 +105,7 @@ export function createStageAnimation(scene) {
       let dpr = 1;
       let frameId = null;
       let openTimer = null;
+      let releaseClock = null;
       let onScreen = false;
       let reducedMotion = false;
       let disposed = false;
@@ -173,8 +174,6 @@ export function createStageAnimation(scene) {
         if (openTimer !== null) clearTimeout(openTimer);
         openTimer = null;
         if (disposed || !ctx) return;
-        // A held scene shows one frame whatever the clock says, so it stays open.
-        if (open.value && held()) return;
         const now = Date.now();
         const waited = now - readWaitClock(props.clockKey, now);
         if (waited >= STAGE_INTRO_MS) {
@@ -186,21 +185,22 @@ export function createStageAnimation(scene) {
         openTimer = setTimeout(syncOpen, STAGE_INTRO_MS - waited);
       };
 
-      // A scene that was held or off screen stopped reading its wait clock,
-      // and a clock left unread is forgotten. So whenever it may play again,
-      // check the wait first: a forgotten one starts over from the card
-      // rather than freezing on the scene's first frame.
-      const resume = () => {
+      // A scene that is held, off screen or in a background tab stops reading
+      // its wait clock. The stage holds the clock for as long as it is
+      // mounted, so the wait is still the same wait when the scene draws again.
+      const follow = () => {
+        releaseClock?.();
+        releaseClock = holdWaitClock(props.clockKey);
         syncOpen();
         refresh();
       };
       const recolor = () => {
         colors = null;
-        resume();
+        refresh();
       };
       const onMotionChange = (event) => {
         reducedMotion = event.matches;
-        resume();
+        refresh();
       };
 
       Vue.onMounted(() => {
@@ -215,12 +215,12 @@ export function createStageAnimation(scene) {
           sizeObserver = new ResizeObserver(resize);
           sizeObserver.observe(host);
         }
-        // An off-screen scene neither draws nor keeps its clock alive.
+        // An off-screen scene does not draw.
         if (typeof IntersectionObserver === 'function') {
           viewObserver = new IntersectionObserver((entries) => {
             // Entries are in time order; the last one is the current state.
             onScreen = entries[entries.length - 1].isIntersecting;
-            resume();
+            refresh();
           });
           viewObserver.observe(host);
         } else {
@@ -228,15 +228,15 @@ export function createStageAnimation(scene) {
         }
         themeObserver = new MutationObserver(recolor);
         themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
-        syncOpen();
+        follow();
         resize();
       });
 
       // Post-flush watchers run after the classes are in the DOM, so the
       // colour tokens can be re-read and the opened picture measured.
       Vue.watch(() => props.status, recolor, { flush: 'post' });
-      Vue.watch(() => props.clockKey, resume, { flush: 'post' });
-      Vue.watch(open, resize, { flush: 'post' });
+      Vue.watch(() => props.clockKey, () => { if (ctx) follow(); }, { flush: 'post' });
+      Vue.watch(open, () => { resize(); refresh(); }, { flush: 'post' });
 
       Vue.onBeforeUnmount(() => {
         disposed = true;
@@ -244,6 +244,8 @@ export function createStageAnimation(scene) {
         frameId = null;
         if (openTimer !== null) clearTimeout(openTimer);
         openTimer = null;
+        releaseClock?.();
+        releaseClock = null;
         sizeObserver?.disconnect();
         viewObserver?.disconnect();
         themeObserver?.disconnect();
