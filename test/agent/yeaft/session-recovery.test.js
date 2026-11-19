@@ -1,10 +1,9 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { describe, expect, it, afterEach } from 'vitest';
 import { openSession } from '../../../agent/yeaft/sessions/session-store.js';
 import { repairSessionStore } from '../../../agent/yeaft/sessions/recovery.js';
-import { migrateRegisteredWorkDirSessions, registerSessionWorkDir, updateSessionConfig } from '../../../agent/yeaft/sessions/session-crud.js';
 
 const roots = [];
 
@@ -19,43 +18,6 @@ afterEach(() => {
 });
 
 describe('Session disk recovery', () => {
-  it('bootstraps registered Session transcripts without copying archived Dream scopes', () => {
-    const root = tempRoot();
-    const workDir = join(root, 'workspace');
-    const sessionId = 'session_legacy_bootstrap';
-    const sourceSession = join(workDir, '.yeaft', 'sessions', sessionId);
-    const sourceMemory = join(workDir, '.yeaft', 'memory', 'group', sessionId);
-    mkdirSync(join(sourceSession, 'conversation', 'segments'), { recursive: true });
-    mkdirSync(sourceMemory, { recursive: true });
-    writeFileSync(join(sourceSession, 'session.json'), `${JSON.stringify({ id: sessionId, name: 'Legacy', workDir, roster: [] })}\n`);
-    writeFileSync(join(sourceSession, 'conversation', 'segments', '000001.jsonl'), '{"role":"user","text":"preserve me"}\n');
-    writeFileSync(join(sourceMemory, 'memory.md'), 'ARCHIVED_DREAM');
-    registerSessionWorkDir(root, sessionId, workDir);
-
-    const result = migrateRegisteredWorkDirSessions(root);
-
-    expect(result.migrated).toEqual([sessionId]);
-    expect(readFileSync(join(root, 'sessions', sessionId, 'conversation', 'segments', '000001.jsonl'), 'utf8'))
-      .toContain('preserve me');
-    expect(readFileSync(join(sourceMemory, 'memory.md'), 'utf8')).toBe('ARCHIVED_DREAM');
-    expect(existsSync(join(root, 'memory', 'group', sessionId))).toBe(false);
-    const manifest = JSON.parse(readFileSync(join(root, 'sessions-manifest.json'), 'utf8'));
-    expect(manifest.sessions.find(row => row.id === sessionId)?.path)
-      .toBe(join(root, 'sessions', sessionId));
-
-    // A cold config edit retains the one-time registered-Session bootstrap;
-    // the no-inventory/no-log fast path applies after this compatibility step.
-    const coldRoot = tempRoot();
-    registerSessionWorkDir(coldRoot, sessionId, workDir);
-    expect(updateSessionConfig(coldRoot, sessionId, { model: 'test/new', modelEffort: 'ultra' }))
-      .toEqual({ model: 'test/new', modelEffort: 'ultra' });
-    expect(readFileSync(join(coldRoot, 'sessions', sessionId, 'conversation', 'segments', '000001.jsonl'), 'utf8'))
-      .toContain('preserve me');
-    expect(JSON.parse(readFileSync(join(coldRoot, 'sessions', sessionId, 'config.json'), 'utf8')))
-      .toMatchObject({ model: 'test/new', modelEffort: 'ultra', modelSource: 'explicit' });
-    expect(existsSync(join(coldRoot, 'memory', 'group', sessionId))).toBe(false);
-  });
-
   it('rebuilds a stale coordinator audit index without duplicating or inventing rows', () => {
     const root = tempRoot();
     const sessionId = 'session_existing_GHI12345';

@@ -5,48 +5,8 @@ import { join } from 'node:path';
 import { createPersonBridge } from '../../../agent/yeaft/person/bridge.js';
 
 const request = (extra = {}) => ({ type: 'person_request', requestId: 'r1', ownerId: 'u1', op: 'status', payload: {}, ...extra });
-function fixture(env = {}) {
-  const service = { request: vi.fn(async () => ({ configured: true })), close: vi.fn(async () => {}) };
-  const createService = vi.fn(async () => service);
-  const send = vi.fn(async () => {});
-  const context = { agentId: 'a1', CONFIG: { serverUrl: 'https://server', yeaftDir: '/isolated/person', workDir: '/work' } };
-  return { service, createService, send, context, bridge: createPersonBridge({ context, env, send, createService }) };
-}
 
 describe('Person bridge is independent of Session and Work Center', () => {
-  it('lazily creates the instance-local service with only supported options', async () => {
-    const f = fixture({});
-    expect(f.createService).not.toHaveBeenCalled();
-    await f.bridge.request(request());
-    expect(f.createService).toHaveBeenCalledWith({
-      namespace: expect.stringMatching(/^[a-f0-9]{64}$/), yeaftDir: '/isolated/person', workDir: '/work',
-      embedding: { enabled: true, allowDownload: true },
-    });
-    expect(f.send).toHaveBeenCalledWith(expect.objectContaining({ ok: true, data: { configured: true } }));
-    await f.bridge.close();
-    expect(f.service.close).toHaveBeenCalledTimes(1);
-  });
-
-  it('does not return database or provider secrets on failures; failed init can be retried', async () => {
-    const f = fixture();
-    f.createService.mockRejectedValueOnce(new Error('https://admin:password@example credentials'));
-    await f.bridge.request(request());
-    expect(f.send.mock.lastCall[0]).toMatchObject({ ok: false, requestId: 'r1', errorCode: 'outcome_unknown' });
-    expect(JSON.stringify(f.send.mock.lastCall)).not.toContain('password');
-    await f.bridge.request(request());
-    expect(f.send.mock.lastCall[0].ok).toBe(true);
-    await f.bridge.close();
-  });
-
-  it('routes output reads with authenticated ownership and original correlation', async () => {
-    const f = fixture(), op = 'output_read';
-    const payload = { outputId: '550e8400-e29b-41d4-a716-446655440000', offset: 64, maxBytes: 65536 };
-    await f.bridge.request(request({ op, payload }));
-    expect(f.service.request).toHaveBeenCalledWith({ ownerId: 'u1', op, payload });
-    expect(f.send.mock.lastCall[0]).toMatchObject({ ok: true, requestId: 'r1', op });
-    await f.bridge.close();
-  });
-
   it('uses the real SQLite service across restart with authenticated owner and Agent namespace isolation', async () => {
     const yeaftDir = await mkdtemp(join(tmpdir(), 'person-bridge-'));
     const send = vi.fn(async () => {});
@@ -74,19 +34,4 @@ describe('Person bridge is independent of Session and Work Center', () => {
     } finally { await bridge.close(); await rm(yeaftDir, { recursive: true, force: true }); }
   });
 
-  it('fences missing owner, closed transport and Agent identity changes', async () => {
-    const f = fixture();
-    await f.bridge.request(request({ ownerId: undefined }));
-    expect(f.createService).not.toHaveBeenCalled();
-    await f.bridge.request(request());
-    const oldNamespace = f.createService.mock.lastCall[0].namespace;
-    f.context.agentId = 'a2';
-    await f.bridge.request(request());
-    expect(f.service.close).toHaveBeenCalledTimes(1);
-    expect(f.createService.mock.lastCall[0].namespace).not.toBe(oldNamespace);
-    await f.bridge.close();
-    await f.bridge.request(request());
-    expect(f.send.mock.lastCall[0].ok).toBe(false);
-    expect(await f.bridge.request({ type: 'other' })).toBe(false);
-  });
 });

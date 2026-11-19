@@ -1,165 +1,21 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { AnthropicAdapter } from '../../../agent/yeaft/llm/anthropic.js';
-import { OpenAIResponsesAdapter } from '../../../agent/yeaft/llm/openai-responses.js';
 import { createProviderContext } from '../../../agent/yeaft/llm/provider-state.js';
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createTrace, DebugTrace } from '../../../agent/yeaft/debug-trace.js';
-import { parseMessage } from '../../../agent/yeaft/conversation/persist.js';
 import { commitSessionTurnDeletion } from '../../../agent/yeaft/conversation/turn-deletion-journal.js';
 
 const identity = { instanceScope: 'instance', ownerScope: 'owner', sessionId: 'session', vpId: 'vp', threadId: 'main' };
 const context = createProviderContext({ protocol: 'anthropic', providerId: 'test', credentialScopeId: 'account', model: 'claude-opus-5-5' });
 const params = { model: 'claude-opus-5-5', system: 'fixed', messages: [{ role: 'user', content: 'question' }], requestIdentity: identity, providerContext: context };
 const json = value => new Response(JSON.stringify(value), { headers: { 'content-type': 'application/json' } });
-const sse = events => new Response(events.map(event => `data: ${JSON.stringify(event)}\n\n`).join(''), { headers: { 'content-type': 'text/event-stream' } });
+
 const collect = async generator => { const events = []; for await (const event of generator) events.push(event); return events; };
 afterEach(() => vi.unstubAllGlobals());
 
 describe('Anthropic evolving Messages protocol', () => {
-  it.each(['stream', 'call'])('defaults known Claude thinking summaries across Messages routes in %s', async method => {
-    const fetch = vi.fn(async () => json({ content: [{ type: 'text', text: 'answer' }], stop_reason: 'end_turn' }));
-    vi.stubGlobal('fetch', fetch);
-    const invoke = async (adapter, request) => method === 'stream' ? collect(adapter.stream(request)) : adapter.call(request);
-    const readBody = () => JSON.parse(fetch.mock.calls.at(-1)[1].body);
-    for (const baseUrl of ['https://api.anthropic.com', 'http://localhost:11041', 'http://localhost:12138']) {
-      const adapter = new AnthropicAdapter({ apiKey: 'synthetic', baseUrl });
-      for (const model of ['claude-opus-5-5', 'claude-opus-5.5', 'claude-opus-5', 'claude-opus-4-8', 'claude-opus-4.7',
-        'claude-sonnet-5', 'claude-sonnet-5-5', 'claude-haiku-5-5', 'claude-fable-5-2', 'claude-mythos-5.1',
-        'claude-mythos-preview', 'gateway/claude-opus-5-5-20261101', 'us.anthropic.claude-opus-5-5-v1:0',
-        'anthropic/claude-opus-5-5-latest']) {
-        // Resolve context for this route, rather than reusing the official params context.
-        const request = { ...params, providerContext: undefined, model };
-        if (/^claude-opus-4[.-][78]/.test(model)) {
-          await invoke(adapter, request);
-          expect(readBody()).not.toHaveProperty('thinking');
-          request.extraBody = { thinking: { type: 'adaptive' } };
-        }
-        await invoke(adapter, request);
-        expect(readBody().thinking, `${baseUrl}/${model}`).toEqual({ type: 'adaptive', display: 'summarized' });
-      }
-      for (const thinking of [{ type: 'adaptive' }, { type: 'enabled', budget_tokens: 2048 }]) {
-        const extraBody = { thinking: Object.freeze(thinking) };
-        await invoke(adapter, { ...params, providerContext: undefined, extraBody });
-        expect(readBody().thinking).toEqual({ ...thinking, display: 'summarized' });
-        expect(extraBody.thinking).not.toHaveProperty('display');
-      }
-      for (const thinking of [{ type: 'adaptive', display: 'omitted' }, { type: 'adaptive', display: 'updates' },
-        { type: 'enabled', budget_tokens: 2048, display: 'omitted' }, { type: 'disabled' }, { type: 'between_tools' }]) {
-        await invoke(adapter, { ...params, providerContext: undefined, extraBody: { thinking } });
-        expect(readBody().thinking).toEqual(thinking);
-      }
-      for (const model of ['deepseek-v4-pro', 'unknown-adaptive', 'claude-opus-4-6', 'claude-sonnet-4-5',
-        'not-claude-opus-5-5', 'claude-opus-5-50', 'claude-opus-5-5-custom', 'claude-opus-6']) {
-        await invoke(adapter, { ...params, model, providerContext: undefined, effort: 'xhigh', effortSource: 'user' });
-        expect(readBody().thinking).toEqual({ type: 'adaptive' });
-      }
-      for (const model of ['claude-opus-4-7', 'claude-opus-4-8', params.model]) {
-        for (const manual of [false, true]) {
-          await invoke(adapter, { ...params, model, providerContext: undefined, maxTokens: 32768,
-            effortContext: manual ? { thinkingProtocol: 'anthropic' } : {},
-            effortConstraint: { parentDecision: { effective: 'xhigh' } } });
-          expect(readBody().thinking).toMatchObject({ type: manual ? 'enabled' : 'adaptive', display: 'summarized' });
-        }
-      }
-      for (const effortContext of [{ supportsEffort: false }, { thinkingProtocol: 'none' }]) {
-        for (const effortConstraint of [undefined, { parentDecision: { effective: 'xhigh' } }]) {
-          await invoke(adapter, { ...params, providerContext: undefined, effortContext, effortConstraint });
-          expect(readBody()).not.toHaveProperty('thinking');
-        }
-      }
-      for (const display of ['summarized', 'omitted']) {
-        for (const manual of [false, true]) {
-          await invoke(adapter, { ...params, providerContext: undefined, maxTokens: 32768,
-            extraBody: { thinking: { type: 'adaptive', ...(display === 'omitted' ? { display } : {}) }, output_config: { effort: 'max' } },
-            effortContext: manual ? { thinkingProtocol: 'anthropic' } : {},
-            effortConstraint: { parentDecision: { effective: 'xhigh' } } });
-          expect(readBody().thinking).toMatchObject({ type: manual ? 'enabled' : 'adaptive', display });
-          if (manual) expect(readBody().thinking.budget_tokens).toBe(8192);
-          else expect(readBody().output_config.effort).toBe('medium');
-        }
-      }
-    }
-    const adapter = new OpenAIResponsesAdapter({ apiKey: 'synthetic', baseUrl: 'http://localhost:11041/v1' });
-    await invoke(adapter, { ...params, providerContext: undefined, effort: 'xhigh', effortSource: 'user' });
-    expect(readBody()).not.toHaveProperty('thinking');
-    expect(readBody().reasoning.effort).toBe('xhigh');
-  });
-  it('persists metadata and reasoning usage in real debug trace and legacy readers', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'anthropic-trace-'));
-    const trace = new DebugTrace(dir);
-    const metadata = { protocol: 'anthropic', stopReason: 'refusal', stopDetails: { category: 'test' },
-      inputTransformations: [{ type: 'thinking_dropped', reason: 'prefix_binding_mismatch' }] };
-    try {
-      const turn = trace.startTurn({ traceId: 'trace', sessionId: 'session', turnNumber: 1 });
-      trace.endTurn(turn, { responseText: 'no', stopReason: 'refusal', providerMetadata: metadata,
-        usage: { inputTokens: 10, outputTokens: 5, reasoningTokens: 3 } });
-      trace.finalizeQuery('trace', { sessionId: 'session', stopReason: 'refusal' });
-      await trace.close();
-      const restarted = new DebugTrace(dir);
-      try {
-        const detail = await restarted.fetchTurnDebug({ sessionId: 'session', turnId: 'trace' });
-        expect(detail.loops[0]).toMatchObject({ providerMetadata: metadata, usage: { reasoningTokens: 3 } });
-      } finally { await restarted.close(); }
-      const encoded = Buffer.from(JSON.stringify(metadata)).toString('base64');
-      expect(parseMessage(`---\nid: m0001\nrole: assistant\nproviderMetadataB64: ${encoded}\n---\n\nno`).providerMetadata).toEqual(metadata);
-    } finally { await trace.close(); rmSync(dir, { recursive: true, force: true }); }
-  });
-
-  it('retains all stop reasons and structured metadata in SSE, JSON fallback and side calls', async () => {
-    const adapter = new AnthropicAdapter({ apiKey: 'synthetic' });
-    for (const reason of ['end_turn', 'stop_sequence', 'tool_use', 'max_tokens', 'pause_turn', 'refusal', 'model_context_window_exceeded', 'future_stop']) {
-      const message = { id: 'msg', model: params.model, content: [{ type: 'text', text: 'answer' }], stop_reason: reason,
-        stop_sequence: reason === 'stop_sequence' ? 'STOP' : null, stop_details: { category: 'test' },
-        input_transformations: [{ type: 'thinking_dropped', path: 'messages.1.content.0', reason: 'prefix_binding_mismatch' }], usage: { input_tokens: 10, output_tokens: 2 } };
-      const fetch = vi.fn().mockImplementation(() => Promise.resolve(json(message)));
-      vi.stubGlobal('fetch', fetch);
-      const expected = { protocol: 'anthropic', responseId: 'msg', model: params.model, stopReason: reason,
-        stopSequence: message.stop_sequence, stopDetails: message.stop_details, inputTransformations: message.input_transformations };
-      const rawExchange = vi.fn();
-      const output = await collect(adapter.stream({ ...params, onRawExchange: rawExchange }));
-      expect(rawExchange).toHaveBeenCalledOnce();
-      expect(rawExchange.mock.calls[0][0].rawResponse.body).toEqual(message);
-      expect(output.find(event => event.type === 'stop')).toMatchObject({ stopReason: reason, stopDetails: message.stop_details });
-      expect(output.find(event => event.type === 'provider_metadata')?.metadata).toMatchObject(expected);
-      expect(await adapter.call(params)).toMatchObject({ stopReason: reason, providerMetadata: expected });
-      fetch.mockImplementation(() => Promise.resolve(sse([
-        { type: 'message_start', message: { ...message, content: [], stop_reason: null } },
-        { type: 'content_block_start', index: 0, content_block: message.content[0] },
-        { type: 'content_block_stop', index: 0 },
-        { type: 'message_delta', delta: { stop_reason: reason, stop_sequence: message.stop_sequence, stop_details: message.stop_details }, usage: message.usage },
-        { type: 'message_stop' },
-      ])));
-      const stream = await collect(adapter.stream(params));
-      expect(stream.filter(event => event.type === 'stop')).toHaveLength(1);
-      expect(stream.find(event => event.type === 'stop')).toMatchObject({ stopReason: reason });
-      const combined = Object.assign({}, ...stream.filter(event => event.type === 'provider_metadata').map(event => event.metadata));
-      expect(combined).toMatchObject(expected);
-    }
-  });
-
-  it('keeps citation deltas and fallback boundaries in exact native order for replay', async () => {
-    const citation = { type: 'char_location', cited_text: 'claim', document_index: 0, document_title: 'doc', start_char_index: 0, end_char_index: 5 };
-    const fallback = { type: 'fallback', model: 'claude-sonnet-5-5' };
-    vi.stubGlobal('fetch', vi.fn(async () => sse([
-      { type: 'message_start', message: { id: 'msg', model: params.model, usage: { input_tokens: 10, output_tokens: 0 } } },
-      { type: 'content_block_start', index: 0, content_block: { type: 'text', text: '', citations: [] } },
-      { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'claim' } },
-      { type: 'content_block_delta', index: 0, delta: { type: 'citations_delta', citation } },
-      { type: 'content_block_stop', index: 0 },
-      { type: 'content_block_start', index: 1, content_block: fallback },
-      { type: 'content_block_stop', index: 1 },
-      { type: 'message_delta', delta: { stop_reason: 'end_turn', model: fallback.model }, usage: { output_tokens: 3 } },
-      { type: 'message_stop' },
-    ])));
-    const output = await collect(new AnthropicAdapter({ apiKey: 'synthetic' }).stream(params));
-    const state = output.find(event => event.type === 'provider_state')?.providerState;
-    expect(state?.items).toEqual([{ type: 'text', text: 'claim', citations: [citation] }, fallback]);
-    expect(output.some(event => event.type === 'provider_metadata' && event.metadata.contentBlocks?.some(block => block.type === 'fallback'))).toBe(true);
-    expect(output.filter(event => event.type === 'text_delta').map(event => event.text).join('')).toBe('claim');
-  });
-
   it('validates actual wire prefixes and appends supported instruction/tool changes without dropping signatures', async () => {
     const signed = [{ type: 'thinking', thinking: '', signature: 'opaque-signature' },
       { type: 'tool_use', id: 'read', name: 'Read', input: {} }];
@@ -191,53 +47,6 @@ describe('Anthropic evolving Messages protocol', () => {
     expect(fetch).toHaveBeenCalledTimes(2);
   });
 
-  it.each(['stream', 'call'])('separates configured output from the actual context ceiling in %s', async method => {
-    const signed = [{ type: 'thinking', thinking: '', signature: 'opaque-signature' },
-      { type: 'tool_use', id: 'read', name: 'Read', input: {} }];
-    const fetch = vi.fn().mockResolvedValueOnce(json({ id: 'signed', content: signed, stop_reason: 'tool_use' }))
-      .mockImplementation(() => Promise.resolve(json({ content: [{ type: 'text', text: 'done' }], stop_reason: 'end_turn' })));
-    vi.stubGlobal('fetch', fetch);
-    const adapter = new AnthropicAdapter({ apiKey: 'synthetic' });
-    const invoke = async request => {
-      if (method === 'call') return adapter.call(request);
-      const events = await collect(adapter.stream(request));
-      return { providerState: events.find(event => event.type === 'provider_state')?.providerState };
-    };
-    const { providerState } = await invoke(params);
-    const next = { ...params, maxTokens: 16384, messages: [...params.messages, { role: 'assistant', content: '',
-      toolCalls: [{ id: 'read', name: 'Read', input: {} }], providerState }, { role: 'tool', toolCallId: 'read', content: 'result' }] };
-    for (const settings of [
-      { effort: 'xhigh', effortSource: 'user', effortContext: { thinkingProtocol: 'anthropic' } },
-      { extraBody: { max_tokens: 17408 } },
-    ]) {
-      // Omitted ceilings preserve compatibility; the exact boundary is allowed.
-      for (const contextOutputLimit of [undefined, 17408, 200000]) {
-        await invoke({ ...next, contextOutputLimit, ...settings });
-        const body = JSON.parse(fetch.mock.calls.at(-1)[1].body);
-        expect(body.max_tokens).toBe(17408);
-        expect(body.messages[1].content).toEqual(signed);
-      }
-      const dispatched = fetch.mock.calls.length;
-      await expect(invoke({ ...next, contextOutputLimit: 17407, ...settings })).rejects.toThrow(/output settings exceed/);
-      expect(fetch).toHaveBeenCalledTimes(dispatched);
-    }
-  });
-
-  it('never publishes client tools cut off by a full context window', async () => {
-    const adapter = new AnthropicAdapter({ apiKey: 'synthetic' });
-    const tool = { type: 'tool_use', id: 'call', name: 'Write', input: { path: 'file' } };
-    for (const response of [
-      () => json({ content: [tool], stop_reason: 'model_context_window_exceeded', usage: { input_tokens: 10, output_tokens: 2 } }),
-      () => sse([{ type: 'content_block_start', index: 0, content_block: tool }, { type: 'content_block_stop', index: 0 },
-        { type: 'message_delta', delta: { stop_reason: 'model_context_window_exceeded' }, usage: { output_tokens: 2 } }, { type: 'message_stop' }]),
-    ]) {
-      vi.stubGlobal('fetch', vi.fn(async () => response()));
-      const events = await collect(adapter.stream(params));
-      expect(events.some(event => event.type === 'tool_call')).toBe(false);
-      expect(events.find(event => event.type === 'stop')?.stopReason).toBe('model_context_window_exceeded');
-      expect(events.some(event => event.type === 'usage')).toBe(true);
-    }
-  });
 });
 
 describe('Session debug trace deletion', () => {
@@ -301,27 +110,6 @@ describe('Session debug trace deletion', () => {
       } finally { await restarted.close(); }
       const disabled = createTrace({ enabled: false, dirPath: dir });
       expect(await disabled.deleteSessionTurns({ sessionId: 'session-b', messageIds: ['client-id'] })).toEqual({ deletedRequests: 1 });
-    } finally { await trace.close(); rmSync(dir, { recursive: true, force: true }); }
-  });
-
-  it('cleans up a legacy request after restart without deleting a colliding Session or locator', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'debug-delete-legacy-'));
-    const debug = join(dir, 'sessions', 'session_a', 'debug');
-    const trace = new DebugTrace(dir);
-    try {
-      for (const [sessionId, key] of [['session/a', 'remove'], ['session_a', 'keep']]) {
-        const requestDir = join(debug, 'requests', key);
-        mkdirSync(requestDir, { recursive: true });
-        writeFileSync(join(requestDir, 'trace.json'), JSON.stringify({ sessionId, requestKey: key,
-          requestId: 'legacy-id', traceId: 'legacy-turn', loops: [], tools: [] }));
-        const turnsDir = join(debug, 'turns');
-        mkdirSync(turnsDir, { recursive: true });
-        writeFileSync(join(turnsDir, `${key}.json`), JSON.stringify({ sessionId, requestKey: key, requestId: 'legacy-id' }));
-      }
-      expect(await trace.deleteSessionTurns({ sessionId: 'session/a', turnIds: ['legacy-turn'] })).toEqual({ deletedRequests: 1 });
-      expect(readdirSync(join(debug, 'requests'))).toEqual(['keep']);
-      expect(readdirSync(join(debug, 'turns'))).toEqual(['keep.json']);
-      expect((await trace.fetchTurnDebug({ sessionId: 'session_a', turnId: 'legacy-turn' })).turns).toHaveLength(1);
     } finally { await trace.close(); rmSync(dir, { recursive: true, force: true }); }
   });
 

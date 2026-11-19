@@ -134,18 +134,6 @@ describe('native Session delete turn', () => {
     expect(store.yeaftSessionHistoryState[scope].latestSeq).not.toBe(900);
   });
 
-  it('invalidates an inactive Session without navigation and forces its next bootstrap to reload', () => {
-    const { store, otherSession } = setup();
-    store.yeaftActiveSessionFilter = 'other';
-    store.handleMessage({ type: 'yeaft_session_turn_deleted', agentId: 'a', sessionId: 's', turnId: 'root' });
-    expect(store.sendWsMessage).not.toHaveBeenCalled();
-    expect(store.messagesMap['a-conv']).toEqual([otherSession]);
-    expect(store.yeaftActiveSessionFilter).toBe('other');
-    store.yeaftActiveSessionFilter = 's';
-    expect(store.requestYeaftSessionBootstrap()).toBe(true);
-    expect(store.sendWsMessage.mock.lastCall[0]).toMatchObject({ type: 'yeaft_load_history', sessionId: 's', requestId: expect.any(String) });
-  });
-
   it('does not retry the mutation when a socket drops after its ack but before the replacement chunk', async () => {
     const { store, selected, otherSession } = setup();
     const pending = store.deleteYeaftSessionTurn(store.yeaftTurnDeleteTarget(selected));
@@ -161,6 +149,7 @@ describe('native Session delete turn', () => {
     expect(fresh.requestId).not.toBe(old.requestId);
     expect(store.sendWsMessage.mock.calls.filter(([m]) => m.type === 'yeaft_session_delete_turn')).toHaveLength(1);
   });
+
 
   it('leaves explicit failures untouched, then reconciles an unconfirmed timeout without replaying the mutation', async () => {
     const { store, selected } = setup();

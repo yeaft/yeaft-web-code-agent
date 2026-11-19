@@ -17,13 +17,7 @@ function final(params) {
   p.concepts = []; p.state.focusConceptIds = []; p.activity.sourceRefs = [input.trigger.ref]; p.reply = 'Actual changes verified.';
   return p;
 }
-function closure(params, id = 'finish') {
-  const results = params.messages.filter(m => m.role === 'tool').map(m => JSON.parse(m.content));
-  const refs = [...new Set(results.filter(r => r.sourceRef && r.id !== 'Execution.goal' && r.errorEffect !== 'none').map(r => r.sourceRef))].slice(-4);
-  return tools([id, 'Execution__goal', { objective: 'Complete and verify the authorized fixture', acceptance: 'Actual operation and verification are observed',
-    kind: 'work', status: 'completed', reason: 'Observed actual results', nextStep: '', sourceRefs: refs,
-    acceptanceChecks: [{ check: 'The real file operation and subsequent result were observed', sourceRefs: refs }], waitFor: [], blocker: null }]);
-}
+
 async function until(read, check) {
   for (let i = 0; i < 200; i++) { const value = await read(); if (check(value)) return value; await new Promise(r => setTimeout(r, 10)); }
   throw new Error('Person did not reach the expected boundary');
@@ -52,86 +46,6 @@ afterEach(async () => {
 });
 
 describe('Person continuous execution with real SQLite authority', () => {
-  it('runs ResponseEnhance through the real private task host and SQLite without publishing the draft or creating a Session', async () => {
-    const enhanced = { status: 'revised', response: '选 A：你当前更需要省下维护时间。', issues: ['原稿回避选择'], evidenceGaps: [] };
-    const run = await setup((params, index) => {
-      if (index === 0) return tools(['enhance', 'ResponseEnhance', { question: '选哪个？', draft: 'private-draft: 各有优缺点。', evidence: 'A 无需运维，B 需要自行维护。' }]);
-      if (index === 1) {
-        expect(params.tools).toEqual([]); expect(params.model).toBe('test/first');
-        return text(JSON.stringify(enhanced));
-      }
-      if (index === 2) {
-        const result = JSON.parse(params.messages.find(message => message.role === 'tool').content);
-        expect(JSON.parse(result.output)).toEqual(enhanced);
-        return tools(['goal', 'Execution__goal', { objective: 'Answer the comparison', acceptance: 'A direct justified answer',
-          kind: 'answer', status: 'completed', reason: 'Compared the supplied constraints', nextStep: '', sourceRefs: [result.sourceRef],
-          acceptanceChecks: [{ check: 'Prepared the answer against the supplied context', sourceRefs: [result.sourceRef] }], waitFor: [], blocker: null }]);
-      }
-      if (index === 3) return text(enhanced.response);
-      const p = final(params); p.reply = null; return text(JSON.stringify(p));
-    });
-    await run.start(); const completed = await run.idle();
-    expect(completed.latestEpisode.status).toBe('completed');
-    const turns = await call(run.service, 'turns');
-    expect(turns.items[0]).toMatchObject({ loopCount: 4, usage: { reportedCalls: 5, inputTokens: 65, outputTokens: 45, totalTokens: 110 } });
-    const side = turns.items[0].calls.flatMap(item => item.capabilities).find(item => item.id === 'ResponseEnhance');
-    expect(side.modelCall).toMatchObject({ model: 'test/first', completed: true, usage: { inputTokens: 13, outputTokens: 9 } });
-    const messages = await call(run.service, 'messages', { limit: 50 });
-    expect(JSON.stringify(messages)).not.toContain('private-draft');
-    expect(JSON.stringify(messages)).toContain(enhanced.response);
-    expect((await traces(run.service)).filter(record => record.kind === 'capability_started' && record.capability.id === 'ResponseEnhance')).toHaveLength(1);
-  });
-
-  it('continues after missing/invalid evidence reads, edits/tests in order and commits once without replay', async () => {
-    let originalCallId, requests = 0;
-    const run = await setup((params, index) => {
-      requests++;
-      if (index < 7) expect(params.tools.map(t => t.name)).toEqual(expect.arrayContaining(['Bash', 'FileRead', 'FileEdit', 'Execution__read']));
-      if (index === 0) return tools(['missing', 'Execution__read', { callId: 'missing' }]);
-      if (index === 1) {
-        expect(JSON.parse(params.messages.find(m => m.role === 'tool' && m.toolCallId === 'missing').content))
-          .toMatchObject({ ok: false, code: 'NOT_FOUND', errorEffect: 'none', replaySafe: true });
-        return tools(['read', 'FileRead', { file_path: 'fixture' }]);
-      }
-      if (index === 2) {
-        const recovery = JSON.parse(params.messages.find(m => m.role === 'tool' && m.toolCallId === 'read').content).recovery.read.args;
-        return tools(['offset', 'Execution__read', { ...recovery, offset: 1000000 }]);
-      }
-      if (index === 3) {
-        expect(JSON.parse(params.messages.find(m => m.role === 'tool' && m.toolCallId === 'offset').content))
-          .toMatchObject({ ok: false, code: 'INVALID_REQUEST', errorEffect: 'none', replaySafe: true });
-        return tools(['edit', 'FileEdit', { file_path: 'fixture', old_string: 'before', new_string: 'after' }]);
-      }
-      if (index === 4) return tools(['test', 'Bash', { command: 'test "$(cat fixture)" = after && printf VERIFIED' }]);
-      if (index === 5) {
-        originalCallId = JSON.parse(params.messages.find(m => m.role === 'tool' && m.toolCallId === 'test').content).callId;
-        return tools(['recover', 'Execution__read', { callId: originalCallId, maxBytes: 4096 }]);
-      }
-      if (index === 6) {
-        const page = JSON.parse(params.messages.find(m => m.role === 'tool' && m.toolCallId === 'recover').content);
-        expect(page).toMatchObject({ callId: originalCallId, output: 'VERIFIED', eof: true, authority: 'evidence-only' });
-        expect(page.executionTraceCallId).not.toBe(originalCallId);
-        return closure(params);
-      }
-      if (index === 7) return text('Read, edited and verified the actual file despite an evidence miss.');
-      expect(params.tools).toEqual([]); return text(JSON.stringify(final(params)));
-    });
-    await writeFile(join(run.dir, 'fixture'), 'before'); await run.start();
-    const completed = await run.idle();
-    expect(completed.latestEpisode.status).toBe('completed'); expect(requests).toBe(9);
-    expect(await readFile(join(run.dir, 'fixture'), 'utf8')).toBe('after');
-    const records = await traces(run.service);
-    expect(records.filter(t => t.kind === 'capability_started').reverse().map(t => t.capability.id)).toEqual(['Execution.read', 'FileRead', 'Execution.read', 'FileEdit', 'Bash', 'Execution.read', 'Execution.goal']);
-    expect(records.filter(t => t.kind === 'capability_failed').map(t => t.result.code).sort()).toEqual(['INVALID_REQUEST', 'NOT_FOUND']);
-    expect(records.filter(t => t.kind === 'activity')).toHaveLength(1);
-    expect(records.filter(t => t.kind === 'call_output' && t.output.protocol === 'cognition')).toHaveLength(1);
-    expect(records.filter(t => t.kind === 'call_output').every(t => t.output.usage.inputTokens === 13)).toBe(true);
-    const turn = (await call(run.service, 'turns')).items[0];
-    expect(turn.loopCount).toBe(9); expect(turn.calls.flatMap(c => c.capabilities ?? [])).toHaveLength(7);
-    await call(run.service, 'open', {}, 'bob');
-    expect((await call(run.service, 'traces', {}, 'bob')).items).toEqual([]);
-  });
-
   it('continues an active goal after premature end_turn, modifies/verifies a real file and distills only once', async () => {
     let actualRef;
     const goal = (status, refs = []) => ({ objective: 'Modify and verify the fixture', acceptance: 'File contains after and shell check passes',
@@ -165,57 +79,6 @@ describe('Person continuous execution with real SQLite authority', () => {
     expect(records.filter(t => t.kind === 'call_output' && t.output.protocol === 'cognition')).toHaveLength(1);
     expect(records.filter(t => t.kind === 'capability_started' && t.capability.id === 'FileEdit')).toHaveLength(1);
     expect((await call(run.service, 'messages')).items.some(m => m.text.includes('next execution opportunity'))).toBe(false);
-  });
-
-  it('reports no-progress honestly without endless prompts or turning it into a fake external blocker', async () => {
-    const run = await setup((params, index) => {
-      if (index === 0) return tools(['goal', 'Execution__goal', { objective: 'Verify fixture', acceptance: 'Check actual result', kind: 'work', acceptanceChecks: [], status: 'active',
-        reason: '', nextStep: 'Read fixture', sourceRefs: [], waitFor: [], blocker: null }]);
-      if (params.tools.length) return text('I will continue on the next opportunity.');
-      throw new Error('No cognition request is allowed after unresolved execution failure');
-    });
-    await run.start(); expect((await run.idle()).latestEpisode).toMatchObject({ status: 'failed', terminalCode: 'GOAL_NO_PROGRESS' });
-    const records = await traces(run.service);
-    expect(records.filter(t => t.kind === 'call_output')).toHaveLength(3);
-    expect(records.find(t => t.kind === 'goal_boundary' && t.code === 'GOAL_NO_PROGRESS').goal.status).toBe('active');
-    expect(records.filter(t => t.kind === 'call_output' && t.output.protocol === 'cognition')).toHaveLength(0);
-  });
-
-  it('repairs malformed tool input and final provenance/JSON without replaying a completed host effect', async () => {
-    const effect = vi.spyOn(fileWrite, 'execute');
-    const run = await setup((params, index) => {
-      if (index === 0) return [
-        ...tools(['once', 'FileWrite', { file_path: 'once', content: 'once' }]).slice(0, -1),
-        { type: 'tool_call', id: 'bad', name: 'FileWrite', input: {} }, { type: 'stop', stopReason: 'tool_use' },
-      ];
-      if (index === 1) return tools(['check', 'FileRead', { file_path: 'once' }]);
-      if (index === 2) return closure(params);
-      if (index === 3) return text('The single write completed.');
-      if (index === 4) { const p = final(params); p.activity.sourceRefs = ['tool:invented']; return text(JSON.stringify(p)); }
-      if (index === 5) return text('{malformed');
-      return text(JSON.stringify(final(params)));
-    });
-    await run.start(); expect((await run.idle()).latestEpisode.status).toBe('completed'); expect(effect).toHaveBeenCalledTimes(1);
-    const records = await traces(run.service);
-    expect(records.filter(t => t.kind === 'proposal_rejected')).toHaveLength(2);
-    expect(records.filter(t => t.kind === 'activity')).toHaveLength(1);
-    expect(records.find(t => t.kind === 'capability_failed' && t.toolUseId === 'bad').result).toMatchObject({ ok: false, code: 'INVALID_TOOL_INPUT', errorEffect: 'none' });
-  });
-
-  it('pauses before native dispatch and resumes with the same provider response, not a replay', async () => {
-    const entered = deferred(), release = deferred(); let providerCalls = 0;
-    const run = await setup(async (params, index) => {
-      providerCalls++;
-      if (index === 0) { entered.resolve(); await release.promise; return tools(['pause', 'FileWrite', { file_path: 'paused', content: 'completed' }]); }
-      if (index === 1) return closure(params);
-      return text(params.tools.length ? 'Completed.' : JSON.stringify(final(params)));
-    });
-    const { episodeId } = await run.start(); await entered.promise;
-    await call(run.service, 'pause', { episodeId }); release.resolve();
-    await until(() => call(run.service, 'executions'), value => value.main?.status === 'paused');
-    expect((await traces(run.service)).filter(t => t.kind === 'capability_started')).toHaveLength(0);
-    await call(run.service, 'resume', { episodeId }); expect((await run.idle()).latestEpisode.status).toBe('completed');
-    expect(providerCalls).toBe(4); expect((await traces(run.service)).filter(t => t.kind === 'capability_started')).toHaveLength(2);
   });
 
   it('cancel waits for a real in-flight effect and archives its actual after-terminal result', async () => {

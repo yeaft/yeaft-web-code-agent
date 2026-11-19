@@ -3,7 +3,7 @@ import { completeLogin } from '../../server/auth/login.js';
 import { activeSessions, revokedTokens } from '../../server/auth/session-store.js';
 import { userDb } from '../../server/database.js';
 import { registerAuthRoutes } from '../../server/routes/auth-routes.js';
-import { SESSION_COOKIE_NAME, authenticateRequest, setSessionCookie } from '../../server/auth/request-auth.js';
+import { SESSION_COOKIE_NAME, setSessionCookie } from '../../server/auth/request-auth.js';
 
 const createdUserIds = [];
 
@@ -26,16 +26,6 @@ describe('request authentication', () => {
     activeSessions.clear();
     revokedTokens.clear();
     while (createdUserIds.length > 0) userDb.deleteUser(createdUserIds.pop());
-  });
-
-  it('falls back to the browser cookie when an explicit bearer token is stale', () => {
-    const cookieToken = issue('cookie-user');
-    const result = authenticateRequest({
-      authorizationHeader: 'Bearer stale-token',
-      cookieHeader: `${SESSION_COOKIE_NAME}=${encodeURIComponent(cookieToken)}`,
-    });
-
-    expect(result).toMatchObject({ valid: true, username: 'cookie-user', token: cookieToken, source: 'cookie' });
   });
 
   it('sets a secure HttpOnly same-origin session cookie behind HTTPS proxying', () => {

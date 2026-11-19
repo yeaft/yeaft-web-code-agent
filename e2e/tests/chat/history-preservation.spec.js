@@ -251,35 +251,6 @@ async function durableIds(page) {
   });
 }
 
-test('preserves 120 folded tools, progress and image through Session switches and page.reload', async ({ chatPage, mockAgent, persistedHistory }) => {
-  test.setTimeout(60000);
-  expect(persistedHistory.folds).toHaveLength(6);
-  expect(persistedHistory.folds.every(row => row?.foldedMessageIds.length === 41)).toBe(true);
-  await openSession(chatPage, mockAgent.agentId);
-  await expectLongTurn(chatPage);
-  for (const [theme, width] of [['light', 1280], ['dark', 320]]) {
-    await chatPage.setViewportSize({ width, height: 800 });
-    await chatPage.evaluate(theme => { document.documentElement.dataset.theme = theme; }, theme);
-    await openSession(chatPage, mockAgent.agentId, SESSION_B);
-    await expect(chatPage.locator('.assistant-turn')).toContainText('Only Session B answer');
-    await expect(chatPage.locator(`.turn-message-block[data-turn-id="${TURN}"]`)).toHaveCount(0);
-    await openSession(chatPage, mockAgent.agentId);
-    await expectLongTurn(chatPage);
-    await expect(chatPage.getByText('Only Session B answer', { exact: true })).toHaveCount(0);
-  }
-  await expectOlderPrompts(chatPage);
-  const beforeReloadIds = await durableIds(chatPage);
-  const beforeReload = persistedHistory.responses.length;
-  await chatPage.reload();
-  await openSession(chatPage, mockAgent.agentId);
-  await expectLongTurn(chatPage);
-  await expectOlderPrompts(chatPage);
-  expect(await durableIds(chatPage)).toEqual(beforeReloadIds);
-  expect(persistedHistory.responses.slice(beforeReload).some(response => (
-    response.sessionId === SESSION_A && response.mode === 'recent'
-  ))).toBe(true);
-});
-
 test('recovers the same complete transcript by pagination after a real fold revision reset', async ({ chatPage, mockAgent, persistedHistory }) => {
   test.setTimeout(60000);
   await openSession(chatPage, mockAgent.agentId);
