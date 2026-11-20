@@ -6,6 +6,7 @@ import { ConversationStore } from '../../../../agent/yeaft/conversation/persist.
 import { closeConversationHistoryIndexes } from '../../../../agent/yeaft/conversation/history-index.js';
 import { createSessionFromSpec, mergeSessions } from '../../../../agent/yeaft/sessions/session-crud.js';
 import { persistYeaftAttachments } from '../../../../agent/yeaft/attachments.js';
+import { readSessionAttachmentChunk } from '../../../../agent/yeaft/session-attachment-read.js';
 
 const roots = [];
 function root() {
@@ -115,9 +116,15 @@ describe('durable native Session fork and merge', () => {
     const store = new ConversationStore(dir);
     const asset = persistYeaftAttachments([{ name: 'asset.txt', data: Buffer.from('asset').toString('base64') }],
       { yeaftDir: dir, sessionId: source.id }).promptAttachments[0];
-    request(store, source.id, 'source', 1, { attachments: [asset] });
+    const { user } = request(store, source.id, 'source', 1, { attachments: [asset] });
     request(store, other.id, 'other', 2);
+    const { user: misplaced } = request(store, 'session_misplaced', 'misplaced', 3, { attachments: [asset] });
+    const read = (sessionId, messageId) => readSessionAttachmentChunk({ sessionId, attachmentId: `${messageId}.0`, offset: 0, download: true }, dir);
+    expect(read(source.id, user.id)).toMatchObject({ size: 5, filename: 'asset.txt', content: 'YXNzZXQ=' });
+    expect(read(other.id, user.id)).toEqual({ error: 'not_found' });
+    expect(read('session_misplaced', misplaced.id)).toEqual({ error: 'not_found' });
     const before = readdirSync(join(dir, 'sessions')).sort();
+    const existingManifest = JSON.parse(readFileSync(join(dir, 'sessions-manifest.json'), 'utf8')).sessions.map(row => row.id).sort();
     // Fail after target-owned assets and transcript have been published.
     const original = ConversationStore.prototype.mergeSessions;
     vi.spyOn(ConversationStore.prototype, 'mergeSessions').mockImplementation(function (...args) {
@@ -126,7 +133,7 @@ describe('durable native Session fork and merge', () => {
     });
     expect(() => mergeSessions(dir, source.id, other.id, options)).toThrow('injected finalization failure');
     expect(readdirSync(join(dir, 'sessions')).sort()).toEqual(before);
-    expect(JSON.parse(readFileSync(join(dir, 'sessions-manifest.json'), 'utf8')).sessions.map(row => row.id).sort()).toEqual(before);
+    expect(JSON.parse(readFileSync(join(dir, 'sessions-manifest.json'), 'utf8')).sessions.map(row => row.id).sort()).toEqual(existingManifest);
     expect(readFileSync(asset.path, 'utf8')).toBe('asset');
     expect(raw(dir, source.id)).toHaveLength(2);
     expect(raw(dir, other.id)).toHaveLength(2);

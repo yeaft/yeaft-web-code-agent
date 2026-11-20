@@ -4,7 +4,8 @@ import { CONFIG } from '../config.js';
 import { userDb } from '../database.js';
 import { pendingFiles, previewFiles } from '../context.js';
 import { PREVIEW_FILE_TTL_MS, prunePreviewFiles } from '../preview-files.js';
-import { yeaftAssetStore } from '../yeaft-asset-store.js';
+import { detectImageMime, yeaftAssetStore } from '../yeaft-asset-store.js';
+import { readSessionAttachment } from '../session-attachment-relay.js';
 import { openWorkbenchVideo, readWorkbenchPreview, WORKBENCH_VIDEO_CHUNK_BYTES } from '../workbench-preview.js';
 
 // 文件上传配置 (存储在内存中)
@@ -136,7 +137,7 @@ setInterval(() => prunePreviewFiles(), Math.min(60 * 1000, PREVIEW_FILE_TTL_MS))
 /**
  * Register file upload and preview routes.
  */
-export function registerUploadRoutes(app, { requireAuth }) {
+export function registerUploadRoutes(app, { requireAuth, requireSessionAuth = requireAuth }) {
   app.post('/api/upload', requireAuth, upload.array('files', 10), (req, res) => {
     if (!req.files || req.files.length === 0) {
       return res.status(400).json({ error: 'No files uploaded' });
@@ -164,6 +165,52 @@ export function registerUploadRoutes(app, { requireAuth }) {
     });
 
     res.json({ files: uploaded });
+  });
+
+  app.get('/api/yeaft/session-attachments/:agentId/:sessionId/:attachmentId', requireSessionAuth, async (req, res) => {
+    const controller = new AbortController();
+    // Bound the whole stream too: a browser that stops draining must not
+    // pin a transfer slot indefinitely.
+    const timeout = setTimeout(() => {
+      controller.abort();
+      if (res.headersSent) res.destroy();
+    }, 60_000);
+    const abort = () => controller.abort();
+    res.once('close', abort);
+    res.setHeader('Cache-Control', 'no-store, no-transform');
+    res.setHeader('Cross-Origin-Resource-Policy', 'same-origin');
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    const download = req.query.download === '1';
+    try {
+      let first = true;
+      for await (const chunk of readSessionAttachment(req.user, { ...req.params, download }, controller.signal)) {
+        if (first) {
+          first = false;
+          // Never serve uploaded HTML/SVG or a user-supplied Content-Type inline
+          // on the authenticated application origin.
+          const mime = download ? 'application/octet-stream' : detectImageMime(chunk.buffer);
+          if (!mime) return res.status(415).send('Attachment is not a supported preview image');
+          const filename = chunk.filename.split(/[/\\]/).pop() || 'attachment';
+          res.setHeader('Content-Type', mime);
+          res.setHeader('Content-Length', String(chunk.size));
+          res.setHeader('Content-Disposition', `${download ? 'attachment' : 'inline'}; filename*=UTF-8''${encodeURIComponent(filename.toWellFormed()).replace(/['()*]/g, c => '%' + c.charCodeAt(0).toString(16))}`);
+          if (req.method === 'HEAD') return res.end();
+        }
+        if (!await writeResponseChunk(res, chunk.buffer)) return;
+      }
+      res.end();
+    } catch (error) {
+      if (res.destroyed) return;
+      if (res.headersSent) res.destroy();
+      else {
+        res.removeHeader('Content-Length');
+        res.removeHeader('Content-Disposition');
+        res.status(error.status === 499 ? 504 : error.status || 502).send(error.status === 499 ? 'Attachment read timed out' : error.status ? error.message : 'Attachment read failed');
+      }
+    } finally {
+      clearTimeout(timeout);
+      res.off('close', abort);
+    }
   });
 
   app.get('/api/preview/:fileId', async (req, res) => {

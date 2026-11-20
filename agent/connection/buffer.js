@@ -57,6 +57,10 @@ function bufferMessage(msg, reason) {
   return 'buffered';
 }
 
+const CONNECTION_SCOPED_TYPES = new Set([
+  'file_content_chunk', 'video_chunk', 'yeaft_session_attachment_chunk', 'upgrade_agent_ack',
+]);
+
 const FILE_CHUNK_SEND_TIMEOUT_MS = 10_000;
 
 function sendTransferChunk(socket, data) {
@@ -104,14 +108,14 @@ async function sendNow(msg, queuedSocket) {
   const socket = ctx.ws;
   if (!socket || socket.readyState !== WebSocket.OPEN) return bufferMessage(msg, 'Disconnected');
   // File transfers are request/connection scoped, unlike replayable chat output.
-  if (['file_content_chunk', 'video_chunk', 'upgrade_agent_ack'].includes(msg.type) && queuedSocket !== socket) return 'dropped';
+  if (CONNECTION_SCOPED_TYPES.has(msg.type) && queuedSocket !== socket) return 'dropped';
   const payload = ctx.serverEncryptionRequired && ctx.sessionKey
     ? await encrypt(msg, ctx.sessionKey) : msg;
   if (socket !== ctx.ws || socket.readyState !== WebSocket.OPEN) {
     return bufferMessage(msg, 'Connection changed');
   }
   const data = JSON.stringify(payload);
-  if (['file_content_chunk', 'video_chunk', 'upgrade_agent_ack'].includes(msg.type)) return sendTransferChunk(socket, data);
+  if (CONNECTION_SCOPED_TYPES.has(msg.type)) return sendTransferChunk(socket, data);
   socket.send(data);
   return 'sent';
 }
@@ -161,7 +165,7 @@ export async function sendToServer(msg) {
     return 'dropped';
   }
   const promise = new Promise((resolve, reject) => {
-    const connectionScoped = ['file_content_chunk', 'video_chunk', 'upgrade_agent_ack'].includes(msg.type);
+    const connectionScoped = CONNECTION_SCOPED_TYPES.has(msg.type);
     ctx.outboundSendQueue.push({ msg, bytes, resolve, reject, socket: connectionScoped ? ctx.ws : null });
     ctx.outboundSendQueueBytes = Number(ctx.outboundSendQueueBytes || 0) + bytes;
   });

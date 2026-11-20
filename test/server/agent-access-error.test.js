@@ -5,6 +5,7 @@ import { userDb, yeaftSessionDb } from '../../server/database.js';
 import { handleClientConversation } from '../../server/handlers/client-conversation.js';
 import { createMockAgent, createMockWebClient } from '../helpers/mockWs.js';
 import { clearSessionTurnDeletesForClient, handleAgentSessionTurnDelete } from '../../server/handlers/session-turn-delete.js';
+import { handleSessionAttachmentChunk, readSessionAttachment } from '../../server/session-attachment-relay.js';
 
 describe('native Session turn deletion relay', () => {
   const agentId = 'owner:agent';
@@ -66,7 +67,29 @@ describe('native Session turn deletion relay', () => {
       expect(await send('requester', { type, userId: 'owner', authorized: true })).toBe(true);
     }
     expect(unexpectedGenericRelay).not.toHaveBeenCalled();
+    for (const type of ['session_attachment_read_authorized', 'yeaft_session_attachment_read', 'unify_session_attachment_read', 'yeaft_session_attachment_chunk']) {
+      await send('requester', { type, attachmentId: 'm0001.0' });
+    }
     expect(agent.ws.getSentMessages()).toEqual([]);
+
+    CONFIG.skipAuth = false;
+    agent.capabilities.push('session_attachment_refs');
+    vi.spyOn(userDb, 'getByUsername').mockImplementation(username => ({ id: username, deletion_state: 'active' }));
+    const source = { agentId, sessionId, attachmentId: 'm0001.0', download: true };
+    const signal = AbortSignal.timeout(5_000);
+    await expect(readSessionAttachment({ username: 'other', role: 'admin' }, source, signal).next()).rejects.toMatchObject({ status: 403 });
+    await expect(readSessionAttachment({ username: 'owner', role: 'pro' }, { ...source, sessionId: 'session_other' }, signal).next()).rejects.toMatchObject({ status: 404 });
+    expect(agent.ws.getSentMessages()).toEqual([]);
+    const stream = readSessionAttachment({ username: 'owner', role: 'pro' }, source, signal);
+    const result = stream.next();
+    const read = agent.ws.getLastMessage();
+    expect(read).toEqual({ type: 'session_attachment_read_authorized', requestId: expect.any(String),
+      sessionId, attachmentId: source.attachmentId, offset: 0, download: true });
+    const reply = { ...read, type: 'yeaft_session_attachment_chunk', size: 2, version: 'a'.repeat(64), filename: 'file.txt', content: 'b2s=' };
+    handleSessionAttachmentChunk(agentId, createMockAgent({ ownerId: 'owner' }), { ...reply, error: 'not_found' });
+    handleSessionAttachmentChunk(agentId, agent, reply);
+    await expect(result).resolves.toMatchObject({ value: { buffer: Buffer.from('ok') } });
+    await stream.return();
   });
 
   it('isolates same-ID requests across tabs and Agents and forwards only approved fields', async () => {

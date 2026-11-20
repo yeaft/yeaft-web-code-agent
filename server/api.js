@@ -40,7 +40,7 @@ setInterval(() => {
 /**
  * Middleware to verify JWT token for protected API routes
  */
-function requireAuth(req, res, next) {
+function requireAuth(req, res, next, { fullSession = false } = {}) {
   if (CONFIG.skipAuth) {
     req.user = { username: 'dev-user', role: 'admin' };
     return next();
@@ -56,6 +56,8 @@ function requireAuth(req, res, next) {
       error: hasCredential ? 'Invalid or expired token' : 'Authentication required',
     });
   }
+
+  if (fullSession && result.type) return res.status(403).json({ error: 'Full session required' });
 
   // Sliding renewal: if the token is in the last `jwtRenewThresholdMs` of its
   // life, mint a fresh one and update both browser auth channels.
@@ -96,7 +98,8 @@ try {
 } catch {}
 
 // Shared middleware/helpers passed to sub-route modules
-const shared = { requireAuth, requireAdmin, checkRateLimit };
+const requireSessionAuth = (req, res, next) => requireAuth(req, res, next, { fullSession: true });
+const shared = { requireAuth, requireSessionAuth, requireAdmin, checkRateLimit };
 
 export function registerApiRoutes(app) {
   // Version API

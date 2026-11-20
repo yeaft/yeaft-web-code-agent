@@ -4,7 +4,9 @@ import { transaction } from '../db/connection.js';
 import { broadcastAgentList, broadcastSessionCatalog, forwardToClients, sendToAgent, sendToWebClient } from '../ws-utils.js';
 import { advanceYeaftDebugRequestChunk, consumeYeaftDebugRequest, webClients, previewFiles } from '../context.js';
 import { CONFIG } from '../config.js';
-import { yeaftAssetStore } from '../yeaft-asset-store.js';
+import { detectImageMime, yeaftAssetStore } from '../yeaft-asset-store.js';
+import { sessionAttachmentUrl } from '../session-attachment-relay.js';
+import { cachePreviewFile } from '../preview-files.js';
 import { recordPerfTraceEvent } from '../perf-trace.js';
 import { syncProjectContextsToAgents } from './client-conversation.js';
 
@@ -184,35 +186,38 @@ async function syncYeaftSessionMetadata(agentId, agent, event) {
   return event;
 }
 
-function hydrateMessagePreviewData(message) {
+function projectMessageAttachments(message, agentId, sessionId) {
   const attachments = message?.attachments;
   if (!Array.isArray(attachments) || attachments.length === 0) return message;
-  let changed = false;
-  const hydrated = attachments.map((att) => {
-    const previewData = att?.previewData;
-    if (!previewData?.data || att.preview) return att;
+  return { ...message, attachments: attachments.filter(att => att && typeof att === 'object').map(att => {
+    const { name, mimeType, isImage, attachmentId, previewData } = att;
+    const metadata = { name, mimeType, isImage: isImage === true };
+    const url = sessionAttachmentUrl(agentId, sessionId, attachmentId);
+    if (url) {
+      return { ...metadata, attachmentId, ...(metadata.isImage ? { preview: url } : {}), download: `${url}?download=1` };
+    }
+    // Rolling upgrade: old Agents sent previews inline. Keep their existing
+    // gallery behavior, without forwarding preview bytes or local paths.
+    if (typeof previewData?.data !== 'string' || previewData.data.length > 14 * 1024 * 1024) return metadata;
+    const buffer = Buffer.from(previewData.data, 'base64');
+    const previewMime = detectImageMime(buffer);
+    if (!previewMime) return metadata;
     const fileId = randomUUID();
     const token = randomUUID();
-    previewFiles.set(fileId, {
-      buffer: Buffer.from(previewData.data, 'base64'),
-      mimeType: previewData.mimeType || att.mimeType || 'application/octet-stream',
-      filename: previewData.filename || att.name || `attachment-${Date.now()}`,
+    if (!cachePreviewFile(fileId, {
+      buffer,
+      mimeType: previewMime,
+      filename: previewData.filename || name || `attachment-${Date.now()}`,
       createdAt: Date.now(),
       token,
-    });
-    changed = true;
-    const { previewData: _previewData, ...rest } = att;
-    return {
-      ...rest,
-      preview: `/api/preview/${fileId}?token=${encodeURIComponent(token)}`,
-    };
-  });
-  return changed ? { ...message, attachments: hydrated } : message;
+    })) return metadata;
+    return { ...metadata, preview: `/api/preview/${fileId}?token=${encodeURIComponent(token)}` };
+  }) };
 }
 
-function hydrateInlinePreviewData(data) {
+function hydrateInlinePreviewData(data, agentId, sessionId) {
   if (!data?.message) return data;
-  const message = hydrateMessagePreviewData(data.message);
+  const message = projectMessageAttachments(data.message, agentId, sessionId);
   return message === data.message ? data : { ...data, message };
 }
 
@@ -653,7 +658,7 @@ export async function handleAgentOutput(agentId, agent, msg) {
       // there are no browsers online. Session reads can then clear older runs
       // that a freshly hydrated client has never received itself.
       scheduledTaskReceiptDb.recordNotificationRun(agent.ownerId, agentId, msg.event);
-      const data = hydrateInlinePreviewData(msg.data);
+      const data = hydrateInlinePreviewData(msg.data, agentId, msg.sessionId);
       let event = await syncYeaftSessionMetadata(agentId, agent, msg.event);
       if ((event?.type === 'session_list_updated' || event?.type === 'session_crud_result') && agent.ownerId) {
         event = {
@@ -848,7 +853,7 @@ export async function handleAgentOutput(agentId, agent, msg) {
       const targetClient = msg._requestClientId ? webClients.get(msg._requestClientId) : null;
       if (targetClient?.authenticated && (CONFIG.skipAuth || targetClient.userId === agent.ownerId)) {
         const messages = Array.isArray(msg.messages) ? projectConfirmedAssetImages(
-          msg.messages.map(hydrateMessagePreviewData),
+          msg.messages.map(row => projectMessageAttachments(row, agentId, msg.sessionId)),
           { ownerId: agent.ownerId, agentId, sessionId: msg.sessionId },
         ) : [];
         await sendToWebClient(targetClient, {
@@ -878,7 +883,7 @@ export async function handleAgentOutput(agentId, agent, msg) {
     case 'yeaft_history_chunk': {
       const messages = Array.isArray(msg.messages)
         ? projectConfirmedAssetImages(
-          msg.messages.map(hydrateMessagePreviewData),
+          msg.messages.map(row => projectMessageAttachments(row, agentId, msg.sessionId)),
           { ownerId: agent.ownerId, agentId, sessionId: msg.sessionId },
         )
         : [];
@@ -928,6 +933,7 @@ export async function handleAgentOutput(agentId, agent, msg) {
             pageKind: msg.pageKind === 'gap' ? 'gap' : (msg.pageKind || null),
             gapStopAtSeq: msg.gapStopAtSeq ?? null,
             cacheEpoch: msg.cacheEpoch ?? null,
+            ...(msg.error ? { error: msg.error } : {}),
           });
           if (msg.perfTraceId) {
             recordPerfTraceEvent({

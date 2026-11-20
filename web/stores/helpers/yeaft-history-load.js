@@ -162,6 +162,7 @@ export function failYeaftHistoryLoad(store, { agentId, sessionId, requestId, err
       loading: false,
       error,
       requestId: null,
+      syncingAfterSeq: null,
       completedAt: Date.now(),
     },
   };

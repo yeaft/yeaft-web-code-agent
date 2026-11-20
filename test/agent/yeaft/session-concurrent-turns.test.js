@@ -6,7 +6,7 @@ import ctx from '../../../agent/context.js';
 import { renderSessionScene } from '../../../agent/yeaft/sessions/scene-prompts.js';
 import * as bridge from '../../../agent/yeaft/web-bridge.js';
 import { ConversationStore } from '../../../agent/yeaft/conversation/persist.js';
-import { closeConversationHistoryIndexes } from '../../../agent/yeaft/conversation/history-index.js';
+import { closeConversationHistoryIndexes, searchConversationIndex } from '../../../agent/yeaft/conversation/history-index.js';
 import { DebugTrace, NullTrace } from '../../../agent/yeaft/debug-trace.js';
 import { seedDefaultVps } from '../../../agent/yeaft/vp/seed-defaults.js';
 import { createSessionFromSpec, snapshotSessions } from '../../../agent/yeaft/sessions/session-crud.js';
@@ -33,13 +33,15 @@ function setup(adapter, roster = ['omni'], config = {}, sceneId) {
   const meta = createSessionFromSpec(root, { name: 'Parallel', roster, defaultVpId: 'omni', sceneId });
   const store = new ConversationStore(root);
   ctx.CONFIG = { yeaftDir: root };
-  ctx.ws = { readyState: 1, send() {} }; ctx.serverEncryptionRequired = false;
-  ctx.outboundSendQueue = []; ctx.outboundSendQueueActive = true;
+  ctx.serverCapabilities = new Set(['session_history_chunk_errors']);
+  const sent = [];
+  ctx.ws = { readyState: 1, send(encoded) { sent.push(JSON.parse(encoded)); }, sent }; ctx.serverEncryptionRequired = false;
+  ctx.outboundSendQueue = []; ctx.outboundSendQueueBytes = 0; ctx.outboundSendQueueActive = false;
   bridge.__testSetSession({ adapter, trace: new NullTrace(), conversationStore: store,
     config: { model: 'test-model', maxOutputTokens: 1024, ...config }, toolRegistry: new ToolRegistry(), yeaftDir: root });
   return { store, sessionId: meta.id, send: (id, text) => bridge.handleYeaftSessionSend({ sessionId: meta.id, id, text }) };
 }
-const frames = () => ctx.outboundSendQueue.map(item => item.msg);
+const frames = () => [...(ctx.ws?.sent || []), ...ctx.outboundSendQueue.map(item => item.msg)];
 const events = type => frames().filter(frame => frame.event?.type === type);
 
 it('runs overlapping same-VP user turns with visible partial peer context, supplements and isolated stop; replays durable grouping', async () => {
@@ -271,6 +273,63 @@ it('pins each Turn to its selected scene while sharing a durable transcript acro
   await bridge.handleYeaftLoadHistory({ sessionId, requestId: 'replay-scenes', limit: 10 });
   expect(frames().find(frame => frame.type === 'yeaft_history_chunk' && frame.requestId === 'replay-scenes').messages)
     .toEqual(expect.arrayContaining([expect.objectContaining({ userTurnId: 'scene-old' }), expect.objectContaining({ userTurnId: 'scene-new', relation: 'supplement' })]));
+
+  const budget = ctx.outboundSendQueueMaxBytes = 64 * 1024;
+  const append = (role, content) => store.append({ sessionId, role, content });
+  const anchor = append('user', 'paged tail');
+  const first = append('assistant', '界'.repeat(14_000));
+  const last = append('assistant', '🌍'.repeat(10_000));
+  const seq = row => store.getMessageSeqById(row.id);
+  const chunk = requestId => frames().find(frame => frame.type === 'yeaft_history_chunk' && frame.requestId === requestId);
+  await bridge.handleYeaftLoadHistory({ sessionId, requestId: 'byte-recent', limit: 1 });
+  expect(chunk('byte-recent')).toMatchObject({ messages: [expect.objectContaining({ id: last.id })], nextBeforeSeq: seq(last), hasMore: true });
+  await bridge.handleYeaftLoadMoreHistory({ sessionId, requestId: 'byte-gap', beforeSeq: seq(last), pageKind: 'gap', gapStopAtSeq: seq(first), cacheEpoch: 5 });
+  expect(chunk('byte-gap')).toMatchObject({ messages: [expect.objectContaining({ id: first.id })], nextBeforeSeq: seq(first), hasMore: false, pageKind: 'gap', gapStopAtSeq: seq(first), cacheEpoch: 5 });
+  await bridge.handleYeaftLoadHistory({ sessionId, requestId: 'byte-delta', afterSeq: seq(anchor) });
+  expect(chunk('byte-delta')).toMatchObject({ messages: [expect.objectContaining({ id: first.id })], latestSeq: seq(first), hasMoreAfter: true });
+  for (const id of ['byte-recent', 'byte-gap', 'byte-delta']) expect(Buffer.byteLength(JSON.stringify(chunk(id)))).toBeLessThanOrEqual(budget);
+
+  // Saturate the real outbound byte accounting; only the small error fits.
+  ctx.outboundSendQueueBytes = budget - 16 * 1024;
+  await bridge.handleYeaftLoadHistory({ sessionId, requestId: 'byte-dropped', _requestClientId: 'browser', limit: 1 });
+  ctx.outboundSendQueueBytes = 0;
+  expect(chunk('byte-dropped')).toMatchObject({ messages: [], error: 'history_delivery_failed', _requestClientId: 'browser' });
+  expect(events('history_loaded').some(frame => frame.requestId === 'byte-dropped')).toBe(false);
+
+  const oversized = append('assistant', 'too large to reveal ' + '界'.repeat(23_000));
+  const lookup = async (query, requestId) => {
+    const { results: [match] } = await searchConversationIndex(root, sessionId, query);
+    await bridge.handleYeaftLoadHistoryWindow({ sessionId, requestId, anchorMessageId: match.messageId,
+      anchorSeq: match.seq, entryId: match.entryId, entryStartSeq: match.entryStartSeq, indexGeneration: match.indexGeneration });
+    return frames().find(frame => frame.type === 'yeaft_history_window' && frame.requestId === requestId);
+  };
+  const window = await lookup('paged tail', 'byte-window');
+  expect(window).toMatchObject({ anchorMessageId: anchor.id, messages: [expect.objectContaining({ id: anchor.id })] });
+  expect(Buffer.byteLength(JSON.stringify(window))).toBeLessThanOrEqual(budget);
+  expect(await lookup('too large to reveal', 'byte-window-oversized')).toMatchObject({ anchorMessageId: oversized.id, messages: [], error: 'history_payload_too_large' });
+  await bridge.handleYeaftLoadHistory({ sessionId, requestId: 'byte-oversized', _requestClientId: 'browser', limit: 1 });
+  expect(chunk('byte-oversized')).toMatchObject({ messages: [], error: 'history_payload_too_large', _requestClientId: 'browser' });
+  expect(events('history_loaded').some(frame => frame.requestId === 'byte-oversized')).toBe(false);
+
+  ctx.serverCapabilities = new Set();
+  await bridge.handleYeaftLoadHistory({ sessionId, requestId: 'old-server-oversized', _requestClientId: 'browser', limit: 1 });
+  expect(chunk('old-server-oversized')).toBeUndefined();
+  expect(events('history_loaded').some(frame => frame.requestId === 'old-server-oversized')).toBe(false);
+  ctx.serverCapabilities.add('session_history_chunk_errors');
+
+  append('user', 'Interleaved question');
+  const askScope = { sessionId, speakerVpId: 'omni', turnId: 'ask-turn', threadId: 'ask-thread' };
+  const ask = store.append({ ...askScope, role: 'assistant', content: '界'.repeat(10_000),
+    toolCalls: [{ id: 'ask-before-page-cut', name: 'AskUser', input: { question: 'Continue?' } }] });
+  const interleaved = store.append({ role: 'assistant', sessionId, speakerVpId: 'linus', content: '界'.repeat(14_000) });
+  store.append({ ...askScope, role: 'tool', toolCallId: 'ask-before-page-cut',
+    content: JSON.stringify({ answers: { 'Continue?': 'Yes' } }) });
+  const unpagedAsk = store.loadVisibleBySession(sessionId, null, 1).messages.find(message => message.id === ask.id);
+  expect(unpagedAsk.askUserResults).toEqual([expect.objectContaining({ status: 'answered', answers: { 'Continue?': 'Yes' } })]);
+  await bridge.handleYeaftLoadHistory({ sessionId, requestId: 'ask-newer', limit: 1 });
+  expect(chunk('ask-newer')).toMatchObject({ nextBeforeSeq: seq(interleaved), hasMore: true });
+  await bridge.handleYeaftLoadMoreHistory({ sessionId, requestId: 'ask-older', beforeSeq: seq(interleaved), turns: 1 });
+  expect(chunk('ask-older').messages.find(message => message.id === ask.id).askUserResults).toEqual(unpagedAsk.askUserResults);
 });
 
 it('deletes a finished Session turn without opt-in and excludes it from real Engine requests', async () => {

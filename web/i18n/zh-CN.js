@@ -887,6 +887,7 @@ export default {
   'chat.session.creating': '正在创建会话...',
   'chat.session.loadingHistory': '正在加载会话历史...',
   'yeaft.historyLoad.error': '会话历史暂时无法加载，消息仍安全保存在 Agent 中。',
+  'yeaft.historyLoad.tooLarge': '这部分会话历史过大，无法加载，但仍保存在 Agent 中。',
   'yeaft.historyLoad.retry': '重新加载',
   'yeaft.sessionInventory.error': '暂时无法加载 Session，会话仍安全保存在 Agent 中。',
   'yeaft.sessionInventory.retry': '重新加载 Session',
