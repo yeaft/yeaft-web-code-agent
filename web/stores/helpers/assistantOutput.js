@@ -206,7 +206,7 @@ export function handleAssistantOutputFrame(store, conversationId, data, frameAge
           toolId: block.id || block.tool_use_id || null,
           toolName: block.name,
           toolInput: block.input,
-          startTime: Date.now(),
+          startTime: Number.isFinite(data.ts) && data.ts > 0 ? data.ts : Date.now(),
           isHistory: block.history === true || data.history === true || data.isHistory === true,
           sessionId: store._currentYeaftSessionId || null,
           vpId: store._currentYeaftVpId || null,

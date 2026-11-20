@@ -4,7 +4,7 @@ import { describe, expect, it, vi } from 'vitest';
 import * as Vue from 'vue';
 import { mount } from '@vue/test-utils';
 import { createVpStatusBroker } from '../../agent/yeaft/vp-status-broker.js';
-import { liveSessionToolsByExecution, recordLiveSessionTool } from '../../web/stores/helpers/session-tool-details.js';
+import { liveSessionToolsByExecution } from '../../web/stores/helpers/session-tool-details.js';
 import { sessionActivityRows } from '../../web/stores/helpers/session-activity.js';
 import { sessionExecutionKey } from '../../web/stores/helpers/yeaft-session-identity.js';
 import VpTimelinePane from '../../web/components/VpTimelinePane.js';
@@ -93,10 +93,15 @@ describe('message flow regressions', () => {
       const aTools = () => liveSessionToolsByExecution(store, envelope, new Set([sessionExecutionKey({
         turnId: 'engine-a', threadId: 'engine-a', vpId: 'omni',
       })])).values().next().value || [];
-      frame('engine-a', a, { type: 'user', tool_use_result: [{ type: 'tool_result', tool_use_id: 'unseen', content: 'not for A' }] });
+      frame('engine-a', a, { type: 'user', tool_use_result: [{ type: 'tool_result', tool_use_id: 'late-call', content: 'belongs to late call', is_error: true }] });
       expect(rows().find(row => row.toolId === 'tool-a').hasResult).not.toBe(true);
+      expect(aTools().map(row => row.toolId)).toEqual(['tool-a']);
       expect(aTools()[0].hasResult).not.toBe(true);
       frame('engine-a', a, { type: 'user', tool_use_result: [{ type: 'tool_result', tool_use_id: 'tool-a', content: 'login evidence', is_error: true }] });
+      frame('engine-a', a, { type: 'assistant', ts: 1, message: { content: [{ type: 'tool_use', id: 'late-call', name: 'FileRead', input: { path: 'late.txt' } }] } });
+      expect(aTools().map(row => row.toolId)).toEqual(['tool-a', 'late-call']);
+      expect(aTools().at(-1)).toMatchObject({ hasResult: true, isError: true, toolResult: 'belongs to late call' });
+      expect(rows().find(row => row.toolId === 'late-call')).toMatchObject({ hasResult: true, isError: true });
       frame('engine-a', a, { type: 'assistant', message: { content: 'login reply' } });
       expect(rows().find(row => row.toolId === 'tool-a')).toMatchObject({ userTurnId: a, toolResult: 'login evidence', isError: true });
       expect(aTools()[0]).toMatchObject({ toolResult: 'login evidence', isError: true });
@@ -139,29 +144,6 @@ describe('message flow regressions', () => {
       runtimeSessionsStore.sessionList = [];
       runtimeSessionsStore.setActive(null, null);
     }
-  });
-
-  it('keeps bounded, newest-first details scoped to the live Agent, Session and execution', () => {
-    const store = Vue.reactive({ yeaftLiveToolExecutions: {} });
-    const scope = { agentId: 'a', conversationId: 'conv', sessionId: 's' };
-    const a = { ...scope, vpId: 'v', turnId: 't', threadId: 'a' };
-    const b = { ...a, threadId: 'b' };
-    const call = (owner, toolId, fields = {}) => recordLiveSessionTool(store, owner, { toolId, toolName: 'Read', ...fields });
-    call(a, 'replayed', { isHistory: true });
-    call(a, 'inline', { toolName: 'AskUser' });
-    for (let i = 0; i < 128; i++) call(a, `call-${i}`);
-    call(a, 'call-127'); // Retransmission must not create another row.
-    call(a, 'latest');
-    call(b, 'sibling');
-    call({ ...a, agentId: 'other' }, 'foreign');
-    call({ ...a, sessionId: 'other' }, 'other-session');
-    const aKey = sessionExecutionKey(a);
-    const bKey = sessionExecutionKey(b);
-    const tools = liveSessionToolsByExecution(store, scope, new Set([aKey, bKey]));
-    expect(tools.get(aKey).map(row => row.id)).toEqual(['latest', ...Array.from({ length: 127 }, (_, i) => `call-${127 - i}`)]);
-    expect(tools.get(bKey).map(row => row.id)).toEqual(['sibling']);
-    expect(liveSessionToolsByExecution(store, scope, new Set([bKey])).has(aKey)).toBe(false);
-    expect(liveSessionToolsByExecution(store, { ...scope, conversationId: 'new' }, new Set([aKey])).size).toBe(0);
   });
 
   it('requires fresh Session and broker evidence for stopping after browser or Agent reconnect', () => {

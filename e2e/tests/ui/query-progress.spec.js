@@ -37,10 +37,11 @@ test('native Session progress is ephemeral, scoped and readable in light/dark at
   broker.broadcastSnapshot({ sessionId: session.id });
   const toolFrame = data => mockAgent.send({ type: 'yeaft_output', conversationId, sessionId: session.id,
     vpId: event.vpId, turnId: event.turnId, threadId: event.threadId, data });
-  const call = (id, name) => {
-    toolFrame({ type: 'assistant', message: { content: [{ type: 'tool_use', id, name, input: { displayResource: id } }] } });
-    toolFrame({ type: 'user', tool_use_result: [{ type: 'tool_result', tool_use_id: id, content: 'example result' }] });
-  };
+  const startCall = (id, name, ts) => toolFrame({ type: 'assistant', ts,
+    message: { content: [{ type: 'tool_use', id, name, input: { displayResource: id } }] } });
+  const result = (id, is_error) => toolFrame({ type: 'user',
+    tool_use_result: [{ type: 'tool_result', tool_use_id: id, content: 'example result', is_error }] });
+  const call = (id, name) => { startCall(id, name); result(id, false); };
   call('first-call.txt', 'FileRead');
   const detailToggle = page.getByRole('button', { name: 'Tool call details', exact: true });
   const details = page.getByRole('list', { name: 'Tool call details', exact: true });
@@ -71,16 +72,21 @@ test('native Session progress is ephemeral, scoped and readable in light/dark at
   await expect(progress.locator('.yeaft-query-progress-counts')).toHaveText(/Requests 2\s*Tools 3\s*Details/);
   await expect(detailToggle).toHaveAttribute('aria-expanded', 'true');
   await expect(detailToggle.locator('.yeaft-model-chevron.open')).toHaveCount(1);
-  for (let i = 0; i < 9; i++) call(`newer-${i}.log`, 'FileGrep');
-  toolFrame({ type: 'assistant', message: { content: [{ type: 'tool_use', id: 'newer-9.log', name: 'FileGrep', input: { displayResource: 'newer-9.log' } }] } });
-  const result = (id, is_error) => toolFrame({ type: 'user', tool_use_result: [{ type: 'tool_result', tool_use_id: id, content: 'test result', is_error }] });
-  result('unseen-call', false);
+  for (let i = 0; i < 8; i++) call(`newer-${i}.log`, 'FileGrep');
+  startCall('still-pending.log', 'FileGrep');
+  result('newer-9.log', true); // Reconnect may deliver the result before its call.
+  await expect(details.locator('.tool-line')).toHaveCount(10);
+  const pending = details.locator('.tool-line').filter({ hasText: 'still-pending.log' });
+  await expect(pending).toHaveClass(/running/);
+  startCall('newer-9.log', 'FileGrep');
   await expect(details.locator('.tool-line')).toHaveCount(11);
   const latest = details.locator('.tool-line').first();
   await expect(latest).toContainText('newer-9.log');
-  await expect(latest).toHaveClass(/running/);
-  result('newer-9.log', true);
   await expect(latest).toHaveClass(/error/);
+  await expect(pending).toHaveClass(/running/);
+  // Complete the sibling without affecting the first call's error status.
+  result('still-pending.log', false);
+  await expect(pending).toHaveClass(/completed/);
   await expect(details.locator('.tool-line').last()).toContainText('first-call.txt');
   await expect(details.getByRole('combobox')).toHaveCount(0);
   expect(await details.evaluate(el => el.scrollHeight > el.clientHeight && el.scrollWidth <= el.clientWidth)).toBe(true);
