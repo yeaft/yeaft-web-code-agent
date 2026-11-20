@@ -82,6 +82,17 @@ function webpDimensions(read) {
   return null;
 }
 
+export function imageMimeFromHeader(header) {
+  if (!Buffer.isBuffer(header)) return null;
+  if (header.length >= 8 && header.subarray(0, 8).equals(PNG_SIGNATURE)) return 'image/png';
+  const firstSix = header.toString('latin1', 0, 6);
+  if (firstSix === 'GIF87a' || firstSix === 'GIF89a') return 'image/gif';
+  if (header[0] === 0xff && header[1] === 0xd8 && header[2] === 0xff) return 'image/jpeg';
+  if (header.toString('latin1', 0, 4) === 'RIFF' && header.toString('latin1', 8, 12) === 'WEBP') return 'image/webp';
+  return null;
+}
+const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+
 function readDimensions(read) {
   const signature = read(0, 12);
   if (!signature) return null;

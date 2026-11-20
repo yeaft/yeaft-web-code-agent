@@ -310,9 +310,10 @@ export class AnthropicAdapter extends LLMAdapter {
     return wire;
   }
 
-  #dispatch({ url, headers, requestBody, signal, withoutCache, context, onProviderDiagnostics, onRequestStart }) {
+  #dispatch({ url, headers, requestBody, signal, withoutCache, context, onProviderDiagnostics, onRequestStart, maxRequestBodyBytes }) {
     return fetchWithPromptCacheFallback({ url, headers, body: requestBody, signal, providerLabel: 'Anthropic', field: 'cache_control',
-      withoutCache, onRequestStart,
+      // Messages API allows 32 MB; keep a margin for gateway limits.
+      withoutCache, onRequestStart, maxRequestBodyBytes: Math.min(maxRequestBodyBytes ?? Infinity, 30_000_000),
       onCacheFallback: () => onProviderDiagnostics?.({ ...context.diagnostics, promptCaching: 'rejected-fallback' }),
     });
   }
@@ -353,7 +354,7 @@ export class AnthropicAdapter extends LLMAdapter {
    * @param {{ model: string, system: string, messages: import('./adapter.js').UnifiedMessage[], tools?: import('./adapter.js').UnifiedToolDef[], maxTokens?: number, contextOutputLimit?: number, effort?: 'medium'|'xhigh'|'max', effortSource?: 'user'|'auto', effortContext?: object, signal?: AbortSignal, onRawExchange?: ({rawRequest, rawResponse}) => void }} params
    * @returns {AsyncGenerator<import('./adapter.js').StreamEvent>}
    */
-  async *stream({ model, system, messages, tools, maxTokens = 16384, contextOutputLimit, effort, effortSource, effortContext, extraBody, providerContext, requestIdentity, onProviderDiagnostics, effortConstraint = null, onEffortDecision = null, signal, onRawExchange, rawExchangeMaxBytes = 512 * 1024, onRequestStart, streamIdleTimeoutMs }) {
+  async *stream({ model, system, messages, tools, maxTokens = 16384, contextOutputLimit, effort, effortSource, effortContext, extraBody, providerContext, requestIdentity, onProviderDiagnostics, effortConstraint = null, onEffortDecision = null, signal, onRawExchange, rawExchangeMaxBytes = 512 * 1024, onRequestStart, streamIdleTimeoutMs, maxRequestBodyBytes }) {
     if (signal?.aborted) throw new LLMAbortError();
 
     const context = providerContext || createProviderContext({ protocol: 'anthropic', baseUrl: this.#baseUrl, staticApiKey: this.#apiKey, model });
@@ -397,7 +398,7 @@ export class AnthropicAdapter extends LLMAdapter {
     const url = `${this.#baseUrl}/v1/messages`;
     const headers = { ...this.#headers(), ...midConversationHeaders(requestBody) };
 
-    const { response, errorBody, body: wireBody } = await this.#dispatch({ url, headers, requestBody, signal,
+    const { response, errorBody, body: wireBody } = await this.#dispatch({ url, headers, requestBody, signal, maxRequestBodyBytes,
       withoutCache: caching.sent ? () => this.#uncachedBody(body, replayed) : undefined, context, onProviderDiagnostics,
       onRequestStart: () => onRequestStart?.({ effort: effortDecision.effective, streamIdleTimeoutMs: idleMs }) });
     // Capture the final request after any pre-generation cache field rejection.
@@ -824,7 +825,7 @@ export class AnthropicAdapter extends LLMAdapter {
    * models silently drop the param. max_tokens auto-widens to budget+1024
    * when needed.
    */
-  async call({ model, system, messages, maxTokens = 4096, contextOutputLimit, effort, effortSource, effortContext, extraBody, providerContext, requestIdentity, onProviderDiagnostics, effortConstraint = null, onEffortDecision = null, signal, onRequestStart }) {
+  async call({ model, system, messages, maxTokens = 4096, contextOutputLimit, effort, effortSource, effortContext, extraBody, providerContext, requestIdentity, onProviderDiagnostics, effortConstraint = null, onEffortDecision = null, signal, onRequestStart, maxRequestBodyBytes }) {
     if (signal?.aborted) throw new LLMAbortError();
 
     const context = providerContext || createProviderContext({ protocol: 'anthropic', baseUrl: this.#baseUrl, staticApiKey: this.#apiKey, model });
@@ -860,7 +861,7 @@ export class AnthropicAdapter extends LLMAdapter {
 
     const url = `${this.#baseUrl}/v1/messages`;
     const headers = { ...this.#headers(), ...midConversationHeaders(requestBody) };
-    const { response, errorBody, body: wireBody } = await this.#dispatch({ url, headers, requestBody, signal,
+    const { response, errorBody, body: wireBody } = await this.#dispatch({ url, headers, requestBody, signal, maxRequestBodyBytes,
       withoutCache: caching.sent ? () => this.#uncachedBody(body, replayed) : undefined, context, onProviderDiagnostics, onRequestStart });
     if (!response.ok) throw this.#classifyError(response.status, errorBody, response);
 

@@ -125,6 +125,8 @@ See [Retired H2-AMS implementation](./yeaft-memory.md).
 
 ## 活跃签名上下文的预算与压缩
 
+HTTP 请求体大小和模型 token 窗口独立。Anthropic Messages 出站 JSON 使用 30 MB 预算，Gemini 使用 19 MB 预算，为服务商公开限制留余量；各原生适配器也识别网关返回的 HTTP 413。按实际发送的 UTF-8 字节检查，超限请求不发出。普通 Session 收到 413 后只尝试更小的请求：优先用文本引用替换图片或附件；已签名的 Anthropic 前缀不改写，必要时用正文摘要、原始用户要求和能放得下的最新图片开启新段，已完成的工具不重跑。原图不降质、不删除；如果连必要的文字也放不下，明确报错，不反复发送同一请求。Work Center 仍由 Run 的派发围栏处理失败，不在 Engine 内隐式重派。
+
 模型窗口和输出上限来自显式模型配置、已缓存的模型目录及默认值，不按 Claude 家族统一硬编码。能力查询先保留目录中的完整模型 ID；未命中时，逐层移除斜杠前缀，按从长到短的后缀查询（例如 `loki/sandbox/claude-fable-5-2` → `sandbox/claude-fable-5-2` → `claude-fable-5-2`），首先命中的目录条目生效，因此真实命名空间条目优先于裸模型名。不做模糊版本匹配；显式 `contextWindow` / `maxOutput` 仍优先。所有候选均未命中目录时，仅对已知的准确版本 `claude-fable-5-2` 使用 1M 上下文能力兜底，优先于实例的旧全局窗口；不推断其输出上限，也不扩大其他 Claude 型号。这里仅影响能力查询，不改变发送给 provider 的模型 ID。未知模型无元数据或显式限制时默认使用 1M；目录和模型配置中较小的已知窗口仍优先。新初始化配置同样使用 1M；已有实例配置不自动重写。
 
 Anthropic 保留 thinking 的工具循环会冻结已经发送的 system、工具定义和消息前缀。后续请求不能通过删旧消息、修改签名 assistant 或重新采样已发送结果来腾空间，否则续传校验会失败。
@@ -163,7 +165,7 @@ The Coordinator uses the same model infrastructure but a restricted decision con
 
 Agent-local Session metadata, history, memory, tasks, and Work Center data live under the resolved Yeaft directory. A Session `workDir` is project context only.
 
-Web Session 上传附件保存在 `<yeaftDir>/sessions/<sessionId>/attachments/`，transcript 仅保存轻量引用，不写入图片 base64。当前消息直接携带图片，无须 `ViewImage`。`attachments.js` 的 `hydratePersistedUserAttachmentContent(row, { yeaftDir, sessionId, legacyRoot })` 将原始用户行还原为标准图片 content parts；批量入口为 `hydratePersistedAttachmentHistory(rows, opts)`。Engine 在 canonical history 和 `relatedHistoryTurns[].messages` 进入历史预算前各调用一次，不能依赖 Web bridge 装饰 store，也不能把还原结果写回 transcript。历史预览与模型历史共用受控读取，拒绝跨 Session、跨实例、任意路径与符号链接；缺失或不可访问的图片会在返回的模型上下文中明确提示重新上传。`legacyRoot` 指旧上传时的 Agent CWD（默认当前进程 CWD），仅兼容其下 `.claude-tmp-attachments/<sessionId>/` 的相对引用，不搜索项目 `workDir`。Session copy/fork 在历史前缀筛选后安全读取并复制可用附件至目标 Session，重映射引用；目标 Session 不能借原路径读取源 Session 图片。显式开启 DebugTrace 的全量诊断记录仍可能包含图片数据，不属于轻量 transcript 保证范围。
+Web Session 上传附件保存在 `<yeaftDir>/sessions/<sessionId>/attachments/`，transcript 仅保存轻量引用，不写入图片 base64。当前消息在预算内仍直接携带图片，无须 `ViewImage`。Engine 对 canonical history 和 `relatedHistoryTurns[].messages` 中的旧图只投影文件名与本 Session 内可重新读取的路径，不再自动读取或发送图片字节。需要对照时可以调用 `ViewImage` 重新打开原图；历史预览与模型读取仍拒绝跨 Session、跨实例、任意路径与符号链接；缺失或不可访问的图片会在模型上下文中明确提示重新上传。`legacyRoot` 指旧上传时的 Agent CWD（默认当前进程 CWD），仅兼容其下 `.claude-tmp-attachments/<sessionId>/` 的相对引用，不搜索项目 `workDir`。Session copy/fork 在历史前缀筛选后安全读取并复制可用附件至目标 Session，重映射引用；目标 Session 不能借原路径读取源 Session 图片。显式开启 DebugTrace 的全量诊断记录仍可能包含图片数据，不属于轻量 transcript 保证范围。
 
 Older wire aliases, payload identifiers, and storage scope prefixes remain where changing them would break deployed clients or data. New code uses Session/Yeaft terminology and the canonical Session memory layout is `sessions/<id>`. Readers may still handle legacy `session/<id>` and `group/<id>` aliases during migration.
 

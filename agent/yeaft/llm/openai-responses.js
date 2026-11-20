@@ -279,9 +279,9 @@ export class OpenAIResponsesAdapter extends LLMAdapter {
     return input;
   }
 
-  #dispatch({ url, headers, requestBody, signal, cacheKeySent, context, onProviderDiagnostics, onRequestStart }) {
+  #dispatch({ url, headers, requestBody, signal, cacheKeySent, context, onProviderDiagnostics, onRequestStart, maxRequestBodyBytes }) {
     return fetchWithPromptCacheFallback({ url, headers, body: requestBody, signal, providerLabel: 'OpenAI', field: 'prompt_cache_key',
-      withoutCache: cacheKeySent ? ({ prompt_cache_key, ...uncached }) => uncached : undefined, onRequestStart,
+      maxRequestBodyBytes, withoutCache: cacheKeySent ? ({ prompt_cache_key, ...uncached }) => uncached : undefined, onRequestStart,
       onCacheFallback: () => onProviderDiagnostics?.({ ...context.diagnostics,
         nativeReasoningState: Boolean(requestBody.include?.includes('reasoning.encrypted_content')), promptCaching: 'rejected-fallback' }),
     });
@@ -303,7 +303,7 @@ export class OpenAIResponsesAdapter extends LLMAdapter {
     }
     const policyError = classifyPolicyError(status, body);
     if (policyError) return policyError;
-    if (status === 413 || body.includes('context_length_exceeded') || body.includes('maximum context length')) {
+    if (body.includes('context_length_exceeded') || body.includes('maximum context length')) {
       return new LLMContextError(`Context too long: ${body}`);
     }
     if (status >= 500) {
@@ -346,7 +346,7 @@ export class OpenAIResponsesAdapter extends LLMAdapter {
    * `api-key` headers are auto-redacted (see `redactRawRequest` in
    * `adapter.js`); request-body fields are caller-controlled.
    */
-  async *stream({ model, system, messages, tools, maxTokens = 16384, effort, effortSource, effortContext = {}, extraBody, providerContext, requestIdentity, onProviderDiagnostics, effortConstraint = null, onEffortDecision = null, signal, onRawExchange, rawExchangeMaxBytes = 512 * 1024, onRequestStart, streamIdleTimeoutMs }) {
+  async *stream({ model, system, messages, tools, maxTokens = 16384, effort, effortSource, effortContext = {}, extraBody, providerContext, requestIdentity, onProviderDiagnostics, effortConstraint = null, onEffortDecision = null, signal, onRawExchange, rawExchangeMaxBytes = 512 * 1024, onRequestStart, streamIdleTimeoutMs, maxRequestBodyBytes }) {
     if (signal?.aborted) throw new LLMAbortError();
 
     const context = providerContext || createProviderContext({ protocol: 'openai-responses', baseUrl: this.#baseUrl, staticApiKey: this.#apiKey, model });
@@ -391,7 +391,7 @@ export class OpenAIResponsesAdapter extends LLMAdapter {
       'Authorization': `Bearer ${this.#apiKey}`,
     };
 
-    const { response, errorBody, body: wireBody } = await this.#dispatch({ url, headers, requestBody, signal,
+    const { response, errorBody, body: wireBody } = await this.#dispatch({ url, headers, requestBody, signal, maxRequestBodyBytes,
       cacheKeySent, context, onProviderDiagnostics,
       onRequestStart: () => onRequestStart?.({ effort: effortDecision.effective, streamIdleTimeoutMs: idleMs }) });
     const rawRequest = redactRawRequest({ url, method: 'POST', headers, body: wireBody });
@@ -798,7 +798,7 @@ export class OpenAIResponsesAdapter extends LLMAdapter {
    * expose them, mirror the stream() instrumentation. Parity with
    * anthropic.js's `call()`.
    */
-  async call({ model, system, messages, tools, maxTokens = 4096, effort, effortSource, effortContext = {}, extraBody, providerContext, requestIdentity, onProviderDiagnostics, effortConstraint = null, onEffortDecision = null, signal, onRequestStart }) {
+  async call({ model, system, messages, tools, maxTokens = 4096, effort, effortSource, effortContext = {}, extraBody, providerContext, requestIdentity, onProviderDiagnostics, effortConstraint = null, onEffortDecision = null, signal, onRequestStart, maxRequestBodyBytes }) {
     if (signal?.aborted) throw new LLMAbortError();
 
     const context = providerContext || createProviderContext({ protocol: 'openai-responses', baseUrl: this.#baseUrl, staticApiKey: this.#apiKey, model });
@@ -836,7 +836,7 @@ export class OpenAIResponsesAdapter extends LLMAdapter {
 
     const url = `${this.#baseUrl}/responses`;
     const headers = { 'Content-Type': 'application/json', 'Authorization': `Bearer ${this.#apiKey}` };
-    const { response, errorBody } = await this.#dispatch({ url, headers, requestBody, signal,
+    const { response, errorBody } = await this.#dispatch({ url, headers, requestBody, signal, maxRequestBodyBytes,
       cacheKeySent, context, onProviderDiagnostics, onRequestStart });
     if (!response.ok) throw this.#classifyError(response.status, errorBody, response);
 

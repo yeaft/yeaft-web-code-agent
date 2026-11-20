@@ -44,6 +44,7 @@
 import { mkdirSync, writeFileSync, lstatSync, openSync, closeSync, fstatSync, readSync, constants } from 'node:fs';
 import { basename, extname, join, resolve, relative, isAbsolute, sep } from 'node:path';
 import { randomBytes } from 'node:crypto';
+import { imageMimeFromHeader } from './image-dimensions.js';
 
 // Same dir name Chat mode uses, so ".gitignore" rules and tool-side
 // expectations stay identical.
@@ -56,6 +57,10 @@ const TEMP_UPLOAD_DIR = '.claude-tmp-attachments';
 export const MAX_FILES_PER_TURN = 16;
 export const MAX_TOTAL_BYTES = 50 * 1024 * 1024;
 export const MAX_PREVIEW_BYTES = 10 * 1024 * 1024;
+
+export function viewImageByteLimit(configured) {
+  return Number.isFinite(configured) && configured > 0 ? Math.floor(configured) : 20 * 1024 * 1024;
+}
 
 /**
  * Sanitize a user-supplied filename's basename for use as an on-disk
@@ -393,41 +398,34 @@ export function persistedAttachmentPreviewPayload(att, opts = {}) {
 }
 
 /**
- * Build provider content from one canonical user row, without a Web runtime.
- * Call once on raw transcript rows, before history-window budgeting (including
- * recalled turns). Never persist the returned base64 or unavailable notices.
- * Ownership comes from the requested Session, not an attachment's metadata.
- *
- * @param {{role:string, sessionId?:string, content?:string|Array, attachments?:Array}} row
- * @param {{yeaftDir:string, sessionId:string, legacyRoot?:string, cwd?:string}} opts
- *        legacyRoot is the original Agent CWD; cwd is its compatibility alias.
- * @returns {Array} Standard provider content parts; the input row is unchanged.
+ * Project historical uploads as owner-scoped paths, without reading image data.
+ * Only references from the requested Session may be advertised to the model.
  */
-export function hydratePersistedUserAttachmentContent(row, opts = {}) {
-  const content = Array.isArray(row?.content) ? [...row.content]
-    : (row?.content ? [{ type: 'text', text: String(row.content) }] : []);
-  if (row?.role !== 'user' || row.sessionId !== opts.sessionId || !validSessionId(opts.sessionId)) return content;
-  const images = Array.isArray(row.attachments) ? row.attachments.filter(att => att?.isImage) : [];
-  let totalBytes = 0;
-  for (const att of images.slice(0, MAX_FILES_PER_TURN)) {
-    try {
-      const payload = readPersistedAttachment(att, opts, MAX_TOTAL_BYTES - totalBytes);
-      totalBytes += payload.bytes;
-      content.push({ type: 'image', source: { type: 'base64', media_type: payload.mimeType, data: payload.data } });
-    } catch (error) {
-      content.push({ type: 'text', text: `[Uploaded image unavailable / 上传图片不可用: ${att.name || 'image'} — ${error.message}. Ask the user to upload it again / 请用户重新上传。]` });
-    }
-  }
-  if (images.length > MAX_FILES_PER_TURN) content.push({ type: 'text', text: '[Uploaded image unavailable: attachment count limit exceeded.]' });
-  return content;
-}
-
-/** Provider-only projection for a canonical history array; no store decoration. */
-export function hydratePersistedAttachmentHistory(messages, opts = {}) {
+export function referencePersistedAttachmentHistory(messages, opts = {}) {
   return messages.map(row => {
     if (row?.role !== 'user' || row.sessionId !== opts.sessionId || !validSessionId(opts.sessionId)
-      || !Array.isArray(row.attachments) || !row.attachments.some(att => att?.isImage)) return row;
-    return { ...row, content: hydratePersistedUserAttachmentContent(row, opts) };
+      || !Array.isArray(row.attachments)) return row;
+    const references = row.attachments.slice(0, MAX_FILES_PER_TURN).filter(att => att?.isImage)
+      .map(att => {
+        const name = JSON.stringify(sessionAttachmentName(att.name));
+        let readable = false;
+        if (typeof att.path === 'string' && !att.path.split(/[/\\]/).includes('..')) {
+          try {
+            // Same scoped file policy, format and size limit as ViewImage;
+            // read only the signature, never the base64 body.
+            const { buffer } = readPersistedAttachmentRange(att.path, opts,
+              { maxBytes: viewImageByteLimit(opts.maxImageBytes), length: 12 });
+            readable = Boolean(imageMimeFromHeader(buffer));
+          } catch { /* Missing, oversized, or outside this Session. */ }
+        }
+        return readable
+          ? { type: 'text', text: `[Previous image ${name}: use ViewImage with file_path=${JSON.stringify(att.path)} if needed.]` }
+          : { type: 'text', text: `[Previous image ${name} is unavailable. Ask the user to upload it again if needed.]` };
+      });
+    if (!references.length) return row;
+    const content = Array.isArray(row.content) ? row.content
+      : row.content ? [{ type: 'text', text: String(row.content) }] : [];
+    return { ...row, content: [...content, ...references] };
   });
 }
 

@@ -10,6 +10,7 @@ import { closeConversationHistoryIndexes } from '../../../agent/yeaft/conversati
 import { loadPostCompact, postCompactPath, savePostCompact } from '../../../agent/yeaft/post-compact.js';
 import { NullTrace } from '../../../agent/yeaft/debug-trace.js';
 import { _setMemCacheForTest } from '../../../agent/yeaft/llm/models-dev.js';
+import { persistYeaftAttachments } from '../../../agent/yeaft/attachments.js';
 import { providerProjectionDigest } from '../../../agent/yeaft/llm/provider-state.js';
 import { defineTool } from '../../../agent/yeaft/tools/types.js';
 import { ToolRegistry } from '../../../agent/yeaft/tools/registry.js';
@@ -77,40 +78,79 @@ beforeEach(() => {
 
 describe('Engine', () => {
   describe('simple query (no tools)', () => {
-    it('persists a normal turn once without end-of-turn duplicates', async () => {
+    it('retries the first image-heavy request by bytes without repeating transcript rows or sending historical image bytes', async () => {
       const yeaftDir = mkdtempSync(join(tmpdir(), 'yeaft-engine-no-persist-duplicates-'));
       try {
         const conversationStore = new ConversationStore(yeaftDir);
-        mockAdapter.pushResponse([
-          { type: 'text_delta', text: 'one reply' },
-          { type: 'stop', stopReason: 'end_turn' },
-        ]);
+        const fetch = vi.fn().mockResolvedValueOnce(new Response(null, { status: 413 }))
+          .mockImplementation(async () => new Response(JSON.stringify({ stop_reason: 'end_turn',
+            content: [{ type: 'text', text: 'one reply' }], usage: { input_tokens: 100, output_tokens: 5 },
+          }), { headers: { 'content-type': 'application/json' } }));
+        vi.stubGlobal('fetch', fetch);
         const engine = new Engine({
-          adapter: mockAdapter,
+          adapter: new AdapterRouter({ providers: [{ name: 'gateway', protocol: 'anthropic',
+            baseUrl: 'https://anthropic-gateway.invalid', apiKey: 'fixture-key', models: ['claude-opus-4.8'] }] }),
           trace,
-          config: { model: 'test-model', maxOutputTokens: 1024 },
+          config: { model: 'gateway/claude-opus-4.8', maxOutputTokens: 1024, projectDocMaxBytes: 0 },
           conversationStore,
           yeaftDir,
         });
 
+        const sessionId = 'session-no-duplicates';
+        const upload = (name, data) => persistYeaftAttachments([{ name, mimeType: 'image/gif', data, isImage: true }], { yeaftDir, sessionId });
+        const old = upload('old-reference.gif', 'R0lGODlhAQABAAAA');
+        const bytes = Buffer.alloc(220_000);
+        bytes.write('GIF89a');
+        bytes.writeUInt16LE(2, 6); bytes.writeUInt16LE(2, 8);
+        const large = upload('large-fresh.gif', bytes.toString('base64'));
+        const fresh = upload('fresh-reference.gif', 'R0lGODlhAgACAA==');
+        const original = conversationStore.append({ role: 'user', sessionId, content: 'old prompt',
+          attachments: old.promptAttachments });
         const events = [];
         for await (const event of engine.query({
-          prompt: 'one prompt',
+          prompt: 'one prompt', promptParts: [{ type: 'text', text: 'one prompt' + large.promptSuffix + fresh.promptSuffix },
+            ...large.promptParts, ...fresh.promptParts],
           sessionId: 'session-no-duplicates',
         })) events.push(event);
-        expect(events.filter(event => event.type === 'turn_end')).toEqual([
+        expect(events.filter(event => event.type === 'turn_end' && event.terminal)).toEqual([
           expect.objectContaining({ stopReason: 'end_turn', terminal: true }),
         ]);
         expect(events.at(-1)).toMatchObject({ type: 'turn_close' });
 
-        expect(conversationStore.loadRecentBySession('session-no-duplicates', 10).map(message => ({
+        expect(old.promptAttachments).toHaveLength(1);
+        expect(fresh.promptParts).toHaveLength(1);
+        expect(events.filter(event => event.type === 'error')).toEqual([]);
+        expect(events.filter(event => event.type === 'llm_retry')).toEqual([expect.objectContaining({
+          reason: 'request_body_recovery', statusCode: 413,
+        })]);
+        expect(fetch).toHaveBeenCalledTimes(2);
+        const [first, second] = fetch.mock.calls.map(([, init]) => init.body);
+        expect(Buffer.byteLength(second)).toBeLessThan(Buffer.byteLength(first));
+        expect(first).toContain(large.promptParts[0].source.data);
+        expect(second).not.toContain(large.promptParts[0].source.data);
+        expect(second).toContain('Image not sent');
+        expect(second).toContain('large-fresh');
+        const wire = first;
+        expect(wire).toContain('old-reference.gif');
+        expect(wire).toContain('ViewImage');
+        const oldContent = JSON.parse(first).messages[0].content;
+        expect(oldContent).toEqual(expect.arrayContaining([expect.objectContaining({
+          text: expect.stringContaining(JSON.stringify(old.promptAttachments[0].path)),
+        })]));
+        expect(wire).not.toContain(old.promptParts[0].source.data);
+        expect(first).toContain(fresh.promptParts[0].source.data);
+        expect(second).toContain(fresh.promptParts[0].source.data);
+        expect(conversationStore.loadRecentBySession(sessionId, 10).find(row => row.id === original.id).attachments).toEqual(old.promptAttachments);
+        expect(conversationStore.loadRecentBySession(sessionId, 10).map(message => ({
           role: message.role,
           content: message.content,
         }))).toEqual([
+          { role: 'user', content: 'old prompt' },
           { role: 'user', content: 'one prompt' },
           { role: 'assistant', content: 'one reply' },
         ]);
       } finally {
+        vi.unstubAllGlobals();
         await closeConversationHistoryIndexes();
         rmSync(yeaftDir, { recursive: true, force: true });
       }
@@ -366,101 +406,132 @@ describe('Engine', () => {
       }
     });
 
-    it.each(['provider', 'abort', 'append'])('rolls signed context into a fresh conversation without tool replay: %s', async mode => {
-      const dir = mkdtempSync(join(tmpdir(), 'yeaft-signed-rollover-'));
-      const originalFetch = globalThis.fetch;
-      const requests = [], summaries = [];
-      const gif = (width, height, bytes) => {
-        const data = Buffer.alloc(bytes);
-        data.write('GIF89a', 0, 'latin1');
-        data.writeUInt16LE(width, 6);
-        data.writeUInt16LE(height, 8);
-        return { type: 'image', source: { type: 'base64', media_type: 'image/gif', data: data.toString('base64') } };
-      };
-      // Encoded size is not visual size: ~800K base64 chars for a 16x16
-      // frame. A 4424x4424 frame (158x158 patches) puts the seed at ~27K: it
-      // fits the window and the 85% threshold (34K), but leaves less than half
-      // of that budget (17K) for new work, so it would roll over again.
-      const reference = gif(16, 16, 600_000);
-      const oversized = mode === 'append' ? [gif(4424, 4424, 64)] : [];
-      const isReference = block => block?.type === 'image' && block.source?.data === reference.source.data;
-      const textOf = content => typeof content === 'string' ? content
-        : content.filter(block => block.type === 'text').map(block => block.text).join('');
-      const config = { model: 'gateway/claude-opus-4.8', maxOutputTokens: 1024, projectDocMaxBytes: 0,
-        modelInfo: { contextWindow: 40000 } };
-      const control = new AbortController();
-      let executions = 0;
-      const inbox = [];
-      try {
-        globalThis.fetch = vi.fn(async (_url, init) => {
-          const body = anthropicWireWithoutCache(init);
-          if (body.stream !== true) {
-            if (body.system.startsWith('Summarize the supplied')) summaries.push(body);
-            expect(body.tools).toBeUndefined();
-            expect(JSON.stringify(body)).not.toContain('signature-');
-            expect(body.messages[0].content).toContain('COMPLETE_EVIDENCE');
-            if (body.system.startsWith('Summarize the supplied') && mode === 'abort') { control.abort(); throw new DOMException('cancelled', 'AbortError'); }
-            return new Response(JSON.stringify({ content: [{ type: 'text', text: 'COMPLETE_EVIDENCE. Echo completed successfully, do not repeat it. Continue unfinished answer.' }], stop_reason: 'end_turn', usage: { input_tokens: 1234, output_tokens: 20 } }), { headers: { 'content-type': 'application/json' } });
-          }
-          requests.push(body);
-          if (mode === 'provider' && requests.length === 2) return new Response('prompt is too long', { status: 400 });
-          const tool = requests.length === 1 ? 'echo' : undefined;
-          return response('roll-' + requests.length, tool, { n: requests.length }, 'claude-opus-4.8', {
-            input_tokens: mode === 'provider' ? 1000 : 39500,
-            output_tokens: 100, cache_read_input_tokens: 0, cache_creation_input_tokens: 0,
+    it.each(['provider', 'abort', 'append'])('rolls signed context into a fresh conversation without tool replay: %s', async trigger => {
+      for (const mode of trigger === 'provider' ? ['token', 'http413', 'http413-token-fallback'] : [trigger]) {
+        const dir = mkdtempSync(join(tmpdir(), 'yeaft-signed-rollover-'));
+        const originalFetch = globalThis.fetch;
+        const requests = [], summaries = [];
+        const gif = (width, height, bytes) => {
+          const data = Buffer.alloc(bytes);
+          data.write('GIF89a', 0, 'latin1');
+          data.writeUInt16LE(width, 6);
+          data.writeUInt16LE(height, 8);
+          return { type: 'image', source: { type: 'base64', media_type: 'image/gif', data: data.toString('base64') } };
+        };
+        // Encoded size is not visual size: ~800K base64 chars for a 16x16
+        // frame. A 4424x4424 frame (158x158 patches) puts the seed at ~27K: it
+        // fits the window and the 85% threshold (34K), but leaves less than half
+        // of that budget (17K) for new work, so it would roll over again.
+        const reference = gif(16, 16, 600_000);
+        const oversized = mode === 'append' ? [gif(4424, 4424, 64)] : [];
+        // A signed provider rejects this particular batch by bytes, not tokens.
+        // It should keep the newly read image, shed the earlier large upload,
+        // and use the persisted tool evidence without invoking the tool again.
+        const screenshot = mode === 'http413-token-fallback' ? gif(4424, 4424, 300_000) : gif(16, 16, 300_000);
+        const tooLarge = mode.startsWith('http413');
+        const imagePath = 'fixture image.gif';
+        const toolName = tooLarge ? 'ViewImage' : 'echo';
+        const requestBytes = [];
+        const isReference = block => block?.type === 'image' && block.source?.data === reference.source.data;
+        const textOf = content => typeof content === 'string' ? content
+          : content.filter(block => block.type === 'text').map(block => block.text).join('');
+        const config = { model: 'gateway/claude-opus-4.8', maxOutputTokens: 1024, projectDocMaxBytes: 0,
+          modelInfo: { contextWindow: 40000 } };
+        const control = new AbortController();
+        let executions = 0;
+        const inbox = [];
+        try {
+          globalThis.fetch = vi.fn(async (_url, init) => {
+            const body = anthropicWireWithoutCache(init);
+            if (body.stream !== true) {
+              if (body.system.startsWith('Summarize the supplied')) summaries.push(body);
+              expect(body.tools).toBeUndefined();
+              expect(JSON.stringify(body)).not.toContain('signature-');
+              expect(body.messages[0].content).toContain('COMPLETE_EVIDENCE');
+              if (body.system.startsWith('Summarize the supplied') && mode === 'abort') { control.abort(); throw new DOMException('cancelled', 'AbortError'); }
+              return new Response(JSON.stringify({ content: [{ type: 'text', text: 'COMPLETE_EVIDENCE. Echo completed successfully, do not repeat it. Continue unfinished answer.' }], stop_reason: 'end_turn', usage: { input_tokens: 1234, output_tokens: 20 } }), { headers: { 'content-type': 'application/json' } });
+            }
+            requests.push(body);
+            requestBytes.push(Buffer.byteLength(init.body));
+            if (tooLarge && requests.length === 2) {
+              expect(body.messages[0]).toEqual(requests[0].messages[0]);
+              expect(JSON.stringify(body)).toContain('signature-roll-1');
+              expect(JSON.stringify(body)).toContain(screenshot.source.data);
+              return new Response(null, { status: 413 });
+            }
+            if (mode === 'token' && requests.length === 2) return new Response('prompt is too long', { status: 400 });
+            const tool = requests.length === 1 ? toolName : undefined;
+            return response('roll-' + requests.length, tool, tooLarge ? { file_path: imagePath } : { n: requests.length }, 'claude-opus-4.8', {
+              input_tokens: trigger === 'provider' ? 1000 : 39500,
+              output_tokens: 100, cache_read_input_tokens: 0, cache_creation_input_tokens: 0,
+            });
           });
-        });
-        const store = new ConversationStore(dir);
-        const engine = new Engine({ adapter: router('claude-opus-4.8'), trace, config, yeaftDir: dir, conversationStore: store });
-        engine.registerTool({ name: 'echo', description: 'echo', parameters: { type: 'object' }, execute: async () => {
-          executions++;
-          if (mode === 'append') inbox.push({ content: 'LATEST_CORRECTION: DO NOT DEPLOY', internal: false });
-          return 'COMPLETE_EVIDENCE: completed side effect ' + executions;
-        } });
-        const events = [];
-        for await (const event of engine.query({ prompt: 'obtain evidence and finish', sessionId: 'signed-rollover', signal: control.signal,
-          promptParts: [reference, ...oversized, { type: 'text', text: 'obtain evidence and finish' }],
-          drainPendingUserMessages: () => inbox.splice(0),
-        })) {
-          events.push(event);
-        }
-        expect(executions).toBe(1);
-        expect(summaries).toHaveLength(1);
-        // Budgeted by pixels, the reference image reaches the model whole.
-        expect(requests[0].messages[0].content.some(isReference)).toBe(true);
-        if (mode !== 'abort') {
-          expect(events.filter(event => event.type === 'error')).toEqual([]);
-          const fresh = requests.at(-1);
-          expect(fresh.messages).toHaveLength(1);
-          expect(fresh.messages[0].role).toBe('user');
-          const seed = fresh.messages[0].content;
-          expect(textOf(seed)).toContain('COMPLETE_EVIDENCE');
-          expect(textOf(seed)).toContain('obtain evidence and finish');
-          // Uploads stay native image parts, never base64 inside text.
-          expect(textOf(seed)).not.toContain(reference.source.data.slice(0, 64));
-          if (mode === 'append') {
-            expect(textOf(seed)).toContain('LATEST_CORRECTION: DO NOT DEPLOY');
-            // Uploads that would re-trigger rollover are swapped for markers.
-            expect(seed).toEqual(expect.any(String));
-            expect(seed.match(/\[image\/gif attachment omitted from the compacted context\]/g)).toHaveLength(2);
-          } else {
-            expect(seed.filter(isReference)).toHaveLength(1);
+          const store = new ConversationStore(dir);
+          const engine = new Engine({ adapter: router('claude-opus-4.8'), trace, config, yeaftDir: dir, conversationStore: store });
+          engine.registerTool({ name: toolName, description: 'Read evidence', parameters: { type: 'object' }, execute: async () => {
+            executions++;
+            if (mode === 'append') inbox.push({ content: 'LATEST_CORRECTION: DO NOT DEPLOY', internal: false });
+            return tooLarge ? JSON.stringify({ text: 'COMPLETE_EVIDENCE: completed side effect', path: imagePath,
+              image: 'data:image/gif;base64,' + screenshot.source.data }) : 'COMPLETE_EVIDENCE: completed side effect ' + executions;
+          } });
+          const events = [];
+          for await (const event of engine.query({ prompt: 'obtain evidence and finish', sessionId: 'signed-rollover', signal: control.signal,
+            promptParts: [reference, ...oversized, { type: 'text', text: 'obtain evidence and finish' }],
+            drainPendingUserMessages: () => inbox.splice(0),
+          })) {
+            events.push(event);
           }
-          expect(JSON.stringify(fresh)).not.toContain('signature-');
+          expect(executions).toBe(1);
+          expect(summaries).toHaveLength(1);
+          // Budgeted by pixels, the reference image reaches the model whole.
+          expect(requests[0].messages[0].content.some(isReference)).toBe(true);
+          if (mode !== 'abort') {
+            expect(events.filter(event => event.type === 'error')).toEqual([]);
+            const fresh = requests.at(-1);
+            expect(fresh.messages).toHaveLength(1);
+            expect(fresh.messages[0].role).toBe('user');
+            const seed = fresh.messages[0].content;
+            expect(textOf(seed)).toContain('COMPLETE_EVIDENCE');
+            expect(textOf(seed)).toContain('obtain evidence and finish');
+            // Uploads stay native image parts, never base64 inside text.
+            expect(textOf(seed)).not.toContain(reference.source.data.slice(0, 64));
+            if (mode === 'append') {
+              expect(textOf(seed)).toContain('LATEST_CORRECTION: DO NOT DEPLOY');
+              // Uploads that would re-trigger rollover are swapped for markers.
+              expect(seed).toEqual(expect.any(String));
+              expect(seed.match(/\[image\/gif attachment omitted from the compacted context\]/g)).toHaveLength(2);
+            } else if (tooLarge) {
+              expect(events.find(event => event.type === 'llm_retry')).toMatchObject({ statusCode: 413, reason: 'context_rollover' });
+              expect(requests).toHaveLength(3);
+              expect(requestBytes[2]).toBeLessThan(requestBytes[1]);
+              expect(textOf(seed)).toContain('ViewImage(file_path=' + JSON.stringify(imagePath) + ')');
+              if (mode === 'http413-token-fallback') {
+                expect(seed).toEqual(expect.any(String));
+                expect(seed).not.toContain(screenshot.source.data);
+              } else {
+                expect(seed.filter(isReference)).toHaveLength(0);
+                expect(seed.filter(part => part.type === 'image')).toEqual([screenshot]);
+                expect(textOf(seed)).toContain('Image not sent');
+              }
+            } else {
+              expect(seed.filter(isReference)).toHaveLength(1);
+            }
+            expect(JSON.stringify(fresh)).not.toContain('signature-');
+          }
+          const rows = store.loadAllBySession('signed-rollover');
+          expect(rows.filter(row => row.role === 'user' && row.userAuthored !== false)).toHaveLength(mode === 'append' ? 2 : 1);
+          expect(rows.filter(row => row.role === 'tool')).toHaveLength(executions);
+          expect(rows.some(row => row.providerState?.items?.some(item => item.signature))).toBe(true);
+          expect(events.filter(event => event.type === 'turn_end' && event.terminal)).toEqual([
+            expect.objectContaining({ stopReason: mode === 'abort' ? 'aborted' : 'end_turn', terminal: true }),
+          ]);
+        } finally {
+          globalThis.fetch = originalFetch;
+          await closeConversationHistoryIndexes();
+          rmSync(dir, { recursive: true, force: true });
         }
-        const rows = store.loadAllBySession('signed-rollover');
-        expect(rows.filter(row => row.role === 'user' && row.userAuthored !== false)).toHaveLength(mode === 'append' ? 2 : 1);
-        expect(rows.filter(row => row.role === 'tool')).toHaveLength(executions);
-        expect(rows.some(row => row.providerState?.items?.some(item => item.signature))).toBe(true);
-        expect(events.filter(event => event.type === 'turn_end' && event.terminal)).toEqual([
-          expect.objectContaining({ stopReason: mode === 'abort' ? 'aborted' : 'end_turn', terminal: true }),
-        ]);
-      } finally {
-        globalThis.fetch = originalFetch;
-        await closeConversationHistoryIndexes();
-        rmSync(dir, { recursive: true, force: true });
       }
-    });
+    }, 20_000);
   });
 
   describe('tool execution loop', () => {

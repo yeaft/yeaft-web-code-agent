@@ -5,7 +5,7 @@ import { GEMINI_BASE_URL, geminiModelsUrl } from './gemini-endpoint.js';
 import { EFFORT_LEVELS, resolveSubAgentEffort } from '../effort.js';
 import {
   LLMAdapter, LLMRateLimitError, LLMServerError, LLMToolInputError, LLMContextError,
-  LLMAbortError, classifyAuthError, classifyFetchError, retryAfterFromResponse,
+  LLMAbortError, LLMRequestTooLargeError, serializeModelRequestBody, classifyAuthError, classifyFetchError, retryAfterFromResponse,
   readStreamChunkWithIdleTimeout, resolveStreamIdleTimeoutMs, SseLineBuffer,
   createBoundedTextAccumulator, redactRawRequest, safeHeaders, toWellFormedJson, contentFilterStopDetails,
 } from './adapter.js';
@@ -285,7 +285,7 @@ export class GeminiAdapter extends LLMAdapter {
     if (status === 400 && /API_KEY_INVALID|API key not valid/i.test(body)) return classifyAuthError(401, body, { provider: 'gemini' });
     if (status === 401 || status === 403) return classifyAuthError(status, body, { provider: 'gemini' });
     if (status === 429 || status === 529) return new LLMRateLimitError(`Gemini rate limited (HTTP ${status})`, status, retryAfterFromResponse(response));
-    if (status === 413 || /(?:input|prompt|context)[^\n]{0,80}(?:too (?:long|large)|exceed|token limit)/i.test(body)) return new LLMContextError('Gemini context limit exceeded');
+    if (/(?:input|prompt|context)[^\n]{0,80}(?:too (?:long|large)|exceed|token limit)/i.test(body)) return new LLMContextError('Gemini context limit exceeded');
     if (status >= 500) return new LLMServerError(`Gemini server error (HTTP ${status})`, status);
     return new Error(`Gemini API error (HTTP ${status})`);
   }
@@ -295,6 +295,9 @@ export class GeminiAdapter extends LLMAdapter {
     if (signal?.aborted) throw new LLMAbortError();
     const { body, context } = this.#request(params);
     const url = this.#url(params.model, streaming);
+    // Inline requests on the public Gemini API are limited to 20 MB.
+    const requestBodyLimit = Math.min(params.maxRequestBodyBytes ?? Infinity, 19_000_000);
+    const { body: serialized, requestBytes } = serializeModelRequestBody(body, requestBodyLimit);
     const headers = { 'Content-Type': 'application/json', 'x-goog-api-key': this.config.apiKey, ...this.config.headers };
     const rawRequest = redactRawRequest({ url, method: 'POST', headers, body });
     const raw = createBoundedTextAccumulator(rawExchangeMaxBytes);
@@ -329,7 +332,11 @@ export class GeminiAdapter extends LLMAdapter {
     }.bind(this);
     try {
       params.onRequestStart?.({ effort: params.effort, streamIdleTimeoutMs: idleMs });
-      response = await fetch(url, { method: 'POST', headers, body: JSON.stringify(body), signal });
+      response = await fetch(url, { method: 'POST', headers, body: serialized, signal });
+      if (response.status === 413) {
+        await response.body?.cancel().catch(() => {});
+        throw new LLMRequestTooLargeError(requestBytes, { limitBytes: requestBodyLimit, received413: true });
+      }
       if (!response.ok) {
         const text = await response.text(); raw.push(text);
         throw this.#error(response.status, text, response);

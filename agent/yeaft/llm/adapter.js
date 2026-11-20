@@ -209,12 +209,34 @@ export function classifyPolicyError(statusCode, responseBody = '', details = {})
   return new LLMPolicyError(signals.message, status, details);
 }
 
-/** Context too long error (413 or API-specific). */
+/** Model token window rejected the request. HTTP body limits are separate. */
 export class LLMContextError extends Error {
   constructor(message) {
     super(message);
     this.name = 'LLMContextError';
   }
+}
+
+/** Final serialized HTTP body exceeds a local budget or was rejected with HTTP 413. */
+export class LLMRequestTooLargeError extends Error {
+  constructor(requestBytes, { limitBytes, received413 = false } = {}) {
+    super(received413
+      ? `Provider rejected the ${requestBytes}-byte request body (HTTP 413).`
+      : `Request body is ${requestBytes} bytes, above the ${limitBytes}-byte limit.`);
+    this.name = 'LLMRequestTooLargeError';
+    this.reasonCode = 'request_body_too_large';
+    this.requestBytes = requestBytes;
+    this.limitBytes = limitBytes;
+    if (received413) this.statusCode = 413;
+  }
+}
+
+/** Measure the exact UTF-8 string that will be handed to fetch. */
+export function serializeModelRequestBody(payload, limitBytes) {
+  const body = JSON.stringify(payload);
+  const requestBytes = Buffer.byteLength(body, 'utf8');
+  if (limitBytes != null && requestBytes > limitBytes) throw new LLMRequestTooLargeError(requestBytes, { limitBytes });
+  return { body, requestBytes };
 }
 
 /** Server error (500, 502, 503) — retryable. */
@@ -529,6 +551,7 @@ export function classifyFetchError(err, opts = {}) {
   if (err instanceof LLMRateLimitError
     || err instanceof LLMAuthError
     || err instanceof LLMContextError
+    || err instanceof LLMRequestTooLargeError
     || err instanceof LLMServerError
     || err instanceof LLMAbortError) {
     return err;
