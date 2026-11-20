@@ -273,6 +273,9 @@ const RETRY_DEFAULTS = Object.freeze({
 
 const RETRY_CONTINUATION_PROMPT =
   'Continue from the exact point where the previous response stopped. Do not repeat text already produced.';
+// Share of the model window an active signed/rolled context may fill before
+// the next request rolls over into a fresh segment.
+const CONTEXT_ROLLOVER_INPUT_RATIO = 0.85;
 const POLICY_RECOVERY_PROMPT =
   'Continue this authorized code review, but describe security findings abstractly. Do not repeat credential-like or exploit payloads, secrets, tokens, or step-by-step misuse instructions. Preserve the technical conclusion, evidence location, severity, and remediation.';
 
@@ -3212,7 +3215,7 @@ export class Engine {
           ?? fittedRequest.meta.estimatedTokens - requestMaxOutputTokens;
         if ((signedAnthropicPrefix || rolloverSeed)
             && successfulRequestsSinceRollover > 0 && !pendingServerOperation
-            && (fittedInputTokens >= fitOptions.contextWindow * 0.85
+            && (fittedInputTokens >= fitOptions.contextWindow * CONTEXT_ROLLOVER_INPUT_RATIO
               || fittedRequest.meta.droppedCurrentMessages > 0)) {
           throw new ProviderContextBudgetError('active context reached the rollover threshold');
         }
@@ -3767,18 +3770,21 @@ export class Engine {
             if (signal?.aborted) throw new LLMAbortError();
             // No native state/tool pairs enter this fresh conversation. The
             // summary is untrusted history, never a new user authorization.
-            // The user's uploads stay native; only a window that cannot hold
-            // them gets explicit markers instead.
-            const seedTokens = seed => estimateHistoryMessagesTokens([seed])
+            // The user's uploads stay native unless the fresh segment could not
+            // also run below the rollover threshold; above it, every later
+            // request would pay for another summary, so markers replace them.
+            const seedInputTokens = seed => estimateHistoryMessagesTokens([seed])
               + estimateMessagesTokens(rolloverSystem, [])
-              + approxTokens(JSON.stringify(toolDefs)) + rolloverOutputReserve;
+              + approxTokens(JSON.stringify(toolDefs));
             let nextRolloverSeed = contextRolloverSeed(summary, rolloverUserRequests);
-            if (seedTokens(nextRolloverSeed) > currentContextWindow) {
+            const mediaSeedInput = seedInputTokens(nextRolloverSeed);
+            if (mediaSeedInput >= currentContextWindow * CONTEXT_ROLLOVER_INPUT_RATIO
+                || mediaSeedInput + rolloverOutputReserve > currentContextWindow) {
               nextRolloverSeed = contextRolloverSeed(summary, rolloverUserRequests, { omitMedia: true });
             }
             // Never silently trim the last human instructions or the new
             // summary. An impossible static/configured budget stays explicit.
-            const seedEstimate = seedTokens(nextRolloverSeed);
+            const seedEstimate = seedInputTokens(nextRolloverSeed) + rolloverOutputReserve;
             if (seedEstimate > currentContextWindow) {
               throw new Error('Fresh context plus original user requests cannot fit the configured model window'
                 + ` (estimated ${seedEstimate} of ${currentContextWindow} tokens)`);

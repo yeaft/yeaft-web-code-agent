@@ -378,9 +378,10 @@ describe('Engine', () => {
         return { type: 'image', source: { type: 'base64', media_type: 'image/gif', data: data.toString('base64') } };
       };
       // Encoded size is not visual size: ~800K base64 chars for a 16x16
-      // frame. Two 8000x8000 frames are more than this window can carry.
+      // frame. A 5208x5208 frame (186x186 patches) puts the seed at ~36K,
+      // which fits the window but sits above its 85% rollover threshold.
       const reference = gif(16, 16, 600_000);
-      const oversized = mode === 'append' ? [gif(8000, 8000, 64), gif(8000, 8000, 64)] : [];
+      const oversized = mode === 'append' ? [gif(5208, 5208, 64)] : [];
       const isReference = block => block?.type === 'image' && block.source?.data === reference.source.data;
       const textOf = content => typeof content === 'string' ? content
         : content.filter(block => block.type === 'text').map(block => block.text).join('');
@@ -438,9 +439,9 @@ describe('Engine', () => {
           expect(textOf(seed)).not.toContain(reference.source.data.slice(0, 64));
           if (mode === 'append') {
             expect(textOf(seed)).toContain('LATEST_CORRECTION: DO NOT DEPLOY');
-            // Only a window that cannot hold the uploads swaps them for markers.
+            // Uploads that would re-trigger rollover are swapped for markers.
             expect(seed).toEqual(expect.any(String));
-            expect(seed.match(/\[image\/gif attachment omitted from the compacted context\]/g)).toHaveLength(3);
+            expect(seed.match(/\[image\/gif attachment omitted from the compacted context\]/g)).toHaveLength(2);
           } else {
             expect(seed.filter(isReference)).toHaveLength(1);
           }

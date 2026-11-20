@@ -14,6 +14,10 @@
  */
 
 const BASE64_WINDOW = /^[A-Za-z0-9+/]*={0,2}$/;
+// Wrapped (MIME) base64 breaks lines every 76 characters, so a non-alphabet
+// character in the first window reveals it; offsets would otherwise drift.
+const BASE64_PREFIX_CHECK = 1024;
+const NON_CANONICAL_BASE64 = /[^A-Za-z0-9+/=]/;
 const MAX_JPEG_SEGMENTS = 1024;
 // Start-of-frame markers SOF0-SOF15, except DHT (C4), JPG (C8) and DAC (CC).
 const JPEG_FRAME_MARKERS = new Set([
@@ -120,7 +124,8 @@ export function imageDimensionsFromBuffer(buffer) {
  * @returns {{ width: number, height: number } | null}
  */
 export function imageDimensionsFromBase64(data) {
-  if (typeof data !== 'string' || data.length < 16) return null;
+  if (typeof data !== 'string' || data.length < 16 || data.length % 4 !== 0
+    || NON_CANONICAL_BASE64.test(data.slice(0, BASE64_PREFIX_CHECK))) return null;
   try {
     return readDimensions((offset, length) => {
       const start = Math.floor(offset / 3) * 4;

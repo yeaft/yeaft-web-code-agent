@@ -34,8 +34,9 @@ const IMAGE_PART_TOKEN_COST = 1024;
 // Providers bill an image by its resized pixels, never by encoded bytes: a
 // multi-megabyte GIF can be a 380x213 frame. Anthropic charges one token per
 // 28px patch and downsizes to at most 4,784; OpenAI's patch models charge
-// 1.2x per 32px patch and reject more than 30,000 patches. The 28px count is
-// the larger of the two for any size, and 30,000 x 1.2 bounds every image.
+// 1.2x per 32px patch and reject more than 30,000 patches, so 30,000 x 1.2
+// bounds every image. Tile-based models also charge a fixed minimum per image,
+// so a small image never counts for less than IMAGE_PART_TOKEN_COST.
 const IMAGE_PATCH_PIXELS = 28;
 const MAX_IMAGE_PART_TOKENS = 36_000;
 const INLINE_IMAGE_URL = /^data:[^;,]*;base64,/i;
@@ -94,8 +95,9 @@ function binaryPayloadTokenEstimate(value) {
 }
 
 /**
- * Estimate one image part from its pixel size. Unreadable payloads keep the
- * byte-based estimate, but no image can cost more than a provider accepts.
+ * Estimate one image part from its pixel size, never below the per-image
+ * minimum. Unreadable payloads keep the byte-based estimate, but no image can
+ * cost more than a provider accepts.
  * Inline data URLs are image bytes too, never text.
  *
  * @param {object} part
@@ -110,7 +112,8 @@ function estimateImagePartTokens(part, source) {
     ? source.data : inline ? url.slice(inline[0].length) : '';
   const size = data ? imageDimensionsFromBase64(data) : null;
   const visualTokens = size
-    ? Math.ceil(size.width / IMAGE_PATCH_PIXELS) * Math.ceil(size.height / IMAGE_PATCH_PIXELS)
+    ? Math.max(IMAGE_PART_TOKEN_COST,
+      Math.ceil(size.width / IMAGE_PATCH_PIXELS) * Math.ceil(size.height / IMAGE_PATCH_PIXELS))
     : IMAGE_PART_TOKEN_COST + binaryPayloadTokenEstimate(data);
   return Math.min(MAX_IMAGE_PART_TOKENS, visualTokens)
     + partMetadataTokenEstimate(part, inline ? ['title', 'alt'] : ['title', 'alt', 'image_url'])
