@@ -299,9 +299,9 @@
 .typing-indicator.is-inline { min-height: 8px; }
 .typing-indicator.is-stage { flex-wrap: wrap; row-gap: var(--space-1); padding: var(--space-2) 0; }
 /* Status text keeps the place it had after the dots: clear of where a small
-   animation starts, and on a line of its own under a stage. */
+   animation starts, and on a line of its own under a stage, centred like it. */
 .typing-indicator.is-inline > .typing-status-text { margin-left: 44px; }
-.typing-indicator.is-stage > .typing-status-text { flex-basis: 100%; margin-left: 0; }
+.typing-indicator.is-stage > .typing-status-text { flex-basis: 100%; margin-left: 0; text-align: center; }
 
 /* Waiting status banner — shown at top of message area */
 .typing-status-banner {

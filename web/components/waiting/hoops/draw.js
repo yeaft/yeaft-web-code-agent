@@ -85,8 +85,12 @@ function drawDust(ctx, camera, play, colors) {
   }
 }
 
-/** Marks drawn flat on the picture: the three going up, the nap, and the running score. */
-function drawMarks(ctx, camera, play, colors, scale) {
+/**
+ * Marks drawn flat on the picture: the three going up, the nap, and the
+ * running score, which sits in the corner of the core.
+ */
+function drawMarks(ctx, camera, play, colors, core) {
+  const scale = core.width / 352;
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
   if (play.pop >= 0) {
@@ -114,17 +118,42 @@ function drawMarks(ctx, camera, play, colors, scale) {
     // Scoreboard: a ball and his points for this wait.
     ctx.font = `700 ${(11 * scale).toFixed(1)}px ${colors.font}`;
     ctx.textAlign = 'left';
-    disc(ctx, 23 * scale, 15 * scale, 4.2 * scale, rgb(colors.ball));
+    disc(ctx, core.x + 23 * scale, core.y + 15 * scale, 4.2 * scale, rgb(colors.ball));
     ctx.fillStyle = rgb(colors.text);
-    ctx.fillText(String(play.points), 31 * scale, 15.5 * scale);
+    ctx.fillText(String(play.points), core.x + 31 * scale, core.y + 15.5 * scale);
   }
+}
+
+/** Fade what has been drawn toward the page, by thinning it. */
+function fadeOut(ctx, play, colors, width, height) {
+  if (play.fade >= 1) return;
+  ctx.globalCompositeOperation = 'destination-out';
+  ctx.fillStyle = rgb(colors.ink, 1 - play.fade);
+  ctx.fillRect(0, 0, width, height);
+  ctx.globalCompositeOperation = 'source-over';
+}
+
+/** The court and hoop with nobody on it: the world beyond the play on a wide stage. */
+function drawBackdrop(ctx, { play, camera, width, height, colors }) {
+  ctx.save();
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
+  drawCourt(ctx, camera, colors, play.angle);
+  drawHoop(ctx, camera, colors, play.angle, play, 'back');
+  drawHoop(ctx, camera, colors, play.angle, play, 'front');
+  ctx.restore();
+  fadeOut(ctx, play, colors, width, height);
 }
 
 /**
  * @param {CanvasRenderingContext2D} ctx Scaled to CSS px and cleared to transparent.
- * @param {{ play: object, camera: object, width: number, height: number, colors: object }} frame
+ * @param {{ play: object, camera: object, width: number, height: number, colors: object,
+ *   core: { x: number, y: number, width: number, height: number },
+ *   backdrop?: CanvasRenderingContext2D }} frame `core` and `backdrop` as the stage gives them.
  */
-export function drawHoopsFrame(ctx, { play, camera, width, height, colors }) {
+export function drawHoopsFrame(ctx, frame) {
+  const { play, camera, width, height, colors, core, backdrop } = frame;
+  if (backdrop) drawBackdrop(backdrop, frame);
   // Lighter tones are mixed toward the page rather than drawn see-through, so
   // overlapping limbs never show darker seams.
   const styles = {
@@ -152,12 +181,6 @@ export function drawHoopsFrame(ctx, { play, camera, width, height, colors }) {
   paintParts(ctx, parts);
 
   drawDust(ctx, camera, play, colors);
-  drawMarks(ctx, camera, play, colors, width / 352);
-  if (play.fade < 1) {
-    // Fade the whole picture toward the page by thinning what has been drawn.
-    ctx.globalCompositeOperation = 'destination-out';
-    ctx.fillStyle = rgb(colors.ink, 1 - play.fade);
-    ctx.fillRect(0, 0, width, height);
-    ctx.globalCompositeOperation = 'source-over';
-  }
+  drawMarks(ctx, camera, play, colors, core);
+  fadeOut(ctx, play, colors, width, height);
 }
