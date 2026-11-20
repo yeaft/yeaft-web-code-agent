@@ -1,4 +1,5 @@
 import TerminalOutput from './TerminalOutput.js';
+import SessionToolDetails from './SessionToolDetails.js';
 import { formatElapsed } from '../stores/helpers/turn-timing.js';
 import { LIVE_SESSION_TURN_STATES } from '../stores/helpers/yeaft-session-turns.js';
 
@@ -117,10 +118,12 @@ export function createSubAgentTaskDetailLines(task, translate) {
 /** Session execution activity, announcement and background tasks. */
 export default {
   name: 'VpTimelinePane',
-  components: { TerminalOutput },
+  components: { TerminalOutput, SessionToolDetails },
   emits: ['start-resize', 'stop-turn', 'edit-announcement', 'cancel-task', 'close'],
   props: {
     rows: { type: Array, required: true },
+    toolGroups: { type: Array, default: () => [] },
+    liveExecutionKeys: { type: Set, default: () => new Set() },
     visible: { type: Boolean, default: true },
     tasks: { type: Array, default: () => [] },
     announcementText: { type: String, default: '' },
@@ -297,6 +300,7 @@ export default {
             </div>
           </li>
         </ul>
+        <SessionToolDetails :groups="toolGroups" :live-execution-keys="liveExecutionKeys" />
       </section>
 
       <section class="yeaft-vp-task-board yeaft-session-status-section" :aria-label="$t('yeaft.sessionStatus.backgroundTasks')">

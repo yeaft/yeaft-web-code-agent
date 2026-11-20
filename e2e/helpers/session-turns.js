@@ -56,27 +56,27 @@ export function sessionTurnWire(page, agent, { sessionId = SESSION, vpId = VP, c
       sessionId, userTurnId: turn.userTurnId, speakerVpId: vpId,
       turnId: turn.executions[0].turnId, threadId: turn.executions[0].threadId, ts: Date.now() });
   };
-  const tool = (turn, id, name) => {
-    frame(turn, { type: 'assistant', message: { content: [{ type: 'tool_use', id, name, input: { path: `${id}.js` } }] } });
+  const tool = (turn, id, name, input = { path: `${id}.js` }) => {
+    frame(turn, { type: 'assistant', message: { content: [{ type: 'tool_use', id, name, input }] } });
     frame(turn, { type: 'user', tool_use_result: [{ type: 'tool_result', tool_use_id: id, content: `${id} evidence` }] });
     history.push({ id: `tool-${id}`, seq: history.length + 1, role: 'assistant', content: '',
       sessionId, userTurnId: turn.userTurnId, speakerVpId: vpId,
       turnId: turn.executions[0].turnId, threadId: turn.executions[0].threadId, ts: Date.now(),
-      toolCalls: [{ id, name, input: { path: `${id}.js` } }] });
+      toolCalls: [{ id, name, input }] });
   };
   const cancelling = (turn) => {
     turn.state = 'cancelling';
     turn.executions[0].state = 'cancelling';
     snapshot();
   };
-  const finish = (turn, reason = 'end_turn') => {
+  const finish = (turn, reason = 'end_turn', { deferSnapshot = false } = {}) => {
     turn.state = reason === 'aborted' ? 'aborted' : 'completed';
     turn.executions[0].state = turn.state;
     // Like the Agent, a finished root carries its end time; strictly ordered here.
     turn.endedAt = lastEndedAt = Math.max(Date.now(), lastEndedAt + 1);
     if (reason === 'end_turn') frame(turn, { type: 'result', result_text: '' });
     event({ type: 'vp_turn_end', sessionId, userTurnId: turn.userTurnId, ...turn.executions[0], reason });
-    snapshot();
+    if (!deferSnapshot) snapshot();
   };
   return { turns, history, send, delta, tool, cancelling, finish, snapshot, event, frame };
 }

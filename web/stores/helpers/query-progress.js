@@ -130,6 +130,10 @@ export function reconcileQueryProgressSnapshot(store, msg, statuses) {
   }
 }
 
+/** Display-only fence for an exact terminal execution, even if an old status snapshot arrives later. */
+export const isQueryExecutionSettled = (store, agentId, conversationId, turnId) =>
+  !!store._yeaftEndedQueryExecutions?.[keyFor(agentId, conversationId, turnId)];
+
 /** Fence explicit settlements, not absences: an older empty snapshot or an
  * older broker without an exact terminal ID cannot prove a turn ended. */
 export function retireSettledQueryProgress(store, agentId, conversationId, statuses) {

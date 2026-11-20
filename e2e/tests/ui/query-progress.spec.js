@@ -37,7 +37,12 @@ test('native Session progress is ephemeral, scoped and readable in light/dark at
     vpId: event.vpId, turnId: event.turnId, threadId: event.threadId, data });
   toolFrame({ type: 'assistant', message: { content: [{ type: 'tool_use', id: 'existing-call', name: 'FileRead', input: { path: 'example.txt' } }] } });
   toolFrame({ type: 'user', tool_use_result: [{ type: 'tool_result', tool_use_id: 'existing-call', content: 'example result' }] });
-  await expect(page.locator('.tool-line.completed')).toContainText('FileRead');
+  const details = page.locator('.session-tool-details');
+  await expect(page.locator('.messages .tool-line')).toHaveCount(0);
+  await details.locator('summary').click();
+  await expect(details.locator('.tool-line.completed')).toContainText('FileRead');
+  await expect(page.locator('.messages .session-response-running-dot')).toBeVisible();
+  await details.locator('summary').click();
   const initialProgress = { ...event, stage: 'running', reason: null, failedCalls: 0, toolStats: [] };
   // The new tab needs no new progress event, even during a long tool call.
   broker.recordQueryProgress(initialProgress);
@@ -204,6 +209,7 @@ test('native Session progress is ephemeral, scoped and readable in light/dark at
     await expect(progresses).toHaveCount(0);
   };
   await afterReplay('terminal-replay-marker');
+  await expect(page.locator('.messages .session-response-running-dot')).toHaveCount(0);
   broker.settleIdle({ sessionId: session.id, vpId: event.vpId, threadId: event.threadId });
   broker.settleIdle({ sessionId: session.id, vpId: parallel.vpId, threadId: parallel.threadId });
   broker.broadcastSnapshot({ sessionId: session.id });

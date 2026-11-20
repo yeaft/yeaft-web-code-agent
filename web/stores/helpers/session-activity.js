@@ -1,11 +1,11 @@
 import { timelineErrors } from './vp-timeline.js';
-import { visibleQueryProgress } from './query-progress.js';
+import { isQueryExecutionSettled, visibleQueryProgress } from './query-progress.js';
 import { LIVE_SESSION_TURN_STATES } from './yeaft-session-turns.js';
 import { yeaftSessionIdentityKey, yeaftTurnIdentityKey } from './yeaft-session-identity.js';
 import { YEAFT_RUNNING_VP_STATES } from './yeaft-runtime-state.js';
 import { userTurnExcerpt } from '../../utils/concurrent-user-turns.js';
 
-const executionKey = (row) => JSON.stringify([row.vpId, row.turnId || null, row.threadId || 'main']);
+export const sessionExecutionKey = (row) => JSON.stringify([row.speakerVpId || row.vpId, row.turnId || null, row.threadId || 'main']);
 const scopedTo = (row, agentId, sessionId) => row?.agentId === agentId && (row.sessionId ?? row.groupId) === sessionId;
 const promptTime = (message) => {
   const value = message.ts ?? message.timestamp;
@@ -39,7 +39,7 @@ export function sessionActivityRows(store, { agentId, sessionId, legacyRoster = 
   // Retired snapshots can tell us to await a fresh root, never authorize Stop.
   for (const turn of snapshot?.turns || []) {
     for (const execution of turn.executions) {
-      if (execution.turnId) knownRootExecutions.add(executionKey(execution));
+      if (execution.turnId) knownRootExecutions.add(sessionExecutionKey(execution));
     }
   }
   for (const turn of turns || []) {
@@ -52,7 +52,7 @@ export function sessionActivityRows(store, { agentId, sessionId, legacyRoster = 
       ? 'queued' : turn.state;
     for (const execution of turn.executions) {
       if (!execution.turnId) continue;
-      const key = executionKey(execution);
+      const key = sessionExecutionKey(execution);
       turnByExecution.set(key, turn);
       if (live && LIVE_SESSION_TURN_STATES.has(execution.state)) {
         ownerByExecution.set(key, turn.userTurnId);
@@ -62,7 +62,7 @@ export function sessionActivityRows(store, { agentId, sessionId, legacyRoster = 
     if (!live) continue;
     rows.set(`user:${turn.userTurnId}`, {
       key: `user:${turn.userTurnId}`, agentId, sessionId, userTurnId: turn.userTurnId, userMessageId: turn.userMessageId,
-      startedAt: turn.startedAt, status: state, canStop: turn.state !== 'cancelling', errors: [], observations: [],
+      startedAt: turn.startedAt, status: state, canStop: turn.state !== 'cancelling', errors: [], observations: [], liveExecutionKeys: [],
     });
   }
 
@@ -70,7 +70,7 @@ export function sessionActivityRows(store, { agentId, sessionId, legacyRoster = 
   // Active metadata supplies start time (broker `since` is only phase time).
   for (const [key, active] of Object.entries(store.activeVpTurns || {})) {
     if (!online || !scopedTo(active, agentId, sessionId) || !current(active)) continue;
-    executionRows.set(executionKey(active), { ...active, status: 'running', isStopping: !!store.stoppingVpTurnIds?.[key] });
+    executionRows.set(sessionExecutionKey(active), { ...active, status: 'running', isStopping: !!store.stoppingVpTurnIds?.[key] });
   }
   const legacyMembers = new Set(legacyRoster);
   const errors = [];
@@ -103,7 +103,7 @@ export function sessionActivityRows(store, { agentId, sessionId, legacyRoster = 
       const state = thread?.state || thread?.status;
       if (!YEAFT_RUNNING_VP_STATES.has(state)) continue;
       const execution = { vpId: status.vpId, turnId: thread.turnId, threadId: thread.threadId };
-      const key = executionKey(execution);
+      const key = sessionExecutionKey(execution);
       const active = executionRows.get(key);
       executionRows.set(key, { ...active, ...execution, userTurnId: active?.userTurnId || thread.userTurnId,
         isStopping: active?.isStopping || !!store.stoppingVpTurnIds?.[yeaftTurnIdentityKey(agentId, thread.turnId)],
@@ -149,7 +149,7 @@ export function sessionActivityRows(store, { agentId, sessionId, legacyRoster = 
       status: execution.status, legacyStop: execution.legacyStop && !exactOwners.has(execution.vpId),
       canStop: execution.status !== 'error' && !awaitingRoots && !userTurnId && !knownRootExecutions.has(key)
         && (!!execution.turnId || (execution.legacyStop && !exactOwners.has(execution.vpId))),
-      isStopping: execution.isStopping, errors: [], observations: [],
+      isStopping: execution.isStopping, errors: [], observations: [], liveExecutionKeys: [],
     });
     return rows.get(rowKey);
   };
@@ -162,12 +162,13 @@ export function sessionActivityRows(store, { agentId, sessionId, legacyRoster = 
       row.status = execution.status;
       row.phaseSince = execution.since;
     }
+    if (execution.turnId && !isQueryExecutionSettled(store, agentId, conversationId, execution.turnId)) row.liveExecutionKeys.push(key);
     const progress = visibleQueryProgress(store, agentId, conversationId, { ...execution, sessionId });
     if (progress) row.observations.push(progress);
   }
   const latestPromptAt = Math.max(latestRoot?.startedAt || 0, latestUnmappedPromptAt);
   for (const detail of errors) {
-    const key = executionKey(detail);
+    const key = sessionExecutionKey(detail);
     const turn = turnByExecution.get(key);
     const liveRoot = turn && rows.get(`user:${turn.userTurnId}`);
     // Use root order, not failure time: an older parallel turn can fail after

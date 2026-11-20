@@ -10,6 +10,8 @@ import UserTurnBlock from './UserTurnBlock.js';
 import VirtualTranscript from './VirtualTranscript.js';
 import MessageBlock from './MessageBlock.js';
 import ConcurrentUserTurns from './ConcurrentUserTurns.js';
+import SessionLaneWait from './SessionLaneWait.js';
+import { sessionExecutionKey } from '../stores/helpers/session-activity.js';
 import { orderUserTurnMessages, partitionUserTurnBlocks, isPendingUserTurn } from '../utils/concurrent-user-turns.js';
 import { readWaitClock } from '../utils/wait-clock.js';
 import { pickWaitingAnimation, waitingAnimation } from './waiting/index.js';
@@ -54,7 +56,7 @@ import { resolveLongResponseOrigin } from '../utils/response-origin-navigation.j
 
 export default {
   name: 'MessageList',
-  components: { AgentInstaller, MessageItem, AssistantTurn, VpTurnBlock, VpSpeakerHeader, ReflectionCard, SubAgentCard, UserTurnBlock, VirtualTranscript, MessageBlock, ConcurrentUserTurns },
+  components: { AgentInstaller, MessageItem, AssistantTurn, VpTurnBlock, VpSpeakerHeader, ReflectionCard, SubAgentCard, UserTurnBlock, VirtualTranscript, MessageBlock, ConcurrentUserTurns, SessionLaneWait },
   template: `
     <main class="chat-container virtual-transcript-scroller" ref="containerRef" tabindex="-1">
       <!-- Session Loading Overlay - only covers message area -->
@@ -177,6 +179,10 @@ export default {
               @delete-turn="$emit('delete-turn', $event)"
               @fork-from-turn="$emit('fork-from-turn', $event)" />
           </template>
+          <template v-if="toolsInStatus" #after="{ turn }">
+            <SessionLaneWait v-if="laneWaiting(turn)"
+              :preference="store.waitingAnimation" :seed="turn.startedAt" :clock-key="waitClockKey + ':' + turn.userTurnId" :status="waitingStatus || ''" />
+          </template>
         </ConcurrentUserTurns>
         <!-- feat-6af5f9f1 PR A: orphan-card flush also removed. Orphans
              still latch in the store; PR B's debug panel surfaces them
@@ -203,7 +209,7 @@ export default {
         -->
         <!-- Waiting indicator: shown while processing but not streaming text. The
              chosen animation plays in it; with animations off, three dots. -->
-        <div v-if="previewShowTypingDots && !splitActive" class="typing-indicator" :class="[animation ? 'is-' + animation.layout : '', waitingStatus ? ('status-' + waitingStatus) : '']">
+        <div v-if="previewShowTypingDots && !splitActive && (!toolsInStatus || store.isProcessing || isPreviewMode)" class="typing-indicator" :class="[animation ? 'is-' + animation.layout : '', waitingStatus ? ('status-' + waitingStatus) : '']">
           <component v-if="animation" :is="animation.component" :clock-key="waitClockKey" :status="waitingStatus || ''" />
           <template v-else><span></span><span></span><span></span></template>
         </div>
@@ -233,6 +239,8 @@ export default {
     </main>
   `,
   props: {
+    toolsInStatus: { type: Boolean, default: false },
+    liveExecutionKeys: { type: Set, default: () => new Set() },
     hideSpeakerIdentity: { type: Boolean, default: false },
     deleteTurnActionFor: { type: Function, default: null },
     forkFromTurnEnabled: { type: Boolean, default: false },
@@ -552,6 +560,12 @@ export default {
           currentTurn.forkBoundaryTurnId = typeof forkEndpoint?.turnId === 'string'
             ? forkEndpoint.turnId.trim() : '';
           currentTurn.isActive = !!activeTurnMeta;
+          if (_props.toolsInStatus) {
+            currentTurn.isResponding = currentTurn.messages.some(message => (
+              message.turnId && _props.liveExecutionKeys.has(sessionExecutionKey(message))
+            ));
+            currentTurn.isActive ||= currentTurn.isResponding;
+          }
           if (Number.isFinite(activeTurnMeta?.startedAt)) currentTurn.startedAt = activeTurnMeta.startedAt;
           finalizeTurnResponseSegments(currentTurn);
           const persistedLlmCallCount = currentTurn.messages.reduce((count, message) => (
@@ -583,25 +597,11 @@ export default {
           if (Number.isFinite(liveTurnMeta?.totalMs)) currentTurn.totalMs = liveTurnMeta.totalMs;
           else if (Number.isFinite(persistedResponseMeta?.totalMs)) currentTurn.totalMs = persistedResponseMeta.totalMs;
           else if (Number.isFinite(persistedResponseMeta?.turnDurationMs)) currentTurn.totalMs = persistedResponseMeta.turnDurationMs;
-          // Has the VP produced anything the user/group can see?
-          // Tools are NOT user-visible content — they're internal
-          // activity. A route_forward call shows up as a tool chip
-          // (ToolLine renders the `Route @target: text` line), so
-          // forward-only turns still pass through the `hasTools`
-          // gate without a separate handoff pill.
-          const hasVisible = !!(
-            currentTurn.textContent
-            || currentTurn.todoMsg
-            || currentTurn.askMsg
-            || currentTurn.imageMsgs.length > 0
-          );
-          const hasTools = currentTurn.toolMsgs.length > 0;
-
-          // Push the turn if it produced ANY surface (visible content
-          // or tools). Empty turns (nothing at all) are still skipped —
-          // they're created when latch helpers ran but no message body
-          // ever attached.
-          if (hasVisible || hasTools) {
+          const hasVisible = !!(currentTurn.textContent || currentTurn.todoMsg || currentTurn.askMsg || currentTurn.imageMsgs.length);
+          const hasInlineTools = currentTurn.toolMsgs.some(tool => !_props.toolsInStatus || tool.toolName === 'RouteForward');
+          // A running tool-only reply still has a status dot. Once it settles,
+          // its details remain reachable in the pane without an empty reply row.
+          if (hasVisible || hasInlineTools || currentTurn.isResponding) {
             // task-708: render the speaker header on every VP-attributed
             // turn. The avatar (with its inline typing badge) is THE
             // surface that signals which VP is speaking + whether they
@@ -671,6 +671,7 @@ export default {
           isHistory: false,
           todoMsg: null,
           toolMsgs: [],
+          toolsInStatus: _props.toolsInStatus,
           imageMsgs: [],
           askMsg: null,
           messages: [],
@@ -777,7 +778,7 @@ export default {
           if (msg.isHistory) currentTurn.isHistory = true;
           if (msg.toolName === 'TodoWrite') {
             currentTurn.todoMsg = toolEntry;
-          } else if (msg.toolName === 'AskUserQuestion') {
+          } else if (msg.toolName === 'AskUserQuestion' || (_props.toolsInStatus && msg.toolName === 'AskUser')) {
             currentTurn.askMsg = toolEntry;
           } else {
             currentTurn.toolMsgs.push(toolEntry);
@@ -879,6 +880,12 @@ export default {
 
     const concurrentTurnsRef = Vue.ref(null);
     const currentPendingTurns = Vue.computed(() => currentSessionTurns.value.filter(isPendingUserTurn));
+    const streamingUserTurns = Vue.computed(() => new Set(turnGroups.value
+      .filter(item => item.isStreaming && item.userTurnId).map(item => item.userTurnId)));
+    // Lane placement follows the root snapshot. Animation needs stronger
+    // evidence: an exact live execution, which can settle before that snapshot.
+    const laneWaiting = turn => turn.state === 'running' && !streamingUserTurns.value.has(turn.userTurnId)
+      && turn.executions.some(execution => _props.liveExecutionKeys.has(sessionExecutionKey(execution)));
     // Settled roots still determine history order, but cannot keep a single
     // pending root in parallel layout. This also applies after navigation/reload.
     const splitActive = Vue.computed(() => currentPendingTurns.value.length > 1);
@@ -1823,6 +1830,7 @@ export default {
       deleteTurnActionFor: _props.deleteTurnActionFor,
       flashMsgId: flashMsgId.value,
       useImStyleForUser: useImStyleForUser.value,
+      toolsInStatus: _props.toolsInStatus,
       hideSpeakerIdentity: _props.hideSpeakerIdentity,
       forkFromTurnEnabled: _props.forkFromTurnEnabled,
       forkFromTurnDisabled: _props.forkFromTurnDisabled,
@@ -1868,7 +1876,7 @@ export default {
       welcomeSetupError,
       turnGroups,
       messageBlocks,
-      historyBlocks, pendingTurns, splitActive, concurrentTurnsRef, stopUserTurn, onReadPane, blockRenderContext,
+      historyBlocks, pendingTurns, splitActive, laneWaiting, concurrentTurnsRef, stopUserTurn, onReadPane, blockRenderContext,
       virtualTranscriptIdentity,
       estimateMessageBlockHeight,
       visibleItemsForBlock,

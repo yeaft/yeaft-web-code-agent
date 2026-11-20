@@ -259,6 +259,31 @@
   51%, 100% { opacity: 0; }
 }
 
+/* An active Session response stays marked between streaming chunks. */
+.session-response-running {
+  display: flex;
+  align-items: center;
+  min-height: 14px;
+  margin-top: 3px;
+}
+
+.session-response-running-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--success);
+  animation: session-response-pulse 1.5s ease-in-out infinite alternate;
+}
+
+@keyframes session-response-pulse {
+  from { opacity: 0.55; }
+  to { opacity: 1; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .session-response-running-dot { animation: none; }
+}
+
 /* Typing Indicator */
 .typing-indicator {
   display: flex;

@@ -941,6 +941,7 @@ function formatYeaftHistoryMessages(incomingMessages, msgSessionId, mode, existi
           startTime: timestamp || 0,
           sessionId: rowSessionId,
           turnId,
+          _hasPersistedTurnId: hasPersistedTurnId,
           ...(m.threadId ? { threadId: m.threadId } : {}),
           ...executionOriginMeta,
           ...(speakerVpId ? { vpId: speakerVpId, speakerVpId } : {}),

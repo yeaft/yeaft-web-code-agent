@@ -24,6 +24,7 @@ import YeaftConversationOutline from './YeaftConversationOutline.js';
 import WorkCenterPage from './WorkCenterPage.js';
 import { parseMentions } from '../utils/parseMentions.js';
 import { sessionActivityRows } from '../stores/helpers/session-activity.js';
+import { sessionToolGroups } from '../stores/helpers/session-tool-details.js';
 import { buildModelSelectionRows, getSessionEffortDisplay, getSelectableModelEfforts, modelOptionMatchesRef, resolveSessionModelRef } from '../utils/modelRefs.js';
 import {
   clearOverlayPointerGesture,
@@ -301,6 +302,8 @@ export default {
           ref="messageListRef"
           v-if="!showSettings && !showOnboardingGuide && (conversationInventoryReady || store.yeaftVisibleMessages.length > 0) && (!isActiveGroupEmpty || store.yeaftVisibleMessages.length > 0 || store.yeaftInitialHistoryLoading)"
           :hide-speaker-identity="sceneSession"
+          :tools-in-status="ordinarySession && !!topbarGroup"
+          :live-execution-keys="sessionLiveExecutionKeys"
           :fork-from-turn-enabled="forkFromTurnEnabled"
           :fork-from-turn-disabled="!!forkUnavailableReason"
           :fork-from-turn-title="forkUnavailableReason ? $t('yeaft.session.error.' + forkUnavailableReason) : $t('yeaft.session.forkFromTurnHint')"
@@ -439,6 +442,9 @@ export default {
         v-if="!store.workCenterOpen && !store.pluginCenterOpen && !store.digitalPersonOpen && !showOnboardingGuide"
         v-show="showSessionStatus"
         :rows="sessionActivity"
+        :tool-groups="sessionToolDetails"
+        :live-execution-keys="sessionLiveExecutionKeys"
+        :key="sessionStatusIdentity"
         :visible="showSessionStatus"
         :tasks="sessionStatusTasksForActiveSession"
         :announcement-text="sessionStatusAnnouncementText"
@@ -1590,12 +1596,19 @@ export default {
 
     const sessionActivity = Vue.computed(() => {
       const group = topbarGroup.value;
-      if (!showSessionStatus.value || !group) return [];
+      if (!group || store.digitalPersonOpen || store.workCenterOpen || store.pluginCenterOpen) return [];
       return sessionActivityRows(store, {
         agentId: sceneAgentId.value, sessionId: group.id,
         legacyRoster: group.sceneId ? [] : group.roster || [],
         sessions: sessionsStore()?.sessionList,
       });
+    });
+
+    const sessionStatusIdentity = Vue.computed(() => JSON.stringify([sceneAgentId.value, topbarGroup.value?.id]));
+    const sessionLiveExecutionKeys = Vue.computed(() => new Set(sessionActivity.value.flatMap(row => row.liveExecutionKeys)));
+    const sessionToolDetails = Vue.computed(() => {
+      if (!ordinarySession.value || !topbarGroup.value || store.digitalPersonOpen || store.workCenterOpen || store.pluginCenterOpen) return [];
+      return sessionToolGroups(store.yeaftVisibleMessages, { agentId: sceneAgentId.value, sessionId: topbarGroup.value.id });
     });
 
     const stopActivityTurn = (target) => {
@@ -1735,6 +1748,9 @@ export default {
       // Session activity pane bindings.
       showSessionStatus,
       sessionActivity,
+      sessionStatusIdentity,
+      sessionLiveExecutionKeys,
+      sessionToolDetails,
       sessionStatusTasksForActiveSession,
       sessionStatusAnnouncementText,
       sessionStatusVisible,
