@@ -181,6 +181,7 @@ export function createVpStatusBroker({ send, now = Date.now } = {}) {
       sequence: ++sequence,
       createdAt: prev?.createdAt || ts,
       turnId,
+      queryProgress: prev?.turnId === turnId && isVpStatusRunning(state) ? prev.queryProgress : undefined,
       errorDetail: nextErrorDetail,
       errorAt: state === 'error'
         ? (prev?.state === 'error' && prev.turnId === turnId && prev.errorAt != null ? prev.errorAt : ts)
@@ -210,11 +211,24 @@ export function createVpStatusBroker({ send, now = Date.now } = {}) {
     return out;
   }
 
+  // The bridge supplies a whitelisted wire frame. Progress is kept only
+  // for the exact live execution and never changes status or phase ordering.
+  function recordQueryProgress(progress) {
+    const row = threads.get(threadKeyOf(progress.sessionId, progress.vpId, progress.threadId));
+    if (!row || row.turnId !== progress.turnId || !isVpStatusRunning(row.state)
+        || (row.queryProgress?.revision || 0) >= progress.revision) return;
+    row.queryProgress = progress;
+  }
+
   function broadcastSnapshot({ sessionId } = {}) {
+    const queryProgress = [...threads.values()]
+      .filter(row => row.queryProgress && (sessionId == null || row.sessionId === sessionId))
+      .map(row => row.queryProgress);
     send({
       type: 'vp_status_snapshot',
       sessionId: sessionId === undefined ? null : sessionId,
       statuses: snapshot(sessionId),
+      ...(queryProgress.length ? { queryProgress } : {}),
     });
   }
 
@@ -231,5 +245,5 @@ export function createVpStatusBroker({ send, now = Date.now } = {}) {
   function reset() { threads.clear(); }
   function __testReset() { threads.clear(); }
 
-  return { transition, settleIdle, snapshot, broadcastSnapshot, forget, reset, __testReset };
+  return { transition, settleIdle, snapshot, recordQueryProgress, broadcastSnapshot, forget, reset, __testReset };
 }

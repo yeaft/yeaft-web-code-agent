@@ -404,7 +404,7 @@ export function handleAssistantOutputFrame(store, conversationId, data, frameAge
     if (completedYeaftSessionId && store._currentYeaftTurnId) {
       store.completeYeaftTurnRuntime({ agentId: store._currentYeaftAgentId || null,
         sessionId: completedYeaftSessionId, vpId: store._currentYeaftVpId,
-        turnId: store._currentYeaftTurnId });
+        turnId: store._currentYeaftTurnId, conversationId });
     }
     if (completedYeaftSessionId && typeof store.clearYeaftSessionProcessingIfIdle === 'function') {
       store.clearYeaftSessionProcessingIfIdle(completedYeaftSessionId, {

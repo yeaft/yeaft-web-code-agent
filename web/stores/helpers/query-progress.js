@@ -1,5 +1,6 @@
 import { isRetiredYeaftConversation } from './yeaft-conversation-generation.js';
 import { statusOwnsRunningTurn } from './yeaft-runtime-state.js';
+import { yeaftTurnIdentityKey } from './yeaft-session-identity.js';
 
 const counters = ['revision', 'modelRequests', 'toolExecutions', 'reusedCalls', 'repeatedCalls', 'failedCalls', 'stagnantBatches'];
 const isAgentOnline = (store, agentId) => store.agents?.some(agent => agent.id === agentId && agent.online);
@@ -9,10 +10,11 @@ export function invalidateOfflineQueryProgress(store) {
   const next = { ...store.activeVpTurns };
   for (const [key, row] of Object.entries(next)) {
     if (isAgentOnline(store, row.agentId)) continue;
-    const { queryProgress: _progress, ...rest } = row;
-    next[key] = { ...rest, connectionGeneration: -1 };
+    next[key] = { ...row, connectionGeneration: -1 };
   }
   store.activeVpTurns = next;
+  store.yeaftQueryProgressByTurn = Object.fromEntries(Object.entries(store.yeaftQueryProgressByTurn || {})
+    .filter(([, row]) => isAgentOnline(store, row.agentId)));
 }
 
 /** Ephemeral metadata only. Never retain unknown fields from a wire event. */
@@ -47,52 +49,97 @@ export function normalizeQueryProgress(event) {
     toolExecutions, reusedCalls, repeatedCalls, failedCalls, stage, reason, lastEvidenceAt, stagnantBatches, ...extra };
 }
 
-/** Progress can update a live owner, never open/revive a turn or a conversation. */
+const keyFor = (agentId, conversationId, turnId) => JSON.stringify([agentId, conversationId, turnId]);
+const generationOf = store => Number(store.chatHistoryConnectionGeneration || 0);
+const belongsTo = (row, agentId, conversationId, generation) => row?.agentId === agentId
+  && row.conversationId === conversationId && row.connectionGeneration === generation;
+const sameExecution = (row, turn) => row.sessionId === turn.sessionId && row.vpId === turn.vpId
+  && row.turnId === turn.turnId && (row.threadId || 'main') === (turn.threadId || 'main');
+
+function hasLiveOwner(store, agentId, conversationId, turn) {
+  const generation = generationOf(store);
+  const owner = store.activeVpTurns?.[yeaftTurnIdentityKey(agentId, turn.turnId)]
+    || store.activeVpTurns?.[turn.turnId];
+  // If a known start was invalidated on disconnect, only a broker snapshot
+  // can re-authorize it, not a buffered incremental frame.
+  if (owner?.agentId === agentId && owner.conversationId === conversationId) {
+    return belongsTo(owner, agentId, conversationId, generation) && sameExecution(owner, turn);
+  }
+  // A tab opened mid-turn can use authoritative thread inventory without
+  // manufacturing a turn-start, a streaming message, or a Stop target.
+  return Object.values(store.vpStatuses || {}).some(status =>
+    belongsTo(status, agentId, conversationId, generation) && Array.isArray(status.threads)
+    && statusOwnsRunningTurn(status, turn));
+}
+
+/** Observations cannot open/revive a turn or a conversation. */
 export function applyQueryProgress(store, msg) {
   const progress = normalizeQueryProgress(msg?.event);
-  if (!progress || !msg.agentId || !msg.conversationId || store.connectionState !== 'connected'
-      || !isAgentOnline(store, msg.agentId)
-      || isRetiredYeaftConversation(store, msg.agentId, msg.conversationId)
-      || store.yeaftConversationIdsByAgent?.[msg.agentId] !== msg.conversationId) return;
-  const entry = Object.entries(store.activeVpTurns || {}).find(([, row]) => (
-    row.agentId === msg.agentId && row.sessionId === progress.sessionId
-    && row.turnId === progress.turnId && row.vpId === progress.vpId
-    && row.threadId === progress.threadId && row.conversationId === msg.conversationId
-    && row.connectionGeneration === Number(store.chatHistoryConnectionGeneration || 0)
-  ));
-  if (!entry || (entry[1].queryProgressRevision || 0) >= progress.revision) return;
-  store.activeVpTurns = { ...store.activeVpTurns, [entry[0]]: {
-    ...entry[1], queryProgress: progress, queryProgressRevision: progress.revision,
+  const { agentId, conversationId } = msg || {};
+  if (!progress || !agentId || !conversationId || store.connectionState !== 'connected'
+      || !isAgentOnline(store, agentId) || isRetiredYeaftConversation(store, agentId, conversationId)
+      || store.yeaftConversationIdsByAgent?.[agentId] !== conversationId
+      || ['sessionId', 'vpId', 'turnId', 'threadId'].some(key => msg[key] != null && msg[key] !== progress[key])
+      || !hasLiveOwner(store, agentId, conversationId, progress)) return;
+  const key = keyFor(agentId, conversationId, progress.turnId);
+  if (store._yeaftEndedQueryExecutions?.[key]) return;
+  const connectionGeneration = generationOf(store);
+  const existing = store.yeaftQueryProgressByTurn?.[key];
+  if (existing && (!sameExecution(existing.progress, progress)
+      || (existing.connectionGeneration === connectionGeneration && existing.progress.revision >= progress.revision))) return;
+  store.yeaftQueryProgressByTurn = { ...store.yeaftQueryProgressByTurn, [key]: {
+    agentId, conversationId, connectionGeneration, progress,
   } };
 }
 
-/** A fresh snapshot can re-authorize an existing turn after reconnect, not invent counters. */
-export function reconcileQueryProgressSnapshot(store, msg) {
-  if (!msg.agentId || !msg.conversationId || store.connectionState !== 'connected'
-      || !isAgentOnline(store, msg.agentId)
-      || store.yeaftConversationIdsByAgent?.[msg.agentId] !== msg.conversationId
-      || isRetiredYeaftConversation(store, msg.agentId, msg.conversationId)) return;
-  const generation = Number(store.chatHistoryConnectionGeneration || 0);
-  const statuses = Array.isArray(msg.event.statuses) ? msg.event.statuses : [];
-  const next = { ...store.activeVpTurns };
-  for (const [key, row] of Object.entries(next)) {
-    if (row.agentId !== msg.agentId || (msg.event.sessionId != null && row.sessionId !== msg.event.sessionId)) continue;
-    const live = statuses.some(status => statusOwnsRunningTurn(status, row));
-    // Routine snapshots must not erase observations still owned by this live
-    // turn. Reconnects can re-authorize ownership, but not restore old counters.
-    if (live && row.connectionGeneration === generation && row.conversationId === msg.conversationId) continue;
-    const { queryProgress: _progress, ...rest } = row;
-    next[key] = { ...rest, connectionGeneration: live ? generation : -1,
-      conversationId: msg.conversationId };
+/** Retire only display metadata. Neither these counters nor their terminal
+ * fence participate in Session processing or Stop authorization. */
+export function retireQueryProgress(store, agentId, conversationId, turnIds) {
+  if (!agentId || !conversationId || store.yeaftConversationIdsByAgent?.[agentId] !== conversationId || !turnIds.length) return;
+  const ended = { ...store._yeaftEndedQueryExecutions };
+  const pending = { ...store.yeaftQueryProgressByTurn };
+  for (const turnId of turnIds) {
+    if (typeof turnId !== 'string' || !turnId || turnId.length > 256) continue;
+    const key = keyFor(agentId, conversationId, turnId);
+    delete pending[key];
+    delete ended[key];
+    ended[key] = true;
   }
-  store.activeVpTurns = next;
+  store.yeaftQueryProgressByTurn = pending;
+  store._yeaftEndedQueryExecutions = Object.fromEntries(Object.entries(ended).slice(-512));
 }
 
-export function visibleQueryProgress(store, { agentId, sessionId, turnId, vpId }) {
-  if (store.connectionState !== 'connected' || !agentId || !sessionId || !isAgentOnline(store, agentId)) return null;
-  const row = Object.values(store.activeVpTurns || {}).find(row => row.agentId === agentId
-    && row.sessionId === sessionId && row.turnId === turnId && row.vpId === vpId
-    && row.connectionGeneration === Number(store.chatHistoryConnectionGeneration || 0)
-    && row.conversationId === store.yeaftConversationIdsByAgent?.[agentId]);
-  return row?.queryProgress || null;
+/** Re-authorize known starts, and recover counts only for exact live threads.
+ * Do not change runtime ownership for a tab that missed vp_turn_start. */
+export function reconcileQueryProgressSnapshot(store, msg, statuses) {
+  const { agentId, conversationId, event } = msg;
+  if (!agentId || !conversationId || store.connectionState !== 'connected'
+      || !isAgentOnline(store, agentId) || store.yeaftConversationIdsByAgent?.[agentId] !== conversationId
+      || isRetiredYeaftConversation(store, agentId, conversationId)) return;
+  const generation = generationOf(store);
+  const scoped = row => event.sessionId == null || row.sessionId === event.sessionId;
+  const owns = turn => statuses.some(status => statusOwnsRunningTurn(status, turn));
+  const next = { ...store.activeVpTurns };
+  for (const [key, row] of Object.entries(next)) {
+    if (row.agentId !== agentId || !scoped(row)) continue;
+    next[key] = { ...row, connectionGeneration: owns(row) ? generation : -1, conversationId };
+  }
+  store.activeVpTurns = next;
+  for (const progress of Array.isArray(event.queryProgress) ? event.queryProgress : []) {
+    if (progress && scoped(progress) && owns(progress)) applyQueryProgress(store, { agentId, conversationId, event: progress });
+  }
+}
+
+/** Drop observations absent from authoritative runtime reconciliation. */
+export function pruneQueryProgress(store, agentId, conversationId, { sessionId, vpId } = {}) {
+  store.yeaftQueryProgressByTurn = Object.fromEntries(Object.entries(store.yeaftQueryProgressByTurn || {}).filter(([, row]) =>
+    row.agentId !== agentId || (sessionId != null && row.progress.sessionId !== sessionId)
+    || (vpId != null && row.progress.vpId !== vpId)
+    || (row.conversationId === conversationId && hasLiveOwner(store, agentId, conversationId, row.progress))));
+}
+
+export function visibleQueryProgress(store, agentId, conversationId, execution) {
+  const entry = store.yeaftQueryProgressByTurn?.[keyFor(agentId, conversationId, execution.turnId)];
+  return belongsTo(entry, agentId, conversationId, generationOf(store)) && sameExecution(entry.progress, execution)
+    ? entry.progress : null;
 }

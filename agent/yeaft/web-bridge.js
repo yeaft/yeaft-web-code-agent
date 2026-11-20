@@ -5023,9 +5023,10 @@ function handleEngineEvent(event, hctx) {
         if (typeof event.toolStatsTruncated === 'boolean') enhanced.toolStatsTruncated = event.toolStatsTruncated;
       }
     }
-    sendToServer({ type: 'yeaft_output', conversationId: yeaftConversationId, sessionId, vpId, turnId, threadId,
-      event: { type: 'query_progress', turnId, threadId, sessionId, vpId, revision, modelRequests,
-        toolExecutions, reusedCalls, repeatedCalls, failedCalls, stage, reason, lastEvidenceAt, stagnantBatches, ...enhanced } });
+    const progress = { type: 'query_progress', turnId, threadId, sessionId, vpId, revision, modelRequests,
+      toolExecutions, reusedCalls, repeatedCalls, failedCalls, stage, reason, lastEvidenceAt, stagnantBatches, ...enhanced };
+    getVpStatusBroker().recordQueryProgress(progress);
+    sendToServer({ type: 'yeaft_output', conversationId: yeaftConversationId, sessionId, vpId, turnId, threadId, event: progress });
     return;
   }
   if (event.type === 'aborted' || (event.type === 'turn_end' && event.terminal === true)) hctx.queryProgressTerminal = true;
