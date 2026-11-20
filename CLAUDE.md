@@ -154,7 +154,7 @@ Work Center 是 Agent instance 级的持久目标执行系统，代码位于 `ag
 - 任务和设置页的操作按钮由 `settings-controls.css` 统一为透明、无常驻方框，hover 才显示轻量底色；操作按钮只用文字或图标之一，不重复叠加（导航与输入状态标记除外），纯图标操作保留可访问名称；键盘 focus 保留清晰轮廓，危险操作保留警示文字。开关的启用轨道共用 `--settings-control-active`，浅色主题为蓝色、深色主题跟随暖灰强调色；输入型触发器与日历选中态不套用普通操作按钮样式。
 - 弹窗沿用所属模块的 overlay / shell。通用路径是 `.modal-overlay` + `.modal`，`.modal-card` 不是全局基础类。配置弹窗 header / footer 固定，中间 body 滚动。
 - 图标复用现有图标或 Symbols Nerd Font；含义不只靠 hover tooltip。用户文案通过 `$t()`，中英翻译同步。
-- UI 验证覆盖 light / dark、320px 窄屏、桌面、长内容滚动，以及键盘 focus、disabled、loading、error、empty 和 stale / reconnect 状态。
+- UI 验证只覆盖受影响的主题、屏宽与交互状态。例如，改布局时检查 320px 窄屏、桌面和长内容；改焦点或异步流程时检查相应的键盘操作和状态。不把这些场景作为每次 UI 改动的固定清单。
 
 ## 开发与验证
 
@@ -172,15 +172,22 @@ Work Center 是 Agent instance 级的持久目标执行系统，代码位于 `ag
 
 `scripts/test-suite-manifest.mjs` 列出全部保留的 Vitest 和 Playwright 文件；`npm run test:budget` 收集两个完整目录的运行时逻辑用例，计入参数展开与 skip，不因默认清单或 project 重复执行改变计数。精简基线合计 197（Vitest 172 + Playwright 25），总预算 200；新功能按风险逐步补关键用例，优先替换冗余覆盖，不用跳过、过滤或合并无关场景绕过数量。`vitest.config.js` 运行全部保留的 Vitest 文件；聚焦开发使用 `vitest.focus.config.js`。裸 `npx vitest run` 不代替项目门禁。
 
-代码改动的基线是相关 focused tests + `npm test`；Agent / Server 增加 syntax / release guard，前端增加 build，真实浏览器路径增加对应 E2E。提交前包含 `git diff --check`，验证记录对应实际执行命令与结果。
+验证按**行为影响和风险**选择，不按改动行数或文件类型套固定组合：
+
+- **只改说明文档或开发约定：** 自查 diff；仅在修改影响文档站构建语义时运行 `docs:build`，不跑应用测试或构建。
+- **纯展示（如界面文案、颜色），不改交互、状态或数据：** 自查 diff，在受影响的页面或状态验证一次。不默认新增用例、构建生产包或跑整套 Playwright。
+- **局部行为改动（如等待时序、停止、焦点）：** 用相关 focused tests 验证，并为缺失的关键场景补回归。只有需要真实浏览器才能验证的契约才跑对应 E2E；同一行为不在源码版和生产包各验一遍，除非两者差异就是风险。
+- **高风险（如鉴权、持久数据、迁移或跨端协议）：** 按受影响的边界验证关键链路、失败与兼容路径。涉及生产打包、启动或跨端联动时，运行相应的 build、release guard 或端到端验证；不因 diff 小而降级。
+
+开发迭代只跑本轮受影响的检查，准备合并时对最终代码版本跑一次 `npm test`；已在同一版本上通过就不重复跑。提交前运行 `git diff --check`，在 PR 中记录实际执行的检查和结果。发布 workflow 的既有门禁不变。
 
 ## Worktree、Review 与发布约定
 
 Feature / fix / docs 使用从最新 `origin/main`（`git fetch origin main --tags`）建立的独立 worktree 和 PR，不直接推送 `main`。Commit 使用 Conventional Commits（如 `feat:`、`fix:`、`docs:`）。提交包含与改动面匹配的验证结果；现有 PR 自动 CI 触发关闭，没有 checks 不表示通过。
 
-PR 记录改动目的、验证结果与风险。审查关注完整 diff、兼容性和相关回归，结论对应明确的 head SHA 与合并基线；代码或基线变化后需要重新确认。开发与审查不绑定具体人员、VP 或交接工具。
+PR 记录改动目的、验证结果与风险。纯文档、纯展示改动自查即可；高风险改动要独立审查，其他改动按影响范围和不确定性决定。审查关注完整 diff、兼容性和相关回归，结论对应明确的 head SHA 与合并基线；head 或基线有变化时确认增量和受影响的结论，不默认重做整轮审查或无关验证。开发与审查不绑定具体人员、VP 或交接工具。
 
-合并使用 head-match 保护，不使用 `HEAD:main` / `branch:main`。发布与代码修改是分开的操作；tag 仅来自合并后重新 fetch 的 `origin/main`，版本从远端实际 tag 单一递增为 `v1.0.X`，PR merge commit、main、本地 / 远端 tag 指向一致。`v*` workflow 发布 npm Agent 与 `:dev` Docker image；`release-*` 为需要用户明确授权的生产发布。发布闭环后清理本任务 worktree，不清理其他人的分支和文件。
+合并使用 head-match 保护，不使用 `HEAD:main` / `branch:main`。发布与代码修改是分开的操作；tag 仅来自合并后重新 fetch 的 `origin/main`，版本从远端实际 tag 单一递增为 `v1.0.X`，PR merge commit、main、本地 / 远端 tag 指向一致。`v*` workflow 发布 npm Agent 与 `:dev` Docker image；`release-*` 为需要用户明确授权的生产发布。tag 推送成功后即可交付，报告「已合并，开发版发布中」；除非任务需要确认发布结果，不轮询 workflow，不把推 tag 当作发布成功或线上更新。清理本任务 worktree，不清理其他人的分支和文件。
 
 ## 运维与安全边界
 
