@@ -216,7 +216,7 @@ export default {
             :class="{ 'has-messages': store.yeaftVisibleMessages.length > 0 }"
             role="alert"
           >
-            <span>{{ $t(store.yeaftSessionHydrateError ? 'yeaft.sessionInventory.error' : 'yeaft.historyLoad.error') }}</span>
+            <span>{{ $t(store.yeaftSessionHydrateError ? 'yeaft.sessionInventory.error' : (store.yeaftHistoryLoadError === 'history_payload_too_large' ? 'yeaft.historyLoad.tooLarge' : 'yeaft.historyLoad.error')) }}</span>
             <button type="button" class="btn-secondary" @click="store.yeaftSessionHydrateError ? retryConversationInventory() : reloadMessages()">{{ $t(store.yeaftSessionHydrateError ? 'yeaft.sessionInventory.retry' : 'yeaft.historyLoad.retry') }}</button>
           </div>
         <p v-if="deleteTurnStatus" class="yeaft-delete-turn-status" role="status">{{ $t('yeaft.deleteTurn.' + deleteTurnStatus) }}</p>

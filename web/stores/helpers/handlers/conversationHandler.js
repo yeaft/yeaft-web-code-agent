@@ -15,7 +15,7 @@ import { sameUserMessage } from '../dedup.js';
 import { ensureMessageUiKeys, maxDbMessageId } from '../messages.js';
 import { t } from '../../../utils/i18n.js';
 import { recordPerfTrace, measureNextPaint } from '../perfTrace.js';
-import { activeYeaftHistoryIdentity } from '../yeaft-history-load.js';
+import { activeYeaftHistoryIdentity, failYeaftHistoryLoad } from '../yeaft-history-load.js';
 import {
   yeaftHistoryIdentityKey,
   yeaftOptimisticMessageIdentity,
@@ -1036,7 +1036,14 @@ export function handleYeaftHistoryChunk(store, msg) {
   if (deletion && (!msg.agentId || !msg.requestId)) return;
   if (msg.requestId && typeof store.isCurrentYeaftHistoryResponse === 'function'
       && !store.isCurrentYeaftHistoryResponse(msg)) return;
-  if (deletion?.needsReplay && (msg.mode !== 'recent' || msg.error || !Array.isArray(msg.messages))) return;
+  if (msg.error) {
+    const failed = failYeaftHistoryLoad(store, {
+      agentId: retiredAgentId, sessionId: msgSessionId, requestId: msg.requestId, error: msg.error,
+    });
+    if (failed && deletion?.needsReplay) store.dropYeaftInvalidatedTranscript?.(retiredAgentId, msgSessionId);
+    return;
+  }
+  if (deletion?.needsReplay && (msg.mode !== 'recent' || !Array.isArray(msg.messages))) return;
   if (isRetiredYeaftConversation(store, retiredAgentId, msg.conversationId)) {
     const currentConversationId = store.yeaftConversationIdsByAgent?.[retiredAgentId] || null;
     if (!currentConversationId || currentConversationId === msg.conversationId) return;

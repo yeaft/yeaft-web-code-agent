@@ -1124,6 +1124,37 @@
   border-radius: 12px;
 }
 
+.session-attachment {
+  display: grid;
+  justify-items: start;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.session-attachment .user-attachment-item {
+  max-width: min(300px, 100%);
+}
+
+.session-attachment .user-attachment-file,
+.session-attachment-label {
+  min-width: 0;
+}
+
+.session-attachment-status {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.session-attachment-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.session-attachment-actions a {
+  text-decoration: none;
+}
+
 /* Image Preview Overlay */
 .image-preview-overlay {
   position: fixed;

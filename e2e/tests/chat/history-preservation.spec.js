@@ -10,6 +10,8 @@ import { join } from 'node:path';
 import { expect } from '@playwright/test';
 import { test as base } from '../../fixtures/test-server.js';
 import { ConversationStore } from '../../../agent/yeaft/conversation/persist.js';
+import { persistYeaftAttachments, projectSessionHistoryAttachments } from '../../../agent/yeaft/attachments.js';
+import { readSessionAttachmentChunk } from '../../../agent/yeaft/session-attachment-read.js';
 
 const SESSION_A = 'fold-history-A';
 const SESSION_B = 'fold-history-B';
@@ -103,7 +105,8 @@ const test = base.extend({
         : reader.loadVisibleBySession(request.sessionId, older ? request.beforeSeq : null, turns,
           { stopAtSeq: request.gapStopAtSeq });
       const messages = page.messages.map(row => ({
-        ...row, seq: reader.getMessageSeqById(row.id), ts: row.time,
+        ...row, ...(row.attachments ? { attachments: projectSessionHistoryAttachments(row) } : {}),
+        seq: reader.getMessageSeqById(row.id), ts: row.time,
         threadId: row.threadId || row.turnId || 'main',
       }));
       const response = {
@@ -312,7 +315,33 @@ test('recovers the same complete transcript by pagination after a real fold revi
   expect(resetPages.at(-1).hasMore).toBe(false);
 });
 
-test('relays uploaded images directly and rejects missing uploads without a text-only send', async ({ chatPage, mockAgent }) => {
+test('relays uploaded images directly and rejects missing uploads without a text-only send', async ({ chatPage, mockAgent, persistedHistory }) => {
+  const agentId = mockAgent.agentId;
+  const capabilities = await chatPage.evaluate(id => window.Pinia.useChatStore().agents
+    .find(agent => agent.id === id).capabilities, agentId);
+  mockAgent.send({ type: 'agent_capabilities_updated', capabilities: [...capabilities, 'session_attachment_refs'] });
+  await chatPage.waitForFunction(id => window.Pinia.useChatStore().agents
+    .find(agent => agent.id === id)?.capabilities?.includes('session_attachment_refs'), agentId);
+
+  const previewPath = `/api/yeaft/session-attachments/${encodeURIComponent(agentId)}/${SESSION_B}/`;
+  const attachmentGets = [];
+  chatPage.on('request', request => {
+    const url = new URL(request.url());
+    if (request.method() === 'GET' && url.pathname.startsWith(previewPath)) {
+      attachmentGets.push(url.pathname.slice(previewPath.length) + url.search);
+    }
+  });
+  // Large enough to exceed the Agent's old 8 MiB history queue when encoded.
+  const bytes = Buffer.concat([Buffer.from(PNG.split(',')[1], 'base64'), Buffer.alloc(6 * 1024 * 1024)]);
+  const persisted = persistYeaftAttachments([{ name: 'direct-image.png', mimeType: 'image/png', data: bytes.toString('base64') }],
+    { yeaftDir: persistedHistory.root, sessionId: SESSION_B }).promptAttachments[0];
+  const readAttachment = incoming => {
+    const { type, requestId, sessionId, attachmentId, offset } = incoming;
+    if (type !== 'session_attachment_read_authorized' || sessionId !== SESSION_B) return;
+    mockAgent.send({ type: 'yeaft_session_attachment_chunk', requestId, sessionId, attachmentId, offset,
+      ...readSessionAttachmentChunk(incoming, persistedHistory.root) });
+  };
+  mockAgent._messageHandlers.push(readAttachment);
   await openSession(chatPage, mockAgent.agentId, SESSION_B);
   await expect(chatPage.locator('.assistant-turn')).toContainText('Only Session B answer');
   const upload = await chatPage.evaluate(async png => {
@@ -332,20 +361,76 @@ test('relays uploaded images directly and rejects missing uploads without a text
   const relayed = await mockAgent.waitForMessage('yeaft_session_send');
   expect(relayed.files).toEqual([expect.objectContaining({ name: 'direct-image.png', mimeType: 'image/png', data: PNG.split(',')[1], isImage: true })]);
   expect(relayed.attachments).toBeUndefined();
-  // Echo the accepted user row through the ordinary durable history contract.
-  // The fixture has no running VP; this send is no longer unacknowledged when
-  // checking rejection cleanup for the following independent send.
-  await chatPage.evaluate(({ agentId, sessionId, conversationId, sent }) => {
+  // MockAgent replays the accepted row from disk through the real Server's
+  // history relay. No inline attachment bytes or browser URLs on the wire.
+  const persistedRow = persistedHistory.store.append({
+    role: 'user', sessionId: SESSION_B, content: relayed.text, clientMessageId: relayed.id,
+    attachments: [
+      persisted,
+      { ...persisted, name: 'missing-image.png', path: join(persistedHistory.root, 'sessions', SESSION_B, 'attachments', 'absent.png') },
+    ],
+  });
+  const availableId = `${persistedRow.id}.0`;
+  const missingId = `${persistedRow.id}.1`;
+  await chatPage.evaluate(({ agentId, sessionId }) => {
     const store = window.Pinia.useChatStore();
-    const request = store.beginYeaftHistoryLoad({ agentId, sessionId, mode: 'delta', preserveLoaded: true });
-    store.handleMessage({
-      type: 'yeaft_history_chunk', agentId, sessionId, conversationId, requestId: request.requestId,
-      mode: 'delta', messages: [{ id: 'm999999', seq: 999999, role: 'user', content: sent.text,
-        clientMessageId: sent.id, sessionId, ts: Date.now() }], latestSeq: 999999, hasMore: false,
-    });
+    const afterSeq = store.activeYeaftHistoryState.latestSeq;
+    store.continueYeaftHistoryDelta(sessionId, agentId, afterSeq);
+  }, { agentId, sessionId: SESSION_B });
+  const message = chatPage.locator('.message.user').filter({ hasText: relayed.text });
+  const badge = message.locator('.attachments-badge');
+  await expect(badge).toHaveText(/2 image/);
+  await expect(badge).toHaveAttribute('aria-expanded', 'false');
+  await expect(message.locator('img')).toHaveCount(0);
+  expect(attachmentGets).toEqual([]);
+  expect(mockAgent.messages('session_attachment_read_authorized')).toHaveLength(0);
+
+  const preview = chatPage.waitForResponse(response => new URL(response.url()).pathname === `${previewPath}${availableId}`);
+  await badge.click();
+  const previewResponse = await preview;
+  expect(previewResponse.status()).toBe(200);
+  expect(previewResponse.headers()['content-type']).toBe('image/png');
+  const previewBytes = await previewResponse.body();
+  expect(previewBytes.length).toBe(bytes.length);
+  expect(createHash('sha256').update(previewBytes).digest('hex')).toBe(createHash('sha256').update(bytes).digest('hex'));
+  expect(mockAgent.messages('session_attachment_read_authorized').filter(read => read.attachmentId === availableId)
+    .map(read => read.offset)).toEqual(Array.from({ length: 7 }, (_, index) => index * 1024 * 1024));
+  const image = message.getByRole('img', { name: 'direct-image.png' });
+  await expect.poll(() => image.evaluate(img => img.complete && img.naturalWidth > 0)).toBe(true);
+  await expect(message.getByText('The image preview could not be loaded.')).toBeVisible();
+  await expect(message.getByText(relayed.text)).toBeVisible();
+  await expect(message.getByRole('button', { name: 'missing-image.png' })).toHaveCount(0);
+  expect([...attachmentGets].sort()).toEqual([availableId, missingId]);
+
+  await message.getByRole('button', { name: 'Retry' }).click();
+  await expect.poll(() => attachmentGets.filter(path => path === missingId).length).toBe(2);
+  await expect(message.getByText('The image preview could not be loaded.')).toBeVisible();
+  await image.click();
+  const gallery = chatPage.locator('.image-preview-overlay');
+  await expect(gallery.getByRole('img', { name: 'direct-image.png' })).toBeVisible();
+  await expect(gallery.locator('.image-preview-next')).toHaveCount(0);
+  await chatPage.keyboard.press('Escape');
+  await expect(gallery).toHaveCount(0);
+
+  expect(mockAgent.messages('session_attachment_read_authorized').some(request => request.download)).toBe(false);
+  const download = chatPage.waitForEvent('download');
+  await message.getByRole('link', { name: 'Download' }).first().click();
+  const downloaded = await download;
+  expect(downloaded.suggestedFilename()).toBe('direct-image.png');
+  const downloadUrl = new URL(downloaded.url());
+  expect(downloadUrl.pathname + downloadUrl.search).toBe(`${previewPath}${availableId}?download=1`);
+  expect(await downloaded.failure()).toBeNull();
+  expect(mockAgent.messages('session_attachment_read_authorized').filter(request => request.download)
+    .map(request => [request.sessionId, request.attachmentId, request.offset])).toEqual(
+    Array.from({ length: 7 }, (_, index) => [SESSION_B, availableId, index * 1024 * 1024]));
+
+  // No running VP in the fixture; close the accepted turn so the next send
+  // independently exercises rejection cleanup.
+  await chatPage.evaluate(() => {
+    const store = window.Pinia.useChatStore();
     store.yeaftProcessingSessions = {};
     store.processingConversations = {};
-  }, { agentId: mockAgent.agentId, sessionId: SESSION_B, conversationId: CONVERSATION, sent: relayed });
+  });
   const rejectedId = await send({ ...upload, fileId: 'expired-image' }, 'Reject an expired image');
   await expect.poll(() => chatPage.evaluate(({ id, conv }) =>
     window.Pinia.useChatStore().messagesMap[conv].find(m => m.clientMessageId === id)?.status,

@@ -20,6 +20,7 @@ import { recordPerfTraceEvent } from './perf-trace.js';
 import { clearWorkbenchCorrelationsForAgent } from './workbench-correlation.js';
 import { clearBrowserRuntimeForAgent } from './browser-runtime-routes.js';
 import { clearFileContentAssembliesForAgent } from './file-content-assembly.js';
+import { closeSessionAttachmentReads, handleSessionAttachmentChunk } from './session-attachment-relay.js';
 import { handleAgentBrowser } from './handlers/agent-browser.js';
 import { markAgentHeartbeatSeen } from './heartbeat-policy.js';
 
@@ -310,6 +311,7 @@ function handleAgentDisconnect(agentId, agentName, ws) {
   clearAgentDirCache(agentId);
   clearWorkbenchCorrelationsForAgent(agentId);
   clearFileContentAssembliesForAgent(agentId);
+  closeSessionAttachmentReads(agentId, agent);
   clearBrowserRuntimeForAgent(agentId);
   for (const pending of takeAgentSettingsRequestsForAgent(agentId)) {
     const client = webClients.get(pending.clientId);
@@ -406,6 +408,7 @@ function completeAgentRegistration(ws, agentId, agentName, workDir, sessionKey, 
   persistAgentInventory(agentId, agents.get(agentId));
 
   if (existingAgent?.ws && existingAgent.ws !== ws) {
+    closeSessionAttachmentReads(agentId, existingAgent);
     clearBrowserRuntimeForAgent(agentId);
     existingAgent.ws.close(1008, 'Superseded by a newer Agent connection');
   }
@@ -434,7 +437,7 @@ function completeAgentRegistration(ws, agentId, agentName, workDir, sessionKey, 
     // unknown field. New agents flip `serverEncryptionRequired = false`
     // and stop calling encrypt() on the send path.
     acceptPlaintext: true,
-    serverCapabilities: ['workbench_file_content_chunks', 'yeaft_session_config_delta', 'yeaft_session_delete_turn'],
+    serverCapabilities: ['workbench_file_content_chunks', 'yeaft_session_config_delta', 'yeaft_session_delete_turn', 'session_history_chunk_errors'],
     ...(upgradeAvailable && { upgradeAvailable })
   }));
 
@@ -445,6 +448,7 @@ function completeAgentRegistration(ws, agentId, agentName, workDir, sessionKey, 
 async function handleAgentMessage(agentId, msg, ws) {
   const agent = agents.get(agentId);
   if (!agent || agent.ws !== ws) return;
+  if (handleSessionAttachmentChunk(agentId, agent, msg)) return;
   if (await handleAgentSessionTurnDelete(agentId, agent, msg)) return;
 
   // Security: 需要 conversationId 的消息类型，验证该 conversation 属于此 agent.
