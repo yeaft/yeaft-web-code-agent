@@ -11,7 +11,7 @@ import VirtualTranscript from './VirtualTranscript.js';
 import MessageBlock from './MessageBlock.js';
 import ConcurrentUserTurns from './ConcurrentUserTurns.js';
 import SessionLaneWait from './SessionLaneWait.js';
-import { sessionExecutionKey } from '../stores/helpers/session-activity.js';
+import { sessionExecutionKey } from '../stores/helpers/yeaft-session-identity.js';
 import { orderUserTurnMessages, partitionUserTurnBlocks, isPendingUserTurn } from '../utils/concurrent-user-turns.js';
 import { readWaitClock } from '../utils/wait-clock.js';
 import { pickWaitingAnimation, waitingAnimation } from './waiting/index.js';

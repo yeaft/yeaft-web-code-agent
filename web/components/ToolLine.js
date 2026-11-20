@@ -23,7 +23,6 @@ export default {
     toolResult: { default: null },
     hasResult: { type: Boolean, default: false },
     isError: { type: Boolean, default: false },
-    inactive: { type: Boolean, default: false },
     compact: { type: Boolean, default: false },
     startTime: { type: Number, default: 0 },
     expanded: { type: Boolean, default: null }
@@ -31,7 +30,7 @@ export default {
   emits: ['update:expanded'],
   template: `
     <div>
-      <div class="tool-line" :class="{ expandable: hasExpandableContent, expanded: isExpanded, completed: hasResult && !isError, error: isError, running: !hasResult && !isError && !inactive }"
+      <div class="tool-line" :class="{ expandable: hasExpandableContent, expanded: isExpanded, completed: hasResult && !isError, error: isError, running: !hasResult && !isError }"
         :role="hasExpandableContent ? 'button' : null" :tabindex="hasExpandableContent ? 0 : null"
         :aria-expanded="hasExpandableContent ? isExpanded : null"
         @click="toggle" @keydown.enter.prevent="toggle" @keydown.space.prevent="toggle">
@@ -39,7 +38,6 @@ export default {
         <span class="tool-line-text">{{ getToolOneLine(toolName, toolInput) }}</span>
         <span class="tool-line-status error" v-if="isError">\u2715</span>
         <span class="tool-line-status completed" v-else-if="hasResult">\u2713</span>
-        <span class="tool-line-status" v-else-if="inactive" :title="$t('yeaft.sessionStatus.toolNoResult')" :aria-label="$t('yeaft.sessionStatus.toolNoResult')">—</span>
         <span class="tool-line-status running" v-else><span class="tool-dots"><span></span><span></span><span></span></span></span>
         <span class="tool-line-time" v-if="formattedTime">{{ formattedTime }}</span>
         <span class="tool-line-toggle" v-if="hasExpandableContent" @click.stop="toggle">

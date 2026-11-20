@@ -179,26 +179,19 @@ async function expectLongTurn(page) {
   for (let batch = 1; batch <= 6; batch += 1) {
     await expect(turn.locator('.turn-response-progress').nth(batch - 1)).toContainText(`Checkpoint ${batch}:`);
   }
-  // The pane projects the same durable history, independently of the
-  // virtual transcript's mounted rows or the fold's replacement window.
+  // History is still recovered into the transcript model, but cannot open a
+  // runtime details dropdown (not even for rows with durable Turn IDs).
   const toggle = page.locator('.yeaft-session-status-toggle');
   if (await toggle.getAttribute('aria-expanded') === 'false') await toggle.click();
-  const details = page.locator('.session-tool-details');
-  if (await details.getAttribute('open') === null) await details.locator('summary').click();
-  const selection = details.getByRole('combobox', { name: 'Turn for tool call details' });
-  await selection.selectOption({ label: 'Turn unknown (2)' });
-  const tools = details.locator('.tool-line');
-  await expect(tools).toHaveCount(2);
-  await expect(tools.first()).toContainText('old-a.txt');
-  await expect(tools.last()).toContainText('old-b.txt');
-  const longGroup = await selection.locator(`option[value*="${TURN}"]`).getAttribute('value');
-  await selection.selectOption(longGroup);
+  await expect(page.getByRole('button', { name: 'Tool call details', exact: true })).toHaveCount(0);
   await expect(turn.locator('.tool-line')).toHaveCount(0);
-  await expect(tools).toHaveCount(TOOL_COUNT);
-  for (const [line, filename] of [[tools.first(), 'check-0.txt'], [tools.last(), 'check-119.txt']]) {
-    if (!await line.evaluate(element => element.classList.contains('expanded'))) await line.click();
-    await expect(line.locator('..').locator('.tool-expand')).toContainText(filename);
-  }
+  await expect.poll(() => page.evaluate(({ conversationId, sessionId }) => {
+    const tools = (window.Pinia.useChatStore().messagesMap[conversationId] || [])
+      .filter(row => row.sessionId === sessionId && row.type === 'tool-use');
+    return tools.map(row => row.toolInput.file_path);
+  }, { conversationId: CONVERSATION, sessionId: SESSION_A })).toEqual([
+    'old-a.txt', 'old-b.txt', ...Array.from({ length: TOOL_COUNT }, (_, index) => `checks/check-${index}.txt`),
+  ]);
   await expect.poll(() => page.evaluate(conversationId => (
     window.Pinia.useChatStore().messagesMap[conversationId] || []
   ).filter(row => row.type === 'chat-image').map(row => ({ filename: row.filename, src: row.src })), CONVERSATION)).toEqual([

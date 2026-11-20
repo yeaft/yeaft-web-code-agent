@@ -1,3 +1,5 @@
+import { clearLiveSessionTools } from './session-tool-details.js';
+
 const RETIRED_CONVERSATION_LIMIT = 8;
 
 function retiredConversationIds(store, agentId) {
@@ -33,6 +35,7 @@ export function resolveCurrentYeaftConversation(store, agentId, conversationId) 
 
 export function retireYeaftConversation(store, agentId, conversationId, replacementConversationId = null) {
   if (!agentId || !conversationId) return;
+  clearLiveSessionTools(store, { agentId, conversationId });
   const nextRetired = retiredConversationIds(store, agentId)
     .filter(id => id !== conversationId)
     .concat(conversationId)

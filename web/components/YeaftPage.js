@@ -24,7 +24,7 @@ import YeaftConversationOutline from './YeaftConversationOutline.js';
 import WorkCenterPage from './WorkCenterPage.js';
 import { parseMentions } from '../utils/parseMentions.js';
 import { sessionActivityRows } from '../stores/helpers/session-activity.js';
-import { sessionToolGroups } from '../stores/helpers/session-tool-details.js';
+import { liveSessionToolsByExecution } from '../stores/helpers/session-tool-details.js';
 import { buildModelSelectionRows, getSessionEffortDisplay, getSelectableModelEfforts, modelOptionMatchesRef, resolveSessionModelRef } from '../utils/modelRefs.js';
 import {
   clearOverlayPointerGesture,
@@ -442,8 +442,7 @@ export default {
         v-if="!store.workCenterOpen && !store.pluginCenterOpen && !store.digitalPersonOpen && !showOnboardingGuide"
         v-show="showSessionStatus"
         :rows="sessionActivity"
-        :tool-groups="sessionToolDetails"
-        :live-execution-keys="sessionLiveExecutionKeys"
+        :tools-by-execution="sessionToolsByExecution"
         :key="sessionStatusIdentity"
         :visible="showSessionStatus"
         :tasks="sessionStatusTasksForActiveSession"
@@ -1606,9 +1605,13 @@ export default {
 
     const sessionStatusIdentity = Vue.computed(() => JSON.stringify([sceneAgentId.value, topbarGroup.value?.id]));
     const sessionLiveExecutionKeys = Vue.computed(() => new Set(sessionActivity.value.flatMap(row => row.liveExecutionKeys)));
-    const sessionToolDetails = Vue.computed(() => {
-      if (!ordinarySession.value || !topbarGroup.value || store.digitalPersonOpen || store.workCenterOpen || store.pluginCenterOpen) return [];
-      return sessionToolGroups(store.yeaftVisibleMessages, { agentId: sceneAgentId.value, sessionId: topbarGroup.value.id });
+    const sessionToolsByExecution = Vue.computed(() => {
+      const keys = sessionLiveExecutionKeys.value;
+      const agentId = sceneAgentId.value;
+      const sessionId = topbarGroup.value?.id;
+      const conversationId = store.yeaftConversationIdsByAgent?.[agentId];
+      if (!showSessionStatus.value || !ordinarySession.value || !sessionId || !conversationId || !keys.size) return new Map();
+      return liveSessionToolsByExecution(store, { agentId, conversationId, sessionId }, keys);
     });
 
     const stopActivityTurn = (target) => {
@@ -1750,7 +1753,7 @@ export default {
       sessionActivity,
       sessionStatusIdentity,
       sessionLiveExecutionKeys,
-      sessionToolDetails,
+      sessionToolsByExecution,
       sessionStatusTasksForActiveSession,
       sessionStatusAnnouncementText,
       sessionStatusVisible,

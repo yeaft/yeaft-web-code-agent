@@ -5208,6 +5208,7 @@ function handleEngineEvent(event, hctx) {
             input: event.name === 'ResponseEnhance' ? {} : event.input,
           }],
         },
+        ts: Date.now(),
       }, envelope);
       maybeTransitionVpStatus(hctx, 'tool');
       break;

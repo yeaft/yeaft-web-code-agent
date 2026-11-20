@@ -98,11 +98,11 @@ Only Sessions that have not opted into a scene use the following routing. A mess
 
 When several VPs are selected, Yeaft persists one canonical user message and fans the turn out to independent VP engines. Each VP has its own persona and memory view, streams its own response, and uses the current Session's allowed tools. Historical attribution remains in the underlying records.
 
-## 工具调用与运行状态
+## Tool calls and execution status
 
-普通 Session 的回复不再列出工具调用。打开右侧 **Session 状态 → 执行状态 → 工具调用详情**，可以选择轮次并查看已加载的调用记录；回合结束后也能查看，较早的轮次可先在聊天区加载历史。旧记录缺少可靠的轮次标识时会单独归组，不会归到相邻提问下。需要回答的提问卡、待办和转交提示仍留在对话里。
+Ordinary Session replies do not list internal tool calls. In **Session status → Execution status**, open **Details** next to a running turn's request and tool counts. It lists up to 128 calls received live in this tab, newest first. Parallel executions have separate lists. Opening Details does not load history, and the control disappears when the execution ends. Interactive questions, checklists, and hand-offs stay in the conversation.
 
-回复末尾的小圆点表示还在运行；等待下一段输出时会显示选中的等待动图（动画关闭时使用三点）。回合结束后，运行提示消失。
+While waiting for the next chunk, the selected waiting animation appears (three dots when animations are off). The activity panel shows whether the turn is still running.
 
 ## Parallel turns
 

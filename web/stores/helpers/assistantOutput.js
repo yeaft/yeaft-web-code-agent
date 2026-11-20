@@ -4,6 +4,8 @@ import { userMessageRoute } from './yeaft-session-turns.js';
 import { resetProcessingWatchdog, stopProcessingWatchdog } from './watchdog.js';
 import { markAllToolsCompleted } from './handlers/conversationHandler.js';
 import { sameUserMessage } from './dedup.js';
+import { applyToolResult, recordLiveSessionTool, recordLiveSessionToolResult } from './session-tool-details.js';
+import { isQueryExecutionSettled } from './query-progress.js';
 import { markTurnResponseKinds } from '../../utils/turn-response.js';
 
 function promoteOrInvalidateOutline(store, row, frameAgentId = null) {
@@ -59,6 +61,18 @@ export function getOrCreateExecutionStatus(store, conversationId) {
 export function handleAssistantOutputFrame(store, conversationId, data, frameAgentId = null) {
   if (!conversationId) return;
 
+  const sessionId = store._currentYeaftSessionId;
+  const turnId = store._currentYeaftTurnId;
+  const vpId = store._currentYeaftVpId;
+  const threadId = store._currentYeaftThreadId || 'main';
+  const nativeExecution = frameAgentId && sessionId && turnId && vpId
+    ? { agentId: frameAgentId, conversationId, sessionId, turnId, vpId, threadId } : null;
+  const liveToolOwner = nativeExecution && !data.history && !data.isHistory
+    && !isQueryExecutionSettled(store, frameAgentId, conversationId, turnId) ? nativeExecution : null;
+  const matchesToolScope = row => row.type === 'tool-use' && (!turnId || row.turnId === turnId)
+    && (!nativeExecution || ((row.sessionId ?? row.groupId) === sessionId
+      && (row.speakerVpId || row.vpId) === vpId && (row.threadId || 'main') === threadId
+      && (!row.agentId || row.agentId === frameAgentId)));
   const execStatus = getOrCreateExecutionStatus(store, conversationId);
   execStatus.lastActivity = Date.now();
 
@@ -116,8 +130,7 @@ export function handleAssistantOutputFrame(store, conversationId, data, frameAge
     // New assistant message means all previous tools are done
     const msgs = store.messagesMap[conversationId] || [];
     for (const msg of msgs) {
-      if (msg.type === 'tool-use' && !msg.hasResult
-          && (!store._currentYeaftTurnId || msg.turnId === store._currentYeaftTurnId)) {
+      if (!msg.hasResult && matchesToolScope(msg)) {
         msg.hasResult = true;
       }
     }
@@ -188,18 +201,20 @@ export function handleAssistantOutputFrame(store, conversationId, data, frameAge
           execStatus.toolHistory.pop();
         }
 
-        store.addMessageToConversation(conversationId, {
+        const toolRow = {
           type: 'tool-use',
           toolId: block.id || block.tool_use_id || null,
           toolName: block.name,
           toolInput: block.input,
-          startTime: Date.now(),
+          startTime: Number.isFinite(data.ts) && data.ts > 0 ? data.ts : Date.now(),
           isHistory: block.history === true || data.history === true || data.isHistory === true,
           sessionId: store._currentYeaftSessionId || null,
           vpId: store._currentYeaftVpId || null,
           turnId: store._currentYeaftTurnId || null,
           threadId: store._currentYeaftThreadId || null,
-        });
+        };
+        if (liveToolOwner) recordLiveSessionTool(store, liveToolOwner, toolRow);
+        store.addMessageToConversation(conversationId, toolRow);
       }
     }
   } else if (data.type === 'user') {
@@ -270,31 +285,12 @@ export function handleAssistantOutputFrame(store, conversationId, data, frameAge
         }
 
         const resultToolUseId = result.tool_use_id || result.toolUseId || result.tool_call_id || result.toolCallId || null;
-        const resultContent = result.content || result;
-        let matched = false;
-        if (resultToolUseId) {
-          for (let i = msgs.length - 1; i >= 0; i--) {
-            if (msgs[i].type === 'tool-use' && msgs[i].toolId === resultToolUseId
-                && (!store._currentYeaftTurnId || msgs[i].turnId === store._currentYeaftTurnId)) {
-              msgs[i].hasResult = true;
-              msgs[i].toolResult = result.is_update && msgs[i].toolResult
-                ? `${msgs[i].toolResult}\n\n${resultContent}`
-                : resultContent;
-              matched = true;
-              break;
-            }
-          }
-        }
-        if (!matched) {
-          for (let i = msgs.length - 1; i >= 0; i--) {
-            if (msgs[i].type === 'tool-use' && !msgs[i].hasResult
-                && (!store._currentYeaftTurnId || msgs[i].turnId === store._currentYeaftTurnId)) {
-              msgs[i].hasResult = true;
-              msgs[i].toolResult = resultContent;
-              break;
-            }
-          }
-        }
+        if (liveToolOwner && !result.history && !result.isHistory) recordLiveSessionToolResult(store, liveToolOwner, resultToolUseId, result);
+        const exact = resultToolUseId && msgs.findLast(row => matchesToolScope(row) && row.toolId === resultToolUseId);
+        // A missing identified native call is not permission to complete a different one.
+        const fallback = (!resultToolUseId || !nativeExecution) && !exact
+          ? msgs.findLast(row => matchesToolScope(row) && !row.hasResult) : null;
+        if (exact || fallback) applyToolResult(exact || fallback, result);
       }
 
       execStatus.currentTool = null;
