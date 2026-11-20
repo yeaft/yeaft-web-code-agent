@@ -18,47 +18,55 @@ import {
   resolveMessageImageFileReference,
 } from '../utils/message-file-reference.js';
 
-// Find the last prose node without putting a cursor inside a link, code block,
-// or rich response. Those block layouts use the reply's end gutter instead.
-function responseTailText(body) {
+function renderedTextEnd(text, range) {
+  const end = text.data.trimEnd().length;
+  if (!end || getComputedStyle(text.parentElement).visibility !== 'visible') return null;
+  range.setStart(text, end - 1);
+  range.setEnd(text, end);
+  const glyph = range.getBoundingClientRect();
+  if (!glyph.width || !glyph.height) return null;
+  range.collapse(false);
+  const caret = range.getBoundingClientRect();
+  return caret.height ? { glyph, caret } : null;
+}
+
+// Follow the last visible prose, ignoring hidden formatting at the tail.
+// A trailing code block, table, or rich response uses the reply's end gutter.
+function responseLineEnd(body) {
   const block = body.querySelector(':scope > .turn-content')?.lastElementChild;
   const segment = block?.matches('.turn-progress-group')
     ? block.firstElementChild?.lastElementChild : block;
-  let line = segment?.querySelector(':scope > .turn-text');
-  while (line) {
-    let tail = line.lastChild;
-    while (tail && (tail.nodeType === Node.COMMENT_NODE
-      || (tail.nodeType === Node.TEXT_NODE && !tail.data.trim())
-      || (tail.nodeType === Node.ELEMENT_NODE && tail.matches('br')))) tail = tail.previousSibling;
-    if (!tail || tail.nodeType === Node.TEXT_NODE) return tail;
-    if (tail.nodeType !== Node.ELEMENT_NODE) return null;
-    if (tail.matches('a, b, strong, i, em, del, s, code, span:not(.math-display), sub, sup, kbd, mark')) {
-      const walker = body.ownerDocument.createTreeWalker(tail, NodeFilter.SHOW_TEXT);
-      let lastText = null;
-      while (walker.nextNode()) if (walker.currentNode.data.trim()) lastText = walker.currentNode;
-      return lastText;
+  const markdown = segment?.querySelector(':scope > .turn-text');
+  if (!markdown) return null;
+
+  const range = body.ownerDocument.createRange();
+  function trailingEnd(parent) {
+    for (let tail = parent.lastChild; tail; tail = tail.previousSibling) {
+      if (tail.nodeType === Node.TEXT_NODE) {
+        const end = renderedTextEnd(tail, range);
+        if (end) return end;
+      } else if (tail.nodeType === Node.ELEMENT_NODE && !tail.matches('br') && getComputedStyle(tail).display !== 'none') {
+        if (!tail.matches('blockquote, ul, ol, li, p, h1, h2, h3, h4, h5, h6, a, b, strong, i, em, del, s, code, span:not(.math-display), sub, sup, kbd, mark')) {
+          return false; // A visible non-prose block ends the search, even in a list or quote.
+        }
+        const end = trailingEnd(tail);
+        if (end !== null) return end;
+      }
     }
-    if (!tail.matches('blockquote, ul, ol, li, p, h1, h2, h3, h4, h5, h6')) return null;
-    line = tail;
+    return null;
   }
-  return null;
+  return trailingEnd(markdown);
 }
 
 function positionResponseDot(body, dot) {
-  const text = responseTailText(body);
-  if (!text) {
+  const end = responseLineEnd(body);
+  if (!end) {
     dot.classList.add('is-in-gutter');
     dot.style.left = '';
     dot.style.top = '';
     return;
   }
-  const end = text.data.trimEnd().length;
-  const range = body.ownerDocument.createRange();
-  range.setStart(text, end - 1);
-  range.setEnd(text, end);
-  const glyph = range.getBoundingClientRect();
-  range.collapse(false);
-  const caret = range.getBoundingClientRect();
+  const { glyph, caret } = end;
   // The caret at the logical end is on the left of an RTL glyph. Measuring
   // it also works when only the last run of an otherwise LTR line is RTL.
   const rtl = Math.abs(caret.left - glyph.left) < Math.abs(caret.left - glyph.right);

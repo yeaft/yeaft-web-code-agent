@@ -182,7 +182,7 @@ test('one native Session turn shows its waiting indicator, retains the ordinary 
       const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
       let text, first, last;
       while ((text = walker.nextNode())) {
-        if (!text.data.trim()) continue;
+        if (!text.data.trim() || text.parentElement.closest('[hidden]')) continue;
         first ||= text;
         last = text;
       }
@@ -269,6 +269,10 @@ test('one native Session turn shows its waiting indicator, retains the ordinary 
   });
   expect(fullHeight.running).toBeCloseTo(fullHeight.oneLine, 1);
   expect(fullHeight.running).toBe(fullHeight.without);
+  wire.delta(turn, '\n\nVisible response ends here<span hidden>not displayed</span>', 'reply-after-append');
+  const visibleLine = answer.locator('.turn-text p').filter({ hasText: 'Visible response ends here' });
+  await expect(visibleLine.locator('[hidden]')).toBeHidden();
+  await expectDotAtTextEnd(visibleLine);
   // A trailing code block has no prose baseline: the marker stays outside the code and inside the reply.
   wire.delta(turn, '\n\n```text\nCode stays unchanged\n```', 'reply-after-append');
   await expect(answer.locator('pre code')).toHaveText('Code stays unchanged');
