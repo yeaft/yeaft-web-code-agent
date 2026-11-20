@@ -1,9 +1,8 @@
 /**
  * Stage for canvas waiting animations: an area under the transcript that a
- * scene paints into. It has no surface of its own. The canvas is transparent
- * and scenes draw straight onto the page, so they must not fill a background
- * and their colours have to read on the page in both themes. The stage owns
- * everything a scene should not have to care about — sizing, pixel ratio,
+ * scene paints into. The canvas is transparent so the stage's background
+ * shows through in both themes; scenes do not fill a background. The stage
+ * owns everything a scene should not have to care about — sizing, pixel ratio,
  * theme changes, reduced motion, stalled connections, running only while on
  * screen. The scene is visible from the first frame of the wait.
  *

@@ -21,6 +21,28 @@ const drawnPixels = scene => scene.locator('canvas').evaluate((canvas) => {
 });
 const drawnFrame = scene => scene.locator('canvas').evaluate(canvas => canvas.toDataURL());
 
+// Check composited pixels, not just the canvas bounds: both ends of a wide
+// scene must show the stage rather than the plain chat background.
+async function expectVisibleStageEdges(scene, path) {
+  const screenshot = await scene.screenshot({ path, scale: 'css', animations: 'disabled' });
+  const edgeContrast = await scene.page().evaluate(async (encoded) => {
+    const image = new Image();
+    image.src = `data:image/png;base64,${encoded}`;
+    await image.decode();
+    const canvas = document.createElement('canvas');
+    canvas.width = image.width;
+    canvas.height = image.height;
+    const ctx = canvas.getContext('2d');
+    ctx.drawImage(image, 0, 0);
+    return [1, canvas.width - 2].map((x) => {
+      const page = ctx.getImageData(x, 0, 1, 1).data;
+      const floor = ctx.getImageData(x, Math.round(canvas.height * 0.7), 1, 1).data;
+      return Math.max(...[0, 1, 2].map(channel => Math.abs(floor[channel] - page[channel])));
+    });
+  }, screenshot.toString('base64'));
+  for (const contrast of edgeContrast) expect(contrast, 'the backdrop is visible at each edge').toBeGreaterThan(6);
+}
+
 test('one native Session turn shows its waiting indicator, retains the ordinary transcript and merges appended tools across replay', async ({ chatPage: page, mockAgent }, info) => {
   const wire = await sessionTurnsFixture(page, mockAgent);
   await page.evaluate(() => { document.documentElement.dataset.theme = 'light'; });
@@ -55,28 +77,31 @@ test('one native Session turn shows its waiting indicator, retains the ordinary 
   const stageBox = scene => scene.evaluate((el) => {
     const stage = el.getBoundingClientRect();
     const canvas = el.querySelector('canvas');
+    const picture = canvas.getBoundingClientRect();
     const row = el.parentElement.getBoundingClientRect();
     return { width: stage.width, height: stage.height, rowHeight: row.height,
-      canvasHeight: canvas.getBoundingClientRect().height, backing: canvas.height / canvas.width,
-      offCentre: Math.abs(stage.left + stage.right - row.left - row.right) / 2 };
+      canvasHeight: picture.height, backing: canvas.height / canvas.width,
+      leftGap: picture.left - row.left, rightGap: row.right - picture.right };
   });
   const expectCompactStage = async (scene) => {
     const box = await stageBox(scene);
     expect(box.rowHeight, 'animation and padding fit within five lines').toBeLessThanOrEqual(fiveLines + 0.02);
     expect(box.canvasHeight).toBeCloseTo(box.height, 1);
-    expect(box.offCentre).toBeLessThan(1);
+    expect(box.leftGap).toBeCloseTo(0, 1);
+    expect(box.rightGap).toBeCloseTo(0, 1);
     // The backing store follows the canvas once ResizeObserver has reported.
     await expect.poll(async () => { const current = await stageBox(scene); return Math.abs(current.backing - current.height / current.width); }).toBeLessThan(0.01);
   };
   const desktop = page.viewportSize();
-  expect((await stageBox(hoops)).width).toBeGreaterThan(400);
+  await page.setViewportSize({ width: 1920, height: desktop.height });
   await expectCompactStage(hoops);
-  await indicator.screenshot({ path: info.outputPath('waiting-stage-desktop.png') });
+  expect((await stageBox(hoops)).width).toBeGreaterThan(960);
+  await expectVisibleStageEdges(hoops, info.outputPath('waiting-stage-desktop.png'));
   await page.evaluate(() => { document.documentElement.dataset.theme = 'dark'; });
   await page.setViewportSize({ width: 320, height: desktop.height });
   await expect.poll(async () => (await stageBox(hoops)).width).toBeLessThan(300);
   await expectCompactStage(hoops);
-  await indicator.screenshot({ path: info.outputPath('waiting-stage-mobile.png') });
+  await expectVisibleStageEdges(hoops, info.outputPath('waiting-stage-mobile.png'));
   // A conversation column narrower than the capped picture still uses the
   // original 11:5 aspect ratio instead of stretching or cropping it.
   await indicator.evaluate(el => { el.style.maxWidth = '200px'; });
@@ -115,6 +140,7 @@ test('one native Session turn shows its waiting indicator, retains the ordinary 
   await expect(hoops).toHaveCount(0);
   await expect(dots).toHaveCount(0);
   await expect.poll(() => drawnPixels(dragon)).toBeGreaterThan(200);
+  await expectVisibleStageEdges(dragon, info.outputPath('waiting-stage-dragon.png'));
   await chooseWaitingAnimation('cat');
   await expect(cat).toBeVisible();
   await expect(indicator.locator('.waiting-stage')).toHaveCount(0);
