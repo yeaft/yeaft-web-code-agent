@@ -32,3 +32,5 @@ export function yeaftTurnIdentityKey(agentId, turnId) {
   if (!agentId || !turnId) return '';
   return `${agentId}${SESSION_IDENTITY_SEPARATOR}${turnId}`;
 }
+
+export const sessionExecutionKey = (row) => JSON.stringify([row.speakerVpId || row.vpId, row.turnId || null, row.threadId || 'main']);

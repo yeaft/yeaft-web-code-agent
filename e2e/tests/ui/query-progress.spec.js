@@ -5,6 +5,8 @@ import { createVpStatusBroker } from '../../../agent/yeaft/vp-status-broker.js';
 
 test.use({ serverEnv: { SERVE_DIST: 'true', YEAFT_LOCAL_RUN: 'true' } });
 test('native Session progress is ephemeral, scoped and readable in light/dark at 320px', async ({ chatPage: page, mockAgent }, info) => {
+  test.setTimeout(60_000); // Includes three viewport/theme captures and two reconnects.
+  await page.setViewportSize({ width: 1400, height: 900 });
   const session = { id: 'progress-session', name: 'Query progress', roster: ['progress-vp'], defaultVpId: 'progress-vp' };
   mockAgent.send({ type: 'yeaft_output', event: { type: 'session_list_updated', sessions: [session] } });
   await expect.poll(() => page.evaluate(id => window.Pinia.useChatStore().sessionCatalog.some(row => row.routeRef.sessionId === id), session.id)).toBe(true);
@@ -35,31 +37,53 @@ test('native Session progress is ephemeral, scoped and readable in light/dark at
   broker.broadcastSnapshot({ sessionId: session.id });
   const toolFrame = data => mockAgent.send({ type: 'yeaft_output', conversationId, sessionId: session.id,
     vpId: event.vpId, turnId: event.turnId, threadId: event.threadId, data });
-  toolFrame({ type: 'assistant', message: { content: [{ type: 'tool_use', id: 'existing-call', name: 'FileRead', input: { path: 'example.txt' } }] } });
-  toolFrame({ type: 'user', tool_use_result: [{ type: 'tool_result', tool_use_id: 'existing-call', content: 'example result' }] });
-  const details = page.locator('.session-tool-details');
+  const call = (id, name) => {
+    toolFrame({ type: 'assistant', message: { content: [{ type: 'tool_use', id, name, input: { displayResource: id } }] } });
+    toolFrame({ type: 'user', tool_use_result: [{ type: 'tool_result', tool_use_id: id, content: 'example result' }] });
+  };
+  call('first-call.txt', 'FileRead');
+  const detailToggle = page.getByRole('button', { name: 'Tool call details', exact: true });
+  const details = page.getByRole('list', { name: 'Tool call details', exact: true });
+  await expect(page.locator('.messages .tool-line')).toHaveCount(0);
+  await expect(detailToggle).toHaveAttribute('aria-expanded', 'false');
+  await detailToggle.press('Space');
+  await expect(details.locator('.tool-line.completed')).toContainText('first-call.txt');
   const statusToggle = page.locator('.yeaft-session-status-toggle');
   const toolOnlyStatus = page.locator('.messages .session-tool-only-status');
-  await expect(page.locator('.messages .tool-line')).toHaveCount(0);
-  await details.locator('summary').click();
-  await expect(details.locator('.tool-line.completed')).toContainText('FileRead');
-  // A tool-only turn stays in the activity pane, without an empty reply row.
   await expect(page.locator('.messages .assistant-turn')).toHaveCount(0);
-  await details.locator('summary').click();
   await statusToggle.click();
   await expect(page.locator('.yeaft-session-status-pane')).toBeHidden();
   await expect(toolOnlyStatus).toHaveRole('status');
   await expect(toolOnlyStatus).toHaveText('Running');
   await expect(toolOnlyStatus).toHaveCSS('position', 'absolute');
   await statusToggle.click();
+  await detailToggle.press('Space');
   const initialProgress = { ...event, stage: 'running', reason: null, failedCalls: 0, toolStats: [] };
   // The new tab needs no new progress event, even during a long tool call.
   broker.recordQueryProgress(initialProgress);
   broker.broadcastSnapshot({ sessionId: session.id });
-  const progresses = page.locator('.yeaft-query-progress');
+  const progresses = page.locator('.yeaft-query-progress:not(.is-tools-only)');
   const progress = progresses.filter({ hasText: '1,234,567' }).first();
   await expect(progress).toBeVisible();
   await expect(progress).toContainText('Tools 3');
+  // Counts may arrive after calls. Adding metrics must not recreate or close
+  // this turn's open disclosure, and new calls insert above existing rows.
+  await expect(progress.locator('.yeaft-query-progress-counts')).toHaveText(/Requests 2\s*Tools 3\s*Details/);
+  await expect(detailToggle).toHaveAttribute('aria-expanded', 'true');
+  await expect(detailToggle.locator('.yeaft-model-chevron.open')).toHaveCount(1);
+  for (let i = 0; i < 9; i++) call(`newer-${i}.log`, 'FileGrep');
+  toolFrame({ type: 'assistant', message: { content: [{ type: 'tool_use', id: 'newer-9.log', name: 'FileGrep', input: { displayResource: 'newer-9.log' } }] } });
+  const result = (id, is_error) => toolFrame({ type: 'user', tool_use_result: [{ type: 'tool_result', tool_use_id: id, content: 'test result', is_error }] });
+  result('unseen-call', false);
+  await expect(details.locator('.tool-line')).toHaveCount(11);
+  const latest = details.locator('.tool-line').first();
+  await expect(latest).toContainText('newer-9.log');
+  await expect(latest).toHaveClass(/running/);
+  result('newer-9.log', true);
+  await expect(latest).toHaveClass(/error/);
+  await expect(details.locator('.tool-line').last()).toContainText('first-call.txt');
+  await expect(details.getByRole('combobox')).toHaveCount(0);
+  expect(await details.evaluate(el => el.scrollHeight > el.clientHeight && el.scrollWidth <= el.clientWidth)).toBe(true);
   expect(await page.evaluate(() => Object.keys(window.Pinia.useChatStore().activeVpTurns))).toHaveLength(0);
   // A delayed start should supply the timer without replacing the recovered metrics.
   send({ ...event, type: 'vp_turn_start' });
@@ -81,7 +105,7 @@ test('native Session progress is ephemeral, scoped and readable in light/dark at
   await expect(progress).toContainText('98,765');
   await expect(page.locator('.yeaft-session-status-pane')).not.toContainText('Software assistant');
   await expect(page.locator('.yeaft-session-activity-elapsed')).toContainText(/Elapsed .+s/);
-  await expect(progress.getByRole('button', { name: 'Details', exact: true })).toHaveCount(0);
+  await expect(progress.getByRole('button', { name: 'Tool call details', exact: true })).toBeVisible();
   await expect(liveStatus).toHaveText('Progress warning · Repeated tool results');
   await expect(liveStatus).toBeVisible();
   const usage = progress.getByRole('group', { name: 'This turn · current thread' });
@@ -118,6 +142,7 @@ test('native Session progress is ephemeral, scoped and readable in light/dark at
   // Mobile mounts its own pane, so disclosure starts closed rather than
   // inheriting ephemeral desktop component state.
   await progress.getByRole('button', { name: 'Failed 2, show tool breakdown' }).click();
+  await detailToggle.click();
   for (const theme of ['light', 'dark']) {
     await page.evaluate(theme => document.documentElement.dataset.theme = theme, theme);
     await expect(progress).toBeVisible();
@@ -126,12 +151,13 @@ test('native Session progress is ephemeral, scoped and readable in light/dark at
     expect(await progress.locator('.yeaft-query-progress-failures').evaluate(el => el.scrollWidth <= el.clientWidth)).toBe(true);
     expect(await progress.evaluate(el => { const r = el.getBoundingClientRect(); return r.left >= 0 && r.right <= innerWidth; })).toBe(true);
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    expect(await details.evaluate(el => el.scrollHeight > el.clientHeight && el.scrollWidth <= el.clientWidth)).toBe(true);
     await page.screenshot({ path: info.outputPath(`query-progress-${theme}-320.png`), fullPage: true });
   }
   await page.evaluate(() => window.Pinia.useChatStore().changeLocale('zh-CN'));
   await expect(progress.getByRole('group', { name: '当前线程 · 本轮累计' })).toContainText('输入 token');
   await expect(progress.getByRole('status')).toHaveText('进度警告 · 工具结果重复');
-  await expect(progress.getByRole('button', { name: '运行详情', exact: true })).toHaveCount(0);
+  await expect(progress.getByRole('button', { name: '工具调用详情', exact: true })).toHaveText('详情');
   await expect(progress).toContainText('执行');
   await assertHeader();
   expect(await progress.locator('.yeaft-query-progress-failures').evaluate(el => el.scrollWidth <= el.clientWidth)).toBe(true);
@@ -181,6 +207,17 @@ test('native Session progress is ephemeral, scoped and readable in light/dark at
     { turnId: parallel.turnId, authorized: false, revision: null },
     { turnId: event.turnId, authorized: false, revision: null },
   ]);
+  // Replace the transcript projection under a still-live turn. The incoming
+  // window omits the already observed calls; it must not replace the live list.
+  const reload = await page.evaluate(({ agentId, sessionId }) => window.Pinia.useChatStore().beginYeaftHistoryLoad({ agentId, sessionId, mode: 'recent' }),
+    { agentId, sessionId: session.id });
+  mockAgent.send({ type: 'yeaft_history_chunk', conversationId, sessionId: session.id,
+    requestId: reload.requestId, mode: 'recent', oldestSeq: 9000, latestSeq: 9000, hasMore: false,
+    messages: [{ id: 'm009000', seq: 9000, role: 'assistant', content: 'Transcript refreshed', ts: Date.now() + 1000,
+      sessionId: session.id, vpId: event.vpId, turnId: event.turnId, threadId: event.threadId,
+      toolCalls: [{ id: 'from-replay', name: 'FileRead', input: { displayResource: 'replay-only.txt' } }] }] });
+  await expect.poll(() => page.evaluate(conversationId => (window.Pinia.useChatStore().messagesMap[conversationId] || [])
+    .filter(row => row.type === 'tool-use').map(row => row.toolId), conversationId)).toEqual(['from-replay']);
   broker.recordQueryProgress({ ...parallel, revision: 1 });
   broker.recordQueryProgress(event);
   broker.broadcastSnapshot();
@@ -189,6 +226,10 @@ test('native Session progress is ephemeral, scoped and readable in light/dark at
     { turnId: event.turnId, authorized: true, revision: 2 },
   ]);
   await expect(progresses).toHaveCount(2);
+  await detailToggle.click();
+  await expect(details.locator('.tool-line')).toHaveCount(11);
+  await expect(details.locator('.tool-line.error')).toContainText('newer-9.log');
+  await expect(details).not.toContainText('replay-only.txt');
   send({ ...parallel, revision: 2 });
   send({ ...event, revision: 3, stage: 'recovering', reason: 'repeated_failure' });
   await expect(progress.getByRole('status')).toHaveText('Recovering · Repeated tool failures');
@@ -218,7 +259,9 @@ test('native Session progress is ephemeral, scoped and readable in light/dark at
     await expect(progresses).toHaveCount(0);
   };
   await afterReplay('terminal-replay-marker');
-  await expect(page.locator('.messages .assistant-turn')).toHaveCount(0);
+  await expect(detailToggle).toHaveCount(0);
+  await expect(details).toHaveCount(0);
+  await expect(page.locator('.messages .assistant-turn').getByRole('status')).toHaveCount(0);
   await expect(toolOnlyStatus).toBeEmpty();
   broker.settleIdle({ sessionId: session.id, vpId: event.vpId, threadId: event.threadId });
   broker.settleIdle({ sessionId: session.id, vpId: parallel.vpId, threadId: parallel.threadId });

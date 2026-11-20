@@ -1,3 +1,4 @@
+import { clearLiveSessionTools } from './session-tool-details.js';
 import { isRetiredYeaftConversation } from './yeaft-conversation-generation.js';
 import { statusOwnsRunningTurn } from './yeaft-runtime-state.js';
 import { yeaftTurnIdentityKey } from './yeaft-session-identity.js';
@@ -96,6 +97,7 @@ export function applyQueryProgress(store, msg) {
  * fence participate in Session processing or Stop authorization. */
 export function retireQueryProgress(store, agentId, conversationId, turnIds) {
   if (!agentId || !conversationId || store.yeaftConversationIdsByAgent?.[agentId] !== conversationId || !turnIds.length) return;
+  clearLiveSessionTools(store, { agentId, conversationId, turnIds: new Set(turnIds) });
   const ended = { ...store._yeaftEndedQueryExecutions };
   const pending = { ...store.yeaftQueryProgressByTurn };
   for (const turnId of turnIds) {

@@ -116,6 +116,7 @@ import {
   touchYeaftHistoryCache,
 } from './helpers/yeaft-history-cache.js';
 import { planNextYeaftHistoryPage } from './helpers/yeaft-history-pagination.js';
+import { clearLiveSessionTools } from './helpers/session-tool-details.js';
 import { applyQueryProgress, pruneQueryProgress, reconcileQueryProgressSnapshot, retireQueryProgress, retireSettledQueryProgress } from './helpers/query-progress.js';
 import { normalizeTimelineErrorDetail } from './helpers/vp-timeline.js';
 import { applySessionTurns, applyUserMessageRoute, clearSessionTurns, LIVE_SESSION_TURN_STATES } from './helpers/yeaft-session-turns.js';
@@ -218,6 +219,7 @@ function yeaftTurnStateKey(state, agentId, turnId) {
 
 function clearYeaftAgentRuntimeState(state, agentId) {
   clearSessionTurns(state, agentId);
+  clearLiveSessionTools(state, { agentId });
   if (!agentId) {
     state.activeVpTurns = {};
     state.yeaftQueryProgressByTurn = {};
@@ -1205,6 +1207,7 @@ export const useChatStore = defineStore('chat', {
     // Active VP turns — keyed by turnId. Cleared on result or abort ack.
     activeVpTurns: {},
     yeaftQueryProgressByTurn: {},
+    yeaftLiveToolExecutions: {},
     _yeaftEndedQueryExecutions: {},
 
     // vp-status (2026-05-15): authoritative per-VP status table, mirrored

@@ -1,11 +1,10 @@
 import { timelineErrors } from './vp-timeline.js';
 import { isQueryExecutionSettled, visibleQueryProgress } from './query-progress.js';
 import { LIVE_SESSION_TURN_STATES } from './yeaft-session-turns.js';
-import { yeaftSessionIdentityKey, yeaftTurnIdentityKey } from './yeaft-session-identity.js';
+import { sessionExecutionKey, yeaftSessionIdentityKey, yeaftTurnIdentityKey } from './yeaft-session-identity.js';
 import { YEAFT_RUNNING_VP_STATES } from './yeaft-runtime-state.js';
 import { userTurnExcerpt } from '../../utils/concurrent-user-turns.js';
 
-export const sessionExecutionKey = (row) => JSON.stringify([row.speakerVpId || row.vpId, row.turnId || null, row.threadId || 'main']);
 const scopedTo = (row, agentId, sessionId) => row?.agentId === agentId && (row.sessionId ?? row.groupId) === sessionId;
 const promptTime = (message) => {
   const value = message.ts ?? message.timestamp;

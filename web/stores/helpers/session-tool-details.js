@@ -1,35 +1,53 @@
-import { userTurnExcerpt } from '../../utils/concurrent-user-turns.js';
-import { sessionExecutionKey } from './session-activity.js';
+import { sessionExecutionKey } from './yeaft-session-identity.js';
 
-// These are user-facing content rather than internal calls: keep the
-// interactive question, checklist and hand-off in the transcript.
+// Interactive questions, checklists and hand-offs stay in the transcript.
 const INLINE_TOOLS = new Set(['AskUser', 'AskUserQuestion', 'TodoWrite', 'RouteForward']);
+const MAX_CALLS_PER_EXECUTION = 128;
+const MAX_TRACKED_EXECUTIONS = 128;
+const scopeKey = ({ agentId, conversationId, sessionId }, executionKey) => JSON.stringify([agentId, conversationId, sessionId, executionKey]);
 
-/** Group the same authorized tool rows the transcript already receives. Do not
- * fetch raw logs or infer legacy ownership from the nearest prompt: concurrent
- * or paginated history can put an unrelated prompt immediately before a call. */
-export function sessionToolGroups(messages, { agentId, sessionId }) {
-  const prompts = new Map();
-  const promptByExecution = new Map();
-  const groups = new Map();
-  for (const row of messages) {
-    if (!row || (row.sessionId ?? row.groupId) !== sessionId || (row.agentId && row.agentId !== agentId)) continue;
-    if (row.type === 'user' && row.turnRelation !== 'supplement') {
-      const label = userTurnExcerpt(row);
-      if (label) {
-        for (const id of [row.userTurnId, row.id, row.messageId, row.clientMessageId]) {
-          if (id && !prompts.has(id)) prompts.set(id, label);
-        }
-        if (row.turnId && row.turnId !== row.id) promptByExecution.set(row.turnId, label);
-      }
-    }
-    if (row.type !== 'tool-use' || !row.toolName || INLINE_TOOLS.has(row.toolName)) continue;
-    const knownExecution = row.turnId && (!row.isHistory || row._hasPersistedTurnId === true);
-    const executionKey = knownExecution ? sessionExecutionKey(row) : '';
-    const key = row.userTurnId ? `user:${row.userTurnId}`
-      : executionKey ? `engine:${executionKey}` : 'legacy';
-    if (!groups.has(key)) groups.set(key, { key, userTurnId: row.userTurnId, turnId: knownExecution ? row.turnId : null, tools: [] });
-    groups.get(key).tools.push({ row, executionKey });
+// Browser-tab state only: capture events as they arrive, not from transcript
+// rows that a recent-history refresh can replace even while a turn is live.
+export function recordLiveSessionTool(store, owner, row) {
+  if (!row.toolId || !row.toolName || row.isHistory || INLINE_TOOLS.has(row.toolName)) return;
+  const key = scopeKey(owner, sessionExecutionKey(owner));
+  const cache = store.yeaftLiveToolExecutions ||= {};
+  const entry = cache[key] ||= { ...owner, tools: [] };
+  if (entry.tools.some(tool => tool.toolId === row.toolId)) return;
+  const { toolId, toolName, toolInput, startTime } = row;
+  entry.tools.unshift({ id: toolId, toolId, toolName, toolInput, startTime });
+  if (entry.tools.length > MAX_CALLS_PER_EXECUTION) entry.tools.pop();
+  const keys = Object.keys(cache);
+  if (keys.length > MAX_TRACKED_EXECUTIONS) delete cache[keys[0]];
+}
+
+export function applyToolResult(row, result) {
+  row.hasResult = true;
+  const content = result.content ?? result;
+  row.toolResult = result.is_update && row.toolResult ? `${row.toolResult}\n\n${content}` : content;
+  if (typeof result.is_error === 'boolean') row.isError = result.is_error;
+}
+
+export function recordLiveSessionToolResult(store, owner, toolId, result) {
+  if (!toolId) return;
+  const entry = store.yeaftLiveToolExecutions?.[scopeKey(owner, sessionExecutionKey(owner))];
+  const tool = entry?.tools.find(row => row.toolId === toolId);
+  if (tool) applyToolResult(tool, result);
+}
+
+export function clearLiveSessionTools(store, { agentId, conversationId, turnIds } = {}) {
+  for (const [key, owner] of Object.entries(store.yeaftLiveToolExecutions || {})) {
+    if ((!agentId || owner.agentId === agentId) && (!conversationId || owner.conversationId === conversationId)
+        && (!turnIds || turnIds.has(owner.turnId))) delete store.yeaftLiveToolExecutions[key];
   }
-  return [...groups.values()].map(group => ({ ...group, label: prompts.get(group.userTurnId) || promptByExecution.get(group.turnId) || '' })).reverse();
+}
+
+/** A fresh runtime owner is required to display cached calls after reconnect. */
+export function liveSessionToolsByExecution(store, scope, liveExecutionKeys) {
+  const toolsByExecution = new Map();
+  for (const key of liveExecutionKeys) {
+    const tools = store.yeaftLiveToolExecutions?.[scopeKey(scope, key)]?.tools;
+    if (tools?.length) toolsByExecution.set(key, tools);
+  }
+  return toolsByExecution;
 }

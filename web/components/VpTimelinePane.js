@@ -1,5 +1,6 @@
 import TerminalOutput from './TerminalOutput.js';
 import SessionToolDetails from './SessionToolDetails.js';
+import { sessionExecutionKey } from '../stores/helpers/yeaft-session-identity.js';
 import { formatElapsed } from '../stores/helpers/turn-timing.js';
 import { LIVE_SESSION_TURN_STATES } from '../stores/helpers/yeaft-session-turns.js';
 
@@ -122,8 +123,7 @@ export default {
   emits: ['start-resize', 'stop-turn', 'edit-announcement', 'cancel-task', 'close'],
   props: {
     rows: { type: Array, required: true },
-    toolGroups: { type: Array, default: () => [] },
-    liveExecutionKeys: { type: Set, default: () => new Set() },
+    toolsByExecution: { type: Map, default: () => new Map() },
     visible: { type: Boolean, default: true },
     tasks: { type: Array, default: () => [] },
     announcementText: { type: String, default: '' },
@@ -200,7 +200,7 @@ export default {
 
       <slot name="scheduled-task"></slot>
 
-      <section class="yeaft-session-status-section yeaft-session-activity" :aria-label="$t('yeaft.sessionStatus.activity')">
+      <section ref="activitySection" tabindex="-1" class="yeaft-session-status-section yeaft-session-activity" :aria-label="$t('yeaft.sessionStatus.activity')">
         <header class="yeaft-session-status-section-header">
           <span>{{ $t('yeaft.sessionStatus.activity') }}</span>
         </header>
@@ -254,32 +254,36 @@ export default {
                 </dl>
               </article>
             </section>
-            <div v-for="(progress, observationIndex) in row.observations" :key="progress.turnId" class="yeaft-query-progress" :class="'is-' + progress.stage">
-              <span v-if="row.observations.length > 1" class="yeaft-query-progress-label">{{ $t('yeaft.sessionStatus.executionNumber', { count: observationIndex + 1 }) }}</span>
-              <div class="yeaft-query-progress-state" role="status">
+            <div v-for="({ key, progress, number }) in visibleExecutions(row)" :key="key" class="yeaft-query-progress" :class="progress ? 'is-' + progress.stage : 'is-tools-only'">
+              <span v-if="number" class="yeaft-query-progress-label">{{ $t('yeaft.sessionStatus.executionNumber', { count: number }) }}</span>
+              <div v-if="progress" class="yeaft-query-progress-state" role="status">
                 <template v-if="progress.stage !== 'running'">
                   <span>{{ $t('yeaft.queryProgress.stage.' + progress.stage) }}</span><span v-if="progress.reason" class="yeaft-query-progress-reason"> · {{ $t('yeaft.queryProgress.reason.' + progress.reason) }}</span>
                 </template>
               </div>
-              <div class="yeaft-query-progress-usage" role="group" :aria-label="$t('yeaft.queryProgress.scopeLabel')" :title="$t('yeaft.queryProgress.tokenScope')">
+              <div v-if="progress" class="yeaft-query-progress-usage" role="group" :aria-label="$t('yeaft.queryProgress.scopeLabel')" :title="$t('yeaft.queryProgress.tokenScope')">
                 <span class="yeaft-query-progress-label" aria-hidden="true">{{ $t('yeaft.queryProgress.scopeLabel') }}</span>
                 <dl class="yeaft-query-progress-tokens">
                   <div><dt>{{ $t('yeaft.queryProgress.inputTokens') }}</dt><dd>{{ formatTokenCount(progress.inputTokens) }}</dd></div>
                   <div><dt>{{ $t('yeaft.queryProgress.outputTokens') }}</dt><dd>{{ formatTokenCount(progress.outputTokens) }}</dd></div>
                 </dl>
               </div>
-              <div class="yeaft-query-progress-counts">
-                <span>{{ $t('yeaft.queryProgress.requests', { count: formatCount(progress.modelRequests) }) }}</span>
-                <span>{{ $t('yeaft.queryProgress.tools', { count: formatCount(progress.toolExecutions) }) }}</span>
-                <button v-if="progress.failedCalls > 0" type="button" class="btn-ghost yeaft-query-progress-failures-toggle"
-                  :aria-expanded="areFailuresExpanded(row, progress)"
-                  :aria-label="$t('yeaft.queryProgress.failureToggle', { count: formatCount(progress.failedCalls) })"
-                  @click="toggleFailures(row, progress)">
-                  {{ $t('yeaft.queryProgress.failed', { count: formatCount(progress.failedCalls) }) }}
-                  <span aria-hidden="true">{{ areFailuresExpanded(row, progress) ? '▾' : '▸' }}</span>
-                </button>
-              </div>
-              <section v-if="progress.failedCalls > 0 && areFailuresExpanded(row, progress)" class="yeaft-query-progress-failures" :aria-label="$t('yeaft.queryProgress.failureTitle')">
+              <SessionToolDetails :tools="toolsByExecution.get(key)" @restore-focus="focusActivity">
+                <template v-if="progress" #default>
+                  <span>{{ $t('yeaft.queryProgress.requests', { count: formatCount(progress.modelRequests) }) }}</span>
+                  <span>{{ $t('yeaft.queryProgress.tools', { count: formatCount(progress.toolExecutions) }) }}</span>
+                </template>
+                <template v-if="progress?.failedCalls > 0" #after>
+                  <button type="button" class="btn-ghost yeaft-query-progress-failures-toggle"
+                    :aria-expanded="areFailuresExpanded(row, progress)"
+                    :aria-label="$t('yeaft.queryProgress.failureToggle', { count: formatCount(progress.failedCalls) })"
+                    @click="toggleFailures(row, progress)">
+                    {{ $t('yeaft.queryProgress.failed', { count: formatCount(progress.failedCalls) }) }}
+                    <span aria-hidden="true">{{ areFailuresExpanded(row, progress) ? '▾' : '▸' }}</span>
+                  </button>
+                </template>
+              </SessionToolDetails>
+              <section v-if="progress?.failedCalls > 0 && areFailuresExpanded(row, progress)" class="yeaft-query-progress-failures" :aria-label="$t('yeaft.queryProgress.failureTitle')">
                 <p class="yeaft-query-progress-label">{{ $t('yeaft.queryProgress.failureTitle') }}</p>
                 <template v-if="Array.isArray(progress.toolStats)">
                   <div v-if="failedTools(progress).length" class="yeaft-query-progress-failure-list">
@@ -300,7 +304,6 @@ export default {
             </div>
           </li>
         </ul>
-        <SessionToolDetails :groups="toolGroups" :live-execution-keys="liveExecutionKeys" />
       </section>
 
       <section class="yeaft-vp-task-board yeaft-session-status-section" :aria-label="$t('yeaft.sessionStatus.backgroundTasks')">
@@ -391,6 +394,9 @@ export default {
       return text.slice(0, 95) + '…';
     });
 
+    const activitySection = Vue.ref(null);
+    const focusActivity = () => { if (props.visible) activitySection.value?.focus(); };
+
     const expandedErrors = Vue.ref({});
     const errorKey = row => JSON.stringify([row.agentId, row.sessionId, row.key,
       (row.errors || []).map(error => [error.turnId, error.threadId, error.at])]);
@@ -404,6 +410,17 @@ export default {
     });
     const formatErrorTime = value => new Date(value).toLocaleString();
 
+    const visibleExecutions = (row) => {
+      const observed = (row.observations || []).map(progress => ({ key: sessionExecutionKey(progress), progress }));
+      // Actual tool events can arrive before telemetry, or from Agents that do
+      // not report request counts. Use the same key so opening details survives
+      // the first metrics update, without fabricating counts.
+      const observedKeys = new Set(observed.map(item => item.key));
+      for (const key of row.liveExecutionKeys || []) {
+        if (!observedKeys.has(key) && props.toolsByExecution.has(key)) observed.push({ key, progress: null });
+      }
+      return observed.length > 1 ? observed.map((item, index) => ({ ...item, number: index + 1 })) : observed;
+    };
     const expandedFailures = Vue.ref({});
     const progressKey = (row, progress) => JSON.stringify([row.agentId, row.sessionId, row.key, progress.turnId, progress.threadId]);
     const areFailuresExpanded = (row, progress) => !!expandedFailures.value[progressKey(row, progress)];
@@ -526,6 +543,9 @@ export default {
       elapsed,
       areFailuresExpanded,
       toggleFailures,
+      visibleExecutions,
+      activitySection,
+      focusActivity,
       formatCount,
       formatTokenCount,
       failedTools,

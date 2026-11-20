@@ -199,20 +199,20 @@ test('one native Session turn shows its waiting indicator, retains the ordinary 
   await expect(answer.getByRole('status')).toHaveText('Running');
   await expect(replyMarkers).toHaveCount(0);
   await page.setViewportSize(desktop);
-  const details = page.locator('.session-tool-details');
+  const details = page.getByRole('list', { name: 'Tool call details', exact: true });
   const toolLines = details.locator('.tool-line');
   const statusToggle = page.locator('.yeaft-session-status-toggle');
-  const showDetails = async () => {
-    if (await statusToggle.getAttribute('aria-expanded') === 'false') await statusToggle.click();
-    await details.locator('summary').press('Enter');
-  };
+  if (await statusToggle.getAttribute('aria-expanded') === 'false') await statusToggle.click();
+  const detailToggle = page.getByRole('button', { name: 'Tool call details', exact: true });
   await expect(answer.locator('.tool-line')).toHaveCount(0);
   await expect(toolLines).toHaveCount(0);
-  await showDetails();
+  await detailToggle.press('Enter');
   await expect(toolLines).toHaveCount(2);
-  await expect(toolLines.last()).toContainText('Grep');
+  await expect(toolLines.first()).toContainText('Grep');
   await page.keyboard.press('Tab');
   await expect(toolLines.first()).toBeFocused();
+  await page.keyboard.press('Tab');
+  await expect(toolLines.last()).toBeFocused();
   await page.keyboard.press('Enter');
   await expect(details.locator('.bash-output')).toContainText('before-append evidence');
   await expect(page.locator('.vp-turn-block')).toHaveCount(1);
@@ -220,7 +220,9 @@ test('one native Session turn shows its waiting indicator, retains the ordinary 
   wire.finish(turn);
   await expect(answer).not.toHaveClass(/streaming/);
   await expect(answer.getByRole('status')).toHaveCount(0);
-  await expect(details.locator('.bash-output')).toContainText('before-append evidence');
+  await expect(detailToggle).toHaveCount(0);
+  await expect(details).toHaveCount(0);
+  await expect(page.getByRole('region', { name: 'Execution status', exact: true })).toBeFocused();
   // The wait ends with the turn.
   await expect(indicator).toHaveCount(0);
   await page.reload();
@@ -231,8 +233,8 @@ test('one native Session turn shows its waiting indicator, retains the ordinary 
   await expect(answer).toContainText('Appended answer finishes.');
   await expect(answer.locator('.tool-line')).toHaveCount(0);
   await expect(answer.getByRole('status')).toHaveCount(0);
-  await showDetails();
-  await expect(toolLines).toHaveCount(2);
+  if (await statusToggle.getAttribute('aria-expanded') === 'false') await statusToggle.click();
+  await expect(detailToggle).toHaveCount(0);
   await expect(page.locator('.message-block')).toHaveCount(1);
   for (const [theme, width] of [['light', 1400], ['dark', 320]]) {
     await page.setViewportSize({ width, height: 900 });
@@ -288,20 +290,25 @@ test('stopping a sibling restores the ordinary live Session transcript and compl
   await expect(pane(page, b).locator('.typing-indicator .svg-running-cat')).toBeVisible();
   await expect(pane(page, a).locator('.typing-indicator')).toHaveCount(0);
   await expect(messages.locator('.tool-line')).toHaveCount(0);
-  const details = page.locator('.session-tool-details');
-  const toolSelect = details.getByRole('combobox', { name: 'Turn for tool call details' });
-  const expectOnlyCallsFor = async (label, resource) => {
-    await toolSelect.selectOption({ label: `${label} (1)` });
-    await expect(details.locator('.tool-line')).toHaveCount(1);
-    await expect(details.locator('.tool-line')).toContainText(resource);
-  };
-  await details.locator('summary').press('Enter');
-  await expect(toolSelect).toBeVisible(); // Native details dispatches toggle asynchronously.
-  await page.keyboard.press('Tab');
-  await expect(toolSelect).toBeFocused();
-  await expectOnlyCallsFor('Earlier long question', 'only A.txt');
-  await expectOnlyCallsFor('Later quick question', 'only B.txt');
-  await details.locator('summary').press('Enter');
+  const toolToggle = row => row.getByRole('button', { name: 'Tool call details', exact: true });
+  const toolList = row => row.getByRole('list', { name: 'Tool call details', exact: true });
+  const earlier = status('Earlier long question');
+  const later = status('Later quick question');
+  const historyRequests = () => mockAgent.messages().filter(msg => ['yeaft_load_history', 'yeaft_load_more_history'].includes(msg.type)).length;
+  const loads = historyRequests();
+  await toolToggle(earlier).press('Enter');
+  await expect(toolList(earlier).locator('.tool-line')).toHaveCount(1);
+  await expect(toolList(earlier)).toContainText('only A.txt');
+  await expect(toolList(later)).toHaveCount(0);
+  await toolToggle(later).click();
+  await expect(toolList(later).locator('.tool-line')).toHaveCount(1);
+  await expect(toolList(later)).toContainText('only B.txt');
+  await expect(toolList(earlier)).not.toContainText('only B.txt');
+  await toolList(earlier).getByRole('button').press('Escape');
+  await expect(toolToggle(earlier)).toBeFocused();
+  await expect(toolList(earlier)).toHaveCount(0);
+  await expect(toolList(later)).toBeVisible();
+  expect(historyRequests()).toBe(loads);
   await page.screenshot({ path: info.outputPath('parallel-desktop.png'), animations: 'disabled' });
 
   const siblingStop = pane(page, b).getByRole('button', { name: 'Stop', exact: true });
@@ -347,10 +354,15 @@ test('stopping a sibling restores the ordinary live Session transcript and compl
   wire.delta(a, ' after reload');
   await expectOrdinaryLive('A is still researching after the split while away after reload', { order: afterStop });
   if (await activity.getAttribute('aria-expanded') === 'false') await activity.click();
-  await details.locator('summary').press('Enter');
-  await expectOnlyCallsFor('Earlier long question', 'only A.txt');
-  await expectOnlyCallsFor('Later quick question', 'only B.txt');
-  await details.locator('summary').press('Enter');
+  // Replaying history while A is live does not restore its previous calls.
+  await expect(toolToggle(earlier)).toHaveCount(0);
+  await expect(later).toHaveCount(0);
+  wire.tool(a, 'continued-work', 'FileRead', { displayResource: 'A after reload.txt' });
+  await toolToggle(earlier).click();
+  await expect(toolList(earlier).locator('.tool-line')).toHaveCount(1);
+  await expect(toolList(earlier)).toContainText('A after reload.txt');
+  await expect(toolList(earlier)).not.toContainText('only A.txt');
+  await toolToggle(earlier).click();
 
   // A new sibling can split the UI again on mobile. Natural completion
   // also returns to single-column rather than waiting for the survivor to end.
@@ -549,17 +561,15 @@ test('Delete turn from a saved supplement replays the remaining Session in both 
   const expectDeleted = async tab => {
     await expectKept(tab);
     for (const text of removedText) await expect(tab.getByText(text, { exact: true })).toHaveCount(0);
-    await expect(tab.locator('.session-tool-details')).toHaveCount(0);
     await expect(tab.getByRole('button', { name: 'Delete turn', exact: true })).toHaveCount(1);
   };
 
   await openSession(page);
   for (const text of removedText) await expect(page.getByText(text, { exact: true })).toBeVisible();
-  const toolDetails = page.locator('.session-tool-details');
+  const toolDetails = page.getByRole('button', { name: 'Tool call details', exact: true });
   const statusToggle = page.locator('.yeaft-session-status-toggle');
   if (await statusToggle.getAttribute('aria-expanded') === 'false') await statusToggle.click();
-  await toolDetails.locator('summary').click();
-  await expect(toolDetails.locator('.tool-line')).toHaveCount(2);
+  await expect(toolDetails).toHaveCount(0);
   await expect(page.locator('.messages .tool-line')).toHaveCount(0);
   await expectKept(page);
   const peer = await context.newPage();
@@ -589,7 +599,7 @@ test('Delete turn from a saved supplement replays the remaining Session in both 
   await expect(action).toBeFocused();
   await expect(supplement).toBeVisible();
   if (await statusToggle.getAttribute('aria-expanded') === 'false') await statusToggle.click();
-  await expect(toolDetails.locator('summary')).toBeVisible();
+  await expect(toolDetails).toHaveCount(0);
   await page.getByRole('button', { name: 'Close Session status', exact: true }).click();
   expect(authorized()).toHaveLength(0);
 
