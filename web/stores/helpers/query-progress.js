@@ -130,6 +130,23 @@ export function reconcileQueryProgressSnapshot(store, msg, statuses) {
   }
 }
 
+/** Fence explicit settlements, not absences: an older empty snapshot or an
+ * older broker without an exact terminal ID cannot prove a turn ended. */
+export function retireSettledQueryProgress(store, agentId, conversationId, statuses) {
+  const turnIds = new Set();
+  for (const status of statuses) {
+    if (!(status?.sessionId || status?.groupId) || !status?.vpId) continue;
+    for (const thread of Array.isArray(status.threads) ? status.threads : [status]) {
+      if (!thread) continue;
+      const state = thread.state || thread.status;
+      if (state !== 'idle' && state !== 'error') continue;
+      const turnId = thread.settledTurnId || (state === 'error' ? thread.turnId : null);
+      if (turnId) turnIds.add(turnId);
+    }
+  }
+  retireQueryProgress(store, agentId, conversationId, [...turnIds]);
+}
+
 /** Drop observations absent from authoritative runtime reconciliation. */
 export function pruneQueryProgress(store, agentId, conversationId, { sessionId, vpId } = {}) {
   store.yeaftQueryProgressByTurn = Object.fromEntries(Object.entries(store.yeaftQueryProgressByTurn || {}).filter(([, row]) =>

@@ -196,14 +196,30 @@ test('native Session progress is ephemeral, scoped and readable in light/dark at
   send({ ...event, type: 'vp_turn_end', reason: 'errored' });
   send(staleRunningSnapshot);
   send({ ...event, revision: 4 });
-  // Check after replay has been received, not merely after the counters disappeared.
-  send({ type: 'vp_status_changed', sessionId: session.id, vpId: 'replay-marker', state: 'idle' });
-  await expect.poll(() => page.evaluate(() => Object.values(window.Pinia.useChatStore().vpStatuses)
-    .some(status => status.vpId === 'replay-marker'))).toBe(true);
-  await expect(progresses).toHaveCount(0);
+  const afterReplay = async vpId => {
+    // Observe the state after the replay has arrived, not during the gap before it.
+    send({ type: 'vp_status_changed', sessionId: session.id, vpId, state: 'idle' });
+    await expect.poll(() => page.evaluate(id => Object.values(window.Pinia.useChatStore().vpStatuses)
+      .some(status => status.vpId === id), vpId)).toBe(true);
+    await expect(progresses).toHaveCount(0);
+  };
+  await afterReplay('terminal-replay-marker');
   broker.settleIdle({ sessionId: session.id, vpId: event.vpId, threadId: event.threadId });
   broker.settleIdle({ sessionId: session.id, vpId: parallel.vpId, threadId: parallel.threadId });
   broker.broadcastSnapshot({ sessionId: session.id });
   expect(lastSnapshot.queryProgress).toBeUndefined();
+  // The browser may see only the broker's idle transition, with no start,
+  // result, vp_turn_end, or abort ack for that execution.
+  const statusOnly = { ...event, turnId: 'status-only-turn', revision: 1, toolExecutions: 12 };
+  broker.transition({ ...statusOnly, state: 'tool' });
+  broker.recordQueryProgress(statusOnly);
+  broker.broadcastSnapshot({ sessionId: session.id });
+  await expect(progresses.filter({ hasText: 'Tools 12' })).toBeVisible();
+  const statusOnlyRunningSnapshot = lastSnapshot;
+  broker.settleIdle({ sessionId: session.id, vpId: statusOnly.vpId, threadId: statusOnly.threadId });
+  await expect(progresses).toHaveCount(0);
+  send(statusOnlyRunningSnapshot);
+  send({ ...statusOnly, revision: 2 });
+  await afterReplay('status-only-replay-marker');
   expect(await page.evaluate(() => JSON.stringify(window.Pinia.useChatStore().messagesMap))).not.toContain('query_progress');
 });

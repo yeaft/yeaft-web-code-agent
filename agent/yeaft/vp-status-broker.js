@@ -113,6 +113,7 @@ export function createVpStatusBroker({ send, now = Date.now } = {}) {
         title: r.title || '',
         since: r.since,
         turnId: r.turnId || null,
+        ...(r.settledTurnId ? { settledTurnId: r.settledTurnId } : {}),
         createdAt: r.createdAt || r.since,
         updatedAt: r.updatedAt || r.since,
         messageCount: r.messageCount || 0,
@@ -181,6 +182,9 @@ export function createVpStatusBroker({ send, now = Date.now } = {}) {
       sequence: ++sequence,
       createdAt: prev?.createdAt || ts,
       turnId,
+      // Idle deliberately has no active turnId. Name the settled execution
+      // separately so clients can fence late progress even if they missed end.
+      settledTurnId: !isVpStatusRunning(state) ? (turnId || prev?.turnId || prev?.settledTurnId) : undefined,
       queryProgress: prev?.turnId === turnId && isVpStatusRunning(state) ? prev.queryProgress : undefined,
       errorDetail: nextErrorDetail,
       errorAt: state === 'error'

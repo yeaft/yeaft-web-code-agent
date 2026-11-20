@@ -116,7 +116,7 @@ import {
   touchYeaftHistoryCache,
 } from './helpers/yeaft-history-cache.js';
 import { planNextYeaftHistoryPage } from './helpers/yeaft-history-pagination.js';
-import { applyQueryProgress, pruneQueryProgress, reconcileQueryProgressSnapshot, retireQueryProgress } from './helpers/query-progress.js';
+import { applyQueryProgress, pruneQueryProgress, reconcileQueryProgressSnapshot, retireQueryProgress, retireSettledQueryProgress } from './helpers/query-progress.js';
 import { normalizeTimelineErrorDetail } from './helpers/vp-timeline.js';
 import { applySessionTurns, applyUserMessageRoute, clearSessionTurns, LIVE_SESSION_TURN_STATES } from './helpers/yeaft-session-turns.js';
 import { YEAFT_RUNNING_VP_STATES, statusOwnsRunningTurn, stopOrphanedTurnMessages } from './helpers/yeaft-runtime-state.js';
@@ -6614,6 +6614,7 @@ export const useChatStore = defineStore('chat', {
             ...this.vpStatuses,
             [k]: nextStatus,
           };
+          retireSettledQueryProgress(this, agentId, msg.conversationId, [nextStatus]);
           this.reconcileYeaftRuntimeFromStatuses(msg, [nextStatus], { sessionId, vpId: event.vpId });
           if (sessionId && YEAFT_RUNNING_VP_STATES.has(event.state)) {
             const processingKey = yeaftSessionIdentityKey(agentId, sessionId);
@@ -6710,6 +6711,7 @@ export const useChatStore = defineStore('chat', {
             statuses,
             eventSessionId == null ? null : eventSessionId,
           );
+          retireSettledQueryProgress(this, msg.agentId, msg.conversationId, statuses);
           reconcileQueryProgressSnapshot(this, msg, statuses);
           this.reconcileYeaftRuntimeFromStatuses(msg, statuses, { sessionId: eventSessionId ?? null });
           this.restoreActiveYeaftSessionFromStatuses(statuses, msg.agentId || null);
