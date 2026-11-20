@@ -135,6 +135,8 @@ The Yeaft page provides:
 - model/effort selection in the composer;
 - an optional debug panel for provider requests, tools, tokens, and stop reasons. Dream events and settings are not exposed.
 
+**Execution status** shows the model requests and actual tool executions for each running thread. Refreshing or reconnecting restores the latest counts from a supporting Agent, even if the page missed the start of the turn. These are live counts, not a count of tool entries in the conversation history.
+
 The execution panel shows errors for the latest turn and any turns that are still running. Once a new turn starts, older finished turns stop showing their errors in the panel. This does not change the conversation history.
 
 Debug output can contain project text and tool results. It is for the current owner and should not be exported or shared casually.

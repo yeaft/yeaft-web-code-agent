@@ -1,4 +1,5 @@
 import { timelineErrors } from './vp-timeline.js';
+import { visibleQueryProgress } from './query-progress.js';
 import { LIVE_SESSION_TURN_STATES } from './yeaft-session-turns.js';
 import { yeaftSessionIdentityKey, yeaftTurnIdentityKey } from './yeaft-session-identity.js';
 import { YEAFT_RUNNING_VP_STATES } from './yeaft-runtime-state.js';
@@ -161,8 +162,8 @@ export function sessionActivityRows(store, { agentId, sessionId, legacyRoster = 
       row.status = execution.status;
       row.phaseSince = execution.since;
     }
-    const progress = execution.queryProgress;
-    if (progress && progress.threadId === (execution.threadId || 'main')) row.observations.push(progress);
+    const progress = visibleQueryProgress(store, agentId, conversationId, { ...execution, sessionId });
+    if (progress) row.observations.push(progress);
   }
   const latestPromptAt = Math.max(latestRoot?.startedAt || 0, latestUnmappedPromptAt);
   for (const detail of errors) {

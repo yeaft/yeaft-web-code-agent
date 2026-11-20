@@ -116,7 +116,7 @@ import {
   touchYeaftHistoryCache,
 } from './helpers/yeaft-history-cache.js';
 import { planNextYeaftHistoryPage } from './helpers/yeaft-history-pagination.js';
-import { applyQueryProgress, reconcileQueryProgressSnapshot } from './helpers/query-progress.js';
+import { applyQueryProgress, pruneQueryProgress, reconcileQueryProgressSnapshot, retireQueryProgress, retireSettledQueryProgress } from './helpers/query-progress.js';
 import { normalizeTimelineErrorDetail } from './helpers/vp-timeline.js';
 import { applySessionTurns, applyUserMessageRoute, clearSessionTurns, LIVE_SESSION_TURN_STATES } from './helpers/yeaft-session-turns.js';
 import { YEAFT_RUNNING_VP_STATES, statusOwnsRunningTurn, stopOrphanedTurnMessages } from './helpers/yeaft-runtime-state.js';
@@ -220,6 +220,8 @@ function clearYeaftAgentRuntimeState(state, agentId) {
   clearSessionTurns(state, agentId);
   if (!agentId) {
     state.activeVpTurns = {};
+    state.yeaftQueryProgressByTurn = {};
+    state._yeaftEndedQueryExecutions = {};
     state.stoppingVpTurnIds = {};
     state.vpStatuses = {};
     state.yeaftProcessingSessions = {};
@@ -227,6 +229,9 @@ function clearYeaftAgentRuntimeState(state, agentId) {
   }
   state.activeVpTurns = Object.fromEntries(
     Object.entries(state.activeVpTurns || {}).filter(([, row]) => row?.agentId && row.agentId !== agentId)
+  );
+  state.yeaftQueryProgressByTurn = Object.fromEntries(
+    Object.entries(state.yeaftQueryProgressByTurn || {}).filter(([, row]) => row.agentId !== agentId)
   );
   state.stoppingVpTurnIds = Object.fromEntries(
     Object.entries(state.stoppingVpTurnIds || {}).filter(([turnId]) => state.activeVpTurns?.[turnId])
@@ -1199,6 +1204,8 @@ export const useChatStore = defineStore('chat', {
 
     // Active VP turns — keyed by turnId. Cleared on result or abort ack.
     activeVpTurns: {},
+    yeaftQueryProgressByTurn: {},
+    _yeaftEndedQueryExecutions: {},
 
     // vp-status (2026-05-15): authoritative per-VP status table, mirrored
     // from the agent broker. Shape: { [vpId]: { state, since, turnId,
@@ -6405,7 +6412,7 @@ export const useChatStore = defineStore('chat', {
           const terminalAgentId = msg.agentId || removed?.agentId || null;
           const terminalVpId = event.vpId || removed?.vpId || null;
           this.completeYeaftTurnRuntime({ agentId: terminalAgentId, sessionId: terminalSessionId,
-            vpId: terminalVpId, turnId: event.turnId });
+            vpId: terminalVpId, turnId: event.turnId, conversationId: envelopeConversationId });
           // Per-message lifecycle: flip every in-flight assistant message
           // owned by this VP/turn from 'pending' to the terminal status
           // carried on `event.reason` (end_turn → completed; route_forward
@@ -6470,6 +6477,7 @@ export const useChatStore = defineStore('chat', {
         case 'yeaft_turn_aborted': {
           const explicitTurnIds = Array.isArray(event.turnIds) ? event.turnIds.filter(Boolean) : [];
           if (event.turnId) explicitTurnIds.push(event.turnId);
+          if (event.success === true) retireQueryProgress(this, msg.agentId, envelopeConversationId, explicitTurnIds);
           const targetSessionId = event.sessionId || null;
           const targetVpId = event.vpId || null;
           const removeIds = new Set();
@@ -6501,6 +6509,7 @@ export const useChatStore = defineStore('chat', {
           break;
         }
         case 'yeaft_aborted': {
+          if (Array.isArray(event.aborted)) retireQueryProgress(this, msg.agentId, envelopeConversationId, event.aborted);
           const sessionId = event.sessionId || msg.sessionId || null;
           if (sessionId) {
             this.activeVpTurns = Object.fromEntries(
@@ -6605,6 +6614,7 @@ export const useChatStore = defineStore('chat', {
             ...this.vpStatuses,
             [k]: nextStatus,
           };
+          retireSettledQueryProgress(this, agentId, msg.conversationId, [nextStatus]);
           this.reconcileYeaftRuntimeFromStatuses(msg, [nextStatus], { sessionId, vpId: event.vpId });
           if (sessionId && YEAFT_RUNNING_VP_STATES.has(event.state)) {
             const processingKey = yeaftSessionIdentityKey(agentId, sessionId);
@@ -6619,8 +6629,7 @@ export const useChatStore = defineStore('chat', {
           break;
         }
         case 'vp_status_snapshot': {
-          if (retiredEnvelopeConversation) break;
-          reconcileQueryProgressSnapshot(this, msg);
+          if (retiredEnvelopeConversation || (event.sessionId != null && msg.sessionId != null && event.sessionId !== msg.sessionId)) break;
           // Bulk hydrate. Snapshot scoping (see broker JSDoc):
           //   - sessionId == null → unscoped, replace the WHOLE table.
           //     This is what session_ready / reset broadcasts use, so
@@ -6628,8 +6637,12 @@ export const useChatStore = defineStore('chat', {
           //     after a reconnect.
           //   - sessionId === '<id>' → scoped, replace just that session's
           //     slice. Other sessions' entries survive.
-          const statuses = Array.isArray(event.statuses) ? event.statuses : [];
           const eventSessionId = event.sessionId;
+          const statuses = (Array.isArray(event.statuses) ? event.statuses : []).flatMap(row => {
+            if (!row?.vpId) return [];
+            const sessionId = row.sessionId || row.groupId || eventSessionId || null;
+            return eventSessionId == null || sessionId === eventSessionId ? [{ ...row, sessionId }] : [];
+          });
           if (eventSessionId == null) {
             const next = { ...(this.vpStatuses || {}) };
             if (msg.agentId) {
@@ -6698,6 +6711,8 @@ export const useChatStore = defineStore('chat', {
             statuses,
             eventSessionId == null ? null : eventSessionId,
           );
+          retireSettledQueryProgress(this, msg.agentId, msg.conversationId, statuses);
+          reconcileQueryProgressSnapshot(this, msg, statuses);
           this.reconcileYeaftRuntimeFromStatuses(msg, statuses, { sessionId: eventSessionId ?? null });
           this.restoreActiveYeaftSessionFromStatuses(statuses, msg.agentId || null);
           break;
@@ -8440,12 +8455,13 @@ export const useChatStore = defineStore('chat', {
         console.warn('[chat] failed to persist pinnedSessions:', e?.message || e);
       }
     },
-    completeYeaftTurnRuntime({ agentId = null, sessionId, vpId, turnId }) {
+    completeYeaftTurnRuntime({ agentId = null, sessionId, vpId, turnId, conversationId }) {
       const turnKey = yeaftTurnStateKey(this, agentId, turnId);
       const removed = this.activeVpTurns?.[turnKey];
       if (!sessionId) sessionId = removed?.sessionId;
       if (!vpId) vpId = removed?.vpId;
       if (!agentId) agentId = removed?.agentId;
+      retireQueryProgress(this, agentId, conversationId || removed?.conversationId, [turnId]);
       const { [turnKey]: _active, ...active } = this.activeVpTurns;
       const { [turnKey]: _stopping, ...stopping } = this.stoppingVpTurnIds;
       this.activeVpTurns = active;
@@ -8499,6 +8515,7 @@ export const useChatStore = defineStore('chat', {
       }
       this.activeVpTurns = active;
       this.stoppingVpTurnIds = stopping;
+      pruneQueryProgress(this, agentId, conversationId, { sessionId, vpId });
       for (const id of affectedSessions) this.clearYeaftSessionProcessingIfIdle(id, { agentId });
     },
     clearYeaftSessionProcessingIfIdle(sessionId, { agentId = null, ignoreStatuses = false } = {}) {

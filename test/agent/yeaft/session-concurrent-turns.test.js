@@ -49,6 +49,7 @@ it('runs overlapping same-VP user turns with visible partial peer context, suppl
     requests.push(structuredClone(params.messages));
     const n = requests.length;
     if (n === 1) {
+      yield { type: 'usage', inputTokens: 123, outputTokens: 5 };
       yield { type: 'text_delta', text: 'already visible first output' };
       await Promise.race([first.promise, new Promise(resolve => params.signal.addEventListener('abort', resolve, { once: true }))]);
       if (params.signal.aborted) { const error = Error('aborted'); error.name = 'AbortError'; throw error; }
@@ -67,6 +68,13 @@ it('runs overlapping same-VP user turns with visible partial peer context, suppl
   const starts = events('vp_turn_start');
   expect(starts.map(f => f.userTurnId)).toEqual(['root-a', 'root-b']);
   expect(new Set(starts.map(f => f.threadId)).size).toBe(2);
+  // The actual bridge replays live metrics on load, without a new provider event.
+  const liveProgress = events('query_progress').find(frame => frame.turnId === starts[0].turnId)?.event;
+  expect(liveProgress).toMatchObject({ inputTokens: 123, outputTokens: 5, modelRequests: 1 });
+  const snapshotCount = events('vp_status_snapshot').length;
+  await bridge.handleYeaftLoadHistory({ sessionId, limit: 0 });
+  await until(() => events('vp_status_snapshot').length > snapshotCount);
+  expect(events('vp_status_snapshot').at(-1).event.queryProgress).toContainEqual(liveProgress);
   bridge.__testSetThreadClassifier(({ runningThreads }) => ({ decision: 'related', targetThreadId: runningThreads.find(t => t.userTurnId === 'root-b').threadId }));
   await send('extra-b', 'additional details');
   expect(events('user_message_routed').at(-1).event).toMatchObject({ messageId: 'extra-b', userTurnId: 'root-b', relation: 'supplement' });
@@ -75,6 +83,14 @@ it('runs overlapping same-VP user turns with visible partial peer context, suppl
   expect(events('vp_turn_end').some(f => f.turnId === starts[1].turnId)).toBe(false);
   second.resolve(); first.resolve();
   await bridge.__testDrainVpDrivers();
+  const settledSnapshotCount = events('vp_status_snapshot').length;
+  await bridge.handleYeaftLoadHistory({ sessionId, limit: 0 });
+  await until(() => events('vp_status_snapshot').length > settledSnapshotCount);
+  expect(events('vp_status_snapshot').at(-1).event.queryProgress).toBeUndefined();
+  const settledThreads = events('vp_status_snapshot').at(-1).event.statuses.flatMap(row => row.threads);
+  for (const { turnId, threadId } of starts) {
+    expect(settledThreads).toContainEqual(expect.objectContaining({ threadId, turnId: null, settledTurnId: turnId }));
+  }
   expect(requests.length).toBeGreaterThanOrEqual(3);
   expect(JSON.stringify(requests.at(-1))).toContain('additional details');
   expect(JSON.stringify(requests.at(-1))).toContain('already visible first output');

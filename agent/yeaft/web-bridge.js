@@ -5023,9 +5023,10 @@ function handleEngineEvent(event, hctx) {
         if (typeof event.toolStatsTruncated === 'boolean') enhanced.toolStatsTruncated = event.toolStatsTruncated;
       }
     }
-    sendToServer({ type: 'yeaft_output', conversationId: yeaftConversationId, sessionId, vpId, turnId, threadId,
-      event: { type: 'query_progress', turnId, threadId, sessionId, vpId, revision, modelRequests,
-        toolExecutions, reusedCalls, repeatedCalls, failedCalls, stage, reason, lastEvidenceAt, stagnantBatches, ...enhanced } });
+    const progress = { type: 'query_progress', turnId, threadId, sessionId, vpId, revision, modelRequests,
+      toolExecutions, reusedCalls, repeatedCalls, failedCalls, stage, reason, lastEvidenceAt, stagnantBatches, ...enhanced };
+    getVpStatusBroker().recordQueryProgress(progress);
+    sendToServer({ type: 'yeaft_output', conversationId: yeaftConversationId, sessionId, vpId, turnId, threadId, event: progress });
     return;
   }
   if (event.type === 'aborted' || (event.type === 'turn_end' && event.terminal === true)) hctx.queryProgressTerminal = true;
@@ -5338,6 +5339,7 @@ function handleEngineEvent(event, hctx) {
             sessionId: hctx.sessionId || null,
             vpId: hctx.vpId,
             threadId: hctx.threadId || 'main',
+            settledTurnId: hctx.turnId,
             title: hctx.thread?.title || '',
             messageCount: hctx.thread?.messageIds?.length || 0,
           });
@@ -6402,7 +6404,7 @@ async function runVpTurnWithEscalation(args) {
         }, { sessionId, vpId, threadId: threadId || 'main', turnId });
       } catch { /* never crash WS pipeline */ }
       try {
-        getVpStatusBroker().settleIdle({ sessionId, vpId, threadId: threadId || 'main', title: thread?.title || '' });
+        getVpStatusBroker().settleIdle({ sessionId, vpId, threadId: threadId || 'main', title: thread?.title || '', settledTurnId: turnId });
       } catch (err) {
         console.warn('[Yeaft] vp-status settleIdle (abort escalation) failed:', err?.message || err);
       }
@@ -6933,7 +6935,7 @@ async function runVpTurn({ prompt, promptParts = null, sessionId, vpId, threadId
     // can't mask the original error.
     if (!escalationState?.escalated && turnEndReason !== 'errored') {
       try {
-        getVpStatusBroker().settleIdle({ sessionId, vpId, threadId: threadId || 'main', title: thread?.title || '' });
+        getVpStatusBroker().settleIdle({ sessionId, vpId, threadId: threadId || 'main', title: thread?.title || '', settledTurnId: turnId });
       } catch (err) {
         console.warn('[Yeaft] vp-status settleIdle failed:', err?.message || err);
       }

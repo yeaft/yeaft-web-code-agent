@@ -54,7 +54,7 @@ Provider 静默 watchdog 只判断流是否活跃，不是 query 的总时长上
 - HistorySearch 默认排除当前用户消息及其后的记录，边界在命中上限之前应用；`includeCurrentTurn: true` 可显式回看本轮。兄弟 Session 不使用当前 Session 的序号边界。
 - SpawnAgent 复用当前 query 内相同 owner/workspace 和任务规格的委派；显式 `taskKey` 的规格变化报冲突。接受 PromptAgent 后续任务或收尾控制后，原身份保留，但原规格重试被拒绝，不能把 Agent 的最新回复当作原委派证据；已领取的原回复或原日志仍可查阅。WaitAgent 可逐 revision 领取后续回复。
 
-Web Session 状态区显示请求、工具执行、复用、重复和失败计数。`query_progress` 只包含白名单元数据，不进入 transcript、模型历史或 provider watchdog；重连隐藏旧计数，终态后的延迟事件不能复活 turn。
+Web Session 状态区显示请求、工具执行和失败计数。`query_progress` 只包含白名单元数据，不进入 transcript、模型历史或 provider watchdog。Agent 的内存状态快照携带每个活动线程最新的观测；重连后只接受当前 Agent、Session 和线程的快照或实时事件。终态后的进度事件不能单独复活 turn。
 
 ## Session 与 VP 编排
 

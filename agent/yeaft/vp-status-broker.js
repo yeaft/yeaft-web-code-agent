@@ -113,6 +113,7 @@ export function createVpStatusBroker({ send, now = Date.now } = {}) {
         title: r.title || '',
         since: r.since,
         turnId: r.turnId || null,
+        ...(r.settledTurnId ? { settledTurnId: r.settledTurnId } : {}),
         createdAt: r.createdAt || r.since,
         updatedAt: r.updatedAt || r.since,
         messageCount: r.messageCount || 0,
@@ -152,7 +153,7 @@ export function createVpStatusBroker({ send, now = Date.now } = {}) {
    * at (epoch milliseconds), turnId and threadId; at remains stable for the same
    * failed turn across metadata updates/corrections. Returned wire rows are copies.
    */
-  function transition({ sessionId, vpId, state, turnId = null, threadId = 'main', title = '', messageCount, errorDetail } = {}) {
+  function transition({ sessionId, vpId, state, turnId = null, threadId = 'main', title = '', messageCount, errorDetail, settledTurnId } = {}) {
     if (!vpId) return false;
     if (!VALID_STATES.has(state)) {
       throw new RangeError(`vp-status-broker: invalid state '${state}'`);
@@ -164,8 +165,10 @@ export function createVpStatusBroker({ send, now = Date.now } = {}) {
       ? (errorDetail === undefined && prev?.state === 'error' && prev.turnId === turnId
           ? prev.errorDetail || null : normalizeVpErrorDetail(errorDetail))
       : null;
+    const settled = isVpStatusRunning(state) ? undefined : (settledTurnId || turnId || undefined);
     if (prev && prev.state === state && prev.turnId === turnId && (!title || prev.title === title)
         && (!Number.isFinite(messageCount) || prev.messageCount === messageCount)
+        && prev.settledTurnId === settled
         && JSON.stringify(prev.errorDetail || null) === JSON.stringify(nextErrorDetail)) {
       return false;
     }
@@ -181,6 +184,10 @@ export function createVpStatusBroker({ send, now = Date.now } = {}) {
       sequence: ++sequence,
       createdAt: prev?.createdAt || ts,
       turnId,
+      // Idle has no active turnId. Name the explicitly finished execution,
+      // not the latest broker owner (which can already be a queued turn).
+      settledTurnId: settled,
+      queryProgress: prev?.turnId === turnId && isVpStatusRunning(state) ? prev.queryProgress : undefined,
       errorDetail: nextErrorDetail,
       errorAt: state === 'error'
         ? (prev?.state === 'error' && prev.turnId === turnId && prev.errorAt != null ? prev.errorAt : ts)
@@ -193,8 +200,8 @@ export function createVpStatusBroker({ send, now = Date.now } = {}) {
     return true;
   }
 
-  function settleIdle({ sessionId, vpId, threadId = 'main', title = '', messageCount } = {}) {
-    return transition({ sessionId, vpId, threadId, state: 'idle', turnId: null, title, messageCount });
+  function settleIdle({ sessionId, vpId, threadId = 'main', title = '', messageCount, settledTurnId } = {}) {
+    return transition({ sessionId, vpId, threadId, state: 'idle', turnId: null, title, messageCount, settledTurnId });
   }
 
   function snapshot(sessionId) {
@@ -210,11 +217,24 @@ export function createVpStatusBroker({ send, now = Date.now } = {}) {
     return out;
   }
 
+  // The bridge supplies a whitelisted wire frame. Progress is kept only
+  // for the exact live execution and never changes status or phase ordering.
+  function recordQueryProgress(progress) {
+    const row = threads.get(threadKeyOf(progress.sessionId, progress.vpId, progress.threadId));
+    if (!row || row.turnId !== progress.turnId || !isVpStatusRunning(row.state)
+        || (row.queryProgress?.revision || 0) >= progress.revision) return;
+    row.queryProgress = progress;
+  }
+
   function broadcastSnapshot({ sessionId } = {}) {
+    const queryProgress = [...threads.values()]
+      .filter(row => row.queryProgress && (sessionId == null || row.sessionId === sessionId))
+      .map(row => row.queryProgress);
     send({
       type: 'vp_status_snapshot',
       sessionId: sessionId === undefined ? null : sessionId,
       statuses: snapshot(sessionId),
+      ...(queryProgress.length ? { queryProgress } : {}),
     });
   }
 
@@ -231,5 +251,5 @@ export function createVpStatusBroker({ send, now = Date.now } = {}) {
   function reset() { threads.clear(); }
   function __testReset() { threads.clear(); }
 
-  return { transition, settleIdle, snapshot, broadcastSnapshot, forget, reset, __testReset };
+  return { transition, settleIdle, snapshot, recordQueryProgress, broadcastSnapshot, forget, reset, __testReset };
 }
