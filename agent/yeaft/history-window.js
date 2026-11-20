@@ -10,6 +10,7 @@ import { providerProjectionDigest, providerStateBytes, MAX_PROVIDER_STATE_BYTES,
  */
 
 import { estimateTokens } from './conversation/persist.js';
+import { imageDimensionsFromBase64 } from './image-dimensions.js';
 import { isVisibleConversationRow } from './conversation/internal-control.js';
 import { scoreRecallTurn } from './conversation/recall-relevance.js';
 import { pairSanitize } from './pair-sanitize.js';
@@ -30,6 +31,15 @@ export const DEFAULT_RUNTIME_CACHE_MESSAGE_CAP = 256;
 const DEFAULT_PROVIDER_RECENT_TURNS = 10;
 const MINIMUM_RECENT_PROVIDER_TURNS = 3;
 const IMAGE_PART_TOKEN_COST = 1024;
+// Providers bill an image by its resized pixels, never by encoded bytes: a
+// multi-megabyte GIF can be a 380x213 frame. Anthropic charges one token per
+// 28px patch and downsizes to at most 4,784; OpenAI's patch models charge
+// 1.2x per 32px patch and reject more than 30,000 patches, so 30,000 x 1.2
+// bounds every image. Tile-based models also charge a fixed minimum per image,
+// so a small image never counts for less than IMAGE_PART_TOKEN_COST.
+const IMAGE_PATCH_PIXELS = 28;
+const MAX_IMAGE_PART_TOKENS = 36_000;
+const INLINE_IMAGE_URL = /^data:[^;,]*;base64,/i;
 const DOCUMENT_PART_TOKEN_COST = 2048;
 const CONTENT_PART_FRAME_TOKENS = 2;
 const TEXT_CHARS_PER_TOKEN = 4;
@@ -84,6 +94,32 @@ function binaryPayloadTokenEstimate(value) {
   return Math.ceil(value.length / BINARY_CHARS_PER_TOKEN);
 }
 
+/**
+ * Estimate one image part from its pixel size, never below the per-image
+ * minimum. Unreadable payloads keep the byte-based estimate, but no image can
+ * cost more than a provider accepts.
+ * Inline data URLs are image bytes too, never text.
+ *
+ * @param {object} part
+ * @param {object} source - `part.source`, or the part itself for flat shapes.
+ * @returns {number}
+ */
+function estimateImagePartTokens(part, source) {
+  const url = typeof part.image_url === 'string' ? part.image_url
+    : typeof part.image_url?.url === 'string' ? part.image_url.url : source.url;
+  const inline = typeof url === 'string' ? INLINE_IMAGE_URL.exec(url) : null;
+  const data = typeof source.data === 'string' && source.data
+    ? source.data : inline ? url.slice(inline[0].length) : '';
+  const size = data ? imageDimensionsFromBase64(data) : null;
+  const visualTokens = size
+    ? Math.max(IMAGE_PART_TOKEN_COST,
+      Math.ceil(size.width / IMAGE_PATCH_PIXELS) * Math.ceil(size.height / IMAGE_PATCH_PIXELS))
+    : IMAGE_PART_TOKEN_COST + binaryPayloadTokenEstimate(data);
+  return Math.min(MAX_IMAGE_PART_TOKENS, visualTokens)
+    + partMetadataTokenEstimate(part, inline ? ['title', 'alt'] : ['title', 'alt', 'image_url'])
+    + partMetadataTokenEstimate(source, inline ? ['media_type', 'mediaType'] : ['url', 'media_type', 'mediaType']);
+}
+
 function partMetadataTokenEstimate(part, fields = []) {
   return fields.reduce((total, field) => {
     const value = part?.[field];
@@ -114,10 +150,7 @@ export function estimateContentPartTokens(part) {
   }
   if (type === 'image' || type === 'input_image') {
     const source = part.source && typeof part.source === 'object' ? part.source : part;
-    return IMAGE_PART_TOKEN_COST
-      + partMetadataTokenEstimate(part, ['title', 'alt', 'image_url'])
-      + partMetadataTokenEstimate(source, ['url', 'media_type', 'mediaType'])
-      + binaryPayloadTokenEstimate(source.data);
+    return estimateImagePartTokens(part, source);
   }
   if (type === 'document' || type === 'input_file') {
     const source = part.source && typeof part.source === 'object' ? part.source : part;
