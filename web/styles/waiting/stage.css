@@ -1,13 +1,11 @@
 /* ================================================================
    WAITING STAGE (components/waiting/stage.js): where canvas waiting
-   animations play. It has no surface of its own: scenes are drawn
-   straight onto the page, and the edges fade so nothing ends at a
-   hard border.
+   animations play. A subtle ground tint spans the conversation width
+   so the sides still read as part of the stage in tight camera shots.
 
    Scenes are composed for an 11:5 picture. A narrow column shows just
    that. Once the picture reaches its height cap, the scene stays the
-   same size in the middle and more of its world shows on either side,
-   fading out toward the ends.
+   same size in the middle and the setting extends to either side.
    ================================================================ */
 
 .typing-indicator.is-stage {
@@ -20,38 +18,24 @@
 .waiting-stage {
   /* The picture and its vertical padding fit within five lines of chat text. */
   --waiting-stage-height: calc(5 * var(--font-size-md) * var(--line-height-relaxed) - 2 * var(--waiting-stage-padding, 0px));
-  /* Widest the stage gets; a wider column centres it. */
-  --waiting-stage-max-width: 960px;
   position: relative;
   box-sizing: border-box;
-  width: min(100%, var(--waiting-stage-max-width));
-  aspect-ratio: 11 / 5;
-  max-height: var(--waiting-stage-height);
-  margin-inline: auto;
-  overflow: hidden;
-}
-
-/* The mask dissolves all four edges into the page. --side is how far in
-   from each end the picture is whole: 16px on a phone, and on a wide stage
-   all of the extra width beside the scene, so the scene itself never fades
-   and the world around it thins out toward the ends. */
-.waiting-stage-canvas {
-  --side: max(16px, calc(50% - var(--waiting-stage-height) * 11 / 10));
-  position: absolute;
-  top: 0;
-  left: 0;
-  display: block;
   width: 100%;
   aspect-ratio: 11 / 5;
   max-height: var(--waiting-stage-height);
-  -webkit-mask-image:
-    linear-gradient(to right, transparent, #000 var(--side), #000 calc(100% - var(--side)), transparent),
-    linear-gradient(to bottom, transparent, #000 8px, #000 calc(100% - 6px), transparent);
-  -webkit-mask-composite: source-in;
-  mask-image:
-    linear-gradient(to right, transparent, #000 var(--side), #000 calc(100% - var(--side)), transparent),
-    linear-gradient(to bottom, transparent, #000 8px, #000 calc(100% - 6px), transparent);
-  mask-composite: intersect;
+  overflow: hidden;
+  background: linear-gradient(to bottom, transparent, color-mix(in srgb, var(--text-secondary) 16%, transparent) 70%, transparent);
+}
+
+/* Blend into the transcript above and below, not at the sides. */
+.waiting-stage-canvas {
+  position: absolute;
+  inset: 0;
+  display: block;
+  width: 100%;
+  height: 100%;
+  -webkit-mask-image: linear-gradient(to bottom, transparent, #000 8px, #000 calc(100% - 6px), transparent);
+  mask-image: linear-gradient(to bottom, transparent, #000 8px, #000 calc(100% - 6px), transparent);
 }
 
 /* A stalled connection holds the scene on one frame, drained of colour. */
