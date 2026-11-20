@@ -1021,7 +1021,6 @@ export default {
   'chat.waiting.cliExited': 'Claude 进程已退出，已刷新，等待最新信息...',
   'chat.waiting.refresh': '刷新',
   'chat.waiting.thinking': 'AI 正在思考中，请稍候...',
-  'chat.waiting.stageIntro': '等待中',
 
   // ============ /btw Side Question ============
   'btw.placeholder': '问个顺便的问题...',

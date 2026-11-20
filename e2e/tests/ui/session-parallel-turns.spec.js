@@ -30,16 +30,17 @@ test('one native Session turn shows its waiting indicator, retains the ordinary 
   const chooseWaitingAnimation = choice => page.evaluate(value => window.Pinia.useChatStore().setWaitingAnimation(value), choice);
   // The default picks one at random; pin one to assert on it.
   await chooseWaitingAnimation('hoops');
+  await page.clock.setFixedTime(Date.now());
   const turn = await wire.send('Single root question');
-  // Until text streams, the chosen waiting animation plays under the
-  // transcript, and only there. It takes the place of the dots: the wait
-  // opens on a line of text and cuts to the scene.
+  // The chosen animation draws its first frame as soon as the wait starts,
+  // with no waiting caption, dots, or time needed for an intro to finish.
   await expect(hoops).toHaveAttribute('aria-hidden', 'true');
-  await expect(hoops).toHaveClass(/is-open/);
-  await expect(hoops).toHaveClass(/is-cut/);
+  await expect(hoops).toHaveText('');
+  await expect(hoops.locator('canvas')).toBeVisible();
   await expect(dots).toHaveCount(0);
   await expect(hoops).toHaveAttribute('data-motion', 'live');
   await expect.poll(() => drawnPixels(hoops)).toBeGreaterThan(200);
+  await page.clock.setSystemTime(Date.now());
   // A wide column keeps the picture's height and centres the stage in the
   // column; a phone column shows the 11:5 picture across its width.
   const stageBox = () => hoops.evaluate((el) => {
@@ -50,7 +51,7 @@ test('one native Session turn shows its waiting indicator, retains the ordinary 
       offCentre: Math.abs(stage.left + stage.right - column.left - column.right) / 2 };
   });
   const desktop = page.viewportSize();
-  await expect.poll(async () => (await stageBox()).height).toBe(160); // Once it has opened.
+  await expect.poll(async () => (await stageBox()).height).toBe(160);
   const wide = await stageBox();
   expect(wide.width).toBeGreaterThan(400);
   expect(wide.offCentre).toBeLessThan(1);
@@ -85,7 +86,8 @@ test('one native Session turn shows its waiting indicator, retains the ordinary 
   // settles on exactly one animation.
   await chooseWaitingAnimation('dragon');
   const dragon = indicator.locator('.dragon-scene');
-  await expect(dragon).toHaveClass(/is-open/);
+  await expect(dragon).toHaveText('');
+  await expect(dragon.locator('canvas')).toBeVisible();
   await expect(hoops).toHaveCount(0);
   await expect(dots).toHaveCount(0);
   await expect.poll(() => drawnPixels(dragon)).toBeGreaterThan(200);
