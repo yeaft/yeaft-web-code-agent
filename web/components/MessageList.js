@@ -210,7 +210,7 @@ export default {
       </div>
 
       <!-- Preview mode: standalone typing indicator when no conversation -->
-      <div v-if="isPreviewMode && !store.currentConversation" class="typing-indicator preview-animation-indicator" :class="animation ? 'is-' + animation.layout : ''" style="position: fixed; bottom: 100px; left: 0; right: 0; padding: 16px 24px; z-index: 100;">
+      <div v-if="isPreviewMode && !store.currentConversation" class="typing-indicator preview-animation-indicator" :class="animation ? 'is-' + animation.layout : ''" style="position: fixed; bottom: 100px; left: 0; right: 0; padding-inline: var(--space-6); z-index: 100;">
         <component v-if="animation" :is="animation.component" :clock-key="waitClockKey" />
         <template v-else><span></span><span></span><span></span></template>
       </div>

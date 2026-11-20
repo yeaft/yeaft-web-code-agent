@@ -27,9 +27,9 @@
  *              to expose where the scene is, for tests and debugging.
  *
  * Scenes are composed for a STAGE_RATIO picture: `core`, { x, y, width,
- * height } in CSS px, centred in the canvas. On a phone the core is the
- * whole canvas. A wider stage keeps the height, so the core stays the same
- * size in the middle, and gives the scene a second context, `backdrop`, for
+ * height } in CSS px, centred in the canvas. In a narrow column the core is
+ * the whole canvas. Once the height cap is reached, extra width leaves the
+ * core the same size and gives the scene a second context, `backdrop`, for
  * the world around it: floor lines and fixtures only, drawn through the same
  * camera across the whole width and with the same shake and fade as the
  * scene. The stage shows the scene over the core and the backdrop beyond it,

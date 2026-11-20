@@ -4,15 +4,22 @@
    straight onto the page, and the edges fade so nothing ends at a
    hard border.
 
-   Scenes are composed for an 11:5 picture. A phone column shows just
-   that, as wide as the column. A wider column keeps the picture's
-   height and the scene in the middle at the same size, and shows
-   more of the scene's world either side, fading out toward the ends.
+   Scenes are composed for an 11:5 picture. A narrow column shows just
+   that. Once the picture reaches its height cap, the scene stays the
+   same size in the middle and more of its world shows on either side,
+   fading out toward the ends.
    ================================================================ */
 
+.typing-indicator.is-stage {
+  --waiting-stage-padding: var(--space-2);
+  flex-wrap: wrap;
+  row-gap: var(--space-1);
+  padding-block: var(--waiting-stage-padding);
+}
+
 .waiting-stage {
-  /* Height of the picture once the column is wide enough for it. */
-  --waiting-stage-height: 160px;
+  /* The picture and its vertical padding fit within five lines of chat text. */
+  --waiting-stage-height: calc(5 * var(--font-size-md) * var(--line-height-relaxed) - 2 * var(--waiting-stage-padding, 0px));
   /* Widest the stage gets; a wider column centres it. */
   --waiting-stage-max-width: 960px;
   position: relative;
