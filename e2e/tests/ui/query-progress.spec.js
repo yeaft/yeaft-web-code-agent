@@ -41,7 +41,13 @@ test('native Session progress is ephemeral, scoped and readable in light/dark at
   await expect(page.locator('.messages .tool-line')).toHaveCount(0);
   await details.locator('summary').click();
   await expect(details.locator('.tool-line.completed')).toContainText('FileRead');
-  await expect(page.locator('.messages .session-response-running-dot')).toBeVisible();
+  const toolOnlyDot = page.locator('.messages .session-response-running-dot');
+  await expect(toolOnlyDot).toBeVisible();
+  expect(await toolOnlyDot.evaluate(dot => {
+    const rect = dot.getBoundingClientRect();
+    const reply = dot.closest('.turn-message-block').getBoundingClientRect();
+    return rect.left >= reply.left && rect.right <= reply.right && rect.top >= reply.top && rect.bottom <= reply.bottom;
+  })).toBe(true);
   await details.locator('summary').click();
   const initialProgress = { ...event, stage: 'running', reason: null, failedCalls: 0, toolStats: [] };
   // The new tab needs no new progress event, even during a long tool call.

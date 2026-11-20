@@ -18,9 +18,118 @@ import {
   resolveMessageImageFileReference,
 } from '../utils/message-file-reference.js';
 
+function renderedTextEnd(text, range) {
+  const value = text.data;
+  if (!value.length || getComputedStyle(text.parentElement).visibility !== 'visible') return null;
+  for (let end = value.length; end > 0;) {
+    const last = value.charCodeAt(end - 1);
+    const start = last >= 0xDC00 && last <= 0xDFFF && end > 1
+      && value.codePointAt(end - 2) > 0xFFFF ? end - 2 : end - 1;
+    // Scan backward so controls inside a long reply don't slow down the dot.
+    if (/[\s\p{Default_Ignorable_Code_Point}]/u.test(value.slice(start, end))) {
+      end = start;
+      continue;
+    }
+    range.setStart(text, start);
+    range.setEnd(text, end);
+    const glyph = range.getBoundingClientRect();
+    if (glyph.width && glyph.height) {
+      range.collapse(false);
+      const caret = range.getBoundingClientRect();
+      if (caret.height) return { glyph, caret };
+    } else if (!glyph.height) {
+      // Do not walk a whole non-rendered text node one character at a time.
+      range.selectNodeContents(text);
+      if (!range.getBoundingClientRect().height) break;
+    }
+    end = start;
+  }
+  return null;
+}
+
+// Follow the last visible prose, ignoring hidden formatting at the tail.
+// A trailing code block, table, or rich response uses the reply's end gutter.
+function responseLineEnd(body) {
+  const block = body.querySelector(':scope > .turn-content')?.lastElementChild;
+  const segment = block?.matches('.turn-progress-group')
+    ? block.firstElementChild?.lastElementChild : block;
+  const markdown = segment?.querySelector(':scope > .turn-text');
+  if (!markdown) return null;
+
+  const range = body.ownerDocument.createRange();
+  function trailingEnd(parent) {
+    for (let tail = parent.lastChild; tail; tail = tail.previousSibling) {
+      if (tail.nodeType === Node.TEXT_NODE) {
+        const end = renderedTextEnd(tail, range);
+        if (end) return end;
+      } else if (tail.nodeType === Node.ELEMENT_NODE && !tail.matches('br') && getComputedStyle(tail).display !== 'none') {
+        if (!tail.matches('blockquote, ul, ol, li, p, h1, h2, h3, h4, h5, h6, a, b, strong, i, em, del, s, code, span:not(.math-display), sub, sup, kbd, mark')) {
+          return false; // A visible non-prose block ends the search, even in a list or quote.
+        }
+        const end = trailingEnd(tail);
+        if (end !== null) return end;
+      }
+    }
+    return null;
+  }
+  return trailingEnd(markdown);
+}
+
+function positionResponseDot(body, dot) {
+  const end = responseLineEnd(body);
+  if (!end) {
+    dot.classList.add('is-in-gutter');
+    dot.style.left = '';
+    dot.style.top = '';
+    return;
+  }
+  const { glyph, caret } = end;
+  // The caret at the logical end is on the left of an RTL glyph. Measuring
+  // it also works when only the last run of an otherwise LTR line is RTL.
+  const rtl = Math.abs(caret.left - glyph.left) < Math.abs(caret.left - glyph.right);
+  const size = dot.offsetWidth;
+  const lane = body.closest('.concurrent-turn-body');
+  const laneLeft = lane ? lane.getBoundingClientRect().left + lane.clientLeft : 0;
+  const right = lane ? laneLeft + lane.clientWidth : body.ownerDocument.documentElement.clientWidth;
+  const x = rtl ? Math.max(laneLeft, caret.left - size - 4) : Math.min(right - size, caret.left + 4);
+  const box = body.getBoundingClientRect();
+  dot.style.left = `${x - box.left}px`;
+  dot.style.top = `${(glyph.top + glyph.bottom - size) / 2 - box.top}px`;
+  dot.classList.remove('is-in-gutter');
+}
+
+// Measure after the Vue patch (v-html replaces nodes on new chunks) and on
+// resize/reflow. Only the live reply is observed, and the dot never reflows text.
+const responseDotLayout = new WeakMap();
+function stopResponseDotLayout(body) {
+  const state = responseDotLayout.get(body);
+  if (!state) return;
+  state.observer.disconnect();
+  cancelAnimationFrame(state.frame);
+  responseDotLayout.delete(body);
+}
+function updateResponseDotLayout(body, { value: running }) {
+  if (!running) return stopResponseDotLayout(body);
+  let state = responseDotLayout.get(body);
+  if (!state) {
+    const dot = body.querySelector(':scope > .session-response-running-dot');
+    const update = () => {
+      if (!state.frame) state.frame = requestAnimationFrame(() => {
+        state.frame = 0;
+        positionResponseDot(body, dot);
+      });
+    };
+    state = { observer: new ResizeObserver(update), frame: 0, update };
+    responseDotLayout.set(body, state);
+    state.observer.observe(body);
+  }
+  state.update();
+}
+
 export default {
   name: 'AssistantTurn',
   components: { ToolLine, AskCard, VpSpeakerHeader, ResponsePresentation },
+  directives: { responseDot: { mounted: updateResponseDotLayout, updated: updateResponseDotLayout, beforeUnmount: stopResponseDotLayout } },
   props: {
     turn: {
       type: Object,
@@ -98,7 +207,7 @@ export default {
         @stop-turn="onStopTurn"
       />
 
-      <div class="turn-message-block" :data-turn-id="turn.turnId || ''">
+      <div class="turn-message-block" :data-turn-id="turn.turnId || ''" v-response-dot="toolsInStatus && turn.isResponding">
         <!-- 1. Response content in transcript order -->
         <div v-if="responseBlocks.length > 0" class="turn-content">
           <div v-if="textSegments.length > 0" class="turn-header">
@@ -210,11 +319,9 @@ export default {
         <AskCard :ask-msg="turn.askMsg" @submit="onAskSubmit" />
       </div>
 
-      <div v-if="toolsInStatus && turn.isResponding" class="session-response-running" role="status">
-        <span class="session-response-running-dot" aria-hidden="true"></span>
-        <span class="response-sr-only">{{ $t('chat.concurrent.running') }}</span>
+      <span v-if="toolsInStatus && turn.isResponding" class="session-response-running-dot is-in-gutter" aria-hidden="true"></span>
       </div>
-      </div>
+      <span v-if="toolsInStatus && turn.isResponding" class="response-sr-only" role="status">{{ $t('chat.concurrent.running') }}</span>
 
       <!-- 6. Response footer actions (visible on hover) -->
       <div
