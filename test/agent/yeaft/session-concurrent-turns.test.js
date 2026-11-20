@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync, readdirSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import ctx from '../../../agent/context.js';
+import { sendToServer, flushMessageBuffer } from '../../../agent/connection/buffer.js';
 import { renderSessionScene } from '../../../agent/yeaft/sessions/scene-prompts.js';
 import * as bridge from '../../../agent/yeaft/web-bridge.js';
 import { ConversationStore } from '../../../agent/yeaft/conversation/persist.js';
@@ -37,6 +38,7 @@ function setup(adapter, roster = ['omni'], config = {}, sceneId) {
   const sent = [];
   ctx.ws = { readyState: 1, send(encoded) { sent.push(JSON.parse(encoded)); }, sent }; ctx.serverEncryptionRequired = false;
   ctx.outboundSendQueue = []; ctx.outboundSendQueueBytes = 0; ctx.outboundSendQueueActive = false;
+  ctx.messageBuffer = []; ctx.messageBufferBytes = 0;
   bridge.__testSetSession({ adapter, trace: new NullTrace(), conversationStore: store,
     config: { model: 'test-model', maxOutputTokens: 1024, ...config }, toolRegistry: new ToolRegistry(), yeaftDir: root });
   return { store, sessionId: meta.id, send: (id, text) => bridge.handleYeaftSessionSend({ sessionId: meta.id, id, text }) };
@@ -315,6 +317,23 @@ it('pins each Turn to its selected scene while sharing a durable transcript acro
   await bridge.handleYeaftLoadHistory({ sessionId, requestId: 'old-server-oversized', _requestClientId: 'browser', limit: 1 });
   expect(chunk('old-server-oversized')).toBeUndefined();
   expect(events('history_loaded').some(frame => frame.requestId === 'old-server-oversized')).toBe(false);
+  ctx.serverCapabilities.add('session_history_chunk_errors');
+
+  // A queued/buffered error must not cross onto a newly connected old Server.
+  const oldSocket = ctx.ws;
+  const errorFrame = { type: 'yeaft_history_chunk', sessionId, requestId: 'stale-error',
+    messages: [], error: 'history_payload_too_large' };
+  const queued = sendToServer(errorFrame);
+  expect(ctx.outboundSendQueue.at(-1)?.msg).toEqual(errorFrame);
+  ctx.ws = null;
+  expect(await sendToServer(errorFrame)).toBe('dropped');
+  ctx.serverCapabilities = new Set();
+  const sentAfterReconnect = [];
+  ctx.ws = { readyState: 1, send: encoded => sentAfterReconnect.push(JSON.parse(encoded)) };
+  expect(await queued).toBe('dropped');
+  await flushMessageBuffer();
+  expect(sentAfterReconnect.filter(frame => frame.requestId === errorFrame.requestId)).toEqual([]);
+  ctx.ws = oldSocket;
   ctx.serverCapabilities.add('session_history_chunk_errors');
 
   append('user', 'Interleaved question');
