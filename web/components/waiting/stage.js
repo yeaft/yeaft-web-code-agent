@@ -5,9 +5,7 @@
  * and their colours have to read on the page in both themes. The stage owns
  * everything a scene should not have to care about — sizing, pixel ratio,
  * theme changes, reduced motion, stalled connections, running only while on
- * screen — and the opening: a wait starts on a line of "waiting" text and
- * cuts to the scene after STAGE_INTRO_MS, so a reply that arrives at once
- * never flashes a full-size picture.
+ * screen. The scene is visible from the first frame of the wait.
  *
  * A scene is a plain object:
  *   name       Component name.
@@ -22,7 +20,7 @@
  *              the next, so the wait still visibly goes on without camera
  *              moves, shake or flashes. Defaults to [posterMs].
  *   paint(ctx, { elapsedMs, width, height, dpr, colors, core, backdrop })
- *              Draw one frame. `elapsedMs` counts from the cut to the scene;
+ *              Draw one frame. `elapsedMs` counts from the start of the wait;
  *              `width`/`height` are CSS px and the context is already scaled
  *              by `dpr` and cleared. `colors[key]` is [r, g, b] and
  *              `colors.font` the UI font family. May return { beat, shot }
@@ -45,8 +43,6 @@
  */
 import { holdWaitClock, readWaitClock } from '../../utils/wait-clock.js';
 
-/** How long a wait shows the "waiting" card before the stage cuts to the scene. */
-export const STAGE_INTRO_MS = 900;
 /** With motion reduced, how long each still is shown, its dissolve included. */
 export const CALM_STILL_MS = 2400;
 const CALM_DISSOLVE_MS = 450;
@@ -208,8 +204,7 @@ export function createStageAnimation(scene) {
       status: { type: String, default: '' },
     },
     template: `
-      <div class="waiting-stage" :class="[sceneClass, { 'is-open': open, 'is-cut': cut }, status ? 'is-' + status : '']" aria-hidden="true">
-        <span v-if="!open" class="waiting-stage-intro">{{ $t('chat.waiting.stageIntro') }}</span>
+      <div class="waiting-stage" :class="[sceneClass, status ? 'is-' + status : '']" aria-hidden="true">
         <canvas ref="canvasRef" class="waiting-stage-canvas"></canvas>
       </div>
     `,
@@ -217,11 +212,6 @@ export function createStageAnimation(scene) {
       const canvasRef = Vue.ref(null);
       // Where a wide stage draws the scene before laying it over the backdrop.
       let scratch = {};
-      // Closed shows the "waiting" card; open shows the scene.
-      const open = Vue.ref(false);
-      // Set when this stage itself went from the card to the scene, which
-      // plays the cut. A stage re-created mid-scene opens without one.
-      const cut = Vue.ref(false);
       let host = null;
       let ctx = null;
       let colors = null;
@@ -229,7 +219,6 @@ export function createStageAnimation(scene) {
       let height = 0;
       let dpr = 1;
       let frameId = null;
-      let openTimer = null;
       let releaseClock = null;
       let onScreen = false;
       let reducedMotion = false;
@@ -291,10 +280,10 @@ export function createStageAnimation(scene) {
 
       /** Paint the picture as it is now. Returns ms until it next changes (0: next frame). */
       const paint = () => {
-        if (!ctx || !open.value || width < 8) return Infinity;
+        if (!ctx || width < 8) return Infinity;
         const mode = motion();
         const now = Date.now();
-        const elapsedMs = Math.max(0, now - readWaitClock(props.clockKey, now) - STAGE_INTRO_MS);
+        const elapsedMs = Math.max(0, now - readWaitClock(props.clockKey, now));
         if (!colors) colors = readStageColors(host, ctx, scene.tokens);
         if (mode !== 'calm' && calmFrames.size) calmFrames.clear();
         ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
@@ -318,8 +307,7 @@ export function createStageAnimation(scene) {
       const resize = () => {
         const canvas = canvasRef.value;
         if (disposed || !canvas || !host) return;
-        // The stylesheet sizes the picture: its height follows its width up
-        // to a cap, independent of the box, which animates open around it.
+        // The stylesheet sizes the picture: its height follows its width up to a cap.
         if (canvas.clientWidth === width && canvas.clientHeight === height && pixelRatio() === dpr) return;
         width = canvas.clientWidth;
         height = canvas.clientHeight;
@@ -332,11 +320,10 @@ export function createStageAnimation(scene) {
 
       /**
        * Paint again after `holdMs`: on the next frame while the picture moves,
-       * later while a still is up, never while held. Only while the scene is
-       * open and on screen.
+       * later while a still is up, never while held. Only while on screen.
        */
       const schedule = (holdMs) => {
-        if (disposed || !open.value || !onScreen || !Number.isFinite(holdMs)) return;
+        if (disposed || !onScreen || !Number.isFinite(holdMs)) return;
         if (holdMs <= 0) {
           frameId = requestAnimationFrame(tick);
           return;
@@ -368,32 +355,12 @@ export function createStageAnimation(scene) {
         schedule(paint());
       }
 
-      /**
-       * Show the card until the wait is STAGE_INTRO_MS old, then the scene.
-       * Without a 2D context there is no scene, and the card stays.
-       */
-      const syncOpen = () => {
-        if (openTimer !== null) clearTimeout(openTimer);
-        openTimer = null;
-        if (disposed || !ctx) return;
-        const now = Date.now();
-        const waited = now - readWaitClock(props.clockKey, now);
-        if (waited >= STAGE_INTRO_MS) {
-          if (!open.value) open.value = true;
-          return;
-        }
-        open.value = false;
-        cut.value = true;
-        openTimer = setTimeout(syncOpen, STAGE_INTRO_MS - waited);
-      };
-
       // A scene that is held, off screen or in a background tab stops reading
       // its wait clock. The stage holds the clock for as long as it is
       // mounted, so the wait is still the same wait when the scene draws again.
       const follow = () => {
         releaseClock?.();
         releaseClock = holdWaitClock(props.clockKey);
-        syncOpen();
         refresh();
       };
       const recolor = () => {
@@ -435,18 +402,14 @@ export function createStageAnimation(scene) {
         resize();
       });
 
-      // Post-flush watchers run after the classes are in the DOM, so the
-      // colour tokens can be re-read and the opened picture measured.
+      // Re-read colour tokens after the status class is in the DOM.
       Vue.watch(() => props.status, recolor, { flush: 'post' });
       Vue.watch(() => props.clockKey, () => { if (ctx) follow(); }, { flush: 'post' });
-      Vue.watch(open, () => { resize(); refresh(); }, { flush: 'post' });
 
       Vue.onBeforeUnmount(() => {
         disposed = true;
         stop();
         calmFrames.clear();
-        if (openTimer !== null) clearTimeout(openTimer);
-        openTimer = null;
         releaseClock?.();
         releaseClock = null;
         sizeObserver?.disconnect();
@@ -456,7 +419,7 @@ export function createStageAnimation(scene) {
         scratch = {};
       });
 
-      return { canvasRef, open, cut, sceneClass: scene.className };
+      return { canvasRef, sceneClass: scene.className };
     },
   };
 }

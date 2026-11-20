@@ -593,7 +593,7 @@ export function resolveDragonPlay(elapsedMs) {
     sigh: t > 13.05 && t < 13.75 ? span(t, 13.05, 13.75) : -1,
     alarm: ALARMS.some(([from, to]) => t >= from && t < to) ? Math.max(...ALARMS.map(([from, to]) => during(t, from, from + 0.08, to - 0.12, to))) : 0,
     shake: shakeAt(t),
-    // Later rounds fade in; the first one opens on the stand-off as the scene cuts in.
+    // The first stand-off is visible immediately; later rounds fade in.
     fade: Math.min(loop > 0 ? smooth(span(t, 0, 0.22)) : 1, 1 - smooth(span(t, LOOP_SECONDS - 0.32, LOOP_SECONDS - 0.02))),
   };
 }

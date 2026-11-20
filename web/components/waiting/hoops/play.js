@@ -450,6 +450,7 @@ export function resolveHoopsPlay(elapsedMs) {
     dust: DUST.filter(puff => t >= puff.from && t < puff.to).map(puff => ({ at: puff.at, size: puff.size, age: span(t, puff.from, puff.to) })),
     shake: t >= IMPACT ? Math.exp(-(t - IMPACT) * 9) : 0,
     doze: napping ? t - PARTY_FROM - 0.15 : -1,
-    fade: Math.min(smooth(span(t, 0, 0.25)), 1 - smooth(span(t, PLAY_SECONDS - 0.4, PLAY_SECONDS - 0.05))),
+    // The first possession is visible immediately; later possessions fade in.
+    fade: Math.min(possession > 0 ? smooth(span(t, 0, 0.25)) : 1, 1 - smooth(span(t, PLAY_SECONDS - 0.4, PLAY_SECONDS - 0.05))),
   };
 }
