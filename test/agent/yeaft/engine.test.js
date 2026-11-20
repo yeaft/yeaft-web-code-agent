@@ -370,6 +370,20 @@ describe('Engine', () => {
       const dir = mkdtempSync(join(tmpdir(), 'yeaft-signed-rollover-'));
       const originalFetch = globalThis.fetch;
       const requests = [], summaries = [];
+      const gif = (width, height, bytes) => {
+        const data = Buffer.alloc(bytes);
+        data.write('GIF89a', 0, 'latin1');
+        data.writeUInt16LE(width, 6);
+        data.writeUInt16LE(height, 8);
+        return { type: 'image', source: { type: 'base64', media_type: 'image/gif', data: data.toString('base64') } };
+      };
+      // Encoded size is not visual size: ~800K base64 chars for a 16x16
+      // frame. Two 8000x8000 frames are more than this window can carry.
+      const reference = gif(16, 16, 600_000);
+      const oversized = mode === 'append' ? [gif(8000, 8000, 64), gif(8000, 8000, 64)] : [];
+      const isReference = block => block?.type === 'image' && block.source?.data === reference.source.data;
+      const textOf = content => typeof content === 'string' ? content
+        : content.filter(block => block.type === 'text').map(block => block.text).join('');
       const config = { model: 'gateway/claude-opus-4.8', maxOutputTokens: 1024, projectDocMaxBytes: 0,
         modelInfo: { contextWindow: 40000 } };
       const control = new AbortController();
@@ -403,20 +417,33 @@ describe('Engine', () => {
         } });
         const events = [];
         for await (const event of engine.query({ prompt: 'obtain evidence and finish', sessionId: 'signed-rollover', signal: control.signal,
+          promptParts: [reference, ...oversized, { type: 'text', text: 'obtain evidence and finish' }],
           drainPendingUserMessages: () => inbox.splice(0),
         })) {
           events.push(event);
         }
         expect(executions).toBe(1);
         expect(summaries).toHaveLength(1);
+        // Budgeted by pixels, the reference image reaches the model whole.
+        expect(requests[0].messages[0].content.some(isReference)).toBe(true);
         if (mode !== 'abort') {
           expect(events.filter(event => event.type === 'error')).toEqual([]);
           const fresh = requests.at(-1);
           expect(fresh.messages).toHaveLength(1);
           expect(fresh.messages[0].role).toBe('user');
-          expect(fresh.messages[0].content).toContain('COMPLETE_EVIDENCE');
-          expect(fresh.messages[0].content).toContain('obtain evidence and finish');
-          if (mode === 'append') expect(fresh.messages[0].content).toContain('LATEST_CORRECTION: DO NOT DEPLOY');
+          const seed = fresh.messages[0].content;
+          expect(textOf(seed)).toContain('COMPLETE_EVIDENCE');
+          expect(textOf(seed)).toContain('obtain evidence and finish');
+          // Uploads stay native image parts, never base64 inside text.
+          expect(textOf(seed)).not.toContain(reference.source.data.slice(0, 64));
+          if (mode === 'append') {
+            expect(textOf(seed)).toContain('LATEST_CORRECTION: DO NOT DEPLOY');
+            // Only a window that cannot hold the uploads swaps them for markers.
+            expect(seed).toEqual(expect.any(String));
+            expect(seed.match(/\[image\/gif attachment omitted from the compacted context\]/g)).toHaveLength(3);
+          } else {
+            expect(seed.filter(isReference)).toHaveLength(1);
+          }
           expect(JSON.stringify(fresh)).not.toContain('signature-');
         }
         const rows = store.loadAllBySession('signed-rollover');

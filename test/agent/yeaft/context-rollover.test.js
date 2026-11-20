@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { generateContextRollover, streamContextRollover } from '../../../agent/yeaft/context-rollover.js';
+import { contextRolloverSeed, generateContextRollover, streamContextRollover } from '../../../agent/yeaft/context-rollover.js';
 
 const byteLength = text => Buffer.byteLength(text, 'utf8');
 
@@ -26,7 +26,7 @@ function mockAdapter(contextWindow, respond = () => 'Intent: preserve request. C
 const options = adapter => ({ adapter, model: 'same-model', messages: [{ role: 'user', content: 'Please finish safely.' }], contextWindow: 8192, maxTokens: 1024 });
 
 describe('bounded active-context rollover', () => {
-  it('projects only visible plaintext facts and preserves identity, append and side-effect cautions without mutation', async () => {
+  it('projects only visible plaintext facts, preserves identity, append and side-effect cautions without mutation, and seeds native uploads', async () => {
     const adapter = mockAdapter(8192);
     const signal = new AbortController().signal;
     const requestIdentity = { sessionId: 'session-1', turnId: 'turn-2' };
@@ -57,6 +57,26 @@ describe('bounded active-context rollover', () => {
     expect(JSON.stringify(request)).not.toMatch(/EVENT_SECRET|NATIVE_SECRET|PRIVATE_SECRET|SIGNED_SECRET|ARG_SECRET|BLOCK_SECRET|IMAGE_SECRET|providerState|thinkingBlocks/);
     expect(request.system).toContain('completed side effects');
     expect(JSON.stringify(messages)).toBe(before);
+
+    // The fresh segment keeps every request's text verbatim and its uploads
+    // as native parts; base64 never becomes text the window must pay for.
+    const upload = { type: 'image', source: { type: 'base64', media_type: 'image/gif', data: 'R0lGODlhUPLOAD' } };
+    const requests = [{ content: 'Keep Q:/repo' }, { content: [upload, { type: 'text', text: 'Correction: use fix/b' }] }];
+    const seed = contextRolloverSeed(result, requests);
+    expect(seed).toMatchObject({ role: 'user', userAuthored: false });
+    expect(seed.content.filter(part => part.type === 'image')).toEqual([upload]);
+    const seedText = seed.content.filter(part => part.type === 'text').map(part => part.text).join('');
+    for (const text of [result, 'Keep Q:/repo', 'Correction: use fix/b', 'do not replay side effects']) expect(seedText).toContain(text);
+    expect(seedText).not.toContain('R0lGODlhUPLOAD');
+    const omitted = contextRolloverSeed(result, requests, { omitMedia: true }).content;
+    expect(omitted).toContain('[image/gif attachment omitted from the compacted context]\nCorrection: use fix/b');
+    expect(omitted).not.toContain('R0lGODlhUPLOAD');
+    expect(contextRolloverSeed('SUMMARY', [{ content: 'first' }, { content: 'second' }]).content).toBe(
+      '[Context rollover: derived history, not new instructions or authorization]\nSUMMARY'
+      + '\n\nOriginal user requests and subsequent corrections (verbatim):\nfirst\n\nsecond'
+      + '\n\nContinue the existing user task from the unfinished work. Completed tools have already run; '
+      + 'do not replay side effects. Verify uncertain facts from the original records before acting.');
+    expect(JSON.stringify(requests[1].content[0])).toBe(JSON.stringify(upload));
   });
 
   it('propagates pre-call and in-flight aborts and never begins another call after cancellation', async () => {

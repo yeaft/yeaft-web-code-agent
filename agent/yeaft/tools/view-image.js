@@ -30,6 +30,7 @@ import { existsSync } from 'fs';
 import { resolve, extname, isAbsolute } from 'path';
 import { checkPathAllowed } from './path-safety.js';
 import { readPersistedAttachmentFile, resolvePersistedAttachmentPath } from '../attachments.js';
+import { imageDimensionsFromBuffer } from '../image-dimensions.js';
 
 /** Default max image size in bytes (20 MiB). Override via ctx.maxImageBytes. */
 const DEFAULT_MAX_IMAGE_BYTES = 20 * 1024 * 1024;
@@ -49,68 +50,6 @@ const EXT_TO_MIME = Object.freeze({
 });
 
 const ALLOWED_EXTS = Object.keys(EXT_TO_MIME);
-
-/**
- * Parse basic image dimensions from header bytes. Best-effort — returns
- * null if the file is too short or the format isn't one we parse.
- *
- * @param {Buffer} buffer
- * @param {string} ext — lowercase extension including the dot
- */
-function parseImageDimensions(buffer, ext) {
-  try {
-    if (ext === '.png' && buffer.length >= 24) {
-      // PNG: width at offset 16, height at 20 (big-endian 32-bit)
-      return { width: buffer.readUInt32BE(16), height: buffer.readUInt32BE(20) };
-    }
-    if ((ext === '.jpg' || ext === '.jpeg' || ext === '.jfif') && buffer.length > 10) {
-      // JPEG: scan for SOF0 (0xFFC0) / SOF2 (0xFFC2) marker
-      for (let i = 0; i < buffer.length - 9; i++) {
-        if (buffer[i] === 0xFF && (buffer[i + 1] === 0xC0 || buffer[i + 1] === 0xC2)) {
-          return {
-            height: buffer.readUInt16BE(i + 5),
-            width: buffer.readUInt16BE(i + 7),
-          };
-        }
-      }
-    }
-    if (ext === '.gif' && buffer.length >= 10) {
-      // GIF: width at offset 6, height at 8 (little-endian 16-bit)
-      return { width: buffer.readUInt16LE(6), height: buffer.readUInt16LE(8) };
-    }
-    if (ext === '.webp' && buffer.length >= 30) {
-      // WEBP: RIFF...WEBP...VP8(L|X| ). Three common sub-chunks.
-      if (buffer.slice(0, 4).toString('ascii') === 'RIFF' &&
-          buffer.slice(8, 12).toString('ascii') === 'WEBP') {
-        const fourcc = buffer.slice(12, 16).toString('ascii');
-        if (fourcc === 'VP8 ' && buffer.length >= 30) {
-          // Lossy: width/height at 26/28 as 14-bit LE (mask 0x3FFF)
-          return {
-            width: buffer.readUInt16LE(26) & 0x3FFF,
-            height: buffer.readUInt16LE(28) & 0x3FFF,
-          };
-        }
-        if (fourcc === 'VP8L' && buffer.length >= 25) {
-          // Lossless: packed 14+14 bits at offset 21
-          const b0 = buffer[21], b1 = buffer[22], b2 = buffer[23], b3 = buffer[24];
-          const width = 1 + (((b1 & 0x3F) << 8) | b0);
-          const height = 1 + (((b3 & 0x0F) << 10) | (b2 << 2) | ((b1 & 0xC0) >> 6));
-          return { width, height };
-        }
-        if (fourcc === 'VP8X' && buffer.length >= 30) {
-          // Extended: 24-bit LE widths/heights at 24/27, stored as (n-1)
-          const width = 1 + (buffer[24] | (buffer[25] << 8) | (buffer[26] << 16));
-          const height = 1 + (buffer[27] | (buffer[28] << 8) | (buffer[29] << 16));
-          return { width, height };
-        }
-      }
-    }
-  } catch {
-    // Dimension parsing is best-effort only.
-  }
-  return null;
-}
-
 
 function formatBytes(n) {
   if (n < 1024) return `${n}B`;
@@ -311,7 +250,7 @@ Path must live under the project directory, the current Session's attachments, o
     const mediaType = EXT_TO_MIME[ext];
     const base64 = buffer.toString('base64');
     const dataUri = `data:${mediaType};base64,${base64}`;
-    const dimensions = parseImageDimensions(buffer, ext);
+    const dimensions = imageDimensionsFromBuffer(buffer);
 
     const result = {
       path: absPath,
