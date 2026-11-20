@@ -87,6 +87,10 @@ it('runs overlapping same-VP user turns with visible partial peer context, suppl
   await bridge.handleYeaftLoadHistory({ sessionId, limit: 0 });
   await until(() => events('vp_status_snapshot').length > settledSnapshotCount);
   expect(events('vp_status_snapshot').at(-1).event.queryProgress).toBeUndefined();
+  const settledThreads = events('vp_status_snapshot').at(-1).event.statuses.flatMap(row => row.threads);
+  for (const { turnId, threadId } of starts) {
+    expect(settledThreads).toContainEqual(expect.objectContaining({ threadId, turnId: null, settledTurnId: turnId }));
+  }
   expect(requests.length).toBeGreaterThanOrEqual(3);
   expect(JSON.stringify(requests.at(-1))).toContain('additional details');
   expect(JSON.stringify(requests.at(-1))).toContain('already visible first output');

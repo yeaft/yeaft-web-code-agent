@@ -5339,6 +5339,7 @@ function handleEngineEvent(event, hctx) {
             sessionId: hctx.sessionId || null,
             vpId: hctx.vpId,
             threadId: hctx.threadId || 'main',
+            settledTurnId: hctx.turnId,
             title: hctx.thread?.title || '',
             messageCount: hctx.thread?.messageIds?.length || 0,
           });
@@ -6403,7 +6404,7 @@ async function runVpTurnWithEscalation(args) {
         }, { sessionId, vpId, threadId: threadId || 'main', turnId });
       } catch { /* never crash WS pipeline */ }
       try {
-        getVpStatusBroker().settleIdle({ sessionId, vpId, threadId: threadId || 'main', title: thread?.title || '' });
+        getVpStatusBroker().settleIdle({ sessionId, vpId, threadId: threadId || 'main', title: thread?.title || '', settledTurnId: turnId });
       } catch (err) {
         console.warn('[Yeaft] vp-status settleIdle (abort escalation) failed:', err?.message || err);
       }
@@ -6934,7 +6935,7 @@ async function runVpTurn({ prompt, promptParts = null, sessionId, vpId, threadId
     // can't mask the original error.
     if (!escalationState?.escalated && turnEndReason !== 'errored') {
       try {
-        getVpStatusBroker().settleIdle({ sessionId, vpId, threadId: threadId || 'main', title: thread?.title || '' });
+        getVpStatusBroker().settleIdle({ sessionId, vpId, threadId: threadId || 'main', title: thread?.title || '', settledTurnId: turnId });
       } catch (err) {
         console.warn('[Yeaft] vp-status settleIdle failed:', err?.message || err);
       }

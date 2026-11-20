@@ -216,10 +216,18 @@ test('native Session progress is ephemeral, scoped and readable in light/dark at
   broker.broadcastSnapshot({ sessionId: session.id });
   await expect(progresses.filter({ hasText: 'Tools 12' })).toBeVisible();
   const statusOnlyRunningSnapshot = lastSnapshot;
-  broker.settleIdle({ sessionId: session.id, vpId: statusOnly.vpId, threadId: statusOnly.threadId });
+  const queued = { ...statusOnly, turnId: 'next-turn-on-same-thread', toolExecutions: 1 };
+  broker.transition({ ...queued, state: 'typing' });
+  broker.settleIdle({ sessionId: session.id, vpId: statusOnly.vpId,
+    threadId: statusOnly.threadId, settledTurnId: statusOnly.turnId });
   await expect(progresses).toHaveCount(0);
   send(statusOnlyRunningSnapshot);
   send({ ...statusOnly, revision: 2 });
   await afterReplay('status-only-replay-marker');
+  broker.transition({ ...queued, state: 'tool' });
+  broker.recordQueryProgress(queued);
+  broker.broadcastSnapshot({ sessionId: session.id });
+  await expect(progresses).toHaveCount(1);
+  await expect(progresses.first()).toContainText('Tools 1');
   expect(await page.evaluate(() => JSON.stringify(window.Pinia.useChatStore().messagesMap))).not.toContain('query_progress');
 });

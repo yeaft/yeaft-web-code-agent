@@ -153,7 +153,7 @@ export function createVpStatusBroker({ send, now = Date.now } = {}) {
    * at (epoch milliseconds), turnId and threadId; at remains stable for the same
    * failed turn across metadata updates/corrections. Returned wire rows are copies.
    */
-  function transition({ sessionId, vpId, state, turnId = null, threadId = 'main', title = '', messageCount, errorDetail } = {}) {
+  function transition({ sessionId, vpId, state, turnId = null, threadId = 'main', title = '', messageCount, errorDetail, settledTurnId } = {}) {
     if (!vpId) return false;
     if (!VALID_STATES.has(state)) {
       throw new RangeError(`vp-status-broker: invalid state '${state}'`);
@@ -165,8 +165,10 @@ export function createVpStatusBroker({ send, now = Date.now } = {}) {
       ? (errorDetail === undefined && prev?.state === 'error' && prev.turnId === turnId
           ? prev.errorDetail || null : normalizeVpErrorDetail(errorDetail))
       : null;
+    const settled = isVpStatusRunning(state) ? undefined : (settledTurnId || turnId || undefined);
     if (prev && prev.state === state && prev.turnId === turnId && (!title || prev.title === title)
         && (!Number.isFinite(messageCount) || prev.messageCount === messageCount)
+        && prev.settledTurnId === settled
         && JSON.stringify(prev.errorDetail || null) === JSON.stringify(nextErrorDetail)) {
       return false;
     }
@@ -182,9 +184,9 @@ export function createVpStatusBroker({ send, now = Date.now } = {}) {
       sequence: ++sequence,
       createdAt: prev?.createdAt || ts,
       turnId,
-      // Idle deliberately has no active turnId. Name the settled execution
-      // separately so clients can fence late progress even if they missed end.
-      settledTurnId: !isVpStatusRunning(state) ? (turnId || prev?.turnId || prev?.settledTurnId) : undefined,
+      // Idle has no active turnId. Name the explicitly finished execution,
+      // not the latest broker owner (which can already be a queued turn).
+      settledTurnId: settled,
       queryProgress: prev?.turnId === turnId && isVpStatusRunning(state) ? prev.queryProgress : undefined,
       errorDetail: nextErrorDetail,
       errorAt: state === 'error'
@@ -198,8 +200,8 @@ export function createVpStatusBroker({ send, now = Date.now } = {}) {
     return true;
   }
 
-  function settleIdle({ sessionId, vpId, threadId = 'main', title = '', messageCount } = {}) {
-    return transition({ sessionId, vpId, threadId, state: 'idle', turnId: null, title, messageCount });
+  function settleIdle({ sessionId, vpId, threadId = 'main', title = '', messageCount, settledTurnId } = {}) {
+    return transition({ sessionId, vpId, threadId, state: 'idle', turnId: null, title, messageCount, settledTurnId });
   }
 
   function snapshot(sessionId) {
