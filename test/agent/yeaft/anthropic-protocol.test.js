@@ -1,5 +1,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { AnthropicAdapter } from '../../../agent/yeaft/llm/anthropic.js';
+import { OpenAIResponsesAdapter } from '../../../agent/yeaft/llm/openai-responses.js';
+import { GeminiAdapter } from '../../../agent/yeaft/llm/gemini.js';
+import { LLMRequestTooLargeError } from '../../../agent/yeaft/llm/adapter.js';
 import { createProviderContext } from '../../../agent/yeaft/llm/provider-state.js';
 import { existsSync, mkdtempSync, readdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -16,7 +19,7 @@ const collect = async generator => { const events = []; for await (const event o
 afterEach(() => vi.unstubAllGlobals());
 
 describe('Anthropic evolving Messages protocol', () => {
-  it('validates actual wire prefixes and appends supported instruction/tool changes without dropping signatures', async () => {
+  it('validates actual byte limits and signed prefixes before dispatch, and appends supported instruction/tool changes', async () => {
     const signed = [{ type: 'thinking', thinking: '', signature: 'opaque-signature' },
       { type: 'tool_use', id: 'read', name: 'Read', input: {} }];
     const fetch = vi.fn().mockResolvedValueOnce(json({ id: 'signed', content: signed, stop_reason: 'tool_use' }))
@@ -45,6 +48,31 @@ describe('Anthropic evolving Messages protocol', () => {
     expect(fetch).toHaveBeenCalledTimes(2);
     await expect(adapter.call({ ...params, model: 'claude-sonnet-4', messages: [{ role: 'system', content: 'new' }] })).rejects.toThrow(/does not support mid-conversation/);
     expect(fetch).toHaveBeenCalledTimes(2);
+
+    const admission = vi.fn();
+    const requestBody = { ...params, messages: [{ role: 'user', content: '中文 🙂 \u0000' }], onRequestStart: admission };
+    for (const [native, model] of [[adapter, params.model],
+      [new OpenAIResponsesAdapter({ apiKey: 'synthetic' }), 'gpt-5'],
+      [new GeminiAdapter({ apiKey: 'synthetic' }), 'gemini-3-flash-preview']]) {
+      for (const mode of ['unary', 'stream']) {
+        fetch.mockReset().mockImplementation(async () => new Response(null, { status: 413 }));
+        admission.mockClear();
+        const call = overrides => {
+          const args = { ...requestBody, ...overrides, model, providerContext: undefined };
+          return mode === 'unary' ? native.call(args) : collect(native.stream(args));
+        };
+        await expect(call({})).rejects.toBeInstanceOf(LLMRequestTooLargeError);
+        const serialized = fetch.mock.lastCall[1].body;
+        const bytes = Buffer.byteLength(serialized);
+        expect(bytes).toBeGreaterThan(serialized.length);
+        await expect(call({ maxRequestBodyBytes: bytes - 1 })).rejects.toMatchObject({ requestBytes: bytes, limitBytes: bytes - 1 });
+        expect(fetch).toHaveBeenCalledTimes(1);
+        expect(admission).toHaveBeenCalledTimes(1);
+        await expect(call({ maxRequestBodyBytes: bytes })).rejects.toMatchObject({ requestBytes: bytes, statusCode: 413 });
+        expect(fetch).toHaveBeenCalledTimes(2);
+        expect(fetch.mock.lastCall[1].body).toBe(serialized);
+      }
+    }
   });
 
 });

@@ -1,9 +1,9 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { dirname, join, sep } from 'node:path';
 import viewImage from '../../../../agent/yeaft/tools/view-image.js';
-import { persistedAttachmentPreviewPayload } from '../../../../agent/yeaft/attachments.js';
+import { persistedAttachmentPreviewPayload, referencePersistedAttachmentHistory } from '../../../../agent/yeaft/attachments.js';
 import { imageDimensionsFromBase64 } from '../../../../agent/yeaft/image-dimensions.js';
 import { estimateContentPartTokens } from '../../../../agent/yeaft/history-window.js';
 
@@ -26,6 +26,19 @@ describe('ViewImage owned Session attachments', () => {
   it('reads owned images at their exact size and rejects other Sessions, missing ownership, traversal and symlinked attachments without widening the instance allowlist', async () => {
     const { ctx, image, read } = fixture();
     const own = image(), other = image('other-session');
+    const extensionless = image(ctx.sessionId, 'extensionless');
+    expect(await read(extensionless)).toMatchObject({ path: extensionless, media_type: 'image/png' });
+    const refs = maxImageBytes => referencePersistedAttachmentHistory([{
+      role: 'user', sessionId: ctx.sessionId, content: '', attachments: [
+        { name: 'extensionless', isImage: true, path: extensionless },
+        { name: 'foreign.png', isImage: true, path: other },
+      ],
+    }], { ...ctx, maxImageBytes })[0].content.map(part => part.text);
+    expect(refs()[0]).toContain(JSON.stringify(extensionless));
+    expect(refs()[1]).toContain('is unavailable');
+    expect(refs()[1]).not.toContain(JSON.stringify(other));
+    expect(refs(1)[0]).toContain('is unavailable');
+    expect(await read(extensionless, { maxImageBytes: 1 })).toHaveProperty('error');
     expect(await read(own)).toMatchObject({ media_type: 'image/png', width: 1, height: 1 });
     // An EXIF thumbnail's frame header inside APP1 must not stand in for the photo's own.
     const photo = image(ctx.sessionId, 'photo.jpg');
@@ -55,7 +68,7 @@ describe('ViewImage owned Session attachments', () => {
     expect(await read(own, { sessionId: 'other-session' })).toHaveProperty('error');
     expect(await read(own, { sessionId: undefined })).toHaveProperty('error');
     expect(await read(own, { yeaftDir: undefined })).toHaveProperty('error');
-    expect(await read(own.replace('/attachments/', '/attachments/../attachments/'))).toHaveProperty('error');
+    expect(await read(dirname(own) + sep + '..' + sep + 'attachments' + sep + 'pixel.png')).toHaveProperty('error');
     const link = join(dirname(own), 'link.png'); symlinkSync(other, link);
     expect(await read(link)).toHaveProperty('error');
     symlinkSync(dirname(other), join(dirname(own), 'linked'));

@@ -24,7 +24,7 @@ import { promises as fsp } from 'fs';
 import { join, resolve as resolvePath } from 'path';
 import { buildSystemPrompt, buildWorkerPrompt } from './prompts.js';
 import { getRuntimePlatformInfo } from './runtime-platform.js';
-import { LLMAbortError, LLMAuthError, LLMContextError, LLMPolicyError, LLMRateLimitError, LLMServerError, LLMStreamIdleTimeoutError, isContentFilterStopDetails } from './llm/adapter.js';
+import { LLMAbortError, LLMAuthError, LLMContextError, LLMPolicyError, LLMRateLimitError, LLMRequestTooLargeError, LLMServerError, LLMStreamIdleTimeoutError, isContentFilterStopDetails } from './llm/adapter.js';
 import { runMemoryPreflow, buildRelevantScopes, memoryScopeLabel } from './sessions/pre-flow.js';
 import {
   readProjectDoc,
@@ -48,7 +48,8 @@ import { recallConversationTurns } from './conversation/history-index.js';
 import { parseSeqFromId } from './conversation/persist.js';
 import { readSessionTurnDeletions, sessionDeletionGeneration, sessionDeletionProjection } from './conversation/turn-deletion-journal.js';
 import { findExistingSessionYeaftDir } from './sessions/session-crud.js';
-import { hydratePersistedAttachmentHistory } from './attachments.js';
+import { referencePersistedAttachmentHistory } from './attachments.js';
+import { inlineMediaBytes, omitHistoricalImages, trimWireMedia, wireToolImageEvidence } from './wire-media.js';
 import { isVpForeign, readContent as readScopeContent } from './memory/store.js';
 import { ActiveMemorySet } from './memory/ams.js';
 import { cleanMemoryPromptText } from './memory/prompt-cleanup.js';
@@ -276,6 +277,7 @@ const RETRY_CONTINUATION_PROMPT =
 // Share of the model window an active signed/rolled context may fill before
 // the next request rolls over into a fresh segment.
 const CONTEXT_ROLLOVER_INPUT_RATIO = 0.85;
+const MAX_REQUEST_BODY_RECOVERY_ATTEMPTS = 3;
 const POLICY_RECOVERY_PROMPT =
   'Continue this authorized code review, but describe security findings abstractly. Do not repeat credential-like or exploit payloads, secrets, tokens, or step-by-step misuse instructions. Preserve the technical conclusion, evidence location, severity, and remediation.';
 
@@ -2244,10 +2246,11 @@ export class Engine {
       if (Number.isFinite(beforeSeq)) {
         const loadHistory = this.#conversationStore.loadProviderHistoryBySession
           || this.#conversationStore.loadRecentBySession;
-        // Materialize only provider copies from this Session's controlled assets.
-        // Hydrate before budgeting; never mutate/persist base64 into canonical rows.
-        const attachmentOptions = { yeaftDir: this.#yeaftDir, sessionId: runtimeSessionId, legacyRoot: process.cwd() };
-        const tail = hydratePersistedAttachmentHistory(
+        // Historical images are references, not automatic uploads. Scope
+        // paths to this Session before exposing them to the model.
+        const attachmentOptions = { yeaftDir: this.#yeaftDir, sessionId: runtimeSessionId, legacyRoot: process.cwd(),
+          maxImageBytes: this.#config?.yeaft?.maxImageBytes };
+        const tail = referencePersistedAttachmentHistory(
           await loadHistory.call(this.#conversationStore, runtimeSessionId, recentTurnCap, { beforeSeq }),
           attachmentOptions,
         );
@@ -2271,7 +2274,7 @@ export class Engine {
               ...turn,
               // Recall indexes intentionally contain text/identities, not assets.
               // Reload only the exact same-Session user anchor's references.
-              messages: hydratePersistedAttachmentHistory((turn.messages || []).map(row => {
+              messages: referencePersistedAttachmentHistory((turn.messages || []).map(row => {
                 if (row.role !== 'user' || row.sessionId !== runtimeSessionId
                   || !Number.isFinite(row.seq) || row.seq >= beforeSeq) return row;
                 const anchor = this.#conversationStore.loadRecentBySession(runtimeSessionId, 1, { beforeSeq: row.seq + 1 })
@@ -2573,8 +2576,9 @@ export class Engine {
         ? `${subAgentNotifBlock}\n\n${prompt || ''}`
         : prompt;
     }
+    const historicalMessages = omitHistoricalImages(messages);
     const conversationMessages = [
-      ...(useMessageHistory ? messages : trimSnapshotForBudget(messages, {
+      ...(useMessageHistory ? historicalMessages : trimSnapshotForBudget(historicalMessages, {
         messageTokenBudget: this.#config.messageTokenBudget,
         language: this.#config.language,
       })),
@@ -2657,6 +2661,10 @@ export class Engine {
     let rolloverCursor = 0;
     let rolloverCount = 0;
     let successfulRequestsSinceRollover = 0;
+    let bodyRecoveryAttempts = 0;
+    let learnedRequestBodyCap;
+    let mediaByteBudget = Infinity;
+    const viewImageToolPaths = new WeakMap();
     let pendingServerOperation = false;
     let turnNumber = 0;
     let continueTurns = 0; // auto-continue counter
@@ -2809,6 +2817,7 @@ export class Engine {
 
       const startTime = Date.now();
       const requestPerfStart = perfNowMs();
+      let requestMediaBytes = 0;
       let firstEventTraced = false;
       traceRequest('llm.request_start', {
         detail: {
@@ -3070,6 +3079,13 @@ export class Engine {
           return modelMessage;
         });
 
+        if (Number.isFinite(mediaByteBudget) && !pendingServerOperation) {
+          const frozenLength = signedAnthropicPrefix ? signedAnthropicPrefix.messages.length + 1 : 0;
+          const prefix = wireMessages.slice(0, frozenLength);
+          const tailBudget = Math.max(0, mediaByteBudget - inlineMediaBytes(prefix));
+          wireMessages = [...prefix, ...trimWireMedia(wireMessages.slice(frozenLength), tailBudget)];
+        }
+
         const currentSystemInstructions = systemPrompt;
         let requestToolDefs = toolDefs;
         let runtimeInstructionUpdate = null;
@@ -3220,6 +3236,7 @@ export class Engine {
           throw new ProviderContextBudgetError('active context reached the rollover threshold');
         }
         wireMessages = fittedRequest.messages;
+        requestMediaBytes = inlineMediaBytes(wireMessages);
         const deliveredTaskIds = taskDeliveries.filter(({ text }) => includesDelivery(wireMessages, text))
           .map(({ taskId }) => taskId);
         historyMessageCount = fittedRequest.meta.historyMessagesAfter;
@@ -3337,6 +3354,7 @@ export class Engine {
           tools: requestToolDefs.length > 0 ? requestToolDefs : undefined,
           maxTokens: requestMaxOutputTokens,
           contextOutputLimit,
+          ...(learnedRequestBodyCap == null ? {} : { maxRequestBodyBytes: learnedRequestBodyCap }),
           effort: resolvedEffort,
           effortConstraint,
           requestIdentity,
@@ -3702,9 +3720,38 @@ export class Engine {
           break;
         }
 
-        const contextNeedsRollover = err instanceof ProviderContextBudgetError
-          || err instanceof LLMContextError;
-        if (contextNeedsRollover && (signedAnthropicPrefix || rolloverSeed) && toolCalls.length === 0
+        const isBodyOverflow = err instanceof LLMRequestTooLargeError;
+        // Work Center owns durable dispatch/retry decisions through its Run
+        // lease. An Engine retry must not bypass a failed dispatch fence.
+        const canRecoverBody = isBodyOverflow && !prepareProviderRequest && err.workItemFailureKind == null
+          && toolCalls.length === 0 && !responseText
+          && !pendingServerOperation && !executionPolicy?.finalize && !progressReporting
+          && bodyRecoveryAttempts < MAX_REQUEST_BODY_RECOVERY_ATTEMPTS;
+        const rollSignedBody = canRecoverBody && signedAnthropicPrefix && successfulRequestsSinceRollover > 0;
+        if (canRecoverBody && (rollSignedBody || requestMediaBytes > 0)) {
+          bodyRecoveryAttempts++;
+          // For a real 413 the gateway's exact limit is unknown. Every retry
+          // must be strictly smaller and the final serialization enforces it.
+          const nextCap = Math.min(learnedRequestBodyCap ?? Infinity, err.limitBytes ?? Infinity,
+            err.statusCode === 413 ? Math.floor(err.requestBytes * 0.8) : err.requestBytes - 1);
+          learnedRequestBodyCap = nextCap;
+          mediaByteBudget = Math.min(mediaByteBudget, Math.max(0, requestMediaBytes
+            - (err.requestBytes - nextCap) - Math.min(65536, Math.floor(nextCap / 10))));
+          this.#trace.log?.('request_body_recovery', { sessionId: runtimeSessionId, turnId: queryTurnId,
+            attempt: bodyRecoveryAttempts, requestBytes: err.requestBytes, nextCap, mediaByteBudget,
+            signed: Boolean(rollSignedBody), statusCode: err.statusCode ?? null });
+          if (!rollSignedBody) {
+            endAttemptTrace('request_body_retry');
+            yield { type: 'llm_retry', attempt: bodyRecoveryAttempts, maxRetries: MAX_REQUEST_BODY_RECOVERY_ATTEMPTS,
+              delayMs: 0, reason: 'request_body_recovery', recoveryMode: 'restart',
+              errorName: err.name, statusCode: err.statusCode ?? null,
+              message: 'Request body is too large; retrying with attachment references. Original attachments are preserved.' };
+            yield { type: 'turn_end', turnNumber, stopReason: 'llm_retry', threadId };
+            continue;
+          }
+        }
+        const contextNeedsRollover = err instanceof ProviderContextBudgetError || err instanceof LLMContextError;
+        if ((rollSignedBody || (contextNeedsRollover && (signedAnthropicPrefix || rolloverSeed))) && toolCalls.length === 0
             && successfulRequestsSinceRollover > 0 && !pendingServerOperation) {
           endAttemptTrace('context_rollover');
           if (responseText) prepareRetryContinuation();
@@ -3713,7 +3760,9 @@ export class Engine {
             type: 'llm_retry', attempt: rolloverCount, maxRetries: rolloverCount,
             delayMs: 0, reason: 'context_rollover', recoveryMode: 'continue',
             errorName: err.name, statusCode: err.statusCode ?? null,
-            message: 'Compacting conversation context and continuing in a fresh model turn.',
+            message: rollSignedBody
+              ? 'Request body is too large; continuing in a fresh model context without repeating completed tools.'
+              : 'Compacting conversation context and continuing in a fresh model turn.',
           };
           const sourceCursor = conversationMessages.length;
           const sourceMessages = rolloverSeed
@@ -3733,14 +3782,15 @@ export class Engine {
             };
             if (executionPolicy?.finalize) {
               // Keep the sole reserved report instead of buying more summaries.
-              summary = reportingExcerpt();            } else {
+              summary = reportingExcerpt();
+            } else {
               const compact = streamContextRollover({
                 adapter: requestAdapter.call ? requestAdapter : this.#adapter,
                 model: currentModel,
                 messages: sourceMessages,
                 contextWindow: Math.max(1, Math.floor(currentContextWindow * providerContextScale)),
                 maxTokens: Math.min(4096, resolveMaxOutputTokens(currentModel, requestConfig)),
-                signal, requestIdentity,
+                signal, requestIdentity, maxRequestBodyBytes: learnedRequestBodyCap,
                 onRequestStart: () => {
                   if (isSubAgent) this.#toolRegistry?.reserveProviderRequest?.();
                 },
@@ -3777,11 +3827,20 @@ export class Engine {
             const seedInputTokens = seed => estimateHistoryMessagesTokens([seed])
               + estimateMessagesTokens(rolloverSystem, [])
               + approxTokens(JSON.stringify(toolDefs));
-            let nextRolloverSeed = contextRolloverSeed(summary, rolloverUserRequests);
+            const latestToolIndex = conversationMessages.findLastIndex(message => message.role === 'tool');
+            let firstToolIndex = latestToolIndex;
+            while (firstToolIndex > 0 && conversationMessages[firstToolIndex - 1].role === 'tool') firstToolIndex--;
+            // Reattach the newest tool batch as evidence, not as calls. Do not
+            // bring back batches from a segment already summarized before this one.
+            const toolImageEvidence = rollSignedBody && latestToolIndex >= Math.max(rolloverCursor, turnStartIdx + 1)
+              ? wireToolImageEvidence(conversationMessages.slice(Math.max(firstToolIndex, rolloverCursor, turnStartIdx + 1), latestToolIndex + 1), viewImageToolPaths)
+              : [];
+            let nextRolloverSeed = contextRolloverSeed(summary, rolloverUserRequests, { toolImageEvidence });
+            if (Number.isFinite(mediaByteBudget)) [nextRolloverSeed] = trimWireMedia([nextRolloverSeed], mediaByteBudget);
             const mediaSeedInput = seedInputTokens(nextRolloverSeed);
             if (mediaSeedInput >= currentContextWindow * CONTEXT_ROLLOVER_INPUT_RATIO / 2
                 || mediaSeedInput + rolloverOutputReserve > currentContextWindow) {
-              nextRolloverSeed = contextRolloverSeed(summary, rolloverUserRequests, { omitMedia: true });
+              nextRolloverSeed = contextRolloverSeed(summary, rolloverUserRequests, { omitMedia: true, toolImageEvidence });
             }
             // Never silently trim the last human instructions or the new
             // summary. An impossible static/configured budget stays explicit.
@@ -3830,6 +3889,10 @@ export class Engine {
             err = new Error('Automatic context compaction failed; conversation and completed tool results are preserved. '
               + String(compactError?.message || compactError));
             err.code = 'CONTEXT_COMPACTION_FAILED';
+            if (rollSignedBody) {
+              err.reasonCode = 'request_body_too_large';
+              if (compactError?.statusCode === 413) err.statusCode = 413;
+            }
           }
         }
 
@@ -4090,6 +4153,8 @@ export class Engine {
             && consecutiveRetryableErrors >= retryPolicy.maxRetries;
           errorEvent.retryAttempts = consecutiveRetryableErrors;
           errorEvent.maxRetries = retryPolicy.maxRetries;
+        } else if (err instanceof LLMRequestTooLargeError) {
+          errorEvent.reason = err.reasonCode;
         } else if (err instanceof LLMPolicyError) {
           errorEvent.reason = 'content_policy_denied';
           errorEvent.retryExhausted = contentPolicyRecoveryAttempts >= 1;
@@ -5264,6 +5329,10 @@ export class Engine {
             : contextOutput,
           isError,
         };
+        if (tc.name === 'ViewImage' && modelImages.length > 0 && !isError
+            && typeof tc.input?.file_path === 'string' && tc.input.file_path.length <= 4096) {
+          viewImageToolPaths.set(toolMessage, tc.input.file_path);
+        }
         conversationMessages.push(toolMessage);
         // Model context may use a bounded copy, but durable conversation
         // history keeps the raw normalized tool output for recovery/debug.

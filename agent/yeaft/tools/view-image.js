@@ -29,11 +29,8 @@ import { stat, readFile } from 'fs/promises';
 import { existsSync } from 'fs';
 import { resolve, extname, isAbsolute } from 'path';
 import { checkPathAllowed } from './path-safety.js';
-import { readPersistedAttachmentFile, resolvePersistedAttachmentPath } from '../attachments.js';
-import { imageDimensionsFromBuffer } from '../image-dimensions.js';
-
-/** Default max image size in bytes (20 MiB). Override via ctx.maxImageBytes. */
-const DEFAULT_MAX_IMAGE_BYTES = 20 * 1024 * 1024;
+import { readPersistedAttachmentFile, resolvePersistedAttachmentPath, viewImageByteLimit } from '../attachments.js';
+import { imageDimensionsFromBuffer, imageMimeFromHeader } from '../image-dimensions.js';
 
 /**
  * Extension → canonical MIME type.
@@ -150,16 +147,13 @@ Path must live under the project directory, the current Session's attachments, o
     const allowlist = Array.isArray(ctx?.imageAllowlist) ? ctx.imageAllowlist : [];
     // Size cap: ctx.maxImageBytes (host-injected from config.json) wins,
     // falling back to 20 MiB. A non-finite / non-positive override is ignored.
-    const maxBytes =
-      Number.isFinite(ctx?.maxImageBytes) && ctx.maxImageBytes > 0
-        ? Math.floor(ctx.maxImageBytes)
-        : DEFAULT_MAX_IMAGE_BYTES;
+    const maxBytes = viewImageByteLimit(ctx?.maxImageBytes);
     const absPath = resolve(cwd, file_path);
 
     // Session uploads intentionally live outside workDir. Reuse the same
     // owner + no-symlink resolver as history/preview, never allow the whole
     // instance's sessions directory just to make an uploaded image readable.
-    const attachmentOptions = { yeaftDir: ctx?.yeaftDir, sessionId: ctx?.sessionId, cwd };
+    const attachmentOptions = { yeaftDir: ctx?.yeaftDir, sessionId: ctx?.sessionId, cwd, legacyRoot: process.cwd() };
     const sessionAttachment = Boolean(ctx?.yeaftDir && ctx?.sessionId
       && resolvePersistedAttachmentPath(file_path, attachmentOptions));
     const pathErr = checkPathAllowed(absPath, cwd, allowlist);
@@ -186,7 +180,7 @@ Path must live under the project directory, the current Session's attachments, o
     // HEIC special-case: iPhone screenshots default to HEIC and silently
     // fail today. Give users a concrete one-liner to fix it instead of a
     // generic "Unsupported format".
-    if (ext === '.heic' || ext === '.heif') {
+    if (!sessionAttachment && (ext === '.heic' || ext === '.heif')) {
       return JSON.stringify({
         error:
           'HEIC images need to be converted to JPEG first. ' +
@@ -196,7 +190,7 @@ Path must live under the project directory, the current Session's attachments, o
         supported: ALLOWED_EXTS,
       });
     }
-    if (!(ext in EXT_TO_MIME)) {
+    if (!sessionAttachment && !(ext in EXT_TO_MIME)) {
       return JSON.stringify({
         error: `Unsupported image format: ${ext || '(none)'}`,
         supported: ALLOWED_EXTS,
@@ -247,22 +241,24 @@ Path must live under the project directory, the current Session's attachments, o
       modified = fileStat.mtime.toISOString();
     }
 
-    const mediaType = EXT_TO_MIME[ext];
+    const mediaType = sessionAttachment ? imageMimeFromHeader(buffer) : EXT_TO_MIME[ext];
+    if (!mediaType) {
+      return JSON.stringify({ error: 'Unsupported Session image format.', code: 'image_attachment_unavailable', errorEffect: 'none' });
+    }
     const base64 = buffer.toString('base64');
     const dataUri = `data:${mediaType};base64,${base64}`;
     const dimensions = imageDimensionsFromBuffer(buffer);
 
     const result = {
-      path: absPath,
-      format: ext.slice(1).toUpperCase() === 'JPG' ? 'JPEG' : ext.slice(1).toUpperCase(),
+      // Legacy uploads are only reopenable by their original relative reference.
+      path: sessionAttachment ? file_path : absPath,
+      format: mediaType.slice('image/'.length).toUpperCase(),
       media_type: mediaType,
       size: buffer.length,
       sizeFormatted: formatBytes(buffer.length),
       modified,
       image: dataUri,
     };
-    // Normalise .jfif to JPEG in display format too, for consistency.
-    if (ext === '.jfif') result.format = 'JPEG';
     if (dimensions) {
       result.width = dimensions.width;
       result.height = dimensions.height;

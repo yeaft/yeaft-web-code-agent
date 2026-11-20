@@ -122,12 +122,12 @@ function* chunks(parts, limit, signal) {
  * @param {{ adapter: {call: Function}, model: string, messages: object[],
  * contextWindow: number, maxTokens?: number, signal?: AbortSignal,
  * requestIdentity?: object, userAppend?: string, maxCalls?: number,
- * onRequestStart?: Function, onUsage?: Function }} options
+ * onRequestStart?: Function, onUsage?: Function, maxRequestBodyBytes?: number }} options
  * @returns {AsyncGenerator<object, string>} Per-call usage, then untrusted handoff.
  */
 export async function* streamContextRollover({
   adapter, model, messages, contextWindow, maxTokens = 4096,
-  signal, requestIdentity, userAppend, maxCalls = 4096, onRequestStart,
+  signal, requestIdentity, userAppend, maxCalls = 4096, onRequestStart, maxRequestBodyBytes,
 }) {
   checkAbort(signal);
   if (!adapter || typeof adapter.call !== 'function' || !Array.isArray(messages)) {
@@ -141,7 +141,11 @@ export async function* streamContextRollover({
   if (outputLimit < bytes(PREFIX) + 128) {
     throw new RangeError('Context window/output budget too small for safe context rollover');
   }
-  const inputLimit = Math.min(65536, available - outputLimit);
+  // JSON can expand control characters to six ASCII bytes. Leave room for
+  // the fixed summary prompt and provider framing when a gateway cap was learned.
+  const inputLimit = Math.min(65536, available - outputLimit,
+    maxRequestBodyBytes == null ? Infinity : Math.floor((maxRequestBodyBytes - 4096) / 6));
+  if (maxRequestBodyBytes != null && inputLimit < 1024) throw new RangeError('Request body limit too small for safe context rollover');
   const summaryLimit = outputLimit - bytes(PREFIX);
   let calls = 0;
   async function* summarize(source) {
@@ -151,7 +155,8 @@ export async function* streamContextRollover({
       model, system: SYSTEM + ` Keep the entire response under ${summaryLimit} UTF-8 bytes.`,
       messages: [{ role: 'user', content: INPUT_LABEL + source }],
       maxTokens: outputLimit, contextOutputLimit: outputLimit,
-      signal, requestIdentity, ...(onRequestStart ? { onRequestStart } : {}),
+      signal, requestIdentity, ...(maxRequestBodyBytes == null ? {} : { maxRequestBodyBytes }),
+      ...(onRequestStart ? { onRequestStart } : {}),
     });
     if (response?.usage) yield { ...response.usage, type: 'usage' };
     checkAbort(signal);
@@ -212,10 +217,10 @@ const SEED_MEDIA_TYPES = new Set(['image', 'input_image', 'document', 'input_fil
  *
  * @param {string} summary - Untrusted handoff from streamContextRollover.
  * @param {Array<{ content: string|Array<object> }>} userRequests
- * @param {{ omitMedia?: boolean }} [options]
+ * @param {{ omitMedia?: boolean, toolImageEvidence?: Array<object> }} [options]
  * @returns {{ role: 'user', userAuthored: false, content: string|Array<object> }}
  */
-export function contextRolloverSeed(summary, userRequests, { omitMedia = false } = {}) {
+export function contextRolloverSeed(summary, userRequests, { omitMedia = false, toolImageEvidence = [] } = {}) {
   const parts = [];
   const text = value => {
     if (!value) return;
@@ -243,6 +248,11 @@ export function contextRolloverSeed(summary, userRequests, { omitMedia = false }
       }
     });
   });
+  if (toolImageEvidence.length > 0) {
+    if (omitMedia) {
+      for (const part of toolImageEvidence) if (part.type === 'text') text(part.text);
+    } else parts.push(...toolImageEvidence);
+  }
   text(SEED_TRAILER);
   return { role: 'user', userAuthored: false,
     content: parts.length === 1 ? parts[0].text : parts };
