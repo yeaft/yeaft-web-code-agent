@@ -407,7 +407,7 @@ describe('Engine', () => {
     });
 
     it.each(['provider', 'abort', 'append'])('rolls signed context into a fresh conversation without tool replay: %s', async trigger => {
-      for (const mode of trigger === 'provider' ? ['token', 'http413', 'http413-token-fallback'] : [trigger]) {
+      for (const mode of trigger === 'provider' ? ['token', 'http413', 'http413-token-fallback', 'http413-summary-retry'] : [trigger]) {
         const dir = mkdtempSync(join(tmpdir(), 'yeaft-signed-rollover-'));
         const originalFetch = globalThis.fetch;
         const requests = [], summaries = [];
@@ -429,6 +429,7 @@ describe('Engine', () => {
         // and use the persisted tool evidence without invoking the tool again.
         const screenshot = mode === 'http413-token-fallback' ? gif(4424, 4424, 300_000) : gif(16, 16, 300_000);
         const tooLarge = mode.startsWith('http413');
+        const retrySummary = mode === 'http413-summary-retry';
         const imagePath = 'fixture image.gif';
         const toolName = tooLarge ? 'ViewImage' : 'echo';
         const requestBytes = [];
@@ -449,7 +450,10 @@ describe('Engine', () => {
               expect(JSON.stringify(body)).not.toContain('signature-');
               expect(body.messages[0].content).toContain('COMPLETE_EVIDENCE');
               if (body.system.startsWith('Summarize the supplied') && mode === 'abort') { control.abort(); throw new DOMException('cancelled', 'AbortError'); }
-              return new Response(JSON.stringify({ content: [{ type: 'text', text: 'COMPLETE_EVIDENCE. Echo completed successfully, do not repeat it. Continue unfinished answer.' }], stop_reason: 'end_turn', usage: { input_tokens: 1234, output_tokens: 20 } }), { headers: { 'content-type': 'application/json' } });
+              const draft = retrySummary && summaries.length === 1
+                ? 'Rejected draft. ' + '细'.repeat(6000)
+                : 'COMPLETE_EVIDENCE. Tool completed successfully, do not repeat it. Continue unfinished answer.';
+              return new Response(JSON.stringify({ content: [{ type: 'text', text: draft }], stop_reason: 'end_turn', usage: { input_tokens: 1234, output_tokens: 20 } }), { headers: { 'content-type': 'application/json' } });
             }
             requests.push(body);
             requestBytes.push(Buffer.byteLength(init.body));
@@ -482,7 +486,11 @@ describe('Engine', () => {
             events.push(event);
           }
           expect(executions).toBe(1);
-          expect(summaries).toHaveLength(1);
+          expect(summaries).toHaveLength(retrySummary ? 2 : 1);
+          if (retrySummary) {
+            expect(summaries[1].messages).toEqual(summaries[0].messages);
+            expect(summaries[1].system).not.toBe(summaries[0].system);
+          }
           // Budgeted by pixels, the reference image reaches the model whole.
           expect(requests[0].messages[0].content.some(isReference)).toBe(true);
           if (mode !== 'abort') {
