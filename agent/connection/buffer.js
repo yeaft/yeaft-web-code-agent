@@ -30,7 +30,13 @@ function removeOutboundAt(index, outcome = 'dropped') {
   removed?.resolve?.(outcome);
 }
 
+const isHistoryChunkError = msg => msg.type === 'yeaft_history_chunk' && !!msg.error;
+const canSendHistoryChunk = msg => !isHistoryChunkError(msg)
+  || ctx.serverCapabilities?.has('session_history_chunk_errors');
+
 function bufferMessage(msg, reason) {
+  // Responses tied to a negotiated error protocol must not be replayed.
+  if (isHistoryChunkError(msg)) return 'dropped';
   if (!BUFFERABLE_TYPES.has(msg.type)) {
     console.warn(`[WS] Cannot send message, WebSocket not open: ${msg.type}`);
     return 'dropped';
@@ -56,6 +62,10 @@ function bufferMessage(msg, reason) {
   console.log(`[WS] ${reason}, buffered: ${msg.type} (queue: ${ctx.messageBuffer.length})`);
   return 'buffered';
 }
+
+const CONNECTION_SCOPED_TYPES = new Set([
+  'file_content_chunk', 'video_chunk', 'yeaft_session_attachment_chunk', 'upgrade_agent_ack',
+]);
 
 const FILE_CHUNK_SEND_TIMEOUT_MS = 10_000;
 
@@ -104,14 +114,15 @@ async function sendNow(msg, queuedSocket) {
   const socket = ctx.ws;
   if (!socket || socket.readyState !== WebSocket.OPEN) return bufferMessage(msg, 'Disconnected');
   // File transfers are request/connection scoped, unlike replayable chat output.
-  if (['file_content_chunk', 'video_chunk', 'upgrade_agent_ack'].includes(msg.type) && queuedSocket !== socket) return 'dropped';
+  if ((CONNECTION_SCOPED_TYPES.has(msg.type) || isHistoryChunkError(msg)) && queuedSocket !== socket) return 'dropped';
+  if (!canSendHistoryChunk(msg)) return 'dropped';
   const payload = ctx.serverEncryptionRequired && ctx.sessionKey
     ? await encrypt(msg, ctx.sessionKey) : msg;
   if (socket !== ctx.ws || socket.readyState !== WebSocket.OPEN) {
     return bufferMessage(msg, 'Connection changed');
   }
   const data = JSON.stringify(payload);
-  if (['file_content_chunk', 'video_chunk', 'upgrade_agent_ack'].includes(msg.type)) return sendTransferChunk(socket, data);
+  if (CONNECTION_SCOPED_TYPES.has(msg.type)) return sendTransferChunk(socket, data);
   socket.send(data);
   return 'sent';
 }
@@ -143,6 +154,7 @@ function scheduleOutboundDrain() {
 }
 
 export async function sendToServer(msg) {
+  if (!canSendHistoryChunk(msg)) return 'dropped';
   if (!ctx.ws || ctx.ws.readyState !== WebSocket.OPEN) return bufferMessage(msg, 'Disconnected');
   const bytes = messageBytes(msg);
   const maxBytes = Math.max(1, Number(ctx.outboundSendQueueMaxBytes) || 8 * 1024 * 1024);
@@ -161,7 +173,7 @@ export async function sendToServer(msg) {
     return 'dropped';
   }
   const promise = new Promise((resolve, reject) => {
-    const connectionScoped = ['file_content_chunk', 'video_chunk', 'upgrade_agent_ack'].includes(msg.type);
+    const connectionScoped = CONNECTION_SCOPED_TYPES.has(msg.type) || isHistoryChunkError(msg);
     ctx.outboundSendQueue.push({ msg, bytes, resolve, reject, socket: connectionScoped ? ctx.ws : null });
     ctx.outboundSendQueueBytes = Number(ctx.outboundSendQueueBytes || 0) + bytes;
   });

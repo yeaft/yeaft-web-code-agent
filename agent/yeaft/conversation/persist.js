@@ -2573,7 +2573,10 @@ export class ConversationStore {
       roles: null,
       visibleOnly: true,
     });
-    const messages = projectVisibleSessionMessages(page.messages);
+    const rows = Number.isFinite(cutoff)
+      ? this.#includeAskUserResultsAcrossPage(sessionId, page.messages, cutoff)
+      : page.messages;
+    const messages = projectVisibleSessionMessages(rows);
     if (messages.length === 0) {
       const nextBeforeSeq = Number.isFinite(page.nextBeforeSeq) ? page.nextBeforeSeq : null;
       return {
@@ -2593,6 +2596,47 @@ export class ConversationStore {
         : (Number.isFinite(oldestSeq) ? oldestSeq : null),
       hasMore: page.truncated && (stopAtSeq === null || oldestSeq > stopAtSeq),
     };
+  }
+
+  #includeAskUserResultsAcrossPage(sessionId, rows, cutoff) {
+    // Byte pagination places the boundary at a visible row, which can fall
+    // between an AskUser call and result when another VP speaks in between.
+    // Resolve only results belonging to a selected call; don't bring any
+    // neighbor messages into this page or advance its cursors. The fixed
+    // per-call lookahead can recover every pair an unsplit recent page could
+    // project, including across repeated byte-sized page boundaries.
+    const observed = new Set(rows.filter(row => row.role === 'tool').map(row => askUserToolIdentity(row, row.toolCallId)));
+    const calls = new Map();
+    for (const row of rows) {
+      if (row.role !== 'assistant' || !isVisibleConversationRow(row)) continue;
+      for (const call of row.toolCalls || []) {
+        if (call.name !== 'AskUser') continue;
+        const identity = askUserToolIdentity(row, call.id);
+        if (identity && !observed.has(identity)) calls.set(identity, row.id);
+      }
+    }
+    if (calls.size === 0) return rows;
+    const callsByRow = new Map();
+    for (const [identity, id] of calls) {
+      if (!callsByRow.has(id)) callsByRow.set(id, []);
+      callsByRow.get(id).push(identity);
+    }
+    const expires = new Map();
+    const results = [];
+    const afterSeq = Math.min(...[...callsByRow.keys()].map(parseSeqFromId)) - 1;
+    if (!Number.isFinite(afterSeq)) return rows;
+    let scanned = 0;
+    for (const row of this.#iterateSessionRows(sessionId, { afterSeq, projection: 'transcript' })) {
+      if (++scanned > 2 * RECENT_SESSION_SCAN_MAX_CAP) break;
+      for (const identity of callsByRow.get(row.id) || []) expires.set(identity, scanned + RECENT_SESSION_SCAN_MAX_CAP);
+      if (row.role !== 'tool' || row.sessionId !== sessionId || !isVisibleConversationRow(row) || parseSeqFromId(row.id) < cutoff) continue;
+      const identity = askUserToolIdentity(row, row.toolCallId);
+      if (!(expires.get(identity) >= scanned)) continue;
+      results.push(row);
+      expires.delete(identity);
+      if (results.length === calls.size) break;
+    }
+    return results.length ? [...rows, ...results] : rows;
   }
 
   /**
@@ -2722,6 +2766,18 @@ export class ConversationStore {
       latestSeq: safeCursorSeq,
       hasMoreAfter,
     };
+  }
+
+  /** Exact transcript lookup for Session attachments; includes cold/legacy rows and excludes deletions. */
+  findVisibleUserMessageById(sessionId, messageId) {
+    const seq = parseSeqFromId(messageId);
+    if (!sessionId || !Number.isSafeInteger(seq) || seq < 1 || seq >= Number.MAX_SAFE_INTEGER) return null;
+    for (const row of this.#iterateSessionRows(sessionId, {
+      afterSeq: seq - 1, beforeSeq: seq + 1, projection: 'transcript',
+    })) {
+      if (row.id === messageId && row.sessionId === sessionId && row.role === 'user' && isVisibleConversationRow(row)) return row;
+    }
+    return null;
   }
 
   /**

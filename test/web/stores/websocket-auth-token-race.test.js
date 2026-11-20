@@ -161,9 +161,16 @@ describe('native Session history and delete turn on reconnect', () => {
       requestId: expect.any(String) });
     const cachedTurn = store.messagesMap.conv.find(row => row.sessionId === 'B');
     expect(store.yeaftTurnDeleteUnavailable(store.yeaftTurnDeleteTarget(cachedTurn))).toBe('refreshing');
-    reply({ sessionId: 'B', requestId: oldRequest.requestId }, [], { streamId: 'stream-B', revision: 4 });
+    reply({ sessionId: 'B', requestId: oldRequest.requestId }, [], { error: 'history_delivery_failed' });
     expect(store.yeaftSessionHistoryState[key('a', 'B')].requestId).toBe(validation.requestId);
-    reply(validation, [], { streamId: 'stream-B', revision: 5 });
+    reply(validation, [], { mode: 'delta', error: 'history_payload_too_large', latestSeq: 900 });
+    expect(store.yeaftHistoryLoadError).toBe('history_payload_too_large');
+    expect(store.yeaftLoadingMoreHistory).toBe(false);
+    expect(store.yeaftSessionHistoryState[key('a', 'B')]).toMatchObject({ loaded: true, latestSeq: 2, syncingAfterSeq: null, requestId: null });
+    expect(store.messagesMap.conv).toContainEqual(cachedTurn);
+    store.reloadYeaftMessages();
+    reply(requests().at(-1), [], { streamId: 'stream-B', revision: 5 });
+    expect(store.yeaftHistoryLoadError).toBeNull();
     expect(store.messagesMap.conv.map(row => row.id)).toEqual(['m0001']);
     expect(store.yeaftSessionHistoryState[key('a', 'B')]).toMatchObject({ loaded: true, revision: 5 });
     store.setActiveSessionFilter('A');

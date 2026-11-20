@@ -245,6 +245,24 @@ export function attachmentsForPersistence(promptAttachments) {
   }));
 }
 
+export function sessionAttachmentName(name) {
+  return (typeof name === 'string' && name.split(/[/\\]/).pop().slice(0, 255)) || 'attachment';
+}
+
+/** Web-only metadata. Durable transcript and provider attachments retain their local path. */
+export function projectSessionHistoryAttachments({ id, role, sessionId, attachments }) {
+  const canReference = role === 'user' && validSessionId(sessionId) && sessionId.length <= 128 && /^m[0-9]{1,16}$/.test(id || '');
+  return attachments.slice(0, MAX_FILES_PER_TURN).flatMap((att, index) => {
+    if (!att || typeof att !== 'object') return [];
+    return [{
+      name: sessionAttachmentName(att.name),
+      mimeType: typeof att.mimeType === 'string' ? att.mimeType.slice(0, 128) : 'application/octet-stream',
+      isImage: att.isImage === true,
+      ...(canReference && typeof att.path === 'string' && att.path ? { attachmentId: `${id}.${index}` } : {}),
+    }];
+  });
+}
+
 /** Session IDs are identities, never sanitized into another Session's directory. */
 function validSessionId(value) {
   return typeof value === 'string' && /^[a-zA-Z0-9_-][a-zA-Z0-9._-]*$/.test(value);
@@ -321,21 +339,32 @@ export function resolvePersistedAttachmentPath(attachmentPath, opts = {}) {
  * @returns {{path:string, buffer:Buffer, modified:string}}
  */
 export function readPersistedAttachmentFile(attachmentPath, opts, maxBytes) {
+  const { path, buffer, stat } = readPersistedAttachmentRange(attachmentPath, opts, { maxBytes });
+  return { path, buffer, modified: stat.mtime.toISOString() };
+}
+
+/** Read an exact bounded range against the same no-follow Session file policy. */
+export function readPersistedAttachmentRange(attachmentPath, opts, { maxBytes, offset = 0, length = Infinity }) {
   const absPath = resolvePersistedAttachmentPath(attachmentPath, opts);
   if (!absPath) throw new Error('file missing or outside this Session / 文件缺失或不属于本会话');
   const fd = openSync(absPath, constants.O_RDONLY | (constants.O_NOFOLLOW || 0) | (constants.O_NONBLOCK || 0));
   try {
     const stat = fstatSync(fd);
     if (!stat.isFile()) throw new Error('not a regular file');
-    if (stat.size > maxBytes) throw new Error('image exceeds attachment size limit');
-    const buffer = Buffer.alloc(stat.size);
-    let offset = 0;
-    while (offset < buffer.length) {
-      const read = readSync(fd, buffer, offset, buffer.length - offset, null);
-      if (!read) throw new Error('image changed while reading');
-      offset += read;
+    if (stat.size > maxBytes) throw Object.assign(new Error('image exceeds attachment size limit'), { code: 'ATTACHMENT_TOO_LARGE' });
+    if (offset > stat.size) throw new Error('offset outside attachment');
+    const buffer = Buffer.alloc(Math.min(length, stat.size - offset));
+    let readBytes = 0;
+    while (readBytes < buffer.length) {
+      const count = readSync(fd, buffer, readBytes, buffer.length - readBytes, offset + readBytes);
+      if (!count) throw new Error('attachment changed while reading');
+      readBytes += count;
     }
-    return { path: absPath, buffer, modified: stat.mtime.toISOString() };
+    const after = fstatSync(fd);
+    if (after.size !== stat.size || after.mtimeMs !== stat.mtimeMs || after.ctimeMs !== stat.ctimeMs) {
+      throw new Error('attachment changed while reading');
+    }
+    return { path: absPath, buffer, stat };
   } finally {
     closeSync(fd);
   }

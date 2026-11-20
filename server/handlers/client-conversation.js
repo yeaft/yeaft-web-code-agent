@@ -1782,6 +1782,7 @@ export async function handleClientConversation(clientId, client, msg, checkAgent
       // hung forever.
       if (typeof msg.type === 'string' && (msg.type.startsWith('yeaft_') || msg.type.startsWith('unify_'))) {
         const relayType = msg.type.startsWith('unify_') ? `yeaft_${msg.type.slice('unify_'.length)}` : msg.type;
+        if (relayType === 'yeaft_session_attachment_chunk' || relayType === 'yeaft_session_attachment_read') return true;
         const relayAgentId = msg.agentId || client.currentAgent;
         // Internal authority messages are generated from Server SQLite only.
         // Generic relay must not turn a browser assertion into trusted context.

@@ -921,6 +921,7 @@ export default {
   'chat.session.creating': 'Creating conversation...',
   'chat.session.loadingHistory': 'Loading conversation history...',
   'yeaft.historyLoad.error': 'Conversation history could not be loaded. Your messages are still stored on the Agent.',
+  'yeaft.historyLoad.tooLarge': 'This part of the conversation is too large to load. It is still stored on the Agent.',
   'yeaft.historyLoad.retry': 'Retry loading',
   'yeaft.sessionInventory.error': 'Sessions could not be loaded. Your conversations are still stored on the Agent.',
   'yeaft.sessionInventory.retry': 'Retry Sessions',

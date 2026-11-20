@@ -136,6 +136,8 @@ export default {
     const errorKey = Vue.computed(() => {
       const error = isSearching.value ? props.searchState.error : props.outlineState.error;
       if (!error) return '';
+      if (error === 'history_payload_too_large') return 'yeaft.historyLoad.tooLarge';
+      if (error === 'history_delivery_failed') return 'yeaft.historyLoad.error';
       return error === 'unsupported' ? 'yeaft.outline.unsupported' : 'yeaft.outline.error';
     });
     const focus = () => Vue.nextTick(() => {

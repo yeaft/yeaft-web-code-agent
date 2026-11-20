@@ -5031,7 +5031,20 @@ export const useChatStore = defineStore('chat', {
           loaded = await windowLoad;
         }
       }
-      if (!loaded || this._yeaftHistoryRevealLeases?.[lease.key]?.token !== lease.token) {
+      if (this._yeaftHistoryRevealLeases?.[lease.key]?.token !== lease.token) return false;
+      if (!loaded) {
+        const error = windowLoad.error;
+        if (error === 'history_payload_too_large' || error === 'history_delivery_failed') {
+          const search = this.yeaftHistorySearchState;
+          if (search?.agentId === agentId && search?.sessionId === sessionId && (search.query || search.senderKey)) {
+            this.yeaftHistorySearchState = { ...search, error };
+          } else {
+            const outline = this.yeaftHistoryOutlineBySession?.[lease.sessionKey];
+            if (outline) this.yeaftHistoryOutlineBySession = {
+              ...this.yeaftHistoryOutlineBySession, [lease.sessionKey]: { ...outline, error },
+            };
+          }
+        }
         this.finishYeaftHistoryReveal(lease);
         return false;
       }

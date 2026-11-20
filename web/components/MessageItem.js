@@ -48,7 +48,7 @@ export default {
           </div>
           <div class="message-content" v-if="message.content">{{ displayContent }}</div>
           <div v-if="message.attachments && message.attachments.length > 0" class="message-user-attachments">
-            <button type="button" class="attachments-badge" @click="toggleAttachments">
+            <button type="button" class="attachments-badge" :aria-expanded="showAttachments" @click="toggleAttachments">
               <span class="badge-icon" aria-hidden="true">\u{1F4CE}</span>
               <span class="badge-text">{{ getAttachmentsText(message.attachments) }}</span>
               <span class="badge-toggle" :class="{ expanded: showAttachments }" aria-hidden="true">
@@ -58,9 +58,47 @@ export default {
           </div>
           <!-- Expanded attachments preview -->
           <div class="user-attachments" v-if="message.attachments && message.attachments.length > 0 && showAttachments">
-            <template v-for="(attachment, index) in message.attachments" :key="index">
+            <template v-for="(attachment, index) in message.attachments" :key="isSessionAttachment(attachment) ? attachment.download : index">
+              <div v-if="isSessionAttachment(attachment)" class="session-attachment">
+                <button
+                  v-if="attachment.isImage && attachment.preview && previewStates.get(attachment.preview) !== 'error'"
+                  v-show="previewStates.get(attachment.preview) === 'ready'"
+                  type="button"
+                  class="user-attachment-item is-image"
+                  @click="previewAttachment(attachment, $event.currentTarget)"
+                >
+                  <img
+                    :key="attachment.preview"
+                    :src="attachment.preview"
+                    :alt="attachment.name || t('message.imagePreview')"
+                    class="user-attachment-image"
+                    @load="previewStates.set(attachment.preview, 'ready')"
+                    @error="previewStates.set(attachment.preview, 'error')"
+                  />
+                </button>
+                <div v-if="previewStates.get(attachment.preview) !== 'ready'" class="user-attachment-item">
+                  <div class="user-attachment-file">
+                    <span class="file-icon" aria-hidden="true">{{ getFileIcon(attachment.mimeType) }}</span>
+                    <div class="session-attachment-label">
+                      <div class="file-name" :title="attachment.name">{{ attachment.name }}</div>
+                      <div v-if="attachment.isImage && attachment.preview" class="session-attachment-status" role="status">
+                        {{ t(previewStates.get(attachment.preview) === 'error' ? 'files.previewLoadFailed' : 'files.loadingPreview') }}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+                <div class="session-attachment-actions">
+                  <button v-if="previewStates.get(attachment.preview) === 'error'" type="button"
+                    class="btn-ghost" @click="previewStates.delete(attachment.preview)">
+                    {{ t('common.retry') }}
+                  </button>
+                  <a class="btn-ghost" :href="attachment.download" download :title="attachment.name">
+                    {{ t('files.download') }}
+                  </a>
+                </div>
+              </div>
               <button
-                v-if="attachment.isImage && attachment.preview"
+                v-else-if="attachment.isImage && attachment.preview"
                 type="button"
                 class="user-attachment-item is-image"
                 @click="previewAttachment(attachment, $event.currentTarget)"
@@ -123,6 +161,7 @@ export default {
   setup(props, { emit }) {
     const store = Pinia.useChatStore();
     const showAttachments = Vue.ref(false);
+    const previewStates = Vue.reactive(new Map());
     const t = Vue.inject('t');
 
     const messageClass = Vue.computed(() => {
@@ -149,11 +188,17 @@ export default {
 
     const toggleAttachments = () => {
       showAttachments.value = !showAttachments.value;
+      if (!showAttachments.value) previewStates.clear();
     };
+
+    const isSessionAttachment = attachment => !props.externalAttachmentOpen
+      && !!attachment.attachmentId && attachment.download?.startsWith('/api/yeaft/session-attachments/');
 
     const previewableAttachments = Vue.computed(() => (
       (Array.isArray(props.message?.attachments) ? props.message.attachments : [])
         .filter(attachment => attachment?.isImage && attachment?.preview)
+        // Do not let a failed or still-loading history image into the gallery.
+        .filter(attachment => !isSessionAttachment(attachment) || previewStates.get(attachment.preview) === 'ready')
         .map(attachment => ({
           attachment,
           src: attachment.preview,
@@ -222,6 +267,8 @@ export default {
       displayContent,
       userQuote,
       showAttachments,
+      previewStates,
+      isSessionAttachment,
       toggleAttachments,
       previewAttachment,
       t,

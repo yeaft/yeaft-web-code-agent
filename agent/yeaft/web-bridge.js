@@ -117,7 +117,7 @@ import { isSessionSceneId } from './sessions/scene-ids.js';
 import { createCoordinator } from './sessions/coordinator.js';
 import { seedDefaultSession } from './sessions/seed-default.js';
 import { trimHistoryCacheForRuntime } from './history-window.js';
-import { persistYeaftAttachments, attachmentsForPersistence, persistedAttachmentPreviewPayload } from './attachments.js';
+import { persistYeaftAttachments, attachmentsForPersistence, projectSessionHistoryAttachments } from './attachments.js';
 import { normalizeSessionMessageQuote, sessionMessageQuotePrompt } from './session-message-quote.js';
 import { ConversationStore, parseSeqFromId, projectVisibleSessionMessages } from './conversation/persist.js';
 import {
@@ -1941,19 +1941,6 @@ function projectPersistedToVisibleHistoryEntry(m) {
   return entry && (entry.role === 'user' || entry.role === 'assistant') ? entry : null;
 }
 
-function hydrateHistoryAttachmentPreviews(attachments, sessionId) {
-  if (!Array.isArray(attachments) || attachments.length === 0) return [];
-  return attachments.map((att) => {
-    if (!att || typeof att !== 'object') return att;
-    if (!att.isImage || att.preview || att.previewData) return att;
-    const payload = sessionId ? persistedAttachmentPreviewPayload(att, {
-      yeaftDir: session?.yeaftDir || ctx.CONFIG?.yeaftDir || DEFAULT_YEAFT_DIR,
-      sessionId,
-    }) : null;
-    return payload ? { ...att, previewData: payload } : att;
-  });
-}
-
 function loadVisibleGroupHistoryPage(store, sessionId, limit, beforeSeq = null, opts = {}) {
   if (!store || !sessionId || !(limit > 0)) return { messages: [], oldestSeq: null, hasMore: false };
 
@@ -2032,9 +2019,8 @@ function projectVisibleHistoryChunkMessages(messages = []) {
       ...(m.imageAssetAnchor === true ? { imageAssetAnchor: true } : {}),
       ...(m.presentation ? { presentation: m.presentation } : {}),
       ...(m.presentationCallId ? { presentationCallId: m.presentationCallId } : {}),
-      ...(Array.isArray(m.attachments) && m.attachments.length > 0 ? { attachments: hydrateHistoryAttachmentPreviews(m.attachments, m.sessionId) } : {}),
+      ...(Array.isArray(m.attachments) && m.attachments.length > 0 ? { attachments: projectSessionHistoryAttachments(m) } : {}),
       ...(m.quote ? { quote: m.quote } : {}),
-      ...(Array.isArray(m.images) && m.images.length > 0 ? { images: m.images } : {}),
       ...(m.speakerVpId ? { speakerVpId: m.speakerVpId } : {}),
       ...(m.responseKind === 'progress' || m.responseKind === 'result' ? { responseKind: m.responseKind } : {}),
       ...(Number.isInteger(m.llmCallCount) && m.llmCallCount > 0 ? { llmCallCount: m.llmCallCount } : {}),
@@ -2052,12 +2038,30 @@ function projectVisibleHistoryChunkMessages(messages = []) {
     }));
 }
 
-function emitHistoryChunk({ sessionId, messages, mode = 'older', oldestSeq = null, nextBeforeSeq = null, hasMore = false, latestSeq = null, afterSeq = null, hasMoreAfter = false, streamId = null, revision = null, turns = null, pageKind = null, gapStopAtSeq = null, cacheEpoch = null, requestId = null, requestClientId = null, perfTraceId = null }) {
-  const projectedMessages = projectVisibleHistoryChunkMessages(messages);
+const HISTORY_FRAME_MAX_BYTES = 2 * 1024 * 1024;
+const historyFrameBytes = frame => Buffer.byteLength(JSON.stringify(frame));
+const historyFrameBudget = () => Math.min(HISTORY_FRAME_MAX_BYTES, ctx.outboundSendQueueMaxBytes || Infinity);
+
+async function sendHistoryFrame(frame, errorFrame) {
+  // Older Servers strip history chunk errors, turning them into empty success
+  // pages with a false continuation cursor. Keep their timeout fallback instead.
+  const canRelayError = frame.type !== 'yeaft_history_chunk'
+    || ctx.serverCapabilities?.has('session_history_chunk_errors');
+  if (frame.error && !canRelayError) {
+    console.warn('[Yeaft] Session history request failed:', frame.error);
+    return false;
+  }
+  const outcome = await sendToServer(frame);
+  if (outcome === 'dropped' && canRelayError) await sendToServer({ ...errorFrame, error: 'history_delivery_failed' });
+  // Buffered frames can be evicted before reconnect; never promise success.
+  return outcome === 'sent';
+}
+
+async function emitHistoryChunk({ sessionId, messages, mode = 'older', oldestSeq = null, nextBeforeSeq = null, hasMore = false, latestSeq = null, afterSeq = null, hasMoreAfter = false, streamId = null, revision = null, turns = null, pageKind = null, gapStopAtSeq = null, cacheEpoch = null, requestId = null, requestClientId = null, perfTraceId = null, loadSmallerDelta = null }) {
   // Empty deltas still carry the authoritative safe cursor and clear the
   // browser's syncingAfterSeq fence. Dropping this envelope leaves Session
   // switching stuck after hidden-only or pair-unsafe rows.
-  sendToServer({
+  const frame = {
     type: 'yeaft_history_chunk',
     conversationId: yeaftConversationId,
     ...(perfTraceId ? { perfTraceId } : {}),
@@ -2065,7 +2069,7 @@ function emitHistoryChunk({ sessionId, messages, mode = 'older', oldestSeq = nul
     ...(requestClientId ? { _requestClientId: requestClientId } : {}),
     sessionId,
     mode,
-    messages: projectedMessages,
+    messages: projectVisibleHistoryChunkMessages(messages),
     oldestSeq,
     nextBeforeSeq: Number.isFinite(nextBeforeSeq) ? nextBeforeSeq : oldestSeq,
     hasMore: !!hasMore,
@@ -2078,8 +2082,64 @@ function emitHistoryChunk({ sessionId, messages, mode = 'older', oldestSeq = nul
     ...(pageKind ? { pageKind } : {}),
     ...(Number.isFinite(gapStopAtSeq) ? { gapStopAtSeq } : {}),
     ...(Number.isFinite(cacheEpoch) ? { cacheEpoch } : {}),
-  });
-  return projectedMessages;
+  };
+  const errorFrame = { ...frame, messages: [] };
+  const budget = historyFrameBudget();
+  let bytes = historyFrameBytes(frame);
+  while (bytes > budget && loadSmallerDelta) {
+    const delta = loadSmallerDelta();
+    // A smaller budget can stop inside a tool arc. Don't report a successful
+    // retry which would leave the browser at or behind its original cursor.
+    if (!delta || !(delta.latestSeq > afterSeq)) break;
+    frame.messages = projectVisibleHistoryChunkMessages(delta.messages);
+    frame.latestSeq = delta.latestSeq;
+    frame.hasMoreAfter = !!delta.hasMoreAfter;
+    bytes = historyFrameBytes(frame);
+  }
+  if (bytes > budget && mode !== 'delta') {
+    // Visible rows already contain their tool/AskUser projection. Keep a
+    // contiguous suffix, never skipping an oversized row to reach older ones.
+    let start = frame.messages.length;
+    let remaining = budget - historyFrameBytes(errorFrame) - 32; // cursor growth
+    while (start > 0) {
+      remaining -= historyFrameBytes(frame.messages[start - 1]) + 1;
+      if (remaining < 0) break;
+      start--;
+    }
+    const seq = parseSeqFromId(frame.messages[start]?.id);
+    if (Number.isFinite(seq)) {
+      frame.messages = frame.messages.slice(start);
+      frame.oldestSeq = frame.nextBeforeSeq = seq;
+      frame.hasMore = true;
+      bytes = historyFrameBytes(frame);
+    }
+  }
+  if (bytes > budget) {
+    await sendHistoryFrame({ ...errorFrame, error: 'history_payload_too_large' }, errorFrame);
+    return null;
+  }
+  return (await sendHistoryFrame(frame, errorFrame)) ? frame : null;
+}
+
+function makeDeltaHistoryLoader(store, sessionId, afterSeq, limit, maxBytes) {
+  return () => {
+    if (!limit) return null;
+    const page = store.loadAfterSeqByGroup(sessionId, afterSeq, { limit, maxBytes });
+    // Rerun from the original cursor, letting the store choose a safe tool
+    // boundary. Slicing a projected delta would lose that boundary information.
+    limit = limit === 1 && maxBytes === 1 ? 0 : Math.max(1, Math.floor(limit / 4));
+    maxBytes = Math.max(1, Math.floor(maxBytes / 4));
+    return page;
+  };
+}
+
+function sendHistoryChunkCompletion(chunk) {
+  const { mode, messages, sessionId, requestId, _requestClientId, perfTraceId,
+    hasMore, oldestSeq, nextBeforeSeq, latestSeq, afterSeq, hasMoreAfter, streamId, revision } = chunk;
+  sendSessionEvent({
+    type: 'history_loaded', mode, count: messages.length, sessionId, requestId,
+    hasMore, oldestSeq, nextBeforeSeq, latestSeq, afterSeq, hasMoreAfter, streamId, revision,
+  }, { sessionId, requestId, requestClientId: _requestClientId, perfTraceId });
 }
 
 function emitLegacyHistoryOutputFrames(replayEntries) {
@@ -2090,7 +2150,7 @@ function emitLegacyHistoryOutputFrames(replayEntries) {
         message: {
           content: entry.content,
           id: entry.id || null,
-          ...(Array.isArray(entry.attachments) && entry.attachments.length > 0 ? { attachments: hydrateHistoryAttachmentPreviews(entry.attachments, entry.sessionId) } : {}),
+          ...(Array.isArray(entry.attachments) && entry.attachments.length > 0 ? { attachments: projectSessionHistoryAttachments(entry) } : {}),
           ...(entry.quote ? { quote: entry.quote } : {}),
         },
         ts: entry.ts || null,
@@ -2121,7 +2181,7 @@ function emitLegacyHistoryOutputFrames(replayEntries) {
   }
 }
 
-function emitVisibleHistoryReplay({ store, sessionId, limit, beforeSeq = null, mode = 'recent', requestId = null, requestClientId = null, perfTraceId = null }) {
+async function emitVisibleHistoryReplay({ store, sessionId, limit, beforeSeq = null, mode = 'recent', requestId = null, requestClientId = null, perfTraceId = null }) {
   const historyMetadata = sessionId && typeof store.getSessionHistoryMetadata === 'function'
     ? store.getSessionHistoryMetadata(sessionId)
     : null;
@@ -2138,7 +2198,7 @@ function emitVisibleHistoryReplay({ store, sessionId, limit, beforeSeq = null, m
     const latestSeq = replayEntries.length
       ? parseSeqFromId(replayEntries[replayEntries.length - 1]?.id)
       : null;
-    emitHistoryChunk({
+    const chunk = await emitHistoryChunk({
       sessionId,
       messages: replayEntries,
       mode,
@@ -2153,17 +2213,8 @@ function emitVisibleHistoryReplay({ store, sessionId, limit, beforeSeq = null, m
       requestClientId,
       perfTraceId,
     });
-    sendSessionEvent({
-      type: 'history_loaded',
-      mode,
-      count: replayEntries.length,
-      sessionId,
-      requestId,
-      hasMore: visiblePage.hasMore,
-      oldestSeq: visiblePage.oldestSeq,
-      nextBeforeSeq: visiblePage.nextBeforeSeq,
-      latestSeq: Number.isFinite(latestSeq) ? latestSeq : null,
-    }, { sessionId, requestId, requestClientId, perfTraceId });
+    if (!chunk) return;
+    sendHistoryChunkCompletion(chunk);
     return;
   }
 
@@ -7981,15 +8032,9 @@ export async function handleYeaftLoadHistory(msg) {
     publishSessionTurns(sessionId, { requestId, requestClientId });
   }
   const metadataOnly = msg && Number.isFinite(msg.limit) && msg.limit <= 0;
-  // `lim` is now expressed in TURNS, not raw messages. `loadRecent` and
-  // `loadRecentBySession` use turn-based slicing so the cut never lands
-  // mid-tool-arc. Pass `undefined` to use the persistence-layer default
-  // (DEFAULT_RECENT_TURNS = 10 turns).
-  const pickRecent = (store, lim) =>
-    sessionId ? store.loadRecentBySession(sessionId, lim) : store.loadRecent(lim);
   let historyAlreadyReplayed = false;
 
-  const replayHistoryFromStore = () => {
+  const replayHistoryFromStore = async () => {
     if (metadataOnly) return;
     // Delta path: caller knows the latest seq (or message id) it has cached
     // and wants only the messages that arrived after that cursor. Returns
@@ -8017,16 +8062,15 @@ export async function handleYeaftLoadHistory(msg) {
     }
     if (sessionId && afterSeq !== null && typeof session.conversationStore.loadAfterSeqByGroup === 'function') {
       const loadStart = perfNowMs();
-      const delta = session.conversationStore.loadAfterSeqByGroup(sessionId, afterSeq, {
-        limit: deltaLimit,
-        maxBytes: deltaMaxBytes,
-      });
+      const loadSmallerDelta = makeDeltaHistoryLoader(session.conversationStore, sessionId, afterSeq, deltaLimit, deltaMaxBytes);
+      const delta = loadSmallerDelta();
       traceDuration('history.store_load_delta', loadStart, { detail: { count: delta.messages?.length || 0, afterSeq } });
       const emitStart = perfNowMs();
-      const projectedMessages = emitHistoryChunk({
+      const chunk = await emitHistoryChunk({
         sessionId,
         messages: delta.messages,
         mode: 'delta',
+        loadSmallerDelta,
         latestSeq: delta.latestSeq,
         afterSeq,
         hasMoreAfter: delta.hasMoreAfter,
@@ -8036,19 +8080,10 @@ export async function handleYeaftLoadHistory(msg) {
         requestClientId,
         perfTraceId,
       });
-      traceDuration('history.emit_chunk', emitStart, { detail: { mode: 'delta', count: projectedMessages.length } });
-      sendSessionEvent({
-        type: 'history_loaded',
-        mode: 'delta',
-        count: projectedMessages.length,
-        sessionId,
-        requestId,
-        latestSeq: delta.latestSeq,
-        afterSeq,
-        hasMoreAfter: !!delta.hasMoreAfter,
-        streamId: historyMetadata?.streamId || null,
-        revision: historyMetadata?.revision ?? null,
-      }, { sessionId, requestId, requestClientId, perfTraceId });
+      if (chunk) {
+        traceDuration('history.emit_chunk', emitStart, { detail: { mode: 'delta', count: chunk.messages.length } });
+        sendHistoryChunkCompletion(chunk);
+      }
       return;
     }
 
@@ -8058,69 +8093,8 @@ export async function handleYeaftLoadHistory(msg) {
     // paged via `yeaft_load_more_history` when the user scrolls upward.
     const limit = (typeof msg.limit === 'number') ? msg.limit : 10;
     const loadStart = perfNowMs();
-    const visiblePage = sessionId
-      ? loadVisibleGroupHistoryPage(session.conversationStore, sessionId, limit)
-      : { messages: limit > 0 ? pickRecent(session.conversationStore, limit) : [], oldestSeq: null, hasMore: false };
-    traceDuration('history.store_load_recent', loadStart, { detail: { rawCount: visiblePage.messages?.length || 0, limit } });
-    const replayEntries = sessionId
-      ? visiblePage.messages
-      : visiblePage.messages
-        .map(projectPersistedToVisibleHistoryEntry)
-        .filter(Boolean);
-
-    let latestSeq = null;
-    if (replayEntries.length > 0 && typeof session.conversationStore.getMessageSeqById === 'function') {
-      const last = replayEntries[replayEntries.length - 1];
-      if (last && last.id) latestSeq = session.conversationStore.getMessageSeqById(last.id);
-    }
-
-    if (sessionId) {
-      const emitStart = perfNowMs();
-      emitHistoryChunk({
-        sessionId,
-        messages: replayEntries,
-        mode: 'recent',
-        oldestSeq: visiblePage.oldestSeq,
-        nextBeforeSeq: visiblePage.nextBeforeSeq,
-        hasMore: visiblePage.hasMore,
-        latestSeq,
-        streamId: historyMetadata?.streamId || null,
-        revision: historyMetadata?.revision ?? null,
-        turns: limit,
-        requestId,
-        requestClientId,
-        perfTraceId,
-      });
-      traceDuration('history.emit_chunk', emitStart, { detail: { mode: 'recent', count: replayEntries.length } });
-    } else {
-      emitLegacyHistoryOutputFrames(replayEntries);
-    }
-
-    // Compute the pagination cursor for the bootstrap load so the frontend
-    // knows whether a "Load older messages" hint should be shown and where
-    // to start the next page. For group history, this is computed from the
-    // visible projected page, not raw persisted rows, so reflection/internal
-    // tail rows cannot consume the bootstrap window or create false hasMore.
-    let hasMore = false;
-    let oldestSeq = null;
-    if (sessionId) {
-      hasMore = visiblePage.hasMore;
-      oldestSeq = visiblePage.oldestSeq;
-    }
-
-    sendSessionEvent({
-      type: 'history_loaded',
-      mode: 'recent',
-      count: replayEntries.length,
-      sessionId,
-      requestId,
-      hasMore,
-      oldestSeq,
-      nextBeforeSeq: visiblePage.nextBeforeSeq,
-      latestSeq,
-      streamId: historyMetadata?.streamId || null,
-      revision: historyMetadata?.revision ?? null,
-    }, { sessionId, requestId, requestClientId, perfTraceId });
+    await emitVisibleHistoryReplay({ store: session.conversationStore, sessionId, limit, requestId, requestClientId, perfTraceId });
+    traceDuration('history.store_load_recent', loadStart, { detail: { limit } });
   };
 
   if (!session) {
@@ -8174,16 +8148,15 @@ export async function handleYeaftLoadHistory(msg) {
     // replay, not an empty delta that leaves a partial browser cache intact.
     if (sessionId && afterSeq !== null && typeof coldStore.loadAfterSeqByGroup === 'function') {
       const loadStart = perfNowMs();
-      const delta = coldStore.loadAfterSeqByGroup(sessionId, afterSeq, {
-        limit: deltaLimit,
-        maxBytes: deltaMaxBytes,
-      });
+      const loadSmallerDelta = makeDeltaHistoryLoader(coldStore, sessionId, afterSeq, deltaLimit, deltaMaxBytes);
+      const delta = loadSmallerDelta();
       traceDuration('history.store_load_delta', loadStart, { detail: { count: delta.messages?.length || 0, afterSeq, cold: true } });
       const emitStart = perfNowMs();
-      const projectedMessages = emitHistoryChunk({
+      const chunk = await emitHistoryChunk({
         sessionId,
         messages: delta.messages,
         mode: 'delta',
+        loadSmallerDelta,
         latestSeq: delta.latestSeq,
         afterSeq,
         hasMoreAfter: delta.hasMoreAfter,
@@ -8193,22 +8166,13 @@ export async function handleYeaftLoadHistory(msg) {
         requestClientId,
         perfTraceId,
       });
-      traceDuration('history.emit_chunk', emitStart, { detail: { mode: 'delta', count: projectedMessages.length, cold: true } });
-      sendSessionEvent({
-        type: 'history_loaded',
-        mode: 'delta',
-        count: projectedMessages.length,
-        sessionId,
-        requestId,
-        latestSeq: delta.latestSeq,
-        afterSeq,
-        hasMoreAfter: !!delta.hasMoreAfter,
-        streamId: historyMetadata?.streamId || null,
-        revision: historyMetadata?.revision ?? null,
-      }, { sessionId, requestId, requestClientId, perfTraceId });
+      if (chunk) {
+        traceDuration('history.emit_chunk', emitStart, { detail: { mode: 'delta', count: chunk.messages.length, cold: true } });
+        sendHistoryChunkCompletion(chunk);
+      }
     } else if (!metadataOnly) {
       const replayStart = perfNowMs();
-      emitVisibleHistoryReplay({ store: coldStore, sessionId, limit, mode: 'recent', requestId, requestClientId, perfTraceId });
+      await emitVisibleHistoryReplay({ store: coldStore, sessionId, limit, mode: 'recent', requestId, requestClientId, perfTraceId });
       traceDuration('history.cold_replay', replayStart, { detail: { mode: 'recent', limit } });
     }
     historyAlreadyReplayed = true;
@@ -8220,7 +8184,7 @@ export async function handleYeaftLoadHistory(msg) {
     startSessionLoadInBackground({ sessionId, sessionMeta: sessionMetaForRuntime, perfTraceId, traceDuration, tracePerf });
   } else {
     const replayStart = perfNowMs();
-    replayHistoryFromStore();
+    await replayHistoryFromStore();
     traceDuration('history.replay_from_store', replayStart);
     historyAlreadyReplayed = true;
   }
@@ -8248,7 +8212,7 @@ export async function handleYeaftLoadHistory(msg) {
   }
 
   const replayStart = perfNowMs();
-  replayHistoryFromStore();
+  await replayHistoryFromStore();
   traceDuration('history.replay_from_store', replayStart);
   traceDuration('history.handler_total', perfStart, { ok: true });
 }
@@ -8509,13 +8473,29 @@ export async function handleYeaftLoadHistoryWindow(msg) {
       sendToServer({ ...response, error: 'stale_result' });
       return;
     }
-    sendToServer({
+    const frame = {
       ...response,
       ...loaded.window,
       entryEndSeq: loaded.entry.entryEndSeq,
       sourceMessageIds: loaded.entry.sourceMessageIds,
       messages: projectVisibleHistoryChunkMessages(loaded.window.messages),
-    });
+    };
+    const budget = historyFrameBudget();
+    if (historyFrameBytes(frame) > budget) {
+      // A search entry can span multiple rows. Keep all of them or fail the
+      // jump; surrounding context is optional and can be loaded separately.
+      const anchors = new Set([anchorMessageId, ...frame.sourceMessageIds]);
+      frame.messages = frame.messages.filter(row => anchors.has(row.id));
+      frame.oldestSeq = parseSeqFromId(frame.messages[0]?.id);
+      frame.hasMoreBefore ||= frame.oldestSeq > loaded.window.oldestSeq;
+      frame.rowCount = frame.messages.length;
+      frame.byteCount = historyFrameBytes(frame.messages);
+    }
+    if (historyFrameBytes(frame) > budget) {
+      await sendHistoryFrame({ ...response, error: 'history_payload_too_large' }, response);
+      return;
+    }
+    await sendHistoryFrame(frame, response);
   } catch (err) {
     console.error('[Yeaft] Session history anchor load failed:', err?.message || err);
     sendToServer({
@@ -8538,7 +8518,7 @@ export async function handleYeaftLoadMoreHistory(msg) {
   const traceDuration = (phase, start, extra = {}) => tracePerf(phase, { durationMs: perfNowMs() - start, ...extra });
   tracePerf('history_more.received');
   if (!sessionId) {
-    emitHistoryChunk({ sessionId, messages: [], mode: 'older', oldestSeq: null, hasMore: false, requestId, requestClientId, perfTraceId });
+    await emitHistoryChunk({ sessionId, messages: [], mode: 'older', oldestSeq: null, hasMore: false, requestId, requestClientId, perfTraceId });
     traceDuration('history_more.handler_total', perfStart, { ok: false, detail: { missingSessionId: true } });
     return;
   }
@@ -8574,7 +8554,7 @@ export async function handleYeaftLoadMoreHistory(msg) {
   // server-side, and stable ids + speaker attribution ride with each row
   // so older-history prepend renders exactly like refresh replay.
   const emitStart = perfNowMs();
-  emitHistoryChunk({
+  const chunk = await emitHistoryChunk({
     sessionId,
     messages: result.messages || [],
     mode: 'older',
@@ -8589,8 +8569,8 @@ export async function handleYeaftLoadMoreHistory(msg) {
     requestClientId,
     perfTraceId,
   });
-  traceDuration('history_more.emit_chunk', emitStart, { detail: { count: result.messages?.length || 0 } });
-  traceDuration('history_more.handler_total', perfStart, { ok: true });
+  traceDuration('history_more.emit_chunk', emitStart, { detail: { count: chunk?.messages.length || 0 } });
+  traceDuration('history_more.handler_total', perfStart, { ok: !!chunk });
 }
 
 /**
