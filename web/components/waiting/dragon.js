@@ -23,10 +23,10 @@ export const scene = {
     ground: '--dragon-ground', shade: '--dragon-shade', dust: '--dragon-dust', flash: '--dragon-flash', spark: '--dragon-spark',
     beam: '--dragon-beam', beamCore: '--dragon-beam-core', bomb: '--dragon-bomb', bombCore: '--dragon-bomb-core',
   },
-  paint(ctx, { elapsedMs, width, height, colors }) {
+  paint(ctx, { elapsedMs, width, height, colors, core, backdrop }) {
     const play = resolveDragonPlay(elapsedMs);
     const camera = resolveDragonCamera(play, width, height);
-    drawDragonFrame(ctx, { play, camera, width, height, colors });
+    drawDragonFrame(ctx, { play, camera, width, height, colors, core, backdrop });
     return { beat: play.beat, shot: camera.shot };
   },
 };

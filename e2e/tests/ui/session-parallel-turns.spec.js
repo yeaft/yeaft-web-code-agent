@@ -40,6 +40,29 @@ test('one native Session turn shows its waiting indicator, retains the ordinary 
   await expect(dots).toHaveCount(0);
   await expect(hoops).toHaveAttribute('data-held', 'false');
   await expect.poll(() => drawnPixels(hoops)).toBeGreaterThan(200);
+  // A wide column keeps the picture's height and centres the stage in the
+  // column; a phone column shows the 11:5 picture across its width.
+  const stageBox = () => hoops.evaluate((el) => {
+    const stage = el.getBoundingClientRect();
+    const canvas = el.querySelector('canvas');
+    const column = el.closest('.messages').getBoundingClientRect();
+    return { width: stage.width, height: stage.height, backing: canvas.height / canvas.width,
+      offCentre: Math.abs(stage.left + stage.right - column.left - column.right) / 2 };
+  });
+  const desktop = page.viewportSize();
+  await expect.poll(async () => (await stageBox()).height).toBe(160); // Once it has opened.
+  const wide = await stageBox();
+  expect(wide.width).toBeGreaterThan(400);
+  expect(wide.offCentre).toBeLessThan(1);
+  await page.setViewportSize({ width: 320, height: desktop.height });
+  await expect.poll(async () => (await stageBox()).width).toBeLessThan(300);
+  await expect.poll(async () => { const box = await stageBox(); return Math.abs(box.height - box.width * 5 / 11); }).toBeLessThan(1);
+  const narrow = await stageBox();
+  expect(narrow.backing).toBeCloseTo(5 / 11, 1);
+  expect(narrow.offCentre).toBeLessThan(1);
+  await page.setViewportSize(desktop);
+  // Panels can settle differently after the round trip; wait for the stage to stop resizing.
+  await expect.poll(async () => { const before = (await stageBox()).width; await page.waitForTimeout(250); return (await stageBox()).width === before; }).toBe(true);
   await expect(cat).toHaveCount(0);
   await expect(page.locator('.yeaft-session-status-pane canvas')).toHaveCount(0);
   // Reduced motion holds one frame; without it the play moves on.

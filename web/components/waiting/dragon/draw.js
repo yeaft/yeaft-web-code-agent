@@ -12,16 +12,31 @@ import { GOKU_HAIR, VEGETA_HAIR, makeCrown } from './hair.js';
 
 const TAU = Math.PI * 2;
 
-/** Stretches of floor line, broken like a line drawn by hand: [from x, to x, z]. */
+/**
+ * Stretches of floor line, broken like a line drawn by hand: [from x, to x, z].
+ * The fight keeps within ±27 ft; the floor runs on well past that for the
+ * world either side of the fight on a wide stage.
+ */
 const FLOOR = [
   [-27, -18.6, 0], [-17.9, -8.2, 0], [-7.4, 2.9, 0], [3.5, 13.6, 0], [14.4, 24, 0],
   [-14, -11.6, 2.6], [-4.6, -2.9, 3.1], [5.2, 7.9, 2.4], [-9.5, -7.8, -3.4], [0.8, 3.2, -3.8], [10.4, 12.2, -3], [16, 18.4, 2.8], [-21, -19, -2.6],
+  // Beyond the fight.
+  [-78, -68, 0], [-67.2, -58.4, 0], [-57.6, -47.7, 0], [-46.9, -38.2, 0], [-37.4, -27.8, 0],
+  [24.8, 34.1, 0], [34.9, 45.3, 0], [46, 55.2, 0], [56.1, 66.4, 0], [67.2, 78, 0],
+  [-70.5, -68.4, 2.7], [-61, -59.2, -3.6], [-50.4, -47.9, 2.5], [-41, -39.1, -3.2], [-33.5, -31.2, 2.9],
+  [28.6, 30.9, -3.1], [37.2, 39.4, 2.6], [44.8, 46.6, -3.7], [52.5, 55.1, 3], [62.4, 64.2, -2.8], [71, 73.3, 2.4],
 ];
 /** Rocks: outlines standing on the floor, as [x, y] offsets from a spot. */
 const ROCKS = [
   { at: [-19.5, -2.2], outline: [[0, 0], [0.5, 1.0], [1.4, 1.35], [2.2, 0.7], [2.6, 0]] },
   { at: [13.4, -2.6], outline: [[0, 0], [0.4, 0.6], [1.1, 0.8], [1.6, 0]] },
   { at: [3.6, -4.4], outline: [[0, 0], [0.3, 0.4], [0.9, 0.5], [1.2, 0]] },
+  // Beyond the fight.
+  { at: [-35, -3], outline: [[0, 0], [0.4, 0.7], [1.2, 0.9], [1.9, 0.4], [2.2, 0]] },
+  { at: [-56, -3.6], outline: [[0, 0], [0.3, 0.45], [0.9, 0.55], [1.3, 0]] },
+  { at: [30, -2.4], outline: [[0, 0], [0.5, 0.9], [1.3, 1.2], [2.1, 0.6], [2.4, 0]] },
+  { at: [49, -3.9], outline: [[0, 0], [0.3, 0.4], [0.9, 0.5], [1.2, 0]] },
+  { at: [63, -2.8], outline: [[0, 0], [0.4, 0.6], [1.1, 0.8], [1.6, 0]] },
 ];
 /** Cracks running out from where the first wave hit: [dx, dz, length]. */
 const CRACKS = [[-1, 0.15, 2.6], [1, -0.1, 2.2], [-0.6, 1, 1.5], [0.7, 1, 1.7], [-0.5, -1, 1.8], [0.55, -1, 1.4]];
@@ -32,7 +47,8 @@ function polyline(ctx, points) {
   ctx.stroke();
 }
 
-function drawFloor(ctx, camera, play, colors) {
+/** The bare floor: its lines and rocks. */
+function drawGround(ctx, camera, colors) {
   const P = point => camera.project(point);
   ctx.strokeStyle = rgb(colors.ground);
   ctx.lineWidth = 1.2;
@@ -45,6 +61,12 @@ function drawFloor(ctx, camera, play, colors) {
     const points = rock.outline.map(([dx, dy]) => P([rock.at[0] + dx, dy, rock.at[1]]));
     if (points.every(point => point.depth > 1)) polyline(ctx, points);
   }
+}
+
+/** The floor as the fight leaves it: the crater opens where the first wave hits. */
+function drawFloor(ctx, camera, play, colors) {
+  const P = point => camera.project(point);
+  drawGround(ctx, camera, colors);
   if (play.crater) {
     const [x, , z] = play.crater.at;
     const open = smooth(clamp01(play.crater.age / 0.25));
@@ -185,11 +207,46 @@ function drawMarks(ctx, camera, play, colors) {
   }
 }
 
+/** Fade what has been drawn toward the page, by thinning it. */
+function fadeOut(ctx, play, colors, width, height) {
+  if (play.fade >= 1) return;
+  ctx.globalCompositeOperation = 'destination-out';
+  ctx.fillStyle = rgb(colors.ink, 1 - play.fade);
+  ctx.fillRect(0, 0, width, height);
+  ctx.globalCompositeOperation = 'source-over';
+}
+
+/**
+ * How far the shake moves the whole picture, a little out of step on each
+ * axis, in proportion to the size of the core. [0, 0] when still.
+ */
+function shakeOffset(play, core) {
+  if (play.shake <= 0.05) return [0, 0];
+  const size = play.shake * (core.width / 352);
+  const t = play.time;
+  return [size * (0.7 * Math.sin(t * 91) + 0.3 * Math.sin(t * 147 + 1)), size * (0.7 * Math.cos(t * 83) + 0.3 * Math.sin(t * 131))];
+}
+
+/** The bare floor, shaking with the fight: the world beyond it on a wide stage. */
+function drawBackdrop(ctx, { play, camera, width, height, colors, core }) {
+  ctx.save();
+  ctx.translate(...shakeOffset(play, core));
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
+  drawGround(ctx, camera, colors);
+  ctx.restore();
+  fadeOut(ctx, play, colors, width, height);
+}
+
 /**
  * @param {CanvasRenderingContext2D} ctx Scaled to CSS px and cleared to transparent.
- * @param {{ play: object, camera: object, width: number, height: number, colors: object }} frame
+ * @param {{ play: object, camera: object, width: number, height: number, colors: object,
+ *   core: { x: number, y: number, width: number, height: number },
+ *   backdrop?: CanvasRenderingContext2D }} frame `core` and `backdrop` as the stage gives them.
  */
-export function drawDragonFrame(ctx, { play, camera, width, height, colors }) {
+export function drawDragonFrame(ctx, frame) {
+  const { play, camera, width, height, colors, core, backdrop } = frame;
+  if (backdrop) drawBackdrop(backdrop, frame);
   const P = point => camera.project(point);
   const { time } = play;
   // Lighter tones are mixed toward the page rather than drawn see-through, so
@@ -204,11 +261,7 @@ export function drawDragonFrame(ctx, { play, camera, width, height, colors }) {
   ctx.save();
   ctx.lineCap = 'round';
   ctx.lineJoin = 'round';
-  // Shake moves the whole picture, a little out of step on each axis.
-  if (play.shake > 0.05) {
-    const size = play.shake * (width / 352);
-    ctx.translate(size * (0.7 * Math.sin(time * 91) + 0.3 * Math.sin(time * 147 + 1)), size * (0.7 * Math.cos(time * 83) + 0.3 * Math.sin(time * 131)));
-  }
+  if (play.shake > 0.05) ctx.translate(...shakeOffset(play, core));
   drawFloor(ctx, camera, play, colors);
   drawShadows(ctx, camera, play, colors);
 
@@ -270,12 +323,5 @@ export function drawDragonFrame(ctx, { play, camera, width, height, colors }) {
   }
   drawMarks(ctx, camera, play, colors);
   ctx.restore();
-
-  if (play.fade < 1) {
-    // Fade the whole picture toward the page by thinning what has been drawn.
-    ctx.globalCompositeOperation = 'destination-out';
-    ctx.fillStyle = rgb(colors.ink, 1 - play.fade);
-    ctx.fillRect(0, 0, width, height);
-    ctx.globalCompositeOperation = 'source-over';
-  }
+  fadeOut(ctx, play, colors, width, height);
 }

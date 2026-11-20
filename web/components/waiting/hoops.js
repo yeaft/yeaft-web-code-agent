@@ -21,10 +21,10 @@ export const scene = {
     line: '--hoops-line', arc: '--hoops-arc', rig: '--hoops-rig', net: '--hoops-net', rim: '--hoops-rim',
     ball: '--hoops-ball', seam: '--hoops-seam', dust: '--hoops-dust', shade: '--hoops-shade', text: '--hoops-text',
   },
-  paint(ctx, { elapsedMs, width, height, colors }) {
+  paint(ctx, { elapsedMs, width, height, colors, core, backdrop }) {
     const play = resolveHoopsPlay(elapsedMs);
     const camera = resolveHoopsCamera(play, width, height);
-    drawHoopsFrame(ctx, { play, camera, width, height, colors });
+    drawHoopsFrame(ctx, { play, camera, width, height, colors, core, backdrop });
     return { beat: play.beat, shot: camera.shot };
   },
 };

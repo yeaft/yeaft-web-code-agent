@@ -16,12 +16,24 @@
  *   tokens     { key: '--css-token' } colours to resolve for `paint`.
  *   posterMs   Scene time of the frame held for reduced motion and for
  *              connections that have stalled.
- *   paint(ctx, { elapsedMs, width, height, dpr, colors })
+ *   paint(ctx, { elapsedMs, width, height, dpr, colors, core, backdrop })
  *              Draw one frame. `elapsedMs` counts from the cut to the scene;
  *              `width`/`height` are CSS px and the context is already scaled
  *              by `dpr` and cleared. `colors[key]` is [r, g, b] and
  *              `colors.font` the UI font family. May return { beat, shot }
  *              to expose where the scene is, for tests and debugging.
+ *
+ * Scenes are composed for a STAGE_RATIO picture: `core`, { x, y, width,
+ * height } in CSS px, centred in the canvas. On a phone the core is the
+ * whole canvas. A wider stage keeps the height, so the core stays the same
+ * size in the middle, and gives the scene a second context, `backdrop`, for
+ * the world around it: floor lines and fixtures only, drawn through the same
+ * camera across the whole width and with the same shake and fade as the
+ * scene. The stage shows the scene over the core and the backdrop beyond it,
+ * blending the two over a short run past the core's edges, so players and
+ * effects stay in the middle and only the setting runs on to the ends.
+ * Without `backdrop` a scene draws exactly what it always has. Flat marks
+ * such as a score belong inside the core, sized by `core.width`.
  *
  * The scene is a function of the wait clock (see wait-clock.js), not of this
  * component, so a re-created indicator resumes the scene in progress.
@@ -30,8 +42,93 @@ import { holdWaitClock, readWaitClock } from '../../utils/wait-clock.js';
 
 /** How long a wait shows the "waiting" card before the stage cuts to the scene. */
 export const STAGE_INTRO_MS = 900;
-/** Height of the picture as a fraction of its width. */
+/** Height of the picture scenes are composed for, as a fraction of its width. */
 export const STAGE_RATIO = 5 / 11;
+
+/**
+ * The part of a `width` x `height` canvas a scene is composed for: all of it
+ * up to STAGE_RATIO, else a centred box of that ratio and the full height.
+ * Rounding in the page's layout leaves a narrow canvas a pixel or so off the
+ * ratio, which still counts as all of it.
+ * @returns {{ x: number, y: number, width: number, height: number }} CSS px.
+ */
+export function stageCore(width, height) {
+  const composed = height / STAGE_RATIO;
+  if (width <= composed + 1.5) return { x: 0, y: 0, width, height };
+  return { x: (width - composed) / 2, y: 0, width: composed, height };
+}
+
+/**
+ * How far past each side of the core the scene fades out into the backdrop.
+ * About as short as the fade at the edge of a phone's picture, so the scene
+ * keeps the framing it has there: whoever the camera has left out stays
+ * out, and only the setting runs on beside it.
+ */
+const blendRun = core => Math.min(core.x, 24);
+
+/**
+ * Horizontal mask over the core: opaque across it, easing to clear
+ * `blendRun` beyond each side.
+ */
+function coreMask(ctx, core) {
+  const run = blendRun(core);
+  const from = core.x - run;
+  const span = core.width + 2 * run;
+  const mask = ctx.createLinearGradient(from, 0, from + span, 0);
+  // Smoothstep in a few stops, so the hand-over has no visible edge.
+  for (const [u, alpha] of [[0, 0], [0.25, 0.156], [0.5, 0.5], [0.75, 0.844], [1, 1]]) {
+    mask.addColorStop((u * run) / span, `rgba(0, 0, 0, ${alpha})`);
+    mask.addColorStop(1 - (u * run) / span, `rgba(0, 0, 0, ${alpha})`);
+  }
+  return mask;
+}
+
+/**
+ * Paint one frame of a scene onto `ctx`, which is cleared and scaled to CSS
+ * px. A canvas wider than its core is composed from the scene and its
+ * backdrop: the scene is drawn on `scratch` and the backdrop on `ctx`; `ctx`
+ * then keeps the backdrop only where the core mask is clear, `scratch` keeps
+ * the scene only where it is opaque, and the two are added. Over the core
+ * the picture is exactly the scene, past the blend run exactly the backdrop,
+ * and in between a straight cross-fade.
+ * @param {CanvasRenderingContext2D} ctx
+ * @param scene Scene definition (see the module comment).
+ * @param {{ elapsedMs: number, width: number, height: number, dpr: number, colors: object }} frame
+ * @param {{ canvas?: HTMLCanvasElement, ctx?: CanvasRenderingContext2D|null }} scratch
+ *   Owned by the caller and kept between frames; filled in on first use.
+ * @returns Whatever `scene.paint` returned.
+ */
+export function paintStageFrame(ctx, scene, frame, scratch) {
+  const { width, height, dpr } = frame;
+  const core = stageCore(width, height);
+  if (core.width >= width) return scene.paint(ctx, { ...frame, core });
+  if (!scratch.canvas) {
+    scratch.canvas = document.createElement('canvas');
+    scratch.ctx = scratch.canvas.getContext('2d');
+  }
+  const layer = scratch.ctx;
+  if (!layer) return scene.paint(ctx, { ...frame, core });
+  if (scratch.canvas.width !== ctx.canvas.width || scratch.canvas.height !== ctx.canvas.height) {
+    scratch.canvas.width = ctx.canvas.width;
+    scratch.canvas.height = ctx.canvas.height;
+  }
+  layer.setTransform(dpr, 0, 0, dpr, 0, 0);
+  layer.clearRect(0, 0, width, height);
+  const where = scene.paint(layer, { ...frame, core, backdrop: ctx });
+  for (const [target, operation] of [[ctx, 'destination-out'], [layer, 'destination-in']]) {
+    target.setTransform(dpr, 0, 0, dpr, 0, 0);
+    target.globalCompositeOperation = operation;
+    target.fillStyle = coreMask(target, core);
+    target.fillRect(0, 0, width, height);
+    target.globalCompositeOperation = 'source-over';
+  }
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.globalCompositeOperation = 'lighter';
+  ctx.drawImage(scratch.canvas, 0, 0);
+  ctx.globalCompositeOperation = 'source-over';
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  return where;
+}
 
 /** Statuses where nothing is progressing: the scene holds still instead of running on. */
 const STALLED = new Set(['disconnected', 'agent-offline', 'session-lost', 'cli-exited']);
@@ -92,6 +189,8 @@ export function createStageAnimation(scene) {
     `,
     setup(props) {
       const canvasRef = Vue.ref(null);
+      // Where a wide stage draws the scene before laying it over the backdrop.
+      let scratch = {};
       // Closed shows the "waiting" card; open shows the scene.
       const open = Vue.ref(false);
       // Set when this stage itself went from the card to the scene, which
@@ -125,7 +224,7 @@ export function createStageAnimation(scene) {
         if (!colors) colors = readStageColors(host, ctx, scene.tokens);
         ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
         ctx.clearRect(0, 0, width, height);
-        const where = scene.paint(ctx, { elapsedMs, width, height, dpr, colors }) || {};
+        const where = paintStageFrame(ctx, scene, { elapsedMs, width, height, dpr, colors }, scratch) || {};
         // Where the scene is, for tests and debugging. Written only on change.
         if (host.dataset.beat !== (where.beat || '')) host.dataset.beat = where.beat || '';
         if (host.dataset.shot !== (where.shot || '')) host.dataset.shot = where.shot || '';
@@ -135,13 +234,11 @@ export function createStageAnimation(scene) {
       const resize = () => {
         const canvas = canvasRef.value;
         if (disposed || !canvas || !host) return;
-        // The picture's height follows its width. The box's own height is
-        // still animating open when this first runs, and reports a resize on
-        // every frame of that; only a new width or pixel ratio needs a new
-        // backing store.
-        if (host.clientWidth === width && pixelRatio() === dpr) return;
-        width = host.clientWidth;
-        height = Math.round(width * STAGE_RATIO);
+        // The stylesheet sizes the picture: its height follows its width up
+        // to a cap, independent of the box, which animates open around it.
+        if (canvas.clientWidth === width && canvas.clientHeight === height && pixelRatio() === dpr) return;
+        width = canvas.clientWidth;
+        height = canvas.clientHeight;
         dpr = pixelRatio();
         canvas.width = Math.max(1, Math.round(width * dpr));
         canvas.height = Math.max(1, Math.round(height * dpr));
@@ -213,7 +310,7 @@ export function createStageAnimation(scene) {
         motionQuery?.addEventListener?.('change', onMotionChange);
         if (typeof ResizeObserver === 'function') {
           sizeObserver = new ResizeObserver(resize);
-          sizeObserver.observe(host);
+          sizeObserver.observe(canvas);
         }
         // An off-screen scene does not draw.
         if (typeof IntersectionObserver === 'function') {
@@ -250,6 +347,7 @@ export function createStageAnimation(scene) {
         viewObserver?.disconnect();
         themeObserver?.disconnect();
         motionQuery?.removeEventListener?.('change', onMotionChange);
+        scratch = {};
       });
 
       return { canvasRef, open, cut, sceneClass: scene.className };
