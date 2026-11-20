@@ -270,6 +270,11 @@ test('stopping a sibling restores the ordinary live Session transcript and compl
   await expect(region.locator('.parallel-turn-pane')).toHaveCount(2);
   await expect(pane(page, a).locator('.concurrent-turn-title')).toHaveText('Earlier long question');
   await expect(pane(page, b).locator('.concurrent-turn-state')).toHaveText('Running');
+  // These fixture Sessions have no scene yet; live replies still omit names.
+  for (const [turn, text] of [[a, 'A is still researching'], [b, 'B partial answer']]) {
+    await expect(pane(page, turn).locator('.assistant-turn')).toContainText(text);
+    await expect(pane(page, turn).locator('.vp-turn-block-name, .vp-speaker-header')).toHaveCount(0);
+  }
   await expect(page.locator('.parallel-turn-tabs')).toBeHidden();
   expect(await pane(page, b).evaluate(el => getComputedStyle(el, '::before').width)).toBe('1px');
   expect(await pane(page, a).evaluate(el => getComputedStyle(el, '::before').content)).toBe('none');
