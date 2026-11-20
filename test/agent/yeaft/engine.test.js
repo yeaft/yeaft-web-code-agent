@@ -407,7 +407,8 @@ describe('Engine', () => {
     });
 
     it.each(['provider', 'abort', 'append'])('rolls signed context into a fresh conversation without tool replay: %s', async trigger => {
-      for (const mode of trigger === 'provider' ? ['token', 'http413', 'http413-token-fallback', 'http413-summary-retry'] : [trigger]) {
+      const modes = ['token', 'http413', 'http413-token-fallback', 'http413-summary-retry', 'http413-multilingual-summary'];
+      for (const mode of trigger === 'provider' ? modes : [trigger]) {
         const dir = mkdtempSync(join(tmpdir(), 'yeaft-signed-rollover-'));
         const originalFetch = globalThis.fetch;
         const requests = [], summaries = [];
@@ -430,6 +431,8 @@ describe('Engine', () => {
         const screenshot = mode === 'http413-token-fallback' ? gif(4424, 4424, 300_000) : gif(16, 16, 300_000);
         const tooLarge = mode.startsWith('http413');
         const retrySummary = mode === 'http413-summary-retry';
+        const multilingual = mode === 'http413-multilingual-summary';
+        const handoff = 'COMPLETE_EVIDENCE: ' + '已核对图像证据。'.repeat(200) + '保留最后的证据。';
         const imagePath = 'fixture image.gif';
         const toolName = tooLarge ? 'ViewImage' : 'echo';
         const requestBytes = [];
@@ -437,7 +440,7 @@ describe('Engine', () => {
         const textOf = content => typeof content === 'string' ? content
           : content.filter(block => block.type === 'text').map(block => block.text).join('');
         const config = { model: 'gateway/claude-opus-4.8', maxOutputTokens: 1024, projectDocMaxBytes: 0,
-          modelInfo: { contextWindow: 40000 } };
+          modelInfo: { contextWindow: 40000, maxOutput: 4096 } };
         const control = new AbortController();
         let executions = 0;
         const inbox = [];
@@ -450,10 +453,10 @@ describe('Engine', () => {
               expect(JSON.stringify(body)).not.toContain('signature-');
               expect(body.messages[0].content).toContain('COMPLETE_EVIDENCE');
               if (body.system.startsWith('Summarize the supplied') && mode === 'abort') { control.abort(); throw new DOMException('cancelled', 'AbortError'); }
-              const draft = retrySummary && summaries.length === 1
-                ? 'Rejected draft. ' + '细'.repeat(6000)
-                : 'COMPLETE_EVIDENCE. Tool completed successfully, do not repeat it. Continue unfinished answer.';
-              return new Response(JSON.stringify({ content: [{ type: 'text', text: draft }], stop_reason: 'end_turn', usage: { input_tokens: 1234, output_tokens: 20 } }), { headers: { 'content-type': 'application/json' } });
+              let draft = 'COMPLETE_EVIDENCE. Tool completed successfully, do not repeat it. Continue unfinished answer.';
+              if (multilingual) draft = handoff;
+              if (retrySummary && summaries.length === 1) draft = 'Rejected draft. ' + '细'.repeat(6000);
+              return new Response(JSON.stringify({ content: [{ type: 'text', text: draft }], stop_reason: 'end_turn', usage: { input_tokens: 1234, output_tokens: multilingual ? 2000 : 20 } }), { headers: { 'content-type': 'application/json' } });
             }
             requests.push(body);
             requestBytes.push(Buffer.byteLength(init.body));
@@ -501,6 +504,11 @@ describe('Engine', () => {
             const seed = fresh.messages[0].content;
             expect(textOf(seed)).toContain('COMPLETE_EVIDENCE');
             expect(textOf(seed)).toContain('obtain evidence and finish');
+            expect(textOf(seed)).not.toContain('Rejected draft.');
+            if (multilingual) {
+              expect(Buffer.byteLength(handoff)).toBeGreaterThan(summaries[0].max_tokens);
+              expect(textOf(seed)).toContain(handoff);
+            }
             // Uploads stay native image parts, never base64 inside text.
             expect(textOf(seed)).not.toContain(reference.source.data.slice(0, 64));
             if (mode === 'append') {
@@ -511,7 +519,7 @@ describe('Engine', () => {
             } else if (tooLarge) {
               expect(events.find(event => event.type === 'llm_retry')).toMatchObject({ statusCode: 413, reason: 'context_rollover' });
               expect(requests).toHaveLength(3);
-              expect(requestBytes[2]).toBeLessThan(requestBytes[1]);
+              expect(requestBytes[2]).toBeLessThanOrEqual(Math.floor(requestBytes[1] * 0.8));
               expect(textOf(seed)).toContain('ViewImage(file_path=' + JSON.stringify(imagePath) + ')');
               if (mode === 'http413-token-fallback') {
                 expect(seed).toEqual(expect.any(String));

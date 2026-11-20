@@ -137,8 +137,9 @@ function* chunks(parts, limit, signal) {
  * Budget provider output in tokens, and text passed to the next summary in
  * UTF-8 bytes. Those are different units: a completed multilingual summary can
  * exceed maxTokens in bytes while fitting comfortably in the next request.
- * Accepted summaries are never clipped and occupy at most a quarter of the
- * next input chunk, so reductions converge. Retry an overlong, empty, or
+ * Accepted summaries are never clipped. Intermediate drafts occupy at most a
+ * quarter of the next input chunk so reductions converge; the final handoff
+ * has its own budget. Retry an overlong, empty, or
  * output-truncated draft once from the same source, within the same call
  * budget. Other failures leave the original context intact.
  *
@@ -166,14 +167,16 @@ export async function* streamContextRollover({
   const inputLimit = Math.min(65536, available - outputLimit,
     maxRequestBodyBytes == null ? Infinity : Math.floor((maxRequestBodyBytes - 4096) / 6));
   if (maxRequestBodyBytes != null && inputLimit < 1024) throw new RangeError('Request body limit too small for safe context rollover');
-  // Including the final label and a separator, any four accepted drafts
-  // fit in one input chunk. This is a byte bound, not a token conversion.
-  const summaryLimit = Math.floor(inputLimit / 4) - bytes(PREFIX) - 1;
-  if (outputLimit < 128 || summaryLimit < 128) {
+  // Intermediate drafts must contract: any four plus separators fit in one
+  // chunk. The final handoff won't be reduced again, and the engine checks the
+  // full continuation separately (system, tools, original requests, media).
+  const draftLimit = Math.floor(inputLimit / 4) - 1;
+  const handoffLimit = Math.min(inputLimit, 16384) - bytes(PREFIX);
+  if (outputLimit < 128 || draftLimit < 128 || handoffLimit < 128) {
     throw new RangeError('Context window/output budget too small for safe context rollover');
   }
   let calls = 0;
-  async function* summarize(source) {
+  async function* summarize(source, summaryLimit) {
     let problem;
     for (let attempt = 0; attempt < 2; attempt++) {
       checkAbort(signal);
@@ -207,17 +210,26 @@ export async function* streamContextRollover({
     throw new Error(problem + '; source context retained');
   }
 
-  let summaries = [];
-  for (const chunk of chunks(transcript(messages, userAppend), inputLimit, signal)) {
-    summaries.push(yield* summarize(chunk));
+  async function* summarizeLevel(parts) {
+    const completed = [];
+    let pending;
+    // One chunk of lookahead determines whether this level needs another
+    // reduction, without materializing the full original transcript.
+    for (const chunk of chunks(parts, inputLimit, signal)) {
+      if (pending !== undefined) completed.push(yield* summarize(pending, draftLimit));
+      pending = chunk;
+    }
+    if (pending !== undefined) {
+      completed.push(yield* summarize(pending, completed.length ? draftLimit : handoffLimit));
+    }
+    return completed;
   }
+
+  let summaries = yield* summarizeLevel(transcript(messages, userAppend));
   if (!summaries.length) throw new Error('Context rollover has no visible history to summarize');
   while (summaries.length > 1) {
-    const reduced = [];
     // Newlines prevent accidental joining of facts at summary boundaries.
-    for (const chunk of chunks(summaries.map(text => text + '\n'), inputLimit, signal)) {
-      reduced.push(yield* summarize(chunk));
-    }
+    const reduced = yield* summarizeLevel(summaries.map(text => text + '\n'));
     if (reduced.length >= summaries.length) throw new Error('Context rollover reduction did not converge');
     summaries = reduced;
   }

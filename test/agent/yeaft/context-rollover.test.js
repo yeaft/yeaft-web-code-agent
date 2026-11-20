@@ -84,9 +84,15 @@ describe('bounded active-context rollover', () => {
       + 'do not replay side effects. Verify uncertain facts from the original records before acting.');
     expect(JSON.stringify(requests[1].content[0])).toBe(JSON.stringify(upload));
 
-    // Force multiple fragments with a small learned gateway cap. Stop at the
-    // first reduction and require every fragment to be accounted for there.
-    const cap = 8192 + 4096;
+    // Under a small learned cap, a final handoff can exceed the strict
+    // intermediate draft size, both with and without a reduction step.
+    const cap = 12 * 1024;
+    const finalHandoff = '保留最后的证据。'.repeat(24);
+    const oneChunk = mockAdapter(8192, () => finalHandoff);
+    expect(await generateContextRollover({ ...options(oneChunk), maxRequestBodyBytes: cap, maxCalls: 1 }))
+      .toContain(finalHandoff);
+    expect(oneChunk.requests).toHaveLength(1);
+
     const onRequestStart = vi.fn();
     const onUsage = vi.fn();
     const reduceAdapter = mockAdapter(8192, (request, index) => {
@@ -98,13 +104,13 @@ describe('bounded active-context rollover', () => {
       if (index <= 3) return { text: `MAP_${index - 1}`, stopReason: 'end_turn', usage };
       expect(source).toContain('MAP_1\nMAP_2');
       expect(source).not.toContain('TRUNCATED');
-      return { text: 'MERGED', stopReason: 'stop_sequence', usage };
+      return { text: finalHandoff, stopReason: 'stop_sequence', usage };
     });
     // The UTF-8/JSON boundary also has to work for control characters.
     const source = { role: 'user', content: '\u0001'.repeat(1600) + 'LAST_FRAGMENT' };
     const compacted = await generateContextRollover({ ...options(reduceAdapter), messages: [source],
       maxRequestBodyBytes: cap, maxCalls: 4, onRequestStart, onUsage });
-    expect(compacted).toMatch(/\nMERGED$/);
+    expect(compacted.endsWith(finalHandoff)).toBe(true);
     expect(reduceAdapter.requests).toHaveLength(4);
     expect(reduceAdapter.requests[1].messages).toEqual(reduceAdapter.requests[0].messages);
     expect(reduceAdapter.requests[2].messages[0].content).toContain('LAST_FRAGMENT');
