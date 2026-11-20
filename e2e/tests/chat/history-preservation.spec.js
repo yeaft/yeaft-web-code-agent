@@ -26,6 +26,12 @@ function seedHistory(root) {
     sessionId: SESSION_A, speakerVpId: 'omni', turnId: TURN,
     time: new Date(clock += 1000).toISOString(), ...message,
   });
+  append({ role: 'user', content: 'Legacy prompt without a tool owner', turnId: undefined });
+  // Pre-turn-ID rows: their synthetic UI IDs must not create two separate
+  // executions or attach either call to the surrounding labelled prompt.
+  for (const path of ['old-a.txt', 'old-b.txt']) {
+    append({ role: 'assistant', content: '', turnId: undefined, toolCalls: [{ id: path, name: 'Read', input: { file_path: path } }] });
+  }
   for (let index = 0; index < OLDER_TURNS; index += 1) {
     append({ role: 'user', content: `Older prompt ${index}`, turnId: `older-${index}` });
     append({ role: 'assistant', content: `Older answer ${index}`, turnId: `older-${index}`, responseKind: 'result' });
@@ -170,10 +176,23 @@ async function expectLongTurn(page) {
   for (let batch = 1; batch <= 6; batch += 1) {
     await expect(turn.locator('.turn-response-progress').nth(batch - 1)).toContainText(`Checkpoint ${batch}:`);
   }
-  // Tool groups may retain expansion after pagination, but remount on switching.
-  if (await turn.locator('.tool-line').count() < TOOL_COUNT) await turn.locator('.turn-expand-btn').click();
-  await expect(turn.locator('.tool-line')).toHaveCount(TOOL_COUNT);
-  for (const [line, filename] of [[turn.locator('.tool-line').first(), 'check-0.txt'], [turn.locator('.tool-line').last(), 'check-119.txt']]) {
+  // The pane projects the same durable history, independently of the
+  // virtual transcript's mounted rows or the fold's replacement window.
+  const toggle = page.locator('.yeaft-session-status-toggle');
+  if (await toggle.getAttribute('aria-expanded') === 'false') await toggle.click();
+  const details = page.locator('.session-tool-details');
+  if (await details.getAttribute('open') === null) await details.locator('summary').click();
+  const selection = details.getByRole('combobox', { name: 'Turn for tool call details' });
+  await selection.selectOption({ label: 'Turn unknown (2)' });
+  const tools = details.locator('.tool-line');
+  await expect(tools).toHaveCount(2);
+  await expect(tools.first()).toContainText('old-a.txt');
+  await expect(tools.last()).toContainText('old-b.txt');
+  const longGroup = await selection.locator(`option[value*="${TURN}"]`).getAttribute('value');
+  await selection.selectOption(longGroup);
+  await expect(turn.locator('.tool-line')).toHaveCount(0);
+  await expect(tools).toHaveCount(TOOL_COUNT);
+  for (const [line, filename] of [[tools.first(), 'check-0.txt'], [tools.last(), 'check-119.txt']]) {
     if (!await line.evaluate(element => element.classList.contains('expanded'))) await line.click();
     await expect(line.locator('..').locator('.tool-expand')).toContainText(filename);
   }
@@ -238,6 +257,7 @@ async function expectOlderPrompts(page) {
   ).filter(row => row.sessionId === sessionId && row.type === 'user').map(row => row.content), {
     conversationId: CONVERSATION, sessionId: SESSION_A,
   })).toEqual([
+    'Legacy prompt without a tool owner',
     ...Array.from({ length: OLDER_TURNS }, (_, index) => `Older prompt ${index}`),
     'Run all 120 checks and keep the screenshots',
   ]);

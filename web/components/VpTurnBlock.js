@@ -45,6 +45,7 @@ export default {
     displayNameOverride: { type: String, default: '' },
     hideSpeakerIdentity: { type: Boolean, default: false },
     sessionActions: { type: Boolean, default: true },
+    toolsInStatus: { type: Boolean, default: false },
     debugActionEnabled: { type: Boolean, default: true },
     canStop: { type: Boolean, default: true },
     interactiveSpeaker: { type: Boolean, default: true },
@@ -122,6 +123,7 @@ export default {
           :response-collapsed="responseCollapsed"
           :response-toggle-label="responseToggleLabel"
           :session-actions="sessionActions"
+          :tools-in-status="toolsInStatus"
           :quote-author="displayName"
           :origin-message-id="originMessageId"
           :show-debug-action="debugActionEnabled && hasDebugEntry"

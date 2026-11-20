@@ -98,6 +98,12 @@ Only Sessions that have not opted into a scene use the following routing. A mess
 
 When several VPs are selected, Yeaft persists one canonical user message and fans the turn out to independent VP engines. Each VP has its own persona and memory view, streams its own response, and uses the current Session's allowed tools. Historical attribution remains in the underlying records.
 
+## 工具调用与运行状态
+
+普通 Session 的回复不再列出工具调用。打开右侧 **Session 状态 → 执行状态 → 工具调用详情**，可以选择轮次并查看已加载的调用记录；回合结束后也能查看，较早的轮次可先在聊天区加载历史。旧记录缺少可靠的轮次标识时会单独归组，不会归到相邻提问下。需要回答的提问卡、待办和转交提示仍留在对话里。
+
+回复末尾的小圆点表示还在运行；等待下一段输出时会显示选中的等待动图（动画关闭时使用三点）。回合结束后，运行提示消失。
+
 ## Parallel turns
 
 原生 Session 正在执行时仍可使用同一个输入框发送消息。AI 根据正在执行的 turn 判断新输入是补充还是独立请求：补充在目标 turn 下一次 loop 读取，独立请求并行执行，同一会话也能同时处理多个 turn；切换场景后发出的消息不会追加到旧场景的 turn。没有 turn 执行时保持普通对话行为。

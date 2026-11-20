@@ -64,6 +64,7 @@ export default {
       default: ''
     },
     sessionActions: { type: Boolean, default: false },
+    toolsInStatus: { type: Boolean, default: false },
     hideSpeakerIdentity: { type: Boolean, default: false },
     quoteAuthor: { type: String, default: '' },
     originMessageId: { type: String, default: '' },
@@ -118,7 +119,7 @@ export default {
                      class="turn-response-segment turn-response-progress">
                   <ResponsePresentation v-if="segment.presentation" :presentation="segment.presentation" :fallback-text="segment.content" :open-link="openBrowser" />
                   <div v-else class="turn-text markdown-body" v-html="renderSegment(segment.content)" @click="onMarkdownClick"></div>
-                  <span v-if="segment.isStreaming" class="cursor-blink"></span>
+                  <span v-if="segment.isStreaming && !toolsInStatus" class="cursor-blink"></span>
                 </div>
               </div>
             </div>
@@ -139,7 +140,7 @@ export default {
                  class="turn-response-segment turn-response-result">
               <ResponsePresentation v-if="segment.presentation" :presentation="segment.presentation" :fallback-text="segment.content" :open-link="openBrowser" />
               <div v-else class="turn-text markdown-body" v-html="renderSegment(segment.content)" @click="onMarkdownClick"></div>
-              <span v-if="segment.isStreaming" class="cursor-blink"></span>
+              <span v-if="segment.isStreaming && !toolsInStatus" class="cursor-blink"></span>
             </div>
           </template>
         </div>
@@ -209,6 +210,10 @@ export default {
         <AskCard :ask-msg="turn.askMsg" @submit="onAskSubmit" />
       </div>
 
+      <div v-if="toolsInStatus && turn.isResponding" class="session-response-running" role="status">
+        <span class="session-response-running-dot" aria-hidden="true"></span>
+        <span class="response-sr-only">{{ $t('chat.concurrent.running') }}</span>
+      </div>
       </div>
 
       <!-- 6. Response footer actions (visible on hover) -->
@@ -342,7 +347,7 @@ export default {
       return tools.filter(tool => tool?.toolName !== 'RouteForward');
     });
 
-    const showToolActions = Vue.computed(() => actionTools.value.length > 0);
+    const showToolActions = Vue.computed(() => !props.toolsInStatus && actionTools.value.length > 0);
 
     const latestTool = Vue.computed(() => {
       const tools = actionTools.value;

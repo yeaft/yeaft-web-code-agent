@@ -44,6 +44,7 @@ async function expectVisibleStageEdges(scene, path) {
 }
 
 test('one native Session turn shows its waiting indicator, retains the ordinary transcript and merges appended tools across replay', async ({ chatPage: page, mockAgent }, info) => {
+  test.setTimeout(60_000); // Includes real canvas, reduced-motion and two viewport transitions.
   const wire = await sessionTurnsFixture(page, mockAgent);
   await page.evaluate(() => { document.documentElement.dataset.theme = 'light'; });
   const indicator = page.locator('.typing-indicator');
@@ -174,10 +175,18 @@ test('one native Session turn shows its waiting indicator, retains the ordinary 
   await expect(page.locator('.assistant-turn').filter({ hasText: 'Single answer begins' })).toBeVisible();
   // Streaming text takes over from the indicator.
   await expect(indicator).toHaveCount(0);
+  const runningDot = page.locator('.session-response-running-dot');
+  await expect(runningDot).toBeVisible();
+  await expect(page.locator('.assistant-turn .cursor-blink')).toHaveCount(0);
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await expect(runningDot).toHaveCSS('animation-name', 'none');
+  await page.emulateMedia({ reducedMotion: 'no-preference' });
+  await expect(runningDot).toHaveCSS('animation-name', 'session-response-pulse');
   await expect(page.locator('.parallel-turn-tabs')).toHaveCount(0);
-  wire.tool(turn, 'before-append', 'Read');
+  wire.tool(turn, 'before-append', 'Bash', { command: 'printf test\n' });
   // Back after the text, the turn keeps the animation it started with.
   await expect(indicator.locator(picked)).toBeVisible();
+  await expect(runningDot).toBeVisible();
   await wire.send('Extra detail for the same turn', turn);
   wire.tool(turn, 'after-append', 'Grep');
   // A new assistant row after a tool loop, not a delta into the old text row.
@@ -186,13 +195,28 @@ test('one native Session turn shows its waiting indicator, retains the ordinary 
   await expect(answer).toHaveCount(1);
   await expect(answer).toContainText('Single answer begins');
   await expect(answer).toContainText('Appended answer finishes.');
-  await expect(answer.locator('.turn-actions')).toHaveCount(1);
-  await answer.getByRole('button', { name: '1 more', exact: true }).click();
-  await expect(answer.locator('.tool-line')).toHaveCount(2);
+  const details = page.locator('.session-tool-details');
+  const toolLines = details.locator('.tool-line');
+  const statusToggle = page.locator('.yeaft-session-status-toggle');
+  const showDetails = async () => {
+    if (await statusToggle.getAttribute('aria-expanded') === 'false') await statusToggle.click();
+    await details.locator('summary').press('Enter');
+  };
+  await expect(answer.locator('.tool-line')).toHaveCount(0);
+  await expect(toolLines).toHaveCount(0);
+  await showDetails();
+  await expect(toolLines).toHaveCount(2);
+  await expect(toolLines.last()).toContainText('Grep');
+  await page.keyboard.press('Tab');
+  await expect(toolLines.first()).toBeFocused();
+  await page.keyboard.press('Enter');
+  await expect(details.locator('.bash-output')).toContainText('before-append evidence');
   await expect(page.locator('.vp-turn-block')).toHaveCount(1);
   await expect(page.locator('.message-user-block').filter({ hasText: 'Extra detail for the same turn' })).toHaveCount(1);
   wire.finish(turn);
   await expect(answer).not.toHaveClass(/streaming/);
+  await expect(runningDot).toHaveCount(0);
+  await expect(details.locator('.bash-output')).toContainText('before-append evidence');
   // The wait ends with the turn.
   await expect(indicator).toHaveCount(0);
   await page.reload();
@@ -201,9 +225,10 @@ test('one native Session turn shows its waiting indicator, retains the ordinary 
   await expect(answer).toHaveCount(1);
   await expect(answer).toContainText('Single answer begins');
   await expect(answer).toContainText('Appended answer finishes.');
-  await expect(answer.locator('.turn-actions')).toHaveCount(1);
-  await answer.getByRole('button', { name: '1 more', exact: true }).click();
-  await expect(answer.locator('.tool-line')).toHaveCount(2);
+  await expect(answer.locator('.tool-line')).toHaveCount(0);
+  await expect(runningDot).toHaveCount(0);
+  await showDetails();
+  await expect(toolLines).toHaveCount(2);
   await expect(page.locator('.message-block')).toHaveCount(1);
   for (const [theme, width] of [['light', 1400], ['dark', 320]]) {
     await page.setViewportSize({ width, height: 900 });
@@ -228,12 +253,14 @@ test('stopping a sibling restores the ordinary live Session transcript and compl
   const status = label => page.locator('.yeaft-vp-timeline-row').filter({ hasText: label });
   if (await activity.getAttribute('aria-expanded') === 'false') await activity.click();
   const a = await wire.send('Earlier long question');
-  wire.delta(a, 'A is still researching');
   const ordinaryWidth = () => messages.evaluate(el => getComputedStyle(el).maxWidth);
   const originalWidth = await ordinaryWidth();
   expect(originalWidth).not.toBe('none');
   await expect(stop).toBeVisible();
 
+  await page.evaluate(() => window.Pinia.useChatStore().setWaitingAnimation('cat'));
+  wire.tool(a, 'first-work', 'FileRead', { displayResource: 'only A.txt' });
+  wire.delta(a, 'A is still researching');
   const b = await wire.send('Later quick question');
   wire.delta(b, 'B partial answer');
   await expect(region.locator('.parallel-turn-pane')).toHaveCount(2);
@@ -245,6 +272,26 @@ test('stopping a sibling restores the ordinary live Session transcript and compl
   expect(await ordinaryWidth()).toBe('none');
   await expect(status('Earlier long question')).toBeVisible();
   await expect(status('Later quick question')).toBeVisible();
+  await expect(pane(page, a).locator('.session-response-running-dot')).toBeVisible();
+  await expect(pane(page, b).locator('.session-response-running-dot')).toBeVisible();
+  wire.tool(b, 'parallel-work', 'FileGrep', { displayResource: 'only B.txt' });
+  await expect(pane(page, b).locator('.typing-indicator .svg-running-cat')).toBeVisible();
+  await expect(pane(page, a).locator('.typing-indicator')).toHaveCount(0);
+  await expect(messages.locator('.tool-line')).toHaveCount(0);
+  const details = page.locator('.session-tool-details');
+  const toolSelect = details.getByRole('combobox', { name: 'Turn for tool call details' });
+  const expectOnlyCallsFor = async (label, resource) => {
+    await toolSelect.selectOption({ label: `${label} (1)` });
+    await expect(details.locator('.tool-line')).toHaveCount(1);
+    await expect(details.locator('.tool-line')).toContainText(resource);
+  };
+  await details.locator('summary').press('Enter');
+  await expect(toolSelect).toBeVisible(); // Native details dispatches toggle asynchronously.
+  await page.keyboard.press('Tab');
+  await expect(toolSelect).toBeFocused();
+  await expectOnlyCallsFor('Earlier long question', 'only A.txt');
+  await expectOnlyCallsFor('Later quick question', 'only B.txt');
+  await details.locator('summary').press('Enter');
   await page.screenshot({ path: info.outputPath('parallel-desktop.png'), animations: 'disabled' });
 
   const siblingStop = pane(page, b).getByRole('button', { name: 'Stop', exact: true });
@@ -268,6 +315,8 @@ test('stopping a sibling restores the ordinary live Session transcript and compl
   const afterStop = ['Later quick question', 'Earlier long question'];
   await expectOrdinaryLive('A is still researching', { order: afterStop });
   await expect(messages.getByText('B partial answer', { exact: true })).toBeVisible();
+  await expect(messages.locator('.assistant-turn').filter({ hasText: 'B partial answer' }).locator('.session-response-running-dot')).toHaveCount(0);
+  await expect(messages.locator('.session-response-running-dot')).toHaveCount(1);
   await expect(status('Later quick question')).toHaveCount(0);
   await expect(status('Earlier long question').locator('.yeaft-vp-timeline-abort')).toBeEnabled();
   await expect(scroller).toBeFocused();
@@ -287,6 +336,11 @@ test('stopping a sibling restores the ordinary live Session transcript and compl
   await wire.open(SESSION);
   wire.delta(a, ' after reload');
   await expectOrdinaryLive('A is still researching after the split while away after reload', { order: afterStop });
+  if (await activity.getAttribute('aria-expanded') === 'false') await activity.click();
+  await details.locator('summary').press('Enter');
+  await expectOnlyCallsFor('Earlier long question', 'only A.txt');
+  await expectOnlyCallsFor('Later quick question', 'only B.txt');
+  await details.locator('summary').press('Enter');
 
   // A new sibling can split the UI again on mobile. Natural completion
   // also returns to single-column rather than waiting for the survivor to end.
@@ -370,7 +424,13 @@ test('stopping a sibling restores the ordinary live Session transcript and compl
   });
   await expect.poll(() => narrowParagraph.evaluate(p => p.getBoundingClientRect().bottom
     - p.closest('.concurrent-turn-body').getBoundingClientRect().top)).toBeCloseTo(36, 0);
-  wire.finish(d);
+  // A terminal frame can arrive before the next root inventory. The lane
+  // is still mounted, but must not show a running dot or waiting animation.
+  wire.finish(d, 'end_turn', { deferSnapshot: true });
+  await expect(pane(page, d).locator('.assistant-turn')).not.toHaveClass(/streaming/);
+  await expect(pane(page, d).locator('.session-response-running-dot, .typing-indicator')).toHaveCount(0);
+  await expect(pane(page, a).locator('.session-response-running-dot')).toHaveCount(1);
+  wire.snapshot();
   await expect(region).toHaveCount(0);
   const restoredParagraph = messages.getByText(wideParagraph, { exact: true });
   expect(await restoredParagraph.evaluate(p => p.getBoundingClientRect().height)).toBeLessThan(clipped);
@@ -478,14 +538,18 @@ test('Delete turn from a saved supplement replays the remaining Session in both 
   const expectDeleted = async tab => {
     await expectKept(tab);
     for (const text of removedText) await expect(tab.getByText(text, { exact: true })).toHaveCount(0);
-    await expect(tab.locator('.tool-line')).toHaveCount(0);
+    await expect(tab.locator('.session-tool-details')).toHaveCount(0);
     await expect(tab.getByRole('button', { name: 'Delete turn', exact: true })).toHaveCount(1);
   };
 
   await openSession(page);
   for (const text of removedText) await expect(page.getByText(text, { exact: true })).toBeVisible();
-  await page.getByRole('button', { name: '1 more', exact: true }).click();
-  await expect(page.locator('.tool-line')).toHaveCount(2);
+  const toolDetails = page.locator('.session-tool-details');
+  const statusToggle = page.locator('.yeaft-session-status-toggle');
+  if (await statusToggle.getAttribute('aria-expanded') === 'false') await statusToggle.click();
+  await toolDetails.locator('summary').click();
+  await expect(toolDetails.locator('.tool-line')).toHaveCount(2);
+  await expect(page.locator('.messages .tool-line')).toHaveCount(0);
   await expectKept(page);
   const peer = await context.newPage();
   await peer.goto(serverUrl);
@@ -513,7 +577,9 @@ test('Delete turn from a saved supplement replays the remaining Session in both 
   await expect(dialog).toBeHidden();
   await expect(action).toBeFocused();
   await expect(supplement).toBeVisible();
-  await expect(page.locator('.tool-line')).toHaveCount(2);
+  if (await statusToggle.getAttribute('aria-expanded') === 'false') await statusToggle.click();
+  await expect(toolDetails.locator('summary')).toBeVisible();
+  await page.getByRole('button', { name: 'Close Session status', exact: true }).click();
   expect(authorized()).toHaveLength(0);
 
   holdHistory = true;

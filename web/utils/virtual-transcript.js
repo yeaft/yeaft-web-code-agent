@@ -32,7 +32,7 @@ function estimateMessageHeight(message) {
 function estimateAssistantTurnHeight(turn) {
   if (!turn) return DEFAULT_ITEM_HEIGHT;
   const textLength = textLengthOf(turn.textContent ?? turn.text ?? turn.content ?? '');
-  const toolCount = Array.isArray(turn.toolMsgs) ? turn.toolMsgs.length : 0;
+  const toolCount = !turn.toolsInStatus && Array.isArray(turn.toolMsgs) ? turn.toolMsgs.length : 0;
   const imageCount = Array.isArray(turn.imageMsgs) ? turn.imageMsgs.length : Array.isArray(turn.images) ? turn.images.length : 0;
   const askCount = turn.askMsg ? 1 : Array.isArray(turn.askRequests) ? turn.askRequests.length : 0;
   return clamp(160 + Math.ceil(textLength / 95) * 18 + toolCount * 56 + imageCount * 140 + askCount * 96, 160, MAX_ESTIMATED_HEIGHT);
