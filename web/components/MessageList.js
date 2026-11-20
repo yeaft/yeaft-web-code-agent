@@ -599,9 +599,8 @@ export default {
           else if (Number.isFinite(persistedResponseMeta?.turnDurationMs)) currentTurn.totalMs = persistedResponseMeta.turnDurationMs;
           const hasVisible = !!(currentTurn.textContent || currentTurn.todoMsg || currentTurn.askMsg || currentTurn.imageMsgs.length);
           const hasInlineTools = currentTurn.toolMsgs.some(tool => !_props.toolsInStatus || tool.toolName === 'RouteForward');
-          // A running tool-only reply still has a status dot. Once it settles,
-          // its details remain reachable in the pane without an empty reply row.
-          if (hasVisible || hasInlineTools || currentTurn.isResponding) {
+          // Tools shown in the activity pane do not create an empty reply row.
+          if (hasVisible || hasInlineTools) {
             // task-708: render the speaker header on every VP-attributed
             // turn. The avatar (with its inline typing badge) is THE
             // surface that signals which VP is speaking + whether they

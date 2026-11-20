@@ -41,13 +41,8 @@ test('native Session progress is ephemeral, scoped and readable in light/dark at
   await expect(page.locator('.messages .tool-line')).toHaveCount(0);
   await details.locator('summary').click();
   await expect(details.locator('.tool-line.completed')).toContainText('FileRead');
-  const toolOnlyDot = page.locator('.messages .session-response-running-dot');
-  await expect(toolOnlyDot).toBeVisible();
-  expect(await toolOnlyDot.evaluate(dot => {
-    const rect = dot.getBoundingClientRect();
-    const reply = dot.closest('.turn-message-block').getBoundingClientRect();
-    return rect.left >= reply.left && rect.right <= reply.right && rect.top >= reply.top && rect.bottom <= reply.bottom;
-  })).toBe(true);
+  // A tool-only turn stays in the activity pane, without an empty reply row.
+  await expect(page.locator('.messages .assistant-turn')).toHaveCount(0);
   await details.locator('summary').click();
   const initialProgress = { ...event, stage: 'running', reason: null, failedCalls: 0, toolStats: [] };
   // The new tab needs no new progress event, even during a long tool call.
@@ -215,7 +210,7 @@ test('native Session progress is ephemeral, scoped and readable in light/dark at
     await expect(progresses).toHaveCount(0);
   };
   await afterReplay('terminal-replay-marker');
-  await expect(page.locator('.messages .session-response-running-dot')).toHaveCount(0);
+  await expect(page.locator('.messages .assistant-turn')).toHaveCount(0);
   broker.settleIdle({ sessionId: session.id, vpId: event.vpId, threadId: event.threadId });
   broker.settleIdle({ sessionId: session.id, vpId: parallel.vpId, threadId: parallel.threadId });
   broker.broadcastSnapshot({ sessionId: session.id });
