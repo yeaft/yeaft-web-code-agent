@@ -259,20 +259,21 @@
   51%, 100% { opacity: 0; }
 }
 
-/* An active Session response stays marked between streaming chunks. */
-.session-response-running {
-  display: flex;
-  align-items: center;
-  min-height: 14px;
-  margin-top: 3px;
-}
-
+/* The live marker overlays the line end instead of changing the text width. */
+.turn-message-block:has(> .session-response-running-dot) { position: relative; }
+.turn-message-block:has(> .session-response-running-dot.is-in-gutter) { min-block-size: 14px; }
 .session-response-running-dot {
-  width: 7px;
-  height: 7px;
+  position: absolute;
+  width: 6px;
+  height: 6px;
   border-radius: 50%;
-  background: var(--success);
+  background: var(--text-primary);
+  pointer-events: none;
   animation: session-response-pulse 1.5s ease-in-out infinite alternate;
+}
+.session-response-running-dot.is-in-gutter {
+  inset-inline-end: 4px;
+  inset-block-end: 4px;
 }
 
 @keyframes session-response-pulse {
