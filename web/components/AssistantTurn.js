@@ -18,59 +18,93 @@ import {
   resolveMessageImageFileReference,
 } from '../utils/message-file-reference.js';
 
-// Follow the end of the rendered prose, not the end of the turn's block box.
-// Descend through ending lists and quotes without inserting UI into code,
-// tables, or links. Rich layouts and non-text responses use the end gutter.
-function responseLineEnd(body, marker) {
+// Find the last prose node without putting a cursor inside a link, code block,
+// or rich response. Those block layouts use the reply's end gutter instead.
+function responseTailText(body) {
   const block = body.querySelector(':scope > .turn-content')?.lastElementChild;
   const segment = block?.matches('.turn-progress-group')
     ? block.firstElementChild?.lastElementChild : block;
   let line = segment?.querySelector(':scope > .turn-text');
   while (line) {
     let tail = line.lastChild;
-    while (tail && (tail === marker || tail.nodeType === Node.COMMENT_NODE || (tail.nodeType === Node.TEXT_NODE && !tail.textContent.trim())
+    while (tail && (tail.nodeType === Node.COMMENT_NODE
+      || (tail.nodeType === Node.TEXT_NODE && !tail.data.trim())
       || (tail.nodeType === Node.ELEMENT_NODE && tail.matches('br')))) tail = tail.previousSibling;
-    if (!tail) return null;
-    if (tail.nodeType === Node.TEXT_NODE || (tail.nodeType === Node.ELEMENT_NODE && tail.textContent.trim()
-      && tail.matches('a, b, strong, i, em, del, s, code, span:not(.math-display), sub, sup, kbd, mark'))) return tail;
-    if (tail.nodeType !== Node.ELEMENT_NODE || !tail.matches('blockquote, ul, ol, li, p, h1, h2, h3, h4, h5, h6')) return null;
+    if (!tail || tail.nodeType === Node.TEXT_NODE) return tail;
+    if (tail.nodeType !== Node.ELEMENT_NODE) return null;
+    if (tail.matches('a, b, strong, i, em, del, s, code, span:not(.math-display), sub, sup, kbd, mark')) {
+      const walker = body.ownerDocument.createTreeWalker(tail, NodeFilter.SHOW_TEXT);
+      let lastText = null;
+      while (walker.nextNode()) if (walker.currentNode.data.trim()) lastText = walker.currentNode;
+      return lastText;
+    }
+    if (!tail.matches('blockquote, ul, ol, li, p, h1, h2, h3, h4, h5, h6')) return null;
     line = tail;
   }
   return null;
 }
 
-// v-html replaces the prose DOM on new chunks. Reattach only the decorative
-// marker after Vue's patch; the separate, accessible status stays mounted.
-const responseMarkers = new WeakMap();
-function placeResponseMarker(body, { value: running }) {
-  let marker = responseMarkers.get(body);
-  if (!running) {
-    marker?.remove();
-    responseMarkers.delete(body);
+function positionResponseDot(body, dot) {
+  const text = responseTailText(body);
+  if (!text) {
+    dot.classList.add('is-in-gutter');
+    dot.style.left = '';
+    dot.style.top = '';
     return;
   }
-  if (!marker) {
-    marker = body.ownerDocument.createElement('span');
-    marker.className = 'session-response-marker';
-    marker.setAttribute('aria-hidden', 'true');
-    const dot = body.ownerDocument.createElement('span');
-    dot.className = 'session-response-running-dot';
-    marker.append(dot);
-    responseMarkers.set(body, marker);
+  const end = text.data.trimEnd().length;
+  const range = body.ownerDocument.createRange();
+  range.setStart(text, end - 1);
+  range.setEnd(text, end);
+  const glyph = range.getBoundingClientRect();
+  range.collapse(false);
+  const caret = range.getBoundingClientRect();
+  // The caret at the logical end is on the left of an RTL glyph. Measuring
+  // it also works when only the last run of an otherwise LTR line is RTL.
+  const rtl = Math.abs(caret.left - glyph.left) < Math.abs(caret.left - glyph.right);
+  const size = dot.offsetWidth;
+  const lane = body.closest('.concurrent-turn-body');
+  const laneLeft = lane ? lane.getBoundingClientRect().left + lane.clientLeft : 0;
+  const right = lane ? laneLeft + lane.clientWidth : body.ownerDocument.documentElement.clientWidth;
+  const x = rtl ? Math.max(laneLeft, caret.left - size - 4) : Math.min(right - size, caret.left + 4);
+  const box = body.getBoundingClientRect();
+  dot.style.left = `${x - box.left}px`;
+  dot.style.top = `${(glyph.top + glyph.bottom - size) / 2 - box.top}px`;
+  dot.classList.remove('is-in-gutter');
+}
+
+// Measure after the Vue patch (v-html replaces nodes on new chunks) and on
+// resize/reflow. Only the live reply is observed, and the dot never reflows text.
+const responseDotLayout = new WeakMap();
+function stopResponseDotLayout(body) {
+  const state = responseDotLayout.get(body);
+  if (!state) return;
+  state.observer.disconnect();
+  cancelAnimationFrame(state.frame);
+  responseDotLayout.delete(body);
+}
+function updateResponseDotLayout(body, { value: running }) {
+  if (!running) return stopResponseDotLayout(body);
+  let state = responseDotLayout.get(body);
+  if (!state) {
+    const dot = body.querySelector(':scope > .session-response-running-dot');
+    const update = () => {
+      if (!state.frame) state.frame = requestAnimationFrame(() => {
+        state.frame = 0;
+        positionResponseDot(body, dot);
+      });
+    };
+    state = { observer: new ResizeObserver(update), frame: 0, update };
+    responseDotLayout.set(body, state);
+    state.observer.observe(body);
   }
-  const tail = responseLineEnd(body, marker);
-  marker.classList.toggle('is-in-gutter', !tail);
-  if (tail) {
-    if (tail.nextSibling !== marker) tail.after(marker);
-  } else if (marker.parentNode !== body) {
-    body.append(marker);
-  }
+  state.update();
 }
 
 export default {
   name: 'AssistantTurn',
   components: { ToolLine, AskCard, VpSpeakerHeader, ResponsePresentation },
-  directives: { responseMarker: { mounted: placeResponseMarker, updated: placeResponseMarker } },
+  directives: { responseDot: { mounted: updateResponseDotLayout, updated: updateResponseDotLayout, beforeUnmount: stopResponseDotLayout } },
   props: {
     turn: {
       type: Object,
@@ -148,7 +182,7 @@ export default {
         @stop-turn="onStopTurn"
       />
 
-      <div class="turn-message-block" :data-turn-id="turn.turnId || ''" v-response-marker="toolsInStatus && turn.isResponding">
+      <div class="turn-message-block" :data-turn-id="turn.turnId || ''" v-response-dot="toolsInStatus && turn.isResponding">
         <!-- 1. Response content in transcript order -->
         <div v-if="responseBlocks.length > 0" class="turn-content">
           <div v-if="textSegments.length > 0" class="turn-header">
@@ -260,6 +294,7 @@ export default {
         <AskCard :ask-msg="turn.askMsg" @submit="onAskSubmit" />
       </div>
 
+      <span v-if="toolsInStatus && turn.isResponding" class="session-response-running-dot is-in-gutter" aria-hidden="true"></span>
       </div>
       <span v-if="toolsInStatus && turn.isResponding" class="response-sr-only" role="status">{{ $t('chat.concurrent.running') }}</span>
 
@@ -785,7 +820,8 @@ export default {
               padding: `${pad}px`,
             },
             filter: (node) => {
-              return !node.matches?.('.turn-header, .screenshot-btn, .session-response-marker');
+              if (node.classList && (node.classList.contains('turn-header') || node.classList.contains('screenshot-btn'))) return false;
+              return true;
             }
           });
 

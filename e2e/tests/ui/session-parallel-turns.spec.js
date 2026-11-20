@@ -177,33 +177,30 @@ test('one native Session turn shows its waiting indicator, retains the ordinary 
   await expect(indicator).toHaveCount(0);
   const runningDot = page.locator('.session-response-running-dot');
   await expect(runningDot).toBeVisible();
-  const expectDotAtTextEnd = async (container, { wraps = false } = {}) => {
-    await expect(container.locator('.session-response-running-dot')).toBeVisible();
-    const geometry = await container.evaluate(el => {
+  const expectDotAtTextEnd = async (container, { wraps = false, rtl = false } = {}) => {
+    await expect.poll(() => container.evaluate((el, { wraps, rtl }) => {
       const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
       let text, first, last;
       while ((text = walker.nextNode())) {
-        if (!text.textContent.trim()) continue;
+        if (!text.data.trim()) continue;
         first ||= text;
         last = text;
       }
       const range = document.createRange();
-      range.setStart(first, first.textContent.search(/\S/));
+      range.setStart(first, first.data.search(/\S/));
       range.setEnd(first, range.startOffset + 1);
       const firstTop = range.getBoundingClientRect().top;
-      range.setStart(last, last.textContent.trimEnd().length - 1);
-      range.setEnd(last, last.textContent.trimEnd().length);
-      const end = range.getBoundingClientRect();
-      const dot = el.querySelector('.session-response-running-dot').getBoundingClientRect();
-      return { gap: dot.left - end.right, center: (dot.top + dot.bottom) / 2,
-        firstTop, lastTop: end.top, lastBottom: end.bottom, right: dot.right, viewport: innerWidth };
-    });
-    expect(geometry.center).toBeGreaterThan(geometry.lastTop);
-    expect(geometry.center).toBeLessThan(geometry.lastBottom);
-    expect(geometry.gap).toBeGreaterThanOrEqual(2);
-    expect(geometry.gap).toBeLessThan(8);
-    expect(geometry.right).toBeLessThanOrEqual(geometry.viewport);
-    if (wraps) expect(geometry.lastTop).toBeGreaterThan(geometry.firstTop);
+      const end = last.data.trimEnd().length;
+      range.setStart(last, end - 1);
+      range.setEnd(last, end);
+      const glyph = range.getBoundingClientRect();
+      const dot = el.closest('.assistant-turn').querySelector('.session-response-running-dot').getBoundingClientRect();
+      const gap = rtl ? glyph.left - dot.right : dot.left - glyph.right;
+      const center = (dot.top + dot.bottom) / 2;
+      return { nextToGlyph: gap >= 2 && gap < 8, sameLine: center > glyph.top && center < glyph.bottom,
+        inViewport: dot.left >= 0 && dot.right <= document.documentElement.clientWidth,
+        wrappedIfExpected: !wraps || glyph.top > firstTop };
+    }, { wraps, rtl })).toEqual({ nextToGlyph: true, sameLine: true, inViewport: true, wrappedIfExpected: true });
   };
   const setTheme = theme => page.evaluate(theme => { document.documentElement.dataset.theme = theme; }, theme);
   await setTheme('light');
@@ -239,17 +236,48 @@ test('one native Session turn shows its waiting indicator, retains the ordinary 
   await expect(runningDot).toHaveCSS('background-color', 'rgb(230, 228, 224)');
   await expectDotAtTextEnd(lastLine, { wraps: true });
   await expect(lastLine.locator('strong')).toHaveText('bold.');
-  await expect(lastLine.locator('strong .session-response-running-dot')).toHaveCount(0);
+  await expect(answer.locator('.turn-content .session-response-running-dot')).toHaveCount(0);
   await answer.screenshot({ path: info.outputPath('running-dot-dark-320.png'), animations: 'disabled' });
+  // The actual visual end of an RTL run can be on the left of its last glyph.
+  const rtl = 'RTL example: هذه هي نهاية الرد';
+  wire.delta(turn, '\n\n' + rtl, 'reply-after-append');
+  await expectDotAtTextEnd(answer.getByText(rtl, { exact: true }), { rtl: true });
+  // Fill a line to within a few pixels. A reserved 12px text gutter would
+  // make the same reply wrap while running and reflow when the dot disappears.
+  const fullLine = await answer.getByText(rtl, { exact: true }).evaluate(p => {
+    const probe = document.createElement('span');
+    probe.style.cssText = 'position:absolute;white-space:nowrap;';
+    p.append(probe);
+    const width = p.closest('.turn-content').clientWidth;
+    probe.textContent = 'This is the last line of the response';
+    while (probe.getBoundingClientRect().width + 6 < width) probe.textContent += 'i';
+    const text = probe.textContent;
+    probe.remove();
+    return text;
+  });
+  wire.delta(turn, '\n\n' + fullLine, 'reply-after-append');
+  const full = answer.getByText(fullLine, { exact: true });
+  await expectDotAtTextEnd(full);
+  const fullHeight = await full.evaluate(el => {
+    const bounds = el.getBoundingClientRect();
+    const dot = el.closest('.assistant-turn').querySelector('.session-response-running-dot');
+    const parent = dot.parentNode;
+    dot.remove();
+    const without = el.getBoundingClientRect();
+    parent.append(dot);
+    return { running: bounds.height, without: without.height, oneLine: parseFloat(getComputedStyle(el).lineHeight) };
+  });
+  expect(fullHeight.running).toBeCloseTo(fullHeight.oneLine, 1);
+  expect(fullHeight.running).toBe(fullHeight.without);
   // A trailing code block has no prose baseline: the marker stays outside the code and inside the reply.
   wire.delta(turn, '\n\n```text\nCode stays unchanged\n```', 'reply-after-append');
   await expect(answer.locator('pre code')).toHaveText('Code stays unchanged');
   await expect(answer.locator('.turn-content .session-response-running-dot')).toHaveCount(0);
+  await expect(runningDot).toHaveClass(/is-in-gutter/);
   expect(await runningDot.evaluate(dot => {
     const rect = dot.getBoundingClientRect();
     const reply = dot.closest('.turn-message-block').getBoundingClientRect();
-    const code = dot.closest('.turn-message-block').querySelector('.code-block-wrapper').getBoundingClientRect();
-    return rect.left >= code.right && rect.right <= reply.right && rect.bottom <= reply.bottom;
+    return rect.left >= reply.left && rect.right <= reply.right && rect.top >= reply.top && rect.bottom <= reply.bottom;
   })).toBe(true);
   await page.setViewportSize(desktop);
   const details = page.locator('.session-tool-details');
