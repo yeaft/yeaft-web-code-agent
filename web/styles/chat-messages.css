@@ -259,32 +259,6 @@
   51%, 100% { opacity: 0; }
 }
 
-/* The live marker overlays the line end instead of changing the text width. */
-.turn-message-block:has(> .session-response-running-dot) { position: relative; }
-.turn-message-block:has(> .session-response-running-dot.is-in-gutter) { min-block-size: 14px; }
-.session-response-running-dot {
-  position: absolute;
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--text-primary);
-  pointer-events: none;
-  animation: session-response-pulse 1.5s ease-in-out infinite alternate;
-}
-.session-response-running-dot.is-in-gutter {
-  inset-inline-end: 4px;
-  inset-block-end: 4px;
-}
-
-@keyframes session-response-pulse {
-  from { opacity: 0.55; }
-  to { opacity: 1; }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .session-response-running-dot { animation: none; }
-}
-
 /* Typing Indicator */
 .typing-indicator {
   display: flex;

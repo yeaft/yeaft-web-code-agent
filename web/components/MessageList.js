@@ -113,6 +113,8 @@ export default {
 
       <!-- Messages when in conversation -->
       <div v-else class="messages" :class="{ 'has-concurrent-turns': splitActive }">
+        <!-- A tool-only reply has no transcript row; parallel lanes already announce their state. -->
+        <span v-if="toolsInStatus" class="response-sr-only session-tool-only-status" role="status">{{ !splitActive && turnProjection.hasToolOnlyResponse ? $t('chat.concurrent.running') : '' }}</span>
         <!-- Connecting banner: non-Claude provider session booting in background -->
         <div v-if="store.isConversationConnecting(store.currentConversation)" class="typing-status-banner typing-status-banner-connecting">
           <span class="typing-status-text typing-status-compact">
@@ -520,12 +522,13 @@ export default {
     const userTurnProjection = Vue.computed(() => orderUserTurnMessages(store.messages || [], currentSessionTurns.value));
 
     // Turn aggregation: group flat messages into turn groups
-    const turnGroups = Vue.computed(() => {
+    const turnProjection = Vue.computed(() => {
       const inlineMessages = orderResponseImageMessages(store.currentView === 'yeaft' ? userTurnProjection.value.messages : store.messages);
       const messages = store.currentView === 'yeaft'
         ? orderYeaftVpTurnMessagesByExecution(inlineMessages)
         : inlineMessages;
       const result = [];
+      let hasToolOnlyResponse = false;
       // Rendering can bucket parallel VP executions. Fork endpoints must still
       // follow transcript order, not the reordered visual row positions.
       const transcriptOrder = new Map(store.messages.map((message, index) => [message, index]));
@@ -599,9 +602,8 @@ export default {
           else if (Number.isFinite(persistedResponseMeta?.turnDurationMs)) currentTurn.totalMs = persistedResponseMeta.turnDurationMs;
           const hasVisible = !!(currentTurn.textContent || currentTurn.todoMsg || currentTurn.askMsg || currentTurn.imageMsgs.length);
           const hasInlineTools = currentTurn.toolMsgs.some(tool => !_props.toolsInStatus || tool.toolName === 'RouteForward');
-          // A running tool-only reply still has a status dot. Once it settles,
-          // its details remain reachable in the pane without an empty reply row.
-          if (hasVisible || hasInlineTools || currentTurn.isResponding) {
+          // Tools shown in the activity pane do not create an empty reply row.
+          if (hasVisible || hasInlineTools) {
             // task-708: render the speaker header on every VP-attributed
             // turn. The avatar (with its inline typing badge) is THE
             // surface that signals which VP is speaking + whether they
@@ -610,6 +612,8 @@ export default {
             // the user reported "无数遍".
             currentTurn.showSpeakerHeader = !!currentTurn.speakerVpId;
             result.push(currentTurn);
+          } else if (currentTurn.isResponding) {
+            hasToolOnlyResponse = true;
           }
           currentTurn = null;
         }
@@ -831,8 +835,9 @@ export default {
       // v0.1.757 as the price of keeping the typing indicator inside
       // the VP's own block.
 
-      return result;
+      return { turns: result, hasToolOnlyResponse };
     });
+    const turnGroups = Vue.computed(() => turnProjection.value.turns);
 
     const messageBlocks = Vue.computed(() => {
       // Group one user row plus the following AI replies into one virtual item.
@@ -1874,6 +1879,7 @@ export default {
       welcomeAgentSecret,
       welcomeSetupLoading,
       welcomeSetupError,
+      turnProjection,
       turnGroups,
       messageBlocks,
       historyBlocks, pendingTurns, splitActive, laneWaiting, concurrentTurnsRef, stopUserTurn, onReadPane, blockRenderContext,

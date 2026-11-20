@@ -171,121 +171,33 @@ test('one native Session turn shows its waiting indicator, retains the ordinary 
   const candidate = indicator.locator('.waiting-stage, .svg-running-cat');
   await expect(candidate).toHaveCount(1);
   const picked = await candidate.evaluate(element => ['hoops-scene', 'dragon-scene', 'svg-running-cat'].map(name => '.' + name).find(selector => element.matches(selector)));
+  const answer = page.locator('.assistant-turn');
+  const replyMarkers = page.locator('.assistant-turn .session-response-running-dot, .assistant-turn .cursor-blink');
   wire.delta(turn, 'Single answer begins');
-  await expect(page.locator('.assistant-turn').filter({ hasText: 'Single answer begins' })).toBeVisible();
-  // Streaming text takes over from the indicator.
+  await expect(answer).toContainText('Single answer begins');
+  // Streaming text replaces the waiting animation, with no blinking marker.
   await expect(indicator).toHaveCount(0);
-  const runningDot = page.locator('.session-response-running-dot');
-  await expect(runningDot).toBeVisible();
-  const expectDotAtTextEnd = async (container, { wraps = false, rtl = false, trailingControls = 0 } = {}) => {
-    await expect.poll(() => container.evaluate((el, { wraps, rtl, trailingControls }) => {
-      const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
-      let text, first, last;
-      while ((text = walker.nextNode())) {
-        if (!text.data.trim() || text.parentElement.closest('[hidden]')) continue;
-        first ||= text;
-        last = text;
-      }
-      const range = document.createRange();
-      range.setStart(first, first.data.search(/\S/));
-      range.setEnd(first, range.startOffset + 1);
-      const firstTop = range.getBoundingClientRect().top;
-      const end = last.data.trimEnd().length - trailingControls;
-      range.setStart(last, end - 1);
-      range.setEnd(last, end);
-      const glyph = range.getBoundingClientRect();
-      const dot = el.closest('.assistant-turn').querySelector('.session-response-running-dot').getBoundingClientRect();
-      const gap = rtl ? glyph.left - dot.right : dot.left - glyph.right;
-      const center = (dot.top + dot.bottom) / 2;
-      return { nextToGlyph: gap >= 2 && gap < 8, sameLine: center > glyph.top && center < glyph.bottom,
-        inViewport: dot.left >= 0 && dot.right <= document.documentElement.clientWidth,
-        wrappedIfExpected: !wraps || glyph.top > firstTop };
-    }, { wraps, rtl, trailingControls })).toEqual({ nextToGlyph: true, sameLine: true, inViewport: true, wrappedIfExpected: true });
-  };
-  const setTheme = theme => page.evaluate(theme => { document.documentElement.dataset.theme = theme; }, theme);
-  await setTheme('light');
-  await expect(runningDot).toHaveCSS('background-color', 'rgb(44, 44, 44)');
-  const firstLine = page.locator('.turn-text p').filter({ hasText: 'Single answer begins' });
-  await expectDotAtTextEnd(firstLine);
-  await firstLine.screenshot({ path: info.outputPath('running-dot-light-desktop.png'), animations: 'disabled' });
-  await expect(page.locator('.assistant-turn').getByRole('status')).toHaveText('Running');
-  await expect(page.locator('.assistant-turn .cursor-blink')).toHaveCount(0);
-  await page.emulateMedia({ reducedMotion: 'reduce' });
-  await expect(runningDot).toHaveCSS('animation-name', 'none');
-  await page.emulateMedia({ reducedMotion: 'no-preference' });
-  await expect(runningDot).toHaveCSS('animation-name', 'session-response-pulse');
+  await expect(answer.getByRole('status')).toHaveText('Running');
+  await expect(replyMarkers).toHaveCount(0);
   await expect(page.locator('.parallel-turn-tabs')).toHaveCount(0);
   wire.tool(turn, 'before-append', 'Bash', { command: 'printf test\n' });
   // Back after the text, the turn keeps the animation it started with.
   await expect(indicator.locator(picked)).toBeVisible();
-  await expect(runningDot).toBeVisible();
+  await expect(replyMarkers).toHaveCount(0);
   await wire.send('Extra detail for the same turn', turn);
   wire.tool(turn, 'after-append', 'Grep');
   // A new assistant row after a tool loop, not a delta into the old text row.
   wire.delta(turn, 'Appended answer finishes.', 'reply-after-append');
-  const answer = page.locator('.assistant-turn');
   await expect(answer).toHaveCount(1);
   await expect(answer).toContainText('Single answer begins');
   await expect(answer).toContainText('Appended answer finishes.');
-  // New chunks may replace the Markdown DOM and reflow the final line.
-  wire.delta(turn, '\n\n- A longer sentence that wraps onto the next line on a small screen and ends here in **bold.**', 'reply-after-append');
-  const lastLine = answer.locator('.turn-text li').filter({ hasText: 'A longer sentence' });
+
   await page.setViewportSize({ width: 320, height: desktop.height });
-  await setTheme('dark');
-  await expect(runningDot).toHaveCount(1);
-  await expect(runningDot).toHaveCSS('background-color', 'rgb(230, 228, 224)');
-  await expectDotAtTextEnd(lastLine, { wraps: true });
-  await expect(lastLine.locator('strong')).toHaveText('bold.');
-  await expect(answer.locator('.turn-content .session-response-running-dot')).toHaveCount(0);
-  await answer.screenshot({ path: info.outputPath('running-dot-dark-320.png'), animations: 'disabled' });
-  // The actual visual end of an RTL run can be on the left of its last glyph.
-  const rtl = 'RTL example: هذه هي نهاية الرد';
-  wire.delta(turn, '\n\n' + rtl, 'reply-after-append');
-  await expectDotAtTextEnd(answer.getByText(rtl, { exact: true }), { rtl: true });
-  // Fill a line to within a few pixels. A reserved 12px text gutter would
-  // make the same reply wrap while running and reflow when the dot disappears.
-  const fullLine = await answer.getByText(rtl, { exact: true }).evaluate(p => {
-    const probe = document.createElement('span');
-    probe.style.cssText = 'position:absolute;white-space:nowrap;';
-    p.append(probe);
-    const width = p.closest('.turn-content').clientWidth;
-    probe.textContent = 'This is the last line of the response';
-    while (probe.getBoundingClientRect().width + 6 < width) probe.textContent += 'i';
-    const text = probe.textContent;
-    probe.remove();
-    return text;
-  });
-  wire.delta(turn, '\n\n' + fullLine, 'reply-after-append');
-  const full = answer.getByText(fullLine, { exact: true });
-  await expectDotAtTextEnd(full);
-  const fullHeight = await full.evaluate(el => {
-    const bounds = el.getBoundingClientRect();
-    const dot = el.closest('.assistant-turn').querySelector('.session-response-running-dot');
-    const parent = dot.parentNode;
-    dot.remove();
-    const without = el.getBoundingClientRect();
-    parent.append(dot);
-    return { running: bounds.height, without: without.height, oneLine: parseFloat(getComputedStyle(el).lineHeight) };
-  });
-  expect(fullHeight.running).toBeCloseTo(fullHeight.oneLine, 1);
-  expect(fullHeight.running).toBe(fullHeight.without);
-  wire.delta(turn, '\n\nVisible response ends here<span hidden>not displayed</span>', 'reply-after-append');
-  const visibleLine = answer.locator('.turn-text p').filter({ hasText: 'Visible response ends here' });
-  await expect(visibleLine.locator('[hidden]')).toBeHidden();
-  await expectDotAtTextEnd(visibleLine);
-  wire.delta(turn, '\n\nThe dot skips zero-width controls&#8203;&#8206;', 'reply-after-append');
-  const controlsLine = answer.locator('.turn-text p').filter({ hasText: 'The dot skips zero-width controls' });
-  await expectDotAtTextEnd(controlsLine, { trailingControls: 2 });
-  // A trailing code block has no prose baseline: the marker stays outside the code and inside the reply.
-  wire.delta(turn, '\n\n```text\nCode stays unchanged\n```', 'reply-after-append');
-  await expect(answer.locator('pre code')).toHaveText('Code stays unchanged');
-  await expect(answer.locator('.turn-content .session-response-running-dot')).toHaveCount(0);
-  await expect(runningDot).toHaveClass(/is-in-gutter/);
-  expect(await runningDot.evaluate(dot => {
-    const rect = dot.getBoundingClientRect();
-    const reply = dot.closest('.turn-message-block').getBoundingClientRect();
-    return rect.left >= reply.left && rect.right <= reply.right && rect.top >= reply.top && rect.bottom <= reply.bottom;
-  })).toBe(true);
+  await page.evaluate(() => { document.documentElement.dataset.theme = 'dark'; });
+  wire.delta(turn, '\n\n- A longer sentence that wraps onto the next line on a small screen and ends here in **bold.**', 'reply-after-append');
+  await expect(answer.locator('.turn-text li strong')).toHaveText('bold.');
+  await expect(answer.getByRole('status')).toHaveText('Running');
+  await expect(replyMarkers).toHaveCount(0);
   await page.setViewportSize(desktop);
   const details = page.locator('.session-tool-details');
   const toolLines = details.locator('.tool-line');
@@ -307,7 +219,7 @@ test('one native Session turn shows its waiting indicator, retains the ordinary 
   await expect(page.locator('.message-user-block').filter({ hasText: 'Extra detail for the same turn' })).toHaveCount(1);
   wire.finish(turn);
   await expect(answer).not.toHaveClass(/streaming/);
-  await expect(runningDot).toHaveCount(0);
+  await expect(answer.getByRole('status')).toHaveCount(0);
   await expect(details.locator('.bash-output')).toContainText('before-append evidence');
   // The wait ends with the turn.
   await expect(indicator).toHaveCount(0);
@@ -318,7 +230,7 @@ test('one native Session turn shows its waiting indicator, retains the ordinary 
   await expect(answer).toContainText('Single answer begins');
   await expect(answer).toContainText('Appended answer finishes.');
   await expect(answer.locator('.tool-line')).toHaveCount(0);
-  await expect(runningDot).toHaveCount(0);
+  await expect(answer.getByRole('status')).toHaveCount(0);
   await showDetails();
   await expect(toolLines).toHaveCount(2);
   await expect(page.locator('.message-block')).toHaveCount(1);
@@ -369,8 +281,9 @@ test('stopping a sibling restores the ordinary live Session transcript and compl
   expect(await ordinaryWidth()).toBe('none');
   await expect(status('Earlier long question')).toBeVisible();
   await expect(status('Later quick question')).toBeVisible();
-  await expect(pane(page, a).locator('.session-response-running-dot')).toBeVisible();
-  await expect(pane(page, b).locator('.session-response-running-dot')).toBeVisible();
+  await expect(pane(page, a).locator('.assistant-turn').getByRole('status')).toHaveText('Running');
+  await expect(pane(page, b).locator('.assistant-turn').getByRole('status')).toHaveText('Running');
+  await expect(region.locator('.session-response-running-dot, .cursor-blink')).toHaveCount(0);
   wire.tool(b, 'parallel-work', 'FileGrep', { displayResource: 'only B.txt' });
   await expect(pane(page, b).locator('.typing-indicator .svg-running-cat')).toBeVisible();
   await expect(pane(page, a).locator('.typing-indicator')).toHaveCount(0);
@@ -412,8 +325,8 @@ test('stopping a sibling restores the ordinary live Session transcript and compl
   const afterStop = ['Later quick question', 'Earlier long question'];
   await expectOrdinaryLive('A is still researching', { order: afterStop });
   await expect(messages.getByText('B partial answer', { exact: true })).toBeVisible();
-  await expect(messages.locator('.assistant-turn').filter({ hasText: 'B partial answer' }).locator('.session-response-running-dot')).toHaveCount(0);
-  await expect(messages.locator('.session-response-running-dot')).toHaveCount(1);
+  await expect(messages.locator('.assistant-turn').filter({ hasText: 'B partial answer' }).getByRole('status')).toHaveCount(0);
+  await expect(messages.locator('.assistant-turn').filter({ hasText: 'A is still researching' }).getByRole('status')).toHaveText('Running');
   await expect(status('Later quick question')).toHaveCount(0);
   await expect(status('Earlier long question').locator('.yeaft-vp-timeline-abort')).toBeEnabled();
   await expect(scroller).toBeFocused();
@@ -522,11 +435,12 @@ test('stopping a sibling restores the ordinary live Session transcript and compl
   await expect.poll(() => narrowParagraph.evaluate(p => p.getBoundingClientRect().bottom
     - p.closest('.concurrent-turn-body').getBoundingClientRect().top)).toBeCloseTo(36, 0);
   // A terminal frame can arrive before the next root inventory. The lane
-  // is still mounted, but must not show a running dot or waiting animation.
+  // is still mounted, but its accessible running status and wait must clear.
   wire.finish(d, 'end_turn', { deferSnapshot: true });
   await expect(pane(page, d).locator('.assistant-turn')).not.toHaveClass(/streaming/);
-  await expect(pane(page, d).locator('.session-response-running-dot, .typing-indicator')).toHaveCount(0);
-  await expect(pane(page, a).locator('.session-response-running-dot')).toHaveCount(1);
+  await expect(pane(page, d).locator('.typing-indicator')).toHaveCount(0);
+  await expect(pane(page, d).locator('.assistant-turn').getByRole('status')).toHaveCount(0);
+  await expect(pane(page, a).locator('.assistant-turn').getByRole('status')).toHaveText('Running');
   wire.snapshot();
   await expect(region).toHaveCount(0);
   const restoredParagraph = messages.getByText(wideParagraph, { exact: true });
