@@ -375,6 +375,10 @@ test('ordinary Session scenes persist through a live switch and reload without e
   // in the frame between a mobile sidebar closing and the desktop layout.
   await expect(page.locator('.sidebar-navigation:visible')).toBeVisible();
   await page.locator('.sidebar-session-row:visible').filter({ hasText: 'Legacy collaboration' }).click();
+  // Legacy routing remains available without exposing reply authors or losing timestamps.
+  const historicalReply = page.locator('.vp-turn-block').filter({ hasText: 'linus preserved historical answer' });
+  await expect(historicalReply.locator('.vp-turn-block-time')).toBeVisible();
+  await expect(historicalReply.locator('.vp-turn-block-name, .vp-speaker-header')).toHaveCount(0);
   const legacyInput = composer.getByRole('textbox');
   await legacyInput.fill('@linus');
   await expect(page.locator('.vp-mention-autocomplete')).toBeVisible();

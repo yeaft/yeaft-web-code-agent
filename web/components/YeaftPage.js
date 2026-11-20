@@ -199,7 +199,7 @@ export default {
           :outline-state="historyOutlineState"
           :search-state="store.yeaftHistorySearchState"
           :active-message-id="historySearchActiveMessageId"
-          :hide-speaker-identity="sceneSession"
+          :hide-speaker-identity="ordinarySession"
           @query="onHistorySearchQuery"
           @move="historySearchActiveMessageId = $event"
           @preview="previewHistorySearchResult"
@@ -301,7 +301,7 @@ export default {
         <MessageList
           ref="messageListRef"
           v-if="!showSettings && !showOnboardingGuide && (conversationInventoryReady || store.yeaftVisibleMessages.length > 0) && (!isActiveGroupEmpty || store.yeaftVisibleMessages.length > 0 || store.yeaftInitialHistoryLoading)"
-          :hide-speaker-identity="sceneSession"
+          :hide-speaker-identity="ordinarySession"
           :tools-in-status="ordinarySession && !!topbarGroup"
           :live-execution-keys="sessionLiveExecutionKeys"
           :fork-from-turn-enabled="forkFromTurnEnabled"
