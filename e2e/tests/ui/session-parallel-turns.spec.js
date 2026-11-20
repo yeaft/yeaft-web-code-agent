@@ -177,6 +177,41 @@ test('one native Session turn shows its waiting indicator, retains the ordinary 
   await expect(indicator).toHaveCount(0);
   const runningDot = page.locator('.session-response-running-dot');
   await expect(runningDot).toBeVisible();
+  const expectDotAtTextEnd = async (container, { wraps = false } = {}) => {
+    await expect(container.locator('.session-response-running-dot')).toBeVisible();
+    const geometry = await container.evaluate(el => {
+      const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+      let text, first, last;
+      while ((text = walker.nextNode())) {
+        if (!text.textContent.trim()) continue;
+        first ||= text;
+        last = text;
+      }
+      const range = document.createRange();
+      range.setStart(first, first.textContent.search(/\S/));
+      range.setEnd(first, range.startOffset + 1);
+      const firstTop = range.getBoundingClientRect().top;
+      range.setStart(last, last.textContent.trimEnd().length - 1);
+      range.setEnd(last, last.textContent.trimEnd().length);
+      const end = range.getBoundingClientRect();
+      const dot = el.querySelector('.session-response-running-dot').getBoundingClientRect();
+      return { gap: dot.left - end.right, center: (dot.top + dot.bottom) / 2,
+        firstTop, lastTop: end.top, lastBottom: end.bottom, right: dot.right, viewport: innerWidth };
+    });
+    expect(geometry.center).toBeGreaterThan(geometry.lastTop);
+    expect(geometry.center).toBeLessThan(geometry.lastBottom);
+    expect(geometry.gap).toBeGreaterThanOrEqual(2);
+    expect(geometry.gap).toBeLessThan(8);
+    expect(geometry.right).toBeLessThanOrEqual(geometry.viewport);
+    if (wraps) expect(geometry.lastTop).toBeGreaterThan(geometry.firstTop);
+  };
+  const setTheme = theme => page.evaluate(theme => { document.documentElement.dataset.theme = theme; }, theme);
+  await setTheme('light');
+  await expect(runningDot).toHaveCSS('background-color', 'rgb(44, 44, 44)');
+  const firstLine = page.locator('.turn-text p').filter({ hasText: 'Single answer begins' });
+  await expectDotAtTextEnd(firstLine);
+  await firstLine.screenshot({ path: info.outputPath('running-dot-light-desktop.png'), animations: 'disabled' });
+  await expect(page.locator('.assistant-turn').getByRole('status')).toHaveText('Running');
   await expect(page.locator('.assistant-turn .cursor-blink')).toHaveCount(0);
   await page.emulateMedia({ reducedMotion: 'reduce' });
   await expect(runningDot).toHaveCSS('animation-name', 'none');
@@ -195,6 +230,28 @@ test('one native Session turn shows its waiting indicator, retains the ordinary 
   await expect(answer).toHaveCount(1);
   await expect(answer).toContainText('Single answer begins');
   await expect(answer).toContainText('Appended answer finishes.');
+  // New chunks may replace the Markdown DOM and reflow the final line.
+  wire.delta(turn, '\n\n- A longer sentence that wraps onto the next line on a small screen and ends here in **bold.**', 'reply-after-append');
+  const lastLine = answer.locator('.turn-text li').filter({ hasText: 'A longer sentence' });
+  await page.setViewportSize({ width: 320, height: desktop.height });
+  await setTheme('dark');
+  await expect(runningDot).toHaveCount(1);
+  await expect(runningDot).toHaveCSS('background-color', 'rgb(230, 228, 224)');
+  await expectDotAtTextEnd(lastLine, { wraps: true });
+  await expect(lastLine.locator('strong')).toHaveText('bold.');
+  await expect(lastLine.locator('strong .session-response-running-dot')).toHaveCount(0);
+  await answer.screenshot({ path: info.outputPath('running-dot-dark-320.png'), animations: 'disabled' });
+  // A trailing code block has no prose baseline: the marker stays outside the code and inside the reply.
+  wire.delta(turn, '\n\n```text\nCode stays unchanged\n```', 'reply-after-append');
+  await expect(answer.locator('pre code')).toHaveText('Code stays unchanged');
+  await expect(answer.locator('.turn-content .session-response-running-dot')).toHaveCount(0);
+  expect(await runningDot.evaluate(dot => {
+    const rect = dot.getBoundingClientRect();
+    const reply = dot.closest('.turn-message-block').getBoundingClientRect();
+    const code = dot.closest('.turn-message-block').querySelector('.code-block-wrapper').getBoundingClientRect();
+    return rect.left >= code.right && rect.right <= reply.right && rect.bottom <= reply.bottom;
+  })).toBe(true);
+  await page.setViewportSize(desktop);
   const details = page.locator('.session-tool-details');
   const toolLines = details.locator('.tool-line');
   const statusToggle = page.locator('.yeaft-session-status-toggle');

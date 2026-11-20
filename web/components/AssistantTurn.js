@@ -18,9 +18,59 @@ import {
   resolveMessageImageFileReference,
 } from '../utils/message-file-reference.js';
 
+// Follow the end of the rendered prose, not the end of the turn's block box.
+// Descend through ending lists and quotes without inserting UI into code,
+// tables, or links. Rich layouts and non-text responses use the end gutter.
+function responseLineEnd(body, marker) {
+  const block = body.querySelector(':scope > .turn-content')?.lastElementChild;
+  const segment = block?.matches('.turn-progress-group')
+    ? block.firstElementChild?.lastElementChild : block;
+  let line = segment?.querySelector(':scope > .turn-text');
+  while (line) {
+    let tail = line.lastChild;
+    while (tail && (tail === marker || tail.nodeType === Node.COMMENT_NODE || (tail.nodeType === Node.TEXT_NODE && !tail.textContent.trim())
+      || (tail.nodeType === Node.ELEMENT_NODE && tail.matches('br')))) tail = tail.previousSibling;
+    if (!tail) return null;
+    if (tail.nodeType === Node.TEXT_NODE || (tail.nodeType === Node.ELEMENT_NODE && tail.textContent.trim()
+      && tail.matches('a, b, strong, i, em, del, s, code, span:not(.math-display), sub, sup, kbd, mark'))) return tail;
+    if (tail.nodeType !== Node.ELEMENT_NODE || !tail.matches('blockquote, ul, ol, li, p, h1, h2, h3, h4, h5, h6')) return null;
+    line = tail;
+  }
+  return null;
+}
+
+// v-html replaces the prose DOM on new chunks. Reattach only the decorative
+// marker after Vue's patch; the separate, accessible status stays mounted.
+const responseMarkers = new WeakMap();
+function placeResponseMarker(body, { value: running }) {
+  let marker = responseMarkers.get(body);
+  if (!running) {
+    marker?.remove();
+    responseMarkers.delete(body);
+    return;
+  }
+  if (!marker) {
+    marker = body.ownerDocument.createElement('span');
+    marker.className = 'session-response-marker';
+    marker.setAttribute('aria-hidden', 'true');
+    const dot = body.ownerDocument.createElement('span');
+    dot.className = 'session-response-running-dot';
+    marker.append(dot);
+    responseMarkers.set(body, marker);
+  }
+  const tail = responseLineEnd(body, marker);
+  marker.classList.toggle('is-in-gutter', !tail);
+  if (tail) {
+    if (tail.nextSibling !== marker) tail.after(marker);
+  } else if (marker.parentNode !== body) {
+    body.append(marker);
+  }
+}
+
 export default {
   name: 'AssistantTurn',
   components: { ToolLine, AskCard, VpSpeakerHeader, ResponsePresentation },
+  directives: { responseMarker: { mounted: placeResponseMarker, updated: placeResponseMarker } },
   props: {
     turn: {
       type: Object,
@@ -98,7 +148,7 @@ export default {
         @stop-turn="onStopTurn"
       />
 
-      <div class="turn-message-block" :data-turn-id="turn.turnId || ''">
+      <div class="turn-message-block" :data-turn-id="turn.turnId || ''" v-response-marker="toolsInStatus && turn.isResponding">
         <!-- 1. Response content in transcript order -->
         <div v-if="responseBlocks.length > 0" class="turn-content">
           <div v-if="textSegments.length > 0" class="turn-header">
@@ -210,11 +260,8 @@ export default {
         <AskCard :ask-msg="turn.askMsg" @submit="onAskSubmit" />
       </div>
 
-      <div v-if="toolsInStatus && turn.isResponding" class="session-response-running" role="status">
-        <span class="session-response-running-dot" aria-hidden="true"></span>
-        <span class="response-sr-only">{{ $t('chat.concurrent.running') }}</span>
       </div>
-      </div>
+      <span v-if="toolsInStatus && turn.isResponding" class="response-sr-only" role="status">{{ $t('chat.concurrent.running') }}</span>
 
       <!-- 6. Response footer actions (visible on hover) -->
       <div
@@ -738,8 +785,7 @@ export default {
               padding: `${pad}px`,
             },
             filter: (node) => {
-              if (node.classList && (node.classList.contains('turn-header') || node.classList.contains('screenshot-btn'))) return false;
-              return true;
+              return !node.matches?.('.turn-header, .screenshot-btn, .session-response-marker');
             }
           });
 

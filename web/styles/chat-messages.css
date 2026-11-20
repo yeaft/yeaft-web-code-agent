@@ -259,20 +259,37 @@
   51%, 100% { opacity: 0; }
 }
 
-/* An active Session response stays marked between streaming chunks. */
-.session-response-running {
-  display: flex;
-  align-items: center;
-  min-height: 14px;
-  margin-top: 3px;
+/* Anchor the dot to the text baseline without taking up space on the line. */
+.session-response-marker {
+  position: relative;
+  pointer-events: none;
+}
+
+/* Use the end gutter when there is no trailing line of prose. */
+.turn-message-block:has(> .session-response-marker.is-in-gutter) {
+  position: relative;
+  min-block-size: 14px;
+}
+.session-response-marker.is-in-gutter {
+  position: absolute;
+  inset-inline-end: 4px;
+  inset-block-end: 4px;
 }
 
 .session-response-running-dot {
-  width: 7px;
-  height: 7px;
+  position: absolute;
+  inset-inline-start: 4px;
+  inset-block-end: 0.22em;
+  width: 6px;
+  height: 6px;
   border-radius: 50%;
-  background: var(--success);
+  background: var(--text-primary);
   animation: session-response-pulse 1.5s ease-in-out infinite alternate;
+}
+
+.session-response-marker.is-in-gutter > .session-response-running-dot {
+  inset-inline: auto 0;
+  inset-block-end: 0;
 }
 
 @keyframes session-response-pulse {
@@ -2538,6 +2555,13 @@
 @media (max-width: 768px) {
   .yeaft-page .turn-content {
     padding-right: 0;
+  }
+
+  /* Keep the trailing dot within the transcript, even if the last line is
+     full. This space is available in the copy-action gutter on desktop. */
+  .yeaft-page .turn-text:has(.session-response-marker),
+  .yeaft-page .turn-message-block:has(> .session-response-marker.is-in-gutter) > .turn-content {
+    padding-inline-end: 12px;
   }
 }
 
