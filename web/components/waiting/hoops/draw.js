@@ -135,11 +135,13 @@ function fadeOut(ctx, play, colors, width, height) {
 
 /** The court and hoop with nobody on it: the world beyond the play on a wide stage. */
 function drawBackdrop(ctx, { play, camera, width, height, colors }) {
+  ctx.save();
   ctx.lineCap = 'round';
   ctx.lineJoin = 'round';
   drawCourt(ctx, camera, colors, play.angle);
   drawHoop(ctx, camera, colors, play.angle, play, 'back');
   drawHoop(ctx, camera, colors, play.angle, play, 'front');
+  ctx.restore();
   fadeOut(ctx, play, colors, width, height);
 }
 

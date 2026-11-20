@@ -10,11 +10,25 @@ const TURNAROUND = 40;
 const REDUCED_MOTION = '(prefers-reduced-motion: reduce)';
 
 /**
+ * With motion reduced the cat stays where it starts and keeps to its calm
+ * moods, each for this long: it walks on the spot, gets its breath back and
+ * naps. Still moving, so the wait never looks stuck, but nothing races
+ * across the row or flickers.
+ */
+const CALM_PHASES = ['speed-normal', 'speed-tired', 'speed-napping'];
+const CALM_PHASE_MS = 4000;
+
+/**
  * Where the cat is and what it is doing after `elapsedMs` of its 19 s loop.
  * @param {number} travelPx How far it can walk before turning round.
+ * @param {{ calm?: boolean }} [options] `calm` for reduced motion.
  * @returns {{ phase: string, transform: string }} Mood class and position.
  */
-export function resolveRunningCatFrame(elapsedMs, travelPx = 0) {
+export function resolveRunningCatFrame(elapsedMs, travelPx = 0, { calm = false } = {}) {
+  if (calm) {
+    const phase = CALM_PHASES[Math.floor(Math.max(0, elapsedMs) / CALM_PHASE_MS) % CALM_PHASES.length];
+    return { phase, transform: 'translate3d(0px, 0, 0) scaleX(1)' };
+  }
   const elapsed = Math.max(0, elapsedMs) % 19000;
   let progress = 0;
   let direction = 1;
@@ -144,8 +158,7 @@ const component = {
       const sprite = spriteRef.value;
       if (walk && sprite) {
         const travelPx = Math.max(0, (walk.parentElement?.clientWidth || 0) - TURNAROUND);
-        // With motion reduced the cat stands where it starts; its CSS stills the rest.
-        const frame = resolveRunningCatFrame(motionQuery?.matches ? 0 : Date.now() - startedAt, travelPx);
+        const frame = resolveRunningCatFrame(Date.now() - startedAt, travelPx, { calm: !!motionQuery?.matches });
         walk.style.transform = frame.transform;
         for (const phase of PHASES) sprite.classList.toggle(phase, phase === frame.phase);
       }

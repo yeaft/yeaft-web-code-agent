@@ -18,6 +18,10 @@ export const scene = {
   name: 'DragonWaiting',
   className: 'dragon-scene',
   posterMs: DRAGON_POSTER_MS,
+  // With motion reduced: stand-off, fists meet, kick, the challenger charges,
+  // the wave lands, the energy sphere, wave against sphere, blast, the
+  // winner stands.
+  stills: [500, 1500, 3250, 5000, 6000, 8250, 10250, 12000, 14250],
   tokens: {
     ink: '--dragon-ink', soft: '--dragon-soft', surface: '--dragon-surface', gi: '--dragon-gi', armor: '--dragon-armor',
     ground: '--dragon-ground', shade: '--dragon-shade', dust: '--dragon-dust', flash: '--dragon-flash', spark: '--dragon-spark',

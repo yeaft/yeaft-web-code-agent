@@ -16,6 +16,9 @@ export const scene = {
   name: 'HoopsWaiting',
   className: 'hoops-scene',
   posterMs: HOOPS_POSTER_MS,
+  // With motion reduced: bring-up, size-up, crossover, defender down, release,
+  // ball at the rim, swish, celebration.
+  stills: [1750, 2750, 4250, 5250, 6500, 7750, 8000, 9000],
   tokens: {
     ink: '--hoops-ink', soft: '--hoops-soft', surface: '--hoops-surface',
     line: '--hoops-line', arc: '--hoops-arc', rig: '--hoops-rig', net: '--hoops-net', rim: '--hoops-rim',

@@ -38,7 +38,7 @@ test('one native Session turn shows its waiting indicator, retains the ordinary 
   await expect(hoops).toHaveClass(/is-open/);
   await expect(hoops).toHaveClass(/is-cut/);
   await expect(dots).toHaveCount(0);
-  await expect(hoops).toHaveAttribute('data-held', 'false');
+  await expect(hoops).toHaveAttribute('data-motion', 'live');
   await expect.poll(() => drawnPixels(hoops)).toBeGreaterThan(200);
   // A wide column keeps the picture's height and centres the stage in the
   // column; a phone column shows the 11:5 picture across its width.
@@ -54,26 +54,32 @@ test('one native Session turn shows its waiting indicator, retains the ordinary 
   const wide = await stageBox();
   expect(wide.width).toBeGreaterThan(400);
   expect(wide.offCentre).toBeLessThan(1);
+  // The backing store follows the canvas once ResizeObserver has reported.
+  await expect.poll(async () => { const box = await stageBox(); return Math.abs(box.backing - 160 / box.width); }).toBeLessThan(0.01);
   await page.setViewportSize({ width: 320, height: desktop.height });
   await expect.poll(async () => (await stageBox()).width).toBeLessThan(300);
   await expect.poll(async () => { const box = await stageBox(); return Math.abs(box.height - box.width * 5 / 11); }).toBeLessThan(1);
-  const narrow = await stageBox();
-  expect(narrow.backing).toBeCloseTo(5 / 11, 1);
-  expect(narrow.offCentre).toBeLessThan(1);
+  await expect.poll(async () => Math.abs((await stageBox()).backing - 5 / 11)).toBeLessThan(0.02);
+  expect((await stageBox()).offCentre).toBeLessThan(1);
   await page.setViewportSize(desktop);
   // Panels can settle differently after the round trip; wait for the stage to stop resizing.
   await expect.poll(async () => { const before = (await stageBox()).width; await page.waitForTimeout(250); return (await stageBox()).width === before; }).toBe(true);
   await expect(cat).toHaveCount(0);
   await expect(page.locator('.yeaft-session-status-pane canvas')).toHaveCount(0);
-  // Reduced motion holds one frame; without it the play moves on.
+  // Reduced motion never leaves the wait frozen: the scene's key moments
+  // take turns, each held still and dissolved into the next. Without it the
+  // play moves on.
   await page.emulateMedia({ reducedMotion: 'reduce' });
-  await expect(hoops).toHaveAttribute('data-held', 'true');
-  const held = await drawnFrame(hoops);
-  await page.waitForTimeout(200);
-  expect(await drawnFrame(hoops)).toBe(held);
+  await expect(hoops).toHaveAttribute('data-motion', 'calm');
+  const firstStill = await hoops.getAttribute('data-still');
+  await expect.poll(() => hoops.getAttribute('data-still'), { timeout: 6000, intervals: [100] }).not.toBe(firstStill);
+  await page.waitForTimeout(600); // Past the dissolve, the still holds.
+  const still = await drawnFrame(hoops);
+  await page.waitForTimeout(300);
+  expect(await drawnFrame(hoops)).toBe(still);
   await page.emulateMedia({ reducedMotion: 'no-preference' });
-  await expect(hoops).toHaveAttribute('data-held', 'false');
-  await expect.poll(() => drawnFrame(hoops)).not.toBe(held);
+  await expect(hoops).toHaveAttribute('data-motion', 'live');
+  await expect.poll(() => drawnFrame(hoops)).not.toBe(still);
   // A new choice applies to the wait on screen. Every animation offered in
   // Settings plays without the dots, off leaves the dots alone, and random
   // settles on exactly one animation.
@@ -86,6 +92,13 @@ test('one native Session turn shows its waiting indicator, retains the ordinary 
   await chooseWaitingAnimation('cat');
   await expect(cat).toBeVisible();
   await expect(indicator.locator('.waiting-stage')).toHaveCount(0);
+  // With motion reduced the cat stays where it starts but keeps moving.
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await page.waitForTimeout(600);
+  await expect(cat).toHaveClass(/speed-(normal|tired|napping)/);
+  expect(await cat.evaluate(el => new DOMMatrix(getComputedStyle(el.parentElement).transform).m41)).toBe(0);
+  expect(await cat.evaluate(el => el.getAnimations({ subtree: true }).length)).toBeGreaterThan(0);
+  await page.emulateMedia({ reducedMotion: 'no-preference' });
   await expect(dots).toHaveCount(0);
   // A waiting status colours the dots, not an animation standing in their place.
   const setCompacting = on => page.evaluate((compacting) => {

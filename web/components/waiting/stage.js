@@ -14,8 +14,13 @@
  *   className  Class on the stage root. The scene's stylesheet hangs its
  *              colour tokens on it, and tests find the scene by it.
  *   tokens     { key: '--css-token' } colours to resolve for `paint`.
- *   posterMs   Scene time of the frame held for reduced motion and for
- *              connections that have stalled.
+ *   posterMs   Scene time of the frame held while the connection has
+ *              stalled: nothing is progressing, so nothing moves.
+ *   stills     Scene times of its key moments, in story order. With motion
+ *              reduced the stage shows these in turn instead of playing the
+ *              scene: each held still for CALM_STILL_MS and dissolved into
+ *              the next, so the wait still visibly goes on without camera
+ *              moves, shake or flashes. Defaults to [posterMs].
  *   paint(ctx, { elapsedMs, width, height, dpr, colors, core, backdrop })
  *              Draw one frame. `elapsedMs` counts from the cut to the scene;
  *              `width`/`height` are CSS px and the context is already scaled
@@ -42,6 +47,27 @@ import { holdWaitClock, readWaitClock } from '../../utils/wait-clock.js';
 
 /** How long a wait shows the "waiting" card before the stage cuts to the scene. */
 export const STAGE_INTRO_MS = 900;
+/** With motion reduced, how long each still is shown, its dissolve included. */
+export const CALM_STILL_MS = 2400;
+const CALM_DISSOLVE_MS = 450;
+
+/**
+ * Which still is on show `t` ms into a wait with motion reduced, and how far
+ * it has dissolved in from the one before. The first still is simply there.
+ * @param {number} count Number of stills.
+ * @returns {{ index: number, previous: number, mix: number, nextInMs: number }}
+ *   `mix` goes 0 → 1 over the dissolve; `nextInMs` is how long the picture
+ *   stays as it is (0 while dissolving).
+ */
+export function calmStill(count, t) {
+  const time = Math.max(0, t);
+  const step = Math.floor(time / CALM_STILL_MS);
+  const into = time - step * CALM_STILL_MS;
+  const index = step % count;
+  const u = step === 0 || count < 2 ? 1 : Math.min(1, into / CALM_DISSOLVE_MS);
+  const mix = u * u * (3 - 2 * u);
+  return { index, previous: (index + count - 1) % count, mix, nextInMs: mix < 1 ? 0 : CALM_STILL_MS - into };
+}
 /** Height of the picture scenes are composed for, as a fraction of its width. */
 export const STAGE_RATIO = 5 / 11;
 
@@ -212,23 +238,79 @@ export function createStageAnimation(scene) {
       let viewObserver = null;
       let themeObserver = null;
       let motionQuery = null;
+      let wakeTimer = null;
+      // With motion reduced: the stills on show, each painted once onto a
+      // canvas of its own and kept while it is the current or the last one.
+      const calmFrames = new Map();
+      const stills = scene.stills?.length ? scene.stills : [scene.posterMs];
 
-      const held = () => reducedMotion || STALLED.has(props.status);
+      /** 'live' plays the scene, 'calm' shows its stills in turn, 'held' stays on its poster. */
+      const motion = () => (STALLED.has(props.status) ? 'held' : (reducedMotion ? 'calm' : 'live'));
       const pixelRatio = () => Math.min(window.devicePixelRatio || 1, 3);
 
+      /** One still, drawn at the stage's size the first time it is wanted. */
+      const calmFrame = (index) => {
+        if (calmFrames.has(index)) return calmFrames.get(index);
+        const canvas = document.createElement('canvas');
+        canvas.width = ctx.canvas.width;
+        canvas.height = ctx.canvas.height;
+        const still = canvas.getContext('2d');
+        if (!still) return null;
+        still.setTransform(dpr, 0, 0, dpr, 0, 0);
+        const where = paintStageFrame(still, scene, { elapsedMs: stills[index], width, height, dpr, colors }, scratch) || {};
+        const frame = { canvas, where };
+        calmFrames.set(index, frame);
+        return frame;
+      };
+
+      /** The still for `t`, dissolving in from the one before. Returns ms the picture holds. */
+      const paintCalm = (t) => {
+        const { index, previous, mix, nextInMs } = calmStill(stills.length, t);
+        for (const key of [...calmFrames.keys()]) if (key !== index && key !== previous) calmFrames.delete(key);
+        const current = calmFrame(index);
+        const before = mix < 1 ? calmFrame(previous) : null;
+        ctx.setTransform(1, 0, 0, 1, 0, 0);
+        if (before) {
+          ctx.globalAlpha = 1 - mix;
+          ctx.drawImage(before.canvas, 0, 0);
+          // Added on, so the two blend straight across: before·(1 − mix) + current·mix.
+          ctx.globalCompositeOperation = 'lighter';
+        }
+        if (current) {
+          ctx.globalAlpha = mix;
+          ctx.drawImage(current.canvas, 0, 0);
+        }
+        ctx.globalAlpha = 1;
+        ctx.globalCompositeOperation = 'source-over';
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+        if (host.dataset.still !== String(index)) host.dataset.still = String(index);
+        return { where: current?.where || {}, holdMs: nextInMs };
+      };
+
+      /** Paint the picture as it is now. Returns ms until it next changes (0: next frame). */
       const paint = () => {
-        if (!ctx || !open.value || width < 8) return;
-        const still = held();
+        if (!ctx || !open.value || width < 8) return Infinity;
+        const mode = motion();
         const now = Date.now();
-        const elapsedMs = still ? scene.posterMs : Math.max(0, now - readWaitClock(props.clockKey, now) - STAGE_INTRO_MS);
+        const elapsedMs = Math.max(0, now - readWaitClock(props.clockKey, now) - STAGE_INTRO_MS);
         if (!colors) colors = readStageColors(host, ctx, scene.tokens);
+        if (mode !== 'calm' && calmFrames.size) calmFrames.clear();
         ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
         ctx.clearRect(0, 0, width, height);
-        const where = paintStageFrame(ctx, scene, { elapsedMs, width, height, dpr, colors }, scratch) || {};
+        let where;
+        let holdMs = 0;
+        if (mode === 'calm') {
+          ({ where, holdMs } = paintCalm(elapsedMs));
+        } else {
+          where = paintStageFrame(ctx, scene, { elapsedMs: mode === 'held' ? scene.posterMs : elapsedMs, width, height, dpr, colors }, scratch) || {};
+          holdMs = mode === 'held' ? Infinity : 0;
+          if (host.dataset.still) host.dataset.still = '';
+        }
         // Where the scene is, for tests and debugging. Written only on change.
         if (host.dataset.beat !== (where.beat || '')) host.dataset.beat = where.beat || '';
         if (host.dataset.shot !== (where.shot || '')) host.dataset.shot = where.shot || '';
-        if (host.dataset.held !== String(still)) host.dataset.held = String(still);
+        if (host.dataset.motion !== mode) host.dataset.motion = mode;
+        return holdMs;
       };
 
       const resize = () => {
@@ -242,25 +324,46 @@ export function createStageAnimation(scene) {
         dpr = pixelRatio();
         canvas.width = Math.max(1, Math.round(width * dpr));
         canvas.height = Math.max(1, Math.round(height * dpr));
+        calmFrames.clear();
         refresh();
       };
 
-      const tick = () => {
+      /**
+       * Paint again after `holdMs`: on the next frame while the picture moves,
+       * later while a still is up, never while held. Only while the scene is
+       * open and on screen.
+       */
+      const schedule = (holdMs) => {
+        if (disposed || !open.value || !onScreen || !Number.isFinite(holdMs)) return;
+        if (holdMs <= 0) {
+          frameId = requestAnimationFrame(tick);
+          return;
+        }
+        wakeTimer = setTimeout(() => {
+          wakeTimer = null;
+          frameId = requestAnimationFrame(tick);
+        }, holdMs);
+      };
+      const stop = () => {
+        if (frameId !== null) cancelAnimationFrame(frameId);
+        frameId = null;
+        if (wakeTimer !== null) clearTimeout(wakeTimer);
+        wakeTimer = null;
+      };
+
+      function tick() {
         frameId = null;
         if (disposed) return;
         // Browser zoom or a move between monitors changes the ratio without a resize.
         if (pixelRatio() !== dpr) { resize(); return; }
-        paint();
-        if (open.value && onScreen && !held()) frameId = requestAnimationFrame(tick);
-      };
+        schedule(paint());
+      }
 
-      /** Repaint now, and run the loop only while the scene is open, on screen and playing. */
+      /** Repaint now, and keep painting for as long as the picture changes. */
       function refresh() {
-        if (frameId !== null) cancelAnimationFrame(frameId);
-        frameId = null;
+        stop();
         if (disposed) return;
-        paint();
-        if (open.value && onScreen && !held()) frameId = requestAnimationFrame(tick);
+        schedule(paint());
       }
 
       /**
@@ -293,6 +396,7 @@ export function createStageAnimation(scene) {
       };
       const recolor = () => {
         colors = null;
+        calmFrames.clear();
         refresh();
       };
       const onMotionChange = (event) => {
@@ -337,8 +441,8 @@ export function createStageAnimation(scene) {
 
       Vue.onBeforeUnmount(() => {
         disposed = true;
-        if (frameId !== null) cancelAnimationFrame(frameId);
-        frameId = null;
+        stop();
+        calmFrames.clear();
         if (openTimer !== null) clearTimeout(openTimer);
         openTimer = null;
         releaseClock?.();
