@@ -3770,15 +3770,16 @@ export class Engine {
             if (signal?.aborted) throw new LLMAbortError();
             // No native state/tool pairs enter this fresh conversation. The
             // summary is untrusted history, never a new user authorization.
-            // The user's uploads stay native unless the fresh segment could not
-            // also run below the rollover threshold; above it, every later
-            // request would pay for another summary, so markers replace them.
+            // The user's uploads stay native only while they leave at least
+            // half of the pre-rollover budget for new work. A seed near the
+            // threshold would roll over again after every tool step, paying
+            // for another summary each time, so markers replace them instead.
             const seedInputTokens = seed => estimateHistoryMessagesTokens([seed])
               + estimateMessagesTokens(rolloverSystem, [])
               + approxTokens(JSON.stringify(toolDefs));
             let nextRolloverSeed = contextRolloverSeed(summary, rolloverUserRequests);
             const mediaSeedInput = seedInputTokens(nextRolloverSeed);
-            if (mediaSeedInput >= currentContextWindow * CONTEXT_ROLLOVER_INPUT_RATIO
+            if (mediaSeedInput >= currentContextWindow * CONTEXT_ROLLOVER_INPUT_RATIO / 2
                 || mediaSeedInput + rolloverOutputReserve > currentContextWindow) {
               nextRolloverSeed = contextRolloverSeed(summary, rolloverUserRequests, { omitMedia: true });
             }

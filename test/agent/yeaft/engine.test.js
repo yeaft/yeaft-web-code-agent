@@ -378,10 +378,11 @@ describe('Engine', () => {
         return { type: 'image', source: { type: 'base64', media_type: 'image/gif', data: data.toString('base64') } };
       };
       // Encoded size is not visual size: ~800K base64 chars for a 16x16
-      // frame. A 5208x5208 frame (186x186 patches) puts the seed at ~36K,
-      // which fits the window but sits above its 85% rollover threshold.
+      // frame. A 4424x4424 frame (158x158 patches) puts the seed at ~27K: it
+      // fits the window and the 85% threshold (34K), but leaves less than half
+      // of that budget (17K) for new work, so it would roll over again.
       const reference = gif(16, 16, 600_000);
-      const oversized = mode === 'append' ? [gif(5208, 5208, 64)] : [];
+      const oversized = mode === 'append' ? [gif(4424, 4424, 64)] : [];
       const isReference = block => block?.type === 'image' && block.source?.data === reference.source.data;
       const textOf = content => typeof content === 'string' ? content
         : content.filter(block => block.type === 'text').map(block => block.text).join('');

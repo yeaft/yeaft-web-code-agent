@@ -45,7 +45,10 @@ describe('ViewImage owned Session attachments', () => {
     expect([png, jpeg, webp].map(bytes => imageDimensionsFromBase64(bytes.toString('base64')))).toEqual([
       { width: 1, height: 1 }, { width: 640, height: 480 }, { width: 1908, height: 858 },
     ]);
-    expect(imageDimensionsFromBase64(jpeg.toString('base64').replace(/^(.{20})/, '$1\n'))).toBeNull();
+    // Non-canonical base64 is refused up front, even where no header read would see it.
+    const jpegBase64 = jpeg.toString('base64');
+    expect(imageDimensionsFromBase64(`${jpegBase64.slice(0, 40)}\n\n\n\n${jpegBase64.slice(40)}`)).toBeNull();
+    expect(imageDimensionsFromBase64(`${jpegBase64}A`)).toBeNull();
     // An inline data URL is image bytes, not text: a 1x1 image costs the per-image minimum.
     expect(estimateContentPartTokens({ type: 'input_image', image_url: `data:image/png;base64,${png.toString('base64')}` })).toBe(1024);
     expect(await read(other)).toMatchObject({ code: 'image_path_denied', errorEffect: 'none' });
