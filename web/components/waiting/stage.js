@@ -266,7 +266,9 @@ export function createStageAnimation(scene) {
       /** The still for `t`, dissolving in from the one before. Returns ms the picture holds. */
       const paintCalm = (t) => {
         const { index, previous, mix, nextInMs } = calmStill(stills.length, t);
-        for (const key of [...calmFrames.keys()]) if (key !== index && key !== previous) calmFrames.delete(key);
+        // Keep the still before only while it is dissolving out.
+        const keep = (key) => key === index || (mix < 1 && key === previous);
+        for (const key of [...calmFrames.keys()]) if (!keep(key)) calmFrames.delete(key);
         const current = calmFrame(index);
         const before = mix < 1 ? calmFrame(previous) : null;
         ctx.setTransform(1, 0, 0, 1, 0, 0);
