@@ -19,15 +19,28 @@ import {
 } from '../utils/message-file-reference.js';
 
 function renderedTextEnd(text, range) {
-  const end = text.data.trimEnd().length;
+  // Formatting controls can terminate a text node without painting a glyph.
+  let end = text.data.replace(/[\s\p{Default_Ignorable_Code_Point}]+$/u, '').length;
   if (!end || getComputedStyle(text.parentElement).visibility !== 'visible') return null;
-  range.setStart(text, end - 1);
-  range.setEnd(text, end);
-  const glyph = range.getBoundingClientRect();
-  if (!glyph.width || !glyph.height) return null;
-  range.collapse(false);
-  const caret = range.getBoundingClientRect();
-  return caret.height ? { glyph, caret } : null;
+  while (end > 0) {
+    const last = text.data.charCodeAt(end - 1);
+    const start = last >= 0xDC00 && last <= 0xDFFF && end > 1
+      && text.data.codePointAt(end - 2) > 0xFFFF ? end - 2 : end - 1;
+    range.setStart(text, start);
+    range.setEnd(text, end);
+    const glyph = range.getBoundingClientRect();
+    if (glyph.width && glyph.height) {
+      range.collapse(false);
+      const caret = range.getBoundingClientRect();
+      if (caret.height) return { glyph, caret };
+    } else if (!glyph.height) {
+      // Do not walk a whole non-rendered text node one character at a time.
+      range.selectNodeContents(text);
+      if (!range.getBoundingClientRect().height) break;
+    }
+    end = start;
+  }
+  return null;
 }
 
 // Follow the last visible prose, ignoring hidden formatting at the tail.

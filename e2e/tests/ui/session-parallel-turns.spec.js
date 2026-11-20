@@ -177,8 +177,8 @@ test('one native Session turn shows its waiting indicator, retains the ordinary 
   await expect(indicator).toHaveCount(0);
   const runningDot = page.locator('.session-response-running-dot');
   await expect(runningDot).toBeVisible();
-  const expectDotAtTextEnd = async (container, { wraps = false, rtl = false } = {}) => {
-    await expect.poll(() => container.evaluate((el, { wraps, rtl }) => {
+  const expectDotAtTextEnd = async (container, { wraps = false, rtl = false, trailingControls = 0 } = {}) => {
+    await expect.poll(() => container.evaluate((el, { wraps, rtl, trailingControls }) => {
       const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
       let text, first, last;
       while ((text = walker.nextNode())) {
@@ -190,7 +190,7 @@ test('one native Session turn shows its waiting indicator, retains the ordinary 
       range.setStart(first, first.data.search(/\S/));
       range.setEnd(first, range.startOffset + 1);
       const firstTop = range.getBoundingClientRect().top;
-      const end = last.data.trimEnd().length;
+      const end = last.data.trimEnd().length - trailingControls;
       range.setStart(last, end - 1);
       range.setEnd(last, end);
       const glyph = range.getBoundingClientRect();
@@ -200,7 +200,7 @@ test('one native Session turn shows its waiting indicator, retains the ordinary 
       return { nextToGlyph: gap >= 2 && gap < 8, sameLine: center > glyph.top && center < glyph.bottom,
         inViewport: dot.left >= 0 && dot.right <= document.documentElement.clientWidth,
         wrappedIfExpected: !wraps || glyph.top > firstTop };
-    }, { wraps, rtl })).toEqual({ nextToGlyph: true, sameLine: true, inViewport: true, wrappedIfExpected: true });
+    }, { wraps, rtl, trailingControls })).toEqual({ nextToGlyph: true, sameLine: true, inViewport: true, wrappedIfExpected: true });
   };
   const setTheme = theme => page.evaluate(theme => { document.documentElement.dataset.theme = theme; }, theme);
   await setTheme('light');
@@ -273,6 +273,9 @@ test('one native Session turn shows its waiting indicator, retains the ordinary 
   const visibleLine = answer.locator('.turn-text p').filter({ hasText: 'Visible response ends here' });
   await expect(visibleLine.locator('[hidden]')).toBeHidden();
   await expectDotAtTextEnd(visibleLine);
+  wire.delta(turn, '\n\nThe dot skips zero-width controls&#8203;&#8206;', 'reply-after-append');
+  const controlsLine = answer.locator('.turn-text p').filter({ hasText: 'The dot skips zero-width controls' });
+  await expectDotAtTextEnd(controlsLine, { trailingControls: 2 });
   // A trailing code block has no prose baseline: the marker stays outside the code and inside the reply.
   wire.delta(turn, '\n\n```text\nCode stays unchanged\n```', 'reply-after-append');
   await expect(answer.locator('pre code')).toHaveText('Code stays unchanged');
