@@ -297,7 +297,6 @@
    row, a stage animation gets a picture of its own. With animations off it
    holds the three dots. */
 .typing-indicator.is-inline { min-height: 8px; }
-.typing-indicator.is-stage { flex-wrap: wrap; row-gap: var(--space-1); padding: var(--space-2) 0; }
 /* Status text keeps the place it had after the dots: clear of where a small
    animation starts, and on a line of its own under a stage, centred like it. */
 .typing-indicator.is-inline > .typing-status-text { margin-left: 44px; }
@@ -430,9 +429,9 @@
 /* ===================== */
 
 .markdown-body {
-  line-height: 1.65;
+  line-height: var(--line-height-relaxed);
   word-wrap: break-word;
-  font-size: 14px;
+  font-size: var(--font-size-md);
 }
 
 /* KaTeX inherits the theme's text color. Only the formula scrolls on mobile. */

@@ -23,6 +23,7 @@ const drawnFrame = scene => scene.locator('canvas').evaluate(canvas => canvas.to
 
 test('one native Session turn shows its waiting indicator, retains the ordinary transcript and merges appended tools across replay', async ({ chatPage: page, mockAgent }, info) => {
   const wire = await sessionTurnsFixture(page, mockAgent);
+  await page.evaluate(() => { document.documentElement.dataset.theme = 'light'; });
   const indicator = page.locator('.typing-indicator');
   const hoops = indicator.locator('.hoops-scene');
   const cat = indicator.locator('.svg-running-cat');
@@ -41,30 +42,52 @@ test('one native Session turn shows its waiting indicator, retains the ordinary 
   await expect(hoops).toHaveAttribute('data-motion', 'live');
   await expect.poll(() => drawnPixels(hoops)).toBeGreaterThan(200);
   await page.clock.setSystemTime(Date.now());
-  // A wide column keeps the picture's height and centres the stage in the
-  // column; a phone column shows the 11:5 picture across its width.
-  const stageBox = () => hoops.evaluate((el) => {
+  // Measure against the conversation's actual body text, including the
+  // animation's vertical padding in the five-line budget.
+  const fiveLines = await indicator.evaluate((el) => {
+    const probe = document.createElement('div');
+    probe.className = 'markdown-body';
+    el.closest('.messages').append(probe);
+    const height = 5 * parseFloat(getComputedStyle(probe).lineHeight);
+    probe.remove();
+    return height;
+  });
+  const stageBox = scene => scene.evaluate((el) => {
     const stage = el.getBoundingClientRect();
     const canvas = el.querySelector('canvas');
-    const column = el.closest('.messages').getBoundingClientRect();
-    return { width: stage.width, height: stage.height, backing: canvas.height / canvas.width,
-      offCentre: Math.abs(stage.left + stage.right - column.left - column.right) / 2 };
+    const row = el.parentElement.getBoundingClientRect();
+    return { width: stage.width, height: stage.height, rowHeight: row.height,
+      canvasHeight: canvas.getBoundingClientRect().height, backing: canvas.height / canvas.width,
+      offCentre: Math.abs(stage.left + stage.right - row.left - row.right) / 2 };
   });
+  const expectCompactStage = async (scene) => {
+    const box = await stageBox(scene);
+    expect(box.rowHeight, 'animation and padding fit within five lines').toBeLessThanOrEqual(fiveLines + 0.02);
+    expect(box.canvasHeight).toBeCloseTo(box.height, 1);
+    expect(box.offCentre).toBeLessThan(1);
+    // The backing store follows the canvas once ResizeObserver has reported.
+    await expect.poll(async () => { const current = await stageBox(scene); return Math.abs(current.backing - current.height / current.width); }).toBeLessThan(0.01);
+  };
   const desktop = page.viewportSize();
-  await expect.poll(async () => (await stageBox()).height).toBe(160);
-  const wide = await stageBox();
-  expect(wide.width).toBeGreaterThan(400);
-  expect(wide.offCentre).toBeLessThan(1);
-  // The backing store follows the canvas once ResizeObserver has reported.
-  await expect.poll(async () => { const box = await stageBox(); return Math.abs(box.backing - 160 / box.width); }).toBeLessThan(0.01);
+  expect((await stageBox(hoops)).width).toBeGreaterThan(400);
+  await expectCompactStage(hoops);
+  await indicator.screenshot({ path: info.outputPath('waiting-stage-desktop.png') });
+  await page.evaluate(() => { document.documentElement.dataset.theme = 'dark'; });
   await page.setViewportSize({ width: 320, height: desktop.height });
-  await expect.poll(async () => (await stageBox()).width).toBeLessThan(300);
-  await expect.poll(async () => { const box = await stageBox(); return Math.abs(box.height - box.width * 5 / 11); }).toBeLessThan(1);
-  await expect.poll(async () => Math.abs((await stageBox()).backing - 5 / 11)).toBeLessThan(0.02);
-  expect((await stageBox()).offCentre).toBeLessThan(1);
+  await expect.poll(async () => (await stageBox(hoops)).width).toBeLessThan(300);
+  await expectCompactStage(hoops);
+  await indicator.screenshot({ path: info.outputPath('waiting-stage-mobile.png') });
+  // A conversation column narrower than the capped picture still uses the
+  // original 11:5 aspect ratio instead of stretching or cropping it.
+  await indicator.evaluate(el => { el.style.maxWidth = '200px'; });
+  const narrow = await stageBox(hoops);
+  expect(narrow.width).toBe(200);
+  expect(narrow.height).toBeCloseTo(narrow.width * 5 / 11, 1);
+  await expectCompactStage(hoops);
+  await indicator.evaluate(el => { el.style.removeProperty('max-width'); });
   await page.setViewportSize(desktop);
   // Panels can settle differently after the round trip; wait for the stage to stop resizing.
-  await expect.poll(async () => { const before = (await stageBox()).width; await page.waitForTimeout(250); return (await stageBox()).width === before; }).toBe(true);
+  await expect.poll(async () => { const before = (await stageBox(hoops)).width; await page.waitForTimeout(250); return (await stageBox(hoops)).width === before; }).toBe(true);
   await expect(cat).toHaveCount(0);
   await expect(page.locator('.yeaft-session-status-pane canvas')).toHaveCount(0);
   // Reduced motion never leaves the wait frozen: the scene's key moments
@@ -88,6 +111,7 @@ test('one native Session turn shows its waiting indicator, retains the ordinary 
   const dragon = indicator.locator('.dragon-scene');
   await expect(dragon).toHaveText('');
   await expect(dragon.locator('canvas')).toBeVisible();
+  await expectCompactStage(dragon);
   await expect(hoops).toHaveCount(0);
   await expect(dots).toHaveCount(0);
   await expect.poll(() => drawnPixels(dragon)).toBeGreaterThan(200);
