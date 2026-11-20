@@ -19,13 +19,17 @@ import {
 } from '../utils/message-file-reference.js';
 
 function renderedTextEnd(text, range) {
-  // Formatting controls can terminate a text node without painting a glyph.
-  let end = text.data.replace(/[\s\p{Default_Ignorable_Code_Point}]+$/u, '').length;
-  if (!end || getComputedStyle(text.parentElement).visibility !== 'visible') return null;
-  while (end > 0) {
-    const last = text.data.charCodeAt(end - 1);
+  const value = text.data;
+  if (!value.length || getComputedStyle(text.parentElement).visibility !== 'visible') return null;
+  for (let end = value.length; end > 0;) {
+    const last = value.charCodeAt(end - 1);
     const start = last >= 0xDC00 && last <= 0xDFFF && end > 1
-      && text.data.codePointAt(end - 2) > 0xFFFF ? end - 2 : end - 1;
+      && value.codePointAt(end - 2) > 0xFFFF ? end - 2 : end - 1;
+    // Scan backward so controls inside a long reply don't slow down the dot.
+    if (/[\s\p{Default_Ignorable_Code_Point}]/u.test(value.slice(start, end))) {
+      end = start;
+      continue;
+    }
     range.setStart(text, start);
     range.setEnd(text, end);
     const glyph = range.getBoundingClientRect();
