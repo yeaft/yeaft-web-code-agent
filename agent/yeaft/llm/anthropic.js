@@ -69,6 +69,7 @@ export function applyAnthropicThinking(body, model, effort, effortContext = {}) 
 
 import { ProviderContextBudgetError, ProviderStateError, createProviderContext, createProviderState, replayProviderState, providerStateBytes, applyAnthropicCaching, stripAnthropicCaching, reasoningUsage, reportedUsageFields, hasUsageCounts, validateAnthropicRequestPrefixes, supportsAnthropicPreservedThinking } from './provider-state.js';
 import { fetchWithPromptCacheFallback } from './prompt-cache.js';
+import { ANTHROPIC_IMAGE_LIMITS, classifyAnthropicImageLimit, validateAnthropicImages } from './anthropic-images.js';
 
 /** Signed continuations cannot recover by compacting after wire settings grow. */
 function validateSignedOutputBudget(body, replayed, contextOutputLimit) {
@@ -204,6 +205,8 @@ export class AnthropicAdapter extends LLMAdapter {
     this.#streamIdlePolicy = { streamIdleTimeoutMs, highEffortStreamIdleTimeoutMs };
   }
 
+  getImageLimits() { return ANTHROPIC_IMAGE_LIMITS; }
+
   #headers() {
     const headers = {
       'Content-Type': 'application/json',
@@ -302,11 +305,12 @@ export class AnthropicAdapter extends LLMAdapter {
     return result;
   }
 
-  #uncachedBody(body, replayed) {
+  #uncachedBody(body, replayed, imageLimits) {
     // Use the pre-cache shape, including shorthand text accepted by gateways
     // that do not implement cache blocks. Do not rewrite signed history.
     const wire = toWellFormedJson(stripAnthropicCaching(body));
     validateAnthropicRequestPrefixes(wire, replayed);
+    if (imageLimits) validateAnthropicImages(wire, imageLimits);
     return wire;
   }
 
@@ -326,7 +330,7 @@ export class AnthropicAdapter extends LLMAdapter {
    *   When provided, reads the `retry-after` header so the engine can honor
    *   the server hint instead of guessing a backoff delay.
    */
-  #classifyError(status, body, response = null) {
+  #classifyError(status, body, response = null, imageLimits) {
     const authHint = `auth=${this.#authHeaderMode}`;
     if (status === 401 || status === 403) {
       return classifyAuthError(status, body);
@@ -339,6 +343,8 @@ export class AnthropicAdapter extends LLMAdapter {
       const retryAfter = retryAfterFromResponse(response);
       return new LLMRateLimitError(`Anthropic overloaded (${authHint}): ${body}`, status, retryAfter);
     }
+    const imageError = imageLimits && classifyAnthropicImageLimit(status, body);
+    if (imageError) return imageError;
     const policyError = classifyPolicyError(status, body);
     if (policyError) return policyError;
     if (body.includes('prompt is too long') || body.includes('max_tokens')) {
@@ -354,7 +360,7 @@ export class AnthropicAdapter extends LLMAdapter {
    * @param {{ model: string, system: string, messages: import('./adapter.js').UnifiedMessage[], tools?: import('./adapter.js').UnifiedToolDef[], maxTokens?: number, contextOutputLimit?: number, effort?: 'medium'|'xhigh'|'max', effortSource?: 'user'|'auto', effortContext?: object, signal?: AbortSignal, onRawExchange?: ({rawRequest, rawResponse}) => void }} params
    * @returns {AsyncGenerator<import('./adapter.js').StreamEvent>}
    */
-  async *stream({ model, system, messages, tools, maxTokens = 16384, contextOutputLimit, effort, effortSource, effortContext, extraBody, providerContext, requestIdentity, onProviderDiagnostics, effortConstraint = null, onEffortDecision = null, signal, onRawExchange, rawExchangeMaxBytes = 512 * 1024, onRequestStart, streamIdleTimeoutMs, maxRequestBodyBytes }) {
+  async *stream({ model, system, messages, tools, maxTokens = 16384, contextOutputLimit, effort, effortSource, effortContext, extraBody, providerContext, requestIdentity, onProviderDiagnostics, effortConstraint = null, onEffortDecision = null, signal, onRawExchange, rawExchangeMaxBytes = 512 * 1024, onRequestStart, streamIdleTimeoutMs, maxRequestBodyBytes, imageLimits }) {
     if (signal?.aborted) throw new LLMAbortError();
 
     const context = providerContext || createProviderContext({ protocol: 'anthropic', baseUrl: this.#baseUrl, staticApiKey: this.#apiKey, model });
@@ -393,13 +399,14 @@ export class AnthropicAdapter extends LLMAdapter {
     const caching = applyAnthropicCaching(body, context, onProviderDiagnostics);
     const requestBody = toWellFormedJson(caching.body);
     validateAnthropicRequestPrefixes(requestBody, replayed);
+    if (imageLimits) validateAnthropicImages(requestBody, imageLimits);
     const idleMs = resolveStreamIdleTimeoutMs(this.#streamIdlePolicy, effortDecision.effective, streamIdleTimeoutMs);
 
     const url = `${this.#baseUrl}/v1/messages`;
     const headers = { ...this.#headers(), ...midConversationHeaders(requestBody) };
 
     const { response, errorBody, body: wireBody } = await this.#dispatch({ url, headers, requestBody, signal, maxRequestBodyBytes,
-      withoutCache: caching.sent ? () => this.#uncachedBody(body, replayed) : undefined, context, onProviderDiagnostics,
+      withoutCache: caching.sent ? () => this.#uncachedBody(body, replayed, imageLimits) : undefined, context, onProviderDiagnostics,
       onRequestStart: () => onRequestStart?.({ effort: effortDecision.effective, streamIdleTimeoutMs: idleMs }) });
     // Capture the final request after any pre-generation cache field rejection.
     const rawRequest = redactRawRequest({ url, method: 'POST', headers, body: wireBody });
@@ -418,7 +425,7 @@ export class AnthropicAdapter extends LLMAdapter {
           });
         } catch { /* ignore */ }
       }
-      throw this.#classifyError(response.status, errorBody, response);
+      throw this.#classifyError(response.status, errorBody, response, imageLimits);
     }
 
     // Some native-compatible gateways return a complete JSON response even
@@ -825,7 +832,7 @@ export class AnthropicAdapter extends LLMAdapter {
    * models silently drop the param. max_tokens auto-widens to budget+1024
    * when needed.
    */
-  async call({ model, system, messages, maxTokens = 4096, contextOutputLimit, effort, effortSource, effortContext, extraBody, providerContext, requestIdentity, onProviderDiagnostics, effortConstraint = null, onEffortDecision = null, signal, onRequestStart, maxRequestBodyBytes }) {
+  async call({ model, system, messages, maxTokens = 4096, contextOutputLimit, effort, effortSource, effortContext, extraBody, providerContext, requestIdentity, onProviderDiagnostics, effortConstraint = null, onEffortDecision = null, signal, onRequestStart, maxRequestBodyBytes, imageLimits }) {
     if (signal?.aborted) throw new LLMAbortError();
 
     const context = providerContext || createProviderContext({ protocol: 'anthropic', baseUrl: this.#baseUrl, staticApiKey: this.#apiKey, model });
@@ -858,12 +865,13 @@ export class AnthropicAdapter extends LLMAdapter {
     const caching = applyAnthropicCaching(body, context, onProviderDiagnostics);
     const requestBody = toWellFormedJson(caching.body);
     validateAnthropicRequestPrefixes(requestBody, replayed);
+    if (imageLimits) validateAnthropicImages(requestBody, imageLimits);
 
     const url = `${this.#baseUrl}/v1/messages`;
     const headers = { ...this.#headers(), ...midConversationHeaders(requestBody) };
     const { response, errorBody, body: wireBody } = await this.#dispatch({ url, headers, requestBody, signal, maxRequestBodyBytes,
-      withoutCache: caching.sent ? () => this.#uncachedBody(body, replayed) : undefined, context, onProviderDiagnostics, onRequestStart });
-    if (!response.ok) throw this.#classifyError(response.status, errorBody, response);
+      withoutCache: caching.sent ? () => this.#uncachedBody(body, replayed, imageLimits) : undefined, context, onProviderDiagnostics, onRequestStart });
+    if (!response.ok) throw this.#classifyError(response.status, errorBody, response, imageLimits);
 
     const result = await response.json();
     for (const block of result.content || []) {

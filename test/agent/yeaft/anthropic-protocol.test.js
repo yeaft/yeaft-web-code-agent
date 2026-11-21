@@ -3,6 +3,10 @@ import { AnthropicAdapter } from '../../../agent/yeaft/llm/anthropic.js';
 import { OpenAIResponsesAdapter } from '../../../agent/yeaft/llm/openai-responses.js';
 import { GeminiAdapter } from '../../../agent/yeaft/llm/gemini.js';
 import { LLMRequestTooLargeError } from '../../../agent/yeaft/llm/adapter.js';
+import { ANTHROPIC_IMAGE_LIMITS, fitAnthropicImages, LLMImageLimitError } from '../../../agent/yeaft/llm/anthropic-images.js';
+import { makeImagePreview } from '../../../agent/yeaft/image-preview.js';
+import { imageDimensionsFromBase64 } from '../../../agent/yeaft/image-dimensions.js';
+import { createRequire } from 'node:module';
 import { createProviderContext } from '../../../agent/yeaft/llm/provider-state.js';
 import { existsSync, mkdtempSync, readdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -72,6 +76,78 @@ describe('Anthropic evolving Messages protocol', () => {
         expect(fetch).toHaveBeenCalledTimes(2);
         expect(fetch.mock.lastCall[1].body).toBe(serialized);
       }
+    }
+
+    const png = (width, height = 16) => {
+      const data = Buffer.from('89504e470d0a1a0a0000000d494844520000000000000000', 'hex');
+      data.writeUInt32BE(width, 16); data.writeUInt32BE(height, 20);
+      return { type: 'image', source: { type: 'base64', media_type: 'image/png', data: data.toString('base64') } };
+    };
+    const small = png(3000);
+    const large = png(16, 3303);
+    const toolCall = { role: 'assistant', toolCalls: [{ id: 'read', name: 'Read', input: { fake: png(8001) } }] };
+    const result = { role: 'tool', toolCallId: 'read', content: [large], isError: true };
+    const mixedRequest = count => ({ ...params, onRequestStart: admission, imageLimits: ANTHROPIC_IMAGE_LIMITS,
+      messages: [{ role: 'user', content: Array(count).fill(small) }, toolCall, result] });
+    fetch.mockReset().mockImplementation(async () => json({ content: [{ type: 'text', text: 'valid' }], stop_reason: 'end_turn' }));
+    admission.mockClear();
+    await adapter.call(mixedRequest(19));
+    expect(JSON.parse(fetch.mock.calls[0][1].body).messages.at(-1).content[0]).toMatchObject({
+      type: 'tool_result', tool_use_id: 'read', is_error: true, content: [large],
+    });
+    await expect(adapter.call(mixedRequest(20))).rejects.toBeInstanceOf(LLMImageLimitError);
+    await expect(collect(adapter.stream(mixedRequest(20)))).rejects.toMatchObject({ reasonCode: 'request_image_limit' });
+    await expect(adapter.call({ ...mixedRequest(0), messages: [{ role: 'user', content: [png(16, 8001)] }] })).rejects.toBeInstanceOf(LLMImageLimitError);
+    await expect(adapter.call({ ...mixedRequest(101), messages: [{ role: 'user', content: Array(101).fill(small) }] })).rejects.toBeInstanceOf(LLMImageLimitError);
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(admission).toHaveBeenCalledTimes(1);
+    // Direct callers such as Work Center do not opt into Session fitting.
+    await adapter.call({ ...mixedRequest(20), imageLimits: undefined });
+    expect(fetch).toHaveBeenCalledTimes(2);
+    expect(admission).toHaveBeenCalledTimes(2);
+    const repeated = mixedRequest(20);
+    const fitted = await fitAnthropicImages(repeated.messages, ANTHROPIC_IMAGE_LIMITS);
+    expect(fitted.messages[0].content.filter(part => part.type === 'image')).toHaveLength(19);
+    expect(fitted.messages[2]).toBe(result);
+    expect(repeated.messages[0].content).toEqual(Array(20).fill(small));
+    await adapter.call({ ...repeated, messages: fitted.messages });
+    const gatewayError = 'At least one image exceeds max allowed dimensions for many-image requests: 2500 pixels';
+    fetch.mockImplementation(async () => new Response(JSON.stringify({ error: { message: gatewayError } }), { status: 400 }));
+    const fittedRequest = { ...repeated, messages: fitted.messages };
+    for (const dispatch of [request => adapter.call(request), request => collect(adapter.stream(request))]) {
+      await expect(dispatch(fittedRequest)).rejects.toMatchObject({ reasonCode: 'request_image_limit', gatewayManyImages: true });
+      await expect(dispatch({ ...fittedRequest, imageLimits: undefined })).rejects.toThrow(gatewayError);
+    }
+    const opaque = { type: 'image', source: { type: 'url', url: 'https://example.invalid/image.png' } };
+    const withOpaque = [{ role: 'user', content: [...Array(20).fill(small), opaque] }];
+    const opaqueFit = await fitAnthropicImages(withOpaque, ANTHROPIC_IMAGE_LIMITS);
+    expect(opaqueFit.messages[0].content.filter(part => part.type === 'image')).toHaveLength(20);
+    expect(opaqueFit.messages[0].content.at(-1)).toBe(opaque);
+
+    const frozen = [{ role: 'user', content: [small] }];
+    const cannotPreview = await fitAnthropicImages([...frozen, { role: 'user', content: [png(9000)] }], ANTHROPIC_IMAGE_LIMITS, {
+      frozenLength: 1, canRollover: true, preview: makeImagePreview,
+    });
+    expect(cannotPreview).toMatchObject({ count: 1, previews: 0, omitted: 1 });
+    expect(cannotPreview.messages[0]).toBe(frozen[0]);
+    expect(cannotPreview.messages[1].content[0].text).toContain('smaller copy or crop');
+
+    const require = createRequire(new URL('../../../agent/package.json', import.meta.url));
+    // The encoder is optional; test the real conversion wherever it is installed.
+    let sharp;
+    try { sharp = require('sharp'); } catch { /* Unsupported platform. */ }
+    if (sharp) {
+      const data = await sharp({ create: { width: 9000, height: 24, channels: 3, background: '#112233' } }).png().toBuffer();
+      const original = { ...small, source: { ...small.source, data: data.toString('base64') } };
+      const withPreview = await fitAnthropicImages([{ role: 'user', content: [original] }], ANTHROPIC_IMAGE_LIMITS, {
+        preview: makeImagePreview, pathForImage: () => 'original.png',
+      });
+      expect(withPreview).toMatchObject({ count: 1, previews: 1, omitted: 0 });
+      const [marker, image] = withPreview.messages[0].content;
+      expect(marker.text).toContain('original.png');
+      expect(image.source.media_type).toBe('image/webp');
+      expect(imageDimensionsFromBase64(image.source.data)).toMatchObject({ width: 8000 });
+      expect(imageDimensionsFromBase64(original.source.data)).toMatchObject({ width: 9000 });
     }
   });
 

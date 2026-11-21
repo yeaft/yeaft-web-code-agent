@@ -22,6 +22,7 @@
  */
 
 import { LLMAdapter, LLMAuthError } from './adapter.js';
+import { ANTHROPIC_IMAGE_LIMITS } from './anthropic-images.js';
 import { cloneGeminiOptions } from './gemini-options.js';
 import { getGeminiThinkingProfile, getThinkingCapability, normalizeEffort, normalizeEffortOptions, parseModelRef, resolveGeminiEffort } from '../models.js';
 import {
@@ -667,6 +668,10 @@ export class AdapterRouter extends LLMAdapter {
     return {
       captureStream: params => this.#streamWithSnapshot(params, dispatchSnapshot),
       call: params => this.#callWithSnapshot(params, dispatchSnapshot),
+      getImageLimits: model => {
+        const hit = dispatchSnapshot.modelToProvider.get(model) || this.#resolveProviderQualifiedFallback(model, dispatchSnapshot);
+        return hit && this.#effectiveProtocol(hit.provider, hit.entry) === 'anthropic' ? ANTHROPIC_IMAGE_LIMITS : null;
+      },
     };
   }
 
