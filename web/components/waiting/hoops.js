@@ -22,7 +22,7 @@ export const scene = {
   // the shot leaving his hand, the ball going in), one possession after another.
   stills: HOOPS_STILLS,
   tokens: {
-    ink: '--hoops-ink', soft: '--hoops-soft', surface: '--hoops-surface',
+    ink: '--hoops-ink', surface: '--hoops-surface',
     line: '--hoops-line', arc: '--hoops-arc', rig: '--hoops-rig', net: '--hoops-net', rim: '--hoops-rim',
     ball: '--hoops-ball', seam: '--hoops-seam', glint: '--hoops-glint', dust: '--hoops-dust', shade: '--hoops-shade', text: '--hoops-text',
     skin: '--hoops-skin', hair: '--hoops-hair', jersey: '--hoops-jersey', trim: '--hoops-trim', number: '--hoops-number',

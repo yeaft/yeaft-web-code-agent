@@ -9,7 +9,6 @@
 
 .hoops-scene {
   --hoops-ink: var(--text-primary);
-  --hoops-soft: var(--text-muted);
   --hoops-surface: var(--bg-main);
   --hoops-line: #d6d1c9;
   --hoops-arc: #aba59b;
@@ -38,7 +37,6 @@
 
 [data-theme="dark"] .hoops-scene {
   --hoops-ink: var(--text-secondary);
-  --hoops-soft: var(--text-muted);
   --hoops-surface: var(--bg-main);
   --hoops-line: #3d3935;
   --hoops-arc: #5d5750;

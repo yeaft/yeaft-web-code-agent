@@ -9,10 +9,50 @@
  * Pure: (play frame, picture size) → camera, in play space.
  */
 import { makeCamera, mixShots } from '../stick/camera.js';
-import { mix, mix3, smooth, span } from '../stick/vec.js';
+import { add, mix, mix3, mul, smooth, span, unit } from '../stick/vec.js';
 import { RIM } from './play.js';
 
 const AT_RIM = [0.3, RIM.y - 0.5, 0];
+/** How far toward the picture's edge the ball may get before the camera turns after it. */
+const SAFE = 0.62;
+/** How much of that again the turn takes to come up to speed, so it eases in instead of snapping on. */
+const EASE = 0.12;
+
+/**
+ * Turn a shot about its eye just far enough to keep `point` in the picture:
+ * up, and to either side. Nothing changes while the point is well inside,
+ * and the turn eases in as it nears the edge.
+ */
+function keepInPicture(shot, point, width, height) {
+  const camera = makeCamera(shot, width, height);
+  const [across, above, depth] = camera.view(point);
+  if (depth < 0.5) return shot;
+  const half = Math.tan((shot.fov * Math.PI) / 360);
+  const past = (tangent, limit) => {
+    const edge = Math.atan(limit);
+    const over = Math.atan(Math.abs(tangent)) - edge;
+    return over <= 0 ? 0 : Math.sign(tangent) * over * over / (over + EASE * edge);
+  };
+  const tilt = Math.max(0, past(above / depth, SAFE * half));
+  const pan = past(across / depth, SAFE * half * width / height);
+  if (!tilt && !pan) return shot;
+  const { forward, right, up } = camera;
+  const aim = unit(add(add(mul(forward, Math.cos(tilt) * Math.cos(pan)), mul(up, Math.sin(tilt))), mul(right, Math.sin(pan) * Math.cos(tilt))));
+  const far = Math.hypot(shot.target[0] - shot.eye[0], shot.target[1] - shot.eye[1], shot.target[2] - shot.eye[2]);
+  return { eye: shot.eye, target: add(shot.eye, mul(aim, far)), fov: shot.fov };
+}
+
+/**
+ * Where to look while a shot is in the air, having looked at `from` before
+ * it: up after the ball, part of the way from the rim to it, so the arc stays
+ * in the picture, and in on the rim (`zoom`) as the ball comes down to it.
+ */
+function alongArc(play, from, zoom, toward) {
+  const { marks, time: t } = play;
+  if (!play.ball.loose || t >= marks.swish) return mix3(from, AT_RIM, zoom);
+  const up = smooth(span(t, marks.flight, marks.flight + 0.4));
+  return mix3(mix3(from, mix3(AT_RIM, play.ball.at, toward), up), AT_RIM, zoom);
+}
 
 const VIEWS = {
   /** Travels with him, ahead and to one side. */
@@ -49,7 +89,7 @@ const VIEWS = {
   /** Wide enough for the finish and the ball's arc, then in on the rim. */
   finish(play) {
     const zoom = smooth(span(play.time, play.marks.swish - 0.5, play.marks.swish - 0.08));
-    return { eye: [-9.5, 7.4, 19 * play.side], target: mix3([-4.4, 6.6, 0], AT_RIM, zoom), fov: mix(39.5, 14, zoom) };
+    return { eye: [-9.5, 7.4, 19 * play.side], target: alongArc(play, [-4.4, 6.6, 0], zoom, 0.5), fov: mix(39.5, 14, zoom) };
   },
   /**
    * Behind the shooter, low enough to show his feet. Once the ball is on its
@@ -61,7 +101,7 @@ const VIEWS = {
     const zoom = smooth(span(t, marks.swish - 0.63, marks.swish - 0.15));
     return {
       eye: mix3([x - 14.6, 9.0, z + 5.0], [x - 13.8, 8.8, z + 4.7], drift),
-      target: mix3([x + 14.9, 1.6 + 1.8 * smooth(span(t, marks.flight, marks.flight + 0.6)), z + 0.2], AT_RIM, zoom),
+      target: alongArc(play, [x + 14.9, 1.6 + 1.8 * smooth(span(t, marks.flight, marks.flight + 0.6)), z + 0.2], zoom, 0.5),
       fov: mix(36, 10, zoom),
     };
   },
@@ -98,6 +138,9 @@ export function resolveHoopsCamera(play, width, height) {
     const jolt = 0.1 * play.shake * Math.sin(play.time * 74);
     shot = { eye: [shot.eye[0], shot.eye[1] + jolt, shot.eye[2] + 0.8 * jolt], target: [shot.target[0], shot.target[1] - 0.6 * jolt, shot.target[2]], fov: shot.fov };
   }
+  // From the pickup until it is through the net the ball stays in the
+  // picture: the camera looks up after a shot that would otherwise leave it.
+  if (play.time >= play.marks.gather && play.time < play.marks.swish) shot = keepInPicture(shot, play.ball.at, width, height);
   const camera = makeCamera(shot, width, height);
   camera.shot = name;
   return camera;

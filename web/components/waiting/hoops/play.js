@@ -263,7 +263,7 @@ const STEPBACK = {
     ]),
   ]),
   beaten: 4.0, skid: [4.1, 1], seat: 4.58,
-  stills: [1.9, 2.5, 3.2, 4.45, 5.49, 7.02, 7.95],
+  stills: [1.9, 2.5, 3.2, 4.45, 5.49, 6.91, 7.95],
 };
 
 /**
@@ -348,8 +348,9 @@ const LONG_TWO = {
     [3.36, { x: -19.68, z: -2.62, yaw: 0.08, hip: 2.6, lean: 0.28, twist: 0, toes: [-0.32, -0.1], R: [-19.5, -2.2] }],
     [3.5, { hip: 2.52, lean: 0.28 }],
     [3.66, { hip: 3.22, lean: 0.06, headPitch: -0.12 }],
-    [3.92, { x: -19.58, lean: 0, L: [-19.65, -3.05], R: [-19.4, -2.2], hands: [[0.6, -0.12, 1.25], FOLLOW] }, { slide: BOTH }],
-    [4.16, { x: -19.43, hip: 3.0, lean: 0.08, L: [-19.5, -3.05], R: [-19.25, -2.2], hands: [[0.55, -0.15, 1.0], FOLLOW] }, { slide: BOTH }],
+    // He comes down a little ahead of where he left: one move of the feet, long enough to count as one.
+    [3.92, { x: -19.56, lean: 0, hands: [[0.6, -0.12, 1.25], FOLLOW] }],
+    [4.16, { x: -19.31, hip: 3.0, lean: 0.08, L: [-19.38, -3.05], R: [-19.13, -2.2], hands: [[0.55, -0.15, 1.0], FOLLOW] }, { slide: BOTH }],
     [4.36, { hip: 3.16, lean: 0.05, headPitch: 0, hands: [[0.3, -0.14, -1.2], [0.6, 0.1, 0.2]] }],
   ]),
   jumps: [[3.64, 4.14, 0.95]],
