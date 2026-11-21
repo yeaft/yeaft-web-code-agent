@@ -375,7 +375,9 @@ function fitContentToBudget(content, tokenBudget) {
     }
 
     if (cost <= remaining) {
-      out.push({ ...part });
+      // Retained binary parts are read-only. Preserve their identity so
+      // provider-only provenance survives a context-budget retry.
+      out.push(BINARY_PART_TYPES.has(type) ? part : { ...part });
       remaining -= cost;
       continue;
     }
@@ -1360,7 +1362,7 @@ export function buildHistoryBuckets(snapshot, options = {}) {
  * @param {{ contextWindow:number, systemTokens?:number, toolSchemaTokens?:number,
  * outputReserve?:number, historyMessageCount?:number, historyTokenBudget?:number,
  * maxMessageCount?:number, language?:string,
- * repeatedToolResultRefs?:Map<string,string> }} options
+ * repeatedToolResultRefs?:Map<string,string>, toolResultCompactionRatio?:number }} options
  * @returns {{messages:Array<object>, meta:object}}
  */
 export function fitProviderRequestToContext(messages, options = {}) {
@@ -1423,6 +1425,13 @@ export function fitProviderRequestToContext(messages, options = {}) {
         language: options.language,
       })
     : [];
+  const ratio = options.toolResultCompactionRatio;
+  // Account for the history that actually survived fitting, not its maximum
+  // allowance. This soft pass only shortens older tool result text.
+  const softBudget = ratio > 0 && ratio < 1 ? Math.floor(contextWindow * ratio)
+    - staticTokens + bucketCap(options.outputReserve, 0) - estimateMessagesTokens(history) : Infinity;
+  const softCompact = compactCurrentToolResults(current, Math.max(0, softBudget));
+  current = softCompact.messages;
   const fullResults = new Map(currentSource.filter(message => message?.role === 'tool')
     .map(message => [message.toolCallId, message]));
   const deduplicated = deduplicateRetainedToolResults(current, options.repeatedToolResultRefs, fullResults);
@@ -1440,8 +1449,8 @@ export function fitProviderRequestToContext(messages, options = {}) {
       currentMessagesAfter: current.length,
       droppedHistoryMessages: historySource.length - history.length,
       droppedCurrentMessages: currentSource.length - current.length,
-      compactedToolResults: compact.compactedToolResults,
-      compactedToolResultTokensSaved: compact.compactedToolResultTokensSaved,
+      compactedToolResults: compact.compactedToolResults + softCompact.compactedToolResults,
+      compactedToolResultTokensSaved: compact.compactedToolResultTokensSaved + softCompact.compactedToolResultTokensSaved,
       deduplicatedToolResults: deduplicated.deduplicatedToolResults,
       deduplicatedToolResultTokensSaved: deduplicated.deduplicatedToolResultTokensSaved,
     },

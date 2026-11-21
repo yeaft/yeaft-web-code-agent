@@ -33,6 +33,10 @@ try {
   // Try lossless output first. Resizing (when needed) still reduces resolution.
   let output = await encode(edge, { lossless: true, effort: 1 });
   if (output.length > maxBytes) output = await encode(Math.min(edge, 2560), { quality: 85, effort: 1 });
+  if (maxBytes <= 200 * 1024 && output.length > maxBytes) {
+    output = await encode(Math.min(edge, 1440), { quality: 78, effort: 1 });
+    if (output.length > maxBytes) output = await encode(Math.min(edge, 1024), { quality: 72, effort: 1 });
+  }
   if (output.length <= maxBytes) process.stdout.write(output);
 } catch {
   process.exitCode = 1;

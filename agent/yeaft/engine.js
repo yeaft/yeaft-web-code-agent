@@ -52,6 +52,7 @@ import { referencePersistedAttachmentHistory } from './attachments.js';
 import { inlineMediaBytes, omitHistoricalImages, trimWireMedia, wireToolImageEvidence } from './wire-media.js';
 import { fitAnthropicImages, LLMImageLimitError } from './llm/anthropic-images.js';
 import { makeImagePreview } from './image-preview.js';
+import { createActiveToolImageProjector, ToolImagePrefixBudgetError } from './active-tool-images.js';
 import { isVpForeign, readContent as readScopeContent } from './memory/store.js';
 import { ActiveMemorySet } from './memory/ams.js';
 import { cleanMemoryPromptText } from './memory/prompt-cleanup.js';
@@ -278,7 +279,8 @@ const RETRY_CONTINUATION_PROMPT =
   'Continue from the exact point where the previous response stopped. Do not repeat text already produced.';
 // Share of the model window an active signed/rolled context may fill before
 // the next request rolls over into a fresh segment.
-const CONTEXT_ROLLOVER_INPUT_RATIO = 0.85;
+const LEGACY_CONTEXT_ROLLOVER_INPUT_RATIO = 0.85;
+const SESSION_COMPACTION_INPUT_RATIO = 0.8;
 const MAX_REQUEST_BODY_RECOVERY_ATTEMPTS = 3;
 const POLICY_RECOVERY_PROMPT =
   'Continue this authorized code review, but describe security findings abstractly. Do not repeat credential-like or exploit payloads, secrets, tokens, or step-by-step misuse instructions. Preserve the technical conclusion, evidence location, severity, and remediation.';
@@ -2669,6 +2671,15 @@ export class Engine {
     const viewImageToolPaths = new WeakMap();
     const viewImagePartPaths = new WeakMap();
     const singleImageDimensionMode = new Set();
+    // Work Center owns the request shape used for durable dispatch/recovery.
+    const useSessionCompactionPolicy = scenario !== 'work-item' && !prepareProviderRequest;
+    const contextRolloverRatio = useSessionCompactionPolicy ? SESSION_COMPACTION_INPUT_RATIO : LEGACY_CONTEXT_ROLLOVER_INPUT_RATIO;
+    const projectToolImages = createActiveToolImageProjector({ pathForImage: part => viewImagePartPaths.get(part) });
+    const previewForRoute = async (part, edge, bytes) => {
+      const preview = await makeImagePreview(part, edge, bytes, signal);
+      projectToolImages.rememberPreview(part, preview);
+      return preview;
+    };
     let pendingServerOperation = false;
     let turnNumber = 0;
     let continueTurns = 0; // auto-continue counter
@@ -3084,6 +3095,20 @@ export class Engine {
           return modelMessage;
         });
 
+        if (useSessionCompactionPolicy && !pendingServerOperation) {
+          const images = await projectToolImages(wireMessages, {
+            frozenLength: signedAnthropicPrefix ? signedAnthropicPrefix.messages.length + 1 : 0,
+            canRollover: Boolean(signedAnthropicPrefix && successfulRequestsSinceRollover > 0
+              && !prepareProviderRequest && !executionPolicy?.finalize && !progressReporting),
+            signal,
+          });
+          wireMessages = images.messages;
+          if (images.duplicateImages || images.staleImages || images.previewImages) {
+            this.#trace.log?.('request_tool_image_projection', { sessionId: runtimeSessionId, turnId: queryTurnId,
+              duplicateImages: images.duplicateImages, staleImages: images.staleImages, previewImages: images.previewImages });
+          }
+        }
+
         if (Number.isFinite(mediaByteBudget) && !pendingServerOperation) {
           const frozenLength = signedAnthropicPrefix ? signedAnthropicPrefix.messages.length + 1 : 0;
           const prefix = wireMessages.slice(0, frozenLength);
@@ -3136,7 +3161,7 @@ export class Engine {
           } catch { /* best-effort */ }
         }
 
-        const imageLimits = scenario !== 'work-item' && !prepareProviderRequest && !pendingServerOperation
+        const imageLimits = useSessionCompactionPolicy && !pendingServerOperation
           ? requestAdapter.getImageLimits?.(currentModel) : null;
         requestImageLimits = imageLimits && singleImageDimensionMode.has(currentModel)
           ? { ...imageLimits, count: imageLimits.manyCount } : imageLimits;
@@ -3145,8 +3170,10 @@ export class Engine {
             frozenLength: signedAnthropicPrefix ? signedAnthropicPrefix.messages.length + 1 : 0,
             canRollover: Boolean(signedAnthropicPrefix && successfulRequestsSinceRollover > 0
               && !prepareProviderRequest && !executionPolicy?.finalize && !progressReporting),
-            pathForImage: part => viewImagePartPaths.get(part),
-            preview: (part, edge, bytes) => makeImagePreview(part, edge, bytes, signal),
+            pathForImage: projectToolImages.pathOf,
+            preview: previewForRoute,
+            imageKey: projectToolImages.wireKey,
+            isToolEvidence: projectToolImages.isToolEvidence,
           });
           wireMessages = images.messages;
           if (images.omitted || images.previews) this.#trace.log?.('request_image_fit', {
@@ -3176,6 +3203,7 @@ export class Engine {
           outputReserve: requestMaxOutputTokens,
           historyMessageCount,
           historyTokenBudget: historyBudget,
+          toolResultCompactionRatio: useSessionCompactionPolicy && !pendingServerOperation ? contextRolloverRatio : undefined,
           repeatedToolResultRefs,
           language: requestConfig.language,
         };
@@ -3255,7 +3283,7 @@ export class Engine {
           ?? fittedRequest.meta.estimatedTokens - requestMaxOutputTokens;
         if ((signedAnthropicPrefix || rolloverSeed)
             && successfulRequestsSinceRollover > 0 && !pendingServerOperation
-            && (fittedInputTokens >= fitOptions.contextWindow * CONTEXT_ROLLOVER_INPUT_RATIO
+            && (fittedInputTokens >= fitOptions.contextWindow * contextRolloverRatio
               || fittedRequest.meta.droppedCurrentMessages > 0)) {
           throw new ProviderContextBudgetError('active context reached the rollover threshold');
         }
@@ -3316,7 +3344,7 @@ export class Engine {
         requestPrefixSnapshot = {
           system: systemPrompt, tools: structuredClone(requestToolDefs),
           currentSystem: currentSystemInstructions, currentTools: structuredClone(toolDefs),
-          messages: structuredClone(wireMessages), historyMessageCount,
+          messages: projectToolImages.copySnapshot(wireMessages), historyMessageCount,
           conversationCursor: conversationMessages.length + (pendingContinuationForRequest ? 1 : 0),
           inputEstimate: requestInputBreakdown.totalEstimatedTokens,
           // A later gateway response may omit usage or report only uncached
@@ -3793,6 +3821,7 @@ export class Engine {
           }
         }
         const contextNeedsRollover = err instanceof ProviderContextBudgetError || err instanceof LLMContextError;
+        const rollSignedToolImages = err instanceof ToolImagePrefixBudgetError && signedAnthropicPrefix;
         if ((rollSignedImage || rollSignedBody || (contextNeedsRollover && (signedAnthropicPrefix || rolloverSeed))) && toolCalls.length === 0
             && successfulRequestsSinceRollover > 0 && !pendingServerOperation) {
           endAttemptTrace('context_rollover');
@@ -3802,7 +3831,7 @@ export class Engine {
             type: 'llm_retry', attempt: rolloverCount, maxRetries: rolloverCount,
             delayMs: 0, reason: 'context_rollover', recoveryMode: 'continue',
             errorName: err.name, statusCode: err.statusCode ?? null,
-            message: rollSignedImage
+            message: rollSignedImage || rollSignedToolImages
               ? 'The signed context reached the image limit; continuing with recent image evidence without repeating completed tools.'
               : rollSignedBody
                 ? 'Request body is too large; continuing in a fresh model context without repeating completed tools.'
@@ -3876,9 +3905,17 @@ export class Engine {
             while (firstToolIndex > 0 && conversationMessages[firstToolIndex - 1].role === 'tool') firstToolIndex--;
             // Reattach the newest tool batch as evidence, not as calls. Do not
             // bring back batches from a segment already summarized before this one.
-            const toolImageEvidence = (rollSignedBody || rollSignedImage) && latestToolIndex >= Math.max(rolloverCursor, turnStartIdx + 1)
-              ? wireToolImageEvidence(conversationMessages.slice(Math.max(firstToolIndex, rolloverCursor, turnStartIdx + 1), latestToolIndex + 1), viewImageToolPaths)
-              : [];
+            const evidenceFloor = Math.max(rolloverCursor, turnStartIdx + 1);
+            const latestToolRows = latestToolIndex >= evidenceFloor
+              ? conversationMessages.slice(Math.max(firstToolIndex, evidenceFloor), latestToolIndex + 1) : [];
+            // Apply the same projection before estimating the seed. Keep the
+            // original paths with the latest evidence even if the images cannot fit.
+            const evidenceRows = useSessionCompactionPolicy && (rollSignedImage || signedAnthropicPrefix)
+              ? (await projectToolImages(latestToolRows, { signal })).messages
+              : rollSignedBody ? latestToolRows : [];
+            const toolImageEvidence = wireToolImageEvidence(evidenceRows, viewImageToolPaths, projectToolImages.isImageAnnotation);
+            // Keep the origin of tool images after moving them to a user-role seed.
+            for (const part of toolImageEvidence) projectToolImages.markEvidence(part);
             let nextRolloverSeed = contextRolloverSeed(summary, rolloverUserRequests, { toolImageEvidence });
             if (Number.isFinite(mediaByteBudget)) [nextRolloverSeed] = trimWireMedia([nextRolloverSeed], mediaByteBudget);
             if (requestImageLimits) {
@@ -3887,13 +3924,15 @@ export class Engine {
               const seedImageLimits = { ...requestImageLimits,
                 count: Math.min(requestImageLimits.count, requestImageLimits.manyCount) - 1 };
               const fittedSeed = await fitAnthropicImages([nextRolloverSeed], seedImageLimits, {
-                pathForImage: part => viewImagePartPaths.get(part),
-                preview: (part, edge, bytes) => makeImagePreview(part, edge, bytes, signal),
+                pathForImage: projectToolImages.pathOf,
+                preview: previewForRoute,
+                imageKey: projectToolImages.wireKey,
+                isToolEvidence: projectToolImages.isToolEvidence,
               });
               [nextRolloverSeed] = fittedSeed.messages;
             }
             const mediaSeedInput = seedInputTokens(nextRolloverSeed);
-            if (mediaSeedInput >= currentContextWindow * CONTEXT_ROLLOVER_INPUT_RATIO / 2
+            if (mediaSeedInput >= currentContextWindow * contextRolloverRatio / 2
                 || mediaSeedInput + rolloverOutputReserve > currentContextWindow) {
               nextRolloverSeed = contextRolloverSeed(summary, rolloverUserRequests, { omitMedia: true, toolImageEvidence });
             }
@@ -3947,7 +3986,7 @@ export class Engine {
             if (rollSignedBody) {
               err.reasonCode = 'request_body_too_large';
               if (compactError?.statusCode === 413) err.statusCode = 413;
-            } else if (rollSignedImage) err.reasonCode = 'request_image_limit';
+            } else if (rollSignedImage || rollSignedToolImages) err.reasonCode = 'request_image_limit';
           }
         }
 

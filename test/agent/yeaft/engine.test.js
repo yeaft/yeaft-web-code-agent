@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { rmSync, mkdtempSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
+import { createRequire } from 'node:module';
 import { SubAgentToolRegistry } from '../../../agent/yeaft/sub-agent/execution-control.js';
 import { Engine } from '../../../agent/yeaft/engine.js';
 import { AdapterRouter } from '../../../agent/yeaft/llm/router.js';
@@ -420,7 +421,11 @@ describe('Engine', () => {
         bytes.writeUInt32LE(index, 12);
         return bytes.toString('base64');
       };
-      const screenshots = Array.from({ length: 31 }, (_, index) => makeGif(index, index === 30 ? 3303 : 1200));
+      // The tool retention policy caps replay independently. Use uploads to
+      // exercise the provider-specific many-image limit despite that cap.
+      const screenshots = Array.from({ length: 20 }, (_, index) => makeGif(index, 1200));
+      const newest = makeGif(20, gatewayRejects ? 2000 : 3303);
+      const photos = screenshots.map(data => ({ type: 'image', source: { type: 'base64', media_type: 'image/gif', data } }));
       const path = n => `screenshot-${n}.gif`;
       const flatten = content => Array.isArray(content) ? content.flatMap(part => part.type === 'tool_result'
         ? [part, ...flatten(part.content)] : [part]) : [];
@@ -433,57 +438,55 @@ describe('Engine', () => {
           const request = anthropicWireWithoutCache(init);
           if (!request.stream) {
             summaries.push(request);
-            const newest = gatewayRejects ? 29 : 30;
-            expect(request.messages[0].content).toContain(path(newest));
-            expect(request.messages[0].content).not.toContain(screenshots[newest]);
+            expect(request.messages[0].content).toContain(path(0));
+            expect(request.messages[0].content).not.toContain(newest);
             return json([{ type: 'text', text: 'Images reviewed; finish the comparison.' }]);
           }
           const images = imageData(request);
           requests.push({ request, images });
-          expect(images.length > 20 && images.includes(screenshots[30])).toBe(false);
-          if (gatewayRejects && images.length === 31) throw new Error('unexpected count');
-          if (gatewayRejects && images.length === 30 && executions.length === 30) {
+          expect(images.length > 20 && images.includes(newest) && !gatewayRejects).toBe(false);
+          if (gatewayRejects && images.length === 21 && executions.length === 1) {
             return new Response(JSON.stringify({ error: {
               message: 'At least one of the image dimensions exceed max allowed size for many-image requests: 1500 pixels',
             } }), { status: 400 });
           }
           const index = executions.length;
           const id = `shot-${index}`;
-          if (signed) return response(id, index < 31 ? 'ViewImage' : undefined, { file_path: path(index) }, model,
+          if (signed) return response(id, index === 0 ? 'ViewImage' : undefined, { file_path: path(index) }, model,
             { input_tokens: 500 + index * 2000, output_tokens: 10, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 });
-          return index < 31 ? json([{ type: 'tool_use', id, name: 'ViewImage', input: { file_path: path(index) } }], 'tool_use')
+          return index === 0 ? json([{ type: 'tool_use', id, name: 'ViewImage', input: { file_path: path(index) } }], 'tool_use')
             : json([{ type: 'text', text: 'Finished safely.' }]);
         }));
         const usage = vi.fn();
         const engine = new Engine({ adapter: withUsageAccounting(router(model), usage), trace, yeaftDir: dir, conversationStore: store,
           config: { model: 'gateway/' + model, maxOutputTokens: 1024, projectDocMaxBytes: 0 } });
         engine.registerTool({ name: 'ViewImage', description: 'Read a screenshot', parameters: { type: 'object' }, execute: async input => {
-          const index = executions.length;
           executions.push(input.file_path);
-          return JSON.stringify({ path: input.file_path, image: 'data:image/gif;base64,' + screenshots[index] });
+          return JSON.stringify({ path: input.file_path, image: 'data:image/gif;base64,' + newest });
         } });
         const events = [];
-        for await (const event of engine.query({ prompt: 'Compare the screenshots.', sessionId: 'image-limit' })) events.push(event);
+        for await (const event of engine.query({ prompt: 'Compare the screenshots.', sessionId: 'image-limit',
+          promptParts: [{ type: 'text', text: 'Compare the screenshots.' }, ...photos], })) events.push(event);
         expect(events.filter(event => event.type === 'error')).toEqual([]);
         expect(events.filter(event => event.type === 'turn_end' && event.terminal)).toEqual([expect.objectContaining({ stopReason: 'end_turn' })]);
-        expect(executions).toEqual(screenshots.map((_, index) => path(index)));
-        expect(store.loadAllBySession('image-limit').filter(row => row.role === 'tool')).toHaveLength(31);
+        expect(executions).toEqual([path(0)]);
+        expect(store.loadAllBySession('image-limit').filter(row => row.role === 'tool')).toHaveLength(1);
         const final = requests.at(-1);
-        expect(final.images).toContain(screenshots[30]);
+        expect(final.images).toContain(newest);
         expect(summaries).toHaveLength(signed ? 1 : 0);
-        expect(requests).toHaveLength(gatewayRejects ? 33 : 32);
+        expect(requests).toHaveLength(gatewayRejects ? 3 : 2);
         if (signed && !gatewayRejects) {
-          expect(requests[30].images).toEqual(screenshots.slice(0, 30));
-          expect(final.images).toEqual([screenshots[30]]);
+          expect(requests[0].images).toEqual(screenshots);
+          expect(final.images.length).toBeLessThanOrEqual(19);
           expect(final.request.messages).toHaveLength(1);
           expect(JSON.stringify(final.request)).not.toContain('signature-shot-');
-          expect(JSON.stringify(final.request)).toContain(path(30));
+          expect(JSON.stringify(final.request)).toContain(path(0));
           expect(events.find(event => event.type === 'llm_retry')).toMatchObject({ reason: 'context_rollover', errorName: 'LLMImageLimitError' });
         } else if (gatewayRejects) {
           expect(events.find(event => event.type === 'llm_retry')).toMatchObject({ reason: 'request_image_recovery', statusCode: 400 });
-          expect(requests[31].images).toEqual([screenshots[29]]);
+          expect(final.images.length).toBeLessThanOrEqual(19);
         } else {
-          expect(final.images).toEqual(screenshots.slice(11));
+          expect(final.images).toEqual([...screenshots.slice(1), newest]);
           expect(JSON.stringify(final.request)).toContain(path(0));
           expect(JSON.stringify(final.request)).toContain('Image not sent: model route image limit');
         }
@@ -494,8 +497,130 @@ describe('Engine', () => {
       }
     }
 
+    async function verifyRoutePreviewDeduplication() {
+      const require = createRequire(new URL('../../../agent/package.json', import.meta.url));
+      let sharp;
+      try { sharp = require('sharp'); }
+      catch (err) {
+        if (err.code !== 'MODULE_NOT_FOUND' && !/Could not load the .sharp. module/.test(err.message)) throw err;
+        return; // Optional native encoder: the protocol test covers the non-encoder path.
+      }
+      const create = { width: 8100, height: 100, channels: 3, background: '#243b53' };
+      // Route-only previews: enough pixels to require downsizing, but neither
+      // original crosses the proactive size threshold. Both render identically.
+      const first = await sharp({ create }).png({ compressionLevel: 6 }).toBuffer();
+      const samePixels = await sharp({ create }).png({ compressionLevel: 1 }).toBuffer();
+      expect(first.equals(samePixels)).toBe(false);
+      expect(Math.max(first.length, samePixels.length)).toBeLessThan(200 * 1024);
+      const originals = [first, first, samePixels];
+      const dir = mkdtempSync(join(tmpdir(), 'yeaft-image-preview-dedup-'));
+      const requests = [];
+      const models = [];
+      const usage = { input_tokens: 1000, output_tokens: 10, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 };
+      const imagesIn = content => !Array.isArray(content) ? []
+        : content.flatMap(block => block.type === 'image' ? [block.source] : imagesIn(block.content));
+      try {
+        vi.stubGlobal('fetch', vi.fn(async (_url, init) => {
+          const body = anthropicWireWithoutCache(init);
+          expect(body.stream).toBe(true);
+          const step = requests.length;
+          requests.push(body);
+          return response(`preview-${step}`, step < originals.length ? 'ViewImage' : undefined,
+            { file_path: `preview-${step}.png` }, 'claude-opus-4.8', usage);
+        }));
+        const engine = new Engine({ adapter: router('claude-opus-4.8'), trace, yeaftDir: dir,
+          config: { model: 'gateway/claude-opus-4.8', maxOutputTokens: 1024, projectDocMaxBytes: 0 } });
+        engine.registerTool({ name: 'ViewImage', description: 'Read image evidence', parameters: { type: 'object' },
+          execute: async ({ file_path }) => {
+            const data = originals[models.length].toString('base64');
+            models.push(file_path);
+            return JSON.stringify({ path: file_path, image: 'data:image/png;base64,' + data });
+          } });
+        const events = [];
+        for await (const event of engine.query({ prompt: 'Inspect the wide screenshots', sessionId: 'preview-dedup' })) events.push(event);
+        expect(events.filter(event => event.type === 'error' || event.type === 'llm_retry')).toEqual([]);
+        expect(events.filter(event => event.type === 'turn_end' && event.terminal)).toEqual([expect.objectContaining({ stopReason: 'end_turn' })]);
+        expect(models).toEqual(['preview-0.png', 'preview-1.png', 'preview-2.png']);
+        expect(requests).toHaveLength(originals.length + 1);
+        const sentImages = requests.map(request => request.messages.flatMap(row => imagesIn(row.content)));
+        expect(sentImages[0]).toEqual([]);
+        expect(sentImages[1]).toEqual([expect.objectContaining({ media_type: 'image/webp' })]);
+        expect(sentImages[2]).toEqual(sentImages[1]);
+        expect(sentImages[3]).toEqual(sentImages[1]);
+        expect(JSON.stringify(requests[3].messages)).toContain('duplicate content');
+        expect(JSON.stringify(requests[3].messages)).toContain('preview-2.png');
+      } finally {
+        vi.unstubAllGlobals();
+        await closeConversationHistoryIndexes();
+        rmSync(dir, { recursive: true, force: true });
+      }
+    }
+
+    async function assertLongImageLoop() {
+      const originalFetch = globalThis.fetch;
+      const dir = mkdtempSync(join(tmpdir(), 'yeaft-long-image-loop-'));
+      let step = 0, summaries = 0;
+      const toolRuns = [], requests = [];
+      const usage = { input_tokens: 1000, output_tokens: 10, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 };
+      const imageFor = index => {
+        const data = Buffer.alloc(16, index);
+        data.write('GIF89a');
+        data.writeUInt16LE(index === 30 ? 3303 : 1200, 6);
+        data.writeUInt16LE(912, 8);
+        return data.toString('base64');
+      };
+      const imagesIn = content => !Array.isArray(content) ? []
+        : content.flatMap(block => block.type === 'image' ? [block.source.data] : imagesIn(block.content));
+      try {
+        globalThis.fetch = vi.fn(async (_url, init) => {
+          const body = anthropicWireWithoutCache(init);
+          if (!body.stream) {
+            expect(JSON.stringify(body.messages)).not.toContain(imageFor(30));
+            summaries++;
+            return new Response(JSON.stringify({ stop_reason: 'end_turn',
+              content: [{ type: 'text', text: 'Screenshots collected so far; continue without repeating tools.' }], usage,
+            }), { headers: { 'content-type': 'application/json' } });
+          }
+          const images = body.messages.flatMap(row => imagesIn(row.content));
+          requests.push({ images, seed: body.messages.length === 1 ? JSON.stringify(body.messages[0].content) : null });
+          // Duplicate responses or a late rollover would grow the wire tape.
+          expect(images.length).toBeLessThanOrEqual(12); // the last segment's evidence counts too
+          expect(new Set(images).size).toBe(images.length);
+          const n = step++;
+          return response(`long-image-${n}`, n < 31 ? 'ViewImage' : undefined,
+            n < 31 ? { file_path: `fixture-${n}.gif` } : {}, 'claude-opus-4.8', usage);
+        });
+        const engine = new Engine({ adapter: router('claude-opus-4.8'), trace, yeaftDir: dir,
+          config: { model: 'gateway/claude-opus-4.8', maxOutputTokens: 1024, projectDocMaxBytes: 0 } });
+        engine.registerTool({ name: 'ViewImage', description: 'Read image evidence', parameters: { type: 'object' },
+          execute: async ({ file_path }) => {
+            const n = Number(file_path.match(/\d+/)[0]);
+            toolRuns.push(n);
+            // A repeated read under a different path, followed by distinct images.
+            return JSON.stringify({ path: file_path, image: 'data:image/gif;base64,' + imageFor(n === 1 ? 0 : n) });
+          } });
+        const events = [];
+        for await (const event of engine.query({ prompt: 'Inspect thirty-one screenshots', sessionId: 'long-image-loop' })) events.push(event);
+        expect(events.filter(event => event.type === 'error')).toEqual([]);
+        expect(events.filter(event => event.type === 'turn_end' && event.terminal)).toEqual([expect.objectContaining({ stopReason: 'end_turn' })]);
+        expect(summaries).toBe(2);
+        expect(requests).toHaveLength(32);
+        expect(requests[2].images).toEqual([imageFor(0)]);
+        expect(requests.at(-1).images).toContain(imageFor(30));
+        expect(requests.at(-1).images).not.toContain(imageFor(0));
+        expect(requests.filter(r => r.seed?.includes('Image evidence from completed tool result'))).toHaveLength(2);
+        expect(toolRuns).toEqual(Array.from({ length: 31 }, (_, n) => n));
+      } finally {
+        globalThis.fetch = originalFetch;
+        await closeConversationHistoryIndexes();
+        rmSync(dir, { recursive: true, force: true });
+      }
+    }
+
     it.each(['provider', 'abort', 'append'])('rolls signed context into a fresh conversation without tool replay: %s', async trigger => {
       if (trigger === 'provider') {
+        await assertLongImageLoop();
+        await verifyRoutePreviewDeduplication();
         for (const mode of ['unsigned', 'signed', 'stricter-gateway']) await verifyImageLimitContinuation(mode);
       }
       const modes = ['token', 'http413', 'http413-token-fallback', 'http413-summary-retry', 'http413-multilingual-summary'];
@@ -512,8 +637,8 @@ describe('Engine', () => {
         };
         // Encoded size is not visual size: ~800K base64 chars for a 16x16
         // frame. A 4424x4424 frame (158x158 patches) puts the seed at ~27K: it
-        // fits the window and the 85% threshold (34K), but leaves less than half
-        // of that budget (17K) for new work, so it would roll over again.
+        // fits the window and the 80% threshold (32K), but leaves less than half
+        // of that budget (16K) for new work, so it would roll over again.
         const reference = gif(16, 16, 600_000);
         const oversized = mode === 'append' ? [gif(4424, 4424, 64)] : [];
         // A signed provider rejects this particular batch by bytes, not tokens.

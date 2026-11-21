@@ -64,15 +64,16 @@ export function trimWireMedia(messages, budget) {
 }
 
 /** Move only freshly observed tool images to a new segment, not native tool arcs. */
-export function wireToolImageEvidence(messages, paths) {
+export function wireToolImageEvidence(messages, paths, isImageAnnotation = () => false) {
   return messages.flatMap(message => {
     if (message.role !== 'tool' || !Array.isArray(message.content)) return [];
-    const images = message.content.filter(part => IMAGE_TYPES.has(part?.type) && inlineMediaPayload(part));
-    if (!images.length) return [];
+    const isImage = part => IMAGE_TYPES.has(part?.type) && inlineMediaPayload(part);
+    const evidence = message.content.filter(part => isImage(part) || isImageAnnotation(part));
+    if (!evidence.some(isImage)) return evidence;
     const path = paths.get(message);
     // Copy the path as text next to the evidence: it must survive both an
     // imperfect summary and removal of the inline image from the seed.
     const reference = path ? `; reopen with ViewImage(file_path=${JSON.stringify(path)}) if needed` : '';
-    return [{ type: 'text', text: `\nImage evidence from completed tool result ${JSON.stringify(message.toolCallId)}${reference}:\n` }, ...images];
+    return [{ type: 'text', text: `\nImage evidence from completed tool result ${JSON.stringify(message.toolCallId)}${reference}:\n` }, ...evidence];
   });
 }
