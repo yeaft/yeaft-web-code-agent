@@ -524,7 +524,7 @@ describe('Engine', () => {
           const images = body.messages.flatMap(row => imagesIn(row.content));
           requests.push({ images, seed: body.messages.length === 1 ? JSON.stringify(body.messages[0].content) : null });
           // Duplicate responses or a late rollover would grow the wire tape.
-          expect(images.length).toBeLessThanOrEqual(13); // 12 tool images plus last segment's seed
+          expect(images.length).toBeLessThanOrEqual(12); // the last segment's evidence counts too
           expect(new Set(images).size).toBe(images.length);
           const n = step++;
           return response(`long-image-${n}`, n < 31 ? 'ViewImage' : undefined,

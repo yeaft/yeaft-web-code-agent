@@ -117,6 +117,18 @@ async function assertActiveToolImageProjection() {
     const projected = await project([raw[1], call('huge'), huge], { frozenLength: 2, canRollover: true });
     expect(imageParts(projected.messages)).toEqual([raw[1].content[1]]);
     expect(projected.messages.at(-1).content[1].text).toContain('retention budget');
+
+    const originalUpload = image('user-upload');
+    const selected = (await project([raw[0]])).messages;
+    const evidence = wireToolImageEvidence(selected, new WeakMap(), project.isImageAnnotation);
+    for (const part of evidence) project.markEvidence(part);
+    const seed = contextRolloverSeed('Completed one screenshot.', [{ content: [originalUpload] }], { toolImageEvidence: evidence });
+    const continuation = [...project.copySnapshot([seed]), call('b'), raw[1]];
+    await expect(project(continuation, { frozenLength: 2, canRollover: true })).rejects.toBeInstanceOf(ToolImagePrefixBudgetError);
+    const withFrozenSeed = await project(continuation, { frozenLength: 2 });
+    expect(imageParts(withFrozenSeed.messages)).toEqual([originalUpload, raw[0].content[1]]);
+    const withEditableSeed = await project([seed, call('b'), raw[1]]);
+    expect(imageParts(withEditableSeed.messages)).toEqual([originalUpload, raw[1].content[1]]);
   });
   if (sharp) await verify('encodes a real multi-megabyte PNG to a decodable preview under 200 KiB', async () => {
     const width = 1800, height = 700;

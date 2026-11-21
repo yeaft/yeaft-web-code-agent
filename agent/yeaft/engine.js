@@ -2671,6 +2671,11 @@ export class Engine {
     const viewImagePartPaths = new WeakMap();
     const singleImageDimensionMode = new Set();
     const projectToolImages = createActiveToolImageProjector({ pathForImage: part => viewImagePartPaths.get(part) });
+    const previewForRoute = async (part, edge, bytes) => {
+      const preview = await makeImagePreview(part, edge, bytes, signal);
+      projectToolImages.copyEvidence(part, preview);
+      return preview;
+    };
     let pendingServerOperation = false;
     let turnNumber = 0;
     let continueTurns = 0; // auto-continue counter
@@ -3161,7 +3166,7 @@ export class Engine {
             canRollover: Boolean(signedAnthropicPrefix && successfulRequestsSinceRollover > 0
               && !prepareProviderRequest && !executionPolicy?.finalize && !progressReporting),
             pathForImage: projectToolImages.pathOf,
-            preview: (part, edge, bytes) => makeImagePreview(part, edge, bytes, signal),
+            preview: previewForRoute,
           });
           wireMessages = images.messages;
           if (images.omitted || images.previews) this.#trace.log?.('request_image_fit', {
@@ -3332,7 +3337,7 @@ export class Engine {
         requestPrefixSnapshot = {
           system: systemPrompt, tools: structuredClone(requestToolDefs),
           currentSystem: currentSystemInstructions, currentTools: structuredClone(toolDefs),
-          messages: structuredClone(wireMessages), historyMessageCount,
+          messages: projectToolImages.copySnapshot(wireMessages), historyMessageCount,
           conversationCursor: conversationMessages.length + (pendingContinuationForRequest ? 1 : 0),
           inputEstimate: requestInputBreakdown.totalEstimatedTokens,
           // A later gateway response may omit usage or report only uncached
@@ -3901,6 +3906,8 @@ export class Engine {
               ? (await projectToolImages(latestToolRows, { signal })).messages
               : [];
             const toolImageEvidence = wireToolImageEvidence(evidenceRows, viewImageToolPaths, projectToolImages.isImageAnnotation);
+            // Keep the origin of tool images after moving them to a user-role seed.
+            for (const part of toolImageEvidence) projectToolImages.markEvidence(part);
             let nextRolloverSeed = contextRolloverSeed(summary, rolloverUserRequests, { toolImageEvidence });
             if (Number.isFinite(mediaByteBudget)) [nextRolloverSeed] = trimWireMedia([nextRolloverSeed], mediaByteBudget);
             if (requestImageLimits) {
@@ -3910,7 +3917,7 @@ export class Engine {
                 count: Math.min(requestImageLimits.count, requestImageLimits.manyCount) - 1 };
               const fittedSeed = await fitAnthropicImages([nextRolloverSeed], seedImageLimits, {
                 pathForImage: projectToolImages.pathOf,
-                preview: (part, edge, bytes) => makeImagePreview(part, edge, bytes, signal),
+                preview: previewForRoute,
               });
               [nextRolloverSeed] = fittedSeed.messages;
             }

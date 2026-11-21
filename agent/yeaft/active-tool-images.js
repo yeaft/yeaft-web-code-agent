@@ -27,6 +27,20 @@ export function createActiveToolImageProjector({ pathForImage, preview = makeMod
   const previews = new Map();
   const pathFor = new WeakMap();
   const imageAnnotations = new WeakSet();
+  // A rollover attaches completed tool evidence to a synthetic user row. Its
+  // transport role changes, its origin (and retention budget) does not.
+  const toolEvidenceParts = new WeakSet();
+  const markEvidence = part => { if (inlineImage(part)) toolEvidenceParts.add(part); };
+  const copyEvidence = (from, to) => { if (to && toolEvidenceParts.has(from)) markEvidence(to); };
+  const copySnapshot = (messages, snapshot) => {
+    for (let i = 0; i < messages.length; i++) {
+      const originals = imagesIn(messages[i]);
+      if (!originals.length) continue;
+      const copies = imagesIn(snapshot[i]);
+      for (let p = 0; p < originals.length; p++) copyEvidence(originals[p], copies[p]);
+    }
+    return snapshot;
+  };
   const keyFor = part => {
     if (!keys.has(part)) {
       const { media_type, mediaType, data } = part.source;
@@ -55,7 +69,7 @@ export function createActiveToolImageProjector({ pathForImage, preview = makeMod
       for (const part of imagesIn(message)) {
         if (!inlineImage(part)) continue;
         seen.add(keyFor(part));
-        if (message.role === 'tool') {
+        if (message.role === 'tool' || toolEvidenceParts.has(part)) {
           frozenToolImages++;
           frozenToolChars += part.source.data.length;
         }
@@ -65,8 +79,10 @@ export function createActiveToolImageProjector({ pathForImage, preview = makeMod
     // Latest mutable occurrence wins. Only accepted payloads become anchors.
     for (let i = messages.length - 1; i >= frozenLength; i--) {
       const message = messages[i];
-      if (message.role !== 'tool') { inToolBatch = false; continue; }
-      if (!inToolBatch) { recentBatches++; inToolBatch = true; }
+      const toolRow = message.role === 'tool';
+      if (!toolRow) inToolBatch = false;
+      else if (!inToolBatch) { recentBatches++; inToolBatch = true; }
+      if (!toolRow && message.role !== 'user') continue;
       const content = imagesIn(message);
       let next;
       const omit = (index, reason, part) => {
@@ -76,7 +92,7 @@ export function createActiveToolImageProjector({ pathForImage, preview = makeMod
       };
       for (let p = content.length - 1; p >= 0; p--) {
         const part = content[p];
-        if (!inlineImage(part)) continue;
+        if (!inlineImage(part) || (!toolRow && !toolEvidenceParts.has(part))) continue;
         const key = keyFor(part);
         let fitted = previews.get(key) ?? part;
         if (seen.has(key) || (fitted !== part && seen.has(keyFor(fitted)))) {
@@ -111,7 +127,7 @@ export function createActiveToolImageProjector({ pathForImage, preview = makeMod
         }
         const chars = fitted.source.data.length;
         if (!fits(frozenToolImages + mutableCount, frozenToolChars + mutableChars, chars)) {
-          if (canRollover && frozenToolImages > 0 && fits(mutableCount, mutableChars, chars)) throw new ToolImagePrefixBudgetError();
+          if (toolRow && canRollover && frozenToolImages > 0 && fits(mutableCount, mutableChars, chars)) throw new ToolImagePrefixBudgetError();
           staleImages++;
           omit(p, 'Tool image not sent: image retention budget.', part);
           continue;
@@ -125,6 +141,7 @@ export function createActiveToolImageProjector({ pathForImage, preview = makeMod
           // Identical files under distinct paths can share encoded bytes but not
           // provenance. Don't attach a different path to a cached preview object.
           const selected = { ...fitted };
+          copyEvidence(part, selected);
           const path = pathOf(part);
           if (path) pathFor.set(selected, path);
           const annotation = marker('Model image preview.', part);
@@ -138,6 +155,9 @@ export function createActiveToolImageProjector({ pathForImage, preview = makeMod
       duplicateImages, staleImages, previewImages };
   }
   project.pathOf = pathOf;
+  project.markEvidence = markEvidence;
+  project.copyEvidence = copyEvidence;
+  project.copySnapshot = messages => copySnapshot(messages, structuredClone(messages));
   project.isImageAnnotation = part => imageAnnotations.has(part);
   return project;
 }
