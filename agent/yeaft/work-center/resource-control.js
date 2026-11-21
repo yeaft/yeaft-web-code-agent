@@ -427,7 +427,7 @@ export class WorkCenterResourceAdapter extends LLMAdapter {
 
 /** Native adapters own the last pre-fetch callback; plain legacy adapters are
  * conservatively admitted before invocation even if they omit the callback. */
-export async function callCoordinatorWithResourceControl(adapter, store, turn, claim, params) {
+export async function callCoordinatorWithResourceControl(adapter, store, turn, claim, params, call = adapter.call.bind(adapter)) {
   const native = adapter instanceof LLMAdapter;
   let suppressFirstCallback = !native;
   const start = (revalidate = false) => {
@@ -441,7 +441,7 @@ export async function callCoordinatorWithResourceControl(adapter, store, turn, c
   };
   try {
     if (!native) start();
-    const response = await adapter.call({ ...params, onRequestStart: () => {
+    const response = await call({ ...params, onRequestStart: () => {
       if (suppressFirstCallback) {
         suppressFirstCallback = false;
         // A resumed WorkItem may be active while this pre-stop claim is stale.

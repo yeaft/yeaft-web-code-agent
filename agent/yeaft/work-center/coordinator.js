@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { resolveMaxOutputTokens } from '../models.js';
+import { fitAnthropicImages } from '../llm/anthropic-images.js';
 import { callCoordinatorWithResourceControl } from './resource-control.js';
 import { normalizeSessionMessageQuote, sessionMessageQuotePrompt } from '../session-message-quote.js';
 import {
@@ -971,6 +972,16 @@ export class WorkItemCoordinator {
                 effortSource: resolved.source,
                 effortContext: { scenario: 'work-center-coordinator' },
               };
+              const adapter = runtime.adapter;
+              const captured = adapter.captureRequest?.();
+              const policySource = captured ?? adapter;
+              const imageLimits = Array.isArray(content) && policySource.getImageLimits?.(resolved.model);
+              if (imageLimits) {
+                // The attempt is persisted and hash-checked on recovery. Use
+                // deterministic attachment references, not an optional encoder.
+                requestBody.messages = (await fitAnthropicImages(requestBody.messages, imageLimits)).messages;
+              }
+              if (abortController.signal.aborted) throw new Error('Work Center Coordinator was interrupted');
               const claim = started.fence.claim;
               providerTurn = this.store.prepareCoordinatorProviderTurn(
                 started.detail.id, started.turnId, attemptCount, requestBody, claim, candidateSpeaker,
@@ -987,7 +998,7 @@ export class WorkItemCoordinator {
                 callCoordinatorWithResourceControl(runtime.adapter, this.store, providerTurn, claim, {
                   ...requestBody,
                   signal: abortController.signal,
-                }).then(response => {
+                }, captured?.call?.bind(captured)).then(response => {
                   const persisted = this.store.respondCoordinatorProviderTurn(
                     providerTurn.id, providerTurn.requestHash, response, claim,
                   );
