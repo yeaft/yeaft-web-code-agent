@@ -111,6 +111,13 @@ describe('Anthropic evolving Messages protocol', () => {
     expect(fitted.messages[2]).toBe(result);
     expect(repeated.messages[0].content).toEqual(Array(20).fill(small));
     await adapter.call({ ...repeated, messages: fitted.messages });
+    const gatewayError = 'At least one image exceeds max allowed dimensions for many-image requests: 2500 pixels';
+    fetch.mockImplementation(async () => new Response(JSON.stringify({ error: { message: gatewayError } }), { status: 400 }));
+    const fittedRequest = { ...repeated, messages: fitted.messages };
+    for (const dispatch of [request => adapter.call(request), request => collect(adapter.stream(request))]) {
+      await expect(dispatch(fittedRequest)).rejects.toMatchObject({ reasonCode: 'request_image_limit', gatewayManyImages: true });
+      await expect(dispatch({ ...fittedRequest, imageLimits: undefined })).rejects.toThrow(gatewayError);
+    }
     const opaque = { type: 'image', source: { type: 'url', url: 'https://example.invalid/image.png' } };
     const withOpaque = [{ role: 'user', content: [...Array(20).fill(small), opaque] }];
     const opaqueFit = await fitAnthropicImages(withOpaque, ANTHROPIC_IMAGE_LIMITS);
