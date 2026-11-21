@@ -623,7 +623,7 @@ describe('Engine', () => {
         await verifyRoutePreviewDeduplication();
         for (const mode of ['unsigned', 'signed', 'stricter-gateway']) await verifyImageLimitContinuation(mode);
       }
-      const modes = ['token', 'http413', 'http413-token-fallback', 'http413-summary-retry', 'http413-multilingual-summary'];
+      const modes = ['token', 'http413', 'http413-token-fallback', 'http413-summary-retry', 'http413-multilingual-summary', 'http413-summary-5xx', 'http413-summary-down'];
       for (const mode of trigger === 'provider' ? modes : [trigger]) {
         const dir = mkdtempSync(join(tmpdir(), 'yeaft-signed-rollover-'));
         const originalFetch = globalThis.fetch;
@@ -648,6 +648,11 @@ describe('Engine', () => {
         const tooLarge = mode.startsWith('http413');
         const retrySummary = mode === 'http413-summary-retry';
         const multilingual = mode === 'http413-multilingual-summary';
+        // The gateway fails one summary step the way loki did in production,
+        // or keeps failing past the retry budget.
+        const summaryOutage = mode === 'http413-summary-5xx';
+        const summaryDown = mode === 'http413-summary-down';
+        const summaryRetries = summaryOutage ? 1 : summaryDown ? 3 : 0;
         const handoff = 'COMPLETE_EVIDENCE: ' + '已核对图像证据。'.repeat(200) + '保留最后的证据。';
         const imagePath = 'fixture image.gif';
         const toolName = tooLarge ? 'ViewImage' : 'echo';
@@ -656,7 +661,7 @@ describe('Engine', () => {
         const textOf = content => typeof content === 'string' ? content
           : content.filter(block => block.type === 'text').map(block => block.text).join('');
         const config = { model: 'gateway/claude-opus-4.8', maxOutputTokens: 1024, projectDocMaxBytes: 0,
-          modelInfo: { contextWindow: 40000, maxOutput: 4096 } };
+          modelInfo: { contextWindow: 40000, maxOutput: 4096 }, ...(summaryRetries ? { llmRetry: { baseDelayMs: 0 } } : {}) };
         const control = new AbortController();
         let executions = 0;
         const inbox = [];
@@ -669,6 +674,9 @@ describe('Engine', () => {
               expect(JSON.stringify(body)).not.toContain('signature-');
               expect(body.messages[0].content).toContain('COMPLETE_EVIDENCE');
               if (body.system.startsWith('Summarize the supplied') && mode === 'abort') { control.abort(); throw new DOMException('cancelled', 'AbortError'); }
+              if (body.system.startsWith('Summarize the supplied') && summaries.length <= summaryRetries + (summaryDown ? 1 : 0)) {
+                return new Response('{"error":"Internal Server Error"}', { status: 500 });
+              }
               let draft = 'COMPLETE_EVIDENCE. Tool completed successfully, do not repeat it. Continue unfinished answer.';
               if (multilingual) draft = handoff;
               if (retrySummary && summaries.length === 1) draft = 'Rejected draft. ' + '细'.repeat(6000);
@@ -705,14 +713,26 @@ describe('Engine', () => {
             events.push(event);
           }
           expect(executions).toBe(1);
-          expect(summaries).toHaveLength(retrySummary ? 2 : 1);
+          expect(summaries).toHaveLength(retrySummary ? 2 : 1 + summaryRetries);
           if (retrySummary) {
             expect(summaries[1].messages).toEqual(summaries[0].messages);
             expect(summaries[1].system).not.toBe(summaries[0].system);
           }
+          // A failed step is sent again unchanged, announced like any retry.
+          for (const repeated of summaries.slice(1, 1 + summaryRetries)) expect(repeated).toEqual(summaries[0]);
+          expect(events.filter(event => event.type === 'llm_retry' && event.reason === 'transient_backoff'))
+            .toEqual(Array.from({ length: summaryRetries }, (_, index) => expect.objectContaining({
+              attempt: index + 1, maxRetries: 3, statusCode: 500, errorName: 'LLMServerError', recoveryMode: 'continue' })));
           // Budgeted by pixels, the reference image reaches the model whole.
           expect(requests[0].messages[0].content.some(isReference)).toBe(true);
-          if (mode !== 'abort') {
+          if (summaryDown) {
+            // Out of retries: the real status and attempt count reach the user.
+            expect(events.filter(event => event.type === 'error').map(event => event.error)).toEqual([expect.objectContaining({
+              code: 'CONTEXT_COMPACTION_FAILED', statusCode: 500,
+              message: expect.stringMatching(/^Automatic context compaction failed after 4 attempts at one summary request; .*Internal Server Error/),
+            })]);
+            expect(requests).toHaveLength(2);
+          } else if (mode !== 'abort') {
             expect(events.filter(event => event.type === 'error')).toEqual([]);
             const fresh = requests.at(-1);
             expect(fresh.messages).toHaveLength(1);
@@ -755,7 +775,7 @@ describe('Engine', () => {
           expect(rows.filter(row => row.role === 'tool')).toHaveLength(executions);
           expect(rows.some(row => row.providerState?.items?.some(item => item.signature))).toBe(true);
           expect(events.filter(event => event.type === 'turn_end' && event.terminal)).toEqual([
-            expect.objectContaining({ stopReason: mode === 'abort' ? 'aborted' : 'end_turn', terminal: true }),
+            expect.objectContaining({ stopReason: mode === 'abort' ? 'aborted' : summaryDown ? 'error' : 'end_turn', terminal: true }),
           ]);
         } finally {
           globalThis.fetch = originalFetch;
