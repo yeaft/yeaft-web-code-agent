@@ -1509,6 +1509,47 @@ export class WorkItemStore {
       WHERE status = 'claimed' AND lease_expires_at <= ?`).run(now, now).changes);
   }
 
+  /** Read attempt history under the current mailbox claim. Only the current
+   * owner may read a prepared request or reuse a recorded response. */
+  loadCoordinatorProviderTurnForRecovery(workItemId, turnId, attemptNumber, claim = {}) {
+    const mailbox = this.#activeCoordinatorMailboxClaim(turnId, claim);
+    if (mailbox?.work_item_id !== workItemId) return null;
+    const row = this.db.prepare(`SELECT * FROM coordinator_provider_turns
+      WHERE work_item_id = ? AND coordinator_turn_id = ? AND attempt_number = ?
+      AND ((claim_owner = ? AND claim_epoch = ? AND status IN ('prepared', 'responded'))
+        OR status IN ('cancelled', 'unknown', 'dispatching'))`).get(
+      workItemId, turnId, attemptNumber, claim.ownerBootId, Number(claim.claimEpoch),
+    );
+    return row ? this.#mapCoordinatorProviderTurn(row) : null;
+  }
+
+  /** Supersede an unsent legacy request without altering its body or hash.
+   * Retire and prepare atomically so another restart can find the successor. */
+  supersedePreparedCoordinatorRequest(turn, requestBody, claim = {}) {
+    return withTransaction(this.db, () => {
+      const mailbox = this.#activeCoordinatorMailboxClaim(turn.coordinatorTurnId, claim);
+      if (mailbox?.work_item_id !== turn.workItemId) return null;
+      const now = this.now();
+      const changed = this.db.prepare(`UPDATE coordinator_provider_turns SET status = 'cancelled', error = ?, updated_at = ?
+        WHERE id = ? AND work_item_id = ? AND coordinator_turn_id = ? AND attempt_number = ? AND request_hash = ?
+        AND status = 'prepared' AND claim_owner = ? AND claim_epoch = ?`).run(
+        'Unsent legacy request superseded to fit image limits', now, turn.id, turn.workItemId, turn.coordinatorTurnId,
+        turn.attemptNumber, turn.requestHash, claim.ownerBootId, Number(claim.claimEpoch),
+      );
+      if (Number(changed.changes) !== 1) return null;
+      const id = durableId('coordinator-provider-turn');
+      const requestHash = createHash('sha256').update(stableJson(requestBody), 'utf8').digest('hex');
+      this.db.prepare(`INSERT INTO coordinator_provider_turns
+        (id, work_item_id, coordinator_turn_id, attempt_number, status, request_body, request_hash,
+         claim_owner, claim_epoch, prepared_at, updated_at)
+        VALUES (?, ?, ?, ?, 'prepared', ?, ?, ?, ?, ?, ?)`).run(
+        id, turn.workItemId, turn.coordinatorTurnId, turn.attemptNumber + 1, stringify(requestBody), requestHash,
+        claim.ownerBootId, claim.claimEpoch, now, now,
+      );
+      return this.getCoordinatorProviderTurn(id);
+    });
+  }
+
   prepareCoordinatorProviderTurn(
     workItemId,
     coordinatorTurnId,
