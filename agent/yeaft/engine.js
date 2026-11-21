@@ -404,6 +404,28 @@ export function computeBackoffDelay(policy, attempt) {
 }
 
 /**
+ * Wait before re-issuing a provider request after a retryable failure. Rate
+ * limits prefer the server's Retry-After; everything else backs off. Shared by
+ * the main request loop and context-rollover summary steps.
+ *
+ * @param {ReturnType<typeof resolveRetryPolicy>} policy
+ * @param {Error} err - LLMRateLimitError or LLMServerError
+ * @param {number} attempt - 1-based retry number
+ * @returns {{ delayMs: number, reason: 'rate_limit_retry_after'|'rate_limit_backoff'|'transient_backoff'|'stream_idle_timeout' }}
+ */
+function retryDelay(policy, err, attempt) {
+  if (err instanceof LLMRateLimitError) {
+    return Number.isFinite(err.retryAfterMs) && err.retryAfterMs > 0
+      ? { delayMs: Math.min(policy.maxDelayMs, err.retryAfterMs), reason: 'rate_limit_retry_after' }
+      : { delayMs: computeBackoffDelay(policy, attempt), reason: 'rate_limit_backoff' };
+  }
+  return {
+    delayMs: computeBackoffDelay(policy, attempt - 1),
+    reason: err instanceof LLMStreamIdleTimeoutError ? 'stream_idle_timeout' : 'transient_backoff',
+  };
+}
+
+/**
  * Promise-based sleep that resolves early if the caller's AbortSignal fires.
  * Returns true when the sleep completed normally, false when aborted.
  *
@@ -3867,6 +3889,10 @@ export class Engine {
                 onRequestStart: () => {
                   if (isSubAgent) this.#toolRegistry?.reserveProviderRequest?.();
                 },
+                // Same policy as the main request. A summary step has no side
+                // effects, so a transient failure repeats only that step.
+                retry: { maxRetries: retryPolicy.maxRetries,
+                  delayFor: (error, attempt) => retryDelay(retryPolicy, error, attempt) },
               });
               while (true) {
                 // A multi-chunk summary can exhaust the allowance midway.
@@ -3878,6 +3904,16 @@ export class Engine {
                 }
                 const next = await compact.next();
                 if (next.done) { summary = next.value; break; }
+                if (next.value.type === 'retry') {
+                  const { attempt, maxRetries, delayMs, reason, error } = next.value;
+                  this.#trace.log?.('context_rollover_retry', { sessionId: runtimeSessionId, turnId: queryTurnId,
+                    model: currentModel, attempt, delayMs, reason,
+                    errorName: error?.name || null, statusCode: error?.statusCode ?? null });
+                  yield { type: 'llm_retry', attempt, maxRetries, delayMs, reason, recoveryMode: 'continue',
+                    errorName: error?.name || 'Error', statusCode: error?.statusCode ?? null,
+                    message: 'A context compaction request failed temporarily; retrying that step. Completed steps and tool results are kept.' };
+                  continue;
+                }
                 const usage = next.value;
                 const input = (usage.inputTokens || 0) + (usage.cacheTokensAreIncludedInInput
                   ? 0 : (usage.cacheReadTokens || 0) + (usage.cacheWriteTokens || 0));
@@ -3980,13 +4016,18 @@ export class Engine {
             }
             // Never drop source context when summarization fails. Report the
             // actual recovery failure, not a misleading invalid-signature error.
-            err = new Error('Automatic context compaction failed; conversation and completed tool results are preserved. '
-              + String(compactError?.message || compactError));
+            const attempts = compactError?.rolloverAttempts;
+            err = new Error('Automatic context compaction failed'
+              + (attempts > 1 ? ` after ${attempts} attempts at one summary request` : '')
+              + '; conversation and completed tool results are preserved. '
+              + String(compactError?.message || compactError), { cause: compactError });
             err.code = 'CONTEXT_COMPACTION_FAILED';
-            if (rollSignedBody) {
-              err.reasonCode = 'request_body_too_large';
-              if (compactError?.statusCode === 413) err.statusCode = 413;
-            } else if (rollSignedImage || rollSignedToolImages) err.reasonCode = 'request_image_limit';
+            // The provider's own status explains the failure; reasonCode names the trigger.
+            if (Number.isInteger(compactError?.statusCode) && compactError.statusCode > 0) {
+              err.statusCode = compactError.statusCode;
+            }
+            if (rollSignedBody) err.reasonCode = 'request_body_too_large';
+            else if (rollSignedImage || rollSignedToolImages) err.reasonCode = 'request_image_limit';
           }
         }
 
@@ -4086,20 +4127,7 @@ export class Engine {
         if ((earlyIsRateLimit || earlyIsTransient) && canReplayProviderRequest) {
           if (consecutiveRetryableErrors < retryPolicy.maxRetries) {
             consecutiveRetryableErrors += 1;
-            let delayMs;
-            let reason;
-            if (earlyIsRateLimit && Number.isFinite(err.retryAfterMs) && err.retryAfterMs > 0) {
-              delayMs = Math.min(retryPolicy.maxDelayMs, err.retryAfterMs);
-              reason = 'rate_limit_retry_after';
-            } else if (earlyIsRateLimit) {
-              delayMs = computeBackoffDelay(retryPolicy, consecutiveRetryableErrors);
-              reason = 'rate_limit_backoff';
-            } else {
-              delayMs = computeBackoffDelay(retryPolicy, consecutiveRetryableErrors - 1);
-              reason = err instanceof LLMStreamIdleTimeoutError
-                ? 'stream_idle_timeout'
-                : 'transient_backoff';
-            }
+            const { delayMs, reason } = retryDelay(retryPolicy, err, consecutiveRetryableErrors);
             // A retry is a brand-new provider request. Replaying the original
             // request after forwarding partial text duplicates that text in
             // the UI and can make the model restart its answer. Preserve the
