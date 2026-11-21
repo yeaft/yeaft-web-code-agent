@@ -1,631 +1,399 @@
 /**
- * Choreography of the basketball waiting animation: four possessions that
- * come round in turn — a crossover and a behind-the-back dribble into a
- * step-back three, a drive to a floater, a hesitation crossover into a long
- * two, and a drive to a layup off the glass — resolved as a pure function of
- * elapsed time. Nothing here keeps state, so any canvas reading the same
- * clock shows the same frame of the same play.
+ * Choreography of the basketball waiting animation: possessions that come
+ * round in turn, resolved as a pure function of elapsed time. Nothing here
+ * keeps state, so any canvas reading the same clock shows the same frame.
  *
- * The moves run at the speed they are played at, and are written foot by
- * foot: where each foot comes down, when, and what the ball is doing as it
- * does. The foot goes first and the ball follows it.
+ * Every body movement is motion capture (mocap.js): real players walking the
+ * ball up, working a defender, pulling up and going to the rim, strung
+ * together clip after clip. What the capture could not hold is worked out
+ * from it: the ball follows the hands (it leaves the hand where a push ends,
+ * bounces once, and is met where the next push begins), and the defender is
+ * the ball handler seen in a mirror a beat late, so he slides, sits down and
+ * goes up with the shot as the ball handler does, his chest up and giving
+ * ground when his man leans in. When he is beaten he trails his man on the
+ * far side, a beat behind, stride for stride.
  *
- * Play space is in feet. The rim's centre is above the origin; +x runs from
- * the ball handler toward the hoop, y is up and +z is to his right. Every
- * possession is laid out along that axis. Where on the arc it happens is
- * `angle`, and the renderer turns the court under the play instead.
+ * Play space is in feet. The rim's centre is above the origin; the ball is
+ * shot toward +x, y is up. Where on the arc it happens is `angle`, and the
+ * renderer turns the court under the play instead.
  */
-import { blend, cycleLength, editable, gait, keyframes, sample } from '../stick/motion.js';
-import { heading, solveFigure, torsoOf } from '../stick/rig.js';
-import { clamp01, dot, mix, mix3, offset, smooth, span, sub, turn } from '../stick/vec.js';
+import { J, blendPoses, clipInfo, clipPose, figureOf, mirrored, moved, perform, rerooted, upright } from './mocap.js';
+import { add, cross, mix, mix3, mul, smooth, span, sub, turn, unit } from '../stick/vec.js';
 
 export const RIM = Object.freeze({ y: 10, radius: 0.75 });
-export const BALL_RADIUS = 0.42;
-export const DEFENDER_SIZE = 1.05;
+export const BALL_RADIUS = 0.4;
+export const DEFENDER_SIZE = 1.04;
 
-const PI = Math.PI;
 const GRAVITY = 32.2;
-const WALK_SPEED = 3.3;
-const STROLL = 0.12;
+/** Share of its speed a ball keeps off the floor. */
+const BOUNCE = 0.78;
 /** The backboard's face, out from the rim's centre (see court.js). */
 const BOARD = 1.25;
-/** How long a celebration holds him, and how long the possession lasts after it. */
+/** How long the possession runs on once the make has settled (he is walking off by then), and the stretch after that which ends in the fade. */
 const PARTY = 1.75;
 const OUTRO = 0.9;
-/** Seconds he takes to settle from his walk into his stance. */
-const SETTLE = 0.26;
-const CELEBRATIONS = ['night', 'shimmy', 'point', 'stroll'];
-
-const BOTH = [true, true];
-const LEFT = [true, false];
-const RIGHT = [false, true];
-/** Hands with no ball in them, from the shoulder: the left out in front, the right at his side. */
-const GUARD = [0.55, -0.5, -0.9];
-const REST = [0.5, 0.45, -1.05];
-const DOWN = [[0.2, -0.16, -1.62], [0.2, 0.16, -1.62]];
-/** The shooting hand held high after the ball has gone. */
-const FOLLOW = [0.98, -0.05, 1.5];
-/** The arm on the far side of a stride, swung back and then through. */
-const BACK = 0.5;
-const swung = (side, back) => (back ? [-0.3, side * BACK, -1.0] : [0.6, side * 0.4, -0.8]);
-
-/** Point a hand at a world position. */
-function setHand(pose, index, point) {
-  const { cf, cr, shoulders } = torsoOf(pose);
-  const reach = sub(point, shoulders[index]);
-  pose.hands[index] = [dot(reach, cf), dot(reach, cr), reach[1]];
-}
-
-/** A point given as [forward, side, height] from the spot under the pelvis. */
-function fromFloor(pose, [forward, side, height]) {
-  const { f, r } = heading(pose.yaw);
-  return offset([pose.x, 0, pose.z], f, forward, r, side, height);
-}
-
-/** Turn his head toward a spot on the floor, as far as a neck turns. */
-function look(pose, x, z, weight) {
-  if (weight <= 0) return;
-  const want = Math.atan2(z - pose.z, x - pose.x) - pose.yaw - pose.twist;
-  const neck = Math.max(-1.15, Math.min(1.15, Math.atan2(Math.sin(want), Math.cos(want))));
-  pose.headYaw = mix(pose.headYaw, neck, weight);
-}
-
-/** Height off the floor at `t` for jumps given as [takes off, lands, height]. */
-function airborne(jumps, t) {
-  let height = 0;
-  for (const [from, to, peak] of jumps || []) {
-    const u = span(t, from, to);
-    height += peak * 4 * u * (1 - u);
-  }
-  return height;
-}
-
-function lifted(pose, air) {
-  if (air <= 0) return;
-  pose.hip += air * 0.94;
-  for (const plant of pose.plants) plant[1] += air;
-}
-
+const WALK = clipInfo('walk');
+const WALK_STRIDE = Math.hypot(WALK.loop[0], WALK.loop[1]);
+const WALK_SPEED = WALK_STRIDE / WALK.seconds;
 /**
- * Keyframes written by where the feet go. A row is [time, changes, options]
- * as `keyframes` takes them, except that a foot is put down with `L` or `R`
- * as world [x, z, lift]. A foot a row does not name stays where it is, so a
- * row reads as the step it is.
+ * How far forward a back may lean, in radians: eased from the first number
+ * toward the second. The capture of the handles dribbles nearly doubled
+ * over; a guard in a game keeps his chest up, and his defender more so.
  */
-function course(rows) {
-  let at = { x: 0, z: 0, yaw: 0 };
-  const plants = [[0, -0.33, 0], [0, 0.33, 0]];
-  return keyframes(rows.map(([t, { L, R, ...changes }, options = {}]) => {
-    at = { ...at, ...changes };
-    [L, R].forEach((plant, foot) => {
-      if (plant) plants[foot] = [plant[0], plant[1], plant[2] || 0];
-    });
-    const { f, r } = heading(at.yaw);
-    const feet = plants.map(([x, z, lift]) => [(x - at.x) * f[0] + (z - at.z) * f[2], (x - at.x) * r[0] + (z - at.z) * r[2], lift]);
-    return [t, { ...changes, feet }, { ...options, keep: options.keep || [!L, !R] }];
-  }));
-}
+const HERO_LEAN = [0.5, 0.8];
+const GUARD_LEAN = [0.3, 0.55];
+/** Least room, in feet, between the two upper bodies' joints along the line between them. */
+const ROOM = 1.9;
+const UPPER = [J.chest, J.neck, J.crown, J.lshoulder, J.rshoulder];
 
-/** Rows for a figure facing straight up or down the court, swapped left for right. */
-function mirrored(rows) {
-  const swap = pair => [pair[1], pair[0]];
-  return rows.map(([t, changes, options = {}]) => {
-    const flipped = { ...changes };
-    for (const name of ['z', 'sway', 'twist', 'headYaw', 'headRoll']) if (name in flipped) flipped[name] = -flipped[name];
-    for (const name of ['feet', 'hands']) if (flipped[name]) flipped[name] = swap(flipped[name]).map(([forward, side, up]) => [forward, -side, up]);
-    if (flipped.toeLift) flipped.toeLift = swap(flipped.toeLift);
-    return [t, flipped, { ...options, ...(options.keep && { keep: swap(options.keep) }), ...(options.slide && { slide: swap(options.slide) }) }];
-  });
-}
-
-/** A sprint along [time, x, z, heading] rows, with the distance run so far added to each. */
-function trail(rows, pace = 0.9) {
-  let run = 0;
-  const path = rows.map((row, i) => {
-    if (i > 0) run += Math.hypot(row[1] - rows[i - 1][1], row[2] - rows[i - 1][2]);
-    return [...row, run];
-  });
-  return { path, pace, from: rows[0][0], to: rows[rows.length - 1][0] };
-}
-
-function sprint({ path, pace }, t) {
-  let index = 1;
-  while (index < path.length - 1 && t >= path[index][0]) index += 1;
-  const a = path[index - 1];
-  const b = path[index];
-  const u = span(t, a[0], b[0]);
-  return gait(mix(a[1], b[1], u), mix(a[2], b[2], u), mix(a[3], b[3], u), mix(a[4], b[4], u) / cycleLength(pace), pace);
-}
-
-// ── The four possessions ──────────────────────────────────────────────────
+// ── The possessions ───────────────────────────────────────────────────────
 //
-// Each is: where he brings the ball up from and to (`from`, `spot`), when he
-// gets there (`sizeup`) and makes his move (`move`); his feet and body
-// (`hero`) and jumps; the dribble as `touches`; where the held ball sits
-// (`hold`, from his chest), which hand shoots it and when it leaves; and his
-// defender. `side` is which sideline the camera watches the move from.
-//
-// A touch is when the ball is in which hand (0 left, 1 right) and where, as
-// [forward, side, height] from the spot under his pelvis. Between two touches
-// it bounces once off `floor`, or with `carry` stays in the hand. The last
-// touch is where he picks it up.
+// `hero` lists the clips the ball handler plays, one into the next; the
+// entry `shot` names holds the gather and the release. The shot goes toward
+// where he is facing as it leaves his hand (`aim: 'facing'`) or where he is
+// going (`'travel'`), from `range` feet out. His defender mirrors him `lag`
+// seconds late from `gap` feet in front, closing to `close` as he rises; on a
+// drive he is beaten at `beaten` (seconds before the release) and trails him.
 
-/** Defender walking up into his stance, `x` feet out, by the time the ball arrives. */
-const closeOut = (at, x) => [
-  [0, { x: x + 2.8, z: -0.5, yaw: PI, hip: 2.95, lean: 0.2, feet: [[0.1, -0.6, 0], [-0.1, 0.6, 0]], hands: [[0.35, -0.35, -1.3], [0.35, 0.35, -1.3]] }],
-  [at - 0.95, {}, { stop: true }],
-  [at - 0.45, { x: x + 1.6, z: -0.25, hip: 2.9, lean: 0.28, feet: [[0.8, -0.8, 0], [-0.4, 0.6, 0]], hands: [[0.6, -0.6, -0.9], [0.6, 0.45, -0.7]] }, { keep: RIGHT }],
-  [at, { x, z: 0, hip: 2.55, lean: 0.42, feet: [[0.12, -1.05, 0], [-0.12, 1.05, 0]], hands: [[0.75, -0.75, -0.55], [0.85, 0.45, -0.15]] }, { keep: LEFT }],
-];
-
-/**
- * Crossover, behind the back, step-back three: the possession the others are
- * measured against. He is low and wide the whole way, the ball below his
- * knees. A jab right and the ball back across; his man reaches, so he drops
- * a foot and takes it round behind his back, turning square to the sideline.
- * A beat with the ball in front of him. Then he sells it back toward the rim,
- * wraps it behind him again and is gone the other way: his man, on his heels,
- * sits down. Two long strides out past the line with the ball in his far
- * hand, the right foot brakes, he turns on it, and the shot is away almost
- * before the left foot is down.
- *
- * Timed from footage of him doing exactly this, at four-fifths speed: a
- * dribble every 0.36 s, and 0.4 s from picking the ball up to letting it go.
- */
-const STEPBACK = {
-  name: 'stepback', worth: 3, angles: [0, -0.45, 0.4], side: 1,
-  from: -28.4, spot: [-20.4, 0], sizeup: 1.5, move: 2.2,
-  hero: course([
-    [1.5, { x: -20.4, z: 0, yaw: 0, hip: 2.42, lean: 0.74, twist: 0.12, headPitch: 0.05, L: [-19.95, -1.0], R: [-20.85, 1.0], hands: [GUARD, REST] }],
-    [1.86, { hip: 2.34, lean: 0.78 }],
-    // The foot goes first: a jab out to his right, and the ball pounded outside it.
-    [2.06, { x: -20.25, z: 0.5, yaw: 0.12, hip: 2.3, lean: 0.76, sway: 0.24, twist: 0.2, R: [-20.3, 1.6] }],
-    [2.2, { z: 0.6, sway: 0.28 }],
-    // Off that foot, and the ball comes back across below his knees.
-    [2.36, { x: -20.2, z: -0.05, yaw: -0.08, hip: 2.26, lean: 0.8, sway: -0.04, twist: -0.1 }],
-    [2.5, { x: -20.1, z: -0.65, yaw: -0.22, hip: 2.34, lean: 0.74, sway: -0.28, twist: -0.25, L: [-19.8, -1.9] }],
-    // His man reaches. He drops the right foot back and takes the ball with him.
-    [2.7, { x: -20.55, z: -0.8, yaw: -0.05, hip: 2.44, lean: 0.66, sway: -0.1, twist: 0, R: [-21.35, 0.15] }],
-    [2.88, { x: -20.9, z: -0.65, yaw: 0.3, hip: 2.42, lean: 0.62, sway: 0, twist: 0.2, L: [-20.55, -1.55] }],
-    // Behind the back: he turns on the left foot, square to the sideline, and the ball goes round behind his hips.
-    [3.06, { x: -21.25, z: -1.0, yaw: 0.85, hip: 2.38, lean: 0.58, sway: 0.1, twist: 0.25, R: [-22.35, -1.3] }],
-    [3.26, { x: -21.45, z: -1.25, yaw: 1.3, hip: 2.38, lean: 0.68, sway: 0, twist: 0.1, L: [-20.5, -1.15] }],
-    // A beat, the ball low in front of him, and his man comes again.
-    [3.44, { yaw: 1.4, hip: 2.5, lean: 0.6 }],
-    [3.62, { x: -21.4, hip: 2.4, lean: 0.68 }],
-    // Sells it back toward the rim: a step with the left foot, the ball across to his left hand...
-    [3.8, { x: -21.05, z: -1.2, yaw: 1.25, hip: 2.3, lean: 0.74, sway: -0.26, twist: -0.2, L: [-19.85, -0.95] }],
-    [3.98, { x: -20.9, sway: -0.3 }],
-    // ...and round behind his back again as he pushes off it, away from everyone.
-    [4.16, { x: -21.8, z: -1.15, yaw: 1.5, hip: 2.36, lean: 0.6, sway: 0.3, twist: 0.25, R: [-23.3, -1.1] }],
-    [4.4, { x: -23.15, z: -1.0, yaw: 1.9, hip: 2.5, lean: 0.5, sway: 0.26, twist: -0.25, L: [-23.95, -0.55] }],
-    // The right foot brakes and he turns on it to face the rim...
-    [4.64, { x: -24.35, z: -0.95, yaw: 1.2, hip: 2.46, lean: 0.48, sway: 0.12, twist: -0.2, R: [-25.15, -0.9] }],
-    // ...the left comes round under him, then the right is set: feet narrow, turned as he likes them.
-    [4.86, { x: -24.95, z: -1.05, yaw: 0.15, hip: 2.56, lean: 0.38, sway: 0, twist: 0, toes: [-0.32, -0.1], L: [-25.25, -1.45] }],
-    [5.0, { x: -25.02, yaw: 0, hip: 2.54, lean: 0.32, R: [-24.85, -0.6] }, { slide: RIGHT }],
-    // A shallow dip and one motion up through the ball. It is gone on the way up, and he drifts back.
-    [5.14, { hip: 2.48, lean: 0.28 }],
-    [5.3, { hip: 3.22, lean: 0.06, headPitch: -0.12 }],
-    [5.56, { x: -25.2, lean: -0.08, hands: [[0.55, -0.1, 0.9], FOLLOW] }],
-    [5.8, { x: -25.45, hip: 3.0, lean: 0.06, L: [-25.7, -1.45], R: [-25.3, -0.6], hands: [[0.5, -0.12, 0.6], FOLLOW] }, { slide: BOTH }],
-    [6.22, { hip: 3.16, lean: 0.05, headPitch: 0, hands: [[0.2, -0.14, -1.6], [0.7, 0.1, 0.6]] }],
-  ]),
-  jumps: [[5.28, 5.78, 1.0]],
-  touches: [
-    { t: 1.5, hand: 1, at: [0.8, 1.0, 1.55], floor: [0.95, 1.05] },
-    { t: 1.86, hand: 1, at: [0.8, 1.0, 1.55], floor: [0.95, 1.05] },
-    { t: 2.2, hand: 1, at: [0.9, 1.3, 1.45], floor: [1.0, 1.4] },       // pounded outside the right foot
-    { t: 2.5, hand: 0, at: [0.75, -0.95, 1.4], floor: [1.0, 0.1] },     // crossed over, below the knees
-    { t: 2.88, hand: 0, at: [0.25, -1.0, 1.7], floor: [0.45, -1.1] },   // pulled back with him
-    { t: 3.26, hand: 1, at: [0.3, 0.95, 1.6], floor: [-0.85, 0] },      // round behind his back
-    { t: 3.62, hand: 1, at: [0.85, 0.5, 1.55], floor: [0.9, 0.75] },    // low in front of him
-    { t: 3.98, hand: 0, at: [0.8, -0.85, 1.45], floor: [1.05, -0.1] },  // across again, toward the rim
-    { t: 4.34, hand: 1, at: [0.25, 1.15, 1.7], floor: [-0.8, 0.1] },    // behind his back as he goes
-    { t: 4.7, hand: 1, at: [0.45, 1.2, 2.2], floor: [0.5, 1.5] },       // pushed out wide in his far hand
-    { t: 5.0, hand: 1, at: [0.4, 0.55, 2.3], floor: [0.6, 0.9] },       // picked up at his right hip
+const PULLUP = {
+  name: 'pullup', worth: 3, side: 1, angles: [0, -0.45, 0.4],
+  hero: [
+    { clip: 'bringup', from: 0, to: 2.2 },
+    { clip: 'handles', from: 0.15, to: 2.55, blend: 0.35 },
+    { clip: 'pullup', from: 0.2, to: 2.35, blend: 0.35 },
   ],
-  // From the hip, up past his chest to his forehead, and away.
-  hold: [[5.0, [0.5, 0.5, -1.15]], [5.14, [0.7, 0.28, -0.8]], [5.3, [0.5, 0.36, 0.78]], [5.42, [0.82, 0.34, 1.55]]],
-  shooter: 1, release: 5.42, flight: 1.35, walk: 6.08,
-  defender: keyframes([
-    ...closeOut(1.5, -16.0),
-    [1.9, {}, { keep: BOTH }],
-    // Slides with the jab, half a beat late.
-    [2.24, { z: 0.6, sway: -0.14, feet: [[-0.05, -1.4, 0], [0.1, 0.7, 0]] }, { keep: RIGHT }],
-    // The ball comes back across and he goes after it: back the other way, then a lunge with his right hand.
-    [2.42, { z: 0.15, sway: 0.1, feet: [[0, -0.75, 0], [0.05, 1.2, 0]] }, { keep: RIGHT }],
-    [2.6, { x: -16.35, z: -0.45, lean: 0.42, sway: 0.2, feet: [[0, -0.55, 0], [0.05, 1.3, 0]], hands: [[0.7, -0.6, -0.5], [0.95, 0.5, -0.5]] }, { keep: LEFT }],
-    [2.82, { x: -17.0, z: -1.0, hip: 2.36, lean: 0.56, sway: 0.28, feet: [[-0.6, -0.9, 0], [0.95, 0.5, 0]], hands: [[0.4, -0.7, -0.7], [1.5, 0.25, -1.0]] }, { keep: LEFT }],
-    // Nothing there. He stumbles on a step and pulls himself up.
-    [3.1, { x: -17.6, z: -1.3, hip: 2.62, lean: 0.4, sway: 0.05, feet: [[0.55, -0.55, 0], [-0.35, 0.6, 0]], hands: [[0.7, -0.7, -0.3], [0.8, 0.5, -0.6]] }, { keep: RIGHT }],
-    // Squares up again, a little closer than is wise.
-    [3.5, { x: -17.85, z: -1.25, hip: 2.5, lean: 0.42, sway: 0, feet: [[0.1, -1.05, 0], [-0.1, 1.05, 0]], hands: [[0.75, -0.75, -0.55], [0.85, 0.45, -0.25]] }],
-    // The ball is shown to him and he gives ground, onto his heels.
-    [3.8, { x: -17.45, hip: 2.56, lean: 0.28, feet: [[-0.45, -0.8, 0], [0.25, 0.85, 0]], hands: [[0.8, -0.7, -0.2], [0.8, 0.6, -0.3]] }, { keep: RIGHT }],
-    [3.98, { x: -17.15, hip: 2.6, lean: 0.16, feet: [[-0.15, -0.8, 0], [-0.5, 0.8, 0]] }, { keep: LEFT }],
-    // It was never coming. Written with left and right swapped, as the fall was first drawn, then mirrored.
-    ...mirrored([
-      // He goes to come forward off his heels and the front foot skids out from under him.
-      [4.1, { x: -17.15, z: 1.3, hip: 2.3, lean: 0.1, sway: 0.1, twist: 0.3, headYaw: 0.2, feet: [[1.0, -0.6, 0], [-0.35, 0.5, 0.15]], hands: [[0.3, -1.0, 0.7], [0.4, 1.2, 0.5]] }, { slide: LEFT }],
-      [4.24, { x: -16.95, z: 1.35, hip: 2.05, lean: -0.22, sway: 0.15, twist: 0.4, headYaw: 0.3, feet: [[1.6, -0.6, 0], [0.1, 0.45, 0.3]], hands: [[0.2, -1.1, 1.25], [0.45, 1.15, 1.3]] }, { slide: LEFT }],
-      [4.4, { x: -16.7, z: 1.4, hip: 1.45, lean: -0.6, sway: 0.1, twist: 0.3, headYaw: 0.2, headPitch: -0.2, feet: [[1.55, -0.6, 0.35], [1.2, 0.5, 0.95]], toeLift: [0.3, 0.5], hands: [[-0.5, -1.0, 0.3], [-0.6, 1.0, 0.5]] }],
-      // Lands on his backside with his feet in the air.
-      [4.58, { x: -16.45, z: 1.45, hip: 0.62, lean: -0.78, sway: 0, twist: 0, feet: [[1.7, -0.5, 1.25], [1.6, 0.5, 1.7]], toeLift: [0.6, 0.6], hands: [[-0.75, -0.7, -1.55], [-0.75, 0.7, -1.55]] }, { stop: true }],
-      // Sits up, one hand out toward the shooter.
-      [4.86, { x: -16.35, z: 1.5, hip: 0.6, lean: -0.5, headYaw: 0.1, headPitch: 0, feet: [[2.0, -0.55, 0.05], [1.55, 0.6, 0.5]], toeLift: [0.5, 0.2], hands: [[-0.7, -0.6, -1.4], [0.85, 0.2, 0.75]] }],
-      [5.42, { hands: [[-0.7, -0.6, -1.4], [0.9, 0.1, 1.0]] }, { keep: BOTH }],
-      // Watches it over his shoulder.
-      [6.0, { twist: 0.55, headYaw: 1.45, headPitch: -0.38, hands: [[-0.7, -0.6, -1.4], [0.6, 0.4, -0.6]] }, { keep: BOTH }],
-      [6.87, {}, { keep: BOTH, stop: true }],
-      // Head in his hand.
-      [7.42, { lean: -0.15, twist: 0, headYaw: 0.2, headPitch: 0.62, hands: [[-0.5, -0.5, -1.5], [0.3, -0.32, 0.74]] }, { keep: BOTH }],
-    ]),
-  ]),
-  beaten: 4.0, skid: [4.1, 1], seat: 4.58,
-  stills: [1.9, 2.5, 3.2, 4.45, 5.49, 6.91, 7.95],
+  shot: 2, aim: 'facing', range: 23.2, flight: 1.3,
+  defender: { lag: 0.2, gap: 4.6, close: 3.3 },
 };
 
-/**
- * Drive and floater. A jab to his left, then past his man on the right with
- * the ball pushed out ahead: four long strides, two more with the ball in
- * his hands, and up off the left foot to float it high over the trailing hand.
- */
-const FLOATER = {
-  name: 'floater', worth: 2, angles: [0.25, -0.3], side: 1,
-  from: -32.5, spot: [-25, 0], sizeup: 1.4, move: 2.0,
-  hero: course([
-    [1.4, { x: -25, z: 0, yaw: 0, hip: 2.48, lean: 0.66, twist: 0.1, L: [-24.6, -0.95], R: [-25.4, 0.95], hands: [GUARD, REST] }],
-    [1.8, { z: -0.1, hip: 2.4, lean: 0.7 }],
-    // Jab left: head and shoulders go, the ball stays home.
-    [2.04, { x: -24.85, z: -0.6, yaw: -0.2, hip: 2.36, lean: 0.7, sway: -0.3, twist: -0.25, L: [-24.4, -1.8] }],
-    // Off that foot and past him on the right: a long first step, the ball pushed out ahead.
-    [2.3, { x: -23.7, z: 0.85, yaw: 0.3, hip: 2.4, lean: 0.68, sway: 0.2, twist: 0.25, R: [-22.5, 1.85], L: [-24.2, -0.9, 0.3], hands: [swung(-1, true), REST] }],
-    [2.56, { x: -21.1, z: 1.95, yaw: 0.12, hip: 2.5, lean: 0.64, sway: 0, twist: -0.15, L: [-19.7, 2.05], hands: [swung(-1, false), REST] }],
-    [2.8, { x: -18.3, z: 2.3, yaw: 0, hip: 2.6, lean: 0.56, twist: 0.15, R: [-16.8, 2.75], hands: [swung(-1, true), REST] }],
-    [3.04, { x: -15.4, z: 2.2, yaw: -0.08, hip: 2.62, lean: 0.5, twist: -0.12, L: [-13.9, 1.75], hands: [swung(-1, false), REST] }],
-    // Two steps with the ball in his hands, and up off the left foot with the right knee driving.
-    [3.28, { x: -12.7, z: 1.8, yaw: -0.12, hip: 2.6, lean: 0.4, twist: 0.1, R: [-11.4, 2.0] }],
-    [3.5, { x: -10.5, z: 1.35, hip: 2.5, lean: 0.3, twist: 0, L: [-9.5, 0.85] }],
-    [3.66, { x: -9.6, z: 1.15, hip: 2.95, lean: 0.16, headPitch: -0.15, R: [-9.0, 1.55, 1.0], hands: [[0.5, -0.6, -0.3], [0.7, 0.15, 1.7]] }],
-    [3.92, { x: -8.5, z: 1.0, hip: 3.1, lean: 0.04, L: [-9.0, 0.7, 0.3], R: [-8.0, 1.35, 0.8] }],
-    [4.26, { x: -7.2, z: 0.85, hip: 2.72, lean: 0.26, headPitch: 0, L: [-7.0, 0.45], R: [-7.45, 1.25], hands: [[0.45, -0.45, -0.7], [0.6, 0.3, 0.6]] }],
-    [4.56, { x: -6.7, hip: 3.08, lean: 0.1, hands: DOWN }],
-  ]),
-  jumps: [[3.66, 4.26, 1.4]],
-  touches: [
-    { t: 1.4, hand: 1, at: [0.8, 1.0, 1.6], floor: [0.95, 1.05] },
-    { t: 1.8, hand: 1, at: [0.8, 1.0, 1.6], floor: [0.95, 1.05] },
-    { t: 2.16, hand: 1, at: [0.55, 1.0, 1.6], floor: [0.7, 1.1] },
-    { t: 2.5, hand: 1, at: [1.3, 0.95, 2.0], floor: [2.2, 1.05] },      // pushed out ahead of the first step
-    { t: 2.82, hand: 1, at: [1.2, 0.9, 2.2], floor: [2.2, 0.95] },
-    { t: 3.14, hand: 1, at: [1.0, 0.7, 2.5], floor: [2.0, 0.9] },
-  ],
-  hold: [[3.34, [0.6, 0.3, -0.5]], [3.52, [0.55, 0.4, -0.15]], [3.72, [0.5, 0.5, 0.8]], [3.88, [0.72, 0.42, 1.75]]],
-  shooter: 1, guideOff: 3.6, release: 3.88, flight: 0.98, walk: 4.6,
-  defender: keyframes([
-    ...closeOut(1.4, -20.9),
-    [1.95, {}, { keep: BOTH }],
-    // Bites on the jab.
-    [2.14, { z: -0.6, sway: 0.15, feet: [[0.1, -0.8, 0], [-0.05, 1.4, 0]] }, { keep: LEFT }],
-    // Beaten: opens up and reaches as the ball goes by, then turns and runs.
-    [2.36, { x: -21.1, z: -0.3, yaw: PI - 0.7, hip: 2.7, lean: 0.3, sway: 0, twist: -0.4, feet: [[0.3, -0.9, 0.2], [-0.2, 0.7, 0]], hands: [[0.8, -0.9, -0.2], [0.4, 0.4, -0.9]] }],
-    // Gets there late and goes up behind the shot.
-    [3.7, { x: -11.4, z: 0.1, yaw: 0.05, hip: 2.85, lean: 0.28, twist: 0, feet: [[0.5, -0.3, 0], [-0.5, 0.3, 0]], hands: [[0.9, -0.2, 1.3], [0.3, 0.3, -0.8]] }],
-    [3.98, { x: -10.6, z: -0.5, hip: 3.2, lean: 0.2, headPitch: -0.3, feet: [[0.2, -0.3, 0], [-0.3, 0.3, 0]], hands: [[0.9, -0.1, 1.85], [0.3, 0.3, -0.6]] }],
-    [4.3, { x: -10.1, z: -1.4, hip: 2.8, lean: 0.3, feet: [[0.3, -0.35, 0], [-0.3, 0.35, 0]], hands: [[0.4, -0.3, -0.9], [0.4, 0.3, -0.9]] }],
-    // Drifts out of the lane and watches it drop.
-    [4.9, { x: -10.4, z: -2.7, hip: 3.12, lean: 0.1, feet: [[0.1, -0.35, 0], [-0.1, 0.35, 0]] }, { stop: true }],
-    // Hands on his hips.
-    [5.5, { headPitch: 0.5, hands: [[-0.1, -0.45, -1.1], [-0.1, 0.45, -1.1]] }, { keep: BOTH }],
-  ]),
-  chase: trail([[2.36, -21.1, -0.3, 1.9], [2.62, -20.3, 0.7, 0.6], [3.0, -18.2, 1.0, 0.1], [3.4, -13.9, 0.3, -0.05], [3.68, -11.6, 0.1, 0]]),
-  leaps: [[3.74, 4.24, 0.85]], beaten: 2.3,
-  stills: [2.7, 3.92, 4.98],
-};
-
-/**
- * Hesitation crossover, pull-up from the elbow. He comes up tall with the
- * ball riding up in his hand and his man leaves the floor; down and across
- * below the knees, two long strides left, a one-two stop and a quick shot
- * with both hands left up high after it.
- */
-const LONG_TWO = {
-  name: 'longtwo', worth: 2, angles: [-0.4, 0.35, 0], side: 1,
-  from: -32.5, spot: [-25, 0], sizeup: 1.4, move: 2.2,
-  hero: course([
-    [1.4, { x: -25, z: 0, yaw: 0, hip: 2.56, lean: 0.58, twist: 0.1, L: [-24.65, -0.9], R: [-25.35, 0.9], hands: [GUARD, REST] }],
-    [1.8, { z: 0.12, hip: 2.46, lean: 0.64 }],
-    [2.2, { z: 0, hip: 2.52 }],
-    // The hesitation: up tall, eyes on the rim.
-    [2.44, { x: -24.9, hip: 3.04, lean: 0.12, headPitch: -0.12 }],
-    // Drops and crosses over; the left foot reaches out wide.
-    [2.62, { x: -24.55, z: -0.55, yaw: -0.25, hip: 2.4, lean: 0.62, sway: -0.26, twist: -0.2, headPitch: 0, L: [-23.7, -1.9] }],
-    // Off the right foot: long and low.
-    [2.88, { x: -22.75, z: -1.85, yaw: -0.28, hip: 2.5, lean: 0.56, sway: -0.08, twist: 0.15, R: [-21.45, -2.2], hands: [GUARD, swung(1, true)] }],
-    // Up out of the drive into a one-two stop, left then right, feet turned as he likes them.
-    [3.14, { x: -20.9, z: -2.55, yaw: -0.15, hip: 2.76, lean: 0.36, sway: 0, twist: -0.1, L: [-19.75, -3.05], hands: [GUARD, swung(1, false)] }],
-    [3.36, { x: -19.68, z: -2.62, yaw: 0.08, hip: 2.6, lean: 0.28, twist: 0, toes: [-0.32, -0.1], R: [-19.5, -2.2] }],
-    [3.5, { hip: 2.52, lean: 0.28 }],
-    [3.66, { hip: 3.22, lean: 0.06, headPitch: -0.12 }],
-    // He comes down a little ahead of where he left: one move of the feet, long enough to count as one.
-    [3.92, { x: -19.56, lean: 0, hands: [[0.6, -0.12, 1.25], FOLLOW] }],
-    [4.16, { x: -19.31, hip: 3.0, lean: 0.08, L: [-19.38, -3.05], R: [-19.13, -2.2], hands: [[0.55, -0.15, 1.0], FOLLOW] }, { slide: BOTH }],
-    [4.36, { hip: 3.16, lean: 0.05, headPitch: 0, hands: [[0.3, -0.14, -1.2], [0.6, 0.1, 0.2]] }],
-  ]),
-  jumps: [[3.64, 4.14, 0.95]],
-  touches: [
-    { t: 1.4, hand: 1, at: [0.75, 0.95, 1.7], floor: [0.9, 1.0] },
-    { t: 1.8, hand: 1, at: [0.75, 0.95, 1.7], floor: [0.9, 1.0] },
-    { t: 2.2, hand: 1, at: [0.75, 0.95, 1.7], floor: [0.9, 1.0] },
-    { t: 2.44, hand: 1, at: [0.65, 0.7, 3.05], carry: true },            // rides up with the hesitation
-    { t: 2.74, hand: 0, at: [0.75, -0.9, 1.8], floor: [1.0, 0.1] },     // crossed over, low
-    { t: 3.0, hand: 0, at: [1.1, -0.85, 2.2], floor: [2.1, -0.95] },
-    { t: 3.24, hand: 0, at: [0.7, -0.6, 2.6], floor: [1.6, -0.8] },
-  ],
-  hold: [[3.42, [0.7, 0.12, -0.6]], [3.5, [0.72, 0.2, -0.78]], [3.66, [0.5, 0.36, 0.78]], [3.78, [0.82, 0.34, 1.55]]],
-  shooter: 1, release: 3.78, flight: 1.15, walk: 4.4,
-  defender: keyframes([
-    ...closeOut(1.4, -21.0),
-    [2.2, { hip: 2.45, lean: 0.45 }, { keep: BOTH }],
-    // Bites on the hesitation: up off the floor with both arms.
-    [2.42, { hip: 2.78, lean: 0.25, hands: [[0.7, -0.4, 0.6], [0.7, 0.4, 0.8]] }, { keep: BOTH }],
-    [2.66, { x: -21.3, hip: 3.2, lean: 0.12, feet: [[0.1, -0.45, 0], [0, 0.45, 0]], hands: [[0.55, -0.35, 1.75], [0.55, 0.3, 1.85]] }],
-    // Lands looking over his shoulder at where the ball went, turns and lunges after it.
-    [3.0, { x: -21.5, z: -0.3, yaw: PI + 0.5, hip: 2.7, lean: 0.3, headYaw: 0.6, feet: [[0.1, -0.5, 0], [-0.1, 0.5, 0]], hands: [[0.5, -0.5, 0.2], [0.5, 0.5, 0.4]] }],
-    [3.3, { x: -21.6, z: -1.9, yaw: PI + 1.5, hip: 2.8, lean: 0.4, headYaw: 0.3, feet: [[0.8, -0.3, 0], [-0.6, 0.3, 0.3]], hands: [[0.5, -0.3, -0.9], [-0.2, 0.4, -1.0]] }],
-    [3.62, { x: -21.5, z: -3.6, yaw: 2 * PI - 0.1, lean: 0.42, headYaw: 0, feet: [[-0.6, -0.3, 0.2], [0.9, 0.3, 0]], hands: [[0.3, -0.3, -0.9], [0.9, 0.2, 1.3]] }],
-    // Comes round behind him with a hand up, too late.
-    [3.9, { x: -21.0, z: -4.3, yaw: 2 * PI + 0.75, hip: 3.0, lean: 0.3, headPitch: -0.3, feet: [[0.4, -0.3, 0], [-0.4, 0.3, 0]], hands: [[0.3, -0.3, -0.9], [0.85, 0.1, 1.75]] }],
-    [4.4, { lean: 0.15, hands: [[0.3, -0.3, -1.3], [0.4, 0.3, -1.2]] }, { keep: BOTH, stop: true }],
-    [5.5, { headPitch: 0.5, hands: [[-0.1, -0.45, -1.1], [-0.1, 0.45, -1.1]] }, { keep: BOTH }],
-  ]),
-  leaps: [[2.46, 2.9, 0.55]], beaten: 2.4,
-  stills: [2.44, 3.83],
-};
-
-/**
- * Drive and layup. The same hesitation, the same crossover, but he keeps
- * going: two left-hand dribbles down the lane, the ball picked up, a step
- * and a long second step, and up off the right foot to lay it high off the
- * glass with his left hand.
- */
 const LAYUP = {
-  name: 'layup', worth: 2, angles: [-0.55, 0.55], side: -1,
-  from: -31.5, spot: [-24.2, 0], sizeup: 1.4, move: 2.0,
-  hero: course([
-    [1.4, { x: -24.2, z: 0, yaw: 0, hip: 2.48, lean: 0.66, twist: 0.1, L: [-23.8, -0.95], R: [-24.6, 0.95], hands: [GUARD, REST] }],
-    [1.8, { hip: 2.4, lean: 0.7 }],
-    [2.1, { x: -24.1, hip: 3.0, lean: 0.14, headPitch: -0.1 }],
-    [2.32, { x: -23.8, z: -0.6, yaw: -0.28, hip: 2.38, lean: 0.62, sway: -0.26, twist: -0.2, headPitch: 0, L: [-22.9, -1.95] }],
-    [2.58, { x: -21.6, z: -1.9, yaw: -0.2, hip: 2.45, lean: 0.66, sway: -0.08, twist: 0.15, R: [-19.9, -2.2], hands: [GUARD, swung(1, true)] }],
-    [2.82, { x: -18.3, z: -2.5, yaw: -0.06, hip: 2.55, lean: 0.6, sway: 0, twist: -0.15, L: [-16.6, -2.95], hands: [GUARD, swung(1, false)] }],
-    [3.06, { x: -15.0, z: -2.65, yaw: 0, hip: 2.6, lean: 0.55, twist: 0.15, R: [-13.3, -2.35], hands: [GUARD, swung(1, true)] }],
-    // The ball is in his hands: a step, a long second step, and up off the right foot.
-    [3.3, { x: -11.7, z: -2.6, hip: 2.6, lean: 0.45, twist: -0.1, L: [-10.0, -2.9], hands: [GUARD, swung(1, false)] }],
-    [3.54, { x: -8.3, z: -2.45, hip: 2.5, lean: 0.34, twist: 0.1, R: [-6.6, -2.15] }],
-    [3.68, { x: -6.9, z: -2.3, hip: 3.0, lean: 0.18, headPitch: -0.2, L: [-6.9, -2.7, 1.3], hands: [[0.65, -0.1, 1.8], [0.45, 0.6, -0.3]] }],
-    [3.98, { x: -4.6, z: -2.05, hip: 3.2, lean: 0.02, L: [-4.2, -2.4, 0.4], R: [-5.3, -1.75, 0.5] }],
-    [4.36, { x: -1.9, z: -1.95, hip: 2.7, lean: 0.25, headPitch: 0, L: [-1.5, -2.3], R: [-2.7, -1.6], hands: [[0.6, -0.3, 0.5], [0.45, 0.45, -0.7]] }],
-    [4.66, { x: -0.9, z: -2.1, hip: 3.06, lean: 0.12, R: [-0.5, -1.8], hands: DOWN }],
-  ]),
-  jumps: [[3.66, 4.36, 2.0]],
-  touches: [
-    { t: 1.4, hand: 1, at: [0.8, 1.0, 1.6], floor: [0.95, 1.05] },
-    { t: 1.8, hand: 1, at: [0.8, 1.0, 1.6], floor: [0.95, 1.05] },
-    { t: 2.1, hand: 1, at: [0.65, 0.75, 2.95], carry: true },            // rides up with the hesitation
-    { t: 2.4, hand: 0, at: [0.8, -0.9, 1.8], floor: [1.0, 0.1] },       // crossed over, low
-    { t: 2.76, hand: 0, at: [1.3, -0.9, 2.0], floor: [2.3, -1.0] },
-    { t: 3.16, hand: 0, at: [1.0, -0.7, 2.5], floor: [2.1, -0.9] },
+  name: 'layup', worth: 2, side: -1, angles: [0.35, -0.3, 0.6],
+  hero: [
+    { clip: 'bringup', from: 0, to: 2.0 },
+    { clip: 'layup', from: 0.0, to: 2.9, blend: 0.4 },
   ],
-  hold: [[3.36, [0.6, -0.25, -0.5]], [3.54, [0.6, -0.35, -0.25]], [3.74, [0.5, -0.5, 0.8]], [3.96, [0.75, -0.38, 1.8]]],
-  shooter: 0, guideOff: 3.6, release: 3.96, flight: 0.6, bank: true, walk: 4.75,
-  defender: keyframes([
-    ...closeOut(1.4, -20.1),
-    [1.85, {}, { keep: BOTH }],
-    // Comes up with the hesitation.
-    [2.1, { x: -20.25, hip: 2.86, lean: 0.25, hands: [[0.7, -0.4, 0.2], [0.7, 0.4, 0.5]] }, { keep: BOTH }],
-    // Beaten: opens up and reaches as the ball goes by, then turns and runs.
-    [2.38, { x: -20.4, z: 0.2, yaw: PI + 0.7, hip: 2.7, lean: 0.3, twist: 0.4, feet: [[-0.2, -0.7, 0], [0.3, 0.9, 0.2]], hands: [[0.4, -0.4, -0.9], [0.8, 0.9, -0.2]] }],
-    // Goes up with him at the rim, a step behind.
-    [3.68, { x: -9.4, z: -0.7, yaw: 2 * PI, hip: 2.85, lean: 0.28, twist: 0, feet: [[0.5, -0.3, 0], [-0.5, 0.3, 0]], hands: [[0.3, -0.3, -0.8], [0.9, 0.2, 1.3]] }],
-    [4.0, { x: -7.6, z: -0.3, hip: 3.2, lean: 0.2, headPitch: -0.3, feet: [[0.2, -0.3, 0], [-0.3, 0.3, 0]], hands: [[0.3, -0.3, -0.6], [0.9, 0.1, 1.85]] }],
-    [4.36, { x: -6.4, z: 0.3, hip: 2.8, lean: 0.3, feet: [[0.3, -0.35, 0], [-0.3, 0.35, 0]], hands: [[0.4, -0.3, -0.9], [0.4, 0.3, -0.9]] }],
-    [4.9, { x: -6.8, z: 1.3, hip: 3.12, lean: 0.1, feet: [[0.1, -0.35, 0], [-0.1, 0.35, 0]] }, { stop: true }],
-    [5.4, { headPitch: 0.5, hands: [[-0.1, -0.45, -1.1], [-0.1, 0.45, -1.1]] }, { keep: BOTH }],
-  ]),
-  chase: trail([[2.38, -20.4, 0.2, PI + 1.2], [2.64, -19.6, -0.8, 5.7], [3.0, -17.0, -1.2, 6.2], [3.4, -12.6, -1.0, 2 * PI], [3.66, -9.6, -0.7, 2 * PI]]),
-  leaps: [[3.72, 4.3, 1.05]], beaten: 2.3,
-  stills: [2.9, 3.98, 4.75],
+  shot: 1, aim: 'travel', range: 2.6, flight: 0.55, bank: true,
+  defender: { lag: 0.22, gap: 4.4, close: 4.4, beaten: 0.8 },
 };
+
+const JUMPER = {
+  name: 'jumper', worth: 2, side: 1, angles: [-0.6, 0.25, -0.2],
+  hero: [
+    { clip: 'bringup', from: 0, to: 5.85 },
+  ],
+  shot: 0, aim: 'facing', range: 16.5, flight: 1.05,
+  defender: { lag: 0.24, gap: 5.0, close: 3.6 },
+};
+
+const DRIVE = {
+  name: 'drive', worth: 2, side: -1, angles: [-0.25, 0.5, 0],
+  hero: [
+    { clip: 'bringup', from: 0.6, to: 2.4 },
+    { clip: 'handles', from: 0.9, to: 2.55, blend: 0.35 },
+    { clip: 'layup', from: 0.35, to: 2.9, blend: 0.4 },
+  ],
+  shot: 2, aim: 'travel', range: 2.6, flight: 0.55, bank: true,
+  defender: { lag: 0.2, gap: 4.4, close: 4.4, beaten: 0.75 },
+};
+
+// ── Ball in the hands ─────────────────────────────────────────────────────
+
+const HAND = [J.lhand, J.rhand];
+const WRIST = [J.lwrist, J.rwrist];
+
+/** Where a ball sits under a dribbling hand: below the palm, a little past the fingers. */
+function underHand(pose, hand) {
+  const h = pose[HAND[hand]];
+  const w = pose[WRIST[hand]];
+  const reach = unit([h[0] - w[0], 0, h[2] - w[2]]);
+  return [h[0] + reach[0] * 0.12, h[1] - BALL_RADIUS - 0.06, h[2] + reach[2] * 0.12];
+}
+
+/**
+ * A ball held for a shot: between the hands while both are on it, then on
+ * the shooting hand's fingers once the other comes off.
+ */
+function heldBall(pose, shooter) {
+  const l = pose[J.lhand];
+  const r = pose[J.rhand];
+  const fig = figureOf(pose);
+  const between = add(mul(add(l, r), 0.5), mul(fig.forward, 0.12));
+  const h = pose[HAND[shooter]];
+  const w = pose[WRIST[shooter]];
+  const along = unit(sub(h, w));
+  const onFingers = add(add(h, mul(along, 0.1)), [0, BALL_RADIUS * 0.8, 0]);
+  const apart = Math.hypot(l[0] - r[0], l[1] - r[1], l[2] - r[2]);
+  return mix3(between, onFingers, smooth(span(apart, 0.95, 1.5)));
+}
+
+/**
+ * A dribble in the air: down from where it left the hand, once off the
+ * floor, and up into the hand that meets it. Thrown down hard enough to make
+ * the trip in the time there is.
+ */
+function bounced(from, to, since, total) {
+  const h0 = Math.max(0.05, from[1] - BALL_RADIUS);
+  const h1 = Math.max(0.05, to[1] - BALL_RADIUS);
+  // Time to the floor: where what is left after it carries the ball back up to the hand.
+  let lo = 1e-3;
+  let hi = total - 1e-3;
+  for (let i = 0; i < 28; i += 1) {
+    const down = (lo + hi) / 2;
+    const up = total - down;
+    const rebound = BOUNCE * (h0 / down + 0.5 * GRAVITY * down);
+    if (rebound * up - 0.5 * GRAVITY * up * up > h1) lo = down;
+    else hi = down;
+  }
+  const down = (lo + hi) / 2;
+  const u = since / total;
+  const x = mix(from[0], to[0], u);
+  const z = mix(from[2], to[2], u);
+  if (since < down) {
+    const v0 = h0 / down - 0.5 * GRAVITY * down;
+    return [x, BALL_RADIUS + h0 - v0 * since - 0.5 * GRAVITY * since * since, z];
+  }
+  const s = since - down;
+  const rebound = BOUNCE * (h0 / down + 0.5 * GRAVITY * down);
+  return [x, BALL_RADIUS + rebound * s - 0.5 * GRAVITY * s * s, z];
+}
+
+/**
+ * The dribble as one list of { catch, hand, release } in performance time,
+ * from every clip's own, each kept while its clip is the one showing. A
+ * catch comes at least a short bounce after the release before it.
+ */
+function dribblesOf(perf, gather) {
+  const all = [];
+  perf.parts.forEach((part, index) => {
+    const info = clipInfo(part.clip);
+    const next = perf.parts[index + 1];
+    const own = [part.start + part.blend / 2, next ? next.start + next.blend / 2 : Infinity];
+    for (const [caught, hand, released] of info.dribbles || []) {
+      const release = perf.time(index, released);
+      if (released < part.from || released > part.to || release < own[0] || release >= own[1]) continue;
+      all.push({ catch: perf.time(index, caught), hand, release });
+    }
+  });
+  all.sort((p, q) => p.release - q.release);
+  const kept = [];
+  for (const dribble of all) {
+    if (dribble.release > gather - 0.22) break;
+    const last = kept[kept.length - 1];
+    const earliest = last ? last.release + 0.26 : -Infinity;
+    const caught = Math.max(dribble.catch, earliest);
+    if (caught > dribble.release - 0.06) continue;
+    kept.push({ ...dribble, catch: caught });
+  }
+  return kept;
+}
+
+// ── Putting a possession together ─────────────────────────────────────────
+
+/** Rotate and move a pose from performance space into play space. */
+const placeWith = place => pose => moved(pose, place.angle, place.dx, place.dz);
+
+function staged(spec) {
+  const perf = perform(spec.hero);
+  const shotPart = spec.shot;
+  const shotInfo = clipInfo(spec.hero[shotPart].clip);
+  const gather = perf.time(shotPart, shotInfo.gather);
+  const release = perf.time(shotPart, shotInfo.release);
+  const shooter = shotInfo.shooter;
+  const dribbles = dribblesOf(perf, gather);
+
+  // Turn the performance so the shot goes toward +x, from `range` feet out.
+  const atRelease = perf.at(release);
+  const before = perf.at(release - 0.25);
+  const facing = (() => {
+    const s = sub(atRelease[J.rshoulder], atRelease[J.lshoulder]);
+    return Math.atan2(-s[0], s[2]);
+  })();
+  const travel = Math.atan2(atRelease[J.pelvis][2] - before[J.pelvis][2], atRelease[J.pelvis][0] - before[J.pelvis][0]);
+  const aim = spec.aim === 'travel' ? travel : facing;
+  const ballOut = turn(heldBall(atRelease, shooter), -aim);
+  const place = { angle: -aim, dx: -spec.range - ballOut[0], dz: -ballOut[2] };
+  const put = placeWith(place);
+  const heroAt = t => upright(put(perf.at(t)), HERO_LEAN[0], HERO_LEAN[1]);
+
+  const flight = spec.flight;
+  const made = release + flight;
+  const party = made + 0.5;
+  const seconds = party + PARTY + OUTRO;
+  const walk = Math.min(perf.duration - 0.35, release + 0.95);
+  const sizeup = perf.parts.length > 1 ? perf.parts[1].start : 1.4;
+  const releasePoint = heldBall(heroAt(release), shooter);
+  const landing = heroAt(walk);
+
+  const play = {
+    ...spec, perf, put, heroAt, dribbles, gather, release, shooter, flight, made, party, seconds,
+    walk, sizeup, releasePoint,
+    ms: Math.round(seconds * 1000),
+    move: sizeup + 0.5,
+    stand: [releasePoint[0], releasePoint[2]],
+    spot: (() => { const p = heroAt(sizeup)[J.pelvis]; return [p[0], p[2]]; })(),
+    // Walking off: from where he lands, back up the court, a little toward the camera.
+    away: { from: [landing[J.pelvis][0], landing[J.pelvis][2]], heading: Math.PI - 0.25 * spec.side },
+  };
+  play.marks = {
+    bringup: 0, sizeup, move: play.move, gather, flight: release, swish: made, celebrate: party, reset: seconds - 0.4,
+  };
+  play.routes = spec.angles.map(angle => routeOf(play, angle));
+  // The move, the gather, the shot about to leave his hand (head to shoes still in the picture), the ball going in.
+  play.stills = [sizeup + 0.9, gather + 0.15, release - 0.15, made + 0.05];
+  return play;
+}
+
+// ── Walking along a path ──────────────────────────────────────
+
+/**
+ * A looping clip played along a straight line from `from` heading `heading`,
+ * `distance` feet along it: the stride is the capture's, the root the path's.
+ */
+function loopAlong(name, stride, seconds, distance, from, heading) {
+  // The capture runs along +x from the origin, so turning it carries it down the path, sway and all.
+  return moved(clipPose(name, (distance / stride) * seconds), heading, from[0], from[1]);
+}
+
+/** Distance covered by `t` seconds after setting off: easing up to `speed` over `ramp` seconds. */
+const covered = (t, speed, ramp) => (t <= 0 ? 0 : t < ramp ? (speed * t * t) / (2 * ramp) : speed * (t - ramp / 2));
+
+/** His walk off, back up the court after the shot. */
+function walkingOff(play, t, lag = 0, aside = 0) {
+  const since = t - play.walk - lag;
+  const { from, heading } = play.away;
+  const side = turn([0, 0, aside], heading);
+  return loopAlong('walk', WALK_STRIDE, WALK.seconds, covered(since, WALK_SPEED * 0.9, 0.8), [from[0] + side[0], from[1] + side[2]], heading);
+}
 
 // ── Ball handler ──────────────────────────────────────────────────────────
 
-const bringUpPace = u => clamp01(Math.pow(1 - u, 0.6));
-
-/** Walks the ball up to his spot, slowing as he gets there. */
-function bringUp(play, t) {
-  const u = clamp01(t / play.sizeup);
-  const far = play.spot[0] - play.from;
-  // Gait phase: the distance covered, in strides of the pace he had while covering it.
-  const steps = 16;
-  let phase = 0;
-  for (let i = 0; i < steps; i += 1) {
-    const s = u * (i + 0.5) / steps;
-    phase += 1.6 * Math.pow(1 - s, 0.6) / cycleLength(bringUpPace(s));
-  }
-  return gait(play.from + far * (1 - Math.pow(1 - u, 1.6)), play.spot[1] + 0.7 * (1 - smooth(u)), 0, phase * far * u / steps, bringUpPace(u));
+function heroAt(play, t) {
+  let pose = play.heroAt(Math.min(t, play.perf.duration));
+  if (t > play.walk) pose = blendPoses(pose, walkingOff(play, t), smooth(span(t, play.walk, play.walk + 0.7)));
+  return pose;
 }
 
-function touchAt(touches, t) {
-  let index = 1;
-  while (index < touches.length - 1 && t >= touches[index].t) index += 1;
-  const from = touches[index - 1];
-  const to = touches[index];
-  return { from, to, q: span(t, from.t, to.t) };
-}
-
-function dribbled({ from, to, q }) {
-  if (to.carry) return mix3(from.at, to.at, smooth(q));
-  const floor = to.floor || [(from.at[0] + to.at[0]) / 2, (from.at[1] + to.at[1]) / 2];
-  // Pushed down fast, and slowing as it comes back up to the hand.
-  const down = 0.46;
-  if (q < down) {
-    const s = q / down;
-    return [mix(from.at[0], floor[0], s), mix(from.at[1], floor[1], s), mix(from.at[2], BALL_RADIUS, Math.pow(s, 1.7))];
-  }
-  const s = (q - down) / (1 - down);
-  return [mix(floor[0], to.at[0], s), mix(floor[1], to.at[1], s), mix(BALL_RADIUS, to.at[2], 1 - Math.pow(1 - s, 1.9))];
-}
-
-/**
- * The dribbling hand rides the ball near the top of its bounce and waits
- * above it otherwise. On a change of hands the giver lets go and the taker
- * leaves its resting spot to meet the ball on the way up.
- */
-function dribbleHands(pose, ball, { from, to, q }) {
-  const top = Math.min(from.at[2], to.at[2]);
-  const ride = [ball[0], Math.max(ball[1] + BALL_RADIUS * 0.85, top - 0.5), ball[2]];
-  if (from.hand === to.hand) {
-    setHand(pose, to.hand, ride);
-    return;
-  }
-  // The giver follows the ball down and comes away slowly; the taker is on its way before the bounce.
-  const rest = [pose.hands[0], pose.hands[1]];
-  setHand(pose, from.hand, ride);
-  pose.hands[from.hand] = mix3(pose.hands[from.hand], rest[from.hand], smooth(span(q, 0.24, 0.82)));
-  setHand(pose, to.hand, ride);
-  pose.hands[to.hand] = mix3(rest[to.hand], pose.hands[to.hand], smooth(span(q, 0.38, 0.84)));
-}
-
-/** Where a held ball sits at `t`, from the keys in `play.hold`: pocket, dip, set point, release. */
-function heldAt(play, pose, t) {
-  const keys = play.hold;
-  let place = keys[keys.length - 1][1];
-  if (t <= keys[0][0]) place = keys[0][1];
-  else {
-    for (let i = 1; i < keys.length; i += 1) {
-      if (t < keys[i][0]) {
-        place = mix3(keys[i - 1][1], keys[i][1], smooth((t - keys[i - 1][0]) / (keys[i][0] - keys[i - 1][0])));
-        break;
-      }
+/** Where the ball is while he has it, or null once it is away. */
+function ballAt(play, pose, t) {
+  if (t >= play.release) return null;
+  if (t >= play.gather) return heldBall(pose, play.shooter);
+  const list = play.dribbles;
+  if (!list.length || t <= list[0].catch) return underHand(pose, list.length ? list[0].hand : play.shooter);
+  for (let i = 0; i < list.length; i += 1) {
+    const dribble = list[i];
+    if (t < dribble.catch) {
+      const before = list[i - 1];
+      return bounced(underHand(play.heroAt(before.release), before.hand), underHand(play.heroAt(dribble.catch), dribble.hand), t - before.release, dribble.catch - before.release);
     }
+    if (t <= dribble.release) return underHand(pose, dribble.hand);
   }
-  const { chest, cf, cr } = torsoOf(pose);
-  return offset(chest, cf, place[0], cr, place[1], place[2]);
-}
-
-/** The shooting hand under and behind the ball, the other on its side. */
-function grip(pose, ball, shooter) {
-  const { cf, cr } = torsoOf(pose);
-  const out = shooter === 1 ? 1 : -1;
-  setHand(pose, shooter, offset(ball, cf, -0.2, cr, 0.02 * out, -0.2));
-  setHand(pose, 1 - shooter, offset(ball, cf, 0.04, cr, -0.34 * out, -0.02));
-}
-
-function celebrate(walk, t, play, plan) {
-  const from = play.party;
-  const to = from + PARTY;
-  const party = smooth(span(t, from - 0.15, from + 0.3)) * (1 - smooth(span(t, to - 0.3, to + 0.15)));
-  if (party <= 0) return walk;
-  const beat = t - from;
-  let pose;
-  if (plan.celebration === 'night') {
-    // Palms pressed together against one cheek, head resting on them.
-    pose = {
-      ...walk, hip: 3.12 + 0.03 * Math.sin(beat * 3), lean: 0.04, twist: 0, headRoll: -0.55, headPitch: 0.1,
-      hands: [[0.2, -0.16, 0.36], [0.3, -1.08, 0.3]],
-    };
-  } else if (plan.celebration === 'point') {
-    // One finger to the sky, the other hand on his chest.
-    pose = { ...walk, hip: 3.2, lean: -0.04, twist: 0, headPitch: -0.4, hands: [[0.4, 0.4, -0.35], [0.18, 0.08, 1.86]] };
-  } else if (plan.celebration === 'shimmy') {
-    const shake = Math.sin(beat * 19);
-    pose = {
-      ...walk, twist: 0.34 * shake, sway: 0.07 * Math.sin(beat * 19 + 1.2), headYaw: -0.3 * shake,
-      hands: [[0.4, -0.22, -0.72 + 0.14 * shake], [0.4, 0.22, -0.72 - 0.14 * shake]],
-    };
-  } else {
-    // Keeps walking, with a shrug: what did you expect?
-    const shrug = Math.sin(PI * span(beat, 0.2, 1.4));
-    pose = {
-      ...walk, headRoll: 0.16 * shrug,
-      hands: [mix3(walk.hands[0], [0.5, -0.6, -0.78], shrug), mix3(walk.hands[1], [0.5, 0.6, -0.78], shrug)],
-    };
-  }
-  return blend(walk, pose, party);
-}
-
-/** Turns his back on the hoop and walks off; some celebrations stop him for a moment. */
-function walkOff(play, t, plan) {
-  const stops = plan.celebration === 'night' || plan.celebration === 'point';
-  const start = play.walk + 0.15;
-  const walked = WALK_SPEED * (stops
-    ? Math.max(0, Math.min(t, play.party) - start) + Math.max(0, t - play.party - PARTY)
-    : Math.max(0, t - start));
-  return celebrate(gait(play.landing.x - walked, play.landing.z, PI, walked / cycleLength(STROLL), STROLL), t, play, plan);
-}
-
-/** Pose and ball for the ball handler. `ball` is null once it has left his hand. */
-function heroAt(play, t, plan) {
-  let base = t < play.sizeup
-    ? bringUp(play, t)
-    : blend(bringUp(play, play.sizeup), sample(play.hero, t), smooth(span(t, play.sizeup, play.sizeup + SETTLE)));
-  if (t > play.walk) base = blend(base, walkOff(play, t, plan), smooth(span(t, play.walk, play.walk + 0.5)));
-  const pose = editable(base);
-  // He arrives with a hop into his stance: both feet leave the floor rather than slide across it.
-  const settle = span(t, play.sizeup, play.sizeup + SETTLE);
-  if (settle > 0 && settle < 1) for (const plant of pose.plants) plant[1] += 0.2 * Math.sin(PI * settle);
-  lifted(pose, airborne(play.jumps, t));
-  // His eyes stay on the rim whatever his hips and shoulders are doing.
-  look(pose, 0, 0, 1 - smooth(span(t, play.walk, play.walk + 0.3)));
-  if (t < play.pickup) {
-    const touch = touchAt(play.touches, t);
-    const ball = fromFloor(pose, dribbled(touch));
-    dribbleHands(pose, ball, touch);
-    return { pose, ball };
-  }
-  const guide = 1 - play.shooter;
-  if (t < play.release) {
-    // The hand that had the dribble brings the ball in; the other comes over to meet it.
-    const last = play.touches[play.touches.length - 1];
-    const joined = smooth(span(t, play.pickup, play.pickup + 0.2));
-    const ball = mix3(fromFloor(pose, last.at), heldAt(play, pose, t), joined);
-    const free = [pose.hands[0], pose.hands[1]];
-    setHand(pose, last.hand, [ball[0], ball[1] + BALL_RADIUS * 0.85, ball[2]]);
-    const riding = pose.hands[last.hand];
-    grip(pose, ball, play.shooter);
-    const other = 1 - last.hand;
-    pose.hands[last.hand] = mix3(riding, pose.hands[last.hand], joined);
-    pose.hands[other] = mix3(free[other], pose.hands[other], joined);
-    // A one-handed finish: the other hand comes off on the way up.
-    if (play.guideOff) pose.hands[guide] = mix3(pose.hands[guide], free[guide], smooth(span(t, play.guideOff, play.guideOff + 0.16)));
-    return { pose, ball };
-  }
-  // Released: the hands leave the ball's last spot for the follow-through.
-  const released = smooth(span(t, play.release, play.release + 0.12));
-  if (released < 1) {
-    const after = [pose.hands[0], pose.hands[1]];
-    grip(pose, heldAt(play, pose, play.release), play.shooter);
-    if (play.guideOff) pose.hands[guide] = after[guide];
-    pose.hands = [mix3(pose.hands[0], after[0], released), mix3(pose.hands[1], after[1], released)];
-  }
-  return { pose, ball: null };
+  // After the last push, down to the floor and up into his hands for the gather.
+  const last = list[list.length - 1];
+  return bounced(underHand(play.heroAt(last.release), last.hand), heldBall(play.heroAt(play.gather), play.shooter), t - last.release, play.gather - last.release);
 }
 
 // ── Defender ──────────────────────────────────────────────────────────────
 
-function defenderAt(play, t) {
-  let base = sample(play.defender, t);
-  if (play.chase) {
-    const running = smooth(span(t, play.chase.from, play.chase.from + 0.2)) * (1 - smooth(span(t, play.chase.to, play.chase.to + 0.26)));
-    if (running > 0) base = blend(base, sprint(play.chase, t), running);
+/** Two-bone reach for an arm: the wrist to `target`, the elbow bending the way it already does. */
+function reachArm(pose, side, target) {
+  const [shoulder, elbow, wrist, hand] = side ? [J.rshoulder, J.relbow, J.rwrist, J.rhand] : [J.lshoulder, J.lelbow, J.lwrist, J.lhand];
+  const s = pose[shoulder];
+  const upper = Math.hypot(...sub(pose[elbow], s));
+  const lower = Math.hypot(...sub(pose[wrist], pose[elbow]));
+  const palm = Math.hypot(...sub(pose[hand], pose[wrist]));
+  const toTarget = sub(target, s);
+  const far = Math.min(upper + lower - 1e-3, Math.max(Math.abs(upper - lower) + 1e-3, Math.hypot(...toTarget)));
+  const dir = unit(toTarget);
+  const old = sub(pose[elbow], s);
+  let bend = sub(old, mul(dir, old[0] * dir[0] + old[1] * dir[1] + old[2] * dir[2]));
+  if (Math.hypot(...bend) < 1e-4) bend = cross(dir, [0, 1, 0]);
+  bend = unit(bend);
+  const cosine = (upper * upper + far * far - lower * lower) / (2 * upper * far);
+  const sine = Math.sqrt(Math.max(0, 1 - cosine * cosine));
+  const e = add(s, add(mul(dir, upper * cosine), mul(bend, upper * sine)));
+  const w = add(s, mul(dir, far));
+  const out = pose.slice();
+  out[elbow] = e;
+  out[wrist] = w;
+  out[hand] = add(w, mul(unit(sub(w, e)), palm));
+  return out;
+}
+
+/** Arms out and live: the hand on the ball's side low, the other up at the passing lane. */
+function guarding(pose, t, weight) {
+  if (weight <= 0) return pose;
+  const fig = figureOf(pose);
+  let out = pose;
+  for (const side of [0, 1]) {
+    const sway = 0.12 * Math.sin(t * 5.1 + side * 2.1);
+    // [forward, out to his right, up] from the shoulder.
+    const reach = side ? [0.7, 1.3, 0.05 + sway] : [0.95, -0.9, -1.0 + sway];
+    const s = pose[side ? J.rshoulder : J.lshoulder];
+    const target = add(add(add(s, mul(fig.forward, reach[0])), mul(fig.right, reach[1])), [0, reach[2], 0]);
+    const wrist = pose[side ? J.rwrist : J.lwrist];
+    out = reachArm(out, side, mix3(wrist, target, weight));
   }
-  const pose = editable(base);
-  lifted(pose, airborne(play.leaps, t));
-  // Light on his feet until he is beaten.
-  pose.hip += 0.04 * Math.sin(t * 7) * (1 - span(t, play.beaten - 0.3, play.beaten));
+  return out;
+}
+
+/**
+ * The defender moved straight back from the ball handler until neither
+ * upper body reaches into the other: when he leans in on his man, his man
+ * gives ground. Eased, so he backs off smoothly rather than off a wall.
+ */
+function giveRoom(pose, hero) {
+  const from = hero[J.pelvis];
+  const to = pose[J.pelvis];
+  const dir = unit([to[0] - from[0], 0, to[2] - from[2]]);
+  const reach = (body, root, sign) => Math.max(...UPPER.map(n => sign * ((body[n][0] - root[0]) * dir[0] + (body[n][2] - root[2]) * dir[2])));
+  const between = Math.hypot(to[0] - from[0], to[2] - from[2]) - reach(hero, from, 1) - reach(pose, to, -1);
+  const back = 0.3 * Math.log1p(Math.exp((ROOM - between) / 0.3));
+  return pose.map(p => [p[0] + dir[0] * back, p[1], p[2] + dir[2] * back]);
+}
+
+/** How far a beaten defender has gone the wrong way, in feet, and how late he trails his man, in seconds. */
+const BITE = 2.4;
+const TRAIL = 0.3;
+
+function defenderAt(play, t, heroPose) {
+  const { lag, gap, close, beaten } = play.defender;
+  const from = beaten === undefined ? Infinity : play.release - beaten;
+  // He waits at the spot until the ball handler arrives, mirroring his stance.
+  const seen = Math.max(t - lag, play.sizeup);
+  const hero = play.heroAt(Math.min(seen, play.perf.duration));
+  const hx = hero[J.pelvis][0];
+  const hz = hero[J.pelvis][2];
+  // Between his man and the rim; on a drive, the line as it was when he was beaten.
+  const line = seen <= from ? hero : play.heroAt(from);
+  const toRim = unit([-line[J.pelvis][0], 0, -line[J.pelvis][2]]);
+  // The far side of that line from the camera, where the drive leaves him.
+  const wrong = mul([-toRim[2], 0, toRim[0]], toRim[0] * play.side > 0 ? -1 : 1);
+  const bite = beaten === undefined ? 0 : BITE * smooth(span(t, from - 0.5, from));
+  const space = mix(gap, close, smooth(span(t, play.gather - 0.3, play.release)));
+  const x = hx + toRim[0] * space + wrong[0] * bite;
+  const z = hz + toRim[2] * space + wrong[2] * bite;
+  const yaw = Math.atan2(hz - z, hx - x);
+  // Before the ball handler is there, the capture of a low stance stands in for him.
+  const body = t - lag < play.sizeup
+    ? blendPoses(mirrored(clipPose('handles', 0.3 + Math.max(0, t))), mirrored(hero), smooth(span(t - lag, play.sizeup - 0.5, play.sizeup)))
+    : mirrored(hero);
+  let pose = rerooted(upright(body, GUARD_LEAN[0], GUARD_LEAN[1]), x, z, yaw);
+  // Lower his hands into a guard until the shot goes up; then he goes up with it.
+  pose = guarding(pose, t, 1 - smooth(span(t, play.gather - 0.1, play.gather + 0.25)));
+  pose = giveRoom(pose, heroPose);
+  if (t > from) pose = blendPoses(pose, trailing(play, t, wrong), smooth(span(t, from, from + 0.55)));
+  // He walks off beside his man on the side he is already on, so neither crosses behind the other.
+  if (t > play.walk + 0.3) pose = blendPoses(pose, walkingOff(play, t, 0.5, (beaten === undefined ? -3.2 : 3.2) * play.side), smooth(span(t, play.walk + 0.3, play.walk + 1.1)));
   return pose;
+}
+
+/**
+ * Beaten: he turns and comes after his man on the far side, a beat behind,
+ * stride for stride with him, and goes up with him at the rim.
+ */
+function trailing(play, t, wrong) {
+  const seen = upright(play.heroAt(Math.min(t - TRAIL, play.perf.duration)), GUARD_LEAN[0], GUARD_LEAN[1]);
+  return seen.map(p => [p[0] + wrong[0] * BITE, p[1], p[2] + wrong[2] * BITE]);
 }
 
 // ── Ball in the air ───────────────────────────────────────────────────────
@@ -671,58 +439,15 @@ function dropAt(since) {
   return [x, BALL_RADIUS, 0];
 }
 
-// ── Putting a possession together ─────────────────────────────────────────
+// ── The loop of possessions ───────────────────────────────────────────────
 
-const STROLLING = { celebration: 'stroll' };
-
-function staged(play) {
-  // Bringing it up: a right-hand dribble every 0.4 s, timed to top out as he arrives.
-  const lead = [];
-  for (let t = play.sizeup - 1.6; t < play.sizeup - 0.01; t += 0.4) {
-    const forward = mix(1.0, 1.55, bringUpPace(clamp01(t / play.sizeup)));
-    lead.push({ t, hand: 1, at: [forward, 0.72, 2.55], floor: [forward + 0.4, 0.78] });
-  }
-  const touches = [...lead, ...play.touches];
-  const made = play.release + play.flight;
-  const party = made + 0.5;
-  const whole = {
-    ...play, touches, made, party,
-    pickup: touches[touches.length - 1].t,
-    landing: play.hero[play.hero.length - 1].pose,
-    seconds: party + PARTY + OUTRO,
-  };
-  whole.ms = Math.round(whole.seconds * 1000);
-  const shooting = heroAt(whole, play.release - 1e-6, STROLLING);
-  whole.releasePoint = shooting.ball;
-  // Where he shoots from, for the camera behind him.
-  whole.stand = [shooting.pose.x, shooting.pose.z];
-  whole.routes = play.angles.map(angle => routeOf(whole, angle));
-  // What the stage reports as the beat, and the camera cuts on.
-  whole.marks = {
-    bringup: 0, sizeup: play.sizeup, move: play.move, gather: whole.pickup, flight: play.release,
-    swish: made, celebrate: party, reset: whole.seconds - 0.4,
-  };
-  // Floor dust: where the defender's foot skids out, then where he lands.
-  whole.dust = [];
-  if (play.skid) {
-    const [at, foot] = play.skid;
-    const skid = solveFigure(defenderAt(whole, at), DEFENDER_SIZE).legs[foot].ankle;
-    const seat = sample(play.defender, play.seat);
-    whole.dust = [
-      { from: at - 0.06, to: at + 0.58, at: [skid[0], 0, skid[2]], size: 0.8 },
-      { from: play.seat - 0.02, to: play.seat + 0.68, at: [seat.x + 0.3, 0, seat.z], size: 1.3 },
-    ];
-  }
-  return whole;
-}
-
-const PLAYS = [STEPBACK, FLOATER, LONG_TWO, LAYUP].map(staged);
+const PLAYS = [PULLUP, LAYUP, JUMPER, DRIVE].map(staged);
 const ROUND_MS = PLAYS.reduce((total, play) => total + play.ms, 0);
 const ROUND_POINTS = PLAYS.reduce((total, play) => total + play.worth, 0);
 const STARTS = PLAYS.map((_, index) => PLAYS.slice(0, index).reduce((total, play) => total + play.ms, 0));
 
-/** A still for stalled connections: the first shot, just off his fingers. */
-export const HOOPS_POSTER_MS = Math.round((PLAYS[0].release + 0.07) * 1000);
+/** A still for stalled connections: the first shot going up over his defender. */
+export const HOOPS_POSTER_MS = Math.round((PLAYS[0].release - 0.15) * 1000);
 /** With motion reduced: the moments that tell each possession, in order. */
 export const HOOPS_STILLS = PLAYS.flatMap((play, index) => play.stills.map(t => STARTS[index] + Math.round(t * 1000)));
 
@@ -745,18 +470,15 @@ export function resolveHoopsPlay(elapsedMs) {
   const play = PLAYS[index];
   const t = (into - STARTS[index]) / 1000;
   const possession = round * PLAYS.length + index;
-  // Where on the arc and how he celebrates shift every round, so a possession
-  // comes back the same only after several.
   const turnOf = round % play.angles.length;
-  const plan = { celebration: CELEBRATIONS[(possession + round) % CELEBRATIONS.length] };
 
-  const hero = heroAt(play, t, plan);
+  const heroPose = heroAt(play, t);
+  const held = ballAt(play, heroPose, t);
   const made = t >= play.made;
   const sinceMake = t - play.made;
   let ball;
-  if (hero.ball) {
-    // In his hands it turns with the dribble, about the line across his body.
-    ball = { at: hero.ball, loose: false, trail: [], axis: heading(hero.pose.yaw).r, spin: t * 5 };
+  if (held) {
+    ball = { at: held, loose: false, trail: [], axis: figureOf(heroPose).right, spin: t * 5 };
   } else {
     const route = play.routes[turnOf];
     const since = t - play.release;
@@ -770,21 +492,17 @@ export function resolveHoopsPlay(elapsedMs) {
     ball = { at: made ? dropAt(sinceMake) : flightAt(route, since), loose: true, trail, axis: [from[2] / far, 0, -from[0] / far], spin: since * 13 };
   }
 
-  const napping = plan.celebration === 'night' && t > play.party + 0.15 && t < play.party + PARTY - 0.1;
   const before = PLAYS.slice(0, index).reduce((total, earlier) => total + earlier.worth, 0);
   return {
     possession, name: play.name, time: t, beat: beatAt(play.marks, t), marks: play.marks,
-    angle: play.angles[turnOf], side: play.side, spot: play.spot, stand: play.stand, celebration: plan.celebration,
-    hero: solveFigure(hero.pose), defender: solveFigure(defenderAt(play, t), DEFENDER_SIZE), ball,
+    angle: play.angles[turnOf], side: play.side, spot: play.spot, stand: play.stand,
+    hero: figureOf(heroPose), defender: figureOf(defenderAt(play, t, heroPose), DEFENDER_SIZE), ball,
     // His points for this wait, counting this shot once it drops.
     worth: play.worth, points: round * ROUND_POINTS + before + (made ? play.worth : 0),
     net: made ? Math.exp(-sinceMake * 4.2) : 0, netAge: made ? sinceMake : 0,
     pop: made && sinceMake < 1.3 ? sinceMake / 1.3 : -1,
-    dust: play.dust.filter(puff => t >= puff.from && t < puff.to).map(puff => ({ at: puff.at, size: puff.size, age: span(t, puff.from, puff.to) })),
-    shake: play.seat && t >= play.seat ? Math.exp(-(t - play.seat) * 9) : 0,
-    // Headroom the camera should leave: up before his defender jumps, and down again well after he lands.
-    room: (play.leaps || []).reduce((most, [from, to]) => Math.max(most, smooth(span(t, from - 0.3, from)) * (1 - smooth(span(t, to, to + 0.45)))), 0),
-    doze: napping ? t - play.party - 0.15 : -1,
+    // Headroom the camera should leave while the shot goes up over his defender.
+    room: smooth(span(t, play.gather - 0.3, play.gather)) * (1 - smooth(span(t, play.release + 0.4, play.release + 0.9))),
     // The first possession is visible immediately; later possessions fade in.
     fade: Math.min(possession > 0 ? smooth(span(t, 0, 0.25)) : 1, 1 - smooth(span(t, play.seconds - 0.4, play.seconds - 0.05))),
   };
