@@ -1383,12 +1383,7 @@ export function fitProviderRequestToContext(messages, options = {}) {
   const currentSource = source.slice(split);
 
   let current = pairSanitize(currentSource.map(message => ({ ...message })));
-  const softToolBudget = options.toolResultCompactionRatio > 0 && options.toolResultCompactionRatio < 1
-    ? Math.max(0, Math.floor(contextWindow * options.toolResultCompactionRatio) - staticTokens + bucketCap(options.outputReserve, 0))
-    : messageBudget;
-  // Sample older tool results as input approaches the soft target. Do not drop
-  // protocol units or shorten the newest batch just to meet that soft target.
-  const compact = compactCurrentToolResults(current, Math.min(messageBudget, softToolBudget));
+  const compact = compactCurrentToolResults(current, messageBudget);
   current = compact.messages;
   if (estimateMessagesTokens(current) > messageBudget || current.length > messageCap) {
     const fitted = [];
@@ -1428,6 +1423,13 @@ export function fitProviderRequestToContext(messages, options = {}) {
         language: options.language,
       })
     : [];
+  const ratio = options.toolResultCompactionRatio;
+  // Account for the history that actually survived fitting, not its maximum
+  // allowance. This soft pass only shortens older tool result text.
+  const softBudget = ratio > 0 && ratio < 1 ? Math.floor(contextWindow * ratio)
+    - staticTokens + bucketCap(options.outputReserve, 0) - estimateMessagesTokens(history) : Infinity;
+  const softCompact = compactCurrentToolResults(current, Math.max(0, softBudget));
+  current = softCompact.messages;
   const fullResults = new Map(currentSource.filter(message => message?.role === 'tool')
     .map(message => [message.toolCallId, message]));
   const deduplicated = deduplicateRetainedToolResults(current, options.repeatedToolResultRefs, fullResults);
@@ -1445,8 +1447,8 @@ export function fitProviderRequestToContext(messages, options = {}) {
       currentMessagesAfter: current.length,
       droppedHistoryMessages: historySource.length - history.length,
       droppedCurrentMessages: currentSource.length - current.length,
-      compactedToolResults: compact.compactedToolResults,
-      compactedToolResultTokensSaved: compact.compactedToolResultTokensSaved,
+      compactedToolResults: compact.compactedToolResults + softCompact.compactedToolResults,
+      compactedToolResultTokensSaved: compact.compactedToolResultTokensSaved + softCompact.compactedToolResultTokensSaved,
       deduplicatedToolResults: deduplicated.deduplicatedToolResults,
       deduplicatedToolResultTokensSaved: deduplicated.deduplicatedToolResultTokensSaved,
     },

@@ -4,6 +4,7 @@ import { createRequire } from 'node:module';
 import { createActiveToolImageProjector, ToolImagePrefixBudgetError } from '../../../agent/yeaft/active-tool-images.js';
 import { makeModelImagePreview, MODEL_IMAGE_TARGET_BYTES } from '../../../agent/yeaft/model-image-preview.js';
 import { fitProviderRequestToContext } from '../../../agent/yeaft/history-window.js';
+import { trimWireMedia, wireToolImageEvidence } from '../../../agent/yeaft/wire-media.js';
 
 const byteLength = text => Buffer.byteLength(text, 'utf8');
 
@@ -54,9 +55,9 @@ async function assertActiveToolImageProjection() {
     const latest = result('same-path-b', image('same-content'), image('new-content'));
     const source = [call('old'), previous, call('mid'), result('mid', image('mid-content')),
       call('same-path-a'), repeat, call('same-path-b'), latest];
-    const paths = new WeakMap([[previous, 'old.png'], [repeat, 'copied original.png']]);
+    const paths = new WeakMap([[previous.content[1], 'old.png'], [repeat.content[1], 'copied original.png']]);
     const saved = JSON.stringify(source);
-    const projected = await createActiveToolImageProjector({ paths })(source);
+    const projected = await createActiveToolImageProjector({ pathForImage: part => paths.get(part) })(source.map(m => ({ ...m })));
     expect(projected).toMatchObject({ duplicateImages: 1, staleImages: 1, previewImages: 0 });
     expect(imageParts(projected.messages)).toEqual([image('mid-content'), image('same-content'), image('new-content')]);
     expect(projected.messages[1].content[1].text).toContain('"old.png"');
@@ -72,8 +73,8 @@ async function assertActiveToolImageProjection() {
     const project = createActiveToolImageProjector({ preview });
     const first = await project([result('first', image(data))]);
     const second = await project([result('different-object', image(data))]);
-    expect(second.messages[0].content[2]).toBe(first.messages[0].content[2]);
-    const frozen = first.messages[0];
+    expect(second.messages[0].content[2]).toEqual(first.messages[0].content[2]);
+    const frozen = structuredClone(first.messages[0]);
     const third = await project([frozen, call('again'), result('path-alias', image(data))], { frozenLength: 2, canRollover: true });
     expect(third.messages[0]).toBe(frozen);
     expect(imageParts(third.messages)).toEqual([image('preview-bytes')]);
@@ -95,6 +96,28 @@ async function assertActiveToolImageProjection() {
     expect(JSON.stringify(messages)).toBe(saved);
   });
 
+  await verify('keeps an honest, reopenable reference if the only duplicate payload is removed later', async () => {
+    const duplicated = 'd'.repeat(40_000);
+    const older = result('older', image(duplicated));
+    const newer = result('newer', image(duplicated));
+    const paths = new WeakMap([[older.content[1], './older.png'], [newer.content[1], './newer.png']]);
+    const project = createActiveToolImageProjector({ pathForImage: part => paths.get(part) });
+    const projected = await project([older, newer]);
+    const fitted = trimWireMedia(projected.messages, 0);
+    expect(imageParts(fitted)).toEqual([]);
+    const evidence = wireToolImageEvidence(fitted, new WeakMap(), project.isImageAnnotation);
+    expect(evidence).toEqual([expect.objectContaining({ text: expect.stringContaining('"./older.png"') })]);
+    expect(evidence[0].text).toContain('Image not included in this tool result');
+  });
+  await verify('failed previews keep only one bounded large original, without triggering a pointless rollover', async () => {
+    const project = createActiveToolImageProjector({ preview: async () => null });
+    const raw = [result('a', image('a'.repeat(4_000_000))), result('b', image('b'.repeat(4_000_000)))];
+    expect(imageParts((await project(raw)).messages)).toEqual([raw[1].content[1]]);
+    const huge = result('huge', image('c'.repeat(9_000_000)));
+    const projected = await project([raw[1], call('huge'), huge], { frozenLength: 2, canRollover: true });
+    expect(imageParts(projected.messages)).toEqual([raw[1].content[1]]);
+    expect(projected.messages.at(-1).content[1].text).toContain('retention budget');
+  });
   if (sharp) await verify('encodes a real multi-megabyte PNG to a decodable preview under 200 KiB', async () => {
     const width = 1800, height = 700;
     const pixels = Buffer.alloc(width * height * 3);
@@ -128,6 +151,13 @@ async function assertActiveToolImageProjection() {
     expect(projected.messages[2].content.length).toBeLessThan(older.length);
     expect(projected.messages[4].content).toBe(latest);
     expect(source[2].content).toBe(older);
+    const history = [{ role: 'user', content: 'historical detail '.repeat(240) }, { role: 'assistant', content: 'seen' }];
+    const withHistory = fitProviderRequestToContext([...history, ...source], {
+      ...options, contextWindow: 9000, historyMessageCount: history.length, toolResultCompactionRatio: 0.8,
+    });
+    expect(withHistory.meta.compactedToolResults).toBe(1);
+    expect(withHistory.meta.historyMessagesAfter).toBe(2);
+    expect(withHistory.messages.at(-1).content).toBe(latest);
   });
 }
 

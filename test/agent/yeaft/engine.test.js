@@ -407,6 +407,95 @@ describe('Engine', () => {
       }
     });
 
+    async function verifyImageLimitContinuation(mode) {
+      const signed = mode !== 'unsigned';
+      const gatewayRejects = mode === 'stricter-gateway';
+      const dir = mkdtempSync(join(tmpdir(), 'yeaft-active-image-limit-'));
+      const store = new ConversationStore(dir);
+      const model = 'claude-opus-4.8';
+      const requests = [], summaries = [], executions = [];
+      const makeGif = (index, edge) => {
+        const bytes = Buffer.alloc(24);
+        bytes.write('GIF89a'); bytes.writeUInt16LE(edge, 6); bytes.writeUInt16LE(912, 8);
+        bytes.writeUInt32LE(index, 12);
+        return bytes.toString('base64');
+      };
+      // The tool retention policy caps replay independently. Use uploads to
+      // exercise the provider-specific many-image limit despite that cap.
+      const screenshots = Array.from({ length: 20 }, (_, index) => makeGif(index, 1200));
+      const newest = makeGif(20, gatewayRejects ? 2000 : 3303);
+      const photos = screenshots.map(data => ({ type: 'image', source: { type: 'base64', media_type: 'image/gif', data } }));
+      const path = n => `screenshot-${n}.gif`;
+      const flatten = content => Array.isArray(content) ? content.flatMap(part => part.type === 'tool_result'
+        ? [part, ...flatten(part.content)] : [part]) : [];
+      const imageData = req => req.messages.flatMap(row => flatten(row.content))
+        .filter(part => part.type === 'image').map(part => part.source.data);
+      const json = (content, stop_reason = 'end_turn') => new Response(JSON.stringify({ content, stop_reason,
+        usage: { input_tokens: 500, output_tokens: 10 } }), { headers: { 'content-type': 'application/json' } });
+      try {
+        vi.stubGlobal('fetch', vi.fn(async (_url, init) => {
+          const request = anthropicWireWithoutCache(init);
+          if (!request.stream) {
+            summaries.push(request);
+            expect(request.messages[0].content).toContain(path(0));
+            expect(request.messages[0].content).not.toContain(newest);
+            return json([{ type: 'text', text: 'Images reviewed; finish the comparison.' }]);
+          }
+          const images = imageData(request);
+          requests.push({ request, images });
+          expect(images.length > 20 && images.includes(newest) && !gatewayRejects).toBe(false);
+          if (gatewayRejects && images.length === 21 && executions.length === 1) {
+            return new Response(JSON.stringify({ error: {
+              message: 'At least one of the image dimensions exceed max allowed size for many-image requests: 1500 pixels',
+            } }), { status: 400 });
+          }
+          const index = executions.length;
+          const id = `shot-${index}`;
+          if (signed) return response(id, index === 0 ? 'ViewImage' : undefined, { file_path: path(index) }, model,
+            { input_tokens: 500 + index * 2000, output_tokens: 10, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 });
+          return index === 0 ? json([{ type: 'tool_use', id, name: 'ViewImage', input: { file_path: path(index) } }], 'tool_use')
+            : json([{ type: 'text', text: 'Finished safely.' }]);
+        }));
+        const usage = vi.fn();
+        const engine = new Engine({ adapter: withUsageAccounting(router(model), usage), trace, yeaftDir: dir, conversationStore: store,
+          config: { model: 'gateway/' + model, maxOutputTokens: 1024, projectDocMaxBytes: 0 } });
+        engine.registerTool({ name: 'ViewImage', description: 'Read a screenshot', parameters: { type: 'object' }, execute: async input => {
+          executions.push(input.file_path);
+          return JSON.stringify({ path: input.file_path, image: 'data:image/gif;base64,' + newest });
+        } });
+        const events = [];
+        for await (const event of engine.query({ prompt: 'Compare the screenshots.', sessionId: 'image-limit',
+          promptParts: [{ type: 'text', text: 'Compare the screenshots.' }, ...photos], })) events.push(event);
+        expect(events.filter(event => event.type === 'error')).toEqual([]);
+        expect(events.filter(event => event.type === 'turn_end' && event.terminal)).toEqual([expect.objectContaining({ stopReason: 'end_turn' })]);
+        expect(executions).toEqual([path(0)]);
+        expect(store.loadAllBySession('image-limit').filter(row => row.role === 'tool')).toHaveLength(1);
+        const final = requests.at(-1);
+        expect(final.images).toContain(newest);
+        expect(summaries).toHaveLength(signed ? 1 : 0);
+        expect(requests).toHaveLength(gatewayRejects ? 3 : 2);
+        if (signed && !gatewayRejects) {
+          expect(requests[0].images).toEqual(screenshots);
+          expect(final.images.length).toBeLessThanOrEqual(19);
+          expect(final.request.messages).toHaveLength(1);
+          expect(JSON.stringify(final.request)).not.toContain('signature-shot-');
+          expect(JSON.stringify(final.request)).toContain(path(0));
+          expect(events.find(event => event.type === 'llm_retry')).toMatchObject({ reason: 'context_rollover', errorName: 'LLMImageLimitError' });
+        } else if (gatewayRejects) {
+          expect(events.find(event => event.type === 'llm_retry')).toMatchObject({ reason: 'request_image_recovery', statusCode: 400 });
+          expect(final.images.length).toBeLessThanOrEqual(19);
+        } else {
+          expect(final.images).toEqual([...screenshots.slice(1), newest]);
+          expect(JSON.stringify(final.request)).toContain(path(0));
+          expect(JSON.stringify(final.request)).toContain('Image not sent: model route image limit');
+        }
+      } finally {
+        vi.unstubAllGlobals();
+        await closeConversationHistoryIndexes();
+        rmSync(dir, { recursive: true, force: true });
+      }
+    }
+
     async function assertLongImageLoop() {
       const originalFetch = globalThis.fetch;
       const dir = mkdtempSync(join(tmpdir(), 'yeaft-long-image-loop-'));
@@ -469,7 +558,10 @@ describe('Engine', () => {
     }
 
     it.each(['provider', 'abort', 'append'])('rolls signed context into a fresh conversation without tool replay: %s', async trigger => {
-      if (trigger === 'provider') await assertLongImageLoop();
+      if (trigger === 'provider') {
+        await assertLongImageLoop();
+        for (const mode of ['unsigned', 'signed', 'stricter-gateway']) await verifyImageLimitContinuation(mode);
+      }
       const modes = ['token', 'http413', 'http413-token-fallback', 'http413-summary-retry', 'http413-multilingual-summary'];
       for (const mode of trigger === 'provider' ? modes : [trigger]) {
         const dir = mkdtempSync(join(tmpdir(), 'yeaft-signed-rollover-'));

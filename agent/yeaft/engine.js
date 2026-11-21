@@ -2670,7 +2670,7 @@ export class Engine {
     const viewImageToolPaths = new WeakMap();
     const viewImagePartPaths = new WeakMap();
     const singleImageDimensionMode = new Set();
-    const projectToolImages = createActiveToolImageProjector({ paths: viewImageToolPaths });
+    const projectToolImages = createActiveToolImageProjector({ pathForImage: part => viewImagePartPaths.get(part) });
     let pendingServerOperation = false;
     let turnNumber = 0;
     let continueTurns = 0; // auto-continue counter
@@ -3160,7 +3160,7 @@ export class Engine {
             frozenLength: signedAnthropicPrefix ? signedAnthropicPrefix.messages.length + 1 : 0,
             canRollover: Boolean(signedAnthropicPrefix && successfulRequestsSinceRollover > 0
               && !prepareProviderRequest && !executionPolicy?.finalize && !progressReporting),
-            pathForImage: part => viewImagePartPaths.get(part),
+            pathForImage: projectToolImages.pathOf,
             preview: (part, edge, bytes) => makeImagePreview(part, edge, bytes, signal),
           });
           wireMessages = images.messages;
@@ -3900,7 +3900,7 @@ export class Engine {
             const evidenceRows = rollSignedBody || rollSignedImage || signedAnthropicPrefix
               ? (await projectToolImages(latestToolRows, { signal })).messages
               : [];
-            const toolImageEvidence = wireToolImageEvidence(evidenceRows, viewImageToolPaths);
+            const toolImageEvidence = wireToolImageEvidence(evidenceRows, viewImageToolPaths, projectToolImages.isImageAnnotation);
             let nextRolloverSeed = contextRolloverSeed(summary, rolloverUserRequests, { toolImageEvidence });
             if (Number.isFinite(mediaByteBudget)) [nextRolloverSeed] = trimWireMedia([nextRolloverSeed], mediaByteBudget);
             if (requestImageLimits) {
@@ -3909,7 +3909,7 @@ export class Engine {
               const seedImageLimits = { ...requestImageLimits,
                 count: Math.min(requestImageLimits.count, requestImageLimits.manyCount) - 1 };
               const fittedSeed = await fitAnthropicImages([nextRolloverSeed], seedImageLimits, {
-                pathForImage: part => viewImagePartPaths.get(part),
+                pathForImage: projectToolImages.pathOf,
                 preview: (part, edge, bytes) => makeImagePreview(part, edge, bytes, signal),
               });
               [nextRolloverSeed] = fittedSeed.messages;
@@ -3969,7 +3969,7 @@ export class Engine {
             if (rollSignedBody) {
               err.reasonCode = 'request_body_too_large';
               if (compactError?.statusCode === 413) err.statusCode = 413;
-            } else if (rollSignedImage) err.reasonCode = 'request_image_limit';
+            } else if (rollSignedImage || rollSignedToolImages) err.reasonCode = 'request_image_limit';
           }
         }
 
