@@ -1360,7 +1360,7 @@ export function buildHistoryBuckets(snapshot, options = {}) {
  * @param {{ contextWindow:number, systemTokens?:number, toolSchemaTokens?:number,
  * outputReserve?:number, historyMessageCount?:number, historyTokenBudget?:number,
  * maxMessageCount?:number, language?:string,
- * repeatedToolResultRefs?:Map<string,string> }} options
+ * repeatedToolResultRefs?:Map<string,string>, toolResultCompactionRatio?:number }} options
  * @returns {{messages:Array<object>, meta:object}}
  */
 export function fitProviderRequestToContext(messages, options = {}) {
@@ -1383,7 +1383,12 @@ export function fitProviderRequestToContext(messages, options = {}) {
   const currentSource = source.slice(split);
 
   let current = pairSanitize(currentSource.map(message => ({ ...message })));
-  const compact = compactCurrentToolResults(current, messageBudget);
+  const softToolBudget = options.toolResultCompactionRatio > 0 && options.toolResultCompactionRatio < 1
+    ? Math.max(0, Math.floor(contextWindow * options.toolResultCompactionRatio) - staticTokens + bucketCap(options.outputReserve, 0))
+    : messageBudget;
+  // Sample older tool results as input approaches the soft target. Do not drop
+  // protocol units or shorten the newest batch just to meet that soft target.
+  const compact = compactCurrentToolResults(current, Math.min(messageBudget, softToolBudget));
   current = compact.messages;
   if (estimateMessagesTokens(current) > messageBudget || current.length > messageCap) {
     const fitted = [];

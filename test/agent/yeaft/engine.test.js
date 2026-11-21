@@ -407,97 +407,69 @@ describe('Engine', () => {
       }
     });
 
-    async function verifyImageLimitContinuation(mode) {
-      const signed = mode !== 'unsigned';
-      const gatewayRejects = mode === 'stricter-gateway';
-      const dir = mkdtempSync(join(tmpdir(), 'yeaft-active-image-limit-'));
-      const store = new ConversationStore(dir);
-      const model = 'claude-opus-4.8';
-      const requests = [], summaries = [], executions = [];
-      const makeGif = (index, edge) => {
-        const bytes = Buffer.alloc(24);
-        bytes.write('GIF89a'); bytes.writeUInt16LE(edge, 6); bytes.writeUInt16LE(912, 8);
-        bytes.writeUInt32LE(index, 12);
-        return bytes.toString('base64');
+    async function assertLongImageLoop() {
+      const originalFetch = globalThis.fetch;
+      const dir = mkdtempSync(join(tmpdir(), 'yeaft-long-image-loop-'));
+      let step = 0, summaries = 0;
+      const toolRuns = [], requests = [];
+      const usage = { input_tokens: 1000, output_tokens: 10, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 };
+      const imageFor = index => {
+        const data = Buffer.alloc(16, index);
+        data.write('GIF89a');
+        data.writeUInt16LE(index === 30 ? 3303 : 1200, 6);
+        data.writeUInt16LE(912, 8);
+        return data.toString('base64');
       };
-      const screenshots = Array.from({ length: 31 }, (_, index) => makeGif(index, index === 30 ? 3303 : 1200));
-      const path = n => `screenshot-${n}.gif`;
-      const flatten = content => Array.isArray(content) ? content.flatMap(part => part.type === 'tool_result'
-        ? [part, ...flatten(part.content)] : [part]) : [];
-      const imageData = req => req.messages.flatMap(row => flatten(row.content))
-        .filter(part => part.type === 'image').map(part => part.source.data);
-      const json = (content, stop_reason = 'end_turn') => new Response(JSON.stringify({ content, stop_reason,
-        usage: { input_tokens: 500, output_tokens: 10 } }), { headers: { 'content-type': 'application/json' } });
+      const imagesIn = content => !Array.isArray(content) ? []
+        : content.flatMap(block => block.type === 'image' ? [block.source.data] : imagesIn(block.content));
       try {
-        vi.stubGlobal('fetch', vi.fn(async (_url, init) => {
-          const request = anthropicWireWithoutCache(init);
-          if (!request.stream) {
-            summaries.push(request);
-            const newest = gatewayRejects ? 29 : 30;
-            expect(request.messages[0].content).toContain(path(newest));
-            expect(request.messages[0].content).not.toContain(screenshots[newest]);
-            return json([{ type: 'text', text: 'Images reviewed; finish the comparison.' }]);
+        globalThis.fetch = vi.fn(async (_url, init) => {
+          const body = anthropicWireWithoutCache(init);
+          if (!body.stream) {
+            expect(JSON.stringify(body.messages)).not.toContain(imageFor(30));
+            summaries++;
+            return new Response(JSON.stringify({ stop_reason: 'end_turn',
+              content: [{ type: 'text', text: 'Screenshots collected so far; continue without repeating tools.' }], usage,
+            }), { headers: { 'content-type': 'application/json' } });
           }
-          const images = imageData(request);
-          requests.push({ request, images });
-          expect(images.length > 20 && images.includes(screenshots[30])).toBe(false);
-          if (gatewayRejects && images.length === 31) throw new Error('unexpected count');
-          if (gatewayRejects && images.length === 30 && executions.length === 30) {
-            return new Response(JSON.stringify({ error: {
-              message: 'At least one of the image dimensions exceed max allowed size for many-image requests: 1500 pixels',
-            } }), { status: 400 });
-          }
-          const index = executions.length;
-          const id = `shot-${index}`;
-          if (signed) return response(id, index < 31 ? 'ViewImage' : undefined, { file_path: path(index) }, model,
-            { input_tokens: 500 + index * 2000, output_tokens: 10, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 });
-          return index < 31 ? json([{ type: 'tool_use', id, name: 'ViewImage', input: { file_path: path(index) } }], 'tool_use')
-            : json([{ type: 'text', text: 'Finished safely.' }]);
-        }));
-        const usage = vi.fn();
-        const engine = new Engine({ adapter: withUsageAccounting(router(model), usage), trace, yeaftDir: dir, conversationStore: store,
-          config: { model: 'gateway/' + model, maxOutputTokens: 1024, projectDocMaxBytes: 0 } });
-        engine.registerTool({ name: 'ViewImage', description: 'Read a screenshot', parameters: { type: 'object' }, execute: async input => {
-          const index = executions.length;
-          executions.push(input.file_path);
-          return JSON.stringify({ path: input.file_path, image: 'data:image/gif;base64,' + screenshots[index] });
-        } });
+          const images = body.messages.flatMap(row => imagesIn(row.content));
+          requests.push({ images, seed: body.messages.length === 1 ? JSON.stringify(body.messages[0].content) : null });
+          // Duplicate responses or a late rollover would grow the wire tape.
+          expect(images.length).toBeLessThanOrEqual(13); // 12 tool images plus last segment's seed
+          expect(new Set(images).size).toBe(images.length);
+          const n = step++;
+          return response(`long-image-${n}`, n < 31 ? 'ViewImage' : undefined,
+            n < 31 ? { file_path: `fixture-${n}.gif` } : {}, 'claude-opus-4.8', usage);
+        });
+        const engine = new Engine({ adapter: router('claude-opus-4.8'), trace, yeaftDir: dir,
+          config: { model: 'gateway/claude-opus-4.8', maxOutputTokens: 1024, projectDocMaxBytes: 0 } });
+        engine.registerTool({ name: 'ViewImage', description: 'Read image evidence', parameters: { type: 'object' },
+          execute: async ({ file_path }) => {
+            const n = Number(file_path.match(/\d+/)[0]);
+            toolRuns.push(n);
+            // A repeated read under a different path, followed by distinct images.
+            return JSON.stringify({ path: file_path, image: 'data:image/gif;base64,' + imageFor(n === 1 ? 0 : n) });
+          } });
         const events = [];
-        for await (const event of engine.query({ prompt: 'Compare the screenshots.', sessionId: 'image-limit' })) events.push(event);
+        for await (const event of engine.query({ prompt: 'Inspect thirty-one screenshots', sessionId: 'long-image-loop' })) events.push(event);
         expect(events.filter(event => event.type === 'error')).toEqual([]);
         expect(events.filter(event => event.type === 'turn_end' && event.terminal)).toEqual([expect.objectContaining({ stopReason: 'end_turn' })]);
-        expect(executions).toEqual(screenshots.map((_, index) => path(index)));
-        expect(store.loadAllBySession('image-limit').filter(row => row.role === 'tool')).toHaveLength(31);
-        const final = requests.at(-1);
-        expect(final.images).toContain(screenshots[30]);
-        expect(summaries).toHaveLength(signed ? 1 : 0);
-        expect(requests).toHaveLength(gatewayRejects ? 33 : 32);
-        if (signed && !gatewayRejects) {
-          expect(requests[30].images).toEqual(screenshots.slice(0, 30));
-          expect(final.images).toEqual([screenshots[30]]);
-          expect(final.request.messages).toHaveLength(1);
-          expect(JSON.stringify(final.request)).not.toContain('signature-shot-');
-          expect(JSON.stringify(final.request)).toContain(path(30));
-          expect(events.find(event => event.type === 'llm_retry')).toMatchObject({ reason: 'context_rollover', errorName: 'LLMImageLimitError' });
-        } else if (gatewayRejects) {
-          expect(events.find(event => event.type === 'llm_retry')).toMatchObject({ reason: 'request_image_recovery', statusCode: 400 });
-          expect(requests[31].images).toEqual([screenshots[29]]);
-        } else {
-          expect(final.images).toEqual(screenshots.slice(11));
-          expect(JSON.stringify(final.request)).toContain(path(0));
-          expect(JSON.stringify(final.request)).toContain('Image not sent: model route image limit');
-        }
+        expect(summaries).toBe(2);
+        expect(requests).toHaveLength(32);
+        expect(requests[2].images).toEqual([imageFor(0)]);
+        expect(requests.at(-1).images).toContain(imageFor(30));
+        expect(requests.at(-1).images).not.toContain(imageFor(0));
+        expect(requests.filter(r => r.seed?.includes('Image evidence from completed tool result'))).toHaveLength(2);
+        expect(toolRuns).toEqual(Array.from({ length: 31 }, (_, n) => n));
       } finally {
-        vi.unstubAllGlobals();
+        globalThis.fetch = originalFetch;
         await closeConversationHistoryIndexes();
         rmSync(dir, { recursive: true, force: true });
       }
     }
 
     it.each(['provider', 'abort', 'append'])('rolls signed context into a fresh conversation without tool replay: %s', async trigger => {
-      if (trigger === 'provider') {
-        for (const mode of ['unsigned', 'signed', 'stricter-gateway']) await verifyImageLimitContinuation(mode);
-      }
+      if (trigger === 'provider') await assertLongImageLoop();
       const modes = ['token', 'http413', 'http413-token-fallback', 'http413-summary-retry', 'http413-multilingual-summary'];
       for (const mode of trigger === 'provider' ? modes : [trigger]) {
         const dir = mkdtempSync(join(tmpdir(), 'yeaft-signed-rollover-'));
@@ -512,8 +484,8 @@ describe('Engine', () => {
         };
         // Encoded size is not visual size: ~800K base64 chars for a 16x16
         // frame. A 4424x4424 frame (158x158 patches) puts the seed at ~27K: it
-        // fits the window and the 85% threshold (34K), but leaves less than half
-        // of that budget (17K) for new work, so it would roll over again.
+        // fits the window and the 80% threshold (32K), but leaves less than half
+        // of that budget (16K) for new work, so it would roll over again.
         const reference = gif(16, 16, 600_000);
         const oversized = mode === 'append' ? [gif(4424, 4424, 64)] : [];
         // A signed provider rejects this particular batch by bytes, not tokens.
