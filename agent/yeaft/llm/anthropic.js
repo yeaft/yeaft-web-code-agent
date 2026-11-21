@@ -69,6 +69,7 @@ export function applyAnthropicThinking(body, model, effort, effortContext = {}) 
 
 import { ProviderContextBudgetError, ProviderStateError, createProviderContext, createProviderState, replayProviderState, providerStateBytes, applyAnthropicCaching, stripAnthropicCaching, reasoningUsage, reportedUsageFields, hasUsageCounts, validateAnthropicRequestPrefixes, supportsAnthropicPreservedThinking } from './provider-state.js';
 import { fetchWithPromptCacheFallback } from './prompt-cache.js';
+import { ANTHROPIC_IMAGE_LIMITS, classifyAnthropicImageLimit, validateAnthropicImages } from './anthropic-images.js';
 
 /** Signed continuations cannot recover by compacting after wire settings grow. */
 function validateSignedOutputBudget(body, replayed, contextOutputLimit) {
@@ -204,6 +205,8 @@ export class AnthropicAdapter extends LLMAdapter {
     this.#streamIdlePolicy = { streamIdleTimeoutMs, highEffortStreamIdleTimeoutMs };
   }
 
+  getImageLimits() { return ANTHROPIC_IMAGE_LIMITS; }
+
   #headers() {
     const headers = {
       'Content-Type': 'application/json',
@@ -307,6 +310,7 @@ export class AnthropicAdapter extends LLMAdapter {
     // that do not implement cache blocks. Do not rewrite signed history.
     const wire = toWellFormedJson(stripAnthropicCaching(body));
     validateAnthropicRequestPrefixes(wire, replayed);
+    validateAnthropicImages(wire);
     return wire;
   }
 
@@ -339,6 +343,8 @@ export class AnthropicAdapter extends LLMAdapter {
       const retryAfter = retryAfterFromResponse(response);
       return new LLMRateLimitError(`Anthropic overloaded (${authHint}): ${body}`, status, retryAfter);
     }
+    const imageError = classifyAnthropicImageLimit(status, body);
+    if (imageError) return imageError;
     const policyError = classifyPolicyError(status, body);
     if (policyError) return policyError;
     if (body.includes('prompt is too long') || body.includes('max_tokens')) {
@@ -393,6 +399,7 @@ export class AnthropicAdapter extends LLMAdapter {
     const caching = applyAnthropicCaching(body, context, onProviderDiagnostics);
     const requestBody = toWellFormedJson(caching.body);
     validateAnthropicRequestPrefixes(requestBody, replayed);
+    validateAnthropicImages(requestBody);
     const idleMs = resolveStreamIdleTimeoutMs(this.#streamIdlePolicy, effortDecision.effective, streamIdleTimeoutMs);
 
     const url = `${this.#baseUrl}/v1/messages`;
@@ -858,6 +865,7 @@ export class AnthropicAdapter extends LLMAdapter {
     const caching = applyAnthropicCaching(body, context, onProviderDiagnostics);
     const requestBody = toWellFormedJson(caching.body);
     validateAnthropicRequestPrefixes(requestBody, replayed);
+    validateAnthropicImages(requestBody);
 
     const url = `${this.#baseUrl}/v1/messages`;
     const headers = { ...this.#headers(), ...midConversationHeaders(requestBody) };

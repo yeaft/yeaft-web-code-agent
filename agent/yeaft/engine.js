@@ -50,6 +50,8 @@ import { readSessionTurnDeletions, sessionDeletionGeneration, sessionDeletionPro
 import { findExistingSessionYeaftDir } from './sessions/session-crud.js';
 import { referencePersistedAttachmentHistory } from './attachments.js';
 import { inlineMediaBytes, omitHistoricalImages, trimWireMedia, wireToolImageEvidence } from './wire-media.js';
+import { fitAnthropicImages, LLMImageLimitError } from './llm/anthropic-images.js';
+import { makeImagePreview } from './image-preview.js';
 import { isVpForeign, readContent as readScopeContent } from './memory/store.js';
 import { ActiveMemorySet } from './memory/ams.js';
 import { cleanMemoryPromptText } from './memory/prompt-cleanup.js';
@@ -2665,6 +2667,8 @@ export class Engine {
     let learnedRequestBodyCap;
     let mediaByteBudget = Infinity;
     const viewImageToolPaths = new WeakMap();
+    const viewImagePartPaths = new WeakMap();
+    const singleImageDimensionMode = new Set();
     let pendingServerOperation = false;
     let turnNumber = 0;
     let continueTurns = 0; // auto-continue counter
@@ -2818,6 +2822,7 @@ export class Engine {
       const startTime = Date.now();
       const requestPerfStart = perfNowMs();
       let requestMediaBytes = 0;
+      let requestImageLimits = null;
       let firstEventTraced = false;
       traceRequest('llm.request_start', {
         detail: {
@@ -3129,6 +3134,24 @@ export class Engine {
             // repeat this best-effort archive lookup without losing history.
             wireMessages = swept.nextMessages;
           } catch { /* best-effort */ }
+        }
+
+        const imageLimits = requestAdapter.getImageLimits?.(currentModel);
+        requestImageLimits = imageLimits && singleImageDimensionMode.has(currentModel)
+          ? { ...imageLimits, count: imageLimits.manyCount } : imageLimits;
+        if (requestImageLimits && !pendingServerOperation) {
+          const images = await fitAnthropicImages(wireMessages, requestImageLimits, {
+            frozenLength: signedAnthropicPrefix ? signedAnthropicPrefix.messages.length + 1 : 0,
+            canRollover: Boolean(signedAnthropicPrefix && successfulRequestsSinceRollover > 0
+              && !prepareProviderRequest && !executionPolicy?.finalize && !progressReporting),
+            pathForImage: part => viewImagePartPaths.get(part),
+            preview: (part, edge, bytes) => makeImagePreview(part, edge, bytes, signal),
+          });
+          wireMessages = images.messages;
+          if (images.omitted || images.previews) this.#trace.log?.('request_image_fit', {
+            sessionId: runtimeSessionId, turnId: queryTurnId, model: currentModel,
+            count: images.count, omitted: images.omitted, previews: images.previews,
+          });
         }
 
         // Final request boundary: account for every component against the
@@ -3722,10 +3745,27 @@ export class Engine {
 
         const isBodyOverflow = err instanceof LLMRequestTooLargeError;
         // Work Center owns durable dispatch/retry decisions through its Run
-        // lease. An Engine retry must not bypass a failed dispatch fence.
-        const canRecoverBody = isBodyOverflow && !prepareProviderRequest && err.workItemFailureKind == null
+        // lease. Don't abandon paused server work or consume the reserved report.
+        const canRecoverRequestSize = !prepareProviderRequest && err.workItemFailureKind == null
           && toolCalls.length === 0 && !responseText
-          && !pendingServerOperation && !executionPolicy?.finalize && !progressReporting
+          && !pendingServerOperation && !executionPolicy?.finalize && !progressReporting;
+        const canRecoverImage = err instanceof LLMImageLimitError && requestImageLimits && canRecoverRequestSize;
+        const rollSignedImage = canRecoverImage && signedAnthropicPrefix && successfulRequestsSinceRollover > 0
+          && err.blockedByPrefix;
+        if (canRecoverImage && err.gatewayManyImages && !singleImageDimensionMode.has(currentModel)) {
+          // Some compatible gateways use a different many-image edge. Learn a
+          // safe count once for this route/model in the current query. Preflight
+          // will trim an editable copy, or roll if the new cap hits the prefix.
+          singleImageDimensionMode.add(currentModel);
+          endAttemptTrace('request_image_retry');
+          yield { type: 'llm_retry', attempt: 1, maxRetries: 1,
+            delayMs: 0, reason: 'request_image_recovery', recoveryMode: 'restart',
+            errorName: err.name, statusCode: err.statusCode,
+            message: 'The gateway rejected a many-image request; retrying with the newest images.' };
+          yield { type: 'turn_end', turnNumber, stopReason: 'llm_retry', threadId };
+          continue;
+        }
+        const canRecoverBody = isBodyOverflow && canRecoverRequestSize
           && bodyRecoveryAttempts < MAX_REQUEST_BODY_RECOVERY_ATTEMPTS;
         const rollSignedBody = canRecoverBody && signedAnthropicPrefix && successfulRequestsSinceRollover > 0;
         if (canRecoverBody && (rollSignedBody || requestMediaBytes > 0)) {
@@ -3751,7 +3791,7 @@ export class Engine {
           }
         }
         const contextNeedsRollover = err instanceof ProviderContextBudgetError || err instanceof LLMContextError;
-        if ((rollSignedBody || (contextNeedsRollover && (signedAnthropicPrefix || rolloverSeed))) && toolCalls.length === 0
+        if ((rollSignedImage || rollSignedBody || (contextNeedsRollover && (signedAnthropicPrefix || rolloverSeed))) && toolCalls.length === 0
             && successfulRequestsSinceRollover > 0 && !pendingServerOperation) {
           endAttemptTrace('context_rollover');
           if (responseText) prepareRetryContinuation();
@@ -3760,9 +3800,11 @@ export class Engine {
             type: 'llm_retry', attempt: rolloverCount, maxRetries: rolloverCount,
             delayMs: 0, reason: 'context_rollover', recoveryMode: 'continue',
             errorName: err.name, statusCode: err.statusCode ?? null,
-            message: rollSignedBody
-              ? 'Request body is too large; continuing in a fresh model context without repeating completed tools.'
-              : 'Compacting conversation context and continuing in a fresh model turn.',
+            message: rollSignedImage
+              ? 'The signed context reached the image limit; continuing with recent image evidence without repeating completed tools.'
+              : rollSignedBody
+                ? 'Request body is too large; continuing in a fresh model context without repeating completed tools.'
+                : 'Compacting conversation context and continuing in a fresh model turn.',
           };
           const sourceCursor = conversationMessages.length;
           const sourceMessages = rolloverSeed
@@ -3832,11 +3874,22 @@ export class Engine {
             while (firstToolIndex > 0 && conversationMessages[firstToolIndex - 1].role === 'tool') firstToolIndex--;
             // Reattach the newest tool batch as evidence, not as calls. Do not
             // bring back batches from a segment already summarized before this one.
-            const toolImageEvidence = rollSignedBody && latestToolIndex >= Math.max(rolloverCursor, turnStartIdx + 1)
+            const toolImageEvidence = (rollSignedBody || rollSignedImage) && latestToolIndex >= Math.max(rolloverCursor, turnStartIdx + 1)
               ? wireToolImageEvidence(conversationMessages.slice(Math.max(firstToolIndex, rolloverCursor, turnStartIdx + 1), latestToolIndex + 1), viewImageToolPaths)
               : [];
             let nextRolloverSeed = contextRolloverSeed(summary, rolloverUserRequests, { toolImageEvidence });
             if (Number.isFinite(mediaByteBudget)) [nextRolloverSeed] = trimWireMedia([nextRolloverSeed], mediaByteBudget);
+            if (requestImageLimits) {
+              // Leave room for the next tool batch even if the seed contains
+              // a wide image or the gateway has learned the lower count cap.
+              const seedImageLimits = { ...requestImageLimits,
+                count: Math.min(requestImageLimits.count, requestImageLimits.manyCount) - 1 };
+              const fittedSeed = await fitAnthropicImages([nextRolloverSeed], seedImageLimits, {
+                pathForImage: part => viewImagePartPaths.get(part),
+                preview: (part, edge, bytes) => makeImagePreview(part, edge, bytes, signal),
+              });
+              [nextRolloverSeed] = fittedSeed.messages;
+            }
             const mediaSeedInput = seedInputTokens(nextRolloverSeed);
             if (mediaSeedInput >= currentContextWindow * CONTEXT_ROLLOVER_INPUT_RATIO / 2
                 || mediaSeedInput + rolloverOutputReserve > currentContextWindow) {
@@ -3892,7 +3945,7 @@ export class Engine {
             if (rollSignedBody) {
               err.reasonCode = 'request_body_too_large';
               if (compactError?.statusCode === 413) err.statusCode = 413;
-            }
+            } else if (rollSignedImage) err.reasonCode = 'request_image_limit';
           }
         }
 
@@ -4153,7 +4206,7 @@ export class Engine {
             && consecutiveRetryableErrors >= retryPolicy.maxRetries;
           errorEvent.retryAttempts = consecutiveRetryableErrors;
           errorEvent.maxRetries = retryPolicy.maxRetries;
-        } else if (err instanceof LLMRequestTooLargeError) {
+        } else if (err instanceof LLMRequestTooLargeError || err instanceof LLMImageLimitError) {
           errorEvent.reason = err.reasonCode;
         } else if (err instanceof LLMPolicyError) {
           errorEvent.reason = 'content_policy_denied';
@@ -5332,6 +5385,7 @@ export class Engine {
         if (tc.name === 'ViewImage' && modelImages.length > 0 && !isError
             && typeof tc.input?.file_path === 'string' && tc.input.file_path.length <= 4096) {
           viewImageToolPaths.set(toolMessage, tc.input.file_path);
+          for (const part of modelImages) viewImagePartPaths.set(part, tc.input.file_path);
         }
         conversationMessages.push(toolMessage);
         // Model context may use a bounded copy, but durable conversation

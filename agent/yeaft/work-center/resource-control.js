@@ -345,7 +345,11 @@ export class WorkCenterResourceAdapter extends LLMAdapter {
     const capture = captured?.captureStream || this.adapter.captureStream?.bind(this.adapter)
       || this.adapter.stream.bind(this.adapter);
     const native = this.adapter instanceof LLMAdapter;
-    return { captureStream: params => this.accountStream(capture, params, native) };
+    const imagePolicy = captured?.getImageLimits ? captured : this.adapter;
+    return {
+      captureStream: params => this.accountStream(capture, params, native),
+      getImageLimits: imagePolicy.getImageLimits?.bind(imagePolicy),
+    };
   }
   captureStream(params) { return this.captureRequest().captureStream(params); }
   stream(params) { return this.captureStream(params); }

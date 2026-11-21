@@ -97,7 +97,10 @@ export class UsageAccountingAdapter extends LLMAdapter {
     const captured = typeof this.#adapter.captureRequest === 'function'
       ? this.#adapter.captureRequest()
       : null;
+    const imagePolicy = captured?.getImageLimits ? captured : this.#adapter;
     return {
+      getImageLimits: imagePolicy.getImageLimits?.bind(imagePolicy),
+      ...(typeof captured?.call === 'function' ? { call: params => this.#callWithAccounting(captured.call.bind(captured), params) } : {}),
       captureStream: params => {
         const requestParams = this.#requestParams(params);
         const capture = captured?.captureStream
@@ -131,10 +134,14 @@ export class UsageAccountingAdapter extends LLMAdapter {
     }
   }
 
-  async call(params) {
+  call(params) {
+    return this.#callWithAccounting(this.#adapter.call.bind(this.#adapter), params);
+  }
+
+  async #callWithAccounting(call, params) {
     let usage = normalizeTokenUsage();
     try {
-      const result = await this.#adapter.call(this.#requestParams(params));
+      const result = await call(this.#requestParams(params));
       usage = normalizeTokenUsage(result?.usage || {});
       return result;
     } finally {
