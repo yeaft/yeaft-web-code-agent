@@ -1,16 +1,19 @@
 /**
  * Renderer for the basketball waiting animation: paints one solved play frame
- * through the camera onto a transparent canvas. Holds no state. The players
- * are stick figures in the page's own ink; the ball and the rim are the only
- * colour.
+ * through the camera onto a transparent canvas. Holds no state. The court is
+ * line art the page shows through; the players and the ball are drawn in
+ * their own colours.
  */
 import { blend, rgb } from '../stage.js';
-import { paintParts, stickParts } from '../stick/figure.js';
+import { paintParts } from '../stick/figure.js';
 import { clamp01 } from '../stick/vec.js';
+import { ballPart } from './ball.js';
 import { drawCourt, drawHoop } from './court.js';
-import { BALL_RADIUS, DEFENDER_SIZE, RIM } from './play.js';
+import { BALL_RADIUS, RIM } from './play.js';
+import { playerParts } from './player.js';
 
 const TAU = Math.PI * 2;
+const ANKLE = 0.28;
 
 function disc(ctx, x, y, radius, color) {
   ctx.fillStyle = color;
@@ -19,58 +22,26 @@ function disc(ctx, x, y, radius, color) {
   ctx.fill();
 }
 
-function ballPart(ctx, camera, play, colors) {
-  const ball = camera.project(play.ball.at);
-  return {
-    depth: ball.depth,
-    draw() {
-      if (ball.depth < 1) return;
-      const radius = Math.max(1.8, BALL_RADIUS * ball.k);
-      play.ball.trail.forEach((point, index) => {
-        const ghost = camera.project(point);
-        disc(ctx, ghost.x, ghost.y, radius * (1 - 0.14 * (index + 1)), rgb(colors.ball, 0.34 - 0.07 * index));
-      });
-      // A thin gap round the ball keeps it apart from the hand that has it.
-      ctx.globalCompositeOperation = 'destination-out';
-      disc(ctx, ball.x, ball.y, radius + Math.max(1, 0.09 * ball.k), rgb(colors.ball));
-      ctx.globalCompositeOperation = 'source-over';
-      disc(ctx, ball.x, ball.y, radius, rgb(colors.ball));
-      if (radius < 3.2) return;
-      ctx.save();
-      ctx.beginPath();
-      ctx.arc(ball.x, ball.y, radius, 0, TAU);
-      ctx.clip();
-      ctx.translate(ball.x, ball.y);
-      ctx.rotate(play.ball.spin);
-      ctx.strokeStyle = rgb(colors.seam);
-      ctx.lineWidth = Math.max(0.7, 0.07 * ball.k);
-      ctx.beginPath();
-      ctx.moveTo(-radius, 0);
-      ctx.lineTo(radius, 0);
-      ctx.stroke();
-      for (const side of [-1, 1]) {
-        ctx.beginPath();
-        ctx.ellipse(side * radius * 1.05, 0, radius * 0.62, radius * 0.95, 0, 0, TAU);
-        ctx.stroke();
-      }
-      ctx.restore();
-    },
-  };
-}
-
+/** Soft shadows under the players, a darker one under each foot on the floor, and the ball's. */
 function drawShadows(ctx, camera, play, colors) {
   const shade = (point, feet, strength) => {
     const at = camera.project([point[0], 0, point[2]]);
-    if (at.depth < 1) return;
+    if (at.depth < 1 || strength <= 0) return;
     ctx.fillStyle = rgb(colors.shade, strength);
     ctx.beginPath();
     ctx.ellipse(at.x, at.y, feet * at.k, feet * at.k * camera.squash, 0, 0, TAU);
     ctx.fill();
   };
-  shade(play.defender.ground, 1.2 * DEFENDER_SIZE, 0.1);
-  shade(play.hero.ground, 1.15, 0.1);
+  for (const fig of [play.defender, play.hero]) {
+    shade(fig.ground, 1.1 * fig.size, 0.07);
+    for (const leg of fig.legs) {
+      // A foot's shadow thins and spreads as the foot leaves the floor.
+      const lift = Math.max(0, leg.ankle[1] - ANKLE * fig.size);
+      shade([(leg.ankle[0] + leg.toe[0]) / 2, 0, (leg.ankle[2] + leg.toe[2]) / 2], (0.4 + 0.3 * lift) * fig.size, 0.2 * clamp01(1 - lift / 0.9));
+    }
+  }
   const height = clamp01(play.ball.at[1] / 16);
-  shade(play.ball.at, BALL_RADIUS * (1.1 - 0.4 * height), 0.16 * (1 - 0.6 * height));
+  shade(play.ball.at, BALL_RADIUS * (1.1 - 0.4 * height), 0.18 * (1 - 0.6 * height));
 }
 
 function drawDust(ctx, camera, play, colors) {
@@ -86,7 +57,7 @@ function drawDust(ctx, camera, play, colors) {
 }
 
 /**
- * Marks drawn flat on the picture: the three going up, the nap, and the
+ * Marks drawn flat on the picture: the points going up, the nap, and the
  * running score, which sits in the corner of the core.
  */
 function drawMarks(ctx, camera, play, colors, core) {
@@ -100,7 +71,7 @@ function drawMarks(ctx, camera, play, colors, core) {
     if (at.depth > 1 && at.k > 12 && strength > 0) {
       ctx.font = `800 ${(Math.min(20, Math.max(11, 1.4 * at.k)) * scale).toFixed(1)}px ${colors.font}`;
       ctx.fillStyle = rgb(colors.ball, strength);
-      ctx.fillText('+3', at.x, at.y);
+      ctx.fillText(`+${play.worth}`, at.x, at.y);
     }
   }
   if (play.doze >= 0) {
@@ -145,6 +116,23 @@ function drawBackdrop(ctx, { play, camera, width, height, colors }) {
   fadeOut(ctx, play, colors, width, height);
 }
 
+/** What each player wears. The shooter is in his team's colours; his defender is kept quieter. */
+function kitsOf(colors) {
+  const quiet = color => blend(color, colors.surface, 0.12);
+  return {
+    hero: {
+      skin: colors.skin, hair: colors.hair, jersey: colors.jersey, shorts: colors.jersey, number: colors.number, trim: colors.trim,
+      legs: colors.tights, shoe: colors.shoe, sole: colors.sole, stripe: colors.trim, guard: colors.guard,
+      shade: colors.shade, mark: '30', font: colors.font, beard: true,
+    },
+    defender: {
+      skin: quiet(colors.rivalSkin), hair: colors.hair, jersey: quiet(colors.rival), shorts: quiet(colors.rival), number: colors.rival, trim: colors.sock,
+      legs: quiet(colors.rivalSkin), socks: quiet(colors.sock), shoe: quiet(blend(colors.rival, colors.shade, 0.25)), sole: quiet(colors.sole),
+      shade: colors.shade, font: colors.font,
+    },
+  };
+}
+
 /**
  * @param {CanvasRenderingContext2D} ctx Scaled to CSS px and cleared to transparent.
  * @param {{ play: object, camera: object, width: number, height: number, colors: object,
@@ -154,19 +142,14 @@ function drawBackdrop(ctx, { play, camera, width, height, colors }) {
 export function drawHoopsFrame(ctx, frame) {
   const { play, camera, width, height, colors, core, backdrop } = frame;
   if (backdrop) drawBackdrop(backdrop, frame);
-  // Lighter tones are mixed toward the page rather than drawn see-through, so
-  // overlapping limbs never show darker seams.
-  const styles = {
-    hero: { near: rgb(colors.ink), far: rgb(blend(colors.ink, colors.surface, 0.36)), mark: '30', markColor: rgb(colors.surface), font: colors.font },
-    defender: { near: rgb(blend(colors.soft, colors.surface, 0.18)), far: rgb(blend(colors.soft, colors.surface, 0.5)) },
-  };
+  const kits = kitsOf(colors);
   ctx.lineCap = 'round';
   ctx.lineJoin = 'round';
   drawCourt(ctx, camera, colors, play.angle);
   drawShadows(ctx, camera, play, colors);
   drawHoop(ctx, camera, colors, play.angle, play, 'back');
 
-  const ball = ballPart(ctx, camera, play, colors);
+  const ball = ballPart(ctx, camera, play.ball, BALL_RADIUS, colors);
   // A shot near the hoop is painted between the rim's two halves; otherwise
   // the ball takes its place among the players by distance.
   const atHoop = play.ball.loose && Math.hypot(play.ball.at[0], play.ball.at[1] - RIM.y, play.ball.at[2]) < 7;
@@ -174,8 +157,8 @@ export function drawHoopsFrame(ctx, frame) {
   drawHoop(ctx, camera, colors, play.angle, play, 'front');
 
   const parts = [
-    ...stickParts(ctx, camera, play.defender, styles.defender),
-    ...stickParts(ctx, camera, play.hero, styles.hero),
+    ...playerParts(ctx, camera, play.defender, kits.defender),
+    ...playerParts(ctx, camera, play.hero, kits.hero),
   ];
   if (!atHoop) parts.push(ball);
   paintParts(ctx, parts);
