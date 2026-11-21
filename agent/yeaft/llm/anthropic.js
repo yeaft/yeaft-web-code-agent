@@ -330,7 +330,7 @@ export class AnthropicAdapter extends LLMAdapter {
    *   When provided, reads the `retry-after` header so the engine can honor
    *   the server hint instead of guessing a backoff delay.
    */
-  #classifyError(status, body, response = null) {
+  #classifyError(status, body, response = null, imageLimits) {
     const authHint = `auth=${this.#authHeaderMode}`;
     if (status === 401 || status === 403) {
       return classifyAuthError(status, body);
@@ -343,7 +343,7 @@ export class AnthropicAdapter extends LLMAdapter {
       const retryAfter = retryAfterFromResponse(response);
       return new LLMRateLimitError(`Anthropic overloaded (${authHint}): ${body}`, status, retryAfter);
     }
-    const imageError = classifyAnthropicImageLimit(status, body);
+    const imageError = imageLimits && classifyAnthropicImageLimit(status, body);
     if (imageError) return imageError;
     const policyError = classifyPolicyError(status, body);
     if (policyError) return policyError;
@@ -425,7 +425,7 @@ export class AnthropicAdapter extends LLMAdapter {
           });
         } catch { /* ignore */ }
       }
-      throw this.#classifyError(response.status, errorBody, response);
+      throw this.#classifyError(response.status, errorBody, response, imageLimits);
     }
 
     // Some native-compatible gateways return a complete JSON response even
@@ -871,7 +871,7 @@ export class AnthropicAdapter extends LLMAdapter {
     const headers = { ...this.#headers(), ...midConversationHeaders(requestBody) };
     const { response, errorBody, body: wireBody } = await this.#dispatch({ url, headers, requestBody, signal, maxRequestBodyBytes,
       withoutCache: caching.sent ? () => this.#uncachedBody(body, replayed, imageLimits) : undefined, context, onProviderDiagnostics, onRequestStart });
-    if (!response.ok) throw this.#classifyError(response.status, errorBody, response);
+    if (!response.ok) throw this.#classifyError(response.status, errorBody, response, imageLimits);
 
     const result = await response.json();
     for (const block of result.content || []) {
