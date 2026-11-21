@@ -2,14 +2,10 @@
    The scene is drawn straight onto the page: the court as line art in the
    border greys, the players and the ball in their own colours. The shooter
    wears his team's away blue on a light page and its home white on a dark
-   one, so he stands out from either; his defender is kept quieter.
-   --hoops-surface is the page behind the scene, which lighter tones are
-   mixed toward, and --hoops-shade what the dark side of a shape is mixed
-   toward. */
+   one, so he stands out from either; the defenders are kept quieter.
+   --hoops-shade is what the dark side of a shape is mixed toward. */
 
 .hoops-scene {
-  --hoops-ink: var(--text-primary);
-  --hoops-surface: var(--bg-main);
   --hoops-line: #d6d1c9;
   --hoops-arc: #aba59b;
   --hoops-rig: #9a9da3;
@@ -27,14 +23,12 @@
   --hoops-number: #f5b92e;
   --hoops-shoe: #30333d;
   --hoops-sole: #c9ccd4;
-  --hoops-rival: #a9bdd4;
+  --hoops-rival: #7199cf;
   --hoops-rival-skin: #8c5c3f;
-  --hoops-sock: #d3d7de;
+  --hoops-sock: #e3e6ec;
 }
 
 [data-theme="dark"] .hoops-scene {
-  --hoops-ink: var(--text-secondary);
-  --hoops-surface: var(--bg-main);
   --hoops-line: #3d3935;
   --hoops-arc: #5d5750;
   --hoops-rig: #666a72;

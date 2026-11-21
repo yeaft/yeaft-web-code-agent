@@ -1,113 +1,129 @@
 /**
- * Renderer for the basketball waiting animation: paints one solved play frame
- * through the camera onto a transparent canvas. Holds no state. The court is
- * line art the page shows through; the players and the ball are drawn in
+ * Renderer for the basketball waiting animation: paints one frame of the play
+ * through the camera onto a transparent canvas. Holds no state. The setting
+ * is line art the page shows through; the players and the ball are drawn in
  * their own colours.
  */
 import { blend, rgb } from '../stage.js';
-import { paintParts } from '../stick/figure.js';
-import { clamp01 } from '../stick/vec.js';
-import { ballPart } from './ball.js';
-import { drawCourt, drawHoop } from './court.js';
-import { BALL_RADIUS, RIM } from './play.js';
-import { playerParts } from './player.js';
+import { drawBall, drawBallShadow } from './ball.js';
+import { drawBoard, drawFloor, drawRim } from './court.js';
+import { createKit, drawPlayer, drawPlayerShadow } from './player.js';
+import { PLAYERS } from './tracks.js';
 
 const TAU = Math.PI * 2;
-const ANKLE = 0.28;
+/** The ball's radius as a fraction of the shooter's standing height: it is as far away as he is. */
+const BALL_TO_HEIGHT = 0.0617;
+/** The ball's radius under the rim, in rim radii. */
+const BALL_AT_RIM = 0.52;
 
-function disc(ctx, x, y, radius, color) {
-  ctx.fillStyle = color;
-  ctx.beginPath();
-  ctx.arc(x, y, radius, 0, TAU);
-  ctx.fill();
-}
+/** How much a defender standing well behind the nearest player fades into the page. */
+const HAZE = 0.16;
 
-/** Soft shadows under the players, a darker one under each foot on the floor, and the ball's. */
-function drawShadows(ctx, camera, play, colors) {
-  const shade = (point, feet, strength) => {
-    const at = camera.project([point[0], 0, point[2]]);
-    if (at.depth < 1 || strength <= 0) return;
-    ctx.fillStyle = rgb(colors.shade, strength);
-    ctx.beginPath();
-    ctx.ellipse(at.x, at.y, feet * at.k, feet * at.k * camera.squash, 0, 0, TAU);
-    ctx.fill();
-  };
-  for (const fig of [play.defender, play.hero]) {
-    shade(fig.ground, 1.1 * fig.size, 0.07);
-    for (const leg of fig.legs) {
-      // A foot's shadow thins and spreads as the foot leaves the floor.
-      const lift = Math.max(0, Math.min(leg.ankle[1] - ANKLE * fig.size, leg.toe[1] - 0.1 * fig.size));
-      shade([(leg.ankle[0] + leg.toe[0]) / 2, 0, (leg.ankle[2] + leg.toe[2]) / 2], (0.4 + 0.3 * lift) * fig.size, 0.2 * clamp01(1 - lift / 0.9));
-    }
-  }
-  const height = clamp01(play.ball.at[1] / 16);
-  shade(play.ball.at, BALL_RADIUS * (1.1 - 0.4 * height), 0.18 * (1 - 0.6 * height));
-}
-
+const kitsByColors = new WeakMap();
 /**
- * Marks drawn flat on the picture: the points going up, and the running
- * score, which sits in the corner of the core.
+ * What each player looks like and wears, made once per set of stage colours.
+ * The shooter is in his team's colours, with tights to the ankle; the three
+ * defenders share theirs and differ in skin, hair, number and what is on
+ * their arms, legs and feet.
  */
-function drawMarks(ctx, camera, play, colors, core) {
+function kitsOf(colors) {
+  let kits = kitsByColors.get(colors);
+  if (kits) return kits;
+  const common = { shade: colors.shade, font: colors.font, hair: colors.hair, sole: colors.sole };
+  const under = blend(colors.rival, colors.shade, 0.8);
+  const defender = (skin, extra) => createKit({
+    ...common, skin, jersey: colors.rival, sleeved: true, trim: colors.sock, number: colors.sock,
+    sock: colors.sock, shoe: blend(colors.rival, colors.sock, 0.45), ...extra,
+  });
+  kits = {
+    hero: createKit({
+      ...common, skin: colors.skin, jersey: colors.jersey, trim: colors.trim, number: colors.number, mark: '30',
+      tights: blend(colors.shoe, colors.shade, 0.25), shoe: colors.shoe, stripe: colors.trim, beard: 0.3,
+    }),
+    // Close-cropped, with a sleeve on his left arm and tights to the ankle.
+    guard: defender(colors.rivalSkin, { mark: '3', under, tights: colors.sock, sleeve: colors.sock, sleeveSide: 'L', shaved: 0.25, beard: 0.4 }),
+    // A flat top and red shoes.
+    wing: defender(blend(colors.rivalSkin, colors.shade, 0.14), { mark: '6', under, cut: 'flat', shoe: blend(colors.rim, colors.shade, 0.2) }),
+    // The big man: long hair, a full beard and a sleeve over each knee.
+    big: defender(blend(colors.skin, colors.glint, 0.25), { mark: '10', cut: 'long', beard: 0.75, knee: colors.sock }),
+  };
+  kitsByColors.set(colors, kits);
+  return kits;
+}
+
+/** Marks drawn flat on the picture: the running score in the corner, and the points going up at the rim. */
+function drawMarks(ctx, play, camera, colors, core) {
   const scale = core.width / 352;
-  ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
-  if (play.pop >= 0) {
-    const at = camera.project([-0.5, RIM.y + 0.9 + play.pop * 1.1, 2.9]);
-    const strength = clamp01(play.pop / 0.12) * clamp01((1 - play.pop) / 0.3);
-    // Only once the camera is on the rim; from across the court it would be a smudge.
-    if (at.depth > 1 && at.k > 12 && strength > 0) {
-      ctx.font = `800 ${(Math.min(20, Math.max(11, 1.4 * at.k)) * scale).toFixed(1)}px ${colors.font}`;
+  if (play.shot === 'rim' && play.pop >= 0) {
+    const strength = Math.min(1, play.pop / 0.12) * Math.min(1, (1 - play.pop) / 0.3);
+    if (strength > 0) {
+      ctx.textAlign = 'center';
+      ctx.font = `800 ${(26 * scale).toFixed(1)}px ${colors.font}`;
       ctx.fillStyle = rgb(colors.ball, strength);
-      ctx.fillText(`+${play.worth}`, at.x, at.y);
+      ctx.fillText(`+${play.worth}`, camera.x(-2.6), camera.y(0.5 - play.pop * 1.3));
     }
   }
   if (play.points > 0) {
     // Scoreboard: a ball and his points for this wait.
     ctx.font = `700 ${(11 * scale).toFixed(1)}px ${colors.font}`;
     ctx.textAlign = 'left';
-    disc(ctx, core.x + 23 * scale, core.y + 15 * scale, 4.2 * scale, rgb(colors.ball));
+    ctx.fillStyle = rgb(colors.ball);
+    ctx.beginPath();
+    ctx.arc(core.x + 23 * scale, core.y + 15 * scale, 4.2 * scale, 0, TAU);
+    ctx.fill();
     ctx.fillStyle = rgb(colors.text);
     ctx.fillText(String(play.points), core.x + 31 * scale, core.y + 15.5 * scale);
   }
 }
 
-/** Fade what has been drawn toward the page, by thinning it. */
-function fadeOut(ctx, play, colors, width, height) {
-  if (play.fade >= 1) return;
-  ctx.globalCompositeOperation = 'destination-out';
-  ctx.fillStyle = rgb(colors.ink, 1 - play.fade);
-  ctx.fillRect(0, 0, width, height);
-  ctx.globalCompositeOperation = 'source-over';
-}
+/** The possession on the floor. */
+function drawCourtShot(ctx, { play, camera, width, colors }) {
+  const { players, ball } = play.capture;
+  const kits = kitsOf(colors);
+  drawFloor(ctx, camera, colors, width);
 
-/** The court and hoop with nobody on it: the world beyond the play on a wide stage. */
-function drawBackdrop(ctx, { play, camera, width, height, colors }) {
-  ctx.save();
-  ctx.lineCap = 'round';
-  ctx.lineJoin = 'round';
-  drawCourt(ctx, camera, colors, play.angle);
-  drawHoop(ctx, camera, colors, play.angle, play, 'back');
-  drawHoop(ctx, camera, colors, play.angle, play, 'front');
-  ctx.restore();
-  fadeOut(ctx, play, colors, width, height);
-}
-
-/** What each player wears. The shooter is in his team's colours; his defender is kept quieter. */
-function kitsOf(colors) {
-  const quiet = color => blend(color, colors.surface, 0.12);
-  return {
-    hero: {
-      skin: colors.skin, hair: colors.hair, jersey: colors.jersey, shorts: colors.jersey, number: colors.number, trim: colors.trim,
-      socks: colors.sock, shoe: colors.shoe, sole: colors.sole,
-      shade: colors.shade, light: colors.glint, mark: '30', font: colors.font, beard: true,
-    },
-    defender: {
-      skin: quiet(colors.rivalSkin), hair: colors.hair, jersey: quiet(colors.rival), shorts: quiet(colors.rival), number: colors.rival, trim: colors.sock,
-      socks: quiet(colors.sock), shoe: quiet(blend(colors.rival, colors.shade, 0.25)), sole: quiet(colors.sole),
-      shade: colors.shade, light: colors.glint, font: colors.font,
-    },
+  const radius = players.hero.size * BALL_TO_HEIGHT * camera.k;
+  const drawn = {
+    x: camera.x(ball.x), y: camera.y(ball.y), radius, spin: play.spin,
+    trail: [play.trail[0] * camera.k, play.trail[1] * camera.k],
   };
+  const seen = PLAYERS.filter(name => players[name].presence > 0.01);
+  for (const name of seen) {
+    ctx.globalAlpha = players[name].presence;
+    drawPlayerShadow(ctx, camera, players[name], colors.shade);
+  }
+  ctx.globalAlpha = 1;
+  const floorY = camera.y(ball.floor);
+  drawBallShadow(ctx, drawn.x, floorY, radius, floorY - drawn.y - radius, colors.shade);
+
+  // Whoever stands lower on the floor is nearer the camera and painted later.
+  const depth = name => players[name].floorL + players[name].floorR;
+  const order = [...seen].sort((a, b) => depth(a) - depth(b));
+  const nearest = depth(order[order.length - 1]);
+  // A ball he cannot be seen with is behind somebody; in his hands it goes
+  // between his body and his arms; loose, it is in front of everyone.
+  if (ball.hidden) drawBall(ctx, drawn, colors);
+  for (const name of order) {
+    const hero = name === 'hero';
+    // Defenders further off sit back a little, so bodies that overlap stay apart to the eye.
+    const back = hero ? 0 : Math.min(1, (nearest - depth(name)) / (0.6 * players[name].size));
+    drawPlayer(
+      ctx, camera, players[name], kits[name], (1 - HAZE * back) * players[name].presence,
+      hero && ball.held && !ball.hidden ? on => drawBall(on, drawn, colors) : undefined,
+    );
+  }
+  if (!ball.held && !ball.hidden) drawBall(ctx, drawn, colors);
+}
+
+/** The make, from under the rim. */
+function drawRimShot(ctx, { play, camera, width, colors }) {
+  drawBoard(ctx, camera, colors, width);
+  drawRim(ctx, camera, colors, play, 'far');
+  drawBall(ctx, {
+    x: camera.x(play.ball.x), y: camera.y(play.ball.y), radius: BALL_AT_RIM * camera.k, spin: play.ball.spin,
+  }, colors);
+  drawRim(ctx, camera, colors, play, 'near');
 }
 
 /**
@@ -117,29 +133,23 @@ function kitsOf(colors) {
  *   backdrop?: CanvasRenderingContext2D }} frame `core` and `backdrop` as the stage gives them.
  */
 export function drawHoopsFrame(ctx, frame) {
-  const { play, camera, width, height, colors, core, backdrop } = frame;
-  if (backdrop) drawBackdrop(backdrop, frame);
-  const kits = kitsOf(colors);
+  const { play, camera, width, colors, core, backdrop } = frame;
   ctx.lineCap = 'round';
   ctx.lineJoin = 'round';
-  drawCourt(ctx, camera, colors, play.angle);
-  drawShadows(ctx, camera, play, colors);
-  drawHoop(ctx, camera, colors, play.angle, play, 'back');
-
-  const ball = ballPart(ctx, camera, play.ball, BALL_RADIUS, colors);
-  // A shot near the hoop is painted between the rim's two halves; otherwise
-  // the ball takes its place among the players by distance.
-  const atHoop = play.ball.loose && Math.hypot(play.ball.at[0], play.ball.at[1] - RIM.y, play.ball.at[2]) < 7;
-  if (atHoop) ball.draw();
-  drawHoop(ctx, camera, colors, play.angle, play, 'front');
-
-  const parts = [
-    ...playerParts(ctx, camera, play.defender, kits.defender),
-    ...playerParts(ctx, camera, play.hero, kits.hero),
-  ];
-  if (!atHoop) parts.push(ball);
-  paintParts(ctx, parts);
-
-  drawMarks(ctx, camera, play, colors, core);
-  fadeOut(ctx, play, colors, width, height);
+  if (play.shot === 'rim') {
+    // The setting beyond the play on a wide stage: the basket with nothing going through it.
+    if (backdrop) {
+      drawBoard(backdrop, camera, colors, width);
+      drawRim(backdrop, camera, colors, { ...play, sinceMake: -1, ball: { x: 0, y: -99 } }, 'far');
+      drawRim(backdrop, camera, colors, { ...play, sinceMake: -1, ball: { x: 0, y: -99 } }, 'near');
+    }
+    drawRimShot(ctx, frame);
+  } else {
+    if (backdrop) {
+      backdrop.lineCap = 'round';
+      drawFloor(backdrop, camera, colors, width);
+    }
+    drawCourtShot(ctx, frame);
+  }
+  drawMarks(ctx, play, camera, colors, core);
 }
