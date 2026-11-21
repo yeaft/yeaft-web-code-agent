@@ -279,7 +279,7 @@ const RETRY_CONTINUATION_PROMPT =
   'Continue from the exact point where the previous response stopped. Do not repeat text already produced.';
 // Share of the model window an active signed/rolled context may fill before
 // the next request rolls over into a fresh segment.
-const CONTEXT_ROLLOVER_INPUT_RATIO = 0.8;
+const LEGACY_CONTEXT_ROLLOVER_INPUT_RATIO = 0.85;
 const MAX_REQUEST_BODY_RECOVERY_ATTEMPTS = 3;
 const POLICY_RECOVERY_PROMPT =
   'Continue this authorized code review, but describe security findings abstractly. Do not repeat credential-like or exploit payloads, secrets, tokens, or step-by-step misuse instructions. Preserve the technical conclusion, evidence location, severity, and remediation.';
@@ -2670,6 +2670,9 @@ export class Engine {
     const viewImageToolPaths = new WeakMap();
     const viewImagePartPaths = new WeakMap();
     const singleImageDimensionMode = new Set();
+    // Work Center owns the request shape used for durable dispatch/recovery.
+    const useSessionCompactionPolicy = scenario !== 'work-item' && !prepareProviderRequest;
+    const contextRolloverRatio = useSessionCompactionPolicy ? SESSION_COMPACTION_INPUT_RATIO : LEGACY_CONTEXT_ROLLOVER_INPUT_RATIO;
     const projectToolImages = createActiveToolImageProjector({ pathForImage: part => viewImagePartPaths.get(part) });
     const previewForRoute = async (part, edge, bytes) => {
       const preview = await makeImagePreview(part, edge, bytes, signal);
@@ -3091,7 +3094,7 @@ export class Engine {
           return modelMessage;
         });
 
-        if (!pendingServerOperation) {
+        if (useSessionCompactionPolicy && !pendingServerOperation) {
           const images = await projectToolImages(wireMessages, {
             frozenLength: signedAnthropicPrefix ? signedAnthropicPrefix.messages.length + 1 : 0,
             canRollover: Boolean(signedAnthropicPrefix && successfulRequestsSinceRollover > 0
@@ -3157,7 +3160,7 @@ export class Engine {
           } catch { /* best-effort */ }
         }
 
-        const imageLimits = scenario !== 'work-item' && !prepareProviderRequest && !pendingServerOperation
+        const imageLimits = useSessionCompactionPolicy && !pendingServerOperation
           ? requestAdapter.getImageLimits?.(currentModel) : null;
         requestImageLimits = imageLimits && singleImageDimensionMode.has(currentModel)
           ? { ...imageLimits, count: imageLimits.manyCount } : imageLimits;
@@ -3197,7 +3200,7 @@ export class Engine {
           outputReserve: requestMaxOutputTokens,
           historyMessageCount,
           historyTokenBudget: historyBudget,
-          toolResultCompactionRatio: CONTEXT_ROLLOVER_INPUT_RATIO,
+          toolResultCompactionRatio: useSessionCompactionPolicy && !pendingServerOperation ? contextRolloverRatio : undefined,
           repeatedToolResultRefs,
           language: requestConfig.language,
         };
@@ -3277,7 +3280,7 @@ export class Engine {
           ?? fittedRequest.meta.estimatedTokens - requestMaxOutputTokens;
         if ((signedAnthropicPrefix || rolloverSeed)
             && successfulRequestsSinceRollover > 0 && !pendingServerOperation
-            && (fittedInputTokens >= fitOptions.contextWindow * CONTEXT_ROLLOVER_INPUT_RATIO
+            && (fittedInputTokens >= fitOptions.contextWindow * contextRolloverRatio
               || fittedRequest.meta.droppedCurrentMessages > 0)) {
           throw new ProviderContextBudgetError('active context reached the rollover threshold');
         }
@@ -3904,9 +3907,9 @@ export class Engine {
               ? conversationMessages.slice(Math.max(firstToolIndex, evidenceFloor), latestToolIndex + 1) : [];
             // Apply the same projection before estimating the seed. Keep the
             // original paths with the latest evidence even if the images cannot fit.
-            const evidenceRows = rollSignedBody || rollSignedImage || signedAnthropicPrefix
+            const evidenceRows = useSessionCompactionPolicy && (rollSignedImage || signedAnthropicPrefix)
               ? (await projectToolImages(latestToolRows, { signal })).messages
-              : [];
+              : rollSignedBody ? latestToolRows : [];
             const toolImageEvidence = wireToolImageEvidence(evidenceRows, viewImageToolPaths, projectToolImages.isImageAnnotation);
             // Keep the origin of tool images after moving them to a user-role seed.
             for (const part of toolImageEvidence) projectToolImages.markEvidence(part);
@@ -3924,7 +3927,7 @@ export class Engine {
               [nextRolloverSeed] = fittedSeed.messages;
             }
             const mediaSeedInput = seedInputTokens(nextRolloverSeed);
-            if (mediaSeedInput >= currentContextWindow * CONTEXT_ROLLOVER_INPUT_RATIO / 2
+            if (mediaSeedInput >= currentContextWindow * contextRolloverRatio / 2
                 || mediaSeedInput + rolloverOutputReserve > currentContextWindow) {
               nextRolloverSeed = contextRolloverSeed(summary, rolloverUserRequests, { omitMedia: true, toolImageEvidence });
             }
