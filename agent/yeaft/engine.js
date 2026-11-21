@@ -280,6 +280,7 @@ const RETRY_CONTINUATION_PROMPT =
 // Share of the model window an active signed/rolled context may fill before
 // the next request rolls over into a fresh segment.
 const LEGACY_CONTEXT_ROLLOVER_INPUT_RATIO = 0.85;
+const SESSION_COMPACTION_INPUT_RATIO = 0.8;
 const MAX_REQUEST_BODY_RECOVERY_ATTEMPTS = 3;
 const POLICY_RECOVERY_PROMPT =
   'Continue this authorized code review, but describe security findings abstractly. Do not repeat credential-like or exploit payloads, secrets, tokens, or step-by-step misuse instructions. Preserve the technical conclusion, evidence location, severity, and remediation.';
