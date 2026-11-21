@@ -36,7 +36,7 @@ function drawShadows(ctx, camera, play, colors) {
     shade(fig.ground, 1.1 * fig.size, 0.07);
     for (const leg of fig.legs) {
       // A foot's shadow thins and spreads as the foot leaves the floor.
-      const lift = Math.max(0, leg.ankle[1] - ANKLE * fig.size);
+      const lift = Math.max(0, Math.min(leg.ankle[1] - ANKLE * fig.size, leg.toe[1] - 0.1 * fig.size));
       shade([(leg.ankle[0] + leg.toe[0]) / 2, 0, (leg.ankle[2] + leg.toe[2]) / 2], (0.4 + 0.3 * lift) * fig.size, 0.2 * clamp01(1 - lift / 0.9));
     }
   }
@@ -122,13 +122,13 @@ function kitsOf(colors) {
   return {
     hero: {
       skin: colors.skin, hair: colors.hair, jersey: colors.jersey, shorts: colors.jersey, number: colors.number, trim: colors.trim,
-      legs: colors.tights, shoe: colors.shoe, sole: colors.sole, stripe: colors.trim, guard: colors.guard,
-      shade: colors.shade, mark: '30', font: colors.font, beard: true,
+      socks: colors.sock, shoe: colors.shoe, sole: colors.sole,
+      shade: colors.shade, light: colors.glint, mark: '30', font: colors.font, beard: true,
     },
     defender: {
       skin: quiet(colors.rivalSkin), hair: colors.hair, jersey: quiet(colors.rival), shorts: quiet(colors.rival), number: colors.rival, trim: colors.sock,
-      legs: quiet(colors.rivalSkin), socks: quiet(colors.sock), shoe: quiet(blend(colors.rival, colors.shade, 0.25)), sole: quiet(colors.sole),
-      shade: colors.shade, font: colors.font,
+      socks: quiet(colors.sock), shoe: quiet(blend(colors.rival, colors.shade, 0.25)), sole: quiet(colors.sole),
+      shade: colors.shade, light: colors.glint, font: colors.font,
     },
   };
 }

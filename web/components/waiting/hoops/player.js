@@ -1,54 +1,49 @@
 /**
- * The players of the basketball waiting animation, drawn from a solved
- * figure (stick/rig.js) as people rather than sticks: limbs that taper from
- * joint to joint, a torso with a body's width and depth, a head with hair and
- * a face, and a kit. Every shape is the outline of spheres placed on the
- * skeleton, so a player looks right from any side the camera takes.
+ * The players of the basketball waiting animation, drawn from a figure
+ * (mocap.js `figureOf`) at a person's real proportions: a head an eighth of
+ * his height, shoulders wider than his hips, thighs, calves and forearms
+ * that swell and taper as muscle does, and a kit cut as one is: a tank top,
+ * long shorts, crew socks and high-tops. Every shape is the outline of
+ * spheres placed on the skeleton, so it looks right from any side the camera
+ * takes, and is shaded across its width from a light at the upper left.
  *
- * Parts come back as { depth, draw } for a painter's sort. Each first clears
- * a thin gap round itself, which keeps a limb readable where it crosses the
- * body or the other player, and is lit from the upper left.
+ * Parts come back as { depth, draw } for a painter's sort.
  */
 import { blend, rgb } from '../stage.js';
 import { add, cross, dot, mix3, mul, sub, unit } from '../stick/vec.js';
 
 const TAU = Math.PI * 2;
 const UP = [0, 1, 0];
-/** Half-widths of the body in feet. */
+/** Half-widths of the body in feet, for a man of 6 ft 3 in. */
 const GIRTH = Object.freeze({
-  shorts: 0.35, hem: 0.33, thigh: 0.27, knee: 0.2, calf: 0.215, ankle: 0.125, heel: 0.17, toe: 0.125,
-  deltoid: 0.215, elbow: 0.15, wrist: 0.105, hand: 0.165, neck: 0.16, head: 0.41, chest: 0.44, waist: 0.37, strap: 0.2,
+  thigh: 0.27, knee: 0.165, calf: 0.195, ankle: 0.115, heel: 0.14, toe: 0.11,
+  deltoid: 0.19, biceps: 0.155, elbow: 0.11, forearm: 0.13, wrist: 0.085, hand: 0.1,
+  neck: 0.2, trapezius: 0.15, skull: 0.27, jaw: 0.225,
 });
-/** How far the shaded side of a shape is mixed toward the kit's shade. */
-const SHADE = 0.3;
-const FAR = 0.2;
-
-const between = (a, b, u) => ({ x: a.x + (b.x - a.x) * u, y: a.y + (b.y - a.y) * u });
+/** Light from the upper left, as a screen direction. */
+const LIGHT = [-0.62, -0.78];
+const FAR = 0.18;
 
 /** Outline of two circles and the skin stretched between them, added to `path`. */
-function capsule(path, a, ra, b, rb, dx = 0, dy = 0) {
-  const ax = a.x + dx;
-  const ay = a.y + dy;
-  const bx = b.x + dx;
-  const by = b.y + dy;
-  const far = Math.hypot(bx - ax, by - ay);
+function capsule(path, a, ra, b, rb) {
+  const far = Math.hypot(b.x - a.x, b.y - a.y);
   if (far <= Math.abs(ra - rb) + 1e-3) {
-    const [x, y, radius] = ra >= rb ? [ax, ay, ra] : [bx, by, rb];
+    const [x, y, radius] = ra >= rb ? [a.x, a.y, ra] : [b.x, b.y, rb];
     path.moveTo(x + radius, y);
     path.arc(x, y, radius, 0, TAU);
     return;
   }
-  const base = Math.atan2(by - ay, bx - ax);
+  const base = Math.atan2(b.y - a.y, b.x - a.x);
   const spread = Math.acos((ra - rb) / far);
-  path.moveTo(ax + ra * Math.cos(base + spread), ay + ra * Math.sin(base + spread));
-  path.arc(ax, ay, ra, base + spread, base + TAU - spread);
-  path.arc(bx, by, rb, base - spread, base + spread);
+  path.moveTo(a.x + ra * Math.cos(base + spread), a.y + ra * Math.sin(base + spread));
+  path.arc(a.x, a.y, ra, base + spread, base + TAU - spread);
+  path.arc(b.x, b.y, rb, base - spread, base + spread);
   path.closePath();
 }
 
-function polygon(path, points, dx = 0, dy = 0) {
-  path.moveTo(points[0].x + dx, points[0].y + dy);
-  for (let i = 1; i < points.length; i += 1) path.lineTo(points[i].x + dx, points[i].y + dy);
+function polygon(path, points) {
+  path.moveTo(points[0].x, points[0].y);
+  for (let i = 1; i < points.length; i += 1) path.lineTo(points[i].x, points[i].y);
   path.closePath();
 }
 
@@ -68,43 +63,55 @@ function hull(points) {
   return [...chain(points), ...chain(points.slice().reverse())];
 }
 
-/** Outline on screen of spheres given as [centre, radius in feet], each `grow` px larger. */
-function outline(camera, spheres, size, grow = 0) {
+/** Outline on screen of spheres given as [centre, radius in feet]. */
+function outline(camera, spheres) {
   const points = [];
   for (const [centre, feet] of spheres) {
     const at = camera.project(centre);
-    const radius = feet * size * at.k + grow;
-    for (let i = 0; i < 14; i += 1) points.push({ x: at.x + radius * Math.cos(i * TAU / 14), y: at.y + radius * Math.sin(i * TAU / 14) });
+    const radius = Math.max(0.5, feet * at.k);
+    for (let i = 0; i < 16; i += 1) points.push({ x: at.x + radius * Math.cos(i * TAU / 16), y: at.y + radius * Math.sin(i * TAU / 16) });
   }
   return hull(points);
 }
 
 /**
- * Fill a shape, then shade its lower right: the part a copy of it moved
- * toward the light leaves uncovered. `shape(path, dx, dy)` adds it to a path.
+ * Fill `path` in `color`, rounded by a gradient across `width` px about
+ * (x, y) at right angles to `axis`: lit on the side facing the light,
+ * falling into shade on the other.
  */
-function lit(ctx, shape, color, shade, shift) {
-  const body = new Path2D();
-  shape(body, 0, 0);
-  ctx.fillStyle = rgb(color);
-  ctx.fill(body);
-  if (shift < 0.45) return;
-  ctx.save();
-  ctx.clip(body);
-  const rest = new Path2D();
-  rest.rect(-1e4, -1e4, 2e4, 2e4);
-  shape(rest, -shift, -0.8 * shift);
-  ctx.fillStyle = rgb(blend(color, shade, SHADE));
-  ctx.fill(rest, 'evenodd');
-  ctx.restore();
+function rounded(ctx, path, color, kit, x, y, axis, width) {
+  let nx = -axis.y;
+  let ny = axis.x;
+  const size = Math.hypot(nx, ny) || 1;
+  nx /= size;
+  ny /= size;
+  if (nx * LIGHT[0] + ny * LIGHT[1] < 0) {
+    nx = -nx;
+    ny = -ny;
+  }
+  if (width < 2.5) {
+    ctx.fillStyle = rgb(color);
+    ctx.fill(path);
+    return;
+  }
+  const gradient = ctx.createLinearGradient(x + nx * width, y + ny * width, x - nx * width, y - ny * width);
+  gradient.addColorStop(0, rgb(blend(color, kit.light, 0.16)));
+  gradient.addColorStop(0.42, rgb(color));
+  gradient.addColorStop(1, rgb(blend(color, kit.shade, 0.42)));
+  ctx.fillStyle = gradient;
+  ctx.fill(path);
 }
 
-function clear(ctx, shape) {
-  ctx.globalCompositeOperation = 'destination-out';
-  ctx.beginPath();
-  shape(ctx);
-  ctx.fill();
-  ctx.globalCompositeOperation = 'source-over';
+/** A tapering limb through screen points [{ x, y, r }], rounded across its length. */
+function limb(ctx, joints, color, kit) {
+  const path = new Path2D();
+  for (let i = 1; i < joints.length; i += 1) capsule(path, joints[i - 1], joints[i - 1].r, joints[i], joints[i].r);
+  const first = joints[0];
+  const last = joints[joints.length - 1];
+  const middle = joints[Math.floor(joints.length / 2)];
+  const widest = Math.max(...joints.map(joint => joint.r));
+  rounded(ctx, path, color, kit, middle.x, middle.y, { x: last.x - first.x, y: last.y - first.y }, widest);
+  return path;
 }
 
 /**
@@ -153,13 +160,11 @@ function capPath(ctx, x, y, radius, axis, reach, flat) {
 /**
  * @param {CanvasRenderingContext2D} ctx
  * @param camera Camera from `makeCamera`.
- * @param fig Solved figure from `solveFigure`.
- * @param kit Colours as [r, g, b]: `skin`, `hair`, `jersey`, `shorts`, `legs`
- *   (tights, or skin again), `shoe`, `number`, `trim`, `shade` (what the dark
- *   side of everything is mixed toward), and optionally `socks`, `sole` (the
- *   shoe's midsole), `stripe` (down the side of the shorts) and `guard` (a
- *   mouthguard). `mark` is the shirt number, `font` its typeface, `beard`
- *   whether he has one.
+ * @param fig Figure from `figureOf`.
+ * @param kit Colours as [r, g, b]: `skin`, `hair`, `jersey`, `shorts`,
+ *   `trim`, `number`, `socks`, `shoe`, `sole`, `shade` (what the dark side
+ *   of everything is mixed toward) and `light` (what the lit side is). `mark`
+ *   is the shirt number, `font` its typeface, `beard` whether he has one.
  * @returns {{ depth: number, draw: () => void }[]} Parts for a painter's sort.
  */
 export function playerParts(ctx, camera, fig, kit) {
@@ -170,83 +175,79 @@ export function playerParts(ctx, camera, fig, kit) {
   if (pelvis.depth < 1.5 || chest.depth < 1.5) return [];
   const size = fig.size;
   const core = (pelvis.depth + chest.depth) / 2;
-  const gapAt = k => Math.max(0.8, 0.07 * k);
-  const toned = (color, depth) => (depth > core + 0.06 ? blend(color, kit.shade, FAR) : color);
-  // A lone circle (no second radius) is shaded as the ball it is.
-  const limb = (a, ra, b, rb, color) => lit(ctx, (path, dx, dy) => capsule(path, a, ra, b, rb, dx, dy), color, kit.shade, rb > 0 ? 0.36 * Math.min(ra, rb) : 0.22 * ra);
+  const toned = (color, depth) => (depth > core + 0.08 ? blend(color, kit.shade, FAR) : color);
+  /** A screen point with a radius of `feet` there. */
+  const R = (point, feet) => {
+    const at = P(point);
+    return { x: at.x, y: at.y, r: Math.max(0.55, feet * size * at.k), depth: at.depth };
+  };
   const parts = [];
+  const spine = unit(sub(fig.chest, fig.pelvis));
 
   fig.legs.forEach((leg, index) => {
-    const hip = P(leg.hip);
+    const thighAt = u => mix3(leg.hip, leg.knee, u);
+    const shinAt = u => mix3(leg.knee, leg.ankle, u);
+    const foot = sub(leg.toe, leg.ankle);
+    const flat = unit([foot[0], 0, foot[2]]);
+    // The heel sits behind and below the ankle joint, whichever way the foot is tipped.
+    const heelAt = add(sub(leg.ankle, mul(flat, 0.13 * size)), [0, -0.17 * size, 0]);
+    const ballAt = add(mix3(leg.ankle, leg.toe, 0.62), [0, -0.06 * size, 0]);
     const knee = P(leg.knee);
-    const ankle = P(leg.ankle);
-    const toe = P(leg.toe);
-    const back = [leg.ankle[0] - leg.toe[0], 0, leg.ankle[2] - leg.toe[2]];
-    const heelAt = [leg.ankle[0] + back[0] * 0.2, Math.max(0.1 * size, leg.ankle[1] - 0.13 * size), leg.ankle[2] + back[2] * 0.2];
-    const heel = P(heelAt);
-    // The sole runs under the shoe whichever way the foot is tipped.
-    const along = unit(sub(leg.toe, heelAt));
-    const under = unit(sub([0, -1, 0], mul(along, -along[1])));
-    const sole = [P(add(heelAt, mul(under, 0.115 * size))), P(add(leg.toe, mul(under, 0.085 * size)))];
-    // The stripe down the outside of the shorts shows only from that side.
-    const outside = mul(fig.right, index === 0 ? -1 : 1);
-    const showsOutside = dot(outside, unit(sub(camera.eye, leg.hip))) > 0.12;
-    const stripe = [P(add(leg.hip, mul(outside, 0.3 * size))), P(add(mix3(leg.hip, leg.knee, 0.64), mul(outside, 0.29 * size)))];
-    const line = (from, to, color, width, cap) => {
-      ctx.strokeStyle = rgb(color);
-      ctx.lineWidth = width;
-      ctx.lineCap = cap;
-      ctx.beginPath();
-      ctx.moveTo(from.x, from.y);
-      ctx.lineTo(to.x, to.y);
-      ctx.stroke();
-    };
     parts.push({
       depth: knee.depth,
       draw() {
+        const skin = toned(kit.skin, knee.depth);
+        // Thigh below the shorts, the knee, and a calf that swells high and tapers to the ankle.
+        limb(ctx, [R(thighAt(0.6), GIRTH.thigh * 0.92), R(leg.knee, GIRTH.knee), R(shinAt(0.3), GIRTH.calf), R(shinAt(0.72), GIRTH.ankle * 1.18), R(leg.ankle, GIRTH.ankle)], skin, kit);
+        // Crew socks over the ankle.
+        limb(ctx, [R(shinAt(0.74), GIRTH.ankle * 1.25), R(leg.ankle, GIRTH.ankle * 1.18)], toned(kit.socks, knee.depth), kit);
+        // High-top shoe: a collar round the ankle, then heel to toe, on a pale sole.
+        const shoe = toned(kit.shoe, knee.depth);
+        limb(ctx, [R(add(leg.ankle, [0, 0.02, 0]), GIRTH.heel), R(heelAt, GIRTH.heel * 0.95), R(ballAt, GIRTH.toe * 1.15), R(leg.toe, GIRTH.toe)], shoe, kit);
+        const heel = P(add(heelAt, [0, -0.09 * size, 0]));
+        const tip = P(add(leg.toe, [0, -0.07 * size, 0]));
         const k = knee.k * size;
-        const wide = feet => Math.max(0.7, feet * k);
-        const gap = gapAt(knee.k);
-        const hem = between(hip, knee, 0.64);
-        // The gap starts below the hip, which stays fused to the body.
-        clear(ctx, (path) => {
-          capsule(path, between(hip, knee, 0.45), wide(GIRTH.hem) + gap, knee, wide(GIRTH.knee) + gap);
-          capsule(path, knee, wide(GIRTH.calf) + gap, ankle, wide(GIRTH.ankle) + gap);
-          capsule(path, heel, wide(GIRTH.heel) + gap, toe, wide(GIRTH.toe) + gap);
-        });
-        const legs = toned(kit.legs, knee.depth);
-        limb(hem, wide(GIRTH.thigh), knee, wide(GIRTH.knee), legs);
-        limb(knee, wide(GIRTH.calf), ankle, wide(GIRTH.ankle), legs);
-        if (kit.socks) limb(between(knee, ankle, 0.62), wide(0.155), ankle, wide(GIRTH.ankle + 0.012), toned(kit.socks, knee.depth));
-        limb(heel, wide(GIRTH.heel), toe, wide(GIRTH.toe), toned(kit.shoe, knee.depth));
-        if (kit.sole && k > 4) line(sole[0], sole[1], toned(kit.sole, knee.depth), Math.max(0.7, 0.06 * k), 'round');
-        limb(hip, wide(GIRTH.shorts), hem, wide(GIRTH.hem), toned(kit.shorts, knee.depth));
-        if (kit.stripe && showsOutside && k > 4) line(stripe[0], stripe[1], toned(kit.stripe, knee.depth), Math.max(0.8, 0.08 * k), 'butt');
+        if (k > 5) {
+          ctx.strokeStyle = rgb(toned(kit.sole, knee.depth));
+          ctx.lineWidth = Math.max(0.8, 0.07 * k);
+          ctx.lineCap = 'round';
+          ctx.beginPath();
+          ctx.moveTo(heel.x, heel.y);
+          ctx.lineTo(tip.x, tip.y);
+          ctx.stroke();
+        }
+        // Long shorts: wide and loose, down to just above the knee.
+        const out = mul(fig.hipsAcross || fig.right, index === 0 ? -1 : 1);
+        const shorts = toned(kit.shorts, knee.depth);
+        limb(ctx, [R(add(leg.hip, mul(out, 0.03 * size)), 0.37), R(add(thighAt(0.82), mul(out, 0.02 * size)), 0.33)], shorts, kit);
+        const hemA = P(add(add(thighAt(0.86), mul(out, 0.3 * size)), mul(spine, 0.02)));
+        const hemB = P(add(add(thighAt(0.82), mul(out, -0.3 * size)), mul(spine, 0.02)));
+        if (k > 6) {
+          ctx.strokeStyle = rgb(toned(kit.trim, knee.depth));
+          ctx.lineWidth = Math.max(0.7, 0.045 * k);
+          ctx.beginPath();
+          ctx.moveTo(hemA.x, hemA.y);
+          ctx.lineTo(hemB.x, hemB.y);
+          ctx.stroke();
+        }
       },
     });
   });
 
   fig.arms.forEach((arm) => {
-    const root = P(arm.root);
     const elbow = P(arm.elbow);
-    const wrist = P(arm.hand);
-    const depth = (elbow.depth + wrist.depth) / 2;
+    const hand = P(arm.hand);
+    const depth = (elbow.depth + hand.depth) / 2;
+    const upperAt = u => mix3(arm.root, arm.elbow, u);
+    const foreAt = u => mix3(arm.elbow, arm.wrist, u);
+    const reach = unit(sub(arm.hand, arm.wrist));
     parts.push({
       depth,
       draw() {
-        const k = elbow.k * size;
-        const wide = feet => Math.max(0.6, feet * k);
-        const gap = gapAt(elbow.k);
-        const hand = between(elbow, wrist, 1.12);
-        clear(ctx, (path) => {
-          capsule(path, between(root, elbow, 0.45), wide(0.18) + gap, elbow, wide(GIRTH.elbow) + gap);
-          capsule(path, elbow, wide(GIRTH.elbow) + gap, wrist, wide(GIRTH.wrist) + gap);
-          capsule(path, hand, wide(GIRTH.hand) + gap, hand, 0);
-        });
         const skin = toned(kit.skin, depth);
-        limb(root, wide(GIRTH.deltoid), elbow, wide(GIRTH.elbow), skin);
-        limb(elbow, wide(GIRTH.elbow), wrist, wide(GIRTH.wrist), skin);
-        limb(hand, wide(GIRTH.hand), hand, 0, skin);
+        limb(ctx, [R(arm.root, GIRTH.deltoid), R(upperAt(0.45), GIRTH.biceps), R(arm.elbow, GIRTH.elbow)], skin, kit);
+        limb(ctx, [R(arm.elbow, GIRTH.elbow), R(foreAt(0.28), GIRTH.forearm), R(arm.wrist, GIRTH.wrist)], skin, kit);
+        limb(ctx, [R(arm.wrist, GIRTH.wrist), R(arm.hand, GIRTH.hand), R(add(arm.hand, mul(reach, 0.16 * size)), GIRTH.hand * 0.75)], skin, kit);
       },
     });
   });
@@ -256,53 +257,79 @@ export function playerParts(ctx, camera, fig, kit) {
     draw() {
       const k = ((pelvis.k + chest.k) / 2) * size;
       const along = u => mix3(fig.pelvis, fig.chest, u);
-      const spine = unit(sub(fig.chest, fig.pelvis));
-      const across = mul(unit(sub(fig.hips[1], fig.hips[0])), 0.15 * size);
-      const jersey = [
-        [add(fig.shoulders[0], mul(fig.right, 0.1 * size)), GIRTH.strap], [add(fig.shoulders[1], mul(fig.right, -0.1 * size)), GIRTH.strap],
-        [add(along(0.7), mul(fig.forward, 0.07 * size)), GIRTH.chest],
-        [sub(along(0.24), across), GIRTH.waist], [add(along(0.24), across), GIRTH.waist],
-      ];
-      const shorts = [
-        [sub(along(0.2), across), GIRTH.waist + 0.012], [add(along(0.2), across), GIRTH.waist + 0.012],
-        [fig.hips[0], GIRTH.shorts], [fig.hips[1], GIRTH.shorts], [add(fig.pelvis, mul(spine, -0.14 * size)), 0.33],
-      ];
-      const gap = gapAt(k / size);
-      clear(ctx, (path) => {
-        polygon(path, outline(camera, jersey, size, gap));
-        polygon(path, outline(camera, shorts, size, gap));
-      });
-      const shift = 0.14 * k;
-      const lower = outline(camera, shorts, size);
-      lit(ctx, (path, dx, dy) => polygon(path, lower, dx, dy), kit.shorts, kit.shade, shift);
-      const upper = outline(camera, jersey, size);
-      lit(ctx, (path, dx, dy) => polygon(path, upper, dx, dy), kit.jersey, kit.shade, shift);
+      const across = fig.right;
+      const hipsAcross = fig.hipsAcross || across;
+      const wide = (point, dir, feet) => add(point, mul(dir, feet * size));
+      // The shorts' waist and seat.
+      const shorts = outline(camera, [
+        [wide(along(0.18), hipsAcross, -0.27), 0.3], [wide(along(0.18), hipsAcross, 0.27), 0.3],
+        [fig.hips[0], 0.33], [fig.hips[1], 0.33], [add(fig.pelvis, mul(spine, -0.22 * size)), 0.3],
+      ].map(([c, r]) => [c, r * size]));
+      const lower = new Path2D();
+      polygon(lower, shorts);
+      rounded(ctx, lower, kit.shorts, kit, pelvis.x, pelvis.y, { x: 0, y: 1 }, 0.4 * k);
+      // The neck and the slope of the shoulders, which the jersey's straps sit on.
+      const top = fig.chest;
+      const base = mix3(fig.chest, fig.neck, 0.4);
+      const yoke = new Path2D();
+      polygon(yoke, outline(camera, [
+        [fig.neck, GIRTH.neck * 0.95], [base, GIRTH.neck * 1.05],
+        [mix3(base, fig.shoulders[0], 0.55), GIRTH.trapezius], [mix3(base, fig.shoulders[1], 0.55), GIRTH.trapezius],
+      ].map(([c, r]) => [c, r * size])));
+      const throat = P(base);
+      rounded(ctx, yoke, blend(kit.skin, kit.shade, 0.1), kit, throat.x, throat.y, { x: 0, y: 1 }, GIRTH.neck * k);
+      // The jersey: narrow straps over the shoulders, a deep chest, hanging loose over the waist.
+      const jersey = outline(camera, [
+        [wide(fig.shoulders[0], across, 0.13), 0.13], [wide(fig.shoulders[1], across, -0.13), 0.13],
+        [wide(add(along(0.72), mul(fig.forward, 0.08 * size)), across, -0.26), 0.3], [wide(add(along(0.72), mul(fig.forward, 0.08 * size)), across, 0.26), 0.3],
+        [wide(along(0.42), across, -0.25), 0.29], [wide(along(0.42), across, 0.25), 0.29],
+        [wide(along(0.16), hipsAcross, -0.27), 0.29], [wide(along(0.16), hipsAcross, 0.27), 0.29],
+        [add(top, mul(spine, -0.12 * size)), 0.24],
+      ].map(([c, r]) => [c, r * size]));
+      const upper = new Path2D();
+      polygon(upper, jersey);
+      const middle = P(along(0.55));
+      rounded(ctx, upper, kit.jersey, kit, middle.x, middle.y, { x: chest.x - pelvis.x, y: chest.y - pelvis.y }, 0.55 * k);
 
-      // 1 with his chest to the camera, −1 with his back to it.
+      // 1 with his chest to the camera, -1 with his back to it.
       const facing = dot(fig.forward, unit(sub(camera.eye, fig.chest)));
-      const lean = Math.atan2(chest.x - pelvis.x, pelvis.y - chest.y);
-      if (k > 6 && facing > 0.25) {
-        // The neckline: a V in the trim colour.
-        const dip = P(add(add(fig.chest, mul(spine, -0.2 * size)), mul(fig.forward, 0.3 * size)));
-        ctx.strokeStyle = rgb(kit.trim);
-        ctx.lineWidth = Math.max(0.7, 0.055 * k);
+      if (k > 4 && Math.abs(facing) > 0.2) {
+        // The neckline between the straps, scooped deep in front and shallow at the back, edged in the trim colour.
+        const front = facing > 0;
+        const out = mul(fig.forward, (front ? 0.2 : -0.22) * size);
+        const left = P(add(wide(base, across, -0.25), out));
+        const right = P(add(wide(base, across, 0.25), out));
+        const dip = P(add(add(top, mul(spine, (front ? -0.16 : 0.08) * size)), mul(fig.forward, (front ? 0.3 : -0.3) * size)));
+        // The control point that takes the curve through `dip` halfway along.
+        const bend = { x: 2 * dip.x - (left.x + right.x) / 2, y: 2 * dip.y - (left.y + right.y) / 2 };
+        const upLeft = P(wide(fig.neck, across, -0.25));
+        const upRight = P(wide(fig.neck, across, 0.25));
+        ctx.fillStyle = rgb(blend(kit.skin, kit.shade, 0.1));
         ctx.beginPath();
-        const left = P(add(fig.chest, mul(fig.right, -0.24 * size)));
-        const right = P(add(fig.chest, mul(fig.right, 0.24 * size)));
         ctx.moveTo(left.x, left.y);
-        ctx.lineTo(dip.x, dip.y);
-        ctx.lineTo(right.x, right.y);
-        ctx.stroke();
+        ctx.quadraticCurveTo(bend.x, bend.y, right.x, right.y);
+        ctx.lineTo(upRight.x, upRight.y);
+        ctx.lineTo(upLeft.x, upLeft.y);
+        ctx.closePath();
+        ctx.fill();
+        if (k > 6) {
+          ctx.strokeStyle = rgb(kit.trim);
+          ctx.lineWidth = Math.max(0.6, 0.04 * k);
+          ctx.beginPath();
+          ctx.moveTo(left.x, left.y);
+          ctx.quadraticCurveTo(bend.x, bend.y, right.x, right.y);
+          ctx.stroke();
+        }
       }
       // The number only shows where the torso is big enough, and turned enough, to carry it.
-      if (!kit.mark || k < 8 || Math.abs(facing) < 0.3) return;
-      const middle = P(add(along(0.58), mul(fig.forward, Math.sign(facing) * 0.3 * size)));
+      if (!kit.mark || k < 9 || Math.abs(facing) < 0.3) return;
+      const at = P(add(along(0.56), mul(fig.forward, Math.sign(facing) * 0.32 * size)));
       ctx.save();
-      ctx.translate(middle.x, middle.y);
-      ctx.rotate(lean);
+      ctx.translate(at.x, at.y);
+      ctx.rotate(Math.atan2(chest.x - pelvis.x, pelvis.y - chest.y));
       ctx.scale(Math.min(1, 0.25 + Math.abs(facing)), 1);
       ctx.fillStyle = rgb(kit.number);
-      ctx.font = `800 ${(0.6 * k).toFixed(1)}px ${kit.font}`;
+      ctx.font = `800 ${(0.48 * k).toFixed(1)}px ${kit.font}`;
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
       ctx.fillText(kit.mark, 0, 0);
@@ -311,52 +338,31 @@ export function playerParts(ctx, camera, fig, kit) {
   });
 
   const head = P(fig.head);
-  const neck = P(fig.chest);
   parts.push({
     // Just nearer than the torso, so a head tipped forward stays in front of the chest.
     depth: Math.min(head.depth, core - 0.02),
     draw() {
       const k = head.k * size;
-      const radius = Math.max(1.8, GIRTH.head * k);
-      const gap = gapAt(head.k);
-      clear(ctx, path => capsule(path, head, radius + gap, head, 0));
-      // The neck sits in the head's shadow.
-      limb(neck, Math.max(0.7, GIRTH.neck * k), head, Math.max(0.7, 0.15 * k), blend(kit.skin, kit.shade, 0.16));
-      limb(head, radius, head, 0, kit.skin);
-
-      const away = unit(sub(fig.head, camera.eye));
+      // The top of the neck, in the head's shadow (the torso draws the rest, under the jersey).
+      limb(ctx, [R(fig.neck, GIRTH.neck * 0.95), R(mix3(fig.neck, fig.head, 0.5), GIRTH.neck * 0.9)], blend(kit.skin, kit.shade, 0.14), kit);
+      // Skull and jaw: an egg a little longer than it is wide.
+      const skullAt = add(fig.head, mul(fig.headUp, 0.04 * size));
+      const jawAt = add(add(fig.head, mul(fig.headUp, -0.21 * size)), mul(fig.face, 0.07 * size));
+      const skull = P(skullAt);
+      const shape = new Path2D();
+      polygon(shape, outline(camera, [[skullAt, GIRTH.skull * size], [jawAt, GIRTH.jaw * size]]));
+      rounded(ctx, shape, kit.skin, kit, skull.x, skull.y, { x: 0, y: 1 }, GIRTH.skull * k);
+      const radius = Math.max(0.8, GIRTH.skull * k);
+      const away = unit(sub(skullAt, camera.eye));
       const flat = point => ({ x: dot(point, camera.right), y: -dot(point, camera.up), shows: dot(point, away) < 0 });
-      const hair = rgb(kit.hair);
-      // A short fade: cropped on top, thinning down the sides and back.
-      ctx.fillStyle = rgb(kit.hair, 0.4);
-      if (capPath(ctx, head.x, head.y, radius, unit(sub(mul(fig.headUp, 0.74), mul(fig.face, 0.67))), 1.62, flat)) ctx.fill();
-      ctx.fillStyle = hair;
-      if (capPath(ctx, head.x, head.y, radius, unit(sub(mul(fig.headUp, 0.84), mul(fig.face, 0.54))), 1.34, flat)) ctx.fill();
-      if (kit.beard) {
-        ctx.fillStyle = rgb(kit.hair, 0.78);
-        if (capPath(ctx, head.x, head.y, radius, unit(sub(mul(fig.face, 0.6), mul(fig.headUp, 0.8))), 0.62, flat)) ctx.fill();
+      // Short hair, cropped close: on top and round the back.
+      ctx.fillStyle = rgb(kit.hair);
+      if (capPath(ctx, skull.x, skull.y, radius * 1.03, unit(sub(mul(fig.headUp, 0.8), mul(fig.face, 0.6))), 1.3, flat)) ctx.fill();
+      if (kit.beard && radius > 2.2) {
+        const jaw = P(jawAt);
+        ctx.fillStyle = rgb(kit.hair, 0.7);
+        if (capPath(ctx, jaw.x, jaw.y, Math.max(0.8, GIRTH.jaw * k) * 1.02, unit(sub(mul(fig.face, 0.55), mul(fig.headUp, 0.84))), 0.85, flat)) ctx.fill();
       }
-      if (radius < 6) return;
-      // Close enough for a face: eyes, and the mouthguard he chews on.
-      const right = unit(cross(fig.face, fig.headUp));
-      for (const side of [-1, 1]) {
-        const eye = flat(unit(add(add(mul(fig.face, 0.9), mul(right, 0.36 * side)), mul(fig.headUp, 0.1))));
-        if (!eye.shows) continue;
-        ctx.fillStyle = hair;
-        ctx.beginPath();
-        ctx.ellipse(head.x + eye.x * radius, head.y + eye.y * radius, Math.max(0.6, 0.095 * radius), Math.max(0.5, 0.07 * radius), 0, 0, TAU);
-        ctx.fill();
-      }
-      if (!kit.guard || radius < 8) return;
-      const mouth = flat(unit(add(sub(mul(fig.face, 0.82), mul(fig.headUp, 0.46)), mul(right, 0.2))));
-      if (!mouth.shows) return;
-      ctx.strokeStyle = rgb(kit.guard);
-      ctx.lineWidth = Math.max(1, 0.13 * radius);
-      ctx.lineCap = 'round';
-      ctx.beginPath();
-      ctx.moveTo(head.x + mouth.x * radius, head.y + mouth.y * radius);
-      ctx.lineTo(head.x + (mouth.x + 0.16) * radius, head.y + (mouth.y + 0.1) * radius);
-      ctx.stroke();
     },
   });
   return parts;

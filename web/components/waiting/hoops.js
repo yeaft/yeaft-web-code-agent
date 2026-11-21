@@ -26,7 +26,7 @@ export const scene = {
     line: '--hoops-line', arc: '--hoops-arc', rig: '--hoops-rig', net: '--hoops-net', rim: '--hoops-rim',
     ball: '--hoops-ball', seam: '--hoops-seam', glint: '--hoops-glint', dust: '--hoops-dust', shade: '--hoops-shade', text: '--hoops-text',
     skin: '--hoops-skin', hair: '--hoops-hair', jersey: '--hoops-jersey', trim: '--hoops-trim', number: '--hoops-number',
-    tights: '--hoops-tights', shoe: '--hoops-shoe', sole: '--hoops-sole', guard: '--hoops-guard',
+    shoe: '--hoops-shoe', sole: '--hoops-sole',
     rival: '--hoops-rival', rivalSkin: '--hoops-rival-skin', sock: '--hoops-sock',
   },
   paint(ctx, { elapsedMs, width, height, colors, core, backdrop }) {

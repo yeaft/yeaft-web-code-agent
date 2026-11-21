@@ -55,10 +55,10 @@ function alongArc(play, from, zoom, toward) {
 }
 
 const VIEWS = {
-  /** Travels with him, ahead and to one side. */
+  /** Travels with him from the sideline, his defender waiting ahead of him toward the hoop. */
   intro(play) {
     const [x, , z] = play.hero.ground;
-    return { eye: [x + 6.5, 5.0, z + 12.5 * play.side], target: [x + 1.6, 2.7, z], fov: 30 };
+    return { eye: [x - 1.2, 5.4, z + 15.5 * play.side], target: [x + 2.2, 3.0, z], fov: 31 };
   },
   /**
    * From the sideline, a little behind him: he stays in front of his
@@ -75,10 +75,10 @@ const VIEWS = {
     // ball leaves his hand inside the picture, and nobody's head leaves it.
     const rise = Math.max(smooth(span(t, marks.gather - 0.15, marks.gather + 0.3)), play.room);
     return {
-      eye: mix3(mix3([x - 2.8, 6.2, z + 12.6 * side], [x - 2.4, 5.4, z + 11.8 * side], push), [x - 2.6, 6.0, z + 14.8 * side], rise),
-      target: mix3(mix3([x + 1.7, 2.7, z + 0.3 * side], [x + 1.9, 2.4, z + 0.5 * side], push), [x + 1.6, 3.9, z + 0.3 * side], rise),
-      // Tight on the two of them while he works, so the handle fills a small stage.
-      fov: mix(28, 34, rise),
+      eye: mix3(mix3([x - 2.8, 6.0, z + 15.5 * side], [x - 2.4, 5.4, z + 14.5 * side], push), [x - 2.6, 6.0, z + 16.5 * side], rise),
+      target: mix3(mix3([x + 1.8, 2.95, z + 0.3 * side], [x + 1.9, 2.85, z + 0.5 * side], push), [x + 1.6, 3.9, z + 0.3 * side], rise),
+      // Close on the two of them while he works, heads to shoes in the picture.
+      fov: mix(mix(31, 30, push), 36, rise),
     };
   },
   /** Runs down the sideline with the drive, looking ahead of him until the hoop comes into the picture. */
@@ -105,10 +105,10 @@ const VIEWS = {
       fov: mix(36, 10, zoom),
     };
   },
-  /** Backs away in front of him at walking pace, from the side his defender is not on. */
+  /** Backs away in front of him at walking pace, from the side his defender is not on, the two of them head to toe. */
   walkoff(play) {
-    const [x, , z] = play.hero.ground;
-    return { eye: [x - 8.6, 5.0, z + 2.6 * play.side], target: [x, 4.85, z + 0.25 * play.side], fov: 30 };
+    const [x, , z] = mix3(play.hero.ground, play.defender.ground, 0.4);
+    return { eye: [x - 17, 5.2, z + 3.6 * play.side], target: [x, 3.1, z], fov: 31 };
   },
 };
 
@@ -116,7 +116,7 @@ const VIEWS = {
 // A jump shot stays on the sideline until the ball is gone: his feet, the dip and the release read best from there.
 const jumpShot = m => [['intro', 0, 0], ['duel', m.sizeup - 0.35, 0.8], ['shot', m.flight - 0.08, 0.9], ['walkoff', m.celebrate, 0]];
 const toTheRim = m => [['intro', 0, 0], ['duel', m.sizeup - 0.35, 0.8], ['drive', m.move + 0.2, 0.6], ['finish', m.gather - 0.1, 0.6], ['walkoff', m.celebrate, 0]];
-const SEQUENCES = { stepback: jumpShot, longtwo: jumpShot, floater: toTheRim, layup: toTheRim };
+const SEQUENCES = { pullup: jumpShot, jumper: jumpShot, layup: toTheRim, drive: toTheRim };
 
 /**
  * @param play Frame from `resolveHoopsPlay`.
