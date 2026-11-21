@@ -29,7 +29,7 @@ const GRAVITY = 32.2;
 const BOUNCE = 0.78;
 /** The backboard's face, out from the rim's centre (see court.js). */
 const BOARD = 1.25;
-/** How long a celebration holds him, and how long the possession lasts after it. */
+/** How long he holds after the make before walking off, and how long the possession lasts after that. */
 const PARTY = 1.75;
 const OUTRO = 0.9;
 const WALK = clipInfo('walk');
@@ -162,7 +162,7 @@ function bounced(from, to, since, total) {
  * from every clip's own, each kept while its clip is the one showing. A
  * catch comes at least a short bounce after the release before it.
  */
-function dribblesOf(perf, entries, gather) {
+function dribblesOf(perf, gather) {
   const all = [];
   perf.parts.forEach((part, index) => {
     const info = clipInfo(part.clip);
@@ -199,7 +199,7 @@ function staged(spec) {
   const gather = perf.time(shotPart, shotInfo.gather);
   const release = perf.time(shotPart, shotInfo.release);
   const shooter = shotInfo.shooter;
-  const dribbles = dribblesOf(perf, spec.hero, gather);
+  const dribbles = dribblesOf(perf, gather);
 
   // Turn the performance so the shot goes toward +x, from `range` feet out.
   const atRelease = perf.at(release);
@@ -364,7 +364,7 @@ function defenderAt(play, t, heroPose) {
   const hx = hero[J.pelvis][0];
   const hz = hero[J.pelvis][2];
   // Between his man and the rim; on a drive, the line as it was when he was beaten.
-  const line = Math.min(seen, from) === seen ? hero : play.heroAt(from);
+  const line = seen <= from ? hero : play.heroAt(from);
   const toRim = unit([-line[J.pelvis][0], 0, -line[J.pelvis][2]]);
   // The far side of that line from the camera, where the drive leaves him.
   const wrong = mul([-toRim[2], 0, toRim[0]], toRim[0] * play.side > 0 ? -1 : 1);
@@ -495,16 +495,14 @@ export function resolveHoopsPlay(elapsedMs) {
   const before = PLAYS.slice(0, index).reduce((total, earlier) => total + earlier.worth, 0);
   return {
     possession, name: play.name, time: t, beat: beatAt(play.marks, t), marks: play.marks,
-    angle: play.angles[turnOf], side: play.side, spot: play.spot, stand: play.stand, celebration: 'stroll',
+    angle: play.angles[turnOf], side: play.side, spot: play.spot, stand: play.stand,
     hero: figureOf(heroPose), defender: figureOf(defenderAt(play, t, heroPose), DEFENDER_SIZE), ball,
     // His points for this wait, counting this shot once it drops.
     worth: play.worth, points: round * ROUND_POINTS + before + (made ? play.worth : 0),
     net: made ? Math.exp(-sinceMake * 4.2) : 0, netAge: made ? sinceMake : 0,
     pop: made && sinceMake < 1.3 ? sinceMake / 1.3 : -1,
-    dust: [], shake: 0,
     // Headroom the camera should leave while the shot goes up over his defender.
     room: smooth(span(t, play.gather - 0.3, play.gather)) * (1 - smooth(span(t, play.release + 0.4, play.release + 0.9))),
-    doze: -1,
     // The first possession is visible immediately; later possessions fade in.
     fade: Math.min(possession > 0 ? smooth(span(t, 0, 0.25)) : 1, 1 - smooth(span(t, play.seconds - 0.4, play.seconds - 0.05))),
   };

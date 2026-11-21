@@ -133,11 +133,6 @@ export function resolveHoopsCamera(play, width, height) {
   if (glide > 0 && play.time < from + glide) {
     shot = mixShots(VIEWS[sequence[index - 1][0]](play), shot, smooth((play.time - from) / glide));
   }
-  // The defender hitting the floor knocks the camera.
-  if (play.shake > 0.01) {
-    const jolt = 0.1 * play.shake * Math.sin(play.time * 74);
-    shot = { eye: [shot.eye[0], shot.eye[1] + jolt, shot.eye[2] + 0.8 * jolt], target: [shot.target[0], shot.target[1] - 0.6 * jolt, shot.target[2]], fov: shot.fov };
-  }
   // From the pickup until it is through the net the ball stays in the
   // picture: the camera looks up after a shot that would otherwise leave it.
   if (play.time >= play.marks.gather && play.time < play.marks.swish) shot = keepInPicture(shot, play.ball.at, width, height);

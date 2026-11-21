@@ -112,7 +112,7 @@ export function clipPose(name, t) {
 }
 
 /** Heading of a pose's hips: yaw 0 faces +x. */
-export function yawOf(pose) {
+function yawOf(pose) {
   const rx = pose[J.rhip][0] - pose[J.lhip][0];
   const rz = pose[J.rhip][2] - pose[J.lhip][2];
   // Forward is up x right.
@@ -205,8 +205,9 @@ export function upright(pose, from, most) {
  * clip from `from` to `to` seconds, faded in over the last `blend` seconds of
  * the entry before (0.3 by default), and picked up where that one is at the
  * start of the fade, turned `turn` radians further. Returns
- * { duration, at(t) } with `at` the pose at `t` seconds into the whole, and
- * `local(t)` which entry and clip time that is.
+ * { parts, duration, at(t), time(index, clipT) }: `at` the pose at `t`
+ * seconds into the whole, `time` when entry `index` reaches its clip's time
+ * `clipT`.
  */
 export function perform(entries) {
   const parts = [];
@@ -231,8 +232,7 @@ export function perform(entries) {
     parts,
     duration: parts[parts.length - 1].end,
     at: t => sampleParts(parts, t),
-    /** Clip time of entry `index` at performance time `t`, and back. */
-    clipTime: (index, t) => parts[index].from + (t - parts[index].start),
+    /** Performance time at which entry `index` is at its clip's time `clipT`. */
     time: (index, clipT) => parts[index].start + (clipT - parts[index].from),
   };
 }
@@ -278,7 +278,7 @@ export function figureOf(pose, size = 1) {
     size,
     ground: [P('pelvis')[0], 0, P('pelvis')[2]],
     pelvis: P('pelvis'), waist: P('waist'), chest: P('chest'), neck, head, crown, face, headUp,
-    forward, right, hipsRight: unit(cross(forward, [0, 1, 0])), hipsAcross,
+    forward, right, hipsAcross,
     shoulders, hips: [P('lhip'), P('rhip')],
     legs: [0, 1].map(side => ({
       hip: P(side ? 'rhip' : 'lhip'), knee: P(side ? 'rknee' : 'lknee'), ankle: P(side ? 'rankle' : 'lankle'), toe: P(side ? 'rtoe' : 'ltoe'),
