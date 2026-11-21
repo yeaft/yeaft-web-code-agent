@@ -345,11 +345,7 @@ export class WorkCenterResourceAdapter extends LLMAdapter {
     const capture = captured?.captureStream || this.adapter.captureStream?.bind(this.adapter)
       || this.adapter.stream.bind(this.adapter);
     const native = this.adapter instanceof LLMAdapter;
-    const imagePolicy = captured?.getImageLimits ? captured : this.adapter;
-    return {
-      captureStream: params => this.accountStream(capture, params, native),
-      getImageLimits: imagePolicy.getImageLimits?.bind(imagePolicy),
-    };
+    return { captureStream: params => this.accountStream(capture, params, native) };
   }
   captureStream(params) { return this.captureRequest().captureStream(params); }
   stream(params) { return this.captureStream(params); }
@@ -427,7 +423,7 @@ export class WorkCenterResourceAdapter extends LLMAdapter {
 
 /** Native adapters own the last pre-fetch callback; plain legacy adapters are
  * conservatively admitted before invocation even if they omit the callback. */
-export async function callCoordinatorWithResourceControl(adapter, store, turn, claim, params, call = adapter.call.bind(adapter)) {
+export async function callCoordinatorWithResourceControl(adapter, store, turn, claim, params) {
   const native = adapter instanceof LLMAdapter;
   let suppressFirstCallback = !native;
   const start = (revalidate = false) => {
@@ -441,7 +437,7 @@ export async function callCoordinatorWithResourceControl(adapter, store, turn, c
   };
   try {
     if (!native) start();
-    const response = await call({ ...params, onRequestStart: () => {
+    const response = await adapter.call({ ...params, onRequestStart: () => {
       if (suppressFirstCallback) {
         suppressFirstCallback = false;
         // A resumed WorkItem may be active while this pre-stop claim is stale.

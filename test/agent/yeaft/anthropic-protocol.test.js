@@ -87,7 +87,7 @@ describe('Anthropic evolving Messages protocol', () => {
     const large = png(16, 3303);
     const toolCall = { role: 'assistant', toolCalls: [{ id: 'read', name: 'Read', input: { fake: png(8001) } }] };
     const result = { role: 'tool', toolCallId: 'read', content: [large], isError: true };
-    const mixedRequest = count => ({ ...params, onRequestStart: admission,
+    const mixedRequest = count => ({ ...params, onRequestStart: admission, imageLimits: ANTHROPIC_IMAGE_LIMITS,
       messages: [{ role: 'user', content: Array(count).fill(small) }, toolCall, result] });
     fetch.mockReset().mockImplementation(async () => json({ content: [{ type: 'text', text: 'valid' }], stop_reason: 'end_turn' }));
     admission.mockClear();
@@ -101,6 +101,10 @@ describe('Anthropic evolving Messages protocol', () => {
     await expect(adapter.call({ ...mixedRequest(101), messages: [{ role: 'user', content: Array(101).fill(small) }] })).rejects.toBeInstanceOf(LLMImageLimitError);
     expect(fetch).toHaveBeenCalledTimes(1);
     expect(admission).toHaveBeenCalledTimes(1);
+    // Direct callers such as Work Center do not opt into Session fitting.
+    await adapter.call({ ...mixedRequest(20), imageLimits: undefined });
+    expect(fetch).toHaveBeenCalledTimes(2);
+    expect(admission).toHaveBeenCalledTimes(2);
     const repeated = mixedRequest(20);
     const fitted = await fitAnthropicImages(repeated.messages, ANTHROPIC_IMAGE_LIMITS);
     expect(fitted.messages[0].content.filter(part => part.type === 'image')).toHaveLength(19);

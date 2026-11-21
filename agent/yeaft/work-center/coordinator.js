@@ -1,6 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { resolveMaxOutputTokens } from '../models.js';
-import { fitAnthropicImages } from '../llm/anthropic-images.js';
 import { callCoordinatorWithResourceControl } from './resource-control.js';
 import { normalizeSessionMessageQuote, sessionMessageQuotePrompt } from '../session-message-quote.js';
 import {
@@ -778,7 +777,6 @@ export class WorkItemCoordinator {
     return this.#scheduleTurn(started, {
       text: `${text}${coordinatorQuotePrompt(quote)}`,
       recovery: options.recovery === true,
-      resumeAttempt: true,
       addedAttachments: Array.isArray(options.addedAttachments) ? options.addedAttachments : [],
       options,
     });
@@ -849,7 +847,7 @@ export class WorkItemCoordinator {
   }
 
   #scheduleTurn(started, {
-    text, recovery, resumeAttempt = false, addedAttachments = [], options,
+    text, recovery, addedAttachments = [], options,
   }) {
     const abortController = new AbortController();
     this.activeTurns.set(started.turnId, abortController);
@@ -862,7 +860,7 @@ export class WorkItemCoordinator {
     renewalTimer?.unref?.();
     const task = new Promise(resolve => setTimeout(resolve, 0))
       .then(() => this.#executeTurn(started, {
-        text, recovery, resumeAttempt, addedAttachments, options, abortController,
+        text, recovery, addedAttachments, options, abortController,
       }))
       .finally(() => {
         if (renewalTimer) clearInterval(renewalTimer);
@@ -874,7 +872,7 @@ export class WorkItemCoordinator {
   }
 
   async #executeTurn(started, {
-    text, recovery, resumeAttempt, addedAttachments, options, abortController,
+    text, recovery, addedAttachments, options, abortController,
   }) {
     let providerTurn = null;
     let candidateSpeaker = null;
@@ -886,9 +884,14 @@ export class WorkItemCoordinator {
       let mutation = null;
       let attemptCount = 0;
       let lastError = null;
+      const snapshotText = coordinatorSnapshotText(started.detail);
       let language = 'en';
-      let snapshotText;
-      let attachmentContext;
+      const attachmentContext = !recovery && this.attachmentRoot
+        ? buildWorkItemAttachmentContext({ ...started.detail, attachments: addedAttachments }, {
+            root: this.attachmentRoot,
+            inlineTextBytes: 32 * 1024,
+          })
+        : { promptBlock: '', promptParts: [] };
       try {
         let runtime;
         let settings;
@@ -939,8 +942,7 @@ export class WorkItemCoordinator {
         const maxAttempts = recovery
           ? COORDINATOR_RECOVERY_DECISION_ATTEMPTS
           : COORDINATOR_DECISION_ATTEMPTS;
-        let legacyImageReplacement = false;
-        for (let index = 0; index < maxAttempts + Number(legacyImageReplacement); index += 1) {
+        for (let index = 0; index < maxAttempts; index += 1) {
           attemptCount = index + 1;
           mutation = null;
           const correction = lastError
@@ -950,80 +952,31 @@ export class WorkItemCoordinator {
           try {
             let result;
             try {
+              const capabilities = JSON.stringify(workItemCapabilityContext(vps, {
+                hasAttachments: started.detail.attachments?.length > 0,
+              }));
+              const latestMessage = `Available execution capabilities (role metadata is descriptive, not authorization):\n${capabilities}\n\nCurrent WorkItem snapshot:\n${snapshotText}\n\n${recovery ? 'Automatic failure recovery trigger' : 'Latest user message'}:\n${text}${attachmentContext.promptBlock}${correction}`;
+              const content = attachmentContext.promptParts.length > 0
+                ? [{ type: 'text', text: latestMessage }, ...attachmentContext.promptParts]
+                : latestMessage;
+              const requestBody = {
+                model: resolved.model,
+                system: coordinatorSystemPrompt(language, started.detail),
+                messages: [{ role: 'user', content }],
+                maxTokens: Math.min(
+                  resolveMaxOutputTokens(resolved.model, runtime.config),
+                  COORDINATOR_MAX_OUTPUT_TOKENS,
+                ),
+                effort: resolved.effort,
+                effortSource: resolved.source,
+                effortContext: { scenario: 'work-center-coordinator' },
+              };
               const claim = started.fence.claim;
-              // A recovered attempt owns its durable request; regenerating it
-              // from current attachments or settings can change its hash.
-              const retained = resumeAttempt ? this.store.loadCoordinatorProviderTurnForRecovery(
-                started.detail.id, started.turnId, attemptCount, claim,
-              ) : null;
-              if (retained?.status === 'cancelled') {
-                if (retained.error === 'Unsent legacy request superseded to fit image limits') legacyImageReplacement = true;
-                else lastError = new Error(retained.error || 'Prior Coordinator decision was rejected');
-                continue;
-              }
-              if (retained && ['unknown', 'dispatching'].includes(retained.status)) {
-                throw new Error('Coordinator provider dispatch outcome is unknown and requires review');
-              }
-              let requestBody = retained?.requestBody;
-              if (!requestBody) {
-                snapshotText ??= coordinatorSnapshotText(started.detail);
-                const addedIds = new Set(addedAttachments.map(attachment => attachment.id));
-                const ownedAttachments = (started.detail.attachments || []).filter(attachment => addedIds.has(attachment.id));
-                attachmentContext ??= !recovery && this.attachmentRoot
-                  ? buildWorkItemAttachmentContext({ ...started.detail, attachments: ownedAttachments }, {
-                      root: this.attachmentRoot, inlineTextBytes: 32 * 1024,
-                    })
-                  : { promptBlock: '', promptParts: [] };
-                const capabilities = JSON.stringify(workItemCapabilityContext(vps, {
-                  hasAttachments: started.detail.attachments?.length > 0,
-                }));
-                const latestMessage = `Available execution capabilities (role metadata is descriptive, not authorization):\n${capabilities}\n\nCurrent WorkItem snapshot:\n${snapshotText}\n\n${recovery ? 'Automatic failure recovery trigger' : 'Latest user message'}:\n${text}${attachmentContext.promptBlock}${correction}`;
-                const content = attachmentContext.promptParts.length > 0
-                  ? [{ type: 'text', text: latestMessage }, ...attachmentContext.promptParts]
-                  : latestMessage;
-                requestBody = {
-                  model: resolved.model,
-                  system: coordinatorSystemPrompt(language, started.detail),
-                  messages: [{ role: 'user', content }],
-                  maxTokens: Math.min(
-                    resolveMaxOutputTokens(resolved.model, runtime.config),
-                    COORDINATOR_MAX_OUTPUT_TOKENS,
-                  ),
-                  effort: resolved.effort,
-                  effortSource: resolved.source,
-                  effortContext: { scenario: 'work-center-coordinator' },
-                };
-              }
-              const adapter = runtime.adapter;
-              const captured = adapter.captureRequest?.();
-              const policySource = captured ?? adapter;
-              if (retained?.status === 'responded') {
-                // The response is already paid for. Do not fit or send its old request.
-                providerTurn = retained;
-              } else {
-                const imageLimits = requestBody.messages.some(message => Array.isArray(message.content))
-                  && policySource.getImageLimits?.(requestBody.model);
-                const messages = imageLimits
-                  ? (await fitAnthropicImages(requestBody.messages, imageLimits)).messages
-                  : requestBody.messages;
-                if (abortController.signal.aborted) throw new Error('Work Center Coordinator was interrupted');
-                if (retained) {
-                  if (messages !== requestBody.messages) {
-                    if (legacyImageReplacement) throw new Error('Recovered Coordinator request still exceeds image limits');
-                    providerTurn = this.store.supersedePreparedCoordinatorRequest(retained, { ...requestBody, messages }, claim);
-                    if (!providerTurn) return started.detail;
-                    legacyImageReplacement = true;
-                    index += 1;
-                    attemptCount = providerTurn.attemptNumber;
-                  } else providerTurn = retained;
-                } else {
-                  providerTurn = this.store.prepareCoordinatorProviderTurn(
-                    started.detail.id, started.turnId, attemptCount, { ...requestBody, messages }, claim, candidateSpeaker,
-                  );
-                }
-              }
+              providerTurn = this.store.prepareCoordinatorProviderTurn(
+                started.detail.id, started.turnId, attemptCount, requestBody, claim, candidateSpeaker,
+              );
               if (!providerTurn) return started.detail;
-              speaker = providerTurn.speaker || speaker;
+              speaker = providerTurn.speaker;
               if (providerTurn.status === 'unknown') {
                 throw new Error('Coordinator provider dispatch outcome is unknown and requires review');
               }
@@ -1031,10 +984,10 @@ export class WorkItemCoordinator {
                 result = providerTurn.response;
               } else {
                 result = await Promise.race([
-                callCoordinatorWithResourceControl(adapter, this.store, providerTurn, claim, {
-                  ...providerTurn.requestBody,
+                callCoordinatorWithResourceControl(runtime.adapter, this.store, providerTurn, claim, {
+                  ...requestBody,
                   signal: abortController.signal,
-                }, captured?.call?.bind(captured)).then(response => {
+                }).then(response => {
                   const persisted = this.store.respondCoordinatorProviderTurn(
                     providerTurn.id, providerTurn.requestHash, response, claim,
                   );
