@@ -64,14 +64,14 @@ function add(budget, image, limits) {
   budget.wide ||= image.edge == null || image.edge > limits.manyEdge;
 }
 
-export function validateAnthropicImages(body) {
+export function validateAnthropicImages(body, limits) {
   const budget = emptyBudget();
   const inspect = part => {
     const info = imageInfo(part);
-    if (!fits(budget, info, ANTHROPIC_IMAGE_LIMITS)) {
+    if (!fits(budget, info, limits)) {
       throw new LLMImageLimitError('Anthropic image limits exceeded. Use fewer images or smaller previews; original images are preserved.');
     }
-    add(budget, info, ANTHROPIC_IMAGE_LIMITS);
+    add(budget, info, limits);
   };
   scanContent(body.system, inspect);
   for (const message of body.messages) scanContent(message.content, inspect);

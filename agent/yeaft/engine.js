@@ -3136,10 +3136,11 @@ export class Engine {
           } catch { /* best-effort */ }
         }
 
-        const imageLimits = requestAdapter.getImageLimits?.(currentModel);
+        const imageLimits = scenario !== 'work-item' && !prepareProviderRequest && !pendingServerOperation
+          ? requestAdapter.getImageLimits?.(currentModel) : null;
         requestImageLimits = imageLimits && singleImageDimensionMode.has(currentModel)
           ? { ...imageLimits, count: imageLimits.manyCount } : imageLimits;
-        if (requestImageLimits && !pendingServerOperation) {
+        if (requestImageLimits) {
           const images = await fitAnthropicImages(wireMessages, requestImageLimits, {
             frozenLength: signedAnthropicPrefix ? signedAnthropicPrefix.messages.length + 1 : 0,
             canRollover: Boolean(signedAnthropicPrefix && successfulRequestsSinceRollover > 0
@@ -3377,6 +3378,7 @@ export class Engine {
           tools: requestToolDefs.length > 0 ? requestToolDefs : undefined,
           maxTokens: requestMaxOutputTokens,
           contextOutputLimit,
+          ...(requestImageLimits ? { imageLimits: requestImageLimits } : {}),
           ...(learnedRequestBodyCap == null ? {} : { maxRequestBodyBytes: learnedRequestBodyCap }),
           effort: resolvedEffort,
           effortConstraint,
