@@ -24,6 +24,7 @@ export class ToolImagePrefixBudgetError extends ProviderContextBudgetError {
  * or paths, so matching also works after a signed snapshot is cloned. */
 export function createActiveToolImageProjector({ pathForImage, preview = makeModelImagePreview } = {}) {
   const keys = new WeakMap();
+  const previewOrigins = new WeakMap();
   const previews = new Map();
   const pathFor = new WeakMap();
   const imageAnnotations = new WeakSet();
@@ -31,13 +32,18 @@ export function createActiveToolImageProjector({ pathForImage, preview = makeMod
   // transport role changes, its origin (and retention budget) does not.
   const toolEvidenceParts = new WeakSet();
   const markEvidence = part => { if (inlineImage(part)) toolEvidenceParts.add(part); };
-  const copyEvidence = (from, to) => { if (to && toolEvidenceParts.has(from)) markEvidence(to); };
+  const copyImageState = (from, to) => {
+    if (!inlineImage(to)) return;
+    if (toolEvidenceParts.has(from)) markEvidence(to);
+    const origin = previewOrigins.get(from);
+    if (origin) previewOrigins.set(to, origin);
+  };
   const copySnapshot = (messages, snapshot) => {
     for (let i = 0; i < messages.length; i++) {
       const originals = imagesIn(messages[i]);
       if (!originals.length) continue;
       const copies = imagesIn(snapshot[i]);
-      for (let p = 0; p < originals.length; p++) copyEvidence(originals[p], copies[p]);
+      for (let p = 0; p < originals.length; p++) copyImageState(originals[p], copies[p]);
     }
     return snapshot;
   };
@@ -49,6 +55,13 @@ export function createActiveToolImageProjector({ pathForImage, preview = makeMod
     return keys.get(part);
   };
   const pathOf = part => pathFor.get(part) ?? pathForImage?.(part);
+  const rememberPreview = (from, to) => {
+    if (!inlineImage(from) || !inlineImage(to)) return;
+    copyImageState(from, to);
+    previewOrigins.set(to, previewOrigins.get(from) ?? keyFor(from));
+    const path = pathOf(from);
+    if (path) pathFor.set(to, path);
+  };
   const marker = (reason, part) => {
     const path = pathOf(part);
     return { type: 'text', text: `[${reason}${path
@@ -69,6 +82,8 @@ export function createActiveToolImageProjector({ pathForImage, preview = makeMod
       for (const part of imagesIn(message)) {
         if (!inlineImage(part)) continue;
         seen.add(keyFor(part));
+        const origin = previewOrigins.get(part);
+        if (origin) seen.add(origin);
         if (message.role === 'tool' || toolEvidenceParts.has(part)) {
           frozenToolImages++;
           frozenToolChars += part.source.data.length;
@@ -141,9 +156,7 @@ export function createActiveToolImageProjector({ pathForImage, preview = makeMod
           // Identical files under distinct paths can share encoded bytes but not
           // provenance. Don't attach a different path to a cached preview object.
           const selected = { ...fitted };
-          copyEvidence(part, selected);
-          const path = pathOf(part);
-          if (path) pathFor.set(selected, path);
+          rememberPreview(part, selected);
           const annotation = marker('Model image preview.', part);
           imageAnnotations.add(annotation);
           (next ??= content.slice())[p] = [annotation, selected];
@@ -156,7 +169,9 @@ export function createActiveToolImageProjector({ pathForImage, preview = makeMod
   }
   project.pathOf = pathOf;
   project.markEvidence = markEvidence;
-  project.copyEvidence = copyEvidence;
+  project.rememberPreview = rememberPreview;
+  project.wireKey = part => inlineImage(part) ? keyFor(part) : null;
+  project.isToolEvidence = part => toolEvidenceParts.has(part);
   project.copySnapshot = messages => copySnapshot(messages, structuredClone(messages));
   project.isImageAnnotation = part => imageAnnotations.has(part);
   return project;

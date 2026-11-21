@@ -105,16 +105,19 @@ function replaceContent(content, replace, depth = 0) {
 /** Fit an Anthropic request copy, never the conversation tape. The newest
  * images get first choice of slots; frozen rows and native items stay intact. */
 export async function fitAnthropicImages(messages, limits, {
-  frozenLength = 0, canRollover = false, preview, pathForImage,
+  frozenLength = 0, canRollover = false, preview, pathForImage, imageKey, isToolEvidence,
 } = {}) {
   const budget = emptyBudget();
   const mutable = [];
+  const seen = new Set();
   const fixed = part => {
     const info = imageInfo(part);
     if (!fits(budget, info, limits)) {
       throw new LLMImageLimitError('The frozen Anthropic context exceeds this route’s image limits. Original images are preserved.', { blockedByPrefix: true });
     }
     add(budget, info, limits);
+    const key = imageKey?.(part);
+    if (key) seen.add(key);
   };
   messages.forEach((message, index) => {
     if (message.role === 'assistant') {
@@ -135,7 +138,10 @@ export async function fitAnthropicImages(messages, limits, {
     const info = imageInfo(part);
     let candidate = part;
     let effective = info;
-    if (!fits(budget, info, limits)) {
+    const deduplicate = messages[index].role === 'tool' || isToolEvidence?.(part);
+    let duplicate = deduplicate && seen.has(imageKey?.(part));
+    if (duplicate) candidate = null;
+    else if (!fits(budget, info, limits)) {
       // In a signed continuation every mutable image is unsent. If removing
       // the prefix would make room alongside the newer images, use a fresh
       // segment rather than losing one image in a new comparison batch.
@@ -154,7 +160,13 @@ export async function fitAnthropicImages(messages, limits, {
         if (candidate && !fits(budget, effective, limits)) candidate = null;
       }
     }
+    const key = candidate && imageKey?.(candidate);
+    if (key && deduplicate && seen.has(key)) {
+      duplicate = true;
+      candidate = null;
+    }
     if (candidate) {
+      if (key) seen.add(key);
       add(budget, effective, limits);
       add(newest, effective, limits);
       if (candidate === part) continue;
@@ -164,6 +176,7 @@ export async function fitAnthropicImages(messages, limits, {
     const reference = path ? ` Original: ${JSON.stringify(path)}.` : ' The original is unchanged; see the upload list or tool output for its path.';
     const needsSmallerCopy = (info.edge ?? 0) > limits.edge || info.bytes > limits.base64Bytes;
     const text = candidate ? `[Image preview sent to fit the model route. Dimensions or encoding may differ from the original.${reference}]`
+      : duplicate ? `[Image not included in this result (duplicate content).${reference}]`
       : `[Image not sent: model route image limit.${reference} ${needsSmallerCopy
         ? 'Use a smaller copy or crop if more detail is needed.'
         : 'Reopen with ViewImage if needed for the current task.'}]`;

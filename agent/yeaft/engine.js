@@ -2677,7 +2677,7 @@ export class Engine {
     const projectToolImages = createActiveToolImageProjector({ pathForImage: part => viewImagePartPaths.get(part) });
     const previewForRoute = async (part, edge, bytes) => {
       const preview = await makeImagePreview(part, edge, bytes, signal);
-      projectToolImages.copyEvidence(part, preview);
+      projectToolImages.rememberPreview(part, preview);
       return preview;
     };
     let pendingServerOperation = false;
@@ -3172,6 +3172,8 @@ export class Engine {
               && !prepareProviderRequest && !executionPolicy?.finalize && !progressReporting),
             pathForImage: projectToolImages.pathOf,
             preview: previewForRoute,
+            imageKey: projectToolImages.wireKey,
+            isToolEvidence: projectToolImages.isToolEvidence,
           });
           wireMessages = images.messages;
           if (images.omitted || images.previews) this.#trace.log?.('request_image_fit', {
@@ -3924,6 +3926,8 @@ export class Engine {
               const fittedSeed = await fitAnthropicImages([nextRolloverSeed], seedImageLimits, {
                 pathForImage: projectToolImages.pathOf,
                 preview: previewForRoute,
+                imageKey: projectToolImages.wireKey,
+                isToolEvidence: projectToolImages.isToolEvidence,
               });
               [nextRolloverSeed] = fittedSeed.messages;
             }
