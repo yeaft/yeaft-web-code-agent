@@ -375,7 +375,9 @@ function fitContentToBudget(content, tokenBudget) {
     }
 
     if (cost <= remaining) {
-      out.push({ ...part });
+      // Retained binary parts are read-only. Preserve their identity so
+      // provider-only provenance survives a context-budget retry.
+      out.push(BINARY_PART_TYPES.has(type) ? part : { ...part });
       remaining -= cost;
       continue;
     }

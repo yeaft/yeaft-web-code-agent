@@ -129,6 +129,18 @@ async function assertActiveToolImageProjection() {
     expect(imageParts(withFrozenSeed.messages)).toEqual([originalUpload, raw[0].content[1]]);
     const withEditableSeed = await project([seed, call('b'), raw[1]]);
     expect(imageParts(withEditableSeed.messages)).toEqual([originalUpload, raw[1].content[1]]);
+
+    // Simulate the stricter retry window after a provider context overflow.
+    // The last text block gets clipped, but the surviving seed image must
+    // still count as tool evidence once this request establishes a prefix.
+    const tail = 'Long continuation text. '.repeat(15000);
+    const oversizedSeed = { ...seed, content: [...seed.content, { type: 'text', text: tail }] };
+    const retry = fitProviderRequestToContext([oversizedSeed], { contextWindow: 100_000 });
+    expect(retry.messages).toHaveLength(1);
+    expect(retry.messages[0].content.at(-1).text).not.toBe(tail);
+    expect(imageParts(retry.messages)).toEqual([originalUpload, raw[0].content[1]]);
+    const afterRetry = [...project.copySnapshot(retry.messages), call('b'), raw[1]];
+    await expect(project(afterRetry, { frozenLength: 2, canRollover: true })).rejects.toBeInstanceOf(ToolImagePrefixBudgetError);
   });
   if (sharp) await verify('encodes a real multi-megabyte PNG to a decodable preview under 200 KiB', async () => {
     const width = 1800, height = 700;
