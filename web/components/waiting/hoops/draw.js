@@ -21,29 +21,31 @@ const HAZE = 0.16;
 
 const kitsByColors = new WeakMap();
 /**
- * What each player wears, made once per set of stage colours. The shooter is
- * in his team's colours; the three defenders share theirs and differ in
- * build, skin, hair and what is on their legs and feet.
+ * What each player looks like and wears, made once per set of stage colours.
+ * The shooter is in his team's colours, with tights to the ankle; the three
+ * defenders share theirs and differ in skin, hair, number and what is on
+ * their arms, legs and feet.
  */
 function kitsOf(colors) {
   let kits = kitsByColors.get(colors);
   if (kits) return kits;
-  const common = { shade: colors.shade, light: colors.glint, font: colors.font, hair: colors.hair, sole: colors.sole };
-  const tights = blend(colors.shoe, colors.shade, 0.25);
+  const common = { shade: colors.shade, font: colors.font, hair: colors.hair, sole: colors.sole };
+  const under = blend(colors.rival, colors.shade, 0.8);
   const defender = (skin, extra) => createKit({
-    ...common, skin, jersey: colors.rival, shorts: colors.rival, thigh: skin, shin: skin,
+    ...common, skin, jersey: colors.rival, sleeved: true, trim: colors.sock, number: colors.sock,
     sock: colors.sock, shoe: blend(colors.rival, colors.sock, 0.45), ...extra,
   });
   kits = {
     hero: createKit({
-      ...common, skin: colors.skin, jersey: colors.jersey, shorts: colors.jersey, thigh: tights, shin: tights,
-      shoe: colors.shoe, trim: colors.trim, number: colors.number, mark: '30', beard: 0.3,
+      ...common, skin: colors.skin, jersey: colors.jersey, trim: colors.trim, number: colors.number, mark: '30',
+      tights: blend(colors.shoe, colors.shade, 0.25), shoe: colors.shoe, stripe: colors.trim, beard: 0.3,
     }),
-    // Leg sleeves to the ankle.
-    guard: defender(colors.rivalSkin, { shin: colors.sock, beard: 0.35 }),
-    wing: defender(blend(colors.rivalSkin, colors.shade, 0.14), { shoe: blend(colors.rim, colors.shade, 0.2) }),
-    // The big man: long hair and a full beard.
-    big: defender(blend(colors.skin, colors.glint, 0.25), { hairLong: 0.3, beard: 0.7 }),
+    // Close-cropped, with a sleeve on his left arm and tights to the ankle.
+    guard: defender(colors.rivalSkin, { mark: '3', under, tights: colors.sock, sleeve: colors.sock, sleeveSide: 'L', shaved: 0.25, beard: 0.4 }),
+    // A flat top and red shoes.
+    wing: defender(blend(colors.rivalSkin, colors.shade, 0.14), { mark: '6', under, cut: 'flat', shoe: blend(colors.rim, colors.shade, 0.2) }),
+    // The big man: long hair, a full beard and a sleeve over each knee.
+    big: defender(blend(colors.skin, colors.glint, 0.25), { mark: '10', cut: 'long', beard: 0.75, knee: colors.sock }),
   };
   kitsByColors.set(colors, kits);
   return kits;
@@ -106,10 +108,11 @@ function drawCourtShot(ctx, { play, camera, width, colors }) {
     const hero = name === 'hero';
     // Defenders further off sit back a little, so bodies that overlap stay apart to the eye.
     const back = hero ? 0 : Math.min(1, (nearest - depth(name)) / (0.6 * players[name].size));
-    ctx.globalAlpha = (1 - HAZE * back) * players[name].presence;
-    drawPlayer(ctx, camera, players[name], kits[name], hero && ball.held && !ball.hidden ? () => drawBall(ctx, drawn, colors) : undefined);
+    drawPlayer(
+      ctx, camera, players[name], kits[name], (1 - HAZE * back) * players[name].presence,
+      hero && ball.held && !ball.hidden ? on => drawBall(on, drawn, colors) : undefined,
+    );
   }
-  ctx.globalAlpha = 1;
   if (!ball.held && !ball.hidden) drawBall(ctx, drawn, colors);
 }
 
