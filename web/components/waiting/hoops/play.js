@@ -29,7 +29,7 @@ const GRAVITY = 32.2;
 const BOUNCE = 0.78;
 /** The backboard's face, out from the rim's centre (see court.js). */
 const BOARD = 1.25;
-/** How long he holds after the make before walking off, and how long the possession lasts after that. */
+/** How long the possession runs on once the make has settled (he is walking off by then), and the stretch after that which ends in the fade. */
 const PARTY = 1.75;
 const OUTRO = 0.9;
 const WALK = clipInfo('walk');
