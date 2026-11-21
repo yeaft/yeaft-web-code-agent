@@ -5,6 +5,7 @@ import { createActiveToolImageProjector, ToolImagePrefixBudgetError } from '../.
 import { makeModelImagePreview, MODEL_IMAGE_TARGET_BYTES } from '../../../agent/yeaft/model-image-preview.js';
 import { fitProviderRequestToContext } from '../../../agent/yeaft/history-window.js';
 import { trimWireMedia, wireToolImageEvidence } from '../../../agent/yeaft/wire-media.js';
+import { LLMAuthError, LLMRateLimitError, LLMServerError } from '../../../agent/yeaft/llm/adapter.js';
 
 const byteLength = text => Buffer.byteLength(text, 'utf8');
 
@@ -285,6 +286,48 @@ describe('bounded active-context rollover', () => {
     const refused = mockAdapter(8192, () => ({ text: 'partial', stopReason: 'refusal' }));
     await expect(generateContextRollover(options(refused))).rejects.toThrow(/refusal/);
     expect(refused.requests).toHaveLength(1);
+
+    // A gateway 500 or 429 mid-rollover repeats only the failed step: the
+    // finished first chunk is not summarized again, and its result is kept.
+    const delayFor = vi.fn(() => ({ delayMs: 0, reason: 'transient_backoff' }));
+    const onRetry = vi.fn();
+    const flaky = mockAdapter(8192, (request, index) => {
+      if (index === 2) throw new LLMServerError('Anthropic server error (auth=x-api-key): {"error":"Internal Server Error"}', 500);
+      if (index === 3) throw new LLMRateLimitError('Anthropic rate limit', 429, 5);
+      if (index <= 4) return `MAP_${index}`;
+      expect(request.messages[0].content).toContain('MAP_1\nMAP_4');
+      return finalHandoff;
+    });
+    const recovered = await generateContextRollover({ ...options(flaky), messages: [source],
+      maxRequestBodyBytes: cap, retry: { maxRetries: 2, delayFor }, onRetry });
+    expect(recovered.endsWith(finalHandoff)).toBe(true);
+    expect(flaky.requests.map(request => request.messages[0].content.includes('LAST_FRAGMENT')))
+      .toEqual([false, true, true, true, false]);
+    for (const index of [2, 3]) {
+      expect(flaky.requests[index].system).toBe(flaky.requests[1].system);
+      expect(flaky.requests[index].messages).toEqual(flaky.requests[1].messages);
+    }
+    expect(delayFor.mock.calls.map(([error, attempt]) => [error.statusCode, attempt])).toEqual([[500, 1], [429, 2]]);
+    expect(onRetry.mock.calls.map(([notice]) => [notice.type, notice.attempt, notice.maxRetries, notice.error.statusCode]))
+      .toEqual([['retry', 1, 2, 500], ['retry', 2, 2, 429]]);
+
+    // A persistent outage stops at the retry budget and says how many tries it
+    // took; a non-transient rejection, or no retry policy, never repeats.
+    const down = mockAdapter(8192, () => { throw new LLMServerError('Anthropic server error: 502', 502); });
+    await expect(generateContextRollover({ ...options(down), retry: { maxRetries: 2, delayFor } }))
+      .rejects.toMatchObject({ statusCode: 502, rolloverAttempts: 3 });
+    expect(down.requests).toHaveLength(3);
+    await expect(generateContextRollover({ ...options(down), maxCalls: 4, retry: { maxRetries: 5, delayFor } }))
+      .rejects.toThrow('call budget exhausted');
+    expect(down.requests).toHaveLength(7);
+    const denied = mockAdapter(8192, () => { throw new LLMAuthError('invalid credentials', 401); });
+    await expect(generateContextRollover({ ...options(denied), retry: { maxRetries: 2, delayFor } })).rejects.toThrow('invalid credentials');
+    expect(denied.requests).toHaveLength(1);
+    const noPolicy = mockAdapter(8192, () => { throw new LLMServerError('Anthropic server error: 500', 500); });
+    const unretried = await generateContextRollover(options(noPolicy)).catch(error => error);
+    expect(unretried).toBeInstanceOf(LLMServerError);
+    expect(unretried.rolloverAttempts).toBeUndefined();
+    expect(noPolicy.requests).toHaveLength(1);
   });
 
   it('propagates cancellation and bounds a stalled summary call without cancelling the turn', async () => {
@@ -302,19 +345,34 @@ describe('bounded active-context rollover', () => {
     await expect(generateContextRollover({ ...options(adapter), signal: controller.signal, messages: [{ role: 'user', content: 'x'.repeat(20000) }] })).rejects.toMatchObject({ name: 'AbortError' });
     expect(adapter.requests).toHaveLength(1);
 
-    const deadline = new AbortController();
-    const timeout = vi.spyOn(AbortSignal, 'timeout').mockReturnValue(deadline.signal);
+    // Cancelling the turn during a retry backoff ends the wait at once.
+    const waiting = new AbortController();
+    const unavailable = mockAdapter(8192, () => { throw new LLMServerError('Anthropic server error: 503', 503); });
+    await expect(generateContextRollover({ ...options(unavailable), signal: waiting.signal,
+      retry: { maxRetries: 3, delayFor: () => ({ delayMs: 60_000, reason: 'transient_backoff' }) },
+      onRetry: () => waiting.abort() })).rejects.toMatchObject({ name: 'AbortError' });
+    expect(unavailable.requests).toHaveLength(1);
+
+    // A hung request is bounded per attempt and retried like a dropped connection.
+    const deadlines = [];
+    const timeout = vi.spyOn(AbortSignal, 'timeout').mockImplementation(() => {
+      deadlines.push(new AbortController());
+      return deadlines.at(-1).signal;
+    });
     try {
       const stalled = mockAdapter(8192, () => {
+        const deadline = deadlines.at(-1);
         queueMicrotask(() => deadline.abort(new DOMException('deadline', 'TimeoutError')));
         return new Promise(() => {});
       });
       const stillActive = new AbortController();
-      await expect(generateContextRollover({ ...options(stalled), signal: stillActive.signal })).rejects.toThrow('Context rollover summary request timed out');
+      await expect(generateContextRollover({ ...options(stalled), signal: stillActive.signal,
+        retry: { maxRetries: 1, delayFor: () => ({ delayMs: 0, reason: 'transient_backoff' }) } }))
+        .rejects.toMatchObject({ message: 'Context rollover summary request timed out', rolloverAttempts: 2 });
       expect(timeout).toHaveBeenCalledWith(120_000);
       expect(stillActive.signal.aborted).toBe(false);
-      expect(stalled.requests).toHaveLength(1);
-      expect(stalled.requests[0].signal.aborted).toBe(true);
+      expect(stalled.requests).toHaveLength(2);
+      expect(stalled.requests.every(request => request.signal.aborted)).toBe(true);
     } finally {
       timeout.mockRestore();
     }
