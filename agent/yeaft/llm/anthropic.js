@@ -70,6 +70,7 @@ export function applyAnthropicThinking(body, model, effort, effortContext = {}) 
 import { ProviderContextBudgetError, ProviderStateError, createProviderContext, createProviderState, replayProviderState, providerStateBytes, applyAnthropicCaching, stripAnthropicCaching, reasoningUsage, reportedUsageFields, hasUsageCounts, validateAnthropicRequestPrefixes, supportsAnthropicPreservedThinking } from './provider-state.js';
 import { fetchWithPromptCacheFallback } from './prompt-cache.js';
 import { ANTHROPIC_IMAGE_LIMITS, classifyAnthropicImageLimit, validateAnthropicImages } from './anthropic-images.js';
+import { correctImageMediaTypes } from '../image-dimensions.js';
 
 /** Signed continuations cannot recover by compacting after wire settings grow. */
 function validateSignedOutputBudget(body, replayed, contextOutputLimit) {
@@ -179,7 +180,8 @@ function translateUserContent(content) {
       // are meaningful even without a text field. Preserve them verbatim.
       parts.push(part);
     }
-    return parts.length > 0 ? parts : null;
+    // Anthropic rejects an image whose declared type differs from its bytes.
+    return parts.length > 0 ? correctImageMediaTypes(parts) : null;
   }
 
   return null;
@@ -286,7 +288,7 @@ export class AnthropicAdapter extends LLMAdapter {
         const toolResult = {
           type: 'tool_result',
           tool_use_id: msg.toolCallId,
-          content: msg.content,
+          content: correctImageMediaTypes(msg.content),
           is_error: msg.isError || false,
         };
         const prev = result[result.length - 1];

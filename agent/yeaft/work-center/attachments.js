@@ -23,6 +23,7 @@ import {
   MAX_WORK_ITEM_INLINE_BYTES,
 } from './attachment-policy.js';
 import { assertWorkItemAttachmentPlatform } from './attachment-platform.js';
+import { imageMimeFromHeader } from '../image-dimensions.js';
 
 function isInsideOrEqual(parent, child) {
   const rel = relative(parent, child);
@@ -723,7 +724,8 @@ export function buildWorkItemAttachmentContext(workItem, options = {}) {
       if (kind === 'image' && resolved.size <= MAX_WORK_ITEM_INLINE_BYTES) {
         promptParts.push({
           type: 'image',
-          source: { type: 'base64', media_type: attachment.mimeType, data: resolved.buffer.toString('base64') },
+          // The stored type came from the uploader; providers check the bytes.
+          source: { type: 'base64', media_type: imageMimeFromHeader(resolved.buffer) || attachment.mimeType, data: resolved.buffer.toString('base64') },
         });
       } else if (kind === 'pdf' && resolved.size <= MAX_WORK_ITEM_INLINE_BYTES) {
         promptParts.push({

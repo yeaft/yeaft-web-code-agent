@@ -52,12 +52,15 @@ function encodeInChild(input, mime, edge, maxBytes, signal) {
 export async function makeImagePreview(part, maxEdge, maxBase64Bytes, signal) {
   if (signal?.aborted) throw new LLMAbortError();
   const source = part.source;
-  if (active >= 2 || source?.type !== 'base64' || !supported.has(source.media_type) || typeof source.data !== 'string'
+  if (active >= 2 || source?.type !== 'base64' || typeof source.data !== 'string'
       || source.data.length > Math.ceil(MAX_SOURCE_BYTES / 3) * 4) return null;
   const dimensions = imageDimensionsFromBase64(source.data);
   if (!dimensions || dimensions.width * dimensions.height > MAX_SOURCE_PIXELS) return null;
   const input = Buffer.from(source.data, 'base64');
-  if (input.length > MAX_SOURCE_BYTES || imageMimeFromHeader(input) !== source.media_type) return null;
-  const output = await encodeInChild(input, source.media_type, maxEdge, Math.floor(maxBase64Bytes / 4) * 3, signal);
+  // Decode by the sniffed format: a mislabeled original (a PNG named .jpg)
+  // must still get a preview rather than ship its wrong label to the provider.
+  const mime = imageMimeFromHeader(input);
+  if (input.length > MAX_SOURCE_BYTES || !supported.has(mime)) return null;
+  const output = await encodeInChild(input, mime, maxEdge, Math.floor(maxBase64Bytes / 4) * 3, signal);
   return output ? { type: 'image', source: { type: 'base64', media_type: 'image/webp', data: output.toString('base64') } } : null;
 }

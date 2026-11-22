@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { getThinkingCapability, getGeminiThinkingProfile, resolveGeminiEffort, geminiThinkingBudgetForEffort } from '../models.js';
 import { GEMINI_BASE_URL, geminiModelsUrl } from './gemini-endpoint.js';
 import { EFFORT_LEVELS, resolveSubAgentEffort } from '../effort.js';
+import { imageMimeFromBase64 } from '../image-dimensions.js';
 import {
   LLMAdapter, LLMRateLimitError, LLMServerError, LLMToolInputError, LLMContextError,
   LLMAbortError, LLMRequestTooLargeError, serializeModelRequestBody, classifyAuthError, classifyFetchError, retryAfterFromResponse,
@@ -48,13 +49,14 @@ function isCompleteGeminiBatch(parts) {
 }
 
 function imagePart(part) {
+  // The bytes decide: extensions and upload types can be wrong.
   if (part.type === 'image' && part.source?.type === 'base64') {
-    return { inlineData: { mimeType: part.source.media_type, data: part.source.data } };
+    return { inlineData: { mimeType: imageMimeFromBase64(part.source.data) || part.source.media_type, data: part.source.data } };
   }
   const url = part.image_url?.url || (part.source?.type === 'url' ? part.source.url : null);
   if (url) {
     const inline = /^data:([^;,]+);base64,([\s\S]+)$/.exec(url);
-    if (inline) return { inlineData: { mimeType: inline[1], data: inline[2] } };
+    if (inline) return { inlineData: { mimeType: imageMimeFromBase64(inline[2]) || inline[1], data: inline[2] } };
     return { fileData: { fileUri: url, ...(part.mimeType ? { mimeType: part.mimeType } : {}) } };
   }
   if (part.inlineData || part.fileData) return structuredClone(part);

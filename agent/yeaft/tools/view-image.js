@@ -5,7 +5,8 @@
  * loader. Returns a tool result that includes:
  *   - `image`: a base64-encoded data URI suitable for embedding into an
  *     LLM image content block (OpenAI / Anthropic style)
- *   - `media_type`: the canonical MIME (image/png, image/jpeg, ...)
+ *   - `media_type`: the canonical MIME (image/png, image/jpeg, ...), sniffed
+ *     from the file bytes; the extension only gates the supported formats
  *   - `format`, `width`, `height`, `size`, `sizeFormatted`, `path`
  *
  * Safety rules (per PM 乔布斯 PR-B spec + prev-3 product review):
@@ -241,9 +242,18 @@ Path must live under the project directory, the current Session's attachments, o
       modified = fileStat.mtime.toISOString();
     }
 
-    const mediaType = sessionAttachment ? imageMimeFromHeader(buffer) : EXT_TO_MIME[ext];
+    // The extension is only a name. Providers check the declared type against
+    // the bytes, so a PNG saved as .jpg must be labelled image/png.
+    const mediaType = imageMimeFromHeader(buffer);
     if (!mediaType) {
-      return JSON.stringify({ error: 'Unsupported Session image format.', code: 'image_attachment_unavailable', errorEffect: 'none' });
+      return JSON.stringify(sessionAttachment
+        ? { error: 'Unsupported Session image format.', code: 'image_attachment_unavailable', errorEffect: 'none' }
+        : {
+          error: `File content is not a PNG, JPEG, GIF or WebP image, although its extension is ${ext}. Convert it to one of these formats first.`,
+          code: 'image_format_unsupported',
+          errorEffect: 'none',
+          supported: ALLOWED_EXTS,
+        });
     }
     const base64 = buffer.toString('base64');
     const dataUri = `data:${mediaType};base64,${base64}`;
@@ -262,6 +272,9 @@ Path must live under the project directory, the current Session's attachments, o
     if (dimensions) {
       result.width = dimensions.width;
       result.height = dimensions.height;
+    }
+    if (!sessionAttachment && EXT_TO_MIME[ext] !== mediaType) {
+      result.note = `The ${ext} extension does not match the file content; it was read as ${result.format}.`;
     }
 
     return JSON.stringify(result, null, 2);

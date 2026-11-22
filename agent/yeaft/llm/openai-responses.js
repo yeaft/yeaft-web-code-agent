@@ -57,6 +57,7 @@ import {
 
 import { createProviderContext, createProviderState, replayProviderState, providerStateBytes, applyResponsesContinuity, reasoningUsage, reportedUsageFields, hasUsageCounts } from './provider-state.js';
 import { fetchWithPromptCacheFallback } from './prompt-cache.js';
+import { imageMimeFromBase64 } from '../image-dimensions.js';
 
 import { decodeResponsesInput, encodeResponsesInput, projectResponsesTools, responsesArgumentProjection } from './responses-tool-schema.js';
 
@@ -198,7 +199,8 @@ export class OpenAIResponsesAdapter extends LLMAdapter {
           if (src.url) {
             imageUrl = src.url;
           } else if (src.data) {
-            const mt = src.media_type || src.mediaType || 'image/png';
+            // The bytes decide: extensions and upload types can be wrong.
+            const mt = imageMimeFromBase64(src.data) || src.media_type || src.mediaType || 'image/png';
             imageUrl = `data:${mt};base64,${src.data}`;
           } else {
             imageUrl = '';

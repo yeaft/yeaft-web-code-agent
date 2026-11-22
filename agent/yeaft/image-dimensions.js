@@ -1,7 +1,8 @@
 /**
- * image-dimensions.js — read raster image dimensions from header bytes.
+ * image-dimensions.js — read raster image format and dimensions from header bytes.
  *
- * Shared by ViewImage metadata and the provider-request token estimate.
+ * Shared by ViewImage metadata, provider adapters (format labels) and the
+ * provider-request token estimate.
  * Providers bill images by (resized) pixels, so the estimate needs the real
  * frame size, not the encoded byte count. Budget checks run many times per
  * request, so base64 input is read through a random-access window instead of
@@ -92,6 +93,53 @@ export function imageMimeFromHeader(header) {
   return null;
 }
 const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+// 16 base64 characters decode to the 12 bytes every signature above needs.
+const BASE64_SIGNATURE_CHARS = 16;
+
+/**
+ * Sniff the raster format from the start of a base64 payload without decoding
+ * the rest. Returns null for unknown formats or non-canonical base64.
+ *
+ * @param {string} data - Base64 image payload, without a data: URI prefix.
+ * @returns {string|null}
+ */
+export function imageMimeFromBase64(data) {
+  if (typeof data !== 'string' || data.length < BASE64_SIGNATURE_CHARS) return null;
+  const head = data.slice(0, BASE64_SIGNATURE_CHARS);
+  return BASE64_WINDOW.test(head) ? imageMimeFromHeader(Buffer.from(head, 'base64')) : null;
+}
+
+/**
+ * Providers check the declared type against the bytes; Anthropic rejects a
+ * mismatch with HTTP 400 and the whole turn stops. File extensions, browser
+ * upload types and attachment metadata are hints, so label an inline image by
+ * its sniffed format. Unknown bytes keep their declared type. Tool-result
+ * blocks are checked one level down. Unchanged input is returned as-is, never
+ * mutated.
+ *
+ * @param {Array<object>|string|null|undefined} content - Message content.
+ * @returns {Array<object>|string|null|undefined}
+ */
+export function correctImageMediaTypes(content) {
+  if (!Array.isArray(content)) return content;
+  let corrected = null;
+  for (let i = 0; i < content.length; i++) {
+    const part = content[i];
+    let next = part;
+    if (part?.type === 'image' && part.source?.type === 'base64') {
+      const actual = imageMimeFromBase64(part.source.data);
+      if (actual && actual !== part.source.media_type) {
+        const { mediaType, ...source } = part.source;
+        next = { ...part, source: { ...source, media_type: actual } };
+      }
+    } else if (typeof part?.type === 'string' && part.type.endsWith('tool_result') && Array.isArray(part.content)) {
+      const nested = correctImageMediaTypes(part.content);
+      if (nested !== part.content) next = { ...part, content: nested };
+    }
+    if (next !== part) (corrected ??= content.slice())[i] = next;
+  }
+  return corrected ?? content;
+}
 
 function readDimensions(read) {
   const signature = read(0, 12);
