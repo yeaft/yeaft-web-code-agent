@@ -85,7 +85,9 @@ function rimShot(play, local) {
   } else {
     // Continue the incoming trajectory, then let the net brake the lateral motion.
     const replay = play.id === 'replay';
-    const drift = replay ? 0.5 * sinceMake : play.entryVX * (1 - Math.exp(-12 * sinceMake)) / 12;
+    const netRoom = 0.36; // rim radii: lateral momentum is arrested inside the mouth of the net
+    const drift = replay ? 0.5 * sinceMake
+      : Math.sign(play.entryVX) * netRoom * (1 - Math.exp(-Math.abs(play.entryVX) * sinceMake / netRoom));
     const vertical = replay ? 6.5 : play.entryVY;
     ball = { x: drift, y: vertical * sinceMake + 7 * sinceMake ** 2,
       spin: replay ? -(RIM_AT + sinceMake) * 9 : play.spinAt(play.impact + pastMake * play.approach) };

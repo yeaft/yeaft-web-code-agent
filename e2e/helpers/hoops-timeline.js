@@ -32,7 +32,13 @@ export async function expectHoopsTimeline() {
   last = undefined;
   for (const frame of frames) {
     const court = frame.shot === 'court' && frame.id !== 'replay';
-    if (!court) { last = undefined; continue; }
+    if (!court) {
+      if (frame.id !== 'replay' && frame.beat === 'swish' && frame.ball.y < 2) {
+        expect(Math.abs(frame.ball.x)).toBeLessThan(0.5);
+      }
+      last = undefined;
+      continue;
+    }
     const { players, ball, view } = frame.capture;
     expect(Object.keys(players)).toContain('guard');
     const ballXY = [ball.x, ball.y];
