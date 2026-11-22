@@ -16,6 +16,7 @@ import { persistYeaftAttachments } from '../../../agent/yeaft/attachments.js';
 import { providerProjectionDigest } from '../../../agent/yeaft/llm/provider-state.js';
 import { defineTool } from '../../../agent/yeaft/tools/types.js';
 import { ToolRegistry } from '../../../agent/yeaft/tools/registry.js';
+import viewImage from '../../../agent/yeaft/tools/view-image.js';
 import { AnthropicAdapter } from '../../../agent/yeaft/llm/anthropic.js';
 import { GeminiAdapter } from '../../../agent/yeaft/llm/gemini.js';
 import { OpenAIResponsesAdapter } from '../../../agent/yeaft/llm/openai-responses.js';
@@ -616,6 +617,69 @@ describe('Engine', () => {
         rmSync(dir, { recursive: true, force: true });
       }
     }
+
+    it('sends a PNG screenshot saved as .jpg with its real type, previewed when large, instead of failing the turn', async () => {
+      const dir = mkdtempSync(join(tmpdir(), 'yeaft-misnamed-image-'));
+      const requests = [], files = [], toolRuns = [];
+      const usage = { input_tokens: 1000, output_tokens: 10, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 };
+      const imagesIn = content => !Array.isArray(content) ? []
+        : content.flatMap(block => block.type === 'image' ? [block.source] : imagesIn(block.content));
+      // The gateway's own check, independent of the Agent's sniffer.
+      const sniff = data => {
+        const head = Buffer.from(data.slice(0, 16), 'base64');
+        if (head[0] === 0x89 && head[1] === 0x50) return 'image/png';
+        if (head[0] === 0xff && head[1] === 0xd8) return 'image/jpeg';
+        return head.toString('latin1', 8, 12) === 'WEBP' ? 'image/webp' : 'unknown';
+      };
+      const pixel = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jC1sAAAAASUVORK5CYII=', 'base64');
+      writeFileSync(join(dir, 'pixel.jpg'), pixel);
+      files.push('pixel.jpg');
+      let sharp;
+      try { sharp = createRequire(new URL('../../../agent/package.json', import.meta.url))('sharp'); }
+      catch (err) {
+        if (err.code !== 'MODULE_NOT_FOUND' && !/Could not load the .sharp. module/.test(err.message)) throw err;
+      }
+      if (sharp) {
+        // Uncompressed, so the original exceeds the 200 KiB model-image target.
+        const large = await sharp({ create: { width: 600, height: 400, channels: 3, background: '#101820' } })
+          .png({ compressionLevel: 0 }).toBuffer();
+        expect(large.length).toBeGreaterThan(200 * 1024);
+        writeFileSync(join(dir, 'detail-dark-before.jpg'), large);
+        files.push('detail-dark-before.jpg');
+      }
+      try {
+        vi.stubGlobal('fetch', vi.fn(async (_url, init) => {
+          const body = anthropicWireWithoutCache(init);
+          requests.push(body);
+          const wrong = body.messages.flatMap(row => imagesIn(row.content)).find(source => source.media_type !== sniff(source.data));
+          if (wrong) {
+            return new Response(JSON.stringify({ type: 'error', error: { type: 'invalid_request_error',
+              message: `The image was specified using the ${wrong.media_type} media type, but the image appears to be a ${sniff(wrong.data)} image` } }),
+            { status: 400, headers: { 'content-type': 'application/json' } });
+          }
+          const step = requests.length - 1;
+          return response(`misnamed-${step}`, step < files.length ? 'ViewImage' : undefined,
+            { file_path: files[step] }, 'claude-opus-4.8', usage);
+        }));
+        const engine = new Engine({ adapter: router('claude-opus-4.8'), trace, yeaftDir: dir,
+          config: { model: 'gateway/claude-opus-4.8', maxOutputTokens: 1024, projectDocMaxBytes: 0 } });
+        engine.registerTool({ name: 'ViewImage', description: 'Read image evidence', parameters: { type: 'object' },
+          execute: input => { toolRuns.push(input.file_path); return viewImage.execute(input, { cwd: dir }); } });
+        const events = [];
+        for await (const event of engine.query({ prompt: 'Inspect the screenshots', sessionId: 'misnamed-image' })) events.push(event);
+        expect(events.filter(event => event.type === 'error')).toEqual([]);
+        expect(events.filter(event => event.type === 'turn_end' && event.terminal)).toEqual([expect.objectContaining({ stopReason: 'end_turn' })]);
+        expect(toolRuns).toEqual(files);
+        expect(requests).toHaveLength(files.length + 1);
+        const sent = requests.at(-1).messages.flatMap(row => imagesIn(row.content));
+        expect(sent.map(source => source.media_type)).toEqual(sharp ? ['image/png', 'image/webp'] : ['image/png']);
+        if (sharp) expect(JSON.stringify(requests.at(-1).messages)).toContain('detail-dark-before.jpg');
+      } finally {
+        vi.unstubAllGlobals();
+        await closeConversationHistoryIndexes();
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
 
     it.each(['provider', 'abort', 'append'])('rolls signed context into a fresh conversation without tool replay: %s', async trigger => {
       if (trigger === 'provider') {

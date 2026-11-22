@@ -151,6 +151,47 @@ describe('Anthropic evolving Messages protocol', () => {
     }
   });
 
+  it('labels inline images by their bytes for every provider and still previews a mislabeled original', async () => {
+    // Anthropic answers a PNG declared as image/jpeg with HTTP 400 and the turn stops.
+    const pngData = Buffer.from('89504e470d0a1a0a0000000d494844520000000100000001', 'hex').toString('base64');
+    const mislabeled = { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: pngData } };
+    const unknown = { type: 'image', source: { type: 'base64', media_type: 'image/gif', data: Buffer.from('no known signature here').toString('base64') } };
+    const userRow = { role: 'user', content: [{ type: 'text', text: 'compare' }, mislabeled, unknown] };
+    const messages = [userRow,
+      { role: 'assistant', content: '', toolCalls: [{ id: 'view', name: 'ViewImage', input: {} }] },
+      { role: 'tool', toolCallId: 'view', content: [{ type: 'text', text: 'detail-dark-before.jpg' }, mislabeled] }];
+    const snapshot = structuredClone(messages);
+    const fetch = vi.fn(async () => new Response(null, { status: 413 }));
+    vi.stubGlobal('fetch', fetch);
+    const sent = async (adapter, model, rows) => {
+      await expect(adapter.call({ ...params, model, messages: rows, providerContext: undefined }))
+        .rejects.toBeInstanceOf(LLMRequestTooLargeError);
+      return JSON.parse(fetch.mock.lastCall[1].body);
+    };
+    const anthropic = await sent(new AnthropicAdapter({ apiKey: 'synthetic' }), params.model, messages);
+    expect(anthropic.messages[0].content.slice(1).map(part => part.source.media_type)).toEqual(['image/png', 'image/gif']);
+    expect(anthropic.messages[2].content[0]).toMatchObject({ type: 'tool_result',
+      content: [{ type: 'text' }, { type: 'image', source: { type: 'base64', media_type: 'image/png', data: pngData } }] });
+    const openai = JSON.stringify(await sent(new OpenAIResponsesAdapter({ apiKey: 'synthetic' }), 'gpt-5', messages));
+    expect(openai.split(`data:image/png;base64,${pngData}`)).toHaveLength(3);
+    expect(openai).not.toContain('data:image/jpeg');
+    const gemini = JSON.stringify(await sent(new GeminiAdapter({ apiKey: 'synthetic' }), 'gemini-3-flash-preview', [userRow]));
+    expect(gemini).toContain(JSON.stringify({ inlineData: { mimeType: 'image/png', data: pngData } }));
+    expect(gemini).not.toContain('image/jpeg');
+    expect(messages).toEqual(snapshot);
+
+    const require = createRequire(new URL('../../../agent/package.json', import.meta.url));
+    let sharp;
+    try { sharp = require('sharp'); } catch { /* Optional encoder. */ }
+    if (sharp) {
+      const data = await sharp({ create: { width: 2643, height: 24, channels: 3, background: '#0b1622' } }).png().toBuffer();
+      const preview = await makeImagePreview({ type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: data.toString('base64') } },
+        1600, 200 * 1024);
+      expect(preview?.source.media_type).toBe('image/webp');
+      expect(imageDimensionsFromBase64(preview.source.data)).toMatchObject({ width: 1600 });
+    }
+  });
+
 });
 
 describe('Session debug trace deletion', () => {

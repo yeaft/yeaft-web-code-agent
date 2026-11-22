@@ -207,7 +207,8 @@ export function persistYeaftAttachments(files, opts = {}) {
             // user-content blocks verbatim (no field rename). The OpenAI
             // Responses adapter accepts both forms (see
             // `openai-responses.js#translateUserContent`).
-            media_type: file.mimeType || 'image/png',
+            // Browsers derive the type from the file name; trust the bytes.
+            media_type: imageMimeFromHeader(buffer) || file.mimeType || 'image/png',
             data: file.data,
           },
         });

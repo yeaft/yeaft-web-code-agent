@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node
 import { tmpdir } from 'node:os';
 import { dirname, join, sep } from 'node:path';
 import viewImage from '../../../../agent/yeaft/tools/view-image.js';
-import { persistedAttachmentPreviewPayload, referencePersistedAttachmentHistory } from '../../../../agent/yeaft/attachments.js';
+import { persistYeaftAttachments, persistedAttachmentPreviewPayload, referencePersistedAttachmentHistory } from '../../../../agent/yeaft/attachments.js';
 import { imageDimensionsFromBase64 } from '../../../../agent/yeaft/image-dimensions.js';
 import { estimateContentPartTokens } from '../../../../agent/yeaft/history-window.js';
 
@@ -74,6 +74,31 @@ describe('ViewImage owned Session attachments', () => {
     symlinkSync(dirname(other), join(dirname(own), 'linked'));
     expect(await read(join(dirname(own), 'linked', 'pixel.png'))).toHaveProperty('error');
     expect(persistedAttachmentPreviewPayload({ path: other, isImage: true }, ctx)).toBeNull();
+  });
+
+  it('labels project images and uploads by their bytes, not their file name, and refuses non-image content', async () => {
+    const { ctx, read } = fixture();
+    // A PNG screenshot saved as .jpg: Anthropic rejects an image/jpeg label.
+    const misnamed = join(ctx.cwd, 'detail-dark-before.jpg');
+    writeFileSync(misnamed, png);
+    const result = await read(misnamed);
+    expect(result).toMatchObject({ media_type: 'image/png', format: 'PNG', width: 1, height: 1 });
+    expect(result.image.startsWith('data:image/png;base64,')).toBe(true);
+    expect(result.note).toContain('.jpg');
+    const named = join(ctx.cwd, 'pixel.png');
+    writeFileSync(named, png);
+    expect(await read(named)).not.toHaveProperty('note');
+    const vector = join(ctx.cwd, 'vector.png');
+    writeFileSync(vector, '<svg xmlns="http://www.w3.org/2000/svg"/>');
+    const refused = await read(vector);
+    expect(refused).toMatchObject({ code: 'image_format_unsupported', errorEffect: 'none' });
+    expect(refused).not.toHaveProperty('image');
+    // Browsers type an upload by its name; the model-facing part follows the bytes.
+    const upload = persistYeaftAttachments([
+      { name: 'shot.jpg', mimeType: 'image/jpeg', data: png.toString('base64'), isImage: true },
+    ], ctx);
+    expect(upload.failed).toEqual([]);
+    expect(upload.promptParts[0].source.media_type).toBe('image/png');
   });
 
 });
