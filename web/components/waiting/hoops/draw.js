@@ -6,9 +6,8 @@
  */
 import { blend, rgb } from '../stage.js';
 import { drawBall, drawBallShadow } from './ball.js';
-import { drawBoard, drawFloor, drawRim } from './court.js';
+import { drawBoard, drawCourtBasket, drawFloor, drawRim } from './court.js';
 import { createKit, drawPlayer, drawPlayerShadow } from './player.js';
-import { PLAYERS } from './tracks.js';
 
 const TAU = Math.PI * 2;
 /** The ball's radius as a fraction of the shooter's standing height: it is as far away as he is. */
@@ -81,14 +80,16 @@ function drawMarks(ctx, play, camera, colors, core) {
 function drawCourtShot(ctx, { play, camera, width, colors }) {
   const { players, ball } = play.capture;
   const kits = kitsOf(colors);
-  drawFloor(ctx, camera, colors, width);
+  const staged = play.id !== 'replay';
+  drawFloor(ctx, camera, colors, width, staged);
+  if (staged) drawCourtBasket(ctx, camera, colors, width);
 
   const radius = players.hero.size * BALL_TO_HEIGHT * camera.k;
   const drawn = {
     x: camera.x(ball.x), y: camera.y(ball.y), radius, spin: play.spin,
     trail: [play.trail[0] * camera.k, play.trail[1] * camera.k],
   };
-  const seen = PLAYERS.filter(name => players[name].presence > 0.01);
+  const seen = Object.keys(players).filter(name => players[name].presence > 0.01);
   for (const name of seen) {
     ctx.globalAlpha = players[name].presence;
     drawPlayerShadow(ctx, camera, players[name], colors.shade);
@@ -147,7 +148,7 @@ export function drawHoopsFrame(ctx, frame) {
   } else {
     if (backdrop) {
       backdrop.lineCap = 'round';
-      drawFloor(backdrop, camera, colors, width);
+      drawFloor(backdrop, camera, colors, width, play.id !== 'replay');
     }
     drawCourtShot(ctx, frame);
   }
