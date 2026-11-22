@@ -618,7 +618,9 @@ describe('Engine', () => {
       }
     }
 
-    it('sends a PNG screenshot saved as .jpg with its real type, previewed when large, instead of failing the turn', async () => {
+    // A PNG screenshot saved as .jpg is sent with its real type (previewed when
+    // large) instead of failing the turn on the gateway's type check.
+    async function verifyMisnamedScreenshot() {
       const dir = mkdtempSync(join(tmpdir(), 'yeaft-misnamed-image-'));
       const requests = [], files = [], toolRuns = [];
       const usage = { input_tokens: 1000, output_tokens: 10, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 };
@@ -679,12 +681,13 @@ describe('Engine', () => {
         await closeConversationHistoryIndexes();
         rmSync(dir, { recursive: true, force: true });
       }
-    });
+    }
 
     it.each(['provider', 'abort', 'append'])('rolls signed context into a fresh conversation without tool replay: %s', async trigger => {
       if (trigger === 'provider') {
         await assertLongImageLoop();
         await verifyRoutePreviewDeduplication();
+        await verifyMisnamedScreenshot();
         for (const mode of ['unsigned', 'signed', 'stricter-gateway']) await verifyImageLimitContinuation(mode);
       }
       const modes = ['token', 'http413', 'http413-token-fallback', 'http413-summary-retry', 'http413-multilingual-summary', 'http413-summary-5xx', 'http413-summary-down'];

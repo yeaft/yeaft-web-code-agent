@@ -135,7 +135,11 @@ describe('Anthropic evolving Messages protocol', () => {
     const require = createRequire(new URL('../../../agent/package.json', import.meta.url));
     // The encoder is optional; test the real conversion wherever it is installed.
     let sharp;
-    try { sharp = require('sharp'); } catch { /* Unsupported platform. */ }
+    try { sharp = require('sharp'); }
+    catch (err) {
+      // Missing is fine; a broken install must not silently skip the checks.
+      if (err.code !== 'MODULE_NOT_FOUND' && !/Could not load the .sharp. module/.test(err.message)) throw err;
+    }
     if (sharp) {
       const data = await sharp({ create: { width: 9000, height: 24, channels: 3, background: '#112233' } }).png().toBuffer();
       const original = { ...small, source: { ...small.source, data: data.toString('base64') } };
@@ -149,10 +153,9 @@ describe('Anthropic evolving Messages protocol', () => {
       expect(imageDimensionsFromBase64(image.source.data)).toMatchObject({ width: 8000 });
       expect(imageDimensionsFromBase64(original.source.data)).toMatchObject({ width: 9000 });
     }
-  });
 
-  it('labels inline images by their bytes for every provider and still previews a mislabeled original', async () => {
-    // Anthropic answers a PNG declared as image/jpeg with HTTP 400 and the turn stops.
+    // Every provider gets images labelled by their bytes: Anthropic answers a
+    // PNG declared as image/jpeg with HTTP 400 and the turn stops.
     const pngData = Buffer.from('89504e470d0a1a0a0000000d494844520000000100000001', 'hex').toString('base64');
     const mislabeled = { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: pngData } };
     const unknown = { type: 'image', source: { type: 'base64', media_type: 'image/gif', data: Buffer.from('no known signature here').toString('base64') } };
@@ -161,8 +164,7 @@ describe('Anthropic evolving Messages protocol', () => {
       { role: 'assistant', content: '', toolCalls: [{ id: 'view', name: 'ViewImage', input: {} }] },
       { role: 'tool', toolCallId: 'view', content: [{ type: 'text', text: 'detail-dark-before.jpg' }, mislabeled] }];
     const snapshot = structuredClone(messages);
-    const fetch = vi.fn(async () => new Response(null, { status: 413 }));
-    vi.stubGlobal('fetch', fetch);
+    fetch.mockReset().mockImplementation(async () => new Response(null, { status: 413 }));
     const sent = async (adapter, model, rows) => {
       await expect(adapter.call({ ...params, model, messages: rows, providerContext: undefined }))
         .rejects.toBeInstanceOf(LLMRequestTooLargeError);
@@ -180,10 +182,8 @@ describe('Anthropic evolving Messages protocol', () => {
     expect(gemini).not.toContain('image/jpeg');
     expect(messages).toEqual(snapshot);
 
-    const require = createRequire(new URL('../../../agent/package.json', import.meta.url));
-    let sharp;
-    try { sharp = require('sharp'); } catch { /* Optional encoder. */ }
     if (sharp) {
+      // A mislabeled original is decoded by its real format and still previewed.
       const data = await sharp({ create: { width: 2643, height: 24, channels: 3, background: '#0b1622' } }).png().toBuffer();
       const preview = await makeImagePreview({ type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: data.toString('base64') } },
         1600, 200 * 1024);

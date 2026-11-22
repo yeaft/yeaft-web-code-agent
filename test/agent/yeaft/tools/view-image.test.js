@@ -74,11 +74,9 @@ describe('ViewImage owned Session attachments', () => {
     symlinkSync(dirname(other), join(dirname(own), 'linked'));
     expect(await read(join(dirname(own), 'linked', 'pixel.png'))).toHaveProperty('error');
     expect(persistedAttachmentPreviewPayload({ path: other, isImage: true }, ctx)).toBeNull();
-  });
 
-  it('labels project images and uploads by their bytes, not their file name, and refuses non-image content', async () => {
-    const { ctx, read } = fixture();
-    // A PNG screenshot saved as .jpg: Anthropic rejects an image/jpeg label.
+    // Project images and uploads are labelled by their bytes, not their file
+    // name. A PNG screenshot saved as .jpg: Anthropic rejects an image/jpeg label.
     const misnamed = join(ctx.cwd, 'detail-dark-before.jpg');
     writeFileSync(misnamed, png);
     const result = await read(misnamed);
