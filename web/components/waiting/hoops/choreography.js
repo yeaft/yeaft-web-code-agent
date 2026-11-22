@@ -158,9 +158,9 @@ export function choreograph(play) {
     turns.push(turns[i - 1] + (a.side && b.side ? 0 : (b.at - a.at) * 0.009));
   }
   const spinAt = ms => {
-    if (ms >= play.fire) return turns.at(-1) - 0.0105 * (ms - play.fire);
+    if (ms >= play.fire) return turns[turns.length - 1] - 0.0105 * (ms - play.fire);
     const next = handle.findIndex(key => key.at > ms);
-    if (next < 0) return turns.at(-1);
+    if (next < 0) return turns[turns.length - 1];
     const previous = handle[next - 1].at;
     return mix(turns[next - 1], turns[next], (ms - previous) / (handle[next].at - previous));
   };

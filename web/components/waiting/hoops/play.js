@@ -11,7 +11,7 @@ const RIM_MS = 1500;
 const RIM_PACE = 1.25;
 const RIM_AT = 0.557;
 const REPLAY_MAKE_MS = (RIM_AT / RIM_PACE) * RIM_MS;
-const CUT_MAKE_MS = 380;
+const CLOSEUP_MAKE_MS = 240;
 
 const REPLAY_BEATS = [[0, 'handle'], [68, 'hesitation'], [84, 'escape'], [118, 'gather'], [137, 'rise'], [RELEASE_FRAME, 'release']];
 const asMs = frame => (frame / CAPTURE_FPS) * 1000;
@@ -42,7 +42,19 @@ const replay = {
 
 let totalMs = 0;
 let totalPoints = 0;
-const playlist = [pullup, floater, layup].map(spec => ({ ...choreograph(spec), make: CUT_MAKE_MS })).concat(replay).map(play => {
+const staged = [pullup, floater, layup].map(spec => {
+  const play = choreograph(spec);
+  const impact = play.targets[play.targets.length - 1][0];
+  const previous = play.flight(impact - 1);
+  // The opening play keeps real-time release-to-net pacing across the cut.
+  const make = play.id === 'pullup' ? impact - play.duration : CLOSEUP_MAKE_MS;
+  const approach = (impact - play.duration) / make;
+  const scale = approach * RIM_MS / (RIM_PACE * HOOP_RADIUS);
+  return { ...play, make, impact, approach,
+    entryVX: (HOOP[0] - previous.x) * scale,
+    entryVY: (HOOP[1] - previous.y) * scale };
+});
+const playlist = [...staged, replay].map(play => {
   const entry = { ...play, start: totalMs, points: totalPoints };
   totalMs += play.duration + RIM_MS;
   totalPoints += play.worth;
@@ -51,7 +63,7 @@ const playlist = [pullup, floater, layup].map(spec => ({ ...choreograph(spec), m
 export const HOOPS_LOOP_MS = totalMs;
 
 /** A clean two-foot gather, ball in hand, held when the connection stalls. */
-export const HOOPS_POSTER_MS = 2120;
+export const HOOPS_POSTER_MS = pullup.stills[4];
 /** The key frames, including a made basket for each play, under reduced motion. */
 export const HOOPS_STILLS = playlist.flatMap(play => [
   ...play.stills,
@@ -60,20 +72,25 @@ export const HOOPS_STILLS = playlist.flatMap(play => [
 
 function rimShot(play, local) {
   const ms = local - play.duration;
-  const sinceMake = ((ms - play.make) / RIM_MS) * RIM_PACE;
+  const pastMake = local - (play.duration + play.make);
+  const sinceMake = (pastMake / RIM_MS) * RIM_PACE;
   let ball;
-  if (play.id === 'replay' && ms < play.make) {
+  if (play.id === 'replay' && pastMake < 0) {
     const at = sinceMake + RIM_AT;
     ball = { x: -2.6 + (2.6 / RIM_AT) * at, y: -4.4 + 4 * at + 7 * at * at, spin: -at * 9 };
-  } else if (ms < play.make) {
-    const impact = play.targets.at(-1)[0];
-    const at = play.duration + (impact - play.duration) * (ms / play.make);
+  } else if (pastMake < 0) {
+    const at = play.duration + ms * play.approach;
     const { x, y } = play.flight(at);
     ball = { x: (x - HOOP[0]) / HOOP_RADIUS, y: (y - HOOP[1]) / HOOP_RADIUS, spin: play.spinAt(at) };
   } else {
-    ball = { x: 0.5 * sinceMake, y: 6.5 * sinceMake + 7 * sinceMake ** 2, spin: (play.id === 'replay' ? -RIM_AT * 9 : play.spinAt(play.targets.at(-1)[0])) - sinceMake * 9 };
+    // Continue the incoming trajectory, then let the net brake the lateral motion.
+    const replay = play.id === 'replay';
+    const drift = replay ? 0.5 * sinceMake : play.entryVX * (1 - Math.exp(-12 * sinceMake)) / 12;
+    const vertical = replay ? 6.5 : play.entryVY;
+    ball = { x: drift, y: vertical * sinceMake + 7 * sinceMake ** 2,
+      spin: replay ? -(RIM_AT + sinceMake) * 9 : play.spinAt(play.impact + pastMake * play.approach) };
   }
-  return { shot: 'rim', beat: ms >= play.make ? 'swish' : 'drop', ball, sinceMake,
+  return { shot: 'rim', beat: pastMake >= 0 ? 'swish' : 'drop', ball, sinceMake,
     pop: sinceMake < 0 ? -1 : Math.min(1, sinceMake / 0.62) };
 }
 
@@ -82,11 +99,15 @@ export function resolveHoopsPlay(elapsedMs) {
   const time = Math.max(0, elapsedMs);
   const loop = Math.floor(time / HOOPS_LOOP_MS);
   const at = time - loop * HOOPS_LOOP_MS;
-  const play = playlist.findLast(entry => at >= entry.start);
+  let index = playlist.length - 1;
+  while (index > 0 && at < playlist[index].start) index -= 1;
+  const play = playlist[index];
   const local = at - play.start;
   const made = local >= play.duration + play.make;
   const base = { id: play.id, worth: play.worth, points: loop * totalPoints + play.points + (made ? play.worth : 0) };
   if (local >= play.duration) return { ...base, ...rimShot(play, local) };
-  const beat = play.beats.findLast(([from]) => local >= from)[1];
+  let next = play.beats.length - 1;
+  while (next > 0 && local < play.beats[next][0]) next -= 1;
+  const beat = play.beats[next][1];
   return { ...base, shot: 'court', beat, ...play.sample(local) };
 }

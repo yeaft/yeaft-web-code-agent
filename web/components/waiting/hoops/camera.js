@@ -21,9 +21,12 @@ const RIM_CENTRE = [0.4, 0.4];
  */
 export function resolveHoopsCamera(play, core) {
   if (play.shot === 'rim') {
-    const k = core.height * RIM_SCALE;
-    const cx = core.x + core.width * RIM_CENTRE[0];
-    const cy = core.y + core.height * RIM_CENTRE[1];
+    // The new angles cut tighter around the incoming ball, near the
+    // right-hand basket already established in the floor shot.
+    const recorded = play.id === 'replay';
+    const k = core.height * (recorded ? RIM_SCALE : 0.135);
+    const cx = core.x + core.width * (recorded ? RIM_CENTRE[0] : 0.64);
+    const cy = core.y + core.height * (recorded ? RIM_CENTRE[1] : 0.49);
     return { shot: 'rim', k, x: x => cx + x * k, y: y => cy + y * k, worldX: px => (px - cx) / k };
   }
   const { view } = play.capture;

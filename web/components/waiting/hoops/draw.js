@@ -148,7 +148,9 @@ export function drawHoopsFrame(ctx, frame) {
   } else {
     if (backdrop) {
       backdrop.lineCap = 'round';
-      drawFloor(backdrop, camera, colors, width, play.id !== 'replay');
+      const staged = play.id !== 'replay';
+      drawFloor(backdrop, camera, colors, width, staged);
+      if (staged) drawCourtBasket(backdrop, camera, colors, width);
     }
     drawCourtShot(ctx, frame);
   }
