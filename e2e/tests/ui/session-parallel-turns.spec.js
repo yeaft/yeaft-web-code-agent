@@ -7,6 +7,7 @@ import { ConversationStore } from '../../../agent/yeaft/conversation/persist.js'
 import { createSessionFromSpec } from '../../../agent/yeaft/sessions/session-crud.js';
 import { expect } from '@playwright/test';
 import { test } from '../../fixtures/test-server.js';
+import { expectHoopsTimeline } from '../../helpers/hoops-timeline.js';
 import { OTHER_SESSION, SESSION, pane, sessionTurnsFixture } from '../../helpers/session-turns.js';
 
 // Run the actual browser modules, not component stubs or injected message arrays.
@@ -64,6 +65,7 @@ test('one native Session turn shows its waiting indicator, retains the ordinary 
   await expect(dots).toHaveCount(0);
   await expect(hoops).toHaveAttribute('data-motion', 'live');
   await expect.poll(() => drawnPixels(hoops)).toBeGreaterThan(200);
+  await expectHoopsTimeline();
   await page.clock.setSystemTime(Date.now());
   // Measure against the conversation's actual body text, including the
   // animation's vertical padding in the five-line budget.

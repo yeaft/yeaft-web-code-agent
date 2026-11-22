@@ -4,34 +4,39 @@
  * line, where the capture has them) and, for the make, the basket from below.
  */
 import { rgb } from '../stage.js';
+import { HOOP, HOOP_RADIUS } from './choreography.js';
 import { ARC, FLOOR_EDGE } from './tracks.js';
 
 const TAU = Math.PI * 2;
+const STAGED_ARC = [236, 0, 272, 57, -0.02];
+const STAGED_EDGE = [-36, 0.008];
+const EMPTY_NET = { sinceMake: -1, ball: { y: -99 } };
 
 /**
  * Floor lines across the whole canvas.
  * @param camera From `resolveHoopsCamera` on the court.
  * @param {number} width Canvas width in CSS px.
  */
-export function drawFloor(ctx, camera, colors, width) {
+export function drawFloor(ctx, camera, colors, width, staged) {
+  const edge = staged ? STAGED_EDGE : FLOOR_EDGE;
   const left = camera.worldX(0);
   const right = camera.worldX(width);
-  const thin = Math.max(0.6, 13 * camera.k);
+  const thin = Math.max(0.6, (staged ? 1.4 : 13) * camera.k);
 
   // Where the floor ends and the stands begin.
   ctx.lineWidth = thin;
   ctx.strokeStyle = rgb(colors.line);
   ctx.beginPath();
-  ctx.moveTo(0, camera.y(FLOOR_EDGE[0] + FLOOR_EDGE[1] * left));
-  ctx.lineTo(width, camera.y(FLOOR_EDGE[0] + FLOOR_EDGE[1] * right));
+  ctx.moveTo(0, camera.y(edge[0] + edge[1] * left));
+  ctx.lineTo(width, camera.y(edge[0] + edge[1] * right));
   ctx.stroke();
 
   // The three-point line: a circle on the floor, seen nearly edge-on. Its top
   // is at the left; both sides run off to the right, toward the basket.
-  const [cx, cy, a, b, shear] = ARC;
+  const [cx, cy, a, b, shear] = staged ? STAGED_ARC : ARC;
   if (right <= cx - a) return;
   const reach = Math.acos(Math.max(-1, Math.min(1, (cx - right) / a)));
-  ctx.lineWidth = Math.max(0.8, 18 * camera.k);
+  ctx.lineWidth = Math.max(0.8, (staged ? 1.7 : 18) * camera.k);
   ctx.strokeStyle = rgb(colors.arc);
   ctx.beginPath();
   const steps = 56;
@@ -43,6 +48,28 @@ export function drawFloor(ctx, camera, colors, width) {
     if (i === 0) ctx.moveTo(camera.x(x), camera.y(y)); else ctx.lineTo(camera.x(x), camera.y(y));
   }
   ctx.stroke();
+}
+
+/** The court view uses the same net at regulation height, seen side-on. */
+export function drawCourtBasket(ctx, camera, colors, width) {
+  const x = HOOP[0];
+  const y = HOOP[1];
+  if (camera.x(x - HOOP_RADIUS) > width || camera.x(x + 54) < 0) return;
+  const netCamera = { k: HOOP_RADIUS * camera.k, x: n => camera.x(x + n * HOOP_RADIUS), y: n => camera.y(y + n * HOOP_RADIUS) };
+  polygon(ctx, camera, [[300, -162], [338, -170], [338, -210], [300, -202]]);
+  ctx.fillStyle = rgb(colors.rig, 0.12);
+  ctx.fill();
+  ctx.strokeStyle = rgb(colors.rig);
+  ctx.lineWidth = Math.max(0.7, 1.4 * camera.k);
+  ctx.stroke();
+  polygon(ctx, camera, [[302, -167], [317, -170], [317, -185], [302, -182]]);
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.moveTo(camera.x(x + 7), camera.y(y - 2));
+  ctx.lineTo(camera.x(301), camera.y(-163));
+  ctx.stroke();
+  drawRim(ctx, netCamera, colors, EMPTY_NET, 'far');
+  drawRim(ctx, netCamera, colors, EMPTY_NET, 'near');
 }
 
 /** The basket from below, in rim radii from the centre of the rim. */
