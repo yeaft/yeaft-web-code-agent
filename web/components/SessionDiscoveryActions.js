@@ -61,6 +61,10 @@ export default {
       }
       return rows;
     },
+    staleCandidateDraft() {
+      if (this.mode !== 'share' || this.catalogLoading || !this.targetAvailable || this.mutating) return false;
+      return [this.draft, this.removing].some(item => item?.status === 'candidate' && !this.catalogBySessionId.has(item.sourceSessionId));
+    },
     visibleShareItems() {
       return (this.items || []).filter(item => item.status !== 'candidate' || this.catalogBySessionId.has(item.sourceSessionId));
     },
@@ -88,11 +92,10 @@ export default {
         void this.loadShare();
       }
     },
-    catalogBySessionId(rows) {
-      if (this.mode !== 'share' || this.catalogLoading || !this.targetAvailable || this.mutating) return;
-      if ([this.draft, this.removing].some(item => item?.status === 'candidate' && !rows.has(item.sourceSessionId))) {
-        this.returnToList();
-      }
+    staleCandidateDraft(stale) {
+      if (!stale) return;
+      this.items = null;
+      this.returnToList();
     },
     turnDeletions(next, previous) {
       if (!this.mode || !this.agentId) return;

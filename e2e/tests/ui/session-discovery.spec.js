@@ -10,6 +10,8 @@ async function openSidebar(page, serverUrl, handle, { mobile = false, locale = '
   await page.addInitScript(locale => localStorage.setItem('locale', locale), locale);
   let sendFrame;
   let enableDiscovery;
+  let catalogSnapshot;
+  const hiddenAgents = new Set();
   await page.routeWebSocket(/.*/, route => {
     const server = route.connectToServer();
     sendFrame = msg => route.send(JSON.stringify(msg));
@@ -32,6 +34,8 @@ async function openSidebar(page, serverUrl, handle, { mobile = false, locale = '
           routeRef: { runtimeProvider: 'yeaft', agentId, sessionId: 'same' }, availability: 'online',
         });
         msg.catalog = [row('alpha', 'Alpha Session'), row('beta', 'Beta Session')];
+        catalogSnapshot = { ...msg };
+        msg.catalog = msg.catalog.filter(row => !hiddenAgents.has(row.routeRef.agentId));
         msg.projectsAuthoritative = true;
         msg.projects = [{ id: 'project', name: 'Design', sortOrder: 0, parentId: null, members: [{ agentId: 'beta', sessionId: 'same' }] }];
       }
@@ -57,6 +61,10 @@ async function openSidebar(page, serverUrl, handle, { mobile = false, locale = '
   }, mobile);
   return {
     enableDiscovery: () => enableDiscovery(),
+    hideSession: agentId => {
+      hiddenAgents.add(agentId);
+      sendFrame({ ...catalogSnapshot, catalog: catalogSnapshot.catalog.filter(row => !hiddenAgents.has(row.routeRef.agentId)) });
+    },
     deleteTurn: (agentId, turnId) => sendFrame({ type: 'yeaft_session_turn_deleted', agentId, sessionId: 'same', turnId }),
   };
 }
@@ -129,9 +137,11 @@ test('Share works at 320px in Chinese, scopes items per Agent, and publishes, ed
   const candidate = { id: 'candidate', kind: 'consensus', status: 'candidate', title: 'Draft title', body: '<b>Draft</b>', sourceSessionId: 'same', createdAt: 1, updatedAt: 1 };
   const requests = [];
   const deletedCandidate = { ...candidate, id: 'deleted-candidate', title: 'Deleted turn draft' };
-  const items = { alpha: [], beta: [candidate, deletedCandidate, { ...candidate, id: 'remove-me', title: 'Discard draft' }] };
+  const staleCandidate = { ...candidate, id: 'stale-candidate', title: 'Source hidden during publish' };
+  const items = { alpha: [], beta: [candidate, deletedCandidate, staleCandidate, { ...candidate, id: 'remove-me', title: 'Discard draft' }] };
   let failList = true;
   let loseCreateAck = true;
+  let failStaleSave;
   const socket = await openSidebar(page, serverUrl, (req, reply) => {
     requests.push(req);
     const list = items[req.agentId];
@@ -141,6 +151,7 @@ test('Share works at 320px in Chinese, scopes items per Agent, and publishes, ed
     }
     if (req.op === 'share_save') {
       const { id, createId, expectedUpdatedAt, ...fields } = req.payload;
+      if (id === staleCandidate.id) { failStaleSave = () => reply(null, { ok: false }); return; }
       const existing = list.find(row => row.id === (id || createId));
       if (createId && existing) return reply({ item: existing });
       if (id && (!existing || expectedUpdatedAt !== existing.updatedAt)) return reply(null, { ok: false });
@@ -178,6 +189,17 @@ test('Share works at 320px in Chinese, scopes items per Agent, and publishes, ed
   await dialog.getByRole('button', { name: '确认移除' }).click();
   await expect(dialog.getByText('Discard draft')).toHaveCount(0);
   expect(requests.at(-1)).toMatchObject({ agentId: 'beta', op: 'share_delete', payload: { id: 'remove-me', expectedUpdatedAt: 1 } });
+  const staleDraft = dialog.getByRole('listitem').filter({ hasText: staleCandidate.title });
+  await staleDraft.getByRole('button', { name: '审核并发布' }).click();
+  await dialog.getByRole('button', { name: '发布', exact: true }).click();
+  await expect.poll(() => typeof failStaleSave).toBe('function');
+  socket.hideSession('beta');
+  await page.waitForFunction(() => window.Pinia.useChatStore().sidebarSessionCatalog
+    .every(row => row.routeRef.agentId !== 'beta'));
+  failStaleSave();
+  await expect(dialog.getByLabel('内容')).toHaveCount(0);
+  await expect(staleDraft).toHaveCount(0);
+  await expect(dialog.getByRole('listitem').filter({ hasText: 'Edited candidate' })).toContainText('已发布');
   await dialog.getByLabel('Agent').selectOption('alpha');
   await expect(dialog.getByText('Edited candidate')).toHaveCount(0);
   await dialog.getByRole('button', { name: '添加分享' }).click();
