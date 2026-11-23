@@ -6048,6 +6048,9 @@ async function dispatchAcceptedSessionSend({
         _perfTraceId: perfTraceId,
         _agentSessionIds: ctx.serverCapabilities?.has('session_discovery') && Array.isArray(msg._agentSessionIds)
           ? msg._agentSessionIds : null,
+        // Older Servers don't strip a browser-supplied _shareOwnerId.
+        _shareOwnerId: ctx.serverCapabilities?.has('session_share_recall') && typeof msg._shareOwnerId === 'string'
+          ? msg._shareOwnerId : null,
         _projectContext: msg.projectContext && typeof msg.projectContext === 'object'
           ? msg.projectContext
           : null,
@@ -6677,6 +6680,7 @@ async function runVpTurn({ prompt, promptParts = null, sessionId, vpId, threadId
         const projectSessionIds = projectContext?.sessionIds || [];
         queryOpts.projectSessionIds = projectSessionIds;
         queryOpts.agentSessionIds = inboundEnvelope?._agentSessionIds || null;
+        queryOpts.shareOwnerId = inboundEnvelope?._shareOwnerId || null;
         queryOpts.projectLabel = projectContext?.projectName
           ? `${projectContext.projectName} (${projectContext.projectId})`
           : (projectContext?.projectId || '');

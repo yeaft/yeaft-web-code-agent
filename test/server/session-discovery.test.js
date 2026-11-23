@@ -117,14 +117,16 @@ it('serves daily FTS results and durable Share entries through owner-scoped Serv
     expect((await send(alice, 'share_list')).items.map(row => row.kind)).toEqual(['output']);
 
     const forward = id => handleClientConversation('alice-client', alice, {
-      type: 'yeaft_session_send', agentId, sessionId: id, message: 'look at history', _agentSessionIds: ['other-owner', 'other-agent'],
+      type: 'yeaft_session_send', agentId, sessionId: id, message: 'look at history', _shareOwnerId: 'bob', _agentSessionIds: ['other-owner', 'other-agent'],
     }, vi.fn(async () => true));
     await forward('visible');
     expect(agent.ws.getLastMessage()._agentSessionIds).toEqual(expect.arrayContaining(['visible', 'old', 'short']));
     expect(agent.ws.getLastMessage()._agentSessionIds).not.toContain('other-owner');
     expect(agent.ws.getLastMessage()._agentSessionIds).not.toContain('other-agent');
+    expect(agent.ws.getLastMessage()._shareOwnerId).toBe('alice');
     await forward('other-owner');
     expect(agent.ws.getLastMessage()._agentSessionIds).toBeUndefined();
+    expect(agent.ws.getLastMessage()._shareOwnerId).toBeUndefined();
     store.clear();
     expect((await send(bob, 'search', { query: '检索' })).results).toEqual([]);
   } finally {

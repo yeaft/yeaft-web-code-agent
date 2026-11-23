@@ -24,7 +24,7 @@ async function openSidebar(page, serverUrl, handle, { mobile = false, locale = '
       } else if (msg.type === 'agent_list') {
         msg.agents = [
           { id: 'alpha', name: 'Alpha', online: true, capabilities: ['session_discovery'] },
-          { id: 'beta', name: 'Beta', online: true, capabilities: ['session_discovery'] },
+          { id: 'beta', name: 'Beta', online: true, capabilities: ['session_discovery', 'digital_person'] },
           { id: 'legacy', name: 'Legacy', online: true, capabilities: [] },
           { id: 'offline', name: 'Offline', online: false, capabilities: ['session_discovery'] },
         ];
@@ -56,6 +56,7 @@ async function openSidebar(page, serverUrl, handle, { mobile = false, locale = '
     const chat = window.Pinia.useChatStore();
     chat.currentView = mobile ? 'yeaft' : 'chat';
     chat.currentAgent = 'beta';
+    chat.digitalPersonUiEnabledByAgent = { beta: true };
     chat.sidebarCollapsed = false;
     if (mobile) chat.sessionSidebarOpen = true;
   }, mobile);
@@ -69,156 +70,133 @@ async function openSidebar(page, serverUrl, handle, { mobile = false, locale = '
   };
 }
 
-test('keyboard search ignores mismatched replies and opens only a matching catalog Session in its folder', async ({ page, serverUrl }) => {
-  let request;
-  let reply;
-  const socket = await openSidebar(page, serverUrl, (req, respond) => { request = req; reply = respond; }, { holdDiscoveryAck: true });
-  await expect(page.getByRole('button', { name: /Beta Session/ })).toBeVisible();
-  const trigger = page.getByRole('button', { name: 'Search Sessions' });
+const hit = (snippet, activeAt) => ({ sessionId: 'same', title: 'Stale index title', snippet, activeAt });
+const indexed = (...results) => ({ indexedAt: 123, results });
+
+function mockSearch() {
+  const requests = [];
+  return {
+    requests,
+    handle: (req, reply) => requests.push({ ...req, reply }),
+    async take(query, after = 0) {
+      const matching = () => requests.slice(after).filter(req => req.payload.query === query);
+      await expect.poll(() => matching().map(req => req.agentId).sort()).toEqual(['alpha', 'beta']);
+      return Object.fromEntries(matching().map(req => [req.agentId, req.reply]));
+    },
+  };
+}
+
+test('sidebar search before Digital Person searches as you type, with scoped results and no dialog', async ({ page, serverUrl }) => {
+  const search = mockSearch();
+  const socket = await openSidebar(page, serverUrl, search.handle, { holdDiscoveryAck: true });
+  const sidebar = page.locator('.sidebar-navigation:visible');
+  const tree = sidebar.locator('.sidebar-session-results');
+  await expect(tree.getByRole('button', { name: /Beta Session/ })).toBeVisible();
+  const trigger = sidebar.getByRole('button', { name: 'Search Sessions' });
   await expect(trigger).toHaveCount(0);
-  await expect(page.getByRole('button', { name: 'Share', exact: true })).toHaveCount(0);
   socket.enableDiscovery();
   await expect(trigger).toBeVisible();
-  await trigger.focus();
+  const order = await sidebar.locator('.sidebar-primary-actions > button').evaluateAll(buttons => buttons.map(button => button.className));
+  expect(order.findIndex(classes => classes.includes('sidebar-search-trigger')) + 1)
+    .toBe(order.findIndex(classes => classes.includes('sidebar-person-trigger')));
   await trigger.press('Enter');
-  const dialog = page.getByRole('dialog', { name: 'Search Sessions' });
-  const query = dialog.getByRole('searchbox');
+  const query = sidebar.getByRole('searchbox');
   await expect(query).toBeFocused();
-  await expect(dialog.getByRole('option')).toHaveText(['Alpha', 'Beta']);
-  await expect(dialog.getByLabel('Agent')).toHaveValue('beta');
+  await expect(trigger).toHaveAttribute('aria-expanded', 'true');
+  await expect(tree.getByRole('button', { name: /Beta Session/ })).toBeVisible();
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+  await expect(sidebar.getByRole('button', { name: 'Share', exact: true })).toHaveCount(0);
+
+  await query.fill('obsolete');
+  const obsolete = await search.take('obsolete');
   await query.fill('  architecture  ');
-  await query.press('Enter');
-  await expect.poll(() => request).toMatchObject({ agentId: 'beta', op: 'search', payload: { query: 'architecture' } });
-  reply({ results: [], indexedAt: null });
-  await expect(dialog.getByRole('status')).toContainText('first search index is not ready');
-  await expect(dialog.getByText('No matching Sessions', { exact: false })).toHaveCount(0);
-  const submit = dialog.getByRole('button', { name: 'Search', exact: true });
-  await submit.click();
-  const results = { results: [
-    { sessionId: 'same', title: 'From index', snippet: '<strong>match</strong>', activeAt: 1 },
-    { sessionId: 'not-in-catalog', title: 'Private match', snippet: 'Private snippet', activeAt: 2 },
-  ], indexedAt: 3 };
-  reply({ results: [] }, { agentId: 'alpha' });
-  reply({ results: [] }, { op: 'share_list' });
-  await expect(dialog.getByRole('status')).toContainText('Searching');
-  reply(results);
-  const result = dialog.getByRole('button', { name: /Beta Session/ });
-  await expect(result).toContainText('Design');
-  await expect(result).toContainText('<strong>match</strong>');
-  await expect(dialog.getByText('Private snippet')).toHaveCount(0);
-  socket.deleteTurn('alpha', 'different-agent');
-  await page.waitForFunction(() => Object.values(window.Pinia.useChatStore().yeaftTurnDeleteHistoryBySession)
-    .some(entry => entry.lastDeletedTurnId === 'different-agent'));
-  await expect(result).toBeVisible();
-  socket.deleteTurn('beta', 'same-agent');
-  await expect(result).toHaveCount(0);
-  const previous = request.requestId;
-  await submit.click();
-  await expect.poll(() => request.requestId).not.toBe(previous);
-  const lateReply = reply;
-  socket.deleteTurn('beta', 'during-search');
-  await expect(submit).toBeEnabled();
-  lateReply(results);
-  await expect(result).toHaveCount(0);
-  await submit.click();
-  await expect.poll(() => reply).not.toBe(lateReply);
-  reply(results);
-  await result.press('Enter');
-  await expect(dialog).toBeHidden();
+  const first = await search.take('architecture');
+  obsolete.alpha(indexed(hit('stale result', 10)));
+  first.alpha({ indexedAt: null, results: [] });
+  first.beta({ indexedAt: null, results: [] });
+  await expect(tree.getByRole('status')).toContainText('index is not ready');
+  await expect(tree.getByText('stale result')).toHaveCount(0);
+  await expect(tree.getByRole('button', { name: /Beta Session/ })).toHaveCount(0);
+  const offset = search.requests.length;
+  await tree.getByRole('button', { name: 'Retry' }).click();
+  const retried = await search.take('architecture', offset);
+  retried.beta(indexed(), { agentId: 'alpha' });
+  retried.beta(indexed(), { op: 'share_list' });
+  await expect(tree.getByRole('status')).toContainText('Searching');
+  retried.alpha(indexed(hit('Alpha match', 3)));
+  retried.beta(indexed(hit('<strong>Beta match</strong>', 4), { ...hit('Private match', 5), sessionId: 'not-in-catalog' }));
+  const results = tree.getByRole('list', { name: 'Session search results' });
+  await expect(results.getByRole('button')).toHaveCount(2);
+  const beta = results.getByRole('button', { name: /Beta Session/ });
+  await expect(beta).toContainText('Beta · Design');
+  await expect(beta).toContainText('<strong>Beta match</strong>');
+  await expect(results.getByText('Private match')).toHaveCount(0);
+  await expect(results.getByRole('button').first()).toHaveText(/Beta Session/);
+  socket.hideSession('alpha');
+  await expect(results.getByRole('button')).toHaveCount(1);
+  await beta.press('Enter');
+  await expect(query).toHaveCount(0);
   await expect.poll(() => page.evaluate(() => window.Pinia.useChatStore().activeSessionRoute)).toMatchObject({
     runtimeProvider: 'yeaft', agentId: 'beta', sessionId: 'same',
   });
-  await page.getByRole('button', { name: 'Search Sessions' }).click();
-  await page.keyboard.press('Escape');
-  await expect(page.getByRole('button', { name: 'Search Sessions' })).toBeFocused();
 });
 
-test('Share works at 320px in Chinese, scopes items per Agent, and publishes, edits, and removes plain text', async ({ page, serverUrl }) => {
-  const candidate = { id: 'candidate', kind: 'consensus', status: 'candidate', title: 'Draft title', body: '<b>Draft</b>', sourceSessionId: 'same', createdAt: 1, updatedAt: 1 };
-  const requests = [];
-  const deletedCandidate = { ...candidate, id: 'deleted-candidate', title: 'Deleted turn draft' };
-  const staleCandidate = { ...candidate, id: 'stale-candidate', title: 'Source hidden during publish' };
-  const items = { alpha: [], beta: [candidate, deletedCandidate, staleCandidate, { ...candidate, id: 'remove-me', title: 'Discard draft' }] };
-  let failList = true;
-  let loseCreateAck = true;
-  let failStaleSave;
-  const socket = await openSidebar(page, serverUrl, (req, reply) => {
-    requests.push(req);
-    const list = items[req.agentId];
-    if (req.op === 'share_list') {
-      if (failList) { failList = false; return reply(null, { ok: false, error: 'temporary error' }); }
-      return reply({ items: list });
-    }
-    if (req.op === 'share_save') {
-      const { id, createId, expectedUpdatedAt, ...fields } = req.payload;
-      if (id === staleCandidate.id) { failStaleSave = () => reply(null, { ok: false }); return; }
-      const existing = list.find(row => row.id === (id || createId));
-      if (createId && existing) return reply({ item: existing });
-      if (id && (!existing || expectedUpdatedAt !== existing.updatedAt)) return reply(null, { ok: false });
-      const item = { ...existing, ...fields, id: id || createId, status: 'published', updatedAt: (existing?.updatedAt || 0) + 1 };
-      items[req.agentId] = [item, ...list.filter(row => row.id !== item.id)];
-      if (createId && loseCreateAck) { loseCreateAck = false; return reply(null, { ok: false }); }
-      return reply({ item });
-    }
-    if (req.op === 'share_delete') {
-      const existing = list.find(row => row.id === req.payload.id);
-      if (existing && existing.updatedAt !== req.payload.expectedUpdatedAt) return reply(null, { ok: false });
-      items[req.agentId] = list.filter(row => row.id !== req.payload.id);
-      return reply({});
-    }
-  }, { mobile: true, locale: 'zh-CN' });
-  await page.getByRole('button', { name: '分享', exact: true }).click();
-  const dialog = page.getByRole('dialog', { name: '分享' });
-  await expect(dialog.getByRole('alert')).toBeVisible();
-  await dialog.getByRole('button', { name: '重试' }).click();
-  const deletedDraft = dialog.getByRole('listitem').filter({ hasText: 'Deleted turn draft' });
-  await deletedDraft.getByRole('button', { name: '审核并发布' }).click();
-  await expect(dialog.getByLabel('内容')).toHaveValue('<b>Draft</b>');
-  items.beta = items.beta.filter(item => item !== deletedCandidate);
-  socket.deleteTurn('beta', 'candidate-source-deleted');
-  await expect(dialog.getByLabel('内容')).toHaveCount(0);
-  await expect(deletedDraft).toHaveCount(0);
-  const draft = dialog.getByRole('listitem').filter({ hasText: 'Draft title' });
-  await expect(draft).toContainText('<b>Draft</b>');
-  await draft.getByRole('button', { name: '审核并发布' }).click();
-  await dialog.getByLabel('标题').fill('Edited candidate');
-  await dialog.getByRole('button', { name: '发布', exact: true }).click();
-  await expect(dialog.getByRole('listitem').filter({ hasText: 'Edited candidate' })).toContainText('已发布');
-  expect(requests.at(-1)).toMatchObject({ agentId: 'beta', op: 'share_save', payload: { id: 'candidate', expectedUpdatedAt: 1, kind: 'consensus', title: 'Edited candidate', body: '<b>Draft</b>' } });
-  await dialog.getByRole('listitem').filter({ hasText: 'Discard draft' }).getByRole('button', { name: '移除' }).click();
-  await dialog.getByRole('button', { name: '确认移除' }).click();
-  await expect(dialog.getByText('Discard draft')).toHaveCount(0);
-  expect(requests.at(-1)).toMatchObject({ agentId: 'beta', op: 'share_delete', payload: { id: 'remove-me', expectedUpdatedAt: 1 } });
-  const staleDraft = dialog.getByRole('listitem').filter({ hasText: staleCandidate.title });
-  await staleDraft.getByRole('button', { name: '审核并发布' }).click();
-  await dialog.getByRole('button', { name: '发布', exact: true }).click();
-  await expect.poll(() => typeof failStaleSave).toBe('function');
-  socket.hideSession('beta');
-  await page.waitForFunction(() => window.Pinia.useChatStore().sidebarSessionCatalog
-    .every(row => row.routeRef.agentId !== 'beta'));
-  failStaleSave();
-  await expect(dialog.getByLabel('内容')).toHaveCount(0);
-  await expect(staleDraft).toHaveCount(0);
-  await expect(dialog.getByRole('listitem').filter({ hasText: 'Edited candidate' })).toContainText('已发布');
-  await dialog.getByLabel('Agent').selectOption('alpha');
-  await expect(dialog.getByText('Edited candidate')).toHaveCount(0);
-  await dialog.getByRole('button', { name: '添加分享' }).click();
-  await dialog.getByLabel('标题').fill('Long title ' + 'x'.repeat(120));
-  await dialog.getByLabel('内容').fill('Manual output');
-  await dialog.getByRole('button', { name: '发布', exact: true }).click();
-  await expect(dialog.getByRole('alert')).toBeVisible();
-  await expect(dialog.getByLabel('内容')).toHaveValue('Manual output');
-  await expect(dialog.getByLabel('内容')).not.toBeEditable();
-  await expect(dialog.getByLabel('标题')).not.toBeEditable();
-  await expect(dialog.getByLabel('类型')).toBeDisabled();
-  const firstCreate = requests.at(-1);
-  expect(firstCreate.payload.createId).toMatch(/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/);
-  await dialog.getByRole('button', { name: '重试', exact: true }).click();
-  await expect(dialog.getByText('Manual output')).toBeVisible();
-  expect(requests.at(-1).payload).toEqual(firstCreate.payload);
-  expect(requests.at(-1).requestId).not.toBe(firstCreate.requestId);
-  expect(items.alpha).toHaveLength(1);
-  expect(requests.at(-1)).toMatchObject({ agentId: 'alpha', op: 'share_save', payload: { kind: 'output', body: 'Manual output' } });
-  expect(requests.at(-1).payload).not.toHaveProperty('id');
-  expect(await dialog.evaluate(el => el.scrollWidth <= el.clientWidth && el.getBoundingClientRect().right <= innerWidth)).toBe(true);
+test('inline search fits the compact sidebar at 320px and clears or closes without a modal', async ({ page, serverUrl }) => {
+  await page.route('**/api/user/preferences', route => route.fulfill({ json: { sidebarActionsCompact: true } }));
+  const search = mockSearch();
+  await openSidebar(page, serverUrl, search.handle, { mobile: true, locale: 'zh-CN' });
+  const sidebar = page.locator('.sidebar-navigation:visible');
+  const trigger = sidebar.getByRole('button', { name: '搜索会话', exact: true });
+  await trigger.click();
+  const box = sidebar.getByRole('searchbox');
+  await expect(box).toBeFocused();
+  await box.fill('检索');
+  const replies = await search.take('检索');
+  replies.alpha(null, { ok: false });
+  replies.beta(indexed(hit('很长的搜索片段'.repeat(22), 5)));
+  const result = sidebar.getByRole('list', { name: '会话搜索结果' }).getByRole('button');
+  await expect(result).toHaveCount(1);
+  await expect(sidebar.getByText('部分 Agent 暂时无法搜索。')).toBeVisible();
+  await expect(sidebar.getByRole('button', { name: '分享', exact: true })).toHaveCount(0);
+  const shortcuts = sidebar.locator('.sidebar-primary-actions');
+  await expect(shortcuts).toHaveClass(/is-compact/);
+  expect(await shortcuts.evaluate(el => el.scrollWidth <= el.clientWidth + 1)).toBe(true);
+  await page.evaluate(() => { document.documentElement.dataset.theme = 'dark'; });
+  const form = sidebar.getByRole('search');
+  await expect(form).toBeVisible();
+  const bounds = await form.boundingBox();
+  expect(bounds.x + bounds.width).toBeLessThan(320);
+  expect(await form.evaluate(el => el.scrollWidth <= el.clientWidth + 1)).toBe(true);
+  await sidebar.getByRole('button', { name: '清除搜索' }).click();
+  await expect(box).toHaveValue('');
+  await expect(box).toBeFocused();
+  await expect(sidebar.getByRole('button', { name: /Beta Session/ })).toBeVisible();
+  await box.press('Escape');
+  await expect(box).toHaveCount(0);
+  await expect(trigger).toBeFocused();
+});
+
+test('a turn deletion invalidates inline results and late replies', async ({ page, serverUrl }) => {
+  const search = mockSearch();
+  const socket = await openSidebar(page, serverUrl, search.handle);
+  const sidebar = page.locator('.sidebar-navigation:visible');
+  await sidebar.getByRole('button', { name: 'Search Sessions' }).click();
+  const query = sidebar.getByRole('searchbox');
+  await query.fill('topic');
+  const initial = await search.take('topic');
+  initial.alpha(indexed());
+  initial.beta(indexed(hit('Deleted excerpt', 9)));
+  await expect(sidebar.getByText('Deleted excerpt')).toBeVisible();
+  const offset = search.requests.length;
+  socket.deleteTurn('beta', 'deleted');
+  const next = await search.take('topic', offset);
+  await expect(sidebar.getByText('Deleted excerpt')).toHaveCount(0);
+  const nextOffset = search.requests.length;
+  socket.deleteTurn('beta', 'while-requesting');
+  const fresh = await search.take('topic', nextOffset);
+  next.beta(indexed(hit('Late excerpt', 10)));
+  fresh.alpha(indexed());
+  fresh.beta(indexed());
+  await expect(sidebar.getByText('No matching sessions.')).toBeVisible();
+  await expect(sidebar.getByText('Late excerpt')).toHaveCount(0);
 });

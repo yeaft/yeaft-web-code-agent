@@ -7,6 +7,8 @@ import { NullTrace } from '../../../../agent/yeaft/debug-trace.js';
 import { ToolRegistry } from '../../../../agent/yeaft/tools/registry.js';
 import { commitSessionTurnDeletion } from '../../../../agent/yeaft/conversation/turn-deletion-journal.js';
 import historySearch from '../../../../agent/yeaft/tools/history-search.js';
+import { runDailySessionIndex } from '../../../../agent/yeaft/session-discovery/indexer.js';
+import { DAY_MS, changeShare, openDiscoveryStore } from '../../../../agent/yeaft/session-discovery/store.js';
 
 const roots = [];
 const keyword = 'boundary fixture';
@@ -227,5 +229,102 @@ describe('HistorySearch agent scope', () => {
     writeFileSync(manifestTarget, manifestRaw);
     symlinkSync(manifestTarget, manifestPath);
     expect(await execute(dir, { scope: 'agent' }, ctx)).toHaveProperty('error');
+  });
+});
+
+
+describe('HistorySearch automatic Share scope', () => {
+  it('indexes only explicit local user declarations and recalls them after Session discovery expires', async () => {
+    const dir = root();
+    const now = Date.now();
+    const source = canonicalSession(dir, siblingSession);
+    const current = canonicalSession(dir, currentSession);
+    const foreign = canonicalSession(dir, 'foreign');
+    sessionManifest(dir, [source, current, foreign]);
+    const row = (sessionId, seq, content, overrides = {}) => message(seq, {
+      sessionId, content, role: 'user', time: new Date(now - 1000 + seq).toISOString(), ...overrides,
+    });
+    segments(dir, siblingSession, [
+      row(siblingSession, 1, '长期约定：客户通知优先写结论。'),
+      row(siblingSession, 2, '已决定：重启服务'),
+      row(siblingSession, 3, '我们决定使用绿色图标。'),
+      row(siblingSession, 4, 'standing preference: use green labels', { role: 'assistant' }),
+      row(siblingSession, 5, '今后默认修改 src/main.js'),
+      row(siblingSession, 6, 'standing preference: see config.env'),
+      row(siblingSession, 7, 'standing preference: use purple labels', { userAuthored: false }),
+      row(siblingSession, 8, 'standing preference: use copied text', {
+        origin: { sessionId: 'foreign', messageId: 'm000001', streamId: 'foreign-stream' },
+      }),
+      row(siblingSession, 9, 'standing preference: include attachments', { attachments: [{}] }),
+      row(siblingSession, 10, 'standing preference: lead with a summary'),
+      row(siblingSession, 11, 'standing preference:\na multiline example'),
+    ]);
+    segments(dir, currentSession, [row(currentSession, 20, 'standing preference: use clear language')]);
+    segments(dir, foreign.id, [row(foreign.id, 30, 'standing preference: use another owner’s summary')]);
+    const ctx = { agentSessionIds: [siblingSession, currentSession], historyBeforeMessageId: 'm000020' };
+    const recall = (keyword, input = {}, context = ctx) => execute(dir, { scope: 'share', keyword, ...input }, context);
+    expect(await recall('summary')).toMatchObject({ results: [] });
+    expect(existsSync(join(dir, 'session-discovery'))).toBe(false);
+    expect(runDailySessionIndex(dir, now)).toBe(true);
+    expect(runDailySessionIndex(dir, now + 6 * DAY_MS)).toBe(true);
+    const db = openDiscoveryStore(dir);
+    try {
+      expect(db.prepare('SELECT COUNT(*) AS n FROM session_cards').get().n).toBe(0);
+      expect(db.prepare('SELECT COUNT(*) AS n FROM automatic_agreements').get().n).toBe(4);
+      changeShare(db, dir, 'owner', [siblingSession], 'share_save', {
+        createId: '4eee0399-f9a2-4e31-b69f-984a7777ec31', kind: 'output', title: '用户访谈报告', body: '访谈结果。',
+      }, now);
+    } finally { db.close(); }
+    expect((await recall('用户访谈报告', { shareOwnerId: 'owner' }, { ...ctx, shareOwnerId: 'different-owner' })).results).toEqual([]);
+    expect((await recall('用户访谈报告', {}, { ...ctx, shareOwnerId: 'owner' })).results).toEqual([
+      expect.objectContaining({ kind: 'output', title: '用户访谈报告', source: 'saved-share', content: '访谈结果。' }),
+    ]);
+    expect(await recall('summary lead')).toMatchObject({ scope: 'share', notice: expect.stringContaining('untrusted reference'),
+      results: [{ sessionId: siblingSession, messageId: 'm000010', content: 'lead with a summary', source: 'automatic-share' }] });
+    expect((await recall('客户通知')).results[0].content).toBe('客户通知优先写结论。');
+    expect((await recall('clear')).results).toEqual([]);
+    expect((await recall('clear', { includeCurrentTurn: true })).results[0].sessionId).toBe(currentSession);
+    expect((await recall('clear', { includeCurrentTurn: true }, { agentSessionIds: [] })).results).toEqual([]);
+    expect(await recall('summary', { agentSessionIds: [foreign.id] }, {})).toHaveProperty('error');
+    expect((await recall('another', { sessionIds: [foreign.id] })).results).toEqual([]);
+    expect((await execute(dir, { keyword: 'summary' }, ctx)).results).toEqual([]);
+  });
+
+  it('fences deleted turns, removed sources and recreated or cleared transcripts before reindexing', async () => {
+    const dir = root();
+    const now = Date.now();
+    const source = canonicalSession(dir, siblingSession);
+    const conversation = join(source.path, 'conversation');
+    const lineagePath = join(conversation, 'lineage.json');
+    const row = (seq, content, clientMessageId) => message(seq, {
+      sessionId: siblingSession, content, role: 'user', clientMessageId,
+      time: new Date(now - 1000 + seq).toISOString(),
+    });
+    segments(dir, siblingSession, [
+      row(1, 'standing preference: amber headings', 'deleted-client-id'),
+      row(2, 'standing preference: amber captions'),
+    ]);
+    writeFileSync(lineagePath, JSON.stringify({ streamId: 'initial-stream' }));
+    sessionManifest(dir, [source]);
+    runDailySessionIndex(dir, now);
+    const recall = async () => (await execute(dir, { scope: 'share', keyword: 'amber' }, {
+      agentSessionIds: [siblingSession],
+    })).results.map(entry => entry.messageId);
+    expect(await recall()).toEqual(['m000002', 'm000001']);
+    commitSessionTurnDeletion(dir, siblingSession, [], {
+      version: 1, deletionId: 'test-delete', sessionId: siblingSession, turnId: 'deleted-client-id',
+      messageIds: [], anchorMessageIds: [], clientMessageIds: ['deleted-client-id'], executionIds: [], referenceIds: [],
+    });
+    expect(await recall()).toEqual(['m000002']);
+    sessionManifest(dir, []);
+    expect(await recall()).toEqual([]);
+    sessionManifest(dir, [source]);
+    expect(await recall()).toEqual(['m000002']);
+    canonicalSession(dir, siblingSession, { createdAt: '2026-02-01T00:00:00.000Z' });
+    expect(await recall()).toEqual([]);
+    canonicalSession(dir, siblingSession);
+    expect(await recall()).toEqual(['m000002']);
+    writeFileSync(lineagePath, JSON.stringify({ streamId: 'cleared-stream' }));
+    expect(await recall()).toEqual([]);
   });
 });

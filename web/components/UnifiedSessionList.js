@@ -1,4 +1,6 @@
-import SessionDiscoveryActions from './SessionDiscoveryActions.js';
+import NavigationIcon from './NavigationIcon.js';
+import { useAuthStore } from '../stores/auth.js';
+import { requestSessionDiscovery, supportsSessionDiscovery } from '../stores/helpers/session-discovery.js';
 import SidebarDigitalPerson from './SidebarDigitalPerson.js';
 import { alertDialog, confirmDialog, promptDialog } from '../utils/dialog.js';
 import { useUserPreferences } from '../utils/user-preferences.js';
@@ -33,6 +35,9 @@ function sortRows(rows, ranked = hasCompleteSortRanks(rows)) {
 function projectIdentityKey(project) {
   return project?.id || '';
 }
+
+const SEARCH_DEBOUNCE_MS = 250;
+const SEARCH_CONCURRENCY = 4;
 
 /** Drag-target key of the top level (outside every folder). */
 const ROOT_DROP_KEY = '__root__';
@@ -132,9 +137,10 @@ export function calculateFloatingSubmenuPosition(parentRect, menuSize, viewport 
 
 export default {
   name: 'UnifiedSessionList',
-  components: { SidebarDigitalPerson, SessionDiscoveryActions },
+  components: { NavigationIcon, SidebarDigitalPerson },
   setup() {
     const userPreferences = useUserPreferences();
+    const auth = useAuthStore();
     Vue.onMounted(() => {
       window.addEventListener('focus', userPreferences.refresh);
       document.addEventListener('visibilitychange', refreshWhenVisible);
@@ -147,6 +153,8 @@ export default {
       if (document.visibilityState === 'visible') void userPreferences.refresh();
     }
     return {
+      searchId: Vue.useId(),
+      searchOwner: Vue.computed(() => auth.authGeneration),
       collapsedProjects: Vue.computed(() => userPreferences.preferences.value.sidebarCollapsedProjects),
       saveProjectCollapsed: userPreferences.saveSidebarProjectCollapsed,
       actionsCompact: Vue.computed(() => userPreferences.preferences.value.sidebarActionsCompact),
@@ -172,6 +180,10 @@ export default {
   },
   data() {
     return {
+      searchOpen: false,
+      searchQuery: '',
+      searchResponses: [],
+      searchPending: false,
       actionGeneration: 0,
       actionsTogglePending: false,
       sessionListOverflows: false,
@@ -215,6 +227,7 @@ export default {
     this.scheduleOverflowCheck();
   },
   beforeUnmount() {
+    this.cancelSearch();
     this.actionsResizeObserver?.disconnect();
     cancelAnimationFrame(this.overflowCheckFrame);
     document.removeEventListener('pointerdown', this.closeMenusFromDocument, true);
@@ -223,6 +236,18 @@ export default {
     window.removeEventListener('scroll', this.positionFloatingMenu, true);
   },
   watch: {
+    searchOwner: { handler() { this.closeSearch(); }, flush: 'sync' },
+    searchText() { this.queueSearch(); },
+    searchAgentKey() { this.queueSearch(); },
+    searchSocket() { this.queueSearch(); },
+    searchDeletions(next, previous) {
+      if (!this.searchText) return;
+      if (Object.entries(next || {}).some(([key, deletion]) =>
+        this.searchAgentIds.includes(deletion.agentId) && deletion.epoch !== previous?.[key]?.epoch)) {
+        // A deletion changes the searchable snapshot, including queries in flight.
+        this.queueSearch();
+      }
+    },
     actionsCompact(value) {
       // A server refresh or failed save may remove the overflow-only control.
       // Keep it mounted until focus has a stable destination in the new layout.
@@ -248,6 +273,44 @@ export default {
     resolvedProjectStore() {
       if (this.projectStore) return this.projectStore;
       try { return window.Pinia?.useChatStore?.() || null; } catch { return null; }
+    },
+    searchSupported() {
+      return this.resolvedProjectStore?.sessionDiscoverySupported === true && this.agents.some(supportsSessionDiscovery);
+    },
+    searchText() { return this.searchOpen ? this.searchQuery.trim() : ''; },
+    searchSocket() { return this.resolvedProjectStore?.ws; },
+    searchDeletions() { return this.resolvedProjectStore?.yeaftTurnDeleteHistoryBySession; },
+    searchAgentIds() {
+      return this.searchSupported && this.resolvedProjectStore.connectionState === 'connected'
+        ? this.agents.filter(agent => agent.online && supportsSessionDiscovery(agent)).map(agent => agent.id).sort()
+        : [];
+    },
+    searchAgentKey() { return JSON.stringify(this.searchAgentIds); },
+    visibleSearchResults() {
+      if (!this.searchText || this.loading || !this.searchResponses.length) return [];
+      const available = new Set(this.searchAgentIds);
+      const rows = new Map(this.sessions.filter(row => row.catalogKey && !row.hidden
+        && row.routeRef?.runtimeProvider === 'yeaft' && available.has(row.routeRef.agentId) && this.isRowOnline(row))
+        .map(row => [JSON.stringify([row.routeRef.agentId, row.routeRef.sessionId]), row]));
+      // Each Agent ranks using its local FTS corpus. Merge by rank, then recency;
+      // BM25 scores from independent corpora would not be directly comparable.
+      return this.searchResponses.flatMap(({ agentId, results }) => (results || []).flatMap((hit, rank) => {
+        const row = rows.get(JSON.stringify([agentId, hit?.sessionId]));
+        return row ? [{ row, rank, activeAt: timestampValue(hit.activeAt),
+          snippet: typeof hit.snippet === 'string' ? hit.snippet : '',
+          location: [this.searchAgentIds.length > 1 ? this.agentLabel(row) : '', this.discoveryProjectPath(row)].filter(Boolean).join(' · '),
+        }] : [];
+      })).sort((a, b) => a.rank - b.rank || b.activeAt - a.activeAt || a.row.catalogKey.localeCompare(b.row.catalogKey));
+    },
+    searchStatusKey() {
+      if (!this.searchAgentIds.length) return 'unavailable';
+      if (this.searchPending || this.loading) return 'searching';
+      const ready = this.searchResponses.some(response => response.indexedAt != null);
+      const failed = this.searchResponses.some(response => response.failed);
+      if (!ready && failed) return 'readFailed';
+      if (!ready && this.searchResponses.length) return 'firstIndexPending';
+      if (failed || this.searchResponses.some(response => response.indexedAt === null)) return 'partial';
+      return this.visibleSearchResults.length ? '' : 'noResults';
     },
     hasCompleteCatalogOrder() {
       return hasCompleteSortRanks(this.sessions);
@@ -371,6 +434,67 @@ export default {
     },
   },
   methods: {
+    toggleSearch() {
+      if (this.searchOpen) return this.closeSearch(true);
+      this.closeMenus();
+      this.finishAllDrag();
+      this.searchOpen = true;
+      this.$nextTick(() => this.$refs.searchInput?.focus());
+    },
+    closeSearch(restoreFocus = false) {
+      if (restoreFocus) this.$refs.searchTrigger?.focus({ preventScroll: true });
+      this.searchOpen = false;
+      this.searchQuery = '';
+      this.cancelSearch();
+    },
+    cancelSearch() {
+      clearTimeout(this.searchTimer);
+      this.searchController?.abort();
+      this.searchController = null;
+      this.searchResponses = [];
+      this.searchPending = false;
+    },
+    queueSearch(delay = SEARCH_DEBOUNCE_MS) {
+      this.cancelSearch();
+      if (!this.searchText || !this.searchAgentIds.length) return;
+      this.searchPending = true;
+      this.searchTimer = setTimeout(() => void this.runSearch(), delay);
+    },
+    async runSearch() {
+      const query = this.searchText;
+      const agents = this.searchAgentIds;
+      const store = this.resolvedProjectStore;
+      const controller = new AbortController();
+      const { signal } = controller;
+      this.searchController = controller;
+      let next = 0;
+      const searchNext = async () => {
+        for (let i; !signal.aborted && (i = next++) < agents.length;) {
+          const agentId = agents[i];
+          let response;
+          try {
+            const data = await requestSessionDiscovery(store, agentId, 'search', { query }, signal);
+            if (!Array.isArray(data?.results)) throw new Error('Invalid search response');
+            response = { agentId, indexedAt: data.indexedAt ?? null, results: data.results };
+          } catch { response = { agentId, failed: true }; }
+          if (!signal.aborted) this.searchResponses.push(response);
+        }
+      };
+      await Promise.all(agents.slice(0, SEARCH_CONCURRENCY).map(searchNext));
+      if (!signal.aborted) this.searchPending = false;
+    },
+    clearSearchInput() {
+      this.searchQuery = '';
+      this.$refs.searchInput?.focus();
+    },
+    submitSearch() {
+      if (this.visibleSearchResults.length) this.selectSearchResult(this.visibleSearchResults[0].row);
+      else if (!this.searchPending) this.queueSearch(0);
+    },
+    selectSearchResult(row) {
+      this.closeSearch(true);
+      this.selectRow(row);
+    },
     scheduleOverflowCheck() {
       if (this.overflowCheckFrame) return;
       this.overflowCheckFrame = requestAnimationFrame(() => {
@@ -1230,6 +1354,13 @@ export default {
             <span v-if="!actionsCompact">{{ $t('yeaft.plugins.title') }}</span>
           </button>
         </slot>
+        <button v-if="searchSupported || searchOpen" ref="searchTrigger" type="button"
+                class="btn-ghost sidebar-primary-action sidebar-search-trigger" :class="{ 'is-open': searchOpen }"
+                :aria-expanded="searchOpen" :aria-controls="searchOpen ? searchId : undefined"
+                :title="$t('sessionDiscovery.search')" :aria-label="$t('sessionDiscovery.search')" @click="toggleSearch">
+          <NavigationIcon name="search" :size="18" class="sidebar-primary-action-icon" />
+          <span v-if="!actionsCompact">{{ $t('sessionDiscovery.search') }}</span>
+        </button>
         <SidebarDigitalPerson :compact="actionsCompact" />
         <button v-if="actionsCompact || sessionListOverflows || actionsTogglePending" ref="actionsToggle" type="button"
                 class="btn-ghost sidebar-actions-toggle" :aria-expanded="!actionsCompact"
@@ -1241,15 +1372,44 @@ export default {
         </button>
       </div>
 
-      <SessionDiscoveryActions v-if="resolvedProjectStore" :store="resolvedProjectStore"
-        :agents="agents" :sessions="sessions" :catalog-loading="loading"
-        :project-path="discoveryProjectPath" @select="$emit('select', $event)" />
+      <form v-if="searchOpen" :id="searchId" class="sidebar-search-form" role="search"
+            :aria-label="$t('sessionDiscovery.search')" @submit.prevent="submitSearch" @keydown.esc.stop.prevent="closeSearch(true)">
+        <NavigationIcon name="search" :size="15" class="sidebar-search-icon" />
+        <input ref="searchInput" v-model="searchQuery" type="search" autocomplete="off" maxlength="160"
+               :placeholder="$t('sessionDiscovery.placeholder')" :aria-label="$t('sessionDiscovery.search')" />
+        <button v-if="searchQuery" type="button" class="btn-ghost sidebar-search-clear" @click="clearSearchInput"
+                :aria-label="$t('sessionDiscovery.clear')" :title="$t('sessionDiscovery.clear')">
+          <NavigationIcon name="close" :size="14" />
+        </button>
+      </form>
 
       <!-- One file tree: folders (nested) first, each with its subfolders and
            Sessions; Sessions outside every folder follow at the top level. -->
       <div ref="sessionResults" class="sidebar-session-results sidebar-tree">
-        <div v-if="loading || preferencesPending" class="sidebar-section-empty sidebar-catalog-loading" role="status"><span class="spinner-mini" aria-hidden="true"></span>{{ $t('common.loading') }}</div>
-        <template v-for="item in treeItems" :key="item.key">
+        <template v-if="searchText">
+          <ul class="sidebar-search-results" :aria-label="$t('sessionDiscovery.results')" @keydown.esc.stop.prevent="closeSearch(true)">
+            <li v-for="hit in visibleSearchResults" :key="hit.row.catalogKey">
+              <button type="button" class="session-item sidebar-session-row sidebar-search-result"
+                      :class="{ active: isActive(hit.row) }" :aria-current="isActive(hit.row) ? 'page' : undefined"
+                      @click="selectSearchResult(hit.row)">
+                <span class="sidebar-search-result-title" :title="hit.row.title">
+                  <span v-if="isProcessing(hit.row)" class="processing-dot" :aria-label="$t('sidebar.sessions.processing')"></span>
+                  <span class="sidebar-session-title-text">{{ hit.row.title }}</span>
+                  <span v-if="isUnread(hit.row)" class="sidebar-session-unread" :aria-label="$t('sidebar.sessions.unread')"></span>
+                </span>
+                <span v-if="hit.location" class="sidebar-search-location" :title="hit.location">{{ hit.location }}</span>
+                <span v-if="hit.snippet" class="sidebar-search-snippet">{{ hit.snippet }}</span>
+              </button>
+            </li>
+          </ul>
+          <div v-if="searchStatusKey" class="sidebar-section-empty sidebar-search-status">
+            <span role="status">{{ $t('sessionDiscovery.' + searchStatusKey) }}</span>
+            <button v-if="['readFailed', 'firstIndexPending', 'partial'].includes(searchStatusKey)"
+                    type="button" class="btn-ghost" @click="queueSearch(0)">{{ $t('common.retry') }}</button>
+          </div>
+        </template>
+        <div v-if="!searchText && (loading || preferencesPending)" class="sidebar-section-empty sidebar-catalog-loading" role="status"><span class="spinner-mini" aria-hidden="true"></span>{{ $t('common.loading') }}</div>
+        <template v-for="item in searchText ? [] : treeItems" :key="item.key">
           <div v-if="item.kind === 'folder'"
             class="sidebar-project-header"
             :class="{ 'menu-open': openProjectMenuKey === projectKey(item.project), 'drag-over': isFolderDropInto(item.project), dragging: draggedProjectId === projectKey(item.project), 'project-drag-before': dragTargetProjectRowId === projectKey(item.project) && dragTargetProjectPosition === 'before', 'project-drag-after': dragTargetProjectRowId === projectKey(item.project) && dragTargetProjectPosition === 'after' }"
@@ -1350,8 +1510,8 @@ export default {
             </span>
           </div>
         </template>
-        <div v-if="!loading && !preferencesPending && treeItems.length === 0" class="sidebar-section-empty">{{ $t('sidebar.sessions.empty') }}</div>
-        <div class="sidebar-tree-end" :class="{ 'drag-over': isRootDropTarget() }" aria-hidden="true"
+        <div v-if="!searchText && !loading && !preferencesPending && treeItems.length === 0" class="sidebar-section-empty">{{ $t('sidebar.sessions.empty') }}</div>
+        <div v-if="!searchText" class="sidebar-tree-end" :class="{ 'drag-over': isRootDropTarget() }" aria-hidden="true"
              @dragover="dragOverRoot" @dragleave="clearGroupDragTarget('__root__', $event)" @drop="dropOnRoot"></div>
       </div>
 

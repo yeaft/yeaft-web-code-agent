@@ -3,23 +3,33 @@ import { lstatSync, mkdirSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { createAgentHistoryScan } from '../conversation/search.js';
-import { readSessionTurnDeletions } from '../conversation/turn-deletion-journal.js';
+import { parseSeqFromId } from '../conversation/persist.js';
+import { readSessionTurnDeletions, sessionDeletionProjection } from '../conversation/turn-deletion-journal.js';
 
 export const DAY_MS = 24 * 60 * 60 * 1000;
 export const ACTIVE_WINDOW_MS = 5 * DAY_MS;
 const SEARCH_LIMIT = 25;
 const PUBLISHED_LIMIT = 200;
 const CANDIDATE_LIMIT = 25;
+const AUTOMATIC_LIMIT = 2000;
+const AUTOMATIC_LIST_LIMIT = 25;
+const discoveryFiles = ['discovery.db', 'discovery.db-wal', 'discovery.db-shm', 'discovery.db-journal'];
+const normalize = text => text.normalize('NFKC').toLowerCase();
 
-export function openDiscoveryStore(root) {
+export function openDiscoveryStore(root, { readOnly = false } = {}) {
   const dir = join(root, 'session-discovery');
-  mkdirSync(dir, { recursive: true, mode: 0o700 });
-  if (!lstatSync(dir).isDirectory()) throw new Error('Invalid Discovery storage directory');
-  for (const name of ['discovery.db', 'discovery.db-wal', 'discovery.db-shm', 'discovery.db-journal']) {
+  if (!readOnly) mkdirSync(dir, { recursive: true, mode: 0o700 });
+  try { if (!lstatSync(dir).isDirectory()) throw new Error('Invalid Discovery storage directory'); }
+  catch (error) { if (readOnly && error.code === 'ENOENT') return null; throw error; }
+  for (const name of discoveryFiles) {
     try { if (!lstatSync(join(dir, name)).isFile()) throw new Error('Invalid Discovery storage file'); }
-    catch (error) { if (error.code !== 'ENOENT') throw error; }
+    catch (error) {
+      if (error.code !== 'ENOENT') throw error;
+      if (readOnly && name === 'discovery.db') return null;
+    }
   }
-  const db = new DatabaseSync(join(dir, 'discovery.db'));
+  const db = new DatabaseSync(join(dir, 'discovery.db'), { readOnly });
+  if (readOnly) return db;
   try {
     db.exec(`
       PRAGMA busy_timeout = 1500;
@@ -43,6 +53,11 @@ export function openDiscoveryStore(root) {
         title TEXT NOT NULL, body TEXT NOT NULL, source_session_id TEXT, source_message_id TEXT,
         created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, PRIMARY KEY(owner_id, id)
       );
+      CREATE TABLE IF NOT EXISTS automatic_agreements (
+        id TEXT PRIMARY KEY, source_session_id TEXT NOT NULL, source_identity TEXT NOT NULL,
+        source_ref TEXT NOT NULL, title TEXT NOT NULL, body TEXT NOT NULL, created_at INTEGER NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS automatic_agreement_recency ON automatic_agreements(created_at DESC, id);
       CREATE TABLE IF NOT EXISTS share_tombstones (
         owner_id TEXT NOT NULL, id TEXT NOT NULL, PRIMARY KEY(owner_id, id)
       );
@@ -93,7 +108,7 @@ export function candidateId(sessionId, body) {
   return `candidate_${createHash('sha256').update(JSON.stringify([sessionId, body.normalize('NFKC').toLowerCase()])).digest('hex')}`;
 }
 
-export function replaceDailyIndex(db, cards, now) {
+export function replaceDailyIndex(db, cards, now, automatic = [], root = null) {
   db.exec('BEGIN IMMEDIATE');
   try {
     const indexedAt = discoveryIndexedAt(db);
@@ -116,6 +131,7 @@ export function replaceDailyIndex(db, cards, now) {
           item.title, item.body, item.createdAt);
       }
     }
+    if (root) updateAutomaticAgreements(db, root, automatic);
     db.prepare('INSERT OR REPLACE INTO index_state VALUES (1, ?)').run(now);
     db.exec('COMMIT');
     return true;
@@ -137,7 +153,7 @@ export function expireDailyIndex(db, now) {
   } catch (error) { db.exec('ROLLBACK'); throw error; }
 }
 
-export function localSessionDirs(root, read) {
+export function localSessionDirs(root, read, allowed = null) {
   const base = join(resolve(root), 'sessions');
   const dirs = new Map();
   try {
@@ -148,6 +164,7 @@ export function localSessionDirs(root, read) {
     for (const row of manifest.sessions) {
       const { id, path } = row || {};
       if (typeof id !== 'string' || typeof path !== 'string' || !/^[a-zA-Z0-9_-][a-zA-Z0-9._-]{0,119}$/.test(id)) continue;
+      if (allowed && !allowed.has(id)) continue;
       if (seen.has(id)) { dirs.delete(id); continue; }
       seen.add(id);
       const dir = join(base, id);
@@ -180,15 +197,17 @@ export function readSourceFence(root, sessionId, read) {
   const rawLineage = read(join(conversation, 'lineage.json'));
   if (rawLineage === null) return null;
   const lineage = rawLineage && JSON.parse(rawLineage);
-  if (rawLineage && typeof lineage?.streamId !== 'string') return null;
+  if (rawLineage && (typeof lineage?.streamId !== 'string' || !lineage.streamId || lineage.streamId.length > 256)) return null;
   const journal = readSessionTurnDeletions(root, sessionId, read);
   if (!journal) return null;
   const operations = journal.operations;
   const tail = operations.at(-1);
   const legacyTimes = lineage ? null : ['segments', 'messages', 'cold'].map(name => date(join(conversation, name)));
-  const key = JSON.stringify([meta.createdAt || '', lineage?.streamId || legacyTimes, operations.length, tail?.deletionId || tail?.turnId || null]);
+  const sourceIdentity = [meta.createdAt || '', lineage?.streamId || legacyTimes];
+  const identity = JSON.stringify(sourceIdentity);
+  const key = JSON.stringify([...sourceIdentity, operations.length, tail?.deletionId || tail?.turnId || null]);
   const freshAt = Math.max(...['index.json', 'segments', 'messages', 'cold'].map(name => date(join(conversation, name))));
-  return { key, freshAt, meta, operations };
+  return { key, identity, streamId: lineage?.streamId, freshAt, meta, operations };
 }
 
 function liveCards(root) {
@@ -242,12 +261,107 @@ export function searchDiscovery(db, root, allowedIds, query, now = Date.now()) {
   return { indexedAt, results };
 }
 
+// Missing or changed lineage invalidates the entire source. Ordinary appends
+// do not extend the five-day Session index or affect an already collected rule.
+// A turn deletion only invalidates agreements derived from that deleted turn.
+function automaticSourceChecker(root, allowed, telemetry = {}, signal) {
+  const { read, stopped } = createAgentHistoryScan(root, telemetry, signal);
+  const dirs = localSessionDirs(root, read, allowed);
+  const cache = new Map();
+  return row => {
+    if (stopped() || telemetry.scanIncomplete) return null;
+    const id = row.source_session_id;
+    if (!dirs.has(id)) return false;
+    if (!cache.has(id)) {
+      try {
+        const source = readSourceFence(root, id, read);
+        cache.set(id, source ? { identity: source.identity,
+          anchors: new Set(source.operations.flatMap(op => op.anchorMessageIds)),
+          scrub: sessionDeletionProjection(source.operations).scrub } : null);
+      } catch { cache.set(id, null); }
+    }
+    if (telemetry.scanIncomplete) return null;
+    const source = cache.get(id);
+    if (!source || source.identity !== row.source_identity) return false;
+    const ref = JSON.parse(row.source_ref);
+    return !source.anchors.has(ref.id) && Boolean(source.scrub(ref));
+  };
+}
+
+function updateAutomaticAgreements(db, root, automatic) {
+  const existing = db.prepare('SELECT id, source_session_id, source_identity, source_ref FROM automatic_agreements').all();
+  const checkSource = automaticSourceChecker(root, new Set(existing.map(row => row.source_session_id)));
+  const remove = db.prepare('DELETE FROM automatic_agreements WHERE id = ?');
+  for (const row of existing) {
+    const live = checkSource(row);
+    if (live === null) break; // Unreadable due to a budget, not evidence of deletion.
+    if (!live) remove.run(row.id);
+  }
+  const insert = db.prepare('INSERT OR IGNORE INTO automatic_agreements VALUES (?, ?, ?, ?, ?, ?, ?)');
+  for (const { sessionId, sourceIdentity, ref, title, body, createdAt } of automatic) {
+    const id = `automatic_${createHash('sha256').update(JSON.stringify([sessionId, sourceIdentity, ref.id])).digest('hex')}`;
+    insert.run(id, sessionId, sourceIdentity, JSON.stringify(ref), title, body, createdAt);
+  }
+  db.prepare(`DELETE FROM automatic_agreements WHERE id IN (
+    SELECT id FROM automatic_agreements ORDER BY created_at DESC, id LIMIT -1 OFFSET ?
+  )`).run(AUTOMATIC_LIMIT);
+}
+
+function searchAutomaticAgreements(db, root, allowedIds, { keyword = '', limit = AUTOMATIC_LIST_LIMIT,
+  sessionId, beforeSeq, telemetry = {}, signal, seen = new Set() } = {}) {
+  if (!db || !allowedIds.length || !db.prepare("SELECT 1 FROM sqlite_schema WHERE name = 'automatic_agreements'").get()) return [];
+  const live = automaticSourceChecker(root, new Set(allowedIds), telemetry, signal);
+  const terms = normalize(keyword).split(/\s+/u).filter(Boolean);
+  const results = [];
+  for (const row of db.prepare(`SELECT * FROM automatic_agreements
+    WHERE source_session_id IN (SELECT value FROM json_each(?))
+    ORDER BY created_at DESC, id`).iterate(JSON.stringify(allowedIds))) {
+    if (signal?.aborted || telemetry.scanIncomplete) break;
+    const body = normalize(row.body);
+    if (seen.has(body) || !terms.every(term => body.includes(term))) continue;
+    const { id: messageId } = JSON.parse(row.source_ref);
+    if (row.source_session_id === sessionId && Number.isFinite(beforeSeq) && parseSeqFromId(messageId) >= beforeSeq) continue;
+    if (!live(row)) continue;
+    seen.add(body);
+    results.push(sharedItem({ ...row, source_message_id: messageId }, 'automatic'));
+    if (results.length >= Math.min(AUTOMATIC_LIST_LIMIT, limit)) break;
+  }
+  return results;
+}
+
 function sharedItem(row, status) {
   return {
     id: row.id, kind: row.kind || 'consensus', status, title: row.title, body: row.body,
     sourceSessionId: row.source_session_id, sourceMessageId: row.source_message_id,
     createdAt: row.created_at, updatedAt: row.updated_at ?? row.created_at,
   };
+}
+
+/** Query saved copies only for the authenticated owner. Automatic entries are
+ * instead fenced by the host-approved IDs and by their live transcript source. */
+export function searchShare(db, root, ownerId, allowedIds, options) {
+  const { keyword, limit, signal } = options;
+  if (!db || signal?.aborted) return [];
+  const allowed = new Set(allowedIds);
+  const terms = normalize(keyword).split(/\s+/u).filter(Boolean);
+  const seen = new Set();
+  const items = [];
+  if (typeof ownerId === 'string' && ownerId) {
+    for (const row of db.prepare('SELECT * FROM share_items WHERE owner_id = ? ORDER BY updated_at DESC, id LIMIT ?')
+      .iterate(ownerId, PUBLISHED_LIMIT)) {
+      if (signal?.aborted) break;
+      const body = normalize(row.body);
+      const text = `${normalize(row.title)} ${body}`;
+      if (seen.has(body) || !terms.every(term => text.includes(term))) continue;
+      seen.add(body);
+      const item = sharedItem(row, 'published');
+      if (!allowed.has(item.sourceSessionId)) item.sourceSessionId = item.sourceMessageId = null;
+      items.push(item);
+      if (items.length >= limit) break;
+    }
+  }
+  return [...items, ...searchAutomaticAgreements(db, root, allowedIds, { ...options, seen })]
+    .sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id)).slice(0, limit);
 }
 
 function* liveCandidates(db, root, ownerId, allowedIds, now, id = null) {

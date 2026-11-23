@@ -5,7 +5,7 @@ export function supportsSessionDiscovery(agent) {
   return Array.isArray(agent?.capabilities) && agent.capabilities.includes('session_discovery');
 }
 
-/** A browser request belongs to one socket, Agent, operation, and dialog lifecycle. */
+/** A browser request belongs to one socket, Agent, operation, and caller lifecycle. */
 export function requestSessionDiscovery(store, agentId, op, payload, signal) {
   return new Promise((resolve, reject) => {
     if (signal.aborted || store.connectionState !== 'connected' || store.sessionDiscoverySupported !== true

@@ -1911,7 +1911,7 @@ export async function handleClientConversation(clientId, client, msg, checkAgent
         }
         // Forward the entire message minus the agentId field; the agent
         // router is the authoritative consumer of the payload shape.
-        const { agentId: _discard, _agentSessionIds: _untrustedIds, ...rest } = msg;
+        const { agentId: _discard, _agentSessionIds: _untrustedIds, _shareOwnerId: _untrustedShareOwner, ...rest } = msg;
         rest.type = relayType;
         if (relayType === 'yeaft_ask_user_answer') {
           rest._requestClientId = clientId;
@@ -1935,6 +1935,7 @@ export async function handleClientConversation(clientId, client, msg, checkAgent
             if (relayAgent.capabilities?.includes('session_discovery')
                 && yeaftSessionDb.getForAgent(client.userId, relayAgentId, sessionId)?.isArchived === false) {
               rest._agentSessionIds = ownedAgentSessionIds(client.userId, relayAgentId);
+              rest._shareOwnerId = client.userId;
             }
             const projectContext = yeaftProjectDb.contextForSession(
               client.userId,

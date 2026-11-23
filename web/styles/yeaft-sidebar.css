@@ -56,7 +56,7 @@
 .sidebar-primary-action { display: flex; align-items: center; gap: 10px; min-height: 34px; padding: 0 44px 0 10px; border: 0; border-radius: var(--agent-setup-control-radius); background: transparent; color: var(--text-primary); font: inherit; font-size: 14px; line-height: 20px; cursor: pointer; text-align: left; }
 .sidebar-primary-actions.is-compact { flex-direction: row; align-items: center; gap: var(--work-center-space-1); }
 /* Icons shrink a little rather than overflow at the narrowest sidebar width. */
-.sidebar-primary-actions.is-compact > .sidebar-primary-action { flex: 0 1 34px; justify-content: center; width: 34px; min-width: 28px; height: 34px; padding: 0; }
+.sidebar-primary-actions.is-compact > .sidebar-primary-action { flex: 0 1 34px; justify-content: center; width: 34px; min-width: 24px; height: 34px; padding: 0; }
 .sidebar-primary-action:hover:not(:disabled), .sidebar-primary-action.active { color: var(--text-primary); }
 .sidebar-primary-action:hover:not(:disabled), .sidebar-project-header:hover, .sidebar-project-header.drag-over { background: var(--sidebar-hover); }
 .sidebar-primary-action:disabled { cursor: not-allowed; color: var(--text-muted); }
