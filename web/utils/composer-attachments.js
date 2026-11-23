@@ -1,5 +1,6 @@
 /** Shared draft attachment lifecycle. Transport and validation stay with the caller.
  * upload(rows, signal) resolves ordered { fileId } references; each row has file/name.
+ * batchRows(rows) may partition a draft into separately cancellable requests.
  * validate(files, existingRows) may throw an i18n-key Error before any files are added.
  * enabled() guards user mutations, not receipt-driven uploadFiles() reconciliation.
  * Rows retain the original File for retries. clear/remove revoke draft previews;
@@ -8,7 +9,7 @@
  * scope() must include auth + logical composer identity; stale requests are aborted
  * and ignored even if their transport does not honour AbortSignal.
  */
-export function useComposerAttachments({ upload, validate, enabled = () => true, scope = () => '' }) {
+export function useComposerAttachments({ upload, validate, batchRows = rows => [rows], enabled = () => true, scope = () => '' }) {
   const attachments = Vue.ref([]);
   const error = Vue.ref('');
   const uploading = Vue.computed(() => attachments.value.some(row => row.uploading));
@@ -52,22 +53,21 @@ export function useComposerAttachments({ upload, validate, enabled = () => true,
     const g = generation;
     const identity = scope();
     pending.forEach(row => { row.uploading = true; row.uploadError = false; });
-    try {
-      const result = await request(pending);
+    for (const batch of batchRows(pending)) {
       if (!current(g, identity)) return;
-      pending.forEach((row, index) => {
+      // Do not upload rows removed while a previous batch was in flight.
+      const retained = batch.filter(row => attachments.value.includes(row));
+      if (!retained.length) continue;
+      let result;
+      try { result = await request(retained); }
+      catch { /* Only this batch failed; later batches can still finish. */ }
+      if (!current(g, identity)) return;
+      retained.forEach((row, index) => {
         if (!attachments.value.includes(row)) return;
         const fileId = typeof result?.[index]?.fileId === 'string' ? result[index].fileId.trim() : '';
         row.fileId = fileId || null;
         row.uploading = false;
         row.uploadError = !fileId;
-      });
-    } catch {
-      if (!current(g, identity)) return;
-      pending.forEach(row => {
-        if (!attachments.value.includes(row)) return;
-        row.uploading = false;
-        row.uploadError = true;
       });
     }
   }
@@ -151,26 +151,27 @@ export function uploadNameForFile(file, index = 0) {
 // byte limit when combined.
 const SESSION_UPLOAD_BATCH_SIZE = 10;
 
+export function sessionUploadBatches(rows) {
+  const batches = [];
+  for (const row of rows) {
+    const batch = batches.at(-1);
+    if (!batch || batch.length >= SESSION_UPLOAD_BATCH_SIZE || batch[0].selectionId !== row.selectionId) {
+      batches.push([row]);
+    } else batch.push(row);
+  }
+  return batches;
+}
+
 /** Session's existing multipart wire contract, with active (including SSO) token. */
 export async function uploadSessionAttachments(rows, auth, signal) {
-  const files = [];
-  for (let offset = 0; offset < rows.length;) {
-    if (signal?.aborted) throw signal.reason;
-    let end = offset + 1;
-    while (end < rows.length && end - offset < SESSION_UPLOAD_BATCH_SIZE
-        && rows[end].selectionId === rows[offset].selectionId) end++;
-    const batch = rows.slice(offset, end);
-    offset = end;
-    const body = new FormData();
-    batch.forEach(row => body.append('files', row.file, row.name));
-    const token = auth.getActiveToken?.() || auth.token;
-    const response = await fetch('/api/upload', { method: 'POST', body, signal, headers: token ? { Authorization: `Bearer ${token}` } : {} });
-    if (!response.ok) throw new Error('Upload failed');
-    const result = await response.json();
-    if (!Array.isArray(result.files) || result.files.length !== batch.length) throw new Error('Incomplete upload response');
-    files.push(...result.files);
-  }
-  return files;
+  const body = new FormData();
+  rows.forEach(row => body.append('files', row.file, row.name));
+  const token = auth.getActiveToken?.() || auth.token;
+  const response = await fetch('/api/upload', { method: 'POST', body, signal, headers: token ? { Authorization: `Bearer ${token}` } : {} });
+  if (!response.ok) throw new Error('Upload failed');
+  const result = await response.json();
+  if (!Array.isArray(result.files) || result.files.length !== rows.length) throw new Error('Incomplete upload response');
+  return result.files;
 }
 
 export function formatFileSize(bytes) {

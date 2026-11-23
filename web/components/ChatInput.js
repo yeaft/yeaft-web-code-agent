@@ -8,7 +8,7 @@ import VpMentionAutocomplete, {
   vpMentionOptionId,
 } from './VpMentionAutocomplete.js';
 import MessageComposer from './MessageComposer.js';
-import { useComposerAttachments, uploadSessionAttachments, hasAttachmentFileId, SESSION_FILE_ACCEPT } from '../utils/composer-attachments.js';
+import { useComposerAttachments, sessionUploadBatches, uploadSessionAttachments, hasAttachmentFileId, SESSION_FILE_ACCEPT } from '../utils/composer-attachments.js';
 import { useUserShortcuts, matchShortcut } from '../utils/user-shortcuts.js';
 
 export default {
@@ -445,6 +445,7 @@ export default {
     ]);
     const attachmentQueue = useComposerAttachments({
       scope: attachmentScope,
+      batchRows: sessionUploadBatches,
       enabled: () => attachmentsAllowed.value && !props.disabled && !isCompacting.value && !sending.value,
       upload: (rows, signal) => uploadSessionAttachments(rows, authStore, signal),
     });

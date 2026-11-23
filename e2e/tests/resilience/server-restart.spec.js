@@ -72,7 +72,8 @@ test.describe('Server 重启恢复', () => {
     await picker.setInputFiles(uploads.slice(0, 6));
     await expect(nativeSend).toBeEnabled();
     await picker.setInputFiles(uploads.slice(6));
-    await expect(composer.locator('.attachment-item')).toHaveCount(11);
+    await picker.setInputFiles({ ...upload, name: 'remove-during-restore.txt' });
+    await expect(composer.locator('.attachment-item')).toHaveCount(12);
     await expect(nativeSend).toBeEnabled();
     await chatPage.context().setOffline(true);
     await testServer.kill();
@@ -83,17 +84,29 @@ test.describe('Server 重启恢复', () => {
     await mockAgent.reconnect();
     native.catalog();
     const restoredBatchSizes = [];
-    const trackUpload = async response => {
-      if (response.url().endsWith('/api/upload') && response.ok()) {
-        restoredBatchSizes.push((await response.json()).files.length);
+    let releaseFirstUpload;
+    const firstUploadGate = new Promise(resolve => { releaseFirstUpload = resolve; });
+    let firstUploadStarted;
+    const firstUploadRequest = new Promise(resolve => { firstUploadStarted = resolve; });
+    await chatPage.route('**/api/upload', async route => {
+      if (!restoredBatchSizes.length) {
+        firstUploadStarted();
+        await firstUploadGate;
       }
-    };
-    chatPage.on('response', trackUpload);
-    await chatPage.context().setOffline(false);
+      const response = await route.fetch();
+      if (response.ok()) restoredBatchSizes.push((await response.json()).files.length);
+      await route.fulfill({ response });
+    });
+    try {
+      await chatPage.context().setOffline(false);
+      await firstUploadRequest;
+      await composer.getByRole('button', { name: 'Remove attachment remove-during-restore.txt' }).click();
+      await expect(composer.locator('.attachment-item')).toHaveCount(11);
+    } finally { releaseFirstUpload(); }
     await expect(nativeInput).toHaveValue('native draft edited offline');
     await expect(nativeSend).toBeEnabled();
-    await expect.poll(() => restoredBatchSizes).toEqual([6, 5]);
-    chatPage.off('response', trackUpload);
+    expect(restoredBatchSizes).toEqual([6, 5]);
+    await chatPage.unroute('**/api/upload');
     expect(mockAgent.messages('yeaft_session_send')).toHaveLength(0);
     await nativeSend.click();
     expect(await mockAgent.waitForMessage('yeaft_session_send')).toMatchObject({
