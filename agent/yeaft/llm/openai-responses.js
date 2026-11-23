@@ -766,8 +766,24 @@ export class OpenAIResponsesAdapter extends LLMAdapter {
           } else if (type === 'response.failed' || type === 'response.error') {
             sawTerminalEvent = true;
             // `response.error` is a compatibility alias for older proxies.
-            const rejected = toolInputError || (malformedStream && hasToolItems()
+            let rejected = toolInputError || (malformedStream && hasToolItems()
               ? new LLMToolInputError('OpenAI returned a malformed tool stream') : null);
+            // Failed responses may omit item.done and carry completed calls only
+            // in the terminal projection. Validate those calls for retry gating,
+            // but never publish them or parse still-in-flight arguments.
+            const output = event.response?.output;
+            if (!rejected && Array.isArray(output)) try {
+              for (const [idx, item] of output.entries()) {
+                if (item?.type !== 'function_call' || item.status !== 'completed') continue;
+                if (malformedStream) throw new LLMToolInputError('OpenAI returned a malformed tool stream');
+                const [call] = projectToolCalls([item], false, codecs);
+                registerToolSlot(idx, call.id);
+                completeToolSlot(idx, call);
+              }
+            } catch (error) {
+              if (!(error instanceof LLMToolInputError)) throw error;
+              rejected = error;
+            }
             const error = rejected || classifyResponseFailure(event, response);
             // Local calls are still buffered. Provider-hosted tools may have
             // already run, so don't automatically replay requests using them.

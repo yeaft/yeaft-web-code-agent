@@ -491,8 +491,15 @@ export function parseRetryAfterMs(headerValue) {
     if (!Number.isFinite(seconds) || seconds < 0) return null;
     return Math.round(seconds * 1000);
   }
-  // HTTP-date path
-  const ts = Date.parse(trimmed);
+  // Date.parse accepts unrelated formats (e.g. "9999-01"). Only allow
+  // the three HTTP-date formats, including the obsolete forms recipients accept.
+  const imf = /^(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun), \d{2} [A-Z][a-z]{2} \d{4} \d{2}:\d{2}:\d{2} GMT$/;
+  const rfc850 = /^(?:Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday), \d{2}-[A-Z][a-z]{2}-\d{2} \d{2}:\d{2}:\d{2} GMT$/;
+  const asctime = /^(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun) [A-Z][a-z]{2} (?: \d|\d{2}) \d{2}:\d{2}:\d{2} \d{4}$/;
+  const date = imf.test(trimmed) || rfc850.test(trimmed) ? trimmed
+    : asctime.test(trimmed) ? `${trimmed} GMT` : null;
+  if (!date) return null;
+  const ts = Date.parse(date);
   if (!Number.isFinite(ts)) return null;
   const delta = ts - Date.now();
   return delta > 0 ? delta : null;

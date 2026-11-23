@@ -80,7 +80,13 @@ describe('Responses retries failed streams without replaying tools', () => {
       const cases = [
         { session: 'eof-without-prefix' },
         { session: 'eof-with-prefix', prefix: 'I will check this. ' },
-        { session: 'server-error', failure: responsesFailure('server_error', 'temporary upstream failure') },
+        { session: 'server-error', failure: { type: 'response.failed', response: {
+          status: 'failed', error: { code: 'server_error', message: 'temporary upstream failure', headers: { 'Retry-After': '9999-01' } },
+          output: [{ ...responsesTool('call-0'), status: 'completed' }, { ...responsesTool('unfinished', '{'), status: 'incomplete' }],
+        } } },
+        { session: 'http-date', failure: responsesFailure('server_error', 'Temporary failure.', {
+          'Retry-After': new Date(Date.now() + 60_000).toUTCString(),
+        }), delayMs: 5, reason: 'transient_retry_after' },
         { session: 'overloaded', failure: responsesFailure('server_is_overloaded', 'overloaded', { 'Retry-After': 0.006 }),
           delayMs: 5, reason: 'transient_retry_after' },
         { session: 'limited-after-tool', prefix: 'I checked this. ', afterTool: true,
@@ -179,6 +185,26 @@ describe('Responses retries failed streams without replaying tools', () => {
       expect(seen.filter(e => e.type === 'turn_end' && e.terminal)).toEqual([
         expect.objectContaining({ stopReason: 'error' }),
       ]);
+    }
+
+    // A failed response can expose completed items only in its terminal payload.
+    // Confirmed malformed input, unlike in-flight arguments, must not trigger retry.
+    for (const item of [
+      { ...responsesTool('terminal', '{'), status: 'completed' },
+      { ...responsesTool('call-0', '{"changed":true}'), status: 'completed' },
+    ]) {
+      const failure = responsesFailure('server_error', 'Temporary error.');
+      failure.response.output = [item];
+      const fetch = vi.fn(async () => sse([...responsesSlot(0, '{}'), failure]));
+      vi.stubGlobal('fetch', fetch);
+      const { engine, execute } = createEngine();
+      const seen = await collect(engine.query({ prompt: 'Use Tool' }));
+      expect(seen.filter(e => e.type === 'error')).toEqual([expect.objectContaining({
+        retryable: false, error: expect.objectContaining({ name: 'LLMToolInputError' }),
+      })]);
+      expect(fetch).toHaveBeenCalledTimes(1);
+      expect(execute).not.toHaveBeenCalled();
+      expect(seen.filter(e => e.type === 'llm_retry' || e.type === 'tool_call')).toEqual([]);
     }
 
     // Even a known transient failure is not replayable if the provider might
