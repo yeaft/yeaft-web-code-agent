@@ -6,6 +6,22 @@
   flex-shrink: 0;
 }
 
+.composer-connection {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 2px 8px;
+  padding: 2px 8px 6px;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.composer-reconnect {
+  min-height: 28px;
+  padding: 2px 8px;
+  font-size: inherit;
+}
+
 /* Context Usage Hint (in header) */
 .context-usage-hint {
   font-size: 11px;

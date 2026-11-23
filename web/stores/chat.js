@@ -675,6 +675,8 @@ export const useChatStore = defineStore('chat', {
     digitalPersonAgentId: null,
     digitalPersonUiEnabledByAgent: readPersonUiPreferences(),
     connectionState: 'disconnected', // 'disconnected' | 'connecting' | 'connected' | 'reconnecting'
+    networkOffline: false, // browser's offline hint; not an origin reachability test
+    wsVerifying: false, // open transport is being checked after a wake or network change
     reconnectAttempts: 0,
     maxReconnectAttempts: 10,
     reconnectTimer: null,
@@ -3749,11 +3751,40 @@ export const useChatStore = defineStore('chat', {
       // a placeholder so the agent path runs end-to-end; the LLM still
       // sees the image content blocks via `_promptParts`.
       const hasAttachments = safeAttachments.length > 0;
-      if (!text?.trim() && !hasAttachments) return;
+      if (!text?.trim() && !hasAttachments) return false;
       const effectiveText = text?.trim() ? text : '(attached files)';
       const sentAt = Date.now();
       const clientMessageId = `u_${sentAt.toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
       const perfTraceId = createPerfTraceId();
+      const wsMsg = {
+        type: 'yeaft_session_send',
+        agentId: targetAgentId,
+        id: clientMessageId,
+        sessionId: groupId,
+        text: effectiveText,
+        mentions: Array.isArray(mentions) ? mentions : [],
+        perfTraceId,
+        ...(quickSend ? { quickSend: {
+          model: quickSend.model,
+          effort: quickSend.effort ?? null,
+          maxOutputTokens: quickSend.maxOutputTokens ?? null,
+        } } : {}),
+        ...(safeQuote ? { quote: safeQuote } : {}),
+      };
+      if (safeAttachments.length > 0) {
+        // Wire-side: only the fields the server resolver needs. The
+        // server (`client-conversation.js` yeaft_* relay) consumes
+        // `attachments[].fileId` against pendingFiles and forwards
+        // `files: [{name,mimeType,data:base64,isImage}]` to the agent.
+        wsMsg.attachments = safeAttachments.map((a) => ({
+          fileId: a.fileId,
+          isImage: !!a.isImage,
+        }));
+      }
+      // Do not create a local message/processing state until WebSocket.send
+      // accepts the frame. Never replay a chat frame on reconnect: if it was
+      // queued just before a drop, delivery is ambiguous until history catches up.
+      if (this.sendWsMessage(wsMsg) === false) return false;
       this.yeaftPerfTraceByMessageId = {
         ...(this.yeaftPerfTraceByMessageId || {}),
         [clientMessageId]: perfTraceId,
@@ -3826,31 +3857,6 @@ export const useChatStore = defineStore('chat', {
         this.getOrCreateExecutionStatus(activeYeaftConvId);
         watchdogHelpers.startYeaftWatchdog(this, activeYeaftConvId);
       }
-      const wsMsg = {
-        type: 'yeaft_session_send',
-        agentId: targetAgentId,
-        id: clientMessageId,
-        sessionId: groupId,
-        text: effectiveText,
-        mentions: Array.isArray(mentions) ? mentions : [],
-        perfTraceId,
-        ...(quickSend ? { quickSend: {
-          model: quickSend.model,
-          effort: quickSend.effort ?? null,
-          maxOutputTokens: quickSend.maxOutputTokens ?? null,
-        } } : {}),
-        ...(safeQuote ? { quote: safeQuote } : {}),
-      };
-      if (safeAttachments.length > 0) {
-        // Wire-side: only the fields the server resolver needs. The
-        // server (`client-conversation.js` yeaft_* relay) consumes
-        // `attachments[].fileId` against pendingFiles and forwards
-        // `files: [{name,mimeType,data:base64,isImage}]` to the agent.
-        wsMsg.attachments = safeAttachments.map((a) => ({
-          fileId: a.fileId,
-          isImage: !!a.isImage,
-        }));
-      }
       recordPerfTrace(this, {
         traceId: perfTraceId,
         phase: 'send.websocket_send',
@@ -3860,7 +3866,7 @@ export const useChatStore = defineStore('chat', {
         messageType: wsMsg.type,
         bytes: JSON.stringify(wsMsg).length,
       });
-      this.sendWsMessage(wsMsg);
+      return true;
     },
 
     cancelYeaftTask({ agentId = null, sessionId, taskId }) {
@@ -8108,16 +8114,17 @@ export const useChatStore = defineStore('chat', {
       this.btwSessionId = null;
     },
     sendBtwQuestion(question) {
-      if (!this.currentConversation) return;
-      this.btwMessages.push({ role: 'user', content: question });
-      this.btwMessages.push({ role: 'assistant', content: '' }); // placeholder for streaming
-      this.btwLoading = true;
-      this.sendWsMessage({
+      if (!this.currentConversation) return false;
+      if (this.sendWsMessage({
         type: 'btw_question',
         conversationId: this.currentConversation,
         question,
         btwSessionId: this.btwSessionId  // null for first question, reuse for subsequent
-      });
+      }) === false) return false;
+      this.btwMessages.push({ role: 'user', content: question });
+      this.btwMessages.push({ role: 'assistant', content: '' }); // placeholder for streaming
+      this.btwLoading = true;
+      return true;
     },
     closeBtw() {
       this.btwMode = false;
@@ -8177,8 +8184,7 @@ export const useChatStore = defineStore('chat', {
     sendWsMessage(msg) { return wsHelpers.sendWsMessage(this, msg); },
     parseWsMessage(data) { return wsHelpers.parseWsMessage(this, data); },
     connect() { wsHelpers.connect(this); },
-    ensureConnected() { return wsHelpers.ensureConnected(this); },
-    scheduleReconnect() { wsHelpers.scheduleReconnect(this); },
+    scheduleReconnect(fastDelay) { wsHelpers.scheduleReconnect(this, fastDelay); },
     manualReconnect() { wsHelpers.manualReconnect(this); },
     startHeartbeat() { wsHelpers.startHeartbeat(this); },
     stopHeartbeat() { wsHelpers.stopHeartbeat(this); },
@@ -8230,7 +8236,7 @@ export const useChatStore = defineStore('chat', {
     // ★ Multi-column: column management
     appendColumn(conversationId) { convHelpers.appendColumn(this, conversationId); },
     removeColumn(conversationId) { convHelpers.removeColumn(this, conversationId); },
-    sendMessageToConversation(conversationId, text, attachments = [], options = {}) { convHelpers.sendMessageToConversation(this, conversationId, text, attachments, options); },
+    sendMessageToConversation(conversationId, text, attachments = [], options = {}) { return convHelpers.sendMessageToConversation(this, conversationId, text, attachments, options); },
     cancelExecutionForConversation(conversationId) { convHelpers.cancelExecutionForConversation(this, conversationId); },
     // ★ Split-screen: panel management
     addPanel() {
@@ -8567,7 +8573,7 @@ export const useChatStore = defineStore('chat', {
         watchdogHelpers.stopProcessingWatchdog(this, conversationId);
       }
     },
-    sendMessage(text, attachments = [], options = {}) { convHelpers.sendMessage(this, text, attachments, options); },
+    sendMessage(text, attachments = [], options = {}) { return convHelpers.sendMessage(this, text, attachments, options); },
     cancelExecution() { convHelpers.cancelExecution(this); },
     /**
      * Bug 5: Yeaft-mode stop. ChatInput's default cancel calls

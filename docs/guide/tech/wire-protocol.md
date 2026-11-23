@@ -229,8 +229,9 @@ A user may have multiple agents online. Server uses `session-pin-router.js` to b
 
 ## Heartbeat / Buffering
 
-- **Heartbeat**: agent sends `agent_status { state: 'idle' | 'busy' }` every N seconds; server uses this to detect liveness
-- **Buffering**: when agent briefly disconnects, server caches pending outbound (`message-buffer`) and flushes on reconnect. Web client also has uplink buffer (`web/stores/chat.js`)
+- **浏览器链路保活**：Server 每 30 秒发送原生 WebSocket `ping`，浏览器的协议栈自动回复 `pong`，不依赖网页的 JavaScript 定时器。连续 90 秒未收到原生 `pong` 才回收连接；Server 事件循环明显延迟时最多多等一个心跳周期。手机休眠或切网仍可能断开，不能靠心跳保证后台常连。
+- **浏览器恢复**：前台网页用应用层 `ping { probeId }` / `pong { probeId }` 检查端到端链路。后台暂停探测；回前台、从页面缓存恢复或重新联网时，先验证旧连接（等 10 秒），不通则重连。旧 Server 不回传 `probeId`，恢复时直接换连接，以免把缓存的旧响应误当成新响应。断开时可继续编辑草稿；用户消息不自动重发，重连后按既有 Session 历史同步补齐。
+- **Agent 链路**：独立于浏览器链路，Server 和 Agent 分别检测连接存活。Agent 短暂离线时，已有的消息缓冲与回放规则不变。
 
 ## Debugging
 

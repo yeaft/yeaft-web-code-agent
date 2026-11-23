@@ -321,9 +321,9 @@ export default {
 
     // Per-panel send function
     const sendFn = (text, attachmentInfos) => {
-      if (!conversationId.value) return;
+      if (!conversationId.value) return false;
       const attachments = attachmentInfos || [];
-      store.sendMessageToConversation(conversationId.value, text, attachments);
+      return store.sendMessageToConversation(conversationId.value, text, attachments);
     };
 
     // Per-panel cancel function

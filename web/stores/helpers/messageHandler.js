@@ -338,9 +338,6 @@ export function handleMessage(store, msg) {
     msg = assembled;
   }
 
-  // Any message means connection is alive
-  store._lastPongAt = Date.now();
-
   switch (msg.type) {
     case 'session_discovery_response':
       acceptSessionDiscoveryResponse(store, msg);

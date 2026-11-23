@@ -5,7 +5,7 @@ import { WebSocket } from 'ws';
 export const agents = new Map();
 
 // 存储所有 web 客户端
-// clientId -> { ws, authenticated, currentAgent, currentConversation, sessionKey, isAlive }
+// clientId -> { ws, authenticated, currentAgent, currentConversation, sessionKey, webHeartbeatPendingSince }
 export const webClients = new Map();
 
 // 临时文件存储: fileId -> { name, mimeType, buffer, uploadedAt, userId }
