@@ -73,6 +73,8 @@ model 项可以是裸字符串（`"gpt-5"`），也可以是对象：
 
 OpenAI Responses 在未收到 `response.completed` / `response.incomplete` 等原生结束事件前提前 EOF，且尚未交付任何工具调用、也未确认参数或流事件非法时，按传输错误使用 `llmRetry` 的有限退避重试：默认最多重试 3 次（首次请求之外），`maxRetries: 0` 可禁用。截断的工具参数整批丢弃，不修补、不执行；已有可见文本按 continuation 续写。已确认的非法参数、`response.incomplete` 工具批次和已交付工具的请求仍不自动重放。重试期间可取消；耗尽后沿用既有 fallback（如配置）或以错误结束，不会无限重试。
 
+即使已经收到 HTTP 200，OpenAI Responses 流里的 `response.failed` 也会立即结束该次尝试，不必等连接关闭。只有已知的临时错误（例如服务错误、过载或限流）才走同一套有限重试；未知错误、无效请求、配额耗尽和策略拒绝不自动重试。对可重试的错误，优先使用有效的 `Retry-After`，最长不超过 `llmRetry.maxDelayMs`；限流还可以使用明确的「多久后再试」提示。已显示的文本从断点续写，已完成的本地工具只传回结果，不重新执行；使用供应商托管工具的失败请求不自动重放。
+
 #### Reasoning 连续性与缓存
 
 官方 `https://api.openai.com/v1` 和 `https://api.anthropic.com` 默认启用协议能力；未知代理默认关闭。仅在确认代理和上游完整支持后设置 `capabilities`，不要根据模型名称推断能力。Messages 转 Chat Completions 不等于原生 Anthropic 透传。

@@ -265,8 +265,7 @@ function mayMutateWorkspaceAfterReturn(engine, name, input) {
 //   • baseDelayMs:    starting backoff for transient (5xx / network) errors
 //   • maxDelayMs:     ceiling we never exceed regardless of backoff growth
 //   • jitterRatio:    ± random fraction of the delay (0.25 = ±25 %)
-// Rate-limit waits prefer the server's Retry-After header; we only fall
-// back to exponential backoff when the header is missing.
+// Retryable provider failures with a Retry-After hint prefer it over backoff.
 const RETRY_DEFAULTS = Object.freeze({
   maxRetries: 3,
   baseDelayMs: 1_000,
@@ -404,21 +403,21 @@ export function computeBackoffDelay(policy, attempt) {
 }
 
 /**
- * Wait before re-issuing a provider request after a retryable failure. Rate
- * limits prefer the server's Retry-After; everything else backs off. Shared by
- * the main request loop and context-rollover summary steps.
+ * Wait before re-issuing a provider request after a retryable failure. Prefer
+ * a provider's Retry-After within the configured cap, otherwise back off. Shared
+ * by the main request loop and context-rollover summary steps.
  *
  * @param {ReturnType<typeof resolveRetryPolicy>} policy
  * @param {Error} err - LLMRateLimitError or LLMServerError
  * @param {number} attempt - 1-based retry number
- * @returns {{ delayMs: number, reason: 'rate_limit_retry_after'|'rate_limit_backoff'|'transient_backoff'|'stream_idle_timeout' }}
+ * @returns {{ delayMs: number, reason: 'rate_limit_retry_after'|'rate_limit_backoff'|'transient_retry_after'|'transient_backoff'|'stream_idle_timeout' }}
  */
 function retryDelay(policy, err, attempt) {
-  if (err instanceof LLMRateLimitError) {
-    return Number.isFinite(err.retryAfterMs) && err.retryAfterMs > 0
-      ? { delayMs: Math.min(policy.maxDelayMs, err.retryAfterMs), reason: 'rate_limit_retry_after' }
-      : { delayMs: computeBackoffDelay(policy, attempt), reason: 'rate_limit_backoff' };
+  const limited = err instanceof LLMRateLimitError;
+  if (Number.isFinite(err.retryAfterMs) && err.retryAfterMs > 0) {
+    return { delayMs: Math.min(policy.maxDelayMs, err.retryAfterMs), reason: limited ? 'rate_limit_retry_after' : 'transient_retry_after' };
   }
+  if (limited) return { delayMs: computeBackoffDelay(policy, attempt), reason: 'rate_limit_backoff' };
   return {
     delayMs: computeBackoffDelay(policy, attempt - 1),
     reason: err instanceof LLMStreamIdleTimeoutError ? 'stream_idle_timeout' : 'transient_backoff',
@@ -586,7 +585,7 @@ export function estimateProviderInputBreakdown({
  * @typedef {{ type: 'tool_end', id: string, name: string, output: string, isError: boolean, skipped?: boolean }} ToolEndEvent
  * @typedef {{ type: 'recall', entryCount: number, cached: boolean }} RecallEvent
  * @typedef {{ type: 'fallback', from: string, to: string, reason: string }} FallbackEvent
- * @typedef {{ type: 'llm_retry', attempt: number, maxRetries: number, delayMs: number, reason: 'rate_limit_retry_after'|'rate_limit_backoff'|'transient_backoff'|'stream_idle_timeout', recoveryMode: 'restart'|'continue', errorName: string, statusCode: number|null, message: string }} LlmRetryEvent
+ * @typedef {{ type: 'llm_retry', attempt: number, maxRetries: number, delayMs: number, reason: 'rate_limit_retry_after'|'rate_limit_backoff'|'transient_retry_after'|'transient_backoff'|'stream_idle_timeout', recoveryMode: 'restart'|'continue', errorName: string, statusCode: number|null, message: string }} LlmRetryEvent
  * @typedef {{ type: 'error', error: Error, retryable: boolean, reason?: 'stream_idle_timeout', retryExhausted?: boolean, retryAttempts?: number, maxRetries?: number }} ErrorEvent
  *
  * @typedef {import('./llm/adapter.js').StreamEvent | TurnStartEvent | TurnEndEvent | ToolStartEvent | ToolEndEvent | RecallEvent | FallbackEvent | LlmRetryEvent | ErrorEvent} EngineEvent

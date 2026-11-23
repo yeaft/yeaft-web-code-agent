@@ -241,10 +241,11 @@ export function serializeModelRequestBody(payload, limitBytes) {
 
 /** Server error (500, 502, 503) — retryable. */
 export class LLMServerError extends Error {
-  constructor(message, statusCode) {
+  constructor(message, statusCode, retryAfterMs = null) {
     super(message);
     this.name = 'LLMServerError';
     this.statusCode = statusCode;
+    this.retryAfterMs = retryAfterMs;
   }
 }
 
@@ -498,11 +499,10 @@ export function parseRetryAfterMs(headerValue) {
 }
 
 /**
- * Read the `retry-after` header from a fetch Response in a case-insensitive
- * way that tolerates both real `Headers` instances and the plain object
- * stand-ins our tests sometimes hand us.
+ * Read the `retry-after` header case-insensitively from a fetch Response or
+ * a provider event with JSON headers.
  *
- * @param {Response | { headers?: Record<string, string> | Headers } | null | undefined} response
+ * @param {Response | { headers?: Record<string, string|number> | Headers } | null | undefined} response
  * @returns {number | null} milliseconds, or null when not present
  */
 export function retryAfterFromResponse(response) {
@@ -519,7 +519,8 @@ export function retryAfterFromResponse(response) {
       }
     }
   }
-  return parseRetryAfterMs(raw);
+  // SSE proxies can supply headers as JSON; ignore non-scalar values.
+  return typeof raw === 'string' || typeof raw === 'number' ? parseRetryAfterMs(raw) : null;
 }
 
 /**
