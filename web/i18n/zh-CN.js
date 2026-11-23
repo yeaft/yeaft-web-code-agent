@@ -1080,6 +1080,8 @@ export default {
   'input.send': '发送',
   'input.stopExecution': '停止执行',
   'chatInput.upload': '上传文件',
+  'chatInput.addAttachment': '添加附件',
+  'chatInput.moreActions': '更多输入操作',
   'chatInput.uploading': '正在上传…',
   'chatInput.uploadFailed': '上传失败',
   'chatInput.retryUpload': '重试',

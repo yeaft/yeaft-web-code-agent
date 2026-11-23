@@ -42,6 +42,7 @@ export default {
   props: {
     session: { type: Object, required: true },
     agentId: { type: String, default: null },
+    inActionMenu: { type: Boolean, default: false },
     disabled: { type: Boolean, default: false },
     open: { type: Boolean, default: undefined },
   },
@@ -182,7 +183,7 @@ export default {
         ref="trigger"
         type="button"
         class="session-scene-select__trigger"
-        :aria-label="$t('yeaft.session.scene.label') + ': ' + displayedLabel"
+        :aria-label="$t(inActionMenu ? 'yeaft.session.scene.choose' : 'yeaft.session.scene.label') + ': ' + displayedLabel"
         :title="$t('yeaft.session.scene.label')"
         aria-haspopup="listbox"
         :aria-expanded="isOpen"
@@ -193,6 +194,7 @@ export default {
         @mousedown="isOpen && $event.preventDefault()"
         @click="isOpen ? closeToTrigger() : setOpen(true)"
       >
+        <span class="chat-composer-overflow-label">{{ $t('yeaft.session.scene.choose') }}</span>
         <span class="yeaft-composer-model-name">{{ displayedLabel }}</span>
         <svg class="yeaft-model-chevron" :class="{ open: isOpen }" viewBox="0 0 24 24" width="12" height="12" aria-hidden="true"><path fill="currentColor" d="M7 10l5 5 5-5z"/></svg>
       </button>

@@ -328,20 +328,22 @@ export default {
           :quote="messageQuote"
           :cancel-fn="cancelYeaft"
           :show-stop="isProcessing"
-          :start-actions-on-top="isMobile && ordinarySession && !!topbarGroup"
+          :collapse-start-actions="isMobile && ordinarySession && !!topbarGroup"
+          @close-start-actions="closeComposerMenu('scene')"
           :disabled="isActiveSessionCopying"
           disabled-placeholder-key="yeaft.session.copying"
           placeholder-key="yeaft.placeholder"
           @remove-quote="messageQuote = null"
           @quote-consumed="messageQuote = null"
         >
-          <template #actions-start>
+          <template #actions-start="{ inActionMenu }">
             <SessionSceneSelect
               v-if="ordinarySession && topbarGroup"
               :key="JSON.stringify([sceneAgentId, topbarGroup.id])"
               :session="topbarGroup"
               :agent-id="sceneAgentId"
               :open="composerMenuOpen === 'scene'"
+              :in-action-menu="inActionMenu"
               :disabled="isActiveSessionCopying || store.connectionState !== 'connected' || store.hasAgentCapability?.(sceneAgentId, 'session_scenes') === false"
               @update:open="$event ? (composerMenuOpen = 'scene') : closeComposerMenu('scene')"
             />
@@ -836,7 +838,7 @@ export default {
     const narrowDetailMedia = typeof window.matchMedia === 'function' ? window.matchMedia(NARROW_DETAIL_QUERY) : null;
     const matchesMedia = (media, fallbackWidth) => media ? media.matches : window.innerWidth <= fallbackWidth;
     const isMobile = Vue.ref(matchesMedia(mobileMedia, 768));
-    // Capture focus before moving the leading controls or closing a popup.
+    // Keep focus on the active selector when closing its popup on rotation.
     Vue.watch(isMobile, (mobile) => {
       const composer = chatInputRef.value?.$el;
       const active = document.activeElement;

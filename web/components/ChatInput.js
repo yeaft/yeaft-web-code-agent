@@ -28,7 +28,7 @@ export default {
     placeholderKey: { type: String, default: '' },
     /** External processing flag. Controls stop button visibility. */
     showStop: { type: Boolean, default: false },
-    startActionsOnTop: { type: Boolean, default: false },
+    collapseStartActions: { type: Boolean, default: false },
     /** Explicit Chat conversation this input controls. Defaults to the active view conversation. */
     conversationId: { type: String, default: null },
     /** Explicit draft scope. Use this when one conversation contains multiple logical inputs. */
@@ -38,7 +38,7 @@ export default {
     disabled: { type: Boolean, default: false },
     disabledPlaceholderKey: { type: String, default: '' }
   },
-  emits: ['remove-quote', 'quote-consumed'],
+  emits: ['remove-quote', 'quote-consumed', 'close-start-actions'],
   template: `
     <footer class="input-area" ref="inputAreaRef">
       <!-- Expert chips bar (above attachments) — hidden in custom send mode and btw mode -->
@@ -101,7 +101,8 @@ export default {
         @retry-attachment="retryAttachment"
         @remove-attachment="removeAttachment"
         :show-stop="isStopVisible"
-        :start-actions-on-top="startActionsOnTop"
+        :collapse-start-actions="collapseStartActions"
+        @close-start-actions="$emit('close-start-actions')"
         :input-id="inputElementId"
         :send-label="$t('chatInput.send')"
         :stop-label="$t('chatInput.stop')"
@@ -161,9 +162,9 @@ export default {
             @hover-index="vpSelectedIndex = $event"
           />
         </template>
-        <template #start-actions>
+        <template #start-actions="{ inActionMenu }">
           <span v-if="store.btwMode" class="btw-input-tag">BTW</span>
-          <slot name="actions-start"></slot>
+          <slot name="actions-start" :in-action-menu="inActionMenu"></slot>
         </template>
         <template #end-actions-before>
           <slot name="actions-end-before"></slot>

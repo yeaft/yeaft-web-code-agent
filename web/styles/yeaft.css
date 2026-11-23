@@ -575,12 +575,48 @@
 }
 
 @media (max-width: 768px) {
-  .yeaft-session-input > .chat-composer.has-top-actions {
-    row-gap: var(--sidebar-section-toggle-gap);
+  .yeaft-session-input .has-collapsible-start-actions .chat-composer-actions {
+    flex-wrap: nowrap;
   }
 
-  .yeaft-session-input .chat-composer-top-actions .chat-composer-actions-start {
-    gap: var(--sidebar-section-toggle-gap);
+  .yeaft-session-input:has(.yeaft-composer-scene) .has-collapsible-start-actions .yeaft-composer-model {
+    max-width: var(--yeaft-composer-model-mobile-max-width);
+  }
+
+  .has-collapsible-start-actions .chat-composer-action-menu .yeaft-composer-scene {
+    position: static;
+  }
+
+  .has-collapsible-start-actions .yeaft-composer-effort {
+    white-space: nowrap;
+  }
+
+  .chat-composer-action-menu .session-scene-select__trigger {
+    width: 100%;
+    max-width: none;
+    min-height: 36px;
+    padding-inline: var(--chat-composer-gap);
+    font-size: var(--font-size-sm);
+  }
+
+  .chat-composer-action-menu .session-scene-select__trigger .yeaft-composer-model-name {
+    display: none;
+  }
+
+  .chat-composer-action-menu .session-scene-select__trigger .yeaft-model-chevron {
+    margin-inline-start: auto;
+  }
+
+  /* Stack scene choices above the action panel rather than opening a submenu
+     to its right, where it could run off the edge on a phone. */
+  .chat-composer-action-menu .yeaft-composer-scene .yeaft-composer-scene-dropdown {
+    min-width: 100%;
+    max-width: 75vw;
+    max-height: min(var(--yeaft-model-menu-max-height), 58dvh, max(2.5rem, calc(var(--yeaft-visual-viewport-height, 100dvh) - 11rem)));
+  }
+
+  .chat-composer-start-slot.is-collapsed .chat-composer-actions-start:not(.chat-composer-action-menu) .yeaft-composer-scene-error {
+    visibility: visible;
   }
 
   .yeaft-composer-model {
