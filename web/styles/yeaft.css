@@ -588,6 +588,13 @@
   }
 
   .has-collapsible-start-actions .yeaft-composer-effort {
+    width: 100%;
+  }
+
+  .has-collapsible-start-actions .yeaft-composer-effort > span {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
     white-space: nowrap;
   }
 
