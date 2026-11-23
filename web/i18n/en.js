@@ -949,6 +949,10 @@ export default {
   'chat.connection.reconnecting': 'Reconnecting ({current}/{max})...',
   'chat.connection.updating': 'Server is updating, please wait...',
   'chat.connection.disconnected': 'Disconnected',
+  'chat.connection.offlineDraft': 'Offline. You can keep editing your draft.',
+  'chat.connection.disconnectedDraft': 'Disconnected. You can keep editing your draft.',
+  'chat.connection.resuming': 'Reconnecting…',
+  'chat.connection.verifying': 'Checking connection…',
   'chat.connection.reconnect': 'Reconnect',
   'chat.connection.reconnectFailed': 'Connection lost. Please click reconnect to retry.',
 

@@ -44,3 +44,22 @@ export function shouldTerminateAgentHeartbeat(
   const lastSeenAt = Number.isFinite(agent.lastSeenAt) ? agent.lastSeenAt : 0;
   return lastSeenAt > 0 && (now - lastSeenAt) > timeoutMs;
 }
+
+// Native ping/pong is independent of page JavaScript. Keep the control frame
+// interval below common 60s idle limits, and tolerate more than one missed
+// reply without keeping dead background sockets forever.
+export const WEB_HEARTBEAT_INTERVAL_MS = 30_000;
+export const WEB_HEARTBEAT_TIMEOUT_MS = 90_000;
+const WEB_HEARTBEAT_STALL_GRACE_MS = 5_000;
+
+export function markWebHeartbeatPong(client) {
+  client.webHeartbeatPendingSince = null;
+}
+
+export function shouldPingWebClient(client, now, timerDriftMs) {
+  if (client.webHeartbeatPendingSince == null || timerDriftMs > WEB_HEARTBEAT_STALL_GRACE_MS) {
+    // Pong callbacks may not have had a chance to run after an event-loop stall.
+    client.webHeartbeatPendingSince = now;
+  }
+  return now - client.webHeartbeatPendingSince < WEB_HEARTBEAT_TIMEOUT_MS;
+}

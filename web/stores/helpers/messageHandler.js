@@ -337,9 +337,6 @@ export function handleMessage(store, msg) {
     msg = assembled;
   }
 
-  // Any message means connection is alive
-  store._lastPongAt = Date.now();
-
   switch (msg.type) {
     case 'person_response':
       acceptPersonResponse(store, msg);
