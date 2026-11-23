@@ -278,6 +278,15 @@ export default {
           <div class="initial-message-loading-text">{{ $t('chat.session.loadingHistory') }}</div>
         </div>
 
+        <div
+          v-if="!showSettings && conversationInventoryReady && waitingForLastViewedSession"
+          class="yeaft-history-load-error"
+          role="status"
+        >
+          <span>{{ $t('yeaft.sessionInventory.lastViewedUnavailable') }}</span>
+          <button type="button" class="btn-secondary" @click="retryConversationInventory">{{ $t('yeaft.sessionInventory.retry') }}</button>
+        </div>
+
         <!-- Messages Area — reuse standard MessageList for identical rendering -->
         <!-- task-fix-empty-group: hero state replaces MessageList when the
              active group has no roster — gives the user a single, clear
@@ -300,7 +309,7 @@ export default {
         </div>
         <MessageList
           ref="messageListRef"
-          v-if="!showSettings && !showOnboardingGuide && (conversationInventoryReady || store.yeaftVisibleMessages.length > 0) && (!isActiveGroupEmpty || store.yeaftVisibleMessages.length > 0 || store.yeaftInitialHistoryLoading)"
+          v-if="!showSettings && !showOnboardingGuide && !waitingForLastViewedSession && (conversationInventoryReady || store.yeaftVisibleMessages.length > 0) && (!isActiveGroupEmpty || store.yeaftVisibleMessages.length > 0 || store.yeaftInitialHistoryLoading)"
           :hide-speaker-identity="ordinarySession"
           :tools-in-status="ordinarySession && !!topbarGroup"
           :live-execution-keys="sessionLiveExecutionKeys"
@@ -317,7 +326,7 @@ export default {
 
         <!-- Input Area -->
         <ChatInput
-          v-if="!showSettings && !showOnboardingGuide"
+          v-if="!showSettings && !showOnboardingGuide && !waitingForLastViewedSession"
           ref="chatInputRef"
           class="yeaft-session-input"
           :conversation-id="store.yeaftConversationId"
@@ -1028,7 +1037,8 @@ export default {
       // sessionsStore.activeSessionId is only the fallback. Keeping send-path
       // resolution aligned with the visible filter prevents quick group
       // switches from stamping a message with a different group's id.
-      const groupId = store.yeaftActiveSessionFilter || (gs && gs.activeSessionId) || 'grp_default';
+      const groupId = store.yeaftActiveSessionFilter || gs?.activeSessionId;
+      if (!groupId || gs?.waitingForLastViewedSession) return false;
       const mentions = sceneSession.value ? [] : parseMentions(text).mentions;
       // Attachments: ChatInput's custom-send path passes the resolved
       // info list as the second arg. We forward it untouched — the
@@ -1103,10 +1113,10 @@ export default {
     // collapses to a slide-over on mobile, hover-reveal affordances
     // don't exist on touch. Resolve the group from the
     // groups store the same way `sendMessage` does (filter > activeSessionId
-    // > grp_default fallback) so the gear targets whatever is on screen.
+    // > active inventory row) so the gear targets whatever is on screen.
     const topbarGroup = Vue.computed(() => {
       const gs = sessionsStore();
-      if (!gs || !gs.sessions) return null;
+      if (!gs || !gs.sessions || gs.waitingForLastViewedSession) return null;
       const filterId = store.yeaftActiveSessionFilter || null;
       if (filterId && typeof gs.sessionById === 'function') {
         const row = gs.sessionById(filterId, store.currentAgent || null);
@@ -1116,7 +1126,7 @@ export default {
         const row = gs.sessionById(gs.activeSessionId, store.currentAgent || null);
         if (row) return row;
       }
-      return typeof gs.sessionById === 'function' ? gs.sessionById('grp_default', store.currentAgent || null) : null;
+      return null;
     });
 
     const deleteTurnHistory = Vue.computed(() => {
@@ -1471,7 +1481,9 @@ export default {
         && store._hasHandledYeaftSessionHydrate === true
         && !!(gs && gs.hasLoadedSnapshot);
     });
+    const waitingForLastViewedSession = Vue.computed(() => !!sessionsStore()?.waitingForLastViewedSession);
     const showOnboardingGuide = Vue.computed(() => {
+      if (waitingForLastViewedSession.value || store.yeaftActiveSessionFilter) return false;
       const gs = sessionsStore();
       return shouldShowYeaftOnboardingGuide({
         agentInventoryReady: store._hasHandledAgentList === true,
@@ -1735,6 +1747,7 @@ export default {
       onInviteDismiss,
       isActiveGroupEmpty,
       conversationInventoryReady,
+      waitingForLastViewedSession,
       showOnboardingGuide,
       agentSecret,
       agentSecretLoading,

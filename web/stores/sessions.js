@@ -15,7 +15,7 @@
  */
 
 import { compareSessionsByActivity } from './helpers/session-order.js';
-import { parseYeaftSessionIdentity } from './helpers/yeaft-session-identity.js';
+import { LAST_VIEWED_YEAFT_SESSION_KEY, parseYeaftSessionIdentity, readLastViewedYeaftSession } from './helpers/yeaft-session-identity.js';
 
 const MANUAL_SESSION_ORDER_KEY = 'yeaft-session-order-by-agent';
 const MANUAL_SESSION_ORDER_ALL_KEY = 'yeaft-session-order-global';
@@ -104,10 +104,6 @@ function findSessionKey(state, sessionId, agentId = null) {
   return keys[0] || '';
 }
 
-function normalizeActiveKey(state, sessionId, agentId = null) {
-  return findSessionKey(state, sessionId, agentId) || '';
-}
-
 function enterAgentScopedInventory(state) {
   if (state.inventoryIdentityMode === 'legacy-bare') {
     const activeRow = state.activeSessionKey ? state.sessions[state.activeSessionKey] : null;
@@ -126,112 +122,95 @@ function enterAgentScopedInventory(state) {
   state.inventoryIdentityMode = 'agent-scoped';
 }
 
-function reconcilePreferredExactSession(state) {
-  const preferred = state._preferredExactSessionIdentity || null;
-  if (!preferred) return false;
-  state._preferredExactSessionIdentity = null;
-
-  const exactRow = state.sessions[preferred.key] || null;
+function activateInventorySession(state, key) {
   const chat = _getChatStoreSafe();
-  const exactRowExists = exactRow?.id === preferred.sessionId
-    && exactRow.agentId === preferred.agentId;
-  const canActivateVisibleRow = chat?.currentView !== 'yeaft'
-    || typeof chat.setActiveSessionFilter === 'function';
-  if (exactRowExists && canActivateVisibleRow) {
-    state.activeSessionId = preferred.sessionId;
-    state.activeSessionKey = preferred.key;
-    if (chat?.currentView === 'yeaft') {
-      chat.setActiveSessionFilter(preferred.sessionId, {
-        agentId: preferred.agentId,
-        force: true,
-      });
-    } else if (chat) {
-      chat.yeaftActiveSessionFilter = preferred.sessionId;
-      chat.yeaftSessionAgentById = {
-        ...(chat.yeaftSessionAgentById || {}),
-        [preferred.sessionId]: preferred.agentId,
-      };
-      try { localStorage.setItem('lastViewedYeaftSession', preferred.key); }
-      catch (_) {}
+  const row = key ? state.sessions[key] : null;
+  const sessionId = row?.id || null;
+  const changed = state.activeSessionKey !== key || chat?.yeaftActiveSessionFilter !== sessionId;
+  state.activeSessionId = sessionId;
+  state.activeSessionKey = row ? key : null;
+  if (!chat || !changed) return;
+  if (row && chat.currentView === 'yeaft' && typeof chat.setActiveSessionFilter === 'function') {
+    chat.setActiveSessionFilter(row.id, { agentId: row.agentId, force: true, remember: false });
+  } else {
+    chat.yeaftActiveSessionFilter = sessionId;
+    if (row?.agentId) {
+      chat.yeaftSessionAgentById = { ...chat.yeaftSessionAgentById, [row.id]: row.agentId };
     }
-    return true;
+    if (!row) chat.syncActiveYeaftHistoryLoad?.();
   }
+}
 
-  state.activeSessionId = null;
-  state.activeSessionKey = null;
-  if (chat?.yeaftActiveSessionFilter === preferred.sessionId) {
-    chat.yeaftActiveSessionFilter = null;
-  }
-  if (chat?.yeaftSessionAgentById?.[preferred.sessionId] === preferred.agentId) {
-    const nextSessionAgents = { ...chat.yeaftSessionAgentById };
-    delete nextSessionAgents[preferred.sessionId];
-    chat.yeaftSessionAgentById = nextSessionAgents;
-  }
-  try {
-    const persisted = parseYeaftSessionIdentity(
-      localStorage.getItem('lastViewedYeaftSession') || '',
-    );
-    if (persisted.agentId === preferred.agentId
-        && persisted.sessionId === preferred.sessionId) {
-      localStorage.removeItem('lastViewedYeaftSession');
-    }
-  } catch (_) {}
-  return true;
+function readSavedSessionKey() {
+  const { agentId, sessionId } = readLastViewedYeaftSession();
+  return storeKeyFor(agentId, sessionId);
+}
+
+function forgetSavedSessionKey(key) {
+  if (readSavedSessionKey() !== key) return;
+  try { localStorage.removeItem(LAST_VIEWED_YEAFT_SESSION_KEY); } catch {}
 }
 
 function reconcileRetiredBareActiveSession(state) {
-  const sessionId = state._retiredBareActiveSessionId || null;
+  const sessionId = state._retiredBareActiveSessionId;
   if (!sessionId) return false;
-  const chat = _getChatStoreSafe();
   if (state.inventoryIdentityMode === 'legacy-bare') {
-    const bareRow = state.sessions[sessionId];
-    state._retiredBareActiveSessionId = null;
-    if (!bareRow || bareRow.agentId) return false;
-    state.activeSessionId = sessionId;
-    state.activeSessionKey = sessionId;
-    if (chat?.currentView === 'yeaft' && typeof chat.setActiveSessionFilter === 'function') {
-      chat.setActiveSessionFilter(sessionId, { force: true });
-    } else if (chat) {
-      chat.yeaftActiveSessionFilter = sessionId;
+    const row = state.sessions[sessionId];
+    if (!row || row.agentId) {
+      // An anonymous empty bootstrap can mean that every Agent is offline;
+      // it isn't proof that an old bare identity was deleted.
+      if (state.sessionOrder.length === 0) {
+        activateInventorySession(state, null);
+        return true;
+      }
+      state._retiredBareActiveSessionId = null;
+      forgetSavedSessionKey(sessionId);
+      return false;
     }
-    return true;
+    activateInventorySession(state, sessionId);
+  } else {
+    const candidates = state.sessionOrder.filter(key => {
+      const row = state.sessions[key];
+      return row?.agentId && row.id === sessionId;
+    });
+    activateInventorySession(state, candidates.length === 1 ? candidates[0] : null);
   }
-  const candidates = state.sessionOrder.filter(key => {
-    const row = state.sessions[key];
-    return row?.agentId && row.id === sessionId;
-  });
-  if (candidates.length === 1) {
-    const activeKey = candidates[0];
-    const alreadyResolved = state.activeSessionId === sessionId
-      && state.activeSessionKey === activeKey;
-    const agentId = state.sessions[activeKey]?.agentId || null;
-    state.activeSessionId = sessionId;
-    state.activeSessionKey = activeKey;
-    if (alreadyResolved) return true;
-    if (chat?.currentView === 'yeaft' && typeof chat.setActiveSessionFilter === 'function') {
-      chat.setActiveSessionFilter(sessionId, { agentId, force: true });
-      // `setActiveSessionFilter()` calls back into `setActive()`, which clears
-      // the migration marker as if this were an explicit user choice. Restore
-      // it until a user really chooses an exact row; a later second candidate
-      // must still be able to turn this automatic migration into fail-closed.
-      state._retiredBareActiveSessionId = sessionId;
-    } else if (chat) {
-      chat.yeaftActiveSessionFilter = sessionId;
-    }
-    return true;
-  }
-  state.activeSessionId = null;
-  state.activeSessionKey = null;
-  if (chat?.yeaftActiveSessionFilter === sessionId) {
-    chat.yeaftActiveSessionFilter = null;
-  }
-  try {
-    const persisted = localStorage.getItem('lastViewedYeaftSession') || '';
-    if (parseYeaftSessionIdentity(persisted).sessionId === sessionId) {
-      localStorage.removeItem('lastViewedYeaftSession');
-    }
-  } catch (_) {}
+  // Until the user chooses an exact row, a later Agent slice can still make
+  // the old bare identity ambiguous. Do not write a guessed owner to storage.
   return true;
+}
+
+function reconcileInventorySelection(state) {
+  const openingKey = state._explicitPendingSessionKey;
+  if (openingKey) {
+    // The operator explicitly opened a catalog route before the Agent's live
+    // row arrived. A delayed or incomplete inventory must not close it.
+    if (state.sessions[openingKey]) {
+      state._explicitPendingSessionKey = null;
+      activateInventorySession(state, openingKey);
+    }
+    return;
+  }
+  if (!state._preferredExactSessionIdentity && !state._retiredBareActiveSessionId && !state.activeSession) {
+    const saved = readLastViewedYeaftSession();
+    if (saved.agentId && saved.sessionId) {
+      state._preferredExactSessionIdentity = storeKeyFor(saved.agentId, saved.sessionId);
+    } else if (saved.sessionId) {
+      state._retiredBareActiveSessionId = saved.sessionId;
+    }
+  }
+  const preferredKey = state._preferredExactSessionIdentity;
+  if (preferredKey) {
+    const row = state.sessions[preferredKey];
+    // An absent row may belong to a temporarily offline Agent. Don't select
+    // a different Session (including one with the same id) while waiting.
+    if (row) state._preferredExactSessionIdentity = null;
+    activateInventorySession(state, row ? preferredKey : null);
+  } else if (!reconcileRetiredBareActiveSession(state)) {
+    const first = state.sessionList[0];
+    activateInventorySession(state, state.activeSession ? state.activeSessionKey
+      : (first ? findSessionKey(state, first.id, first.agentId) || null : null));
+  }
 }
 
 function normalizeOrderList(ids) {
@@ -282,17 +261,6 @@ function isRunningRow(s) {
   return s.running === true || s.active === true || s.isActive === true || s.isRunning === true;
 }
 
-function latestActivityValue(s) {
-  if (!s || typeof s !== 'object') return 0;
-  const value = s.latestActivityAt || s.lastActivityAt || s.lastMessageAt || s.updatedAt || 0;
-  if (typeof value === 'number' && Number.isFinite(value)) return value;
-  if (typeof value === 'string' && value) {
-    const parsed = Date.parse(value);
-    return Number.isFinite(parsed) ? parsed : 0;
-  }
-  return 0;
-}
-
 /**
  * Resolve the shared chat store iff Pinia is wired up. Returns null in
  * test/SSR environments that don't bootstrap window.Pinia, so every
@@ -327,6 +295,7 @@ export const useSessionsStore = defineStore('sessions', {
     inventoryIdentityMode: 'empty',
     _retiredBareActiveSessionId: null,
     _preferredExactSessionIdentity: null,
+    _explicitPendingSessionKey: null,
     lastSnapshotAt: 0,
     /**
      * Most recent CRUD result for the UI to surface as toast/modal error.
@@ -386,6 +355,9 @@ export const useSessionsStore = defineStore('sessions', {
     activeSession(state) {
       return state.activeSessionKey ? (state.sessions[state.activeSessionKey] || null) : null;
     },
+    waitingForLastViewedSession(state) {
+      return !state.activeSession && !!(state._preferredExactSessionIdentity || state._retiredBareActiveSessionId);
+    },
     hasLoadedSnapshot(state) {
       return state.lastSnapshotAt > 0;
     },
@@ -416,7 +388,6 @@ export const useSessionsStore = defineStore('sessions', {
      */
     applySnapshot(sessions, agentId = null, { deferActivation = false } = {}) {
       const arr = Array.isArray(sessions) ? sessions : [];
-      let retiredIdentityReconciled = false;
       if (!agentId) {
         // Legacy path — single-agent stores only. Once this inventory has
         // observed an Agent-scoped source, never downgrade it merely because
@@ -536,10 +507,6 @@ export const useSessionsStore = defineStore('sessions', {
         }
         this.sessionOrder = nextOrder;
       }
-      if (!deferActivation) {
-        retiredIdentityReconciled = reconcilePreferredExactSession(this)
-          || reconcileRetiredBareActiveSession(this);
-      }
       this.lastSnapshotAt = Date.now();
       const chat = _getChatStoreSafe();
       if (chat && agentId) {
@@ -548,70 +515,6 @@ export const useSessionsStore = defineStore('sessions', {
           if (s && s.id && !nextSessionAgents[s.id]) nextSessionAgents[s.id] = agentId;
         }
         chat.yeaftSessionAgentById = nextSessionAgents;
-      }
-      if (!deferActivation && !retiredIdentityReconciled) {
-      // fix-yeaft-session-server-persistence: prefer the user's
-      // last-viewed yeaft session over a blind `sessionOrder[0]`
-      // fall-back. This is what stops "switch agent + reload" from
-      // arbitrarily landing on some other agent's first session
-      // (the phantom-default-group bug).
-      let lastViewed = null;
-      try { lastViewed = localStorage.getItem('lastViewedYeaftSession') || null; }
-      catch (_) {}
-      // New values persist the full Agent + Session key. Bare Session ids remain
-      // readable for older browsers, but are resolved only inside this snapshot.
-      const storedLastViewedSession = lastViewed ? this.sessions[lastViewed] : null;
-      const lastViewedKey = storedLastViewedSession
-        ? lastViewed
-        : (lastViewed ? findSessionKey(this, lastViewed, agentId) : '');
-      const lastViewedSession = lastViewedKey ? this.sessions[lastViewedKey] : null;
-      const lastViewedMatchesAgent = lastViewedSession
-        && (!agentId || lastViewedSession.agentId === agentId);
-      const runningSessionKey = this.sessionOrder
-        .filter(id => this.sessions[id] && (!agentId || this.sessions[id].agentId === agentId) && this.sessions[id].running)
-        .sort((a, b) => latestActivityValue(this.sessions[b]) - latestActivityValue(this.sessions[a]))[0] || null;
-      const runningSessionId = runningSessionKey ? this.sessions[runningSessionKey]?.id : null;
-      const firstVisibleSession = this.sessionList[0] || null;
-      const firstVisibleSessionId = firstVisibleSession?.id || null;
-      const firstVisibleSessionKey = firstVisibleSessionId ? findSessionKey(this, firstVisibleSessionId, firstVisibleSession?.raw?.agentId || null) : '';
-      const fallbackActiveId = runningSessionId || (lastViewedMatchesAgent ? lastViewedSession.id : null) || firstVisibleSessionId;
-      const fallbackActiveKey = runningSessionKey || (lastViewedMatchesAgent ? lastViewedKey : '') || firstVisibleSessionKey || normalizeActiveKey(this, fallbackActiveId, agentId);
-      const activeAgentId = this.activeSessionKey ? this.sessions[this.activeSessionKey]?.agentId : null;
-      if (this.activeSessionId && !findSessionKey(this, this.activeSessionId, activeAgentId)) {
-        this.activeSessionId = fallbackActiveId;
-        this.activeSessionKey = fallbackActiveKey || null;
-      } else if (!this.activeSessionId && this.sessionOrder.length > 0
-          && !this._retiredBareActiveSessionId) {
-        this.activeSessionId = fallbackActiveId;
-        this.activeSessionKey = fallbackActiveKey || null;
-      } else if (this.activeSessionId) {
-        this.activeSessionKey = normalizeActiveKey(this, this.activeSessionId, activeAgentId) || this.activeSessionKey;
-      }
-      // Sanitize the chat store's parallel filter so a persisted
-      // yeaftActiveSessionFilter pointing at a now-deleted session does not
-      // render the main pane as empty until the user clicks. If Yeaft is
-      // already visible, go through chat.setActiveSessionFilter() instead of
-      // assigning the field directly: the first default selection must trigger
-      // the same history/model bootstrap as a manual sidebar click.
-      if (chat && !this._retiredBareActiveSessionId) {
-        const selectedSessionId = this.activeSessionId || fallbackActiveId;
-        let nextFilterId = null;
-        if (chat.yeaftActiveSessionFilter && !findSessionKey(this, chat.yeaftActiveSessionFilter)) {
-          nextFilterId = selectedSessionId;
-        } else if (!chat.yeaftActiveSessionFilter && selectedSessionId) {
-          nextFilterId = selectedSessionId;
-        }
-        if (nextFilterId) {
-          const nextFilterKey = normalizeActiveKey(this, nextFilterId);
-          const nextFilterAgentId = nextFilterKey ? this.sessions[nextFilterKey]?.agentId || null : null;
-          if (chat.currentView === 'yeaft' && typeof chat.setActiveSessionFilter === 'function') {
-            chat.setActiveSessionFilter(nextFilterId, { agentId: nextFilterAgentId, force: true });
-          } else {
-            chat.yeaftActiveSessionFilter = nextFilterId;
-          }
-          this.activeSessionKey = nextFilterKey || this.activeSessionKey;
-        }
-      }
       }
       // fix-yeaft-session-list-and-menu: mirror server-decorated pin
       // state from this snapshot into chatStore.pinnedSessions so the
@@ -647,6 +550,7 @@ export const useSessionsStore = defineStore('sessions', {
         };
         chat.applyServerPinSnapshot(agentId, pinnedInSnapshot, isOwnedByAgent);
       }
+      if (!deferActivation) reconcileInventorySelection(this);
     },
 
     /** Apply a `group_roster_changed` delta (in-place merge). */
@@ -682,7 +586,7 @@ export const useSessionsStore = defineStore('sessions', {
     },
 
     /** Record a `group_crud_result` for UI feedback. */
-    applyCrudResult(result, agentId = null, { activate = true } = {}) {
+    applyCrudResult(result, agentId = null) {
       if (!result) return;
       this.lastCrudResult = { ...result, at: Date.now() };
       if (result.requestId && this.pending[result.requestId]) {
@@ -694,8 +598,7 @@ export const useSessionsStore = defineStore('sessions', {
         this.applySnapshot(result.sessions, mutationAgentId);
       }
       if (result.ok && (result.op === 'create' || result.op === 'copy' || result.op === 'merge' || result.op === 'restore') && session && session.id) {
-        const key = this.applySnapshotUpsert(session, mutationAgentId);
-        if (key && activate) this.setActive(session.id, mutationAgentId);
+        this.applySnapshotUpsert(session, mutationAgentId);
       }
       if (result.ok && ['rename', 'update', 'update_task', 'run_task'].includes(result.op) && session && session.id) {
         // Task ACKs may come from an older Agent which omitted config.json.
@@ -711,13 +614,23 @@ export const useSessionsStore = defineStore('sessions', {
       const opKey = opSessionId && (mutationAgentId || allowOwnerlessMutation)
         ? findSessionKey(this, opSessionId, mutationAgentId)
         : '';
-      if (result.ok && (result.op === 'archive' || result.op === 'delete') && opSessionId && opKey) {
-        delete this.sessions[opKey];
-        this.sessionOrder = this.sessionOrder.filter(id => id !== opKey);
-        if (this.activeSessionKey === opKey
-            || (allowOwnerlessMutation && this.activeSessionId === opSessionId)) {
-          this.activeSessionKey = this.sessionOrder[0] || null;
-          this.activeSessionId = this.activeSessionKey ? this.sessions[this.activeSessionKey]?.id || null : null;
+      if (result.ok && (result.op === 'archive' || result.op === 'delete') && opSessionId
+          && (mutationAgentId || allowOwnerlessMutation)) {
+        const key = opKey || storeKeyFor(mutationAgentId, opSessionId);
+        const wasActive = this.activeSessionKey === key || this._explicitPendingSessionKey === key;
+        if (this._explicitPendingSessionKey === key) this._explicitPendingSessionKey = null;
+        const wasPreferred = this._preferredExactSessionIdentity === key;
+        if (wasPreferred) this._preferredExactSessionIdentity = null;
+        const bareMatch = this._retiredBareActiveSessionId === opSessionId;
+        if (bareMatch && (wasActive || (allowOwnerlessMutation && !mutationAgentId))) {
+          this._retiredBareActiveSessionId = null;
+          forgetSavedSessionKey(opSessionId);
+        }
+        forgetSavedSessionKey(key);
+        delete this.sessions[key];
+        this.sessionOrder = this.sessionOrder.filter(id => id !== key);
+        if (wasActive || wasPreferred || bareMatch) {
+          reconcileInventorySelection(this);
         }
       }
       if (result.ok && result.op === 'update_config' && opSessionId) {
@@ -746,7 +659,11 @@ export const useSessionsStore = defineStore('sessions', {
         ...this._normalize(session, effectiveAgentId, isPinnedRow(prev)),
       };
       if (!existed) this.sessionOrder.push(key);
-      reconcileRetiredBareActiveSession(this);
+      if (key === this._explicitPendingSessionKey || key === this._preferredExactSessionIdentity) {
+        reconcileInventorySelection(this);
+      } else {
+        reconcileRetiredBareActiveSession(this);
+      }
       return key;
     },
 
@@ -755,7 +672,6 @@ export const useSessionsStore = defineStore('sessions', {
       if (sessionId && key && this.sessions[key]) {
         this.activeSessionId = sessionId;
         this.activeSessionKey = key;
-        this._retiredBareActiveSessionId = null;
       } else {
         this.activeSessionId = null;
         this.activeSessionKey = null;
@@ -843,22 +759,34 @@ export const useSessionsStore = defineStore('sessions', {
       this.inventoryIdentityMode = 'empty';
       this._retiredBareActiveSessionId = null;
       this._preferredExactSessionIdentity = null;
+      this._explicitPendingSessionKey = null;
       this.lastSnapshotAt = 0;
     },
 
+    rememberSessionSelection(sessionId, agentId, activeKey) {
+      const key = activeKey || (agentId && storeKeyFor(agentId, sessionId));
+      if (!key) return;
+      this._preferredExactSessionIdentity = null;
+      this._retiredBareActiveSessionId = null;
+      this._explicitPendingSessionKey = activeKey ? null : key;
+      try { localStorage.setItem(LAST_VIEWED_YEAFT_SESSION_KEY, key); } catch {}
+    },
+
+    preferredInventoryIdentity() {
+      const exactKey = this._explicitPendingSessionKey || this._preferredExactSessionIdentity;
+      if (exactKey) return parseYeaftSessionIdentity(exactKey);
+      if (this._retiredBareActiveSessionId) return { agentId: null, sessionId: this._retiredBareActiveSessionId };
+      const active = this.activeSession;
+      return active ? { agentId: active.agentId, sessionId: active.id } : readLastViewedYeaftSession();
+    },
+
     beginInventoryCommit(preferredSessionId = null, preferredAgentId = null) {
+      const openingKey = this._explicitPendingSessionKey;
       this.resetInventory();
-      if (preferredSessionId && preferredAgentId) {
-        const key = storeKeyFor(preferredAgentId, preferredSessionId);
-        this.activeSessionId = preferredSessionId;
-        this.activeSessionKey = key;
-        this._preferredExactSessionIdentity = {
-          sessionId: preferredSessionId,
-          agentId: preferredAgentId,
-          key,
-        };
-      } else if (preferredSessionId) {
-        this._retiredBareActiveSessionId = preferredSessionId;
+      this._explicitPendingSessionKey = openingKey;
+      if (!openingKey && preferredSessionId) {
+        if (preferredAgentId) this._preferredExactSessionIdentity = storeKeyFor(preferredAgentId, preferredSessionId);
+        else this._retiredBareActiveSessionId = preferredSessionId;
       }
     },
 

@@ -2,7 +2,8 @@ import { mkdir } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { expect } from '@playwright/test';
 import { test } from '../../fixtures/scheduled-task-server.js';
-import { scheduledTaskAgent, TASK_SESSION_ID } from '../../fixtures/scheduled-task-agent.js';
+import { MockAgent } from '../../fixtures/mock-agent.js';
+import { scheduledTaskAgent, CHAT_SESSION_ID, TASK_SESSION_ID, taskSession } from '../../fixtures/scheduled-task-agent.js';
 
 test.use({ serverEnv: { YEAFT_LOCAL_RUN: 'true', SERVE_DIST: process.env.SERVE_DIST || 'false' } });
 test.setTimeout(60000);
@@ -221,7 +222,7 @@ test('task editing preserves failed drafts for retry, then manually runs the sam
 
 });
 
-test('Task reads synchronize across independent devices and survive clean storage reconnects without muting future runs', async ({ browser, page, serverUrl, mockAgent }) => {
+test('Task reads synchronize across devices and background runs do not take focus on reload', async ({ browser, page, serverUrl, mockAgent }) => {
   const state = scheduledTaskAgent(mockAgent);
   await boot(page, serverUrl, mockAgent);
   await showSidebar(page);
@@ -284,5 +285,85 @@ test('Task reads synchronize across independent devices and survive clean storag
     await expect(taskRow(page)).toHaveCount(0);
     await page.locator('.scheduled-task-notification-open').click();
     await expect(second.locator('.scheduled-task-notification')).toHaveCount(0);
+
+    // With two Agents, the other Agent can report a running task before
+    // inventory commits, or even use the same local id as the saved Session.
+    const backgroundAgent = new MockAgent(serverUrl, 'background-task-agent');
+    const route = () => second.evaluate(() => window.Pinia.useChatStore().activeSessionRoute);
+    const remembered = () => second.evaluate(() => localStorage.getItem('lastViewedYeaftSession'));
+    const ordinaryRoute = { runtimeProvider: 'yeaft', agentId: mockAgent.agentId, sessionId: CHAT_SESSION_ID };
+    const savedKey = `${mockAgent.agentId}\u001f${CHAT_SESSION_ID}`;
+    await backgroundAgent.connect();
+    try {
+      scheduledTaskAgent(backgroundAgent, {
+        sessions: [taskSession({ id: CHAT_SESSION_ID, name: 'Daily Report', running: true })],
+      });
+      await expect.poll(remembered).toBe(savedKey);
+      const topTitle = second.locator('.yeaft-topbar-session-title');
+      const runningStatus = (type) => {
+        const status = { sessionId: CHAT_SESSION_ID, vpId: 'omni', state: 'thinking' };
+        return { type: 'yeaft_output', agentId: backgroundAgent.agentId,
+          event: type === 'vp_status_changed' ? { type, ...status } : { type, statuses: [status] } };
+      };
+      let releaseInventory;
+      let delayInventory = true;
+      const delayedLiveLists = [];
+      await second.routeWebSocket(/.*/, ws => {
+        const server = ws.connectToServer();
+        server.onMessage(raw => {
+          const msg = JSON.parse(String(raw));
+          if (!delayInventory) return ws.send(raw);
+          if (msg.type === 'yeaft_output' && (msg.event?.type === 'session_list_updated'
+              || (msg.event?.type === 'session_crud_result' && msg.event.op === 'list'))) {
+            delayedLiveLists.push(() => ws.send(raw));
+            return;
+          }
+          if (msg.type !== 'yeaft_session_hydrate_complete') return ws.send(raw);
+          ws.send(JSON.stringify(runningStatus('vp_status_changed')));
+          ws.send(JSON.stringify(runningStatus('vp_status_snapshot')));
+          releaseInventory = () => ws.send(raw);
+        });
+      });
+      await second.reload();
+      await expect.poll(() => !!releaseInventory).toBe(true);
+      // App state observes the status while the final inventory frame is still
+      // held. It must not project the foreign task as the visible route.
+      await expect.poll(() => second.evaluate(agentId => Object.values(window.Pinia.useChatStore().vpStatuses)
+        .some(status => status.agentId === agentId && status.state === 'thinking'), backgroundAgent.agentId)).toBe(true);
+      expect(await route()).toBeNull();
+      expect(await remembered()).toBe(savedKey);
+      delayInventory = false;
+      releaseInventory();
+      delayedLiveLists.forEach(deliver => deliver());
+      await expect(topTitle).toHaveText('Ordinary conversation');
+      await expect.poll(route).toEqual(ordinaryRoute);
+      await expect(second.locator('.assistant-turn')).toContainText(`${mockAgent.agentName}: persistent conversation for ${CHAT_SESSION_ID}`);
+      await expect.poll(remembered).toBe(savedKey);
+
+      const composer = second.locator('.yeaft-session-input textarea');
+      await mockAgent.disconnect();
+      await expect.poll(() => second.evaluate(agentId => window.Pinia.useChatStore().agents
+        .some(row => row.id === agentId && row.online), mockAgent.agentId)).toBe(false);
+      await second.reload();
+      await expect(second.getByText('Your last Session is temporarily unavailable.', { exact: false })).toBeVisible();
+      await expect(composer).toHaveCount(0);
+      expect(await route()).toBeNull();
+      expect(await remembered()).toBe(savedKey);
+      await mockAgent.reconnect();
+      state.publish();
+      await expect(topTitle).toHaveText('Ordinary conversation');
+      await expect.poll(route).toEqual(ordinaryRoute);
+      await expect(composer).toBeEditable();
+      expect(state.requests.filter(request => request.type === 'yeaft_session_send')).toHaveLength(0);
+
+      // Choosing another Session is deliberate and changes what reload restores.
+      await showSidebar(second);
+      await taskRow(second, 'Daily Report').click();
+      await expect(topTitle).toHaveText('Daily Report');
+      await expect.poll(remembered).toBe(`${backgroundAgent.agentId}\u001f${CHAT_SESSION_ID}`);
+      await second.reload();
+      await expect(topTitle).toHaveText('Daily Report');
+      await expect.poll(route).toEqual({ ...ordinaryRoute, agentId: backgroundAgent.agentId });
+    } finally { await backgroundAgent.disconnect(); }
   } finally { await device.close(); }
 });

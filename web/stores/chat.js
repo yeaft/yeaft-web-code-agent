@@ -655,7 +655,7 @@ export const useChatStore = defineStore('chat', {
     browserRuntimeServerEnabled: false,
     yeaftSessionHydrateRequestId: null,
     yeaftSessionHydrateSlices: [],
-    yeaftSessionHydrateConfigDeltas: null, // request-scoped live config deltas replayed at inventory commit
+    yeaftSessionHydrateCrudDeltas: null, // request-scoped live mutations replayed at inventory commit
     yeaftSessionHydrateError: null,
     _yeaftSessionInventorySocketQuarantined: false,
     sessionKey: null, // Uint8Array for encryption
@@ -3169,7 +3169,7 @@ export const useChatStore = defineStore('chat', {
       const requestId = `session_inventory_${crypto.randomUUID()}`;
       this.yeaftSessionHydrateRequestId = requestId;
       this.yeaftSessionHydrateSlices = [];
-      this.yeaftSessionHydrateConfigDeltas = null;
+      this.yeaftSessionHydrateCrudDeltas = null;
       this._hasHandledAgentList = false;
       this._hasHandledYeaftSessionHydrate = false;
       this.yeaftSessionHydrateError = null;
@@ -3182,7 +3182,7 @@ export const useChatStore = defineStore('chat', {
       if (!sent) {
         this.yeaftSessionHydrateRequestId = null;
         this.yeaftSessionHydrateSlices = [];
-        this.yeaftSessionHydrateConfigDeltas = null;
+        this.yeaftSessionHydrateCrudDeltas = null;
         this.yeaftSessionHydrateError = 'session_inventory_send_failed';
         return null;
       }
@@ -3190,7 +3190,7 @@ export const useChatStore = defineStore('chat', {
         if (this.yeaftSessionHydrateRequestId !== requestId) return;
         this.yeaftSessionHydrateRequestId = null;
         this.yeaftSessionHydrateSlices = [];
-        this.yeaftSessionHydrateConfigDeltas = null;
+        this.yeaftSessionHydrateCrudDeltas = null;
         this.yeaftSessionHydrateError = 'session_inventory_timeout';
         if (this.yeaftSessionInventoryCompleteSupported !== true) {
           this._yeaftSessionInventorySocketQuarantined = true;
@@ -6232,13 +6232,7 @@ export const useChatStore = defineStore('chat', {
           if (event.type !== 'yeaft_session_hydrate'
               && this.yeaftSessionHydrateRequestId
               && this.yeaftSessionInventoryCompleteSupported === true) {
-            const slices = Array.isArray(this.yeaftSessionHydrateSlices)
-              ? this.yeaftSessionHydrateSlices.filter(slice => slice.agentId !== (msg.agentId || null))
-              : [];
-            this.yeaftSessionHydrateSlices = [...slices, {
-              agentId: msg.agentId || null,
-              sessions: rows,
-            }];
+            handlerHelpers.bufferYeaftSessionInventorySlice(this, { agentId: msg.agentId, sessions: rows }, { live: true });
             break;
           }
           const prevGroupId = gs ? (gs.activeSessionId || null) : null;
@@ -6260,18 +6254,15 @@ export const useChatStore = defineStore('chat', {
           const newAgentId = gs?.activeSessionKey
             ? gs.sessions?.[gs.activeSessionKey]?.agentId || null
             : null;
-          // Bug 1: after enterYeaft the group snapshot may arrive *after*
-          // initial history load (which happened with groupId:null), so
-          // reload history for the correct group when activeGroupId changes.
-          if (this.currentView === 'yeaft' && newGroupId) {
+          // A stable Session may still need a history bootstrap after a new
+          // Agent snapshot. Selection changes already bootstrap in the store.
+          if (this.currentView === 'yeaft' && newGroupId && newGroupId === prevGroupId
+              && newAgentId === prevAgentId) {
             const targetAgentId = newAgentId || resolveAgentIdForSession(this, newGroupId, msg.agentId || null);
-            const sessionKey = yeaftHistoryIdentityKey(targetAgentId, newGroupId);
-            const sessionState = this.yeaftSessionHistoryState[sessionKey] || null;
-            this.setActiveSessionFilter(newGroupId, {
-              agentId: targetAgentId,
-              force: prevAgentId !== targetAgentId
-                || msgHelpers.shouldForceHydrateActiveYeaftSession(newGroupId, prevGroupId, sessionState),
-            });
+            const sessionState = this.yeaftSessionHistoryState[yeaftHistoryIdentityKey(targetAgentId, newGroupId)];
+            if (msgHelpers.shouldForceHydrateActiveYeaftSession(newGroupId, prevGroupId, sessionState)) {
+              this.setActiveSessionFilter(newGroupId, { agentId: targetAgentId, force: true, remember: false });
+            }
           }
           break;
         }
@@ -6326,13 +6317,15 @@ export const useChatStore = defineStore('chat', {
           if (isBranchResult && event.projectsAuthoritative === true && Array.isArray(event.projects)) {
             this.applySessionCatalogSnapshot(this.sessionCatalog, event.projects, null, { authoritative: false });
           }
-          handlerHelpers.bufferYeaftSessionConfigDelta(this, event, msg.agentId || null);
-          if (gs) gs.applyCrudResult(event, msg.agentId || null, {
-            // The initiating branch action owns navigation so it can render a
-            // visible success state before entering the new Session. Other
-            // tabs still receive the inventory update without being redirected.
-            activate: !isBranchResult,
-          });
+          if (this.yeaftSessionHydrateRequestId && this.yeaftSessionInventoryCompleteSupported === true
+              && event.ok && event.op === 'list' && Array.isArray(event.sessions)) {
+            // A successful direct Agent list is useful even if the Server's
+            // replay later fails. Apply it below and also keep it at commit.
+            handlerHelpers.bufferYeaftSessionInventorySlice(this, { agentId: msg.agentId, sessions: event.sessions }, { live: true });
+          }
+          handlerHelpers.bufferYeaftSessionCrudDelta(this, event, msg.agentId || null);
+          // The initiating create/restore/branch UI owns navigation.
+          if (gs) gs.applyCrudResult(event, msg.agentId || null);
           if (event.ok && event.op === 'delete' && event.sessionId && msg.agentId) {
             this.clearYeaftHistoryMemory({
               agentId: msg.agentId,
@@ -6648,7 +6641,6 @@ export const useChatStore = defineStore('chat', {
           } else if (sessionId) {
             this.clearYeaftSessionProcessingIfIdle(sessionId, { agentId });
           }
-          this.restoreActiveYeaftSessionFromStatuses([nextStatus], agentId);
           break;
         }
         case 'vp_status_snapshot': {
@@ -6737,7 +6729,6 @@ export const useChatStore = defineStore('chat', {
           retireSettledQueryProgress(this, msg.agentId, msg.conversationId, statuses);
           reconcileQueryProgressSnapshot(this, msg, statuses);
           this.reconcileYeaftRuntimeFromStatuses(msg, statuses, { sessionId: eventSessionId ?? null });
-          this.restoreActiveYeaftSessionFromStatuses(statuses, msg.agentId || null);
           break;
         }
 
@@ -6966,24 +6957,6 @@ export const useChatStore = defineStore('chat', {
       return true;
     },
 
-    restoreActiveYeaftSessionFromStatuses(statuses = [], sourceAgentId = null) {
-      if (this.yeaftActiveSessionFilter) return null;
-      const rows = Array.isArray(statuses) ? statuses : [];
-      const running = rows
-        .filter(row => row && (row.sessionId || row.groupId) && !['idle', 'offline', 'completed', 'failed', 'aborted'].includes(row.state))
-        .sort((a, b) => (b.updatedAt || b.since || 0) - (a.updatedAt || a.since || 0));
-      const sessionId = running[0]?.sessionId || running[0]?.groupId || null;
-      if (!sessionId) return null;
-      const agentId = sourceAgentId || running[0]?.agentId || uniqueYeaftSessionOwner(this, sessionId);
-      if (!agentId) return null;
-      this.setActiveSessionFilter(sessionId, { agentId, force: true });
-      try {
-        const gs = window.Pinia?.useSessionsStore?.() || (window.__useSessionsStore && window.__useSessionsStore());
-        if (gs && typeof gs.setActive === 'function') gs.setActive(sessionId, agentId);
-      } catch (_) {}
-      return sessionId;
-    },
-
     setActiveSessionFilter(groupId, opts = {}) {
       const prev = this.yeaftActiveSessionFilter || null;
       const next = groupId || null;
@@ -7032,13 +7005,11 @@ export const useChatStore = defineStore('chat', {
         if (!this.messagesMap[targetConversationId]) this.messagesMap[targetConversationId] = [];
         if (this.currentView === 'yeaft') this.activeConversations = [targetConversationId];
       }
-      try {
-        const gs = window.Pinia?.useSessionsStore?.() || (window.__useSessionsStore && window.__useSessionsStore());
-        if (gs && typeof gs.setActive === 'function') gs.setActive(next, targetAgentId || null);
-        const activeKey = gs?.activeSessionKey || null;
-        if (activeKey) localStorage.setItem('lastViewedYeaftSession', activeKey);
-        else localStorage.removeItem('lastViewedYeaftSession');
-      } catch (_) {}
+      const gs = getSessionsStore();
+      gs?.setActive?.(next, targetAgentId);
+      if (opts.remember !== false && next) {
+        gs?.rememberSessionSelection?.(next, opts.agentId || null, gs.activeSessionKey);
+      }
       if (scheduledTaskHelpers.isScheduledTaskSessionVisible(this, next, targetAgentId)) {
         scheduledTaskHelpers.markScheduledTaskSessionRead(this, next, targetAgentId,
           getSessionsStore()?.sessionById?.(next, targetAgentId)?.task?.lastRun);

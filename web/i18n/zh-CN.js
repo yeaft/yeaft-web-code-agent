@@ -920,6 +920,7 @@ export default {
   'yeaft.historyLoad.tooLarge': '这部分会话历史过大，无法加载，但仍保存在 Agent 中。',
   'yeaft.historyLoad.retry': '重新加载',
   'yeaft.sessionInventory.error': '暂时无法加载 Session，会话仍安全保存在 Agent 中。',
+  'yeaft.sessionInventory.lastViewedUnavailable': '上次查看的会话暂时不可用。可以重试，或从侧栏选择其他会话。',
   'yeaft.sessionInventory.retry': '重新加载 Session',
   'chat.session.closed': '会话已关闭',
   'chat.session.agentOffline': 'Agent 已离线，该会话将在 Agent 重新上线后恢复。',

@@ -258,10 +258,14 @@ describe('message flow regressions', () => {
     expect(rows()).toEqual([]);
   });
 
-  it('waits for a slow scene receipt, retains an unconfirmed draft and ignores its stale receipt', async () => {
+  it('keeps current Session choices and configuration when receipts or inventory arrive out of order', async () => {
     vi.useFakeTimers();
     const mockedSessions = Pinia.useSessionsStore;
+    const mockedChat = Pinia.useChatStore;
     Pinia.useSessionsStore = useSessionsStore;
+    const lastViewedKey = 'lastViewedYeaftSession';
+    const saved = localStorage.getItem(lastViewedKey);
+    localStorage.removeItem(lastViewedKey);
     try {
       storeFactories.clear();
       const store = useChatStore();
@@ -324,8 +328,88 @@ describe('message flow regressions', () => {
       expect(await interruptedSend).toBe(false);
       expect(sent()).toHaveLength(5);
       expect(store._sessionCrudPending.size).toBe(0);
+
+      Pinia.useChatStore = useChatStore;
+      // A catalog route can open before its live row. Holding a snapshot must
+      // not hide that view or start the old Session's history when it commits.
+      store.agents[0].online = true;
+      store.yeaftSessionInventoryCompleteSupported = true;
+      const scope = (agentId, sessionId) => ({ runtimeProvider: 'yeaft', agentId, sessionId });
+      const open = (agentId, sessionId) => store.openCatalogSession({
+        catalogKey: `yeaft:${agentId}:${sessionId}`, routeRef: scope(agentId, sessionId),
+      });
+      const requestInventory = (id, rows = []) => {
+        store.yeaftSessionHydrateRequestId = id;
+        store.handleMessage({ type: 'yeaft_session_hydrate', requestId: id, agentId: 'b', sessions: rows });
+      };
+      const commit = id => store.handleMessage({ type: 'yeaft_session_hydrate_complete', requestId: id });
+      const record = (op, payload) => store.handleYeaftOutput({ agentId: 'b',
+        event: { type: 'session_crud_result', ok: true, op, ...payload } });
+      requestInventory('stale-catalog', [{ id: 's' }]);
+      open('b', 'catalog-only');
+      commit('stale-catalog');
+      expect(store.activeSessionRoute).toEqual(scope('b', 'catalog-only'));
+      expect(sessions.waitingForLastViewedSession).toBe(false);
+      expect(localStorage.getItem(lastViewedKey)).toBe('b\u001fcatalog-only');
+
+      // A newer create is not a selection until the user opens it. An older
+      // buffered list can't drop the new row or reintroduce a deleted row.
+      requestInventory('stale-crud', [{ id: 's' }]);
+      record('create', { session: { id: 'new', name: 'New' } });
+      expect(store.activeSessionRoute).toEqual(scope('b', 'catalog-only'));
+      open('b', 'new');
+      record('delete', { sessionId: 's' });
+      record('update_config', { sessionId: 'new', config: { sceneId: 'software' } });
+      commit('stale-crud');
+      expect(store.activeSessionRoute).toEqual(scope('b', 'new'));
+      expect(sessions.sessionById('new', 'b')).toMatchObject({ name: 'New', sceneId: 'software' });
+      expect(sessions.sessionById('s', 'b')).toBeNull();
+
+      // Conversely, a full live snapshot arriving after a receipt wins.
+      // A delayed Server replay cannot overwrite that live snapshot either.
+      requestInventory('newer-live', [{ id: 's' }]);
+      record('create', { session: { id: 'rename-me', name: 'Old name' } });
+      open('b', 'rename-me');
+      record('list', { sessions: [{ id: 'rename-me', name: 'New name' }] });
+      requestInventory('newer-live', [{ id: 'rename-me', name: 'From stale server replay' }]);
+      commit('newer-live');
+      expect(store.activeSessionRoute).toEqual(scope('b', 'rename-me'));
+      expect(sessions.sessionById('rename-me', 'b').name).toBe('New name');
+
+      requestInventory('server-failure', [{ id: 'rename-me', name: 'Stale name' }]);
+      record('list', { sessions: [{ id: 'rename-me', name: 'From the Agent' }] });
+      store.handleMessage({ type: 'yeaft_session_hydrate_complete', requestId: 'server-failure', ok: false });
+      expect(store.activeSessionRoute).toEqual(scope('b', 'rename-me'));
+      expect(store.yeaftSessionHydrateError).toBe('session_inventory_failed');
+      expect(sessions.sessionById('rename-me', 'b').name).toBe('From the Agent');
+
+      // A legacy bare identity may resolve only while it has a single owner;
+      // the browser must not rewrite a guessed owner as a durable preference.
+      localStorage.setItem(lastViewedKey, 'legacy');
+      sessions.resetInventory();
+      sessions.applySnapshot([{ id: 'legacy' }], 'a');
+      expect(store.activeSessionRoute).toEqual(scope('a', 'legacy'));
+      sessions.applySnapshot([{ id: 'legacy' }], 'b');
+      expect(store.activeSessionRoute).toBeNull();
+      expect(localStorage.getItem(lastViewedKey)).toBe('legacy');
+      sessions.resetInventory();
+      sessions.applySnapshot([{ id: 'fallback' }]);
+      expect(store.yeaftActiveSessionFilter).toBe('fallback');
+      expect(localStorage.getItem(lastViewedKey)).toBeNull();
+
+      localStorage.setItem(lastViewedKey, 'confirmed-deleted');
+      sessions.resetInventory();
+      sessions.applySnapshot([]);
+      expect(sessions.waitingForLastViewedSession).toBe(true);
+      sessions.applyCrudResult({ ok: true, op: 'delete', groupId: 'confirmed-deleted' });
+      expect(sessions.waitingForLastViewedSession).toBe(false);
+      expect(localStorage.getItem(lastViewedKey)).toBeNull();
     } finally {
+      if (saved === null) localStorage.removeItem(lastViewedKey);
+      else localStorage.setItem(lastViewedKey, saved);
       Pinia.useSessionsStore = mockedSessions;
+      if (mockedChat) Pinia.useChatStore = mockedChat;
+      else delete Pinia.useChatStore;
       vi.useRealTimers();
     }
   });
