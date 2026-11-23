@@ -21,6 +21,14 @@ Folders, including subfolders, remember their expanded or collapsed state per us
 
 Legacy browser-local section state is not imported into user preferences. The initial default is expanded; subsequent visits use Server-saved state.
 
+## 搜索会话与分享
+
+- **搜索会话**：点侧栏的放大镜，选一台在线 Agent，输入关键词。Agent 首次上线后在后台建索引，此后每天最多刷新一次，不调用模型。只索引过去 5 天有可见对话、且可见消息超过 3 条的原生 Yeaft Session；支持中英文关键词，结果可直接打开会话。新消息不必然立即可搜到，隐藏会话不在侧栏搜索结果中。5 天以前的历史不会因离开索引而删除。
+- **跨会话历史**：可以说“查一下这台 Agent 上我其他会话里关于版本发布的讨论”。`HistorySearch` 默认仍只查当前 Session；跨会话查询按需读取同账号、同 Agent 的历史，不受 5 天限制，返回带来源的片段，受扫描和输出上限约束。不会自动把其他会话的内容放进新对话。
+- **分享**：在同账号、同 Agent 的各 Session 之间保存可长期复用的共识与非代码成果，例如写作约定、拍板结论、调研报告。后台仅从用户明确说过的长期约定或决定中标记候选，例如“今后默认先写结论”，不把助手的推测或修改项目文件的指令当成共识。候选由用户编辑确认后才发布；成果可手动添加。已发布条目是副本，删除原轮次不会同时删除它；可在分享区单独移除。文件、代码及项目配置仍留在各自工作目录，不写入 Share。
+
+以上功能需要更新后的 Web、Server 和 Agent；经典侧栏及其他 Chat 提供方的使用方式不变。
+
 ## Create a Session
 
 1. Choose **New chat** in the unified sidebar and select **Yeaft** as the runtime.

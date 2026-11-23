@@ -9,7 +9,7 @@ import { CORE_TEST_FILES, E2E_TEST_FILES, REVIEWED_TEST_FILES, isTestFile, norma
 
 // Combined Vitest and Playwright ceiling, including skipped and parameterized cases.
 // Coverage changes are documented in the PR and the curation policy.
-export const TEST_CASE_LIMIT = 200;
+export const TEST_CASE_LIMIT = 205;
 
 function walkFiles(directory) {
   return readdirSync(directory, { withFileTypes: true }).flatMap(entry => {

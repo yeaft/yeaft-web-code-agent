@@ -12,18 +12,20 @@ function journalPath(root, sessionId) {
   return join(root, 'sessions', safe, 'conversation', SESSION_TURN_DELETION_FILE);
 }
 
-export function readSessionTurnDeletions(ownerRoot, sessionId) {
-  return readSessionTurnDeletionsAt(journalPath(ownerRoot, sessionId), sessionId);
+export function readSessionTurnDeletions(ownerRoot, sessionId, read) {
+  return readSessionTurnDeletionsAt(journalPath(ownerRoot, sessionId), sessionId, read);
 }
 
 /** Allocation recovery also considers archived journals whose directory was renamed. */
-export function readSessionTurnDeletionsAt(path, sessionId = null) {
+export function readSessionTurnDeletionsAt(path, sessionId = null, read = readFileSync) {
   let raw;
-  try { raw = readFileSync(path, 'utf8'); }
+  try { raw = read(path, 'utf8'); }
   catch (error) {
     if (error.code !== 'ENOENT') throw error;
     return { operations: [] };
   }
+  if (raw === null) return null; // A bounded reader could not safely read the journal.
+  if (raw === undefined) return { operations: [] };
   const operations = raw.split('\n').filter(Boolean).map(line => {
     const op = JSON.parse(line);
     const validIds = ids => Array.isArray(ids) && ids.every(id => typeof id === 'string' && id.length > 0);

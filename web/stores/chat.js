@@ -648,6 +648,7 @@ export const useChatStore = defineStore('chat', {
     yeaftSessionInventoryCompleteSupported: null,
     yeaftSessionDeleteTurnSupported: false,
     workbenchRouteProtocolSupported: null,
+    sessionDiscoverySupported: false,
     workCenterWorkbenchProtocolSupported: null,
     browserRuntimeProtocolSupported: null,
     browserRuntimeSetupProtocolSupported: null,

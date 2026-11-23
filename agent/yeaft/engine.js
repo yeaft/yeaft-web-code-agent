@@ -1506,6 +1506,7 @@ export class Engine {
       sceneId: vpCtx?.vpPersona?.sceneId || null,
       webResearch: vpCtx?.webResearch,
       historyBeforeSeq: vpCtx?.historyBeforeSeq,
+      agentSessionIds: vpCtx?.agentSessionIds,
       yeaftDir: this.#yeaftDir,
       managedCliReady: this.#managedCliReady,
       runtimePlatform: getRuntimePlatformInfo(),
@@ -1933,6 +1934,7 @@ export class Engine {
    *   string-prompt shape (no regression for existing callers).
    * @param {string|null} [params.causalRootId] - Stable durable identity for
    *   every row generated as part of one externally accepted causal root.
+   * @param {string[]} [params.agentSessionIds] - Host-authorized same-owner, same-Agent Session IDs for explicit HistorySearch scope only.
    * @param {Function} [params.getPeerContext] - Bridge-owned bounded visible text
    *   updates, consumed at provider loop boundaries; never raw peer messages.
    * @param {string[]} [params.peerTurnIds] - Active peer executions whose durable
@@ -1950,7 +1952,8 @@ export class Engine {
     let lastTurnNumber = 0;
     const publications = [];
     try {
-      for await (const event of this.#queryLifecycle(params)) {
+      const agentSessionIds = Array.isArray(params.agentSessionIds) ? params.agentSessionIds.slice() : null;
+      for await (const event of this.#queryLifecycle({ ...params, agentSessionIds })) {
         if (event?.type === 'response_presentation') publications.push(event.message);
         if (Number.isFinite(event?.turnNumber)) lastTurnNumber = event.turnNumber;
         if (event?.type === 'turn_end' && event.terminal === true) {
@@ -2000,7 +2003,7 @@ export class Engine {
     }
   }
 
-  async *#queryLifecycle({ prompt, promptParts = null, messages = [], signal, turnConfig = null, userEffort = null, scenario = 'chat', isSubAgent = false, parentEffortDecision = null, vpPersona, router, senderVpId, inboundEnvelope, taskId, taskMembers, sessionId, sessionMembers, projectSessionIds = null, projectInstruction = '', projectLabel = '', vpPlan, sessionAnnouncement, workCenterInstructions, workDir, userAlreadyPersisted = false, currentUserMessage = null, causalRootId = null, getCurrentTodos = null, setCurrentTodos = null, askUser = null, threadId = MAIN_THREAD_ID, vpTurnId = null, drainPendingUserMessages = null, getPeerContext = null, peerTurnIds = [], prepareProviderRequest = null, startProviderRequest = null, finishProviderRequest = null, failProviderRequest = null, closePendingUserInput = null, collabToolPolicy = null, onProviderRequestStart = null } = {}) {
+  async *#queryLifecycle({ prompt, promptParts = null, messages = [], signal, turnConfig = null, userEffort = null, scenario = 'chat', isSubAgent = false, parentEffortDecision = null, vpPersona, router, senderVpId, inboundEnvelope, taskId, taskMembers, sessionId, sessionMembers, projectSessionIds = null, agentSessionIds = null, projectInstruction = '', projectLabel = '', vpPlan, sessionAnnouncement, workCenterInstructions, workDir, userAlreadyPersisted = false, currentUserMessage = null, causalRootId = null, getCurrentTodos = null, setCurrentTodos = null, askUser = null, threadId = MAIN_THREAD_ID, vpTurnId = null, drainPendingUserMessages = null, getPeerContext = null, peerTurnIds = [], prepareProviderRequest = null, startProviderRequest = null, finishProviderRequest = null, failProviderRequest = null, closePendingUserInput = null, collabToolPolicy = null, onProviderRequestStart = null } = {}) {
     if (!prompt || typeof prompt !== 'string' || !prompt.trim()) {
       const error = new Error('prompt is required and must be a non-empty string');
       yield {
@@ -2093,7 +2096,7 @@ export class Engine {
       this.#currentThreadId = threadId || MAIN_THREAD_ID;
       this.#currentCausalRootId = effectiveCausalRootId;
       this.#currentUserTurnId = inboundEnvelope?._userTurnId || currentUserMessage?.userTurnId || null;
-      yield* this.#runQuery({ prompt: effectivePrompt, promptParts: effectivePromptParts, messages, signal: runSignal, turnConfig: turnConfig ? { model: turnConfig.model, effort: turnConfig.effort, maxOutputTokens: turnConfig.maxOutputTokens } : null, userEffort: explicitUserEffort, scenario, isSubAgent, parentEffortDecision, vpPersona, router, senderVpId, inboundEnvelope, taskId, taskMembers, sessionId, sessionMembers, projectSessionIds, projectInstruction, projectLabel, vpPlan, sessionAnnouncement, workCenterInstructions, workDir, userAlreadyPersisted, currentUserMessage, causalRootId: effectiveCausalRootId, getCurrentTodos, setCurrentTodos, askUser, threadId: this.#currentThreadId, vpTurnId, drainPendingUserMessages, getPeerContext, peerTurnIds, prepareProviderRequest, startProviderRequest, finishProviderRequest, failProviderRequest, closePendingUserInput, collabToolPolicy: effectiveCollabToolPolicy, explicitSkillName: parsedSkill.skillName, retryLifecycle, onProviderRequestStart });
+      yield* this.#runQuery({ prompt: effectivePrompt, promptParts: effectivePromptParts, messages, signal: runSignal, turnConfig: turnConfig ? { model: turnConfig.model, effort: turnConfig.effort, maxOutputTokens: turnConfig.maxOutputTokens } : null, userEffort: explicitUserEffort, scenario, isSubAgent, parentEffortDecision, vpPersona, router, senderVpId, inboundEnvelope, taskId, taskMembers, sessionId, sessionMembers, projectSessionIds, agentSessionIds, projectInstruction, projectLabel, vpPlan, sessionAnnouncement, workCenterInstructions, workDir, userAlreadyPersisted, currentUserMessage, causalRootId: effectiveCausalRootId, getCurrentTodos, setCurrentTodos, askUser, threadId: this.#currentThreadId, vpTurnId, drainPendingUserMessages, getPeerContext, peerTurnIds, prepareProviderRequest, startProviderRequest, finishProviderRequest, failProviderRequest, closePendingUserInput, collabToolPolicy: effectiveCollabToolPolicy, explicitSkillName: parsedSkill.skillName, retryLifecycle, onProviderRequestStart });
     } finally {
       // Closing the async generator at a visible retry boundary means the
       // continuation never reached a provider. Keep it out of history and
@@ -2149,7 +2152,7 @@ export class Engine {
    * in a try/finally without indenting the whole loop.
    * @private
    */
-  async *#runQuery({ prompt, promptParts = null, messages, signal, turnConfig = null, userEffort = null, scenario = 'chat', isSubAgent = false, parentEffortDecision = null, vpPersona, router, senderVpId, inboundEnvelope, taskId, taskMembers, sessionId, sessionMembers, projectSessionIds = null, projectInstruction = '', projectLabel = '', vpPlan, sessionAnnouncement, workCenterInstructions, workDir, userAlreadyPersisted = false, currentUserMessage = null, causalRootId = null, getCurrentTodos = null, setCurrentTodos = null, askUser = null, threadId = MAIN_THREAD_ID, vpTurnId = null, drainPendingUserMessages = null, getPeerContext = null, peerTurnIds = [], prepareProviderRequest = null, startProviderRequest = null, finishProviderRequest = null, failProviderRequest = null, closePendingUserInput = null, collabToolPolicy = null, explicitSkillName = null, retryLifecycle, onProviderRequestStart = null }) {
+  async *#runQuery({ prompt, promptParts = null, messages, signal, turnConfig = null, userEffort = null, scenario = 'chat', isSubAgent = false, parentEffortDecision = null, vpPersona, router, senderVpId, inboundEnvelope, taskId, taskMembers, sessionId, sessionMembers, projectSessionIds = null, agentSessionIds = null, projectInstruction = '', projectLabel = '', vpPlan, sessionAnnouncement, workCenterInstructions, workDir, userAlreadyPersisted = false, currentUserMessage = null, causalRootId = null, getCurrentTodos = null, setCurrentTodos = null, askUser = null, threadId = MAIN_THREAD_ID, vpTurnId = null, drainPendingUserMessages = null, getPeerContext = null, peerTurnIds = [], prepareProviderRequest = null, startProviderRequest = null, finishProviderRequest = null, failProviderRequest = null, closePendingUserInput = null, collabToolPolicy = null, explicitSkillName = null, retryLifecycle, onProviderRequestStart = null }) {
 
     const effectiveCollabToolPolicy = collabToolPolicy === COLLAB_TOOL_POLICY.SINGLE_VP || collabToolPolicy === COLLAB_TOOL_POLICY.MULTI_VP
       ? collabToolPolicy
@@ -4792,6 +4795,7 @@ export class Engine {
         senderVpId,
         sessionId: runtimeSessionId,
         projectSessionIds,
+        agentSessionIds,
         projectInstruction,
         projectLabel,
         threadId: runtimeThreadId,

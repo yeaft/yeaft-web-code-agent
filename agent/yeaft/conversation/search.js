@@ -4,11 +4,133 @@
  * Bounded content search across hot and cold messages.
  */
 
-import { existsSync, readdirSync, readFileSync, statSync } from 'fs';
-import { join } from 'path';
+import { closeSync, constants, existsSync, fstatSync, lstatSync, opendirSync, openSync, readSync, readdirSync, readFileSync, statSync } from 'fs';
+import { dirname, join, resolve } from 'path';
 import { parseMessage, parseSeqFromId } from './persist.js';
 import { isVisibleConversationRow } from './internal-control.js';
 import { readSessionTurnDeletions, sessionDeletionProjection } from './turn-deletion-journal.js';
+import { sessionManifestPath } from '../sessions/session-manifest.js';
+import { SESSION_META_FILE } from '../sessions/session-store.js';
+
+
+const MAX_AGENT_SCAN_BYTES = 64 * 1024 * 1024;
+const MAX_AGENT_FILE_BYTES = 8 * 1024 * 1024;
+const MAX_AGENT_DIRECTORY_ENTRIES = 16_000;
+
+// Match the canonical deletion journal's ID width so it cannot alias a different Session.
+export const isAgentHistorySessionId = id => typeof id === 'string' && /^[A-Za-z0-9_-][A-Za-z0-9._-]{0,119}$/.test(id);
+
+// Only the explicit agent scope uses these shared, per-call I/O bounds. The
+// configured instance root is trusted; no symlinks below it are traversed.
+export function createAgentHistoryScan(instanceRoot, telemetry, signal) {
+  const root = resolve(instanceRoot);
+  let remainingBytes = MAX_AGENT_SCAN_BYTES;
+  let remainingEntries = MAX_AGENT_DIRECTORY_ENTRIES;
+  const limited = () => { telemetry.scanIncomplete = true; return null; };
+  const stopped = () => signal?.aborted || remainingBytes <= 0 || remainingEntries <= 0;
+  const missing = error => ['ENOENT', 'ENOTDIR', 'ELOOP'].includes(error.code);
+
+  function isDirectory(dir) {
+    if (dir === root) return true;
+    const parent = dirname(dir);
+    if (parent === dir) return false;
+    const parentExists = isDirectory(parent);
+    if (parentExists !== true) return parentExists;
+    try { return lstatSync(dir).isDirectory(); }
+    catch (error) { if (error.code === 'ENOENT') return undefined; throw error; }
+  }
+
+  return {
+    stopped,
+    limited,
+    list(dir, suffix) {
+      if (stopped()) return limited();
+      dir = resolve(dir);
+      const directoryExists = isDirectory(dir);
+      if (directoryExists !== true) return directoryExists === undefined ? [] : limited();
+      const files = [];
+      let handle;
+      try {
+        handle = opendirSync(dir);
+        for (let entry; (entry = handle.readSync());) {
+          if (remainingEntries-- <= 0) {
+            limited();
+            break;
+          }
+          if (entry.isFile() && entry.name.endsWith(suffix)) files.push(entry.name);
+        }
+      } catch (error) {
+        if (!missing(error)) throw error;
+      } finally {
+        handle?.closeSync();
+      }
+      return files;
+    },
+    read(file) {
+      if (signal?.aborted || remainingBytes <= 0) return limited();
+      file = resolve(file);
+      const directoryExists = isDirectory(dirname(file));
+      if (directoryExists !== true) return directoryExists === undefined ? undefined : limited();
+      let fd;
+      try {
+        const before = lstatSync(file);
+        if (!before.isFile()) return limited();
+        fd = openSync(file, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+        const stat = fstatSync(fd);
+        if (!stat.isFile() || stat.dev !== before.dev || stat.ino !== before.ino) return limited();
+        if (stat.size > MAX_AGENT_FILE_BYTES || stat.size > remainingBytes) return limited();
+        const buffer = Buffer.allocUnsafe(stat.size);
+        let count = 0;
+        while (count < buffer.length) {
+          const bytes = readSync(fd, buffer, count, buffer.length - count, null);
+          if (bytes === 0) break;
+          count += bytes;
+        }
+        remainingBytes -= count;
+        return buffer.toString('utf8', 0, count);
+      } catch (error) {
+        if (error.code === 'ENOENT') return undefined;
+        if (missing(error)) return limited();
+        throw error;
+      } finally {
+        if (fd !== undefined) closeSync(fd);
+      }
+    },
+  };
+}
+
+function parseJsonObject(raw) {
+  if (typeof raw !== 'string') return null;
+  try {
+    const value = JSON.parse(raw);
+    return value && typeof value === 'object' && !Array.isArray(value) ? value : null;
+  } catch {
+    return null;
+  }
+}
+
+function canonicalAgentSessions(dir, requestedIds, scan) {
+  const manifest = parseJsonObject(scan.read(sessionManifestPath(dir)));
+  if (manifest?.version !== 1 || !Array.isArray(manifest.sessions)) return [];
+
+  const entries = new Map();
+  for (const entry of manifest.sessions) {
+    if (requestedIds.has(entry?.id)) entries.set(entry.id, entries.has(entry.id) ? null : entry);
+  }
+
+  const ids = [];
+  for (const id of requestedIds) {
+    const entry = entries.get(id);
+    if (!entry || typeof entry.path !== 'string' || typeof entry.createdAt !== 'string' || !entry.createdAt.trim()) continue;
+    const sessionDir = resolve(dir, 'sessions', id);
+    if (resolve(entry.path) !== sessionDir) continue;
+    // The host catalog carries IDs only. Compare the local incarnation against
+    // the manifest to reject a different Session left at the same path.
+    const meta = parseJsonObject(scan.read(join(sessionDir, SESSION_META_FILE)));
+    if (meta?.id === id && meta.createdAt === entry.createdAt) ids.push(id);
+  }
+  return ids;
+}
 
 function parseJsonLine(line) {
   if (!line || !line.trim()) return null;
@@ -41,6 +163,7 @@ function searchableContent(msg) {
 
 function matchesMessage(msg, terms, source, boundary) {
   if (!msg || msg.role === 'tool' || !isVisibleConversationRow(msg)) return false;
+  if (source.agentScan && msg.role !== 'user' && msg.role !== 'assistant') return false;
   // Sequence numbers belong to the source Session, not to a sibling transcript
   // (or a row's optional sessionId). Filter before counting toward any limit.
   if (boundary && source.sessionId === boundary.sessionId) {
@@ -75,51 +198,87 @@ function withSource(msg, source) {
  * Search Markdown messages in one directory, newest first.
  */
 function searchMarkdownDir(dir, terms, limit, source, telemetry, boundary) {
-  if (!existsSync(dir)) return [];
-
-  const files = readdirSync(dir)
-    .filter(f => f.endsWith('.md'))
+  const { agentScan } = source;
+  const files = (agentScan ? agentScan.list(dir, '.md') || []
+    : existsSync(dir) ? readdirSync(dir).filter(f => f.endsWith('.md')) : [])
     .sort()
     .reverse();
 
   const results = [];
   for (const file of files) {
-    if (results.length >= limit) break;
-    const raw = readFileSync(join(dir, file), 'utf8');
+    if (!agentScan && results.length >= limit) break;
+    if (agentScan?.stopped()) {
+      agentScan.limited();
+      break;
+    }
+    const path = join(dir, file);
+    const raw = agentScan ? agentScan.read(path) : readFileSync(path, 'utf8');
+    if (raw == null) continue;
     recordFileScan(telemetry, raw);
     recordMessageScan(telemetry);
-    const lowerRaw = raw.toLocaleLowerCase();
-    if (!terms.every(term => lowerRaw.includes(term))) continue;
+    if (!agentScan) {
+      const lowerRaw = raw.toLocaleLowerCase();
+      if (!terms.every(term => lowerRaw.includes(term))) continue;
+    }
     const msg = source.project(parseMessage(raw), source.sessionId);
-    if (matchesMessage(msg, terms, source, boundary)) results.push(withSource(msg, source));
+    collectMatch(results, msg, terms, source, boundary, limit);
   }
   return results;
 }
 
 function searchSegmentDir(dir, terms, limit, source, telemetry, boundary) {
-  if (!existsSync(dir)) return [];
-  const files = readdirSync(dir)
-    .filter(f => f.endsWith('.jsonl'))
+  const { agentScan } = source;
+  const files = (agentScan ? agentScan.list(dir, '.jsonl') || []
+    : existsSync(dir) ? readdirSync(dir).filter(f => f.endsWith('.jsonl')) : [])
     .sort()
     .reverse();
 
   const results = [];
   for (const file of files) {
-    if (results.length >= limit) break;
-    const raw = readFileSync(join(dir, file), 'utf8');
+    if (!agentScan && results.length >= limit) break;
+    if (agentScan?.stopped()) {
+      agentScan.limited();
+      break;
+    }
+    const path = join(dir, file);
+    const raw = agentScan ? agentScan.read(path) : readFileSync(path, 'utf8');
+    if (raw == null) continue;
     recordFileScan(telemetry, raw);
-    const lowerRaw = raw.toLocaleLowerCase();
-    if (!terms.every(term => lowerRaw.includes(term))) continue;
+    if (!agentScan) {
+      const lowerRaw = raw.toLocaleLowerCase();
+      if (!terms.every(term => lowerRaw.includes(term))) continue;
+    }
     const lines = raw.split('\n');
     for (let i = lines.length - 1; i >= 0; i -= 1) {
-      if (results.length >= limit) break;
+      if (!agentScan && results.length >= limit) break;
       if (!lines[i]?.trim()) continue;
       recordMessageScan(telemetry);
       const msg = source.project(parseJsonLine(lines[i]), source.sessionId);
-      if (matchesMessage(msg, terms, source, boundary)) results.push(withSource(msg, source));
+      collectMatch(results, msg, terms, source, boundary, limit);
     }
   }
   return results;
+}
+
+function collectMatch(results, msg, terms, source, boundary, limit) {
+  if (!matchesMessage(msg, terms, source, boundary)) return;
+  if (!source.agentScan) {
+    results.push(withSource(msg, source));
+    return;
+  }
+  // Retain only the newest matches even if old-format files or rows arrive
+  // out of timestamp order. Do not retain the full scan in memory.
+  const candidate = withSource(msg, source);
+  let low = 0;
+  let high = results.length;
+  while (low < high) {
+    const mid = (low + high) >>> 1;
+    if (compareNewest(candidate, results[mid]) < 0) high = mid;
+    else low = mid + 1;
+  }
+  if (low >= limit) return;
+  results.splice(low, 0, candidate);
+  if (results.length > limit) results.pop();
 }
 
 function compareNewest(a, b) {
@@ -161,7 +320,7 @@ function sessionConversationDirs(dir) {
  * @param {string} dir — Yeaft root directory (e.g. ~/.yeaft)
  * @param {string} keyword — search terms
  * @param {number} [limit=10] — max results
- * @param {{telemetry?: {scannedFiles?: number, scannedBytes?: number, scannedMessages?: number}, sessionIds?: string[], boundarySessionId?: string, beforeSeq?: number, beforeMessageId?: string}} [options]
+ * @param {{telemetry?: {scannedFiles?: number, scannedBytes?: number, scannedMessages?: number, scannedSessions?: number}, sessionIds?: string[], boundarySessionId?: string, beforeSeq?: number, beforeMessageId?: string, agentScan?: ReturnType<typeof createAgentHistoryScan>, agentCurrentSessionId?: string}} [options]
  *   A trusted exclusive boundary applies only to boundarySessionId's transcript.
  *   Finite beforeSeq takes precedence over a monotonic beforeMessageId. Without
  *   a valid boundary, legacy search behavior is preserved.
@@ -186,11 +345,25 @@ export function searchMessages(dir, keyword, limit = 10, options = {}) {
     ? { sessionId: options.boundarySessionId, beforeSeq }
     : null;
 
+  const { agentScan } = options;
   const requestedSessionIds = Array.isArray(options.sessionIds)
-    ? new Set(options.sessionIds.filter(id => typeof id === 'string' && id.trim()).map(id => id.trim()))
+    ? new Set(agentScan ? options.sessionIds.filter(isAgentHistorySessionId)
+      : options.sessionIds.filter(id => typeof id === 'string' && id.trim()).map(id => id.trim()))
     : null;
-  const scopedSessionDirs = sessionConversationDirs(dir)
-    .filter(source => !requestedSessionIds || requestedSessionIds.has(source.sessionId));
+  let scopedSessionDirs;
+  if (agentScan) {
+    if (!requestedSessionIds?.has(options.agentCurrentSessionId)) throw new Error('Agent history requires an authorized current Session');
+    const ids = canonicalAgentSessions(dir, requestedSessionIds, agentScan);
+    if (!ids.includes(options.agentCurrentSessionId)) throw new Error('Agent history requires a canonical current Session');
+    scopedSessionDirs = ids.map(sessionId => ({
+      dir: join(dir, 'sessions', sessionId, 'conversation'),
+      sessionId,
+      kind: 'session',
+      agentScan,
+    }));
+  } else {
+    scopedSessionDirs = sessionConversationDirs(dir).filter(source => !requestedSessionIds || requestedSessionIds.has(source.sessionId));
+  }
   const conversationDirs = requestedSessionIds
     ? scopedSessionDirs
     : [{ dir: join(dir, 'chat'), sessionId: null, kind: 'chat' }, ...scopedSessionDirs];
@@ -198,13 +371,50 @@ export function searchMessages(dir, keyword, limit = 10, options = {}) {
   const deletions = new Map();
   const project = (row, scopeId) => {
     if (!row) return null;
-    const sessionId = row.sessionId || scopeId;
+    const sessionId = agentScan ? scopeId : row.sessionId || scopeId;
     if (!sessionId) return row;
     if (!deletions.has(sessionId)) {
-      deletions.set(sessionId, sessionDeletionProjection(readSessionTurnDeletions(dir, sessionId).operations));
+      if (agentScan) {
+        // A missing journal is normal; an unreadable or over-budget journal
+        // must never let a logically deleted row back into results.
+        const journal = readSessionTurnDeletions(dir, sessionId, agentScan.read);
+        deletions.set(sessionId, journal ? sessionDeletionProjection(journal.operations) : null);
+      } else {
+        deletions.set(sessionId, sessionDeletionProjection(readSessionTurnDeletions(dir, sessionId).operations));
+      }
     }
-    return deletions.get(sessionId).scrub(row);
+    if (agentScan) {
+      // Only a well-formed copy origin on a correctly owned row can exempt it
+      // from the local causal-ID scrub (copies may reuse another Session's IDs).
+      const { origin } = row;
+      const validCopyOrigin = row.sessionId === scopeId && origin && !Array.isArray(origin)
+        && isAgentHistorySessionId(origin.sessionId) && origin.sessionId !== scopeId
+        && typeof origin.streamId === 'string' && origin.streamId.trim()
+        && typeof origin.messageId === 'string' && origin.messageId.trim();
+      row = { ...row, sessionId: scopeId, origin: validCopyOrigin ? origin : null };
+    }
+    return deletions.get(sessionId)?.scrub(row) ?? null;
   };
+  if (agentScan) {
+    let results = [];
+    if (telemetry) telemetry.scannedSessions = 0;
+    for (const source of conversationDirs) {
+      if (agentScan.stopped()) {
+        agentScan.limited();
+        break;
+      }
+      if (telemetry) telemetry.scannedSessions += 1;
+      const projected = { ...source, project };
+      results = [
+        ...results,
+        ...searchSegmentDir(join(source.dir, 'segments'), terms, resultLimit, projected, telemetry, boundary),
+        ...searchMarkdownDir(join(source.dir, 'messages'), terms, resultLimit, projected, telemetry, boundary),
+        ...searchMarkdownDir(join(source.dir, 'cold'), terms, resultLimit, projected, telemetry, boundary),
+      ].sort(compareNewest).slice(0, resultLimit);
+    }
+    if (telemetry) telemetry.resultCount = results.length;
+    return results;
+  }
   const markdownDirs = [
     ...conversationDirs.flatMap(source => [
       { ...source, dir: join(source.dir, 'messages') },
