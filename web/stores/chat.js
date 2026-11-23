@@ -6317,14 +6317,15 @@ export const useChatStore = defineStore('chat', {
           if (isBranchResult && event.projectsAuthoritative === true && Array.isArray(event.projects)) {
             this.applySessionCatalogSnapshot(this.sessionCatalog, event.projects, null, { authoritative: false });
           }
-          const deferList = this.yeaftSessionHydrateRequestId && this.yeaftSessionInventoryCompleteSupported === true
-            && event.ok && event.op === 'list' && Array.isArray(event.sessions);
-          if (deferList) {
+          if (this.yeaftSessionHydrateRequestId && this.yeaftSessionInventoryCompleteSupported === true
+              && event.ok && event.op === 'list' && Array.isArray(event.sessions)) {
+            // A successful direct Agent list is useful even if the Server's
+            // replay later fails. Apply it below and also keep it at commit.
             handlerHelpers.bufferYeaftSessionInventorySlice(this, { agentId: msg.agentId, sessions: event.sessions }, { live: true });
           }
           handlerHelpers.bufferYeaftSessionCrudDelta(this, event, msg.agentId || null);
           // The initiating create/restore/branch UI owns navigation.
-          if (gs) gs.applyCrudResult(event, msg.agentId || null, { deferList });
+          if (gs) gs.applyCrudResult(event, msg.agentId || null);
           if (event.ok && event.op === 'delete' && event.sessionId && msg.agentId) {
             this.clearYeaftHistoryMemory({
               agentId: msg.agentId,

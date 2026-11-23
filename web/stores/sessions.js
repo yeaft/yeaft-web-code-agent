@@ -586,7 +586,7 @@ export const useSessionsStore = defineStore('sessions', {
     },
 
     /** Record a `group_crud_result` for UI feedback. */
-    applyCrudResult(result, agentId = null, { deferList = false } = {}) {
+    applyCrudResult(result, agentId = null) {
       if (!result) return;
       this.lastCrudResult = { ...result, at: Date.now() };
       if (result.requestId && this.pending[result.requestId]) {
@@ -594,7 +594,7 @@ export const useSessionsStore = defineStore('sessions', {
       }
       const session = result.session || result.group || null;
       const mutationAgentId = agentId || result.agentId || session?.agentId || null;
-      if (!deferList && result.ok && result.op === 'list' && Array.isArray(result.sessions)) {
+      if (result.ok && result.op === 'list' && Array.isArray(result.sessions)) {
         this.applySnapshot(result.sessions, mutationAgentId);
       }
       if (result.ok && (result.op === 'create' || result.op === 'copy' || result.op === 'merge' || result.op === 'restore') && session && session.id) {

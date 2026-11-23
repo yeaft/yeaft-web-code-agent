@@ -376,6 +376,13 @@ describe('message flow regressions', () => {
       expect(store.activeSessionRoute).toEqual(scope('b', 'rename-me'));
       expect(sessions.sessionById('rename-me', 'b').name).toBe('New name');
 
+      requestInventory('server-failure', [{ id: 'rename-me', name: 'Stale name' }]);
+      record('list', { sessions: [{ id: 'rename-me', name: 'From the Agent' }] });
+      store.handleMessage({ type: 'yeaft_session_hydrate_complete', requestId: 'server-failure', ok: false });
+      expect(store.activeSessionRoute).toEqual(scope('b', 'rename-me'));
+      expect(store.yeaftSessionHydrateError).toBe('session_inventory_failed');
+      expect(sessions.sessionById('rename-me', 'b').name).toBe('From the Agent');
+
       // A legacy bare identity may resolve only while it has a single owner;
       // the browser must not rewrite a guessed owner as a durable preference.
       localStorage.setItem(lastViewedKey, 'legacy');
