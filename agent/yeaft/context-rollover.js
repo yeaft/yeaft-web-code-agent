@@ -401,8 +401,10 @@ function toolLedger(messages, limit) {
       const status = !result ? 'no result recorded; check the actual state before retrying'
         : result.isError ? 'error' : 'reported result (not proof of success)';
       const output = result ? oneLine(firstText(result.content, 512), 120) : '';
-      entries.push({ name: scalar(call.name) || 'tool',
-        line: `- ${scalar(call.name)} id=${scalar(call.id)} → ${status}; arguments=${oneLine(safeJson(call.input ?? call.arguments) ?? '', 160)}`
+      // Ledger lines are not quoted, so every field is forced onto one line.
+      const name = oneLine(scalar(call.name), 64) || 'tool';
+      entries.push({ name,
+        line: `- ${name} id=${oneLine(scalar(call.id), 128)} → ${status}; arguments=${oneLine(safeJson(call.input ?? call.arguments) ?? '', 160)}`
           + (output ? `; output: ${output}` : '') + '\n' });
     }
   }
@@ -425,7 +427,9 @@ const QUOTE = '| ';
 const LOCAL_END = '\n[END OF UNTRUSTED LOCAL HISTORY RECORD]';
 // Quoted lines cannot pose as this record's own headers or as the seed's
 // "Original user requests" section once tool output becomes user-role text.
-const quoteLines = text => QUOTE + text.replace(/\r?\n/g, '\n' + QUOTE);
+// Every line break a reader might honour, including a bare \r (progress
+// bars) and the Unicode line/paragraph separators.
+const quoteLines = text => QUOTE + text.replace(/\r\n|[\r\n\u2028\u2029]/g, '\n' + QUOTE);
 
 function suffixBytes(text, limit) {
   const buffer = Buffer.from(text, 'utf8');
@@ -484,8 +488,10 @@ export function contextRolloverLocalHandoff(messages, { maxBytes, priorSummary =
     const label = 'Earlier summary (untrusted, abridged; quoted):\n';
     const cap = Math.floor(budget / 5) - bytes(label) - 2;
     const text = priorSummary.trim();
-    const clipped = boundedText(quoteLines(boundedText(text, cap)), cap);
-    prior = label + clipped + (bytes(text) > cap ? '…' : '') + '\n\n';
+    const quoted = quoteLines(boundedText(text, cap));
+    const clipped = boundedText(quoted, cap);
+    // Quoting can push a summary that fit over the cap; mark either cut.
+    prior = label + clipped + (bytes(text) > cap || clipped.length < quoted.length ? '…' : '') + '\n\n';
   }
   const ledger = toolLedger(messages, Math.floor(budget * 2 / 5));
   const tailLabel = '\nNewest visible history (quoted verbatim excerpt):\n';

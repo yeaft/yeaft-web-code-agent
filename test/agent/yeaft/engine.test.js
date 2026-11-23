@@ -707,8 +707,59 @@ describe('Engine', () => {
       }
     }
 
+    // The summary model keeps refusing, so two local records follow each other.
+    // The second must still list the first segment's call, excerpt only the
+    // new rows, and never nest the first record inside itself.
+    async function verifyRepeatedLocalRollover() {
+      const dir = mkdtempSync(join(tmpdir(), 'yeaft-repeated-local-rollover-'));
+      const requests = [], summaries = [], executions = [];
+      const usage = { input_tokens: 1000, output_tokens: 100, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 };
+      const textOf = content => typeof content === 'string' ? content
+        : content.filter(block => block.type === 'text').map(block => block.text).join('');
+      try {
+        vi.stubGlobal('fetch', vi.fn(async (_url, init) => {
+          const body = anthropicWireWithoutCache(init);
+          if (!body.stream) {
+            summaries.push(body);
+            return new Response(JSON.stringify({ content: [{ type: 'text', text: 'No.' }], stop_reason: 'refusal',
+              usage: { input_tokens: 100, output_tokens: 1 } }), { headers: { 'content-type': 'application/json' } });
+          }
+          requests.push(body);
+          const n = requests.length;
+          if (n === 2 || n === 4) return new Response('prompt is too long', { status: 400 });
+          return response('roll-' + n, n < 4 ? 'echo' : undefined, { n }, 'claude-opus-4.8', usage);
+        }));
+        const engine = new Engine({ adapter: router('claude-opus-4.8'), trace, yeaftDir: dir, conversationStore: new ConversationStore(dir),
+          config: { model: 'gateway/claude-opus-4.8', maxOutputTokens: 1024, projectDocMaxBytes: 0, modelInfo: { contextWindow: 40000, maxOutput: 4096 } } });
+        engine.registerTool({ name: 'echo', description: 'Record a side effect', parameters: { type: 'object' }, execute: async input => {
+          executions.push(input.n);
+          return `SIDE_EFFECT_DONE_${input.n}`;
+        } });
+        const events = [];
+        for await (const event of engine.query({ prompt: 'do both steps', sessionId: 'repeated-local' })) events.push(event);
+        expect(events.filter(event => event.type === 'error')).toEqual([]);
+        expect(events.filter(event => event.type === 'turn_end' && event.terminal)).toEqual([expect.objectContaining({ stopReason: 'end_turn' })]);
+        expect(executions).toEqual([1, 3]);
+        expect(summaries).toHaveLength(2);
+        expect(requests).toHaveLength(5);
+        const seed = textOf(requests[4].messages[0].content);
+        expect(seed.match(/\[UNTRUSTED LOCAL HISTORY RECORD/g)).toHaveLength(1);
+        expect(seed).toContain('- echo id=roll-1 → reported result');
+        expect(seed).toContain('- echo id=roll-3 → reported result');
+        const excerpt = seed.slice(seed.indexOf('Newest visible history'), seed.indexOf('[END OF UNTRUSTED LOCAL HISTORY RECORD]'));
+        expect(excerpt).toContain('SIDE_EFFECT_DONE_3');
+        expect(excerpt).not.toContain('SIDE_EFFECT_DONE_1');
+        expect(seed).toContain('do both steps');
+      } finally {
+        vi.unstubAllGlobals();
+        await closeConversationHistoryIndexes();
+        rmSync(dir, { recursive: true, force: true });
+      }
+    }
+
     it.each(['provider', 'abort', 'append'])('rolls signed context into a fresh conversation without tool replay: %s', async trigger => {
       if (trigger === 'provider') {
+        await verifyRepeatedLocalRollover();
         await assertLongImageLoop();
         await verifyRoutePreviewDeduplication();
         await verifyMisnamedScreenshot();
