@@ -21,6 +21,7 @@ import {
   broadcastAgentList, broadcastSessionCatalog, buildSessionCatalog, buildHiddenSessionCatalog,
   verifyConversationOwnership, verifyAgentOwnership, resolveAgentAccessError
 } from '../ws-utils.js';
+import { ownedAgentSessionIds } from './session-discovery.js';
 import { routeSessionPin } from './session-pin-router.js';
 import { handleClientSessionTurnDelete } from './session-turn-delete.js';
 import { handleClientScheduledTasks } from './client-scheduled-tasks.js';
@@ -1910,7 +1911,7 @@ export async function handleClientConversation(clientId, client, msg, checkAgent
         }
         // Forward the entire message minus the agentId field; the agent
         // router is the authoritative consumer of the payload shape.
-        const { agentId: _discard, ...rest } = msg;
+        const { agentId: _discard, _agentSessionIds: _untrustedIds, ...rest } = msg;
         rest.type = relayType;
         if (relayType === 'yeaft_ask_user_answer') {
           rest._requestClientId = clientId;
@@ -1931,6 +1932,10 @@ export async function handleClientConversation(clientId, client, msg, checkAgent
           trackUserTurn(client.userId, Buffer.byteLength(JSON.stringify(msg)));
           const sessionId = typeof rest.sessionId === 'string' ? rest.sessionId.trim() : '';
           if (sessionId && client.userId) {
+            if (relayAgent.capabilities?.includes('session_discovery')
+                && yeaftSessionDb.getForAgent(client.userId, relayAgentId, sessionId)?.isArchived === false) {
+              rest._agentSessionIds = ownedAgentSessionIds(client.userId, relayAgentId);
+            }
             const projectContext = yeaftProjectDb.contextForSession(
               client.userId,
               relayAgentId,

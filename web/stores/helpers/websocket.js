@@ -200,6 +200,7 @@ export function connect(store) {
   store.yeaftSessionInventoryCompleteSupported = null;
   store.yeaftSessionDeleteTurnSupported = false;
   store.workbenchRouteProtocolSupported = null;
+  store.sessionDiscoverySupported = false;
   store.workCenterWorkbenchProtocolSupported = null;
   store.browserRuntimeProtocolSupported = null;
   store.browserRuntimeSetupProtocolSupported = null;
@@ -357,6 +358,7 @@ export function connect(store) {
     store._hasHandledYeaftSessionHydrate = false;
     store.yeaftSessionInventoryCompleteSupported = null;
     store.workbenchRouteProtocolSupported = null;
+    store.sessionDiscoverySupported = false;
     store.workCenterWorkbenchProtocolSupported = null;
     store.browserRuntimeProtocolSupported = null;
     store.browserRuntimeSetupProtocolSupported = null;

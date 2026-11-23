@@ -6046,6 +6046,8 @@ async function dispatchAcceptedSessionSend({
         _promptParts: attachmentBundle.promptParts,
         _promptSuffix: attachmentBundle.promptSuffix,
         _perfTraceId: perfTraceId,
+        _agentSessionIds: ctx.serverCapabilities?.has('session_discovery') && Array.isArray(msg._agentSessionIds)
+          ? msg._agentSessionIds : null,
         _projectContext: msg.projectContext && typeof msg.projectContext === 'object'
           ? msg.projectContext
           : null,
@@ -6674,6 +6676,7 @@ async function runVpTurn({ prompt, promptParts = null, sessionId, vpId, threadId
           || legacyProjectContext(ctx.CONFIG?.yeaftDir, sessionId);
         const projectSessionIds = projectContext?.sessionIds || [];
         queryOpts.projectSessionIds = projectSessionIds;
+        queryOpts.agentSessionIds = inboundEnvelope?._agentSessionIds || null;
         queryOpts.projectLabel = projectContext?.projectName
           ? `${projectContext.projectName} (${projectContext.projectId})`
           : (projectContext?.projectId || '');

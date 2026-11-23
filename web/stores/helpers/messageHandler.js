@@ -3,6 +3,7 @@
  * Delegates to sub-handlers for complex message types.
  */
 
+import { acceptSessionDiscoveryResponse } from './session-discovery.js';
 import { acceptPersonResponse } from './digital-person.js';
 import { acceptPluginConfigReply, acceptPluginSkillDetailReply } from './plugin-config.js';
 import { applyScheduledTaskReceipts, bindScheduledTaskNotificationOwner, reconcileScheduledTaskNotifications } from './scheduled-tasks.js';
@@ -327,7 +328,7 @@ export function handleMessage(store, msg) {
   // A renewed HTTP token does not change the owner of an existing socket.
   // Socket replacement is fenced by websocket.js; generation and owner fence
   // logout/login without rejecting normal same-account JWT renewal.
-  if (msg?.type === 'scheduled_task_notifications_read'
+  if (['scheduled_task_notifications_read', 'session_discovery_response'].includes(msg?.type)
       && Object.hasOwn(msg, '_wsAuthGeneration')
       && (msg._wsAuthGeneration !== authStore.authGeneration
         || msg._wsAuthOwnerId !== (authStore.userId || null))) return;
@@ -341,6 +342,10 @@ export function handleMessage(store, msg) {
   store._lastPongAt = Date.now();
 
   switch (msg.type) {
+    case 'session_discovery_response':
+      acceptSessionDiscoveryResponse(store, msg);
+      break;
+
     case 'person_response':
       acceptPersonResponse(store, msg);
       break;
@@ -364,6 +369,7 @@ export function handleMessage(store, msg) {
       break;
 
     case 'client_hello_ack':
+      store.sessionDiscoverySupported = msg.sessionDiscoverySupported === true;
       store.workbenchRouteProtocolSupported = msg.workbenchRouteProtocol === 1;
       store.workCenterWorkbenchProtocolSupported = msg.workCenterWorkbenchProtocol === 1;
       store.browserRuntimeProtocolSupported = msg.browserRuntimeProtocol === 1;
@@ -401,6 +407,7 @@ export function handleMessage(store, msg) {
         // auth_result advertises Server support; the route protocol is usable
         // only after Server confirms it processed our client_hello.
         store.workbenchRouteProtocolSupported = false;
+        store.sessionDiscoverySupported = false;
         store.workCenterWorkbenchProtocolSupported = false;
         store.browserRuntimeProtocolSupported = false;
         store.browserRuntimeSetupProtocolSupported = false;

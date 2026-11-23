@@ -12,6 +12,7 @@ import {
 import { handleAgentConversation } from './handlers/agent-conversation.js';
 import { handleAgentOutput } from './handlers/agent-output.js';
 import { handleAgentSessionTurnDelete } from './handlers/session-turn-delete.js';
+import { handleAgentSessionDiscovery } from './handlers/session-discovery.js';
 import { handleAgentWorkCenter } from './handlers/agent-work-center.js';
 import { handleAgentPerson } from './handlers/client-person.js';
 import { handleAgentFileTerminal } from './handlers/agent-file-terminal.js';
@@ -437,7 +438,7 @@ function completeAgentRegistration(ws, agentId, agentName, workDir, sessionKey, 
     // unknown field. New agents flip `serverEncryptionRequired = false`
     // and stop calling encrypt() on the send path.
     acceptPlaintext: true,
-    serverCapabilities: ['workbench_file_content_chunks', 'yeaft_session_config_delta', 'yeaft_session_delete_turn', 'session_history_chunk_errors'],
+    serverCapabilities: ['workbench_file_content_chunks', 'yeaft_session_config_delta', 'yeaft_session_delete_turn', 'session_history_chunk_errors', 'session_discovery'],
     ...(upgradeAvailable && { upgradeAvailable })
   }));
 
@@ -450,6 +451,7 @@ async function handleAgentMessage(agentId, msg, ws) {
   if (!agent || agent.ws !== ws) return;
   if (handleSessionAttachmentChunk(agentId, agent, msg)) return;
   if (await handleAgentSessionTurnDelete(agentId, agent, msg)) return;
+  if (await handleAgentSessionDiscovery(agentId, agent, msg)) return;
 
   // Security: 需要 conversationId 的消息类型，验证该 conversation 属于此 agent.
   // The conversation-id check only authorizes Chat flows where the

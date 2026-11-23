@@ -34,6 +34,7 @@ import { handleClientWorkbench } from './handlers/client-workbench.js';
 import { CLIENT_BROWSER_TYPES, handleClientBrowser } from './handlers/client-browser.js';
 import { handleClientMisc } from './handlers/client-misc.js';
 import { clearWorkCenterRequestsForClient, handleClientWorkCenter } from './handlers/client-work-center.js';
+import { clearSessionDiscoveryRequests, handleClientSessionDiscovery } from './handlers/session-discovery.js';
 import { clearPersonRequestsForClient, handleClientPerson } from './handlers/client-person.js';
 import { recordPerfTraceEvent } from './perf-trace.js';
 
@@ -208,6 +209,7 @@ export function handleWebConnection(ws, url, req = {}) {
       }
     }
     clearWorkCenterRequestsForClient(client);
+    clearSessionDiscoveryRequests(client);
     clearPersonRequestsForClient(client);
     clearAgentSettingsRequestsForClient(clientId);
     clearYeaftDebugRequestsForClient(clientId);
@@ -270,6 +272,7 @@ async function handleWebMessage(clientId, msg) {
     }
     await sendToWebClient(client, {
       type: 'client_hello_ack',
+      sessionDiscoverySupported: true,
       workbenchRouteProtocol: client.workbenchRouteProtocol,
       workCenterWorkbenchProtocol: client.workCenterWorkbenchProtocol,
       browserRuntimeProtocol: client.browserRuntimeProtocol,
@@ -305,5 +308,6 @@ async function handleWebMessage(clientId, msg) {
   if (await handleClientWorkbench(clientId, client, msg, checkAgentAccess)) return;
   if (await handleClientWorkCenter(client, msg, checkAgentAccess)) return;
   if (await handleClientPerson(client, msg)) return;
+  if (await handleClientSessionDiscovery(client, msg)) return;
   if (await handleClientMisc(clientId, client, msg, checkAgentAccess)) return;
 }

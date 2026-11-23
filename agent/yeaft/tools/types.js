@@ -28,6 +28,7 @@
  * @property {string} [sessionId] — current Session id
  * @property {string} [queryTurnId] — unique identity of the owning Engine query
  * @property {number} [historyBeforeSeq] — durable current-user boundary; default history recall excludes this sequence and later
+ * @property {string[]} [agentSessionIds] — host-authorized same-owner, same-Agent Session IDs; absent means agent HistorySearch unavailable
  * @property {string[]} [projectSessionIds] — same-Agent sibling Session ids in the current Project
  * @property {string} [threadId] — current Session thread id
  * @property {string} [currentVpId] — R6: VP id of the caller (set in multi-VP groups)

@@ -1,3 +1,4 @@
+import SessionDiscoveryActions from './SessionDiscoveryActions.js';
 import SidebarDigitalPerson from './SidebarDigitalPerson.js';
 import { alertDialog, confirmDialog, promptDialog } from '../utils/dialog.js';
 import { useUserPreferences } from '../utils/user-preferences.js';
@@ -131,7 +132,7 @@ export function calculateFloatingSubmenuPosition(parentRect, menuSize, viewport 
 
 export default {
   name: 'UnifiedSessionList',
-  components: { SidebarDigitalPerson },
+  components: { SidebarDigitalPerson, SessionDiscoveryActions },
   setup() {
     const userPreferences = useUserPreferences();
     Vue.onMounted(() => {
@@ -505,6 +506,10 @@ export default {
     isProjectUnread(project) {
       return this.projectTree.subtreeIds(projectIdentityKey(project))
         .some(id => (this.projectSessionRows.get(id) || []).some(row => this.isUnread(row)));
+    },
+    discoveryProjectPath(row) {
+      const project = this.projectBySessionKey.get(`${row.routeRef.agentId}\u001f${row.routeRef.sessionId}`);
+      return project ? this.projectPathLabel(project) : '';
     },
     projectSessionCount(project) {
       return this.subtreeRowCounts.get(projectIdentityKey(project)) || 0;
@@ -1235,6 +1240,10 @@ export default {
           <svg class="sidebar-section-chevron" :class="{ collapsed: actionsCompact }" viewBox="0 0 24 24" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="m8 10 4 4 4-4"/></svg>
         </button>
       </div>
+
+      <SessionDiscoveryActions v-if="resolvedProjectStore" :store="resolvedProjectStore"
+        :agents="agents" :sessions="sessions" :catalog-loading="loading"
+        :project-path="discoveryProjectPath" @select="$emit('select', $event)" />
 
       <!-- One file tree: folders (nested) first, each with its subfolders and
            Sessions; Sessions outside every folder follow at the top level. -->
