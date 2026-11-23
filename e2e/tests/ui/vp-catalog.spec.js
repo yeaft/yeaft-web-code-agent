@@ -201,7 +201,7 @@ test('ordinary Session scenes persist through a live switch and reload without e
   fixture.turnWire = { sessionId, ...wire };
   // Creating from the vendor chat surface opens the new native Session.
   const composer = page.locator('.yeaft-session-input [data-message-composer]');
-  const scene = composer.getByRole('button', { name: /^Scene:/ });
+  const scene = composer.locator('.session-scene-select__trigger');
   const sceneMenu = composer.getByRole('listbox', { name: 'Scene', exact: true });
   const expectScene = id => expect(scene).toHaveAccessibleName(`Scene: ${id}`);
   const activity = page.locator('.yeaft-session-status-toggle');
@@ -286,36 +286,42 @@ test('ordinary Session scenes persist through a live switch and reload without e
   await expect(statusPane.getByText('Execution status')).toBeVisible();
   await expect(statusPane).not.toContainText(/\b(VPs?|Omni)\b/i);
 
-  await scene.press('ArrowDown');
-  await expect(sceneMenu.getByRole('option', { name: 'Writing', exact: true })).toBeFocused();
-  await page.setViewportSize({ width: 320, height: 740 });
-  await expect(sceneMenu).toHaveCount(0);
-  await expect(scene).toBeFocused();
-  await page.evaluate(() => window.Pinia.useChatStore().closeSessionSidebar());
   const effort = composer.locator('.yeaft-composer-effort');
   const modelMenu = composer.locator('.yeaft-composer-model-dropdown');
   const attach = composer.locator('.attach-btn');
+  const more = composer.getByRole('button', { name: 'More composer actions' });
+  const extra = composer.getByRole('group', { name: 'More composer actions' });
+  const textbox = composer.getByRole('textbox');
   const stop = composer.locator('.stop-btn');
   const send = composer.locator('.send-btn:not(.stop-btn)');
-  for (const [width, theme] of [[390, 'light'], [320, 'dark']]) {
+  const expectToolbarRow = async (leading) => {
+    for (const control of [...leading, model, effort, stop, send]) await expectWithinViewport(control, page);
+    const [input, ...buttons] = await Promise.all([textbox, ...leading, model, effort, stop, send].map(el => el.boundingBox()));
+    for (const [i, box] of buttons.entries()) {
+      expect(box.y).toBeGreaterThanOrEqual(input.y + input.height - 1);
+      expect(Math.abs(box.y + box.height / 2 - (buttons[0].y + buttons[0].height / 2))).toBeLessThan(1);
+      if (i) expect(box.x).toBeGreaterThanOrEqual(buttons[i - 1].x + buttons[i - 1].width - 1);
+    }
+  };
+  // Crossing the desktop breakpoint while a scene option has focus must route
+  // focus directly to + when the controls will be hidden on the new layout.
+  await scene.press('ArrowDown');
+  await expect(writing).toBeFocused();
+  await page.setViewportSize({ width: 320, height: 740 });
+  await expect(sceneMenu).toHaveCount(0);
+  await expect(more).toBeFocused();
+  await page.evaluate(() => window.Pinia.useChatStore().closeSessionSidebar());
+  for (const [width, theme] of [[430, 'light'], [320, 'dark']]) {
     await page.setViewportSize({ width, height: 740 });
     await page.evaluate(theme => { document.documentElement.dataset.theme = theme; }, theme);
-    for (const control of [attach, scene, model, effort, stop, send]) await expectWithinViewport(control, page);
-    // Geometry matters: attachment and scene sit above the editor (not a
-    // wrapped row below it), with the trailing actions on a single row.
-    await expect(composer.locator('.chat-composer-top-actions .attach-btn')).toHaveCount(1);
-    await expect(composer.locator('.chat-composer-top-actions .session-scene-select__trigger')).toHaveCount(1);
+    const leading = width === 430 ? [attach, scene] : [more];
+    await expectToolbarRow(leading);
+    if (width === 430) await expect(more).toHaveCount(0);
+    else {
+      await expect(attach).toBeHidden();
+      await expect(scene).toBeHidden();
+    }
     await expect(composer.locator('input[type="file"]')).toHaveCount(1);
-    expect(await composer.evaluate(el => {
-      const container = el.getBoundingClientRect();
-      const input = el.querySelector('textarea').getBoundingClientRect();
-      const top = [...el.querySelectorAll('.chat-composer-top-actions button')].map(button => button.getBoundingClientRect());
-      const bottom = [...el.querySelectorAll('.chat-composer-actions-end button')].map(button => button.getBoundingClientRect());
-      const within = bounds => bounds.every((rect, index) => rect.left >= container.left - 1 && rect.right <= container.right + 1
-        && bounds.slice(index + 1).every(other => rect.right <= other.left + 1));
-      return { top: within(top) && top.every(rect => rect.bottom <= input.top + 1),
-        bottom: within(bottom) && bottom.every(rect => rect.top >= input.bottom - 1 && Math.abs(rect.top - bottom[0].top) < 1) };
-    })).toEqual({ top: true, bottom: true });
     expect(await model.locator('.yeaft-composer-model-name').evaluate(el => el.clientWidth)).toBeGreaterThanOrEqual(60);
     await model.click();
     await expectWithinViewport(modelMenu, page);
@@ -324,15 +330,82 @@ test('ordinary Session scenes persist through a live switch and reload without e
     await expect(modelMenu).toHaveCount(0);
     await expectWithinViewport(composer.locator('.yeaft-composer-effort-dropdown'), page);
     await effort.press('Escape');
+    await page.screenshot({ path: info.outputPath(`scene-model-toolbar-${theme}-${width}.png`), fullPage: true });
   }
-  await page.screenshot({ path: info.outputPath('scene-model-toolbar-dark-320.png'), fullPage: true });
-  await scene.click();
+  // Long selector labels (e.g. the native Gemini "Unavailable" state) still
+  // cannot overlap Stop/Send. Keep the fixture's wire state unchanged here.
+  await composer.evaluate(async el => {
+    const model = el.querySelector('.yeaft-composer-model-name');
+    const effort = el.querySelector('.yeaft-composer-effort > span');
+    el._restoreTestLabels = [model.textContent, effort.textContent];
+    model.textContent = 'A model with a deliberately long label that cannot fit on a small phone';
+    effort.textContent = 'Unavailable';
+    await new Promise(requestAnimationFrame);
+  });
+  await expectToolbarRow([more]);
+  await composer.evaluate(el => {
+    const [label, effort] = el._restoreTestLabels;
+    el.querySelector('.yeaft-composer-model-name').textContent = label;
+    el.querySelector('.yeaft-composer-effort > span').textContent = effort;
+    delete el._restoreTestLabels;
+  });
+  // The actual composer width controls overflow, even without a viewport resize.
+  await page.setViewportSize({ width: 430, height: 740 });
+  await expect(more).toHaveCount(0);
+  await composer.evaluate(el => { el.style.maxWidth = '300px'; });
+  await expect(more).toBeVisible();
+  await composer.evaluate(el => { el.style.removeProperty('max-width'); });
+  await expect(more).toHaveCount(0);
+  await page.setViewportSize({ width: 320, height: 740 });
+  await more.press('Enter');
+  await expectWithinViewport(extra, page);
+  await expect(extra.getByRole('button')).toHaveCount(2);
+  await expect(extra.getByRole('button', { name: /^Choose scene:/ })).toBeVisible();
+  await page.screenshot({ path: info.outputPath('composer-more-dark-320.png'), fullPage: true });
+  const fileChooser = page.waitForEvent('filechooser');
+  await extra.getByRole('button', { name: 'Add attachment' }).click();
+  expect(await (await fileChooser).element().getAttribute('type')).toBe('file');
+  await expect(more).toHaveAttribute('aria-expanded', 'false');
+  await expect(more).toBeFocused();
+  await more.press('Space');
+  await more.press('Tab');
+  await expect(attach).toBeFocused();
+  await attach.press('Tab');
+  await expect(scene).toBeFocused();
+  await scene.press('ArrowDown');
   await expectWithinViewport(sceneMenu, page);
-  await expect(sceneMenu.getByRole('option', { name: 'Writing', exact: true })).toHaveAttribute('aria-selected', 'true');
+  await expect(writing).toHaveAttribute('aria-selected', 'true');
   await page.screenshot({ path: info.outputPath('scene-menu-dark-320.png'), fullPage: true });
-  await sceneMenu.getByRole('option', { name: 'Writing', exact: true }).press('Tab');
+  await writing.press('Escape');
+  await expect(scene).toBeFocused();
+  await expect(more).toHaveAttribute('aria-expanded', 'true');
+  await scene.press('Escape');
+  await expect(more).toBeFocused();
+  await expect(more).toHaveAttribute('aria-expanded', 'false');
+  await more.click();
+  await scene.click();
+  await software.click();
+  await expect(scene).toHaveAccessibleName('Choose scene: Software');
+  await expect.poll(readConfig).toMatchObject({ sceneId: 'software' });
+  await scene.click();
+  await writing.click();
+  await expect(scene).toHaveAccessibleName('Choose scene: Writing');
+  await expect.poll(readConfig).toMatchObject({ sceneId: 'writing' });
+  await scene.click();
+  await model.click();
   await expect(sceneMenu).toHaveCount(0);
-  await expect(composer.getByRole('textbox')).toBeFocused();
+  await expect(more).toHaveAttribute('aria-expanded', 'false');
+  await expect(modelMenu).toBeVisible();
+  await model.press('Escape');
+  await more.click();
+  await page.setViewportSize({ width: 430, height: 740 });
+  await expect(more).toHaveCount(0);
+  await expect(attach).toBeFocused();
+  await scene.press('ArrowDown');
+  await expect(writing).toBeFocused();
+  await page.setViewportSize({ width: 320, height: 740 });
+  await expect(more).toBeFocused();
+  await expect(sceneMenu).toHaveCount(0);
   const tabs = region.getByRole('tab');
   await expect(tabs).toHaveCount(2);
   await tabs.filter({ hasText: 'Second scene question' }).press('Enter');
@@ -357,11 +430,23 @@ test('ordinary Session scenes persist through a live switch and reload without e
   await expect(region).toHaveCount(0);
   await expect(page.locator('.assistant-turn.streaming')).toHaveCount(0);
 
+  // Programmatic Session routing need not pass through an outside click.
+  await more.click();
+  await scene.click();
+  await expect(writing).toBeFocused();
+  await page.evaluate(legacyId => {
+    const store = window.Pinia.useChatStore();
+    store.setActiveSessionFilter(legacyId, { agentId: store.currentAgent });
+  }, fixture.legacyId);
+  await expect(sceneMenu).toHaveCount(0);
+  await expect(extra).toHaveCount(0);
+
   await page.reload();
   await showSidebar(page);
   await page.locator('.sidebar-session-row:visible').filter({ hasText: title }).click();
   await hideMobileSidebar(page);
-  await expectScene('Writing');
+  if (await more.isVisible()) await more.click();
+  await expect(scene).toHaveAccessibleName(/^(Choose scene|Scene): Writing$/);
   await expect(page.locator('.assistant-turn')).toContainText(['First scene answer', 'Second scene answer continues after the first Turn finishes']);
   await expectAnonymous(page.locator('.chat-container'));
   await expect(region).toHaveCount(0);
@@ -369,6 +454,7 @@ test('ordinary Session scenes persist through a live switch and reload without e
   // A converted Session does not need the compatibility owner in its old
   // roster. Verify the activity and Stop action still follow the live turn.
   await attach.focus();
+  await expect(attach).toBeFocused();
   await page.setViewportSize({ width: 1360, height: 900 });
   await expect(composer.locator('.chat-composer-actions .attach-btn')).toBeFocused();
   // Wait for the responsive layout to commit instead of sampling visibility

@@ -1114,6 +1114,8 @@ export default {
   'input.send': 'Send',
   'input.stopExecution': 'Stop execution',
   'chatInput.upload': 'Upload file',
+  'chatInput.addAttachment': 'Add attachment',
+  'chatInput.moreActions': 'More composer actions',
   'chatInput.uploading': 'Uploading...',
   'chatInput.uploadFailed': 'Upload failed',
   'chatInput.retryUpload': 'Retry',

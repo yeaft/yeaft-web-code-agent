@@ -10,7 +10,8 @@ export default {
     canSend: { type: Boolean, default: false },
     sending: { type: Boolean, default: false },
     showStop: { type: Boolean, default: false },
-    startActionsOnTop: { type: Boolean, default: false },
+    collapseStartActions: { type: Boolean, default: false },
+    startActionsScope: { type: String, default: null },
     stopDisabled: { type: Boolean, default: false },
     // Opt-in keeps other consumers' keyboard handling unchanged. Parent keydown
     // handlers (autocomplete / quick-send) run first and may preventDefault().
@@ -28,12 +29,17 @@ export default {
     ariaControls: { type: String, default: null },
     ariaActivedescendant: { type: String, default: null },
   },
-  emits: ['update:modelValue', 'input', 'keydown', 'paste', 'focus', 'blur', 'send', 'stop', 'files-selected', 'retry-attachment', 'remove-attachment'],
+  emits: ['update:modelValue', 'input', 'keydown', 'paste', 'focus', 'blur', 'send', 'stop', 'files-selected', 'retry-attachment', 'remove-attachment', 'close-start-actions'],
   setup(props, { emit }) {
     const fileInput = Vue.ref(null);
-    const topActionsTarget = Vue.ref(null);
+    const startActionsSlot = Vue.ref(null);
+    const startActions = Vue.ref(null);
+    const moreButton = Vue.ref(null);
+    const actionsCollapsed = Vue.ref(false);
+    const actionsOpen = Vue.ref(false);
     const uid = Vue.getCurrentInstance()?.uid ?? nextComposerId++;
     const fileInputId = `composer-files-${uid}`;
+    const startActionsId = `composer-start-actions-${uid}`;
     const attachmentsLocked = Vue.computed(() => props.disabled || props.sending || props.attachmentsDisabled);
     const sendDisabled = Vue.computed(() => props.disabled || props.sending || !props.canSend
       || (props.attachmentsEnabled && props.attachments.some(row => row.uploading || row.uploadError || !hasAttachmentFileId(row))));
@@ -135,6 +141,82 @@ export default {
     const focusInput = () => Vue.nextTick(() => textareaRef.value?.focus());
     const getTextarea = () => textareaRef.value;
 
+    const closeStartActions = (restoreFocus = false) => {
+      if (!actionsOpen.value) return;
+      if (restoreFocus) moreButton.value?.focus({ preventScroll: true });
+      actionsOpen.value = false;
+      emit('close-start-actions');
+    };
+    Vue.watch(() => props.startActionsScope, () => {
+      closeStartActions(startActionsSlot.value?.contains(document.activeElement));
+    });
+    const onStartActionsOutside = event => {
+      if (!startActionsSlot.value?.contains(event.target)) closeStartActions();
+    };
+    const onStartActionsFocusout = event => {
+      if (event.relatedTarget && !startActionsSlot.value?.contains(event.relatedTarget)) closeStartActions();
+    };
+    const onStartActionsEscape = event => {
+      if (!actionsOpen.value) return;
+      event.stopPropagation();
+      event.preventDefault();
+      closeStartActions(true);
+    };
+    const toggleStartActions = () => {
+      if (actionsOpen.value) closeStartActions(true);
+      else actionsOpen.value = true;
+    };
+    const openFilePicker = () => {
+      closeStartActions(true);
+      fileInput.value?.click();
+    };
+
+    const fitStartActions = () => {
+      const slot = startActionsSlot.value;
+      const actions = startActions.value;
+      if (!slot || !actions) return;
+      let collapse = false;
+      if (props.collapseStartActions) {
+        // Measure the real non-wrapping row, even while the same controls
+        // are shown as vertical menu items. Restore the class before paint.
+        const stacked = actions.classList.contains('chat-composer-action-menu');
+        if (stacked) actions.classList.remove('chat-composer-action-menu');
+        collapse = actions.getBoundingClientRect().width > slot.getBoundingClientRect().width + 0.5;
+        if (stacked) actions.classList.add('chat-composer-action-menu');
+      }
+      if (collapse === actionsCollapsed.value) return;
+      const active = document.activeElement;
+      const restore = actions.contains(active) || moreButton.value === active;
+      if (actionsOpen.value) closeStartActions();
+      else if (collapse) emit('close-start-actions');
+      actionsCollapsed.value = collapse;
+      if (restore) Vue.nextTick(() => {
+        if (document.activeElement !== active && document.activeElement !== document.body) return;
+        const target = collapse ? moreButton.value : actions.querySelector('button:not(:disabled):not([aria-disabled="true"])');
+        (target || textareaRef.value)?.focus({ preventScroll: true });
+      });
+    };
+    Vue.watch([startActionsSlot, startActions, () => props.collapseStartActions], ([slot, actions, enabled], _, onCleanup) => {
+      if (!slot || !actions) return;
+      fitStartActions();
+      if (!enabled) return;
+      const resize = new ResizeObserver(fitStartActions);
+      // Available width includes space taken by model, effort, Stop and Send.
+      // Natural width responds to scene labels, locale, font and added actions.
+      resize.observe(slot);
+      resize.observe(actions);
+      const content = new MutationObserver(fitStartActions);
+      content.observe(actions, { subtree: true, childList: true, characterData: true });
+      document.addEventListener('pointerdown', onStartActionsOutside, true);
+      document.addEventListener('click', onStartActionsOutside, true);
+      onCleanup(() => {
+        resize.disconnect();
+        content.disconnect();
+        document.removeEventListener('pointerdown', onStartActionsOutside, true);
+        document.removeEventListener('click', onStartActionsOutside, true);
+      });
+    }, { flush: 'post' });
+
     Vue.watch(() => props.modelValue, (value) => {
       Vue.nextTick(() => {
         if (value) autoResize();
@@ -166,7 +248,9 @@ export default {
     });
 
     return {
-      fileInput, fileInputId, topActionsTarget, attachmentsLocked, sendDisabled, send, onKeydown, onPaste, onFileSelect, onDragover, onDrop, retryAttachment, removeAttachment, formatFileSize,
+      fileInput, fileInputId, startActionsId, startActionsSlot, startActions, moreButton,
+      actionsCollapsed, actionsOpen, onStartActionsFocusout, onStartActionsEscape, toggleStartActions, openFilePicker,
+      attachmentsLocked, sendDisabled, send, onKeydown, onPaste, onFileSelect, onDragover, onDrop, retryAttachment, removeAttachment, formatFileSize,
       textareaWrapperRef,
       textareaRef,
       textareaScrollable,
@@ -179,8 +263,7 @@ export default {
     };
   },
   template: `
-    <div class="input-wrapper chat-composer" :class="{ 'is-disabled': disabled, 'has-top-actions': startActionsOnTop }" data-message-composer @dragover="onDragover" @drop="onDrop">
-      <div v-show="startActionsOnTop" ref="topActionsTarget" class="chat-composer-top-actions"></div>
+    <div class="input-wrapper chat-composer" :class="{ 'is-disabled': disabled, 'has-collapsible-start-actions': collapseStartActions }" data-message-composer @dragover="onDragover" @drop="onDrop">
       <div class="attachments-preview" v-if="attachmentsEnabled && attachments.length" aria-live="polite">
         <div v-for="file in attachments" :key="file.localId" class="attachment-item" :class="{ 'is-uploading': file.uploading, 'has-error': file.uploadError }">
           <img v-if="file.preview" :src="file.preview" :alt="file.name" class="attachment-thumb" />
@@ -221,16 +304,23 @@ export default {
         ></textarea>
       </div>
       <div class="chat-composer-actions">
-        <!-- Reparent the existing controls so focus order matches the layout,
-             without duplicating the file input or the scene selection state. -->
-        <Teleport :to="topActionsTarget" :disabled="!startActionsOnTop || !topActionsTarget">
-          <div class="chat-composer-actions-start">
-            <button v-if="attachmentsEnabled" type="button" class="attach-btn" :disabled="attachmentsLocked" :aria-controls="fileInputId" :title="$t('chatInput.upload')" :aria-label="$t('chatInput.upload')" @click="fileInput?.click()">
+        <div ref="startActionsSlot" class="chat-composer-start-slot" :class="{ 'is-collapsed': actionsCollapsed }" @focusout="onStartActionsFocusout" @keydown.esc="onStartActionsEscape">
+          <button v-if="actionsCollapsed" ref="moreButton" type="button" class="chat-composer-more"
+            :aria-label="$t('chatInput.moreActions')" :title="$t('chatInput.moreActions')"
+            :aria-expanded="actionsOpen" :aria-controls="startActionsId" @click="toggleStartActions">
+            <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" d="M5 12h14M12 5v14"/></svg>
+          </button>
+          <div ref="startActions" :id="startActionsId" class="chat-composer-actions-start"
+            :class="{ 'chat-composer-action-menu': actionsOpen }"
+            :role="actionsOpen ? 'group' : undefined" :aria-label="actionsOpen ? $t('chatInput.moreActions') : undefined">
+            <button v-if="attachmentsEnabled" type="button" class="attach-btn" :disabled="attachmentsLocked" :aria-controls="fileInputId"
+              :title="actionsOpen ? undefined : $t('chatInput.upload')" :aria-label="actionsOpen ? undefined : $t('chatInput.upload')" @click="openFilePicker">
               <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path d="M16.5 6v11.5c0 2.21-1.79 4-4 4s-4-1.79-4-4V5c0-1.38 1.12-2.5 2.5-2.5s2.5 1.12 2.5 2.5v10.5c0 .55-.45 1-1 1s-1-.45-1-1V6H10v9.5c0 1.38 1.12 2.5 2.5 2.5s2.5-1.12 2.5-2.5V5c0-2.21-1.79-4-4-4S7 2.79 7 5v12.5c0 3.04 2.46 5.5 5.5 5.5s5.5-2.46 5.5-5.5V6h-1.5z"/></svg>
+              <span class="chat-composer-overflow-label">{{ $t('chatInput.addAttachment') }}</span>
             </button>
-            <slot name="start-actions"></slot>
+            <slot name="start-actions" :in-action-menu="actionsOpen"></slot>
           </div>
-        </Teleport>
+        </div>
         <slot name="quick-actions"></slot>
         <div class="chat-composer-actions-end">
           <slot name="end-actions-before"></slot>

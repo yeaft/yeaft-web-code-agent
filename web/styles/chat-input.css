@@ -315,6 +315,98 @@
   height: var(--chat-composer-control-size);
 }
 
+/* Keep the same controls mounted and in tab order; on narrow composers the
+   leading group becomes a disclosure only when its inline width won't fit. */
+.chat-composer-start-slot {
+  display: contents;
+}
+
+.chat-composer-overflow-label {
+  display: none;
+}
+
+.has-collapsible-start-actions .chat-composer-start-slot {
+  position: relative;
+  display: block;
+  flex: 1 1 0;
+  min-width: 0;
+}
+
+.has-collapsible-start-actions .chat-composer-actions-start {
+  width: max-content;
+  flex-wrap: nowrap;
+}
+
+.chat-composer-start-slot.is-collapsed {
+  min-width: var(--chat-composer-control-size);
+}
+
+.chat-composer-start-slot.is-collapsed .chat-composer-actions-start {
+  position: absolute;
+  inset-inline-start: 0;
+  bottom: calc(100% + var(--chat-composer-gap));
+}
+
+.chat-composer-start-slot.is-collapsed .chat-composer-actions-start:not(.chat-composer-action-menu) {
+  visibility: hidden;
+  pointer-events: none;
+}
+
+.chat-composer-more {
+  display: grid;
+  place-items: center;
+  width: var(--chat-composer-control-size);
+  height: var(--chat-composer-control-size);
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.chat-composer-more:hover,
+.chat-composer-more[aria-expanded="true"] {
+  background: var(--sidebar-hover);
+  color: var(--text-primary);
+}
+
+.chat-composer-more:focus-visible,
+.chat-composer-action-menu button:focus-visible {
+  outline: var(--sidebar-focus-ring-width) solid var(--accent-blue);
+  outline-offset: var(--sidebar-focus-ring-offset);
+}
+
+.chat-composer-actions-start.chat-composer-action-menu {
+  flex-direction: column;
+  align-items: stretch;
+  gap: var(--space-1);
+  min-width: min(12rem, 75vw);
+  max-width: 75vw;
+  padding: var(--space-1);
+  z-index: var(--yeaft-model-menu-layer);
+  border: 1px solid var(--border-color);
+  border-radius: var(--sidebar-section-toggle-radius);
+  background: var(--bg-main);
+  box-shadow: var(--shadow-md);
+}
+
+.chat-composer-action-menu .chat-composer-overflow-label {
+  display: inline;
+}
+
+.chat-composer-action-menu .attach-btn {
+  justify-content: flex-start;
+  width: 100%;
+  min-height: 36px;
+  gap: var(--chat-composer-control-gap);
+  padding: 0 var(--chat-composer-gap);
+  border-radius: var(--sidebar-section-toggle-radius);
+  font: inherit;
+  font-size: var(--font-size-sm);
+  text-align: start;
+}
+
 .input-wrapper textarea,
 .textarea-wrapper textarea {
   flex: 1;
