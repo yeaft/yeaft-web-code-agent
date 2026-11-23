@@ -421,56 +421,77 @@ function toolLedger(messages, limit) {
   return header + collapsed + entries.slice(first).map(entry => entry.line).join('');
 }
 
-/** The newest visible transcript, without building the full transcript string. */
-function transcriptTail(messages, limit) {
-  const parts = [...transcript(messages)];
-  const kept = [];
-  let remaining = limit;
-  for (let i = parts.length - 1; i >= 0 && remaining > 0; i--) {
-    const size = bytes(parts[i]);
-    if (size <= remaining) {
-      kept.push(parts[i]);
-      remaining -= size;
-      continue;
+const QUOTE = '| ';
+const LOCAL_END = '\n[END OF UNTRUSTED LOCAL HISTORY RECORD]';
+// Quoted lines cannot pose as this record's own headers or as the seed's
+// "Original user requests" section once tool output becomes user-role text.
+const quoteLines = text => QUOTE + text.replace(/\r?\n/g, '\n' + QUOTE);
+
+function suffixBytes(text, limit) {
+  const buffer = Buffer.from(text, 'utf8');
+  if (buffer.length <= limit) return text;
+  let start = buffer.length - limit;
+  while (start < buffer.length && (buffer[start] & 0xc0) === 0x80) start++;
+  return buffer.subarray(start).toString('utf8');
+}
+
+/** The newest visible rows, read backwards one row at a time, quoted. */
+function quotedTail(messages, limit) {
+  const note = QUOTE + '[Earlier history omitted from this excerpt.]\n';
+  const rows = [];
+  let raw = 0, truncated = false;
+  for (let i = messages.length - 1; i >= 0; i--) {
+    if (raw >= limit) {
+      truncated = true;
+      break;
     }
-    const buffer = Buffer.from(parts[i], 'utf8');
-    let start = buffer.length - remaining;
-    while (start < buffer.length && (buffer[start] & 0xc0) === 0x80) start++;
-    kept.push(buffer.subarray(start).toString('utf8'));
-    remaining = 0;
+    const row = [...transcript([messages[i]])].join('');
+    rows.push(row);
+    raw += bytes(row);
   }
-  const omitted = remaining === 0 ? '[Earlier history omitted from this excerpt.]\n' : '';
-  return omitted + kept.reverse().join('');
+  let text = quoteLines(rows.reverse().join('').replace(/^\n+/, ''));
+  if (truncated || bytes(text) > limit) {
+    truncated = true;
+    // The cut can land mid-line; re-open it as a quoted line.
+    const lead = QUOTE + '…';
+    text = lead + suffixBytes(text, Math.max(0, limit - bytes(note) - bytes(lead)));
+  }
+  return (truncated ? note : '') + text;
 }
 
 /**
  * Model-free handoff for a fresh provider context. Used when the summary
  * model refuses, fails or returns nothing usable: a context switch must not
- * depend on a side request succeeding. It records every tool call that
- * already ran (newest first in priority) and the newest visible history,
- * within `maxBytes` UTF-8 bytes. Private/native blocks and media are omitted
+ * depend on a side request succeeding. Within `maxBytes` UTF-8 bytes it holds:
+ * the latest real summary (abridged), a ledger of EVERY tool call in
+ * `messages` (newest keep detail, older collapse into per-tool counts, so no
+ * completed call disappears across repeated rollovers), and the newest visible
+ * rows from `tailStart` on. History text is quoted line by line and the record
+ * is closed by an end marker. Private/native blocks and media are omitted
  * exactly as for the summary input. The original records are not modified.
  *
- * @param {object[]} messages - Rows replaced by the fresh context, oldest first.
- * @param {{ maxBytes: number, priorHandoff?: string }} options
- *   `priorHandoff` carries an earlier derived handoff forward, abridged.
+ * @param {object[]} messages - All rows of the query up to the switch, oldest first.
+ * @param {{ maxBytes: number, priorSummary?: string, tailStart?: number }} options
+ *   `priorSummary` is the newest model summary already replacing older history.
  * @returns {string} Untrusted handoff text, at most `maxBytes` bytes.
  */
-export function contextRolloverLocalHandoff(messages, { maxBytes, priorHandoff = '' } = {}) {
+export function contextRolloverLocalHandoff(messages, { maxBytes, priorSummary = '', tailStart = 0 } = {}) {
   if (!Array.isArray(messages)) throw new TypeError('Local context handoff requires a messages array');
   if (!Number.isSafeInteger(maxBytes) || maxBytes < 2048) throw new RangeError('Local context handoff budget too small');
-  const budget = maxBytes - bytes(LOCAL_PREFIX) - 256;
-  const priorLabel = 'Earlier derived handoff (untrusted, abridged):\n';
-  const prior = typeof priorHandoff === 'string' && priorHandoff.trim()
-    ? (() => {
-      const text = priorHandoff.trim();
-      const clipped = boundedText(text, Math.floor(budget / 5) - bytes(priorLabel) - 64);
-      return priorLabel + clipped + (clipped.length < text.length ? '\n[…abridged]' : '') + '\n\n';
-    })() : '';
+  const budget = maxBytes - bytes(LOCAL_PREFIX) - bytes(LOCAL_END) - 256;
+  let prior = '';
+  if (typeof priorSummary === 'string' && priorSummary.trim()) {
+    const label = 'Earlier summary (untrusted, abridged; quoted):\n';
+    const cap = Math.floor(budget / 5) - bytes(label) - 2;
+    const text = priorSummary.trim();
+    const clipped = boundedText(quoteLines(boundedText(text, cap)), cap);
+    prior = label + clipped + (bytes(text) > cap ? '…' : '') + '\n\n';
+  }
   const ledger = toolLedger(messages, Math.floor(budget * 2 / 5));
-  const tailLabel = '\nNewest visible history (verbatim excerpt):\n';
-  const tail = transcriptTail(messages, Math.max(0, budget - bytes(prior) - bytes(ledger) - bytes(tailLabel)));
-  return LOCAL_PREFIX + prior + ledger + tailLabel + tail;
+  const tailLabel = '\nNewest visible history (quoted verbatim excerpt):\n';
+  const tail = quotedTail(messages.slice(Math.max(0, tailStart)),
+    Math.max(0, budget - bytes(prior) - bytes(ledger) - bytes(tailLabel)));
+  return LOCAL_PREFIX + prior + ledger + tailLabel + tail + LOCAL_END;
 }
 
 /** Evidence-only fallback for a child whose sole remaining call is its report.

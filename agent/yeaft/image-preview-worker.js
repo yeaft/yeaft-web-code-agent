@@ -10,7 +10,8 @@ const SMALL_TARGET_BYTES = 200 * 1024;
 // CPU (a 3840x1080 frame took 3.2 s and produced 4.9 MB). Above this size it
 // is slower than the whole lossy ladder and almost never meets the target.
 const LOSSLESS_MAX_PIXELS = 2_500_000;
-// The parent kills the process at 10 s. Leave room to write the result.
+// The parent kills the process 10 s after spawning it. Measured from process
+// start (process.uptime), so loading sharp and reading stdin count too.
 const ENCODE_BUDGET_MS = 8000;
 const loaders = new Map([
   ['image/png', 'VipsForeignLoadPngBuffer'], ['image/jpeg', 'VipsForeignLoadJpegBuffer'],
@@ -29,17 +30,17 @@ for await (const chunk of process.stdin) {
 }
 const input = Buffer.concat(chunks, size);
 if (imageMimeFromHeader(input) !== mime) process.exit(1);
-const started = Date.now();
 sharp.cache(false);
 sharp.concurrency(1);
 sharp.block({ operation: ['VipsForeignLoad'] });
 sharp.unblock({ operation: [loaders.get(mime)] });
-const encode = (target, options) => sharp(input, { limitInputPixels: MAX_SOURCE_PIXELS, pages: 1 })
-  .timeout({ seconds: 3 }).autoOrient().resize({ width: target, height: target, fit: 'inside', withoutEnlargement: true })
+const encode = (target, options, seconds) => sharp(input, { limitInputPixels: MAX_SOURCE_PIXELS, pages: 1 })
+  .timeout({ seconds }).autoOrient().resize({ width: target, height: target, fit: 'inside', withoutEnlargement: true })
   .webp(options).toBuffer();
 
-/** Cheapest-acceptable-first ladder. Each rung is independent: a timeout or
- * an oversized result moves to the next, smaller rung instead of giving up. */
+/** Best-first ladder. An oversized result moves to the next, smaller rung; a
+ * timeout or error jumps to the cheapest one. Neither gives up early. Only
+ * small (model-preview) targets get the 1920/1440/1024 rungs. */
 function ladder({ width, height }) {
   const scale = Math.min(1, edge / Math.max(width, height));
   const rungs = [];
@@ -59,11 +60,20 @@ function ladder({ width, height }) {
 try {
   const metadata = await sharp(input, { limitInputPixels: MAX_SOURCE_PIXELS, pages: 1 }).metadata();
   if (!metadata.width || !metadata.height) throw new Error('unreadable image');
-  for (const [target, options] of ladder(metadata)) {
-    if (Date.now() - started > ENCODE_BUDGET_MS) break;
+  const rungs = ladder(metadata);
+  for (let i = 0; i < rungs.length; i++) {
+    // Never start a rung that could outlive the parent's kill timer.
+    const seconds = Math.min(3, Math.floor((ENCODE_BUDGET_MS - process.uptime() * 1000) / 1000));
+    if (seconds < 1) break;
     let output;
-    try { output = await encode(target, options); }
-    catch { continue; } // A timeout on one rung is not a verdict on the next.
+    try {
+      output = await encode(rungs[i][0], rungs[i][1], seconds);
+    } catch {
+      // A slow or failed rung predicts slow neighbours: go straight to the
+      // cheapest one instead of giving up or spending the budget in between.
+      if (i < rungs.length - 2) i = rungs.length - 2;
+      continue;
+    }
     if (output.length <= maxBytes) {
       process.stdout.write(output);
       break;

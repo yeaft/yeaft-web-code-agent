@@ -10,22 +10,41 @@ const supported = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp']
 const MAX_ACTIVE_ENCODERS = 2;
 // The worker walks a ladder of encodings within its own 8 s budget.
 const ENCODER_KILL_MS = 10_000;
+// A short queue is better than shipping a large original; a long one would
+// stall the request. After this wait the caller keeps its reference path.
+const ENCODER_WAIT_MS = 10_000;
 let active = 0;
 const waiting = [];
 
-/** Bound CPU and memory with a queue, not a refusal: answering "no preview"
- * because another Session is encoding would ship a multi-megabyte original. */
+/** Bound CPU and memory with a short queue, not an instant refusal: answering
+ * "no preview" because another Session is encoding would ship a large original.
+ * Resolves true with a slot, or false after ENCODER_WAIT_MS without one. */
 async function acquireEncoder(signal) {
   if (active < MAX_ACTIVE_ENCODERS) {
     active++;
-    return;
+    return true;
   }
-  await new Promise((resolve, reject) => {
-    const entry = { resolve, signal };
+  return new Promise((resolve, reject) => {
+    const entry = { signal };
+    const leave = () => {
+      clearTimeout(entry.timer);
+      signal?.removeEventListener('abort', entry.onAbort);
+      const index = waiting.indexOf(entry);
+      if (index >= 0) waiting.splice(index, 1);
+    };
+    entry.grant = () => {
+      leave();
+      resolve(true);
+    };
     entry.onAbort = () => {
-      waiting.splice(waiting.indexOf(entry), 1);
+      leave();
       reject(new LLMAbortError());
     };
+    entry.timer = setTimeout(() => {
+      leave();
+      resolve(false);
+    }, ENCODER_WAIT_MS);
+    entry.timer.unref?.();
     signal?.addEventListener('abort', entry.onAbort, { once: true });
     waiting.push(entry);
   });
@@ -37,8 +56,7 @@ function releaseEncoder() {
     active--;
     return;
   }
-  next.signal?.removeEventListener('abort', next.onAbort);
-  next.resolve(); // Hand the slot directly to the next caller.
+  next.grant(); // Hand the slot directly to the next caller.
 }
 
 function encodeInChild(input, mime, edge, maxBytes, signal) {
@@ -86,14 +104,16 @@ export async function makeImagePreview(part, maxEdge, maxBase64Bytes, signal) {
       || source.data.length > Math.ceil(MAX_SOURCE_BYTES / 3) * 4) return null;
   const dimensions = imageDimensionsFromBase64(source.data);
   if (!dimensions || dimensions.width * dimensions.height > MAX_SOURCE_PIXELS) return null;
-  const input = Buffer.from(source.data, 'base64');
   // Decode by the sniffed format: a mislabeled original (a PNG named .jpg)
   // must still get a preview rather than ship its wrong label to the provider.
-  const mime = imageMimeFromHeader(input);
-  if (input.length > MAX_SOURCE_BYTES || !supported.has(mime)) return null;
-  await acquireEncoder(signal);
+  const mime = imageMimeFromHeader(Buffer.from(source.data.slice(0, 64), 'base64'));
+  if (!supported.has(mime)) return null;
+  // Queued callers hold only the base64 they already had, not a decoded copy.
+  if (!await acquireEncoder(signal)) return null;
   let output;
   try {
+    const input = Buffer.from(source.data, 'base64');
+    if (input.length > MAX_SOURCE_BYTES) return null;
     output = await encodeInChild(input, mime, maxEdge, Math.floor(maxBase64Bytes / 4) * 3, signal);
   } finally {
     releaseEncoder();

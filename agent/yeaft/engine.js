@@ -2685,8 +2685,9 @@ export class Engine {
     // A provider-context segment is not a new user query. Keep the durable tape,
     // tool execution ledgers and query identity; only the request context rolls.
     let rolloverSeed = null;
-    // The derived history inside rolloverSeed (summary or local record).
-    let rolloverHandoff = '';
+    // The newest model summary behind rolloverSeed. A local record never
+    // replaces it: each record lists every call again from the full tape.
+    let rolloverSummary = '';
     const rolloverUserRequests = [{ role: 'user', content:
       Array.isArray(promptParts) && promptParts.length ? promptParts : prompt }];
     let rolloverCursor = 0;
@@ -3874,6 +3875,7 @@ export class Engine {
             const rolloverOutputReserve = Math.min(requestConfig.maxOutputTokens || resolveMaxOutputTokens(currentModel, requestConfig), resolveMaxOutputTokens(currentModel, requestConfig));
             let summary;
             let handoffKind = 'summary';
+            const priorSummary = (rolloverSeed ? rolloverSummary : postCompactState.summary) || '';
             // The summary model is an optional refinement. A refusal, an empty
             // or overlong draft, or an outage after its retries must not end
             // the user's task: hand off a local record of the same history.
@@ -3882,10 +3884,15 @@ export class Engine {
               this.#trace.log?.('context_rollover_summary_unavailable', { sessionId: runtimeSessionId, turnId: queryTurnId,
                 model: currentModel, errorName: summaryError?.name || null, statusCode: summaryError?.statusCode ?? null,
                 attempts: summaryError?.rolloverAttempts ?? null, message: String(summaryError?.message || summaryError).slice(0, 200) });
-              const maxBytes = Math.max(LOCAL_HANDOFF_MIN_BYTES, Math.min(LOCAL_HANDOFF_MAX_BYTES,
-                Math.floor(currentContextWindow * contextRolloverRatio / 4)));
-              return contextRolloverLocalHandoff(conversationMessages.slice(rolloverSeed ? rolloverCursor : 0, sourceCursor),
-                { maxBytes, priorHandoff: rolloverSeed ? rolloverHandoff : postCompactState.summary });
+              // A gateway that taught a body cap (HTTP 413) bounds this text too.
+              const maxBytes = Math.max(2048, Math.min(LOCAL_HANDOFF_MAX_BYTES,
+                Math.max(LOCAL_HANDOFF_MIN_BYTES, Math.floor(currentContextWindow * contextRolloverRatio / 4)),
+                Number.isFinite(learnedRequestBodyCap) ? Math.floor(learnedRequestBodyCap / 8) : Infinity));
+              // The ledger covers the whole tape so that no segment's calls drop
+              // out after repeated local rollovers; the verbatim excerpt covers
+              // only rows not already represented by the current seed.
+              return contextRolloverLocalHandoff(conversationMessages.slice(0, sourceCursor),
+                { maxBytes, priorSummary, tailStart: rolloverSeed ? rolloverCursor : 0 });
             };
             const reportingExcerpt = () => {
               const staticCost = estimateMessagesTokens(rolloverSystem, [])
@@ -3896,6 +3903,7 @@ export class Engine {
             };
             if (executionPolicy?.finalize) {
               // Keep the sole reserved report instead of buying more summaries.
+              handoffKind = 'report';
               summary = reportingExcerpt();
             } else {
               const compact = streamContextRollover({
@@ -3918,6 +3926,7 @@ export class Engine {
                 // Recheck before EVERY dispatch, not just at rollover entry.
                 if (isSubAgent && this.#toolRegistry?.prepareProviderRequest?.()?.finalize) {
                   await compact.return();
+                  handoffKind = 'report';
                   summary = reportingExcerpt();
                   break;
                 }
@@ -4006,7 +4015,7 @@ export class Engine {
                 + ` (estimated ${seedEstimate} of ${currentContextWindow} tokens)`);
             }
             rolloverSeed = nextRolloverSeed;
-            rolloverHandoff = summary;
+            rolloverSummary = handoffKind === 'summary' ? summary : priorSummary;
             rolloverCursor = sourceCursor;
             signedAnthropicPrefix = null;
             postCompactCandidate = null;
@@ -4018,8 +4027,8 @@ export class Engine {
             completeReadResultIds.clear();
             // Persist only a derived cache for future user turns. It is not a
             // transcript row and never creates a second human-authored prompt.
-            // A local record is a stopgap for this query, not a summary: later
-            // turns keep the previous summary and the normal history window.
+            // A local record or report excerpt is a stopgap for this query, not
+            // a summary: later turns keep the previous summary and history window.
             if (postCompactScope && handoffKind === 'summary') {
               const artifact = { summary, model: currentModel, sourceTurnId: queryTurnId,
                 sourceRevision: postCompactState.revision, contextWindow: currentContextWindow,
