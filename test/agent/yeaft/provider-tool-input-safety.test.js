@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { OpenAIResponsesAdapter } from '../../../agent/yeaft/llm/openai-responses.js';
 import { AnthropicAdapter } from '../../../agent/yeaft/llm/anthropic.js';
-import { LLMServerError } from '../../../agent/yeaft/llm/adapter.js';
+import { LLMServerError, parseRetryAfterMs } from '../../../agent/yeaft/llm/adapter.js';
 import { Engine } from '../../../agent/yeaft/engine.js';
 import { NullTrace } from '../../../agent/yeaft/debug-trace.js';
 import { ConversationStore } from '../../../agent/yeaft/conversation/persist.js';
@@ -74,6 +74,21 @@ describe('Responses retries failed streams without replaying tools', () => {
   }
 
   it('retries EOF and transient terminal errors, keeping text and completed tool results', async () => {
+    const now = Date.UTC(2026, 10, 23);
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(now);
+    try {
+      for (const date of ['Sat, 01 Jan 2050 00:00:00 GMT', 'Saturday, 01-Jan-50 00:00:00 GMT', 'Sat Jan  1 00:00:00 2050']) {
+        expect(parseRetryAfterMs(date)).toBe(Date.UTC(2050, 0, 1) - now);
+      }
+      for (const date of ['9999-01', 'Tue, 31 Nov 2026 00:00:00 GMT', 'Mon, 01 Dec 2026 00:00:00 GMT',
+        'Tuesday, 01-Dec-76 00:00:00 GMT', 'Sun, 22 Nov 2026 23:59:59 GMT']) {
+        expect(parseRetryAfterMs(date), date).toBeNull();
+      }
+      expect(parseRetryAfterMs('0.005')).toBe(5);
+      expect(parseRetryAfterMs('0')).toBeNull();
+    } finally {
+      clock.mockRestore();
+    }
     const dir = await mkdtemp(join(tmpdir(), 'responses-stream-retry-'));
     try {
       const store = new ConversationStore(dir);
