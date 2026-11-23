@@ -90,6 +90,18 @@ it('serves daily FTS results and durable Share entries through owner-scoped Serv
       expect(response.data.results.map(row => row.sessionId)).toEqual(['visible']);
     });
     expect(result).toMatchObject({ indexedAt: now, results: [{ sessionId: 'visible', snippet: expect.stringContaining('索引检索功能') }] });
+    const searchFrame = { type: 'session_discovery_request', op: 'search', agentId, payload: { query: '检索' } };
+    for (let i = 0; i < 8; i++) await handleClientSessionDiscovery(alice, { ...searchFrame, requestId: `superseded_${i}` });
+    const lastSuperseded = agent.ws.getLastMessage();
+    const cancel = { type: 'session_discovery_cancel', requestId: 'superseded_7', agentId };
+    await handleClientSessionDiscovery(bob, cancel);
+    await handleClientSessionDiscovery(alice, { ...searchFrame, requestId: 'still_full' });
+    expect(alice.ws.getLastMessage()).toMatchObject({ requestId: 'still_full', ok: false });
+    await handleClientSessionDiscovery(alice, cancel);
+    await handleSessionDiscovery(lastSuperseded, root, response => handleAgentSessionDiscovery(agentId, agent, response));
+    expect(alice.ws.getLastMessage().requestId).toBe('still_full');
+    expect((await send(alice, 'search', { query: '检索' })).results).toHaveLength(1);
+    clearSessionDiscoveryRequests(alice);
     expect((await send(bob, 'search', { query: '检索' })).results.map(row => row.sessionId)).toEqual(['other-owner']);
     expect((await send(alice, 'search', { query: '检索' }, () => { hidden.push('visible'); })).results).toEqual([]);
     hidden.pop();

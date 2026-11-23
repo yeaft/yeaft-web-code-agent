@@ -11,6 +11,7 @@ async function openSidebar(page, serverUrl, handle, { mobile = false, locale = '
   let sendFrame;
   let enableDiscovery;
   let catalogSnapshot;
+  const cancellations = [];
   const hiddenAgents = new Set();
   await page.routeWebSocket(/.*/, route => {
     const server = route.connectToServer();
@@ -43,6 +44,7 @@ async function openSidebar(page, serverUrl, handle, { mobile = false, locale = '
     });
     route.onMessage(message => {
       const req = JSON.parse(String(message));
+      if (req.type === 'session_discovery_cancel') { cancellations.push(req); return; }
       if (req.type !== 'session_discovery_request') return server.send(message);
       handle(req, (data, overrides = {}) => route.send(JSON.stringify({
         type: 'session_discovery_response', agentId: req.agentId, requestId: req.requestId, op: req.op,
@@ -62,6 +64,7 @@ async function openSidebar(page, serverUrl, handle, { mobile = false, locale = '
   }, mobile);
   return {
     enableDiscovery: () => enableDiscovery(),
+    cancellations,
     hideSession: agentId => {
       hiddenAgents.add(agentId);
       sendFrame({ ...catalogSnapshot, catalog: catalogSnapshot.catalog.filter(row => !hiddenAgents.has(row.routeRef.agentId)) });
@@ -111,6 +114,8 @@ test('sidebar search before Digital Person searches as you type, with scoped res
   const obsolete = await search.take('obsolete');
   await query.fill('  architecture  ');
   const first = await search.take('architecture');
+  expect(socket.cancellations.map(frame => frame.requestId).sort())
+    .toEqual(search.requests.filter(req => req.payload.query === 'obsolete').map(req => req.requestId).sort());
   obsolete.alpha(indexed(hit('stale result', 10)));
   first.alpha({ indexedAt: null, results: [] });
   first.beta({ indexedAt: null, results: [] });
@@ -144,7 +149,18 @@ test('sidebar search before Digital Person searches as you type, with scoped res
 test('inline search fits the compact sidebar at 320px and clears or closes without a modal', async ({ page, serverUrl }) => {
   await page.route('**/api/user/preferences', route => route.fulfill({ json: { sidebarActionsCompact: true } }));
   const search = mockSearch();
-  await openSidebar(page, serverUrl, search.handle, { mobile: true, locale: 'zh-CN' });
+  await openSidebar(page, serverUrl, (req, reply) => {
+    if (req.op === 'share_list') return reply({ items: [
+      { id: 'existing', kind: 'output', status: 'published', title: '旧调研成果', body: '报告摘要', updatedAt: 123 },
+      { id: 'candidate', kind: 'consensus', status: 'candidate', title: '未发布的旧候选', body: '候选共识', updatedAt: 124 },
+    ] });
+    if (req.op === 'share_delete') {
+      expect(req.agentId).toBe('beta');
+      expect(req.payload).toEqual({ id: 'existing', expectedUpdatedAt: 123 });
+      return reply({});
+    }
+    search.handle(req, reply);
+  }, { mobile: true, locale: 'zh-CN' });
   const sidebar = page.locator('.sidebar-navigation:visible');
   const trigger = sidebar.getByRole('button', { name: '搜索会话', exact: true });
   await trigger.click();
@@ -174,6 +190,15 @@ test('inline search fits the compact sidebar at 320px and clears or closes witho
   await box.press('Escape');
   await expect(box).toHaveCount(0);
   await expect(trigger).toBeFocused();
+  await page.getByRole('button', { name: /^设置/ }).click();
+  await page.getByRole('button', { name: '通用', exact: true }).click();
+  const saved = page.locator('.saved-share-settings');
+  await saved.getByText('已保存的分享', { exact: true }).click();
+  await expect(saved.getByText('旧调研成果')).toBeVisible();
+  await expect(saved.getByText('未发布的旧候选')).toHaveCount(0);
+  await saved.getByRole('button', { name: '移除', exact: true }).click();
+  await page.getByRole('dialog').getByRole('button', { name: '确定', exact: true }).click();
+  await expect(saved.getByText('这台 Agent 上没有已保存的条目。')).toBeVisible();
 });
 
 test('a turn deletion invalidates inline results and late replies', async ({ page, serverUrl }) => {

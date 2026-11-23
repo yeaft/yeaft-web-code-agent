@@ -1767,3 +1767,7 @@
     width: 100%;
   }
 }
+
+.saved-share-settings summary { cursor: pointer; }
+.saved-share-settings .saved-share-item { display: block; overflow-wrap: anywhere; }
+.saved-share-item > .sp-desc { white-space: pre-wrap; }
