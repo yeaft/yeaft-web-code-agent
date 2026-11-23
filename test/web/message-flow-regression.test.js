@@ -365,6 +365,17 @@ describe('message flow regressions', () => {
       expect(sessions.sessionById('new', 'b')).toMatchObject({ name: 'New', sceneId: 'software' });
       expect(sessions.sessionById('s', 'b')).toBeNull();
 
+      // Conversely, a full live snapshot arriving after a receipt wins.
+      // A delayed Server replay cannot overwrite that live snapshot either.
+      requestInventory('newer-live', [{ id: 's' }]);
+      record('create', { session: { id: 'rename-me', name: 'Old name' } });
+      open('b', 'rename-me');
+      record('list', { sessions: [{ id: 'rename-me', name: 'New name' }] });
+      requestInventory('newer-live', [{ id: 'rename-me', name: 'From stale server replay' }]);
+      commit('newer-live');
+      expect(store.activeSessionRoute).toEqual(scope('b', 'rename-me'));
+      expect(sessions.sessionById('rename-me', 'b').name).toBe('New name');
+
       // A legacy bare identity may resolve only while it has a single owner;
       // the browser must not rewrite a guessed owner as a durable preference.
       localStorage.setItem(lastViewedKey, 'legacy');
@@ -377,6 +388,14 @@ describe('message flow regressions', () => {
       sessions.resetInventory();
       sessions.applySnapshot([{ id: 'fallback' }]);
       expect(store.yeaftActiveSessionFilter).toBe('fallback');
+      expect(localStorage.getItem(lastViewedKey)).toBeNull();
+
+      localStorage.setItem(lastViewedKey, 'confirmed-deleted');
+      sessions.resetInventory();
+      sessions.applySnapshot([]);
+      expect(sessions.waitingForLastViewedSession).toBe(true);
+      sessions.applyCrudResult({ ok: true, op: 'delete', groupId: 'confirmed-deleted' });
+      expect(sessions.waitingForLastViewedSession).toBe(false);
       expect(localStorage.getItem(lastViewedKey)).toBeNull();
     } finally {
       if (saved === null) localStorage.removeItem(lastViewedKey);

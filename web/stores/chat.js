@@ -6232,13 +6232,7 @@ export const useChatStore = defineStore('chat', {
           if (event.type !== 'yeaft_session_hydrate'
               && this.yeaftSessionHydrateRequestId
               && this.yeaftSessionInventoryCompleteSupported === true) {
-            const slices = Array.isArray(this.yeaftSessionHydrateSlices)
-              ? this.yeaftSessionHydrateSlices.filter(slice => slice.agentId !== (msg.agentId || null))
-              : [];
-            this.yeaftSessionHydrateSlices = [...slices, {
-              agentId: msg.agentId || null,
-              sessions: rows,
-            }];
+            handlerHelpers.bufferYeaftSessionInventorySlice(this, { agentId: msg.agentId, sessions: rows }, { live: true });
             break;
           }
           const prevGroupId = gs ? (gs.activeSessionId || null) : null;
@@ -6323,9 +6317,14 @@ export const useChatStore = defineStore('chat', {
           if (isBranchResult && event.projectsAuthoritative === true && Array.isArray(event.projects)) {
             this.applySessionCatalogSnapshot(this.sessionCatalog, event.projects, null, { authoritative: false });
           }
+          const deferList = this.yeaftSessionHydrateRequestId && this.yeaftSessionInventoryCompleteSupported === true
+            && event.ok && event.op === 'list' && Array.isArray(event.sessions);
+          if (deferList) {
+            handlerHelpers.bufferYeaftSessionInventorySlice(this, { agentId: msg.agentId, sessions: event.sessions }, { live: true });
+          }
           handlerHelpers.bufferYeaftSessionCrudDelta(this, event, msg.agentId || null);
           // The initiating create/restore/branch UI owns navigation.
-          if (gs) gs.applyCrudResult(event, msg.agentId || null);
+          if (gs) gs.applyCrudResult(event, msg.agentId || null, { deferList });
           if (event.ok && event.op === 'delete' && event.sessionId && msg.agentId) {
             this.clearYeaftHistoryMemory({
               agentId: msg.agentId,

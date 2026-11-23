@@ -586,7 +586,7 @@ export const useSessionsStore = defineStore('sessions', {
     },
 
     /** Record a `group_crud_result` for UI feedback. */
-    applyCrudResult(result, agentId = null) {
+    applyCrudResult(result, agentId = null, { deferList = false } = {}) {
       if (!result) return;
       this.lastCrudResult = { ...result, at: Date.now() };
       if (result.requestId && this.pending[result.requestId]) {
@@ -594,7 +594,7 @@ export const useSessionsStore = defineStore('sessions', {
       }
       const session = result.session || result.group || null;
       const mutationAgentId = agentId || result.agentId || session?.agentId || null;
-      if (result.ok && result.op === 'list' && Array.isArray(result.sessions)) {
+      if (!deferList && result.ok && result.op === 'list' && Array.isArray(result.sessions)) {
         this.applySnapshot(result.sessions, mutationAgentId);
       }
       if (result.ok && (result.op === 'create' || result.op === 'copy' || result.op === 'merge' || result.op === 'restore') && session && session.id) {
@@ -621,14 +621,15 @@ export const useSessionsStore = defineStore('sessions', {
         if (this._explicitPendingSessionKey === key) this._explicitPendingSessionKey = null;
         const wasPreferred = this._preferredExactSessionIdentity === key;
         if (wasPreferred) this._preferredExactSessionIdentity = null;
-        if (wasActive && this._retiredBareActiveSessionId === opSessionId) {
+        const bareMatch = this._retiredBareActiveSessionId === opSessionId;
+        if (bareMatch && (wasActive || (allowOwnerlessMutation && !mutationAgentId))) {
           this._retiredBareActiveSessionId = null;
           forgetSavedSessionKey(opSessionId);
         }
         forgetSavedSessionKey(key);
         delete this.sessions[key];
         this.sessionOrder = this.sessionOrder.filter(id => id !== key);
-        if (wasActive || wasPreferred || this._retiredBareActiveSessionId === opSessionId) {
+        if (wasActive || wasPreferred || bareMatch) {
           reconcileInventorySelection(this);
         }
       }

@@ -156,14 +156,17 @@ function sessionsStore() {
     || (window.__useSessionsStore && window.__useSessionsStore());
 }
 
-function bufferYeaftSessionInventorySlice(store, msg) {
+export function bufferYeaftSessionInventorySlice(store, msg, { live = false } = {}) {
   const agentId = msg.agentId || null;
-  const slices = Array.isArray(store.yeaftSessionHydrateSlices)
-    ? store.yeaftSessionHydrateSlices.filter(slice => slice.agentId !== agentId)
-    : [];
-  store.yeaftSessionHydrateSlices = [...slices, {
+  const slices = Array.isArray(store.yeaftSessionHydrateSlices) ? store.yeaftSessionHydrateSlices : [];
+  // The initial Server replay may still be in transit after a live, full
+  // Agent snapshot has arrived. It cannot replace that newer inventory.
+  if (!live && slices.some(slice => slice.agentId === agentId && slice.live)) return;
+  if (live) store.yeaftSessionHydrateCrudDeltas?.agents?.delete(agentId);
+  store.yeaftSessionHydrateSlices = [...slices.filter(slice => slice.agentId !== agentId), {
     agentId,
     sessions: Array.isArray(msg.sessions) ? msg.sessions : [],
+    live,
   }];
 }
 
@@ -196,7 +199,7 @@ function applyYeaftSessionInventoryDeltas(slices, deltas) {
   if (!deltas?.size) return slices;
   const result = new Map(slices.map(slice => [slice.agentId, slice.sessions]));
   for (const [agentId, updates] of deltas) {
-    const rows = new Map((result.get(agentId) || []).map(row => [row.id, row]));
+    const rows = new Map((result.get(agentId) || []).filter(row => row?.id).map(row => [row.id, row]));
     for (const [sessionId, delta] of updates) {
       if (!delta) rows.delete(sessionId);
       else if (delta.insert || rows.has(sessionId)) {
@@ -221,9 +224,11 @@ function commitBufferedYeaftSessionInventory(store) {
   }
   const deltas = store.yeaftSessionHydrateCrudDeltas?.requestId === store.yeaftSessionHydrateRequestId
     ? store.yeaftSessionHydrateCrudDeltas?.agents : null;
-  const slices = applyYeaftSessionInventoryDeltas(
+  const mergedSlices = applyYeaftSessionInventoryDeltas(
     Array.isArray(store.yeaftSessionHydrateSlices) ? store.yeaftSessionHydrateSlices : [], deltas,
   );
+  const slices = mergedSlices.some(slice => slice.agentId)
+    ? mergedSlices.filter(slice => slice.agentId) : mergedSlices;
   const orderedSlices = preferred.agentId
     ? [
         ...slices.filter(slice => slice.agentId === preferred.agentId),
