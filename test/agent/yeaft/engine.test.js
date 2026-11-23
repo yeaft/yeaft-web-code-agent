@@ -13,6 +13,7 @@ import { loadPostCompact, postCompactPath, savePostCompact } from '../../../agen
 import { NullTrace } from '../../../agent/yeaft/debug-trace.js';
 import { _setMemCacheForTest } from '../../../agent/yeaft/llm/models-dev.js';
 import { persistYeaftAttachments } from '../../../agent/yeaft/attachments.js';
+import { imageDimensionsFromBase64 } from '../../../agent/yeaft/image-dimensions.js';
 import { providerProjectionDigest } from '../../../agent/yeaft/llm/provider-state.js';
 import { defineTool } from '../../../agent/yeaft/tools/types.js';
 import { ToolRegistry } from '../../../agent/yeaft/tools/registry.js';
@@ -412,6 +413,20 @@ describe('Engine', () => {
     async function verifyImageLimitContinuation(mode) {
       const signed = mode !== 'unsigned';
       const gatewayRejects = mode === 'stricter-gateway';
+      // C1: a real 3840x1080 screenshot after 20 signed images. A route-sized
+      // preview must fit it without rebuilding the context.
+      const realPreview = mode === 'signed-preview';
+      let realScreenshot;
+      if (realPreview) {
+        let sharp;
+        try { sharp = createRequire(new URL('../../../agent/package.json', import.meta.url))('sharp'); }
+        catch (err) {
+          if (err.code !== 'MODULE_NOT_FOUND' && !/Could not load the .sharp. module/.test(err.message)) throw err;
+          return; // Optional native encoder.
+        }
+        realScreenshot = await sharp({ create: { width: 3840, height: 1080, channels: 3, background: '#1b2a3a' } }).png().toBuffer();
+        expect(realScreenshot.length).toBeLessThan(200 * 1024); // Below the model-preview target: only the route fitter can shrink it.
+      }
       const dir = mkdtempSync(join(tmpdir(), 'yeaft-active-image-limit-'));
       const store = new ConversationStore(dir);
       const model = 'claude-opus-4.8';
@@ -425,7 +440,7 @@ describe('Engine', () => {
       // The tool retention policy caps replay independently. Use uploads to
       // exercise the provider-specific many-image limit despite that cap.
       const screenshots = Array.from({ length: 20 }, (_, index) => makeGif(index, 1200));
-      const newest = makeGif(20, gatewayRejects ? 2000 : 3303);
+      const newest = realPreview ? realScreenshot.toString('base64') : makeGif(20, gatewayRejects ? 2000 : 3303);
       const photos = screenshots.map(data => ({ type: 'image', source: { type: 'base64', media_type: 'image/gif', data } }));
       const path = n => `screenshot-${n}.gif`;
       const flatten = content => Array.isArray(content) ? content.flatMap(part => part.type === 'tool_result'
@@ -463,7 +478,7 @@ describe('Engine', () => {
           config: { model: 'gateway/' + model, maxOutputTokens: 1024, projectDocMaxBytes: 0 } });
         engine.registerTool({ name: 'ViewImage', description: 'Read a screenshot', parameters: { type: 'object' }, execute: async input => {
           executions.push(input.file_path);
-          return JSON.stringify({ path: input.file_path, image: 'data:image/gif;base64,' + newest });
+          return JSON.stringify({ path: input.file_path, image: `data:image/${realPreview ? 'png' : 'gif'};base64,` + newest });
         } });
         const events = [];
         for await (const event of engine.query({ prompt: 'Compare the screenshots.', sessionId: 'image-limit',
@@ -473,9 +488,18 @@ describe('Engine', () => {
         expect(executions).toEqual([path(0)]);
         expect(store.loadAllBySession('image-limit').filter(row => row.role === 'tool')).toHaveLength(1);
         const final = requests.at(-1);
-        expect(final.images).toContain(newest);
-        expect(summaries).toHaveLength(signed ? 1 : 0);
+        expect(summaries).toHaveLength(signed && !realPreview ? 1 : 0);
         expect(requests).toHaveLength(gatewayRejects ? 3 : 2);
+        if (realPreview) {
+          expect(events.filter(event => event.type === 'llm_retry')).toEqual([]);
+          expect(final.request.messages.length).toBeGreaterThan(1);
+          expect(final.images.slice(0, 20)).toEqual(screenshots);
+          expect(final.images).toHaveLength(21);
+          expect(imageDimensionsFromBase64(final.images[20]).width).toBeLessThanOrEqual(3000);
+          expect(JSON.stringify(final.request)).toContain('Image preview sent to fit the model route');
+          return;
+        }
+        expect(final.images).toContain(newest);
         if (signed && !gatewayRejects) {
           expect(requests[0].images).toEqual(screenshots);
           expect(final.images.length).toBeLessThanOrEqual(19);
@@ -683,14 +707,65 @@ describe('Engine', () => {
       }
     }
 
+    // The summary model keeps refusing, so two local records follow each other.
+    // The second must still list the first segment's call, excerpt only the
+    // new rows, and never nest the first record inside itself.
+    async function verifyRepeatedLocalRollover() {
+      const dir = mkdtempSync(join(tmpdir(), 'yeaft-repeated-local-rollover-'));
+      const requests = [], summaries = [], executions = [];
+      const usage = { input_tokens: 1000, output_tokens: 100, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 };
+      const textOf = content => typeof content === 'string' ? content
+        : content.filter(block => block.type === 'text').map(block => block.text).join('');
+      try {
+        vi.stubGlobal('fetch', vi.fn(async (_url, init) => {
+          const body = anthropicWireWithoutCache(init);
+          if (!body.stream) {
+            summaries.push(body);
+            return new Response(JSON.stringify({ content: [{ type: 'text', text: 'No.' }], stop_reason: 'refusal',
+              usage: { input_tokens: 100, output_tokens: 1 } }), { headers: { 'content-type': 'application/json' } });
+          }
+          requests.push(body);
+          const n = requests.length;
+          if (n === 2 || n === 4) return new Response('prompt is too long', { status: 400 });
+          return response('roll-' + n, n < 4 ? 'echo' : undefined, { n }, 'claude-opus-4.8', usage);
+        }));
+        const engine = new Engine({ adapter: router('claude-opus-4.8'), trace, yeaftDir: dir, conversationStore: new ConversationStore(dir),
+          config: { model: 'gateway/claude-opus-4.8', maxOutputTokens: 1024, projectDocMaxBytes: 0, modelInfo: { contextWindow: 40000, maxOutput: 4096 } } });
+        engine.registerTool({ name: 'echo', description: 'Record a side effect', parameters: { type: 'object' }, execute: async input => {
+          executions.push(input.n);
+          return `SIDE_EFFECT_DONE_${input.n}`;
+        } });
+        const events = [];
+        for await (const event of engine.query({ prompt: 'do both steps', sessionId: 'repeated-local' })) events.push(event);
+        expect(events.filter(event => event.type === 'error')).toEqual([]);
+        expect(events.filter(event => event.type === 'turn_end' && event.terminal)).toEqual([expect.objectContaining({ stopReason: 'end_turn' })]);
+        expect(executions).toEqual([1, 3]);
+        expect(summaries).toHaveLength(2);
+        expect(requests).toHaveLength(5);
+        const seed = textOf(requests[4].messages[0].content);
+        expect(seed.match(/\[UNTRUSTED LOCAL HISTORY RECORD/g)).toHaveLength(1);
+        expect(seed).toContain('- echo id=roll-1 → reported result');
+        expect(seed).toContain('- echo id=roll-3 → reported result');
+        const excerpt = seed.slice(seed.indexOf('Newest visible history'), seed.indexOf('[END OF UNTRUSTED LOCAL HISTORY RECORD]'));
+        expect(excerpt).toContain('SIDE_EFFECT_DONE_3');
+        expect(excerpt).not.toContain('SIDE_EFFECT_DONE_1');
+        expect(seed).toContain('do both steps');
+      } finally {
+        vi.unstubAllGlobals();
+        await closeConversationHistoryIndexes();
+        rmSync(dir, { recursive: true, force: true });
+      }
+    }
+
     it.each(['provider', 'abort', 'append'])('rolls signed context into a fresh conversation without tool replay: %s', async trigger => {
       if (trigger === 'provider') {
+        await verifyRepeatedLocalRollover();
         await assertLongImageLoop();
         await verifyRoutePreviewDeduplication();
         await verifyMisnamedScreenshot();
-        for (const mode of ['unsigned', 'signed', 'stricter-gateway']) await verifyImageLimitContinuation(mode);
+        for (const mode of ['unsigned', 'signed', 'signed-preview', 'stricter-gateway']) await verifyImageLimitContinuation(mode);
       }
-      const modes = ['token', 'http413', 'http413-token-fallback', 'http413-summary-retry', 'http413-multilingual-summary', 'http413-summary-5xx', 'http413-summary-down'];
+      const modes = ['token', 'http413', 'http413-token-fallback', 'http413-summary-retry', 'http413-multilingual-summary', 'http413-summary-5xx', 'http413-summary-down', 'http413-summary-refusal'];
       for (const mode of trigger === 'provider' ? modes : [trigger]) {
         const dir = mkdtempSync(join(tmpdir(), 'yeaft-signed-rollover-'));
         const originalFetch = globalThis.fetch;
@@ -720,6 +795,9 @@ describe('Engine', () => {
         const summaryOutage = mode === 'http413-summary-5xx';
         const summaryDown = mode === 'http413-summary-down';
         const summaryRetries = summaryOutage ? 1 : summaryDown ? 3 : 0;
+        // The summary model declines, as it did for C1: the task continues on a local record.
+        const summaryRefused = mode === 'http413-summary-refusal';
+        const localHandoff = summaryDown || summaryRefused;
         const handoff = 'COMPLETE_EVIDENCE: ' + '已核对图像证据。'.repeat(200) + '保留最后的证据。';
         const imagePath = 'fixture image.gif';
         const toolName = tooLarge ? 'ViewImage' : 'echo';
@@ -744,6 +822,7 @@ describe('Engine', () => {
               if (body.system.startsWith('Summarize the supplied') && summaries.length <= summaryRetries + (summaryDown ? 1 : 0)) {
                 return new Response('{"error":"Internal Server Error"}', { status: 500 });
               }
+              if (summaryRefused) return new Response(JSON.stringify({ content: [{ type: 'text', text: 'I can not summarize this.' }], stop_reason: 'refusal', usage: { input_tokens: 1234, output_tokens: 5 } }), { headers: { 'content-type': 'application/json' } });
               let draft = 'COMPLETE_EVIDENCE. Tool completed successfully, do not repeat it. Continue unfinished answer.';
               if (multilingual) draft = handoff;
               if (retrySummary && summaries.length === 1) draft = 'Rejected draft. ' + '细'.repeat(6000);
@@ -792,14 +871,7 @@ describe('Engine', () => {
               attempt: index + 1, maxRetries: 3, statusCode: 500, errorName: 'LLMServerError', recoveryMode: 'continue' })));
           // Budgeted by pixels, the reference image reaches the model whole.
           expect(requests[0].messages[0].content.some(isReference)).toBe(true);
-          if (summaryDown) {
-            // Out of retries: the real status and attempt count reach the user.
-            expect(events.filter(event => event.type === 'error').map(event => event.error)).toEqual([expect.objectContaining({
-              code: 'CONTEXT_COMPACTION_FAILED', statusCode: 500,
-              message: expect.stringMatching(/^Automatic context compaction failed after 4 attempts at one summary request; .*Internal Server Error/),
-            })]);
-            expect(requests).toHaveLength(2);
-          } else if (mode !== 'abort') {
+          if (mode !== 'abort') {
             expect(events.filter(event => event.type === 'error')).toEqual([]);
             const fresh = requests.at(-1);
             expect(fresh.messages).toHaveLength(1);
@@ -808,6 +880,17 @@ describe('Engine', () => {
             expect(textOf(seed)).toContain('COMPLETE_EVIDENCE');
             expect(textOf(seed)).toContain('obtain evidence and finish');
             expect(textOf(seed)).not.toContain('Rejected draft.');
+            // Out of retries or refused, the summary is skipped, not the task:
+            // a local record names the completed call so it is not repeated.
+            expect(textOf(seed).includes('UNTRUSTED LOCAL HISTORY RECORD')).toBe(localHandoff);
+            if (localHandoff) {
+              expect(textOf(seed)).toContain('- ViewImage id=roll-1 → reported result');
+              expect(textOf(seed)).not.toContain('I can not summarize this.');
+            }
+            // Only a real summary becomes the cached history for later turns.
+            const cached = await loadPostCompact(postCompactPath(dir, { sessionId: 'signed-rollover' }));
+            if (localHandoff) expect(cached).toBeNull();
+            else expect(cached?.summary).toContain('COMPLETE_EVIDENCE');
             if (multilingual) {
               expect(Buffer.byteLength(handoff)).toBeGreaterThan(summaries[0].max_tokens);
               expect(textOf(seed)).toContain(handoff);
@@ -842,7 +925,7 @@ describe('Engine', () => {
           expect(rows.filter(row => row.role === 'tool')).toHaveLength(executions);
           expect(rows.some(row => row.providerState?.items?.some(item => item.signature))).toBe(true);
           expect(events.filter(event => event.type === 'turn_end' && event.terminal)).toEqual([
-            expect.objectContaining({ stopReason: mode === 'abort' ? 'aborted' : summaryDown ? 'error' : 'end_turn', terminal: true }),
+            expect.objectContaining({ stopReason: mode === 'abort' ? 'aborted' : 'end_turn', terminal: true }),
           ]);
         } finally {
           globalThis.fetch = originalFetch;
@@ -850,7 +933,10 @@ describe('Engine', () => {
           rmSync(dir, { recursive: true, force: true });
         }
       }
-    }, 20_000);
+      // One case runs about a dozen end-to-end scenarios (the suite is capped at
+      // 200 cases), several with real image encodes in child processes: ~8 s idle,
+      // ~27 s on a loaded desktop. Leave room for slow CI instead of flaking.
+    }, 60_000);
   });
 
   describe('tool execution loop', () => {

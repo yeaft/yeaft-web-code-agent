@@ -72,7 +72,7 @@ import {
   removePostCompactIfSource,
   savePostCompact,
 } from './post-compact.js';
-import { streamContextRollover, contextRolloverReport, contextRolloverSeed } from './context-rollover.js';
+import { streamContextRollover, contextRolloverLocalHandoff, contextRolloverReport, contextRolloverSeed } from './context-rollover.js';
 import { getModelInfo, normalizeEffort, parseModelRef, resolveContextWindow, resolveMaxOutputTokens } from './models.js';
 import { attachRouterPlan, extractPriorPlan, stripMetaForWire } from './router/continuity.js';
 import { resolveThinking } from './router/thinking.js';
@@ -281,6 +281,10 @@ const RETRY_CONTINUATION_PROMPT =
 const LEGACY_CONTEXT_ROLLOVER_INPUT_RATIO = 0.85;
 const SESSION_COMPACTION_INPUT_RATIO = 0.8;
 const MAX_REQUEST_BODY_RECOVERY_ATTEMPTS = 3;
+// A mechanical handoff is uncompressed, so it gets more room than a summary,
+// but stays far below the half-window a rollover seed may occupy.
+const LOCAL_HANDOFF_MIN_BYTES = 4 * 1024;
+const LOCAL_HANDOFF_MAX_BYTES = 64 * 1024;
 const POLICY_RECOVERY_PROMPT =
   'Continue this authorized code review, but describe security findings abstractly. Do not repeat credential-like or exploit payloads, secrets, tokens, or step-by-step misuse instructions. Preserve the technical conclusion, evidence location, severity, and remediation.';
 
@@ -2684,6 +2688,9 @@ export class Engine {
     // A provider-context segment is not a new user query. Keep the durable tape,
     // tool execution ledgers and query identity; only the request context rolls.
     let rolloverSeed = null;
+    // The newest model summary behind rolloverSeed. A local record never
+    // replaces it: each record lists every call again from the full tape.
+    let rolloverSummary = '';
     const rolloverUserRequests = [{ role: 'user', content:
       Array.isArray(promptParts) && promptParts.length ? promptParts : prompt }];
     let rolloverCursor = 0;
@@ -3870,6 +3877,26 @@ export class Engine {
             const rolloverSystem = buildCurrentSystemPrompt() + (executionPolicy?.prompt ? '\n\n' + executionPolicy.prompt : '');
             const rolloverOutputReserve = Math.min(requestConfig.maxOutputTokens || resolveMaxOutputTokens(currentModel, requestConfig), resolveMaxOutputTokens(currentModel, requestConfig));
             let summary;
+            let handoffKind = 'summary';
+            const priorSummary = (rolloverSeed ? rolloverSummary : postCompactState.summary) || '';
+            // The summary model is an optional refinement. A refusal, an empty
+            // or overlong draft, or an outage after its retries must not end
+            // the user's task: hand off a local record of the same history.
+            const localHandoff = summaryError => {
+              handoffKind = 'local';
+              this.#trace.log?.('context_rollover_summary_unavailable', { sessionId: runtimeSessionId, turnId: queryTurnId,
+                model: currentModel, errorName: summaryError?.name || null, statusCode: summaryError?.statusCode ?? null,
+                attempts: summaryError?.rolloverAttempts ?? null, message: String(summaryError?.message || summaryError).slice(0, 200) });
+              // A gateway that taught a body cap (HTTP 413) bounds this text too.
+              const maxBytes = Math.max(2048, Math.min(LOCAL_HANDOFF_MAX_BYTES,
+                Math.max(LOCAL_HANDOFF_MIN_BYTES, Math.floor(currentContextWindow * contextRolloverRatio / 4)),
+                Number.isFinite(learnedRequestBodyCap) ? Math.floor(learnedRequestBodyCap / 8) : Infinity));
+              // The ledger covers the whole tape so that no segment's calls drop
+              // out after repeated local rollovers; the verbatim excerpt covers
+              // only rows not already represented by the current seed.
+              return contextRolloverLocalHandoff(conversationMessages.slice(0, sourceCursor),
+                { maxBytes, priorSummary, tailStart: rolloverSeed ? rolloverCursor : 0 });
+            };
             const reportingExcerpt = () => {
               const staticCost = estimateMessagesTokens(rolloverSystem, [])
                 + approxTokens(JSON.stringify(toolDefs));
@@ -3879,6 +3906,7 @@ export class Engine {
             };
             if (executionPolicy?.finalize) {
               // Keep the sole reserved report instead of buying more summaries.
+              handoffKind = 'report';
               summary = reportingExcerpt();
             } else {
               const compact = streamContextRollover({
@@ -3901,10 +3929,18 @@ export class Engine {
                 // Recheck before EVERY dispatch, not just at rollover entry.
                 if (isSubAgent && this.#toolRegistry?.prepareProviderRequest?.()?.finalize) {
                   await compact.return();
+                  handoffKind = 'report';
                   summary = reportingExcerpt();
                   break;
                 }
-                const next = await compact.next();
+                let next;
+                try {
+                  next = await compact.next();
+                } catch (summaryError) {
+                  if (signal?.aborted || summaryError instanceof LLMAbortError || summaryError?.name === 'AbortError') throw summaryError;
+                  summary = localHandoff(summaryError);
+                  break;
+                }
                 if (next.done) { summary = next.value; break; }
                 if (next.value.type === 'retry') {
                   const { attempt, maxRetries, delayMs, reason, error } = next.value;
@@ -3982,6 +4018,7 @@ export class Engine {
                 + ` (estimated ${seedEstimate} of ${currentContextWindow} tokens)`);
             }
             rolloverSeed = nextRolloverSeed;
+            rolloverSummary = handoffKind === 'summary' ? summary : priorSummary;
             rolloverCursor = sourceCursor;
             signedAnthropicPrefix = null;
             postCompactCandidate = null;
@@ -3993,7 +4030,9 @@ export class Engine {
             completeReadResultIds.clear();
             // Persist only a derived cache for future user turns. It is not a
             // transcript row and never creates a second human-authored prompt.
-            if (postCompactScope) {
+            // A local record or report excerpt is a stopgap for this query, not
+            // a summary: later turns keep the previous summary and history window.
+            if (postCompactScope && handoffKind === 'summary') {
               const artifact = { summary, model: currentModel, sourceTurnId: queryTurnId,
                 sourceRevision: postCompactState.revision, contextWindow: currentContextWindow,
                 deletionGeneration: postCompactState.deletionGeneration, createdAt: new Date().toISOString() };
@@ -4006,7 +4045,7 @@ export class Engine {
             }
             this.#trace.log?.('context_rollover', { sessionId: runtimeSessionId,
               turnId: queryTurnId, model: currentModel, contextWindow: currentContextWindow,
-              segment: rolloverCount, sourceMessageCount: rolloverCursor });
+              segment: rolloverCount, sourceMessageCount: rolloverCursor, handoff: handoffKind });
             yield queryProgress.snapshot(progressIdentity);
             yield { type: 'turn_end', turnNumber, stopReason: 'llm_retry', threadId };
             continue;
@@ -4016,12 +4055,11 @@ export class Engine {
               yield { type: 'turn_end', turnNumber, stopReason: 'aborted', threadId, terminal: true };
               break;
             }
-            // Never drop source context when summarization fails. Report the
-            // actual recovery failure, not a misleading invalid-signature error.
-            const attempts = compactError?.rolloverAttempts;
-            err = new Error('Automatic context compaction failed'
-              + (attempts > 1 ? ` after ${attempts} attempts at one summary request` : '')
-              + '; conversation and completed tool results are preserved. '
+            // Summary failures already fell back to a local record. What remains
+            // is a fresh context that cannot be built at all (for example the
+            // original user requests alone exceed the window). Never drop source
+            // context; report this failure, not a misleading invalid-signature error.
+            err = new Error('Automatic context compaction failed; conversation and completed tool results are preserved. '
               + String(compactError?.message || compactError), { cause: compactError });
             err.code = 'CONTEXT_COMPACTION_FAILED';
             // The provider's own status explains the failure; reasonCode names the trigger.
