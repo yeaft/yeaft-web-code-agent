@@ -5,7 +5,7 @@ export function supportsSessionDiscovery(agent) {
   return Array.isArray(agent?.capabilities) && agent.capabilities.includes('session_discovery');
 }
 
-/** A browser request belongs to one socket, Agent, operation, and dialog lifecycle. */
+/** A browser request belongs to one socket, Agent, operation, and caller lifecycle. */
 export function requestSessionDiscovery(store, agentId, op, payload, signal) {
   return new Promise((resolve, reject) => {
     if (signal.aborted || store.connectionState !== 'connected' || store.sessionDiscoverySupported !== true
@@ -14,6 +14,7 @@ export function requestSessionDiscovery(store, agentId, op, payload, signal) {
       return;
     }
     const requestId = `discovery_${(globalThis.crypto?.randomUUID?.() || `${Date.now()}_${Math.random().toString(36).slice(2)}`)}`;
+    const socket = store.ws;
     const finish = (error, data) => {
       clearTimeout(timer);
       signal.removeEventListener('abort', abort);
@@ -21,10 +22,15 @@ export function requestSessionDiscovery(store, agentId, op, payload, signal) {
       if (error) reject(error);
       else resolve(data);
     };
-    const abort = () => finish(new Error('aborted'));
+    const abort = () => {
+      if (op === 'search' && store.ws === socket && store.connectionState === 'connected') {
+        store.sendWsMessage({ type: 'session_discovery_cancel', requestId, agentId });
+      }
+      finish(new Error('aborted'));
+    };
     const timer = setTimeout(() => finish(new Error('timeout')), REQUEST_TIMEOUT_MS);
     signal.addEventListener('abort', abort, { once: true });
-    pending.set(requestId, { store, socket: store.ws, agentId, op, finish });
+    pending.set(requestId, { store, socket, agentId, op, finish });
     if (!store.sendWsMessage({ type: 'session_discovery_request', agentId, requestId, op, payload })) {
       finish(new Error('unavailable'));
     }

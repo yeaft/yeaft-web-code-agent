@@ -17,6 +17,7 @@ import VpCrudPanel from './VpCrudPanel.js';
 import SearchSettingsTab from './SearchSettingsTab.js';
 import McpTab from './McpTab.js';
 import UserShortcutsSettings from './UserShortcutsSettings.js';
+import SavedShareSettings from './SavedShareSettings.js';
 import { loadSandboxState } from '../utils/sandbox-api.js';
 import { confirmDialog } from '../utils/dialog.js';
 import NavigationIcon from './NavigationIcon.js';
@@ -24,7 +25,7 @@ import { WAITING_ANIMATION_CHOICES } from './waiting/index.js';
 
 export default {
   name: 'SettingsPanel',
-  components: { NavigationIcon, DashboardTab, AgentInstaller, VpCrudPanel, SearchSettingsTab, McpTab, UserShortcutsSettings },
+  components: { NavigationIcon, DashboardTab, AgentInstaller, VpCrudPanel, SearchSettingsTab, McpTab, UserShortcutsSettings, SavedShareSettings },
   props: {
     visible: Boolean,
     initialTab: { type: String, default: '' },
@@ -327,6 +328,7 @@ export default {
                 </div>
               </div>
               <UserShortcutsSettings />
+              <SavedShareSettings v-if="activeTab === 'general' && chatStore.sessionDiscoverySupported" :store="chatStore" />
             </div>
 
             <!-- Managed Sandbox -->

@@ -55,11 +55,19 @@ export function clearSessionDiscoveryRequests(client) {
 }
 
 export async function handleClientSessionDiscovery(client, msg) {
-  if (msg.type !== 'session_discovery_request') return false;
+  if (!['session_discovery_request', 'session_discovery_cancel'].includes(msg.type)) return false;
   const requestId = clean(msg.requestId);
+  if (!client.authenticated || !client.userId || !requestId || requestId.length > 100) return true;
+  if (msg.type === 'session_discovery_cancel') {
+    for (const [id, request] of pending) {
+      if (request.client === client && request.ownerId === client.userId
+          && request.op === 'search' && request.browserRequestId === requestId && request.agentId === msg.agentId) dropRequest(id);
+    }
+    return true;
+  }
   const agentId = clean(msg.agentId);
   const op = clean(msg.op);
-  if (!client.authenticated || !client.userId || !requestId || requestId.length > 100 || !OPS.has(op)) return true;
+  if (!OPS.has(op)) return true;
   const respond = data => sendToWebClient(client, { type: 'session_discovery_response', requestId, op, agentId, ...data });
   const accessError = resolveAgentAccessError(agentId, client.userId, client.role);
   const agent = agents.get(agentId);
@@ -82,7 +90,7 @@ export async function handleClientSessionDiscovery(client, msg) {
     void respond({ ok: false, error: 'Session discovery request timed out' });
   }, REQUEST_TTL_MS);
   timer.unref();
-  pending.set(opaqueId, { client, agent, agentId, ownerId, op, timer, respond, allowedIds: new Set(allowedIds) });
+  pending.set(opaqueId, { client, agent, agentId, ownerId, op, timer, respond, browserRequestId: requestId, allowedIds: new Set(allowedIds) });
   try {
     if (await sendToAgent(agent, { type: 'session_discovery_request', requestId: opaqueId, op, ownerId, allowedIds, payload })) return true;
   } catch { /* use the same correlated failure as a closed socket */ }
