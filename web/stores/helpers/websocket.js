@@ -197,7 +197,7 @@ export function connect(store) {
   notifyBrowserTransportReset();
   store.yeaftSessionHydrateRequestId = null;
   store.yeaftSessionHydrateSlices = [];
-  store.yeaftSessionHydrateConfigDeltas = null;
+  store.yeaftSessionHydrateCrudDeltas = null;
   store.yeaftSessionHydrateError = null;
   store._yeaftSessionInventorySocketQuarantined = false;
   store.pendingAgentSelection = null;
@@ -384,7 +384,7 @@ export function connect(store) {
     notifyBrowserTransportReset();
     store.yeaftSessionHydrateRequestId = null;
     store.yeaftSessionHydrateSlices = [];
-    store.yeaftSessionHydrateConfigDeltas = null;
+    store.yeaftSessionHydrateCrudDeltas = null;
     store.yeaftSessionHydrateError = null;
     for (const pending of Object.values(store._workCenterFeaturePending || {})) {
       clearTimeout(pending.timer);

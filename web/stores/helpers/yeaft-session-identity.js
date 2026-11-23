@@ -1,4 +1,5 @@
 const SESSION_IDENTITY_SEPARATOR = '\u001f';
+export const LAST_VIEWED_YEAFT_SESSION_KEY = 'lastViewedYeaftSession';
 
 /**
  * Build the strict runtime identity for a Yeaft Session owned by an Agent.
@@ -22,6 +23,11 @@ export function parseYeaftSessionIdentity(value) {
   const agentId = normalized.slice(0, separatorIndex) || null;
   const sessionId = normalized.slice(separatorIndex + SESSION_IDENTITY_SEPARATOR.length) || null;
   return { agentId, sessionId };
+}
+
+export function readLastViewedYeaftSession() {
+  try { return parseYeaftSessionIdentity(localStorage.getItem(LAST_VIEWED_YEAFT_SESSION_KEY)); }
+  catch { return parseYeaftSessionIdentity(null); }
 }
 
 export function yeaftAgentSessionIdentityPrefix(agentId) {

@@ -13,7 +13,7 @@ import { t } from '../../utils/i18n.js';
 import { stopProcessingWatchdog, startLegacyWatchdog } from './watchdog.js';
 import { clearSessionLoading } from './session.js';
 import { applyDebugRawRequestDelta } from '../../components/yeaft-debug-helpers.js';
-import { parseYeaftSessionIdentity } from './yeaft-session-identity.js';
+import { parseYeaftSessionIdentity, readLastViewedYeaftSession } from './yeaft-session-identity.js';
 import { legacySidebarCatalogReady } from './sidebar-session-catalog.js';
 import { handleAgentList, handleAgentSelected } from './handlers/agentHandler.js';
 import {
@@ -167,36 +167,45 @@ function bufferYeaftSessionInventorySlice(store, msg) {
   }];
 }
 
-/** Preserve live config acknowledgements across an older in-flight inventory. */
-export function bufferYeaftSessionConfigDelta(store, event, agentId) {
+/** Preserve exact, live CRUD receipts across an older in-flight inventory. */
+export function bufferYeaftSessionCrudDelta(store, event, agentId) {
   const requestId = store.yeaftSessionHydrateRequestId;
-  if (!requestId || !agentId || !event?.ok || event.op !== 'update_config' || !event.sessionId) return;
-  if (store.yeaftSessionHydrateConfigDeltas?.requestId !== requestId) {
-    store.yeaftSessionHydrateConfigDeltas = { requestId, agents: {} };
+  if (!requestId || !agentId || !event?.ok) return;
+  const session = event.session || event.group;
+  const inserted = ['create', 'restore', 'copy', 'merge'].includes(event.op);
+  const removed = event.op === 'delete' || event.op === 'archive';
+  if (!inserted && !removed && event.op !== 'update_config') return;
+  const sessionId = inserted ? session?.id : (event.sessionId || event.groupId);
+  if (!sessionId) return;
+  if (store.yeaftSessionHydrateCrudDeltas?.requestId !== requestId) {
+    store.yeaftSessionHydrateCrudDeltas = { requestId, agents: new Map() };
   }
-  const agents = store.yeaftSessionHydrateConfigDeltas.agents;
-  if (!agents[agentId]) agents[agentId] = {};
-  agents[agentId][event.sessionId] = { ...event.session, id: event.sessionId, config: event.config || {} };
+  const agents = store.yeaftSessionHydrateCrudDeltas.agents;
+  if (!agents.has(agentId)) agents.set(agentId, new Map());
+  const rows = agents.get(agentId);
+  const previous = rows.get(sessionId);
+  if (removed) rows.set(sessionId, null);
+  else if (inserted) rows.set(sessionId, { insert: true, patch: session });
+  else if (previous !== null) rows.set(sessionId, {
+    insert: previous?.insert || false,
+    patch: { ...previous?.patch, ...session, id: sessionId, config: event.config || {} },
+  });
 }
 
-function preferredYeaftSessionInventoryIdentity(store) {
-  const sessions = sessionsStore();
-  let persistedIdentity = null;
-  try { persistedIdentity = localStorage.getItem('lastViewedYeaftSession') || null; }
-  catch (_) {}
-  const persisted = parseYeaftSessionIdentity(persistedIdentity);
-  const activeSessionId = store.yeaftActiveSessionFilter || sessions?.activeSessionId || null;
-  if (activeSessionId) {
-    const activeRow = sessions?.activeSessionKey
-      ? sessions.sessions?.[sessions.activeSessionKey]
-      : null;
-    if (activeRow?.id === activeSessionId && activeRow.agentId) {
-      return { sessionId: activeSessionId, agentId: activeRow.agentId };
+function applyYeaftSessionInventoryDeltas(slices, deltas) {
+  if (!deltas?.size) return slices;
+  const result = new Map(slices.map(slice => [slice.agentId, slice.sessions]));
+  for (const [agentId, updates] of deltas) {
+    const rows = new Map((result.get(agentId) || []).map(row => [row.id, row]));
+    for (const [sessionId, delta] of updates) {
+      if (!delta) rows.delete(sessionId);
+      else if (delta.insert || rows.has(sessionId)) {
+        rows.set(sessionId, { ...rows.get(sessionId), ...delta.patch });
+      }
     }
-    if (persisted.sessionId === activeSessionId && persisted.agentId) return persisted;
-    return { sessionId: activeSessionId, agentId: null };
+    if (rows.size || result.has(agentId)) result.set(agentId, [...rows.values()]);
   }
-  return persisted;
+  return [...result].map(([agentId, sessions]) => ({ agentId, sessions }));
 }
 
 // New Servers send an explicit completion frame. Older Servers do not, so the
@@ -204,20 +213,17 @@ function preferredYeaftSessionInventoryIdentity(store) {
 // buffered snapshot and never expose per-Agent slices to the live store.
 function commitBufferedYeaftSessionInventory(store) {
   const sessions = sessionsStore();
-  const preferred = preferredYeaftSessionInventoryIdentity(store);
+  const preferred = sessions?.preferredInventoryIdentity?.() || readLastViewedYeaftSession();
   if (typeof sessions?.beginInventoryCommit === 'function') {
     sessions.beginInventoryCommit(preferred.sessionId, preferred.agentId);
   } else if (typeof sessions?.resetInventory === 'function') {
     sessions.resetInventory();
   }
-  const deltas = store.yeaftSessionHydrateConfigDeltas?.requestId === store.yeaftSessionHydrateRequestId
-    ? store.yeaftSessionHydrateConfigDeltas.agents : {};
-  const slices = (Array.isArray(store.yeaftSessionHydrateSlices) ? store.yeaftSessionHydrateSlices : [])
-    .map(slice => {
-      const updates = deltas[slice.agentId] || {};
-      return { ...slice, sessions: (slice.sessions || []).map(row => updates[row.id]
-        ? { ...row, ...updates[row.id] } : row) };
-    });
+  const deltas = store.yeaftSessionHydrateCrudDeltas?.requestId === store.yeaftSessionHydrateRequestId
+    ? store.yeaftSessionHydrateCrudDeltas?.agents : null;
+  const slices = applyYeaftSessionInventoryDeltas(
+    Array.isArray(store.yeaftSessionHydrateSlices) ? store.yeaftSessionHydrateSlices : [], deltas,
+  );
   const orderedSlices = preferred.agentId
     ? [
         ...slices.filter(slice => slice.agentId === preferred.agentId),
@@ -232,7 +238,7 @@ function commitBufferedYeaftSessionInventory(store) {
     reconcileScheduledTaskNotifications(store, slice.sessions, slice.agentId);
   });
   store.yeaftSessionHydrateSlices = [];
-  store.yeaftSessionHydrateConfigDeltas = null;
+  store.yeaftSessionHydrateCrudDeltas = null;
 }
 
 function scheduleLegacyYeaftSessionInventoryComplete(store) {
@@ -411,7 +417,7 @@ export function handleMessage(store, msg) {
         store.browserRuntimeServerEnabled = msg.browserRuntimeEnabled === true;
         window.dispatchEvent(new CustomEvent('browser-runtime-message', { detail: msg }));
         store.yeaftSessionHydrateSlices = [];
-        store.yeaftSessionHydrateConfigDeltas = null;
+        store.yeaftSessionHydrateCrudDeltas = null;
         store._hasHandledYeaftSessionHydrate = false;
         store.yeaftSessionHydrateError = null;
 
@@ -475,7 +481,7 @@ export function handleMessage(store, msg) {
       store._legacyYeaftSessionHydrateTimer = null;
       if (msg.ok !== false) commitBufferedYeaftSessionInventory(store);
       else store.yeaftSessionHydrateSlices = [];
-      store.yeaftSessionHydrateConfigDeltas = null;
+      store.yeaftSessionHydrateCrudDeltas = null;
       store.yeaftSessionHydrateRequestId = null;
       store._hasHandledYeaftSessionHydrate = msg.ok !== false;
       store.yeaftSessionHydrateError = msg.ok === false

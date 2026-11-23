@@ -21,6 +21,8 @@ Folders, including subfolders, remember their expanded or collapsed state per us
 
 Legacy browser-local section state is not imported into user preferences. The initial default is expanded; subsequent visits use Server-saved state.
 
+刷新 Yeaft 对话页时，浏览器优先恢复上次查看的会话，按 Agent 和 Session ID 精确匹配。后台任务的运行状态只更新侧栏，不会切换打开的对话。原会话暂时不可用时，页面会保留恢复记录；可以等它恢复、重试加载，或从侧栏主动打开另一条会话。
+
 ## 搜索会话与分享
 
 - **搜索会话**：点侧栏的放大镜，选一台在线 Agent，输入关键词。Agent 首次上线后在后台建索引，此后每天最多刷新一次，不调用模型。只索引过去 5 天有可见对话、且可见消息超过 3 条的原生 Yeaft Session；支持中英文关键词，结果可直接打开会话。新消息不必然立即可搜到，隐藏会话不在侧栏搜索结果中。5 天以前的历史不会因离开索引而删除。

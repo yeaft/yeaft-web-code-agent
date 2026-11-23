@@ -954,6 +954,7 @@ export default {
   'yeaft.historyLoad.tooLarge': 'This part of the conversation is too large to load. It is still stored on the Agent.',
   'yeaft.historyLoad.retry': 'Retry loading',
   'yeaft.sessionInventory.error': 'Sessions could not be loaded. Your conversations are still stored on the Agent.',
+  'yeaft.sessionInventory.lastViewedUnavailable': 'Your last Session is temporarily unavailable. Retry or choose another Session from the sidebar.',
   'yeaft.sessionInventory.retry': 'Retry Sessions',
   'chat.session.closed': 'Conversation closed',
   'chat.session.agentOffline': 'Agent is offline. This session will be available when the agent reconnects.',
