@@ -154,6 +154,11 @@ export function connect(store) {
 
   // Retention belongs to the authentication identity, not its renewable token.
   const retainCatalog = sidebarCatalogAuthIsCurrent(store, authStore);
+  if (store.ws && retainCatalog) {
+    // Wake can arrive before a CLOSING socket dispatches its close event.
+    // Settle its pending work and arm catch-up before opening the replacement.
+    expireSocket(store, store.ws, 4001, 'WebSocket replaced', { replacing: true });
+  }
   if (retainCatalog && store.sessionCatalogProtocolSupported === false) {
     store.sidebarLegacySessionCatalog = sidebarSessionCatalogRows(
       store,
@@ -216,6 +221,7 @@ export function connect(store) {
   }
 
   store.authenticated = false;
+  store._wsCorrelatedHeartbeat = false;
   store.connectionState = store.reconnectAttempts > 0 ? 'reconnecting' : 'connecting';
   // Encryption and history request capabilities are connection-scoped. Start
   // every socket conservatively and cancel requests owned by the old socket;
@@ -283,8 +289,6 @@ export function connect(store) {
     if (socket !== store.ws) return;
     clearTimeout(store._wsConnectTimer);
     store._wsConnectTimer = null;
-    console.log('[WS] Connected');
-    store.connectionState = 'connected';
     store._wsConnectTimer = setTimeout(() => {
       expireSocket(store, socket, 4002, 'WebSocket authentication response timeout');
     }, CONNECT_TIMEOUT_MS);
@@ -322,15 +326,18 @@ export function connect(store) {
     }
     if (msg) {
       if (msg.type === 'pong') {
-        // Pre-upgrade servers don't echo the probe id. A new server's pong
-        // from before suspension must not confirm the post-resume probe.
-        if (msg.probeId == null || msg.probeId === store._wsProbeId) clearHeartbeatProbe(store);
+        const currentProbe = msg.probeId === store._wsProbeId;
+        const legacyKeepalive = !store._wsCorrelatedHeartbeat && !store.wsVerifying && msg.probeId == null;
+        if (store._wsProbeTimer != null && (currentProbe || legacyKeepalive)) clearHeartbeatProbe(store);
         return;
       }
       if (msg.type === 'auth_result' && msg.success === true) {
         clearTimeout(store._wsConnectTimer);
         store._wsConnectTimer = null;
+        console.log('[WS] Connected');
+        store.connectionState = 'connected';
         store.reconnectAttempts = 0;
+        store._wsCorrelatedHeartbeat = msg.webHeartbeatProbeProtocol === 1;
         store.startHeartbeat();
       }
       if (msg.type === 'file_content') console.log('[WS.onmessage] Received file_content, path:', msg.filePath, 'contentLen:', msg.content?.length);
@@ -340,7 +347,7 @@ export function connect(store) {
     }
   };
 
-  socket.onclose = (event) => {
+  socket.onclose = (event, { replacing = false } = {}) => {
     if (socket !== store.ws) {
       if (isAuthenticationClose(event)) authStore.handleAuthFailure?.(undefined, authToken, authGeneration);
       return;
@@ -398,8 +405,11 @@ export function connect(store) {
     if (isAuthenticationClose(event)) {
       console.log('[WS] Auth failure, clearing token and resetting auth state');
       authStore.handleAuthFailure?.(undefined, authToken, authGeneration);
-      store.reconnectAttempts = 0;
-      return;
+      if (!authStore.isAuthenticated) {
+        store.reconnectAttempts = 0;
+        return;
+      }
+      // A stale token's rejection must not stop recovery for the renewed login.
     }
 
     // Mark that the NEXT online agent_list (after reconnect) should run the
@@ -409,7 +419,7 @@ export function connect(store) {
     // routine agent_list broadcasts leave it false and skip those requests.
     store._yeaftReconnectCatchUpPending = true;
 
-    store.scheduleReconnect(wasUpdating ? 2000 : undefined);
+    if (!replacing) store.scheduleReconnect(wasUpdating ? 2000 : undefined);
   };
 
   store.ws.onerror = (error) => {
@@ -445,14 +455,14 @@ export function manualReconnect(store) {
   store.connect();
 }
 
-function expireSocket(store, socket, code, reason) {
+function expireSocket(store, socket, code, reason, options) {
   if (socket !== store.ws) return;
   // Don't wait for the close handshake on an already unresponsive connection.
   // Use the ordinary close path so history/receipts are invalidated exactly once.
   const onClose = socket.onclose;
   socket.onclose = null;
   socket.close(code, reason);
-  onClose?.({ code, reason });
+  onClose?.({ code, reason }, options);
 }
 
 function clearHeartbeatProbe(store) {
@@ -463,6 +473,12 @@ function clearHeartbeatProbe(store) {
 
 function probeSocket(store, socket, verifying = false) {
   if (socket !== store.ws || socket?.readyState !== WebSocket.OPEN || !isVisible() || !isOnline()) return;
+  if (verifying && !store._wsCorrelatedHeartbeat) {
+    // A legacy pong could have been buffered before sleep. A new socket is
+    // the only way to verify a recovered connection to a pre-upgrade Server.
+    expireSocket(store, socket, 4001, 'Reconnect to verify legacy WebSocket');
+    return;
+  }
   if (verifying) store.wsVerifying = true;
   // Coalesce pageshow, visibilitychange, online and periodic ticks on one socket.
   if (store._wsProbeTimer != null) return;

@@ -144,6 +144,7 @@ export function handleWebConnection(ws, url, req = {}) {
     sessionKey: sessionKey ? encodeKey(sessionKey) : null,
     role,
     acceptPlaintext: true,
+    webHeartbeatProbeProtocol: 1,
     yeaftSessionInventoryComplete: true,
     yeaftSessionDeleteTurn: true,
     sessionCatalogProtocol: 1,

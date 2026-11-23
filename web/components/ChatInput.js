@@ -463,6 +463,19 @@ export default {
       if (store.wsVerifying) return 'chat.connection.verifying';
       return '';
     });
+    let reuploadAfterReconnect = false;
+    Vue.watch(() => store.chatHistoryConnectionGeneration, () => {
+      // Cancel pending dispatch before reusing local files in a new connection.
+      sendGeneration++;
+      sending.value = false;
+      attachmentQueue.invalidateUploads();
+      reuploadAfterReconnect = true;
+    }, { flush: 'sync' });
+    Vue.watch([connectionHint, () => store.chatHistoryConnectionGeneration, isCompacting, () => props.disabled], ([hint, , compacting, disabled]) => {
+      if (hint || compacting || disabled || !reuploadAfterReconnect) return;
+      reuploadAfterReconnect = false;
+      void attachmentQueue.uploadRows(attachments.value);
+    });
     const canSend = Vue.computed(() => {
       if (connectionHint.value || props.disabled || isCompacting.value) return false;
       if (sending.value) return false;

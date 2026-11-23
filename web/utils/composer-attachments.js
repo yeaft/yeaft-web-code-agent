@@ -18,10 +18,13 @@ export function useComposerAttachments({ upload, validate, enabled = () => true,
   let disposed = false;
 
   const revoke = row => { if (row.preview) URL.revokeObjectURL(row.preview); };
-  const clear = () => {
+  const cancelUploads = () => {
     generation++;
     for (const job of jobs) job.controller.abort();
     jobs.clear();
+  };
+  const clear = () => {
+    cancelUploads();
     attachments.value.forEach(revoke);
     attachments.value = [];
     error.value = '';
@@ -109,10 +112,21 @@ export function useComposerAttachments({ upload, validate, enabled = () => true,
     error.value = '';
   }
 
+  // A new connection can have reached a restarted Server. Keep original
+  // files/previews but never trust ids issued to the previous connection.
+  function invalidateUploads() {
+    cancelUploads();
+    for (const row of attachments.value) {
+      row.fileId = null;
+      row.uploading = false;
+      row.uploadError = true;
+    }
+  }
+
   Vue.watch(scope, clear, { flush: 'sync' });
   Vue.onBeforeUnmount(() => { disposed = true; clear(); });
   return {
-    attachments, error, uploading, filesReady, addFiles, uploadRows,
+    attachments, error, uploading, filesReady, addFiles, uploadRows, invalidateUploads,
     retryAttachment: row => uploadRows([row]), removeAttachment, clear, release,
     // Receipt reconciliation may reupload retained originals while input is locked.
     // These requests share cancellation/fencing but do not create draft previews.

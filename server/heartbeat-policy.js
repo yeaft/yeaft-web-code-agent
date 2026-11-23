@@ -54,12 +54,17 @@ const WEB_HEARTBEAT_STALL_GRACE_MS = 5_000;
 
 export function markWebHeartbeatPong(client) {
   client.webHeartbeatPendingSince = null;
+  client.webHeartbeatDeferred = false;
 }
 
 export function shouldPingWebClient(client, now, timerDriftMs) {
-  if (client.webHeartbeatPendingSince == null || timerDriftMs > WEB_HEARTBEAT_STALL_GRACE_MS) {
-    // Pong callbacks may not have had a chance to run after an event-loop stall.
-    client.webHeartbeatPendingSince = now;
+  client.webHeartbeatPendingSince ??= now;
+  if (now - client.webHeartbeatPendingSince < WEB_HEARTBEAT_TIMEOUT_MS) return true;
+  // Give queued pong callbacks one chance to run after an event-loop stall;
+  // never extend a dead connection's grace for a second delayed tick.
+  if (timerDriftMs > WEB_HEARTBEAT_STALL_GRACE_MS && !client.webHeartbeatDeferred) {
+    client.webHeartbeatDeferred = true;
+    return true;
   }
-  return now - client.webHeartbeatPendingSince < WEB_HEARTBEAT_TIMEOUT_MS;
+  return false;
 }
