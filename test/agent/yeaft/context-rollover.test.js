@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { contextRolloverSeed, generateContextRollover, streamContextRollover } from '../../../agent/yeaft/context-rollover.js';
+import { contextRolloverLocalHandoff, contextRolloverSeed, generateContextRollover, streamContextRollover } from '../../../agent/yeaft/context-rollover.js';
 import { createRequire } from 'node:module';
 import { createActiveToolImageProjector, ToolImagePrefixBudgetError } from '../../../agent/yeaft/active-tool-images.js';
 import { makeModelImagePreview, MODEL_IMAGE_TARGET_BYTES } from '../../../agent/yeaft/model-image-preview.js';
@@ -162,6 +162,27 @@ async function assertActiveToolImageProjection() {
     expect(original.source.data).toBe(png.toString('base64'));
     const corrupt = image(png.subarray(0, 300_000).toString('base64'));
     await expect(makeModelImagePreview(corrupt)).resolves.toBeNull();
+
+    // C1's frame: a 3840x1080 JPEG. Lossless re-encoding is slow and useless
+    // for it; the lossy ladder must still deliver, even with three Sessions
+    // asking for previews at once (the encoder pool queues, never refuses).
+    const frame = Buffer.alloc(3840 * 1080 * 3);
+    for (let i = 0; i < frame.length; i++) {
+      noise = (Math.imul(noise, 1664525) + 1013904223) >>> 0;
+      frame[i] = ((i / 3) % 3840 >> 4) + (noise >>> 27);
+    }
+    const jpeg = await sharp(frame, { raw: { width: 3840, height: 1080, channels: 3 } }).jpeg({ quality: 90 }).toBuffer();
+    expect(jpeg.length).toBeGreaterThan(MODEL_IMAGE_TARGET_BYTES);
+    const screenshot = { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: jpeg.toString('base64') } };
+    const previews = await Promise.all([1, 2, 3].map(() => makeModelImagePreview(screenshot)));
+    for (const frameView of previews) {
+      const encoded = Buffer.from(frameView.source.data, 'base64');
+      expect(encoded.length).toBeLessThanOrEqual(MODEL_IMAGE_TARGET_BYTES);
+      const { width, format } = await sharp(encoded).metadata();
+      expect(format).toBe('webp');
+      expect(width).toBeGreaterThanOrEqual(1024);
+      expect(width).toBeLessThanOrEqual(2560);
+    }
   });
 
   await verify('samples prior tool text near 80% without removing tool calls or sampling the latest batch', () => {
@@ -286,6 +307,37 @@ describe('bounded active-context rollover', () => {
     const refused = mockAdapter(8192, () => ({ text: 'partial', stopReason: 'refusal' }));
     await expect(generateContextRollover(options(refused))).rejects.toThrow(/refusal/);
     expect(refused.requests).toHaveLength(1);
+
+    // Without any model: the local record keeps every completed call's identity
+    // and outcome, and the newest visible history, within its byte budget.
+    const unchanged = JSON.stringify(messages);
+    const local = contextRolloverLocalHandoff([...messages,
+      { role: 'assistant', content: '', toolCalls: [{ name: 'Bash', id: 'call-19', input: { command: 'git push' } }] }],
+    { maxBytes: 4096, priorHandoff: 'EARLIER_HANDOFF: deployed nothing yet.' });
+    expect(byteLength(local)).toBeLessThanOrEqual(4096);
+    expect(local).toMatch(/^\[UNTRUSTED LOCAL HISTORY RECORD/);
+    expect(local).toContain('EARLIER_HANDOFF: deployed nothing yet.');
+    expect(local).toContain('- Bash id=call-17 → reported result (not proof of success); arguments={"command":"git status"}; output: Successful: clean tree');
+    expect(local).toContain('- Bash id=call-19 → no result recorded; check the actual state before retrying');
+    expect(local).toContain('Correction: use branch fix/b');
+    expect(local).not.toMatch(/EVENT_SECRET|NATIVE_SECRET|PRIVATE_SECRET|SIGNED_SECRET|ARG_SECRET|BLOCK_SECRET|IMAGE_SECRET/);
+    expect(JSON.stringify(messages)).toBe(unchanged);
+    // A long loop: older calls collapse into counts, newer ones keep detail,
+    // and the newest output survives even when the history is far larger.
+    const loop = Array.from({ length: 300 }, (_, n) => [
+      { role: 'assistant', content: `step ${n}`, toolCalls: [{ name: n % 2 ? 'ViewImage' : 'Bash', id: `loop-${n}`, input: { n } }] },
+      { role: 'tool', toolCallId: `loop-${n}`, isError: n === 298, content: `output ${n} ` + 'x'.repeat(400) },
+    ]).flat();
+    const longRecord = contextRolloverLocalHandoff(loop, { maxBytes: 16 * 1024 });
+    expect(byteLength(longRecord)).toBeLessThanOrEqual(16 * 1024);
+    expect(longRecord).toContain('Tool calls in the replaced history (300, oldest first)');
+    expect(longRecord).toMatch(/- \d+ earlier calls, details omitted .*Bash ×\d+, ViewImage ×\d+/);
+    expect(longRecord).toContain('- Bash id=loop-298 → error');
+    expect(longRecord).toContain('- ViewImage id=loop-299 → reported result');
+    expect(longRecord).not.toContain('id=loop-0 ');
+    expect(longRecord).toContain('output 299');
+    expect(longRecord).toContain('[Earlier history omitted from this excerpt.]');
+    expect(() => contextRolloverLocalHandoff(loop, { maxBytes: 1000 })).toThrow(RangeError);
 
     // A gateway 500 or 429 mid-rollover repeats only the failed step: the
     // finished first chunk is not summarized again, and its result is kept.

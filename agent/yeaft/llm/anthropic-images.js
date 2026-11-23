@@ -146,18 +146,25 @@ export async function fitAnthropicImages(messages, limits, {
       // the prefix would make room alongside the newer images, use a fresh
       // segment rather than losing one image in a new comparison batch.
       const edge = budget.count >= limits.manyCount ? limits.manyEdge : limits.edge;
-      if (canRollover && fits(newest, info, limits)) {
+      const blockedByPrefix = canRollover && fits(newest, info, limits);
+      // A user upload keeps its original through a fresh segment. A tool
+      // screenshot is already a model preview by policy: a route-sized copy
+      // is far cheaper and safer than rebuilding the whole context for it.
+      if (blockedByPrefix && !deduplicate) {
         throw new LLMImageLimitError('The newest image cannot fit alongside the frozen Anthropic context.', { blockedByPrefix: true });
       }
       candidate = null;
       // Don't resize old images just to maximize the size of the request. An
       // individually oversized newest image still gets a usable preview.
-      if (preview && newest.count === 0 && previewAttempts < 3 && info.edge != null
+      if (preview && (newest.count === 0 || blockedByPrefix) && previewAttempts < 3 && info.edge != null
           && fits(budget, { edge, bytes: 0 }, limits)) {
         previewAttempts++;
         candidate = await preview(part, edge, limits.base64Bytes);
         if (candidate) effective = imageInfo(candidate);
         if (candidate && !fits(budget, effective, limits)) candidate = null;
+      }
+      if (!candidate && blockedByPrefix) {
+        throw new LLMImageLimitError('The newest image cannot fit alongside the frozen Anthropic context.', { blockedByPrefix: true });
       }
     }
     const key = candidate && imageKey?.(candidate);

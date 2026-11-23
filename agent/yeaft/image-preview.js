@@ -7,7 +7,39 @@ const MAX_SOURCE_BYTES = 20 * 1024 * 1024;
 const MAX_SOURCE_PIXELS = 32_000_000;
 const WORKER = fileURLToPath(new URL('./image-preview-worker.js', import.meta.url));
 const supported = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp']);
+const MAX_ACTIVE_ENCODERS = 2;
+// The worker walks a ladder of encodings within its own 8 s budget.
+const ENCODER_KILL_MS = 10_000;
 let active = 0;
+const waiting = [];
+
+/** Bound CPU and memory with a queue, not a refusal: answering "no preview"
+ * because another Session is encoding would ship a multi-megabyte original. */
+async function acquireEncoder(signal) {
+  if (active < MAX_ACTIVE_ENCODERS) {
+    active++;
+    return;
+  }
+  await new Promise((resolve, reject) => {
+    const entry = { resolve, signal };
+    entry.onAbort = () => {
+      waiting.splice(waiting.indexOf(entry), 1);
+      reject(new LLMAbortError());
+    };
+    signal?.addEventListener('abort', entry.onAbort, { once: true });
+    waiting.push(entry);
+  });
+}
+
+function releaseEncoder() {
+  const next = waiting.shift();
+  if (!next) {
+    active--;
+    return;
+  }
+  next.signal?.removeEventListener('abort', next.onAbort);
+  next.resolve(); // Hand the slot directly to the next caller.
+}
 
 function encodeInChild(input, mime, edge, maxBytes, signal) {
   return new Promise((resolve, reject) => {
@@ -16,7 +48,6 @@ function encodeInChild(input, mime, edge, maxBytes, signal) {
     const child = spawn(process.execPath, ['--max-old-space-size=64', WORKER, mime, String(edge), String(maxBytes)], {
       stdio: ['pipe', 'pipe', 'ignore'], windowsHide: true, env,
     });
-    active++;
     const chunks = [];
     let size = 0, stopped = false;
     const stop = () => {
@@ -24,7 +55,7 @@ function encodeInChild(input, mime, edge, maxBytes, signal) {
       stopped = true;
       child.kill('SIGKILL');
     };
-    const timer = setTimeout(stop, 5000);
+    const timer = setTimeout(stop, ENCODER_KILL_MS);
     timer.unref();
     signal?.addEventListener('abort', stop, { once: true });
     child.stdin.on('error', () => {}); // Decoder may exit before consuming stdin.
@@ -36,7 +67,6 @@ function encodeInChild(input, mime, edge, maxBytes, signal) {
       else chunks.push(chunk);
     });
     child.once('close', code => {
-      active--;
       clearTimeout(timer);
       signal?.removeEventListener('abort', stop);
       if (signal?.aborted) reject(new LLMAbortError());
@@ -52,7 +82,7 @@ function encodeInChild(input, mime, edge, maxBytes, signal) {
 export async function makeImagePreview(part, maxEdge, maxBase64Bytes, signal) {
   if (signal?.aborted) throw new LLMAbortError();
   const source = part.source;
-  if (active >= 2 || source?.type !== 'base64' || typeof source.data !== 'string'
+  if (source?.type !== 'base64' || typeof source.data !== 'string'
       || source.data.length > Math.ceil(MAX_SOURCE_BYTES / 3) * 4) return null;
   const dimensions = imageDimensionsFromBase64(source.data);
   if (!dimensions || dimensions.width * dimensions.height > MAX_SOURCE_PIXELS) return null;
@@ -61,6 +91,12 @@ export async function makeImagePreview(part, maxEdge, maxBase64Bytes, signal) {
   // must still get a preview rather than ship its wrong label to the provider.
   const mime = imageMimeFromHeader(input);
   if (input.length > MAX_SOURCE_BYTES || !supported.has(mime)) return null;
-  const output = await encodeInChild(input, mime, maxEdge, Math.floor(maxBase64Bytes / 4) * 3, signal);
+  await acquireEncoder(signal);
+  let output;
+  try {
+    output = await encodeInChild(input, mime, maxEdge, Math.floor(maxBase64Bytes / 4) * 3, signal);
+  } finally {
+    releaseEncoder();
+  }
   return output ? { type: 'image', source: { type: 'base64', media_type: 'image/webp', data: output.toString('base64') } } : null;
 }

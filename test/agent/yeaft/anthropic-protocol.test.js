@@ -132,6 +132,27 @@ describe('Anthropic evolving Messages protocol', () => {
     expect(cannotPreview.messages[0]).toBe(frozen[0]);
     expect(cannotPreview.messages[1].content[0].text).toContain('smaller copy or crop');
 
+    // C1: 20 images are locked in a signed prefix and a new 3840-pixel tool
+    // screenshot exceeds the many-image edge. A route-sized preview fits
+    // without rebuilding the context; an upload in the same place, or a
+    // screenshot whose preview fails, still asks for a fresh segment.
+    const signedPrefix = [{ role: 'user', content: Array(20).fill(small) },
+      { role: 'assistant', toolCalls: [{ id: 'shot', name: 'ViewImage', input: {} }] }];
+    const screenshot = png(3840, 1080);
+    const shot = { role: 'tool', toolCallId: 'shot', content: [screenshot] };
+    const routePreview = vi.fn(async (_part, edge) => png(edge, 844));
+    const signedFit = { frozenLength: 2, canRollover: true, preview: routePreview };
+    const previewed = await fitAnthropicImages([...signedPrefix, shot], ANTHROPIC_IMAGE_LIMITS, signedFit);
+    expect(routePreview).toHaveBeenCalledWith(screenshot, ANTHROPIC_IMAGE_LIMITS.manyEdge, ANTHROPIC_IMAGE_LIMITS.base64Bytes);
+    expect(previewed).toMatchObject({ count: 21, previews: 1, omitted: 0 });
+    expect(previewed.messages.slice(0, 2)).toEqual(signedPrefix);
+    expect(previewed.messages[2].content.at(-1)).toEqual(png(3000, 844));
+    await expect(fitAnthropicImages([signedPrefix[0], { role: 'user', content: [screenshot] }], ANTHROPIC_IMAGE_LIMITS,
+      { ...signedFit, frozenLength: 1 })).rejects.toMatchObject({ blockedByPrefix: true });
+    expect(routePreview).toHaveBeenCalledTimes(1);
+    await expect(fitAnthropicImages([...signedPrefix, shot], ANTHROPIC_IMAGE_LIMITS, { ...signedFit, preview: async () => null }))
+      .rejects.toMatchObject({ blockedByPrefix: true });
+
     const require = createRequire(new URL('../../../agent/package.json', import.meta.url));
     // The encoder is optional; test the real conversion wherever it is installed.
     let sharp;
