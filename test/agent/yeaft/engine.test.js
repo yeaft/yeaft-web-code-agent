@@ -933,7 +933,10 @@ describe('Engine', () => {
           rmSync(dir, { recursive: true, force: true });
         }
       }
-    }, 20_000);
+      // One case runs about a dozen end-to-end scenarios (the suite is capped at
+      // 200 cases), several with real image encodes in child processes: ~8 s idle,
+      // ~27 s on a loaded desktop. Leave room for slow CI instead of flaking.
+    }, 60_000);
   });
 
   describe('tool execution loop', () => {
