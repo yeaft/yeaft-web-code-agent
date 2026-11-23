@@ -65,7 +65,14 @@ test.describe('Server 重启恢复', () => {
     const nativeInput = composer.locator('textarea');
     const nativeSend = composer.locator('.send-btn:not(.stop-btn)');
     await nativeInput.fill('native draft before restart');
-    await composer.locator('input[type=file]').setInputFiles(upload);
+    const uploads = Array.from({ length: 11 }, (_, i) => ({
+      name: `reconnect-${i}.txt`, mimeType: 'text/plain', buffer: Buffer.from(`keep original attachment ${i}`),
+    }));
+    const picker = composer.locator('input[type=file]');
+    await picker.setInputFiles(uploads.slice(0, 6));
+    await expect(nativeSend).toBeEnabled();
+    await picker.setInputFiles(uploads.slice(6));
+    await expect(composer.locator('.attachment-item')).toHaveCount(11);
     await expect(nativeSend).toBeEnabled();
     await chatPage.context().setOffline(true);
     await testServer.kill();
@@ -75,17 +82,24 @@ test.describe('Server 重启恢复', () => {
     await testServer.restart();
     await mockAgent.reconnect();
     native.catalog();
-    const nativeReupload = chatPage.waitForResponse(response => response.url().endsWith('/api/upload') && response.ok());
+    const restoredBatchSizes = [];
+    const trackUpload = async response => {
+      if (response.url().endsWith('/api/upload') && response.ok()) {
+        restoredBatchSizes.push((await response.json()).files.length);
+      }
+    };
+    chatPage.on('response', trackUpload);
     await chatPage.context().setOffline(false);
-    await nativeReupload;
     await expect(nativeInput).toHaveValue('native draft edited offline');
     await expect(nativeSend).toBeEnabled();
+    await expect.poll(() => restoredBatchSizes).toEqual([6, 5]);
+    chatPage.off('response', trackUpload);
     expect(mockAgent.messages('yeaft_session_send')).toHaveLength(0);
     await nativeSend.click();
     expect(await mockAgent.waitForMessage('yeaft_session_send')).toMatchObject({
-      sessionId: SESSION, text: 'native draft edited offline', files: [{
-        name: upload.name, mimeType: upload.mimeType, data: upload.buffer.toString('base64'),
-      }],
+      sessionId: SESSION, text: 'native draft edited offline', files: uploads.map(({ name, mimeType, buffer }) => ({
+        name, mimeType, data: buffer.toString('base64'),
+      })),
     });
     await expect(nativeInput).toHaveValue('');
   });

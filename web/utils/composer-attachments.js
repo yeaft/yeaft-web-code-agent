@@ -79,8 +79,9 @@ export function useComposerAttachments({ upload, validate, enabled = () => true,
     error.value = '';
     try { validate?.(files, attachments.value); }
     catch (reason) { error.value = reason.message; return; }
+    const selectionId = nextAttachmentId;
     const rows = files.map((file, index) => Vue.reactive({
-      localId: `attachment-${nextAttachmentId++}`, file,
+      localId: `attachment-${nextAttachmentId++}`, selectionId, file,
       name: uploadNameForFile(file, index), size: file.size,
       preview: file.type?.startsWith('image/') ? URL.createObjectURL(file) : null,
       uploading: false, uploadError: false, fileId: null,
@@ -145,15 +146,31 @@ export function uploadNameForFile(file, index = 0) {
   return `pasted-${file?.type?.startsWith('image/') ? 'image' : 'file'}-${Date.now()}-${index + 1}${extensions[String(file?.type || '').toLowerCase()] || ''}`;
 }
 
+// Match the /api/upload multipart count limit. Don't combine separate
+// selections on reconnect: independently valid bodies may exceed a proxy's
+// byte limit when combined.
+const SESSION_UPLOAD_BATCH_SIZE = 10;
+
 /** Session's existing multipart wire contract, with active (including SSO) token. */
 export async function uploadSessionAttachments(rows, auth, signal) {
-  const body = new FormData();
-  rows.forEach(row => body.append('files', row.file, row.name));
-  const token = auth.getActiveToken?.() || auth.token;
-  const response = await fetch('/api/upload', { method: 'POST', body, signal, headers: token ? { Authorization: `Bearer ${token}` } : {} });
-  if (!response.ok) throw new Error('Upload failed');
-  const result = await response.json();
-  return Array.isArray(result.files) ? result.files : [];
+  const files = [];
+  for (let offset = 0; offset < rows.length;) {
+    if (signal?.aborted) throw signal.reason;
+    let end = offset + 1;
+    while (end < rows.length && end - offset < SESSION_UPLOAD_BATCH_SIZE
+        && rows[end].selectionId === rows[offset].selectionId) end++;
+    const batch = rows.slice(offset, end);
+    offset = end;
+    const body = new FormData();
+    batch.forEach(row => body.append('files', row.file, row.name));
+    const token = auth.getActiveToken?.() || auth.token;
+    const response = await fetch('/api/upload', { method: 'POST', body, signal, headers: token ? { Authorization: `Bearer ${token}` } : {} });
+    if (!response.ok) throw new Error('Upload failed');
+    const result = await response.json();
+    if (!Array.isArray(result.files) || result.files.length !== batch.length) throw new Error('Incomplete upload response');
+    files.push(...result.files);
+  }
+  return files;
 }
 
 export function formatFileSize(bytes) {
