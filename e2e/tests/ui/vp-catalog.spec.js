@@ -286,12 +286,6 @@ test('ordinary Session scenes persist through a live switch and reload without e
   await expect(statusPane.getByText('Execution status')).toBeVisible();
   await expect(statusPane).not.toContainText(/\b(VPs?|Omni)\b/i);
 
-  await scene.press('ArrowDown');
-  await expect(sceneMenu.getByRole('option', { name: 'Writing', exact: true })).toBeFocused();
-  await page.setViewportSize({ width: 430, height: 740 });
-  await expect(sceneMenu).toHaveCount(0);
-  await expect(scene).toBeFocused();
-  await page.evaluate(() => window.Pinia.useChatStore().closeSessionSidebar());
   const effort = composer.locator('.yeaft-composer-effort');
   const modelMenu = composer.locator('.yeaft-composer-model-dropdown');
   const attach = composer.locator('.attach-btn');
@@ -300,23 +294,34 @@ test('ordinary Session scenes persist through a live switch and reload without e
   const textbox = composer.getByRole('textbox');
   const stop = composer.locator('.stop-btn');
   const send = composer.locator('.send-btn:not(.stop-btn)');
-  for (const [width, theme] of [[430, 'light'], [320, 'dark']]) {
-    await page.setViewportSize({ width, height: 740 });
-    await page.evaluate(theme => { document.documentElement.dataset.theme = theme; }, theme);
-    const leading = width === 430 ? [attach, scene] : [more];
+  const expectToolbarRow = async (leading) => {
     for (const control of [...leading, model, effort, stop, send]) await expectWithinViewport(control, page);
-    if (width === 430) await expect(more).toHaveCount(0);
-    else {
-      await expect(attach).toBeHidden();
-      await expect(scene).toBeHidden();
-    }
-    await expect(composer.locator('input[type="file"]')).toHaveCount(1);
     const [input, ...buttons] = await Promise.all([textbox, ...leading, model, effort, stop, send].map(el => el.boundingBox()));
     for (const [i, box] of buttons.entries()) {
       expect(box.y).toBeGreaterThanOrEqual(input.y + input.height - 1);
       expect(Math.abs(box.y + box.height / 2 - (buttons[0].y + buttons[0].height / 2))).toBeLessThan(1);
       if (i) expect(box.x).toBeGreaterThanOrEqual(buttons[i - 1].x + buttons[i - 1].width - 1);
     }
+  };
+  // Crossing the desktop breakpoint while a scene option has focus must route
+  // focus directly to + when the controls will be hidden on the new layout.
+  await scene.press('ArrowDown');
+  await expect(writing).toBeFocused();
+  await page.setViewportSize({ width: 320, height: 740 });
+  await expect(sceneMenu).toHaveCount(0);
+  await expect(more).toBeFocused();
+  await page.evaluate(() => window.Pinia.useChatStore().closeSessionSidebar());
+  for (const [width, theme] of [[430, 'light'], [320, 'dark']]) {
+    await page.setViewportSize({ width, height: 740 });
+    await page.evaluate(theme => { document.documentElement.dataset.theme = theme; }, theme);
+    const leading = width === 430 ? [attach, scene] : [more];
+    await expectToolbarRow(leading);
+    if (width === 430) await expect(more).toHaveCount(0);
+    else {
+      await expect(attach).toBeHidden();
+      await expect(scene).toBeHidden();
+    }
+    await expect(composer.locator('input[type="file"]')).toHaveCount(1);
     expect(await model.locator('.yeaft-composer-model-name').evaluate(el => el.clientWidth)).toBeGreaterThanOrEqual(60);
     await model.click();
     await expectWithinViewport(modelMenu, page);
@@ -327,6 +332,23 @@ test('ordinary Session scenes persist through a live switch and reload without e
     await effort.press('Escape');
     await page.screenshot({ path: info.outputPath(`scene-model-toolbar-${theme}-${width}.png`), fullPage: true });
   }
+  // Long selector labels (e.g. the native Gemini "Unavailable" state) still
+  // cannot overlap Stop/Send. Keep the fixture's wire state unchanged here.
+  await composer.evaluate(async el => {
+    const model = el.querySelector('.yeaft-composer-model-name');
+    const effort = el.querySelector('.yeaft-composer-effort > span');
+    el._restoreTestLabels = [model.textContent, effort.textContent];
+    model.textContent = 'A model with a deliberately long label that cannot fit on a small phone';
+    effort.textContent = 'Unavailable';
+    await new Promise(requestAnimationFrame);
+  });
+  await expectToolbarRow([more]);
+  await composer.evaluate(el => {
+    const [label, effort] = el._restoreTestLabels;
+    el.querySelector('.yeaft-composer-model-name').textContent = label;
+    el.querySelector('.yeaft-composer-effort > span').textContent = effort;
+    delete el._restoreTestLabels;
+  });
   // The actual composer width controls overflow, even without a viewport resize.
   await page.setViewportSize({ width: 430, height: 740 });
   await expect(more).toHaveCount(0);
@@ -407,6 +429,17 @@ test('ordinary Session scenes persist through a live switch and reload without e
   wire.finish(second);
   await expect(region).toHaveCount(0);
   await expect(page.locator('.assistant-turn.streaming')).toHaveCount(0);
+
+  // Programmatic Session routing need not pass through an outside click.
+  await more.click();
+  await scene.click();
+  await expect(writing).toBeFocused();
+  await page.evaluate(legacyId => {
+    const store = window.Pinia.useChatStore();
+    store.setActiveSessionFilter(legacyId, { agentId: store.currentAgent });
+  }, fixture.legacyId);
+  await expect(sceneMenu).toHaveCount(0);
+  await expect(extra).toHaveCount(0);
 
   await page.reload();
   await showSidebar(page);

@@ -851,7 +851,9 @@ export default {
         if (isMobile.value !== mobile || !restore.isConnected || restore.disabled) return;
         // Do not steal focus if the user or another control already moved it.
         if (document.activeElement === document.body || document.activeElement === active) {
-          restore.focus({ preventScroll: true });
+          const hidden = window.getComputedStyle(restore).visibility !== 'visible';
+          const target = hidden ? composer.querySelector('.chat-composer-more') : restore;
+          target?.focus({ preventScroll: true });
         }
       });
     });

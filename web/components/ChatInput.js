@@ -102,6 +102,7 @@ export default {
         @remove-attachment="removeAttachment"
         :show-stop="isStopVisible"
         :collapse-start-actions="collapseStartActions"
+        :start-actions-scope="draftKey"
         @close-start-actions="$emit('close-start-actions')"
         :input-id="inputElementId"
         :send-label="$t('chatInput.send')"

@@ -11,6 +11,7 @@ export default {
     sending: { type: Boolean, default: false },
     showStop: { type: Boolean, default: false },
     collapseStartActions: { type: Boolean, default: false },
+    startActionsScope: { type: String, default: null },
     stopDisabled: { type: Boolean, default: false },
     // Opt-in keeps other consumers' keyboard handling unchanged. Parent keydown
     // handlers (autocomplete / quick-send) run first and may preventDefault().
@@ -146,6 +147,9 @@ export default {
       actionsOpen.value = false;
       emit('close-start-actions');
     };
+    Vue.watch(() => props.startActionsScope, () => {
+      closeStartActions(startActionsSlot.value?.contains(document.activeElement));
+    });
     const onStartActionsOutside = event => {
       if (!startActionsSlot.value?.contains(event.target)) closeStartActions();
     };

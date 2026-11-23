@@ -587,11 +587,19 @@
     position: static;
   }
 
+  /* When Stop is visible, the selectors shrink instead of painting over it. */
+  .has-collapsible-start-actions .yeaft-composer-model-choice,
+  .has-collapsible-start-actions .yeaft-composer-effort-choice {
+    min-width: calc(var(--sidebar-section-toggle-gap) * 2 + 12px);
+  }
+
   .has-collapsible-start-actions .yeaft-composer-effort {
     width: 100%;
   }
 
+  .has-collapsible-start-actions .yeaft-model-refreshing,
   .has-collapsible-start-actions .yeaft-composer-effort > span {
+    flex: 0 1 auto;
     min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
