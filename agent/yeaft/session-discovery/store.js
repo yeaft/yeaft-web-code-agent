@@ -293,6 +293,9 @@ export function changeShare(db, root, ownerId, allowedIds, op, payload, now = Da
       if (source) db.prepare('INSERT OR IGNORE INTO share_tombstones VALUES (?,?)').run(ownerId, id);
     } else {
       if (payload.createId && previous) {
+        if (previous.kind !== payload.kind || previous.title !== payload.title || previous.body !== payload.body) {
+          throw new Error('Shared create identity was already used with different content');
+        }
         db.exec('COMMIT');
         return { item: sharedItem(previous, 'published') };
       }

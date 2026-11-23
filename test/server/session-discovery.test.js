@@ -65,7 +65,7 @@ it('serves daily FTS results and durable Share entries through owner-scoped Serv
   vi.spyOn(yeaftSessionDb, 'getForAgent').mockImplementation((userId, id, sessionId) => metadata.find(row => row.userId === userId && row.agentId === id && row.id === sessionId));
   vi.spyOn(sessionUiMetadataDb, 'getByUser').mockImplementation(userId => userId === 'alice' ? hiddenRows() : []);
   let nextRequest = 0;
-  async function send(client, op, payload = {}, beforeReply = async () => {}) {
+  async function send(client, op, payload = {}, beforeReply = async () => {}, ok = true) {
     const requestId = `browser_${++nextRequest}`;
     await handleClientSessionDiscovery(client, {
       type: 'session_discovery_request', requestId, op, agentId, payload, ownerId: 'bob', allowedIds: ['other-owner'],
@@ -78,7 +78,7 @@ it('serves daily FTS results and durable Share entries through owner-scoped Serv
       await handleAgentSessionDiscovery(agentId, agent, response);
     });
     const reply = client.ws.getLastMessage();
-    expect(reply).toMatchObject({ type: 'session_discovery_response', agentId, op, requestId, ok: true });
+    expect(reply).toMatchObject({ type: 'session_discovery_response', agentId, op, requestId, ok });
     return reply.data;
   }
   try {
@@ -102,6 +102,8 @@ it('serves daily FTS results and durable Share entries through owner-scoped Serv
     const output = (await send(alice, 'share_save', createOutput)).item;
     expect(output.kind).toBe('output');
     expect((await send(alice, 'share_save', createOutput)).item).toEqual(output);
+    await send(alice, 'share_save', { ...createOutput, body: '另一个版本' }, undefined, false);
+    expect((await send(alice, 'share_list')).items.find(row => row.id === output.id)).toEqual(output);
     expect((await send(bob, 'share_list')).items).not.toEqual(expect.arrayContaining([expect.objectContaining({ id: item.id })]));
     commitSessionTurnDeletion(root, 'visible', [], {
       version: 1, deletionId: 'test-delete', sessionId: 'visible', turnId: 'test-turn', messageIds: [visible[3].id],

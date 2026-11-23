@@ -186,9 +186,12 @@ test('Share works at 320px in Chinese, scopes items per Agent, and publishes, ed
   await dialog.getByRole('button', { name: '发布', exact: true }).click();
   await expect(dialog.getByRole('alert')).toBeVisible();
   await expect(dialog.getByLabel('内容')).toHaveValue('Manual output');
+  await expect(dialog.getByLabel('内容')).not.toBeEditable();
+  await expect(dialog.getByLabel('标题')).not.toBeEditable();
+  await expect(dialog.getByLabel('类型')).toBeDisabled();
   const firstCreate = requests.at(-1);
   expect(firstCreate.payload.createId).toMatch(/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/);
-  await dialog.getByRole('button', { name: '发布', exact: true }).click();
+  await dialog.getByRole('button', { name: '重试', exact: true }).click();
   await expect(dialog.getByText('Manual output')).toBeVisible();
   expect(requests.at(-1).payload).toEqual(firstCreate.payload);
   expect(requests.at(-1).requestId).not.toBe(firstCreate.requestId);

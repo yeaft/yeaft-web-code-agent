@@ -48,9 +48,10 @@ export default {
     connected() { return this.store.connectionState === 'connected'; },
     targetAvailable() { return this.serverSupported && this.connected && this.onlineAgents.some(agent => agent.id === this.agentId); },
     mutating() { return ['share_save', 'share_delete'].includes(this.operation); },
+    draftLocked() { return this.mutating || this.errorKey === 'sessionDiscovery.writeFailed'; },
     catalogBySessionId() {
       const rows = new Map();
-      if (!this.catalogLoading && this.targetAvailable && this.mode === 'search') {
+      if (!this.catalogLoading && this.targetAvailable && this.mode) {
         for (const row of this.sessions) {
           const route = row.routeRef;
           if (row.catalogKey && !row.hidden && route?.runtimeProvider === 'yeaft' && route.agentId === this.agentId) {
@@ -59,6 +60,9 @@ export default {
         }
       }
       return rows;
+    },
+    visibleShareItems() {
+      return (this.items || []).filter(item => item.status !== 'candidate' || this.catalogBySessionId.has(item.sourceSessionId));
     },
     visibleResults() {
       return [...(this.results || [])].flatMap(result => {
@@ -82,6 +86,12 @@ export default {
         }
       } else if (this.mode === 'share' && this.items === null && !this.draft && !this.removing && !this.operation) {
         void this.loadShare();
+      }
+    },
+    catalogBySessionId(rows) {
+      if (this.mode !== 'share' || this.catalogLoading || !this.targetAvailable || this.mutating) return;
+      if ([this.draft, this.removing].some(item => item?.status === 'candidate' && !rows.has(item.sourceSessionId))) {
+        this.returnToList();
       }
     },
     turnDeletions(next, previous) {
@@ -209,7 +219,8 @@ export default {
       if (!title.trim() || !body.trim()) return;
       const identity = id ? { id, expectedUpdatedAt: updatedAt } : { createId };
       return this.request('share_save', { ...identity, kind, title: title.trim(), body: body.trim() }, data => {
-        if (!isShareItem(data?.item) || data.item.status !== 'published' || (id && data.item.id !== id)) {
+        if (!isShareItem(data?.item) || data.item.status !== 'published' || data.item.id !== (id || createId)
+            || data.item.kind !== kind || data.item.title !== title.trim() || data.item.body !== body.trim()) {
           throw new Error('invalid published Share item');
         }
         if (this.items) {
@@ -285,21 +296,21 @@ export default {
               <p v-if="operation" role="status">{{ $t(mutating ? 'sessionDiscovery.updating' : 'common.loading') }}</p>
               <form v-if="draft" class="session-discovery-form" @submit.prevent="save">
                 <label class="session-discovery-field">{{ $t('sessionDiscovery.kind') }}
-                  <select v-model="draft.kind" :disabled="mutating">
+                  <select v-model="draft.kind" :disabled="draftLocked">
                     <option value="output">{{ $t('sessionDiscovery.output') }}</option>
                     <option value="consensus">{{ $t('sessionDiscovery.consensus') }}</option>
                   </select>
                 </label>
                 <label class="session-discovery-field">{{ $t('sessionDiscovery.title') }}
-                  <input ref="draftTitle" v-model="draft.title" maxlength="120" required :readonly="mutating" />
+                  <input ref="draftTitle" v-model="draft.title" maxlength="120" required :readonly="draftLocked" />
                 </label>
                 <label class="session-discovery-field">{{ $t('sessionDiscovery.body') }}
-                  <textarea v-model="draft.body" rows="6" maxlength="12000" required :readonly="mutating"></textarea>
+                  <textarea v-model="draft.body" rows="6" maxlength="12000" required :readonly="draftLocked"></textarea>
                 </label>
                 <div class="session-discovery-buttons">
                   <button type="button" class="btn-secondary" :disabled="mutating" @click="returnToList">{{ $t('common.cancel') }}</button>
                   <button type="submit" class="btn-primary" :disabled="mutating || !draft.title.trim() || !draft.body.trim()">
-                    {{ $t(draft.status === 'published' ? 'sessionDiscovery.saveChanges' : 'sessionDiscovery.publish') }}
+                    {{ $t(errorKey === 'sessionDiscovery.writeFailed' ? 'common.retry' : draft.status === 'published' ? 'sessionDiscovery.saveChanges' : 'sessionDiscovery.publish') }}
                   </button>
                 </div>
               </form>
@@ -312,9 +323,9 @@ export default {
               </div>
               <template v-else-if="items">
                 <button ref="add" type="button" class="btn-primary" @click="edit()">{{ $t('sessionDiscovery.add') }}</button>
-                <p v-if="!items.length" role="status">{{ $t('sessionDiscovery.noItems') }}</p>
+                <p v-if="!visibleShareItems.length" role="status">{{ $t('sessionDiscovery.noItems') }}</p>
                 <ul v-else class="session-discovery-list">
-                  <li v-for="item in items" :key="item.id" class="session-discovery-item">
+                  <li v-for="item in visibleShareItems" :key="item.id" class="session-discovery-item">
                     <h3>{{ item.title }}</h3>
                     <p class="session-discovery-meta">{{ $t('sessionDiscovery.' + item.kind) }} · {{ $t('sessionDiscovery.' + item.status) }}</p>
                     <p class="session-discovery-text">{{ item.body }}</p>
