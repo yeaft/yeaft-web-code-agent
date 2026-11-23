@@ -71,6 +71,8 @@ Official Anthropic requests enable [fine-grained tool streaming](https://platfor
 
 Tool arguments are accumulated without execution until the entire Anthropic message finishes. Malformed or non-object input, unfinished blocks, early EOF, or a `max_tokens` tool response fail the whole batch; no partial sibling tool is executed or persisted as a completed call. Valid no-argument tools can still use `{}`. Cancellation and finite retry/fallback policy remain active; truncated arguments are never repaired into executable input.
 
+A `response.failed` event ends the OpenAI Responses attempt immediately, even after HTTP 200 and before the connection closes. Only known transient failures (such as server errors, overload, or rate limiting) use the existing bounded retry policy. Unknown errors, invalid requests, exhausted quota, and policy rejections are not retried automatically. Retryable failures prefer a valid `Retry-After` up to `llmRetry.maxDelayMs`; rate limits may also supply an explicit delay in the error message. Retries continue from visible text and reuse completed local tool results without rerunning those tools. Failed requests using provider-hosted tools are not automatically replayed.
+
 #### Reasoning continuity and caching
 
 The official `https://api.openai.com/v1` and `https://api.anthropic.com` endpoints enable native capabilities by default. Unknown proxies default to disabled. Enable capabilities only after verifying both the proxy and upstream; model names do not prove support. Translating Messages into Chat Completions is not native Anthropic passthrough.

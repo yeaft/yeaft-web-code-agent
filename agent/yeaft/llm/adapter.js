@@ -241,10 +241,11 @@ export function serializeModelRequestBody(payload, limitBytes) {
 
 /** Server error (500, 502, 503) — retryable. */
 export class LLMServerError extends Error {
-  constructor(message, statusCode) {
+  constructor(message, statusCode, retryAfterMs = null) {
     super(message);
     this.name = 'LLMServerError';
     this.statusCode = statusCode;
+    this.retryAfterMs = retryAfterMs;
   }
 }
 
@@ -466,6 +467,42 @@ export async function readStreamChunkWithIdleTimeout(reader, opts = {}) {
 
 // ─── Retry helpers ─────────────────────────────────────────────
 
+const HTTP_DATE_PATTERNS = [
+  /^(?<weekday>[A-Z][a-z]{2}), (?<day>\d{2}) (?<month>[A-Z][a-z]{2}) (?<year>\d{4}) (?<time>\d{2}:\d{2}:\d{2}) GMT$/,
+  /^(?<weekday>Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday), (?<day>\d{2})-(?<month>[A-Z][a-z]{2})-(?<year>\d{2}) (?<time>\d{2}:\d{2}:\d{2}) GMT$/,
+  /^(?<weekday>[A-Z][a-z]{2}) (?<month>[A-Z][a-z]{2}) (?<day> \d|\d{2}) (?<time>\d{2}:\d{2}:\d{2}) (?<year>\d{4})$/,
+];
+const HTTP_MONTHS = 'Jan Feb Mar Apr May Jun Jul Aug Sep Oct Nov Dec'.split(' ');
+const HTTP_WEEKDAYS = 'Sun Mon Tue Wed Thu Fri Sat'.split(' ');
+
+function parseHttpDate(value, now) {
+  const parts = HTTP_DATE_PATTERNS.map(pattern => pattern.exec(value)?.groups).find(Boolean);
+  if (!parts) return null;
+  const month = HTTP_MONTHS.indexOf(parts.month);
+  const day = Number(parts.day);
+  const [hour, minute, second] = parts.time.split(':').map(Number);
+  if (month < 0 || day < 1 || day > 31 || hour > 23 || minute > 59 || second > 60
+    || (second === 60 && (hour !== 23 || minute !== 59))) return null;
+
+  const date = new Date(0);
+  const leapSecondMs = second === 60 ? 1000 : 0;
+  date.setUTCHours(hour, minute, Math.min(second, 59));
+  let year = Number(parts.year);
+  if (parts.year.length === 2) {
+    // RFC 9110: use the most recent matching year no more than 50 years ahead.
+    const cutoff = new Date(now);
+    const cutoffYear = cutoff.getUTCFullYear() + 50;
+    cutoff.setUTCFullYear(cutoffYear);
+    year += Math.floor(cutoffYear / 100) * 100;
+    if (date.setUTCFullYear(year, month, day) + leapSecondMs > cutoff.getTime()) year -= 100;
+  }
+  date.setUTCFullYear(year, month, day);
+  // UTC setters normalize impossible dates; don't accept a rolled-over day.
+  if (date.getUTCMonth() !== month || date.getUTCDate() !== day
+    || HTTP_WEEKDAYS[date.getUTCDay()] !== parts.weekday.slice(0, 3)) return null;
+  return date.getTime() + leapSecondMs;
+}
+
 /**
  * Parse an HTTP `Retry-After` header value into milliseconds.
  *
@@ -477,32 +514,28 @@ export async function readStreamChunkWithIdleTimeout(reader, opts = {}) {
  * delay. Callers should treat null as "no server hint" and fall back to their
  * own backoff schedule.
  *
- * @param {string | null | undefined} headerValue
+ * @param {string | number | null | undefined} headerValue
  * @returns {number | null} milliseconds to wait, or null
  */
 export function parseRetryAfterMs(headerValue) {
-  if (!headerValue) return null;
+  if (typeof headerValue !== 'string' && typeof headerValue !== 'number') return null;
   const trimmed = String(headerValue).trim();
   if (!trimmed) return null;
-  // Integer seconds path
+  // Some providers use fractional seconds, although HTTP specifies integers.
   if (/^\d+(\.\d+)?$/.test(trimmed)) {
-    const seconds = Number(trimmed);
-    if (!Number.isFinite(seconds) || seconds < 0) return null;
-    return Math.round(seconds * 1000);
+    const delay = Math.round(Number(trimmed) * 1000);
+    return Number.isFinite(delay) && delay > 0 ? delay : null;
   }
-  // HTTP-date path
-  const ts = Date.parse(trimmed);
-  if (!Number.isFinite(ts)) return null;
-  const delta = ts - Date.now();
-  return delta > 0 ? delta : null;
+  const now = Date.now();
+  const ts = parseHttpDate(trimmed, now);
+  return ts !== null && ts > now ? ts - now : null;
 }
 
 /**
- * Read the `retry-after` header from a fetch Response in a case-insensitive
- * way that tolerates both real `Headers` instances and the plain object
- * stand-ins our tests sometimes hand us.
+ * Read the `retry-after` header case-insensitively from a fetch Response or
+ * a provider event with JSON headers.
  *
- * @param {Response | { headers?: Record<string, string> | Headers } | null | undefined} response
+ * @param {Response | { headers?: Record<string, string|number> | Headers } | null | undefined} response
  * @returns {number | null} milliseconds, or null when not present
  */
 export function retryAfterFromResponse(response) {

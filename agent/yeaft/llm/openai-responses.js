@@ -63,6 +63,41 @@ import { decodeResponsesInput, encodeResponsesInput, projectResponsesTools, resp
 
 const DEFAULT_BASE_URL = 'https://api.openai.com/v1';
 
+const RATE_LIMIT_CODES = new Set(['rate_limit_exceeded', 'rate_limit_error', 'slow_down']);
+const TRANSIENT_FAILURE_CODES = new Set([
+  'server_error', 'internal_server_error', 'server_is_overloaded', 'overloaded_error',
+  'policy_capacity_unavailable', 'service_unavailable', 'vector_store_timeout',
+]);
+
+/** Classify a failed Responses payload even when its HTTP status was 200. */
+function classifyResponseFailure(event, response) {
+  const providerError = event.response?.error || event.error;
+  const code = [providerError?.code, providerError?.type]
+    .find(value => typeof value === 'string' && value.trim())?.trim();
+  const diagnosticCode = code || (typeof event.response?.status === 'string' && event.response.status) || event.type;
+  const message = [providerError?.message, event.message].find(value => typeof value === 'string' && value.trim())
+    || `${event.type}: ${diagnosticCode}`;
+  const limited = RATE_LIMIT_CODES.has(code);
+  let error;
+  // An explicit code takes precedence over a broad type such as rate_limit_error
+  // (e.g. insufficient_quota). A delay hint alone never makes a rejection retryable.
+  if (limited || TRANSIENT_FAILURE_CODES.has(code)) {
+    const messageDelay = limited && message.match(/\btry again in\s+(\d+(?:\.\d+)?)\s*(ms|s|seconds?)\b/i);
+    const retryAfterMs = [
+      retryAfterFromResponse(providerError),
+      retryAfterFromResponse(event),
+      retryAfterFromResponse(response),
+      messageDelay ? Math.round(Number(messageDelay[1]) * (messageDelay[2].toLowerCase() === 'ms' ? 1 : 1000)) : null,
+    ].find(delay => Number.isFinite(delay) && delay > 0) ?? null;
+    // Status 0 denotes a semantic failure, not an HTTP 429/5xx.
+    error = limited ? new LLMRateLimitError(message, 0, retryAfterMs) : new LLMServerError(message, 0, retryAfterMs);
+  } else {
+    error = new Error(message);
+  }
+  error.code = diagnosticCode;
+  return error;
+}
+
 /**
  * Feature-flag accessor mirroring anthropic.js. YEAFT_THINKING_V1 is OFF by
  * default; set env to '1' to enable thinking-mode field translation. Read
@@ -730,17 +765,32 @@ export class OpenAIResponsesAdapter extends LLMAdapter {
             };
           } else if (type === 'response.failed' || type === 'response.error') {
             sawTerminalEvent = true;
-            // Let the engine decide; emit error event. `response.failed` is
-            // the official terminal event; keep `response.error` as a legacy
-            // compatibility alias for older mocks/proxies.
-            const errObj = event.response?.error || event.error || {};
-            const code = errObj.code || event.response?.status || type;
-            const message = errObj.message || event.message || `${type}: ${code}`;
-            const failure = new Error(message);
-            failure.code = code;
-            const rejected = toolInputError || (malformedStream && hasToolItems()
+            // `response.error` is a compatibility alias for older proxies.
+            let rejected = toolInputError || (malformedStream && hasToolItems()
               ? new LLMToolInputError('OpenAI returned a malformed tool stream') : null);
-            yield { type: 'error', error: rejected || failure, retryable: false };
+            // Failed responses may omit item.done and carry completed calls only
+            // in the terminal projection. Validate those calls for retry gating,
+            // but never publish them or parse still-in-flight arguments.
+            const output = event.response?.output;
+            if (!rejected && Array.isArray(output)) try {
+              for (const [idx, item] of output.entries()) {
+                if (item?.type !== 'function_call' || item.status !== 'completed') continue;
+                if (malformedStream) throw new LLMToolInputError('OpenAI returned a malformed tool stream');
+                const [call] = projectToolCalls([item], false, codecs);
+                registerToolSlot(idx, call.id);
+                completeToolSlot(idx, call);
+              }
+            } catch (error) {
+              if (!(error instanceof LLMToolInputError)) throw error;
+              rejected = error;
+            }
+            const error = rejected || classifyResponseFailure(event, response);
+            // Local calls are still buffered. Provider-hosted tools may have
+            // already run, so don't automatically replay requests using them.
+            const usesHostedTools = Array.isArray(body.tools) && body.tools.some(tool => tool?.type !== 'function');
+            const retryable = !rejected && !usesHostedTools
+              && (error instanceof LLMRateLimitError || error instanceof LLMServerError);
+            yield { type: 'error', error, retryable };
             return;
           }
           // Other semantic events (output_item.done, content_part.added, etc.) are ignored.

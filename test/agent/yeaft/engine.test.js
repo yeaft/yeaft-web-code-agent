@@ -1298,17 +1298,21 @@ RELEASE_BODY`;
         rmSync(boundaryDir, { recursive: true, force: true });
       }
       const errorDir = mkdtempSync(join(tmpdir(), 'yeaft-engine-retry-final-partial-'));
+      const terminalFailureFetch = globalThis.fetch;
       try {
         const conversationStore = new ConversationStore(errorDir);
         let attempts = 0;
+        globalThis.fetch = async () => {
+          attempts += 1;
+          const events = [
+            ...(attempts === 1 ? [{ type: 'response.output_text.delta', delta: 'visible partial before failure' }] : []),
+            { type: 'response.failed', response: { status: 'failed', error: { code: 'server_error', message: 'temporary upstream failure' } } },
+          ];
+          return new Response(events.map(event => `data: ${JSON.stringify(event)}\n\n`).join(''),
+            { headers: { 'content-type': 'text/event-stream' } });
+        };
         const engine = new Engine({
-          adapter: {
-            async *stream() {
-              attempts += 1;
-              if (attempts === 1) yield { type: 'text_delta', text: 'visible partial before failure' };
-              throw new LLMServerError('temporary upstream failure', 503);
-            },
-          },
+          adapter: new OpenAIResponsesAdapter({ apiKey: 'fixture', baseUrl: 'https://responses.invalid/v1' }),
           trace,
           conversationStore,
           yeaftDir: errorDir,
@@ -1327,7 +1331,11 @@ RELEASE_BODY`;
         })) events.push(event);
 
         expect(attempts).toBe(3);
-        expect(events).toContainEqual(expect.objectContaining({ type: 'error', retryable: true }));
+        expect(events.filter(event => event.type === 'llm_retry').map(event => event.attempt)).toEqual([1, 2]);
+        expect(events).toContainEqual(expect.objectContaining({ type: 'error', retryable: true,
+          error: expect.objectContaining({ code: 'server_error', message: 'temporary upstream failure' }) }));
+        expect(events.filter(event => event.type === 'turn_end' && event.terminal))
+          .toEqual([expect.objectContaining({ stopReason: 'error' })]);
         expect(conversationStore.loadRecentBySession('session-retry-final-partial', Infinity)).toEqual([
           expect.objectContaining({ role: 'user', content: 'hi' }),
           expect.objectContaining({
@@ -1344,6 +1352,7 @@ RELEASE_BODY`;
           }),
         ]);
       } finally {
+        globalThis.fetch = terminalFailureFetch;
         await closeConversationHistoryIndexes();
         rmSync(errorDir, { recursive: true, force: true });
       }
