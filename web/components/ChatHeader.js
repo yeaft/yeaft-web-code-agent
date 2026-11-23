@@ -282,11 +282,11 @@ export default {
     const clearMessages = async () => {
       if (isClearing.value) return;
       if (!await confirmDialog(t('chatHeader.confirmClear'), { destructive: true })) return;
+      if (store.sendMessage('/clear') === false) return;
       store.clearStatus = {
         conversationId: effectiveConvId.value,
         status: 'clearing'
       };
-      store.sendMessage('/clear');
     };
 
 

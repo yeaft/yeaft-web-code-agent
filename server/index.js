@@ -4,7 +4,7 @@ assertNodeVersion({ component: 'yeaft-server' });
 import express from 'express';
 import compression from 'compression';
 import { createServer } from 'http';
-import { WebSocketServer } from 'ws';
+import { WebSocket, WebSocketServer } from 'ws';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import { CONFIG, isEmailConfigured, validateProductionConfig } from './config.js';
@@ -16,7 +16,10 @@ import { registerProxyRoutes, handleProxyWebSocketUpgrade } from './proxy.js';
 import { handleAgentConnection } from './ws-agent.js';
 import { handleWebConnection } from './ws-client.js';
 import { sendToWebClient } from './ws-utils.js';
-import { markAgentHeartbeatPing, markAgentHeartbeatStall, shouldTerminateAgentHeartbeat } from './heartbeat-policy.js';
+import {
+  markAgentHeartbeatPing, markAgentHeartbeatStall, shouldTerminateAgentHeartbeat,
+  shouldPingWebClient, WEB_HEARTBEAT_INTERVAL_MS,
+} from './heartbeat-policy.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -62,7 +65,6 @@ const wss = new WebSocketServer({
 // WebSocket 心跳机制
 // =====================
 const AGENT_HEARTBEAT_INTERVAL = 30000;
-const CLIENT_HEARTBEAT_INTERVAL = 90000;
 const ACCOUNT_DELETION_RECONCILE_INTERVAL = 5000;
 
 let lastAgentHeartbeatTickAt = Date.now();
@@ -87,17 +89,21 @@ setInterval(() => {
   }
 }, AGENT_HEARTBEAT_INTERVAL);
 
+let lastWebHeartbeatTickAt = Date.now();
 setInterval(() => {
+  const now = Date.now();
+  const timerDriftMs = Math.max(0, now - lastWebHeartbeatTickAt - WEB_HEARTBEAT_INTERVAL_MS);
+  lastWebHeartbeatTickAt = now;
   for (const [clientId, client] of webClients) {
-    if (client.isAlive === false) {
-      console.log(`[Heartbeat] Web client ${clientId} not responding, terminating`);
+    if (client.ws.readyState !== WebSocket.OPEN) continue;
+    if (!shouldPingWebClient(client, now, timerDriftMs)) {
+      console.warn(`[Heartbeat] Web client ${clientId} missed native pong; terminating (pendingMs=${now - client.webHeartbeatPendingSince}, bufferedBytes=${client.ws.bufferedAmount})`);
       client.ws.terminate();
       continue;
     }
-    client.isAlive = false;
     client.ws.ping();
   }
-}, CLIENT_HEARTBEAT_INTERVAL);
+}, WEB_HEARTBEAT_INTERVAL_MS);
 
 // ★ Phase 5: 每小时清理超过 24 小时的 file tab 状态
 setInterval(() => {

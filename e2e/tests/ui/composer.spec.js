@@ -59,13 +59,20 @@ async function openYeaftComposer(page, serverUrl) {
 }
 
 test.describe('Yeaft composer menus', () => {
-  test('mobile Enter inserts newlines; only the send action submits, while desktop keeps shortcuts', async ({ page, serverUrl, browser }, testInfo) => {
+  test('mobile composer preserves newlines and draft through network recovery; desktop keeps shortcuts', async ({ page, serverUrl, browser }, testInfo) => {
     test.setTimeout(60000);
     await page.setViewportSize({ width: 320, height: 800 });
     await openYeaftComposer(page, serverUrl);
     await page.evaluate(() => {
       window.__keyboardWire = [];
-      window.Pinia.useChatStore().sendWsMessage = msg => { window.__keyboardWire.push(msg); };
+      const store = window.Pinia.useChatStore();
+      const send = store.sendWsMessage;
+      store.sendWsMessage = msg => {
+        if (msg.type !== 'yeaft_session_send') return send(msg);
+        if (window.__rejectSessionSend) return false;
+        window.__keyboardWire.push(msg);
+        return true;
+      };
     });
     const composer = page.locator('.yeaft-session-input');
     const input = composer.locator('textarea');
@@ -95,6 +102,29 @@ test.describe('Yeaft composer menus', () => {
       await expect(input).toHaveValue('');
       expect((await sends()).at(-1).text).toBe('First line\n\nSecond line');
     }
+    // Chromium's offline event leaves an already-open WebSocket half-open.
+    // Verify the live socket via actual Server pong when it reports online.
+    const sendButton = composer.getByRole('button', { name: 'Send', exact: true });
+    const pending = 'Retain the mobile draft';
+    await input.fill(pending);
+    await page.evaluate(() => { window.__rejectSessionSend = true; });
+    await sendButton.click();
+    await expect(input).toHaveValue(pending);
+    expect(await sends()).toHaveLength(2);
+    await page.evaluate(() => { window.__rejectSessionSend = false; });
+    await page.context().setOffline(true);
+    await expect(composer.locator('.composer-connection')).toContainText('Offline');
+    await expect(sendButton).toBeDisabled();
+    await expect(input).toBeEditable();
+    await input.fill(`${pending} (edited offline)`);
+    await page.context().setOffline(false);
+    await expect(sendButton).toBeEnabled();
+    await expect(input).toHaveValue(`${pending} (edited offline)`);
+    expect(await sends()).toHaveLength(2);
+    await sendButton.click();
+    await expect(input).toHaveValue('');
+    expect((await sends()).at(-1).text).toBe(`${pending} (edited offline)`);
+
     await page.setViewportSize({ width: 1280, height: 800 });
     await input.fill('Desktop first');
     await input.press('Shift+Enter');

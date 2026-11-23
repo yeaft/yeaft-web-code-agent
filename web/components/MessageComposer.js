@@ -9,6 +9,7 @@ export default {
     disabled: { type: Boolean, default: false },
     canSend: { type: Boolean, default: false },
     sending: { type: Boolean, default: false },
+    editableWhileSending: { type: Boolean, default: false },
     showStop: { type: Boolean, default: false },
     collapseStartActions: { type: Boolean, default: false },
     startActionsScope: { type: String, default: null },
@@ -291,7 +292,7 @@ export default {
           enterkeyhint="enter"
           :class="{ 'is-scrollable': textareaScrollable }"
           :placeholder="placeholder"
-          :disabled="disabled || sending"
+          :disabled="disabled || (sending && !editableWhileSending)"
           :aria-autocomplete="ariaAutocomplete"
           :aria-haspopup="ariaHaspopup"
           :aria-controls="ariaControls"

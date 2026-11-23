@@ -36,6 +36,7 @@ import { handleClientMisc } from './handlers/client-misc.js';
 import { clearWorkCenterRequestsForClient, handleClientWorkCenter } from './handlers/client-work-center.js';
 import { clearPersonRequestsForClient, handleClientPerson } from './handlers/client-person.js';
 import { recordPerfTraceEvent } from './perf-trace.js';
+import { markWebHeartbeatPong } from './heartbeat-policy.js';
 
 export function cleanupWorkbenchForDisconnectedClient(clientId) {
   const ownedTerminals = clearWorkbenchCorrelationsForClient(clientId);
@@ -94,6 +95,12 @@ export function handleWebConnection(ws, url, req = {}) {
     }
   }
 
+  if (!authenticated) {
+    ws.send(JSON.stringify({ type: 'auth_result', success: false, error: 'Authentication required' }));
+    ws.close(1008, 'Authentication required');
+    return;
+  }
+
   const connectionId = randomUUID();
   webClients.set(clientId, {
     id: clientId,
@@ -107,7 +114,7 @@ export function handleWebConnection(ws, url, req = {}) {
     currentAgent: null,
     currentConversation: null,
     sessionKey,
-    isAlive: true,
+    webHeartbeatPendingSince: null,
     // feat-ws-plaintext-negotiation: per-client flag. Defaults `true`
     // (= old client, encrypt outbound for back-compat). Flipped to
     // `false` when the client sends `client_hello { plaintextOk: true }`
@@ -120,47 +127,37 @@ export function handleWebConnection(ws, url, req = {}) {
     browserRuntimeSetupProtocol: 0,
   });
 
-  // 心跳响应处理
-  ws.on('pong', () => {
-    const client = webClients.get(clientId);
-    if (client) client.isAlive = true;
-  });
+  const client = webClients.get(clientId);
+  ws.on('pong', () => markWebHeartbeatPong(client));
 
   console.log(`Web client connected: ${clientId} (authenticated: ${authenticated})`);
 
-  const client = webClients.get(clientId);
-
-  if (authenticated) {
-    // Send auth result unencrypted (client doesn't have key yet).
-    // `acceptPlaintext: true` advertises that this server will accept
-    // plaintext from a new client. Old clients ignore the unknown field.
-    // The corresponding flip on the server side (stop encrypting outbound
-    // to this client) happens when the new client confirms it can speak
-    // plaintext via the `client_hello` frame — see handleWebMessage.
-    ws.send(JSON.stringify({
-      type: 'auth_result',
-      success: true,
-      sessionKey: sessionKey ? encodeKey(sessionKey) : null,
-      role,
-      acceptPlaintext: true,
-      yeaftSessionInventoryComplete: true,
-      yeaftSessionDeleteTurn: true,
-      sessionCatalogProtocol: 1,
-      scheduledTaskProtocol: 1,
-      scheduledTaskReceiptProtocol: 1,
-      scheduledTaskReceipts: scheduledTaskReceiptDb.getByUser(userId),
-      workbenchRouteProtocol: WORKBENCH_ROUTE_PROTOCOL,
-      workCenterWorkbenchProtocol: WORK_CENTER_WORKBENCH_PROTOCOL,
-      browserRuntimeProtocol: BROWSER_RUNTIME_PROTOCOL,
-      browserRuntimeSetupProtocol: BROWSER_RUNTIME_SETUP_PROTOCOL,
-      browserRuntimeEnabled: CONFIG.browserRuntime.enabled,
-    }));
-    setTimeout(() => broadcastAgentList(), 100);
-  } else {
-    ws.send(JSON.stringify({ type: 'auth_result', success: false, error: 'Authentication required' }));
-    ws.close(1008, 'Authentication required');
-    return;
-  }
+  // Send auth result unencrypted (client doesn't have key yet).
+  // `acceptPlaintext: true` advertises that this server will accept
+  // plaintext from a new client. Old clients ignore the unknown field.
+  // The corresponding flip on the server side (stop encrypting outbound
+  // to this client) happens when the new client confirms it can speak
+  // plaintext via the `client_hello` frame — see handleWebMessage.
+  ws.send(JSON.stringify({
+    type: 'auth_result',
+    success: true,
+    sessionKey: sessionKey ? encodeKey(sessionKey) : null,
+    role,
+    acceptPlaintext: true,
+    webHeartbeatProbeProtocol: 1,
+    yeaftSessionInventoryComplete: true,
+    yeaftSessionDeleteTurn: true,
+    sessionCatalogProtocol: 1,
+    scheduledTaskProtocol: 1,
+    scheduledTaskReceiptProtocol: 1,
+    scheduledTaskReceipts: scheduledTaskReceiptDb.getByUser(userId),
+    workbenchRouteProtocol: WORKBENCH_ROUTE_PROTOCOL,
+    workCenterWorkbenchProtocol: WORK_CENTER_WORKBENCH_PROTOCOL,
+    browserRuntimeProtocol: BROWSER_RUNTIME_PROTOCOL,
+    browserRuntimeSetupProtocol: BROWSER_RUNTIME_SETUP_PROTOCOL,
+    browserRuntimeEnabled: CONFIG.browserRuntime.enabled,
+  }));
+  setTimeout(() => broadcastAgentList(), 100);
 
   ws.on('message', async (data) => {
     const client = webClients.get(clientId);
@@ -182,7 +179,7 @@ export function handleWebConnection(ws, url, req = {}) {
     handleWebMessage(clientId, msg);
   });
 
-  ws.on('close', () => {
+  ws.once('close', (code) => {
     const client = webClients.get(clientId);
     // Web 客户端断开时，检查是否需要禁用其关联 Agent 的端口
     if (client?.currentAgent) {
@@ -232,7 +229,7 @@ export function handleWebConnection(ws, url, req = {}) {
     }
     cleanupWorkbenchForDisconnectedClient(clientId);
     webClients.delete(clientId);
-    console.log(`Web client disconnected: ${clientId}`);
+    console.log(`Web client disconnected: ${clientId} (code=${code})`);
   });
 
   ws.on('error', (err) => {

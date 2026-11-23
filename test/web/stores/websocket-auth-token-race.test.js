@@ -48,16 +48,17 @@ function installFakeWebSocket() {
   class FakeWebSocket {
     static CONNECTING = 0;
     static OPEN = 1;
+    static CLOSING = 2;
     constructor(url) {
       this.url = url;
       this.readyState = FakeWebSocket.CONNECTING;
       this.sent = [];
+      this.close = vi.fn();
       sockets.push(this);
     }
     send(data) {
       this.sent.push(data);
     }
-    close() {}
   }
   globalThis.WebSocket = FakeWebSocket;
   return sockets;
@@ -78,6 +79,7 @@ function createRaceAuthStore() {
 }
 
 afterEach(() => {
+  vi.unstubAllGlobals();
   vi.restoreAllMocks();
   vi.resetModules();
   globalThis.location = originalLocation;
@@ -97,13 +99,10 @@ async function lifecycleFixture() {
   globalThis.location = { protocol: 'https:', host: 'example.test' };
   const sessions = { sessionList: [], applySnapshot: vi.fn(), beginInventoryCommit: vi.fn() };
   globalThis.window = { Pinia: { useSessionsStore: () => sessions }, dispatchEvent: vi.fn() };
-  const auth = { ...createRaceAuthStore(), userId: 'owner-a' };
+  const auth = { ...createRaceAuthStore(), userId: 'owner-a', isAuthenticated: true };
   auth.$subscribe = vi.fn(callback => { auth.notify = callback; return vi.fn(); });
   const helpers = await loadWebsocketHelpers(auth);
   const store = helpers.useChatStore();
-  store.startHeartbeat = vi.fn();
-  store.stopHeartbeat = vi.fn();
-  store.scheduleReconnect = vi.fn();
   store.parseWsMessage = data => JSON.parse(data);
   store.requestYeaftSessionInventory = vi.fn();
   store.checkPendingRecovery = vi.fn();
@@ -122,8 +121,13 @@ async function lifecycleFixture() {
 }
 
 describe('native Session history and delete turn on reconnect', () => {
-  it('validates an inactive cached Session only when selected and removes a missed last-turn deletion', async () => {
-    const { store, sockets, open, deliver } = await lifecycleFixture();
+  it('recovers after a suspended socket stops responding, then revalidates inactive cached Session history on selection', async () => {
+    const { store, sockets, open, deliver, helpers } = await lifecycleFixture();
+    const page = new EventTarget();
+    page.visibilityState = 'visible';
+    vi.stubGlobal('document', page);
+    vi.stubGlobal('window', Object.assign(new EventTarget(), globalThis.window));
+    helpers.setupVisibilityHandler(store);
     const { yeaftHistoryIdentityKey: key } = await import('../../../web/stores/helpers/yeaft-history-identity.js');
     const agent = { id: 'a', online: true, capabilities: ['session_delete_turn'] };
     store.currentView = 'yeaft';
@@ -131,7 +135,7 @@ describe('native Session history and delete turn on reconnect', () => {
     store.yeaftConversationIdsByAgent = { a: 'conv' };
     store.loadOpenedYeaftSessionsForConnectedAgents = vi.fn();
     store.yeaftActiveSessionFilter = 'A';
-    open(1, true, { yeaftSessionDeleteTurn: true });
+    open(1, true, { yeaftSessionDeleteTurn: true, webHeartbeatProbeProtocol: 1 });
     deliver({ type: 'agent_list', agents: [agent] });
     const requests = () => sockets.at(-1).sent.map(JSON.parse).filter(m => m.type === 'yeaft_load_history');
     const reply = (request, messages, identity) => deliver({ type: 'yeaft_history_chunk',
@@ -143,11 +147,33 @@ describe('native Session history and delete turn on reconnect', () => {
     store.setActiveSessionFilter('B');
     reply(requests().at(-1), [{ id: 'm0002', role: 'user', content: 'Deleted elsewhere' }],
       { latestSeq: 2, streamId: 'stream-B', revision: 4 });
-    const oldRequest = store.beginYeaftHistoryLoad({ agentId: 'a', sessionId: 'B', mode: 'older' });
     store.setActiveSessionFilter('A');
 
-    sockets[0].onclose({ code: 1006, reason: 'network lost' });
-    open(1, true, { yeaftSessionDeleteTurn: true });
+    vi.advanceTimersByTime(25_000);
+    const oldProbe = sockets[0].sent.map(JSON.parse).findLast(m => m.type === 'ping');
+    const setVisibility = state => {
+      page.visibilityState = state;
+      page.dispatchEvent(new Event('visibilitychange'));
+    };
+    setVisibility('hidden');
+    vi.advanceTimersByTime(120_000);
+    expect(sockets[0].close).not.toHaveBeenCalled();
+    setVisibility('visible');
+    const freshProbe = sockets[0].sent.map(JSON.parse).findLast(m => m.type === 'ping');
+    expect(freshProbe.probeId).not.toBe(oldProbe.probeId);
+    deliver({ type: 'pong', probeId: oldProbe.probeId });
+    deliver({ type: 'pong' });
+    expect(store.wsVerifying).toBe(true);
+    vi.advanceTimersByTime(9_999);
+    expect(sockets[0].close).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(1);
+    expect(sockets[0].close).toHaveBeenCalledExactlyOnceWith(4000, 'Heartbeat reply timeout');
+    expect(store.ws).toBeNull();
+    vi.advanceTimersByTime(1_000);
+    expect(sockets).toHaveLength(2);
+    sockets[1].readyState = WebSocket.OPEN;
+    sockets[1].onopen();
+    deliver({ type: 'auth_result', success: true, webHeartbeatProbeProtocol: 1, yeaftSessionInventoryComplete: true, yeaftSessionDeleteTurn: true, sessionCatalogProtocol: 1 });
     deliver({ type: 'agent_list', agents: [agent] });
     expect(requests().map(m => m.sessionId)).toEqual(['A']);
     expect(requests()[0]).toMatchObject({ afterSeq: 1, streamId: 'stream-A', revision: 1 });
@@ -161,7 +187,7 @@ describe('native Session history and delete turn on reconnect', () => {
       requestId: expect.any(String) });
     const cachedTurn = store.messagesMap.conv.find(row => row.sessionId === 'B');
     expect(store.yeaftTurnDeleteUnavailable(store.yeaftTurnDeleteTarget(cachedTurn))).toBe('refreshing');
-    reply({ sessionId: 'B', requestId: oldRequest.requestId }, [], { error: 'history_delivery_failed' });
+    reply({ sessionId: 'B', requestId: 'stale-B-request' }, [], { error: 'history_delivery_failed' });
     expect(store.yeaftSessionHistoryState[key('a', 'B')].requestId).toBe(validation.requestId);
     reply(validation, [], { mode: 'delta', error: 'history_payload_too_large', latestSeq: 900 });
     expect(store.yeaftHistoryLoadError).toBe('history_payload_too_large');
@@ -176,6 +202,23 @@ describe('native Session history and delete turn on reconnect', () => {
     store.setActiveSessionFilter('A');
     store.setActiveSessionFilter('B');
     expect(requests().at(-1)).toMatchObject({ sessionId: 'B', limit: 0 });
+    store.setActiveSessionFilter('A');
+    setVisibility('hidden');
+    sockets[1].readyState = WebSocket.CLOSING;
+    const lateClose = sockets[1].onclose;
+    setVisibility('visible');
+    expect(sockets).toHaveLength(3);
+    expect(store._yeaftReconnectCatchUpPending).toBe(true);
+    lateClose({ code: 1006 });
+    expect(store.ws).toBe(sockets[2]);
+    sockets[2].readyState = WebSocket.OPEN;
+    sockets[2].onopen();
+    deliver({ type: 'auth_result', success: true });
+    deliver({ type: 'agent_list', agents: [agent] });
+    expect(requests()).toContainEqual(expect.objectContaining({ sessionId: 'A', afterSeq: 1 }));
+    setVisibility('hidden');
+    setVisibility('visible');
+    expect(sockets[2].close).toHaveBeenCalledExactlyOnceWith(4001, 'Reconnect to verify legacy WebSocket');
   });
 
   it('does not send delete turn without both capability advertisements on the current socket', async () => {

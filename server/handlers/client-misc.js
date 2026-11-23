@@ -85,7 +85,10 @@ export function requiresManualUpgradeBridge(capabilities, platform = null) {
 export async function handleClientMisc(clientId, client, msg, checkAgentAccess) {
   switch (msg.type) {
     case 'ping':
-      await sendToWebClient(client, { type: 'pong' });
+      await sendToWebClient(client, {
+        type: 'pong',
+        ...(Number.isSafeInteger(msg.probeId) ? { probeId: msg.probeId } : {}),
+      });
       break;
 
     case 'restart_agent': {

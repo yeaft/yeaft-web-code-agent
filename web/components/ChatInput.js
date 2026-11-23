@@ -1,6 +1,5 @@
 import { DEFAULT_SLASH_COMMANDS, YEAFT_DEFAULT_SLASH_COMMANDS, getCommandDescription, buildGroupedCommands, mergeSlashCommands, resolveDynamicSlashCommands } from '../utils/slash-commands.js';
 import { buildAutocompleteItems as buildExpertAutocomplete, getSelectionLabel, EXPERT_ROLES, MAX_SELECTIONS } from '../utils/expert-roles.js';
-import { parseMentions } from '../utils/parseMentions.js';
 import VpMentionAutocomplete, {
   filterVpMentions,
   applyMentionSelection,
@@ -9,7 +8,7 @@ import VpMentionAutocomplete, {
   vpMentionOptionId,
 } from './VpMentionAutocomplete.js';
 import MessageComposer from './MessageComposer.js';
-import { useComposerAttachments, uploadSessionAttachments, hasAttachmentFileId, SESSION_FILE_ACCEPT } from '../utils/composer-attachments.js';
+import { useComposerAttachments, sessionUploadBatches, uploadSessionAttachments, hasAttachmentFileId, SESSION_FILE_ACCEPT } from '../utils/composer-attachments.js';
 import { useUserShortcuts, matchShortcut } from '../utils/user-shortcuts.js';
 
 export default {
@@ -85,14 +84,20 @@ export default {
           <span>{{ preset.name }}</span>
         </button>
       </div>
+      <div v-if="connectionHint" class="composer-connection" role="status">
+        <span>{{ $t(connectionHint) }}</span>
+        <button v-if="store.connectionState === 'disconnected' && !store.networkOffline"
+          type="button" class="btn-ghost composer-reconnect" @click="store.manualReconnect()">{{ $t('chat.connection.reconnect') }}</button>
+      </div>
       <MessageComposer
         ref="messageComposerRef"
         v-model="inputText"
         :class="{ 'btw-active': store.btwMode, 'is-disabled': disabled }"
         :placeholder="disabled && disabledPlaceholderKey ? $t(disabledPlaceholderKey) : (store.btwMode ? $t('btw.placeholder') : (isCompacting ? $t('chatHeader.compacting') : $t(effectivePlaceholderKey)))"
-        :disabled="isCompacting || disabled"
+        :disabled="disabled || (isCompacting && !connectionHint)"
         :can-send="canSend"
         :sending="sending"
+        editable-while-sending
         keyboard-send
         :attachments-enabled="attachmentsAllowed"
         :attachments="attachments"
@@ -177,7 +182,7 @@ export default {
     const store = Pinia.useChatStore();
     const authStore = Pinia.useAuthStore();
     const vpStore = Pinia.useVpStore();
-    // task-338-F4: resolve groups store for Yeaft group-chat dispatch routing.
+    // Session roster provides the candidates for @mentions.
     const sessionsStore = (Pinia.useSessionsStore ? Pinia.useSessionsStore() : null);
     const inputText = Vue.ref('');
     const inputFocused = Vue.ref(false);
@@ -440,6 +445,7 @@ export default {
     ]);
     const attachmentQueue = useComposerAttachments({
       scope: attachmentScope,
+      batchRows: sessionUploadBatches,
       enabled: () => attachmentsAllowed.value && !props.disabled && !isCompacting.value && !sending.value,
       upload: (rows, signal) => uploadSessionAttachments(rows, authStore, signal),
     });
@@ -449,8 +455,30 @@ export default {
     Vue.watch(attachmentScope, () => { sendGeneration++; sending.value = false; }, { flush: 'sync' });
     Vue.onBeforeUnmount(() => { sendGeneration++; });
 
+    const connectionHint = Vue.computed(() => {
+      if (store.networkOffline) return 'chat.connection.offlineDraft';
+      if (store.connectionState === 'updating') return 'chat.connection.updating';
+      if (store.connectionState === 'disconnected') return 'chat.connection.disconnectedDraft';
+      if (store.connectionState === 'reconnecting') return 'chat.connection.resuming';
+      if (store.connectionState !== 'connected' || !store.authenticated) return 'chat.connection.connecting';
+      if (store.wsVerifying) return 'chat.connection.verifying';
+      return '';
+    });
+    let reuploadAfterReconnect = false;
+    Vue.watch(() => store.chatHistoryConnectionGeneration, () => {
+      // Cancel pending dispatch before reusing local files in a new connection.
+      sendGeneration++;
+      sending.value = false;
+      attachmentQueue.invalidateUploads();
+      reuploadAfterReconnect = true;
+    }, { flush: 'sync' });
+    Vue.watch([connectionHint, () => store.chatHistoryConnectionGeneration, isCompacting, () => props.disabled], ([hint, , compacting, disabled]) => {
+      if (hint || compacting || disabled || !reuploadAfterReconnect) return;
+      reuploadAfterReconnect = false;
+      void attachmentQueue.uploadRows(attachments.value);
+    });
     const canSend = Vue.computed(() => {
-      if (props.disabled || isCompacting.value) return false;
+      if (connectionHint.value || props.disabled || isCompacting.value) return false;
       if (sending.value) return false;
       const hasText = !!inputText.value.trim();
       const hasAttachments = attachments.value.length > 0;
@@ -477,7 +505,7 @@ export default {
       const items = config.agentConfig?.quickSends || config.effectiveConfig?.quickSends || [];
       return Array.isArray(items) ? items.slice(0, 5) : [];
     });
-    const canQuickSend = Vue.computed(() => canSend.value && store.connectionState === 'connected'
+    const canQuickSend = Vue.computed(() => canSend.value
       && store.agents?.some(agent => agent.id === store.currentAgent && agent.online));
     // Watch scalar sources, not a freshly allocated tuple. Routine snapshots
     // must not re-read full config. onopen alone is too early after reconnect:
@@ -636,7 +664,10 @@ export default {
       if (trimmed === '/btw' || trimmed.startsWith('/btw ')) {
         const question = trimmed.substring(4).trim();
         store.enterBtwMode();
-        if (question) store.sendBtwQuestion(question);
+        if (question && store.sendBtwQuestion(question) === false) {
+          store.closeBtw();
+          return;
+        }
         inputText.value = '';
         if (effectiveDraftKey.value) delete store.inputDrafts[effectiveDraftKey.value];
         resetTextareaSize();
@@ -646,7 +677,7 @@ export default {
 
       // In btw mode, all sends go through btw channel
       if (store.btwMode) {
-        store.sendBtwQuestion(trimmed);
+        if (store.sendBtwQuestion(trimmed) === false) return;
         inputText.value = '';
         if (effectiveDraftKey.value) delete store.inputDrafts[effectiveDraftKey.value];
         resetTextareaSize();
@@ -654,12 +685,7 @@ export default {
         return;
       }
 
-      // Build attachmentInfos once — every send branch (chat / yeaft
-      // group) wants the same shape. Previously the Yeaft branches
-      // `return`ed before this, silently dropping the user's selected
-      // files. Now the store-side helpers (`sendYeaft*`) know how to
-      // forward them; we just need to make sure the array is available
-      // before the dispatch.
+      // Build the CLI attachment payload before handing it to the store.
       const attachmentInfos = attachments.value
         .filter(hasValidFileId)
         .map(a => ({
@@ -670,37 +696,8 @@ export default {
           mimeType: a.file?.type || ''
         }));
 
-      // Yeaft group-chat branch — Yeaft is conceptually a single conversation
-      // backed by a group (default: grp_default). All Yeaft turns go through
-      // the group path so the agent builds a coordinator and wires
-      // ctx.router for the per-VP Engine query; otherwise `route_forward`
-      // would bomb out with `router_unavailable` the moment a VP @-mentions
-      // another VP. There is no longer a no-group backstop — the legacy
-      // `yeaft_chat` WS frame and `handleYeaftChat` agent handler were
-      // removed in v0.1.672.
-      //
-      // PR #721: also fire when text is empty but attachments are present
-      // (image-only send). The store helper synthesizes a placeholder
-      // text so the agent path runs end-to-end.
-      if (store.currentView === 'yeaft' && (trimmed || attachmentInfos.length > 0)) {
-        const mentions = parseMentions(trimmed).mentions;
-        const groupId = store.yeaftActiveSessionFilter || sessionsStore?.activeSessionId || 'grp_default';
-        store.sendYeaftSessionMessage({
-          groupId,
-          text: trimmed,
-          mentions,
-          attachments: attachmentInfos,
-        });
-        attachmentQueue.release();
-        inputText.value = '';
-        if (effectiveDraftKey.value) delete store.inputDrafts[effectiveDraftKey.value];
-        resetTextareaSize();
-        exitMobileInput();
-        return;
-      }
-
       const currentExpertSelections = [...expertSelections.value];
-      store.sendMessage(inputText.value.trim(), attachmentInfos, { expertSelections: currentExpertSelections });
+      if (store.sendMessage(trimmed, attachmentInfos, { expertSelections: currentExpertSelections }) === false) return;
 
       attachmentQueue.release();
       inputText.value = '';
@@ -841,6 +838,7 @@ export default {
       sending,
       SESSION_FILE_ACCEPT,
       canSend,
+      connectionHint,
       quickSends,
       canQuickSend,
       shortcutPreferences,

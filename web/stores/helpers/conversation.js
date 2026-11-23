@@ -2,7 +2,6 @@
 
 import { startProcessingWatchdog, stopProcessingWatchdog } from './watchdog.js';
 import { setSessionLoading, saveOpenSessions } from './session.js';
-import { ensureConnected } from './websocket.js';
 import { markAllToolsCompleted } from './handlers/conversationHandler.js';
 import { t } from '../../utils/i18n.js';
 import { EXPERT_ROLES, buildClientExpertMessage } from '../../utils/expert-roles.js';
@@ -322,7 +321,7 @@ export function deleteConversation(store, conversationId, agentId) {
 
 export function sendMessage(store, text, attachments = [], options = {}) {
   const hasExpertSelections = options.expertSelections && options.expertSelections.length > 0;
-  if ((!text.trim() && attachments.length === 0 && !hasExpertSelections) || !store.currentAgent || !store.currentConversation) return;
+  if ((!text.trim() && attachments.length === 0 && !hasExpertSelections) || !store.currentAgent || !store.currentConversation) return false;
 
   // fix-usermsg-dup: stamp a stable id on the optimistic message AND on
   // the outgoing `chat` payload so the server can round-trip it back on
@@ -333,41 +332,6 @@ export function sendMessage(store, text, attachments = [], options = {}) {
   // producing the "user message rendered twice" symptom that only
   // reproduces after page refresh.
   const clientMessageId = makeClientMessageId();
-
-  store.addMessage({
-    type: 'user',
-    content: text,
-    clientMessageId,
-    attachments: attachments.length > 0 ? attachments : undefined,
-    expertSelections: hasExpertSelections ? options.expertSelections : undefined
-  });
-
-  if (text.trim()) {
-    const title = text.trim().substring(0, 100);
-    store.conversationTitles[store.currentConversation] = title;
-  } else if (hasExpertSelections) {
-    // When sending expert-only (no text), use first selection as title hint
-    const sel = options.expertSelections[0];
-    const label = `@${sel.role}${sel.action ? '\u00B7' + sel.action : ''}`;
-    store.conversationTitles[store.currentConversation] = label;
-  }
-
-  // Update lastMessageAt for sidebar sorting (only user-sent messages should trigger reorder)
-  const conv = store.conversations.find(c => c.id === store.currentConversation);
-  if (conv) {
-    conv.lastMessageAt = Date.now();
-  }
-
-  if (!store.processingConversations[store.currentConversation]) {
-    store.processingConversations[store.currentConversation] = true;
-    if (store._closedAt?.[store.currentConversation]) {
-      delete store._closedAt[store.currentConversation];
-    }
-    store._turnCompletedConvs?.delete(store.currentConversation);
-    // 预初始化 executionStatus entry，确保 getter 返回 reactive 对象
-    store.getOrCreateExecutionStatus(store.currentConversation);
-    startProcessingWatchdog(store, store.currentConversation);
-  }
 
   const fileIds = attachments.map(a => a.fileId);
   const wsMsg = {
@@ -411,19 +375,45 @@ export function sendMessage(store, text, attachments = [], options = {}) {
     }
   }
 
-  // Try send; if WS not connected, auto-reconnect and retry
-  if (!store.sendWsMessage(wsMsg)) {
-    ensureConnected(store).then(() => {
-      store.sendWsMessage(wsMsg);
-    }).catch(() => {
-      store.addMessage({
-        type: 'system',
-        content: t('chat.connection.reconnectFailed')
-      });
-      delete store.processingConversations[store.currentConversation];
-      stopProcessingWatchdog(store, store.currentConversation);
-    });
+  // If the frame wasn't queued, leave the draft and timeline untouched.
+  if (store.sendWsMessage(wsMsg) === false) return false;
+
+  store.addMessage({
+    type: 'user',
+    content: text,
+    clientMessageId,
+    attachments: attachments.length > 0 ? attachments : undefined,
+    expertSelections: hasExpertSelections ? options.expertSelections : undefined
+  });
+
+  if (text.trim()) {
+    const title = text.trim().substring(0, 100);
+    store.conversationTitles[store.currentConversation] = title;
+  } else if (hasExpertSelections) {
+    // When sending expert-only (no text), use first selection as title hint
+    const sel = options.expertSelections[0];
+    const label = `@${sel.role}${sel.action ? '\u00B7' + sel.action : ''}`;
+    store.conversationTitles[store.currentConversation] = label;
   }
+
+  // Update lastMessageAt for sidebar sorting (only user-sent messages should trigger reorder)
+  const conv = store.conversations.find(c => c.id === store.currentConversation);
+  if (conv) {
+    conv.lastMessageAt = Date.now();
+  }
+
+  if (!store.processingConversations[store.currentConversation]) {
+    store.processingConversations[store.currentConversation] = true;
+    if (store._closedAt?.[store.currentConversation]) {
+      delete store._closedAt[store.currentConversation];
+    }
+    store._turnCompletedConvs?.delete(store.currentConversation);
+    // 预初始化 executionStatus entry，确保 getter 返回 reactive 对象
+    store.getOrCreateExecutionStatus(store.currentConversation);
+    startProcessingWatchdog(store, store.currentConversation);
+  }
+
+  return true;
 }
 
 export function cancelExecution(store) {
@@ -564,43 +554,12 @@ export function removeColumn(store, conversationId) {
 // ★ Multi-column: send message to a specific conversation (parameterized)
 export function sendMessageToConversation(store, conversationId, text, attachments = [], options = {}) {
   const hasExpertSelections = options.expertSelections && options.expertSelections.length > 0;
-  if ((!text.trim() && attachments.length === 0 && !hasExpertSelections) || !store.currentAgent || !conversationId) return;
+  if ((!text.trim() && attachments.length === 0 && !hasExpertSelections) || !store.currentAgent || !conversationId) return false;
 
   // fix-usermsg-dup: see sendMessage above — same rationale, multi-column path.
   const clientMessageId = makeClientMessageId();
 
-  store.addMessageToConversation(conversationId, {
-    type: 'user',
-    content: text,
-    clientMessageId,
-    attachments: attachments.length > 0 ? attachments : undefined,
-    expertSelections: hasExpertSelections ? options.expertSelections : undefined
-  });
-
-  if (text.trim()) {
-    const title = text.trim().substring(0, 100);
-    store.conversationTitles[conversationId] = title;
-  } else if (hasExpertSelections) {
-    const sel = options.expertSelections[0];
-    const label = `@${sel.role}${sel.action ? '\u00B7' + sel.action : ''}`;
-    store.conversationTitles[conversationId] = label;
-  }
-
   const conv = store.conversations.find(c => c.id === conversationId);
-  if (conv) {
-    conv.lastMessageAt = Date.now();
-  }
-
-  if (!store.processingConversations[conversationId]) {
-    store.processingConversations[conversationId] = true;
-    if (store._closedAt?.[conversationId]) {
-      delete store._closedAt[conversationId];
-    }
-    store._turnCompletedConvs?.delete(conversationId);
-    store.getOrCreateExecutionStatus(conversationId);
-    startProcessingWatchdog(store, conversationId);
-  }
-
   const fileIds = attachments.map(a => a.fileId);
   const wsMsg = {
     type: 'chat',
@@ -628,18 +587,41 @@ export function sendMessageToConversation(store, conversationId, text, attachmen
     }
   }
 
-  if (!store.sendWsMessage(wsMsg)) {
-    ensureConnected(store).then(() => {
-      store.sendWsMessage(wsMsg);
-    }).catch(() => {
-      store.addMessageToConversation(conversationId, {
-        type: 'system',
-        content: t('chat.connection.reconnectFailed')
-      });
-      delete store.processingConversations[conversationId];
-      stopProcessingWatchdog(store, conversationId);
-    });
+  // If the frame wasn't queued, leave the draft and timeline untouched.
+  if (store.sendWsMessage(wsMsg) === false) return false;
+
+  store.addMessageToConversation(conversationId, {
+    type: 'user',
+    content: text,
+    clientMessageId,
+    attachments: attachments.length > 0 ? attachments : undefined,
+    expertSelections: hasExpertSelections ? options.expertSelections : undefined
+  });
+
+  if (text.trim()) {
+    const title = text.trim().substring(0, 100);
+    store.conversationTitles[conversationId] = title;
+  } else if (hasExpertSelections) {
+    const sel = options.expertSelections[0];
+    const label = `@${sel.role}${sel.action ? '\u00B7' + sel.action : ''}`;
+    store.conversationTitles[conversationId] = label;
   }
+
+  if (conv) {
+    conv.lastMessageAt = Date.now();
+  }
+
+  if (!store.processingConversations[conversationId]) {
+    store.processingConversations[conversationId] = true;
+    if (store._closedAt?.[conversationId]) {
+      delete store._closedAt[conversationId];
+    }
+    store._turnCompletedConvs?.delete(conversationId);
+    store.getOrCreateExecutionStatus(conversationId);
+    startProcessingWatchdog(store, conversationId);
+  }
+
+  return true;
 }
 
 // ★ Multi-column: cancel execution for a specific conversation

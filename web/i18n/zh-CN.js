@@ -915,6 +915,10 @@ export default {
   'chat.connection.reconnecting': '重连中 ({current}/{max})...',
   'chat.connection.updating': '服务正在更新，请稍候...',
   'chat.connection.disconnected': '连接断开',
+  'chat.connection.offlineDraft': '网络已断开，仍可编辑草稿。',
+  'chat.connection.disconnectedDraft': '连接已断开，仍可编辑草稿。',
+  'chat.connection.resuming': '正在重新连接…',
+  'chat.connection.verifying': '正在确认连接…',
   'chat.connection.reconnect': '重连',
   'chat.connection.reconnectFailed': '连接断开，请点击重连按钮重试。',
 

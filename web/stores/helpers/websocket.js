@@ -22,8 +22,23 @@ function clearSidebarSessionCatalog(store) {
   store.scheduledTaskReceiptProtocolSupported = false;
 }
 
-// Pending ensureConnected resolvers — settled by onopen/timeout
-let _connectResolvers = [];
+const CONNECT_TIMEOUT_MS = 15_000;
+const HEARTBEAT_INTERVAL_MS = 25_000;
+const HEARTBEAT_REPLY_TIMEOUT_MS = 10_000;
+const TIMER_STALL_GRACE_MS = 5_000;
+
+function isOnline() {
+  return typeof navigator === 'undefined' || navigator.onLine !== false;
+}
+
+function isVisible() {
+  return typeof document === 'undefined' || document.visibilityState === 'visible';
+}
+
+function clearReconnectTimer(store) {
+  clearTimeout(store.reconnectTimer);
+  store.reconnectTimer = null;
+}
 
 function notifyBrowserTransportReset() {
   if (typeof window === 'undefined' || typeof window.dispatchEvent !== 'function'
@@ -34,16 +49,6 @@ function notifyBrowserTransportReset() {
 function isAuthenticationClose(event) {
   return event?.code === 1008
     && String(event.reason || '').toLowerCase().includes('authentication');
-}
-
-function _settleConnectResolvers(success) {
-  const resolvers = _connectResolvers;
-  _connectResolvers = [];
-  for (const { resolve, reject, timer } of resolvers) {
-    clearTimeout(timer);
-    if (success) resolve();
-    else reject(new Error('WebSocket reconnect failed'));
-  }
 }
 
 // Message types that operate on server-backed conversations (sessionDb).
@@ -60,7 +65,11 @@ const YEAFT_INCOMPATIBLE_TYPES = new Set([
   'ask_user_answer',
 ]);
 
+// User messages cannot safely be queued on a socket under verification.
+const USER_MESSAGE_TYPES = new Set(['chat', 'yeaft_session_send', 'btw_question']);
+
 export function sendWsMessage(store, msg) {
+  if (USER_MESSAGE_TYPES.has(msg.type) && (!isOnline() || store.wsVerifying || !store.authenticated)) return false;
   if (!store.ws || store.ws.readyState !== WebSocket.OPEN) {
     console.warn('[WS] Cannot send, connection not open:', msg.type);
     return false;
@@ -96,34 +105,6 @@ export function sendWsMessage(store, msg) {
   }
 }
 
-/**
- * Ensure WebSocket is connected before sending.
- * - If already open: resolves immediately.
- * - If disconnected/reconnecting: triggers reconnect and waits for onopen (timeout 10s).
- */
-export function ensureConnected(store, timeoutMs = 10000) {
-  if (store.ws && store.ws.readyState === WebSocket.OPEN) {
-    return Promise.resolve();
-  }
-
-  console.log('[WS] ensureConnected: not connected, triggering reconnect...');
-
-  return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => {
-      _connectResolvers = _connectResolvers.filter(r => r.resolve !== resolve);
-      reject(new Error('WebSocket reconnect timeout'));
-    }, timeoutMs);
-
-    _connectResolvers.push({ resolve, reject, timer });
-
-    // Only trigger reconnect if not already connecting
-    if (!store.ws || store.ws.readyState !== WebSocket.CONNECTING) {
-      store.reconnectAttempts = 0;
-      store.connect();
-    }
-  });
-}
-
 export function parseWsMessage(store, data) {
   try {
     const parsed = JSON.parse(data);
@@ -151,9 +132,11 @@ export function connect(store) {
   const authStore = useAuthStore();
   const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
 
-  if (store.reconnectTimer) {
-    clearTimeout(store.reconnectTimer);
-    store.reconnectTimer = null;
+  clearReconnectTimer(store);
+  store.networkOffline = !isOnline();
+  if (store.networkOffline) {
+    store.connectionState = 'disconnected';
+    return;
   }
 
   const authToken = authStore.getActiveToken?.() || authStore.token || null;
@@ -162,6 +145,7 @@ export function connect(store) {
   bindScheduledTaskNotificationOwner(store, authOwnerId || (authStore.skipAuth ? 'local' : null));
 
   if (store.ws && store.ws.readyState === WebSocket.CONNECTING
+      && Date.now() - store._wsConnectStartedAt < CONNECT_TIMEOUT_MS
       && store._wsAuthToken === authToken && store._wsAuthGeneration === authGeneration
       && store.sidebarCatalogOwnerId === authOwnerId) {
     console.log('[WS] Already connecting, skip');
@@ -170,6 +154,11 @@ export function connect(store) {
 
   // Retention belongs to the authentication identity, not its renewable token.
   const retainCatalog = sidebarCatalogAuthIsCurrent(store, authStore);
+  if (store.ws && retainCatalog) {
+    // Wake can arrive before a CLOSING socket dispatches its close event.
+    // Settle its pending work and arm catch-up before opening the replacement.
+    expireSocket(store, store.ws, 4001, 'WebSocket replaced', { replacing: true });
+  }
   if (retainCatalog && store.sessionCatalogProtocolSupported === false) {
     store.sidebarLegacySessionCatalog = sidebarSessionCatalogRows(
       store,
@@ -213,6 +202,9 @@ export function connect(store) {
   store.pendingAgentSelection = null;
   store.agentSwitching = false;
 
+  store.stopHeartbeat();
+  clearTimeout(store._wsConnectTimer);
+  store._wsConnectTimer = null;
   if (store.ws) {
     store.interruptYeaftTurnDeletions?.();
     settleSessionCrudForConnection(
@@ -228,6 +220,8 @@ export function connect(store) {
     store.ws = null;
   }
 
+  store.authenticated = false;
+  store._wsCorrelatedHeartbeat = false;
   store.connectionState = store.reconnectAttempts > 0 ? 'reconnecting' : 'connecting';
   // Encryption and history request capabilities are connection-scoped. Start
   // every socket conservatively and cancel requests owned by the old socket;
@@ -284,13 +278,20 @@ export function connect(store) {
 
   const socket = new WebSocket(wsUrl);
   store.ws = socket;
+  store._wsConnectStartedAt = Date.now();
+  store._wsConnectTimer = setTimeout(() => {
+    if (socket === store.ws && socket.readyState === WebSocket.CONNECTING) {
+      expireSocket(store, socket, 4002, 'WebSocket upgrade timeout');
+    }
+  }, CONNECT_TIMEOUT_MS);
 
   socket.onopen = () => {
     if (socket !== store.ws) return;
-    console.log('[WS] Connected');
-    store.connectionState = 'connected';
-    store.reconnectAttempts = 0;
-    store.startHeartbeat();
+    clearTimeout(store._wsConnectTimer);
+    store._wsConnectTimer = null;
+    store._wsConnectTimer = setTimeout(() => {
+      expireSocket(store, socket, 4002, 'WebSocket authentication response timeout');
+    }, CONNECT_TIMEOUT_MS);
     // feat-ws-plaintext-negotiation: capability handshake. Tell the
     // server we're a new client that can accept plaintext outbound.
     // New server flips per-client `encryptOutbound = false` so future
@@ -312,7 +313,6 @@ export function connect(store) {
     } catch (e) {
       console.warn('[WS] Failed to send client_hello:', e);
     }
-    _settleConnectResolvers(true);
   };
 
   socket.onmessage = (event) => {
@@ -325,6 +325,21 @@ export function connect(store) {
       return;
     }
     if (msg) {
+      if (msg.type === 'pong') {
+        const currentProbe = msg.probeId === store._wsProbeId;
+        const legacyKeepalive = !store._wsCorrelatedHeartbeat && !store.wsVerifying && msg.probeId == null;
+        if (store._wsProbeTimer != null && (currentProbe || legacyKeepalive)) clearHeartbeatProbe(store);
+        return;
+      }
+      if (msg.type === 'auth_result' && msg.success === true) {
+        clearTimeout(store._wsConnectTimer);
+        store._wsConnectTimer = null;
+        console.log('[WS] Connected');
+        store.connectionState = 'connected';
+        store.reconnectAttempts = 0;
+        store._wsCorrelatedHeartbeat = msg.webHeartbeatProbeProtocol === 1;
+        store.startHeartbeat();
+      }
       if (msg.type === 'file_content') console.log('[WS.onmessage] Received file_content, path:', msg.filePath, 'contentLen:', msg.content?.length);
       store.handleMessage({ ...msg, _wsAuthToken: authToken, _wsAuthGeneration: authGeneration, _wsAuthOwnerId: authOwnerId });
     } else {
@@ -332,11 +347,14 @@ export function connect(store) {
     }
   };
 
-  socket.onclose = (event) => {
+  socket.onclose = (event, { replacing = false } = {}) => {
     if (socket !== store.ws) {
       if (isAuthenticationClose(event)) authStore.handleAuthFailure?.(undefined, authToken, authGeneration);
       return;
     }
+    clearTimeout(store._wsConnectTimer);
+    store._wsConnectTimer = null;
+    store.ws = null;
     console.log('[WS] Disconnected:', event.code, event.reason);
     store.interruptYeaftTurnDeletions?.();
     store.authenticated = false;
@@ -387,9 +405,11 @@ export function connect(store) {
     if (isAuthenticationClose(event)) {
       console.log('[WS] Auth failure, clearing token and resetting auth state');
       authStore.handleAuthFailure?.(undefined, authToken, authGeneration);
-      store.reconnectAttempts = 0;
-      _settleConnectResolvers(false);
-      return;
+      if (!authStore.isAuthenticated) {
+        store.reconnectAttempts = 0;
+        return;
+      }
+      // A stale token's rejection must not stop recovery for the renewed login.
     }
 
     // Mark that the NEXT online agent_list (after reconnect) should run the
@@ -399,16 +419,7 @@ export function connect(store) {
     // routine agent_list broadcasts leave it false and skip those requests.
     store._yeaftReconnectCatchUpPending = true;
 
-    if (wasUpdating) {
-      // Server is updating — fast reconnect with short interval
-      store.reconnectAttempts = 0;
-      store.reconnectTimer = setTimeout(() => {
-        store.connect();
-      }, 2000);
-      return;
-    }
-
-    store.scheduleReconnect();
+    if (!replacing) store.scheduleReconnect(wasUpdating ? 2000 : undefined);
   };
 
   store.ws.onerror = (error) => {
@@ -416,94 +427,139 @@ export function connect(store) {
   };
 }
 
-export function scheduleReconnect(store) {
-  if (store.reconnectAttempts >= store.maxReconnectAttempts) {
-    console.log('[WS] Max reconnect attempts reached, giving up');
+export function scheduleReconnect(store, fastDelay) {
+  clearReconnectTimer(store);
+  if (!useAuthStore().isAuthenticated || !isOnline() || !isVisible()
+      || store.reconnectAttempts >= store.maxReconnectAttempts) {
     store.connectionState = 'disconnected';
     return;
   }
 
-  const delay = Math.min(1000 * Math.pow(2, store.reconnectAttempts), 30000);
-  store.reconnectAttempts++;
-  store.connectionState = 'reconnecting';
-
-  console.log(`[WS] Reconnecting in ${delay / 1000}s (attempt ${store.reconnectAttempts}/${store.maxReconnectAttempts})`);
+  const baseDelay = fastDelay ?? Math.min(1000 * 2 ** store.reconnectAttempts, 30000);
+  const delay = Math.round(baseDelay * (0.8 + Math.random() * 0.2));
+  if (fastDelay == null) {
+    store.reconnectAttempts++;
+    store.connectionState = 'reconnecting';
+    console.log(`[WS] Reconnecting in ${delay / 1000}s (attempt ${store.reconnectAttempts}/${store.maxReconnectAttempts})`);
+  }
 
   store.reconnectTimer = setTimeout(() => {
-    store.connect();
+    store.reconnectTimer = null;
+    if (useAuthStore().isAuthenticated && isOnline() && isVisible()) store.connect();
+    else store.connectionState = 'disconnected';
   }, delay);
 }
 
 export function manualReconnect(store) {
-  console.log('[WS] Manual reconnect triggered');
   store.reconnectAttempts = 0;
   store.connect();
 }
 
-export function startHeartbeat(store) {
-  store.stopHeartbeat();
-  store._lastPongAt = Date.now();
-  store.heartbeatTimer = setInterval(() => {
-    if (store.ws && store.ws.readyState === WebSocket.OPEN) {
-      const sincePong = Date.now() - store._lastPongAt;
-      if (sincePong > 45000) {
-        console.warn(`[Heartbeat] No pong received for ${Math.round(sincePong / 1000)}s, reconnecting...`);
-        store.ws.close(4000, 'Heartbeat timeout');
-        return;
-      }
-      try {
-        store.sendWsMessage({ type: 'ping' });
-      } catch (e) {
-        console.warn('[Heartbeat] Failed to send ping:', e);
-      }
+function expireSocket(store, socket, code, reason, options) {
+  if (socket !== store.ws) return;
+  // Don't wait for the close handshake on an already unresponsive connection.
+  // Use the ordinary close path so history/receipts are invalidated exactly once.
+  const onClose = socket.onclose;
+  socket.onclose = null;
+  socket.close(code, reason);
+  onClose?.({ code, reason }, options);
+}
+
+function clearHeartbeatProbe(store) {
+  clearTimeout(store._wsProbeTimer);
+  store._wsProbeTimer = null;
+  store.wsVerifying = false;
+}
+
+function probeSocket(store, socket, verifying = false) {
+  if (socket !== store.ws || socket?.readyState !== WebSocket.OPEN || !isVisible() || !isOnline()) return;
+  if (verifying && !store._wsCorrelatedHeartbeat) {
+    // A legacy pong could have been buffered before sleep. A new socket is
+    // the only way to verify a recovered connection to a pre-upgrade Server.
+    expireSocket(store, socket, 4001, 'Reconnect to verify legacy WebSocket');
+    return;
+  }
+  if (verifying) store.wsVerifying = true;
+  // Coalesce pageshow, visibilitychange, online and periodic ticks on one socket.
+  if (store._wsProbeTimer != null) return;
+  const probeId = (store._wsProbeId = (store._wsProbeId || 0) + 1);
+  if (!store.sendWsMessage({ type: 'ping', probeId })) {
+    expireSocket(store, socket, 4000, 'Heartbeat send failed');
+    return;
+  }
+  const deadline = Date.now() + HEARTBEAT_REPLY_TIMEOUT_MS;
+  store._wsProbeTimer = setTimeout(() => {
+    if (socket !== store.ws) return;
+    store._wsProbeTimer = null;
+    if (!isVisible() || !isOnline()) return;
+    // A suspended page (or blocked main thread) cannot run the timer or
+    // dispatch an incoming pong. After a delayed tick, use a fresh deadline.
+    if (Date.now() - deadline > TIMER_STALL_GRACE_MS) {
+      probeSocket(store, socket, true);
+      return;
     }
-  }, 25000);
+    expireSocket(store, socket, 4000, 'Heartbeat reply timeout');
+  }, HEARTBEAT_REPLY_TIMEOUT_MS);
+}
+
+export function startHeartbeat(store) {
+  const socket = store.ws;
+  if (store.heartbeatTimer != null || !isVisible() || !isOnline()) return;
+  let lastTick = Date.now();
+  store.heartbeatTimer = setInterval(() => {
+    const now = Date.now();
+    probeSocket(store, socket, now - lastTick > HEARTBEAT_INTERVAL_MS + TIMER_STALL_GRACE_MS);
+    lastTick = now;
+  }, HEARTBEAT_INTERVAL_MS);
 }
 
 export function stopHeartbeat(store) {
-  if (store.heartbeatTimer) {
-    clearInterval(store.heartbeatTimer);
-    store.heartbeatTimer = null;
-  }
+  clearInterval(store.heartbeatTimer);
+  store.heartbeatTimer = null;
+  clearHeartbeatProbe(store);
 }
 
-/**
- * 监听页面可见性变化（移动端切换 APP 场景）
- * 切回前台时主动检查 WebSocket 连接，快速恢复状态
- */
+/** Recover after a mobile suspend, network change or back/forward-cache restore. */
 export function setupVisibilityHandler(store) {
   if (store._visibilityHandlerInstalled) return;
   store._visibilityHandlerInstalled = true;
+  store.networkOffline = !isOnline();
+
+  const suspend = () => {
+    store.stopHeartbeat();
+    if (store.reconnectTimer != null) {
+      clearReconnectTimer(store);
+      store.connectionState = 'disconnected';
+    }
+  };
+  const resume = () => {
+    store.networkOffline = !isOnline();
+    const auth = useAuthStore();
+    if (store.networkOffline || !isVisible() || !auth.isAuthenticated) return;
+    if (store._wsAuthGeneration !== auth.authGeneration || store.sidebarCatalogOwnerId !== (auth.userId || null)) {
+      store.manualReconnect();
+    } else if (store.ws?.readyState === WebSocket.OPEN) {
+      if (store.authenticated) {
+        store.startHeartbeat();
+        probeSocket(store, store.ws, true);
+      }
+    } else if (store.ws?.readyState !== WebSocket.CONNECTING
+        || Date.now() - store._wsConnectStartedAt >= CONNECT_TIMEOUT_MS) {
+      store.manualReconnect();
+    }
+  };
 
   document.addEventListener('visibilitychange', () => {
-    if (document.visibilityState === 'visible') {
+    if (isVisible()) {
       store.markVisibleScheduledTaskSessionRead?.();
-      console.log('[Visibility] Page became visible, checking connection...');
-
-      if (!store.ws || store.ws.readyState !== WebSocket.OPEN) {
-        // WebSocket 已断开，立即重连
-        console.log('[Visibility] WebSocket not open, reconnecting immediately');
-        store.reconnectAttempts = 0;
-        store.connect();
-      } else {
-        // WebSocket 看起来还连着，发一个 ping 验证
-        // 移动端浏览器切后台后 WebSocket 可能静默失效
-        try {
-          store.sendWsMessage({ type: 'ping' });
-          // 如果 3 秒内没收到 pong，说明连接已死，重连
-          const pongBefore = store._lastPongAt;
-          setTimeout(() => {
-            if (store._lastPongAt === pongBefore) {
-              console.warn('[Visibility] No pong after resume, reconnecting...');
-              if (store.ws) store.ws.close(4001, 'Visibility resume timeout');
-            }
-          }, 3000);
-        } catch (e) {
-          console.warn('[Visibility] Ping failed, reconnecting...', e);
-          store.reconnectAttempts = 0;
-          store.connect();
-        }
-      }
-    }
+      resume();
+    } else suspend();
   });
+  window.addEventListener('pagehide', suspend);
+  window.addEventListener('pageshow', event => { if (event.persisted) resume(); });
+  window.addEventListener('offline', () => {
+    store.networkOffline = true;
+    suspend();
+  });
+  window.addEventListener('online', resume);
 }
