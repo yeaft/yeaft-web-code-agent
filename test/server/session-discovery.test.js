@@ -10,8 +10,9 @@ import { handleClientConversation } from '../../server/handlers/client-conversat
 import { clearSessionDiscoveryRequests, handleAgentSessionDiscovery, handleClientSessionDiscovery } from '../../server/handlers/session-discovery.js';
 import { createMockAgent, createMockWebClient } from '../helpers/mockWs.js';
 import { handleSessionDiscovery } from '../../agent/yeaft/session-discovery/bridge.js';
-import { MAX_MESSAGE_INDEX_CHARS, runDailySessionIndex } from '../../agent/yeaft/session-discovery/indexer.js';
+import { MAX_MESSAGE_INDEX_CHARS, extractIndexableTurnMessages, runDailySessionIndex } from '../../agent/yeaft/session-discovery/indexer.js';
 import { DAY_MS, listActiveSessionCards, openDiscoveryStore, searchDiscovery } from '../../agent/yeaft/session-discovery/store.js';
+import { createAgentHistoryScan } from '../../agent/yeaft/conversation/search.js';
 import { ConversationStore } from '../../agent/yeaft/conversation/persist.js';
 import { commitSessionTurnDeletion } from '../../agent/yeaft/conversation/turn-deletion-journal.js';
 import { addOrUpdateManifestSession } from '../../agent/yeaft/sessions/session-manifest.js';
@@ -264,6 +265,119 @@ it('serves full incremental FTS results, 5-day active cards and durable Share en
     expect(agent.ws.getLastMessage()._shareOwnerId).toBeUndefined();
     store.clear();
     expect((await send(bob, 'search', { query: '检索' })).results).toEqual([]);
+
+    // Verify edge-case regressions inside a clean sub-root:
+    // (a) mid-turn progress -> later result incremental update,
+    // (b) surrogate-pair snippet <= 222 UTF-16 code units,
+    // (c) chatty session not starving cross-message intersection,
+    // (d) scan-budget exhaustion preserving existing cards without advancing index_state,
+    // (e) legacy assistant rows without turnId keeping distinct replies + `from` speaker.
+    const edgeRoot = mkdtempSync(join(tmpdir(), 'session-discovery-edge-'));
+    try {
+      const edgeStore = new ConversationStore(edgeRoot);
+      const addEdgeSession = (id, name, rows) => {
+        const handle = createSession(join(edgeRoot, 'sessions'), { id, name });
+        const meta = handle.getMeta();
+        addOrUpdateManifestSession(edgeRoot, meta, handle.dir);
+        handle.close();
+        edgeStore.appendBatch(rows.map((row, idx) => ({
+          sessionId: id,
+          time: new Date(now - 60_000 + idx * 100).toISOString(),
+          ...row,
+        })));
+      };
+      addEdgeSession('mid-turn', 'Mid Turn', [
+        { role: 'user', content: '第一轮问题' },
+        { role: 'assistant', turnId: 't1', responseKind: 'result', content: '第一轮回答' },
+        { role: 'user', content: '第二轮问题 MID_TURN_QUESTION' },
+        { role: 'assistant', turnId: 't2', responseKind: 'progress', content: '正在分析 MID_TURN_PROGRESS' },
+      ]);
+      const emojiFiller = '😀'.repeat(180);
+      addEdgeSession('emoji', 'Emoji Bound', [
+        { role: 'user', content: '普通问题' },
+        { role: 'assistant', turnId: 'e1', responseKind: 'result', content: '普通回答' },
+        { role: 'user', content: `${emojiFiller}EMOJI_NEEDLE${emojiFiller}` },
+        { role: 'assistant', turnId: 'e2', responseKind: 'result', content: '结束' },
+      ]);
+      const chattyRows = [];
+      for (let i = 0; i < 60; i++) {
+        chattyRows.push({ role: 'user', content: `COMMON_TERM_ALPHA 聊天消息 ${i}` });
+        chattyRows.push({ role: 'assistant', turnId: `c-${i}`, responseKind: 'result', content: `COMMON_TERM_ALPHA 回复 ${i}` });
+      }
+      addEdgeSession('chatty', 'Chatty', chattyRows);
+      addEdgeSession('cross-target', 'Cross Target', [
+        { role: 'user', content: 'COMMON_TERM_ALPHA 出现于第一条消息' },
+        { role: 'assistant', turnId: 'ct1', responseKind: 'result', content: '中间回复' },
+        { role: 'user', content: '第二轮继续讨论' },
+        { role: 'assistant', turnId: 'ct2', responseKind: 'result', content: 'RARE_TERM_OMEGA 出现在另一条最终回复' },
+      ]);
+      expect(runDailySessionIndex(edgeRoot, now)).toBe(true);
+      let edgeDb = openDiscoveryStore(edgeRoot);
+      try {
+        expect(searchDiscovery(edgeDb, edgeRoot, ['mid-turn'], 'MID_TURN_PROGRESS', now).results).toEqual([]);
+        expect(searchDiscovery(edgeDb, edgeRoot, ['mid-turn'], 'MID_TURN_QUESTION', now).results).toHaveLength(1);
+        const emojiHits = searchDiscovery(edgeDb, edgeRoot, ['emoji'], 'EMOJI_NEEDLE', now).results;
+        expect(emojiHits).toHaveLength(1);
+        expect(emojiHits[0].snippet.length).toBeLessThanOrEqual(222);
+        expect(emojiHits[0].snippet.isWellFormed()).toBe(true);
+        const crossHits = searchDiscovery(edgeDb, edgeRoot, ['chatty', 'cross-target'], 'COMMON_TERM_ALPHA RARE_TERM_OMEGA', now, { limit: 2 }).results;
+        expect(crossHits.map(r => r.sessionId)).toEqual(['cross-target']);
+      } finally { edgeDb.close(); }
+
+      const day2 = now + DAY_MS + 1000;
+      edgeStore.appendBatch([
+        {
+          sessionId: 'mid-turn',
+          role: 'assistant',
+          turnId: 't2',
+          responseKind: 'result',
+          stopReason: 'end_turn',
+          content: '第二轮最终答复 MID_TURN_FINAL_RESULT',
+          time: new Date(day2 - 1000).toISOString(),
+        },
+      ]);
+      expect(runDailySessionIndex(edgeRoot, day2)).toBe(true);
+      edgeDb = openDiscoveryStore(edgeRoot);
+      try {
+        expect(searchDiscovery(edgeDb, edgeRoot, ['mid-turn'], 'MID_TURN_FINAL_RESULT', day2).results).toHaveLength(1);
+        expect(searchDiscovery(edgeDb, edgeRoot, ['mid-turn'], 'MID_TURN_PROGRESS', day2).results).toEqual([]);
+        expect(searchDiscovery(edgeDb, edgeRoot, ['mid-turn'], 'MID_TURN_QUESTION', day2).results).toHaveLength(1);
+      } finally { edgeDb.close(); }
+
+      const day3 = day2 + DAY_MS + 1000;
+      edgeStore.appendBatch([
+        { sessionId: 'mid-turn', role: 'user', content: '触发变更', time: new Date(day3 - 500).toISOString() },
+      ]);
+      const exhaustingScan = (scanRoot, telemetry) => {
+        const inner = createAgentHistoryScan(scanRoot, telemetry);
+        return {
+          ...inner,
+          list: () => {
+            telemetry.scanIncomplete = true;
+            return null;
+          },
+          stopped: () => Boolean(telemetry.scanIncomplete || inner.stopped()),
+        };
+      };
+      runDailySessionIndex(edgeRoot, day3, { force: true, createScan: exhaustingScan });
+      edgeDb = openDiscoveryStore(edgeRoot);
+      try {
+        expect(searchDiscovery(edgeDb, edgeRoot, ['mid-turn'], 'MID_TURN_FINAL_RESULT', day3).results).toHaveLength(1);
+        expect(searchDiscovery(edgeDb, edgeRoot, ['cross-target'], 'RARE_TERM_OMEGA', day3).results).toHaveLength(1);
+        expect(edgeDb.prepare('SELECT indexed_at FROM index_state WHERE id = 1').get()?.indexed_at).toBe(day2);
+      } finally { edgeDb.close(); }
+
+      const legacyProjection = extractIndexableTurnMessages([
+        { sessionId: 'legacy', id: 'm0000', seq: 0, role: 'user', content: '零号问题', time: now - 4000 },
+        { sessionId: 'legacy', id: 'm0001', seq: 1, role: 'assistant', from: 'vp-alpha', content: '旧版回复一', time: now - 3000 },
+        { sessionId: 'legacy', id: 'm0002', seq: 2, role: 'assistant', from: 'vp-beta', content: '旧版回复二', time: now - 2000 },
+        { sessionId: 'legacy', id: 'm0003', seq: 3, role: 'assistant', content: '旧版回复三', time: now - 1000 },
+      ], 'legacy', now);
+      expect(legacyProjection.messages.map(m => m.text)).toEqual(['零号问题', '旧版回复一', '旧版回复二', '旧版回复三']);
+      expect(legacyProjection.visibleTurnCount).toBe(4);
+    } finally {
+      rmSync(edgeRoot, { force: true, recursive: true });
+    }
   } finally {
     clearSessionDiscoveryRequests(alice);
     clearSessionDiscoveryRequests(bob);

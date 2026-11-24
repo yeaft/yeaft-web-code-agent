@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { lstatSync, mkdirSync, readdirSync } from 'node:fs';
+import { lstatSync, mkdirSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { createAgentHistoryScan } from '../conversation/search.js';
@@ -206,11 +206,11 @@ function deleteSessionFromIndex(db, sessionId) {
   db.prepare('DELETE FROM candidates WHERE source_session_id = ?').run(sessionId);
 }
 
-function deleteSessionMessagesAfterSeq(db, sessionId, afterSeq) {
+function deleteSessionMessagesFromSeq(db, sessionId, fromSeq) {
   db.prepare(`DELETE FROM session_message_fts WHERE rowid IN (
-    SELECT rowid FROM session_messages WHERE session_id = ? AND seq > ?
-  )`).run(sessionId, afterSeq);
-  db.prepare('DELETE FROM session_messages WHERE session_id = ? AND seq > ?').run(sessionId, afterSeq);
+    SELECT rowid FROM session_messages WHERE session_id = ? AND seq >= ?
+  )`).run(sessionId, fromSeq);
+  db.prepare('DELETE FROM session_messages WHERE session_id = ? AND seq >= ?').run(sessionId, fromSeq);
 }
 
 function insertCardMessages(db, sessionId, messages) {
@@ -245,6 +245,7 @@ export function applyDailyIndexUpdates(db, {
   now,
   root = null,
   force = false,
+  markIndexed = true,
 } = {}) {
   db.exec('BEGIN IMMEDIATE');
   try {
@@ -285,8 +286,8 @@ export function applyDailyIndexUpdates(db, {
           );
           deleteCardTerms.run(existing.rowid);
           insertCardTerms.run(existing.rowid, termsForIndex(card.title), termsForIndex(card.workDir));
-          if (Number.isFinite(card.pruneAfterSeq)) {
-            deleteSessionMessagesAfterSeq(db, card.sessionId, card.pruneAfterSeq);
+          if (Number.isFinite(card.pruneFromSeq)) {
+            deleteSessionMessagesFromSeq(db, card.sessionId, card.pruneFromSeq);
           }
         } else {
           const { lastInsertRowid } = insertCard.run(
@@ -306,7 +307,9 @@ export function applyDailyIndexUpdates(db, {
     }
 
     if (root) updateAutomaticAgreements(db, root, automatic);
-    db.prepare('INSERT OR REPLACE INTO index_state VALUES (1, ?)').run(now);
+    if (markIndexed) {
+      db.prepare('INSERT OR REPLACE INTO index_state VALUES (1, ?)').run(now);
+    }
     db.exec('COMMIT');
     return true;
   } catch (error) {
@@ -339,11 +342,25 @@ export function localSessionDirs(root, read, allowed = null) {
   return dirs;
 }
 
+function hasSessionIndexSchema(db) {
+  return tableExists(db, 'session_cards')
+    && tableExists(db, 'session_fts')
+    && tableExists(db, 'session_messages')
+    && tableExists(db, 'session_message_fts');
+}
+
+function compareNumericFileNames(a, b, prefixLength, suffixLength) {
+  const numA = Number.parseInt(a.slice(prefixLength, a.length - suffixLength), 10);
+  const numB = Number.parseInt(b.slice(prefixLength, b.length - suffixLength), 10);
+  return numA - numB || a.localeCompare(b);
+}
+
 // A clear/recreation replaces the transcript stream ID. Turn deletion has a
 // separate durable journal and invalidates derived text immediately, without
 // scheduling a second index pass. Normal appends do not change either fence.
-export function readSourceFence(root, sessionId, read, { includeSignature = false } = {}) {
-  const dir = join(root, 'sessions', sessionId);
+export function readSourceFence(root, sessionId, read, { includeSignature = false, list = null } = {}) {
+  const sessionsDir = join(root, 'sessions');
+  const dir = join(sessionsDir, sessionId);
   const conversation = join(dir, 'conversation');
   const date = path => {
     try {
@@ -351,7 +368,7 @@ export function readSourceFence(root, sessionId, read, { includeSignature = fals
       return stat.isDirectory() || stat.isFile() ? stat.mtimeMs : 0;
     } catch (error) { if (error.code === 'ENOENT') return 0; throw error; }
   };
-  if (!lstatSync(conversation).isDirectory()) return null;
+  if (!lstatSync(sessionsDir).isDirectory() || !lstatSync(dir).isDirectory() || !lstatSync(conversation).isDirectory()) return null;
   const metaRaw = read(join(dir, 'session.json')) ?? read(join(dir, 'group.json'));
   if (!metaRaw) return null;
   const meta = JSON.parse(metaRaw);
@@ -371,11 +388,14 @@ export function readSourceFence(root, sessionId, read, { includeSignature = fals
   const freshAt = Math.max(...['index.json', 'segments', 'messages', 'cold'].map(name => date(join(conversation, name))));
   let transcriptSignature = '';
   if (includeSignature) {
-    let segSignature = null;
+    const boundedList = list || createAgentHistoryScan(root, {}).list;
+    const parts = [];
     const indexRaw = read(join(conversation, 'index.json'));
+    let parsedIndex = false;
     if (indexRaw) {
       try {
         const idx = JSON.parse(indexRaw);
+        let segSignature = null;
         const lastSeg = Array.isArray(idx?.segments) ? idx.segments.at(-1) : null;
         if (lastSeg?.file && /^\d+\.jsonl$/u.test(lastSeg.file)) {
           try {
@@ -383,7 +403,8 @@ export function readSourceFence(root, sessionId, read, { includeSignature = fals
             if (st.isFile()) segSignature = [st.size, Math.floor(st.mtimeMs)];
           } catch { /* ignore */ }
         }
-        transcriptSignature = JSON.stringify([
+        parts.push([
+          'idx',
           idx?.totalMessages ?? null,
           idx?.nextSeq ?? null,
           idx?.revision ?? null,
@@ -392,38 +413,41 @@ export function readSourceFence(root, sessionId, read, { includeSignature = fals
           lastSeg?.bytes ?? null,
           segSignature,
         ]);
+        parsedIndex = true;
       } catch { /* fallback to directory scan below */ }
     }
-    if (!transcriptSignature) {
+    if (!parsedIndex) {
       // No usable index.json (e.g. legacy or test fixture writing segments directly):
-      // stat the latest segment or legacy markdown file so in-place appends change the signature.
-      const parts = [];
+      // stat the highest-numbered segment so in-place appends change the signature.
       try {
         const segDir = join(conversation, 'segments');
-        if (lstatSync(segDir).isDirectory()) {
-          const files = readdirSync(segDir).filter(name => /^\d+\.jsonl$/u.test(name)).sort();
-          const latest = files.at(-1);
-          if (latest) {
-            const stat = lstatSync(join(segDir, latest));
-            if (stat.isFile()) parts.push(['seg', files.length, latest, stat.size, Math.floor(stat.mtimeMs)]);
-          }
+        const files = (boundedList(segDir, '.jsonl') || [])
+          .filter(name => /^\d+\.jsonl$/u.test(name))
+          .sort((a, b) => compareNumericFileNames(a, b, 0, 6));
+        const latest = files.at(-1);
+        if (latest) {
+          const stat = lstatSync(join(segDir, latest));
+          if (stat.isFile()) parts.push(['seg', files.length, latest, stat.size, Math.floor(stat.mtimeMs)]);
         }
       } catch { /* ignore */ }
-      for (const kind of ['messages', 'cold']) {
-        try {
-          const dirPath = join(conversation, kind);
-          if (lstatSync(dirPath).isDirectory()) {
-            const files = readdirSync(dirPath).filter(name => /^m\d+\.md$/u.test(name)).sort();
-            const latest = files.at(-1);
-            if (latest) {
-              const stat = lstatSync(join(dirPath, latest));
-              if (stat.isFile()) parts.push([kind, files.length, latest, stat.size, Math.floor(stat.mtimeMs)]);
-            }
-          }
-        } catch { /* ignore */ }
-      }
-      if (parts.length > 0) transcriptSignature = JSON.stringify(parts);
     }
+    // Always include legacy markdown directories when present so edits to legacy
+    // files are never masked by an existing index.json.
+    for (const kind of ['messages', 'cold']) {
+      try {
+        const dirPath = join(conversation, kind);
+        if (date(dirPath) === 0) continue;
+        const files = (boundedList(dirPath, '.md') || [])
+          .filter(name => /^m\d+\.md$/u.test(name))
+          .sort((a, b) => compareNumericFileNames(a, b, 1, 3));
+        const latest = files.at(-1);
+        if (latest) {
+          const stat = lstatSync(join(dirPath, latest));
+          if (stat.isFile()) parts.push([kind, files.length, latest, stat.size, Math.floor(stat.mtimeMs)]);
+        }
+      } catch { /* ignore */ }
+    }
+    if (parts.length > 0) transcriptSignature = JSON.stringify(parts);
   }
   return { key, identity, streamId: lineage?.streamId, freshAt, transcriptSignature, meta, operations };
 }
@@ -454,8 +478,10 @@ function isLowSurrogate(codeUnit) {
 function boundedSlice(text, start, end) {
   let s = Math.max(0, start);
   let e = Math.min(text.length, end);
-  if (s > 0 && isLowSurrogate(text.charCodeAt(s)) && isHighSurrogate(text.charCodeAt(s - 1))) s -= 1;
+  if (s > 0 && isLowSurrogate(text.charCodeAt(s)) && isHighSurrogate(text.charCodeAt(s - 1))) s += 1;
+  e = Math.min(e, s + MAX_PREVIEW_CHARS);
   if (e < text.length && isLowSurrogate(text.charCodeAt(e)) && isHighSurrogate(text.charCodeAt(e - 1))) e -= 1;
+  if (e < s) e = s;
   return `${s > 0 ? '…' : ''}${text.slice(s, e)}${e < text.length ? '…' : ''}`;
 }
 
@@ -487,11 +513,13 @@ function resolveWindowCutoff(options, now) {
  * to recently active Sessions for automatic routing / new UI flows.
  */
 export function searchDiscovery(db, root, allowedIds, query, now = Date.now(), options = {}) {
-  const indexedAt = discoveryIndexedAt(db);
+  const indexedAt = tableExists(db, 'index_state') ? discoveryIndexedAt(db) : null;
   const clauses = lexicalTermClauses(query);
   const match = clauses.join(' AND ');
   const results = [];
-  if (!match || !Array.isArray(allowedIds) || allowedIds.length === 0) return { indexedAt, results };
+  if (!match || !Array.isArray(allowedIds) || allowedIds.length === 0 || !hasSessionIndexSchema(db)) {
+    return { indexedAt, results };
+  }
   const limit = Math.max(1, Math.min(SEARCH_LIMIT, Math.floor(Number(options?.limit) || SEARCH_LIMIT)));
   const cutoff = resolveWindowCutoff(options, now);
   const allowedJson = JSON.stringify(allowedIds);
@@ -499,6 +527,7 @@ export function searchDiscovery(db, root, allowedIds, query, now = Date.now(), o
   const bestBySession = new Map();
 
   const recordCandidate = (sessionId, row, rank, matchedText) => {
+    if (!live(sessionId, row.deletion_generation)) return;
     const existing = bestBySession.get(sessionId);
     if (!existing) {
       bestBySession.set(sessionId, {
@@ -551,6 +580,7 @@ export function searchDiscovery(db, root, allowedIds, query, now = Date.now(), o
 
   // 3. Cross-message / title+message multi-term intersection: when a query has
   // multiple terms spanning different messages or title + message in the same Session.
+  // Deduplicate per Session inside SQL so a single chatty Session cannot starve others.
   if (clauses.length > 1 && bestBySession.size < limit * 2) {
     let intersected = null;
     const sampleTextBySession = new Map();
@@ -560,23 +590,29 @@ export function searchDiscovery(db, root, allowedIds, query, now = Date.now(), o
       WHERE session_fts MATCH ?
         AND (? IS NULL OR c.active_at >= ?)
         AND c.session_id IN (SELECT value FROM json_each(?))
+      ORDER BY c.active_at DESC, c.session_id
       LIMIT ?`);
-    const msgTermStmt = db.prepare(`SELECT c.session_id, c.title, c.work_dir, c.active_at, c.deletion_generation,
-        m.text AS matched_text
-      FROM session_message_fts
-      JOIN session_messages m ON session_message_fts.rowid = m.rowid
-      JOIN session_cards c ON c.session_id = m.session_id
-      WHERE session_message_fts MATCH ?
-        AND (? IS NULL OR c.active_at >= ?)
-        AND c.session_id IN (SELECT value FROM json_each(?))
-      ORDER BY c.active_at DESC, m.seq DESC
+    const msgTermStmt = db.prepare(`SELECT session_id, title, work_dir, active_at, deletion_generation, matched_text
+      FROM (
+        SELECT c.session_id, c.title, c.work_dir, c.active_at, c.deletion_generation,
+          m.text AS matched_text,
+          ROW_NUMBER() OVER (PARTITION BY c.session_id ORDER BY m.seq DESC) AS rn
+        FROM session_message_fts
+        JOIN session_messages m ON session_message_fts.rowid = m.rowid
+        JOIN session_cards c ON c.session_id = m.session_id
+        WHERE session_message_fts MATCH ?
+          AND (? IS NULL OR c.active_at >= ?)
+          AND c.session_id IN (SELECT value FROM json_each(?))
+      )
+      WHERE rn = 1
+      ORDER BY active_at DESC, session_id
       LIMIT ?`);
     for (const clause of clauses) {
       const matchedThisClause = new Map();
       for (const row of metaTermStmt.iterate(clause, cutoff, cutoff, allowedJson, limit * 16)) {
         matchedThisClause.set(row.session_id, row);
       }
-      for (const row of msgTermStmt.iterate(clause, cutoff, cutoff, allowedJson, limit * 32)) {
+      for (const row of msgTermStmt.iterate(clause, cutoff, cutoff, allowedJson, limit * 16)) {
         if (!matchedThisClause.has(row.session_id)) matchedThisClause.set(row.session_id, row);
         if (!sampleTextBySession.has(row.session_id)) sampleTextBySession.set(row.session_id, row.matched_text);
       }
@@ -604,7 +640,6 @@ export function searchDiscovery(db, root, allowedIds, query, now = Date.now(), o
   ));
 
   for (const candidate of ordered) {
-    if (!live(candidate.sessionId, candidate.deletionGeneration)) continue;
     const text = candidate.matchedText ?? latestSessionText(db, candidate.sessionId);
     results.push({
       sessionId: candidate.sessionId,
@@ -626,9 +661,11 @@ export function listActiveSessionCards(db, root, allowedIds, now = Date.now(), {
   activeWindowDays = null,
   limit = ACTIVE_CARDS_LIMIT,
 } = {}) {
-  const indexedAt = discoveryIndexedAt(db);
+  const indexedAt = tableExists(db, 'index_state') ? discoveryIndexedAt(db) : null;
   const cards = [];
-  if (!Array.isArray(allowedIds) || allowedIds.length === 0) return { indexedAt, cards };
+  if (!Array.isArray(allowedIds) || allowedIds.length === 0 || !hasSessionIndexSchema(db)) {
+    return { indexedAt, cards };
+  }
   const cutoff = resolveWindowCutoff({ activeWindowMs, activeWindowDays }, now) ?? (now - ACTIVE_WINDOW_MS);
   const boundedLimit = Math.max(1, Math.min(200, Math.floor(Number(limit) || ACTIVE_CARDS_LIMIT)));
   const live = liveCards(root);
@@ -736,7 +773,7 @@ export function searchShare(db, root, ownerId, allowedIds, options) {
   const terms = normalize(keyword).split(/\s+/u).filter(Boolean);
   const seen = new Set();
   const items = [];
-  if (typeof ownerId === 'string' && ownerId) {
+  if (typeof ownerId === 'string' && ownerId && tableExists(db, 'share_items')) {
     for (const row of db.prepare('SELECT * FROM share_items WHERE owner_id = ? ORDER BY updated_at DESC, id LIMIT ?')
       .iterate(ownerId, PUBLISHED_LIMIT)) {
       if (signal?.aborted) break;

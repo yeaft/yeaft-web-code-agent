@@ -36,13 +36,15 @@ function rowTimestamp(row) {
 }
 
 /**
- * Resolve the last user-message sequence that precedes any messages appended
- * after `existingLastSeq`, so an assistant turn split across two indexing runs
- * can be safely re-evaluated in full without losing its turn grouping.
+ * Resolve the inclusive sequence boundary at which incremental append should
+ * prune and re-insert messages, so an assistant turn split across two indexing
+ * runs (e.g. progress -> result) is re-evaluated cleanly without touching older turns.
+ * Returns the first seq after the last user message at/before `existingLastSeq`,
+ * or `0` when no user message precedes `existingLastSeq` (covering seq === 0).
  */
-function findTurnBoundaryStartSeq(rows, sessionId, existingLastSeq) {
-  if (!Number.isFinite(existingLastSeq) || existingLastSeq <= 0) return 0;
-  let lastUserSeq = 0;
+function findTurnPruneStartSeq(rows, sessionId, existingLastSeq) {
+  if (!Number.isFinite(existingLastSeq) || existingLastSeq < 0) return 0;
+  let lastUserSeq = null;
   for (const row of rows) {
     if (!row || row.sessionId !== sessionId || !isVisibleConversationRow(row)) continue;
     const rowSeq = seq(row);
@@ -50,7 +52,7 @@ function findTurnBoundaryStartSeq(rows, sessionId, existingLastSeq) {
     if (rowSeq > existingLastSeq) break;
     if (row.role === 'user') lastUserSeq = rowSeq;
   }
-  return lastUserSeq;
+  return lastUserSeq === null ? 0 : lastUserSeq + 1;
 }
 
 /**
@@ -132,7 +134,7 @@ function readTranscriptRowsOldestFirst(conversation, sessionId, read, list, oper
 
   const segments = (list(join(conversation, 'segments'), '.jsonl') || [])
     .filter(file => /^\d+\.jsonl$/u.test(file))
-    .sort();
+    .sort((a, b) => Number.parseInt(a.slice(0, -6), 10) - Number.parseInt(b.slice(0, -6), 10) || a.localeCompare(b));
   for (const file of segments) {
     const raw = read(join(conversation, 'segments', file));
     if (!raw) continue;
@@ -169,8 +171,14 @@ export function extractIndexableTurnMessages(rows, sessionId, now) {
     const byGroup = new Map();
     for (const item of assistantBucket) {
       const turnId = typeof item.row.turnId === 'string' && item.row.turnId ? item.row.turnId : null;
-      const speaker = item.row.speakerVpId || item.row.meta?.senderVpId || '';
-      const key = turnId ? `turn:${turnId}:speaker:${speaker}` : `legacy:${speaker}`;
+      const speaker = item.row.speakerVpId || item.row.meta?.senderVpId
+        || (item.row.role === 'assistant' && item.row.from && item.row.from !== 'user' ? item.row.from : '');
+      // Match visible-entry.js: coalesce by explicit turnId + speaker; legacy
+      // assistant rows without a turnId keep their own message identity so
+      // distinct legacy replies are never collapsed into one.
+      const key = turnId
+        ? `turn:${turnId}:speaker:${speaker}`
+        : `legacy:${speaker}:${item.row.id || item.seq}`;
       const list = byGroup.get(key) || [];
       list.push(item);
       byGroup.set(key, list);
@@ -266,7 +274,7 @@ export function extractIndexableTurnMessages(rows, sessionId, now) {
   };
 }
 
-export function runDailySessionIndex(root, now = Date.now(), { force = false } = {}) {
+export function runDailySessionIndex(root, now = Date.now(), { force = false, createScan = createAgentHistoryScan } = {}) {
   const db = openDiscoveryStore(root);
   try {
     const indexedAt = discoveryIndexedAt(db);
@@ -276,11 +284,14 @@ export function runDailySessionIndex(root, now = Date.now(), { force = false } =
     const upserts = [];
     const removedSessionIds = [];
     const automatic = [];
-    const { read, list, stopped } = createAgentHistoryScan(root, {});
+    const telemetry = {};
+    const { read, list, stopped } = createScan(root, telemetry);
+    const scanStopped = () => Boolean(stopped() || telemetry.scanIncomplete);
 
     // Newest-created first so bounded scan budgets prioritize recent work first
     // while still indexing all eligible historical Sessions incrementally.
     const sessionsMap = localSessionDirs(root, read);
+    if (scanStopped()) return false;
     const sessions = [...sessionsMap].reverse();
 
     for (const existingSessionId of existingCards.keys()) {
@@ -290,9 +301,10 @@ export function runDailySessionIndex(root, now = Date.now(), { force = false } =
     }
 
     for (const [sessionId, dir] of sessions) {
-      if (stopped() || upserts.length >= MAX_UPSERTS_PER_RUN) break;
+      if (scanStopped() || upserts.length >= MAX_UPSERTS_PER_RUN) break;
       try {
-        const source = readSourceFence(root, sessionId, read, { includeSignature: true });
+        const source = readSourceFence(root, sessionId, read, { includeSignature: true, list });
+        if (scanStopped()) break;
         if (!source) {
           if (existingCards.has(sessionId)) removedSessionIds.push(sessionId);
           continue;
@@ -330,6 +342,9 @@ export function runDailySessionIndex(root, now = Date.now(), { force = false } =
         }
 
         const rows = readTranscriptRowsOldestFirst(join(dir, 'conversation'), sessionId, read, list, source.operations);
+        // Never mutate or delete an existing Session card using a partial/truncated
+        // read caused by scan budget exhaustion.
+        if (scanStopped()) break;
         const agreements = [];
         for (const row of rows) {
           if (agreements.length >= MAX_AGREEMENTS_PER_SESSION
@@ -341,7 +356,9 @@ export function runDailySessionIndex(root, now = Date.now(), { force = false } =
         const { messages, visibleTurnCount, activeAt, lastSeq } = extractIndexableTurnMessages(rows, sessionId, now);
 
         // Verify the source fence did not mutate mid-read.
-        if (readSourceFence(root, sessionId, read)?.key !== source.key) continue;
+        const afterSource = readSourceFence(root, sessionId, read);
+        if (scanStopped()) break;
+        if (afterSource?.key !== source.key) continue;
 
         for (const agreement of agreements) {
           automatic.push({ ...agreement, sessionId, sourceIdentity: source.identity });
@@ -361,23 +378,28 @@ export function runDailySessionIndex(root, now = Date.now(), { force = false } =
         // True incremental append when the lineage/deletion fence matches and
         // we only have strictly newer turns. If the previous run ended mid-turn
         // (e.g. a progress/result update arrived for the same assistant turn),
-        // prune & re-insert only from the boundary user seq forward.
+        // prune & re-insert only from the boundary user turn forward.
+        // Only perform delta append when we know the transcript only grew at the tail
+        // (i.e. canonical segment index signature is present and unchanged prior to tail).
+        // For legacy markdown transcripts or non-monotonic changes, fall back to replace.
+        const hasIndexSignature = Boolean(source.transcriptSignature && source.transcriptSignature.startsWith('[["idx",'));
         const canIncrementalAppend = Boolean(
           existing
+          && hasIndexSignature
           && existing.deletionGeneration === source.key
           && lastSeq >= existing.lastSeq
           && visibleTurnCount >= existing.messageCount,
         );
         const pruneFromSeq = canIncrementalAppend
-          ? findTurnBoundaryStartSeq(rows, sessionId, existing.lastSeq)
+          ? findTurnPruneStartSeq(rows, sessionId, existing.lastSeq)
           : null;
         const deltaMessages = canIncrementalAppend
-          ? messages.filter(message => message.seq > (pruneFromSeq ?? existing.lastSeq))
+          ? messages.filter(message => message.seq >= pruneFromSeq)
           : messages;
 
         upserts.push({
           mode: canIncrementalAppend ? 'append' : 'replace',
-          pruneAfterSeq: canIncrementalAppend ? pruneFromSeq : null,
+          pruneFromSeq: canIncrementalAppend ? pruneFromSeq : null,
           sessionId,
           title,
           workDir,
@@ -391,12 +413,14 @@ export function runDailySessionIndex(root, now = Date.now(), { force = false } =
           candidates,
         });
       } catch (error) {
+        if (scanStopped()) break;
         // Missing/deleted or corrupt Sessions can't keep their stale cards.
         if (existingCards.has(sessionId)) removedSessionIds.push(sessionId);
         console.warn('[SessionDiscovery] skipping unreadable Session:', error.code || error.name);
       }
     }
 
+    const hitBudgetLimit = scanStopped() || upserts.length >= MAX_UPSERTS_PER_RUN;
     return applyDailyIndexUpdates(db, {
       upserts,
       removedSessionIds,
@@ -404,6 +428,10 @@ export function runDailySessionIndex(root, now = Date.now(), { force = false } =
       now,
       root,
       force,
+      // When a run stops early due to scan budget, persist already-verified
+      // incremental progress without advancing index_state so the next run
+      // can resume remaining Sessions instead of stalling for 24 hours.
+      markIndexed: !hitBudgetLimit,
     });
   } finally {
     db.close();
