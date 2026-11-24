@@ -7,7 +7,7 @@ import { buildSessionCatalog, resolveAgentAccessError, sendToAgent, sendToWebCli
 const CAPABILITY = 'session_discovery';
 const REQUEST_TTL_MS = 15_000;
 const pending = new Map();
-const OPS = new Set(['search', 'share_list', 'share_save', 'share_delete']);
+const OPS = new Set(['search', 'active_sessions', 'share_list', 'share_save', 'share_delete']);
 const isRecord = value => value !== null && typeof value === 'object' && !Array.isArray(value);
 const clean = value => typeof value === 'string' ? value.trim() : '';
 
@@ -22,11 +22,37 @@ function visibleNativeIds(client, agentId) {
     .map(row => row.routeRef.sessionId);
 }
 
+function validateWindowDays(value) {
+  if (value === undefined) return undefined;
+  return Number.isSafeInteger(value) && value >= 1 && value <= 365 ? value : null;
+}
+
+function validateLimit(value, max) {
+  if (value === undefined) return undefined;
+  return Number.isSafeInteger(value) && value >= 1 && value <= max ? value : null;
+}
+
 function validatePayload(op, payload) {
   if (!isRecord(payload)) return null;
   if (op === 'search') {
     const query = clean(payload.query);
-    return query && query.length <= 160 ? { query } : null;
+    const activeWindowDays = validateWindowDays(payload.activeWindowDays);
+    const limit = validateLimit(payload.limit, 25);
+    if (!query || query.length > 160 || activeWindowDays === null || limit === null) return null;
+    return {
+      query,
+      ...(activeWindowDays !== undefined ? { activeWindowDays } : {}),
+      ...(limit !== undefined ? { limit } : {}),
+    };
+  }
+  if (op === 'active_sessions') {
+    const activeWindowDays = validateWindowDays(payload.activeWindowDays);
+    const limit = validateLimit(payload.limit, 200);
+    if (activeWindowDays === null || limit === null) return null;
+    return {
+      ...(activeWindowDays !== undefined ? { activeWindowDays } : {}),
+      ...(limit !== undefined ? { limit } : {}),
+    };
   }
   if (op === 'share_list') return {};
   const id = clean(payload.id);
@@ -130,6 +156,15 @@ export async function handleAgentSessionDiscovery(agentId, agent, msg) {
         .filter(row => allowed.has(row?.sessionId) && validText(row.title, 240)
           && validText(row.snippet, 222) && validTime(row.activeAt)).slice(0, 25)
         .map(({ sessionId, title, snippet, activeAt }) => ({ sessionId, title, snippet, activeAt })) };
+      break;
+    case 'active_sessions':
+      result = { indexedAt: validTime(data.indexedAt) ? data.indexedAt : null, cards: (Array.isArray(data.cards) ? data.cards : [])
+        .filter(row => allowed.has(row?.sessionId) && validText(row.title, 240)
+          && validText(row.workDir, 512) && validText(row.preview, 222)
+          && validTime(row.activeAt) && validTime(row.messageCount)).slice(0, 200)
+        .map(({ sessionId, title, workDir, preview, activeAt, messageCount }) => ({
+          sessionId, title, workDir, preview, activeAt, messageCount,
+        })) };
       break;
     case 'share_list':
       result = { items: (Array.isArray(data.items) ? data.items : []).filter(row => validItem(row)

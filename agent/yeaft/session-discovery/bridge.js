@@ -1,5 +1,5 @@
 import { Worker } from 'node:worker_threads';
-import { changeShare, listShare, openDiscoveryStore, searchDiscovery } from './store.js';
+import { changeShare, listActiveSessionCards, listShare, openDiscoveryStore, searchDiscovery } from './store.js';
 
 const CHECK_INTERVAL_MS = 15 * 60 * 1000;
 let scheduler = null;
@@ -55,7 +55,14 @@ export async function handleSessionDiscovery(msg, root, send) {
     let data;
     try {
       switch (op) {
-        case 'search': data = searchDiscovery(db, root, allowedIds, payload.query); break;
+        case 'search': data = searchDiscovery(db, root, allowedIds, payload.query, Date.now(), {
+          activeWindowDays: payload.activeWindowDays,
+          limit: payload.limit,
+        }); break;
+        case 'active_sessions': data = listActiveSessionCards(db, root, allowedIds, Date.now(), {
+          activeWindowDays: payload.activeWindowDays,
+          limit: payload.limit,
+        }); break;
         case 'share_list': data = listShare(db, root, ownerId, allowedIds); break;
         case 'share_save':
         case 'share_delete': data = changeShare(db, root, ownerId, allowedIds, op, payload); break;
