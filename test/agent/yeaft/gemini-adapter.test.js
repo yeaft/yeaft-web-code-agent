@@ -116,7 +116,8 @@ describe('native Gemini adapter', () => {
       };
       const providers = [{ name: 'google', protocol: 'gemini', apiKey: 'fixture', models: [...Object.keys(families), 'gemini-4-unverified', { id: 'gemini-2.5-flash', maxBudgetTokens: 16384 }] },
         { name: 'restricted', protocol: 'gemini', apiKey: 'fixture', models: [{ id: 'gemini-4-hydrogen', effortOptions: ['medium', 'xhigh'] }] },
-        { name: 'strict', protocol: 'gemini', apiKey: 'fixture', models: [{ id: 'gemini-4-hydrogen', effortOptions: ['xhigh'] }] }];
+        { name: 'strict', protocol: 'gemini', apiKey: 'fixture', models: [{ id: 'gemini-4-hydrogen', effortOptions: ['xhigh'] }] },
+        { name: 'neon-restricted', protocol: 'gemini', apiKey: 'fixture', models: [{ id: 'gemini-4-neon', effortOptions: ['low', 'xhigh'] }] }];
       writeFileSync(join(dir, 'config.json'), JSON.stringify({ providers }));
       mkdirSync(join(dir, 'sessions', 'gemini'), { recursive: true });
       const config = loadConfig({ dir });
@@ -158,6 +159,13 @@ describe('native Gemini adapter', () => {
       for (const effort of ['xhigh', 'max']) {
         await router.call({ ...params, model: capped.modelRef, effort, effortSource: 'user' });
         expect(JSON.parse(global.fetch.mock.calls.at(-1)[1].body).generationConfig.thinkingConfig.thinkingBudget).toBe(16384);
+      }
+      const restrictedNeon = rows.find(row => row.modelRef === 'neon-restricted/gemini-4-neon');
+      expect(restrictedNeon).toMatchObject({ efforts: ['xhigh'], defaultEffort: 'xhigh', model: { defaultEffort: 'xhigh' } });
+      expect(getSessionEffortDisplay({}, '', restrictedNeon.model)).toBe('xhigh');
+      for (const [effort, effortSource] of [[restrictedNeon.model.defaultEffort, 'model-default'], ['low', 'user']]) {
+        await router.call({ ...params, model: restrictedNeon.modelRef, effort, effortSource });
+        expect(JSON.parse(global.fetch.mock.calls.at(-1)[1].body).generationConfig.thinkingConfig.thinkingLevel).toBe(effort.toUpperCase());
       }
       const narrowed = rows.find(row => row.modelRef === 'restricted/gemini-4-hydrogen');
       expect(narrowed.model).toMatchObject({ geminiThinkingMode: 'level', effortOptions: ['medium', 'xhigh'] });

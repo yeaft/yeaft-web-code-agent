@@ -416,7 +416,10 @@ export function resolveGeminiEffort(model, effort, options) {
 /** Publish the distinction between accepted saved tiers and distinct menu choices. */
 export function geminiEffortCatalog(model, capability) {
   if (capability.thinkingProtocol !== 'gemini') return {};
-  if (capability.maxBudgetTokens === null) return { geminiThinkingMode: 'level' };
+  if (capability.maxBudgetTokens === null) return {
+    geminiThinkingMode: 'level',
+    effortMenuOptions: capability.effortOptions.filter(effort => ['medium', 'high', 'xhigh'].includes(effort)),
+  };
   const seen = new Set();
   const effortMenuOptions = capability.effortOptions.filter(effort => {
     const budget = Math.min(capability.maxBudgetTokens, geminiThinkingBudgetForEffort(model, effort));
@@ -520,7 +523,9 @@ export function getThinkingCapability(model, context = {}) {
     const maxBudgetTokens = profile.levels ? null : Math.min(profile.maxBudget, context.maxBudgetTokens ?? profile.maxBudget);
     if (!effortOptions.length || maxBudgetTokens < (profile.minBudget ?? 0)) return disabled;
     const capability = { supportsThinking: true, thinkingProtocol: 'gemini', maxBudgetTokens, effortOptions };
-    const defaults = geminiEffortCatalog(model, capability).effortMenuOptions || effortOptions;
+    // Prefer a visible default without dropping compatibility with explicitly saved Low/Minimal.
+    const menuOptions = geminiEffortCatalog(model, capability).effortMenuOptions;
+    const defaults = menuOptions.length ? menuOptions : effortOptions;
     return { ...capability, defaultEffort: resolveGeminiEffort(model, context.defaultEffort, effortOptions)
       || (profile.defaultEffort && resolveGeminiEffort(model, profile.defaultEffort, defaults))
       || ['xhigh', 'medium', 'high'].find(value => defaults.includes(value)) || defaults[0] };
