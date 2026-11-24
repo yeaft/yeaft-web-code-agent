@@ -171,12 +171,11 @@ class MCPServerConnection extends EventEmitter {
         // 'error' event can report the same failure, even after retirement.
         const onError = (err) => this.#retire(child, err);
         child.on('error', onError);
-        for (const stream of [child.stdin, child.stdout, child.stderr]) {
-          stream.on('error', onError);
-        }
+        child.stdout.on('error', onError);
+        child.stderr.on('error', onError);
+        child.stdin.on('error', (err) => this.#onStdinFailure(child, err));
         child.stdin.once('close', () => {
-          if (this.#exitError || child.exitCode != null || child.signalCode != null) return;
-          this.#retire(child, new Error(`MCP server "${this.#name}" stdin closed`));
+          this.#onStdinFailure(child, new Error(`MCP server "${this.#name}" stdin closed`));
         });
         const exitError = (code, signal) => {
           const reason = signal ? `signal ${signal}` : `code ${code}`;
@@ -320,12 +319,19 @@ class MCPServerConnection extends EventEmitter {
         throw new Error(`MCP server "${this.#name}" stdin is not writable`);
       }
       stdin.write(message + '\n', (err) => {
-        if (err) this.#retire(child, err);
+        if (err) this.#onStdinFailure(child, err);
       });
     } catch (err) {
-      this.#retire(child, err);
+      this.#onStdinFailure(child, err);
       throw err;
     }
+  }
+
+  #onStdinFailure(child, err) {
+    // Node tears down stdin on exit; that may fail a pending write even
+    // though the corresponding reply is already buffered on stdout.
+    if (this.#exitError || child?.exitCode != null || child?.signalCode != null) return;
+    this.#retire(child, err);
   }
 
   /**

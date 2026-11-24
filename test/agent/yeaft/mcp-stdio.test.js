@@ -190,6 +190,8 @@ describe('MCP client stdio lifecycle', () => {
       const buffered = manager.callTool(toolName).catch(err => err);
 
       child.emit('exit', 1);
+      child.stdin.write.mock.calls.at(-1)[1](brokenPipe());
+      expect(() => child.stdin.emit('error', brokenPipe())).not.toThrow();
       child.stdin.emit('close'); // routine closure of the exited process's stdin
       expect(child.stdout.destroy).not.toHaveBeenCalled();
       expect(manager.listTools()).toEqual([]);
