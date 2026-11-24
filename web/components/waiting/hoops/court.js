@@ -31,9 +31,28 @@ export function drawFloor(ctx, camera, colors, width, staged) {
   ctx.lineTo(width, camera.y(edge[0] + edge[1] * right));
   ctx.stroke();
 
-  // The three-point line: a circle on the floor, seen nearly edge-on. Its top
-  // is at the left; both sides run off to the right, toward the basket.
+  // The three-point line: an open half-ellipse extending from the right
+  // baseline (x = 328) out to its left-hand apex, seen nearly edge-on.
   const [cx, cy, a, b, shear] = staged ? STAGED_ARC : ARC;
+  if (staged) {
+    if (right <= cx - a || left >= cx + 92) return;
+    const xEnd = Math.min(right, cx + 92);
+    const reach = Math.acos(Math.max(-1, Math.min(1, (cx - xEnd) / a)));
+    ctx.lineWidth = Math.max(0.8, 1.7 * camera.k);
+    ctx.strokeStyle = rgb(colors.arc);
+    for (const sign of [-1, 1]) {
+      ctx.beginPath();
+      const steps = 32;
+      for (let i = 0; i <= steps; i += 1) {
+        const angle = sign * (reach * i) / steps;
+        const x = cx - a * Math.cos(angle);
+        const y = cy + shear * (x - cx) + b * Math.sin(angle);
+        if (i === 0) ctx.moveTo(camera.x(x), camera.y(y)); else ctx.lineTo(camera.x(x), camera.y(y));
+      }
+      ctx.stroke();
+    }
+    return;
+  }
   if (right <= cx - a) return;
   const reach = Math.acos(Math.max(-1, Math.min(1, (cx - right) / a)));
   ctx.lineWidth = Math.max(0.8, (staged ? 1.7 : 18) * camera.k);

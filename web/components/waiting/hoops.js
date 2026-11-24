@@ -1,4 +1,4 @@
-// Basketball waiting stage: three authored possessions and the original replay.
+// Basketball waiting stage: four real motion-captured possessions rendered as crisp minimalist ink silhouettes.
 import { resolveHoopsCamera } from './hoops/camera.js';
 import { drawHoopsFrame } from './hoops/draw.js';
 import { HOOPS_POSTER_MS, HOOPS_STILLS, resolveHoopsPlay } from './hoops/play.js';
@@ -11,11 +11,9 @@ export const scene = {
   // With motion reduced, show the key moments without the moving camera.
   stills: HOOPS_STILLS,
   tokens: {
+    ink: '--hoops-ink', soft: '--hoops-soft', surface: '--hoops-surface',
     line: '--hoops-line', arc: '--hoops-arc', rig: '--hoops-rig', net: '--hoops-net', rim: '--hoops-rim',
     ball: '--hoops-ball', seam: '--hoops-seam', glint: '--hoops-glint', shade: '--hoops-shade', text: '--hoops-text',
-    skin: '--hoops-skin', hair: '--hoops-hair', jersey: '--hoops-jersey', trim: '--hoops-trim', number: '--hoops-number',
-    shoe: '--hoops-shoe', sole: '--hoops-sole',
-    rival: '--hoops-rival', rivalSkin: '--hoops-rival-skin', sock: '--hoops-sock',
   },
   paint(ctx, { elapsedMs, width, height, colors, core, backdrop }) {
     const play = resolveHoopsPlay(elapsedMs);

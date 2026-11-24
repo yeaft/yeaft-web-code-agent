@@ -21,30 +21,38 @@ const HAZE = 0.16;
 const kitsByColors = new WeakMap();
 /**
  * What each player looks like and wears, made once per set of stage colours.
- * The shooter is in his team's colours, with tights to the ankle; the three
- * defenders share theirs and differ in skin, hair, number and what is on
- * their arms, legs and feet.
+ * Jerseys stay clean and unnumbered so the focus is pure athletic motion rather
+ * than broadcast team branding.
  */
 function kitsOf(colors) {
   let kits = kitsByColors.get(colors);
   if (kits) return kits;
-  const common = { shade: colors.shade, font: colors.font, hair: colors.hair, sole: colors.sole };
-  const under = blend(colors.rival, colors.shade, 0.8);
-  const defender = (skin, extra) => createKit({
-    ...common, skin, jersey: colors.rival, sleeved: true, trim: colors.sock, number: colors.sock,
-    sock: colors.sock, shoe: blend(colors.rival, colors.sock, 0.45), ...extra,
+  const heroNear = colors.ink;
+  const heroFar = blend(colors.ink, colors.surface, 0.28);
+  const defNear = blend(colors.soft, colors.surface, 0.12);
+  const defFar = blend(colors.soft, colors.surface, 0.38);
+  const defBackNear = blend(colors.soft, colors.surface, 0.26);
+  const defBackFar = blend(colors.soft, colors.surface, 0.48);
+  const defenderKit = createKit({
+    near: defNear, far: defFar,
+    shortsNear: blend(defNear, colors.ink, 0.08),
+    shortsFar: defFar,
+  });
+  const helpKit = createKit({
+    near: defBackNear, far: defBackFar,
+    shortsNear: defBackNear,
+    shortsFar: defBackFar,
   });
   kits = {
     hero: createKit({
-      ...common, skin: colors.skin, jersey: colors.jersey, trim: colors.trim, number: colors.number, mark: '30',
-      tights: blend(colors.shoe, colors.shade, 0.25), shoe: colors.shoe, stripe: colors.trim, beard: 0.3,
+      near: heroNear, far: heroFar,
+      vest: blend(heroNear, colors.surface, 0.04),
+      shortsNear: heroNear,
+      shortsFar: heroFar,
     }),
-    // Close-cropped, with a sleeve on his left arm and tights to the ankle.
-    guard: defender(colors.rivalSkin, { mark: '3', under, tights: colors.sock, sleeve: colors.sock, sleeveSide: 'L', shaved: 0.25, beard: 0.4 }),
-    // A flat top and red shoes.
-    wing: defender(blend(colors.rivalSkin, colors.shade, 0.14), { mark: '6', under, cut: 'flat', shoe: blend(colors.rim, colors.shade, 0.2) }),
-    // The big man: long hair, a full beard and a sleeve over each knee.
-    big: defender(blend(colors.skin, colors.glint, 0.25), { mark: '10', cut: 'long', beard: 0.75, knee: colors.sock }),
+    guard: defenderKit,
+    wing: helpKit,
+    big: helpKit,
   };
   kitsByColors.set(colors, kits);
   return kits;
