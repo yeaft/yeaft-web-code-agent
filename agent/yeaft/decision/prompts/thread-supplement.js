@@ -52,7 +52,9 @@ export function buildThreadSupplementUserPrompt({ vp = {}, runningThreads = [], 
 }
 
 export function fallbackThreadSupplement({ runningThreads = [], newQuery = '' } = {}, reason = 'fallback') {
-  const live = (runningThreads || []).filter(t => t && t.threadId);
+  const live = (runningThreads || [])
+    .map(t => (t && typeof t.threadId === 'string' ? { ...t, threadId: boundedText(t.threadId, 160) } : null))
+    .filter(t => t && t.threadId);
   if (live.length === 1) {
     return {
       decision: 'related',
@@ -71,7 +73,9 @@ export function fallbackThreadSupplement({ runningThreads = [], newQuery = '' } 
 
 export function validateThreadSupplementOutput(parsed, { runningThreads = [], newQuery = '' } = {}) {
   if (!parsed) return null;
-  const known = new Set((runningThreads || []).map(t => t && t.threadId).filter(Boolean));
+  const known = new Set((runningThreads || [])
+    .map(t => boundedText(t?.threadId || '', 160))
+    .filter(Boolean));
   const decision = VALID_DECISIONS.has(parsed.decision) ? parsed.decision : null;
   if (!decision) return null;
 
@@ -81,7 +85,7 @@ export function validateThreadSupplementOutput(parsed, { runningThreads = [], ne
   const reason = boundedText(parsed.reason || '', 500);
 
   if (decision === 'related') {
-    const targetThreadId = typeof parsed.targetThreadId === 'string' ? parsed.targetThreadId.trim() : '';
+    const targetThreadId = boundedText(parsed.targetThreadId || '', 160);
     if (targetThreadId && known.has(targetThreadId)) {
       return { decision: 'related', targetThreadId, title, reason };
     }

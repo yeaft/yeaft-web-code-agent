@@ -69,12 +69,14 @@ export function validateRouteRunningSessionOutput(parsed, {
   const decision = VALID_DECISIONS.has(parsed.decision) ? parsed.decision : null;
   if (!decision) return null;
 
-  const allowed = new Set((runningSessions || []).map(s => s?.sessionId).filter(Boolean));
+  const allowed = new Set((runningSessions || [])
+    .map(s => boundedText(s?.sessionId || '', 160))
+    .filter(Boolean));
   const confidence = clampConfidence(parsed.confidence, decision === 'match' ? 0.8 : 0);
   const reason = boundedText(parsed.reason || '', 400);
 
   if (decision === 'match') {
-    const sessionId = typeof parsed.sessionId === 'string' ? parsed.sessionId.trim() : '';
+    const sessionId = boundedText(parsed.sessionId || '', 160);
     if (!sessionId || !allowed.has(sessionId)) {
       return { decision: 'none', sessionId: null, confidence: 0, reason: reason || 'invalid_session_id' };
     }

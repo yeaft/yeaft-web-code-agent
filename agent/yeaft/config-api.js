@@ -198,12 +198,12 @@ function normalizeManagedModelDefaults(config) {
     && !modelSelectionIsValid(config.fastModel, providers, authoritativeManagedNames)) {
     config.fastModel = validPrimary;
   }
+  // Unlike primaryModel/fastModel, null means Auto (follow fastModel -> primaryModel).
+  // Never pin decisionModel to a heavyweight primary model when a managed catalog
+  // removes its previous target; clear to null so Auto inheritance stays live.
   if (config.decisionModel
     && !modelSelectionIsValid(config.decisionModel, providers, authoritativeManagedNames)) {
-    const validFast = modelSelectionIsValid(config.fastModel, providers, authoritativeManagedNames)
-      ? config.fastModel
-      : null;
-    config.decisionModel = validFast || validPrimary;
+    config.decisionModel = null;
   }
 }
 

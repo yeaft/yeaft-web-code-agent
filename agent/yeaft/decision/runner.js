@@ -169,8 +169,6 @@ export async function runDecision({
         system: systemPrompt,
         messages: [{ role: 'user', content: userPrompt }],
         maxTokens: spec.maxTokens || 256,
-        effort: 'medium',
-        effortSource: 'scenario',
         signal: ctrl.signal,
       }),
       new Promise((_, reject) => {

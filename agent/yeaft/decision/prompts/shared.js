@@ -47,6 +47,43 @@ export function stripJsonFence(text) {
   return raw;
 }
 
+function extractBalancedJsonObjects(text) {
+  const candidates = [];
+  let depth = 0;
+  let start = -1;
+  let inString = false;
+  let escaped = false;
+
+  for (let i = 0; i < text.length; i += 1) {
+    const ch = text[i];
+    if (inString) {
+      if (escaped) {
+        escaped = false;
+      } else if (ch === '\\') {
+        escaped = true;
+      } else if (ch === '"') {
+        inString = false;
+      }
+      continue;
+    }
+    if (ch === '"') {
+      if (depth > 0) inString = true;
+      continue;
+    }
+    if (ch === '{') {
+      if (depth === 0) start = i;
+      depth += 1;
+    } else if (ch === '}' && depth > 0) {
+      depth -= 1;
+      if (depth === 0 && start >= 0) {
+        candidates.push(text.slice(start, i + 1));
+        start = -1;
+      }
+    }
+  }
+  return candidates;
+}
+
 export function parseDecisionJsonObject(text) {
   const cleaned = stripJsonFence(text);
   if (!cleaned) return null;
@@ -55,19 +92,17 @@ export function parseDecisionJsonObject(text) {
     if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) return parsed;
     return null;
   } catch {
-    // Some gateways or reasoning models prepend a brief line before the JSON
-    // object despite instructions. Extract the first balanced top-level `{...}`
-    // only if it parses cleanly as a plain object.
-    const start = cleaned.indexOf('{');
-    const end = cleaned.lastIndexOf('}');
-    if (start >= 0 && end > start) {
+    // Some gateways or reasoning models prepend/append brief prose around the
+    // JSON object despite instructions. Scan string-aware balanced top-level
+    // `{...}` blocks and return the first valid plain JSON object.
+    for (const slice of extractBalancedJsonObjects(cleaned)) {
       try {
-        const extracted = JSON.parse(cleaned.slice(start, end + 1));
+        const extracted = JSON.parse(slice);
         if (extracted && typeof extracted === 'object' && !Array.isArray(extracted)) {
           return extracted;
         }
       } catch {
-        return null;
+        // Keep scanning subsequent balanced `{...}` candidates (e.g. if leading prose had `{foo}`).
       }
     }
     return null;

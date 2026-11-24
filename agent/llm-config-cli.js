@@ -318,6 +318,11 @@ export async function useGitHubCopilot(config, options = {}) {
   next.primaryModel = `${provider.name}/${primaryModel}`;
   if (fastModel) next.fastModel = `${provider.name}/${fastModel}`;
   else delete next.fastModel;
+  const nextProviderModelIds = new Set(modelIdsFromProviderModels(providerModels));
+  if (pointsAtProvider(next.decisionModel, provider.name)
+    && !nextProviderModelIds.has(next.decisionModel.slice(provider.name.length + 1))) {
+    delete next.decisionModel;
+  }
 
   return { config: next, provider, discovery };
 }
@@ -409,6 +414,11 @@ async function useApiKeyProvider(config, options, env, { gemini = false } = {}) 
   next.providers = providers;
   next.primaryModel = `${provider.name}/${primaryModel}`;
   if (fastModel) next.fastModel = `${provider.name}/${fastModel}`;
+  const nextProviderModelIds = new Set(modelIdsFromProviderModels(provider.models));
+  if (pointsAtProvider(next.decisionModel, provider.name)
+    && !nextProviderModelIds.has(next.decisionModel.slice(provider.name.length + 1))) {
+    delete next.decisionModel;
+  }
   return { config: next, provider, discovery };
 }
 

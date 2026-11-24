@@ -614,6 +614,10 @@ async function runREPL(config, args) {
             if (session.config.fastModel && session.config.fastModel !== session.config.primaryModel) {
               console.log(`Fast model: ${session.config.fastModel}`);
             }
+            if (session.config.decisionModel && session.config.decisionModel !== session.config.fastModel
+              && session.config.decisionModel !== session.config.primaryModel) {
+              console.log(`Decision model: ${session.config.decisionModel}`);
+            }
           }
           break;
 
@@ -626,11 +630,17 @@ async function runREPL(config, args) {
               console.log(`  [${provider.name}] ${provider.baseUrl}`);
               if (Array.isArray(provider.models)) {
                 for (const m of provider.models) {
-                  const current = (`${provider.name}/${m}` === session.config.primaryModel) ? ' ← primary' :
-                    (`${provider.name}/${m}` === session.config.fastModel) ? ' ← fast' : '';
-                  const info = resolveModel(m);
+                  const mId = typeof m === 'string' ? m : m?.id;
+                  if (!mId) continue;
+                  const fullRef = `${provider.name}/${mId}`;
+                  const roles = [];
+                  if (fullRef === session.config.primaryModel) roles.push('primary');
+                  if (fullRef === session.config.fastModel) roles.push('fast');
+                  if (fullRef === session.config.decisionModel) roles.push('decision');
+                  const current = roles.length ? ` ← ${roles.join(', ')}` : '';
+                  const info = resolveModel(mId);
                   const displayName = info ? ` (${info.displayName})` : '';
-                  console.log(`    ${provider.name}/${m}${displayName}${current}`);
+                  console.log(`    ${fullRef}${displayName}${current}`);
                 }
               }
             }

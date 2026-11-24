@@ -6,6 +6,7 @@ import { loadConfig } from '../../../agent/yeaft/config.js';
 import { getLlmConfig, updateLlmConfig } from '../../../agent/yeaft/config-api.js';
 import { removeProvider, setLocalModels } from '../../../agent/llm-config-cli.js';
 import { classifyThread } from '../../../agent/yeaft/vp/thread-classifier.js';
+import { AdapterRouter } from '../../../agent/yeaft/llm/router.js';
 import { flushAgentPerfTrace } from '../../../agent/yeaft/perf-trace.js';
 import {
   PLAN_NEW_SESSION_PROMPT,
@@ -17,6 +18,7 @@ import {
   THREAD_SUPPLEMENT_PROMPT,
   THREAD_SUPPLEMENT_SCENARIO_ID,
   listDecisionScenarioIds,
+  parseDecisionJsonObject,
   resolveDecisionModel,
   runDecision,
 } from '../../../agent/yeaft/decision/index.js';
@@ -79,6 +81,23 @@ describe('Decision model configuration & scenario-tailored runner', () => {
     const cliRemoved = removeProvider(cliSet.config, { name: 'proxy' });
     expect(cliRemoved.cleared).toContain('decisionModel');
     expect(cliRemoved.config.decisionModel).toBeUndefined();
+
+    // Runtime overrides normalize global: prefix and derive decisionModelId consistently.
+    const overridden = loadConfig({ dir, decisionModel: 'global:proxy/gpt-4.1-mini' });
+    expect(overridden.decisionModel).toBe('gpt-4.1-mini');
+    expect(overridden.decisionModelId).toBe('gpt-4.1-mini');
+
+    // Managed Copilot catalog refresh clears a removed decisionModel to null (Auto) instead of pinning primary.
+    const copilotUpdated = updateLlmConfig({
+      providers: [
+        { name: 'openai', baseUrl: 'https://api.openai.com/v1', apiKey: 'sk-1', protocol: 'openai-responses', models: ['gpt-5'] },
+        { name: 'github-copilot', credentialProvider: 'github-copilot', managed: 'github-copilot', models: ['gpt-5.4-mini'] },
+      ],
+      primaryModel: 'openai/gpt-5',
+      decisionModel: 'github-copilot/retired-fast-model',
+    }, dir);
+    expect(copilotUpdated.decisionModel).toBeNull();
+    expect(copilotUpdated.primaryModel).toBe('openai/gpt-5');
   });
 
   it('keeps distinct system-owned prompts per scenario and enforces strict allowlists, confidence thresholds, and timeout fallback', async () => {
@@ -269,5 +288,67 @@ describe('Decision model configuration & scenario-tailored runner', () => {
     const traceLog = readFileSync(join(dir, 'perf-traces', `${day}.jsonl`), 'utf8');
     expect(traceLog).toContain('"phase":"decision:route-running-session"');
     expect(traceLog).toContain('"model":"proxy/decision-fast"');
+
+    // 5. String-aware balanced JSON extraction handles leading/trailing braces and braces inside strings.
+    expect(parseDecisionJsonObject('Checking {candidateSessions}: {"decision":"match","sessionId":"sess_1","reason":"matched {ok}"} (Note: {done})'))
+      .toEqual({ decision: 'match', sessionId: 'sess_1', reason: 'matched {ok}' });
+
+    // 6. Trimmed candidate IDs in allowlists match trimmed prompt IDs.
+    const trimmedMatch = await runDecision({
+      scenario: ROUTE_RUNNING_SESSION_SCENARIO_ID,
+      config: { decisionModel: 'proxy/decision-fast' },
+      adapter: {
+        async call() {
+          return { text: '{"decision":"match","sessionId":"sess_padded","confidence":0.95,"reason":"trimmed"}' };
+        },
+      },
+      input: {
+        newQuery: 'yes',
+        runningSessions: [{ sessionId: '  sess_padded  ', title: 'Padded ID' }],
+      },
+    });
+    expect(trimmedMatch.result).toMatchObject({ decision: 'match', sessionId: 'sess_padded' });
+
+    // 7. Wire check through real AdapterRouter + OpenAIResponsesAdapter with YEAFT_THINKING_V1=1:
+    // runDecision must NOT inject reasoning.effort on tight 220-256 token classification calls.
+    const prevThinkingFlag = process.env.YEAFT_THINKING_V1;
+    const prevFetch = globalThis.fetch;
+    const wireBodies = [];
+    process.env.YEAFT_THINKING_V1 = '1';
+    globalThis.fetch = async (_url, init) => {
+      wireBodies.push(JSON.parse(init.body));
+      return new Response(JSON.stringify({
+        id: 'resp_dec_1',
+        status: 'completed',
+        output_text: '{"decision":"none","sessionId":null,"confidence":0.1,"reason":"unrelated"}',
+        usage: { input_tokens: 90, output_tokens: 20 },
+      }), { status: 200, headers: { 'content-type': 'application/json' } });
+    };
+    try {
+      const router = new AdapterRouter({
+        providers: [{
+          name: 'openai',
+          baseUrl: 'https://api.openai.com/v1',
+          apiKey: 'sk-wire-test',
+          protocol: 'openai-responses',
+          models: ['gpt-5-mini'],
+        }],
+      });
+      const wireDecision = await runDecision({
+        scenario: ROUTE_RUNNING_SESSION_SCENARIO_ID,
+        adapter: router,
+        config: { decisionModel: 'openai/gpt-5-mini' },
+        input: { newQuery: 'hello', runningSessions: [{ sessionId: 's1', title: 'Task 1' }] },
+      });
+      expect(wireDecision.meta.usedFallback).toBe(false);
+      expect(wireDecision.result).toMatchObject({ decision: 'none', sessionId: null });
+      expect(wireBodies).toHaveLength(1);
+      expect(wireBodies[0].reasoning).toBeUndefined();
+      expect(wireBodies[0].max_output_tokens).toBe(220);
+    } finally {
+      globalThis.fetch = prevFetch;
+      if (prevThinkingFlag === undefined) delete process.env.YEAFT_THINKING_V1;
+      else process.env.YEAFT_THINKING_V1 = prevThinkingFlag;
+    }
   });
 });

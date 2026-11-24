@@ -400,8 +400,10 @@ function loadLegacyConfig(dir, overrides) {
     providers: null,
     primaryModel: null,
     fastModel: null,
-    decisionModel: null,
-    decisionModelId: null,
+    decisionModel: overrides.decisionModel ? (parseModelRef(overrides.decisionModel).providerName?.startsWith('global:')
+      ? parseModelRef(overrides.decisionModel).modelId
+      : overrides.decisionModel) : null,
+    decisionModelId: overrides.decisionModel ? parseModelRef(overrides.decisionModel).modelId : null,
   };
 
   // Auto-detect adapter
@@ -480,7 +482,7 @@ export function loadConfig(overrides = {}) {
   }
 
   // Resolve fast model
-  let fastModel = jsonConfig.fastModel || primaryModel || null;
+  let fastModel = overrides.fastModel || jsonConfig.fastModel || primaryModel || null;
   let fastModelId = null;
   if (fastModel) {
     const parsed = parseModelRef(fastModel);
@@ -489,7 +491,7 @@ export function loadConfig(overrides = {}) {
   }
 
   // Resolve decision model (fallback chain: decisionModel -> fastModel -> primaryModel)
-  let decisionModel = jsonConfig.decisionModel || fastModel || primaryModel || null;
+  let decisionModel = overrides.decisionModel || jsonConfig.decisionModel || fastModel || primaryModel || null;
   let decisionModelId = null;
   if (decisionModel) {
     const parsed = parseModelRef(decisionModel);
@@ -526,10 +528,10 @@ export function loadConfig(overrides = {}) {
     // Model
     model: overrides.model || model,
     primaryModel: overrides.primaryModel || primaryModel,
-    fastModel: overrides.fastModel || fastModel,
-    fastModelId: fastModelId,
-    decisionModel: overrides.decisionModel || decisionModel,
-    decisionModelId: decisionModelId,
+    fastModel,
+    fastModelId,
+    decisionModel,
+    decisionModelId,
     fallbackModel: jsonConfig.fallbackModel || null,
     llmRetry: normalizeLlmRetry(jsonConfig.llmRetry, overrides.llmRetry),
     modelInfo: modelInfo || null,
