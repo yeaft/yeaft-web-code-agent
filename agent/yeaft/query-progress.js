@@ -87,6 +87,9 @@ export class QueryProgress {
 
   requestStarted() { this.#state.modelRequests += 1; }
 
+  /** Tool calls executed so far in this query, without publishing a snapshot. */
+  get toolExecutions() { return this.#state.toolExecutions; }
+
   /** Query-local telemetry only: include synchronous side calls, not billing or loop budgets. */
   usageObserved(usage) {
     const reported = key => (!Array.isArray(usage.reportedTokenFields) || usage.reportedTokenFields.includes(key))
