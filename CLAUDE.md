@@ -89,7 +89,7 @@ Project 的权威归属在 Server SQLite 的 `yeaft_projects` / `yeaft_project_s
 | `server/handlers/`、`server/db/` | Web / Agent 请求处理、鉴权中继与 SQLite 存储。 |
 | `web/components/`、`web/stores/` | Vue 组件与 Pinia 状态。 |
 | `web/styles/`、`web/i18n/` | Design tokens、样式与 `en.js` / `zh-CN.js`。 |
-| `test/`、`e2e/`、`scripts/` | Vitest、Playwright、测试预算和构建 / 发布门禁。 |
+| `test/`、`e2e/`、`scripts/` | Vitest、Playwright、测试完整性检查和构建 / 发布门禁。 |
 | `docs/` | VitePress 用户文档。 |
 
 ## Yeaft 原生引擎
@@ -162,7 +162,8 @@ Work Center 是 Agent instance 级的持久目标执行系统，代码位于 `ag
 
 | 命令 | 用途 |
 | --- | --- |
-| `npm test` | 测试预算检查 + 核心 Vitest manifest。 |
+| `npm test` | 执行全量 Vitest，校验测试收集完整性并报告用例数。 |
+| `npm run test:count` | 只收集 Vitest 和 Playwright，校验清单并统计用例。 |
 | `npm run test:focus -- path/to/file.test.js` | 指定 focused tests，包括未进入核心 manifest 的文件。 |
 | `npm run test:e2e` | Playwright 浏览器验证。 |
 | `npm run check:server-agent-syntax` | Agent / Server 语法检查。 |
@@ -170,7 +171,7 @@ Work Center 是 Agent instance 级的持久目标执行系统，代码位于 `ag
 | `npm run build` | 生产前端 bundle。 |
 | `npm run docs:build` | VitePress 文档构建。 |
 
-`scripts/test-suite-manifest.mjs` 列出全部保留的 Vitest 和 Playwright 文件；`npm run test:budget` 收集两个完整目录的运行时逻辑用例，计入参数展开与 skip，不因默认清单或 project 重复执行改变计数。精简基线合计 197（Vitest 172 + Playwright 25），总预算 200；新功能按风险逐步补关键用例，优先替换冗余覆盖，不用跳过、过滤或合并无关场景绕过数量。`vitest.config.js` 运行全部保留的 Vitest 文件；聚焦开发使用 `vitest.focus.config.js`。裸 `npx vitest run` 不代替项目门禁。
+`scripts/test-suite-manifest.mjs` 列出全部保留的 Vitest 和 Playwright 文件。用例数只统计，不设上限；参数化和 skip 计入，浏览器 project 重复执行只计一次。按风险补关键回归，每月人工盘点，删除重复或过时用例，不用跳过、过滤或合并无关场景来降低数量。`vitest.config.js` 运行全部保留的 Vitest 文件；聚焦开发使用 `vitest.focus.config.js`。裸 `npx vitest run` 不代替项目门禁。
 
 验证按**行为影响和风险**选择，不按改动行数或文件类型套固定组合：
 

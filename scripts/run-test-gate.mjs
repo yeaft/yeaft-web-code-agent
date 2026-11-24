@@ -8,14 +8,13 @@ import {
   collectBrowserCases,
   countUnitCases,
   isMainModule,
-  reportCaseBudget,
-  TEST_CASE_LIMIT,
-} from './check-test-budget.mjs';
+  reportCaseCounts,
+} from './check-test-suite.mjs';
 
 /** Execute once; only this run's public Vitest collection can satisfy the gate. */
-export async function runUnitTestsWithBudget({
+export async function runUnitTests({
   rootDir = process.cwd(), configFile = 'vitest.config.js', expectedFiles = CORE_TEST_FILES,
-  browser, limit = TEST_CASE_LIMIT,
+  browser,
 } = {}) {
   // Match Vitest CLI's environment before config/module imports.
   process.env.TEST = 'true';
@@ -40,7 +39,7 @@ export async function runUnitTestsWithBudget({
     const result = await context.start();
     const unit = countUnitCases(result, { rootDir, expectedFiles, executed: true });
     if (reason !== 'passed') throw new Error(`Unit test run did not complete successfully: ${reason || 'no end event'}`);
-    return reportCaseBudget({ unit, browser }, limit);
+    return reportCaseCounts({ unit, browser });
   } catch (error) {
     // exit() can terminate the process on teardown timeout. Commit failure
     // before cleanup so an all-green assertion run cannot mask a gate error.
@@ -57,7 +56,7 @@ if (isMainModule(import.meta.url)) {
     if (process.argv.length > 2) throw new Error('npm test does not accept filters/options; use npm run test:focus -- <files/options>');
     assertReviewedTestFiles();
     const browser = collectBrowserCases();
-    await runUnitTestsWithBudget({ browser });
+    await runUnitTests({ browser });
   } catch (error) {
     console.error(error.message);
     process.exitCode = 1;

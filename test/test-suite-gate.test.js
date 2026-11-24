@@ -11,17 +11,16 @@ import { CORE_TEST_FILES, E2E_TEST_FILES, REVIEWED_TEST_FILES, isTestFile } from
 import {
   assertCollectedTestFiles,
   assertUnfilteredUnitRun,
-  checkCaseBudget,
   collectBrowserCases,
   collectUnitCases,
   countBrowserCases,
-  TEST_CASE_LIMIT,
+  reportCaseCounts,
   validateCoreTestFiles,
-} from '../scripts/check-test-budget.mjs';
+} from '../scripts/check-test-suite.mjs';
 
 const nodeModules = dirname(dirname(createRequire(import.meta.url).resolve('vitest/package.json')));
 
-describe('test budget gate', () => {
+describe('test suite gate', () => {
   it('rejects missing or unreviewed unit and browser files', () => {
     const missingResult = validateCoreTestFiles({ files: [] });
     expect(missingResult.missing).toContain(CORE_TEST_FILES[0]);
@@ -52,7 +51,7 @@ describe('test budget gate', () => {
   it('collects real skip/todo/each cases without executing them and rejects collection errors', async () => {
     expect(isTestFile('e2e/tests/new.spec.js')).toBe(true);
     expect(isTestFile('test/helpers/support.js')).toBe(false);
-    const root = await mkdtemp(join(tmpdir(), 'yeaft-budget-fixture-'));
+    const root = await mkdtemp(join(tmpdir(), 'yeaft-suite-fixture-'));
     try {
       await symlink(nodeModules, join(root, 'node_modules'), process.platform === 'win32' ? 'junction' : 'dir');
       await writeFile(join(root, 'vitest.config.mjs'), 'export default { test: { include: ["probe.test.js"], pool: "forks", fileParallelism: false } };');
@@ -76,7 +75,7 @@ describe('test budget gate', () => {
         } }],
         test: { include: ['probe.test.js'], pool: 'forks', fileParallelism: false }
       };`);
-      const cli = join(process.cwd(), 'scripts/check-test-budget.mjs');
+      const cli = join(process.cwd(), 'scripts/check-test-suite.mjs');
       const output = join(root, 'count.json');
       const run = promisify(execFile);
       await writeFile(join(root, 'probe.test.js'), `import { it } from 'vitest';
@@ -109,26 +108,24 @@ describe('test budget gate', () => {
       describe.skip('skipped suite', () => { it('child', body); });
       describe.skip.each([1, 2])('nested %s', () => { it.each([1, 2])('child %s', body); });
       it('dynamic skip', ctx => { body(); ctx.skip(); });
+      it.each(Array.from({ length: 210 }, (_, index) => index))('extra case %s', body);
     `;
     try {
       await symlink(nodeModules, join(root, 'node_modules'), process.platform === 'win32' ? 'junction' : 'dir');
-      await writeFile(join(root, 'run.mjs'), `import { runUnitTestsWithBudget } from ${JSON.stringify(runner)};
-        try { await runUnitTestsWithBudget({ rootDir: process.cwd(), configFile: 'vitest.config.mjs', expectedFiles: ['probe.test.js'], browser: 2, limit: 17 }); }
+      await writeFile(join(root, 'run.mjs'), `import { runUnitTests } from ${JSON.stringify(runner)};
+        try { await runUnitTests({ rootDir: process.cwd(), configFile: 'vitest.config.mjs', expectedFiles: ['probe.test.js'], browser: 2 }); }
         catch (error) { console.error(error.message); process.exitCode = 1; }
       `);
       await writeFile(join(root, 'vitest.config.mjs'), config.replace(' CONFIG', ''));
       await writeFile(join(root, 'probe.test.js'), source);
       const success = await run(process.execPath, ['run.mjs'], { cwd: root, timeout: 15000 });
-      expect(success.stdout).toContain('15 cases');
-      expect(success.stdout).toContain('17/17 cases');
+      expect(success.stdout).toContain('225 Vitest cases + 2 browser cases = 227 cases');
       expect(await readFile(join(root, 'imports'), 'utf8')).toBe('x');
-      expect(await readFile(join(root, 'bodies'), 'utf8')).toBe('xxxx');
+      expect(await readFile(join(root, 'bodies'), 'utf8')).toBe('x'.repeat(214));
       const rejectRun = (message) => expect(run(process.execPath, ['run.mjs'], { cwd: root, timeout: 15000 }))
         .rejects.toMatchObject({ code: 1, stderr: expect.stringContaining(message) });
-      // Growth, ordinary failures, suite collection errors and unhandled errors
-      // all fail using fresh execution, never a previously published count.
-      await writeFile(join(root, 'probe.test.js'), `${source}\nit('new case', () => {});`);
-      await rejectRun('Test budget exceeded');
+      // Assertion, collection and unhandled errors still fail using fresh
+      // execution, even after a larger suite passed.
       await writeFile(join(root, 'probe.test.js'), "import { it } from 'vitest'; it('failure', () => { throw new Error('fixture assertion failure'); });");
       await rejectRun('fixture assertion failure');
       await writeFile(join(root, 'probe.test.js'), "throw new Error('fixture import failure');");
@@ -153,33 +150,29 @@ describe('test budget gate', () => {
       await rejectRun('incomplete or filtered');
       await expect(run(process.execPath, [join(process.cwd(), 'scripts/run-test-gate.mjs'), '--exclude=anything'], { cwd: root, timeout: 15000 }))
         .rejects.toMatchObject({ code: 1, stderr: expect.stringContaining('does not accept filters/options') });
-      // Vitest exit() force-exits after a stuck teardown. The budget error
-      // must already own the exit code before cleanup can terminate the process.
-      await writeFile(join(root, 'probe.test.js'), "import { it } from 'vitest'; for (let i=0;i<18;i++) it('pass '+i,()=>{});");
+      // Vitest exit() may force-exit during a stuck teardown. A failed test
+      // must not be reported as success even when that happens.
+      await writeFile(join(root, 'probe.test.js'), "import { it } from 'vitest'; it('failure', () => { throw new Error('fixture teardown assertion failure'); });");
       await writeFile(join(root, 'global.mjs'), `export default function () {
         return () => { setInterval(() => {}, 1000); return new Promise(() => {}); };
       }`);
       await writeFile(join(root, 'vitest.config.mjs'), config.replace(' CONFIG', ', teardownTimeout: 100, globalSetup: ["./global.mjs"]'));
       const timedOut = await run(process.execPath, ['run.mjs'], { cwd: root, timeout: 15000 }).catch(error => error);
       expect(timedOut.code).toBe(1);
-      expect(timedOut.stdout).toContain('20/17 cases');
+      expect(timedOut.stderr).toContain('fixture teardown assertion failure');
       expect(timedOut.stderr).toContain('close timed out');
     } finally { await rm(root, { recursive: true, force: true }); }
   }, 30000);
 
-  it('enforces the combined case budget and rejects invalid counts', () => {
-    const browser = 25;
-    const unit = TEST_CASE_LIMIT - browser;
-    expect(checkCaseBudget({ unit, browser })).toMatchObject({ total: TEST_CASE_LIMIT, exceeded: false });
-    expect(checkCaseBudget({ unit: unit + 1, browser })).toMatchObject({ total: TEST_CASE_LIMIT + 1, exceeded: true });
-    expect(() => checkCaseBudget({ unit: NaN, browser: 0 })).toThrow('Invalid collected test count');
-    expect(() => checkCaseBudget({ unit: -1, browser: 0 })).toThrow('Invalid collected test count');
+  it('rejects invalid counts instead of reporting them', () => {
+    expect(() => reportCaseCounts({ unit: NaN, browser: 0 })).toThrow('Invalid collected test count');
+    expect(() => reportCaseCounts({ unit: 0, browser: -1 })).toThrow('Invalid collected test count');
   });
 
   it('counts all browser specs, including skipped/parameterized instances, but not project replicas', async () => {
     expect(countBrowserCases({ suites: [{ specs: [{ tests: [{ projectName: 'chromium' }, { projectName: 'smoke', expectedStatus: 'skipped' }] }], suites: [{ specs: [{}, {}] }] }] })).toBe(3);
     expect(() => countBrowserCases({ errors: [{ message: 'broken collection' }] })).toThrow('broken collection');
-    const root = await mkdtemp(join(tmpdir(), 'yeaft-browser-budget-fixture-'));
+    const root = await mkdtemp(join(tmpdir(), 'yeaft-browser-suite-fixture-'));
     try {
       await symlink(nodeModules, join(root, 'node_modules'), process.platform === 'win32' ? 'junction' : 'dir');
       const config = `export default { testDir: '.', grep: /no match/, grepInvert: /normal/, projects: [{ name: 'one' }, { name: 'two' }] CONFIG };`;
