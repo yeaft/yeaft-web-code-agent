@@ -139,7 +139,8 @@ function failedProviderStopMessage({ stopReason, stopDetails, providerReason = n
   const filter = isContentFilterStopDetails(stopDetails) ? stopDetails : null;
   const withheldCount = filter ? filter.withheldToolCalls : withheldToolCalls;
   const names = filter?.withheldTools?.length ? ` (${filter.withheldTools.join(', ')})` : '';
-  const retried = retries > 0 ? ` The request was retried ${plural(retries, 'time', 'times')} without a usable response.` : '';
+  // Retries in one streak may fail for different reasons; count, don't attribute.
+  const retried = retries > 0 ? ` The request was retried ${plural(retries, 'time', 'times')} without success.` : '';
   const withheld = withheldCount > 0
     ? ` ${plural(withheldCount, 'tool call', 'tool calls')} in this response${names} ${withheldCount === 1 ? 'was' : 'were'} not run.`
     : '';
@@ -3961,7 +3962,7 @@ export class Engine {
         const contextNeedsRollover = err instanceof ProviderContextBudgetError || err instanceof LLMContextError;
         const rollSignedToolImages = err instanceof ToolImagePrefixBudgetError && signedAnthropicPrefix;
         if ((rollSignedImage || rollSignedBody || (contextNeedsRollover && (signedAnthropicPrefix || rolloverSeed))) && toolCalls.length === 0
-            && successfulRequestsSinceRollover > 0 && !pendingServerOperation) {
+            && successfulRequestsSinceRollover > 0 && !pendingServerOperation && err?.workItemFailureKind == null) {
           endAttemptTrace('context_rollover');
           if (responseText) prepareRetryContinuation();
           rolloverCount += 1;
@@ -4200,8 +4201,11 @@ export class Engine {
         // A completed tool_call has already crossed the streaming boundary to
         // the caller. Replaying that request would publish a duplicate call and
         // leave ambiguous execution ownership, so only pre-tool failures are
-        // eligible for transparent retry or model fallback.
-        const canReplayProviderRequest = toolCalls.length === 0 && !executionPolicy?.finalize && !progressReporting;
+        // eligible for transparent retry or model fallback. Work Center owns the
+        // retry decision for a dispatched EngineTurn: once it refused a replay
+        // (failProviderRequest set workItemFailureKind), report the real cause.
+        const canReplayProviderRequest = toolCalls.length === 0 && !executionPolicy?.finalize && !progressReporting
+          && err?.workItemFailureKind == null;
         if (earlyIsContextOverflow && canReplayProviderRequest && !signedAnthropicPrefix
           && contextOverflowRecoveryAttempts < 3) {
           contextOverflowRecoveryAttempts += 1;
@@ -4433,7 +4437,9 @@ export class Engine {
         const errorEvent = {
           type: 'error',
           error: err,
-          retryable: retryEligible,
+          // Retryable only when replay was actually allowed: a parent model must
+          // not be invited to retry a published call or a Work Center refusal.
+          retryable: retryEligible && canReplayProviderRequest,
           // Failed stops keep their reason as the error code (refusal, unknown).
           ...(err instanceof LLMFailedResponseError ? { code: err.code } : {}),
         };

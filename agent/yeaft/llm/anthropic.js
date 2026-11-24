@@ -110,12 +110,17 @@ function contentMetadata(items = []) {
 
 const PROVIDER_RUN_TOOL_BLOCKS = new Set(['server_tool_use', 'mcp_tool_use']);
 
+/** Anthropic itself started server or MCP tools in this response. */
+function providerRanTools(blocks) {
+  return blocks.some(block => PROVIDER_RUN_TOOL_BLOCKS.has(block?.type));
+}
+
 /**
  * Flag a failed response in which Anthropic itself ran server or MCP tools: the
  * Engine retries failed responses, and replaying this one could repeat effects.
  */
 function unusable(event, blocks) {
-  return blocks.some(block => PROVIDER_RUN_TOOL_BLOCKS.has(block?.type)) ? { ...event, replayUnsafe: true } : event;
+  return providerRanTools(blocks) ? { ...event, replayUnsafe: true } : event;
 }
 
 function stopEvent(message) {
@@ -810,7 +815,15 @@ export class AnthropicAdapter extends LLMAdapter {
       if (err instanceof LLMToolInputError) yield unusable({ type: 'error', error: err, retryable: false }, seenBlocks());
       else if (!signal?.aborted && (toolInputError || (malformedStream && hasToolBlocks()))) {
         yield unusable({ type: 'error', error: toolInputError || new LLMToolInputError('Anthropic returned a malformed tool stream'), retryable: false }, seenBlocks());
-      } else throw classifyFetchError(err, { providerLabel: 'Anthropic', signal });
+      } else {
+        const classified = classifyFetchError(err, { providerLabel: 'Anthropic', signal });
+        // A cut stream, idle timeout or invalid server-tool input after the
+        // provider started its own tools must not be replayed either.
+        if (!signal?.aborted && classified && typeof classified === 'object' && providerRanTools(seenBlocks())) {
+          classified.replayUnsafe = true;
+        }
+        throw classified;
+      }
     } finally {
       // Close malformed/aborted streams and transports that stay open after
       // message_stop. Cancellation must not delay the caller or mask its error.

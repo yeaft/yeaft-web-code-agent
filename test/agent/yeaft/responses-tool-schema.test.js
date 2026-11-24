@@ -215,5 +215,19 @@ describe('Responses strict tool boundary', () => {
     }
     vi.stubGlobal('fetch', vi.fn(async () => json(filtered([good]))));
     expect(await responses().call(options)).toMatchObject({ stopReason: 'refusal', providerState: null });
+
+    // After any 2xx the hosted tool may already have run, so even a thrown cut stream or failed JSON
+    // response is unsafe to replay. An HTTP rejection happens before generation and stays retryable.
+    const thrown = async reply => {
+      vi.stubGlobal('fetch', vi.fn(async () => reply()));
+      try { await collect(responses().stream(options)); } catch (error) { return error; }
+      throw new Error('expected the stream to throw');
+    };
+    for (const reply of [() => sse([{ type: 'response.output_text.delta', delta: 'cut' }]), () => json({ status: 'failed', output: [] })]) {
+      expect(await thrown(reply)).toMatchObject({ name: 'LLMServerError', replayUnsafe: true });
+    }
+    const rejected = await thrown(() => new Response('{"error":{"message":"busy"}}', { status: 503 }));
+    expect(rejected.name).toBe('LLMServerError');
+    expect(rejected.replayUnsafe).toBeUndefined();
   });
 });

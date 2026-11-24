@@ -386,7 +386,21 @@ export class OpenAIResponsesAdapter extends LLMAdapter {
    * `api-key` headers are auto-redacted (see `redactRawRequest` in
    * `adapter.js`); request-body fields are caller-controlled.
    */
-  async *stream({ model, system, messages, tools, maxTokens = 16384, effort, effortSource, effortContext = {}, extraBody, providerContext, requestIdentity, onProviderDiagnostics, effortConstraint = null, onEffortDecision = null, signal, onRawExchange, rawExchangeMaxBytes = 512 * 1024, onRequestStart, streamIdleTimeoutMs, maxRequestBodyBytes }) {
+  async *stream(params) {
+    // Once an HTTP 2xx response exists, provider-hosted tools may already have
+    // run. Any failure after that point (failed JSON, cut or malformed stream,
+    // idle timeout) is flagged so the Engine never replays it. HTTP rejections
+    // happen before generation and keep their ordinary retry.
+    const exposure = { replayUnsafe: false };
+    try {
+      yield* this.#streamResponse(params, exposure);
+    } catch (error) {
+      if (exposure.replayUnsafe && error && typeof error === 'object' && !(error instanceof LLMAbortError)) error.replayUnsafe = true;
+      throw error;
+    }
+  }
+
+  async *#streamResponse({ model, system, messages, tools, maxTokens = 16384, effort, effortSource, effortContext = {}, extraBody, providerContext, requestIdentity, onProviderDiagnostics, effortConstraint = null, onEffortDecision = null, signal, onRawExchange, rawExchangeMaxBytes = 512 * 1024, onRequestStart, streamIdleTimeoutMs, maxRequestBodyBytes }, exposure) {
     if (signal?.aborted) throw new LLMAbortError();
 
     const context = providerContext || createProviderContext({ protocol: 'openai-responses', baseUrl: this.#baseUrl, staticApiKey: this.#apiKey, model });
@@ -456,6 +470,7 @@ export class OpenAIResponsesAdapter extends LLMAdapter {
       }
       throw this.#classifyError(response.status, errorBody, response);
     }
+    exposure.replayUnsafe = replayUnsafe;
 
     if (response.headers?.get('content-type')?.includes('application/json')) {
       const result = await response.json();

@@ -247,27 +247,39 @@ describe('Responses retries failed streams without replaying tools', () => {
     expect(await collect(adapter().stream({ model: 'test-model', messages: [], extraBody: { tools: [{ type: 'web_search' }] } })))
       .toEqual([{ type: 'error', retryable: false, replayUnsafe: true, error: expect.objectContaining({ code: 'server_error' }) }]);
 
-    for (const [name, failAfterPublish, retryable] of [
-      // The error class stays retryable; the published call is what forbids replay.
+    // Work Center owns the retry decision for a dispatched EngineTurn (runner.failProviderRequest).
+    const refusingWorkCenter = { prepareProviderRequest: () => ({ id: 'turn-1' }), startProviderRequest: () => {},
+      finishProviderRequest: () => {}, failProviderRequest: (_turn, error) => {
+        error.retryable = false;
+        error.workItemFailureKind = 'provider_dispatch_unknown';
+      } };
+    for (const [name, failAfterPublish, query = {}, error = expect.anything()] of [
       ['published call', async function* () {
         yield { type: 'tool_call', id: 'published', name: 'Tool', input: {} };
         throw new LLMServerError('stream ended after tool publication', 0);
-      }, true],
+      }],
       // `replayUnsafe` outranks even an adapter's own retryable verdict.
       ['provider-run tools', async function* () {
         yield { type: 'error', error: new LLMServerError('overloaded', 529), retryable: true, replayUnsafe: true };
-      }, false],
+      }],
+      // The provider's own reason is reported, not a later lease failure.
+      ['work center refused replay', async function* () {
+        yield { type: 'provider_metadata', metadata: { protocol: 'gemini', stopReason: 'OTHER' } };
+        yield { type: 'stop', stopReason: 'unknown' };
+      }, refusingWorkCenter, expect.objectContaining({ name: 'LLMFailedResponseError',
+        workItemFailureKind: 'provider_dispatch_unknown', message: expect.stringContaining('without usable output (OTHER)') })],
     ]) {
       let requests = 0;
       const { engine, execute } = createEngine({ adapter: { async *stream() {
         requests += 1;
         yield* failAfterPublish();
       } } });
-      const seen = await collect(engine.query({ prompt: 'Use Tool' }));
+      const seen = await collect(engine.query({ prompt: 'Use Tool', ...query }));
       expect(requests, name).toBe(1);
       expect(execute).not.toHaveBeenCalled();
       expect(seen.filter(e => e.type === 'llm_retry')).toEqual([]);
-      expect(seen.filter(e => e.type === 'error')).toEqual([expect.objectContaining({ retryable })]);
+      // Nothing invites the caller (or a parent model) to retry what cannot be replayed.
+      expect(seen.filter(e => e.type === 'error')).toEqual([expect.objectContaining({ retryable: false, error })]);
       expect(seen.filter(e => e.type === 'turn_end' && e.terminal)).toEqual([
         expect.objectContaining({ stopReason: 'error' }),
       ]);

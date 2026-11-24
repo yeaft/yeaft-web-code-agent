@@ -303,9 +303,9 @@ describe('Engine', () => {
           replies: [gemini('STOP'), other(), gemini('STOP', [{ text: 'merged' }])] },
         // Exhausted retries report the provider's own reason and how often it was retried.
         { model: 'gemini-2.5-flash', ran: ['STOP'], retried: ['OTHER'], adapter: geminiAdapter(), replies: [gemini('STOP'), other(), other()], code: 'unknown',
-          error: `The provider ended the response without usable output (OTHER); completion was not confirmed. The request was retried 1 time without a usable response. ${earlier} Send a follow-up to continue.` },
+          error: `The provider ended the response without usable output (OTHER); completion was not confirmed. The request was retried 1 time without success. ${earlier} Send a follow-up to continue.` },
         { model: 'test-model', ran: ['mock'], retried: ['refusal'], replies: [], adapter: spoofed, code: 'refusal',
-          error: `The model refused this request. The request was retried 1 time without a usable response. ${earlier} Revise the request before retrying.` },
+          error: `The model refused this request. The request was retried 1 time without success. ${earlier} Revise the request before retrying.` },
       ];
       for (const { model, ran, replies, filter, retried = [], code, error, adapter } of cases) {
         const expectedFetches = replies.length;
@@ -1143,7 +1143,7 @@ RELEASE_BODY`;
   });
 
   describe('LLM retry policy', () => {
-    it('never executes or persists rejected Anthropic tool batches, retries them with a fresh request, and executes a complete batch in order', async () => {
+    it('never executes or persists rejected Anthropic tool batches, retries them unless server tools ran, and executes a complete batch in order', async () => {
       const { AnthropicAdapter } = await import('../../../agent/yeaft/llm/anthropic.js');
       const yeaftDir = mkdtempSync(join(tmpdir(), 'yeaft-anthropic-tool-boundary-'));
       const originalFetch = global.fetch;
@@ -1159,6 +1159,8 @@ RELEASE_BODY`;
       const firstTool = [start(0), delta(0, '{"value":1}'), blockStop(0)];
       const complete = [...firstTool, start(1), delta(1, '{"value":2}'), blockStop(1), stop('tool_use'), messageStop];
       const partial = [...firstTool, start(1), delta(1, '{"value":')];
+      // Anthropic runs server/MCP tools itself; a failed response that started one is never replayed.
+      const serverTool = { type: 'content_block_start', index: 0, content_block: { type: 'server_tool_use', id: 'srv-0', name: 'web_search', input: {} } };
       // Mix both legal SSE field forms, including no-space input/stop deltas.
       const encode = events => new TextEncoder().encode(events.map(e => `data:${e.type === 'content_block_delta' || e.type === 'message_delta' ? '' : ' '}${typeof e === 'string' ? e : JSON.stringify(e)}\n\n`).join(''));
       const sse = events => new Response(encode(events));
@@ -1173,6 +1175,8 @@ RELEASE_BODY`;
           ['abort', partial],
           ['complete', complete],
           ['retry', [...partial, blockStop(1), stop('tool_use'), messageStop]],
+          ['server-refusal', [serverTool, blockStop(0), stop('refusal'), messageStop]],
+          ['server-cut', [serverTool]],
         ]) {
           execute.mockClear();
           const sessionId = `session-stream-${name}`;
@@ -1194,7 +1198,7 @@ RELEASE_BODY`;
           const engine = new Engine({ adapter: new AnthropicAdapter({ apiKey: 'synthetic', baseUrl: 'https://proxy.invalid', streamIdleTimeoutMs: 10 }), trace,
             toolRegistry: registry, conversationStore, yeaftDir,
             config: { model: 'claude-opus-4.8', modelEffort: 'high', projectDocMaxBytes: 0, maxOutputTokens: 1024,
-              llmRetry: { maxRetries: name === 'retry' ? 1 : 0, baseDelayMs: 0, maxDelayMs: 0, jitterRatio: 0 } } });
+              llmRetry: { maxRetries: ['retry', 'server-refusal', 'server-cut'].includes(name) ? 1 : 0, baseDelayMs: 0, maxDelayMs: 0, jitterRatio: 0 } } });
           const output = [];
           for await (const event of engine.query({ prompt: 'echo values', sessionId, signal: ctrl.signal, onProviderRequestStart: policy => policies.push(policy) })) {
             output.push(event);
@@ -1224,6 +1228,8 @@ RELEASE_BODY`;
             expect(persisted.filter(row => row.role === 'tool')).toEqual([]);
             expect(output.some(e => e.type === (name === 'abort' ? 'aborted' : 'error'))).toBe(true);
             expect(output.filter(e => e.type === 'llm_retry')).toHaveLength(0);
+            // A retry budget exists, but replay could rerun the provider's own tools.
+            if (name.startsWith('server-')) expect(output.find(e => e.type === 'error')).toMatchObject({ retryable: false });
           }
           // Tool-loop boundaries are nonterminal; query owns exactly one terminal boundary.
           expect(output.filter(e => e.type === 'turn_end' && e.terminal)).toEqual([
