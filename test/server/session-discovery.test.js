@@ -378,6 +378,44 @@ it('serves full incremental FTS results, 5-day active cards and durable Share en
     } finally {
       rmSync(edgeRoot, { force: true, recursive: true });
     }
+
+    // Verify workspace_folders relay and Server-enforced yeaft_auto_route_send capability/auth gates.
+    const foldersReply = await send(alice, 'workspace_folders', { refresh: true });
+    expect(Array.isArray(foldersReply.folders)).toBe(true);
+    expect(typeof foldersReply.scannedAt).toBe('number');
+
+    // Old Agent without `session_auto_route` capability is rejected cleanly without mutating `yeaft_session_send`
+    await handleClientConversation('client-alice', alice, {
+      type: 'yeaft_auto_route_send',
+      agentId,
+      id: 'auto_msg_unsupported',
+      text: 'hello auto route',
+    }, async () => true);
+    expect(alice.ws.getLastMessage()).toMatchObject({
+      type: 'error',
+      code: 'session_auto_route_unsupported',
+      clientMessageId: 'auto_msg_unsupported',
+    });
+
+    // Capable Agent receives Server-stamped `_allowedSessionIds` (never browser-forged IDs)
+    agent.capabilities.push('session_auto_route');
+    await handleClientConversation('client-alice', alice, {
+      type: 'yeaft_auto_route_send',
+      agentId,
+      id: 'auto_msg_ok',
+      text: 'continue visible session',
+      _allowedSessionIds: ['other-owner'], // forged by malicious client
+      _shareOwnerId: 'bob',
+    }, async () => true);
+    const forwardedAuto = agent.ws.getLastMessage();
+    expect(forwardedAuto).toMatchObject({
+      type: 'yeaft_auto_route_send',
+      id: 'auto_msg_ok',
+      _shareOwnerId: 'alice',
+    });
+    expect(forwardedAuto._allowedSessionIds).toContain('visible');
+    expect(forwardedAuto._allowedSessionIds).not.toContain('other-owner');
+    expect(forwardedAuto._allowedSessionIds).not.toContain('hidden');
   } finally {
     clearSessionDiscoveryRequests(alice);
     clearSessionDiscoveryRequests(bob);

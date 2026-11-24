@@ -808,6 +808,44 @@ export async function handleAgentOutput(agentId, agent, msg) {
       break;
     }
 
+    case 'yeaft_session_routed': {
+      const ownerId = agent?.ownerId || null;
+      if (msg.ok && ownerId && msg.decision === 'created' && msg.session?.id) {
+        try {
+          const existing = yeaftSessionDb.getForAgent(ownerId, agentId, msg.session.id);
+          yeaftSessionDb.upsertFromSnapshot(ownerId, agentId, { ...existing, ...msg.session });
+          agent.yeaftSessions ??= new Map();
+          agent.yeaftSessions.set(msg.session.id, { ...existing, ...msg.session });
+          await broadcastSessionCatalog(ownerId);
+        } catch (err) {
+          console.warn(`[Server] Failed to persist auto-routed Session ${msg.session.id}:`, err?.message || err);
+        }
+      }
+      const targetClient = msg._requestClientId ? webClients.get(msg._requestClientId) : null;
+      const targets = targetClient ? [[msg._requestClientId, targetClient]] : webClients;
+      for (const [, c] of targets) {
+        if (!c?.authenticated || (!CONFIG.skipAuth && c.userId !== ownerId)) continue;
+        await sendToWebClient(c, {
+          type: 'yeaft_session_routed',
+          ok: msg.ok === true,
+          agentId,
+          requestId: msg.requestId ?? null,
+          clientMessageId: msg.clientMessageId ?? null,
+          sessionId: typeof msg.sessionId === 'string' ? msg.sessionId : null,
+          decision: msg.decision === 'created' ? 'created' : (msg.decision === 'matched' ? 'matched' : null),
+          tier: typeof msg.tier === 'string' ? msg.tier : null,
+          title: typeof msg.title === 'string' ? msg.title.slice(0, 240) : null,
+          sceneId: typeof msg.sceneId === 'string' ? msg.sceneId.slice(0, 64) : null,
+          workDir: typeof msg.workDir === 'string' ? msg.workDir.slice(0, 512) : '',
+          confidence: Number.isFinite(msg.confidence) ? msg.confidence : null,
+          reason: typeof msg.reason === 'string' ? msg.reason.slice(0, 400) : '',
+          decisionModel: typeof msg.decisionModel === 'string' ? msg.decisionModel.slice(0, 160) : null,
+          ...(msg.error ? { error: String(msg.error).slice(0, 400) } : {}),
+        });
+      }
+      break;
+    }
+
     case 'yeaft_history_outline': {
       const targetClient = msg._requestClientId ? webClients.get(msg._requestClientId) : null;
       if (targetClient?.authenticated && (CONFIG.skipAuth || targetClient.userId === agent.ownerId)) {

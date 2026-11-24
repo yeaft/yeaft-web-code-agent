@@ -499,6 +499,19 @@ function latestSessionText(db, sessionId) {
   return db.prepare('SELECT text FROM session_messages WHERE session_id = ? ORDER BY seq DESC LIMIT 1').get(sessionId)?.text || '';
 }
 
+export function getRecentSessionMessagesFromIndex(db, sessionId, limit = 4) {
+  if (!hasSessionIndexSchema(db)) return [];
+  const bounded = Math.max(1, Math.min(12, Math.floor(Number(limit) || 4)));
+  const rows = db.prepare(
+    'SELECT role, text, created_at FROM session_messages WHERE session_id = ? ORDER BY seq DESC LIMIT ?',
+  ).all(sessionId, bounded);
+  return rows.reverse().map(row => ({
+    role: row.role,
+    text: String(row.text || '').slice(0, 600),
+    createdAt: row.created_at,
+  }));
+}
+
 function resolveWindowCutoff(options, now) {
   if (!options) return null;
   if (Number.isFinite(options.activeWindowMs) && options.activeWindowMs > 0) return now - options.activeWindowMs;

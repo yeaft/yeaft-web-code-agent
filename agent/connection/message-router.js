@@ -30,7 +30,7 @@ import { getLlmConfig, updateLlmConfig, getYeaftSettings, updateYeaftSettings, g
 import { loadConfig } from '../yeaft/config.js';
 import { discoverLlmModels } from '../llm-model-discovery.js';
 import { fetchModelsDev } from '../yeaft/llm/models-dev.js';
-import { invalidateYeaftProjectContexts, startYeaftScheduledTasks, handleYeaftScheduledTask, handleYeaftSessionSend, handleYeaftAskUserAnswer, handleYeaftSubAgentPrompt, handleYeaftTaskCancel, handleYeaftModeSwitch, handleYeaftModelSwitch, resetYeaftSession, refreshLiveSessionConfig, handleYeaftLoadHistory, handleYeaftLoadHistoryOutline, handleYeaftSearchHistory, handleYeaftLoadHistoryWindow, handleYeaftLoadMoreHistory, handleYeaftAbortThread, handleYeaftAbortAll, handleYeaftAbortTurn, handleYeaftVpSubscribe, handleYeaftVpCreate, handleYeaftVpUpdate, handleYeaftVpDelete, handleYeaftVpRead, handleYeaftListSessions, handleYeaftProjectContextSync, handleYeaftProjectMutation, handleYeaftCreateSession, handleYeaftCopySession, handleYeaftDeleteTurn, handleYeaftMergeSessions, handleYeaftRenameSession, handleYeaftUpdateSession, handleYeaftUpdateSessionConfig, handleYeaftArchiveSession, handleYeaftDeleteSession, handleYeaftSessionAddMember, handleYeaftSessionRemoveMember, handleYeaftSessionSetDefaultVp, handleYeaftScanWorkdirSessions, handleYeaftRestoreSession, handleYeaftDreamTrigger, handleYeaftFetchToolStats, handleYeaftFetchDebugHistory, handleYeaftMcpList, handleYeaftMcpAdd, handleYeaftMcpRemove, handleYeaftMcpReload, handleYeaftPluginCatalog, handleYeaftManagedSkill, ensureSessionLoaded, broadcastLanguageChange, broadcastYeaftSessionSnapshotEager, broadcastYeaftVpSnapshotEager, preloadYeaftSkillSlashCommands } from '../yeaft/web-bridge.js';
+import { invalidateYeaftProjectContexts, startYeaftScheduledTasks, handleYeaftScheduledTask, handleYeaftSessionSend, handleYeaftAutoRouteSend, handleYeaftAskUserAnswer, handleYeaftSubAgentPrompt, handleYeaftTaskCancel, handleYeaftModeSwitch, handleYeaftModelSwitch, resetYeaftSession, refreshLiveSessionConfig, handleYeaftLoadHistory, handleYeaftLoadHistoryOutline, handleYeaftSearchHistory, handleYeaftLoadHistoryWindow, handleYeaftLoadMoreHistory, handleYeaftAbortThread, handleYeaftAbortAll, handleYeaftAbortTurn, handleYeaftVpSubscribe, handleYeaftVpCreate, handleYeaftVpUpdate, handleYeaftVpDelete, handleYeaftVpRead, handleYeaftListSessions, handleYeaftProjectContextSync, handleYeaftProjectMutation, handleYeaftCreateSession, handleYeaftCopySession, handleYeaftDeleteTurn, handleYeaftMergeSessions, handleYeaftRenameSession, handleYeaftUpdateSession, handleYeaftUpdateSessionConfig, handleYeaftArchiveSession, handleYeaftDeleteSession, handleYeaftSessionAddMember, handleYeaftSessionRemoveMember, handleYeaftSessionSetDefaultVp, handleYeaftScanWorkdirSessions, handleYeaftRestoreSession, handleYeaftDreamTrigger, handleYeaftFetchToolStats, handleYeaftFetchDebugHistory, handleYeaftMcpList, handleYeaftMcpAdd, handleYeaftMcpRemove, handleYeaftMcpReload, handleYeaftPluginCatalog, handleYeaftManagedSkill, ensureSessionLoaded, broadcastLanguageChange, broadcastYeaftSessionSnapshotEager, broadcastYeaftVpSnapshotEager, preloadYeaftSkillSlashCommands } from '../yeaft/web-bridge.js';
 import { startYeaftStatusRefresh, forceRefreshYeaftStatus } from '../yeaft/status-cache.js';
 import { handleSessionDiscovery, startSessionDiscovery } from '../yeaft/session-discovery/bridge.js';
 import { handleWorkCenterRequest } from '../yeaft/work-center/bridge.js';
@@ -213,7 +213,9 @@ export async function handleMessage(msg) {
       // The callee already wraps its FS scan + emit in try/catch and
       // logs via console.warn — no second guard needed here.
       broadcastYeaftSessionSnapshotEager();
-      if (ctx.serverCapabilities.has('session_discovery')) startSessionDiscovery(ctx.CONFIG.yeaftDir);
+      if (ctx.serverCapabilities.has('session_discovery')) {
+        startSessionDiscovery(ctx.CONFIG.yeaftDir, { agentWorkDir: ctx.CONFIG.workDir || '' });
+      }
       startYeaftScheduledTasks();
       // Stock VPs are bundled Agent data. Seed + publish them during register so
       // a first-install user can open the create dialog immediately instead of
@@ -865,6 +867,9 @@ export async function handleMessage(msg) {
     case 'yeaft_session_send':
       handleYeaftSessionSend(msg);
       break;
+    case 'yeaft_auto_route_send':
+      await handleYeaftAutoRouteSend(msg);
+      break;
     case 'yeaft_sub_agent_prompt':
       handleYeaftSubAgentPrompt(msg);
       break;
@@ -898,7 +903,7 @@ export async function handleMessage(msg) {
 
     case 'session_discovery_request':
       if (!ctx.serverCapabilities?.has('session_discovery')) break;
-      await handleSessionDiscovery(msg, ctx.CONFIG?.yeaftDir, sendToServer);
+      await handleSessionDiscovery(msg, ctx.CONFIG?.yeaftDir, sendToServer, { agentWorkDir: ctx.CONFIG?.workDir || '' });
       break;
 
     case 'work_center_request':

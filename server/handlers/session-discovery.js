@@ -7,7 +7,7 @@ import { buildSessionCatalog, resolveAgentAccessError, sendToAgent, sendToWebCli
 const CAPABILITY = 'session_discovery';
 const REQUEST_TTL_MS = 15_000;
 const pending = new Map();
-const OPS = new Set(['search', 'active_sessions', 'share_list', 'share_save', 'share_delete']);
+const OPS = new Set(['search', 'active_sessions', 'workspace_folders', 'share_list', 'share_save', 'share_delete']);
 const isRecord = value => value !== null && typeof value === 'object' && !Array.isArray(value);
 const clean = value => typeof value === 'string' ? value.trim() : '';
 
@@ -53,6 +53,10 @@ function validatePayload(op, payload) {
       ...(activeWindowDays !== undefined ? { activeWindowDays } : {}),
       ...(limit !== undefined ? { limit } : {}),
     };
+  }
+  if (op === 'workspace_folders') {
+    if (payload.refresh !== undefined && typeof payload.refresh !== 'boolean') return null;
+    return { ...(payload.refresh === true ? { refresh: true } : {}) };
   }
   if (op === 'share_list') return {};
   const id = clean(payload.id);
@@ -165,6 +169,22 @@ export async function handleAgentSessionDiscovery(agentId, agent, msg) {
         .map(({ sessionId, title, workDir, preview, activeAt, messageCount }) => ({
           sessionId, title, workDir, preview, activeAt, messageCount,
         })) };
+      break;
+    case 'workspace_folders':
+      result = {
+        scannedAt: validTime(data.scannedAt) ? data.scannedAt : null,
+        folders: (Array.isArray(data.folders) ? data.folders : [])
+          .filter(row => isRecord(row) && validText(row.path, 512) && row.path.length > 0
+            && validText(row.name, 120) && validText(row.label || '', 120))
+          .slice(0, 120)
+          .map(({ path, name, depth, markers, label }) => ({
+            path,
+            name,
+            depth: Number.isSafeInteger(depth) && depth >= 0 && depth <= 3 ? depth : 0,
+            markers: Array.isArray(markers) ? markers.filter(m => validText(m, 40)).slice(0, 8) : [],
+            label: typeof label === 'string' ? label : '',
+          })),
+      };
       break;
     case 'share_list':
       result = { items: (Array.isArray(data.items) ? data.items : []).filter(row => validItem(row)

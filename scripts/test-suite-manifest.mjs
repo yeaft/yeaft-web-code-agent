@@ -36,6 +36,7 @@ export const CORE_TEST_FILES = Object.freeze([
   "test/agent/yeaft/provider-tool-input-safety.test.js",
   "test/agent/yeaft/responses-tool-schema.test.js",
   "test/agent/yeaft/scheduled-session-tasks.test.js",
+  "test/agent/yeaft/session-auto-route.test.js",
   "test/agent/yeaft/session-config.test.js",
   "test/agent/yeaft/session-concurrent-turns.test.js",
   "test/agent/yeaft/session-fork-runtime.test.js",
