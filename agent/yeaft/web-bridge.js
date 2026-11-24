@@ -146,7 +146,7 @@ import { filterSnapshotForVp } from './snapshot-filter.js';
 import { createVpStatusBroker, isVpStatusRunning, normalizeVpErrorDetail } from './vp-status-broker.js';
 import { classifyThread as defaultClassifyThread, fallbackTitle } from './vp/thread-classifier.js';
 import { resolveDecisionModel } from './decision/index.js';
-import { refreshSingleSessionIndex } from './session-discovery/indexer.js';
+import { scheduleSingleSessionIndexRefresh } from './session-discovery/indexer.js';
 import { decideSessionAutoRoute, withAutoRouteLock } from './session-discovery/auto-route.js';
 import { SESSION_SCENE_IDS } from './sessions/scene-ids.js';
 import { listMcpServers, upsertMcpServer, removeMcpServer } from './config-api.js';
@@ -7001,11 +7001,7 @@ async function runVpTurn({ prompt, promptParts = null, sessionId, vpId, threadId
     if (!escalationState?.escalated && turnEndReason === 'end_turn') {
       const discoveryRoot = liveConfigRoot();
       if (discoveryRoot && sessionId) {
-        const refreshTimer = setTimeout(() => {
-          try { refreshSingleSessionIndex(discoveryRoot, sessionId, Date.now()); }
-          catch { /* best-effort background index refresh */ }
-        }, 0);
-        refreshTimer.unref?.();
+        scheduleSingleSessionIndexRefresh(discoveryRoot, sessionId);
       }
     }
     // vp-status: guaranteed-settle. Regardless of how the turn exited
@@ -7836,7 +7832,8 @@ function collectLiveRunningSessionsForAutoRoute(yeaftDir, allowedSessionIds = []
   const pendingAskBySession = new Map();
   for (const [requestId, pending] of pendingUserPrompts) {
     if (!pending?.sessionId || !allowed.has(pending.sessionId) || pending.expiresAt <= now) continue;
-    pendingAskBySession.set(pending.sessionId, {
+    const list = pendingAskBySession.get(pending.sessionId) || [];
+    list.push({
       requestId,
       question: pending.question || '',
       options: Array.isArray(pending.options) ? pending.options : [],
@@ -7845,6 +7842,7 @@ function collectLiveRunningSessionsForAutoRoute(yeaftDir, allowedSessionIds = []
       turnId: pending.turnId || null,
       toolCallId: pending.toolCallId || null,
     });
+    pendingAskBySession.set(pending.sessionId, list);
   }
 
   let brokerStatuses = [];
@@ -7880,24 +7878,28 @@ function collectLiveRunningSessionsForAutoRoute(yeaftDir, allowedSessionIds = []
             : ''),
       }))
       .filter(m => m.text);
-    // Include live streaming assistant text / prompt from active executions if not yet committed to history.
+    // Include only currently active/queued executions from visibleExecutionText (never completed historical turns).
     for (const [, liveRow] of visibleExecutionText) {
-      if (liveRow.sessionId !== sid) continue;
+      if (liveRow.sessionId !== sid || (liveRow.state !== 'running' && liveRow.state !== 'queued')) continue;
       if (liveRow.prompt) {
-        recentMessages.push({ role: 'user', text: String(liveRow.prompt).slice(-600) });
+        const promptTail = String(liveRow.prompt).slice(-600);
+        const lastEntry = recentMessages[recentMessages.length - 1];
+        if (!lastEntry || lastEntry.role !== 'user' || lastEntry.text !== promptTail) {
+          recentMessages.push({ role: 'user', text: promptTail });
+        }
       }
       if (liveRow.text) {
         recentMessages.push({ role: 'assistant', text: String(liveRow.text).slice(-600) });
       }
     }
-    const pendingQuestion = pendingAskBySession.get(sid) || null;
+    const pendingQuestions = pendingAskBySession.get(sid) || [];
     out.push({
       sessionId: sid,
       title: meta.name || sid,
       sceneId,
       workDir: meta.workDir || '',
-      state: pendingQuestion ? 'waiting_input' : 'running',
-      ...(pendingQuestion ? { pendingQuestion } : {}),
+      state: pendingQuestions.length > 0 ? 'waiting_input' : 'running',
+      ...(pendingQuestions.length > 0 ? { pendingQuestions } : {}),
       recentMessages: recentMessages.slice(-6),
     });
   }
@@ -7977,7 +7979,7 @@ export async function handleYeaftAutoRouteSend(msg = {}) {
         forceNew: msg.forceNew === true,
         preferredSceneId: typeof msg.preferredSceneId === 'string' ? msg.preferredSceneId : null,
         preferredWorkDir: typeof msg.preferredWorkDir === 'string' ? msg.preferredWorkDir : null,
-        allowedScenes: SESSION_SCENE_IDS,
+        allowedScenes: Array.isArray(msg.allowedScenes) ? msg.allowedScenes : SESSION_SCENE_IDS,
         activeWindowDays: Number.isSafeInteger(msg.activeWindowDays) ? msg.activeWindowDays : undefined,
         adapter: session?.adapter || null,
         config: session?.config || loadConfig({ dir: yeaftDir }),
@@ -8006,6 +8008,30 @@ export async function handleYeaftAutoRouteSend(msg = {}) {
         || decision.sceneId
         || 'general';
 
+      // If Tier 1 explicitly determined that the user's plain-text message answers a
+      // specific pending AskUser prompt (`decision.answeredQuestion.requestId`), settle
+      // that prompt AND persist the user's reply row into the Session transcript so
+      // conversation history stays complete and no optimistic message is orphaned.
+      let answeredAskUser = false;
+      if (!createdSession && decision.tier === 'running' && decision.answeredQuestion?.requestId && !hasFiles && text.trim()) {
+        const livePending = pendingUserPrompts.get(decision.answeredQuestion.requestId);
+        if (livePending && livePending.sessionId === targetSessionId && livePending.expiresAt > Date.now()) {
+          const questionKey = livePending.question || 'response';
+          persistInboundMessageOnceByMsgId({
+            msgId: clientMessageId,
+            text: text.trim(),
+            sessionId: targetSessionId,
+            threadId: livePending.threadId || 'main',
+            role: 'user',
+            clientMessageId,
+            ts: new Date().toISOString(),
+          });
+          answeredAskUser = settlePendingUserPrompt(decision.answeredQuestion.requestId, livePending, {
+            answers: { [questionKey]: text.trim() },
+          });
+        }
+      }
+
       await sendToServer({
         type: 'yeaft_session_routed',
         ok: true,
@@ -8021,20 +8047,12 @@ export async function handleYeaftAutoRouteSend(msg = {}) {
         confidence: decision.confidence ?? null,
         reason: decision.reason || '',
         decisionModel: decision.decisionModel || null,
+        ...(answeredAskUser ? { answeredAskUser: true } : {}),
         ...(createdSession ? { session: createdSession } : {}),
       });
 
-      // If Tier 1 matched a Session with a live AskUser prompt and the user sent plain text
-      // without file attachments, settle the pending AskUser directly so the blocked tool resumes.
-      if (!createdSession && decision.tier === 'running' && decision.pendingQuestion?.requestId && !hasFiles && text.trim()) {
-        const livePending = pendingUserPrompts.get(decision.pendingQuestion.requestId);
-        if (livePending && livePending.sessionId === targetSessionId && livePending.expiresAt > Date.now()) {
-          const questionKey = livePending.question || 'response';
-          const settled = settlePendingUserPrompt(decision.pendingQuestion.requestId, livePending, {
-            answers: { [questionKey]: text.trim() },
-          });
-          if (settled) return { sessionId: targetSessionId, decision: 'matched', tier: 'running', answeredAskUser: true };
-        }
+      if (answeredAskUser) {
+        return { sessionId: targetSessionId, decision: 'matched', tier: 'running', answeredAskUser: true };
       }
 
       // Otherwise dispatch through the canonical `runYeaftSessionSend` pipeline.

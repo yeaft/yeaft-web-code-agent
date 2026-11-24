@@ -4,9 +4,10 @@ import { tmpdir } from 'node:os';
 import { DatabaseSync } from 'node:sqlite';
 import { expect, it, vi } from 'vitest';
 import { CONFIG } from '../../server/config.js';
-import { agents } from '../../server/context.js';
+import { agents, webClients } from '../../server/context.js';
 import { userDb, yeaftSessionDb, sessionUiMetadataDb } from '../../server/database.js';
 import { handleClientConversation } from '../../server/handlers/client-conversation.js';
+import { handleAgentOutput } from '../../server/handlers/agent-output.js';
 import { clearSessionDiscoveryRequests, handleAgentSessionDiscovery, handleClientSessionDiscovery } from '../../server/handlers/session-discovery.js';
 import { createMockAgent, createMockWebClient } from '../helpers/mockWs.js';
 import { handleSessionDiscovery } from '../../agent/yeaft/session-discovery/bridge.js';
@@ -416,6 +417,41 @@ it('serves full incremental FTS results, 5-day active cards and durable Share en
     expect(forwardedAuto._allowedSessionIds).toContain('visible');
     expect(forwardedAuto._allowedSessionIds).not.toContain('other-owner');
     expect(forwardedAuto._allowedSessionIds).not.toContain('hidden');
+
+    // Ownerless global Agent (`agent.ownerId === null`) delivers `yeaft_session_routed` to the
+    // requesting admin (`alice`), persists the newly created Session under `alice`, and does NOT leak to `bob`.
+    webClients.set('client-alice', alice);
+    webClients.set('client-bob', bob);
+    const upsertSpy = vi.spyOn(yeaftSessionDb, 'upsertFromSnapshot').mockImplementation((userId, aId, sess) => {
+      metadata.push({ ...sess, userId, agentId: aId, isArchived: false });
+    });
+    try {
+      await handleAgentOutput(agentId, agent, {
+        type: 'yeaft_session_routed',
+        ok: true,
+        requestId: 'req_global_admin',
+        clientMessageId: 'auto_msg_ok',
+        _requestClientId: 'client-alice',
+        sessionId: 'sess_created_global',
+        decision: 'created',
+        tier: 'create',
+        title: 'Global Admin Session',
+        sceneId: 'software',
+        workDir: '/repo/core',
+        session: { id: 'sess_created_global', name: 'Global Admin Session', workDir: '/repo/core', createdAt: new Date().toISOString() },
+      });
+      expect(upsertSpy).toHaveBeenCalledWith('alice', agentId, expect.objectContaining({ id: 'sess_created_global' }));
+      expect(alice.ws.getLastMessage()).toMatchObject({
+        type: 'yeaft_session_routed',
+        ok: true,
+        sessionId: 'sess_created_global',
+        decision: 'created',
+      });
+      expect(bob.ws.getLastMessage()?.type).not.toBe('yeaft_session_routed');
+    } finally {
+      webClients.delete('client-alice');
+      webClients.delete('client-bob');
+    }
   } finally {
     clearSessionDiscoveryRequests(alice);
     clearSessionDiscoveryRequests(bob);

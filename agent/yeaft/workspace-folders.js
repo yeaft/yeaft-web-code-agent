@@ -319,6 +319,10 @@ export function scanWorkspaceFolders({
   };
 }
 
+export function normalizeWorkspaceFolderPath(dirPath) {
+  return normalizePath(dirPath);
+}
+
 export function workspaceFoldersSnapshotPath(yeaftDir) {
   return join(yeaftDir, WORKSPACE_FOLDERS_FILE);
 }
@@ -384,6 +388,7 @@ function lexicalScoreFolder(folder, queryTokens) {
 export function selectCandidateWorkspaceFolders(yeaftDir, {
   query = '',
   agentWorkDir = '',
+  preferredWorkDir = '',
   allowedSessionIds = null,
   limit = 25,
 } = {}) {
@@ -443,6 +448,12 @@ export function selectCandidateWorkspaceFolders(yeaftDir, {
     });
   }
 
+  const normPreferred = normalizePath(preferredWorkDir);
+  // Only accept preferredWorkDir when it is already a known workspace folder (in snapshot,
+  // historical authorized Session workDir, or agentWorkDir) so untrusted callers cannot
+  // probe arbitrary filesystem paths outside the workspace map.
+  const pinnedPreferred = normPreferred && byPath.has(normPreferred) ? normPreferred : '';
+
   const queryTokens = [...new Set(
     String(query || '')
       .toLowerCase()
@@ -451,12 +462,14 @@ export function selectCandidateWorkspaceFolders(yeaftDir, {
 
   const scored = [...byPath.values()].map(entry => ({
     entry,
+    pinned: pinnedPreferred && entry.path === pinnedPreferred ? 1 : 0,
     lexical: lexicalScoreFolder(entry, queryTokens),
     hasMarkers: entry.markers.length > 0 ? 1 : 0,
   }));
 
   scored.sort((a, b) => (
-    b.lexical - a.lexical
+    b.pinned - a.pinned
+    || b.lexical - a.lexical
     || (b.entry.recent ? 1 : 0) - (a.entry.recent ? 1 : 0)
     || b.entry.recentRank - a.entry.recentRank
     || b.hasMarkers - a.hasMarkers

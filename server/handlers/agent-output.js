@@ -1,7 +1,7 @@
 import { randomUUID } from 'crypto';
 import { messageDb, scheduledTaskReceiptDb, sessionUiMetadataDb, userStatsDb, yeaftProjectDb, yeaftSessionDb } from '../database.js';
 import { transaction } from '../db/connection.js';
-import { broadcastAgentList, broadcastSessionCatalog, forwardToClients, sendToAgent, sendToWebClient } from '../ws-utils.js';
+import { broadcastAgentList, broadcastSessionCatalog, forwardToClients, sendToAgent, sendToWebClient, verifyAgentOwnership } from '../ws-utils.js';
 import { advanceYeaftDebugRequestChunk, consumeYeaftDebugRequest, webClients, previewFiles } from '../context.js';
 import { CONFIG } from '../config.js';
 import { detectImageMime, yeaftAssetStore } from '../yeaft-asset-store.js';
@@ -809,22 +809,26 @@ export async function handleAgentOutput(agentId, agent, msg) {
     }
 
     case 'yeaft_session_routed': {
-      const ownerId = agent?.ownerId || null;
-      if (msg.ok && ownerId && msg.decision === 'created' && msg.session?.id) {
+      const targetClient = msg._requestClientId ? webClients.get(msg._requestClientId) : null;
+      const effectiveOwnerId = agent?.ownerId
+        || (targetClient?.authenticated && verifyAgentOwnership(agentId, targetClient.userId, targetClient.role)
+          ? targetClient.userId
+          : null);
+      if (msg.ok && effectiveOwnerId && msg.decision === 'created' && msg.session?.id) {
         try {
-          const existing = yeaftSessionDb.getForAgent(ownerId, agentId, msg.session.id);
-          yeaftSessionDb.upsertFromSnapshot(ownerId, agentId, { ...existing, ...msg.session });
+          const existing = yeaftSessionDb.getForAgent(effectiveOwnerId, agentId, msg.session.id);
+          yeaftSessionDb.upsertFromSnapshot(effectiveOwnerId, agentId, { ...existing, ...msg.session });
           agent.yeaftSessions ??= new Map();
           agent.yeaftSessions.set(msg.session.id, { ...existing, ...msg.session });
-          await broadcastSessionCatalog(ownerId);
+          await broadcastSessionCatalog(effectiveOwnerId);
         } catch (err) {
           console.warn(`[Server] Failed to persist auto-routed Session ${msg.session.id}:`, err?.message || err);
         }
       }
-      const targetClient = msg._requestClientId ? webClients.get(msg._requestClientId) : null;
       const targets = targetClient ? [[msg._requestClientId, targetClient]] : webClients;
       for (const [, c] of targets) {
-        if (!c?.authenticated || (!CONFIG.skipAuth && c.userId !== ownerId)) continue;
+        if (!c?.authenticated || !verifyAgentOwnership(agentId, c.userId, c.role)) continue;
+        if (effectiveOwnerId && !CONFIG.skipAuth && c.userId !== effectiveOwnerId) continue;
         await sendToWebClient(c, {
           type: 'yeaft_session_routed',
           ok: msg.ok === true,
@@ -840,6 +844,7 @@ export async function handleAgentOutput(agentId, agent, msg) {
           confidence: Number.isFinite(msg.confidence) ? msg.confidence : null,
           reason: typeof msg.reason === 'string' ? msg.reason.slice(0, 400) : '',
           decisionModel: typeof msg.decisionModel === 'string' ? msg.decisionModel.slice(0, 160) : null,
+          ...(msg.answeredAskUser === true ? { answeredAskUser: true } : {}),
           ...(msg.error ? { error: String(msg.error).slice(0, 400) } : {}),
         });
       }

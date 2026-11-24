@@ -84,7 +84,7 @@ function migrateDiscoverySchema(db) {
   }
 }
 
-export function openDiscoveryStore(root, { readOnly = false } = {}) {
+export function openDiscoveryStore(root, { readOnly = false, busyTimeoutMs = 1500 } = {}) {
   const dir = join(root, 'session-discovery');
   if (!readOnly) mkdirSync(dir, { recursive: true, mode: 0o700 });
   try { if (!lstatSync(dir).isDirectory()) throw new Error('Invalid Discovery storage directory'); }
@@ -96,11 +96,15 @@ export function openDiscoveryStore(root, { readOnly = false } = {}) {
       if (readOnly && name === 'discovery.db') return null;
     }
   }
+  const timeout = Math.max(50, Math.min(10_000, Math.floor(Number(busyTimeoutMs) || 1500)));
   const db = new DatabaseSync(join(dir, 'discovery.db'), { readOnly });
-  if (readOnly) return db;
+  if (readOnly) {
+    try { db.exec(`PRAGMA busy_timeout = ${timeout}`); } catch { /* ignore */ }
+    return db;
+  }
   try {
     db.exec(`
-      PRAGMA busy_timeout = 1500;
+      PRAGMA busy_timeout = ${timeout};
       PRAGMA journal_mode = WAL;
       PRAGMA secure_delete = ON;
       CREATE TABLE IF NOT EXISTS index_state (

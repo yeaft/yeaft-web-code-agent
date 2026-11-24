@@ -29,7 +29,7 @@ import { SESSION_SCENE_IDS, isSessionSceneId } from '../sessions/scene-ids.js';
 import { loadSessionConfig } from '../sessions/session-config.js';
 import { loadSessionMeta } from '../sessions/session-store.js';
 import { sessionsRoot, snapshotSessions } from '../sessions/session-crud.js';
-import { selectCandidateWorkspaceFolders } from '../workspace-folders.js';
+import { normalizeWorkspaceFolderPath, selectCandidateWorkspaceFolders } from '../workspace-folders.js';
 import {
   DAY_MS,
   getRecentSessionMessagesFromIndex,
@@ -270,6 +270,12 @@ export async function decideSessionAutoRoute({
     });
     if (tier1.decision === 'match' && tier1.sessionId && allowedSet.has(tier1.sessionId)) {
       const target = eligibleRunning.find(s => s.sessionId === tier1.sessionId);
+      const pendingQuestions = Array.isArray(target?.pendingQuestions)
+        ? target.pendingQuestions
+        : (target?.pendingQuestion ? [target.pendingQuestion] : []);
+      const answeredQuestion = tier1.answeredRequestId
+        ? pendingQuestions.find(q => q?.requestId === tier1.answeredRequestId) || null
+        : null;
       return {
         action: 'continue',
         tier: 'running',
@@ -277,7 +283,7 @@ export async function decideSessionAutoRoute({
         title: target?.title || tier1.sessionId,
         sceneId: target?.sceneId || null,
         workDir: target?.workDir || '',
-        pendingQuestion: target?.pendingQuestion || null,
+        answeredQuestion,
         confidence: tier1.confidence,
         reason: tier1.reason || 'matched_running_session',
         decisionModel: tier1Meta.model,
@@ -339,20 +345,20 @@ export async function decideSessionAutoRoute({
     now,
   });
 
-  const candidateFolders = selectCandidateWorkspaceFolders(yeaftDir, {
-    query: cleanQuery,
-    agentWorkDir,
-    allowedSessionIds: [...allowedSet],
-    limit: 25,
-  });
-
-  // If caller explicitly locked workDir and it exists on disk, ensure it's in the allowlist.
-  const explicitWorkDir = typeof preferredWorkDir === 'string' && preferredWorkDir.trim()
-    ? preferredWorkDir.trim()
+  const explicitWorkDir = typeof preferredWorkDir === 'string'
+    ? (preferredWorkDir.trim() ? normalizeWorkspaceFolderPath(preferredWorkDir) : '')
     : null;
   const explicitSceneId = isSessionSceneId(preferredSceneId) && allowedScenes.includes(preferredSceneId)
     ? preferredSceneId
     : null;
+
+  const candidateFolders = selectCandidateWorkspaceFolders(yeaftDir, {
+    query: cleanQuery,
+    agentWorkDir,
+    preferredWorkDir: explicitWorkDir || '',
+    allowedSessionIds: [...allowedSet],
+    limit: 25,
+  });
 
   const { result: planned, meta: planMeta } = await runDecision({
     scenario: PLAN_NEW_SESSION_SCENARIO_ID,

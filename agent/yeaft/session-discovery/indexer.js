@@ -460,11 +460,12 @@ export function runDailySessionIndex(root, now = Date.now(), { force = false, cr
  */
 export function refreshSingleSessionIndex(root, sessionId, now = Date.now(), {
   minMessages = 2,
+  busyTimeoutMs = 150,
   createScan = createAgentHistoryScan,
 } = {}) {
   if (!root || typeof sessionId !== 'string' || !sessionId.trim()) return false;
   const targetId = sessionId.trim();
-  const db = openDiscoveryStore(root);
+  const db = openDiscoveryStore(root, { busyTimeoutMs });
   try {
     const existingCards = listIndexedCardWatermarks(db);
     const existing = existingCards.get(targetId);
@@ -578,9 +579,33 @@ export function refreshSingleSessionIndex(root, sessionId, now = Date.now(), {
       markIndexed: false,
     });
   } catch (error) {
+    const msg = String(error?.message || '');
+    if (error?.errcode === 5 || /database is locked|SQLITE_BUSY/i.test(msg)) {
+      const busyErr = new Error('discovery_db_busy');
+      busyErr.code = 'SQLITE_BUSY';
+      throw busyErr;
+    }
     console.warn('[SessionDiscovery] single-session index refresh failed:', error?.code || error?.name || error?.message);
     return false;
   } finally {
     db.close();
   }
+}
+
+export function scheduleSingleSessionIndexRefresh(root, sessionId, { maxAttempts = 4, baseDelayMs = 250 } = {}) {
+  if (!root || typeof sessionId !== 'string' || !sessionId.trim()) return;
+  let attempt = 0;
+  const run = () => {
+    attempt += 1;
+    try {
+      refreshSingleSessionIndex(root, sessionId, Date.now(), { busyTimeoutMs: 120 });
+    } catch (err) {
+      if (err?.code === 'SQLITE_BUSY' && attempt < maxAttempts) {
+        const retryTimer = setTimeout(run, baseDelayMs * attempt);
+        retryTimer.unref?.();
+      }
+    }
+  };
+  const firstTimer = setTimeout(run, 0);
+  firstTimer.unref?.();
 }

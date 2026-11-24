@@ -105,7 +105,7 @@ describe('Workspace <=3 level folder snapshot & Sessionless auto-routing pipelin
     const forcedRefresh = ensureWorkspaceFoldersSnapshot(yeaftDir, { homeDir: home, force: true });
     expect(forcedRefresh.folders.map(f => f.path)).toContain(repoC);
 
-    // Candidate ranking boosts lexical match + recent Session workDir
+    // Candidate ranking boosts lexical match + recent Session workDir, and pins trailing-slash preferredWorkDir even outside top limit
     seedDefaultVps(join(yeaftDir, 'virtual-persons'));
     const s1 = createSessionFromSpec(yeaftDir, { name: 'Quant work', sceneId: 'investment', workDir: repoB });
     const candidates = selectCandidateWorkspaceFolders(yeaftDir, {
@@ -114,6 +114,15 @@ describe('Workspace <=3 level folder snapshot & Sessionless auto-routing pipelin
     });
     expect(candidates[0].path).toBe(repoA);
     expect(candidates.find(c => c.path === repoB)?.recent).toBe(true);
+
+    const pinned = selectCandidateWorkspaceFolders(yeaftDir, {
+      query: 'fix yeaft-web',
+      preferredWorkDir: `${repoC}/`,
+      allowedSessionIds: [s1.id],
+      limit: 1,
+    });
+    expect(pinned).toHaveLength(1);
+    expect(pinned[0].path).toBe(repoC);
   });
 
   it('refreshes single-session index on turn end and routes Tier 1 (running/AskUser) -> Tier 2 (recent 5d) -> Tier 3 (create with folder & scene)', async () => {
@@ -162,17 +171,31 @@ describe('Workspace <=3 level folder snapshot & Sessionless auto-routing pipelin
         const userPayload = JSON.parse(params.messages[0].content);
         // Tier 1: route-running-session
         if (userPayload.runningSessions) {
+          if (userPayload.newQuery.includes('choose port 8080')) {
+            const targetSession = userPayload.runningSessions[0];
+            const secondPrompt = targetSession.pendingQuestions?.find(q => q.question.includes('Which port'));
+            return {
+              text: JSON.stringify({
+                decision: 'match',
+                sessionId: targetSession.sessionId,
+                answeredRequestId: secondPrompt?.requestId || null,
+                confidence: 0.96,
+                reason: 'answers specific AskUser port question',
+              }),
+            };
+          }
           if (userPayload.newQuery.includes('also add rollback SQL')) {
             return {
               text: JSON.stringify({
                 decision: 'match',
                 sessionId: userPayload.runningSessions[0].sessionId,
+                answeredRequestId: null,
                 confidence: 0.94,
-                reason: 'supplements active migration',
+                reason: 'supplements active migration without answering AskUser',
               }),
             };
           }
-          return { text: '{"decision":"none","sessionId":null,"confidence":0.1,"reason":"unrelated"}' };
+          return { text: '{"decision":"none","sessionId":null,"answeredRequestId":null,"confidence":0.1,"reason":"unrelated"}' };
         }
         // Tier 2: route-recent-session
         if (userPayload.candidateSessions) {
@@ -308,6 +331,23 @@ describe('Workspace <=3 level folder snapshot & Sessionless auto-routing pipelin
       targetThreadId: runningThreads[0]?.threadId || null,
     }));
 
+    // Seed TWO concurrent pending AskUser prompts on runningSession:
+    // 1) A side instruction ("also add rollback SQL") must NOT settle either AskUser prompt,
+    // 2) An explicit answer ("choose port 8080") must settle ONLY ask_port_2 AND persist the user's reply in transcript!
+    let ask1Settled = false;
+    const ask1Promise = bridge.__testHooks.seedPendingUserPrompt({
+      requestId: 'ask_env_1',
+      sessionId: runningSession.id,
+      question: 'Which environment?',
+      options: ['staging', 'prod'],
+    }).then(res => { ask1Settled = true; return res; });
+    const ask2Promise = bridge.__testHooks.seedPendingUserPrompt({
+      requestId: 'ask_port_2',
+      sessionId: runningSession.id,
+      question: 'Which port should I bind?',
+      options: ['3000', '8080'],
+    });
+
     const tier1Res = await bridge.handleYeaftAutoRouteSend({
       id: 'msg_tier1_1',
       requestId: 'req_tier1_1',
@@ -320,6 +360,27 @@ describe('Workspace <=3 level folder snapshot & Sessionless auto-routing pipelin
       decision: 'matched',
       tier: 'running',
     });
+    expect(ask1Settled).toBe(false);
+
+    const askAnswerRes = await bridge.handleYeaftAutoRouteSend({
+      id: 'msg_tier1_ask',
+      requestId: 'req_tier1_ask',
+      text: 'choose port 8080',
+      _allowedSessionIds: [createdSessionId, runningSession.id],
+      _shareOwnerId: 'user-1',
+    });
+    expect(askAnswerRes).toEqual({
+      sessionId: runningSession.id,
+      decision: 'matched',
+      tier: 'running',
+      answeredAskUser: true,
+    });
+    expect(await ask2Promise).toEqual({ 'Which port should I bind?': 'choose port 8080' });
+    expect(ask1Settled).toBe(false);
+    // Transcript must include the user's AskUser reply row
+    expect(store.loadAllBySession(runningSession.id).some(r => r.role === 'user' && r.content === 'choose port 8080')).toBe(true);
+    bridge.__testHooks.settlePendingUserPromptForTest('ask_env_1', { answers: { 'Which environment?': 'staging' } });
+    await ask1Promise;
 
     // Security check: if runningSession.id is NOT in _allowedSessionIds, Tier 1 MUST NOT match it!
     const unauthorizedRes = await bridge.handleYeaftAutoRouteSend({

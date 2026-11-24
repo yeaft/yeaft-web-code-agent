@@ -1,8 +1,9 @@
 import { Worker } from 'node:worker_threads';
-import { ensureWorkspaceFoldersSnapshot } from '../workspace-folders.js';
+import { ensureWorkspaceFoldersSnapshot, readWorkspaceFoldersSnapshot } from '../workspace-folders.js';
 import { changeShare, listActiveSessionCards, listShare, openDiscoveryStore, searchDiscovery } from './store.js';
 
 const CHECK_INTERVAL_MS = 15 * 60 * 1000;
+const WORKSPACE_FOLDER_REFRESH_COOLDOWN_MS = 15_000;
 let scheduler = null;
 
 /** First run after registration; persistent due time prevents reindex on restart. */
@@ -61,8 +62,12 @@ export async function handleSessionDiscovery(msg, root, send, { agentWorkDir = '
   if (!root || !ownerId || !Array.isArray(allowedIds)) return reply({ ok: false, error: 'Search unavailable' });
   try {
     if (op === 'workspace_folders') {
+      const existing = readWorkspaceFoldersSnapshot(root);
+      const now = Date.now();
+      const canForceRefresh = payload?.refresh === true
+        && (!existing?.scannedAt || now - existing.scannedAt >= WORKSPACE_FOLDER_REFRESH_COOLDOWN_MS);
       const snapshot = ensureWorkspaceFoldersSnapshot(root, {
-        force: payload?.refresh === true,
+        force: canForceRefresh,
         agentWorkDir,
       });
       return reply({

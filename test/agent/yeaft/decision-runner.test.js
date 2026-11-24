@@ -130,7 +130,7 @@ describe('Decision model configuration & scenario-tailored runner', () => {
         async call(params) {
           calls.push(params);
           return {
-            text: '```json\n{"decision":"match","sessionId":"sess_live_1","confidence":0.92,"reason":"answers pending AskUser"}\n```',
+            text: '```json\n{"decision":"match","sessionId":"sess_live_1","answeredRequestId":"ask_1","confidence":0.92,"reason":"answers pending AskUser"}\n```',
             usage: { inputTokens: 120, outputTokens: 28 },
           };
         },
@@ -140,7 +140,7 @@ describe('Decision model configuration & scenario-tailored runner', () => {
         runningSessions: [{
           sessionId: 'sess_live_1',
           title: 'Refactor router',
-          pendingQuestion: { question: '选方案 A 还是 B？', options: ['A', 'B'] },
+          pendingQuestions: [{ requestId: 'ask_1', question: '选方案 A 还是 B？', options: ['A', 'B'] }],
           recentMessages: [{ role: 'assistant', text: '选方案 A 还是 B？' }],
         }],
       },
@@ -150,6 +150,7 @@ describe('Decision model configuration & scenario-tailored runner', () => {
     expect(runningHit.result).toEqual({
       decision: 'match',
       sessionId: 'sess_live_1',
+      answeredRequestId: 'ask_1',
       confidence: 0.92,
       reason: 'answers pending AskUser',
     });
@@ -344,7 +345,7 @@ describe('Decision model configuration & scenario-tailored runner', () => {
       expect(wireDecision.result).toMatchObject({ decision: 'none', sessionId: null });
       expect(wireBodies).toHaveLength(1);
       expect(wireBodies[0].reasoning).toBeUndefined();
-      expect(wireBodies[0].max_output_tokens).toBe(220);
+      expect(wireBodies[0].max_output_tokens).toBe(240);
     } finally {
       globalThis.fetch = prevFetch;
       if (prevThinkingFlag === undefined) delete process.env.YEAFT_THINKING_V1;
