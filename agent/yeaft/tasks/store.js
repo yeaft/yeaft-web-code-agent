@@ -165,12 +165,13 @@ export class TaskStore {
     return normalizePersistedTask(JSON.parse(readFileSync(path, 'utf8')));
   }
 
-  loadActiveTasks() {
+  loadActiveTasks(sessionId = null) {
     if (!existsSync(this.root)) return [];
+    const dirs = sessionId ? [this.sessionDir(sessionId)].filter(dir => existsSync(dir))
+      : readdirSync(this.root, { withFileTypes: true }).filter(entry => entry.isDirectory())
+        .map(entry => join(this.root, entry.name));
     const out = [];
-    for (const sessionDirName of readdirSync(this.root, { withFileTypes: true })) {
-      if (!sessionDirName.isDirectory()) continue;
-      const sessionDir = join(this.root, sessionDirName.name);
+    for (const sessionDir of dirs) {
       for (const entry of readdirSync(sessionDir, { withFileTypes: true })) {
         if (!entry.isFile() || !entry.name.endsWith('.json')) continue;
         try {

@@ -7,6 +7,7 @@ import { sendToServer, flushMessageBuffer } from '../../../agent/connection/buff
 import { renderSessionScene } from '../../../agent/yeaft/sessions/scene-prompts.js';
 import * as bridge from '../../../agent/yeaft/web-bridge.js';
 import { ConversationStore } from '../../../agent/yeaft/conversation/persist.js';
+import { hydratePersistedSessionTurns } from '../../../agent/yeaft/sessions/turn-recovery.js';
 import { closeConversationHistoryIndexes, searchConversationIndex } from '../../../agent/yeaft/conversation/history-index.js';
 import { DebugTrace, NullTrace } from '../../../agent/yeaft/debug-trace.js';
 import { seedDefaultVps } from '../../../agent/yeaft/vp/seed-defaults.js';
@@ -45,6 +46,65 @@ function setup(adapter, roster = ['omni'], config = {}, sceneId) {
 }
 const frames = () => [...(ctx.ws?.sent || []), ...ctx.outboundSendQueue.map(item => item.msg)];
 const events = type => frames().filter(frame => frame.event?.type === type);
+
+it('defers to live root state and only attributes durable execution evidence to its own root', () => {
+  const liveStates = ['submitted', 'queued', 'waiting', 'running', 'completed'];
+  const turns = new Map(liveStates.map(state => [state, { state, executions: new Map() }]));
+  const user = userTurnId => ({ id: `row-${userTurnId}`, userTurnId, role: 'user', userAuthored: true, relation: 'new' });
+  const causalReply = { role: 'assistant', causalRootId: 'row-answered', content: 'legacy keyed answer' };
+  hydratePersistedSessionTurns(turns, [
+    ...liveStates.map(user), user('answered'), user('orphan'), causalReply,
+    { role: 'assistant', content: 'not evidence for the nearest user' },
+    { ...user('supplement'), relation: 'supplement' },
+  ]);
+  expect(liveStates.map(state => turns.get(state).state)).toEqual(liveStates);
+  expect(turns.get('answered').state).toBe('completed');
+  expect(turns.get('supplement').state).toBe('completed');
+  expect(turns.get('orphan')).toMatchObject({ state: 'interrupted', executions: new Map() });
+  hydratePersistedSessionTurns(turns, [user('orphan'), { role: 'assistant', userTurnId: 'orphan', content: 'answer now durable' }]);
+  expect(turns.get('orphan').state).toBe('completed');
+});
+
+it('shows a persisted native input without execution evidence as interrupted after runtime restart, without replaying it', async () => {
+  let queries = 0;
+  const adapter = { async *stream() {
+    queries++;
+    yield { type: 'text_delta', text: 'durable answer' };
+    yield { type: 'stop', stopReason: 'end_turn' };
+  } };
+  const { send, sessionId, store } = setup(adapter);
+  const legacy = store.append({ sessionId, role: 'user', content: 'legacy input', userTurnId: 'legacy' });
+  store.append({ sessionId, role: 'assistant', content: 'legacy answer without an execution id', userTurnId: 'legacy' });
+  const orphan = store.append({ sessionId, role: 'user', content: 'orphan', userAuthored: true,
+    clientMessageId: 'orphan', userTurnId: 'orphan', relation: 'new' });
+  const toolRoot = store.append({ sessionId, role: 'user', content: 'tool was dispatched', userAuthored: true,
+    clientMessageId: 'tool-root', userTurnId: 'tool-root', relation: 'new' });
+  store.append({ sessionId, role: 'assistant', content: '', userTurnId: 'tool-root', causalRootId: toolRoot.id,
+    turnId: 'omni:inflight-tool', incomplete: true, toolCalls: [{ id: 'tool-1', name: 'Write', input: {} }] });
+  await send('healthy', 'answered input');
+  await bridge.__testDrainVpDrivers();
+  expect(queries).toBe(1);
+
+  // Drop the bridge's entire runtime projection and re-open the on-disk tape.
+  await bridge.__testResetVpState();
+  const reopened = new ConversationStore(root);
+  bridge.__testSetSession({ adapter, trace: new NullTrace(), conversationStore: reopened,
+    config: { model: 'test-model', maxOutputTokens: 1024 }, toolRegistry: new ToolRegistry(), yeaftDir: root });
+  for (const requestId of ['restart-history', 'repeat-history']) {
+    await bridge.handleYeaftLoadHistory({ sessionId, requestId, limit: 10 });
+    const snapshot = events('session_turns').find(frame => frame.requestId === requestId).event.turns;
+    expect(snapshot).toEqual(expect.arrayContaining([
+      expect.objectContaining({ userTurnId: 'orphan', state: 'interrupted', executions: [] }),
+      expect.objectContaining({ userTurnId: 'tool-root', executions: [expect.objectContaining({ turnId: 'omni:inflight-tool' })] }),
+      expect.objectContaining({ userTurnId: 'healthy', state: 'completed' }),
+      expect.objectContaining({ userTurnId: 'legacy', state: 'completed' }),
+    ]));
+    const history = frames().find(frame => frame.type === 'yeaft_history_chunk' && frame.requestId === requestId);
+    expect(history.messages.map(row => row.id)).toEqual(expect.arrayContaining([legacy.id, orphan.id]));
+    expect(history.messages.some(row => row.content === 'durable answer')).toBe(true);
+  }
+  expect(queries).toBe(1);
+});
 
 it('runs overlapping same-VP user turns with visible partial peer context, supplements and isolated stop; replays durable grouping', async () => {
   const first = deferred(); const second = deferred();

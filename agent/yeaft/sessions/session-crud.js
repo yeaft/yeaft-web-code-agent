@@ -603,10 +603,11 @@ export function createSessionFromSpec(yeaftDir, spec, options = {}) {
  * Server-owned assets retain their original ownership; message references are preserved.
  * @param {string} yeaftDir Agent-owned data root
  * @param {string} sourceSessionId Existing Session
- * @param {{name?:string, throughBoundary?:object, throughTurnId?:string, throughMessageId?:string|null, beforeMessageId?:string}} [options]
+ * @param {{name?:string, throughBoundary?:object, throughTurnId?:string, throughMessageId?:string|null, beforeMessageId?:string, beforeMessageIds?:string[]}} [options]
  * throughBoundary forwards the opaque raw-prefix token returned synchronously by
- * ConversationStore.captureSessionCopyBoundary. A requested throughTurnId must
- * end within that prefix or fail closed (never truncate an active turn).
+ * ConversationStore.captureSessionAppendBoundary (or the legacy row token).
+ * beforeMessageIds adds recovery roots to the physical fence. A requested
+ * throughTurnId must end within the earliest safe prefix or fail closed.
  * Legacy throughMessageId/null and beforeMessageId fences remain supported.
  * @returns {object} New Session metadata with copiedMessageCount
  */
@@ -648,7 +649,7 @@ export function copySession(yeaftDir, sourceSessionId, options = {}) {
 
     const transcript = new ConversationStore(sourceYeaftDir);
     const transcriptOptions = {};
-    for (const key of ['throughBoundary', 'throughTurnId', 'throughMessageId', 'beforeMessageId']) {
+    for (const key of ['throughBoundary', 'throughTurnId', 'throughMessageId', 'beforeMessageId', 'beforeMessageIds']) {
       if (Object.prototype.hasOwnProperty.call(options, key)) transcriptOptions[key] = options[key];
     }
     const { copiedCount } = transcript.copySession(sourceSessionId, copied.id, transcriptOptions);

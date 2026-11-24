@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { ConversationStore } from '../../../../agent/yeaft/conversation/persist.js';
@@ -37,6 +37,63 @@ afterEach(async () => {
 });
 
 describe('durable native Session fork and merge', () => {
+  it('pins an append-order prefix through segment rollover and rejects rewrites or deletion', () => {
+    const dir = root();
+    const store = new ConversationStore(dir);
+    const source = 'source';
+    const big = 'a'.repeat(1_100_000);
+    store.append({ role: 'user', content: big, sessionId: source });
+    const prior = request(store, source, 'historic', 1);
+    const conversation = join(dir, 'sessions', source, 'conversation');
+    // Missing/stale derived metadata is not a reason to rebuild on capture.
+    rmSync(join(conversation, 'index.json'));
+    const fence = store.captureSessionAppendBoundary(source);
+    expect(existsSync(join(conversation, 'index.json'))).toBe(false);
+    expect(fence.segments).toMatchObject({ sealedCount: 1, tail: { name: '000002.jsonl' } });
+
+    const active = request(store, source, 'active', 2);
+    store.append({ role: 'assistant', content: big, sessionId: source, causalRootId: active.user.id });
+    store.append({ role: 'assistant', content: 'next segment', sessionId: source, causalRootId: active.user.id });
+    expect(readdirSync(join(conversation, 'segments'))).toHaveLength(3);
+    const throughBoundary = JSON.parse(JSON.stringify(fence));
+    const copy = opts => store.copySession(source, 'branch', { throughBoundary, ...opts });
+    expect(() => copy({ throughTurnId: active.answer.turnId })).toThrow(expect.objectContaining({ code: 'incomplete_fork_boundary' }));
+    expect(copy().copiedCount).toBe(3);
+    expect(raw(dir, 'branch').map(row => row.content)).toEqual([big, 'historic', 'historic answer']);
+    const recoveryFence = store.captureSessionAppendBoundary(source);
+    expect(store.copySession(source, 'earliest-orphan', {
+      throughBoundary: recoveryFence, beforeMessageIds: [active.user.id, prior.user.id],
+    }).copiedCount).toBe(1);
+
+    // Same-size in-place change to the sealed segment must fail closed.
+    const sealed = join(conversation, 'segments', '000001.jsonl');
+    const data = readFileSync(sealed, 'utf8');
+    writeFileSync(sealed, data.replace(big, 'b'.repeat(big.length)));
+    expect(() => store.copySession(source, 'rewritten', { throughBoundary })).toThrow(expect.objectContaining({ code: 'invalid_fork_boundary' }));
+    const fresh = store.captureSessionAppendBoundary(source);
+    store.deleteSessionTurn(source, prior.user.id);
+    expect(() => store.copySession(source, 'deleted', { throughBoundary: fresh })).toThrow(expect.objectContaining({ code: 'invalid_fork_boundary' }));
+  });
+
+  it('validates legacy rows and the exact old tail even when newer activity changes segment size', () => {
+    const dir = root();
+    const store = new ConversationStore(dir);
+    const source = 'mixed';
+    const old = join(dir, 'groups', source, 'conversation', 'messages');
+    mkdirSync(old, { recursive: true });
+    const legacy = join(old, 'm0001.md');
+    writeFileSync(legacy, '---\nid: m0001\nrole: user\nsessionId: mixed\n---\n\nold markdown\n');
+    const prior = request(store, source, 'prior', 1);
+    const fence = store.captureSessionAppendBoundary(source);
+    request(store, source, 'active', 2);
+    expect(store.copySession(source, 'mixed-copy', { throughBoundary: fence }).copiedCount).toBe(3);
+    expect(raw(dir, 'mixed-copy').map(row => row.content)).toEqual(['old markdown', 'prior', 'prior answer']);
+    store.update(prior.answer, { content: 'changed tail' });
+    expect(() => store.copySession(source, 'bad-tail', { throughBoundary: fence })).toThrow(expect.objectContaining({ code: 'invalid_fork_boundary' }));
+    const fresh = store.captureSessionAppendBoundary(source);
+    writeFileSync(legacy, readFileSync(legacy, 'utf8').replace('old markdown', 'new markdown'));
+    expect(() => store.copySession(source, 'bad-legacy', { throughBoundary: fresh })).toThrow(expect.objectContaining({ code: 'invalid_fork_boundary' }));
+  });
   it('keeps explicit concurrent roots and supplements atomic through forks, colliding streams and nested merges', () => {
     const dir = root();
     const store = new ConversationStore(dir);

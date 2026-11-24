@@ -1098,6 +1098,7 @@ export default {
   'message.removeQuote': '删除引用',
   'message.replyingTo': '正在回复 {author}',
   'message.quotedFrom': '引用自 {author}',
+  'message.sessionTurnInterrupted': '这一轮已中断。确认可以安全重试后，可编辑并重新发送这条消息。',
   'message.editAsNew': '编辑',
   'message.you': '你',
 

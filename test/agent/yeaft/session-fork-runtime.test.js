@@ -1,4 +1,6 @@
 import { existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import fs from 'node:fs';
+import { syncBuiltinESMExports } from 'node:module';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
@@ -94,6 +96,8 @@ beforeEach(() => {
     writeFileSync(join(dir, 'role.md'), buildRoleMd({ vpId, displayName: vpId, role: 'Test' }));
   }
   seedSession();
+  // Copy tests must not load this machine's actual global/project MCP config.
+  __testHooks.setRuntimeFactoriesForTest({ loadMcpConfig: () => ({ servers: [] }) });
   store = new ConversationStore(root);
   runtime = { yeaftDir: root, config: {}, conversationStore: store };
   __testSetSession(runtime);
@@ -139,9 +143,40 @@ afterEach(async () => {
   rmSync(root, { recursive: true, force: true });
 });
 
+it('accepts a send without reading sealed transcript bodies and still forks before that send', async () => {
+  const large = 'z'.repeat(1_100_000);
+  store.append({ sessionId: id, role: 'user', content: large });
+  completedTurn();
+  const prefix = rows(id);
+  const originalRead = fs.readFileSync;
+  const sealedReads = [];
+  const read = vi.spyOn(fs, 'readFileSync').mockImplementation((path, ...args) => {
+    if (typeof path === 'string' && path.endsWith('000001.jsonl')) sealedReads.push(path);
+    return originalRead(path, ...args);
+  });
+  syncBuiltinESMExports();
+  let sending;
+  try {
+    // Only the synchronous acceptance section: model hydration after the
+    // first await can legitimately read recent history.
+    sending = send('new-active-input');
+  } finally {
+    read.mockRestore();
+    syncBuiltinESMExports();
+  }
+  await sending;
+  await waitCalls(1);
+  expect(sealedReads).toEqual([]);
+  expectFork(copy('bounded-ingress-fork'), prefix);
+  expectSourceRunning();
+  calls[0].gate.resolve();
+  await __testDrainVpDrivers();
+});
+
 it('forks completed history while orphaned tasks resume, restoring checkpoints or recovering a legacy human-root fence', async () => {
   completedTurn();
   const prefix = rows(id);
+  const legacyToken = store.captureSessionCopyBoundary(id);
   const checkpoint = join(sessionsRoot(root), id, 'copy-boundary.json');
   // Exercise a real TaskManager restart, not an injected runtime status. The
   // task is persisted with the source turn and becomes orphaned on reload.
@@ -152,8 +187,8 @@ it('forks completed history while orphaned tasks resume, restoring checkpoints o
   const activeInput = rows(id).find(row => row.clientMessageId === 'before-restart');
   runtime.taskManager.startTask({ sessionId: id, ownerVpId: 'alpha', resultDelivery: 'model_reentry',
     source: { threadId: calls[0].threadId, causalRootId: activeInput.id } });
-  expect(JSON.parse(readFileSync(checkpoint, 'utf8'))).toMatchObject({ sessionId: id, rowCount: prefix.length });
-  expect(statSync(checkpoint).mode & 0o777).toBe(0o600);
+  expect(JSON.parse(readFileSync(checkpoint, 'utf8'))).toMatchObject({ sessionId: id, boundary: { version: 2, sessionId: id } });
+  if (process.platform !== 'win32') expect(statSync(checkpoint).mode & 0o777).toBe(0o600);
   calls[0].gate.resolve();
   await __testDrainVpDrivers();
   expect(existsSync(checkpoint)).toBe(true); // the task still owns this epoch
@@ -166,6 +201,12 @@ it('forks completed history while orphaned tasks resume, restoring checkpoints o
   expectFork(copy('restored-cold-first'), prefix);
   expectFork(copy('restored-cold-second'), prefix);
   expect(existsSync(checkpoint)).toBe(true);
+  const v2 = JSON.parse(readFileSync(checkpoint, 'utf8'));
+  await __testResetVpState();
+  writeFileSync(checkpoint, JSON.stringify({ ...legacyToken, taskIds: v2.taskIds }));
+  expectFork(copy('restored-from-v1'), prefix);
+  await __testResetVpState();
+  writeFileSync(checkpoint, JSON.stringify(v2));
   runtime = { yeaftDir: root, config: {}, conversationStore: store, taskManager: new TaskManager({ yeaftDir: root }) };
   __testSetSession(runtime);
   installYeaftRuntimeBridge(runtime);
@@ -205,6 +246,8 @@ it('forks completed history while orphaned tasks resume, restoring checkpoints o
   expectFork(copy('legacy-historic', { throughTurnId: 'historic' }), prefix);
   expect(rows(id)).toEqual(unchanged);
   expectSourceRunning();
+  store.update(prefix[1], { content: 'historic row rewritten during orphan recovery' });
+  expect(copy('legacy-rewritten')).toMatchObject({ ok: false, error: { code: 'invalid_fork_boundary' } });
   calls[2].gate.resolve();
   await __testDrainVpDrivers();
   expectFork(copy('legacy-idle'), rows(id));

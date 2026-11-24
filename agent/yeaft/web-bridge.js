@@ -108,6 +108,7 @@ import {
 } from './sessions/session-crud.js';
 import { openSession, loadSessionMeta, SESSION_META_FILE } from './sessions/session-store.js';
 import { tryAcquireSessionTurnDeletion } from './sessions/session-turn-fence.js';
+import { hydratePersistedSessionTurns } from './sessions/turn-recovery.js';
 import { validateSessionId } from './sessions/ids.js';
 import { publicScheduledTask } from './sessions/scheduled-task-definition.js';
 import { ScheduledTaskScheduler, SCHEDULED_TASK_DISPATCH_GUARD } from './sessions/scheduled-task-scheduler.js';
@@ -592,10 +593,9 @@ function sessionCopyBoundaryPath(sessionId) {
 }
 
 function persistSessionCopyBoundary(sessionId, epoch) {
-  if (!epoch.boundary) return;
   try {
     writeAtomic(sessionCopyBoundaryPath(sessionId), JSON.stringify({
-      ...JSON.parse(epoch.boundary), taskIds: [...epoch.taskIds],
+      sessionId, boundary: epoch.boundary, beforeMessageIds: [...epoch.beforeMessageIds], taskIds: [...epoch.taskIds],
     }), { mode: 0o600 });
   } catch (error) {
     console.warn('[Yeaft] Session copy boundary persistence failed:', sessionId, error?.code || 'write_failed');
@@ -620,60 +620,64 @@ function settleSessionCopyEpoch(sessionId) {
 // Once TaskManager exists, its startup queue owns that inventory (it has already
 // changed running tasks to orphaned). No task metadata is mutated here.
 function sessionCopyRecoveryTasks(sessionId) {
-  if (!ctx.CONFIG?.yeaftDir) return [];
+  if (!ctx.CONFIG?.yeaftDir || !validateSessionId(sessionId).ok) return [];
   const manager = session?.taskManager;
   const tasks = manager
     ? (manager.pendingStartupEvents || []).map(event => event.task)
-    : new TaskStore({ yeaftDir: ctx.CONFIG?.yeaftDir }).loadActiveTasks();
+    : new TaskStore({ yeaftDir: ctx.CONFIG.yeaftDir }).loadActiveTasks(sessionId);
   return tasks.filter(task => task?.sessionId === sessionId && task.ownerVpId
     && taskResultDeliveryFor(task) === TASK_RESULT_DELIVERY.MODEL_REENTRY);
 }
 
-function recoverSessionCopyTask(sessionId, epoch, task) {
+function recoverSessionCopyTask(epoch, task) {
   if (epoch.unrecoverable || epoch.taskIds.has(task.id)) return;
-  try {
-    const root = resolveSessionYeaftDir(ctx.CONFIG?.yeaftDir, sessionId);
-    const token = new ConversationStore(root).captureSessionCopyBoundary(sessionId, {
-      beforeMessageId: task.source?.causalRootId,
-    });
-    if (!epoch.boundary || token.rowCount < JSON.parse(epoch.boundary).rowCount) {
-      epoch.boundary = JSON.stringify(token);
-    }
-    epoch.taskIds.add(task.id);
-  } catch {
+  const root = task.source?.causalRootId;
+  if (typeof root !== 'string' || !root.trim()) {
     // One orphan's known root cannot authorize another orphan's unknown input.
-    epoch.boundary = null;
     epoch.unrecoverable = true;
+    return;
   }
+  // Resolve the causal closure only when someone actually asks for a copy.
+  epoch.beforeMessageIds.add(root);
+  epoch.taskIds.add(task.id);
 }
 
 function beginSessionActivity(sessionId, { recoveryTask = null, unknownBoundary = false } = {}) {
+  if (!validateSessionId(sessionId).ok) return () => {};
   settleSessionCopyEpoch(sessionId);
   let epoch = sessionCopyEpochs.get(sessionId);
-  const previousBoundary = epoch?.boundary;
-  const previousTaskCount = epoch?.taskIds.size;
+  const previousTaskCount = epoch?.taskIds.size || 0;
   if (!epoch) {
     const recovering = sessionCopyRecoveryTasks(sessionId);
     if (unknownBoundary && recoveryTask && !recovering.some(task => task.id === recoveryTask.id)) recovering.push(recoveryTask);
-    epoch = { boundary: null, taskIds: new Set(), awaitingRecovery: new Set(recovering.map(task => task.id)), unrecoverable: false, pending: 0 };
+    epoch = { boundary: null, beforeMessageIds: new Set(), taskIds: new Set(),
+      awaitingRecovery: new Set(recovering.map(task => task.id)), unrecoverable: false, pending: 0 };
     // A checkpoint is useful only for the tasks that actually owned it. A
     // leftover file after a completed query must not truncate new idle history.
     if (recovering.length) {
       try {
-        const saved = readFileSync(sessionCopyBoundaryPath(sessionId), 'utf8');
-        const token = JSON.parse(saved);
-        if (token?.version === 1 && token.sessionId === sessionId && Array.isArray(token.taskIds)
-            && recovering.some(task => token.taskIds.includes(task.id))) {
-          epoch.boundary = saved;
-          epoch.taskIds = new Set(token.taskIds);
+        const saved = JSON.parse(readFileSync(sessionCopyBoundaryPath(sessionId), 'utf8'));
+        if (saved?.sessionId === sessionId && Array.isArray(saved.taskIds)
+            && recovering.some(task => saved.taskIds.includes(task.id))) {
+          const token = saved.version === 1 ? saved : saved.boundary;
+          const roots = saved.version === 1 ? [] : saved.beforeMessageIds;
+          if ([1, 2].includes(token?.version) && token.sessionId === sessionId
+              && Array.isArray(roots) && roots.every(id => typeof id === 'string' && id.trim())) {
+            epoch.boundary = token;
+            epoch.beforeMessageIds = new Set(roots);
+            epoch.taskIds = new Set(saved.taskIds);
+          }
         }
       } catch { /* Missing/invalid checkpoint never authorizes unrestricted copy. */ }
-      for (const task of recovering) recoverSessionCopyTask(sessionId, epoch, task);
-    } else if (!unknownBoundary && !hasSessionRuntimeWork(sessionId)) {
+      for (const task of recovering) recoverSessionCopyTask(epoch, task);
+    }
+    const needsRecoveryFence = epoch.beforeMessageIds.size > 0 && !epoch.unrecoverable;
+    if (!epoch.boundary && (needsRecoveryFence || (!recovering.length && !unknownBoundary && !hasSessionRuntimeWork(sessionId)))) {
       try {
         const root = resolveSessionYeaftDir(ctx.CONFIG?.yeaftDir, sessionId);
-        epoch.boundary = JSON.stringify(new ConversationStore(root).captureSessionCopyBoundary(sessionId));
+        epoch.boundary = new ConversationStore(root).captureSessionAppendBoundary(sessionId);
       } catch (error) {
+        epoch.unrecoverable = true;
         console.warn('[Yeaft] Session copy boundary capture failed:', sessionId, error?.code || 'capture_failed');
       }
     }
@@ -681,14 +685,14 @@ function beginSessionActivity(sessionId, { recoveryTask = null, unknownBoundary 
   }
   if (recoveryTask) {
     if (unknownBoundary) {
-      recoverSessionCopyTask(sessionId, epoch, recoveryTask);
+      recoverSessionCopyTask(epoch, recoveryTask);
       epoch.awaitingRecovery.delete(recoveryTask.id);
     }
     else if (epoch.boundary) epoch.taskIds.add(recoveryTask.id);
   }
-  if (epoch.boundary !== previousBoundary || epoch.taskIds.size !== previousTaskCount) {
-    if (epoch.boundary) persistSessionCopyBoundary(sessionId, epoch);
-    else clearSessionCopyBoundary(sessionId);
+  if (epoch.unrecoverable) clearSessionCopyBoundary(sessionId);
+  else if (epoch.taskIds.size !== previousTaskCount && epoch.boundary) {
+    persistSessionCopyBoundary(sessionId, epoch);
   }
   epoch.pending += 1;
   let released = false;
@@ -1223,27 +1227,8 @@ function userTurnsFor(sessionId) {
 }
 
 function hydrateSessionTurns(sessionId, store) {
-  if (!sessionId || !store?.loadRecentBySession) return;
-  const turns = userTurnsFor(sessionId);
-  const runtimeExecutions = new Set([...turns.values()].flatMap(turn => [...turn.executions.keys()]));
-  for (const row of store.loadRecentBySession(sessionId, 20)) {
-    if (!row.userTurnId) continue;
-    const rowTime = Date.parse(row.time || row.ts);
-    let turn = turns.get(row.userTurnId);
-    if (!turn) {
-      turn = { userTurnId: row.userTurnId, userMessageId: row.userTurnId,
-        startedAt: rowTime || Date.now(), state: 'completed', executions: new Map() };
-      turns.set(row.userTurnId, turn);
-    }
-    // Replayed roots have no runtime end event; their last durable row bounds it.
-    if (rowTime > 0) turn.lastActivityAt = Math.max(turn.lastActivityAt || 0, rowTime);
-    if (row.turnId && !runtimeExecutions.has(row.turnId)) {
-      const state = row.incomplete ? 'interrupted' : 'completed';
-      turn.executions.set(row.turnId, { vpId: row.speakerVpId || null, threadId: row.threadId || 'main',
-        turnId: row.turnId, state });
-      turn.state = state;
-    }
-  }
+  if (!sessionId || !store?.loadRecentSessionTurnEvidence) return;
+  hydratePersistedSessionTurns(userTurnsFor(sessionId), store.loadRecentSessionTurnEvidence(sessionId));
 }
 
 function publishSessionTurns(sessionId, extra = {}) {
@@ -4432,13 +4417,14 @@ export function handleYeaftCopySession(msg) {
     if (!source) throw new SessionCrudError('not_found', sessionId);
     const active = sessionHasActiveWork(sessionId);
     const epoch = sessionCopyEpochs.get(sessionId);
-    if ((active || source.running) && !epoch?.boundary) {
+    if ((active || source.running) && (!epoch?.boundary || epoch.unrecoverable)) {
       throw new SessionCrudError('session_running', sessionId, 'No safe copy boundary for this running Session');
     }
     const session = copySession(yeaftDir, sessionId, {
       ...configuredVpPaths(),
       name: msg && msg.name,
-      ...(epoch?.boundary ? { throughBoundary: JSON.parse(epoch.boundary) } : {}),
+      ...(epoch?.boundary ? { throughBoundary: epoch.boundary } : {}),
+      ...(epoch?.beforeMessageIds.size ? { beforeMessageIds: [...epoch.beforeMessageIds] } : {}),
       ...(msg && Object.prototype.hasOwnProperty.call(msg, 'throughTurnId')
         ? { throughTurnId: msg.throughTurnId }
         : {}),
@@ -5872,7 +5858,11 @@ async function runYeaftSessionSend(msg) {
   // Snapshot at message acceptance, before boot/classification can yield to
   // another client's scene update. Never mutate the scene of a running turn.
   const sceneId = sessionHandle && !sessionMetaForRuntime?.task ? loadSessionConfig(yeaftDir, sessionId).sceneId || null : null;
+  const copyFenceStart = perfNowMs();
   const releaseActivity = beginSessionActivity(sessionId);
+  const copyFenceMs = perfNowMs() - copyFenceStart;
+  tracePerf('session_send.copy_fence', { durationMs: copyFenceMs });
+  if (copyFenceMs > 100) console.warn('[Yeaft] Session ingress copy fence took %dms: %s', Math.round(copyFenceMs), sessionId);
   const ingress = beginSessionIngress(sessionId);
   ingress.messageId = typeof msg.id === 'string' && msg.id ? msg.id : randomUUID();
   try {

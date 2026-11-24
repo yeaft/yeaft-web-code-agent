@@ -17,7 +17,7 @@
  * Reference: yeaft-yeaft-core-systems.md §4.1, yeaft-yeaft-brainstorm-v5.1.md
  */
 
-import { accessSync, constants, existsSync, mkdirSync, writeFileSync, readFileSync, readdirSync, renameSync, unlinkSync, statSync, appendFileSync, rmSync } from 'fs';
+import { accessSync, constants, existsSync, mkdirSync, writeFileSync, readFileSync, readdirSync, renameSync, unlinkSync, statSync, appendFileSync, rmSync, openSync, readSync, closeSync } from 'fs';
 import { createHash, randomUUID } from 'node:crypto';
 import { hostname } from 'node:os';
 import { DatabaseSync } from 'node:sqlite';
@@ -85,6 +85,46 @@ const VISIBLE_HISTORY_PROJECTION_VERSION = 2;
 const SEGMENT_DIR = 'segments';
 const SEGMENT_TARGET_BYTES = 1024 * 1024;
 const SEGMENT_FIRST_NAME = '000001.jsonl';
+
+// Snapshot the identity of files the Agent treats as sealed. Atomic rewrites,
+// replacement and in-place mutation invalidate these stamps; no row reads.
+function copyFileStamp(path) {
+  const { dev, ino, size, mtimeNs, ctimeNs } = statSync(path, { bigint: true });
+  return { bytes: Number(size), stamp: `${dev}:${ino}:${size}:${mtimeNs}:${ctimeNs}` };
+}
+
+function copyFileStampsDigest(paths) {
+  const hash = createHash('sha256');
+  for (const path of paths) hash.update(JSON.stringify([resolve(path), copyFileStamp(path).stamp]));
+  return hash.digest('hex');
+}
+
+function copyDeletionStamp(path) {
+  try { return copyFileStamp(path).stamp; }
+  catch (error) {
+    if (error.code === 'ENOENT') return null;
+    throw error;
+  }
+}
+
+function copyBoundaryChanged() {
+  return historyError('invalid_fork_boundary', 'Captured Session prefix is invalid or has changed');
+}
+
+function readCopyTail(path, bytes) {
+  const fd = openSync(path, 'r');
+  try {
+    const buffer = Buffer.allocUnsafe(bytes);
+    for (let offset = 0; offset < bytes;) {
+      const read = readSync(fd, buffer, offset, bytes - offset, offset);
+      if (!read) throw copyBoundaryChanged();
+      offset += read;
+    }
+    return buffer;
+  } finally {
+    closeSync(fd);
+  }
+}
 const MESSAGE_SEQUENCE_FILE = 'message-sequence.json';
 const MESSAGE_SEQUENCE_LOCK_DIR = 'message-sequence.lock';
 const MESSAGE_SEQUENCE_MUTEX_FILE = 'message-sequence-lock.db';
@@ -1128,6 +1168,70 @@ class SegmentStore {
     return appendOrder ? rows : rows.sort(compareMessagesBySeq);
   }
 
+  #copySegmentFiles() {
+    try {
+      return readdirSync(this.segmentDir).filter(name => name.endsWith('.jsonl')).sort((a, b) => a.localeCompare(b));
+    } catch (error) {
+      if (error.code === 'ENOENT') return [];
+      throw error;
+    }
+  }
+
+  captureCopyPrefix() {
+    const files = this.#copySegmentFiles();
+    const tailName = files.at(-1);
+    let tail = null;
+    if (tailName) {
+      const path = join(this.segmentDir, tailName);
+      const { bytes, stamp } = copyFileStamp(path);
+      // A full segment won't accept another append. Even an oversized single
+      // row is sealed here, so acceptance never reads an unbounded payload.
+      if (bytes < SEGMENT_TARGET_BYTES) {
+        const raw = readCopyTail(path, bytes);
+        if (copyFileStamp(path).stamp !== stamp) throw copyBoundaryChanged();
+        if (raw.length && raw.at(-1) !== 10) throw copyBoundaryChanged();
+        files.pop();
+        tail = { name: tailName, bytes, digest: createHash('sha256').update(raw).digest('hex') };
+      }
+    }
+    return { sealedCount: files.length, sealedDigest: copyFileStampsDigest(files.map(name => join(this.segmentDir, name))),
+      tail, streamId: this.#readLineage()?.streamId ?? null };
+  }
+
+  readRawWithCopyPrefix(prefix) {
+    const { sealedCount, sealedDigest, tail } = prefix;
+    if (!Number.isSafeInteger(sealedCount) || sealedCount < 0) throw copyBoundaryChanged();
+    const files = this.#copySegmentFiles();
+    if (sealedCount > files.length || (tail && (files[sealedCount] !== tail.name
+        || !Number.isSafeInteger(tail.bytes) || tail.bytes < 0 || tail.bytes >= SEGMENT_TARGET_BYTES))) {
+      throw copyBoundaryChanged();
+    }
+    const verifySealed = () => {
+      if (copyFileStampsDigest(files.slice(0, sealedCount).map(name => join(this.segmentDir, name))) !== sealedDigest) {
+        throw copyBoundaryChanged();
+      }
+    };
+    verifySealed();
+    let prefixCount = 0;
+    const rows = files.flatMap((name, index) => {
+      if (index === sealedCount && tail) {
+        const raw = readFileSync(join(this.segmentDir, name));
+        const head = raw.subarray(0, tail.bytes);
+        if (head.length !== tail.bytes || createHash('sha256').update(head).digest('hex') !== tail.digest) {
+          throw copyBoundaryChanged();
+        }
+        const headRows = this.#parseSegmentRows(head.toString('utf8'), { includeCold: true, appendOrder: true });
+        prefixCount += headRows.length;
+        return headRows.concat(this.#parseSegmentRows(raw.subarray(tail.bytes).toString('utf8'), { includeCold: true, appendOrder: true }));
+      }
+      const segmentRows = this.#readSegment(name, { includeCold: true, appendOrder: true });
+      if (index < sealedCount) prefixCount += segmentRows.length;
+      return segmentRows;
+    });
+    verifySealed();
+    return { rows, prefixCount };
+  }
+
   *scan({ beforeSeq = Infinity, afterSeq = -Infinity, desc = false, includeCold = false, scanStats = null, projection = 'context' } = {}) {
     if (!this.hasData()) return;
     const idx = this.loadIndex();
@@ -1431,7 +1535,10 @@ class SegmentStore {
   #readSegment(file, { beforeSeq = Infinity, afterSeq = -Infinity, desc = false, includeCold = false, appendOrder = false } = {}) {
     const path = join(this.segmentDir, file);
     if (!existsSync(path)) return [];
-    const raw = readFileSync(path, 'utf8');
+    return this.#parseSegmentRows(readFileSync(path, 'utf8'), { beforeSeq, afterSeq, desc, includeCold, appendOrder });
+  }
+
+  #parseSegmentRows(raw, { beforeSeq = Infinity, afterSeq = -Infinity, desc = false, includeCold = false, appendOrder = false }) {
     const rows = [];
     for (const line of raw.split('\n')) {
       const msg = parseJsonLine(line);
@@ -2013,6 +2120,12 @@ export class ConversationStore {
     return pairSanitize(messages);
   }
 
+  /** Bounded, deletion-aware reconnect evidence, before any provider pair sanitization or folding. */
+  loadRecentSessionTurnEvidence(sessionId) {
+    if (!sessionId) return [];
+    return this.#loadRecentSessionWindow(sessionId, 20, { visibleOnly: true }).messages;
+  }
+
   /**
    * Provider-only chronological history. UI pages deliberately cap raw rows;
    * that cap is not a turn limit and must not truncate a tool-heavy query's
@@ -2088,6 +2201,30 @@ export class ConversationStore {
       lastMessageId: rows.at(-1)?.id ?? null,
       digest: this.#sessionCopyPrefixDigest(rows),
     };
+  }
+
+  /**
+   * Capture an active copy fence before ingress can write. No index rebuild or
+   * historic row parsing: sealed files and legacy Markdown use file metadata;
+   * only the appendable JSONL tail (less than 1 MiB) needs a byte-prefix hash.
+   * The raw fence is independent of sequence reservation and duplicate IDs.
+   * @returns {object} Serializable version-2 token for throughBoundary
+   */
+  captureSessionAppendBoundary(sessionId) {
+    if (typeof sessionId !== 'string' || !sessionId) throw copyBoundaryChanged();
+    const dir = this.#sessionConversationDir(sessionId);
+    const primary = this.#segmentStoreForConversationDir(dir);
+    return {
+      version: 2,
+      sessionId,
+      segments: primary.captureCopyPrefix(),
+      legacyDigest: this.#sessionCopyLegacyDigest(sessionId),
+      deletionStamp: copyDeletionStamp(join(dir, SESSION_TURN_DELETION_FILE)),
+    };
+  }
+
+  #sessionCopyLegacyDigest(sessionId) {
+    return copyFileStampsDigest(this.#sessionFileEntries('all', sessionId).map(entry => entry.path));
   }
 
   #sessionCopyBeforeMessageCutoff(rows, streamId, beforeMessageId) {
@@ -2187,12 +2324,16 @@ export class ConversationStore {
     if (!sourceSessionId || !targetSessionId || sourceSessionId === targetSessionId) {
       return { copiedCount: 0, idMap: new Map() };
     }
-    const { rows: durableRows, streamId } = this.#loadDurableSession(sourceSessionId, { allowDuplicateIds: true });
+    const boundary = options.throughBoundary;
+    const appendBoundary = boundary?.version === 2 ? boundary : null;
+    if (appendBoundary && (appendBoundary.sessionId !== sourceSessionId || !appendBoundary.segments)) {
+      throw copyBoundaryChanged();
+    }
+    const { rows: durableRows, streamId, appendCutoff } = this.#loadDurableSession(sourceSessionId, { allowDuplicateIds: true, appendBoundary });
     let rows = durableRows;
     let cutoff = rows.length;
-    let capturedCutoff = null;
-    if (Object.prototype.hasOwnProperty.call(options, 'throughBoundary')) {
-      const boundary = options.throughBoundary;
+    let capturedCutoff = appendCutoff;
+    if (Object.hasOwn(options, 'throughBoundary') && !appendBoundary) {
       if (!boundary || typeof boundary !== 'object' || boundary.version !== 1
           || boundary.sessionId !== sourceSessionId
           || (boundary.rowCount !== 0 && boundary.streamId !== streamId)
@@ -2203,8 +2344,15 @@ export class ConversationStore {
         throw historyError('invalid_fork_boundary', 'Captured Session prefix is invalid or has changed');
       }
       capturedCutoff = boundary.rowCount;
-      cutoff = capturedCutoff;
     }
+    if (Object.hasOwn(options, 'beforeMessageIds')) {
+      if (!Array.isArray(options.beforeMessageIds) || !options.beforeMessageIds.length) throw copyBoundaryChanged();
+      for (const id of new Set(options.beforeMessageIds)) {
+        const rootCutoff = this.#sessionCopyBeforeMessageCutoff(rows, streamId, id);
+        capturedCutoff = Math.min(capturedCutoff ?? rows.length, rootCutoff);
+      }
+    }
+    if (capturedCutoff !== null) cutoff = capturedCutoff;
     if (Object.prototype.hasOwnProperty.call(options, 'throughMessageId')) {
       if (options.throughMessageId === null) cutoff = 0;
       else {
@@ -2329,11 +2477,23 @@ export class ConversationStore {
     }
   }
 
-  #loadDurableSession(sourceSessionId, { allowDuplicateIds = false } = {}) {
-    const primary = this.#segmentStoreForConversationDir(this.#sessionConversationDir(sourceSessionId));
+  #loadDurableSession(sourceSessionId, { allowDuplicateIds = false, appendBoundary = null } = {}) {
+    const dir = this.#sessionConversationDir(sourceSessionId);
+    const primary = this.#segmentStoreForConversationDir(dir);
+    const verifyProjection = () => {
+      if (appendBoundary && (copyDeletionStamp(join(dir, SESSION_TURN_DELETION_FILE)) !== appendBoundary.deletionStamp
+          || this.#sessionCopyLegacyDigest(sourceSessionId) !== appendBoundary.legacyDigest)) throw copyBoundaryChanged();
+    };
+    verifyProjection();
     const projection = sessionDeletionProjection(readSessionTurnDeletions(this.#dir, sourceSessionId).operations);
     const project = row => row?.sessionId === sourceSessionId ? projection.scrub(row) : row;
-    const segmentedRows = primary.readAllRaw({ includeCold: true, appendOrder: true }).map(project).filter(Boolean);
+    const raw = appendBoundary ? primary.readRawWithCopyPrefix(appendBoundary.segments) : null;
+    let prefixCount = 0;
+    const segmentedRows = (raw?.rows ?? primary.readAllRaw({ includeCold: true, appendOrder: true })).map((row, i) => {
+      const kept = project(row);
+      if (raw && i < raw.prefixCount && kept?.sessionId === sourceSessionId) prefixCount++;
+      return kept;
+    }).filter(Boolean);
     const segmentIds = new Set(segmentedRows.map(row => row.id));
     const hasDuplicates = segmentIds.size !== segmentedRows.length;
     if (hasDuplicates && !allowDuplicateIds) {
@@ -2351,22 +2511,38 @@ export class ConversationStore {
     // identical, not merely its ID. Distinct hot/cold/segment rows all survive.
     const shadowKey = row => serializeMessage({ ...row, time: row.time || '<missing>' });
     const shadows = new Map();
-    for (const row of segmentedRows) {
-      const key = shadowKey(row);
-      shadows.set(key, (shadows.get(key) || 0) + 1);
+    const prefixShadows = new Map();
+    if (legacyRows.length) {
+      let inScopeRows = 0;
+      for (const row of segmentedRows) {
+        const key = shadowKey(row);
+        shadows.set(key, (shadows.get(key) || 0) + 1);
+        if (raw && row.sessionId === sourceSessionId && inScopeRows++ < prefixCount) {
+          prefixShadows.set(key, (prefixShadows.get(key) || 0) + 1);
+        }
+      }
     }
     const legacy = [];
     for (const row of legacyRows) {
       if (row?.sessionId !== sourceSessionId || typeof row.id !== 'string' || !row.id) continue;
       const key = shadowKey(row);
-      if (shadows.get(key)) { shadows.set(key, shadows.get(key) - 1); continue; }
+      if (shadows.get(key)) {
+        shadows.set(key, shadows.get(key) - 1);
+        // A post-fence row must not turn a captured legacy row into a shadow.
+        if (raw && !prefixShadows.get(key)) throw copyBoundaryChanged();
+        if (raw) prefixShadows.set(key, prefixShadows.get(key) - 1);
+        continue;
+      }
       legacy.push(row);
     }
     // Legacy-only rows predate the segmented transcript; each block has its
     // own stable order. Never switch order after an append introduces a clash.
     const rows = [...legacy.sort(compareMessagesBySeq),
       ...segmentedRows.filter(row => row?.sessionId === sourceSessionId)];
-    return { sessionId: sourceSessionId, streamId: rows.length || primary.hasData() ? primary.metadata().streamId : null, rows };
+    const streamId = rows.length || primary.hasData() ? primary.metadata().streamId : null;
+    verifyProjection();
+    if (appendBoundary?.segments.streamId && appendBoundary.segments.streamId !== streamId) throw copyBoundaryChanged();
+    return { sessionId: sourceSessionId, streamId, rows, appendCutoff: raw ? legacy.length + prefixCount : null };
   }
 
   /**
