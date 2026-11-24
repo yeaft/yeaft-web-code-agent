@@ -1191,6 +1191,21 @@ RELEASE_BODY`;
       }
     });
 
+    it('keeps an immediate 429 distinct from a timeout when its retry delay will not fit', async () => {
+      const fetch = vi.fn(async () => new Response('{}', { status: 429, headers: { 'Retry-After': '30' } }));
+      vi.stubGlobal('fetch', fetch);
+      try {
+        const engine = new Engine({ adapter: geminiGateway(), trace, config: { ...geminiConfig,
+          llmRetry: { maxRequestRetryTimeMs: 20_000 } } });
+        const events = [];
+        for await (const event of engine.query({ prompt: 'Check the provider' })) events.push(event);
+        expect(fetch).toHaveBeenCalledTimes(1);
+        expect(events.some(event => event.type === 'llm_retry')).toBe(false);
+        expect(events.find(event => event.type === 'error')).toMatchObject({ reason: 'request_retry_time_exhausted',
+          retryAttempts: 0, error: { statusCode: 429, message: expect.stringContaining('rate limited') } });
+      } finally { vi.unstubAllGlobals(); }
+    });
+
     it('does not interrupt a healthy Gemini stream after headers or treat user cancellation as timeout', async () => {
       for (const cancel of [false, true]) {
         const ctrl = new AbortController();
@@ -1326,6 +1341,8 @@ RELEASE_BODY`;
           ['retry', [...partial, blockStop(1), stop('tool_use'), messageStop]],
           ['server-refusal', [serverTool, blockStop(0), stop('refusal'), messageStop]],
           ['server-cut', [serverTool]],
+          ['server-empty', [serverTool, blockStop(0), stop('end_turn'), messageStop]],
+          ['server-empty-json', []],
         ]) {
           execute.mockClear();
           const sessionId = `session-stream-${name}`;
@@ -1336,6 +1353,8 @@ RELEASE_BODY`;
           global.fetch = vi.fn(async (_url, init) => {
             requests += 1;
             bodies.push(init.body);
+            if (name === 'server-empty-json') return new Response(JSON.stringify({ stop_reason: 'end_turn',
+              content: [serverTool.content_block] }), { headers: { 'content-type': 'application/json' } });
             if (name === 'complete' && requests > 1) return sse(answer);
             if (name === 'retry' && requests > 1) return sse(requests === 2 ? complete : answer);
             if (name === 'idle' || name === 'abort') return new Response(new ReadableStream({ start(controller) {
@@ -1347,13 +1366,15 @@ RELEASE_BODY`;
           const engine = new Engine({ adapter: new AnthropicAdapter({ apiKey: 'synthetic', baseUrl: 'https://proxy.invalid', streamIdleTimeoutMs: 10 }), trace,
             toolRegistry: registry, conversationStore, yeaftDir,
             config: { model: 'claude-opus-4.8', modelEffort: 'high', projectDocMaxBytes: 0, maxOutputTokens: 1024,
-              llmRetry: { maxRetries: ['retry', 'server-refusal', 'server-cut'].includes(name) ? 1 : 0, baseDelayMs: 0, maxDelayMs: 0, jitterRatio: 0 } } });
+              ...(name.startsWith('server-empty') ? { fallbackModel: 'claude-sonnet-4.6' } : {}),
+              llmRetry: { maxRetries: name === 'retry' || name.startsWith('server-') ? 1 : 0, baseDelayMs: 0, maxDelayMs: 0, jitterRatio: 0 } } });
           const output = [];
           for await (const event of engine.query({ prompt: 'echo values', sessionId, signal: ctrl.signal, onProviderRequestStart: policy => policies.push(policy) })) {
             output.push(event);
             if (name === 'abort' && event.type === 'provider_activity') ctrl.abort();
           }
-          expect(policies[0]).toEqual({ effort: 'xhigh', streamIdleTimeoutMs: 10 });
+          expect(policies[0]).toEqual({ effort: 'xhigh', streamIdleTimeoutMs: 10, headersTimeoutMs: expect.any(Number) });
+          expect(policies[1]).toEqual({ effort: 'xhigh', streamIdleTimeoutMs: 10, headersTimeoutMs: undefined });
           const persisted = conversationStore.loadRecentBySession(sessionId, 50);
           if (name === 'complete' || name === 'retry') {
             // One tool batch and one tool-result continuation, after one fresh

@@ -1244,7 +1244,8 @@ export default {
 
     const waitingFailures = Vue.computed(() => _props.sessionActivity.flatMap(row => (row.errors || [])
       .filter(error => error.turnId && (error.code === 'provider_watchdog_timeout' || ['stream_idle_timeout', 'response_headers_timeout', 'upstream_headers_timeout', 'request_retry_time_exhausted'].includes(error.reason)))
-      .map(error => ({ turnId: error.turnId, kind: error.retryAttempts > 0 ? 'failedAfterRetry' : 'failed' }))));
+      .map(error => ({ turnId: error.turnId, kind: error.reason === 'request_retry_time_exhausted' ? 'retryBudgetReached'
+        : error.retryAttempts > 0 ? 'failedAfterRetry' : 'failed' }))));
 
     function refreshSession() {
       const convId = store.currentConversation;

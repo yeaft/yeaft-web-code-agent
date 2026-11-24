@@ -2307,6 +2307,7 @@ export default {
   'yeaft.queryProgress.waiting.retrying': '{name} 正在准备重试模型请求。',
   'yeaft.queryProgress.waiting.failed': '模型服务响应超时，任务尚未确认完成。再次尝试前请检查工具是否已产生变更。',
   'yeaft.queryProgress.waiting.failedAfterRetry': '重试后模型服务响应仍然超时，任务尚未确认完成。再次尝试前请检查工具是否已产生变更。',
+  'yeaft.queryProgress.waiting.retryBudgetReached': '剩余时间不足，已停止重试。任务尚未确认完成；继续前请检查工具是否已产生变更。',
   'yeaft.queryProgress.inputTokens': '输入 token',
   'yeaft.queryProgress.outputTokens': '输出 token',
   'yeaft.queryProgress.unavailable': '未提供',

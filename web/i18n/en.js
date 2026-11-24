@@ -2310,6 +2310,7 @@ export default {
   'yeaft.queryProgress.waiting.retrying': '{name} is preparing to retry the model request.',
   'yeaft.queryProgress.waiting.failed': 'The provider response timed out. The task is not confirmed complete. Check any tool changes before trying again.',
   'yeaft.queryProgress.waiting.failedAfterRetry': 'The provider response timed out after retrying. The task is not confirmed complete. Check any tool changes before trying again.',
+  'yeaft.queryProgress.waiting.retryBudgetReached': 'No more retries fit within the time limit. The task is not confirmed complete. Check any tool changes before continuing.',
   'yeaft.queryProgress.inputTokens': 'Input tokens',
   'yeaft.queryProgress.outputTokens': 'Output tokens',
   'yeaft.queryProgress.unavailable': 'Not provided',

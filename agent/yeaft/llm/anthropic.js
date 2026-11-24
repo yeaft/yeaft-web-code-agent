@@ -116,7 +116,7 @@ function providerRanTools(blocks) {
 }
 
 /**
- * Flag a failed response in which Anthropic itself ran server or MCP tools: the
+ * Flag a response in which Anthropic itself ran server or MCP tools: the
  * Engine retries failed responses, and replaying this one could repeat effects.
  */
 function unusable(event, blocks) {
@@ -331,8 +331,8 @@ export class AnthropicAdapter extends LLMAdapter {
     return wire;
   }
 
-  #dispatch({ url, headers, requestBody, signal, getHeadersTimeoutMs, withoutCache, context, onProviderDiagnostics, onRequestStart, maxRequestBodyBytes }) {
-    return fetchWithPromptCacheFallback({ url, headers, body: requestBody, signal, getHeadersTimeoutMs, providerLabel: 'Anthropic', field: 'cache_control',
+  #dispatch({ url, headers, requestBody, signal, getHeadersTimeoutMs, onResponseHeaders, withoutCache, context, onProviderDiagnostics, onRequestStart, maxRequestBodyBytes }) {
+    return fetchWithPromptCacheFallback({ url, headers, body: requestBody, signal, getHeadersTimeoutMs, onResponseHeaders, providerLabel: 'Anthropic', field: 'cache_control',
       // Messages API allows 32 MB; keep a margin for gateway limits.
       withoutCache, onRequestStart, maxRequestBodyBytes: Math.min(maxRequestBodyBytes ?? Infinity, 30_000_000),
       onCacheFallback: () => onProviderDiagnostics?.({ ...context.diagnostics, promptCaching: 'rejected-fallback' }),
@@ -377,7 +377,7 @@ export class AnthropicAdapter extends LLMAdapter {
    * @param {{ model: string, system: string, messages: import('./adapter.js').UnifiedMessage[], tools?: import('./adapter.js').UnifiedToolDef[], maxTokens?: number, contextOutputLimit?: number, effort?: 'medium'|'xhigh'|'max', effortSource?: 'user'|'auto', effortContext?: object, signal?: AbortSignal, onRawExchange?: ({rawRequest, rawResponse}) => void }} params
    * @returns {AsyncGenerator<import('./adapter.js').StreamEvent>}
    */
-  async *stream({ model, system, messages, tools, maxTokens = 16384, contextOutputLimit, effort, effortSource, effortContext, extraBody, providerContext, requestIdentity, onProviderDiagnostics, effortConstraint = null, onEffortDecision = null, signal, onRawExchange, rawExchangeMaxBytes = 512 * 1024, onRequestStart, getHeadersTimeoutMs, streamIdleTimeoutMs, maxRequestBodyBytes, imageLimits }) {
+  async *stream({ model, system, messages, tools, maxTokens = 16384, contextOutputLimit, effort, effortSource, effortContext, extraBody, providerContext, requestIdentity, onProviderDiagnostics, effortConstraint = null, onEffortDecision = null, signal, onRawExchange, rawExchangeMaxBytes = 512 * 1024, onRequestStart, getHeadersTimeoutMs, onResponseHeaders, streamIdleTimeoutMs, maxRequestBodyBytes, imageLimits }) {
     if (signal?.aborted) throw new LLMAbortError();
 
     const context = providerContext || createProviderContext({ protocol: 'anthropic', baseUrl: this.#baseUrl, staticApiKey: this.#apiKey, model });
@@ -422,9 +422,9 @@ export class AnthropicAdapter extends LLMAdapter {
     const url = `${this.#baseUrl}/v1/messages`;
     const headers = { ...this.#headers(), ...midConversationHeaders(requestBody) };
 
-    const { response, errorBody, body: wireBody } = await this.#dispatch({ url, headers, requestBody, signal, getHeadersTimeoutMs, maxRequestBodyBytes,
+    const { response, errorBody, body: wireBody } = await this.#dispatch({ url, headers, requestBody, signal, getHeadersTimeoutMs, onResponseHeaders, maxRequestBodyBytes,
       withoutCache: caching.sent ? () => this.#uncachedBody(body, replayed, imageLimits) : undefined, context, onProviderDiagnostics,
-      onRequestStart: () => onRequestStart?.({ effort: effortDecision.effective, streamIdleTimeoutMs: idleMs }) });
+      onRequestStart: headersTimeoutMs => onRequestStart?.({ effort: effortDecision.effective, streamIdleTimeoutMs: idleMs, headersTimeoutMs }) });
     // Capture the final request after any pre-generation cache field rejection.
     const rawRequest = redactRawRequest({ url, method: 'POST', headers, body: wireBody });
 
@@ -489,7 +489,7 @@ export class AnthropicAdapter extends LLMAdapter {
         if (block.type === 'redacted_thinking') yield { type: 'thinking_block_end', redacted: true, data: block.data };
       }
       if (state) yield { type: 'provider_state', providerState: state, providerStateBytes: providerStateBytes(state) };
-      yield stopEvent(result);
+      yield unusable(stopEvent(result), result.content || []);
       return;
     }
 
@@ -759,7 +759,7 @@ export class AnthropicAdapter extends LLMAdapter {
               if (state) yield { type: 'provider_state', providerState: state, providerStateBytes: providerStateBytes(state) };
               const publicBlocks = contentMetadata(items);
               if (publicBlocks.length) yield { type: 'provider_metadata', metadata: { protocol: 'anthropic', contentBlocks: publicBlocks } };
-              yield finalStop || { type: 'stop', stopReason: 'unknown' };
+              yield unusable(finalStop || { type: 'stop', stopReason: 'unknown' }, items);
             }
           } else if (type === 'message_start') {
             sawMessageStart = true;

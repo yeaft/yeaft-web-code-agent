@@ -341,8 +341,9 @@ export class GeminiAdapter extends LLMAdapter {
     }.bind(this);
     try {
       const timeoutMs = params.getHeadersTimeoutMs?.();
-      if (timeoutMs !== 0) params.onRequestStart?.({ effort: params.effort, streamIdleTimeoutMs: idleMs });
+      if (timeoutMs !== 0) params.onRequestStart?.({ effort: params.effort, streamIdleTimeoutMs: idleMs, headersTimeoutMs: timeoutMs });
       response = await fetchWithHeadersTimeout(url, { method: 'POST', headers, body: serialized, signal }, timeoutMs);
+      params.onResponseHeaders?.();
       if (response.status === 413) {
         await response.body?.cancel().catch(() => {});
         throw new LLMRequestTooLargeError(requestBytes, { limitBytes: requestBodyLimit, received413: true });

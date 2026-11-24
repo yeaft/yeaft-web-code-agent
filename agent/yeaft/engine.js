@@ -2031,8 +2031,8 @@ export class Engine {
    * @param {string[]} [params.peerTurnIds] - Active peer executions whose durable
    *   history is text-only even when they use the same VP as this execution.
    * @param {Function} [params.onProviderRequestStart] - Internal liveness policy
-   *   callback before dispatch: { effort, streamIdleTimeoutMs } from the final
-   *   native request. No user content; not persisted or projected to the Web.
+   *   before dispatch ({ effort, streamIdleTimeoutMs, headersTimeoutMs }) and
+   *   when headers arrive (headersTimeoutMs cleared). Not persisted.
    * @yields {EngineEvent}
    */
   async *query(params = {}) {
@@ -3511,6 +3511,7 @@ export class Engine {
           retryLifecycle.pendingContinuation = null;
           continuationCommitted = true;
         };
+        let providerRequestPolicy;
         let legacyDispatchReserved = false;
         let progressRequestCounted = false;
         const commitDispatch = (reserveChild = true) => {
@@ -3553,6 +3554,11 @@ export class Engine {
           signal,
           onRawExchange: captureRawExchange,
           rawExchangeMaxBytes,
+          onResponseHeaders: () => {
+            if (!signal?.aborted && providerRequestPolicy) {
+              onProviderRequestStart?.({ ...providerRequestPolicy, headersTimeoutMs: undefined });
+            }
+          },
           onRequestStart: requestPolicy => {
             // Native adapters invoke this immediately before fetch(). A retry
             // continuation and Work Center EngineTurn become durable only when
@@ -3562,6 +3568,7 @@ export class Engine {
             try {
               commitDispatch(!legacyDispatchReserved);
               legacyDispatchReserved = false;
+              providerRequestPolicy = requestPolicy;
               onProviderRequestStart?.(requestPolicy);
             } catch (error) {
               // Budget, lease and persistence failures are local, never a
@@ -4404,7 +4411,7 @@ export class Engine {
           err.withRetries(consecutiveRetryableErrors);
         }
         if (retryTimeExhausted || err instanceof LLMHeadersTimeoutError) {
-          const limit = retryTimeExhausted ? ' The time limit for retrying this model step was reached.' : '';
+          const limit = retryTimeExhausted ? ' The retry time budget for this model step would be exceeded.' : '';
           const retried = consecutiveRetryableErrors + consecutiveForbiddenErrors;
           const retryCount = retried && !(err instanceof LLMFailedResponseError)
             ? ` Retried ${plural(retried, 'time', 'times')}.` : '';

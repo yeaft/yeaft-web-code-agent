@@ -319,8 +319,8 @@ export class OpenAIResponsesAdapter extends LLMAdapter {
     return input;
   }
 
-  #dispatch({ url, headers, requestBody, signal, getHeadersTimeoutMs, cacheKeySent, context, onProviderDiagnostics, onRequestStart, maxRequestBodyBytes }) {
-    return fetchWithPromptCacheFallback({ url, headers, body: requestBody, signal, getHeadersTimeoutMs, providerLabel: 'OpenAI', field: 'prompt_cache_key',
+  #dispatch({ url, headers, requestBody, signal, getHeadersTimeoutMs, onResponseHeaders, cacheKeySent, context, onProviderDiagnostics, onRequestStart, maxRequestBodyBytes }) {
+    return fetchWithPromptCacheFallback({ url, headers, body: requestBody, signal, getHeadersTimeoutMs, onResponseHeaders, providerLabel: 'OpenAI', field: 'prompt_cache_key',
       maxRequestBodyBytes, withoutCache: cacheKeySent ? ({ prompt_cache_key, ...uncached }) => uncached : undefined, onRequestStart,
       onCacheFallback: () => onProviderDiagnostics?.({ ...context.diagnostics,
         nativeReasoningState: Boolean(requestBody.include?.includes('reasoning.encrypted_content')), promptCaching: 'rejected-fallback' }),
@@ -400,7 +400,7 @@ export class OpenAIResponsesAdapter extends LLMAdapter {
     }
   }
 
-  async *#streamResponse({ model, system, messages, tools, maxTokens = 16384, effort, effortSource, effortContext = {}, extraBody, providerContext, requestIdentity, onProviderDiagnostics, effortConstraint = null, onEffortDecision = null, signal, onRawExchange, rawExchangeMaxBytes = 512 * 1024, onRequestStart, getHeadersTimeoutMs, streamIdleTimeoutMs, maxRequestBodyBytes }, exposure) {
+  async *#streamResponse({ model, system, messages, tools, maxTokens = 16384, effort, effortSource, effortContext = {}, extraBody, providerContext, requestIdentity, onProviderDiagnostics, effortConstraint = null, onEffortDecision = null, signal, onRawExchange, rawExchangeMaxBytes = 512 * 1024, onRequestStart, getHeadersTimeoutMs, onResponseHeaders, streamIdleTimeoutMs, maxRequestBodyBytes }, exposure) {
     if (signal?.aborted) throw new LLMAbortError();
 
     const context = providerContext || createProviderContext({ protocol: 'openai-responses', baseUrl: this.#baseUrl, staticApiKey: this.#apiKey, model });
@@ -449,9 +449,9 @@ export class OpenAIResponsesAdapter extends LLMAdapter {
       'Authorization': `Bearer ${this.#apiKey}`,
     };
 
-    const { response, errorBody, body: wireBody } = await this.#dispatch({ url, headers, requestBody, signal, getHeadersTimeoutMs, maxRequestBodyBytes,
+    const { response, errorBody, body: wireBody } = await this.#dispatch({ url, headers, requestBody, signal, getHeadersTimeoutMs, onResponseHeaders, maxRequestBodyBytes,
       cacheKeySent, context, onProviderDiagnostics,
-      onRequestStart: () => onRequestStart?.({ effort: effortDecision.effective, streamIdleTimeoutMs: idleMs }) });
+      onRequestStart: headersTimeoutMs => onRequestStart?.({ effort: effortDecision.effective, streamIdleTimeoutMs: idleMs, headersTimeoutMs }) });
     const rawRequest = redactRawRequest({ url, method: 'POST', headers, body: wireBody });
 
     if (!response.ok) {

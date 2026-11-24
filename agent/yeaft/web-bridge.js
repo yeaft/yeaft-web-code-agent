@@ -1694,10 +1694,13 @@ function queryTimeoutMsForSessionConfig(config = null) {
 // Request effort can differ from Session settings (prefix, auto, child ceiling,
 // fallback). Leave transport retries 30s of headroom even for explicit budgets.
 // Disabling the transport guard does not disable this independent watchdog.
-function queryTimeoutMsForProviderRequest({ effort, streamIdleTimeoutMs } = {}) {
+function queryTimeoutMsForProviderRequest({ effort, headersTimeoutMs, streamIdleTimeoutMs } = {}) {
   const fallback = queryTimeoutMsForSessionConfig({ modelEffort: effort });
-  return Number.isFinite(streamIdleTimeoutMs) && streamIdleTimeoutMs > 0
-    ? Math.max(fallback, Math.min(600_000, streamIdleTimeoutMs) + 30_000) : fallback;
+  // While waiting for headers, let the adapter own timeout classification and
+  // retry; after headers use the stream's independent rolling silence policy.
+  const transportMs = headersTimeoutMs ?? streamIdleTimeoutMs;
+  return Number.isFinite(transportMs) && transportMs > 0
+    ? Math.max(fallback, Math.min(600_000, transportMs) + 30_000) : fallback;
 }
 
 function queryTimeoutMsForSession(sessionId = null) {
@@ -6873,6 +6876,7 @@ async function runVpTurn({ prompt, promptParts = null, sessionId, vpId, threadId
         onProviderRequestStart: policy => {
           handlerCtx.visibleQueryProgress.phase('provider');
           if (policy) watchdog.setTimeoutMs(queryTimeoutMsForProviderRequest(policy));
+          watchdog.reset();
         },
       })) {
         // An escalated turn is detached from the per-VP driver. Its stale
