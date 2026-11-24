@@ -64,9 +64,12 @@ export function choreograph(spec) {
       const capture = sampleTrack(frame);
       if (ms >= spec.fire) {
         const air = flight(ms);
+        const releaseBall = sampleTrack(spec.release).ball;
         capture.ball.x = air.x;
         capture.ball.y = air.y;
+        capture.ball.floor = mix(releaseBall.floor, 0, clamp((ms - spec.fire) / 450, 0, 1));
         capture.ball.held = false;
+        capture.ball.hidden = false;
       }
       const backMs = Math.max(0, ms - 14);
       const before = backMs >= spec.fire

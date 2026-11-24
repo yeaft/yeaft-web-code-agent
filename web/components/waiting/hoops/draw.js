@@ -37,11 +37,13 @@ function kitsOf(colors) {
     near: defNear, far: defFar,
     shortsNear: blend(defNear, colors.ink, 0.08),
     shortsFar: defFar,
+    surface: colors.surface,
   });
   const helpKit = createKit({
     near: defBackNear, far: defBackFar,
     shortsNear: defBackNear,
     shortsFar: defBackFar,
+    surface: colors.surface,
   });
   kits = {
     hero: createKit({
@@ -49,6 +51,7 @@ function kitsOf(colors) {
       vest: blend(heroNear, colors.surface, 0.04),
       shortsNear: heroNear,
       shortsFar: heroFar,
+      surface: colors.surface,
     }),
     guard: defenderKit,
     wing: helpKit,
@@ -99,10 +102,8 @@ function drawCourtShot(ctx, { play, camera, width, colors }) {
   };
   const seen = Object.keys(players).filter(name => players[name].presence > 0.01);
   for (const name of seen) {
-    ctx.globalAlpha = players[name].presence;
     drawPlayerShadow(ctx, camera, players[name], colors.shade);
   }
-  ctx.globalAlpha = 1;
   const floorY = camera.y(ball.floor);
   drawBallShadow(ctx, drawn.x, floorY, radius, floorY - drawn.y - radius, colors.shade);
 
@@ -115,10 +116,10 @@ function drawCourtShot(ctx, { play, camera, width, colors }) {
   if (ball.hidden) drawBall(ctx, drawn, colors);
   for (const name of order) {
     const hero = name === 'hero';
-    // Defenders further off sit back a little, so bodies that overlap stay apart to the eye.
+    // Defenders further off mix slightly toward the page surface so overlapping bodies separate cleanly.
     const back = hero ? 0 : Math.min(1, (nearest - depth(name)) / (0.6 * players[name].size));
     drawPlayer(
-      ctx, camera, players[name], kits[name], (1 - HAZE * back) * players[name].presence,
+      ctx, camera, players[name], kits[name], HAZE * back,
       hero && ball.held && !ball.hidden ? on => drawBall(on, drawn, colors) : undefined,
     );
   }

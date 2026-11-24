@@ -55,7 +55,7 @@ export function drawFloor(ctx, camera, colors, width, staged) {
   }
   if (right <= cx - a) return;
   const reach = Math.acos(Math.max(-1, Math.min(1, (cx - right) / a)));
-  ctx.lineWidth = Math.max(0.8, (staged ? 1.7 : 18) * camera.k);
+  ctx.lineWidth = Math.max(0.8, 18 * camera.k);
   ctx.strokeStyle = rgb(colors.arc);
   ctx.beginPath();
   const steps = 56;
