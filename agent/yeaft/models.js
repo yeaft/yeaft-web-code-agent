@@ -370,6 +370,7 @@ export function parseModelRef(ref) {
 // Gemini-wide enum. Keep unverified IDs out rather than guessing from a prefix.
 const GEMINI_LEVEL_MODELS = new Map([
   ['gemini-4-hydrogen', ['low', 'medium', 'high', 'xhigh']],
+  ['gemini-4-neon', ['low', 'medium', 'high', 'xhigh']],
   ...['gemini-4-carbon', 'gemini-4-argon', 'gemini-3.8-flash', 'gemini-3.1-pro-preview', 'gemini-3.1-pro-preview-customtools']
     .map(id => [id, ['low', 'medium', 'high']]),
   ...['gemini-3.6-flash', 'gemini-3.5-flash-lite', 'gemini-3.1-flash-lite', 'gemini-3-flash-preview', 'gemini-robotics-er-2-preview']
@@ -384,7 +385,7 @@ export const GEMINI_THINKING_BUDGETS = Object.freeze({ medium: 8192, xhigh: 1638
 export function getGeminiThinkingProfile(model, context = {}) {
   const id = geminiModelId(model);
   const levels = GEMINI_LEVEL_MODELS.get(id);
-  if (levels) return { levels: [...levels] };
+  if (levels) return { levels: [...levels], ...(id === 'gemini-4-neon' ? { defaultEffort: 'high' } : {}) };
   const pro = /^gemini-2\.5-pro(?:-preview(?:-\d{2}-\d{2})?)?$/.test(id);
   const flash = /^gemini-2\.5-flash(-lite)?(?:-preview(?:-\d{2}-\d{2})?)?$/.exec(id);
   if (!pro && !flash && id !== 'gemini-robotics-er-1.6-preview' && context.thinkingProtocol !== 'gemini') return null;
@@ -415,7 +416,10 @@ export function resolveGeminiEffort(model, effort, options) {
 /** Publish the distinction between accepted saved tiers and distinct menu choices. */
 export function geminiEffortCatalog(model, capability) {
   if (capability.thinkingProtocol !== 'gemini') return {};
-  if (capability.maxBudgetTokens === null) return { geminiThinkingMode: 'level' };
+  if (capability.maxBudgetTokens === null) return {
+    geminiThinkingMode: 'level',
+    effortMenuOptions: capability.effortOptions.filter(effort => ['medium', 'high', 'xhigh'].includes(effort)),
+  };
   const seen = new Set();
   const effortMenuOptions = capability.effortOptions.filter(effort => {
     const budget = Math.min(capability.maxBudgetTokens, geminiThinkingBudgetForEffort(model, effort));
@@ -519,8 +523,11 @@ export function getThinkingCapability(model, context = {}) {
     const maxBudgetTokens = profile.levels ? null : Math.min(profile.maxBudget, context.maxBudgetTokens ?? profile.maxBudget);
     if (!effortOptions.length || maxBudgetTokens < (profile.minBudget ?? 0)) return disabled;
     const capability = { supportsThinking: true, thinkingProtocol: 'gemini', maxBudgetTokens, effortOptions };
-    const defaults = geminiEffortCatalog(model, capability).effortMenuOptions || effortOptions;
+    // Prefer a visible default without dropping compatibility with explicitly saved Low/Minimal.
+    const menuOptions = geminiEffortCatalog(model, capability).effortMenuOptions;
+    const defaults = menuOptions.length ? menuOptions : effortOptions;
     return { ...capability, defaultEffort: resolveGeminiEffort(model, context.defaultEffort, effortOptions)
+      || (profile.defaultEffort && resolveGeminiEffort(model, profile.defaultEffort, defaults))
       || ['xhigh', 'medium', 'high'].find(value => defaults.includes(value)) || defaults[0] };
   }
   if (protocol !== 'anthropic' && protocol !== 'openai-responses') return disabled;

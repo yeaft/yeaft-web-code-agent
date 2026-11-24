@@ -132,7 +132,7 @@ test(`Gemini configuration discovery and Session roundtrip (${theme}, ${width}px
   await dialog.locator('.agent-settings-close').click();
 
   // The Agent catalog and per-Session writes still cross the real relay.
-  const catalog = [...GEMINI_MODELS, { id: 'gemini-4-carbon', protocol: 'gemini' }].map(model => {
+  const catalog = [...GEMINI_MODELS, ...['gemini-4-carbon', 'gemini-4-neon'].map(id => ({ id, protocol: 'gemini' }))].map(model => {
     const capability = getThinkingCapability(model.id, model);
     const { effortOptions, defaultEffort, thinkingProtocol } = capability;
     return { ...model, ref: `google/${model.id}`, provider: 'google', label: model.id, effortProtocol: thinkingProtocol, effortOptions, defaultEffort, ...geminiEffortCatalog(model.id, capability) };
@@ -174,7 +174,7 @@ test(`Gemini configuration discovery and Session roundtrip (${theme}, ${width}px
   await modelMenu.getByRole('menuitemradio', { name: /gemini-4-hydrogen/ }).click();
   await expect.poll(() => state.inventory.sessions.get('ordinary-session').config?.model).toBe('google/gemini-4-hydrogen');
   await expect(effort).toHaveText('X-High');
-  await chooseEffort(['Medium', 'X-High'], 'Medium', 'medium');
+  await chooseEffort(['Medium', 'High', 'X-High'], 'Medium', 'medium');
   // Restricting the catalog must not present a higher unselected effort.
   const restricted = catalog.map(model => model.id === 'gemini-4-hydrogen' ? { ...model, effortOptions: ['xhigh'] } : model);
   mockAgent.send({ type: 'yeaft_output', event: { type: 'yeaft_status', model: catalog[0].ref,
@@ -182,6 +182,14 @@ test(`Gemini configuration discovery and Session roundtrip (${theme}, ${width}px
   await expect(effort).toHaveText('Unavailable');
   expect(state.inventory.sessions.get('ordinary-session').config?.modelEffort).toBe('medium');
   await chooseEffort(['X-High'], 'X-High', 'xhigh');
+  await modelTrigger.press('Enter');
+  await modelMenu.getByRole('menuitemradio', { name: /gemini-4-neon/ }).click();
+  await expect.poll(() => state.inventory.sessions.get('ordinary-session').config?.model).toBe('google/gemini-4-neon');
+  await expect(effort).toHaveText('High');
+  const neonLevels = ['Medium', 'High', 'X-High'];
+  await chooseEffort(neonLevels, 'Medium', 'medium');
+  await chooseEffort(neonLevels, 'High', 'high');
+  await chooseEffort(neonLevels, 'X-High', 'xhigh');
 
   await page.screenshot({ path: testInfo.outputPath(`${mode}-session-${theme}-${width}.png`) });
   expect(externalRequests).toEqual([]);
