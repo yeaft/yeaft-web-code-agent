@@ -106,6 +106,7 @@ describe('native Gemini adapter', () => {
     try {
       const families = {
         'gemini-4-hydrogen': ['low', 'medium', 'high', 'xhigh'],
+        'gemini-4-neon': ['low', 'medium', 'high', 'xhigh'],
         'gemini-4-carbon': ['low', 'medium', 'high'],
         'gemini-4-argon': ['low', 'medium', 'high'],
         'gemini-3.8-flash': ['low', 'medium', 'high'],
@@ -124,11 +125,18 @@ describe('native Gemini adapter', () => {
       for (const [model, levels] of Object.entries(families)) {
         const row = buildModelSelectionRows(config.availableModels).find(row => row.modelRef === `google/${model}`);
         expect(row.model.effortOptions).toEqual(levels);
-        const visible = levels.includes('xhigh') ? ['medium', 'xhigh'] : levels.filter(level => ['medium', 'high'].includes(level));
+        const neon = model === 'gemini-4-neon';
+        const visible = levels.filter(level => ['medium', 'high', 'xhigh'].includes(level));
         expect(row.efforts).toEqual(visible);
-        const expectedDefault = levels.includes('xhigh') ? 'xhigh' : levels.includes('medium') ? 'medium' : 'high';
+        const expectedDefault = neon ? 'high' : levels.includes('xhigh') ? 'xhigh' : levels.includes('medium') ? 'medium' : 'high';
         expect(row.defaultEffort).toBe(expectedDefault);
         expect(row.model.defaultEffort).toBe(expectedDefault);
+        if (neon) {
+          expect(getSessionEffortDisplay({}, '', row.model)).toBe('high');
+          expect(getSessionEffortDisplay({ config: { modelEffort: 'low' } }, '', row.model)).toBe('low');
+          await router.call({ ...params, model: row.modelRef, effort: row.model.defaultEffort, effortSource: 'model-default' });
+          expect(JSON.parse(global.fetch.mock.calls.at(-1)[1].body).generationConfig.thinkingConfig.thinkingLevel).toBe('HIGH');
+        }
         for (const effort of levels) {
           saveSessionConfig(dir, 'gemini', { model: row.modelRef, modelEffort: effort });
           const selection = resolveSessionConfig(config, loadSessionConfig(dir, 'gemini'));

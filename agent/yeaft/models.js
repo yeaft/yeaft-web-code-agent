@@ -370,6 +370,7 @@ export function parseModelRef(ref) {
 // Gemini-wide enum. Keep unverified IDs out rather than guessing from a prefix.
 const GEMINI_LEVEL_MODELS = new Map([
   ['gemini-4-hydrogen', ['low', 'medium', 'high', 'xhigh']],
+  ['gemini-4-neon', ['low', 'medium', 'high', 'xhigh']],
   ...['gemini-4-carbon', 'gemini-4-argon', 'gemini-3.8-flash', 'gemini-3.1-pro-preview', 'gemini-3.1-pro-preview-customtools']
     .map(id => [id, ['low', 'medium', 'high']]),
   ...['gemini-3.6-flash', 'gemini-3.5-flash-lite', 'gemini-3.1-flash-lite', 'gemini-3-flash-preview', 'gemini-robotics-er-2-preview']
@@ -384,7 +385,7 @@ export const GEMINI_THINKING_BUDGETS = Object.freeze({ medium: 8192, xhigh: 1638
 export function getGeminiThinkingProfile(model, context = {}) {
   const id = geminiModelId(model);
   const levels = GEMINI_LEVEL_MODELS.get(id);
-  if (levels) return { levels: [...levels] };
+  if (levels) return { levels: [...levels], ...(id === 'gemini-4-neon' ? { defaultEffort: 'high' } : {}) };
   const pro = /^gemini-2\.5-pro(?:-preview(?:-\d{2}-\d{2})?)?$/.test(id);
   const flash = /^gemini-2\.5-flash(-lite)?(?:-preview(?:-\d{2}-\d{2})?)?$/.exec(id);
   if (!pro && !flash && id !== 'gemini-robotics-er-1.6-preview' && context.thinkingProtocol !== 'gemini') return null;
@@ -521,6 +522,7 @@ export function getThinkingCapability(model, context = {}) {
     const capability = { supportsThinking: true, thinkingProtocol: 'gemini', maxBudgetTokens, effortOptions };
     const defaults = geminiEffortCatalog(model, capability).effortMenuOptions || effortOptions;
     return { ...capability, defaultEffort: resolveGeminiEffort(model, context.defaultEffort, effortOptions)
+      || (profile.defaultEffort && resolveGeminiEffort(model, profile.defaultEffort, defaults))
       || ['xhigh', 'medium', 'high'].find(value => defaults.includes(value)) || defaults[0] };
   }
   if (protocol !== 'anthropic' && protocol !== 'openai-responses') return disabled;
