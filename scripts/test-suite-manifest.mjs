@@ -83,7 +83,8 @@ export const CORE_TEST_FILES = Object.freeze([
   "test/web/safe-message-markdown.test.js",
   "test/web/stores/auth-session-refresh.test.js",
   "test/web/stores/load-more-yeaft-history.test.js",
-  "test/web/stores/websocket-auth-token-race.test.js"
+  "test/web/stores/websocket-auth-token-race.test.js",
+  "test/web/waiting-hoops.test.js"
 ]);
 
 export const E2E_TEST_FILES = Object.freeze([

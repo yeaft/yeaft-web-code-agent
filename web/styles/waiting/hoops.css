@@ -1,13 +1,15 @@
 /* Colours of the basketball waiting animation (components/waiting/hoops.js).
-   The scene is drawn straight onto the page: the court as line art in the
-   border greys, the players and the ball in their own colours. The shooter
-   wears his team's away blue on a light page and its home white on a dark
-   one, so he stands out from either; the defenders are kept quieter.
-   --hoops-shade is what the dark side of a shape is mixed toward. */
+   Minimalist ink-and-graphite visual language matching the Dragon Ball waiting
+   scene: athletes are crisp monochrome silhouettes in ink and slate tones on
+   the bare court line art, while the warm orange basketball and rim carry the
+   single focal accent. */
 
 .hoops-scene {
+  --hoops-ink: #252830;
+  --hoops-soft: #7e8594;
+  --hoops-surface: var(--bg-main);
   --hoops-line: #d6d1c9;
-  --hoops-arc: #aba59b;
+  --hoops-arc: #b5afa6;
   --hoops-rig: #9a9da3;
   --hoops-net: #b9b4ab;
   --hoops-rim: #e4572e;
@@ -16,21 +18,14 @@
   --hoops-glint: #ffecd0;
   --hoops-shade: #1f2230;
   --hoops-text: var(--text-muted);
-  --hoops-skin: #c58d62;
-  --hoops-hair: #2b211c;
-  --hoops-jersey: #1f4fa8;
-  --hoops-trim: #f5b92e;
-  --hoops-number: #f5b92e;
-  --hoops-shoe: #30333d;
-  --hoops-sole: #c9ccd4;
-  --hoops-rival: #7199cf;
-  --hoops-rival-skin: #8c5c3f;
-  --hoops-sock: #e3e6ec;
 }
 
 [data-theme="dark"] .hoops-scene {
-  --hoops-line: #3d3935;
-  --hoops-arc: #5d5750;
+  --hoops-ink: #e4e6ec;
+  --hoops-soft: #7b8396;
+  --hoops-surface: var(--bg-main);
+  --hoops-line: #3a3733;
+  --hoops-arc: #565049;
   --hoops-rig: #666a72;
   --hoops-net: #8c877f;
   --hoops-rim: #db5530;
@@ -39,14 +34,4 @@
   --hoops-glint: #ffe2bd;
   --hoops-shade: #07080c;
   --hoops-text: var(--text-muted);
-  --hoops-skin: #bd875f;
-  --hoops-hair: #4a3b32;
-  --hoops-jersey: #ecebe6;
-  --hoops-trim: #f0b233;
-  --hoops-number: #2f62c8;
-  --hoops-shoe: #8d93a4;
-  --hoops-sole: #e6e8ee;
-  --hoops-rival: #6f8fb4;
-  --hoops-rival-skin: #875a3e;
-  --hoops-sock: #b9bdc6;
 }
