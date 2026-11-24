@@ -505,6 +505,9 @@ it('pins each Turn to its selected scene while sharing a durable transcript acro
   expect(sentAfterReconnect.filter(frame => frame.requestId === errorFrame.requestId)).toEqual([]);
   ctx.ws = oldSocket;
   ctx.serverCapabilities.add('session_history_chunk_errors');
+  // This case measures history-page sizing, not competition with prior
+  // replay frames. Let the previous delivery drain before starting it.
+  await until(() => !ctx.outboundSendQueueActive && ctx.outboundSendQueue.length === 0);
 
   append('user', 'Interleaved question');
   const askScope = { sessionId, speakerVpId: 'omni', turnId: 'ask-turn', threadId: 'ask-thread' };
