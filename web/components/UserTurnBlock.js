@@ -34,6 +34,7 @@ export default {
   components: { MessageItem },
   props: {
     message: { type: Object, required: true },
+    interrupted: { type: Boolean, default: false },
     deleteTurnAction: { type: Object, default: null },
     sessionActions: { type: Boolean, default: true },
     hideSpeakerIdentity: { type: Boolean, default: false },
@@ -54,6 +55,7 @@ export default {
           @edit-as-new="$emit('edit-as-new', $event)"
           @open-attachment="$emit('open-attachment', $event)"
         />
+        <p v-if="interrupted" class="message-time" role="status">{{ $t('message.sessionTurnInterrupted') }}</p>
       </div>
     </div>
   `,

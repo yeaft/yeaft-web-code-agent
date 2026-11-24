@@ -30,6 +30,7 @@ export default {
                   v-if="item.type === 'user' && context.useImStyleForUser"
                   :message="item.message"
                   :delete-turn-action="context.deleteTurnActionFor?.(item.message)"
+                  :interrupted="item.interrupted"
                   @delete-turn="$emit('delete-turn', $event)"
                   :hide-speaker-identity="context.hideSpeakerIdentity"
                   @quote="$emit('quote-message', $event)"
@@ -153,6 +154,7 @@ export default {
               <UserTurnBlock
                 v-if="block.type === 'user' && context.useImStyleForUser"
                 :message="block.message"
+                :interrupted="block.interrupted"
                 :delete-turn-action="context.deleteTurnActionFor?.(block.message)"
                 @delete-turn="$emit('delete-turn', $event)"
                 :hide-speaker-identity="context.hideSpeakerIdentity"

@@ -58,6 +58,8 @@ Session metadata 和 history 位于所属 Agent 的 Yeaft 目录。`workDir` 是
 
 目录选择本身不会移动文件或 Session 历史。修改 Session 工作目录后，后续执行使用新的项目上下文。
 
+Agent 重启后，如果最近的原生 Session 消息已保存、但没有对应的执行或回复记录，消息会保留并标记为「已中断」。确认可以安全重试后，可用消息的「编辑」操作手动重发；Agent 不会自动重发。
+
 ## Fork 当前 Session
 
 在当前 Session 的侧栏菜单选择 **复制会话**，或点击 conversation 右上角的复制图标。无需填写创建弹窗，完成后自动打开同一 Agent 上的新 Session。

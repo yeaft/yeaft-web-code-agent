@@ -520,6 +520,9 @@ export default {
 
     const currentSessionTurns = Vue.computed(() => (store.currentView === 'yeaft' ? (store.yeaftSessionTurns || []) : []));
     const userTurnProjection = Vue.computed(() => orderUserTurnMessages(store.messages || [], currentSessionTurns.value));
+    const interruptedRootIds = Vue.computed(() => new Set(currentSessionTurns.value
+      .filter(turn => turn.state === 'interrupted' && turn.executions?.length === 0)
+      .map(turn => turn.userTurnId)));
 
     // Turn aggregation: group flat messages into turn groups
     const turnProjection = Vue.computed(() => {
@@ -726,7 +729,8 @@ export default {
             continue;
           }
           finishTurn();
-          result.push({ type: 'user', id: messageUiKey(msg), userTurnId: userTurnProjection.value.userTurnByMessage.get(msg) || '', message: msg });
+          result.push({ type: 'user', id: messageUiKey(msg), userTurnId: userTurnProjection.value.userTurnByMessage.get(msg) || '',
+            interrupted: msg.turnRelation !== 'supplement' && interruptedRootIds.value.has(msg.userTurnId), message: msg });
           continue;
         }
 

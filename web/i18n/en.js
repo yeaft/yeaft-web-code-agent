@@ -1132,6 +1132,7 @@ export default {
   'message.removeQuote': 'Remove quote',
   'message.replyingTo': 'Replying to {author}',
   'message.quotedFrom': 'Quoted from {author}',
+  'message.sessionTurnInterrupted': 'Interrupted. You can edit and resend this message if it’s safe to try again.',
   'message.editAsNew': 'Edit',
   'message.you': 'You',
 

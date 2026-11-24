@@ -34,6 +34,9 @@ const DEFAULT_TIMEOUT_MS = 30000;
 /** Server startup timeout (10 seconds). */
 const STARTUP_TIMEOUT_MS = 10000;
 
+/** Maximum time to drain stdout after process exit (e.g. an inherited pipe). */
+const STDOUT_DRAIN_TIMEOUT_MS = 2000;
+
 // ─── Process-level connection pool ────────────────────────────
 
 /** @type {Map<string, { connection: MCPServerConnection, refs: number, startPromise: Promise<void> }>} */
@@ -60,12 +63,13 @@ function mcpConnectionKey(config) {
 async function acquireMcpConnection(serverConfig) {
   const key = mcpConnectionKey(serverConfig);
   let entry = mcpConnectionPool.get(key);
-  if (!entry) {
+  // A draining connection may still deliver replies but cannot accept a new lease.
+  if (!entry || entry.connection.failure) {
     const connection = new MCPServerConnection(serverConfig.name, serverConfig);
     entry = {
       connection,
       refs: 0,
-      startPromise: connection.start(),
+      startPromise: null,
     };
     connection.once('close', () => {
       if (mcpConnectionPool.get(key) === entry) {
@@ -73,11 +77,13 @@ async function acquireMcpConnection(serverConfig) {
       }
     });
     mcpConnectionPool.set(key, entry);
+    entry.startPromise = connection.start();
   }
 
   entry.refs += 1;
   try {
     await entry.startPromise;
+    if (!entry.connection.ready) throw entry.connection.failure;
     return { key, connection: entry.connection };
   } catch (err) {
     entry.refs -= 1;
@@ -112,7 +118,10 @@ class MCPServerConnection extends EventEmitter {
   #pendingRequests;
   #tools;
   #ready;
-  #closed;
+  #failure = null;
+  #exitError = null;
+  #drainTimer;
+  #disposal;
   #buffer;
 
   /**
@@ -126,7 +135,6 @@ class MCPServerConnection extends EventEmitter {
     this.#pendingRequests = new Map();
     this.#tools = [];
     this.#ready = false;
-    this.#closed = false;
     this.#buffer = '';
     this.config = config;
   }
@@ -134,6 +142,7 @@ class MCPServerConnection extends EventEmitter {
   get name() { return this.#name; }
   get tools() { return this.#tools; }
   get ready() { return this.#ready; }
+  get failure() { return this.#failure ?? this.#exitError; }
 
   /**
    * Start the MCP server process and initialize.
@@ -141,33 +150,64 @@ class MCPServerConnection extends EventEmitter {
    */
   async start() {
     return new Promise((resolve, reject) => {
-      let settled = false;
-      let timer = null;
-      const failStart = async (err) => {
-        if (settled) return;
-        settled = true;
-        if (timer) clearTimeout(timer);
-        await this.stop();
+      const timer = setTimeout(() => {
+        this.#retire(this.#process, new Error(`MCP server "${this.#name}" startup timeout (${STARTUP_TIMEOUT_MS}ms)`));
+      }, STARTUP_TIMEOUT_MS);
+      const onClose = (err) => {
+        clearTimeout(timer);
         reject(err);
       };
-      timer = setTimeout(() => {
-        void failStart(new Error(`MCP server "${this.#name}" startup timeout (${STARTUP_TIMEOUT_MS}ms)`));
-      }, STARTUP_TIMEOUT_MS);
+      this.once('close', onClose);
 
       try {
-        this.#process = spawn(this.config.command, this.config.args || [], {
+        const child = this.#process = spawn(this.config.command, this.config.args || [], {
           stdio: ['pipe', 'pipe', 'pipe'],
           env: { ...process.env, ...this.config.env },
           cwd: this.config.cwd || undefined,
           windowsHide: true,
         });
 
-        this.#process.stdout.on('data', (data) => {
+        // Keep listening through disposal: a write callback and the stream's
+        // 'error' event can report the same failure, even after retirement.
+        const onError = (err) => this.#retire(child, err);
+        child.on('error', onError);
+        child.stdout.on('error', onError);
+        child.stderr.on('error', onError);
+        child.stdin.on('error', (err) => this.#onStdinFailure(child, err));
+        child.stdin.once('close', () => {
+          this.#onStdinFailure(child, new Error(`MCP server "${this.#name}" stdin closed`));
+        });
+        const exitError = (code, signal) => {
+          const reason = signal ? `signal ${signal}` : `code ${code}`;
+          return new Error(`MCP server "${this.#name}" closed with ${reason}`);
+        };
+        child.once('exit', (code, signal) => {
+          if (this.#process !== child) return;
+          // Exit can precede the last stdout data. Block writes, but preserve replies.
+          this.#exitError = exitError(code, signal);
+          this.#ready = false;
+          clearTimeout(timer);
+          this.#drainTimer = setTimeout(() => {
+            this.#retire(child, this.#exitError);
+          }, STDOUT_DRAIN_TIMEOUT_MS);
+        });
+        child.once('close', (code, signal) => {
+          this.#retire(child, this.#exitError ?? exitError(code, signal), false);
+        });
+        const onStdoutClosed = () => {
+          this.#retire(child, this.#exitError ?? new Error(`MCP server "${this.#name}" stdout closed`));
+        };
+        child.stdout.once('end', onStdoutClosed);
+        child.stdout.once('close', onStdoutClosed);
+
+        child.stdout.on('data', (data) => {
+          if (this.#process !== child) return;
           this.#buffer += data.toString();
           this.#processBuffer();
         });
 
-        this.#process.stderr.on('data', (data) => {
+        child.stderr.on('data', (data) => {
+          if (this.#process !== child) return;
           const text = data.toString().trim();
           if (!text) return;
           const err = new Error(`[${this.#name}] stderr: ${text}`);
@@ -178,34 +218,17 @@ class MCPServerConnection extends EventEmitter {
           }
         });
 
-        this.#process.on('close', (code) => {
-          this.#ready = false;
-          this.#closed = true;
-          this.emit('close', code);
-          // Reject all pending requests
-          for (const [, { reject: rej }] of this.#pendingRequests) {
-            rej(new Error(`MCP server "${this.#name}" closed with code ${code}`));
-          }
-          this.#pendingRequests.clear();
-        });
-
-        this.#process.on('error', (err) => {
-          void failStart(err);
-        });
-
-        // Initialize MCP protocol
         this.#initialize().then(() => {
-          if (settled) return;
-          settled = true;
+          if (this.#process !== child || this.#exitError) return;
           clearTimeout(timer);
+          this.removeListener('close', onClose);
           this.#ready = true;
           resolve();
-        }).catch((err) => {
-          void failStart(err);
+        }, (err) => {
+          if (!this.#exitError) this.#retire(child, err);
         });
-
       } catch (err) {
-        void failStart(err);
+        this.#retire(this.#process, err);
       }
     });
   }
@@ -256,7 +279,9 @@ class MCPServerConnection extends EventEmitter {
    * Send a JSON-RPC request and wait for response.
    */
   async #rpcCall(method, params, timeoutMs = DEFAULT_TIMEOUT_MS) {
+    if (this.failure) throw this.failure;
     const id = randomUUID();
+    const message = JSON.stringify({ jsonrpc: '2.0', id, method, params });
 
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
@@ -277,9 +302,36 @@ class MCPServerConnection extends EventEmitter {
         },
       });
 
-      const message = JSON.stringify({ jsonrpc: '2.0', id, method, params });
-      this.#process.stdin.write(message + '\n');
+      try {
+        this.#write(message);
+      } catch (err) {
+        this.#pendingRequests.get(id)?.reject(err);
+      }
     });
+  }
+
+  #write(message) {
+    if (this.failure) throw this.failure;
+    const child = this.#process;
+    try {
+      const stdin = child?.stdin;
+      if (!stdin?.writable || stdin.destroyed || stdin.writableEnded) {
+        throw new Error(`MCP server "${this.#name}" stdin is not writable`);
+      }
+      stdin.write(message + '\n', (err) => {
+        if (err) this.#onStdinFailure(child, err);
+      });
+    } catch (err) {
+      this.#onStdinFailure(child, err);
+      throw err;
+    }
+  }
+
+  #onStdinFailure(child, err) {
+    // Node tears down stdin on exit; that may fail a pending write even
+    // though the corresponding reply is already buffered on stdout.
+    if (this.#exitError || child?.exitCode != null || child?.signalCode != null) return;
+    this.#retire(child, err);
   }
 
   /**
@@ -287,7 +339,7 @@ class MCPServerConnection extends EventEmitter {
    */
   #rpcNotify(method, params) {
     const message = JSON.stringify({ jsonrpc: '2.0', method, params });
-    this.#process.stdin.write(message + '\n');
+    this.#write(message);
   }
 
   /**
@@ -324,30 +376,61 @@ class MCPServerConnection extends EventEmitter {
   }
 
   /**
-   * Stop the MCP server process.
+   * Retire synchronously, before any child I/O or termination wait.
+   * Its first terminal reason wins.
    */
-  async stop() {
-    const child = this.#process;
-    if (!child) return;
-
+  #retire(child, err, terminate = true) {
+    if (this.#failure || this.#process !== child) return;
+    clearTimeout(this.#drainTimer);
+    this.#failure = err;
     this.#ready = false;
-    let closed = this.#closed;
-    if (!closed) {
-      child.kill('SIGTERM');
-      closed = await new Promise(resolve => {
-        let timer = null;
-        const finish = (didClose) => {
-          if (timer) clearTimeout(timer);
-          child.removeListener('close', onClose);
-          resolve(didClose);
-        };
-        const onClose = () => finish(true);
-        child.once('close', onClose);
-        timer = setTimeout(() => finish(false), 2000);
-      });
-      if (!closed) child.kill('SIGKILL');
+    this.#process = null;
+    this.#buffer = '';
+    for (const { reject } of this.#pendingRequests.values()) reject(err);
+    this.emit('close', err);
+
+    if (child) {
+      // These pipes belong only to this child; leave their error handlers attached.
+      child.stdin.destroy();
+      child.stdout.destroy();
+      child.stderr.destroy();
+      if (terminate && !this.#exitError && child.pid && child.exitCode == null && child.signalCode == null) {
+        this.#disposal = this.#terminate(child);
+      }
     }
-    if (this.#process === child) this.#process = null;
+  }
+
+  async #terminate(child) {
+    const kill = (signal) => {
+      try {
+        child.kill(signal);
+      } catch (err) {
+        console.warn(`[MCP] Failed to send ${signal} to "${this.#name}": ${err.message}`);
+      }
+    };
+    const exited = await new Promise(resolve => {
+      const finish = (didExit) => {
+        clearTimeout(timer);
+        child.removeListener('exit', onExit);
+        child.removeListener('close', onExit);
+        resolve(didExit);
+      };
+      const onExit = () => finish(true);
+      const timer = setTimeout(() => finish(false), 2000);
+      child.once('exit', onExit);
+      child.once('close', onExit);
+      kill('SIGTERM');
+    });
+    if (!exited && child.exitCode == null && child.signalCode == null) kill('SIGKILL');
+  }
+
+  async stop() {
+    if (this.#exitError && !this.#failure) {
+      await new Promise(resolve => this.once('close', resolve));
+    } else {
+      this.#retire(this.#process, new Error(`MCP server "${this.#name}" stopped`));
+    }
+    await this.#disposal;
   }
 }
 
@@ -379,6 +462,10 @@ export class MCPManager {
 
     const pooled = await acquireMcpConnection(serverConfig);
     const connection = pooled.connection;
+    if (!connection.ready) {
+      // It may have retired between acquisition and this continuation.
+      throw connection.failure;
+    }
 
     this.#servers.set(name, pooled);
 
@@ -423,7 +510,9 @@ export class MCPManager {
       const connection = entry.connection;
       // Remove tools from index
       for (const tool of connection.tools) {
-        this.#toolIndex.delete(tool.name);
+        if (this.#toolIndex.get(tool.name)?.server === connection) {
+          this.#toolIndex.delete(tool.name);
+        }
       }
       this.#servers.delete(name);
       await releaseMcpConnection(entry.key, connection);
@@ -450,7 +539,7 @@ export class MCPManager {
     const tools = [];
 
     for (const [, { server, tool }] of this.#toolIndex) {
-      if (serverFilter && server.name !== serverFilter) continue;
+      if (!server.ready || (serverFilter && server.name !== serverFilter)) continue;
       tools.push({
         name: tool.name,
         server: server.name,
@@ -493,7 +582,7 @@ export class MCPManager {
     return [...this.#servers.entries()].map(([name, { connection: conn }]) => ({
       name,
       ready: conn.ready,
-      toolCount: conn.tools.length,
+      toolCount: conn.ready ? conn.tools.length : 0,
     }));
   }
 
@@ -510,7 +599,9 @@ export class MCPManager {
    * @returns {number}
    */
   get toolCount() {
-    return this.#toolIndex.size;
+    let count = 0;
+    for (const { server } of this.#toolIndex.values()) if (server.ready) count++;
+    return count;
   }
 }
 

@@ -80,6 +80,17 @@ describe('concurrent user turn presentation', () => {
       );
       await Vue.nextTick();
       expect(replies().map(item => [item.speakerVpId, item.userTurnId])).toEqual([['omni', 'root'], ['other', 'root'], ['omni', 'new']]);
+      store.messages.push({ id: 'lost', type: 'user', content: 'recoverable input', userTurnId: 'lost', turnRelation: 'new', isHistory: true });
+      store.yeaftSessionTurns = [{ userTurnId: 'lost', state: 'interrupted', executions: [] }];
+      await Vue.nextTick();
+      expect(wrapper.vm.turnGroups.filter(item => item.interrupted).map(item => item.id)).toEqual(['lost']);
+      expect(wrapper.vm.historyBlocks.some(block => block.userTurnId === 'lost')).toBe(true);
+      const { default: UserTurnBlock } = await import('../../web/components/UserTurnBlock.js');
+      const { message, interrupted } = wrapper.vm.turnGroups.find(item => item.interrupted);
+      const user = mount(UserTurnBlock, { props: { message, interrupted },
+        global: { provide: { t: key => key }, mocks: { $t: key => key } } });
+      try { expect(user.get('[role="status"]').text()).toBe('message.sessionTurnInterrupted'); } finally { user.unmount(); }
+      store.messages.pop();
       store.yeaftSessionTurns = [
         { userTurnId: 'root', state: 'running', startedAt: 10 },
         { userTurnId: 'new', state: 'queued', startedAt: 20 },
