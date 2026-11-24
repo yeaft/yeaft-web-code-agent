@@ -77,9 +77,10 @@ export function createPersonChildProvider(provider, selection, instanceConfig = 
   const effortContext = { ...modelInfo, effortOptions: [...efforts] };
 
   Object.assign(config, {
-    model, primaryModel: model, fastModel: model, fastModelId: modelId, secondaryModel: model,
+    model, primaryModel: model, fastModel: model, fastModelId: modelId,
+    decisionModel: model, decisionModelId: modelId, secondaryModel: model,
     fallbackModel: null, modelEffort: effort,
-    models: { ...pinModels(config.models, model), primary: model, secondary: model, fast: model },
+    models: { ...pinModels(config.models, model), primary: model, secondary: model, fast: model, decision: model },
     personaModels: pinModels(config.personaModels, model),
     modelInfo, availableModels: [{ ...modelInfo, effortOptions: [...efforts] }],
     maxContextTokens: modelInfo.contextWindow, maxOutputTokens,

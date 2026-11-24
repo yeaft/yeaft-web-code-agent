@@ -76,6 +76,7 @@
 | `providers` | `Provider[]` | ✓ | — | LLM provider 列表 |
 | `primaryModel` | `string` | ✓ | — | 主 model，格式 `<provider>/<model-id>` |
 | `fastModel` | `string` | — | `primaryModel` | 用于当前仍启用的分类等内部任务的轻量 model |
+| `decisionModel` | `string` | — | `fastModel` → `primaryModel` | 用于系统内置决策场景（会话路由、活跃会话匹配、新建目录与场景选择）的低延迟 model |
 | `language` | `'en' \| 'zh'` | — | `'en'` | System prompt 语言 |
 | `debug` | `boolean` | — | `false` | 把每次 LLM raw request/response 打到 console |
 | `maxContextTokens` | `number` | — | `200000` | Provider context window 的请求保护参考值 |

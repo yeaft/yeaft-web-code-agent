@@ -35,6 +35,7 @@ function defaultAgentLlmConfig(msg = {}) {
     providers: msg.providers || [],
     primaryModel: msg.primaryModel || null,
     fastModel: msg.fastModel || null,
+    decisionModel: msg.decisionModel || null,
     language: msg.language || 'en'
   };
 }
@@ -1318,6 +1319,7 @@ export function handleMessage(store, msg) {
           providers: msg.providers || effectiveConfig.providers || [],
           primaryModel: msg.primaryModel || effectiveConfig.primaryModel || null,
           fastModel: msg.fastModel || effectiveConfig.fastModel || null,
+          decisionModel: msg.decisionModel ?? effectiveConfig.decisionModel ?? null,
           language: msg.language || agentConfig.language || effectiveConfig.language || 'en',
           needsSetup: msg.needsSetup ?? effectiveConfig.needsSetup ?? false,
           agentConfig,

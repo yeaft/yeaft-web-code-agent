@@ -205,6 +205,32 @@ export default {
                 </div>
               </div>
 
+              <div class="llm-model-select-field">
+                <label class="llm-field-label">{{ $t('settings.llm.decisionModel') }}</label>
+                <div class="sp-custom-select" :class="{ open: openDropdown === 'decisionModel' }" v-click-outside="() => closeDropdown('decisionModel')">
+                  <button class="sp-custom-select-trigger" @click="toggleDropdown('decisionModel')">
+                    <span>{{ localDecisionModel || $t('settings.llm.decisionModelAuto') }}</span>
+                    <svg class="sp-custom-select-chevron" viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M7 10l5 5 5-5z"/></svg>
+                  </button>
+                  <div class="sp-custom-select-menu llm-model-menu" v-show="openDropdown === 'decisionModel'">
+                    <div class="sp-custom-select-option"
+                      :class="{ active: !localDecisionModel }"
+                      @click="localDecisionModel = null; closeDropdown('decisionModel'); markDirty()">
+                      {{ $t('settings.llm.decisionModelAuto') }}
+                      <svg v-if="!localDecisionModel" class="sp-custom-select-check" viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg>
+                    </div>
+                    <div class="sp-custom-select-option"
+                      v-for="ref in allModelRefs" :key="'decision-' + ref"
+                      :class="{ active: localDecisionModel === ref }"
+                      @click="localDecisionModel = ref; closeDropdown('decisionModel'); markDirty()">
+                      {{ ref }}
+                      <svg v-if="localDecisionModel === ref" class="sp-custom-select-check" viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg>
+                    </div>
+                  </div>
+                </div>
+                <p class="llm-models-hint">{{ $t('settings.llm.decisionModelHint') }}</p>
+              </div>
+
               <div class="llm-model-select-field" v-if="context !== 'yeaft'">
                 <label class="llm-field-label">{{ $t('settings.llm.fastModel') }}</label>
                 <div class="sp-custom-select" :class="{ open: openDropdown === 'fastModel' }" v-click-outside="() => closeDropdown('fastModel')">
@@ -274,6 +300,7 @@ export default {
       providerModelsText: [],
       localPrimaryModel: null,
       localFastModel: null,
+      localDecisionModel: null,
       localDebug: false,
       isDirty: false,
       draftRevision: 0,
@@ -338,6 +365,7 @@ export default {
           this.providerModelsText = [];
           this.localPrimaryModel = null;
           this.localFastModel = null;
+          this.localDecisionModel = null;
           this.localDebug = false;
           this.isDirty = false;
           this.draftRevision = 0;
@@ -519,6 +547,10 @@ export default {
         && !modelRefs.has(this.localFastModel)) {
         this.localFastModel = firstModelRef;
       }
+      if (this.localDecisionModel?.startsWith(`${provider.name}/`)
+        && !modelRefs.has(this.localDecisionModel)) {
+        this.localDecisionModel = null;
+      }
       this.markDirty();
     },
 
@@ -597,6 +629,7 @@ export default {
 
       this.localPrimaryModel = config.agentConfig?.primaryModel || config.primaryModel || null;
       this.localFastModel = config.agentConfig?.fastModel || config.fastModel || null;
+      this.localDecisionModel = config.agentConfig?.decisionModel || config.decisionModel || null;
       this.localDebug = config.agentConfig?.debug === true;
       this.isDirty = false;
       this.showApiKey = {};
@@ -709,6 +742,16 @@ export default {
         else newShow[i] = this.showApiKey[i + 1];
       }
       this.showApiKey = newShow;
+      const remainingRefs = new Set(this.allModelRefs);
+      if (this.localPrimaryModel && !remainingRefs.has(this.localPrimaryModel)) {
+        this.localPrimaryModel = this.allModelRefs[0] || null;
+      }
+      if (this.localFastModel && !remainingRefs.has(this.localFastModel)) {
+        this.localFastModel = null;
+      }
+      if (this.localDecisionModel && !remainingRefs.has(this.localDecisionModel)) {
+        this.localDecisionModel = null;
+      }
       this.markDirty();
     },
 
@@ -843,6 +886,7 @@ export default {
       const llmConfig = {
         providers,
         primaryModel: this.localPrimaryModel || null,
+        decisionModel: this.localDecisionModel || null,
         debug: this.localDebug === true,
       };
       if (this.context !== 'yeaft') {

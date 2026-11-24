@@ -59,4 +59,43 @@ describe('native Gemini settings', () => {
     ] } });
   });
 
+  it('exposes Decision Model selection in Yeaft LLM settings and persists explicit or Auto (null) choice', async () => {
+    const store = await setup();
+    store.llmConfig['agent-a'] = config('decision-read', {
+      primaryModel: 'test/model-a',
+      decisionModel: 'test/model-b',
+    });
+    await Vue.nextTick();
+    expect(wrapper.text()).toContain('Decision Model');
+    expect(wrapper.vm.localDecisionModel).toBe('test/model-b');
+
+    // Switch back to Auto (null) via dropdown and save
+    wrapper.vm.localDecisionModel = null;
+    wrapper.vm.markDirty();
+    await Vue.nextTick();
+    await saveButton().trigger('click');
+    expect(pendingRequest(store)).toMatchObject({
+      type: 'update_llm_config',
+      config: {
+        primaryModel: 'test/model-a',
+        decisionModel: null,
+      },
+    });
+
+    // Acknowledge the pending save and verify removing a provider clears localDecisionModel
+    const saveReqId = pendingRequest(store).requestId;
+    store.llmConfig['agent-a'] = config(saveReqId, {
+      providers: [
+        { name: 'p1', baseUrl: 'https://p1.test', apiKey: 'k1', protocol: 'openai-responses', models: ['m1'] },
+        { name: 'p2', baseUrl: 'https://p2.test', apiKey: 'k2', protocol: 'openai-responses', models: ['m2'] },
+      ],
+      primaryModel: 'p1/m1',
+      decisionModel: 'p2/m2',
+    });
+    await Vue.nextTick();
+    expect(wrapper.vm.localDecisionModel).toBe('p2/m2');
+    wrapper.vm.removeProvider(1);
+    expect(wrapper.vm.localDecisionModel).toBeNull();
+  });
+
 });

@@ -15,6 +15,7 @@
 | `providers` | `Provider[]` | — (required) | LLM provider 列表 |
 | `primaryModel` | `string` | — (required) | 主 model 引用 `<provider>/<model-id>` |
 | `fastModel` | `string` | `primaryModel` | 用于当前仍启用的 compact、分类等内部任务的轻量 model |
+| `decisionModel` | `string` | `fastModel` → `primaryModel` | 专用于系统内置决策场景（运行中/近期会话路由、新建会话目录与场景选择、并发线程归并）的低延迟 model |
 | `fallbackModel` | `string` | `null` | 主 model 出现可重试错误时换用的 model |
 | `language` | `'en' \| 'zh'` | `'en'` | System prompt 语言 |
 | `debug` | `boolean` | `false` | 把 LLM raw req/resp + 引擎事件 verbose-log 到 stdout |
