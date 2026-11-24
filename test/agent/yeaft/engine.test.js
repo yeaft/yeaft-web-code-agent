@@ -1343,6 +1343,8 @@ RELEASE_BODY`;
           ['server-cut', [serverTool]],
           ['server-empty', [serverTool, blockStop(0), stop('end_turn'), messageStop]],
           ['server-empty-json', []],
+          ['server-context', [serverTool, blockStop(0), stop('model_context_window_exceeded'), messageStop]],
+          ['server-context-json', []],
         ]) {
           execute.mockClear();
           const sessionId = `session-stream-${name}`;
@@ -1353,7 +1355,8 @@ RELEASE_BODY`;
           global.fetch = vi.fn(async (_url, init) => {
             requests += 1;
             bodies.push(init.body);
-            if (name === 'server-empty-json') return new Response(JSON.stringify({ stop_reason: 'end_turn',
+            if (['server-empty-json', 'server-context-json'].includes(name)) return new Response(JSON.stringify({
+              stop_reason: name === 'server-empty-json' ? 'end_turn' : 'model_context_window_exceeded',
               content: [serverTool.content_block] }), { headers: { 'content-type': 'application/json' } });
             if (name === 'complete' && requests > 1) return sse(answer);
             if (name === 'retry' && requests > 1) return sse(requests === 2 ? complete : answer);
@@ -1366,7 +1369,7 @@ RELEASE_BODY`;
           const engine = new Engine({ adapter: new AnthropicAdapter({ apiKey: 'synthetic', baseUrl: 'https://proxy.invalid', streamIdleTimeoutMs: 10 }), trace,
             toolRegistry: registry, conversationStore, yeaftDir,
             config: { model: 'claude-opus-4.8', modelEffort: 'high', projectDocMaxBytes: 0, maxOutputTokens: 1024,
-              ...(name.startsWith('server-empty') ? { fallbackModel: 'claude-sonnet-4.6' } : {}),
+              ...(name.startsWith('server-') ? { fallbackModel: 'claude-sonnet-4.6' } : {}),
               llmRetry: { maxRetries: name === 'retry' || name.startsWith('server-') ? 1 : 0, baseDelayMs: 0, maxDelayMs: 0, jitterRatio: 0 } } });
           const output = [];
           for await (const event of engine.query({ prompt: 'echo values', sessionId, signal: ctrl.signal, onProviderRequestStart: policy => policies.push(policy) })) {

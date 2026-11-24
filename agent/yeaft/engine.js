@@ -3782,6 +3782,7 @@ export class Engine {
             // Retrying needs a smaller request, which the context recovery provides.
             const error = new LLMContextError(failedProviderStopMessage(stop));
             error.code = stopReason;
+            error.replayUnsafe = stopReplayUnsafe;
             error.providerFailure = true;
             throw error;
           }
@@ -3966,10 +3967,12 @@ export class Engine {
           break;
         }
 
+        // Hosted tools may already have run even though no local call exists.
+        const replaySafe = err?.replayUnsafe !== true && !stopReplayUnsafe;
         const isBodyOverflow = err instanceof LLMRequestTooLargeError;
         // Work Center owns durable dispatch/retry decisions through its Run
         // lease. Don't abandon paused server work or consume the reserved report.
-        const canRecoverRequestSize = !prepareProviderRequest && err.workItemFailureKind == null
+        const canRecoverRequestSize = replaySafe && !prepareProviderRequest && err.workItemFailureKind == null
           && toolCalls.length === 0 && !responseText
           && !pendingServerOperation && !executionPolicy?.finalize && !progressReporting;
         const canRecoverImage = err instanceof LLMImageLimitError && requestImageLimits && canRecoverRequestSize;
@@ -4015,7 +4018,7 @@ export class Engine {
         }
         const contextNeedsRollover = err instanceof ProviderContextBudgetError || err instanceof LLMContextError;
         const rollSignedToolImages = err instanceof ToolImagePrefixBudgetError && signedAnthropicPrefix;
-        if ((rollSignedImage || rollSignedBody || (contextNeedsRollover && (signedAnthropicPrefix || rolloverSeed))) && toolCalls.length === 0
+        if (replaySafe && (rollSignedImage || rollSignedBody || (contextNeedsRollover && (signedAnthropicPrefix || rolloverSeed))) && toolCalls.length === 0
             && successfulRequestsSinceRollover > 0 && !pendingServerOperation && err?.workItemFailureKind == null) {
           endAttemptTrace('context_rollover');
           if (responseText) prepareRetryContinuation();
@@ -4258,7 +4261,7 @@ export class Engine {
         // eligible for transparent retry or model fallback. Work Center owns the
         // retry decision for a dispatched EngineTurn: once it refused a replay
         // (failProviderRequest set workItemFailureKind), report the real cause.
-        const canReplayProviderRequest = toolCalls.length === 0 && !executionPolicy?.finalize && !progressReporting
+        const canReplayProviderRequest = replaySafe && toolCalls.length === 0 && !executionPolicy?.finalize && !progressReporting
           && err?.workItemFailureKind == null;
         if (earlyIsContextOverflow && canReplayProviderRequest && !signedAnthropicPrefix
           && contextOverflowRecoveryAttempts < 3) {
