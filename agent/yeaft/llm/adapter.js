@@ -250,10 +250,12 @@ export class LLMServerError extends Error {
 }
 
 /**
- * Invalid/incomplete provider tool batch — recover by correcting arguments, not
- * by replaying the same provider request. stream() publishes this as an error
- * event with retryable:false (legacy Engine retries thrown LLMServerError by
- * class); call() throws it. No tool_call may be published from the rejected batch.
+ * Invalid/incomplete provider tool batch (e.g. Gemini MALFORMED_FUNCTION_CALL).
+ * stream() publishes this as an error event with retryable:false — it is not a
+ * transport failure — and call() throws it. No tool_call may be published from
+ * the rejected batch, so the Engine may request a fresh response that asks for
+ * complete arguments; an adapter that knows the provider itself ran tools in
+ * this response adds `replayUnsafe: true` to the event instead.
  */
 export class LLMToolInputError extends LLMServerError {
   constructor(message) {

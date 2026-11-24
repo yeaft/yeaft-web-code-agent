@@ -111,6 +111,8 @@ describe('Responses retries failed streams without replaying tools', () => {
           delayMs: 3, reason: 'rate_limit_retry_after' },
         { session: 'http-retry-after', failure: responsesFailure('server_error', 'Temporary error.', { 'Retry-After': { toString: null } }),
           httpRetryAfter: '0.003', delayMs: 3, reason: 'transient_retry_after' },
+        // Production shape (gpt via copilot-proxy-server): created, then failed with no error at all.
+        { session: 'failed-without-code', failure: { type: 'response.failed', response: { status: 'failed' } } },
       ];
       for (const { session, prefix = '', afterTool = false, failure, httpRetryAfter,
         delayMs = 1, reason = 'transient_backoff' } of cases) {
@@ -175,13 +177,13 @@ describe('Responses retries failed streams without replaying tools', () => {
     }
   });
 
-  it('does not retry permanent errors, run rejected tools, or replay after tool publication', async () => {
+  it('retries known and unknown failures without running rejected tools, but never replays hosted tools or published calls', async () => {
     const headers = { 'Retry-After': '0.001' };
+    // Known or unknown, every failed response is retried within the bounded budget.
     for (const error of [
       { code: 'invalid_request_error', message: 'Bad request.' },
       { code: 'insufficient_quota', type: 'rate_limit_error', message: 'Quota exhausted.' },
       { code: 'content_policy_violation', message: 'Request rejected.' },
-      { code: 'context_length_exceeded', message: 'Context too long.' },
       { code: 'unrecognized_code', message: 'Try again in 1ms.' },
       { message: 'No structured error code.' },
     ]) {
@@ -191,56 +193,96 @@ describe('Responses retries failed streams without replaying tools', () => {
       vi.stubGlobal('fetch', fetch);
       const { engine, execute } = createEngine();
       const seen = await collect(engine.query({ prompt: 'Use Tool' }));
-      expect(fetch).toHaveBeenCalledTimes(1);
+      expect(fetch).toHaveBeenCalledTimes(1 + retryPolicy.maxRetries);
       expect(execute).not.toHaveBeenCalled();
-      expect(seen.filter(e => e.type === 'llm_retry' || e.type === 'tool_call')).toEqual([]);
+      expect(seen.filter(e => e.type === 'tool_call')).toEqual([]);
+      expect(seen.filter(e => e.type === 'llm_retry').map(e => [e.attempt, e.reason])).toEqual([[1, 'transient_backoff'], [2, 'transient_backoff']]);
       expect(seen.filter(e => e.type === 'error')).toEqual([expect.objectContaining({
-        retryable: false, error: expect.objectContaining({ code: error.code || 'failed', message: error.message }),
+        retryable: true, retryExhausted: true, retryAttempts: 2, maxRetries: 2,
+        error: expect.objectContaining({ code: error.code || 'failed', message: error.message }),
       })]);
       expect(seen.filter(e => e.type === 'turn_end' && e.terminal)).toEqual([
         expect.objectContaining({ stopReason: 'error' }),
       ]);
     }
+    // A context rejection retries through its smaller-request recovery, not an identical replay.
+    const overflow = vi.fn(async () => sse([responsesFailure('context_length_exceeded', 'Context too long.', headers)]));
+    vi.stubGlobal('fetch', overflow);
+    const overflowSeen = await collect(createEngine().engine.query({ prompt: 'Use Tool' }));
+    expect(overflowSeen.filter(e => e.type === 'llm_retry').map(e => e.reason)).toEqual(Array(3).fill('context_overflow_recovery'));
+    expect(overflow).toHaveBeenCalledTimes(4);
+    expect(overflowSeen.filter(e => e.type === 'error')).toEqual([expect.objectContaining({
+      error: expect.objectContaining({ name: 'LLMContextError', code: 'context_length_exceeded' }) })]);
 
-    // A failed response can expose completed items only in its terminal payload.
-    // Confirmed malformed input, unlike in-flight arguments, must not trigger retry.
+    // A failed response can expose completed items only in its terminal payload. A
+    // malformed batch never runs; the retry asks once (never stacked) for valid arguments.
     for (const item of [
       { ...responsesTool('terminal', '{'), status: 'completed' },
       { ...responsesTool('call-0', '{"changed":true}'), status: 'completed' },
     ]) {
       const failure = responsesFailure('server_error', 'Temporary error.');
       failure.response.output = [item];
-      const fetch = vi.fn(async () => sse([...responsesSlot(0, '{}'), failure]));
+      const requests = [];
+      const fetch = vi.fn(async (_url, init) => {
+        requests.push(JSON.parse(init.body));
+        return requests.length <= 2 ? sse([...responsesSlot(0, '{}'), failure])
+          : json({ status: 'completed', output: [{ type: 'message', content: [{ type: 'output_text', text: 'Checked.' }] }], usage: {} });
+      });
       vi.stubGlobal('fetch', fetch);
       const { engine, execute } = createEngine();
       const seen = await collect(engine.query({ prompt: 'Use Tool' }));
-      expect(seen.filter(e => e.type === 'error')).toEqual([expect.objectContaining({
-        retryable: false, error: expect.objectContaining({ name: 'LLMToolInputError' }),
-      })]);
-      expect(fetch).toHaveBeenCalledTimes(1);
+      expect(fetch).toHaveBeenCalledTimes(3);
       expect(execute).not.toHaveBeenCalled();
-      expect(seen.filter(e => e.type === 'llm_retry' || e.type === 'tool_call')).toEqual([]);
+      expect(seen.filter(e => e.type === 'tool_call' || e.type === 'error')).toEqual([]);
+      expect(seen.filter(e => e.type === 'llm_retry').map(e => [e.reason, e.errorName])).toEqual(
+        Array(2).fill(['unusable_response', 'LLMToolInputError']));
+      const nudges = request => JSON.stringify(request.input).split('without usable output and was discarded').length - 1;
+      expect(requests.map(nudges)).toEqual([0, 1, 1]);
+      expect(seen.filter(e => e.type === 'text_delta').map(e => e.text).join('')).toBe('Checked.');
     }
 
     // Even a known transient failure is not replayable if the provider might
     // already have executed a hosted tool that Yeaft cannot account for.
     vi.stubGlobal('fetch', vi.fn(async () => sse([responsesFailure('server_error', 'Server error.')])));
     expect(await collect(adapter().stream({ model: 'test-model', messages: [], extraBody: { tools: [{ type: 'web_search' }] } })))
-      .toEqual([{ type: 'error', retryable: false, error: expect.objectContaining({ code: 'server_error' }) }]);
+      .toEqual([{ type: 'error', retryable: false, replayUnsafe: true, error: expect.objectContaining({ code: 'server_error' }) }]);
 
-    let requests = 0;
-    const { engine, execute } = createEngine({ adapter: { async *stream() {
-      requests += 1;
-      yield { type: 'tool_call', id: 'published', name: 'Tool', input: {} };
-      throw new LLMServerError('stream ended after tool publication', 0);
-    } } });
-    const seen = await collect(engine.query({ prompt: 'Use Tool' }));
-    expect(requests).toBe(1);
-    expect(execute).not.toHaveBeenCalled();
-    expect(seen.filter(e => e.type === 'tool_call')).toHaveLength(1);
-    expect(seen.filter(e => e.type === 'llm_retry')).toEqual([]);
-    expect(seen.filter(e => e.type === 'turn_end' && e.terminal)).toEqual([
-      expect.objectContaining({ stopReason: 'error' }),
-    ]);
+    // Work Center owns the retry decision for a dispatched EngineTurn (runner.failProviderRequest).
+    const refusingWorkCenter = { prepareProviderRequest: () => ({ id: 'turn-1' }), startProviderRequest: () => {},
+      finishProviderRequest: () => {}, failProviderRequest: (_turn, error) => {
+        error.retryable = false;
+        error.workItemFailureKind = 'provider_dispatch_unknown';
+      } };
+    for (const [name, failAfterPublish, query = {}, error = expect.anything()] of [
+      ['published call', async function* () {
+        yield { type: 'tool_call', id: 'published', name: 'Tool', input: {} };
+        throw new LLMServerError('stream ended after tool publication', 0);
+      }],
+      // `replayUnsafe` outranks even an adapter's own retryable verdict.
+      ['provider-run tools', async function* () {
+        yield { type: 'error', error: new LLMServerError('overloaded', 529), retryable: true, replayUnsafe: true };
+      }],
+      // The provider's own reason is reported, not a later lease failure.
+      ['work center refused replay', async function* () {
+        yield { type: 'provider_metadata', metadata: { protocol: 'gemini', stopReason: 'OTHER' } };
+        yield { type: 'stop', stopReason: 'unknown' };
+      }, refusingWorkCenter, expect.objectContaining({ name: 'LLMFailedResponseError',
+        workItemFailureKind: 'provider_dispatch_unknown', message: expect.stringContaining('without usable output (OTHER)') })],
+    ]) {
+      let requests = 0;
+      const { engine, execute } = createEngine({ adapter: { async *stream() {
+        requests += 1;
+        yield* failAfterPublish();
+      } } });
+      const seen = await collect(engine.query({ prompt: 'Use Tool', ...query }));
+      expect(requests, name).toBe(1);
+      expect(execute).not.toHaveBeenCalled();
+      expect(seen.filter(e => e.type === 'llm_retry')).toEqual([]);
+      // Nothing invites the caller (or a parent model) to retry what cannot be replayed.
+      expect(seen.filter(e => e.type === 'error')).toEqual([expect.objectContaining({ retryable: false, error })]);
+      expect(seen.filter(e => e.type === 'turn_end' && e.terminal)).toEqual([
+        expect.objectContaining({ stopReason: 'error' }),
+      ]);
+    }
   });
 });
