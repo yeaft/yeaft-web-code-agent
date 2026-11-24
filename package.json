@@ -10,7 +10,8 @@
   ],
   "scripts": {
     "test": "node scripts/run-test-gate.mjs",
-    "test:budget": "node scripts/check-test-budget.mjs",
+    "test:count": "node scripts/check-test-suite.mjs",
+    "test:budget": "npm run test:count",
     "test:focus": "vitest run --config vitest.focus.config.js",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",

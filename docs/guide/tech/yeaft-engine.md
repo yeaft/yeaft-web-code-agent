@@ -159,7 +159,7 @@ Anthropic 保留 thinking 的工具循环会冻结已经发送的 system、工�
 - **后续回复等待**：未指定 `timeout_ms` 时，`WaitAgent` 对待收集的 `PromptAgent` 回复默认等待 120 秒，正常返回即提前结束，减少 5 秒后纯粹为再次等待的模型往返。普通 SpawnAgent 仍默认 5 秒，显式超时（含零）优先，不改变生命周期、取消和证据 revision。
 - **可核验交接与连续复审**：子 Agent 交付版本、产物与实际验证；父级核验必要证据而非重走完整调查。修复 Findings 后优先继续已有 idle reviewer，确认旧／新 head 后审增量及受影响行为；基线、设计或风险变化或原覆盖不足时扩大审查。独立判断和必要回归不因此省略。
 
-`npm test` 使用一次真实 Vitest 执行的公开 collection 统计预算（含 skip／todo／each），不再全量导入一次后重新执行。测试文件仍串行，browser 清单每次重新收集；缺失／未审核文件、过滤、收集错误、断言失败与超预算均失败。`npm run test:budget` 保留独立的仅收集检查，定向执行仍用 `npm run test:focus -- <files>`。
+`npm test` 从一次实际的 Vitest 执行统计逻辑用例（含 skip／todo／each），并重新收集 Playwright 用例。用例数只统计，不设上限；文件缺失或未登记、过滤、收集错误、断言失败仍会让检查失败。`npm run test:count` 只收集不执行，定向执行仍用 `npm run test:focus -- <files>`。
 
 这些是可验证的机制收益，不代表已证明所有真实任务的端到端加速比例。需要同时比较首次有用结果、完整完成时间、请求／工具数量、正确性、用户纠偏和实际验证；模型输出、外部 API、真实计算和授权等待应分别归因。
 

@@ -7,10 +7,6 @@ import { createRequire } from 'node:module';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { CORE_TEST_FILES, E2E_TEST_FILES, REVIEWED_TEST_FILES, isTestFile, normalizeTestPath } from './test-suite-manifest.mjs';
 
-// Combined Vitest and Playwright ceiling, including skipped and parameterized cases.
-// Coverage changes are documented in the PR and the curation policy.
-export const TEST_CASE_LIMIT = 208;
-
 function walkFiles(directory) {
   return readdirSync(directory, { withFileTypes: true }).flatMap(entry => {
     const path = resolve(directory, entry.name);
@@ -79,14 +75,6 @@ export function countUnitCases(result, { rootDir = process.cwd(), expectedFiles,
   return count;
 }
 
-export function checkCaseBudget({ unit, browser }, limit = TEST_CASE_LIMIT) {
-  for (const count of [unit, browser]) {
-    if (!Number.isSafeInteger(count) || count < 0) throw new Error('Invalid collected test count');
-  }
-  const total = unit + browser;
-  return { unit, browser, total, limit, exceeded: total > limit };
-}
-
 /** Close collection resources without blocking an isolated collector forever. */
 export async function closeUnitCollector(context, timeoutMs = 5000) {
   let timer;
@@ -139,18 +127,18 @@ export async function collectUnitCases({ rootDir = process.cwd(), configFile = '
 /** Browser list is always fresh and unfiltered, regardless of configured grep. */
 export function collectBrowserCases({ rootDir = process.cwd(), configFile = 'e2e/playwright.config.js', expectedFiles = E2E_TEST_FILES } = {}) {
   const require = createRequire(import.meta.url);
-  const wrapper = resolve(dirname(fileURLToPath(import.meta.url)), 'test-budget-playwright.config.mjs');
+  const wrapper = resolve(dirname(fileURLToPath(import.meta.url)), 'test-suite-playwright.config.mjs');
   const browserReport = execFileSync(process.execPath, [require.resolve('@playwright/test/cli'), 'test', `--config=${wrapper}`,
     '--list', '--reporter=json', '--forbid-only'], {
     cwd: rootDir, encoding: 'utf8', maxBuffer: 8 * 1024 * 1024, timeout: 60000,
-    env: { ...process.env, YEAFT_BUDGET_PLAYWRIGHT_CONFIG: resolve(rootDir, configFile) },
+    env: { ...process.env, YEAFT_TEST_SUITE_PLAYWRIGHT_CONFIG: resolve(rootDir, configFile) },
   });
   return countBrowserCases(JSON.parse(browserReport), { rootDir, expectedFiles });
 }
 
 /** Bound the isolated collector so import side effects cannot hang the gate. */
 export function collectTestCaseCounts({ rootDir = process.cwd() } = {}) {
-  const outputDir = mkdtempSync(resolve(tmpdir(), 'yeaft-test-budget-'));
+  const outputDir = mkdtempSync(resolve(tmpdir(), 'yeaft-test-suite-'));
   const outputFile = resolve(outputDir, 'tests.json');
   try {
     execFileSync(process.execPath, [fileURLToPath(import.meta.url), '--collect-unit', outputFile, 'vitest.focus.config.js', '--reviewed'], {
@@ -174,19 +162,19 @@ export function assertReviewedTestFiles({ rootDir = process.cwd() } = {}) {
   }
 }
 
-export function reportCaseBudget(counts, limit = TEST_CASE_LIMIT) {
-  const budget = checkCaseBudget(counts, limit);
-  console.log(`Suite: ${CORE_TEST_FILES.length} Vitest files / ${budget.unit} cases + ${E2E_TEST_FILES.length} browser files / ${budget.browser} cases = ${budget.total}/${budget.limit} cases`);
-  if (budget.exceeded) {
-    throw new Error('Test budget exceeded. Remove redundant cases or explicitly review a small budget increase for new critical coverage. Do not hide cases with skip or exclude.');
+export function reportCaseCounts({ unit, browser }) {
+  for (const count of [unit, browser]) {
+    if (!Number.isSafeInteger(count) || count < 0) throw new Error('Invalid collected test count');
   }
-  return budget;
+  const total = unit + browser;
+  console.log(`Suite: ${unit} Vitest cases + ${browser} browser cases = ${total} cases`);
+  return { unit, browser, total };
 }
 
 function main() {
   try {
     assertReviewedTestFiles();
-    reportCaseBudget(collectTestCaseCounts());
+    reportCaseCounts(collectTestCaseCounts());
   } catch (error) {
     console.error(error.message);
     process.exitCode = 1;

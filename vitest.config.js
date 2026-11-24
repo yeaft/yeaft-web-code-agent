@@ -16,8 +16,7 @@ export default defineConfig({
     hookTimeout: 10000,
     pool: 'forks',
     fileParallelism: false,
-    // All retained Vitest files run by default. Prefer replacing redundant
-    // coverage; new critical regressions may justify a reviewed budget increase.
+    // The full gate runs every registered Vitest file. New test files belong in the manifest.
     include: [...CORE_TEST_FILES],
     // Dot-dir worktrees may appear at different depths depending on who
     // created them. Use globstar forms so both full and focused runs exclude

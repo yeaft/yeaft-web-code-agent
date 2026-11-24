@@ -262,7 +262,7 @@ npm run build            # production Web assets
 npm run docs:build       # bilingual VitePress site
 ```
 
-The reviewed baseline is 500 logical test cases: 450 Vitest unit/integration cases and 50 Playwright browser cases. `npm run test:budget` collects both complete test trees, including parameterized and skipped cases; repeated browser-project executions count once. No retired cases are kept in a hidden suite. Add focused coverage for new behavior, replacing redundant cases or explicitly reviewing a small budget increase. See [the curation policy](docs/notes/2026-10-13-test-suite-curation.md) for priorities and tradeoffs.
+Use `npm run test:count` to check the test-file manifest and report logical Vitest and Playwright case counts. Parameterized and skipped cases count; browser project replicas do not. There is no case-count limit: add focused regression coverage and periodically remove redundant or obsolete cases. See [the curation policy](docs/notes/2026-10-13-test-suite-curation.md).
 
 The repository uses ES modules, Node.js 22.5+, plain JavaScript with JSDoc, Vue 3 + Pinia, Express + `ws`, SQLite, esbuild, Vitest, Playwright, and VitePress.
 

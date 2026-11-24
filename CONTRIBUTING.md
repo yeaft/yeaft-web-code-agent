@@ -31,7 +31,7 @@ npm test
 npm run test:e2e
 ```
 
-Vitest and Playwright cover server, agent, frontend, Yeaft engine, provider routing, and integration scenarios. The curated baseline is 172 Vitest + 25 browser logical cases, with a combined ceiling of 200. `npm run test:budget` collects both full test trees (including skipped and parameterized cases) and rejects missing/unreviewed files or an exceeded budget. Add critical regressions incrementally with new features; prefer replacing redundant coverage before proposing any increase; do not hide tests or combine unrelated scenarios just to reduce the count. See [the curation policy](docs/notes/2026-10-13-test-suite-curation.md).
+Vitest and Playwright cover server, agent, frontend, Yeaft engine, provider routing, and integration scenarios. `npm run test:count` reports logical cases without enforcing a count limit. Missing or unregistered files and collection errors still fail. Add focused regression tests as needed and review the suite monthly for redundant or obsolete coverage. Do not hide tests or combine unrelated scenarios just to lower the count. See [the curation policy](docs/notes/2026-10-13-test-suite-curation.md).
 
 ## Building Frontend
 

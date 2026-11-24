@@ -262,7 +262,7 @@ npm run build            # production Web assets
 npm run docs:build       # 中英文 VitePress 文档站
 ```
 
-当前审定基线为 500 个逻辑用例：450 个 Vitest 单元／集成用例、50 个 Playwright 浏览器用例。`npm run test:budget` 收集两个完整测试目录，包含参数展开与跳过用例；同一浏览器用例在多个 project 中重复执行只计一次。不保留隐藏的退役测试集。新行为应补齐聚焦覆盖，替换冗余用例或明确审查小幅预算增长。保留优先级与取舍见[测试精简策略](docs/notes/2026-10-13-test-suite-curation.md)。
+用 `npm run test:count` 校验测试文件清单并统计 Vitest 和 Playwright 的逻辑用例。参数化和跳过的用例计入，同一浏览器用例在多个 project 中只计一次。用例数不设上限：为新行为补必要的回归测试，定期清理重复或过时的用例。详见[测试精简策略](docs/notes/2026-10-13-test-suite-curation.md)。
 
 仓库使用 ES modules、Node.js 22.5+、带 JSDoc 的纯 JavaScript、Vue 3 + Pinia、Express + `ws`、SQLite、esbuild、Vitest、Playwright 和 VitePress。
 
