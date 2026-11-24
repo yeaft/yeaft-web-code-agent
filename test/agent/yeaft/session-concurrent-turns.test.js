@@ -1,4 +1,5 @@
-import { afterEach, expect, it } from 'vitest';
+import { afterEach, expect, it, vi } from 'vitest';
+import { setTimeout as realTimeout } from 'node:timers';
 import { mkdtempSync, rmSync, readdirSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -20,6 +21,7 @@ let root;
 const gates = [];
 const previous = { ...ctx };
 afterEach(async () => {
+  vi.useRealTimers();
   for (const gate of gates.splice(0)) gate.resolve();
   await bridge.__testResetVpState();
   bridge.__testSetSession(null);
@@ -28,7 +30,7 @@ afterEach(async () => {
   if (root) rmSync(root, { recursive: true, force: true });
 });
 function deferred() { let resolve; const promise = new Promise(r => { resolve = r; }); const gate = { promise, resolve }; gates.push(gate); return gate; }
-async function until(fn) { for (let i = 0; i < 400; i++) { if (fn()) return; await new Promise(r => setTimeout(r, 5)); } throw Error('condition timed out'); }
+async function until(fn) { for (let i = 0; i < 400; i++) { if (fn()) return; await new Promise(r => realTimeout(r, 5)); } throw Error('condition timed out'); }
 function setup(adapter, roster = ['omni'], config = {}, sceneId) {
   root = mkdtempSync(join(tmpdir(), 'session-parallel-'));
   seedDefaultVps(join(root, 'virtual-persons'));
@@ -40,12 +42,90 @@ function setup(adapter, roster = ['omni'], config = {}, sceneId) {
   ctx.ws = { readyState: 1, send(encoded) { sent.push(JSON.parse(encoded)); }, sent }; ctx.serverEncryptionRequired = false;
   ctx.outboundSendQueue = []; ctx.outboundSendQueueBytes = 0; ctx.outboundSendQueueActive = false;
   ctx.messageBuffer = []; ctx.messageBufferBytes = 0;
+  const toolRegistry = new ToolRegistry();
   bridge.__testSetSession({ adapter, trace: new NullTrace(), conversationStore: store,
-    config: { model: 'test-model', maxOutputTokens: 1024, ...config }, toolRegistry: new ToolRegistry(), yeaftDir: root });
-  return { store, sessionId: meta.id, send: (id, text) => bridge.handleYeaftSessionSend({ sessionId: meta.id, id, text }) };
+    config: { model: 'test-model', maxOutputTokens: 1024, ...config }, toolRegistry, yeaftDir: root });
+  return { store, toolRegistry, sessionId: meta.id, send: (id, text) => bridge.handleYeaftSessionSend({ sessionId: meta.id, id, text }) };
 }
 const frames = () => [...(ctx.ws?.sent || []), ...ctx.outboundSendQueue.map(item => item.msg)];
 const events = type => frames().filter(frame => frame.event?.type === type);
+
+it('projects one VP’s silent stage across tools and provider waits; text re-arms it and abort retires it', async () => {
+  const toolGate = deferred();
+  const textGate = deferred();
+  const finish = deferred();
+  let requests = 0;
+  let runningTool = false;
+  const { send, sessionId, store, toolRegistry } = setup({ async *stream(params) {
+    if (++requests === 1) {
+      yield { type: 'tool_call', id: 'test-tool', name: 'TestWait', input: {} };
+      yield { type: 'stop', stopReason: 'tool_use' };
+      return;
+    }
+    params.onRequestStart?.();
+    yield { type: 'text_delta', text: '  ' };
+    yield { type: 'thinking_delta', text: 'not a visible update' };
+    await textGate.promise;
+    yield { type: 'text_delta', text: 'real update' };
+    await Promise.race([finish.promise, new Promise(resolve => params.signal.addEventListener('abort', resolve, { once: true }))]);
+    yield { type: 'stop', stopReason: 'end_turn' };
+  } });
+  // Runtime tools are registered on the injected shared registry.
+  toolRegistry.register({ name: 'TestWait', description: 'Wait for test', inputSchema: { type: 'object' },
+    async execute() { runningTool = true; await toolGate.promise; return 'done'; } });
+  vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] });
+  await send('silent', 'silent test');
+  await until(() => runningTool);
+  const latest = () => events('query_progress').at(-1)?.event;
+  await vi.advanceTimersByTimeAsync(59_999);
+  expect(latest()?.waitingStage).toBeNull();
+  await vi.advanceTimersByTimeAsync(1);
+  expect(latest()).toMatchObject({ waitingStage: 'tool', modelRequests: 1 });
+  const turnId = latest().turnId;
+  const toolRevision = latest().revision;
+  toolGate.resolve();
+  await until(() => requests === 2);
+  expect(latest()).toMatchObject({ waitingStage: 'provider', turnId });
+  expect(latest().revision).toBeGreaterThan(toolRevision);
+  textGate.resolve();
+  await until(() => latest()?.waitingStage === null);
+  await vi.advanceTimersByTimeAsync(59_999);
+  expect(latest()?.waitingStage).toBeNull();
+  await vi.advanceTimersByTimeAsync(1);
+  expect(latest()).toMatchObject({ waitingStage: 'provider', turnId });
+  const snapshotCount = events('vp_status_snapshot').length;
+  await bridge.handleYeaftLoadHistory({ sessionId, limit: 0 });
+  await vi.advanceTimersByTimeAsync(1); // Run deferred metadata replay.
+  await until(() => events('vp_status_snapshot').length > snapshotCount);
+  expect(events('vp_status_snapshot').at(-1)?.event.queryProgress).toContainEqual(latest());
+  bridge.handleYeaftAbortTurn({ sessionId, turnId });
+  await bridge.__testDrainVpDrivers();
+  expect(latest()).toMatchObject({ waitingStage: null, turnId });
+  expect(events('vp_turn_end').at(-1).event).toMatchObject({ reason: 'aborted' });
+  expect(requests).toBe(2);
+  expect(store.loadAllBySession(sessionId).some(row => row.type === 'query_progress' || row.waitingStage)).toBe(false);
+});
+
+it('shows status before the initial provider emits any output and reports a watchdog timeout as failure', async () => {
+  let requests = 0;
+  const { send, sessionId } = setup({ async *stream(params) {
+    requests++;
+    await new Promise(resolve => params.signal.addEventListener('abort', resolve, { once: true }));
+    yield { type: 'stop', stopReason: 'end_turn' };
+  } });
+  vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] });
+  await send('hung', 'hung test');
+  await until(() => requests === 1);
+  await vi.advanceTimersByTimeAsync(60_000);
+  const progress = events('query_progress').at(-1).event;
+  expect(progress.waitingStage).toBe('provider');
+  expect(progress).not.toHaveProperty('modelRequests');
+  await vi.advanceTimersByTimeAsync(60_000);
+  await bridge.__testDrainVpDrivers();
+  expect(events('vp_turn_end').at(-1).event).toMatchObject({ reason: 'errored', detail: { code: 'provider_watchdog_timeout' } });
+  expect(frames().findLast(frame => frame.data?.type === 'result')?.data).toMatchObject({ is_error: true });
+  expect(requests).toBe(1);
+});
 
 it('defers to live root state and only attributes durable execution evidence to its own root', () => {
   const liveStates = ['submitted', 'queued', 'waiting', 'running', 'completed'];

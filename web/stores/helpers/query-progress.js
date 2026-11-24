@@ -18,15 +18,28 @@ export function invalidateOfflineQueryProgress(store) {
     .filter(([, row]) => isAgentOnline(store, row.agentId)));
 }
 
+const waitingStages = new Set(['preparing', 'provider', 'tool', 'background_task', 'retrying']);
+
 /** Ephemeral metadata only. Never retain unknown fields from a wire event. */
 export function normalizeQueryProgress(event) {
   if (!event || event.type !== 'query_progress'
       || !['turnId', 'threadId', 'sessionId', 'vpId'].every(key => typeof event[key] === 'string' && event[key].length > 0)
-      || !counters.every(key => Number.isSafeInteger(event[key]) && event[key] >= 0)
-      || event.revision < 1
-      || !['running', 'warning', 'recovering', 'stopped'].includes(event.stage)
-      || ![null, 'repeated_results', 'repeated_failure'].includes(event.reason)
-      || !(event.lastEvidenceAt === null || (Number.isFinite(event.lastEvidenceAt) && event.lastEvidenceAt >= 0))) return null;
+      || !Number.isSafeInteger(event.revision) || event.revision < 1) return null;
+  const waitingStage = waitingStages.has(event.waitingStage) ? { waitingStage: event.waitingStage } : {};
+  if (event.waitingStage === null) waitingStage.waitingStage = null;
+  const hasMetrics = counters.every(key => Number.isSafeInteger(event[key]) && event[key] >= 0)
+      && ['running', 'warning', 'recovering', 'stopped'].includes(event.stage)
+      && [null, 'repeated_results', 'repeated_failure'].includes(event.reason)
+      && (event.lastEvidenceAt === null || (Number.isFinite(event.lastEvidenceAt) && event.lastEvidenceAt >= 0));
+  if (!hasMetrics) {
+    // A provider can hang before the first engine metrics snapshot. Do not
+    // imply that zero requests or tools ran. Null explicitly clears the stage.
+    if (Object.hasOwn(waitingStage, 'waitingStage')) {
+      const { type, turnId, threadId, sessionId, vpId, revision } = event;
+      return { type, turnId, threadId, sessionId, vpId, revision, ...waitingStage };
+    }
+    return null;
+  }
   const { turnId, threadId, sessionId, vpId, revision, modelRequests, toolExecutions, reusedCalls,
     repeatedCalls, failedCalls, stage, reason, lastEvidenceAt, stagnantBatches } = event;
   const extra = {};
@@ -47,7 +60,7 @@ export function normalizeQueryProgress(event) {
     }
   }
   return { type: 'query_progress', turnId, threadId, sessionId, vpId, revision, modelRequests,
-    toolExecutions, reusedCalls, repeatedCalls, failedCalls, stage, reason, lastEvidenceAt, stagnantBatches, ...extra };
+    toolExecutions, reusedCalls, repeatedCalls, failedCalls, stage, reason, lastEvidenceAt, stagnantBatches, ...extra, ...waitingStage };
 }
 
 const keyFor = (agentId, conversationId, turnId) => JSON.stringify([agentId, conversationId, turnId]);
@@ -165,4 +178,18 @@ export function visibleQueryProgress(store, agentId, conversationId, execution) 
   const entry = store.yeaftQueryProgressByTurn?.[keyFor(agentId, conversationId, execution.turnId)];
   return belongsTo(entry, agentId, conversationId, generationOf(store)) && sameExecution(entry.progress, execution)
     ? entry.progress : null;
+}
+
+/** Conversation waiting banner; does not act as a runtime owner or Stop target. */
+export function visibleWaitingStages(store, { agentId, sessionId } = {}) {
+  const conversationId = store.yeaftConversationIdsByAgent?.[agentId];
+  if (!agentId || !sessionId || !conversationId || store.connectionState !== 'connected'
+      || !isAgentOnline(store, agentId) || isRetiredYeaftConversation(store, agentId, conversationId)) return [];
+  const generation = generationOf(store);
+  return Object.values(store.yeaftQueryProgressByTurn || {})
+    .filter(entry => belongsTo(entry, agentId, conversationId, generation))
+    .map(entry => entry.progress)
+    .filter(progress => progress.sessionId === sessionId && progress.waitingStage
+      && !isQueryExecutionSettled(store, agentId, conversationId, progress.turnId)
+      && hasLiveOwner(store, agentId, conversationId, progress));
 }

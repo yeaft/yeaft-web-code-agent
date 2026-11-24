@@ -313,6 +313,7 @@ export default {
           :hide-speaker-identity="ordinarySession"
           :tools-in-status="ordinarySession && !!topbarGroup"
           :live-execution-keys="sessionLiveExecutionKeys"
+          :session-activity="sessionActivity"
           :fork-from-turn-enabled="forkFromTurnEnabled"
           :fork-from-turn-disabled="!!forkUnavailableReason"
           :fork-from-turn-title="forkUnavailableReason ? $t('yeaft.session.error.' + forkUnavailableReason) : $t('yeaft.session.forkFromTurnHint')"

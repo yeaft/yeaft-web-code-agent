@@ -59,12 +59,15 @@ model 项可以是裸字符串（`"gpt-5"`），也可以是对象：
 
 #### 流静默与长工具参数
 
-全局 `llmRetry` 策略同时用于 Anthropic Messages 和 OpenAI Responses：
+全局 `llmRetry` 策略用于 Anthropic Messages、Gemini 和 OpenAI Responses：
 
 | 字段 | 默认 | 说明 |
 | --- | --- | --- |
+| `llmRetry.maxRequestRetryTimeMs` | `180000` | 每个模型步骤等待响应头、重试和退避的总预算；`0` 关闭此时间预算 |
 | `llmRetry.streamIdleTimeoutMs` | `90000` | 普通请求每个 chunk 之间的静默预算；`0` 在所有 effort 下关闭全局传输层 guard |
 | `llmRetry.highEffortStreamIdleTimeoutMs` | `270000` | 最终 wire effort 为 `high`、`xhigh`、`max` 或 `ultra` 时的预算，不依据最初请求的 effort |
+
+重试时间预算不会中断正常返回的响应体、工具执行或整轮对话。已配置的备用模型有独立预算。只有空白或服务商图片分隔标记的回复不算作有效答复。
 
 启用的预算最多 600000ms。每次收到 chunk 都重新计时，不是整次请求的总时限。旧配置显式指定 `streamIdleTimeoutMs` 时，该值用于所有 effort，除非同时提供高 effort 预算。模型/provider 的绝对覆盖优先于全局配置（包括全局 `0`），且不会改变其他模型共用的缓存 adapter。独立的 Session watchdog 按最终请求 effort 调整，并比启用的传输层预算至少多留 30 秒处理超时。关闭传输层 guard 不会关闭 Session watchdog 或用户取消能力；原有有限重试次数仍有效。
 

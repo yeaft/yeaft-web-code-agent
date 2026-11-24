@@ -34,7 +34,7 @@ import {
   classifyAuthError,
   classifyPolicyError,
   LLMContextError,
-  LLMServerError,
+  LLMServerError, classifyUpstreamHeadersTimeout,
   LLMToolInputError,
   LLMAbortError,
   classifyFetchError,
@@ -319,8 +319,8 @@ export class OpenAIResponsesAdapter extends LLMAdapter {
     return input;
   }
 
-  #dispatch({ url, headers, requestBody, signal, cacheKeySent, context, onProviderDiagnostics, onRequestStart, maxRequestBodyBytes }) {
-    return fetchWithPromptCacheFallback({ url, headers, body: requestBody, signal, providerLabel: 'OpenAI', field: 'prompt_cache_key',
+  #dispatch({ url, headers, requestBody, signal, getHeadersTimeoutMs, cacheKeySent, context, onProviderDiagnostics, onRequestStart, maxRequestBodyBytes }) {
+    return fetchWithPromptCacheFallback({ url, headers, body: requestBody, signal, getHeadersTimeoutMs, providerLabel: 'OpenAI', field: 'prompt_cache_key',
       maxRequestBodyBytes, withoutCache: cacheKeySent ? ({ prompt_cache_key, ...uncached }) => uncached : undefined, onRequestStart,
       onCacheFallback: () => onProviderDiagnostics?.({ ...context.diagnostics,
         nativeReasoningState: Boolean(requestBody.include?.includes('reasoning.encrypted_content')), promptCaching: 'rejected-fallback' }),
@@ -347,7 +347,7 @@ export class OpenAIResponsesAdapter extends LLMAdapter {
       return new LLMContextError(`Context too long: ${body}`);
     }
     if (status >= 500) {
-      return new LLMServerError(`Server error: ${body}`, status);
+      return classifyUpstreamHeadersTimeout(status, body) || new LLMServerError(`Server error: ${body}`, status);
     }
     return new Error(`API error ${status}: ${body}`);
   }
@@ -400,7 +400,7 @@ export class OpenAIResponsesAdapter extends LLMAdapter {
     }
   }
 
-  async *#streamResponse({ model, system, messages, tools, maxTokens = 16384, effort, effortSource, effortContext = {}, extraBody, providerContext, requestIdentity, onProviderDiagnostics, effortConstraint = null, onEffortDecision = null, signal, onRawExchange, rawExchangeMaxBytes = 512 * 1024, onRequestStart, streamIdleTimeoutMs, maxRequestBodyBytes }, exposure) {
+  async *#streamResponse({ model, system, messages, tools, maxTokens = 16384, effort, effortSource, effortContext = {}, extraBody, providerContext, requestIdentity, onProviderDiagnostics, effortConstraint = null, onEffortDecision = null, signal, onRawExchange, rawExchangeMaxBytes = 512 * 1024, onRequestStart, getHeadersTimeoutMs, streamIdleTimeoutMs, maxRequestBodyBytes }, exposure) {
     if (signal?.aborted) throw new LLMAbortError();
 
     const context = providerContext || createProviderContext({ protocol: 'openai-responses', baseUrl: this.#baseUrl, staticApiKey: this.#apiKey, model });
@@ -449,7 +449,7 @@ export class OpenAIResponsesAdapter extends LLMAdapter {
       'Authorization': `Bearer ${this.#apiKey}`,
     };
 
-    const { response, errorBody, body: wireBody } = await this.#dispatch({ url, headers, requestBody, signal, maxRequestBodyBytes,
+    const { response, errorBody, body: wireBody } = await this.#dispatch({ url, headers, requestBody, signal, getHeadersTimeoutMs, maxRequestBodyBytes,
       cacheKeySent, context, onProviderDiagnostics,
       onRequestStart: () => onRequestStart?.({ effort: effortDecision.effective, streamIdleTimeoutMs: idleMs }) });
     const rawRequest = redactRawRequest({ url, method: 'POST', headers, body: wireBody });
@@ -513,7 +513,7 @@ export class OpenAIResponsesAdapter extends LLMAdapter {
               ...reasoningUsage(usage, 'openai-responses') };
       if (result.status === 'failed') throw new LLMServerError('OpenAI JSON response failed', 0);
       yield filtered ? (calls.length > 0 ? contentFilterStop(items, body.tools, { ran: true }) : unusable(contentFilterStop(items, body.tools)))
-        : { type: 'stop', stopReason: this.#mapStopReason(result, false) };
+        : unusable({ type: 'stop', stopReason: this.#mapStopReason(result, false) });
       return;
     }
     const reader = response.body.getReader();
@@ -782,10 +782,7 @@ export class OpenAIResponsesAdapter extends LLMAdapter {
               yield call;
             }
             if (state) yield { type: 'provider_state', providerState: state, providerStateBytes: providerStateBytes(state) };
-            yield {
-              type: 'stop',
-              stopReason: this.#mapStopReason(respObj, sawToolCall),
-            };
+            yield unusable({ type: 'stop', stopReason: this.#mapStopReason(respObj, sawToolCall) });
           } else if (type === 'response.failed' || type === 'response.error') {
             sawTerminalEvent = true;
             // `response.error` is a compatibility alias for older proxies.

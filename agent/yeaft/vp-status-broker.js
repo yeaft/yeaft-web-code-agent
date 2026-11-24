@@ -222,8 +222,9 @@ export function createVpStatusBroker({ send, now = Date.now } = {}) {
   function recordQueryProgress(progress) {
     const row = threads.get(threadKeyOf(progress.sessionId, progress.vpId, progress.threadId));
     if (!row || row.turnId !== progress.turnId || !isVpStatusRunning(row.state)
-        || (row.queryProgress?.revision || 0) >= progress.revision) return;
+        || (row.queryProgress?.revision || 0) >= progress.revision) return false;
     row.queryProgress = progress;
+    return true;
   }
 
   function broadcastSnapshot({ sessionId } = {}) {

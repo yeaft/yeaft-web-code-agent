@@ -85,6 +85,8 @@ const DEFAULTS = {
   //   • baseDelayMs / maxDelayMs: exponential backoff bounds used when
   //     the server didn't send a Retry-After header.
   //   • jitterRatio: ± random fraction applied to backoff; 0 disables.
+  //   • maxRequestRetryTimeMs: 180s per model step (waiting for headers and
+  //     replaying failures, including backoff); 0 disables the time budget.
   //   • streamIdleTimeoutMs / highEffortStreamIdleTimeoutMs: per-chunk silence
   //     budgets, selected from the final wire effort (high/xhigh/max/ultra).
   //     Defaults leave 30s before the Session's 120s/300s silence watchdog.
@@ -95,6 +97,7 @@ const DEFAULTS = {
     baseDelayMs: 1_000,
     maxDelayMs: 30_000,
     jitterRatio: 0.25,
+    maxRequestRetryTimeMs: 180_000,
     streamIdleTimeoutMs: 90_000,
     highEffortStreamIdleTimeoutMs: 270_000,
     forbiddenRetryDelaysMs: [30_000, 120_000],
@@ -113,7 +116,7 @@ const DEFAULTS = {
  *
  * @param {object | null | undefined} fileConfig
  * @param {object | null | undefined} overrides
- * @returns {{ maxRetries: number, baseDelayMs: number, maxDelayMs: number, jitterRatio: number, streamIdleTimeoutMs: number, highEffortStreamIdleTimeoutMs: number }}
+ * @returns {{ maxRetries: number, baseDelayMs: number, maxDelayMs: number, jitterRatio: number, maxRequestRetryTimeMs: number, streamIdleTimeoutMs: number, highEffortStreamIdleTimeoutMs: number }}
  */
 export function normalizeLlmRetry(fileConfig, overrides) {
   const base = DEFAULTS.llmRetry;
@@ -131,6 +134,9 @@ export function normalizeLlmRetry(fileConfig, overrides) {
     }
     if (Number.isFinite(src.jitterRatio) && src.jitterRatio >= 0) {
       out.jitterRatio = Math.min(1, src.jitterRatio);
+    }
+    if (Number.isFinite(src.maxRequestRetryTimeMs) && src.maxRequestRetryTimeMs >= 0) {
+      out.maxRequestRetryTimeMs = Math.min(600_000, Math.floor(src.maxRequestRetryTimeMs));
     }
     if (Number.isFinite(src.streamIdleTimeoutMs) && src.streamIdleTimeoutMs >= 0) {
       out.streamIdleTimeoutMs = Math.min(600_000, Math.floor(src.streamIdleTimeoutMs));

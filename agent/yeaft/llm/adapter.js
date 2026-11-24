@@ -266,6 +266,41 @@ export class LLMToolInputError extends LLMServerError {
   }
 }
 
+/** Distinguish missing upstream headers from a stalled response body. */
+export class LLMHeadersTimeoutError extends LLMServerError {
+  constructor(upstream = false) {
+    super(upstream ? 'The gateway timed out waiting for upstream model response headers.'
+      : 'Timed out waiting for model response headers.', upstream ? 504 : 0);
+    this.name = 'LLMHeadersTimeoutError';
+    this.reasonCode = upstream ? 'upstream_headers_timeout' : 'response_headers_timeout';
+  }
+}
+
+export function classifyUpstreamHeadersTimeout(status, responseBody) {
+  if (status !== 504) return null;
+  const body = parseProviderErrorBody(responseBody);
+  return (body?.error?.code ?? body?.code) === 'upstream_headers_timeout' ? new LLMHeadersTimeoutError(true) : null;
+}
+
+/** Stop the retry clock from interrupting healthy body streaming once headers arrive. */
+export async function fetchWithHeadersTimeout(url, init, timeoutMs) {
+  if (init.signal?.aborted) throw new LLMAbortError();
+  if (!Number.isFinite(timeoutMs)) return fetch(url, init);
+  if (timeoutMs <= 0) throw new LLMHeadersTimeoutError();
+  const deadline = new AbortController();
+  const signal = init.signal ? AbortSignal.any([init.signal, deadline.signal]) : deadline.signal;
+  const timer = setTimeout(() => deadline.abort(new LLMHeadersTimeoutError()), timeoutMs);
+  try {
+    return await fetch(url, { ...init, signal });
+  } catch (error) {
+    if (init.signal?.aborted) throw new LLMAbortError();
+    if (deadline.signal.aborted) throw deadline.signal.reason;
+    throw error;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 /** Streaming response went idle after the server accepted the request. Retryable. */
 export class LLMStreamIdleTimeoutError extends LLMServerError {
   constructor(message, idleMs) {

@@ -144,6 +144,7 @@ import { imageMetadataForPersistence } from './image-assets.js';
 import { sliceLastNTurns } from './turn-utils.js';
 import { pairSanitize } from './pair-sanitize.js';
 import { filterSnapshotForVp } from './snapshot-filter.js';
+import { createVisibleQueryProgress } from './visible-query-progress.js';
 import { createVpStatusBroker, isVpStatusRunning, normalizeVpErrorDetail } from './vp-status-broker.js';
 import { classifyThread as defaultClassifyThread, fallbackTitle } from './vp/thread-classifier.js';
 import { resolveDecisionModel } from './decision/index.js';
@@ -5037,6 +5038,18 @@ export function __testHandleEngineEvent(event, hctx) {
   return handleEngineEvent(event, hctx);
 }
 
+function publishQueryProgress(hctx) {
+  const { turnId, sessionId, vpId } = hctx;
+  const threadId = hctx.threadId || 'main';
+  // One wire sequence for engine metrics and bridge display updates, including
+  // a provider wait before the engine has emitted any metrics.
+  const revision = hctx.queryProgressWireRevision = (hctx.queryProgressWireRevision || 0) + 1;
+  const event = { ...hctx.queryProgressMetrics, type: 'query_progress', turnId, threadId, sessionId, vpId, revision,
+    ...(hctx.visibleQueryProgress ? { waitingStage: hctx.queryWaitingStage ?? null } : {}) };
+  if (!getVpStatusBroker().recordQueryProgress(event)) return;
+  sendToServer({ type: 'yeaft_output', conversationId: yeaftConversationId, sessionId, vpId, turnId, threadId, event });
+}
+
 function handleEngineEvent(event, hctx) {
   // Observability is not provider activity: never touch watchdogs, text or history.
   if (event.type === 'query_progress') {
@@ -5051,7 +5064,7 @@ function handleEngineEvent(event, hctx) {
         || ![null, 'repeated_results', 'repeated_failure'].includes(event.reason)
         || !(event.lastEvidenceAt === null || (Number.isFinite(event.lastEvidenceAt) && event.lastEvidenceAt >= 0))) return;
     hctx.queryProgressRevision = event.revision;
-    const { turnId, threadId, sessionId, vpId, revision, modelRequests, toolExecutions, reusedCalls,
+    const { modelRequests, toolExecutions, reusedCalls,
       repeatedCalls, failedCalls, stage, reason, lastEvidenceAt, stagnantBatches } = event;
     // Optional enhancements must never invalidate a legacy progress frame or
     // carry arbitrary provider/tool payloads across this projection boundary.
@@ -5070,13 +5083,16 @@ function handleEngineEvent(event, hctx) {
         if (typeof event.toolStatsTruncated === 'boolean') enhanced.toolStatsTruncated = event.toolStatsTruncated;
       }
     }
-    const progress = { type: 'query_progress', turnId, threadId, sessionId, vpId, revision, modelRequests,
-      toolExecutions, reusedCalls, repeatedCalls, failedCalls, stage, reason, lastEvidenceAt, stagnantBatches, ...enhanced };
-    getVpStatusBroker().recordQueryProgress(progress);
-    sendToServer({ type: 'yeaft_output', conversationId: yeaftConversationId, sessionId, vpId, turnId, threadId, event: progress });
+    hctx.queryProgressMetrics = { modelRequests, toolExecutions, reusedCalls, repeatedCalls, failedCalls,
+      stage, reason, lastEvidenceAt, stagnantBatches, ...enhanced };
+    publishQueryProgress(hctx);
     return;
   }
-  if (event.type === 'aborted' || (event.type === 'turn_end' && event.terminal === true)) hctx.queryProgressTerminal = true;
+  if (event.type === 'aborted' || event.type === 'error'
+      || (event.type === 'turn_end' && (event.terminal === true || event.stopReason === 'tool_handoff'))) {
+    hctx.visibleQueryProgress?.stop();
+    hctx.queryProgressTerminal = true;
+  }
   // Hidden progress has no wire/history/status projection and must not flush
   // pending visible text or resume a paused/terminal provider watchdog.
   if (event.type === 'provider_activity') {
@@ -5094,6 +5110,9 @@ function handleEngineEvent(event, hctx) {
         || hctx.presentations?.some(row => row.id === message.id)) return;
   }
   const terminalTurnEnd = event.type === 'turn_end' && event.terminal === true;
+  if (event.type === 'turn_end' && !terminalTurnEnd && event.stopReason !== 'llm_retry') {
+    hctx.visibleQueryProgress?.phase('preparing');
+  }
   const managesQueryTimer = terminalTurnEnd
     || event.type === 'aborted'
     || event.type === 'usage'
@@ -5121,6 +5140,7 @@ function handleEngineEvent(event, hctx) {
     case 'text_delta':
       hctx.assistantTextParts.push(event.text);
       queueStreamTextDelta(hctx, event.text, envelope);
+      if (/[^\s\u200B-\u200D]/u.test(event.text)) hctx.visibleQueryProgress?.visibleOutput();
       // vp-status: first text-delta of a (thinking|tool) phase flips
       // the row to 'streaming'. transition() is a no-op when already
       // streaming, so subsequent deltas are cheap.
@@ -5128,6 +5148,7 @@ function handleEngineEvent(event, hctx) {
       break;
 
     case 'response_presentation': {
+      hctx.visibleQueryProgress?.visibleOutput();
       const message = event.message;
       if (!hctx.presentations) hctx.presentations = [];
       hctx.presentations.push({ ...message, _textPartsCount: (hctx.assistantTextParts || []).length });
@@ -5210,6 +5231,8 @@ function handleEngineEvent(event, hctx) {
       break;
 
     case 'tool_start':
+      hctx.activeVisibleTools?.add(event.id);
+      hctx.visibleQueryProgress?.phase('tool');
       // ToolRegistry and individual tools own their execution deadlines. The
       // bridge watchdog only protects provider silence; leaving it armed here
       // races legitimate long tools and can abort the whole query just before
@@ -5223,6 +5246,8 @@ function handleEngineEvent(event, hctx) {
       break;
 
     case 'tool_end': {
+      hctx.activeVisibleTools?.delete(event.id);
+      hctx.visibleQueryProgress?.phase(hctx.activeVisibleTools?.size ? 'tool' : 'preparing');
       const images = Array.isArray(event.displayImages) ? event.displayImages : [];
       const rawOutput = typeof event.output === 'string' ? event.output : JSON.stringify(event.output ?? '');
       const displayOutput = event.name === 'ResponseEnhance'
@@ -5322,6 +5347,8 @@ function handleEngineEvent(event, hctx) {
     }
 
     case 'turn_start':
+      hctx.visibleQueryProgress?.phase('provider');
+      break;
     case 'stop':
       // No UI action needed; outer loop sends the final result.
       break;
@@ -5439,6 +5466,7 @@ function handleEngineEvent(event, hctx) {
       break;
 
     case 'llm_retry':
+      hctx.visibleQueryProgress?.phase('retrying');
       // Engine is intentionally sleeping before the next provider request.
       // Silence watchdogs protect active calls, not declared retry waits.
       if (typeof hctx.pauseQueryTimer === 'function') hctx.pauseQueryTimer();
@@ -5567,6 +5595,7 @@ function handleEngineEvent(event, hctx) {
     // namespaced under `vp_async_task_*` to match the existing
     // `vp_thread_*` / `vp_typing_*` event family.
     case 'async_task_wait_start':
+      hctx.visibleQueryProgress?.phase('background_task');
       // The engine is intentionally parked on a tracked background task, not
       // waiting on the LLM. Pause the LLM-silence watchdog until the task (or
       // an explicit abort) wakes the turn.
@@ -5582,6 +5611,7 @@ function handleEngineEvent(event, hctx) {
       break;
 
     case 'async_task_wait_end':
+      hctx.visibleQueryProgress?.phase('preparing');
       if (event.timedOut) {
         console.warn(
           '[Yeaft] same-turn async task wait timed out; continuing the VP turn and deferring task results:',
@@ -5603,6 +5633,7 @@ function handleEngineEvent(event, hctx) {
       break;
 
     case 'loop':
+      hctx.visibleQueryProgress?.phase('preparing');
       // Live clients only need bounded summary metadata. The complete request,
       // response, prompt, messages, and tool calls are already persisted by
       // DebugTrace and fetched for one Turn on demand. Forwarding those growing
@@ -6398,6 +6429,10 @@ function startSessionLoadInBackground({ sessionId = null, sessionMeta = null, pe
   return promise;
 }
 
+function providerWatchdogFailure(timeoutMs) {
+  return { code: 'provider_watchdog_timeout', message: `The model provider made no progress for ${timeoutMs / 1000}s. The response was stopped.` };
+}
+
 /**
  * Wrap {@link runVpTurn} with a second-stage abort escalation.
  *
@@ -6427,12 +6462,13 @@ async function runVpTurnWithEscalation(args) {
       if (escalationState.escalated) return;
       escalationState.escalated = true;
       escalationState.terminalEmitted = true;
+      const timeout = escalationState.watchdogFailure;
       console.error(
         `[Yeaft] runVpTurn abort escalation: session=${sessionId || ''} vp=${vpId || ''} thread=${threadId || 'main'} turn=${turnId || ''} did not return ${ESCALATE_AFTER_ABORT_MS}ms after abort — emitting synthetic stop and unblocking driver`,
       );
       try {
         sendSessionOutputFrame(
-          { type: 'result', result_text: '', stopped: true },
+          { type: 'result', result_text: '', ...(timeout ? { is_error: true } : { stopped: true }) },
           { sessionId, vpId, turnId, threadId },
         );
       } catch { /* never crash WS pipeline */ }
@@ -6455,13 +6491,14 @@ async function runVpTurnWithEscalation(args) {
           vpId,
           threadId: threadId || 'main',
           turnId,
-          reason: 'aborted',
-          detail: { reason: 'abort_escalation', graceMs: ESCALATE_AFTER_ABORT_MS },
+          reason: timeout ? 'errored' : 'aborted',
+          detail: timeout || { reason: 'abort_escalation', graceMs: ESCALATE_AFTER_ABORT_MS },
           ts: Date.now(),
         }, { sessionId, vpId, threadId: threadId || 'main', turnId });
       } catch { /* never crash WS pipeline */ }
       try {
-        getVpStatusBroker().settleIdle({ sessionId, vpId, threadId: threadId || 'main', title: thread?.title || '', settledTurnId: turnId });
+        if (timeout) getVpStatusBroker().transition({ sessionId, vpId, threadId, turnId, state: 'error', errorDetail: timeout });
+        else getVpStatusBroker().settleIdle({ sessionId, vpId, threadId: threadId || 'main', title: thread?.title || '', settledTurnId: turnId });
       } catch (err) {
         console.warn('[Yeaft] vp-status settleIdle (abort escalation) failed:', err?.message || err);
       }
@@ -6617,14 +6654,20 @@ async function runVpTurn({ prompt, promptParts = null, sessionId, vpId, threadId
       console.warn('[Yeaft] vp_turn_end emit failed:', err?.message || err);
     }
   };
+  let watchdogFailure = null;
   const finishAbortedTurn = (detail = null) => {
+    if (watchdogFailure) {
+      turnEndReason = 'errored';
+      turnEndDetail = watchdogFailure;
+      getVpStatusBroker().transition({ sessionId, vpId, threadId, turnId, state: 'error', errorDetail: watchdogFailure });
+    }
     flushStreamTextBatch(handlerCtx, envelope, { resetImmediate: true });
     sendSessionOutputFrame({
       type: 'result',
       result_text: '',
-      stopped: true,
+      ...(watchdogFailure ? { is_error: true } : { stopped: true }),
     }, envelope);
-    emitVpTurnEnd('aborted', detail);
+    emitVpTurnEnd(watchdogFailure ? 'errored' : 'aborted', watchdogFailure || detail);
   };
 
   try {
@@ -6634,6 +6677,8 @@ async function runVpTurn({ prompt, promptParts = null, sessionId, vpId, threadId
       timeoutMs: queryTimeoutMs,
       onTimeout: timeoutMs => {
         console.error(`[Yeaft] query timeout after ${timeoutMs / 1000}s of silence — aborting VP ${vpId}`);
+        watchdogFailure = providerWatchdogFailure(timeoutMs);
+        if (escalationState) escalationState.watchdogFailure = watchdogFailure;
         try { vpAbort.abort(); } catch { /* best-effort */ }
       },
     });
@@ -6738,6 +6783,14 @@ async function runVpTurn({ prompt, promptParts = null, sessionId, vpId, threadId
         markEngineTerminal,
         markTurnEnd,
       };
+      handlerCtx.activeVisibleTools = new Set();
+      handlerCtx.visibleQueryProgress = createVisibleQueryProgress({
+        signal: vpAbort.signal,
+        publish: waitingStage => {
+          handlerCtx.queryWaitingStage = waitingStage;
+          publishQueryProgress(handlerCtx);
+        },
+      });
       // The runtime cache is already bounded. Preserve its candidates here:
       // Engine allocates recent + related turns together at each provider boundary.
       const trimStart = perfNowMs();
@@ -6785,6 +6838,7 @@ async function runVpTurn({ prompt, promptParts = null, sessionId, vpId, threadId
           // but keep a separate bounded AskUser lifetime so an abandoned card
           // cannot pin the VP forever.
           pauseQueryTimer();
+          handlerCtx.visibleQueryProgress.phase('awaiting_user');
           const pending = {
             resolve,
             reject,
@@ -6799,7 +6853,10 @@ async function runVpTurn({ prompt, promptParts = null, sessionId, vpId, threadId
             createdAt,
             expiresAt: createdAt + ASK_USER_TIMEOUT_MS,
             timer: null,
-            resumeQueryTimer: resetQueryTimer,
+            resumeQueryTimer: () => {
+              handlerCtx.visibleQueryProgress.phase('tool');
+              resetQueryTimer();
+            },
             signal,
             onAbort: null,
           };
@@ -6814,6 +6871,7 @@ async function runVpTurn({ prompt, promptParts = null, sessionId, vpId, threadId
         },
         ...queryOpts,
         onProviderRequestStart: policy => {
+          handlerCtx.visibleQueryProgress.phase('provider');
           if (policy) watchdog.setTimeoutMs(queryTimeoutMsForProviderRequest(policy));
         },
       })) {
@@ -6850,7 +6908,7 @@ async function runVpTurn({ prompt, promptParts = null, sessionId, vpId, threadId
 
       if (escalationState?.escalated) return;
 
-      if (engineTerminalReason === 'aborted') {
+      if (watchdogFailure || engineTerminalReason === 'aborted') {
         finishAbortedTurn(engineTerminalDetail);
         return;
       }
@@ -6908,12 +6966,13 @@ async function runVpTurn({ prompt, promptParts = null, sessionId, vpId, threadId
         emitVpTurnEnd('end_turn');
       }
     } finally {
+      handlerCtx?.visibleQueryProgress?.stop();
       watchdog.stop();
     }
   } catch (err) {
     if (escalationState?.escalated) return;
     const isAbort = err && (err.name === 'AbortError' || err.name === 'LLMAbortError');
-    if (isAbort) {
+    if (watchdogFailure || isAbort) {
       if (!escalationState?.escalated) finishAbortedTurn();
       return;
     }

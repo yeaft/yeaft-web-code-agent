@@ -7,7 +7,7 @@ import { imageMimeFromBase64 } from '../image-dimensions.js';
 import {
   LLMAdapter, LLMRateLimitError, LLMServerError, LLMToolInputError, LLMContextError,
   LLMAbortError, LLMRequestTooLargeError, serializeModelRequestBody, classifyAuthError, classifyFetchError, retryAfterFromResponse,
-  readStreamChunkWithIdleTimeout, resolveStreamIdleTimeoutMs, SseLineBuffer,
+  readStreamChunkWithIdleTimeout, resolveStreamIdleTimeoutMs, fetchWithHeadersTimeout, classifyUpstreamHeadersTimeout, SseLineBuffer,
   createBoundedTextAccumulator, redactRawRequest, safeHeaders, toWellFormedJson, contentFilterStopDetails,
 } from './adapter.js';
 import {
@@ -188,6 +188,13 @@ export class GeminiAdapter extends LLMAdapter {
         append('user', [{ functionResponse }], true);
       } else if (msg.role === 'user') append('user', contentParts(msg.content), true);
     }
+    // An async delivery can update a prior function response without appending
+    // a turn. The engine marks that reentry at the request boundary; Gemini
+    // needs a final user turn, but the historical model parts must stay intact.
+    if (params.controlReentry === true && contents[0]?.role === 'user'
+        && contents.at(-1)?.role === 'model' && calls.size === resolved.size) {
+      append('user', [{ text: '[system note] Continue the pending task using the updated context above.' }]);
+    }
     const generationConfig = { maxOutputTokens: maxTokens };
     for (const key of ['temperature', 'topP', 'topK', 'seed', 'stopSequences', 'responseMimeType', 'responseJsonSchema']) {
       if (params[key] !== undefined) generationConfig[key] = params[key];
@@ -288,7 +295,7 @@ export class GeminiAdapter extends LLMAdapter {
     if (status === 401 || status === 403) return classifyAuthError(status, body, { provider: 'gemini' });
     if (status === 429 || status === 529) return new LLMRateLimitError(`Gemini rate limited (HTTP ${status})`, status, retryAfterFromResponse(response));
     if (/(?:input|prompt|context)[^\n]{0,80}(?:too (?:long|large)|exceed|token limit)/i.test(body)) return new LLMContextError('Gemini context limit exceeded');
-    if (status >= 500) return new LLMServerError(`Gemini server error (HTTP ${status})`, status);
+    if (status >= 500) return classifyUpstreamHeadersTimeout(status, body) || new LLMServerError(`Gemini server error (HTTP ${status})`, status);
     return new Error(`Gemini API error (HTTP ${status})`);
   }
 
@@ -333,8 +340,9 @@ export class GeminiAdapter extends LLMAdapter {
       }
     }.bind(this);
     try {
-      params.onRequestStart?.({ effort: params.effort, streamIdleTimeoutMs: idleMs });
-      response = await fetch(url, { method: 'POST', headers, body: serialized, signal });
+      const timeoutMs = params.getHeadersTimeoutMs?.();
+      if (timeoutMs !== 0) params.onRequestStart?.({ effort: params.effort, streamIdleTimeoutMs: idleMs });
+      response = await fetchWithHeadersTimeout(url, { method: 'POST', headers, body: serialized, signal }, timeoutMs);
       if (response.status === 413) {
         await response.body?.cancel().catch(() => {});
         throw new LLMRequestTooLargeError(requestBytes, { limitBytes: requestBodyLimit, received413: true });
