@@ -92,15 +92,17 @@ describe('wait-agent envelope shape', () => {
     const adapter = { async *stream() {
       const call = calls++;
       if (call > 0) await followUpGate;
-      if (call === 3) {
+      // Task C fails persistently: the Engine retries it once, then gives up.
+      if (call >= 3) {
         yield { type: 'error', error: 'Task C failed', retryable: false };
         return;
       }
       yield { type: 'text_delta', text: call === 2 ? continuationReply : reply };
       yield { type: 'stop', stopReason: 'end_turn' };
     } };
-    const ctx = { cwd: dir, queryTurnId: 'reply-query', sessionId: 'ctx-session', senderVpId: 'vp-test',
-      parentEngineDeps: mkDeps(adapter, { subAgentLogDir: dir }) };
+    const deps = mkDeps(adapter, { subAgentLogDir: dir });
+    deps.config = { ...deps.config, llmRetry: { maxRetries: 1, baseDelayMs: 0, maxDelayMs: 0, jitterRatio: 0 } };
+    const ctx = { cwd: dir, queryTurnId: 'reply-query', sessionId: 'ctx-session', senderVpId: 'vp-test', parentEngineDeps: deps };
     const spec = { name: 'revisions', mission: 'Return evidence' };
     const assertRetryRejected = async () => {
       const retry = JSON.parse(await agentTool.execute({ ...spec, name: 'original-retry' }, ctx));
@@ -173,7 +175,7 @@ describe('wait-agent envelope shape', () => {
       expect(closed.status).toBe(STATUS.FAILED);
       expect(agent.abortController.signal.aborted).toBe(true);
       await agent.driverPromise;
-      expect(calls).toBe(4);
+      expect(calls).toBe(5);
     } finally {
       releaseFollowUp();
       if (agent) {

@@ -108,6 +108,16 @@ function contentMetadata(items = []) {
   });
 }
 
+const PROVIDER_RUN_TOOL_BLOCKS = new Set(['server_tool_use', 'mcp_tool_use']);
+
+/**
+ * Flag a failed response in which Anthropic itself ran server or MCP tools: the
+ * Engine retries failed responses, and replaying this one could repeat effects.
+ */
+function unusable(event, blocks) {
+  return blocks.some(block => PROVIDER_RUN_TOOL_BLOCKS.has(block?.type)) ? { ...event, replayUnsafe: true } : event;
+}
+
 function stopEvent(message) {
   return { type: 'stop', stopReason: message.stop_reason || 'unknown',
     ...(message.stop_details !== undefined ? { stopDetails: message.stop_details } : {}),
@@ -450,7 +460,7 @@ export class AnthropicAdapter extends LLMAdapter {
       if (result.stop_reason === 'model_context_window_exceeded' || result.stop_reason === 'refusal'
           || !['end_turn', 'stop_sequence', 'max_tokens', 'pause_turn', 'tool_use'].includes(result.stop_reason)) {
         for (const block of result.content || []) if (block.type === 'text') yield { type: 'text_delta', text: block.text };
-        yield stopEvent(result);
+        yield unusable(stopEvent(result), result.content || []);
         return;
       }
       try {
@@ -463,7 +473,7 @@ export class AnthropicAdapter extends LLMAdapter {
         }
       } catch (error) {
         if (!(error instanceof LLMToolInputError)) throw error;
-        yield { type: 'error', error, retryable: false };
+        yield unusable({ type: 'error', error, retryable: false }, result.content || []);
         return;
       }
       const state = createProviderState({ context, identity: requestIdentity, items: result.content, responseId: result.id, requestBody: wireBody });
@@ -515,6 +525,7 @@ export class AnthropicAdapter extends LLMAdapter {
     let malformedStream = false;
     const hasToolBlocks = () => toolInputError !== null || [...blockByIndex.values()].some(block => block.kind === 'tool_use')
       || [...completedBlocks.values()].some(block => block.type === 'tool_use');
+    const seenBlocks = () => [...completedBlocks.values(), ...[...blockByIndex.values()].map(block => block.native)];
     const requireClosedBlocks = () => {
       if (blockByIndex.size > 0) {
         if (hasToolBlocks()) throw new LLMToolInputError('Anthropic stream ended with an incomplete tool batch');
@@ -727,7 +738,7 @@ export class AnthropicAdapter extends LLMAdapter {
             if (finalStop?.stopReason === 'model_context_window_exceeded' || finalStop?.stopReason === 'refusal'
                 || (finalStop && !['end_turn', 'stop_sequence', 'max_tokens', 'pause_turn', 'tool_use'].includes(finalStop.stopReason))) {
               sawStop = true;
-              yield finalStop;
+              yield unusable(finalStop, seenBlocks());
               continue;
             }
             if (toolInputError) throw toolInputError;
@@ -772,11 +783,11 @@ export class AnthropicAdapter extends LLMAdapter {
             stateFailed = true;
             const rejected = toolInputError || (malformedStream && hasToolBlocks()
               ? new LLMToolInputError('Anthropic returned a malformed tool stream') : null);
-            yield {
+            yield unusable({
               type: 'error',
               error: rejected || new Error(event.error?.message || 'Unknown streaming error'),
               retryable: !rejected && event.error?.type === 'overloaded_error',
-            };
+            }, seenBlocks());
             return;
           }
         }
@@ -796,9 +807,9 @@ export class AnthropicAdapter extends LLMAdapter {
     } catch (err) {
       // Once malformed input is known, a later drain failure cannot make the
       // same rejected request eligible for transport retry. Abort still wins.
-      if (err instanceof LLMToolInputError) yield { type: 'error', error: err, retryable: false };
+      if (err instanceof LLMToolInputError) yield unusable({ type: 'error', error: err, retryable: false }, seenBlocks());
       else if (!signal?.aborted && (toolInputError || (malformedStream && hasToolBlocks()))) {
-        yield { type: 'error', error: toolInputError || new LLMToolInputError('Anthropic returned a malformed tool stream'), retryable: false };
+        yield unusable({ type: 'error', error: toolInputError || new LLMToolInputError('Anthropic returned a malformed tool stream'), retryable: false }, seenBlocks());
       } else throw classifyFetchError(err, { providerLabel: 'Anthropic', signal });
     } finally {
       // Close malformed/aborted streams and transports that stay open after

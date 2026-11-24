@@ -24,7 +24,7 @@ import { promises as fsp } from 'fs';
 import { join, resolve as resolvePath } from 'path';
 import { buildSystemPrompt, buildWorkerPrompt } from './prompts.js';
 import { getRuntimePlatformInfo } from './runtime-platform.js';
-import { LLMAbortError, LLMAuthError, LLMContextError, LLMPolicyError, LLMRateLimitError, LLMRequestTooLargeError, LLMServerError, LLMStreamIdleTimeoutError, isContentFilterStopDetails } from './llm/adapter.js';
+import { LLMAbortError, LLMAuthError, LLMContextError, LLMPolicyError, LLMRateLimitError, LLMRequestTooLargeError, LLMServerError, LLMStreamIdleTimeoutError, LLMToolInputError, isContentFilterStopDetails } from './llm/adapter.js';
 import { runMemoryPreflow, buildRelevantScopes, memoryScopeLabel } from './sessions/pre-flow.js';
 import {
   readProjectDoc,
@@ -115,18 +115,31 @@ const PROVIDER_STOP_REASONS = new Set([
 ]);
 const COMPLETED_STOP_REASONS = new Set(['end_turn', 'stop_sequence']);
 const FAILED_PROVIDER_STOPS = new Set(['refusal', 'model_context_window_exceeded', 'unknown']);
+// Sent once with the retry of an unusable response (empty, filtered, refused or
+// a malformed tool batch), as gemini-cli does for empty Gemini output. It is
+// model-only control text, not a user request, and it is appended after the
+// history so prompt caches and signed prefixes stay intact.
+const UNUSABLE_RESPONSE_RETRY_PROMPT = 'Your previous response ended without usable output and was discarded. '
+  + 'Continue the task from the current state: give the answer, or call the next tool with complete, valid arguments. '
+  + 'Do not repeat tool calls whose results are already present.';
 
 const plural = (count, one, many) => `${count} ${count === 1 ? one : many}`;
+
+/** A provider-native stop label (e.g. Gemini OTHER) that is safe to show; never free text. */
+function providerReasonLabel(value) {
+  return typeof value === 'string' && /^[A-Za-z0-9_.:-]{1,64}$/.test(value) ? value : null;
+}
 
 /**
  * Explain a failed provider stop from runtime evidence. Only the failed response
  * is withheld; tool results from earlier loops of the query stay in history.
- * @param {{ stopReason: string, stopDetails?: object|null, withheldToolCalls: number, earlierToolRuns: number }} input
+ * @param {{ stopReason: string, stopDetails?: object|null, providerReason?: string|null, retries?: number, withheldToolCalls: number, earlierToolRuns: number }} input
  */
-function failedProviderStopMessage({ stopReason, stopDetails, withheldToolCalls, earlierToolRuns }) {
+function failedProviderStopMessage({ stopReason, stopDetails, providerReason = null, retries = 0, withheldToolCalls, earlierToolRuns }) {
   const filter = isContentFilterStopDetails(stopDetails) ? stopDetails : null;
   const withheldCount = filter ? filter.withheldToolCalls : withheldToolCalls;
   const names = filter?.withheldTools?.length ? ` (${filter.withheldTools.join(', ')})` : '';
+  const retried = retries > 0 ? ` The request was retried ${plural(retries, 'time', 'times')} without a usable response.` : '';
   const withheld = withheldCount > 0
     ? ` ${plural(withheldCount, 'tool call', 'tool calls')} in this response${names} ${withheldCount === 1 ? 'was' : 'were'} not run.`
     : '';
@@ -134,16 +147,77 @@ function failedProviderStopMessage({ stopReason, stopDetails, withheldToolCalls,
     ? ` ${plural(earlierToolRuns, 'earlier tool call', 'earlier tool calls')} in this turn already ran; ${earlierToolRuns === 1 ? 'its result is' : 'their results are'} kept.`
     : '';
   if (filter?.blocked === 'prompt') {
-    return `The provider's content filter blocked this request (${filter.reason}).${withheld}${earlier} Adjust the request before retrying.`;
+    return `The provider's content filter blocked this request (${filter.reason}).${retried}${withheld}${earlier} Adjust the request before retrying.`;
   }
   if (filter) {
-    return `The provider's content filter stopped this response (${filter.reason}).${withheld}${earlier} Send a follow-up to continue, or adjust the request.`;
+    return `The provider's content filter stopped this response (${filter.reason}).${retried}${withheld}${earlier} Send a follow-up to continue, or adjust the request.`;
   }
-  if (stopReason === 'refusal') return `The model refused this request.${withheld}${earlier} Revise the request before retrying.`;
+  if (stopReason === 'refusal') return `The model refused this request.${retried}${withheld}${earlier} Revise the request before retrying.`;
   if (stopReason === 'model_context_window_exceeded') {
-    return `The model reached its context window.${withheld}${earlier} Start a new turn with a smaller context.`;
+    return `The model reached its context window.${retried}${withheld}${earlier} Start a new turn with a smaller context.`;
   }
-  return `The provider returned an unknown or missing stop reason; completion was not confirmed.${withheld}${earlier}`;
+  const label = providerReason && providerReason !== 'unknown' ? ` (${providerReason})` : '';
+  return `The provider ended the response without usable output${label}; completion was not confirmed.${retried}${withheld}${earlier} Send a follow-up to continue.`;
+}
+
+/**
+ * The provider answered, but the response cannot be used: a failed stop such as
+ * a refusal, a content filter or an unknown/missing reason. Nothing from it ran
+ * or was kept, so the query retries it like a transient failure.
+ */
+class LLMFailedResponseError extends LLMServerError {
+  /** @param {Parameters<typeof failedProviderStopMessage>[0] & { replayUnsafe?: boolean }} stop */
+  constructor({ replayUnsafe = false, ...input }) {
+    // Keep only the adapter-built filter shape: a proxy can forward arbitrary
+    // native stop details, and this error travels to UI and Work Center.
+    const stop = { ...input, stopDetails: isContentFilterStopDetails(input.stopDetails) ? input.stopDetails : null };
+    super(failedProviderStopMessage(stop), 0);
+    this.name = 'LLMFailedResponseError';
+    this.code = stop.stopReason;
+    this.stop = stop;
+    if (replayUnsafe) this.replayUnsafe = true;
+  }
+
+  /** Short notice for the retry banner; the full message is for the final error. */
+  get retryNotice() {
+    const reason = this.stop.stopDetails?.reason || this.stop.providerReason || this.stop.stopReason;
+    return `The model response ended abnormally (${reason}) and was discarded; retrying.`;
+  }
+
+  /** Restate the final error with the number of retries actually made. */
+  withRetries(retries) {
+    this.message = failedProviderStopMessage({ ...this.stop, retries });
+    return this;
+  }
+}
+
+/**
+ * Every failure of the provider exchange may be retried, known or unknown, as
+ * long as replay cannot repeat work: adapters flag responses in which the
+ * provider itself ran tools, and the caller excludes published tool calls.
+ * Request-shape rejections would repeat identically and keep their dedicated
+ * recovery; a temporary 403 keeps its slower schedule; local failures (budgets,
+ * state invariants, compaction) are not provider failures.
+ */
+function isReplayableProviderFailure(err) {
+  if (!err || typeof err !== 'object' || err.replayUnsafe === true) return false;
+  if (err instanceof LLMContextError || err instanceof LLMRequestTooLargeError || err instanceof LLMImageLimitError
+    || err instanceof ProviderStateError || (err instanceof LLMAuthError && err.temporary === true)) return false;
+  return err instanceof LLMRateLimitError || err instanceof LLMServerError || err.providerFailure === true;
+}
+
+/**
+ * Tag errors raised while iterating a provider stream (HTTP, transport,
+ * protocol) so the retry policy can tell them from local engine failures.
+ * Engine callbacks invoked by the adapter mark their own errors first.
+ */
+async function* markProviderFailures(stream) {
+  try {
+    yield* stream;
+  } catch (error) {
+    if (error && typeof error === 'object' && error.providerFailure === undefined) error.providerFailure = true;
+    throw error;
+  }
 }
 
 /**
@@ -171,10 +245,10 @@ function safeProviderMetadata(metadata) {
     return result;
   };
   const result = {};
-  for (const key of ['protocol', 'responseId', 'model', 'stopReason', 'stopDetails', 'stopSequence', 'inputTransformations', 'container', 'contentBlocks']) {
+  for (const key of ['protocol', 'responseId', 'model', 'stopReason', 'providerStopReason', 'stopDetails', 'stopSequence', 'inputTransformations', 'container', 'contentBlocks']) {
     if (!Object.prototype.hasOwnProperty.call(metadata, key)) continue;
     const value = clean(metadata[key]);
-    if (['protocol', 'responseId', 'model', 'stopReason', 'stopSequence'].includes(key)
+    if (['protocol', 'responseId', 'model', 'stopReason', 'providerStopReason', 'stopSequence'].includes(key)
       && value !== null && typeof value !== 'string') continue;
     if (value !== undefined) result[key] = value;
   }
@@ -589,8 +663,8 @@ export function estimateProviderInputBreakdown({
  * @typedef {{ type: 'tool_end', id: string, name: string, output: string, isError: boolean, skipped?: boolean }} ToolEndEvent
  * @typedef {{ type: 'recall', entryCount: number, cached: boolean }} RecallEvent
  * @typedef {{ type: 'fallback', from: string, to: string, reason: string }} FallbackEvent
- * @typedef {{ type: 'llm_retry', attempt: number, maxRetries: number, delayMs: number, reason: 'rate_limit_retry_after'|'rate_limit_backoff'|'transient_retry_after'|'transient_backoff'|'stream_idle_timeout', recoveryMode: 'restart'|'continue', errorName: string, statusCode: number|null, message: string }} LlmRetryEvent
- * @typedef {{ type: 'error', error: Error, retryable: boolean, reason?: 'stream_idle_timeout', retryExhausted?: boolean, retryAttempts?: number, maxRetries?: number }} ErrorEvent
+ * @typedef {{ type: 'llm_retry', attempt: number, maxRetries: number, delayMs: number, reason: 'rate_limit_retry_after'|'rate_limit_backoff'|'transient_retry_after'|'transient_backoff'|'stream_idle_timeout'|'unusable_response', recoveryMode: 'restart'|'continue', errorName: string, statusCode: number|null, message: string }} LlmRetryEvent
+ * @typedef {{ type: 'error', error: Error, retryable: boolean, code?: string, reason?: 'stream_idle_timeout', retryExhausted?: boolean, retryAttempts?: number, maxRetries?: number }} ErrorEvent
  *
  * @typedef {import('./llm/adapter.js').StreamEvent | TurnStartEvent | TurnEndEvent | ToolStartEvent | ToolEndEvent | RecallEvent | FallbackEvent | LlmRetryEvent | ErrorEvent} EngineEvent
  */
@@ -2899,6 +2973,10 @@ export class Engine {
       let providerMetadata = null;
       let requestEffortDecision = snapshotEffortDecision();
       let stopReason = 'unknown';
+      // The provider's own word for an abnormal stop (e.g. Gemini OTHER), kept
+      // for diagnosis; `stopReason` is the normalized value the loop acts on.
+      let providerStopLabel = null;
+      let stopReplayUnsafe = false;
       const totalUsage = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, cacheInputDeltaTokens: 0 };
       let completeInputUsage = false;
       // Raw provider exchange is diagnostic source data, not model context or
@@ -3432,7 +3510,7 @@ export class Engine {
           startProviderRequest?.(activeProviderRequest);
           commitRetryContinuation();
         };
-        const providerStream = captureStream({
+        const providerStream = markProviderFailures(captureStream({
           model: currentModel,
           system: systemPrompt,
           messages: wireMessages,
@@ -3456,11 +3534,18 @@ export class Engine {
             // their request crosses dispatch, never when turn_start is shown.
             // Logical bookkeeping is idempotent, but a second HTTP dispatch
             // (including cache fallback) must consume its own child allowance.
-            commitDispatch(!legacyDispatchReserved);
-            legacyDispatchReserved = false;
-            onProviderRequestStart?.(requestPolicy);
+            try {
+              commitDispatch(!legacyDispatchReserved);
+              legacyDispatchReserved = false;
+              onProviderRequestStart?.(requestPolicy);
+            } catch (error) {
+              // Budget, lease and persistence failures are local, never a
+              // provider failure to retry, even though the adapter raises them.
+              if (error && typeof error === 'object') error.providerFailure = false;
+              throw error;
+            }
           },
-        });
+        }));
         yield { type: 'turn_start', turnId: queryTurnId, turnNumber, threadId };
 
         // Provider iteration begins after the visible boundary. Native adapters
@@ -3589,8 +3674,14 @@ export class Engine {
             case 'stop':
               sawProviderStop = true;
               stopReason = PROVIDER_STOP_REASONS.has(event.stopReason) ? event.stopReason : 'unknown';
+              // Adapters may normalize the native reason before the stop (Gemini
+              // reports OTHER in metadata, then stops with `unknown`).
+              providerStopLabel = providerReasonLabel(event.stopReason && event.stopReason !== 'unknown'
+                ? event.stopReason : providerMetadata?.stopReason);
+              stopReplayUnsafe = event.replayUnsafe === true;
               providerMetadata = mergeProviderMetadata(providerMetadata, {
                 stopReason: event.stopReason || 'unknown',
+                ...(providerStopLabel && providerStopLabel !== stopReason ? { providerStopReason: providerStopLabel } : {}),
                 ...(event.stopDetails !== undefined ? { stopDetails: event.stopDetails } : {}),
                 ...(event.stopSequence !== undefined ? { stopSequence: event.stopSequence } : {}),
               });
@@ -3602,6 +3693,17 @@ export class Engine {
               const adapterError = event.error instanceof Error
                 ? event.error
                 : new Error(String(event.error?.message || event.error || 'LLM stream error'));
+              // The provider itself ran tools in this response (hosted/server
+              // tools): replaying it could repeat their effects, so never retry.
+              if (event.replayUnsafe === true) {
+                const unsafeError = adapterError instanceof LLMRateLimitError || adapterError instanceof LLMServerError
+                  ? Object.assign(new Error(adapterError.message), { name: adapterError.name || 'LLMStreamError',
+                    code: adapterError.code, statusCode: adapterError.statusCode })
+                  : adapterError;
+                unsafeError.retryable = false;
+                unsafeError.replayUnsafe = true;
+                throw unsafeError;
+              }
               adapterError.retryable = Boolean(event.retryable);
               if (event.retryable) {
                 if (adapterError instanceof LLMRateLimitError || adapterError instanceof LLMServerError) {
@@ -3609,14 +3711,10 @@ export class Engine {
                 }
                 throw new LLMServerError(adapterError.message, adapterError.statusCode ?? 0);
               }
-              if (adapterError instanceof LLMRateLimitError || adapterError instanceof LLMServerError) {
-                const nonRetryableError = new Error(adapterError.message);
-                nonRetryableError.name = adapterError.name || 'LLMStreamError';
-                nonRetryableError.code = adapterError.code;
-                nonRetryableError.statusCode = adapterError.statusCode;
-                nonRetryableError.retryable = false;
-                throw nonRetryableError;
-              }
+              // `retryable: false` only says the failure is not transport-transient
+              // (a malformed tool batch, a failed response without a code); the
+              // query still retries it as an unusable response.
+              adapterError.providerFailure = true;
               throw adapterError;
             }
           }
@@ -3627,37 +3725,44 @@ export class Engine {
         if (signal?.aborted) {
           throw new LLMAbortError();
         }
+        // A stream that ends without a terminal stop was cut, and a failed stop
+        // (refusal, content filter, unknown reason, context window) produced
+        // nothing usable. Neither is a completion: both go to the retry and
+        // recovery path below, which also keeps task-result escrow for replay.
+        if (!sawProviderStop) {
+          const error = new LLMServerError('Provider stream ended without a stop event; completion was not confirmed.', 0);
+          error.code = 'unknown';
+          error.providerFailure = true;
+          throw error;
+        }
+        if (FAILED_PROVIDER_STOPS.has(stopReason)) {
+          const stop = { stopReason, stopDetails: providerMetadata?.stopDetails, providerReason: providerStopLabel,
+            // This loop's tools have not run yet, so the snapshot counts only earlier loops.
+            withheldToolCalls: toolCalls.length, earlierToolRuns: queryProgress.toolExecutions };
+          if (stopReason === 'model_context_window_exceeded') {
+            // Retrying needs a smaller request, which the context recovery provides.
+            const error = new LLMContextError(failedProviderStopMessage(stop));
+            error.code = stopReason;
+            error.providerFailure = true;
+            throw error;
+          }
+          throw new LLMFailedResponseError({ ...stop, replayUnsafe: stopReplayUnsafe });
+        }
         // A provider terminal stop plus normal stream completion proves that
         // the request containing these task results completed successfully.
-        // Retryable errors, aborts, idle timeouts, and truncated streams keep
-        // escrow so retry or final rescue can deliver the payload.
-        if (!sawProviderStop && activeProviderRequest) {
-          const error = new Error('Provider stream ended without a stop event; completion was not confirmed.');
-          error.code = 'unknown';
-          error.retryable = false;
-          failProviderRequest?.(activeProviderRequest, error);
-          activeProviderRequest = null;
-        }
-        if (sawProviderStop) {
-          this.#confirmAsyncTaskResults(requestAsyncTaskIds);
-          const completedProviderRequest = activeProviderRequest;
-          activeProviderRequest = null;
-          if (FAILED_PROVIDER_STOPS.has(stopReason)) {
-            const error = new Error(`Provider response ended with ${stopReason}; completion was not confirmed.`);
-            error.code = stopReason;
-            error.retryable = false;
-            failProviderRequest?.(completedProviderRequest, error);
-          } else finishProviderRequest?.(completedProviderRequest, {
-            responseText,
-            stopReason,
-            toolCalls: toolCalls.map(tc => ({ id: tc.id, name: tc.name, input: tc.input })),
-            thinkingBlocks,
-            ...(providerMetadata ? { providerMetadata } : {}),
-          });
-        }
+        this.#confirmAsyncTaskResults(requestAsyncTaskIds);
+        const completedProviderRequest = activeProviderRequest;
+        activeProviderRequest = null;
+        finishProviderRequest?.(completedProviderRequest, {
+          responseText,
+          stopReason,
+          toolCalls: toolCalls.map(tc => ({ id: tc.id, name: tc.name, input: tc.input })),
+          thinkingBlocks,
+          ...(providerMetadata ? { providerMetadata } : {}),
+        });
         traceRequest('llm.request_complete', {
           durationMs: perfNowMs() - requestPerfStart,
-          ok: !FAILED_PROVIDER_STOPS.has(stopReason),
+          ok: true,
           detail: {
             model: currentModel,
             stopReason,
@@ -4073,6 +4178,9 @@ export class Engine {
           }
         }
 
+        const retryEligible = isReplayableProviderFailure(err);
+        // The model answered but nothing usable came back; resend with a note.
+        const unusableResponse = err instanceof LLMFailedResponseError || err instanceof LLMToolInputError;
         traceRequest('llm.request_error', {
           durationMs: perfNowMs() - requestPerfStart,
           ok: false,
@@ -4080,14 +4188,13 @@ export class Engine {
             model: currentModel,
             errorName: err?.name || null,
             statusCode: err?.statusCode ?? null,
-            retryable: err instanceof LLMRateLimitError || err instanceof LLMServerError,
+            retryable: retryEligible,
+            ...(err instanceof LLMFailedResponseError ? { stopReason: err.code, providerStopReason: err.stop.providerReason ?? null } : {}),
             reasonCode: err?.reasonCode || null,
             message: String(err?.message || '').slice(0, 200),
           },
         });
 
-        const earlyIsRateLimit = err instanceof LLMRateLimitError;
-        const earlyIsTransient = err instanceof LLMServerError;
         const earlyIsContentPolicy = err instanceof LLMPolicyError;
         const earlyIsContextOverflow = err instanceof LLMContextError;
         // A completed tool_call has already crossed the streaming boundary to
@@ -4166,10 +4273,12 @@ export class Engine {
           yield { type: 'turn_end', turnNumber, stopReason: 'llm_retry', threadId };
           continue;
         }
-        if ((earlyIsRateLimit || earlyIsTransient) && canReplayProviderRequest) {
+        if (retryEligible && canReplayProviderRequest) {
           if (consecutiveRetryableErrors < retryPolicy.maxRetries) {
             consecutiveRetryableErrors += 1;
-            const { delayMs, reason } = retryDelay(retryPolicy, err, consecutiveRetryableErrors);
+            const delay = retryDelay(retryPolicy, err, consecutiveRetryableErrors);
+            const { delayMs } = delay;
+            const reason = unusableResponse ? 'unusable_response' : delay.reason;
             // A retry is a brand-new provider request. Replaying the original
             // request after forwarding partial text duplicates that text in
             // the UI and can make the model restart its answer. Preserve the
@@ -4178,6 +4287,19 @@ export class Engine {
             const recoveryMode = responseText && toolCalls.length === 0 ? 'continue' : 'restart';
             endAttemptTrace('llm_retry');
             if (recoveryMode === 'continue') prepareRetryContinuation();
+            else if (unusableResponse && !retryLifecycle.pendingContinuation) {
+              // Resending the identical request tends to reproduce an empty or
+              // malformed answer; one note asks for an answer or a valid call.
+              // Add it once per query segment, never stacked on the last one.
+              const last = conversationMessages.at(-1);
+              if (!(last?.role === 'user' && last.content === UNUSABLE_RESPONSE_RETRY_PROMPT)) {
+                retryLifecycle.pendingContinuation = {
+                  role: 'user',
+                  content: UNUSABLE_RESPONSE_RETRY_PROMPT,
+                  userAuthored: false,
+                };
+              }
+            }
             yield {
               type: 'llm_retry',
               attempt: consecutiveRetryableErrors,
@@ -4187,7 +4309,7 @@ export class Engine {
               recoveryMode,
               errorName: err.name,
               statusCode: err.statusCode ?? null,
-              message: String(err.message || '').slice(0, 300),
+              message: String(err.retryNotice || err.message || '').slice(0, 300),
             };
             const slept = await sleepWithAbort(delayMs, signal);
             if (!slept || signal?.aborted) {
@@ -4212,7 +4334,7 @@ export class Engine {
 
         const earlyFallbackModel = requestConfig.fallbackModel;
         if (earlyFallbackModel && earlyFallbackModel !== currentModel
-          && (earlyIsRateLimit || earlyIsTransient) && canReplayProviderRequest) {
+          && retryEligible && canReplayProviderRequest) {
           endAttemptTrace('fallback_retry');
           prepareRetryContinuation();
           yield { type: 'fallback', from: currentModel, to: earlyFallbackModel, reason: err.message };
@@ -4222,6 +4344,9 @@ export class Engine {
           continue;
         }
 
+        if (err instanceof LLMFailedResponseError && consecutiveRetryableErrors > 0) {
+          err.withRetries(consecutiveRetryableErrors);
+        }
         // A later fresh request can fail before producing text. In that case the
         // durable assistant prefix belongs to this same query and must leave the
         // transient `retry` state even though the current attempt persisted none.
@@ -4305,11 +4430,12 @@ export class Engine {
         };
 
 
-        const isRetryableError = err instanceof LLMRateLimitError || err instanceof LLMServerError;
         const errorEvent = {
           type: 'error',
           error: err,
-          retryable: isRetryableError,
+          retryable: retryEligible,
+          // Failed stops keep their reason as the error code (refusal, unknown).
+          ...(err instanceof LLMFailedResponseError ? { code: err.code } : {}),
         };
         if (err instanceof LLMStreamIdleTimeoutError) {
           errorEvent.reason = 'stream_idle_timeout';
@@ -4320,10 +4446,15 @@ export class Engine {
         } else if (err instanceof LLMRequestTooLargeError || err instanceof LLMImageLimitError) {
           errorEvent.reason = err.reasonCode;
         } else if (err instanceof LLMPolicyError) {
+          // One sanitized recovery, then the ordinary retries.
           errorEvent.reason = 'content_policy_denied';
           errorEvent.retryExhausted = contentPolicyRecoveryAttempts >= 1;
-          errorEvent.retryAttempts = contentPolicyRecoveryAttempts;
-          errorEvent.maxRetries = 1;
+          errorEvent.retryAttempts = contentPolicyRecoveryAttempts + consecutiveRetryableErrors;
+          errorEvent.maxRetries = 1 + (retryEligible && canReplayProviderRequest ? retryPolicy.maxRetries : 0);
+        } else if (retryEligible && canReplayProviderRequest) {
+          errorEvent.retryExhausted = consecutiveRetryableErrors >= retryPolicy.maxRetries;
+          errorEvent.retryAttempts = consecutiveRetryableErrors;
+          errorEvent.maxRetries = retryPolicy.maxRetries;
         }
         yield errorEvent;
         yield {
@@ -4389,14 +4520,15 @@ export class Engine {
       const assistantMsg = { role: 'assistant', content: responseText, responseKind: 'progress',
         ...(providerMetadata ? { providerMetadata } : {}),
       };
-      if (toolCalls.length > 0 && !FAILED_PROVIDER_STOPS.has(stopReason)) {
+      // Failed stops never reach here: they were retried or reported above.
+      if (toolCalls.length > 0) {
         assistantMsg.toolCalls = toolCalls.map(tc => ({
           id: tc.id,
           name: tc.name,
           input: tc.input,
         }));
       }
-      const boundProviderState = FAILED_PROVIDER_STOPS.has(stopReason) ? null : bindProviderState(providerState, assistantMsg);
+      const boundProviderState = bindProviderState(providerState, assistantMsg);
       if (boundProviderState) assistantMsg.providerState = boundProviderState;
       // Only prefix-enforced models need an append-only request tape. Legacy
       // Claude signatures alone do not imply support for inline system/tools.
@@ -4441,7 +4573,7 @@ export class Engine {
         turnId: vpTurnId || queryTurnId,
         model: currentModel,
         stopReason,
-        incomplete: FAILED_PROVIDER_STOPS.has(stopReason) || stopReason === 'pause_turn',
+        incomplete: stopReason === 'pause_turn',
         executionOrigin,
       });
       if (persistedAssistantMessage) {
@@ -4515,17 +4647,6 @@ export class Engine {
       if (signal?.aborted && (toolCalls.length === 0 || executionPolicy?.finalize || progressReporting)) {
         yield { type: 'aborted', reason: this.#abortReason || 'external', turnNumber, threadId };
         yield { type: 'turn_end', turnNumber, stopReason: 'aborted', threadId, terminal: true };
-        break;
-      }
-      // These are protocol outcomes, not successful answers or tool dispatch
-      // permission. Handle before reporting, async waits, user-append recovery,
-      // and duplicate/max-token continuation so none can mask the real reason.
-      if (FAILED_PROVIDER_STOPS.has(stopReason)) {
-        // This loop's tools have not run yet, so the snapshot counts only earlier loops.
-        const message = failedProviderStopMessage({ stopReason, stopDetails: providerMetadata?.stopDetails,
-          withheldToolCalls: toolCalls.length, earlierToolRuns: loopProgress.toolExecutions });
-        yield { type: 'error', error: message, code: stopReason, retryable: false, threadId };
-        yield { type: 'turn_end', turnNumber, stopReason, threadId, terminal: true };
         break;
       }
       if (stopReason === 'pause_turn') {

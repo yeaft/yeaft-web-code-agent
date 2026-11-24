@@ -81,7 +81,10 @@ function classifyResponseFailure(event, response) {
   let error;
   // An explicit code takes precedence over a broad type such as rate_limit_error
   // (e.g. insufficient_quota). A delay hint alone never makes a rejection retryable.
-  if (limited || TRANSIENT_FAILURE_CODES.has(code)) {
+  if (code === 'context_length_exceeded') {
+    // Same meaning as the HTTP rejection: recover with a smaller request.
+    error = new LLMContextError(message);
+  } else if (limited || TRANSIENT_FAILURE_CODES.has(code)) {
     const messageDelay = limited && message.match(/\btry again in\s+(\d+(?:\.\d+)?)\s*(ms|s|seconds?)\b/i);
     const retryAfterMs = [
       retryAfterFromResponse(providerError),
@@ -421,6 +424,10 @@ export class OpenAIResponsesAdapter extends LLMAdapter {
     onEffortDecision?.(effortDecision);
     const requestBody = toWellFormedJson(body);
     const idleMs = resolveStreamIdleTimeoutMs(this.#streamIdlePolicy, effortDecision.effective, streamIdleTimeoutMs);
+    // Provider-hosted tools (web search, code interpreter, remote MCP) may have
+    // run during a response that then fails; the Engine never replays those.
+    const replayUnsafe = Array.isArray(body.tools) && body.tools.some(tool => tool?.type !== 'function');
+    const unusable = event => (replayUnsafe ? { ...event, replayUnsafe: true } : event);
 
     const url = `${this.#baseUrl}/responses`;
     const headers = {
@@ -470,7 +477,7 @@ export class OpenAIResponsesAdapter extends LLMAdapter {
           inputTokens: usage.input_tokens || 0, outputTokens: usage.output_tokens || 0,
           cacheReadTokens: usage.input_tokens_details?.cached_tokens || 0, cacheWriteTokens: 0,
           cacheTokensAreIncludedInInput: true, ...reasoningUsage(usage, 'openai-responses') };
-        yield { type: 'error', error, retryable: false };
+        yield unusable({ type: 'error', error, retryable: false });
         return;
       }
       for (const item of items) {
@@ -490,7 +497,8 @@ export class OpenAIResponsesAdapter extends LLMAdapter {
         cacheTokensAreIncludedInInput: true,
               ...reasoningUsage(usage, 'openai-responses') };
       if (result.status === 'failed') throw new LLMServerError('OpenAI JSON response failed', 0);
-      yield filtered ? contentFilterStop(items, body.tools, { ran: calls.length > 0 }) : { type: 'stop', stopReason: this.#mapStopReason(result, false) };
+      yield filtered ? (calls.length > 0 ? contentFilterStop(items, body.tools, { ran: true }) : unusable(contentFilterStop(items, body.tools)))
+        : { type: 'stop', stopReason: this.#mapStopReason(result, false) };
       return;
     }
     const reader = response.body.getReader();
@@ -738,7 +746,7 @@ export class OpenAIResponsesAdapter extends LLMAdapter {
               for (const [idx, call] of completedToolCalls) add(call?.id ?? `slot:${idx}`, call?.name);
               for (const [idx, accum] of toolCallAccum) add(accum?.callId ?? `slot:${idx}`, accum?.name);
               outputArr.forEach((item, position) => { if (item?.type === 'function_call') add(item.call_id ?? `output:${position}`, item.name); });
-              yield contentFilterStop([...withheld.values()], body.tools);
+              yield unusable(contentFilterStop([...withheld.values()], body.tools));
               return;
             }
             if (malformedStream) {
@@ -747,7 +755,7 @@ export class OpenAIResponsesAdapter extends LLMAdapter {
               } else throw new LLMServerError('OpenAI returned a malformed stream event', 0);
             }
             if (toolInputError) {
-              yield { type: 'error', error: toolInputError, retryable: false };
+              yield unusable({ type: 'error', error: toolInputError, retryable: false });
               return;
             }
             const state = outputArr.filter(item => item?.type === 'function_call').length === completedToolCalls.size
@@ -787,10 +795,9 @@ export class OpenAIResponsesAdapter extends LLMAdapter {
             const error = rejected || classifyResponseFailure(event, response);
             // Local calls are still buffered. Provider-hosted tools may have
             // already run, so don't automatically replay requests using them.
-            const usesHostedTools = Array.isArray(body.tools) && body.tools.some(tool => tool?.type !== 'function');
-            const retryable = !rejected && !usesHostedTools
+            const retryable = !rejected && !replayUnsafe
               && (error instanceof LLMRateLimitError || error instanceof LLMServerError);
-            yield { type: 'error', error, retryable };
+            yield unusable({ type: 'error', error, retryable });
             return;
           }
           // Other semantic events (output_item.done, content_part.added, etc.) are ignored.
@@ -813,9 +820,9 @@ export class OpenAIResponsesAdapter extends LLMAdapter {
     } catch (err) {
       // A transport failure while draining an already rejected batch must not
       // turn argument correction into an automatic request replay.
-      if (err instanceof LLMToolInputError) yield { type: 'error', error: err, retryable: false };
+      if (err instanceof LLMToolInputError) yield unusable({ type: 'error', error: err, retryable: false });
       else if (!signal?.aborted && (toolInputError || (malformedStream && hasToolItems()))) {
-        yield { type: 'error', error: toolInputError || new LLMToolInputError('OpenAI returned a malformed tool stream'), retryable: false };
+        yield unusable({ type: 'error', error: toolInputError || new LLMToolInputError('OpenAI returned a malformed tool stream'), retryable: false });
       } else throw classifyFetchError(err, { providerLabel: 'OpenAI', signal });
     } finally {
       try { Promise.resolve(reader.cancel()).catch(() => {}); } catch { /* best-effort */ }
