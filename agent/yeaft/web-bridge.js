@@ -146,6 +146,9 @@ import { filterSnapshotForVp } from './snapshot-filter.js';
 import { createVpStatusBroker, isVpStatusRunning, normalizeVpErrorDetail } from './vp-status-broker.js';
 import { classifyThread as defaultClassifyThread, fallbackTitle } from './vp/thread-classifier.js';
 import { resolveDecisionModel } from './decision/index.js';
+import { scheduleSingleSessionIndexRefresh } from './session-discovery/indexer.js';
+import { decideSessionAutoRoute, withAutoRouteLock } from './session-discovery/auto-route.js';
+import { SESSION_SCENE_IDS } from './sessions/scene-ids.js';
 import { listMcpServers, upsertMcpServer, removeMcpServer } from './config-api.js';
 import { buildMcpFlattenedTools } from './tools/mcp-tools.js';
 import { getAgentRegistry, agentBelongsToScope } from './tools/agent.js';
@@ -6992,6 +6995,15 @@ async function runVpTurn({ prompt, promptParts = null, sessionId, vpId, threadId
     // already emitted above). Done before settleIdle so the web client
     // sees status flip BEFORE the broker's idle event lands.
     if (turnEndReason === 'errored') emitVpTurnEnd('errored', turnEndDetail);
+    // Incrementally refresh this Session's discovery card & complete turn messages
+    // asynchronously after a normal turn completes so both sidebar search and
+    // Sessionless auto-routing see just-finished 1-turn Sessions immediately.
+    if (!escalationState?.escalated && turnEndReason === 'end_turn') {
+      const discoveryRoot = liveConfigRoot();
+      if (discoveryRoot && sessionId) {
+        scheduleSingleSessionIndexRefresh(discoveryRoot, sessionId);
+      }
+    }
     // vp-status: guaranteed-settle. Regardless of how the turn exited
     // (normal completion, AbortError early-return, caught exception),
     // the row must drop back to 'idle'. EXCEPTION: when the turn errored,
@@ -7806,6 +7818,290 @@ export function handleYeaftAskUserAnswer(msg = {}) {
 
 export async function handleYeaftSessionSend(msg) {
   return runYeaftSessionSend(msg);
+}
+
+function collectLiveRunningSessionsForAutoRoute(yeaftDir, allowedSessionIds = []) {
+  const allowed = new Set(
+    (Array.isArray(allowedSessionIds) ? allowedSessionIds : [])
+      .filter(id => typeof id === 'string' && id.trim())
+      .map(id => id.trim()),
+  );
+  if (allowed.size === 0) return [];
+
+  const now = Date.now();
+  const pendingAskBySession = new Map();
+  for (const [requestId, pending] of pendingUserPrompts) {
+    if (!pending?.sessionId || !allowed.has(pending.sessionId) || pending.expiresAt <= now) continue;
+    const list = pendingAskBySession.get(pending.sessionId) || [];
+    list.push({
+      requestId,
+      question: pending.question || '',
+      options: Array.isArray(pending.options) ? pending.options : [],
+      vpId: pending.vpId || null,
+      threadId: pending.threadId || null,
+      turnId: pending.turnId || null,
+      toolCallId: pending.toolCallId || null,
+    });
+    pendingAskBySession.set(pending.sessionId, list);
+  }
+
+  let brokerStatuses = [];
+  try { brokerStatuses = getVpStatusBroker().snapshot(); } catch { brokerStatuses = []; }
+  const activeSessionIds = new Set(pendingAskBySession.keys());
+  for (const row of brokerStatuses) {
+    const sid = row?.sessionId || row?.groupId || null;
+    if (!sid || !allowed.has(sid)) continue;
+    if (isVpStatusRunning(row.state || 'idle') || sessionHasActiveWork(sid)) {
+      activeSessionIds.add(sid);
+    }
+  }
+  for (const sid of allowed) {
+    if (sessionHasActiveWork(sid)) activeSessionIds.add(sid);
+  }
+  if (activeSessionIds.size === 0) return [];
+
+  const out = [];
+  for (const sid of activeSessionIds) {
+    const meta = loadSessionMeta(join(sessionsRoot(yeaftDir), sid));
+    if (!meta || meta.task) continue;
+    const sceneId = loadSessionConfig(yeaftDir, sid)?.sceneId || '';
+    const history = getOrCreateSessionHistory(sid);
+    const recentMessages = history
+      .filter(row => row && (row.role === 'user' || row.role === 'assistant') && !row.internal)
+      .slice(-6)
+      .map(row => ({
+        role: row.role,
+        text: typeof row.content === 'string'
+          ? row.content.slice(0, 600)
+          : (Array.isArray(row.content)
+            ? row.content.filter(p => p?.type === 'text' && typeof p.text === 'string').map(p => p.text).join('\n').slice(0, 600)
+            : ''),
+      }))
+      .filter(m => m.text);
+    // Include only currently active/queued executions from visibleExecutionText (never completed historical turns).
+    for (const [, liveRow] of visibleExecutionText) {
+      if (liveRow.sessionId !== sid || (liveRow.state !== 'running' && liveRow.state !== 'queued')) continue;
+      if (liveRow.prompt) {
+        const promptTail = String(liveRow.prompt).slice(-600);
+        const lastEntry = recentMessages[recentMessages.length - 1];
+        if (!lastEntry || lastEntry.role !== 'user' || lastEntry.text !== promptTail) {
+          recentMessages.push({ role: 'user', text: promptTail });
+        }
+      }
+      if (liveRow.text) {
+        recentMessages.push({ role: 'assistant', text: String(liveRow.text).slice(-600) });
+      }
+    }
+    const pendingQuestions = pendingAskBySession.get(sid) || [];
+    out.push({
+      sessionId: sid,
+      title: meta.name || sid,
+      sceneId,
+      workDir: meta.workDir || '',
+      state: pendingQuestions.length > 0 ? 'waiting_input' : 'running',
+      ...(pendingQuestions.length > 0 ? { pendingQuestions } : {}),
+      recentMessages: recentMessages.slice(-6),
+    });
+  }
+  return out;
+}
+
+function readRecentFallbackMessagesForAutoRoute(sessionId, limit = 4) {
+  try {
+    const history = getOrCreateSessionHistory(sessionId);
+    return history
+      .filter(row => row && (row.role === 'user' || row.role === 'assistant') && !row.internal)
+      .slice(-limit)
+      .map(row => ({
+        role: row.role,
+        text: typeof row.content === 'string'
+          ? row.content.slice(0, 500)
+          : (Array.isArray(row.content)
+            ? row.content.filter(p => p?.type === 'text' && typeof p.text === 'string').map(p => p.text).join('\n').slice(0, 500)
+            : ''),
+      }))
+      .filter(m => m.text);
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Dedicated Sessionless auto-route + send entry point (`yeaft_auto_route_send`).
+ * Leaves existing `yeaft_session_send` untouched for 100% backward compatibility:
+ *   1. Boots runtime if needed so `session.adapter` and `decisionModel` are available.
+ *   2. Runs Tier 1 (running/AskUser) -> Tier 2 (5-day recent) -> Tier 3 (create new Session
+ *      with LLM-selected `workDir` from <=3 level snapshot, `sceneId`, and `title`).
+ *   3. If Tier 3 creates a Session, persists it via `createSessionFromSpec` and broadcasts
+ *      `session_crud_result` + `session_list_updated` so Server catalog & sidebar stay in sync.
+ *   4. Emits `yeaft_session_routed` back to Server (which binds projectContext & relays to Web),
+ *      then either settles a pending `AskUser` prompt or executes `runYeaftSessionSend`.
+ */
+export async function handleYeaftAutoRouteSend(msg = {}) {
+  if (!msg || typeof msg !== 'object') return null;
+  const text = typeof msg.text === 'string' ? msg.text : '';
+  const hasFiles = Array.isArray(msg.files) && msg.files.length > 0;
+  if (!text.trim() && !hasFiles) return null;
+
+  const yeaftDir = ctx.CONFIG?.yeaftDir;
+  const clientMessageId = typeof msg.id === 'string' && msg.id ? msg.id : randomUUID();
+  const requestId = typeof msg.requestId === 'string' && msg.requestId ? msg.requestId : clientMessageId;
+  const requestClientId = typeof msg._requestClientId === 'string' && msg._requestClientId ? msg._requestClientId : null;
+  const perfTraceId = typeof msg.perfTraceId === 'string' && msg.perfTraceId.trim() ? msg.perfTraceId.trim() : null;
+  const ownerKey = typeof msg._shareOwnerId === 'string' && msg._shareOwnerId ? msg._shareOwnerId : (requestClientId || '__local__');
+
+  if (!yeaftDir) {
+    await sendToServer({
+      type: 'yeaft_session_routed',
+      ok: false,
+      requestId,
+      clientMessageId,
+      _requestClientId: requestClientId,
+      error: 'No Yeaft directory configured on this Agent.',
+    });
+    return null;
+  }
+
+  return withAutoRouteLock(ownerKey, async () => {
+    try {
+      await ensureSessionLoaded({ perfTraceId });
+      const allowedSessionIds = Array.isArray(msg._allowedSessionIds)
+        ? msg._allowedSessionIds.filter(id => typeof id === 'string' && id.trim())
+        : [];
+      const runningSessions = collectLiveRunningSessionsForAutoRoute(yeaftDir, allowedSessionIds);
+
+      const decision = await decideSessionAutoRoute({
+        yeaftDir,
+        agentWorkDir: ctx.CONFIG?.workDir || '',
+        text: text.trim() || '(attached files)',
+        allowedSessionIds,
+        runningSessions,
+        forceNew: msg.forceNew === true,
+        preferredSceneId: typeof msg.preferredSceneId === 'string' ? msg.preferredSceneId : null,
+        preferredWorkDir: typeof msg.preferredWorkDir === 'string' ? msg.preferredWorkDir : null,
+        allowedScenes: Array.isArray(msg.allowedScenes) ? msg.allowedScenes : SESSION_SCENE_IDS,
+        activeWindowDays: Number.isSafeInteger(msg.activeWindowDays) ? msg.activeWindowDays : undefined,
+        adapter: session?.adapter || null,
+        config: session?.config || loadConfig({ dir: yeaftDir }),
+        traceId: perfTraceId,
+        readRecentFallbackMessages: readRecentFallbackMessagesForAutoRoute,
+      });
+
+      let targetSessionId = decision.sessionId;
+      let createdSession = null;
+      if (decision.action === 'create' || !targetSessionId) {
+        createdSession = createSessionFromSpec(yeaftDir, {
+          name: decision.title || fallbackTitle(text),
+          sceneId: isSessionSceneId(decision.sceneId) ? decision.sceneId : 'general',
+          workDir: decision.workDir || '',
+        }, configuredVpPaths());
+        recordAgentSessionCreated();
+        createdSession.config = loadSessionConfig(yeaftDir, createdSession.id);
+        targetSessionId = createdSession.id;
+        sendSessionCrudResult({ op: 'create', requestId, ok: true, session: createdSession });
+        sendSessionSnapshotBroadcast();
+      }
+
+      const targetMeta = createdSession || loadSessionMeta(join(sessionsRoot(yeaftDir), targetSessionId));
+      const targetSceneId = createdSession?.config?.sceneId
+        || loadSessionConfig(yeaftDir, targetSessionId)?.sceneId
+        || decision.sceneId
+        || 'general';
+
+      // If Tier 1 explicitly determined that the user's plain-text message answers a
+      // specific pending AskUser prompt (`decision.answeredQuestion.requestId`), settle
+      // that prompt AND persist the user's reply row into the Session transcript so
+      // conversation history stays complete and no optimistic message is orphaned.
+      let answeredAskUser = false;
+      if (!createdSession && decision.tier === 'running' && decision.answeredQuestion?.requestId && !hasFiles && text.trim()) {
+        const livePending = pendingUserPrompts.get(decision.answeredQuestion.requestId);
+        if (livePending && livePending.sessionId === targetSessionId && livePending.expiresAt > Date.now()) {
+          const questionKey = livePending.question || 'response';
+          persistInboundMessageOnceByMsgId({
+            msgId: clientMessageId,
+            text: text.trim(),
+            sessionId: targetSessionId,
+            threadId: livePending.threadId || 'main',
+            role: 'user',
+            clientMessageId,
+            ts: new Date().toISOString(),
+          });
+          answeredAskUser = settlePendingUserPrompt(decision.answeredQuestion.requestId, livePending, {
+            answers: { [questionKey]: text.trim() },
+          });
+        }
+      }
+
+      await sendToServer({
+        type: 'yeaft_session_routed',
+        ok: true,
+        requestId,
+        clientMessageId,
+        _requestClientId: requestClientId,
+        sessionId: targetSessionId,
+        decision: createdSession ? 'created' : 'matched',
+        tier: createdSession ? 'create' : decision.tier,
+        title: targetMeta?.name || decision.title || targetSessionId,
+        sceneId: targetSceneId,
+        workDir: targetMeta?.workDir ?? decision.workDir ?? '',
+        confidence: decision.confidence ?? null,
+        reason: decision.reason || '',
+        decisionModel: decision.decisionModel || null,
+        ...(answeredAskUser ? { answeredAskUser: true } : {}),
+        ...(createdSession ? { session: createdSession } : {}),
+      });
+
+      if (answeredAskUser) {
+        return { sessionId: targetSessionId, decision: 'matched', tier: 'running', answeredAskUser: true };
+      }
+
+      // Otherwise dispatch through the canonical `runYeaftSessionSend` pipeline.
+      // When Tier 3 attached lightweight >5-day historical hints, pass them as a bounded
+      // non-transcript context note only on the first turn? Wait: keeping user `text` clean
+      // in transcript is critical — never mutate `msg.text` persisted to history!
+      const nextAgentSessionIds = Array.isArray(msg._agentSessionIds)
+        ? [...new Set([...msg._agentSessionIds, targetSessionId])]
+        : [targetSessionId];
+
+      await runYeaftSessionSend({
+        type: 'yeaft_session_send',
+        id: clientMessageId,
+        sessionId: targetSessionId,
+        text: text.trim() ? text : '(attached files)',
+        mentions: Array.isArray(msg.mentions) ? msg.mentions : [],
+        ...(msg.quote ? { quote: msg.quote } : {}),
+        ...(msg.quickSend !== undefined ? { quickSend: msg.quickSend } : {}),
+        ...(Array.isArray(msg.files) && msg.files.length > 0 ? { files: msg.files } : {}),
+        ...(perfTraceId ? { perfTraceId } : {}),
+        _agentSessionIds: nextAgentSessionIds,
+        ...(typeof msg._shareOwnerId === 'string' ? { _shareOwnerId: msg._shareOwnerId } : {}),
+        projectContext: (!createdSession && msg._projectContextsBySession && msg._projectContextsBySession[targetSessionId])
+          || {
+            projectId: null,
+            projectName: null,
+            projectInstruction: '',
+            sessionIds: [],
+          },
+      });
+
+      return {
+        sessionId: targetSessionId,
+        decision: createdSession ? 'created' : 'matched',
+        tier: createdSession ? 'create' : decision.tier,
+      };
+    } catch (err) {
+      console.error('[Yeaft] auto-route send failed:', err?.message || err);
+      await sendToServer({
+        type: 'yeaft_session_routed',
+        ok: false,
+        requestId,
+        clientMessageId,
+        _requestClientId: requestClientId,
+        error: err?.message || String(err),
+      });
+      return null;
+    }
+  });
 }
 
 export function handleYeaftSubAgentPrompt(msg) {

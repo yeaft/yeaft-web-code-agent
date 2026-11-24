@@ -463,7 +463,7 @@ async function handleAgentMessage(agentId, msg, ws) {
     'agent_sync_complete', 'sync_sessions', 'proxy_response', 'proxy_response_chunk',
     'proxy_response_end', 'proxy_ports_update', 'proxy_ws_opened', 'proxy_ws_message',
     'proxy_ws_closed', 'proxy_ws_error', 'restart_agent_ack', 'upgrade_agent_ack',
-    'directory_listing', 'folders_list', 'models_list', 'yeaft_output', 'yeaft_session_output', 'session_output', 'yeaft_asset_put',
+    'directory_listing', 'folders_list', 'models_list', 'yeaft_output', 'yeaft_session_output', 'session_output', 'yeaft_session_routed', 'yeaft_asset_put',
     'yeaft_history_chunk', 'yeaft_history_outline', 'yeaft_history_search_result', 'yeaft_history_window', 'slash_commands_update', 'agent_metrics',
     'file_content', 'file_content_chunk', 'video_metadata', 'video_chunk', 'file_saved', 'file_op_result', 'file_search_result',
     'git_status_result', 'git_diff_result', 'git_op_result',

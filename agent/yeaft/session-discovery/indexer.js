@@ -365,8 +365,19 @@ export function runDailySessionIndex(root, now = Date.now(), { force = false, cr
         }
 
         if (visibleTurnCount < MIN_MESSAGES_FOR_CARD || activeAt <= 0) {
-          if (existing) removedSessionIds.push(sessionId);
-          continue;
+          // Daily sweep enforces the >=4 message threshold for brand-new indexing,
+          // while preserving cards ALREADY inserted by live turn-end refresh (`existing`)
+          // while they remain active within the 5-day window.
+          const keepExistingLiveCard = Boolean(
+            existing
+            && activeAt > 0
+            && now - activeAt <= 5 * DAY_MS
+            && visibleTurnCount >= 2,
+          );
+          if (!keepExistingLiveCard) {
+            if (existing) removedSessionIds.push(sessionId);
+            continue;
+          }
         }
 
         const candidates = [];
@@ -436,4 +447,165 @@ export function runDailySessionIndex(root, now = Date.now(), { force = false, cr
   } finally {
     db.close();
   }
+}
+
+/**
+ * Incrementally refresh one Session's card & complete turn messages in
+ * `discovery.db` immediately after a turn settles (or when metadata changes),
+ * without advancing the 24h `index_state` timer or running global standing-agreement sweeps.
+ *
+ * Accepts Sessions with `>= minMessages` (default 2: at least 1 complete user+assistant
+ * turn; pass 4 to enforce the daily-sweep threshold) so a newly created Session
+ * becomes searchable and eligible for Tier 2 auto-routing right away.
+ */
+export function refreshSingleSessionIndex(root, sessionId, now = Date.now(), {
+  minMessages = 2,
+  busyTimeoutMs = 150,
+  createScan = createAgentHistoryScan,
+} = {}) {
+  if (!root || typeof sessionId !== 'string' || !sessionId.trim()) return false;
+  const targetId = sessionId.trim();
+  const db = openDiscoveryStore(root, { busyTimeoutMs });
+  try {
+    const existingCards = listIndexedCardWatermarks(db);
+    const existing = existingCards.get(targetId);
+    const telemetry = {};
+    const { read, list, stopped } = createScan(root, telemetry);
+    const scanStopped = () => Boolean(stopped() || telemetry.scanIncomplete);
+
+    const sessionsMap = localSessionDirs(root, read, new Set([targetId]));
+    if (scanStopped()) return false;
+    const dir = sessionsMap.get(targetId);
+    if (!dir) {
+      if (existing) {
+        return applyDailyIndexUpdates(db, {
+          upserts: [],
+          removedSessionIds: [targetId],
+          automatic: [],
+          now,
+          root: null,
+          force: true,
+          markIndexed: false,
+        });
+      }
+      return false;
+    }
+
+    const source = readSourceFence(root, targetId, read, { includeSignature: true, list });
+    if (scanStopped()) return false;
+    if (!source) {
+      if (existing) {
+        return applyDailyIndexUpdates(db, {
+          upserts: [],
+          removedSessionIds: [targetId],
+          automatic: [],
+          now,
+          root: null,
+          force: true,
+          markIndexed: false,
+        });
+      }
+      return false;
+    }
+
+    const meta = source.meta;
+    const title = truncate(typeof meta.name === 'string' ? meta.name : targetId, 240);
+    const workDir = truncate(typeof meta.workDir === 'string' ? meta.workDir : '', 512);
+
+    const rows = readTranscriptRowsOldestFirst(join(dir, 'conversation'), targetId, read, list, source.operations);
+    if (scanStopped()) return false;
+    const { messages, visibleTurnCount, activeAt, lastSeq } = extractIndexableTurnMessages(rows, targetId, now);
+    const afterSource = readSourceFence(root, targetId, read);
+    if (scanStopped() || afterSource?.key !== source.key) return false;
+
+    const effectiveMin = Math.max(1, Math.floor(Number(minMessages) || 2));
+    if (visibleTurnCount < effectiveMin || activeAt <= 0) {
+      if (existing) {
+        return applyDailyIndexUpdates(db, {
+          upserts: [],
+          removedSessionIds: [targetId],
+          automatic: [],
+          now,
+          root: null,
+          force: true,
+          markIndexed: false,
+        });
+      }
+      return false;
+    }
+
+    const candidates = [];
+    for (const message of messages) {
+      const proposal = extractConsensus(message, message.createdAt);
+      if (proposal) candidates.push(proposal);
+    }
+
+    const hasIndexSignature = Boolean(source.transcriptSignature && source.transcriptSignature.startsWith('[["idx",'));
+    const canIncrementalAppend = Boolean(
+      existing
+      && hasIndexSignature
+      && existing.deletionGeneration === source.key
+      && lastSeq >= existing.lastSeq
+      && visibleTurnCount >= existing.messageCount,
+    );
+    const pruneFromSeq = canIncrementalAppend
+      ? findTurnPruneStartSeq(rows, targetId, existing.lastSeq)
+      : null;
+    const deltaMessages = canIncrementalAppend
+      ? messages.filter(message => message.seq >= pruneFromSeq)
+      : messages;
+
+    return applyDailyIndexUpdates(db, {
+      upserts: [{
+        mode: canIncrementalAppend ? 'append' : 'replace',
+        pruneFromSeq: canIncrementalAppend ? pruneFromSeq : null,
+        sessionId: targetId,
+        title,
+        workDir,
+        activeAt,
+        deletionGeneration: source.key,
+        freshAt: source.freshAt,
+        transcriptSignature: source.transcriptSignature || '',
+        lastSeq,
+        messageCount: visibleTurnCount,
+        messages: deltaMessages,
+        candidates,
+      }],
+      removedSessionIds: [],
+      automatic: [],
+      now,
+      root: null,
+      force: true,
+      markIndexed: false,
+    });
+  } catch (error) {
+    const msg = String(error?.message || '');
+    if (error?.errcode === 5 || /database is locked|SQLITE_BUSY/i.test(msg)) {
+      const busyErr = new Error('discovery_db_busy');
+      busyErr.code = 'SQLITE_BUSY';
+      throw busyErr;
+    }
+    console.warn('[SessionDiscovery] single-session index refresh failed:', error?.code || error?.name || error?.message);
+    return false;
+  } finally {
+    db.close();
+  }
+}
+
+export function scheduleSingleSessionIndexRefresh(root, sessionId, { maxAttempts = 4, baseDelayMs = 250 } = {}) {
+  if (!root || typeof sessionId !== 'string' || !sessionId.trim()) return;
+  let attempt = 0;
+  const run = () => {
+    attempt += 1;
+    try {
+      refreshSingleSessionIndex(root, sessionId, Date.now(), { busyTimeoutMs: 120 });
+    } catch (err) {
+      if (err?.code === 'SQLITE_BUSY' && attempt < maxAttempts) {
+        const retryTimer = setTimeout(run, baseDelayMs * attempt);
+        retryTimer.unref?.();
+      }
+    }
+  };
+  const firstTimer = setTimeout(run, 0);
+  firstTimer.unref?.();
 }

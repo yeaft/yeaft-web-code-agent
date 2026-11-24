@@ -107,7 +107,9 @@ async function sendYeaftSessionSendError(client, msg, agentId, code = 'agent_una
       ? 'Session message was not sent: an attachment is missing, expired, invalid, or unavailable. Please upload the files again.'
       : code === 'agent_access_denied'
         ? 'Agent access denied; Session message was not sent.'
-        : 'No agent available; Session message was not sent. Please retry.',
+        : code === 'session_auto_route_unsupported'
+          ? 'The selected Agent must be upgraded to support automatic Session routing.'
+          : 'No agent available; Session message was not sent. Please retry.',
   });
 }
 
@@ -1794,7 +1796,8 @@ export async function handleClientConversation(clientId, client, msg, checkAgent
           });
           return true;
         }
-        const isSessionSend = relayType === 'yeaft_session_send' || relayType === 'yeaft_session_chat';
+        const isAutoRouteSend = relayType === 'yeaft_auto_route_send';
+        const isSessionSend = relayType === 'yeaft_session_send' || relayType === 'yeaft_session_chat' || isAutoRouteSend;
         if (msg.perfTraceId) {
           recordPerfTraceEvent({
             traceId: msg.perfTraceId,
@@ -1905,14 +1908,47 @@ export async function handleClientConversation(clientId, client, msg, checkAgent
             return true;
           }
         }
+        if (isAutoRouteSend && !relayAgent?.capabilities?.includes('session_auto_route')) {
+          await sendYeaftSessionSendError(client, msg, relayAgentId, 'session_auto_route_unsupported');
+          return true;
+        }
         if (relayType === 'yeaft_fetch_agent_metrics') {
           await forwardToAgent(relayAgentId, { type: 'get_agent_metrics' });
           return true;
         }
         // Forward the entire message minus the agentId field; the agent
         // router is the authoritative consumer of the payload shape.
-        const { agentId: _discard, _agentSessionIds: _untrustedIds, _shareOwnerId: _untrustedShareOwner, ...rest } = msg;
+        const {
+          agentId: _discard,
+          _agentSessionIds: _untrustedIds,
+          _allowedSessionIds: _untrustedAllowedIds,
+          _projectContextsBySession: _untrustedProjectContexts,
+          _shareOwnerId: _untrustedShareOwner,
+          ...rest
+        } = msg;
         rest.type = relayType;
+        if (isAutoRouteSend) {
+          rest._requestClientId = clientId;
+          trackUserTurn(client.userId, Buffer.byteLength(JSON.stringify(msg)));
+          if (client.userId) {
+            const visibleIds = buildSessionCatalog(client.userId, client.role)
+              .filter(row => row.agentId === relayAgentId && row.runtimeProvider === 'yeaft')
+              .map(row => row.routeRef.sessionId);
+            rest._allowedSessionIds = visibleIds;
+            if (relayAgent.capabilities?.includes('session_discovery')) {
+              rest._agentSessionIds = ownedAgentSessionIds(client.userId, relayAgentId);
+              rest._shareOwnerId = client.userId;
+            }
+            const contextsBySession = {};
+            for (const sid of visibleIds) {
+              const ctxObj = yeaftProjectDb.contextForSession(client.userId, relayAgentId, sid);
+              if (ctxObj) contextsBySession[sid] = ctxObj;
+            }
+            rest._projectContextsBySession = contextsBySession;
+          } else {
+            rest._allowedSessionIds = [];
+          }
+        }
         if (relayType === 'yeaft_ask_user_answer') {
           rest._requestClientId = clientId;
           let dispatched = false;
