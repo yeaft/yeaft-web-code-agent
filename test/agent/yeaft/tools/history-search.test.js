@@ -8,7 +8,7 @@ import { ToolRegistry } from '../../../../agent/yeaft/tools/registry.js';
 import { commitSessionTurnDeletion } from '../../../../agent/yeaft/conversation/turn-deletion-journal.js';
 import historySearch from '../../../../agent/yeaft/tools/history-search.js';
 import { runDailySessionIndex } from '../../../../agent/yeaft/session-discovery/indexer.js';
-import { DAY_MS, changeShare, openDiscoveryStore } from '../../../../agent/yeaft/session-discovery/store.js';
+import { DAY_MS, changeShare, listActiveSessionCards, openDiscoveryStore } from '../../../../agent/yeaft/session-discovery/store.js';
 
 const roots = [];
 const keyword = 'boundary fixture';
@@ -269,7 +269,9 @@ describe('HistorySearch automatic Share scope', () => {
     expect(runDailySessionIndex(dir, now + 6 * DAY_MS)).toBe(true);
     const db = openDiscoveryStore(dir);
     try {
-      expect(db.prepare('SELECT COUNT(*) AS n FROM session_cards').get().n).toBe(0);
+      // Full table keeps the Session card persisted, while the 5-day active window excludes it.
+      expect(db.prepare('SELECT COUNT(*) AS n FROM session_cards').get().n).toBe(1);
+      expect(listActiveSessionCards(db, dir, [siblingSession], now + 6 * DAY_MS).cards).toEqual([]);
       expect(db.prepare('SELECT COUNT(*) AS n FROM automatic_agreements').get().n).toBe(4);
       changeShare(db, dir, 'owner', [siblingSession], 'share_save', {
         createId: '4eee0399-f9a2-4e31-b69f-984a7777ec31', kind: 'output', title: '用户访谈报告', body: '访谈结果。',
