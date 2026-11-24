@@ -70,6 +70,29 @@ describe('Gemini routing and private continuation integration', () => {
     } finally { await closeConversationHistoryIndexes(); rmSync(dir, { recursive: true, force: true }); }
   });
 
+  it('forwards control reentry through the router without touching signed parts or function responses', async () => {
+    const fetch = vi.fn(async () => json({ candidates: [{ content: { parts: [{ text: 'complete' }] }, finishReason: 'STOP' }] }));
+    vi.stubGlobal('fetch', fetch);
+    const start = assistant();
+    const messages = [
+      { role: 'user', content: 'Read the evidence.' }, start,
+      { role: 'tool', toolCallId: 'call1', content: 'Started.\n\nAsync evidence.' },
+      { role: 'tool', toolCallId: 'call2', content: 'Other evidence.' },
+      { role: 'assistant', content: 'I will wait.' },
+    ];
+    const router = new AdapterRouter({ providers: [provider] });
+    await collect(router.stream({ model: 'google/gemini-2.5-pro', messages, requestIdentity: identity, controlReentry: true }));
+    const { contents } = JSON.parse(fetch.mock.lastCall[1].body);
+    expect(contents.map(row => row.role)).toEqual(['user', 'model', 'user', 'model', 'user']);
+    expect(contents[1].parts).toEqual(items.map(item => item.part));
+    expect(contents[2].parts).toEqual([
+      { functionResponse: { name: 'Read', response: { output: messages[2].content } } },
+      { functionResponse: { name: 'Read', id: 'call2', response: { output: messages[3].content } } },
+    ]);
+    expect(contents[3].parts).toEqual([{ text: 'I will wait.' }]);
+    expect(messages.at(-1)).toEqual({ role: 'assistant', content: 'I will wait.' });
+  });
+
   it('infers Gemini without overriding an explicitly configured proxy protocol', async () => {
     for (const id of ['gemini-2.5-pro', 'models/gemini-2.5-flash', 'google/gemini-3-pro-preview']) expect(inferProtocolFromModelId(id)).toBe('gemini');
     expect(inferProtocolFromModelId('not-gemini-route')).toBeNull();

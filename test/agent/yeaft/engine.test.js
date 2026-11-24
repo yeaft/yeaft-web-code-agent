@@ -1027,7 +1027,7 @@ describe('Engine', () => {
   describe('project document write review', () => {
     const call = (id, name, input = {}) => ({ type: 'tool_call', id, name, input });
     const toolStop = { type: 'stop', stopReason: 'tool_use' };
-    const done = { type: 'stop', stopReason: 'end_turn' };
+    const done = [{ type: 'text_delta', text: 'Finished.' }, { type: 'stop', stopReason: 'end_turn' }];
     const document = (coreHeading = 'Core') => `# Fixture
 ## ${coreHeading}
 ${'Stable instruction.\n'.repeat(520)}
@@ -1071,7 +1071,7 @@ RELEASE_BODY`;
         let executions = 0;
         const { events, requests } = await runWithDoc(document(), [
           [call('first', name, input), call('same-batch', name, input), toolStop],
-          [call('retry', name, input), toolStop], [done],
+          [call('retry', name, input), toolStop], done,
         ], [{ name, execute: async () => { executions++; return 'ok'; } }]);
         expect(executions, name).toBe(1);
         expect(events.filter(event => event.type === 'tool_end').map(event => [event.id, event.isError, event.skipped]), name)
@@ -1143,6 +1143,168 @@ RELEASE_BODY`;
   });
 
   describe('LLM retry policy', () => {
+    const geminiResult = parts => new Response(JSON.stringify({ candidates: [{ finishReason: 'STOP', content: { parts } }] }),
+      { headers: { 'content-type': 'application/json' } });
+    const geminiGateway = () => new AdapterRouter({ providers: [{ name: 'gateway', protocol: 'gemini',
+      baseUrl: 'https://gemini-gateway.invalid/v1beta', apiKey: 'fixture-key', models: ['gemini-4-carbon'] }] });
+    const geminiConfig = { model: 'gateway/gemini-4-carbon', maxOutputTokens: 1024, projectDocMaxBytes: 0 };
+
+    it('spends one shared headers/retry budget after a tool, without replaying the tool', async () => {
+      const toolRuns = vi.fn(async () => 'retained probe result');
+      const failure = () => new Response(JSON.stringify({ error: { code: 'upstream_headers_timeout' } }), { status: 504 });
+      const fetch = vi.fn(async (_url, { signal }) => {
+        switch (fetch.mock.calls.length) {
+          case 1: return geminiResult([{ functionCall: { id: 'probe-1', name: 'Probe', args: {} } }]);
+          case 2:
+            await new Promise(resolve => setTimeout(resolve, 120_000));
+            return failure();
+          default: return new Promise((_, reject) => signal.addEventListener('abort', () => reject(signal.reason), { once: true }));
+        }
+      });
+      vi.stubGlobal('fetch', fetch);
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'hrtime'] });
+      try {
+        const engine = new Engine({ adapter: geminiGateway(), trace,
+          config: { ...geminiConfig, llmRetry: { baseDelayMs: 1_000, jitterRatio: 0 } } });
+        engine.registerTool({ name: 'Probe', description: 'Read a fixture', parameters: { type: 'object' }, execute: toolRuns });
+        const events = [];
+        const run = (async () => { for await (const event of engine.query({ prompt: 'Read and summarize.' })) events.push(event); })();
+        await vi.advanceTimersByTimeAsync(0);
+        expect(fetch).toHaveBeenCalledTimes(2);
+        await vi.advanceTimersByTimeAsync(121_000);
+        expect(fetch).toHaveBeenCalledTimes(3);
+        expect(fetch.mock.calls[2][1].body).toBe(fetch.mock.calls[1][1].body);
+        expect(fetch.mock.calls[2][1].body).toContain('retained probe result');
+        expect(events.find(e => e.type === 'llm_retry')).toMatchObject({ attempt: 1, reason: 'upstream_headers_timeout' });
+        await vi.advanceTimersByTimeAsync(58_999);
+        expect(events.some(e => e.terminal)).toBe(false);
+        await vi.advanceTimersByTimeAsync(2);
+        await run;
+        expect(toolRuns).toHaveBeenCalledTimes(1);
+        expect(fetch).toHaveBeenCalledTimes(3);
+        expect(events.find(e => e.type === 'error')).toMatchObject({ reason: 'response_headers_timeout', retryExhausted: true,
+          retryAttempts: 1, error: { message: expect.stringContaining('Completed tool results are kept') } });
+        expect(events.find(e => e.type === 'turn_end' && e.terminal)).toMatchObject({ type: 'turn_end', terminal: true, stopReason: 'error' });
+      } finally {
+        vi.useRealTimers();
+        vi.unstubAllGlobals();
+      }
+    });
+
+    it('keeps an immediate 429 distinct from a timeout when its retry delay will not fit', async () => {
+      const fetch = vi.fn(async () => new Response('{}', { status: 429, headers: { 'Retry-After': '30' } }));
+      vi.stubGlobal('fetch', fetch);
+      try {
+        const engine = new Engine({ adapter: geminiGateway(), trace, config: { ...geminiConfig,
+          llmRetry: { maxRequestRetryTimeMs: 20_000 } } });
+        const events = [];
+        for await (const event of engine.query({ prompt: 'Check the provider' })) events.push(event);
+        expect(fetch).toHaveBeenCalledTimes(1);
+        expect(events.some(event => event.type === 'llm_retry')).toBe(false);
+        expect(events.find(event => event.type === 'error')).toMatchObject({ reason: 'request_retry_time_exhausted',
+          retryAttempts: 0, error: { statusCode: 429, message: expect.stringContaining('rate limited') } });
+      } finally { vi.unstubAllGlobals(); }
+    });
+
+    it('does not interrupt a healthy Gemini stream after headers or treat user cancellation as timeout', async () => {
+      for (const cancel of [false, true]) {
+        const ctrl = new AbortController();
+        let finishBody;
+        const fetch = vi.fn(async (_url, { signal }) => {
+          if (cancel) return new Promise((_, reject) => signal.addEventListener('abort', () => reject(signal.reason), { once: true }));
+          return new Response(new ReadableStream({ start(controller) {
+            finishBody = () => {
+              controller.enqueue(new TextEncoder().encode('data: ' + JSON.stringify({
+                candidates: [{ finishReason: 'STOP', content: { parts: [{ text: 'arrived' }] } }],
+              }) + '\n\n'));
+              controller.close();
+            };
+          } }), { headers: { 'content-type': 'text/event-stream' } });
+        });
+        vi.stubGlobal('fetch', fetch);
+        vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'hrtime'] });
+        try {
+          const engine = new Engine({ adapter: geminiGateway(), trace, config: { ...geminiConfig,
+            llmRetry: { maxRequestRetryTimeMs: 20 } } });
+          const events = [];
+          const run = (async () => { for await (const e of engine.query({ prompt: 'wait', signal: ctrl.signal })) events.push(e); })();
+          await vi.advanceTimersByTimeAsync(cancel ? 10 : 40);
+          expect(fetch).toHaveBeenCalledTimes(1);
+          if (cancel) ctrl.abort();
+          else finishBody();
+          await run;
+          expect(events.some(e => e.type === 'llm_retry' || e.type === 'error')).toBe(false);
+          expect(events.find(e => e.type === 'turn_end' && e.terminal)).toMatchObject({ type: 'turn_end', terminal: true, stopReason: cancel ? 'aborted' : 'end_turn' });
+        } finally {
+          vi.useRealTimers();
+          vi.unstubAllGlobals();
+        }
+      }
+    });
+
+    it('never publishes a split delimiter-only stop as a response, retries once, and preserves real quoted text', async () => {
+      for (const answer of ['', 'The literal delimiter is `<end_of_image>`.']) {
+        const yeaftDir = mkdtempSync(join(tmpdir(), 'yeaft-empty-provider-stop-'));
+        const marker = () => geminiResult([{ text: '  <end' }, { text: '_of_image>\n' }, { text: '<end_of_image>' }]);
+        const fetch = vi.fn().mockImplementationOnce(marker).mockImplementationOnce(() => answer ? geminiResult([{ text: answer }]) : marker());
+        vi.stubGlobal('fetch', fetch);
+        try {
+          const store = new ConversationStore(yeaftDir);
+          const engine = new Engine({ yeaftDir, conversationStore: store, adapter: geminiGateway(), trace, config: { ...geminiConfig,
+            llmRetry: { maxRetries: 1, baseDelayMs: 0, maxDelayMs: 0 } } });
+          const events = [];
+          for await (const e of engine.query({ prompt: 'Give a visible reply', sessionId: 'delimiter-stop' })) events.push(e);
+          expect(fetch).toHaveBeenCalledTimes(2);
+          expect(events.filter(e => e.type === 'text_delta').map(e => e.text)).toEqual(answer ? [answer] : []);
+          expect(events.find(e => e.type === 'llm_retry')).toMatchObject({ reason: 'unusable_response', recoveryMode: 'restart' });
+          expect(store.loadRecentBySession('delimiter-stop', 20).filter(row => row.role === 'assistant' && row.content)
+            .map(row => row.content)).toEqual(answer ? [answer] : []);
+          expect(events.find(e => e.type === 'turn_end' && e.terminal)).toMatchObject({ type: 'turn_end', terminal: true, stopReason: answer ? 'end_turn' : 'error' });
+          if (!answer) expect(events.find(e => e.type === 'error')).toMatchObject({ code: 'empty_response', retryExhausted: true });
+        } finally {
+          vi.unstubAllGlobals();
+          await closeConversationHistoryIndexes();
+          rmSync(yeaftDir, { recursive: true, force: true });
+        }
+      }
+    });
+
+    it('resumes Gemini after an owned task updates an earlier tool response without persisting a synthetic user message', async () => {
+      const yeaftDir = mkdtempSync(join(tmpdir(), 'yeaft-gemini-async-reentry-'));
+      const bodies = [];
+      vi.stubGlobal('fetch', vi.fn(async (_url, { body }) => {
+        bodies.push(JSON.parse(body));
+        if (bodies.length === 1) return geminiResult([{ functionCall: { id: 'spawn-1', name: 'SpawnProbe', args: {} } }]);
+        if (bodies.length === 2) return geminiResult([{ text: 'Waiting for review.' }]);
+        if (bodies.at(-1).contents.at(-1).role !== 'user') {
+          return new Response(JSON.stringify({ error: { code: 'invalid_message_role' } }), { status: 400 });
+        }
+        return geminiResult([{ text: 'Review passed.' }]);
+      }));
+      try {
+        const store = new ConversationStore(yeaftDir);
+        const engine = new Engine({ yeaftDir, conversationStore: store, adapter: geminiGateway(), trace, config: geminiConfig });
+        engine.registerTool({ name: 'SpawnProbe', description: 'Start a fixture task', parameters: { type: 'object' },
+          execute: async (_input, ctx) => { ctx.registerAsyncTask('probe-task'); return 'started'; } });
+        const events = [];
+        for await (const e of engine.query({ prompt: 'summarize review', sessionId: 'session-async-role' })) {
+          events.push(e);
+          if (e.type === 'async_task_wait_start') expect(engine.notifyAsyncTaskCompleted('probe-task', 'review finished')).toBe(true);
+        }
+        expect(bodies).toHaveLength(3);
+        expect(bodies[1].contents.at(-1).parts[0]).toHaveProperty('functionResponse');
+        expect(bodies[2].contents.slice(-2).map(content => content.role)).toEqual(['model', 'user']);
+        expect(JSON.stringify(bodies[2])).toContain('review finished');
+        expect(events.find(e => e.type === 'turn_end' && e.terminal)).toMatchObject({ stopReason: 'end_turn', terminal: true });
+        expect(store.loadRecentBySession('session-async-role', 30).filter(row => row.role === 'user')
+          .map(row => row.content)).toEqual(['summarize review']);
+      } finally {
+        vi.unstubAllGlobals();
+        await closeConversationHistoryIndexes();
+        rmSync(yeaftDir, { recursive: true, force: true });
+      }
+    });
+
     it('never executes or persists rejected Anthropic tool batches, retries them unless server tools ran, and executes a complete batch in order', async () => {
       const { AnthropicAdapter } = await import('../../../agent/yeaft/llm/anthropic.js');
       const yeaftDir = mkdtempSync(join(tmpdir(), 'yeaft-anthropic-tool-boundary-'));
@@ -1156,6 +1318,8 @@ RELEASE_BODY`;
       const blockStop = index => ({ type: 'content_block_stop', index });
       const messageStop = { type: 'message_stop' };
       const stop = stop_reason => ({ type: 'message_delta', delta: { stop_reason } });
+      const answer = [{ type: 'content_block_start', index: 0, content_block: { type: 'text', text: 'Finished.' } },
+        blockStop(0), stop('end_turn'), messageStop];
       const firstTool = [start(0), delta(0, '{"value":1}'), blockStop(0)];
       const complete = [...firstTool, start(1), delta(1, '{"value":2}'), blockStop(1), stop('tool_use'), messageStop];
       const partial = [...firstTool, start(1), delta(1, '{"value":')];
@@ -1177,6 +1341,10 @@ RELEASE_BODY`;
           ['retry', [...partial, blockStop(1), stop('tool_use'), messageStop]],
           ['server-refusal', [serverTool, blockStop(0), stop('refusal'), messageStop]],
           ['server-cut', [serverTool]],
+          ['server-empty', [serverTool, blockStop(0), stop('end_turn'), messageStop]],
+          ['server-empty-json', []],
+          ['server-context', [serverTool, blockStop(0), stop('model_context_window_exceeded'), messageStop]],
+          ['server-context-json', []],
         ]) {
           execute.mockClear();
           const sessionId = `session-stream-${name}`;
@@ -1187,8 +1355,11 @@ RELEASE_BODY`;
           global.fetch = vi.fn(async (_url, init) => {
             requests += 1;
             bodies.push(init.body);
-            if (name === 'complete' && requests > 1) return sse([stop('end_turn'), messageStop]);
-            if (name === 'retry' && requests > 1) return sse(requests === 2 ? complete : [stop('end_turn'), messageStop]);
+            if (['server-empty-json', 'server-context-json'].includes(name)) return new Response(JSON.stringify({
+              stop_reason: name === 'server-empty-json' ? 'end_turn' : 'model_context_window_exceeded',
+              content: [serverTool.content_block] }), { headers: { 'content-type': 'application/json' } });
+            if (name === 'complete' && requests > 1) return sse(answer);
+            if (name === 'retry' && requests > 1) return sse(requests === 2 ? complete : answer);
             if (name === 'idle' || name === 'abort') return new Response(new ReadableStream({ start(controller) {
               controller.enqueue(encode(events));
             }, cancel }));
@@ -1198,13 +1369,15 @@ RELEASE_BODY`;
           const engine = new Engine({ adapter: new AnthropicAdapter({ apiKey: 'synthetic', baseUrl: 'https://proxy.invalid', streamIdleTimeoutMs: 10 }), trace,
             toolRegistry: registry, conversationStore, yeaftDir,
             config: { model: 'claude-opus-4.8', modelEffort: 'high', projectDocMaxBytes: 0, maxOutputTokens: 1024,
-              llmRetry: { maxRetries: ['retry', 'server-refusal', 'server-cut'].includes(name) ? 1 : 0, baseDelayMs: 0, maxDelayMs: 0, jitterRatio: 0 } } });
+              ...(name.startsWith('server-') ? { fallbackModel: 'claude-sonnet-4.6' } : {}),
+              llmRetry: { maxRetries: name === 'retry' || name.startsWith('server-') ? 1 : 0, baseDelayMs: 0, maxDelayMs: 0, jitterRatio: 0 } } });
           const output = [];
           for await (const event of engine.query({ prompt: 'echo values', sessionId, signal: ctrl.signal, onProviderRequestStart: policy => policies.push(policy) })) {
             output.push(event);
             if (name === 'abort' && event.type === 'provider_activity') ctrl.abort();
           }
-          expect(policies[0]).toEqual({ effort: 'xhigh', streamIdleTimeoutMs: 10 });
+          expect(policies[0]).toEqual({ effort: 'xhigh', streamIdleTimeoutMs: 10, headersTimeoutMs: expect.any(Number) });
+          expect(policies[1]).toEqual({ effort: 'xhigh', streamIdleTimeoutMs: 10, headersTimeoutMs: undefined });
           const persisted = conversationStore.loadRecentBySession(sessionId, 50);
           if (name === 'complete' || name === 'retry') {
             // One tool batch and one tool-result continuation, after one fresh

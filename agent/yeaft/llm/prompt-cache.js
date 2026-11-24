@@ -1,4 +1,4 @@
-import { classifyFetchError, LLMAbortError, LLMRequestTooLargeError, serializeModelRequestBody } from './adapter.js';
+import { classifyFetchError, LLMAbortError, LLMRequestTooLargeError, serializeModelRequestBody, fetchWithHeadersTimeout } from './adapter.js';
 
 // A retry is only safe on pre-generation validation that names a field we
 // supplied. Never infer that from a generic 400 or a mention in prompt data.
@@ -30,15 +30,17 @@ function rejectsCacheField(status, raw, field) {
 }
 
 /** Dispatch once normally, and at most once without the optional cache hint. */
-export async function fetchWithPromptCacheFallback({ url, headers, body, signal, providerLabel, field, withoutCache, onCacheFallback, onRequestStart, maxRequestBodyBytes }) {
+export async function fetchWithPromptCacheFallback({ url, headers, body, signal, providerLabel, field, withoutCache, onCacheFallback, onRequestStart, maxRequestBodyBytes, getHeadersTimeoutMs, onResponseHeaders }) {
   const dispatch = async payload => {
     if (signal?.aborted) throw new LLMAbortError();
     const { body: serialized, requestBytes } = serializeModelRequestBody(payload, maxRequestBodyBytes);
     try {
       // Re-run the caller's admission hook on every HTTP dispatch: an owned
       // Work Center lease or a request allowance may have expired meanwhile.
-      onRequestStart?.();
-      const response = await fetch(url, { method: 'POST', headers, body: serialized, signal });
+      const timeoutMs = getHeadersTimeoutMs?.();
+      if (timeoutMs !== 0) onRequestStart?.(timeoutMs);
+      const response = await fetchWithHeadersTimeout(url, { method: 'POST', headers, body: serialized, signal }, timeoutMs);
+      onResponseHeaders?.();
       if (response.status === 413) {
         await response.body?.cancel().catch(() => {});
         throw new LLMRequestTooLargeError(requestBytes, { limitBytes: maxRequestBodyBytes, received413: true });

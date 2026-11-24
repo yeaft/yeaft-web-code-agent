@@ -24,7 +24,7 @@ import { promises as fsp } from 'fs';
 import { join, resolve as resolvePath } from 'path';
 import { buildSystemPrompt, buildWorkerPrompt } from './prompts.js';
 import { getRuntimePlatformInfo } from './runtime-platform.js';
-import { LLMAbortError, LLMAuthError, LLMContextError, LLMPolicyError, LLMRateLimitError, LLMRequestTooLargeError, LLMServerError, LLMStreamIdleTimeoutError, LLMToolInputError, isContentFilterStopDetails } from './llm/adapter.js';
+import { LLMAbortError, LLMAuthError, LLMContextError, LLMHeadersTimeoutError, LLMPolicyError, LLMRateLimitError, LLMRequestTooLargeError, LLMServerError, LLMStreamIdleTimeoutError, LLMToolInputError, isContentFilterStopDetails } from './llm/adapter.js';
 import { runMemoryPreflow, buildRelevantScopes, memoryScopeLabel } from './sessions/pre-flow.js';
 import {
   readProjectDoc,
@@ -114,6 +114,13 @@ const PROVIDER_STOP_REASONS = new Set([
   'pause_turn', 'model_context_window_exceeded', 'unknown',
 ]);
 const COMPLETED_STOP_REASONS = new Set(['end_turn', 'stop_sequence']);
+// Hold a split provider image delimiter until real text arrives. Prose that
+// quotes the delimiter is not rewritten.
+const IMAGE_DELIMITER = '<end_of_image>';
+function hasPotentiallyVisibleText(text, streaming = false) {
+  const remainder = text.replaceAll(IMAGE_DELIMITER, '').trim();
+  return Boolean(remainder && (!streaming || !IMAGE_DELIMITER.startsWith(remainder)));
+}
 const FAILED_PROVIDER_STOPS = new Set(['refusal', 'model_context_window_exceeded', 'unknown']);
 // Sent once with the retry of an unusable response (empty, filtered, refused or
 // a malformed tool batch), as gemini-cli does for empty Gemini output. It is
@@ -346,6 +353,7 @@ const RETRY_DEFAULTS = Object.freeze({
   baseDelayMs: 1_000,
   maxDelayMs: 30_000,
   jitterRatio: 0.25,
+  maxRequestRetryTimeMs: 180_000,
   forbiddenRetryDelaysMs: [30_000, 120_000],
 });
 
@@ -458,6 +466,7 @@ function resolveRetryPolicy(config) {
     baseDelayMs: Math.max(0, Math.floor(num(raw.baseDelayMs, RETRY_DEFAULTS.baseDelayMs))),
     maxDelayMs: Math.max(0, Math.floor(num(raw.maxDelayMs, RETRY_DEFAULTS.maxDelayMs))),
     jitterRatio: Math.min(1, Math.max(0, num(raw.jitterRatio, RETRY_DEFAULTS.jitterRatio))),
+    maxRequestRetryTimeMs: Math.min(600_000, Math.floor(num(raw.maxRequestRetryTimeMs, RETRY_DEFAULTS.maxRequestRetryTimeMs))),
     forbiddenRetryDelaysMs,
   };
 }
@@ -499,7 +508,8 @@ function retryDelay(policy, err, attempt) {
   if (limited) return { delayMs: computeBackoffDelay(policy, attempt), reason: 'rate_limit_backoff' };
   return {
     delayMs: computeBackoffDelay(policy, attempt - 1),
-    reason: err instanceof LLMStreamIdleTimeoutError ? 'stream_idle_timeout' : 'transient_backoff',
+    reason: err instanceof LLMHeadersTimeoutError ? err.reasonCode
+      : err instanceof LLMStreamIdleTimeoutError ? 'stream_idle_timeout' : 'transient_backoff',
   };
 }
 
@@ -2021,8 +2031,8 @@ export class Engine {
    * @param {string[]} [params.peerTurnIds] - Active peer executions whose durable
    *   history is text-only even when they use the same VP as this execution.
    * @param {Function} [params.onProviderRequestStart] - Internal liveness policy
-   *   callback before dispatch: { effort, streamIdleTimeoutMs } from the final
-   *   native request. No user content; not persisted or projected to the Web.
+   *   before dispatch ({ effort, streamIdleTimeoutMs, headersTimeoutMs }) and
+   *   when headers arrive (headersTimeoutMs cleared). Not persisted.
    * @yields {EngineEvent}
    */
   async *query(params = {}) {
@@ -2835,6 +2845,16 @@ export class Engine {
     let retryPolicy = resolveRetryPolicy(this.#config);
     let consecutiveRetryableErrors = 0;
     let consecutiveForbiddenErrors = 0;
+    let retryDeadline = null;
+    let controlReentry = false;
+    const getHeadersTimeoutMs = () => {
+      if (retryDeadline === null) {
+        if (!retryPolicy.maxRequestRetryTimeMs) return undefined;
+        retryDeadline = perfNowMs() + retryPolicy.maxRequestRetryTimeMs;
+      }
+      return Math.max(0, Math.ceil(retryDeadline - perfNowMs()));
+    };
+    const hasFinalPublication = () => lastPersistedAssistantTextMessage?.presentation?.phase === 'final';
     let contentPolicyRecoveryAttempts = 0;
     let contextOverflowRecoveryAttempts = 0;
     // A provider can know about framing/tokenizer overhead that our monotonic
@@ -2953,6 +2973,7 @@ export class Engine {
       });
       let ttfbMs = null;  // Time to first token
       let responseText = '';
+      let pendingVisibleText = '';
       let incompleteAssistantPersisted = false;
       const persistIncompleteAssistantOnce = (reason) => {
         if (incompleteAssistantPersisted || (!responseText && !providerMetadata)) return null;
@@ -3042,6 +3063,7 @@ export class Engine {
         // synchronization point before the next provider loop.
         invalidateReadOnlyToolReuse();
         resetProgressEvidence();
+        controlReentry = true;
       }
       if (taskResultUpdatesBeforeStream.length > 0) {
         for (const update of taskResultUpdatesBeforeStream) {
@@ -3489,6 +3511,7 @@ export class Engine {
           retryLifecycle.pendingContinuation = null;
           continuationCommitted = true;
         };
+        let providerRequestPolicy;
         let legacyDispatchReserved = false;
         let progressRequestCounted = false;
         const commitDispatch = (reserveChild = true) => {
@@ -3523,12 +3546,19 @@ export class Engine {
           effort: resolvedEffort,
           effortConstraint,
           requestIdentity,
+          controlReentry,
+          getHeadersTimeoutMs,
           onEffortDecision: decision => { requestEffortDecision = snapshotEffortDecision(decision); },
           onProviderDiagnostics: info => traceRequest('llm.capabilities', { detail: info }),
           effortSource,
           signal,
           onRawExchange: captureRawExchange,
           rawExchangeMaxBytes,
+          onResponseHeaders: () => {
+            if (!signal?.aborted && providerRequestPolicy) {
+              onProviderRequestStart?.({ ...providerRequestPolicy, headersTimeoutMs: undefined });
+            }
+          },
           onRequestStart: requestPolicy => {
             // Native adapters invoke this immediately before fetch(). A retry
             // continuation and Work Center EngineTurn become durable only when
@@ -3538,6 +3568,7 @@ export class Engine {
             try {
               commitDispatch(!legacyDispatchReserved);
               legacyDispatchReserved = false;
+              providerRequestPolicy = requestPolicy;
               onProviderRequestStart?.(requestPolicy);
             } catch (error) {
               // Budget, lease and persistence failures are local, never a
@@ -3557,6 +3588,7 @@ export class Engine {
         if (!hasCaptureStream) {
           commitDispatch();
           legacyDispatchReserved = true;
+          getHeadersTimeoutMs();
         }
 
         // Snapshot task results carried by this exact request. Request start
@@ -3565,7 +3597,7 @@ export class Engine {
         // that included the provider's terminal stop event.
         const requestAsyncTaskIds = deliveredTaskIds;
         let sawProviderStop = false;
-        for await (const event of providerStream) {
+        for await (let event of providerStream) {
           // task-325a (abort-stop fix): per-event abort short-circuit.
           // The adapter is expected to throw AbortError when fetch's
           // signal fires, but in practice undici/HTTP-2/proxy layers
@@ -3594,6 +3626,12 @@ export class Engine {
               break;
             case 'text_delta':
               if (typeof event.text !== 'string' || event.text.length === 0) break;
+              if (!responseText) {
+                pendingVisibleText += event.text;
+                if (!hasPotentiallyVisibleText(pendingVisibleText, true)) break;
+                event = { ...event, text: pendingVisibleText };
+                pendingVisibleText = '';
+              }
               if (ttfbMs === null) {
                 ttfbMs = Date.now() - startTime;
                 traceRequest('llm.first_text', {
@@ -3744,10 +3782,24 @@ export class Engine {
             // Retrying needs a smaller request, which the context recovery provides.
             const error = new LLMContextError(failedProviderStopMessage(stop));
             error.code = stopReason;
+            error.replayUnsafe = stopReplayUnsafe;
             error.providerFailure = true;
             throw error;
           }
           throw new LLMFailedResponseError({ ...stop, replayUnsafe: stopReplayUnsafe });
+        }
+        if (!responseText && hasPotentiallyVisibleText(pendingVisibleText)) {
+          responseText = pendingVisibleText;
+          yield { type: 'text_delta', text: responseText };
+        }
+        if (COMPLETED_STOP_REASONS.has(stopReason) && !responseText && toolCalls.length === 0
+            && !hasFinalPublication() && !duplicateReminderAwaitingResponse
+            && !executionPolicy?.finalize && !progressReporting
+            && this.#pendingAsyncTaskIds.size === 0 && this.#pendingTaskResultUpdates.length === 0
+            && this.#pendingTaskResultMessages.length === 0 && this.#pendingUserMessages.length === 0
+            && !this.#externalUserWakePending) {
+          throw new LLMFailedResponseError({ stopReason: 'empty_response', withheldToolCalls: 0,
+            earlierToolRuns: queryProgress.toolExecutions, replayUnsafe: stopReplayUnsafe });
         }
         // A provider terminal stop plus normal stream completion proves that
         // the request containing these task results completed successfully.
@@ -3814,6 +3866,9 @@ export class Engine {
         // the next turn starts with a clean budget. In-band adapter errors
         // are converted to throws above so they share the real error path.
         consecutiveRetryableErrors = 0;
+        consecutiveForbiddenErrors = 0;
+        retryDeadline = null;
+        controlReentry = false;
       } catch (err) {
         const latencyMs = Date.now() - startTime;
         if (activeProviderRequest) {
@@ -3912,10 +3967,12 @@ export class Engine {
           break;
         }
 
+        // Hosted tools may already have run even though no local call exists.
+        const replaySafe = err?.replayUnsafe !== true && !stopReplayUnsafe;
         const isBodyOverflow = err instanceof LLMRequestTooLargeError;
         // Work Center owns durable dispatch/retry decisions through its Run
         // lease. Don't abandon paused server work or consume the reserved report.
-        const canRecoverRequestSize = !prepareProviderRequest && err.workItemFailureKind == null
+        const canRecoverRequestSize = replaySafe && !prepareProviderRequest && err.workItemFailureKind == null
           && toolCalls.length === 0 && !responseText
           && !pendingServerOperation && !executionPolicy?.finalize && !progressReporting;
         const canRecoverImage = err instanceof LLMImageLimitError && requestImageLimits && canRecoverRequestSize;
@@ -3961,7 +4018,7 @@ export class Engine {
         }
         const contextNeedsRollover = err instanceof ProviderContextBudgetError || err instanceof LLMContextError;
         const rollSignedToolImages = err instanceof ToolImagePrefixBudgetError && signedAnthropicPrefix;
-        if ((rollSignedImage || rollSignedBody || (contextNeedsRollover && (signedAnthropicPrefix || rolloverSeed))) && toolCalls.length === 0
+        if (replaySafe && (rollSignedImage || rollSignedBody || (contextNeedsRollover && (signedAnthropicPrefix || rolloverSeed))) && toolCalls.length === 0
             && successfulRequestsSinceRollover > 0 && !pendingServerOperation && err?.workItemFailureKind == null) {
           endAttemptTrace('context_rollover');
           if (responseText) prepareRetryContinuation();
@@ -4204,7 +4261,7 @@ export class Engine {
         // eligible for transparent retry or model fallback. Work Center owns the
         // retry decision for a dispatched EngineTurn: once it refused a replay
         // (failProviderRequest set workItemFailureKind), report the real cause.
-        const canReplayProviderRequest = toolCalls.length === 0 && !executionPolicy?.finalize && !progressReporting
+        const canReplayProviderRequest = replaySafe && toolCalls.length === 0 && !executionPolicy?.finalize && !progressReporting
           && err?.workItemFailureKind == null;
         if (earlyIsContextOverflow && canReplayProviderRequest && !signedAnthropicPrefix
           && contextOverflowRecoveryAttempts < 3) {
@@ -4252,9 +4309,10 @@ export class Engine {
         const earlyIsTemporaryForbidden = err instanceof LLMAuthError
           && err.statusCode === 403
           && err.temporary === true;
-        if (earlyIsTemporaryForbidden && canReplayProviderRequest
-          && consecutiveForbiddenErrors < retryPolicy.forbiddenRetryDelaysMs.length) {
-          const delayMs = retryPolicy.forbiddenRetryDelaysMs[consecutiveForbiddenErrors];
+        const remainingRetryTime = retryDeadline === null ? Infinity : Math.max(0, retryDeadline - perfNowMs());
+        const forbiddenDelayMs = retryPolicy.forbiddenRetryDelaysMs[consecutiveForbiddenErrors];
+        if (earlyIsTemporaryForbidden && canReplayProviderRequest && forbiddenDelayMs < remainingRetryTime) {
+          const delayMs = forbiddenDelayMs;
           consecutiveForbiddenErrors += 1;
           endAttemptTrace('llm_retry');
           yield {
@@ -4277,10 +4335,12 @@ export class Engine {
           yield { type: 'turn_end', turnNumber, stopReason: 'llm_retry', threadId };
           continue;
         }
+        let retryTimeExhausted = earlyIsTemporaryForbidden && canReplayProviderRequest && forbiddenDelayMs >= remainingRetryTime;
         if (retryEligible && canReplayProviderRequest) {
-          if (consecutiveRetryableErrors < retryPolicy.maxRetries) {
+          const delay = retryDelay(retryPolicy, err, consecutiveRetryableErrors + 1);
+          retryTimeExhausted = delay.delayMs >= remainingRetryTime;
+          if (!retryTimeExhausted && consecutiveRetryableErrors < retryPolicy.maxRetries) {
             consecutiveRetryableErrors += 1;
-            const delay = retryDelay(retryPolicy, err, consecutiveRetryableErrors);
             const { delayMs } = delay;
             const reason = unusableResponse ? 'unusable_response' : delay.reason;
             // A retry is a brand-new provider request. Replaying the original
@@ -4344,12 +4404,23 @@ export class Engine {
           yield { type: 'fallback', from: currentModel, to: earlyFallbackModel, reason: err.message };
           currentModel = earlyFallbackModel;
           consecutiveRetryableErrors = 0;
+          consecutiveForbiddenErrors = 0;
+          retryDeadline = null;
           yield { type: 'turn_end', turnNumber, stopReason: 'fallback_retry', threadId };
           continue;
         }
 
         if (err instanceof LLMFailedResponseError && consecutiveRetryableErrors > 0) {
           err.withRetries(consecutiveRetryableErrors);
+        }
+        if (retryTimeExhausted || err instanceof LLMHeadersTimeoutError) {
+          const limit = retryTimeExhausted ? ' The retry time budget for this model step would be exceeded.' : '';
+          const retried = consecutiveRetryableErrors + consecutiveForbiddenErrors;
+          const retryCount = retried && !(err instanceof LLMFailedResponseError)
+            ? ` Retried ${plural(retried, 'time', 'times')}.` : '';
+          const kept = queryProgress.toolExecutions > 0 && !(err instanceof LLMFailedResponseError)
+            ? ' Completed tool results are kept; send a follow-up to continue.' : '';
+          err.message += limit + retryCount + kept;
         }
         // A later fresh request can fail before producing text. In that case the
         // durable assistant prefix belongs to this same query and must leave the
@@ -4443,7 +4514,13 @@ export class Engine {
           // Failed stops keep their reason as the error code (refusal, unknown).
           ...(err instanceof LLMFailedResponseError ? { code: err.code } : {}),
         };
-        if (err instanceof LLMStreamIdleTimeoutError) {
+        if (err instanceof LLMHeadersTimeoutError || retryTimeExhausted) {
+          errorEvent.reason = err.reasonCode || 'request_retry_time_exhausted';
+          errorEvent.retryExhausted = canReplayProviderRequest && (retryTimeExhausted
+            || consecutiveRetryableErrors >= retryPolicy.maxRetries);
+          errorEvent.retryAttempts = consecutiveRetryableErrors + consecutiveForbiddenErrors;
+          errorEvent.maxRetries = earlyIsTemporaryForbidden ? retryPolicy.forbiddenRetryDelaysMs.length : retryPolicy.maxRetries;
+        } else if (err instanceof LLMStreamIdleTimeoutError) {
           errorEvent.reason = 'stream_idle_timeout';
           errorEvent.retryExhausted = canReplayProviderRequest
             && consecutiveRetryableErrors >= retryPolicy.maxRetries;
@@ -4523,7 +4600,10 @@ export class Engine {
       // The complete exchange is already owned by the per-loop debug trace.
       // Keeping it on model history retains every previous request and makes
       // subsequent debug snapshots grow with cumulative request bodies.
-      const assistantMsg = { role: 'assistant', content: responseText, responseKind: 'progress',
+      const assistantMsg = { role: 'assistant',
+        // An ongoing provider operation may require replay of its exact signed parts.
+        content: responseText || (providerState && (toolCalls.length || stopReason === 'pause_turn') ? pendingVisibleText : ''),
+        responseKind: 'progress',
         ...(providerMetadata ? { providerMetadata } : {}),
       };
       // Failed stops never reach here: they were retried or reported above.
@@ -4865,6 +4945,7 @@ export class Engine {
                 preview: update.preview,
               };
             }
+            controlReentry = true;
             yield { type: 'turn_end', turnNumber, stopReason: 'async_task_continue', threadId };
             continue;
           }
@@ -4919,6 +5000,13 @@ export class Engine {
           }
           yield { type: 'turn_end', turnNumber, stopReason: 'user_append_continue', threadId };
           continue;
+        }
+        if (COMPLETED_STOP_REASONS.has(stopReason) && !responseText && !hasFinalPublication()) {
+          const error = new LLMFailedResponseError({ stopReason: 'empty_response', withheldToolCalls: 0,
+            earlierToolRuns: queryProgress.toolExecutions });
+          yield { type: 'error', error, code: error.code, retryable: false };
+          yield { type: 'turn_end', turnNumber, stopReason: 'error', threadId, terminal: true };
+          break;
         }
         if (pendingSubAgentNotifs.length > 0) {
           acknowledgePendingNotifications(notifScope, pendingSubAgentNotifs.map(n => n.id));

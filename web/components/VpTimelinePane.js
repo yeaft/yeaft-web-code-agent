@@ -411,7 +411,8 @@ export default {
     const formatErrorTime = value => new Date(value).toLocaleString();
 
     const visibleExecutions = (row) => {
-      const observed = (row.observations || []).map(progress => ({ key: sessionExecutionKey(progress), progress }));
+      const observed = (row.observations || []).filter(progress => progress.stage)
+        .map(progress => ({ key: sessionExecutionKey(progress), progress }));
       // Actual tool events can arrive before telemetry, or from Agents that do
       // not report request counts. Use the same key so opening details survives
       // the first metrics update, without fabricating counts.

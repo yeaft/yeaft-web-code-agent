@@ -11,6 +11,7 @@ import VirtualTranscript from './VirtualTranscript.js';
 import MessageBlock from './MessageBlock.js';
 import ConcurrentUserTurns from './ConcurrentUserTurns.js';
 import SessionLaneWait from './SessionLaneWait.js';
+import { visibleWaitingStages } from '../stores/helpers/query-progress.js';
 import { sessionExecutionKey } from '../stores/helpers/yeaft-session-identity.js';
 import { orderUserTurnMessages, partitionUserTurnBlocks, isPendingUserTurn } from '../utils/concurrent-user-turns.js';
 import { readWaitClock } from '../utils/wait-clock.js';
@@ -140,6 +141,14 @@ export default {
             {{ $t('chat.waiting.cliExited') }}
           </span>
         </div>
+        <div v-if="waitingStages.length || waitingFailures.length" class="yeaft-waiting-stages" role="status" aria-live="polite">
+          <div v-for="wait in waitingStages" :key="wait.turnId" class="typing-status-banner typing-status-banner-connecting">
+            <span class="typing-status-text">{{ $t('yeaft.queryProgress.waiting.' + wait.waitingStage, { name: wait.label }) }}</span>
+          </div>
+          <div v-for="failure in waitingFailures" :key="failure.turnId" class="typing-status-banner typing-status-banner-session-lost">
+            <span class="typing-status-text">{{ $t('yeaft.queryProgress.waiting.' + failure.kind) }}</span>
+          </div>
+        </div>
         <!-- Load-more hint + spinner. Two parallel paths share one row:
              - Chat mode dispatches 'sync_messages' against the SQLite
                messageDb (gated on store.hasMoreMessages).
@@ -243,6 +252,7 @@ export default {
   props: {
     toolsInStatus: { type: Boolean, default: false },
     liveExecutionKeys: { type: Set, default: () => new Set() },
+    sessionActivity: { type: Array, default: () => [] },
     hideSpeakerIdentity: { type: Boolean, default: false },
     deleteTurnActionFor: { type: Function, default: null },
     forkFromTurnEnabled: { type: Boolean, default: false },
@@ -1224,6 +1234,19 @@ export default {
       return null;
     });
 
+    const waitingStages = Vue.computed(() => {
+      const route = store.activeSessionRoute;
+      if (route?.runtimeProvider !== 'yeaft') return [];
+      return visibleWaitingStages(store, route).map(wait => ({ ...wait,
+        label: vpStore?.vpLabel?.(wait.vpId, route.agentId) || wait.vpId,
+      }));
+    });
+
+    const waitingFailures = Vue.computed(() => _props.sessionActivity.flatMap(row => (row.errors || [])
+      .filter(error => error.turnId && (error.code === 'provider_watchdog_timeout' || ['stream_idle_timeout', 'response_headers_timeout', 'upstream_headers_timeout', 'request_retry_time_exhausted'].includes(error.reason)))
+      .map(error => ({ turnId: error.turnId, kind: error.reason === 'request_retry_time_exhausted' ? 'retryBudgetReached'
+        : error.retryAttempts > 0 ? 'failedAfterRetry' : 'failed' }))));
+
     function refreshSession() {
       const convId = store.currentConversation;
       if (!convId) return;
@@ -1875,7 +1898,7 @@ export default {
       initialMessagesLoadingText,
       previewShowTypingDots,
       isPreviewMode,
-      waitingStatus,
+      waitingStatus, waitingStages, waitingFailures,
       animation,
       waitClockKey,
       refreshSession,

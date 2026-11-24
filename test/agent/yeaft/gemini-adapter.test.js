@@ -45,6 +45,64 @@ describe('native Gemini adapter', () => {
     expect(result).toMatchObject({ text: 'ok', stopReason: 'end_turn' });
   });
 
+  it.each(['call', 'stream'])('projects model-tailed control reentry as a final user turn (%s)', async method => {
+    const messages = [
+      { role: 'user', content: 'Check the result when ready.' },
+      { role: 'assistant', content: '', toolCalls: [{ id: 'start', name: 'sub_agent', input: {} }] },
+      { role: 'tool', toolCallId: 'start', content: 'Started.\n\nThe sub-agent reported: ready.' },
+      { role: 'assistant', content: 'I am waiting for the result.' },
+    ];
+    const original = structuredClone(messages);
+    global.fetch = vi.fn(async (_url, init) => {
+      const { contents } = JSON.parse(init.body);
+      if (contents.at(-1)?.role !== 'user') {
+        return new Response(JSON.stringify({ error: { code: 400, message: 'invalid_message_role' } }), { status: 400 });
+      }
+      const response = candidate([{ text: 'The result is ready.' }]);
+      return method === 'stream' ? sse([response]) : json(response);
+    });
+    const request = { ...params, messages, controlReentry: true };
+    if (method === 'stream') {
+      expect((await collect(adapter().stream(request))).at(-1)).toEqual({ type: 'stop', stopReason: 'end_turn' });
+    } else {
+      expect(await adapter().call(request)).toMatchObject({ text: 'The result is ready.', stopReason: 'end_turn' });
+    }
+    const body = JSON.parse(global.fetch.mock.calls[0][1].body);
+    expect(body).not.toHaveProperty('controlReentry');
+    expect(body.contents).toEqual([
+      { role: 'user', parts: [{ text: messages[0].content }] },
+      { role: 'model', parts: [{ functionCall: { id: 'start', name: 'sub_agent', args: {} } }] },
+      { role: 'user', parts: [{ functionResponse: { id: 'start', name: 'sub_agent', response: { output: messages[2].content } } }] },
+      { role: 'model', parts: [{ text: messages[3].content }] },
+      { role: 'user', parts: [{ text: expect.stringMatching(/^\[system note\]/) }] },
+    ]);
+    expect(messages).toEqual(original);
+  });
+
+  it('does not add a control cue to ordinary history, real user input or a function-response turn', async () => {
+    global.fetch = vi.fn(async () => json(candidate([{ text: 'ok' }])));
+    const requestContents = async (messages, controlReentry) => {
+      await adapter().call({ ...params, messages, controlReentry });
+      return JSON.parse(global.fetch.mock.lastCall[1].body).contents;
+    };
+    const assistant = { role: 'assistant', content: 'Ordinary reply' };
+    expect(await requestContents([...params.messages, assistant])).toEqual([
+      { role: 'user', parts: [{ text: 'hello' }] },
+      { role: 'model', parts: [{ text: 'Ordinary reply' }] },
+    ]);
+    expect((await requestContents([...params.messages, assistant, { role: 'user', content: 'Real follow-up' }], true)).at(-1))
+      .toEqual({ role: 'user', parts: [{ text: 'Real follow-up' }] });
+    const batch = [...params.messages, { role: 'assistant', toolCalls: [
+      { id: 'a', name: 'read', input: {} }, { id: 'b', name: 'read', input: {} },
+    ] }];
+    expect((await requestContents(batch, true)).at(-1).role).toBe('model');
+    expect((await requestContents([...batch, { role: 'tool', toolCallId: 'a', content: 'A' },
+      { role: 'tool', toolCallId: 'b', content: 'B' }], true)).at(-1)).toEqual({ role: 'user', parts: [
+      { functionResponse: { id: 'a', name: 'read', response: { output: 'A' } } },
+      { functionResponse: { id: 'b', name: 'read', response: { output: 'B' } } },
+    ] });
+  });
+
   it('streams incremental public thought summaries/text and reports cumulative usage only once including thought cost', async () => {
     global.fetch = vi.fn(async () => sse([
       candidate([{ thought: true, text: 'plan' }], null),

@@ -35,6 +35,19 @@ test('native Session progress is ephemeral, scoped and readable in light/dark at
   // Open the Session in the middle of its turn: the tab never saw vp_turn_start.
   broker.transition({ sessionId: session.id, vpId: event.vpId, turnId: event.turnId, threadId: event.threadId, state: 'tool' });
   broker.broadcastSnapshot({ sessionId: session.id });
+  // A status-only event is visible in the conversation before any tool or
+  // assistant message, without opening the Session activity drawer.
+  const wait = { type: event.type, sessionId: event.sessionId, vpId: event.vpId, threadId: event.threadId,
+    turnId: event.turnId, revision: event.revision++, waitingStage: 'provider' };
+  broker.recordQueryProgress(wait);
+  send(wait);
+  const waitingBanner = page.locator('.messages .yeaft-waiting-stages');
+  await expect(waitingBanner).toContainText('still waiting for the model provider');
+  send({ ...wait, revision: event.revision++, waitingStage: 'tool' });
+  await expect(waitingBanner).toContainText('is running a tool');
+  send({ ...wait, revision: event.revision++, waitingStage: null });
+  await expect(waitingBanner).toHaveCount(0);
+  send(wait); // An out-of-order stage cannot resurrect the banner.
   const toolFrame = data => mockAgent.send({ type: 'yeaft_output', conversationId, sessionId: session.id,
     vpId: event.vpId, turnId: event.turnId, threadId: event.threadId, data });
   const startCall = (id, name, ts) => toolFrame({ type: 'assistant', ts,
@@ -193,7 +206,7 @@ test('native Session progress is ephemeral, scoped and readable in light/dark at
   }, mockAgent.agentId);
   await expect.poll(liveOwners).toEqual([
     { turnId: parallel.turnId, authorized: true, revision: 1 },
-    { turnId: event.turnId, authorized: true, revision: 2 },
+    { turnId: event.turnId, authorized: true, revision: event.revision },
   ]);
   const generation = await page.evaluate(() => window.Pinia.useChatStore().chatHistoryConnectionGeneration);
   const agentId = mockAgent.agentId;
@@ -205,7 +218,7 @@ test('native Session progress is ephemeral, scoped and readable in light/dark at
   await mockAgent.connect();
   expect(mockAgent.agentId).toBe(agentId);
   await expect.poll(() => page.evaluate(id => window.Pinia.useChatStore().agents.some(a => a.id === id && a.online), agentId)).toBe(true);
-  send({ ...event, revision: 3 });
+  send({ ...event, revision: event.revision + 1 });
   send({ ...parallel, revision: 2 });
   broker.transition({ ...event, state: 'streaming' });
   await expect(progresses).toHaveCount(0);
@@ -229,7 +242,7 @@ test('native Session progress is ephemeral, scoped and readable in light/dark at
   broker.broadcastSnapshot();
   await expect.poll(liveOwners).toEqual([
     { turnId: parallel.turnId, authorized: true, revision: 1 },
-    { turnId: event.turnId, authorized: true, revision: 2 },
+    { turnId: event.turnId, authorized: true, revision: event.revision },
   ]);
   await expect(progresses).toHaveCount(2);
   await detailToggle.click();
@@ -237,18 +250,18 @@ test('native Session progress is ephemeral, scoped and readable in light/dark at
   await expect(details.locator('.tool-line.error')).toContainText('newer-9.log');
   await expect(details).not.toContainText('replay-only.txt');
   send({ ...parallel, revision: 2 });
-  send({ ...event, revision: 3, stage: 'recovering', reason: 'repeated_failure' });
+  send({ ...event, revision: event.revision + 1, stage: 'recovering', reason: 'repeated_failure' });
   await expect(progress.getByRole('status')).toHaveText('Recovering · Repeated tool failures');
   await expect(progresses).toHaveCount(2);
   await expect.poll(liveOwners).toEqual([
     { turnId: parallel.turnId, authorized: true, revision: 2 },
-    { turnId: event.turnId, authorized: true, revision: 3 },
+    { turnId: event.turnId, authorized: true, revision: event.revision + 1 },
   ]);
   // Browser reconnect likewise needs a fresh snapshot, not old observations.
   await page.evaluate(() => { const chat = window.Pinia.useChatStore(); chat.connectionState = 'reconnecting'; chat.chatHistoryConnectionGeneration++; });
   await expect(progresses).toHaveCount(0);
   await page.evaluate(() => { window.Pinia.useChatStore().connectionState = 'connected'; });
-  const recovered = { ...event, revision: 3, stage: 'recovering', reason: 'repeated_failure', toolExecutions: 8 };
+  const recovered = { ...event, revision: event.revision + 1, stage: 'recovering', reason: 'repeated_failure', toolExecutions: 8 };
   broker.recordQueryProgress(recovered);
   broker.broadcastSnapshot({ sessionId: session.id });
   await expect(progress).toContainText('Tools 8');
