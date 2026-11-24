@@ -115,7 +115,7 @@ function readLocalLlmConfig(dir) {
   const configPath = join(root, 'config.json');
 
   if (!existsSync(configPath)) {
-    return { providers: [], primaryModel: null, fastModel: null, language: 'en', quickSends: [], availableModels: [], needsSetup: true };
+    return { providers: [], primaryModel: null, fastModel: null, decisionModel: null, language: 'en', quickSends: [], availableModels: [], needsSetup: true };
   }
 
   const raw = readFileSync(configPath, 'utf8');
@@ -126,6 +126,7 @@ function readLocalLlmConfig(dir) {
     providers,
     primaryModel: json.primaryModel || null,
     fastModel: json.fastModel || null,
+    decisionModel: json.decisionModel || null,
     language: json.language || 'en',
     debug: json.debug === true,
     quickSends: publicQuickSends(json.quickSends, availableModels, collectAmbiguousModelRefs(providers)),
@@ -197,6 +198,13 @@ function normalizeManagedModelDefaults(config) {
     && !modelSelectionIsValid(config.fastModel, providers, authoritativeManagedNames)) {
     config.fastModel = validPrimary;
   }
+  if (config.decisionModel
+    && !modelSelectionIsValid(config.decisionModel, providers, authoritativeManagedNames)) {
+    const validFast = modelSelectionIsValid(config.fastModel, providers, authoritativeManagedNames)
+      ? config.fastModel
+      : null;
+    config.decisionModel = validFast || validPrimary;
+  }
 }
 
 /**
@@ -248,6 +256,7 @@ export function updateLlmConfig(update, dir) {
       }
       if (update.primaryModel !== undefined) existing.primaryModel = update.primaryModel || null;
       if (update.fastModel !== undefined) existing.fastModel = update.fastModel || null;
+      if (update.decisionModel !== undefined) existing.decisionModel = update.decisionModel || null;
       if (update.providers !== undefined) normalizeManagedModelDefaults(existing);
       if (update.language !== undefined) existing.language = update.language;
       if (update.debug !== undefined) existing.debug = update.debug === true;
@@ -262,6 +271,7 @@ export function updateLlmConfig(update, dir) {
         providers: Array.isArray(existing.providers) ? existing.providers.map(withGeminiDefault) : [],
         primaryModel: existing.primaryModel || null,
         fastModel: existing.fastModel || null,
+        decisionModel: existing.decisionModel || null,
         language: existing.language || 'en',
         debug: existing.debug === true,
         quickSends: publicQuickSends(existing.quickSends, availableModels, collectAmbiguousModelRefs(existing.providers)),

@@ -400,6 +400,8 @@ function loadLegacyConfig(dir, overrides) {
     providers: null,
     primaryModel: null,
     fastModel: null,
+    decisionModel: null,
+    decisionModelId: null,
   };
 
   // Auto-detect adapter
@@ -486,6 +488,15 @@ export function loadConfig(overrides = {}) {
     fastModelId = parsed.modelId;
   }
 
+  // Resolve decision model (fallback chain: decisionModel -> fastModel -> primaryModel)
+  let decisionModel = jsonConfig.decisionModel || fastModel || primaryModel || null;
+  let decisionModelId = null;
+  if (decisionModel) {
+    const parsed = parseModelRef(decisionModel);
+    decisionModel = parsed.providerName?.startsWith('global:') ? parsed.modelId : decisionModel;
+    decisionModelId = parsed.modelId;
+  }
+
   // Resolve model info for adapter/baseUrl/thinking metadata. Token limits
   // (contextWindow / maxOutputTokens) are NOT read from here — they live in
   // models.dev and are resolved via resolveContextWindow / resolveMaxOutputTokens
@@ -517,6 +528,8 @@ export function loadConfig(overrides = {}) {
     primaryModel: overrides.primaryModel || primaryModel,
     fastModel: overrides.fastModel || fastModel,
     fastModelId: fastModelId,
+    decisionModel: overrides.decisionModel || decisionModel,
+    decisionModelId: decisionModelId,
     fallbackModel: jsonConfig.fallbackModel || null,
     llmRetry: normalizeLlmRetry(jsonConfig.llmRetry, overrides.llmRetry),
     modelInfo: modelInfo || null,
@@ -646,6 +659,10 @@ export function loadConfig(overrides = {}) {
       }
       if (overrides.maxOutputTokens === undefined && jsonConfig.maxOutputTokens === undefined) {
         config.maxOutputTokens = resolveMaxOutputTokens(parsed.modelId, { modelInfo: fallbackModelInfo });
+      }
+      if (!config.decisionModel) {
+        config.decisionModel = firstRef;
+        config.decisionModelId = parsed.modelId;
       }
     }
   }

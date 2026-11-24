@@ -96,6 +96,7 @@ export function formatLlmConfig(config, { reveal = false } = {}) {
   lines.push(`Config: ${config.__configPath || getDefaultYeaftConfigPath()}`);
   lines.push(`Primary model: ${config.primaryModel || '(not set)'}`);
   lines.push(`Fast model: ${config.fastModel || '(not set)'}`);
+  lines.push(`Decision model: ${config.decisionModel || '(not set)'}`);
   lines.push('Providers:');
 
   if (providers.length === 0) {
@@ -184,6 +185,7 @@ export function addOrUpdateProvider(config, options, env = process.env) {
 
   if (options.setPrimary) next.primaryModel = qualifyModelRef(options.setPrimary, name);
   if (options.setFast) next.fastModel = qualifyModelRef(options.setFast, name);
+  if (options.setDecision) next.decisionModel = qualifyModelRef(options.setDecision, name);
 
   return {
     config: next,
@@ -195,12 +197,14 @@ export function addOrUpdateProvider(config, options, env = process.env) {
 export function setLocalModels(config, options) {
   const hasPrimary = Boolean(options.primary);
   const hasFast = Boolean(options.fast);
-  if (!hasPrimary && !hasFast) {
-    throw new Error('set-model requires --primary and/or --fast');
+  const hasDecision = Boolean(options.decision);
+  if (!hasPrimary && !hasFast && !hasDecision) {
+    throw new Error('set-model requires --primary, --fast, and/or --decision');
   }
   const next = { ...config };
   if (hasPrimary) next.primaryModel = requireFullModelRef(options.primary, '--primary');
   if (hasFast) next.fastModel = requireFullModelRef(options.fast, '--fast');
+  if (hasDecision) next.decisionModel = requireFullModelRef(options.decision, '--decision');
   return { config: next };
 }
 
@@ -220,6 +224,10 @@ export function removeProvider(config, options) {
   if (pointsAtProvider(next.fastModel, name)) {
     delete next.fastModel;
     cleared.push('fastModel');
+  }
+  if (pointsAtProvider(next.decisionModel, name)) {
+    delete next.decisionModel;
+    cleared.push('decisionModel');
   }
 
   return { config: next, removed, cleared };
@@ -316,7 +324,7 @@ export async function useGitHubCopilot(config, options = {}) {
 
 export function hasLocalLlmConfig(config = {}) {
   const providers = Array.isArray(config.providers) ? config.providers.filter(Boolean) : [];
-  return providers.length > 0 || Boolean(config.primaryModel) || Boolean(config.fastModel);
+  return providers.length > 0 || Boolean(config.primaryModel) || Boolean(config.fastModel) || Boolean(config.decisionModel);
 }
 
 export function isDefaultSeedLlmConfig(config = {}) {

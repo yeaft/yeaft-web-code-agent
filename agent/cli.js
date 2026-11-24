@@ -212,8 +212,8 @@ export function printLlmHelp() {
     yeaft-agent llm use openai-compatible --name <name> --base-url <url> --api-key-env <ENV> --model <modelId> [--fast <modelId>]
     yeaft-agent llm add-provider --name <name> --base-url <url> --models <m1,m2> \
       [--api-key <key>|--api-key-env <ENV>|--credential-provider github-copilot] \
-      [--protocol anthropic|openai-responses|gemini] [--set-primary <model>] [--set-fast <model>]
-    yeaft-agent llm set-model [--primary <provider/model>] [--fast <provider/model>]
+      [--protocol anthropic|openai-responses|gemini] [--set-primary <model>] [--set-fast <model>] [--set-decision <model>]
+    yeaft-agent llm set-model [--primary <provider/model>] [--fast <provider/model>] [--decision <provider/model>]
     yeaft-agent llm remove-provider --name <name>
 
   Behavior:
@@ -307,6 +307,7 @@ async function handleLlmCommand(args) {
       console.log(`${result.replaced ? 'Updated' : 'Added'} provider: ${result.provider.name}`);
       if (result.config.primaryModel) console.log(`Primary model: ${result.config.primaryModel}`);
       if (result.config.fastModel) console.log(`Fast model: ${result.config.fastModel}`);
+      if (result.config.decisionModel) console.log(`Decision model: ${result.config.decisionModel}`);
       return;
     }
 
@@ -315,6 +316,7 @@ async function handleLlmCommand(args) {
       writeLocalLlmConfig(result.config, configPath, current);
       if (result.config.primaryModel) console.log(`Primary model: ${result.config.primaryModel}`);
       if (result.config.fastModel) console.log(`Fast model: ${result.config.fastModel}`);
+      if (result.config.decisionModel) console.log(`Decision model: ${result.config.decisionModel}`);
       return;
     }
 
@@ -418,9 +420,11 @@ export async function handleListModels(
       const id = typeof m === 'string' ? m : m?.id;
       if (!id) continue;
       const ref = `${provider.name}/${id}`;
-      const annot = ref === config.primaryModel ? ' ← primary'
-        : ref === config.fastModel ? ' ← fast'
-        : '';
+      const tags = [];
+      if (ref === config.primaryModel) tags.push('primary');
+      if (ref === config.fastModel) tags.push('fast');
+      if (ref === config.decisionModel) tags.push('decision');
+      const annot = tags.length ? ` ← ${tags.join(', ')}` : '';
       console.log(`    ${ref}${annot}`);
     }
   }

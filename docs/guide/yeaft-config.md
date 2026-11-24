@@ -76,6 +76,7 @@ That's enough — the engine will run.
 | `providers` | `Provider[]` | ✓ | — | LLM provider list |
 | `primaryModel` | `string` | ✓ | — | Primary model, format `<provider>/<model-id>` |
 | `fastModel` | `string` | — | `primaryModel` | Lightweight model for active internal tasks such as classification |
+| `decisionModel` | `string` | — | `fastModel` → `primaryModel` | Low-latency model for internal Decision scenarios (routing, Session matching, folder/scene planning) |
 | `language` | `'en' \| 'zh'` | — | `'en'` | System prompt language |
 | `debug` | `boolean` | — | `false` | Log raw LLM request/response to console |
 | `maxContextTokens` | `number` | — | `1000000` | Provider context-window reference used for request guards |

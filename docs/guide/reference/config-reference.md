@@ -15,6 +15,7 @@ This chapter is the **field-by-field** reference for an Agent instance's Yeaft `
 | `providers` | `Provider[]` | — (required) | LLM provider list |
 | `primaryModel` | `string` | — (required) | Primary model `<provider>/<model-id>` |
 | `fastModel` | `string` | `primaryModel` | Lightweight model for active internal tasks such as classification |
+| `decisionModel` | `string` | `fastModel` → `primaryModel` | Low-latency model dedicated to system-owned Decision scenarios (Session/thread routing, scene & folder planning) |
 | `fallbackModel` | `string` | `null` | Model used when the primary fails with a retryable error |
 | `language` | `'en' \| 'zh'` | `'en'` | System prompt language |
 | `debug` | `boolean` | `false` | Verbose-log raw LLM req/resp + engine events to stdout |

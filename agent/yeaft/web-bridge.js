@@ -145,6 +145,7 @@ import { pairSanitize } from './pair-sanitize.js';
 import { filterSnapshotForVp } from './snapshot-filter.js';
 import { createVpStatusBroker, isVpStatusRunning, normalizeVpErrorDetail } from './vp-status-broker.js';
 import { classifyThread as defaultClassifyThread, fallbackTitle } from './vp/thread-classifier.js';
+import { resolveDecisionModel } from './decision/index.js';
 import { listMcpServers, upsertMcpServer, removeMcpServer } from './config-api.js';
 import { buildMcpFlattenedTools } from './tools/mcp-tools.js';
 import { getAgentRegistry, agentBelongsToScope } from './tools/agent.js';
@@ -963,6 +964,8 @@ function engineConfigKey(config) {
     modelEffort: config?.modelEffort || '',
     fastModel: config?.fastModel || '',
     fastModelId: config?.fastModelId || '',
+    decisionModel: config?.decisionModel || '',
+    decisionModelId: config?.decisionModelId || '',
     fallbackModel: config?.fallbackModel || '',
     plugins: config?.plugins || {},
     providers: Array.isArray(config?.providers) ? config.providers : [],
@@ -1349,7 +1352,9 @@ async function classifySessionUserInput(sessionId, messageId, text, ingress, tur
   if (running.length && !turnConfig) {
     try {
       const decision = await classifyWithDeadline({ adapter: session?.adapter,
-        model: session?.config?.fastModel || session?.config?.model,
+        config: session?.config,
+        model: resolveDecisionModel(session?.config),
+        sessionId,
         vp: { vpId: 'session', displayName: 'Session' },
         runningThreads: [...representatives.values()].map(thread => ({ ...threadSnapshotForClassifier(thread),
           userTurnId: thread.userTurnId, vpId: thread.vpId,
@@ -2752,7 +2757,9 @@ async function routeActiveEnvelopeToVpThread(sessionId, vpId, envelope, ingress)
     try {
       decision = await classifyWithDeadline({
         adapter: session?.adapter,
-        model: session?.config?.fastModel || session?.config?.model,
+        config: session?.config,
+        model: resolveDecisionModel(session?.config),
+        sessionId,
         vp: readVpForClassifier(vpId),
         runningThreads: runningThreads.map(threadSnapshotForClassifier),
         newQuery: text,
