@@ -1,15 +1,25 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
+import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { EnvHttpProxyAgent } from 'undici';
 import { OpenAIChatCompletionsAdapter } from '../../../agent/yeaft/llm/openai-chat-completions.js';
+import { OpenAIResponsesAdapter } from '../../../agent/yeaft/llm/openai-responses.js';
+import { AnthropicAdapter } from '../../../agent/yeaft/llm/anthropic.js';
 import { AdapterRouter } from '../../../agent/yeaft/llm/router.js';
 import {
   createLLMAdapter,
+  createModelFetchDispatcher,
+  fetchWithHeadersTimeout,
+  classifyFetchError,
   LLMToolInputError,
   LLMContextError,
   LLMHeadersTimeoutError,
+  LLMStreamIdleTimeoutError,
+  LLMServerError,
 } from '../../../agent/yeaft/llm/adapter.js';
+import fileWriteTool from '../../../agent/yeaft/tools/file-write.js';
 import {
   createProviderContext,
   createProviderState,
@@ -533,5 +543,228 @@ describe('OpenAI Chat Completions protocol adapter & continuity', () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+
+    // FileWrite guidance encourages modular files and incremental FileEdit builds in both EN and ZH.
+    expect(fileWriteTool.description.en).toMatch(/modular/i);
+    expect(fileWriteTool.description.en).toMatch(/FileEdit/);
+    expect(fileWriteTool.description.zh).toMatch(/模块/);
+    expect(fileWriteTool.description.zh).toMatch(/FileEdit/);
+  });
+
+  it('disables Undici 300s bodyTimeout on model fetch and classifies upstream stream timeouts into step-down retries', async () => {
+    // 1. Real local HTTP socket proves fetchWithHeadersTimeout attaches an explicit Undici dispatcher
+    //    with bodyTimeout disabled (while a short dispatcher triggers UND_ERR_BODY_TIMEOUT -> LLMStreamIdleTimeoutError).
+    const server = createServer((_req, res) => {
+      res.writeHead(200, { 'content-type': 'text/event-stream' });
+      res.flushHeaders();
+      const timer = setTimeout(() => res.end('data: ok\n\n'), 1250);
+      res.on('close', () => clearTimeout(timer));
+    });
+    await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+    const url = `http://127.0.0.1:${server.address().port}`;
+    const shortDispatcher = createModelFetchDispatcher({ bodyTimeout: 100 });
+    try {
+      const shortRes = await fetchWithHeadersTimeout(url, { dispatcher: shortDispatcher }, 5_000);
+      let rawErr = null;
+      try {
+        await shortRes.text();
+      } catch (err) {
+        rawErr = err;
+      }
+      expect(rawErr).toBeTruthy();
+      const classifiedBodyTimeout = classifyFetchError(rawErr, { providerLabel: 'Chat Completions' });
+      expect(classifiedBodyTimeout).toBeInstanceOf(LLMStreamIdleTimeoutError);
+      expect(classifiedBodyTimeout).toBeInstanceOf(LLMServerError);
+
+      let seenDispatcher = null;
+      const realFetch = globalThis.fetch;
+      vi.stubGlobal('fetch', vi.fn((u, init) => {
+        seenDispatcher = init?.dispatcher;
+        return realFetch(u, init);
+      }));
+      const okRes = await fetchWithHeadersTimeout(url, {}, 5_000);
+      expect(seenDispatcher).toBeTruthy();
+      expect(await okRes.text()).toBe('data: ok\n\n');
+    } finally {
+      vi.unstubAllGlobals();
+      await shortDispatcher.close();
+      await new Promise(resolve => {
+        server.close(() => resolve());
+        server.closeAllConnections?.();
+      });
+    }
+
+    // 2. Env proxy dispatcher selection (NODE_USE_ENV_PROXY=1 & NODE_OPTIONS) and classifyFetchError nested timeouts.
+    vi.stubEnv('NODE_USE_ENV_PROXY', '1');
+    const envDispatcher = createModelFetchDispatcher();
+    try {
+      expect(envDispatcher).toBeInstanceOf(EnvHttpProxyAgent);
+    } finally {
+      await envDispatcher.close();
+      vi.unstubAllEnvs();
+    }
+    vi.stubEnv('NODE_OPTIONS', '--trace-warnings --use-env-proxy');
+    const nodeOptDispatcher = createModelFetchDispatcher();
+    try {
+      expect(nodeOptDispatcher).toBeInstanceOf(EnvHttpProxyAgent);
+    } finally {
+      await nodeOptDispatcher.close();
+      vi.unstubAllEnvs();
+    }
+
+    const nestedBodyTimeout = new Error('outer', {
+      cause: new TypeError('terminated', {
+        cause: Object.assign(new Error('Body Timeout Error'), { code: 'UND_ERR_BODY_TIMEOUT' }),
+      }),
+    });
+    expect(classifyFetchError(nestedBodyTimeout)).toBeInstanceOf(LLMStreamIdleTimeoutError);
+    const headersTimeout = new TypeError('fetch failed', {
+      cause: Object.assign(new Error('Headers Timeout Error'), { code: 'UND_ERR_HEADERS_TIMEOUT' }),
+    });
+    expect(classifyFetchError(headersTimeout)).toBeInstanceOf(LLMHeadersTimeoutError);
+
+    // 3. Stream error classification across Chat Completions and Responses.
+    const adapter = new OpenAIChatCompletionsAdapter({ baseUrl: 'https://proxy.invalid/v1', apiKey: 'k' });
+    const streamFrame = payload => sse([payload]);
+
+    vi.stubGlobal('fetch', vi.fn(async () => streamFrame({
+      error: { message: 'Upstream stream timed out waiting for data.', type: 'upstream_error', code: 'upstream_stream_timeout' },
+    })));
+    const timeoutEvents = await collect(adapter.stream({ model: 'gemini-4-carbon', messages: [{ role: 'user', content: 'hi' }] }));
+    expect(timeoutEvents.at(-1).error).toBeInstanceOf(LLMStreamIdleTimeoutError);
+    expect(timeoutEvents.at(-1).error).toMatchObject({ upstream: true, reasonCode: 'upstream_stream_timeout', code: 'upstream_stream_timeout' });
+    expect(timeoutEvents.at(-1).retryable).toBe(true);
+
+    vi.stubGlobal('fetch', vi.fn(async () => streamFrame({
+      error: { message: 'terminated', type: 'upstream_error', code: null },
+    })));
+    const legacyTerminated = await collect(adapter.stream({ model: 'gemini-4-carbon', messages: [{ role: 'user', content: 'hi' }] }));
+    expect(legacyTerminated.at(-1).error).toBeInstanceOf(LLMStreamIdleTimeoutError);
+    expect(legacyTerminated.at(-1).retryable).toBe(true);
+
+    vi.stubGlobal('fetch', vi.fn(async () => streamFrame({
+      error: { message: 'socket hang up', type: 'upstream_error', code: null },
+    })));
+    const genericUpstream = await collect(adapter.stream({ model: 'gemini-4-carbon', messages: [{ role: 'user', content: 'hi' }] }));
+    expect(genericUpstream.at(-1).error).toBeInstanceOf(LLMServerError);
+    expect(genericUpstream.at(-1).error).not.toBeInstanceOf(LLMStreamIdleTimeoutError);
+    expect(genericUpstream.at(-1).retryable).toBe(true);
+
+    vi.stubGlobal('fetch', vi.fn(async () => streamFrame({
+      error: { message: 'terminated', type: 'upstream_error', code: 'invalid_request_error' },
+    })));
+    const explicit4xx = await collect(adapter.stream({ model: 'gemini-4-carbon', messages: [{ role: 'user', content: 'hi' }] }));
+    expect(explicit4xx.at(-1).error).not.toBeInstanceOf(LLMServerError);
+    expect(explicit4xx.at(-1).retryable).toBe(false);
+
+    vi.stubGlobal('fetch', vi.fn(async () => streamFrame({
+      error: { message: 'too long', type: 'upstream_error', code: 'context_length_exceeded' },
+    })));
+    const contextErr = await collect(adapter.stream({ model: 'gemini-4-carbon', messages: [{ role: 'user', content: 'hi' }] }));
+    expect(contextErr.at(-1).error).toBeInstanceOf(LLMContextError);
+    expect(contextErr.at(-1).retryable).toBe(false);
+
+    const responsesAdapter = new OpenAIResponsesAdapter({ baseUrl: 'https://proxy.invalid/v1', apiKey: 'k' });
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(
+      `event: response.failed\ndata: ${JSON.stringify({
+        type: 'response.failed',
+        response: { status: 'failed', error: { type: 'upstream_error', code: 'upstream_stream_timeout', message: 'Upstream stream timed out.' } },
+      })}\n\n`,
+      { headers: { 'content-type': 'text/event-stream' } },
+    )));
+    const respEvents = await collect(responsesAdapter.stream({ model: 'gpt-5', messages: [{ role: 'user', content: 'hi' }] }));
+    expect(respEvents.at(-1).error).toBeInstanceOf(LLMStreamIdleTimeoutError);
+    expect(respEvents.at(-1).retryable).toBe(true);
+
+    const anthropicAdapter = new AnthropicAdapter({ baseUrl: 'https://proxy.invalid', apiKey: 'k' });
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(
+      `event: error\ndata: ${JSON.stringify({
+        type: 'error',
+        error: { type: 'upstream_error', code: 'upstream_stream_timeout', message: 'Upstream stream timed out.' },
+      })}\n\n`,
+      { headers: { 'content-type': 'text/event-stream' } },
+    )));
+    const anthropicEvents = await collect(anthropicAdapter.stream({ model: 'claude-sonnet-4-6', messages: [{ role: 'user', content: 'hi' }] }));
+    expect(anthropicEvents.at(-1).error).toBeInstanceOf(LLMStreamIdleTimeoutError);
+    expect(anthropicEvents.at(-1).error.code).toBe('upstream_stream_timeout');
+    expect(anthropicEvents.at(-1).retryable).toBe(true);
+
+    // 4. End-to-end Engine: upstream_stream_timeout and legacy terminated trigger effort step-down + older tool compaction.
+    const bodies = [];
+    let callCount = 0;
+    vi.stubGlobal('fetch', vi.fn(async (_u, init) => {
+      bodies.push(JSON.parse(init.body));
+      callCount++;
+      if (callCount === 1) {
+        return sse([
+          { id: 'c1', choices: [{ index: 0, delta: { tool_calls: [{ index: 0, id: 'call_old', type: 'function', function: { name: 'big_read', arguments: '{}' } }] }, finish_reason: 'tool_calls' }] },
+          '[DONE]',
+        ]);
+      }
+      if (callCount === 2) {
+        return sse([
+          { id: 'c2', choices: [{ index: 0, delta: { tool_calls: [{ index: 0, id: 'call_new', type: 'function', function: { name: 'big_read', arguments: '{}' } }] }, finish_reason: 'tool_calls' }] },
+          '[DONE]',
+        ]);
+      }
+      if (callCount === 3) {
+        return streamFrame({
+          error: { message: 'terminated', type: 'upstream_error', code: null },
+        });
+      }
+      if (callCount === 4) {
+        return streamFrame({
+          error: { message: 'Upstream stream timed out waiting for data.', type: 'upstream_error', code: 'upstream_stream_timeout' },
+        });
+      }
+      return sse([
+        { id: 'c5', choices: [{ index: 0, delta: { content: 'Recovered after step-down.' }, finish_reason: 'stop' }] },
+        '[DONE]',
+      ]);
+    }));
+
+    const router = new AdapterRouter({
+      providers: [{
+        name: 'copilot',
+        protocol: 'openai-chat-completions',
+        baseUrl: 'https://proxy.invalid/v1',
+        apiKey: 'k',
+        models: ['gemini-4-neon'],
+      }],
+    });
+    const tools = new ToolRegistry();
+    tools.register(defineTool({
+      name: 'big_read',
+      description: 'returns large output',
+      parameters: { type: 'object', properties: {} },
+      execute: async () => 'x'.repeat(24_000),
+    }));
+    const engine = new Engine({
+      adapter: router,
+      toolRegistry: tools,
+      trace: new NullTrace(),
+      config: {
+        model: 'copilot/gemini-4-neon',
+        modelEffort: 'xhigh',
+        maxOutputTokens: 1024,
+        projectDocMaxBytes: 0,
+        llmRetry: { maxRetries: 3, baseDelayMs: 0, maxDelayMs: 0, jitterRatio: 0 },
+      },
+    });
+    const engineEvents = [];
+    for await (const event of engine.query({ prompt: 'Run multi-step task' })) {
+      engineEvents.push(event);
+    }
+    expect(engineEvents.find(e => e.type === 'turn_end' && e.terminal)).toMatchObject({ stopReason: 'end_turn', terminal: true });
+    // Loop 3 starts at xhigh -> legacy terminated steps down to high -> upstream_stream_timeout steps down to medium.
+    expect(bodies.map(b => b.reasoning_effort)).toEqual(['xhigh', 'xhigh', 'xhigh', 'high', 'medium']);
+    const retries = engineEvents.filter(e => e.type === 'llm_retry');
+    expect(retries).toHaveLength(2);
+    expect(retries[0]).toMatchObject({ reason: 'stream_idle_timeout', effortFrom: 'xhigh', effortTo: 'high' });
+    expect(retries[1]).toMatchObject({ reason: 'stream_idle_timeout', effortFrom: 'high', effortTo: 'medium' });
+    // Older tool result (call_old) compacted on timeout retry while latest batch (call_new) stays lossless.
+    const retryBodyTools = bodies[3].messages.filter(m => m.role === 'tool');
+    expect(retryBodyTools.find(m => m.tool_call_id === 'call_old').content.length).toBeLessThan(10_000);
+    expect(retryBodyTools.find(m => m.tool_call_id === 'call_new').content.length).toBe(24_000);
   });
 });
