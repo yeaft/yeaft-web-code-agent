@@ -8,6 +8,7 @@ export const CORE_TEST_FILES = Object.freeze([
   "test/agent/unix-upgrade.test.js",
   "test/agent/sub-agent/execution-control.test.js",
   "test/agent/sub-agent/sub-agent-reliability.test.js",
+  "test/agent/sub-agent/sub-agent-selection.test.js",
   "test/agent/yeaft/conversation/persist.test.js",
   "test/agent/yeaft/conversation/session-history.test.js",
   "test/agent/yeaft/anthropic-protocol.test.js",

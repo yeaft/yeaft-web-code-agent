@@ -184,22 +184,32 @@ function capabilityContext(protocol, effortContext) {
 /**
  * Resolve the non-disableable child ceiling using the actual model's capabilities.
  * Unknown/omitted parent wire defaults are conservative medium, never chat/max.
+ * When `targetEffort` is explicitly supplied by the sub-agent delegation (e.g.
+ * explicit `effort` arg or `designer` persona's `defaultEffort: 'xhigh'`),
+ * that validated target becomes the child's ceiling instead of the default
+ * `medium` cap, while still enforcing model capability and wire invariants.
  */
-export function resolveSubAgentEffort({ parentDecision = null, model, effortContext = {}, protocol } = {}) {
+export function resolveSubAgentEffort({ parentDecision = null, model, effortContext = {}, protocol, targetEffort = null } = {}) {
   const parent = snapshotEffortDecision(parentDecision);
+  const context = capabilityContext(protocol, effortContext);
+  const preserveNative = (protocol || effortContext?.protocol) === 'gemini';
+  const explicitTarget = normalizeEffort(targetEffort, preserveNative);
+
   // An unsupported intermediate model has no wire effort, but must not erase
   // an inherited lower ceiling when it delegates again.
   let parentTarget = parent.effective || 'medium';
   if (parent.cap && atMost(parent.cap, parentTarget)) parentTarget = parent.cap;
-  // Keep the existing child ceiling below the retired high tier; do not
-  // increase child cost to xhigh when the public tiers are consolidated.
-  const target = atMost(parentTarget, 'medium') ? parentTarget : 'medium';
-  const context = capabilityContext(protocol, effortContext);
+  // Explicit delegation effort (or persona defaultEffort like designer -> xhigh)
+  // overrides the default medium ceiling; omitted effort preserves the existing
+  // child ceiling so ordinary sub-agents stay conservative.
+  const target = explicitTarget || (atMost(parentTarget, 'medium') ? parentTarget : 'medium');
   const capability = getThinkingCapability(model, context);
+  const isGeminiLevel = capability.thinkingProtocol === 'gemini' && capability.maxBudgetTokens === null;
   const base = {
-    requested: parentTarget, source: parent.effective ? 'inherited' : 'fallback',
+    requested: explicitTarget || parentTarget,
+    source: explicitTarget ? 'explicit' : (parent.effective ? 'inherited' : 'fallback'),
     model, cap: target, thinkingEnabled: false,
-    ...(['minimal', 'low'].includes(target) ? { nativeEffortCap: true } : {}),
+    ...((['minimal', 'low'].includes(target) || (isGeminiLevel && target === 'high')) ? { nativeEffortCap: true } : {}),
   };
   if (!capability.supportsThinking || capability.thinkingProtocol === 'none') {
     return snapshotEffortDecision({ ...base, effective: null, wireMode: 'unsupported' });
@@ -209,7 +219,8 @@ export function resolveSubAgentEffort({ parentDecision = null, model, effortCont
   if (!effective) throw effortError(model, target);
   const wireMode = protocol === 'openai-responses' || capability.thinkingProtocol === 'openai-reasoning'
     ? 'reasoning-effort'
-    : capability.thinkingProtocol === 'anthropic-adaptive' ? 'adaptive' : 'manual';
+    : isGeminiLevel ? 'thinking-level'
+      : capability.thinkingProtocol === 'anthropic-adaptive' ? 'adaptive' : 'manual';
   return snapshotEffortDecision({ ...base, effective, wireMode, thinkingEnabled: true });
 }
 
@@ -272,7 +283,11 @@ function removeEffortField(body, key) {
  */
 export function enforceSubAgentEffortPayload(body, { model, protocol, effortContext = {}, effortConstraint } = {}) {
   if (!effortConstraint) return captureEffortDecision({ body, model, protocol, effortContext });
-  const decision = resolveSubAgentEffort({ parentDecision: effortConstraint.parentDecision, model, protocol, effortContext });
+  const decision = resolveSubAgentEffort({
+    parentDecision: effortConstraint.parentDecision,
+    targetEffort: effortConstraint.targetEffort ?? null,
+    model, protocol, effortContext,
+  });
   if (decision.wireMode === 'unsupported') {
     removeEffortField(body, 'reasoning');
     removeEffortField(body, 'output_config');

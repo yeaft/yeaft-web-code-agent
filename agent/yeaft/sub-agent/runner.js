@@ -37,10 +37,12 @@
 
 import { Engine } from '../engine.js';
 import { snapshotEffortDecision } from '../effort.js';
+import { getModelInfo, parseModelRef, resolveContextWindow, resolveMaxOutputTokens } from '../models.js';
 import { SubAgentToolRegistry, resolveSubAgentBudget, createExecutionStats } from './execution-control.js';
 import { getPersona } from '../personas.js';
 import { RESTRICTED_TOOLS, createChildToolPolicy } from './tool-access.js';
 import { buildSpawnedPreamble } from './spawned-prompt.js';
+import { resolveSubAgentSelection } from './selection.js';
 import { STATUS, isTerminalAgentStatus } from './status.js';
 import { describeAgentOutcome } from './outcome.js';
 import { createOutputLog } from './output-log.js';
@@ -141,13 +143,79 @@ export function startSubAgent(agent, deps = {}) {
     agent.budget = resolveSubAgentBudget(agent.budget);
     agent.execution = agent.execution || createExecutionStats();
     const childRegistry = buildChildToolRegistry(deps.parentToolRegistry, { agent });
+    const persona = agent.personaData || getPersona(agent.persona) || null;
+    const resolvedSelection = agent.selection || resolveSubAgentSelection({
+      requestedModel: agent.requestedModel ?? null,
+      requestedEffort: agent.requestedEffort ?? null,
+      requestedScene: agent.requestedScene ?? null,
+      personaId: agent.persona ?? null,
+      personaData: persona,
+      config: deps.config || null,
+      parentModel: deps.parentModel || deps.config?.model || null,
+      parentSceneId: deps.parentVpPersona?.sceneId ?? null,
+    });
+    if (!resolvedSelection.ok) {
+      throw new Error(resolvedSelection.error || 'Invalid sub-agent model/effort/scene selection');
+    }
+    agent.selection = resolvedSelection;
+    agent.model = resolvedSelection.model || deps.config?.model || null;
+    agent.modelSource = resolvedSelection.modelSource || 'inherited';
+    agent.effort = resolvedSelection.effort || null;
+    agent.effortSource = resolvedSelection.effortSource || 'inherited';
+    agent.scene = resolvedSelection.sceneId || null;
+    agent.sceneSource = resolvedSelection.sceneSource || 'none';
+
+    const childConfig = {
+      ...deps.config,
+      _readOnly: true,
+      _gitReadAlwaysVisible: persona?.id === 'reviewer' || persona?.id === 'designer',
+    };
+    if (agent.model && agent.model !== childConfig.model) {
+      const parsedChildModel = parseModelRef(agent.model);
+      const modelEntry = resolvedSelection.modelEntry
+        || childConfig.availableModels?.find(entry => entry.ref === agent.model || entry.id === parsedChildModel.modelId)
+        || null;
+      const childModelInfo = getModelInfo(parsedChildModel.modelId, modelEntry) || null;
+      const parentModelId = parseModelRef(deps.config?.model || deps.config?.primaryModel || '').modelId;
+      const parentDefaultMaxOutput = parentModelId
+        ? resolveMaxOutputTokens(parentModelId, {
+            modelInfo: deps.config?.modelInfo,
+            availableModels: deps.config?.availableModels,
+          })
+        : null;
+      const explicitOutputCap = Number.isFinite(deps.config?.maxOutputTokens) && deps.config.maxOutputTokens > 0
+        && (!Number.isFinite(parentDefaultMaxOutput) || deps.config.maxOutputTokens < parentDefaultMaxOutput)
+        ? Math.floor(deps.config.maxOutputTokens)
+        : null;
+      childConfig.model = agent.model;
+      childConfig.primaryModel = agent.model;
+      childConfig.modelInfo = childModelInfo;
+      const modelMaxOutput = resolveMaxOutputTokens(parsedChildModel.modelId, {
+        modelInfo: childModelInfo,
+        availableModels: childConfig.availableModels,
+      });
+      childConfig.maxContextTokens = resolveContextWindow(parsedChildModel.modelId, {
+        modelInfo: childModelInfo,
+        availableModels: childConfig.availableModels,
+      });
+      childConfig.maxOutputTokens = explicitOutputCap !== null
+        ? Math.min(explicitOutputCap, modelMaxOutput)
+        : modelMaxOutput;
+    }
+    if (resolvedSelection.modelSource === 'explicit') {
+      // Fail-closed explicit model override must not silently fall back to an
+      // unrelated parent fallbackModel on transient provider retry exhaustion.
+      childConfig.fallbackModel = null;
+    }
+    // Always set childConfig.modelEffort explicitly so ordinary sub-agents
+    // (explicitEffortTarget === null) do not inherit a parent Session's `max`
+    // effort and inflate Anthropic manual thinking max_tokens before clamping.
+    childConfig.modelEffort = resolvedSelection.explicitEffortTarget || null;
+
     subEngine = new Engine({
       adapter: deps.adapter,
       trace: deps.trace,
-      config: {
-        ...deps.config, _readOnly: true,
-        _gitReadAlwaysVisible: (agent.personaData || getPersona(agent.persona))?.id === 'reviewer',
-      },
+      config: childConfig,
       conversationStore: null,
       memoryIndex: null,
       memoryStore: null,
@@ -181,7 +249,19 @@ export function startSubAgent(agent, deps = {}) {
     if (agent.taskId && deps.taskManager && agent.parentSessionId) {
       try { deps.taskManager.setTaskLogPath(agent.parentSessionId, agent.taskId, agent.outputFile); } catch { /* ignore */ }
     }
-    outputLog.write({ type: 'sub_agent_spawned', agentId: agent.id, agentName: agent.name, mission: agent.mission || agent.task || '', parentEffortDecision: agent.parentEffortDecision });
+    outputLog.write({
+      type: 'sub_agent_spawned',
+      agentId: agent.id,
+      agentName: agent.name,
+      mission: agent.mission || agent.task || '',
+      persona: agent.persona || null,
+      scene: agent.scene || null,
+      model: agent.model || null,
+      modelSource: agent.modelSource || null,
+      effort: agent.effort || null,
+      effortSource: agent.effortSource || null,
+      parentEffortDecision: agent.parentEffortDecision,
+    });
 
     // Compose the system-prompt-overlay we want injected.
     const preamble = buildSpawnedPreamble({
@@ -190,7 +270,8 @@ export function startSubAgent(agent, deps = {}) {
       agentName: agent.name,
       mission: (agent.mission || agent.task || '') + (agent.baseline ? `\n\nWorkspace baseline: ${agent.baseline}` : ''),
       expectedOutput: agent.expected_output,
-      presetPrompt: (agent.personaData || getPersona(agent.persona))?.systemPrompt,
+      presetPrompt: persona?.systemPrompt,
+      sceneId: agent.scene || null,
       budget: agent.budget,
       allowTools: agent.allowTools || [],
       language: deps.language ?? deps.config?.language ?? 'en',
@@ -200,6 +281,11 @@ export function startSubAgent(agent, deps = {}) {
       deps.parentVpPersona && typeof deps.parentVpPersona === 'object'
         ? { ...deps.parentVpPersona }
         : {};
+    if (agent.scene) {
+      baseVpPersona.sceneId = agent.scene;
+    } else {
+      delete baseVpPersona.sceneId;
+    }
     // Keep the spawned-agent contract outside the inherited VP soul. Stock
     // souls can contain bilingual section markers, and persona rendering selects
     // one language section before provider dispatch; appending the preamble to
@@ -213,6 +299,7 @@ export function startSubAgent(agent, deps = {}) {
       parentVpId: deps.parentVpId || null,
       agentId: agent.id,
       agentName: agent.name,
+      sceneId: agent.scene || null,
     };
 
     agent.subVpPersona = baseVpPersona;
@@ -476,6 +563,7 @@ async function driveSubAgent(agent, subEngine, vpPersona, deps) {
       try {
         agent.activeParentEffortDecision = queuedPrompt.parentEffortDecision;
         emit({ type: 'sub_agent_effort_snapshot', parentEffortDecision: queuedPrompt.parentEffortDecision });
+        const explicitEffortTarget = agent.selection?.explicitEffortTarget || null;
         const stream = subEngine.query({
           prompt: queuedPrompt.prompt,
           messages: agent.engineMessages,
@@ -483,6 +571,8 @@ async function driveSubAgent(agent, subEngine, vpPersona, deps) {
           scenario: 'sub_agent',
           isSubAgent: true,
           parentEffortDecision: queuedPrompt.parentEffortDecision,
+          subAgentTargetEffort: explicitEffortTarget,
+          userEffort: explicitEffortTarget,
           vpPersona,
           sessionId: agent.parentSessionId || deps.parentSessionId || null,
           threadId: agent.id,
