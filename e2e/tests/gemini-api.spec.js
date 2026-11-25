@@ -137,6 +137,8 @@ test(`Gemini configuration discovery and Session roundtrip (${theme}, ${width}px
     const { effortOptions, defaultEffort, thinkingProtocol } = capability;
     return { ...model, ref: `google/${model.id}`, provider: 'google', label: model.id, effortProtocol: thinkingProtocol, effortOptions, defaultEffort, ...geminiEffortCatalog(model.id, capability) };
   });
+  const chat = { id: 'gemini-4-carbon', protocol: 'openai-chat-completions', provider: 'chat', label: 'Carbon via Chat', ref: 'chat/gemini-4-carbon' };
+  catalog.push({ ...chat, effortOptions: getThinkingCapability(chat.id, chat).effortOptions });
   mockAgent.send({ type: 'yeaft_output', event: { type: 'yeaft_status', model: catalog[0].ref,
     catalogEpoch: 'gemini-e2e', catalogRevision: 1, catalogRefreshedAt: Date.now(), availableModels: catalog } });
   await expect.poll(() => page.evaluate(() => window.Pinia.useChatStore().sidebarSessionCatalog.some(row => row.routeRef.sessionId === 'ordinary-session'))).toBe(true);
@@ -190,6 +192,14 @@ test(`Gemini configuration discovery and Session roundtrip (${theme}, ${width}px
   await chooseEffort(neonLevels, 'Medium', 'medium');
   await chooseEffort(neonLevels, 'High', 'high');
   await chooseEffort(neonLevels, 'X-High', 'xhigh');
+
+  // Switch from a saved X-High to Carbon on Chat Completions; verify the
+  // actual relayed Session write, not just the label painted by the picker.
+  await modelTrigger.press('Enter');
+  await modelMenu.getByRole('menuitemradio', { name: /Carbon via Chat/ }).click();
+  await expect.poll(() => state.inventory.sessions.get('ordinary-session').config).toMatchObject({ model: chat.ref, modelEffort: 'high' });
+  await chooseEffort(['Medium', 'High'], 'Medium', 'medium');
+  await chooseEffort(['Medium', 'High'], 'High', 'high');
 
   await page.screenshot({ path: testInfo.outputPath(`${mode}-session-${theme}-${width}.png`) });
   expect(externalRequests).toEqual([]);

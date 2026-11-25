@@ -88,6 +88,7 @@ export class LLMAdapter {
 ### OpenAIChatCompletionsAdapter (`openai-chat-completions.js`)
 - 对 OpenAI Chat Completions API `/v1/chat/completions`（`protocol: "openai-chat-completions"`）
 - 支持 `max_completion_tokens`、顶层 `reasoning_effort`、`stream_options.include_usage`、`prompt_cache_key`（遇上游拒绝自动单次回退）、函数工具及多模态用户/工具图片
+- Chat Completions 的 **High** 发送 `reasoning_effort: "high"`，与 **X-High** 是不同档位。`gemini-4-carbon` 可选 Medium、High；旧会话保存的 X-High、Max、Ultra 会按模型实际允许的最高档发送（不超过 High），不改写会话记录。其他协议沿用各自的档位。
 - 通过受归属保护的 `providerState` 捕获并原样回传 `reasoning_opaque` 与 `reasoning_text` / `reasoning_content` / `reasoning`，保证 Copilot Proxy Gemini 及兼容网关在多轮工具循环中的思考签名与缓存连续性
 
 ## AdapterRouter（`router.js`）

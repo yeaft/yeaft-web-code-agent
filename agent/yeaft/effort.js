@@ -21,7 +21,7 @@
  */
 
 import {
-  normalizeEffort, getThinkingCapability, getModelEffortOptions, thinkingBudgetForEffort,
+  normalizeEffort, normalizeChatEffort, resolveChatEffort, getThinkingCapability, getModelEffortOptions, thinkingBudgetForEffort,
 } from './models.js';
 
 /**
@@ -136,7 +136,8 @@ export function stepDownRetryEffort(effort, { model, protocol, effortContext = {
   const capability = getThinkingCapability(model, ctx);
   if (!capability.supportsThinking || capability.thinkingProtocol === 'none') return null;
   const native = capability.thinkingProtocol === 'gemini' && capability.maxBudgetTokens === null;
-  const current = normalizeEffort(effort, native);
+  const current = ctx.protocol === 'openai-chat-completions'
+    ? resolveChatEffort(model, effort, capability.effortOptions) : normalizeEffort(effort, native);
   if (!current) return null;
   const currentRank = effortRank(current);
   const floorRank = effortRank('medium');
@@ -149,17 +150,18 @@ export function stepDownRetryEffort(effort, { model, protocol, effortContext = {
 
 /** Copy only durable decision fields; never retain a mutable request/config object. */
 export function snapshotEffortDecision(decision = null) {
-  // Older providers used low/high as aliases. Only a native thinking-level
-  // decision (or its inherited cap) has literal Gemini semantics.
+  // On the wire a literal High can be a Gemini level or a Chat Completions
+  // tier. Responses/adaptive already normalized their legacy High on capture.
   const native = decision?.wireMode === 'thinking-level' || decision?.nativeEffortCap === true;
+  const normalize = value => decision?.wireMode === 'reasoning-effort' && value === 'high' ? value : normalizeEffort(value, native);
   return Object.freeze({
-    requested: normalizeEffort(decision?.requested, native),
-    effective: normalizeEffort(decision?.effective, native),
+    requested: normalize(decision?.requested),
+    effective: normalize(decision?.effective),
     source: typeof decision?.source === 'string' ? decision.source : 'unknown',
     model: typeof decision?.model === 'string' ? decision.model : null,
     wireMode: typeof decision?.wireMode === 'string' ? decision.wireMode : 'omitted',
     thinkingEnabled: decision?.thinkingEnabled === true,
-    cap: normalizeEffort(decision?.cap, native),
+    cap: normalize(decision?.cap),
     ...(decision?.nativeEffortCap === true ? { nativeEffortCap: true } : {}),
     ...(typeof decision?.thinkingLevel === 'string' ? { thinkingLevel: decision.thinkingLevel } : {}),
     ...(Number.isFinite(decision?.budgetTokens) ? { budgetTokens: decision.budgetTokens } : {}),
@@ -193,7 +195,8 @@ export function resolveSubAgentEffort({ parentDecision = null, model, effortCont
   const parent = snapshotEffortDecision(parentDecision);
   const context = capabilityContext(protocol, effortContext);
   const preserveNative = (protocol || effortContext?.protocol) === 'gemini';
-  const explicitTarget = normalizeEffort(targetEffort, preserveNative);
+  const isChat = context.protocol === 'openai-chat-completions';
+  const explicitTarget = isChat ? normalizeChatEffort(targetEffort) : normalizeEffort(targetEffort, preserveNative);
 
   // An unsupported intermediate model has no wire effort, but must not erase
   // an inherited lower ceiling when it delegates again.
@@ -209,7 +212,7 @@ export function resolveSubAgentEffort({ parentDecision = null, model, effortCont
     requested: explicitTarget || parentTarget,
     source: explicitTarget ? 'explicit' : (parent.effective ? 'inherited' : 'fallback'),
     model, cap: target, thinkingEnabled: false,
-    ...((['minimal', 'low'].includes(target) || (isGeminiLevel && target === 'high')) ? { nativeEffortCap: true } : {}),
+    ...((['minimal', 'low'].includes(target) || ((isGeminiLevel || isChat) && target === 'high')) ? { nativeEffortCap: true } : {}),
   };
   if (!capability.supportsThinking || capability.thinkingProtocol === 'none') {
     return snapshotEffortDecision({ ...base, effective: null, wireMode: 'unsupported' });
@@ -233,8 +236,8 @@ function manualEffortForBudget(model, budget) {
 /** Normalize retired tiers after extraBody, without mutating caller-owned objects. */
 export function normalizeEffortPayload(body, protocol) {
   if (protocol === 'openai-chat-completions') {
-    const effort = normalizeEffort(body.reasoning_effort);
-    if (effort && effort !== body.reasoning_effort) body.reasoning_effort = effort;
+    const effort = normalizeChatEffort(body.reasoning_effort);
+    if (effort) body.reasoning_effort = effort;
     return;
   }
   const key = protocol === 'anthropic' ? 'output_config' : 'reasoning';
@@ -257,7 +260,7 @@ export function captureEffortDecision({ body = {}, model, protocol, effortContex
     const effective = normalizeEffort(body.reasoning?.effort);
     if (effective) return snapshotEffortDecision({ ...base, effective, wireMode: 'reasoning-effort', thinkingEnabled: true });
   } else if (protocol === 'openai-chat-completions') {
-    const effective = normalizeEffort(body.reasoning_effort);
+    const effective = normalizeChatEffort(body.reasoning_effort);
     if (effective) return snapshotEffortDecision({ ...base, effective, wireMode: 'reasoning-effort', thinkingEnabled: true });
   } else if (body.thinking?.type === 'enabled') {
     const budgetTokens = body.thinking.budget_tokens;
@@ -266,7 +269,7 @@ export function captureEffortDecision({ body = {}, model, protocol, effortContex
     const effective = normalizeEffort(body.output_config?.effort);
     if (effective) return snapshotEffortDecision({ ...base, effective, wireMode: 'adaptive', thinkingEnabled: true });
   }
-  const modelDefault = body.thinking?.type === 'disabled' ? null : normalizeEffort(capability.defaultEffort);
+  const modelDefault = body.thinking?.type === 'disabled' ? null : capability.defaultEffort;
   return snapshotEffortDecision({ ...base, effective: modelDefault, source: modelDefault ? 'model-default' : source, wireMode: 'omitted' });
 }
 
