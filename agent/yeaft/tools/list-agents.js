@@ -69,6 +69,10 @@ By default terminal agents are omitted. Pass include_closed=true to include them
       agents.push({
         id,
         name: agent.name,
+        persona: agent.persona || null,
+        scene: agent.scene || null,
+        model: agent.model || null,
+        effort: agent.effort || null,
         status: agent.status,
         lifecycle: describeAgentLifecycle(agent),
         outcome: describeAgentOutcome(agent),

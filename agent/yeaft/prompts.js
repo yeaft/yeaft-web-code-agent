@@ -293,12 +293,22 @@ export function buildSystemPrompt({
   // ─── 1. Stable Core ────────────────────────────────────
   // A VP persona supplies the identity layer when present. The compact core
   // rules stay stable across turns and replace the old full base/common bundle.
-  const sceneBlock = renderSessionScene(vpPersona?.sceneId, effectiveLang);
+  // Sub-agents receive domain practices stripped of human-conversational prose
+  // and omit the human-chat core template so their machine-oriented delivery
+  // contract stays unambiguous.
+  const isSubAgentPersona = Boolean(vpPersona && typeof vpPersona === 'object' && vpPersona.subAgent);
+  const sceneBlock = renderSessionScene(
+    vpPersona?.sceneId,
+    effectiveLang,
+    isSubAgentPersona ? { audience: 'sub-agent' } : undefined,
+  );
   const personaBlock = sceneBlock
     ? [sceneBlock, vpPersona.runtimePreamble?.trim()].filter(Boolean).join('\n\n')
-    : renderVpPersona(vpPersona, lang, effectiveLang);
+    : isSubAgentPersona
+      ? (vpPersona.runtimePreamble?.trim() || renderVpPersona(vpPersona, lang, effectiveLang))
+      : renderVpPersona(vpPersona, lang, effectiveLang);
   if (personaBlock) parts.push(personaBlock);
-  const coreTemplate = getTemplate('core', effectiveLang);
+  const coreTemplate = isSubAgentPersona ? '' : getTemplate('core', effectiveLang);
   if (coreTemplate) {
     parts.push(coreTemplate);
   } else if (!personaBlock) {

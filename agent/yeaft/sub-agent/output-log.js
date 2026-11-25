@@ -208,6 +208,14 @@ function serialize(evt) {
   if (evt.parentEffortDecision && (evt.type === 'sub_agent_spawned' || evt.type === 'sub_agent_effort_snapshot')) {
     out.parentEffortDecision = snapshotEffortDecision(evt.parentEffortDecision);
   }
+  if (evt.type === 'sub_agent_spawned') {
+    if (evt.persona) out.persona = evt.persona;
+    if (evt.scene) out.scene = evt.scene;
+    if (evt.model) out.model = evt.model;
+    if (evt.modelSource) out.modelSource = evt.modelSource;
+    if (evt.effort) out.effort = evt.effort;
+    if (evt.effortSource) out.effortSource = evt.effortSource;
+  }
   if (evt.status) out.status = evt.status;
   if (typeof evt.tokens === 'number') out.tokens = evt.tokens;
   return out;

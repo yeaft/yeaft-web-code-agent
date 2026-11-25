@@ -241,8 +241,11 @@ export class GeminiAdapter extends LLMAdapter {
       delete body.labels;
       for (const key of ['speechConfig', 'audioTranscriptionConfig', 'translationConfig', 'enableAffectiveDialog']) delete body.generationConfig[key];
     }
-    const child = params.effortConstraint && resolveSubAgentEffort({ model, protocol: 'gemini', effortContext,
-      parentDecision: params.effortConstraint.parentDecision });
+    const child = params.effortConstraint && resolveSubAgentEffort({
+      model, protocol: 'gemini', effortContext,
+      parentDecision: params.effortConstraint.parentDecision,
+      targetEffort: params.effortConstraint.targetEffort ?? null,
+    });
     let thinking = body.generationConfig.thinkingConfig;
     if (!capability.supportsThinking) thinking = undefined;
     else if (child || effort) {

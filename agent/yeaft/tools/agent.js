@@ -10,7 +10,10 @@
  *     task: string,                   // legacy summary; becomes mission when not given
  *     mission?: string,               // concrete objective statement
  *     expected_output?: object,       // JSON schema describing the required output
- *     persona?: string,               // preset id: explorer|implementer|reviewer|researcher
+ *     persona?: string,               // preset id: explorer|implementer|reviewer|researcher|designer
+ *     scene?: string,                 // domain scene id from SESSION_SCENE_IDS (defaults to parent scene)
+ *     model?: string,                 // optional allowed model ref from config.availableModels
+ *     effort?: string,                // optional reasoning effort level supported by the resolved model
  *     budget?: {
  *       max_tokens?: number,
  *       max_turns?: number,
@@ -32,9 +35,11 @@ import { validateToolGrants } from '../sub-agent/tool-access.js';
 import { STATUS, isTerminalAgentStatus } from '../sub-agent/status.js';
 import { diagnoseAgentLiveness, makeLiveness } from '../sub-agent/liveness.js';
 import { TASK_RESULT_DELIVERY } from '../tasks/store.js';
-import { captureParentEffortDecision } from '../effort.js';
+import { captureParentEffortDecision, EFFORT_LEVELS } from '../effort.js';
 import { buildDelegationIdentity, resolveAgentCwd } from '../sub-agent/task-identity.js';
 import { getAgentResultRef } from '../sub-agent/result-reference.js';
+import { resolveSubAgentSelection } from '../sub-agent/selection.js';
+import { isSessionSceneId, SESSION_SCENE_IDS } from '../sessions/scene-ids.js';
 
 /** In-memory sub-agent registry. */
 const agents = new Map();
@@ -96,8 +101,8 @@ export function validateSpec(input) {
   if (!input || typeof input !== 'object') {
     return { ok: false, error: 'spec must be an object' };
   }
-  const { name, task, mission, expected_output, persona, budget } = input;
-  for (const key of ['taskKey', 'baseline', 'cwd']) {
+  const { name, task, mission, expected_output, persona, scene, model, effort, budget } = input;
+  for (const key of ['taskKey', 'baseline', 'cwd', 'scene', 'model', 'effort']) {
     if (input[key] !== undefined && !cleanString(input[key])) {
       return { ok: false, error: `${key} must be a non-empty string` };
     }
@@ -115,6 +120,18 @@ export function validateSpec(input) {
       error: `unknown persona "${persona}"; available: ${listPersonaIds().join(', ')}`,
     };
   }
+  if (scene !== undefined && !isSessionSceneId(scene.trim())) {
+    return {
+      ok: false,
+      error: `unknown scene "${scene}"; available: ${SESSION_SCENE_IDS.join(', ')}`,
+    };
+  }
+  if (effort !== undefined && !EFFORT_LEVELS.includes(effort.trim())) {
+    return {
+      ok: false,
+      error: `invalid effort "${effort}"; valid levels: ${EFFORT_LEVELS.join(', ')}`,
+    };
+  }
   if (expected_output !== undefined && (typeof expected_output !== 'object' || expected_output === null)) {
     return { ok: false, error: 'expected_output must be a JSON schema object' };
   }
@@ -130,6 +147,9 @@ export function validateSpec(input) {
       task: task || mission,
       expected_output: expected_output || null,
       persona: persona || null,
+      scene: cleanString(scene),
+      model: cleanString(model),
+      effort: cleanString(effort),
       budget: resolveSubAgentBudget(budget),
     },
   };
@@ -236,11 +256,13 @@ with an optional expected_output schema. By default there is no lifetime tool,
 LLM, token, turn, or wall-time ceiling: the agent may finish its assigned work.
 Explicit budget fields are absolute lifetime limits. max_tokens uses provider
 usage; max_turns counts query turns, not tools.
-Pick a preset persona to pre-wire a tool subset and model tier:
-  - explorer   : fast, read-only scout (Read/Grep/Glob/ListDir)
-  - implementer: builder with full work tools (primary model)
-  - reviewer   : read-only critic (primary model)
-  - researcher : web-facing info gatherer (WebSearch/WebFetch/Read)
+Pick a preset persona to pre-wire a tool subset, model routing, and default effort:
+  - explorer   : fast, read-only scout (Read/Grep/Glob/ListDir; defaults to fastModel if configured)
+  - implementer: builder with full work tools (inherits current model)
+  - reviewer   : read-only critic with GitRead (inherits current model)
+  - researcher : web-facing info gatherer (WebSearch/WebFetch/Read; defaults to fastModel if configured)
+  - designer   : read-only architect & decision maker (GitRead/Read/Grep/Glob/ListDir/WebSearch/WebFetch; defaults to effort=xhigh)
+Optionally pass scene to apply domain expertise practices (defaults to the parent Session scene, stripped of human-chat prose), and model/effort only when an explicit override from the configured model catalog is needed.
 
 Guidelines:
 - Give a clear, focused mission — what "done" looks like
@@ -262,11 +284,13 @@ stops or finalizes work no longer needed.`,
 子 Agent 在独立上下文中运行，可给定具体 mission 和可选的 expected_output schema。
 默认不设工具执行、LLM 请求、token、turn 或总耗时上限，让 Agent 完成已分配工作。
 显式 budget 字段是累计生命周期硬上限；max_tokens 使用 provider usage，max_turns 统计 query turn 而非工具调用。
-选择预设 persona 来预配置工具子集和模型层级：
-  - explorer   : 快速只读侦察（Read/Grep/Glob/ListDir）
-  - implementer: 具备完整工作工具的构建者（主模型）
-  - reviewer   : 只读审查者（主模型）
-  - researcher : 面向网络的信息收集者（WebSearch/WebFetch/Read）
+选择预设 persona 来预配置工具子集、默认模型路由与 effort：
+  - explorer   : 快速只读侦察（Read/Grep/Glob/ListDir；优先使用 fastModel）
+  - implementer: 具备完整工作工具的构建者（继承当前模型）
+  - reviewer   : 带 GitRead 的只读审查者（继承当前模型）
+  - researcher : 面向网络的信息收集者（WebSearch/WebFetch/Read；优先使用 fastModel）
+  - designer   : 只读架构设计与决策者（GitRead/Read/Grep/Glob/ListDir/WebSearch/WebFetch；默认 effort=xhigh）
+可按需传入 scene 指定领域专业准则（默认继承父 Session 的 scene，且仅注入专业标准而非人类聊天语气），并按需用 model/effort 从已配置模型白名单中显式覆写。
 
 使用指南：
 - 给出清晰聚焦的 mission——"完成"是什么样子
@@ -327,10 +351,33 @@ stops or finalizes work no longer needed.`,
       },
       persona: {
         type: 'string',
-        enum: ['explorer', 'implementer', 'reviewer', 'researcher'],
+        enum: ['explorer', 'implementer', 'reviewer', 'researcher', 'designer'],
         description: {
-          en: 'Preset persona that pre-wires tool subset + model tier',
-          zh: '预设 persona，预装工具子集和模型等级',
+          en: 'Preset persona that pre-wires tool subset, default model tier, and default effort (designer defaults to xhigh)',
+          zh: '预设 persona，预装工具子集、默认模型层级与 effort（designer 默认 xhigh）',
+        },
+      },
+      scene: {
+        type: 'string',
+        enum: [...SESSION_SCENE_IDS],
+        description: {
+          en: 'Optional domain scene for professional practices (defaults to parent Session scene; machine-oriented delivery protocol is always kept)',
+          zh: '可选领域 scene，用于注入对应行业专业准则（默认继承父 Session scene，始终保持面向父 Agent 的结构化交付协议）',
+        },
+      },
+      model: {
+        type: 'string',
+        description: {
+          en: 'Optional model override from configured availableModels (provider/model or unambiguous modelId). Omit to use persona/parent default.',
+          zh: '可选模型覆写，必须在已配置的 availableModels 白名单内（provider/model 或无歧义 modelId）；省略则按 persona/父模型自动选择。',
+        },
+      },
+      effort: {
+        type: 'string',
+        enum: [...EFFORT_LEVELS],
+        description: {
+          en: 'Optional reasoning effort override supported by the resolved model. Omit to use persona default (designer -> xhigh) or inherited sub-agent default.',
+          zh: '可选推理 effort 覆写，必须受目标模型支持；省略则使用 persona 默认（designer 为 xhigh）或继承子任务默认策略。',
         },
       },
       budget: {
@@ -405,9 +452,26 @@ stops or finalizes work no longer needed.`,
     const spec = validation.spec;
     const grants = validateToolGrants(input.allow_tools === undefined ? [] : input.allow_tools, ctx?.parentEngineDeps?.parentToolRegistry);
     if (!grants.ok) return JSON.stringify({ next_steps: ERROR_NEXT_STEPS, error: grants.error });
+    const persona = spec.persona ? getPersona(spec.persona) : null;
+    const selectionConfig = ctx?.parentEngineDeps?.config || ctx?.config || null;
+    const parentModel = ctx?.parentEngineDeps?.parentModel || selectionConfig?.model || null;
+    const parentSceneId = ctx?.sceneId || ctx?.parentEngineDeps?.parentVpPersona?.sceneId || null;
+    const selection = resolveSubAgentSelection({
+      requestedModel: spec.model,
+      requestedEffort: spec.effort,
+      requestedScene: spec.scene,
+      personaId: spec.persona,
+      personaData: persona,
+      config: selectionConfig,
+      parentModel,
+      parentSceneId,
+    });
+    if (!selection.ok) {
+      return JSON.stringify({ next_steps: ERROR_NEXT_STEPS, error: selection.error });
+    }
     const { name } = input;
     const callerScope = getCallerAgentScope(ctx);
-    const identity = buildDelegationIdentity(input, spec, grants.tools, ctx);
+    const identity = buildDelegationIdentity(input, spec, grants.tools, ctx, selection);
     if (identity) {
       for (const agent of agents.values()) {
         const prior = agent.delegationIdentity;
@@ -440,6 +504,10 @@ stops or finalizes work no longer needed.`,
           reused: true,
           agentId: agent.id,
           name: agent.name,
+          persona: agent.persona || null,
+          scene: agent.scene || null,
+          model: agent.model || null,
+          effort: agent.effort || null,
           status: agent.status,
           taskId: agent.taskId || null,
           outputFile: agent.outputFile || null,
@@ -464,7 +532,6 @@ stops or finalizes work no longer needed.`,
       }
     }
 
-    const persona = spec.persona ? getPersona(spec.persona) : null;
     const now = Date.now();
     const agentId = `agent-${randomUUID().slice(0, 8)}`;
     const agent = {
@@ -478,6 +545,16 @@ stops or finalizes work no longer needed.`,
       expected_output: spec.expected_output,
       persona: spec.persona,
       personaData: persona || null,
+      requestedScene: spec.scene,
+      requestedModel: spec.model,
+      requestedEffort: spec.effort,
+      selection,
+      scene: selection.sceneId,
+      sceneSource: selection.sceneSource,
+      model: selection.model,
+      modelSource: selection.modelSource,
+      effort: selection.effort,
+      effortSource: selection.effortSource,
       // Capture at the tool boundary, before fire-and-forget startup can yield.
       parentEffortDecision: captureParentEffortDecision(ctx),
       budget: spec.budget,
@@ -576,6 +653,9 @@ stops or finalizes work no longer needed.`,
       agentId,
       name,
       persona: spec.persona || null,
+      scene: agent.scene || null,
+      model: agent.model || null,
+      effort: agent.effort || null,
       budget: spec.budget || null,
       allow_tools: agent.allowTools,
       status: agent.status,

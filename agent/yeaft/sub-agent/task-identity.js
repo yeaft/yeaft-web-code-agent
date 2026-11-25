@@ -28,13 +28,16 @@ function canonicalWorkspace(cwd) {
  * Keep this initial identity reserved across continuations; their latest mutable
  * evidence must not be returned for an original-spec retry.
  */
-export function buildDelegationIdentity(input, spec, grants, ctx = {}) {
+export function buildDelegationIdentity(input, spec, grants, ctx = {}, selection = null) {
   const queryTurnId = typeof ctx?.queryTurnId === 'string' ? ctx.queryTurnId.trim() : '';
   if (!queryTurnId) return null;
   const workspace = canonicalWorkspace(ctx.cwd);
   const taskSpec = {
     mission: spec.mission,
     persona: spec.persona,
+    scene: selection?.sceneId ?? spec.scene ?? null,
+    model: selection?.model ?? spec.model ?? null,
+    effort: selection?.effort ?? spec.effort ?? null,
     cwd: canonicalWorkspace(resolveAgentCwd(input.cwd, ctx.cwd)),
     baseline: input.baseline ?? null,
     expected_output: spec.expected_output,

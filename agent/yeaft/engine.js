@@ -82,6 +82,7 @@ import { COLLAB_TOOL_POLICY, isToolErrorOutput, toolValidationError, localizeVis
 import { CONDITIONAL_BUILTIN_TOOL_NAMES, resolveActiveToolNames } from './tools/activation.js';
 import { discoverToolCapabilities } from './tools/discover-tools.js';
 import { agentBelongsToScope, getAgentRegistry } from './tools/agent.js';
+import { formatSubAgentModelCatalogNotice } from './sub-agent/selection.js';
 import { createPluginSkillManager } from './plugins.js';
 import { extractDisplayImages, stripDisplayImageData } from './image-assets.js';
 import { acknowledgePendingNotifications, formatNotificationsForPrompt, peekPendingNotifications } from './sub-agent/notifications.js';
@@ -1674,6 +1675,7 @@ export class Engine {
         adapter: this.#adapter,
         trace: this.#trace,
         config: this.#config,
+        parentModel: vpCtx?.currentModel || this.#config?.model || null,
         memoryIndex: this.#memoryIndex,
         parentToolRegistry: this.#toolRegistry,
         skillManager: this.#skillManager,
@@ -2094,7 +2096,7 @@ export class Engine {
     }
   }
 
-  async *#queryLifecycle({ prompt, promptParts = null, messages = [], signal, turnConfig = null, userEffort = null, scenario = 'chat', isSubAgent = false, parentEffortDecision = null, vpPersona, router, senderVpId, inboundEnvelope, taskId, taskMembers, sessionId, sessionMembers, projectSessionIds = null, agentSessionIds = null, shareOwnerId = null, projectInstruction = '', projectLabel = '', vpPlan, sessionAnnouncement, workCenterInstructions, workDir, userAlreadyPersisted = false, currentUserMessage = null, causalRootId = null, getCurrentTodos = null, setCurrentTodos = null, askUser = null, threadId = MAIN_THREAD_ID, vpTurnId = null, drainPendingUserMessages = null, getPeerContext = null, peerTurnIds = [], prepareProviderRequest = null, startProviderRequest = null, finishProviderRequest = null, failProviderRequest = null, closePendingUserInput = null, collabToolPolicy = null, onProviderRequestStart = null } = {}) {
+  async *#queryLifecycle({ prompt, promptParts = null, messages = [], signal, turnConfig = null, userEffort = null, scenario = 'chat', isSubAgent = false, parentEffortDecision = null, subAgentTargetEffort = null, vpPersona, router, senderVpId, inboundEnvelope, taskId, taskMembers, sessionId, sessionMembers, projectSessionIds = null, agentSessionIds = null, shareOwnerId = null, projectInstruction = '', projectLabel = '', vpPlan, sessionAnnouncement, workCenterInstructions, workDir, userAlreadyPersisted = false, currentUserMessage = null, causalRootId = null, getCurrentTodos = null, setCurrentTodos = null, askUser = null, threadId = MAIN_THREAD_ID, vpTurnId = null, drainPendingUserMessages = null, getPeerContext = null, peerTurnIds = [], prepareProviderRequest = null, startProviderRequest = null, finishProviderRequest = null, failProviderRequest = null, closePendingUserInput = null, collabToolPolicy = null, onProviderRequestStart = null } = {}) {
     if (!prompt || typeof prompt !== 'string' || !prompt.trim()) {
       const error = new Error('prompt is required and must be a non-empty string');
       yield {
@@ -2187,7 +2189,7 @@ export class Engine {
       this.#currentThreadId = threadId || MAIN_THREAD_ID;
       this.#currentCausalRootId = effectiveCausalRootId;
       this.#currentUserTurnId = inboundEnvelope?._userTurnId || currentUserMessage?.userTurnId || null;
-      yield* this.#runQuery({ prompt: effectivePrompt, promptParts: effectivePromptParts, messages, signal: runSignal, turnConfig: turnConfig ? { model: turnConfig.model, effort: turnConfig.effort, maxOutputTokens: turnConfig.maxOutputTokens } : null, userEffort: explicitUserEffort, scenario, isSubAgent, parentEffortDecision, vpPersona, router, senderVpId, inboundEnvelope, taskId, taskMembers, sessionId, sessionMembers, projectSessionIds, agentSessionIds, shareOwnerId, projectInstruction, projectLabel, vpPlan, sessionAnnouncement, workCenterInstructions, workDir, userAlreadyPersisted, currentUserMessage, causalRootId: effectiveCausalRootId, getCurrentTodos, setCurrentTodos, askUser, threadId: this.#currentThreadId, vpTurnId, drainPendingUserMessages, getPeerContext, peerTurnIds, prepareProviderRequest, startProviderRequest, finishProviderRequest, failProviderRequest, closePendingUserInput, collabToolPolicy: effectiveCollabToolPolicy, explicitSkillName: parsedSkill.skillName, retryLifecycle, onProviderRequestStart });
+      yield* this.#runQuery({ prompt: effectivePrompt, promptParts: effectivePromptParts, messages, signal: runSignal, turnConfig: turnConfig ? { model: turnConfig.model, effort: turnConfig.effort, maxOutputTokens: turnConfig.maxOutputTokens } : null, userEffort: explicitUserEffort, scenario, isSubAgent, parentEffortDecision, subAgentTargetEffort, vpPersona, router, senderVpId, inboundEnvelope, taskId, taskMembers, sessionId, sessionMembers, projectSessionIds, agentSessionIds, shareOwnerId, projectInstruction, projectLabel, vpPlan, sessionAnnouncement, workCenterInstructions, workDir, userAlreadyPersisted, currentUserMessage, causalRootId: effectiveCausalRootId, getCurrentTodos, setCurrentTodos, askUser, threadId: this.#currentThreadId, vpTurnId, drainPendingUserMessages, getPeerContext, peerTurnIds, prepareProviderRequest, startProviderRequest, finishProviderRequest, failProviderRequest, closePendingUserInput, collabToolPolicy: effectiveCollabToolPolicy, explicitSkillName: parsedSkill.skillName, retryLifecycle, onProviderRequestStart });
     } finally {
       // Closing the async generator at a visible retry boundary means the
       // continuation never reached a provider. Keep it out of history and
@@ -2243,7 +2245,7 @@ export class Engine {
    * in a try/finally without indenting the whole loop.
    * @private
    */
-  async *#runQuery({ prompt, promptParts = null, messages, signal, turnConfig = null, userEffort = null, scenario = 'chat', isSubAgent = false, parentEffortDecision = null, vpPersona, router, senderVpId, inboundEnvelope, taskId, taskMembers, sessionId, sessionMembers, projectSessionIds = null, agentSessionIds = null, shareOwnerId = null, projectInstruction = '', projectLabel = '', vpPlan, sessionAnnouncement, workCenterInstructions, workDir, userAlreadyPersisted = false, currentUserMessage = null, causalRootId = null, getCurrentTodos = null, setCurrentTodos = null, askUser = null, threadId = MAIN_THREAD_ID, vpTurnId = null, drainPendingUserMessages = null, getPeerContext = null, peerTurnIds = [], prepareProviderRequest = null, startProviderRequest = null, finishProviderRequest = null, failProviderRequest = null, closePendingUserInput = null, collabToolPolicy = null, explicitSkillName = null, retryLifecycle, onProviderRequestStart = null }) {
+  async *#runQuery({ prompt, promptParts = null, messages, signal, turnConfig = null, userEffort = null, scenario = 'chat', isSubAgent = false, parentEffortDecision = null, subAgentTargetEffort = null, vpPersona, router, senderVpId, inboundEnvelope, taskId, taskMembers, sessionId, sessionMembers, projectSessionIds = null, agentSessionIds = null, shareOwnerId = null, projectInstruction = '', projectLabel = '', vpPlan, sessionAnnouncement, workCenterInstructions, workDir, userAlreadyPersisted = false, currentUserMessage = null, causalRootId = null, getCurrentTodos = null, setCurrentTodos = null, askUser = null, threadId = MAIN_THREAD_ID, vpTurnId = null, drainPendingUserMessages = null, getPeerContext = null, peerTurnIds = [], prepareProviderRequest = null, startProviderRequest = null, finishProviderRequest = null, failProviderRequest = null, closePendingUserInput = null, collabToolPolicy = null, explicitSkillName = null, retryLifecycle, onProviderRequestStart = null }) {
 
     const effectiveCollabToolPolicy = collabToolPolicy === COLLAB_TOOL_POLICY.SINGLE_VP || collabToolPolicy === COLLAB_TOOL_POLICY.MULTI_VP
       ? collabToolPolicy
@@ -2276,7 +2278,11 @@ export class Engine {
       threadId: runtimeThreadId,
     });
     const effortConstraint = isSubAgent || scenario === 'sub_agent' || vpPersona?.subAgent
-      ? Object.freeze({ parentDecision: snapshotEffortDecision(parentEffortDecision) }) : null;
+      ? Object.freeze({
+          parentDecision: snapshotEffortDecision(parentEffortDecision),
+          ...(subAgentTargetEffort ? { targetEffort: subAgentTargetEffort } : {}),
+        })
+      : null;
     const queryStartedAt = Date.now();
     const queryProgress = new QueryProgress();
     const progressIdentity = { turnId: queryTurnId, threadId: runtimeThreadId, sessionId: runtimeSessionId, vpId: requestIdentity.vpId };
@@ -2628,20 +2634,30 @@ export class Engine {
     });
 
     let promptNotices = [];
-    const buildCurrentSystemPrompt = () => this.#buildSystemPrompt({
-      prompt,
-      memoryInjection,
-      vpPersona,
-      activeScope,
-      sessionAnnouncement,
-      projectInstruction,
-      projectLabel,
-      workCenterInstructions,
-      projectDoc: projectDocContext.text,
-      promptNotices,
-      explicitSkillName,
-      resolvedSkillContent,
-    });
+    const buildCurrentSystemPrompt = () => {
+      const effectivePromptNotices = [...promptNotices];
+      if (!isSubAgent && !vpPersona?.subAgent && activeToolNames?.has('SpawnAgent')) {
+        const subAgentCatalogNotice = formatSubAgentModelCatalogNotice(
+          this.#config,
+          this.#config?.language || 'en',
+        );
+        if (subAgentCatalogNotice) effectivePromptNotices.push(subAgentCatalogNotice);
+      }
+      return this.#buildSystemPrompt({
+        prompt,
+        memoryInjection,
+        vpPersona,
+        activeScope,
+        sessionAnnouncement,
+        projectInstruction,
+        projectLabel,
+        workCenterInstructions,
+        projectDoc: projectDocContext.text,
+        promptNotices: effectivePromptNotices,
+        explicitSkillName,
+        resolvedSkillContent,
+      });
+    };
     let systemPrompt = buildCurrentSystemPrompt();
 
     // Build conversation from the caller-provided history and the new user message.
@@ -5041,6 +5057,7 @@ export class Engine {
       // is a per-query local (reset implicitly at the top of #runQuery).
       const toolCtx = this.#buildToolContext(signal, {
         effortDecision: snapshotEffortDecision(requestEffortDecision),
+        currentModel,
         requestIdentity,
         queryTurnId,
         causalRootId,

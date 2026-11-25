@@ -22,6 +22,7 @@ const PERSONAS_DIR = join(__dirname, 'templates', 'personas');
  * @property {string} name
  * @property {string} description
  * @property {'fast'|'primary'} modelTier
+ * @property {string|null} defaultEffort
  * @property {string[]} tools
  * @property {string} systemPrompt
  */
@@ -100,6 +101,9 @@ export function loadPersonas(options = {}) {
         name: String(meta.name || meta.id),
         description: String(meta.description || ''),
         modelTier: meta.modelTier === 'primary' ? 'primary' : 'fast',
+        defaultEffort: typeof meta.defaultEffort === 'string' && meta.defaultEffort.trim()
+          ? meta.defaultEffort.trim()
+          : null,
         tools: Array.isArray(meta.tools) ? meta.tools.map(String) : [],
         systemPrompt: body,
       };
