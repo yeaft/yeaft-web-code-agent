@@ -63,6 +63,7 @@ import { perfNowMs, recordAgentPerfTrace } from './perf-trace.js';
 const MAIN_THREAD_ID = 'main';
 
 import { pickEffort, parseEffortPrefix, snapshotEffortDecision, stepDownRetryEffort } from './effort.js';
+import { normalizeProtocolName } from './llm/router.js';
 import { bindProviderState, ProviderStateError, ProviderContextBudgetError } from './llm/provider-state.js';
 import {
   POST_COMPACT_CONTEXT_RATIO,
@@ -4472,8 +4473,10 @@ export class Engine {
               // for this retry only; effort climbs back on the next successful
               // loop while compacted older tool results stay compacted.
               if (!signedAnthropicPrefix) tightenOlderToolResultsOnRetry = true;
-              const protocol = effortModel?.protocol || effortModel?.effortProtocol
-                || routedProvider?.protocol || requestConfig.adapter;
+              const protocol = normalizeProtocolName(effortModel?.protocol)
+                || effortModel?.effortProtocol
+                || normalizeProtocolName(routedProvider?.protocol)
+                || normalizeProtocolName(requestConfig.adapter);
               // Never enable thinking on retry when the timed-out request ran
               // with thinking disabled/omitted (e.g. YEAFT_THINKING_V1 off on
               // Anthropic/OpenAI without an explicit user effort).

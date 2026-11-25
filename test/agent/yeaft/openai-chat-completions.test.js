@@ -361,16 +361,65 @@ describe('OpenAI Chat Completions protocol adapter & continuity', () => {
     ]);
     expect(events.at(-1)).toEqual({ type: 'stop', stopReason: 'end_turn' });
 
-    // Truncated / malformed tool calls fail closed without publishing tool_call events
+    // Truncated / malformed / unsupported-type tool calls fail closed without publishing tool_call events
     for (const payload of [
       sse([{ choices: [{ index: 0, delta: { tool_calls: [{ index: 0, id: 'tc1', function: { name: 'Read', arguments: '{"bad' } }] }, finish_reason: 'tool_calls' }] }, '[DONE]']),
       sse([{ choices: [{ index: 0, delta: { tool_calls: [{ index: 0, id: 'tc1', function: { name: 'Read', arguments: '{}' } }] }, finish_reason: 'length' }] }, '[DONE]']),
+      sse([{ choices: [{ index: 0, delta: { tool_calls: [{ index: 0, id: 'tc1', type: 'custom', function: { name: 'Read', arguments: '{}' } }] }, finish_reason: 'tool_calls' }] }, '[DONE]']),
     ]) {
       vi.stubGlobal('fetch', vi.fn(async () => payload));
       const badEvents = await collect(adapter.stream({ model: 'gemini-4-neon', messages: [{ role: 'user', content: 'hi' }] }));
       expect(badEvents.some(e => e.type === 'tool_call')).toBe(false);
       expect(badEvents.at(-1)).toMatchObject({ type: 'error', retryable: false, error: expect.any(LLMToolInputError) });
     }
+
+    // Continuation tool_call delta omitting `index` attaches to the active slot instead of fragmenting
+    vi.stubGlobal('fetch', vi.fn(async () => sse([
+      { choices: [{ index: 0, delta: { tool_calls: [{ id: 'tc_noidx', type: 'function', function: { name: 'Read', arguments: '{"path":' } }] }, finish_reason: null }] },
+      { choices: [{ index: 0, delta: { tool_calls: [{ function: { arguments: '"a.txt"}' } }] }, finish_reason: 'tool_calls' }] },
+      '[DONE]',
+    ])));
+    const noIdxEvents = await collect(adapter.stream({ model: 'gemini-4-neon', messages: [{ role: 'user', content: 'hi' }] }));
+    expect(noIdxEvents.filter(e => e.type === 'tool_call')).toEqual([
+      { type: 'tool_call', id: 'tc_noidx', name: 'Read', input: { path: 'a.txt' } },
+    ]);
+
+    // Explicit extraBody.reasoning_effort ('high' / 'low') is preserved rather than rewritten to 'xhigh'/'medium'
+    let capturedEffortBody;
+    vi.stubGlobal('fetch', vi.fn(async (_url, init) => {
+      capturedEffortBody = JSON.parse(init.body);
+      return json({ id: 'chatcmpl-effort', choices: [{ index: 0, message: { role: 'assistant', content: 'ok' }, finish_reason: 'stop' }] });
+    }));
+    await adapter.call({ model: 'gpt-5', messages: [{ role: 'user', content: 'hi' }], extraBody: { reasoning_effort: 'high' } });
+    expect(capturedEffortBody.reasoning_effort).toBe('high');
+
+    // controlReentry checks actual ID resolution, not just equal Set sizes
+    let capturedReentryBody;
+    vi.stubGlobal('fetch', vi.fn(async (_url, init) => {
+      capturedReentryBody = JSON.parse(init.body);
+      return json({ id: 'chatcmpl-re', choices: [{ index: 0, message: { role: 'assistant', content: 'ok' }, finish_reason: 'stop' }] });
+    }));
+    await adapter.call({
+      model: 'gemini-4-neon',
+      controlReentry: true,
+      messages: [
+        { role: 'user', content: 'start' },
+        { role: 'tool', toolCallId: 'stray_orphan', content: 'old' },
+        { role: 'assistant', content: '', toolCalls: [{ id: 'open_call', name: 'Read', input: {} }] },
+      ],
+    });
+    expect(capturedReentryBody.messages.at(-1).role).toBe('assistant');
+
+    // Hosted tool JSON fallback parse failure carries replayUnsafe: true
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('not-json', {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    })));
+    await expect(collect(adapter.stream({
+      model: 'gpt-5',
+      messages: [{ role: 'user', content: 'hi' }],
+      extraBody: { web_search_options: { search_context_size: 'low' } },
+    }))).rejects.toMatchObject({ replayUnsafe: true });
 
     // Content filter refusal without complete calls stops as refusal; 504 upstream_headers_timeout classifies cleanly
     vi.stubGlobal('fetch', vi.fn(async () => json({

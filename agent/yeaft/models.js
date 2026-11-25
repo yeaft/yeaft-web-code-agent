@@ -468,27 +468,6 @@ export function mapEffortToOpenAIReasoning(effort) {
   }
 }
 
-/**
- * Map a Yeaft effort level to the OpenAI Chat Completions `reasoning_effort` field.
- * Accepts both Yeaft canonical tiers and native OpenAI/Gemini chat-completions tiers.
- *
- * @param {string|null|undefined} effort
- * @returns {'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra' | null}
- */
-export function mapEffortToChatCompletionsReasoning(effort) {
-  if (!effort) return null;
-  switch (effort) {
-    case 'minimal': return 'minimal';
-    case 'low': return 'low';
-    case 'medium': return 'medium';
-    case 'high': return 'high';
-    case 'xhigh': return 'xhigh';
-    case 'max': return 'max';
-    case 'ultra': return 'ultra';
-    default: return null;
-  }
-}
-
 // Effort is an API contract, not a model-name allowlist. Compatible gateways
 // can expose new IDs/aliases without requiring a Yeaft release.
 export const OPENAI_REASONING_EFFORT_OPTIONS = Object.freeze(['medium', 'xhigh', 'max', 'ultra']);

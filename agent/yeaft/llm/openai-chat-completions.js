@@ -59,7 +59,7 @@ import {
   normalizeEffort,
   getModelEffortOptions,
   getThinkingCapability,
-  mapEffortToChatCompletionsReasoning,
+  mapEffortToOpenAIReasoning,
 } from '../models.js';
 import {
   createProviderContext,
@@ -480,8 +480,8 @@ export class OpenAIChatCompletionsAdapter extends LLMAdapter {
     // result while the conversation still ends on an assistant message): some
     // Chat Completions upstreams (including Copilot Gemini) reject a trailing
     // assistant turn with HTTP 400 invalid_message_role.
-    if (controlReentry === true && wire.at(-1)?.role === 'assistant'
-        && openToolCallIds.size === resolvedToolCallIds.size) {
+    const allOpenCallsResolved = [...openToolCallIds].every(id => resolvedToolCallIds.has(id));
+    if (controlReentry === true && wire.at(-1)?.role === 'assistant' && allOpenCallsResolved) {
       wire.push({
         role: 'user',
         content: '[system note] Continue the pending task using the updated context above.',
@@ -514,17 +514,17 @@ export class OpenAIChatCompletionsAdapter extends LLMAdapter {
     if (translatedTools) body.tools = translatedTools;
 
     const capContext = { ...effortContext, protocol: 'openai-chat-completions' };
-    const cap = getThinkingCapability(model, capContext);
-    const preserveNative = cap.effortOptions.some(value => ['minimal', 'low', 'high'].includes(value));
-    const normEffort = normalizeEffort(effort, preserveNative);
+    const normEffort = normalizeEffort(effort);
     if ((thinkingV1Enabled() || effortSource === 'user') && normEffort) {
+      const cap = getThinkingCapability(model, capContext);
       const supportedEfforts = getModelEffortOptions(model, capContext);
       if (cap.supportsThinking && cap.thinkingProtocol === 'openai-reasoning' && supportedEfforts.includes(normEffort)) {
-        const wireEffort = mapEffortToChatCompletionsReasoning(normEffort);
+        const wireEffort = mapEffortToOpenAIReasoning(normEffort);
         if (wireEffort) body.reasoning_effort = wireEffort;
       }
     }
 
+    const hasExplicitExtraEffort = Boolean(extraBody && typeof extraBody === 'object' && Object.hasOwn(extraBody, 'reasoning_effort'));
     if (extraBody && typeof extraBody === 'object') {
       Object.assign(body, extraBody);
       // If caller explicitly opted into legacy `max_tokens` via extraBody without
@@ -551,7 +551,12 @@ export class OpenAIChatCompletionsAdapter extends LLMAdapter {
       onProviderDiagnostics,
     });
 
-    normalizeEffortPayload(body, 'openai-chat-completions');
+    // Preserve explicit caller overrides in extraBody.reasoning_effort (e.g.
+    // 'minimal'/'low'/'high' required by specific gateways/models) unless a
+    // sub-agent effortConstraint applies below.
+    if (!hasExplicitExtraEffort) {
+      normalizeEffortPayload(body, 'openai-chat-completions');
+    }
     const effortDecision = effortConstraint
       ? enforceSubAgentEffortPayload(body, { model, protocol: 'openai-chat-completions', effortContext: capContext, effortConstraint })
       : captureEffortDecision({ body, model, protocol: 'openai-chat-completions', effortContext: capContext, requested: effort, source: effortSource || 'scenario' });
@@ -683,21 +688,31 @@ export class OpenAIChatCompletionsAdapter extends LLMAdapter {
 
     // Non-streaming JSON response fallback (some gateways return JSON even with stream:true)
     if ((response.headers?.get('content-type') || '').includes('application/json')) {
-      const result = await response.json();
-      if (onRawExchange) {
-        try {
-          onRawExchange({
-            rawRequest,
-            rawResponse: { status: responseStatus, headers: responseHeaders, body: result },
-          });
-        } catch { /* ignore */ }
+      try {
+        const result = await response.json();
+        if (onRawExchange) {
+          try {
+            onRawExchange({
+              rawRequest,
+              rawResponse: { status: responseStatus, headers: responseHeaders, body: result },
+            });
+          } catch { /* ignore */ }
+        }
+        yield* this.#emitJsonCompletion(result, { context, requestIdentity, wireBody, signal, replayUnsafe });
+        return;
+      } catch (err) {
+        const classified = classifyFetchError(err, { providerLabel: 'Chat Completions', signal });
+        if (replayUnsafe && classified && typeof classified === 'object' && !(classified instanceof LLMAbortError)) {
+          classified.replayUnsafe = true;
+        }
+        throw classified;
       }
-      yield* this.#emitJsonCompletion(result, { context, requestIdentity, wireBody, signal, replayUnsafe });
-      return;
     }
 
     if (!response.body) {
-      throw new LLMServerError('Chat Completions returned no response body', 0);
+      const err = new LLMServerError('Chat Completions returned no response body', 0);
+      if (replayUnsafe) err.replayUnsafe = true;
+      throw err;
     }
 
     const reader = response.body.getReader();
@@ -719,8 +734,112 @@ export class OpenAIChatCompletionsAdapter extends LLMAdapter {
     let streamError = null;
     let toolInputError = null;
     const toolSlots = new Map();
+    let lastToolSlotIndex = null;
 
     const hasAnyTools = () => toolSlots.size > 0;
+
+    const processSseLine = function* (rawLine) {
+      const line = rawLine.trimEnd();
+      if (!line.startsWith('data:')) return;
+      const data = line.slice(5).trim();
+      if (!data) return;
+      if (data === '[DONE]') {
+        sawDone = true;
+        return;
+      }
+      if (signal?.aborted) throw new LLMAbortError();
+
+      let chunk;
+      try {
+        chunk = JSON.parse(data);
+      } catch {
+        malformedStream = true;
+        return;
+      }
+
+      if (chunk?.error) {
+        streamError = classifyStreamErrorPayload(chunk, response);
+        return;
+      }
+      if (chunk?.id) responseId = chunk.id;
+      if (chunk?.model) responseModel = chunk.model;
+      if (chunk?.usage) usage = chunk.usage;
+
+      const choices = Array.isArray(chunk?.choices) ? chunk.choices : [];
+      if (choices.length === 0) return;
+      const choice = choices.find(c => c?.index === 0) || choices[0];
+      if (!choice) return;
+
+      if (typeof choice.finish_reason === 'string' && choice.finish_reason) {
+        finishReason = choice.finish_reason;
+      }
+
+      const delta = choice.delta || {};
+
+      // Reasoning text deltas (Copilot: reasoning_text; DeepSeek/OpenRouter: reasoning_content / reasoning)
+      const reasoning = extractReasoningFields(delta);
+      if (reasoning.text) {
+        if (!reasoningField) reasoningField = reasoning.field;
+        reasoningText += reasoning.text;
+        yield { type: 'thinking_delta', text: reasoning.text };
+      }
+      if (reasoning.opaque) {
+        reasoningOpaque = reasoning.opaque;
+        yield { type: 'provider_activity' };
+      }
+
+      // Visible text content & refusal
+      if (typeof delta.content === 'string' && delta.content.length > 0) {
+        textContent += delta.content;
+        yield { type: 'text_delta', text: delta.content };
+      }
+      if (typeof delta.refusal === 'string' && delta.refusal.length > 0) {
+        refusalText += delta.refusal;
+        yield { type: 'provider_activity' };
+      }
+
+      // Streaming tool call deltas
+      if (Array.isArray(delta.tool_calls) && delta.tool_calls.length > 0) {
+        for (const tcDelta of delta.tool_calls) {
+          if (!tcDelta || typeof tcDelta !== 'object') {
+            toolInputError = new LLMToolInputError('Chat Completions returned invalid tool call delta');
+            continue;
+          }
+          if (tcDelta.type && tcDelta.type !== 'function') {
+            toolInputError = new LLMToolInputError('Chat Completions returned unsupported tool call type');
+            continue;
+          }
+          const hasExplicitIndex = Number.isSafeInteger(tcDelta.index) && tcDelta.index >= 0;
+          const idx = hasExplicitIndex
+            ? tcDelta.index
+            : (!tcDelta.id && lastToolSlotIndex !== null && toolSlots.has(lastToolSlotIndex)
+              ? lastToolSlotIndex
+              : toolSlots.size);
+          let slot = toolSlots.get(idx);
+          if (!slot) {
+            slot = { index: idx, id: '', name: '', arguments: '' };
+            toolSlots.set(idx, slot);
+          }
+          lastToolSlotIndex = idx;
+          if (typeof tcDelta.id === 'string' && tcDelta.id) {
+            if (slot.id && slot.id !== tcDelta.id) {
+              toolInputError = new LLMToolInputError('Chat Completions returned inconsistent tool call identity');
+            } else {
+              slot.id = tcDelta.id;
+            }
+          }
+          if (tcDelta.function && typeof tcDelta.function === 'object') {
+            if (typeof tcDelta.function.name === 'string' && tcDelta.function.name) {
+              slot.name += tcDelta.function.name;
+            }
+            if (typeof tcDelta.function.arguments === 'string' && tcDelta.function.arguments.length > 0) {
+              slot.arguments += tcDelta.function.arguments;
+              yield { type: 'provider_activity' };
+            }
+          }
+        }
+      }
+    };
 
     try {
       while (true) {
@@ -735,96 +854,8 @@ export class OpenAIChatCompletionsAdapter extends LLMAdapter {
         rawSseBody.push(chunkText);
 
         for (const rawLine of sseLines.push(chunkText)) {
-          const line = rawLine.trimEnd();
-          if (!line.startsWith('data:')) continue;
-          const data = line.slice(5).trim();
-          if (!data) continue;
-          if (data === '[DONE]') {
-            sawDone = true;
-            continue;
-          }
-          if (signal?.aborted) throw new LLMAbortError();
-
-          let chunk;
-          try {
-            chunk = JSON.parse(data);
-          } catch {
-            malformedStream = true;
-            continue;
-          }
-
-          if (chunk?.error) {
-            streamError = classifyStreamErrorPayload(chunk, response);
-            break;
-          }
-          if (chunk?.id) responseId = chunk.id;
-          if (chunk?.model) responseModel = chunk.model;
-          if (chunk?.usage) usage = chunk.usage;
-
-          const choices = Array.isArray(chunk?.choices) ? chunk.choices : [];
-          if (choices.length === 0) continue;
-          const choice = choices.find(c => c?.index === 0) || choices[0];
-          if (!choice) continue;
-
-          if (typeof choice.finish_reason === 'string' && choice.finish_reason) {
-            finishReason = choice.finish_reason;
-          }
-
-          const delta = choice.delta || {};
-
-          // Reasoning text deltas (Copilot: reasoning_text; DeepSeek/OpenRouter: reasoning_content / reasoning)
-          const reasoning = extractReasoningFields(delta);
-          if (reasoning.text) {
-            if (!reasoningField) reasoningField = reasoning.field;
-            reasoningText += reasoning.text;
-            yield { type: 'thinking_delta', text: reasoning.text };
-          }
-          if (reasoning.opaque) {
-            reasoningOpaque = reasoning.opaque;
-            yield { type: 'provider_activity' };
-          }
-
-          // Visible text content
-          if (typeof delta.content === 'string' && delta.content.length > 0) {
-            textContent += delta.content;
-            yield { type: 'text_delta', text: delta.content };
-          }
-          if (typeof delta.refusal === 'string' && delta.refusal.length > 0) {
-            refusalText += delta.refusal;
-            yield { type: 'provider_activity' };
-          }
-
-          // Streaming tool call deltas
-          if (Array.isArray(delta.tool_calls) && delta.tool_calls.length > 0) {
-            for (const tcDelta of delta.tool_calls) {
-              if (!tcDelta || typeof tcDelta !== 'object') {
-                toolInputError = new LLMToolInputError('Chat Completions returned invalid tool call delta');
-                continue;
-              }
-              const idx = Number.isSafeInteger(tcDelta.index) && tcDelta.index >= 0 ? tcDelta.index : toolSlots.size;
-              let slot = toolSlots.get(idx);
-              if (!slot) {
-                slot = { index: idx, id: '', name: '', arguments: '' };
-                toolSlots.set(idx, slot);
-              }
-              if (typeof tcDelta.id === 'string' && tcDelta.id) {
-                if (slot.id && slot.id !== tcDelta.id) {
-                  toolInputError = new LLMToolInputError('Chat Completions returned inconsistent tool call identity');
-                } else {
-                  slot.id = tcDelta.id;
-                }
-              }
-              if (tcDelta.function && typeof tcDelta.function === 'object') {
-                if (typeof tcDelta.function.name === 'string' && tcDelta.function.name) {
-                  slot.name += tcDelta.function.name;
-                }
-                if (typeof tcDelta.function.arguments === 'string' && tcDelta.function.arguments.length > 0) {
-                  slot.arguments += tcDelta.function.arguments;
-                  yield { type: 'provider_activity' };
-                }
-              }
-            }
-          }
+          yield* processSseLine(rawLine);
+          if (streamError) break;
         }
         if (streamError) break;
       }
@@ -835,71 +866,8 @@ export class OpenAIChatCompletionsAdapter extends LLMAdapter {
         const remaining = [...sseLines.push(tail)];
         if (sseLines.pending) remaining.push(sseLines.pending);
         for (const rawLine of remaining) {
-          const line = rawLine.trimEnd();
-          if (!line.startsWith('data:')) continue;
-          const data = line.slice(5).trim();
-          if (!data) continue;
-          if (data === '[DONE]') { sawDone = true; continue; }
-          try {
-            const chunk = JSON.parse(data);
-            if (chunk?.error) { streamError = classifyStreamErrorPayload(chunk, response); break; }
-            if (chunk?.id) responseId = chunk.id;
-            if (chunk?.model) responseModel = chunk.model;
-            if (chunk?.usage) usage = chunk.usage;
-            const choice = Array.isArray(chunk?.choices) ? (chunk.choices.find(c => c?.index === 0) || chunk.choices[0]) : null;
-            if (choice?.finish_reason) finishReason = choice.finish_reason;
-            const delta = choice?.delta || {};
-            const reasoning = extractReasoningFields(delta);
-            if (reasoning.text) {
-              if (!reasoningField) reasoningField = reasoning.field;
-              reasoningText += reasoning.text;
-              yield { type: 'thinking_delta', text: reasoning.text };
-            }
-            if (reasoning.opaque) {
-              reasoningOpaque = reasoning.opaque;
-              yield { type: 'provider_activity' };
-            }
-            if (typeof delta.content === 'string' && delta.content.length > 0) {
-              textContent += delta.content;
-              yield { type: 'text_delta', text: delta.content };
-            }
-            if (typeof delta.refusal === 'string' && delta.refusal.length > 0) {
-              refusalText += delta.refusal;
-              yield { type: 'provider_activity' };
-            }
-            if (Array.isArray(delta.tool_calls) && delta.tool_calls.length > 0) {
-              for (const tcDelta of delta.tool_calls) {
-                if (!tcDelta || typeof tcDelta !== 'object') {
-                  toolInputError = new LLMToolInputError('Chat Completions returned invalid tool call delta');
-                  continue;
-                }
-                const idx = Number.isSafeInteger(tcDelta.index) && tcDelta.index >= 0 ? tcDelta.index : toolSlots.size;
-                let slot = toolSlots.get(idx);
-                if (!slot) {
-                  slot = { index: idx, id: '', name: '', arguments: '' };
-                  toolSlots.set(idx, slot);
-                }
-                if (typeof tcDelta.id === 'string' && tcDelta.id) {
-                  if (slot.id && slot.id !== tcDelta.id) {
-                    toolInputError = new LLMToolInputError('Chat Completions returned inconsistent tool call identity');
-                  } else {
-                    slot.id = tcDelta.id;
-                  }
-                }
-                if (tcDelta.function && typeof tcDelta.function === 'object') {
-                  if (typeof tcDelta.function.name === 'string' && tcDelta.function.name) {
-                    slot.name += tcDelta.function.name;
-                  }
-                  if (typeof tcDelta.function.arguments === 'string' && tcDelta.function.arguments.length > 0) {
-                    slot.arguments += tcDelta.function.arguments;
-                    yield { type: 'provider_activity' };
-                  }
-                }
-              }
-            }
-          } catch {
-            malformedStream = true;
-          }
+          yield* processSseLine(rawLine);
+          if (streamError) break;
         }
       }
 
@@ -1084,7 +1052,9 @@ export class OpenAIChatCompletionsAdapter extends LLMAdapter {
     const rawToolCalls = Array.isArray(message.tool_calls) ? message.tool_calls : [];
 
     if (reasoning.text) yield { type: 'thinking_delta', text: reasoning.text };
+    else if (reasoning.opaque) yield { type: 'provider_activity' };
     if (content) yield { type: 'text_delta', text: content };
+    else if (refusal) yield { type: 'provider_activity' };
 
     yield buildUsageEvent(result.usage);
     yield {

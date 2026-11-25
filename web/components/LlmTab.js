@@ -120,6 +120,11 @@ export default {
                       {{ $t('settings.llm.protocolAnthropic') }}
                       <svg v-if="provider.protocol === 'anthropic'" class="sp-custom-select-check" viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg>
                     </div>
+                    <div class="sp-custom-select-option" :class="{ active: !provider.protocol }"
+                      @click="setProtocol(idx, ''); closeDropdown('protocol-' + idx)">
+                      {{ $t('settings.llm.protocolAuto') }}
+                      <svg v-if="!provider.protocol" class="sp-custom-select-check" viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg>
+                    </div>
                   </div>
                 </div>
               </div>
