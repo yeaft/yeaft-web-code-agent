@@ -1149,7 +1149,7 @@ RELEASE_BODY`;
       baseUrl: 'https://gemini-gateway.invalid/v1beta', apiKey: 'fixture-key', models: ['gemini-4-carbon'] }] });
     const geminiConfig = { model: 'gateway/gemini-4-carbon', maxOutputTokens: 1024, projectDocMaxBytes: 0 };
 
-    it('spends one shared headers/retry budget after a tool, without replaying the tool', async () => {
+    it('gives each retry attempt a fresh 180s headers window after a tool, without replaying the tool', async () => {
       const toolRuns = vi.fn(async () => 'retained probe result');
       const failure = () => new Response(JSON.stringify({ error: { code: 'upstream_headers_timeout' } }), { status: 504 });
       const fetch = vi.fn(async (_url, { signal }) => {
@@ -1165,7 +1165,7 @@ RELEASE_BODY`;
       vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'hrtime'] });
       try {
         const engine = new Engine({ adapter: geminiGateway(), trace,
-          config: { ...geminiConfig, llmRetry: { baseDelayMs: 1_000, jitterRatio: 0 } } });
+          config: { ...geminiConfig, llmRetry: { maxRetries: 1, baseDelayMs: 1_000, jitterRatio: 0 } } });
         engine.registerTool({ name: 'Probe', description: 'Read a fixture', parameters: { type: 'object' }, execute: toolRuns });
         const events = [];
         const run = (async () => { for await (const event of engine.query({ prompt: 'Read and summarize.' })) events.push(event); })();
@@ -1176,7 +1176,8 @@ RELEASE_BODY`;
         expect(fetch.mock.calls[2][1].body).toBe(fetch.mock.calls[1][1].body);
         expect(fetch.mock.calls[2][1].body).toContain('retained probe result');
         expect(events.find(e => e.type === 'llm_retry')).toMatchObject({ attempt: 1, reason: 'upstream_headers_timeout' });
-        await vi.advanceTimersByTimeAsync(58_999);
+        // Retry attempt gets its own full 180s headers budget, not just the 59s remaining from attempt 1.
+        await vi.advanceTimersByTimeAsync(179_999);
         expect(events.some(e => e.terminal)).toBe(false);
         await vi.advanceTimersByTimeAsync(2);
         await run;
@@ -1191,11 +1192,12 @@ RELEASE_BODY`;
       }
     });
 
-    it('temporarily steps down effort and tightens older tool results on timeout retry, then restores effort on the next loop', async () => {
+    it('temporarily steps down effort on timeout retry, keeps compacted older tool results compacted on later loops while restoring effort', async () => {
       const neonGateway = () => new AdapterRouter({ providers: [{ name: 'gateway', protocol: 'gemini',
         baseUrl: 'https://gemini-gateway.invalid/v1beta', apiKey: 'fixture-key', models: ['gemini-4-neon'] }] });
       const olderDetail = 'older-detail-'.repeat(400);
       const latestDetail = 'latest-detail-'.repeat(20);
+      const thirdDetail = 'third-detail-'.repeat(20);
       const bodies = [];
       let callCount = 0;
       const fetch = vi.fn(async (_url, init) => {
@@ -1205,8 +1207,8 @@ RELEASE_BODY`;
         if (callCount === 2) return geminiResult([{ functionCall: { id: 'new-1', name: 'ReadNew', args: {} } }]);
         // Loop 3 attempt 1 times out with gateway 504 -> retry should step xhigh -> high & compact old-1 while keeping new-1 intact.
         if (callCount === 3) return new Response(JSON.stringify({ error: { code: 'upstream_headers_timeout' } }), { status: 504 });
-        // Loop 3 retry succeeds with another tool call -> loop 4 must restore xhigh.
-        if (callCount === 4) return geminiResult([{ functionCall: { id: 'final-1', name: 'ReadNew', args: {} } }]);
+        // Loop 3 retry succeeds with another tool call -> loop 4 must restore xhigh, keep old-1 compacted, and keep newer results (new-1, final-1) intact.
+        if (callCount === 4) return geminiResult([{ functionCall: { id: 'final-1', name: 'ReadThird', args: {} } }]);
         return geminiResult([{ text: 'Done after stepping back up.' }]);
       });
       vi.stubGlobal('fetch', fetch);
@@ -1218,6 +1220,8 @@ RELEASE_BODY`;
           execute: async () => olderDetail });
         engine.registerTool({ name: 'ReadNew', description: 'Return recent output', parameters: { type: 'object' },
           execute: async () => latestDetail });
+        engine.registerTool({ name: 'ReadThird', description: 'Return third output', parameters: { type: 'object' },
+          execute: async () => thirdDetail });
         const events = [];
         for await (const event of engine.query({ prompt: 'Inspect and finish.' })) events.push(event);
 
@@ -1230,11 +1234,16 @@ RELEASE_BODY`;
         expect(bodies[3].generationConfig.thinkingConfig.thinkingLevel).toBe('HIGH');
         const retryJson = JSON.stringify(bodies[3].contents);
         expect(retryJson).toContain('tool result compacted for context budget');
+        expect(retryJson).not.toContain(olderDetail);
         expect(retryJson).toContain(latestDetail);
         expect(retryJson.length).toBeLessThan(JSON.stringify(bodies[2].contents).length);
-        // Loop 4 (index 4) automatically climbs back to XHIGH and does not keep forced compaction on.
+        // Loop 4 (index 4) climbs back to XHIGH, keeps old-1 compacted instead of re-expanding it, and preserves newer tool outputs (new-1 & final-1).
         expect(bodies[4].generationConfig.thinkingConfig.thinkingLevel).toBe('XHIGH');
-        expect(JSON.stringify(bodies[4].contents)).toContain(olderDetail);
+        const nextLoopJson = JSON.stringify(bodies[4].contents);
+        expect(nextLoopJson).toContain('tool result compacted for context budget');
+        expect(nextLoopJson).not.toContain(olderDetail);
+        expect(nextLoopJson).toContain(latestDetail);
+        expect(nextLoopJson).toContain(thirdDetail);
         expect(events.find(e => e.type === 'llm_retry')).toMatchObject({
           attempt: 1, reason: 'upstream_headers_timeout', effortFrom: 'xhigh', effortTo: 'high',
         });
@@ -1326,8 +1335,9 @@ RELEASE_BODY`;
         expect(collectInline(bodies[0].contents)).toEqual(uploads.map(u => u.source.data));
         // Request 2 has 4 uploads + 4 tool images = 8 total -> newest 5 kept (last 1 upload + all 4 tool images).
         expect(collectInline(bodies[1].contents)).toEqual([uploads[3].source.data, ...toolGifs]);
-        // The 3 omitted older uploads turned into text placeholders.
-        expect(JSON.stringify(bodies[1].contents[0])).toContain('Image not sent.');
+        // The 3 omitted older uploads turned into actionable text placeholders.
+        expect(JSON.stringify(bodies[1].contents[0])).toContain('request image limit (5');
+        expect(JSON.stringify(bodies[1].contents[0])).toContain('do not reopen images you already inspected');
       } finally {
         vi.unstubAllGlobals();
       }
@@ -1467,19 +1477,85 @@ RELEASE_BODY`;
       }
     });
 
-    it('keeps an immediate 429 distinct from a timeout when its retry delay will not fit', async () => {
-      const fetch = vi.fn(async () => new Response('{}', { status: 429, headers: { 'Retry-After': '30' } }));
+    it('gives each attempt (including retries and model switch) its own per-request headers wait budget', async () => {
+      const neonGateway = () => new AdapterRouter({ providers: [
+        { name: 'gateway', protocol: 'gemini', baseUrl: 'https://gemini-gateway.invalid/v1beta', apiKey: 'fixture-key', models: ['gemini-4-neon', 'gemini-4-carbon'] },
+      ] });
+      const bodies = [];
+      let callCount = 0;
+      const fetch = vi.fn(async (_url, init) => {
+        bodies.push(JSON.parse(init.body));
+        callCount++;
+        if (callCount === 1 || callCount === 2) {
+          // Each attempt waits 120s then hits gateway 504: with a 180s per-request budget,
+          // both XHIGH and HIGH retries finish and the 3rd attempt reaches MEDIUM cleanly.
+          await new Promise(resolve => setTimeout(resolve, 120_000));
+          return new Response(JSON.stringify({ error: { code: 'upstream_headers_timeout' } }), { status: 504 });
+        }
+        if (callCount === 3) {
+          await new Promise(resolve => setTimeout(resolve, 90_000));
+          return geminiResult([{ text: 'Recovered at medium after two 120s 504s.' }]);
+        }
+        return geminiResult([{ text: 'Unexpected extra call.' }]);
+      });
+      vi.stubGlobal('fetch', fetch);
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'hrtime'] });
+      try {
+        const engine = new Engine({ adapter: neonGateway(), trace,
+          config: { model: 'gateway/gemini-4-neon', modelEffort: 'xhigh', maxOutputTokens: 1024, projectDocMaxBytes: 0,
+            llmRetry: { maxRetries: 3, baseDelayMs: 1_000, maxDelayMs: 2_000, jitterRatio: 0 } } });
+        const events = [];
+        const run = (async () => { for await (const event of engine.query({ prompt: 'Run full effort ladder.' })) events.push(event); })();
+        await vi.advanceTimersByTimeAsync(121_000); // attempt 1 (120s 504) + 1s backoff -> attempt 2
+        expect(fetch).toHaveBeenCalledTimes(2);
+        await vi.advanceTimersByTimeAsync(122_000); // attempt 2 (120s 504) + 2s backoff -> attempt 3
+        expect(fetch).toHaveBeenCalledTimes(3);
+        await vi.advanceTimersByTimeAsync(90_000); // attempt 3 (90s) succeeds at MEDIUM
+        await run;
+        expect(events.find(e => e.type === 'turn_end' && e.terminal)).toMatchObject({ stopReason: 'end_turn', terminal: true });
+        expect(bodies.map(b => b.generationConfig.thinkingConfig.thinkingLevel)).toEqual(['XHIGH', 'HIGH', 'MEDIUM']);
+      } finally {
+        vi.useRealTimers();
+        vi.unstubAllGlobals();
+      }
+    });
+
+    it('resets retry attempt counter and effort override when primary model switches mid-retry', async () => {
+      const multiRouter = new AdapterRouter({ providers: [
+        { name: 'gateway', protocol: 'gemini', baseUrl: 'https://gemini-gateway.invalid/v1beta', apiKey: 'fixture-key', models: ['gemini-4-neon', 'gemini-4-carbon'] },
+      ] });
+      const urls = [];
+      let callCount = 0;
+      const fetch = vi.fn(async (url) => {
+        urls.push(String(url));
+        callCount++;
+        // Call 1 (neon) fails -> switches to carbon before retry.
+        // Call 2 (carbon) fails -> must still get its own fresh maxRetries=1 retry on carbon!
+        if (callCount <= 2) {
+          return new Response(JSON.stringify({ error: { code: 'upstream_headers_timeout' } }), { status: 504 });
+        }
+        return geminiResult([{ text: 'Succeeded on switched model fresh budget.' }]);
+      });
       vi.stubGlobal('fetch', fetch);
       try {
-        const engine = new Engine({ adapter: geminiGateway(), trace, config: { ...geminiConfig,
-          llmRetry: { maxRequestRetryTimeMs: 20_000 } } });
+        const baseConfig = { model: 'gateway/gemini-4-neon', modelEffort: 'xhigh', maxOutputTokens: 1024, projectDocMaxBytes: 0,
+          llmRetry: { maxRetries: 1, baseDelayMs: 0, maxDelayMs: 0, jitterRatio: 0 } };
+        const engine = new Engine({ adapter: multiRouter, trace, config: baseConfig });
         const events = [];
-        for await (const event of engine.query({ prompt: 'Check the provider' })) events.push(event);
-        expect(fetch).toHaveBeenCalledTimes(1);
-        expect(events.some(event => event.type === 'llm_retry')).toBe(false);
-        expect(events.find(event => event.type === 'error')).toMatchObject({ reason: 'request_retry_time_exhausted',
-          retryAttempts: 0, error: { statusCode: 429, message: expect.stringContaining('rate limited') } });
-      } finally { vi.unstubAllGlobals(); }
+        for await (const event of engine.query({ prompt: 'Switch mid retry' })) {
+          events.push(event);
+          if (event.type === 'llm_retry' && callCount === 1) {
+            engine.refreshConfig({ ...baseConfig, model: 'gateway/gemini-4-carbon', modelEffort: 'high' });
+          }
+        }
+        expect(events.find(e => e.type === 'turn_end' && e.terminal)).toMatchObject({ stopReason: 'end_turn', terminal: true });
+        expect(urls).toHaveLength(3);
+        expect(urls[0]).toContain('gemini-4-neon');
+        expect(urls[1]).toContain('gemini-4-carbon');
+        expect(urls[2]).toContain('gemini-4-carbon');
+      } finally {
+        vi.unstubAllGlobals();
+      }
     });
 
     it('does not interrupt a healthy Gemini stream after headers or treat user cancellation as timeout', async () => {

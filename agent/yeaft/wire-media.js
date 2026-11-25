@@ -84,8 +84,8 @@ export function capRequestImages(messages, maxImages, { frozenLength = 0, pathFo
       omittedImages++;
       const path = pathForImage?.(part);
       const marker = path
-        ? { type: 'text', text: `[Older image not sent: request image limit (${cap}). Original: ${JSON.stringify(path)}. Use ViewImage to reopen it if needed.]` }
-        : wireMediaMarker(part, message);
+        ? { type: 'text', text: `[Older image not sent: request image limit (${cap}; newest ${cap} kept). Original: ${JSON.stringify(path)}. Record findings from the currently visible images before opening another batch of up to ${cap} images; do not reopen images you already inspected.]` }
+        : { type: 'text', text: `[Older image not sent: request image limit (${cap}; newest ${cap} kept). Record findings from the currently visible images before opening another batch of up to ${cap} images; do not reopen images you already inspected (use the saved path${message.role === 'tool' ? ' in the tool result' : ' in the upload list'} with ViewImage only if you have not inspected it yet).]` };
       next ??= message.content.slice();
       next[p] = marker;
       // Drop any immediately preceding preview annotation paired with this

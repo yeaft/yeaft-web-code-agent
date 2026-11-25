@@ -63,11 +63,13 @@ export function createActiveToolImageProjector({ pathForImage, preview = makeMod
     const path = pathOf(from);
     if (path) pathFor.set(to, path);
   };
-  const marker = (reason, part) => {
+  const marker = (reason, part, { hint = null } = {}) => {
     const path = pathOf(part);
-    return { type: 'text', text: `[${reason}${path
-      ? ` Original: ${JSON.stringify(path)}. Use ViewImage to reopen it or crop the original for more detail.`
-      : ' See the tool result for the original; use a crop if more detail is needed.'}]` };
+    const guidance = hint
+      || (path
+        ? ` Original: ${JSON.stringify(path)}. Use ViewImage to reopen it or crop the original for more detail.`
+        : ' See the tool result for the original; use a crop if more detail is needed.');
+    return { type: 'text', text: `[${reason}${guidance}]` };
   };
 
   async function project(messages, { frozenLength = 0, canRollover = false, signal } = {}) {
@@ -101,8 +103,8 @@ export function createActiveToolImageProjector({ pathForImage, preview = makeMod
       if (!toolRow && message.role !== 'user') continue;
       const content = imagesIn(message);
       let next;
-      const omit = (index, reason, part) => {
-        const text = marker(reason, part);
+      const omit = (index, reason, part, options) => {
+        const text = marker(reason, part, options);
         imageAnnotations.add(text);
         (next ??= content.slice())[index] = text;
       };
@@ -145,7 +147,15 @@ export function createActiveToolImageProjector({ pathForImage, preview = makeMod
         if (!fits(frozenToolImages + mutableCount, frozenToolChars + mutableChars, chars)) {
           if (toolRow && canRollover && frozenToolImages > 0 && fits(mutableCount, mutableChars, chars)) throw new ToolImagePrefixBudgetError();
           staleImages++;
-          omit(p, 'Tool image not sent: image retention budget.', part);
+          const path = pathOf(part);
+          const countCapped = frozenToolImages + mutableCount >= TOOL_IMAGE_COUNT;
+          if (countCapped) {
+            omit(p, `Image not sent: at most ${TOOL_IMAGE_COUNT} images can be attached per request (newest ${TOOL_IMAGE_COUNT} kept).`, part, {
+              hint: `${path ? ` Original: ${JSON.stringify(path)}.` : ''} Analyze the currently visible images and record findings first before opening another batch of up to ${TOOL_IMAGE_COUNT} images; do not reopen images you already inspected.`,
+            });
+          } else {
+            omit(p, 'Tool image not sent: image retention budget.', part);
+          }
           continue;
         }
         seen.add(key);

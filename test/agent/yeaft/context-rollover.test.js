@@ -124,9 +124,21 @@ async function assertActiveToolImageProjection() {
     expect(capped.totalImages).toBe(5);
     expect(capped.omittedImages).toBe(2);
     expect(capped.messages[0]).toBe(projected.messages[0]);
-    // Preview annotation paired with the omitted tool image is collapsed, leaving only the honest omission notice with original path.
+    // Preview annotation paired with the omitted tool image is collapsed, leaving only the honest omission notice with original path and batch guidance.
     expect(capped.messages[2].content.some(p => p.text?.includes('Model image preview'))).toBe(false);
-    expect(capped.messages[2].content.some(p => p.text?.includes('shots/big.png') && p.text?.includes('request image limit (5)'))).toBe(true);
+    expect(capped.messages[2].content.some(p => p.text?.includes('shots/big.png')
+      && p.text?.includes('request image limit (5')
+      && p.text?.includes('do not reopen images you already inspected'))).toBe(true);
+
+    // Count-capped active-tool-images projection (7 parallel ViewImage calls in one batch) keeps newest 5 and emits batch guidance to prevent view-image thrashing.
+    const batch = [
+      { role: 'assistant', content: '', toolCalls: Array.from({ length: 7 }, (_, n) => ({ id: `b-${n}`, name: 'ViewImage', input: { file_path: `img-${n}.png` } })) },
+      ...Array.from({ length: 7 }, (_, n) => result(`b-${n}`, image(`batch-${n}`))),
+    ];
+    const batchProjected = await project(batch);
+    expect(imageParts(batchProjected.messages)).toHaveLength(5);
+    const omittedNotice = batchProjected.messages[1].content.find(p => p.type === 'text' && p.text?.includes('at most 5 images'));
+    expect(omittedNotice?.text).toContain('do not reopen images you already inspected');
 
     // 2. stepDownRetryEffort across Gemini, Anthropic, OpenAI, floor medium, and unsupported models.
     expect(stepDownRetryEffort('xhigh', { model: 'gemini-4-neon', protocol: 'gemini' })).toBe('high');

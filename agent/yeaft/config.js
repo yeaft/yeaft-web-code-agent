@@ -85,8 +85,8 @@ const DEFAULTS = {
   //   • baseDelayMs / maxDelayMs: exponential backoff bounds used when
   //     the server didn't send a Retry-After header.
   //   • jitterRatio: ± random fraction applied to backoff; 0 disables.
-  //   • maxRequestRetryTimeMs: 180s per model step (waiting for headers and
-  //     replaying failures, including backoff); 0 disables the time budget.
+  //   • maxRequestRetryTimeMs: 180s per provider request attempt (waiting for
+  //     headers; each retry / model switch gets a fresh 180s window); 0 disables.
   //   • streamIdleTimeoutMs / highEffortStreamIdleTimeoutMs: per-chunk silence
   //     budgets, selected from the final wire effort (high/xhigh/max/ultra).
   //     Defaults leave 30s before the Session's 120s/300s silence watchdog.
