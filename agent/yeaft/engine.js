@@ -77,7 +77,7 @@ import { streamContextRollover, contextRolloverLocalHandoff, contextRolloverRepo
 import { getModelInfo, normalizeEffort, parseModelRef, resolveContextWindow, resolveMaxOutputTokens } from './models.js';
 import { attachRouterPlan, extractPriorPlan, stripMetaForWire } from './router/continuity.js';
 import { resolveThinking } from './router/thinking.js';
-import { findEffortModelEntry, usesNativeGeminiLevels } from './sessions/session-config.js';
+import { findEffortModelEntry, normalizeRoutedEffort } from './sessions/session-config.js';
 import { approxTokens, computeBudget } from './memory/budget.js';
 import { COLLAB_TOOL_POLICY, isToolErrorOutput, toolValidationError, localizeVisibleText, normalizeToolOutput, truncateToolResultIfNeeded } from './tools/registry.js';
 import { CONDITIONAL_BUILTIN_TOOL_NAMES, resolveActiveToolNames } from './tools/activation.js';
@@ -2945,8 +2945,9 @@ export class Engine {
         : this.#adapter;
       const routedProvider = this.#adapter.getProviderForModel?.(currentModel);
       const effortModel = findEffortModelEntry(requestConfig, currentModel, routedProvider?.name);
-      const preserveNativeEffort = usesNativeGeminiLevels(currentModel, effortModel,
-        routedProvider?.protocol || requestConfig.adapter);
+      const effortProtocol = effortModel?.protocol || this.#adapter.getProtocolForModel?.(currentModel)
+        || routedProvider?.protocol || requestConfig.adapter;
+      const normalizeRequestEffort = value => normalizeRoutedEffort(value, currentModel, effortModel, effortProtocol);
       retryPolicy = resolveRetryPolicy(requestConfig);
 
       // task-324: no hard MAX_TURNS cap. Loop terminates on end_turn,
@@ -3170,9 +3171,9 @@ export class Engine {
         // Resolve effort per provider request so a saved Session effort takes
         // effect at the next loop. A caller override or `/effort` prefix stays
         // fixed for this query and still wins over live Session config.
-        const requestUserEffort = normalizeEffort(turnConfig?.effort, preserveNativeEffort)
-          || normalizeEffort(userEffort, preserveNativeEffort)
-          || normalizeEffort(requestConfig.modelEffort, preserveNativeEffort);
+        const requestUserEffort = normalizeRequestEffort(turnConfig?.effort)
+          || normalizeRequestEffort(userEffort)
+          || normalizeRequestEffort(requestConfig.modelEffort);
         const geminiDefault = scenario === 'chat' && effortModel?.effortProtocol === 'gemini'
           ? effortModel.defaultEffort : null;
         let resolvedEffort = requestUserEffort || geminiDefault || pickEffort({ scenario, toolLoopTurns });
@@ -4510,10 +4511,7 @@ export class Engine {
               // for this retry only; effort climbs back on the next successful
               // loop while compacted older tool results stay compacted.
               if (!signedAnthropicPrefix) tightenOlderToolResultsOnRetry = true;
-              const protocol = normalizeProtocolName(effortModel?.protocol)
-                || effortModel?.effortProtocol
-                || normalizeProtocolName(routedProvider?.protocol)
-                || normalizeProtocolName(requestConfig.adapter);
+              const protocol = normalizeProtocolName(effortProtocol) || effortModel?.effortProtocol;
               // Never enable thinking on retry when the timed-out request ran
               // with thinking disabled/omitted (e.g. YEAFT_THINKING_V1 off on
               // Anthropic/OpenAI without an explicit user effort).

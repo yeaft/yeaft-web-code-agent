@@ -2,6 +2,8 @@
 import { mount } from '@vue/test-utils';
 import * as Vue from 'vue';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import QuickSendSettings from '../../web/components/QuickSendSettings.js';
+import { buildModelSelectionRows, getSessionEffortDisplay } from '../../web/utils/modelRefs.js';
 import LlmTab from '../../web/components/LlmTab.js';
 import en from '../../web/i18n/en.js';
 
@@ -31,6 +33,42 @@ async function setup() {
 const saveButton = () => wrapper.find('.llm-save-row button');
 
 const pendingRequest = store => store.sendWsMessage.mock.calls.at(-1)[0];
+
+describe('Chat Completions effort choices', () => {
+  const carbon = { id: 'gemini-4-carbon', provider: 'chat', protocol: 'openai-chat-completions', effortOptions: ['medium', 'high'] };
+  const generic = { ...carbon, id: 'generic', effortOptions: ['medium', 'high', 'xhigh', 'max', 'ultra'] };
+  const responses = { ...carbon, provider: 'responses', protocol: 'openai-responses', effortOptions: ['medium', 'xhigh', 'max', 'ultra'] };
+
+  it('selects Carbon High by default and displays saved effort using the actual wire protocol', () => {
+    const rows = buildModelSelectionRows([carbon, generic, responses]);
+    expect(rows.map(row => [row.efforts, row.defaultEffort])).toEqual([
+      [carbon.effortOptions, 'high'], [generic.effortOptions, 'xhigh'], [responses.effortOptions, 'xhigh'],
+    ]);
+    for (const effort of ['xhigh', 'max', 'ultra']) {
+      expect(getSessionEffortDisplay({}, effort, carbon)).toBe('high');
+      expect(getSessionEffortDisplay({}, effort, { ...carbon, effortOptions: ['medium'] })).toBe('medium');
+    }
+    expect(getSessionEffortDisplay({}, 'high', generic)).toBe('high');
+    expect(getSessionEffortDisplay({}, 'high', responses)).toBe('xhigh');
+  });
+
+  it('loads, switches and saves Quick Send efforts against the provider-qualified model', async () => {
+    const store = Vue.reactive({ agents: [{ id: 'a', online: true }], llmConfig: {}, ws: { readyState: 1 }, sendWsMessage: vi.fn() });
+    globalThis.Pinia = { useChatStore: () => store };
+    wrapper = mount(QuickSendSettings, { props: { agentId: 'a' }, global: { mocks: { $t: key => en[key] || key } } });
+    store.llmConfig.a = config(pendingRequest(store).requestId, { availableModels: [responses, carbon, generic], quickSends: [
+      { id: '1', name: 'Carbon', model: 'chat/gemini-4-carbon', effort: 'xhigh' },
+      { id: '2', name: 'Legacy', model: 'responses/gemini-4-carbon', effort: 'high' },
+    ] });
+    await Vue.nextTick();
+    const vm = wrapper.vm;
+    expect(vm.draft.map(item => item.effort)).toEqual(['high', 'xhigh']);
+    vm.changeModel(vm.draft[1], 'chat/gemini-4-carbon');
+    expect(vm.effortsFor(vm.draft[1])).toEqual(['medium', 'high']);
+    vm.save();
+    expect(pendingRequest(store).config.quickSends.map(item => item.effort)).toEqual(['high', 'high']);
+  });
+});
 
 describe('native Gemini settings', () => {
   it('retains manual model options through draft edits, rediscovery and save while refreshing catalog limits', async () => {

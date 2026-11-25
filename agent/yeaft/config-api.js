@@ -57,6 +57,11 @@ function publicQuickSends(value, models, ambiguousRefs) {
     // Keep unavailable rows editable and preserve their keyboard slots. Never
     // reinterpret a saved effort when its model ownership cannot be resolved.
     if (!model) return { ...item, available: false };
+    if (model.protocol === 'openai-chat-completions') {
+      const effort = resolveCatalogEffort(model, item.effort);
+      if (item.effort != null && !effort) return { ...item, available: false };
+      return { ...item, effort };
+    }
     const effort = model.effortProtocol === 'gemini'
       ? resolveCatalogEffort(model, item.effort) ?? normalizeEffort(item.effort, model.geminiThinkingMode === 'level')
       : normalizeEffort(item.effort);

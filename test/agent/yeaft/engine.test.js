@@ -5,7 +5,8 @@ import { tmpdir } from 'os';
 import { createRequire } from 'node:module';
 import { SubAgentToolRegistry } from '../../../agent/yeaft/sub-agent/execution-control.js';
 import { Engine } from '../../../agent/yeaft/engine.js';
-import { AdapterRouter } from '../../../agent/yeaft/llm/router.js';
+import { AdapterRouter, filterEffortForModel, normalizeModelEntry } from '../../../agent/yeaft/llm/router.js';
+import { WorkCenterResourceAdapter } from '../../../agent/yeaft/work-center/resource-control.js';
 import { withUsageAccounting } from '../../../agent/yeaft/llm/usage-accounting.js';
 import { ConversationStore } from '../../../agent/yeaft/conversation/persist.js';
 import { closeConversationHistoryIndexes } from '../../../agent/yeaft/conversation/history-index.js';
@@ -82,6 +83,50 @@ beforeEach(() => {
 
 describe('Engine', () => {
   describe('simple query (no tools)', () => {
+    it('resolves caller and prefix intent at the request boundary, not by model family', async () => {
+      const model = 'proxy/gemini-4-carbon';
+      for (const [protocol, query, expected] of [
+        ['openai-chat-completions', { prompt: '/high hello' }, 'high'],
+        ['openai-chat-completions', { prompt: '/high hello', userEffort: 'low' }, 'medium'],
+        ['openai-responses', { prompt: '/high hello' }, 'xhigh'],
+        ['gemini', { prompt: 'hello', userEffort: 'low' }, 'low'],
+      ]) {
+        const engine = new Engine({ adapter: mockAdapter, trace, config: { model, projectDocMaxBytes: 0,
+          availableModels: [{ ref: model, id: 'gemini-4-carbon', protocol }] } });
+        mockAdapter.pushResponse([{ type: 'text_delta', text: 'ok' }, { type: 'stop', stopReason: 'end_turn' }]);
+        for await (const event of engine.query(query)) expect(event.type).not.toBe('error');
+        expect(mockAdapter.callLog.at(-1)).toMatchObject({ model, effort: expected, effortSource: 'user' });
+      }
+    });
+
+    it('preserves a per-model Chat High through Session accounting even when the public catalog is stale', async () => {
+      const router = new AdapterRouter({ providers: [{ name: 'proxy', protocol: 'openai-responses', baseUrl: 'https://mixed.invalid/v1', apiKey: 'fixture',
+        models: [{ id: 'alias', protocol: 'openai-chat-completions' }] }] });
+      const adapter = withUsageAccounting(router, vi.fn());
+      expect(new WorkCenterResourceAdapter(adapter).getProtocolForModel('proxy/alias')).toBe('openai-chat-completions');
+      const engine = new Engine({ adapter, trace, config: { model: 'proxy/alias', projectDocMaxBytes: 0, availableModels: [] } });
+      const fetch = vi.spyOn(globalThis, 'fetch').mockResolvedValue(Response.json({ choices: [{ message: { content: 'ok' }, finish_reason: 'stop' }] }));
+      try {
+        for await (const event of engine.query({ prompt: '/high Hello' })) expect(event.type).not.toBe('error');
+        expect(String(fetch.mock.calls[0][0])).toBe('https://mixed.invalid/v1/chat/completions');
+        expect(JSON.parse(fetch.mock.calls[0][1].body).reasoning_effort).toBe('high');
+      } finally { fetch.mockRestore(); }
+    });
+
+    it('filters Chat effort against routed options and leaves an omitted Carbon effort unset', () => {
+      const protocol = 'openai-chat-completions';
+      const model = 'gemini-4-carbon';
+      const entry = normalizeModelEntry({ id: model, effortOptions: ['high'] }, protocol);
+      const route = { protocol, entry };
+      const params = { model, effortSource: 'user' };
+      for (const effort of ['high', 'xhigh', 'max', 'ultra']) {
+        expect(filterEffortForModel({ ...params, effort }, route).effort).toBe('high');
+      }
+      expect(filterEffortForModel({ model }, route)).not.toHaveProperty('effort');
+      expect(filterEffortForModel({ ...params, effort: 'medium' }, route)).not.toHaveProperty('effort');
+      expect(filterEffortForModel({ ...params, model: 'another', effort: 'max' }, route)).not.toHaveProperty('effort');
+    });
+
     it('retries the first image-heavy request by bytes without repeating transcript rows or sending historical image bytes', async () => {
       const yeaftDir = mkdtempSync(join(tmpdir(), 'yeaft-engine-no-persist-duplicates-'));
       try {
@@ -1503,7 +1548,7 @@ RELEASE_BODY`;
           protocol: 'openai-chat-completions',
           baseUrl: 'https://copilot.invalid/v1',
           apiKey: 'fixture-key',
-          models: ['gemini-4-neon', 'gemini-4-carbon'],
+          models: ['gemini-4-carbon'],
         }],
         llmRetry: defaultPolicy,
       });
@@ -1516,7 +1561,7 @@ RELEASE_BODY`;
         bodies.push(JSON.parse(init.body));
         callCount++;
         if (callCount === 1) {
-          // Attempt 1 (xhigh): headers + reasoning chunk arrive, then stream stalls for 600s.
+          // Attempt 1 (Carbon high): headers + reasoning chunk arrive, then stream stalls for 600s.
           return new Response(new ReadableStream({
             start(controller) {
               controller.enqueue(sseChunk({ id: 'c1', choices: [{ index: 0, delta: { role: 'assistant', reasoning_text: 'Thinking...' }, finish_reason: null }] }));
@@ -1552,8 +1597,8 @@ RELEASE_BODY`;
       let run = null;
       try {
         const baseConfig = {
-          model: 'copilot/gemini-4-neon',
-          modelEffort: 'xhigh',
+          model: 'copilot/gemini-4-carbon',
+          modelEffort: 'high',
           maxOutputTokens: 1024,
           projectDocMaxBytes: 0,
           llmRetry: { ...defaultPolicy, maxRetries: 2, baseDelayMs: 1_000, maxDelayMs: 1_000, jitterRatio: 0 },
@@ -1588,16 +1633,16 @@ RELEASE_BODY`;
         run = null;
 
         expect(events.find(e => e.type === 'turn_end' && e.terminal)).toMatchObject({ stopReason: 'end_turn', terminal: true });
-        expect(bodies.map(b => b.reasoning_effort)).toEqual(['xhigh', 'medium', 'medium']);
+        expect(bodies.map(b => b.reasoning_effort)).toEqual(['high', 'medium', 'medium']);
         // Policies come in pairs: before headers (headersTimeoutMs set) and after headers (undefined).
         const postHeaderPolicies = policies.filter(p => p.headersTimeoutMs === undefined);
         expect(postHeaderPolicies).toEqual([
-          { effort: 'xhigh', streamIdleTimeoutMs: 600_000, headersTimeoutMs: undefined },
+          { effort: 'high', streamIdleTimeoutMs: 600_000, headersTimeoutMs: undefined },
           { effort: 'medium', streamIdleTimeoutMs: 600_000, headersTimeoutMs: undefined },
           { effort: 'medium', streamIdleTimeoutMs: 300_000, headersTimeoutMs: undefined },
         ]);
 
-        // Also verify disabled high-effort guard (0) preserves both transport 0 and high-effort watchdog across xhigh -> medium headers-timeout retry.
+        // Also verify disabled high-effort guard (0) preserves both transport 0 and high-effort watchdog across high -> medium headers-timeout retry.
         const zeroPolicies = [];
         let zeroCalls = 0;
         vi.stubGlobal('fetch', vi.fn(async () => {
@@ -1616,7 +1661,7 @@ RELEASE_BODY`;
             protocol: 'openai-chat-completions',
             baseUrl: 'https://copilot.invalid/v1',
             apiKey: 'fixture-key',
-            models: ['gemini-4-neon'],
+            models: ['gemini-4-carbon'],
           }],
           llmRetry: normalizeLlmRetry({ streamIdleTimeoutMs: 300_000, highEffortStreamIdleTimeoutMs: 0 }),
         });
@@ -1630,7 +1675,7 @@ RELEASE_BODY`;
           onProviderRequestStart: policy => zeroPolicies.push(policy),
         })) { /* drain */ }
         expect(zeroPolicies.filter(p => p.headersTimeoutMs === undefined)).toEqual([
-          { effort: 'xhigh', streamIdleTimeoutMs: 0, headersTimeoutMs: undefined },
+          { effort: 'high', streamIdleTimeoutMs: 0, headersTimeoutMs: undefined },
           { effort: 'medium', streamIdleTimeoutMs: 0, headersTimeoutMs: undefined, preserveHighEffortWatchdog: true },
         ]);
       } finally {

@@ -87,6 +87,7 @@ export class LLMAdapter {
 ### OpenAIChatCompletionsAdapter (`openai-chat-completions.js`)
 - Targets OpenAI Chat Completions API `/v1/chat/completions` (`protocol: "openai-chat-completions"`)
 - Supports `max_completion_tokens`, top-level `reasoning_effort`, `stream_options.include_usage`, `prompt_cache_key` (with automatic single retry fallback if rejected), function tools, and multimodal user/tool images
+- In Chat Completions, **High** sends `reasoning_effort: "high"`, distinct from **X-High**. For `gemini-4-carbon`, the picker offers Medium and High; saved X-High/Max/Ultra selections use the highest allowed tier up to High without rewriting the Session. Other routes keep their own effort tiers.
 - Captures and replays native assistant reasoning state (`reasoning_opaque`, `reasoning_text`, `reasoning_content`, `reasoning`) in fenced `providerState` so Copilot Proxy Gemini and OpenAI-compatible reasoning gateways preserve multi-turn tool-loop signatures and prompt caching
 
 ### 工具 schema 按协议转换

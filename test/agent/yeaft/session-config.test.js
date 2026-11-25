@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import ctx from '../../../agent/context.js';
+import { AdapterRouter } from '../../../agent/yeaft/llm/router.js';
 import { loadConfig } from '../../../agent/yeaft/config.js';
 import { getPluginConfig, updatePluginConfig } from '../../../agent/yeaft/config-api.js';
 import { flushAllAgentPerfTraces } from '../../../agent/yeaft/perf-trace.js';
@@ -38,6 +39,47 @@ afterEach(async () => {
 });
 
 describe('Yeaft session-scoped model config', () => {
+  it('persists High using the selected route rather than the Gemini model ID', () => {
+    const root = makeDir();
+    const id = 'gemini-4-carbon';
+    const availableModels = ['openai-responses', 'openai-chat-completions', 'gemini'].map(protocol =>
+      ({ id, ref: `${protocol}/${id}`, provider: protocol, protocol }));
+    const config = { availableModels, model: id, primaryModel: availableModels[1].ref };
+    for (const [model, input, expected] of [
+      [undefined, 'high', 'high'], [availableModels[1].ref, 'low', 'medium'],
+      [availableModels[0].ref, 'high', 'xhigh'], [availableModels[2].ref, 'low', 'low'],
+    ]) {
+      const sessionId = `configured-${expected}`;
+      createSession(sessionsRoot(root), { id: sessionId, roster: ['omni'] }).close();
+      const saved = saveSessionConfig(root, sessionId, { model, modelEffort: input }, config);
+      expect(saved.modelEffort).toBe(expected);
+      expect(loadSessionConfig(root, sessionId, config)).toEqual(saved);
+      expect(resolveSessionConfig(config, saved).modelEffort).toBe(expected);
+    }
+  });
+
+  it('keeps High from disk to wire for a qualified Chat alias missing from the local model catalog', async () => {
+    const root = makeDir(), sessionId = 'stale-catalog';
+    // Same-name rows are supported. The qualified Chat fallback can be the second row.
+    const providers = [
+      { name: 'proxy', protocol: 'openai-responses', baseUrl: 'https://responses.invalid/v1', apiKey: 'fixture', models: ['listed-responses'] },
+      { name: 'proxy', protocol: 'chat-completions', baseUrl: 'https://chat.invalid/v1', apiKey: 'fixture', models: ['listed-chat'] },
+    ];
+    const config = { providers, adapter: 'openai-responses', availableModels: [], model: 'listed' };
+    const selection = { model: 'proxy/unlisted-alias', modelEffort: 'high' };
+    createSession(sessionsRoot(root), { id: sessionId, roster: ['omni'] }).close();
+    expect(saveSessionConfig(root, sessionId, selection, config)).toEqual(selection);
+    const resolved = resolveSessionConfig(config, loadSessionConfig(root, sessionId, config));
+    const fetch = vi.spyOn(globalThis, 'fetch').mockResolvedValue(Response.json({ choices: [{ message: { content: 'ok' }, finish_reason: 'stop' }] }));
+    try {
+      await new AdapterRouter({ providers }).call({ model: resolved.model, effort: resolved.modelEffort, effortSource: 'user', messages: [{ role: 'user', content: 'Hi' }] });
+      expect(String(fetch.mock.calls[0][0])).toBe('https://chat.invalid/v1/chat/completions');
+      expect(JSON.parse(fetch.mock.calls[0][1].body)).toMatchObject({ model: 'unlisted-alias', reasoning_effort: 'high' });
+      // A listed model on the first row still uses Responses, even with a stale public catalog.
+      expect(resolveSessionConfig(config, { ...selection, model: 'proxy/listed-responses' }).modelEffort).toBe('xhigh');
+    } finally { fetch.mockRestore(); }
+  });
+
   it('fails closed for an invalid config.json root and preserves every bad file', () => {
     const root = makeDir();
     const configPath = join(root, 'config.json');

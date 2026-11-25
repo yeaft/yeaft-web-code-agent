@@ -23,7 +23,8 @@ import { existsSync, readFileSync } from 'fs';
 import { join } from 'path';
 import { writeAtomic } from '../storage/index.js';
 import { isGitHubCopilotProvider } from '../llm/known-providers.js';
-import { getGeminiThinkingProfile, normalizeEffort, parseModelRef } from '../models.js';
+import { getGeminiThinkingProfile, normalizeChatEffort, normalizeEffort, parseModelRef } from '../models.js';
+import { AdapterRouter, normalizeProtocolName } from '../llm/router.js';
 import { loadConfig } from '../config.js';
 import { isSessionSceneId } from './scene-ids.js';
 import { sessionsRoot } from './session-crud.js';
@@ -64,6 +65,14 @@ export function usesNativeGeminiLevels(model, entry, protocol = null) {
     && Boolean(getGeminiThinkingProfile(model)?.levels);
 }
 
+// Preserve intent until the wire route is known; Chat High is literal, but
+// Chat Low/Minimal still use legacy aliases (unlike native Gemini levels).
+export function normalizeRoutedEffort(effort, model, entry, protocol) {
+  const route = normalizeProtocolName(entry?.protocol || protocol || entry?.effortProtocol);
+  if (route === 'openai-chat-completions') return normalizeChatEffort(effort);
+  return normalizeEffort(effort, usesNativeGeminiLevels(model, entry, route));
+}
+
 function inheritedModel(config) {
   const { model, primaryModel } = config || {};
   // loadConfig exposes the configured ref in primaryModel and may leave an
@@ -81,7 +90,12 @@ function normalizeSessionEffort(effort, model, config, yeaftDir) {
   const base = (typeof config === 'function' ? config() : config)
     ?? (yeaftDir && existsSync(join(yeaftDir, CONFIG_FILE)) ? loadConfig({ dir: yeaftDir }) : null);
   const effective = (model && resolveAllowedModelRef(base, model)) || inheritedModel(base);
-  return usesNativeGeminiLevels(effective, findEffortModelEntry(base, effective), base?.adapter) ? effort : legacy;
+  const entry = findEffortModelEntry(base, effective);
+  // On an incomplete catalog the router alone owns per-model overrides and the
+  // precedence between same-name provider rows. Resolve policy, never credentials.
+  const route = entry?.protocol || (effective && base?.providers?.length &&
+    new AdapterRouter({ providers: base.providers }).getProtocolForModel(effective));
+  return normalizeRoutedEffort(effort, effective, entry, route || entry?.effortProtocol || base?.adapter);
 }
 
 function publicConfig(stored, config, yeaftDir) {
@@ -144,7 +158,7 @@ export function validateSessionConfig(cfg) {
   }
   if ('modelEffort' in cfg && cfg.modelEffort !== null && cfg.modelEffort !== undefined && cfg.modelEffort !== '') {
     if (typeof cfg.modelEffort !== 'string' || !normalizeEffort(cfg.modelEffort.trim())) {
-      throw new SessionConfigError('invalid_model_effort', 'modelEffort must be medium, xhigh, max, or ultra');
+      throw new SessionConfigError('invalid_model_effort', 'modelEffort must be a recognized effort level');
     }
   }
 }

@@ -1,5 +1,5 @@
 import ModernSelect from './ModernSelect.js';
-import { getSelectableModelEfforts, modelOptionMatchesRef, modelOptionRef, normalizeModelEffort } from '../utils/modelRefs.js';
+import { findCatalogModel, getSelectableModelEfforts, modelOptionRef, normalizeModelEffort } from '../utils/modelRefs.js';
 
 const MAX_QUICK_SENDS = 5;
 const cloneEntries = entries => (Array.isArray(entries) ? entries : []).map(item => ({
@@ -96,8 +96,7 @@ export default {
       }
     },
     modelFor(item) {
-      const matches = this.models.filter(model => modelOptionMatchesRef(model, item.model));
-      return matches.length === 1 ? matches[0] : null;
+      return findCatalogModel(this.models, item.model);
     },
     effortsFor(item) {
       const model = this.modelFor(item);
@@ -117,6 +116,8 @@ export default {
     changeModel(item, model) {
       item.model = model;
       delete item.available;
+      const owner = this.modelFor(item);
+      if (owner?.protocol === 'openai-chat-completions') item.effort = normalizeModelEffort(item.effort, owner) || null;
       if (!this.effortsFor(item).includes(item.effort)) item.effort = null;
       this.changed();
     },

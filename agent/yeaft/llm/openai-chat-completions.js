@@ -30,7 +30,6 @@
  */
 
 import {
-  normalizeEffortPayload,
   enforceSubAgentEffortPayload,
   captureEffortDecision,
 } from '../effort.js';
@@ -56,10 +55,8 @@ import {
   contentFilterStopDetails,
 } from './adapter.js';
 import {
-  normalizeEffort,
   getModelEffortOptions,
-  getThinkingCapability,
-  mapEffortToOpenAIReasoning,
+  resolveChatEffort,
 } from '../models.js';
 import {
   createProviderContext,
@@ -514,17 +511,11 @@ export class OpenAIChatCompletionsAdapter extends LLMAdapter {
     if (translatedTools) body.tools = translatedTools;
 
     const capContext = { ...effortContext, protocol: 'openai-chat-completions' };
-    const normEffort = normalizeEffort(effort);
-    if ((thinkingV1Enabled() || effortSource === 'user') && normEffort) {
-      const cap = getThinkingCapability(model, capContext);
-      const supportedEfforts = getModelEffortOptions(model, capContext);
-      if (cap.supportsThinking && cap.thinkingProtocol === 'openai-reasoning' && supportedEfforts.includes(normEffort)) {
-        const wireEffort = mapEffortToOpenAIReasoning(normEffort);
-        if (wireEffort) body.reasoning_effort = wireEffort;
-      }
+    if (effort && (thinkingV1Enabled() || effortSource === 'user')) {
+      const effective = resolveChatEffort(model, effort, getModelEffortOptions(model, capContext));
+      if (effective) body.reasoning_effort = effective;
     }
 
-    const hasExplicitExtraEffort = Boolean(extraBody && typeof extraBody === 'object' && Object.hasOwn(extraBody, 'reasoning_effort'));
     if (extraBody && typeof extraBody === 'object') {
       Object.assign(body, extraBody);
       // If caller explicitly opted into legacy `max_tokens` via extraBody without
@@ -551,12 +542,7 @@ export class OpenAIChatCompletionsAdapter extends LLMAdapter {
       onProviderDiagnostics,
     });
 
-    // Preserve explicit caller overrides in extraBody.reasoning_effort (e.g.
-    // 'minimal'/'low'/'high' required by specific gateways/models) unless a
-    // sub-agent effortConstraint applies below.
-    if (!hasExplicitExtraEffort) {
-      normalizeEffortPayload(body, 'openai-chat-completions');
-    }
+    // extraBody is an explicit raw wire override; only child constraints override it.
     const effortDecision = effortConstraint
       ? enforceSubAgentEffortPayload(body, { model, protocol: 'openai-chat-completions', effortContext: capContext, effortConstraint })
       : captureEffortDecision({ body, model, protocol: 'openai-chat-completions', effortContext: capContext, requested: effort, source: effortSource || 'scenario' });

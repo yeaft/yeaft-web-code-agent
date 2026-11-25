@@ -153,6 +153,10 @@ export class UsageAccountingAdapter extends LLMAdapter {
     return this.#adapter.refreshProviders?.(providers);
   }
 
+  getProtocolForModel(modelId) {
+    return this.#adapter.getProtocolForModel?.(modelId) || null;
+  }
+
   getProviderForModel(modelId) {
     return this.#adapter.getProviderForModel?.(modelId) || null;
   }

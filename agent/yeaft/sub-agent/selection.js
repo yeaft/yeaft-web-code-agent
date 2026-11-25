@@ -34,6 +34,7 @@ import { inferProtocolFromModelId, normalizeProtocolName } from '../llm/router.j
 import {
   getModelEffortOptions,
   getThinkingCapability,
+  normalizeChatEffort,
   normalizeEffort,
   parseModelRef,
   resolveGeminiEffort,
@@ -172,7 +173,7 @@ function pickClosestAtOrBelow(target, options, { modelRef, protocol, preserveNat
     const resolved = resolveGeminiEffort(modelRef, target, options);
     if (resolved) return resolved;
   }
-  const normalizedTarget = normalizeEffort(target, preserveNative);
+  const normalizedTarget = protocol === 'openai-chat-completions' ? normalizeChatEffort(target) : normalizeEffort(target, preserveNative);
   if (normalizedTarget && options.includes(normalizedTarget)) return normalizedTarget;
   const targetRank = effortRank(target);
   if (targetRank < 0) return null;

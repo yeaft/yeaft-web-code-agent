@@ -44,6 +44,26 @@ afterEach(async () => {
 });
 
 describe('live input in the single continuous Person execution loop', () => {
+  it('restores the previous Chat Carbon selection at High instead of switching to the default model', async () => {
+    const ids = ['generic', 'gemini-4-carbon'];
+    const providerConfig = { primaryModel: 'chat/generic', providers: [{ name: 'chat', protocol: 'openai-chat-completions', models: ids }],
+      availableModels: ids.map(id => ({ id, ref: `chat/${id}`, contextWindow: 100000, maxOutput: 4096, effortOptions: ['medium', 'high'] })) };
+    vi.stubEnv('YEAFT_THINKING_V1', '1');
+    try {
+      const run = await setup((params, index) => index === 0 ? tools(['goal', 'Execution__goal', goalInput([])])
+        : params.tools.length ? text('Done.') : final(params), providerConfig);
+      const context = run.repository.context.bind(run.repository);
+      vi.spyOn(run.repository, 'context').mockImplementation(async episode => {
+        const snapshot = await context(episode);
+        snapshot.state.lastSelection = { model: 'chat/gemini-4-carbon', effort: 'xhigh' };
+        return snapshot;
+      });
+      await run.start().promise;
+      expect(run.requests[0]).toMatchObject({ model: 'chat/gemini-4-carbon', effort: 'high' });
+      expect((await run.snapshot()).latestEpisode.status).toBe('completed');
+    } finally { vi.unstubAllEnvs(); }
+  });
+
   it('receives mid-model text and full attachments as exact user records, preventing the old write/publication', async () => {
     const entered = deferred(), release = deferred(); let incoming;
     const run = await setup(async (params, index) => {

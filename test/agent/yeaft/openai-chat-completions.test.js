@@ -25,6 +25,7 @@ import { defineTool } from '../../../agent/yeaft/tools/types.js';
 import { updateLlmConfig, getLlmConfig } from '../../../agent/yeaft/config-api.js';
 import { loadConfig } from '../../../agent/yeaft/config.js';
 import { addOrUpdateProvider } from '../../../agent/llm-config-cli.js';
+import { getModelEffortOptions } from '../../../agent/yeaft/models.js';
 import { stepDownRetryEffort, enforceSubAgentEffortPayload } from '../../../agent/yeaft/effort.js';
 
 const identity = {
@@ -136,6 +137,48 @@ describe('OpenAI Chat Completions protocol adapter & continuity', () => {
     // Direct factory supports openai-chat-completions
     const direct = await createLLMAdapter({ adapter: 'openai-chat-completions', apiKey: 'k', baseUrl: 'https://direct.invalid/v1' });
     expect(direct).toBeInstanceOf(OpenAIChatCompletionsAdapter);
+  });
+
+  it('sends literal Chat High for unary and streaming requests, and caps stale Carbon effort before fetch', async () => {
+    vi.stubEnv('YEAFT_THINKING_V1', '0');
+    const protocol = 'openai-chat-completions';
+    const model = 'gemini-4-carbon';
+    const messages = [{ role: 'user', content: 'ok?' }];
+    const adapter = new OpenAIChatCompletionsAdapter({ apiKey: 'test', baseUrl: 'https://fixture.invalid/v1' });
+    const bodies = [];
+    vi.stubGlobal('fetch', vi.fn(async (_url, init) => {
+      const body = JSON.parse(init.body);
+      bodies.push(body);
+      // Reproduce the upstream contract in the screenshot without hitting Copilot.
+      if (body.reasoning_effort && !['low', 'medium', 'high'].includes(body.reasoning_effort)) {
+        return Response.json({ error: { code: 'invalid_reasoning_effort' } }, { status: 400 });
+      }
+      return body.stream ? sse([{ choices: [{ delta: { content: 'ok' }, finish_reason: 'stop' }] }, '[DONE]'])
+        : json({ choices: [{ message: { content: 'ok' }, finish_reason: 'stop' }] });
+    }));
+    expect(getModelEffortOptions(model, { protocol })).toEqual(['medium', 'high']);
+    expect(getModelEffortOptions('other-alias', { protocol })).toEqual(['medium', 'high', 'xhigh', 'max', 'ultra']);
+    const decision = vi.fn();
+    for (const effort of ['high', 'xhigh', 'max', 'ultra']) {
+      const params = { model, messages, effort, effortSource: 'user', onEffortDecision: decision };
+      await adapter.call(params);
+      await collect(adapter.stream(params));
+      expect(bodies.slice(-2).map(body => body.reasoning_effort)).toEqual(['high', 'high']);
+      expect(decision).toHaveBeenLastCalledWith(expect.objectContaining({ requested: effort, effective: 'high' }));
+    }
+    for (const [effort, effortContext, expected] of [
+      ['xhigh', { effortOptions: ['medium'] }, 'medium'],
+      ['high', { supportsEffort: false }, undefined],
+      ['high', { effortOptions: ['xhigh'] }, undefined],
+      [undefined, {}, undefined],
+    ]) {
+      await adapter.call({ model, messages, effort, effortContext, effortSource: 'user' });
+      expect(bodies.at(-1).reasoning_effort).toBe(expected);
+    }
+    expect(stepDownRetryEffort('high', { model, protocol })).toBe('medium');
+    const body = { reasoning_effort: 'max' };
+    const child = enforceSubAgentEffortPayload(body, { model, protocol, effortConstraint: { targetEffort: 'high' } });
+    expect([child.cap, child.effective, body.reasoning_effort]).toEqual(['high', 'high', 'high']);
   });
 
   it('streams reasoning_text and reasoning_opaque, persists signed providerState, and replays them verbatim across Engine tool loops', async () => {
@@ -442,7 +485,7 @@ describe('OpenAI Chat Completions protocol adapter & continuity', () => {
   });
 
   it('supports effort stepping, sub-agent effort capping, config-api persistence, and CLI validation', () => {
-    expect(stepDownRetryEffort('xhigh', { model: 'gemini-4-neon', protocol: 'openai-chat-completions' })).toBe('medium');
+    expect(stepDownRetryEffort('xhigh', { model: 'gemini-4-neon', protocol: 'openai-chat-completions' })).toBe('high');
     expect(stepDownRetryEffort('max', { model: 'gemini-4-neon', protocol: 'openai-chat-completions' })).toBe('xhigh');
 
     const body = { model: 'gemini-4-neon', reasoning_effort: 'max', messages: [] };

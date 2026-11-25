@@ -1,4 +1,4 @@
-import { normalizeEffort } from '../models.js';
+import { resolveChatEffort, normalizeEffort } from '../models.js';
 import { enhanceResponse } from '../llm/response-enhance.js';
 import { createPersonChildProvider } from './child-provider.js';
 import { createPersonToolHost, createPersonNativeRegistry, isNativeTool, projectNativeResult } from './native-tools.js';
@@ -464,7 +464,9 @@ export class PersonRuntime {
         try {
           const restored = { ...snapshot.state.lastSelection };
           if (restored.effort != null) {
-            restored.effort = normalizeEffort(restored.effort, provider.catalog.some(model => model.id === restored.model && model.efforts.includes(restored.effort)));
+            const entry = provider.catalog.find(model => model.id === restored.model);
+            restored.effort = entry?.protocol === 'openai-chat-completions' ? resolveChatEffort(entry.id, restored.effort, entry.efforts)
+              : normalizeEffort(restored.effort, entry?.efforts.includes(restored.effort));
             if (!restored.effort) fail('MODEL_SELECTION');
           }
           validateSelection(restored, provider.catalog);

@@ -1,7 +1,7 @@
 import { EFFORT_LEVELS, snapshotEffortDecision } from '../effort.js';
 import { inferProtocolFromModelId } from '../llm/router.js';
 import { applyAnthropicThinking } from '../llm/anthropic.js';
-import { normalizeEffort, parseModelRef } from '../models.js';
+import { normalizeChatEffort, normalizeEffort, parseModelRef } from '../models.js';
 import { fail } from './contracts.js';
 
 const rank = effort => EFFORT_LEVELS.indexOf(normalizeEffort(effort, true));
@@ -62,15 +62,16 @@ export function createPersonChildProvider(provider, selection, instanceConfig = 
   const config = structuredClone(instanceConfig);
   const { modelId, providerName } = parseModelRef(model);
   const metadata = config.availableModels?.find(item => (item.ref || item.id) === model) || {};
-  const preserveNative = (metadata.protocol || inferProtocolFromModelId(modelId)) === 'gemini';
-  const efforts = [...new Set((entry.efforts || []).map(effort => normalizeEffort(effort, preserveNative)).filter(Boolean))];
-  const effort = normalizeEffort(selected.effort, preserveNative);
+  const protocol = entry.protocol || metadata.protocol || inferProtocolFromModelId(modelId);
+  const normalize = protocol === 'openai-chat-completions' ? normalizeChatEffort : value => normalizeEffort(value, protocol === 'gemini');
+  const efforts = [...new Set((entry.efforts || []).map(normalize).filter(Boolean))];
+  const effort = normalize(selected.effort);
   if (selected.effort != null && !effort) fail('MODEL_SELECTION');
   if (effort !== null && !efforts.includes(effort)) fail('MODEL_SELECTION');
   const outputCeiling = Number.isFinite(config.maxOutputTokens) && config.maxOutputTokens >= 1
     ? Math.floor(config.maxOutputTokens) : Math.floor(entry.maxOutput);
   const maxOutputTokens = Math.min(Math.floor(entry.maxOutput), outputCeiling);
-  const modelInfo = { ...metadata, id: modelId, ref: model,
+  const modelInfo = { ...metadata, protocol, id: modelId, ref: model,
     contextWindow: Math.floor(entry.contextWindow), maxOutput: maxOutputTokens,
     effortOptions: [...efforts], thinkingProtocol: metadata.effortProtocol || metadata.thinkingProtocol };
   // Keep preflight independent of the returned config and request overrides.

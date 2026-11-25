@@ -3,7 +3,7 @@
  *
  * Maps model IDs (e.g. "gpt-5", "claude-sonnet-4-20250514") to the *adapter*
  * metadata Yeaft needs to dispatch requests: protocol and base URL. Effort
- * options are resolved separately from the effective API, never model IDs.
+ * options are resolved separately from the effective API and known capability limits.
  *
  * Yeaft does not provide its own models. The "model" field is always a
  * model ID from an external provider. This registry lets Yeaft auto-detect
@@ -364,7 +364,7 @@ export function parseModelRef(ref) {
 
 /**
  * Valid effort levels accepted by Yeaft adapters.
- * @typedef {'medium' | 'xhigh' | 'max' | 'ultra'} Effort
+ * @typedef {'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra'} Effort
  */
 
 // Google Developer API GenerateContent uses model-specific enums, not one
@@ -435,6 +435,7 @@ export function geminiEffortCatalog(model, capability) {
 export function resolveCatalogEffort(model, effort) {
   const options = model?.effortOptions || [];
   if (model?.effortProtocol === 'gemini') return resolveGeminiEffort(model.id, effort, options);
+  if (model?.protocol === 'openai-chat-completions') return resolveChatEffort(model.id, effort, options);
   const value = normalizeEffort(effort);
   return options.includes(value) ? value : null;
 }
@@ -472,13 +473,42 @@ export function mapEffortToOpenAIReasoning(effort) {
 // Effort is an API contract, not a model-name allowlist. Compatible gateways
 // can expose new IDs/aliases without requiring a Yeaft release.
 export const OPENAI_REASONING_EFFORT_OPTIONS = Object.freeze(['medium', 'xhigh', 'max', 'ultra']);
+const CHAT_EFFORT_OPTIONS = Object.freeze(['medium', 'high', 'xhigh', 'max', 'ultra']);
+// This Chat Completions endpoint rejects reasoning_effort above high on Carbon.
+// Do not infer a limit for other Gemini IDs or routes from a shared prefix.
+const hasChatHighCeiling = model => geminiModelId(model) === 'gemini-4-carbon';
+export function normalizeChatEffort(effort) {
+  return effort === 'high' ? effort : normalizeEffort(effort);
+}
+
+/** Resolve persisted intent against the actual allowed wire tiers; never enable omitted effort. */
+export function resolveChatEffort(model, effort, options) {
+  const value = normalizeChatEffort(effort);
+  if (hasChatHighCeiling(model) && ['xhigh', 'max', 'ultra'].includes(value)) {
+    return ['high', 'medium'].find(level => options.includes(level)) ?? null;
+  }
+  return options.includes(value) ? value : null;
+}
+
 export const ANTHROPIC_ADAPTIVE_EFFORT_OPTIONS = Object.freeze(['medium', 'xhigh', 'max']);
 export const ANTHROPIC_MANUAL_EFFORT_OPTIONS = Object.freeze(['medium', 'xhigh', 'max']);
 
 export function normalizeEffortOptions(options, preserveNative = false) {
   if (!Array.isArray(options)) return null;
-  const out = [...new Set(options.map(value => normalizeEffort(value, preserveNative)).filter(Boolean))];
+  const normalize = typeof preserveNative === 'function' ? preserveNative : value => normalizeEffort(value, preserveNative);
+  const out = [...new Set(options.map(value => normalize(value)).filter(Boolean))];
   return out.length ? out : null;
+}
+
+/** At config boundaries a model may still inherit its provider's protocol. Don't
+ * irreversibly fold High before the route is known. */
+export function configuredEffortOptions(options, model, protocol) {
+  const wire = typeof protocol === 'string' ? protocol.trim() : '';
+  if (!wire) return normalizeEffortOptions(options, true);
+  if (['openai-chat-completions', 'chat-completions', 'openai'].includes(wire)) {
+    return normalizeEffortOptions(options, normalizeChatEffort);
+  }
+  return normalizeEffortOptions(options, wire === 'gemini' && Boolean(getGeminiThinkingProfile(model)?.levels));
 }
 
 /**
@@ -532,16 +562,19 @@ export function getThinkingCapability(model, context = {}) {
       || ['xhigh', 'medium', 'high'].find(value => defaults.includes(value)) || defaults[0] };
   }
   if (protocol !== 'anthropic' && protocol !== 'openai-responses' && protocol !== 'openai-chat-completions') return disabled;
-  const isOpenAI = protocol === 'openai-responses' || protocol === 'openai-chat-completions';
+  const isChat = protocol === 'openai-chat-completions';
+  const isOpenAI = protocol === 'openai-responses' || isChat;
   const manual = protocol === 'anthropic' && context.thinkingProtocol === 'anthropic';
   const thinkingProtocol = isOpenAI ? 'openai-reasoning'
     : manual ? 'anthropic' : 'anthropic-adaptive';
-  const apiOptions = isOpenAI ? OPENAI_REASONING_EFFORT_OPTIONS
+  const apiOptions = isChat ? (hasChatHighCeiling(model) ? ['medium', 'high'] : CHAT_EFFORT_OPTIONS)
+    : isOpenAI ? OPENAI_REASONING_EFFORT_OPTIONS
     : manual ? ANTHROPIC_MANUAL_EFFORT_OPTIONS : ANTHROPIC_ADAPTIVE_EFFORT_OPTIONS;
-  const overrides = normalizeEffortOptions(context.effortOptions);
+  const overrides = normalizeEffortOptions(context.effortOptions, isChat ? normalizeChatEffort : undefined);
   const effortOptions = overrides ? apiOptions.filter(value => overrides.includes(value)) : [...apiOptions];
   if (!effortOptions.length) return disabled;
-  const defaultEffort = normalizeEffort(context.defaultEffort) || (thinkingProtocol === 'anthropic-adaptive' ? 'xhigh' : null);
+  const configuredDefault = isChat ? resolveChatEffort(model, context.defaultEffort, effortOptions) : normalizeEffort(context.defaultEffort);
+  const defaultEffort = configuredDefault || (thinkingProtocol === 'anthropic-adaptive' ? 'xhigh' : null);
   return {
     supportsThinking: true,
     thinkingProtocol,
@@ -628,8 +661,7 @@ export function normalizeProviderModels(provider) {
       if (typeof entry.thinkingProtocol === 'string' && entry.thinkingProtocol.trim()) {
         norm.thinkingProtocol = entry.thinkingProtocol.trim();
       }
-      const effortOptions = normalizeEffortOptions(entry.effortOptions,
-        (entry.protocol === 'gemini' || !entry.protocol) && Boolean(getGeminiThinkingProfile(entry.id)?.levels));
+      const effortOptions = configuredEffortOptions(entry.effortOptions, entry.id, norm.protocol || provider.protocol);
       if (effortOptions) norm.effortOptions = effortOptions;
       const maxBudget = coercePositiveInt(entry.maxBudgetTokens);
       if (maxBudget !== undefined) norm.maxBudgetTokens = maxBudget;
@@ -661,8 +693,7 @@ export function serializeModelForPersistence(entry) {
   const effort = {};
   if (typeof entry.supportsEffort === 'boolean') effort.supportsEffort = entry.supportsEffort;
   if (typeof entry.thinkingProtocol === 'string' && entry.thinkingProtocol.trim()) effort.thinkingProtocol = entry.thinkingProtocol.trim();
-  const effortOptions = normalizeEffortOptions(entry.effortOptions,
-    (proto === 'gemini' || !proto) && Boolean(getGeminiThinkingProfile(entry.id)?.levels));
+  const effortOptions = configuredEffortOptions(entry.effortOptions, entry.id, proto);
   if (effortOptions) effort.effortOptions = effortOptions;
   const maxBudget = coercePositiveInt(entry.maxBudgetTokens);
   if (maxBudget !== undefined) effort.maxBudgetTokens = maxBudget;
