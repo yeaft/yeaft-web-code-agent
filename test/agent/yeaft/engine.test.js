@@ -1477,6 +1477,135 @@ RELEASE_BODY`;
       }
     });
 
+    it('preserves non-shrinking stream idle timeout on effort step-down retries and uses 300s/600s defaults', async () => {
+      const { normalizeLlmRetry } = await import('../../../agent/yeaft/config.js');
+      const { resolveStreamIdleTimeoutMs, MAX_STREAM_IDLE_TIMEOUT_MS } = await import('../../../agent/yeaft/llm/adapter.js');
+      // Preload dynamic adapter module before enabling fake timers so the first dispatch doesn't wait on module I/O.
+      await import('../../../agent/yeaft/llm/openai-chat-completions.js');
+
+      const defaultPolicy = normalizeLlmRetry();
+      expect(defaultPolicy.streamIdleTimeoutMs).toBe(300_000);
+      expect(defaultPolicy.highEffortStreamIdleTimeoutMs).toBe(600_000);
+      expect(MAX_STREAM_IDLE_TIMEOUT_MS).toBe(900_000);
+      expect(normalizeLlmRetry({ streamIdleTimeoutMs: 1_200_000 }).streamIdleTimeoutMs).toBe(900_000);
+      // High effort never shrinks below normal unless explicitly disabled with 0.
+      expect(resolveStreamIdleTimeoutMs({ streamIdleTimeoutMs: 300_000, highEffortStreamIdleTimeoutMs: 120_000 }, 'xhigh')).toBe(300_000);
+      expect(resolveStreamIdleTimeoutMs({ streamIdleTimeoutMs: 300_000, highEffortStreamIdleTimeoutMs: 0 }, 'xhigh')).toBe(0);
+      // Retry floor keeps prior higher/disabled budget without re-enabling global 0 or overriding model override.
+      expect(resolveStreamIdleTimeoutMs(defaultPolicy, 'medium', undefined, 600_000)).toBe(600_000);
+      expect(resolveStreamIdleTimeoutMs(defaultPolicy, 'medium', undefined, Infinity)).toBe(0);
+      expect(resolveStreamIdleTimeoutMs({ streamIdleTimeoutMs: 0, highEffortStreamIdleTimeoutMs: 0 }, 'medium', undefined, 600_000)).toBe(0);
+      expect(resolveStreamIdleTimeoutMs(defaultPolicy, 'medium', 45_000, 600_000)).toBe(45_000);
+
+      const chatRouter = new AdapterRouter({
+        providers: [{
+          name: 'copilot',
+          protocol: 'openai-chat-completions',
+          baseUrl: 'https://copilot.invalid/v1',
+          apiKey: 'fixture-key',
+          models: ['gemini-4-neon', 'gemini-4-carbon'],
+        }],
+        llmRetry: defaultPolicy,
+      });
+      const bodies = [];
+      const policies = [];
+      let callCount = 0;
+      const enc = new TextEncoder();
+      const sseChunk = obj => enc.encode(`data: ${JSON.stringify(obj)}\n\n`);
+      const fetch = vi.fn(async (_url, init) => {
+        bodies.push(JSON.parse(init.body));
+        callCount++;
+        if (callCount === 1) {
+          // Attempt 1 (xhigh): headers + reasoning chunk arrive, then stream stalls for 600s.
+          return new Response(new ReadableStream({
+            start(controller) {
+              controller.enqueue(sseChunk({ id: 'c1', choices: [{ index: 0, delta: { role: 'assistant', reasoning_text: 'Thinking...' }, finish_reason: null }] }));
+            },
+          }), { headers: { 'content-type': 'text/event-stream' } });
+        }
+        if (callCount === 2) {
+          // Attempt 2 (stepped down to medium): silent for 400s (>300s normal budget, <600s preserved floor),
+          // then emits a tool call so Loop 2 runs cleanly and proves the floor resets after success.
+          return new Response(new ReadableStream({
+            start(controller) {
+              controller.enqueue(sseChunk({ id: 'c2', choices: [{ index: 0, delta: { role: 'assistant', reasoning_text: 'Writing big file...' }, finish_reason: null }] }));
+              setTimeout(() => {
+                controller.enqueue(sseChunk({ id: 'c2', choices: [{ index: 0, delta: { tool_calls: [{ index: 0, id: 'call_write', type: 'function', function: { name: 'noop', arguments: '{}' } }] }, finish_reason: 'tool_calls' }] }));
+                controller.enqueue(enc.encode('data: [DONE]\n\n'));
+                controller.close();
+              }, 400_000);
+            },
+          }), { headers: { 'content-type': 'text/event-stream' } });
+        }
+        // Loop 2 (after recovery): switched to medium config to prove retry floor reset back to normal 300s.
+        return new Response(new ReadableStream({
+          start(controller) {
+            controller.enqueue(sseChunk({ id: 'c3', choices: [{ index: 0, delta: { role: 'assistant', content: 'Done.' }, finish_reason: 'stop' }] }));
+            controller.enqueue(enc.encode('data: [DONE]\n\n'));
+            controller.close();
+          },
+        }), { headers: { 'content-type': 'text/event-stream' } });
+      });
+      vi.stubGlobal('fetch', fetch);
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'hrtime'] });
+      const ctrl = new AbortController();
+      let run = null;
+      try {
+        const baseConfig = {
+          model: 'copilot/gemini-4-neon',
+          modelEffort: 'xhigh',
+          maxOutputTokens: 1024,
+          projectDocMaxBytes: 0,
+          llmRetry: { ...defaultPolicy, maxRetries: 2, baseDelayMs: 1_000, maxDelayMs: 1_000, jitterRatio: 0 },
+        };
+        const engine = new Engine({ adapter: chatRouter, trace, config: baseConfig });
+        engine.registerTool({
+          name: 'noop',
+          description: 'noop',
+          parameters: { type: 'object', properties: {} },
+          execute: async () => {
+            // Switch configured effort to medium for the next loop to verify the retry floor cleared on success.
+            engine.refreshConfig({ ...baseConfig, modelEffort: 'medium' });
+            return 'ok';
+          },
+        });
+        const events = [];
+        run = (async () => {
+          for await (const event of engine.query({
+            prompt: 'Write showcase page',
+            signal: ctrl.signal,
+            onProviderRequestStart: policy => policies.push(policy),
+          })) events.push(event);
+        })();
+        // Attempt 1 must NOT time out at old 270s; it times out at 600s.
+        await vi.advanceTimersByTimeAsync(599_000);
+        expect(fetch).toHaveBeenCalledTimes(1);
+        await vi.advanceTimersByTimeAsync(2_500); // 600s idle timeout + 1s retry backoff -> Attempt 2
+        expect(fetch).toHaveBeenCalledTimes(2);
+        // Attempt 2 stepped down to medium but preserved 600s silence budget — survives 400s silence!
+        await vi.advanceTimersByTimeAsync(400_500);
+        await run;
+        run = null;
+
+        expect(events.find(e => e.type === 'turn_end' && e.terminal)).toMatchObject({ stopReason: 'end_turn', terminal: true });
+        expect(bodies.map(b => b.reasoning_effort)).toEqual(['xhigh', 'medium', 'medium']);
+        // Policies come in pairs: before headers (headersTimeoutMs set) and after headers (undefined).
+        const postHeaderPolicies = policies.filter(p => p.headersTimeoutMs === undefined);
+        expect(postHeaderPolicies).toEqual([
+          { effort: 'xhigh', streamIdleTimeoutMs: 600_000, headersTimeoutMs: undefined },
+          { effort: 'medium', streamIdleTimeoutMs: 600_000, headersTimeoutMs: undefined },
+          { effort: 'medium', streamIdleTimeoutMs: 300_000, headersTimeoutMs: undefined },
+        ]);
+      } finally {
+        if (run) {
+          ctrl.abort();
+          await run.catch(() => {});
+        }
+        vi.useRealTimers();
+        vi.unstubAllGlobals();
+      }
+    });
+
     it('gives each attempt (including retries and model switch) its own per-request headers wait budget', async () => {
       const neonGateway = () => new AdapterRouter({ providers: [
         { name: 'gateway', protocol: 'gemini', baseUrl: 'https://gemini-gateway.invalid/v1beta', apiKey: 'fixture-key', models: ['gemini-4-neon', 'gemini-4-carbon'] },

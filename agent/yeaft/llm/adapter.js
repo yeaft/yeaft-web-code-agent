@@ -426,26 +426,42 @@ export class SseLineBuffer {
   }
 }
 
+/** Hard upper bound (ms) for any enabled per-chunk stream silence budget (15 minutes). */
+export const MAX_STREAM_IDLE_TIMEOUT_MS = 900_000;
+
 /**
  * Resolve one request's transport silence budget after final effort enforcement.
  * Provider/model overrides are absolute (including 0); the shared adapter is
  * never mutated. Explicit legacy timeouts apply to every effort unless a high
- * budget was also configured. All enabled budgets remain bounded at 10 minutes.
+ * budget was also configured. High-effort budgets never shrink below the normal
+ * budget (unless explicitly disabled with 0), and an optional `minTimeoutMs`
+ * floor (preserved across same-model retries such as effort step-down) prevents
+ * a retry from shrinking the silence budget without re-enabling a disabled (`0`)
+ * guard. All enabled budgets remain bounded at {@link MAX_STREAM_IDLE_TIMEOUT_MS}.
  *
  * @param {{ streamIdleTimeoutMs?: number, highEffortStreamIdleTimeoutMs?: number }} policy
  * @param {string|null} effort — effective wire effort, not the requested value
  * @param {number|undefined} overrideMs — model > provider override
+ * @param {number|undefined} [minTimeoutMs] — non-shrinking retry floor (positive ms, or `Infinity` when a prior attempt had the guard disabled)
  * @returns {number}
  */
-export function resolveStreamIdleTimeoutMs(policy = {}, effort = null, overrideMs) {
+export function resolveStreamIdleTimeoutMs(policy = {}, effort = null, overrideMs, minTimeoutMs) {
   const valid = value => Number.isFinite(value) && value >= 0;
-  const clamp = value => Math.min(600_000, Math.floor(value));
+  const clamp = value => Math.min(MAX_STREAM_IDLE_TIMEOUT_MS, Math.floor(value));
   if (valid(overrideMs)) return clamp(overrideMs);
   const normal = valid(policy.streamIdleTimeoutMs) ? clamp(policy.streamIdleTimeoutMs) : 0;
   if (normal === 0) return 0;
   const high = ['high', 'xhigh', 'max', 'ultra'].includes(effort);
-  return high && valid(policy.highEffortStreamIdleTimeoutMs)
-    ? clamp(policy.highEffortStreamIdleTimeoutMs) : normal;
+  let resolved = normal;
+  if (high && valid(policy.highEffortStreamIdleTimeoutMs)) {
+    const highBudget = clamp(policy.highEffortStreamIdleTimeoutMs);
+    resolved = highBudget === 0 ? 0 : Math.max(normal, highBudget);
+  }
+  if (resolved === 0) return 0;
+  if (minTimeoutMs === Infinity) return 0;
+  return valid(minTimeoutMs) && minTimeoutMs > 0
+    ? Math.max(resolved, clamp(minTimeoutMs))
+    : resolved;
 }
 
 /**

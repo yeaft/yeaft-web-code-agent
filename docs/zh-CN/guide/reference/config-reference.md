@@ -40,7 +40,7 @@
 | `models` | `(string \| ModelEntry)[]` | ✓ | 该 provider 服务的 model |
 | `credentialScopeId` | `string` | — | 原生 reasoning 回传与缓存的稳定、非敏感账号归属；动态凭据/自定义 endpoint 必填，官方静态 key 路径默认使用 key 指纹。换账号时更换；仅轮换 token 时保持 |
 | `capabilities` | `object` | — | `nativeReasoningState`、`promptCaching`、`parallelToolCalls`、`eagerInputStreaming` 布尔开关；`translation: true` 强制关闭这些能力。模型级覆盖优先 |
-| `streamIdleTimeoutMs` | `number` | — | provider 的流读取静默预算（0–600000ms）；绝对覆盖全局策略，模型级覆盖优先。Managed Copilot 保存时也保留 timeout 和 capability 覆盖 |
+| `streamIdleTimeoutMs` | `number` | — | provider 的流读取静默预算（0–900000ms）；绝对覆盖全局策略，模型级覆盖优先。Managed Copilot 保存时也保留 timeout 和 capability 覆盖 |
 
 > 当前支持的协议：`anthropic`、`openai-responses`、`openai-chat-completions`、`gemini`。旧别名 `chat-completions` / `openai` 会自动规范化为 `openai-chat-completions`。
 
@@ -55,21 +55,21 @@ model 项可以是裸字符串（`"gpt-5"`），也可以是对象：
 | `contextWindow` | `number` | — | 覆盖该 model 的注册表默认 |
 | `maxOutput` | `number` | — | 覆盖该 model 的注册表输出默认 |
 | `capabilities` | `object` | — | 逐字段覆盖 provider 的协议能力开关 |
-| `streamIdleTimeoutMs` | `number` | — | 当前请求的流读取静默预算（0–600000ms）；绝对覆盖 provider 和全局策略，包括显式 `0` |
+| `streamIdleTimeoutMs` | `number` | — | 当前请求的流读取静默预算（0–900000ms）；绝对覆盖 provider 和全局策略，包括显式 `0` |
 
 #### 流静默与长工具参数
 
-全局 `llmRetry` 策略用于 Anthropic Messages、Gemini 和 OpenAI Responses：
+全局 `llmRetry` 策略用于 Anthropic Messages、Gemini、OpenAI Responses 和 OpenAI Chat Completions：
 
 | 字段 | 默认 | 说明 |
 | --- | --- | --- |
 | `llmRetry.maxRequestRetryTimeMs` | `180000` | 单次模型请求等待响应头的超时预算（每次重试和切换模型都会重新计时）；`0` 关闭此响应头等待超时 |
-| `llmRetry.streamIdleTimeoutMs` | `90000` | 普通请求每个 chunk 之间的静默预算；`0` 在所有 effort 下关闭全局传输层 guard |
-| `llmRetry.highEffortStreamIdleTimeoutMs` | `270000` | 最终 wire effort 为 `high`、`xhigh`、`max` 或 `ultra` 时的预算，不依据最初请求的 effort |
+| `llmRetry.streamIdleTimeoutMs` | `300000` | 普通请求每个 chunk 之间的静默预算（5 分钟；每次收到 chunk 重新计时，不是整次请求总时限）；`0` 在所有 effort 下关闭全局传输层 guard |
+| `llmRetry.highEffortStreamIdleTimeoutMs` | `600000` | 最终 wire effort 为 `high`、`xhigh`、`max` 或 `ultra` 时的静默预算（10 分钟）；除非显式设为 `0`，否则不会低于 `streamIdleTimeoutMs` |
 
 响应头等待超时按单次请求计算，不会中断正常返回的响应体、工具执行或整轮对话。每次重试和切换模型都会重新计时。只有空白或服务商图片分隔标记的回复不算作有效答复。
 
-启用的预算最多 600000ms。每次收到 chunk 都重新计时，不是整次请求的总时限。旧配置显式指定 `streamIdleTimeoutMs` 时，该值用于所有 effort，除非同时提供高 effort 预算。模型/provider 的绝对覆盖优先于全局配置（包括全局 `0`），且不会改变其他模型共用的缓存 adapter。独立的 Session watchdog 按最终请求 effort 调整，并比启用的传输层预算至少多留 30 秒处理超时。关闭传输层 guard 不会关闭 Session watchdog 或用户取消能力；原有有限重试次数仍有效。
+启用的流静默预算最多 900000ms（15 分钟）。每次收到 chunk 都重新计时，不是整次请求的总时限。超时重试临时降低 effort（例如 `xhigh` → `medium`）时，会保留上一枪的静默预算作为下限，不会在重试中缩减静默超时（当前步成功、触发上下文滚动或切换模型后恢复默认策略）。旧配置显式指定 `streamIdleTimeoutMs` 时，该值用于所有 effort，除非同时提供高 effort 预算。模型/provider 的绝对覆盖优先于全局配置（包括全局 `0`），且不会改变其他模型共用的缓存 adapter。独立的 Session watchdog 按最终请求 effort 调整，并比启用的传输层预算至少多留 30 秒处理超时。关闭传输层 guard 不会关闭 Session watchdog 或用户取消能力；原有有限重试次数仍有效。
 
 官方 Anthropic 请求会对自定义工具发送 `eager_input_streaming: true`，启用[细粒度工具流](https://platform.claude.com/docs/en/agents-and-tools/tool-use/fine-grained-tool-streaming)，无需 beta header。未知代理默认**不发送**该字段；确认代理支持后，才可在 provider/model 设置 `capabilities.eagerInputStreaming: true`。设为 `false` 可退出；`translation: true` 始终关闭该能力。此选项不影响 OpenAI Responses。
 

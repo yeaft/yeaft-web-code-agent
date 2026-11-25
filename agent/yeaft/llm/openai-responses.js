@@ -400,7 +400,7 @@ export class OpenAIResponsesAdapter extends LLMAdapter {
     }
   }
 
-  async *#streamResponse({ model, system, messages, tools, maxTokens = 16384, effort, effortSource, effortContext = {}, extraBody, providerContext, requestIdentity, onProviderDiagnostics, effortConstraint = null, onEffortDecision = null, signal, onRawExchange, rawExchangeMaxBytes = 512 * 1024, onRequestStart, getHeadersTimeoutMs, onResponseHeaders, streamIdleTimeoutMs, maxRequestBodyBytes }, exposure) {
+  async *#streamResponse({ model, system, messages, tools, maxTokens = 16384, effort, effortSource, effortContext = {}, extraBody, providerContext, requestIdentity, onProviderDiagnostics, effortConstraint = null, onEffortDecision = null, signal, onRawExchange, rawExchangeMaxBytes = 512 * 1024, onRequestStart, getHeadersTimeoutMs, onResponseHeaders, streamIdleTimeoutMs, minStreamIdleTimeoutMs, maxRequestBodyBytes }, exposure) {
     if (signal?.aborted) throw new LLMAbortError();
 
     const context = providerContext || createProviderContext({ protocol: 'openai-responses', baseUrl: this.#baseUrl, staticApiKey: this.#apiKey, model });
@@ -437,7 +437,7 @@ export class OpenAIResponsesAdapter extends LLMAdapter {
       : captureEffortDecision({ body, model, protocol: 'openai-responses', effortContext, requested: effort, source: effortSource || 'scenario' });
     onEffortDecision?.(effortDecision);
     const requestBody = toWellFormedJson(body);
-    const idleMs = resolveStreamIdleTimeoutMs(this.#streamIdlePolicy, effortDecision.effective, streamIdleTimeoutMs);
+    const idleMs = resolveStreamIdleTimeoutMs(this.#streamIdlePolicy, effortDecision.effective, streamIdleTimeoutMs, minStreamIdleTimeoutMs);
     // Provider-hosted tools (web search, code interpreter, remote MCP) may have
     // run during a response that then fails; the Engine never replays those.
     const replayUnsafe = Array.isArray(body.tools) && body.tools.some(tool => tool?.type !== 'function');

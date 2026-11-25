@@ -373,13 +373,16 @@ describe('OpenAI Chat Completions protocol adapter & continuity', () => {
       expect(badEvents.at(-1)).toMatchObject({ type: 'error', retryable: false, error: expect.any(LLMToolInputError) });
     }
 
-    // Continuation tool_call delta omitting `index` attaches to the active slot instead of fragmenting
+    // Continuation tool_call delta omitting `index` attaches to the active slot instead of fragmenting,
+    // and tool_call header deltas (id/name with empty arguments) emit provider_activity.
     vi.stubGlobal('fetch', vi.fn(async () => sse([
-      { choices: [{ index: 0, delta: { tool_calls: [{ id: 'tc_noidx', type: 'function', function: { name: 'Read', arguments: '{"path":' } }] }, finish_reason: null }] },
+      { choices: [{ index: 0, delta: { tool_calls: [{ id: 'tc_noidx', type: 'function', function: { name: 'Read', arguments: '' } }] }, finish_reason: null }] },
+      { choices: [{ index: 0, delta: { tool_calls: [{ function: { arguments: '{"path":' } }] }, finish_reason: null }] },
       { choices: [{ index: 0, delta: { tool_calls: [{ function: { arguments: '"a.txt"}' } }] }, finish_reason: 'tool_calls' }] },
       '[DONE]',
     ])));
     const noIdxEvents = await collect(adapter.stream({ model: 'gemini-4-neon', messages: [{ role: 'user', content: 'hi' }] }));
+    expect(noIdxEvents.filter(e => e.type === 'provider_activity')).toHaveLength(3);
     expect(noIdxEvents.filter(e => e.type === 'tool_call')).toEqual([
       { type: 'tool_call', id: 'tc_noidx', name: 'Read', input: { path: 'a.txt' } },
     ]);

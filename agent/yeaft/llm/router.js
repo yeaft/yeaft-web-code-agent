@@ -19,7 +19,7 @@
  * without splitting into separate provider entries.
  */
 
-import { LLMAdapter, LLMAuthError } from './adapter.js';
+import { LLMAdapter, LLMAuthError, MAX_STREAM_IDLE_TIMEOUT_MS } from './adapter.js';
 import { ANTHROPIC_IMAGE_LIMITS } from './anthropic-images.js';
 import { cloneGeminiOptions } from './gemini-options.js';
 import { getGeminiThinkingProfile, getThinkingCapability, normalizeEffort, normalizeEffortOptions, parseModelRef, resolveGeminiEffort } from '../models.js';
@@ -68,7 +68,7 @@ export function normalizeModelEntry(entry) {
     if (geminiOptions !== undefined) out.geminiOptions = geminiOptions;
     if (entry.capabilities && typeof entry.capabilities === 'object') out.capabilities = { ...entry.capabilities };
     if (Number.isFinite(entry.streamIdleTimeoutMs) && entry.streamIdleTimeoutMs >= 0) {
-      out.streamIdleTimeoutMs = Math.min(600_000, Math.floor(entry.streamIdleTimeoutMs));
+      out.streamIdleTimeoutMs = Math.min(MAX_STREAM_IDLE_TIMEOUT_MS, Math.floor(entry.streamIdleTimeoutMs));
     }
     const normalizedProtocol = normalizeProtocolName(entry.protocol);
     if (normalizedProtocol) {

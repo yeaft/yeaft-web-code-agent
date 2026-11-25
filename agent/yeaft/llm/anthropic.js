@@ -377,7 +377,7 @@ export class AnthropicAdapter extends LLMAdapter {
    * @param {{ model: string, system: string, messages: import('./adapter.js').UnifiedMessage[], tools?: import('./adapter.js').UnifiedToolDef[], maxTokens?: number, contextOutputLimit?: number, effort?: 'medium'|'xhigh'|'max', effortSource?: 'user'|'auto', effortContext?: object, signal?: AbortSignal, onRawExchange?: ({rawRequest, rawResponse}) => void }} params
    * @returns {AsyncGenerator<import('./adapter.js').StreamEvent>}
    */
-  async *stream({ model, system, messages, tools, maxTokens = 16384, contextOutputLimit, effort, effortSource, effortContext, extraBody, providerContext, requestIdentity, onProviderDiagnostics, effortConstraint = null, onEffortDecision = null, signal, onRawExchange, rawExchangeMaxBytes = 512 * 1024, onRequestStart, getHeadersTimeoutMs, onResponseHeaders, streamIdleTimeoutMs, maxRequestBodyBytes, imageLimits }) {
+  async *stream({ model, system, messages, tools, maxTokens = 16384, contextOutputLimit, effort, effortSource, effortContext, extraBody, providerContext, requestIdentity, onProviderDiagnostics, effortConstraint = null, onEffortDecision = null, signal, onRawExchange, rawExchangeMaxBytes = 512 * 1024, onRequestStart, getHeadersTimeoutMs, onResponseHeaders, streamIdleTimeoutMs, minStreamIdleTimeoutMs, maxRequestBodyBytes, imageLimits }) {
     if (signal?.aborted) throw new LLMAbortError();
 
     const context = providerContext || createProviderContext({ protocol: 'anthropic', baseUrl: this.#baseUrl, staticApiKey: this.#apiKey, model });
@@ -417,7 +417,7 @@ export class AnthropicAdapter extends LLMAdapter {
     const requestBody = toWellFormedJson(caching.body);
     validateAnthropicRequestPrefixes(requestBody, replayed);
     if (imageLimits) validateAnthropicImages(requestBody, imageLimits);
-    const idleMs = resolveStreamIdleTimeoutMs(this.#streamIdlePolicy, effortDecision.effective, streamIdleTimeoutMs);
+    const idleMs = resolveStreamIdleTimeoutMs(this.#streamIdlePolicy, effortDecision.effective, streamIdleTimeoutMs, minStreamIdleTimeoutMs);
 
     const url = `${this.#baseUrl}/v1/messages`;
     const headers = { ...this.#headers(), ...midConversationHeaders(requestBody) };

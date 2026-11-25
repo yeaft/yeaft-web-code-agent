@@ -25,6 +25,7 @@ import { join } from 'path';
 import { DEFAULT_YEAFT_DIR } from './init.js';
 import { geminiEffortCatalog, getModelEffortOptions, getThinkingCapability, modelSupportsEffort, resolveModel, parseModelRef, normalizeProviderModels, resolveContextWindow, resolveMaxOutputTokens, DEFAULT_CONTEXT_WINDOW } from './models.js';
 import { inferProtocolFromModelId, normalizeProtocolName } from './llm/router.js';
+import { MAX_STREAM_IDLE_TIMEOUT_MS } from './llm/adapter.js';
 import { withGeminiDefault } from './llm/gemini-endpoint.js';
 import { collectAmbiguousModelRefs, normalizeKnownProviderForRuntime } from './llm/known-providers.js';
 import { createDenyAllPluginConfig, normalizePluginConfig } from './plugins.js';
@@ -88,18 +89,22 @@ const DEFAULTS = {
   //   • maxRequestRetryTimeMs: 180s per provider request attempt (waiting for
   //     headers; each retry / model switch gets a fresh 180s window); 0 disables.
   //   • streamIdleTimeoutMs / highEffortStreamIdleTimeoutMs: per-chunk silence
-  //     budgets, selected from the final wire effort (high/xhigh/max/ultra).
-  //     Defaults leave 30s before the Session's 120s/300s silence watchdog.
-  //     streamIdleTimeoutMs: 0 disables both; an explicit legacy timeout sets
-  //     both budgets unless highEffortStreamIdleTimeoutMs is also supplied.
+  //     budgets (reset on every received chunk, NOT a total request deadline),
+  //     selected from the final wire effort (high/xhigh/max/ultra). Defaults
+  //     (5m normal / 10m high effort) cover buffered large tool arguments and
+  //     reasoning pauses while leaving 30s before the Session's 330s/630s
+  //     silence watchdog. Effort step-down retries preserve the prior attempt's
+  //     budget so silence timeouts never shrink on retry. streamIdleTimeoutMs: 0
+  //     disables both; an explicit legacy timeout sets both budgets unless
+  //     highEffortStreamIdleTimeoutMs is also supplied.
   llmRetry: {
     maxRetries: 3,
     baseDelayMs: 1_000,
     maxDelayMs: 30_000,
     jitterRatio: 0.25,
     maxRequestRetryTimeMs: 180_000,
-    streamIdleTimeoutMs: 90_000,
-    highEffortStreamIdleTimeoutMs: 270_000,
+    streamIdleTimeoutMs: 300_000,
+    highEffortStreamIdleTimeoutMs: 600_000,
     forbiddenRetryDelaysMs: [30_000, 120_000],
   },
 };
@@ -139,12 +144,12 @@ export function normalizeLlmRetry(fileConfig, overrides) {
       out.maxRequestRetryTimeMs = Math.min(600_000, Math.floor(src.maxRequestRetryTimeMs));
     }
     if (Number.isFinite(src.streamIdleTimeoutMs) && src.streamIdleTimeoutMs >= 0) {
-      out.streamIdleTimeoutMs = Math.min(600_000, Math.floor(src.streamIdleTimeoutMs));
+      out.streamIdleTimeoutMs = Math.min(MAX_STREAM_IDLE_TIMEOUT_MS, Math.floor(src.streamIdleTimeoutMs));
       // Preserve explicit legacy budgets (especially 0) at every effort.
       out.highEffortStreamIdleTimeoutMs = out.streamIdleTimeoutMs;
     }
     if (Number.isFinite(src.highEffortStreamIdleTimeoutMs) && src.highEffortStreamIdleTimeoutMs >= 0) {
-      out.highEffortStreamIdleTimeoutMs = Math.min(600_000, Math.floor(src.highEffortStreamIdleTimeoutMs));
+      out.highEffortStreamIdleTimeoutMs = Math.min(MAX_STREAM_IDLE_TIMEOUT_MS, Math.floor(src.highEffortStreamIdleTimeoutMs));
     }
     if (Array.isArray(src.forbiddenRetryDelaysMs)) {
       out.forbiddenRetryDelaysMs = src.forbiddenRetryDelaysMs

@@ -22,6 +22,7 @@
 import { lookupModelLimitSync } from './llm/models-dev.js';
 import { GEMINI_BASE_URL } from './llm/gemini-endpoint.js';
 import { cloneGeminiOptions } from './llm/gemini-options.js';
+import { MAX_STREAM_IDLE_TIMEOUT_MS } from './llm/adapter.js';
 
 /**
  * @typedef {Object} ModelInfo
@@ -614,7 +615,7 @@ export function normalizeProviderModels(provider) {
       if (geminiOptions !== undefined) norm.geminiOptions = geminiOptions;
       if (entry.capabilities && typeof entry.capabilities === 'object') norm.capabilities = { ...entry.capabilities };
       if (Number.isFinite(entry.streamIdleTimeoutMs) && entry.streamIdleTimeoutMs >= 0) {
-        norm.streamIdleTimeoutMs = Math.min(600_000, Math.floor(entry.streamIdleTimeoutMs));
+        norm.streamIdleTimeoutMs = Math.min(MAX_STREAM_IDLE_TIMEOUT_MS, Math.floor(entry.streamIdleTimeoutMs));
       }
       const ctx = coercePositiveInt(entry.contextWindow);
       const max = coercePositiveInt(entry.maxOutput);
@@ -656,7 +657,7 @@ export function serializeModelForPersistence(entry) {
     : undefined;
   const capabilities = entry.capabilities && typeof entry.capabilities === 'object' ? { ...entry.capabilities } : undefined;
   const streamIdleTimeoutMs = Number.isFinite(entry.streamIdleTimeoutMs) && entry.streamIdleTimeoutMs >= 0
-    ? Math.min(600_000, Math.floor(entry.streamIdleTimeoutMs)) : undefined;
+    ? Math.min(MAX_STREAM_IDLE_TIMEOUT_MS, Math.floor(entry.streamIdleTimeoutMs)) : undefined;
   const effort = {};
   if (typeof entry.supportsEffort === 'boolean') effort.supportsEffort = entry.supportsEffort;
   if (typeof entry.thinkingProtocol === 'string' && entry.thinkingProtocol.trim()) effort.thinkingProtocol = entry.thinkingProtocol.trim();

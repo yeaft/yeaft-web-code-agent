@@ -281,7 +281,8 @@ export class GeminiAdapter extends LLMAdapter {
     else delete body.generationConfig.thinkingConfig;
     validateGeminiBody(body, tools);
     const effectiveEffort = thinking?.thinkingLevel?.toLowerCase() || (thinking?.thinkingBudget > 0
-      ? ['medium', 'xhigh', 'max'].find(level => thinking.thinkingBudget <= geminiThinkingBudgetForEffort(model, level)) : null);
+      ? ['medium', 'xhigh', 'max'].find(level => thinking.thinkingBudget <= geminiThinkingBudgetForEffort(model, level)) || 'ultra'
+      : null);
     params.onEffortDecision?.({ requested: params.effort || null, effective: effectiveEffort || null, source: params.effortSource || 'scenario', model,
       cap: child?.cap ?? null, ...(child?.nativeEffortCap ? { nativeEffortCap: true } : {}), thinkingEnabled: Boolean(thinking && thinking.thinkingBudget !== 0),
       wireMode: thinking?.thinkingLevel ? 'thinking-level' : thinking ? 'manual' : child?.wireMode || 'omitted',
@@ -290,7 +291,7 @@ export class GeminiAdapter extends LLMAdapter {
     params.onProviderDiagnostics?.({ ...context.diagnostics, nativeReasoningState: Boolean(context.capabilities.nativeReasoningState),
       promptCaching: body.cachedContent ? 'explicit-reference'
         : google && context.capabilities.promptCaching ? 'implicit' : 'provider-managed-unverified' });
-    return { body: toWellFormedJson(body), context };
+    return { body: toWellFormedJson(body), context, effectiveEffort: effectiveEffort || null };
   }
 
   #error(status, body, response) {
@@ -305,7 +306,7 @@ export class GeminiAdapter extends LLMAdapter {
   async *#events(params, streaming) {
     const { signal, onRawExchange, rawExchangeMaxBytes = 512 * 1024 } = params;
     if (signal?.aborted) throw new LLMAbortError();
-    const { body, context } = this.#request(params);
+    const { body, context, effectiveEffort } = this.#request(params);
     const url = this.#url(params.model, streaming);
     // Inline requests on the public Gemini API are limited to 20 MB.
     const requestBodyLimit = Math.min(params.maxRequestBodyBytes ?? Infinity, 19_000_000);
@@ -321,7 +322,7 @@ export class GeminiAdapter extends LLMAdapter {
     let responseId;
     let modelVersion;
     let usage = {};
-    const idleMs = resolveStreamIdleTimeoutMs(this.config, params.effort, params.streamIdleTimeoutMs);
+    const idleMs = resolveStreamIdleTimeoutMs(this.config, effectiveEffort, params.streamIdleTimeoutMs, params.minStreamIdleTimeoutMs);
     const consume = function* (result) {
       if (signal?.aborted) throw new LLMAbortError();
       if (result.error) throw this.#error(Number(result.error.code) || 500, JSON.stringify(result.error));
@@ -344,7 +345,7 @@ export class GeminiAdapter extends LLMAdapter {
     }.bind(this);
     try {
       const timeoutMs = params.getHeadersTimeoutMs?.();
-      if (timeoutMs !== 0) params.onRequestStart?.({ effort: params.effort, streamIdleTimeoutMs: idleMs, headersTimeoutMs: timeoutMs });
+      if (timeoutMs !== 0) params.onRequestStart?.({ effort: effectiveEffort, streamIdleTimeoutMs: idleMs, headersTimeoutMs: timeoutMs });
       response = await fetchWithHeadersTimeout(url, { method: 'POST', headers, body: serialized, signal }, timeoutMs);
       params.onResponseHeaders?.();
       if (response.status === 413) {

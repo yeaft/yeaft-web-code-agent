@@ -122,11 +122,20 @@ it('shows status before the initial provider emits any output and reports a watc
   const progress = events('query_progress').at(-1).event;
   expect(progress.waitingStage).toBe('provider');
   expect(progress).not.toHaveProperty('modelRequests');
-  await vi.advanceTimersByTimeAsync(60_000);
+  // Normal Session watchdog is 330s (300s default stream idle + 30s headroom).
+  await vi.advanceTimersByTimeAsync(200_000);
+  expect(events('vp_turn_end')).toHaveLength(0);
+  await vi.advanceTimersByTimeAsync(70_000);
   await bridge.__testDrainVpDrivers();
   expect(events('vp_turn_end').at(-1).event).toMatchObject({ reason: 'errored', detail: { code: 'provider_watchdog_timeout' } });
   expect(frames().findLast(frame => frame.data?.type === 'result')?.data).toMatchObject({ is_error: true });
   expect(requests).toBe(1);
+
+  // Watchdog follows the preserved non-shrinking stream idle budget on effort step-down retries.
+  expect(bridge.__testHooks.queryTimeoutMsForProviderRequest({ effort: 'medium', streamIdleTimeoutMs: 300_000 })).toBe(330_000);
+  expect(bridge.__testHooks.queryTimeoutMsForProviderRequest({ effort: 'xhigh', streamIdleTimeoutMs: 600_000 })).toBe(630_000);
+  expect(bridge.__testHooks.queryTimeoutMsForProviderRequest({ effort: 'medium', streamIdleTimeoutMs: 600_000 })).toBe(630_000);
+  expect(bridge.__testHooks.queryTimeoutMsForProviderRequest({ effort: 'medium', streamIdleTimeoutMs: 900_000 })).toBe(930_000);
 });
 
 it('lets the transport classify a gateway 504 and exhaust its per-request headers timeout before the Session watchdog', async () => {
