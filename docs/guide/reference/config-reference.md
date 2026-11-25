@@ -63,11 +63,11 @@ The global `llmRetry` policy applies to Anthropic Messages, Gemini and OpenAI Re
 
 | Field | Default | Description |
 | --- | --- | --- |
-| `llmRetry.maxRequestRetryTimeMs` | `180000` | Time budget per model step, from the first dispatch through response headers and retries (including backoff); `0` disables the time budget |
+| `llmRetry.maxRequestRetryTimeMs` | `180000` | Per-request headers wait timeout (each retry and model switch gets a fresh window); `0` disables the headers wait timeout |
 | `llmRetry.streamIdleTimeoutMs` | `90000` | Normal per-chunk silence budget; `0` disables the global transport guard at every effort |
 | `llmRetry.highEffortStreamIdleTimeoutMs` | `270000` | Budget for final wire effort `high`, `xhigh`, `max` or `ultra`; not the initially requested effort |
 
-The retry time budget is not a deadline for a healthy response body, a tool, or the whole turn. A configured fallback model receives its own budget. A response that contains only whitespace or provider image delimiters is not a successful answer.
+The headers wait timeout applies per provider request attempt and is not a deadline for a healthy response body, a tool, or the whole turn. Each retry attempt and model switch gets a fresh window. A response that contains only whitespace or provider image delimiters is not a successful answer.
 
 Enabled budgets are capped at 600000ms. Every received chunk restarts the transport budget; this is not a total request deadline. Explicit legacy `streamIdleTimeoutMs` settings apply at every effort unless a high-effort budget is also supplied. Absolute model/provider overrides take precedence over global settings, including global `0`, and never mutate the cached adapter used by other models. The independent Session watchdog follows the final request effort and leaves at least 30 seconds beyond an enabled transport budget for timeout handling. Disabling the transport guard does not disable the Session watchdog or user cancellation. Existing finite retry limits still apply.
 

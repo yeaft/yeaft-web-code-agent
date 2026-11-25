@@ -1525,9 +1525,11 @@ RELEASE_BODY`;
         { name: 'gateway', protocol: 'gemini', baseUrl: 'https://gemini-gateway.invalid/v1beta', apiKey: 'fixture-key', models: ['gemini-4-neon', 'gemini-4-carbon'] },
       ] });
       const urls = [];
+      const bodies = [];
       let callCount = 0;
-      const fetch = vi.fn(async (url) => {
+      const fetch = vi.fn(async (url, init) => {
         urls.push(String(url));
+        bodies.push(JSON.parse(init.body));
         callCount++;
         // Call 1 (neon) fails -> switches to carbon before retry.
         // Call 2 (carbon) fails -> must still get its own fresh maxRetries=1 retry on carbon!
@@ -1553,6 +1555,10 @@ RELEASE_BODY`;
         expect(urls[0]).toContain('gemini-4-neon');
         expect(urls[1]).toContain('gemini-4-carbon');
         expect(urls[2]).toContain('gemini-4-carbon');
+        expect(bodies[0].generationConfig.thinkingConfig.thinkingLevel).toBe('XHIGH');
+        // Switched model starts at its configured effort (HIGH), then steps down to MEDIUM on its own timeout retry.
+        expect(bodies[1].generationConfig.thinkingConfig.thinkingLevel).toBe('HIGH');
+        expect(bodies[2].generationConfig.thinkingConfig.thinkingLevel).toBe('MEDIUM');
       } finally {
         vi.unstubAllGlobals();
       }
