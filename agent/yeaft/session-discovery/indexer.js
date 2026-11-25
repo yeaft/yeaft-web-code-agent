@@ -1,3 +1,4 @@
+import { lstatSync } from 'node:fs';
 import { join } from 'node:path';
 import { createAgentHistoryScan } from '../conversation/search.js';
 import { parseMessage, parseSeqFromId } from '../conversation/persist.js';
@@ -25,6 +26,10 @@ const MAX_NEW_AGREEMENTS = 2_000;
 const MAX_UPSERTS_PER_RUN = 5_000;
 export const MAX_MESSAGE_INDEX_CHARS = 64 * 1024;
 const MIN_MESSAGES_FOR_CARD = 4;
+// Stay comfortably below createAgentHistoryScan's 64 MiB cap per Session so
+// very large transcripts (>64 MiB) always index their newest segments cleanly
+// instead of exhausting the scan budget and producing zero cards.
+const MAX_SESSION_TAIL_BYTES = 48 * 1024 * 1024;
 
 const truncate = (text, limit) => text.length > limit ? `${text.slice(0, limit - 1)}…` : text;
 const seq = row => Number.isFinite(row?.seq) ? Number(row.seq) : parseSeqFromId(row?.id);
@@ -112,11 +117,126 @@ function extractStandingAgreement(row, source, now) {
   return { title: truncate(body.split(/[。！？.!?；;]/u)[0].trim() || body, 72), body, createdAt, ref };
 }
 
+function safeStatMtime(path) {
+  try {
+    const st = lstatSync(path);
+    return (st.isFile() || st.isDirectory()) ? st.mtimeMs : 0;
+  } catch {
+    return 0;
+  }
+}
+
+function safeFileSize(path) {
+  try {
+    const st = lstatSync(path);
+    return st.isFile() ? st.size : 0;
+  } catch {
+    return 0;
+  }
+}
+
+function parseSegmentIntoMap(conversation, file, sessionId, read, scrub, bySeq) {
+  const raw = read(join(conversation, 'segments', file));
+  if (!raw) return false;
+  let foundVisibleUser = false;
+  for (const line of raw.split('\n')) {
+    if (!line) continue;
+    try {
+      const row = JSON.parse(line);
+      if (row?.sessionId !== sessionId) continue;
+      const kept = scrub(row);
+      const rowSeq = seq(kept);
+      if (kept && Number.isFinite(rowSeq)) {
+        bySeq.set(rowSeq, kept);
+        if (kept.role === 'user' && isVisibleConversationRow(kept)) {
+          foundVisibleUser = true;
+        }
+      }
+    } catch { /* an incomplete trailing append may be read */ }
+  }
+  return foundVisibleUser;
+}
+
+function selectDeltaSegmentRange(conversation, segments, read, minSeq) {
+  if (!Number.isFinite(minSeq) || minSeq <= 0 || segments.length <= 2) return null;
+  const rawIdx = read(join(conversation, 'index.json'));
+  if (!rawIdx) return null;
+  try {
+    const idx = JSON.parse(rawIdx);
+    const segMeta = Array.isArray(idx?.segments) ? idx.segments : [];
+    const fileSet = new Set(segments);
+    const valid = segMeta.filter(s => s?.file && fileSet.has(s.file) && Number.isFinite(s.lastSeq));
+    if (valid.length === 0 || valid.length !== segments.length) return null;
+    let startIdx = valid.findIndex(s => s.lastSeq >= minSeq);
+    if (startIdx < 0) startIdx = valid.length - 1;
+    if (startIdx === 0) return null;
+    return { files: valid.map(s => s.file), startIdx };
+  } catch {
+    return null;
+  }
+}
+
+function applyTailBudget(conversation, files, tailBudgetBytes) {
+  if (!Number.isFinite(tailBudgetBytes) || tailBudgetBytes <= 0 || files.length <= 1) return files;
+  const keptReversed = [];
+  let bytes = 0;
+  for (let i = files.length - 1; i >= 0; i -= 1) {
+    const file = files[i];
+    const size = safeFileSize(join(conversation, 'segments', file));
+    if (keptReversed.length > 0 && bytes + size > tailBudgetBytes) break;
+    bytes += size;
+    keptReversed.push(file);
+  }
+  return keptReversed.length < files.length ? keptReversed.reverse() : files;
+}
+
 // Scan the canonical instance transcript oldest-first. Don't open/repair the
 // live SegmentStore from a worker, and never follow a transcript-supplied path.
-function readTranscriptRowsOldestFirst(conversation, sessionId, read, list, operations) {
+function readTranscriptRowsOldestFirst(conversation, sessionId, read, list, operations, {
+  minSeq = null,
+  tailBudgetBytes = MAX_SESSION_TAIL_BYTES,
+} = {}) {
   const { scrub } = sessionDeletionProjection(operations);
   const bySeq = new Map();
+
+  const segments = (list(join(conversation, 'segments'), '.jsonl') || [])
+    .filter(file => /^\d+\.jsonl$/u.test(file))
+    .sort((a, b) => Number.parseInt(a.slice(0, -6), 10) - Number.parseInt(b.slice(0, -6), 10) || a.localeCompare(b));
+
+  // Fast incremental delta read: read only segments at/after `minSeq`, then step
+  // backward one segment at a time until we find the boundary visible user row.
+  const deltaRange = selectDeltaSegmentRange(conversation, segments, read, minSeq);
+  if (deltaRange) {
+    let bytesRead = 0;
+    const { files, startIdx } = deltaRange;
+    for (let i = startIdx; i < files.length; i += 1) {
+      bytesRead += safeFileSize(join(conversation, 'segments', files[i]));
+      parseSegmentIntoMap(conversation, files[i], sessionId, read, scrub, bySeq);
+    }
+    const hasBoundaryUserAtOrBefore = () => {
+      for (const [rSeq, row] of bySeq) {
+        if (rSeq <= minSeq && row.role === 'user' && isVisibleConversationRow(row)) return true;
+      }
+      return false;
+    };
+    let backIdx = startIdx - 1;
+    while (backIdx >= 0 && !hasBoundaryUserAtOrBefore()) {
+      const size = safeFileSize(join(conversation, 'segments', files[backIdx]));
+      if (Number.isFinite(tailBudgetBytes) && tailBudgetBytes > 0 && bytesRead + size > tailBudgetBytes) break;
+      bytesRead += size;
+      parseSegmentIntoMap(conversation, files[backIdx], sessionId, read, scrub, bySeq);
+      backIdx -= 1;
+    }
+    if (hasBoundaryUserAtOrBefore()) {
+      return {
+        rows: [...bySeq.entries()].sort((a, b) => a[0] - b[0]).map(([, row]) => row),
+        usedDeltaSlice: true,
+      };
+    }
+    bySeq.clear();
+  }
+
+  const selectedSegments = applyTailBudget(conversation, segments, tailBudgetBytes);
 
   const legacy = ['messages', 'cold'].flatMap(kind => {
     const dir = join(conversation, kind);
@@ -132,25 +252,14 @@ function readTranscriptRowsOldestFirst(conversation, sessionId, read, list, oper
     if (kept && Number.isFinite(rowSeq)) bySeq.set(rowSeq, kept);
   }
 
-  const segments = (list(join(conversation, 'segments'), '.jsonl') || [])
-    .filter(file => /^\d+\.jsonl$/u.test(file))
-    .sort((a, b) => Number.parseInt(a.slice(0, -6), 10) - Number.parseInt(b.slice(0, -6), 10) || a.localeCompare(b));
-  for (const file of segments) {
-    const raw = read(join(conversation, 'segments', file));
-    if (!raw) continue;
-    for (const line of raw.split('\n')) {
-      if (!line) continue;
-      try {
-        const row = JSON.parse(line);
-        if (row?.sessionId !== sessionId) continue;
-        const kept = scrub(row);
-        const rowSeq = seq(kept);
-        if (kept && Number.isFinite(rowSeq)) bySeq.set(rowSeq, kept);
-      } catch { /* an incomplete trailing append may be read */ }
-    }
+  for (const file of selectedSegments) {
+    parseSegmentIntoMap(conversation, file, sessionId, read, scrub, bySeq);
   }
 
-  return [...bySeq.entries()].sort((a, b) => a[0] - b[0]).map(([, row]) => row);
+  return {
+    rows: [...bySeq.entries()].sort((a, b) => a[0] - b[0]).map(([, row]) => row),
+    usedDeltaSlice: false,
+  };
 }
 
 /**
@@ -274,6 +383,50 @@ export function extractIndexableTurnMessages(rows, sessionId, now) {
   };
 }
 
+function sessionFreshMtime(dir) {
+  const conv = join(dir, 'conversation');
+  return Math.max(
+    safeStatMtime(join(conv, 'index.json')),
+    safeStatMtime(join(conv, 'segments')),
+    safeStatMtime(join(conv, 'messages')),
+  );
+}
+
+function reconcileDeltaMetrics(rows, sessionId, now, existing, extracted, usedDeltaSlice) {
+  if (!usedDeltaSlice || !existing) {
+    return {
+      messages: extracted.messages,
+      visibleTurnCount: extracted.visibleTurnCount,
+      activeAt: extracted.activeAt,
+      lastSeq: extracted.lastSeq,
+      safeIncremental: true,
+    };
+  }
+  const hasBoundaryUser = rows.some(
+    row => row && row.sessionId === sessionId && row.role === 'user'
+      && isVisibleConversationRow(row) && seq(row) <= existing.lastSeq,
+  );
+  if (!hasBoundaryUser) {
+    return {
+      messages: extracted.messages,
+      visibleTurnCount: extracted.visibleTurnCount,
+      activeAt: extracted.activeAt,
+      lastSeq: extracted.lastSeq,
+      safeIncremental: false,
+    };
+  }
+  const priorRows = rows.filter(row => seq(row) <= existing.lastSeq);
+  const priorExtracted = extractIndexableTurnMessages(priorRows, sessionId, now);
+  const deltaTurns = extracted.visibleTurnCount - priorExtracted.visibleTurnCount;
+  return {
+    messages: extracted.messages,
+    visibleTurnCount: Math.max(extracted.visibleTurnCount, existing.messageCount + deltaTurns),
+    activeAt: Math.max(existing.activeAt || 0, extracted.activeAt || 0),
+    lastSeq: Math.max(existing.lastSeq || 0, extracted.lastSeq || 0),
+    safeIncremental: true,
+  };
+}
+
 export function runDailySessionIndex(root, now = Date.now(), { force = false, createScan = createAgentHistoryScan } = {}) {
   const db = openDiscoveryStore(root);
   try {
@@ -284,15 +437,14 @@ export function runDailySessionIndex(root, now = Date.now(), { force = false, cr
     const upserts = [];
     const removedSessionIds = [];
     const automatic = [];
-    const telemetry = {};
-    const { read, list, stopped } = createScan(root, telemetry);
-    const scanStopped = () => Boolean(stopped() || telemetry.scanIncomplete);
+    const manifestTelemetry = {};
+    const manifestScan = createScan(root, manifestTelemetry);
+    const manifestStopped = () => Boolean(manifestScan.stopped() || manifestTelemetry.scanIncomplete);
 
-    // Newest-created first so bounded scan budgets prioritize recent work first
-    // while still indexing all eligible historical Sessions incrementally.
-    const sessionsMap = localSessionDirs(root, read);
-    if (scanStopped()) return false;
-    const sessions = [...sessionsMap].reverse();
+    const sessionsMap = localSessionDirs(root, manifestScan.read);
+    if (manifestStopped()) return false;
+    // Most-recently-modified first so active 5-day Sessions are always indexed first.
+    const sessions = [...sessionsMap].sort((a, b) => sessionFreshMtime(b[1]) - sessionFreshMtime(a[1]));
 
     for (const existingSessionId of existingCards.keys()) {
       if (!sessionsMap.has(existingSessionId)) {
@@ -300,11 +452,20 @@ export function runDailySessionIndex(root, now = Date.now(), { force = false, cr
       }
     }
 
+    let anyScanIncomplete = false;
     for (const [sessionId, dir] of sessions) {
-      if (scanStopped() || upserts.length >= MAX_UPSERTS_PER_RUN) break;
+      if (upserts.length >= MAX_UPSERTS_PER_RUN) break;
+      // Isolate scan byte/entry budget per Session so one large transcript
+      // never starves other active Sessions in the same daily sweep.
+      const sessionTelemetry = {};
+      const { read, list, stopped } = createScan(root, sessionTelemetry);
+      const scanStopped = () => Boolean(stopped() || sessionTelemetry.scanIncomplete);
       try {
         const source = readSourceFence(root, sessionId, read, { includeSignature: true, list });
-        if (scanStopped()) break;
+        if (scanStopped()) {
+          anyScanIncomplete = true;
+          continue;
+        }
         if (!source) {
           if (existingCards.has(sessionId)) removedSessionIds.push(sessionId);
           continue;
@@ -341,10 +502,43 @@ export function runDailySessionIndex(root, now = Date.now(), { force = false, cr
           continue;
         }
 
-        const rows = readTranscriptRowsOldestFirst(join(dir, 'conversation'), sessionId, read, list, source.operations);
+        const hasIndexSignature = Boolean(source.transcriptSignature && source.transcriptSignature.startsWith('[["idx",'));
+        const deltaMinSeq = (existing && hasIndexSignature && existing.deletionGeneration === source.key && existing.lastSeq > 0)
+          ? existing.lastSeq
+          : null;
+        let { rows, usedDeltaSlice } = readTranscriptRowsOldestFirst(
+          join(dir, 'conversation'),
+          sessionId,
+          read,
+          list,
+          source.operations,
+          { minSeq: deltaMinSeq },
+        );
         // Never mutate or delete an existing Session card using a partial/truncated
         // read caused by scan budget exhaustion.
-        if (scanStopped()) break;
+        if (scanStopped()) {
+          anyScanIncomplete = true;
+          continue;
+        }
+        let extracted = extractIndexableTurnMessages(rows, sessionId, now);
+        let reconciled = reconcileDeltaMetrics(rows, sessionId, now, existing, extracted, usedDeltaSlice);
+        if (usedDeltaSlice && !reconciled.safeIncremental) {
+          ({ rows, usedDeltaSlice } = readTranscriptRowsOldestFirst(
+            join(dir, 'conversation'),
+            sessionId,
+            read,
+            list,
+            source.operations,
+            { minSeq: null },
+          ));
+          if (scanStopped()) {
+            anyScanIncomplete = true;
+            continue;
+          }
+          extracted = extractIndexableTurnMessages(rows, sessionId, now);
+          reconciled = reconcileDeltaMetrics(rows, sessionId, now, existing, extracted, false);
+        }
+
         const agreements = [];
         for (const row of rows) {
           if (agreements.length >= MAX_AGREEMENTS_PER_SESSION
@@ -353,11 +547,14 @@ export function runDailySessionIndex(root, now = Date.now(), { force = false, cr
           if (agreement) agreements.push(agreement);
         }
 
-        const { messages, visibleTurnCount, activeAt, lastSeq } = extractIndexableTurnMessages(rows, sessionId, now);
+        const { messages, visibleTurnCount, activeAt, lastSeq } = reconciled;
 
         // Verify the source fence did not mutate mid-read.
         const afterSource = readSourceFence(root, sessionId, read);
-        if (scanStopped()) break;
+        if (scanStopped()) {
+          anyScanIncomplete = true;
+          continue;
+        }
         if (afterSource?.key !== source.key) continue;
 
         for (const agreement of agreements) {
@@ -386,20 +583,13 @@ export function runDailySessionIndex(root, now = Date.now(), { force = false, cr
           if (proposal) candidates.push(proposal);
         }
 
-        // True incremental append when the lineage/deletion fence matches and
-        // we only have strictly newer turns. If the previous run ended mid-turn
-        // (e.g. a progress/result update arrived for the same assistant turn),
-        // prune & re-insert only from the boundary user turn forward.
-        // Only perform delta append when we know the transcript only grew at the tail
-        // (i.e. canonical segment index signature is present and unchanged prior to tail).
-        // For legacy markdown transcripts or non-monotonic changes, fall back to replace.
-        const hasIndexSignature = Boolean(source.transcriptSignature && source.transcriptSignature.startsWith('[["idx",'));
         const canIncrementalAppend = Boolean(
           existing
           && hasIndexSignature
           && existing.deletionGeneration === source.key
           && lastSeq >= existing.lastSeq
-          && visibleTurnCount >= existing.messageCount,
+          && visibleTurnCount >= existing.messageCount
+          && reconciled.safeIncremental,
         );
         const pruneFromSeq = canIncrementalAppend
           ? findTurnPruneStartSeq(rows, sessionId, existing.lastSeq)
@@ -424,14 +614,17 @@ export function runDailySessionIndex(root, now = Date.now(), { force = false, cr
           candidates,
         });
       } catch (error) {
-        if (scanStopped()) break;
+        if (scanStopped()) {
+          anyScanIncomplete = true;
+          continue;
+        }
         // Missing/deleted or corrupt Sessions can't keep their stale cards.
         if (existingCards.has(sessionId)) removedSessionIds.push(sessionId);
         console.warn('[SessionDiscovery] skipping unreadable Session:', error.code || error.name);
       }
     }
 
-    const hitBudgetLimit = scanStopped() || upserts.length >= MAX_UPSERTS_PER_RUN;
+    const hitBudgetLimit = anyScanIncomplete || upserts.length >= MAX_UPSERTS_PER_RUN;
     return applyDailyIndexUpdates(db, {
       upserts,
       removedSessionIds,
@@ -456,7 +649,7 @@ export function runDailySessionIndex(root, now = Date.now(), { force = false, cr
  *
  * Accepts Sessions with `>= minMessages` (default 2: at least 1 complete user+assistant
  * turn; pass 4 to enforce the daily-sweep threshold) so a newly created Session
- * becomes searchable and eligible for Tier 2 auto-routing right away.
+ * becomes searchable and eligible for auto-routing right away.
  */
 export function refreshSingleSessionIndex(root, sessionId, now = Date.now(), {
   minMessages = 2,
@@ -512,9 +705,69 @@ export function refreshSingleSessionIndex(root, sessionId, now = Date.now(), {
     const title = truncate(typeof meta.name === 'string' ? meta.name : targetId, 240);
     const workDir = truncate(typeof meta.workDir === 'string' ? meta.workDir : '', 512);
 
-    const rows = readTranscriptRowsOldestFirst(join(dir, 'conversation'), targetId, read, list, source.operations);
+    const unchangedTranscript = Boolean(
+      existing
+      && existing.deletionGeneration === source.key
+      && existing.freshAt === source.freshAt
+      && existing.transcriptSignature === (source.transcriptSignature || '')
+      && source.freshAt > 0,
+    );
+    if (unchangedTranscript) {
+      if (existing.title === title && existing.workDir === workDir) return true;
+      return applyDailyIndexUpdates(db, {
+        upserts: [{
+          mode: 'append',
+          sessionId: targetId,
+          title,
+          workDir,
+          activeAt: existing.activeAt,
+          deletionGeneration: existing.deletionGeneration,
+          freshAt: existing.freshAt,
+          transcriptSignature: existing.transcriptSignature,
+          lastSeq: existing.lastSeq,
+          messageCount: existing.messageCount,
+          messages: [],
+          candidates: [],
+        }],
+        removedSessionIds: [],
+        automatic: [],
+        now,
+        root: null,
+        force: true,
+        markIndexed: false,
+      });
+    }
+
+    const hasIndexSignature = Boolean(source.transcriptSignature && source.transcriptSignature.startsWith('[["idx",'));
+    const deltaMinSeq = (existing && hasIndexSignature && existing.deletionGeneration === source.key && existing.lastSeq > 0)
+      ? existing.lastSeq
+      : null;
+    let { rows, usedDeltaSlice } = readTranscriptRowsOldestFirst(
+      join(dir, 'conversation'),
+      targetId,
+      read,
+      list,
+      source.operations,
+      { minSeq: deltaMinSeq },
+    );
     if (scanStopped()) return false;
-    const { messages, visibleTurnCount, activeAt, lastSeq } = extractIndexableTurnMessages(rows, targetId, now);
+    let extracted = extractIndexableTurnMessages(rows, targetId, now);
+    let reconciled = reconcileDeltaMetrics(rows, targetId, now, existing, extracted, usedDeltaSlice);
+    if (usedDeltaSlice && !reconciled.safeIncremental) {
+      ({ rows, usedDeltaSlice } = readTranscriptRowsOldestFirst(
+        join(dir, 'conversation'),
+        targetId,
+        read,
+        list,
+        source.operations,
+        { minSeq: null },
+      ));
+      if (scanStopped()) return false;
+      extracted = extractIndexableTurnMessages(rows, targetId, now);
+      reconciled = reconcileDeltaMetrics(rows, targetId, now, existing, extracted, false);
+    }
+
+    const { messages, visibleTurnCount, activeAt, lastSeq } = reconciled;
     const afterSource = readSourceFence(root, targetId, read);
     if (scanStopped() || afterSource?.key !== source.key) return false;
 
@@ -540,13 +793,13 @@ export function refreshSingleSessionIndex(root, sessionId, now = Date.now(), {
       if (proposal) candidates.push(proposal);
     }
 
-    const hasIndexSignature = Boolean(source.transcriptSignature && source.transcriptSignature.startsWith('[["idx",'));
     const canIncrementalAppend = Boolean(
       existing
       && hasIndexSignature
       && existing.deletionGeneration === source.key
       && lastSeq >= existing.lastSeq
-      && visibleTurnCount >= existing.messageCount,
+      && visibleTurnCount >= existing.messageCount
+      && reconciled.safeIncremental,
     );
     const pruneFromSeq = canIncrementalAppend
       ? findTurnPruneStartSeq(rows, targetId, existing.lastSeq)

@@ -16,7 +16,10 @@ import {
   selectCandidateWorkspaceFolders,
 } from '../../../agent/yeaft/workspace-folders.js';
 import { refreshSingleSessionIndex, runDailySessionIndex } from '../../../agent/yeaft/session-discovery/indexer.js';
-import { listActiveSessionCards, openDiscoveryStore } from '../../../agent/yeaft/session-discovery/store.js';
+import { createAgentHistoryScan } from '../../../agent/yeaft/conversation/search.js';
+import { listActiveSessionCards, openDiscoveryStore, searchDiscovery, searchDiscoveryRelaxed } from '../../../agent/yeaft/session-discovery/store.js';
+import { decideSessionAutoRoute, collectRecentIdleCandidates } from '../../../agent/yeaft/session-discovery/auto-route.js';
+import { scoreRouteCandidates, tryFastPathRoute } from '../../../agent/yeaft/session-discovery/route-scorer.js';
 
 let tempRoot = null;
 const savedCtx = { ...ctx };
@@ -169,51 +172,58 @@ describe('Workspace <=3 level folder snapshot & Sessionless auto-routing pipelin
       async call(params) {
         decisionCalls.push(params);
         const userPayload = JSON.parse(params.messages[0].content);
-        // Tier 1: route-running-session
-        if (userPayload.runningSessions) {
-          if (userPayload.newQuery.includes('choose port 8080')) {
-            const targetSession = userPayload.runningSessions[0];
-            const secondPrompt = targetSession.pendingQuestions?.find(q => q.question.includes('Which port'));
+        // Unified Stage 1: auto-route-session (evaluates running + idle candidates side-by-side)
+        if (Array.isArray(userPayload.candidates)) {
+          const runningCand = userPayload.candidates.find(c => c.state === 'running' || c.state === 'waiting_input');
+          if (runningCand && userPayload.newQuery.includes('choose port 8080')) {
+            const secondPrompt = runningCand.pendingQuestions?.find(q => q.question.includes('Which port'));
             return {
               text: JSON.stringify({
                 decision: 'match',
-                sessionId: targetSession.sessionId,
+                sessionId: runningCand.id,
                 answeredRequestId: secondPrompt?.requestId || null,
                 confidence: 0.96,
                 reason: 'answers specific AskUser port question',
               }),
             };
           }
-          if (userPayload.newQuery.includes('also add rollback SQL')) {
+          if (runningCand && userPayload.newQuery.includes('also add rollback SQL')) {
             return {
               text: JSON.stringify({
                 decision: 'match',
-                sessionId: userPayload.runningSessions[0].sessionId,
+                sessionId: runningCand.id,
                 answeredRequestId: null,
                 confidence: 0.94,
                 reason: 'supplements active migration without answering AskUser',
               }),
             };
           }
-          return { text: '{"decision":"none","sessionId":null,"answeredRequestId":null,"confidence":0.1,"reason":"unrelated"}' };
-        }
-        // Tier 2: route-recent-session
-        if (userPayload.candidateSessions) {
           if (userPayload.newQuery.includes('continue frontend header')) {
+            const idleCand = userPayload.candidates.find(c => c.state === 'idle') || userPayload.candidates[0];
             return {
               text: JSON.stringify({
                 decision: 'match',
-                sessionId: userPayload.candidateSessions[0].sessionId,
+                sessionId: idleCand.id,
+                answeredRequestId: null,
                 confidence: 0.91,
                 reason: 'continues recent frontend session',
               }),
             };
           }
           return {
-            text: '{"decision":"create","sessionId":null,"confidence":0.2,"searchKeywords":["frontend"],"reason":"new topic"}',
+            text: JSON.stringify({
+              decision: 'create',
+              sessionId: null,
+              answeredRequestId: null,
+              confidence: 0.9,
+              sceneId: 'frontend',
+              workDir: frontendRepo,
+              title: '新建独立话题',
+              reason: 'new topic',
+            }),
           };
         }
-        // Tier 3: plan-new-session
+        // Direct Tier 3: plan-new-session (when no active candidates exist)
         if (userPayload.allowedScenes) {
           return {
             text: JSON.stringify({
@@ -399,5 +409,254 @@ describe('Workspace <=3 level folder snapshot & Sessionless auto-routing pipelin
     // Verify all Decision calls used configured decisionModel
     expect(decisionCalls.length).toBeGreaterThanOrEqual(3);
     expect(decisionCalls.every(c => c.model === 'proxy/decision-mini')).toBe(true);
+  });
+
+  it('handles Stage 0 zero-LLM fast-path, safety guards, relaxed FTS5, task-session exclusion, and scale-invariant scoring', async () => {
+    tempRoot = mkdtempSync(join(tmpdir(), 'yeaft-router-fastpath-'));
+    const yeaftDir = join(tempRoot, 'yeaft');
+    mkdirSync(yeaftDir, { recursive: true });
+    seedDefaultVps(join(yeaftDir, 'virtual-persons'));
+    const store = new ConversationStore(yeaftDir);
+
+    const now = Date.now();
+    const sProxy = createSessionFromSpec(yeaftDir, { name: 'Proxy-Server', sceneId: 'software', workDir: join(tempRoot, 'proxy') });
+    const sTcm = createSessionFromSpec(yeaftDir, { name: 'ZhongYi', sceneId: 'general', workDir: join(tempRoot, 'zhongyi') });
+    const sYeaft = createSessionFromSpec(yeaftDir, { name: 'Yeaft-Dev', sceneId: 'software', workDir: join(tempRoot, 'yeaft-app') });
+    const sTask = createSessionFromSpec(yeaftDir, {
+      name: 'Daily Report',
+      workDir: join(tempRoot, 'inv'),
+      task: { prompt: 'Generate daily market report', enabled: true, trigger: { type: 'manual' } },
+    });
+
+    const appendTurn = (sid, userText, assistantText, tsMs) => {
+      store.appendBatch([
+        { sessionId: sid, role: 'user', content: userText, time: new Date(tsMs - 20_000).toISOString() },
+        { sessionId: sid, role: 'assistant', turnId: `t_${tsMs}`, responseKind: 'result', stopReason: 'end_turn', content: assistantText, time: new Date(tsMs).toISOString() },
+      ]);
+    };
+
+    appendTurn(sProxy.id, '帮我把服务更新最新版本', '已将线上 copilot-proxy 升级到 v0.1.320', now - 4 * 3_600_000);
+    appendTurn(sProxy.id, '查看 nginx upstream 超时配置', '已检查 upstream_timeout 参数', now - 3 * 3_600_000);
+    appendTurn(sTcm.id, '黄帝内经五行脏腑子母关系和针灸补泻怎么对应？', '木火土金水相生，生我者为母，虚则补其母实则泻其子，已整理图谱。', now - 10 * 60_000);
+    appendTurn(sTcm.id, '帮我生成一个中医饮食补泻海报 html', '已生成 wuxing-diet-poster.html，可直接预览。', now - 8 * 60_000);
+    appendTurn(sYeaft.id, '排查 WebSocket 心跳和 session auto-route 超时问题', '已定位 auto-route 超时并缩短 prompt 体积。', now - 5 * 3_600_000);
+    appendTurn(sTask.id, '每日投研早报定时汇总', '今日标普与纳斯达克早报已完成。', now - 2 * 60_000);
+
+    expect(runDailySessionIndex(yeaftDir, now, { force: true })).toBe(true);
+
+    // 1. Task sessions (Daily Report) are excluded from auto-route idle candidates even if in allowedSessionIds.
+    const allowedIds = [sProxy.id, sTcm.id, sYeaft.id, sTask.id];
+    const { candidates: idle } = collectRecentIdleCandidates(yeaftDir, {
+      allowedSessionIds: allowedIds,
+      query: '每日投研早报',
+      now,
+    });
+    expect(idle.some(c => c.sessionId === sTask.id)).toBe(false);
+
+    // 2. Relaxed FTS5 recalls natural-language Chinese queries where strict AND search returns 0 hits.
+    const db = openDiscoveryStore(yeaftDir, { readOnly: true });
+    try {
+      const nlQuery = '那么各个器官的子母关系是什么？这个是不是和五行相关？';
+      expect(searchDiscovery(db, yeaftDir, allowedIds, nlQuery, now, { activeWindowDays: 5 }).results).toHaveLength(0);
+      const relaxed = searchDiscoveryRelaxed(db, yeaftDir, allowedIds, nlQuery, now, { activeWindowDays: 5 });
+      expect(relaxed.results[0]?.sessionId).toBe(sTcm.id);
+    } finally {
+      db.close();
+    }
+
+    let llmCalls = 0;
+    const countingAdapter = {
+      async call() {
+        llmCalls += 1;
+        return {
+          text: JSON.stringify({
+            decision: 'create',
+            sessionId: null,
+            answeredRequestId: null,
+            confidence: 0.9,
+            sceneId: 'general',
+            workDir: '',
+            title: '新话题',
+            reason: 'mock_llm_fallback',
+          }),
+        };
+      },
+    };
+
+    // 3. Fast-Path Rule 1: Exact repeated user utterance -> 0 LLM calls!
+    const repeatHit = await decideSessionAutoRoute({
+      yeaftDir,
+      text: '帮我把服务更新最新版本',
+      allowedSessionIds: allowedIds,
+      adapter: countingAdapter,
+      config: { decisionModel: 'proxy/decision-mini' },
+      now,
+    });
+    expect(repeatHit).toMatchObject({ action: 'continue', sessionId: sProxy.id, routeSource: 'fast_path', decisionModel: null });
+    expect(llmCalls).toBe(0);
+
+    // 4. Fast-Path Rule 2/3: Strong lexical hit on ZhongYi -> 0 LLM calls!
+    const lexHit = await decideSessionAutoRoute({
+      yeaftDir,
+      text: '脏腑五行相生和饮食补泻再帮我补充虚实症状',
+      allowedSessionIds: allowedIds,
+      adapter: countingAdapter,
+      config: { decisionModel: 'proxy/decision-mini' },
+      now,
+    });
+    expect(lexHit).toMatchObject({ action: 'continue', sessionId: sTcm.id, routeSource: 'fast_path', decisionModel: null });
+    expect(llmCalls).toBe(0);
+
+    // 5. Fast-Path Rule 4: Short/anaphoric continuation to sole recently-active session (<30m vs >=3h) -> 0 LLM calls!
+    const shortHit = await decideSessionAutoRoute({
+      yeaftDir,
+      text: '你看看下面这个被挡住了啊',
+      allowedSessionIds: allowedIds,
+      adapter: countingAdapter,
+      config: { decisionModel: 'proxy/decision-mini' },
+      now,
+    });
+    expect(shortHit).toMatchObject({ action: 'continue', sessionId: sTcm.id, routeSource: 'fast_path', decisionModel: null });
+    expect(llmCalls).toBe(0);
+
+    // 6. Fast-Path Rule 0: Exact unambiguous pending AskUser option match -> 0 LLM calls!
+    const askHit = await decideSessionAutoRoute({
+      yeaftDir,
+      text: '8080',
+      allowedSessionIds: allowedIds,
+      runningSessions: [{
+        sessionId: sYeaft.id,
+        title: 'Yeaft-Dev',
+        state: 'waiting_input',
+        pendingQuestions: [{ requestId: 'ask_port_1', question: 'Bind which port?', options: ['3000', '8080'] }],
+        recentMessages: [{ role: 'assistant', text: 'Bind which port?' }],
+      }],
+      adapter: countingAdapter,
+      config: { decisionModel: 'proxy/decision-mini' },
+      now,
+    });
+    expect(askHit).toMatchObject({
+      action: 'continue',
+      tier: 'running',
+      sessionId: sYeaft.id,
+      routeSource: 'fast_path',
+      answeredQuestion: { requestId: 'ask_port_1' },
+    });
+    expect(llmCalls).toBe(0);
+
+    // 7. Safety Guards: meta-diagnostic reference & explicit new-topic MUST NOT trigger fast-path!
+    await decideSessionAutoRoute({
+      yeaftDir,
+      text: '你帮我看看ZhongYi这个session，它是正常终止吗？我感觉没给我response啊',
+      allowedSessionIds: allowedIds,
+      adapter: countingAdapter,
+      config: { decisionModel: 'proxy/decision-mini' },
+      now,
+    });
+    expect(llmCalls).toBe(1);
+
+    await decideSessionAutoRoute({
+      yeaftDir,
+      text: '新开一个话题，帮我规划京都五天自由行路线',
+      allowedSessionIds: allowedIds,
+      adapter: countingAdapter,
+      config: { decisionModel: 'proxy/decision-mini' },
+      now,
+    });
+    expect(llmCalls).toBe(2);
+
+    // 8. Scale-invariant IDF guard: adding 20 distractor sessions must NOT cause generic words to false-trigger fast-path!
+    const baseCandidates = [
+      {
+        sessionId: 's_dev',
+        title: 'App-Dev',
+        workDir: '/tmp/app',
+        activeAt: now - 30 * 60_000,
+        windowMessages: [
+          { role: 'user', text: '把版本发布日志改成更简洁的更新说明', createdAt: now - 35 * 60_000 },
+          { role: 'assistant', text: '已完成最新版本的日志更新与发布。', createdAt: now - 30 * 60_000 },
+        ],
+      },
+      ...Array.from({ length: 20 }, (_, i) => ({
+        sessionId: `s_dist_${i}`,
+        title: `Topic-${i}`,
+        workDir: '',
+        activeAt: now - (3 + i) * 3_600_000,
+        windowMessages: [
+          { role: 'user', text: `完全不相关的主题讨论编号 alpha${i}`, createdAt: now - (3 + i) * 3_600_000 },
+          { role: 'assistant', text: `回复主题内容 beta${i}`, createdAt: now - (3 + i) * 3_600_000 },
+        ],
+      })),
+    ];
+    const { scored, metaExcluded } = scoreRouteCandidates({
+      query: '帮我把这段产品发布说明改成更克制、没有营销味的中文更新日志',
+      candidates: baseCandidates,
+      now,
+    });
+    expect(tryFastPathRoute({ query: '帮我把这段产品发布说明改成更克制、没有营销味的中文更新日志', scoredCandidates: scored, metaExcluded })).toBeNull();
+  });
+
+  it('isolates per-session scan budgets in runDailySessionIndex and supports fast multi-segment incremental refresh', () => {
+    tempRoot = mkdtempSync(join(tmpdir(), 'yeaft-idx-iso-'));
+    const yeaftDir = join(tempRoot, 'yeaft');
+    mkdirSync(yeaftDir, { recursive: true });
+    seedDefaultVps(join(yeaftDir, 'virtual-persons'));
+    const store = new ConversationStore(yeaftDir);
+    const now = Date.now();
+
+    const sA = createSessionFromSpec(yeaftDir, { name: 'Session-A', sceneId: 'software' });
+    const sB = createSessionFromSpec(yeaftDir, { name: 'Session-B', sceneId: 'general' });
+
+    for (let i = 0; i < 3; i += 1) {
+      store.appendBatch([
+        { sessionId: sA.id, role: 'user', content: `Alpha topic question ${i}`, time: new Date(now - (10 - i) * 60_000).toISOString() },
+        { sessionId: sA.id, role: 'assistant', turnId: `ta_${i}`, responseKind: 'result', stopReason: 'end_turn', content: `Alpha answer ${i}`, time: new Date(now - (9 - i) * 60_000).toISOString() },
+        { sessionId: sB.id, role: 'user', content: `Beta topic question ${i}`, time: new Date(now - (8 - i) * 60_000).toISOString() },
+        { sessionId: sB.id, role: 'assistant', turnId: `tb_${i}`, responseKind: 'result', stopReason: 'end_turn', content: `Beta answer ${i}`, time: new Date(now - (7 - i) * 60_000).toISOString() },
+      ]);
+    }
+
+    // Even if sA's scan exhausts budget, sB is isolated and still gets indexed!
+    const partialFailScan = (scanRoot, telemetry) => {
+      const inner = createAgentHistoryScan(scanRoot, telemetry);
+      return {
+        ...inner,
+        list(dir, suffix) {
+          if (String(dir).includes(sA.id)) {
+            telemetry.scanIncomplete = true;
+            return null;
+          }
+          return inner.list(dir, suffix);
+        },
+        stopped: () => Boolean(telemetry.scanIncomplete || inner.stopped()),
+      };
+    };
+    expect(runDailySessionIndex(yeaftDir, now, { force: true, createScan: partialFailScan })).toBe(true);
+    {
+      const dbPartial = openDiscoveryStore(yeaftDir, { readOnly: true });
+      try {
+        const cards = listActiveSessionCards(dbPartial, yeaftDir, [sA.id, sB.id], now).cards;
+        expect(cards.map(c => c.sessionId)).toEqual([sB.id]);
+        // Partial sweep must NOT advance index_state so the next sweep retries sA.
+        expect(dbPartial.prepare('SELECT indexed_at FROM index_state WHERE id = 1').get()).toBeUndefined();
+      } finally {
+        dbPartial.close();
+      }
+    }
+
+    // Full sweep indexes both, and incremental single-session refresh picks up new turns immediately.
+    expect(runDailySessionIndex(yeaftDir, now, { force: true })).toBe(true);
+    store.appendBatch([
+      { sessionId: sB.id, role: 'user', content: 'Beta unique keyword QUARTZ_DELTA', time: new Date(now + 1000).toISOString() },
+      { sessionId: sB.id, role: 'assistant', turnId: 'tb_new', responseKind: 'result', stopReason: 'end_turn', content: 'Delta confirmed', time: new Date(now + 2000).toISOString() },
+    ]);
+    expect(refreshSingleSessionIndex(yeaftDir, sB.id, now + 3000)).toBe(true);
+    const db = openDiscoveryStore(yeaftDir, { readOnly: true });
+    try {
+      const hits = searchDiscovery(db, yeaftDir, [sA.id, sB.id], 'QUARTZ_DELTA', now + 3000);
+      expect(hits.results.map(r => r.sessionId)).toEqual([sB.id]);
+    } finally {
+      db.close();
+    }
   });
 });

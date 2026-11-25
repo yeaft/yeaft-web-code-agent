@@ -124,8 +124,8 @@ export function validateRouteRecentSessionOutput(parsed, {
 
 export const routeRecentSessionScenario = Object.freeze({
   id: ROUTE_RECENT_SESSION_SCENARIO_ID,
-  maxTokens: 256,
-  defaultTimeoutMs: 3_500,
+  maxTokens: 768,
+  defaultTimeoutMs: 8_000,
   buildSystemPrompt: () => ROUTE_RECENT_SESSION_PROMPT,
   buildUserPrompt: buildRouteRecentSessionUserPrompt,
   validate: validateRouteRecentSessionOutput,

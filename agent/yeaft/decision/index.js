@@ -52,3 +52,14 @@ export {
   planNewSessionScenario,
   validatePlanNewSessionOutput,
 } from './prompts/plan-new-session.js';
+
+export {
+  AUTO_ROUTE_SESSION_PROMPT,
+  AUTO_ROUTE_SESSION_SCENARIO_ID,
+  DEFAULT_AUTO_ROUTE_MATCH_MIN_CONFIDENCE,
+  DEFAULT_AUTO_ROUTE_SHORT_CONT_MIN_CONFIDENCE,
+  autoRouteSessionScenario,
+  buildAutoRouteSessionUserPrompt,
+  fallbackAutoRouteSession,
+  validateAutoRouteSessionOutput,
+} from './prompts/auto-route-session.js';

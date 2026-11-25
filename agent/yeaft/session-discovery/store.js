@@ -5,6 +5,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { createAgentHistoryScan } from '../conversation/search.js';
 import { parseSeqFromId } from '../conversation/persist.js';
 import { readSessionTurnDeletions, sessionDeletionProjection } from '../conversation/turn-deletion-journal.js';
+import { extractRoutingTerms } from './route-scorer.js';
 
 export const DAY_MS = 24 * 60 * 60 * 1000;
 export const ACTIVE_WINDOW_MS = 5 * DAY_MS;
@@ -514,6 +515,150 @@ export function getRecentSessionMessagesFromIndex(db, sessionId, limit = 4) {
     text: String(row.text || '').slice(0, 600),
     createdAt: row.created_at,
   }));
+}
+
+/**
+ * Fetch up to `limit` recent indexed messages (oldest-first) for local routing
+ * scoring and exact repeated-utterance detection without extra disk scans.
+ */
+export function getSessionMessagesInWindowFromIndex(db, sessionId, {
+  sinceMs = 0,
+  limit = 32,
+  maxTextChars = 1800,
+} = {}) {
+  if (!hasSessionIndexSchema(db)) return [];
+  const boundedLimit = Math.max(1, Math.min(60, Math.floor(Number(limit) || 32)));
+  const boundedChars = Math.max(120, Math.min(4000, Math.floor(Number(maxTextChars) || 1800)));
+  const rows = db.prepare(
+    'SELECT role, text, created_at FROM session_messages WHERE session_id = ? ORDER BY seq DESC LIMIT ?',
+  ).all(sessionId, boundedLimit);
+  // Always keep at least the latest 8 turns even if `sinceMs` is tighter, and
+  // keep older turns within `sinceMs` for 5-day topic/utterance recall.
+  const kept = [];
+  for (let i = 0; i < rows.length; i += 1) {
+    const row = rows[i];
+    if (i < 8 || !sinceMs || (row.created_at && row.created_at >= sinceMs)) {
+      kept.push({
+        role: row.role,
+        text: String(row.text || '').slice(0, boundedChars),
+        createdAt: row.created_at,
+      });
+    }
+  }
+  return kept.reverse();
+}
+
+function relaxedRoutingFtsMatch(query, maxClauses = 14) {
+  const terms = extractRoutingTerms(query);
+  if (terms.size === 0) return '';
+  const ranked = [...terms.entries()].sort((a, b) => b[1] - a[1]);
+  const clauses = [];
+  const seen = new Set();
+  for (const [term] of ranked) {
+    if (clauses.length >= maxClauses) break;
+    if (term.length === 2 && cjk.test(term[0]) && cjk.test(term[1])) {
+      const encoded = `z2x${term.codePointAt(0).toString(16)}x${term.codePointAt(1).toString(16)}`;
+      if (!seen.has(encoded)) {
+        seen.add(encoded);
+        clauses.push(`"${encoded}"`);
+      }
+      continue;
+    }
+    // Split compound identifiers into safe alphanumeric FTS5 prefix tokens.
+    for (const part of term.split(/[^a-z0-9]+/u)) {
+      if (part.length < 2 || seen.has(part)) continue;
+      seen.add(part);
+      clauses.push(`"${part}"*`);
+      if (clauses.length >= maxClauses) break;
+    }
+  }
+  return clauses.join(' OR ');
+}
+
+/**
+ * Natural-language OR-scored FTS5 candidate retrieval for Session auto-routing.
+ * Unlike `searchDiscovery` (strict AND for user keyword search), this recalls
+ * lexically relevant Sessions even when the user's message is a full sentence
+ * in Chinese or English that doesn't appear verbatim in past turns.
+ */
+export function searchDiscoveryRelaxed(db, root, allowedIds, query, now = Date.now(), options = {}) {
+  const indexedAt = tableExists(db, 'index_state') ? discoveryIndexedAt(db) : null;
+  const match = relaxedRoutingFtsMatch(query);
+  const results = [];
+  if (!match || !Array.isArray(allowedIds) || allowedIds.length === 0 || !hasSessionIndexSchema(db)) {
+    return { indexedAt, results };
+  }
+  const limit = Math.max(1, Math.min(SEARCH_LIMIT, Math.floor(Number(options?.limit) || 12)));
+  const cutoff = resolveWindowCutoff(options, now);
+  const allowedJson = JSON.stringify(allowedIds);
+  const live = liveCards(root);
+  const bestBySession = new Map();
+
+  const recordCandidate = (sessionId, row, rank, matchedText) => {
+    if (!live(sessionId, row.deletion_generation)) return;
+    const existing = bestBySession.get(sessionId);
+    if (!existing) {
+      bestBySession.set(sessionId, {
+        sessionId,
+        title: row.title,
+        workDir: row.work_dir,
+        activeAt: row.active_at,
+        rank,
+        matchedText,
+      });
+      return;
+    }
+    if (rank < existing.rank) {
+      existing.rank = rank;
+      if (matchedText) existing.matchedText = matchedText;
+    } else if (!existing.matchedText && matchedText) {
+      existing.matchedText = matchedText;
+    }
+  };
+
+  for (const row of db.prepare(`SELECT c.session_id, c.title, c.work_dir, c.active_at, c.deletion_generation,
+      bm25(session_fts, 6.0, 2.0) AS rank
+    FROM session_fts
+    JOIN session_cards c ON session_fts.rowid = c.rowid
+    WHERE session_fts MATCH ?
+      AND (? IS NULL OR c.active_at >= ?)
+      AND c.session_id IN (SELECT value FROM json_each(?))
+    ORDER BY rank, c.active_at DESC, c.session_id
+    LIMIT ?`).iterate(match, cutoff, cutoff, allowedJson, limit * 4)) {
+    recordCandidate(row.session_id, row, Number(row.rank) - 2.0, null);
+  }
+
+  for (const row of db.prepare(`SELECT c.session_id, c.title, c.work_dir, c.active_at, c.deletion_generation,
+      m.text AS matched_text,
+      bm25(session_message_fts, 2.0, 1.0) AS rank
+    FROM session_message_fts
+    JOIN session_messages m ON session_message_fts.rowid = m.rowid
+    JOIN session_cards c ON c.session_id = m.session_id
+    WHERE session_message_fts MATCH ?
+      AND (? IS NULL OR c.active_at >= ?)
+      AND c.session_id IN (SELECT value FROM json_each(?))
+    ORDER BY rank, c.active_at DESC, m.seq DESC
+    LIMIT ?`).iterate(match, cutoff, cutoff, allowedJson, limit * 8)) {
+    recordCandidate(row.session_id, row, Number(row.rank), row.matched_text);
+  }
+
+  const ordered = [...bestBySession.values()].sort((a, b) => (
+    a.rank - b.rank || b.activeAt - a.activeAt || a.sessionId.localeCompare(b.sessionId)
+  ));
+
+  for (const candidate of ordered) {
+    const text = candidate.matchedText ?? latestSessionText(db, candidate.sessionId);
+    results.push({
+      sessionId: candidate.sessionId,
+      title: candidate.title,
+      workDir: candidate.workDir,
+      snippet: snippetFromText(text, query),
+      matchedText: candidate.matchedText || '',
+      activeAt: candidate.activeAt,
+    });
+    if (results.length >= limit) break;
+  }
+  return { indexedAt, results };
 }
 
 function resolveWindowCutoff(options, now) {
