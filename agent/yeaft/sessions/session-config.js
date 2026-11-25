@@ -90,7 +90,14 @@ function normalizeSessionEffort(effort, model, config, yeaftDir) {
   const base = (typeof config === 'function' ? config() : config)
     ?? (yeaftDir && existsSync(join(yeaftDir, CONFIG_FILE)) ? loadConfig({ dir: yeaftDir }) : null);
   const effective = (model && resolveAllowedModelRef(base, model)) || inheritedModel(base);
-  return normalizeRoutedEffort(effort, effective, findEffortModelEntry(base, effective), base?.adapter);
+  const entry = findEffortModelEntry(base, effective);
+  // The router accepts qualified, unlisted models on explicit Chat gateways.
+  // A stale catalog must not turn their literal High into the global legacy alias.
+  const owner = parseModelRef(effective).providerName;
+  const provider = owner && base?.providers?.find(row => row.name === owner);
+  const fallback = normalizeProtocolName(provider?.protocol) === 'openai-chat-completions'
+    ? 'openai-chat-completions' : base?.adapter;
+  return normalizeRoutedEffort(effort, effective, entry, entry?.effortProtocol || fallback);
 }
 
 function publicConfig(stored, config, yeaftDir) {

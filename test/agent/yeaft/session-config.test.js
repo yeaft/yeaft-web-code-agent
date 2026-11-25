@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import ctx from '../../../agent/context.js';
+import { AdapterRouter } from '../../../agent/yeaft/llm/router.js';
 import { loadConfig } from '../../../agent/yeaft/config.js';
 import { getPluginConfig, updatePluginConfig } from '../../../agent/yeaft/config-api.js';
 import { flushAllAgentPerfTraces } from '../../../agent/yeaft/perf-trace.js';
@@ -55,6 +56,21 @@ describe('Yeaft session-scoped model config', () => {
       expect(loadSessionConfig(root, sessionId, config)).toEqual(saved);
       expect(resolveSessionConfig(config, saved).modelEffort).toBe(expected);
     }
+  });
+
+  it('keeps High from disk to wire for a qualified Chat alias missing from the local model catalog', async () => {
+    const root = makeDir(), sessionId = 'stale-catalog';
+    const providers = [{ name: 'proxy', protocol: 'chat-completions', baseUrl: 'https://test.invalid/v1', apiKey: 'fixture', models: ['listed'] }];
+    const config = { providers, adapter: 'openai-responses', availableModels: [], model: 'listed' };
+    const selection = { model: 'proxy/unlisted-alias', modelEffort: 'high' };
+    createSession(sessionsRoot(root), { id: sessionId, roster: ['omni'] }).close();
+    expect(saveSessionConfig(root, sessionId, selection, config)).toEqual(selection);
+    const resolved = resolveSessionConfig(config, loadSessionConfig(root, sessionId, config));
+    const fetch = vi.spyOn(globalThis, 'fetch').mockResolvedValue(Response.json({ choices: [{ message: { content: 'ok' }, finish_reason: 'stop' }] }));
+    try {
+      await new AdapterRouter({ providers }).call({ model: resolved.model, effort: resolved.modelEffort, effortSource: 'user', messages: [{ role: 'user', content: 'Hi' }] });
+      expect(JSON.parse(fetch.mock.calls[0][1].body)).toMatchObject({ model: 'unlisted-alias', reasoning_effort: 'high' });
+    } finally { fetch.mockRestore(); }
   });
 
   it('fails closed for an invalid config.json root and preserves every bad file', () => {
