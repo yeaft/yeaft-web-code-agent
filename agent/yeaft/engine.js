@@ -2878,6 +2878,7 @@ export class Engine {
     // transcript remains untouched and newer tool batches stay lossless).
     let retryEffortOverride = null;
     let retryStreamIdleTimeoutFloorMs = null;
+    let retryPreservedHighEffort = false;
     let tightenOlderToolResultsOnRetry = false;
     const compactedToolCallIds = new Set();
     let controlReentry = false;
@@ -2911,6 +2912,7 @@ export class Engine {
           consecutiveForbiddenErrors = 0;
           retryEffortOverride = null;
           retryStreamIdleTimeoutFloorMs = null;
+          retryPreservedHighEffort = false;
           tightenOlderToolResultsOnRetry = false;
         }
       }
@@ -3662,8 +3664,14 @@ export class Engine {
             try {
               commitDispatch(!legacyDispatchReserved);
               legacyDispatchReserved = false;
-              providerRequestPolicy = requestPolicy;
-              onProviderRequestStart?.(requestPolicy);
+              const effectivePolicy = requestPolicy
+                && requestPolicy.streamIdleTimeoutMs === 0
+                && retryPreservedHighEffort
+                && !['high', 'xhigh', 'max', 'ultra'].includes(requestPolicy.effort)
+                ? { ...requestPolicy, preserveHighEffortWatchdog: true }
+                : requestPolicy;
+              providerRequestPolicy = effectivePolicy;
+              onProviderRequestStart?.(effectivePolicy);
             } catch (error) {
               // Budget, lease and persistence failures are local, never a
               // provider failure to retry, even though the adapter raises them.
@@ -3968,6 +3976,7 @@ export class Engine {
         consecutiveForbiddenErrors = 0;
         retryEffortOverride = null;
         retryStreamIdleTimeoutFloorMs = null;
+        retryPreservedHighEffort = false;
         tightenOlderToolResultsOnRetry = false;
         controlReentry = false;
       } catch (err) {
@@ -4298,6 +4307,7 @@ export class Engine {
             contextOverflowRecoveryAttempts = 0;
             retryEffortOverride = null;
             retryStreamIdleTimeoutFloorMs = null;
+            retryPreservedHighEffort = false;
             tightenOlderToolResultsOnRetry = false;
             compactedToolCallIds.clear();
             fileReadObservations.clear();
@@ -4417,10 +4427,14 @@ export class Engine {
           continue;
         }
         const preserveRetryStreamIdleFloor = () => {
-          // Never shrink the stream silence timeout across retries on the same
-          // model (e.g. stepping effort down from xhigh -> medium). Preserve the
-          // prior attempt's budget (including disabled `0` via `Infinity`) until
+          // Never shrink the stream silence timeout (or independent watchdog)
+          // across retries on the same model (e.g. stepping effort down from
+          // xhigh -> medium). Preserve the prior attempt's budget (including
+          // disabled `0` via `Infinity`) and high-effort watchdog tier until
           // this step succeeds, rolls over, or switches model.
+          if (['high', 'xhigh', 'max', 'ultra'].includes(providerRequestPolicy?.effort)) {
+            retryPreservedHighEffort = true;
+          }
           const currentIdleMs = providerRequestPolicy?.streamIdleTimeoutMs;
           if (currentIdleMs === 0) {
             retryStreamIdleTimeoutFloorMs = Infinity;
@@ -4574,6 +4588,7 @@ export class Engine {
           consecutiveForbiddenErrors = 0;
           retryEffortOverride = null;
           retryStreamIdleTimeoutFloorMs = null;
+          retryPreservedHighEffort = false;
           tightenOlderToolResultsOnRetry = false;
           yield { type: 'turn_end', turnNumber, stopReason: 'fallback_retry', threadId };
           continue;

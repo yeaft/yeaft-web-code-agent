@@ -1596,6 +1596,43 @@ RELEASE_BODY`;
           { effort: 'medium', streamIdleTimeoutMs: 600_000, headersTimeoutMs: undefined },
           { effort: 'medium', streamIdleTimeoutMs: 300_000, headersTimeoutMs: undefined },
         ]);
+
+        // Also verify disabled high-effort guard (0) preserves both transport 0 and high-effort watchdog across xhigh -> medium headers-timeout retry.
+        const zeroPolicies = [];
+        let zeroCalls = 0;
+        vi.stubGlobal('fetch', vi.fn(async () => {
+          zeroCalls++;
+          if (zeroCalls === 1) {
+            return new Response(JSON.stringify({ error: { code: 'upstream_headers_timeout' } }), { status: 504 });
+          }
+          return new Response(JSON.stringify({
+            id: 'c_zero',
+            choices: [{ index: 0, message: { role: 'assistant', content: 'Recovered.' }, finish_reason: 'stop' }],
+          }), { headers: { 'content-type': 'application/json' } });
+        }));
+        const zeroRouter = new AdapterRouter({
+          providers: [{
+            name: 'copilot',
+            protocol: 'openai-chat-completions',
+            baseUrl: 'https://copilot.invalid/v1',
+            apiKey: 'fixture-key',
+            models: ['gemini-4-neon'],
+          }],
+          llmRetry: normalizeLlmRetry({ streamIdleTimeoutMs: 300_000, highEffortStreamIdleTimeoutMs: 0 }),
+        });
+        const zeroEngine = new Engine({
+          adapter: zeroRouter,
+          trace,
+          config: { ...baseConfig, llmRetry: { maxRetries: 1, baseDelayMs: 0, maxDelayMs: 0, jitterRatio: 0 } },
+        });
+        for await (const _event of zeroEngine.query({
+          prompt: 'Retry with disabled high-effort transport guard',
+          onProviderRequestStart: policy => zeroPolicies.push(policy),
+        })) { /* drain */ }
+        expect(zeroPolicies.filter(p => p.headersTimeoutMs === undefined)).toEqual([
+          { effort: 'xhigh', streamIdleTimeoutMs: 0, headersTimeoutMs: undefined },
+          { effort: 'medium', streamIdleTimeoutMs: 0, headersTimeoutMs: undefined, preserveHighEffortWatchdog: true },
+        ]);
       } finally {
         if (run) {
           ctrl.abort();

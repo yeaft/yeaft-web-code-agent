@@ -131,10 +131,11 @@ it('shows status before the initial provider emits any output and reports a watc
   expect(frames().findLast(frame => frame.data?.type === 'result')?.data).toMatchObject({ is_error: true });
   expect(requests).toBe(1);
 
-  // Watchdog follows the preserved non-shrinking stream idle budget on effort step-down retries.
+  // Watchdog follows the preserved non-shrinking stream idle budget (and high-effort floor when transport guard is 0) on retries.
   expect(bridge.__testHooks.queryTimeoutMsForProviderRequest({ effort: 'medium', streamIdleTimeoutMs: 300_000 })).toBe(330_000);
   expect(bridge.__testHooks.queryTimeoutMsForProviderRequest({ effort: 'xhigh', streamIdleTimeoutMs: 600_000 })).toBe(630_000);
   expect(bridge.__testHooks.queryTimeoutMsForProviderRequest({ effort: 'medium', streamIdleTimeoutMs: 600_000 })).toBe(630_000);
+  expect(bridge.__testHooks.queryTimeoutMsForProviderRequest({ effort: 'medium', streamIdleTimeoutMs: 0, preserveHighEffortWatchdog: true })).toBe(630_000);
   expect(bridge.__testHooks.queryTimeoutMsForProviderRequest({ effort: 'medium', streamIdleTimeoutMs: 900_000 })).toBe(930_000);
 });
 
