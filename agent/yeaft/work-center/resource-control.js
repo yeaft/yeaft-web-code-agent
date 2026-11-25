@@ -417,6 +417,7 @@ export class WorkCenterResourceAdapter extends LLMAdapter {
       return result;
     } finally { request.settle(usage, complete); }
   }
+  getProtocolForModel(model) { return this.adapter.getProtocolForModel?.(model) || null; }
   getProviderForModel(model) { return this.adapter.getProviderForModel?.(model) || null; }
   listAvailableModels() { return this.adapter.listAvailableModels?.() || []; }
 }

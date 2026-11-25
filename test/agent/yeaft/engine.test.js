@@ -6,6 +6,7 @@ import { createRequire } from 'node:module';
 import { SubAgentToolRegistry } from '../../../agent/yeaft/sub-agent/execution-control.js';
 import { Engine } from '../../../agent/yeaft/engine.js';
 import { AdapterRouter, filterEffortForModel, normalizeModelEntry } from '../../../agent/yeaft/llm/router.js';
+import { WorkCenterResourceAdapter } from '../../../agent/yeaft/work-center/resource-control.js';
 import { withUsageAccounting } from '../../../agent/yeaft/llm/usage-accounting.js';
 import { ConversationStore } from '../../../agent/yeaft/conversation/persist.js';
 import { closeConversationHistoryIndexes } from '../../../agent/yeaft/conversation/history-index.js';
@@ -96,6 +97,20 @@ describe('Engine', () => {
         for await (const event of engine.query(query)) expect(event.type).not.toBe('error');
         expect(mockAdapter.callLog.at(-1)).toMatchObject({ model, effort: expected, effortSource: 'user' });
       }
+    });
+
+    it('preserves a per-model Chat High through Session accounting even when the public catalog is stale', async () => {
+      const router = new AdapterRouter({ providers: [{ name: 'proxy', protocol: 'openai-responses', baseUrl: 'https://mixed.invalid/v1', apiKey: 'fixture',
+        models: [{ id: 'alias', protocol: 'openai-chat-completions' }] }] });
+      const adapter = withUsageAccounting(router, vi.fn());
+      expect(new WorkCenterResourceAdapter(adapter).getProtocolForModel('proxy/alias')).toBe('openai-chat-completions');
+      const engine = new Engine({ adapter, trace, config: { model: 'proxy/alias', projectDocMaxBytes: 0, availableModels: [] } });
+      const fetch = vi.spyOn(globalThis, 'fetch').mockResolvedValue(Response.json({ choices: [{ message: { content: 'ok' }, finish_reason: 'stop' }] }));
+      try {
+        for await (const event of engine.query({ prompt: '/high Hello' })) expect(event.type).not.toBe('error');
+        expect(String(fetch.mock.calls[0][0])).toBe('https://mixed.invalid/v1/chat/completions');
+        expect(JSON.parse(fetch.mock.calls[0][1].body).reasoning_effort).toBe('high');
+      } finally { fetch.mockRestore(); }
     });
 
     it('filters Chat effort against routed options and leaves an omitted Carbon effort unset', () => {
