@@ -19,12 +19,14 @@ import { threadSupplementScenario } from './prompts/thread-supplement.js';
 import { routeRunningSessionScenario } from './prompts/route-running-session.js';
 import { routeRecentSessionScenario } from './prompts/route-recent-session.js';
 import { planNewSessionScenario } from './prompts/plan-new-session.js';
+import { autoRouteSessionScenario } from './prompts/auto-route-session.js';
 
 const BUILTIN_SCENARIOS = new Map([
   [threadSupplementScenario.id, threadSupplementScenario],
   [routeRunningSessionScenario.id, routeRunningSessionScenario],
   [routeRecentSessionScenario.id, routeRecentSessionScenario],
   [planNewSessionScenario.id, planNewSessionScenario],
+  [autoRouteSessionScenario.id, autoRouteSessionScenario],
 ]);
 
 /**

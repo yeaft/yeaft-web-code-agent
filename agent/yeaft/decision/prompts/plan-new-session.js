@@ -137,8 +137,8 @@ export function validatePlanNewSessionOutput(parsed, {
 
 export const planNewSessionScenario = Object.freeze({
   id: PLAN_NEW_SESSION_SCENARIO_ID,
-  maxTokens: 256,
-  defaultTimeoutMs: 4_000,
+  maxTokens: 768,
+  defaultTimeoutMs: 8_000,
   buildSystemPrompt: () => PLAN_NEW_SESSION_PROMPT,
   buildUserPrompt: buildPlanNewSessionUserPrompt,
   validate: validatePlanNewSessionOutput,

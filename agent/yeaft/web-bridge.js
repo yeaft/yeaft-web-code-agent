@@ -8101,6 +8101,7 @@ export async function handleYeaftAutoRouteSend(msg = {}) {
         confidence: decision.confidence ?? null,
         reason: decision.reason || '',
         decisionModel: decision.decisionModel || null,
+        ...(decision.routeSource ? { routeSource: decision.routeSource } : {}),
         ...(answeredAskUser ? { answeredAskUser: true } : {}),
         ...(createdSession ? { session: createdSession } : {}),
       });

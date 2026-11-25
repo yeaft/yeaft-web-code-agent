@@ -9,6 +9,8 @@ import { classifyThread } from '../../../agent/yeaft/vp/thread-classifier.js';
 import { AdapterRouter } from '../../../agent/yeaft/llm/router.js';
 import { flushAgentPerfTrace } from '../../../agent/yeaft/perf-trace.js';
 import {
+  AUTO_ROUTE_SESSION_PROMPT,
+  AUTO_ROUTE_SESSION_SCENARIO_ID,
   PLAN_NEW_SESSION_PROMPT,
   PLAN_NEW_SESSION_SCENARIO_ID,
   ROUTE_RECENT_SESSION_PROMPT,
@@ -17,6 +19,7 @@ import {
   ROUTE_RUNNING_SESSION_SCENARIO_ID,
   THREAD_SUPPLEMENT_PROMPT,
   THREAD_SUPPLEMENT_SCENARIO_ID,
+  autoRouteSessionScenario,
   listDecisionScenarioIds,
   parseDecisionJsonObject,
   resolveDecisionModel,
@@ -133,17 +136,21 @@ describe('Decision model configuration & scenario-tailored runner', () => {
       ROUTE_RUNNING_SESSION_SCENARIO_ID,
       ROUTE_RECENT_SESSION_SCENARIO_ID,
       PLAN_NEW_SESSION_SCENARIO_ID,
+      AUTO_ROUTE_SESSION_SCENARIO_ID,
     ]);
     const prompts = new Set([
       THREAD_SUPPLEMENT_PROMPT,
       ROUTE_RUNNING_SESSION_PROMPT,
       ROUTE_RECENT_SESSION_PROMPT,
       PLAN_NEW_SESSION_PROMPT,
+      AUTO_ROUTE_SESSION_PROMPT,
     ]);
-    expect(prompts.size).toBe(4);
+    expect(prompts.size).toBe(5);
     for (const prompt of prompts) {
       expect(prompt).toContain('UNTRUSTED DATA');
     }
+    expect(autoRouteSessionScenario.maxTokens).toBeGreaterThanOrEqual(1024);
+    expect(autoRouteSessionScenario.defaultTimeoutMs).toBeGreaterThanOrEqual(8_000);
 
     const dir = createTempYeaftDir({ telemetry: { enabled: true, flushIntervalMs: 60_000 } });
     const calls = [];
@@ -290,6 +297,47 @@ describe('Decision model configuration & scenario-tailored runner', () => {
       reason: 'matched repo',
     });
 
+    // 3b. Unified auto-route-session scenario: validates running+idle allowlist, adaptive short-continuation confidence, and single-shot create allowlists.
+    const unifiedShortCont = await runDecision({
+      scenario: AUTO_ROUTE_SESSION_SCENARIO_ID,
+      config: { decisionModel: 'proxy/decision-fast' },
+      adapter: {
+        async call() {
+          return { text: '{"decision":"match","sessionId":"sess_idle_1","answeredRequestId":null,"confidence":0.62,"reason":"continues prior plan"}' };
+        },
+      },
+      input: {
+        newQuery: '下一步咱们要做什么来着？',
+        candidates: [{ sessionId: 'sess_idle_1', title: 'Plan', state: 'idle', ageText: '12m ago', recentMessages: [{ role: 'assistant', text: '准备做第二步' }] }],
+        allowedScenes: ['general', 'software'],
+        candidateFolders: [{ path: '/workspace/app', name: 'app' }],
+      },
+    });
+    expect(unifiedShortCont.result).toMatchObject({ decision: 'match', sessionId: 'sess_idle_1', confidence: 0.62 });
+
+    const unifiedNormalLowConf = await runDecision({
+      scenario: AUTO_ROUTE_SESSION_SCENARIO_ID,
+      config: { decisionModel: 'proxy/decision-fast' },
+      adapter: {
+        async call() {
+          return { text: '{"decision":"match","sessionId":"sess_idle_1","confidence":0.62,"sceneId":"writing","workDir":"/etc/passwd","title":"写产品文档","reason":"weak match"}' };
+        },
+      },
+      input: {
+        newQuery: '帮我写一篇全新的技术架构科普文章',
+        candidates: [{ sessionId: 'sess_idle_1', title: 'Plan', state: 'idle', ageText: '12m ago' }],
+        allowedScenes: ['general', 'writing'],
+        candidateFolders: [{ path: '/workspace/app', name: 'app' }],
+      },
+    });
+    expect(unifiedNormalLowConf.result).toMatchObject({
+      decision: 'create',
+      sessionId: null,
+      sceneId: 'writing',
+      workDir: '',
+      title: '写产品文档',
+    });
+
     // 4. Legacy thread-classifier delegates through Decision runner and honors config.decisionModel.
     let classifiedModel = null;
     const threadDecision = await classifyThread({
@@ -372,7 +420,7 @@ describe('Decision model configuration & scenario-tailored runner', () => {
       expect(wireDecision.result).toMatchObject({ decision: 'none', sessionId: null });
       expect(wireBodies).toHaveLength(1);
       expect(wireBodies[0].reasoning).toBeUndefined();
-      expect(wireBodies[0].max_output_tokens).toBe(240);
+      expect(wireBodies[0].max_output_tokens).toBe(768);
     } finally {
       globalThis.fetch = prevFetch;
       if (prevThinkingFlag === undefined) delete process.env.YEAFT_THINKING_V1;

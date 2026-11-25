@@ -844,6 +844,7 @@ export async function handleAgentOutput(agentId, agent, msg) {
           confidence: Number.isFinite(msg.confidence) ? msg.confidence : null,
           reason: typeof msg.reason === 'string' ? msg.reason.slice(0, 400) : '',
           decisionModel: typeof msg.decisionModel === 'string' ? msg.decisionModel.slice(0, 160) : null,
+          ...(typeof msg.routeSource === 'string' ? { routeSource: msg.routeSource.slice(0, 32) } : {}),
           ...(msg.answeredAskUser === true ? { answeredAskUser: true } : {}),
           ...(msg.error ? { error: String(msg.error).slice(0, 400) } : {}),
         });
