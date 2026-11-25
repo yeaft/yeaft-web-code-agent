@@ -416,7 +416,7 @@ export async function decideSessionAutoRoute({
         candidateFolders,
         newQuery: cleanQuery,
         preferredSceneId: explicitSceneId,
-        preferredWorkDir: explicitWorkDir || '',
+        preferredWorkDir: explicitWorkDir,
       },
       adapter,
       config,

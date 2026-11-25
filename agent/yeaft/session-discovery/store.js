@@ -556,8 +556,9 @@ function relaxedRoutingFtsMatch(query, maxClauses = 14) {
   const seen = new Set();
   for (const [term] of ranked) {
     if (clauses.length >= maxClauses) break;
-    if (term.length === 2 && cjk.test(term[0]) && cjk.test(term[1])) {
-      const encoded = `z2x${term.codePointAt(0).toString(16)}x${term.codePointAt(1).toString(16)}`;
+    const chars = [...term];
+    if (chars.length === 2 && cjk.test(chars[0]) && cjk.test(chars[1])) {
+      const encoded = `z2x${chars[0].codePointAt(0).toString(16)}x${chars[1].codePointAt(0).toString(16)}`;
       if (!seen.has(encoded)) {
         seen.add(encoded);
         clauses.push(`"${encoded}"`);

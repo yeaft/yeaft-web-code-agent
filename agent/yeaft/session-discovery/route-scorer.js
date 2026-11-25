@@ -64,9 +64,12 @@ const ZH_STOP_BIGRAMS = new Set([
 
 const EXPLICIT_NEW_SESSION_RE = /(?:^|[\s,，。])(?:新开一个|另开一个|开个新|新建一个|换个话题|聊点别的|说个别的|写一个独立的|写一份通用的|写一篇|推荐几本|推荐两本|start a new|new topic|new session|standalone\s)/iu;
 
-const SHORT_CONTINUATION_RE = /^(?:(?:你看看|你看|帮我看看|帮我看|那|可是|但是|对了)[，,\s]*)?(?:继续|好了吗|创建了吗|创建好了吗|做完了吗|执行完了吗|你是都执行完了吗|可以|好|好的|行|没问题|试试|去吧|去做吧|执行吧|继续吧|继续别停|继续帮我|下一步|然后呢|那这个|这个|下面这个|上面这个|刚才那个|全帮我|帮我修复|你做什么了|回答我|非常好|非常版|很棒|不错)/iu;
+// Standalone short affirmative / follow-up utterances MUST match the whole trimmed
+// utterance (end-anchored) so new-topic sentences starting with "可以..." or "好的，..."
+// are NEVER misclassified as pure continuations.
+const STANDALONE_SHORT_CONTINUATION_RE = /^(?:(?:可以|好|好的|行|没问题|不错|很棒|非常好|非常版|嗯|对)[，,、\s]*)?(?:继续|继续吧|继续啊|继续别停|继续帮我(?:执行|做|改|写)?吧?|好了吗|创建了吗|创建好了吗|做完了吗|执行完了吗|你是都执行完了吗|可以|好|好的|行|没问题|试试|试试看|去吧|去做吧|执行吧|你去帮我(?:执行|做这个)?(?:修复|实现)吧?|全帮我修复吧?(?:[，,\s]*谢谢)?|帮我修复吧?|你做什么了[？?\s]*回答我啊?|回答我啊?|然后呢|下一步(?:咱们)?要做什么(?:来着)?)[。！!？?~～\s]*$/iu;
 
-const ANAPHORIC_CONTINUATION_RE = /(?:这个图|这个表|这个服务|这个\s*folder|你这个|下面这个|上面那个|刚才那个|再给我生成|也生产了吗|也生成了吗|怎么中间停止了|继续啊|继续别停|继续帮我|下一步咱们|执行完了吗|创建好了吗|创建了吗)/iu;
+const ANAPHORIC_CONTINUATION_RE = /^(?:(?:你看看|你看|帮我看看|帮我看|那|可是|但是|对了)[，,\s]*)?(?:.*(?:下面这个|上面那个|刚才那个|这个图|你这个|这个服务|这个\s*folder|那这个配置|也生产了吗|也生成了吗|怎么中间停止了|被挡住).*)$/iu;
 
 const META_SESSION_DIAGNOSTIC_RE = /(?:这个\s*session|session\s*(?:是|叫|里|中|老|一直|为什么)|为什么.*(?:挂|停|失败|没回复|没有回复|没有\s*response|正常终止|断)|老是自己停止|怎么挂|又挂了|最新\s*message|pr\s*都开始|一个\s*(?:delta|response|回复).*都没有)/iu;
 
@@ -145,15 +148,17 @@ export function extractRoutingTerms(text) {
     }
   }
 
-  // 2. CJK content bigrams
+  // 2. CJK content bigrams (iterate Unicode code points so non-BMP Han chars are never split)
   for (const m of norm.matchAll(/[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]+/gu)) {
-    const run = m[0];
-    if (run.length < 2) continue;
-    for (let i = 0; i < run.length - 1; i += 1) {
-      const bg = run.slice(i, i + 2);
+    const chars = [...m[0]];
+    if (chars.length < 2) continue;
+    for (let i = 0; i < chars.length - 1; i += 1) {
+      const c0 = chars[i];
+      const c1 = chars[i + 1];
+      const bg = c0 + c1;
       if (ZH_STOP_BIGRAMS.has(bg)) continue;
-      if (ZH_FUNC_CHARS.has(bg[0]) && ZH_FUNC_CHARS.has(bg[1])) continue;
-      const weight = (!ZH_FUNC_CHARS.has(bg[0]) && !ZH_FUNC_CHARS.has(bg[1])) ? 1.4 : 0.7;
+      if (ZH_FUNC_CHARS.has(c0) && ZH_FUNC_CHARS.has(c1)) continue;
+      const weight = (!ZH_FUNC_CHARS.has(c0) && !ZH_FUNC_CHARS.has(c1)) ? 1.4 : 0.7;
       add(bg, weight);
     }
   }
@@ -168,12 +173,14 @@ export function isExplicitNewSessionIntent(query) {
 export function isShortContinuationQuery(query) {
   const clean = normalizeRouteText(query);
   if (!clean || clean.length > 40 || EXPLICIT_NEW_SESSION_RE.test(clean)) return false;
-  if (SHORT_CONTINUATION_RE.test(clean)) return true;
-  if (clean.length <= 36 && ANAPHORIC_CONTINUATION_RE.test(clean)) return true;
+  if (STANDALONE_SHORT_CONTINUATION_RE.test(clean)) return true;
   const terms = extractRoutingTerms(clean);
-  return clean.length <= 22
-    && terms.size <= 3
-    && /(?:这个|那个|它|上面|下面|继续|好了|完了|修复|实现|帮我|怎么|挡住|吗\??$)/u.test(clean);
+  if (clean.length <= 36 && ANAPHORIC_CONTINUATION_RE.test(clean) && terms.size <= 5) {
+    return true;
+  }
+  return clean.length <= 18
+    && terms.size <= 2
+    && /(?:这个|那个|上面|下面|继续|好了|完了|挡住|吗\??$)/u.test(clean);
 }
 
 /**
@@ -376,6 +383,16 @@ export function scoreRouteCandidates({
       + (normLex > 0.3 ? recencyScore : recencyScore * 0.2);
 
     matchedTerms.sort((a, b) => b.contrib - a.contrib);
+    const matchedTermSet = new Set(matchedTerms.map(x => x.term));
+    let unmatchedTermCount = 0;
+    let hasNovelIdentifier = false;
+    for (const [term, qw] of qTerms) {
+      if (!matchedTermSet.has(term)) {
+        // Count content-bearing terms (weight >= 1.0), ignoring half-functional boundary bigrams.
+        if (qw >= 1.0) unmatchedTermCount += 1;
+        if (/^[a-z0-9][a-z0-9._/-]{2,}$/i.test(term)) hasNovelIdentifier = true;
+      }
+    }
     scored.push({
       ...cand,
       activeAt,
@@ -388,6 +405,8 @@ export function scoreRouteCandidates({
       queryCoverage: Math.round(queryCoverage * 100) / 100,
       distinctiveHits,
       uniqueHits,
+      unmatchedTermCount,
+      hasNovelIdentifier,
       totalScore: Math.round(totalScore * 100) / 100,
       matchedTerms: matchedTerms.slice(0, 4).map(x => x.term),
       matchedOlderSnippet: normLex >= 1.5 && info.bestOlderHitScore >= 3.0 ? info.bestOlderSnippet : '',
@@ -504,13 +523,21 @@ export function tryFastPathRoute({
 
   // Rule 4: Short/anaphoric continuation when ONLY ONE Session was active
   // within 30 minutes and no other Session was active within 3 hours.
+  // Guard against hijacking a new topic: standalone acknowledgments always pass,
+  // while deictic queries must NOT carry novel identifiers or many novel topic terms.
   const byAge = [...scoredCandidates].sort((a, b) => a.ageMs - b.ageMs);
+  const soleRecent = byAge[0];
+  const isPureStandalone = STANDALONE_SHORT_CONTINUATION_RE.test(normalizeRouteText(cleanQuery));
+  const noNovelDomainShift = isPureStandalone || (
+    !soleRecent.hasNovelIdentifier && (soleRecent.unmatchedTermCount ?? 0) <= 3
+  );
   if (
     isShortContinuationQuery(cleanQuery)
-    && byAge[0].ageMin <= 30
+    && noNovelDomainShift
+    && soleRecent.ageMin <= 30
     && (!byAge[1] || byAge[1].ageMin >= 180)
   ) {
-    return buildHit(byAge[0], 0.92, 'sole_recent_continuation');
+    return buildHit(soleRecent, 0.92, 'sole_recent_continuation');
   }
 
   return null;

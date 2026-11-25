@@ -130,7 +130,7 @@ export function validateAutoRouteSessionOutput(parsed, {
   allowedScenes = SESSION_SCENE_IDS,
   candidateFolders = [],
   preferredSceneId = null,
-  preferredWorkDir = '',
+  preferredWorkDir = null,
   minConfidence,
 } = {}) {
   if (!parsed) return null;
@@ -166,8 +166,9 @@ export function validateAutoRouteSessionOutput(parsed, {
       ? preferredSceneId
       : (sceneSet.has(rawScene) ? rawScene : (sceneSet.has('general') ? 'general' : scenes[0]));
     const rawWorkDir = typeof parsed.workDir === 'string' ? parsed.workDir.trim() : '';
-    const workDir = preferredWorkDir
-      ? (allowedPaths.has(preferredWorkDir) ? preferredWorkDir : '')
+    const hasExplicitWorkDir = typeof preferredWorkDir === 'string';
+    const workDir = hasExplicitWorkDir
+      ? (preferredWorkDir && allowedPaths.has(preferredWorkDir) ? preferredWorkDir : '')
       : (rawWorkDir && allowedPaths.has(rawWorkDir) ? rawWorkDir : '');
     const title = typeof parsed.title === 'string' && parsed.title.trim()
       ? boundedText(parsed.title, 80)

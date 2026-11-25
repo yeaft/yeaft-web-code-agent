@@ -544,26 +544,131 @@ describe('Workspace <=3 level folder snapshot & Sessionless auto-routing pipelin
     });
     expect(llmCalls).toBe(0);
 
-    // 7. Safety Guards: meta-diagnostic reference & explicit new-topic MUST NOT trigger fast-path!
-    await decideSessionAutoRoute({
-      yeaftDir,
-      text: '你帮我看看ZhongYi这个session，它是正常终止吗？我感觉没给我response啊',
-      allowedSessionIds: allowedIds,
-      adapter: countingAdapter,
-      config: { decisionModel: 'proxy/decision-mini' },
-      now,
-    });
-    expect(llmCalls).toBe(1);
+    // 7. Safety Guards: meta-diagnostic reference, explicit new-topic, and prefix-bearing new-topic queries
+    // MUST NOT trigger fast-path even when only ONE Session was active 5-8 minutes ago!
+    const safeGuardQueries = [
+      '你帮我看看ZhongYi这个session，它是正常终止吗？我感觉没给我response啊',
+      '新开一个话题，帮我规划京都五天自由行路线',
+      '可以帮我规划京都五天自由行路线吗？',
+      '好的，帮我查一下英伟达财报',
+      '帮我修复一下 nginx 的 502 错误',
+      '这个报错怎么解决: ECONNREFUSED',
+    ];
+    for (const q of safeGuardQueries) {
+      const beforeCalls = llmCalls;
+      await decideSessionAutoRoute({
+        yeaftDir,
+        text: q,
+        allowedSessionIds: allowedIds,
+        adapter: countingAdapter,
+        config: { decisionModel: 'proxy/decision-mini' },
+        now,
+      });
+      expect(llmCalls).toBe(beforeCalls + 1);
+    }
 
-    await decideSessionAutoRoute({
+    // 7b. Multi-prompt & non-option AskUser deferral: Stage 0 MUST defer to Stage 1 LLM.
+    for (const askCase of [
+      {
+        text: '8080',
+        runningSessions: [{
+          sessionId: sYeaft.id,
+          title: 'Yeaft-Dev',
+          state: 'waiting_input',
+          pendingQuestions: [
+            { requestId: 'ask_1', question: 'Port?', options: ['3000', '8080'] },
+            { requestId: 'ask_2', question: 'Env?', options: ['dev', 'prod'] },
+          ],
+        }],
+      },
+      {
+        text: 'prod',
+        runningSessions: [
+          {
+            sessionId: sYeaft.id,
+            title: 'Yeaft-Dev',
+            state: 'waiting_input',
+            pendingQuestions: [{ requestId: 'ask_a', question: 'Env?', options: ['dev', 'prod'] }],
+          },
+          {
+            sessionId: sProxy.id,
+            title: 'Proxy-Server',
+            state: 'waiting_input',
+            pendingQuestions: [{ requestId: 'ask_b', question: 'Env?', options: ['dev', 'prod'] }],
+          },
+        ],
+      },
+      {
+        text: '帮我把服务更新最新版本',
+        runningSessions: [{
+          sessionId: sYeaft.id,
+          title: 'Yeaft-Dev',
+          state: 'waiting_input',
+          pendingQuestions: [{ requestId: 'ask_c', question: 'Port?', options: ['3000', '8080'] }],
+        }],
+      },
+    ]) {
+      const beforeCalls = llmCalls;
+      await decideSessionAutoRoute({
+        yeaftDir,
+        text: askCase.text,
+        allowedSessionIds: allowedIds,
+        runningSessions: askCase.runningSessions,
+        adapter: countingAdapter,
+        config: { decisionModel: 'proxy/decision-mini' },
+        now,
+      });
+      expect(llmCalls).toBe(beforeCalls + 1);
+    }
+
+    // 7c. Stage 1 unauthorized sessionId rejection & explicit preferredWorkDir/preferredSceneId precedence.
+    const repoDir = join(tempRoot, 'yeaft-app');
+    mkdirSync(repoDir, { recursive: true });
+    writeFileSync(join(repoDir, 'package.json'), JSON.stringify({ name: 'yeaft-app' }));
+    ensureWorkspaceFoldersSnapshot(yeaftDir, { roots: [tempRoot], force: true });
+    const hijackingAdapter = {
+      async call() {
+        return {
+          text: JSON.stringify({
+            decision: 'match',
+            sessionId: 'unauthorized_other_owner_session',
+            confidence: 0.99,
+            sceneId: 'software',
+            workDir: repoDir,
+            title: '规划新任务',
+            reason: 'hallucinated id',
+          }),
+        };
+      },
+    };
+    const rejectedMatch = await decideSessionAutoRoute({
       yeaftDir,
-      text: '新开一个话题，帮我规划京都五天自由行路线',
+      text: '新开一个话题写一篇周报',
       allowedSessionIds: allowedIds,
-      adapter: countingAdapter,
+      preferredSceneId: 'writing',
+      preferredWorkDir: '', // explicit empty workDir must suppress LLM-selected repoDir
+      adapter: hijackingAdapter,
       config: { decisionModel: 'proxy/decision-mini' },
       now,
     });
-    expect(llmCalls).toBe(2);
+    expect(rejectedMatch).toMatchObject({
+      action: 'create',
+      sessionId: null,
+      sceneId: 'writing',
+      workDir: '',
+      title: '规划新任务',
+    });
+
+    // 7d. Non-BMP CJK surrogate-pair bigram recall (e.g. 𠮷野家)
+    appendTurn(sTcm.id, '研究𠮷野山古籍草药记录', '已整理𠮷野山药材笔记', now - 60_000);
+    expect(refreshSingleSessionIndex(yeaftDir, sTcm.id, now)).toBe(true);
+    const dbBmp = openDiscoveryStore(yeaftDir, { readOnly: true });
+    try {
+      const bmpHits = searchDiscoveryRelaxed(dbBmp, yeaftDir, allowedIds, '查一下𠮷野相关的古籍笔记', now, { activeWindowDays: 5 });
+      expect(bmpHits.results[0]?.sessionId).toBe(sTcm.id);
+    } finally {
+      dbBmp.close();
+    }
 
     // 8. Scale-invariant IDF guard: adding 20 distractor sessions must NOT cause generic words to false-trigger fast-path!
     const baseCandidates = [
@@ -657,6 +762,98 @@ describe('Workspace <=3 level folder snapshot & Sessionless auto-routing pipelin
       expect(hits.results.map(r => r.sessionId)).toEqual([sB.id]);
     } finally {
       db.close();
+    }
+
+    // Multi-segment (>=3 segments) delta slice: verify refreshSingleSessionIndex skips segment 1!
+    const sMulti = createSessionFromSpec(yeaftDir, { name: 'Multi-Seg', sceneId: 'software' });
+    const convDir = join(yeaftDir, 'sessions', sMulti.id, 'conversation');
+    const segDir = join(convDir, 'segments');
+    mkdirSync(segDir, { recursive: true });
+    const writeSeg = (file, rows) => {
+      const body = `${rows.map(r => JSON.stringify(r)).join('\n')}\n`;
+      writeFileSync(join(segDir, file), body);
+      return Buffer.byteLength(body);
+    };
+    const mkRow = (seqNum, role, content, tsMs) => ({
+      id: `m${String(seqNum).padStart(4, '0')}`,
+      seq: seqNum,
+      sessionId: sMulti.id,
+      role,
+      ...(role === 'assistant' ? { turnId: `tm_${seqNum}`, responseKind: 'result', stopReason: 'end_turn' } : {}),
+      content,
+      time: new Date(tsMs).toISOString(),
+    });
+    const b1 = writeSeg('000001.jsonl', [
+      mkRow(1, 'user', 'Seg1 alpha SEG1_OLD_TOKEN', now - 60_000),
+      mkRow(2, 'assistant', 'Seg1 reply', now - 59_000),
+    ]);
+    const b2 = writeSeg('000002.jsonl', [
+      mkRow(3, 'user', 'Seg2 beta question', now - 50_000),
+      mkRow(4, 'assistant', 'Seg2 reply', now - 49_000),
+    ]);
+    const b3 = writeSeg('000003.jsonl', [
+      mkRow(5, 'user', 'Seg3 gamma question', now - 40_000),
+      mkRow(6, 'assistant', 'Seg3 reply', now - 39_000),
+    ]);
+    writeFileSync(join(convDir, 'index.json'), JSON.stringify({
+      version: 1,
+      streamId: 'stream-multi',
+      revision: 3,
+      nextSeq: 7,
+      totalMessages: 6,
+      segments: [
+        { file: '000001.jsonl', firstSeq: 1, lastSeq: 2, count: 2, bytes: b1 },
+        { file: '000002.jsonl', firstSeq: 3, lastSeq: 4, count: 2, bytes: b2 },
+        { file: '000003.jsonl', firstSeq: 5, lastSeq: 6, count: 2, bytes: b3 },
+      ],
+    }));
+    writeFileSync(join(convDir, 'lineage.json'), JSON.stringify({ streamId: 'stream-multi' }));
+
+    expect(refreshSingleSessionIndex(yeaftDir, sMulti.id, now)).toBe(true);
+
+    // Append turn 4 into segment 3 and verify delta refresh skips 000001.jsonl completely!
+    const b3Updated = writeSeg('000003.jsonl', [
+      mkRow(5, 'user', 'Seg3 gamma question', now - 40_000),
+      mkRow(6, 'assistant', 'Seg3 reply', now - 39_000),
+      mkRow(7, 'user', 'Seg3 delta DELTA_SLICE_TOKEN', now - 10_000),
+      mkRow(8, 'assistant', 'Seg3 delta reply', now - 9_000),
+    ]);
+    writeFileSync(join(convDir, 'index.json'), JSON.stringify({
+      version: 1,
+      streamId: 'stream-multi',
+      revision: 4,
+      nextSeq: 9,
+      totalMessages: 8,
+      segments: [
+        { file: '000001.jsonl', firstSeq: 1, lastSeq: 2, count: 2, bytes: b1 },
+        { file: '000002.jsonl', firstSeq: 3, lastSeq: 4, count: 2, bytes: b2 },
+        { file: '000003.jsonl', firstSeq: 5, lastSeq: 8, count: 4, bytes: b3Updated },
+      ],
+    }));
+
+    const readFiles = [];
+    const spyingScan = (scanRoot, telemetry) => {
+      const inner = createAgentHistoryScan(scanRoot, telemetry);
+      return {
+        ...inner,
+        read(filePath) {
+          readFiles.push(String(filePath));
+          return inner.read(filePath);
+        },
+      };
+    };
+    expect(refreshSingleSessionIndex(yeaftDir, sMulti.id, now + 1000, { createScan: spyingScan })).toBe(true);
+    expect(readFiles.some(p => p.endsWith('000003.jsonl'))).toBe(true);
+    expect(readFiles.some(p => p.endsWith('000001.jsonl'))).toBe(false);
+
+    const dbMulti = openDiscoveryStore(yeaftDir, { readOnly: true });
+    try {
+      const card = listActiveSessionCards(dbMulti, yeaftDir, [sMulti.id], now + 1000).cards[0];
+      expect(card?.messageCount).toBe(8);
+      expect(searchDiscovery(dbMulti, yeaftDir, [sMulti.id], 'SEG1_OLD_TOKEN', now + 1000).results).toHaveLength(1);
+      expect(searchDiscovery(dbMulti, yeaftDir, [sMulti.id], 'DELTA_SLICE_TOKEN', now + 1000).results).toHaveLength(1);
+    } finally {
+      dbMulti.close();
     }
   });
 });

@@ -167,6 +167,7 @@ function selectDeltaSegmentRange(conversation, segments, read, minSeq) {
     const fileSet = new Set(segments);
     const valid = segMeta.filter(s => s?.file && fileSet.has(s.file) && Number.isFinite(s.lastSeq));
     if (valid.length === 0 || valid.length !== segments.length) return null;
+    if (new Set(valid.map(s => s.file)).size !== segments.length) return null;
     let startIdx = valid.findIndex(s => s.lastSeq >= minSeq);
     if (startIdx < 0) startIdx = valid.length - 1;
     if (startIdx === 0) return null;
@@ -203,40 +204,54 @@ function readTranscriptRowsOldestFirst(conversation, sessionId, read, list, oper
     .filter(file => /^\d+\.jsonl$/u.test(file))
     .sort((a, b) => Number.parseInt(a.slice(0, -6), 10) - Number.parseInt(b.slice(0, -6), 10) || a.localeCompare(b));
 
-  // Fast incremental delta read: read only segments at/after `minSeq`, then step
-  // backward one segment at a time until we find the boundary visible user row.
+  // Fast incremental delta read: pre-check forward byte size against half the
+  // tail budget so a >48 MiB burst between runs never exhausts the 64 MiB scan
+  // budget or stalls indexing; if it fits, step backward one segment at a time
+  // until we find the boundary visible user row.
+  const deltaBudgetBytes = Number.isFinite(tailBudgetBytes) && tailBudgetBytes > 0
+    ? Math.floor(tailBudgetBytes / 2)
+    : 0;
+  let bytesConsumedInDelta = 0;
   const deltaRange = selectDeltaSegmentRange(conversation, segments, read, minSeq);
   if (deltaRange) {
-    let bytesRead = 0;
     const { files, startIdx } = deltaRange;
+    let forwardBytes = 0;
     for (let i = startIdx; i < files.length; i += 1) {
-      bytesRead += safeFileSize(join(conversation, 'segments', files[i]));
-      parseSegmentIntoMap(conversation, files[i], sessionId, read, scrub, bySeq);
+      forwardBytes += safeFileSize(join(conversation, 'segments', files[i]));
     }
-    const hasBoundaryUserAtOrBefore = () => {
-      for (const [rSeq, row] of bySeq) {
-        if (rSeq <= minSeq && row.role === 'user' && isVisibleConversationRow(row)) return true;
+    if (!deltaBudgetBytes || forwardBytes <= deltaBudgetBytes) {
+      for (let i = startIdx; i < files.length; i += 1) {
+        bytesConsumedInDelta += safeFileSize(join(conversation, 'segments', files[i]));
+        parseSegmentIntoMap(conversation, files[i], sessionId, read, scrub, bySeq);
       }
-      return false;
-    };
-    let backIdx = startIdx - 1;
-    while (backIdx >= 0 && !hasBoundaryUserAtOrBefore()) {
-      const size = safeFileSize(join(conversation, 'segments', files[backIdx]));
-      if (Number.isFinite(tailBudgetBytes) && tailBudgetBytes > 0 && bytesRead + size > tailBudgetBytes) break;
-      bytesRead += size;
-      parseSegmentIntoMap(conversation, files[backIdx], sessionId, read, scrub, bySeq);
-      backIdx -= 1;
-    }
-    if (hasBoundaryUserAtOrBefore()) {
-      return {
-        rows: [...bySeq.entries()].sort((a, b) => a[0] - b[0]).map(([, row]) => row),
-        usedDeltaSlice: true,
+      const hasBoundaryUserAtOrBefore = () => {
+        for (const [rSeq, row] of bySeq) {
+          if (rSeq <= minSeq && row.role === 'user' && isVisibleConversationRow(row)) return true;
+        }
+        return false;
       };
+      let backIdx = startIdx - 1;
+      while (backIdx >= 0 && !hasBoundaryUserAtOrBefore()) {
+        const size = safeFileSize(join(conversation, 'segments', files[backIdx]));
+        if (deltaBudgetBytes > 0 && bytesConsumedInDelta + size > deltaBudgetBytes) break;
+        bytesConsumedInDelta += size;
+        parseSegmentIntoMap(conversation, files[backIdx], sessionId, read, scrub, bySeq);
+        backIdx -= 1;
+      }
+      if (hasBoundaryUserAtOrBefore()) {
+        return {
+          rows: [...bySeq.entries()].sort((a, b) => a[0] - b[0]).map(([, row]) => row),
+          usedDeltaSlice: true,
+        };
+      }
+      bySeq.clear();
     }
-    bySeq.clear();
   }
 
-  const selectedSegments = applyTailBudget(conversation, segments, tailBudgetBytes);
+  const remainingTailBudget = (Number.isFinite(tailBudgetBytes) && tailBudgetBytes > 0)
+    ? Math.max(8 * 1024 * 1024, tailBudgetBytes - bytesConsumedInDelta)
+    : tailBudgetBytes;
+  const selectedSegments = applyTailBudget(conversation, segments, remainingTailBudget);
 
   const legacy = ['messages', 'cold'].flatMap(kind => {
     const dir = join(conversation, kind);
@@ -406,7 +421,7 @@ function reconcileDeltaMetrics(rows, sessionId, now, existing, extracted, usedDe
     row => row && row.sessionId === sessionId && row.role === 'user'
       && isVisibleConversationRow(row) && seq(row) <= existing.lastSeq,
   );
-  if (!hasBoundaryUser) {
+  if (!hasBoundaryUser || extracted.lastSeq < existing.lastSeq) {
     return {
       messages: extracted.messages,
       visibleTurnCount: extracted.visibleTurnCount,
