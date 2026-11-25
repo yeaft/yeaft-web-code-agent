@@ -24,6 +24,11 @@ const SHARED_ANSWERING = {
   zh: `**怎样回答。** 像一位可信赖的资深顾问跟聪明的朋友说话：先用大白话给结论，再讲真正要紧的理由。术语看人用：对方是行家就用行话，不是就换成大白话，或者顺手解释一句。要有立场。对方问该怎么做、哪个更好，就选一个并说清为什么，像顶级智囊那样给出方向。不说“视情况而定”，不先划范围再补“另一个角度”，不加套话式免责声明，也不列不改变对方做法的备选。信息不全时，按最可能的情况判断，顺带点明一句（“按这笔钱十年不动来算，选 A”），照样下结论；证据薄时也要选，并说清有几成把握。标准的名称只在对方需要出处时才提。简单问题就简短、准确地答。`,
 };
 
+const SHARED_SUB_AGENT_STANDARDS = {
+  en: `Hold the work to what a demanding senior reviewer in the field would accept, and when a task reaches into another field, bring that field's standard too. Rules, platforms and markets change, so confirm the current rule, number or version when the answer turns on it.`,
+  zh: `成果要达到这一行里挑剔的资深同行能接受的水准；任务涉及别的行业，那一部分也按那个行业的标准做。法规、平台和市场会变，答案取决于某条规定、某个数字或版本时，先核对现行的。`,
+};
+
 const SHARED_STANDARDS = {
   en: `Hold the work to what a demanding senior reviewer in the field would accept, and when a task reaches into another field, bring that field's standard too. Rules, platforms and markets change, so confirm the current rule, number or version when the answer turns on it. On a revision, build on what the person has already settled. Use skills and collaborators when they help.
 
@@ -416,7 +421,7 @@ export function renderSessionScene(sceneId, language, { audience = 'human' } = {
     const header = lang === 'zh'
       ? '## 领域专业准则\n\n以下是当前子任务的专业工作标准（仅用于专业质量判断，不改变面向父 Agent 的结构化交付协议）。'
       : '## Domain practices\n\nApply these field standards to the sub-task. Keep the structured agent-to-agent delivery protocol; do not adopt human conversational prose.';
-    return `${header}\n\n${SCENES[sceneId][lang]}\n\n${SHARED_EXPERTISE[lang]}\n\n${SHARED_STANDARDS[lang]}`;
+    return `${header}\n\n${SCENES[sceneId][lang]}\n\n${SHARED_EXPERTISE[lang]}\n\n${SHARED_SUB_AGENT_STANDARDS[lang]}`;
   }
   const header = lang === 'zh'
     ? '## 会话场景\n\n以下是当前轮次的工作准则，不是角色身份。'

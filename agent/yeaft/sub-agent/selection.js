@@ -32,13 +32,13 @@
 import { EFFORT_LEVELS } from '../effort.js';
 import { inferProtocolFromModelId } from '../llm/router.js';
 import {
-  getGeminiThinkingProfile,
   getModelEffortOptions,
   getThinkingCapability,
   normalizeEffort,
   parseModelRef,
   resolveGeminiEffort,
 } from '../models.js';
+import { isZhLanguage } from '../prompts.js';
 import { findEffortModelEntry, usesNativeGeminiLevels } from '../sessions/session-config.js';
 import { isSessionSceneId, SESSION_SCENE_IDS } from '../sessions/scene-ids.js';
 import { getPersona } from '../personas.js';
@@ -67,9 +67,16 @@ function modelRefMatches(left, right) {
   return !a.providerName || !b.providerName || a.providerName === b.providerName;
 }
 
+function wireProtocolFromEffortProtocol(effortProtocol) {
+  if (effortProtocol === 'gemini') return 'gemini';
+  if (effortProtocol === 'anthropic' || effortProtocol === 'anthropic-adaptive') return 'anthropic';
+  if (effortProtocol === 'openai-reasoning') return 'openai-responses';
+  return null;
+}
+
 function protocolForEntry(modelRef, entry, config) {
   return entry?.protocol
-    || entry?.effortProtocol
+    || wireProtocolFromEffortProtocol(entry?.effortProtocol || entry?.thinkingProtocol)
     || inferProtocolFromModelId(parseModelRef(modelRef).modelId)
     || config?.adapter
     || 'openai-responses';
@@ -92,9 +99,7 @@ function supportedEffortsForModel(modelRef, entry, config) {
   if (!cap.supportsThinking || cap.thinkingProtocol === 'none') {
     return { supportsThinking: false, preserveNative: false, protocol: context.protocol, options: [] };
   }
-  const options = Array.isArray(entry?.effortOptions) && entry.effortOptions.length
-    ? entry.effortOptions.slice()
-    : getModelEffortOptions(modelRef, context);
+  const options = getModelEffortOptions(modelRef, context);
   const preserveNative = usesNativeGeminiLevels(modelRef, entry, context.protocol);
   return { supportsThinking: options.length > 0, preserveNative, protocol: context.protocol, options };
 }
@@ -181,6 +186,22 @@ function pickClosestAtOrBelow(target, options, { modelRef, protocol, preserveNat
   return null;
 }
 
+function resolveInheritedModelRef(parentModel, config) {
+  const explicitParent = cleanString(parentModel);
+  const configModel = cleanString(config?.model);
+  const primaryModel = cleanString(config?.primaryModel);
+  const raw = explicitParent || configModel || primaryModel;
+  if (!raw) return null;
+  // loadConfig exposes the configured ref in primaryModel and may leave an
+  // unqualified ID in model. Retain the provider qualification when IDs match
+  // so multi-provider catalogs resolve the exact owning entry.
+  if (!parseModelRef(raw).providerName && primaryModel && parseModelRef(primaryModel).providerName
+      && modelRefMatches(raw, primaryModel)) {
+    return primaryModel;
+  }
+  return raw;
+}
+
 /**
  * Resolve explicit or default sub-agent model, effort, and scene.
  *
@@ -236,9 +257,10 @@ export function resolveSubAgentSelection({
 
   // 2. Model resolution (explicit fail-closed > persona fastModel > parent model).
   const explicitModel = cleanString(requestedModel);
-  const inheritedModel = cleanString(parentModel) || cleanString(config?.model) || cleanString(config?.primaryModel);
+  const rawInheritedModel = resolveInheritedModelRef(parentModel, config);
+  let modelEntry = rawInheritedModel ? findEffortModelEntry(config, rawInheritedModel) || null : null;
+  const inheritedModel = (modelEntry && catalogEntryRef(modelEntry)) || rawInheritedModel;
   let model = inheritedModel;
-  let modelEntry = inheritedModel ? findEffortModelEntry(config, inheritedModel) || null : null;
   let modelSource = 'inherited';
 
   if (explicitModel) {
@@ -255,6 +277,16 @@ export function resolveSubAgentSelection({
         model = fastResolved.model;
         modelEntry = fastResolved.entry;
         modelSource = 'persona-fast';
+      } else {
+        // Fallback for legacy configs where config.fastModel is an unqualified
+        // modelId that appears in multiple providers; match router.js's
+        // first-provider ownership so persona fast routing stays usable.
+        const fallbackEntry = findEffortModelEntry(config, fastCandidate);
+        if (fallbackEntry) {
+          model = catalogEntryRef(fallbackEntry);
+          modelEntry = fallbackEntry;
+          modelSource = 'persona-fast';
+        }
       }
     }
   }
@@ -279,20 +311,16 @@ export function resolveSubAgentSelection({
           error: `Model "${model}" does not support reasoning effort overrides.`,
         };
       }
-      const normalized = support.protocol === 'gemini'
-        ? (support.options.includes(explicitEffort)
-            ? explicitEffort
-            : (!support.preserveNative && support.options.includes(normalizeEffort(explicitEffort))
-                ? normalizeEffort(explicitEffort)
-                : null))
-        : normalizeEffort(explicitEffort, support.preserveNative);
-      if (!normalized || !support.options.includes(normalized)) {
+      // Fail closed on explicit effort overrides: require exact membership in
+      // the resolved model's supported effort options (never silently escalate
+      // e.g. `low` -> `medium` or remap `high` -> `xhigh`).
+      if (!support.options.includes(explicitEffort)) {
         return {
           ok: false,
           error: `Model "${model}" does not support effort "${explicitEffort}". Supported efforts: ${support.options.join(', ')}.`,
         };
       }
-      effort = normalized;
+      effort = explicitEffort;
     } else {
       effort = normalizeEffort(explicitEffort, true);
     }
@@ -351,22 +379,24 @@ export function formatSubAgentModelCatalogNotice(config, language = 'en') {
 
   const seen = new Set();
   const entries = [];
+  let totalUnique = 0;
   for (const item of catalog) {
     const ref = catalogEntryRef(item);
     if (!ref || seen.has(ref)) continue;
     seen.add(ref);
+    totalUnique += 1;
+    if (entries.length >= 24) continue;
     const support = supportedEffortsForModel(ref, item, config);
     const efforts = support.supportsThinking && support.options.length
       ? `[${support.options.join(',')}]`
       : '[no-effort]';
     entries.push(`${ref} ${efforts}`);
-    if (entries.length >= 24) break;
   }
   if (entries.length <= 1) return '';
 
-  const truncated = catalog.length > entries.length ? ` (+${catalog.length - entries.length} more)` : '';
+  const truncated = totalUnique > entries.length ? ` (+${totalUnique - entries.length} more)` : '';
   const list = entries.join('; ') + truncated;
-  if (language === 'zh') {
+  if (isZhLanguage(language)) {
     return `SpawnAgent 可选模型与 effort（仅按需覆写；省略 model 时 explorer/researcher 默认优先 fastModel，其余继承当前模型；designer 默认 effort=xhigh，其余默认至少 medium）：${list}`;
   }
   return `SpawnAgent available models and efforts (override only when needed; omitting model uses fastModel for explorer/researcher and inherits current model otherwise; designer defaults to effort=xhigh): ${list}`;

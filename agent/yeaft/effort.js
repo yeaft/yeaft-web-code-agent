@@ -180,11 +180,12 @@ export function resolveSubAgentEffort({ parentDecision = null, model, effortCont
   // child ceiling so ordinary sub-agents stay conservative.
   const target = explicitTarget || (atMost(parentTarget, 'medium') ? parentTarget : 'medium');
   const capability = getThinkingCapability(model, context);
+  const isGeminiLevel = capability.thinkingProtocol === 'gemini' && capability.maxBudgetTokens === null;
   const base = {
     requested: explicitTarget || parentTarget,
     source: explicitTarget ? 'explicit' : (parent.effective ? 'inherited' : 'fallback'),
     model, cap: target, thinkingEnabled: false,
-    ...(['minimal', 'low'].includes(target) ? { nativeEffortCap: true } : {}),
+    ...((['minimal', 'low'].includes(target) || (isGeminiLevel && target === 'high')) ? { nativeEffortCap: true } : {}),
   };
   if (!capability.supportsThinking || capability.thinkingProtocol === 'none') {
     return snapshotEffortDecision({ ...base, effective: null, wireMode: 'unsupported' });
@@ -194,7 +195,8 @@ export function resolveSubAgentEffort({ parentDecision = null, model, effortCont
   if (!effective) throw effortError(model, target);
   const wireMode = protocol === 'openai-responses' || capability.thinkingProtocol === 'openai-reasoning'
     ? 'reasoning-effort'
-    : capability.thinkingProtocol === 'anthropic-adaptive' ? 'adaptive' : 'manual';
+    : isGeminiLevel ? 'thinking-level'
+      : capability.thinkingProtocol === 'anthropic-adaptive' ? 'adaptive' : 'manual';
   return snapshotEffortDecision({ ...base, effective, wireMode, thinkingEnabled: true });
 }
 

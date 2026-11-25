@@ -176,6 +176,17 @@ export function startSubAgent(agent, deps = {}) {
         || childConfig.availableModels?.find(entry => entry.ref === agent.model || entry.id === parsedChildModel.modelId)
         || null;
       const childModelInfo = getModelInfo(parsedChildModel.modelId, modelEntry) || null;
+      const parentModelId = parseModelRef(deps.config?.model || deps.config?.primaryModel || '').modelId;
+      const parentDefaultMaxOutput = parentModelId
+        ? resolveMaxOutputTokens(parentModelId, {
+            modelInfo: deps.config?.modelInfo,
+            availableModels: deps.config?.availableModels,
+          })
+        : null;
+      const explicitOutputCap = Number.isFinite(deps.config?.maxOutputTokens) && deps.config.maxOutputTokens > 0
+        && (!Number.isFinite(parentDefaultMaxOutput) || deps.config.maxOutputTokens < parentDefaultMaxOutput)
+        ? Math.floor(deps.config.maxOutputTokens)
+        : null;
       childConfig.model = agent.model;
       childConfig.primaryModel = agent.model;
       childConfig.modelInfo = childModelInfo;
@@ -187,11 +198,19 @@ export function startSubAgent(agent, deps = {}) {
         modelInfo: childModelInfo,
         availableModels: childConfig.availableModels,
       });
-      childConfig.maxOutputTokens = modelMaxOutput;
+      childConfig.maxOutputTokens = explicitOutputCap !== null
+        ? Math.min(explicitOutputCap, modelMaxOutput)
+        : modelMaxOutput;
     }
-    if (resolvedSelection.explicitEffortTarget) {
-      childConfig.modelEffort = resolvedSelection.explicitEffortTarget;
+    if (resolvedSelection.modelSource === 'explicit') {
+      // Fail-closed explicit model override must not silently fall back to an
+      // unrelated parent fallbackModel on transient provider retry exhaustion.
+      childConfig.fallbackModel = null;
     }
+    // Always set childConfig.modelEffort explicitly so ordinary sub-agents
+    // (explicitEffortTarget === null) do not inherit a parent Session's `max`
+    // effort and inflate Anthropic manual thinking max_tokens before clamping.
+    childConfig.modelEffort = resolvedSelection.explicitEffortTarget || null;
 
     subEngine = new Engine({
       adapter: deps.adapter,

@@ -14,6 +14,7 @@ import { readOutputLog } from '../../../agent/yeaft/sub-agent/output-log.js';
 import { STATUS } from '../../../agent/yeaft/sub-agent/status.js';
 import { _resetNotifications } from '../../../agent/yeaft/sub-agent/notifications.js';
 import agentTool, { _resetAgentRegistry, getAgentRegistry } from '../../../agent/yeaft/tools/agent.js';
+import sendMessage from '../../../agent/yeaft/tools/send-message.js';
 import waitAgent from '../../../agent/yeaft/tools/wait-agent.js';
 import listAgents from '../../../agent/yeaft/tools/list-agents.js';
 import closeAgent from '../../../agent/yeaft/tools/close-agent.js';
@@ -23,6 +24,7 @@ import { NullTrace } from '../../../agent/yeaft/debug-trace.js';
 import { Engine } from '../../../agent/yeaft/engine.js';
 import { AdapterRouter } from '../../../agent/yeaft/llm/router.js';
 import { GeminiAdapter } from '../../../agent/yeaft/llm/gemini.js';
+import { createPersonChildProvider } from '../../../agent/yeaft/person/child-provider.js';
 
 function mkCatalogConfig(overrides = {}) {
   return {
@@ -200,13 +202,49 @@ describe('sub-agent model, effort, scene, and machine protocol', () => {
     expect(resolveSubAgentSelection({ requestedModel: 'openai/unknown-model', config })).toMatchObject({ ok: false });
     expect(resolveSubAgentSelection({ requestedModel: 'proxy/plain-no-effort', requestedEffort: 'xhigh', config })).toMatchObject({ ok: false });
     expect(resolveSubAgentSelection({ requestedModel: 'anthropic/claude-sonnet-4.6', requestedEffort: 'ultra', config })).toMatchObject({ ok: false });
+    // Fail closed on retired/unsupported explicit efforts (must NOT silently escalate low -> medium or high -> xhigh).
+    expect(resolveSubAgentSelection({ requestedModel: 'openai/gpt-5.4', requestedEffort: 'low', config })).toMatchObject({ ok: false });
+    expect(resolveSubAgentSelection({ requestedModel: 'anthropic/claude-sonnet-4.6', requestedEffort: 'high', config })).toMatchObject({ ok: false });
     expect(resolveSubAgentSelection({ requestedScene: 'not-a-scene', config })).toMatchObject({ ok: false });
 
-    // Catalog notice omits single-model configs and renders compact multi-model list otherwise.
+    // Catalog entries omitting `protocol` (carrying only `effortProtocol`) still map to valid wire protocol.
+    const effortProtoOnlyConfig = mkCatalogConfig({
+      availableModels: [
+        { id: 'claude-sonnet-4.6', ref: 'anthropic/claude-sonnet-4.6', provider: 'anthropic', effortProtocol: 'anthropic-adaptive', effortOptions: ['medium', 'xhigh', 'max'] },
+        { id: 'gpt-5.4', ref: 'openai/gpt-5.4', provider: 'openai', effortProtocol: 'openai-reasoning', effortOptions: ['medium', 'xhigh', 'max', 'ultra'] },
+      ],
+    });
+    expect(resolveSubAgentSelection({
+      personaId: 'designer',
+      requestedModel: 'anthropic/claude-sonnet-4.6',
+      requestedEffort: 'xhigh',
+      config: effortProtoOnlyConfig,
+    })).toMatchObject({ ok: true, model: 'anthropic/claude-sonnet-4.6', effort: 'xhigh' });
+
+    // Bare config.model keeps primaryModel's provider ownership and canonicalizes to provider/model ref.
+    const bareModelConfig = mkCatalogConfig({
+      model: 'gpt-5.4',
+      primaryModel: 'copilot/gpt-5.4',
+      availableModels: [
+        ...config.availableModels,
+        { id: 'gpt-5.4', ref: 'copilot/gpt-5.4', provider: 'copilot', protocol: 'openai-responses', supportsEffort: true, effortOptions: ['medium', 'xhigh'] },
+      ],
+    });
+    expect(resolveSubAgentSelection({ config: bareModelConfig })).toMatchObject({
+      ok: true,
+      model: 'copilot/gpt-5.4',
+      modelSource: 'inherited',
+    });
+
+    // Catalog notice omits single-model configs, handles zh-CN locale, and counts only unique entries for truncation.
     expect(formatSubAgentModelCatalogNotice({ availableModels: [config.availableModels[0]] }, 'en')).toBe('');
-    const notice = formatSubAgentModelCatalogNotice(config, 'zh');
-    expect(notice).toContain('openai/gpt-5.4 [medium,xhigh,max,ultra]');
-    expect(notice).toContain('proxy/plain-no-effort [no-effort]');
+    const noticeZhCn = formatSubAgentModelCatalogNotice({
+      availableModels: [...config.availableModels, config.availableModels[0]],
+    }, 'zh-CN');
+    expect(noticeZhCn).toContain('SpawnAgent 可选模型与 effort');
+    expect(noticeZhCn).toContain('openai/gpt-5.4 [medium,xhigh,max,ultra]');
+    expect(noticeZhCn).toContain('proxy/plain-no-effort [no-effort]');
+    expect(noticeZhCn).not.toContain('more)');
   });
 
   it('honors explicit targetEffort across OpenAI, Anthropic, and Gemini while preserving legacy medium ceiling by default', () => {
@@ -235,10 +273,10 @@ describe('sub-agent model, effort, scene, and machine protocol', () => {
     expect(anthropicDecision).toMatchObject({ effective: 'max', cap: 'max', source: 'explicit' });
     expect(anthropicBody.output_config.effort).toBe('max');
 
-    // Gemini adapter honors targetEffort on native thinkingLevel models.
-    let capturedBody = null;
+    // Gemini adapter preserves native thinkingLevel on both Gemini 4 (XHIGH) and Gemini 3.x (HIGH, never corrupted to XHIGH).
+    const capturedBodies = [];
     vi.stubGlobal('fetch', vi.fn(async (_url, init) => {
-      capturedBody = JSON.parse(init.body);
+      capturedBodies.push(JSON.parse(init.body));
       return new Response(JSON.stringify({
         candidates: [{ content: { role: 'model', parts: [{ text: 'ok' }] }, finishReason: 'STOP' }],
       }), { headers: { 'content-type': 'application/json' } });
@@ -250,8 +288,15 @@ describe('sub-agent model, effort, scene, and machine protocol', () => {
       effort: 'xhigh',
       effortSource: 'user',
       effortConstraint: { parentDecision: parentMax, targetEffort: 'xhigh' },
-    }).then(() => {
-      expect(capturedBody.generationConfig.thinkingConfig.thinkingLevel).toBe('XHIGH');
+    }).then(() => gemini.call({
+      model: 'gemini-3.8-flash',
+      messages: [{ role: 'user', content: 'design' }],
+      effortConstraint: { parentDecision: parentMax, targetEffort: 'high' },
+    })).then(() => {
+      expect(capturedBodies[0].generationConfig.thinkingConfig.thinkingLevel).toBe('XHIGH');
+      expect(capturedBodies[1].generationConfig.thinkingConfig.thinkingLevel).toBe('HIGH');
+      expect(resolveSubAgentEffort({ parentDecision: parentMax, model: 'gemini-3.8-flash', protocol: 'gemini', targetEffort: 'high' }))
+        .toMatchObject({ effective: 'high', cap: 'high', wireMode: 'thinking-level' });
     });
   });
 
@@ -287,6 +332,7 @@ describe('sub-agent model, effort, scene, and machine protocol', () => {
       expect(childSystem).toContain(preamble);
       expect(childSystem).not.toContain(lang === 'zh' ? '顺着对方的话，用对方的语言聊' : "Pick up the thread in the user's language");
       expect(childSystem).not.toContain(lang === 'zh' ? '像一位可信赖的资深顾问' : 'Talk like a trusted senior adviser');
+      expect(childSystem).not.toContain(lang === 'zh' ? '先得到对方明确同意' : "get the person's explicit go-ahead");
     }
   });
 
@@ -455,6 +501,138 @@ describe('sub-agent model, effort, scene, and machine protocol', () => {
       expect(wireWait.status).toBe(STATUS.IDLE);
       expect(wirePayload.model).toBe('gpt-5.4');
       expect(wirePayload.reasoning).toEqual({ effort: 'xhigh' });
+
+      // 7. PromptAgent follow-up preserves explicit targetEffort and model across turns.
+      wirePayload = null;
+      expect(JSON.parse(await sendMessage.execute({
+        agent_id: wireSpawn.agentId,
+        message: 'Check edge case 2',
+      }, { ...ctx, parentEngineDeps: { ...deps, adapter: router } })).success).toBe(true);
+      const followUpWait = JSON.parse(await waitAgent.execute({ agent_id: wireSpawn.agentId, timeout_ms: 2000 }, { ...ctx, parentEngineDeps: { ...deps, adapter: router } }));
+      expect(followUpWait.status).toBe(STATUS.IDLE);
+      expect(wirePayload.model).toBe('gpt-5.4');
+      expect(wirePayload.reasoning).toEqual({ effort: 'xhigh' });
+
+      // 8. Explicit model override clears parent fallbackModel and respects an explicit lower output cap;
+      //    ordinary sub-agents do not inherit parent modelEffort='max' (avoiding Anthropic manual max_tokens inflation).
+      let anthropicBody = null;
+      vi.stubGlobal('fetch', vi.fn(async (_url, init) => {
+        anthropicBody = JSON.parse(init.body);
+        return new Response(JSON.stringify({
+          id: 'msg_1',
+          type: 'message',
+          role: 'assistant',
+          model: 'claude-3-7-sonnet',
+          stop_reason: 'end_turn',
+          content: [{ type: 'text', text: 'status: done\nconclusion: ok' }],
+          usage: { input_tokens: 10, output_tokens: 5 },
+        }), { headers: { 'content-type': 'application/json' } });
+      }));
+      const manualAnthropicRouter = new AdapterRouter({
+        providers: [{
+          name: 'anthropic',
+          protocol: 'anthropic',
+          baseUrl: 'https://api.anthropic.invalid',
+          apiKey: 'fixture',
+          models: [{ id: 'claude-3-7-sonnet', thinkingProtocol: 'anthropic' }],
+        }],
+      });
+      const manualConfig = mkCatalogConfig({
+        model: 'anthropic/claude-3-7-sonnet',
+        primaryModel: 'anthropic/claude-3-7-sonnet',
+        modelEffort: 'max',
+        fallbackModel: 'openai/gpt-5.4-mini',
+        maxOutputTokens: 10000,
+        availableModels: [
+          {
+            id: 'claude-3-7-sonnet',
+            ref: 'anthropic/claude-3-7-sonnet',
+            provider: 'anthropic',
+            protocol: 'anthropic',
+            thinkingProtocol: 'anthropic',
+            supportsEffort: true,
+            effortOptions: ['medium', 'xhigh', 'max'],
+            contextWindow: 200000,
+            maxOutput: 64000,
+          },
+          ...config.availableModels,
+        ],
+      });
+      const ordinaryCtx = {
+        ...ctx,
+        queryTurnId: 'turn-manual-check',
+        parentEngineDeps: {
+          ...deps,
+          adapter: manualAnthropicRouter,
+          config: manualConfig,
+          parentModel: 'anthropic/claude-3-7-sonnet',
+        },
+      };
+      const ordinarySpawn = JSON.parse(await agentTool.execute({
+        name: 'ordinary-worker',
+        mission: 'Verify no max_tokens inflation',
+        persona: 'implementer',
+      }, ordinaryCtx));
+      expect(ordinarySpawn.success).toBe(true);
+      spawnedIds.push(ordinarySpawn.agentId);
+      await waitAgent.execute({ agent_id: ordinarySpawn.agentId, timeout_ms: 2000 }, ordinaryCtx);
+      expect(anthropicBody.max_tokens).toBe(10000);
+      expect(anthropicBody.thinking).toEqual({ type: 'enabled', budget_tokens: 8192 });
+
+      // Explicit model override clears fallbackModel and preserves explicit lower output cap.
+      const cappedChild = JSON.parse(await agentTool.execute({
+        name: 'explicit-capped',
+        mission: 'Check cap and fallback clearing',
+        model: 'openai/gpt-5.4',
+      }, { ...ctx, queryTurnId: 'turn-cap-check', parentEngineDeps: { ...deps, config: manualConfig, parentModel: manualConfig.model } }));
+      expect(cappedChild.success).toBe(true);
+      spawnedIds.push(cappedChild.agentId);
+      await waitAgent.execute({ agent_id: cappedChild.agentId, timeout_ms: 2000 }, ctx);
+      expect(recorded.at(-1).maxTokens).toBe(10000);
+      expect(getAgentRegistry().get(cappedChild.agentId).modelSource).toBe('explicit');
+
+      // 9. Bare vs qualified parentModel produces identical delegation identity (dedupes retries).
+      const bareCtx = {
+        ...ctx,
+        queryTurnId: 'turn-canonical-id',
+        parentEngineDeps: { ...deps, config: { ...config, model: 'claude-sonnet-4.6', primaryModel: 'anthropic/claude-sonnet-4.6' }, parentModel: 'claude-sonnet-4.6' },
+      };
+      const firstBare = JSON.parse(await agentTool.execute({ name: 'canon-1', mission: 'Same mission' }, bareCtx));
+      expect(firstBare).toMatchObject({ success: true, model: 'anthropic/claude-sonnet-4.6' });
+      spawnedIds.push(firstBare.agentId);
+      const retryQualified = JSON.parse(await agentTool.execute({ name: 'canon-2', mission: 'Same mission', model: 'anthropic/claude-sonnet-4.6' }, bareCtx));
+      expect(retryQualified).toMatchObject({ success: true, reused: true, agentId: firstBare.agentId });
+
+      // 10. Person createPersonChildProvider guard keeps working with persona='designer' without crashing.
+      const personSeen = [];
+      const personChild = createPersonChildProvider({
+        adapter: {
+          async *stream(params) {
+            personSeen.push(params);
+            yield { type: 'text_delta', text: 'status: done\nconclusion: person ok' };
+            yield { type: 'stop', stopReason: 'end_turn' };
+          },
+        },
+        catalog: [{ id: 'openai/gpt-5.4', contextWindow: 128000, maxOutput: 4096, efforts: ['medium', 'xhigh'] }],
+        defaultSelection: { model: 'openai/gpt-5.4', effort: 'xhigh' },
+      }, null, config);
+      const personCtx = {
+        ...ctx,
+        queryTurnId: 'turn-person-designer',
+        parentEngineDeps: { ...deps, adapter: personChild.adapter, config: personChild.config, parentModel: personChild.config.model },
+      };
+      const personSpawn = JSON.parse(await agentTool.execute({
+        name: 'person-designer',
+        mission: 'Verify person guard compatibility',
+        persona: 'designer',
+      }, personCtx));
+      expect(personSpawn.success).toBe(true);
+      spawnedIds.push(personSpawn.agentId);
+      const personWait = JSON.parse(await waitAgent.execute({ agent_id: personSpawn.agentId, timeout_ms: 2000 }, personCtx));
+      expect(personWait.status).toBe(STATUS.IDLE);
+      expect(personSeen[0].model).toBe('openai/gpt-5.4');
+      // Person's guard still enforces its own medium child ceiling.
+      expect(personSeen[0].effort).toBe('medium');
     } finally {
       for (const id of spawnedIds) {
         const record = getAgentRegistry().get(id);

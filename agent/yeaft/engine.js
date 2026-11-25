@@ -2633,10 +2633,16 @@ export class Engine {
       explicitSkillName,
     });
 
+    // Freeze whether the parent system prompt carries the compact SpawnAgent
+    // model/effort catalog at turn start so mid-query DiscoverTools activation
+    // never mutates systemPrompt across loops (preserving prompt cache and
+    // avoiding signed Anthropic prefix updates/ProviderStateError).
+    const includeSubAgentCatalogNotice = !isSubAgent && !vpPersona?.subAgent
+      && activeToolNames?.has('SpawnAgent');
     let promptNotices = [];
     const buildCurrentSystemPrompt = () => {
       const effectivePromptNotices = [...promptNotices];
-      if (!isSubAgent && !vpPersona?.subAgent && activeToolNames?.has('SpawnAgent')) {
+      if (includeSubAgentCatalogNotice) {
         const subAgentCatalogNotice = formatSubAgentModelCatalogNotice(
           this.#config,
           this.#config?.language || 'en',
