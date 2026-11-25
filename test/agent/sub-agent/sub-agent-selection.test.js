@@ -24,6 +24,7 @@ import { NullTrace } from '../../../agent/yeaft/debug-trace.js';
 import { Engine } from '../../../agent/yeaft/engine.js';
 import { AdapterRouter } from '../../../agent/yeaft/llm/router.js';
 import { GeminiAdapter } from '../../../agent/yeaft/llm/gemini.js';
+import { createPersonProvider } from '../../../agent/yeaft/person/provider.js';
 import { createPersonChildProvider } from '../../../agent/yeaft/person/child-provider.js';
 
 function mkCatalogConfig(overrides = {}) {
@@ -115,6 +116,20 @@ describe('sub-agent model, effort, scene, and machine protocol', () => {
     _resetAgentRegistry();
     _resetNotifications();
     vi.restoreAllMocks();
+  });
+
+  it('keeps Chat High in Person catalogs, pinned children, and SpawnAgent selections', async () => {
+    const id = 'chat-alias', model = `proxy/${id}`, protocol = 'openai-chat-completions';
+    const config = mkCatalogConfig({ model, primaryModel: model, providers: [{ name: 'proxy', protocol, models: [id] }],
+      availableModels: [{ id, ref: model, protocol, effortOptions: ['medium', 'high', 'xhigh'], contextWindow: 128000, maxOutput: 4096 }] });
+    const stream = vi.fn(async function* () { yield { type: 'stop', stopReason: 'end_turn' }; });
+    const provider = await createPersonProvider({ config, adapter: { stream }, effortEnabled: true, minimumRequestBytes: 1 });
+    expect(provider.catalog[0].efforts).toEqual(['medium', 'high', 'xhigh']);
+    const child = createPersonChildProvider(provider, { model, effort: 'high' });
+    await child.adapter.call({ model });
+    expect(stream).toHaveBeenCalledWith(expect.objectContaining({ model, effort: 'high', effortSource: 'user' }));
+    expect(resolveSubAgentSelection({ config, requestedEffort: 'high' })).toMatchObject({ ok: true, explicitEffortTarget: 'high' });
+    expect(resolveSubAgentSelection({ config, personaData: { defaultEffort: 'high' } })).toMatchObject({ ok: true, explicitEffortTarget: 'high' });
   });
 
   it('validates and resolves designer persona, model whitelist, effort rules, and scene inheritance', () => {

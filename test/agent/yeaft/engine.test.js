@@ -5,7 +5,7 @@ import { tmpdir } from 'os';
 import { createRequire } from 'node:module';
 import { SubAgentToolRegistry } from '../../../agent/yeaft/sub-agent/execution-control.js';
 import { Engine } from '../../../agent/yeaft/engine.js';
-import { AdapterRouter } from '../../../agent/yeaft/llm/router.js';
+import { AdapterRouter, filterEffortForModel, normalizeModelEntry } from '../../../agent/yeaft/llm/router.js';
 import { withUsageAccounting } from '../../../agent/yeaft/llm/usage-accounting.js';
 import { ConversationStore } from '../../../agent/yeaft/conversation/persist.js';
 import { closeConversationHistoryIndexes } from '../../../agent/yeaft/conversation/history-index.js';
@@ -82,6 +82,36 @@ beforeEach(() => {
 
 describe('Engine', () => {
   describe('simple query (no tools)', () => {
+    it('resolves caller and prefix intent at the request boundary, not by model family', async () => {
+      const model = 'proxy/gemini-4-carbon';
+      for (const [protocol, query, expected] of [
+        ['openai-chat-completions', { prompt: '/high hello' }, 'high'],
+        ['openai-chat-completions', { prompt: '/high hello', userEffort: 'low' }, 'medium'],
+        ['openai-responses', { prompt: '/high hello' }, 'xhigh'],
+        ['gemini', { prompt: 'hello', userEffort: 'low' }, 'low'],
+      ]) {
+        const engine = new Engine({ adapter: mockAdapter, trace, config: { model, projectDocMaxBytes: 0,
+          availableModels: [{ ref: model, id: 'gemini-4-carbon', protocol }] } });
+        mockAdapter.pushResponse([{ type: 'text_delta', text: 'ok' }, { type: 'stop', stopReason: 'end_turn' }]);
+        for await (const event of engine.query(query)) expect(event.type).not.toBe('error');
+        expect(mockAdapter.callLog.at(-1)).toMatchObject({ model, effort: expected, effortSource: 'user' });
+      }
+    });
+
+    it('filters Chat effort against routed options and leaves an omitted Carbon effort unset', () => {
+      const protocol = 'openai-chat-completions';
+      const model = 'gemini-4-carbon';
+      const entry = normalizeModelEntry({ id: model, effortOptions: ['high'] }, protocol);
+      const route = { protocol, entry };
+      const params = { model, effortSource: 'user' };
+      for (const effort of ['high', 'xhigh', 'max', 'ultra']) {
+        expect(filterEffortForModel({ ...params, effort }, route).effort).toBe('high');
+      }
+      expect(filterEffortForModel({ model }, route)).not.toHaveProperty('effort');
+      expect(filterEffortForModel({ ...params, effort: 'medium' }, route)).not.toHaveProperty('effort');
+      expect(filterEffortForModel({ ...params, model: 'another', effort: 'max' }, route)).not.toHaveProperty('effort');
+    });
+
     it('retries the first image-heavy request by bytes without repeating transcript rows or sending historical image bytes', async () => {
       const yeaftDir = mkdtempSync(join(tmpdir(), 'yeaft-engine-no-persist-duplicates-'));
       try {

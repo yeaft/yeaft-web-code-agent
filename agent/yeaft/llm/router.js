@@ -22,7 +22,7 @@
 import { LLMAdapter, LLMAuthError, MAX_STREAM_IDLE_TIMEOUT_MS } from './adapter.js';
 import { ANTHROPIC_IMAGE_LIMITS } from './anthropic-images.js';
 import { cloneGeminiOptions } from './gemini-options.js';
-import { getGeminiThinkingProfile, getThinkingCapability, normalizeEffort, normalizeEffortOptions, parseModelRef, resolveGeminiEffort } from '../models.js';
+import { configuredEffortOptions, getThinkingCapability, normalizeEffort, parseModelRef, resolveChatEffort, resolveGeminiEffort } from '../models.js';
 import {
   GITHUB_COPILOT_BASE_URL,
   GITHUB_COPILOT_CREDENTIAL_PROVIDER,
@@ -58,7 +58,7 @@ export function normalizeProtocolName(value) {
   return trimmed;
 }
 
-export function normalizeModelEntry(entry) {
+export function normalizeModelEntry(entry, providerProtocol) {
   if (typeof entry === 'string') {
     return entry ? { id: entry } : null;
   }
@@ -78,8 +78,8 @@ export function normalizeModelEntry(entry) {
     if (typeof entry.thinkingProtocol === 'string' && entry.thinkingProtocol) {
       out.thinkingProtocol = entry.thinkingProtocol;
     }
-    const effortOptions = normalizeEffortOptions(entry.effortOptions,
-      (entry.protocol === 'gemini' || !entry.protocol) && Boolean(getGeminiThinkingProfile(entry.id)?.levels));
+    const protocol = normalizedProtocol || normalizeProtocolName(providerProtocol) || inferProtocolFromModelId(entry.id);
+    const effortOptions = configuredEffortOptions(entry.effortOptions, entry.id, protocol);
     if (effortOptions) out.effortOptions = effortOptions;
     if (Number.isFinite(entry.maxBudgetTokens) && entry.maxBudgetTokens > 0) {
       out.maxBudgetTokens = entry.maxBudgetTokens;
@@ -156,11 +156,6 @@ export function filterEffortForModel(params, context = {}) {
       return rest;
     }
   }
-  const norm = normalizeEffort(params.effort, context.protocol === 'gemini');
-  if (!norm) {
-    const { effort: _drop, effortSource: _source, ...rest } = params;
-    return rest;
-  }
   const modelId = parseModelRef(params.model).modelId;
   const effortContext = {
     protocol: context.protocol,
@@ -175,7 +170,15 @@ export function filterEffortForModel(params, context = {}) {
     return rest;
   }
   const options = cap.effortOptions;
-  const supported = context.protocol === 'gemini' ? resolveGeminiEffort(modelId, norm, options) : options.includes(norm) ? norm : null;
+  let supported;
+  if (context.protocol === 'openai-chat-completions') {
+    supported = resolveChatEffort(modelId, params.effort, options);
+  } else if (context.protocol === 'gemini') {
+    supported = resolveGeminiEffort(modelId, params.effort, options);
+  } else {
+    const norm = normalizeEffort(params.effort);
+    supported = options.includes(norm) ? norm : null;
+  }
   if (!supported) {
     const { effort: _drop, effortSource: _source, ...rest } = params;
     return rest;
@@ -339,7 +342,7 @@ export class AdapterRouter extends LLMAdapter {
     for (const provider of this.#providers) {
       if (!Array.isArray(provider.models)) continue;
       for (const raw of provider.models) {
-        const entry = normalizeModelEntry(raw);
+        const entry = normalizeModelEntry(raw, provider.protocol);
         if (!entry) continue;
         const ref = provider.name ? `${provider.name}/${entry.id}` : entry.id;
         if (!this.#modelToProvider.has(ref)) {
@@ -410,7 +413,7 @@ export class AdapterRouter extends LLMAdapter {
     for (const provider of candidates) {
       const models = Array.isArray(provider.models) ? provider.models : [];
       for (const raw of models) {
-        const existing = normalizeModelEntry(raw);
+        const existing = normalizeModelEntry(raw, provider.protocol);
         if (!existing) continue;
         try {
           if (this.#effectiveProtocol(provider, existing) === inferred) {
@@ -444,7 +447,7 @@ export class AdapterRouter extends LLMAdapter {
         if (!provider || provider.name !== parsed.providerName) continue;
         sawProvider = true;
         for (const raw of Array.isArray(provider.models) ? provider.models : []) {
-          const entry = normalizeModelEntry(raw);
+          const entry = normalizeModelEntry(raw, provider.protocol);
           if (entry) providerModels.push(entry.id);
         }
       }
@@ -823,7 +826,7 @@ export class AdapterRouter extends LLMAdapter {
     for (const provider of this.#providers) {
       if (!Array.isArray(provider.models)) continue;
       for (const raw of provider.models) {
-        const entry = normalizeModelEntry(raw);
+        const entry = normalizeModelEntry(raw, provider.protocol);
         if (!entry) continue;
         const key = `${provider.name}/${entry.id}`;
         if (seen.has(key)) continue;

@@ -38,6 +38,25 @@ afterEach(async () => {
 });
 
 describe('Yeaft session-scoped model config', () => {
+  it('persists High using the selected route rather than the Gemini model ID', () => {
+    const root = makeDir();
+    const id = 'gemini-4-carbon';
+    const availableModels = ['openai-responses', 'openai-chat-completions', 'gemini'].map(protocol =>
+      ({ id, ref: `${protocol}/${id}`, provider: protocol, protocol }));
+    const config = { availableModels, model: id, primaryModel: availableModels[1].ref };
+    for (const [model, input, expected] of [
+      [undefined, 'high', 'high'], [availableModels[1].ref, 'low', 'medium'],
+      [availableModels[0].ref, 'high', 'xhigh'], [availableModels[2].ref, 'low', 'low'],
+    ]) {
+      const sessionId = `configured-${expected}`;
+      createSession(sessionsRoot(root), { id: sessionId, roster: ['omni'] }).close();
+      const saved = saveSessionConfig(root, sessionId, { model, modelEffort: input }, config);
+      expect(saved.modelEffort).toBe(expected);
+      expect(loadSessionConfig(root, sessionId, config)).toEqual(saved);
+      expect(resolveSessionConfig(config, saved).modelEffort).toBe(expected);
+    }
+  });
+
   it('fails closed for an invalid config.json root and preserves every bad file', () => {
     const root = makeDir();
     const configPath = join(root, 'config.json');

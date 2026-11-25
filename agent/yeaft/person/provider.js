@@ -3,7 +3,7 @@ import { createLLMAdapter } from '../llm/adapter.js';
 import { applyAnthropicThinking } from '../llm/anthropic.js';
 import { inferProtocolFromModelId, normalizeModelEntry, normalizeProtocolName } from '../llm/router.js';
 import { normalizeKnownProviderForRuntime } from '../llm/known-providers.js';
-import { normalizeEffort, resolveContextWindow, resolveMaxOutputTokens } from '../models.js';
+import { normalizeChatEffort, normalizeEffort, resolveContextWindow, resolveMaxOutputTokens } from '../models.js';
 import { bindProviderState, providerStateBytes, MAX_PROVIDER_STATE_BYTES } from '../llm/provider-state.js';
 import { utf8PrefixWithinBytes } from '../utf8.js';
 import { bytes, digest, fail, LIMITS, PersonError } from './contracts.js';
@@ -105,9 +105,10 @@ export async function createPersonProvider({ yeaftDir, config: suppliedConfig, a
     const rawProvider = config.providers?.[routeIndex];
     const rawModel = rawProvider?.models?.find(item => item && typeof item === 'object' && item.id === m.id);
     const explicitImages = m.supportsImages ?? rawModel?.supportsImages ?? rawProvider?.supportsImages;
-    const protocol = normalizeProtocolName(routedModel?.protocol) || normalizeProtocolName(routedProvider?.protocol) || inferProtocolFromModelId(m.id) || 'openai-responses';
+    const protocol = normalizeProtocolName(routedModel?.protocol) || normalizeProtocolName(routedProvider?.protocol) || normalizeProtocolName(m.protocol) || inferProtocolFromModelId(m.id) || 'openai-responses';
     const effortContext = { ...m, protocol, thinkingProtocol: m.effortProtocol || m.thinkingProtocol };
-    const efforts = effortEnabled ? [...new Set((m.effortOptions || []).map(effort => normalizeEffort(effort, protocol === 'gemini')).filter(Boolean))].filter(e => {
+    const normalize = protocol === 'openai-chat-completions' ? normalizeChatEffort : effort => normalizeEffort(effort, protocol === 'gemini');
+    const efforts = effortEnabled ? [...new Set((m.effortOptions || []).map(normalize).filter(Boolean))].filter(e => {
       // Manual thinking can silently expand native max_tokens. Use the exact
       // adapter rules to admit only combinations that fit this model's reserve;
       // adaptive and Responses effort do not require a larger output budget.
@@ -116,7 +117,7 @@ export async function createPersonProvider({ yeaftDir, config: suppliedConfig, a
       return body.max_tokens === maxOutput;
     }) : [];
     const imageBudget = !routedProvider || explicitImages === false ? null : imageInputBudget(m.id, protocol);
-    return { id: m.ref || m.id, efforts, maxOutput, usageCacheIncluded: protocol === 'anthropic' ? false : undefined, supportsImages: imageBudget !== null, imageBudget,
+    return { id: m.ref || m.id, protocol, efforts, maxOutput, usageCacheIncluded: protocol === 'anthropic' ? false : undefined, supportsImages: imageBudget !== null, imageBudget,
       contextWindow: Math.floor(resolveContextWindow(m.id, { ...config, modelInfo: m })) };
   }).filter(m => typeof m.id === 'string' && m.id.length <= 256 && Number.isSafeInteger(m.contextWindow) &&
     Number.isSafeInteger(m.maxOutput) && m.contextWindow > m.maxOutput + PERSON_ENVELOPE_TOKENS_RESERVED && m.maxOutput >= 256);
