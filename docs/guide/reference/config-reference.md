@@ -40,7 +40,7 @@ This chapter is the **field-by-field** reference for an Agent instance's Yeaft `
 | `models` | `(string \| ModelEntry)[]` | ✓ | Models served by this provider |
 | `credentialScopeId` | `string` | — | Stable, non-secret account scope for native reasoning replay and caching. Required for dynamic credentials/custom endpoints; official static-key routes default to a key fingerprint. Change when switching accounts; preserve when rotating tokens |
 | `capabilities` | `object` | — | Boolean `nativeReasoningState`, `promptCaching`, `parallelToolCalls`, `eagerInputStreaming`; `translation: true` disables these capabilities. Model overrides take precedence |
-| `streamIdleTimeoutMs` | `number` | — | Provider stream read silence budget (0–600000ms); absolute override of global policy, with model overrides taking precedence. Managed Copilot also preserves timeout and capability overrides when saving |
+| `streamIdleTimeoutMs` | `number` | — | Provider stream read silence budget (0–900000ms); absolute override of global policy, with model overrides taking precedence. Managed Copilot also preserves timeout and capability overrides when saving |
 
 > Supported protocols: `anthropic`, `openai-responses`, `openai-chat-completions`, and `gemini`. Legacy `"chat-completions"` / `"openai"` aliases normalize to `openai-chat-completions`.
 
@@ -55,21 +55,21 @@ A model entry can be either the bare id string (`"gpt-5"`) or an object:
 | `contextWindow` | `number` | — | Overrides the registry default for this model |
 | `maxOutput` | `number` | — | Overrides the registry default output cap |
 | `capabilities` | `object` | — | Per-field overrides of provider protocol capabilities |
-| `streamIdleTimeoutMs` | `number` | — | Absolute per-request stream read silence budget (0–600000ms); overrides the provider and global policy, including an explicit `0` |
+| `streamIdleTimeoutMs` | `number` | — | Absolute per-request stream read silence budget (0–900000ms); overrides the provider and global policy, including an explicit `0` |
 
 #### Stream silence and long tool inputs
 
-The global `llmRetry` policy applies to Anthropic Messages, Gemini and OpenAI Responses:
+The global `llmRetry` policy applies to Anthropic Messages, Gemini, OpenAI Responses and OpenAI Chat Completions:
 
 | Field | Default | Description |
 | --- | --- | --- |
 | `llmRetry.maxRequestRetryTimeMs` | `180000` | Per-request headers wait timeout (each retry and model switch gets a fresh window); `0` disables the headers wait timeout |
-| `llmRetry.streamIdleTimeoutMs` | `90000` | Normal per-chunk silence budget; `0` disables the global transport guard at every effort |
-| `llmRetry.highEffortStreamIdleTimeoutMs` | `270000` | Budget for final wire effort `high`, `xhigh`, `max` or `ultra`; not the initially requested effort |
+| `llmRetry.streamIdleTimeoutMs` | `300000` | Normal per-chunk silence budget (5 min; resets on every received chunk, not a total request deadline); `0` disables the global transport guard at every effort |
+| `llmRetry.highEffortStreamIdleTimeoutMs` | `600000` | Per-chunk silence budget (10 min) for final wire effort `high`, `xhigh`, `max` or `ultra`; never lower than `streamIdleTimeoutMs` unless explicitly `0` |
 
 The headers wait timeout applies per provider request attempt and is not a deadline for a healthy response body, a tool, or the whole turn. Each retry attempt and model switch gets a fresh window. A response that contains only whitespace or provider image delimiters is not a successful answer.
 
-Enabled budgets are capped at 600000ms. Every received chunk restarts the transport budget; this is not a total request deadline. Explicit legacy `streamIdleTimeoutMs` settings apply at every effort unless a high-effort budget is also supplied. Absolute model/provider overrides take precedence over global settings, including global `0`, and never mutate the cached adapter used by other models. The independent Session watchdog follows the final request effort and leaves at least 30 seconds beyond an enabled transport budget for timeout handling. Disabling the transport guard does not disable the Session watchdog or user cancellation. Existing finite retry limits still apply.
+Enabled stream silence budgets are capped at 900000ms (15 minutes). Every received chunk restarts the transport budget; this is not a total request deadline. When a timeout retry temporarily steps effort down (for example `xhigh` → `medium`), the retry preserves the prior attempt's silence budget as a floor so stream silence timeouts never shrink on retry (and reset back after the step succeeds, rolls over, or switches models). Explicit legacy `streamIdleTimeoutMs` settings apply at every effort unless a high-effort budget is also supplied. Absolute model/provider overrides take precedence over global settings, including global `0`, and never mutate the cached adapter used by other models. The independent Session watchdog follows the final request effort and leaves at least 30 seconds beyond an enabled transport budget for timeout handling. Disabling the transport guard does not disable the Session watchdog or user cancellation. Existing finite retry limits still apply.
 
 Official Anthropic requests enable [fine-grained tool streaming](https://platform.claude.com/docs/en/agents-and-tools/tool-use/fine-grained-tool-streaming) using `eager_input_streaming: true` on user-defined tools, without a beta header. Unknown proxies do **not** receive that field by default: only set provider/model `capabilities.eagerInputStreaming: true` after verifying support. Set it to `false` to opt out; `translation: true` always disables it. This option does not affect OpenAI Responses.
 

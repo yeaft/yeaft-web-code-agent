@@ -636,6 +636,7 @@ export class OpenAIChatCompletionsAdapter extends LLMAdapter {
       getHeadersTimeoutMs,
       onResponseHeaders,
       streamIdleTimeoutMs,
+      minStreamIdleTimeoutMs,
       maxRequestBodyBytes,
     } = params;
 
@@ -646,7 +647,7 @@ export class OpenAIChatCompletionsAdapter extends LLMAdapter {
       maxTokens,
       stream: true,
     });
-    const idleMs = resolveStreamIdleTimeoutMs(this.#streamIdlePolicy, effortDecision.effective, streamIdleTimeoutMs);
+    const idleMs = resolveStreamIdleTimeoutMs(this.#streamIdlePolicy, effortDecision.effective, streamIdleTimeoutMs, minStreamIdleTimeoutMs);
     const url = this.#endpointUrl();
     const headers = this.#headersForRequest();
 
@@ -821,22 +822,26 @@ export class OpenAIChatCompletionsAdapter extends LLMAdapter {
             toolSlots.set(idx, slot);
           }
           lastToolSlotIndex = idx;
+          let emittedToolActivity = false;
           if (typeof tcDelta.id === 'string' && tcDelta.id) {
             if (slot.id && slot.id !== tcDelta.id) {
               toolInputError = new LLMToolInputError('Chat Completions returned inconsistent tool call identity');
             } else {
               slot.id = tcDelta.id;
+              emittedToolActivity = true;
             }
           }
           if (tcDelta.function && typeof tcDelta.function === 'object') {
             if (typeof tcDelta.function.name === 'string' && tcDelta.function.name) {
               slot.name += tcDelta.function.name;
+              emittedToolActivity = true;
             }
             if (typeof tcDelta.function.arguments === 'string' && tcDelta.function.arguments.length > 0) {
               slot.arguments += tcDelta.function.arguments;
-              yield { type: 'provider_activity' };
+              emittedToolActivity = true;
             }
           }
+          if (emittedToolActivity) yield { type: 'provider_activity' };
         }
       }
     };

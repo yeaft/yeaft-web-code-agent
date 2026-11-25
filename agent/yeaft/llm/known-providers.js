@@ -1,4 +1,5 @@
 import { normalizeEffortOptions } from '../models.js';
+import { MAX_STREAM_IDLE_TIMEOUT_MS } from './adapter.js';
 
 export const GITHUB_COPILOT_PROVIDER_NAME = 'github-copilot';
 export const GITHUB_COPILOT_BASE_URL = 'https://api.githubcopilot.com';
@@ -104,7 +105,7 @@ function requestPolicyOverrides(entry) {
     out.capabilities = { ...entry.capabilities };
   }
   if (Number.isFinite(entry?.streamIdleTimeoutMs) && entry.streamIdleTimeoutMs >= 0) {
-    out.streamIdleTimeoutMs = Math.min(600_000, Math.floor(entry.streamIdleTimeoutMs));
+    out.streamIdleTimeoutMs = Math.min(MAX_STREAM_IDLE_TIMEOUT_MS, Math.floor(entry.streamIdleTimeoutMs));
   }
   if (typeof entry?.supportsEffort === 'boolean') out.supportsEffort = entry.supportsEffort;
   if (['anthropic', 'anthropic-adaptive', 'openai-reasoning', 'none'].includes(entry?.thinkingProtocol)) {

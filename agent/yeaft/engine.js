@@ -2868,13 +2868,17 @@ export class Engine {
     let retryPolicy = resolveRetryPolicy(this.#config);
     let consecutiveRetryableErrors = 0;
     let consecutiveForbiddenErrors = 0;
-    // Temporary per-step timeout recovery state. `retryEffortOverride` is
-    // cleared once a provider request succeeds so the next loop returns to the
-    // configured effort. `compactedToolCallIds` sticks across later loops of
-    // this query so older tool results compacted on retry never re-expand back
-    // to full payloads (while the durable transcript remains untouched and
-    // newer tool batches stay lossless).
+    // Temporary per-step timeout recovery state. `retryEffortOverride` and
+    // `retryStreamIdleTimeoutFloorMs` are cleared once a provider request
+    // succeeds (or switches model / rolls over) so the next loop returns to the
+    // configured effort and default timeout policy without shrinking stream
+    // silence budgets during an effort step-down retry. `compactedToolCallIds`
+    // sticks across later loops of this query so older tool results compacted
+    // on retry never re-expand back to full payloads (while the durable
+    // transcript remains untouched and newer tool batches stay lossless).
     let retryEffortOverride = null;
+    let retryStreamIdleTimeoutFloorMs = null;
+    let retryPreservedHighEffort = false;
     let tightenOlderToolResultsOnRetry = false;
     const compactedToolCallIds = new Set();
     let controlReentry = false;
@@ -2907,6 +2911,8 @@ export class Engine {
           consecutiveRetryableErrors = 0;
           consecutiveForbiddenErrors = 0;
           retryEffortOverride = null;
+          retryStreamIdleTimeoutFloorMs = null;
+          retryPreservedHighEffort = false;
           tightenOlderToolResultsOnRetry = false;
         }
       }
@@ -3158,6 +3164,7 @@ export class Engine {
       let requestDebugMessages = [];
       let requestInputBreakdown = null;
       let requestPrefixSnapshot = null;
+      let providerRequestPolicy = null;
 
       try {
         // Resolve effort per provider request so a saved Session effort takes
@@ -3597,7 +3604,6 @@ export class Engine {
           retryLifecycle.pendingContinuation = null;
           continuationCommitted = true;
         };
-        let providerRequestPolicy;
         let legacyDispatchReserved = false;
         let progressRequestCounted = false;
         const commitDispatch = (reserveChild = true) => {
@@ -3629,6 +3635,7 @@ export class Engine {
           contextOutputLimit,
           ...(requestImageLimits ? { imageLimits: requestImageLimits } : {}),
           ...(learnedRequestBodyCap == null ? {} : { maxRequestBodyBytes: learnedRequestBodyCap }),
+          ...(retryStreamIdleTimeoutFloorMs == null ? {} : { minStreamIdleTimeoutMs: retryStreamIdleTimeoutFloorMs }),
           effort: resolvedEffort,
           effortConstraint,
           requestIdentity,
@@ -3657,8 +3664,14 @@ export class Engine {
             try {
               commitDispatch(!legacyDispatchReserved);
               legacyDispatchReserved = false;
-              providerRequestPolicy = requestPolicy;
-              onProviderRequestStart?.(requestPolicy);
+              const effectivePolicy = requestPolicy
+                && requestPolicy.streamIdleTimeoutMs === 0
+                && retryPreservedHighEffort
+                && !['high', 'xhigh', 'max', 'ultra'].includes(requestPolicy.effort)
+                ? { ...requestPolicy, preserveHighEffortWatchdog: true }
+                : requestPolicy;
+              providerRequestPolicy = effectivePolicy;
+              onProviderRequestStart?.(effectivePolicy);
             } catch (error) {
               // Budget, lease and persistence failures are local, never a
               // provider failure to retry, even though the adapter raises them.
@@ -3962,6 +3975,8 @@ export class Engine {
         consecutiveRetryableErrors = 0;
         consecutiveForbiddenErrors = 0;
         retryEffortOverride = null;
+        retryStreamIdleTimeoutFloorMs = null;
+        retryPreservedHighEffort = false;
         tightenOlderToolResultsOnRetry = false;
         controlReentry = false;
       } catch (err) {
@@ -4291,6 +4306,8 @@ export class Engine {
             providerContextScale = 1;
             contextOverflowRecoveryAttempts = 0;
             retryEffortOverride = null;
+            retryStreamIdleTimeoutFloorMs = null;
+            retryPreservedHighEffort = false;
             tightenOlderToolResultsOnRetry = false;
             compactedToolCallIds.clear();
             fileReadObservations.clear();
@@ -4409,6 +4426,24 @@ export class Engine {
           yield { type: 'turn_end', turnNumber, stopReason: 'llm_retry', threadId };
           continue;
         }
+        const preserveRetryStreamIdleFloor = () => {
+          // Never shrink the stream silence timeout (or independent watchdog)
+          // across retries on the same model (e.g. stepping effort down from
+          // xhigh -> medium). Preserve the prior attempt's budget (including
+          // disabled `0` via `Infinity`) and high-effort watchdog tier until
+          // this step succeeds, rolls over, or switches model.
+          if (['high', 'xhigh', 'max', 'ultra'].includes(providerRequestPolicy?.effort)) {
+            retryPreservedHighEffort = true;
+          }
+          const currentIdleMs = providerRequestPolicy?.streamIdleTimeoutMs;
+          if (currentIdleMs === 0) {
+            retryStreamIdleTimeoutFloorMs = Infinity;
+          } else if (Number.isFinite(currentIdleMs) && currentIdleMs > 0) {
+            retryStreamIdleTimeoutFloorMs = retryStreamIdleTimeoutFloorMs === Infinity
+              ? Infinity
+              : Math.max(retryStreamIdleTimeoutFloorMs || 0, currentIdleMs);
+          }
+        };
         const earlyIsTemporaryForbidden = err instanceof LLMAuthError
           && err.statusCode === 403
           && err.temporary === true;
@@ -4417,6 +4452,7 @@ export class Engine {
           && consecutiveForbiddenErrors < retryPolicy.forbiddenRetryDelaysMs.length) {
           const delayMs = forbiddenDelayMs;
           consecutiveForbiddenErrors += 1;
+          preserveRetryStreamIdleFloor();
           endAttemptTrace('llm_retry');
           yield {
             type: 'llm_retry',
@@ -4467,6 +4503,7 @@ export class Engine {
             }
             let retryEffortFrom = null;
             let retryEffortTo = null;
+            preserveRetryStreamIdleFloor();
             if (err instanceof LLMHeadersTimeoutError || err instanceof LLMStreamIdleTimeoutError) {
               // Tighten older tool results on the provider copy (the latest
               // batch stays lossless) and step effort down one supported tier
@@ -4550,6 +4587,8 @@ export class Engine {
           consecutiveRetryableErrors = 0;
           consecutiveForbiddenErrors = 0;
           retryEffortOverride = null;
+          retryStreamIdleTimeoutFloorMs = null;
+          retryPreservedHighEffort = false;
           tightenOlderToolResultsOnRetry = false;
           yield { type: 'turn_end', turnNumber, stopReason: 'fallback_retry', threadId };
           continue;

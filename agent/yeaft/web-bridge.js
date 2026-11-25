@@ -29,6 +29,7 @@ import { historyError } from './conversation/session-history.js';
 import { loadSession } from './session.js';
 import { loadAgentMCPConfig, loadConfig, loadMCPConfig } from './config.js';
 import { resolveCatalogEffort, resolveMaxOutputTokens } from './models.js';
+import { MAX_STREAM_IDLE_TIMEOUT_MS } from './llm/adapter.js';
 import {
   createManagedProjectSkill,
   createManagedSkill,
@@ -1635,8 +1636,8 @@ export function broadcastLanguageChange(language) {
 }
 
 /** Provider inactivity windows (not a total-duration limit on an LLM call). */
-const QUERY_TIMEOUT_MS = 120_000;
-const HIGH_REASONING_QUERY_TIMEOUT_MS = 300_000;
+const QUERY_TIMEOUT_MS = 330_000;
+const HIGH_REASONING_QUERY_TIMEOUT_MS = 630_000;
 /** AskUser is human-paced but must never pin a VP turn forever. */
 const ASK_USER_TIMEOUT_MS = 10 * 60_000;
 
@@ -1694,13 +1695,13 @@ function queryTimeoutMsForSessionConfig(config = null) {
 // Request effort can differ from Session settings (prefix, auto, child ceiling,
 // fallback). Leave transport retries 30s of headroom even for explicit budgets.
 // Disabling the transport guard does not disable this independent watchdog.
-function queryTimeoutMsForProviderRequest({ effort, headersTimeoutMs, streamIdleTimeoutMs } = {}) {
-  const fallback = queryTimeoutMsForSessionConfig({ modelEffort: effort });
+function queryTimeoutMsForProviderRequest({ effort, headersTimeoutMs, streamIdleTimeoutMs, preserveHighEffortWatchdog } = {}) {
+  const fallback = queryTimeoutMsForSessionConfig({ modelEffort: preserveHighEffortWatchdog ? 'high' : effort });
   // While waiting for headers, let the adapter own timeout classification and
   // retry; after headers use the stream's independent rolling silence policy.
   const transportMs = headersTimeoutMs ?? streamIdleTimeoutMs;
   return Number.isFinite(transportMs) && transportMs > 0
-    ? Math.max(fallback, Math.min(600_000, transportMs) + 30_000) : fallback;
+    ? Math.max(fallback, Math.min(MAX_STREAM_IDLE_TIMEOUT_MS, transportMs) + 30_000) : fallback;
 }
 
 function queryTimeoutMsForSession(sessionId = null) {
