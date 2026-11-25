@@ -1333,6 +1333,140 @@ RELEASE_BODY`;
       }
     });
 
+    it('never enables thinking on timeout retry when thinking was omitted, and clears retry effort on mid-query model switch', async () => {
+      // 1. Anthropic with YEAFT_THINKING_V1 off and no user effort: thinking is omitted on attempt 1 and must stay omitted on timeout retry.
+      const prevThinkingFlag = process.env.YEAFT_THINKING_V1;
+      delete process.env.YEAFT_THINKING_V1;
+      const anthropicBodies = [];
+      let anthropicCalls = 0;
+      const anthropicFetch = vi.fn(async (_url, init) => {
+        anthropicBodies.push(JSON.parse(init.body));
+        anthropicCalls++;
+        if (anthropicCalls === 1) {
+          return new Response(JSON.stringify({ error: { code: 'upstream_headers_timeout' } }), { status: 504 });
+        }
+        return new Response(JSON.stringify({
+          content: [{ type: 'text', text: 'Anthropic recovered without enabling thinking.' }],
+          stop_reason: 'end_turn',
+          usage: { input_tokens: 10, output_tokens: 5 },
+        }), { headers: { 'content-type': 'application/json' } });
+      });
+      vi.stubGlobal('fetch', anthropicFetch);
+      try {
+        const anthropicRouter = new AdapterRouter({ providers: [{ name: 'anthropic', protocol: 'anthropic',
+          baseUrl: 'https://anthropic-gateway.invalid', apiKey: 'fixture-key', models: ['claude-opus-4-8'] }] });
+        const engine = new Engine({ adapter: anthropicRouter, trace,
+          config: { model: 'anthropic/claude-opus-4-8', maxOutputTokens: 1024, projectDocMaxBytes: 0,
+            llmRetry: { maxRetries: 2, baseDelayMs: 0, maxDelayMs: 0, jitterRatio: 0 } } });
+        const events = [];
+        for await (const event of engine.query({ prompt: 'Answer quickly.' })) events.push(event);
+        expect(events.find(e => e.type === 'turn_end' && e.terminal)).toMatchObject({ stopReason: 'end_turn', terminal: true });
+        expect(anthropicBodies).toHaveLength(2);
+        expect(anthropicBodies[0].thinking).toBeUndefined();
+        expect(anthropicBodies[1].thinking).toBeUndefined();
+        expect(anthropicBodies[1].output_config).toBeUndefined();
+        expect(events.find(e => e.type === 'llm_retry')?.effortTo).toBeUndefined();
+      } finally {
+        if (prevThinkingFlag !== undefined) process.env.YEAFT_THINKING_V1 = prevThinkingFlag;
+        vi.unstubAllGlobals();
+      }
+
+      // 2. Mid-query primary model switch via refreshConfig() during timeout retry clears stale retryEffortOverride.
+      const multiRouter = new AdapterRouter({ providers: [
+        { name: 'gemini', protocol: 'gemini', baseUrl: 'https://gemini-gateway.invalid/v1beta', apiKey: 'fixture-key', models: ['gemini-4-neon'] },
+        { name: 'anthropic', protocol: 'anthropic', baseUrl: 'https://anthropic-gateway.invalid', apiKey: 'fixture-key', models: ['claude-opus-4-8'] },
+      ] });
+      const switchBodies = [];
+      let switchCalls = 0;
+      const switchFetch = vi.fn(async (_url, init) => {
+        switchBodies.push(JSON.parse(init.body));
+        switchCalls++;
+        if (switchCalls === 1) {
+          return new Response(JSON.stringify({ error: { code: 'upstream_headers_timeout' } }), { status: 504 });
+        }
+        return new Response(JSON.stringify({
+          content: [{ type: 'text', text: 'Switched cleanly.' }],
+          stop_reason: 'end_turn',
+          usage: { input_tokens: 10, output_tokens: 5 },
+        }), { headers: { 'content-type': 'application/json' } });
+      });
+      vi.stubGlobal('fetch', switchFetch);
+      try {
+        const baseConfig = { model: 'gemini/gemini-4-neon', modelEffort: 'xhigh', maxOutputTokens: 1024, projectDocMaxBytes: 0,
+          llmRetry: { maxRetries: 2, baseDelayMs: 0, maxDelayMs: 0, jitterRatio: 0 } };
+        const engine = new Engine({ adapter: multiRouter, trace, config: baseConfig });
+        const events = [];
+        for await (const event of engine.query({ prompt: 'Handle switch during retry.' })) {
+          events.push(event);
+          if (event.type === 'llm_retry') {
+            engine.refreshConfig({ ...baseConfig, model: 'anthropic/claude-opus-4-8', modelEffort: undefined });
+          }
+        }
+        expect(events.find(e => e.type === 'turn_end' && e.terminal)).toMatchObject({ stopReason: 'end_turn', terminal: true });
+        expect(switchBodies).toHaveLength(2);
+        expect(switchBodies[0].generationConfig.thinkingConfig.thinkingLevel).toBe('XHIGH');
+        // After switching to Anthropic without modelEffort (and YEAFT_THINKING_V1 off), stale Gemini 'high' must NOT leak onto Anthropic.
+        expect(switchBodies[1].model).toBe('claude-opus-4-8');
+        expect(switchBodies[1].thinking).toBeUndefined();
+        expect(switchBodies[1].output_config).toBeUndefined();
+      } finally {
+        vi.unstubAllGlobals();
+      }
+    });
+
+    it('steps effort down on stream idle timeout and caps images on work-item scenario too', async () => {
+      const neonGateway = () => new AdapterRouter({ providers: [{ name: 'gateway', protocol: 'gemini',
+        baseUrl: 'https://gemini-gateway.invalid/v1beta', apiKey: 'fixture-key', models: ['gemini-4-neon'],
+        streamIdleTimeoutMs: 50, highEffortStreamIdleTimeoutMs: 50 }] });
+      const makeGif = index => {
+        const bytes = Buffer.alloc(24);
+        bytes.write('GIF89a'); bytes.writeUInt16LE(120, 6); bytes.writeUInt16LE(80, 8);
+        bytes.writeUInt32LE(index, 12);
+        return bytes.toString('base64');
+      };
+      const uploads = Array.from({ length: 7 }, (_, i) => ({
+        type: 'image', source: { type: 'base64', media_type: 'image/gif', data: makeGif(i + 1) },
+      }));
+      const bodies = [];
+      let callCount = 0;
+      const fetch = vi.fn(async (_url, init) => {
+        bodies.push(JSON.parse(init.body));
+        callCount++;
+        if (callCount === 1) {
+          // Return headers immediately, then stall stream body until streamIdleTimeoutMs fires.
+          return new Response(new ReadableStream({ start() {} }), {
+            headers: { 'content-type': 'text/event-stream' },
+          });
+        }
+        return geminiResult([{ text: 'Recovered from idle stream.' }]);
+      });
+      vi.stubGlobal('fetch', fetch);
+      try {
+        const engine = new Engine({ adapter: neonGateway(), trace,
+          config: { model: 'gateway/gemini-4-neon', modelEffort: 'xhigh', maxOutputTokens: 1024, projectDocMaxBytes: 0,
+            llmRetry: { maxRetries: 2, baseDelayMs: 0, maxDelayMs: 0, jitterRatio: 0 } } });
+        const events = [];
+        for await (const event of engine.query({
+          prompt: 'Work item with many uploads',
+          scenario: 'work-item',
+          promptParts: [{ type: 'text', text: 'Work item with many uploads' }, ...uploads],
+        })) events.push(event);
+
+        expect(events.find(e => e.type === 'turn_end' && e.terminal)).toMatchObject({ stopReason: 'end_turn', terminal: true });
+        expect(bodies).toHaveLength(2);
+        expect(bodies[0].generationConfig.thinkingConfig.thinkingLevel).toBe('XHIGH');
+        expect(bodies[1].generationConfig.thinkingConfig.thinkingLevel).toBe('HIGH');
+        expect(events.find(e => e.type === 'llm_retry')).toMatchObject({
+          reason: 'stream_idle_timeout', effortFrom: 'xhigh', effortTo: 'high',
+        });
+        // Even in work-item scenario, total images in the request are capped to the newest 5.
+        const sentImages = bodies[0].contents[0].parts.filter(p => p.inlineData).map(p => p.inlineData.data);
+        expect(sentImages).toEqual(uploads.slice(-5).map(u => u.source.data));
+      } finally {
+        vi.unstubAllGlobals();
+      }
+    });
+
     it('keeps an immediate 429 distinct from a timeout when its retry delay will not fit', async () => {
       const fetch = vi.fn(async () => new Response('{}', { status: 429, headers: { 'Retry-After': '30' } }));
       vi.stubGlobal('fetch', fetch);

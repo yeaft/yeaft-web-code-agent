@@ -54,7 +54,7 @@ export function inlineMediaBytes(messages) {
  * Rows before `frozenLength` (e.g. a signed Anthropic prefix) are counted toward
  * the cap but never mutated. Returns `{ messages, totalImages, omittedImages }`.
  */
-export function capRequestImages(messages, maxImages, { frozenLength = 0, pathForImage = null } = {}) {
+export function capRequestImages(messages, maxImages, { frozenLength = 0, pathForImage = null, isImageAnnotation = null } = {}) {
   if (!Array.isArray(messages) || !Number.isFinite(maxImages) || maxImages < 0) {
     return { messages, totalImages: 0, omittedImages: 0 };
   }
@@ -86,9 +86,15 @@ export function capRequestImages(messages, maxImages, { frozenLength = 0, pathFo
       const marker = path
         ? { type: 'text', text: `[Older image not sent: request image limit (${cap}). Original: ${JSON.stringify(path)}. Use ViewImage to reopen it if needed.]` }
         : wireMediaMarker(part, message);
-      (next ??= message.content.slice())[p] = marker;
+      next ??= message.content.slice();
+      next[p] = marker;
+      // Drop any immediately preceding preview annotation paired with this
+      // omitted image so we do not leave an orphaned "Model image preview" note.
+      if (p > 0 && isImageAnnotation?.(next[p - 1])) {
+        next[p - 1] = null;
+      }
     }
-    if (next) out[i] = { ...message, content: next };
+    if (next) out[i] = { ...message, content: next.filter(item => item !== null) };
   }
   return {
     messages: omittedImages > 0 ? out : messages,

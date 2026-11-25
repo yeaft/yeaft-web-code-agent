@@ -73,7 +73,7 @@ import {
   savePostCompact,
 } from './post-compact.js';
 import { streamContextRollover, contextRolloverLocalHandoff, contextRolloverReport, contextRolloverSeed } from './context-rollover.js';
-import { getModelInfo, getThinkingCapability, normalizeEffort, parseModelRef, resolveContextWindow, resolveMaxOutputTokens } from './models.js';
+import { getModelInfo, normalizeEffort, parseModelRef, resolveContextWindow, resolveMaxOutputTokens } from './models.js';
 import { attachRouterPlan, extractPriorPlan, stripMetaForWire } from './router/continuity.js';
 import { resolveThinking } from './router/thinking.js';
 import { findEffortModelEntry, usesNativeGeminiLevels } from './sessions/session-config.js';
@@ -2880,6 +2880,8 @@ export class Engine {
         if (refreshedPrimaryModel !== primaryModelAtLastBoundary) {
           currentModel = refreshedPrimaryModel;
           primaryModelAtLastBoundary = refreshedPrimaryModel;
+          retryEffortOverride = null;
+          tightenOlderToolResultsOnRetry = false;
         }
       }
 
@@ -2999,6 +3001,9 @@ export class Engine {
       let providerState = null;
       let providerMetadata = null;
       let requestEffortDecision = snapshotEffortDecision();
+      let requestEffortDecisionReported = false;
+      let attemptedResolvedEffort = null;
+      let attemptedEffortSource = null;
       let stopReason = 'unknown';
       // The provider's own word for an abnormal stop (e.g. Gemini OTHER), kept
       // for diagnosis; `stopReason` is the normalized value the loop acts on.
@@ -3182,6 +3187,8 @@ export class Engine {
           resolvedEffort = retryEffortOverride;
           effortSource = 'user';
         }
+        attemptedResolvedEffort = resolvedEffort;
+        attemptedEffortSource = effortSource;
 
         // Phase 8 PR-E: archive bulky tool results before they go on the
         // wire. archiveToolResults walks the messages array and replaces
@@ -3264,6 +3271,7 @@ export class Engine {
             const capped = capRequestImages(wireMessages, MAX_REQUEST_IMAGES, {
               frozenLength,
               pathForImage: projectToolImages.pathOf,
+              isImageAnnotation: projectToolImages.isImageAnnotation,
             });
             wireMessages = capped.messages;
             if (capped.omittedImages > 0) {
@@ -3271,6 +3279,22 @@ export class Engine {
                 model: currentModel, maxImages: MAX_REQUEST_IMAGES, keptImages: capped.totalImages,
                 omittedImages: capped.omittedImages });
             }
+          }
+        } else if (!pendingServerOperation && !requestAdapter.getImageLimits?.(currentModel)) {
+          // Work Center / prepared-request callers bypass Session tool-image
+          // compaction, but still need the per-request image cap so long
+          // multimodal loops do not forward unbounded images.
+          const frozenLength = signedAnthropicPrefix ? signedAnthropicPrefix.messages.length + 1 : 0;
+          const capped = capRequestImages(wireMessages, MAX_REQUEST_IMAGES, {
+            frozenLength,
+            pathForImage: projectToolImages.pathOf,
+            isImageAnnotation: projectToolImages.isImageAnnotation,
+          });
+          wireMessages = capped.messages;
+          if (capped.omittedImages > 0) {
+            this.#trace.log?.('request_image_cap', { sessionId: runtimeSessionId, turnId: queryTurnId,
+              model: currentModel, maxImages: MAX_REQUEST_IMAGES, keptImages: capped.totalImages,
+              omittedImages: capped.omittedImages });
           }
         }
 
@@ -3581,7 +3605,10 @@ export class Engine {
           requestIdentity,
           controlReentry,
           getHeadersTimeoutMs,
-          onEffortDecision: decision => { requestEffortDecision = snapshotEffortDecision(decision); },
+          onEffortDecision: decision => {
+            requestEffortDecision = snapshotEffortDecision(decision);
+            requestEffortDecisionReported = true;
+          },
           onProviderDiagnostics: info => traceRequest('llm.capabilities', { detail: info }),
           effortSource,
           signal,
@@ -4204,6 +4231,11 @@ export class Engine {
                 isToolEvidence: projectToolImages.isToolEvidence,
               });
               [nextRolloverSeed] = fittedSeed.messages;
+            } else {
+              [nextRolloverSeed] = capRequestImages([nextRolloverSeed], MAX_REQUEST_IMAGES, {
+                pathForImage: projectToolImages.pathOf,
+                isImageAnnotation: projectToolImages.isImageAnnotation,
+              }).messages;
             }
             const mediaSeedInput = seedInputTokens(nextRolloverSeed);
             if (mediaSeedInput >= currentContextWindow * contextRolloverRatio / 2
@@ -4225,6 +4257,8 @@ export class Engine {
             successfulRequestsSinceRollover = 0;
             providerContextScale = 1;
             contextOverflowRecoveryAttempts = 0;
+            retryEffortOverride = null;
+            tightenOlderToolResultsOnRetry = false;
             fileReadObservations.clear();
             repeatedToolResultRefs.clear();
             completeReadResultIds.clear();
@@ -4408,13 +4442,20 @@ export class Engine {
               if (!signedAnthropicPrefix) tightenOlderToolResultsOnRetry = true;
               const protocol = effortModel?.protocol || effortModel?.effortProtocol
                 || routedProvider?.protocol || requestConfig.adapter;
-              const attemptedEffort = requestEffortDecision.effective || retryEffortOverride
-                || normalizeEffort(turnConfig?.effort, preserveNativeEffort)
-                || normalizeEffort(userEffort, preserveNativeEffort)
-                || normalizeEffort(requestConfig.modelEffort, preserveNativeEffort)
-                || (scenario === 'chat' && effortModel?.effortProtocol === 'gemini' ? effortModel.defaultEffort : null)
-                || (protocol === 'gemini' && scenario === 'chat' ? getThinkingCapability(currentModel, { protocol }).defaultEffort : null);
-              const steppedDown = stepDownRetryEffort(attemptedEffort, {
+              // Never enable thinking on retry when the timed-out request ran
+              // with thinking disabled/omitted (e.g. YEAFT_THINKING_V1 off on
+              // Anthropic/OpenAI without an explicit user effort).
+              const thinkingWasActive = requestEffortDecisionReported
+                ? requestEffortDecision.thinkingEnabled === true
+                : (attemptedEffortSource === 'user'
+                  || (protocol === 'gemini' && attemptedEffortSource === 'model-default')
+                  || process.env.YEAFT_THINKING_V1 === '1');
+              const attemptedEffort = !thinkingWasActive
+                ? null
+                : requestEffortDecisionReported
+                  ? requestEffortDecision.effective
+                  : (retryEffortOverride || attemptedResolvedEffort);
+              const steppedDown = attemptedEffort ? stepDownRetryEffort(attemptedEffort, {
                 model: currentModel,
                 protocol,
                 effortContext: {
@@ -4424,7 +4465,7 @@ export class Engine {
                   thinkingProtocol: effortModel?.effortProtocol === 'gemini' ? 'gemini' : effortModel?.thinkingProtocol,
                   maxBudgetTokens: effortModel?.maxBudgetTokens,
                 },
-              });
+              }) : null;
               if (steppedDown && (!signedAnthropicPrefix || protocol !== 'anthropic')) {
                 retryEffortFrom = attemptedEffort;
                 retryEffortTo = steppedDown;
