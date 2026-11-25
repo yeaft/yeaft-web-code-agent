@@ -16,6 +16,7 @@ import {
   writeWorkCenterDrafts,
   writeWorkCenterOutbox,
 } from './helpers/work-center-browser-state.js';
+import { findCatalogModel, normalizeModelEffort } from '../utils/modelRefs.js';
 import { setLocale, getLocale } from '../utils/i18n.js';
 import { agentSupportsYeaftPlugins } from '../utils/yeaft-plugin-capability.js';
 import { agentSupportsYeaftManagedSkills } from '../utils/yeaft-managed-skill-capability.js';
@@ -3741,6 +3742,16 @@ export const useChatStore = defineStore('chat', {
       // rather than applying another instance's model catalog to this Session.
       if (quickSend && (targetAgentId !== this.currentAgent || this.connectionState !== 'connected'
         || !this.agents?.some(agent => agent.id === targetAgentId && agent.online))) return false;
+      if (quickSend?.effort != null) {
+        const config = this.llmConfig?.[targetAgentId];
+        const models = config?.agentConfig?.availableModels ?? config?.effectiveConfig?.availableModels ?? this.yeaftAvailableModels;
+        const model = findCatalogModel(models, quickSend.model);
+        if (model?.protocol === 'openai-chat-completions') {
+          const effort = normalizeModelEffort(quickSend.effort, model);
+          if (!model.effortOptions?.includes(effort)) return false;
+          quickSend = { ...quickSend, effort };
+        }
+      }
       const safeAttachments = Array.isArray(attachments)
         ? attachments.filter((a) => a && a.fileId)
         : [];
@@ -7081,8 +7092,16 @@ export const useChatStore = defineStore('chat', {
     async switchYeaftModel(modelId, groupId = null, modelEffort = undefined) {
       if (!modelId || !this.currentAgent) return;
       const targetSessionId = groupId || null;
+      const agentId = targetSessionId ? resolveAgentIdForSession(this, targetSessionId) : this.currentAgent;
+      if (modelEffort != null) {
+        const models = agentId === this.currentAgent ? this.yeaftAvailableModels : this.yeaftStatusByAgent[agentId]?.availableModels;
+        const model = findCatalogModel(models, modelId);
+        if (model?.protocol === 'openai-chat-completions') {
+          modelEffort = normalizeModelEffort(modelEffort, model);
+          if (!model.effortOptions?.includes(modelEffort)) return { ok: false, error: { code: 'unsupported_effort' } };
+        }
+      }
       if (targetSessionId) {
-        const agentId = resolveAgentIdForSession(this, targetSessionId);
         const key = yeaftSessionIdentityKey(agentId, targetSessionId);
         const config = { model: modelId };
         if (modelEffort !== undefined) config.modelEffort = modelEffort || null;

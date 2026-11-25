@@ -414,6 +414,26 @@ describe('message flow regressions', () => {
     }
   });
 
+  it('submits stale Carbon selections at High only on its Chat Completions provider', async () => {
+    storeFactories.clear();
+    const store = useChatStore();
+    Object.assign(store, { currentAgent: 'a', connectionState: 'connected', yeaftSessionAgentById: { s: 'a' },
+      agents: [{ id: 'a', online: true }], sendWsMessage: vi.fn(() => true) });
+    const id = 'gemini-4-carbon';
+    store.llmConfig.a = { agentConfig: { availableModels: [
+      { id, provider: 'resp', protocol: 'openai-responses', effortOptions: ['medium', 'xhigh'] },
+      { id, provider: 'chat', protocol: 'openai-chat-completions', effortOptions: ['medium', 'high'] },
+    ] } };
+    store.yeaftAvailableModels = store.llmConfig.a.agentConfig.availableModels;
+    for (const [provider, effort] of [['chat', 'high'], ['resp', 'xhigh']]) {
+      const model = `${provider}/${id}`;
+      await store.switchYeaftModel(model, null, 'xhigh');
+      expect(store.sendWsMessage).toHaveBeenLastCalledWith(expect.objectContaining({ type: 'yeaft_model_switch', model, modelEffort: effort }));
+      store.sendYeaftSessionMessage({ groupId: 's', text: 'test', quickSend: { model, effort: 'xhigh' } });
+      expect(store.sendWsMessage).toHaveBeenLastCalledWith(expect.objectContaining({ quickSend: { model, effort, maxOutputTokens: null } }));
+    }
+  });
+
   it('previews model/effort immediately, serializes rapid changes, rolls back failures and fences owners', async () => {
     storeFactories.clear();
     const store = useChatStore();

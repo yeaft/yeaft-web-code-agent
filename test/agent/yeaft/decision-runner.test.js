@@ -39,6 +39,33 @@ function createTempYeaftDir(configObj = null) {
   return tempRoot;
 }
 
+describe('protocol-qualified Quick Send configuration', () => {
+  it('round-trips inherited Chat High, honors per-model overrides, and repairs old Carbon presets', () => {
+    const id = 'gemini-4-carbon';
+    const providers = [{ name: 'chat', protocol: 'openai-chat-completions', baseUrl: 'https://chat.invalid/v1', models: [
+      id, { id: 'generic', effortOptions: ['high'] }, { id: 'overridden', protocol: 'openai-responses', effortOptions: ['high'] },
+    ] }, { name: 'responses', protocol: 'openai-responses', baseUrl: 'https://responses.invalid/v1', models: [id] }];
+    const quickSends = [`chat/${id}`, `responses/${id}`, 'chat/generic'].map((model, i) => ({
+      id: `preset-${i}`, name: model, model, effort: ['xhigh', 'high', 'high'][i],
+    }));
+    const dir = createTempYeaftDir({ providers, quickSends });
+    expect(getLlmConfig(dir).quickSends.map(item => item.effort)).toEqual(['high', 'xhigh', 'high']);
+    const updated = updateLlmConfig({ providers, quickSends }, dir);
+    expect(updated.error).toBeUndefined();
+    expect(updated.quickSends.map(item => item.effort)).toEqual(['high', 'xhigh', 'high']);
+    const expected = [
+      { protocol: 'openai-chat-completions', effortOptions: ['medium', 'high'] },
+      { protocol: 'openai-chat-completions', effortOptions: ['high'] },
+      { protocol: 'openai-responses', effortOptions: ['xhigh'] },
+      { protocol: 'openai-responses', effortOptions: ['medium', 'xhigh', 'max', 'ultra'] },
+    ];
+    expect(updated.availableModels).toMatchObject(expected);
+    expect(loadConfig({ dir }).availableModels).toMatchObject(expected);
+    expect(getLlmConfig(dir).providers[0].models[1]).toEqual({ id: 'generic', effortOptions: ['high'] });
+    expect(updateLlmConfig({ quickSends: [{ ...quickSends[0], model: id }] }, dir).error).toContain('unambiguous');
+  });
+});
+
 describe('Decision model configuration & scenario-tailored runner', () => {
   it('resolves decisionModel via decisionModel -> fastModel -> primaryModel across config, config-api, and CLI helpers', () => {
     const dir = createTempYeaftDir({
