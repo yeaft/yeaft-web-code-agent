@@ -90,7 +90,7 @@
 | `baseUrl` | `string` | ✓ | API 根 URL（不带 `/v1/messages` 这种 path 尾巴） |
 | `apiKey` | `string` | △ | 静态 API key（和 `credentialProvider` 二选一） |
 | `credentialProvider` | `string` | △ | 动态 credential provider 名（和 `apiKey` 二选一） |
-| `protocol` | `'anthropic' \| 'openai-responses' \| 'gemini'` | — | provider 级默认 wire 协议 |
+| `protocol` | `'anthropic' \| 'openai-responses' \| 'openai-chat-completions' \| 'gemini'` | — | provider 级默认 wire 协议 |
 | `models` | `(string \| ModelEntry)[]` | ✓ | 该 provider 支持的 model 列表 |
 
 ### Model entry
@@ -107,7 +107,7 @@
 | Model entry 字段 | 类型 | 必填 | 说明 |
 | --- | --- | :---: | --- |
 | `id` | `string` | ✓ | model id（vendor 端实际可识别的字符串） |
-| `protocol` | `'anthropic' \| 'openai-responses' \| 'gemini'` | — | 覆盖 provider 级 protocol |
+| `protocol` | `'anthropic' \| 'openai-responses' \| 'openai-chat-completions' \| 'gemini'` | — | 覆盖 provider 级 protocol |
 | `contextWindow` | `number` | — | 覆盖 `models.js` 注册表默认 |
 | `maxOutput` | `number` | — | 覆盖默认输出上限 |
 

@@ -12,7 +12,7 @@ import { existsSync, readFileSync } from 'fs';
 import { join } from 'path';
 import { DEFAULT_YEAFT_DIR } from './init.js';
 import { geminiEffortCatalog, getThinkingCapability, normalizeEffort, resolveCatalogEffort, normalizeProviderModels, parseModelRef, resolveMaxOutputTokens, serializeModelForPersistence } from './models.js';
-import { inferProtocolFromModelId } from './llm/router.js';
+import { inferProtocolFromModelId, normalizeProtocolName } from './llm/router.js';
 import { withGeminiDefault } from './llm/gemini-endpoint.js';
 import { clampYeaftField, normaliseTelemetrySection, normaliseYeaftSection } from './config.js';
 import { normaliseBrowserRuntimeSection, validateBrowserRuntimeUpdate } from '../browser-runtime/config.js';
@@ -21,12 +21,14 @@ import { mutateAgentConfig, readAgentConfigForWrite } from './config-store.js';
 import { collectAmbiguousModelRefs, isGitHubCopilotProvider, normalizeKnownProviderForRuntime, serializeKnownProviderForPersistence } from './llm/known-providers.js';
 import { getWorkCenterFeatureState } from './work-center/feature.js';
 
+const VALID_PROTOCOLS = new Set(['anthropic', 'openai-responses', 'openai-chat-completions', 'gemini']);
+
 /** Agent-owned model catalog, with the same protocol/capability resolution as runtime. */
 function quickSendModels(config) {
   return (Array.isArray(config.providers) ? config.providers : []).flatMap(raw => {
     const provider = normalizeKnownProviderForRuntime(raw);
     return normalizeProviderModels(provider).map(model => {
-      const protocol = model.protocol || provider.protocol || inferProtocolFromModelId(model.id) || 'openai-responses';
+      const protocol = normalizeProtocolName(model.protocol) || normalizeProtocolName(provider.protocol) || inferProtocolFromModelId(model.id) || 'openai-responses';
       const capability = getThinkingCapability(model.id, { ...model, protocol });
       return {
         id: model.id,
@@ -226,11 +228,13 @@ export function updateLlmConfig(update, dir) {
       }
       if (isGitHubCopilotProvider(provider)) continue;
       for (const model of normalizeProviderModels(provider)) {
-        if (model.protocol && !['anthropic', 'openai-responses', 'gemini'].includes(model.protocol)) {
+        const mp = normalizeProtocolName(model.protocol);
+        if (mp && !VALID_PROTOCOLS.has(mp)) {
           return { error: `Unsupported model protocol: ${model.protocol}` };
         }
       }
-      if (provider.protocol && !['anthropic', 'openai-responses', 'gemini'].includes(provider.protocol)) {
+      const pp = normalizeProtocolName(provider.protocol);
+      if (pp && !VALID_PROTOCOLS.has(pp)) {
         return { error: `Unsupported provider protocol: ${provider.protocol}` };
       }
       if ((!provider.baseUrl && provider.protocol !== 'gemini') || (provider.baseUrl && typeof provider.baseUrl !== 'string')) {
@@ -248,9 +252,16 @@ export function updateLlmConfig(update, dir) {
         existing.providers = update.providers.map(provider => {
           const managed = serializeKnownProviderForPersistence(provider);
           if (managed) return managed;
+          const normalizedProvider = { ...withGeminiDefault(provider) };
+          if (normalizedProvider.protocol) {
+            normalizedProvider.protocol = normalizeProtocolName(normalizedProvider.protocol);
+          }
           return {
-            ...withGeminiDefault(provider),
-            models: normalizeProviderModels(provider).map(serializeModelForPersistence),
+            ...normalizedProvider,
+            models: normalizeProviderModels(provider).map(model => {
+              const next = model.protocol ? { ...model, protocol: normalizeProtocolName(model.protocol) } : model;
+              return serializeModelForPersistence(next);
+            }),
           };
         });
       }

@@ -212,7 +212,7 @@ export function printLlmHelp() {
     yeaft-agent llm use openai-compatible --name <name> --base-url <url> --api-key-env <ENV> --model <modelId> [--fast <modelId>]
     yeaft-agent llm add-provider --name <name> --base-url <url> --models <m1,m2> \
       [--api-key <key>|--api-key-env <ENV>|--credential-provider github-copilot] \
-      [--protocol anthropic|openai-responses|gemini] [--set-primary <model>] [--set-fast <model>] [--set-decision <model>]
+      [--protocol anthropic|openai-responses|openai-chat-completions|gemini] [--set-primary <model>] [--set-fast <model>] [--set-decision <model>]
     yeaft-agent llm set-model [--primary <provider/model>] [--fast <provider/model>] [--decision <provider/model>]
     yeaft-agent llm remove-provider --name <name>
 

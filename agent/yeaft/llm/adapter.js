@@ -2,13 +2,10 @@
  * adapter.js — LLM Adapter base class, unified types, and factory
  *
  * Native adapters:
- *   1. AnthropicAdapter        — Anthropic Messages API
- *   2. OpenAIResponsesAdapter  — OpenAI Responses API (covers GPT, DeepSeek, CopilotProxy, etc.)
- *   3. GeminiAdapter           — Gemini GenerateContent API
- *
- * The legacy ChatCompletionsAdapter (OpenAI Chat Completions API) was deleted in
- * Phase 7. Configurations using protocol "openai" or alias "chat-completions"
- * must migrate to "openai-responses" or "anthropic".
+ *   1. AnthropicAdapter              — Anthropic Messages API
+ *   2. OpenAIResponsesAdapter        — OpenAI Responses API (/v1/responses)
+ *   3. OpenAIChatCompletionsAdapter  — OpenAI Chat Completions API (/v1/chat/completions)
+ *   4. GeminiAdapter                 — Gemini GenerateContent API
  *
  * The engine sees only unified types — it never knows which API is underneath.
  */
@@ -881,24 +878,42 @@ export async function createLLMAdapter(config) {
     });
   }
 
+  if (adapter === 'openai-chat-completions' || adapter === 'chat-completions') {
+    const { OpenAIChatCompletionsAdapter } = await import('./openai-chat-completions.js');
+    return new OpenAIChatCompletionsAdapter({
+      apiKey: config.apiKey || config.openaiApiKey || '',
+      baseUrl: config.baseUrl || config.proxyUrl || undefined,
+      headers: config.headers,
+      streamIdleTimeoutMs: config.llmRetry?.streamIdleTimeoutMs,
+      highEffortStreamIdleTimeoutMs: config.llmRetry?.highEffortStreamIdleTimeoutMs,
+    });
+  }
+
+  if (adapter === 'openai-responses') {
+    const { OpenAIResponsesAdapter } = await import('./openai-responses.js');
+    return new OpenAIResponsesAdapter({
+      apiKey: config.apiKey || config.openaiApiKey || '',
+      baseUrl: config.baseUrl || config.proxyUrl || undefined,
+      streamIdleTimeoutMs: config.llmRetry?.streamIdleTimeoutMs,
+      highEffortStreamIdleTimeoutMs: config.llmRetry?.highEffortStreamIdleTimeoutMs,
+    });
+  }
+
   if (
-    adapter === 'chat-completions' ||
     adapter === 'openai' ||
     adapter === 'proxy' ||
     (!adapter && (config.openaiApiKey || config.proxyUrl))
   ) {
     throw new Error(
-      'The chat-completions adapter was removed in Phase 7. ' +
-      'Configure providers via ~/.yeaft/config.json with protocol: "anthropic" ' +
-      'or protocol: "openai-responses" instead of using the legacy ' +
-      '"openai"/"proxy"/"chat-completions" adapter env-var path.'
+      'Legacy "openai"/"proxy" env-var adapters are unsupported. ' +
+      'Configure providers via ~/.yeaft/config.json with protocol: "openai-chat-completions", ' +
+      '"openai-responses", "anthropic", or "gemini".'
     );
   }
 
   throw new Error(
     'No LLM adapter configured. Set YEAFT_API_KEY (Anthropic) or configure ' +
-    'providers in ~/.yeaft/config.json. The chat-completions/openai/proxy ' +
-    'env-var paths were removed in Phase 7 — use protocol: "openai-responses" ' +
-    'in a provider entry instead.',
+    'providers in ~/.yeaft/config.json with protocol: "openai-chat-completions", ' +
+    '"openai-responses", "anthropic", or "gemini".',
   );
 }

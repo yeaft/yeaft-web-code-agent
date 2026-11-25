@@ -15,10 +15,8 @@
  *   4. default `openai-responses`
  *
  * This lets a single provider (e.g. GitHub Copilot, a unified proxy) serve
- * Anthropic, OpenAI and Gemini families without splitting into two provider
- * entries.
- *
- * Phase 7 removed the legacy "openai" (Chat Completions) protocol entirely.
+ * Anthropic, OpenAI (Responses or Chat Completions) and Gemini families
+ * without splitting into separate provider entries.
  */
 
 import { LLMAdapter, LLMAuthError } from './adapter.js';
@@ -43,6 +41,23 @@ import { pairSanitize } from '../pair-sanitize.js';
  * @param {string|object} entry
  * @returns {{id: string, protocol?: string} | null}
  */
+/**
+ * Normalize legacy or canonical protocol names.
+ * Accepts canonical `'anthropic' | 'openai-responses' | 'openai-chat-completions' | 'gemini'`,
+ * plus legacy `'chat-completions'` / `'openai'` aliases mapped to `'openai-chat-completions'`
+ * so older configs do not break silently.
+ *
+ * @param {unknown} value
+ * @returns {string|undefined}
+ */
+export function normalizeProtocolName(value) {
+  if (typeof value !== 'string') return undefined;
+  const trimmed = value.trim();
+  if (!trimmed) return undefined;
+  if (trimmed === 'chat-completions' || trimmed === 'openai') return 'openai-chat-completions';
+  return trimmed;
+}
+
 export function normalizeModelEntry(entry) {
   if (typeof entry === 'string') {
     return entry ? { id: entry } : null;
@@ -55,8 +70,9 @@ export function normalizeModelEntry(entry) {
     if (Number.isFinite(entry.streamIdleTimeoutMs) && entry.streamIdleTimeoutMs >= 0) {
       out.streamIdleTimeoutMs = Math.min(600_000, Math.floor(entry.streamIdleTimeoutMs));
     }
-    if (typeof entry.protocol === 'string' && entry.protocol) {
-      out.protocol = entry.protocol;
+    const normalizedProtocol = normalizeProtocolName(entry.protocol);
+    if (normalizedProtocol) {
+      out.protocol = normalizedProtocol;
     }
     if (typeof entry.supportsEffort === 'boolean') out.supportsEffort = entry.supportsEffort;
     if (typeof entry.thinkingProtocol === 'string' && entry.thinkingProtocol) {
@@ -375,6 +391,14 @@ export class AdapterRouter extends LLMAdapter {
     if (authoritativeManagedProviders.has(parsed.providerName)) return null;
 
     const inferred = inferProtocolFromModelId(parsed.modelId);
+    // If a provider row explicitly declares openai-chat-completions, allow
+    // provider-qualified fallback models (including Gemini/Claude/custom IDs)
+    // to route through that explicit protocol.
+    for (const provider of candidates) {
+      if (normalizeProtocolName(provider.protocol) === 'openai-chat-completions') {
+        return { provider, entry: { id: parsed.modelId, protocol: 'openai-chat-completions' } };
+      }
+    }
     if (!inferred) return null;
     const entry = { id: parsed.modelId, protocol: inferred };
 
@@ -445,41 +469,35 @@ export class AdapterRouter extends LLMAdapter {
    * Resolution order:
    *   1. Per-model entry override (provider.models[i].protocol)
    *   2. Provider-level protocol (explicit config wins over inference)
-   *   3. Heuristic from model id (claude-* → anthropic, gpt-* → openai-responses)
+   *   3. Heuristic from model id (claude-* → anthropic, gpt-* → openai-responses, gemini-* → gemini)
    *   4. Default "openai-responses"
    *
-   * Claude model ids without an anthropic-compatible resolution still throw
-   * — chat-completions fallback was removed in Phase 7.
+   * Explicit `openai-chat-completions` (at model or provider level) is honored
+   * for any model, including proxies serving Claude or Gemini over Chat Completions.
    *
    * @param {object} provider — Provider config
    * @param {{id: string, protocol?: string}} entry — Normalized model entry
-   * @returns {'anthropic' | 'openai-responses' | 'gemini'}
+   * @returns {'anthropic' | 'openai-responses' | 'openai-chat-completions' | 'gemini'}
    */
   #effectiveProtocol(provider, entry) {
     const modelId = entry.id;
-    const perModel = entry.protocol;
+    const perModel = normalizeProtocolName(entry.protocol);
     const inferred = inferProtocolFromModelId(modelId);
-    const providerLevel = provider.protocol;
+    const providerLevel = normalizeProtocolName(provider.protocol);
     const resolved = perModel || providerLevel || inferred || 'openai-responses';
 
-    // Use the SAME predicate as inferProtocolFromModelId so the guard never
-    // disagrees with the inference (e.g. "my-claude-proxy" → infer=null →
-    // guard wouldn't fire either; "claude-opus-*" → infer=anthropic →
-    // guard enforces anthropic). Prevents confusing "resolved openai-responses
-    // for claude-*" errors on ids the heuristic didn't actually match.
-    if (inferred === 'anthropic') {
-      if (resolved !== 'anthropic') {
-        const parts = [];
-        if (perModel) parts.push(`per-model="${perModel}"`);
-        if (providerLevel) parts.push(`provider-level="${providerLevel}"`);
-        const detail = parts.length ? ` (${parts.join(', ')})` : '';
-        throw new Error(
-          `Claude models require protocol="anthropic"; ` +
-          `chat-completions fallback removed in Phase 7. ` +
-          `Provider "${provider.name}" resolved protocol="${resolved}" for model "${modelId}"${detail}.`
-        );
-      }
-      return 'anthropic';
+    // Keep guarding against accidentally routing Claude models to the Responses API
+    // (which Anthropic endpoints do not speak), while allowing explicit Chat Completions
+    // gateways (e.g. unified proxies) to route Claude over /chat/completions.
+    if (inferred === 'anthropic' && resolved !== 'anthropic' && resolved !== 'openai-chat-completions') {
+      const parts = [];
+      if (perModel) parts.push(`per-model="${perModel}"`);
+      if (providerLevel) parts.push(`provider-level="${providerLevel}"`);
+      const detail = parts.length ? ` (${parts.join(', ')})` : '';
+      throw new Error(
+        `Claude models require protocol="anthropic" or explicit protocol="openai-chat-completions". ` +
+        `Provider "${provider.name}" resolved protocol="${resolved}" for model "${modelId}"${detail}.`
+      );
     }
     return resolved;
   }
@@ -546,9 +564,17 @@ export class AdapterRouter extends LLMAdapter {
         ...this.#streamIdlePolicy,
       });
     } else if (protocol === 'openai-responses') {
-      // OpenAI Responses API (/v1/responses) — canonical OpenAI-compatible path.
+      // OpenAI Responses API (/v1/responses)
       const { OpenAIResponsesAdapter } = await import('./openai-responses.js');
       adapter = new OpenAIResponsesAdapter({
+        apiKey,
+        baseUrl: provider.baseUrl,
+        ...this.#streamIdlePolicy,
+      });
+    } else if (protocol === 'openai-chat-completions') {
+      // OpenAI Chat Completions API (/v1/chat/completions)
+      const { OpenAIChatCompletionsAdapter } = await import('./openai-chat-completions.js');
+      adapter = new OpenAIChatCompletionsAdapter({
         apiKey,
         baseUrl: provider.baseUrl,
         ...this.#streamIdlePolicy,
@@ -559,8 +585,7 @@ export class AdapterRouter extends LLMAdapter {
     } else {
       throw new Error(
         `Unsupported protocol "${protocol}" for provider "${provider.name}". ` +
-        `Use protocol: "anthropic", "openai-responses" or "gemini". ` +
-        `The chat-completions adapter was removed in Phase 7.`
+        `Use protocol: "anthropic", "openai-responses", "openai-chat-completions" or "gemini".`
       );
     }
 

@@ -217,7 +217,7 @@ export function resolveSubAgentEffort({ parentDecision = null, model, effortCont
   const supported = getModelEffortOptions(model, context).filter(value => atMost(value, target));
   const effective = EFFORT_LEVELS.filter(value => supported.includes(value)).at(-1);
   if (!effective) throw effortError(model, target);
-  const wireMode = protocol === 'openai-responses' || capability.thinkingProtocol === 'openai-reasoning'
+  const wireMode = protocol === 'openai-responses' || protocol === 'openai-chat-completions' || capability.thinkingProtocol === 'openai-reasoning'
     ? 'reasoning-effort'
     : isGeminiLevel ? 'thinking-level'
       : capability.thinkingProtocol === 'anthropic-adaptive' ? 'adaptive' : 'manual';
@@ -232,6 +232,11 @@ function manualEffortForBudget(model, budget) {
 
 /** Normalize retired tiers after extraBody, without mutating caller-owned objects. */
 export function normalizeEffortPayload(body, protocol) {
+  if (protocol === 'openai-chat-completions') {
+    const effort = normalizeEffort(body.reasoning_effort);
+    if (effort && effort !== body.reasoning_effort) body.reasoning_effort = effort;
+    return;
+  }
   const key = protocol === 'anthropic' ? 'output_config' : 'reasoning';
   const effort = normalizeEffort(body[key]?.effort);
   if (effort && effort !== body[key].effort) body[key] = { ...body[key], effort };
@@ -250,6 +255,9 @@ export function captureEffortDecision({ body = {}, model, protocol, effortContex
   }
   if (protocol === 'openai-responses') {
     const effective = normalizeEffort(body.reasoning?.effort);
+    if (effective) return snapshotEffortDecision({ ...base, effective, wireMode: 'reasoning-effort', thinkingEnabled: true });
+  } else if (protocol === 'openai-chat-completions') {
+    const effective = normalizeEffort(body.reasoning_effort);
     if (effective) return snapshotEffortDecision({ ...base, effective, wireMode: 'reasoning-effort', thinkingEnabled: true });
   } else if (body.thinking?.type === 'enabled') {
     const budgetTokens = body.thinking.budget_tokens;
@@ -291,24 +299,36 @@ export function enforceSubAgentEffortPayload(body, { model, protocol, effortCont
   if (decision.wireMode === 'unsupported') {
     removeEffortField(body, 'reasoning');
     removeEffortField(body, 'output_config');
+    delete body.reasoning_effort;
     delete body.thinking;
     return decision;
   }
   const context = capabilityContext(protocol, effortContext);
   const options = getModelEffortOptions(model, context);
-  const wireEffort = protocol === 'openai-responses' ? body.reasoning?.effort : body.output_config?.effort;
+  const wireEffort = protocol === 'openai-responses'
+    ? body.reasoning?.effort
+    : protocol === 'openai-chat-completions'
+      ? body.reasoning_effort
+      : body.output_config?.effort;
   const effective = options.includes(wireEffort) && atMost(wireEffort, decision.effective)
     ? wireEffort : decision.effective;
   // Display controls observability, not effort; retain it when enforcing the cap.
   const display = body.thinking?.display;
   if (protocol === 'openai-responses') {
     body.reasoning = { ...(body.reasoning && typeof body.reasoning === 'object' && !Array.isArray(body.reasoning) ? body.reasoning : {}), effort: effective };
+    delete body.reasoning_effort;
+    delete body.thinking;
+    removeEffortField(body, 'output_config');
+  } else if (protocol === 'openai-chat-completions') {
+    body.reasoning_effort = effective;
+    removeEffortField(body, 'reasoning');
     delete body.thinking;
     removeEffortField(body, 'output_config');
   } else if (decision.wireMode === 'adaptive') {
     body.thinking = { type: 'adaptive', ...(display !== undefined ? { display } : {}) };
     body.output_config = { ...(body.output_config && typeof body.output_config === 'object' && !Array.isArray(body.output_config) ? body.output_config : {}), effort: effective };
     removeEffortField(body, 'reasoning');
+    delete body.reasoning_effort;
   } else {
     const capability = getThinkingCapability(model, context);
     let budget = thinkingBudgetForEffort(model, effective);
@@ -321,6 +341,7 @@ export function enforceSubAgentEffortPayload(body, { model, protocol, effortCont
     body.thinking = { type: 'enabled', budget_tokens: budget, ...(display !== undefined ? { display } : {}) };
     removeEffortField(body, 'output_config');
     removeEffortField(body, 'reasoning');
+    delete body.reasoning_effort;
     return snapshotEffortDecision({ ...decision, effective: manualEffortForBudget(model, budget), budgetTokens: budget });
   }
   return snapshotEffortDecision({ ...decision, effective });

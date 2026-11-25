@@ -28,7 +28,7 @@ import { cloneGeminiOptions } from './llm/gemini-options.js';
  * @property {'anthropic' | 'openai' | 'deepseek' | 'google'} provider — Which provider this model belongs to.
  *   These ids are intentionally aligned with the top-level keys in the models.dev
  *   catalog so they can be used as a `providerHint` to {@link lookupModelLimitSync}.
- * @property {'anthropic' | 'openai-responses' | 'gemini'} adapter — Which wire protocol to use
+ * @property {'anthropic' | 'openai-responses' | 'openai-chat-completions' | 'gemini'} adapter — Which wire protocol to use
  * @property {string} baseUrl — Official API endpoint base URL
  * @property {string} displayName — Human-readable model name
  */
@@ -530,11 +530,12 @@ export function getThinkingCapability(model, context = {}) {
       || (profile.defaultEffort && resolveGeminiEffort(model, profile.defaultEffort, defaults))
       || ['xhigh', 'medium', 'high'].find(value => defaults.includes(value)) || defaults[0] };
   }
-  if (protocol !== 'anthropic' && protocol !== 'openai-responses') return disabled;
+  if (protocol !== 'anthropic' && protocol !== 'openai-responses' && protocol !== 'openai-chat-completions') return disabled;
+  const isOpenAI = protocol === 'openai-responses' || protocol === 'openai-chat-completions';
   const manual = protocol === 'anthropic' && context.thinkingProtocol === 'anthropic';
-  const thinkingProtocol = protocol === 'openai-responses' ? 'openai-reasoning'
+  const thinkingProtocol = isOpenAI ? 'openai-reasoning'
     : manual ? 'anthropic' : 'anthropic-adaptive';
-  const apiOptions = protocol === 'openai-responses' ? OPENAI_REASONING_EFFORT_OPTIONS
+  const apiOptions = isOpenAI ? OPENAI_REASONING_EFFORT_OPTIONS
     : manual ? ANTHROPIC_MANUAL_EFFORT_OPTIONS : ANTHROPIC_ADAPTIVE_EFFORT_OPTIONS;
   const overrides = normalizeEffortOptions(context.effortOptions);
   const effortOptions = overrides ? apiOptions.filter(value => overrides.includes(value)) : [...apiOptions];

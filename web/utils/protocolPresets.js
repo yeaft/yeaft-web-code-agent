@@ -19,7 +19,7 @@ export const PROTOCOL_PRESET_MODELS = {
     'claude-opus-4-20250514',
     'claude-haiku-3-20250414',
   ],
-  openai: [
+  'openai-chat-completions': [
     'gpt-5',
     'gpt-4.1',
     'gpt-4.1-mini',

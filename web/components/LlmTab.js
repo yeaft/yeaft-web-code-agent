@@ -100,10 +100,10 @@ export default {
                     <svg class="sp-custom-select-chevron" viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M7 10l5 5 5-5z"/></svg>
                   </button>
                   <div class="sp-custom-select-menu" v-show="openDropdown === 'protocol-' + idx">
-                    <div class="sp-custom-select-option" :class="{ active: !provider.protocol || provider.protocol === 'openai' }"
-                      @click="setProtocol(idx, 'openai'); closeDropdown('protocol-' + idx)">
-                      {{ $t('settings.llm.protocolOpenAI') }}
-                      <svg v-if="!provider.protocol || provider.protocol === 'openai'" class="sp-custom-select-check" viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg>
+                    <div class="sp-custom-select-option" :class="{ active: provider.protocol === 'openai-chat-completions' }"
+                      @click="setProtocol(idx, 'openai-chat-completions'); closeDropdown('protocol-' + idx)">
+                      {{ $t('settings.llm.protocolChatCompletions') }}
+                      <svg v-if="provider.protocol === 'openai-chat-completions'" class="sp-custom-select-check" viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg>
                     </div>
                     <div class="sp-custom-select-option" :class="{ active: provider.protocol === 'openai-responses' }"
                       @click="setProtocol(idx, 'openai-responses'); closeDropdown('protocol-' + idx)">
@@ -113,11 +113,17 @@ export default {
                     <div class="sp-custom-select-option" :class="{ active: provider.protocol === 'gemini' }"
                       @click="setProtocol(idx, 'gemini'); closeDropdown('protocol-' + idx)">
                       {{ $t('settings.llm.protocolGemini') }}
+                      <svg v-if="provider.protocol === 'gemini'" class="sp-custom-select-check" viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg>
                     </div>
                     <div class="sp-custom-select-option" :class="{ active: provider.protocol === 'anthropic' }"
                       @click="setProtocol(idx, 'anthropic'); closeDropdown('protocol-' + idx)">
                       {{ $t('settings.llm.protocolAnthropic') }}
                       <svg v-if="provider.protocol === 'anthropic'" class="sp-custom-select-check" viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg>
+                    </div>
+                    <div class="sp-custom-select-option" :class="{ active: !provider.protocol }"
+                      @click="setProtocol(idx, ''); closeDropdown('protocol-' + idx)">
+                      {{ $t('settings.llm.protocolAuto') }}
+                      <svg v-if="!provider.protocol" class="sp-custom-select-check" viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg>
                     </div>
                   </div>
                 </div>
@@ -636,14 +642,17 @@ export default {
     },
 
     cloneProvider(p) {
+      const normalizedProtocol = p.protocol === 'openai' || p.protocol === 'chat-completions'
+        ? 'openai-chat-completions'
+        : (p.protocol || '');
       return {
         type: p.type || 'api-key',
         scope: 'agent',
         name: p.originalName || p.name || '',
-        baseUrl: p.baseUrl || (p.protocol === 'gemini' ? GEMINI_BASE_URL : ''),
+        baseUrl: p.baseUrl || (normalizedProtocol === 'gemini' ? GEMINI_BASE_URL : ''),
         apiKey: p.apiKey || '',
         githubToken: p.githubToken || '',
-        protocol: p.protocol || 'openai',
+        protocol: normalizedProtocol,
         credentialProvider: p.credentialProvider || null,
         ...cloneRequestPolicy(p),
         models: Array.isArray(p.models)
@@ -699,7 +708,7 @@ export default {
         name: '',
         baseUrl: '',
         apiKey: '',
-        protocol: 'openai',
+        protocol: 'openai-chat-completions',
         credentialProvider: null,
         models: []
       });
@@ -724,7 +733,7 @@ export default {
         name,
         baseUrl: payload.baseUrl || (payload.protocol === 'gemini' ? GEMINI_BASE_URL : ''),
         apiKey: '',
-        protocol: payload.protocol || 'openai',
+        protocol: payload.protocol || '',
         credentialProvider: null,
         models,
       });
@@ -800,11 +809,12 @@ export default {
       if (protocol === 'gemini') return this.$t('settings.llm.protocolGemini');
       if (protocol === 'anthropic') return this.$t('settings.llm.protocolAnthropic');
       if (protocol === 'openai-responses') return this.$t('settings.llm.protocolOpenAIResponses');
-      return this.$t('settings.llm.protocolOpenAI');
+      if (protocol === 'openai-chat-completions') return this.$t('settings.llm.protocolChatCompletions');
+      return this.$t('settings.llm.protocolAuto');
     },
 
     _getModelPresets(protocol) {
-      return PROTOCOL_PRESET_MODELS[protocol] || PROTOCOL_PRESET_MODELS.openai;
+      return PROTOCOL_PRESET_MODELS[protocol] || PROTOCOL_PRESET_MODELS['openai-chat-completions'];
     },
 
     toggleApiKeyVisibility(idx) {
@@ -857,7 +867,7 @@ export default {
             // collapses to plain string when no metadata is attached.
             models: (p.models || []).filter(m => this._modelId(m))
           };
-          if (p.protocol && p.protocol !== 'openai') {
+          if (p.protocol) {
             clean.protocol = p.protocol;
           }
           // Only emit credentialProvider when explicitly opted-in. Omitting

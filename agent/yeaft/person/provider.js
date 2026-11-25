@@ -1,7 +1,7 @@
 import { loadConfig } from '../config.js';
 import { createLLMAdapter } from '../llm/adapter.js';
 import { applyAnthropicThinking } from '../llm/anthropic.js';
-import { inferProtocolFromModelId, normalizeModelEntry } from '../llm/router.js';
+import { inferProtocolFromModelId, normalizeModelEntry, normalizeProtocolName } from '../llm/router.js';
 import { normalizeKnownProviderForRuntime } from '../llm/known-providers.js';
 import { normalizeEffort, resolveContextWindow, resolveMaxOutputTokens } from '../models.js';
 import { bindProviderState, providerStateBytes, MAX_PROVIDER_STATE_BYTES } from '../llm/provider-state.js';
@@ -61,7 +61,7 @@ export function selectPersonModels({ availableModels, unavailableModels = [], mo
 // Claude 3/4 resize to <=4784 visual tokens. Keep headroom for image overhead.
 // Sources and supported-model policy: docs/person-backend-files.md.
 function imageInputBudget(modelId, protocol) {
-  if (protocol === 'openai-responses') {
+  if (protocol === 'openai-responses' || protocol === 'openai-chat-completions') {
     if (/^(?:gpt-(?:4o(?:-mini)?|4\.1|5(?:\.1)?)|o1(?:-pro)?|o3)(?:-\d{4}-\d{2}-\d{2})?$/.test(modelId)) {
       return { detail: 'low', tokensPerImage: 8192 };
     }
@@ -105,7 +105,7 @@ export async function createPersonProvider({ yeaftDir, config: suppliedConfig, a
     const rawProvider = config.providers?.[routeIndex];
     const rawModel = rawProvider?.models?.find(item => item && typeof item === 'object' && item.id === m.id);
     const explicitImages = m.supportsImages ?? rawModel?.supportsImages ?? rawProvider?.supportsImages;
-    const protocol = routedModel?.protocol || routedProvider?.protocol || inferProtocolFromModelId(m.id) || 'openai-responses';
+    const protocol = normalizeProtocolName(routedModel?.protocol) || normalizeProtocolName(routedProvider?.protocol) || inferProtocolFromModelId(m.id) || 'openai-responses';
     const effortContext = { ...m, protocol, thinkingProtocol: m.effortProtocol || m.thinkingProtocol };
     const efforts = effortEnabled ? [...new Set((m.effortOptions || []).map(effort => normalizeEffort(effort, protocol === 'gemini')).filter(Boolean))].filter(e => {
       // Manual thinking can silently expand native max_tokens. Use the exact

@@ -110,11 +110,11 @@ Query 的重要契约：
 
 原生模型配置由 `config.js`、`config-api.js` 与 `llm/` 读取，位于当前实例的 `<yeaftDir>/config.json`。原生 API provider 与 `agent/providers/` 的 CLI ChatProvider 是两条扩展路径。
 
-- 支持 `anthropic` 与 `openai-responses`，不含旧 Chat Completions 协议。
+- 支持 `anthropic`、`openai-responses`、`openai-chat-completions` 与 `gemini` 四种原生 wire 协议。
 - 协议解析顺序：model override → provider override → model-id inference → `openai-responses` 默认。
 - 静态凭据为 `apiKey`，动态凭据为 `credentialProvider`（包括 GitHub Copilot）。
 - 模型能力来自显式配置、`models.dev` cache 和 `models.js`；模型级 `maxOutput` 与 runtime 顶层 `maxOutputTokens` 是不同字段，窗口大小不在 UI / prompt 中另行硬编码。
-- Effort 档位按最终生效的 `anthropic` / `openai-responses` API 提供，不由模型 ID 白名单决定；显式 `effortOptions` / `supportsEffort:false` 可缩小或禁用，旧 Anthropic 手动预算需显式 `thinkingProtocol:"anthropic"`。
+- Effort 档位按最终生效的 `anthropic` / `openai-responses` / `openai-chat-completions` / `gemini` API 提供，不由模型 ID 白名单决定；显式 `effortOptions` / `supportsEffort:false` 可缩小或禁用，旧 Anthropic 手动预算需显式 `thinkingProtocol:"anthropic"`。
 - Session 的 `sceneId`、`model` 和 `modelEffort` 写入自己的 `config.json`。场景不改变模型、权限或历史归属。
 
 ### 历史上下文、Skills 与工具

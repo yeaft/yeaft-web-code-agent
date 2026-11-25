@@ -159,12 +159,23 @@ function messageBudget(message) {
   if (!providerState) return { wireBytes: publicBytes, opaqueBytes: 0 };
   const items = providerState.items;
   if (bytes(providerState) > OPAQUE_BYTES) return { wireBytes: Infinity, opaqueBytes: Infinity };
-  if (!Array.isArray(items) || !['anthropic', 'openai-responses'].includes(providerState.protocol)) {
+  if (!Array.isArray(items) || !['anthropic', 'openai-responses', 'openai-chat-completions'].includes(providerState.protocol)) {
     return { wireBytes: publicBytes, opaqueBytes: bytes(providerState) };
   }
-  const native = providerState.protocol === 'anthropic' ? { role: 'assistant', content: items } : items;
-  return { wireBytes: Math.max(publicBytes, bytes(native)),
-    opaqueBytes: bytes(items.filter(item => ['reasoning', 'thinking', 'redacted_thinking'].includes(item?.type))) - 2 };
+  const native = providerState.protocol === 'anthropic'
+    ? { role: 'assistant', content: items }
+    : providerState.protocol === 'openai-chat-completions'
+      ? items[0]
+      : items;
+  const opaque = providerState.protocol === 'openai-chat-completions'
+    ? bytes(items.map(item => ({
+        ...(item?.reasoning_opaque ? { reasoning_opaque: item.reasoning_opaque } : {}),
+        ...(item?.reasoning_text ? { reasoning_text: item.reasoning_text } : {}),
+        ...(item?.reasoning_content ? { reasoning_content: item.reasoning_content } : {}),
+        ...(item?.reasoning ? { reasoning: item.reasoning } : {}),
+      })))
+    : bytes(items.filter(item => ['reasoning', 'thinking', 'redacted_thinking'].includes(item?.type))) - 2;
+  return { wireBytes: Math.max(publicBytes, bytes(native)), opaqueBytes: opaque };
 }
 
 /** Only request copies are reduced. Original calls/results are in fenced traces.
