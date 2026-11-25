@@ -815,6 +815,15 @@ export class AdapterRouter extends LLMAdapter {
     return this.#getProviderForModel(modelId);
   }
 
+  /** Synchronous policy lookup only: no adapter creation, credentials or I/O.
+   * Use dispatch's own precedence, including qualified aliases on split providers. */
+  getProtocolForModel(modelRef) {
+    const hit = this.#modelToProvider.get(modelRef) || this.#resolveProviderQualifiedFallback(modelRef);
+    if (!hit) return null;
+    try { return this.#effectiveProtocol(hit.provider, hit.entry); }
+    catch { return null; } // An invalid route still fails normally on actual dispatch.
+  }
+
   /**
    * List all available models across all providers.
    *

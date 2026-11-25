@@ -2945,9 +2945,8 @@ export class Engine {
         : this.#adapter;
       const routedProvider = this.#adapter.getProviderForModel?.(currentModel);
       const effortModel = findEffortModelEntry(requestConfig, currentModel, routedProvider?.name);
-      const { modelId: effortModelId } = parseModelRef(currentModel);
-      const routedModel = !effortModel?.protocol && routedProvider?.models?.find(entry => entry?.id === effortModelId);
-      const effortProtocol = effortModel?.protocol || routedModel?.protocol || routedProvider?.protocol || requestConfig.adapter;
+      const effortProtocol = effortModel?.protocol || this.#adapter.getProtocolForModel?.(currentModel)
+        || routedProvider?.protocol || requestConfig.adapter;
       const normalizeRequestEffort = value => normalizeRoutedEffort(value, currentModel, effortModel, effortProtocol);
       retryPolicy = resolveRetryPolicy(requestConfig);
 

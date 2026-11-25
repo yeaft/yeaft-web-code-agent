@@ -24,7 +24,7 @@ import { join } from 'path';
 import { writeAtomic } from '../storage/index.js';
 import { isGitHubCopilotProvider } from '../llm/known-providers.js';
 import { getGeminiThinkingProfile, normalizeChatEffort, normalizeEffort, parseModelRef } from '../models.js';
-import { normalizeProtocolName } from '../llm/router.js';
+import { AdapterRouter, normalizeProtocolName } from '../llm/router.js';
 import { loadConfig } from '../config.js';
 import { isSessionSceneId } from './scene-ids.js';
 import { sessionsRoot } from './session-crud.js';
@@ -91,13 +91,11 @@ function normalizeSessionEffort(effort, model, config, yeaftDir) {
     ?? (yeaftDir && existsSync(join(yeaftDir, CONFIG_FILE)) ? loadConfig({ dir: yeaftDir }) : null);
   const effective = (model && resolveAllowedModelRef(base, model)) || inheritedModel(base);
   const entry = findEffortModelEntry(base, effective);
-  // The router accepts qualified, unlisted models on explicit Chat gateways.
-  // A stale catalog must not turn their literal High into the global legacy alias.
-  const owner = parseModelRef(effective).providerName;
-  const provider = owner && base?.providers?.find(row => row.name === owner);
-  const fallback = normalizeProtocolName(provider?.protocol) === 'openai-chat-completions'
-    ? 'openai-chat-completions' : base?.adapter;
-  return normalizeRoutedEffort(effort, effective, entry, entry?.effortProtocol || fallback);
+  // On an incomplete catalog the router alone owns per-model overrides and the
+  // precedence between same-name provider rows. Resolve policy, never credentials.
+  const route = entry?.protocol || (effective && base?.providers?.length &&
+    new AdapterRouter({ providers: base.providers }).getProtocolForModel(effective));
+  return normalizeRoutedEffort(effort, effective, entry, route || entry?.effortProtocol || base?.adapter);
 }
 
 function publicConfig(stored, config, yeaftDir) {
