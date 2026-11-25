@@ -318,10 +318,15 @@ export function classifyUpstreamStreamError({ code = null, type = null, message 
 let cachedModelFetchDispatcher = null;
 let cachedModelFetchEnvProxyKey = null;
 
+function isEnvProxyEnabled() {
+  if (process.env.NODE_USE_ENV_PROXY === '1') return true;
+  if (process.execArgv.includes('--use-env-proxy')) return true;
+  const nodeOptions = process.env.NODE_OPTIONS;
+  return typeof nodeOptions === 'string' && /(?:^|\s)--use-env-proxy(?=\s|$)/.test(nodeOptions);
+}
+
 function modelFetchEnvProxyKey() {
-  const useEnvProxy = process.env.NODE_USE_ENV_PROXY === '1'
-    || process.execArgv.includes('--use-env-proxy');
-  if (!useEnvProxy) return 'direct';
+  if (!isEnvProxyEnabled()) return 'direct';
   return [
     'env',
     process.env.http_proxy ?? '',
@@ -351,9 +356,7 @@ export function createModelFetchDispatcher(opts = {}) {
     bodyTimeout: 0,
     ...opts,
   };
-  const useEnvProxy = process.env.NODE_USE_ENV_PROXY === '1'
-    || process.execArgv.includes('--use-env-proxy');
-  return useEnvProxy ? new EnvHttpProxyAgent(dispatcherOpts) : new Agent(dispatcherOpts);
+  return isEnvProxyEnabled() ? new EnvHttpProxyAgent(dispatcherOpts) : new Agent(dispatcherOpts);
 }
 
 function getModelFetchDispatcher() {
@@ -374,9 +377,9 @@ function getModelFetchDispatcher() {
 export async function fetchWithHeadersTimeout(url, init = {}, timeoutMs) {
   const requestInit = init && typeof init === 'object' ? init : {};
   if (requestInit.signal?.aborted) throw new LLMAbortError();
+  if (Number.isFinite(timeoutMs) && timeoutMs <= 0) throw new LLMHeadersTimeoutError();
   const dispatcher = requestInit.dispatcher ?? getModelFetchDispatcher();
   if (!Number.isFinite(timeoutMs)) return fetch(url, { ...requestInit, dispatcher });
-  if (timeoutMs <= 0) throw new LLMHeadersTimeoutError();
   const deadline = new AbortController();
   const signal = requestInit.signal ? AbortSignal.any([requestInit.signal, deadline.signal]) : deadline.signal;
   const timer = setTimeout(() => deadline.abort(new LLMHeadersTimeoutError()), timeoutMs);

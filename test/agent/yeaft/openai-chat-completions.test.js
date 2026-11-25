@@ -3,8 +3,10 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { EnvHttpProxyAgent } from 'undici';
 import { OpenAIChatCompletionsAdapter } from '../../../agent/yeaft/llm/openai-chat-completions.js';
 import { OpenAIResponsesAdapter } from '../../../agent/yeaft/llm/openai-responses.js';
+import { AnthropicAdapter } from '../../../agent/yeaft/llm/anthropic.js';
 import { AdapterRouter } from '../../../agent/yeaft/llm/router.js';
 import {
   createLLMAdapter,
@@ -592,7 +594,24 @@ describe('OpenAI Chat Completions protocol adapter & continuity', () => {
       });
     }
 
-    // 2. classifyFetchError maps UND_ERR_HEADERS_TIMEOUT and nested UND_ERR_BODY_TIMEOUT safely.
+    // 2. Env proxy dispatcher selection (NODE_USE_ENV_PROXY=1 & NODE_OPTIONS) and classifyFetchError nested timeouts.
+    vi.stubEnv('NODE_USE_ENV_PROXY', '1');
+    const envDispatcher = createModelFetchDispatcher();
+    try {
+      expect(envDispatcher).toBeInstanceOf(EnvHttpProxyAgent);
+    } finally {
+      await envDispatcher.close();
+      vi.unstubAllEnvs();
+    }
+    vi.stubEnv('NODE_OPTIONS', '--trace-warnings --use-env-proxy');
+    const nodeOptDispatcher = createModelFetchDispatcher();
+    try {
+      expect(nodeOptDispatcher).toBeInstanceOf(EnvHttpProxyAgent);
+    } finally {
+      await nodeOptDispatcher.close();
+      vi.unstubAllEnvs();
+    }
+
     const nestedBodyTimeout = new Error('outer', {
       cause: new TypeError('terminated', {
         cause: Object.assign(new Error('Body Timeout Error'), { code: 'UND_ERR_BODY_TIMEOUT' }),
@@ -656,6 +675,19 @@ describe('OpenAI Chat Completions protocol adapter & continuity', () => {
     const respEvents = await collect(responsesAdapter.stream({ model: 'gpt-5', messages: [{ role: 'user', content: 'hi' }] }));
     expect(respEvents.at(-1).error).toBeInstanceOf(LLMStreamIdleTimeoutError);
     expect(respEvents.at(-1).retryable).toBe(true);
+
+    const anthropicAdapter = new AnthropicAdapter({ baseUrl: 'https://proxy.invalid', apiKey: 'k' });
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(
+      `event: error\ndata: ${JSON.stringify({
+        type: 'error',
+        error: { type: 'upstream_error', code: 'upstream_stream_timeout', message: 'Upstream stream timed out.' },
+      })}\n\n`,
+      { headers: { 'content-type': 'text/event-stream' } },
+    )));
+    const anthropicEvents = await collect(anthropicAdapter.stream({ model: 'claude-sonnet-4-6', messages: [{ role: 'user', content: 'hi' }] }));
+    expect(anthropicEvents.at(-1).error).toBeInstanceOf(LLMStreamIdleTimeoutError);
+    expect(anthropicEvents.at(-1).error.code).toBe('upstream_stream_timeout');
+    expect(anthropicEvents.at(-1).retryable).toBe(true);
 
     // 4. End-to-end Engine: upstream_stream_timeout and legacy terminated trigger effort step-down + older tool compaction.
     const bodies = [];

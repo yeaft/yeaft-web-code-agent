@@ -793,8 +793,13 @@ export class AnthropicAdapter extends LLMAdapter {
                 code: event.error.code,
                 type: event.error.type,
                 message: event.error.message,
+                retryAfterMs: retryAfterFromResponse(event.error) ?? retryAfterFromResponse(response),
               })
               : null;
+            if (upstreamErr && !upstreamErr.code) {
+              const diagCode = event.error?.code || event.error?.type;
+              if (typeof diagCode === 'string' && diagCode.trim()) upstreamErr.code = diagCode.trim();
+            }
             yield unusable({
               type: 'error',
               error: rejected || upstreamErr || new Error(event.error?.message || 'Unknown streaming error'),
