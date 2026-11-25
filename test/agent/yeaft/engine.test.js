@@ -1533,7 +1533,7 @@ RELEASE_BODY`;
           protocol: 'openai-chat-completions',
           baseUrl: 'https://copilot.invalid/v1',
           apiKey: 'fixture-key',
-          models: ['gemini-4-neon', 'gemini-4-carbon'],
+          models: ['gemini-4-carbon'],
         }],
         llmRetry: defaultPolicy,
       });
@@ -1546,7 +1546,7 @@ RELEASE_BODY`;
         bodies.push(JSON.parse(init.body));
         callCount++;
         if (callCount === 1) {
-          // Attempt 1 (xhigh): headers + reasoning chunk arrive, then stream stalls for 600s.
+          // Attempt 1 (Carbon high): headers + reasoning chunk arrive, then stream stalls for 600s.
           return new Response(new ReadableStream({
             start(controller) {
               controller.enqueue(sseChunk({ id: 'c1', choices: [{ index: 0, delta: { role: 'assistant', reasoning_text: 'Thinking...' }, finish_reason: null }] }));
@@ -1582,8 +1582,8 @@ RELEASE_BODY`;
       let run = null;
       try {
         const baseConfig = {
-          model: 'copilot/gemini-4-neon',
-          modelEffort: 'xhigh',
+          model: 'copilot/gemini-4-carbon',
+          modelEffort: 'high',
           maxOutputTokens: 1024,
           projectDocMaxBytes: 0,
           llmRetry: { ...defaultPolicy, maxRetries: 2, baseDelayMs: 1_000, maxDelayMs: 1_000, jitterRatio: 0 },
@@ -1618,16 +1618,16 @@ RELEASE_BODY`;
         run = null;
 
         expect(events.find(e => e.type === 'turn_end' && e.terminal)).toMatchObject({ stopReason: 'end_turn', terminal: true });
-        expect(bodies.map(b => b.reasoning_effort)).toEqual(['xhigh', 'medium', 'medium']);
+        expect(bodies.map(b => b.reasoning_effort)).toEqual(['high', 'medium', 'medium']);
         // Policies come in pairs: before headers (headersTimeoutMs set) and after headers (undefined).
         const postHeaderPolicies = policies.filter(p => p.headersTimeoutMs === undefined);
         expect(postHeaderPolicies).toEqual([
-          { effort: 'xhigh', streamIdleTimeoutMs: 600_000, headersTimeoutMs: undefined },
+          { effort: 'high', streamIdleTimeoutMs: 600_000, headersTimeoutMs: undefined },
           { effort: 'medium', streamIdleTimeoutMs: 600_000, headersTimeoutMs: undefined },
           { effort: 'medium', streamIdleTimeoutMs: 300_000, headersTimeoutMs: undefined },
         ]);
 
-        // Also verify disabled high-effort guard (0) preserves both transport 0 and high-effort watchdog across xhigh -> medium headers-timeout retry.
+        // Also verify disabled high-effort guard (0) preserves both transport 0 and high-effort watchdog across high -> medium headers-timeout retry.
         const zeroPolicies = [];
         let zeroCalls = 0;
         vi.stubGlobal('fetch', vi.fn(async () => {
@@ -1646,7 +1646,7 @@ RELEASE_BODY`;
             protocol: 'openai-chat-completions',
             baseUrl: 'https://copilot.invalid/v1',
             apiKey: 'fixture-key',
-            models: ['gemini-4-neon'],
+            models: ['gemini-4-carbon'],
           }],
           llmRetry: normalizeLlmRetry({ streamIdleTimeoutMs: 300_000, highEffortStreamIdleTimeoutMs: 0 }),
         });
@@ -1660,7 +1660,7 @@ RELEASE_BODY`;
           onProviderRequestStart: policy => zeroPolicies.push(policy),
         })) { /* drain */ }
         expect(zeroPolicies.filter(p => p.headersTimeoutMs === undefined)).toEqual([
-          { effort: 'xhigh', streamIdleTimeoutMs: 0, headersTimeoutMs: undefined },
+          { effort: 'high', streamIdleTimeoutMs: 0, headersTimeoutMs: undefined },
           { effort: 'medium', streamIdleTimeoutMs: 0, headersTimeoutMs: undefined, preserveHighEffortWatchdog: true },
         ]);
       } finally {
