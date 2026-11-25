@@ -3,7 +3,7 @@ import { normalizeGeminiEndpoint } from './gemini-endpoint.js';
 import { decodeResponsesInput } from './responses-tool-schema.js';
 
 export const MAX_PROVIDER_STATE_BYTES = 4 * 1024 * 1024;
-const PROTOCOLS = new Set(['openai-responses', 'anthropic', 'gemini']);
+const PROTOCOLS = new Set(['openai-responses', 'openai-chat-completions', 'anthropic', 'gemini']);
 const hash = value => `sha256:${createHash('sha256').update(JSON.stringify(value)).digest('hex')}`;
 const clone = value => structuredClone(value);
 const nonempty = value => typeof value === 'string' && value.length > 0;
@@ -85,7 +85,7 @@ export function createProviderContext({ protocol, baseUrl, providerId, credentia
   // not a rotating access token or a provider name shared by every account.
   if (!nonempty(credentialScopeId)) credentialScopeId = createCredentialScopeId(staticApiKey);
   const enabled = key => capabilities.translation !== true
-    && (capabilities[key] ?? (key === 'nativeReasoningState' && ['anthropic', 'gemini'].includes(protocol) ? Boolean(endpoint) : native)) === true;
+    && (capabilities[key] ?? (key === 'nativeReasoningState' && ['anthropic', 'gemini', 'openai-chat-completions'].includes(protocol) ? Boolean(endpoint) : native)) === true;
   return {
     protocol,
     origin: { providerId: providerId || protocol, endpointFingerprint: hash(endpoint), model, credentialScopeId },
@@ -182,6 +182,32 @@ function projectItems(protocol, items, responsesArguments) {
       } else if (!nonempty(part.thoughtSignature)) {
         throw new ProviderStateError('unsupported Gemini part');
       }
+    } else if (protocol === 'openai-chat-completions') {
+      if (item.type !== 'assistant_message') throw new ProviderStateError('unsupported Chat Completions item');
+      if (item.content !== undefined && item.content !== null && typeof item.content !== 'string') {
+        throw new ProviderStateError('invalid Chat Completions content');
+      }
+      if (item.reasoning_opaque !== undefined && !nonempty(item.reasoning_opaque)) {
+        throw new ProviderStateError('invalid Chat Completions reasoning_opaque');
+      }
+      for (const field of ['reasoning_text', 'reasoning_content', 'reasoning']) {
+        if (item[field] !== undefined && typeof item[field] !== 'string') {
+          throw new ProviderStateError(`invalid Chat Completions ${field}`);
+        }
+      }
+      if (typeof item.content === 'string') projection.content += item.content;
+      if (item.tool_calls !== undefined) {
+        if (!Array.isArray(item.tool_calls)) throw new ProviderStateError('invalid Chat Completions tool_calls');
+        for (const tc of item.tool_calls) {
+          if (!record(tc) || !nonempty(tc.id) || (tc.type && tc.type !== 'function')
+              || !record(tc.function) || !nonempty(tc.function.name) || typeof tc.function.arguments !== 'string') {
+            throw new ProviderStateError('invalid Chat Completions tool call');
+          }
+          const parsed = JSON.parse(tc.function.arguments);
+          if (!record(parsed)) throw new ProviderStateError('invalid Chat Completions tool arguments');
+          projection.toolCalls.push({ id: tc.id, name: tc.function.name, input: parsed });
+        }
+      }
     }
   }
   return projection;
@@ -192,7 +218,9 @@ export function hasSignedProviderState(state) {
   // Do not trust a possibly damaged discriminator to decide whether signatures
   // exist: a protocol edit must not downgrade a signed turn to unsigned replay.
   return Array.isArray(state?.items) && state.items.some(item =>
-    ['thinking', 'redacted_thinking'].includes(item?.type) || nonempty(item?.part?.thoughtSignature));
+    ['thinking', 'redacted_thinking'].includes(item?.type)
+    || nonempty(item?.part?.thoughtSignature)
+    || nonempty(item?.reasoning_opaque));
 }
 
 // The semantic digest alone cannot detect equivalent wire edits such as
@@ -216,6 +244,10 @@ export function createProviderState({ context, identity, items, responseId, requ
       && items.some(item => item?.part?.functionCall)) {
       throw new ProviderStateError('signed Gemini tool turn requires nativeReasoningState, credential scope and request identity');
     }
+    if (context?.protocol === 'openai-chat-completions' && hasSignedProviderState({ protocol: 'openai-chat-completions', items })
+      && items.some(item => Array.isArray(item?.tool_calls) && item.tool_calls.length > 0)) {
+      throw new ProviderStateError('signed Chat Completions tool turn requires nativeReasoningState, credential scope and request identity');
+    }
     return null;
   }
   if (!Array.isArray(items) || !items.length) return null;
@@ -233,6 +265,7 @@ export function createProviderState({ context, identity, items, responseId, requ
     if (state.protocol === 'anthropic' && items.some(item => ANTHROPIC_TOOL_USES.has(item?.type))
       && items.some(item => ['thinking', 'redacted_thinking'].includes(item?.type))) throw error;
     if (state.protocol === 'gemini' && hasSignedProviderState(state)) throw error;
+    if (state.protocol === 'openai-chat-completions' && hasSignedProviderState(state)) throw error;
     return null; // unsupported/partial optional state is not replayable
   }
   if (state.protocol === 'anthropic' && requestBody && hasThinking(items)
@@ -307,6 +340,10 @@ function signedToolState(state, message) {
     return (message?.toolCalls?.length > 0 || state.items?.some?.(item => item?.part?.functionCall))
       && (!Array.isArray(state.items) || hasSignedProviderState(state));
   }
+  if (state?.protocol === 'openai-chat-completions' || state?.items?.some?.(item => nonempty(item?.reasoning_opaque))) {
+    return (message?.toolCalls?.length > 0 || state.items?.some?.(item => Array.isArray(item?.tool_calls) && item.tool_calls.length > 0))
+      && (!Array.isArray(state.items) || hasSignedProviderState(state));
+  }
   return (state?.protocol === 'anthropic' || hasSignedProviderState(state))
     && (message?.toolCalls?.length > 0 || state.items?.some?.(item => ANTHROPIC_TOOL_USES.has(item?.type)))
     && (!Array.isArray(state.items) || hasThinking(state.items));
@@ -371,6 +408,28 @@ export function applyResponsesContinuity(body, { context, identity, input, onPro
   return Boolean(key);
 }
 
+/** Mandatory normalization AFTER extraBody for Chat Completions; messages/storage/cache-key cannot be spoofed. */
+export function applyChatCompletionsContinuity(body, { context, identity, messages, onProviderDiagnostics }) {
+  body.messages = messages;
+  delete body.store;
+  delete body.prompt_cache_key;
+  const key = context?.capabilities?.promptCaching && createPromptCacheKey(identity, context);
+  if (key) body.prompt_cache_key = key;
+  if (context?.capabilities?.parallelToolCalls) {
+    if (body.parallel_tool_calls === undefined && Array.isArray(body.tools) && body.tools.length > 0) {
+      body.parallel_tool_calls = true;
+    }
+  } else {
+    delete body.parallel_tool_calls;
+  }
+  onProviderDiagnostics?.({
+    ...context?.diagnostics,
+    nativeReasoningState: Boolean(context?.capabilities?.nativeReasoningState && validOrigin(context.origin) && requestOwner(identity)),
+    promptCaching: key ? 'sent-unverified' : 'not-sent',
+  });
+  return Boolean(key);
+}
+
 /** Remove wire cache markers, not signed blocks or keys inside tool arguments. */
 export function stripAnthropicCaching(body) {
   const { cache_control, ...plain } = body;
@@ -414,7 +473,11 @@ export function applyAnthropicCaching(body, context, onProviderDiagnostics) {
 }
 
 export function reasoningUsage(usage, protocol) {
-  const value = protocol === 'anthropic' ? usage?.output_tokens_details?.thinking_tokens : usage?.output_tokens_details?.reasoning_tokens;
+  const value = protocol === 'anthropic'
+    ? usage?.output_tokens_details?.thinking_tokens
+    : protocol === 'openai-chat-completions'
+      ? (usage?.completion_tokens_details?.reasoning_tokens ?? usage?.reasoning_tokens)
+      : usage?.output_tokens_details?.reasoning_tokens;
   return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? { reasoningTokens: value } : {};
 }
 
@@ -424,9 +487,20 @@ export function hasUsageCounts(usage, fields = ['input_tokens', 'output_tokens']
 }
 
 export function reportedUsageFields(usage, protocol) {
-  const counts = { inputTokens: usage?.input_tokens, outputTokens: usage?.output_tokens,
-    cacheReadTokens: protocol === 'anthropic' ? usage?.cache_read_input_tokens : usage?.input_tokens_details?.cached_tokens,
-    cacheWriteTokens: protocol === 'anthropic' ? usage?.cache_creation_input_tokens : undefined,
-    reasoningTokens: protocol === 'anthropic' ? usage?.output_tokens_details?.thinking_tokens : usage?.output_tokens_details?.reasoning_tokens };
+  const counts = protocol === 'openai-chat-completions'
+    ? {
+        inputTokens: usage?.prompt_tokens ?? usage?.input_tokens,
+        outputTokens: usage?.completion_tokens ?? usage?.output_tokens,
+        cacheReadTokens: usage?.prompt_tokens_details?.cached_tokens ?? usage?.input_tokens_details?.cached_tokens,
+        cacheWriteTokens: undefined,
+        reasoningTokens: usage?.completion_tokens_details?.reasoning_tokens ?? usage?.reasoning_tokens,
+      }
+    : {
+        inputTokens: usage?.input_tokens,
+        outputTokens: usage?.output_tokens,
+        cacheReadTokens: protocol === 'anthropic' ? usage?.cache_read_input_tokens : usage?.input_tokens_details?.cached_tokens,
+        cacheWriteTokens: protocol === 'anthropic' ? usage?.cache_creation_input_tokens : undefined,
+        reasoningTokens: protocol === 'anthropic' ? usage?.output_tokens_details?.thinking_tokens : usage?.output_tokens_details?.reasoning_tokens,
+      };
   return Object.keys(counts).filter(key => Number.isSafeInteger(counts[key]) && counts[key] >= 0);
 }

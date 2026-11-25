@@ -206,6 +206,12 @@ export function estimateMessageTokens(message) {
   } else if (message.providerState?.protocol === 'gemini') {
     const thoughts = (message.providerState.items || []).filter(item => item?.part?.thought === true);
     total += thoughts.reduce((sum, item) => sum + estimateTokens(item.part.text || ''), 0);
+  } else if (message.providerState?.protocol === 'openai-chat-completions') {
+    for (const item of message.providerState.items || []) {
+      for (const key of ['reasoning_text', 'reasoning_content', 'reasoning']) {
+        if (typeof item?.[key] === 'string' && item[key]) total += estimateTokens(item[key]);
+      }
+    }
   } else if (!message.providerState) {
     total += estimateThinkingBlocksTokens(message.thinkingBlocks);
   }

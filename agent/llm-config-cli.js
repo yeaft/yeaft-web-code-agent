@@ -16,7 +16,7 @@ import {
 
 export const DEFAULT_GITHUB_COPILOT_MODEL = 'gpt-5.5';
 
-const VALID_PROTOCOLS = new Set(['anthropic', 'openai-responses', 'gemini']);
+const VALID_PROTOCOLS = new Set(['anthropic', 'openai-responses', 'openai-chat-completions', 'gemini']);
 const VALID_CREDENTIAL_PROVIDERS = new Set(['github-copilot']);
 
 export function getDefaultYeaftConfigPath() {

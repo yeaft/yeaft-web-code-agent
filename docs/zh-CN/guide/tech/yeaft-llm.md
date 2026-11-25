@@ -25,13 +25,15 @@ agent/yeaft/llm/
   router.js               — AdapterRouter：按 model 路由到 provider
   anthropic.js            — Anthropic Messages API 适配器
   openai-responses.js     — OpenAI Responses API 适配器（/v1/responses）
+  openai-chat-completions.js — OpenAI Chat Completions API 适配器（/v1/chat/completions）
+  gemini.js               — Gemini GenerateContent API 适配器
   models-dev.js           — models.dev 注册表（UI 自动补全用）
   credentials/
     index.js              — credential provider registry
     github-copilot.js     — GitHub OAuth → Copilot API token
 ```
 
-> Phase 7（2026-04-27）移除了旧的 ChatCompletionsAdapter。当前支持三个 wire 协议：`anthropic`、`openai-responses`、`gemini`。
+> 当前支持四个 wire 协议：`anthropic`、`openai-responses`、`openai-chat-completions`、`gemini`。
 
 ## 适配器层
 
@@ -78,10 +80,15 @@ export class LLMAdapter {
 - 这些是 Yeaft 对相应 API 暴露的档位，不保证每个上游模型/网关全部接受；不支持的组合仍由上游明确报错，不偷偷改为其他档位。可以在模型对象显式设置 `effortOptions: ["medium", "xhigh"]` 缩小范围，或 `supportsEffort: false` 禁用。旧版 Anthropic 模型只支持手动 thinking 时，显式设置 `thinkingProtocol: "anthropic"`，可配合 `maxBudgetTokens`；不会再从模型名猜测手动预算。Session 显式选择不依赖自动 thinking feature flag；自动场景开关保持不变；旧 `minimal` / `low` 在读取和请求边界归一为 `medium`，`high` 归一为 `xhigh`，不改写历史记录。Work Center 保留 `medium / xhigh` 策略，子 Agent 上限收敛为 `medium`，无法表示时明确失败，不放宽到 `xhigh`。
 
 ### OpenAIResponsesAdapter (`openai-responses.js`)
-- 对 OpenAI Responses API `/v1/responses`（**不是**老的 chat completions）
+- 对 OpenAI Responses API `/v1/responses`
 - 支持 reasoning models（o1 / o3 / o4 / gpt-5）
 - thinking 部分通过 reasoning summary 输出
 - 工具调用走 `tools` + `function_call` 格式
+
+### OpenAIChatCompletionsAdapter (`openai-chat-completions.js`)
+- 对 OpenAI Chat Completions API `/v1/chat/completions`（`protocol: "openai-chat-completions"`）
+- 支持 `max_completion_tokens`、顶层 `reasoning_effort`、`stream_options.include_usage`、`prompt_cache_key`（遇上游拒绝自动单次回退）、函数工具及多模态用户/工具图片
+- 通过受归属保护的 `providerState` 捕获并原样回传 `reasoning_opaque` 与 `reasoning_text` / `reasoning_content` / `reasoning`，保证 Copilot Proxy Gemini 及兼容网关在多轮工具循环中的思考签名与缓存连续性
 
 ## AdapterRouter（`router.js`）
 

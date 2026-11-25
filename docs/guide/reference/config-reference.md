@@ -36,13 +36,13 @@ This chapter is the **field-by-field** reference for an Agent instance's Yeaft `
 | `baseUrl` | `string` | ✓ | API root URL (no `/v1/...` suffix) |
 | `apiKey` | `string` | △ | Static key (mutually exclusive with `credentialProvider`) |
 | `credentialProvider` | `string` | △ | Dynamic credential name (currently only `github-copilot`) |
-| `protocol` | `'anthropic' \| 'openai-responses' \| 'gemini'` | — | Provider-level wire protocol; per-model overrides win |
+| `protocol` | `'anthropic' \| 'openai-responses' \| 'openai-chat-completions' \| 'gemini'` | — | Provider-level wire protocol; per-model overrides win |
 | `models` | `(string \| ModelEntry)[]` | ✓ | Models served by this provider |
 | `credentialScopeId` | `string` | — | Stable, non-secret account scope for native reasoning replay and caching. Required for dynamic credentials/custom endpoints; official static-key routes default to a key fingerprint. Change when switching accounts; preserve when rotating tokens |
 | `capabilities` | `object` | — | Boolean `nativeReasoningState`, `promptCaching`, `parallelToolCalls`, `eagerInputStreaming`; `translation: true` disables these capabilities. Model overrides take precedence |
 | `streamIdleTimeoutMs` | `number` | — | Provider stream read silence budget (0–600000ms); absolute override of global policy, with model overrides taking precedence. Managed Copilot also preserves timeout and capability overrides when saving |
 
-> The chat-completions protocol was removed in Phase 7 (v0.1.590). 有效协议为 `anthropic`、`openai-responses`、`gemini`。
+> Supported protocols: `anthropic`, `openai-responses`, `openai-chat-completions`, and `gemini`. Legacy `"chat-completions"` / `"openai"` aliases normalize to `openai-chat-completions`.
 
 ### Model Entry (string shorthand also valid)
 
@@ -51,7 +51,7 @@ A model entry can be either the bare id string (`"gpt-5"`) or an object:
 | Field | Type | Required | Description |
 | --- | --- | :---: | --- |
 | `id` | `string` | ✓ | Model id the vendor recognizes |
-| `protocol` | `'anthropic' \| 'openai-responses' \| 'gemini'` | — | Overrides the provider protocol |
+| `protocol` | `'anthropic' \| 'openai-responses' \| 'openai-chat-completions' \| 'gemini'` | — | Overrides the provider protocol |
 | `contextWindow` | `number` | — | Overrides the registry default for this model |
 | `maxOutput` | `number` | — | Overrides the registry default output cap |
 | `capabilities` | `object` | — | Per-field overrides of provider protocol capabilities |

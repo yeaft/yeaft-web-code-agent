@@ -90,7 +90,7 @@ That's enough — the engine will run.
 | `baseUrl` | `string` | ✓ | API root URL (no `/v1/messages` path suffix) |
 | `apiKey` | `string` | △ | static API key (or use `credentialProvider`) |
 | `credentialProvider` | `string` | △ | dynamic credential provider name (or use `apiKey`) |
-| `protocol` | `'anthropic' \| 'openai-responses' \| 'gemini'` | — | provider default wire protocol |
+| `protocol` | `'anthropic' \| 'openai-responses' \| 'openai-chat-completions' \| 'gemini'` | — | provider default wire protocol |
 | `models` | `(string \| ModelEntry)[]` | ✓ | supported model list |
 
 ### Model Entry
@@ -107,7 +107,7 @@ Both shapes can be mixed:
 | Model entry field | Type | Required | Description |
 | --- | --- | :---: | --- |
 | `id` | `string` | ✓ | model id the vendor recognizes |
-| `protocol` | `'anthropic' \| 'openai-responses' \| 'gemini'` | — | overrides provider protocol |
+| `protocol` | `'anthropic' \| 'openai-responses' \| 'openai-chat-completions' \| 'gemini'` | — | overrides provider protocol |
 | `contextWindow` | `number` | — | overrides `models.js` default |
 | `maxOutput` | `number` | — | overrides default output cap |
 

@@ -98,4 +98,45 @@ describe('native Gemini settings', () => {
     expect(wrapper.vm.localDecisionModel).toBeNull();
   });
 
+  it('replaces OpenAI Compatible with Chat Completions and persists protocol openai-chat-completions explicitly', async () => {
+    const store = await setup();
+    store.llmConfig['agent-a'] = config('chat-comp-read', {
+      providers: [
+        { name: 'mixed-auto', baseUrl: 'https://mixed.test/v1', apiKey: 'k1', models: ['gpt-5'] },
+        { name: 'legacy-openai', baseUrl: 'https://legacy.test/v1', apiKey: 'k2', protocol: 'openai', models: ['gemini-4-neon'] },
+      ],
+      primaryModel: 'legacy-openai/gemini-4-neon',
+    });
+    await Vue.nextTick();
+
+    // Legacy 'openai' normalizes to 'openai-chat-completions'; unset stays '' (Auto)
+    expect(wrapper.vm.editableProviders[0].protocol).toBe('');
+    expect(wrapper.vm.editableProviders[1].protocol).toBe('openai-chat-completions');
+
+    // Add Provider defaults to Chat Completions and never shows "OpenAI Compatible"
+    wrapper.vm.addProvider();
+    await Vue.nextTick();
+    const newProvider = wrapper.vm.editableProviders[2];
+    expect(newProvider.protocol).toBe('openai-chat-completions');
+    expect(wrapper.text()).not.toContain('OpenAI Compatible');
+    expect(wrapper.text()).toContain('Chat Completions');
+
+    newProvider.name = 'copilot-chat';
+    newProvider.baseUrl = 'https://copilot.test/v1';
+    newProvider.models = ['gemini-4-neon'];
+    wrapper.vm.markDirty();
+    await Vue.nextTick();
+    await saveButton().trigger('click');
+
+    const saved = pendingRequest(store).config.providers;
+    expect(saved[0].protocol).toBeUndefined();
+    expect(saved[1].protocol).toBe('openai-chat-completions');
+    expect(saved[2]).toMatchObject({
+      name: 'copilot-chat',
+      baseUrl: 'https://copilot.test/v1',
+      protocol: 'openai-chat-completions',
+      models: ['gemini-4-neon'],
+    });
+  });
+
 });

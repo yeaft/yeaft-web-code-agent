@@ -30,7 +30,7 @@
  */
 
 import { EFFORT_LEVELS } from '../effort.js';
-import { inferProtocolFromModelId } from '../llm/router.js';
+import { inferProtocolFromModelId, normalizeProtocolName } from '../llm/router.js';
 import {
   getModelEffortOptions,
   getThinkingCapability,
@@ -75,10 +75,10 @@ function wireProtocolFromEffortProtocol(effortProtocol) {
 }
 
 function protocolForEntry(modelRef, entry, config) {
-  return entry?.protocol
+  return normalizeProtocolName(entry?.protocol)
     || wireProtocolFromEffortProtocol(entry?.effortProtocol || entry?.thinkingProtocol)
     || inferProtocolFromModelId(parseModelRef(modelRef).modelId)
-    || config?.adapter
+    || normalizeProtocolName(config?.adapter)
     || 'openai-responses';
 }
 

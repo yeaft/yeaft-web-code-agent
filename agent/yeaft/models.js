@@ -28,7 +28,7 @@ import { cloneGeminiOptions } from './llm/gemini-options.js';
  * @property {'anthropic' | 'openai' | 'deepseek' | 'google'} provider — Which provider this model belongs to.
  *   These ids are intentionally aligned with the top-level keys in the models.dev
  *   catalog so they can be used as a `providerHint` to {@link lookupModelLimitSync}.
- * @property {'anthropic' | 'openai-responses' | 'gemini'} adapter — Which wire protocol to use
+ * @property {'anthropic' | 'openai-responses' | 'openai-chat-completions' | 'gemini'} adapter — Which wire protocol to use
  * @property {string} baseUrl — Official API endpoint base URL
  * @property {string} displayName — Human-readable model name
  */
@@ -468,6 +468,27 @@ export function mapEffortToOpenAIReasoning(effort) {
   }
 }
 
+/**
+ * Map a Yeaft effort level to the OpenAI Chat Completions `reasoning_effort` field.
+ * Accepts both Yeaft canonical tiers and native OpenAI/Gemini chat-completions tiers.
+ *
+ * @param {string|null|undefined} effort
+ * @returns {'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra' | null}
+ */
+export function mapEffortToChatCompletionsReasoning(effort) {
+  if (!effort) return null;
+  switch (effort) {
+    case 'minimal': return 'minimal';
+    case 'low': return 'low';
+    case 'medium': return 'medium';
+    case 'high': return 'high';
+    case 'xhigh': return 'xhigh';
+    case 'max': return 'max';
+    case 'ultra': return 'ultra';
+    default: return null;
+  }
+}
+
 // Effort is an API contract, not a model-name allowlist. Compatible gateways
 // can expose new IDs/aliases without requiring a Yeaft release.
 export const OPENAI_REASONING_EFFORT_OPTIONS = Object.freeze(['medium', 'xhigh', 'max', 'ultra']);
@@ -530,11 +551,12 @@ export function getThinkingCapability(model, context = {}) {
       || (profile.defaultEffort && resolveGeminiEffort(model, profile.defaultEffort, defaults))
       || ['xhigh', 'medium', 'high'].find(value => defaults.includes(value)) || defaults[0] };
   }
-  if (protocol !== 'anthropic' && protocol !== 'openai-responses') return disabled;
+  if (protocol !== 'anthropic' && protocol !== 'openai-responses' && protocol !== 'openai-chat-completions') return disabled;
+  const isOpenAI = protocol === 'openai-responses' || protocol === 'openai-chat-completions';
   const manual = protocol === 'anthropic' && context.thinkingProtocol === 'anthropic';
-  const thinkingProtocol = protocol === 'openai-responses' ? 'openai-reasoning'
+  const thinkingProtocol = isOpenAI ? 'openai-reasoning'
     : manual ? 'anthropic' : 'anthropic-adaptive';
-  const apiOptions = protocol === 'openai-responses' ? OPENAI_REASONING_EFFORT_OPTIONS
+  const apiOptions = isOpenAI ? OPENAI_REASONING_EFFORT_OPTIONS
     : manual ? ANTHROPIC_MANUAL_EFFORT_OPTIONS : ANTHROPIC_ADAPTIVE_EFFORT_OPTIONS;
   const overrides = normalizeEffortOptions(context.effortOptions);
   const effortOptions = overrides ? apiOptions.filter(value => overrides.includes(value)) : [...apiOptions];

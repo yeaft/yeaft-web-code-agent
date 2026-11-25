@@ -19,6 +19,7 @@ export const CORE_TEST_FILES = Object.freeze([
   "test/agent/yeaft/gemini-endpoint.test.js",
   "test/agent/yeaft/gemini-continuity.test.js",
   "test/agent/yeaft/llm-auth-headers.test.js",
+  "test/agent/yeaft/openai-chat-completions.test.js",
   "test/agent/yeaft/mcp-stdio.test.js",
   "test/agent/yeaft/person-bridge.test.js",
   "test/agent/yeaft/person/autonomy.test.js",

@@ -24,7 +24,7 @@ import { homedir } from 'os';
 import { join } from 'path';
 import { DEFAULT_YEAFT_DIR } from './init.js';
 import { geminiEffortCatalog, getModelEffortOptions, getThinkingCapability, modelSupportsEffort, resolveModel, parseModelRef, normalizeProviderModels, resolveContextWindow, resolveMaxOutputTokens, DEFAULT_CONTEXT_WINDOW } from './models.js';
-import { inferProtocolFromModelId } from './llm/router.js';
+import { inferProtocolFromModelId, normalizeProtocolName } from './llm/router.js';
 import { withGeminiDefault } from './llm/gemini-endpoint.js';
 import { collectAmbiguousModelRefs, normalizeKnownProviderForRuntime } from './llm/known-providers.js';
 import { createDenyAllPluginConfig, normalizePluginConfig } from './plugins.js';
@@ -623,7 +623,7 @@ export function loadConfig(overrides = {}) {
           };
           if (m.contextWindow !== undefined) entry.contextWindow = m.contextWindow;
           if (m.maxOutput !== undefined) entry.maxOutput = m.maxOutput;
-          const protocol = m.protocol || p.protocol || inferProtocolFromModelId(m.id) || 'openai-responses';
+          const protocol = normalizeProtocolName(m.protocol) || normalizeProtocolName(p.protocol) || inferProtocolFromModelId(m.id) || 'openai-responses';
           entry.protocol = protocol;
           if (m.supportsEffort === false || m.thinkingProtocol === 'none') entry.supportsEffort = false;
           if (m.maxBudgetTokens !== undefined) entry.maxBudgetTokens = m.maxBudgetTokens;

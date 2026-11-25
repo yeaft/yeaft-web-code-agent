@@ -25,6 +25,7 @@ agent/yeaft/llm/
   router.js               — AdapterRouter: route by model to provider
   anthropic.js            — Anthropic Messages API adapter
   openai-responses.js     — OpenAI Responses API adapter (/v1/responses)
+  openai-chat-completions.js — OpenAI Chat Completions API adapter (/v1/chat/completions)
   responses-tool-schema.js — Responses strict schema and argument conversion
   gemini.js               — Gemini GenerateContent API adapter
   models-dev.js           — models.dev registry (UI autocomplete)
@@ -33,7 +34,7 @@ agent/yeaft/llm/
     github-copilot.js     — GitHub OAuth → Copilot API token
 ```
 
-> Phase 7 (2026-04-27) removed the old ChatCompletionsAdapter. 当前支持三个 wire 协议：`anthropic`、`openai-responses`、`gemini`。
+> Supported wire protocols: `anthropic`, `openai-responses`, `openai-chat-completions`, and `gemini`.
 
 ## Adapter Layer
 
@@ -78,10 +79,15 @@ export class LLMAdapter {
 - Legacy `minimal` / `low` selections normalize to `medium`, and `high` to `xhigh`, at read and request boundaries without rewriting history. Lightweight automatic scenarios use `medium`; Work Center retains its `medium / xhigh` policy subset. Child effort is capped at `medium`, the highest retained tier below the previous ceiling, rather than being raised to `xhigh`; an unrepresentable safe tier fails explicitly before dispatch.
 
 ### OpenAIResponsesAdapter (`openai-responses.js`)
-- Targets OpenAI Responses API `/v1/responses` (**not** legacy chat completions)
+- Targets OpenAI Responses API `/v1/responses`
 - Supports reasoning models (o1 / o3 / o4 / gpt-5)
 - Thinking surfaces via reasoning summary
 - Tool calls use `tools` + `function_call` format
+
+### OpenAIChatCompletionsAdapter (`openai-chat-completions.js`)
+- Targets OpenAI Chat Completions API `/v1/chat/completions` (`protocol: "openai-chat-completions"`)
+- Supports `max_completion_tokens`, top-level `reasoning_effort`, `stream_options.include_usage`, `prompt_cache_key` (with automatic single retry fallback if rejected), function tools, and multimodal user/tool images
+- Captures and replays native assistant reasoning state (`reasoning_opaque`, `reasoning_text`, `reasoning_content`, `reasoning`) in fenced `providerState` so Copilot Proxy Gemini and OpenAI-compatible reasoning gateways preserve multi-turn tool-loop signatures and prompt caching
 
 ### 工具 schema 按协议转换
 

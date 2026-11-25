@@ -243,8 +243,8 @@ export default {
         name: this.selectedProviderId,
         baseUrl: this.selectedProviderId === 'google' ? GEMINI_BASE_URL : entry.api || '',
         // Google uses a single native API. Other catalogs may be mixed; an empty
-        // protocol is intentional: LlmTab.saveConfig drops empty/`'openai'`
-        // protocol values so the per-model entries are the sole source of truth.
+        // protocol is intentional: LlmTab.saveConfig omits empty protocol values
+        // so per-model entries and router heuristics stay the source of truth.
         // Do NOT default this back to a real protocol or you'll break mixed
         // providers (the provider-level value would win over heuristic).
         protocol: this.selectedProviderId === 'google' ? 'gemini' : '',

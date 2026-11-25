@@ -36,13 +36,13 @@
 | `baseUrl` | `string` | ✓ | API 根 URL（不带 `/v1/...` 尾） |
 | `apiKey` | `string` | △ | 静态 key（和 `credentialProvider` 二选一） |
 | `credentialProvider` | `string` | △ | 动态凭证名（当前仅支持 `github-copilot`） |
-| `protocol` | `'anthropic' \| 'openai-responses' \| 'gemini'` | — | provider 级 wire 协议；per-model 覆盖优先 |
+| `protocol` | `'anthropic' \| 'openai-responses' \| 'openai-chat-completions' \| 'gemini'` | — | provider 级 wire 协议；per-model 覆盖优先 |
 | `models` | `(string \| ModelEntry)[]` | ✓ | 该 provider 服务的 model |
 | `credentialScopeId` | `string` | — | 原生 reasoning 回传与缓存的稳定、非敏感账号归属；动态凭据/自定义 endpoint 必填，官方静态 key 路径默认使用 key 指纹。换账号时更换；仅轮换 token 时保持 |
 | `capabilities` | `object` | — | `nativeReasoningState`、`promptCaching`、`parallelToolCalls`、`eagerInputStreaming` 布尔开关；`translation: true` 强制关闭这些能力。模型级覆盖优先 |
 | `streamIdleTimeoutMs` | `number` | — | provider 的流读取静默预算（0–600000ms）；绝对覆盖全局策略，模型级覆盖优先。Managed Copilot 保存时也保留 timeout 和 capability 覆盖 |
 
-> chat-completions 协议已在 Phase 7（v0.1.590）移除。当前合法值只有 `anthropic` 和 `openai-responses`。
+> 当前支持的协议：`anthropic`、`openai-responses`、`openai-chat-completions`、`gemini`。旧别名 `chat-completions` / `openai` 会自动规范化为 `openai-chat-completions`。
 
 ### Model entry（字符串简写也可）
 
@@ -51,7 +51,7 @@ model 项可以是裸字符串（`"gpt-5"`），也可以是对象：
 | 字段 | 类型 | 必填 | 说明 |
 | --- | --- | :---: | --- |
 | `id` | `string` | ✓ | vendor 端识别的 model id |
-| `protocol` | `'anthropic' \| 'openai-responses' \| 'gemini'` | — | 覆盖 provider 协议 |
+| `protocol` | `'anthropic' \| 'openai-responses' \| 'openai-chat-completions' \| 'gemini'` | — | 覆盖 provider 协议 |
 | `contextWindow` | `number` | — | 覆盖该 model 的注册表默认 |
 | `maxOutput` | `number` | — | 覆盖该 model 的注册表输出默认 |
 | `capabilities` | `object` | — | 逐字段覆盖 provider 的协议能力开关 |
