@@ -3,7 +3,8 @@ import { makeModelImagePreview, MODEL_IMAGE_TARGET_BASE64_CHARS } from './model-
 import { ProviderContextBudgetError } from './llm/provider-state.js';
 
 const RECENT_TOOL_BATCHES = 3;
-const TOOL_IMAGE_COUNT = 12;
+export const MAX_REQUEST_IMAGES = 5;
+const TOOL_IMAGE_COUNT = MAX_REQUEST_IMAGES;
 const TOOL_IMAGE_BASE64_CHARS = 3 * 1024 * 1024;
 // If previewing fails, a single recent original can still be useful. Never
 // combine this exception with other tool images or bypass the route fitter.
@@ -12,7 +13,7 @@ const MAX_NEW_PREVIEWS_PER_REQUEST = 4;
 const imagesIn = message => Array.isArray(message.content) ? message.content : [];
 const inlineImage = part => part?.type === 'image' && part.source?.type === 'base64'
   && typeof part.source.data === 'string' && part.source.data.length > 0;
-const fits = (count, chars, next) => count < TOOL_IMAGE_COUNT
+const fits = (count, chars, next, limit = TOOL_IMAGE_COUNT) => count < limit
   && (chars + next <= TOOL_IMAGE_BASE64_CHARS || (count === 0 && next <= SINGLE_IMAGE_BASE64_CHARS));
 
 export class ToolImagePrefixBudgetError extends ProviderContextBudgetError {

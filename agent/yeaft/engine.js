@@ -49,10 +49,10 @@ import { parseSeqFromId } from './conversation/persist.js';
 import { readSessionTurnDeletions, sessionDeletionGeneration, sessionDeletionProjection } from './conversation/turn-deletion-journal.js';
 import { findExistingSessionYeaftDir } from './sessions/session-crud.js';
 import { referencePersistedAttachmentHistory } from './attachments.js';
-import { inlineMediaBytes, omitHistoricalImages, trimWireMedia, wireToolImageEvidence } from './wire-media.js';
+import { capRequestImages, inlineMediaBytes, omitHistoricalImages, trimWireMedia, wireToolImageEvidence } from './wire-media.js';
 import { fitAnthropicImages, LLMImageLimitError } from './llm/anthropic-images.js';
 import { makeImagePreview } from './image-preview.js';
-import { createActiveToolImageProjector, ToolImagePrefixBudgetError } from './active-tool-images.js';
+import { createActiveToolImageProjector, MAX_REQUEST_IMAGES, ToolImagePrefixBudgetError } from './active-tool-images.js';
 import { isVpForeign, readContent as readScopeContent } from './memory/store.js';
 import { ActiveMemorySet } from './memory/ams.js';
 import { cleanMemoryPromptText } from './memory/prompt-cleanup.js';
@@ -62,7 +62,7 @@ import { perfNowMs, recordAgentPerfTrace } from './perf-trace.js';
 // pass a real threadId per (sessionId, vpId, threadId) engine instance.
 const MAIN_THREAD_ID = 'main';
 
-import { pickEffort, parseEffortPrefix, snapshotEffortDecision } from './effort.js';
+import { pickEffort, parseEffortPrefix, snapshotEffortDecision, stepDownRetryEffort } from './effort.js';
 import { bindProviderState, ProviderStateError, ProviderContextBudgetError } from './llm/provider-state.js';
 import {
   POST_COMPACT_CONTEXT_RATIO,
@@ -73,7 +73,7 @@ import {
   savePostCompact,
 } from './post-compact.js';
 import { streamContextRollover, contextRolloverLocalHandoff, contextRolloverReport, contextRolloverSeed } from './context-rollover.js';
-import { getModelInfo, normalizeEffort, parseModelRef, resolveContextWindow, resolveMaxOutputTokens } from './models.js';
+import { getModelInfo, getThinkingCapability, normalizeEffort, parseModelRef, resolveContextWindow, resolveMaxOutputTokens } from './models.js';
 import { attachRouterPlan, extractPriorPlan, stripMetaForWire } from './router/continuity.js';
 import { resolveThinking } from './router/thinking.js';
 import { findEffortModelEntry, usesNativeGeminiLevels } from './sessions/session-config.js';
@@ -2846,6 +2846,11 @@ export class Engine {
     let consecutiveRetryableErrors = 0;
     let consecutiveForbiddenErrors = 0;
     let retryDeadline = null;
+    // Temporary per-step timeout recovery state. Cleared as soon as a provider
+    // request succeeds so the next loop returns to the configured effort and
+    // ordinary tool-result compaction threshold.
+    let retryEffortOverride = null;
+    let tightenOlderToolResultsOnRetry = false;
     let controlReentry = false;
     const getHeadersTimeoutMs = () => {
       if (retryDeadline === null) {
@@ -3170,6 +3175,13 @@ export class Engine {
             resolvedEffort = resolved.value;
           }
         }
+        // Apply a temporary one-step effort reduction on retry after a timeout.
+        // Never persisted; cleared on the next successful loop so effort climbs
+        // back automatically.
+        if (retryEffortOverride) {
+          resolvedEffort = retryEffortOverride;
+          effortSource = 'user';
+        }
 
         // Phase 8 PR-E: archive bulky tool results before they go on the
         // wire. archiveToolResults walks the messages array and replaces
@@ -3230,8 +3242,9 @@ export class Engine {
         });
 
         if (useSessionCompactionPolicy && !pendingServerOperation) {
+          const frozenLength = signedAnthropicPrefix ? signedAnthropicPrefix.messages.length + 1 : 0;
           const images = await projectToolImages(wireMessages, {
-            frozenLength: signedAnthropicPrefix ? signedAnthropicPrefix.messages.length + 1 : 0,
+            frozenLength,
             canRollover: Boolean(signedAnthropicPrefix && successfulRequestsSinceRollover > 0
               && !prepareProviderRequest && !executionPolicy?.finalize && !progressReporting),
             signal,
@@ -3240,6 +3253,24 @@ export class Engine {
           if (images.duplicateImages || images.staleImages || images.previewImages) {
             this.#trace.log?.('request_tool_image_projection', { sessionId: runtimeSessionId, turnId: queryTurnId,
               duplicateImages: images.duplicateImages, staleImages: images.staleImages, previewImages: images.previewImages });
+          }
+          // Bound total images per provider request across tool results and
+          // user uploads (newest images win; older ones become reopenable text
+          // references). When a route supplies an explicit image policy (e.g.
+          // Anthropic's many-image fitter), leave its higher count/dimension
+          // contract intact while tool-image projection already caps tool replay
+          // to MAX_REQUEST_IMAGES.
+          if (!requestAdapter.getImageLimits?.(currentModel)) {
+            const capped = capRequestImages(wireMessages, MAX_REQUEST_IMAGES, {
+              frozenLength,
+              pathForImage: projectToolImages.pathOf,
+            });
+            wireMessages = capped.messages;
+            if (capped.omittedImages > 0) {
+              this.#trace.log?.('request_image_cap', { sessionId: runtimeSessionId, turnId: queryTurnId,
+                model: currentModel, maxImages: MAX_REQUEST_IMAGES, keptImages: capped.totalImages,
+                omittedImages: capped.omittedImages });
+            }
           }
         }
 
@@ -3337,7 +3368,9 @@ export class Engine {
           outputReserve: requestMaxOutputTokens,
           historyMessageCount,
           historyTokenBudget: historyBudget,
-          toolResultCompactionRatio: useSessionCompactionPolicy && !pendingServerOperation ? contextRolloverRatio : undefined,
+          toolResultCompactionRatio: tightenOlderToolResultsOnRetry && !signedAnthropicPrefix && !pendingServerOperation
+            ? 0
+            : (useSessionCompactionPolicy && !pendingServerOperation ? contextRolloverRatio : undefined),
           repeatedToolResultRefs,
           language: requestConfig.language,
         };
@@ -3868,6 +3901,8 @@ export class Engine {
         consecutiveRetryableErrors = 0;
         consecutiveForbiddenErrors = 0;
         retryDeadline = null;
+        retryEffortOverride = null;
+        tightenOlderToolResultsOnRetry = false;
         controlReentry = false;
       } catch (err) {
         const latencyMs = Date.now() - startTime;
@@ -4364,6 +4399,38 @@ export class Engine {
                 };
               }
             }
+            let retryEffortFrom = null;
+            let retryEffortTo = null;
+            if (err instanceof LLMHeadersTimeoutError || err instanceof LLMStreamIdleTimeoutError) {
+              // Tighten older tool results on the provider copy (the latest
+              // batch stays lossless) and step effort down one supported tier
+              // for this retry only; cleared on the next successful response.
+              if (!signedAnthropicPrefix) tightenOlderToolResultsOnRetry = true;
+              const protocol = effortModel?.protocol || effortModel?.effortProtocol
+                || routedProvider?.protocol || requestConfig.adapter;
+              const attemptedEffort = requestEffortDecision.effective || retryEffortOverride
+                || normalizeEffort(turnConfig?.effort, preserveNativeEffort)
+                || normalizeEffort(userEffort, preserveNativeEffort)
+                || normalizeEffort(requestConfig.modelEffort, preserveNativeEffort)
+                || (scenario === 'chat' && effortModel?.effortProtocol === 'gemini' ? effortModel.defaultEffort : null)
+                || (protocol === 'gemini' && scenario === 'chat' ? getThinkingCapability(currentModel, { protocol }).defaultEffort : null);
+              const steppedDown = stepDownRetryEffort(attemptedEffort, {
+                model: currentModel,
+                protocol,
+                effortContext: {
+                  protocol,
+                  supportsEffort: effortModel?.supportsEffort,
+                  effortOptions: effortModel?.effortOptions,
+                  thinkingProtocol: effortModel?.effortProtocol === 'gemini' ? 'gemini' : effortModel?.thinkingProtocol,
+                  maxBudgetTokens: effortModel?.maxBudgetTokens,
+                },
+              });
+              if (steppedDown && (!signedAnthropicPrefix || protocol !== 'anthropic')) {
+                retryEffortFrom = attemptedEffort;
+                retryEffortTo = steppedDown;
+                retryEffortOverride = steppedDown;
+              }
+            }
             yield {
               type: 'llm_retry',
               attempt: consecutiveRetryableErrors,
@@ -4374,6 +4441,7 @@ export class Engine {
               errorName: err.name,
               statusCode: err.statusCode ?? null,
               message: String(err.retryNotice || err.message || '').slice(0, 300),
+              ...(retryEffortTo ? { effortFrom: retryEffortFrom, effortTo: retryEffortTo } : {}),
             };
             const slept = await sleepWithAbort(delayMs, signal);
             if (!slept || signal?.aborted) {
@@ -4406,6 +4474,8 @@ export class Engine {
           consecutiveRetryableErrors = 0;
           consecutiveForbiddenErrors = 0;
           retryDeadline = null;
+          retryEffortOverride = null;
+          tightenOlderToolResultsOnRetry = false;
           yield { type: 'turn_end', turnNumber, stopReason: 'fallback_retry', threadId };
           continue;
         }

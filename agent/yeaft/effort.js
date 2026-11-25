@@ -123,6 +123,30 @@ export const EFFORT_LEVELS = Object.freeze(['minimal', 'low', 'medium', 'high', 
 const effortRank = value => EFFORT_LEVELS.indexOf(normalizeEffort(value, true));
 const atMost = (value, ceiling) => effortRank(value) >= 0 && effortRank(value) <= effortRank(ceiling);
 
+/**
+ * Step a model's effort down one supported tier for a single timeout retry.
+ * Never steps below `medium` or mutates persisted Session/Agent effort.
+ *
+ * @param {string|null|undefined} effort
+ * @param {{ model: string, protocol?: string, effortContext?: object }} context
+ * @returns {string|null} Next lower supported effort, or null when already at the floor/unsupported.
+ */
+export function stepDownRetryEffort(effort, { model, protocol, effortContext = {} } = {}) {
+  const ctx = capabilityContext(protocol, effortContext);
+  const capability = getThinkingCapability(model, ctx);
+  if (!capability.supportsThinking || capability.thinkingProtocol === 'none') return null;
+  const native = capability.thinkingProtocol === 'gemini' && capability.maxBudgetTokens === null;
+  const current = normalizeEffort(effort, native);
+  if (!current) return null;
+  const currentRank = effortRank(current);
+  const floorRank = effortRank('medium');
+  if (currentRank <= floorRank) return null;
+  const options = capability.effortOptions
+    .filter(value => effortRank(value) >= floorRank && effortRank(value) < currentRank)
+    .sort((left, right) => effortRank(left) - effortRank(right));
+  return options.at(-1) || null;
+}
+
 /** Copy only durable decision fields; never retain a mutable request/config object. */
 export function snapshotEffortDecision(decision = null) {
   // Older providers used low/high as aliases. Only a native thinking-level

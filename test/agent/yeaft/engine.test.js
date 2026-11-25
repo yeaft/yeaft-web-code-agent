@@ -626,7 +626,7 @@ describe('Engine', () => {
           const images = body.messages.flatMap(row => imagesIn(row.content));
           requests.push({ images, seed: body.messages.length === 1 ? JSON.stringify(body.messages[0].content) : null });
           // Duplicate responses or a late rollover would grow the wire tape.
-          expect(images.length).toBeLessThanOrEqual(12); // the last segment's evidence counts too
+          expect(images.length).toBeLessThanOrEqual(5); // the last segment's evidence counts too
           expect(new Set(images).size).toBe(images.length);
           const n = step++;
           return response(`long-image-${n}`, n < 31 ? 'ViewImage' : undefined,
@@ -645,12 +645,12 @@ describe('Engine', () => {
         for await (const event of engine.query({ prompt: 'Inspect thirty-one screenshots', sessionId: 'long-image-loop' })) events.push(event);
         expect(events.filter(event => event.type === 'error')).toEqual([]);
         expect(events.filter(event => event.type === 'turn_end' && event.terminal)).toEqual([expect.objectContaining({ stopReason: 'end_turn' })]);
-        expect(summaries).toBe(2);
+        expect(summaries).toBe(5);
         expect(requests).toHaveLength(32);
         expect(requests[2].images).toEqual([imageFor(0)]);
         expect(requests.at(-1).images).toContain(imageFor(30));
         expect(requests.at(-1).images).not.toContain(imageFor(0));
-        expect(requests.filter(r => r.seed?.includes('Image evidence from completed tool result'))).toHaveLength(2);
+        expect(requests.filter(r => r.seed?.includes('Image evidence from completed tool result'))).toHaveLength(5);
         expect(toolRuns).toEqual(Array.from({ length: 31 }, (_, n) => n));
       } finally {
         globalThis.fetch = originalFetch;
@@ -1187,6 +1187,148 @@ RELEASE_BODY`;
         expect(events.find(e => e.type === 'turn_end' && e.terminal)).toMatchObject({ type: 'turn_end', terminal: true, stopReason: 'error' });
       } finally {
         vi.useRealTimers();
+        vi.unstubAllGlobals();
+      }
+    });
+
+    it('temporarily steps down effort and tightens older tool results on timeout retry, then restores effort on the next loop', async () => {
+      const neonGateway = () => new AdapterRouter({ providers: [{ name: 'gateway', protocol: 'gemini',
+        baseUrl: 'https://gemini-gateway.invalid/v1beta', apiKey: 'fixture-key', models: ['gemini-4-neon'] }] });
+      const olderDetail = 'older-detail-'.repeat(400);
+      const latestDetail = 'latest-detail-'.repeat(20);
+      const bodies = [];
+      let callCount = 0;
+      const fetch = vi.fn(async (_url, init) => {
+        bodies.push(JSON.parse(init.body));
+        callCount++;
+        if (callCount === 1) return geminiResult([{ functionCall: { id: 'old-1', name: 'ReadOld', args: {} } }]);
+        if (callCount === 2) return geminiResult([{ functionCall: { id: 'new-1', name: 'ReadNew', args: {} } }]);
+        // Loop 3 attempt 1 times out with gateway 504 -> retry should step xhigh -> high & compact old-1 while keeping new-1 intact.
+        if (callCount === 3) return new Response(JSON.stringify({ error: { code: 'upstream_headers_timeout' } }), { status: 504 });
+        // Loop 3 retry succeeds with another tool call -> loop 4 must restore xhigh.
+        if (callCount === 4) return geminiResult([{ functionCall: { id: 'final-1', name: 'ReadNew', args: {} } }]);
+        return geminiResult([{ text: 'Done after stepping back up.' }]);
+      });
+      vi.stubGlobal('fetch', fetch);
+      try {
+        const engine = new Engine({ adapter: neonGateway(), trace,
+          config: { model: 'gateway/gemini-4-neon', modelEffort: 'xhigh', maxOutputTokens: 1024, projectDocMaxBytes: 0,
+            llmRetry: { maxRetries: 3, baseDelayMs: 0, maxDelayMs: 0, jitterRatio: 0 } } });
+        engine.registerTool({ name: 'ReadOld', description: 'Return large older output', parameters: { type: 'object' },
+          execute: async () => olderDetail });
+        engine.registerTool({ name: 'ReadNew', description: 'Return recent output', parameters: { type: 'object' },
+          execute: async () => latestDetail });
+        const events = [];
+        for await (const event of engine.query({ prompt: 'Inspect and finish.' })) events.push(event);
+
+        expect(events.find(e => e.type === 'turn_end' && e.terminal)).toMatchObject({ stopReason: 'end_turn', terminal: true });
+        expect(bodies).toHaveLength(5);
+        // Loop 1 & 2 & Loop 3 attempt 1 use xhigh.
+        expect(bodies[0].generationConfig.thinkingConfig.thinkingLevel).toBe('XHIGH');
+        expect(bodies[2].generationConfig.thinkingConfig.thinkingLevel).toBe('XHIGH');
+        // Loop 3 retry (index 3) steps down one tier to HIGH and compacts older tool output while preserving latest.
+        expect(bodies[3].generationConfig.thinkingConfig.thinkingLevel).toBe('HIGH');
+        const retryJson = JSON.stringify(bodies[3].contents);
+        expect(retryJson).toContain('tool result compacted for context budget');
+        expect(retryJson).toContain(latestDetail);
+        expect(retryJson.length).toBeLessThan(JSON.stringify(bodies[2].contents).length);
+        // Loop 4 (index 4) automatically climbs back to XHIGH and does not keep forced compaction on.
+        expect(bodies[4].generationConfig.thinkingConfig.thinkingLevel).toBe('XHIGH');
+        expect(JSON.stringify(bodies[4].contents)).toContain(olderDetail);
+        expect(events.find(e => e.type === 'llm_retry')).toMatchObject({
+          attempt: 1, reason: 'upstream_headers_timeout', effortFrom: 'xhigh', effortTo: 'high',
+        });
+      } finally {
+        vi.unstubAllGlobals();
+      }
+    });
+
+    it('steps effort down repeatedly to medium floor on consecutive timeouts without going to low, and never steps below medium', async () => {
+      const neonGateway = () => new AdapterRouter({ providers: [{ name: 'gateway', protocol: 'gemini',
+        baseUrl: 'https://gemini-gateway.invalid/v1beta', apiKey: 'fixture-key', models: ['gemini-4-neon'] }] });
+      const bodies = [];
+      let callCount = 0;
+      const fetch = vi.fn(async (_url, init) => {
+        bodies.push(JSON.parse(init.body));
+        callCount++;
+        if (callCount <= 3) return new Response(JSON.stringify({ error: { code: 'upstream_headers_timeout' } }), { status: 504 });
+        return geminiResult([{ text: 'Recovered at medium.' }]);
+      });
+      vi.stubGlobal('fetch', fetch);
+      try {
+        const engine = new Engine({ adapter: neonGateway(), trace,
+          config: { model: 'gateway/gemini-4-neon', modelEffort: 'xhigh', maxOutputTokens: 1024, projectDocMaxBytes: 0,
+            llmRetry: { maxRetries: 3, baseDelayMs: 0, maxDelayMs: 0, jitterRatio: 0 } } });
+        const events = [];
+        for await (const event of engine.query({ prompt: 'Handle repeated timeouts.' })) events.push(event);
+
+        expect(events.find(e => e.type === 'turn_end' && e.terminal)).toMatchObject({ stopReason: 'end_turn', terminal: true });
+        expect(bodies.map(b => b.generationConfig.thinkingConfig.thinkingLevel)).toEqual(['XHIGH', 'HIGH', 'MEDIUM', 'MEDIUM']);
+        const retries = events.filter(e => e.type === 'llm_retry');
+        expect(retries).toHaveLength(3);
+        expect(retries[0]).toMatchObject({ attempt: 1, effortFrom: 'xhigh', effortTo: 'high' });
+        expect(retries[1]).toMatchObject({ attempt: 2, effortFrom: 'high', effortTo: 'medium' });
+        expect(retries[2].effortTo).toBeUndefined();
+      } finally {
+        vi.unstubAllGlobals();
+      }
+    });
+
+    it('caps total images per Gemini request to the newest 5 across uploads and tool results without losing older paths', async () => {
+      const makeGif = index => {
+        const bytes = Buffer.alloc(24);
+        bytes.write('GIF89a'); bytes.writeUInt16LE(120, 6); bytes.writeUInt16LE(80, 8);
+        bytes.writeUInt32LE(index, 12);
+        return bytes.toString('base64');
+      };
+      const uploads = Array.from({ length: 4 }, (_, i) => ({
+        type: 'image', source: { type: 'base64', media_type: 'image/gif', data: makeGif(i + 1) },
+      }));
+      const toolGifs = Array.from({ length: 4 }, (_, i) => makeGif(100 + i));
+      const bodies = [];
+      let callCount = 0;
+      const fetch = vi.fn(async (_url, init) => {
+        bodies.push(JSON.parse(init.body));
+        callCount++;
+        if (callCount === 1) {
+          return geminiResult(toolGifs.map((_, i) => ({
+            functionCall: { id: `view-${i}`, name: 'ViewImage', args: { file_path: `tool-${i}.gif` } },
+          })));
+        }
+        return geminiResult([{ text: 'Inspected.' }]);
+      });
+      vi.stubGlobal('fetch', fetch);
+      try {
+        const engine = new Engine({ adapter: geminiGateway(), trace, config: geminiConfig });
+        engine.registerTool({
+          name: 'ViewImage',
+          description: 'Read an image',
+          parameters: { type: 'object' },
+          execute: async ({ file_path }) => {
+            const idx = Number(file_path.match(/\d+/)[0]);
+            return JSON.stringify({ path: file_path, image: `data:image/gif;base64,${toolGifs[idx]}` });
+          },
+        });
+        const events = [];
+        for await (const event of engine.query({
+          prompt: 'Compare images',
+          promptParts: [{ type: 'text', text: 'Compare images' }, ...uploads],
+        })) events.push(event);
+
+        expect(events.find(e => e.type === 'turn_end' && e.terminal)).toMatchObject({ stopReason: 'end_turn', terminal: true });
+        expect(bodies).toHaveLength(2);
+        const collectInline = contents => contents.flatMap(c => c.parts.flatMap(p => {
+          if (p.inlineData) return [p.inlineData.data];
+          if (p.functionResponse?.parts) return p.functionResponse.parts.filter(x => x.inlineData).map(x => x.inlineData.data);
+          return [];
+        }));
+        // Request 1 has 4 user uploads (<= 5), all kept.
+        expect(collectInline(bodies[0].contents)).toEqual(uploads.map(u => u.source.data));
+        // Request 2 has 4 uploads + 4 tool images = 8 total -> newest 5 kept (last 1 upload + all 4 tool images).
+        expect(collectInline(bodies[1].contents)).toEqual([uploads[3].source.data, ...toolGifs]);
+        // The 3 omitted older uploads turned into text placeholders.
+        expect(JSON.stringify(bodies[1].contents[0])).toContain('Image not sent.');
+      } finally {
         vi.unstubAllGlobals();
       }
     });

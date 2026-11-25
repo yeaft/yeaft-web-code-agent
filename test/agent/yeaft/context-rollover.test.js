@@ -84,7 +84,7 @@ async function assertActiveToolImageProjection() {
   });
 
   await verify('requests rollover rather than rewriting a signed prefix at the image cap', async () => {
-    const frozen = Array.from({ length: 12 }, (_, n) => [call(`id-${n}`), result(`id-${n}`, image(`content-${n}`))]).flat();
+    const frozen = Array.from({ length: 5 }, (_, n) => [call(`id-${n}`), result(`id-${n}`, image(`content-${n}`))]).flat();
     const tail = [call('new'), result('new', image('new'))];
     const messages = [...frozen, ...tail];
     const saved = JSON.stringify(messages);
@@ -92,7 +92,7 @@ async function assertActiveToolImageProjection() {
     await expect(project(messages, { frozenLength: frozen.length + 1, canRollover: true })).rejects.toBeInstanceOf(ToolImagePrefixBudgetError);
     const fitted = await project(messages, { frozenLength: frozen.length + 1 });
     expect(fitted.messages.slice(0, frozen.length)).toEqual(frozen);
-    expect(imageParts(fitted.messages)).toHaveLength(12);
+    expect(imageParts(fitted.messages)).toHaveLength(5);
     expect(imageParts((await project(tail)).messages)).toEqual([image('new')]);
     expect(JSON.stringify(messages)).toBe(saved);
   });
