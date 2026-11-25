@@ -1428,8 +1428,11 @@ export function fitProviderRequestToContext(messages, options = {}) {
   const ratio = options.toolResultCompactionRatio;
   // Account for the history that actually survived fitting, not its maximum
   // allowance. This soft pass only shortens older tool result text.
-  const softBudget = ratio > 0 && ratio < 1 ? Math.floor(contextWindow * ratio)
-    - staticTokens + bucketCap(options.outputReserve, 0) - estimateMessagesTokens(history) : Infinity;
+  const softBudget = ratio === 0
+    ? 0
+    : ratio > 0 && ratio < 1
+      ? Math.floor(contextWindow * ratio) - staticTokens + bucketCap(options.outputReserve, 0) - estimateMessagesTokens(history)
+      : Infinity;
   const softCompact = compactCurrentToolResults(current, Math.max(0, softBudget));
   current = softCompact.messages;
   const fullResults = new Map(currentSource.filter(message => message?.role === 'tool')

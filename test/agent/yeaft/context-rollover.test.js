@@ -4,7 +4,8 @@ import { createRequire } from 'node:module';
 import { createActiveToolImageProjector, ToolImagePrefixBudgetError } from '../../../agent/yeaft/active-tool-images.js';
 import { makeModelImagePreview, MODEL_IMAGE_TARGET_BYTES } from '../../../agent/yeaft/model-image-preview.js';
 import { fitProviderRequestToContext } from '../../../agent/yeaft/history-window.js';
-import { trimWireMedia, wireToolImageEvidence } from '../../../agent/yeaft/wire-media.js';
+import { capRequestImages, trimWireMedia, wireToolImageEvidence } from '../../../agent/yeaft/wire-media.js';
+import { stepDownRetryEffort } from '../../../agent/yeaft/effort.js';
 import { LLMAuthError, LLMRateLimitError, LLMServerError } from '../../../agent/yeaft/llm/adapter.js';
 
 const byteLength = text => Buffer.byteLength(text, 'utf8');
@@ -84,7 +85,7 @@ async function assertActiveToolImageProjection() {
   });
 
   await verify('requests rollover rather than rewriting a signed prefix at the image cap', async () => {
-    const frozen = Array.from({ length: 12 }, (_, n) => [call(`id-${n}`), result(`id-${n}`, image(`content-${n}`))]).flat();
+    const frozen = Array.from({ length: 5 }, (_, n) => [call(`id-${n}`), result(`id-${n}`, image(`content-${n}`))]).flat();
     const tail = [call('new'), result('new', image('new'))];
     const messages = [...frozen, ...tail];
     const saved = JSON.stringify(messages);
@@ -92,9 +93,52 @@ async function assertActiveToolImageProjection() {
     await expect(project(messages, { frozenLength: frozen.length + 1, canRollover: true })).rejects.toBeInstanceOf(ToolImagePrefixBudgetError);
     const fitted = await project(messages, { frozenLength: frozen.length + 1 });
     expect(fitted.messages.slice(0, frozen.length)).toEqual(frozen);
-    expect(imageParts(fitted.messages)).toHaveLength(12);
+    expect(imageParts(fitted.messages)).toHaveLength(5);
     expect(imageParts((await project(tail)).messages)).toEqual([image('new')]);
     expect(JSON.stringify(messages)).toBe(saved);
+  });
+
+  await verify('caps request images across uploads/tools, preserves frozen prefixes, drops orphaned preview annotations, and steps retry effort down cleanly', async () => {
+    // 1. capRequestImages with preview annotation removal + frozenLength + image_url/input_image shapes.
+    const big = image('p'.repeat(300_000));
+    const preview = vi.fn(async () => image('small-preview'));
+    const paths = new WeakMap([[big, 'shots/big.png']]);
+    const project = createActiveToolImageProjector({ pathForImage: part => paths.get(part), preview });
+    const projected = await project([
+      { role: 'user', content: [{ type: 'image_url', image_url: { url: 'data:image/png;base64,u0' } }] },
+      call('t1'),
+      result('t1', big),
+      { role: 'user', content: [
+        { type: 'input_image', image_url: 'data:image/png;base64,u1' },
+        image('u2'), image('u3'), image('u4'), image('u5'),
+      ] },
+    ]);
+    // Preview annotation precedes the previewed image before capping.
+    expect(projected.messages[2].content.some(p => p.text?.includes('Model image preview'))).toBe(true);
+    const capped = capRequestImages(projected.messages, 5, {
+      frozenLength: 1,
+      pathForImage: project.pathOf,
+      isImageAnnotation: project.isImageAnnotation,
+    });
+    // Frozen row[0] kept (1), plus newest 4 images from row[3] (u2..u5) = 5 total; u1 and big omitted.
+    expect(capped.totalImages).toBe(5);
+    expect(capped.omittedImages).toBe(2);
+    expect(capped.messages[0]).toBe(projected.messages[0]);
+    // Preview annotation paired with the omitted tool image is collapsed, leaving only the honest omission notice with original path.
+    expect(capped.messages[2].content.some(p => p.text?.includes('Model image preview'))).toBe(false);
+    expect(capped.messages[2].content.some(p => p.text?.includes('shots/big.png') && p.text?.includes('request image limit (5)'))).toBe(true);
+
+    // 2. stepDownRetryEffort across Gemini, Anthropic, OpenAI, floor medium, and unsupported models.
+    expect(stepDownRetryEffort('xhigh', { model: 'gemini-4-neon', protocol: 'gemini' })).toBe('high');
+    expect(stepDownRetryEffort('high', { model: 'gemini-4-neon', protocol: 'gemini' })).toBe('medium');
+    expect(stepDownRetryEffort('medium', { model: 'gemini-4-neon', protocol: 'gemini' })).toBeNull();
+    expect(stepDownRetryEffort('low', { model: 'gemini-4-neon', protocol: 'gemini' })).toBeNull();
+    expect(stepDownRetryEffort('high', { model: 'gemini-4-carbon', protocol: 'gemini' })).toBe('medium');
+    expect(stepDownRetryEffort('max', { model: 'claude-opus-4-8', protocol: 'anthropic' })).toBe('xhigh');
+    expect(stepDownRetryEffort('xhigh', { model: 'claude-opus-4-8', protocol: 'anthropic' })).toBe('medium');
+    expect(stepDownRetryEffort('medium', { model: 'claude-opus-4-8', protocol: 'anthropic' })).toBeNull();
+    expect(stepDownRetryEffort('ultra', { model: 'gpt-5', protocol: 'openai-responses' })).toBe('max');
+    expect(stepDownRetryEffort('xhigh', { model: 'gpt-5', protocol: 'openai-responses', effortContext: { supportsEffort: false } })).toBeNull();
   });
 
   await verify('keeps an honest, reopenable reference if the only duplicate payload is removed later', async () => {
