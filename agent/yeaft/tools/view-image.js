@@ -64,6 +64,10 @@ Returns a base64 data URI (\`image\` field) plus metadata (format, dimensions,
 size). The engine delivers the image as a native multimodal tool result.
 Inspect the whole image first. Crop/zoom only details that are unreadable; OCR
 is optional for text extraction, not a prerequisite for seeing the image.
+At most 5 images are attached per model request (newest 5 kept; older images
+become text notices). When inspecting more than 5 images, open at most 5 per
+batch, record your findings from those images first, then open the next batch
+— do not reopen images you already inspected.
 
 When to call:
   - User references a local image path (screenshot, design, log/chart) and
@@ -92,6 +96,7 @@ Path must live under the project directory, the current Session's attachments, o
 
 返回 base64 data URI（image 字段）及元数据（格式、尺寸、大小）。引擎将图片作为原生多模态工具结果交给模型。
 先直接查看整图；仅对确实看不清的细节裁剪/放大。OCR 用于需要时提取文字，不是看图的前置步骤。
+单次模型请求最多携带 5 张图片（仅保留最新 5 张，更早的图片会替换为文字提示）。需要查看超过 5 张图时，每批最多打开 5 张，先记录当前已见图片的结论再打开下一批，不要反复重开已经看过的图片。
 
 何时调用：
   - 用户引用本地图片路径（截图、设计稿、日志/图表）并要求你读取、分析或描述它。

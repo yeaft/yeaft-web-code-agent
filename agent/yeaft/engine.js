@@ -2867,20 +2867,21 @@ export class Engine {
     let retryPolicy = resolveRetryPolicy(this.#config);
     let consecutiveRetryableErrors = 0;
     let consecutiveForbiddenErrors = 0;
-    let retryDeadline = null;
-    // Temporary per-step timeout recovery state. Cleared as soon as a provider
-    // request succeeds so the next loop returns to the configured effort and
-    // ordinary tool-result compaction threshold.
+    // Temporary per-step timeout recovery state. `retryEffortOverride` is
+    // cleared once a provider request succeeds so the next loop returns to the
+    // configured effort. `compactedToolCallIds` sticks across later loops of
+    // this query so older tool results compacted on retry never re-expand back
+    // to full payloads (while the durable transcript remains untouched and
+    // newer tool batches stay lossless).
     let retryEffortOverride = null;
     let tightenOlderToolResultsOnRetry = false;
+    const compactedToolCallIds = new Set();
     let controlReentry = false;
-    const getHeadersTimeoutMs = () => {
-      if (retryDeadline === null) {
-        if (!retryPolicy.maxRequestRetryTimeMs) return undefined;
-        retryDeadline = perfNowMs() + retryPolicy.maxRequestRetryTimeMs;
-      }
-      return Math.max(0, Math.ceil(retryDeadline - perfNowMs()));
-    };
+    // Per-request headers wait budget: every provider request attempt (including
+    // retries and model switches) gets a fresh headers timeout window.
+    const getHeadersTimeoutMs = () => (
+      retryPolicy.maxRequestRetryTimeMs ? retryPolicy.maxRequestRetryTimeMs : undefined
+    );
     const hasFinalPublication = () => lastPersistedAssistantTextMessage?.presentation?.phase === 'final';
     let contentPolicyRecoveryAttempts = 0;
     let contextOverflowRecoveryAttempts = 0;
@@ -2902,6 +2903,8 @@ export class Engine {
         if (refreshedPrimaryModel !== primaryModelAtLastBoundary) {
           currentModel = refreshedPrimaryModel;
           primaryModelAtLastBoundary = refreshedPrimaryModel;
+          consecutiveRetryableErrors = 0;
+          consecutiveForbiddenErrors = 0;
           retryEffortOverride = null;
           tightenOlderToolResultsOnRetry = false;
         }
@@ -3417,6 +3420,9 @@ export class Engine {
           toolResultCompactionRatio: tightenOlderToolResultsOnRetry && !signedAnthropicPrefix && !pendingServerOperation
             ? 0
             : (useSessionCompactionPolicy && !pendingServerOperation ? contextRolloverRatio : undefined),
+          compactedToolCallIds: !signedAnthropicPrefix && !pendingServerOperation && compactedToolCallIds.size > 0
+            ? compactedToolCallIds
+            : undefined,
           repeatedToolResultRefs,
           language: requestConfig.language,
         };
@@ -3670,7 +3676,6 @@ export class Engine {
         if (!hasCaptureStream) {
           commitDispatch();
           legacyDispatchReserved = true;
-          getHeadersTimeoutMs();
         }
 
         // Snapshot task results carried by this exact request. Request start
@@ -3945,11 +3950,16 @@ export class Engine {
         lastSuccessfulModel = currentModel;
         lastSuccessfulEffort = requestEffortDecision.effective || resolvedEffort || null;
         // Stream completed without throwing — reset the retry counter so
-        // the next turn starts with a clean budget. In-band adapter errors
-        // are converted to throws above so they share the real error path.
+        // the next turn starts with a clean budget. Keep any older tool results
+        // compacted on this request compacted for subsequent loops of this
+        // query so context moves forward instead of re-expanding old payloads.
+        if (!signedAnthropicPrefix && Array.isArray(fittedRequest.meta.compactedToolCallIds)) {
+          for (const callId of fittedRequest.meta.compactedToolCallIds) {
+            compactedToolCallIds.add(callId);
+          }
+        }
         consecutiveRetryableErrors = 0;
         consecutiveForbiddenErrors = 0;
-        retryDeadline = null;
         retryEffortOverride = null;
         tightenOlderToolResultsOnRetry = false;
         controlReentry = false;
@@ -4281,6 +4291,7 @@ export class Engine {
             contextOverflowRecoveryAttempts = 0;
             retryEffortOverride = null;
             tightenOlderToolResultsOnRetry = false;
+            compactedToolCallIds.clear();
             fileReadObservations.clear();
             repeatedToolResultRefs.clear();
             completeReadResultIds.clear();
@@ -4400,9 +4411,9 @@ export class Engine {
         const earlyIsTemporaryForbidden = err instanceof LLMAuthError
           && err.statusCode === 403
           && err.temporary === true;
-        const remainingRetryTime = retryDeadline === null ? Infinity : Math.max(0, retryDeadline - perfNowMs());
         const forbiddenDelayMs = retryPolicy.forbiddenRetryDelaysMs[consecutiveForbiddenErrors];
-        if (earlyIsTemporaryForbidden && canReplayProviderRequest && forbiddenDelayMs < remainingRetryTime) {
+        if (earlyIsTemporaryForbidden && canReplayProviderRequest
+          && consecutiveForbiddenErrors < retryPolicy.forbiddenRetryDelaysMs.length) {
           const delayMs = forbiddenDelayMs;
           consecutiveForbiddenErrors += 1;
           endAttemptTrace('llm_retry');
@@ -4426,11 +4437,9 @@ export class Engine {
           yield { type: 'turn_end', turnNumber, stopReason: 'llm_retry', threadId };
           continue;
         }
-        let retryTimeExhausted = earlyIsTemporaryForbidden && canReplayProviderRequest && forbiddenDelayMs >= remainingRetryTime;
         if (retryEligible && canReplayProviderRequest) {
           const delay = retryDelay(retryPolicy, err, consecutiveRetryableErrors + 1);
-          retryTimeExhausted = delay.delayMs >= remainingRetryTime;
-          if (!retryTimeExhausted && consecutiveRetryableErrors < retryPolicy.maxRetries) {
+          if (consecutiveRetryableErrors < retryPolicy.maxRetries) {
             consecutiveRetryableErrors += 1;
             const { delayMs } = delay;
             const reason = unusableResponse ? 'unusable_response' : delay.reason;
@@ -4460,7 +4469,8 @@ export class Engine {
             if (err instanceof LLMHeadersTimeoutError || err instanceof LLMStreamIdleTimeoutError) {
               // Tighten older tool results on the provider copy (the latest
               // batch stays lossless) and step effort down one supported tier
-              // for this retry only; cleared on the next successful response.
+              // for this retry only; effort climbs back on the next successful
+              // loop while compacted older tool results stay compacted.
               if (!signedAnthropicPrefix) tightenOlderToolResultsOnRetry = true;
               const protocol = effortModel?.protocol || effortModel?.effortProtocol
                 || routedProvider?.protocol || requestConfig.adapter;
@@ -4536,7 +4546,6 @@ export class Engine {
           currentModel = earlyFallbackModel;
           consecutiveRetryableErrors = 0;
           consecutiveForbiddenErrors = 0;
-          retryDeadline = null;
           retryEffortOverride = null;
           tightenOlderToolResultsOnRetry = false;
           yield { type: 'turn_end', turnNumber, stopReason: 'fallback_retry', threadId };
@@ -4546,14 +4555,13 @@ export class Engine {
         if (err instanceof LLMFailedResponseError && consecutiveRetryableErrors > 0) {
           err.withRetries(consecutiveRetryableErrors);
         }
-        if (retryTimeExhausted || err instanceof LLMHeadersTimeoutError) {
-          const limit = retryTimeExhausted ? ' The retry time budget for this model step would be exceeded.' : '';
+        if (err instanceof LLMHeadersTimeoutError) {
           const retried = consecutiveRetryableErrors + consecutiveForbiddenErrors;
           const retryCount = retried && !(err instanceof LLMFailedResponseError)
             ? ` Retried ${plural(retried, 'time', 'times')}.` : '';
           const kept = queryProgress.toolExecutions > 0 && !(err instanceof LLMFailedResponseError)
             ? ' Completed tool results are kept; send a follow-up to continue.' : '';
-          err.message += limit + retryCount + kept;
+          err.message += retryCount + kept;
         }
         // A later fresh request can fail before producing text. In that case the
         // durable assistant prefix belongs to this same query and must leave the
@@ -4647,12 +4655,12 @@ export class Engine {
           // Failed stops keep their reason as the error code (refusal, unknown).
           ...(err instanceof LLMFailedResponseError ? { code: err.code } : {}),
         };
-        if (err instanceof LLMHeadersTimeoutError || retryTimeExhausted) {
-          errorEvent.reason = err.reasonCode || 'request_retry_time_exhausted';
-          errorEvent.retryExhausted = canReplayProviderRequest && (retryTimeExhausted
-            || consecutiveRetryableErrors >= retryPolicy.maxRetries);
+        if (err instanceof LLMHeadersTimeoutError) {
+          errorEvent.reason = err.reasonCode;
+          errorEvent.retryExhausted = canReplayProviderRequest
+            && consecutiveRetryableErrors >= retryPolicy.maxRetries;
           errorEvent.retryAttempts = consecutiveRetryableErrors + consecutiveForbiddenErrors;
-          errorEvent.maxRetries = earlyIsTemporaryForbidden ? retryPolicy.forbiddenRetryDelaysMs.length : retryPolicy.maxRetries;
+          errorEvent.maxRetries = retryPolicy.maxRetries;
         } else if (err instanceof LLMStreamIdleTimeoutError) {
           errorEvent.reason = 'stream_idle_timeout';
           errorEvent.retryExhausted = canReplayProviderRequest

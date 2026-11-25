@@ -700,34 +700,40 @@ function compactToolContentToBudget(content, tokenBudget) {
   return fitted;
 }
 
-function compactToolResults(messages, messageBudget, endIndex) {
+function compactToolResults(messages, messageBudget, endIndex, forcedIds = null) {
   const out = messages.slice();
   let excess = estimateMessagesTokens(out) - messageBudget;
   let compactedToolResults = 0;
   let compactedToolResultTokensSaved = 0;
-  for (let index = 0; index < endIndex && excess > 0; index += 1) {
+  const compactedIds = [];
+  const hasForced = forcedIds instanceof Set && forcedIds.size > 0;
+  for (let index = 0; index < endIndex; index += 1) {
     const message = out[index];
     if (message?.role !== 'tool') continue;
+    const forced = hasForced && typeof message.toolCallId === 'string' && forcedIds.has(message.toolCallId);
+    if (!forced && excess <= 0) continue;
     const before = estimateContentTokens(message.content);
-    const content = compactToolContentToBudget(message.content, Math.max(0, before - excess));
+    const targetBudget = forced ? 0 : Math.max(0, before - excess);
+    const content = compactToolContentToBudget(message.content, targetBudget);
     const saved = before - estimateContentTokens(content);
     if (saved <= 0) continue;
     out[index] = { ...message, content };
-    excess -= saved;
+    excess = Math.max(0, excess - saved);
     compactedToolResults += 1;
     compactedToolResultTokensSaved += saved;
+    if (typeof message.toolCallId === 'string') compactedIds.push(message.toolCallId);
   }
-  return { messages: out, compactedToolResults, compactedToolResultTokensSaved };
+  return { messages: out, compactedToolResults, compactedToolResultTokensSaved, compactedIds };
 }
 
-function compactCurrentToolResults(messages, messageBudget) {
+function compactCurrentToolResults(messages, messageBudget, forcedIds = null) {
   // The ordinary fitter protects the complete newest batch. Signed-prefix
   // continuations instead select only the not-yet-sent tail below.
   let latestEnd = messages.length - 1;
   while (latestEnd >= 0 && messages[latestEnd]?.role !== 'tool') latestEnd -= 1;
   let latestStart = latestEnd;
   while (latestStart > 0 && messages[latestStart - 1]?.role === 'tool') latestStart -= 1;
-  return compactToolResults(messages, messageBudget, latestStart);
+  return compactToolResults(messages, messageBudget, latestStart, forcedIds);
 }
 
 /**
@@ -1362,7 +1368,8 @@ export function buildHistoryBuckets(snapshot, options = {}) {
  * @param {{ contextWindow:number, systemTokens?:number, toolSchemaTokens?:number,
  * outputReserve?:number, historyMessageCount?:number, historyTokenBudget?:number,
  * maxMessageCount?:number, language?:string,
- * repeatedToolResultRefs?:Map<string,string>, toolResultCompactionRatio?:number }} options
+ * repeatedToolResultRefs?:Map<string,string>, toolResultCompactionRatio?:number,
+ * compactedToolCallIds?:Set<string> }} options
  * @returns {{messages:Array<object>, meta:object}}
  */
 export function fitProviderRequestToContext(messages, options = {}) {
@@ -1433,7 +1440,7 @@ export function fitProviderRequestToContext(messages, options = {}) {
     : ratio > 0 && ratio < 1
       ? Math.floor(contextWindow * ratio) - staticTokens + bucketCap(options.outputReserve, 0) - estimateMessagesTokens(history)
       : Infinity;
-  const softCompact = compactCurrentToolResults(current, Math.max(0, softBudget));
+  const softCompact = compactCurrentToolResults(current, Math.max(0, softBudget), options.compactedToolCallIds);
   current = softCompact.messages;
   const fullResults = new Map(currentSource.filter(message => message?.role === 'tool')
     .map(message => [message.toolCallId, message]));
@@ -1454,6 +1461,7 @@ export function fitProviderRequestToContext(messages, options = {}) {
       droppedCurrentMessages: currentSource.length - current.length,
       compactedToolResults: compact.compactedToolResults + softCompact.compactedToolResults,
       compactedToolResultTokensSaved: compact.compactedToolResultTokensSaved + softCompact.compactedToolResultTokensSaved,
+      compactedToolCallIds: [...new Set([...compact.compactedIds, ...softCompact.compactedIds])],
       deduplicatedToolResults: deduplicated.deduplicatedToolResults,
       deduplicatedToolResultTokensSaved: deduplicated.deduplicatedToolResultTokensSaved,
     },

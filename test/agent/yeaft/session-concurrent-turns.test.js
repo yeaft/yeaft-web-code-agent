@@ -129,7 +129,7 @@ it('shows status before the initial provider emits any output and reports a watc
   expect(requests).toBe(1);
 });
 
-it('lets the transport classify a gateway 504 and exhaust its retry budget before the Session watchdog', async () => {
+it('lets the transport classify a gateway 504 and exhaust its per-request headers timeout before the Session watchdog', async () => {
   // Use the real adapter and a compatible mocked gateway; no network calls.
   const fetch = vi.fn(async (_url, { signal }) => {
     if (fetch.mock.calls.length === 1) {
@@ -141,7 +141,7 @@ it('lets the transport classify a gateway 504 and exhaust its retry budget befor
   vi.stubGlobal('fetch', fetch);
   const adapter = new GeminiAdapter({ baseUrl: 'https://gateway.invalid/v1beta', apiKey: 'test-key', streamIdleTimeoutMs: 90_000 });
   const { send } = setup(adapter, ['omni'], { model: 'gemini-4-carbon', modelEffort: 'medium',
-    llmRetry: { baseDelayMs: 1_000, jitterRatio: 0 } });
+    llmRetry: { maxRetries: 1, baseDelayMs: 1_000, jitterRatio: 0 } });
   vi.useFakeTimers({ toFake: ['Date', 'hrtime', 'setTimeout', 'clearTimeout'] });
   await send('provider-budget', 'Check provider response');
   await until(() => fetch.mock.calls.length === 1);
@@ -149,7 +149,8 @@ it('lets the transport classify a gateway 504 and exhaust its retry budget befor
   expect(events('llm_retry').at(-1)?.event).toMatchObject({ reason: 'upstream_headers_timeout', attempt: 1 });
   await vi.advanceTimersByTimeAsync(1_000);
   expect(fetch).toHaveBeenCalledTimes(2);
-  await vi.advanceTimersByTimeAsync(59_001);
+  // Second attempt gets its own full 180s per-request headers wait window, and still finishes before the 210s Session watchdog.
+  await vi.advanceTimersByTimeAsync(180_001);
   await until(() => events('vp_turn_end').length > 0);
   expect(events('vp_turn_end').at(-1)?.event).toMatchObject({ reason: 'errored', detail: {
     reason: 'response_headers_timeout', retryAttempts: 1,
