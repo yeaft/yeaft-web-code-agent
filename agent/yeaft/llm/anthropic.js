@@ -15,7 +15,7 @@ import {
   classifyAuthError,
   classifyPolicyError,
   LLMContextError,
-  LLMServerError, classifyUpstreamHeadersTimeout,
+  LLMServerError, classifyUpstreamHeadersTimeout, classifyUpstreamStreamError,
   LLMToolInputError,
   LLMAbortError,
   readStreamChunkWithIdleTimeout,
@@ -788,10 +788,17 @@ export class AnthropicAdapter extends LLMAdapter {
             stateFailed = true;
             const rejected = toolInputError || (malformedStream && hasToolBlocks()
               ? new LLMToolInputError('Anthropic returned a malformed tool stream') : null);
+            const upstreamErr = !rejected && event.error && typeof event.error === 'object'
+              ? classifyUpstreamStreamError({
+                code: event.error.code,
+                type: event.error.type,
+                message: event.error.message,
+              })
+              : null;
             yield unusable({
               type: 'error',
-              error: rejected || new Error(event.error?.message || 'Unknown streaming error'),
-              retryable: !rejected && event.error?.type === 'overloaded_error',
+              error: rejected || upstreamErr || new Error(event.error?.message || 'Unknown streaming error'),
+              retryable: !rejected && (Boolean(upstreamErr) || event.error?.type === 'overloaded_error'),
             }, seenBlocks());
             return;
           }

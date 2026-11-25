@@ -34,7 +34,7 @@ import {
   classifyAuthError,
   classifyPolicyError,
   LLMContextError,
-  LLMServerError, classifyUpstreamHeadersTimeout,
+  LLMServerError, classifyUpstreamHeadersTimeout, classifyUpstreamStreamError,
   LLMToolInputError,
   LLMAbortError,
   classifyFetchError,
@@ -72,30 +72,45 @@ const TRANSIENT_FAILURE_CODES = new Set([
 /** Classify a failed Responses payload even when its HTTP status was 200. */
 function classifyResponseFailure(event, response) {
   const providerError = event.response?.error || event.error;
-  const code = [providerError?.code, providerError?.type]
-    .find(value => typeof value === 'string' && value.trim())?.trim();
+  const explicitCode = typeof providerError?.code === 'string' && providerError.code.trim()
+    ? providerError.code.trim()
+    : null;
+  const errorType = typeof providerError?.type === 'string' && providerError.type.trim()
+    ? providerError.type.trim()
+    : null;
+  const code = explicitCode || errorType;
   const diagnosticCode = code || (typeof event.response?.status === 'string' && event.response.status) || event.type;
   const message = [providerError?.message, event.message].find(value => typeof value === 'string' && value.trim())
     || `${event.type}: ${diagnosticCode}`;
   const limited = RATE_LIMIT_CODES.has(code);
+  const messageDelay = limited && message.match(/\btry again in\s+(\d+(?:\.\d+)?)\s*(ms|s|seconds?)\b/i);
+  const retryAfterMs = [
+    retryAfterFromResponse(providerError),
+    retryAfterFromResponse(event),
+    retryAfterFromResponse(response),
+    messageDelay ? Math.round(Number(messageDelay[1]) * (messageDelay[2].toLowerCase() === 'ms' ? 1 : 1000)) : null,
+  ].find(delay => Number.isFinite(delay) && delay > 0) ?? null;
   let error;
   // An explicit code takes precedence over a broad type such as rate_limit_error
   // (e.g. insufficient_quota). A delay hint alone never makes a rejection retryable.
   if (code === 'context_length_exceeded') {
     // Same meaning as the HTTP rejection: recover with a smaller request.
     error = new LLMContextError(message);
-  } else if (limited || TRANSIENT_FAILURE_CODES.has(code)) {
-    const messageDelay = limited && message.match(/\btry again in\s+(\d+(?:\.\d+)?)\s*(ms|s|seconds?)\b/i);
-    const retryAfterMs = [
-      retryAfterFromResponse(providerError),
-      retryAfterFromResponse(event),
-      retryAfterFromResponse(response),
-      messageDelay ? Math.round(Number(messageDelay[1]) * (messageDelay[2].toLowerCase() === 'ms' ? 1 : 1000)) : null,
-    ].find(delay => Number.isFinite(delay) && delay > 0) ?? null;
-    // Status 0 denotes a semantic failure, not an HTTP 429/5xx.
-    error = limited ? new LLMRateLimitError(message, 0, retryAfterMs) : new LLMServerError(message, 0, retryAfterMs);
   } else {
-    error = new Error(message);
+    const upstreamError = classifyUpstreamStreamError({
+      code: explicitCode,
+      type: errorType,
+      message,
+      retryAfterMs,
+    });
+    if (upstreamError) {
+      error = upstreamError;
+    } else if (limited || TRANSIENT_FAILURE_CODES.has(code)) {
+      // Status 0 denotes a semantic failure, not an HTTP 429/5xx.
+      error = limited ? new LLMRateLimitError(message, 0, retryAfterMs) : new LLMServerError(message, 0, retryAfterMs);
+    } else {
+      error = new Error(message);
+    }
   }
   error.code = diagnosticCode;
   return error;

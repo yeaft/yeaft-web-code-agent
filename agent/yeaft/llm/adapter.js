@@ -10,6 +10,7 @@
  * The engine sees only unified types — it never knows which API is underneath.
  */
 
+import { Agent, EnvHttpProxyAgent } from 'undici';
 import { utf8PrefixWithinBytes } from '../utf8.js';
 
 // ─── Unified Types ─────────────────────────────────────────────
@@ -279,18 +280,110 @@ export function classifyUpstreamHeadersTimeout(status, responseBody) {
   return (body?.error?.code ?? body?.code) === 'upstream_headers_timeout' ? new LLMHeadersTimeoutError(true) : null;
 }
 
+const UPSTREAM_STREAM_TIMEOUT_MESSAGE_RE = /^(?:terminated)$|\b(?:body\s+timeout|stream\s+timed?\s*out|UND_ERR_BODY_TIMEOUT|upstream_stream_timeout)\b/i;
+
+/**
+ * Classify gateway-injected streaming error frames (such as Copilot Proxy's
+ * `upstream_stream_timeout` or legacy `{ type: 'upstream_error', code: null,
+ * message: 'terminated' }`) into the matching retryable timeout or server error.
+ *
+ * Never overrides a specific non-gateway error code (e.g. `context_length_exceeded`,
+ * `rate_limit_exceeded`, `invalid_request_error`).
+ *
+ * @param {{ code?: string|null, type?: string|null, message?: string, retryAfterMs?: number|null }} [input]
+ * @returns {LLMHeadersTimeoutError | LLMStreamIdleTimeoutError | LLMServerError | null}
+ */
+export function classifyUpstreamStreamError({ code = null, type = null, message = '', retryAfterMs = null } = {}) {
+  const cleanCode = typeof code === 'string' && code.trim() ? code.trim() : null;
+  const cleanType = typeof type === 'string' && type.trim() ? type.trim() : null;
+  if (cleanCode === 'upstream_headers_timeout') {
+    return new LLMHeadersTimeoutError(true);
+  }
+  if (cleanCode === 'upstream_stream_timeout') {
+    return new LLMStreamIdleTimeoutError(
+      message || 'The gateway timed out waiting for upstream model stream data.',
+      0,
+      { upstream: true },
+    );
+  }
+  if (cleanType === 'upstream_error' && (!cleanCode || cleanCode === 'upstream_error')) {
+    if (typeof message === 'string' && UPSTREAM_STREAM_TIMEOUT_MESSAGE_RE.test(message.trim())) {
+      return new LLMStreamIdleTimeoutError(message.trim(), 0, { upstream: true });
+    }
+    return new LLMServerError(message || 'Upstream model stream failed.', 0, retryAfterMs);
+  }
+  return null;
+}
+
+let cachedModelFetchDispatcher = null;
+let cachedModelFetchEnvProxyKey = null;
+
+function modelFetchEnvProxyKey() {
+  const useEnvProxy = process.env.NODE_USE_ENV_PROXY === '1'
+    || process.execArgv.includes('--use-env-proxy');
+  if (!useEnvProxy) return 'direct';
+  return [
+    'env',
+    process.env.http_proxy ?? '',
+    process.env.HTTP_PROXY ?? '',
+    process.env.https_proxy ?? '',
+    process.env.HTTPS_PROXY ?? '',
+    process.env.no_proxy ?? '',
+    process.env.NO_PROXY ?? '',
+  ].join('\0');
+}
+
+/**
+ * Create an Undici dispatcher for LLM HTTP calls.
+ *
+ * Node's global `fetch()` defaults to Undici's 300s `headersTimeout` and 300s
+ * `bodyTimeout`, which silently aborts healthy long-running streams (such as
+ * models buffering large `FileWrite` arguments before emitting a chunk) even
+ * when Yeaft's configured stream silence budget is 600s–900s. Disabling both
+ * Undici timers here makes `fetchWithHeadersTimeout()` and
+ * `readStreamChunkWithIdleTimeout()` the single source of truth.
+ *
+ * @param {{ headersTimeout?: number, bodyTimeout?: number }} [opts]
+ */
+export function createModelFetchDispatcher(opts = {}) {
+  const dispatcherOpts = {
+    headersTimeout: 0,
+    bodyTimeout: 0,
+    ...opts,
+  };
+  const useEnvProxy = process.env.NODE_USE_ENV_PROXY === '1'
+    || process.execArgv.includes('--use-env-proxy');
+  return useEnvProxy ? new EnvHttpProxyAgent(dispatcherOpts) : new Agent(dispatcherOpts);
+}
+
+function getModelFetchDispatcher() {
+  const key = modelFetchEnvProxyKey();
+  if (cachedModelFetchDispatcher && cachedModelFetchEnvProxyKey === key) {
+    return cachedModelFetchDispatcher;
+  }
+  const previous = cachedModelFetchDispatcher;
+  cachedModelFetchDispatcher = createModelFetchDispatcher();
+  cachedModelFetchEnvProxyKey = key;
+  if (previous) {
+    Promise.resolve(previous.close()).catch(() => {});
+  }
+  return cachedModelFetchDispatcher;
+}
+
 /** Stop the retry clock from interrupting healthy body streaming once headers arrive. */
-export async function fetchWithHeadersTimeout(url, init, timeoutMs) {
-  if (init.signal?.aborted) throw new LLMAbortError();
-  if (!Number.isFinite(timeoutMs)) return fetch(url, init);
+export async function fetchWithHeadersTimeout(url, init = {}, timeoutMs) {
+  const requestInit = init && typeof init === 'object' ? init : {};
+  if (requestInit.signal?.aborted) throw new LLMAbortError();
+  const dispatcher = requestInit.dispatcher ?? getModelFetchDispatcher();
+  if (!Number.isFinite(timeoutMs)) return fetch(url, { ...requestInit, dispatcher });
   if (timeoutMs <= 0) throw new LLMHeadersTimeoutError();
   const deadline = new AbortController();
-  const signal = init.signal ? AbortSignal.any([init.signal, deadline.signal]) : deadline.signal;
+  const signal = requestInit.signal ? AbortSignal.any([requestInit.signal, deadline.signal]) : deadline.signal;
   const timer = setTimeout(() => deadline.abort(new LLMHeadersTimeoutError()), timeoutMs);
   try {
-    return await fetch(url, { ...init, signal });
+    return await fetch(url, { ...requestInit, signal, dispatcher });
   } catch (error) {
-    if (init.signal?.aborted) throw new LLMAbortError();
+    if (requestInit.signal?.aborted) throw new LLMAbortError();
     if (deadline.signal.aborted) throw deadline.signal.reason;
     throw error;
   } finally {
@@ -300,10 +393,12 @@ export async function fetchWithHeadersTimeout(url, init, timeoutMs) {
 
 /** Streaming response went idle after the server accepted the request. Retryable. */
 export class LLMStreamIdleTimeoutError extends LLMServerError {
-  constructor(message, idleMs) {
+  constructor(message, idleMs = 0, details = {}) {
     super(message, 0);
     this.name = 'LLMStreamIdleTimeoutError';
     this.idleMs = idleMs;
+    this.upstream = details?.upstream === true;
+    this.reasonCode = details?.reasonCode || (this.upstream ? 'upstream_stream_timeout' : 'stream_idle_timeout');
   }
 }
 
@@ -622,6 +717,22 @@ export function retryAfterFromResponse(response) {
  * @param {{ providerLabel?: string, signal?: AbortSignal }} [opts]
  * @returns {Error}
  */
+function extractFetchErrorCode(err) {
+  let current = err;
+  const seen = new Set();
+  let fallbackName = null;
+  for (let depth = 0; depth < 6 && current && typeof current === 'object'; depth++) {
+    if (seen.has(current)) break;
+    seen.add(current);
+    if (typeof current.code === 'string' && current.code) return current.code;
+    if (!fallbackName && (current.name === 'BodyTimeoutError' || current.name === 'HeadersTimeoutError')) {
+      fallbackName = current.name;
+    }
+    current = current.cause;
+  }
+  return fallbackName;
+}
+
 export function classifyFetchError(err, opts = {}) {
   if (!(err instanceof Error)) return err instanceof Object ? err : new Error(String(err));
   if (err.name === 'LLMAbortError' || err instanceof LLMAbortError) return new LLMAbortError();
@@ -639,12 +750,17 @@ export function classifyFetchError(err, opts = {}) {
     || err instanceof LLMAbortError) {
     return err;
   }
-  const code = err.cause?.code || err.code || null;
+  const code = extractFetchErrorCode(err);
+  if (code === 'UND_ERR_BODY_TIMEOUT' || code === 'BodyTimeoutError') {
+    return new LLMStreamIdleTimeoutError(`${label}stream body timeout (${code}): ${err.message}`, 0);
+  }
+  if (code === 'UND_ERR_HEADERS_TIMEOUT' || code === 'HeadersTimeoutError') {
+    return new LLMHeadersTimeoutError(false);
+  }
   const transientCodes = new Set([
     'ECONNRESET', 'ECONNREFUSED', 'ECONNABORTED', 'ETIMEDOUT',
     'ENOTFOUND', 'EAI_AGAIN', 'EPIPE', 'EHOSTUNREACH', 'ENETUNREACH',
-    'UND_ERR_SOCKET', 'UND_ERR_CLOSED', 'UND_ERR_BODY_TIMEOUT',
-    'UND_ERR_HEADERS_TIMEOUT', 'UND_ERR_CONNECT_TIMEOUT',
+    'UND_ERR_SOCKET', 'UND_ERR_CLOSED', 'UND_ERR_CONNECT_TIMEOUT',
   ]);
   if (code && transientCodes.has(code)) {
     return new LLMServerError(`${label}network error (${code}): ${err.message}`, 0);

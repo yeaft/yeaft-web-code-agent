@@ -19,6 +19,7 @@ Creates parent directories automatically. Overwrites existing files.
 Guidelines:
 - Use absolute paths when possible
 - For modifying existing files, prefer FileEdit (surgical edits) over FileWrite (full overwrite)
+- Prefer modular files split by responsibility over a single oversized monolith; when creating a large file, write a focused skeleton first and fill in sections incrementally with FileEdit
 - Parent directories are created automatically
 - Content should be the complete file content`,
     zh: `将内容写入文件，若文件不存在则创建。
@@ -28,6 +29,7 @@ Guidelines:
 使用指南：
 - 尽量使用绝对路径
 - 修改已有文件时优先使用 FileEdit（精确编辑）而非 FileWrite（全量覆盖）
+- 优先按职责拆分为适中的模块文件，避免单次写入超长单体文件；确需构建较大文件时，可先写清晰骨架再用 FileEdit 分段补充
 - 父目录自动创建
 - 内容应为完整文件内容`
   },

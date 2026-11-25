@@ -44,6 +44,7 @@ import {
   classifyPolicyError,
   classifyFetchError,
   classifyUpstreamHeadersTimeout,
+  classifyUpstreamStreamError,
   retryAfterFromResponse,
   readStreamChunkWithIdleTimeout,
   resolveStreamIdleTimeoutMs,
@@ -110,26 +111,41 @@ function parseToolInput(argumentsJson) {
 
 function classifyStreamErrorPayload(payload, response) {
   const providerError = payload?.error && typeof payload.error === 'object' ? payload.error : payload;
-  const code = [providerError?.code, providerError?.type]
-    .find(value => typeof value === 'string' && value.trim())?.trim();
+  const explicitCode = typeof providerError?.code === 'string' && providerError.code.trim()
+    ? providerError.code.trim()
+    : null;
+  const errorType = typeof providerError?.type === 'string' && providerError.type.trim()
+    ? providerError.type.trim()
+    : null;
+  const code = explicitCode || errorType;
   const message = [providerError?.message, typeof payload?.error === 'string' ? payload.error : null]
     .find(value => typeof value === 'string' && value.trim())
     || `Chat Completions stream error${code ? `: ${code}` : ''}`;
+  const retryAfterMs = [
+    retryAfterFromResponse(providerError),
+    retryAfterFromResponse(payload),
+    retryAfterFromResponse(response),
+  ].find(delay => Number.isFinite(delay) && delay > 0) ?? null;
   const limited = RATE_LIMIT_CODES.has(code);
   let error;
   if (code === 'context_length_exceeded') {
     error = new LLMContextError(message);
-  } else if (limited || TRANSIENT_FAILURE_CODES.has(code)) {
-    const retryAfterMs = [
-      retryAfterFromResponse(providerError),
-      retryAfterFromResponse(payload),
-      retryAfterFromResponse(response),
-    ].find(delay => Number.isFinite(delay) && delay > 0) ?? null;
-    error = limited
-      ? new LLMRateLimitError(message, 0, retryAfterMs)
-      : new LLMServerError(message, 0, retryAfterMs);
   } else {
-    error = new Error(message);
+    const upstreamError = classifyUpstreamStreamError({
+      code: explicitCode,
+      type: errorType,
+      message,
+      retryAfterMs,
+    });
+    if (upstreamError) {
+      error = upstreamError;
+    } else if (limited || TRANSIENT_FAILURE_CODES.has(code)) {
+      error = limited
+        ? new LLMRateLimitError(message, 0, retryAfterMs)
+        : new LLMServerError(message, 0, retryAfterMs);
+    } else {
+      error = new Error(message);
+    }
   }
   if (code) error.code = code;
   return error;
