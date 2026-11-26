@@ -34,7 +34,7 @@
 }
 
 .cosmos-page.is-workbench-maximized {
-  --c-panel-w: min(94vw, 1280px);
+  --c-panel-w: min(calc(100vw - 220px), 1280px);
 }
 
 .cosmos-gl-canvas,

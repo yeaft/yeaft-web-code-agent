@@ -821,7 +821,7 @@ describe('Cosmos Component & WebGL Review Regressions', () => {
           CosmosEventsOverlay: true,
           SettingsPanel: true,
           AgentSettingsPanel: true,
-          SessionCreateModal: true,
+          SessionSettingsModal: true,
         },
       },
     });
@@ -1551,12 +1551,12 @@ describe('Cosmos Component & WebGL Review Regressions', () => {
         config: { globalProperties: { $t: (k) => k } },
         stubs: {
           CosmosQuickComposer: true,
-          CosmosConversationDrawer: { template: '<div />', methods: { openSessionSwitcher() {}, closeSessionSwitcher() {}, isHistoryOpen: () => false } },
+          CosmosConversationDrawer: { template: '<div />', methods: { openSessionSwitcher() {}, closeSessionSwitcher() {}, isHistoryOpen: () => false, isSearchOpen: () => false, closeSearch() {}, isSessionStatusOpen: () => false, closeSessionStatus() {} } },
           CosmosConstantsPopover: true,
           CosmosEventsOverlay: true,
           SettingsPanel: true,
           AgentSettingsPanel: true,
-          SessionCreateModal: true,
+          SessionSettingsModal: true,
         },
       },
     });
@@ -2320,14 +2320,96 @@ describe('Cosmos Drawer Waiting Suppression, Horizontal Drag Resize & Session St
     expect(wrapper.find('.cosmos-status-host').classes()).toContain('is-docked');
     expect(wrapper.find('.cosmos-drawer-chat').attributes('inert')).toBeUndefined();
 
-    // 5. Mutual exclusivity: opening Workbench closes Session Status
+    // 5. Mutual exclusivity: opening Workbench closes Session Status and hides live status strip
     drawerStore.workbenchExpanded = true;
     await flushPromises();
     expect(wrapper.vm.sessionStatusOpen).toBe(false);
+    expect(wrapper.find('.cosmos-status-strip').exists()).toBe(false);
+    drawerStore.workbenchExpanded = false;
+    await flushPromises();
 
-    // 6. Horizontal resize handle supports keyboard arrows, Home reset, End maximize, and dblclick reset
+    // 5b. Multi-VP sessions (roster.length > 1) still expose live tool details in Session Status,
+    //     openSessionStatus closes inline outline search, and openSearch closes overlay Session Status.
+    const { recordLiveSessionTool } = await import('../../web/stores/helpers/session-tool-details.js');
+    activeSession.roster = [{ id: 'vp-1' }, { id: 'vp-2' }];
+    recordLiveSessionTool(
+      drawerStore,
+      { agentId: 'ag-1', conversationId: 'yeaft_ag-1', sessionId: 'sess-1', vpId: 'vp-1', turnId: 't-1', threadId: 'th-1' },
+      { toolId: 'tl-1', toolName: 'FileRead', toolInput: { file_path: 'a.js' }, startTime: Date.now() },
+    );
+    drawerStore.searchYeaftHistory = vi.fn();
+    await wrapper.setProps({ drawerWidth: 460 });
+    await flushPromises();
+    wrapper.vm.toggleSearch();
+    await flushPromises();
+    expect(wrapper.vm.searchOpen).toBe(true);
+    wrapper.vm.openSessionStatus();
+    await flushPromises();
+    expect(wrapper.vm.searchOpen).toBe(false);
+    expect(wrapper.vm.sessionStatusOpen).toBe(true);
+    expect(wrapper.findComponent(VpTimelinePaneStub).props('toolsByExecution').size).toBe(1);
+    wrapper.vm.toggleSearch();
+    await flushPromises();
+    expect(wrapper.vm.searchOpen).toBe(true);
+    expect(wrapper.vm.sessionStatusOpen).toBe(false);
+    wrapper.vm.closeSearch();
+    await flushPromises();
+
+    // 5c. Non-live error rows do not drive liveStatusStartedAt
+    drawerStore.yeaftSessionTurnsBySession['ag-1\u001fsess-1'].turns = [];
+    drawerStore.activeVpTurns = {};
+    drawerStore.vpStatuses = {
+      'vp-1': {
+        vpId: 'vp-1',
+        agentId: 'ag-1',
+        sessionId: 'sess-1',
+        conversationId: 'yeaft_ag-1',
+        connectionGeneration: 1,
+        state: 'error',
+        error: { message: 'boom', turnId: 't-err', at: Date.now() },
+      },
+    };
+    await flushPromises();
+    expect(wrapper.vm.hasSessionActivityError).toBe(true);
+    expect(wrapper.vm.sessionActivity[0]?.status).toBe('error');
+
+    // 6. Horizontal resize handle:
+    //    - Plain 0px click must NOT emit resize-start / resize-end
+    //    - Pointer drag over window works even when setPointerCapture throws, and cleans up on pointercancel & blur
+    //    - Keyboard ArrowLeft/ArrowRight/Home/End and dblclick reset work cleanly
+    await wrapper.setProps({ drawerWidth: 840 });
+    await flushPromises();
     const handle = wrapper.find('.cosmos-drawer-resize-handle');
     expect(handle.attributes('role')).toBe('separator');
+    expect(Number(handle.attributes('aria-valuenow'))).toBeLessThanOrEqual(Number(handle.attributes('aria-valuemax')));
+
+    handle.element.setPointerCapture = () => { throw new Error('unsupported'); };
+    await handle.trigger('pointerdown', { isPrimary: true, pointerType: 'mouse', button: 0, pointerId: 7, clientX: 600 });
+    await handle.trigger('pointerup', { pointerId: 7, clientX: 600 });
+    await flushPromises();
+    expect(wrapper.emitted('resize-start')).toBeUndefined();
+    expect(wrapper.emitted('resize-end')).toBeUndefined();
+
+    await handle.trigger('pointerdown', { isPrimary: true, pointerType: 'mouse', button: 0, pointerId: 8, clientX: 600 });
+    window.dispatchEvent(new PointerEvent('pointermove', { pointerId: 8, clientX: 540 }));
+    await flushPromises();
+    expect(wrapper.emitted('resize-start')).toHaveLength(1);
+    expect(wrapper.emitted('resize')?.at(-1)?.[0]).toBe(900);
+    expect(document.body.style.cursor).toBe('col-resize');
+    window.dispatchEvent(new PointerEvent('pointercancel', { pointerId: 8 }));
+    await flushPromises();
+    expect(document.body.style.cursor).toBe('');
+    expect(wrapper.emitted('resize-end')).toHaveLength(1);
+
+    // Window blur during active drag also cleans up cursor/userSelect
+    await handle.trigger('pointerdown', { isPrimary: true, pointerType: 'mouse', button: 0, pointerId: 9, clientX: 600 });
+    window.dispatchEvent(new PointerEvent('pointermove', { pointerId: 9, clientX: 560 }));
+    await flushPromises();
+    expect(document.body.style.cursor).toBe('col-resize');
+    window.dispatchEvent(new Event('blur'));
+    await flushPromises();
+    expect(document.body.style.cursor).toBe('');
+
     await handle.trigger('keydown', { key: 'ArrowLeft' });
     expect(wrapper.emitted('resize')?.at(-1)?.[0]).toBe(864);
     await handle.trigger('keydown', { key: 'ArrowRight', shiftKey: true });
@@ -2338,5 +2420,176 @@ describe('Cosmos Drawer Waiting Suppression, Horizontal Drag Resize & Session St
     expect(wrapper.emitted('resize-reset')).toHaveLength(1);
     await handle.trigger('dblclick');
     expect(wrapper.emitted('resize-reset')).toHaveLength(2);
+
+    // 7. Empty state emits open-quick-composer (no create-session button)
+    drawerStore.yeaftActiveSessionFilter = '';
+    sessionsStore.activeSessionId = '';
+    await flushPromises();
+    const cta = wrapper.find('.cosmos-drawer-cta');
+    expect(cta.exists()).toBe(true);
+    await cta.trigger('click');
+    expect(wrapper.emitted('open-quick-composer')?.[0]?.[0]).toBe('ag-1');
+  });
+
+  it('verifies real MessageList hideWaitingAnimation reactivity and CosmosPage Escape/maximize/widen boundaries', async () => {
+    // 1. Real MessageList waiting-animation suppression & dynamic reactivity
+    const msgStore = Vue.reactive({
+      currentView: 'yeaft',
+      currentAgent: 'ag-1',
+      yeaftActiveSessionFilter: 'sess-1',
+      currentConversation: 'yeaft_ag-1',
+      activeConversationId: 'yeaft_ag-1',
+      connectionState: 'connected',
+      agents: [{ id: 'ag-1', online: true }],
+      isProcessing: true,
+      waitingAnimation: 'none',
+      messages: [{ id: 'u1', type: 'user', content: 'hi', timestamp: 1 }],
+      yeaftSessionTurns: [],
+      yeaftSessionTurnsBySession: {},
+      yeaftRetryableTurnsBySession: {},
+      yeaftWaitingStagesBySession: {},
+      yeaftWaitingFailuresBySession: {},
+      isConversationConnecting: () => false,
+    });
+    globalThis.Pinia = {
+      defineStore: () => () => ({}),
+      useChatStore: () => msgStore,
+      useSessionsStore: () => ({ activeSessionId: 'sess-1', sessionById: () => null, sessionList: [] }),
+    };
+
+    const { default: MessageList } = await import('../../web/components/MessageList.js');
+    wrapper = mount(MessageList, {
+      props: { hideWaitingAnimation: false, toolsInStatus: true },
+      global: {
+        config: { globalProperties: { $t: (k) => k } },
+        stubs: {
+          AgentInstaller: true,
+          MessageItem: true,
+          AssistantTurn: true,
+          VpTurnBlock: true,
+          VpSpeakerHeader: true,
+          ReflectionCard: true,
+          SubAgentCard: true,
+          UserTurnBlock: true,
+          VirtualTranscript: { template: '<div class="vt-stub" />' },
+          MessageBlock: true,
+          ConcurrentUserTurns: true,
+          SessionLaneWait: true,
+        },
+      },
+    });
+    await flushPromises();
+    // Classic default (hideWaitingAnimation=false) renders .typing-indicator
+    expect(wrapper.find('.typing-indicator').exists()).toBe(true);
+    // Toggling hideWaitingAnimation -> true immediately removes .typing-indicator
+    await wrapper.setProps({ hideWaitingAnimation: true });
+    await flushPromises();
+    expect(wrapper.find('.typing-indicator').exists()).toBe(false);
+    // Dynamic toggle true -> false while still processing re-arms .typing-indicator
+    await wrapper.setProps({ hideWaitingAnimation: false });
+    await flushPromises();
+    expect(wrapper.find('.typing-indicator').exists()).toBe(true);
+    wrapper.unmount();
+    wrapper = null;
+
+    // 2. CosmosPage SessionSettingsModal Escape handoff, History-before-SessionStatus Escape precedence,
+    //    workbenchMaximized alignment with drawerMaxWidth, and toggleWorkbenchWiden restore when custom >= wideDefault
+    const closeHistorySpy = vi.fn();
+    const closeStatusSpy = vi.fn();
+    let historyIsOpen = true;
+    let statusIsOpen = true;
+    const pageStore = Vue.reactive({
+      agents: [{ id: 'ag-1', name: 'server', online: true, workDir: '/srv', capabilities: [] }],
+      currentAgent: 'ag-1',
+      currentView: 'yeaft',
+      workbenchExpanded: false,
+      workbenchMaximized: false,
+      sessionCatalog: [],
+      sessionProjects: [],
+      yeaftProcessingSessions: {},
+      yeaftActiveTasksBySession: {},
+      messagesMap: {},
+      toggleWorkbenchMaximized() { this.workbenchMaximized = !this.workbenchMaximized; },
+      toggleWorkbench() { this.workbenchExpanded = !this.workbenchExpanded; },
+    });
+    globalThis.Pinia = {
+      defineStore: () => () => ({}),
+      useChatStore: () => pageStore,
+      useSessionsStore: () => ({ sessionList: [], activeSessionId: null, sessionById: () => null }),
+    };
+
+    const { default: CosmosPage } = await import('../../web/components/cosmos/CosmosPage.js');
+    const prevInnerWidth = window.innerWidth;
+    Object.defineProperty(window, 'innerWidth', { value: 1280, configurable: true });
+    try {
+      wrapper = mount(CosmosPage, {
+        global: {
+          config: { globalProperties: { $t: (k) => k } },
+          stubs: {
+            CosmosQuickComposer: true,
+            CosmosConversationDrawer: {
+              template: '<div class="drawer-stub" />',
+              methods: {
+                isHistoryOpen: () => historyIsOpen,
+                closeSessionSwitcher: () => { historyIsOpen = false; closeHistorySpy(); },
+                isSearchOpen: () => false,
+                closeSearch: () => {},
+                isSessionStatusOpen: () => statusIsOpen,
+                closeSessionStatus: () => { statusIsOpen = false; closeStatusSpy(); },
+              },
+            },
+            CosmosConstantsPopover: true,
+            CosmosEventsOverlay: true,
+            SettingsPanel: true,
+            AgentSettingsPanel: true,
+            SessionSettingsModal: true,
+          },
+        },
+      });
+      await flushPromises();
+
+      wrapper.vm.openSessionInDrawer('ag-1', { id: 'sess-1' });
+      await flushPromises();
+
+      // workbenchMaximized stays strictly within drawerMaxWidth (no jump / ARIA overflow)
+      pageStore.workbenchExpanded = true;
+      pageStore.workbenchMaximized = true;
+      await flushPromises();
+      expect(wrapper.vm.effectiveDrawerWidth).toBe(wrapper.vm.drawerMaxWidth);
+      pageStore.workbenchMaximized = false;
+      pageStore.workbenchExpanded = false;
+      await flushPromises();
+
+      // toggleWorkbenchWiden visibly restores width when customDrawerWidth >= wideDefault
+      wrapper.vm.onDrawerResize(840);
+      await flushPromises();
+      expect(wrapper.vm.effectiveDrawerWidth).toBe(840);
+      wrapper.vm.toggleWorkbenchWiden();
+      await flushPromises();
+      expect(wrapper.vm.effectiveDrawerWidth).toBeLessThan(600);
+
+      // Escape with SessionSettingsModal open MUST NOT close it (SessionSettingsModal owns Escape & busy guards)
+      wrapper.vm.openSessionSettings({ sessionId: 'sess-1', agentId: 'ag-1', section: 'session' });
+      await flushPromises();
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', cancelable: true }));
+      await flushPromises();
+      expect(wrapper.vm.sessionSettingsModal.open).toBe(true);
+      wrapper.vm.closeSessionSettings();
+      await flushPromises();
+
+      // Escape closes topmost History switcher BEFORE docked Session Status
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', cancelable: true }));
+      await flushPromises();
+      expect(closeHistorySpy).toHaveBeenCalledTimes(1);
+      expect(closeStatusSpy).toHaveBeenCalledTimes(0);
+
+      // Next Escape closes Session Status while keeping drawer open
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', cancelable: true }));
+      await flushPromises();
+      expect(closeStatusSpy).toHaveBeenCalledTimes(1);
+      expect(wrapper.vm.drawerOpen).toBe(true);
+    } finally {
+      Object.defineProperty(window, 'innerWidth', { value: prevInnerWidth, configurable: true });
+    }
   });
 });

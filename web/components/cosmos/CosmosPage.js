@@ -522,7 +522,7 @@ export default {
     const effectiveDrawerWidth = Vue.computed(() => {
       const vw = viewportWidth.value;
       if (vw <= 768) return vw;
-      if (workbenchMaximized.value) return Math.min(Math.round(vw * 0.94), COSMOS_DRAWER_WIDTH.max);
+      if (workbenchMaximized.value) return drawerMaxWidth.value;
       if (workbenchWidened.value) {
         const customClamped = customDrawerWidth.value != null
           ? clampCosmosDrawerWidth(customDrawerWidth.value, vw)
@@ -1098,7 +1098,25 @@ export default {
         workbenchWidened.value = false;
         return;
       }
-      workbenchWidened.value = !workbenchWidened.value;
+      const vw = viewportWidth.value;
+      const wideDefault = Math.min(760, Math.max(540, Math.round(vw * 0.50)));
+      const customClamped = customDrawerWidth.value != null
+        ? clampCosmosDrawerWidth(customDrawerWidth.value, vw)
+        : null;
+      if (workbenchWidened.value) {
+        workbenchWidened.value = false;
+        if (customClamped != null && customClamped >= wideDefault) {
+          customDrawerWidth.value = null;
+          saveCosmosDrawerWidth(null);
+        }
+        return;
+      }
+      if (customClamped != null && customClamped >= wideDefault) {
+        customDrawerWidth.value = null;
+        saveCosmosDrawerWidth(null);
+        return;
+      }
+      workbenchWidened.value = true;
     }
 
     function closeDrawer() {
@@ -1332,19 +1350,21 @@ export default {
         return;
       }
       if (e.key !== 'Escape') return;
-      if (sessionSettingsModal.open) { closeSessionSettings(); return; }
+      // Let SessionSettingsModal (and its nested FolderPickerDialog) own Escape & busy guards.
+      if (sessionSettingsModal.open) return;
       if (settingsModal.open) { settingsModal.open = false; return; }
       if (agentSettingsModal.open) { agentSettingsModal.open = false; return; }
       if (emptyPlanetMenu.value) { emptyPlanetMenu.value = null; return; }
       if (constantsOpen.value) { constantsOpen.value = false; return; }
       if (bookCreateOpen.value) { bookCreateOpen.value = false; return; }
       if (eventSim.active?.observing) { onReturnFromEvent(); return; }
+      if (drawerOpen.value && drawerRef.value?.isHistoryOpen?.()) { drawerRef.value.closeSessionSwitcher?.(); return; }
+      if (drawerOpen.value && drawerRef.value?.isSearchOpen?.()) { drawerRef.value.closeSearch?.(); return; }
       if (store.workbenchExpanded && drawerOpen.value) { collapseOpenWorkbench(); return; }
       if (drawerOpen.value && drawerRef.value?.isSessionStatusOpen?.()) {
         drawerRef.value.closeSessionStatus?.({ restoreFocus: true });
         return;
       }
-      if (drawerOpen.value && drawerRef.value?.isHistoryOpen?.()) { drawerRef.value.closeSessionSwitcher?.(); return; }
       if (drawerOpen.value) { closeDrawer(); return; }
       if (quickAgentId.value) { quickAgentId.value = null; return; }
       if (currentBand.value !== 'solar') jumpToScale(13.0);

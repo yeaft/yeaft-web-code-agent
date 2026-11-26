@@ -47,6 +47,7 @@
   --diff-del-text: #f2a6ae;
   --diff-line-num: rgba(168, 192, 224, 0.48);
   --error: #ff8c96;
+  --error-text: #ff8c96;
   --error-bg: rgba(255, 118, 128, 0.15);
   --status-busy: var(--p-accent);
   --tool-bg: rgba(255, 255, 255, 0.055);
@@ -1139,6 +1140,7 @@
   --accent: var(--p-accent);
   --status-busy: var(--p-accent);
   --error: #ff8c96;
+  --error-text: #ff8c96;
   --error-bg: rgba(255, 118, 128, 0.15);
 
   display: flex;

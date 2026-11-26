@@ -33,6 +33,7 @@ import {
 } from '../../utils/modelRefs.js';
 import { sessionActivityRows } from '../../stores/helpers/session-activity.js';
 import { liveSessionToolsByExecution } from '../../stores/helpers/session-tool-details.js';
+import { LIVE_SESSION_TURN_STATES } from '../../stores/helpers/yeaft-session-turns.js';
 import { formatElapsed } from '../../stores/helpers/turn-timing.js';
 import { revealOutlineResult } from '../../utils/message-search-navigation.js';
 import { alertDialog } from '../../utils/dialog.js';
@@ -113,8 +114,8 @@ export default {
         aria-orientation="vertical"
         :aria-label="$t('cosmos.panel.resize')"
         :aria-valuemin="minDrawerWidth"
-        :aria-valuemax="maxDrawerWidth"
-        :aria-valuenow="Math.round(drawerWidth)"
+        :aria-valuemax="ariaMaxDrawerWidth"
+        :aria-valuenow="ariaCurrentDrawerWidth"
         :title="$t('cosmos.panel.resize')"
         @pointerdown.stop="startDrawerResize"
         @pointermove="moveDrawerResize"
@@ -240,7 +241,7 @@ export default {
       </header>
 
       <!-- Sidebar History, Project Tree & Session Search Switcher (opened via ☰) -->
-      <div v-if="historyOpen" class="cosmos-history-drawer">
+      <div v-if="historyOpen" class="cosmos-history-drawer" @keydown.esc.stop.prevent="closeHistoryDrawer">
         <form
           class="cosmos-history-search"
           role="search"
@@ -663,12 +664,19 @@ export default {
       new Set(sessionActivity.value.flatMap((row) => row?.liveExecutionKeys || []))
     ));
 
+    const ariaMaxDrawerWidth = Vue.computed(() => (
+      Math.max(props.minDrawerWidth, props.maxDrawerWidth, Math.round(props.drawerWidth))
+    ));
+    const ariaCurrentDrawerWidth = Vue.computed(() => (
+      Math.round(Math.max(props.minDrawerWidth, Math.min(ariaMaxDrawerWidth.value, props.drawerWidth)))
+    ));
+
     const sessionToolsByExecution = Vue.computed(() => {
       const keys = liveExecutionKeys.value;
       const agentId = props.agent?.id;
       const sessionId = activeGroup.value?.id;
       const conversationId = agentId ? store.yeaftConversationIdsByAgent?.[agentId] : null;
-      if (!sessionStatusOpen.value || !ordinarySession.value || !sessionId || !conversationId || !keys.size) {
+      if (!sessionStatusOpen.value || !isYeaftView.value || !sessionId || !conversationId || !keys.size) {
         return new Map();
       }
       return liveSessionToolsByExecution(store, { agentId, conversationId, sessionId }, keys);
@@ -697,7 +705,7 @@ export default {
 
     const hasLiveSessionActivity = Vue.computed(() => (
       isProcessing.value
-      || sessionActivity.value.some((row) => row?.status && row.status !== 'error')
+      || sessionActivity.value.some((row) => LIVE_SESSION_TURN_STATES.has(row?.status))
       || sessionStatusTasks.value.length > 0
     ));
 
@@ -705,12 +713,14 @@ export default {
       isYeaftView.value
       && activeGroup.value
       && !sessionStatusOpen.value
+      && !workbenchOpen.value
       && (hasLiveSessionActivity.value || hasSessionActivityError.value),
     ));
 
     const liveStatusStartedAt = Vue.computed(() => {
       let earliest = 0;
       for (const row of sessionActivity.value) {
+        if (!LIVE_SESSION_TURN_STATES.has(row?.status)) continue;
         const ts = Number(row?.startedAt || 0);
         if (ts > 0 && (earliest === 0 || ts < earliest)) earliest = ts;
       }
@@ -1131,10 +1141,13 @@ export default {
         else store.workbenchExpanded = false;
       }
       if (historyOpen.value) closeHistoryDrawer();
+      if (searchOpen.value) closeSearch();
       sessionStatusOpen.value = true;
-      if (!sessionStatusDocked.value) {
-        Vue.nextTick(() => sessionStatusPaneRef.value?.$el?.querySelector?.('.yeaft-session-status-close')?.focus?.());
-      }
+      Vue.nextTick(() => {
+        if (sessionStatusOpen.value && !sessionStatusDocked.value) {
+          sessionStatusPaneRef.value?.$el?.querySelector?.('.yeaft-session-status-close')?.focus?.();
+        }
+      });
     }
 
     function closeSessionStatus({ restoreFocus = false } = {}) {
@@ -1194,6 +1207,15 @@ export default {
       });
     }
 
+    const RESIZE_DRAG_THRESHOLD_PX = 2;
+    let lastHandledResizeEvent = null;
+
+    function detachWindowResizeListeners() {
+      window.removeEventListener('pointermove', moveDrawerResize);
+      window.removeEventListener('pointerup', endDrawerResize);
+      window.removeEventListener('pointercancel', endDrawerResize);
+    }
+
     function startDrawerResize(ev) {
       if (!ev || !ev.isPrimary) return;
       if (ev.pointerType !== 'touch' && ev.button !== 0) return;
@@ -1201,69 +1223,87 @@ export default {
       endDrawerResize();
       const handle = resizeHandleRef.value;
       const measured = drawerRootRef.value?.getBoundingClientRect?.().width || props.drawerWidth;
+      const startWidth = Math.max(props.minDrawerWidth, Math.min(props.maxDrawerWidth, measured));
       const releaseFocus = document.activeElement !== handle;
       handle?.focus?.({ preventScroll: true });
       activeResizeDrag = {
         pointerId: ev.pointerId,
         startX: ev.clientX,
-        startWidth: measured,
+        startWidth,
+        moved: false,
         releaseFocus,
         prevCursor: document.body.style.cursor,
         prevUserSelect: document.body.style.userSelect,
       };
-      try { handle?.setPointerCapture?.(ev.pointerId); } catch { /* ignore */ }
-      isDraggingResize.value = true;
-      document.body.style.cursor = 'col-resize';
-      document.body.style.userSelect = 'none';
-      emit('resize-start', measured);
+      try { handle?.setPointerCapture?.(ev.pointerId); } catch { /* fallback to window listeners */ }
+      window.addEventListener('pointermove', moveDrawerResize);
+      window.addEventListener('pointerup', endDrawerResize);
+      window.addEventListener('pointercancel', endDrawerResize);
     }
 
     function moveDrawerResize(ev) {
-      if (!activeResizeDrag || ev.pointerId !== activeResizeDrag.pointerId) return;
+      if (!ev || ev === lastHandledResizeEvent) return;
+      if (!activeResizeDrag || (ev.pointerId != null && activeResizeDrag.pointerId != null && ev.pointerId !== activeResizeDrag.pointerId)) return;
+      lastHandledResizeEvent = ev;
       const delta = activeResizeDrag.startX - ev.clientX;
+      if (!activeResizeDrag.moved) {
+        if (Math.abs(delta) < RESIZE_DRAG_THRESHOLD_PX) return;
+        activeResizeDrag.moved = true;
+        isDraggingResize.value = true;
+        document.body.style.cursor = 'col-resize';
+        document.body.style.userSelect = 'none';
+        emit('resize-start', activeResizeDrag.startWidth);
+      }
       emit('resize', activeResizeDrag.startWidth + delta);
     }
 
     function endDrawerResize(ev = null) {
+      if (ev && ev === lastHandledResizeEvent) return;
       const drag = activeResizeDrag;
       if (!drag) return;
-      if (ev && ev.pointerId != null && ev.pointerId !== drag.pointerId) return;
+      if (ev && ev.pointerId != null && drag.pointerId != null && ev.pointerId !== drag.pointerId) return;
+      if (ev) lastHandledResizeEvent = ev;
       activeResizeDrag = null;
+      detachWindowResizeListeners();
       isDraggingResize.value = false;
-      document.body.style.cursor = drag.prevCursor;
-      document.body.style.userSelect = drag.prevUserSelect;
+      if (drag.moved) {
+        document.body.style.cursor = drag.prevCursor;
+        document.body.style.userSelect = drag.prevUserSelect;
+      }
       const handle = resizeHandleRef.value;
       try {
-        if (handle?.hasPointerCapture?.(drag.pointerId)) {
+        if (drag.pointerId != null && handle?.hasPointerCapture?.(drag.pointerId)) {
           handle.releasePointerCapture(drag.pointerId);
         }
       } catch { /* ignore */ }
       if (drag.releaseFocus && document.activeElement === handle) handle?.blur?.();
-      emit('resize-end');
+      if (drag.moved) emit('resize-end');
     }
 
     function resetDrawerResize() {
+      endDrawerResize();
       emit('resize-reset');
     }
 
     function onResizeHandleKeydown(ev) {
       const step = ev.shiftKey ? 64 : 24;
+      const baseWidth = Math.max(props.minDrawerWidth, Math.min(props.maxDrawerWidth, props.drawerWidth));
       if (ev.key === 'ArrowLeft') {
         ev.preventDefault();
-        emit('resize-start', props.drawerWidth);
-        emit('resize', props.drawerWidth + step);
+        emit('resize-start', baseWidth);
+        emit('resize', baseWidth + step);
         emit('resize-end');
       } else if (ev.key === 'ArrowRight') {
         ev.preventDefault();
-        emit('resize-start', props.drawerWidth);
-        emit('resize', props.drawerWidth - step);
+        emit('resize-start', baseWidth);
+        emit('resize', baseWidth - step);
         emit('resize-end');
       } else if (ev.key === 'Home') {
         ev.preventDefault();
         emit('resize-reset');
       } else if (ev.key === 'End') {
         ev.preventDefault();
-        emit('resize-start', props.drawerWidth);
+        emit('resize-start', baseWidth);
         emit('resize', props.maxDrawerWidth);
         emit('resize-end');
       }
@@ -1309,6 +1349,7 @@ export default {
     }
 
     function openSearch() {
+      if (sessionStatusOpen.value && !sessionStatusDocked.value) sessionStatusOpen.value = false;
       clearSearchTimers();
       historySearchQuery.value = '';
       resetHistorySearchState(DEFAULT_HISTORY_SENDER);
@@ -1343,6 +1384,7 @@ export default {
 
     function onSearchSelect(result) {
       if (!result) return null;
+      if (sessionStatusOpen.value && !sessionStatusDocked.value) sessionStatusOpen.value = false;
       searchActiveMessageId.value = result.messageId || '';
       const revealLease = store.beginYeaftHistoryReveal?.(result) || null;
       const isMobileViewport = typeof window !== 'undefined' && window.innerWidth <= 768;
@@ -1578,6 +1620,12 @@ export default {
       isHistoryOpen() {
         return historyOpen.value;
       },
+      isSearchOpen() {
+        return searchOpen.value;
+      },
+      closeSearch() {
+        closeSearch();
+      },
       openSessionStatus() {
         openSessionStatus();
       },
@@ -1594,6 +1642,8 @@ export default {
       drawerRootRef,
       resizeHandleRef,
       isDraggingResize,
+      ariaMaxDrawerWidth,
+      ariaCurrentDrawerWidth,
       historyOpen,
       sessionSearchQuery,
       sessionSearchInputRef,

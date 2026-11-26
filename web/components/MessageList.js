@@ -1237,30 +1237,27 @@ export default {
     };
     Vue.watch(() => store.isProcessing, (processing) => { if (!processing) turnAnimation = null; });
     Vue.watch(waitClockKey, () => { turnAnimation = null; });
-    Vue.watch(() => _props.hideWaitingAnimation, (hidden) => {
-      if (hidden) clearWaitingIndicatorState();
-    });
     // A change in Settings applies to the wait already on screen.
     Vue.watch(() => store.waitingAnimation, () => {
       turnAnimation = null;
-      if (!_props.hideWaitingAnimation && displayTypingDots.value) startWaitingAnimation();
+      if (!_props.hideWaitingAnimation && (displayTypingDots.value || isPreviewMode)) startWaitingAnimation();
     });
 
-    Vue.watch(showTypingDots, (show) => {
-      if (_props.hideWaitingAnimation) {
+    Vue.watch([showTypingDots, () => _props.hideWaitingAnimation], ([show, hidden]) => {
+      if (hidden) {
         clearWaitingIndicatorState();
         return;
       }
-      if (show) {
+      if (show || isPreviewMode) {
         // Cancel any pending hide from a prior cycle — we're visible again.
         if (typingHideTimer) {
           clearTimeout(typingHideTimer);
           typingHideTimer = null;
         }
-        displayTypingDots.value = true;
+        if (show) displayTypingDots.value = true;
         typingStartTime.value = Date.now();
         now.value = Date.now();
-        if (!typingTimer) {
+        if (show && !typingTimer) {
           typingTimer = setInterval(() => {
             now.value = Date.now();
           }, 1000);
@@ -1283,13 +1280,6 @@ export default {
         }
       }
     }, { immediate: true });
-
-    // Preview mode initialization
-    if (isPreviewMode && !_props.hideWaitingAnimation) {
-      typingStartTime.value = Date.now();
-      now.value = Date.now();
-      startWaitingAnimation();
-    }
 
     // Event-driven waiting status (replaces time-based waitingPhase)
     const waitingStatus = Vue.computed(() => {
