@@ -30,6 +30,7 @@ import {
 } from './ws-utils.js';
 import { handleClientConversation } from './handlers/client-conversation.js';
 import { clearSessionTurnDeletesForClient } from './handlers/session-turn-delete.js';
+import { clearSessionTurnRetriesForClient } from './handlers/session-turn-retry.js';
 import { handleClientWorkbench } from './handlers/client-workbench.js';
 import { CLIENT_BROWSER_TYPES, handleClientBrowser } from './handlers/client-browser.js';
 import { handleClientMisc } from './handlers/client-misc.js';
@@ -211,6 +212,7 @@ export function handleWebConnection(ws, url, req = {}) {
     clearAgentSettingsRequestsForClient(clientId);
     clearYeaftDebugRequestsForClient(clientId);
     clearSessionTurnDeletesForClient(clientId);
+    clearSessionTurnRetriesForClient(clientId);
     const browserPeers = clearBrowserRuntimeForClient(client);
     for (const peer of browserPeers) {
       const agent = agents.get(peer.agentId);

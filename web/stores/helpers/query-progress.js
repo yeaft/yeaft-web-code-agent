@@ -106,6 +106,16 @@ export function applyQueryProgress(store, msg) {
   } };
 }
 
+/** Only a trusted explicit same-turn retry start reopens a settled turn. */
+export function reopenQueryProgress(store, agentId, conversationId, turnId) {
+  if (!agentId || !conversationId || store.yeaftConversationIdsByAgent?.[agentId] !== conversationId) return;
+  const key = keyFor(agentId, conversationId, turnId);
+  if (!store._yeaftEndedQueryExecutions?.[key]) return;
+  const ended = { ...store._yeaftEndedQueryExecutions };
+  delete ended[key];
+  store._yeaftEndedQueryExecutions = ended;
+}
+
 /** Retire only display metadata. Neither these counters nor their terminal
  * fence participate in Session processing or Stop authorization. */
 export function retireQueryProgress(store, agentId, conversationId, turnIds) {

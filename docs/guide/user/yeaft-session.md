@@ -128,6 +128,8 @@ While waiting for the next chunk, the selected waiting animation appears (three 
 
 After an Agent restart, a recent native Session message with no recorded execution or reply stays visible and is marked **Interrupted**. The Agent does not resend it automatically. Check whether retrying is safe, then use the message’s **Edit** action to send it again.
 
+When a model request fails and the Agent can safely resume it, the chat status bar offers **Retry** and **Compact tool results and retry**. Both continue the same turn without a new message or redispatching finished tools. Use the second option if the request context was too large: it shrinks the model input, not the original tool records. The actions survive a browser refresh while the checkpoint is valid, but not an Agent restart or checkpoint expiry.
+
 新执行可读取 Session 有界历史和其他未结束执行已公开的输入／正文，后续 loop 接收增量参考，不共享 thinking 或 provider 私有续接状态。并行仍使用同一个工作目录，不自动隔离文件写入；同时修改代码时应明确分工或使用独立 worktree。
 
 ## Planning and progress

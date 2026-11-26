@@ -24,7 +24,7 @@ import { randomUUID } from 'node:crypto';
 import { DEFAULT_YEAFT_DIR } from './init.js';
 import { Engine } from './engine.js';
 import { DebugTrace } from './debug-trace.js';
-import { readSessionTurnDeletions, sessionDeletionProjection } from './conversation/turn-deletion-journal.js';
+import { readSessionTurnDeletions, sessionDeletionGeneration, sessionDeletionProjection } from './conversation/turn-deletion-journal.js';
 import { historyError } from './conversation/session-history.js';
 import { loadSession } from './session.js';
 import { loadAgentMCPConfig, loadConfig, loadMCPConfig } from './config.js';
@@ -454,6 +454,91 @@ const turnAbortCtrls = new Map();
  * @type {Map<string, { sessionId: string, vpId: string, threadId: string, key: string }>}
  */
 const turnAbortMeta = new Map();
+// A checkpoint is not a transcript and must not outlive the owning runtime.
+// Keep a small, bounded working set; no files or browser payloads contain it.
+const failedTurnRetries = new Map();
+const RETRY_STATE_TTL = 30 * 60_000;
+const MAX_RETRY_STATE_BYTES = 64 * 1024 * 1024;
+let failedRetryBytes = 0;
+
+function forgetFailedTurnRetry(turnId) {
+  const entry = failedTurnRetries.get(turnId);
+  if (!entry) return;
+  failedTurnRetries.delete(turnId);
+  failedRetryBytes -= entry.bytes;
+  clearTimeout(entry.timer);
+}
+
+function clearFailedTurnRetries(sessionId = null, thread = null) {
+  for (const [id, entry] of failedTurnRetries) {
+    if ((!sessionId || entry.sessionId === sessionId) && (!thread || entry.thread === thread)) forgetFailedTurnRetry(id);
+  }
+}
+
+// Approximate the retained object graph without serializing large tool/image
+// payloads. Object identity matters: the signed projection can share rows.
+function retryStateWeight(entry) {
+  const seen = new WeakSet();
+  const cap = MAX_RETRY_STATE_BYTES / 2;
+  let bytes = 0;
+  function visit(value, depth = 0) {
+    bytes += typeof value === 'string' ? 2 * value.length + 16 : 16;
+    if (bytes > cap || !value || typeof value !== 'object' || seen.has(value)) return;
+    if (depth >= 64) { bytes = Infinity; return; }
+    seen.add(value);
+    bytes += 112;
+    if (ArrayBuffer.isView(value)) { visit(value.buffer, depth + 1); return; }
+    if (value instanceof ArrayBuffer) { bytes += value.byteLength; return; }
+    if (value instanceof Map || value instanceof Set) {
+      for (const [key, item] of value.entries()) {
+        visit(key, depth + 1);
+        if (value instanceof Map) visit(item, depth + 1);
+        if (bytes > cap) break;
+      }
+    } else {
+      for (const key in value) {
+        if (!Object.hasOwn(value, key)) continue;
+        bytes += 16 + 2 * key.length;
+        visit(value[key], depth + 1);
+        if (bytes > cap) break;
+      }
+    }
+  }
+  visit(entry);
+  return bytes;
+}
+
+function revokeFailedTurnRetries(matches) {
+  const sessions = new Set();
+  for (const [turnId, entry] of failedTurnRetries) {
+    if (!matches(entry)) continue;
+    forgetFailedTurnRetry(turnId);
+    sessions.add(entry.sessionId);
+  }
+  for (const sessionId of sessions) publishSessionTurns(sessionId);
+}
+
+function rememberFailedTurnRetry(entry) {
+  const { turnId, sessionId, thread } = entry;
+  // Don't pin the thread/Engine or its registry a second time for sizing.
+  const bytes = retryStateWeight({ state: entry.state, envelope: entry.envelope, history: entry.history });
+  if (bytes > MAX_RETRY_STATE_BYTES / 2) return;
+  clearFailedTurnRetries(sessionId, thread);
+  const evicted = new Set();
+  while (failedTurnRetries.size >= 24 || failedRetryBytes + bytes > MAX_RETRY_STATE_BYTES) {
+    const [id, old] = failedTurnRetries.entries().next().value;
+    evicted.add(old.sessionId);
+    forgetFailedTurnRetry(id);
+  }
+  const timer = setTimeout(() => {
+    forgetFailedTurnRetry(turnId);
+    publishSessionTurns(sessionId);
+  }, RETRY_STATE_TTL);
+  timer.unref?.();
+  failedTurnRetries.set(turnId, { ...entry, bytes, timer, retryToken: randomUUID() });
+  failedRetryBytes += bytes;
+  for (const id of evicted) if (id !== sessionId) publishSessionTurns(id);
+}
 /**
  * Per-VP status broker — the agent-side authority for VP timeline
  * status. Lazy-initialized on first use because `sendSessionEvent` is
@@ -947,6 +1032,12 @@ function normalizeProjectContext(value, sessionId) {
   };
 }
 
+function retryProjectKey(value, sessionId) {
+  const normalized = normalizeProjectContext(value, sessionId);
+  if (!normalized?.projectId) return '';
+  return JSON.stringify({ ...normalized, sessionIds: normalized.sessionIds.sort() });
+}
+
 function legacyProjectContext(yeaftDir, sessionId) {
   const project = loadProjects(yeaftDir).find(row => row.sessionIds.includes(sessionId));
   if (!project) return null;
@@ -1247,10 +1338,13 @@ function publishSessionTurns(sessionId, extra = {}) {
     return { userTurnId: turn.userTurnId, userMessageId: turn.userMessageId,
       startedAt: turn.startedAt, ...(activeSince > 0 ? { activeSince } : {}), ...(endedAt > 0 ? { endedAt } : {}), state, executions };
   });
-  sendSessionEvent({ type: 'session_turns', turns }, { sessionId, ...extra });
+  const retryableTurns = [...failedTurnRetries.values()]
+    .filter(row => row.sessionId === sessionId && !turnAbortMeta.has(row.turnId))
+    .map(({ turnId, vpId, threadId, retryToken, message, preview }) => ({ turnId, vpId, threadId, retryToken, message, preview }));
+  sendSessionEvent({ type: 'session_turns', turns, retryableTurns }, { sessionId, ...extra });
 }
 
-function registerUserExecution(sessionId, userTurnId, vpId, threadId, turnId, prompt = '') {
+function registerUserExecution(sessionId, userTurnId, vpId, threadId, turnId, prompt = '', { retry = false } = {}) {
   if (!userTurnId) return;
   const turns = userTurnsFor(sessionId);
   let turn = turns.get(userTurnId);
@@ -1266,7 +1360,9 @@ function registerUserExecution(sessionId, userTurnId, vpId, threadId, turnId, pr
     delete turn.endedAt;
   }
   turn.executions.set(turnId, { vpId, threadId, turnId, state: 'queued' });
-  visibleExecutionText.set(turnId, { sessionId, userTurnId, vpId, prompt: String(prompt).slice(0, 4000), promptOffset: 0, text: '', textOffset: 0, state: 'queued' });
+  const visible = retry ? visibleExecutionText.get(turnId) : null;
+  if (visible) visible.state = 'queued';
+  else visibleExecutionText.set(turnId, { sessionId, userTurnId, vpId, prompt: String(prompt).slice(0, 4000), promptOffset: 0, text: '', textOffset: 0, state: 'queued' });
   if (visibleExecutionText.size > 200) visibleExecutionText.delete(visibleExecutionText.keys().next().value);
   // Retain a bounded reconnect projection; history owns the complete tape.
   for (const [id, row] of turns) {
@@ -1561,6 +1657,7 @@ function invalidateGroupContext(sessionId, { abortRuntime = false } = {}) {
   if (!sessionId) return;
   sessionContexts.delete(sessionId);
   if (!abortRuntime) return;
+  clearFailedTurnRetries(sessionId);
   const prefix = `${sessionId}::`;
   for (const [k, ctrl] of vpAborts) {
     if (!k.startsWith(prefix)) continue;
@@ -2914,8 +3011,12 @@ function ensureDriverRunning(sessionId, vpId, threadId = 'main') {
     while (true) {
       const inbox = vpInboxes.get(key);
       if (!inbox || inbox.length === 0) break;
-      const { envelope, turnId, thread: queuedThread } = inbox.shift();
+      const { envelope, turnId, thread: queuedThread, retry } = inbox.shift();
       const thread = queuedThread || getOrCreateVpThread({ sessionId, vpId, threadId });
+      if (!retry && [...failedTurnRetries.values()].some(entry => entry.thread === thread)) {
+        clearFailedTurnRetries(sessionId, thread);
+        publishSessionTurns(sessionId);
+      }
       const vpAbort = new AbortController();
       vpAborts.set(key, vpAbort);
       turnAbortCtrls.set(turnId, vpAbort);
@@ -2928,7 +3029,7 @@ function ensureDriverRunning(sessionId, vpId, threadId = 'main') {
       // `loadSessionHistoryForVp`, which applies no threadId filter.
       const peerExecutions = new Set(liveSessionThreads(sessionId).filter(peer => peer !== thread)
         .flatMap(peer => [...(userTurnsFor(sessionId).get(peer.userTurnId)?.executions.keys() || [])]));
-      const safeSnapshot = getOrCreateSessionHistory(sessionId).flatMap(row => {
+      const safeSnapshot = retry ? [] : getOrCreateSessionHistory(sessionId).flatMap(row => {
         if (!peerExecutions.has(row._runtimeTurnId || row.turnId)) return [row];
         if (row.role === 'tool') return [];
         return [{ role: row.role, content: typeof row.content === 'string' ? row.content : '',
@@ -2939,7 +3040,7 @@ function ensureDriverRunning(sessionId, vpId, threadId = 'main') {
       const { text, prompt, promptParts } = buildVpPromptPayload(vpId, envelope);
 
       try {
-        const envMsgId = envelope?.msg?.id;
+        const envMsgId = retry ? null : envelope?.msg?.id;
         if (envMsgId && text) {
           const meta = envelope?.msg?.meta || {};
           const injectedBy = meta.injectedBy;
@@ -2974,6 +3075,7 @@ function ensureDriverRunning(sessionId, vpId, threadId = 'main') {
           envelope,
           vpAbort,
           baseSnapshot,
+          retry,
         });
       } catch (err) {
         console.warn('[Yeaft] driveVp: runVpTurn failed', vpId, err?.message || err);
@@ -2981,6 +3083,7 @@ function ensureDriverRunning(sessionId, vpId, threadId = 'main') {
         turnAbortCtrls.delete(turnId);
         turnAbortMeta.delete(turnId);
         if (vpAborts.get(key) === vpAbort) vpAborts.delete(key);
+        if (failedTurnRetries.has(turnId)) publishSessionTurns(sessionId);
         try {
           sendSessionEvent({
             type: 'vp_typing_end',
@@ -2995,7 +3098,7 @@ function ensureDriverRunning(sessionId, vpId, threadId = 'main') {
       try {
         const injectedBy = envelope?.msg?.meta?.injectedBy;
         const isInternalMessage = injectedBy === 'route_forward' || injectedBy === 'task_result';
-        if (text && envelope?.msg && !isInternalMessage) {
+        if (!retry && text && envelope?.msg && !isInternalMessage) {
           sendSessionEvent({
             type: 'session_message',
             sessionId,
@@ -3123,6 +3226,7 @@ export async function __testResetVpState() {
   turnAbortCtrls.clear();
   turnAbortMeta.clear();
   await __testDrainVpDrivers();
+  clearFailedTurnRetries();
   vpInboxes.clear();
   vpDrivers.clear();
   vpEngines.clear();
@@ -4308,6 +4412,8 @@ export function handleYeaftProjectContextSync(msg) {
     if (!sessionId) continue;
     const projectContext = normalizeProjectContext(row.projectContext, sessionId);
     if (!projectContext && row.projectContext !== null) continue;
+    const key = retryProjectKey(projectContext, sessionId);
+    revokeFailedTurnRetries(entry => entry.sessionId === sessionId && entry.projectKey !== key);
     projectContextBySession.set(sessionId, projectContext || {
       projectId: null,
       projectName: null,
@@ -4642,6 +4748,8 @@ export function handleYeaftUpdateSession(msg) {
     }
     if (hasWorkDir) {
       group = updateSessionWorkDir(yeaftDir, sessionId, patch.workDir);
+      clearFailedTurnRetries(sessionId);
+      publishSessionTurns(sessionId);
     }
     invalidateGroupContext(sessionId);
     sendSessionCrudResult({ op: 'update', requestId, ok: true, session: { ...group, config: loadSessionConfig(yeaftDir, sessionId) } });
@@ -5681,6 +5789,9 @@ function handleEngineEvent(event, hctx) {
         ...(Number.isFinite(event.retryAttempts) ? { retryAttempts: event.retryAttempts } : {}),
         ...(Number.isFinite(event.maxRetries) ? { maxRetries: event.maxRetries } : {}),
       }, envelope);
+      // Status/error and controls are enough for a resumable request. A
+      // synthetic assistant row would become stale prose on the same turn.
+      if (event.manualRetryState) break;
       if (isPermissionErrorMsg(errMsg)) {
         if (!_permissionDiagnosticSent) {
           _permissionDiagnosticSent = true;
@@ -6539,7 +6650,7 @@ async function raceWithEscalation(inner, { signal, graceMs, onEscalate }) {
  *
  * @param {{ prompt: string, sessionId: string, vpId: string, turnId: string, envelope: object, vpAbort: AbortController, baseSnapshot: Array }} args
  */
-async function runVpTurn({ prompt, promptParts = null, sessionId, vpId, threadId = 'main', thread = null, turnId, envelope: inboundEnvelope, vpAbort, baseSnapshot, escalationState = null }) {
+async function runVpTurn({ prompt, promptParts = null, sessionId, vpId, threadId = 'main', thread = null, turnId, envelope: inboundEnvelope, vpAbort, baseSnapshot, escalationState = null, retry = null }) {
   if (!prompt?.trim()) return;
 
   const perfTraceId = typeof inboundEnvelope?._perfTraceId === 'string' && inboundEnvelope._perfTraceId.trim()
@@ -6575,6 +6686,8 @@ async function runVpTurn({ prompt, promptParts = null, sessionId, vpId, threadId
   let engineTerminalReason = null;
   let engineTerminalDetail = null;
   let handlerCtx = null;
+  let retryState = null;
+  const owner = captureRuntimeOwner();
   const markEngineTerminal = (reason, detail = null) => {
     engineTerminalReason = reason;
     if (detail) engineTerminalDetail = detail;
@@ -6636,7 +6749,7 @@ async function runVpTurn({ prompt, promptParts = null, sessionId, vpId, threadId
     resetQueryTimer();
 
     // Emit turn_start so frontend can create the message block.
-    sendSessionEvent({ type: 'vp_turn_start', vpId, threadId, turnId, sessionId, title: thread?.title || '', ts: turnStartAt }, envelope);
+    sendSessionEvent({ type: 'vp_turn_start', vpId, threadId, turnId, sessionId, title: thread?.title || '', ...(retry ? { retry: true } : {}), ts: turnStartAt }, envelope);
     // vp-status: LLM call about to start, no text/tool yet → 'thinking'.
     try {
       getVpStatusBroker().transition({ sessionId, vpId, threadId, title: thread?.title || '', state: 'thinking', turnId, messageCount: thread?.messageIds?.length || 0 });
@@ -6645,11 +6758,11 @@ async function runVpTurn({ prompt, promptParts = null, sessionId, vpId, threadId
     }
 
     try {
-      const assistantTextParts = [];
-      const toolCallsAccum = [];
-      const toolResultsAccum = [];
-      const thinkingBlocksAccum = []; // task-327d: round-trip to next turn
-      const appendedUserPrompts = [];
+      const assistantTextParts = retry?.history.assistantTextParts || [];
+      const toolCallsAccum = retry?.history.toolCallsAccum || [];
+      const toolResultsAccum = retry?.history.toolResultsAccum || [];
+      const thinkingBlocksAccum = retry?.history.thinkingBlocksAccum || [];
+      const appendedUserPrompts = retry?.history.appendedUserPrompts || [];
       let vpEngine = null;
 
       // task-707: per-VP engine + persistent group coord. The coord is
@@ -6667,11 +6780,13 @@ async function runVpTurn({ prompt, promptParts = null, sessionId, vpId, threadId
         threadId,
         turnId,
       });
+      let projectKey = null;
       if (queryOpts) {
         const envelopeProjectContext = normalizeProjectContext(inboundEnvelope?._projectContext, sessionId);
         const projectContext = envelopeProjectContext
           || projectContextBySession.get(sessionId)
           || legacyProjectContext(ctx.CONFIG?.yeaftDir, sessionId);
+        projectKey = retryProjectKey(projectContext, sessionId);
         const projectSessionIds = projectContext?.sessionIds || [];
         queryOpts.projectSessionIds = projectSessionIds;
         queryOpts.agentSessionIds = inboundEnvelope?._agentSessionIds || null;
@@ -6713,6 +6828,9 @@ async function runVpTurn({ prompt, promptParts = null, sessionId, vpId, threadId
 
       const inboundInjectedBy = inboundEnvelope?.msg?.meta?.injectedBy;
       const inboundIsInternal = inboundInjectedBy === 'route_forward' || inboundInjectedBy === 'task_result';
+      const retryEnabled = !!thread && !!owner && !!inboundEnvelope?._persistedUserMessage && !inboundInjectedBy
+        && !turnSessionMeta?.task && ctx.serverCapabilities?.has('session_turn_retry');
+      const workDir = normalizeSessionWorkDir(turnSessionMeta?.workDir);
 
       handlerCtx = {
         assistantTextParts,
@@ -6733,6 +6851,9 @@ async function runVpTurn({ prompt, promptParts = null, sessionId, vpId, threadId
         prompt,
         includeInitialPrompt: !inboundIsInternal,
         skipPartialHistory: false,
+        presentations: retry?.history.presentations,
+        presentationTextPartsCount: retry?.history.presentationTextPartsCount,
+        queryProgressWireRevision: retry?.history.queryProgressWireRevision || 0,
         markEngineTerminal,
         markTurnEnd,
       };
@@ -6761,8 +6882,12 @@ async function runVpTurn({ prompt, promptParts = null, sessionId, vpId, threadId
         });
       }
       const engineStart = perfNowMs();
+      if (retry && session?.trace instanceof DebugTrace) {
+        // Debug data is optional; the live checkpoint is the only resume input.
+        try { await session.trace.resumeTrace({ sessionId, turnId }); } catch { /* best effort */ }
+      }
       let firstEngineEvent = false;
-      const peerContextSeen = new Map();
+      const peerContextSeen = retry?.history.peerContextSeen || new Map();
       for await (const event of vpEngine.query({
         prompt,
         promptParts,
@@ -6833,6 +6958,7 @@ async function runVpTurn({ prompt, promptParts = null, sessionId, vpId, threadId
           return true;
         },
         ...queryOpts,
+        ...(retryEnabled ? { manualRetry: { state: retry?.state, mode: retry?.mode } } : {}),
         onProviderRequestStart: policy => {
           handlerCtx.visibleQueryProgress.phase('provider');
           if (policy) watchdog.setTimeoutMs(queryTimeoutMsForProviderRequest(policy));
@@ -6856,6 +6982,7 @@ async function runVpTurn({ prompt, promptParts = null, sessionId, vpId, threadId
             messageType: event?.type || null,
           });
         }
+        if (event.type === 'error' && event.manualRetryState) retryState = event.manualRetryState;
         handleEngineEvent(event, handlerCtx);
       }
       if (perfTraceId) {
@@ -6879,6 +7006,19 @@ async function runVpTurn({ prompt, promptParts = null, sessionId, vpId, threadId
       if (engineTerminalReason === 'error') {
         turnEndReason = 'errored';
         turnEndDetail = engineTerminalDetail;
+        if (retryState && !vpAbort.signal.aborted && isCurrentRuntimeOwner(owner) && !thread?.pendingQueries.length
+            && !sessionUserTurns.get(sessionId)?.get(inboundEnvelope._userTurnId)?.cancelled
+            && (!projectContextBySession.has(sessionId) || projectKey === retryProjectKey(projectContextBySession.get(sessionId), sessionId))
+            && !vpInboxes.get(threadKey(sessionId, vpId, threadId))?.length) {
+          rememberFailedTurnRetry({ sessionId, vpId, threadId, turnId, userTurnId: inboundEnvelope._userTurnId,
+            owner, thread, workDir, projectKey, envelope: inboundEnvelope, state: retryState,
+            message: turnEndDetail?.message || null,
+            preview: String(inboundEnvelope.msg?.text || '').slice(0, 100),
+            history: { assistantTextParts, toolCallsAccum, toolResultsAccum, thinkingBlocksAccum, appendedUserPrompts,
+              peerContextSeen, presentations: handlerCtx.presentations, presentationTextPartsCount: handlerCtx.presentationTextPartsCount,
+              queryProgressWireRevision: handlerCtx.queryProgressWireRevision },
+          });
+        }
         flushStreamTextBatch(handlerCtx, envelope, { resetImmediate: true });
         sendSessionOutputFrame({
           type: 'result',
@@ -7426,6 +7566,8 @@ function abortAllVpRuntime(aborted, sessionId = null) {
 export function handleYeaftAbortThread(_msg = {}) {
   const aborted = [];
   const targetThreadId = _msg && typeof _msg.threadId === 'string' ? _msg.threadId : '';
+  revokeFailedTurnRetries(entry => (!targetThreadId || entry.threadId === targetThreadId)
+    && (!_msg.sessionId || entry.sessionId === _msg.sessionId));
 
   if (targetThreadId) {
     for (const [key, ctrl] of Array.from(vpAborts.entries())) {
@@ -7479,6 +7621,7 @@ export function handleYeaftAbortAll(msg = {}) {
   const sessionId = typeof msg.sessionId === 'string' && msg.sessionId ? msg.sessionId : null;
   const aborted = [];
   cancelSessionIngress(sessionId);
+  revokeFailedTurnRetries(entry => !sessionId || entry.sessionId === sessionId);
   if (!sessionId && currentAbortCtrl && !currentAbortCtrl.signal.aborted) {
     try { currentAbortCtrl.abort(); aborted.push('main'); } catch { /* best-effort */ }
   }
@@ -7500,15 +7643,76 @@ export function handleYeaftAbortAll(msg = {}) {
   return { aborted, all: true };
 }
 
-/**
- * Per-VP abort: stops a single VP turn without affecting siblings.
- * New clients send `{ sessionId, vpId }`; `turnId` is kept for legacy buttons.
- * @param {{ turnId?: string, sessionId?: string, vpId?: string }} msg
- */
+/** Resume only an exact live checkpoint after a Server-authorized request. */
+export async function handleYeaftSessionRetry(msg = {}) {
+  const { sessionId, turnId, requestId, retryToken, mode, _requestClientId, _dispatchId, _projectContext } = msg;
+  if (!_requestClientId || !requestId) return;
+  const respond = (ok, error) => sendToServer({ type: 'yeaft_session_retry_result',
+    sessionId, turnId, requestId, _requestClientId, _dispatchId, ok, ...(error ? { error } : {}) });
+  const entry = failedTurnRetries.get(turnId);
+  const root = ctx.CONFIG?.yeaftDir;
+  if (!root || !entry || entry.sessionId !== sessionId || entry.retryToken !== retryToken
+      || !isCurrentRuntimeOwner(entry.owner) || !['plain', 'compact'].includes(mode)) {
+    return respond(false, 'This failed request is no longer available to retry.');
+  }
+  const { thread, vpId, threadId, userTurnId } = entry;
+  // Project scope is stamped by the current Server, never by the browser or
+  // the failed turn. A moved Session cannot replay its old provider context.
+  const authoritativeProject = normalizeProjectContext(_projectContext, sessionId);
+  if (!_dispatchId || !authoritativeProject || entry.projectKey !== retryProjectKey(authoritativeProject, sessionId)
+      || (projectContextBySession.has(sessionId) && entry.projectKey !== retryProjectKey(projectContextBySession.get(sessionId), sessionId))
+      || sessionUserTurns.get(sessionId)?.get(userTurnId)?.cancelled) {
+    forgetFailedTurnRetry(turnId);
+    publishSessionTurns(sessionId);
+    return respond(false, 'This Session has changed; the failed request cannot be retried.');
+  }
+  const envelope = { ...entry.envelope, _projectContext: authoritativeProject };
+  const key = threadKey(sessionId, vpId, threadId);
+  if (turnDeletionsInProgress.has(sessionId) || vpDrivers.has(key) || vpAborts.has(key)
+      || vpInboxes.get(key)?.length || thread.pendingQueries.length) {
+    return respond(false, 'This request is not ready to retry.');
+  }
+  try {
+    const ownerRoot = findExistingSessionYeaftDir(root, sessionId);
+    const sessionRoot = sessionsRoot(ownerRoot);
+    const meta = loadSessionMeta(join(sessionRoot, sessionId));
+    // Revalidate the destination and work directory, never execute a stale
+    // checkpoint in a different workspace or after losing VP membership.
+    if (!meta || meta.id !== sessionId || meta.task || normalizeSessionWorkDir(meta.workDir) !== entry.workDir
+        || sessionDeletionGeneration(ownerRoot, sessionId) !== entry.state.deletionGeneration
+        || !envelope._sceneId && !meta.roster?.includes(vpId)
+        || vpThreads.get(vpKey(sessionId, vpId))?.get(threadId) !== thread) {
+      forgetFailedTurnRetry(turnId);
+      publishSessionTurns(sessionId);
+      return respond(false, 'This Session has changed; the failed request cannot be retried.');
+    }
+    if (!sessionContexts.get(sessionId)?.coord) getOrCreateSessionContext(sessionId, openSession(sessionRoot, sessionId));
+  } catch (error) {
+    console.warn('[Yeaft] Session retry admission failed:', error?.code || error?.name);
+    return respond(false, 'Could not reopen the original Session.');
+  }
+  // Claim synchronously before any await or send. Even delayed requests from
+  // another tab cannot consume a newer failure's one-use token.
+  forgetFailedTurnRetry(turnId);
+  thread.userTurnId = userTurnId;
+  thread.status = 'typing';
+  thread.userInputClosed = true;
+  vpInboxes.set(key, [{ envelope, turnId, thread, retry: { ...entry, mode } }]);
+  turnAbortMeta.set(turnId, { sessionId, vpId, threadId, key });
+  registerUserExecution(sessionId, userTurnId, vpId, threadId, turnId, envelope.msg?.text, { retry: true });
+  respond(true);
+  ensureDriverRunning(sessionId, vpId, threadId);
+}
+
+/** Stop the matching VP execution or human root without affecting siblings. */
 export function handleYeaftAbortTurn(msg = {}) {
   const sessionId = msg.sessionId || null;
   const vpId = msg.vpId || null;
+  revokeFailedTurnRetries(entry => (!sessionId || entry.sessionId === sessionId)
+    && (msg.turnId ? entry.turnId === msg.turnId : msg.userTurnId ? entry.userTurnId === msg.userTurnId : !!vpId && entry.vpId === vpId));
   if (sessionId && msg.userTurnId) {
+    const root = sessionUserTurns.get(sessionId)?.get(msg.userTurnId);
+    if (root) root.cancelled = true;
     for (const ingress of pendingSessionIngress.get(sessionId) || []) {
       if (ingress.messageId === msg.userTurnId) ingress.cancelled = true;
     }
@@ -8908,6 +9112,7 @@ export async function handleYeaftLoadMoreHistory(msg) {
 export async function resetYeaftSession() {
   // Runtime ownership must be revoked before reset reaches its first await.
   const oldSession = session;
+  clearFailedTurnRetries();
   const oldRuntimesShutdown = shutdownProjectRuntimes();
   await oldRuntimesShutdown;
   if (currentAbortCtrl && !currentAbortCtrl.signal.aborted) {

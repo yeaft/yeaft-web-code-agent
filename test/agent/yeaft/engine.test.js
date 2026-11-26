@@ -412,6 +412,56 @@ describe('Engine', () => {
     const router = model => new AdapterRouter({ providers: [{ name: 'gateway', protocol: 'anthropic',
       baseUrl: 'https://anthropic-gateway.invalid', apiKey: 'fixture-key', models: [model] }] });
 
+    it.each(['plain', 'compact'])('retries a signed Anthropic request in %s mode without rerunning the tool', async mode => {
+      const dir = mkdtempSync(join(tmpdir(), 'yeaft-signed-manual-retry-'));
+      const requests = [];
+      const originalOutput = 'EVIDENCE: completed write. ' + 'result '.repeat(4000);
+      let executions = 0;
+      vi.stubGlobal('fetch', vi.fn(async (_url, init) => {
+        requests.push(anthropicWireWithoutCache(init));
+        if (requests.length === 2) return new Response('{"error":{"message":"Test credentials rejected"}}', { status: 401 });
+        return response('retry-test-' + requests.length, requests.length === 1 ? 'RecordEvidence' : undefined);
+      }));
+      try {
+        const store = new ConversationStore(dir);
+        const config = { model: 'gateway/claude-opus-4.8', maxOutputTokens: 1024, projectDocMaxBytes: 0, llmRetry: { maxRetries: 0 } };
+        const sessionId = 'manual-signed';
+        const engine = new Engine({ adapter: router('claude-opus-4.8'), trace, yeaftDir: dir, conversationStore: store, config });
+        engine.registerTool({ name: 'RecordEvidence', description: 'Record evidence', parameters: { type: 'object' },
+          execute: async () => { executions++; return originalOutput; } });
+        const params = { prompt: 'Record the evidence and finish.', sessionId, vpTurnId: 'original-typed-turn' };
+        const initial = [];
+        for await (const event of engine.query({ ...params, manualRetry: {} })) initial.push(event);
+        const state = initial.find(event => event.type === 'error')?.manualRetryState;
+        expect(state?.signedAnthropicPrefix).toBeTruthy();
+        const retried = [];
+        for await (const event of engine.query({ ...params, userAlreadyPersisted: true,
+          currentUserMessage: store.loadAllBySession(sessionId).find(row => row.role === 'user'),
+          manualRetry: { state, mode } })) retried.push(event);
+        expect(retried.filter(event => event.type === 'error')).toEqual([]);
+        expect(retried.find(event => event.type === 'turn_end' && event.terminal)?.stopReason).toBe('end_turn');
+        expect(requests).toHaveLength(3);
+        expect(executions).toBe(1);
+        if (mode === 'plain') {
+          expect(requests[2]).toEqual(requests[1]);
+          expect(JSON.stringify(requests[2].messages)).toContain('signature-retry-test-1');
+        } else {
+          const sent = JSON.stringify(requests[2].messages);
+          expect(sent).toContain('Record the evidence and finish.');
+          expect(sent).toContain('EVIDENCE: completed write');
+          expect(sent).not.toContain('signature-retry-test-1');
+          expect(sent).not.toContain('"type":"tool_use"');
+          expect(sent.length).toBeLessThan(JSON.stringify(requests[1].messages).length);
+        }
+        expect(store.loadAllBySession(sessionId).filter(row => row.role === 'tool'))
+          .toEqual([expect.objectContaining({ content: originalOutput, turnId: 'original-typed-turn' })]);
+      } finally {
+        vi.unstubAllGlobals();
+        await closeConversationHistoryIndexes();
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
+
     it('continues catalog 1M Opus/Fable and unknown default requests past 200K with signed prefixes intact', async () => {
       const dir = mkdtempSync(join(tmpdir(), 'yeaft-qualified-million-'));
       const originalFetch = globalThis.fetch;

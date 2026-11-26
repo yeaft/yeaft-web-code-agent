@@ -7,6 +7,7 @@ import { isRecentlyClosed, stopProcessingWatchdog } from '../watchdog.js';
 import { clearSessionLoading, restorePanels } from '../session.js';
 import { maxDbMessageId } from '../messages.js';
 import { invalidateOfflineQueryProgress } from '../query-progress.js';
+import { invalidateOfflineYeaftTurnRetries } from '../yeaft-turn-retry.js';
 
 /**
  * Decide whether the current Yeaft agent just RESTARTED (a fresh process),
@@ -115,6 +116,7 @@ export function handleAgentList(store, msg) {
   // Agent-only disconnects leave the browser socket/generation intact. Retire
   // progress ownership now; an online inventory alone cannot re-authorize it.
   invalidateOfflineQueryProgress(store);
+  invalidateOfflineYeaftTurnRetries(store);
   if ([...previouslyOnlineAgentIds].some(id => !nextOnlineAgentIds.has(id))) {
     // Retire observations used for Stop without clearing the transcript or its
     // routing cache. Only fresh frames from the returning Agent re-enable it.

@@ -119,9 +119,19 @@ import {
 } from './helpers/yeaft-history-cache.js';
 import { planNextYeaftHistoryPage } from './helpers/yeaft-history-pagination.js';
 import { clearLiveSessionTools } from './helpers/session-tool-details.js';
-import { applyQueryProgress, pruneQueryProgress, reconcileQueryProgressSnapshot, retireQueryProgress, retireSettledQueryProgress } from './helpers/query-progress.js';
+import { applyQueryProgress, pruneQueryProgress, reconcileQueryProgressSnapshot, reopenQueryProgress, retireQueryProgress, retireSettledQueryProgress } from './helpers/query-progress.js';
 import { normalizeTimelineErrorDetail } from './helpers/vp-timeline.js';
 import { applySessionTurns, applyUserMessageRoute, clearSessionTurns, LIVE_SESSION_TURN_STATES } from './helpers/yeaft-session-turns.js';
+import {
+  clearYeaftRetryableTurn,
+  clearYeaftRetryableTurnsForScope,
+  handleYeaftTurnRetryResult,
+  interruptYeaftTurnRetries,
+  prepareYeaftTurnForRetryResume,
+  reconcileYeaftRetryableTurns,
+  recordYeaftRetryableError,
+  requestYeaftTurnRetry,
+} from './helpers/yeaft-turn-retry.js';
 import { YEAFT_RUNNING_VP_STATES, statusOwnsRunningTurn, stopOrphanedTurnMessages } from './helpers/yeaft-runtime-state.js';
 
 const { defineStore } = Pinia;
@@ -221,6 +231,7 @@ function yeaftTurnStateKey(state, agentId, turnId) {
 
 function clearYeaftAgentRuntimeState(state, agentId) {
   clearSessionTurns(state, agentId);
+  clearYeaftRetryableTurnsForScope(state, agentId);
   clearLiveSessionTools(state, { agentId });
   if (!agentId) {
     state.activeVpTurns = {};
@@ -1208,6 +1219,8 @@ export const useChatStore = defineStore('chat', {
     _currentYeaftUserTurnId: null,
     yeaftSessionTurnsBySession: {},
     yeaftUserMessageRoutes: {},
+    yeaftRetryableTurnsByKey: {},
+    yeaftRetryPendingByKey: {},
     // Terminal AskUser events can beat their tool-use row during reconnect.
     // Keep a small bounded cache and apply the event when the row replays.
     _yeaftAskTerminalEvents: {},
@@ -4062,6 +4075,22 @@ export const useChatStore = defineStore('chat', {
       }
     },
 
+    retryYeaftFailedTurn({ agentId, sessionId, turnId, retryToken = null, mode = 'plain' } = {}) {
+      return requestYeaftTurnRetry(this, { agentId, sessionId, turnId, retryToken, mode });
+    },
+
+    handleYeaftTurnRetryResult(msg) {
+      return handleYeaftTurnRetryResult(this, msg);
+    },
+
+    handleYeaftThreadStatesSnapshot(msg) {
+      return reconcileYeaftRetryableTurns(this, msg);
+    },
+
+    interruptYeaftTurnRetries() {
+      interruptYeaftTurnRetries(this);
+    },
+
     invalidateYeaftDeletedTurn({ agentId, sessionId, turnId }, { reload = true } = {}) {
       const key = yeaftHistoryIdentityKey(agentId, sessionId);
       const previous = this.yeaftTurnDeleteHistoryBySession?.[key];
@@ -5429,6 +5458,16 @@ export const useChatStore = defineStore('chat', {
         });
         return;
       }
+      if (event.type === 'yeaft_session_retry_result') {
+        if (event.sessionId && msg.sessionId && event.sessionId !== msg.sessionId) return;
+        this.handleYeaftTurnRetryResult({
+          ...event,
+          agentId: event.agentId || msg.agentId || null,
+          sessionId: event.sessionId || msg.sessionId || null,
+          requestId: event.requestId || msg.requestId || null,
+        });
+        return;
+      }
       const phaseEvent = {
         ...event,
         vpId: event.vpId || msg.vpId || null,
@@ -5459,11 +5498,18 @@ export const useChatStore = defineStore('chat', {
         case 'session_turns': {
           if (!applySessionTurns(this, msg)) break;
           const sessionId = event.sessionId || msg.sessionId;
+          if (Array.isArray(event.retryableTurns)) {
+            reconcileYeaftRetryableTurns(this, msg, { scopedSessionId: sessionId });
+          }
           const key = yeaftSessionIdentityKey(msg.agentId, sessionId);
           if (this.yeaftSessionTurnsBySession[key].turns.some(turn => LIVE_SESSION_TURN_STATES.has(turn.state))) {
             this.yeaftProcessingSessions = { ...this.yeaftProcessingSessions, [key]: true };
             if (eventConversationId) this.processingConversations[eventConversationId] = true;
           } else this.clearYeaftSessionProcessingIfIdle(sessionId, { agentId: msg.agentId });
+          break;
+        }
+        case 'error': {
+          recordYeaftRetryableError(this, msg);
           break;
         }
         case 'user_message_routed':
@@ -5683,6 +5729,9 @@ export const useChatStore = defineStore('chat', {
           // which identifies the agent that emitted this session_ready;
           // `currentAgent` is the fallback. Falling through `||` covers
           // single- and multi-agent deployments alike.
+          if (Array.isArray(event.retryableTurns)) {
+            reconcileYeaftRetryableTurns(this, msg, { scopedSessionId: event.sessionId || msg.sessionId || null });
+          }
           const subscribeAgentId = msg.agentId || this.currentAgent || null;
           const subscribeKey = subscribeAgentId || '__current__';
           if (this._yeaftVpSubscribedAgentKey !== subscribeKey) {
@@ -6426,6 +6475,22 @@ export const useChatStore = defineStore('chat', {
         // typing — usually 0–5.
         case 'vp_turn_start': {
           if (!event.turnId || !event.vpId) break;
+          clearYeaftRetryableTurn(this, {
+            agentId: msg.agentId || null,
+            sessionId: event.sessionId || msg.sessionId || null,
+            turnId: event.turnId,
+            clearVpError: true,
+          });
+          if (event.retry === true) {
+            reopenQueryProgress(this, msg.agentId, envelopeConversationId, event.turnId);
+            prepareYeaftTurnForRetryResume(this, {
+              agentId: msg.agentId || null,
+              sessionId: event.sessionId || msg.sessionId || null,
+              vpId: event.vpId,
+              turnId: event.turnId,
+              conversationId: resolveYeaftEnvelopeConversationId(this, msg.agentId || null, msg.conversationId),
+            });
+          }
           const turnKey = yeaftTurnIdentityKey(msg.agentId || null, event.turnId) || event.turnId;
           this.activeVpTurns = {
             ...this.activeVpTurns,
@@ -6462,6 +6527,13 @@ export const useChatStore = defineStore('chat', {
           const terminalSessionId = event.sessionId || removed?.sessionId || null;
           const terminalAgentId = msg.agentId || removed?.agentId || null;
           const terminalVpId = event.vpId || removed?.vpId || null;
+          if (event.reason !== 'errored' && event.reason !== 'error') {
+            clearYeaftRetryableTurn(this, {
+              agentId: terminalAgentId,
+              sessionId: terminalSessionId,
+              turnId: event.turnId,
+            });
+          }
           this.completeYeaftTurnRuntime({ agentId: terminalAgentId, sessionId: terminalSessionId,
             vpId: terminalVpId, turnId: event.turnId, conversationId: envelopeConversationId });
           // Per-message lifecycle: flip every in-flight assistant message
@@ -6528,7 +6600,16 @@ export const useChatStore = defineStore('chat', {
         case 'yeaft_turn_aborted': {
           const explicitTurnIds = Array.isArray(event.turnIds) ? event.turnIds.filter(Boolean) : [];
           if (event.turnId) explicitTurnIds.push(event.turnId);
-          if (event.success === true) retireQueryProgress(this, msg.agentId, envelopeConversationId, explicitTurnIds);
+          if (event.success === true) {
+            retireQueryProgress(this, msg.agentId, envelopeConversationId, explicitTurnIds);
+            for (const abortedTurnId of explicitTurnIds) {
+              clearYeaftRetryableTurn(this, {
+                agentId: msg.agentId || null,
+                sessionId: event.sessionId || msg.sessionId || null,
+                turnId: abortedTurnId,
+              });
+            }
+          }
           const targetSessionId = event.sessionId || null;
           const targetVpId = event.vpId || null;
           const removeIds = new Set();
@@ -6572,6 +6653,7 @@ export const useChatStore = defineStore('chat', {
               Object.entries(this.stoppingVpTurnIds || {}).filter(([turnId]) => this.activeVpTurns?.[turnId])
             );
             clearSessionTurns(this, msg.agentId || null, sessionId);
+            clearYeaftRetryableTurnsForScope(this, msg.agentId || null, sessionId);
             this.vpStatuses = Object.fromEntries(
               Object.entries(this.vpStatuses || {}).filter(([, status]) => (
                 !matchesYeaftRuntimeIdentity(status, sessionId, msg.agentId || null)
@@ -6763,6 +6845,9 @@ export const useChatStore = defineStore('chat', {
           );
           retireSettledQueryProgress(this, msg.agentId, msg.conversationId, statuses);
           reconcileQueryProgressSnapshot(this, msg, statuses);
+          if (Array.isArray(event.retryableTurns)) {
+            reconcileYeaftRetryableTurns(this, msg, { scopedSessionId: eventSessionId ?? null });
+          }
           this.reconcileYeaftRuntimeFromStatuses(msg, statuses, { sessionId: eventSessionId ?? null });
           break;
         }

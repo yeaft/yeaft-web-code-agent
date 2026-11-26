@@ -12,6 +12,7 @@ import MessageBlock from './MessageBlock.js';
 import ConcurrentUserTurns from './ConcurrentUserTurns.js';
 import SessionLaneWait from './SessionLaneWait.js';
 import { visibleWaitingStages } from '../stores/helpers/query-progress.js';
+import { visibleYeaftRetryableTurns } from '../stores/helpers/yeaft-turn-retry.js';
 import { sessionExecutionKey } from '../stores/helpers/yeaft-session-identity.js';
 import { orderUserTurnMessages, partitionUserTurnBlocks, isPendingUserTurn } from '../utils/concurrent-user-turns.js';
 import { readWaitClock } from '../utils/wait-clock.js';
@@ -203,6 +204,53 @@ export default {
           :key="card.key"
           :card="card"
         />
+        <div
+          v-if="retryableFailedTurns.length"
+          class="yeaft-failed-turn-status-bar"
+          role="status"
+          aria-live="polite"
+          :aria-label="$t('yeaft.turnRetry.statusAria')"
+        >
+          <div
+            v-for="item in retryableFailedTurns"
+            :key="item.turnId + ':' + item.retryToken"
+            class="typing-status-banner typing-status-banner-agent-offline yeaft-failed-turn-banner"
+            :data-retry-turn-id="item.turnId"
+            :data-retry-token="item.retryToken"
+          >
+            <div class="yeaft-failed-turn-summary">
+              <span v-if="item.preview" class="yeaft-failed-turn-preview">{{ item.preview }}</span>
+              <span class="typing-status-text typing-status-error yeaft-failed-turn-message">
+                {{ failedTurnStatusText(item) }}
+              </span>
+              <span v-if="item.retryError" class="yeaft-failed-turn-relay-error" role="alert">
+                {{ failedTurnRelayErrorText(item.retryError) }}
+              </span>
+            </div>
+            <div class="yeaft-failed-turn-actions" role="group" :aria-label="$t('yeaft.turnRetry.actionsAria')">
+              <button
+                type="button"
+                class="typing-refresh-btn yeaft-failed-turn-btn"
+                data-retry-mode="plain"
+                :disabled="item.pending"
+                :aria-busy="item.pending && item.pendingMode === 'plain' ? 'true' : 'false'"
+                @click="retryFailedTurn(item, 'plain')"
+              >
+                {{ item.pending && item.pendingMode === 'plain' ? $t('yeaft.turnRetry.retrying') : $t('yeaft.turnRetry.retry') }}
+              </button>
+              <button
+                type="button"
+                class="typing-refresh-btn yeaft-failed-turn-btn"
+                data-retry-mode="compact"
+                :disabled="item.pending"
+                :aria-busy="item.pending && item.pendingMode === 'compact' ? 'true' : 'false'"
+                @click="retryFailedTurn(item, 'compact')"
+              >
+                {{ item.pending && item.pendingMode === 'compact' ? $t('yeaft.turnRetry.retrying') : $t('yeaft.turnRetry.retryCompact') }}
+              </button>
+            </div>
+          </div>
+        </div>
         <!--
           task-708: per-VP typing is now an avatar-attached badge on
           every VP-attributed AssistantTurn (see VpSpeakerHeader →
@@ -1247,6 +1295,30 @@ export default {
       .map(error => ({ turnId: error.turnId, kind: error.reason === 'request_retry_time_exhausted' ? 'retryBudgetReached'
         : error.retryAttempts > 0 ? 'failedAfterRetry' : 'failed' }))));
 
+    const retryableFailedTurns = Vue.computed(() => visibleYeaftRetryableTurns(store, store.activeSessionRoute));
+
+    function failedTurnStatusText(item) {
+      if (item?.message) return item.message;
+      return typeof t === 'function' ? t('yeaft.turnRetry.turnFailed') : 'This turn failed';
+    }
+
+    function failedTurnRelayErrorText(error) {
+      if (error === 'offline') return typeof t === 'function' ? t('yeaft.turnRetry.errorOffline') : 'Disconnected. Unable to retry right now.';
+      if (error === 'timeout') return typeof t === 'function' ? t('yeaft.turnRetry.errorTimeout') : 'Retry request timed out. Please try again.';
+      return typeof t === 'function' ? t('yeaft.turnRetry.errorFailed', { error }) : `Retry failed: ${error}`;
+    }
+
+    function retryFailedTurn(item, mode) {
+      if (!item || item.pending) return;
+      store.retryYeaftFailedTurn({
+        agentId: item.agentId,
+        sessionId: item.sessionId,
+        turnId: item.turnId,
+        retryToken: item.retryToken,
+        mode,
+      });
+    }
+
     function refreshSession() {
       const convId = store.currentConversation;
       if (!convId) return;
@@ -1899,6 +1971,7 @@ export default {
       previewShowTypingDots,
       isPreviewMode,
       waitingStatus, waitingStages, waitingFailures,
+      retryableFailedTurns, failedTurnStatusText, failedTurnRelayErrorText, retryFailedTurn,
       animation,
       waitClockKey,
       refreshSession,

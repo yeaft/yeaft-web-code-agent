@@ -641,6 +641,14 @@ export function handleMessage(store, msg) {
       store.handleYeaftTurnDeletion(msg);
       break;
 
+    case 'yeaft_session_retry_result':
+      store.handleYeaftTurnRetryResult?.(msg);
+      break;
+
+    case 'yeaft_session_thread_states':
+      store.handleYeaftThreadStatesSnapshot?.(msg);
+      break;
+
     case 'yeaft_history_chunk':
       handleYeaftHistoryChunk(store, msg);
       break;

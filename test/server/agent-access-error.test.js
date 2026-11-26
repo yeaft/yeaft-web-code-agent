@@ -3,6 +3,8 @@ import { CONFIG } from '../../server/config.js';
 import { agents, webClients } from '../../server/context.js';
 import { userDb, yeaftSessionDb } from '../../server/database.js';
 import { handleClientConversation } from '../../server/handlers/client-conversation.js';
+import { handleAgentOutput } from '../../server/handlers/agent-output.js';
+import { clearSessionTurnRetriesForClient } from '../../server/handlers/session-turn-retry.js';
 import { createMockAgent, createMockWebClient } from '../helpers/mockWs.js';
 import { clearSessionTurnDeletesForClient, handleAgentSessionTurnDelete } from '../../server/handlers/session-turn-delete.js';
 import { handleSessionAttachmentChunk, readSessionAttachment } from '../../server/session-attachment-relay.js';
@@ -141,4 +143,151 @@ describe('native Session turn deletion relay', () => {
     expect([owner, other, unauth].map(c => c.ws.getSentMessages())).toEqual([[], [], []]);
   });
 
+});
+
+describe('native Session retry relay', () => {
+  const request = {
+    type: 'yeaft_session_retry', agentId: 'owner:retry-agent', sessionId: 'session_retry_fixture',
+    turnId: '12345678:vp', mode: 'plain', requestId: 'retry-1', retryToken: 'attempt-token',
+  };
+  const RESULT = 'yeaft_session_retry_result';
+  const savedSkipAuth = CONFIG.skipAuth;
+  let agent, requester, tab, outsider;
+  const genericAccess = vi.fn(async () => true);
+
+  function addClient(id, overrides = {}) {
+    const client = createMockWebClient({ userId: 'owner', encryptOutbound: false, ...overrides });
+    webClients.set(id, client);
+    return client;
+  }
+
+  const send = (id = 'requester', overrides = {}) => handleClientConversation(
+    id, webClients.get(id), { ...request, ...overrides }, genericAccess,
+  );
+  const dispatchFor = id => agent.ws.getSentMessages().findLast(message => message._requestClientId === id);
+  const result = (overrides = {}) => handleAgentOutput(request.agentId, agent, {
+    type: RESULT, agentId: request.agentId, sessionId: request.sessionId, turnId: request.turnId, requestId: request.requestId,
+    ok: true, _requestClientId: 'requester', _dispatchId: dispatchFor(overrides._requestClientId || 'requester')?._dispatchId, ...overrides,
+  });
+
+  beforeEach(() => {
+    CONFIG.skipAuth = false;
+    agent = createMockAgent({ ownerId: 'owner', capabilities: ['session_turn_retry'], encryptOutbound: false });
+    agents.set(request.agentId, agent);
+    requester = addClient('requester', { currentAgent: request.agentId });
+    tab = addClient('tab');
+    outsider = addClient('outsider', { userId: 'other' });
+    vi.spyOn(userDb, 'isActive').mockReturnValue(true);
+    vi.spyOn(yeaftSessionDb, 'getForAgent').mockImplementation((owner, agentId, sessionId) => (
+      owner === 'owner' && agentId === request.agentId && sessionId === request.sessionId ? { id: sessionId, isArchived: false } : null
+    ));
+  });
+
+  afterEach(() => {
+    CONFIG.skipAuth = savedSkipAuth;
+    for (const id of webClients.keys()) clearSessionTurnRetriesForClient(id);
+    agents.clear();
+    webClients.clear();
+    genericAccess.mockClear();
+    vi.restoreAllMocks();
+    vi.useRealTimers();
+  });
+
+  it('whitelists input and returns only a matched standalone result to the requesting tab', async () => {
+    await send('requester', { _requestClientId: 'tab', _dispatchId: 'forged', _projectContext: { projectId: 'forged' }, toolState: { trusted: false }, messages: ['injected'] });
+    expect(agent.ws.getSentMessages()).toEqual([{ ...request, type: 'session_turn_retry_authorized', _requestClientId: 'requester', _dispatchId: expect.not.stringMatching(/^forged$/), _projectContext: { sessionIds: [] } }]);
+    await send(); // Same socket and request ID is dispatched only once.
+    expect(agent.ws.getSentMessages()).toHaveLength(1);
+    await send('tab', { mode: 'compact' });
+    expect(agent.ws.getLastMessage()).toEqual({ ...request, type: 'session_turn_retry_authorized', mode: 'compact', _requestClientId: 'tab', _dispatchId: expect.any(String), _projectContext: { sessionIds: [] } });
+    await result({ turnId: 'other-turn' });
+    await result({ _requestClientId: undefined });
+    await result({ _requestClientId: 'outsider' });
+    expect(requester.ws.getSentMessages()).toEqual([]);
+    expect(outsider.ws.getSentMessages()).toEqual([]);
+    await result({ messages: ['transcript'], toolState: { hidden: true }, retryToken: request.retryToken });
+    await result();
+    const reply = { type: RESULT, agentId: request.agentId, sessionId: request.sessionId, turnId: request.turnId, requestId: request.requestId, ok: true };
+    expect(requester.ws.getSentMessages()).toEqual([reply]);
+    expect(tab.ws.getSentMessages()).toEqual([]);
+    await result({ _requestClientId: 'tab', ok: false, error: 'Retry token expired', toolState: [] });
+    expect(tab.ws.getSentMessages()).toEqual([{ ...reply, ok: false, error: 'Retry token expired' }]);
+    expect(genericAccess).not.toHaveBeenCalled();
+  });
+
+  it('correlates invalid, inaccessible, unsupported, offline and failed-dispatch requests', async () => {
+    const failure = (client, pattern, correlation = {}) => expect(client.ws.getLastMessage()).toEqual({
+      type: RESULT, agentId: request.agentId, sessionId: request.sessionId, turnId: request.turnId, requestId: request.requestId,
+      ok: false, error: expect.stringMatching(pattern), ...correlation,
+    });
+    for (const invalid of [{ agentId: undefined }, { mode: 'other' }, { retryToken: {} }, { retryToken: '' }]) {
+      await send('requester', invalid);
+      failure(requester, /required/i, invalid.agentId === undefined && Object.hasOwn(invalid, 'agentId') ? { agentId: null } : {});
+    }
+    await send('requester', { sessionId: 'session_unowned' });
+    failure(requester, /owner/i, { sessionId: 'session_unowned' });
+    CONFIG.skipAuth = true;
+    await send('outsider');
+    failure(outsider, /owner/i);
+    CONFIG.skipAuth = false;
+    agent.ownerId = null;
+    await send();
+    failure(requester, /owner/i);
+    agent.ownerId = 'owner';
+    agent.capabilities = [];
+    await send();
+    failure(requester, /not support/i);
+    expect(agent.ws.getSentMessages()).toEqual([]);
+    agent.capabilities = ['session_turn_retry'];
+    vi.spyOn(agent.ws, 'send').mockImplementationOnce(() => { throw new Error('socket failed'); });
+    await send();
+    failure(requester, /offline/i);
+    agents.delete(request.agentId);
+    await send();
+    failure(requester, /offline/i);
+    expect(genericAccess).not.toHaveBeenCalled();
+  });
+
+  it('consumes client result frames and drops results after ownership or the socket changes', async () => {
+    expect(await send('requester', { type: RESULT })).toBe(true);
+    expect(await send('requester', { type: 'unify_session_retry_result' })).toBe(true);
+    const anonymous = addClient('anonymous', { authenticated: false });
+    await send('anonymous');
+    expect(anonymous.ws.getSentMessages()).toEqual([]);
+    expect(agent.ws.getSentMessages()).toEqual([]);
+
+    await send();
+    const replacement = addClient('requester');
+    await result();
+    expect(replacement.ws.getSentMessages()).toEqual([]);
+    await send('tab');
+    const originalAgent = agent;
+    agent = createMockAgent({ ownerId: 'owner' });
+    agents.set(request.agentId, agent);
+    await result({ _requestClientId: 'tab' });
+    expect(tab.ws.getSentMessages()).toEqual([]);
+    agent = originalAgent;
+    agents.set(request.agentId, agent);
+    yeaftSessionDb.getForAgent.mockReturnValue(null);
+    await result({ _requestClientId: 'tab' });
+    expect(tab.ws.getSentMessages()).toEqual([]);
+  });
+
+  it('settles a missing acknowledgement once and drops late results', async () => {
+    vi.useFakeTimers();
+    await send();
+    const old = dispatchFor('requester')._dispatchId;
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(requester.ws.getSentMessages()).toEqual([{
+      type: RESULT, agentId: request.agentId, sessionId: request.sessionId, turnId: request.turnId, requestId: request.requestId,
+      ok: false, error: expect.stringMatching(/No retry result/),
+    }]);
+    await send();
+    expect(dispatchFor('requester')._dispatchId).not.toBe(old);
+    await result({ _dispatchId: old });
+    expect(requester.ws.getSentMessages()).toHaveLength(1);
+    await result();
+    expect(requester.ws.getSentMessages()).toHaveLength(2);
+    expect(tab.ws.getSentMessages()).toEqual([]);
+  });
 });
