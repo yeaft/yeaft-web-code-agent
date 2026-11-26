@@ -213,7 +213,7 @@ export default {
     // Event-driven waiting status
     const waitingStatus = Vue.computed(() => {
       if (!isProcessing.value) return null;
-      if (store.connectionState !== 'connected') return 'disconnected';
+      if (store.connectionState !== 'connected' && store.connectionNoticeVisible !== false) return 'disconnected';
       const convId = conversationId.value;
       if (store.compactStatus?.conversationId === convId && store.compactStatus?.status === 'compacting') return 'compacting';
       const health = store.sessionHealth?.[convId];

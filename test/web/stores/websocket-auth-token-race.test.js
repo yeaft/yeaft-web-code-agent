@@ -250,4 +250,126 @@ describe('native Session history and delete turn on reconnect', () => {
     expect(store.yeaftTurnDeleteUnavailable(store.yeaftTurnDeleteTarget(row))).toBe('unsupported');
     expect(mutations()).toHaveLength(1);
   });
+
+  it('buffers transient disconnect, offline, and wake verification notices behind the grace window', async () => {
+    const { store, sockets, open, deliver, helpers, auth } = await lifecycleFixture();
+    const page = new EventTarget();
+    page.visibilityState = 'visible';
+    vi.stubGlobal('document', page);
+    const win = Object.assign(new EventTarget(), { Pinia: globalThis.window.Pinia });
+    vi.stubGlobal('window', win);
+    let online = true;
+    vi.stubGlobal('navigator', { get onLine() { return online; } });
+    helpers.setupVisibilityHandler(store);
+
+    const graceMs = helpers.CONNECTION_NOTICE_GRACE_MS;
+    expect(graceMs).toBe(2000);
+
+    // 1. Sub-grace auto-reconnect (e.g. mobile Wi-Fi <-> 5G switch in ~1.2s) never shows the notice.
+    open(1, true, { webHeartbeatProbeProtocol: 1 });
+    expect(store.connectionNoticeVisible).toBe(false);
+    sockets[0].onclose({ code: 1006, reason: '' });
+    expect(store.connectionState).toBe('reconnecting');
+    expect(store.connectionNoticeVisible).toBe(false);
+    vi.advanceTimersByTime(1000);
+    expect(sockets).toHaveLength(2);
+    expect(store.connectionNoticeVisible).toBe(false);
+    vi.advanceTimersByTime(500);
+    expect(store.connectionNoticeVisible).toBe(false);
+    sockets[1].readyState = WebSocket.OPEN;
+    sockets[1].onopen();
+    deliver({ type: 'auth_result', success: true, webHeartbeatProbeProtocol: 1 });
+    expect(store.connectionState).toBe('connected');
+    expect(store.authenticated).toBe(true);
+    expect(store.connectionNoticeVisible).toBe(false);
+    vi.advanceTimersByTime(graceMs);
+    expect(store.connectionNoticeVisible).toBe(false);
+
+    // 2. Brief offline -> online blip (< graceMs) stays silent; prolonged disconnect reveals at exact graceMs without resetting across phases.
+    online = false;
+    win.dispatchEvent(new Event('offline'));
+    expect(store.networkOffline).toBe(true);
+    expect(store.connectionNoticeVisible).toBe(false);
+    vi.advanceTimersByTime(600);
+    online = true;
+    win.dispatchEvent(new Event('online'));
+    expect(store.wsVerifying).toBe(true);
+    expect(store.connectionNoticeVisible).toBe(false);
+    const onlineProbe = sockets[1].sent.map(JSON.parse).findLast(m => m.type === 'ping');
+    deliver({ type: 'pong', probeId: onlineProbe.probeId });
+    expect(store.wsVerifying).toBe(false);
+    expect(store.connectionNoticeVisible).toBe(false);
+    vi.advanceTimersByTime(graceMs);
+    expect(store.connectionNoticeVisible).toBe(false);
+
+    // Prolonged drop: clock starts at onclose and is NOT reset when connect() runs at ~1000ms.
+    sockets[1].onclose({ code: 1006, reason: '' });
+    vi.advanceTimersByTime(graceMs - 1);
+    expect(sockets).toHaveLength(3);
+    expect(store.connectionNoticeVisible).toBe(false);
+    vi.advanceTimersByTime(1);
+    expect(store.connectionNoticeVisible).toBe(true);
+    // Auth completion clears the visible notice immediately.
+    sockets[2].readyState = WebSocket.OPEN;
+    sockets[2].onopen();
+    deliver({ type: 'auth_result', success: true, webHeartbeatProbeProtocol: 1 });
+    expect(store.connectionNoticeVisible).toBe(false);
+
+    // 3. Explicit send attempt during grace window reveals notice immediately; no-op when healthy.
+    store.revealConnectionNotice();
+    expect(store.connectionNoticeVisible).toBe(false);
+    sockets[2].onclose({ code: 1006, reason: '' });
+    expect(store.connectionNoticeVisible).toBe(false);
+    store.revealConnectionNotice();
+    expect(store.connectionNoticeVisible).toBe(true);
+
+    // 4. Returning from background while online gives a fresh grace window; returning while still offline keeps visible notice.
+    page.visibilityState = 'hidden';
+    page.dispatchEvent(new Event('visibilitychange'));
+    online = false;
+    store.networkOffline = true;
+    page.visibilityState = 'visible';
+    page.dispatchEvent(new Event('visibilitychange'));
+    expect(store.connectionNoticeVisible).toBe(true);
+
+    page.visibilityState = 'hidden';
+    page.dispatchEvent(new Event('visibilitychange'));
+    online = true;
+    page.visibilityState = 'visible';
+    page.dispatchEvent(new Event('visibilitychange'));
+    expect(store.connectionNoticeVisible).toBe(false);
+    expect(sockets).toHaveLength(4);
+    sockets[3].readyState = WebSocket.OPEN;
+    sockets[3].onopen();
+    deliver({ type: 'auth_result', success: true, webHeartbeatProbeProtocol: 1 });
+    expect(store.connectionNoticeVisible).toBe(false);
+
+    // 5. Server updating and exhausted reconnects reveal immediately.
+    deliver({ type: 'server_updating' });
+    expect(store.connectionState).toBe('updating');
+    expect(store.connectionNoticeVisible).toBe(true);
+    open(1, true, { webHeartbeatProbeProtocol: 1 });
+    expect(store.connectionNoticeVisible).toBe(false);
+    store.reconnectAttempts = store.maxReconnectAttempts;
+    sockets.at(-1).onclose({ code: 1006, reason: '' });
+    expect(store.connectionState).toBe('disconnected');
+    expect(store.connectionNoticeVisible).toBe(true);
+
+    // 6. Auth loss (1008) and logout clear pending notice state and timers.
+    open(1, true, { webHeartbeatProbeProtocol: 1 });
+    auth.handleAuthFailure = vi.fn(() => { auth.isAuthenticated = false; });
+    sockets.at(-1).onclose({ code: 1008, reason: 'Authentication required' });
+    expect(store.connectionNoticeVisible).toBe(false);
+    vi.advanceTimersByTime(graceMs * 2);
+    expect(store.connectionNoticeVisible).toBe(false);
+
+    auth.isAuthenticated = true;
+    auth.logout = vi.fn(() => { auth.isAuthenticated = false; });
+    open(1, true, { webHeartbeatProbeProtocol: 1 });
+    sockets.at(-1).onclose({ code: 1006, reason: '' });
+    expect(store.connectionNoticeVisible).toBe(false);
+    store.logout();
+    vi.advanceTimersByTime(graceMs * 2);
+    expect(store.connectionNoticeVisible).toBe(false);
+  });
 });

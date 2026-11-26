@@ -1224,7 +1224,7 @@ export default {
     // Event-driven waiting status (replaces time-based waitingPhase)
     const waitingStatus = Vue.computed(() => {
       if (!store.isProcessing) return null;
-      if (store.connectionState !== 'connected') return 'disconnected';
+      if (store.connectionState !== 'connected' && store.connectionNoticeVisible !== false) return 'disconnected';
       const convId = store.currentConversation;
       if (store.compactStatus?.conversationId === convId && store.compactStatus?.status === 'compacting') return 'compacting';
       const health = store.sessionHealth?.[convId];

@@ -26,6 +26,7 @@ const CONNECT_TIMEOUT_MS = 15_000;
 const HEARTBEAT_INTERVAL_MS = 25_000;
 const HEARTBEAT_REPLY_TIMEOUT_MS = 10_000;
 const TIMER_STALL_GRACE_MS = 5_000;
+export const CONNECTION_NOTICE_GRACE_MS = 2_000;
 
 function isOnline() {
   return typeof navigator === 'undefined' || navigator.onLine !== false;
@@ -33,6 +34,69 @@ function isOnline() {
 
 function isVisible() {
   return typeof document === 'undefined' || document.visibilityState === 'visible';
+}
+
+function isConnectionReady(store) {
+  return !store.networkOffline
+    && store.connectionState === 'connected'
+    && store.authenticated === true
+    && !store.wsVerifying;
+}
+
+function clearConnectionNoticeTimer(store) {
+  clearTimeout(store._connectionNoticeTimer);
+  store._connectionNoticeTimer = null;
+}
+
+export function resetConnectionNotice(store) {
+  clearConnectionNoticeTimer(store);
+  store.connectionNoticeVisible = false;
+}
+
+/**
+ * Delay transient disconnect/reconnect/offline notices by a short grace window
+ * so sub-2s mobile network switches do not flash banners or jump the composer.
+ * Deliberate server updates, exhausted retries, and explicit send attempts
+ * reveal the notice immediately.
+ */
+export function syncConnectionNotice(store, { immediate = false } = {}) {
+  if (isConnectionReady(store) || useAuthStore()?.isAuthenticated === false) {
+    resetConnectionNotice(store);
+    return;
+  }
+
+  const maxAttempts = Number(store.maxReconnectAttempts || 0);
+  const exhaustedReconnects = !store.networkOffline
+    && store.connectionState === 'disconnected'
+    && store.reconnectTimer == null
+    && maxAttempts > 0
+    && Number(store.reconnectAttempts || 0) >= maxAttempts;
+
+  if (immediate || store.connectionState === 'updating' || exhaustedReconnects) {
+    clearConnectionNoticeTimer(store);
+    store.connectionNoticeVisible = true;
+    return;
+  }
+
+  if (!isVisible()) {
+    clearConnectionNoticeTimer(store);
+    return;
+  }
+
+  if (store.connectionNoticeVisible || store._connectionNoticeTimer != null) return;
+
+  store._connectionNoticeTimer = setTimeout(() => {
+    store._connectionNoticeTimer = null;
+    if (!isConnectionReady(store) && isVisible()) {
+      store.connectionNoticeVisible = true;
+    }
+  }, CONNECTION_NOTICE_GRACE_MS);
+}
+
+export function revealConnectionNotice(store) {
+  if (!isConnectionReady(store)) {
+    syncConnectionNotice(store, { immediate: true });
+  }
 }
 
 function clearReconnectTimer(store) {
@@ -136,6 +200,7 @@ export function connect(store) {
   store.networkOffline = !isOnline();
   if (store.networkOffline) {
     store.connectionState = 'disconnected';
+    syncConnectionNotice(store);
     return;
   }
 
@@ -149,6 +214,7 @@ export function connect(store) {
       && store._wsAuthToken === authToken && store._wsAuthGeneration === authGeneration
       && store.sidebarCatalogOwnerId === authOwnerId) {
     console.log('[WS] Already connecting, skip');
+    syncConnectionNotice(store);
     return;
   }
 
@@ -224,6 +290,7 @@ export function connect(store) {
   store.authenticated = false;
   store._wsCorrelatedHeartbeat = false;
   store.connectionState = store.reconnectAttempts > 0 ? 'reconnecting' : 'connecting';
+  syncConnectionNotice(store);
   // Encryption and history request capabilities are connection-scoped. Start
   // every socket conservatively and cancel requests owned by the old socket;
   // reconnect catch-up will issue fresh requests after agent_list arrives.
@@ -329,7 +396,10 @@ export function connect(store) {
       if (msg.type === 'pong') {
         const currentProbe = msg.probeId === store._wsProbeId;
         const legacyKeepalive = !store._wsCorrelatedHeartbeat && !store.wsVerifying && msg.probeId == null;
-        if (store._wsProbeTimer != null && (currentProbe || legacyKeepalive)) clearHeartbeatProbe(store);
+        if (store._wsProbeTimer != null && (currentProbe || legacyKeepalive)) {
+          clearHeartbeatProbe(store);
+          syncConnectionNotice(store);
+        }
         return;
       }
       if (msg.type === 'auth_result' && msg.success === true) {
@@ -343,6 +413,7 @@ export function connect(store) {
       }
       if (msg.type === 'file_content') console.log('[WS.onmessage] Received file_content, path:', msg.filePath, 'contentLen:', msg.content?.length);
       store.handleMessage({ ...msg, _wsAuthToken: authToken, _wsAuthGeneration: authGeneration, _wsAuthOwnerId: authOwnerId });
+      if (msg.type === 'auth_result') syncConnectionNotice(store);
     } else {
       console.warn('[WS.onmessage] parseWsMessage returned null, raw data length:', event.data?.length);
     }
@@ -409,6 +480,7 @@ export function connect(store) {
       authStore.handleAuthFailure?.(undefined, authToken, authGeneration);
       if (!authStore.isAuthenticated) {
         store.reconnectAttempts = 0;
+        resetConnectionNotice(store);
         return;
       }
       // A stale token's rejection must not stop recovery for the renewed login.
@@ -431,9 +503,13 @@ export function connect(store) {
 
 export function scheduleReconnect(store, fastDelay) {
   clearReconnectTimer(store);
-  if (!useAuthStore().isAuthenticated || !isOnline() || !isVisible()
+  store.networkOffline = !isOnline();
+  const isAuth = useAuthStore().isAuthenticated;
+  if (!isAuth || store.networkOffline || !isVisible()
       || store.reconnectAttempts >= store.maxReconnectAttempts) {
     store.connectionState = 'disconnected';
+    if (!isAuth) resetConnectionNotice(store);
+    else syncConnectionNotice(store);
     return;
   }
 
@@ -447,9 +523,16 @@ export function scheduleReconnect(store, fastDelay) {
 
   store.reconnectTimer = setTimeout(() => {
     store.reconnectTimer = null;
-    if (useAuthStore().isAuthenticated && isOnline() && isVisible()) store.connect();
-    else store.connectionState = 'disconnected';
+    store.networkOffline = !isOnline();
+    const stillAuth = useAuthStore().isAuthenticated;
+    if (stillAuth && !store.networkOffline && isVisible()) store.connect();
+    else {
+      store.connectionState = 'disconnected';
+      if (!stillAuth) resetConnectionNotice(store);
+      else syncConnectionNotice(store);
+    }
   }, delay);
+  syncConnectionNotice(store);
 }
 
 export function manualReconnect(store) {
@@ -481,7 +564,10 @@ function probeSocket(store, socket, verifying = false) {
     expireSocket(store, socket, 4001, 'Reconnect to verify legacy WebSocket');
     return;
   }
-  if (verifying) store.wsVerifying = true;
+  if (verifying) {
+    store.wsVerifying = true;
+    syncConnectionNotice(store);
+  }
   // Coalesce pageshow, visibilitychange, online and periodic ticks on one socket.
   if (store._wsProbeTimer != null) return;
   const probeId = (store._wsProbeId = (store._wsProbeId || 0) + 1);
@@ -527,41 +613,58 @@ export function setupVisibilityHandler(store) {
   store._visibilityHandlerInstalled = true;
   store.networkOffline = !isOnline();
 
-  const suspend = () => {
+  const suspend = ({ background = false } = {}) => {
     store.stopHeartbeat();
     if (store.reconnectTimer != null) {
       clearReconnectTimer(store);
       store.connectionState = 'disconnected';
     }
+    if (background) clearConnectionNoticeTimer(store);
+    else syncConnectionNotice(store);
   };
-  const resume = () => {
+  const resume = ({ fromBackground = false } = {}) => {
     store.networkOffline = !isOnline();
     const auth = useAuthStore();
-    if (store.networkOffline || !isVisible() || !auth.isAuthenticated) return;
+    if (!auth.isAuthenticated) {
+      resetConnectionNotice(store);
+      return;
+    }
+    if (store.networkOffline || !isVisible()) {
+      syncConnectionNotice(store);
+      return;
+    }
+    if (fromBackground && store.connectionState !== 'updating') {
+      clearConnectionNoticeTimer(store);
+      store.connectionNoticeVisible = false;
+    }
     if (store._wsAuthGeneration !== auth.authGeneration || store.sidebarCatalogOwnerId !== (auth.userId || null)) {
       store.manualReconnect();
     } else if (store.ws?.readyState === WebSocket.OPEN) {
       if (store.authenticated) {
         store.startHeartbeat();
         probeSocket(store, store.ws, true);
+      } else {
+        syncConnectionNotice(store);
       }
     } else if (store.ws?.readyState !== WebSocket.CONNECTING
         || Date.now() - store._wsConnectStartedAt >= CONNECT_TIMEOUT_MS) {
       store.manualReconnect();
+    } else {
+      syncConnectionNotice(store);
     }
   };
 
   document.addEventListener('visibilitychange', () => {
     if (isVisible()) {
       store.markVisibleScheduledTaskSessionRead?.();
-      resume();
-    } else suspend();
+      resume({ fromBackground: true });
+    } else suspend({ background: true });
   });
-  window.addEventListener('pagehide', suspend);
-  window.addEventListener('pageshow', event => { if (event.persisted) resume(); });
+  window.addEventListener('pagehide', () => suspend({ background: true }));
+  window.addEventListener('pageshow', event => { if (event.persisted) resume({ fromBackground: true }); });
   window.addEventListener('offline', () => {
     store.networkOffline = true;
     suspend();
   });
-  window.addEventListener('online', resume);
+  window.addEventListener('online', () => resume());
 }

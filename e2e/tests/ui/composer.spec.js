@@ -112,6 +112,30 @@ test.describe('Yeaft composer menus', () => {
     await expect(input).toHaveValue(pending);
     expect(await sends()).toHaveLength(2);
     await page.evaluate(() => { window.__rejectSessionSend = false; });
+    // A brief mobile network blip (<2s) must not flash the banner or jump the composer.
+    await page.context().setOffline(true);
+    await page.waitForTimeout(300);
+    await expect(composer.locator('.composer-connection')).toHaveCount(0);
+    await page.context().setOffline(false);
+    await page.waitForFunction(() => {
+      const store = window.Pinia?.useChatStore?.();
+      return store && !store.networkOffline && !store.wsVerifying && store.connectionState === 'connected' && store.authenticated;
+    }, null, { timeout: 5000 });
+    await expect(composer.locator('.composer-connection')).toHaveCount(0);
+
+    // Tapping Send during the grace window preserves the draft and immediately reveals the real status.
+    await page.context().setOffline(true);
+    await expect(composer.locator('.composer-connection')).toHaveCount(0);
+    await sendButton.click();
+    await expect(composer.locator('.composer-connection')).toContainText('Offline');
+    await expect(sendButton).toBeDisabled();
+    await expect(input).toHaveValue(pending);
+    expect(await sends()).toHaveLength(2);
+    await page.context().setOffline(false);
+    await expect(composer.locator('.composer-connection')).toHaveCount(0);
+    await expect(sendButton).toBeEnabled();
+
+    // Staying offline past the grace window reveals the notice automatically while keeping the draft editable.
     await page.context().setOffline(true);
     await expect(composer.locator('.composer-connection')).toContainText('Offline');
     await expect(sendButton).toBeDisabled();
