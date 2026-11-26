@@ -347,7 +347,9 @@ export default {
       routing.value = true;
       statusBanner.value = { error: false, text: $t('cosmos.quick.routing', { name: targetAgentName }), sessionId: null };
 
-      const quickSend = selectedModel.value
+      // Merely displaying the Agent default isn't a one-message override. A
+      // normal send can attach to the active Turn and inherit its settings.
+      const quickSend = userPickedModel && selectedModel.value
         ? { model: selectedModel.value, effort: selectedEffort.value || null }
         : null;
 
@@ -376,11 +378,11 @@ export default {
         }
 
         const title = res.title || res.sessionId || targetAgentName;
-        const okText = res.answeredAskUser
-          ? $t('cosmos.quick.routedAskUser', { title })
-          : (res.decision === 'created'
-            ? $t('cosmos.quick.routedCreated', { name: targetAgentName, title })
-            : $t('cosmos.quick.routedMatched', { title }));
+        let okText;
+        if (res.answeredAskUser) okText = $t('cosmos.quick.routedAskUser', { title });
+        else if (res.delivery === 'appended') okText = $t('cosmos.quick.routedAppended', { title });
+        else if (res.decision === 'created') okText = $t('cosmos.quick.routedCreated', { name: targetAgentName, title });
+        else okText = $t('cosmos.quick.routedMatched', { title });
         if (isStillSameTarget) {
           statusBanner.value = { error: false, text: okText, sessionId: res.sessionId || null };
         }

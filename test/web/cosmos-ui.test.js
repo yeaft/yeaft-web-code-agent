@@ -94,7 +94,7 @@ describe('Cosmos UI Mode & Auto-Route Store Helper', () => {
     expect(frame).not.toHaveProperty('_knowledgeSessionIds');
     expect(frame.attachments).toEqual([{ fileId: 'f-1', isImage: true }]);
     expect(frame.preferredSceneId).toBeUndefined();
-    expect(frame.quickSend).toEqual({ model: 'copilot/gpt-6.2-sol', effort: 'high' });
+    expect(frame.quickSend).toEqual({ model: 'copilot/gpt-6.2-sol', effort: 'high', maxOutputTokens: null });
 
     const handled = handleYeaftSessionRouted(store, {
       ok: true,
@@ -166,6 +166,11 @@ describe('Cosmos UI Mode & Auto-Route Store Helper', () => {
     const errRes = await pErr;
     expect(errRes.ok).toBe(false);
     expect(errRes.code).toBe('invalid_attachment');
+
+    const pRejected = sendYeaftAutoRouteMessage(store, { agentId: 'ag-ok', text: 'Follow up' });
+    handleYeaftSessionRouted(store, { ok: false, requestId: store.sendWsMessage.mock.lastCall[0].requestId,
+      code: 'invalid_quick_send', error: 'Invalid model' });
+    expect(await pRejected).toMatchObject({ ok: false, code: 'invalid_quick_send' });
 
     const pCancel = sendYeaftAutoRouteMessage(store, { agentId: 'ag-ok', text: 'pending on logout' });
     clearPendingAutoRoutes(store, 'logout');
@@ -402,6 +407,24 @@ describe('Cosmos Component & WebGL Review Regressions', () => {
     const routed = wrapper.emitted('routed');
     expect(routed).toHaveLength(1);
     expect(routed[0][0]).toMatchObject({ agentId: 'ag-cloud', planetId: 'saturn' });
+
+    const supplement = wrapper.vm.handleQuickSend('Also check mobile');
+    expect(sendYeaftAutoRouteMessageMock).toHaveBeenLastCalledWith(expect.objectContaining({
+      agentId: 'ag-mac', quickSend: null,
+    }));
+    resolveRoute({ ok: true, sessionId: 'sess-mac-1', decision: 'matched', delivery: 'appended' });
+    expect(await supplement).toBe(true);
+    expect(wrapper.vm.statusBanner.text).toBe('cosmos.quick.routedAppended');
+
+    wrapper.vm.selectModel('copilot/mac-only-model', 'high');
+    const explicit = wrapper.vm.handleQuickSend('Run it with this model');
+    expect(sendYeaftAutoRouteMessageMock).toHaveBeenLastCalledWith(expect.objectContaining({
+      quickSend: { model: 'copilot/mac-only-model', effort: null },
+    }));
+    resolveRoute({ ok: false, code: 'invalid_quick_send', error: 'Invalid model' });
+    expect(await explicit).toBe(false);
+    expect(wrapper.vm.statusBanner.error).toBe(true);
+    expect(wrapper.emitted('routed')).toHaveLength(2);
   });
 
   it('wires CosmosConversationDrawer search/outline to real store APIs and enforces agent-scoped session lookup', async () => {
