@@ -1,21 +1,22 @@
 /**
- * route-scorer.js — Pure, zero-LLM local candidate scoring and high-precision
- * fast-path routing for Sessionless auto-routing.
+ * route-scorer.js — Pure, zero-LLM local candidate scoring for Sessionless
+ * auto-routing.
  *
- * Designed as Stage 0 ahead of the compact single-shot LLM arbiter:
+ * Runs ahead of the single-shot LLM arbiter:
  *   1. Extracts content-bearing Latin identifiers, version numbers, and CJK
  *      bigrams (filtering conversational/generic stopwords).
  *   2. Computes scale-invariant normalized IDF (`relIdf` in (0, 1]) so scores
- *      remain calibrated whether a user has 5 or 100 active Sessions.
+ *      remain calibrated whether a user has 5 or 100 active Sessions; the
+ *      scores rank which candidates the arbiter sees.
  *   3. Detects meta-diagnostic references ("看看 X 这个 session 为什么挂了") so
  *      the inspected Session is penalized rather than wrongly targeted.
- *   4. Resolves unmistakable cases locally in <5 ms with 0 LLM calls:
- *        - Rule 0: Exact unambiguous match to a single pending AskUser option
- *        - Rule 1: Exact/near-exact repeated user utterance in one Session
- *        - Rule 2: Strong scale-invariant lexical margin in a fresh (<24h) Session
- *        - Rule 3: Multiple unique-term hits in a recently active (<2h) Session
- *        - Rule 4: Short/anaphoric continuation when only ONE Session was active
- *                  within 30m and no other Session was active within 3h
+ *   4. `tryFastPathRoute` commits without an LLM only for a verbatim answer to
+ *      the single pending AskUser option.
+ *   5. `tryLocalFallbackRoute` keeps the lexical heuristics (repeated utterance,
+ *      strong lexical margin, unique recent terms, sole-recent continuation) for
+ *      the degraded path when the arbiter cannot decide. Point-in-time replay of
+ *      real multi-Session history (`scripts/auto-route-replay.mjs`) showed they
+ *      are less precise than the arbiter on the same messages.
  */
 
 import { basename } from 'node:path';
@@ -96,13 +97,15 @@ export function formatRelativeAge(ageMs) {
 
 /**
  * Compact a message excerpt by preserving BOTH head (topic/opening) and tail
- * (final conclusion, version/PR number, or pending question).
+ * (final conclusion, version/PR number, or pending question). `headRatio`
+ * shifts the budget toward the tail for replies that end with an offer/question.
  */
-export function compactMessageExcerpt(text, maxChars = 220) {
+export function compactMessageExcerpt(text, maxChars = 220, headRatio = 0.56) {
   const clean = String(text || '').replace(/\r\n/g, '\n').replace(/\n{2,}/g, '\n').trim();
   if (clean.length <= maxChars) return clean;
   if (maxChars <= 12) return clean.slice(0, maxChars);
-  const headLen = Math.floor(maxChars * 0.56);
+  const ratio = Number.isFinite(headRatio) ? Math.min(0.9, Math.max(0.1, headRatio)) : 0.56;
+  const headLen = Math.floor(maxChars * ratio);
   const tailLen = Math.max(1, maxChars - headLen - 3);
   let head = clean.slice(0, headLen);
   if (head.length > 0) {
@@ -417,21 +420,43 @@ export function scoreRouteCandidates({
   return { scored, metaExcluded, queryTerms: qTerms };
 }
 
+function buildLocalHit(candidate, { confidence, rule, detail = '', routeSource }) {
+  const prefix = routeSource === 'fast_path' ? 'fast_path' : 'local_fallback';
+  return {
+    action: 'continue',
+    tier: candidate.isRunning ? 'running' : 'recent',
+    sessionId: candidate.sessionId,
+    title: candidate.title || candidate.sessionId,
+    sceneId: candidate.sceneId || null,
+    workDir: candidate.workDir || '',
+    answeredQuestion: null,
+    confidence,
+    reason: detail ? `${prefix}:${rule}(${detail})` : `${prefix}:${rule}`,
+    routeSource,
+    fastPathRule: rule,
+    decisionModel: null,
+  };
+}
+
 /**
- * Attempt Stage 0 zero-LLM fast-path routing. Returns a complete decision object
- * ONLY when confidence is overwhelmingly high; returns `null` whenever there is
- * any ambiguity so Stage 1 LLM arbiter decides.
+ * Attempt Stage 0 zero-LLM fast-path routing.
+ *
+ * Only commits the one rule that point-in-time historical replay showed to be
+ * exact: the reply is verbatim one option of the single pending AskUser prompt.
+ * Lexical heuristics (repeated utterance, strong lexical margin, unique recent
+ * terms, sole-recent continuation) were measurably less precise than the LLM
+ * arbiter on the very same messages, because users run several Sessions on the
+ * same repository in parallel. They now only back the degraded path in
+ * `tryLocalFallbackRoute` when the arbiter is unavailable.
  *
  * @param {object} params
  * @param {string} params.query
  * @param {Array<object>} params.scoredCandidates
- * @param {Set<string>} [params.metaExcluded]
  * @returns {object | null}
  */
 export function tryFastPathRoute({
   query = '',
   scoredCandidates = [],
-  metaExcluded = new Set(),
 } = {}) {
   if (!Array.isArray(scoredCandidates) || scoredCandidates.length === 0) return null;
 
@@ -442,59 +467,53 @@ export function tryFastPathRoute({
   const waitingSessions = scoredCandidates
     .map(c => ({ candidate: c, questions: getPendingQuestions(c) }))
     .filter(x => x.questions.length > 0);
-  if (waitingSessions.length > 0) {
-    if (waitingSessions.length === 1 && waitingSessions[0].questions.length === 1) {
-      const { candidate, questions } = waitingSessions[0];
-      const pq = questions[0];
-      const opts = Array.isArray(pq.options)
-        ? pq.options.map(o => normalizeRouteText(String(o || ''))).filter(Boolean)
-        : [];
-      const normQ = normalizeRouteText(cleanQuery);
-      if (opts.length > 0 && opts.includes(normQ)) {
-        return {
-          action: 'continue',
-          tier: 'running',
-          sessionId: candidate.sessionId,
-          title: candidate.title || candidate.sessionId,
-          sceneId: candidate.sceneId || null,
-          workDir: candidate.workDir || '',
-          answeredQuestion: pq.requestId ? pq : null,
-          confidence: 0.99,
-          reason: 'fast_path:exact_ask_user_option',
-          routeSource: 'fast_path',
-          fastPathRule: 'exact_ask_user_option',
-          decisionModel: null,
-        };
-      }
-    }
-    // Whenever any AskUser prompt is pending and the reply isn't an exact option
-    // match, always defer to the LLM arbiter so we never miss or falsely settle it.
-    return null;
-  }
+  if (waitingSessions.length !== 1 || waitingSessions[0].questions.length !== 1) return null;
+  const { candidate, questions } = waitingSessions[0];
+  const pq = questions[0];
+  const opts = Array.isArray(pq.options)
+    ? pq.options.map(o => normalizeRouteText(String(o || ''))).filter(Boolean)
+    : [];
+  if (opts.length === 0 || !opts.includes(normalizeRouteText(cleanQuery))) return null;
+  return {
+    ...buildLocalHit(candidate, { confidence: 0.99, rule: 'exact_ask_user_option', routeSource: 'fast_path' }),
+    tier: 'running',
+    answeredQuestion: pq.requestId ? pq : null,
+  };
+}
 
+/**
+ * Degraded-mode local guess, used only after the LLM arbiter could not decide
+ * (no adapter/model, timeout, provider error, invalid output). Continuing an
+ * unmistakable lexical owner beats spawning a duplicate Session that lacks the
+ * conversation context; anything ambiguous returns `null` so the caller creates.
+ *
+ * @param {object} params
+ * @param {string} params.query
+ * @param {Array<object>} params.scoredCandidates
+ * @param {Set<string>} [params.metaExcluded]
+ * @returns {object | null}
+ */
+export function tryLocalFallbackRoute({
+  query = '',
+  scoredCandidates = [],
+  metaExcluded = new Set(),
+} = {}) {
+  if (!Array.isArray(scoredCandidates) || scoredCandidates.length === 0) return null;
+  const cleanQuery = String(query || '').trim();
+  if (!cleanQuery) return null;
+  // Never guess an AskUser answer, an explicit new topic, or a meta-diagnostic target.
+  if (scoredCandidates.some(c => getPendingQuestions(c).length > 0)) return null;
   if (isExplicitNewSessionIntent(cleanQuery) || metaExcluded.size > 0) return null;
 
   const top1 = scoredCandidates[0];
   const top2 = scoredCandidates[1] || null;
-
-  const buildHit = (candidate, confidence, rule, detail = '') => ({
-    action: 'continue',
-    tier: candidate.isRunning ? 'running' : 'recent',
-    sessionId: candidate.sessionId,
-    title: candidate.title || candidate.sessionId,
-    sceneId: candidate.sceneId || null,
-    workDir: candidate.workDir || '',
-    answeredQuestion: null,
-    confidence,
-    reason: detail ? `fast_path:${rule}(${detail})` : `fast_path:${rule}`,
-    routeSource: 'fast_path',
-    fastPathRule: rule,
-    decisionModel: null,
+  const hit = (candidate, confidence, rule, detail = '') => buildLocalHit(candidate, {
+    confidence, rule, detail, routeSource: 'fallback',
   });
 
   // Rule 1: Exact / near-exact repeated user utterance in one unique Session.
   if (top1.exactUtteranceMatch && (!top2 || !top2.exactUtteranceMatch)) {
-    return buildHit(top1, 0.98, 'exact_utterance');
+    return hit(top1, 0.9, 'exact_utterance');
   }
 
   // Rule 2: Strong scale-invariant lexical match with clear margin in a fresh (<24h) Session.
@@ -507,7 +526,7 @@ export function tryFastPathRoute({
     && top1.queryCoverage >= 0.25
     && (lexRatio >= 2.0 || (sameWorkDir && lexRatio >= 1.3 && top1.ageMin <= 60))
   ) {
-    return buildHit(top1, 0.94, 'strong_lexical', top1.matchedTerms.join(','));
+    return hit(top1, 0.8, 'strong_lexical', top1.matchedTerms.join(','));
   }
 
   // Rule 3: Multiple unique-term hits in a recently active (<2h) Session.
@@ -518,13 +537,11 @@ export function tryFastPathRoute({
     && top1.queryCoverage >= 0.22
     && (!top2 || top1.normLex >= top2.normLex * 2.2)
   ) {
-    return buildHit(top1, 0.92, 'unique_recent', top1.matchedTerms.join(','));
+    return hit(top1, 0.8, 'unique_recent', top1.matchedTerms.join(','));
   }
 
   // Rule 4: Short/anaphoric continuation when ONLY ONE Session was active
   // within 30 minutes and no other Session was active within 3 hours.
-  // Guard against hijacking a new topic: standalone acknowledgments always pass,
-  // while deictic queries must NOT carry novel identifiers or many novel topic terms.
   const byAge = [...scoredCandidates].sort((a, b) => a.ageMs - b.ageMs);
   const soleRecent = byAge[0];
   const isPureStandalone = STANDALONE_SHORT_CONTINUATION_RE.test(normalizeRouteText(cleanQuery));
@@ -537,7 +554,7 @@ export function tryFastPathRoute({
     && soleRecent.ageMin <= 30
     && (!byAge[1] || byAge[1].ageMin >= 180)
   ) {
-    return buildHit(soleRecent, 0.92, 'sole_recent_continuation');
+    return hit(soleRecent, 0.8, 'sole_recent_continuation');
   }
 
   return null;

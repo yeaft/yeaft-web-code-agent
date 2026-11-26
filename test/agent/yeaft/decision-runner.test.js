@@ -11,6 +11,7 @@ import { flushAgentPerfTrace } from '../../../agent/yeaft/perf-trace.js';
 import {
   AUTO_ROUTE_SESSION_PROMPT,
   AUTO_ROUTE_SESSION_SCENARIO_ID,
+  DEFAULT_AUTO_ROUTE_MATCH_MIN_CONFIDENCE,
   PLAN_NEW_SESSION_PROMPT,
   PLAN_NEW_SESSION_SCENARIO_ID,
   ROUTE_RECENT_SESSION_PROMPT,
@@ -297,7 +298,9 @@ describe('Decision model configuration & scenario-tailored runner', () => {
       reason: 'matched repo',
     });
 
-    // 3b. Unified auto-route-session scenario: validates running+idle allowlist, adaptive short-continuation confidence, and single-shot create allowlists.
+    // 3b. Unified auto-route-session scenario: validates running+idle allowlist, the replay-calibrated
+    // 0.5 match floor for every message, and single-shot create allowlists.
+    expect(DEFAULT_AUTO_ROUTE_MATCH_MIN_CONFIDENCE).toBe(0.5);
     const unifiedShortCont = await runDecision({
       scenario: AUTO_ROUTE_SESSION_SCENARIO_ID,
       config: { decisionModel: 'proxy/decision-fast' },
@@ -315,12 +318,29 @@ describe('Decision model configuration & scenario-tailored runner', () => {
     });
     expect(unifiedShortCont.result).toMatchObject({ decision: 'match', sessionId: 'sess_idle_1', confidence: 0.62 });
 
+    const unifiedNormalMidConf = await runDecision({
+      scenario: AUTO_ROUTE_SESSION_SCENARIO_ID,
+      config: { decisionModel: 'proxy/decision-fast' },
+      adapter: {
+        async call() {
+          return { text: '{"decision":"match","sessionId":"sess_idle_1","confidence":0.62,"reason":"best guess among similar Sessions"}' };
+        },
+      },
+      input: {
+        newQuery: '把刚才的方案第二步展开写一下',
+        candidates: [{ sessionId: 'sess_idle_1', title: 'Plan', state: 'idle', ageText: '12m ago' }],
+        allowedScenes: ['general', 'writing'],
+        candidateFolders: [{ path: '/workspace/app', name: 'app' }],
+      },
+    });
+    expect(unifiedNormalMidConf.result).toMatchObject({ decision: 'match', sessionId: 'sess_idle_1', confidence: 0.62 });
+
     const unifiedNormalLowConf = await runDecision({
       scenario: AUTO_ROUTE_SESSION_SCENARIO_ID,
       config: { decisionModel: 'proxy/decision-fast' },
       adapter: {
         async call() {
-          return { text: '{"decision":"match","sessionId":"sess_idle_1","confidence":0.62,"sceneId":"writing","workDir":"/etc/passwd","title":"写产品文档","reason":"weak match"}' };
+          return { text: '{"decision":"match","sessionId":"sess_idle_1","confidence":0.42,"sceneId":"writing","workDir":"/etc/passwd","title":"写产品文档","reason":"weak match"}' };
         },
       },
       input: {
