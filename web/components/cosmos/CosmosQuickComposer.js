@@ -89,7 +89,7 @@ export default {
             :active-model-label="activeModelLabel"
             :effort-options="effortOptions"
             :active-effort="selectedEffort"
-            :show-scene="true"
+            :show-scene="supportsExplicitScenes"
             :scene-options="sceneOptions"
             :active-scene="selectedScene"
             default-scene-id="auto"
@@ -155,7 +155,12 @@ export default {
       return m ? getSelectableModelEfforts(m.effortOptions, m) : [];
     });
 
+    const supportsExplicitScenes = Vue.computed(() => (
+      store.hasAgentCapability?.(props.agent?.id, 'session_scenes') === true
+    ));
+
     const sceneOptions = Vue.computed(() => {
+      if (!supportsExplicitScenes.value) return [];
       const list = [
         { id: 'auto', label: $t('cosmos.quick.sceneAuto') },
         { id: 'none', label: $t('cosmos.quick.sceneNone') },
@@ -232,13 +237,18 @@ export default {
       },
     );
 
-    Vue.watch(sceneOptions, (options) => {
-      if (!options.some((opt) => opt.id === selectedScene.value)) {
+    Vue.watch([supportsExplicitScenes, sceneOptions], ([supported, options]) => {
+      if (!supported || !options.some((opt) => opt.id === selectedScene.value)) {
         selectedScene.value = 'auto';
       }
     });
 
     const selectScene = (id) => {
+      if (id === 'auto') {
+        selectedScene.value = 'auto';
+        return;
+      }
+      if (!supportsExplicitScenes.value || !sceneOptions.value.some((opt) => opt.id === id)) return;
       selectedScene.value = id;
     };
 
@@ -278,12 +288,19 @@ export default {
         ? { model: selectedModel.value, effort: selectedEffort.value || null }
         : null;
 
+      // Revalidate explicit scene preference at send time so capability loss
+      // or an auto-route-only agent never forwards an unsupported scene ID.
+      const effectiveSceneId = supportsExplicitScenes.value
+        && sceneOptions.value.some((opt) => opt.id === selectedScene.value)
+        ? selectedScene.value
+        : 'auto';
+
       try {
         const res = await store.sendYeaftAutoRouteMessage({
           agentId: targetAgentId,
           text,
           attachments: Array.isArray(attachmentInfos) ? attachmentInfos : undefined,
-          preferredSceneId: selectedScene.value,
+          preferredSceneId: effectiveSceneId,
           quickSend,
           quote,
           cosmosDelivery: true,
@@ -340,6 +357,7 @@ export default {
       modelRows,
       activeModelLabel,
       effortOptions,
+      supportsExplicitScenes,
       sceneOptions,
       sceneLabel,
       selectScene,

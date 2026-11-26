@@ -304,7 +304,12 @@ export default {
 
       <!-- Body Stack: Pure Conversation Stream + Slide-Over Real Workbench -->
       <div class="cosmos-drawer-body">
-        <div class="cosmos-drawer-chat">
+        <div
+          ref="drawerChatRef"
+          class="cosmos-drawer-chat"
+          :inert="workbenchOpen || undefined"
+          :aria-hidden="workbenchOpen ? 'true' : undefined"
+        >
           <div v-if="!hasSelectedSession" class="cosmos-drawer-empty">
             <span>{{ $t('cosmos.panel.empty') }}</span>
             <button type="button" class="cosmos-drawer-cta" @click="$emit('create-session', agent.id)">
@@ -346,6 +351,8 @@ export default {
                   :model-rows="modelRows"
                   :active-model="activeModel"
                   :active-model-label="activeModelLabel"
+                  :model-disabled="!activeGroup?.id"
+                  :model-busy="Boolean(pendingModelSelection)"
                   :effort-options="effortOptions"
                   :active-effort="activeEffort"
                   :show-scene="showDrawerScene"
@@ -355,7 +362,9 @@ export default {
                   :scene-disabled="drawerSceneDisabled"
                   :scene-busy="Boolean(pendingDrawerScene)"
                   :scene-error="drawerSceneError"
+                  :disabled="workbenchOpen"
                   :scope-key="composerDraftKey"
+                  @open="onTuningOpen"
                   @select-model="onSelectModel"
                   @select-effort="selectEffort"
                   @select-scene="selectDrawerScene"
@@ -398,6 +407,7 @@ export default {
     const historySearchRef = Vue.ref(null);
     let historySearchTimer = null;
     let stopLoadOlderWatch = null;
+    const drawerChatRef = Vue.ref(null);
     const tuningRef = Vue.ref(null);
     const requestedScene = Vue.ref('');
     const unconfirmedScene = Vue.ref('');
@@ -541,8 +551,23 @@ export default {
       return '';
     });
 
+    const pendingModelSelection = Vue.computed(() => {
+      const sid = activeGroup.value?.id;
+      const aid = props.agent?.id || store.currentAgent;
+      if (!sid || !aid) return null;
+      return store.sessionModelSelectionFor?.(sid, aid) || null;
+    });
+
+    const effectiveModelSession = Vue.computed(() => {
+      const group = activeGroup.value;
+      if (!group) return null;
+      return pendingModelSelection.value
+        ? { ...group, config: { ...group.config, ...pendingModelSelection.value } }
+        : group;
+    });
+
     const modelRows = Vue.computed(() => buildModelSelectionRows(drawerAgentModels.value));
-    const activeModel = Vue.computed(() => resolveSessionModelRef(activeGroup.value, drawerDefaultModel.value));
+    const activeModel = Vue.computed(() => resolveSessionModelRef(effectiveModelSession.value, drawerDefaultModel.value));
     const activeModelMeta = Vue.computed(() => {
       const hit = modelRows.value.find((r) => modelOptionMatchesRef(r.model, activeModel.value));
       return hit?.model || null;
@@ -555,7 +580,7 @@ export default {
       activeModelMeta.value ? getSelectableModelEfforts(activeModelMeta.value.effortOptions, activeModelMeta.value) : []
     ));
     const activeEffort = Vue.computed(() => getSessionEffortDisplay(
-      activeGroup.value,
+      effectiveModelSession.value,
       drawerDefaultEffort.value,
       activeModelMeta.value,
     ));
@@ -1005,9 +1030,24 @@ export default {
       },
     );
 
+    Vue.watch(workbenchOpen, (open) => {
+      if (!open) return;
+      tuningRef.value?.close?.(false);
+      if (drawerChatRef.value?.contains(document.activeElement)) {
+        document.activeElement?.blur?.();
+      }
+    });
+
+    function onTuningOpen() {
+      if (historyOpen.value) closeHistoryDrawer();
+      if (searchOpen.value) closeSearch();
+    }
+
     async function applyModel(modelId, effort) {
+      const sessionId = activeGroup.value?.id;
+      if (!sessionId || !modelId) return;
       try {
-        const res = await store.switchYeaftModel?.(modelId, activeGroup.value?.id || null, effort);
+        const res = await store.switchYeaftModel?.(modelId, sessionId, effort);
         if (res?.ok === false && !res.superseded) {
           await alertDialog($t('yeaft.modelMenu.saveFailed'));
         }
@@ -1135,7 +1175,9 @@ export default {
       searchOpen,
       searchActiveMessageId,
       historySearchRef,
+      drawerChatRef,
       tuningRef,
+      pendingModelSelection,
       messageQuote,
       messageListRef,
       chatInputRef,
@@ -1181,6 +1223,7 @@ export default {
       onSearchSelect,
       loadOlderOutline,
       loadMoreSearch,
+      onTuningOpen,
       selectModel,
       onSelectModel,
       selectEffort,

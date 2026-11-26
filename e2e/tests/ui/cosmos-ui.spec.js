@@ -37,7 +37,7 @@ test.describe('Yeaft Cosmos UI', () => {
           online: true,
           status: 'ready',
           workDir: '/Users/dev/yeaft',
-          capabilities: ['session_auto_route', 'work_center', 'session_scenes', 'workbench_session_routes', 'terminal', 'file_editor'],
+          capabilities: ['session_auto_route', 'work_center', 'session_scenes', 'session_scene_frontend', 'workbench_session_routes', 'terminal', 'file_editor'],
         },
         {
           id: 'z-agent-cloud',
@@ -66,7 +66,7 @@ test.describe('Yeaft Cosmos UI', () => {
         },
       };
       const sessionsStore = window.Pinia.useSessionsStore?.();
-      sessionsStore?.upsertSession?.({
+      sessionsStore?.applySnapshotUpsert?.({
         id: 'sess-earth-1',
         name: 'Planetary Shader Polish',
         agentId,
@@ -223,7 +223,7 @@ test.describe('Yeaft Cosmos UI', () => {
     expect(userMsgBg.innerBg).not.toBe('rgba(0, 0, 0, 0)');
 
     // Verify Drawer unified tuning popover opens strictly ABOVE the Drawer Composer within Drawer bounds
-    // and 1st Escape dismisses ONLY the tuning popover while keeping the Drawer open.
+    // (including top containment below header & localized Drawer scene chips), and 1st Escape dismisses ONLY the popover.
     const drawerComposer = page.locator('.cosmos-drawer .input-wrapper.chat-composer');
     const drawerTuneTrigger = page.locator('.cosmos-drawer .cosmos-tune-trigger');
     await expect(drawerTuneTrigger).toBeVisible();
@@ -232,13 +232,18 @@ test.describe('Yeaft Cosmos UI', () => {
     const drawerTunePopover = page.locator('.cosmos-drawer .cosmos-tune-popover');
     await expect(drawerTunePopover).toBeVisible();
     await drawerTunePopover.evaluate((el) => Promise.all(el.getAnimations().map((a) => a.finished)).catch(() => {}));
-    const [drawerBox, drawerComposerHeightAfter, drawerComposerBoxAfter, drawerPopBox] = await Promise.all([
+    const drawerSceneTexts = await drawerTunePopover.locator('.cosmos-tune-chip').allTextContents();
+    expect(drawerSceneTexts.length).toBeGreaterThanOrEqual(4);
+    expect(drawerSceneTexts.some((t) => /^(Frontend|前端开发)$/.test(t.trim()))).toBe(true);
+    const [drawerBox, drawerHeadBox, drawerComposerHeightAfter, drawerComposerBoxAfter, drawerPopBox] = await Promise.all([
       page.locator('.cosmos-drawer').boundingBox(),
+      page.locator('.cosmos-drawer-head').boundingBox(),
       drawerComposer.evaluate((el) => el.offsetHeight),
       drawerComposer.boundingBox(),
       drawerTunePopover.boundingBox(),
     ]);
     expect(drawerComposerHeightAfter).toBe(drawerComposerHeightBefore);
+    expect(drawerPopBox.y).toBeGreaterThanOrEqual(drawerHeadBox.y + drawerHeadBox.height - 1);
     expect(drawerPopBox.y + drawerPopBox.height).toBeLessThanOrEqual(drawerComposerBoxAfter.y + 1);
     expect(drawerPopBox.x).toBeGreaterThanOrEqual(drawerBox.x - 1);
     expect(drawerPopBox.x + drawerPopBox.width).toBeLessThanOrEqual(drawerBox.x + drawerBox.width + 1);
@@ -247,11 +252,13 @@ test.describe('Yeaft Cosmos UI', () => {
     await expect(page.locator('.cosmos-drawer')).toBeVisible();
     await expect(drawerTuneTrigger).toBeFocused();
 
-    // Open real Workbench inside Cosmos drawer and verify launcher, Add menu positioning, maximize & 2-step Escape under both themes
+    // Open real Workbench inside Cosmos drawer and verify chat becomes inert (cannot reopen tuning behind Workbench)
     await page.evaluate(() => document.documentElement.setAttribute('data-theme', 'light'));
     await page.locator('.cosmos-drawer').getByRole('button', { name: /workbench/i }).click();
     const wbHost = page.locator('.cosmos-workbench-host');
     await expect(wbHost).toBeVisible();
+    await expect(page.locator('.cosmos-drawer-chat')).toHaveAttribute('inert', '');
+    await expect(page.locator('.cosmos-drawer .cosmos-tune-popover')).toHaveCount(0);
     await expect(wbHost.locator('.workbench-content')).toBeVisible();
     await expect(wbHost.locator('.workbench-capability-card').first()).toBeVisible();
 
@@ -487,11 +494,23 @@ test.describe('Yeaft Cosmos UI', () => {
 
     await page.evaluate((agentId) => {
       const chat = window.Pinia.useChatStore();
+      const models = [
+        { id: 'copilot/gemini-4-neon', label: 'gemini-4-neon', provider: 'copilot', effortOptions: ['medium', 'high', 'xhigh'] },
+        { id: 'copilot/gpt-6.2-sol', label: 'gpt-6.2-sol', provider: 'copilot', effortOptions: ['medium', 'xhigh', 'max'] },
+        { id: 'anthropic/claude-opus-4', label: 'claude-opus-4', provider: 'anthropic', effortOptions: ['low', 'medium', 'high'] },
+      ];
       chat.agents = [
-        { id: agentId, name: 'MacBook-Pro', online: true, status: 'ready', workDir: '/Users/dev/yeaft', capabilities: ['session_auto_route', 'workbench_session_routes', 'terminal', 'file_editor'] },
+        { id: agentId, name: 'MacBook-Pro', online: true, status: 'ready', workDir: '/Users/dev/yeaft', capabilities: ['session_auto_route', 'session_scenes', 'session_scene_frontend', 'workbench_session_routes', 'terminal', 'file_editor'] },
         { id: 'z-saturn-node', name: 'Cloud-Linux', online: true, status: 'ready', workDir: '/srv/prod', capabilities: ['session_auto_route'] },
       ];
       chat.workbenchRouteProtocolSupported = true;
+      chat.yeaftAvailableModels = models;
+      chat.yeaftModel = 'copilot/gemini-4-neon';
+      chat.yeaftModelEffort = 'medium';
+      chat.llmConfig = {
+        ...(chat.llmConfig || {}),
+        [agentId]: { agentConfig: { primaryModel: 'copilot/gemini-4-neon', defaultEffort: 'medium', availableModels: models } },
+      };
       chat.applySessionCatalogSnapshot([
         {
           catalogKey: `yeaft:${agentId}:sess-mobile-1`,
@@ -504,6 +523,13 @@ test.describe('Yeaft Cosmos UI', () => {
           sortRank: 0,
         },
       ], []);
+      window.Pinia.useSessionsStore?.()?.applySnapshotUpsert?.({
+        id: 'sess-mobile-1',
+        name: 'Mobile Workbench Check',
+        agentId,
+        sceneId: 'general',
+        roster: [{ id: 'vp-1' }],
+      }, agentId);
     }, mockAgent.agentId);
 
     const earthNode = page.locator('.cosmos-planet-node[data-planet-id="earth"]');
@@ -517,13 +543,60 @@ test.describe('Yeaft Cosmos UI', () => {
     expect(saturnBox.x).toBeGreaterThanOrEqual(0);
     expect(saturnBox.x + saturnBox.width).toBeLessThanOrEqual(392);
 
-    // Click Earth tag -> opens Quick Composer -> Open Chat -> full-screen drawer
+    // Click Earth tag -> opens Quick Composer; verify 320px short-viewport multiline draft keeps upward popover
+    // strictly inside top/horizontal viewport bounds with both first & last controls reachable and clickable.
     const earthTagBox = await earthNode.locator('.cosmos-planet-tag').boundingBox();
     expect(earthTagBox).not.toBeNull();
     await page.mouse.click(earthTagBox.x + earthTagBox.width / 2, earthTagBox.y + earthTagBox.height / 2);
-    await expect(page.locator('.cosmos-quick-composer')).toBeVisible();
+    const mobileQuick = page.locator('.cosmos-quick-composer');
+    await expect(mobileQuick).toBeVisible();
+    await page.setViewportSize({ width: 320, height: 460 });
+    await mobileQuick.locator('textarea').fill('Line 1\nLine 2\nLine 3\nLine 4\nLine 5');
+    await mobileQuick.locator('.cosmos-tune-trigger').click();
+    const mobileQuickPop = mobileQuick.locator('.cosmos-tune-popover');
+    await expect(mobileQuickPop).toBeVisible();
+    await mobileQuickPop.evaluate((el) => Promise.all(el.getAnimations().map((a) => a.finished)).catch(() => {}));
+    const [q320Box, q320PopBox] = await Promise.all([mobileQuick.boundingBox(), mobileQuickPop.boundingBox()]);
+    expect(q320PopBox.y).toBeGreaterThanOrEqual(0);
+    expect(q320PopBox.y + q320PopBox.height).toBeLessThanOrEqual(q320Box.y + 1);
+    expect(q320PopBox.x).toBeGreaterThanOrEqual(0);
+    expect(q320PopBox.x + q320PopBox.width).toBeLessThanOrEqual(320.5);
+    const qFirstRadio = mobileQuickPop.locator('button[role="radio"]').first();
+    const qLastRadio = mobileQuickPop.locator('button[role="radio"]').last();
+    await qFirstRadio.scrollIntoViewIfNeeded();
+    await qFirstRadio.click();
+    await qLastRadio.scrollIntoViewIfNeeded();
+    await qLastRadio.click();
+    await expect(qLastRadio).toHaveAttribute('aria-checked', 'true');
+    await page.keyboard.press('Escape');
+    await expect(mobileQuickPop).toHaveCount(0);
+
+    // Restore 390x844 -> Open Chat -> verify Drawer tuning popover stays below Drawer header with expanded draft
+    await page.setViewportSize({ width: 390, height: 844 });
     await page.locator('.cosmos-quick-open-btn').click();
     await expect(page.locator('.cosmos-drawer')).toBeVisible();
+    await page.setViewportSize({ width: 390, height: 500 });
+    await page.locator('.cosmos-drawer textarea').fill('Drawer line 1\nDrawer line 2\nDrawer line 3\nDrawer line 4');
+    await page.locator('.cosmos-drawer .cosmos-tune-trigger').click();
+    const mobileDrawerPop = page.locator('.cosmos-drawer .cosmos-tune-popover');
+    await expect(mobileDrawerPop).toBeVisible();
+    await mobileDrawerPop.evaluate((el) => Promise.all(el.getAnimations().map((a) => a.finished)).catch(() => {}));
+    const [mHeadBox, mComposerBox, mDrawerPopBox] = await Promise.all([
+      page.locator('.cosmos-drawer-head').boundingBox(),
+      page.locator('.cosmos-drawer .input-wrapper.chat-composer').boundingBox(),
+      mobileDrawerPop.boundingBox(),
+    ]);
+    expect(mDrawerPopBox.y).toBeGreaterThanOrEqual(mHeadBox.y + mHeadBox.height - 1);
+    expect(mDrawerPopBox.y + mDrawerPopBox.height).toBeLessThanOrEqual(mComposerBox.y + 1);
+    expect(mDrawerPopBox.x).toBeGreaterThanOrEqual(0);
+    expect(mDrawerPopBox.x + mDrawerPopBox.width).toBeLessThanOrEqual(390.5);
+    await mobileDrawerPop.locator('button[role="radio"]').last().scrollIntoViewIfNeeded();
+    await mobileDrawerPop.locator('button[role="radio"]').last().focus();
+    await expect(mobileDrawerPop.locator('button[role="radio"]').last()).toBeFocused();
+    await page.keyboard.press('Escape');
+    await expect(mobileDrawerPop).toHaveCount(0);
+    await page.setViewportSize({ width: 390, height: 844 });
+
     // Open Workbench on 390px phone and verify Add (+) menu stays inside 390px viewport
     await page.locator('.cosmos-drawer').getByRole('button', { name: /workbench/i }).click();
     const mobileWbHost = page.locator('.cosmos-workbench-host');

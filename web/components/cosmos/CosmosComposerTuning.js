@@ -4,7 +4,7 @@
  * Consolidates Model, Reasoning Effort, and localized Scene selection into a
  * single calm borderless trigger + upward-opening atmospheric glass sheet.
  * Shared identically by CosmosQuickComposer and CosmosConversationDrawer so
- * both surfaces stay minimal, border-free, and zero-clutter.
+ * both surfaces stay minimal, border-free, accessible, and viewport-safe.
  */
 import { modelOptionMatchesRef } from '../../utils/modelRefs.js';
 
@@ -14,6 +14,8 @@ export default {
     modelRows: { type: Array, default: () => [] },
     activeModel: { type: String, default: '' },
     activeModelLabel: { type: String, default: '' },
+    modelDisabled: { type: Boolean, default: false },
+    modelBusy: { type: Boolean, default: false },
     effortOptions: { type: Array, default: () => [] },
     activeEffort: { type: String, default: '' },
     showScene: { type: Boolean, default: false },
@@ -28,7 +30,7 @@ export default {
     disabled: { type: Boolean, default: false },
     scopeKey: { type: String, default: '' },
   },
-  emits: ['select-model', 'select-effort', 'select-scene', 'open-llm-config'],
+  emits: ['open', 'select-model', 'select-effort', 'select-scene', 'open-llm-config'],
   template: `
     <div
       v-if="hasAnyControls"
@@ -47,6 +49,7 @@ export default {
         aria-haspopup="dialog"
         :aria-expanded="isOpen ? 'true' : 'false'"
         :aria-controls="isOpen ? popoverId : undefined"
+        :aria-busy="modelBusy || sceneBusy ? 'true' : undefined"
         :aria-label="triggerAriaLabel"
         :title="triggerAriaLabel"
         @click.stop="toggle"
@@ -67,6 +70,7 @@ export default {
         :id="popoverId"
         ref="popoverRef"
         class="cosmos-tune-popover"
+        :style="popoverStyle"
         role="dialog"
         :aria-label="$t('cosmos.composer.tuneLabel')"
         @pointerdown.stop
@@ -83,15 +87,24 @@ export default {
               @click="onOpenConfig"
             >{{ $t('cosmos.composer.configureShort') }}</button>
           </div>
-          <div class="cosmos-tune-model-list" role="radiogroup" :aria-label="$t('yeaft.modelMenu.label')">
+          <div
+            ref="modelGroupRef"
+            class="cosmos-tune-model-list"
+            role="radiogroup"
+            :aria-label="$t('yeaft.modelMenu.label')"
+            :aria-busy="modelBusy ? 'true' : undefined"
+            @keydown="onRadioGroupKeydown($event, 'model')"
+          >
             <button
-              v-for="row in modelRows"
+              v-for="(row, idx) in modelRows"
               :key="row.modelRef"
               type="button"
               class="cosmos-tune-model-row"
               :class="{ 'is-active': isModelActive(row) }"
               role="radio"
+              :tabindex="idx === modelTabIndex ? 0 : -1"
               :aria-checked="isModelActive(row) ? 'true' : 'false'"
+              :disabled="modelDisabled"
               @click="onSelectModel(row)"
             >
               <span class="cosmos-tune-check" aria-hidden="true">
@@ -108,15 +121,24 @@ export default {
           <div class="cosmos-tune-section-head">
             <span class="cosmos-tune-section-title">{{ $t('yeaft.modelMenu.effort') }}</span>
           </div>
-          <div class="cosmos-tune-segments" role="radiogroup" :aria-label="$t('yeaft.modelMenu.effort')">
+          <div
+            ref="effortGroupRef"
+            class="cosmos-tune-segments"
+            role="radiogroup"
+            :aria-label="$t('yeaft.modelMenu.effort')"
+            :aria-busy="modelBusy ? 'true' : undefined"
+            @keydown="onRadioGroupKeydown($event, 'effort')"
+          >
             <button
-              v-for="eff in effortOptions"
+              v-for="(eff, idx) in effortOptions"
               :key="eff"
               type="button"
               class="cosmos-tune-seg"
               :class="{ 'is-active': eff === effectiveEffort }"
               role="radio"
+              :tabindex="idx === effortTabIndex ? 0 : -1"
               :aria-checked="eff === effectiveEffort ? 'true' : 'false'"
+              :disabled="modelDisabled"
               @click="onSelectEffort(eff)"
             >{{ $t('yeaft.modelMenu.effort.' + eff) }}</button>
           </div>
@@ -128,16 +150,25 @@ export default {
             <span class="cosmos-tune-section-title">{{ $t('yeaft.session.scene.label') }}</span>
             <span v-if="sceneHint" class="cosmos-tune-section-hint">{{ sceneHint }}</span>
           </div>
-          <div class="cosmos-tune-chips" role="radiogroup" :aria-label="$t('yeaft.session.scene.label')">
+          <div
+            ref="sceneGroupRef"
+            class="cosmos-tune-chips"
+            role="radiogroup"
+            :aria-label="$t('yeaft.session.scene.label')"
+            :aria-busy="sceneBusy ? 'true' : undefined"
+            @keydown="onRadioGroupKeydown($event, 'scene')"
+          >
             <button
-              v-for="opt in sceneOptions"
+              v-for="(opt, idx) in sceneOptions"
               :key="opt.id"
               type="button"
               class="cosmos-tune-chip"
               :class="{ 'is-active': opt.id === activeScene }"
               role="radio"
+              :tabindex="idx === sceneTabIndex ? 0 : -1"
               :aria-checked="opt.id === activeScene ? 'true' : 'false'"
-              :disabled="sceneDisabled || sceneBusy"
+              :disabled="sceneDisabled"
+              :aria-disabled="sceneDisabled || sceneBusy ? 'true' : undefined"
               :aria-busy="sceneBusy && opt.id === activeScene ? 'true' : undefined"
               @click="onSelectScene(opt.id)"
             >{{ opt.label }}</button>
@@ -155,7 +186,15 @@ export default {
     const rootRef = Vue.ref(null);
     const triggerRef = Vue.ref(null);
     const popoverRef = Vue.ref(null);
+    const modelGroupRef = Vue.ref(null);
+    const effortGroupRef = Vue.ref(null);
+    const sceneGroupRef = Vue.ref(null);
     const isOpen = Vue.ref(false);
+    const popoverMaxHeight = Vue.ref(null);
+    const rovingIndex = Vue.reactive({ model: -1, effort: -1, scene: -1 });
+
+    let boundsObserver = null;
+    let stopBoundsListeners = null;
 
     const hasAnyControls = Vue.computed(() => (
       props.modelRows.length > 0
@@ -189,8 +228,6 @@ export default {
 
     const summaryScene = Vue.computed(() => {
       if (!props.showScene || !props.sceneOptions.length) return '';
-      // Show scene in compact trigger when user explicitly chose a non-default scene,
-      // or when model catalog is empty so the trigger still has a crisp label.
       if (hasCustomScene.value || !summaryModel.value) {
         if (props.activeScene === 'none') return $t('cosmos.composer.sceneNoneShort');
         if (props.activeScene === 'auto') return $t('cosmos.composer.sceneAutoShort');
@@ -205,41 +242,173 @@ export default {
       return parts.length ? `${base}: ${parts.join(' · ')}` : base;
     });
 
+    const popoverStyle = Vue.computed(() => (
+      popoverMaxHeight.value ? { maxHeight: popoverMaxHeight.value } : undefined
+    ));
+
     function isModelActive(row) {
       if (!row?.model || !props.activeModel) return false;
       return modelOptionMatchesRef(row.model, props.activeModel);
     }
 
-    function isRendered() {
+    const modelTabIndex = Vue.computed(() => {
+      if (rovingIndex.model >= 0 && rovingIndex.model < props.modelRows.length) return rovingIndex.model;
+      const idx = props.modelRows.findIndex((r) => isModelActive(r));
+      return idx >= 0 ? idx : 0;
+    });
+
+    const effortTabIndex = Vue.computed(() => {
+      if (rovingIndex.effort >= 0 && rovingIndex.effort < props.effortOptions.length) return rovingIndex.effort;
+      const idx = props.effortOptions.indexOf(effectiveEffort.value);
+      return idx >= 0 ? idx : 0;
+    });
+
+    const sceneTabIndex = Vue.computed(() => {
+      if (rovingIndex.scene >= 0 && rovingIndex.scene < props.sceneOptions.length) return rovingIndex.scene;
+      const idx = props.sceneOptions.findIndex((o) => o.id === props.activeScene);
+      return idx >= 0 ? idx : 0;
+    });
+
+    function isBlocked() {
+      if (props.disabled) return true;
+      const el = triggerRef.value;
+      if (!el) return true;
+      if (typeof el.closest === 'function' && el.closest('[inert], [aria-hidden="true"]')) {
+        return true;
+      }
+      if (typeof window !== 'undefined' && typeof window.getComputedStyle === 'function') {
+        const style = window.getComputedStyle(el);
+        if (style.display === 'none' || style.visibility === 'hidden') return true;
+      }
+      return false;
+    }
+
+    function isInteractive() {
+      if (isBlocked()) return false;
       const el = triggerRef.value;
       if (!el || !el.isConnected) return false;
       return typeof el.getClientRects === 'function' ? el.getClientRects().length > 0 : true;
     }
 
+    function updatePopoverBounds() {
+      if (!isOpen.value || !popoverRef.value) return;
+      const anchorEl = popoverRef.value.offsetParent
+        || rootRef.value?.closest?.('.cosmos-quick-composer, .input-wrapper.chat-composer');
+      if (!anchorEl || typeof anchorEl.getBoundingClientRect !== 'function') return;
+      const anchorRect = anchorEl.getBoundingClientRect();
+      if (!anchorRect || (anchorRect.width === 0 && anchorRect.height === 0)) return;
+      const vv = typeof window !== 'undefined' ? window.visualViewport : null;
+      const viewportTop = vv && Number.isFinite(vv.offsetTop) ? vv.offsetTop : 0;
+      const drawerEl = rootRef.value?.closest?.('.cosmos-drawer');
+      const drawerHeadEl = drawerEl?.querySelector?.('.cosmos-drawer-head');
+      let topLimit = viewportTop + 12;
+      if (drawerEl && typeof drawerEl.getBoundingClientRect === 'function') {
+        const drawerRect = drawerEl.getBoundingClientRect();
+        topLimit = Math.max(topLimit, drawerRect.top + 8);
+        if (drawerHeadEl && typeof drawerHeadEl.getBoundingClientRect === 'function') {
+          const headRect = drawerHeadEl.getBoundingClientRect();
+          topLimit = Math.max(topLimit, headRect.bottom + 8);
+        }
+      }
+      const gapAboveAnchor = 10;
+      const availableAbove = Math.floor(anchorRect.top - gapAboveAnchor - topLimit);
+      const clamped = Math.max(48, Math.min(440, availableAbove));
+      popoverMaxHeight.value = `${clamped}px`;
+    }
+
+    function teardownBoundsTracking() {
+      if (boundsObserver) {
+        boundsObserver.disconnect();
+        boundsObserver = null;
+      }
+      if (stopBoundsListeners) {
+        stopBoundsListeners();
+        stopBoundsListeners = null;
+      }
+    }
+
+    function setupBoundsTracking() {
+      teardownBoundsTracking();
+      updatePopoverBounds();
+      if (typeof ResizeObserver === 'function') {
+        boundsObserver = new ResizeObserver(() => updatePopoverBounds());
+        const anchorEl = popoverRef.value?.offsetParent
+          || rootRef.value?.closest?.('.cosmos-quick-composer, .input-wrapper.chat-composer');
+        if (anchorEl) boundsObserver.observe(anchorEl);
+        const drawerEl = rootRef.value?.closest?.('.cosmos-drawer');
+        if (drawerEl && drawerEl !== anchorEl) boundsObserver.observe(drawerEl);
+      }
+      const onViewportChange = () => updatePopoverBounds();
+      window.addEventListener('resize', onViewportChange);
+      const vv = window.visualViewport;
+      vv?.addEventListener?.('resize', onViewportChange);
+      vv?.addEventListener?.('scroll', onViewportChange);
+      stopBoundsListeners = () => {
+        window.removeEventListener('resize', onViewportChange);
+        vv?.removeEventListener?.('resize', onViewportChange);
+        vv?.removeEventListener?.('scroll', onViewportChange);
+      };
+    }
+
+    function focusFirstPopoverControl() {
+      const pop = popoverRef.value;
+      const target = pop?.querySelector?.('button[role="radio"][tabindex="0"]:not(:disabled)')
+        || pop?.querySelector?.('button:not(:disabled)')
+        || triggerRef.value;
+      target?.focus?.({ preventScroll: true });
+    }
+
+    function resetRovingIndices() {
+      rovingIndex.model = -1;
+      rovingIndex.effort = -1;
+      rovingIndex.scene = -1;
+    }
+
+    function openPopover({ focusFirst = false } = {}) {
+      if (isBlocked()) return;
+      if (!isOpen.value) {
+        resetRovingIndices();
+        isOpen.value = true;
+        emit('open');
+      }
+      if (focusFirst) {
+        Vue.nextTick(() => focusFirstPopoverControl());
+      }
+    }
+
     function close(restoreFocus = false) {
       if (!isOpen.value) return;
       isOpen.value = false;
-      if (restoreFocus) {
+      resetRovingIndices();
+      teardownBoundsTracking();
+      popoverMaxHeight.value = null;
+      if (restoreFocus && !isBlocked()) {
         Vue.nextTick(() => triggerRef.value?.focus?.({ preventScroll: true }));
       }
     }
 
     function toggle() {
-      if (props.disabled) return;
-      isOpen.value = !isOpen.value;
+      if (isBlocked()) return;
+      if (isOpen.value) close(false);
+      else openPopover();
     }
 
     function onSelectModel(row) {
-      if (!row?.modelRef) return;
+      if (!row?.modelRef || props.modelDisabled) return;
+      rovingIndex.model = -1;
+      rovingIndex.effort = -1;
       emit('select-model', { modelRef: row.modelRef, defaultEffort: row.defaultEffort || null });
     }
 
     function onSelectEffort(eff) {
+      if (props.modelDisabled) return;
+      rovingIndex.effort = -1;
       emit('select-effort', eff);
     }
 
     function onSelectScene(sceneId) {
       if (props.sceneDisabled || props.sceneBusy) return;
+      rovingIndex.scene = -1;
       emit('select-scene', sceneId);
     }
 
@@ -248,16 +417,57 @@ export default {
       emit('open-llm-config');
     }
 
+    function onRadioGroupKeydown(event, groupName) {
+      const { key } = event;
+      const groupEl = groupName === 'model'
+        ? modelGroupRef.value
+        : groupName === 'effort'
+          ? effortGroupRef.value
+          : sceneGroupRef.value;
+      if (!groupEl) return;
+      const allRadios = Array.from(groupEl.querySelectorAll('button[role="radio"]'));
+      const enabledIndices = [];
+      allRadios.forEach((btn, idx) => {
+        if (!btn.disabled) enabledIndices.push(idx);
+      });
+      if (!enabledIndices.length) return;
+      const currentDomIdx = allRadios.includes(event.target)
+        ? allRadios.indexOf(event.target)
+        : allRadios.indexOf(document.activeElement);
+      const currentPos = enabledIndices.indexOf(currentDomIdx);
+      let nextPos = -1;
+      if (key === 'ArrowDown' || key === 'ArrowRight') {
+        nextPos = currentPos < 0 ? 0 : (currentPos + 1) % enabledIndices.length;
+      } else if (key === 'ArrowUp' || key === 'ArrowLeft') {
+        nextPos = currentPos < 0 ? enabledIndices.length - 1 : (currentPos - 1 + enabledIndices.length) % enabledIndices.length;
+      } else if (key === 'Home') {
+        nextPos = 0;
+      } else if (key === 'End') {
+        nextPos = enabledIndices.length - 1;
+      } else {
+        return;
+      }
+      event.preventDefault();
+      event.stopPropagation();
+      const targetIdx = enabledIndices[nextPos];
+      rovingIndex[groupName] = targetIdx;
+      allRadios[targetIdx]?.focus({ preventScroll: false });
+    }
+
     function onKeydown(event) {
       if (event.key === 'Escape' && isOpen.value) {
+        if (isBlocked()) {
+          close(false);
+          return;
+        }
         event.preventDefault();
         event.stopPropagation();
         close(true);
         return;
       }
-      if (!isOpen.value && !props.disabled && (event.key === 'ArrowUp' || event.key === 'ArrowDown')) {
+      if (!isOpen.value && !isBlocked() && (event.key === 'ArrowUp' || event.key === 'ArrowDown')) {
         event.preventDefault();
-        isOpen.value = true;
+        openPopover({ focusFirst: true });
       }
     }
 
@@ -275,8 +485,8 @@ export default {
 
     function onDocKeydown(event) {
       if (!isOpen.value || event.key !== 'Escape' || event.defaultPrevented) return;
-      if (!isRendered()) {
-        isOpen.value = false;
+      if (!isInteractive()) {
+        close(false);
         return;
       }
       event.preventDefault();
@@ -284,12 +494,34 @@ export default {
       close(true);
     }
 
+    Vue.watch(isOpen, (open) => {
+      if (open) setupBoundsTracking();
+      else {
+        teardownBoundsTracking();
+        popoverMaxHeight.value = null;
+      }
+    }, { flush: 'post' });
+
     Vue.watch(() => props.scopeKey, () => {
-      isOpen.value = false;
+      close(false);
     });
 
     Vue.watch(() => props.disabled, (val) => {
-      if (val) isOpen.value = false;
+      if (val) close(false);
+    });
+
+    Vue.watch(() => props.sceneDisabled, (disabledNow) => {
+      if (disabledNow && isOpen.value && sceneGroupRef.value?.contains(document.activeElement)) {
+        focusFirstPopoverControl();
+      }
+    });
+
+    Vue.watch(() => props.modelDisabled, (disabledNow) => {
+      if (disabledNow && isOpen.value
+          && (modelGroupRef.value?.contains(document.activeElement)
+            || effortGroupRef.value?.contains(document.activeElement))) {
+        focusFirstPopoverControl();
+      }
     });
 
     Vue.onMounted(() => {
@@ -298,6 +530,7 @@ export default {
     });
 
     Vue.onBeforeUnmount(() => {
+      teardownBoundsTracking();
       document.removeEventListener('pointerdown', onDocPointerDown, true);
       document.removeEventListener('keydown', onDocKeydown);
     });
@@ -305,6 +538,7 @@ export default {
     expose({
       close,
       isOpen: () => isOpen.value,
+      updatePopoverBounds,
     });
 
     return {
@@ -312,7 +546,11 @@ export default {
       rootRef,
       triggerRef,
       popoverRef,
+      modelGroupRef,
+      effortGroupRef,
+      sceneGroupRef,
       isOpen,
+      popoverStyle,
       hasAnyControls,
       effectiveEffort,
       hasCustomScene,
@@ -320,6 +558,9 @@ export default {
       summaryEffort,
       summaryScene,
       triggerAriaLabel,
+      modelTabIndex,
+      effortTabIndex,
+      sceneTabIndex,
       isModelActive,
       toggle,
       close,
@@ -327,6 +568,7 @@ export default {
       onSelectEffort,
       onSelectScene,
       onOpenConfig,
+      onRadioGroupKeydown,
       onKeydown,
       onFocusout,
     };
