@@ -190,11 +190,12 @@ export default {
     const effortGroupRef = Vue.ref(null);
     const sceneGroupRef = Vue.ref(null);
     const isOpen = Vue.ref(false);
-    const popoverMaxHeight = Vue.ref(null);
+    const popoverLayout = Vue.ref(null);
     const rovingIndex = Vue.reactive({ model: -1, effort: -1, scene: -1 });
 
     let boundsObserver = null;
     let stopBoundsListeners = null;
+    let pendingFocusOnOpen = false;
 
     const hasAnyControls = Vue.computed(() => (
       props.modelRows.length > 0
@@ -242,9 +243,7 @@ export default {
       return parts.length ? `${base}: ${parts.join(' · ')}` : base;
     });
 
-    const popoverStyle = Vue.computed(() => (
-      popoverMaxHeight.value ? { maxHeight: popoverMaxHeight.value } : undefined
-    ));
+    const popoverStyle = Vue.computed(() => popoverLayout.value || undefined);
 
     function isModelActive(row) {
       if (!row?.model || !props.activeModel) return false;
@@ -290,6 +289,24 @@ export default {
       return typeof el.getClientRects === 'function' ? el.getClientRects().length > 0 : true;
     }
 
+    function revealWithinScrollableAncestors(target, boundaryEl) {
+      if (!target || !boundaryEl || typeof target.getBoundingClientRect !== 'function') return;
+      let scroller = target.parentElement;
+      while (scroller) {
+        if (scroller.scrollHeight > scroller.clientHeight + 1 && typeof scroller.getBoundingClientRect === 'function') {
+          const targetRect = target.getBoundingClientRect();
+          const scrollerRect = scroller.getBoundingClientRect();
+          if (targetRect.top < scrollerRect.top + 4) {
+            scroller.scrollTop -= (scrollerRect.top + 4 - targetRect.top);
+          } else if (targetRect.bottom > scrollerRect.bottom - 4) {
+            scroller.scrollTop += (targetRect.bottom - (scrollerRect.bottom - 4));
+          }
+        }
+        if (scroller === boundaryEl) break;
+        scroller = scroller.parentElement;
+      }
+    }
+
     function updatePopoverBounds() {
       if (!isOpen.value || !popoverRef.value) return;
       const anchorEl = popoverRef.value.offsetParent
@@ -299,21 +316,42 @@ export default {
       if (!anchorRect || (anchorRect.width === 0 && anchorRect.height === 0)) return;
       const vv = typeof window !== 'undefined' ? window.visualViewport : null;
       const viewportTop = vv && Number.isFinite(vv.offsetTop) ? vv.offsetTop : 0;
+      const viewportHeight = vv && Number.isFinite(vv.height) ? vv.height : (window.innerHeight || 0);
+      const viewportBottom = viewportTop + viewportHeight;
       const drawerEl = rootRef.value?.closest?.('.cosmos-drawer');
       const drawerHeadEl = drawerEl?.querySelector?.('.cosmos-drawer-head');
       let topLimit = viewportTop + 12;
+      let bottomLimit = viewportBottom - 12;
       if (drawerEl && typeof drawerEl.getBoundingClientRect === 'function') {
         const drawerRect = drawerEl.getBoundingClientRect();
         topLimit = Math.max(topLimit, drawerRect.top + 8);
+        bottomLimit = Math.min(bottomLimit, drawerRect.bottom - 8);
         if (drawerHeadEl && typeof drawerHeadEl.getBoundingClientRect === 'function') {
           const headRect = drawerHeadEl.getBoundingClientRect();
           topLimit = Math.max(topLimit, headRect.bottom + 8);
         }
       }
       const gapAboveAnchor = 10;
+      const minUsableAbove = 120;
       const availableAbove = Math.floor(anchorRect.top - gapAboveAnchor - topLimit);
-      const clamped = Math.max(48, Math.min(440, availableAbove));
-      popoverMaxHeight.value = `${clamped}px`;
+      if (availableAbove >= minUsableAbove) {
+        popoverLayout.value = {
+          top: 'auto',
+          bottom: `calc(100% + ${gapAboveAnchor}px)`,
+          maxHeight: `${Math.min(440, availableAbove)}px`,
+        };
+      } else {
+        // Too little room above the anchor (e.g. very short viewport or mobile keyboard
+        // with multiline draft): keep the sheet strictly inside [topLimit, bottomLimit]
+        // so it never crosses the Drawer header or exits the visible viewport.
+        const availableViewport = Math.max(0, Math.floor(bottomLimit - topLimit));
+        const topOffset = Math.ceil(topLimit - anchorRect.top);
+        popoverLayout.value = {
+          top: `${topOffset}px`,
+          bottom: 'auto',
+          maxHeight: `${Math.min(440, availableViewport)}px`,
+        };
+      }
     }
 
     function teardownBoundsTracking() {
@@ -356,6 +394,9 @@ export default {
         || pop?.querySelector?.('button:not(:disabled)')
         || triggerRef.value;
       target?.focus?.({ preventScroll: true });
+      if (target && pop && pop.contains(target)) {
+        revealWithinScrollableAncestors(target, pop);
+      }
     }
 
     function resetRovingIndices() {
@@ -368,20 +409,21 @@ export default {
       if (isBlocked()) return;
       if (!isOpen.value) {
         resetRovingIndices();
+        pendingFocusOnOpen = focusFirst;
         isOpen.value = true;
         emit('open');
-      }
-      if (focusFirst) {
-        Vue.nextTick(() => focusFirstPopoverControl());
+      } else if (focusFirst) {
+        focusFirstPopoverControl();
       }
     }
 
     function close(restoreFocus = false) {
       if (!isOpen.value) return;
       isOpen.value = false;
+      pendingFocusOnOpen = false;
       resetRovingIndices();
       teardownBoundsTracking();
-      popoverMaxHeight.value = null;
+      popoverLayout.value = null;
       if (restoreFocus && !isBlocked()) {
         Vue.nextTick(() => triggerRef.value?.focus?.({ preventScroll: true }));
       }
@@ -450,8 +492,21 @@ export default {
       event.preventDefault();
       event.stopPropagation();
       const targetIdx = enabledIndices[nextPos];
+      // WAI-ARIA APG standalone radiogroup: arrow navigation moves focus AND selects
+      // through the existing guarded handlers (keeping pending/disabled writes safe).
+      if (groupName === 'model' && props.modelRows[targetIdx]) {
+        onSelectModel(props.modelRows[targetIdx]);
+      } else if (groupName === 'effort' && props.effortOptions[targetIdx] !== undefined) {
+        onSelectEffort(props.effortOptions[targetIdx]);
+      } else if (groupName === 'scene' && props.sceneOptions[targetIdx]) {
+        onSelectScene(props.sceneOptions[targetIdx].id);
+      }
       rovingIndex[groupName] = targetIdx;
-      allRadios[targetIdx]?.focus({ preventScroll: false });
+      const targetBtn = allRadios[targetIdx];
+      targetBtn?.focus({ preventScroll: true });
+      if (targetBtn && popoverRef.value) {
+        revealWithinScrollableAncestors(targetBtn, popoverRef.value);
+      }
     }
 
     function onKeydown(event) {
@@ -495,10 +550,16 @@ export default {
     }
 
     Vue.watch(isOpen, (open) => {
-      if (open) setupBoundsTracking();
-      else {
+      if (open) {
+        setupBoundsTracking();
+        if (pendingFocusOnOpen) {
+          pendingFocusOnOpen = false;
+          // Wait one tick so inline maxHeight/top layout has flushed before measuring scroll reveal
+          Vue.nextTick(() => focusFirstPopoverControl());
+        }
+      } else {
         teardownBoundsTracking();
-        popoverMaxHeight.value = null;
+        popoverLayout.value = null;
       }
     }, { flush: 'post' });
 

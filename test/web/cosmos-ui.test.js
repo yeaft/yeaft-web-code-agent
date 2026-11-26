@@ -1950,15 +1950,13 @@ describe('Cosmos Component & WebGL Review Regressions', () => {
     expect(wrapper.find('.cosmos-tune-popover').element.contains(document.activeElement)).toBe(true);
     const modelRadios = wrapper.findAll('.cosmos-tune-model-row');
     expect(modelRadios.filter((r) => r.attributes('tabindex') === '0')).toHaveLength(1);
-    // ArrowDown on the focused model radio moves focus + roving tabindex to model-b
+    // ArrowDown on the focused model radio moves focus, updates roving tabindex, AND immediately selects model-b
+    // (WAI-ARIA APG standalone radiogroup: no click needed; first write is still pending!)
     await modelRadios[0].trigger('keydown', { key: 'ArrowDown' });
     await flushPromises();
     expect(document.activeElement).toBe(modelRadios[1].element);
     expect(modelRadios[1].attributes('tabindex')).toBe('0');
-
-    // Click model-b (first write still pending!) -> effort options IMMEDIATELY switch to model-b's ['medium', 'xhigh', 'max']
-    await modelRadios[1].trigger('click');
-    await flushPromises();
+    expect(modelRadios[1].attributes('aria-checked')).toBe('true');
     expect(modelCalls).toHaveLength(1);
     expect(modelCalls[0]).toMatchObject({ modelId: 'copilot/model-b', sessionId: 'sess-1' });
     const segButtons = wrapper.findAll('.cosmos-tune-seg');
@@ -1974,7 +1972,8 @@ describe('Cosmos Component & WebGL Review Regressions', () => {
     modelCalls[1].resolve({ ok: true, superseded: false });
     await flushPromises();
 
-    // Deferred Drawer scene change: preserves focus while pending, handles unconfirmed + late snapshot ack + rejection
+    // Deferred Drawer scene change: preserves focus while pending, guards arrow/click during pending,
+    // and handles unconfirmed + late snapshot ack + rejection
     const frontendChip = wrapper.findAll('.cosmos-tune-chip').find((c) => c.text() === '前端开发');
     frontendChip.element.focus();
     await frontendChip.trigger('click');
@@ -1983,7 +1982,8 @@ describe('Cosmos Component & WebGL Review Regressions', () => {
     expect(frontendChip.attributes('aria-busy')).toBe('true');
     expect(frontendChip.attributes('aria-disabled')).toBe('true');
     expect(document.activeElement).toBe(frontendChip.element); // focus NEVER drops to body!
-    // Clicking another chip while pending is ignored
+    // Arrow navigation and clicks during pending scene write must NOT fire a duplicate scene update
+    await frontendChip.trigger('keydown', { key: 'ArrowRight' });
     const writingChip = wrapper.findAll('.cosmos-tune-chip').find((c) => c.text() === '写作');
     await writingChip.trigger('click');
     expect(sceneCalls).toHaveLength(1);

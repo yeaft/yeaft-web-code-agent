@@ -495,9 +495,14 @@ test.describe('Yeaft Cosmos UI', () => {
     await page.evaluate((agentId) => {
       const chat = window.Pinia.useChatStore();
       const models = [
-        { id: 'copilot/gemini-4-neon', label: 'gemini-4-neon', provider: 'copilot', effortOptions: ['medium', 'high', 'xhigh'] },
-        { id: 'copilot/gpt-6.2-sol', label: 'gpt-6.2-sol', provider: 'copilot', effortOptions: ['medium', 'xhigh', 'max'] },
-        { id: 'anthropic/claude-opus-4', label: 'claude-opus-4', provider: 'anthropic', effortOptions: ['low', 'medium', 'high'] },
+        { id: 'model-01', label: 'model-01', provider: 'copilot', effortOptions: ['medium', 'high', 'xhigh'] },
+        { id: 'model-02', label: 'model-02', provider: 'copilot', effortOptions: ['medium', 'xhigh', 'max'] },
+        { id: 'model-03', label: 'model-03', provider: 'copilot', effortOptions: ['low', 'medium', 'high'] },
+        { id: 'model-04', label: 'model-04', provider: 'copilot', effortOptions: ['medium', 'high'] },
+        { id: 'model-05', label: 'model-05', provider: 'copilot', effortOptions: ['medium', 'high'] },
+        { id: 'model-06', label: 'model-06', provider: 'copilot', effortOptions: ['medium', 'high'] },
+        { id: 'model-07', label: 'model-07', provider: 'copilot', effortOptions: ['medium', 'high'] },
+        { id: 'model-08', label: 'model-08', provider: 'copilot', effortOptions: ['medium', 'high', 'xhigh'] },
       ];
       chat.agents = [
         { id: agentId, name: 'MacBook-Pro', online: true, status: 'ready', workDir: '/Users/dev/yeaft', capabilities: ['session_auto_route', 'session_scenes', 'session_scene_frontend', 'workbench_session_routes', 'terminal', 'file_editor'] },
@@ -505,11 +510,11 @@ test.describe('Yeaft Cosmos UI', () => {
       ];
       chat.workbenchRouteProtocolSupported = true;
       chat.yeaftAvailableModels = models;
-      chat.yeaftModel = 'copilot/gemini-4-neon';
-      chat.yeaftModelEffort = 'medium';
+      chat.yeaftModel = 'copilot/model-08';
+      chat.yeaftModelEffort = 'high';
       chat.llmConfig = {
         ...(chat.llmConfig || {}),
-        [agentId]: { agentConfig: { primaryModel: 'copilot/gemini-4-neon', defaultEffort: 'medium', availableModels: models } },
+        [agentId]: { agentConfig: { primaryModel: 'copilot/model-08', defaultEffort: 'high', availableModels: models } },
       };
       chat.applySessionCatalogSnapshot([
         {
@@ -523,13 +528,30 @@ test.describe('Yeaft Cosmos UI', () => {
           sortRank: 0,
         },
       ], []);
-      window.Pinia.useSessionsStore?.()?.applySnapshotUpsert?.({
+      const sessionsStore = window.Pinia.useSessionsStore?.();
+      sessionsStore?.applySnapshotUpsert?.({
         id: 'sess-mobile-1',
         name: 'Mobile Workbench Check',
         agentId,
         sceneId: 'general',
+        config: { model: 'copilot/model-08', modelEffort: 'high' },
         roster: [{ id: 'vp-1' }],
       }, agentId);
+      // Record & acknowledge scoped Drawer session update_config writes for this seeded session
+      window.__drawerConfigUpdates = [];
+      const origCrud = chat.sessionCrudRequest?.bind(chat);
+      chat.sessionCrudRequest = async (action, payload, opts) => {
+        if (action === 'update_config' && payload?.sessionId === 'sess-mobile-1') {
+          window.__drawerConfigUpdates.push({ action, payload, opts });
+          const row = sessionsStore?.sessionById?.('sess-mobile-1', opts?.agentId || agentId);
+          if (row) {
+            row.config = { ...(row.config || {}), ...(payload.config || {}) };
+            if (payload.config?.sceneId) row.sceneId = payload.config.sceneId;
+          }
+          return { ok: true, config: { ...(row?.config || {}), ...(payload.config || {}) } };
+        }
+        return origCrud ? origCrud(action, payload, opts) : { ok: false };
+      };
     }, mockAgent.agentId);
 
     const earthNode = page.locator('.cosmos-planet-node[data-planet-id="earth"]');
@@ -543,8 +565,10 @@ test.describe('Yeaft Cosmos UI', () => {
     expect(saturnBox.x).toBeGreaterThanOrEqual(0);
     expect(saturnBox.x + saturnBox.width).toBeLessThanOrEqual(392);
 
-    // Click Earth tag -> opens Quick Composer; verify 320px short-viewport multiline draft keeps upward popover
-    // strictly inside top/horizontal viewport bounds with both first & last controls reachable and clickable.
+    // Click Earth tag -> opens Quick Composer; verify:
+    // 1) Keyboard open (ArrowDown) reveals the 8th selected model inside the scrollable model list & popover without scrolling page
+    // 2) Shrinking viewport while open into extreme cramped height (320x250 with multiline draft) keeps the sheet strictly
+    //    inside viewport bounds via viewport-contained fallback, with both first & last controls genuinely clickable.
     const earthTagBox = await earthNode.locator('.cosmos-planet-tag').boundingBox();
     expect(earthTagBox).not.toBeNull();
     await page.mouse.click(earthTagBox.x + earthTagBox.width / 2, earthTagBox.y + earthTagBox.height / 2);
@@ -552,26 +576,51 @@ test.describe('Yeaft Cosmos UI', () => {
     await expect(mobileQuick).toBeVisible();
     await page.setViewportSize({ width: 320, height: 460 });
     await mobileQuick.locator('textarea').fill('Line 1\nLine 2\nLine 3\nLine 4\nLine 5');
-    await mobileQuick.locator('.cosmos-tune-trigger').click();
+    const mobileQuickTrigger = mobileQuick.locator('.cosmos-tune-trigger');
+    await mobileQuickTrigger.focus();
+    await page.keyboard.press('ArrowDown');
     const mobileQuickPop = mobileQuick.locator('.cosmos-tune-popover');
     await expect(mobileQuickPop).toBeVisible();
     await mobileQuickPop.evaluate((el) => Promise.all(el.getAnimations().map((a) => a.finished)).catch(() => {}));
-    const [q320Box, q320PopBox] = await Promise.all([mobileQuick.boundingBox(), mobileQuickPop.boundingBox()]);
+    const activeModelRadio = mobileQuickPop.locator('.cosmos-tune-model-row[aria-checked="true"]');
+    await expect(activeModelRadio).toBeFocused();
+    await expect(activeModelRadio).toContainText('model-08');
+    const [mListBox, q320Box, q320PopBox, activeRadioBox] = await Promise.all([
+      mobileQuickPop.locator('.cosmos-tune-model-list').boundingBox(),
+      mobileQuick.boundingBox(),
+      mobileQuickPop.boundingBox(),
+      activeModelRadio.boundingBox(),
+    ]);
     expect(q320PopBox.y).toBeGreaterThanOrEqual(0);
     expect(q320PopBox.y + q320PopBox.height).toBeLessThanOrEqual(q320Box.y + 1);
     expect(q320PopBox.x).toBeGreaterThanOrEqual(0);
     expect(q320PopBox.x + q320PopBox.width).toBeLessThanOrEqual(320.5);
+    expect(activeRadioBox.y).toBeGreaterThanOrEqual(mListBox.y - 1);
+    expect(activeRadioBox.y + activeRadioBox.height).toBeLessThanOrEqual(mListBox.y + mListBox.height + 1);
+    expect(activeRadioBox.y).toBeGreaterThanOrEqual(q320PopBox.y - 1);
+    expect(activeRadioBox.y + activeRadioBox.height).toBeLessThanOrEqual(q320PopBox.y + q320PopBox.height + 1);
+
+    // Shrink viewport WHILE sheet is open into extreme short height (< 48px above multiline composer)
+    await page.setViewportSize({ width: 320, height: 250 });
+    await expect(async () => {
+      const box = await mobileQuickPop.boundingBox();
+      expect(box).not.toBeNull();
+      expect(box.y).toBeGreaterThanOrEqual(0);
+      expect(box.y + box.height).toBeLessThanOrEqual(250.5);
+    }).toPass({ timeout: 2000 });
     const qFirstRadio = mobileQuickPop.locator('button[role="radio"]').first();
     const qLastRadio = mobileQuickPop.locator('button[role="radio"]').last();
     await qFirstRadio.scrollIntoViewIfNeeded();
     await qFirstRadio.click();
+    await expect(qFirstRadio).toHaveAttribute('aria-checked', 'true');
     await qLastRadio.scrollIntoViewIfNeeded();
     await qLastRadio.click();
     await expect(qLastRadio).toHaveAttribute('aria-checked', 'true');
     await page.keyboard.press('Escape');
     await expect(mobileQuickPop).toHaveCount(0);
 
-    // Restore 390x844 -> Open Chat -> verify Drawer tuning popover stays below Drawer header with expanded draft
+    // Restore 390x844 -> Open Chat -> verify Drawer tuning popover stays below Drawer header with expanded draft,
+    // handles shrinking height while open, and real pointer clicks on BOTH first (model) & last (scene) controls trigger scoped updates.
     await page.setViewportSize({ width: 390, height: 844 });
     await page.locator('.cosmos-quick-open-btn').click();
     await expect(page.locator('.cosmos-drawer')).toBeVisible();
@@ -590,9 +639,41 @@ test.describe('Yeaft Cosmos UI', () => {
     expect(mDrawerPopBox.y + mDrawerPopBox.height).toBeLessThanOrEqual(mComposerBox.y + 1);
     expect(mDrawerPopBox.x).toBeGreaterThanOrEqual(0);
     expect(mDrawerPopBox.x + mDrawerPopBox.width).toBeLessThanOrEqual(390.5);
-    await mobileDrawerPop.locator('button[role="radio"]').last().scrollIntoViewIfNeeded();
-    await mobileDrawerPop.locator('button[role="radio"]').last().focus();
-    await expect(mobileDrawerPop.locator('button[role="radio"]').last()).toBeFocused();
+
+    // Shrink Drawer height while popover is open so space above composer collapses -> viewport-contained fallback stays below header
+    await page.setViewportSize({ width: 390, height: 260 });
+    await expect(async () => {
+      const [hBox, pBox] = await Promise.all([
+        page.locator('.cosmos-drawer-head').boundingBox(),
+        mobileDrawerPop.boundingBox(),
+      ]);
+      expect(pBox).not.toBeNull();
+      expect(pBox.y).toBeGreaterThanOrEqual(hBox.y + hBox.height - 1);
+      expect(pBox.y + pBox.height).toBeLessThanOrEqual(260.5);
+    }).toPass({ timeout: 2000 });
+
+    // Real pointer clicks on first (model-01) and last (scene) controls inside the Drawer popover
+    const dFirstRadio = mobileDrawerPop.locator('.cosmos-tune-model-row').first();
+    await dFirstRadio.scrollIntoViewIfNeeded();
+    await dFirstRadio.click();
+    await expect(dFirstRadio).toHaveAttribute('aria-checked', 'true');
+    const dLastScene = mobileDrawerPop.locator('.cosmos-tune-chip').last();
+    await dLastScene.scrollIntoViewIfNeeded();
+    await dLastScene.click();
+    await expect(dLastScene).toHaveAttribute('aria-checked', 'true');
+    const drawerUpdates = await page.evaluate(() => window.__drawerConfigUpdates);
+    expect(drawerUpdates).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        action: 'update_config',
+        payload: expect.objectContaining({ sessionId: 'sess-mobile-1', config: expect.objectContaining({ model: 'copilot/model-01' }) }),
+        opts: expect.objectContaining({ agentId: mockAgent.agentId }),
+      }),
+      expect.objectContaining({
+        action: 'update_config',
+        payload: expect.objectContaining({ sessionId: 'sess-mobile-1', config: expect.objectContaining({ sceneId: 'investment' }) }),
+        opts: expect.objectContaining({ agentId: mockAgent.agentId }),
+      }),
+    ]));
     await page.keyboard.press('Escape');
     await expect(mobileDrawerPop).toHaveCount(0);
     await page.setViewportSize({ width: 390, height: 844 });
