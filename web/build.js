@@ -226,6 +226,10 @@ if (existsSync(assetsSrc)) {
   const assetCount = readdirSync(join(distDir, 'assets'), { recursive: true }).length;
   console.log(`   Copied web/assets/ → dist/assets/ (${assetCount} entries)`);
 }
+const cosmosAssetsDist = join(distDir, 'assets', 'cosmos');
+if (!existsSync(cosmosAssetsDist) || readdirSync(cosmosAssetsDist).filter(f => f.endsWith('.webp')).length === 0) {
+  throw new Error('Missing web/assets/cosmos/*.webp astronomical textures in production build output.');
+}
 
 // Public bootstrap scripts must remain available in production/local-runtime.
 // Fail the build if either installer is missing rather than shipping a dead setup command.

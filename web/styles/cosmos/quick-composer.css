@@ -115,6 +115,15 @@
   box-shadow: 0 0 14px rgba(var(--p-accent-rgb), 0.20);
 }
 
+.cosmos-quick-session-count {
+  font-family: var(--font-mono, monospace);
+  font-size: 9.5px;
+  padding: 0 4px;
+  border-radius: 999px;
+  background: rgba(var(--p-accent-rgb), 0.20);
+  color: var(--p-accent);
+}
+
 .cosmos-quick-status {
   display: flex;
   align-items: center;
@@ -201,7 +210,7 @@
 
 @media (max-width: 640px) {
   .cosmos-quick-composer {
-    bottom: 12px;
+    bottom: calc(12px + env(safe-area-inset-bottom, 0px));
     width: calc(100vw - 20px);
   }
   .cosmos-quick-idle-hint {

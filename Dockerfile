@@ -16,7 +16,9 @@ RUN npm install
 
 # Copy web source files
 COPY web/*.js web/*.css web/*.html ./
+COPY web/assets ./assets/
 COPY web/components ./components/
+COPY web/cosmos ./cosmos/
 COPY web/stores ./stores/
 COPY web/styles ./styles/
 COPY web/utils ./utils/

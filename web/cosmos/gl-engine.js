@@ -1,9 +1,18 @@
 /**
- * Yeaft Cosmos — WebGL2/WebGL Renderer Engine with Clean Lifecycle & 2D Fallback
+ * Yeaft Cosmos — WebGL2/WebGL Renderer Engine with Real NASA/ESO Hot-Swap,
+ * Mobile Thermal Scaling, Context-Loss Recovery & High-Craft 2D No-GPU Fallback
  */
 import { BG_VERT, BG_FRAG, PARTICLE_VERT, PARTICLE_FRAG } from './shaders-bg.js';
 import { BODY_VERT, BODY_FRAG } from './shaders-bodies.js';
 import { bakeProceduralWebGLTextures } from './gpu-texture-baker.js';
+import {
+  COSMOS_TEXTURE_MANIFEST,
+  requestCosmosTextureGroup,
+  getLoadedCosmosImage,
+  uploadImageToWebGLTexture,
+  createSolidPlaceholderTexture,
+} from './texture-loader.js';
+import { createFallback2DEngine } from './fallback-2d-engine.js';
 
 function createShader(gl, type, src) {
   const sh = gl.createShader(type);
@@ -40,97 +49,98 @@ function createProgram(gl, vsSrc, fsSrc) {
   return prog;
 }
 
-function detectSoftwareRenderer(gl) {
+export function detectSoftwareRenderer(gl) {
   try {
     const dbg = gl.getExtension('WEBGL_debug_renderer_info');
     const name = String(dbg ? gl.getParameter(dbg.UNMASKED_RENDERER_WEBGL) : gl.getParameter(gl.RENDERER) || '');
-    return /swiftshader|llvmpipe|softpipe|software|mesa offscreen|basic render/i.test(name);
+    return /swiftshader|llvmpipe|softpipe|software|mesa offscreen|basic render|google swiftshader/i.test(name);
   } catch {
     return false;
   }
 }
 
-/** Lightweight Canvas 2D fallback when WebGL is unavailable (e.g., restricted environments). */
-function createFallback2DEngine(glCanvas, hudCanvas) {
-  const bgCtx = glCanvas.getContext('2d');
-  const ctx2d = hudCanvas.getContext('2d');
-  let width = 1, height = 1, dpr = 1;
-
-  function resize() {
-    dpr = Math.min(window.devicePixelRatio || 1, 2);
-    width = Math.max(glCanvas.clientWidth || window.innerWidth || 1, 1);
-    height = Math.max(glCanvas.clientHeight || window.innerHeight || 1, 1);
-    glCanvas.width = Math.round(width * dpr);
-    glCanvas.height = Math.round(height * dpr);
-    hudCanvas.width = Math.round(width * dpr);
-    hudCanvas.height = Math.round(height * dpr);
-    if (bgCtx) bgCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    if (ctx2d) ctx2d.setTransform(dpr, 0, 0, dpr, 0, 0);
-  }
-
-  resize();
-  window.addEventListener('resize', resize);
-
-  function renderFrame(frameState) {
-    if (bgCtx) {
-      const grad = bgCtx.createRadialGradient(width * 0.5, height * 0.5, 20, width * 0.5, height * 0.5, Math.max(width, height) * 0.72);
-      grad.addColorStop(0, '#0a1428');
-      grad.addColorStop(0.5, '#050a18');
-      grad.addColorStop(1, '#02040a');
-      bgCtx.fillStyle = grad;
-      bgCtx.fillRect(0, 0, width, height);
-
-      const { solarBodies = [], solarAlpha = 1 } = frameState;
-      if (solarAlpha > 0.01) {
-        bgCtx.save();
-        bgCtx.globalAlpha = solarAlpha;
-        const sorted = solarBodies.slice().sort((a, b) => a.camZ - b.camZ);
-        for (const b of sorted) {
-          const [ar, ag, ab] = b.atmo || [0.5, 0.7, 1.0];
-          const g = bgCtx.createRadialGradient(b.screenX - b.radiusPx * 0.3, b.screenY - b.radiusPx * 0.3, b.radiusPx * 0.1, b.screenX, b.screenY, b.radiusPx);
-          g.addColorStop(0, `rgb(${Math.round(ar * 255)}, ${Math.round(ag * 255)}, ${Math.round(ab * 255)})`);
-          g.addColorStop(1, b.bodyType === 0 ? '#e67422' : '#0b1222');
-          bgCtx.fillStyle = g;
-          bgCtx.beginPath();
-          bgCtx.arc(b.screenX, b.screenY, b.radiusPx, 0, Math.PI * 2);
-          bgCtx.fill();
-        }
-        bgCtx.restore();
-      }
-    }
-    if (ctx2d) {
-      ctx2d.clearRect(0, 0, width, height);
-      if (frameState.hudDraw) frameState.hudDraw(ctx2d, width, height);
-    }
-  }
-
-  return {
-    isWebGL: false,
-    renderFrame,
-    resize,
-    getSize: () => ({ width, height, dpr }),
-    areTexturesReady: () => true,
-    destroy: () => {
-      window.removeEventListener('resize', resize);
-    },
-  };
+export function detectMobileDevice() {
+  if (typeof window === 'undefined') return false;
+  const coarse = Boolean(window.matchMedia?.('(pointer: coarse)')?.matches);
+  const touch = (typeof navigator !== 'undefined' && navigator.maxTouchPoints > 0);
+  const minDim = Math.min(window.innerWidth || 1024, window.innerHeight || 1024);
+  return coarse || (touch && minDim <= 900) || minDim < 600;
 }
 
-export function createCosmosEngine(glCanvas, hudCanvas) {
-  if (!glCanvas || !hudCanvas) return null;
-  let gl = null;
+/**
+ * Probe whether browser WebGL is backed by a software CPU rasterizer using a
+ * disposable 1x1 canvas so the real stage canvas remains free for Canvas 2D.
+ */
+function probeSoftwareWebGL() {
+  if (typeof document === 'undefined' || typeof document.createElement !== 'function') return false;
   try {
-    gl = glCanvas.getContext('webgl2', { alpha: false, antialias: true, premultipliedAlpha: false, powerPreference: 'high-performance' })
-      || glCanvas.getContext('webgl', { alpha: false, antialias: true, premultipliedAlpha: false });
+    const probe = document.createElement('canvas');
+    probe.width = 1;
+    probe.height = 1;
+    const pgl = probe.getContext('webgl2') || probe.getContext('webgl');
+    if (!pgl) return false;
+    const isSoft = detectSoftwareRenderer(pgl);
+    try { pgl.getExtension('WEBGL_lose_context')?.loseContext?.(); } catch { /* ignore */ }
+    return isSoft;
+  } catch {
+    return false;
+  }
+}
+
+export function createCosmosEngine(glCanvas, hudCanvas, opts = {}) {
+  if (!glCanvas || !hudCanvas) return null;
+
+  const renderQuality = opts.renderQuality === 'high' || opts.renderQuality === 'lite'
+    ? opts.renderQuality
+    : 'auto';
+  const isMobile = typeof opts.isMobile === 'boolean' ? opts.isMobile : detectMobileDevice();
+
+  // Explicit 2D Eco mode: skip WebGL completely so glCanvas stays available for Canvas 2D.
+  if (renderQuality === 'lite') {
+    return createFallback2DEngine(glCanvas, hudCanvas, { isMobile });
+  }
+
+  // In 'auto' mode, route software/CPU WebGL directly to our High-Craft 2D Cosmos Engine
+  // (sharp native DPR, real NASA/ESO imagery, low CPU) instead of blurry 0.5x CPU shaders.
+  if (renderQuality === 'auto' && probeSoftwareWebGL()) {
+    return createFallback2DEngine(glCanvas, hudCanvas, { isMobile });
+  }
+
+  let gl = null;
+  let isWebGL2 = false;
+  try {
+    const attrs = {
+      alpha: false,
+      antialias: !isMobile,
+      premultipliedAlpha: false,
+      powerPreference: isMobile ? 'default' : 'high-performance',
+    };
+    gl = glCanvas.getContext('webgl2', attrs);
+    if (gl) {
+      isWebGL2 = true;
+    } else {
+      gl = glCanvas.getContext('webgl', attrs);
+    }
   } catch {
     gl = null;
   }
+
+  const releaseUnusedGl = () => {
+    if (!gl) return;
+    try { gl.getExtension('WEBGL_lose_context')?.loseContext?.(); } catch { /* ignore */ }
+  };
+
   const ctx2d = hudCanvas.getContext('2d');
   if (!gl || !ctx2d) {
-    return createFallback2DEngine(glCanvas, hudCanvas);
+    releaseUnusedGl();
+    return createFallback2DEngine(glCanvas, hudCanvas, { isMobile });
   }
 
   const isSoftware = detectSoftwareRenderer(gl);
+  if (renderQuality === 'auto' && isSoftware) {
+    releaseUnusedGl();
+    return createFallback2DEngine(glCanvas, hudCanvas, { isMobile });
+  }
 
   let bgProg = null;
   let bodyProg = null;
@@ -142,6 +152,39 @@ export function createCosmosEngine(glCanvas, hudCanvas) {
   let ptLoc = null;
   let bodyLoc = null;
   let contextLost = false;
+  let destroyed = false;
+
+  const requestedGroups = new Set();
+  const textureUnsubs = [];
+  const uploadedRealKeys = new Set();
+
+  function applyRealImage(key, img, spec) {
+    if (destroyed || contextLost || !textures || !textures[key] || gl.isContextLost?.()) return;
+    if (uploadImageToWebGLTexture(gl, textures[key], img, spec)) {
+      uploadedRealKeys.add(key);
+    }
+  }
+
+  function requestTextureGroup(group) {
+    if (destroyed || requestedGroups.has(group)) return;
+    requestedGroups.add(group);
+    const unsub = requestCosmosTextureGroup(group, (key, img, spec) => {
+      applyRealImage(key, img, spec);
+    });
+    textureUnsubs.push(unsub);
+  }
+
+  function reuploadCachedRealTextures() {
+    for (const spec of COSMOS_TEXTURE_MANIFEST) {
+      const img = getLoadedCosmosImage(spec.key);
+      if (img) applyRealImage(spec.key, img, spec);
+    }
+  }
+
+  function ensureScaleTextures(scaleLog) {
+    if (scaleLog > 16.0) requestTextureGroup('galaxy');
+    if (scaleLog > 20.0) requestTextureGroup('web');
+  }
 
   function initGpuResources() {
     const nextBgProg = createProgram(gl, BG_VERT, BG_FRAG);
@@ -160,8 +203,9 @@ export function createCosmosEngine(glCanvas, hudCanvas) {
 
     const nextPtBuf = gl.createBuffer();
 
-    // Zero external downloads: bake all 15 procedural astronomical textures directly on GPU (~30ms)
-    const nextTextures = bakeProceduralWebGLTextures(gl, nextQuadBuf, isSoftware ? 0.5 : 1.0);
+    // Instant 0ms GPU procedural placeholder bake (~20ms) so first frame is never blank.
+    const bakeScale = isSoftware ? 0.5 : (isMobile ? 0.75 : 1.0);
+    const nextTextures = bakeProceduralWebGLTextures(gl, nextQuadBuf, bakeScale);
     if (!nextTextures) {
       gl.deleteBuffer(nextQuadBuf);
       gl.deleteBuffer(nextPtBuf);
@@ -170,6 +214,11 @@ export function createCosmosEngine(glCanvas, hudCanvas) {
       gl.deleteProgram(nextPtProg);
       return false;
     }
+
+    // Create 1x1 black placeholder slots for additive deep-space & galaxy layers until WebPs land.
+    nextTextures.nebula = createSolidPlaceholderTexture(gl, [0, 0, 0, 255]);
+    nextTextures.deep = createSolidPlaceholderTexture(gl, [0, 0, 0, 255]);
+    nextTextures.galaxy_disc = createSolidPlaceholderTexture(gl, [0, 0, 0, 255]);
 
     bgProg = nextBgProg;
     bodyProg = nextBodyProg;
@@ -191,6 +240,7 @@ export function createCosmosEngine(glCanvas, hudCanvas) {
       uShockWave: gl.getUniformLocation(bgProg, 'uShockWave'),
       uSkyBright: gl.getUniformLocation(bgProg, 'uSkyBright'),
       uStarDensity: gl.getUniformLocation(bgProg, 'uStarDensity'),
+      uQuality: gl.getUniformLocation(bgProg, 'uQuality'),
       uBhPos: gl.getUniformLocation(bgProg, 'uBhPos'),
       uBhRadius: gl.getUniformLocation(bgProg, 'uBhRadius'),
       uBhStrength: gl.getUniformLocation(bgProg, 'uBhStrength'),
@@ -202,7 +252,10 @@ export function createCosmosEngine(glCanvas, hudCanvas) {
       uWebRadius: gl.getUniformLocation(bgProg, 'uWebRadius'),
       uWebAlpha: gl.getUniformLocation(bgProg, 'uWebAlpha'),
       uTexMilky: gl.getUniformLocation(bgProg, 'uTexMilky'),
+      uTexNebula: gl.getUniformLocation(bgProg, 'uTexNebula'),
+      uTexDeep: gl.getUniformLocation(bgProg, 'uTexDeep'),
       uTexGalaxy: gl.getUniformLocation(bgProg, 'uTexGalaxy'),
+      uTexGalaxyDisc: gl.getUniformLocation(bgProg, 'uTexGalaxyDisc'),
       uTexWeb: gl.getUniformLocation(bgProg, 'uTexWeb'),
     };
 
@@ -235,25 +288,36 @@ export function createCosmosEngine(glCanvas, hudCanvas) {
       uTexRing: gl.getUniformLocation(bodyProg, 'uTexRing'),
     };
 
+    uploadedRealKeys.clear();
     return true;
   }
 
   if (!initGpuResources()) {
-    return createFallback2DEngine(glCanvas, hudCanvas);
+    releaseUnusedGl();
+    return createFallback2DEngine(glCanvas, hudCanvas, { isMobile });
   }
+  reuploadCachedRealTextures();
 
-  let width = 1, height = 1, dpr = 1, glDpr = 1;
-  let destroyed = false;
+  // Stream photorealistic Solar NASA/ESO/Hubble/JWST maps asynchronously and hot-swap seamlessly.
+  requestTextureGroup('solar');
+
+  let width = 1;
+  let height = 1;
+  let dpr = 1;
+  let glDpr = 1;
+  const qualityFactor = (isMobile && renderQuality !== 'high') ? 0.65 : 1.0;
 
   function onContextLost(e) {
     e?.preventDefault?.();
     contextLost = true;
+    uploadedRealKeys.clear();
   }
 
   function onContextRestored() {
     if (destroyed) return;
     if (initGpuResources()) {
       contextLost = false;
+      reuploadCachedRealTextures();
       resize();
     }
   }
@@ -261,9 +325,14 @@ export function createCosmosEngine(glCanvas, hudCanvas) {
   function resize() {
     if (destroyed) return;
     dpr = Math.min(window.devicePixelRatio || 1, 2);
-    // Keep 2D astronomical HUD razor-sharp at native DPR while scaling WebGL backing buffer
-    // sensibly on software/CPU renderers so interaction stays responsive everywhere.
-    glDpr = isSoftware ? 0.5 : dpr;
+    // Keep 2D HUD crisp at full DPR; scale mobile WebGL pixel fill cleanly to save battery.
+    if (isSoftware) {
+      glDpr = renderQuality === 'high' ? Math.min(dpr, 1.0) : 0.6;
+    } else if (isMobile && renderQuality !== 'high') {
+      glDpr = Math.min(dpr, 1.35);
+    } else {
+      glDpr = dpr;
+    }
     width = Math.max(glCanvas.clientWidth || window.innerWidth || 1, 1);
     height = Math.max(glCanvas.clientHeight || window.innerHeight || 1, 1);
     glCanvas.width = Math.max(1, Math.round(width * glDpr));
@@ -318,6 +387,8 @@ export function createCosmosEngine(glCanvas, hudCanvas) {
       particleData, particleCount, solarBodies, solarAlpha, hudDraw,
     } = frameState;
 
+    ensureScaleTextures(scaleLog);
+
     gl.viewport(0, 0, glCanvas.width, glCanvas.height);
     gl.disable(gl.BLEND);
 
@@ -338,6 +409,7 @@ export function createCosmosEngine(glCanvas, hudCanvas) {
     gl.uniform4f(bgLoc.uShockWave, sw[0], sw[1], sw[2], sw[3]);
     gl.uniform1f(bgLoc.uSkyBright, skyBright);
     gl.uniform1f(bgLoc.uStarDensity, starDensity);
+    gl.uniform1f(bgLoc.uQuality, qualityFactor);
 
     gl.uniform2f(bgLoc.uBhPos, bhParams.x, bhParams.y);
     gl.uniform1f(bgLoc.uBhRadius, bhParams.radius);
@@ -353,11 +425,17 @@ export function createCosmosEngine(glCanvas, hudCanvas) {
     gl.uniform1f(bgLoc.uWebAlpha, webParams.alpha);
 
     bindTexUnit(0, textures.milky);
-    bindTexUnit(1, textures.galaxy);
-    bindTexUnit(2, textures.web);
+    bindTexUnit(1, textures.nebula);
+    bindTexUnit(2, textures.deep);
+    bindTexUnit(3, textures.galaxy);
+    bindTexUnit(4, textures.galaxy_disc);
+    bindTexUnit(5, textures.web);
     gl.uniform1i(bgLoc.uTexMilky, 0);
-    gl.uniform1i(bgLoc.uTexGalaxy, 1);
-    gl.uniform1i(bgLoc.uTexWeb, 2);
+    gl.uniform1i(bgLoc.uTexNebula, 1);
+    gl.uniform1i(bgLoc.uTexDeep, 2);
+    gl.uniform1i(bgLoc.uTexGalaxy, 3);
+    gl.uniform1i(bgLoc.uTexGalaxyDisc, 4);
+    gl.uniform1i(bgLoc.uTexWeb, 5);
 
     gl.drawArrays(gl.TRIANGLES, 0, 6);
 
@@ -410,13 +488,17 @@ export function createCosmosEngine(glCanvas, hudCanvas) {
   function destroy() {
     if (destroyed) return;
     destroyed = true;
+    for (const off of textureUnsubs) off();
+    textureUnsubs.length = 0;
     window.removeEventListener('resize', resize);
     glCanvas.removeEventListener('webglcontextlost', onContextLost, false);
     glCanvas.removeEventListener('webglcontextrestored', onContextRestored, false);
     if (contextLost || gl.isContextLost?.()) return;
     try {
       if (textures) {
-        for (const tex of Object.values(textures)) gl.deleteTexture(tex);
+        for (const tex of Object.values(textures)) {
+          if (tex) gl.deleteTexture(tex);
+        }
       }
       if (quadBuf) gl.deleteBuffer(quadBuf);
       if (ptBuf) gl.deleteBuffer(ptBuf);
@@ -427,12 +509,16 @@ export function createCosmosEngine(glCanvas, hudCanvas) {
   }
 
   return {
+    mode: isWebGL2 ? 'webgl2' : 'webgl',
     isWebGL: true,
     isSoftware,
+    isMobile,
     renderFrame,
     resize,
+    ensureScaleTextures,
     getSize: () => ({ width, height, dpr: glDpr }),
     areTexturesReady: () => true,
+    areRealTexturesReady: () => uploadedRealKeys.has('earth_day') && uploadedRealKeys.has('milky'),
     destroy,
   };
 }

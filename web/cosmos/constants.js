@@ -48,6 +48,7 @@ export const DEFAULT_COSMOS_CONSTANTS = Object.freeze({
   livePreviewMode: '2', // '2' | '3' | 'hover'
   showEventsCountdown: true,
   eventsAutoEnabled: true,
+  renderQuality: 'auto', // 'auto' | 'high' | 'lite'
 });
 
 function getStorage(storage) {
@@ -67,6 +68,7 @@ export function clampNum(val, min, max, fallback) {
 export function normalizeCosmosConstants(raw) {
   const src = raw && typeof raw === 'object' ? raw : {};
   const mode = ['2', '3', 'hover'].includes(src.livePreviewMode) ? src.livePreviewMode : DEFAULT_COSMOS_CONSTANTS.livePreviewMode;
+  const renderQuality = ['auto', 'high', 'lite'].includes(src.renderQuality) ? src.renderQuality : DEFAULT_COSMOS_CONSTANTS.renderQuality;
   return {
     orbitSpeed: clampNum(src.orbitSpeed, 0, 2.5, DEFAULT_COSMOS_CONSTANTS.orbitSpeed),
     starDensity: clampNum(src.starDensity, 0.35, 2.0, DEFAULT_COSMOS_CONSTANTS.starDensity),
@@ -76,6 +78,7 @@ export function normalizeCosmosConstants(raw) {
     livePreviewMode: mode,
     showEventsCountdown: src.showEventsCountdown !== false,
     eventsAutoEnabled: src.eventsAutoEnabled !== false,
+    renderQuality,
   };
 }
 

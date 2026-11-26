@@ -46,6 +46,7 @@ export default {
             @click="$emit('open-conversation', { agentId: agent.id, sessionId: firstSessionId })"
           >
             <span>{{ $t('cosmos.quick.openConversation') }}</span>
+            <span v-if="agent.sessions && agent.sessions.length > 0" class="cosmos-quick-session-count">{{ agent.sessions.length }}</span>
             <span aria-hidden="true">↗</span>
           </button>
           <button

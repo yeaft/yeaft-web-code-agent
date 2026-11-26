@@ -159,9 +159,11 @@ export function createCosmicWebGraph() {
 }
 
 export function fillGpuParticles(gpuBuf, pools, st, params) {
-  const { w, h, dpr, cx, cy, span, tilt, solarAlpha, galAlpha, bhStrength, bhCx, bhCy, bhRadiusPx } = params;
+  const { w, h, dpr, cx, cy, span, tilt, solarAlpha, galAlpha, bhStrength, bhCx, bhCy, bhRadiusPx, densityScale = 1.0 } = params;
+  if (densityScale <= 0) return 0;
   let count = 0;
   const maxPts = 3100;
+  const step = densityScale < 0.7 ? 2 : 1;
   const yawCos = Math.cos(st.camRot.x * 0.38);
   const yawSin = Math.sin(st.camRot.x * 0.38);
 
@@ -181,7 +183,7 @@ export function fillGpuParticles(gpuBuf, pools, st, params) {
 
   if (solarAlpha > 0.02) {
     const spd = Math.max(0.25, st.constants.orbitSpeed);
-    for (let i = 0; i < pools.belt.length; i++) {
+    for (let i = 0; i < pools.belt.length; i += step) {
       const p = pools.belt[i];
       const ang = p.angle + st.time * p.speed * spd;
       const ux = Math.cos(ang) * p.r, uz = Math.sin(ang) * p.r;
@@ -190,7 +192,7 @@ export function fillGpuParticles(gpuBuf, pools, st, params) {
       const sunSide = 0.52 + 0.48 * Math.max(0, -rz / Math.max(p.r, 0.2));
       pushPt(cx + rx * span * persp, cy + (rz * span * tilt + p.incl * span) * persp, p.size * persp, p.col[0], p.col[1], p.col[2], p.alpha * sunSide * solarAlpha);
     }
-    for (let i = 0; i < pools.dust.length; i++) {
+    for (let i = 0; i < pools.dust.length; i += step) {
       const d = pools.dust[i];
       const drift = st.realTime * 0.011 * d.z;
       const px = (((d.x - drift) % 1) + 1) % 1 * w;
@@ -198,7 +200,7 @@ export function fillGpuParticles(gpuBuf, pools, st, params) {
       const twinkle = 0.65 + 0.35 * Math.sin(st.realTime * 1.4 + i);
       pushPt(px, py, d.size * (0.65 + d.z * 0.7), d.tint > 0.65 ? 0.96 : 0.72, d.tint > 0.65 ? 0.88 : 0.86, 1.0, d.alpha * twinkle * solarAlpha);
     }
-    for (let i = 0; i < pools.solarWind.length; i++) {
+    for (let i = 0; i < pools.solarWind.length; i += step) {
       const sw = pools.solarWind[i];
       const prog = (sw.phase + st.realTime * sw.speed) % 1.0;
       const dist = (0.045 + prog * sw.maxDist) * span;
@@ -210,7 +212,7 @@ export function fillGpuParticles(gpuBuf, pools, st, params) {
     const gcx = w * 0.5 + st.parallax.x * 12, gcy = h * 0.5 + st.parallax.y * 8;
     const gRad = Math.min(w, h) * 0.66, gTilt = 0.54 + st.camRot.y * 0.16;
     const rc = Math.cos(-0.26), rs = Math.sin(-0.26);
-    for (let i = 0; i < pools.galStars.length; i++) {
+    for (let i = 0; i < pools.galStars.length; i += step) {
       const gSt = pools.galStars[i];
       const ang = gSt.angle - st.realTime * gSt.speed * 0.38 - st.time * gSt.speed * 0.25;
       const lx = Math.cos(ang) * gSt.r, ly = Math.sin(ang) * gSt.r * gTilt + gSt.zOff;
@@ -220,7 +222,7 @@ export function fillGpuParticles(gpuBuf, pools, st, params) {
 
   if (bhStrength > 0.06 && bhRadiusPx > 32) {
     const tiltCos = Math.cos(-0.15), tiltSin = Math.sin(-0.15);
-    for (let i = 0; i < pools.bhInfall.length; i++) {
+    for (let i = 0; i < pools.bhInfall.length; i += step) {
       const pt = pools.bhInfall[i];
       const prog = (pt.phase + st.realTime * pt.speed) % 1.0;
       const r = pt.rStart * (1.0 - prog) + 1.04 * prog;
