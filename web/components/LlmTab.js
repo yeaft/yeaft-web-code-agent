@@ -242,9 +242,9 @@ export default {
                 <span class="llm-field-label" :id="fastModelHintId + '-label'">{{ $t('settings.llm.fastModel') }}</span>
                 <select class="sp-input llm-route-select" v-model="selectedFastModel" @change="markDirty"
                   :aria-labelledby="fastModelHintId + '-label'" :aria-describedby="fastModelHintId">
-                  <option :value="null">{{ $t('settings.llm.fastModelAuto') }}</option>
-                  <option v-if="localFastModel && !allModelRefs.includes(selectedFastModel)" :value="localFastModel" disabled>
-                    {{ $t('settings.llm.modelUnavailable', { model: localFastModel }) }}
+                  <option value="">{{ $t('settings.llm.fastModelAuto') }}</option>
+                  <option v-if="selectedFastModel && !allModelRefs.includes(selectedFastModel)" :value="selectedFastModel" disabled>
+                    {{ $t('settings.llm.modelUnavailable', { model: selectedFastModel }) }}
                   </option>
                   <option v-for="ref in uniqueModelRefs" :key="ref" :value="ref">{{ ref }}</option>
                 </select>
@@ -323,6 +323,7 @@ export default {
       providerModelsText: [],
       localPrimaryModel: null,
       localFastModel: null,
+      fastModelTarget: null,
       localSubAgentSceneModels: {},
       sceneModelConfigSupported: false,
       localDecisionModel: null,
@@ -364,26 +365,17 @@ export default {
       return this.localProviders;
     },
     allModelRefs() {
-      const providers = this.localProviders;
-      const refs = [];
-      for (const p of providers) {
-        if (!p.name) continue;
-        const models = this.parseModelsFromProvider(p);
-        for (const m of models) refs.push(`${p.name}/${m}`);
-      }
-      return refs;
-    },
-    legacyFastModelRef() {
-      const ref = this.localFastModel;
-      if (!ref || this.allModelRefs.includes(ref)) return null;
-      // Runtime interprets old global: provider selections as bare model IDs.
-      const modelId = ref.startsWith('global:') ? ref.slice(ref.indexOf('/') + 1) : ref;
-      return this.allModelRefs.find(candidate => candidate === modelId)
-        || this.allModelRefs.find(candidate => candidate.slice(candidate.indexOf('/') + 1) === modelId) || null;
+      return this.modelRefsFor(this.localProviders);
     },
     selectedFastModel: {
-      get() { return this.legacyFastModelRef || this.localFastModel; },
-      set(ref) { this.localFastModel = ref; },
+      get() {
+        if (!this.fastModelTarget) return this.localFastModel || '';
+        return this.allModelRefs.includes(this.fastModelTarget) ? this.fastModelTarget : '';
+      },
+      set(ref) {
+        this.localFastModel = ref || null;
+        this.fastModelTarget = ref || null;
+      },
     },
     uniqueModelRefs() {
       return [...new Set(this.allModelRefs)];
@@ -410,6 +402,7 @@ export default {
           this.providerModelsText = [];
           this.localPrimaryModel = null;
           this.localFastModel = null;
+          this.fastModelTarget = null;
           this.localSubAgentSceneModels = {};
           this.sceneModelConfigSupported = false;
           this.localDecisionModel = null;
@@ -589,11 +582,6 @@ export default {
       if (firstModelRef && !modelRefs.has(this.localPrimaryModel)) {
         this.localPrimaryModel = firstModelRef;
       }
-      if (firstModelRef
-        && this.localFastModel?.startsWith(`${provider.name}/`)
-        && !modelRefs.has(this.localFastModel)) {
-        this.localFastModel = firstModelRef;
-      }
       if (this.localDecisionModel?.startsWith(`${provider.name}/`)
         && !modelRefs.has(this.localDecisionModel)) {
         this.localDecisionModel = null;
@@ -676,6 +664,7 @@ export default {
 
       this.localPrimaryModel = config.agentConfig?.primaryModel || config.primaryModel || null;
       this.localFastModel = config.agentConfig?.fastModel || config.fastModel || null;
+      this.fastModelTarget = this.resolveFastModelRef(this.localFastModel, this.allModelRefs);
       const sceneModels = config.agentConfig?.subAgentSceneModels;
       this.sceneModelConfigSupported = !!sceneModels;
       this.localSubAgentSceneModels = { ...sceneModels };
@@ -714,6 +703,30 @@ export default {
       this.providerModelsText = this.editableProviders.map(p =>
         (p.models || []).map(m => this._modelId(m)).join(', ')
       );
+    },
+
+    modelRefsFor(providers) {
+      return providers.flatMap(provider => provider.name
+        ? this.parseModelsFromProvider(provider).map(id => `${provider.name}/${id}`) : []);
+    },
+
+    resolveFastModelRef(ref, refs) {
+      if (!ref) return null;
+      // Mirrors exact-before-bare lookup; the removed global namespace was
+      // stored with the local model ID after the first slash.
+      const normalized = ref.startsWith('global:') && ref.includes('/') ? ref.slice(ref.indexOf('/') + 1) : ref;
+      return refs.find(candidate => candidate === normalized)
+        || refs.find(candidate => candidate.slice(candidate.indexOf('/') + 1) === normalized) || null;
+    },
+
+    fastModelForSave(refs) {
+      const stored = this.localFastModel;
+      const target = this.fastModelTarget;
+      if (!target) return stored || null;
+      if (!refs.includes(target)) return null;
+      // A catalog edit may shadow a legacy alias. Keep its original provider,
+      // without rewriting that alias on ordinary saves where it still works.
+      return this.resolveFastModelRef(stored, refs) === target ? stored : target;
     },
 
     parseModelsFromProvider(provider) {
@@ -798,9 +811,6 @@ export default {
       const remainingRefs = new Set(this.allModelRefs);
       if (this.localPrimaryModel && !remainingRefs.has(this.localPrimaryModel)) {
         this.localPrimaryModel = this.allModelRefs[0] || null;
-      }
-      if (this.localFastModel && !remainingRefs.has(this.localFastModel) && !this.legacyFastModelRef) {
-        this.localFastModel = null;
       }
       if (this.localDecisionModel && !remainingRefs.has(this.localDecisionModel)) {
         this.localDecisionModel = null;
@@ -935,7 +945,7 @@ export default {
       const llmConfig = {
         providers,
         primaryModel: this.localPrimaryModel || null,
-        fastModel: this.localFastModel || null,
+        fastModel: this.fastModelForSave(this.modelRefsFor(providers)),
         decisionModel: this.localDecisionModel || null,
         debug: this.localDebug === true,
       };

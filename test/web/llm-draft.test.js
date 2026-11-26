@@ -185,6 +185,41 @@ describe('native Gemini settings', () => {
     }
   });
 
+  it('does not retarget a removed exact Fast Model to a different provider with the same bare ID', async () => {
+    const store = await setup();
+    store.llmConfig['agent-a'] = config('exact-fast', { fastModel: 'openai/gpt-5', providers: [
+      { name: 'proxy', baseUrl: 'https://proxy.test', models: ['main', 'openai/gpt-5'] },
+      { name: 'openai', baseUrl: 'https://openai.test', models: ['gpt-5'] },
+    ] });
+    await Vue.nextTick();
+    const select = wrapper.get('select.llm-route-select');
+    expect(select.element.value).toBe('openai/gpt-5');
+    wrapper.vm.removeProvider(1);
+    await Vue.nextTick();
+    expect(select.element.value).toBe('');
+    await saveButton().trigger('click');
+    expect(pendingRequest(store).config.fastModel).toBeNull();
+  });
+
+  it('keeps a proxy Fast Model during Copilot discovery, even if a new exact ref shadows its legacy alias', async () => {
+    const store = await setup();
+    for (const [id, expected] of [['gpt-5.4', 'github-copilot/legacy-fast'], ['legacy-fast', 'proxy/github-copilot/legacy-fast']]) {
+      store.llmConfig['agent-a'] = config('legacy-fast', { fastModel: 'github-copilot/legacy-fast', providers: [
+        { name: 'proxy', baseUrl: 'https://proxy.test', models: ['github-copilot/legacy-fast'] },
+        { name: 'github-copilot', credentialProvider: 'github-copilot', models: ['old-model'] },
+      ] });
+      await Vue.nextTick();
+      wrapper.vm.applyDiscoveredProvider({ providerModels: [{ id }] });
+      await Vue.nextTick();
+      expect(wrapper.get('select.llm-route-select').element.value).toBe('proxy/github-copilot/legacy-fast');
+      await saveButton().trigger('click');
+      const saved = pendingRequest(store);
+      expect(saved.config.fastModel).toBe(expected);
+      store.llmConfig['agent-a'] = config(saved.requestId, saved.config);
+      await Vue.nextTick();
+    }
+  });
+
   it('keeps Fast Model available with an older Agent without sending unrecognized scene mappings', async () => {
     const store = await setup();
     expect(wrapper.text()).toContain('Fast Model');
