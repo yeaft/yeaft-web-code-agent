@@ -19,7 +19,7 @@ import { refreshSingleSessionIndex, runDailySessionIndex } from '../../../agent/
 import { createAgentHistoryScan } from '../../../agent/yeaft/conversation/search.js';
 import { listActiveSessionCards, openDiscoveryStore, searchDiscovery, searchDiscoveryRelaxed } from '../../../agent/yeaft/session-discovery/store.js';
 import { decideSessionAutoRoute, collectRecentIdleCandidates } from '../../../agent/yeaft/session-discovery/auto-route.js';
-import { scoreRouteCandidates, tryFastPathRoute } from '../../../agent/yeaft/session-discovery/route-scorer.js';
+import { scoreRouteCandidates, tryFastPathRoute, tryLocalFallbackRoute } from '../../../agent/yeaft/session-discovery/route-scorer.js';
 
 let tempRoot = null;
 const savedCtx = { ...ctx };
@@ -174,7 +174,7 @@ describe('Workspace <=3 level folder snapshot & Sessionless auto-routing pipelin
         const userPayload = JSON.parse(params.messages[0].content);
         // Unified Stage 1: auto-route-session (evaluates running + idle candidates side-by-side)
         if (Array.isArray(userPayload.candidates)) {
-          const runningCand = userPayload.candidates.find(c => c.state === 'running' || c.state === 'waiting_input');
+          const runningCand = userPayload.candidates.find(c => c.status === 'running' || c.status === 'waiting_input');
           if (runningCand && userPayload.newQuery.includes('choose port 8080')) {
             const secondPrompt = runningCand.pendingQuestions?.find(q => q.question.includes('Which port'));
             return {
@@ -199,7 +199,7 @@ describe('Workspace <=3 level folder snapshot & Sessionless auto-routing pipelin
             };
           }
           if (userPayload.newQuery.includes('continue frontend header')) {
-            const idleCand = userPayload.candidates.find(c => c.state === 'idle') || userPayload.candidates[0];
+            const idleCand = userPayload.candidates.find(c => c.status === 'replied' || c.status === 'interrupted') || userPayload.candidates[0];
             return {
               text: JSON.stringify({
                 decision: 'match',
@@ -411,7 +411,7 @@ describe('Workspace <=3 level folder snapshot & Sessionless auto-routing pipelin
     expect(decisionCalls.every(c => c.model === 'proxy/decision-mini')).toBe(true);
   });
 
-  it('handles Stage 0 zero-LLM fast-path, safety guards, relaxed FTS5, task-session exclusion, and scale-invariant scoring', async () => {
+  it('keeps only the exact AskUser fast path, sends heuristics to the arbiter, falls back locally on arbiter failure, and keeps FTS5/task/IDF guards', async () => {
     tempRoot = mkdtempSync(join(tmpdir(), 'yeaft-router-fastpath-'));
     const yeaftDir = join(tempRoot, 'yeaft');
     mkdirSync(yeaftDir, { recursive: true });
@@ -465,9 +465,11 @@ describe('Workspace <=3 level folder snapshot & Sessionless auto-routing pipelin
     }
 
     let llmCalls = 0;
+    const llmPayloads = [];
     const countingAdapter = {
-      async call() {
+      async call(params) {
         llmCalls += 1;
+        llmPayloads.push(JSON.parse(params.messages[0].content));
         return {
           text: JSON.stringify({
             decision: 'create',
@@ -482,44 +484,63 @@ describe('Workspace <=3 level folder snapshot & Sessionless auto-routing pipelin
         };
       },
     };
+    const failingAdapter = {
+      async call() {
+        throw new Error('provider unavailable');
+      },
+    };
 
-    // 3. Fast-Path Rule 1: Exact repeated user utterance -> 0 LLM calls!
-    const repeatHit = await decideSessionAutoRoute({
+    // 3. Lexical heuristics no longer pre-empt a working arbiter: a repeated
+    // utterance, strong lexical overlap and a short continuation all reach the
+    // LLM, which sees each candidate's turn state ordered most recent first.
+    for (const text of ['帮我把服务更新最新版本', '脏腑五行相生和饮食补泻再帮我补充虚实症状', '你看看下面这个被挡住了啊']) {
+      const before = llmCalls;
+      const routed = await decideSessionAutoRoute({
+        yeaftDir,
+        text,
+        allowedSessionIds: allowedIds,
+        adapter: countingAdapter,
+        config: { decisionModel: 'proxy/decision-mini' },
+        now,
+      });
+      expect(llmCalls).toBe(before + 1);
+      expect(routed).toMatchObject({ routeSource: 'llm', action: 'create' });
+    }
+    const turnStatePayload = llmPayloads.at(-1);
+    expect(turnStatePayload.candidates.map(c => c.id)).not.toContain(sTask.id);
+    expect(turnStatePayload.candidates[0]).toMatchObject({
+      id: sTcm.id,
+      status: 'replied',
+      lastUser: { t: '帮我生成一个中医饮食补泻海报 html' },
+      lastReply: { t: '已生成 wuxing-diet-poster.html，可直接预览。' },
+    });
+    expect(turnStatePayload.candidates[0].earlier.map(m => m.r)).toEqual(['u', 'a']);
+
+    // 4. When the arbiter fails (provider error/timeout/invalid output), the
+    // local scorer still continues an unmistakable owner instead of spawning a
+    // context-less duplicate Session.
+    const localFallback = async text => decideSessionAutoRoute({
       yeaftDir,
-      text: '帮我把服务更新最新版本',
+      text,
       allowedSessionIds: allowedIds,
-      adapter: countingAdapter,
+      adapter: failingAdapter,
       config: { decisionModel: 'proxy/decision-mini' },
       now,
     });
-    expect(repeatHit).toMatchObject({ action: 'continue', sessionId: sProxy.id, routeSource: 'fast_path', decisionModel: null });
-    expect(llmCalls).toBe(0);
-
-    // 4. Fast-Path Rule 2/3: Strong lexical hit on ZhongYi -> 0 LLM calls!
-    const lexHit = await decideSessionAutoRoute({
-      yeaftDir,
-      text: '脏腑五行相生和饮食补泻再帮我补充虚实症状',
-      allowedSessionIds: allowedIds,
-      adapter: countingAdapter,
-      config: { decisionModel: 'proxy/decision-mini' },
-      now,
+    expect(await localFallback('帮我把服务更新最新版本')).toMatchObject({
+      action: 'continue', sessionId: sProxy.id, routeSource: 'fallback', fastPathRule: 'exact_utterance', decisionModel: null,
     });
-    expect(lexHit).toMatchObject({ action: 'continue', sessionId: sTcm.id, routeSource: 'fast_path', decisionModel: null });
-    expect(llmCalls).toBe(0);
-
-    // 5. Fast-Path Rule 4: Short/anaphoric continuation to sole recently-active session (<30m vs >=3h) -> 0 LLM calls!
-    const shortHit = await decideSessionAutoRoute({
-      yeaftDir,
-      text: '你看看下面这个被挡住了啊',
-      allowedSessionIds: allowedIds,
-      adapter: countingAdapter,
-      config: { decisionModel: 'proxy/decision-mini' },
-      now,
+    expect(await localFallback('脏腑五行相生和饮食补泻再帮我补充虚实症状')).toMatchObject({
+      action: 'continue', sessionId: sTcm.id, routeSource: 'fallback', decisionModel: null,
     });
-    expect(shortHit).toMatchObject({ action: 'continue', sessionId: sTcm.id, routeSource: 'fast_path', decisionModel: null });
-    expect(llmCalls).toBe(0);
+    const shortFallback = await localFallback('你看看下面这个被挡住了啊');
+    expect(shortFallback).toMatchObject({
+      action: 'continue', sessionId: sTcm.id, routeSource: 'fallback', fastPathRule: 'sole_recent_continuation',
+    });
+    expect(shortFallback.reason).toMatch(/arbiter:decision_error/);
 
     // 6. Fast-Path Rule 0: Exact unambiguous pending AskUser option match -> 0 LLM calls!
+    const callsBeforeAsk = llmCalls;
     const askHit = await decideSessionAutoRoute({
       yeaftDir,
       text: '8080',
@@ -542,10 +563,10 @@ describe('Workspace <=3 level folder snapshot & Sessionless auto-routing pipelin
       routeSource: 'fast_path',
       answeredQuestion: { requestId: 'ask_port_1' },
     });
-    expect(llmCalls).toBe(0);
+    expect(llmCalls).toBe(callsBeforeAsk);
 
     // 7. Safety Guards: meta-diagnostic reference, explicit new-topic, and prefix-bearing new-topic queries
-    // MUST NOT trigger fast-path even when only ONE Session was active 5-8 minutes ago!
+    // always reach the arbiter, and even the degraded local fallback never pulls them into a Session.
     const safeGuardQueries = [
       '你帮我看看ZhongYi这个session，它是正常终止吗？我感觉没给我response啊',
       '新开一个话题，帮我规划京都五天自由行路线',
@@ -565,6 +586,7 @@ describe('Workspace <=3 level folder snapshot & Sessionless auto-routing pipelin
         now,
       });
       expect(llmCalls).toBe(beforeCalls + 1);
+      expect(await localFallback(q)).toMatchObject({ action: 'create', routeSource: 'fallback' });
     }
 
     // 7b. Multi-prompt & non-option AskUser deferral: Stage 0 MUST defer to Stage 1 LLM.
@@ -619,6 +641,19 @@ describe('Workspace <=3 level folder snapshot & Sessionless auto-routing pipelin
         now,
       });
       expect(llmCalls).toBe(beforeCalls + 1);
+      // An arbiter outage must never turn a reply to a pending AskUser into a
+      // lexical guess (here the repeated utterance owned by Proxy-Server).
+      const degraded = await decideSessionAutoRoute({
+        yeaftDir,
+        text: askCase.text,
+        allowedSessionIds: allowedIds,
+        runningSessions: askCase.runningSessions,
+        adapter: failingAdapter,
+        config: { decisionModel: 'proxy/decision-mini' },
+        now,
+      });
+      expect(degraded).toMatchObject({ action: 'create', routeSource: 'fallback' });
+      expect(degraded.answeredQuestion).toBeUndefined();
     }
 
     // 7c. Stage 1 unauthorized sessionId rejection & explicit preferredWorkDir/preferredSceneId precedence.
@@ -698,7 +733,136 @@ describe('Workspace <=3 level folder snapshot & Sessionless auto-routing pipelin
       candidates: baseCandidates,
       now,
     });
-    expect(tryFastPathRoute({ query: '帮我把这段产品发布说明改成更克制、没有营销味的中文更新日志', scoredCandidates: scored, metaExcluded })).toBeNull();
+    const genericQuery = '帮我把这段产品发布说明改成更克制、没有营销味的中文更新日志';
+    expect(tryFastPathRoute({ query: genericQuery, scoredCandidates: scored })).toBeNull();
+    expect(tryLocalFallbackRoute({ query: genericQuery, scoredCandidates: scored, metaExcluded })).toBeNull();
+
+    // 9. A Session recalled from beyond the window keeps its FTS match for the arbiter even on weak overlap.
+    const quiet = {
+      title: 'Archive',
+      activeAt: now - 9 * 24 * 3_600_000,
+      matchedOlderSnippet: '旧会话里讨论过的发布说明模板',
+      windowMessages: [{ role: 'assistant', text: '已整理模板。', createdAt: now - 9 * 24 * 3_600_000 }],
+    };
+    const { scored: quietScored } = scoreRouteCandidates({
+      query: '发布说明',
+      candidates: [
+        { ...quiet, sessionId: 's_quiet_outside', outsideWindow: true },
+        { ...quiet, sessionId: 's_quiet_inside' },
+      ],
+      now,
+    });
+    expect(quietScored.find(c => c.sessionId === 's_quiet_outside').matchedOlderSnippet).toBe('旧会话里讨论过的发布说明模板');
+    expect(quietScored.find(c => c.sessionId === 's_quiet_inside').matchedOlderSnippet).toBe('');
+  });
+
+  it('routes new-topic, quiet older, parallel running and AskUser messages through one arbiter call with per-Session turn state', async () => {
+    tempRoot = mkdtempSync(join(tmpdir(), 'yeaft-route-scenarios-'));
+    const yeaftDir = join(tempRoot, 'yeaft');
+    const workspaceRoot = join(tempRoot, 'workspaces');
+    const appRepo = join(workspaceRoot, 'family-app');
+    mkdirSync(appRepo, { recursive: true });
+    writeFileSync(join(appRepo, 'package.json'), JSON.stringify({ name: 'family-app' }));
+    ensureWorkspaceFoldersSnapshot(yeaftDir, { roots: [workspaceRoot] });
+    seedDefaultVps(join(yeaftDir, 'virtual-persons'));
+    const store = new ConversationStore(yeaftDir);
+    const now = Date.now();
+    const DAY = 24 * 3_600_000;
+
+    const sLimit = createSessionFromSpec(yeaftDir, { name: 'Daily-Limit', sceneId: 'software', workDir: appRepo });
+    const sAlert = createSessionFromSpec(yeaftDir, { name: 'Safety-Alert', sceneId: 'software', workDir: appRepo });
+    const sProxy = createSessionFromSpec(yeaftDir, { name: 'Proxy-Server', sceneId: 'software', workDir: join(tempRoot, 'proxy') });
+    const sArchive = createSessionFromSpec(yeaftDir, { name: 'Image-Policy', sceneId: 'software', workDir: appRepo });
+    const turn = (sid, userText, reply, tsMs) => store.appendBatch([
+      { sessionId: sid, role: 'user', content: userText, time: new Date(tsMs - 30_000).toISOString() },
+      ...(reply ? [{ sessionId: sid, role: 'assistant', turnId: `t_${sid}_${tsMs}`, responseKind: 'result', stopReason: 'end_turn', content: reply, time: new Date(tsMs).toISOString() }] : []),
+    ]);
+    // Quiet for 8 days: outside the 5-day active window.
+    turn(sArchive.id, '图片生成被家长管控拦截后，错误文案为什么进了 conversation.Messages？', 'BotConnection 兜底把异常文案写成了一条普通 Chat 消息。', now - 8 * DAY);
+    turn(sArchive.id, '那前端展示和模型上下文要怎么分开？', '建议单独记录失败状态，不要伪装成 assistant 聊天消息塞给下一轮模型。', now - 8 * DAY + 120_000);
+    turn(sLimit.id, 'Settings PATCH 传 null 能清除每日限额吗？', '可以，SDF 上实测家长和孩子都读回 null。', now - 3 * 3_600_000);
+    turn(sLimit.id, '所以目前 API 都是 work 的对吗？', '对，设限和清除都通过了，ChildActivity heartbeat 还没验证。', now - 2 * 3_600_000);
+    turn(sAlert.id, 'IC3 推送卡在哪？', '卡在跨用户写家长的 Activity Feed。', now - 50 * 60_000);
+    turn(sAlert.id, '那要怎么推进？', '最慢的是等 IC3 答复，要不要我先起草给 Rong 的 Teams 消息？', now - 40 * 60_000);
+    turn(sProxy.id, '升级 docker 服务到最新', '已升级到 0.1.324，旧容器 0.1.319 还在，要我删掉吗？', now - 20 * 60_000);
+    turn(sProxy.id, '先看下磁盘占用', '还剩 41 GB，旧镜像占 3 GB。', now - 15 * 60_000);
+    turn(sProxy.id, '删掉吧', null, now - 5 * 60_000); // Interrupted: no final reply.
+    expect(runDailySessionIndex(yeaftDir, now, { force: true })).toBe(true);
+    const allowedIds = [sLimit.id, sAlert.id, sProxy.id, sArchive.id];
+
+    const payloads = [];
+    let scripted = null;
+    const arbiter = {
+      async call(params) {
+        const payload = JSON.parse(params.messages[0].content);
+        payloads.push(payload);
+        return { text: JSON.stringify(scripted(payload)) };
+      },
+    };
+    const route = (text, extra = {}) => decideSessionAutoRoute({
+      yeaftDir,
+      text,
+      allowedSessionIds: allowedIds,
+      adapter: arbiter,
+      config: { decisionModel: 'proxy/decision-mini' },
+      now,
+      ...extra,
+    });
+
+    // 1. New topic: one call plans the new Session; candidates arrive most recent first with turn state.
+    scripted = () => ({ decision: 'create', sessionId: null, answeredRequestId: null, confidence: 0.92, sceneId: 'software', workDir: appRepo, title: 'Session 导出 Markdown', reason: 'new feature' });
+    const created = await route('family-app 里新做一个功能：把 Session 导出成 Markdown 文件下载');
+    expect(created).toMatchObject({ action: 'create', tier: 'create', sceneId: 'software', workDir: appRepo, routeSource: 'llm' });
+    const firstPayload = payloads.at(-1);
+    expect(firstPayload.candidates.map(c => c.id).slice(0, 3)).toEqual([sProxy.id, sAlert.id, sLimit.id]);
+    expect(firstPayload.candidates[0]).toMatchObject({
+      status: 'interrupted',
+      lastUser: { t: '删掉吧', age: '6m ago' },
+      lastReply: { t: '还剩 41 GB，旧镜像占 3 GB。', age: '15m ago' },
+    });
+    expect(firstPayload.candidates[1]).toMatchObject({ status: 'replied', lastReply: { t: expect.stringContaining('要不要我先起草给 Rong') } });
+
+    // 2. A quiet older Session (beyond the 5-day window) stays reachable when the text clearly returns to it.
+    scripted = payload => ({ decision: 'match', sessionId: payload.candidates.find(c => c.title === 'Image-Policy')?.id || null, answeredRequestId: null, confidence: 0.86, reason: 'returns to error-message persistence' });
+    const older = await route('错误文案伪装成 Chat 消息塞进 conversation.Messages 的问题，帮我写修复方案');
+    expect(older).toMatchObject({ action: 'continue', tier: 'recent', sessionId: sArchive.id, routeSource: 'llm' });
+    expect(payloads.at(-1).candidates.find(c => c.id === sArchive.id)).toMatchObject({
+      age: '8d ago',
+      status: 'replied',
+      olderMatch: expect.stringContaining('conversation.Messages'),
+    });
+
+    // 3. Several running Sessions: live progress is the reply the user reacts to, and a running match keeps tier "running".
+    const running = [
+      { sessionId: sAlert.id, title: 'Safety-Alert', state: 'running', recentMessages: [{ role: 'user', text: '起草吧' }, { role: 'assistant', text: '正在起草给 Rong 的 Teams 消息…' }] },
+      { sessionId: sLimit.id, title: 'Daily-Limit', state: 'running', recentMessages: [{ role: 'user', text: 'heartbeat 也验证一下' }, { role: 'assistant', text: '正在 SDF 上验证清除限额后的 heartbeat…' }] },
+    ];
+    scripted = payload => ({ decision: 'match', sessionId: payload.candidates.find(c => c.lastReply?.t.includes('heartbeat'))?.id, answeredRequestId: null, confidence: 0.88, reason: 'supplements heartbeat verification' });
+    const supplement = await route('验证的时候用孩子测试账号，别用家长账号', { runningSessions: running });
+    expect(supplement).toMatchObject({ action: 'continue', tier: 'running', sessionId: sLimit.id });
+    const runningView = payloads.at(-1).candidates.filter(c => c.status === 'running').map(c => [c.id, c.lastReply.t]);
+    expect(runningView).toEqual(expect.arrayContaining([
+      [sAlert.id, '正在起草给 Rong 的 Teams 消息…'],
+      [sLimit.id, '正在 SDF 上验证清除限额后的 heartbeat…'],
+    ]));
+
+    // 4. AskUser: pending prompts are listed per Session; an answeredRequestId borrowed from another
+    // Session is dropped, while the matched Session's own requestId settles its prompt.
+    const waiting = [
+      { sessionId: sAlert.id, title: 'Safety-Alert', state: 'waiting_input', pendingQuestions: [{ requestId: 'ask_alert_env', question: 'IC3 适配器先部署到哪个环境？', options: ['dev', 'prod'] }] },
+      { sessionId: sProxy.id, title: 'Proxy-Server', state: 'waiting_input', pendingQuestions: [{ requestId: 'ask_proxy_delete', question: '旧容器 0.1.319 要删除吗？', options: ['删除', '保留'] }] },
+    ];
+    scripted = () => ({ decision: 'match', sessionId: sProxy.id, answeredRequestId: 'ask_alert_env', confidence: 0.95, reason: 'answers delete prompt' });
+    const borrowed = await route('旧容器删了吧，留着没用', { runningSessions: waiting });
+    expect(borrowed).toMatchObject({ action: 'continue', tier: 'running', sessionId: sProxy.id, answeredQuestion: null });
+    expect(payloads.at(-1).candidates.find(c => c.id === sProxy.id)).toMatchObject({
+      status: 'waiting_input',
+      pendingQuestions: [{ requestId: 'ask_proxy_delete', options: ['删除', '保留'] }],
+    });
+    scripted = () => ({ decision: 'match', sessionId: sProxy.id, answeredRequestId: 'ask_proxy_delete', confidence: 0.95, reason: 'answers delete prompt' });
+    const answered = await route('旧容器删了吧，留着没用', { runningSessions: waiting });
+    expect(answered).toMatchObject({ sessionId: sProxy.id, answeredQuestion: { requestId: 'ask_proxy_delete' } });
+    expect(payloads).toHaveLength(5);
   });
 
   it('isolates per-session scan budgets in runDailySessionIndex and supports fast multi-segment incremental refresh', () => {

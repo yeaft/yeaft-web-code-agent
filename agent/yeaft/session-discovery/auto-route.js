@@ -1,23 +1,27 @@
 /**
  * auto-route.js — Hybrid two-stage Session auto-routing engine for Sessionless entry.
  *
- * Stage 0 (Zero-LLM local scorer & high-precision fast-path, <5 ms, $0):
- *   - Scores all running + recent (<= 5 day) authorized non-task Sessions with
- *     scale-invariant normalized IDF, recency-weighted TF, exact utterance matching,
- *     and meta-diagnostic detection.
- *   - Resolves unmistakable cases directly without invoking an LLM:
- *       * Exact unambiguous match to a single pending AskUser option
- *       * Exact/near-exact repeated user utterance in one Session
- *       * High-margin lexical/entity hit in a fresh Session
- *       * Short/anaphoric continuation to a sole recently active Session
+ * Stage 0 (Zero-LLM local scorer):
+ *   - Scores all running + recent (<= 5 day) authorized non-task Sessions, plus
+ *     the lexically strongest Sessions that went quiet before the window, with
+ *     scale-invariant normalized IDF, recency-weighted TF, exact utterance
+ *     matching, and meta-diagnostic detection.
+ *   - Commits without an LLM only for a verbatim answer to the single pending
+ *     AskUser option; lexical heuristics serve the degraded path when the
+ *     arbiter cannot decide (see route-scorer.js).
  *
- * Stage 1 (Compact single-shot unified LLM arbiter, max 1 LLM call):
- *   - Evaluates running Sessions (with pending AskUser prompts) and the top
- *     relevance + recency idle candidates side by side so running Sessions never
- *     blindly hijack messages owned by idle Sessions.
+ * Stage 1 (Single-shot unified LLM arbiter, max 1 LLM call):
+ *   - Shows running Sessions (with pending AskUser prompts) and the top
+ *     relevance + recency idle candidates side by side, most recent first, as
+ *     turn state: status (replied/running/waiting_input/interrupted), the user's
+ *     latest request, the latest reply the user may be reacting to, and a little
+ *     earlier context.
  *   - Returns either a matched Session (`action: 'continue'`) OR complete new
  *     Session metadata `{ sceneId, workDir, title }` (`action: 'create'`) in a
  *     single compact JSON call instead of 2-3 serial calls.
+ *
+ * `scripts/auto-route-replay.mjs` replays an instance's real history point in
+ * time against this module to measure routing accuracy.
  *
  * Serializes routing decisions per `(ownerKey)` so two back-to-back auto-route
  * messages from the same user never split into duplicate newly-created Sessions.
@@ -39,6 +43,7 @@ import {
   scoreRouteCandidates,
   selectCandidatesForLlm,
   tryFastPathRoute,
+  tryLocalFallbackRoute,
 } from './route-scorer.js';
 import {
   DAY_MS,
@@ -51,6 +56,10 @@ import {
 
 export const SESSION_AUTO_ROUTE_CAPABILITY = 'session_auto_route';
 export const DEFAULT_AUTO_ROUTE_WINDOW_DAYS = 5;
+// Running Sessions plus the best relevance and recency idle Sessions shown to the arbiter.
+export const AUTO_ROUTE_LLM_CANDIDATES = 8;
+// Lexically strongest Sessions idle beyond the window that may still be scored.
+export const AUTO_ROUTE_OLDER_CANDIDATES = 2;
 
 const ownerRouteLocks = new Map();
 
@@ -104,6 +113,10 @@ function getCachedMeta(yeaftDir, sessionId, metaCache) {
  * scheduled-task Sessions and already-running `excludeSessionIds`), merging
  * natural-language OR-scored FTS5 hits, recency cards from `discovery.db`, and
  * freshly-active manifest Sessions.
+ *
+ * `olderCandidates` (default 0) additionally admits up to that many of the
+ * lexically strongest Sessions whose last activity is BEFORE the window; they
+ * carry `outsideWindow: true` and their matched text as `matchedOlderSnippet`.
  */
 export function collectRecentIdleCandidates(yeaftDir, {
   allowedSessionIds = [],
@@ -112,6 +125,7 @@ export function collectRecentIdleCandidates(yeaftDir, {
   activeWindowDays = DEFAULT_AUTO_ROUTE_WINDOW_DAYS,
   now = Date.now(),
   maxCandidates = 24,
+  olderCandidates = 0,
   readRecentFallbackMessages = null,
 } = {}) {
   const allowedList = [...normalizeAllowedIdSet(allowedSessionIds)]
@@ -148,6 +162,34 @@ export function collectRecentIdleCandidates(yeaftDir, {
             windowMessages,
             recentMessages: windowMessages.slice(-4),
           });
+        }
+
+        // 1b. A few lexically strongest Sessions that went quiet before the window,
+        // so returning to an older topic can still continue it; the scorer and
+        // arbiter see their real age and only keep them on a content match.
+        if (olderCandidates > 0) {
+          const older = searchDiscoveryRelaxed(db, yeaftDir, allowedList, query, now, { limit: 8 });
+          let added = 0;
+          for (const hit of older.results || []) {
+            if (added >= olderCandidates) break;
+            if (byId.has(hit.sessionId) || excludeSessionIds.has(hit.sessionId) || !(hit.activeAt < sinceMs)) continue;
+            if (isTaskSession(yeaftDir, hit.sessionId, metaCache)) continue;
+            const meta = getCachedMeta(yeaftDir, hit.sessionId, metaCache);
+            const windowMessages = getSessionMessagesInWindowFromIndex(db, hit.sessionId, { sinceMs, limit: 8 });
+            byId.set(hit.sessionId, {
+              sessionId: hit.sessionId,
+              title: hit.title,
+              sceneId: loadSessionConfig(yeaftDir, hit.sessionId)?.sceneId || '',
+              workDir: meta?.workDir || hit.workDir || '',
+              activeAt: hit.activeAt,
+              preview: hit.snippet || '',
+              matchedOlderSnippet: hit.matchedText || hit.snippet || '',
+              outsideWindow: true,
+              windowMessages,
+              recentMessages: windowMessages.slice(-4),
+            });
+            added += 1;
+          }
         }
       }
 
@@ -312,8 +354,9 @@ function resolveAnsweredQuestion(target, answeredRequestId) {
 
 /**
  * Decide whether an incoming Sessionless message routes to:
- *   - Stage 0 zero-LLM fast-path (`routeSource: 'fast_path'`, `tier: 'running' | 'recent'`)
+ *   - Stage 0 zero-LLM AskUser option fast-path (`routeSource: 'fast_path'`, `tier: 'running'`)
  *   - Stage 1 single-shot LLM match (`routeSource: 'llm'`, `tier: 'running' | 'recent'`)
+ *   - Degraded local lexical match when the arbiter failed (`routeSource: 'fallback'`)
  *   - Stage 1 / Tier 3 brand-new Session (`action: 'create'`, `tier: 'create'`)
  */
 export async function decideSessionAutoRoute({
@@ -358,6 +401,7 @@ export async function decideSessionAutoRoute({
       query: cleanQuery,
       activeWindowDays,
       now,
+      olderCandidates: AUTO_ROUTE_OLDER_CANDIDATES,
       readRecentFallbackMessages,
     }).candidates
     : [];
@@ -386,7 +430,6 @@ export async function decideSessionAutoRoute({
       const fastHit = tryFastPathRoute({
         query: cleanQuery,
         scoredCandidates: scored,
-        metaExcluded,
       });
       if (fastHit && fastHit.sessionId && allowedSet.has(fastHit.sessionId)) {
         return fastHit;
@@ -397,7 +440,7 @@ export async function decideSessionAutoRoute({
     // together AND plans new-Session metadata in the same call when creating).
     const llmCandidates = selectCandidatesForLlm({
       scoredCandidates: scored,
-      maxTotal: 7,
+      maxTotal: AUTO_ROUTE_LLM_CANDIDATES,
     });
 
     const candidateFolders = selectCandidateWorkspaceFolders(yeaftDir, {
@@ -417,12 +460,23 @@ export async function decideSessionAutoRoute({
         newQuery: cleanQuery,
         preferredSceneId: explicitSceneId,
         preferredWorkDir: explicitWorkDir,
+        now,
       },
       adapter,
       config,
       traceId,
       signal,
     });
+
+    // The arbiter could not decide (no model, timeout, provider error, invalid
+    // output): continue an unmistakable lexical owner instead of spawning a
+    // context-less duplicate Session; otherwise fall through to create.
+    if (routeMeta.usedFallback) {
+      const localHit = tryLocalFallbackRoute({ query: cleanQuery, scoredCandidates: scored, metaExcluded });
+      if (localHit && allowedSet.has(localHit.sessionId)) {
+        return { ...localHit, reason: `${localHit.reason};arbiter:${routeMeta.fallbackReason || 'fallback'}` };
+      }
+    }
 
     if (routed.decision === 'match' && routed.sessionId && allowedSet.has(routed.sessionId)) {
       const target = llmCandidates.find(c => c.sessionId === routed.sessionId);
