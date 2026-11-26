@@ -118,10 +118,9 @@ export class TestServer {
   }
 }
 
-export const test = base.extend({
-  serverEnv: [{}, { option: true, scope: 'worker' }],
-  // Existing E2E suites assert classic sidebar/chat selectors; pass `uiMode: null`
-  // in Cosmos E2E tests to exercise the default first-run Cosmos landing experience.
+// Existing E2E suites assert classic sidebar/chat selectors; pass `uiMode: null`
+// in Cosmos E2E tests to exercise the default first-run Cosmos landing experience.
+export const UI_MODE_FIXTURES = {
   uiMode: ['classic', { option: true, scope: 'worker' }],
 
   browser: [async ({ browser, uiMode }, use) => {
@@ -164,6 +163,11 @@ export const test = base.extend({
     }
     await use(page);
   },
+};
+
+export const test = base.extend({
+  serverEnv: [{}, { option: true, scope: 'worker' }],
+  ...UI_MODE_FIXTURES,
 
   testServer: [async ({ serverEnv }, use) => {
     const port = await getAvailablePort();

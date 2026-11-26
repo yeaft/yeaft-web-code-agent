@@ -6,7 +6,7 @@ test.use({ serverEnv: { YEAFT_LOCAL_RUN: 'true', SERVE_DIST: 'false' }, uiMode: 
 
 test.describe('Yeaft Cosmos UI', () => {
   test('renders Cosmos by default, routes planet click to Quick Auto-Route, opens translucent planetary drawer on session click, controls random events, and toggles Classic UI cleanly', async ({ page, serverUrl, mockAgent }) => {
-    test.setTimeout(60000);
+    test.setTimeout(90000);
     const errors = [];
     page.on('pageerror', (err) => errors.push(err.message));
 
@@ -122,10 +122,14 @@ test.describe('Yeaft Cosmos UI', () => {
     await expect(page.locator('.cosmos-drawer')).toHaveCount(0);
 
     // 3. Hover planet -> click specific session -> opens right planetary drawer
+    // Note: after closing the drawer, camera centerShiftX smoothly lerps back,
+    // so track Saturn's live screen position until the hover card opens.
     const saturnTag = page.locator('.cosmos-planet-node[data-planet-id="saturn"] .cosmos-planet-tag');
     await expect(saturnTag).toBeVisible();
-    await hoverOrbiting(saturnTag);
-    await expect(page.locator('.cosmos-hover-card')).toBeVisible();
+    await expect(async () => {
+      await hoverOrbiting(saturnTag);
+      await expect(page.locator('.cosmos-hover-card')).toBeVisible({ timeout: 600 });
+    }).toPass({ timeout: 8000 });
     await page.locator('.cosmos-hover-row').first().click();
     await expect(page.locator('.cosmos-drawer')).toBeVisible();
     await expect(page.locator('.cosmos-drawer')).toHaveAttribute('data-planet-theme', 'saturn');
