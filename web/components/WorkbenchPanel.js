@@ -933,12 +933,30 @@ export default {
       Vue.nextTick(scheduleTabOverflowUpdate);
     };
 
+    const repositionOpenItemsMenu = () => {
+      if (!openItemsMenu.visible) return;
+      const rect = openItemsTrigger.value?.getBoundingClientRect();
+      if (rect && (rect.width > 0 || rect.height > 0)) {
+        Object.assign(openItemsMenu, positionFixedMenu(openItemsMenuElement.value, rect));
+      } else {
+        openItemsMenu.visible = false;
+      }
+    };
+    const repositionOpenMenus = () => {
+      if (launcherOpen.value) void updateLauncherMenuPosition();
+      repositionOpenItemsMenu();
+      if (tabContextMenu.visible) {
+        tabContextMenu.visible = false;
+      }
+    };
+
     const scheduleTabOverflowUpdate = () => {
       if (tabOverflowUpdatePending) return;
       tabOverflowUpdatePending = true;
       Vue.nextTick(() => {
         tabOverflowUpdatePending = false;
         updateTabOverflow();
+        Vue.nextTick(repositionOpenMenus);
       });
     };
 
@@ -1071,20 +1089,6 @@ export default {
       }
     };
 
-    const repositionOpenMenus = () => {
-      if (launcherOpen.value) void updateLauncherMenuPosition();
-      if (openItemsMenu.visible) {
-        const rect = openItemsTrigger.value?.getBoundingClientRect();
-        if (rect && (rect.width > 0 || rect.height > 0)) {
-          Object.assign(openItemsMenu, positionFixedMenu(openItemsMenuElement.value, rect));
-        } else {
-          openItemsMenu.visible = false;
-        }
-      }
-      if (tabContextMenu.visible) {
-        tabContextMenu.visible = false;
-      }
-    };
     const handleViewportResize = () => {
       scheduleTabOverflowUpdate();
       repositionOpenMenus();
@@ -1096,6 +1100,16 @@ export default {
         const originatingItemId = tabContextMenu.itemId;
         tabContextMenu.visible = false;
         if (originatingItemId) focusWorkbenchItem(originatingItemId);
+        return;
+      }
+      if (openItemsMenu.visible) {
+        event.preventDefault();
+        closeOpenItemsMenu(true);
+        return;
+      }
+      if (launcherOpen.value) {
+        event.preventDefault();
+        closeLauncher(true);
       }
     };
 
@@ -1121,6 +1135,14 @@ export default {
     Vue.watch(
       [activeWorkbenchItemId, workbenchItems],
       () => Vue.nextTick(keepActiveItemVisible),
+      { flush: 'post' },
+    );
+
+    Vue.watch(
+      () => [openItemsMenu.visible, hiddenWorkbenchItemIds.value.length],
+      ([visible]) => {
+        if (visible) repositionOpenItemsMenu();
+      },
       { flush: 'post' },
     );
 
