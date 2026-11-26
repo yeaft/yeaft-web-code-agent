@@ -363,6 +363,7 @@ export default {
             >{{ subAgentRouteSummary(task) }}</div>
             <div v-if="expandedTasks[task.id]" class="yeaft-vp-task-detail">
               <div v-if="task.kind === 'sub_agent'" class="yeaft-vp-task-sub-agent-panel">
+                <div v-if="task.subAgentRoute" class="yeaft-vp-task-detail-line">{{ task.title || task.id }}</div>
                 <div v-if="subAgentRouteSummary(task)" class="yeaft-vp-task-route">{{ subAgentRouteSummary(task) }}</div>
                 <TerminalOutput
                   v-if="subAgentTaskStreamText(task)"

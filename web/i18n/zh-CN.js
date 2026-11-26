@@ -1603,7 +1603,7 @@ export default {
   'settings.llm.modelSelectionTitle': '模型选择',
   'settings.llm.primaryModel': '主模型',
   'settings.llm.fastModel': '快速模型',
-  'settings.llm.fastModelAuto': '自动（使用主模型）',
+  'settings.llm.fastModelAuto': '自动（默认路由）',
   'settings.llm.fastModelHint': '场景未指定模型时，侦察和研究子 Agent 优先使用；也供部分内部任务使用。',
   'settings.llm.subAgentSceneModels': '按场景指定子 Agent 模型',
   'settings.llm.subAgentSceneModelsHint': '选定模型后，该场景优先使用它。设为自动或模型不可用时，恢复默认的子 Agent 路由。',

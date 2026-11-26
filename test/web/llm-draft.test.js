@@ -163,6 +163,18 @@ describe('native Gemini settings', () => {
     expect(pendingRequest(store).config).toMatchObject({ fastModel: null, subAgentSceneModels: {} });
   });
 
+  it('shows the qualified owner of a saved bare Fast Model without rewriting the legacy setting', async () => {
+    const store = await setup();
+    store.llmConfig['agent-a'] = config('legacy-fast', { fastModel: 'model-b', subAgentSceneModels: {} });
+    await Vue.nextTick();
+    const select = wrapper.get('select.llm-route-select');
+    expect(select.element.selectedOptions[0].textContent.trim()).toBe('test/model-b');
+    expect(select.element.selectedOptions[0].disabled).toBe(false);
+    await wrapper.get('.llm-toggle-row input').setValue(true);
+    await saveButton().trigger('click');
+    expect(pendingRequest(store).config.fastModel).toBe('model-b');
+  });
+
   it('keeps Fast Model available with an older Agent without sending unrecognized scene mappings', async () => {
     const store = await setup();
     expect(wrapper.text()).toContain('Fast Model');

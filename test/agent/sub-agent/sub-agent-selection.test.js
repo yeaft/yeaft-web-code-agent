@@ -119,23 +119,31 @@ describe('sub-agent model, effort, scene, and machine protocol', () => {
     vi.restoreAllMocks();
   });
 
-  it('persists the child scene and adapter-resolved effort in native Session task snapshots', async () => {
+  it('dispatches a scene-mapped child to its exact provider despite slash IDs and caches, then persists the wire effort', async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'yeaft-sub-agent-task-route-'));
     const events = [];
     const taskManager = new TaskManager({ yeaftDir: dir, onEvent: event => events.push(event) });
     const model = 'openai/gpt-5.4';
-    const config = mkCatalogConfig({ model, primaryModel: model });
-    const adapter = new AdapterRouter({ providers: [{
-      name: 'openai', protocol: 'openai-responses', baseUrl: 'https://openai.invalid/v1',
-      apiKey: 'fixture', models: ['gpt-5.4'],
-    }] });
+    const config = mkCatalogConfig({ subAgentSceneModels: { frontend: model } });
+    const adapter = new AdapterRouter({ providers: [
+      { name: 'proxy', protocol: 'openai-chat-completions', baseUrl: 'https://proxy.invalid/v1',
+        apiKey: 'fixture', models: [model] },
+      { name: 'openai', protocol: 'openai-responses', baseUrl: 'https://alternate.invalid/v1',
+        apiKey: 'fixture', models: ['gpt-5.4-mini'] },
+      { name: 'openai', protocol: 'openai-responses', baseUrl: 'https://openai.invalid/v1',
+        apiKey: 'fixture', models: ['gpt-5.4'] },
+    ] });
     let release;
     const gate = new Promise(resolve => { release = resolve; });
     let captureDispatch;
     const dispatched = new Promise(resolve => { captureDispatch = resolve; });
-    vi.stubGlobal('fetch', vi.fn(async (_url, init) => {
-      captureDispatch(JSON.parse(init.body));
-      await gate;
+    const urls = [];
+    vi.stubGlobal('fetch', vi.fn(async (url, init) => {
+      urls.push(String(url));
+      if (urls.length > 1) {
+        captureDispatch(JSON.parse(init.body));
+        await gate;
+      }
       return new Response([
         'data: {"type":"response.output_text.delta","delta":"status: done"}',
         'data: {"type":"response.completed","response":{"id":"resp_1","status":"completed"}}',
@@ -144,8 +152,12 @@ describe('sub-agent model, effort, scene, and machine protocol', () => {
     }));
     let child;
     try {
+      expect(adapter.getProtocolForModel(model)).toBe('openai-responses');
+      expect(adapter.getProviderForModel(model).baseUrl).toBe('https://openai.invalid/v1');
+      expect(adapter.getProviderForModel(`proxy/${model}`).name).toBe('proxy');
+      for await (const _event of adapter.stream({ model: 'gpt-5.4-mini', messages: [] })) { /* warm adapter cache */ }
       const spawn = JSON.parse(await agentTool.execute({
-        name: 'route-test', mission: 'Check route', scene: 'frontend',
+        name: 'route-test', mission: 'Check route', scene: 'frontend', model: config.model,
       }, {
         sessionId: 's', sceneId: 'software', currentVpId: 'omni', taskManager,
         parentEngineDeps: { adapter, config, trace: new NullTrace(), taskManager,
@@ -157,7 +169,8 @@ describe('sub-agent model, effort, scene, and machine protocol', () => {
         source: { sceneId: 'software' }, subAgentRoute: { model, sceneId: 'frontend' },
       } });
       expect(events[0].task.subAgentRoute).not.toHaveProperty('effort');
-      expect((await dispatched).reasoning).toEqual({ effort: 'medium' });
+      expect(await dispatched).toMatchObject({ model: 'gpt-5.4', reasoning: { effort: 'medium' } });
+      expect(urls).toEqual(['https://alternate.invalid/v1/responses', 'https://openai.invalid/v1/responses']);
       const route = { model, effort: 'medium', sceneId: 'frontend' };
       expect(events.some(event => event.event === 'updated' && event.task.subAgentRoute?.effort === 'medium')).toBe(true);
       expect(taskManager.listActiveTasks('s')[0].subAgentRoute).toEqual(route);

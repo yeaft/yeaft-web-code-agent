@@ -3630,10 +3630,10 @@ export class Engine {
           commitRetryContinuation();
         };
         let routeObserved = false;
-        const observeRequestRoute = () => {
+        const observeRequestRoute = (dispatchedModel = currentModel) => {
           routeObserved = true;
           try {
-            onProviderRequestRoute?.({ model: currentModel,
+            onProviderRequestRoute?.({ model: dispatchedModel,
               effortDecision: requestEffortDecisionReported ? requestEffortDecision : null });
           } catch { /* diagnostics must not interrupt dispatch */ }
         };
@@ -3666,7 +3666,7 @@ export class Engine {
               onProviderRequestStart?.({ ...providerRequestPolicy, headersTimeoutMs: undefined });
             }
           },
-          onRequestStart: requestPolicy => {
+          onRequestStart: (requestPolicy, dispatchedModel) => {
             // Native adapters invoke this immediately before fetch(). A retry
             // continuation and Work Center EngineTurn become durable only when
             // their request crosses dispatch, never when turn_start is shown.
@@ -3675,7 +3675,7 @@ export class Engine {
             try {
               commitDispatch(!legacyDispatchReserved);
               legacyDispatchReserved = false;
-              if (onProviderRequestRoute) observeRequestRoute();
+              if (onProviderRequestRoute) observeRequestRoute(dispatchedModel);
               const effectivePolicy = requestPolicy
                 && requestPolicy.streamIdleTimeoutMs === 0
                 && retryPreservedHighEffort

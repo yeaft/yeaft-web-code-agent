@@ -511,7 +511,7 @@ describe('message flow regressions', () => {
     const frame = event => store.handleYeaftOutput({ ...scope, event });
     const tasks = () => Object.values(store.yeaftActiveTasksBySession['a\u001fs'] || {});
     const base = { sessionId: 's', kind: 'sub_agent', status: 'running', source: { sceneId: 'software' } };
-    const task = { ...base, id: 'new', title: 'Review', subAgentRoute: { model: 'proxy/reviewer', sceneId: 'frontend' } };
+    const task = { ...base, id: 'new', title: 'Review model routing across two upstream endpoints with a long objective', subAgentRoute: { model: 'proxy/reviewer', sceneId: 'frontend' } };
     const legacy = { ...base, id: 'old', title: 'Older review' };
     const shell = { ...base, id: 'shell', kind: 'shell', runtime: { command: 'echo ok' } };
     frame({ type: 'session_ready', ...scope, tasks: [task, legacy, shell] });
@@ -538,6 +538,7 @@ describe('message flow regressions', () => {
       await toggle.trigger('click');
       expect(toggle.attributes('aria-expanded')).toBe('true');
       expect(row.find('.yeaft-vp-task-route-preview').exists()).toBe(false);
+      expect(row.get('.yeaft-vp-task-detail-line').text()).toBe(task.title);
       expect(row.get('.yeaft-vp-task-route').text()).toContain('Effective effort: medium');
 
       frame({ type: 'session_ready', ...scope, tasks: [updated, legacy, shell] });

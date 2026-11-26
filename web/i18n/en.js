@@ -1605,7 +1605,7 @@ export default {
   'settings.llm.modelSelectionTitle': 'Model Selection',
   'settings.llm.primaryModel': 'Primary Model',
   'settings.llm.fastModel': 'Fast Model',
-  'settings.llm.fastModelAuto': 'Auto (use Primary Model)',
+  'settings.llm.fastModelAuto': 'Auto (default routing)',
   'settings.llm.fastModelHint': 'Used by explorer and researcher unless the scene specifies a model. Also used by some internal tasks.',
   'settings.llm.subAgentSceneModels': 'Sub-agent models by scene',
   'settings.llm.subAgentSceneModelsHint': 'The selected model takes priority for that scene. If it becomes unavailable or is set to Auto, normal sub-agent routing applies.',

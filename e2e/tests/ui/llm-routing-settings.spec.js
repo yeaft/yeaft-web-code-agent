@@ -48,7 +48,7 @@ test('LLM settings round-trip the fast model and a sub-agent scene route', async
     await expect(frontend).toBeVisible();
     expect(await settings.evaluate(node => node.scrollWidth <= node.clientWidth + 1)).toBe(true);
     await frontend.selectOption('');
-    await fastModel.selectOption({ label: 'Auto (use Primary Model)' });
+    await fastModel.selectOption({ label: 'Auto (default routing)' });
     await saveSettings();
     expect(getLlmConfig(dir).agentConfig).toMatchObject({ fastModel: null, subAgentSceneModels: {} });
   } finally {
