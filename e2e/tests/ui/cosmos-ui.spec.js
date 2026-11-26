@@ -8,7 +8,13 @@ test.describe('Yeaft Cosmos UI', () => {
   test('renders Cosmos by default, routes planet click to Quick Auto-Route, opens translucent planetary drawer on session click, controls random events, and toggles Classic UI cleanly', async ({ page, serverUrl, mockAgent }) => {
     test.setTimeout(90000);
     const errors = [];
+    const failedAssets = [];
     page.on('pageerror', (err) => errors.push(err.message));
+    page.on('response', (res) => {
+      if (res.url().includes('/assets/cosmos/') && res.status() >= 400) {
+        failedAssets.push(`${res.status()} ${res.url()}`);
+      }
+    });
 
     await page.goto(serverUrl);
     await expect(page.locator('.cosmos-page')).toBeVisible({ timeout: 15000 });
@@ -174,6 +180,69 @@ test.describe('Yeaft Cosmos UI', () => {
     await page.locator('.sidebar-cosmos-btn').click();
     await expect(page.locator('.cosmos-page')).toBeVisible({ timeout: 8000 });
 
+    expect(failedAssets).toEqual([]);
+    expect(errors).toEqual([]);
+  });
+
+  test('fits all planets cleanly in 390x844 mobile portrait mode and switches cleanly between 2D Eco and Ultra 3D WebGL', async ({ page, serverUrl, mockAgent }) => {
+    test.setTimeout(90000);
+    const errors = [];
+    const failedAssets = [];
+    page.on('pageerror', (err) => errors.push(err.message));
+    page.on('response', (res) => {
+      if (res.url().includes('/assets/cosmos/') && res.status() >= 400) {
+        failedAssets.push(`${res.status()} ${res.url()}`);
+      }
+    });
+
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto(serverUrl);
+    await expect(page.locator('.cosmos-page')).toBeVisible({ timeout: 15000 });
+
+    await page.waitForFunction((agentId) => {
+      const chat = window.Pinia?.useChatStore?.();
+      return Boolean(chat && (chat.agents || []).some((a) => a.id === agentId && a.online === true));
+    }, mockAgent.agentId, { timeout: 15000 });
+
+    await page.evaluate((agentId) => {
+      const chat = window.Pinia.useChatStore();
+      chat.agents = [
+        { id: agentId, name: 'MacBook-Pro', online: true, status: 'ready', workDir: '/Users/dev/yeaft', capabilities: ['session_auto_route'] },
+        { id: 'z-saturn-node', name: 'Cloud-Linux', online: true, status: 'ready', workDir: '/srv/prod', capabilities: ['session_auto_route'] },
+      ];
+    }, mockAgent.agentId);
+
+    const earthNode = page.locator('.cosmos-planet-node[data-planet-id="earth"]');
+    const saturnNode = page.locator('.cosmos-planet-node[data-planet-id="saturn"]');
+    await expect(earthNode.locator('.cosmos-planet-tag')).toContainText('MacBook-Pro', { timeout: 5000 });
+    await expect(saturnNode.locator('.cosmos-planet-tag')).toContainText('Cloud-Linux', { timeout: 5000 });
+
+    // Verify both inner (Earth) and outer (Saturn) planets stay within the 390px phone viewport
+    const saturnBox = await saturnNode.locator('.cosmos-planet-tag').boundingBox();
+    expect(saturnBox).not.toBeNull();
+    expect(saturnBox.x).toBeGreaterThanOrEqual(0);
+    expect(saturnBox.x + saturnBox.width).toBeLessThanOrEqual(392);
+
+    // Click Earth tag -> opens Quick Composer -> Open Chat -> full-screen drawer
+    const earthTagBox = await earthNode.locator('.cosmos-planet-tag').boundingBox();
+    expect(earthTagBox).not.toBeNull();
+    await page.mouse.click(earthTagBox.x + earthTagBox.width / 2, earthTagBox.y + earthTagBox.height / 2);
+    await expect(page.locator('.cosmos-quick-composer')).toBeVisible();
+    await page.locator('.cosmos-quick-open-btn').click();
+    await expect(page.locator('.cosmos-drawer')).toBeVisible();
+    await page.keyboard.press('Escape');
+    await expect(page.locator('.cosmos-drawer')).toHaveCount(0);
+
+    // Switch renderer between Ultra 3D WebGL and 2D Eco cleanly inside Cosmic Constants
+    await page.locator('.cosmos-corner-actions .cosmos-corner-icon').first().click();
+    await expect(page.locator('.cosmos-constants-popover')).toBeVisible();
+    const rendererSelect = page.locator('.cosmos-constants-popover .cosmos-const-select').nth(1);
+    await rendererSelect.selectOption('high');
+    await expect(page.locator('.cosmos-const-engine-badge')).toContainText(/WebGL/i, { timeout: 5000 });
+    await rendererSelect.selectOption('lite');
+    await expect(page.locator('.cosmos-const-engine-badge')).toContainText(/2D/i, { timeout: 5000 });
+
+    expect(failedAssets).toEqual([]);
     expect(errors).toEqual([]);
   });
 });

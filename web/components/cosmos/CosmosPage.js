@@ -66,7 +66,7 @@ export default {
       }"
       @wheel="onStageWheel"
     >
-      <canvas ref="glCanvasRef" class="cosmos-gl-canvas" :class="{ 'is-orbiting': camOrbiting }" @pointerdown="onCanvasPointerDown" @dblclick="resetCamera"></canvas>
+      <canvas ref="glCanvasRef" :key="canvasEpoch" class="cosmos-gl-canvas" :class="{ 'is-orbiting': camOrbiting }" @pointerdown="onCanvasPointerDown" @dblclick="resetCamera"></canvas>
       <canvas ref="hudCanvasRef" class="cosmos-hud-canvas"></canvas>
 
       <!-- Spatial Interactive Layer (Zero-VDOM-diff direct transform updates via refs) -->
@@ -303,6 +303,7 @@ export default {
         :constants="constants"
         :agents="projectedAgentList"
         :agent-to-planet="assignments.agentToPlanet"
+        :renderer-mode="rendererMode"
         @update-constant="onUpdateConstant"
         @assign-planet="onAssignPlanet"
         @open-settings="openYeaftSettings"
@@ -443,6 +444,8 @@ export default {
     const constants = Vue.reactive(loadCosmosConstants());
     const savedBindings = Vue.ref(loadPlanetBindings());
     const galaxyBooks = Vue.ref(loadGalaxyBooks());
+    const canvasEpoch = Vue.ref(0);
+    const rendererMode = Vue.ref('webgl2');
 
     const constantsOpen = Vue.ref(false);
     const quickAgentId = Vue.ref(null);
@@ -604,6 +607,7 @@ export default {
     }
 
     function onPlanetEnter(planetId, e) {
+      if (e?.pointerType === 'touch') return;
       if (anim.drag?.active || currentBand.value !== 'solar' || isObservingEvent.value) return;
       clearHoverHideTimer();
       anim.hoverPlanetId = planetId;
@@ -683,10 +687,30 @@ export default {
       if (scaleBand(anim.targetScaleLog) !== 'galaxy') bookCreateOpen.value = false;
     }
 
+    const activeTouchPointers = new Map();
+    let pinchPrevDist = 0;
+
+    function getTouchPinchDist() {
+      const pts = Array.from(activeTouchPointers.values());
+      if (pts.length < 2) return 0;
+      return Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
+    }
+
     function onCanvasPointerDown(e) {
-      if (e.button !== 0) return;
+      if (e.pointerType !== 'touch' && e.button !== 0) return;
       emptyPlanetMenu.value = null;
       constantsOpen.value = false;
+      if (e.pointerType === 'touch') {
+        activeTouchPointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+        if (activeTouchPointers.size >= 2) {
+          anim.camDrag = null;
+          anim.drag = null;
+          camOrbiting.value = false;
+          dragActive.value = false;
+          pinchPrevDist = getTouchPinchDist();
+          return;
+        }
+      }
       anim.camDrag = { startX: e.clientX, startY: e.clientY, yaw0: anim.camRot.tx, pitch0: anim.camRot.ty, moved: false };
       camOrbiting.value = true;
     }
@@ -696,7 +720,17 @@ export default {
     }
 
     function onPlanetPointerDown(planetId, ev) {
-      if (ev.button !== 0) return;
+      if (ev.pointerType !== 'touch' && ev.button !== 0) return;
+      if (ev.pointerType === 'touch') {
+        activeTouchPointers.set(ev.pointerId, { x: ev.clientX, y: ev.clientY });
+        if (activeTouchPointers.size >= 2) {
+          anim.drag = null;
+          anim.camDrag = null;
+          dragActive.value = false;
+          pinchPrevDist = getTouchPinchDist();
+          return;
+        }
+      }
       emptyPlanetMenu.value = null;
       constantsOpen.value = false;
       const agent = agentsByPlanet.value[planetId];
@@ -738,6 +772,32 @@ export default {
     function assignFromMenu(agentId, planetId) { emptyPlanetMenu.value = null; performMoveOrSwap(agentId, planetId); }
 
     function onGlobalPointerMove(e) {
+      if (e.pointerType === 'touch' && activeTouchPointers.has(e.pointerId)) {
+        activeTouchPointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+        if (activeTouchPointers.size >= 2) {
+          const dist = getTouchPinchDist();
+          if (pinchPrevDist > 12 && dist > 12) {
+            if (eventSim.active?.observing) {
+              const zoomDelta = (dist - pinchPrevDist) * 0.008;
+              setCosmicEventZoom(eventSim, eventSim.active.targetZoom + zoomDelta);
+              syncEventRefs();
+            } else {
+              const ratio = pinchPrevDist / dist;
+              const step = Math.max(-1.2, Math.min(1.2, Math.log(ratio) * 4.4));
+              anim.targetScaleLog = Math.max(7.0, Math.min(24.0, anim.targetScaleLog + step));
+              anim.warpEnergy = Math.min(1.0, anim.warpEnergy + Math.min(0.45, Math.abs(step) * 0.65));
+              hideHoverImmediate();
+              if (scaleBand(anim.targetScaleLog) !== 'solar') {
+                quickAgentId.value = null;
+                if (drawerOpen.value) closeDrawer();
+              }
+            }
+          }
+          pinchPrevDist = dist;
+          return;
+        }
+      }
+
       anim.mouseX = e.clientX; anim.mouseY = e.clientY;
       anim.parallax.tx = (e.clientX / Math.max(window.innerWidth, 1)) * 2 - 1;
       anim.parallax.ty = (e.clientY / Math.max(window.innerHeight, 1)) * 2 - 1;
@@ -786,7 +846,11 @@ export default {
       }
     }
 
-    function onGlobalPointerUp() {
+    function onGlobalPointerUp(e) {
+      if (e && e.pointerType === 'touch') {
+        activeTouchPointers.delete(e.pointerId);
+        if (activeTouchPointers.size < 2) pinchPrevDist = 0;
+      }
       if (anim.drag) {
         const drag = anim.drag;
         anim.drag = null;
@@ -932,6 +996,9 @@ export default {
         syncEventRefs();
       }
       if (key === 'showEventsCountdown' && !value && eventSim.active) { stopCosmicEvent(eventSim); syncEventRefs(); }
+      if (key === 'renderQuality') {
+        rebuildCosmosEngine(value);
+      }
     }
     function onAssignPlanet({ agentId, planetId }) { if (agentId && planetId) performMoveOrSwap(agentId, planetId); }
 
@@ -1009,17 +1076,67 @@ export default {
     }
 
     let softTimer = 0;
+    let unmounted = false;
+    let consecutiveSlowFrames = 0;
+    let autoDowngraded = false;
+
+    function resolveInitialQuality(override) {
+      if (override) return override;
+      try {
+        const param = new URLSearchParams(window.location.search).get('cosmosRenderer');
+        if (param === 'webgl' || param === 'high') return 'high';
+        if (param === '2d' || param === 'lite') return 'lite';
+      } catch { /* ignore */ }
+      return constants.renderQuality || 'auto';
+    }
+
+    function mountEngine(quality) {
+      if (unmounted) return;
+      cancelAnimationFrame(rafId);
+      clearTimeout(softTimer);
+      engine?.destroy?.();
+      engine = createCosmosEngine(glCanvasRef.value, hudCanvasRef.value, {
+        renderQuality: resolveInitialQuality(quality),
+      });
+      rendererMode.value = engine?.mode || '2d';
+      consecutiveSlowFrames = 0;
+      if (engine) {
+        anim.lastTs = performance.now();
+        rafId = requestAnimationFrame(loop);
+      }
+    }
+
+    function rebuildCosmosEngine(quality) {
+      cancelAnimationFrame(rafId);
+      clearTimeout(softTimer);
+      engine?.destroy?.();
+      engine = null;
+      canvasEpoch.value += 1;
+      Vue.nextTick(() => {
+        if (!unmounted) mountEngine(quality);
+      });
+    }
+
     function scheduleNextFrame() {
-      if (!engine) return;
-      if (engine.isSoftware) {
-        softTimer = setTimeout(() => { rafId = requestAnimationFrame(loop); }, 90);
+      if (!engine || unmounted) return;
+      let delayMs = 0;
+      if (!engine.isWebGL) delayMs = 30;
+      else if (engine.isSoftware) delayMs = 46;
+      else if (engine.isMobile && constants.renderQuality !== 'high') delayMs = 24;
+
+      if (delayMs > 0) {
+        softTimer = setTimeout(() => {
+          if (!unmounted && engine) rafId = requestAnimationFrame(loop);
+        }, delayMs);
       } else {
         rafId = requestAnimationFrame(loop);
       }
     }
+
     function loop(now) {
-      if (!engine) return;
+      if (!engine || unmounted) return;
       if (!document.hidden) {
+        const t0 = performance.now();
         stepCosmosFrame(now, {
           engine, anim, eventSim, pools, webGraph, gpuParticles, constants, domRefs,
           getAgentsByPlanet: () => agentsByPlanet.value,
@@ -1027,6 +1144,7 @@ export default {
           getUiState: () => ({
             currentBand: currentBand.value,
             drawerOpen: drawerOpen.value,
+            quickOpen: Boolean(quickAgentId.value),
             workbenchWidened: workbenchWidened.value,
             focusedPlanetId: focusedPlanetId.value,
             dragActive: dragActive.value,
@@ -1037,16 +1155,33 @@ export default {
           onSyncEvents: syncEventRefs,
           onUpdateHoverPos: updateHoverCardPosition,
         });
+
+        // Adaptive guard for masked software renderers: if WebGL stays severely stalled
+        // (>115ms per frame for 20 consecutive frames) in 'auto' mode, smoothly switch to 2D.
+        if (engine.isWebGL && constants.renderQuality === 'auto' && !autoDowngraded) {
+          const frameCost = performance.now() - t0;
+          if (frameCost > 115) {
+            consecutiveSlowFrames += 1;
+            if (consecutiveSlowFrames >= 20) {
+              autoDowngraded = true;
+              showToast($t('cosmos.constants.autoDowngradedToast'));
+              rebuildCosmosEngine('lite');
+              return;
+            }
+          } else {
+            consecutiveSlowFrames = 0;
+          }
+        }
       }
       scheduleNextFrame();
     }
 
     Vue.onMounted(() => {
-      engine = createCosmosEngine(glCanvasRef.value, hudCanvasRef.value);
-      anim.lastTs = performance.now();
-      rafId = requestAnimationFrame(loop);
+      unmounted = false;
+      mountEngine();
       window.addEventListener('pointermove', onGlobalPointerMove);
       window.addEventListener('pointerup', onGlobalPointerUp);
+      window.addEventListener('pointercancel', onGlobalPointerUp);
       window.addEventListener('keydown', onKeyDown);
       document.addEventListener('click', onDocClick);
       nowInterval = setInterval(() => { nowTick.value = Date.now(); }, 15000);
@@ -1054,6 +1189,8 @@ export default {
     });
 
     Vue.onBeforeUnmount(() => {
+      unmounted = true;
+      activeTouchPointers.clear();
       cancelAnimationFrame(rafId);
       clearTimeout(softTimer);
       clearTimeout(toastTimer);
@@ -1065,6 +1202,7 @@ export default {
       clearInterval(nowInterval);
       window.removeEventListener('pointermove', onGlobalPointerMove);
       window.removeEventListener('pointerup', onGlobalPointerUp);
+      window.removeEventListener('pointercancel', onGlobalPointerUp);
       window.removeEventListener('keydown', onKeyDown);
       document.removeEventListener('click', onDocClick);
       engine?.destroy?.();
@@ -1072,7 +1210,7 @@ export default {
     });
 
     return {
-      glCanvasRef, hudCanvasRef, hoverCardRef, domRefs, setMapRef,
+      glCanvasRef, hudCanvasRef, hoverCardRef, domRefs, setMapRef, canvasEpoch, rendererMode,
       planets: PLANETS, bookDomains: BOOK_DOMAINS,
       portals: [
         { id: 'to-galaxy', labelKey: 'cosmos.scale.galaxy', scale: '10²¹', target: 21.0, ring: 54 },

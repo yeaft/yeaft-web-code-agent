@@ -1,5 +1,7 @@
 // @vitest-environment happy-dom
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { readFileSync, readdirSync, existsSync, statSync } from 'node:fs';
+import { resolve, join } from 'node:path';
 import * as Vue from 'vue';
 import { flushPromises, mount } from '@vue/test-utils';
 import {
@@ -11,6 +13,7 @@ import {
   clearPendingAutoRoutes,
 } from '../../web/stores/helpers/yeaft-auto-route.js';
 import {
+  PLANETS,
   loadCosmosConstants,
   saveCosmosConstants,
   resolvePlanetAssignments,
@@ -30,6 +33,14 @@ import {
 import { projectAgentsForCosmos } from '../../web/cosmos/agent-projection.js';
 import { bakeProceduralWebGLTextures } from '../../web/cosmos/gpu-texture-baker.js';
 import { createCosmosEngine } from '../../web/cosmos/gl-engine.js';
+import { computeSolarProjectionLayout } from '../../web/cosmos/stage-loop.js';
+import {
+  COSMOS_TEXTURE_MANIFEST,
+  requestCosmosTextureGroup,
+  uploadImageToWebGLTexture,
+  getLoadedCosmosImage,
+  __resetCosmosTextureCacheForTests,
+} from '../../web/cosmos/texture-loader.js';
 
 function createMemoryStorage() {
   const map = new Map();
@@ -601,5 +612,148 @@ describe('Cosmos Component & WebGL Review Regressions', () => {
     engine.destroy();
     expect(listeners.webglcontextlost).toBeUndefined();
     expect(listeners.webglcontextrestored).toBeUndefined();
+  });
+
+  it('copies every web source directory in Dockerfile Stage 1 and ships all 18 Cosmos WebP assets', () => {
+    const repoRoot = resolve(process.cwd());
+    const dockerfile = readFileSync(join(repoRoot, 'Dockerfile'), 'utf-8');
+    const webDir = join(repoRoot, 'web');
+    const ignored = new Set(['node_modules', 'dist', 'vendor']);
+    const sourceDirs = readdirSync(webDir, { withFileTypes: true })
+      .filter((d) => d.isDirectory() && !ignored.has(d.name))
+      .map((d) => d.name);
+
+    expect(sourceDirs).toContain('cosmos');
+    expect(sourceDirs).toContain('assets');
+    for (const dir of sourceDirs) {
+      const pattern = new RegExp(`COPY\\s+web/${dir}\\s+\\./${dir}/`);
+      expect(dockerfile, `Dockerfile Stage 1 must COPY web/${dir}`).toMatch(pattern);
+    }
+
+    expect(COSMOS_TEXTURE_MANIFEST).toHaveLength(18);
+    for (const spec of COSMOS_TEXTURE_MANIFEST) {
+      const fullPath = join(webDir, 'assets', 'cosmos', spec.file);
+      expect(existsSync(fullPath), `Missing cosmos texture: ${spec.file}`).toBe(true);
+      expect(statSync(fullPath).size).toBeGreaterThan(500);
+    }
+  });
+
+  it('loads Solar textures eagerly, defers Galaxy/Web textures lazily, and uploads safely on WebGL 1', () => {
+    __resetCosmosTextureCacheForTests();
+    const created = [];
+    class FakeImage {
+      constructor() {
+        this.naturalWidth = 1024;
+        this.naturalHeight = 512;
+        this._src = '';
+        created.push(this);
+      }
+      set src(v) { this._src = v; }
+      get src() { return this._src; }
+    }
+
+    const ready = [];
+    const unsub = requestCosmosTextureGroup('solar', (k) => ready.push(k), { ImageCtor: FakeImage });
+    expect(created).toHaveLength(15);
+    expect(created.some((im) => im.src.includes('galaxy_m51.webp'))).toBe(false);
+    expect(created.some((im) => im.src.includes('cosmic_web_field.webp'))).toBe(false);
+
+    // Trigger load for earth_day and verify cache reuse + error tolerance on another image
+    const earthImg = created.find((im) => im.src.endsWith('earth_day.webp'));
+    earthImg.onload();
+    expect(ready).toContain('earth_day');
+    expect(getLoadedCosmosImage('earth_day')).toBe(earthImg);
+
+    const marsImg = created.find((im) => im.src.endsWith('mars.webp'));
+    marsImg.onerror();
+    expect(getLoadedCosmosImage('mars')).toBeNull();
+
+    // WebGL 1 NPOT image must clamp instead of using REPEAT
+    const params = [];
+    const mockGl1 = {
+      TEXTURE_2D: 1, RGBA: 2, UNSIGNED_BYTE: 3, LINEAR: 4, LINEAR_MIPMAP_LINEAR: 5,
+      TEXTURE_MIN_FILTER: 6, TEXTURE_MAG_FILTER: 7, TEXTURE_WRAP_S: 8, TEXTURE_WRAP_T: 9,
+      REPEAT: 10, CLAMP_TO_EDGE: 11, UNPACK_FLIP_Y_WEBGL: 12,
+      bindTexture: () => {},
+      pixelStorei: () => {},
+      texImage2D: () => {},
+      generateMipmap: vi.fn(),
+      texParameteri: (_t, p, v) => params.push([p, v]),
+    };
+    uploadImageToWebGLTexture(mockGl1, {}, { naturalWidth: 1024, naturalHeight: 820 }, { wrapS: true, wrapT: true });
+    expect(mockGl1.generateMipmap).not.toHaveBeenCalled();
+    expect(params).toContainEqual([mockGl1.TEXTURE_WRAP_S, mockGl1.CLAMP_TO_EDGE]);
+    expect(params).toContainEqual([mockGl1.TEXTURE_WRAP_T, mockGl1.CLAMP_TO_EDGE]);
+
+    unsub();
+    __resetCosmosTextureCacheForTests();
+  });
+
+  it('keeps all 8 planets inside a 390x844 portrait phone viewport and supports 2D fallback / software GL routing', () => {
+    const mobile = computeSolarProjectionLayout(390, 844);
+    expect(mobile.isPortrait).toBe(true);
+    expect(mobile.isCompact).toBe(true);
+    expect(mobile.tilt).toBeGreaterThan(0.6);
+
+    for (const p of PLANETS) {
+      for (let deg = 0; deg < 360; deg += 15) {
+        const rad = (deg * Math.PI) / 180;
+        const ux = Math.cos(rad) * p.orbitR;
+        const uz = Math.sin(rad) * p.orbitR;
+        const persp = 1.0 / (1.0 - uz * 0.26);
+        const sx = mobile.cx + ux * mobile.span * persp;
+        expect(sx, `${p.id} at ${deg}deg clipped portrait viewport`).toBeGreaterThanOrEqual(8);
+        expect(sx, `${p.id} at ${deg}deg clipped portrait viewport`).toBeLessThanOrEqual(382);
+      }
+    }
+
+    const desktop = computeSolarProjectionLayout(1440, 900);
+    expect(desktop.isPortrait).toBe(false);
+    expect(desktop.span).toBeGreaterThan(700);
+
+    // 2D Eco mode renders all 4 scales cleanly without requesting WebGL
+    const stubCtx2d = () => ({
+      setTransform: () => {}, clearRect: () => {}, fillRect: () => {},
+      save: () => {}, restore: () => {}, translate: () => {}, rotate: () => {}, scale: () => {},
+      beginPath: () => {}, arc: () => {}, ellipse: () => {}, rect: () => {}, clip: () => {},
+      fill: () => {}, stroke: () => {}, moveTo: () => {}, lineTo: () => {}, drawImage: () => {},
+      createRadialGradient: () => ({ addColorStop: () => {} }),
+      createLinearGradient: () => ({ addColorStop: () => {} }),
+    });
+    const getContext = vi.fn((kind) => (kind === '2d' ? stubCtx2d() : null));
+    const glCanvas = { width: 0, height: 0, clientWidth: 390, clientHeight: 844, getContext };
+    const hudCanvas = { width: 0, height: 0, getContext: () => stubCtx2d() };
+
+    const eng2d = createCosmosEngine(glCanvas, hudCanvas, { renderQuality: 'lite', isMobile: true });
+    expect(eng2d.mode).toBe('2d');
+    expect(eng2d.isWebGL).toBe(false);
+    expect(getContext).toHaveBeenCalledWith('2d');
+    expect(getContext).not.toHaveBeenCalledWith('webgl2');
+
+    // Render across Solar, Galaxy, Cosmic Web, and Event Horizon scales cleanly
+    const hudDraw = vi.fn();
+    eng2d.renderFrame({
+      time: 1, realTime: 1, scaleLog: 13,
+      parallax: { x: 0, y: 0 }, camRot: { x: 0, y: 0 }, warp: 0.2,
+      skyBright: 1.05, starDensity: 1.18,
+      bhParams: { x: 0, y: 0, radius: 0.16, strength: 0.9 },
+      galParams: { x: 0, y: 0, radius: 0.8, alpha: 0.9, tilt: 0.54 },
+      webParams: { x: 0, y: 0, radius: 1.0, alpha: 0.9 },
+      solarAlpha: 1,
+      solarBodies: [
+        { bodyType: 0, texKey: 'sun', screenX: 195, screenY: 400, radiusPx: 24, camZ: 0, spin: 0.1, oblate: 1, lightDir: [0, 0, 1], atmo: [1, 0.7, 0.3], highlight: 0 },
+        { bodyType: 6, texKey: 'saturn', screenX: 280, screenY: 460, radiusPx: 20, camZ: 0.2, spin: 0.4, oblate: 0.9, lightDir: [-0.7, 0.2, 0.6], atmo: [0.9, 0.8, 0.6], highlight: 0.5 },
+      ],
+      hudDraw,
+    });
+    expect(hudDraw).toHaveBeenCalledTimes(1);
+    eng2d.destroy();
+
+    // Persisted renderQuality clamping
+    const storage = createMemoryStorage();
+    saveCosmosConstants({ renderQuality: 'lite' }, storage);
+    expect(loadCosmosConstants(storage).renderQuality).toBe('lite');
+    saveCosmosConstants({ renderQuality: 'invalid-mode' }, storage);
+    expect(loadCosmosConstants(storage).renderQuality).toBe('auto');
   });
 });

@@ -3,7 +3,7 @@
  * ============================================================================ */
 .cosmos-event-wrap {
   position: fixed;
-  top: 14px;
+  top: calc(14px + env(safe-area-inset-top, 0px));
   left: 50%;
   transform: translateX(-50%);
   z-index: 29;
@@ -395,6 +395,34 @@
 }
 
 @media (max-width: 768px) {
+  .cosmos-event-wrap {
+    left: calc(12px + env(safe-area-inset-left, 0px));
+    transform: none;
+    align-items: flex-start;
+    max-width: calc(100vw - 106px);
+  }
+  .cosmos-event-pill {
+    max-width: 100%;
+    gap: 4px;
+    padding: 0 4px 0 8px;
+  }
+  .cosmos-event-main {
+    min-width: 0;
+    overflow: hidden;
+    gap: 4px;
+  }
+  .cosmos-event-name {
+    max-width: 92px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .cosmos-event-watch-btn,
+  .cosmos-event-stop-btn {
+    white-space: nowrap;
+    flex-shrink: 0;
+    padding: 0 7px;
+  }
   .cosmos-page.is-drawer-open .cosmos-event-wrap,
   .cosmos-page.is-drawer-open .cosmos-watch-dock {
     opacity: 0;

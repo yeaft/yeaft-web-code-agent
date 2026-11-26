@@ -1,5 +1,9 @@
 /**
  * Yeaft Cosmos — WebGL Background Skybox, Galaxy, Cosmic Web, Gargantua Black Hole & Particle Shaders
+ *
+ * Renders the full 360° ESO Milky Way + Hubble Veil Nebula + JWST Deep Field spherical skybox,
+ * multi-octave 3D parallax starfield with warp streaking, Hubble M51 + 4-arm Spiral Galaxy,
+ * unsharp-masked 3D Cosmic Web neural filaments, and relativistic Gargantua Black Hole lensing.
  */
 
 export const BG_VERT = `
@@ -26,6 +30,7 @@ export const BG_FRAG = `
   uniform vec4 uShockWave;
   uniform float uSkyBright;
   uniform float uStarDensity;
+  uniform float uQuality;
 
   uniform vec2 uBhPos;
   uniform float uBhRadius;
@@ -41,7 +46,10 @@ export const BG_FRAG = `
   uniform float uWebAlpha;
 
   uniform sampler2D uTexMilky;
+  uniform sampler2D uTexNebula;
+  uniform sampler2D uTexDeep;
   uniform sampler2D uTexGalaxy;
+  uniform sampler2D uTexGalaxyDisc;
   uniform sampler2D uTexWeb;
 
   const float PI = 3.14159265359;
@@ -170,7 +178,7 @@ export const BG_FRAG = `
       lensedP += normalize(dSw + vec2(1e-5)) * rippleSw * 0.026;
     }
 
-    /* 2. Wide-Field 3D Spherical Deep-Space Skybox (Procedural Milky Way + Deep Nebulae) */
+    /* 2. Wide-Field 3D Spherical Deep-Space Skybox (ESO Milky Way + Veil Nebula + JWST Deep Field) */
     float scaleDelta = uScaleLog - 13.0;
     float fovDiv = max(uFovZoom, 0.55);
     vec3 ray = normalize(vec3((lensedP / fovDiv) * 1.16, 0.92));
@@ -179,75 +187,93 @@ export const BG_FRAG = `
     vec3 skyDir = rotate3D(ray, voyageYaw, voyagePitch, -0.44);
 
     vec2 skyUv = vec2(fract(atan(skyDir.x, skyDir.z) / TAU + 0.52), clamp(0.5 - asin(clamp(skyDir.y, -1.0, 1.0)) / PI, 0.003, 0.997));
-    vec3 milky = pow(max(texture2D(uTexMilky, skyUv).rgb, vec3(0.0)), vec3(1.52)) * (0.48 * uSkyBright);
-    milky = milky * vec3(0.86, 0.94, 1.10) + pow(milky, vec3(2.2)) * 0.18;
+    vec3 eso = pow(max(texture2D(uTexMilky, skyUv).rgb, vec3(0.0)), vec3(1.36)) * (0.70 * uSkyBright);
+    eso = eso * vec3(0.90, 0.96, 1.08) + pow(eso, vec3(2.4)) * 0.22;
 
-    float skyPresence = 1.0 - smoothstep(18.5, 23.2, uScaleLog) * 0.74;
-    float horizonSkyBoost = 1.0 - smoothstep(10.5, 7.2, uScaleLog) * 0.35;
-    vec3 col = vec3(0.0025, 0.005, 0.013)
-             + milky * skyPresence * horizonSkyBoost * (1.0 + einsteinBoost * 0.65);
+    vec2 nebUv = mirrorUv(skyUv * vec2(2.0, 1.6) + vec2(0.18 + uRealTime * 0.0005, -0.08));
+    float nebMask = smoothstep(0.22, 0.62, sin(skyUv.x * TAU + 0.8) * 0.5 + 0.5)
+                  * smoothstep(0.82, 0.28, abs(skyUv.y - 0.46) * 2.0);
+    vec3 neb = pow(max(texture2D(uTexNebula, nebUv).rgb, vec3(0.0)), vec3(1.65)) * 0.14 * nebMask * uSkyBright;
+    vec3 deepField = pow(max(texture2D(uTexDeep, mirrorUv(skyUv * vec2(3.6, 2.4) + vec2(0.31, 0.14))).rgb, vec3(0.0)), vec3(2.2)) * 0.11 * uSkyBright;
+
+    float skyPresence = 1.0 - smoothstep(19.5, 23.8, uScaleLog) * 0.52;
+    float horizonSkyBoost = 1.0 + smoothstep(11.0, 7.2, uScaleLog) * 0.42;
+    vec3 col = vec3(0.005, 0.009, 0.020)
+             + (eso + neb + deepField) * skyPresence * horizonSkyBoost * (1.0 + einsteinBoost);
 
     /* 3. Multi-Octave 3D Depth Starfield */
-    float threshA = clamp(0.980 - 0.015 * uStarDensity, 0.940, 0.995);
-    float threshB = clamp(0.966 - 0.020 * uStarDensity, 0.920, 0.992);
+    float threshA = clamp(0.982 - 0.014 * uStarDensity, 0.942, 0.995);
+    float threshB = clamp(0.968 - 0.020 * uStarDensity, 0.922, 0.992);
     float zPhase = scaleDelta * 0.48 + uRealTime * 0.0018;
     vec2 starDrift = vec2(uRealTime * 0.0024, uRealTime * 0.00085) + uParallax * 0.032 + uCamRot * 0.12;
     float warpAmt = uWarp * clamp(pRad * 1.4, 0.0, 1.35);
     vec3 stars = vec3(0.0);
 
-    for (int oct = 0; oct < 2; oct++) {
+    for (int oct = 0; oct < 3; oct++) {
+      if (oct == 2 && uQuality < 0.8) break;
       float fOct = float(oct);
-      float cyc = fract(zPhase + fOct * 0.5);
+      float cyc = fract(zPhase + fOct * 0.3333);
       float env = sin(PI * cyc);
       env *= env;
-      vec2 sp = lensedP * (mix(1.85, 0.52, cyc) / fovDiv) + starDrift * (0.48 + fOct * 0.36) + vec2(fOct * 4.1, fOct * 6.7);
-      stars += starLayer(sp, 25.0, threshA, 1.05, warpAmt, radialDir) * env * 1.15;
-      stars += starLayer(sp + 5.1, 64.0, threshB, 0.92, warpAmt * 0.65, radialDir) * env * 0.78;
+      vec2 sp = lensedP * (mix(1.95, 0.48, cyc) / fovDiv) + starDrift * (0.45 + fOct * 0.32) + vec2(fOct * 4.1, fOct * 6.7);
+      stars += starLayer(sp, 24.0, threshA, 1.05, warpAmt, radialDir) * env;
+      stars += starLayer(sp + 5.1, 62.0, threshB, 0.92, warpAmt * 0.65, radialDir) * env * 0.68;
     }
     vec2 deepSp = (lensedP / fovDiv) * (0.98 - scaleDelta * 0.006) + starDrift * 0.25;
-    stars += starLayer(deepSp + 9.4, 132.0, threshB, 0.85, warpAmt * 0.3, radialDir) * 0.48;
+    stars += starLayer(deepSp + 9.4, 132.0, threshB, 0.85, warpAmt * 0.3, radialDir) * 0.44;
     col += stars * (1.0 - smoothstep(22.0, 24.0, uScaleLog) * 0.32) * (1.0 + einsteinBoost * 1.4);
 
-    /* 4. Spiral Galaxy (10^21 m) */
+    /* 4. Spiral Galaxy (10^21 m — Hubble M51 + 4-Arm Galactic Disc) */
     if (uGalAlpha > 0.002) {
       vec2 gp = rot2(-0.26) * ((lensedP - uGalPos) / max(uGalRadius, 0.001));
       gp.y /= max(uGalTilt, 0.26);
       float gr = length(gp);
       if (gr < 1.65) {
         vec2 gRot = rot2(-uRealTime * 0.016 - uTime * 0.012) * gp;
-        vec2 gUv = gRot * 0.48 + 0.5;
-        vec3 gTex = vec3(0.0);
-        if (gUv.x > 0.0 && gUv.x < 1.0 && gUv.y > 0.0 && gUv.y < 1.0) {
-          vec2 edge = smoothstep(0.0, 0.14, gUv) * smoothstep(1.0, 0.86, gUv);
-          gTex = texture2D(uTexGalaxy, gUv).rgb * edge.x * edge.y;
+        vec2 m51Uv = gRot * vec2(0.42, 0.56) + 0.5;
+        vec3 m51 = vec3(0.0);
+        if (m51Uv.x > 0.0 && m51Uv.x < 1.0 && m51Uv.y > 0.0 && m51Uv.y < 1.0) {
+          vec2 edge = smoothstep(0.0, 0.16, m51Uv) * smoothstep(1.0, 0.84, m51Uv);
+          m51 = texture2D(uTexGalaxy, m51Uv).rgb * edge.x * edge.y;
         }
+        vec2 discUv = gRot * 0.44 + 0.5;
+        vec3 disc = (discUv.x > 0.0 && discUv.x < 1.0 && discUv.y > 0.0 && discUv.y < 1.0)
+          ? texture2D(uTexGalaxyDisc, discUv).rgb
+          : vec3(0.0);
         float pulse = 0.94 + 0.06 * sin(uRealTime * 0.55 - gr * 5.2);
-        vec3 gCol = pow(max(gTex, vec3(0.0)), vec3(1.18)) * 1.15 * pulse;
-        col += (gCol + vec3(1.0, 0.84, 0.58) * exp(-gr * gr * 14.0) * 0.36) * smoothstep(1.48, 0.36, gr) * uGalAlpha;
+        vec3 gCol = (pow(max(m51, vec3(0.0)), vec3(0.95)) * 1.18 + pow(max(disc, vec3(0.0)), vec3(1.05)) * 0.44) * pulse;
+        col += (gCol + vec3(1.0, 0.90, 0.72) * exp(-gr * gr * 7.2) * 0.48) * smoothstep(1.48, 0.36, gr) * uGalAlpha;
       }
     }
 
-    /* 5. 3D Cosmic Web (10^24 m) */
+    /* 5. 3D Cosmic Web (10^24 m — Unsharp-Masked Dark Matter Neural Filaments) */
     if (uWebAlpha > 0.002) {
       vec2 wp = (lensedP - uWebPos) / max(uWebRadius, 0.001);
       float wr = length(wp);
       if (wr < 2.15) {
         float edgeMask = uWebRadius > 0.55 ? smoothstep(2.12, 0.72, wr) : smoothstep(1.12, 0.18, wr);
-        vec2 uvA = fract(rot2(0.22) * (wp * 0.44) + 0.52 + vec2(uRealTime * 0.0014, -uRealTime * 0.0009) + uParallax * 0.018);
+        vec2 uvA = mirrorUv(rot2(0.18) * (wp * 0.34) + 0.52 + vec2(uRealTime * 0.0014, -uRealTime * 0.0009) + uParallax * 0.018);
         vec3 wA = texture2D(uTexWeb, uvA).rgb;
-        vec2 uvB = fract(rot2(-0.14 + sin(uRealTime * 0.04) * 0.02) * (wp * 0.62) + 0.49 + vec2(-uRealTime * 0.0021, uRealTime * 0.0013) + uParallax * 0.042);
+        vec2 uvB = mirrorUv(rot2(-0.08 + sin(uRealTime * 0.04) * 0.02) * (wp * 0.46) + 0.49 + vec2(-uRealTime * 0.0021, uRealTime * 0.0013) + uParallax * 0.042);
         vec3 wB = texture2D(uTexWeb, uvB).rgb;
-        float ridge = max(wB.r, max(wB.g, wB.b));
+        vec3 wBlur = (
+          texture2D(uTexWeb, mirrorUv(uvB + vec2(0.003, 0.0))).rgb +
+          texture2D(uTexWeb, mirrorUv(uvB - vec2(0.003, 0.0))).rgb +
+          texture2D(uTexWeb, mirrorUv(uvB + vec2(0.0, 0.003))).rgb +
+          texture2D(uTexWeb, mirrorUv(uvB - vec2(0.0, 0.003))).rgb
+        ) * 0.25;
+        vec3 wSharp = max(wB + (wB - wBlur) * 1.45, vec3(0.0));
+        float ridge = max(wSharp.r, max(wSharp.g, wSharp.b));
         float wave1 = 0.5 + 0.5 * sin(wr * 8.5 - uRealTime * 1.35 + ridge * 6.0);
         float wave2 = 0.5 + 0.5 * sin(wp.x * 5.2 + wp.y * 4.4 - uRealTime * 0.95 + wA.b * 5.0);
-        vec3 colWeb = wA * vec3(0.32, 0.30, 0.78) * 0.48 + wB * vec3(0.46, 0.66, 0.98) * 0.72
-                    + vec3(0.68, 0.62, 1.00) * pow(ridge, 1.9) * (0.35 + 0.75 * wave1 * wave2) * 0.54
-                    + vec3(1.00, 0.76, 0.42) * pow(ridge, 3.6) * (0.30 + 0.65 * wave1) * 0.52;
+        vec3 colWeb = wA * vec3(0.46, 0.44, 0.94) * 0.55 + wSharp * vec3(0.68, 0.86, 1.08) * 1.08
+                    + vec3(0.92, 0.84, 1.05) * pow(ridge, 1.55) * (0.45 + 0.85 * wave1 * wave2) * 0.72
+                    + vec3(1.00, 0.78, 0.46) * pow(ridge, 3.2) * (0.35 + 0.65 * wave1) * 0.55;
         col += colWeb * edgeMask * uWebAlpha;
       }
     }
 
-    col *= (1.0 - smoothstep(0.0, 0.35, shadowAlpha));
+    col *= (1.0 - shadowAlpha);
 
     /* 6. Relativistic Gargantua Black Hole */
     if (uBhStrength > 0.002 && rBh < rs * 7.8) {
@@ -286,11 +312,11 @@ export const BG_FRAG = `
         archIntensity = archMask * (0.40 + 0.80 * an2) * (0.64 + 0.36 * sin(qr * 15.0 + an1 * 5.2 - bhFlow * 0.5)) * doppler * 0.92;
       }
 
-      vec3 frontEmission = diskCol * diskIntensity * frontCross * 0.78;
-      vec3 extEmission = diskCol * (diskIntensity * (1.0 - frontCross) * 0.78 + archIntensity * 0.72)
-                       + mix(colMid, colHot, smoothstep(0.45, 1.45, doppler)) * (photonRing * 0.72 + secondaryRing * 0.65) * doppler
-                       + vec3(0.98, 0.52, 0.18) * (innerGlow * 0.72 + exp(-max(qr - 1.0, 0.0) * 0.85) * 0.10 * doppler);
-      col += (frontEmission + extEmission * smoothstep(0.96, 1.03, qr)) * uBhStrength;
+      vec3 frontEmission = diskCol * diskIntensity * frontCross;
+      vec3 extEmission = diskCol * (diskIntensity * (1.0 - frontCross) + archIntensity)
+                       + mix(colMid, colHot, smoothstep(0.45, 1.45, doppler)) * (photonRing + secondaryRing) * doppler
+                       + vec3(0.98, 0.56, 0.22) * (innerGlow + exp(-max(qr - 1.0, 0.0) * 0.85) * 0.14 * doppler);
+      col += (frontEmission + extEmission * smoothstep(0.94, 1.02, qr)) * uBhStrength;
     }
 
     col = (col * (2.51 * col + 0.03)) / (col * (2.43 * col + 0.59) + 0.14);

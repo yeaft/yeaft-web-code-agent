@@ -9,6 +9,7 @@ export default {
     constants: { type: Object, required: true },
     agents: { type: Array, default: () => [] },
     agentToPlanet: { type: Object, default: () => ({}) },
+    rendererMode: { type: String, default: 'webgl2' },
   },
   emits: ['update-constant', 'assign-planet', 'open-settings', 'open-agent-settings'],
   template: `
@@ -21,7 +22,10 @@ export default {
     >
       <div class="cosmos-const-head">
         <span class="cosmos-const-title">{{ $t('cosmos.constants.title') }}</span>
-        <span class="cosmos-const-sym">Λ · G · c</span>
+        <span class="cosmos-const-sym">
+          <span class="cosmos-const-engine-badge">{{ rendererMode === '2d' ? $t('cosmos.constants.renderer2D') : $t('cosmos.constants.rendererWebGL') }}</span>
+          <span>Λ · G · c</span>
+        </span>
       </div>
 
       <div class="cosmos-const-slider">
@@ -135,6 +139,19 @@ export default {
           :aria-checked="constants.eventsAutoEnabled ? 'true' : 'false'"
           @click="$emit('update-constant', { key: 'eventsAutoEnabled', value: !constants.eventsAutoEnabled })"
         ></button>
+      </div>
+
+      <div class="cosmos-const-toggle-row">
+        <span>{{ $t('cosmos.constants.renderQuality') }}</span>
+        <select
+          class="cosmos-const-select"
+          :value="constants.renderQuality || 'auto'"
+          @change="$emit('update-constant', { key: 'renderQuality', value: $event.target.value })"
+        >
+          <option value="auto">{{ $t('cosmos.constants.renderAuto') }}</option>
+          <option value="high">{{ $t('cosmos.constants.renderHigh') }}</option>
+          <option value="lite">{{ $t('cosmos.constants.renderLite') }}</option>
+        </select>
       </div>
 
       <!-- Planetary Orbit Bindings -->
