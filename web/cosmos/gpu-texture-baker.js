@@ -451,22 +451,26 @@ const BAKE_FRAG = `
 `;
 
 const MAP_SPECS = [
-  { key: 'sun',          id: 0,  w: 512, h: 256, wrapS: true },
-  { key: 'mercury',      id: 1,  w: 512, h: 256, wrapS: true },
-  { key: 'venus',        id: 2,  w: 512, h: 256, wrapS: true },
-  { key: 'earth_day',    id: 3,  w: 768, h: 384, wrapS: true },
-  { key: 'earth_night',  id: 4,  w: 512, h: 256, wrapS: true },
-  { key: 'earth_clouds', id: 5,  w: 512, h: 256, wrapS: true },
-  { key: 'mars',         id: 6,  w: 512, h: 256, wrapS: true },
-  { key: 'jupiter',      id: 7,  w: 512, h: 256, wrapS: true },
-  { key: 'saturn',       id: 8,  w: 512, h: 256, wrapS: true },
-  { key: 'saturn_ring',  id: 9,  w: 512, h: 4,   wrapS: false },
-  { key: 'uranus',       id: 10, w: 256, h: 128, wrapS: true },
-  { key: 'neptune',      id: 11, w: 256, h: 128, wrapS: true },
+  { key: 'sun',          id: 0,  w: 512,  h: 256, wrapS: true },
+  { key: 'mercury',      id: 1,  w: 512,  h: 256, wrapS: true },
+  { key: 'venus',        id: 2,  w: 512,  h: 256, wrapS: true },
+  { key: 'earth_day',    id: 3,  w: 1024, h: 512, wrapS: true },
+  { key: 'earth_night',  id: 4,  w: 512,  h: 256, wrapS: true },
+  { key: 'earth_clouds', id: 5,  w: 512,  h: 256, wrapS: true },
+  { key: 'mars',         id: 6,  w: 512,  h: 256, wrapS: true },
+  { key: 'jupiter',      id: 7,  w: 512,  h: 256, wrapS: true },
+  { key: 'saturn',       id: 8,  w: 512,  h: 256, wrapS: true },
+  { key: 'saturn_ring',  id: 9,  w: 512,  h: 4,   wrapS: false },
+  { key: 'uranus',       id: 10, w: 256,  h: 128, wrapS: true },
+  { key: 'neptune',      id: 11, w: 256,  h: 128, wrapS: true },
   { key: 'milky',        id: 12, w: 1024, h: 512, wrapS: true },
-  { key: 'galaxy',       id: 13, w: 512, h: 512, wrapS: false },
-  { key: 'web',          id: 14, w: 384, h: 384, wrapS: true, wrapT: true },
+  { key: 'galaxy',       id: 13, w: 512,  h: 512, wrapS: false },
+  { key: 'web',          id: 14, w: 512,  h: 512, wrapS: true, wrapT: true },
 ];
+
+function isPowerOfTwo(n) {
+  return n > 0 && (n & (n - 1)) === 0;
+}
 
 function compile(gl, type, src) {
   const sh = gl.createShader(type);
@@ -518,16 +522,19 @@ export function bakeProceduralWebGLTextures(gl, quadBuf, scaleMul = 1.0) {
   gl.vertexAttribPointer(aPos, 2, gl.FLOAT, false, 0, 0);
   gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
 
+  const isWebGL2 = typeof WebGL2RenderingContext !== 'undefined' && gl instanceof WebGL2RenderingContext;
+
   for (const spec of MAP_SPECS) {
     const w = Math.max(64, Math.round(spec.w * scaleMul));
     const h = spec.h <= 4 ? spec.h : Math.max(32, Math.round(spec.h * scaleMul));
+    const canRepeat = isWebGL2 || (isPowerOfTwo(w) && isPowerOfTwo(h));
     const tex = gl.createTexture();
     gl.bindTexture(gl.TEXTURE_2D, tex);
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, w, h, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, spec.wrapS ? gl.REPEAT : gl.CLAMP_TO_EDGE);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, spec.wrapT ? gl.REPEAT : gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, (spec.wrapS && canRepeat) ? gl.REPEAT : gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, (spec.wrapT && canRepeat) ? gl.REPEAT : gl.CLAMP_TO_EDGE);
 
     gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tex, 0);
     gl.viewport(0, 0, w, h);

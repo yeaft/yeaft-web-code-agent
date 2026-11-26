@@ -1,5 +1,7 @@
 // @vitest-environment happy-dom
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import * as Vue from 'vue';
+import { flushPromises, mount } from '@vue/test-utils';
 import {
   readUiMode,
   writeUiMode,
@@ -26,6 +28,8 @@ import {
   pickRandomEventIndex,
 } from '../../web/cosmos/events-controller.js';
 import { projectAgentsForCosmos } from '../../web/cosmos/agent-projection.js';
+import { bakeProceduralWebGLTextures } from '../../web/cosmos/gpu-texture-baker.js';
+import { createCosmosEngine } from '../../web/cosmos/gl-engine.js';
 
 function createMemoryStorage() {
   const map = new Map();
@@ -306,5 +310,286 @@ describe('Cosmos Real Agent & Session Projection', () => {
     expect(projected.mac.sessions[1].id).toBe('s-run');
     expect(projected.mac.sessions[1].summary).toContain('Adjusted procedural Earth shader');
     expect(projected.ci.status).toBe('offline');
+  });
+});
+
+describe('Cosmos Component & WebGL Review Regressions', () => {
+  let wrapper = null;
+
+  afterEach(() => {
+    wrapper?.unmount();
+    wrapper = null;
+    vi.useRealTimers();
+  });
+
+  it('scopes Quick Composer models per target Agent, fetches llm_config, and guards planet switch during in-flight routing', async () => {
+    vi.stubGlobal('Vue', Vue);
+    const sendWsMessage = vi.fn(() => true);
+    let resolveRoute;
+    const sendYeaftAutoRouteMessageMock = vi.fn(() => new Promise((resolve) => { resolveRoute = resolve; }));
+
+    const store = Vue.reactive({
+      currentAgent: 'ag-mac',
+      yeaftModel: 'copilot/mac-only-model',
+      yeaftModelEffort: 'high',
+      yeaftAvailableModels: [{ id: 'copilot/mac-only-model', label: 'mac-only', provider: 'copilot', effortOptions: ['high'] }],
+      llmConfig: {},
+      sendWsMessage,
+      sendYeaftAutoRouteMessage: sendYeaftAutoRouteMessageMock,
+    });
+    vi.stubGlobal('Pinia', {
+      defineStore: () => () => ({}),
+      useChatStore: () => store,
+      useSessionsStore: () => ({}),
+      useVpStore: () => ({}),
+    });
+
+    const { default: CosmosQuickComposer } = await import('../../web/components/cosmos/CosmosQuickComposer.js');
+
+    const cloudAgent = { id: 'ag-cloud', name: 'Cloud-Linux', online: true, liveSessions: [], sessions: [] };
+    const macAgent = { id: 'ag-mac', name: 'MacBook-Pro', online: true, liveSessions: [], sessions: [] };
+
+    wrapper = mount(CosmosQuickComposer, {
+      props: { agent: cloudAgent, planetId: 'saturn' },
+      global: {
+        config: { globalProperties: { $t: (k) => k } },
+        stubs: { ChatInput: true },
+      },
+    });
+
+    // Must request target agent's LLM config and NOT bleed ag-mac's model
+    expect(sendWsMessage).toHaveBeenCalledWith({ type: 'get_llm_config', agentId: 'ag-cloud' });
+    expect(wrapper.vm.selectedModel).toBe('');
+    expect(wrapper.vm.modelRows).toEqual([]);
+
+    // Start auto-route send on ag-cloud -> quickSend must be null (no cross-agent model override)
+    const sendPromise = wrapper.vm.handleQuickSend('Deploy worker');
+    expect(sendYeaftAutoRouteMessageMock).toHaveBeenCalledWith(expect.objectContaining({
+      agentId: 'ag-cloud',
+      quickSend: null,
+    }));
+    expect(wrapper.vm.routing).toBe(true);
+
+    // Switch planet to ag-mac while ag-cloud's auto-route is still in flight
+    await wrapper.setProps({ agent: macAgent, planetId: 'earth' });
+    await flushPromises();
+    expect(wrapper.vm.routing).toBe(false);
+    expect(wrapper.vm.statusBanner).toBeNull();
+    expect(wrapper.vm.selectedModel).toBe('copilot/mac-only-model');
+
+    // Now resolve the stale ag-cloud route: must NOT overwrite ag-mac's statusBanner
+    // and MUST emit 'routed' with the original captured ag-cloud / saturn identity.
+    resolveRoute({ ok: true, sessionId: 'sess-cloud-1', decision: 'created', title: 'Worker Deploy' });
+    await sendPromise;
+    await flushPromises();
+
+    expect(wrapper.vm.statusBanner).toBeNull();
+    const routed = wrapper.emitted('routed');
+    expect(routed).toHaveLength(1);
+    expect(routed[0][0]).toMatchObject({ agentId: 'ag-cloud', planetId: 'saturn' });
+  });
+
+  it('wires CosmosConversationDrawer search/outline to real store APIs and enforces agent-scoped session lookup', async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal('Vue', Vue);
+
+    const outlineState = Vue.reactive({ results: [{ messageId: 'm-1', preview: 'hello' }], loading: false, hasMore: false, error: null });
+    const searchYeaftHistory = vi.fn(() => true);
+    const loadYeaftHistoryWindow = vi.fn();
+    const revealLease = { token: 'lease-1' };
+    const beginYeaftHistoryReveal = vi.fn(() => revealLease);
+    const revealYeaftHistoryResult = vi.fn().mockResolvedValue({ messageId: 'm-1', found: true });
+    const finishYeaftHistoryReveal = vi.fn();
+
+    const store = Vue.reactive({
+      currentView: 'yeaft',
+      currentAgent: 'ag-earth',
+      yeaftActiveSessionFilter: 'sess-shared',
+      yeaftAvailableModels: [],
+      yeaftModel: '',
+      yeaftModelEffort: '',
+      yeaftHistorySearchState: { query: '', senderKey: 'user', loading: false, results: [], hasMore: false },
+      workbenchExpanded: false,
+      getYeaftHistoryOutlineState: vi.fn(() => outlineState),
+      searchYeaftHistory,
+      loadYeaftHistoryWindow,
+      beginYeaftHistoryReveal,
+      revealYeaftHistoryResult,
+      finishYeaftHistoryReveal,
+      hasCapability: (cap) => cap === 'session_history_window_prefetch',
+    });
+
+    const sessionById = vi.fn((sid, agentId) => (
+      sid === 'sess-shared' && agentId === 'ag-earth'
+        ? { id: 'sess-shared', name: 'Earth Session', agentId: 'ag-earth', roster: [{ id: 'vp-1' }] }
+        : null
+    ));
+
+    vi.stubGlobal('Pinia', {
+      defineStore: () => () => ({}),
+      useChatStore: () => store,
+      useSessionsStore: () => ({ activeSessionId: 'sess-shared', sessionById }),
+      useVpStore: () => ({}),
+    });
+
+    const { default: CosmosConversationDrawer } = await import('../../web/components/cosmos/CosmosConversationDrawer.js');
+
+    const revealMessage = vi.fn(() => true);
+    wrapper = mount(CosmosConversationDrawer, {
+      props: {
+        agent: { id: 'ag-earth', name: 'Earth', online: true, sessions: [] },
+        planetId: 'earth',
+        allAgents: [],
+      },
+      global: {
+        config: { globalProperties: { $t: (k) => k } },
+        stubs: {
+          MessageList: { template: '<div />', methods: { revealMessage } },
+          ChatInput: true,
+          SessionSceneSelect: true,
+          WorkbenchPanel: true,
+          YeaftConversationOutline: { template: '<div />', methods: { focus() {}, restoreOlderScroll() {} } },
+        },
+      },
+    });
+
+    // Strict (agentId, sessionId) scoping: every sessionById call must pass 'ag-earth'
+    expect(wrapper.vm.activeGroup?.id).toBe('sess-shared');
+    expect(sessionById.mock.calls.every(([, ag]) => ag === 'ag-earth')).toBe(true);
+    expect(wrapper.vm.historyOutlineState.results).toHaveLength(1);
+
+    // Toggle search opens outline via store.searchYeaftHistory('', { senderKey: 'user' })
+    wrapper.vm.toggleSearch();
+    expect(wrapper.vm.searchOpen).toBe(true);
+    expect(searchYeaftHistory).toHaveBeenCalledWith('', { senderKey: 'user' });
+
+    // Debounced query search
+    wrapper.vm.onSearchQuery('shader');
+    vi.advanceTimersByTime(230);
+    expect(searchYeaftHistory).toHaveBeenCalledWith('shader', { senderKey: 'user' });
+
+    // Preview & select use real prefetch + revealOutlineResult single-object API
+    const item = { messageId: 'm-1', seq: 1 };
+    wrapper.vm.onSearchPreview(item);
+    expect(loadYeaftHistoryWindow).toHaveBeenCalledWith(item);
+
+    await wrapper.vm.onSearchSelect(item);
+    expect(beginYeaftHistoryReveal).toHaveBeenCalledWith(item);
+    expect(revealYeaftHistoryResult).toHaveBeenCalledWith(item, revealLease);
+    expect(revealMessage).toHaveBeenCalled();
+    expect(finishYeaftHistoryReveal).toHaveBeenCalledWith(revealLease);
+  });
+
+  it('bakes WebGL 1 POT-safe procedural textures and handles webglcontextlost / webglcontextrestored cleanly', () => {
+    const texCalls = [];
+    const wrapCalls = [];
+    let currentTex = null;
+    let lost = false;
+    let drawArraysCount = 0;
+
+    const fakeGl = {
+      VERTEX_SHADER: 1, FRAGMENT_SHADER: 2, COMPILE_STATUS: 3, LINK_STATUS: 4,
+      ARRAY_BUFFER: 5, STATIC_DRAW: 6, DYNAMIC_DRAW: 7, FLOAT: 8, TRIANGLES: 9, POINTS: 10,
+      TEXTURE_2D: 11, TEXTURE0: 12, RGBA: 13, UNSIGNED_BYTE: 14, LINEAR: 15,
+      TEXTURE_MIN_FILTER: 16, TEXTURE_MAG_FILTER: 17, TEXTURE_WRAP_S: 18, TEXTURE_WRAP_T: 19,
+      REPEAT: 20, CLAMP_TO_EDGE: 21, FRAMEBUFFER: 22, COLOR_ATTACHMENT0: 23,
+      BLEND: 24, ONE: 25, ONE_MINUS_SRC_ALPHA: 26, RENDERER: 27,
+      createShader: () => ({}),
+      shaderSource: () => {},
+      compileShader: () => {},
+      getShaderParameter: () => true,
+      getShaderInfoLog: () => '',
+      deleteShader: () => {},
+      createProgram: () => ({}),
+      attachShader: () => {},
+      linkProgram: () => {},
+      getProgramParameter: () => true,
+      getProgramInfoLog: () => '',
+      deleteProgram: () => {},
+      getAttribLocation: () => 0,
+      getUniformLocation: () => ({}),
+      createBuffer: () => ({}),
+      bindBuffer: () => {},
+      bufferData: () => {},
+      deleteBuffer: () => {},
+      createFramebuffer: () => ({}),
+      bindFramebuffer: () => {},
+      framebufferTexture2D: () => {},
+      deleteFramebuffer: () => {},
+      createTexture: () => { currentTex = { w: 0, h: 0 }; texCalls.push(currentTex); return currentTex; },
+      bindTexture: (_t, tex) => { currentTex = tex; },
+      deleteTexture: () => {},
+      texImage2D: (_t, _l, _i, w, h) => { if (currentTex) { currentTex.w = w; currentTex.h = h; } },
+      texParameteri: (_t, pname, param) => {
+        if ((pname === 18 || pname === 19) && currentTex) {
+          wrapCalls.push({ w: currentTex.w, h: currentTex.h, param });
+        }
+      },
+      useProgram: () => {},
+      enable: () => {},
+      disable: () => {},
+      blendFunc: () => {},
+      enableVertexAttribArray: () => {},
+      disableVertexAttribArray: () => {},
+      vertexAttribPointer: () => {},
+      viewport: () => {},
+      activeTexture: () => {},
+      uniform1i: () => {},
+      uniform1f: () => {},
+      uniform2f: () => {},
+      uniform3f: () => {},
+      uniform4f: () => {},
+      drawArrays: () => { drawArraysCount += 1; },
+      getParameter: () => 'Mock GPU',
+      getExtension: () => null,
+      isContextLost: () => lost,
+    };
+
+    const baked = bakeProceduralWebGLTextures(fakeGl, {}, 1.0);
+    expect(Object.keys(baked)).toHaveLength(15);
+    const isPot = (n) => n > 0 && (n & (n - 1)) === 0;
+    for (const c of wrapCalls) {
+      if (c.param === fakeGl.REPEAT) {
+        expect(isPot(c.w) && isPot(c.h)).toBe(true);
+      }
+    }
+
+    const listeners = {};
+    const glCanvas = {
+      width: 0, height: 0, clientWidth: 640, clientHeight: 360,
+      getContext: (kind) => (kind === 'webgl' ? fakeGl : null),
+      addEventListener: (ev, fn) => { listeners[ev] = fn; },
+      removeEventListener: (ev, fn) => { if (listeners[ev] === fn) delete listeners[ev]; },
+    };
+    const hudCanvas = {
+      width: 0, height: 0,
+      getContext: () => ({ setTransform: () => {}, clearRect: () => {} }),
+    };
+
+    const engine = createCosmosEngine(glCanvas, hudCanvas);
+    expect(engine.isWebGL).toBe(true);
+    expect(typeof listeners.webglcontextlost).toBe('function');
+    expect(typeof listeners.webglcontextrestored).toBe('function');
+
+    // Simulate GPU context loss: preventDefault() must be called and GL draws skipped
+    const lostEvent = { defaultPrevented: false, preventDefault() { this.defaultPrevented = true; } };
+    lost = true;
+    listeners.webglcontextlost(lostEvent);
+    expect(lostEvent.defaultPrevented).toBe(true);
+
+    const drawsBeforeLost = drawArraysCount;
+    const hudDraw = vi.fn();
+    engine.renderFrame({ hudDraw });
+    expect(drawArraysCount).toBe(drawsBeforeLost);
+    expect(hudDraw).toHaveBeenCalledTimes(1);
+
+    // Simulate GPU context restored: resources re-bake and GL rendering resumes
+    lost = false;
+    listeners.webglcontextrestored();
+    expect(drawArraysCount).toBeGreaterThan(drawsBeforeLost);
+
+    engine.destroy();
+    expect(listeners.webglcontextlost).toBeUndefined();
+    expect(listeners.webglcontextrestored).toBeUndefined();
   });
 });

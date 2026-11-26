@@ -43,7 +43,6 @@ export default {
     'close',
     'select-session',
     'create-session',
-    'open-session-settings',
     'open-llm-config',
     'toggle-widen',
     'message-sent',
@@ -194,6 +193,7 @@ export default {
       <!-- Inline Conversation Outline Search -->
       <YeaftConversationOutline
         v-if="searchOpen && isYeaftView && activeGroup"
+        ref="historySearchRef"
         :outline-state="historyOutlineState"
         :search-state="store.yeaftHistorySearchState"
         :active-message-id="searchActiveMessageId"
@@ -204,7 +204,7 @@ export default {
         @select="onSearchSelect"
         @load-older="loadOlderOutline"
         @load-more-search="loadMoreSearch"
-        @close="searchOpen = false"
+        @close="closeSearch"
       />
 
       <!-- Body Stack: Pure Conversation Stream + Slide-Over Real Workbench -->
@@ -342,9 +342,14 @@ export default {
     const { proxy } = Vue.getCurrentInstance();
     const $t = (k, p) => (proxy?.$t ? proxy.$t(k, p) : k);
 
+    const DEFAULT_HISTORY_SENDER = 'user';
     const historyOpen = Vue.ref(false);
     const searchOpen = Vue.ref(false);
     const searchActiveMessageId = Vue.ref('');
+    const historySearchQuery = Vue.ref('');
+    const historySearchRef = Vue.ref(null);
+    let historySearchTimer = null;
+    let stopLoadOlderWatch = null;
     const composerMenuOpen = Vue.ref(null);
     const messageQuote = Vue.ref(null);
     const messageListRef = Vue.ref(null);
@@ -356,10 +361,8 @@ export default {
     const activeGroup = Vue.computed(() => {
       if (!isYeaftView.value) return null;
       const sid = store.yeaftActiveSessionFilter || sessionsStore?.activeSessionId || null;
-      if (!sid) return null;
-      return sessionsStore?.sessionById?.(sid, props.agent.id)
-        || sessionsStore?.sessionById?.(sid)
-        || null;
+      if (!sid || !props.agent?.id) return null;
+      return sessionsStore?.sessionById?.(sid, props.agent.id) || null;
     });
 
     const hasSelectedSession = Vue.computed(() => {
@@ -432,7 +435,7 @@ export default {
     });
 
     const historyOutlineState = Vue.computed(() => (
-      store.yeaftHistoryOutlineState || { results: [], loading: false, hasMore: false, error: null }
+      store.getYeaftHistoryOutlineState?.() || { results: [], loading: false, hasMore: false, error: null }
     ));
 
     const modelRows = Vue.computed(() => buildModelSelectionRows(store.yeaftAvailableModels));
@@ -469,7 +472,7 @@ export default {
 
     function pickSession(agentId, session) {
       historyOpen.value = false;
-      searchOpen.value = false;
+      closeSearch();
       emit('select-session', { agentId, session });
     }
 
@@ -482,46 +485,121 @@ export default {
       store.toggleWorkbench?.();
     }
 
-    function toggleSearch() {
-      searchOpen.value = !searchOpen.value;
-      if (searchOpen.value && activeGroup.value) {
-        store.requestYeaftHistoryOutline?.({
-          agentId: props.agent.id,
-          sessionId: activeGroup.value.id,
-        });
+    function clearSearchTimers() {
+      if (historySearchTimer) {
+        clearTimeout(historySearchTimer);
+        historySearchTimer = null;
       }
+      if (stopLoadOlderWatch) {
+        stopLoadOlderWatch();
+        stopLoadOlderWatch = null;
+      }
+    }
+
+    function resetHistorySearchState(senderKey = DEFAULT_HISTORY_SENDER) {
+      store.yeaftHistorySearchState = {
+        requestId: null,
+        agentId: props.agent?.id || store.currentAgent || null,
+        sessionId: activeGroup.value?.id || store.yeaftActiveSessionFilter || null,
+        query: '',
+        senderKey,
+        loading: false,
+        results: [],
+        hasMore: false,
+        nextBeforeSeq: null,
+        error: null,
+      };
+    }
+
+    function closeSearch() {
+      clearSearchTimers();
+      historySearchQuery.value = '';
+      resetHistorySearchState(DEFAULT_HISTORY_SENDER);
+      searchOpen.value = false;
+      searchActiveMessageId.value = '';
+    }
+
+    function openSearch() {
+      clearSearchTimers();
+      historySearchQuery.value = '';
+      resetHistorySearchState(DEFAULT_HISTORY_SENDER);
+      searchOpen.value = true;
+      store.searchYeaftHistory?.('', { senderKey: DEFAULT_HISTORY_SENDER });
+      Vue.nextTick(() => historySearchRef.value?.focus?.());
+    }
+
+    function toggleSearch() {
+      if (searchOpen.value) closeSearch();
+      else if (activeGroup.value) openSearch();
     }
 
     function onSearchQuery(query) {
       if (!activeGroup.value) return;
-      store.requestYeaftHistorySearch?.({
-        agentId: props.agent.id,
-        sessionId: activeGroup.value.id,
-        query,
-      });
+      historySearchQuery.value = query;
+      if (historySearchTimer) clearTimeout(historySearchTimer);
+      searchActiveMessageId.value = '';
+      historySearchTimer = setTimeout(() => {
+        historySearchTimer = null;
+        const senderKey = store.yeaftHistorySearchState?.senderKey ?? DEFAULT_HISTORY_SENDER;
+        store.searchYeaftHistory?.(historySearchQuery.value, { senderKey });
+      }, 220);
     }
 
-    function onSearchPreview(item) {
-      if (!item) return;
-      revealOutlineResult(item, { store, messageList: messageListRef.value });
+    function onSearchPreview(result) {
+      if (!result) return;
+      if (store.hasCapability?.('session_history_window_prefetch')) {
+        store.loadYeaftHistoryWindow?.(result);
+      }
     }
 
-    function onSearchSelect(item) {
-      if (!item) return;
-      searchActiveMessageId.value = item.messageId || '';
-      revealOutlineResult(item, { store, messageList: messageListRef.value });
-      searchOpen.value = false;
+    function onSearchSelect(result) {
+      if (!result) return null;
+      searchActiveMessageId.value = result.messageId || '';
+      const revealLease = store.beginYeaftHistoryReveal?.(result) || null;
+      const isMobileViewport = typeof window !== 'undefined' && window.innerWidth <= 768;
+      return revealOutlineResult({
+        result,
+        revealWindow: (candidate) => store.revealYeaftHistoryResult?.(candidate, revealLease),
+        nextTick: () => Vue.nextTick(),
+        revealMessage: (target) => messageListRef.value?.revealMessage?.(target),
+        isMobile: isMobileViewport,
+        closeOutline: closeSearch,
+      }).finally(() => store.finishYeaftHistoryReveal?.(revealLease));
     }
 
-    function loadOlderOutline() {
+    function loadOlderOutline(scrollSnapshot) {
       if (!activeGroup.value) return;
-      store.loadMoreYeaftHistoryOutline?.({ agentId: props.agent.id, sessionId: activeGroup.value.id });
+      if (!store.searchYeaftHistory?.('', { append: true, senderKey: DEFAULT_HISTORY_SENDER })) return;
+      if (stopLoadOlderWatch) {
+        stopLoadOlderWatch();
+        stopLoadOlderWatch = null;
+      }
+      stopLoadOlderWatch = Vue.watch(
+        () => historyOutlineState.value.loading,
+        (loading) => {
+          if (loading) return;
+          if (stopLoadOlderWatch) {
+            stopLoadOlderWatch();
+            stopLoadOlderWatch = null;
+          }
+          historySearchRef.value?.restoreOlderScroll?.(scrollSnapshot);
+        },
+      );
     }
 
     function loadMoreSearch() {
       if (!activeGroup.value) return;
-      store.loadMoreYeaftHistorySearch?.({ agentId: props.agent.id, sessionId: activeGroup.value.id });
+      const q = store.yeaftHistorySearchState?.query ?? historySearchQuery.value;
+      const senderKey = store.yeaftHistorySearchState?.senderKey ?? DEFAULT_HISTORY_SENDER;
+      store.searchYeaftHistory?.(q, { append: true, senderKey });
     }
+
+    Vue.watch(
+      () => `${props.agent?.id || ''}\u001f${activeGroup.value?.id || ''}`,
+      () => {
+        if (searchOpen.value || historySearchTimer) closeSearch();
+      },
+    );
 
     function toggleComposerMenu(name) {
       composerMenuOpen.value = composerMenuOpen.value === name ? null : name;
@@ -596,13 +674,17 @@ export default {
     };
 
     Vue.onMounted(() => document.addEventListener('click', onDocClick));
-    Vue.onBeforeUnmount(() => document.removeEventListener('click', onDocClick));
+    Vue.onBeforeUnmount(() => {
+      clearSearchTimers();
+      document.removeEventListener('click', onDocClick);
+    });
 
     return {
       store,
       historyOpen,
       searchOpen,
       searchActiveMessageId,
+      historySearchRef,
       composerMenuOpen,
       messageQuote,
       messageListRef,
@@ -634,6 +716,7 @@ export default {
       refreshHistory,
       toggleWorkbench,
       toggleSearch,
+      closeSearch,
       onSearchQuery,
       onSearchPreview,
       onSearchSelect,

@@ -44,7 +44,6 @@ import CosmosEventsOverlay from './CosmosEventsOverlay.js';
 import SettingsPanel from '../SettingsPanel.js';
 import AgentSettingsPanel from '../AgentSettingsPanel.js';
 import SessionCreateModal from '../SessionCreateModal.js';
-import SessionSettingsModal from '../SessionSettingsModal.js';
 
 export default {
   name: 'CosmosPage',
@@ -56,7 +55,6 @@ export default {
     SettingsPanel,
     AgentSettingsPanel,
     SessionCreateModal,
-    SessionSettingsModal,
   },
   template: `
     <div
@@ -416,7 +414,6 @@ export default {
       <SettingsPanel v-if="settingsModal.open" :visible="settingsModal.open" :initial-tab="settingsModal.tab" :initial-sub-tab="settingsModal.subTab" @close="settingsModal.open = false" />
       <AgentSettingsPanel v-if="agentSettingsModal.open" :initial-agent-id="agentSettingsModal.agentId" :initial-category="agentSettingsModal.category" @close="agentSettingsModal.open = false" />
       <SessionCreateModal v-if="sessionCreateModal.open" :initial-agent-id="sessionCreateModal.agentId" @close="sessionCreateModal.open = false" @created="onSessionCreated" />
-      <SessionSettingsModal v-if="sessionSettingsModal.open && sessionSettingsModal.sessionId" :group-id="sessionSettingsModal.sessionId" :agent-id="sessionSettingsModal.agentId" @close="sessionSettingsModal.open = false" />
     </div>
   `,
   setup() {
@@ -467,7 +464,6 @@ export default {
     const settingsModal = Vue.reactive({ open: false, tab: 'general', subTab: '' });
     const agentSettingsModal = Vue.reactive({ open: false, agentId: null, category: 'llm' });
     const sessionCreateModal = Vue.reactive({ open: false, agentId: null });
-    const sessionSettingsModal = Vue.reactive({ open: false, sessionId: null, agentId: null });
 
     const dragActive = Vue.ref(false);
     const dragFromPlanetId = Vue.ref(null);
@@ -568,6 +564,7 @@ export default {
     let hoverHideTimer = null;
     let hoverAnchoredPlanetId = null;
     let hoverEnterPointer = { x: 0, y: 0 };
+    let waitJumpTimer = null;
     let nowInterval = null;
 
     function clearHoverHideTimer() {
@@ -816,7 +813,7 @@ export default {
     }
 
     function onStageWheel(e) {
-      if (settingsModal.open || agentSettingsModal.open || sessionCreateModal.open || sessionSettingsModal.open) return;
+      if (settingsModal.open || agentSettingsModal.open || sessionCreateModal.open) return;
       if (e.target.closest('.cosmos-drawer, .cosmos-quick-composer, .cosmos-constants-popover, .cosmos-hover-card, .cosmos-event-almanac, .cosmos-book-popover')) return;
       e.preventDefault();
       if (eventSim.active?.observing) {
@@ -883,9 +880,16 @@ export default {
     function jumpToWaitingAgent() {
       const ag = waitingAgent.value;
       jumpToScale(13.0);
+      if (waitJumpTimer) {
+        clearTimeout(waitJumpTimer);
+        waitJumpTimer = null;
+      }
       if (ag) {
         const waitSession = ag.liveSessions.find((s) => s.status === 'waiting') || ag.sessions[0] || null;
-        setTimeout(() => openSessionInDrawer(ag.id, waitSession), 320);
+        waitJumpTimer = setTimeout(() => {
+          waitJumpTimer = null;
+          openSessionInDrawer(ag.id, waitSession);
+        }, 320);
       }
     }
 
@@ -948,7 +952,8 @@ export default {
     }
     function onSessionCreated(created) {
       sessionCreateModal.open = false;
-      if (created?.agentId && created?.sessionId) openSessionInDrawer(created.agentId, { id: created.sessionId });
+      const sid = created?.sessionId || created?.id;
+      if (created?.agentId && sid) openSessionInDrawer(created.agentId, { id: sid });
     }
     function abandonCosmos() {
       constantsOpen.value = false;
@@ -979,7 +984,6 @@ export default {
       if (settingsModal.open) { settingsModal.open = false; return; }
       if (agentSettingsModal.open) { agentSettingsModal.open = false; return; }
       if (sessionCreateModal.open) { sessionCreateModal.open = false; return; }
-      if (sessionSettingsModal.open) { sessionSettingsModal.open = false; return; }
       if (emptyPlanetMenu.value) { emptyPlanetMenu.value = null; return; }
       if (constantsOpen.value) { constantsOpen.value = false; return; }
       if (bookCreateOpen.value) { bookCreateOpen.value = false; return; }
@@ -1054,6 +1058,10 @@ export default {
       clearTimeout(softTimer);
       clearTimeout(toastTimer);
       clearTimeout(hoverHideTimer);
+      if (waitJumpTimer) {
+        clearTimeout(waitJumpTimer);
+        waitJumpTimer = null;
+      }
       clearInterval(nowInterval);
       window.removeEventListener('pointermove', onGlobalPointerMove);
       window.removeEventListener('pointerup', onGlobalPointerUp);
@@ -1083,7 +1091,7 @@ export default {
       camOrbiting, currentBand, projectedAgentList, assignments, agentsByPlanet, focusedPlanetId, waitingAgent,
       dragActive, dragFromPlanetId, dragOverPlanetId, dragX, dragY, dragIsSwap, dragGhostText,
       bookCreateOpen, bookDraftTitle, bookDraftDomain, toast,
-      settingsModal, agentSettingsModal, sessionCreateModal, sessionSettingsModal,
+      settingsModal, agentSettingsModal, sessionCreateModal,
       eventActiveSnapshot, eventNextIndex, eventCountdownSec, isObservingEvent,
       planetTagClass, planetPipClass,
       onCanvasPointerDown, resetCamera, onPlanetPointerDown, onPlanetEnter, onPlanetLeave,

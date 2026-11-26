@@ -130,93 +130,133 @@ export function createCosmosEngine(glCanvas, hudCanvas) {
     return createFallback2DEngine(glCanvas, hudCanvas);
   }
 
-  const bgProg = createProgram(gl, BG_VERT, BG_FRAG);
-  const bodyProg = createProgram(gl, BODY_VERT, BODY_FRAG);
-  const ptProg = createProgram(gl, PARTICLE_VERT, PARTICLE_FRAG);
-  if (!bgProg || !bodyProg || !ptProg) {
-    if (bgProg) gl.deleteProgram(bgProg);
-    if (bodyProg) gl.deleteProgram(bodyProg);
-    if (ptProg) gl.deleteProgram(ptProg);
-    return createFallback2DEngine(glCanvas, hudCanvas);
-  }
-
-  const quadBuf = gl.createBuffer();
-  gl.bindBuffer(gl.ARRAY_BUFFER, quadBuf);
-  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, -1, 1, -1, 1, 1, -1, 1, 1]), gl.STATIC_DRAW);
-
-  const ptBuf = gl.createBuffer();
   const isSoftware = detectSoftwareRenderer(gl);
 
-  // Zero external downloads: bake all 15 procedural astronomical textures directly on GPU (~30ms)
-  const textures = bakeProceduralWebGLTextures(gl, quadBuf, isSoftware ? 0.5 : 1.0);
-  if (!textures) {
-    gl.deleteBuffer(quadBuf);
-    gl.deleteBuffer(ptBuf);
-    gl.deleteProgram(bgProg);
-    gl.deleteProgram(bodyProg);
-    gl.deleteProgram(ptProg);
-    return createFallback2DEngine(glCanvas, hudCanvas);
+  let bgProg = null;
+  let bodyProg = null;
+  let ptProg = null;
+  let quadBuf = null;
+  let ptBuf = null;
+  let textures = null;
+  let bgLoc = null;
+  let ptLoc = null;
+  let bodyLoc = null;
+  let contextLost = false;
+
+  function initGpuResources() {
+    const nextBgProg = createProgram(gl, BG_VERT, BG_FRAG);
+    const nextBodyProg = createProgram(gl, BODY_VERT, BODY_FRAG);
+    const nextPtProg = createProgram(gl, PARTICLE_VERT, PARTICLE_FRAG);
+    if (!nextBgProg || !nextBodyProg || !nextPtProg) {
+      if (nextBgProg) gl.deleteProgram(nextBgProg);
+      if (nextBodyProg) gl.deleteProgram(nextBodyProg);
+      if (nextPtProg) gl.deleteProgram(nextPtProg);
+      return false;
+    }
+
+    const nextQuadBuf = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, nextQuadBuf);
+    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, -1, 1, -1, 1, 1, -1, 1, 1]), gl.STATIC_DRAW);
+
+    const nextPtBuf = gl.createBuffer();
+
+    // Zero external downloads: bake all 15 procedural astronomical textures directly on GPU (~30ms)
+    const nextTextures = bakeProceduralWebGLTextures(gl, nextQuadBuf, isSoftware ? 0.5 : 1.0);
+    if (!nextTextures) {
+      gl.deleteBuffer(nextQuadBuf);
+      gl.deleteBuffer(nextPtBuf);
+      gl.deleteProgram(nextBgProg);
+      gl.deleteProgram(nextBodyProg);
+      gl.deleteProgram(nextPtProg);
+      return false;
+    }
+
+    bgProg = nextBgProg;
+    bodyProg = nextBodyProg;
+    ptProg = nextPtProg;
+    quadBuf = nextQuadBuf;
+    ptBuf = nextPtBuf;
+    textures = nextTextures;
+
+    bgLoc = {
+      aPos: gl.getAttribLocation(bgProg, 'aPos'),
+      uRes: gl.getUniformLocation(bgProg, 'uRes'),
+      uTime: gl.getUniformLocation(bgProg, 'uTime'),
+      uRealTime: gl.getUniformLocation(bgProg, 'uRealTime'),
+      uScaleLog: gl.getUniformLocation(bgProg, 'uScaleLog'),
+      uParallax: gl.getUniformLocation(bgProg, 'uParallax'),
+      uCamRot: gl.getUniformLocation(bgProg, 'uCamRot'),
+      uWarp: gl.getUniformLocation(bgProg, 'uWarp'),
+      uFovZoom: gl.getUniformLocation(bgProg, 'uFovZoom'),
+      uShockWave: gl.getUniformLocation(bgProg, 'uShockWave'),
+      uSkyBright: gl.getUniformLocation(bgProg, 'uSkyBright'),
+      uStarDensity: gl.getUniformLocation(bgProg, 'uStarDensity'),
+      uBhPos: gl.getUniformLocation(bgProg, 'uBhPos'),
+      uBhRadius: gl.getUniformLocation(bgProg, 'uBhRadius'),
+      uBhStrength: gl.getUniformLocation(bgProg, 'uBhStrength'),
+      uGalPos: gl.getUniformLocation(bgProg, 'uGalPos'),
+      uGalRadius: gl.getUniformLocation(bgProg, 'uGalRadius'),
+      uGalAlpha: gl.getUniformLocation(bgProg, 'uGalAlpha'),
+      uGalTilt: gl.getUniformLocation(bgProg, 'uGalTilt'),
+      uWebPos: gl.getUniformLocation(bgProg, 'uWebPos'),
+      uWebRadius: gl.getUniformLocation(bgProg, 'uWebRadius'),
+      uWebAlpha: gl.getUniformLocation(bgProg, 'uWebAlpha'),
+      uTexMilky: gl.getUniformLocation(bgProg, 'uTexMilky'),
+      uTexGalaxy: gl.getUniformLocation(bgProg, 'uTexGalaxy'),
+      uTexWeb: gl.getUniformLocation(bgProg, 'uTexWeb'),
+    };
+
+    ptLoc = {
+      aPosPx: gl.getAttribLocation(ptProg, 'aPosPx'),
+      aSize: gl.getAttribLocation(ptProg, 'aSize'),
+      aColor: gl.getAttribLocation(ptProg, 'aColor'),
+      uRes: gl.getUniformLocation(ptProg, 'uRes'),
+    };
+
+    bodyLoc = {
+      aCorner: gl.getAttribLocation(bodyProg, 'aCorner'),
+      uRes: gl.getUniformLocation(bodyProg, 'uRes'),
+      uCenterPx: gl.getUniformLocation(bodyProg, 'uCenterPx'),
+      uQuadRadiusPx: gl.getUniformLocation(bodyProg, 'uQuadRadiusPx'),
+      uBodyType: gl.getUniformLocation(bodyProg, 'uBodyType'),
+      uRadiusRatio: gl.getUniformLocation(bodyProg, 'uRadiusRatio'),
+      uTime: gl.getUniformLocation(bodyProg, 'uTime'),
+      uRealTime: gl.getUniformLocation(bodyProg, 'uRealTime'),
+      uSpin: gl.getUniformLocation(bodyProg, 'uSpin'),
+      uTilt: gl.getUniformLocation(bodyProg, 'uTilt'),
+      uOblate: gl.getUniformLocation(bodyProg, 'uOblate'),
+      uLightDir: gl.getUniformLocation(bodyProg, 'uLightDir'),
+      uAtmoColor: gl.getUniformLocation(bodyProg, 'uAtmoColor'),
+      uAlpha: gl.getUniformLocation(bodyProg, 'uAlpha'),
+      uHighlight: gl.getUniformLocation(bodyProg, 'uHighlight'),
+      uTexMain: gl.getUniformLocation(bodyProg, 'uTexMain'),
+      uTexNight: gl.getUniformLocation(bodyProg, 'uTexNight'),
+      uTexClouds: gl.getUniformLocation(bodyProg, 'uTexClouds'),
+      uTexRing: gl.getUniformLocation(bodyProg, 'uTexRing'),
+    };
+
+    return true;
   }
 
-  const bgLoc = {
-    aPos: gl.getAttribLocation(bgProg, 'aPos'),
-    uRes: gl.getUniformLocation(bgProg, 'uRes'),
-    uTime: gl.getUniformLocation(bgProg, 'uTime'),
-    uRealTime: gl.getUniformLocation(bgProg, 'uRealTime'),
-    uScaleLog: gl.getUniformLocation(bgProg, 'uScaleLog'),
-    uParallax: gl.getUniformLocation(bgProg, 'uParallax'),
-    uCamRot: gl.getUniformLocation(bgProg, 'uCamRot'),
-    uWarp: gl.getUniformLocation(bgProg, 'uWarp'),
-    uFovZoom: gl.getUniformLocation(bgProg, 'uFovZoom'),
-    uShockWave: gl.getUniformLocation(bgProg, 'uShockWave'),
-    uSkyBright: gl.getUniformLocation(bgProg, 'uSkyBright'),
-    uStarDensity: gl.getUniformLocation(bgProg, 'uStarDensity'),
-    uBhPos: gl.getUniformLocation(bgProg, 'uBhPos'),
-    uBhRadius: gl.getUniformLocation(bgProg, 'uBhRadius'),
-    uBhStrength: gl.getUniformLocation(bgProg, 'uBhStrength'),
-    uGalPos: gl.getUniformLocation(bgProg, 'uGalPos'),
-    uGalRadius: gl.getUniformLocation(bgProg, 'uGalRadius'),
-    uGalAlpha: gl.getUniformLocation(bgProg, 'uGalAlpha'),
-    uGalTilt: gl.getUniformLocation(bgProg, 'uGalTilt'),
-    uWebPos: gl.getUniformLocation(bgProg, 'uWebPos'),
-    uWebRadius: gl.getUniformLocation(bgProg, 'uWebRadius'),
-    uWebAlpha: gl.getUniformLocation(bgProg, 'uWebAlpha'),
-    uTexMilky: gl.getUniformLocation(bgProg, 'uTexMilky'),
-    uTexGalaxy: gl.getUniformLocation(bgProg, 'uTexGalaxy'),
-    uTexWeb: gl.getUniformLocation(bgProg, 'uTexWeb'),
-  };
-
-  const ptLoc = {
-    aPosPx: gl.getAttribLocation(ptProg, 'aPosPx'),
-    aSize: gl.getAttribLocation(ptProg, 'aSize'),
-    aColor: gl.getAttribLocation(ptProg, 'aColor'),
-    uRes: gl.getUniformLocation(ptProg, 'uRes'),
-  };
-
-  const bodyLoc = {
-    aCorner: gl.getAttribLocation(bodyProg, 'aCorner'),
-    uRes: gl.getUniformLocation(bodyProg, 'uRes'),
-    uCenterPx: gl.getUniformLocation(bodyProg, 'uCenterPx'),
-    uQuadRadiusPx: gl.getUniformLocation(bodyProg, 'uQuadRadiusPx'),
-    uBodyType: gl.getUniformLocation(bodyProg, 'uBodyType'),
-    uRadiusRatio: gl.getUniformLocation(bodyProg, 'uRadiusRatio'),
-    uTime: gl.getUniformLocation(bodyProg, 'uTime'),
-    uRealTime: gl.getUniformLocation(bodyProg, 'uRealTime'),
-    uSpin: gl.getUniformLocation(bodyProg, 'uSpin'),
-    uTilt: gl.getUniformLocation(bodyProg, 'uTilt'),
-    uOblate: gl.getUniformLocation(bodyProg, 'uOblate'),
-    uLightDir: gl.getUniformLocation(bodyProg, 'uLightDir'),
-    uAtmoColor: gl.getUniformLocation(bodyProg, 'uAtmoColor'),
-    uAlpha: gl.getUniformLocation(bodyProg, 'uAlpha'),
-    uHighlight: gl.getUniformLocation(bodyProg, 'uHighlight'),
-    uTexMain: gl.getUniformLocation(bodyProg, 'uTexMain'),
-    uTexNight: gl.getUniformLocation(bodyProg, 'uTexNight'),
-    uTexClouds: gl.getUniformLocation(bodyProg, 'uTexClouds'),
-    uTexRing: gl.getUniformLocation(bodyProg, 'uTexRing'),
-  };
+  if (!initGpuResources()) {
+    return createFallback2DEngine(glCanvas, hudCanvas);
+  }
 
   let width = 1, height = 1, dpr = 1, glDpr = 1;
   let destroyed = false;
+
+  function onContextLost(e) {
+    e?.preventDefault?.();
+    contextLost = true;
+  }
+
+  function onContextRestored() {
+    if (destroyed) return;
+    if (initGpuResources()) {
+      contextLost = false;
+      resize();
+    }
+  }
 
   function resize() {
     if (destroyed) return;
@@ -235,6 +275,8 @@ export function createCosmosEngine(glCanvas, hudCanvas) {
 
   resize();
   window.addEventListener('resize', resize);
+  glCanvas.addEventListener('webglcontextlost', onContextLost, false);
+  glCanvas.addEventListener('webglcontextrestored', onContextRestored, false);
 
   function bindTexUnit(unit, tex) {
     gl.activeTexture(gl.TEXTURE0 + unit);
@@ -264,7 +306,12 @@ export function createCosmosEngine(glCanvas, hudCanvas) {
   }
 
   function renderFrame(frameState) {
-    if (destroyed || gl.isContextLost?.()) return;
+    if (destroyed) return;
+    if (contextLost || gl.isContextLost?.() || !textures) {
+      ctx2d.clearRect(0, 0, width, height);
+      if (frameState?.hudDraw) frameState.hudDraw(ctx2d, width, height);
+      return;
+    }
     const {
       time, realTime, scaleLog, parallax, camRot, warp, fovZoom, shockWave,
       skyBright, starDensity, bhParams, galParams, webParams,
@@ -364,13 +411,18 @@ export function createCosmosEngine(glCanvas, hudCanvas) {
     if (destroyed) return;
     destroyed = true;
     window.removeEventListener('resize', resize);
+    glCanvas.removeEventListener('webglcontextlost', onContextLost, false);
+    glCanvas.removeEventListener('webglcontextrestored', onContextRestored, false);
+    if (contextLost || gl.isContextLost?.()) return;
     try {
-      for (const tex of Object.values(textures)) gl.deleteTexture(tex);
-      gl.deleteBuffer(quadBuf);
-      gl.deleteBuffer(ptBuf);
-      gl.deleteProgram(bgProg);
-      gl.deleteProgram(bodyProg);
-      gl.deleteProgram(ptProg);
+      if (textures) {
+        for (const tex of Object.values(textures)) gl.deleteTexture(tex);
+      }
+      if (quadBuf) gl.deleteBuffer(quadBuf);
+      if (ptBuf) gl.deleteBuffer(ptBuf);
+      if (bgProg) gl.deleteProgram(bgProg);
+      if (bodyProg) gl.deleteProgram(bodyProg);
+      if (ptProg) gl.deleteProgram(ptProg);
     } catch { /* context already lost */ }
   }
 

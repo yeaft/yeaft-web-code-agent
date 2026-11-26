@@ -192,15 +192,23 @@ export default {
     const selectedScene = Vue.ref('auto');
     const selectedModel = Vue.ref('');
     const selectedEffort = Vue.ref('');
+    let userPickedModel = false;
+    let activeSendSeq = 0;
 
     const hasRunningSessions = Vue.computed(() => (props.agent?.liveSessions?.length || 0) > 0);
     const firstSessionId = Vue.computed(() => props.agent?.sessions?.[0]?.id || null);
 
+    const isCurrentStoreAgent = Vue.computed(() => Boolean(props.agent?.id && props.agent.id === store.currentAgent));
+
     const agentModels = Vue.computed(() => {
-      const cfg = store.llmConfig?.[props.agent.id];
+      const cfg = store.llmConfig?.[props.agent?.id];
       const list = cfg?.agentConfig?.availableModels ?? cfg?.effectiveConfig?.availableModels;
       if (Array.isArray(list) && list.length > 0) return list;
-      return Array.isArray(store.yeaftAvailableModels) ? store.yeaftAvailableModels : [];
+      // Never bleed another Agent's model catalog into an unloaded target Agent.
+      if (isCurrentStoreAgent.value && Array.isArray(store.yeaftAvailableModels)) {
+        return store.yeaftAvailableModels;
+      }
+      return [];
     });
 
     const modelRows = Vue.computed(() => buildModelSelectionRows(agentModels.value));
@@ -212,6 +220,7 @@ export default {
     });
 
     const activeModelLabel = Vue.computed(() => {
+      if (!modelRows.value.length) return $t('settings.llm.selectModel');
       const row = modelRows.value.find((r) => modelOptionMatchesRef(r.model, selectedModel.value)) || modelRows.value[0];
       return row?.label || $t('settings.llm.selectModel');
     });
@@ -240,20 +249,59 @@ export default {
       return hit ? hit.label : $t('cosmos.quick.sceneAuto');
     });
 
-    Vue.watch(
-      () => props.agent?.id,
-      () => {
-        statusBanner.value = null;
-        openMenu.value = null;
-        selectedScene.value = 'auto';
-        const cfg = store.llmConfig?.[props.agent.id];
-        const defModel = cfg?.agentConfig?.primaryModel || cfg?.effectiveConfig?.primaryModel || store.yeaftModel || '';
-        selectedModel.value = defModel;
+    function syncDefaultModelFromConfig() {
+      const agentId = props.agent?.id;
+      const cfg = agentId ? store.llmConfig?.[agentId] : null;
+      const cfgPrimary = cfg?.agentConfig?.primaryModel || cfg?.effectiveConfig?.primaryModel || '';
+      const cfgEffort = cfg?.agentConfig?.defaultEffort || cfg?.effectiveConfig?.defaultEffort || '';
+      if (cfgPrimary) {
+        selectedModel.value = cfgPrimary;
+        const opts = effortOptions.value;
+        selectedEffort.value = (cfgEffort && opts.includes(cfgEffort)) ? cfgEffort : (opts[0] || '');
+        return;
+      }
+      if (isCurrentStoreAgent.value) {
+        selectedModel.value = store.yeaftModel || '';
         const opts = effortOptions.value;
         selectedEffort.value = opts.includes(store.yeaftModelEffort) ? store.yeaftModelEffort : (opts[0] || '');
-        Vue.nextTick(() => chatInputRef.value?.focusInput?.());
+        return;
+      }
+      // Keep empty until target Agent's own llm_config loads so quickSend stays null
+      // and the target Agent safely uses its own configured default model.
+      selectedModel.value = '';
+      selectedEffort.value = '';
+    }
+
+    function ensureTargetLlmConfig() {
+      const agentId = props.agent?.id;
+      if (!agentId || !props.agent?.online) return;
+      if (store.llmConfig?.[agentId]) return;
+      store.sendWsMessage?.({ type: 'get_llm_config', agentId });
+    }
+
+    Vue.watch(
+      () => [props.agent?.id, props.agent?.online],
+      ([nextId], [prevId] = []) => {
+        if (nextId !== prevId) {
+          routing.value = false;
+          statusBanner.value = null;
+          openMenu.value = null;
+          selectedScene.value = 'auto';
+          userPickedModel = false;
+          syncDefaultModelFromConfig();
+          Vue.nextTick(() => chatInputRef.value?.focusInput?.());
+        }
+        ensureTargetLlmConfig();
       },
       { immediate: true },
+    );
+
+    Vue.watch(
+      () => store.llmConfig?.[props.agent?.id],
+      (cfg) => {
+        if (!cfg || userPickedModel) return;
+        syncDefaultModelFromConfig();
+      },
     );
 
     const toggleMenu = (name) => {
@@ -266,6 +314,7 @@ export default {
     };
 
     const selectModel = (modelRef, defaultEffort) => {
+      userPickedModel = true;
       selectedModel.value = modelRef;
       const opts = effortOptions.value;
       selectedEffort.value = (defaultEffort && opts.includes(defaultEffort)) ? defaultEffort : (opts[0] || '');
@@ -273,6 +322,7 @@ export default {
     };
 
     const selectEffort = (eff) => {
+      userPickedModel = true;
       selectedEffort.value = eff;
       openMenu.value = null;
     };
@@ -288,8 +338,13 @@ export default {
 
     const handleQuickSend = async (text, attachmentInfos, quote) => {
       if (!props.agent?.online) return false;
+      const targetAgentId = props.agent.id;
+      const targetAgentName = props.agent.name || targetAgentId;
+      const targetPlanetId = props.planetId;
+      const sendSeq = ++activeSendSeq;
+
       routing.value = true;
-      statusBanner.value = { error: false, text: $t('cosmos.quick.routing', { name: props.agent.name }), sessionId: null };
+      statusBanner.value = { error: false, text: $t('cosmos.quick.routing', { name: targetAgentName }), sessionId: null };
 
       const quickSend = selectedModel.value
         ? { model: selectedModel.value, effort: selectedEffort.value || null }
@@ -297,7 +352,7 @@ export default {
 
       try {
         const res = await store.sendYeaftAutoRouteMessage({
-          agentId: props.agent.id,
+          agentId: targetAgentId,
           text,
           attachments: Array.isArray(attachmentInfos) ? attachmentInfos : undefined,
           preferredSceneId: selectedScene.value,
@@ -305,32 +360,40 @@ export default {
           quote,
         });
 
-        routing.value = false;
+        const isStillSameTarget = props.agent?.id === targetAgentId && activeSendSeq === sendSeq;
+        if (isStillSameTarget) routing.value = false;
+
         if (!res?.ok) {
-          const msg = res?.code === 'session_auto_route_unsupported'
-            ? $t('cosmos.quick.unsupported', { name: props.agent.name })
-            : $t('cosmos.quick.routeFailed', { error: res?.error || res?.code || 'unknown' });
-          statusBanner.value = { error: true, text: msg, sessionId: null };
+          if (isStillSameTarget) {
+            const msg = res?.code === 'session_auto_route_unsupported'
+              ? $t('cosmos.quick.unsupported', { name: targetAgentName })
+              : $t('cosmos.quick.routeFailed', { error: res?.error || res?.code || 'unknown' });
+            statusBanner.value = { error: true, text: msg, sessionId: null };
+          }
           return false;
         }
 
-        const title = res.title || res.sessionId || props.agent.name;
+        const title = res.title || res.sessionId || targetAgentName;
         const okText = res.answeredAskUser
           ? $t('cosmos.quick.routedAskUser', { title })
           : (res.decision === 'created'
-            ? $t('cosmos.quick.routedCreated', { name: props.agent.name, title })
+            ? $t('cosmos.quick.routedCreated', { name: targetAgentName, title })
             : $t('cosmos.quick.routedMatched', { title }));
-        statusBanner.value = { error: false, text: okText, sessionId: res.sessionId || null };
+        if (isStillSameTarget) {
+          statusBanner.value = { error: false, text: okText, sessionId: res.sessionId || null };
+        }
         emit('routed', {
-          agentId: props.agent.id,
-          planetId: props.planetId,
+          agentId: targetAgentId,
+          planetId: targetPlanetId,
           result: res,
           message: okText,
         });
         return true;
       } catch (err) {
-        routing.value = false;
-        statusBanner.value = { error: true, text: $t('cosmos.quick.routeFailed', { error: err?.message || 'error' }), sessionId: null };
+        if (props.agent?.id === targetAgentId && activeSendSeq === sendSeq) {
+          routing.value = false;
+          statusBanner.value = { error: true, text: $t('cosmos.quick.routeFailed', { error: err?.message || 'error' }), sessionId: null };
+        }
         return false;
       }
     };
