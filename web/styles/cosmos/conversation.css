@@ -845,6 +845,8 @@
   border-color: rgba(var(--p-accent-rgb), 0.28);
   color: var(--p-ink);
   max-width: min(320px, calc(100% - 16px));
+  max-height: calc(100% - 16px);
+  overflow-y: auto;
 }
 
 .cosmos-workbench-host .workbench-add-menu {

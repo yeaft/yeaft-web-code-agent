@@ -185,7 +185,11 @@ export default {
           v-if="openItemsMenu.visible"
           ref="openItemsMenuElement"
           class="ctx-menu workbench-open-items-menu"
-          :style="{ left: openItemsMenu.x + 'px', top: openItemsMenu.y + 'px' }"
+          :style="{
+            left: openItemsMenu.x + 'px',
+            top: openItemsMenu.y + 'px',
+            maxHeight: openItemsMenu.maxHeight ? openItemsMenu.maxHeight + 'px' : undefined,
+          }"
           role="menu"
           @click.stop
         >
@@ -207,7 +211,11 @@ export default {
           v-if="tabContextMenu.visible"
           ref="tabContextMenuElement"
           class="ctx-menu workbench-tab-context-menu"
-          :style="{ left: tabContextMenu.x + 'px', top: tabContextMenu.y + 'px' }"
+          :style="{
+            left: tabContextMenu.x + 'px',
+            top: tabContextMenu.y + 'px',
+            maxHeight: tabContextMenu.maxHeight ? tabContextMenu.maxHeight + 'px' : undefined,
+          }"
           role="menu"
           @click.stop
         >
@@ -268,8 +276,8 @@ export default {
     const openItemsTrigger = Vue.ref(null);
     const openItemsMenuElement = Vue.ref(null);
     const tabContextMenuElement = Vue.ref(null);
-    const openItemsMenu = Vue.reactive({ visible: false, x: 0, y: 0 });
-    const tabContextMenu = Vue.reactive({ visible: false, x: 0, y: 0, itemId: '', index: -1 });
+    const openItemsMenu = Vue.reactive({ visible: false, x: 0, y: 0, maxHeight: 0 });
+    const tabContextMenu = Vue.reactive({ visible: false, x: 0, y: 0, maxHeight: 0, itemId: '', index: -1 });
     const hiddenWorkbenchItemIds = Vue.ref([]);
     const measuredTabWidths = new Map();
     let tabOverflowUpdatePending = false;
@@ -468,12 +476,22 @@ export default {
       const triggerRect = launcherTrigger.value?.getBoundingClientRect();
       const menu = launcherMenu.value;
       if (!triggerRect || !menu) return;
+      const pre = clampFixedMenuCoordinates(menu, {
+        viewportX: triggerRect.left,
+        viewportY: triggerRect.bottom + 4,
+        maxHeightCap: 420,
+      });
+      if (pre.maxHeight > 0) {
+        menu.style.maxHeight = `${pre.maxHeight}px`;
+        menu.style.overflowY = 'auto';
+      }
       const menuRect = menu.getBoundingClientRect();
       const pos = clampFixedMenuCoordinates(menu, {
         viewportX: triggerRect.left,
         viewportY: triggerRect.bottom + 4,
         width: menuRect.width || menu.offsetWidth || 190,
         height: menuRect.height || menu.offsetHeight || 180,
+        maxHeightCap: 420,
       });
       menu.style.left = `${pos.x}px`;
       menu.style.top = `${pos.y}px`;
@@ -619,6 +637,14 @@ export default {
       closeCapability(item.capabilityId);
     };
     const positionFixedMenu = (target, triggerRect) => {
+      const pre = clampFixedMenuCoordinates(target, {
+        viewportX: triggerRect.left,
+        viewportY: triggerRect.bottom + 4,
+        maxHeightCap: 420,
+      });
+      if (target && pre.maxHeight > 0) {
+        target.style.maxHeight = `${pre.maxHeight}px`;
+      }
       const width = target?.offsetWidth || 220;
       const height = target?.offsetHeight || 200;
       const pos = clampFixedMenuCoordinates(target, {
@@ -626,8 +652,9 @@ export default {
         viewportY: triggerRect.bottom + 4,
         width,
         height,
+        maxHeightCap: 420,
       });
-      return { x: pos.x, y: pos.y };
+      return { x: pos.x, y: pos.y, maxHeight: pos.maxHeight };
     };
     const closeWorkbenchMenus = () => {
       openItemsMenu.visible = false;
@@ -707,25 +734,38 @@ export default {
         viewportY: event.clientY,
         width: 180,
         height: 220,
+        maxHeightCap: 420,
       });
       Object.assign(tabContextMenu, {
         visible: true,
         x: initial.x,
         y: initial.y,
+        maxHeight: initial.maxHeight,
         itemId: item.id,
         index,
       });
       await Vue.nextTick();
+      const targetEl = tabContextMenuElement.value || panelRoot.value;
+      const pre = clampFixedMenuCoordinates(targetEl, {
+        viewportX: event.clientX,
+        viewportY: event.clientY,
+        maxHeightCap: 420,
+      });
+      if (tabContextMenuElement.value && pre.maxHeight > 0) {
+        tabContextMenuElement.value.style.maxHeight = `${pre.maxHeight}px`;
+      }
       const width = tabContextMenuElement.value?.offsetWidth || 180;
       const height = tabContextMenuElement.value?.offsetHeight || 220;
-      const settled = clampFixedMenuCoordinates(tabContextMenuElement.value || panelRoot.value, {
+      const settled = clampFixedMenuCoordinates(targetEl, {
         viewportX: event.clientX,
         viewportY: event.clientY,
         width,
         height,
+        maxHeightCap: 420,
       });
       tabContextMenu.x = settled.x;
       tabContextMenu.y = settled.y;
+      tabContextMenu.maxHeight = settled.maxHeight;
     };
     const closeFileItems = paths => new Promise(resolve => {
       window.dispatchEvent(new CustomEvent('workbench-close-file-items', {
@@ -1029,12 +1069,23 @@ export default {
       }
     };
 
+    const handleDocumentKeydown = event => {
+      if (event.key !== 'Escape') return;
+      if (tabContextMenu.visible) {
+        event.preventDefault();
+        const originatingItemId = tabContextMenu.itemId;
+        tabContextMenu.visible = false;
+        if (originatingItemId) focusWorkbenchItem(originatingItemId);
+      }
+    };
+
     Vue.onMounted(() => {
       window.addEventListener('open-file-in-explorer', handleOpenFile);
       window.addEventListener('workbench-open-browser', handleOpenBrowser);
       window.addEventListener('workbench-open-capability', handleOpenCapability);
       window.addEventListener('workbench-file-items-changed', handleFileItemsChanged);
       document.addEventListener('click', handleDocumentClick);
+      document.addEventListener('keydown', handleDocumentKeydown);
       if (typeof ResizeObserver !== 'undefined' && panelRoot.value) {
         panelResizeObserver = new ResizeObserver(() => {
           scheduleTabOverflowUpdate();
@@ -1059,6 +1110,7 @@ export default {
       window.removeEventListener('workbench-open-capability', handleOpenCapability);
       window.removeEventListener('workbench-file-items-changed', handleFileItemsChanged);
       document.removeEventListener('click', handleDocumentClick);
+      document.removeEventListener('keydown', handleDocumentKeydown);
       window.removeEventListener('resize', scheduleTabOverflowUpdate);
       panelResizeObserver?.disconnect();
       panelResizeObserver = null;

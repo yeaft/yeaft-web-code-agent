@@ -190,16 +190,61 @@ test.describe('Yeaft Cosmos UI', () => {
     await addMenu.locator('[data-workbench-capability="files"]').click();
     await expect(wbHost.locator('.workbench-item-tab[data-workbench-item-id="files"]')).toBeVisible();
 
-    // Right-click tab context menu also stays strictly inside .cosmos-workbench-host bounds
-    await wbHost.locator('.workbench-item-tab[data-workbench-item-id="files"]').click({ button: 'right' });
+    // Right-click tab context menu stays strictly inside .cosmos-workbench-host bounds
+    // AND 1st Escape dismisses the tab context menu & restores tab focus without collapsing Workbench
+    const filesTab = wbHost.locator('.workbench-item-tab[data-workbench-item-id="files"]');
+    await filesTab.click({ button: 'right' });
     const tabCtx = wbHost.locator('.workbench-tab-context-menu');
     await expect(tabCtx).toBeVisible();
     const tabCtxBox = await tabCtx.boundingBox();
     expect(tabCtxBox).not.toBeNull();
     expect(tabCtxBox.x).toBeGreaterThanOrEqual(hostBox.x - 1);
     expect(tabCtxBox.x + tabCtxBox.width).toBeLessThanOrEqual(hostBox.x + hostBox.width + 1);
-    await wbHost.locator('.workbench-header').click({ position: { x: 10, y: 10 } });
+    await page.keyboard.press('Escape');
     await expect(tabCtx).toHaveCount(0);
+    await expect(wbHost).toBeVisible();
+    await expect(filesTab.locator('.workbench-item-select')).toBeFocused();
+
+    // Open Tabs overflow menu in a short host (with ☰ history drawer open above Workbench)
+    // must stay bounded inside .cosmos-workbench-host and keep the final overflow tab reachable via scroll.
+    await page.locator('.cosmos-drawer-head-left .cosmos-icon-btn').first().click();
+    await expect(page.locator('.cosmos-history-drawer')).toBeVisible();
+    await page.evaluate(async () => {
+      const { workbenchRouteKey, workbenchWorkspaceGeneration } = await import('/utils/workbench-route.js');
+      const chat = window.Pinia.useChatStore();
+      const routeKey = workbenchRouteKey(chat.activeSessionRoute);
+      const workDir = chat.effectiveWorkDir || '';
+      const workspaceGeneration = workbenchWorkspaceGeneration(routeKey, workDir);
+      const files = Array.from({ length: 14 }, (_, idx) => ({
+        path: `${workDir || '/Users/dev/yeaft'}/module-${String(idx + 1).padStart(2, '0')}.js`,
+        name: `module-${String(idx + 1).padStart(2, '0')}.js`,
+        isDirty: false,
+      }));
+      window.dispatchEvent(new CustomEvent('workbench-file-items-changed', {
+        detail: { routeKey, workspaceGeneration, files, activePath: files[0].path },
+      }));
+    });
+    const openItemsBtn = wbHost.locator('.workbench-open-items-btn');
+    await expect(openItemsBtn).toBeVisible();
+    await openItemsBtn.click();
+    const openItemsMenu = wbHost.locator('.workbench-open-items-menu');
+    await expect(openItemsMenu).toBeVisible();
+    const [shortHostBox, openMenuBox] = await Promise.all([wbHost.boundingBox(), openItemsMenu.boundingBox()]);
+    expect(shortHostBox).not.toBeNull();
+    expect(openMenuBox).not.toBeNull();
+    expect(openMenuBox.y).toBeGreaterThanOrEqual(shortHostBox.y - 1);
+    expect(openMenuBox.y + openMenuBox.height).toBeLessThanOrEqual(shortHostBox.y + shortHostBox.height + 1);
+    const lastOverflowItem = openItemsMenu.locator('.workbench-menu-item').last();
+    await lastOverflowItem.scrollIntoViewIfNeeded();
+    await expect(lastOverflowItem).toBeVisible();
+    // 1st Escape closes Open Tabs menu and restores focus to Open Tabs trigger
+    await page.keyboard.press('Escape');
+    await expect(openItemsMenu).toHaveCount(0);
+    await expect(wbHost).toBeVisible();
+    await expect(openItemsBtn).toBeFocused();
+    // Close ☰ history drawer before maximize check
+    await page.locator('.cosmos-drawer-head-left .cosmos-icon-btn').first().click();
+    await expect(page.locator('.cosmos-history-drawer')).toHaveCount(0);
 
     // Workbench maximize expands the Cosmos drawer cleanly and restores
     const initialDrawerW = (await page.locator('.cosmos-drawer').boundingBox()).width;

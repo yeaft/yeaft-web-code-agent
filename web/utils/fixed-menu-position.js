@@ -44,11 +44,13 @@ export function resolveFixedContainingBlock(element) {
   };
 }
 
-export function clampFixedMenuCoordinates(element, { viewportX, viewportY, width = 0, height = 0, margin = 8 }) {
+export function clampFixedMenuCoordinates(element, { viewportX, viewportY, width = 0, height = 0, margin = 8, maxHeightCap = Infinity }) {
   const cb = resolveFixedContainingBlock(element);
-  const clampedW = Math.min(Math.max(0, width), Math.max(0, cb.width - margin * 2));
-  const clampedH = Math.min(Math.max(0, height), Math.max(0, cb.height - margin * 2));
+  const maxWidth = Math.max(0, cb.width - margin * 2);
+  const maxHeight = Math.min(maxHeightCap, Math.max(0, cb.height - margin * 2));
+  const clampedW = Math.min(Math.max(0, width), maxWidth);
+  const clampedH = Math.min(Math.max(0, height), maxHeight);
   const x = Math.max(margin, Math.min(viewportX - cb.left, cb.width - clampedW - margin));
   const y = Math.max(margin, Math.min(viewportY - cb.top, cb.height - clampedH - margin));
-  return { x, y, containingBlock: cb };
+  return { x, y, maxWidth, maxHeight, containingBlock: cb };
 }

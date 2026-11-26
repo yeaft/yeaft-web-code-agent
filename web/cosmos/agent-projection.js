@@ -259,10 +259,19 @@ export function projectAgentsForCosmos({ chatStore, sessionsStore, nowMs = Date.
       hiddenNativeKeys.add(`${ref.agentId}\u001f${ref.sessionId}`);
     }
   }
-  const catalogAuthoritative = hasSidebarCatalog
+  const isLegacyCatalogMode = chatStore?.sessionCatalogProtocolSupported === false;
+  const catalogAuthoritative = !isLegacyCatalogMode && (
+    hasSidebarCatalog
     || chatStore?.sessionCatalogProtocolSupported === true
     || chatStore?.sessionCatalogLoaded === true
-    || hiddenCatalog.length > 0;
+    || hiddenCatalog.length > 0
+  );
+  const singleLegacyAgentId = !catalogAuthoritative
+    && agents.length === 1
+    && agents[0]?.id
+    && (!chatStore?.currentAgent || chatStore.currentAgent === agents[0].id)
+    ? agents[0].id
+    : '';
   const yeaftSessions = Array.isArray(sessionsStore?.sessionList)
     ? sessionsStore.sessionList
     : Object.values(sessionsStore?.sessions || {});
@@ -277,7 +286,7 @@ export function projectAgentsForCosmos({ chatStore, sessionsStore, nowMs = Date.
   const detailByKey = new Map();
   for (const s of yeaftSessions) {
     if (!s?.id) continue;
-    const aid = s.agentId || chatStore?.currentAgent || '';
+    const aid = s.agentId || singleLegacyAgentId;
     if (aid) detailByKey.set(`${aid}\u001f${s.id}`, s);
   }
 
@@ -314,9 +323,12 @@ export function projectAgentsForCosmos({ chatStore, sessionsStore, nowMs = Date.
 
     // 2. Enrich visible native Yeaft rows from live sessionsStore;
     //    never resurrect hidden/absent sessions when the visible catalog is authoritative.
+    //    On the legacy single-Agent path, ownerless rows (agentId == null) still project
+    //    unambiguously onto that single Agent.
     for (const s of yeaftSessions) {
-      if (!s?.id || s.hidden === true || (s.agentId && s.agentId !== agentId)) continue;
-      if (!s.agentId && agentId !== chatStore?.currentAgent) continue;
+      if (!s?.id || s.hidden === true) continue;
+      const ownerAgentId = s.agentId || singleLegacyAgentId;
+      if (!ownerAgentId || ownerAgentId !== agentId) continue;
       if (hiddenNativeKeys.has(`${agentId}\u001f${s.id}`)) continue;
       const key = `yeaft:${s.id}`;
       const existing = mergedMap.get(key);

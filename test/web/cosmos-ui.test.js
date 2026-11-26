@@ -36,6 +36,7 @@ import {
   filterCosmosSessions,
 } from '../../web/cosmos/agent-projection.js';
 import { acceptSessionDiscoveryResponse } from '../../web/stores/helpers/session-discovery.js';
+import { sidebarSessionCatalogRows } from '../../web/stores/helpers/sidebar-session-catalog.js';
 import { clampFixedMenuCoordinates } from '../../web/utils/fixed-menu-position.js';
 import { bakeProceduralWebGLTextures } from '../../web/cosmos/gpu-texture-baker.js';
 import { createCosmosEngine } from '../../web/cosmos/gl-engine.js';
@@ -983,25 +984,60 @@ describe('Cosmos Component & WebGL Review Regressions', () => {
     const projectedRestored = projectAgentsForCosmos({ chatStore: restoredChatStore, sessionsStore: liveSessionsStore, nowMs: now, isEn: true });
     expect(projectedRestored.mac.sessions.map((s) => s.id)).toContain('s-hidden');
 
-    // Legacy fallback (non-authoritative server) still populates from sessionsStore while skipping hidden rows
-    const legacyProjected = projectAgentsForCosmos({
-      chatStore: {
-        ...chatStore,
-        sessionCatalog: [],
-        sessionCatalogLoaded: false,
-        sessionCatalogProtocolSupported: false,
-        hiddenSessionCatalog: [],
-      },
-      sessionsStore: {
-        sessionList: [
-          { id: 's-legacy', agentId: 'mac', name: 'Legacy-Live', updatedAt: now - 200 },
-          { id: 's-legacy-hidden', agentId: 'mac', name: 'Legacy-Hidden', hidden: true, updatedAt: now - 100 },
-        ],
-      },
+    // Legacy single-Agent fallback via production sidebarSessionCatalogRows adapter:
+    // sidebarSessionCatalog is array-valued even for legacy servers and drops ownerless rows (agentId == null),
+    // yet Cosmos must still project an unambiguous single-Agent ownerless legacy row without guessing on multi-Agent.
+    const singleLegacyStore = {
+      agents: [{ id: 'mac', name: 'MacBook', online: true, workDir: '/dev/yeaft', capabilities: [] }],
+      currentAgent: 'mac',
+      conversations: [],
+      sessionCatalog: [],
+      sidebarLegacySessionCatalog: [],
+      hiddenSessionCatalog: [],
+      sessionProjects: [],
+      sessionCatalogLoaded: false,
+      sessionCatalogProtocolSupported: false,
+      _hasHandledAgentList: true,
+      _hasHandledYeaftSessionHydrate: true,
+      yeaftSessionHydrateError: null,
+      yeaftConversationIdsByAgent: {},
+      messagesMap: {},
+      isYeaftSessionProcessing: () => false,
+      isYeaftSessionUnread: () => false,
+    };
+    const legacySessions = [
+      { id: 's-ownerless', agentId: null, name: 'Legacy-Ownerless', updatedAt: now - 200 },
+      { id: 's-stamped', agentId: 'mac', name: 'Legacy-Stamped', updatedAt: now - 300 },
+      { id: 's-legacy-hidden', agentId: null, name: 'Legacy-Hidden', hidden: true, updatedAt: now - 100 },
+    ];
+    singleLegacyStore.sidebarSessionCatalog = sidebarSessionCatalogRows(singleLegacyStore, legacySessions);
+    // Confirm production legacy adapter dropped the ownerless row, yet projectAgentsForCosmos recovers it cleanly
+    expect(singleLegacyStore.sidebarSessionCatalog.map((r) => r.routeRef.sessionId)).toEqual(['s-stamped']);
+    const legacySingleProjected = projectAgentsForCosmos({
+      chatStore: singleLegacyStore,
+      sessionsStore: { sessionList: legacySessions },
       nowMs: now,
       isEn: true,
     });
-    expect(legacyProjected.mac.sessions.map((s) => s.id)).toEqual(['s-legacy']);
+    expect(legacySingleProjected.mac.sessions.map((s) => s.id).sort()).toEqual(['s-ownerless', 's-stamped']);
+
+    // Multi-Agent legacy store must NOT guess an owner for an ownerless row
+    const multiLegacyStore = {
+      ...singleLegacyStore,
+      agents: [
+        { id: 'mac', name: 'MacBook', online: true, workDir: '/dev/yeaft', capabilities: [] },
+        { id: 'cloud', name: 'Cloud', online: true, workDir: '/srv', capabilities: [] },
+      ],
+    };
+    multiLegacyStore.sidebarSessionCatalog = sidebarSessionCatalogRows(multiLegacyStore, legacySessions);
+    const legacyMultiProjected = projectAgentsForCosmos({
+      chatStore: multiLegacyStore,
+      sessionsStore: { sessionList: legacySessions },
+      nowMs: now,
+      isEn: true,
+    });
+    expect(legacyMultiProjected.mac.sessions.map((s) => s.id)).toEqual(['s-stamped']);
+    expect(legacyMultiProjected.cloud.sessions).toEqual([]);
   });
 
   it('mounts real WorkbenchPanel bound to chatStore.workbenchExpanded (no ownerRoute shadowing) and runs Project tree + FTS session search', async () => {
@@ -1342,18 +1378,19 @@ describe('Cosmos Component & WebGL Review Regressions', () => {
     expect(wrapper.vm.drawerOpen).toBe(false);
     expect(enterYeaft).not.toHaveBeenCalled();
 
-    // Containing-block-relative menu coordinates under a backdrop-filter ancestor
+    // Containing-block-relative menu coordinates & maxHeight constraint under a short backdrop-filter ancestor
     const host = document.createElement('div');
     host.style.backdropFilter = 'blur(28px)';
-    host.getBoundingClientRect = () => ({ left: 952, top: 52, width: 488, height: 848, right: 1440, bottom: 900 });
+    host.getBoundingClientRect = () => ({ left: 952, top: 52, width: 488, height: 220, right: 1440, bottom: 272 });
     const menu = document.createElement('div');
     host.appendChild(menu);
     document.body.appendChild(host);
     try {
-      const pos = clampFixedMenuCoordinates(menu, { viewportX: 1350, viewportY: 100, width: 200, height: 180, margin: 8 });
-      // Clamped inside host's 488px width: 488 - 200 - 8 = 280; y = 100 - 52 = 48
+      const pos = clampFixedMenuCoordinates(menu, { viewportX: 1350, viewportY: 100, width: 200, height: 360, margin: 8, maxHeightCap: 420 });
+      // Clamped inside host's 488px width (488 - 200 - 8 = 280) and constrained maxHeight (220 - 16 = 204)
       expect(pos.x).toBe(280);
-      expect(pos.y).toBe(48);
+      expect(pos.y).toBe(8);
+      expect(pos.maxHeight).toBe(204);
     } finally {
       host.remove();
     }
