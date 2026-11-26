@@ -1581,6 +1581,7 @@ export class DebugTrace {
 
   async resumeTrace({ sessionId, turnId } = {}) {
     if (!sessionId || !turnId) return false;
+    await this.#drainWrites();
     const locator = await readJson(turnLocatorPath(this.#rootDir, sessionId, turnId));
     let trace = null;
     if (locator?.requestKey && locator.sessionId === sessionId) {
@@ -1598,6 +1599,9 @@ export class DebugTrace {
       trace._lastSnapshot = this.#reconstructLastSnapshot(trace);
       this.#releasePersistedPayload(trace, [...trace.loops, ...trace.tools]);
     }
+    trace.active = true;
+    trace.closedAt = null;
+    delete trace.finalStopReason;
     this.#requestCache.set(trace.requestKey, trace);
     return true;
   }

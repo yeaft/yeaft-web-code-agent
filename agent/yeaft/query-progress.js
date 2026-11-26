@@ -74,6 +74,7 @@ export class QueryProgress {
   #results = new Map();
   #mutations = new Map();
   #failures = new Map();
+  #uncertainMutation = false;
   #toolStats = new Map();
   #pendingOutcomes = new Map();
   #usageTotals = { inputTokens: 0, outputTokens: 0 };
@@ -89,6 +90,8 @@ export class QueryProgress {
 
   /** Tool calls executed so far in this query, without publishing a snapshot. */
   get toolExecutions() { return this.#state.toolExecutions; }
+
+  get hasUncertainMutation() { return this.#uncertainMutation; }
 
   /** Query-local telemetry only: include synchronous side calls, not billing or loop budgets. */
   usageObserved(usage) {
@@ -163,6 +166,7 @@ export class QueryProgress {
     if (isError) {
       const prior = this.#failures.get(key);
       const kind = failureKind(observation, call, readOnly);
+      if (executed && !readOnly && kind === 'uncertain') this.#uncertainMutation = true;
       if (executed && !readOnly) {
         // A partial mutation may have changed even a previously unreadable
         // resource. Permit verification, never a replay of the mutation itself.

@@ -119,7 +119,7 @@ import {
 } from './helpers/yeaft-history-cache.js';
 import { planNextYeaftHistoryPage } from './helpers/yeaft-history-pagination.js';
 import { clearLiveSessionTools } from './helpers/session-tool-details.js';
-import { applyQueryProgress, pruneQueryProgress, reconcileQueryProgressSnapshot, retireQueryProgress, retireSettledQueryProgress } from './helpers/query-progress.js';
+import { applyQueryProgress, pruneQueryProgress, reconcileQueryProgressSnapshot, reopenQueryProgress, retireQueryProgress, retireSettledQueryProgress } from './helpers/query-progress.js';
 import { normalizeTimelineErrorDetail } from './helpers/vp-timeline.js';
 import { applySessionTurns, applyUserMessageRoute, clearSessionTurns, LIVE_SESSION_TURN_STATES } from './helpers/yeaft-session-turns.js';
 import {
@@ -6482,6 +6482,7 @@ export const useChatStore = defineStore('chat', {
             clearVpError: true,
           });
           if (event.retry === true) {
+            reopenQueryProgress(this, msg.agentId, envelopeConversationId, event.turnId);
             prepareYeaftTurnForRetryResume(this, {
               agentId: msg.agentId || null,
               sessionId: event.sessionId || msg.sessionId || null,

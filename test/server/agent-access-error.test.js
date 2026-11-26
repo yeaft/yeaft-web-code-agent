@@ -164,9 +164,10 @@ describe('native Session retry relay', () => {
   const send = (id = 'requester', overrides = {}) => handleClientConversation(
     id, webClients.get(id), { ...request, ...overrides }, genericAccess,
   );
+  const dispatchFor = id => agent.ws.getSentMessages().findLast(message => message._requestClientId === id);
   const result = (overrides = {}) => handleAgentOutput(request.agentId, agent, {
     type: RESULT, agentId: request.agentId, sessionId: request.sessionId, turnId: request.turnId, requestId: request.requestId,
-    ok: true, _requestClientId: 'requester', ...overrides,
+    ok: true, _requestClientId: 'requester', _dispatchId: dispatchFor(overrides._requestClientId || 'requester')?._dispatchId, ...overrides,
   });
 
   beforeEach(() => {
@@ -193,12 +194,12 @@ describe('native Session retry relay', () => {
   });
 
   it('whitelists input and returns only a matched standalone result to the requesting tab', async () => {
-    await send('requester', { _requestClientId: 'tab', toolState: { trusted: false }, messages: ['injected'] });
-    expect(agent.ws.getSentMessages()).toEqual([{ ...request, _requestClientId: 'requester' }]);
+    await send('requester', { _requestClientId: 'tab', _dispatchId: 'forged', _projectContext: { projectId: 'forged' }, toolState: { trusted: false }, messages: ['injected'] });
+    expect(agent.ws.getSentMessages()).toEqual([{ ...request, type: 'session_turn_retry_authorized', _requestClientId: 'requester', _dispatchId: expect.not.stringMatching(/^forged$/), _projectContext: { sessionIds: [] } }]);
     await send(); // Same socket and request ID is dispatched only once.
     expect(agent.ws.getSentMessages()).toHaveLength(1);
     await send('tab', { mode: 'compact' });
-    expect(agent.ws.getLastMessage()).toEqual({ ...request, mode: 'compact', _requestClientId: 'tab' });
+    expect(agent.ws.getLastMessage()).toEqual({ ...request, type: 'session_turn_retry_authorized', mode: 'compact', _requestClientId: 'tab', _dispatchId: expect.any(String), _projectContext: { sessionIds: [] } });
     await result({ turnId: 'other-turn' });
     await result({ _requestClientId: undefined });
     await result({ _requestClientId: 'outsider' });
@@ -275,13 +276,18 @@ describe('native Session retry relay', () => {
   it('settles a missing acknowledgement once and drops late results', async () => {
     vi.useFakeTimers();
     await send();
+    const old = dispatchFor('requester')._dispatchId;
     await vi.advanceTimersByTimeAsync(60_000);
     expect(requester.ws.getSentMessages()).toEqual([{
       type: RESULT, agentId: request.agentId, sessionId: request.sessionId, turnId: request.turnId, requestId: request.requestId,
       ok: false, error: expect.stringMatching(/No retry result/),
     }]);
-    await result();
+    await send();
+    expect(dispatchFor('requester')._dispatchId).not.toBe(old);
+    await result({ _dispatchId: old });
     expect(requester.ws.getSentMessages()).toHaveLength(1);
+    await result();
+    expect(requester.ws.getSentMessages()).toHaveLength(2);
     expect(tab.ws.getSentMessages()).toEqual([]);
   });
 });

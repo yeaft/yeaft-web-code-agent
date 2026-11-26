@@ -1,9 +1,12 @@
+import { randomUUID } from 'node:crypto';
 import { CONFIG } from '../config.js';
 import { agents, webClients } from '../context.js';
-import { userDb, yeaftSessionDb } from '../database.js';
+import { userDb, yeaftProjectDb, yeaftSessionDb } from '../database.js';
 import { resolveAgentAccessError, sendToAgent, sendToWebClient } from '../ws-utils.js';
 
 const RETRY = 'yeaft_session_retry';
+// Unprefixed, so an older Server's generic yeaft_* relay cannot mint this frame.
+const AUTHORIZED_RETRY = 'session_turn_retry_authorized';
 export const SESSION_RETRY_RESULT = 'yeaft_session_retry_result';
 const MAX_PENDING = 1024;
 const MAX_PENDING_PER_CLIENT = 16;
@@ -40,7 +43,7 @@ export function clearSessionTurnRetriesForClient(clientId) {
 /** Validate and authorize before forwarding; browser metadata cannot establish authority. */
 export async function handleClientSessionTurnRetry(clientId, client, msg) {
   // Reserve aliases too so they cannot fall through to the generic relay.
-  if ([SESSION_RETRY_RESULT, 'unify_session_retry_result', 'unify_session_retry'].includes(msg.type)) return true;
+  if ([AUTHORIZED_RETRY, SESSION_RETRY_RESULT, 'unify_session_retry_result', 'unify_session_retry'].includes(msg.type)) return true;
   if (msg.type !== RETRY) return false;
   if (!client.authenticated || !client.userId) return true;
 
@@ -77,7 +80,7 @@ export async function handleClientSessionTurnRetry(clientId, client, msg) {
       return true;
     }
 
-    const entry = { agent, client, clientId, userId: client.userId, reply };
+    const entry = { agent, client, clientId, userId: client.userId, reply, dispatchId: randomUUID() };
     entry.timer = setTimeout(() => {
       if (!forget(key, entry) || webClients.get(clientId) !== client || !client.authenticated
           || client.userId !== entry.userId) return;
@@ -87,7 +90,9 @@ export async function handleClientSessionTurnRetry(clientId, client, msg) {
     entry.timer.unref();
     pending.set(key, entry);
     try {
-      if (await sendToAgent(agent, { type: RETRY, agentId, sessionId, turnId, mode, requestId, retryToken, _requestClientId: clientId })) return true;
+      const projectContext = yeaftProjectDb.contextForSession(client.userId, agentId, sessionId) || { sessionIds: [] };
+      if (await sendToAgent(agent, { type: AUTHORIZED_RETRY, agentId, sessionId, turnId, mode, requestId, retryToken,
+        _requestClientId: clientId, _dispatchId: entry.dispatchId, _projectContext: projectContext })) return true;
     } catch { /* Settle failed dispatch with the original correlation. */ }
     if (forget(key, entry)) await reject('The selected Agent is offline or delivery could not be confirmed.');
   }
@@ -101,7 +106,7 @@ export async function routeSessionTurnRetryResult(agentId, agent, msg) {
       || !isIdentifier(clientId, 256) || !isIdentifier(requestId, 160)) return;
   const key = requestKey(clientId, agentId, requestId);
   const entry = pending.get(key);
-  if (!entry || entry.agent !== agent || entry.reply.sessionId !== sessionId || entry.reply.turnId !== turnId) return;
+  if (!entry || entry.agent !== agent || entry.dispatchId !== msg._dispatchId || entry.reply.sessionId !== sessionId || entry.reply.turnId !== turnId) return;
   forget(key, entry);
   const { client, userId, reply } = entry;
   if (webClients.get(clientId) !== client || !client.authenticated || client.userId !== userId

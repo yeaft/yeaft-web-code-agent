@@ -130,10 +130,10 @@ test('failed native Yeaft Session turn retry status bar, retryToken fencing, res
   expect(await page.evaluate(cid => (window.Pinia.useChatStore().messagesMap[cid] || []).length, conversationId)).toBe(msgCountBefore);
 
   // 4) Standalone relay failure ok:false re-enables buttons and surfaces inline error string.
-  const firstRelay = await mockAgent.waitForMessage('yeaft_session_retry');
-  expect(firstRelay).toMatchObject({ ...retryFrames1[0], _requestClientId: expect.any(String) });
+  const firstRelay = await mockAgent.waitForMessage('session_turn_retry_authorized');
+  expect(firstRelay).toMatchObject({ ...retryFrames1[0], type: 'session_turn_retry_authorized', _requestClientId: expect.any(String) });
   mockAgent.send({ type: 'yeaft_session_retry_result', sessionId: firstRelay.sessionId,
-    turnId: firstRelay.turnId, requestId: firstRelay.requestId, _requestClientId: firstRelay._requestClientId,
+    turnId: firstRelay.turnId, requestId: firstRelay.requestId, _requestClientId: firstRelay._requestClientId, _dispatchId: firstRelay._dispatchId,
     ok: false, error: 'relay_unavailable' });
   await expect(plainBtn).toBeEnabled();
   await expect(compactBtn).toBeEnabled();
@@ -152,10 +152,10 @@ test('failed native Yeaft Session turn retry status bar, retryToken fencing, res
     retryToken: 'tok-1',
     mode: 'compact',
   });
-  const secondRelay = await mockAgent.waitForMessage('yeaft_session_retry');
-  expect(secondRelay).toMatchObject({ ...retryFrames2[1], _requestClientId: firstRelay._requestClientId });
+  const secondRelay = await mockAgent.waitForMessage('session_turn_retry_authorized');
+  expect(secondRelay).toMatchObject({ ...retryFrames2[1], type: 'session_turn_retry_authorized', _requestClientId: firstRelay._requestClientId });
   mockAgent.send({ type: 'yeaft_session_retry_result', sessionId: secondRelay.sessionId,
-    turnId: secondRelay.turnId, requestId: secondRelay.requestId, _requestClientId: secondRelay._requestClientId, ok: true });
+    turnId: secondRelay.turnId, requestId: secondRelay.requestId, _requestClientId: secondRelay._requestClientId, _dispatchId: secondRelay._dispatchId, ok: true });
   await expect(bar).toHaveCount(0);
 
   // Resumed vp_turn_start with retry:true retains existing partial assistant text.

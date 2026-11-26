@@ -868,7 +868,7 @@ export async function handleMessage(msg) {
     case 'yeaft_session_send':
       handleYeaftSessionSend(msg);
       break;
-    case 'yeaft_session_retry':
+    case 'session_turn_retry_authorized':
       // Older Servers generically relay yeaft_* without the retry-specific ACL.
       if (ctx.serverCapabilities?.has('session_turn_retry')) await handleYeaftSessionRetry(msg);
       break;

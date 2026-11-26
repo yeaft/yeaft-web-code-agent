@@ -219,6 +219,7 @@ export default {
             :data-retry-token="item.retryToken"
           >
             <div class="yeaft-failed-turn-summary">
+              <span v-if="item.preview" class="yeaft-failed-turn-preview">{{ item.preview }}</span>
               <span class="typing-status-text typing-status-error yeaft-failed-turn-message">
                 {{ failedTurnStatusText(item) }}
               </span>

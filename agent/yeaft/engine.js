@@ -2750,6 +2750,8 @@ export class Engine {
     // provider copy is compacted when its actual model-window budget is full.
     const turnStartIdx = resume?.turnStartIdx ?? conversationMessages.length - 1;
     let queryToolCount = resume?.queryToolCount ?? 0;
+    const completedMutationKeys = resume?.completedMutationKeys ?? new Set();
+    const priorMutationKeys = resume ? new Set(completedMutationKeys) : null;
     // Duplicate policy is scoped to one user query. Only successful, real
     // executions increment these counters; errors and cache reuse do not.
     const queryDuplicateCounts = resume?.queryDuplicateCounts ?? new Map();
@@ -4679,7 +4681,7 @@ export class Engine {
         // Do not hand out checkpoints for provider-managed work, policy
         // refusals, completed publications, or unsettled asynchronous results.
         const canResume = manualRetry && canReplayProviderRequest && !pendingServerOperation
-          && !hasFinalPublication() && !this.#pendingAsyncTaskIds.size
+          && !hasFinalPublication() && !queryProgress.hasUncertainMutation && !this.#pendingAsyncTaskIds.size
           && !this.#acceptedAsyncTaskResults.size && !this.#pendingTaskResultUpdates.length
           && !this.#pendingTaskResultMessages.length && !(err instanceof LLMPolicyError)
           && err.code !== 'refusal' && !err.stop?.stopDetails
@@ -4816,7 +4818,8 @@ export class Engine {
           // this checkpoint; it must never be serialized onto the wire.
           errorEvent.manualRetryState = {
             conversationMessages, turnStartIdx, relatedHistoryTurns, queryStartedAt,
-            queryProgress, queryNumber, queryToolCount, queryDuplicateCounts, queryDuplicateSuppressions,
+            deletionGeneration: postCompactState.deletionGeneration,
+            queryProgress, queryNumber, queryToolCount, completedMutationKeys, queryDuplicateCounts, queryDuplicateSuppressions,
             queryValidationFailures, duplicateReminderAwaitingResponse, discoveredToolNames, discoveryTraversals,
             projectDocLoadedPathHints, projectDocScopes: [...projectDocContext.selectedScopes],
             signedAnthropicPrefix, rolloverSeed, rolloverSummary, rolloverCursor, rolloverCount,
@@ -5615,7 +5618,11 @@ export class Engine {
           && duplicateCallPolicy === 'suppress'
           && successfulDuplicateCount >= DUP_TOOL_THRESHOLD - 1;
         let suppressionCount = queryDuplicateSuppressions.get(duplicateCallKey) || 0;
-        const failureBlock = !readyParallelExecution && !skipped ? queryProgress.blocked(tc) : null;
+        const completedBeforeRetry = priorMutationKeys?.has(duplicateCallKey);
+        const failureBlock = !readyParallelExecution && !skipped
+          ? (completedBeforeRetry
+            ? 'This exact operation already ran before the request failed. It was not dispatched again. Continue from the existing result or verify the current state.'
+            : queryProgress.blocked(tc)) : null;
 
         let output;
         let displayImages = [];
@@ -5904,6 +5911,8 @@ export class Engine {
             `[system note] ${tc.name} rejected the same arguments twice before execution: ${validationError.slice(0, 300)}. Correct the arguments using its schema/error hint or choose a different tool. No operation was performed; repeating unchanged arguments will not help.`,
           );
         }
+        if (manualRetry && !readOnlyTool && hasTool && !isError && !skipped
+            && !duplicateCallSuppressed && !failureBlock && !needsProjectDocReload) completedMutationKeys.add(duplicateCallKey);
         const repeatedResultCallId = queryProgress.observe({
           call: tc, output, isError, readOnly: readOnlyTool,
           executed: !skipped && !duplicateCallSuppressed && !failureBlock && !reusedReadOnlyResult && !readyParallelExecution?.shared && hasTool && !needsProjectDocReload,

@@ -265,6 +265,8 @@ describe('yeaft failed turn retry store flow', () => {
     emitSessionTurns(store, [{ turnId: 'turn-1', vpId: 'vp-1', threadId: 'main', retryToken: 'tok-1' }]);
     expect(visibleYeaftRetryableTurns(store, yeaftRoute())).toHaveLength(1);
 
+    const key = JSON.stringify(['agent-a', 'conv-a', 'turn-1']);
+    store._yeaftEndedQueryExecutions = { [key]: true };
     store.handleYeaftOutput({
       type: 'yeaft_output',
       agentId: 'agent-a',
@@ -289,6 +291,10 @@ describe('yeaft failed turn retry store flow', () => {
     expect(rows[2].status).toBe('pending');
     expect(rows[2].turnEndReason).toBeUndefined();
     expect(rows[2].turnEndDetail).toBeUndefined();
+    store.handleYeaftOutput({ type: 'yeaft_output', agentId: 'agent-a', conversationId: 'conv-a',
+      event: { type: 'query_progress', sessionId: 'sess-1', turnId: 'turn-1', threadId: 'main', vpId: 'vp-1',
+        revision: 10, waitingStage: 'provider' } });
+    expect(store.yeaftQueryProgressByTurn[key]?.progress.waitingStage).toBe('provider');
   });
 
   it('scopes multi-turn, multi-session, and multi-agent retries independently', async () => {

@@ -195,6 +195,7 @@ export function reconcileYeaftRetryableTurns(store, msg, { scopedSessionId = und
       ready: true,
       vpId: normalizeId(item?.vpId) || (sameToken ? prev?.vpId : null) || null,
       threadId: normalizeId(item?.threadId) || (sameToken ? prev?.threadId : null) || 'main',
+      preview: normalizeMessage(item?.preview)?.slice(0, 100) || null,
       message: normalizeMessage(item?.message) || (sameToken ? prev?.message : null) || null,
       reason: normalizeId(item?.reason) || (sameToken ? prev?.reason : null) || null,
       code: normalizeId(item?.code) || (sameToken ? prev?.code : null) || null,
@@ -207,13 +208,12 @@ export function reconcileYeaftRetryableTurns(store, msg, { scopedSessionId = und
   }
 
   store.yeaftRetryableTurnsByKey = next;
-  // Clear pending requests for turns no longer retryable or superseded by a new retryToken.
+  // An absent entry can also mean Stop, eviction or expiry. Only the
+  // correlated acknowledgement or explicit retry start confirms admission.
   for (const [key, pending] of Object.entries(store.yeaftRetryPendingByKey || {})) {
     if (!pending || pending.agentId !== agentId) continue;
     if (resolvedScope != null && pending.sessionId !== resolvedScope) continue;
-    if (!next[key]) {
-      clearPendingEntry(store, key, { ok: true });
-    } else if (pending.retryToken && next[key].retryToken !== pending.retryToken) {
+    if (next[key] && pending.retryToken && next[key].retryToken !== pending.retryToken) {
       clearPendingEntry(store, key, { ok: false, error: 'stale_retry_token' });
     }
   }
