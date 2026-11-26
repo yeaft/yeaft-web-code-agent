@@ -1,21 +1,30 @@
 /**
- * Yeaft Cosmos — Random Cosmic Event Countdown Pill, Stop Button, Almanac & Telescope Dock
+ * Yeaft Cosmos — Random Distant Cosmic Event Countdown Pill, Almanac,
+ * Auto-Zoom Toggle & Deep-Sky Telescope Observation Dock
  */
-import { COSMIC_EVENTS, formatEventCountdown } from '../../cosmos/events-controller.js';
+import {
+  COSMIC_EVENTS,
+  formatEventCountdown,
+  formatEventDistance,
+} from '../../cosmos/events-controller.js';
+import { getLocale } from '../../utils/i18n.js';
 
 export default {
   name: 'CosmosEventsOverlay',
   props: {
     visible: { type: Boolean, default: true },
     autoEnabled: { type: Boolean, default: true },
+    autoZoom: { type: Boolean, default: true },
     activeEvent: { type: Object, default: null },
     nextEventIndex: { type: Number, default: 0 },
     countdownSec: { type: Number, default: 60 },
   },
   emits: [
     'observe',
+    'return-solar',
     'stop-event',
     'toggle-auto',
+    'toggle-auto-zoom',
     'toggle-pause',
     'replay',
     'next-random',
@@ -45,7 +54,7 @@ export default {
           class="cosmos-event-watch-btn"
           @click.stop="onWatchClick"
         >
-          <span>{{ activeEvent?.observing ? $t('cosmos.events.focusing') : $t('cosmos.events.watch') }}</span>
+          <span>{{ activeEvent?.observing ? $t('cosmos.events.returnSolar') : $t('cosmos.events.watch') }}</span>
         </button>
 
         <!-- Explicit Stop / Silence Auto-Events Button -->
@@ -78,6 +87,23 @@ export default {
           <span class="cosmos-almanac-title">{{ $t('cosmos.events.almanacTitle') }}</span>
           <span class="cosmos-almanac-sub">{{ $t('cosmos.events.almanacSub') }}</span>
         </div>
+
+        <div class="cosmos-almanac-pref">
+          <div class="cosmos-almanac-pref-copy">
+            <span class="cosmos-almanac-pref-label">{{ $t('cosmos.constants.eventsAutoZoom') }}</span>
+            <span class="cosmos-almanac-pref-meta">{{ autoZoom ? $t('cosmos.events.autoZoomOn') : $t('cosmos.events.autoZoomOff') }}</span>
+          </div>
+          <button
+            type="button"
+            class="cosmos-switch"
+            :class="{ 'is-on': autoZoom }"
+            role="switch"
+            :aria-checked="autoZoom ? 'true' : 'false'"
+            :aria-label="$t('cosmos.constants.eventsAutoZoom')"
+            @click.stop="$emit('toggle-auto-zoom')"
+          ></button>
+        </div>
+
         <div class="cosmos-almanac-list">
           <button
             v-for="(ev, idx) in events"
@@ -100,16 +126,19 @@ export default {
       </div>
     </div>
 
-    <!-- Telescope Observation Dock (only visible while focusing an event) -->
+    <!-- Telescope Observation Dock (only visible while zoomed into a distant event) -->
     <div v-if="activeEvent && activeEvent.observing" class="cosmos-watch-dock" @pointerdown.stop @wheel.stop>
-      <span class="cosmos-ewd-badge">{{ $t('cosmos.events.' + activeEvent.def.id + '.name') }}</span>
+      <div class="cosmos-ewd-meta">
+        <span class="cosmos-ewd-badge">{{ $t('cosmos.events.' + activeEvent.def.id + '.name') }}</span>
+        <span v-if="activeBearingLabel" class="cosmos-ewd-bearing">{{ activeBearingLabel }}</span>
+      </div>
 
       <div class="cosmos-ewd-zoom">
         <button type="button" class="cosmos-ewd-mini" :title="$t('cosmos.events.zoomOut')" @click="$emit('set-zoom', activeEvent.targetZoom - 0.25)">−</button>
         <input
           type="range"
           class="cosmos-ewd-range"
-          min="0.65"
+          min="0.75"
           max="3.4"
           step="0.05"
           :value="activeEvent.targetZoom"
@@ -125,6 +154,7 @@ export default {
         </button>
         <button type="button" class="cosmos-ewd-btn" @click="$emit('replay')">{{ $t('cosmos.events.replay') }}</button>
         <button type="button" class="cosmos-ewd-btn" @click="$emit('next-random')">{{ $t('cosmos.events.nextRandom') }}</button>
+        <button type="button" class="cosmos-ewd-btn" @click="$emit('return-solar')">{{ $t('cosmos.events.returnSolar') }}</button>
         <button type="button" class="cosmos-ewd-btn is-stop" @click="$emit('stop-event')">■ {{ $t('cosmos.events.stop') }}</button>
       </div>
     </div>
@@ -137,6 +167,14 @@ export default {
     const nextEventDef = Vue.computed(() => (
       COSMIC_EVENTS[props.nextEventIndex % COSMIC_EVENTS.length] || COSMIC_EVENTS[0]
     ));
+
+    const activeBearingLabel = Vue.computed(() => {
+      const loc = props.activeEvent?.location;
+      if (!loc) return '';
+      const dir = $t(`cosmos.events.dir.${loc.sector}`);
+      const dist = formatEventDistance(loc.distanceLy, getLocale() === 'en');
+      return `${dir} · ${dist}`;
+    });
 
     const pillTitle = Vue.computed(() => {
       if (props.activeEvent) return $t(`cosmos.events.${props.activeEvent.def.id}.name`);
@@ -172,7 +210,7 @@ export default {
     function onWatchClick() {
       almanacOpen.value = false;
       if (props.activeEvent?.observing) {
-        emit('stop-event');
+        emit('return-solar');
       } else {
         emit('observe', props.activeEvent ? props.activeEvent.def.id : nextEventDef.value.id);
       }
@@ -190,6 +228,7 @@ export default {
     return {
       events: COSMIC_EVENTS,
       almanacOpen,
+      activeBearingLabel,
       pillTitle,
       pillTimer,
       rowCta,

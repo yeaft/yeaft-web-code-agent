@@ -16,6 +16,7 @@ import { createSessionFromSpec, snapshotSessions } from '../../../agent/yeaft/se
 import { openSession } from '../../../agent/yeaft/sessions/session-store.js';
 import { pruneDeletedSessionTurnsOffline } from '../../../agent/yeaft/cli.js';
 import { ToolRegistry } from '../../../agent/yeaft/tools/registry.js';
+import routeForward from '../../../agent/yeaft/tools/route-forward.js';
 import { GeminiAdapter } from '../../../agent/yeaft/llm/gemini.js';
 
 let root;
@@ -594,4 +595,50 @@ it('deletes a finished Session turn without opt-in and excludes it from real Eng
   expect(readLog()).not.toContain('deleted-special');
   expect(readLog()).toContain('next question');
   await until(() => ctx.outboundSendQueue.length === 0 && !ctx.outboundSendQueueActive);
+});
+
+it('takes a routed human supplement into the same execution even when its tool batch hands work off', async () => {
+  const streamGate = deferred();
+  const requests = [];
+  const followUp = 'Also include the rollback SQL';
+  const adapter = {
+    async *stream({ messages }) {
+      const users = messages.filter(row => row.role === 'user').map(row => typeof row.content === 'string'
+        ? row.content : row.content?.filter(block => block.type === 'text').map(block => block.text).join(''));
+      requests.push({ users, toolResults: messages.filter(row => row.role === 'tool').map(row => row.content) });
+      const input = users.filter(text => !text?.startsWith('[Session peer context')).at(-1);
+      if (input === '@vp-omni START_HANDOFF_WITH_SUPPLEMENT' || input === '@vp-omni START_HANDOFF_ALONE') {
+        if (input.endsWith('WITH_SUPPLEMENT')) await streamGate.promise;
+        yield { type: 'tool_call', id: `handoff-${requests.length}`, name: 'RouteForward', input: { to: 'linus', text: 'Review the migration' } };
+        yield { type: 'stop', stopReason: 'tool_use' };
+        return;
+      }
+      yield { type: 'text_delta', text: 'Reviewed.' };
+      yield { type: 'stop', stopReason: 'end_turn' };
+    },
+    async call({ messages }) {
+      const { candidates } = JSON.parse(messages[0].content);
+      return { text: JSON.stringify({ decision: 'match', sessionId: candidates[0].id, confidence: 0.99 }) };
+    },
+  };
+  const { sessionId, toolRegistry, send } = setup(adapter, ['omni', 'linus'], { decisionModel: 'test-model' });
+  toolRegistry.register(routeForward);
+  bridge.__testSetThreadClassifier(({ runningThreads }) => ({ decision: 'related', targetThreadId: runningThreads[0].threadId }));
+  await send('handoff-root', 'START_HANDOFF_WITH_SUPPLEMENT');
+  await until(() => requests.length === 1);
+  const root = events('vp_turn_start').find(frame => frame.sessionId === sessionId && frame.vpId === 'omni');
+  expect(root).toBeDefined();
+  await bridge.handleYeaftAutoRouteSend({ id: 'handoff-supplement', requestId: 'req-handoff', text: followUp, _allowedSessionIds: [sessionId] });
+  expect(frames().find(f => f.type === 'yeaft_session_routed' && f.requestId === 'req-handoff')).toMatchObject({ ok: true, delivery: 'appended' });
+  streamGate.resolve();
+  await bridge.__testDrainVpDrivers();
+  const nextRequest = requests.find(request => request.users.at(-1) === `@vp-omni ${followUp}`);
+  expect(nextRequest?.toolResults).toEqual(expect.arrayContaining([expect.stringContaining('"dispatched":["linus"]')]));
+  expect(events('vp_turn_start').filter(f => f.vpId === 'omni').map(f => f.turnId)).toEqual([root.turnId]);
+  expect(events('vp_thread_user_append_consumed').find(f => f.event.preview.includes(followUp))?.turnId).toBe(root.turnId);
+  expect(events('vp_turn_start').some(f => f.vpId === 'linus')).toBe(true);
+
+  await send('normal-handoff', 'START_HANDOFF_ALONE');
+  await bridge.__testDrainVpDrivers();
+  expect(events('vp_turn_end').filter(f => f.vpId === 'omni').at(-1)?.event.stopReason).toBe('tool_handoff');
 });

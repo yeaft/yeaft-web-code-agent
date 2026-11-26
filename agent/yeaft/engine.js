@@ -62,7 +62,7 @@ import { perfNowMs, recordAgentPerfTrace } from './perf-trace.js';
 // pass a real threadId per (sessionId, vpId, threadId) engine instance.
 const MAIN_THREAD_ID = 'main';
 
-import { pickEffort, parseEffortPrefix, snapshotEffortDecision, stepDownRetryEffort } from './effort.js';
+import { pickEffort, parseEffortPrefix, snapshotEffortDecision, stepDownRetryEffort, highestEffortAtOrBelow } from './effort.js';
 import { normalizeProtocolName } from './llm/router.js';
 import { bindProviderState, ProviderStateError, ProviderContextBudgetError } from './llm/provider-state.js';
 import {
@@ -74,7 +74,7 @@ import {
   savePostCompact,
 } from './post-compact.js';
 import { streamContextRollover, contextRolloverLocalHandoff, contextRolloverReport, contextRolloverSeed } from './context-rollover.js';
-import { getModelInfo, normalizeEffort, parseModelRef, resolveContextWindow, resolveMaxOutputTokens } from './models.js';
+import { getModelEffortOptions, getModelInfo, normalizeEffort, parseModelRef, resolveContextWindow, resolveMaxOutputTokens } from './models.js';
 import { attachRouterPlan, extractPriorPlan, stripMetaForWire } from './router/continuity.js';
 import { resolveThinking } from './router/thinking.js';
 import { findEffortModelEntry, normalizeRoutedEffort } from './sessions/session-config.js';
@@ -3184,7 +3184,18 @@ export class Engine {
         // Resolve effort per provider request so a saved Session effort takes
         // effect at the next loop. A caller override or `/effort` prefix stays
         // fixed for this query and still wins over live Session config.
-        const requestUserEffort = normalizeRequestEffort(turnConfig?.effort)
+        // Child targets are portable across routing and retry. Resolve against
+        // this request's model, before an adapter interprets protocol aliases
+        // or allocates a manual thinking budget. The adapter still owns the
+        // final capability/ceiling check, and can report the actual wire tier.
+        const routedChildEffort = subAgentTargetEffort ? highestEffortAtOrBelow(subAgentTargetEffort,
+          getModelEffortOptions(currentModel, {
+            protocol: effortProtocol, supportsEffort: effortModel?.supportsEffort,
+            effortOptions: effortModel?.effortOptions,
+            thinkingProtocol: effortModel?.thinkingProtocol || effortModel?.effortProtocol,
+            maxBudgetTokens: effortModel?.maxBudgetTokens,
+          })) : null;
+        const requestUserEffort = routedChildEffort || normalizeRequestEffort(turnConfig?.effort)
           || normalizeRequestEffort(userEffort)
           || normalizeRequestEffort(requestConfig.modelEffort);
         const geminiDefault = scenario === 'chat' && effortModel?.effortProtocol === 'gemini'
@@ -6050,14 +6061,15 @@ export class Engine {
       // and must not leak into a later provider-generated batch.
       if (toolBatchBarrier) endTurnRequested = null;
 
-      // task-707: tool-callable end-turn signal. If a tool in this batch
-      // called toolCtx.requestEndTurn(reason), break out of the outer
-      // while-loop now — DON'T call adapter.stream() again. The
-      // assistant(tool_use)+tool(tool_result) pairs are already in
-      // conversationMessages, so the next user-initiated turn sees a
-      // clean wire shape. Used by `route_forward` to hand off control
-      // to other VPs without continuing to generate.
-      //
+      // A handoff normally ends this execution. If a live Session already
+      // accepted a newer human instruction, finish the paired tool batch and
+      // let the next loop read it. The forward already happened; only its
+      // request to stop this VP is superseded. Otherwise seal the input queue
+      // so a late send cannot be acknowledged as joining an ending query.
+      if (endTurnRequested && !signal?.aborted && closePendingUserInput?.({ handoff: true }) === false) {
+        endTurnRequested = null;
+      }
+
       // A clean handoff must precede the abortedDuringTools check so it
       // does not get reported as 'aborted'.
       if (endTurnRequested && !toolBatchBarrier) {

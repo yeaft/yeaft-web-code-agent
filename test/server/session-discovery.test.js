@@ -430,6 +430,7 @@ it('serves full incremental FTS results, 5-day active cards and durable Share en
         type: 'yeaft_session_routed',
         ok: true,
         requestId: 'req_global_admin',
+        delivery: 'queued',
         clientMessageId: 'auto_msg_ok',
         _requestClientId: 'client-alice',
         sessionId: 'sess_created_global',
@@ -446,6 +447,14 @@ it('serves full incremental FTS results, 5-day active cards and durable Share en
         ok: true,
         sessionId: 'sess_created_global',
         decision: 'created',
+        delivery: 'queued',
+      });
+      await handleAgentOutput(agentId, agent, {
+        type: 'yeaft_session_routed', ok: false, code: 'invalid_quick_send',
+        requestId: 'req_failed', _requestClientId: 'client-alice',
+      });
+      expect(alice.ws.getLastMessage()).toMatchObject({
+        type: 'yeaft_session_routed', ok: false, code: 'invalid_quick_send', requestId: 'req_failed',
       });
       expect(bob.ws.getLastMessage()?.type).not.toBe('yeaft_session_routed');
     } finally {

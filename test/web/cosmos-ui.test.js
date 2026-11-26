@@ -24,11 +24,20 @@ import {
   COSMIC_EVENTS,
   MIN_EVENT_INTERVAL_SEC,
   MAX_EVENT_INTERVAL_SEC,
+  EVENT_DISTANT_MIN_SCALE,
+  EVENT_DISTANT_MAX_SCALE,
   createCosmicEventState,
   startCosmicEvent,
+  focusActiveCosmicEvent,
+  unfocusCosmicEvent,
   stopCosmicEvent,
   tickCosmicEvents,
   pickRandomEventIndex,
+  pickRandomDistantLocation,
+  getEventScreenPosition,
+  getEventShockWave,
+  getSolarTelescopeTransform,
+  formatEventDistance,
 } from '../../web/cosmos/events-controller.js';
 import {
   projectAgentsForCosmos,
@@ -101,7 +110,7 @@ describe('Cosmos UI Mode & Auto-Route Store Helper', () => {
     expect(frame).not.toHaveProperty('_knowledgeSessionIds');
     expect(frame.attachments).toEqual([{ fileId: 'f-1', isImage: true }]);
     expect(frame.preferredSceneId).toBeUndefined();
-    expect(frame.quickSend).toEqual({ model: 'copilot/gpt-6.2-sol', effort: 'high' });
+    expect(frame.quickSend).toEqual({ model: 'copilot/gpt-6.2-sol', effort: 'high', maxOutputTokens: null });
 
     const handled = handleYeaftSessionRouted(store, {
       ok: true,
@@ -174,6 +183,11 @@ describe('Cosmos UI Mode & Auto-Route Store Helper', () => {
     expect(errRes.ok).toBe(false);
     expect(errRes.code).toBe('invalid_attachment');
 
+    const pRejected = sendYeaftAutoRouteMessage(store, { agentId: 'ag-ok', text: 'Follow up' });
+    handleYeaftSessionRouted(store, { ok: false, requestId: store.sendWsMessage.mock.lastCall[0].requestId,
+      code: 'invalid_quick_send', error: 'Invalid model' });
+    expect(await pRejected).toMatchObject({ ok: false, code: 'invalid_quick_send' });
+
     const pCancel = sendYeaftAutoRouteMessage(store, { agentId: 'ag-ok', text: 'pending on logout' });
     clearPendingAutoRoutes(store, 'logout');
     const cancelRes = await pCancel;
@@ -218,6 +232,7 @@ describe('Cosmos Planet Assignments & Constants Persistence', () => {
       activeFlash: false,
       livePreviewMode: '3',
       eventsAutoEnabled: false,
+      eventsAutoZoom: false,
     }, storage);
 
     const loaded = loadCosmosConstants(storage);
@@ -226,6 +241,7 @@ describe('Cosmos Planet Assignments & Constants Persistence', () => {
     expect(loaded.activeFlash).toBe(false);
     expect(loaded.livePreviewMode).toBe('3');
     expect(loaded.eventsAutoEnabled).toBe(false);
+    expect(loaded.eventsAutoZoom).toBe(false);
 
     expect(scaleBand(24)).toBe('web');
     expect(scaleBand(21)).toBe('galaxy');
@@ -269,6 +285,108 @@ describe('Cosmos Random-Interval Event Scheduler & Stop Control', () => {
     tickCosmicEvents(sim, 10, { showCountdown: true, autoEnabled: false, rng });
     expect(sim.active).toBeNull();
     expect(sim.countdown).toBe(1);
+  });
+
+  it('spawns events at peripheral 3D deep-sky coordinates, slews in on observe, returns to Solar System after completion, and respects autoZoom off', () => {
+    // 1. Peripheral coordinates never overlap the central Solar System center (0.5, 0.5)
+    let seed = 42;
+    const rng = () => {
+      seed = (seed * 1664525 + 1013904223) >>> 0;
+      return seed / 4294967296;
+    };
+    const seenSectors = new Set();
+    let prevSector = null;
+    for (let i = 0; i < 40; i++) {
+      const loc = pickRandomDistantLocation(prevSector, rng);
+      expect(loc.sector).not.toBe(prevSector);
+      seenSectors.add(loc.sector);
+      const radialDist = Math.hypot(loc.x - 0.5, loc.y - 0.5);
+      expect(radialDist).toBeGreaterThanOrEqual(0.28);
+      expect(loc.distantScale).toBeGreaterThanOrEqual(EVENT_DISTANT_MIN_SCALE);
+      expect(loc.distantScale).toBeLessThanOrEqual(EVENT_DISTANT_MAX_SCALE);
+      expect(loc.distanceLy).toBeGreaterThanOrEqual(160);
+      prevSector = loc.sector;
+    }
+    expect(seenSectors.size).toBeGreaterThanOrEqual(6);
+    expect(formatEventDistance(420, false)).toBe('420 光年');
+    expect(formatEventDistance(2400, true)).toBe('2.4k ly');
+
+    // 2. When autoZoom is OFF, scheduled trigger unfolds in place at distant scale (no camera hijack)
+    const simOff = createCosmicEventState({ autoEnabled: true, autoZoom: false, rng });
+    simOff.countdown = 0.5;
+    tickCosmicEvents(simOff, 1.0, { showCountdown: true, autoEnabled: true, autoZoom: false, rng });
+    expect(simOff.active).not.toBeNull();
+    expect(simOff.active.observing).toBe(false);
+    expect(simOff.focusProgress).toBe(0);
+    const distantPos = getEventScreenPosition(simOff, 1440, 900, 0);
+    expect(distantPos.isDistant).toBe(true);
+    expect(distantPos.scale).toBeCloseTo(simOff.active.location.distantScale, 3);
+    expect(getSolarTelescopeTransform(simOff, 1440, 900).active).toBe(false);
+
+    // Clicking the distant beacon focuses in -> camera slews to center and Solar System recedes
+    focusActiveCosmicEvent(simOff);
+    expect(simOff.active.observing).toBe(true);
+    for (let f = 0; f < 40; f++) {
+      tickCosmicEvents(simOff, 0.05, { showCountdown: true, autoEnabled: true, autoZoom: false, rng });
+    }
+    expect(simOff.focusProgress).toBeGreaterThan(0.92);
+    const focusedPos = getEventScreenPosition(simOff, 1440, 900, 0);
+    expect(focusedPos.isDistant).toBe(false);
+    expect(Math.abs(focusedPos.x - 720)).toBeLessThan(20);
+    expect(Math.abs(focusedPos.y - 450)).toBeLessThan(20);
+    expect(focusedPos.scale).toBeGreaterThan(1.2);
+    const zoomedSolar = getSolarTelescopeTransform(simOff, 1440, 900);
+    expect(zoomedSolar.active).toBe(true);
+    expect(zoomedSolar.alphaMul).toBeLessThan(0.1);
+
+    // Unfocusing keeps the distant event playing while camera glides smoothly back to Solar System
+    expect(unfocusCosmicEvent(simOff)).toBe(true);
+    expect(simOff.active).not.toBeNull();
+    expect(simOff.active.observing).toBe(false);
+    for (let f = 0; f < 60; f++) {
+      tickCosmicEvents(simOff, 0.05, { showCountdown: true, autoEnabled: true, autoZoom: false, rng });
+    }
+    expect(simOff.focusProgress).toBeLessThan(0.05);
+    expect(Math.abs(simOff.camYawOffset)).toBeLessThan(0.05);
+
+    // 3. When autoZoom is ON, scheduled trigger slews in automatically and returns automatically on finish
+    const simOn = createCosmicEventState({ autoEnabled: true, autoZoom: true, rng });
+    simOn.countdown = 0.5;
+    tickCosmicEvents(simOn, 1.0, { showCountdown: true, autoEnabled: true, autoZoom: true, canAutoZoom: true, rng });
+    expect(simOn.active?.observing).toBe(true);
+    for (let f = 0; f < 25; f++) {
+      tickCosmicEvents(simOn, 0.05, { showCountdown: true, autoEnabled: true, autoZoom: true, rng });
+    }
+    expect(simOn.focusProgress).toBeGreaterThan(0.85);
+    // Advance past end of event -> active clears and camera smoothly returns to Solar System
+    tickCosmicEvents(simOn, simOn.active.duration + 1, { showCountdown: true, autoEnabled: true, autoZoom: true, rng });
+    expect(simOn.active).toBeNull();
+    for (let f = 0; f < 80; f++) {
+      tickCosmicEvents(simOn, 0.05, { showCountdown: true, autoEnabled: true, autoZoom: true, rng });
+    }
+    expect(simOn.focusProgress).toBe(0);
+    expect(getSolarTelescopeTransform(simOn, 1440, 900).active).toBe(false);
+
+    // 4. When user has drawer/quick composer open (canAutoZoom=false), even with autoZoom ON do not hijack camera
+    const simBusy = createCosmicEventState({ autoEnabled: true, autoZoom: true, rng });
+    simBusy.countdown = 0.5;
+    tickCosmicEvents(simBusy, 1.0, { showCountdown: true, autoEnabled: true, autoZoom: true, canAutoZoom: false, rng });
+    expect(simBusy.active).not.toBeNull();
+    expect(simBusy.active.observing).toBe(false);
+
+    // 5. Portal avoidance keeps distant event & beacon clear of corner portals, and shockwave respects visibilityAlpha
+    const simPortal = createCosmicEventState({ autoEnabled: true, autoZoom: false, rng });
+    startCosmicEvent(simPortal, 'supernova', { observe: false, rng });
+    simPortal.active.location = { sector: 'nw', x: 0.14, y: 0.16, depth: 0.5, distantScale: 0.32, yaw: 0.34, pitch: -0.22, distanceLy: 1200 };
+    simPortal.active.elapsed = simPortal.active.duration * 0.45;
+    const portalPt = { x: 0.14 * 1440, y: 0.16 * 900 };
+    const nudged = getEventScreenPosition(simPortal, 1440, 900, 0, [portalPt]);
+    expect(Math.hypot(nudged.restX - portalPt.x, nudged.restY - portalPt.y)).toBeGreaterThanOrEqual(115);
+
+    const distantShock = getEventShockWave(simPortal, 1440, 900, 0, [portalPt], 1.0);
+    const hiddenShock = getEventShockWave(simPortal, 1440, 900, 0, [portalPt], 0.0);
+    expect(distantShock[3]).toBeGreaterThan(0);
+    expect(hiddenShock).toEqual([0, 0, 0, 0]);
   });
 });
 
@@ -409,6 +527,24 @@ describe('Cosmos Component & WebGL Review Regressions', () => {
     const routed = wrapper.emitted('routed');
     expect(routed).toHaveLength(1);
     expect(routed[0][0]).toMatchObject({ agentId: 'ag-cloud', planetId: 'saturn' });
+
+    const supplement = wrapper.vm.handleQuickSend('Also check mobile');
+    expect(sendYeaftAutoRouteMessageMock).toHaveBeenLastCalledWith(expect.objectContaining({
+      agentId: 'ag-mac', quickSend: null,
+    }));
+    resolveRoute({ ok: true, sessionId: 'sess-mac-1', decision: 'matched', delivery: 'appended' });
+    expect(await supplement).toBe(true);
+    expect(wrapper.vm.statusBanner.text).toBe('cosmos.quick.routedAppended');
+
+    wrapper.vm.selectModel('copilot/mac-only-model', 'high');
+    const explicit = wrapper.vm.handleQuickSend('Run it with this model');
+    expect(sendYeaftAutoRouteMessageMock).toHaveBeenLastCalledWith(expect.objectContaining({
+      quickSend: { model: 'copilot/mac-only-model', effort: null },
+    }));
+    resolveRoute({ ok: false, code: 'invalid_quick_send', error: 'Invalid model' });
+    expect(await explicit).toBe(false);
+    expect(wrapper.vm.statusBanner.error).toBe(true);
+    expect(wrapper.emitted('routed')).toHaveLength(2);
   });
 
   it('wires CosmosConversationDrawer search/outline to real store APIs and enforces agent-scoped session lookup', async () => {

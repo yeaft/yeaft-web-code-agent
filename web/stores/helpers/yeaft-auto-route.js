@@ -51,7 +51,7 @@ function normalizeQuickSend(store, agentId, quickSend) {
   const maxOutputTokens = Number.isFinite(quickSend.maxOutputTokens) && quickSend.maxOutputTokens > 0
     ? quickSend.maxOutputTokens
     : null;
-  if (!model && !effort && !maxOutputTokens) return null;
+  if (!model) return null;
   if (model && effort) {
     const config = store.llmConfig?.[agentId];
     const models = config?.agentConfig?.availableModels
@@ -62,11 +62,7 @@ function normalizeQuickSend(store, agentId, quickSend) {
       effort = normalizeModelEffort(effort, catalogModel);
     }
   }
-  return {
-    ...(model ? { model } : {}),
-    ...(effort ? { effort } : {}),
-    ...(maxOutputTokens ? { maxOutputTokens } : {}),
-  };
+  return { model, effort: effort || null, maxOutputTokens };
 }
 
 function lookupPending(store, { requestId, clientMessageId }) {
@@ -91,7 +87,7 @@ function finalizePending(store, entry, result) {
 /**
  * Send a sessionless message via `yeaft_auto_route_send` for a specific Agent.
  * Resolves with `{ ok, agentId, sessionId, decision, tier, title, sceneId, workDir,
- * confidence, reason, answeredAskUser, code, error }`.
+ * confidence, reason, delivery, answeredAskUser, code, error }`.
  */
 export function sendYeaftAutoRouteMessage(store, {
   agentId,
@@ -230,14 +226,18 @@ export function handleYeaftSessionRouted(store, msg, sessionIdentityKeyFn) {
     reason: typeof msg.reason === 'string' ? msg.reason : '',
     decisionModel: typeof msg.decisionModel === 'string' ? msg.decisionModel : null,
     routeSource: typeof msg.routeSource === 'string' ? msg.routeSource : null,
+    delivery: msg.delivery === 'appended' || msg.delivery === 'queued' ? msg.delivery : null,
     answeredAskUser: msg.answeredAskUser === true,
+    code: typeof msg.code === 'string' ? msg.code : null,
     error: msg.error || null,
     at: Date.now(),
   };
 
   store.yeaftLastAutoRouteResult = result;
 
-  if (result.ok && agentId && sessionId && !result.answeredAskUser) {
+  // New Agents send authoritative turn events before the receipt. Do not
+  // re-mark a turn as processing if it already completed before the receipt.
+  if (result.ok && !result.delivery && agentId && sessionId && !result.answeredAskUser) {
     const key = typeof sessionIdentityKeyFn === 'function'
       ? sessionIdentityKeyFn(agentId, sessionId)
       : `${agentId}\u001f${sessionId}`;

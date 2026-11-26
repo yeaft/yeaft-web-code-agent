@@ -200,10 +200,46 @@
   font-size: 11.5px;
   font-weight: 500;
   color: var(--c-ink);
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 
 .cosmos-almanac-sub {
   font-size: 10px;
+  color: var(--c-faint);
+  text-align: right;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.cosmos-almanac-pref {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 6px 8px;
+  margin-bottom: 6px;
+  border-radius: 9px;
+  background: rgba(124, 196, 255, 0.06);
+  border: 1px solid rgba(186, 214, 255, 0.12);
+}
+
+.cosmos-almanac-pref-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.cosmos-almanac-pref-label {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--c-ink);
+}
+
+.cosmos-almanac-pref-meta {
+  font-size: 9.5px;
   color: var(--c-faint);
 }
 
@@ -311,10 +347,23 @@
   left: calc((100vw - var(--c-panel-w)) * 0.5);
 }
 
+.cosmos-ewd-meta {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 7px;
+}
+
 .cosmos-ewd-badge {
   font-size: 11.5px;
   font-weight: 500;
   color: #fff;
+}
+
+.cosmos-ewd-bearing {
+  font-family: var(--font-mono, monospace);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  color: var(--c-muted);
 }
 
 .cosmos-ewd-zoom {
@@ -394,6 +443,158 @@
   background: rgba(255, 126, 136, 0.30);
 }
 
+/* ── Distant Deep-Sky Event Reticle Beacon (when Auto-Zoom is off) ── */
+.cosmos-event-beacon {
+  --event-swatch: var(--c-cyan);
+  position: absolute;
+  width: 44px;
+  height: 44px;
+  transform: translate(-50%, -50%);
+  z-index: 24;
+  pointer-events: auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  color: var(--c-ink);
+  transition: opacity 220ms ease;
+}
+
+.cosmos-event-beacon-reticle {
+  position: relative;
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  border: 1px solid color-mix(in srgb, var(--event-swatch) 58%, transparent);
+  box-shadow: 0 0 18px color-mix(in srgb, var(--event-swatch) 28%, transparent);
+  transition: transform 240ms var(--c-ease), border-color 180ms ease, box-shadow 180ms ease;
+}
+
+.cosmos-event-beacon-reticle::before,
+.cosmos-event-beacon-reticle::after {
+  content: '';
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  border-radius: 50%;
+  pointer-events: none;
+}
+
+.cosmos-event-beacon-reticle::before {
+  inset: -6px;
+  left: -6px;
+  top: -6px;
+  transform: none;
+  border: 1px solid color-mix(in srgb, var(--event-swatch) 42%, transparent);
+  animation: cosmos-beacon-ping 2.4s ease-out infinite;
+}
+
+.cosmos-event-beacon-reticle::after {
+  width: 4px;
+  height: 4px;
+  background: var(--event-swatch);
+  box-shadow: 0 0 8px var(--event-swatch);
+}
+
+.cosmos-event-beacon:hover .cosmos-event-beacon-reticle,
+.cosmos-event-beacon:focus-visible .cosmos-event-beacon-reticle {
+  transform: scale(1.16);
+  border-color: var(--event-swatch);
+  box-shadow: 0 0 26px color-mix(in srgb, var(--event-swatch) 55%, transparent);
+}
+
+.cosmos-event-beacon-tag {
+  position: absolute;
+  left: 50%;
+  top: calc(100% + 4px);
+  transform: translateX(-50%);
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 22px;
+  padding: 0 9px;
+  border-radius: 999px;
+  background: rgba(5, 10, 22, 0.76);
+  border: 1px solid color-mix(in srgb, var(--event-swatch) 34%, rgba(186, 214, 255, 0.16));
+  backdrop-filter: blur(12px);
+  box-shadow: 0 8px 22px rgba(0, 0, 0, 0.54);
+  white-space: nowrap;
+  transition: background 160ms ease, border-color 160ms ease, transform 180ms var(--c-ease);
+}
+
+.cosmos-event-beacon.is-bottom-edge .cosmos-event-beacon-tag {
+  top: auto;
+  bottom: calc(100% + 4px);
+}
+
+.cosmos-event-beacon.is-right-edge .cosmos-event-beacon-tag {
+  left: auto;
+  right: -6px;
+  transform: none;
+}
+
+.cosmos-event-beacon.is-left-edge .cosmos-event-beacon-tag {
+  left: -6px;
+  transform: none;
+}
+
+.cosmos-event-beacon:hover .cosmos-event-beacon-tag,
+.cosmos-event-beacon:focus-visible .cosmos-event-beacon-tag {
+  background: rgba(8, 16, 34, 0.90);
+  border-color: color-mix(in srgb, var(--event-swatch) 72%, rgba(255, 255, 255, 0.2));
+}
+
+.cosmos-event-beacon:focus-visible {
+  outline: none;
+}
+
+.cosmos-event-beacon:focus-visible .cosmos-event-beacon-tag {
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--event-swatch) 55%, transparent), 0 8px 22px rgba(0, 0, 0, 0.54);
+}
+
+.cosmos-event-beacon-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--event-swatch);
+  box-shadow: 0 0 8px var(--event-swatch);
+  flex-shrink: 0;
+}
+
+.cosmos-event-beacon-title {
+  font-size: 10.5px;
+  font-weight: 500;
+  color: rgba(238, 246, 255, 0.94);
+}
+
+.cosmos-event-beacon-coords {
+  font-family: var(--font-mono, monospace);
+  font-size: 9.5px;
+  font-variant-numeric: tabular-nums;
+  color: var(--c-muted);
+  padding-left: 4px;
+  border-left: 1px solid rgba(186, 214, 255, 0.16);
+}
+
+@keyframes cosmos-beacon-ping {
+  0% {
+    transform: scale(0.86);
+    opacity: 0.72;
+  }
+  70% {
+    transform: scale(1.42);
+    opacity: 0;
+  }
+  100% {
+    transform: scale(1.42);
+    opacity: 0;
+  }
+}
+
 @media (max-width: 768px) {
   .cosmos-event-wrap {
     left: calc(12px + env(safe-area-inset-left, 0px));
@@ -424,8 +625,20 @@
     padding: 0 7px;
   }
   .cosmos-page.is-drawer-open .cosmos-event-wrap,
-  .cosmos-page.is-drawer-open .cosmos-watch-dock {
+  .cosmos-page.is-drawer-open .cosmos-watch-dock,
+  .cosmos-page.is-drawer-open .cosmos-event-beacon {
     opacity: 0;
     pointer-events: none;
+  }
+  .cosmos-event-beacon-reticle {
+    width: 28px;
+    height: 28px;
+  }
+  .cosmos-event-beacon-tag {
+    height: 21px;
+    padding: 0 7px;
+  }
+  .cosmos-event-beacon-coords {
+    display: none;
   }
 }

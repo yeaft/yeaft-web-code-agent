@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 // Real settings UI and Server relay against an isolated Agent config.json.
-test('LLM settings round-trip the fast model and a sub-agent scene route', async ({ chatPage: page, mockAgent }) => {
+test('LLM settings round-trip the fast model and sub-agent routing defaults', async ({ chatPage: page, mockAgent }) => {
   const dir = await mkdtemp(join(tmpdir(), 'yeaft-llm-scene-settings-'));
   try {
     const main = 'fixture/gpt-5.4';
@@ -34,23 +34,32 @@ test('LLM settings round-trip the fast model and a sub-agent scene route', async
     };
     const fastModel = settings.getByRole('combobox', { name: /^Fast Model/ });
     const frontend = settings.getByRole('combobox', { name: /^Frontend/ });
+    const design = settings.getByRole('combobox', { name: 'Design (Designer)' });
+    const review = settings.getByRole('combobox', { name: 'Review (Reviewer)' });
     await openSettings();
+    await expect(design.locator('option:checked')).toHaveText('Auto (X-High target)');
+    await expect(review.locator('option:checked')).toHaveText('Auto (X-High target)');
+    await review.selectOption('medium');
     await fastModel.selectOption(fast);
     await frontend.selectOption(main);
     await saveSettings();
-    expect(getLlmConfig(dir).agentConfig).toMatchObject({ fastModel: fast, subAgentSceneModels: { frontend: main } });
+    expect(getLlmConfig(dir).agentConfig).toMatchObject({ fastModel: fast, subAgentSceneModels: { frontend: main }, subAgentPersonaEfforts: { reviewer: 'medium' } });
 
     await settings.getByRole('button', { name: 'Close' }).click();
     await openSettings();
     await expect(fastModel).toHaveValue(fast);
     await expect(frontend).toHaveValue(main);
+    await expect(review).toHaveValue('medium');
     await page.setViewportSize({ width: 320, height: 800 });
     await expect(frontend).toBeVisible();
+    await review.focus();
+    await expect(review).toBeFocused();
     expect(await settings.evaluate(node => node.scrollWidth <= node.clientWidth + 1)).toBe(true);
     await frontend.selectOption('');
+    await review.selectOption('');
     await fastModel.selectOption({ label: 'Auto (default routing)' });
     await saveSettings();
-    expect(getLlmConfig(dir).agentConfig).toMatchObject({ fastModel: null, subAgentSceneModels: {} });
+    expect(getLlmConfig(dir).agentConfig).toMatchObject({ fastModel: null, subAgentSceneModels: {}, subAgentPersonaEfforts: {} });
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

@@ -3,6 +3,7 @@ id: reviewer
 name: Reviewer
 description: Critical read-only reviewer for code changes and designs
 modelTier: primary
+defaultEffort: xhigh
 tools:
   - GitRead
   - Read

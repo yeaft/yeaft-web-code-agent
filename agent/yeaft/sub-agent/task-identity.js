@@ -37,7 +37,9 @@ export function buildDelegationIdentity(input, spec, grants, ctx = {}, selection
     persona: spec.persona,
     scene: selection?.sceneId ?? spec.scene ?? null,
     model: selection?.model ?? spec.model ?? null,
-    effort: selection?.effort ?? spec.effort ?? null,
+    // The target may differ from the first route's wire tier; a fallback can
+    // distinguish targets which happen to produce the same initial effort.
+    effort: selection ? selection.explicitEffortTarget : spec.effort ?? null,
     cwd: canonicalWorkspace(resolveAgentCwd(input.cwd, ctx.cwd)),
     baseline: input.baseline ?? null,
     expected_output: spec.expected_output,

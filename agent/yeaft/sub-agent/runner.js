@@ -207,10 +207,9 @@ export function startSubAgent(agent, deps = {}) {
       // fallbackModel on transient provider retry exhaustion.
       childConfig.fallbackModel = null;
     }
-    // Always set childConfig.modelEffort explicitly so ordinary sub-agents
-    // (explicitEffortTarget === null) do not inherit a parent Session's `max`
-    // effort and inflate Anthropic manual thinking max_tokens before clamping.
-    childConfig.modelEffort = resolvedSelection.explicitEffortTarget || null;
+    // A child never inherits a Session's modelEffort setting directly. The
+    // query resolves the delegation target against each actual provider route.
+    childConfig.modelEffort = null;
 
     subEngine = new Engine({
       adapter: deps.adapter,
@@ -563,7 +562,6 @@ async function driveSubAgent(agent, subEngine, vpPersona, deps) {
       try {
         agent.activeParentEffortDecision = queuedPrompt.parentEffortDecision;
         emit({ type: 'sub_agent_effort_snapshot', parentEffortDecision: queuedPrompt.parentEffortDecision });
-        const explicitEffortTarget = agent.selection?.explicitEffortTarget || null;
         const stream = subEngine.query({
           prompt: queuedPrompt.prompt,
           messages: agent.engineMessages,
@@ -571,8 +569,7 @@ async function driveSubAgent(agent, subEngine, vpPersona, deps) {
           scenario: 'sub_agent',
           isSubAgent: true,
           parentEffortDecision: queuedPrompt.parentEffortDecision,
-          subAgentTargetEffort: explicitEffortTarget,
-          userEffort: explicitEffortTarget,
+          subAgentTargetEffort: agent.selection?.explicitEffortTarget ?? null,
           ...(agent.taskId && deps.taskManager?.setSubAgentRoute && agent.parentSessionId ? {
             // Observe the provider request, not the selection estimate. Retries
             // and follow-ups can change the actual model or wire effort.

@@ -974,6 +974,7 @@ function engineConfigKey(config) {
     fastModel: config?.fastModel || '',
     fastModelId: config?.fastModelId || '',
     subAgentSceneModels: config?.subAgentSceneModels || {},
+    subAgentPersonaEfforts: config?.subAgentPersonaEfforts || {},
     decisionModel: config?.decisionModel || '',
     decisionModelId: config?.decisionModelId || '',
     fallbackModel: config?.fallbackModel || '',
@@ -1006,8 +1007,6 @@ function createThreadId() {
 const RUNNING_THREAD_STATES = new Set(['queued', 'typing', 'thinking', 'retrying', 'streaming', 'tool']);
 /** @type {Map<string, Map<string, object>>} */
 const vpThreads = new Map();
-/** @type {Map<string, Set<Promise<string|null>>>} */
-const routePromisesByMsgId = new Map();
 /** @type {Map<string, { workDir: string, skillManager: import('./skills.js').SkillManager, mcpManager: import('./mcp.js').MCPManager, mcpStatus: object, configuredMcpConfig: object, effectiveMcpConfig: object, status: { skills: number, mcpServers: string[], mcpFailed: object[], mcpSkipped: object[], tools: number } }>} */
 const projectRuntimes = new Map();
 /** @type {Map<string, Promise<any>>} */
@@ -1470,23 +1469,6 @@ function rememberThreadMessage(thread, msg) {
   thread.updatedAt = Date.now();
 }
 
-function registerRoutePromise(msgId, promise) {
-  if (!msgId) return;
-  let set = routePromisesByMsgId.get(msgId);
-  if (!set) {
-    set = new Set();
-    routePromisesByMsgId.set(msgId, set);
-  }
-  set.add(promise);
-  promise.finally(() => {
-    set.delete(promise);
-    if (set.size === 0 && routePromisesByMsgId.get(msgId) === set) {
-      routePromisesByMsgId.delete(msgId);
-    }
-  }).catch(() => {});
-}
-
-
 function buildVpPromptPayload(vpId, envelope) {
   const text = envelope?.msg?.text || '';
   const inboundSuffix = `${envelope?._promptSuffix || ''}${sessionMessageQuotePrompt(envelope?.msg?.meta?.quote)}`;
@@ -1563,13 +1545,6 @@ function readVpForClassifier(vpId) {
   } catch {
     return { vpId };
   }
-}
-
-async function waitForRoutePromises(msgId) {
-  if (!msgId) return;
-  const set = routePromisesByMsgId.get(msgId);
-  if (!set || set.size === 0) return;
-  await Promise.all(Array.from(set).map((p) => p.catch(() => null)));
 }
 
 /**
@@ -2429,11 +2404,6 @@ export function __testSeedVpThread({ sessionId, vpId, threadId, title = 'test th
   return thread.threadId;
 }
 
-/** Test-only: wait for thread classification/routing spawned by a msg id. */
-export async function __testWaitForRoutePromises(msgId) {
-  await waitForRoutePromises(msgId);
-}
-
 /** Test-only: route one coordinator envelope into the VP thread runtime. */
 export function __testEnqueueForVp(sessionId, vpId, envelope) {
   return enqueueForVp(sessionId, vpId, envelope);
@@ -2601,8 +2571,13 @@ function enqueueForVp(sessionId, vpId, envelope) {
       messageType: envelope?.trigger || 'user',
     });
   }
-  const routePromise = routeEnvelopeToVpThread(sessionId, vpId, envelope);
-  registerRoutePromise(envelope?.msg?.id, routePromise);
+  // This collector belongs to one ingress, never a caller-controlled message ID.
+  const { _routeOutcomes, ...deliveryEnvelope } = envelope;
+  const outcome = routeEnvelopeToVpThread(sessionId, vpId, deliveryEnvelope).catch(err => {
+    console.warn('[Yeaft] VP thread delivery failed:', err?.message || err);
+    return null;
+  });
+  _routeOutcomes?.push(outcome);
 }
 
 function scheduleTaskResultRescue({ taskId, sessionId, vpId, threadId = 'main', content, taskKind, taskStatus, causalRootId = null, userTurnId = null, sceneId = null }) {
@@ -2836,7 +2811,9 @@ async function routeActiveEnvelopeToVpThread(sessionId, vpId, envelope, ingress)
     // is not actually running, this was a stale classifier hit; remove the
     // append and fall through to a normal queued turn instead of orphaning it.
     let appendedToRunningThread = false;
-    try { appendedToRunningThread = thread.engine?.wakeForPendingUserMessage?.() === true; } catch { /* best-effort wake */ }
+    try {
+      appendedToRunningThread = !thread.userInputClosed && thread.engine?.wakeForPendingUserMessage?.() === true;
+    } catch { /* best-effort wake */ }
     if (!appendedToRunningThread) {
       thread.pendingQueries.pop();
       related = false;
@@ -2884,7 +2861,7 @@ async function routeActiveEnvelopeToVpThread(sessionId, vpId, envelope, ingress)
           ts: Date.now(),
         }, { sessionId, vpId, threadId: thread.threadId, userTurnId });
       } catch { /* never crash WS pipeline */ }
-      return thread.threadId;
+      return 'appended';
     }
   }
 
@@ -2926,7 +2903,7 @@ async function routeActiveEnvelopeToVpThread(sessionId, vpId, envelope, ingress)
   }
 
   ensureDriverRunning(sessionId, vpId, thread.threadId);
-  return thread.threadId;
+  return 'queued';
 }
 
 function ensureDriverRunning(sessionId, vpId, threadId = 'main') {
@@ -5758,15 +5735,15 @@ export function validateQuickSend(value, config) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
     throw new Error('quickSend must be an object');
   }
-  const { model, maxOutputTokens } = value;
+  const { model, effort: requestedEffort = null, maxOutputTokens = null } = value;
   const entry = typeof model === 'string' && model.includes('/')
     ? config?.availableModels?.find(candidate => candidate.ref === model)
     : null;
   if (!entry || config?.ambiguousModelRefs?.includes(model)) {
     throw new Error('quickSend.model must name an available, unambiguous provider/model');
   }
-  const effort = resolveCatalogEffort(entry, value.effort);
-  if (value.effort !== null && !effort) {
+  const effort = resolveCatalogEffort(entry, requestedEffort);
+  if (requestedEffort !== null && !effort) {
     throw new Error('quickSend.effort is not supported by the selected model');
   }
   if (maxOutputTokens !== null && (!Number.isSafeInteger(maxOutputTokens) || maxOutputTokens < 1
@@ -5776,7 +5753,7 @@ export function validateQuickSend(value, config) {
   return { model, effort, maxOutputTokens };
 }
 
-async function runYeaftSessionSend(msg) {
+async function runYeaftSessionSend(msg, { reportToSession = true, validatedTurnConfig } = {}) {
   if (!msg || typeof msg !== 'object') return;
   const { text } = msg;
   // PR #721: image-only send is allowed — text may be empty when the
@@ -5793,6 +5770,17 @@ async function runYeaftSessionSend(msg) {
   const sessionId = (typeof msg.sessionId === 'string' && msg.sessionId.trim())
     ? msg.sessionId.trim()
     : 'grp_default';
+  // Auto-route failures go to its submitting composer, not the target's active
+  // turn. Keep legacy session output for ordinary sends and scheduled tasks.
+  const reject = (code, error, { inlineError = false, clientMessageId = msg.id || null } = {}) => {
+    if (reportToSession) {
+      sendSessionOutputFrame(inlineError
+        ? { type: 'error', code, message: error, clientMessageId }
+        : { type: 'assistant', message: { content: [{ type: 'text', text: `⚠️ ${error}` }] } }, { sessionId });
+      sendSessionOutputFrame({ type: 'result', result_text: '', ...(inlineError ? { is_error: true } : {}) }, { sessionId });
+    }
+    return { ok: false, code, error };
+  };
   // Cache authority before the first await: an accepted send from the previous
   // transport must not repopulate stale context after disconnect invalidation.
   const hasInboundProjectContext = Object.prototype.hasOwnProperty.call(msg, 'projectContext');
@@ -5843,26 +5831,18 @@ async function runYeaftSessionSend(msg) {
   // session lying around.
   const yeaftDir = ctx.CONFIG?.yeaftDir;
   if (!yeaftDir) {
-    sendSessionOutputFrame({
-      type: 'assistant',
-      message: { content: [{ type: 'text', text: '⚠️ Yeaft session error: no yeaft directory configured.' }] },
-    }, { sessionId });
-    sendSessionOutputFrame({ type: 'result', result_text: '' }, { sessionId });
-    return;
+    return reject('agent_unavailable', 'Yeaft session error: no yeaft directory configured.');
   }
 
   // Reject malformed overrides before boot, roster changes, attachment writes,
   // or coordinator persistence. The error includes the client id for retry.
-  let turnConfig = null;
+  let turnConfig = validatedTurnConfig ?? null;
   try {
-    if (msg.quickSend !== undefined) {
+    if (validatedTurnConfig === undefined && msg.quickSend !== undefined) {
       turnConfig = validateQuickSend(msg.quickSend, loadConfig({ dir: yeaftDir }));
     }
   } catch (err) {
-    sendSessionOutputFrame({ type: 'error', code: 'invalid_quick_send',
-      message: err.message, clientMessageId: msg.id || null }, { sessionId });
-    sendSessionOutputFrame({ type: 'result', result_text: '', is_error: true }, { sessionId });
-    return;
+    return reject('invalid_quick_send', err.message, { inlineError: true });
   }
 
   // Open the user-level session metadata first so project runtime loading can
@@ -5906,7 +5886,7 @@ async function runYeaftSessionSend(msg) {
   try {
     return await dispatchAcceptedSessionSend({
       msg, text, mentions, quote, sessionId, yeaftDir, perfTraceId, perfStart, ingress, knowledgeSessionIds,
-      tracePerf, traceDuration, turnConfig, sceneId, sessionHandle, sessionRoot, sessionMetaForRuntime,
+      tracePerf, traceDuration, turnConfig, sceneId, sessionHandle, sessionRoot, sessionMetaForRuntime, reject,
     });
   } finally {
     ingress.release();
@@ -5916,11 +5896,12 @@ async function runYeaftSessionSend(msg) {
 
 async function dispatchAcceptedSessionSend({
   msg, text, mentions, quote, sessionId, yeaftDir, perfTraceId, perfStart, ingress, knowledgeSessionIds,
-  tracePerf, traceDuration, turnConfig, sceneId, sessionHandle, sessionRoot, sessionMetaForRuntime,
+  tracePerf, traceDuration, turnConfig, sceneId, sessionHandle, sessionRoot, sessionMetaForRuntime, reject,
 }) {
   const ensureSessionStart = perfNowMs();
   await ensureSessionLoaded({ sessionMeta: sessionMetaForRuntime, perfTraceId });
-  if (ingress.cancelled) return;
+  const cancelled = { ok: false, code: 'delivery_cancelled', error: 'Session message was cancelled before delivery.' };
+  if (ingress.cancelled) return cancelled;
   // Runtime boot may await I/O. Re-read the claim immediately before ingress
   // so edits, disable, archive or deletion during boot cannot execute stale work.
   msg[SCHEDULED_TASK_DISPATCH_GUARD]?.();
@@ -5939,14 +5920,7 @@ async function dispatchAcceptedSessionSend({
   traceDuration('session_send.ensure_session_loaded', ensureSessionStart);
 
 
-  if (!sessionHandle) {
-    sendSessionOutputFrame({
-      type: 'assistant',
-      message: { content: [{ type: 'text', text: `⚠️ Session ${sessionId} not found.` }] },
-    }, { sessionId });
-    sendSessionOutputFrame({ type: 'result', result_text: '' }, { sessionId });
-    return;
-  }
+  if (!sessionHandle) return reject('session_not_found', `Session ${sessionId} not found.`);
 
   // Auto-add @-mentioned VPs from the library, heal missing defaultVpId.
   let rosterMutated = false;
@@ -6043,26 +6017,25 @@ async function dispatchAcceptedSessionSend({
   // Ingest user text. The coordinator persists, applies mention/fanout
   // rules, and calls deliver() (== enqueueForVp) for each chosen VP —
   // which both (a) emits vp_typing_start and (b) ensures a driver runs.
-  let report;
   const ingestStart = perfNowMs();
   try {
-    await withSessionRouting(sessionId, async () => {
+    return await withSessionRouting(sessionId, async () => {
       const messageId = ingress.messageId;
-      if (ingress.cancelled) return;
+      if (ingress.cancelled) return cancelled;
       const ownerRoot = findExistingSessionYeaftDir(yeaftDir, sessionId);
       const { operations } = readSessionTurnDeletions(ownerRoot, sessionId);
       // A stale tab must not resurrect the same request by retransmitting its ID.
       if (operations.some(op => op.clientMessageIds.includes(messageId))) {
-        sendSessionOutputFrame({ type: 'error', code: 'message_deleted', message: 'This request was deleted.', clientMessageId: messageId }, { sessionId });
-        sendSessionOutputFrame({ type: 'result', result_text: '', is_error: true }, { sessionId });
-        return;
+        return reject('message_deleted', 'This request was deleted.', { inlineError: true, clientMessageId: messageId });
       }
       if (quote?.id && sessionDeletionProjection(operations).references.has(quote.id)) quote = null;
       const routing = await classifySessionUserInput(sessionId, messageId, text, ingress, turnConfig,
         sceneId ? [] : (mentions.length ? mentions : coord.parseMentions(text)), sceneId);
-      if (!routing) return;
-      report = coord.ingest({
+      if (!routing) return cancelled;
+      const routeOutcomes = [];
+      const report = coord.ingest({
         id: messageId,
+        _routeOutcomes: routeOutcomes,
         _userTurnRouting: routing,
         _sceneId: sceneId,
         _userTurnId: routing.userTurnId,
@@ -6094,65 +6067,34 @@ async function dispatchAcceptedSessionSend({
           ? msg.projectContext
           : null,
       });
-      await waitForRoutePromises(report?.message?.id);
+      const routeWaitStart = perfNowMs();
+      // Await only intake into the VP's append queue/inbox, not the model or
+      // other running turns. The coordinator's target list alone is not an ack.
+      const outcomes = await Promise.all(routeOutcomes);
+      traceDuration('session_send.wait_route_promises', routeWaitStart, { turnId: report.message.id });
+      traceDuration('session_send.coordinator_ingest', ingestStart, {
+        turnId: report.message.id,
+        detail: { dispatchedCount: report.dispatched?.length || 0, fallback: report.fallback || null },
+      });
+      const delivery = outcomes.includes('appended') ? 'appended' : outcomes.includes('queued') ? 'queued' : null;
+      if (!delivery) {
+        if (ingress.cancelled) return cancelled;
+        return report.dispatched?.length || report.fallback
+          ? reject('session_dispatch_failed', 'No running or queued turn accepted this message.')
+          : reject('no_session_responder', 'No VP available to respond — check the group roster.');
+      }
+      traceDuration('session_send.handler_total', perfStart, { turnId: report.message.id, ok: true });
+      return { ok: true, delivery };
     });
-    if (ingress.cancelled || !report) return;
   } catch (err) {
     console.warn('[Yeaft] yeaft_session_chat: coord.ingest failed', err?.message || err);
-    sendSessionOutputFrame({
-      type: 'assistant',
-      message: { content: [{ type: 'text', text: `⚠️ Session dispatch error: ${err?.message || err}` }] },
-    }, { sessionId });
-    sendSessionOutputFrame({ type: 'result', result_text: '' }, { sessionId });
-    return;
+    return reject('session_dispatch_failed', `Session dispatch error: ${err?.message || err}`);
   }
-
-  traceDuration('session_send.coordinator_ingest', ingestStart, {
-    turnId: report?.message?.id || null,
-    detail: {
-      dispatchedCount: Array.isArray(report?.dispatched) ? report.dispatched.length : 0,
-      fallback: typeof report?.fallback === 'string' ? report.fallback : null,
-    },
-  });
-
-  // Thread ownership is resolved inside enqueueForVp()/routeEnvelopeToVpThread
-  // before persistence. Do not write a canonical 'main' user row here: a
-  // route to an active VP may append to an existing thread, while an
-  // unrelated query may create a new one. The per-target route path writes
-  // the thread-local inbound row with the classified threadId.
-
-  const dispatchedIds = Array.isArray(report?.dispatched) ? report.dispatched : [];
-  const fallbackId = typeof report?.fallback === 'string' ? report.fallback : null;
-  if (dispatchedIds.length === 0 && !fallbackId) {
-    // Coordinator chose nobody and provided no fallback — should not happen
-    // with a healthy roster. Surface the failure explicitly rather than
-    // silently retrying as a single-VP turn (the legacy fallback masked
-    // group-roster bugs).
-    sendSessionOutputFrame({
-      type: 'assistant',
-      message: { content: [{ type: 'text', text: '⚠️ No VP available to respond — check the group roster.' }] },
-    }, { sessionId });
-    sendSessionOutputFrame({ type: 'result', result_text: '' }, { sessionId });
-    return;
-  }
-
-  // Wait only for routing/classification promises spawned by this message.
-  // Do not wait for every driver in the group: unrelated older threads may keep
-  // running for minutes and must not hold this request lifecycle hostage.
-  const routeWaitStart = perfNowMs();
-  await waitForRoutePromises(report?.message?.id);
-  traceDuration('session_send.wait_route_promises', routeWaitStart, {
-    turnId: report?.message?.id || null,
-  });
-  traceDuration('session_send.handler_total', perfStart, {
-    turnId: report?.message?.id || null,
-    ok: true,
-  });
 }
 
 /**
  * Wait for a bounded set of driver keys. Production group chat uses
- * waitForRoutePromises() so a new message is fire-and-stream after its
+ * per-ingress routing promises so a new message is fire-and-stream after its
  * classification/target-thread decision. This helper remains for tests and
  * explicit barriers, but it must never wait for every group driver: an
  * unrelated long-running thread must not pin a fresh query.
@@ -6764,7 +6706,10 @@ async function runVpTurn({ prompt, promptParts = null, sessionId, vpId, threadId
           session?.config?.plugins,
         ));
       }
-      if (thread) thread.engine = vpEngine;
+      if (thread) {
+        thread.engine = vpEngine;
+        thread.userInputClosed = false;
+      }
 
       const inboundInjectedBy = inboundEnvelope?.msg?.meta?.injectedBy;
       const inboundIsInternal = inboundInjectedBy === 'route_forward' || inboundInjectedBy === 'task_result';
@@ -6876,6 +6821,16 @@ async function runVpTurn({ prompt, promptParts = null, sessionId, vpId, threadId
         drainPendingUserMessages: () => {
           if (!thread || !Array.isArray(thread.pendingQueries) || thread.pendingQueries.length === 0) return [];
           return thread.pendingQueries.splice(0).map(item => ({ ...item, persisted: true }));
+        },
+        // Seal the append queue before the Engine commits to a terminal
+        // response. A racing send either wins the last drain (same query) or
+        // is actually queued for the driver rather than acknowledged as an append.
+        closePendingUserInput: ({ handoff = false } = {}) => {
+          if (!thread || escalationState?.escalated || vpAbort.signal.aborted) return true;
+          // In a handoff, only a new human instruction can keep this VP running.
+          if (thread.pendingQueries.some(item => !handoff || !item.internal)) return false;
+          thread.userInputClosed = true;
+          return true;
         },
         ...queryOpts,
         onProviderRequestStart: policy => {
@@ -7986,14 +7941,14 @@ function readRecentFallbackMessagesForAutoRoute(sessionId, limit = 4) {
 
 /**
  * Dedicated Sessionless auto-route + send entry point (`yeaft_auto_route_send`).
- * Leaves existing `yeaft_session_send` untouched for 100% backward compatibility:
+ * Keeps `yeaft_session_send` as the shared Session delivery path:
  *   1. Boots runtime if needed so `session.adapter` and `decisionModel` are available.
  *   2. Runs Tier 1 (running/AskUser) -> Tier 2 (5-day recent) -> Tier 3 (create new Session
  *      with LLM-selected `workDir` from <=3 level snapshot, `sceneId`, and `title`).
  *   3. If Tier 3 creates a Session, persists it via `createSessionFromSpec` and broadcasts
  *      `session_crud_result` + `session_list_updated` so Server catalog & sidebar stay in sync.
- *   4. Emits `yeaft_session_routed` back to Server (which binds projectContext & relays to Web),
- *      then either settles a pending `AskUser` prompt or executes `runYeaftSessionSend`.
+ *   4. Settles a pending `AskUser` prompt or uses the same ingress as a direct
+ *      Session send. Acknowledges only after the runtime accepts the message.
  */
 export async function handleYeaftAutoRouteSend(msg = {}) {
   if (!msg || typeof msg !== 'object') return null;
@@ -8020,7 +7975,22 @@ export async function handleYeaftAutoRouteSend(msg = {}) {
     return null;
   }
 
+  const reply = (result) => sendToServer({
+    type: 'yeaft_session_routed', requestId, clientMessageId, _requestClientId: requestClientId,
+    ...result,
+  });
   return withAutoRouteLock(ownerKey, async () => {
+    let validatedTurnConfig = null;
+    if (msg.quickSend !== undefined) {
+      try {
+        validatedTurnConfig = validateQuickSend(msg.quickSend, loadConfig({ dir: yeaftDir }));
+      } catch (err) {
+        await reply({ ok: false, code: 'invalid_quick_send', error: err.message });
+        return null;
+      }
+    }
+    let receipt;
+    let result;
     try {
       await ensureSessionLoaded({ perfTraceId });
       const allowedSessionIds = Array.isArray(msg._allowedSessionIds)
@@ -8071,7 +8041,7 @@ export async function handleYeaftAutoRouteSend(msg = {}) {
       // that prompt AND persist the user's reply row into the Session transcript so
       // conversation history stays complete and no optimistic message is orphaned.
       let answeredAskUser = false;
-      if (!createdSession && decision.tier === 'running' && decision.answeredQuestion?.requestId && !hasFiles && text.trim()) {
+      if (!validatedTurnConfig && !createdSession && decision.tier === 'running' && decision.answeredQuestion?.requestId && !hasFiles && text.trim()) {
         const livePending = pendingUserPrompts.get(decision.answeredQuestion.requestId);
         if (livePending && livePending.sessionId === targetSessionId && livePending.expiresAt > Date.now()) {
           const questionKey = livePending.question || 'response';
@@ -8090,81 +8060,64 @@ export async function handleYeaftAutoRouteSend(msg = {}) {
         }
       }
 
-      await sendToServer({
-        type: 'yeaft_session_routed',
-        ok: true,
-        requestId,
-        clientMessageId,
-        _requestClientId: requestClientId,
-        sessionId: targetSessionId,
-        decision: createdSession ? 'created' : 'matched',
-        tier: createdSession ? 'create' : decision.tier,
-        title: targetMeta?.name || decision.title || targetSessionId,
-        sceneId: targetSceneId,
-        workDir: targetMeta?.workDir ?? decision.workDir ?? '',
-        confidence: decision.confidence ?? null,
-        reason: decision.reason || '',
-        decisionModel: decision.decisionModel || null,
-        ...(decision.routeSource ? { routeSource: decision.routeSource } : {}),
-        ...(answeredAskUser ? { answeredAskUser: true } : {}),
-        ...(createdSession ? { session: createdSession } : {}),
-      });
+      let delivery = { ok: false, code: 'session_dispatch_failed', error: 'Session did not accept the message.' };
+      if (!answeredAskUser) {
+        const nextAgentSessionIds = Array.isArray(msg._agentSessionIds)
+          ? [...new Set([...msg._agentSessionIds, targetSessionId])]
+          : [targetSessionId];
 
-      if (answeredAskUser) {
-        return { sessionId: targetSessionId, decision: 'matched', tier: 'running', answeredAskUser: true };
+        delivery = (await runYeaftSessionSend({
+          type: 'yeaft_session_send',
+          id: clientMessageId,
+          sessionId: targetSessionId,
+          text: text.trim() ? text : '(attached files)',
+          mentions: Array.isArray(msg.mentions) ? msg.mentions : [],
+          ...(msg.quote ? { quote: msg.quote } : {}),
+          ...(Array.isArray(msg.files) && msg.files.length > 0 ? { files: msg.files } : {}),
+          ...(perfTraceId ? { perfTraceId } : {}),
+          _agentSessionIds: nextAgentSessionIds,
+          // Newly created targets may use authorized prior sources, but their
+          // own ID is not added to the Server's source allowlist.
+          ...(Array.isArray(msg._knowledgeSessionIds)
+            && (createdSession || msg._knowledgeSessionIds.includes(targetSessionId))
+            ? { _knowledgeSessionIds: msg._knowledgeSessionIds } : {}),
+          ...(typeof msg._shareOwnerId === 'string' ? { _shareOwnerId: msg._shareOwnerId } : {}),
+          projectContext: (!createdSession && msg._projectContextsBySession && msg._projectContextsBySession[targetSessionId])
+            || {
+              projectId: null,
+              projectName: null,
+              projectInstruction: '',
+              sessionIds: [],
+            },
+        }, { reportToSession: false, validatedTurnConfig })) || delivery;
       }
 
-      // Otherwise dispatch through the canonical `runYeaftSessionSend` pipeline.
-      // When Tier 3 attached lightweight >5-day historical hints, pass them as a bounded
-      // non-transcript context note only on the first turn? Wait: keeping user `text` clean
-      // in transcript is critical — never mutate `msg.text` persisted to history!
-      const nextAgentSessionIds = Array.isArray(msg._agentSessionIds)
-        ? [...new Set([...msg._agentSessionIds, targetSessionId])]
-        : [targetSessionId];
-
-      await runYeaftSessionSend({
-        type: 'yeaft_session_send',
-        id: clientMessageId,
-        sessionId: targetSessionId,
-        text: text.trim() ? text : '(attached files)',
-        mentions: Array.isArray(msg.mentions) ? msg.mentions : [],
-        ...(msg.quote ? { quote: msg.quote } : {}),
-        ...(msg.quickSend !== undefined ? { quickSend: msg.quickSend } : {}),
-        ...(Array.isArray(msg.files) && msg.files.length > 0 ? { files: msg.files } : {}),
-        ...(perfTraceId ? { perfTraceId } : {}),
-        _agentSessionIds: nextAgentSessionIds,
-        // Newly created targets may use authorized prior sources, but their
-        // own ID is not added to the Server's source allowlist.
-        ...(Array.isArray(msg._knowledgeSessionIds)
-          && (createdSession || msg._knowledgeSessionIds.includes(targetSessionId))
-          ? { _knowledgeSessionIds: msg._knowledgeSessionIds } : {}),
-        ...(typeof msg._shareOwnerId === 'string' ? { _shareOwnerId: msg._shareOwnerId } : {}),
-        projectContext: (!createdSession && msg._projectContextsBySession && msg._projectContextsBySession[targetSessionId])
-          || {
-            projectId: null,
-            projectName: null,
-            projectInstruction: '',
-            sessionIds: [],
-          },
-      });
-
-      return {
-        sessionId: targetSessionId,
-        decision: createdSession ? 'created' : 'matched',
-        tier: createdSession ? 'create' : decision.tier,
-      };
+      const decisionType = createdSession ? 'created' : 'matched';
+      const tier = createdSession ? 'create' : decision.tier;
+      if (answeredAskUser || delivery.ok) {
+        result = { sessionId: targetSessionId, decision: decisionType, tier, ...(answeredAskUser ? { answeredAskUser: true } : {}) };
+        receipt = {
+          ok: true,
+          ...result,
+          title: targetMeta?.name || decision.title || targetSessionId,
+          sceneId: targetSceneId,
+          workDir: targetMeta?.workDir ?? decision.workDir ?? '',
+          confidence: decision.confidence ?? null,
+          reason: decision.reason || '',
+          decisionModel: decision.decisionModel || null,
+          ...(decision.routeSource ? { routeSource: decision.routeSource } : {}),
+          ...(delivery.ok ? { delivery: delivery.delivery } : {}),
+          ...(createdSession ? { session: createdSession } : {}),
+        };
+      } else {
+        receipt = delivery;
+      }
     } catch (err) {
       console.error('[Yeaft] auto-route send failed:', err?.message || err);
-      await sendToServer({
-        type: 'yeaft_session_routed',
-        ok: false,
-        requestId,
-        clientMessageId,
-        _requestClientId: requestClientId,
-        error: err?.message || String(err),
-      });
-      return null;
+      receipt = { ok: false, error: err?.message || String(err) };
     }
+    await reply(receipt);
+    return result || null;
   });
 }
 
@@ -9500,12 +9453,6 @@ export const __testHooks = {
   decorateSessionsWithRuntimeState,
   async loadProjectRuntime(workDir) {
     return loadProjectRuntime(workDir);
-  },
-  registerRoutePromiseForTest(msgId, promise) {
-    registerRoutePromise(msgId, promise);
-  },
-  routePromiseEntryCountForTest() {
-    return routePromisesByMsgId.size;
   },
   getOrCreateVpEngineForTest: getOrCreateVpEngine,
   getOrCreateSessionContextForTest(sessionId, sessionHandle) {

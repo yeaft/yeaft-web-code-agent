@@ -142,6 +142,19 @@ export default {
       </div>
 
       <div class="cosmos-const-toggle-row">
+        <span>{{ $t('cosmos.constants.eventsAutoZoom') }}</span>
+        <button
+          type="button"
+          class="cosmos-switch"
+          :class="{ 'is-on': constants.eventsAutoZoom }"
+          role="switch"
+          :aria-checked="constants.eventsAutoZoom ? 'true' : 'false'"
+          :aria-label="$t('cosmos.constants.eventsAutoZoom')"
+          @click="$emit('update-constant', { key: 'eventsAutoZoom', value: !constants.eventsAutoZoom })"
+        ></button>
+      </div>
+
+      <div class="cosmos-const-toggle-row">
         <span>{{ $t('cosmos.constants.renderQuality') }}</span>
         <select
           class="cosmos-const-select"

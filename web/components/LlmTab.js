@@ -273,6 +273,25 @@ export default {
           </div>
         </div>
 
+        <div v-if="context === 'yeaft' && subAgentEffortSettings?.personas.length" class="sp-group llm-section">
+          <div class="sp-group-title">{{ $t('settings.llm.subAgentPersonaEfforts') }}</div>
+          <p class="sp-desc">{{ $t('settings.llm.subAgentPersonaEffortsHint') }}</p>
+          <div class="llm-model-select-row">
+            <label v-for="persona in subAgentEffortSettings.personas" :key="persona.id" class="llm-model-select-field">
+              <span class="llm-field-label">{{ $t('settings.llm.subAgentPersona.' + persona.id) }}</span>
+              <select class="sp-input llm-route-select" :value="localSubAgentPersonaEfforts[persona.id] || ''"
+                @change="setSubAgentPersonaEffort(persona.id, $event.target.value)">
+                <option value="">{{ persona.defaultEffort
+                  ? $t('settings.llm.subAgentEffortAutoTarget', { effort: $t('yeaft.modelMenu.effort.' + persona.defaultEffort) })
+                  : $t('settings.llm.subAgentEffortAuto') }}</option>
+                <option v-for="effort in subAgentEffortSettings.levels" :key="effort" :value="effort">
+                  {{ $t('yeaft.modelMenu.effort.' + effort) }}
+                </option>
+              </select>
+            </label>
+          </div>
+        </div>
+
         <!-- Debug traces: per-agent opt-in. Off by default; when enabled the
              agent collects per-turn debug traces so the turn debug action can
              show the full request/loop/tool timeline. -->
@@ -327,6 +346,8 @@ export default {
       fastModelFallbackOwner: null,
       localSubAgentSceneModels: {},
       sceneModelConfigSupported: false,
+      localSubAgentPersonaEfforts: {},
+      subAgentEffortSettings: null,
       localDecisionModel: null,
       localDebug: false,
       isDirty: false,
@@ -408,6 +429,8 @@ export default {
           this.fastModelFallbackOwner = null;
           this.localSubAgentSceneModels = {};
           this.sceneModelConfigSupported = false;
+          this.localSubAgentPersonaEfforts = {};
+          this.subAgentEffortSettings = null;
           this.localDecisionModel = null;
           this.localDebug = false;
           this.isDirty = false;
@@ -677,6 +700,10 @@ export default {
       const sceneModels = config.agentConfig?.subAgentSceneModels;
       this.sceneModelConfigSupported = !!sceneModels;
       this.localSubAgentSceneModels = { ...sceneModels };
+      const effortSettings = config.agentConfig?.subAgentEffortSettings;
+      this.subAgentEffortSettings = Array.isArray(effortSettings?.personas) && Array.isArray(effortSettings?.levels)
+        ? effortSettings : null;
+      this.localSubAgentPersonaEfforts = { ...config.agentConfig?.subAgentPersonaEfforts };
       this.localDecisionModel = config.agentConfig?.decisionModel || config.decisionModel || null;
       this.localDebug = config.agentConfig?.debug === true;
       this.isDirty = false;
@@ -909,6 +936,12 @@ export default {
       this.markDirty();
     },
 
+    setSubAgentPersonaEffort(persona, effort) {
+      if (effort) this.localSubAgentPersonaEfforts[persona] = effort;
+      else delete this.localSubAgentPersonaEfforts[persona];
+      this.markDirty();
+    },
+
     markDirty() {
       this.draftRevision += 1;
       this.isDirty = true;
@@ -971,6 +1004,9 @@ export default {
       };
       if (this.context === 'yeaft' && this.sceneModelConfigSupported) {
         llmConfig.subAgentSceneModels = { ...this.localSubAgentSceneModels };
+      }
+      if (this.context === 'yeaft' && this.subAgentEffortSettings) {
+        llmConfig.subAgentPersonaEfforts = { ...this.localSubAgentPersonaEfforts };
       }
 
       const requestId = `llm-save-${Date.now()}-${Math.random().toString(36).slice(2)}`;

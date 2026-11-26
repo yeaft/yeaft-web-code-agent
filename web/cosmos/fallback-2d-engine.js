@@ -400,6 +400,7 @@ export function createFallback2DEngine(glCanvas, hudCanvas, opts = {}) {
         parallax = { x: 0, y: 0 },
         camRot = { x: 0, y: 0 },
         warp = 0,
+        fovZoom = 1.0,
         skyBright = 1.05,
         starDensity = 1.18,
         bhParams = { x: 0, y: 0, radius: 0, strength: 0 },
@@ -417,10 +418,15 @@ export function createFallback2DEngine(glCanvas, hudCanvas, opts = {}) {
 
       // 2. Panoramic ESO Milky Way skybox tilted along galactic plane with seamless void fade
       const skyPresence = Math.max(0.28, 1.0 - Math.max(0, (scaleLog - 19.0) / 5.0) * 0.62);
+      const safeFovZoom = Math.max(0.75, Math.min(3.4, fovZoom || 1.0));
       const milkyImg = getLoadedCosmosImage('milky');
       if (milkyImg) {
         drawCtx.save();
         drawCtx.translate(width * 0.5, height * 0.5);
+        if (safeFovZoom !== 1.0) {
+          const skyScale = 1 + (safeFovZoom - 1) * 0.36;
+          drawCtx.scale(skyScale, skyScale);
+        }
         drawCtx.rotate(-0.34);
         drawCtx.globalAlpha = Math.min(0.88, 0.56 * skyBright * skyPresence);
         const diag = Math.hypot(width, height);
@@ -454,10 +460,14 @@ export function createFallback2DEngine(glCanvas, hudCanvas, opts = {}) {
       const count = Math.min(stars.length, Math.round(stars.length * Math.min(1.4, Math.max(0.35, starDensity * 0.85))));
       const cx0 = width * 0.5;
       const cy0 = height * 0.5;
+      const starZoom = 1 + (safeFovZoom - 1) * 0.42;
       for (let i = 0; i < count; i++) {
         const st = stars[i];
-        const sx = (((st.x * width + parallax.x * 28 * st.depth + camRot.x * 95 * st.depth + realTime * 1.4 * st.depth) % width) + width) % width;
-        const sy = (((st.y * height + parallax.y * 22 * st.depth + camRot.y * 70 * st.depth) % height) + height) % height;
+        const rawX = (((st.x * width + parallax.x * 28 * st.depth + camRot.x * 95 * st.depth + realTime * 1.4 * st.depth) % width) + width) % width;
+        const rawY = (((st.y * height + parallax.y * 22 * st.depth + camRot.y * 70 * st.depth) % height) + height) % height;
+        const sx = cx0 + (rawX - cx0) * starZoom;
+        const sy = cy0 + (rawY - cy0) * starZoom;
+        if (sx < -24 || sx > width + 24 || sy < -24 || sy > height + 24) continue;
         const tw = 0.82 + 0.18 * Math.sin(realTime * st.speed + st.phase);
         const alpha = st.alpha * tw;
         const [cr, cg, cb] = st.col;

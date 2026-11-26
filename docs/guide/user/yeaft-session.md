@@ -42,6 +42,12 @@ Legacy browser-local section state is not imported into user preferences. The in
 
 模型与推理强度选择会立即预览，并等待 Agent 确认保存；保存失败会恢复已确认值并提示。连续切换按 Session 顺序应用，其他 Session 不受影响；若立即发送消息，会先等待所选模型确认，不会悄悄使用旧模型。切换模型时优先默认使用 `xhigh`，没有此档位时只从该模型支持的档位选择；已保存的 Session 强度不会被刷新覆盖。运行中的请求不被中断，新设置从下一次模型请求开始使用。
 
+### Supplement a running turn from the Cosmos quick composer
+
+After Auto Router chooses a Session, it uses the same rules as sending from inside that Session. A related follow-up enters the current turn at the next model call, without interrupting an in-flight call or tool. Unrelated requests and explicit one-message model or effort overrides use a separate turn. Simply displaying the default model does not count as an override.
+
+The Agent confirms the send after accepting it into a running turn or queuing a separate turn. Choosing a Session alone does not confirm delivery.
+
 ### Change the scene during a conversation
 
 If the page cannot confirm a scene change, refresh to check what the Agent saved before trying again. The page does not repeat the change or send a message waiting on it.
