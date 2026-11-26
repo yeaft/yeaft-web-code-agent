@@ -36,7 +36,7 @@ test.describe('Yeaft Cosmos UI', () => {
           online: true,
           status: 'ready',
           workDir: '/Users/dev/yeaft',
-          capabilities: ['session_auto_route', 'work_center', 'session_scenes'],
+          capabilities: ['session_auto_route', 'work_center', 'session_scenes', 'workbench_session_routes', 'terminal', 'file_editor'],
         },
         {
           id: 'z-agent-cloud',
@@ -44,9 +44,10 @@ test.describe('Yeaft Cosmos UI', () => {
           online: true,
           status: 'ready',
           workDir: '/srv/yeaft-prod',
-          capabilities: ['session_auto_route', 'work_center'],
+          capabilities: ['session_auto_route', 'work_center', 'workbench_session_routes', 'terminal', 'file_editor'],
         },
       ];
+      chat.workbenchRouteProtocolSupported = true;
       chat.currentAgent = agentId;
       chat.yeaftAvailableModels = [
         { id: 'copilot/gpt-6.2-sol', label: 'gpt-6.2-sol', provider: 'copilot', effortOptions: ['medium', 'high', 'xhigh'] },
@@ -66,6 +67,17 @@ test.describe('Yeaft Cosmos UI', () => {
           sortRank: 0,
         },
         {
+          catalogKey: `yeaft:${agentId}:sess-earth-2`,
+          runtimeProvider: 'yeaft',
+          routeRef: { runtimeProvider: 'yeaft', agentId, sessionId: 'sess-earth-2' },
+          title: 'Quick Scratchpad',
+          workDir: '/Users/dev/yeaft',
+          availability: 'online',
+          createdAt: new Date(now - 5400000).toISOString(),
+          metadataUpdatedAt: new Date(now - 50000).toISOString(),
+          sortRank: 1,
+        },
+        {
           catalogKey: 'yeaft:z-agent-cloud:sess-saturn-1',
           runtimeProvider: 'yeaft',
           routeRef: { runtimeProvider: 'yeaft', agentId: 'z-agent-cloud', sessionId: 'sess-saturn-1' },
@@ -74,9 +86,24 @@ test.describe('Yeaft Cosmos UI', () => {
           availability: 'online',
           createdAt: new Date(now - 7200000).toISOString(),
           metadataUpdatedAt: new Date(now - 10000).toISOString(),
-          sortRank: 1,
+          sortRank: 2,
         },
-      ], []);
+      ], [
+        {
+          id: 'proj-yeaft',
+          name: 'Yeaft',
+          parentId: null,
+          sortOrder: 0,
+          members: [{ agentId, sessionId: 'sess-earth-1' }],
+        },
+        {
+          id: 'proj-ops',
+          name: 'Ops',
+          parentId: null,
+          sortOrder: 1,
+          members: [{ agentId: 'z-agent-cloud', sessionId: 'sess-saturn-1' }],
+        },
+      ]);
       chat.yeaftProcessingSessions = { [`${agentId}\u001fsess-earth-1`]: true };
       const convId = `yeaft_${agentId}`;
       chat.yeaftConversationIdsByAgent = { ...(chat.yeaftConversationIdsByAgent || {}), [agentId]: convId };
@@ -113,13 +140,37 @@ test.describe('Yeaft Cosmos UI', () => {
     await page.locator('.cosmos-quick-open-btn').click();
     await expect(page.locator('.cosmos-drawer')).toBeVisible();
     await expect(page.locator('.cosmos-drawer')).toHaveAttribute('data-planet-theme', 'earth');
+    // Verify Project chip appears in header subtitle
+    await expect(page.locator('.cosmos-drawer-project-chip')).toContainText('Yeaft');
     // Verify removed redundant elements (no session pill strip, no dashed meta bar)
     await expect(page.locator('.ap-session-strip')).toHaveCount(0);
     await expect(page.locator('.conv-meta-strip')).toHaveCount(0);
 
-    // Toggle embedded sidebar history via top-left ☰ button
+    // Verify user message outer wrapper is transparent (no nested double-box background)
+    const userMsgBg = await page.locator('.cosmos-drawer .message.user').first().evaluate((el) => {
+      const outer = getComputedStyle(el);
+      const inner = el.querySelector('.message-user-block') ? getComputedStyle(el.querySelector('.message-user-block')) : null;
+      return { outerBg: outer.backgroundColor, outerBorder: outer.borderTopWidth, innerBg: inner?.backgroundColor || '' };
+    });
+    expect(userMsgBg.outerBg).toBe('rgba(0, 0, 0, 0)');
+    expect(userMsgBg.outerBorder).toBe('0px');
+    expect(userMsgBg.innerBg).not.toBe('rgba(0, 0, 0, 0)');
+
+    // Open real Workbench inside Cosmos drawer and verify capability launcher renders & closes cleanly
+    await page.locator('.cosmos-drawer').getByRole('button', { name: /workbench/i }).click();
+    await expect(page.locator('.cosmos-workbench-host')).toBeVisible();
+    await expect(page.locator('.cosmos-workbench-host .workbench-content')).toBeVisible();
+    await expect(page.locator('.cosmos-workbench-host .workbench-capability-card').first()).toBeVisible();
+    await page.locator('.cosmos-workbench-host .workbench-panel-close').click();
+    await expect(page.locator('.cosmos-workbench-host')).toBeHidden();
+
+    // Toggle embedded sidebar history via top-left ☰ button: verify Project tree & Session search
     await page.locator('.cosmos-drawer-head-left .cosmos-icon-btn').first().click();
     await expect(page.locator('.cosmos-history-drawer')).toBeVisible();
+    await expect(page.locator('.cosmos-history-folder-name').first()).toContainText('Yeaft');
+    await page.locator('.cosmos-history-search-input').fill('Ops');
+    await expect(page.locator('.cosmos-history-search-hit').first()).toContainText('Production Release Guard');
+    await page.locator('.cosmos-history-search-clear').click();
     await page.locator('.cosmos-drawer-head-left .cosmos-icon-btn').first().click();
     await expect(page.locator('.cosmos-history-drawer')).toHaveCount(0);
 

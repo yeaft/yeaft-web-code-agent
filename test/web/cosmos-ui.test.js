@@ -30,7 +30,12 @@ import {
   tickCosmicEvents,
   pickRandomEventIndex,
 } from '../../web/cosmos/events-controller.js';
-import { projectAgentsForCosmos } from '../../web/cosmos/agent-projection.js';
+import {
+  projectAgentsForCosmos,
+  buildCosmosProjectSessionTree,
+  filterCosmosSessions,
+} from '../../web/cosmos/agent-projection.js';
+import { acceptSessionDiscoveryResponse } from '../../web/stores/helpers/session-discovery.js';
 import { bakeProceduralWebGLTextures } from '../../web/cosmos/gpu-texture-baker.js';
 import { createCosmosEngine } from '../../web/cosmos/gl-engine.js';
 import { computeSolarProjectionLayout } from '../../web/cosmos/stage-loop.js';
@@ -867,5 +872,237 @@ describe('Cosmos Component & WebGL Review Regressions', () => {
     expect(loadCosmosConstants(storage).renderQuality).toBe('lite');
     saveCosmosConstants({ renderQuality: 'invalid-mode' }, storage);
     expect(loadCosmosConstants(storage).renderQuality).toBe('auto');
+  });
+
+  it('projects nested Project hierarchy, builds collapsible folder trees, and searches sessions across agents', () => {
+    const now = Date.now();
+    const projects = [
+      {
+        id: 'proj-root',
+        name: 'Yeaft',
+        parentId: null,
+        sortOrder: 0,
+        members: [{ agentId: 'mac', sessionId: 's-1' }],
+      },
+      {
+        id: 'proj-child',
+        name: 'Cosmos',
+        parentId: 'proj-root',
+        sortOrder: 1,
+        members: [{ agentId: 'mac', sessionId: 's-2' }],
+      },
+      {
+        id: 'proj-cloud',
+        name: 'Infra',
+        parentId: null,
+        sortOrder: 2,
+        members: [{ agentId: 'cloud', sessionId: 's-3' }],
+      },
+    ];
+    const chatStore = {
+      currentAgent: 'mac',
+      agents: [
+        { id: 'mac', name: 'MacBook', online: true, workDir: '/dev/yeaft', capabilities: ['session_auto_route'] },
+        { id: 'cloud', name: 'CloudBox', online: true, workDir: '/srv/infra', capabilities: ['session_auto_route'] },
+      ],
+      sessionProjects: projects,
+      sessionCatalog: [
+        { catalogKey: 'yeaft:mac:s-1', runtimeProvider: 'yeaft', routeRef: { runtimeProvider: 'yeaft', agentId: 'mac', sessionId: 's-1' }, title: 'Yeaft-Agent', metadataUpdatedAt: now - 1000 },
+        { catalogKey: 'yeaft:mac:s-2', runtimeProvider: 'yeaft', routeRef: { runtimeProvider: 'yeaft', agentId: 'mac', sessionId: 's-2' }, title: 'Shader-Lab', metadataUpdatedAt: now - 2000 },
+        { catalogKey: 'yeaft:mac:s-free', runtimeProvider: 'yeaft', routeRef: { runtimeProvider: 'yeaft', agentId: 'mac', sessionId: 's-free' }, title: 'Scratchpad', metadataUpdatedAt: now - 3000 },
+        { catalogKey: 'yeaft:cloud:s-3', runtimeProvider: 'yeaft', routeRef: { runtimeProvider: 'yeaft', agentId: 'cloud', sessionId: 's-3' }, title: 'Nginx-TLS', metadataUpdatedAt: now - 4000 },
+      ],
+      yeaftConversationIdsByAgent: {},
+      messagesMap: {},
+      isYeaftSessionProcessing: (sid) => sid === 's-2',
+      isYeaftSessionUnread: () => false,
+    };
+
+    const projected = projectAgentsForCosmos({ chatStore, sessionsStore: { sessionList: [] }, nowMs: now, isEn: true });
+    expect(projected.mac.sessions.find((s) => s.id === 's-1')?.projectPath).toBe('Yeaft');
+    expect(projected.mac.sessions.find((s) => s.id === 's-2')?.projectPath).toBe('Yeaft / Cosmos');
+    expect(projected.mac.sessions.find((s) => s.id === 's-free')?.projectPath).toBe('');
+
+    const treeExpanded = buildCosmosProjectSessionTree(projects, projected.mac.sessions);
+    expect(treeExpanded.hasFolders).toBe(true);
+    // Folders containing only sessions on other planets (Infra) are omitted for this planet
+    expect(treeExpanded.items.map((i) => `${i.kind}:${i.kind === 'folder' ? `${i.project.name}@${i.depth}(${i.count})` : `${i.session.id}@${i.depth}`}`)).toEqual([
+      'folder:Yeaft@0(2)',
+      'folder:Cosmos@1(1)',
+      'session:s-2@2',
+      'session:s-1@1',
+      'session:s-free@0',
+    ]);
+    expect(treeExpanded.items.at(-1)?.groupStart).toBe(true);
+
+    const treeCollapsed = buildCosmosProjectSessionTree(projects, projected.mac.sessions, new Set(['proj-root']));
+    expect(treeCollapsed.items.map((i) => i.key)).toEqual(['folder:proj-root', 'yeaft:mac:s-free']);
+
+    // Multi-token search matches across Project path, title, and Agent name
+    const allAgents = Object.values(projected);
+    expect(filterCosmosSessions(allAgents, 'yeaft cosmos').map((h) => h.session.id)).toEqual(['s-2']);
+    expect(filterCosmosSessions(allAgents, 'infra').map((h) => h.session.id)).toEqual(['s-3']);
+    expect(filterCosmosSessions(allAgents, 'scratch').map((h) => h.session.id)).toEqual(['s-free']);
+  });
+
+  it('mounts real WorkbenchPanel bound to chatStore.workbenchExpanded (no ownerRoute shadowing) and runs Project tree + FTS session search', async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal('Vue', Vue);
+
+    const sentFrames = [];
+    const mockWs = {};
+    const store = Vue.reactive({
+      ws: mockWs,
+      connectionState: 'connected',
+      sessionDiscoverySupported: true,
+      workbenchRouteProtocolSupported: true,
+      currentView: 'yeaft',
+      currentAgent: 'ag-earth',
+      yeaftActiveSessionFilter: 'sess-1',
+      activeSessionRoute: { runtimeProvider: 'yeaft', agentId: 'ag-earth', sessionId: 'sess-1' },
+      effectiveWorkDir: '/workspace/yeaft',
+      yeaftAvailableModels: [],
+      yeaftModel: '',
+      yeaftModelEffort: '',
+      yeaftHistorySearchState: { query: '', senderKey: 'user', loading: false, results: [], hasMore: false },
+      workbenchExpanded: false,
+      workbenchMaximized: false,
+      agents: [
+        {
+          id: 'ag-earth',
+          name: 'Earth-Mac',
+          online: true,
+          capabilities: ['session_discovery', 'workbench_session_routes', 'terminal', 'file_editor'],
+        },
+      ],
+      sessionProjects: [
+        {
+          id: 'p-yeaft',
+          name: 'Yeaft',
+          parentId: null,
+          sortOrder: 0,
+          members: [
+            { agentId: 'ag-earth', sessionId: 'sess-1' },
+            { agentId: 'ag-earth', sessionId: 'sess-2' },
+          ],
+        },
+      ],
+      hasAgentCapability: (aid, cap) => aid === 'ag-earth' && ['session_discovery', 'workbench_session_routes', 'terminal', 'file_editor'].includes(cap),
+      toggleWorkbench() {
+        this.workbenchExpanded = !this.workbenchExpanded;
+        if (!this.workbenchExpanded) this.workbenchMaximized = false;
+      },
+      toggleWorkbenchMaximized() {
+        this.workbenchMaximized = !this.workbenchMaximized;
+      },
+      rememberWorkbenchPanelState: vi.fn(),
+      restoreWorkbenchPanelState: vi.fn(),
+      workbenchPanelWidthForRoute: vi.fn(() => null),
+      sendWsMessage: vi.fn((frame) => {
+        sentFrames.push(frame);
+        return true;
+      }),
+      getYeaftHistoryOutlineState: () => ({ results: [], loading: false, hasMore: false, error: null }),
+    });
+
+    vi.stubGlobal('Pinia', {
+      defineStore: () => () => ({}),
+      useChatStore: () => store,
+      useSessionsStore: () => ({
+        activeSessionId: 'sess-1',
+        sessionById: (sid, aid) => (aid === 'ag-earth' && sid === 'sess-1'
+          ? { id: 'sess-1', name: 'Yeaft-Agent', agentId: 'ag-earth', workDir: '/workspace/yeaft', roster: [] }
+          : null),
+      }),
+      useVpStore: () => ({}),
+    });
+
+    const { default: CosmosConversationDrawer } = await import('../../web/components/cosmos/CosmosConversationDrawer.js');
+
+    const earthAgent = {
+      id: 'ag-earth',
+      name: 'Earth-Mac',
+      online: true,
+      sessions: [
+        { id: 'sess-1', agentId: 'ag-earth', runtimeProvider: 'yeaft', catalogKey: 'yeaft:ag-earth:sess-1', title: 'Yeaft-Agent', status: 'running', updatedLabel: 'now', projectId: 'p-yeaft', projectName: 'Yeaft', projectPath: 'Yeaft', summary: 'working' },
+        { id: 'sess-2', agentId: 'ag-earth', runtimeProvider: 'yeaft', catalogKey: 'yeaft:ag-earth:sess-2', title: 'Hidden-FTS-Hit', status: 'done', updatedLabel: '2h', projectId: 'p-yeaft', projectName: 'Yeaft', projectPath: 'Yeaft', summary: 'unrelated summary' },
+      ],
+    };
+
+    wrapper = mount(CosmosConversationDrawer, {
+      props: {
+        agent: earthAgent,
+        planetId: 'earth',
+        allAgents: [earthAgent],
+        agentToPlanet: { 'ag-earth': 'earth' },
+      },
+      global: {
+        config: { globalProperties: { $t: (k) => k } },
+        stubs: {
+          MessageList: true,
+          ChatInput: true,
+          SessionSceneSelect: true,
+          YeaftConversationOutline: true,
+          WorkbenchCapabilityHost: true,
+          BrowserPanel: true,
+          NavigationIcon: true,
+        },
+      },
+    });
+
+    // 1. Header displays Project chip for the active session
+    expect(wrapper.find('.cosmos-drawer-project-chip').text()).toContain('Yeaft');
+
+    // 2. Real WorkbenchPanel MUST become visible when store.workbenchExpanded flips to true
+    //    (regression guard: passing :owner-route previously shadowed workbenchExpanded to false!)
+    expect(wrapper.find('.workbench-content').attributes('style')).toContain('display: none');
+    await wrapper.find('button[aria-label="cosmos.panel.workbench"]').trigger('click');
+    await flushPromises();
+    expect(store.workbenchExpanded).toBe(true);
+    expect(wrapper.find('.cosmos-workbench-host').attributes('style') || '').not.toContain('display: none');
+    expect(wrapper.find('.workbench-content').attributes('style') || '').not.toContain('display: none');
+    expect(wrapper.findAll('.workbench-capability-card').length).toBeGreaterThanOrEqual(4);
+
+    // Clicking WorkbenchPanel's own close button collapses chatStore.workbenchExpanded
+    await wrapper.find('.workbench-panel-close').trigger('click');
+    await flushPromises();
+    expect(store.workbenchExpanded).toBe(false);
+
+    // 3. Open ☰ switcher -> shows Project folder tree + runs live FTS discovery search
+    await wrapper.find('button[aria-label="cosmos.panel.history"]').trigger('click');
+    await flushPromises();
+    expect(wrapper.find('.cosmos-history-folder-name').text()).toBe('Yeaft');
+
+    const input = wrapper.find('.cosmos-history-search-input');
+    await input.setValue('quantum-flux');
+    vi.advanceTimersByTime(250);
+    await flushPromises();
+
+    const searchFrame = sentFrames.find((f) => f.type === 'session_discovery_request');
+    expect(searchFrame).toBeDefined();
+    expect(searchFrame.payload).toEqual({ query: 'quantum-flux' });
+
+    acceptSessionDiscoveryResponse(store, {
+      requestId: searchFrame.requestId,
+      agentId: 'ag-earth',
+      op: 'search',
+      ok: true,
+      data: {
+        indexedAt: Date.now(),
+        results: [{ sessionId: 'sess-2', snippet: 'Matched quantum-flux discussion in transcript' }],
+      },
+    });
+    await flushPromises();
+
+    const hits = wrapper.findAll('.cosmos-history-search-hit');
+    expect(hits).toHaveLength(1);
+    expect(hits[0].text()).toContain('Hidden-FTS-Hit');
+    expect(hits[0].text()).toContain('Matched quantum-flux discussion');
+
+    // Verify user-bubble CSS keeps outer .message.user transparent and workbench host overrides light-theme tokens
+    const convCss = readFileSync(join(resolve(process.cwd()), 'web', 'styles', 'cosmos', 'conversation.css'), 'utf-8');
+    expect(convCss).toMatch(/\.cosmos-drawer\s+\.message\.user[\s\S]*?background:\s*transparent\s*!important/);
+    expect(convCss).toMatch(/\.cosmos-workbench-host[\s\S]*?--bg-workbench:/);
+    expect(convCss).toMatch(/\.cosmos-workbench-host\s+\.resize-handle/);
   });
 });
