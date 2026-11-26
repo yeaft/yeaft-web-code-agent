@@ -238,14 +238,14 @@ export function createCosmosEngine(glCanvas, hudCanvas, opts = {}) {
     if (isDomImage && typeof createImageBitmap === 'function') {
       createImageBitmap(img).then((bmp) => {
         if (destroyed || contextLost || gen !== contextGen || uploadedRealKeys.has(key)) {
-          queuedUploadKeys.delete(key);
+          if (gen === contextGen) queuedUploadKeys.delete(key);
           try { bmp.close(); } catch { /* ignore */ }
           return;
         }
         uploadQueue.push({ key, source: bmp, spec, ownsBitmap: true, gen });
       }, () => {
         if (destroyed || contextLost || gen !== contextGen || uploadedRealKeys.has(key)) {
-          queuedUploadKeys.delete(key);
+          if (gen === contextGen) queuedUploadKeys.delete(key);
           return;
         }
         uploadQueue.push({ key, source: img, spec, ownsBitmap: false, gen });
@@ -381,7 +381,7 @@ export function createCosmosEngine(glCanvas, hudCanvas, opts = {}) {
     };
   }
 
-  function finalizeCorePrograms() {
+  function finalizeCorePrograms({ notify = true } = {}) {
     if (coreReady) return true;
     if (coreFailed || !pendingCore) return false;
     if (parallelExt) {
@@ -399,7 +399,7 @@ export function createCosmosEngine(glCanvas, hudCanvas, opts = {}) {
       if (nextBody) gl.deleteProgram(nextBody);
       if (nextPt) gl.deleteProgram(nextPt);
       coreFailed = true;
-      notifyFatalError('shader_link_failed');
+      if (notify) notifyFatalError('shader_link_failed');
       return false;
     }
     bgProg = nextBg;
@@ -501,7 +501,7 @@ export function createCosmosEngine(glCanvas, hudCanvas, opts = {}) {
     sharedEventVert = null;
   }
 
-  function initGpuResources() {
+  function initGpuResources({ notifyOnFail = false } = {}) {
     contextGen += 1;
     parallelExt = gl.getExtension?.('KHR_parallel_shader_compile') || null;
     coreReady = false;
@@ -528,13 +528,17 @@ export function createCosmosEngine(glCanvas, hudCanvas, opts = {}) {
         gl.deleteShader(h.vs);
         gl.deleteShader(h.fs);
       }
+      if (notifyOnFail) {
+        coreFailed = true;
+        notifyFatalError('shader_init_failed');
+      }
       return false;
     }
     pendingCore = { bg: bgH, body: bodyH, pt: ptH };
 
     // When KHR_parallel_shader_compile is unavailable, verify links synchronously now
     // (still after kicking off all 3 in parallel so multi-threaded drivers overlap them).
-    if (!parallelExt && !finalizeCorePrograms()) {
+    if (!parallelExt && !finalizeCorePrograms({ notify: notifyOnFail })) {
       return false;
     }
 
@@ -561,6 +565,10 @@ export function createCosmosEngine(glCanvas, hudCanvas, opts = {}) {
         pendingCore = null;
       }
       coreReady = false;
+      if (notifyOnFail) {
+        coreFailed = true;
+        notifyFatalError('texture_init_failed');
+      }
       return false;
     }
 
@@ -618,7 +626,7 @@ export function createCosmosEngine(glCanvas, hudCanvas, opts = {}) {
 
   function onContextRestored() {
     if (destroyed) return;
-    if (initGpuResources()) {
+    if (initGpuResources({ notifyOnFail: true })) {
       contextLost = false;
       reuploadCachedRealTextures();
       resize();
@@ -740,11 +748,12 @@ export function createCosmosEngine(glCanvas, hudCanvas, opts = {}) {
       return;
     }
 
-    // Frame-budgeted GPU texture upload (max 1 per frame, zero stutter bursts).
+    // Frame-budgeted GPU texture upload (max 2 per frame, <4ms budget, zero stutter bursts).
     flushUploadQueue();
 
     // Non-blocking poll for async parallel core shader compilation.
-    if (!coreReady && !finalizeCorePrograms()) {
+    if (!coreReady && !finalizeCorePrograms({ notify: true })) {
+      if (destroyed) return;
       gl.viewport(0, 0, glCanvas.width, glCanvas.height);
       if (typeof gl.clearColor === 'function' && typeof gl.clear === 'function') {
         gl.clearColor(0.012, 0.024, 0.059, 1.0);

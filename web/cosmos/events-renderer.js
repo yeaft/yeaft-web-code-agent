@@ -183,7 +183,8 @@ export function fillEventGpuParticles(buf, evDraw, w, h, dpr, densityScale = 1.0
           const ang = sd.a + evT * (2.8 / Math.pow(Math.max(rad / Math.max(rs, 1), 1.0), 1.1));
           const lx = Math.cos(ang) * rad;
           const ly = Math.sin(ang) * rad * 0.19 + sd.z * rs * 0.14 * (1.0 - prog);
-          if (Math.sin(ang) < 0 && Math.hypot(lx, ly) < rs * 1.02) continue;
+          // In Y-up shader coordinates, ly > 0 (sin(ang) > 0) is the back arc occluded behind the shadow.
+          if (Math.sin(ang) > 0 && Math.hypot(lx, ly) < rs * 1.02) continue;
           const doppler = Math.max(0.38, Math.min(1.55, 1.0 - 0.44 * (lx / Math.max(rad, 1))));
           const heat = Math.min(1.0, prog * 0.8 + doppler * 0.35);
           pushLocal(
@@ -257,8 +258,9 @@ export function fillEventGpuParticles(buf, evDraw, w, h, dpr, densityScale = 1.0
   } else if (type === 4) {
     const sunR = evDraw.sunRadiusPx || S * 0.34;
     const cmeP = Math.max(0, (p - 0.16) / 0.84);
-    const baseC = Math.cos(evDraw.angle || -0.58);
-    const baseS = Math.sin(evDraw.angle || -0.58);
+    const flareAng = evDraw.angle ?? -0.58;
+    const baseC = Math.cos(flareAng);
+    const baseS = Math.sin(flareAng);
     for (let i = 0; i < 260; i += step) {
       const sd = SEEDS[i];
       const angOff = sd.z * (0.48 + cmeP * 0.22);
@@ -336,7 +338,8 @@ export function fillEventGpuParticles(buf, evDraw, w, h, dpr, densityScale = 1.0
         const ang = sd.a + evT * (2.4 / Math.pow(1.0 + sd.r * 2.0, 0.8));
         const lx = Math.cos(ang) * rad + rBh * 0.22;
         const ly = Math.sin(ang) * rad * 0.24;
-        if (Math.sin(ang) < 0 && Math.hypot(lx, ly) < rBh) continue;
+        // In Y-up shader coordinates, ly > 0 (sin(ang) > 0) is occluded behind the black-hole shadow.
+        if (Math.sin(ang) > 0 && Math.hypot(lx, ly) < rBh) continue;
         pushLocal(
           lx, ly,
           sd.sz * 0.82,

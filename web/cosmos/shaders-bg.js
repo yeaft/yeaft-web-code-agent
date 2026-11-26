@@ -179,7 +179,7 @@ export const BG_FRAG = `
       float evRs = uEventLens.z;
       float evEin = evRs * 1.52;
       if (rEv > evRs * 0.65 && rEv < evRs * 9.5) {
-        float fall = smoothstep(evRs * 9.5, evRs * 2.2, rEv);
+        float fall = 1.0 - smoothstep(evRs * 2.2, evRs * 9.5, rEv);
         float evBend = min((evEin * evEin) / max(rEv - evRs * 0.36, 0.0016), 0.36);
         lensedP -= normalize(dEv + vec2(1e-5)) * evBend * 0.44 * uEventLens.w * fall;
         evEinsteinBoost = exp(-pow((rEv - evEin * 1.04) / max(evRs * 0.42, 0.004), 2.0)) * 0.62 * uEventLens.w;

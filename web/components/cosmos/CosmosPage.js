@@ -1364,6 +1364,7 @@ export default {
 
         lastFrameCostMs = performance.now() - t0;
 
+        if (!engine || unmounted) return;
         if (engine.isWebGL && engine.isFailed?.()) {
           autoDowngraded = true;
           rebuildCosmosEngine('lite');

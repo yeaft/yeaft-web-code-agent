@@ -2323,7 +2323,6 @@ describe('Cosmos Component & WebGL Review Regressions', () => {
       };
     };
 
-    const onFatalError = vi.fn();
     const mkCanvas = (mockGl) => ({
       width: 0, height: 0, clientWidth: 640, clientHeight: 360,
       getContext: (k) => (k === 'webgl' ? mockGl : null),
@@ -2331,47 +2330,96 @@ describe('Cosmos Component & WebGL Review Regressions', () => {
     });
     const mkHud = () => ({ width: 0, height: 0, getContext: () => ({ setTransform: () => {}, clearRect: () => {} }) });
 
-    const failEngine = createCosmosEngine(mkCanvas(makeParallelGl(false)), mkHud(), { onFatalError });
+    // Re-entrant onFatalError that synchronously destroys and nulls the engine (matching CosmosPage.js)
+    // must NOT throw or run post-destroy gl.clear() / hudDraw() calls.
+    let clearCount = 0;
+    const failGl = makeParallelGl(false);
+    failGl.clear = () => { clearCount += 1; };
+    let failEngine = null;
+    const reentrantFatal = vi.fn(() => {
+      failEngine?.destroy();
+      failEngine = null;
+    });
+    failEngine = createCosmosEngine(mkCanvas(failGl), mkHud(), { onFatalError: reentrantFatal });
     expect(failEngine.isWebGL).toBe(true);
     expect(failEngine.isFailed()).toBe(false);
-    // Frame 1: still compiling in background -> no fatal error yet
-    failEngine.renderFrame({ hudDraw: vi.fn() });
-    expect(onFatalError).not.toHaveBeenCalled();
-    // Frame 2: compile finishes with link failure -> fires onFatalError once & marks failed
+    // Frame 1: still compiling in background -> clears once, no fatal error yet
+    const hud1 = vi.fn();
+    failEngine.renderFrame({ hudDraw: hud1 });
+    expect(reentrantFatal).not.toHaveBeenCalled();
+    expect(clearCount).toBe(1);
+    expect(hud1).toHaveBeenCalledTimes(1);
+    // Frame 2: compile finishes with link failure -> fires reentrantFatal once, destroys engine, skips post-destroy clear/hudDraw
     compileDone = true;
-    failEngine.renderFrame({ hudDraw: vi.fn() });
-    failEngine.renderFrame({ hudDraw: vi.fn() });
-    expect(onFatalError).toHaveBeenCalledTimes(1);
-    expect(failEngine.isFailed()).toBe(true);
-    failEngine.destroy();
+    const hud2 = vi.fn();
+    failEngine.renderFrame({ hudDraw: hud2 });
+    expect(reentrantFatal).toHaveBeenCalledTimes(1);
+    expect(failEngine).toBeNull();
+    expect(clearCount).toBe(1);
+    expect(hud2).not.toHaveBeenCalled();
 
-    // Multi-frame drawCosmicEvent must disable aPosPx after drawParticles and never re-subscribe nebula
+    // Sync boot link failure (no parallel ext) falls back to 2D without prematurely firing onFatalError
+    const syncFailGl = makeParallelGl(false);
+    syncFailGl.getExtension = () => null;
+    const syncFatalSpy = vi.fn();
+    const syncFallback = createCosmosEngine(mkCanvas(syncFailGl), mkHud(), { onFatalError: syncFatalSpy });
+    expect(syncFallback.mode).toBe('2d');
+    expect(syncFatalSpy).not.toHaveBeenCalled();
+    syncFallback.destroy();
+
+    // Multi-frame drawCosmicEvent must disable aPosPx after drawParticles and request/upload nebula at most once
     disabledAttribs.length = 0;
-    const okEngine = createCosmosEngine(mkCanvas(makeParallelGl(true)), mkHud());
-    compileDone = true;
-    const sampleFrame = {
-      time: 1, realTime: 1, scaleLog: 13,
-      parallax: { x: 0, y: 0 }, camRot: { x: 0, y: 0 }, warp: 0, fovZoom: 1,
-      shockWave: [0, 0, 0, 0], eventLens: [0, 0, 0, 0], eventAmbient: [0, 0, 0, 0],
-      skyBright: 1, starDensity: 1,
-      bhParams: { x: 0, y: 0, radius: 0.017, strength: 0.9 },
-      galParams: { x: 0.4, y: -0.35, radius: 0.09, alpha: 0.7, tilt: 0.5 },
-      webParams: { x: -0.4, y: -0.35, radius: 0.08, alpha: 0.5 },
-      particleData: new Float32Array(2 * 7), particleCount: 2,
-      eventDraw: {
-        id: 'supernova', eventType: 0, layer: 'deep',
-        x: 320, y: 180, eventRadiusPx: 80, quadRadiusPx: 196, sunRadiusPx: 27,
-        progress: 0.45, elapsed: 9, alpha: 0.9, obsBlend: 0, distNorm: 4, angle: 0.2, seed: 0.4,
-      },
-      eventParticleData: new Float32Array(3 * 7), eventParticleCount: 3,
-      solarBodies: [], solarAlpha: 1, hudDraw: vi.fn(),
+    __resetCosmosTextureCacheForTests();
+    const origImage = globalThis.Image;
+    const spawnedNebulaImgs = [];
+    class TrackedImage {
+      constructor() { this.naturalWidth = 512; this.naturalHeight = 512; this._src = ''; }
+      set src(v) { this._src = v; if (v.includes('veil_nebula.webp')) spawnedNebulaImgs.push(this); }
+      get src() { return this._src; }
+    }
+    globalThis.Image = TrackedImage;
+    let nebulaUploads = 0;
+    const okGl = makeParallelGl(true);
+    okGl.texImage2D = (_t, _l, _i, _w, _h, _b) => {
+      if (_b instanceof TrackedImage && _b.src.includes('veil_nebula.webp')) nebulaUploads += 1;
     };
-    okEngine.renderFrame(sampleFrame);
-    okEngine.renderFrame(sampleFrame);
-    expect(disabledAttribs).toContain(0);
-    expect(disabledAttribs).toContain(1);
-    expect(disabledAttribs).toContain(2);
-    okEngine.destroy();
+    let okEngine = null;
+    try {
+      okEngine = createCosmosEngine(mkCanvas(okGl), mkHud());
+      compileDone = true;
+      const sampleFrame = {
+        time: 1, realTime: 1, scaleLog: 13,
+        parallax: { x: 0, y: 0 }, camRot: { x: 0, y: 0 }, warp: 0, fovZoom: 1,
+        shockWave: [0, 0, 0, 0], eventLens: [0, 0, 0, 0], eventAmbient: [0, 0, 0, 0],
+        skyBright: 1, starDensity: 1,
+        bhParams: { x: 0, y: 0, radius: 0.017, strength: 0.9 },
+        galParams: { x: 0.4, y: -0.35, radius: 0.09, alpha: 0.7, tilt: 0.5 },
+        webParams: { x: -0.4, y: -0.35, radius: 0.08, alpha: 0.5 },
+        particleData: new Float32Array(2 * 7), particleCount: 2,
+        eventDraw: {
+          id: 'supernova', eventType: 0, layer: 'deep',
+          x: 320, y: 180, eventRadiusPx: 80, quadRadiusPx: 196, sunRadiusPx: 27,
+          progress: 0.45, elapsed: 9, alpha: 0.9, obsBlend: 0, distNorm: 4, angle: 0.2, seed: 0.4,
+        },
+        eventParticleData: new Float32Array(3 * 7), eventParticleCount: 3,
+        solarBodies: [], solarAlpha: 1, hudDraw: vi.fn(),
+      };
+      okEngine.renderFrame(sampleFrame);
+      okEngine.renderFrame(sampleFrame);
+      okEngine.renderFrame(sampleFrame);
+      expect(spawnedNebulaImgs).toHaveLength(1);
+      spawnedNebulaImgs[0].onload();
+      okEngine.renderFrame(sampleFrame);
+      okEngine.renderFrame(sampleFrame);
+      expect(nebulaUploads).toBe(1);
+      expect(disabledAttribs).toContain(0);
+      expect(disabledAttribs).toContain(1);
+      expect(disabledAttribs).toContain(2);
+    } finally {
+      okEngine?.destroy();
+      globalThis.Image = origImage;
+      __resetCosmosTextureCacheForTests();
+    }
 
     // 5. CosmosEventsOverlay timeline APG keyboard nav, distinct zoom slider label & Watch forceObserve
     wrapper = mount(CosmosEventsOverlay, {

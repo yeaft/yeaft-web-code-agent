@@ -27,6 +27,10 @@ function scheduleMermaidDrainOnReady() {
   const script = document.querySelector('script[src*="mermaid.min.js"]');
   if (script) {
     script.addEventListener('load', drain, { once: true });
+    script.addEventListener('error', () => {
+      _mermaidLoadHookAttached = false;
+      _pendingMermaidContainers.clear();
+    }, { once: true });
   }
   window.addEventListener('load', drain, { once: true });
 }
