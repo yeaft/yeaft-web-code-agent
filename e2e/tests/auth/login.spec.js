@@ -107,11 +107,11 @@ test.describe('Login Flow', () => {
     await page.fill('input[autocomplete="username"]', testUsername);
     await page.fill('input[autocomplete="current-password"]', testPassword);
     await page.locator('.login-container button').first().click();
-    await expect(page.locator('.chat-page')).toBeVisible({ timeout: 15000 });
+    await expect(page.locator('.cosmos-page, .chat-page, .yeaft-page').first()).toBeVisible({ timeout: 15000 });
 
     await page.reload();
 
-    await expect(page.locator('.chat-page')).toBeVisible({ timeout: 15000 });
+    await expect(page.locator('.cosmos-page, .chat-page, .yeaft-page').first()).toBeVisible({ timeout: 15000 });
     await expect(page.locator('.login-page')).not.toBeVisible();
   });
 });

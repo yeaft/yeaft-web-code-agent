@@ -3,6 +3,7 @@
  */
 import { en as quickSend } from './quick-send.js';
 import { en as userShortcuts } from './user-shortcuts.js';
+import { en as cosmos } from './cosmos.js';
 
 export default {
   "sessionDiscovery.search": "Search Sessions",
@@ -467,6 +468,7 @@ export default {
 
   ...quickSend,
   ...userShortcuts,
+  ...cosmos,
   'quickSend.composer.label': 'Quick send',
   'quickSend.composer.send': 'Quick send {number}: {name}',
   // ============ Common ============

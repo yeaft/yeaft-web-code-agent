@@ -1,0 +1,210 @@
+/* ============================================================================
+ *  Yeaft Cosmos — Click-Planet Quick Auto-Route Composer Overlay
+ *  Light, translucent floating planetary deck for sessionless auto-routing
+ * ============================================================================ */
+.cosmos-quick-composer {
+  --bg-main: transparent;
+  --bg-primary: var(--p-surface);
+  --bg-secondary: var(--p-surface);
+  --bg-hover: rgba(var(--p-accent-rgb), 0.14);
+  --bg-input: transparent;
+  --text-primary: var(--p-ink);
+  --text-secondary: var(--p-muted);
+  --text-muted: var(--p-faint);
+  --border-color: var(--p-border);
+  --accent-color: var(--p-accent);
+  --accent: var(--p-accent);
+
+  position: fixed;
+  left: 50%;
+  bottom: 24px;
+  transform: translateX(-50%);
+  width: min(560px, calc(100vw - 28px));
+  z-index: 30;
+  border-radius: calc(var(--p-radius) + 4px);
+  background: linear-gradient(180deg, var(--p-bg-top) 0%, var(--p-bg-bot) 100%);
+  border: 1px solid rgba(var(--p-accent-rgb), 0.30);
+  backdrop-filter: blur(24px) saturate(142%);
+  -webkit-backdrop-filter: blur(24px) saturate(142%);
+  box-shadow:
+    0 22px 60px rgba(0, 0, 0, 0.62),
+    0 0 36px rgba(var(--p-accent-rgb), 0.12),
+    inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  color: var(--p-ink);
+  overflow: visible;
+  animation: cosmos-quick-in 200ms var(--c-ease);
+}
+
+@keyframes cosmos-quick-in {
+  from { opacity: 0; transform: translate(-50%, 10px) scale(0.985); }
+  to { opacity: 1; transform: translate(-50%, 0) scale(1); }
+}
+
+.cosmos-quick-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 10px 6px 12px;
+  border-bottom: 1px solid rgba(var(--p-accent-rgb), 0.12);
+}
+
+.cosmos-quick-id {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+}
+
+.cosmos-quick-name {
+  font-family: var(--p-font-head);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--p-ink);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.cosmos-quick-badge {
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: rgba(var(--p-accent-rgb), 0.14);
+  border: 1px solid rgba(var(--p-accent-rgb), 0.32);
+  color: var(--p-accent);
+  white-space: nowrap;
+}
+
+.cosmos-quick-idle-hint {
+  font-size: 10px;
+  color: var(--p-faint);
+  white-space: nowrap;
+}
+
+.cosmos-quick-head-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.cosmos-quick-open-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 24px;
+  padding: 0 9px;
+  border-radius: 999px;
+  background: rgba(var(--p-accent-rgb), 0.14);
+  border: 1px solid rgba(var(--p-accent-rgb), 0.36);
+  color: var(--p-ink);
+  font-size: 10.5px;
+  cursor: pointer;
+  transition: background 140ms ease, border-color 140ms ease;
+}
+
+.cosmos-quick-open-btn:hover {
+  background: rgba(var(--p-accent-rgb), 0.26);
+  border-color: var(--p-border-strong);
+}
+
+.cosmos-quick-open-btn.is-prominent {
+  background: rgba(var(--p-accent-rgb), 0.22);
+  border-color: rgba(var(--p-accent-rgb), 0.54);
+  box-shadow: 0 0 14px rgba(var(--p-accent-rgb), 0.20);
+}
+
+.cosmos-quick-status {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 5px 12px;
+  font-size: 11px;
+  color: var(--p-muted);
+  background: rgba(var(--p-accent-rgb), 0.08);
+  border-bottom: 1px solid rgba(var(--p-accent-rgb), 0.10);
+}
+
+.cosmos-quick-status.is-error {
+  color: #ffc5cb;
+  background: rgba(255, 126, 136, 0.12);
+}
+
+/* Adapt native ChatInput cleanly inside the quick deck */
+.cosmos-quick-composer .input-area {
+  background: transparent !important;
+  border-top: 0 !important;
+  padding: 8px 10px 10px !important;
+}
+
+.cosmos-quick-composer .message-composer,
+.cosmos-quick-composer .input-wrapper {
+  background: rgba(2, 6, 16, 0.32) !important;
+  border: 1px solid rgba(var(--p-accent-rgb), 0.18) !important;
+  border-radius: var(--p-radius) !important;
+  box-shadow: none !important;
+}
+
+.cosmos-quick-composer .message-composer:focus-within,
+.cosmos-quick-composer .input-wrapper:focus-within {
+  border-color: var(--p-border-strong) !important;
+}
+
+.cosmos-quick-composer textarea {
+  color: var(--p-ink) !important;
+  font-size: 13px !important;
+  line-height: 1.5 !important;
+}
+
+.cosmos-quick-composer textarea::placeholder {
+  color: var(--p-faint) !important;
+}
+
+.cosmos-quick-composer .send-btn,
+.cosmos-quick-composer .composer-send-btn {
+  background: var(--p-accent) !important;
+  color: var(--p-send-ink) !important;
+}
+
+.cosmos-quick-composer .yeaft-composer-model,
+.cosmos-quick-composer .yeaft-composer-effort,
+.cosmos-quick-scene-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 26px;
+  padding: 0 8px;
+  border-radius: calc(var(--p-radius) * 0.55);
+  background: rgba(255, 255, 255, 0.04) !important;
+  border: 1px solid rgba(var(--p-accent-rgb), 0.20) !important;
+  color: var(--p-muted) !important;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.cosmos-quick-scene-btn:hover,
+.cosmos-quick-composer .yeaft-composer-model:hover,
+.cosmos-quick-composer .yeaft-composer-effort:hover {
+  color: var(--p-ink) !important;
+  border-color: var(--p-border-strong) !important;
+  background: rgba(var(--p-accent-rgb), 0.14) !important;
+}
+
+.cosmos-quick-composer .yeaft-model-dropdown {
+  background: rgba(5, 11, 24, 0.94) !important;
+  border: 1px solid rgba(var(--p-accent-rgb), 0.28) !important;
+  backdrop-filter: blur(22px);
+  color: var(--p-ink) !important;
+}
+
+@media (max-width: 640px) {
+  .cosmos-quick-composer {
+    bottom: 12px;
+    width: calc(100vw - 20px);
+  }
+  .cosmos-quick-idle-hint {
+    display: none;
+  }
+}

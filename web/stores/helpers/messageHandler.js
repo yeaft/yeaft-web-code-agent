@@ -610,6 +610,10 @@ export function handleMessage(store, msg) {
       store.handleYeaftOutput(msg);
       break;
 
+    case 'yeaft_session_routed':
+      store.handleYeaftSessionRouted?.(msg);
+      break;
+
     case 'yeaft_asset_ready': {
       const conversationId = msg.conversationId
         || store.yeaftConversationIdsByAgent?.[msg.agentId]
@@ -865,6 +869,9 @@ export function handleMessage(store, msg) {
       break;
 
     case 'error': {
+      if (store.handleYeaftAutoRouteError?.(msg)) {
+        break;
+      }
       if (msg.sessionId || (msg.clientMessageId && msg.code)) {
         handleYeaftSessionSendError(store, msg);
         break;

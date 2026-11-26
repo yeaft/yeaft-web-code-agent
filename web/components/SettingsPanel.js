@@ -308,6 +308,23 @@ export default {
                 </div>
                 <div class="sp-row sp-setting-row">
                   <div class="sp-row-left sp-setting-copy">
+                    <span id="general-cosmos-ui-label" class="sp-label">{{ $t('cosmos.mode.settingLabel') }}</span>
+                    <span id="general-cosmos-ui-desc" class="sp-desc-small">{{ $t('cosmos.mode.settingDesc') }}</span>
+                  </div>
+                  <div class="sp-setting-switch-control">
+                    <span class="sp-setting-status">
+                      {{ chatStore.uiMode === 'cosmos' ? $t('cosmos.mode.settingOn') : $t('cosmos.mode.settingOff') }}
+                    </span>
+                    <button class="sp-setting-switch" :class="{ active: chatStore.uiMode === 'cosmos' }"
+                            type="button" role="switch" :aria-checked="chatStore.uiMode === 'cosmos'"
+                            aria-labelledby="general-cosmos-ui-label" aria-describedby="general-cosmos-ui-desc"
+                            @click="toggleCosmosUi">
+                      <span class="sp-setting-switch-knob" aria-hidden="true"></span>
+                    </button>
+                  </div>
+                </div>
+                <div class="sp-row sp-setting-row">
+                  <div class="sp-row-left sp-setting-copy">
                     <span id="general-work-center-label" class="sp-label">{{ $t('settings.general.workCenter') }}</span>
                   </div>
                   <div class="sp-setting-switch-control">
@@ -988,6 +1005,10 @@ export default {
 
     toggleWorkCenter() {
       this.chatStore.setWorkCenterUiEnabled(!this.chatStore.workCenterUiEnabled);
+    },
+
+    toggleCosmosUi() {
+      this.chatStore.setUiMode(this.chatStore.uiMode === 'cosmos' ? 'classic' : 'cosmos');
     },
 
     formatBytes(value) {

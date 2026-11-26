@@ -87,7 +87,8 @@ export const CORE_TEST_FILES = Object.freeze([
   "test/web/stores/auth-session-refresh.test.js",
   "test/web/stores/load-more-yeaft-history.test.js",
   "test/web/stores/websocket-auth-token-race.test.js",
-  "test/web/waiting-hoops.test.js"
+  "test/web/waiting-hoops.test.js",
+  "test/web/cosmos-ui.test.js"
 ]);
 
 export const E2E_TEST_FILES = Object.freeze([
@@ -110,6 +111,7 @@ export const E2E_TEST_FILES = Object.freeze([
   "e2e/tests/ui/sidebar-layout.spec.js",
   "e2e/tests/ui/vp-catalog.spec.js",
   "e2e/tests/ui/work-center.spec.js",
+  "e2e/tests/ui/cosmos-ui.spec.js",
   "e2e/tests/workbench/external-files.spec.js"
 ]);
 
