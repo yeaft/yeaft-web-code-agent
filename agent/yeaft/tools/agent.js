@@ -602,6 +602,7 @@ stops or finalizes work no longer needed.`,
           title: spec.mission || spec.task || name,
           resultDelivery: TASK_RESULT_DELIVERY.MODEL_REENTRY,
           runtime: { subAgentId: agentId, name, cwd: agent.cwd },
+          subAgentRoute: { model: agent.model, sceneId: agent.scene },
           source: {
             threadId: callerScope.parentThreadId || ctx?.threadId || 'main',
             ...(ctx.causalRootId ? { causalRootId: ctx.causalRootId } : {}),

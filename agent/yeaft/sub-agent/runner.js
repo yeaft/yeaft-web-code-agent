@@ -573,6 +573,17 @@ async function driveSubAgent(agent, subEngine, vpPersona, deps) {
           parentEffortDecision: queuedPrompt.parentEffortDecision,
           subAgentTargetEffort: explicitEffortTarget,
           userEffort: explicitEffortTarget,
+          ...(agent.taskId && deps.taskManager?.setSubAgentRoute && agent.parentSessionId ? {
+            // Observe the provider request, not the selection estimate. Retries
+            // and follow-ups can change the actual model or wire effort.
+            onProviderRequestRoute: ({ model, effortDecision }) => {
+              deps.taskManager.setSubAgentRoute(agent.parentSessionId, agent.taskId, {
+                model,
+                ...(effortDecision ? { effort: effortDecision.effective } : {}),
+                sceneId: agent.scene,
+              });
+            },
+          } : {}),
           vpPersona,
           sessionId: agent.parentSessionId || deps.parentSessionId || null,
           threadId: agent.id,

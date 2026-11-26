@@ -325,7 +325,9 @@ export default {
               <button
                 type="button"
                 class="yeaft-vp-task-toggle"
-                :title="taskSummaryTitle(task)"
+                :title="task.subAgentRoute && task.kind === 'sub_agent' ? null : taskSummaryTitle(task)"
+                :aria-expanded="task.kind === 'sub_agent' ? !!expandedTasks[task.id] : undefined"
+                :aria-describedby="!expandedTasks[task.id] && subAgentRouteSummary(task) ? taskRouteId(task) : undefined"
                 @click="toggleTaskExpanded(task.id)"
               >
                 <span class="yeaft-vp-task-dot" aria-hidden="true"></span>
@@ -348,14 +350,20 @@ export default {
                   <rect x="6" y="6" width="12" height="12" rx="2" fill="currentColor"/>
                 </svg>
               </button>
-              <button type="button" class="yeaft-vp-task-chevron-btn" @click="toggleTaskExpanded(task.id)" :aria-label="$t('yeaft.vpTimeline.expand')">
+              <button type="button" class="yeaft-vp-task-chevron-btn" :aria-expanded="task.kind === 'sub_agent' ? !!expandedTasks[task.id] : undefined" @click="toggleTaskExpanded(task.id)" :aria-label="$t('yeaft.vpTimeline.expand')">
                 <svg class="yeaft-vp-task-chevron" viewBox="0 0 24 24" width="13" height="13" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                   <path d="M9 18l6-6-6-6"/>
                 </svg>
               </button>
             </div>
+            <div
+              v-if="!expandedTasks[task.id] && subAgentRouteSummary(task)"
+              :id="taskRouteId(task)"
+              class="yeaft-vp-task-route-preview"
+            >{{ subAgentRouteSummary(task) }}</div>
             <div v-if="expandedTasks[task.id]" class="yeaft-vp-task-detail">
               <div v-if="task.kind === 'sub_agent'" class="yeaft-vp-task-sub-agent-panel">
+                <div v-if="subAgentRouteSummary(task)" class="yeaft-vp-task-route">{{ subAgentRouteSummary(task) }}</div>
                 <TerminalOutput
                   v-if="subAgentTaskStreamText(task)"
                   class="yeaft-vp-task-log yeaft-vp-task-stream"
@@ -439,6 +447,8 @@ export default {
       .slice().sort((a, b) => b.failedCalls - a.failedCalls || a.name.localeCompare(b.name));
 
     const expandedTasks = Vue.ref({});
+    const routeIdPrefix = Vue.useId();
+    const taskRouteId = (task) => `${routeIdPrefix}-task-route-${task.id}`;
     const taskLogRefs = new Map();
     const taskLogPinned = new Map();
 
@@ -506,6 +516,19 @@ export default {
       if (command) lines.push(`${$t('yeaft.sessionStatus.task.command')}: ${command}`);
       return lines.join('\n');
     };
+    const subAgentRouteSummary = (task) => {
+      if (task?.kind !== 'sub_agent' || !task.subAgentRoute) return '';
+      const { model, effort, sceneId } = task.subAgentRoute;
+      const unknown = $t('yeaft.sessionStatus.task.route.unreported');
+      const sceneKey = `yeaft.session.scene.${sceneId}`;
+      const sceneLabel = sceneId ? $t(sceneKey) : null;
+      return [
+        $t('yeaft.sessionStatus.task.route.model', { value: model || unknown }),
+        $t('yeaft.sessionStatus.task.route.effort', { value: effort === null ? $t('yeaft.sessionStatus.task.route.noEffort') : effort || unknown }),
+        $t('yeaft.sessionStatus.task.route.scene', { value: sceneId === null ? $t('yeaft.sessionStatus.task.route.noScene')
+          : (sceneLabel === sceneKey ? sceneId : sceneLabel) || unknown }),
+      ].join('\n');
+    };
     const taskStopKey = (task) => `${task?.agentId || ''}\u001f${task?.sessionId || ''}::${task?.id || ''}`;
     const isTaskCancellable = (task) => task?.status === 'running' && (
       (task.kind === 'shell' && !!task.runtime?.pid)
@@ -556,6 +579,8 @@ export default {
       taskKindLabel,
       shellTaskCommand,
       taskSummaryTitle,
+      subAgentRouteSummary,
+      taskRouteId,
       isTaskCancellable,
       isTaskStopping,
       taskDetailLines,

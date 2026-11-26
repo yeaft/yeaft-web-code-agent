@@ -18,6 +18,7 @@ import sendMessage from '../../../agent/yeaft/tools/send-message.js';
 import waitAgent from '../../../agent/yeaft/tools/wait-agent.js';
 import listAgents from '../../../agent/yeaft/tools/list-agents.js';
 import closeAgent from '../../../agent/yeaft/tools/close-agent.js';
+import { TaskManager } from '../../../agent/yeaft/tasks/manager.js';
 import { ToolRegistry } from '../../../agent/yeaft/tools/registry.js';
 import { defineTool } from '../../../agent/yeaft/tools/types.js';
 import { NullTrace } from '../../../agent/yeaft/debug-trace.js';
@@ -116,6 +117,61 @@ describe('sub-agent model, effort, scene, and machine protocol', () => {
     _resetAgentRegistry();
     _resetNotifications();
     vi.restoreAllMocks();
+  });
+
+  it('persists the child scene and adapter-resolved effort in native Session task snapshots', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'yeaft-sub-agent-task-route-'));
+    const events = [];
+    const taskManager = new TaskManager({ yeaftDir: dir, onEvent: event => events.push(event) });
+    const model = 'openai/gpt-5.4';
+    const config = mkCatalogConfig({ model, primaryModel: model });
+    const adapter = new AdapterRouter({ providers: [{
+      name: 'openai', protocol: 'openai-responses', baseUrl: 'https://openai.invalid/v1',
+      apiKey: 'fixture', models: ['gpt-5.4'],
+    }] });
+    let release;
+    const gate = new Promise(resolve => { release = resolve; });
+    let captureDispatch;
+    const dispatched = new Promise(resolve => { captureDispatch = resolve; });
+    vi.stubGlobal('fetch', vi.fn(async (_url, init) => {
+      captureDispatch(JSON.parse(init.body));
+      await gate;
+      return new Response([
+        'data: {"type":"response.output_text.delta","delta":"status: done"}',
+        'data: {"type":"response.completed","response":{"id":"resp_1","status":"completed"}}',
+        '', '',
+      ].join('\n\n'), { headers: { 'content-type': 'text/event-stream' } });
+    }));
+    let child;
+    try {
+      const spawn = JSON.parse(await agentTool.execute({
+        name: 'route-test', mission: 'Check route', scene: 'frontend',
+      }, {
+        sessionId: 's', sceneId: 'software', currentVpId: 'omni', taskManager,
+        parentEngineDeps: { adapter, config, trace: new NullTrace(), taskManager,
+          yeaftDir: dir, subAgentLogDir: dir, parentToolRegistry: mkParentRegistry() },
+      }));
+      expect(spawn.success).toBe(true);
+      child = getAgentRegistry().get(spawn.agentId);
+      expect(events[0]).toMatchObject({ event: 'started', task: {
+        source: { sceneId: 'software' }, subAgentRoute: { model, sceneId: 'frontend' },
+      } });
+      expect(events[0].task.subAgentRoute).not.toHaveProperty('effort');
+      expect((await dispatched).reasoning).toEqual({ effort: 'medium' });
+      const route = { model, effort: 'medium', sceneId: 'frontend' };
+      expect(events.some(event => event.event === 'updated' && event.task.subAgentRoute?.effort === 'medium')).toBe(true);
+      expect(taskManager.listActiveTasks('s')[0].subAgentRoute).toEqual(route);
+      expect(taskManager.store.readTask('s', spawn.taskId).subAgentRoute).toEqual(route);
+      release();
+      await child.driverPromise;
+      expect(events.find(event => event.event === 'completed')).toMatchObject({ event: 'completed', task: { status: 'succeeded', subAgentRoute: route } });
+      expect(new TaskManager({ yeaftDir: dir }).getTask('s', spawn.taskId).subAgentRoute).toEqual(route);
+    } finally {
+      release();
+      await child?.driverPromise;
+      vi.unstubAllGlobals();
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it('keeps Chat High in Person catalogs, pinned children, and SpawnAgent selections', async () => {

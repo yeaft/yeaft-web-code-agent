@@ -4518,6 +4518,37 @@
   outline: none;
 }
 
+.yeaft-vp-task-route,
+.yeaft-vp-task-route-preview {
+  color: var(--text-secondary);
+  white-space: pre-line;
+  overflow-wrap: anywhere;
+}
+
+.yeaft-vp-task-route-preview {
+  display: none;
+  margin-inline-start: 22px;
+  padding: 4px 9px 7px;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+/* In-flow so the details remain hoverable and do not obscure other rows. */
+@media (hover: hover) {
+  .yeaft-vp-task-item:hover > .yeaft-vp-task-route-preview {
+    display: block;
+  }
+}
+
+.yeaft-vp-task-item:has(.yeaft-vp-task-toggle:focus-visible) > .yeaft-vp-task-route-preview {
+  display: block;
+}
+
+.yeaft-vp-task-toggle[aria-expanded]:focus-visible {
+  outline: 2px solid var(--text-secondary);
+  outline-offset: 1px;
+}
+
 .yeaft-vp-task-detail-line {
   color: var(--text-secondary);
   overflow-wrap: anywhere;

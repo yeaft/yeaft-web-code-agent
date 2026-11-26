@@ -26,6 +26,31 @@ describe('TaskManager', () => {
     if (dir) rmSync(dir, { recursive: true, force: true });
   });
 
+  it('retains only the latest observed sub-agent route on restart and leaves legacy/shell records alone', () => {
+    const events = [];
+    const manager = new TaskManager({ yeaftDir: dir, onEvent: event => events.push(event) });
+    const setup = { sessionId: 's', kind: 'sub_agent', source: { sceneId: 'software' } };
+    const legacy = manager.startTask(setup);
+    const task = manager.startTask({ ...setup, subAgentRoute: { model: 'first', sceneId: null } });
+    const shell = manager.startTask({ ...setup, kind: 'shell', subAgentRoute: { model: 'wrong' } });
+    manager.setSubAgentRoute('s', shell.id, { model: 'wrong' });
+    manager.setSubAgentRoute('s', task.id, { model: 'first', effort: 'medium', sceneId: null });
+    const fallback = { model: 'fallback', sceneId: null };
+    manager.setSubAgentRoute('s', task.id, fallback);
+    manager.setSubAgentRoute('s', task.id, fallback);
+    expect(events.filter(event => event.event === 'updated')).toHaveLength(2);
+    expect(manager.getTask('s', task.id).subAgentRoute).toEqual(fallback);
+    const restarted = new TaskManager({ yeaftDir: dir });
+    const replay = [];
+    restarted.setEventSink(event => replay.push(event));
+    expect(replay.find(event => event.task.id === task.id).task).toMatchObject({
+      status: 'orphaned', subAgentRoute: fallback,
+    });
+    expect(restarted.getTask('s', task.id).subAgentRoute).toEqual(fallback);
+    expect(restarted.getTask('s', legacy.id)).not.toHaveProperty('subAgentRoute');
+    expect(restarted.getTask('s', shell.id)).not.toHaveProperty('subAgentRoute');
+  });
+
   it('marks persisted running tasks as orphaned on restart', () => {
     const manager = new TaskManager({
       yeaftDir: dir,
