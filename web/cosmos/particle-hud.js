@@ -66,38 +66,60 @@ export function createParticlePools() {
     });
   }
 
-  // Spiral Galaxy stars (2,000 differentially rotating stars)
-  const galStars = [];
-  for (let i = 0; i < 2000; i++) {
-    const arm = i % 4;
-    const r = 0.06 + Math.pow(rnd(), 0.75) * 0.88;
-    const spiral = arm * (Math.PI * 0.5) + Math.log(r + 0.08) * 2.6 + (rnd() - 0.5) * (0.45 + r * 0.55);
-    const tint = rnd();
-    galStars.push({
-      r,
-      angle: spiral,
-      speed: 0.08 / Math.pow(r + 0.16, 0.65),
-      zOff: (rnd() - 0.5) * 0.032 * (1.2 - r * 0.6),
-      size: 1.0 + Math.pow(rnd(), 2.2) * 2.8,
-      alpha: (0.28 + rnd() * 0.58) * (1.0 - r * 0.45),
-      col: tint < 0.28 ? [0.66, 0.84, 1.0] : (tint < 0.76 ? [0.96, 0.95, 1.0] : [1.0, 0.80, 0.58]),
-    });
+  // Lazily synthesize Galaxy (2,000) & Event Horizon (480) pools only when those scales enter view.
+  let galStarsCache = null;
+  let bhInfallCache = null;
+
+  function buildGalStars() {
+    const grnd = makeRng(20261129);
+    const arr = [];
+    for (let i = 0; i < 2000; i++) {
+      const arm = i % 4;
+      const r = 0.06 + Math.pow(grnd(), 0.75) * 0.88;
+      const spiral = arm * (Math.PI * 0.5) + Math.log(r + 0.08) * 2.6 + (grnd() - 0.5) * (0.45 + r * 0.55);
+      const tint = grnd();
+      arr.push({
+        r,
+        angle: spiral,
+        speed: 0.08 / Math.pow(r + 0.16, 0.65),
+        zOff: (grnd() - 0.5) * 0.032 * (1.2 - r * 0.6),
+        size: 1.0 + Math.pow(grnd(), 2.2) * 2.8,
+        alpha: (0.28 + grnd() * 0.58) * (1.0 - r * 0.45),
+        col: tint < 0.28 ? [0.66, 0.84, 1.0] : (tint < 0.76 ? [0.96, 0.95, 1.0] : [1.0, 0.80, 0.58]),
+      });
+    }
+    return arr;
   }
 
-  // Black hole infalling accretion stream
-  const bhInfall = [];
-  for (let i = 0; i < 480; i++) {
-    bhInfall.push({
-      angle0: rnd() * Math.PI * 2,
-      rStart: 1.8 + rnd() * 3.8,
-      phase: rnd(),
-      speed: 0.06 + rnd() * 0.14,
-      incl: (rnd() - 0.5) * 0.16,
-      size: 1.1 + rnd() * 2.0,
-    });
+  function buildBhInfall() {
+    const brnd = makeRng(20261131);
+    const arr = [];
+    for (let i = 0; i < 480; i++) {
+      arr.push({
+        angle0: brnd() * Math.PI * 2,
+        rStart: 1.8 + brnd() * 3.8,
+        phase: brnd(),
+        speed: 0.06 + brnd() * 0.14,
+        incl: (brnd() - 0.5) * 0.16,
+        size: 1.1 + brnd() * 2.0,
+      });
+    }
+    return arr;
   }
 
-  return { belt, dust, solarWind, galStars, bhInfall };
+  return {
+    belt,
+    dust,
+    solarWind,
+    get galStars() {
+      if (!galStarsCache) galStarsCache = buildGalStars();
+      return galStarsCache;
+    },
+    get bhInfall() {
+      if (!bhInfallCache) bhInfallCache = buildBhInfall();
+      return bhInfallCache;
+    },
+  };
 }
 
 export function createCosmicWebGraph() {
@@ -452,7 +474,7 @@ export function drawCosmosHud(ctx, w, h, st, webGraph, galaxyBooks, agentsByPlan
     ctx.restore();
   }
 
-  if (webAlpha > 0.04) {
+  if (webAlpha > 0.04 && webGraph) {
     ctx.save();
     ctx.globalAlpha = webAlpha;
     const rotY = Math.sin(st.realTime * 0.07) * 0.14 + st.camRot.x * 0.35 + st.parallax.x * 0.08;

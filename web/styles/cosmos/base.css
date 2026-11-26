@@ -21,7 +21,7 @@
   width: 100%;
   height: 100%;
   overflow: hidden;
-  background: var(--c-bg);
+  background: radial-gradient(ellipse 75% 65% at 50% 48%, #0a1428 0%, #040914 54%, #02040a 100%);
   color: var(--c-ink);
   font-family: var(--font-sans, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif);
   font-size: 13px;
@@ -356,6 +356,11 @@
   font-size: 12px;
   box-shadow: 0 14px 36px rgba(0, 0, 0, 0.62);
   max-width: calc(100vw - 32px);
+  transition: bottom 220ms var(--c-ease);
+}
+
+.cosmos-page.is-observing-event .cosmos-toast {
+  bottom: calc(136px + env(safe-area-inset-bottom, 0px));
 }
 
 .cosmos-toast-action {
@@ -487,7 +492,7 @@
 }
 
 @keyframes cosmos-hover-pop {
-  from { opacity: 0.2; transform: translateY(4px) scale(0.985); }
+  from { opacity: 0.86; transform: translateY(3px) scale(0.99); }
   to { opacity: 1; transform: translateY(0) scale(1); }
 }
 
@@ -516,6 +521,9 @@
   }
   .cosmos-toast {
     bottom: calc(74px + env(safe-area-inset-bottom, 0px));
+  }
+  .cosmos-page.is-observing-event .cosmos-toast {
+    bottom: calc(168px + env(safe-area-inset-bottom, 0px));
   }
 }
 

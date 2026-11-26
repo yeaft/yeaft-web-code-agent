@@ -7,6 +7,33 @@ import { mathExtensions } from './markdown-math.js';
 let _configured = false;
 let _mermaidInitializedTheme = null;
 let _mermaidRenderSeq = 0;
+const _pendingMermaidContainers = new Set();
+let _mermaidLoadHookAttached = false;
+
+function scheduleMermaidDrainOnReady() {
+  if (_mermaidLoadHookAttached || typeof window === 'undefined' || typeof document === 'undefined') return;
+  _mermaidLoadHookAttached = true;
+  const drain = () => {
+    _mermaidLoadHookAttached = false;
+    if (typeof mermaid === 'undefined') return;
+    const queued = Array.from(_pendingMermaidContainers);
+    _pendingMermaidContainers.clear();
+    for (const el of queued) {
+      if (el && el.isConnected !== false) {
+        renderMermaidIn(el);
+      }
+    }
+  };
+  const script = document.querySelector('script[src*="mermaid.min.js"]');
+  if (script) {
+    script.addEventListener('load', drain, { once: true });
+    script.addEventListener('error', () => {
+      _mermaidLoadHookAttached = false;
+      _pendingMermaidContainers.clear();
+    }, { once: true });
+  }
+  window.addEventListener('load', drain, { once: true });
+}
 
 function safeDownloadFilename(base, ext) {
   const cleanBase = String(base || 'mermaid-diagram')
@@ -254,7 +281,13 @@ export function initMermaid() {
 }
 
 export async function renderMermaidIn(container) {
-  if (!container || !initMermaid()) return;
+  if (!container) return;
+  if (typeof mermaid === 'undefined') {
+    _pendingMermaidContainers.add(container);
+    scheduleMermaidDrainOnReady();
+    return;
+  }
+  if (!initMermaid()) return;
   const codeBlocks = container.querySelectorAll('pre code.language-mermaid:not([data-mermaid-error])');
   for (const codeEl of codeBlocks) {
     const pre = codeEl.closest('pre');
@@ -385,4 +418,6 @@ export function clearMarkdownCache() {
 export function resetMermaidForTests() {
   _mermaidInitializedTheme = null;
   _mermaidRenderSeq = 0;
+  _pendingMermaidContainers.clear();
+  _mermaidLoadHookAttached = false;
 }

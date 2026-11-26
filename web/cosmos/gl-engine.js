@@ -1,51 +1,66 @@
 /**
- * Yeaft Cosmos — WebGL2/WebGL Renderer Engine with Real NASA/ESO Hot-Swap,
- * Mobile Thermal Scaling, Context-Loss Recovery & High-Craft 2D No-GPU Fallback
+ * Yeaft Cosmos — Non-Blocking WebGL2/WebGL Engine with Lazy Per-Event Shaders,
+ * Parallel Shader Compilation, Tiered Off-Main-Thread Texture Streaming,
+ * Pixel-Budgeted Adaptive Scaling, Context-Loss Recovery & 2D Fallback
  */
 import { BG_VERT, BG_FRAG, PARTICLE_VERT, PARTICLE_FRAG } from './shaders-bg.js';
 import { BODY_VERT, BODY_FRAG } from './shaders-bodies.js';
-import { bakeProceduralWebGLTextures } from './gpu-texture-baker.js';
+import { EVENT_VERT, getEventFrag } from './shaders-events.js';
 import {
   COSMOS_TEXTURE_MANIFEST,
   requestCosmosTextureGroup,
+  requestCosmosTextureTier,
+  requestCosmosTextureKeys,
   getLoadedCosmosImage,
   uploadImageToWebGLTexture,
-  createSolidPlaceholderTexture,
+  createPlaceholderTextureSet,
 } from './texture-loader.js';
 import { createFallback2DEngine } from './fallback-2d-engine.js';
 
-function createShader(gl, type, src) {
+function compileShader(gl, type, src) {
   const sh = gl.createShader(type);
   if (!sh) return null;
   gl.shaderSource(sh, src);
   gl.compileShader(sh);
-  if (!gl.getShaderParameter(sh, gl.COMPILE_STATUS)) {
-    console.warn('[Cosmos] Shader compile warning:', gl.getShaderInfoLog(sh));
-    gl.deleteShader(sh);
-    return null;
-  }
   return sh;
 }
 
-function createProgram(gl, vsSrc, fsSrc) {
-  const vs = createShader(gl, gl.VERTEX_SHADER, vsSrc);
-  const fs = createShader(gl, gl.FRAGMENT_SHADER, fsSrc);
+function startProgram(gl, vsSrc, fsSrc, primaryAttr = null) {
+  const vs = compileShader(gl, gl.VERTEX_SHADER, vsSrc);
+  const fs = compileShader(gl, gl.FRAGMENT_SHADER, fsSrc);
   if (!vs || !fs) {
     if (vs) gl.deleteShader(vs);
     if (fs) gl.deleteShader(fs);
     return null;
   }
   const prog = gl.createProgram();
-  gl.attachShader(prog, vs);
-  gl.attachShader(prog, fs);
-  gl.linkProgram(prog);
-  gl.deleteShader(vs);
-  gl.deleteShader(fs);
-  if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) {
-    console.warn('[Cosmos] Program link warning:', gl.getProgramInfoLog(prog));
-    gl.deleteProgram(prog);
+  if (!prog) {
+    gl.deleteShader(vs);
+    gl.deleteShader(fs);
     return null;
   }
+  gl.attachShader(prog, vs);
+  gl.attachShader(prog, fs);
+  if (primaryAttr && typeof gl.bindAttribLocation === 'function') {
+    gl.bindAttribLocation(prog, 0, primaryAttr);
+  }
+  gl.linkProgram(prog);
+  return { prog, vs, fs };
+}
+
+function finishProgram(gl, handle, label = 'Program') {
+  if (!handle) return null;
+  const { prog, vs, fs } = handle;
+  const linked = gl.getProgramParameter(prog, gl.LINK_STATUS);
+  if (!linked) {
+    console.warn(`[Cosmos] ${label} link warning:`, gl.getProgramInfoLog?.(prog), gl.getShaderInfoLog?.(vs), gl.getShaderInfoLog?.(fs));
+    gl.deleteProgram(prog);
+    gl.deleteShader(vs);
+    gl.deleteShader(fs);
+    return null;
+  }
+  gl.deleteShader(vs);
+  gl.deleteShader(fs);
   return prog;
 }
 
@@ -67,11 +82,19 @@ export function detectMobileDevice() {
   return coarse || (touch && minDim <= 900) || minDim < 600;
 }
 
+let cachedSoftwareProbe = null;
+
+/** Reset cached software-GL probe (for isolated unit tests). */
+export function __resetSoftwareProbeForTests() {
+  cachedSoftwareProbe = null;
+}
+
 /**
- * Probe whether browser WebGL is backed by a software CPU rasterizer using a
- * disposable 1x1 canvas so the real stage canvas remains free for Canvas 2D.
+ * Probe once per session whether browser WebGL is backed by a software CPU rasterizer
+ * using a disposable 1x1 canvas so the real stage canvas remains free for Canvas 2D.
  */
 function probeSoftwareWebGL() {
+  if (cachedSoftwareProbe !== null) return cachedSoftwareProbe;
   if (typeof document === 'undefined' || typeof document.createElement !== 'function') return false;
   try {
     const probe = document.createElement('canvas');
@@ -81,6 +104,7 @@ function probeSoftwareWebGL() {
     if (!pgl) return false;
     const isSoft = detectSoftwareRenderer(pgl);
     try { pgl.getExtension('WEBGL_lose_context')?.loseContext?.(); } catch { /* ignore */ }
+    cachedSoftwareProbe = isSoft;
     return isSoft;
   } catch {
     return false;
@@ -100,8 +124,7 @@ export function createCosmosEngine(glCanvas, hudCanvas, opts = {}) {
     return createFallback2DEngine(glCanvas, hudCanvas, { isMobile });
   }
 
-  // In 'auto' mode, route software/CPU WebGL directly to our High-Craft 2D Cosmos Engine
-  // (sharp native DPR, real NASA/ESO imagery, low CPU) instead of blurry 0.5x CPU shaders.
+  // In 'auto' mode, route software/CPU WebGL directly to our High-Craft 2D Cosmos Engine.
   if (renderQuality === 'auto' && probeSoftwareWebGL()) {
     return createFallback2DEngine(glCanvas, hudCanvas, { isMobile });
   }
@@ -111,7 +134,7 @@ export function createCosmosEngine(glCanvas, hudCanvas, opts = {}) {
   try {
     const attrs = {
       alpha: false,
-      antialias: !isMobile,
+      antialias: false,
       premultipliedAlpha: false,
       powerPreference: isMobile ? 'default' : 'high-performance',
     };
@@ -142,9 +165,17 @@ export function createCosmosEngine(glCanvas, hudCanvas, opts = {}) {
     return createFallback2DEngine(glCanvas, hudCanvas, { isMobile });
   }
 
+  let parallelExt = null;
+  let pendingCore = null;
+  let coreReady = false;
+  let coreFailed = false;
+  let fatalNotified = false;
+  let contextGen = 0;
   let bgProg = null;
   let bodyProg = null;
   let ptProg = null;
+  let sharedEventVert = null;
+  let eventCache = Object.create(null); // eventType -> { prog, fs, loc, ready, failed }
   let quadBuf = null;
   let ptBuf = null;
   let textures = null;
@@ -155,13 +186,94 @@ export function createCosmosEngine(glCanvas, hudCanvas, opts = {}) {
   let destroyed = false;
 
   const requestedGroups = new Set();
+  const requestedTiers = new Set();
+  const requestedKeys = new Set();
   const textureUnsubs = [];
   const uploadedRealKeys = new Set();
+  const queuedUploadKeys = new Set();
+  const uploadQueue = []; // { key, source, spec, ownsBitmap, gen }
+  const stageTimers = [];
+  let idleHandle = 0;
 
-  function applyRealImage(key, img, spec) {
-    if (destroyed || contextLost || !textures || !textures[key] || gl.isContextLost?.()) return;
-    if (uploadImageToWebGLTexture(gl, textures[key], img, spec)) {
-      uploadedRealKeys.add(key);
+  function notifyFatalError(reason) {
+    if (fatalNotified || destroyed) return;
+    fatalNotified = true;
+    try { opts.onFatalError?.(reason); } catch { /* ignore callback errors */ }
+  }
+
+  function clearPendingUploadQueue() {
+    while (uploadQueue.length) {
+      const item = uploadQueue.shift();
+      if (item?.ownsBitmap && typeof item.source?.close === 'function') {
+        try { item.source.close(); } catch { /* ignore */ }
+      }
+    }
+    queuedUploadKeys.clear();
+  }
+
+  function applyRealSourceImmediate(key, source, spec, ownsBitmap = false) {
+    try {
+      if (destroyed || contextLost || !textures || !textures[key] || gl.isContextLost?.()) {
+        return false;
+      }
+      const ok = uploadImageToWebGLTexture(gl, textures[key], source, spec);
+      if (ok) uploadedRealKeys.add(key);
+      return ok;
+    } catch (err) {
+      console.warn('[Cosmos] Texture upload warning:', key, err?.message || err);
+      return false;
+    } finally {
+      if (ownsBitmap && typeof source?.close === 'function') {
+        try { source.close(); } catch { /* ignore */ }
+      }
+    }
+  }
+
+  function enqueueRealImage(key, img, spec) {
+    if (destroyed || contextLost || !textures || !textures[key]) return;
+    if (uploadedRealKeys.has(key) || queuedUploadKeys.has(key)) return;
+    const gen = contextGen;
+    queuedUploadKeys.add(key);
+    const isDomImage = typeof HTMLImageElement !== 'undefined' && img instanceof HTMLImageElement;
+    if (isDomImage && typeof createImageBitmap === 'function') {
+      createImageBitmap(img).then((bmp) => {
+        if (destroyed || contextLost || gen !== contextGen || uploadedRealKeys.has(key)) {
+          if (gen === contextGen) queuedUploadKeys.delete(key);
+          try { bmp.close(); } catch { /* ignore */ }
+          return;
+        }
+        uploadQueue.push({ key, source: bmp, spec, ownsBitmap: true, gen });
+      }, () => {
+        if (destroyed || contextLost || gen !== contextGen || uploadedRealKeys.has(key)) {
+          if (gen === contextGen) queuedUploadKeys.delete(key);
+          return;
+        }
+        uploadQueue.push({ key, source: img, spec, ownsBitmap: false, gen });
+      });
+    } else {
+      // Unit tests or environments without createImageBitmap
+      uploadQueue.push({ key, source: img, spec, ownsBitmap: false, gen });
+    }
+  }
+
+  function flushUploadQueue() {
+    if (!uploadQueue.length || destroyed || contextLost || !textures || gl.isContextLost?.()) return;
+    const budgetMs = 4.0;
+    const maxPerFrame = 2;
+    const t0 = typeof performance !== 'undefined' ? performance.now() : 0;
+    let done = 0;
+    while (uploadQueue.length && done < maxPerFrame) {
+      const item = uploadQueue.shift();
+      queuedUploadKeys.delete(item.key);
+      if (item.gen !== contextGen || uploadedRealKeys.has(item.key)) {
+        if (item.ownsBitmap && typeof item.source?.close === 'function') {
+          try { item.source.close(); } catch { /* ignore */ }
+        }
+        continue;
+      }
+      applyRealSourceImmediate(item.key, item.source, item.spec, item.ownsBitmap);
+      done += 1;
+      if (t0 && (performance.now() - t0) >= budgetMs) break;
     }
   }
 
@@ -169,7 +281,25 @@ export function createCosmosEngine(glCanvas, hudCanvas, opts = {}) {
     if (destroyed || requestedGroups.has(group)) return;
     requestedGroups.add(group);
     const unsub = requestCosmosTextureGroup(group, (key, img, spec) => {
-      applyRealImage(key, img, spec);
+      enqueueRealImage(key, img, spec);
+    });
+    textureUnsubs.push(unsub);
+  }
+
+  function requestTextureTier(tier) {
+    if (destroyed || requestedTiers.has(tier)) return;
+    requestedTiers.add(tier);
+    const unsub = requestCosmosTextureTier(tier, (key, img, spec) => {
+      enqueueRealImage(key, img, spec);
+    });
+    textureUnsubs.push(unsub);
+  }
+
+  function ensureEventTextures() {
+    if (destroyed || uploadedRealKeys.has('nebula') || requestedKeys.has('nebula')) return;
+    requestedKeys.add('nebula');
+    const unsub = requestCosmosTextureKeys(['nebula'], (key, img, spec) => {
+      enqueueRealImage(key, img, spec);
     });
     textureUnsubs.push(unsub);
   }
@@ -177,7 +307,7 @@ export function createCosmosEngine(glCanvas, hudCanvas, opts = {}) {
   function reuploadCachedRealTextures() {
     for (const spec of COSMOS_TEXTURE_MANIFEST) {
       const img = getLoadedCosmosImage(spec.key);
-      if (img) applyRealImage(spec.key, img, spec);
+      if (img) applyRealSourceImmediate(spec.key, img, spec, false);
     }
   }
 
@@ -186,47 +316,7 @@ export function createCosmosEngine(glCanvas, hudCanvas, opts = {}) {
     if (scaleLog > 20.0) requestTextureGroup('web');
   }
 
-  function initGpuResources() {
-    const nextBgProg = createProgram(gl, BG_VERT, BG_FRAG);
-    const nextBodyProg = createProgram(gl, BODY_VERT, BODY_FRAG);
-    const nextPtProg = createProgram(gl, PARTICLE_VERT, PARTICLE_FRAG);
-    if (!nextBgProg || !nextBodyProg || !nextPtProg) {
-      if (nextBgProg) gl.deleteProgram(nextBgProg);
-      if (nextBodyProg) gl.deleteProgram(nextBodyProg);
-      if (nextPtProg) gl.deleteProgram(nextPtProg);
-      return false;
-    }
-
-    const nextQuadBuf = gl.createBuffer();
-    gl.bindBuffer(gl.ARRAY_BUFFER, nextQuadBuf);
-    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, -1, 1, -1, 1, 1, -1, 1, 1]), gl.STATIC_DRAW);
-
-    const nextPtBuf = gl.createBuffer();
-
-    // Instant 0ms GPU procedural placeholder bake (~20ms) so first frame is never blank.
-    const bakeScale = isSoftware ? 0.5 : (isMobile ? 0.75 : 1.0);
-    const nextTextures = bakeProceduralWebGLTextures(gl, nextQuadBuf, bakeScale);
-    if (!nextTextures) {
-      gl.deleteBuffer(nextQuadBuf);
-      gl.deleteBuffer(nextPtBuf);
-      gl.deleteProgram(nextBgProg);
-      gl.deleteProgram(nextBodyProg);
-      gl.deleteProgram(nextPtProg);
-      return false;
-    }
-
-    // Create 1x1 black placeholder slots for additive deep-space & galaxy layers until WebPs land.
-    nextTextures.nebula = createSolidPlaceholderTexture(gl, [0, 0, 0, 255]);
-    nextTextures.deep = createSolidPlaceholderTexture(gl, [0, 0, 0, 255]);
-    nextTextures.galaxy_disc = createSolidPlaceholderTexture(gl, [0, 0, 0, 255]);
-
-    bgProg = nextBgProg;
-    bodyProg = nextBodyProg;
-    ptProg = nextPtProg;
-    quadBuf = nextQuadBuf;
-    ptBuf = nextPtBuf;
-    textures = nextTextures;
-
+  function queryCoreLocations() {
     bgLoc = {
       aPos: gl.getAttribLocation(bgProg, 'aPos'),
       uRes: gl.getUniformLocation(bgProg, 'uRes'),
@@ -238,6 +328,8 @@ export function createCosmosEngine(glCanvas, hudCanvas, opts = {}) {
       uWarp: gl.getUniformLocation(bgProg, 'uWarp'),
       uFovZoom: gl.getUniformLocation(bgProg, 'uFovZoom'),
       uShockWave: gl.getUniformLocation(bgProg, 'uShockWave'),
+      uEventLens: gl.getUniformLocation(bgProg, 'uEventLens'),
+      uEventAmbient: gl.getUniformLocation(bgProg, 'uEventAmbient'),
       uSkyBright: gl.getUniformLocation(bgProg, 'uSkyBright'),
       uStarDensity: gl.getUniformLocation(bgProg, 'uStarDensity'),
       uQuality: gl.getUniformLocation(bgProg, 'uQuality'),
@@ -287,8 +379,204 @@ export function createCosmosEngine(glCanvas, hudCanvas, opts = {}) {
       uTexClouds: gl.getUniformLocation(bodyProg, 'uTexClouds'),
       uTexRing: gl.getUniformLocation(bodyProg, 'uTexRing'),
     };
+  }
 
+  function finalizeCorePrograms({ notify = true } = {}) {
+    if (coreReady) return true;
+    if (coreFailed || !pendingCore) return false;
+    if (parallelExt) {
+      const done = gl.getProgramParameter(pendingCore.bg.prog, parallelExt.COMPLETION_STATUS_KHR)
+        && gl.getProgramParameter(pendingCore.body.prog, parallelExt.COMPLETION_STATUS_KHR)
+        && gl.getProgramParameter(pendingCore.pt.prog, parallelExt.COMPLETION_STATUS_KHR);
+      if (!done) return false;
+    }
+    const nextBg = finishProgram(gl, pendingCore.bg, 'Background');
+    const nextBody = finishProgram(gl, pendingCore.body, 'Body');
+    const nextPt = finishProgram(gl, pendingCore.pt, 'Particle');
+    pendingCore = null;
+    if (!nextBg || !nextBody || !nextPt) {
+      if (nextBg) gl.deleteProgram(nextBg);
+      if (nextBody) gl.deleteProgram(nextBody);
+      if (nextPt) gl.deleteProgram(nextPt);
+      coreFailed = true;
+      if (notify) notifyFatalError('shader_link_failed');
+      return false;
+    }
+    bgProg = nextBg;
+    bodyProg = nextBody;
+    ptProg = nextPt;
+    queryCoreLocations();
+    coreReady = true;
+    return true;
+  }
+
+  function getEventLocations(prog) {
+    return {
+      aCorner: gl.getAttribLocation(prog, 'aCorner'),
+      uRes: gl.getUniformLocation(prog, 'uRes'),
+      uCenterPx: gl.getUniformLocation(prog, 'uCenterPx'),
+      uQuadRadiusPx: gl.getUniformLocation(prog, 'uQuadRadiusPx'),
+      uEventRadiusPx: gl.getUniformLocation(prog, 'uEventRadiusPx'),
+      uProgress: gl.getUniformLocation(prog, 'uProgress'),
+      uElapsed: gl.getUniformLocation(prog, 'uElapsed'),
+      uRealTime: gl.getUniformLocation(prog, 'uRealTime'),
+      uAlpha: gl.getUniformLocation(prog, 'uAlpha'),
+      uObsBlend: gl.getUniformLocation(prog, 'uObsBlend'),
+      uDistNorm: gl.getUniformLocation(prog, 'uDistNorm'),
+      uAngle: gl.getUniformLocation(prog, 'uAngle'),
+      uSeed: gl.getUniformLocation(prog, 'uSeed'),
+      uSunRadiusPx: gl.getUniformLocation(prog, 'uSunRadiusPx'),
+      uTexNebula: gl.getUniformLocation(prog, 'uTexNebula'),
+      uTexSun: gl.getUniformLocation(prog, 'uTexSun'),
+      uTexRock: gl.getUniformLocation(prog, 'uTexRock'),
+    };
+  }
+
+  function ensureEventProgram(eventType) {
+    if (destroyed || contextLost) return null;
+    let entry = eventCache[eventType];
+    if (!entry) {
+      if (!sharedEventVert) {
+        sharedEventVert = compileShader(gl, gl.VERTEX_SHADER, EVENT_VERT);
+        if (!sharedEventVert) return null;
+      }
+      const fs = compileShader(gl, gl.FRAGMENT_SHADER, getEventFrag(eventType));
+      if (!fs) {
+        eventCache[eventType] = { prog: null, fs: null, loc: null, ready: false, failed: true };
+        return null;
+      }
+      const prog = gl.createProgram();
+      if (!prog) {
+        gl.deleteShader(fs);
+        eventCache[eventType] = { prog: null, fs: null, loc: null, ready: false, failed: true };
+        return null;
+      }
+      gl.attachShader(prog, sharedEventVert);
+      gl.attachShader(prog, fs);
+      if (typeof gl.bindAttribLocation === 'function') {
+        gl.bindAttribLocation(prog, 0, 'aCorner');
+      }
+      gl.linkProgram(prog);
+      entry = { prog, fs, loc: null, ready: false, failed: false };
+      eventCache[eventType] = entry;
+    }
+    if (!entry.ready && !entry.failed) {
+      finalizeEventProgram(entry);
+    }
+    return entry.ready ? entry : null;
+  }
+
+  function finalizeEventProgram(entry) {
+    if (entry.ready || entry.failed) return entry.ready;
+    if (parallelExt && !gl.getProgramParameter(entry.prog, parallelExt.COMPLETION_STATUS_KHR)) {
+      return false;
+    }
+    if (!gl.getProgramParameter(entry.prog, gl.LINK_STATUS)) {
+      console.warn('[Cosmos] Event shader link warning:', gl.getProgramInfoLog?.(entry.prog), gl.getShaderInfoLog?.(entry.fs));
+      gl.deleteProgram(entry.prog);
+      if (entry.fs) gl.deleteShader(entry.fs);
+      entry.prog = null;
+      entry.fs = null;
+      entry.failed = true;
+      return false;
+    }
+    if (entry.fs) {
+      gl.deleteShader(entry.fs);
+      entry.fs = null;
+    }
+    entry.loc = getEventLocations(entry.prog);
+    entry.ready = true;
+    return true;
+  }
+
+  function disposeEventPrograms() {
+    try {
+      for (const entry of Object.values(eventCache)) {
+        if (entry?.prog) gl.deleteProgram(entry.prog);
+        if (entry?.fs) gl.deleteShader(entry.fs);
+      }
+      if (sharedEventVert) gl.deleteShader(sharedEventVert);
+    } catch { /* ignore if context lost */ }
+    eventCache = Object.create(null);
+    sharedEventVert = null;
+  }
+
+  function initGpuResources({ notifyOnFail = false } = {}) {
+    contextGen += 1;
+    parallelExt = gl.getExtension?.('KHR_parallel_shader_compile') || null;
+    coreReady = false;
+    coreFailed = false;
+    fatalNotified = false;
+    bgProg = null;
+    bodyProg = null;
+    ptProg = null;
+    bgLoc = null;
+    ptLoc = null;
+    bodyLoc = null;
+    eventCache = Object.create(null);
+    sharedEventVert = null;
+
+    // Kick off all 3 core programs in parallel so drivers compile them across worker threads.
+    // Zero cosmic event shaders and zero procedural texture baker shaders compile at boot!
+    const bgH = startProgram(gl, BG_VERT, BG_FRAG, 'aPos');
+    const bodyH = startProgram(gl, BODY_VERT, BODY_FRAG, 'aCorner');
+    const ptH = startProgram(gl, PARTICLE_VERT, PARTICLE_FRAG, 'aPosPx');
+    if (!bgH || !bodyH || !ptH) {
+      for (const h of [bgH, bodyH, ptH]) {
+        if (!h) continue;
+        gl.deleteProgram(h.prog);
+        gl.deleteShader(h.vs);
+        gl.deleteShader(h.fs);
+      }
+      if (notifyOnFail) {
+        coreFailed = true;
+        notifyFatalError('shader_init_failed');
+      }
+      return false;
+    }
+    pendingCore = { bg: bgH, body: bodyH, pt: ptH };
+
+    // When KHR_parallel_shader_compile is unavailable, verify links synchronously now
+    // (still after kicking off all 3 in parallel so multi-threaded drivers overlap them).
+    if (!parallelExt && !finalizeCorePrograms({ notify: notifyOnFail })) {
+      return false;
+    }
+
+    const nextQuadBuf = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, nextQuadBuf);
+    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, -1, 1, -1, 1, 1, -1, 1, 1]), gl.STATIC_DRAW);
+
+    const nextPtBuf = gl.createBuffer();
+
+    // Instant <0.1ms thematic 1x1 placeholders (zero procedural FBO startup stall).
+    const nextTextures = createPlaceholderTextureSet(gl);
+    if (!nextTextures) {
+      gl.deleteBuffer(nextQuadBuf);
+      gl.deleteBuffer(nextPtBuf);
+      if (bgProg) { gl.deleteProgram(bgProg); bgProg = null; }
+      if (bodyProg) { gl.deleteProgram(bodyProg); bodyProg = null; }
+      if (ptProg) { gl.deleteProgram(ptProg); ptProg = null; }
+      if (pendingCore) {
+        for (const h of Object.values(pendingCore)) {
+          gl.deleteProgram(h.prog);
+          gl.deleteShader(h.vs);
+          gl.deleteShader(h.fs);
+        }
+        pendingCore = null;
+      }
+      coreReady = false;
+      if (notifyOnFail) {
+        coreFailed = true;
+        notifyFatalError('texture_init_failed');
+      }
+      return false;
+    }
+
+    quadBuf = nextQuadBuf;
+    ptBuf = nextPtBuf;
+    textures = nextTextures;
     uploadedRealKeys.clear();
+    clearPendingUploadQueue();
     return true;
   }
 
@@ -298,24 +586,47 @@ export function createCosmosEngine(glCanvas, hudCanvas, opts = {}) {
   }
   reuploadCachedRealTextures();
 
-  // Stream photorealistic Solar NASA/ESO/Hubble/JWST maps asynchronously and hot-swap seamlessly.
-  requestTextureGroup('solar');
+  // Tier 0 (Solar core) starts right away; Tier 1 (clouds/night/nebula) & Tier 2 (galaxy/web portals)
+  // stage gently after initial frames so opening Yeaft feels instantaneous and never stalls.
+  requestTextureTier(0);
+  stageTimers.push(setTimeout(() => {
+    if (!destroyed) requestTextureTier(1);
+  }, 140));
+  if (typeof window !== 'undefined' && typeof window.requestIdleCallback === 'function') {
+    idleHandle = window.requestIdleCallback(() => {
+      idleHandle = 0;
+      if (!destroyed) requestTextureTier(2);
+    }, { timeout: 700 });
+  } else {
+    stageTimers.push(setTimeout(() => {
+      if (!destroyed) requestTextureTier(2);
+    }, 450));
+  }
 
   let width = 1;
   let height = 1;
   let dpr = 1;
   let glDpr = 1;
+  let adaptiveScale = 1.0;
+  let avgRenderMs = 8.0;
+  let adaptiveCooldown = 0;
   const qualityFactor = (isMobile && renderQuality !== 'high') ? 0.65 : 1.0;
 
   function onContextLost(e) {
     e?.preventDefault?.();
+    contextGen += 1;
     contextLost = true;
+    coreReady = false;
+    pendingCore = null;
+    eventCache = Object.create(null);
+    sharedEventVert = null;
     uploadedRealKeys.clear();
+    clearPendingUploadQueue();
   }
 
   function onContextRestored() {
     if (destroyed) return;
-    if (initGpuResources()) {
+    if (initGpuResources({ notifyOnFail: true })) {
       contextLost = false;
       reuploadCachedRealTextures();
       resize();
@@ -325,20 +636,35 @@ export function createCosmosEngine(glCanvas, hudCanvas, opts = {}) {
   function resize() {
     if (destroyed) return;
     dpr = Math.min(window.devicePixelRatio || 1, 2);
-    // Keep 2D HUD crisp at full DPR; scale mobile WebGL pixel fill cleanly to save battery.
-    if (isSoftware) {
-      glDpr = renderQuality === 'high' ? Math.min(dpr, 1.0) : 0.6;
-    } else if (isMobile && renderQuality !== 'high') {
-      glDpr = Math.min(dpr, 1.35);
-    } else {
-      glDpr = dpr;
-    }
     width = Math.max(glCanvas.clientWidth || window.innerWidth || 1, 1);
     height = Math.max(glCanvas.clientHeight || window.innerHeight || 1, 1);
-    glCanvas.width = Math.max(1, Math.round(width * glDpr));
-    glCanvas.height = Math.max(1, Math.round(height * glDpr));
-    hudCanvas.width = Math.max(1, Math.round(width * dpr));
-    hudCanvas.height = Math.max(1, Math.round(height * dpr));
+
+    if (isSoftware) {
+      glDpr = renderQuality === 'high' ? Math.min(dpr, 1.0) : 0.6;
+    } else if (renderQuality === 'high') {
+      const capDpr = Math.sqrt(4200000 / Math.max(width * height, 1));
+      glDpr = Math.max(0.85, Math.min(dpr, capDpr));
+    } else if (isMobile) {
+      const capDpr = Math.sqrt(1100000 / Math.max(width * height, 1));
+      glDpr = Math.max(0.75, Math.min(Math.min(dpr, 1.25), capDpr)) * adaptiveScale;
+    } else {
+      const capDpr = Math.sqrt(2200000 / Math.max(width * height, 1));
+      glDpr = Math.max(0.75, Math.min(Math.min(dpr, 1.5), capDpr)) * adaptiveScale;
+    }
+
+    const gw = Math.max(1, Math.round(width * glDpr));
+    const gh = Math.max(1, Math.round(height * glDpr));
+    if (glCanvas.width !== gw || glCanvas.height !== gh) {
+      glCanvas.width = gw;
+      glCanvas.height = gh;
+    }
+
+    const hw = Math.max(1, Math.round(width * dpr));
+    const hh = Math.max(1, Math.round(height * dpr));
+    if (hudCanvas.width !== hw || hudCanvas.height !== hh) {
+      hudCanvas.width = hw;
+      hudCanvas.height = hh;
+    }
     ctx2d.setTransform(dpr, 0, 0, dpr, 0, 0);
   }
 
@@ -370,21 +696,83 @@ export function createCosmosEngine(glCanvas, hudCanvas, opts = {}) {
     gl.vertexAttribPointer(ptLoc.aColor, 4, gl.FLOAT, false, stride, 3 * 4);
 
     gl.drawArrays(gl.POINTS, 0, count);
+    gl.disableVertexAttribArray(ptLoc.aPosPx);
     gl.disableVertexAttribArray(ptLoc.aSize);
     gl.disableVertexAttribArray(ptLoc.aColor);
+  }
+
+  function drawCosmicEvent(ev, realTime) {
+    if (!ev || ev.alpha <= 0.002) return false;
+    ensureEventTextures();
+    const entry = ensureEventProgram(ev.eventType);
+    if (!entry) return false;
+    const loc = entry.loc;
+
+    gl.enable(gl.BLEND);
+    gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
+    gl.useProgram(entry.prog);
+    gl.bindBuffer(gl.ARRAY_BUFFER, quadBuf);
+    gl.enableVertexAttribArray(loc.aCorner);
+    gl.vertexAttribPointer(loc.aCorner, 2, gl.FLOAT, false, 0, 0);
+
+    gl.uniform2f(loc.uRes, glCanvas.width, glCanvas.height);
+    gl.uniform2f(loc.uCenterPx, ev.x * glDpr, ev.y * glDpr);
+    gl.uniform1f(loc.uQuadRadiusPx, ev.quadRadiusPx * glDpr);
+    gl.uniform1f(loc.uEventRadiusPx, ev.eventRadiusPx * glDpr);
+    gl.uniform1f(loc.uProgress, ev.progress);
+    gl.uniform1f(loc.uElapsed, ev.elapsed);
+    gl.uniform1f(loc.uRealTime, realTime);
+    gl.uniform1f(loc.uAlpha, ev.alpha);
+    gl.uniform1f(loc.uObsBlend, ev.obsBlend);
+    gl.uniform1f(loc.uDistNorm, ev.distNorm);
+    gl.uniform1f(loc.uAngle, ev.angle);
+    gl.uniform1f(loc.uSeed, ev.seed);
+    gl.uniform1f(loc.uSunRadiusPx, (ev.sunRadiusPx || ev.eventRadiusPx * 0.24) * glDpr);
+
+    bindTexUnit(0, textures.nebula);
+    bindTexUnit(1, textures.sun);
+    bindTexUnit(2, textures.mars);
+    gl.uniform1i(loc.uTexNebula, 0);
+    gl.uniform1i(loc.uTexSun, 1);
+    gl.uniform1i(loc.uTexRock, 2);
+
+    gl.drawArrays(gl.TRIANGLES, 0, 6);
+    return true;
   }
 
   function renderFrame(frameState) {
     if (destroyed) return;
     if (contextLost || gl.isContextLost?.() || !textures) {
       ctx2d.clearRect(0, 0, width, height);
-      if (frameState?.hudDraw) frameState.hudDraw(ctx2d, width, height);
+      if (frameState?.hudDraw) frameState.hudDraw(ctx2d, width, height, { eventRenderedInGL: false });
       return;
     }
+
+    // Frame-budgeted GPU texture upload (max 2 per frame, <4ms budget, zero stutter bursts).
+    flushUploadQueue();
+
+    // Non-blocking poll for async parallel core shader compilation.
+    if (!coreReady && !finalizeCorePrograms({ notify: true })) {
+      if (destroyed) return;
+      gl.viewport(0, 0, glCanvas.width, glCanvas.height);
+      if (typeof gl.clearColor === 'function' && typeof gl.clear === 'function') {
+        gl.clearColor(0.012, 0.024, 0.059, 1.0);
+        gl.clear(gl.COLOR_BUFFER_BIT);
+      }
+      ctx2d.clearRect(0, 0, width, height);
+      if (frameState?.hudDraw) frameState.hudDraw(ctx2d, width, height, { eventRenderedInGL: false });
+      return;
+    }
+
+    const renderStart = typeof performance !== 'undefined' ? performance.now() : 0;
+
     const {
       time, realTime, scaleLog, parallax, camRot, warp, fovZoom, shockWave,
+      eventLens, eventAmbient,
       skyBright, starDensity, bhParams, galParams, webParams,
-      particleData, particleCount, solarBodies, solarAlpha, hudDraw,
+      particleData, particleCount,
+      eventDraw, eventParticleData, eventParticleCount,
+      solarBodies, solarAlpha, hudDraw,
     } = frameState;
 
     ensureScaleTextures(scaleLog);
@@ -407,6 +795,10 @@ export function createCosmosEngine(glCanvas, hudCanvas, opts = {}) {
     gl.uniform1f(bgLoc.uFovZoom, fovZoom || 1.0);
     const sw = shockWave || [0, 0, 0, 0];
     gl.uniform4f(bgLoc.uShockWave, sw[0], sw[1], sw[2], sw[3]);
+    const el = eventLens || [0, 0, 0, 0];
+    gl.uniform4f(bgLoc.uEventLens, el[0], el[1], el[2], el[3]);
+    const ea = eventAmbient || [0, 0, 0, 0];
+    gl.uniform4f(bgLoc.uEventAmbient, ea[0], ea[1], ea[2], ea[3]);
     gl.uniform1f(bgLoc.uSkyBright, skyBright);
     gl.uniform1f(bgLoc.uStarDensity, starDensity);
     gl.uniform1f(bgLoc.uQuality, qualityFactor);
@@ -438,6 +830,14 @@ export function createCosmosEngine(glCanvas, hudCanvas, opts = {}) {
     gl.uniform1i(bgLoc.uTexWeb, 5);
 
     gl.drawArrays(gl.TRIANGLES, 0, 6);
+
+    // Deep-space cosmic events render BEHIND Solar System planets for authentic 3D occlusion.
+    let eventRenderedInGL = false;
+    const isDeepEvent = Boolean(eventDraw && eventDraw.layer !== 'local');
+    if (eventDraw && isDeepEvent) {
+      eventRenderedInGL = drawCosmicEvent(eventDraw, realTime);
+      if (eventRenderedInGL) drawParticles(eventParticleData, eventParticleCount);
+    }
 
     drawParticles(particleData, particleCount);
 
@@ -481,20 +881,62 @@ export function createCosmosEngine(glCanvas, hudCanvas, opts = {}) {
       }
     }
 
+    // Close-up focused events (when Solar System has smoothly receded) render cleanly in front.
+    if (eventDraw && !isDeepEvent) {
+      eventRenderedInGL = drawCosmicEvent(eventDraw, realTime);
+      if (eventRenderedInGL) drawParticles(eventParticleData, eventParticleCount);
+    }
+
     ctx2d.clearRect(0, 0, width, height);
-    if (hudDraw) hudDraw(ctx2d, width, height);
+    if (hudDraw) hudDraw(ctx2d, width, height, { eventRenderedInGL });
+
+    // Measure actual render cost (not intentional sleep intervals on mobile) and apply any
+    // adaptive resolution resize AFTER the frame completes so particle glDpr stays in sync.
+    if (renderQuality === 'auto' && !isSoftware && renderStart > 0) {
+      const renderMs = Math.min(120, performance.now() - renderStart);
+      avgRenderMs = avgRenderMs * 0.90 + renderMs * 0.10;
+      if (adaptiveCooldown > 0) {
+        adaptiveCooldown -= 1;
+      } else if (avgRenderMs > 28 && adaptiveScale > 0.74) {
+        adaptiveScale = Math.max(0.72, adaptiveScale - 0.08);
+        avgRenderMs = 14;
+        adaptiveCooldown = 25;
+        resize();
+      } else if (avgRenderMs < 10 && adaptiveScale < 1.0) {
+        adaptiveScale = Math.min(1.0, adaptiveScale + 0.05);
+        avgRenderMs = 14;
+        adaptiveCooldown = 35;
+        resize();
+      }
+    }
   }
 
   function destroy() {
     if (destroyed) return;
     destroyed = true;
+    for (const id of stageTimers) clearTimeout(id);
+    stageTimers.length = 0;
+    if (idleHandle && typeof window !== 'undefined' && typeof window.cancelIdleCallback === 'function') {
+      window.cancelIdleCallback(idleHandle);
+      idleHandle = 0;
+    }
     for (const off of textureUnsubs) off();
     textureUnsubs.length = 0;
+    clearPendingUploadQueue();
     window.removeEventListener('resize', resize);
     glCanvas.removeEventListener('webglcontextlost', onContextLost, false);
     glCanvas.removeEventListener('webglcontextrestored', onContextRestored, false);
     if (contextLost || gl.isContextLost?.()) return;
     try {
+      disposeEventPrograms();
+      if (pendingCore) {
+        for (const h of Object.values(pendingCore)) {
+          gl.deleteProgram(h.prog);
+          gl.deleteShader(h.vs);
+          gl.deleteShader(h.fs);
+        }
+        pendingCore = null;
+      }
       if (textures) {
         for (const tex of Object.values(textures)) {
           if (tex) gl.deleteTexture(tex);
@@ -516,9 +958,11 @@ export function createCosmosEngine(glCanvas, hudCanvas, opts = {}) {
     renderFrame,
     resize,
     ensureScaleTextures,
-    getSize: () => ({ width, height, dpr: glDpr }),
+    getSize: () => ({ width, height, dpr: glDpr, hudDpr: dpr }),
     areTexturesReady: () => true,
     areRealTexturesReady: () => uploadedRealKeys.has('earth_day') && uploadedRealKeys.has('milky'),
+    isFailed: () => coreFailed,
+    getCompiledEventShaderCount: () => Object.values(eventCache).filter((e) => e?.ready).length,
     destroy,
   };
 }

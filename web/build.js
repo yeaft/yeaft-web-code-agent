@@ -186,16 +186,15 @@ const indexHtml = `<!DOCTYPE html>
   <link rel="stylesheet" href="vendor/katex/katex.min.css?v=${katexCssHash}">
   <link rel="stylesheet" href="style.bundle.css?v=${cssHash}">
   <script src="vendor.bundle.js?v=${vendorHash}"></script>
-  <script defer src="jszip.min.js"></script>
-  <script defer src="docx-preview.min.js"></script>
-  <script defer src="xlsx.min.js"></script>
-  <script defer src="mermaid.min.js"></script>
-  <script defer src="html-to-image.min.js"></script>
-  <script defer src="msal-browser.min.js"></script>
 </head>
 <body>
   <div id="app"></div>
   <script type="module" src="app.bundle.js?v=${appHash}"></script>
+  <script defer src="msal-browser.min.js"></script>
+  <script defer src="jszip.min.js"></script>
+  <script defer src="docx-preview.min.js"></script>
+  <script defer src="html-to-image.min.js"></script>
+  <script defer src="mermaid.min.js"></script>
 </body>
 </html>`;
 writeFileSync(join(distDir, 'index.html'), indexHtml);
