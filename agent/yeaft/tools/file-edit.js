@@ -20,21 +20,21 @@ Replaces exact occurrences of old_string with new_string.
 The old_string must be unique in the file unless replace_all is true.
 
 Guidelines:
+- Read the relevant section of the file first so old_string matches current content accurately
 - old_string must match EXACTLY (including whitespace and indentation)
-- The edit fails if old_string is not found or is not unique
-- Use replace_all: true to replace ALL occurrences
-- For creating new files or full rewrites, use FileWrite instead
-- Always read the file first to understand its current content`,
+- The edit fails if old_string is not found or is not unique; use replace_all: true to replace all occurrences
+- For broad or multi-section edits to an existing large file, apply focused section-by-section FileEdit calls (or split out new modules with FileWrite and wire them in via FileEdit) instead of rewriting the whole file with FileWrite
+- Use FileWrite only for creating new files or rewriting a short file in full`,
     zh: `在已有文件中做精确文本替换。
 
 用 new_string 替换 old_string 的精确出现。old_string 在文件中必须唯一，除非设置 replace_all 为 true。
 
 使用指南：
+- 先读取文件相关区段，确保 old_string 与当前内容精确一致
 - old_string 必须完全匹配（包括空白和缩进）
-- 若 old_string 找不到或不唯一，编辑失败
-- 使用 replace_all: true 替换所有出现位置
-- 创建新文件或全量重写请用 FileWrite
-- 始终先读文件了解其当前内容`
+- 若 old_string 找不到或不唯一，编辑失败；设置 replace_all: true 可替换全部匹配
+- 修改已有大文件的多处逻辑时，应按区块分批使用 FileEdit（或用 FileWrite 拆出新模块再用 FileEdit 接入），不要用 FileWrite 整文件重写
+- 仅在创建新文件或整份重写简短文件时使用 FileWrite`
   },
   parameters: {
     type: 'object',

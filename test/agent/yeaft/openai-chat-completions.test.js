@@ -20,6 +20,7 @@ import {
   LLMServerError,
 } from '../../../agent/yeaft/llm/adapter.js';
 import fileWriteTool from '../../../agent/yeaft/tools/file-write.js';
+import fileEditTool from '../../../agent/yeaft/tools/file-edit.js';
 import {
   createProviderContext,
   createProviderState,
@@ -544,11 +545,23 @@ describe('OpenAI Chat Completions protocol adapter & continuity', () => {
       rmSync(dir, { recursive: true, force: true });
     }
 
-    // FileWrite guidance encourages modular files and incremental FileEdit builds in both EN and ZH.
+    // FileWrite and FileEdit share a consistent division of labor in both EN and ZH:
+    // modular files, incremental FileEdit on existing large files, and FileWrite only for new or short files.
     expect(fileWriteTool.description.en).toMatch(/modular/i);
+    expect(fileWriteTool.description.en).toMatch(/short file/i);
     expect(fileWriteTool.description.en).toMatch(/FileEdit/);
     expect(fileWriteTool.description.zh).toMatch(/模块/);
+    expect(fileWriteTool.description.zh).toMatch(/简短文件/);
     expect(fileWriteTool.description.zh).toMatch(/FileEdit/);
+
+    expect(fileEditTool.description.en).toMatch(/large file/i);
+    expect(fileEditTool.description.en).toMatch(/section-by-section/i);
+    expect(fileEditTool.description.en).toMatch(/short file/i);
+    expect(fileEditTool.description.en).not.toMatch(/creating new files or full rewrites, use FileWrite/i);
+    expect(fileEditTool.description.zh).toMatch(/已有大文件/);
+    expect(fileEditTool.description.zh).toMatch(/分批/);
+    expect(fileEditTool.description.zh).toMatch(/简短文件/);
+    expect(fileEditTool.description.zh).not.toContain('创建新文件或全量重写请用 FileWrite');
   });
 
   it('disables Undici 300s bodyTimeout on model fetch and classifies upstream stream timeouts into step-down retries', async () => {
