@@ -81,7 +81,7 @@ export function stepCosmosFrame(now, ctx) {
   anim.focusedPlanetId = ui.focusedPlanetId;
 
   const prevFocus = eventSim.focusProgress || 0;
-  tickCosmicEvents(eventSim, dt * motionMul, {
+  tickCosmicEvents(eventSim, dt * (reducedMotion ? 0.5 : 1.0), {
     showCountdown: constants.showEventsCountdown && ui.currentBand === 'solar',
     autoEnabled: constants.eventsAutoEnabled,
     autoZoom: constants.eventsAutoZoom !== false,
@@ -100,7 +100,7 @@ export function stepCosmosFrame(now, ctx) {
   anim.warpEnergy = Math.max(
     anim.warpEnergy * Math.exp(-dt * 4.5),
     Math.min(1.0, (Math.abs(anim.scaleLog - prevScale) / Math.max(dt, 0.001)) * 0.11),
-    Math.min(0.62, focusVel * 0.24),
+    reducedMotion ? 0 : Math.min(0.62, focusVel * 0.24),
   );
 
   anim.parallax.x += (anim.parallax.tx - anim.parallax.x) * Math.min(1, dt * 4.2);
@@ -319,11 +319,13 @@ export function stepCosmosFrame(now, ctx) {
     toScreen(bhPortalX, bhPortalY),
   ];
   const eventPos = eventSim.active ? getEventScreenPosition(eventSim, w, h, anim.centerShiftX, portalAvoidPoints) : null;
+  const eventVisibilityAlpha = baseSolarAlpha;
   const beaconEl = domRefs.eventBeacon?.value;
   if (beaconEl) {
     const showBeacon = Boolean(
       eventSim.active
       && eventPos
+      && eventVisibilityAlpha > 0.05
       && band === 'solar'
       && !observing
       && telescope.focus < 0.22
@@ -331,10 +333,15 @@ export function stepCosmosFrame(now, ctx) {
       && !(isCompact && ui.quickOpen && eventPos.restY > h * 0.62)
     );
     if (showBeacon) {
+      const edgePadX = isCompact ? 115 : 150;
+      const edgePadBottom = isCompact ? 130 : 110;
       beaconEl.style.display = 'inline-flex';
-      beaconEl.style.opacity = String(Math.max(0, Math.min(1, (1 - telescope.focus * 4.5) * baseSolarAlpha)));
+      beaconEl.style.opacity = String(Math.max(0, Math.min(1, (1 - telescope.focus * 4.5) * eventVisibilityAlpha)));
       beaconEl.style.left = `${Math.round(eventPos.restX)}px`;
       beaconEl.style.top = `${Math.round(eventPos.restY)}px`;
+      beaconEl.classList.toggle('is-left-edge', eventPos.restX < edgePadX);
+      beaconEl.classList.toggle('is-right-edge', eventPos.restX > w - edgePadX);
+      beaconEl.classList.toggle('is-bottom-edge', eventPos.restY > h - edgePadBottom);
     } else {
       beaconEl.style.display = 'none';
     }
@@ -353,7 +360,9 @@ export function stepCosmosFrame(now, ctx) {
     camRot: effectiveCamRot,
     warp: anim.warpEnergy,
     fovZoom: eventSim.fovZoom,
-    shockWave: getEventShockWave(eventSim, w, h, anim.centerShiftX, portalAvoidPoints),
+    shockWave: eventVisibilityAlpha > 0.01
+      ? getEventShockWave(eventSim, w, h, anim.centerShiftX, portalAvoidPoints, eventVisibilityAlpha)
+      : [0, 0, 0, 0],
     skyBright: constants.skyBright,
     starDensity: constants.starDensity,
     bhParams,
@@ -367,9 +376,9 @@ export function stepCosmosFrame(now, ctx) {
       drawCosmosHud(c2d, cw, ch, anim, webGraph, galaxyBooks, agentsByPlanet, {
         cx, cy, span, tilt, solarAlpha, galAlpha: galFullAlpha, webAlpha: webFullAlpha,
       }, (ec, ew, eh) => {
-        if (!eventSim.active) return;
+        if (!eventSim.active || eventVisibilityAlpha <= 0.01) return;
         const pos = getEventScreenPosition(eventSim, ew, eh, anim.centerShiftX, portalAvoidPoints);
-        if (pos) drawCosmicEventCanvas(ec, ew, eh, eventSim.active, pos);
+        if (pos) drawCosmicEventCanvas(ec, ew, eh, eventSim.active, pos, eventVisibilityAlpha);
       });
     },
   });

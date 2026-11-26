@@ -203,8 +203,6 @@ export function createCosmicEventState(opts = {}) {
     // Smooth telescope camera transition state (returns cleanly to 0 / 1.0 after observation)
     focusProgress: 0, // 0 = Solar System home view, 1 = fully telescoped into distant event
     fovZoom: 1.0,
-    panX: 0,
-    panY: 0,
     camYawOffset: 0,
     camPitchOffset: 0,
     lastLocation: null,
@@ -329,11 +327,6 @@ export function tickCosmicEvents(
   const goalZoom = isObserving ? sim.active.targetZoom : 1.0;
   sim.fovZoom += (goalZoom - sim.fovZoom) * Math.min(1, camStep * (isObserving ? 3.8 : 3.2));
 
-  const goalPanX = isObserving && loc ? (0.5 - loc.x) : 0;
-  const goalPanY = isObserving && loc ? (0.5 - loc.y) : 0;
-  sim.panX += (goalPanX - sim.panX) * Math.min(1, camStep * 3.4);
-  sim.panY += (goalPanY - sim.panY) * Math.min(1, camStep * 3.4);
-
   const goalYaw = isObserving && loc ? loc.yaw : 0;
   const goalPitch = isObserving && loc ? loc.pitch : 0;
   sim.camYawOffset += (goalYaw - sim.camYawOffset) * Math.min(1, camStep * 3.1);
@@ -436,8 +429,8 @@ export function getSolarTelescopeTransform(sim, w, h) {
   };
 }
 
-export function getEventShockWave(sim, w, h, centerShiftX = 0, avoidPoints = null) {
-  if (!sim.active || !sim.active.def.hasShock) return [0, 0, 0, 0];
+export function getEventShockWave(sim, w, h, centerShiftX = 0, avoidPoints = null, visibilityAlpha = 1.0) {
+  if (!sim.active || !sim.active.def.hasShock || visibilityAlpha <= 0.01) return [0, 0, 0, 0];
   const p = sim.active.elapsed / sim.active.duration;
   if (p < 0.16 || p > 0.86) return [0, 0, 0, 0];
   const pos = getEventScreenPosition(sim, w, h, centerShiftX, avoidPoints);
@@ -446,7 +439,7 @@ export function getEventShockWave(sim, w, h, centerShiftX = 0, avoidPoints = nul
   const sp = (p - 0.16) / 0.70;
   // Distant events ripple only locally around their far-away epicenter; focused view shows full lensing
   const radiusMul = 0.24 + pos.focusProgress * 0.76;
-  const strengthMul = 0.20 + pos.focusProgress * 0.72;
+  const strengthMul = (0.20 + pos.focusProgress * 0.72) * clamp(visibilityAlpha, 0, 1);
   return [
     (pos.x / w - 0.5) * aspect,
     0.5 - pos.y / h,

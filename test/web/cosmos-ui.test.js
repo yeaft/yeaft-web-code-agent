@@ -35,6 +35,7 @@ import {
   pickRandomEventIndex,
   pickRandomDistantLocation,
   getEventScreenPosition,
+  getEventShockWave,
   getSolarTelescopeTransform,
   formatEventDistance,
 } from '../../web/cosmos/events-controller.js';
@@ -360,6 +361,20 @@ describe('Cosmos Random-Interval Event Scheduler & Stop Control', () => {
     tickCosmicEvents(simBusy, 1.0, { showCountdown: true, autoEnabled: true, autoZoom: true, canAutoZoom: false, rng });
     expect(simBusy.active).not.toBeNull();
     expect(simBusy.active.observing).toBe(false);
+
+    // 5. Portal avoidance keeps distant event & beacon clear of corner portals, and shockwave respects visibilityAlpha
+    const simPortal = createCosmicEventState({ autoEnabled: true, autoZoom: false, rng });
+    startCosmicEvent(simPortal, 'supernova', { observe: false, rng });
+    simPortal.active.location = { sector: 'nw', x: 0.14, y: 0.16, depth: 0.5, distantScale: 0.32, yaw: 0.34, pitch: -0.22, distanceLy: 1200 };
+    simPortal.active.elapsed = simPortal.active.duration * 0.45;
+    const portalPt = { x: 0.14 * 1440, y: 0.16 * 900 };
+    const nudged = getEventScreenPosition(simPortal, 1440, 900, 0, [portalPt]);
+    expect(Math.hypot(nudged.restX - portalPt.x, nudged.restY - portalPt.y)).toBeGreaterThanOrEqual(115);
+
+    const distantShock = getEventShockWave(simPortal, 1440, 900, 0, [portalPt], 1.0);
+    const hiddenShock = getEventShockWave(simPortal, 1440, 900, 0, [portalPt], 0.0);
+    expect(distantShock[3]).toBeGreaterThan(0);
+    expect(hiddenShock).toEqual([0, 0, 0, 0]);
   });
 });
 

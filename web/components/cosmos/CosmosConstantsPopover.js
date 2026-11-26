@@ -149,6 +149,7 @@ export default {
           :class="{ 'is-on': constants.eventsAutoZoom }"
           role="switch"
           :aria-checked="constants.eventsAutoZoom ? 'true' : 'false'"
+          :aria-label="$t('cosmos.constants.eventsAutoZoom')"
           @click="$emit('update-constant', { key: 'eventsAutoZoom', value: !constants.eventsAutoZoom })"
         ></button>
       </div>

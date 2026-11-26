@@ -58,8 +58,8 @@ function drawFeatheredShell(ctx, x, y, rOut, innerRgb, midRgb, outerRgb, alpha) 
   ctx.fill();
 }
 
-export function drawCosmicEventCanvas(ctx, w, h, active, pos) {
-  if (!active || !pos) return;
+export function drawCosmicEventCanvas(ctx, w, h, active, pos, visibilityAlpha = 1.0) {
+  if (!active || !pos || visibilityAlpha <= 0.01) return;
   const def = active.def;
   const p = Math.max(0, Math.min(1, active.elapsed / active.duration));
   const scale = Math.max(0.14, pos.scale || 1);
@@ -75,7 +75,7 @@ export function drawCosmicEventCanvas(ctx, w, h, active, pos) {
   const depthAtten = 0.72 + focus * 0.28;
 
   ctx.save();
-  ctx.globalAlpha = startFade * endFade * depthAtten;
+  ctx.globalAlpha = startFade * endFade * depthAtten * Math.max(0, Math.min(1, visibilityAlpha));
   ctx.globalCompositeOperation = 'lighter';
 
   if (def.id === 'supernova') {

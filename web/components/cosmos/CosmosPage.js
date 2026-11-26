@@ -152,7 +152,6 @@ export default {
           :ref="(el) => { domRefs.eventBeacon.value = el; }"
           type="button"
           class="cosmos-event-beacon"
-          :class="eventBeaconAlignClass"
           :style="{ '--event-swatch': eventActiveSnapshot.def.swatch }"
           :aria-label="eventBeaconAriaLabel"
           style="display:none"
@@ -580,15 +579,6 @@ export default {
       const name = $t(`cosmos.events.${act.def.id}.name`);
       return eventBeaconCoords.value ? `${name} · ${eventBeaconCoords.value}` : name;
     });
-    const eventBeaconAlignClass = Vue.computed(() => {
-      const loc = eventActiveSnapshot.value?.location;
-      if (!loc) return {};
-      return {
-        'is-right-edge': loc.x > 0.72,
-        'is-left-edge': loc.x < 0.28,
-        'is-bottom-edge': loc.y > 0.74,
-      };
-    });
 
     function syncEventRefs() {
       eventActiveSnapshot.value = eventSim.active
@@ -732,7 +722,7 @@ export default {
       const prev = anim.targetScaleLog;
       anim.targetScaleLog = Math.max(7.0, Math.min(24.0, targetLog));
       if (Math.abs(anim.targetScaleLog - prev) > 0.6) anim.warpEnergy = Math.min(1.0, anim.warpEnergy + 0.85);
-      if (eventSim.active?.observing) { stopCosmicEvent(eventSim); syncEventRefs(); }
+      if (eventSim.active?.observing) { unfocusCosmicEvent(eventSim); syncEventRefs(); }
       hideHoverImmediate();
       emptyPlanetMenu.value = null;
       if (scaleBand(anim.targetScaleLog) !== 'solar') {
@@ -986,6 +976,10 @@ export default {
 
     function openSessionInDrawer(agentId, session) {
       hideHoverImmediate();
+      if (eventSim.active?.observing) {
+        unfocusCosmicEvent(eventSim);
+        syncEventRefs();
+      }
       quickAgentId.value = null;
       drawerAgentId.value = agentId;
       drawerOpen.value = true;
@@ -1059,6 +1053,10 @@ export default {
       const shouldZoomIn = isAlreadySame || Boolean(constants.eventsAutoZoom);
       const act = startCosmicEvent(eventSim, eventId, { observe: shouldZoomIn });
       hideHoverImmediate();
+      if (act.observing) {
+        quickAgentId.value = null;
+        if (drawerOpen.value) closeDrawer();
+      }
       syncEventRefs();
       if (act.observing) {
         showToast(formatEventLocationToast(act));
@@ -1074,6 +1072,8 @@ export default {
       if (scaleBand(anim.targetScaleLog) !== 'solar') jumpToScale(13.0);
       const act = focusActiveCosmicEvent(eventSim);
       hideHoverImmediate();
+      quickAgentId.value = null;
+      if (drawerOpen.value) closeDrawer();
       syncEventRefs();
       if (act) showToast(formatEventLocationToast(act));
     }
@@ -1361,7 +1361,7 @@ export default {
       bookCreateOpen, bookDraftTitle, bookDraftDomain, toast,
       settingsModal, agentSettingsModal, sessionCreateModal,
       eventActiveSnapshot, eventNextIndex, eventCountdownSec, isObservingEvent,
-      eventBeaconCoords, eventBeaconAriaLabel, eventBeaconAlignClass,
+      eventBeaconCoords, eventBeaconAriaLabel,
       planetTagClass, planetPipClass,
       onCanvasPointerDown, resetCamera, onPlanetPointerDown, onPlanetEnter, onPlanetLeave,
       onHoverCardEnter, onHoverCardLeave, onStageWheel, jumpToScale,
