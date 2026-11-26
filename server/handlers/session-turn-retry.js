@@ -17,7 +17,7 @@ function isIdentifier(value, maxLength) {
 
 function ownsSession(userId, agentId, agent, sessionId) {
   // Neither global admin access nor skipAuth establishes Session ownership.
-  return !!userId && agent?.ownerId === userId && !!yeaftSessionDb.getForAgent(userId, agentId, sessionId);
+  return !!userId && agent?.ownerId === userId && yeaftSessionDb.getForAgent(userId, agentId, sessionId)?.isArchived === false;
 }
 
 function requestKey(clientId, agentId, requestId) {
@@ -47,6 +47,7 @@ export async function handleClientSessionTurnRetry(clientId, client, msg) {
   const { agentId, sessionId, turnId, mode, requestId, retryToken } = msg;
   const reply = {
     type: SESSION_RETRY_RESULT,
+    agentId: isIdentifier(agentId, 256) ? agentId : null,
     sessionId: isIdentifier(sessionId, 128) && /^session_[A-Za-z0-9][A-Za-z0-9._-]*$/.test(sessionId) ? sessionId : null,
     turnId: isIdentifier(turnId, 256) ? turnId : null,
     requestId: isIdentifier(requestId, 160) ? requestId : null,

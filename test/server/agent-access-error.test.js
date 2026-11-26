@@ -165,7 +165,7 @@ describe('native Session retry relay', () => {
     id, webClients.get(id), { ...request, ...overrides }, genericAccess,
   );
   const result = (overrides = {}) => handleAgentOutput(request.agentId, agent, {
-    type: RESULT, sessionId: request.sessionId, turnId: request.turnId, requestId: request.requestId,
+    type: RESULT, agentId: request.agentId, sessionId: request.sessionId, turnId: request.turnId, requestId: request.requestId,
     ok: true, _requestClientId: 'requester', ...overrides,
   });
 
@@ -178,7 +178,7 @@ describe('native Session retry relay', () => {
     outsider = addClient('outsider', { userId: 'other' });
     vi.spyOn(userDb, 'isActive').mockReturnValue(true);
     vi.spyOn(yeaftSessionDb, 'getForAgent').mockImplementation((owner, agentId, sessionId) => (
-      owner === 'owner' && agentId === request.agentId && sessionId === request.sessionId ? { id: sessionId } : null
+      owner === 'owner' && agentId === request.agentId && sessionId === request.sessionId ? { id: sessionId, isArchived: false } : null
     ));
   });
 
@@ -206,7 +206,7 @@ describe('native Session retry relay', () => {
     expect(outsider.ws.getSentMessages()).toEqual([]);
     await result({ messages: ['transcript'], toolState: { hidden: true }, retryToken: request.retryToken });
     await result();
-    const reply = { type: RESULT, sessionId: request.sessionId, turnId: request.turnId, requestId: request.requestId, ok: true };
+    const reply = { type: RESULT, agentId: request.agentId, sessionId: request.sessionId, turnId: request.turnId, requestId: request.requestId, ok: true };
     expect(requester.ws.getSentMessages()).toEqual([reply]);
     expect(tab.ws.getSentMessages()).toEqual([]);
     await result({ _requestClientId: 'tab', ok: false, error: 'Retry token expired', toolState: [] });
@@ -216,12 +216,12 @@ describe('native Session retry relay', () => {
 
   it('correlates invalid, inaccessible, unsupported, offline and failed-dispatch requests', async () => {
     const failure = (client, pattern, correlation = {}) => expect(client.ws.getLastMessage()).toEqual({
-      type: RESULT, sessionId: request.sessionId, turnId: request.turnId, requestId: request.requestId,
+      type: RESULT, agentId: request.agentId, sessionId: request.sessionId, turnId: request.turnId, requestId: request.requestId,
       ok: false, error: expect.stringMatching(pattern), ...correlation,
     });
     for (const invalid of [{ agentId: undefined }, { mode: 'other' }, { retryToken: {} }, { retryToken: '' }]) {
       await send('requester', invalid);
-      failure(requester, /required/i);
+      failure(requester, /required/i, invalid.agentId === undefined && Object.hasOwn(invalid, 'agentId') ? { agentId: null } : {});
     }
     await send('requester', { sessionId: 'session_unowned' });
     failure(requester, /owner/i, { sessionId: 'session_unowned' });
@@ -277,7 +277,7 @@ describe('native Session retry relay', () => {
     await send();
     await vi.advanceTimersByTimeAsync(60_000);
     expect(requester.ws.getSentMessages()).toEqual([{
-      type: RESULT, sessionId: request.sessionId, turnId: request.turnId, requestId: request.requestId,
+      type: RESULT, agentId: request.agentId, sessionId: request.sessionId, turnId: request.turnId, requestId: request.requestId,
       ok: false, error: expect.stringMatching(/No retry result/),
     }]);
     await result();

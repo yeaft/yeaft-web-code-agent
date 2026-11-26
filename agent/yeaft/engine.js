@@ -2100,7 +2100,7 @@ export class Engine {
     }
   }
 
-  async *#queryLifecycle({ prompt, promptParts = null, messages = [], signal, turnConfig = null, userEffort = null, scenario = 'chat', isSubAgent = false, parentEffortDecision = null, subAgentTargetEffort = null, vpPersona, router, senderVpId, inboundEnvelope, taskId, taskMembers, sessionId, sessionMembers, projectSessionIds = null, agentSessionIds = null, shareOwnerId = null, projectInstruction = '', projectLabel = '', vpPlan, sessionAnnouncement, workCenterInstructions, workDir, userAlreadyPersisted = false, currentUserMessage = null, causalRootId = null, getCurrentTodos = null, setCurrentTodos = null, askUser = null, threadId = MAIN_THREAD_ID, vpTurnId = null, drainPendingUserMessages = null, getPeerContext = null, peerTurnIds = [], prepareProviderRequest = null, startProviderRequest = null, finishProviderRequest = null, failProviderRequest = null, closePendingUserInput = null, collabToolPolicy = null, onProviderRequestStart = null, onProviderRequestRoute = null } = {}) {
+  async *#queryLifecycle({ prompt, promptParts = null, messages = [], signal, turnConfig = null, userEffort = null, scenario = 'chat', isSubAgent = false, parentEffortDecision = null, subAgentTargetEffort = null, vpPersona, router, senderVpId, inboundEnvelope, taskId, taskMembers, sessionId, sessionMembers, projectSessionIds = null, agentSessionIds = null, shareOwnerId = null, projectInstruction = '', projectLabel = '', vpPlan, sessionAnnouncement, workCenterInstructions, workDir, userAlreadyPersisted = false, currentUserMessage = null, causalRootId = null, getCurrentTodos = null, setCurrentTodos = null, askUser = null, threadId = MAIN_THREAD_ID, vpTurnId = null, drainPendingUserMessages = null, getPeerContext = null, peerTurnIds = [], prepareProviderRequest = null, startProviderRequest = null, finishProviderRequest = null, failProviderRequest = null, closePendingUserInput = null, collabToolPolicy = null, onProviderRequestStart = null, onProviderRequestRoute = null, manualRetry = null } = {}) {
     if (!prompt || typeof prompt !== 'string' || !prompt.trim()) {
       const error = new Error('prompt is required and must be a non-empty string');
       yield {
@@ -2193,7 +2193,7 @@ export class Engine {
       this.#currentThreadId = threadId || MAIN_THREAD_ID;
       this.#currentCausalRootId = effectiveCausalRootId;
       this.#currentUserTurnId = inboundEnvelope?._userTurnId || currentUserMessage?.userTurnId || null;
-      yield* this.#runQuery({ prompt: effectivePrompt, promptParts: effectivePromptParts, messages, signal: runSignal, turnConfig: turnConfig ? { model: turnConfig.model, effort: turnConfig.effort, maxOutputTokens: turnConfig.maxOutputTokens } : null, userEffort: explicitUserEffort, scenario, isSubAgent, parentEffortDecision, subAgentTargetEffort, vpPersona, router, senderVpId, inboundEnvelope, taskId, taskMembers, sessionId, sessionMembers, projectSessionIds, agentSessionIds, shareOwnerId, projectInstruction, projectLabel, vpPlan, sessionAnnouncement, workCenterInstructions, workDir, userAlreadyPersisted, currentUserMessage, causalRootId: effectiveCausalRootId, getCurrentTodos, setCurrentTodos, askUser, threadId: this.#currentThreadId, vpTurnId, drainPendingUserMessages, getPeerContext, peerTurnIds, prepareProviderRequest, startProviderRequest, finishProviderRequest, failProviderRequest, closePendingUserInput, collabToolPolicy: effectiveCollabToolPolicy, explicitSkillName: parsedSkill.skillName, retryLifecycle, onProviderRequestStart, onProviderRequestRoute });
+      yield* this.#runQuery({ prompt: effectivePrompt, promptParts: effectivePromptParts, messages, signal: runSignal, turnConfig: turnConfig ? { model: turnConfig.model, effort: turnConfig.effort, maxOutputTokens: turnConfig.maxOutputTokens } : null, userEffort: explicitUserEffort, scenario, isSubAgent, parentEffortDecision, subAgentTargetEffort, vpPersona, router, senderVpId, inboundEnvelope, taskId, taskMembers, sessionId, sessionMembers, projectSessionIds, agentSessionIds, shareOwnerId, projectInstruction, projectLabel, vpPlan, sessionAnnouncement, workCenterInstructions, workDir, userAlreadyPersisted, currentUserMessage, causalRootId: effectiveCausalRootId, getCurrentTodos, setCurrentTodos, askUser, threadId: this.#currentThreadId, vpTurnId, drainPendingUserMessages, getPeerContext, peerTurnIds, prepareProviderRequest, startProviderRequest, finishProviderRequest, failProviderRequest, closePendingUserInput, collabToolPolicy: effectiveCollabToolPolicy, explicitSkillName: parsedSkill.skillName, retryLifecycle, onProviderRequestStart, onProviderRequestRoute, manualRetry });
     } finally {
       // Closing the async generator at a visible retry boundary means the
       // continuation never reached a provider. Keep it out of history and
@@ -2249,7 +2249,7 @@ export class Engine {
    * in a try/finally without indenting the whole loop.
    * @private
    */
-  async *#runQuery({ prompt, promptParts = null, messages, signal, turnConfig = null, userEffort = null, scenario = 'chat', isSubAgent = false, parentEffortDecision = null, subAgentTargetEffort = null, vpPersona, router, senderVpId, inboundEnvelope, taskId, taskMembers, sessionId, sessionMembers, projectSessionIds = null, agentSessionIds = null, shareOwnerId = null, projectInstruction = '', projectLabel = '', vpPlan, sessionAnnouncement, workCenterInstructions, workDir, userAlreadyPersisted = false, currentUserMessage = null, causalRootId = null, getCurrentTodos = null, setCurrentTodos = null, askUser = null, threadId = MAIN_THREAD_ID, vpTurnId = null, drainPendingUserMessages = null, getPeerContext = null, peerTurnIds = [], prepareProviderRequest = null, startProviderRequest = null, finishProviderRequest = null, failProviderRequest = null, closePendingUserInput = null, collabToolPolicy = null, explicitSkillName = null, retryLifecycle, onProviderRequestStart = null, onProviderRequestRoute = null }) {
+  async *#runQuery({ prompt, promptParts = null, messages, signal, turnConfig = null, userEffort = null, scenario = 'chat', isSubAgent = false, parentEffortDecision = null, subAgentTargetEffort = null, vpPersona, router, senderVpId, inboundEnvelope, taskId, taskMembers, sessionId, sessionMembers, projectSessionIds = null, agentSessionIds = null, shareOwnerId = null, projectInstruction = '', projectLabel = '', vpPlan, sessionAnnouncement, workCenterInstructions, workDir, userAlreadyPersisted = false, currentUserMessage = null, causalRootId = null, getCurrentTodos = null, setCurrentTodos = null, askUser = null, threadId = MAIN_THREAD_ID, vpTurnId = null, drainPendingUserMessages = null, getPeerContext = null, peerTurnIds = [], prepareProviderRequest = null, startProviderRequest = null, finishProviderRequest = null, failProviderRequest = null, closePendingUserInput = null, collabToolPolicy = null, explicitSkillName = null, retryLifecycle, onProviderRequestStart = null, onProviderRequestRoute = null, manualRetry }) {
 
     const effectiveCollabToolPolicy = collabToolPolicy === COLLAB_TOOL_POLICY.SINGLE_VP || collabToolPolicy === COLLAB_TOOL_POLICY.MULTI_VP
       ? collabToolPolicy
@@ -2287,8 +2287,10 @@ export class Engine {
           ...(subAgentTargetEffort ? { targetEffort: subAgentTargetEffort } : {}),
         })
       : null;
-    const queryStartedAt = Date.now();
-    const queryProgress = new QueryProgress();
+    // Only the trusted native Session bridge may carry an in-process checkpoint.
+    const resume = manualRetry?.state;
+    const queryStartedAt = resume?.queryStartedAt ?? Date.now();
+    const queryProgress = resume?.queryProgress ?? new QueryProgress();
     const progressIdentity = { turnId: queryTurnId, threadId: runtimeThreadId, sessionId: runtimeSessionId, vpId: requestIdentity.vpId };
     let progressReportPending = false;
     const resetProgressEvidence = () => {
@@ -2358,9 +2360,9 @@ export class Engine {
     const useDreamMemory = false;
     const recentTurnCap = Math.max(10, this.#config.yeaft?.recentTurnsLimit ?? 10);
     const relatedTurnCap = Math.min(5, this.#config.yeaft?.relatedTurnsLimit ?? 5);
-    let relatedHistoryTurns = [];
+    let relatedHistoryTurns = resume?.relatedHistoryTurns ?? [];
     let historyRecallMeta = { source: 'messages', status: 'disabled' };
-    if (useMessageHistory && !internalTrigger && this.#conversationStore?.loadRecentBySession) {
+    if (!resume && useMessageHistory && !internalTrigger && this.#conversationStore?.loadRecentBySession) {
       // Bounded canonical rows, not the lossy bridge cache. Threads share the
       // Session transcript; only tool arcs and thinking are VP-private.
       const clientId = inboundEnvelope?.msg?.meta?.clientMessageId;
@@ -2563,11 +2565,12 @@ export class Engine {
     };
 
     let projectDocSource = this.#getProjectDocBlock(workDir);
-    let projectDocLoadedPathHints = [];
+    let projectDocLoadedPathHints = resume?.projectDocLoadedPathHints ?? [];
     let projectDocContext = selectProjectDocContext(projectDocSource, {
       prompt,
       messages,
       pathHints: projectDocLoadedPathHints,
+      forcedScopes: resume?.projectDocScopes,
       language: this.#config.language || 'en',
     });
     let activeTaskSnapshots = this.#taskManager
@@ -2611,8 +2614,8 @@ export class Engine {
             && this.#config.imageApiUrl.trim().length > 0,
         })
       : new Set(registeredToolNames);
-    const discoveredToolNames = new Set();
-    const discoveryTraversals = new Map();
+    const discoveredToolNames = resume?.discoveredToolNames ?? new Set();
+    const discoveryTraversals = resume?.discoveryTraversals ?? new Map();
     const currentDiscoverableTools = () => this.#toolRegistry
       ? this.#toolRegistry.getAllTools()
           .filter(tool => registeredToolNameSet.has(tool.name))
@@ -2731,8 +2734,8 @@ export class Engine {
         ? `${subAgentNotifBlock}\n\n${prompt || ''}`
         : prompt;
     }
-    const historicalMessages = omitHistoricalImages(messages);
-    const conversationMessages = [
+    const historicalMessages = resume ? [] : omitHistoricalImages(messages);
+    const conversationMessages = resume?.conversationMessages ?? [
       ...(useMessageHistory ? historicalMessages : trimSnapshotForBudget(historicalMessages, {
         messageTokenBudget: this.#config.messageTokenBudget,
         language: this.#config.language,
@@ -2745,28 +2748,28 @@ export class Engine {
 
     // Current-turn protocol stays on the live tape. Only the disposable
     // provider copy is compacted when its actual model-window budget is full.
-    const turnStartIdx = conversationMessages.length - 1;
-    let queryToolCount = 0;
+    const turnStartIdx = resume?.turnStartIdx ?? conversationMessages.length - 1;
+    let queryToolCount = resume?.queryToolCount ?? 0;
     // Duplicate policy is scoped to one user query. Only successful, real
     // executions increment these counters; errors and cache reuse do not.
-    const queryDuplicateCounts = new Map();
-    const queryDuplicateSuppressions = new Map();
-    const queryValidationFailures = new Map();
+    const queryDuplicateCounts = resume?.queryDuplicateCounts ?? new Map();
+    const queryDuplicateSuppressions = resume?.queryDuplicateSuppressions ?? new Map();
+    const queryValidationFailures = resume?.queryValidationFailures ?? new Map();
     const fileReadObservations = new Map();
-    const repeatedToolResultRefs = new Map();
-    const completeReadResultIds = new Set();
+    const repeatedToolResultRefs = resume?.repeatedToolResultRefs ?? new Map();
+    const completeReadResultIds = resume?.completeReadResultIds ?? new Set();
     // Success reuse and in-flight sharing must not cross user turns, Sessions,
     // or child Engines. Never copy this ledger into parentEngineDeps.
     const webResearch = createWebResearchState();
-    let duplicateReminderAwaitingResponse = false;
-    const queryNumber = (this.#__queryCounter = (this.#__queryCounter || 0) + 1);
+    let duplicateReminderAwaitingResponse = resume?.duplicateReminderAwaitingResponse ?? false;
+    const queryNumber = resume?.queryNumber ?? (this.#__queryCounter = (this.#__queryCounter || 0) + 1);
 
     // feat-6af5f9f1 PR B: a Turn = one user prompt + all AI responses.
     // `queryTurnId` is the wire-level turn identifier; every event emitted
     // during this query() carries it as `turnId`. Each LLM call inside
     // the loop is a `loopNumber` (was wire field `turnNumber`).
 
-    yield {
+    if (!resume) yield {
       type: 'turn_open',
       turnId: queryTurnId,
       threadId,
@@ -2807,24 +2810,24 @@ export class Engine {
     // Once Anthropic signs a response, its complete request prefix is immutable.
     // Keep a provider-only tape plus its live-conversation cursor; asynchronous
     // tool updates must arrive as new notes, never edits to previously sent rows.
-    let signedAnthropicPrefix = null;
+    let signedAnthropicPrefix = resume?.signedAnthropicPrefix ?? null;
     // A provider-context segment is not a new user query. Keep the durable tape,
     // tool execution ledgers and query identity; only the request context rolls.
-    let rolloverSeed = null;
+    let rolloverSeed = resume?.rolloverSeed ?? null;
     // The newest model summary behind rolloverSeed. A local record never
     // replaces it: each record lists every call again from the full tape.
-    let rolloverSummary = '';
-    const rolloverUserRequests = [{ role: 'user', content:
+    let rolloverSummary = resume?.rolloverSummary ?? '';
+    const rolloverUserRequests = resume?.rolloverUserRequests ?? [{ role: 'user', content:
       Array.isArray(promptParts) && promptParts.length ? promptParts : prompt }];
-    let rolloverCursor = 0;
-    let rolloverCount = 0;
-    let successfulRequestsSinceRollover = 0;
+    let rolloverCursor = resume?.rolloverCursor ?? 0;
+    let rolloverCount = resume?.rolloverCount ?? 0;
+    let successfulRequestsSinceRollover = resume?.successfulRequestsSinceRollover ?? 0;
     let bodyRecoveryAttempts = 0;
-    let learnedRequestBodyCap;
-    let mediaByteBudget = Infinity;
-    const viewImageToolPaths = new WeakMap();
-    const viewImagePartPaths = new WeakMap();
-    const singleImageDimensionMode = new Set();
+    let learnedRequestBodyCap = resume?.learnedRequestBodyCap;
+    let mediaByteBudget = resume?.mediaByteBudget ?? Infinity;
+    const viewImageToolPaths = resume?.viewImageToolPaths ?? new WeakMap();
+    const viewImagePartPaths = resume?.viewImagePartPaths ?? new WeakMap();
+    const singleImageDimensionMode = resume?.singleImageDimensionMode ?? new Set();
     // Work Center owns the request shape used for durable dispatch/recovery.
     const useSessionCompactionPolicy = scenario !== 'work-item' && !prepareProviderRequest;
     const contextRolloverRatio = useSessionCompactionPolicy ? SESSION_COMPACTION_INPUT_RATIO : LEGACY_CONTEXT_ROLLOVER_INPUT_RATIO;
@@ -2835,24 +2838,24 @@ export class Engine {
       return preview;
     };
     let pendingServerOperation = false;
-    let turnNumber = 0;
-    let continueTurns = 0; // auto-continue counter
-    let pauseContinueTurns = 0;
-    let toolLoopTurns = 0; // task-327b: tool-use turns for long-loop auto-bump
-    let fullResponseText = '';
-    let displayImageAnchorMessage = null;
-    let lastPersistedAssistantMessage = null;
-    let lastPersistedAssistantTextMessage = null;
+    let turnNumber = resume?.turnNumber ?? 0;
+    let continueTurns = resume?.continueTurns ?? 0; // auto-continue counter
+    let pauseContinueTurns = resume?.pauseContinueTurns ?? 0;
+    let toolLoopTurns = resume?.toolLoopTurns ?? 0; // task-327b: tool-use turns for long-loop auto-bump
+    let fullResponseText = resume?.fullResponseText ?? '';
+    let displayImageAnchorMessage = resume?.displayImageAnchorMessage ?? null;
+    let lastPersistedAssistantMessage = resume?.lastPersistedAssistantMessage ?? null;
+    let lastPersistedAssistantTextMessage = resume?.lastPersistedAssistantTextMessage ?? null;
     const publishedResponses = new Map();
-    let lastSuccessfulModel = null;
-    let lastSuccessfulEffort = null;
+    let lastSuccessfulModel = resume?.lastSuccessfulModel ?? null;
+    let lastSuccessfulEffort = resume?.lastSuccessfulEffort ?? null;
     // `refreshConfig()` may publish a new Session model while a stream or a
     // tool is running. Apply it only before the next provider request; the
     // current request keeps the snapshot captured below.
-    let currentModel = turnConfig?.model || this.#config.model;
-    let primaryModelAtLastBoundary = currentModel;
-    let cumulativeInputTokens = 0;
-    let cumulativeOutputTokens = 0;
+    let currentModel = resume?.currentModel ?? turnConfig?.model ?? this.#config.model;
+    let primaryModelAtLastBoundary = resume?.primaryModelAtLastBoundary ?? currentModel;
+    let cumulativeInputTokens = resume?.cumulativeInputTokens ?? 0;
+    let cumulativeOutputTokens = resume?.cumulativeOutputTokens ?? 0;
     let maxContextOccupancyRatio = 0;
     let peakContextTokens = 0;
     let peakContextWindow = 0;
@@ -2893,7 +2896,7 @@ export class Engine {
     let retryStreamIdleTimeoutFloorMs = null;
     let retryPreservedHighEffort = false;
     let tightenOlderToolResultsOnRetry = false;
-    const compactedToolCallIds = new Set();
+    const compactedToolCallIds = resume?.compactedToolCallIds ?? new Set();
     let controlReentry = false;
     // Per-request headers wait budget: every provider request attempt (including
     // retries and model switches) gets a fresh headers timeout window.
@@ -2901,12 +2904,32 @@ export class Engine {
       retryPolicy.maxRequestRetryTimeMs ? retryPolicy.maxRequestRetryTimeMs : undefined
     );
     const hasFinalPublication = () => lastPersistedAssistantTextMessage?.presentation?.phase === 'final';
-    let contentPolicyRecoveryAttempts = 0;
+    let contentPolicyRecoveryAttempts = resume?.contentPolicyRecoveryAttempts ?? 0;
     let contextOverflowRecoveryAttempts = 0;
     // A provider can know about framing/tokenizer overhead that our monotonic
     // estimator cannot. Each real overflow retries the same unexecuted request
     // with a smaller provider-only window; no transcript row is rewritten.
-    let providerContextScale = 1;
+    let providerContextScale = resume?.providerContextScale ?? 1;
+    let sampleOnManualRetry = manualRetry?.mode === 'compact';
+    if (sampleOnManualRetry && signedAnthropicPrefix) {
+      // Earlier tool outputs are part of the signed request prefix. An edit
+      // would invalidate it. Start a fresh provider segment instead, retaining
+      // the original human requests and local evidence of the completed work.
+      const limit = Math.max(2048, Math.min(LOCAL_HANDOFF_MAX_BYTES,
+        Math.floor(resolveContextWindow(currentModel, this.#config) / 8),
+        Number.isFinite(learnedRequestBodyCap) ? Math.floor(learnedRequestBodyCap / 8) : Infinity));
+      const compact = compactPendingToolResults(conversationMessages.slice(turnStartIdx), 0);
+      const handoff = contextRolloverLocalHandoff(compact.messages, {
+        maxBytes: limit, priorSummary: rolloverSummary, tailStart: 1,
+      });
+      rolloverSeed = contextRolloverSeed(handoff, rolloverUserRequests);
+      rolloverCursor = conversationMessages.length;
+      rolloverCount += 1;
+      signedAnthropicPrefix = null;
+      successfulRequestsSinceRollover = 0;
+      compactedToolCallIds.clear();
+      sampleOnManualRetry = false;
+    }
 
     while (true) {
       turnNumber++;
@@ -3406,6 +3429,15 @@ export class Engine {
             // repeat this best-effort archive lookup without losing history.
             wireMessages = swept.nextMessages;
           } catch { /* best-effort */ }
+        }
+
+        if (sampleOnManualRetry) {
+          // Compact this request copy, including the newest completed batch.
+          // Pair IDs, tool status and original transcripts are not rewritten.
+          const tail = wireMessages.slice(historyMessageCount);
+          const compact = compactPendingToolResults(tail, 0);
+          wireMessages = [...wireMessages.slice(0, historyMessageCount), ...compact.messages];
+          for (const id of compact.compactedIds) compactedToolCallIds.add(id);
         }
 
         const imageLimits = useSessionCompactionPolicy && !pendingServerOperation
@@ -3997,6 +4029,7 @@ export class Engine {
         // adapter-resolved effort so the visible response can identify the last
         // successful provider call (including fallback-model switches).
         successfulRequestsSinceRollover += 1;
+        sampleOnManualRetry = false;
         pendingServerOperation = stopReason === 'pause_turn';
         lastSuccessfulModel = currentModel;
         lastSuccessfulEffort = requestEffortDecision.effective || resolvedEffort || null;
@@ -4636,12 +4669,24 @@ export class Engine {
           const retryCount = retried && !(err instanceof LLMFailedResponseError)
             ? ` Retried ${plural(retried, 'time', 'times')}.` : '';
           const kept = queryProgress.toolExecutions > 0 && !(err instanceof LLMFailedResponseError)
-            ? ' Completed tool results are kept; send a follow-up to continue.' : '';
+            ? ' Completed tool results are kept.' : '';
           err.message += retryCount + kept;
         }
         // A later fresh request can fail before producing text. In that case the
         // durable assistant prefix belongs to this same query and must leave the
         // transient `retry` state even though the current attempt persisted none.
+        // This is a failed model request, not failed/ambiguous tool dispatch.
+        // Do not hand out checkpoints for provider-managed work, policy
+        // refusals, completed publications, or unsettled asynchronous results.
+        const canResume = manualRetry && canReplayProviderRequest && !pendingServerOperation
+          && !hasFinalPublication() && !this.#pendingAsyncTaskIds.size
+          && !this.#acceptedAsyncTaskResults.size && !this.#pendingTaskResultUpdates.length
+          && !this.#pendingTaskResultMessages.length && !(err instanceof LLMPolicyError)
+          && err.code !== 'refusal' && !err.stop?.stopDetails
+          && (retryEligible || err instanceof LLMAuthError || err instanceof LLMContextError
+            || err instanceof LLMRequestTooLargeError || err instanceof LLMImageLimitError
+            || err instanceof ProviderStateError || err instanceof ProviderContextBudgetError
+            || err.code === 'CONTEXT_COMPACTION_FAILED');
         const persistedErrorPartial = persistIncompleteAssistantOnce('error');
         if (persistedErrorPartial) {
           retryLifecycle.lastPersistedPartial = persistedErrorPartial;
@@ -4653,6 +4698,7 @@ export class Engine {
           );
           if (errorPartial) retryLifecycle.lastPersistedPartial = errorPartial;
         }
+        const pendingManualContinuation = retryLifecycle.pendingContinuation;
         retryLifecycle.pendingContinuation = null;
 
         this.#trace.endTurn(turnId, {
@@ -4755,6 +4801,33 @@ export class Engine {
           errorEvent.retryExhausted = consecutiveRetryableErrors >= retryPolicy.maxRetries;
           errorEvent.retryAttempts = consecutiveRetryableErrors;
           errorEvent.maxRetries = retryPolicy.maxRetries;
+        }
+        if (canResume) {
+          if (responseText) {
+            conversationMessages.push({ role: 'assistant', content: responseText, incomplete: true, responseKind: 'progress' });
+            // A model-only cue, never a new transcript user row.
+            conversationMessages.push({ role: 'user', userAuthored: false, content: RETRY_CONTINUATION_PROMPT });
+            fullResponseText += responseText;
+          } else if (pendingManualContinuation) {
+            conversationMessages.push(pendingManualContinuation);
+          }
+          if (persistedErrorPartial) lastPersistedAssistantTextMessage = persistedErrorPartial;
+          // Private, process-local state. The Session bridge sizes and owns
+          // this checkpoint; it must never be serialized onto the wire.
+          errorEvent.manualRetryState = {
+            conversationMessages, turnStartIdx, relatedHistoryTurns, queryStartedAt,
+            queryProgress, queryNumber, queryToolCount, queryDuplicateCounts, queryDuplicateSuppressions,
+            queryValidationFailures, duplicateReminderAwaitingResponse, discoveredToolNames, discoveryTraversals,
+            projectDocLoadedPathHints, projectDocScopes: [...projectDocContext.selectedScopes],
+            signedAnthropicPrefix, rolloverSeed, rolloverSummary, rolloverCursor, rolloverCount,
+            rolloverUserRequests, successfulRequestsSinceRollover, compactedToolCallIds,
+            learnedRequestBodyCap, mediaByteBudget, viewImageToolPaths, viewImagePartPaths,
+            singleImageDimensionMode, repeatedToolResultRefs, completeReadResultIds,
+            turnNumber, continueTurns, pauseContinueTurns, toolLoopTurns, fullResponseText,
+            displayImageAnchorMessage, lastPersistedAssistantMessage, lastPersistedAssistantTextMessage,
+            currentModel, primaryModelAtLastBoundary, lastSuccessfulModel, lastSuccessfulEffort,
+            cumulativeInputTokens, cumulativeOutputTokens, contentPolicyRecoveryAttempts, providerContextScale,
+          };
         }
         yield errorEvent;
         yield {
