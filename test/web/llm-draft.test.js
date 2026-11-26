@@ -201,6 +201,28 @@ describe('native Gemini settings', () => {
     expect(pendingRequest(store).config.fastModel).toBeNull();
   });
 
+  it('preserves an unlisted Fast Model alias only while its original fallback owner is present', async () => {
+    const store = await setup();
+    const alias = 'proxy/unlisted-alias';
+    const providers = [
+      { name: 'main', baseUrl: 'https://main.test', models: ['one'] },
+      { name: 'proxy', baseUrl: 'https://proxy.test', protocol: 'openai-chat-completions', models: ['listed'] },
+    ];
+    store.llmConfig['agent-a'] = config('fallback-fast', { primaryModel: 'main/one', fastModel: alias, providers });
+    await Vue.nextTick();
+    await wrapper.get('.llm-toggle-row input').setValue(true);
+    await saveButton().trigger('click');
+    const saved = pendingRequest(store);
+    expect(saved.config.fastModel).toBe(alias);
+    store.llmConfig['agent-a'] = config(saved.requestId, saved.config);
+    await Vue.nextTick();
+    wrapper.vm.removeProvider(1);
+    await Vue.nextTick();
+    expect(wrapper.get('select.llm-route-select').element.value).toBe('');
+    await saveButton().trigger('click');
+    expect(pendingRequest(store).config.fastModel).toBeNull();
+  });
+
   it('keeps a proxy Fast Model during Copilot discovery, even if a new exact ref shadows its legacy alias', async () => {
     const store = await setup();
     for (const [id, expected] of [['gpt-5.4', 'github-copilot/legacy-fast'], ['legacy-fast', 'proxy/github-copilot/legacy-fast']]) {

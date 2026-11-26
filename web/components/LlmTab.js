@@ -324,6 +324,7 @@ export default {
       localPrimaryModel: null,
       localFastModel: null,
       fastModelTarget: null,
+      fastModelFallbackOwner: null,
       localSubAgentSceneModels: {},
       sceneModelConfigSupported: false,
       localDecisionModel: null,
@@ -369,12 +370,13 @@ export default {
     },
     selectedFastModel: {
       get() {
-        if (!this.fastModelTarget) return this.localFastModel || '';
+        if (!this.fastModelTarget) return this.fastModelForSave(this.localProviders) || '';
         return this.allModelRefs.includes(this.fastModelTarget) ? this.fastModelTarget : '';
       },
       set(ref) {
         this.localFastModel = ref || null;
         this.fastModelTarget = ref || null;
+        this.fastModelFallbackOwner = null;
       },
     },
     uniqueModelRefs() {
@@ -403,6 +405,7 @@ export default {
           this.localPrimaryModel = null;
           this.localFastModel = null;
           this.fastModelTarget = null;
+          this.fastModelFallbackOwner = null;
           this.localSubAgentSceneModels = {};
           this.sceneModelConfigSupported = false;
           this.localDecisionModel = null;
@@ -665,6 +668,12 @@ export default {
       this.localPrimaryModel = config.agentConfig?.primaryModel || config.primaryModel || null;
       this.localFastModel = config.agentConfig?.fastModel || config.fastModel || null;
       this.fastModelTarget = this.resolveFastModelRef(this.localFastModel, this.allModelRefs);
+      const normalizedFast = this.normalizeFastModelRef(this.localFastModel);
+      const owner = normalizedFast?.includes('/') ? normalizedFast.slice(0, normalizedFast.indexOf('/')) : null;
+      // Qualified fallbacks need not be listed (for example, a Chat Completions
+      // alias). Remember their owner without guessing whether the model exists.
+      this.fastModelFallbackOwner = !this.fastModelTarget && owner && this.localProviders.some(p => p.name === owner)
+        ? owner : null;
       const sceneModels = config.agentConfig?.subAgentSceneModels;
       this.sceneModelConfigSupported = !!sceneModels;
       this.localSubAgentSceneModels = { ...sceneModels };
@@ -710,23 +719,34 @@ export default {
         ? this.parseModelsFromProvider(provider).map(id => `${provider.name}/${id}`) : []);
     },
 
+    normalizeFastModelRef(ref) {
+      // Older runtime configs strip the removed global namespace before lookup.
+      return ref?.startsWith('global:') && ref.includes('/') ? ref.slice(ref.indexOf('/') + 1) : ref;
+    },
+
     resolveFastModelRef(ref, refs) {
-      if (!ref) return null;
-      // Mirrors exact-before-bare lookup; the removed global namespace was
-      // stored with the local model ID after the first slash.
-      const normalized = ref.startsWith('global:') && ref.includes('/') ? ref.slice(ref.indexOf('/') + 1) : ref;
+      const normalized = this.normalizeFastModelRef(ref);
+      if (!normalized) return null;
       return refs.find(candidate => candidate === normalized)
         || refs.find(candidate => candidate.slice(candidate.indexOf('/') + 1) === normalized) || null;
     },
 
-    fastModelForSave(refs) {
+    fastModelForSave(providers) {
       const stored = this.localFastModel;
+      if (!stored) return null;
+      const refs = this.modelRefsFor(providers);
+      const resolved = this.resolveFastModelRef(stored, refs);
       const target = this.fastModelTarget;
-      if (!target) return stored || null;
-      if (!refs.includes(target)) return null;
-      // A catalog edit may shadow a legacy alias. Keep its original provider,
-      // without rewriting that alias on ordinary saves where it still works.
-      return this.resolveFastModelRef(stored, refs) === target ? stored : target;
+      if (target) {
+        if (!refs.includes(target)) return null;
+        // A catalog edit may shadow a legacy alias. Preserve its original
+        // provider without rewriting the alias on ordinary saves.
+        return resolved === target ? stored : target;
+      }
+      const fallbackOwner = this.fastModelFallbackOwner;
+      if (fallbackOwner && (!providers.some(p => p.name === fallbackOwner)
+        || (resolved && resolved !== this.normalizeFastModelRef(stored)))) return null;
+      return stored;
     },
 
     parseModelsFromProvider(provider) {
@@ -945,7 +965,7 @@ export default {
       const llmConfig = {
         providers,
         primaryModel: this.localPrimaryModel || null,
-        fastModel: this.fastModelForSave(this.modelRefsFor(providers)),
+        fastModel: this.fastModelForSave(providers),
         decisionModel: this.localDecisionModel || null,
         debug: this.localDebug === true,
       };
