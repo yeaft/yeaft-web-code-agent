@@ -22,9 +22,12 @@ import { decideSessionAutoRoute, collectRecentIdleCandidates } from '../../../ag
 import { scoreRouteCandidates, tryFastPathRoute, tryLocalFallbackRoute } from '../../../agent/yeaft/session-discovery/route-scorer.js';
 
 let tempRoot = null;
+let holdRunningTurn;
 const savedCtx = { ...ctx };
 
 afterEach(async () => {
+  holdRunningTurn?.();
+  holdRunningTurn = undefined;
   await bridge.__testResetVpState();
   bridge.__testSetSession(null);
   await closeConversationHistoryIndexes();
@@ -153,15 +156,16 @@ describe('Workspace <=3 level folder snapshot & Sessionless auto-routing pipelin
     ctx.messageBuffer = [];
     ctx.messageBufferBytes = 0;
 
-    let holdRunningTurn;
     const runningGate = new Promise(resolve => { holdRunningTurn = resolve; });
     const decisionCalls = [];
+    const adapterInputs = [];
 
     const mockAdapter = {
       async *stream(params) {
         const lastUser = params.messages.filter(m => m.role === 'user').at(-1);
         const text = typeof lastUser?.content === 'string' ? lastUser.content : JSON.stringify(lastUser?.content || '');
-        if (text.includes('HOLD_RUNNING_TASK')) {
+        adapterInputs.push(text);
+        if (text.includes('HOLD_RUNNING_TASK') && !text.includes('also add rollback SQL')) {
           yield { type: 'text_delta', text: 'Working on database migration...' };
           await runningGate;
         } else {
@@ -333,7 +337,9 @@ describe('Workspace <=3 level folder snapshot & Sessionless auto-routing pipelin
       sessionId: runningSession.id,
       text: 'HOLD_RUNNING_TASK: migrate users table',
     });
-    await until(() => allSent().some(f => f.sessionId === runningSession.id && f.event?.type === 'vp_turn_start'));
+    // Ensure loop 1 is inside the adapter, not merely queued for startup.
+    await until(() => adapterInputs.some(text => text.includes('HOLD_RUNNING_TASK')));
+    const runningTurn = allSent().find(f => f.sessionId === runningSession.id && f.event?.type === 'vp_turn_start');
 
     // Ensure bridge classifier appends to the active thread
     bridge.__testSetThreadClassifier(({ runningThreads }) => ({
@@ -358,6 +364,20 @@ describe('Workspace <=3 level folder snapshot & Sessionless auto-routing pipelin
       options: ['3000', '8080'],
     });
 
+    const rejected = await bridge.handleYeaftAutoRouteSend({
+      id: 'msg_bad_override',
+      requestId: 'req_bad_override',
+      text: 'also add rollback SQL (invalid override)',
+      quickSend: { model: 'not-a-model' },
+      _allowedSessionIds: [runningSession.id],
+      _shareOwnerId: 'user-1',
+      _requestClientId: 'client-1',
+    });
+    expect(rejected).toBeNull();
+    expect(allSent().filter(f => f.type === 'yeaft_session_routed' && f.requestId === 'req_bad_override')).toEqual([
+      expect.objectContaining({ ok: false, code: 'invalid_quick_send', clientMessageId: 'msg_bad_override', _requestClientId: 'client-1' }),
+    ]);
+
     const tier1Res = await bridge.handleYeaftAutoRouteSend({
       id: 'msg_tier1_1',
       requestId: 'req_tier1_1',
@@ -371,6 +391,13 @@ describe('Workspace <=3 level folder snapshot & Sessionless auto-routing pipelin
       tier: 'running',
     });
     expect(ask1Settled).toBe(false);
+    const appendIndex = allSent().findIndex(f => f.event?.type === 'vp_thread_user_appended' && f.event.messageId === 'msg_tier1_1');
+    const ackIndex = allSent().findIndex(f => f.type === 'yeaft_session_routed' && f.requestId === 'req_tier1_1');
+    expect(appendIndex).toBeGreaterThanOrEqual(0);
+    expect(ackIndex).toBeGreaterThan(appendIndex);
+    expect(allSent()[appendIndex].event.turnId).toBe(runningTurn.event.turnId);
+    expect(allSent()[ackIndex]).toMatchObject({ ok: true, delivery: 'appended' });
+    expect(adapterInputs.some(text => text.includes('also add rollback SQL'))).toBe(false);
 
     const askAnswerRes = await bridge.handleYeaftAutoRouteSend({
       id: 'msg_tier1_ask',
@@ -396,7 +423,7 @@ describe('Workspace <=3 level folder snapshot & Sessionless auto-routing pipelin
     const unauthorizedRes = await bridge.handleYeaftAutoRouteSend({
       id: 'msg_unauth_1',
       requestId: 'req_unauth_1',
-      text: 'also add rollback SQL to that migration',
+      text: 'also add rollback SQL in the other workspace',
       _allowedSessionIds: [createdSessionId], // runningSession.id excluded
       _shareOwnerId: 'user-2',
     });
@@ -405,6 +432,16 @@ describe('Workspace <=3 level folder snapshot & Sessionless auto-routing pipelin
     holdRunningTurn();
     await runningPromise;
     await bridge.__testDrainVpDrivers();
+
+    // The original execution opened a second adapter loop with the new input.
+    // Neither a history row nor a new execution would satisfy this assertion.
+    expect(adapterInputs.filter(text => text.includes('also add rollback SQL to that migration'))).toHaveLength(1);
+    const runningStarts = allSent().filter(f => f.sessionId === runningSession.id && f.event?.type === 'vp_turn_start');
+    expect(runningStarts).toHaveLength(1);
+    expect(allSent().find(f => f.sessionId === runningSession.id && f.event?.type === 'vp_thread_user_append_consumed')).toMatchObject({
+      turnId: runningTurn.turnId,
+      event: { preview: expect.stringContaining('also add rollback SQL') },
+    });
 
     // Verify all Decision calls used configured decisionModel
     expect(decisionCalls.length).toBeGreaterThanOrEqual(3);

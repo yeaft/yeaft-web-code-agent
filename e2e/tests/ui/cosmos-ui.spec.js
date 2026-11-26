@@ -20,10 +20,11 @@ test.describe('Yeaft Cosmos UI', () => {
     await expect(page.locator('.cosmos-page')).toBeVisible({ timeout: 15000 });
     await expect(page.locator('.cosmos-gl-canvas')).toBeVisible();
 
+    mockAgent.send({ type: 'agent_capabilities_updated', capabilities: ['session_auto_route', 'work_center', 'session_scenes', 'plaintext-ok'] });
     // Wait for real WebSocket + mockAgent handshake before seeding multi-planet test fixture
     await page.waitForFunction((agentId) => {
       const chat = window.Pinia?.useChatStore?.();
-      return Boolean(chat && (chat.agents || []).some((a) => a.id === agentId && a.online === true));
+      return Boolean(chat && (chat.agents || []).some(a => a.id === agentId && a.online && a.capabilities?.includes('session_auto_route')));
     }, mockAgent.agentId, { timeout: 15000 });
 
     await page.evaluate((agentId) => {
@@ -108,6 +109,23 @@ test.describe('Yeaft Cosmos UI', () => {
     await expect(page.locator('.cosmos-quick-composer')).toBeVisible();
     await expect(page.locator('.cosmos-drawer')).toHaveCount(0);
     await expect(page.locator('.cosmos-quick-open-btn')).toBeVisible();
+
+    // Send through the real Web -> Server WebSocket; a receipt, not routing alone,
+    // is what clears the draft. The Agent integration test asserts next-loop consumption.
+    const quickComposer = page.locator('.cosmos-quick-composer');
+    const draft = quickComposer.locator('textarea');
+    const followUp = 'Also test on mobile before finishing';
+    await draft.fill(followUp);
+    await quickComposer.getByRole('button', { name: /^(Send|发送)$/ }).click();
+    const send = await mockAgent.waitForMessage('yeaft_auto_route_send');
+    expect(send.text).toBe(followUp);
+    expect(send.quickSend).toBeUndefined();
+    await expect(draft).toHaveValue(followUp);
+    mockAgent.send({ type: 'yeaft_session_routed', ok: true, requestId: send.requestId,
+      clientMessageId: send.id, _requestClientId: send._requestClientId,
+      sessionId: 'sess-earth-1', title: 'Planetary Shader Polish', decision: 'matched', tier: 'running', delivery: 'appended' });
+    await expect(quickComposer.locator('.cosmos-quick-status')).toContainText(/Added to the running turn|已补充到/);
+    await expect(draft).toHaveValue('');
 
     // 2. Clicking "Open Chat" (or a live micro-list session) opens the right translucent planetary drawer
     await page.locator('.cosmos-quick-open-btn').click();
