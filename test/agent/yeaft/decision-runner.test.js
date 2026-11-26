@@ -95,6 +95,34 @@ describe('Agent-owned sub-agent scene routes', () => {
   });
 });
 
+describe('Agent-owned sub-agent persona effort settings', () => {
+  it('advertises defaults for old configs, persists a strict map and preserves it on unrelated writes', () => {
+    const dir = createTempYeaftDir();
+    const initial = getLlmConfig(dir).agentConfig;
+    expect(initial.subAgentPersonaEfforts).toEqual({});
+    expect(initial.subAgentEffortSettings.personas).toEqual(expect.arrayContaining([
+      { id: 'designer', defaultEffort: 'xhigh' }, { id: 'reviewer', defaultEffort: 'xhigh' },
+      { id: 'explorer', defaultEffort: null },
+    ]));
+    expect(initial.subAgentEffortSettings.levels).toContain('high');
+    const targets = { explorer: 'low', reviewer: 'max', implementer: 'medium' };
+    const saved = updateLlmConfig({ subAgentPersonaEfforts: targets }, dir);
+    expect(saved.error).toBeUndefined();
+    expect(saved.agentConfig.subAgentPersonaEfforts).toEqual(targets);
+    expect(getLlmConfig(dir).agentConfig.subAgentPersonaEfforts).toEqual(targets);
+    expect(loadConfig({ dir }).subAgentPersonaEfforts).toEqual(targets);
+    expect(updateLlmConfig({ debug: true }, dir).subAgentPersonaEfforts).toEqual(targets);
+    const file = join(dir, 'config.json');
+    const before = readFileSync(file, 'utf8');
+    for (const invalid of [null, [], { design: 'xhigh' }, { reviewer: '' }, { reviewer: 'XHIGH' }]) {
+      expect(updateLlmConfig({ debug: false, subAgentPersonaEfforts: invalid }, dir).error).toBeTruthy();
+      expect(readFileSync(file, 'utf8')).toBe(before);
+    }
+    expect(updateLlmConfig({ subAgentPersonaEfforts: {} }, dir).subAgentPersonaEfforts).toEqual({});
+    expect(loadConfig({ dir }).subAgentPersonaEfforts).toEqual({});
+  });
+});
+
 describe('legacy Fast Model config', () => {
   it('retains vendor-qualified legacy IDs when saving alongside a managed provider', () => {
     const legacy = { name: 'proxy', baseUrl: 'https://proxy.invalid', models: ['github-copilot/legacy-fast'] };

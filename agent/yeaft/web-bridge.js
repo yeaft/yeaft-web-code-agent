@@ -974,6 +974,7 @@ function engineConfigKey(config) {
     fastModel: config?.fastModel || '',
     fastModelId: config?.fastModelId || '',
     subAgentSceneModels: config?.subAgentSceneModels || {},
+    subAgentPersonaEfforts: config?.subAgentPersonaEfforts || {},
     decisionModel: config?.decisionModel || '',
     decisionModelId: config?.decisionModelId || '',
     fallbackModel: config?.fallbackModel || '',
