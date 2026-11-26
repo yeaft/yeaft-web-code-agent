@@ -55,9 +55,15 @@ export async function runDailySharedKnowledge({ slot, cutoff = Date.now(), clock
       signal?.throwIfAborted();
       if (!await rpc('renew', lease, clock() + LEASE_MS)) throw new Error('knowledge_lease_lost');
     };
-    const decide = async (scenario, input) => {
+    const decide = async (scenario, input, dependencies) => {
       await heartbeat();
       model ||= await openModel(signal);
+      // A buffered batch may have been deleted while a previous provider
+      // request was in flight. Recheck immediately before each new dispatch.
+      if (!await rpc('check', dependencies)) {
+        throw Object.assign(new Error('knowledge_sources_changed'), { code: 'knowledge_sources_changed' });
+      }
+      signal?.throwIfAborted();
       stats.modelCalls += 1;
       const { result, meta } = await runDecision({ scenario, input, adapter: model.adapter, config: model.config,
         model: model.config?.primaryModel || model.config?.model, signal });
@@ -82,13 +88,13 @@ export async function runDailySharedKnowledge({ slot, cutoff = Date.now(), clock
       for (const group of groups.values()) {
         const candidates = group.map((item, i) => ({ ...item, id: `c${i + 1}` }));
         const existing = await rpc('predecessors', candidates);
-        const decisions = await decide(knowledgeMergeScenario, {
-          candidates: candidates.map(modelItem), existing: existing.map(modelItem),
-        });
-        const scope = candidates[0].scope;
         // The merge prompt sees all these sources. Keep all of them as
         // dependencies even on add/supersede: the model may copy older text.
         const sources = [...candidates, ...existing].flatMap(item => item.sources);
+        const decisions = await decide(knowledgeMergeScenario, {
+          candidates: candidates.map(modelItem), existing: existing.map(modelItem),
+        }, sources);
+        const scope = candidates[0].scope;
         actions.push(...decisions.map(decision => ({ ...decision, item: { ...decision.item, scope }, sources })));
       }
       const marks = new Map(units.map(unit => [unit.mark.sessionId, unit.mark]));
@@ -137,10 +143,15 @@ export async function runDailySharedKnowledge({ slot, cutoff = Date.now(), clock
         continue;
       }
       if (!input) continue;
-      const mark = lastSeq => ({ sessionId, identity: input.identity, generation: input.generation, lastSeq });
+      const sameStream = watermark?.identity === input.identity;
+      const oldPending = new Set(sameStream ? watermark.pendingSeqs : []);
+      const nextPending = input.pendingSeqs ?? [];
+      let cursor = sameStream ? watermark.lastSeq : -1;
+      const mark = (lastSeq, pendingSeqs) => ({ sessionId, identity: input.identity, generation: input.generation, lastSeq, pendingSeqs });
       if (!input.messages.length) {
-        if ((watermark || input.lastSeq >= 0) && (input.generation !== watermark?.generation || input.lastSeq !== watermark?.lastSeq)) {
-          pending.push({ mark: mark(input.lastSeq), candidates: [], messageCount: 0 });
+        if ((watermark || input.lastSeq >= 0 || nextPending.length) && (input.generation !== watermark?.generation
+            || input.lastSeq !== watermark?.lastSeq || JSON.stringify(nextPending) !== JSON.stringify(watermark?.pendingSeqs ?? []))) {
+          pending.push({ mark: mark(input.lastSeq, nextPending), candidates: [], messageCount: 0 });
           if (pending.length >= 16) await flush();
         }
         continue;
@@ -152,7 +163,7 @@ export async function runDailySharedKnowledge({ slot, cutoff = Date.now(), clock
         if (failures.has(sessionId)) break;
         let items;
         try {
-          items = await decide(knowledgeExtractScenario, { hasWorkspace: Boolean(scope), messages: chunk });
+          items = await decide(knowledgeExtractScenario, { hasWorkspace: Boolean(scope), messages: chunk }, [mark(cursor, [])]);
         } catch (error) {
           // Checkpoint earlier work, then leave this chunk for retry. A
           // provider-wide error backs off; a bad output doesn't starve others.
@@ -167,8 +178,13 @@ export async function runDailySharedKnowledge({ slot, cutoff = Date.now(), clock
         const candidates = items.map(({ evidenceSeqs, ...item }) => ({ ...item, scope: item.scope === 'workspace' ? scope : 'agent',
           sources: evidenceSeqs.map(seq => ({ sessionId, seq, messageId: messages.get(seq).messageId, generation: input.generation,
             firstInputSeq: chunk[0].seq, lastInputSeq: chunk.at(-1).seq })) }));
-        const lastSeq = chunk.at(-1).seq === input.messages.at(-1).seq ? input.lastSeq : chunk.at(-1).seq;
-        pending.push({ mark: mark(lastSeq), candidates, messageCount: chunk.length });
+        const last = chunk.at(-1).seq;
+        for (const row of chunk) oldPending.delete(row.seq);
+        const finalChunk = last === input.messages.at(-1).seq;
+        cursor = Math.max(cursor, finalChunk ? input.lastSeq : last);
+        const unresolved = finalChunk ? nextPending
+          : [...new Set([...oldPending, ...nextPending.filter(seq => seq <= cursor)])].sort((a, b) => a - b);
+        pending.push({ mark: mark(cursor, unresolved), candidates, messageCount: chunk.length });
         candidateCount += candidates.length;
         if (candidateCount >= MAX_CANDIDATES_PER_MERGE || pending.length >= 16) await flush();
       }

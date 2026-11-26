@@ -17,6 +17,11 @@ parentPort.on('message', ({ op, args }) => {
       case 'renew': data = renewKnowledgeJob(db, ...args); break;
       case 'watermark': data = readKnowledgeWatermark(db, ...args); break;
       case 'predecessors': data = findKnowledgePredecessors(db, args[0], createKnowledgeSourceCheck(root)); break;
+      case 'check': {
+        const live = createKnowledgeSourceCheck(root);
+        data = args[0].length > 0 && args[0].every(live);
+        break;
+      }
       case 'commit': data = commitKnowledgeBatch(db, { root, ...args[0] }); break;
       case 'release': data = releaseKnowledgeJob(db, ...args); break;
       case 'close': db?.close(); db = null; break;

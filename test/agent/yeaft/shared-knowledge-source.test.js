@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { listDigestSessions, readDigestSource } from '../../../agent/yeaft/shared-knowledge/source.js';
+import { claimKnowledgeJob, commitKnowledgeBatch, openKnowledgeWriter, readKnowledgeWatermark } from '../../../agent/yeaft/shared-knowledge/store.js';
 
 const createdAt = '2025-01-01T00:00:00.000Z';
 const options = { bootstrapSince: 100, cutoff: 200 };
@@ -57,6 +58,87 @@ describe('daily shared knowledge digest source', () => {
     const after = read({ watermark: before });
     expect(after).toMatchObject({ lastSeq: 5, messages: [{ seq: 5, role: 'assistant', messageId: 'm5', createdAt: 200, text: 'Final' }] });
     expect(read({ watermark: after })).toMatchObject({ lastSeq: 5, messages: [] });
+  });
+
+  it('finds an in-place finalization below the cursor even with a fresh segment index', () => {
+    const progress = msg(2, 'assistant', 150, { responseKind: 'progress', stopReason: 'end_turn' });
+    writeFileSync(first, jsonl([msg(1, 'user', 100), progress]));
+    writeFileSync(join(segments, '000002.jsonl'), jsonl([msg(3, 'user', 160)]));
+    const before = read();
+    expect(before.lastSeq).toBe(3);
+    expect(before.messages.map(m => m.seq)).toEqual([1, 3]);
+
+    const finalized = jsonl([msg(1, 'user', 100), { ...progress, responseKind: 'result' }]);
+    writeFileSync(first, finalized);
+    writeFileSync(join(conversation, 'index.json'), JSON.stringify({ version: 2, streamId: 'stream', segments: [
+      { file: '000001.jsonl', firstSeq: 1, lastSeq: 2, count: 2, bytes: Buffer.byteLength(finalized) },
+    ] }));
+    const after = read({ watermark: before });
+    expect(after.messages.map(m => m.seq)).toEqual([2]);
+    expect(after).toMatchObject({ lastSeq: 3, pendingSeqs: [] });
+    expect(before.pendingSeqs).toEqual([2]);
+    expect(read({ watermark: after })).toMatchObject({ lastSeq: 3, pendingSeqs: [], messages: [] });
+  });
+
+  it('tracks only visible potentially-final progress within the time window', () => {
+    const progress = (seq, ts, extra) => msg(seq, 'assistant', ts, { responseKind: 'progress', ...extra });
+    const rows = [
+      progress(1, 99, { stopReason: 'end_turn' }),
+      progress(2, 100, { stopReason: 'stop_sequence' }),
+      progress(3, 200),
+      progress(4, 150, { stopReason: 'tool_use' }),
+      progress(5, 150, { stopReason: 'error' }),
+      progress(6, 150, { stopReason: 'end_turn', incomplete: true }),
+      progress(7, 150, { stopReason: 'end_turn', internal: true }),
+      progress(8, 150, { toolCalls: [{ id: 'tool' }] }),
+      progress(9, 201, { stopReason: 'end_turn' }),
+      msg(10, 'user', 199),
+    ];
+    writeFileSync(first, jsonl(rows));
+    const before = read();
+    expect(before).toMatchObject({ lastSeq: -1, messages: [], pendingSeqs: [2, 3] });
+    rows[8].responseKind = 'result';
+    writeFileSync(first, jsonl(rows));
+    expect(read({ watermark: before, cutoff: 201 })).toMatchObject({ lastSeq: 10, pendingSeqs: [2, 3], messages: [{ seq: 9 }, { seq: 10 }] });
+  });
+
+  it('fails the scan rather than dropping pending rows when the tracking bound is exceeded', () => {
+    writeFileSync(first, jsonl(Array.from({ length: 16_385 }, (_, seq) =>
+      msg(seq, 'assistant', 150, { responseKind: 'progress' }))));
+    expect(() => read()).toThrow(/Too many digest pending sequences/);
+  });
+
+  it('does not bypass bootstrap filtering when the first scan only saved pending rows', () => {
+    const progress = msg(2, 'assistant', 150, { responseKind: 'progress', stopReason: 'end_turn' });
+    writeFileSync(first, jsonl([progress]));
+    const before = read();
+    writeFileSync(first, jsonl([msg(1, 'user', 99), { ...progress, responseKind: 'result' }]));
+    expect(read({ watermark: before })).toMatchObject({ lastSeq: 2, pendingSeqs: [], messages: [{ seq: 2 }] });
+  });
+
+  it('persists pending-only first scans and drops deleted pending rows without advancing', () => {
+    writeFileSync(first, jsonl([msg(2, 'assistant', 150, { responseKind: 'progress', stopReason: 'end_turn' })]));
+    const before = read();
+    expect(before).toMatchObject({ lastSeq: -1, pendingSeqs: [2], messages: [] });
+    expect(() => read({ watermark: { ...before, pendingSeqs: Array(16_385).fill(2) } })).toThrow(/Too many digest pending sequences/);
+    const db = openKnowledgeWriter(root);
+    try {
+      expect(readKnowledgeWatermark(db, 's')).toBeNull();
+      const { lease } = claimKnowledgeJob(db, { slot: 1, now: 1, leaseMs: 100, bootstrapSince: 100 });
+      expect(commitKnowledgeBatch(db, { root, lease, actions: [], watermarks: [before], now: 1 })).toBe(true);
+    } finally { db.close(); }
+    const reopened = openKnowledgeWriter(root);
+    try {
+      const watermark = readKnowledgeWatermark(reopened, 's');
+      expect(watermark).toEqual({ identity: before.identity, generation: before.generation, lastSeq: -1, pendingSeqs: [2] });
+      writeFileSync(join(conversation, 'deleted-turns.jsonl'), jsonl([{
+        version: 1, sessionId: 's', turnId: 't', deletionId: 'deleted', messageIds: ['m2'],
+        anchorMessageIds: [], clientMessageIds: [], executionIds: [], referenceIds: [],
+      }]));
+      const after = read({ watermark });
+      expect(after.generation).not.toBe(before.generation);
+      expect(after).toMatchObject({ identity: before.identity, lastSeq: -1, pendingSeqs: [], messages: [] });
+    } finally { reopened.close(); }
   });
 
   it('does not advance past a future message even when a subsequent row has an earlier timestamp', () => {
@@ -130,6 +212,7 @@ describe('daily shared knowledge digest source', () => {
     expect(() => read()).toThrow(/Incomplete digest source scan/);
     const watermark = { generation: 'old', identity: JSON.stringify([createdAt, 'stream']), lastSeq: 10 };
     expect(read({ watermark }).messages.map(m => m.seq)).toEqual([11]);
+    expect(() => read({ watermark: { ...watermark, pendingSeqs: [2] } })).toThrow(/Incomplete digest source scan/);
     appendFileSync(first, jsonl([msg(12, 'user', 150)]));
     expect(() => read({ watermark })).toThrow(/Incomplete digest source scan/);
   });

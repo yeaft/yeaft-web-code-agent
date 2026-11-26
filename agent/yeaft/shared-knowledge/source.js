@@ -7,12 +7,18 @@ import { sessionDeletionProjection } from '../conversation/turn-deletion-journal
 import { classifyAssistantResponseKind, extractIndexableTurnMessages, extractPlainText, rowTimestamp } from '../session-discovery/indexer.js';
 import { localSessionDirs, readSourceFence } from '../session-discovery/store.js';
 import { screenKnowledgeText } from './prompts.js';
+import { validatePendingSeqs } from './store.js';
 
 const isSeq = value => Number.isSafeInteger(value) && value >= 0;
 const stat = path => lstatSync(path, { throwIfNoEntry: false });
 // NTFS can update ctime when a read updates access metadata.
 const changeTime = st => process.platform === 'win32' ? st.mtimeMs : st.ctimeMs;
 const stamp = st => st && [st.dev, st.ino, st.size, st.mtimeMs, changeTime(st)].join(':');
+
+function canFinalizeInPlace(row) {
+  return row.incomplete !== true && !row.toolCalls?.length && (
+    row.stopReason === 'end_turn' || row.stopReason === 'stop_sequence' || row.stopReason == null || row.stopReason === '');
+}
 
 function digestScan(root, signal) {
   const telemetry = {};
@@ -61,6 +67,8 @@ function segmentBounds(raw, streamId) {
  * Read one manifest-owned transcript without opening or repairing the live store.
  * Bounds are epoch milliseconds (inclusive). An empty result keeps a recognized
  * cursor, or returns -1 if no indexable row has been supplied in this lineage.
+ * Messages may include finalized rows at or below the cursor. pendingSeqs is
+ * the unresolved set after processing all returned messages.
  */
 export function readDigestSource(root, sessionId, { watermark = null, bootstrapSince, cutoff, signal } = {}) {
   const scan = digestScan(root, signal);
@@ -96,6 +104,17 @@ export function readDigestSource(root, sessionId, { watermark = null, bootstrapS
   const recognized = watermark?.identity === source.identity;
   const previous = recognized ? watermark.lastSeq : -1;
   if (previous !== -1 && !isSeq(previous)) throw new TypeError('Invalid digest watermark');
+  const oldPending = new Set(recognized ? validatePendingSeqs(watermark.pendingSeqs === undefined ? [] : watermark.pendingSeqs) : []);
+  const pendingBelowCursor = [...oldPending].filter(seq => seq <= previous).sort((a, b) => a - b);
+  const pendingIntersects = ({ firstSeq, lastSeq }) => {
+    let lo = 0, hi = pendingBelowCursor.length;
+    while (lo < hi) {
+      const mid = (lo + hi) >>> 1;
+      if (pendingBelowCursor[mid] < firstSeq) lo = mid + 1;
+      else hi = mid;
+    }
+    return lo < pendingBelowCursor.length && pendingBelowCursor[lo] <= lastSeq;
+  };
   const indexPath = join(conversation, 'index.json');
   const indexStat = watch(indexPath);
   const bounds = previous >= 0 && indexStat ? segmentBounds(scan.read(indexPath), source.streamId) : new Map();
@@ -108,7 +127,7 @@ export function readDigestSource(root, sessionId, { watermark = null, bootstrapS
     // also the stable source references. Current origin-stamped rows must agree.
     if (!row || !isSeq(seq) || (row.origin != null && row.seq != null && row.seq !== seq)
       || row.sessionId !== sessionId || typeof row.role !== 'string') throw new Error(`Invalid digest transcript row: ${path}`);
-    if (seq <= previous) return;
+    if (seq <= previous && !oldPending.has(seq)) return;
     // Copy/merge rewrites the outer sessionId but preserves the origin. The
     // target's deletion journal cannot authorize another Session/stream's rows.
     const local = row.origin == null || (row.origin.sessionId === sessionId && row.origin.streamId === source.streamId);
@@ -125,6 +144,7 @@ export function readDigestSource(root, sessionId, { watermark = null, bootstrapS
       id: kept.id, sessionId, seq, role: kept.role, ts: rowTimestamp(kept),
       content: text.length <= 64 * 1024 ? text : `${text.slice(0, 48 * 1024)}\n[… omitted …]\n${text.slice(-16 * 1024 + 24)}`,
       responseKind: kind, turnId: kept.turnId, from: kept.from,
+      potentiallyFinal: kind === 'progress' && canFinalizeInPlace(kept),
       speakerVpId: kept.speakerVpId || kept.meta?.senderVpId,
     });
   }
@@ -146,7 +166,7 @@ export function readDigestSource(root, sessionId, { watermark = null, bootstrapS
       const fileStat = watch(path);
       if (segments) {
         const bound = bounds.get(file);
-        if (bound && fileStat?.isFile() && bound.lastSeq <= previous && bound.bytes === fileStat.size
+        if (bound && fileStat?.isFile() && bound.lastSeq <= previous && !pendingIntersects(bound) && bound.bytes === fileStat.size
           && indexStat?.isFile() && fileStat.mtimeMs <= indexStat.mtimeMs && changeTime(fileStat) <= indexStat.mtimeMs) continue;
         const raw = readFile(path, fileStat);
         // Writers commit newline-terminated JSONL records, including the last.
@@ -159,7 +179,8 @@ export function readDigestSource(root, sessionId, { watermark = null, bootstrapS
         }
       } else {
         const id = file.slice(0, -3);
-        if (parseSeqFromId(id) <= previous) continue;
+        const seq = parseSeqFromId(id);
+        if (seq <= previous && !oldPending.has(seq)) continue;
         const row = parseMessage(readFile(path, fileStat));
         if (row?.id !== id) throw new Error(`Invalid legacy digest message: ${path}`);
         add({ ...row, sessionId: row.sessionId ?? sessionId }, path);
@@ -168,19 +189,32 @@ export function readDigestSource(root, sessionId, { watermark = null, bootstrapS
   }
 
   const prefix = [];
+  const replay = [];
+  const pendingSeqs = [];
   for (const row of [...bySeq.values()].sort((a, b) => a.seq - b.seq)) {
-    // Stop at the first deferred potentially indexable row, even when a
-    // higher-seq row has an earlier timestamp. A seq cursor cannot encode holes.
-    if (isVisibleConversationRow(row) && (row.role === 'user'
-      || (row.role === 'assistant' && classifyAssistantResponseKind(row) !== 'progress')) && extractPlainText(row.content)) {
+    const indexableNow = row.responseKind !== 'progress' && isVisibleConversationRow(row) && extractPlainText(row.content);
+    if (indexableNow || row.potentiallyFinal) {
       const time = rowTimestamp(row);
       if (!Number.isFinite(time)) throw new Error('Invalid digest message timestamp');
-      if (time > cutoff) break;
+      if (time > cutoff) {
+        // Do not cross a future potentially-final progress row with the
+        // forward cursor: it cannot enter the pending set before its cutoff.
+        if (row.seq > previous) break;
+        continue;
+      }
+      if (row.potentiallyFinal && time >= bootstrapSince) pendingSeqs.push(row.seq);
+      if (row.seq <= previous && indexableNow && time >= bootstrapSince) {
+        // An old hole that has become final is independent of forward turn
+        // coalescing, which could otherwise hide it behind a newer result.
+        replay.push(...extractIndexableTurnMessages([row], sessionId, cutoff).messages);
+      }
     }
-    prefix.push(row);
+    if (row.seq > previous) prefix.push(row);
   }
+  validatePendingSeqs(pendingSeqs);
   const { messages: projected } = extractIndexableTurnMessages(prefix, sessionId, cutoff);
-  const messages = projected.filter(message => recognized || message.createdAt >= bootstrapSince);
+  // A pending-only watermark has not yet checkpointed the bootstrap prefix.
+  const messages = [...replay, ...projected.filter(message => previous >= 0 || message.createdAt >= bootstrapSince)];
   const after = getFence();
   const current = getDir();
   if (after?.key !== source.key || after.meta.workDir !== source.meta.workDir || after.meta.task
@@ -200,6 +234,7 @@ export function readDigestSource(root, sessionId, { watermark = null, bootstrapS
     messages,
     // A verified older prefix was intentionally excluded by the cold-start
     // policy. Checkpoint it so inactive Sessions needn't rescan it every day.
-    lastSeq: projected.at(-1)?.seq ?? previous,
+    lastSeq: Math.max(previous, projected.at(-1)?.seq ?? -1),
+    pendingSeqs,
   };
 }

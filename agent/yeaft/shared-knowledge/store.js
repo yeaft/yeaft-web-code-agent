@@ -9,6 +9,15 @@ export const KNOWLEDGE_DIMENSIONS = Object.freeze([
   'preference_rule', 'decision', 'project_fact', 'workstream', 'artifact_outcome', 'user_context',
 ]);
 
+const MAX_PENDING_SEQS = 16_384;
+
+export function validatePendingSeqs(seqs) {
+  if (!Array.isArray(seqs)) throw new TypeError('Invalid digest pending sequences');
+  if (seqs.length > MAX_PENDING_SEQS) throw new Error('Too many digest pending sequences');
+  for (const seq of seqs) if (!Number.isSafeInteger(seq) || seq < 0) throw new TypeError('Invalid digest pending sequence');
+  return seqs;
+}
+
 // Additive schema: older discovery readers ignore these tables. The job does
 // not migrate or depend on legacy Share, route cards, or any memory tables.
 export function openKnowledgeWriter(root) {
@@ -20,7 +29,8 @@ export function openKnowledgeWriter(root) {
         completed_slot INTEGER, lease TEXT, lease_until INTEGER
       );
       CREATE TABLE IF NOT EXISTS knowledge_watermarks (
-        session_id TEXT PRIMARY KEY, identity TEXT NOT NULL, generation TEXT NOT NULL, seq INTEGER NOT NULL
+        session_id TEXT PRIMARY KEY, identity TEXT NOT NULL, generation TEXT NOT NULL, seq INTEGER NOT NULL,
+        pending_seqs TEXT NOT NULL DEFAULT '[]'
       );
       CREATE TABLE IF NOT EXISTS shared_knowledge (
         id TEXT NOT NULL UNIQUE, dimension TEXT NOT NULL, scope TEXT NOT NULL,
@@ -71,7 +81,10 @@ export function renewKnowledgeJob(db, lease, leaseUntil) {
 }
 
 export function readKnowledgeWatermark(db, sessionId) {
-  return db.prepare('SELECT identity, generation, seq AS lastSeq FROM knowledge_watermarks WHERE session_id = ?').get(sessionId) || null;
+  const row = db.prepare('SELECT identity, generation, seq AS lastSeq, pending_seqs FROM knowledge_watermarks WHERE session_id = ?').get(sessionId);
+  if (!row) return null;
+  const { pending_seqs, ...mark } = row;
+  return { ...mark, pendingSeqs: validatePendingSeqs(JSON.parse(pending_seqs)) };
 }
 
 /** All sources (not just one contributor) must still belong to the live Agent scope. */
@@ -214,13 +227,16 @@ export function commitKnowledgeBatch(db, { root, lease, actions, watermarks, now
     if (signal?.aborted || !db.prepare('SELECT 1 FROM knowledge_job WHERE id = 1 AND lease = ?').get(lease)) return false;
     const live = createKnowledgeSourceCheck(root, { signal });
     if (!watermarks.every(live) || !actions.every(action => action.sources.every(live))) return false;
-    const upsert = db.prepare(`INSERT INTO knowledge_watermarks(session_id, identity, generation, seq) VALUES (?, ?, ?, ?)
-      ON CONFLICT(session_id) DO UPDATE SET identity = excluded.identity, generation = excluded.generation, seq = excluded.seq`);
+    const upsert = db.prepare(`INSERT INTO knowledge_watermarks(session_id, identity, generation, seq, pending_seqs) VALUES (?, ?, ?, ?, ?)
+      ON CONFLICT(session_id) DO UPDATE SET identity = excluded.identity, generation = excluded.generation,
+        seq = excluded.seq, pending_seqs = excluded.pending_seqs`);
     for (const action of actions) {
       if (action.action === 'supersede') removeItem(db, action.targetId);
       writeItem(db, action.action === 'update' ? action.targetId : randomUUID(), action.item, action.sources, now);
     }
-    for (const mark of watermarks) upsert.run(mark.sessionId, mark.identity, mark.generation, mark.lastSeq);
+    for (const mark of watermarks) {
+      upsert.run(mark.sessionId, mark.identity, mark.generation, mark.lastSeq, JSON.stringify(validatePendingSeqs(mark.pendingSeqs)));
+    }
     return true;
   });
 }

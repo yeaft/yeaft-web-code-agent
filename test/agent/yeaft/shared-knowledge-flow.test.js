@@ -162,6 +162,38 @@ describe('one daily shared knowledge flow', () => {
     expect(lookup()).toEqual([]);
   });
 
+  it('does not send a stale batch after a source turn is deleted during extraction', async () => {
+    // Six wide rows force a second extraction chunk even after per-row clipping.
+    const rows = Array.from({ length: 6 }, (_, i) => append(a, `fixture-${i} ${'字'.repeat(4_100)}`));
+    const deleted = rows.at(-1);
+    const fake = model(() => {
+      commitSessionTurnDeletion(root, a.id, [], { version: 1, sessionId: a.id, turnId: 'deleted', deletionId: 'd',
+        messageIds: [deleted.id], anchorMessageIds: [deleted.id], clientMessageIds: [], executionIds: [], referenceIds: [] });
+      return [];
+    });
+    expect(await run(fake)).toMatchObject({ status: 'partial', failedSessions: 1, modelCalls: 1 });
+    expect(fake.call.mock.calls[0][0].messages[0].content).not.toContain('fixture-5');
+    expect(cursor(a)).toBeNull();
+    expect(lookup()).toEqual([]);
+  });
+
+  it('ingests an in-place finalized assistant answer once, even below a committed newer user cursor', async () => {
+    const original = append(a, text);
+    const progress = history.append({ role: 'assistant', content: 'Final benchmark: 42', sessionId: a.id,
+      ts: new Date(at - 10).toISOString(), responseKind: 'progress', stopReason: 'end_turn', turnId: 'in-flight' });
+    const newest = append(a, '补充用户说明');
+    const empty = model(() => []);
+    expect(await run(empty)).toMatchObject({ status: 'empty', messages: 2 });
+    expect(cursor(a)).toMatchObject({ lastSeq: newest.seq, pendingSeqs: [progress.seq] });
+    expect(JSON.parse(empty.call.mock.calls[0][0].messages[0].content).messages.map(row => row.seq)).toEqual([original.seq, newest.seq]);
+    expect(history.update(progress, { responseKind: 'result' })).toBeTruthy();
+    const ready = model(() => []);
+    expect(await run(ready, { slot: 20261127, cutoff: at + day })).toMatchObject({ status: 'empty', messages: 1 });
+    expect(JSON.parse(ready.call.mock.calls[0][0].messages[0].content).messages).toMatchObject([{ seq: progress.seq, role: 'assistant' }]);
+    expect(cursor(a)).toMatchObject({ lastSeq: newest.seq, pendingSeqs: [] });
+    expect(await run(ready, { slot: 20261128, cutoff: at + 2 * day })).toMatchObject({ status: 'empty', modelCalls: 0 });
+  });
+
   it('a concurrent job cannot run the same scheduled slot', async () => {
     append(a, text);
     let release, started;
