@@ -12,6 +12,7 @@ import { decodeKey } from '../../utils/encryption.js';
 import { t } from '../../utils/i18n.js';
 import { stopProcessingWatchdog, startLegacyWatchdog } from './watchdog.js';
 import { clearSessionLoading } from './session.js';
+import { syncConnectionNotice } from './websocket.js';
 import { applyDebugRawRequestDelta } from '../../components/yeaft-debug-helpers.js';
 import { parseYeaftSessionIdentity, readLastViewedYeaftSession } from './yeaft-session-identity.js';
 import { legacySidebarCatalogReady } from './sidebar-session-catalog.js';
@@ -391,6 +392,7 @@ export function handleMessage(store, msg) {
       store.yeaftSessionDeleteTurnSupported = msg.success === true && msg.yeaftSessionDeleteTurn === true;
       if (msg.success) {
         store.authenticated = true;
+        syncConnectionNotice(store);
 
         if (msg.sessionKey) {
           store.sessionKey = decodeKey(msg.sessionKey);
@@ -1275,6 +1277,7 @@ export function handleMessage(store, msg) {
     case 'server_updating':
       console.log('[WS] Server is updating, will reconnect automatically');
       store.connectionState = 'updating';
+      syncConnectionNotice(store);
       break;
 
     case 'context_usage':

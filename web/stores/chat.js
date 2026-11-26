@@ -675,9 +675,11 @@ export const useChatStore = defineStore('chat', {
     digitalPersonOpen: false,
     digitalPersonAgentId: null,
     digitalPersonUiEnabledByAgent: readPersonUiPreferences(),
-    connectionState: 'disconnected', // 'disconnected' | 'connecting' | 'connected' | 'reconnecting'
+    connectionState: 'disconnected', // 'disconnected' | 'connecting' | 'connected' | 'reconnecting' | 'updating'
     networkOffline: false, // browser's offline hint; not an origin reachability test
     wsVerifying: false, // open transport is being checked after a wake or network change
+    connectionNoticeVisible: false, // delayed visibility gate for transient reconnect/offline notices
+    _connectionNoticeTimer: null,
     reconnectAttempts: 0,
     maxReconnectAttempts: 10,
     reconnectTimer: null,
@@ -8176,6 +8178,7 @@ export const useChatStore = defineStore('chat', {
     connect() { wsHelpers.connect(this); },
     scheduleReconnect(fastDelay) { wsHelpers.scheduleReconnect(this, fastDelay); },
     manualReconnect() { wsHelpers.manualReconnect(this); },
+    revealConnectionNotice() { wsHelpers.revealConnectionNotice(this); },
     startHeartbeat() { wsHelpers.startHeartbeat(this); },
     stopHeartbeat() { wsHelpers.stopHeartbeat(this); },
     setupVisibilityHandler() { wsHelpers.setupVisibilityHandler(this); },
@@ -9369,6 +9372,7 @@ export const useChatStore = defineStore('chat', {
       const authStore = useAuthStore();
       authStore.logout();
       this.authenticated = false;
+      wsHelpers.resetConnectionNotice(this);
       this.sessionKey = null;
       this.agents = [];
       this.clearPluginState();

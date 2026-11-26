@@ -84,8 +84,8 @@ export default {
           <span>{{ preset.name }}</span>
         </button>
       </div>
-      <div v-if="connectionHint" class="composer-connection" role="status">
-        <span>{{ $t(connectionHint) }}</span>
+      <div v-if="visibleConnectionHint" class="composer-connection" role="status">
+        <span>{{ $t(visibleConnectionHint) }}</span>
         <button v-if="store.connectionState === 'disconnected' && !store.networkOffline"
           type="button" class="btn-ghost composer-reconnect" @click="store.manualReconnect()">{{ $t('chat.connection.reconnect') }}</button>
       </div>
@@ -464,6 +464,9 @@ export default {
       if (store.wsVerifying) return 'chat.connection.verifying';
       return '';
     });
+    const visibleConnectionHint = Vue.computed(() => (
+      connectionHint.value && store.connectionNoticeVisible !== false ? connectionHint.value : ''
+    ));
     let reuploadAfterReconnect = false;
     Vue.watch(() => store.chatHistoryConnectionGeneration, () => {
       // Cancel pending dispatch before reusing local files in a new connection.
@@ -478,7 +481,7 @@ export default {
       void attachmentQueue.uploadRows(attachments.value);
     });
     const canSend = Vue.computed(() => {
-      if (connectionHint.value || props.disabled || isCompacting.value) return false;
+      if (visibleConnectionHint.value || props.disabled || isCompacting.value) return false;
       if (sending.value) return false;
       const hasText = !!inputText.value.trim();
       const hasAttachments = attachments.value.length > 0;
@@ -602,6 +605,10 @@ export default {
 
     const send = (quickSend = null) => {
       if (!canSend.value) return;
+      if (connectionHint.value) {
+        store.revealConnectionNotice?.();
+        return;
+      }
       // Vue's ordinary send event has no preset; never treat a DOM event as configuration.
       if (!quickSend || typeof quickSend.model !== 'string') quickSend = null;
 
@@ -839,6 +846,7 @@ export default {
       SESSION_FILE_ACCEPT,
       canSend,
       connectionHint,
+      visibleConnectionHint,
       quickSends,
       canQuickSend,
       shortcutPreferences,
