@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, readdirSync, rmSync, statSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -142,7 +142,8 @@ describe('auto-route historical replay harness', () => {
     const source = join(tempRoot, 'C1');
     mkdirSync(join(source, 'sessions'), { recursive: true });
     mkdirSync(join(tempRoot, 'C1-out'), { recursive: true });
-    expect(() => assertDisjointTrees(source, join(source, 'out'))).toThrow(/must not contain/);
+    expect(() => assertDisjointTrees(source, join(source, 'out', 'nested'))).toThrow(/must not contain/);
+    expect(existsSync(join(source, 'out'))).toBe(false);
     expect(() => assertDisjointTrees(source, tempRoot)).toThrow(/must not contain/);
     expect(() => assertDisjointTrees(source, source)).toThrow(/must not contain/);
     expect(() => assertDisjointTrees(source, join(tempRoot, 'C1-out'))).not.toThrow();

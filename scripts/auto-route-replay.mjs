@@ -842,7 +842,19 @@ function loadProjection(sourceDir, outDir, log, { refresh = false } = {}) {
  * --source must be disjoint trees (case-insensitive on Windows, after realpath).
  */
 export function assertDisjointTrees(sourceDir, outDir) {
-  const real = p => { try { return realpathSync(p); } catch { return resolve(p); } };
+  // Resolve through the nearest existing ancestor so the check also works
+  // before --out exists (nothing may be created inside the source first).
+  const real = p => {
+    let head = resolve(p);
+    const tail = [];
+    for (;;) {
+      try { return join(realpathSync(head), ...tail); } catch { /* not created yet */ }
+      const parent = resolve(head, '..');
+      if (parent === head) return resolve(p);
+      tail.unshift(basename(head));
+      head = parent;
+    }
+  };
   const norm = p => (process.platform === 'win32' ? real(p).toLowerCase() : real(p));
   const a = norm(sourceDir);
   const b = norm(outDir);
@@ -887,8 +899,8 @@ async function main() {
   const sourceDir = resolve(expandHome(args.source));
   const outDir = resolve(expandHome(args.out));
   args.outDir = outDir;
-  mkdirSync(outDir, { recursive: true });
   assertDisjointTrees(sourceDir, outDir);
+  mkdirSync(outDir, { recursive: true });
   const log = args.shard ? () => {} : msg => console.log(msg);
   const label = args.label || 'run';
 
