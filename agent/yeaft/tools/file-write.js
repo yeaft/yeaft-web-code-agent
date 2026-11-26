@@ -14,24 +14,22 @@ export default defineTool({
   description: {
     en: `Write content to a file, creating it if it doesn't exist.
 
-Creates parent directories automatically. Overwrites existing files.
+Creates parent directories automatically and overwrites the entire file on disk.
 
 Guidelines:
 - Use absolute paths when possible
-- For modifying existing files, prefer FileEdit (surgical edits) over FileWrite (full overwrite)
-- Prefer modular files split by responsibility over a single oversized monolith; when creating a large file, write a focused skeleton first and fill in sections incrementally with FileEdit
-- Parent directories are created automatically
-- Content should be the complete file content`,
+- Use FileWrite only for creating new files or rewriting a short file in full; for modifying existing files — especially large ones — use FileEdit incrementally by section instead of overwriting the whole file
+- Prefer modular files split by responsibility over an oversized monolith; when a new file must be large, write a focused skeleton with FileWrite first and fill in sections incrementally with FileEdit
+- Because FileWrite replaces the whole file, content must be the complete file content (never a partial snippet)`,
     zh: `将内容写入文件，若文件不存在则创建。
 
-自动创建父目录。覆盖已存在的文件。
+自动创建父目录，并覆盖磁盘上的整个文件。
 
 使用指南：
 - 尽量使用绝对路径
-- 修改已有文件时优先使用 FileEdit（精确编辑）而非 FileWrite（全量覆盖）
-- 优先按职责拆分为适中的模块文件，避免单次写入超长单体文件；确需构建较大文件时，可先写清晰骨架再用 FileEdit 分段补充
-- 父目录自动创建
-- 内容应为完整文件内容`
+- 仅在创建新文件或整份重写简短文件时使用 FileWrite；修改已有文件（尤其是较大文件）时，请按区块分批使用 FileEdit，不要整文件覆盖
+- 优先按职责拆分为适中的模块文件，避免单次写入超长单体文件；确需新建较大文件时，先用 FileWrite 写清晰骨架，再用 FileEdit 分段补充
+- 由于 FileWrite 会替换整个文件，content 必须为完整文件内容（不要只传片段）`
   },
   parameters: {
     type: 'object',
