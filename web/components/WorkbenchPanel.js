@@ -1093,21 +1093,30 @@ export default {
       scheduleTabOverflowUpdate();
       repositionOpenMenus();
     };
+    const isElementRendered = el => {
+      if (!el || !el.isConnected) return false;
+      if (typeof window === 'undefined' || typeof window.getComputedStyle !== 'function') return true;
+      for (let node = el; node && node !== document.documentElement; node = node.parentElement) {
+        const cs = window.getComputedStyle(node);
+        if (cs.display === 'none' || cs.visibility === 'hidden') return false;
+      }
+      return true;
+    };
     const handleDocumentKeydown = event => {
-      if (event.defaultPrevented || event.key !== 'Escape') return;
-      if (tabContextMenu.visible) {
+      if (event.defaultPrevented || event.key !== 'Escape' || !store.workbenchExpanded) return;
+      if (tabContextMenu.visible && isElementRendered(tabContextMenuElement.value)) {
         event.preventDefault();
         const originatingItemId = tabContextMenu.itemId;
         tabContextMenu.visible = false;
         if (originatingItemId) focusWorkbenchItem(originatingItemId);
         return;
       }
-      if (openItemsMenu.visible) {
+      if (openItemsMenu.visible && isElementRendered(openItemsMenuElement.value)) {
         event.preventDefault();
         closeOpenItemsMenu(true);
         return;
       }
-      if (launcherOpen.value) {
+      if (launcherOpen.value && isElementRendered(launcherMenu.value)) {
         event.preventDefault();
         closeLauncher(true);
       }
@@ -1131,6 +1140,16 @@ export default {
       window.addEventListener('resize', handleViewportResize);
       scheduleTabOverflowUpdate();
     });
+
+    Vue.watch(
+      () => store.workbenchExpanded,
+      expanded => {
+        if (!expanded) {
+          closeLauncher(false);
+          closeWorkbenchMenus();
+        }
+      },
+    );
 
     Vue.watch(
       [activeWorkbenchItemId, workbenchItems],

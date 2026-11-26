@@ -1198,6 +1198,64 @@ describe('Cosmos Component & WebGL Review Regressions', () => {
     expect(wrapper.findAll('.workbench-capability-card').length).toBeGreaterThanOrEqual(4);
 
     // Clicking WorkbenchPanel's own close button collapses chatStore.workbenchExpanded
+    // Regression: open launcher then collapse Workbench via keyboard shortcut (toggleWorkbench)
+    // must clear launcher state without restoring focus and MUST NOT consume the next Escape.
+    wrapper.unmount();
+    wrapper = mount(CosmosConversationDrawer, {
+      attachTo: document.body,
+      props: {
+        agent: earthAgent,
+        planetId: 'earth',
+        allAgents: [earthAgent, saturnAgent],
+        agentToPlanet: { 'ag-earth': 'earth', 'ag-saturn': 'saturn' },
+      },
+      global: {
+        config: { globalProperties: { $t: (k) => k } },
+        stubs: {
+          MessageList: true,
+          ChatInput: true,
+          SessionSceneSelect: true,
+          YeaftConversationOutline: true,
+          WorkbenchCapabilityHost: true,
+          BrowserPanel: true,
+          NavigationIcon: true,
+        },
+      },
+    });
+    await wrapper.find('.workbench-add-btn').trigger('click');
+    await flushPromises();
+    expect(wrapper.find('.workbench-add-menu').exists()).toBe(true);
+    // Simulate Alt+W keyboard collapse while launcher is open
+    store.toggleWorkbench();
+    await flushPromises();
+    expect(store.workbenchExpanded).toBe(false);
+    expect(wrapper.find('.workbench-add-menu').exists()).toBe(false);
+    const escAfterCollapse = new KeyboardEvent('keydown', { key: 'Escape', cancelable: true, bubbles: true });
+    document.dispatchEvent(escAfterCollapse);
+    expect(escAfterCollapse.defaultPrevented).toBe(false);
+
+    // Re-open Workbench: even if an ancestor hides it via v-show (display:none) without collapsing
+    // workbenchExpanded, fallback Escape must NOT consume the key for the invisible menu.
+    store.toggleWorkbench();
+    await flushPromises();
+    await wrapper.find('.workbench-add-btn').trigger('click');
+    await flushPromises();
+    const hostEl = wrapper.find('.cosmos-workbench-host').element;
+    hostEl.style.display = 'none';
+    const escWhileAncestorHidden = new KeyboardEvent('keydown', { key: 'Escape', cancelable: true, bubbles: true });
+    document.dispatchEvent(escWhileAncestorHidden);
+    expect(escWhileAncestorHidden.defaultPrevented).toBe(false);
+    hostEl.style.display = '';
+    await flushPromises();
+
+    // When the menu IS rendered and visible (even with focus on document.body), fallback Escape consumes it.
+    document.body.focus();
+    const escWhileVisible = new KeyboardEvent('keydown', { key: 'Escape', cancelable: true, bubbles: true });
+    document.dispatchEvent(escWhileVisible);
+    await flushPromises();
+    expect(escWhileVisible.defaultPrevented).toBe(true);
+    expect(wrapper.find('.workbench-add-menu').exists()).toBe(false);
+
     await wrapper.find('.workbench-panel-close').trigger('click');
     await flushPromises();
     expect(store.workbenchExpanded).toBe(false);
