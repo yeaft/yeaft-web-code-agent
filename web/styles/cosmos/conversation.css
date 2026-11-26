@@ -111,16 +111,35 @@
   to { opacity: 1; transform: translateX(0); }
 }
 
-/* ── Compact Mobile-Yeaft Header (Single Clean Row, Zero Redundant Strip) ── */
+/* ── Compact Mobile-Yeaft Header (Weightless Atmospheric Strip, Zero Hard Dividers) ── */
 .cosmos-drawer-head {
+  position: relative;
+  z-index: 5;
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  padding: 10px 10px 9px 12px;
-  background: var(--p-head-bg);
-  border-bottom: 1px solid rgba(var(--p-accent-rgb), 0.12);
+  padding: 11px 12px 10px 14px;
+  background: linear-gradient(180deg, rgba(var(--p-tint-rgb), 0.44) 0%, rgba(var(--p-tint-rgb), 0.08) 100%);
+  border-bottom: 0;
   flex-shrink: 0;
+}
+
+.cosmos-drawer-head::after {
+  content: '';
+  position: absolute;
+  left: 16px;
+  right: 16px;
+  bottom: 0;
+  height: 1px;
+  pointer-events: none;
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    rgba(var(--p-accent-rgb), 0.18) 28%,
+    rgba(var(--p-accent-rgb), 0.14) 72%,
+    transparent 100%
+  );
 }
 
 .cosmos-drawer-head-left {
@@ -148,7 +167,7 @@
 .cosmos-drawer-name-row {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 5px;
   min-width: 0;
 }
 
@@ -160,17 +179,27 @@
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  flex: 0 1 auto;
+  min-width: 0;
 }
 
 .cosmos-drawer-planet-badge {
-  font-size: 9.5px;
-  color: var(--p-accent);
-  padding: 1px 6px;
-  border-radius: calc(var(--p-radius) * 0.7);
-  background: rgba(var(--p-accent-rgb), 0.12);
-  border: 1px solid rgba(var(--p-accent-rgb), 0.26);
+  font-size: 10.5px;
+  color: rgba(var(--p-accent-rgb), 0.78);
+  padding: 0;
+  border: 0;
+  background: transparent;
   white-space: nowrap;
-  flex-shrink: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex: 1 1 0;
+  min-width: 0;
+}
+
+.cosmos-drawer-planet-badge::before {
+  content: '·';
+  margin-right: 5px;
+  opacity: 0.48;
 }
 
 .cosmos-drawer-sub-row {
@@ -186,12 +215,12 @@
   align-items: center;
   gap: 3px;
   max-width: 48%;
-  padding: 0.5px 5.5px;
-  border-radius: calc(var(--p-radius) * 0.45);
+  padding: 1px 6px;
+  border-radius: 6px;
   background: rgba(var(--p-accent-rgb), 0.10);
-  border: 1px solid rgba(var(--p-accent-rgb), 0.22);
+  border: 0;
   color: var(--p-accent);
-  font-size: 9.5px;
+  font-size: 10px;
   line-height: 1.45;
   flex-shrink: 0;
   min-width: 0;
@@ -231,16 +260,16 @@
 }
 
 .cosmos-icon-btn {
-  width: 27px;
-  height: 27px;
-  border-radius: calc(var(--p-radius) * 0.55);
+  width: 28px;
+  height: 28px;
+  border-radius: 999px;
   display: grid;
   place-items: center;
   background: transparent;
-  border: 1px solid transparent;
+  border: 0;
   color: var(--p-muted);
   cursor: pointer;
-  transition: color 140ms ease, background 140ms ease, border-color 140ms ease;
+  transition: color 140ms ease, background 140ms ease, opacity 140ms ease;
 }
 
 .cosmos-icon-btn svg {
@@ -258,7 +287,11 @@
 .cosmos-icon-btn[aria-expanded="true"] {
   color: var(--p-ink);
   background: rgba(var(--p-accent-rgb), 0.15);
-  border-color: rgba(var(--p-accent-rgb), 0.34);
+}
+
+.cosmos-icon-btn:focus-visible {
+  outline: 1.5px solid rgba(var(--p-accent-rgb), 0.78);
+  outline-offset: 2px;
 }
 
 /* ── Embedded Sidebar History, Project Tree & Session Search (Opened via Top-Left ☰) ── */
@@ -266,12 +299,13 @@
   display: flex;
   flex-direction: column;
   max-height: 62vh;
-  border-bottom: 1px solid rgba(var(--p-accent-rgb), 0.18);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
   background: rgba(var(--p-tint-rgb), 0.92);
-  backdrop-filter: blur(22px) saturate(135%);
-  box-shadow: 0 14px 32px rgba(0, 0, 0, 0.46);
+  backdrop-filter: blur(26px) saturate(140%);
+  -webkit-backdrop-filter: blur(26px) saturate(140%);
+  box-shadow: 0 18px 40px rgba(0, 0, 0, 0.52);
   flex-shrink: 0;
-  z-index: 4;
+  z-index: 8;
 }
 
 .cosmos-history-search {
@@ -279,18 +313,18 @@
   align-items: center;
   gap: 6px;
   margin: 8px 10px 6px;
-  padding: 0 8px;
-  height: 30px;
-  border-radius: calc(var(--p-radius) * 0.6);
-  background: rgba(255, 255, 255, 0.045);
-  border: 1px solid rgba(var(--p-accent-rgb), 0.20);
-  transition: border-color 140ms ease, background 140ms ease;
+  padding: 0 10px;
+  height: 32px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.055);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  transition: border-color 150ms ease, background 150ms ease;
   flex-shrink: 0;
 }
 
 .cosmos-history-search:focus-within {
-  border-color: var(--p-border-strong);
-  background: rgba(var(--p-accent-rgb), 0.08);
+  border-color: rgba(var(--p-accent-rgb), 0.36);
+  background: rgba(var(--p-accent-rgb), 0.09);
 }
 
 .cosmos-history-search-icon {
@@ -659,12 +693,12 @@
 .cosmos-drawer .message.user .message-user-block,
 .cosmos-drawer .user-turn-block-main > .message.user .message-user-block {
   background: var(--p-user-bg) !important;
-  border: 1px solid var(--p-user-border) !important;
+  border: 1px solid rgba(255, 255, 255, 0.075) !important;
   border-radius: var(--p-radius) var(--p-radius) 4px var(--p-radius) !important;
   padding: 9px 13px !important;
   color: var(--p-ink) !important;
-  backdrop-filter: blur(6px);
-  -webkit-backdrop-filter: blur(6px);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
 }
 
@@ -734,65 +768,66 @@
 
 /* ── Deep Visual Integration of Native ChatInput inside Cosmos Drawer ── */
 .cosmos-drawer .input-area {
-  background: linear-gradient(180deg, transparent, rgba(2, 6, 16, 0.36)) !important;
-  border-top: 1px solid rgba(var(--p-accent-rgb), 0.10) !important;
-  padding: 8px 11px 11px !important;
+  position: relative;
+  z-index: 4;
+  background: linear-gradient(
+    180deg,
+    transparent 0%,
+    rgba(var(--p-tint-rgb), 0.30) 34%,
+    rgba(var(--p-tint-rgb), 0.54) 100%
+  ) !important;
+  border-top: 0 !important;
+  padding: 6px 14px calc(14px + env(safe-area-inset-bottom, 0px)) !important;
+  overflow: visible;
 }
 
-.cosmos-drawer .message-composer,
-.cosmos-drawer .input-wrapper {
-  background: var(--p-surface) !important;
-  border: 1px solid rgba(var(--p-accent-rgb), 0.22) !important;
-  border-radius: var(--p-radius) !important;
-  backdrop-filter: blur(14px);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04) !important;
+.cosmos-drawer .input-wrapper.chat-composer {
+  position: relative;
+  background:
+    radial-gradient(ellipse 68% 72px at 50% -20px, rgba(var(--p-accent-rgb), 0.13), transparent 72%),
+    linear-gradient(172deg, rgba(var(--p-tint-rgb), 0.44) 0%, rgba(3, 7, 16, 0.68) 100%) !important;
+  border: 1px solid rgba(255, 255, 255, 0.06) !important;
+  border-radius: calc(var(--p-radius) + 6px) !important;
+  padding: 10px 12px 9px 14px !important;
+  gap: 6px !important;
+  backdrop-filter: blur(24px) saturate(142%);
+  -webkit-backdrop-filter: blur(24px) saturate(142%);
+  box-shadow:
+    0 14px 38px rgba(0, 0, 0, 0.44),
+    0 0 28px rgba(var(--p-accent-rgb), 0.08),
+    inset 0 1px 0 rgba(255, 255, 255, 0.06) !important;
+  overflow: visible;
+  transition: border-color 200ms ease, box-shadow 220ms var(--c-ease) !important;
 }
 
-.cosmos-drawer .message-composer:focus-within,
-.cosmos-drawer .input-wrapper:focus-within {
-  border-color: var(--p-border-strong) !important;
-  box-shadow: 0 0 0 1px rgba(var(--p-accent-rgb), 0.18), 0 0 20px rgba(var(--p-accent-rgb), 0.10) !important;
+.cosmos-drawer .input-wrapper.chat-composer::before {
+  content: '';
+  position: absolute;
+  top: -1px;
+  left: 14%;
+  right: 14%;
+  height: 1px;
+  pointer-events: none;
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    rgba(var(--p-accent-rgb), 0.52) 50%,
+    transparent 100%
+  );
+  opacity: 0.72;
+  transition: opacity 200ms ease;
 }
 
-.cosmos-drawer textarea {
-  color: var(--p-ink) !important;
-  font-size: 13px !important;
-  line-height: 1.5 !important;
+.cosmos-drawer .input-wrapper.chat-composer:focus-within {
+  border-color: rgba(var(--p-accent-rgb), 0.14) !important;
+  box-shadow:
+    0 18px 46px rgba(0, 0, 0, 0.52),
+    0 0 36px rgba(var(--p-accent-rgb), 0.14),
+    inset 0 1px 0 rgba(255, 255, 255, 0.09) !important;
 }
 
-.cosmos-drawer textarea::placeholder {
-  color: var(--p-faint) !important;
-}
-
-.cosmos-drawer .send-btn,
-.cosmos-drawer .composer-send-btn {
-  background: var(--p-accent) !important;
-  color: var(--p-send-ink) !important;
-}
-
-.cosmos-drawer .yeaft-composer-model,
-.cosmos-drawer .yeaft-composer-effort,
-.cosmos-drawer .session-scene-trigger {
-  background: rgba(255, 255, 255, 0.04) !important;
-  border: 1px solid rgba(var(--p-accent-rgb), 0.20) !important;
-  color: var(--p-muted) !important;
-  border-radius: calc(var(--p-radius) * 0.55) !important;
-}
-
-.cosmos-drawer .yeaft-composer-model:hover,
-.cosmos-drawer .yeaft-composer-effort:hover,
-.cosmos-drawer .session-scene-trigger:hover {
-  color: var(--p-ink) !important;
-  border-color: var(--p-border-strong) !important;
-  background: rgba(var(--p-accent-rgb), 0.14) !important;
-}
-
-.cosmos-drawer .yeaft-model-dropdown,
-.cosmos-drawer .session-scene-menu {
-  background: rgba(5, 11, 24, 0.94) !important;
-  border: 1px solid rgba(var(--p-accent-rgb), 0.28) !important;
-  backdrop-filter: blur(22px);
-  color: var(--p-ink) !important;
+.cosmos-drawer .input-wrapper.chat-composer:focus-within::before {
+  opacity: 1;
 }
 
 /* ── Embedded Real Workbench Overlay Inside Planetary Drawer ── */
@@ -867,6 +902,10 @@
   }
   .cosmos-drawer::after {
     display: none;
+  }
+  .cosmos-drawer-agent {
+    flex-shrink: 0;
+    max-width: 58%;
   }
   .cosmos-drawer-widen-btn,
   .cosmos-workbench-host .workbench-maximize-btn {

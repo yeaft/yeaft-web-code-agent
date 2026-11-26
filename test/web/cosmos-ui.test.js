@@ -1611,4 +1611,502 @@ describe('Cosmos Component & WebGL Review Regressions', () => {
       host.remove();
     }
   });
+
+  it('localizes Quick Composer scenes via yeaft.session.scene.*, filters by agent capability, and renders unified upward tuning across Quick Composer & Drawer', async () => {
+    vi.stubGlobal('Vue', Vue);
+    const { default: zhCN } = await import('../../web/i18n/zh-CN.js');
+    const { default: en } = await import('../../web/i18n/en.js');
+    const { zhCN: cosmosZh, en: cosmosEn } = await import('../../web/i18n/cosmos.js');
+    const zhDict = { ...zhCN, ...cosmosZh };
+    const enDict = { ...en, ...cosmosEn };
+    const tZh = (k) => zhDict[k] ?? k;
+    const tEn = (k) => enDict[k] ?? k;
+
+    const updateYeaftSessionScene = vi.fn().mockResolvedValue({ ok: true });
+    const switchYeaftModel = vi.fn().mockResolvedValue({ ok: true });
+    const store = Vue.reactive({
+      currentView: 'yeaft',
+      currentAgent: 'ag-earth',
+      connectionState: 'connected',
+      yeaftActiveSessionFilter: 'sess-1',
+      yeaftModel: 'copilot/gemini-4-neon',
+      yeaftModelEffort: 'medium',
+      yeaftAvailableModels: [
+        { id: 'copilot/gemini-4-neon', label: 'gemini-4-neon', provider: 'copilot', effortOptions: ['medium', 'high', 'xhigh'] },
+      ],
+      llmConfig: {
+        'ag-saturn': {
+          agentConfig: {
+            primaryModel: 'copilot/gpt-6.2-sol',
+            defaultEffort: 'xhigh',
+            availableModels: [
+              { id: 'copilot/gpt-6.2-sol', label: 'gpt-6.2-sol', provider: 'copilot', effortOptions: ['medium', 'xhigh', 'max'] },
+            ],
+          },
+        },
+      },
+      yeaftHistorySearchState: { query: '', senderKey: 'user', loading: false, results: [], hasMore: false },
+      workbenchExpanded: false,
+      activeSessionRoute: { runtimeProvider: 'yeaft', agentId: 'ag-earth', sessionId: 'sess-1' },
+      sessionProjects: [],
+      hasAgentCapability: (agentId, cap) => {
+        if (agentId === 'ag-earth') return cap === 'session_scenes' || cap === 'session_scene_frontend';
+        return cap === 'session_scenes';
+      },
+      sendWsMessage: vi.fn(() => true),
+      sendYeaftAutoRouteMessage: vi.fn().mockResolvedValue({ ok: true, sessionId: 'sess-1', decision: 'matched' }),
+      updateYeaftSessionScene,
+      switchYeaftModel,
+    });
+    const sessionRow = Vue.reactive({
+      id: 'sess-1',
+      name: 'Cosmos UI',
+      agentId: 'ag-earth',
+      sceneId: 'general',
+      roster: [{ id: 'vp-1' }],
+    });
+    vi.stubGlobal('Pinia', {
+      defineStore: () => () => ({}),
+      useChatStore: () => store,
+      useSessionsStore: () => ({
+        activeSessionId: 'sess-1',
+        sessionById: (sid, aid) => (sid === 'sess-1' && aid === 'ag-earth' ? sessionRow : null),
+      }),
+      useVpStore: () => ({}),
+    });
+
+    const { default: CosmosQuickComposer } = await import('../../web/components/cosmos/CosmosQuickComposer.js');
+    const { default: CosmosComposerTuning } = await import('../../web/components/cosmos/CosmosComposerTuning.js');
+    const { default: CosmosConversationDrawer } = await import('../../web/components/cosmos/CosmosConversationDrawer.js');
+
+    // 1. Quick Composer localized zh-CN scenes (no raw English IDs) + capability filter
+    wrapper = mount(CosmosQuickComposer, {
+      props: { agent: { id: 'ag-earth', name: 'Earth', online: true, liveSessions: [], sessions: [] }, planetId: 'earth' },
+      global: {
+        config: { globalProperties: { $t: tZh } },
+        stubs: {
+          ChatInput: { template: '<div><slot name="actions-start" /><slot name="actions-end-before" /></div>' },
+        },
+      },
+    });
+    const labelsZh = wrapper.vm.sceneOptions.map((o) => o.label);
+    expect(labelsZh).toContain('AI 自动');
+    expect(labelsZh).toContain('不指定场景');
+    expect(labelsZh).toContain('软件开发');
+    expect(labelsZh).toContain('前端开发');
+    expect(labelsZh).toContain('内容创作');
+    expect(labelsZh).toContain('投资');
+    expect(labelsZh).not.toContain('short-video');
+    expect(labelsZh).not.toContain('software');
+    expect(labelsZh).not.toContain('视频剪辑'); // excluded when capability not advertised
+
+    // Open unified tuning popover, verify scene chips + Escape closes ONLY popover
+    const trigger = wrapper.find('.cosmos-tune-trigger');
+    expect(trigger.exists()).toBe(true);
+    await trigger.trigger('click');
+    expect(wrapper.find('.cosmos-tune-popover').exists()).toBe(true);
+    const chipTexts = wrapper.findAll('.cosmos-tune-chip').map((c) => c.text());
+    expect(chipTexts).toContain('前端开发');
+    expect(chipTexts).toContain('内容创作');
+    await wrapper.findAll('.cosmos-tune-chip').find((c) => c.text() === '前端开发').trigger('click');
+    expect(wrapper.vm.selectedScene).toBe('frontend');
+    expect(trigger.text()).toContain('前端开发');
+
+    const escEvent = new KeyboardEvent('keydown', { key: 'Escape', cancelable: true, bubbles: true });
+    wrapper.find('.cosmos-tune').element.dispatchEvent(escEvent);
+    await flushPromises();
+    expect(escEvent.defaultPrevented).toBe(true);
+    expect(wrapper.find('.cosmos-tune-popover').exists()).toBe(false);
+    expect(wrapper.emitted('close')).toBeUndefined();
+    wrapper.unmount();
+
+    // 2. Quick Composer EN localization check
+    wrapper = mount(CosmosQuickComposer, {
+      props: { agent: { id: 'ag-earth', name: 'Earth', online: true, liveSessions: [], sessions: [] }, planetId: 'earth' },
+      global: {
+        config: { globalProperties: { $t: tEn } },
+        stubs: {
+          ChatInput: { template: '<div><slot name="actions-start" /><slot name="actions-end-before" /></div>' },
+        },
+      },
+    });
+    const labelsEn = wrapper.vm.sceneOptions.map((o) => o.label);
+    expect(labelsEn).toContain('AI Auto');
+    expect(labelsEn).toContain('Software');
+    expect(labelsEn).toContain('Frontend');
+    expect(labelsEn).toContain('Content creation');
+    wrapper.unmount();
+
+    // 3. Drawer uses per-agent llmConfig fallback, unified tuning popover updates session scene,
+    //    and closes popover when Workbench opens
+    wrapper = mount(CosmosConversationDrawer, {
+      props: {
+        agent: { id: 'ag-earth', name: 'Earth', online: true, sessions: [{ id: 'sess-1', agentId: 'ag-earth', runtimeProvider: 'yeaft', title: 'Cosmos UI', status: 'idle', updatedLabel: 'now' }] },
+        planetId: 'earth',
+      },
+      global: {
+        config: { globalProperties: { $t: tZh } },
+        stubs: {
+          MessageList: true,
+          WorkbenchPanel: true,
+          YeaftConversationOutline: true,
+          ChatInput: { template: '<div><slot name="actions-start" :in-action-menu="false" /><slot name="actions-end-before" /></div>' },
+        },
+      },
+    });
+    const drawerTrigger = wrapper.find('.cosmos-tune-trigger');
+    expect(drawerTrigger.text()).toContain('gemini-4-neon');
+    await drawerTrigger.trigger('click');
+    expect(wrapper.find('.cosmos-tune-popover').exists()).toBe(true);
+    const frontendChip = wrapper.findAll('.cosmos-tune-chip').find((c) => c.text() === '前端开发');
+    expect(frontendChip).toBeTruthy();
+    await frontendChip.trigger('click');
+    await flushPromises();
+    expect(updateYeaftSessionScene).toHaveBeenCalledWith('sess-1', 'frontend', 'ag-earth');
+
+    // Opening Workbench must cleanly close the open tuning popover
+    store.workbenchExpanded = true;
+    await flushPromises();
+    expect(wrapper.find('.cosmos-tune-popover').exists()).toBe(false);
+    wrapper.unmount();
+
+    // 4. CosmosComposerTuning emits open-llm-config and closes immediately on Configure click
+    wrapper = mount(CosmosComposerTuning, {
+      props: {
+        modelRows: [{ modelRef: 'copilot/gemini-4-neon', label: 'gemini-4-neon', model: { id: 'copilot/gemini-4-neon', provider: 'copilot' } }],
+        activeModel: 'copilot/gemini-4-neon',
+        activeModelLabel: 'gemini-4-neon',
+        effortOptions: ['medium', 'high'],
+        activeEffort: 'medium',
+      },
+      global: { config: { globalProperties: { $t: tZh } } },
+    });
+    await wrapper.find('.cosmos-tune-trigger').trigger('click');
+    await wrapper.find('.cosmos-tune-config-link').trigger('click');
+    expect(wrapper.emitted('open-llm-config')).toHaveLength(1);
+    expect(wrapper.find('.cosmos-tune-popover').exists()).toBe(false);
+    wrapper.unmount();
+
+    // 5. CSS preserves .attachment-item.has-error visual distinction in Cosmos composers
+    const composerCss = readFileSync(resolve(process.cwd(), 'web/styles/cosmos/composer.css'), 'utf8');
+    expect(composerCss).toMatch(/\.cosmos-composer-surface\s+\.attachment-item\.has-error\b/);
+    expect(composerCss).toMatch(/\.cosmos-composer-surface\s+\.attachment-item\.has-error\s+\.attachment-status\b/);
+  });
+
+  it('enforces Quick Composer session_scenes gating, Drawer pending-model race safety, Workbench inertness, ARIA radiogroup keyboard nav & deferred scene races', async () => {
+    vi.stubGlobal('Vue', Vue);
+    const { default: zhCN } = await import('../../web/i18n/zh-CN.js');
+    const { zhCN: cosmosZh } = await import('../../web/i18n/cosmos.js');
+    const zhDict = { ...zhCN, ...cosmosZh };
+    const tZh = (k) => zhDict[k] ?? k;
+
+    // 1. Quick Composer: auto-route-only agent (no session_scenes) never renders or sends explicit scene;
+    //    capability loss after selecting a scene resets and revalidates to 'auto' at send time.
+    const capState = Vue.reactive({ hasScenes: false, hasFrontend: true });
+    const sendAutoRoute = vi.fn().mockResolvedValue({ ok: true, sessionId: 'sess-1', decision: 'matched' });
+    const quickStore = Vue.reactive({
+      currentAgent: 'ag-earth',
+      yeaftModel: 'copilot/gemini-4-neon',
+      yeaftModelEffort: 'medium',
+      yeaftAvailableModels: [
+        { id: 'copilot/gemini-4-neon', label: 'gemini-4-neon', provider: 'copilot', effortOptions: ['medium', 'high'] },
+      ],
+      llmConfig: {},
+      hasAgentCapability: (_aid, cap) => {
+        if (cap === 'session_scenes') return capState.hasScenes;
+        if (cap === 'session_scene_frontend') return capState.hasFrontend;
+        return false;
+      },
+      sendWsMessage: vi.fn(() => true),
+      sendYeaftAutoRouteMessage: sendAutoRoute,
+    });
+    vi.stubGlobal('Pinia', {
+      defineStore: () => () => ({}),
+      useChatStore: () => quickStore,
+      useSessionsStore: () => ({}),
+      useVpStore: () => ({}),
+    });
+
+    const { default: CosmosQuickComposer } = await import('../../web/components/cosmos/CosmosQuickComposer.js');
+    wrapper = mount(CosmosQuickComposer, {
+      props: { agent: { id: 'ag-earth', name: 'Earth', online: true, liveSessions: [], sessions: [] }, planetId: 'earth' },
+      global: {
+        config: { globalProperties: { $t: tZh } },
+        stubs: { ChatInput: { template: '<div><slot name="actions-end-before" /></div>' } },
+      },
+    });
+    expect(wrapper.vm.supportsExplicitScenes).toBe(false);
+    expect(wrapper.vm.sceneOptions).toEqual([]);
+    await wrapper.find('.cosmos-tune-trigger').trigger('click');
+    expect(wrapper.findAll('.cosmos-tune-chip')).toHaveLength(0);
+    wrapper.vm.selectScene('software');
+    expect(wrapper.vm.selectedScene).toBe('auto');
+    await wrapper.vm.handleQuickSend('Hello auto-route');
+    expect(sendAutoRoute).toHaveBeenLastCalledWith(expect.objectContaining({ preferredSceneId: 'auto' }));
+
+    // Enable session_scenes, pick frontend, then revoke session_scenes before sending -> must revert to 'auto'
+    capState.hasScenes = true;
+    await flushPromises();
+    expect(wrapper.vm.sceneOptions.some((o) => o.id === 'frontend')).toBe(true);
+    wrapper.vm.selectScene('frontend');
+    expect(wrapper.vm.selectedScene).toBe('frontend');
+    capState.hasScenes = false;
+    await flushPromises();
+    expect(wrapper.vm.selectedScene).toBe('auto');
+    await wrapper.vm.handleQuickSend('After capability loss');
+    expect(sendAutoRoute).toHaveBeenLastCalledWith(expect.objectContaining({ preferredSceneId: 'auto' }));
+    wrapper.unmount();
+
+    // 2. Drawer: pending model preview prevents effort click reverting to old model, requires resolved Session,
+    //    Workbench makes chat inert & blocks keyboard reopening, ARIA roving tabindex + Arrow nav,
+    //    and deferred scene requests preserve focus, handle unconfirmed/late-ack/rejection & stale session switch.
+    const modelA = { id: 'model-a', label: 'model-a', provider: 'copilot', effortOptions: ['low', 'medium'] };
+    const modelB = { id: 'model-b', label: 'model-b', provider: 'copilot', effortOptions: ['medium', 'xhigh', 'max'] };
+    const pendingModelMap = Vue.reactive({});
+    const modelCalls = [];
+    const switchYeaftModel = vi.fn((modelId, sessionId, effort) => {
+      const key = `ag-earth\u001f${sessionId}`;
+      pendingModelMap[key] = { model: modelId, modelEffort: effort || null };
+      let resolve;
+      const promise = new Promise((r) => { resolve = r; });
+      modelCalls.push({ modelId, sessionId, effort, resolve, key });
+      return promise;
+    });
+
+    const sceneCalls = [];
+    const updateYeaftSessionScene = vi.fn((sessionId, sceneId, agentId) => {
+      let resolve;
+      let reject;
+      const promise = new Promise((res, rej) => { resolve = res; reject = rej; });
+      sceneCalls.push({ sessionId, sceneId, agentId, resolve, reject });
+      return promise;
+    });
+
+    const sessionsMap = Vue.reactive({
+      'sess-1': Vue.reactive({ id: 'sess-1', name: 'Session One', agentId: 'ag-earth', sceneId: 'general', config: { model: 'copilot/model-a', modelEffort: 'low' }, roster: [{ id: 'vp-1' }] }),
+      'sess-2': Vue.reactive({ id: 'sess-2', name: 'Session Two', agentId: 'ag-earth', sceneId: 'software', config: { model: 'copilot/model-a', modelEffort: 'low' }, roster: [{ id: 'vp-1' }] }),
+    });
+
+    const drawerStore = Vue.reactive({
+      currentView: 'yeaft',
+      currentAgent: 'ag-earth',
+      connectionState: 'connected',
+      yeaftActiveSessionFilter: 'sess-1',
+      yeaftModel: 'copilot/model-a',
+      yeaftModelEffort: 'low',
+      yeaftAvailableModels: [modelA, modelB],
+      llmConfig: {},
+      yeaftHistorySearchState: { query: '', senderKey: 'user', loading: false, results: [], hasMore: false },
+      workbenchExpanded: false,
+      activeSessionRoute: { runtimeProvider: 'yeaft', agentId: 'ag-earth', sessionId: 'sess-1' },
+      sessionProjects: [],
+      hasAgentCapability: (_aid, cap) => cap === 'session_scenes' || cap === 'session_scene_frontend',
+      sessionModelSelectionFor: (sid, aid) => pendingModelMap[`${aid}\u001f${sid}`] || null,
+      switchYeaftModel,
+      updateYeaftSessionScene,
+    });
+    vi.stubGlobal('Pinia', {
+      defineStore: () => () => ({}),
+      useChatStore: () => drawerStore,
+      useSessionsStore: () => ({
+        get activeSessionId() { return drawerStore.yeaftActiveSessionFilter; },
+        sessionById: (sid, aid) => (aid === 'ag-earth' ? (sessionsMap[sid] || null) : null),
+      }),
+      useVpStore: () => ({}),
+    });
+
+    const { default: CosmosConversationDrawer } = await import('../../web/components/cosmos/CosmosConversationDrawer.js');
+    wrapper = mount(CosmosConversationDrawer, {
+      attachTo: document.body,
+      props: {
+        agent: {
+          id: 'ag-earth',
+          name: 'Earth',
+          online: true,
+          sessions: [
+            { id: 'sess-1', agentId: 'ag-earth', runtimeProvider: 'yeaft', title: 'Session One', status: 'idle', updatedLabel: 'now' },
+            { id: 'sess-2', agentId: 'ag-earth', runtimeProvider: 'yeaft', title: 'Session Two', status: 'idle', updatedLabel: 'now' },
+          ],
+        },
+        planetId: 'earth',
+      },
+      global: {
+        config: { globalProperties: { $t: tZh } },
+        stubs: {
+          MessageList: true,
+          WorkbenchPanel: true,
+          YeaftConversationOutline: true,
+          ChatInput: { template: '<div><slot name="actions-end-before" /></div>' },
+        },
+      },
+    });
+
+    // Open tuning via ArrowDown on trigger -> focus moves into popover & roving tabindex has exactly 1 tabbable radio per group
+    const triggerEl = wrapper.find('.cosmos-tune-trigger').element;
+    triggerEl.focus();
+    await wrapper.find('.cosmos-tune').trigger('keydown', { key: 'ArrowDown' });
+    await flushPromises();
+    expect(wrapper.find('.cosmos-tune-popover').exists()).toBe(true);
+    expect(wrapper.find('.cosmos-tune-popover').element.contains(document.activeElement)).toBe(true);
+    const modelRadios = wrapper.findAll('.cosmos-tune-model-row');
+    expect(modelRadios.filter((r) => r.attributes('tabindex') === '0')).toHaveLength(1);
+    // Home on the already-checked first model preserves non-default effort and does NOT issue a Drawer write
+    sessionsMap['sess-1'].config = { model: 'copilot/model-a', modelEffort: 'medium' };
+    await flushPromises();
+    const callsBeforeHome = modelCalls.length;
+    await modelRadios[0].trigger('keydown', { key: 'Home' });
+    await flushPromises();
+    expect(document.activeElement).toBe(modelRadios[0].element);
+    expect(modelCalls).toHaveLength(callsBeforeHome);
+    expect(wrapper.vm.activeEffort).toBe('medium');
+
+    // ArrowDown on the focused model radio moves focus, updates roving tabindex, AND immediately selects model-b
+    // (WAI-ARIA APG standalone radiogroup: no click needed; first write is still pending!)
+    await modelRadios[0].trigger('keydown', { key: 'ArrowDown' });
+    await flushPromises();
+    expect(document.activeElement).toBe(modelRadios[1].element);
+    expect(modelRadios[1].attributes('tabindex')).toBe('0');
+    expect(modelRadios[1].attributes('aria-checked')).toBe('true');
+    expect(modelCalls).toHaveLength(1);
+    expect(modelCalls[0]).toMatchObject({ modelId: 'copilot/model-b', sessionId: 'sess-1' });
+    const segButtons = wrapper.findAll('.cosmos-tune-seg');
+    expect(segButtons.map((b) => b.text())).toEqual(['中', '超高', '最高']);
+    // Click '最高' ('max') BEFORE first write settles -> second write MUST target 'copilot/model-b', NOT old 'copilot/model-a'
+    await segButtons[2].trigger('click');
+    await flushPromises();
+    expect(modelCalls).toHaveLength(2);
+    expect(modelCalls[1]).toMatchObject({ modelId: 'copilot/model-b', sessionId: 'sess-1', effort: 'max' });
+    delete pendingModelMap['ag-earth\u001fsess-1'];
+    sessionsMap['sess-1'].config = { model: 'copilot/model-b', modelEffort: 'max' };
+    modelCalls[0].resolve({ ok: true, superseded: true });
+    modelCalls[1].resolve({ ok: true, superseded: false });
+    await flushPromises();
+
+    // Deferred Drawer scene change: preserves focus while pending, guards arrow/click during pending,
+    // and handles unconfirmed + late snapshot ack + rejection
+    const frontendChip = wrapper.findAll('.cosmos-tune-chip').find((c) => c.text() === '前端开发');
+    frontendChip.element.focus();
+    await frontendChip.trigger('click');
+    await flushPromises();
+    expect(sceneCalls).toHaveLength(1);
+    expect(frontendChip.attributes('aria-busy')).toBe('true');
+    expect(frontendChip.attributes('aria-disabled')).toBe('true');
+    expect(document.activeElement).toBe(frontendChip.element); // focus NEVER drops to body!
+    // Arrow navigation and clicks during pending scene write must NOT fire a duplicate scene update
+    await frontendChip.trigger('keydown', { key: 'ArrowRight' });
+    const writingChip = wrapper.findAll('.cosmos-tune-chip').find((c) => c.text() === '写作');
+    await writingChip.trigger('click');
+    expect(sceneCalls).toHaveLength(1);
+    // Unconfirmed response shows error; late snapshot confirmation clears it
+    sceneCalls[0].resolve({ ok: false, error: { code: 'scene_unconfirmed' } });
+    await flushPromises();
+    expect(wrapper.find('.cosmos-tune-error').exists()).toBe(true);
+    sessionsMap['sess-1'].sceneId = 'frontend';
+    await flushPromises();
+    expect(wrapper.find('.cosmos-tune-error').exists()).toBe(false);
+
+    // Rejection shows updateError
+    await writingChip.trigger('click');
+    await flushPromises();
+    expect(sceneCalls).toHaveLength(2);
+    sceneCalls[1].reject(new Error('network fail'));
+    await flushPromises();
+    expect(wrapper.find('.cosmos-tune-error').exists()).toBe(true);
+
+    // Stale completion after switching session MUST NOT pollute sess-2
+    const softwareChip = wrapper.findAll('.cosmos-tune-chip').find((c) => c.text() === '软件开发');
+    await softwareChip.trigger('click');
+    await flushPromises();
+    expect(sceneCalls).toHaveLength(3);
+    drawerStore.yeaftActiveSessionFilter = 'sess-2';
+    await flushPromises();
+    expect(wrapper.find('.cosmos-tune-popover').exists()).toBe(false);
+    sceneCalls[2].resolve({ ok: false, error: { code: 'failed' } });
+    await flushPromises();
+    await wrapper.find('.cosmos-tune-trigger').trigger('click');
+    await flushPromises();
+    expect(wrapper.find('.cosmos-tune-error').exists()).toBe(false);
+
+    // Workbench active makes .cosmos-drawer-chat inert, blocks keyboard reopening, and does NOT steal Escape
+    drawerStore.workbenchExpanded = true;
+    await flushPromises();
+    expect(wrapper.find('.cosmos-tune-popover').exists()).toBe(false);
+    expect(wrapper.find('.cosmos-drawer-chat').attributes('inert')).toBeDefined();
+    expect(wrapper.find('.cosmos-drawer-chat').attributes('aria-hidden')).toBe('true');
+    expect(wrapper.find('.cosmos-tune-trigger').attributes('disabled')).toBeDefined();
+    await wrapper.find('.cosmos-tune').trigger('keydown', { key: 'ArrowDown' });
+    await wrapper.find('.cosmos-tune-trigger').trigger('click');
+    await flushPromises();
+    expect(wrapper.find('.cosmos-tune-popover').exists()).toBe(false);
+    const wbEsc = new KeyboardEvent('keydown', { key: 'Escape', cancelable: true });
+    document.dispatchEvent(wbEsc);
+    expect(wbEsc.defaultPrevented).toBe(false);
+
+    // Unresolved session (activeGroup === null) disables model/effort writes cleanly
+    drawerStore.workbenchExpanded = false;
+    drawerStore.yeaftActiveSessionFilter = 'sess-unresolved';
+    await flushPromises();
+    const beforeCalls = switchYeaftModel.mock.calls.length;
+    wrapper.vm.selectModel('copilot/model-b', 'max');
+    await flushPromises();
+    expect(switchYeaftModel.mock.calls.length).toBe(beforeCalls);
+    wrapper.unmount();
+
+    // 3. visualViewport-only shrink (mobile soft keyboard keeping fixed layout anchor below visible bottom)
+    //    must switch to the viewport-contained fallback so both popover edges stay strictly inside visualViewport.
+    const { default: CosmosComposerTuning } = await import('../../web/components/cosmos/CosmosComposerTuning.js');
+    const anchorHost = document.createElement('div');
+    anchorHost.className = 'cosmos-quick-composer';
+    anchorHost.getBoundingClientRect = () => ({ left: 20, top: 680, width: 320, height: 140, right: 340, bottom: 820 });
+    document.body.appendChild(anchorHost);
+    const prevVV = window.visualViewport;
+    const vvMock = {
+      offsetTop: 0,
+      height: 360,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+    };
+    Object.defineProperty(window, 'visualViewport', { value: vvMock, configurable: true });
+    try {
+      wrapper = mount(CosmosComposerTuning, {
+        attachTo: anchorHost,
+        props: {
+          modelRows: [
+            { modelRef: 'copilot/model-a', label: 'model-a', model: { id: 'model-a', provider: 'copilot' } },
+            { modelRef: 'copilot/model-b', label: 'model-b', model: { id: 'model-b', provider: 'copilot' } },
+          ],
+          activeModel: 'copilot/model-a',
+          activeModelLabel: 'model-a',
+          effortOptions: ['medium', 'high'],
+          activeEffort: 'high',
+        },
+        global: { config: { globalProperties: { $t: tZh } } },
+      });
+      await wrapper.find('.cosmos-tune-trigger').trigger('click');
+      await flushPromises();
+      wrapper.vm.updatePopoverBounds();
+      await flushPromises();
+      const popEl = wrapper.find('.cosmos-tune-popover').element;
+      expect(popEl.style.bottom).toBe('auto');
+      const topPx = Number.parseFloat(popEl.style.top);
+      const maxHPx = Number.parseFloat(popEl.style.maxHeight);
+      const renderedTop = 680 + topPx;
+      expect(renderedTop).toBeGreaterThanOrEqual(0);
+      expect(renderedTop).toBeLessThanOrEqual(20);
+      expect(renderedTop + maxHPx).toBeLessThanOrEqual(vvMock.height);
+
+      // Home on the already-checked first model in Quick Composer preserves custom effort ('high') and emits nothing
+      const firstRow = wrapper.findAll('.cosmos-tune-model-row')[0];
+      firstRow.element.focus();
+      await firstRow.trigger('keydown', { key: 'Home' });
+      await flushPromises();
+      expect(wrapper.emitted('select-model')).toBeUndefined();
+      expect(wrapper.props('activeEffort')).toBe('high');
+    } finally {
+      wrapper?.unmount();
+      wrapper = null;
+      Object.defineProperty(window, 'visualViewport', { value: prevVV, configurable: true });
+      anchorHost.remove();
+    }
+  });
 });
