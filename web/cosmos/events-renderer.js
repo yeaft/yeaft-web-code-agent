@@ -58,19 +58,24 @@ function drawFeatheredShell(ctx, x, y, rOut, innerRgb, midRgb, outerRgb, alpha) 
   ctx.fill();
 }
 
-export function drawCosmicEventCanvas(ctx, w, h, active, pos, solarSunScreen) {
+export function drawCosmicEventCanvas(ctx, w, h, active, pos) {
   if (!active || !pos) return;
   const def = active.def;
   const p = Math.max(0, Math.min(1, active.elapsed / active.duration));
-  const S = Math.min(w, h) * 0.23 * pos.scale;
+  const scale = Math.max(0.14, pos.scale || 1);
+  const S = Math.min(w, h) * 0.23 * scale;
   const x = pos.x;
   const y = pos.y;
+  const focus = typeof pos.focusProgress === 'number' ? pos.focusProgress : (active.observing ? 1 : 0);
 
-  // Smooth fade-out tail on final 8% so single-shot events dissolve naturally into quiet space
+  // Smooth fade-in (first 4%) & fade-out tail (final 10%) so distant events emerge and dissolve naturally
+  const startFade = p < 0.04 ? Math.max(0.15, p / 0.04) : 1;
   const endFade = p > 0.90 ? Math.max(0, 1 - (p - 0.90) / 0.10) : 1;
+  // Slightly soften brilliance when far away so distant events sit naturally in deep space
+  const depthAtten = 0.72 + focus * 0.28;
 
   ctx.save();
-  ctx.globalAlpha = endFade;
+  ctx.globalAlpha = startFade * endFade * depthAtten;
   ctx.globalCompositeOperation = 'lighter';
 
   if (def.id === 'supernova') {
@@ -292,26 +297,43 @@ export function drawCosmicEventCanvas(ctx, w, h, active, pos, solarSunScreen) {
       drawFeatheredShell(ctx, x, y, r * 1.05, '132, 244, 226', '255, 212, 136', '156, 132, 255', 0.55 * (1 - kp * 0.7));
     }
   } else if (def.id === 'solar-flare') {
-    const sunX = solarSunScreen?.x || x;
-    const sunY = solarSunScreen?.y || y;
-    const sunR = (solarSunScreen?.r || 54) * pos.scale;
+    // Distant stellar superflare around a far-away yellow-white star (never overwrites our foreground Sun)
+    const starR = S * 0.22;
     const erupt = Math.sin(p * Math.PI);
-    const flareR = sunR * (1.1 + p * 3.8);
+    const flareR = starR * (1.25 + p * 3.9);
     const baseAng = -0.68;
-    const cme = ctx.createRadialGradient(sunX, sunY, sunR * 0.8, sunX, sunY, flareR);
-    cme.addColorStop(0, `rgba(255, 244, 200, ${0.72 * erupt})`);
-    cme.addColorStop(0.45, `rgba(255, 134, 48, ${0.44 * erupt})`);
+
+    const corona = ctx.createRadialGradient(x, y, starR * 0.2, x, y, starR * 2.8);
+    corona.addColorStop(0, 'rgba(255, 250, 232, 0.96)');
+    corona.addColorStop(0.28, 'rgba(255, 198, 108, 0.72)');
+    corona.addColorStop(0.65, 'rgba(255, 118, 42, 0.24)');
+    corona.addColorStop(1, 'rgba(255, 72, 20, 0)');
+    ctx.fillStyle = corona;
+    ctx.beginPath(); ctx.arc(x, y, starR * 2.8, 0, Math.PI * 2); ctx.fill();
+
+    const cme = ctx.createRadialGradient(x, y, starR * 0.72, x, y, flareR);
+    cme.addColorStop(0, `rgba(255, 244, 200, ${0.76 * erupt})`);
+    cme.addColorStop(0.45, `rgba(255, 134, 48, ${0.48 * erupt})`);
     cme.addColorStop(1, 'rgba(255, 68, 24, 0)');
     ctx.fillStyle = cme;
-    ctx.beginPath(); ctx.moveTo(sunX, sunY); ctx.arc(sunX, sunY, flareR, baseAng - 0.62, baseAng + 0.62); ctx.closePath(); ctx.fill();
+    ctx.beginPath(); ctx.moveTo(x, y); ctx.arc(x, y, flareR, baseAng - 0.64, baseAng + 0.64); ctx.closePath(); ctx.fill();
+
     ctx.beginPath();
-    ctx.arc(sunX + Math.cos(baseAng) * sunR * 0.92, sunY + Math.sin(baseAng) * sunR * 0.92, sunR * (0.45 + erupt * 1.15), baseAng - 0.85, baseAng + 0.85);
-    ctx.strokeStyle = `rgba(255, 168, 72, ${0.78 * erupt})`; ctx.lineWidth = 4.2 * pos.scale; ctx.stroke();
+    ctx.arc(x + Math.cos(baseAng) * starR * 0.92, y + Math.sin(baseAng) * starR * 0.92, starR * (0.50 + erupt * 1.35), baseAng - 0.85, baseAng + 0.85);
+    ctx.strokeStyle = `rgba(255, 178, 86, ${0.82 * erupt})`; ctx.lineWidth = Math.max(1.2, 3.8 * scale); ctx.stroke();
+
+    const starCore = ctx.createRadialGradient(x, y, 0, x, y, starR);
+    starCore.addColorStop(0, '#ffffff');
+    starCore.addColorStop(0.68, 'rgba(255, 224, 152, 0.96)');
+    starCore.addColorStop(1, 'rgba(255, 146, 54, 0.82)');
+    ctx.fillStyle = starCore;
+    ctx.beginPath(); ctx.arc(x, y, starR, 0, Math.PI * 2); ctx.fill();
   } else if (def.id === 'gamma-burst') {
     const beamEnv = Math.sin(p * Math.PI);
-    const len = Math.max(w, h) * 0.88 * Math.min(1, p * 2.4);
-    drawTaperedSpike(ctx, x, y, len, -0.54, `rgba(196, 136, 255, ${0.58 * beamEnv})`, 18 * pos.scale * beamEnv);
-    drawTaperedSpike(ctx, x, y, len, -0.54, `rgba(248, 232, 255, ${0.95 * beamEnv})`, 3.4 * pos.scale * beamEnv);
+    // Scale beam length proportionally with event scale so distant GRBs look far away instead of spanning the whole screen
+    const len = Math.min(Math.max(w, h) * 0.88, S * (3.1 + focus * 1.4)) * Math.min(1, p * 2.4);
+    drawTaperedSpike(ctx, x, y, len, -0.54, `rgba(196, 136, 255, ${0.58 * beamEnv})`, Math.max(2.4, 16 * scale * beamEnv));
+    drawTaperedSpike(ctx, x, y, len, -0.54, `rgba(248, 232, 255, ${0.95 * beamEnv})`, Math.max(1.0, 3.2 * scale * beamEnv));
     const coreG = ctx.createRadialGradient(x, y, 0, x, y, S * 0.76 * (0.4 + beamEnv));
     coreG.addColorStop(0, `rgba(255, 255, 255, ${0.96 * beamEnv})`);
     coreG.addColorStop(0.35, `rgba(204, 152, 255, ${0.68 * beamEnv})`);

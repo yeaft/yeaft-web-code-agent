@@ -29,9 +29,12 @@ import {
   COSMIC_EVENTS,
   createCosmicEventState,
   startCosmicEvent,
+  focusActiveCosmicEvent,
+  unfocusCosmicEvent,
   stopCosmicEvent,
   setCosmicEventZoom,
   pickRandomEventIndex,
+  formatEventDistance,
 } from '../../cosmos/events-controller.js';
 import { stepCosmosFrame } from '../../cosmos/stage-loop.js';
 import { projectAgentsForCosmos } from '../../cosmos/agent-projection.js';
@@ -143,6 +146,27 @@ export default {
           </div>
         </div>
 
+        <!-- Distant Cosmic Event Spatial Reticle Beacon (visible when distant event plays without auto-zoom) -->
+        <button
+          v-if="eventActiveSnapshot && !eventActiveSnapshot.observing"
+          :ref="(el) => { domRefs.eventBeacon.value = el; }"
+          type="button"
+          class="cosmos-event-beacon"
+          :class="eventBeaconAlignClass"
+          :style="{ '--event-swatch': eventActiveSnapshot.def.swatch }"
+          :aria-label="eventBeaconAriaLabel"
+          style="display:none"
+          @pointerdown.stop
+          @click.stop="onFocusDistantEvent"
+        >
+          <span class="cosmos-event-beacon-reticle" aria-hidden="true"></span>
+          <span class="cosmos-event-beacon-tag">
+            <span class="cosmos-event-beacon-dot" aria-hidden="true"></span>
+            <span class="cosmos-event-beacon-title">{{ $t('cosmos.events.' + eventActiveSnapshot.def.id + '.name') }}</span>
+            <span v-if="eventBeaconCoords" class="cosmos-event-beacon-coords">{{ eventBeaconCoords }}</span>
+          </span>
+        </button>
+
         <!-- Deep-Sky Astronomical Portals -->
         <button
           v-for="pt in portals"
@@ -250,12 +274,15 @@ export default {
       <CosmosEventsOverlay
         :visible="constants.showEventsCountdown && currentBand === 'solar'"
         :auto-enabled="constants.eventsAutoEnabled"
+        :auto-zoom="constants.eventsAutoZoom"
         :active-event="eventActiveSnapshot"
         :next-event-index="eventNextIndex"
         :countdown-sec="eventCountdownSec"
         @observe="onObserveEvent"
+        @return-solar="onReturnFromEvent"
         @stop-event="onStopEvent"
         @toggle-auto="onToggleAutoEvents"
+        @toggle-auto-zoom="onToggleAutoZoom"
         @toggle-pause="onTogglePauseEvent"
         @replay="onReplayEvent"
         @next-random="onNextRandomEvent"
@@ -435,6 +462,7 @@ export default {
       portals: {},
       books: {},
       homeBeacon: { value: null },
+      eventBeacon: { value: null },
     };
     const setMapRef = (bucket, key, el) => {
       if (el) bucket[key] = el;
@@ -531,14 +559,41 @@ export default {
       return $t('cosmos.agent.dragHint', { name: moving.name });
     });
 
-    const eventSim = createCosmicEventState({ autoEnabled: constants.eventsAutoEnabled });
+    const eventSim = createCosmicEventState({
+      autoEnabled: constants.eventsAutoEnabled,
+      autoZoom: constants.eventsAutoZoom,
+    });
     const eventActiveSnapshot = Vue.ref(null);
     const eventNextIndex = Vue.ref(eventSim.nextIdx);
     const eventCountdownSec = Vue.ref(eventSim.countdown);
     const isObservingEvent = Vue.computed(() => Boolean(eventActiveSnapshot.value?.observing));
+    const eventBeaconCoords = Vue.computed(() => {
+      const loc = eventActiveSnapshot.value?.location;
+      if (!loc) return '';
+      const dir = $t(`cosmos.events.dir.${loc.sector}`);
+      const dist = formatEventDistance(loc.distanceLy, getLocale() === 'en');
+      return `${dir} · ${dist}`;
+    });
+    const eventBeaconAriaLabel = Vue.computed(() => {
+      const act = eventActiveSnapshot.value;
+      if (!act) return '';
+      const name = $t(`cosmos.events.${act.def.id}.name`);
+      return eventBeaconCoords.value ? `${name} · ${eventBeaconCoords.value}` : name;
+    });
+    const eventBeaconAlignClass = Vue.computed(() => {
+      const loc = eventActiveSnapshot.value?.location;
+      if (!loc) return {};
+      return {
+        'is-right-edge': loc.x > 0.72,
+        'is-left-edge': loc.x < 0.28,
+        'is-bottom-edge': loc.y > 0.74,
+      };
+    });
 
     function syncEventRefs() {
-      eventActiveSnapshot.value = eventSim.active ? { ...eventSim.active } : null;
+      eventActiveSnapshot.value = eventSim.active
+        ? { ...eventSim.active, location: eventSim.active.location ? { ...eventSim.active.location } : null }
+        : null;
       eventNextIndex.value = eventSim.nextIdx;
       eventCountdownSec.value = eventSim.countdown;
     }
@@ -990,12 +1045,42 @@ export default {
       }
     }
 
+    function formatEventLocationToast(act) {
+      const name = $t(`cosmos.events.${act.def.id}.name`);
+      const loc = act.location;
+      if (!loc) return name;
+      const dir = $t(`cosmos.events.dir.${loc.sector}`);
+      const dist = formatEventDistance(loc.distanceLy, getLocale() === 'en');
+      return $t('cosmos.events.distantToast', { name, dir, dist });
+    }
     function onObserveEvent(eventId) {
       if (scaleBand(anim.targetScaleLog) !== 'solar') jumpToScale(13.0);
-      const act = startCosmicEvent(eventSim, eventId, { observe: true });
+      const isAlreadySame = Boolean(eventSim.active && (!eventId || eventSim.active.def.id === eventId));
+      const shouldZoomIn = isAlreadySame || Boolean(constants.eventsAutoZoom);
+      const act = startCosmicEvent(eventSim, eventId, { observe: shouldZoomIn });
       hideHoverImmediate();
       syncEventRefs();
-      showToast($t('cosmos.events.lockedToast', { name: $t(`cosmos.events.${act.def.id}.name`) }));
+      if (act.observing) {
+        showToast(formatEventLocationToast(act));
+      } else {
+        showToast(formatEventLocationToast(act), {
+          actionLabel: $t('cosmos.events.watch'),
+          onAction: () => onFocusDistantEvent(),
+        });
+      }
+    }
+    function onFocusDistantEvent() {
+      if (!eventSim.active) return;
+      if (scaleBand(anim.targetScaleLog) !== 'solar') jumpToScale(13.0);
+      const act = focusActiveCosmicEvent(eventSim);
+      hideHoverImmediate();
+      syncEventRefs();
+      if (act) showToast(formatEventLocationToast(act));
+    }
+    function onReturnFromEvent() {
+      const released = unfocusCosmicEvent(eventSim);
+      syncEventRefs();
+      if (released) showToast($t('cosmos.events.returnedToast'));
     }
     function onStopEvent() {
       const wasActive = stopCosmicEvent(eventSim);
@@ -1009,13 +1094,21 @@ export default {
       syncEventRefs();
       showToast($t(constants.eventsAutoEnabled ? 'cosmos.events.autoResumedToast' : 'cosmos.events.autoPausedToast'));
     }
+    function onToggleAutoZoom() {
+      constants.eventsAutoZoom = !constants.eventsAutoZoom;
+      saveCosmosConstants(constants);
+      eventSim.autoZoom = constants.eventsAutoZoom;
+      syncEventRefs();
+      showToast($t(constants.eventsAutoZoom ? 'cosmos.events.autoZoomOnToast' : 'cosmos.events.autoZoomOffToast'));
+    }
     function onTogglePauseEvent() { if (eventSim.active) { eventSim.active.paused = !eventSim.active.paused; syncEventRefs(); } }
     function onReplayEvent() { if (eventSim.active) { eventSim.active.elapsed = 0.01; eventSim.active.paused = false; syncEventRefs(); } }
     function onNextRandomEvent() {
       const curIdx = eventSim.active ? COSMIC_EVENTS.findIndex((e) => e.id === eventSim.active.def.id) : eventSim.lastPlayedIdx;
       const nextIdx = pickRandomEventIndex(curIdx);
-      startCosmicEvent(eventSim, COSMIC_EVENTS[nextIdx].id, { observe: true });
+      const act = startCosmicEvent(eventSim, COSMIC_EVENTS[nextIdx].id, { observe: true });
       syncEventRefs();
+      if (act) showToast(formatEventLocationToast(act));
     }
     function onSetEventZoom(z) { setCosmicEventZoom(eventSim, z); syncEventRefs(); }
 
@@ -1026,6 +1119,10 @@ export default {
       if (key === 'eventsAutoEnabled') {
         eventSim.autoEnabled = Boolean(value);
         if (!value && eventSim.active && !eventSim.active.observing) stopCosmicEvent(eventSim);
+        syncEventRefs();
+      }
+      if (key === 'eventsAutoZoom') {
+        eventSim.autoZoom = Boolean(value);
         syncEventRefs();
       }
       if (key === 'showEventsCountdown' && !value && eventSim.active) { stopCosmicEvent(eventSim); syncEventRefs(); }
@@ -1087,7 +1184,7 @@ export default {
       if (emptyPlanetMenu.value) { emptyPlanetMenu.value = null; return; }
       if (constantsOpen.value) { constantsOpen.value = false; return; }
       if (bookCreateOpen.value) { bookCreateOpen.value = false; return; }
-      if (eventSim.active?.observing) { onStopEvent(); return; }
+      if (eventSim.active?.observing) { onReturnFromEvent(); return; }
       if (store.workbenchExpanded && drawerOpen.value) { store.workbenchExpanded = false; return; }
       if (drawerOpen.value) { closeDrawer(); return; }
       if (quickAgentId.value) { quickAgentId.value = null; return; }
@@ -1264,12 +1361,13 @@ export default {
       bookCreateOpen, bookDraftTitle, bookDraftDomain, toast,
       settingsModal, agentSettingsModal, sessionCreateModal,
       eventActiveSnapshot, eventNextIndex, eventCountdownSec, isObservingEvent,
+      eventBeaconCoords, eventBeaconAriaLabel, eventBeaconAlignClass,
       planetTagClass, planetPipClass,
       onCanvasPointerDown, resetCamera, onPlanetPointerDown, onPlanetEnter, onPlanetLeave,
       onHoverCardEnter, onHoverCardLeave, onStageWheel, jumpToScale,
       openSessionInDrawer, openAgentConversationFromQuick, onDrawerSelectSession, closeDrawer,
       emitTelemetryBeam, onAutoRouted, jumpToWaitingAgent, assignFromMenu,
-      onObserveEvent, onStopEvent, onToggleAutoEvents, onTogglePauseEvent, onReplayEvent, onNextRandomEvent, onSetEventZoom,
+      onObserveEvent, onFocusDistantEvent, onReturnFromEvent, onStopEvent, onToggleAutoEvents, onToggleAutoZoom, onTogglePauseEvent, onReplayEvent, onNextRandomEvent, onSetEventZoom,
       onUpdateConstant, onAssignPlanet, openYeaftSettings, openYeaftAgentSettings, openAgentLlmConfig, openSessionCreate, onSessionCreated,
       abandonCosmos, submitNewBook, showToast, runToastAction,
     };
