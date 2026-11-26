@@ -62,7 +62,7 @@ import { perfNowMs, recordAgentPerfTrace } from './perf-trace.js';
 // pass a real threadId per (sessionId, vpId, threadId) engine instance.
 const MAIN_THREAD_ID = 'main';
 
-import { pickEffort, parseEffortPrefix, snapshotEffortDecision, stepDownRetryEffort } from './effort.js';
+import { pickEffort, parseEffortPrefix, snapshotEffortDecision, stepDownRetryEffort, highestEffortAtOrBelow } from './effort.js';
 import { normalizeProtocolName } from './llm/router.js';
 import { bindProviderState, ProviderStateError, ProviderContextBudgetError } from './llm/provider-state.js';
 import {
@@ -74,7 +74,7 @@ import {
   savePostCompact,
 } from './post-compact.js';
 import { streamContextRollover, contextRolloverLocalHandoff, contextRolloverReport, contextRolloverSeed } from './context-rollover.js';
-import { getModelInfo, normalizeEffort, parseModelRef, resolveContextWindow, resolveMaxOutputTokens } from './models.js';
+import { getModelEffortOptions, getModelInfo, normalizeEffort, parseModelRef, resolveContextWindow, resolveMaxOutputTokens } from './models.js';
 import { attachRouterPlan, extractPriorPlan, stripMetaForWire } from './router/continuity.js';
 import { resolveThinking } from './router/thinking.js';
 import { findEffortModelEntry, normalizeRoutedEffort } from './sessions/session-config.js';
@@ -3184,7 +3184,18 @@ export class Engine {
         // Resolve effort per provider request so a saved Session effort takes
         // effect at the next loop. A caller override or `/effort` prefix stays
         // fixed for this query and still wins over live Session config.
-        const requestUserEffort = normalizeRequestEffort(turnConfig?.effort)
+        // Child targets are portable across routing and retry. Resolve against
+        // this request's model, before an adapter interprets protocol aliases
+        // or allocates a manual thinking budget. The adapter still owns the
+        // final capability/ceiling check, and can report the actual wire tier.
+        const routedChildEffort = subAgentTargetEffort ? highestEffortAtOrBelow(subAgentTargetEffort,
+          getModelEffortOptions(currentModel, {
+            protocol: effortProtocol, supportsEffort: effortModel?.supportsEffort,
+            effortOptions: effortModel?.effortOptions,
+            thinkingProtocol: effortModel?.thinkingProtocol || effortModel?.effortProtocol,
+            maxBudgetTokens: effortModel?.maxBudgetTokens,
+          })) : null;
+        const requestUserEffort = routedChildEffort || normalizeRequestEffort(turnConfig?.effort)
           || normalizeRequestEffort(userEffort)
           || normalizeRequestEffort(requestConfig.modelEffort);
         const geminiDefault = scenario === 'chat' && effortModel?.effortProtocol === 'gemini'

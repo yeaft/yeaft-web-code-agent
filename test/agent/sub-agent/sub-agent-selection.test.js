@@ -208,7 +208,7 @@ describe('sub-agent model, effort, scene, and machine protocol', () => {
     expect(resolve('reviewer')).toMatchObject({ effort: 'medium', effortSource: 'persona-config' });
     expect(resolve('explorer')).toMatchObject({ model: 'openai/gpt-5.4-mini', effort: 'xhigh', effortSource: 'persona-config' });
     expect(resolve('implementer')).toMatchObject({ effort: null, effortSource: 'inherited' });
-    expect(resolve('reviewer', { requestedModel: 'proxy/plain-no-effort' })).toMatchObject({ effort: null, explicitEffortTarget: null });
+    expect(resolve('reviewer', { requestedModel: 'proxy/plain-no-effort' })).toMatchObject({ effort: null, explicitEffortTarget: 'high', effortSource: 'persona-config' });
     expect(resolveSubAgentSelection({ personaId: 'reviewer', config: mkCatalogConfig(), requestedEffort: 'medium' }))
       .toMatchObject({ effort: 'medium', effortSource: 'explicit' });
     expect(resolve('reviewer', { config: { ...config, subAgentPersonaEfforts: { reviewer: 'low' } } }))
@@ -255,6 +255,61 @@ describe('sub-agent model, effort, scene, and machine protocol', () => {
           subAgentRoute: { model, effort, sceneId: 'software' } });
       }
       expect(wire).toHaveLength(3);
+    } finally {
+      vi.unstubAllGlobals();
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('retains the original role target when a retryable failure changes provider protocol', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'yeaft-effort-fallback-'));
+    const carbon = 'chat/gemini-4-carbon', plain = 'chat/plain', neon = 'google/gemini-4-neon';
+    const providers = [
+      { name: 'chat', protocol: 'openai-chat-completions', baseUrl: 'https://chat.invalid/v1', apiKey: 'fixture',
+        models: ['gemini-4-carbon', { id: 'plain', supportsEffort: false }] },
+      { name: 'openai', protocol: 'openai-responses', baseUrl: 'https://openai.invalid/v1', apiKey: 'fixture', models: ['gpt-5.4'] },
+      { name: 'google', protocol: 'gemini', baseUrl: 'https://gemini.invalid/v1beta', apiKey: 'fixture', models: ['gemini-4-neon'] },
+    ];
+    const adapter = new AdapterRouter({ providers });
+    const wire = [];
+    vi.stubGlobal('fetch', vi.fn(async (url, init) => {
+      wire.push([String(url), JSON.parse(init.body)]);
+      if (String(url).startsWith('https://chat.invalid')) return new Response('unavailable', { status: 503 });
+      const events = String(url).startsWith('https://gemini.invalid')
+        ? ['{"candidates":[{"content":{"role":"model","parts":[{"text":"status: done"}]},"finishReason":"STOP"}]}']
+        : ['{"type":"response.output_text.delta","delta":"status: done"}', '{"type":"response.completed","response":{"id":"resp_1","status":"completed"}}'];
+      return new Response(events.map(event => `data: ${event}\n\n`).join(''), { headers: { 'content-type': 'text/event-stream' } });
+    }));
+    const taskManager = new TaskManager({ yeaftDir: dir });
+    try {
+      for (const [model, initial, target, fallbackModel, expected] of [
+        [carbon, 'high', null, 'openai/gpt-5.4', 'xhigh'], [plain, undefined, 'low', neon, 'low'],
+      ]) {
+        const config = mkCatalogConfig({ model, primaryModel: model, fallbackModel, llmRetry: { maxRetries: 0 },
+          ...(target ? { subAgentPersonaEfforts: { reviewer: target } } : {}) });
+        config.availableModels.push(...providers.filter(p => p.name !== 'openai').flatMap(p => p.models.map(raw => {
+          const info = typeof raw === 'string' ? { id: raw } : raw;
+          return { ...info, ref: `${p.name}/${info.id}`, provider: p.name, protocol: p.protocol };
+        })));
+        const ctx = { cwd: dir, sessionId: 's', sceneId: 'software', currentVpId: 'omni', taskManager,
+          parentEngineDeps: { adapter, config, trace: new NullTrace(), taskManager, yeaftDir: dir,
+            subAgentLogDir: dir, parentToolRegistry: mkParentRegistry() } };
+        const spawn = JSON.parse(await agentTool.execute({ name: 'review', mission: 'Review the changed file', persona: 'reviewer' }, ctx));
+        expect(spawn.success).toBe(true);
+        await getAgentRegistry().get(spawn.agentId).driverPromise;
+        const [[primaryUrl, primary], [fallbackUrl, fallback]] = wire.splice(0);
+        expect(primaryUrl).toContain('chat.invalid/v1/chat/completions');
+        expect(primary.reasoning_effort).toBe(initial);
+        if (fallbackModel === neon) {
+          expect(fallbackUrl).toContain('gemini.invalid/v1beta/models/gemini-4-neon:streamGenerateContent');
+          expect(fallback.generationConfig.thinkingConfig.thinkingLevel).toBe('LOW');
+        } else {
+          expect(fallbackUrl).toContain('openai.invalid/v1/responses');
+          expect(fallback.reasoning.effort).toBe('xhigh');
+        }
+        expect(taskManager.getTask('s', spawn.taskId)).toMatchObject({ status: 'succeeded',
+          subAgentRoute: { model: fallbackModel, effort: expected, sceneId: 'software' } });
+      }
     } finally {
       vi.unstubAllGlobals();
       fs.rmSync(dir, { recursive: true, force: true });
@@ -310,7 +365,7 @@ describe('sub-agent model, effort, scene, and machine protocol', () => {
       modelSource: 'explicit',
       effort: 'high',
       effortSource: 'persona-default',
-      explicitEffortTarget: 'high',
+      explicitEffortTarget: 'xhigh',
       sceneId: 'frontend',
       sceneSource: 'explicit',
     });

@@ -123,6 +123,12 @@ export const EFFORT_LEVELS = Object.freeze(['minimal', 'low', 'medium', 'high', 
 const effortRank = value => EFFORT_LEVELS.indexOf(normalizeEffort(value, true));
 const atMost = (value, ceiling) => effortRank(value) >= 0 && effortRank(value) <= effortRank(ceiling);
 
+/** Resolve a portable ordinal target, without reinterpreting native tiers as aliases. */
+export function highestEffortAtOrBelow(target, options) {
+  const rank = effortRank(target);
+  return rank >= 0 ? EFFORT_LEVELS.slice(0, rank + 1).findLast(level => options.includes(level)) || null : null;
+}
+
 /**
  * Step a model's effort down one supported tier for a single timeout retry.
  * Never steps below `medium` or mutates persisted Session/Agent effort.
@@ -216,8 +222,7 @@ export function resolveSubAgentEffort({ parentDecision = null, model, effortCont
   if (!capability.supportsThinking || capability.thinkingProtocol === 'none') {
     return snapshotEffortDecision({ ...base, effective: null, wireMode: 'unsupported' });
   }
-  const supported = getModelEffortOptions(model, context).filter(value => atMost(value, target));
-  const effective = EFFORT_LEVELS.filter(value => supported.includes(value)).at(-1);
+  const effective = highestEffortAtOrBelow(target, capability.effortOptions);
   if (!effective) throw effortError(model, target);
   const wireMode = protocol === 'openai-responses' || protocol === 'openai-chat-completions' || capability.thinkingProtocol === 'openai-reasoning'
     ? 'reasoning-effort'

@@ -24,7 +24,7 @@
  *     Session `sceneId` (if any).
  */
 
-import { EFFORT_LEVELS } from '../effort.js';
+import { EFFORT_LEVELS, highestEffortAtOrBelow } from '../effort.js';
 import { inferProtocolFromModelId, normalizeProtocolName } from '../llm/router.js';
 import {
   getThinkingCapability,
@@ -194,6 +194,7 @@ function resolveInheritedModelRef(parentModel, config) {
  *   modelEntry: object|null,
  *   effort: string|null,
  *   effortSource: 'persona-config'|'explicit'|'persona-default'|'inherited',
+ *   explicitEffortTarget: string|null, // Unadapted target, retained for fallback routes.
  *   sceneId: string|null,
  *   sceneSource: 'explicit'|'inherited'|'none',
  * } | { ok: false, error: string }}
@@ -279,6 +280,7 @@ export function resolveSubAgentSelection({
   const options = model ? supportedEffortsForModel(model, modelEntry, config) : [];
   let effort = null;
   let effortSource = 'inherited';
+  let effortTarget = null;
 
   if (explicitEffort && !configuredTarget) {
     if (effortRank(explicitEffort) < 0) {
@@ -296,19 +298,20 @@ export function resolveSubAgentSelection({
         error: `Model "${model}" does not support effort "${explicitEffort}". Supported efforts: ${options.join(', ')}.`,
       };
     }
-    effort = explicitEffort;
+    effort = effortTarget = explicitEffort;
     effortSource = 'explicit';
   } else {
     const target = configuredTarget || normalizeEffort(persona?.defaultEffort, true);
     if (target) {
-      effort = model ? EFFORT_LEVELS.slice(0, effortRank(target) + 1).findLast(level => options.includes(level)) || null : target;
+      effort = model ? highestEffortAtOrBelow(target, options) : target;
       if (configuredTarget && options.length > 0 && !effort) {
         return {
           ok: false,
           error: `Model "${model}" cannot use the configured "${personaKey}" effort target "${target}" without increasing it. Update the persona effort in LLM settings or select a compatible model. Supported efforts: ${options.join(', ')}.`,
         };
       }
-      if (effort) effortSource = configuredTarget ? 'persona-config' : 'persona-default';
+      effortTarget = target;
+      effortSource = configuredTarget ? 'persona-config' : 'persona-default';
     }
   }
 
@@ -319,7 +322,7 @@ export function resolveSubAgentSelection({
     modelEntry,
     effort,
     effortSource,
-    explicitEffortTarget: effort,
+    explicitEffortTarget: effortTarget,
     sceneId,
     sceneSource,
   };

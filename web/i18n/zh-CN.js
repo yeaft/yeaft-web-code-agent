@@ -1611,7 +1611,7 @@ export default {
   'settings.llm.subAgentSceneModelsHint': '选定模型后，该场景优先使用它。设为自动或模型不可用时，恢复默认的子 Agent 路由。',
   'settings.llm.subAgentSceneModelAuto': '自动（默认子 Agent 路由）',
   'settings.llm.subAgentPersonaEfforts': '按角色设置子 Agent 推理强度',
-  'settings.llm.subAgentPersonaEffortsHint': '此处设置优先于单次委派参数。模型会使用不高于目标的最高支持档位；如果模型不支持推理强度，则不发送该参数。',
+  'settings.llm.subAgentPersonaEffortsHint': '此处设置优先于单次委派参数。模型会使用不高于目标的最高支持档位；不支持推理强度的模型不发送该参数。若模型只支持比目标更高的档位，任务无法启动，请选「自动」或更换兼容模型。',
   'settings.llm.subAgentEffortAutoTarget': '自动（目标：{effort}）',
   'settings.llm.subAgentEffortAuto': '自动（默认委派策略）',
   'settings.llm.subAgentPersona.designer': '设计（Designer）',

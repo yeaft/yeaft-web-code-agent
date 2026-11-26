@@ -1613,7 +1613,7 @@ export default {
   'settings.llm.subAgentSceneModelsHint': 'The selected model takes priority for that scene. If it becomes unavailable or is set to Auto, normal sub-agent routing applies.',
   'settings.llm.subAgentSceneModelAuto': 'Auto (normal sub-agent routing)',
   'settings.llm.subAgentPersonaEfforts': 'Sub-agent effort by role',
-  'settings.llm.subAgentPersonaEffortsHint': 'These settings take priority over delegation arguments. The selected model uses the highest supported level at or below the target, or omits effort if unsupported.',
+  'settings.llm.subAgentPersonaEffortsHint': 'These settings take priority over delegation arguments. The selected model uses the highest supported level at or below your target, or omits effort if it has no effort control. If all supported levels are higher, the task cannot start: choose Auto or a compatible model.',
   'settings.llm.subAgentEffortAutoTarget': 'Auto ({effort} target)',
   'settings.llm.subAgentEffortAuto': 'Auto (normal delegation)',
   'settings.llm.subAgentPersona.designer': 'Design (Designer)',
