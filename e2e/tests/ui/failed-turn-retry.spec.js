@@ -15,8 +15,8 @@ test('failed native Yeaft Session turn retry status bar, retryToken fencing, res
   await page.reload();
   await page.waitForSelector('.app-container, .chat-container, .yeaft-page', { timeout: 15_000 });
 
-  const sessionA = { id: 'retry-session-a', name: 'Retry Session A', roster: ['vp-retry'], defaultVpId: 'vp-retry' };
-  const sessionB = { id: 'retry-session-b', name: 'Retry Session B', roster: ['vp-retry'], defaultVpId: 'vp-retry' };
+  const sessionA = { id: 'session_retry_a', name: 'Retry Session A', roster: ['vp-retry'], defaultVpId: 'vp-retry' };
+  const sessionB = { id: 'session_retry_b', name: 'Retry Session B', roster: ['vp-retry'], defaultVpId: 'vp-retry' };
   mockAgent.send({ type: 'yeaft_output', event: { type: 'session_list_updated', sessions: [sessionA, sessionB] } });
   await expect.poll(() => page.evaluate(id => window.Pinia.useChatStore().sessionCatalog.some(row => row.routeRef.sessionId === id), sessionA.id)).toBe(true);
 
@@ -130,16 +130,11 @@ test('failed native Yeaft Session turn retry status bar, retryToken fencing, res
   expect(await page.evaluate(cid => (window.Pinia.useChatStore().messagesMap[cid] || []).length, conversationId)).toBe(msgCountBefore);
 
   // 4) Standalone relay failure ok:false re-enables buttons and surfaces inline error string.
-  await page.evaluate(({ sessionId, turnId, requestId }) => {
-    window.Pinia.useChatStore().handleMessage({
-      type: 'yeaft_session_retry_result',
-      sessionId,
-      turnId,
-      requestId,
-      ok: false,
-      error: 'relay_unavailable',
-    });
-  }, { sessionId: sessionA.id, turnId: 'turn-1', requestId: retryFrames1[0].requestId });
+  const firstRelay = await mockAgent.waitForMessage('yeaft_session_retry');
+  expect(firstRelay).toMatchObject({ ...retryFrames1[0], _requestClientId: expect.any(String) });
+  mockAgent.send({ type: 'yeaft_session_retry_result', sessionId: firstRelay.sessionId,
+    turnId: firstRelay.turnId, requestId: firstRelay.requestId, _requestClientId: firstRelay._requestClientId,
+    ok: false, error: 'relay_unavailable' });
   await expect(plainBtn).toBeEnabled();
   await expect(compactBtn).toBeEnabled();
   await expect(bar).toContainText('relay_unavailable');
@@ -157,15 +152,10 @@ test('failed native Yeaft Session turn retry status bar, retryToken fencing, res
     retryToken: 'tok-1',
     mode: 'compact',
   });
-  await page.evaluate(({ sessionId, turnId, requestId }) => {
-    window.Pinia.useChatStore().handleMessage({
-      type: 'yeaft_session_retry_result',
-      sessionId,
-      turnId,
-      requestId,
-      ok: true,
-    });
-  }, { sessionId: sessionA.id, turnId: 'turn-1', requestId: retryFrames2[1].requestId });
+  const secondRelay = await mockAgent.waitForMessage('yeaft_session_retry');
+  expect(secondRelay).toMatchObject({ ...retryFrames2[1], _requestClientId: firstRelay._requestClientId });
+  mockAgent.send({ type: 'yeaft_session_retry_result', sessionId: secondRelay.sessionId,
+    turnId: secondRelay.turnId, requestId: secondRelay.requestId, _requestClientId: secondRelay._requestClientId, ok: true });
   await expect(bar).toHaveCount(0);
 
   // Resumed vp_turn_start with retry:true retains existing partial assistant text.
