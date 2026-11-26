@@ -9,6 +9,7 @@ import { sessionAttachmentUrl } from '../session-attachment-relay.js';
 import { cachePreviewFile } from '../preview-files.js';
 import { recordPerfTraceEvent } from '../perf-trace.js';
 import { syncProjectContextsToAgents } from './client-conversation.js';
+import { routeSessionTurnRetryResult, SESSION_RETRY_RESULT } from './session-turn-retry.js';
 
 
 /** Keep Skill detail read-only and browser-safe, including replies from newer Agents. */
@@ -263,6 +264,10 @@ export function projectConfirmedAssetImages(messages, { ownerId, agentId, sessio
  */
 export async function handleAgentOutput(agentId, agent, msg) {
   switch (msg.type) {
+    case SESSION_RETRY_RESULT:
+      await routeSessionTurnRetryResult(agentId, agent, msg);
+      break;
+
     case 'claude_output':
       // 保存消息到数据库
       try {
