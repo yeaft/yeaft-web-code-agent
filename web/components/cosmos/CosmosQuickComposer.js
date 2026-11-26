@@ -1,12 +1,14 @@
 /**
  * Yeaft Cosmos — Click-Planet Quick Auto-Route Composer
  *
- * Clicking a planet opens this lightweight planetary composer deck:
+ * Clicking a planet opens this weightless, single-lens planetary command deck:
  * - Sends via `yeaft_auto_route_send` bound to that Agent (with attachments, model, effort & optional scene).
- * - Always provides an "Open Chat" entrance to the right conversation drawer (highlighted when no sessions are running).
+ * - Consolidates Model, Effort & localized Scene into a single calm upward-floating tuning popover.
+ * - Always provides a clean borderless "Open Chat" link into the right conversation drawer.
  */
 import ChatInput from '../ChatInput.js';
-import { SESSION_SCENE_IDS } from '../SessionSceneSelect.js';
+import CosmosComposerTuning from './CosmosComposerTuning.js';
+import { sessionScenesForAgent } from '../SessionSceneSelect.js';
 import {
   buildModelSelectionRows,
   getSelectableModelEfforts,
@@ -15,7 +17,7 @@ import {
 
 export default {
   name: 'CosmosQuickComposer',
-  components: { ChatInput },
+  components: { ChatInput, CosmosComposerTuning },
   props: {
     agent: { type: Object, required: true },
     planetId: { type: String, required: true },
@@ -23,7 +25,7 @@ export default {
   emits: ['close', 'open-conversation', 'open-search', 'routed', 'open-llm-config'],
   template: `
     <section
-      class="cosmos-quick-composer"
+      class="cosmos-quick-composer cosmos-composer-surface"
       :data-planet-theme="planetId"
       role="dialog"
       :aria-label="agent.name"
@@ -34,19 +36,8 @@ export default {
         <div class="cosmos-quick-id">
           <span class="cosmos-planet-emblem" aria-hidden="true"></span>
           <span class="cosmos-quick-name">{{ agent.name }}</span>
-          <span class="cosmos-quick-badge">{{ $t('cosmos.quick.badge') }}</span>
-          <span v-if="!hasRunningSessions" class="cosmos-quick-idle-hint">{{ $t('cosmos.quick.noRunningHint') }}</span>
         </div>
         <div class="cosmos-quick-head-actions">
-          <button
-            type="button"
-            class="cosmos-icon-btn"
-            :title="$t('cosmos.panel.searchSessions')"
-            :aria-label="$t('cosmos.panel.searchSessions')"
-            @click="$emit('open-search', { agentId: agent.id })"
-          >
-            <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
-          </button>
           <button
             type="button"
             class="cosmos-quick-open-btn"
@@ -56,11 +47,11 @@ export default {
           >
             <span>{{ $t('cosmos.quick.openConversation') }}</span>
             <span v-if="agent.sessions && agent.sessions.length > 0" class="cosmos-quick-session-count">{{ agent.sessions.length }}</span>
-            <span aria-hidden="true">↗</span>
+            <span class="cosmos-quick-open-arrow" aria-hidden="true">↗</span>
           </button>
           <button
             type="button"
-            class="cosmos-icon-btn"
+            class="cosmos-icon-btn cosmos-quick-close-btn"
             :title="$t('cosmos.panel.close')"
             :aria-label="$t('cosmos.panel.close')"
             @click="$emit('close')"
@@ -71,7 +62,7 @@ export default {
       </header>
 
       <div v-if="statusBanner" class="cosmos-quick-status" :class="{ 'is-error': statusBanner.error }" role="status">
-        <span>{{ statusBanner.text }}</span>
+        <span class="cosmos-quick-status-text">{{ statusBanner.text }}</span>
         <button
           v-if="statusBanner.sessionId"
           type="button"
@@ -90,102 +81,26 @@ export default {
         placeholder-key="cosmos.quick.inputPlaceholder"
         disabled-placeholder-key="cosmos.quick.offlineInputPlaceholder"
       >
-        <template #actions-start>
-          <div class="yeaft-composer-choice" :class="{ 'is-open': openMenu === 'scene' }">
-            <button
-              type="button"
-              class="cosmos-quick-scene-btn"
-              aria-haspopup="menu"
-              :aria-expanded="openMenu === 'scene' ? 'true' : 'false'"
-              @click.stop="toggleMenu('scene')"
-            >
-              <span>{{ sceneLabel }}</span>
-              <svg viewBox="0 0 24 24" width="11" height="11" aria-hidden="true"><path fill="currentColor" d="M7 10l5 5 5-5z"/></svg>
-            </button>
-            <div v-if="openMenu === 'scene'" class="yeaft-model-dropdown" role="menu">
-              <button
-                v-for="opt in sceneOptions"
-                :key="opt.id"
-                type="button"
-                class="yeaft-model-option"
-                :class="{ active: selectedScene === opt.id }"
-                role="menuitemradio"
-                :aria-checked="selectedScene === opt.id ? 'true' : 'false'"
-                @click="selectScene(opt.id)"
-              >
-                <span class="yeaft-model-check" aria-hidden="true">{{ selectedScene === opt.id ? '✓' : '' }}</span>
-                <span class="yeaft-model-option-label">{{ opt.label }}</span>
-              </button>
-            </div>
-          </div>
-        </template>
-
         <template #actions-end-before>
-          <div class="yeaft-composer-model-controls" v-if="modelRows.length > 0">
-            <div class="yeaft-composer-choice" :class="{ 'is-open': openMenu === 'model' }">
-              <button
-                type="button"
-                class="yeaft-composer-model"
-                aria-haspopup="menu"
-                :aria-expanded="openMenu === 'model' ? 'true' : 'false'"
-                @click.stop="toggleMenu('model')"
-              >
-                <span class="yeaft-composer-model-name">{{ activeModelLabel }}</span>
-                <svg class="yeaft-model-chevron" :class="{ open: openMenu === 'model' }" viewBox="0 0 24 24" width="12" height="12" aria-hidden="true"><path fill="currentColor" d="M7 10l5 5 5-5z"/></svg>
-              </button>
-              <div v-if="openMenu === 'model'" class="yeaft-model-dropdown yeaft-composer-model-dropdown" role="menu">
-                <div class="yeaft-model-list">
-                  <button
-                    v-for="row in modelRows"
-                    :key="row.modelRef"
-                    type="button"
-                    class="yeaft-model-option"
-                    :class="{ active: modelOptionMatchesRef(row.model, selectedModel) }"
-                    role="menuitemradio"
-                    :aria-checked="modelOptionMatchesRef(row.model, selectedModel) ? 'true' : 'false'"
-                    @click="selectModel(row.modelRef, row.defaultEffort)"
-                  >
-                    <span class="yeaft-model-check" aria-hidden="true">{{ modelOptionMatchesRef(row.model, selectedModel) ? '✓' : '' }}</span>
-                    <span class="yeaft-model-option-main">
-                      <span class="yeaft-model-option-label">{{ row.label }}</span>
-                      <span class="yeaft-model-option-meta" v-if="row.model.provider">{{ row.model.provider }}</span>
-                    </span>
-                  </button>
-                </div>
-                <button type="button" class="yeaft-model-config-option" @click="$emit('open-llm-config', agent.id)">
-                  <span class="yeaft-model-config-label">{{ $t('settings.llm.configureMenu') }}</span>
-                </button>
-              </div>
-            </div>
-
-            <div v-if="effortOptions.length > 0" class="yeaft-composer-choice" :class="{ 'is-open': openMenu === 'effort' }">
-              <button
-                type="button"
-                class="yeaft-composer-effort"
-                aria-haspopup="menu"
-                :aria-expanded="openMenu === 'effort' ? 'true' : 'false'"
-                @click.stop="toggleMenu('effort')"
-              >
-                <span>{{ $t('yeaft.modelMenu.effort.' + (selectedEffort || effortOptions[0])) }}</span>
-                <svg class="yeaft-model-chevron" :class="{ open: openMenu === 'effort' }" viewBox="0 0 24 24" width="12" height="12" aria-hidden="true"><path fill="currentColor" d="M7 10l5 5 5-5z"/></svg>
-              </button>
-              <div v-if="openMenu === 'effort'" class="yeaft-model-dropdown yeaft-composer-effort-dropdown" role="menu">
-                <button
-                  v-for="eff in effortOptions"
-                  :key="eff"
-                  type="button"
-                  class="yeaft-model-option yeaft-composer-effort-option"
-                  :class="{ active: eff === selectedEffort }"
-                  role="menuitemradio"
-                  :aria-checked="eff === selectedEffort ? 'true' : 'false'"
-                  @click="selectEffort(eff)"
-                >
-                  <span class="yeaft-model-check" aria-hidden="true">{{ eff === selectedEffort ? '✓' : '' }}</span>
-                  <span class="yeaft-model-option-label">{{ $t('yeaft.modelMenu.effort.' + eff) }}</span>
-                </button>
-              </div>
-            </div>
-          </div>
+          <CosmosComposerTuning
+            ref="tuningRef"
+            :model-rows="modelRows"
+            :active-model="selectedModel || (modelRows[0]?.modelRef || '')"
+            :active-model-label="activeModelLabel"
+            :effort-options="effortOptions"
+            :active-effort="selectedEffort"
+            :show-scene="true"
+            :scene-options="sceneOptions"
+            :active-scene="selectedScene"
+            default-scene-id="auto"
+            :scene-hint="$t('cosmos.composer.sceneAutoHint')"
+            :disabled="!agent.online || routing"
+            :scope-key="agent.id"
+            @select-model="onSelectModel"
+            @select-effort="selectEffort"
+            @select-scene="selectScene"
+            @open-llm-config="$emit('open-llm-config', agent.id)"
+          />
         </template>
       </ChatInput>
     </section>
@@ -196,7 +111,7 @@ export default {
     const $t = (k, p) => (proxy?.$t ? proxy.$t(k, p) : k);
 
     const chatInputRef = Vue.ref(null);
-    const openMenu = Vue.ref(null);
+    const tuningRef = Vue.ref(null);
     const routing = Vue.ref(false);
     const statusBanner = Vue.ref(null);
     const selectedScene = Vue.ref('auto');
@@ -245,9 +160,12 @@ export default {
         { id: 'auto', label: $t('cosmos.quick.sceneAuto') },
         { id: 'none', label: $t('cosmos.quick.sceneNone') },
       ];
-      for (const sid of (SESSION_SCENE_IDS || [])) {
+      const supportedIds = sessionScenesForAgent(
+        (capability) => store.hasAgentCapability?.(props.agent?.id, capability),
+      );
+      for (const sid of supportedIds) {
         if (sid === 'general') continue;
-        const key = `yeaft.scene.${sid}`;
+        const key = `yeaft.session.scene.${sid}`;
         const translated = $t(key);
         list.push({ id: sid, label: translated === key ? sid : translated });
       }
@@ -295,7 +213,7 @@ export default {
         if (nextId !== prevId) {
           routing.value = false;
           statusBanner.value = null;
-          openMenu.value = null;
+          tuningRef.value?.close?.(false);
           selectedScene.value = 'auto';
           userPickedModel = false;
           syncDefaultModelFromConfig();
@@ -314,13 +232,14 @@ export default {
       },
     );
 
-    const toggleMenu = (name) => {
-      openMenu.value = openMenu.value === name ? null : name;
-    };
+    Vue.watch(sceneOptions, (options) => {
+      if (!options.some((opt) => opt.id === selectedScene.value)) {
+        selectedScene.value = 'auto';
+      }
+    });
 
     const selectScene = (id) => {
       selectedScene.value = id;
-      openMenu.value = null;
     };
 
     const selectModel = (modelRef, defaultEffort) => {
@@ -328,23 +247,19 @@ export default {
       selectedModel.value = modelRef;
       const opts = effortOptions.value;
       selectedEffort.value = (defaultEffort && opts.includes(defaultEffort)) ? defaultEffort : (opts[0] || '');
-      openMenu.value = null;
+    };
+
+    const onSelectModel = ({ modelRef, defaultEffort }) => {
+      selectModel(modelRef, defaultEffort);
     };
 
     const selectEffort = (eff) => {
       userPickedModel = true;
-      selectedEffort.value = eff;
-      openMenu.value = null;
-    };
-
-    const closeOutside = (e) => {
-      if (openMenu.value && !e.target.closest('.yeaft-composer-choice')) {
-        openMenu.value = null;
+      if (!selectedModel.value && modelRows.value[0]?.modelRef) {
+        selectedModel.value = modelRows.value[0].modelRef;
       }
+      selectedEffort.value = eff;
     };
-
-    Vue.onMounted(() => document.addEventListener('click', closeOutside));
-    Vue.onBeforeUnmount(() => document.removeEventListener('click', closeOutside));
 
     const handleQuickSend = async (text, attachmentInfos, quote) => {
       if (!props.agent?.online) return false;
@@ -353,6 +268,7 @@ export default {
       const targetPlanetId = props.planetId;
       const sendSeq = ++activeSendSeq;
 
+      tuningRef.value?.close?.(false);
       routing.value = true;
       statusBanner.value = { error: false, text: $t('cosmos.quick.routing', { name: targetAgentName }), sessionId: null };
 
@@ -413,7 +329,7 @@ export default {
 
     return {
       chatInputRef,
-      openMenu,
+      tuningRef,
       routing,
       statusBanner,
       selectedScene,
@@ -426,10 +342,9 @@ export default {
       effortOptions,
       sceneOptions,
       sceneLabel,
-      modelOptionMatchesRef,
-      toggleMenu,
       selectScene,
       selectModel,
+      onSelectModel,
       selectEffort,
       handleQuickSend,
     };

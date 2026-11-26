@@ -55,6 +55,24 @@ test.describe('Yeaft Cosmos UI', () => {
       ];
       chat.yeaftModel = 'copilot/gpt-6.2-sol';
       chat.yeaftModelEffort = 'high';
+      chat.llmConfig = {
+        ...(chat.llmConfig || {}),
+        [agentId]: {
+          agentConfig: {
+            primaryModel: 'copilot/gpt-6.2-sol',
+            defaultEffort: 'high',
+            availableModels: chat.yeaftAvailableModels,
+          },
+        },
+      };
+      const sessionsStore = window.Pinia.useSessionsStore?.();
+      sessionsStore?.upsertSession?.({
+        id: 'sess-earth-1',
+        name: 'Planetary Shader Polish',
+        agentId,
+        sceneId: 'general',
+        roster: [{ id: 'vp-1' }],
+      }, agentId);
       chat.applySessionCatalogSnapshot([
         {
           catalogKey: `yeaft:${agentId}:sess-earth-1`,
@@ -137,9 +155,39 @@ test.describe('Yeaft Cosmos UI', () => {
     await expect(page.locator('.cosmos-drawer')).toHaveCount(0);
     await expect(page.locator('.cosmos-quick-open-btn')).toBeVisible();
 
+    // Verify unified tuning popover opens strictly ABOVE the Quick Composer without stretching its height,
+    // uses localized scene names (never raw English keys), and 1st Escape dismisses ONLY the popover.
+    const quickComposer = page.locator('.cosmos-quick-composer');
+    await quickComposer.evaluate((el) => Promise.all(el.getAnimations().map((a) => a.finished)).catch(() => {}));
+    const quickLayoutBefore = await quickComposer.evaluate((el) => el.offsetHeight);
+    const quickTuneTrigger = quickComposer.locator('.cosmos-tune-trigger');
+    await expect(quickTuneTrigger).toBeVisible();
+    await quickTuneTrigger.click();
+    const quickTunePopover = quickComposer.locator('.cosmos-tune-popover');
+    await expect(quickTunePopover).toBeVisible();
+    await quickTunePopover.evaluate((el) => Promise.all(el.getAnimations().map((a) => a.finished)).catch(() => {}));
+    const [quickLayoutAfter, quickBoxAfter, quickPopBox] = await Promise.all([
+      quickComposer.evaluate((el) => el.offsetHeight),
+      quickComposer.boundingBox(),
+      quickTunePopover.boundingBox(),
+    ]);
+    expect(quickBoxAfter).not.toBeNull();
+    expect(quickPopBox).not.toBeNull();
+    expect(quickLayoutAfter).toBe(quickLayoutBefore);
+    expect(quickPopBox.y + quickPopBox.height).toBeLessThanOrEqual(quickBoxAfter.y + 1);
+    expect(quickPopBox.x).toBeGreaterThanOrEqual(quickBoxAfter.x - 1);
+    expect(quickPopBox.x + quickPopBox.width).toBeLessThanOrEqual(quickBoxAfter.x + quickBoxAfter.width + 1);
+    const quickSceneTexts = await quickTunePopover.locator('.cosmos-tune-chip').allTextContents();
+    expect(quickSceneTexts.length).toBeGreaterThanOrEqual(4);
+    expect(quickSceneTexts).not.toContain('short-video');
+    expect(quickSceneTexts).not.toContain('primary-education');
+    await page.keyboard.press('Escape');
+    await expect(quickTunePopover).toHaveCount(0);
+    await expect(quickComposer).toBeVisible();
+    await expect(quickTuneTrigger).toBeFocused();
+
     // Send through the real Web -> Server WebSocket; a receipt, not routing alone,
     // is what clears the draft. The Agent integration test asserts next-loop consumption.
-    const quickComposer = page.locator('.cosmos-quick-composer');
     const draft = quickComposer.locator('textarea');
     const followUp = 'Also test on mobile before finishing';
     await draft.fill(followUp);
@@ -173,6 +221,31 @@ test.describe('Yeaft Cosmos UI', () => {
     expect(userMsgBg.outerBg).toBe('rgba(0, 0, 0, 0)');
     expect(userMsgBg.outerBorder).toBe('0px');
     expect(userMsgBg.innerBg).not.toBe('rgba(0, 0, 0, 0)');
+
+    // Verify Drawer unified tuning popover opens strictly ABOVE the Drawer Composer within Drawer bounds
+    // and 1st Escape dismisses ONLY the tuning popover while keeping the Drawer open.
+    const drawerComposer = page.locator('.cosmos-drawer .input-wrapper.chat-composer');
+    const drawerTuneTrigger = page.locator('.cosmos-drawer .cosmos-tune-trigger');
+    await expect(drawerTuneTrigger).toBeVisible();
+    const drawerComposerHeightBefore = await drawerComposer.evaluate((el) => el.offsetHeight);
+    await drawerTuneTrigger.click();
+    const drawerTunePopover = page.locator('.cosmos-drawer .cosmos-tune-popover');
+    await expect(drawerTunePopover).toBeVisible();
+    await drawerTunePopover.evaluate((el) => Promise.all(el.getAnimations().map((a) => a.finished)).catch(() => {}));
+    const [drawerBox, drawerComposerHeightAfter, drawerComposerBoxAfter, drawerPopBox] = await Promise.all([
+      page.locator('.cosmos-drawer').boundingBox(),
+      drawerComposer.evaluate((el) => el.offsetHeight),
+      drawerComposer.boundingBox(),
+      drawerTunePopover.boundingBox(),
+    ]);
+    expect(drawerComposerHeightAfter).toBe(drawerComposerHeightBefore);
+    expect(drawerPopBox.y + drawerPopBox.height).toBeLessThanOrEqual(drawerComposerBoxAfter.y + 1);
+    expect(drawerPopBox.x).toBeGreaterThanOrEqual(drawerBox.x - 1);
+    expect(drawerPopBox.x + drawerPopBox.width).toBeLessThanOrEqual(drawerBox.x + drawerBox.width + 1);
+    await page.keyboard.press('Escape');
+    await expect(drawerTunePopover).toHaveCount(0);
+    await expect(page.locator('.cosmos-drawer')).toBeVisible();
+    await expect(drawerTuneTrigger).toBeFocused();
 
     // Open real Workbench inside Cosmos drawer and verify launcher, Add menu positioning, maximize & 2-step Escape under both themes
     await page.evaluate(() => document.documentElement.setAttribute('data-theme', 'light'));

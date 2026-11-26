@@ -1,0 +1,578 @@
+/* ============================================================================
+ *  Yeaft Cosmos — Unified Atmospheric Composer & Upward-Floating Tuning Sheet
+ *  Shared by CosmosQuickComposer and CosmosConversationDrawer:
+ *  - Zero nested borders ("single atmospheric lens")
+ *  - Complete token isolation from classic light/dark theme bleed
+ *  - Streamlined 3-control bar: Attach | Unified Model·Effort·Scene | Send Orb
+ *  - Guaranteed upward-opening, zero-flow-shift tuning popover
+ * ============================================================================ */
+
+.cosmos-composer-surface {
+  --bg-main: transparent;
+  --bg-primary: rgba(var(--p-tint-rgb), 0.78);
+  --bg-secondary: rgba(var(--p-tint-rgb), 0.52);
+  --bg-elevated: rgba(var(--p-tint-rgb), 0.94);
+  --bg-hover: rgba(var(--p-accent-rgb), 0.12);
+  --sidebar-hover: rgba(var(--p-accent-rgb), 0.12);
+  --session-active: rgba(var(--p-accent-rgb), 0.18);
+  --bg-input: transparent;
+  --bg-input-wrapper: transparent;
+  --text-primary: var(--p-ink);
+  --text-secondary: var(--p-muted);
+  --text-muted: var(--p-faint);
+  --border-color: rgba(255, 255, 255, 0.09);
+  --accent-color: var(--p-accent);
+  --accent: var(--p-accent);
+  --accent-blue: var(--p-accent);
+  --chat-composer-bg: transparent;
+  --chat-composer-border: transparent;
+  --chat-composer-border-focus: transparent;
+  --chat-composer-shadow: none;
+  --chat-composer-shadow-focus: none;
+  --chat-composer-focus-ring-width: 0px;
+  --focus-ring: transparent;
+}
+
+/* ── Textarea & Placeholder ── */
+.cosmos-composer-surface .textarea-wrapper textarea {
+  color: var(--p-ink) !important;
+  -webkit-text-fill-color: var(--p-ink) !important;
+  caret-color: var(--p-accent) !important;
+  font-size: 13.5px !important;
+  line-height: 1.56 !important;
+  min-height: 36px;
+  padding: 2px 2px 0 !important;
+}
+
+.cosmos-composer-surface .textarea-wrapper textarea::placeholder {
+  color: rgba(182, 206, 236, 0.42) !important;
+  -webkit-text-fill-color: rgba(182, 206, 236, 0.42) !important;
+}
+
+/* ── Bottom Action Bar: Static so Tuning Popover Anchors Cleanly Above Entire Composer ── */
+.cosmos-composer-surface .chat-composer-actions {
+  position: static;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding-top: 2px;
+  min-height: 30px;
+}
+
+.cosmos-composer-surface .chat-composer-actions-start,
+.cosmos-composer-surface .chat-composer-actions-end {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.cosmos-composer-surface .chat-composer-actions-end {
+  min-width: 0;
+  max-width: calc(100% - 38px);
+}
+
+/* ── Quiet Borderless Attach Icon ── */
+.cosmos-composer-surface .attach-btn {
+  width: 30px !important;
+  height: 30px !important;
+  border: 0 !important;
+  border-radius: 999px !important;
+  background: transparent !important;
+  color: var(--p-faint) !important;
+  transition: color 160ms ease, background 160ms ease, transform 160ms var(--c-ease);
+}
+
+.cosmos-composer-surface .attach-btn svg {
+  width: 17px;
+  height: 17px;
+  fill: currentColor;
+}
+
+.cosmos-composer-surface .attach-btn:hover:not(:disabled) {
+  color: var(--p-ink) !important;
+  background: rgba(var(--p-accent-rgb), 0.13) !important;
+}
+
+.cosmos-composer-surface .attach-btn:focus-visible {
+  outline: 1.5px solid rgba(var(--p-accent-rgb), 0.72);
+  outline-offset: 2px;
+}
+
+/* ── Luminous Planetary Send Orb & Stop Orb ── */
+.cosmos-composer-surface .send-btn,
+.cosmos-composer-surface .composer-send-btn {
+  width: 30px !important;
+  height: 30px !important;
+  border: 0 !important;
+  border-radius: 999px !important;
+  background: var(--p-accent) !important;
+  color: var(--p-send-ink) !important;
+  box-shadow:
+    0 0 18px rgba(var(--p-accent-rgb), 0.36),
+    inset 0 1px 1px rgba(255, 255, 255, 0.42) !important;
+  transition:
+    transform 160ms var(--c-ease),
+    box-shadow 180ms ease,
+    background 180ms ease,
+    color 180ms ease !important;
+}
+
+.cosmos-composer-surface .send-btn svg {
+  width: 15px;
+  height: 15px;
+}
+
+.cosmos-composer-surface .send-btn:hover:not(:disabled) {
+  transform: translateY(-1px) scale(1.04);
+  box-shadow:
+    0 0 24px rgba(var(--p-accent-rgb), 0.54),
+    inset 0 1px 1px rgba(255, 255, 255, 0.56) !important;
+}
+
+.cosmos-composer-surface .send-btn:disabled {
+  background: rgba(255, 255, 255, 0.085) !important;
+  color: rgba(226, 238, 255, 0.34) !important;
+  box-shadow: none !important;
+  opacity: 1 !important;
+  transform: none !important;
+}
+
+.cosmos-composer-surface .send-btn.stop-btn {
+  background: rgba(255, 118, 128, 0.20) !important;
+  color: #ffc2c8 !important;
+  box-shadow: inset 0 0 0 1px rgba(255, 126, 136, 0.34) !important;
+}
+
+.cosmos-composer-surface .send-btn.stop-btn:hover:not(:disabled) {
+  background: rgba(255, 118, 128, 0.32) !important;
+  box-shadow: 0 0 16px rgba(255, 118, 128, 0.28), inset 0 0 0 1px rgba(255, 152, 160, 0.48) !important;
+}
+
+.cosmos-composer-surface .send-btn:focus-visible {
+  outline: 1.5px solid rgba(var(--p-accent-rgb), 0.82);
+  outline-offset: 2px;
+}
+
+/* ── Translucent Cosmic Attachments & Quote Preview ── */
+.cosmos-composer-surface .attachments-preview {
+  gap: 6px;
+  padding-bottom: 4px;
+}
+
+.cosmos-composer-surface .attachment-item {
+  background: rgba(var(--p-accent-rgb), 0.09) !important;
+  border: 1px solid rgba(255, 255, 255, 0.08) !important;
+  border-radius: 10px !important;
+  color: var(--p-ink) !important;
+}
+
+.cosmos-composer-surface .attachment-status {
+  color: var(--p-faint) !important;
+}
+
+.cosmos-composer-surface .attachment-remove {
+  color: var(--p-muted) !important;
+}
+
+.cosmos-composer-surface .attachment-remove:hover {
+  color: var(--p-ink) !important;
+  background: rgba(var(--p-accent-rgb), 0.16) !important;
+}
+
+.cosmos-composer-surface .input-quote-preview {
+  background: rgba(var(--p-accent-rgb), 0.07) !important;
+  border: 0 !important;
+  border-left: 2px solid rgba(var(--p-accent-rgb), 0.62) !important;
+  border-radius: 8px !important;
+  color: var(--p-ink) !important;
+}
+
+.cosmos-composer-surface .input-quote-meta {
+  color: var(--p-faint) !important;
+}
+
+.cosmos-composer-surface .input-quote-content {
+  color: var(--p-muted) !important;
+}
+
+/* ── Cosmic Autocomplete Overlays (Slash / VP Mention) ── */
+.cosmos-composer-surface .slash-autocomplete {
+  bottom: calc(100% + 10px);
+  background: linear-gradient(170deg, rgba(var(--p-tint-rgb), 0.92), rgba(4, 8, 18, 0.96)) !important;
+  border: 1px solid rgba(255, 255, 255, 0.10) !important;
+  border-radius: 14px !important;
+  backdrop-filter: blur(26px) saturate(145%);
+  -webkit-backdrop-filter: blur(26px) saturate(145%);
+  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.64), 0 0 28px rgba(var(--p-accent-rgb), 0.10) !important;
+  color: var(--p-ink) !important;
+}
+
+.cosmos-composer-surface .slash-group-separator {
+  background: rgba(255, 255, 255, 0.07) !important;
+}
+
+.cosmos-composer-surface .slash-autocomplete-item:hover,
+.cosmos-composer-surface .slash-autocomplete-item.active {
+  background: rgba(var(--p-accent-rgb), 0.16) !important;
+}
+
+/* ============================================================================
+ *  Unified Cosmic Tuning Control (.cosmos-tune)
+ *  Single borderless readout trigger + Upward-floating frosted glass sheet
+ * ============================================================================ */
+.cosmos-tune {
+  position: static;
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.cosmos-tune-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 28px;
+  max-width: min(290px, 100%);
+  min-width: 0;
+  padding: 0 9px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--p-muted);
+  font: inherit;
+  font-size: 11.5px;
+  letter-spacing: 0.01em;
+  cursor: pointer;
+  transition: background 150ms ease, color 150ms ease;
+}
+
+.cosmos-tune-trigger:hover:not(:disabled),
+.cosmos-tune-trigger.is-open {
+  background: rgba(var(--p-accent-rgb), 0.13);
+  color: var(--p-ink);
+}
+
+.cosmos-tune-trigger:focus-visible {
+  outline: 1.5px solid rgba(var(--p-accent-rgb), 0.76);
+  outline-offset: 2px;
+}
+
+.cosmos-tune-trigger:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.cosmos-tune-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background: var(--p-accent);
+  box-shadow: 0 0 8px rgba(var(--p-accent-rgb), 0.82);
+}
+
+.cosmos-tune-scene {
+  color: var(--p-accent);
+  font-weight: 500;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.cosmos-tune-model {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 500;
+}
+
+.cosmos-tune-effort {
+  white-space: nowrap;
+  flex-shrink: 0;
+  opacity: 0.82;
+}
+
+.cosmos-tune-sep {
+  color: rgba(var(--p-accent-rgb), 0.56);
+  font-weight: 600;
+  flex-shrink: 0;
+}
+
+.cosmos-tune-chevron {
+  flex-shrink: 0;
+  opacity: 0.65;
+  transition: transform 180ms var(--c-ease), opacity 150ms ease;
+}
+
+.cosmos-tune-chevron.is-open {
+  transform: rotate(180deg);
+  opacity: 1;
+}
+
+/* ── Upward-Floating Frosted Space Tuning Popover (Cleanly Above Entire Composer) ── */
+.cosmos-tune-popover {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 10px);
+  width: min(320px, 100%);
+  max-height: min(440px, calc(100vh - 180px));
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  z-index: 60;
+  padding: 13px;
+  border-radius: calc(var(--p-radius) + 4px);
+  background:
+    radial-gradient(ellipse 78% 72px at 50% -22px, rgba(var(--p-accent-rgb), 0.14), transparent 74%),
+    linear-gradient(172deg, rgba(var(--p-tint-rgb), 0.90) 0%, rgba(4, 8, 18, 0.95) 100%);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  backdrop-filter: blur(28px) saturate(150%);
+  -webkit-backdrop-filter: blur(28px) saturate(150%);
+  box-shadow:
+    0 24px 60px rgba(0, 0, 0, 0.72),
+    0 0 36px rgba(var(--p-accent-rgb), 0.12),
+    inset 0 1px 0 rgba(255, 255, 255, 0.07);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  color: var(--p-ink);
+  animation: cosmos-tune-pop-in 160ms var(--c-ease);
+}
+
+@keyframes cosmos-tune-pop-in {
+  from { opacity: 0; transform: translateY(6px) scale(0.985); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+.cosmos-tune-section {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.cosmos-tune-section + .cosmos-tune-section {
+  padding-top: 10px;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.cosmos-tune-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 0 2px;
+}
+
+.cosmos-tune-section-title {
+  font-size: 10.5px;
+  font-weight: 500;
+  letter-spacing: 0.04em;
+  color: var(--p-faint);
+}
+
+.cosmos-tune-section-hint {
+  font-size: 10px;
+  color: rgba(168, 196, 228, 0.48);
+}
+
+.cosmos-tune-config-link {
+  border: 0;
+  padding: 2px 6px;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--p-accent);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+  opacity: 0.85;
+  transition: background 140ms ease, opacity 140ms ease;
+}
+
+.cosmos-tune-config-link:hover {
+  opacity: 1;
+  background: rgba(var(--p-accent-rgb), 0.14);
+}
+
+/* ── Model Rows ── */
+.cosmos-tune-model-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 156px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.cosmos-tune-model-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 7px 8px;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--p-muted);
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+  transition: background 130ms ease, color 130ms ease;
+}
+
+.cosmos-tune-model-row:hover {
+  background: rgba(var(--p-accent-rgb), 0.11);
+  color: var(--p-ink);
+}
+
+.cosmos-tune-model-row.is-active {
+  background: rgba(var(--p-accent-rgb), 0.17);
+  color: var(--p-ink);
+  font-weight: 500;
+}
+
+.cosmos-tune-model-row:focus-visible,
+.cosmos-tune-seg:focus-visible,
+.cosmos-tune-chip:focus-visible,
+.cosmos-tune-config-link:focus-visible {
+  outline: 1.5px solid rgba(var(--p-accent-rgb), 0.78);
+  outline-offset: -1px;
+}
+
+.cosmos-tune-check {
+  width: 12px;
+  height: 12px;
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+}
+
+.cosmos-tune-check-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--p-accent);
+  box-shadow: 0 0 8px rgba(var(--p-accent-rgb), 0.85);
+}
+
+.cosmos-tune-model-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cosmos-tune-model-provider {
+  font-size: 10px;
+  color: var(--p-faint);
+  flex-shrink: 0;
+}
+
+/* ── Effort Segmented Track ── */
+.cosmos-tune-segments {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  padding: 3px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.045);
+}
+
+.cosmos-tune-seg {
+  flex: 1;
+  min-width: 0;
+  height: 28px;
+  padding: 0 6px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--p-muted);
+  font: inherit;
+  font-size: 11.5px;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background 140ms ease, color 140ms ease, box-shadow 140ms ease;
+}
+
+.cosmos-tune-seg:hover {
+  color: var(--p-ink);
+  background: rgba(var(--p-accent-rgb), 0.10);
+}
+
+.cosmos-tune-seg.is-active {
+  background: rgba(var(--p-accent-rgb), 0.22);
+  color: var(--p-ink);
+  font-weight: 500;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.10);
+}
+
+/* ── Localized Scene Chips ── */
+.cosmos-tune-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.cosmos-tune-chip {
+  height: 28px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--p-muted);
+  font: inherit;
+  font-size: 11.5px;
+  cursor: pointer;
+  transition: background 140ms ease, color 140ms ease, box-shadow 140ms ease;
+}
+
+.cosmos-tune-chip:hover:not(:disabled) {
+  background: rgba(var(--p-accent-rgb), 0.13);
+  color: var(--p-ink);
+}
+
+.cosmos-tune-chip.is-active {
+  background: rgba(var(--p-accent-rgb), 0.22);
+  color: var(--p-ink);
+  font-weight: 500;
+  box-shadow: inset 0 0 0 1px rgba(var(--p-accent-rgb), 0.34);
+}
+
+.cosmos-tune-chip:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.cosmos-tune-error {
+  font-size: 11px;
+  line-height: 1.4;
+  color: #ffc2c8;
+  padding: 5px 8px;
+  border-radius: 8px;
+  background: rgba(255, 118, 128, 0.12);
+}
+
+@media (max-width: 640px) {
+  .cosmos-tune-trigger {
+    max-width: min(215px, 100%);
+    height: 32px;
+  }
+  .cosmos-tune-popover {
+    max-height: min(380px, calc(100vh - 150px));
+  }
+  .cosmos-tune-seg,
+  .cosmos-tune-chip {
+    min-height: 32px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cosmos-tune-popover,
+  .cosmos-tune-chevron,
+  .cosmos-composer-surface .send-btn {
+    animation: none !important;
+    transition: none !important;
+  }
+}

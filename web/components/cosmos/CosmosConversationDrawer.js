@@ -9,7 +9,12 @@
  */
 import MessageList from '../MessageList.js';
 import ChatInput from '../ChatInput.js';
-import SessionSceneSelect from '../SessionSceneSelect.js';
+import CosmosComposerTuning from './CosmosComposerTuning.js';
+import {
+  SESSION_SCENE_IDS,
+  sessionScenesForAgent,
+  displaySessionScene,
+} from '../SessionSceneSelect.js';
 import WorkbenchPanel from '../WorkbenchPanel.js';
 import YeaftConversationOutline from '../YeaftConversationOutline.js';
 import { parseMentions } from '../../utils/parseMentions.js';
@@ -37,7 +42,7 @@ export default {
   components: {
     MessageList,
     ChatInput,
-    SessionSceneSelect,
+    CosmosComposerTuning,
     WorkbenchPanel,
     YeaftConversationOutline,
   },
@@ -320,7 +325,7 @@ export default {
 
             <ChatInput
               ref="chatInputRef"
-              class="cosmos-drawer-input"
+              class="cosmos-drawer-input cosmos-composer-surface"
               :conversation-id="isYeaftView ? store.yeaftConversationId : store.currentConversation"
               :draft-key="composerDraftKey"
               :send-fn="isYeaftView ? sendYeaftMessage : null"
@@ -334,86 +339,28 @@ export default {
               @remove-quote="messageQuote = null"
               @quote-consumed="messageQuote = null"
             >
-              <template #actions-start="{ inActionMenu }">
-                <SessionSceneSelect
-                  v-if="isYeaftView && ordinarySession && activeGroup"
-                  :key="JSON.stringify([agent.id, activeGroup.id])"
-                  :session="activeGroup"
-                  :agent-id="agent.id"
-                  :open="composerMenuOpen === 'scene'"
-                  :in-action-menu="inActionMenu"
-                  :disabled="store.connectionState !== 'connected' || store.hasAgentCapability?.(agent.id, 'session_scenes') === false"
-                  @update:open="$event ? (composerMenuOpen = 'scene') : closeComposerMenu('scene')"
-                />
-              </template>
-
               <template #actions-end-before>
-                <div v-if="isYeaftView && modelRows.length" class="yeaft-composer-model-controls">
-                  <div class="yeaft-composer-choice" :class="{ 'is-open': composerMenuOpen === 'model' }">
-                    <button
-                      type="button"
-                      class="yeaft-composer-model"
-                      :title="$t('yeaft.modelMenu.label')"
-                      aria-haspopup="menu"
-                      :aria-expanded="composerMenuOpen === 'model' ? 'true' : 'false'"
-                      @click.stop="toggleComposerMenu('model')"
-                    >
-                      <span class="yeaft-composer-model-name">{{ activeModelLabel }}</span>
-                      <svg class="yeaft-model-chevron" :class="{ open: composerMenuOpen === 'model' }" viewBox="0 0 24 24" width="12" height="12" aria-hidden="true"><path fill="currentColor" d="M7 10l5 5 5-5z"/></svg>
-                    </button>
-                    <div v-if="composerMenuOpen === 'model'" class="yeaft-model-dropdown yeaft-composer-model-dropdown" role="menu">
-                      <div class="yeaft-model-list">
-                        <button
-                          v-for="row in modelRows"
-                          :key="row.modelRef"
-                          type="button"
-                          class="yeaft-model-option"
-                          :class="{ active: modelOptionMatchesRef(row.model, activeModel) }"
-                          role="menuitemradio"
-                          :aria-checked="modelOptionMatchesRef(row.model, activeModel) ? 'true' : 'false'"
-                          @click="selectModel(row.modelRef, row.defaultEffort)"
-                        >
-                          <span class="yeaft-model-check" aria-hidden="true">{{ modelOptionMatchesRef(row.model, activeModel) ? '✓' : '' }}</span>
-                          <span class="yeaft-model-option-main">
-                            <span class="yeaft-model-option-label">{{ row.label }}</span>
-                            <span class="yeaft-model-option-meta" v-if="row.model.provider">{{ row.model.provider }}</span>
-                          </span>
-                        </button>
-                      </div>
-                      <button type="button" class="yeaft-model-config-option" @click="$emit('open-llm-config', agent.id)">
-                        <span class="yeaft-model-config-label">{{ $t('settings.llm.configureMenu') }}</span>
-                      </button>
-                    </div>
-                  </div>
-
-                  <div v-if="effortOptions.length" class="yeaft-composer-choice" :class="{ 'is-open': composerMenuOpen === 'effort' }">
-                    <button
-                      type="button"
-                      class="yeaft-composer-effort"
-                      aria-haspopup="menu"
-                      :aria-expanded="composerMenuOpen === 'effort' ? 'true' : 'false'"
-                      @click.stop="toggleComposerMenu('effort')"
-                    >
-                      <span>{{ $t('yeaft.modelMenu.effort.' + activeEffort) }}</span>
-                      <svg class="yeaft-model-chevron" :class="{ open: composerMenuOpen === 'effort' }" viewBox="0 0 24 24" width="12" height="12" aria-hidden="true"><path fill="currentColor" d="M7 10l5 5 5-5z"/></svg>
-                    </button>
-                    <div v-if="composerMenuOpen === 'effort'" class="yeaft-model-dropdown yeaft-composer-effort-dropdown" role="menu">
-                      <button
-                        v-for="effort in effortOptions"
-                        :key="effort"
-                        type="button"
-                        class="yeaft-model-option yeaft-composer-effort-option"
-                        :class="{ active: effort === activeEffort }"
-                        role="menuitemradio"
-                        :aria-checked="effort === activeEffort ? 'true' : 'false'"
-                        @click="selectEffort(effort)"
-                      >
-                        <span class="yeaft-model-check" aria-hidden="true">{{ effort === activeEffort ? '✓' : '' }}</span>
-                        <span class="yeaft-model-option-label">{{ $t('yeaft.modelMenu.effort.' + effort) }}</span>
-                      </button>
-                    </div>
-                  </div>
-                </div>
+                <CosmosComposerTuning
+                  v-if="isYeaftView && (modelRows.length > 0 || showDrawerScene)"
+                  ref="tuningRef"
+                  :model-rows="modelRows"
+                  :active-model="activeModel"
+                  :active-model-label="activeModelLabel"
+                  :effort-options="effortOptions"
+                  :active-effort="activeEffort"
+                  :show-scene="showDrawerScene"
+                  :scene-options="drawerSceneOptions"
+                  :active-scene="displayedDrawerScene"
+                  default-scene-id="general"
+                  :scene-disabled="drawerSceneDisabled"
+                  :scene-busy="Boolean(pendingDrawerScene)"
+                  :scene-error="drawerSceneError"
+                  :scope-key="composerDraftKey"
+                  @select-model="onSelectModel"
+                  @select-effort="selectEffort"
+                  @select-scene="selectDrawerScene"
+                  @open-llm-config="$emit('open-llm-config', agent.id)"
+                />
               </template>
             </ChatInput>
           </template>
@@ -451,7 +398,11 @@ export default {
     const historySearchRef = Vue.ref(null);
     let historySearchTimer = null;
     let stopLoadOlderWatch = null;
-    const composerMenuOpen = Vue.ref(null);
+    const tuningRef = Vue.ref(null);
+    const requestedScene = Vue.ref('');
+    const unconfirmedScene = Vue.ref('');
+    const sceneErrorKey = Vue.ref('');
+    let sceneUpdateSeq = 0;
     const messageQuote = Vue.ref(null);
     const messageListRef = Vue.ref(null);
     const chatInputRef = Vue.ref(null);
@@ -564,8 +515,34 @@ export default {
       store.getYeaftHistoryOutlineState?.() || { results: [], loading: false, hasMore: false, error: null }
     ));
 
-    const modelRows = Vue.computed(() => buildModelSelectionRows(store.yeaftAvailableModels));
-    const activeModel = Vue.computed(() => resolveSessionModelRef(activeGroup.value, store.yeaftModel || ''));
+    const drawerAgentModels = Vue.computed(() => {
+      const cfg = props.agent?.id ? store.llmConfig?.[props.agent.id] : null;
+      const list = cfg?.agentConfig?.availableModels ?? cfg?.effectiveConfig?.availableModels;
+      if (Array.isArray(list) && list.length > 0) return list;
+      if (props.agent?.id && props.agent.id === store.currentAgent && Array.isArray(store.yeaftAvailableModels)) {
+        return store.yeaftAvailableModels;
+      }
+      return [];
+    });
+
+    const drawerDefaultModel = Vue.computed(() => {
+      const cfg = props.agent?.id ? store.llmConfig?.[props.agent.id] : null;
+      const cfgPrimary = cfg?.agentConfig?.primaryModel || cfg?.effectiveConfig?.primaryModel || '';
+      if (cfgPrimary) return cfgPrimary;
+      if (props.agent?.id && props.agent.id === store.currentAgent) return store.yeaftModel || '';
+      return '';
+    });
+
+    const drawerDefaultEffort = Vue.computed(() => {
+      const cfg = props.agent?.id ? store.llmConfig?.[props.agent.id] : null;
+      const cfgEffort = cfg?.agentConfig?.defaultEffort || cfg?.effectiveConfig?.defaultEffort || '';
+      if (cfgEffort) return cfgEffort;
+      if (props.agent?.id && props.agent.id === store.currentAgent) return store.yeaftModelEffort || '';
+      return '';
+    });
+
+    const modelRows = Vue.computed(() => buildModelSelectionRows(drawerAgentModels.value));
+    const activeModel = Vue.computed(() => resolveSessionModelRef(activeGroup.value, drawerDefaultModel.value));
     const activeModelMeta = Vue.computed(() => {
       const hit = modelRows.value.find((r) => modelOptionMatchesRef(r.model, activeModel.value));
       return hit?.model || null;
@@ -579,8 +556,46 @@ export default {
     ));
     const activeEffort = Vue.computed(() => getSessionEffortDisplay(
       activeGroup.value,
-      store.yeaftModelEffort || '',
+      drawerDefaultEffort.value,
       activeModelMeta.value,
+    ));
+
+    const showDrawerScene = Vue.computed(() => Boolean(isYeaftView.value && ordinarySession.value && activeGroup.value));
+
+    const drawerSceneIds = Vue.computed(() => {
+      if (!activeGroup.value) return [];
+      const offered = sessionScenesForAgent(
+        (capability) => store.hasAgentCapability?.(props.agent?.id, capability),
+      );
+      return SESSION_SCENE_IDS.filter(
+        (sceneId) => offered.includes(sceneId) || sceneId === activeGroup.value?.sceneId,
+      );
+    });
+
+    const drawerSceneOptions = Vue.computed(() => drawerSceneIds.value.map((sceneId) => {
+      const key = `yeaft.session.scene.${sceneId}`;
+      const translated = $t(key);
+      return { id: sceneId, label: translated === key ? sceneId : translated };
+    }));
+
+    const pendingDrawerScene = Vue.computed(() => {
+      if (!activeGroup.value) return '';
+      return requestedScene.value
+        || store.pendingSessionSceneSelectionFor?.(activeGroup.value.id, props.agent?.id)
+        || '';
+    });
+
+    const displayedDrawerScene = Vue.computed(() => (
+      pendingDrawerScene.value || displaySessionScene(activeGroup.value)
+    ));
+
+    const drawerSceneDisabled = Vue.computed(() => (
+      store.connectionState !== 'connected'
+      || store.hasAgentCapability?.(props.agent?.id, 'session_scenes') === false
+    ));
+
+    const drawerSceneError = Vue.computed(() => (
+      sceneErrorKey.value ? $t(`yeaft.session.scene.${sceneErrorKey.value}`) : ''
     ));
 
     // Strictly scoped to the active planet's Agent (never cross-planet)
@@ -965,16 +980,30 @@ export default {
       () => `${props.agent?.id || ''}\u001f${activeGroup.value?.id || ''}`,
       () => {
         if (searchOpen.value || historySearchTimer) closeSearch();
+        sceneUpdateSeq += 1;
+        requestedScene.value = '';
+        unconfirmedScene.value = '';
+        sceneErrorKey.value = '';
+        tuningRef.value?.close?.(false);
       },
     );
 
-    function toggleComposerMenu(name) {
-      composerMenuOpen.value = composerMenuOpen.value === name ? null : name;
-    }
+    Vue.watch(
+      () => activeGroup.value?.sceneId,
+      (sceneId) => {
+        if (sceneId && sceneId === unconfirmedScene.value) {
+          unconfirmedScene.value = '';
+          sceneErrorKey.value = '';
+        }
+      },
+    );
 
-    function closeComposerMenu(name = null) {
-      if (!name || composerMenuOpen.value === name) composerMenuOpen.value = null;
-    }
+    Vue.watch(
+      () => workbenchOpen.value || historyOpen.value || searchOpen.value,
+      (overlayActive) => {
+        if (overlayActive) tuningRef.value?.close?.(false);
+      },
+    );
 
     async function applyModel(modelId, effort) {
       try {
@@ -990,18 +1019,57 @@ export default {
     function selectModel(modelId, defaultEffort = null) {
       if (!modelId) return;
       void applyModel(modelId, defaultEffort);
-      composerMenuOpen.value = null;
+    }
+
+    function onSelectModel({ modelRef, defaultEffort }) {
+      selectModel(modelRef, defaultEffort);
     }
 
     function selectEffort(effort) {
       if (!effortOptions.value.includes(effort) || !activeModel.value) return;
       void applyModel(activeModel.value, effort);
-      composerMenuOpen.value = null;
+    }
+
+    async function selectDrawerScene(sceneId) {
+      const targetGroup = activeGroup.value;
+      const targetAgentId = props.agent?.id;
+      if (!targetGroup || !targetAgentId || drawerSceneDisabled.value || pendingDrawerScene.value) return;
+      if (!drawerSceneIds.value.includes(sceneId)) return;
+      if (sceneId === targetGroup.sceneId) return;
+      const targetSessionId = targetGroup.id;
+      const updateSeq = ++sceneUpdateSeq;
+      sceneErrorKey.value = '';
+      unconfirmedScene.value = '';
+      requestedScene.value = sceneId;
+      try {
+        const result = await store.updateYeaftSessionScene?.(targetSessionId, sceneId, targetAgentId);
+        const stillSameSession = updateSeq === sceneUpdateSeq
+          && activeGroup.value?.id === targetSessionId
+          && props.agent?.id === targetAgentId;
+        if (!stillSameSession || result?.ok) return;
+        if (result?.error?.code === 'scene_unconfirmed') {
+          if (activeGroup.value?.sceneId !== sceneId) {
+            unconfirmedScene.value = sceneId;
+            sceneErrorKey.value = 'unconfirmed';
+          }
+        } else {
+          sceneErrorKey.value = 'updateError';
+        }
+      } catch {
+        if (updateSeq === sceneUpdateSeq
+            && activeGroup.value?.id === targetSessionId
+            && props.agent?.id === targetAgentId) {
+          sceneErrorKey.value = 'updateError';
+        }
+      } finally {
+        if (updateSeq === sceneUpdateSeq) requestedScene.value = '';
+      }
     }
 
     function sendYeaftMessage(text, attachmentInfos, quote, quickSend) {
       const groupId = store.yeaftActiveSessionFilter || sessionsStore?.activeSessionId;
       if (!groupId) return false;
+      tuningRef.value?.close?.(false);
       const mentions = sceneSession.value ? [] : parseMentions(text).mentions;
       const attachments = Array.isArray(attachmentInfos) ? attachmentInfos : undefined;
       const res = store.sendYeaftSessionMessage({
@@ -1035,17 +1103,9 @@ export default {
       chatInputRef.value?.replaceDraft?.(text || '');
     }
 
-    const onDocClick = (e) => {
-      if (composerMenuOpen.value && !e.target.closest('.yeaft-composer-choice')) {
-        composerMenuOpen.value = null;
-      }
-    };
-
-    Vue.onMounted(() => document.addEventListener('click', onDocClick));
     Vue.onBeforeUnmount(() => {
       clearSearchTimers();
       cancelSessionDiscoverySearch();
-      document.removeEventListener('click', onDocClick);
     });
 
     expose({
@@ -1075,7 +1135,7 @@ export default {
       searchOpen,
       searchActiveMessageId,
       historySearchRef,
-      composerMenuOpen,
+      tuningRef,
       messageQuote,
       messageListRef,
       chatInputRef,
@@ -1098,7 +1158,12 @@ export default {
       activeModelLabel,
       effortOptions,
       activeEffort,
-      modelOptionMatchesRef,
+      showDrawerScene,
+      drawerSceneOptions,
+      pendingDrawerScene,
+      displayedDrawerScene,
+      drawerSceneDisabled,
+      drawerSceneError,
       toggleHistoryDrawer,
       closeHistoryDrawer,
       toggleProjectFolder,
@@ -1116,10 +1181,10 @@ export default {
       onSearchSelect,
       loadOlderOutline,
       loadMoreSearch,
-      toggleComposerMenu,
-      closeComposerMenu,
       selectModel,
+      onSelectModel,
       selectEffort,
+      selectDrawerScene,
       sendYeaftMessage,
       cancelYeaft,
       setMessageQuote,

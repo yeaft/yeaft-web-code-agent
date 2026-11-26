@@ -1611,4 +1611,179 @@ describe('Cosmos Component & WebGL Review Regressions', () => {
       host.remove();
     }
   });
+
+  it('localizes Quick Composer scenes via yeaft.session.scene.*, filters by agent capability, and renders unified upward tuning across Quick Composer & Drawer', async () => {
+    vi.stubGlobal('Vue', Vue);
+    const { default: zhCN } = await import('../../web/i18n/zh-CN.js');
+    const { default: en } = await import('../../web/i18n/en.js');
+    const { zhCN: cosmosZh, en: cosmosEn } = await import('../../web/i18n/cosmos.js');
+    const zhDict = { ...zhCN, ...cosmosZh };
+    const enDict = { ...en, ...cosmosEn };
+    const tZh = (k) => zhDict[k] ?? k;
+    const tEn = (k) => enDict[k] ?? k;
+
+    const updateYeaftSessionScene = vi.fn().mockResolvedValue({ ok: true });
+    const switchYeaftModel = vi.fn().mockResolvedValue({ ok: true });
+    const store = Vue.reactive({
+      currentView: 'yeaft',
+      currentAgent: 'ag-earth',
+      connectionState: 'connected',
+      yeaftActiveSessionFilter: 'sess-1',
+      yeaftModel: 'copilot/gemini-4-neon',
+      yeaftModelEffort: 'medium',
+      yeaftAvailableModels: [
+        { id: 'copilot/gemini-4-neon', label: 'gemini-4-neon', provider: 'copilot', effortOptions: ['medium', 'high', 'xhigh'] },
+      ],
+      llmConfig: {
+        'ag-saturn': {
+          agentConfig: {
+            primaryModel: 'copilot/gpt-6.2-sol',
+            defaultEffort: 'xhigh',
+            availableModels: [
+              { id: 'copilot/gpt-6.2-sol', label: 'gpt-6.2-sol', provider: 'copilot', effortOptions: ['medium', 'xhigh', 'max'] },
+            ],
+          },
+        },
+      },
+      yeaftHistorySearchState: { query: '', senderKey: 'user', loading: false, results: [], hasMore: false },
+      workbenchExpanded: false,
+      activeSessionRoute: { runtimeProvider: 'yeaft', agentId: 'ag-earth', sessionId: 'sess-1' },
+      sessionProjects: [],
+      hasAgentCapability: (agentId, cap) => {
+        if (agentId === 'ag-earth') return cap === 'session_scenes' || cap === 'session_scene_frontend';
+        return cap === 'session_scenes';
+      },
+      sendWsMessage: vi.fn(() => true),
+      sendYeaftAutoRouteMessage: vi.fn().mockResolvedValue({ ok: true, sessionId: 'sess-1', decision: 'matched' }),
+      updateYeaftSessionScene,
+      switchYeaftModel,
+    });
+    const sessionRow = Vue.reactive({
+      id: 'sess-1',
+      name: 'Cosmos UI',
+      agentId: 'ag-earth',
+      sceneId: 'general',
+      roster: [{ id: 'vp-1' }],
+    });
+    vi.stubGlobal('Pinia', {
+      defineStore: () => () => ({}),
+      useChatStore: () => store,
+      useSessionsStore: () => ({
+        activeSessionId: 'sess-1',
+        sessionById: (sid, aid) => (sid === 'sess-1' && aid === 'ag-earth' ? sessionRow : null),
+      }),
+      useVpStore: () => ({}),
+    });
+
+    const { default: CosmosQuickComposer } = await import('../../web/components/cosmos/CosmosQuickComposer.js');
+    const { default: CosmosComposerTuning } = await import('../../web/components/cosmos/CosmosComposerTuning.js');
+    const { default: CosmosConversationDrawer } = await import('../../web/components/cosmos/CosmosConversationDrawer.js');
+
+    // 1. Quick Composer localized zh-CN scenes (no raw English IDs) + capability filter
+    wrapper = mount(CosmosQuickComposer, {
+      props: { agent: { id: 'ag-earth', name: 'Earth', online: true, liveSessions: [], sessions: [] }, planetId: 'earth' },
+      global: {
+        config: { globalProperties: { $t: tZh } },
+        stubs: {
+          ChatInput: { template: '<div><slot name="actions-start" /><slot name="actions-end-before" /></div>' },
+        },
+      },
+    });
+    const labelsZh = wrapper.vm.sceneOptions.map((o) => o.label);
+    expect(labelsZh).toContain('AI 自动');
+    expect(labelsZh).toContain('不指定场景');
+    expect(labelsZh).toContain('软件开发');
+    expect(labelsZh).toContain('前端开发');
+    expect(labelsZh).toContain('内容创作');
+    expect(labelsZh).toContain('投资');
+    expect(labelsZh).not.toContain('short-video');
+    expect(labelsZh).not.toContain('software');
+    expect(labelsZh).not.toContain('视频剪辑'); // excluded when capability not advertised
+
+    // Open unified tuning popover, verify scene chips + Escape closes ONLY popover
+    const trigger = wrapper.find('.cosmos-tune-trigger');
+    expect(trigger.exists()).toBe(true);
+    await trigger.trigger('click');
+    expect(wrapper.find('.cosmos-tune-popover').exists()).toBe(true);
+    const chipTexts = wrapper.findAll('.cosmos-tune-chip').map((c) => c.text());
+    expect(chipTexts).toContain('前端开发');
+    expect(chipTexts).toContain('内容创作');
+    await wrapper.findAll('.cosmos-tune-chip').find((c) => c.text() === '前端开发').trigger('click');
+    expect(wrapper.vm.selectedScene).toBe('frontend');
+    expect(trigger.text()).toContain('前端开发');
+
+    const escEvent = new KeyboardEvent('keydown', { key: 'Escape', cancelable: true, bubbles: true });
+    wrapper.find('.cosmos-tune').element.dispatchEvent(escEvent);
+    await flushPromises();
+    expect(escEvent.defaultPrevented).toBe(true);
+    expect(wrapper.find('.cosmos-tune-popover').exists()).toBe(false);
+    expect(wrapper.emitted('close')).toBeUndefined();
+    wrapper.unmount();
+
+    // 2. Quick Composer EN localization check
+    wrapper = mount(CosmosQuickComposer, {
+      props: { agent: { id: 'ag-earth', name: 'Earth', online: true, liveSessions: [], sessions: [] }, planetId: 'earth' },
+      global: {
+        config: { globalProperties: { $t: tEn } },
+        stubs: {
+          ChatInput: { template: '<div><slot name="actions-start" /><slot name="actions-end-before" /></div>' },
+        },
+      },
+    });
+    const labelsEn = wrapper.vm.sceneOptions.map((o) => o.label);
+    expect(labelsEn).toContain('AI Auto');
+    expect(labelsEn).toContain('Software');
+    expect(labelsEn).toContain('Frontend');
+    expect(labelsEn).toContain('Content creation');
+    wrapper.unmount();
+
+    // 3. Drawer uses per-agent llmConfig fallback, unified tuning popover updates session scene,
+    //    and closes popover when Workbench opens
+    wrapper = mount(CosmosConversationDrawer, {
+      props: {
+        agent: { id: 'ag-earth', name: 'Earth', online: true, sessions: [{ id: 'sess-1', agentId: 'ag-earth', runtimeProvider: 'yeaft', title: 'Cosmos UI', status: 'idle', updatedLabel: 'now' }] },
+        planetId: 'earth',
+      },
+      global: {
+        config: { globalProperties: { $t: tZh } },
+        stubs: {
+          MessageList: true,
+          WorkbenchPanel: true,
+          YeaftConversationOutline: true,
+          ChatInput: { template: '<div><slot name="actions-start" :in-action-menu="false" /><slot name="actions-end-before" /></div>' },
+        },
+      },
+    });
+    const drawerTrigger = wrapper.find('.cosmos-tune-trigger');
+    expect(drawerTrigger.text()).toContain('gemini-4-neon');
+    await drawerTrigger.trigger('click');
+    expect(wrapper.find('.cosmos-tune-popover').exists()).toBe(true);
+    const frontendChip = wrapper.findAll('.cosmos-tune-chip').find((c) => c.text() === '前端开发');
+    expect(frontendChip).toBeTruthy();
+    await frontendChip.trigger('click');
+    await flushPromises();
+    expect(updateYeaftSessionScene).toHaveBeenCalledWith('sess-1', 'frontend', 'ag-earth');
+
+    // Opening Workbench must cleanly close the open tuning popover
+    store.workbenchExpanded = true;
+    await flushPromises();
+    expect(wrapper.find('.cosmos-tune-popover').exists()).toBe(false);
+    wrapper.unmount();
+
+    // 4. CosmosComposerTuning emits open-llm-config and closes immediately on Configure click
+    wrapper = mount(CosmosComposerTuning, {
+      props: {
+        modelRows: [{ modelRef: 'copilot/gemini-4-neon', label: 'gemini-4-neon', model: { id: 'copilot/gemini-4-neon', provider: 'copilot' } }],
+        activeModel: 'copilot/gemini-4-neon',
+        activeModelLabel: 'gemini-4-neon',
+        effortOptions: ['medium', 'high'],
+        activeEffort: 'medium',
+      },
+      global: { config: { globalProperties: { $t: tZh } } },
+    });
+    await wrapper.find('.cosmos-tune-trigger').trigger('click');
+    await wrapper.find('.cosmos-tune-config-link').trigger('click');
+    expect(wrapper.emitted('open-llm-config')).toHaveLength(1);
+    expect(wrapper.find('.cosmos-tune-popover').exists()).toBe(false);
+  });
 });
