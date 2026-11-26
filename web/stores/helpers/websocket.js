@@ -274,6 +274,7 @@ export function connect(store) {
   store._wsConnectTimer = null;
   if (store.ws) {
     store.interruptYeaftTurnDeletions?.();
+    store.interruptYeaftTurnRetries?.();
     settleSessionCrudForConnection(
       store,
       store.chatHistoryConnectionGeneration,
@@ -429,6 +430,7 @@ export function connect(store) {
     store.ws = null;
     console.log('[WS] Disconnected:', event.code, event.reason);
     store.interruptYeaftTurnDeletions?.();
+    store.interruptYeaftTurnRetries?.();
     store.authenticated = false;
     store.yeaftSessionDeleteTurnSupported = false;
     if (store.sessionCatalogProtocolSupported === false) {
