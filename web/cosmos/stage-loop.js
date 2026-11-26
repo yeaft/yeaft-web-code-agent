@@ -8,11 +8,17 @@ import { PLANETS, scaleBand } from './constants.js';
 import { fillGpuParticles, drawCosmosHud } from './particle-hud.js';
 import {
   tickCosmicEvents,
-  getEventScreenPosition,
+  computeEventFrame,
+  getEventLens,
+  getEventAmbient,
   getEventShockWave,
   getSolarTelescopeTransform,
 } from './events-controller.js';
-import { drawCosmicEventCanvas } from './events-renderer.js';
+import {
+  fillEventGpuParticles,
+  drawCosmicEventHud,
+  drawCosmicEventCanvas,
+} from './events-renderer.js';
 
 /**
  * Pure aspect-aware Solar System layout calculator.
@@ -57,7 +63,7 @@ export function computeSolarProjectionLayout(w, h, opts = {}) {
 
 export function stepCosmosFrame(now, ctx) {
   const {
-    engine, anim, eventSim, pools, webGraph, gpuParticles,
+    engine, anim, eventSim, pools, webGraph, getWebGraph, gpuParticles, eventGpuParticles,
     constants, domRefs, getAgentsByPlanet, getGalaxyBooks,
     getUiState, onBandChange, onSyncEvents, onUpdateHoverPos,
   } = ctx;
@@ -84,7 +90,7 @@ export function stepCosmosFrame(now, ctx) {
   tickCosmicEvents(eventSim, dt * (reducedMotion ? 0.5 : 1.0), {
     showCountdown: constants.showEventsCountdown && ui.currentBand === 'solar',
     autoEnabled: constants.eventsAutoEnabled,
-    autoZoom: constants.eventsAutoZoom !== false,
+    autoZoom: constants.eventsAutoZoom === true,
     canAutoZoom: ui.currentBand === 'solar' && !ui.drawerOpen && !ui.quickOpen && !ui.dragActive,
     cameraDt: reducedMotion ? Math.max(dt * 8, 0.28) : dt,
   });
@@ -312,36 +318,55 @@ export function stepCosmosFrame(now, ctx) {
     densityScale,
   });
 
-  // Distant cosmic event spatial beacon (shown at the event's peripheral coordinates when not telescoped in)
+  // Distant cosmic event spatial beacon & WebGL render frame descriptor
   const portalAvoidPoints = [
     toScreen(galPortalX, galPortalY),
     toScreen(webPortalX, webPortalY),
     toScreen(bhPortalX, bhPortalY),
   ];
-  const eventPos = eventSim.active ? getEventScreenPosition(eventSim, w, h, anim.centerShiftX, portalAvoidPoints) : null;
   const eventVisibilityAlpha = baseSolarAlpha;
+  const eventDraw = (eventSim.active && eventVisibilityAlpha > 0.01)
+    ? computeEventFrame(
+      eventSim,
+      w,
+      h,
+      anim.centerShiftX,
+      portalAvoidPoints,
+      eventVisibilityAlpha,
+      anim.camRot,
+      anim.parallax,
+    )
+    : null;
+  const eventParticleCount = (eventDraw && engine.isWebGL && eventGpuParticles)
+    ? fillEventGpuParticles(eventGpuParticles, eventDraw, w, h, dpr, densityScale)
+    : 0;
+  const eventLens = eventDraw ? getEventLens(eventDraw, w, h) : [0, 0, 0, 0];
+  const eventAmbient = eventDraw ? getEventAmbient(eventDraw) : [0, 0, 0, 0];
+
   const beaconEl = domRefs.eventBeacon?.value;
   if (beaconEl) {
     const showBeacon = Boolean(
       eventSim.active
-      && eventPos
+      && eventDraw
       && eventVisibilityAlpha > 0.05
       && band === 'solar'
       && !observing
       && telescope.focus < 0.22
-      && (!ui.drawerOpen || eventPos.restX < w - panelW - 88)
-      && !(isCompact && ui.quickOpen && eventPos.restY > h * 0.62)
+      && (!ui.drawerOpen || eventDraw.restX < w - panelW - 88)
+      && !(isCompact && ui.quickOpen && eventDraw.restY > h * 0.62)
     );
     if (showBeacon) {
       const edgePadX = isCompact ? 115 : 150;
       const edgePadBottom = isCompact ? 130 : 110;
+      const reticleSize = Math.round(Math.max(30, Math.min(72, eventDraw.eventRadiusPx * 1.1)));
       beaconEl.style.display = 'inline-flex';
       beaconEl.style.opacity = String(Math.max(0, Math.min(1, (1 - telescope.focus * 4.5) * eventVisibilityAlpha)));
-      beaconEl.style.left = `${Math.round(eventPos.restX)}px`;
-      beaconEl.style.top = `${Math.round(eventPos.restY)}px`;
-      beaconEl.classList.toggle('is-left-edge', eventPos.restX < edgePadX);
-      beaconEl.classList.toggle('is-right-edge', eventPos.restX > w - edgePadX);
-      beaconEl.classList.toggle('is-bottom-edge', eventPos.restY > h - edgePadBottom);
+      beaconEl.style.left = `${Math.round(eventDraw.restX)}px`;
+      beaconEl.style.top = `${Math.round(eventDraw.restY)}px`;
+      beaconEl.style.setProperty('--beacon-size', `${reticleSize}px`);
+      beaconEl.classList.toggle('is-left-edge', eventDraw.restX < edgePadX);
+      beaconEl.classList.toggle('is-right-edge', eventDraw.restX > w - edgePadX);
+      beaconEl.classList.toggle('is-bottom-edge', eventDraw.restY > h - edgePadBottom);
     } else {
       beaconEl.style.display = 'none';
     }
@@ -351,6 +376,8 @@ export function stepCosmosFrame(now, ctx) {
     x: anim.camRot.x + (eventSim.camYawOffset || 0),
     y: anim.camRot.y + (eventSim.camPitchOffset || 0),
   };
+
+  const activeWebGraph = webFullAlpha > 0.04 ? (webGraph || getWebGraph?.() || null) : null;
 
   engine.renderFrame({
     time: anim.time,
@@ -363,6 +390,8 @@ export function stepCosmosFrame(now, ctx) {
     shockWave: eventVisibilityAlpha > 0.01
       ? getEventShockWave(eventSim, w, h, anim.centerShiftX, portalAvoidPoints, eventVisibilityAlpha)
       : [0, 0, 0, 0],
+    eventLens,
+    eventAmbient,
     skyBright: constants.skyBright,
     starDensity: constants.starDensity,
     bhParams,
@@ -370,15 +399,21 @@ export function stepCosmosFrame(now, ctx) {
     webParams,
     particleData: gpuParticles,
     particleCount,
+    eventDraw,
+    activeEvent: eventSim.active,
+    eventParticleData: eventGpuParticles,
+    eventParticleCount,
     solarBodies,
     solarAlpha,
-    hudDraw: (c2d, cw, ch) => {
-      drawCosmosHud(c2d, cw, ch, anim, webGraph, galaxyBooks, agentsByPlanet, {
+    hudDraw: (c2d, cw, ch, renderInfo = {}) => {
+      drawCosmosHud(c2d, cw, ch, anim, activeWebGraph, galaxyBooks, agentsByPlanet, {
         cx, cy, span, tilt, solarAlpha, galAlpha: galFullAlpha, webAlpha: webFullAlpha,
       }, (ec, ew, eh) => {
-        if (!eventSim.active || eventVisibilityAlpha <= 0.01) return;
-        const pos = getEventScreenPosition(eventSim, ew, eh, anim.centerShiftX, portalAvoidPoints);
-        if (pos) drawCosmicEventCanvas(ec, ew, eh, eventSim.active, pos, eventVisibilityAlpha);
+        if (!eventDraw || !eventSim.active) return;
+        if (!renderInfo.eventRenderedInGL && !renderInfo.eventRenderedIn2D) {
+          drawCosmicEventCanvas(ec, ew, eh, eventSim.active, eventDraw, eventDraw.alpha);
+        }
+        drawCosmicEventHud(ec, ew, eh, eventDraw, anim.centerShiftX);
       });
     },
   });

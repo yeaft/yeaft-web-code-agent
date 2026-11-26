@@ -6,7 +6,8 @@
  * solar terminator shading, Saturn/Uranus 3D front/back rings, M51 galaxy, Cosmic Web,
  * and Gargantua black hole lensing — keeping Cosmos crisp and smooth without any GPU.
  */
-import { requestCosmosTextureGroup, getLoadedCosmosImage } from './texture-loader.js';
+import { requestCosmosTextureGroup, requestCosmosTextureTier, getLoadedCosmosImage } from './texture-loader.js';
+import { drawCosmicEventCanvas } from './events-renderer.js';
 
 function makeSeededStars(count = 240) {
   let s = 20261127;
@@ -350,7 +351,10 @@ export function createFallback2DEngine(glCanvas, hudCanvas, opts = {}) {
   let destroyed = false;
 
   const loadedGroups = new Set();
+  const loadedTiers = new Set();
   const unsubs = [];
+  const stageTimers = [];
+  let idleHandle = 0;
 
   function requestGroup(group) {
     if (destroyed || loadedGroups.has(group)) return;
@@ -358,7 +362,22 @@ export function createFallback2DEngine(glCanvas, hudCanvas, opts = {}) {
     unsubs.push(requestCosmosTextureGroup(group, null));
   }
 
-  requestGroup('solar');
+  function requestTier(tier) {
+    if (destroyed || loadedTiers.has(tier)) return;
+    loadedTiers.add(tier);
+    unsubs.push(requestCosmosTextureTier(tier, null));
+  }
+
+  requestTier(0);
+  stageTimers.push(setTimeout(() => { if (!destroyed) requestTier(1); }, 140));
+  if (typeof window !== 'undefined' && typeof window.requestIdleCallback === 'function') {
+    idleHandle = window.requestIdleCallback(() => {
+      idleHandle = 0;
+      if (!destroyed) requestTier(2);
+    }, { timeout: 700 });
+  } else {
+    stageTimers.push(setTimeout(() => { if (!destroyed) requestTier(2); }, 450));
+  }
 
   function ensureScaleTextures(scaleLog) {
     if (scaleLog > 16.0) requestGroup('galaxy');
@@ -408,6 +427,8 @@ export function createFallback2DEngine(glCanvas, hudCanvas, opts = {}) {
         webParams = { x: 0, y: 0, radius: 0, alpha: 0 },
         solarBodies = [],
         solarAlpha = 1,
+        eventDraw = null,
+        activeEvent = null,
       } = frameState || {};
 
       ensureScaleTextures(scaleLog);
@@ -502,6 +523,10 @@ export function createFallback2DEngine(glCanvas, hudCanvas, opts = {}) {
         drawCtx.rotate(-0.26);
         drawCtx.scale(1, Math.max(0.28, galParams.tilt || 0.54));
         drawCtx.rotate(-realTime * 0.016 - time * 0.012);
+        // Elliptical clip prevents rectangular image edges from showing over the Milky Way in 2D Eco mode
+        drawCtx.beginPath();
+        drawCtx.arc(0, 0, gr * 0.94, 0, Math.PI * 2);
+        drawCtx.clip();
         drawCtx.globalCompositeOperation = 'screen';
         if (m51) {
           drawCtx.globalAlpha = Math.min(1, galParams.alpha * 0.92);
@@ -528,6 +553,11 @@ export function createFallback2DEngine(glCanvas, hudCanvas, opts = {}) {
         const wr = webParams.radius * Math.max(width, height) * 0.95;
         const webImg = getLoadedCosmosImage('web');
         drawCtx.save();
+        if (webParams.radius < 0.5) {
+          drawCtx.beginPath();
+          drawCtx.arc(wp.x, wp.y, wr * 0.88, 0, Math.PI * 2);
+          drawCtx.clip();
+        }
         drawCtx.globalCompositeOperation = 'screen';
         if (webImg) {
           drawCtx.globalAlpha = Math.min(0.88, webParams.alpha * 0.72);
@@ -554,6 +584,14 @@ export function createFallback2DEngine(glCanvas, hudCanvas, opts = {}) {
         drawBlackHole2D(drawCtx, bp.x, bp.y, bhParams.radius * height, bhParams.strength, realTime);
       }
 
+      // 6b. Distant Deep-Sky Cosmic Events (drawn BEHIND foreground Solar planets for 3D depth)
+      let eventRenderedIn2D = false;
+      const isDeepEvent = Boolean(eventDraw && eventDraw.layer !== 'local');
+      if (eventDraw && activeEvent && isDeepEvent) {
+        drawCosmicEventCanvas(drawCtx, width, height, activeEvent, eventDraw, eventDraw.alpha);
+        eventRenderedIn2D = true;
+      }
+
       // 7. Solar Bodies (depth-sorted Sun + 8 Planets with real NASA textures & rings)
       if (solarAlpha > 0.01 && solarBodies.length) {
         drawCtx.save();
@@ -565,11 +603,23 @@ export function createFallback2DEngine(glCanvas, hudCanvas, opts = {}) {
         }
         drawCtx.restore();
       }
+
+      // 7b. Focused Telescope Close-Up Event (drawn cleanly in front after planets recede)
+      if (eventDraw && activeEvent && !isDeepEvent) {
+        drawCosmicEventCanvas(drawCtx, width, height, activeEvent, eventDraw, eventDraw.alpha);
+        eventRenderedIn2D = true;
+      }
+
+      if (ctx2d) {
+        if (!sharedSingleCanvas) ctx2d.clearRect(0, 0, width, height);
+        if (frameState?.hudDraw) frameState.hudDraw(ctx2d, width, height, { eventRenderedInGL: false, eventRenderedIn2D });
+      }
+      return;
     }
 
     if (ctx2d) {
       if (!sharedSingleCanvas) ctx2d.clearRect(0, 0, width, height);
-      if (frameState?.hudDraw) frameState.hudDraw(ctx2d, width, height);
+      if (frameState?.hudDraw) frameState.hudDraw(ctx2d, width, height, { eventRenderedInGL: false, eventRenderedIn2D: false });
     }
   }
 
@@ -587,6 +637,12 @@ export function createFallback2DEngine(glCanvas, hudCanvas, opts = {}) {
     destroy: () => {
       if (destroyed) return;
       destroyed = true;
+      for (const id of stageTimers) clearTimeout(id);
+      stageTimers.length = 0;
+      if (idleHandle && typeof window !== 'undefined' && typeof window.cancelIdleCallback === 'function') {
+        window.cancelIdleCallback(idleHandle);
+        idleHandle = 0;
+      }
       window.removeEventListener('resize', resize);
       for (const off of unsubs) off();
       unsubs.length = 0;

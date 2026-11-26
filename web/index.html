@@ -36,19 +36,16 @@
   <script src="vendor/cm-mode-shell.js"></script>
   <script src="vendor/cm-mode-clike.js"></script>
   <script src="vendor/cm-mode-markdown.js"></script>
-  <!-- Document Preview (Office/PDF) - defer: non-blocking, loaded before DOMContentLoaded -->
-  <script defer src="vendor/jszip.min.js"></script>
-  <script defer src="vendor/docx-preview.min.js"></script>
-  <script defer src="vendor/xlsx.min.js"></script>
-  <!-- Mermaid (Diagram rendering in Markdown) -->
-  <script defer src="vendor/mermaid.min.js"></script>
-  <!-- html-to-image (Screenshot) -->
-  <script defer src="vendor/html-to-image.min.js"></script>
-  <!-- MSAL (Microsoft Authentication Library) - for Azure AD SSO, defer: only needed at login -->
-  <script defer src="vendor/msal-browser.min.js"></script>
 </head>
 <body>
   <div id="app"></div>
   <script type="module" src="app.js"></script>
+  <!-- Document Preview / Mermaid / Screenshot / SSO - deferred after app bootstrap -->
+  <script defer src="vendor/jszip.min.js"></script>
+  <script defer src="vendor/docx-preview.min.js"></script>
+  <script defer src="vendor/xlsx.min.js"></script>
+  <script defer src="vendor/mermaid.min.js"></script>
+  <script defer src="vendor/html-to-image.min.js"></script>
+  <script defer src="vendor/msal-browser.min.js"></script>
 </body>
 </html>

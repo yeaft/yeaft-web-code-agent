@@ -1,265 +1,568 @@
 /**
- * Yeaft Cosmos — High-Craft Multi-Phase Cosmic Event Canvas Renderer (8 Phenomena)
+ * Yeaft Cosmos — GPU Event Particle Sculptor, Observatory HUD Fiducials & High-Craft 2D Fallback
+ *
+ * Primary volumetric cosmic events render in native WebGL (`shaders-events.js` + `gl-engine.js`).
+ * This module supplies:
+ * 1. `fillEventGpuParticles`: matching additive GPU micro-particles for all 8 phenomena
+ * 2. `drawCosmicEventHud`: delicate astronomical telescope field fiducials during observation
+ * 3. `drawCosmicEventCanvas`: upgraded real-texture Canvas 2D renderer for 2D Eco / no-GPU mode
  */
+import { getLoadedCosmosImage } from './texture-loader.js';
 
-function makeRays(seedStart, count) {
+function createSeeds(seedStart, count) {
   let s = seedStart >>> 0;
   const rnd = () => {
     s = (s * 1664525 + 1013904223) >>> 0;
     return s / 4294967296;
   };
-  const arr = [];
+  const out = [];
   for (let i = 0; i < count; i++) {
-    arr.push({
-      ang: rnd() * Math.PI * 2,
+    out.push({
+      a: rnd() * Math.PI * 2,
+      r: rnd(),
       spd: 0.35 + rnd() * 0.95,
-      size: 1.4 + rnd() * 3.8,
+      sz: 1.0 + Math.pow(rnd(), 2.2) * 3.1,
       hue: rnd(),
-      delay: rnd() * 0.14,
-      wobble: (rnd() - 0.5) * 0.25,
+      ph: rnd(),
+      wob: (rnd() - 0.5) * 0.65,
+      z: (rnd() - 0.5) * 2.0,
     });
   }
-  return arr;
+  return out;
 }
 
-const RAYS_SN = makeRays(10131, 120);
-const RAYS_PLANET = makeRays(29847, 110);
-const RAYS_BH = makeRays(51923, 88);
-const RAYS_COMET = makeRays(77341, 72);
+const SEEDS = createSeeds(314159, 460);
 
-function drawTaperedSpike(ctx, x, y, len, angle, rgbaCenter, width) {
-  const dx = Math.cos(angle) * len;
-  const dy = Math.sin(angle) * len;
-  const grad = ctx.createLinearGradient(x - dx, y - dy, x + dx, y + dy);
-  grad.addColorStop(0, 'rgba(200, 235, 255, 0)');
-  grad.addColorStop(0.42, rgbaCenter);
-  grad.addColorStop(0.50, 'rgba(255, 255, 255, 0.96)');
-  grad.addColorStop(0.58, rgbaCenter);
-  grad.addColorStop(1, 'rgba(200, 235, 255, 0)');
-  ctx.strokeStyle = grad;
-  ctx.lineWidth = width;
-  ctx.beginPath();
-  ctx.moveTo(x - dx, y - dy);
-  ctx.lineTo(x + dx, y + dy);
-  ctx.stroke();
+function smoothstep(e0, e1, x) {
+  const t = Math.max(0, Math.min(1, (x - e0) / (e1 - e0)));
+  return t * t * (3 - 2 * t);
 }
 
-function drawFeatheredShell(ctx, x, y, rOut, innerRgb, midRgb, outerRgb, alpha) {
+/**
+ * Populate GPU additive particle buffer matching the active WebGL cosmic event shader.
+ */
+export function fillEventGpuParticles(buf, evDraw, w, h, dpr, densityScale = 1.0) {
+  if (!buf || !evDraw || evDraw.alpha <= 0.004 || densityScale <= 0) return 0;
+  const maxPts = 520;
+  const step = densityScale < 0.7 ? 2 : 1;
+  let count = 0;
+
+  const p = evDraw.progress;
+  const evT = evDraw.elapsed;
+  const x = evDraw.x;
+  const y = evDraw.y;
+  const S = evDraw.eventRadiusPx;
+  const alphaMaster = evDraw.alpha;
+  const rotC = Math.cos(evDraw.angle || 0);
+  const rotS = Math.sin(evDraw.angle || 0);
+  const sizeScale = Math.max(0.42, Math.min(1.42, S / 215));
+
+  const birthEnv = smoothstep(0.0, 0.14, p);
+  const decayEnv = smoothstep(1.0, 0.76, p);
+  const lifeEnv = birthEnv * decayEnv * alphaMaster;
+  if (lifeEnv <= 0.004) return 0;
+
+  const pushLocal = (lx, ly, sz, r, g, b, a) => {
+    if (count >= maxPts || a <= 0.01) return;
+    const sx = x + (lx * rotC - ly * rotS);
+    const sy = y + (lx * rotS + ly * rotC);
+    if (sx < -24 || sx > w + 24 || sy < -24 || sy > h + 24) return;
+    const off = count * 7;
+    buf[off] = sx * dpr;
+    buf[off + 1] = sy * dpr;
+    buf[off + 2] = Math.max(1.0, sz * sizeScale) * dpr;
+    buf[off + 3] = r;
+    buf[off + 4] = g;
+    buf[off + 5] = b;
+    buf[off + 6] = Math.min(1.0, a);
+    count++;
+  };
+
+  const type = evDraw.eventType;
+
+  /* 0. SUPERNOVA — Shock-front luminous ejecta knots & remnant spark field */
+  if (type === 0) {
+    const expP = Math.max(0, (p - 0.19) / 0.81);
+    if (expP > 0.01) {
+      const rShell = S * (0.14 + Math.pow(expP, 0.62) * 1.38);
+      const env = smoothstep(0.0, 0.12, expP) * decayEnv * alphaMaster;
+      for (let i = 0; i < 340; i += step) {
+        const sd = SEEDS[i];
+        const asym = 1.0 + 0.12 * Math.sin(sd.a * 3.0 + evDraw.seed * 6.28) + 0.07 * Math.cos(sd.a * 5.0);
+        const dist = rShell * asym * (0.34 + sd.r * 0.78);
+        const ang = sd.a + sd.wob * expP * 0.35;
+        const tw = 0.65 + 0.35 * Math.sin(evT * (2.2 + sd.spd * 2.5) + sd.ph * 25.0);
+        const isOuter = sd.r > 0.72;
+        const colR = isOuter ? 1.0 : (sd.hue < 0.55 ? 0.56 : 0.86);
+        const colG = isOuter ? 0.58 : (sd.hue < 0.55 ? 0.90 : 0.72);
+        const colB = isOuter ? 0.34 : 1.0;
+        pushLocal(
+          Math.cos(ang) * dist,
+          Math.sin(ang) * dist,
+          sd.sz * (isOuter ? 1.08 : 0.88),
+          colR, colG, colB,
+          (0.28 + 0.44 * sd.spd) * tw * (1.0 - expP * 0.35) * env,
+        );
+      }
+    }
+
+  /* 1. PLANET SHATTER — Ballistic molten lava droplets & sheared 3D Roche debris boulders */
+  } else if (type === 1) {
+    const hitT = 0.24;
+    if (p < hitT + 0.04) {
+      const ap = Math.max(0, Math.min(1, p / hitT));
+      const appEnv = birthEnv * (1.0 - smoothstep(hitT - 0.02, hitT + 0.04, p)) * alphaMaster;
+      const ix = (1.25 + (0.24 - 1.25) * Math.pow(ap, 1.15)) * S;
+      const iy = (-0.62 + (-0.14 + 0.62) * Math.pow(ap, 1.15)) * S;
+      for (let i = 0; i < 64; i += step) {
+        const sd = SEEDS[i];
+        const trail = sd.r * 0.68 * S;
+        const spread = sd.z * (0.04 + sd.r * 0.14) * S;
+        pushLocal(
+          ix + trail * 0.89 + spread * 0.45,
+          iy - trail * 0.45 + spread * 0.89,
+          sd.sz * 0.85,
+          1.0, 0.62 + sd.hue * 0.3, 0.26,
+          (1.0 - sd.r) * 0.68 * appEnv,
+        );
+      }
+    }
+    if (p >= hitT) {
+      const bp = (p - hitT) / (1 - hitT);
+      const env = decayEnv * alphaMaster;
+      const rc = Math.cos(-0.22);
+      const rs = Math.sin(-0.22);
+      for (let i = 0; i < 380; i += step) {
+        const sd = SEEDS[i];
+        if (i < 210) {
+          const ringEnv = smoothstep(0.10, 0.45, bp) * env;
+          const rr = S * (0.42 + bp * 0.82) * (0.58 + sd.r * 0.72);
+          const ang = sd.a + evT * (1.15 / Math.pow(0.45 + sd.r, 0.75));
+          const ex = Math.cos(ang) * rr;
+          const ey = Math.sin(ang) * rr * 0.27 + sd.z * S * 0.025;
+          const heat = Math.max(0.18, 0.92 - bp * 0.36 - sd.r * 0.28);
+          pushLocal(
+            ex * rc - ey * rs,
+            ex * rs + ey * rc,
+            sd.sz * 0.86,
+            1.0, 0.34 + heat * 0.56, 0.14 + heat * 0.36,
+            (0.32 + 0.48 * heat) * ringEnv,
+          );
+        } else {
+          const fanAng = -0.52 + (sd.a - Math.PI) * 0.72;
+          const dist = S * (0.14 + Math.pow(bp, 0.72) * (0.42 + sd.spd * 1.05));
+          const lx = 0.22 * S + Math.cos(fanAng) * dist;
+          const ly = -0.12 * S + Math.sin(fanAng) * dist * 0.82;
+          const cool = Math.max(0.16, 1.0 - bp * 0.58);
+          pushLocal(
+            lx, ly,
+            sd.sz * (0.78 + 0.35 * cool),
+            1.0, 0.38 + cool * 0.52, 0.16 + cool * 0.38,
+            (0.35 + 0.45 * cool) * env,
+          );
+        }
+      }
+    }
+
+  /* 2. BLACK HOLE BIRTH — Spiraling Gargantua accretion embers & polar jet plasma knots */
+  } else if (type === 2) {
+    const birthP = Math.max(0, (p - 0.23) / 0.77);
+    if (birthP > 0.01) {
+      const rs = S * 0.25 * smoothstep(0.0, 0.18, birthP);
+      const bhEnv = smoothstep(0.0, 0.14, birthP) * decayEnv * alphaMaster;
+      const jetEnv = smoothstep(0.04, 0.22, birthP) * (1.0 - smoothstep(0.56, 0.94, birthP)) * decayEnv * alphaMaster;
+      for (let i = 0; i < 340; i += step) {
+        const sd = SEEDS[i];
+        if (i < 250) {
+          const prog = (sd.ph + evT * (0.18 + sd.spd * 0.18)) % 1.0;
+          const rad = rs * (1.14 + (1.0 - prog) * 4.2);
+          const ang = sd.a + evT * (2.8 / Math.pow(Math.max(rad / Math.max(rs, 1), 1.0), 1.1));
+          const lx = Math.cos(ang) * rad;
+          const ly = Math.sin(ang) * rad * 0.19 + sd.z * rs * 0.14 * (1.0 - prog);
+          if (Math.sin(ang) < 0 && Math.hypot(lx, ly) < rs * 1.02) continue;
+          const doppler = Math.max(0.38, Math.min(1.55, 1.0 - 0.44 * (lx / Math.max(rad, 1))));
+          const heat = Math.min(1.0, prog * 0.8 + doppler * 0.35);
+          pushLocal(
+            lx, ly,
+            sd.sz * (0.76 + heat * 0.45),
+            1.0, 0.48 + heat * 0.44, 0.18 + heat * 0.64,
+            Math.sin(prog * Math.PI) * 0.56 * doppler * bhEnv,
+          );
+        } else if (jetEnv > 0.01) {
+          const side = i % 2 === 0 ? 1 : -1;
+          const prog = (sd.ph + evT * (0.65 + sd.spd * 0.55)) % 1.0;
+          const along = rs * 1.05 + prog * S * 1.65;
+          const spread = sd.z * (0.018 + prog * 0.085) * S;
+          pushLocal(
+            spread, side * along,
+            sd.sz * (0.85 - prog * 0.35),
+            0.68, 0.86, 1.0,
+            Math.sin(prog * Math.PI) * 0.72 * jetEnv,
+          );
+        }
+      }
+    }
+
+  /* 3. KILONOVA — Tidal spiral tail sparks -> polar cyan + equatorial forged-gold ejecta */
+  } else if (type === 3) {
+    const mergeP = 0.42;
+    if (p < mergeP) {
+      const ip = p / mergeP;
+      const inEnv = birthEnv * alphaMaster;
+      const sep = S * 0.62 * Math.pow(1 - ip, 0.52);
+      const omega = ip * ip * 20.0 + evT * 2.4;
+      for (let i = 0; i < 190; i += step) {
+        const sd = SEEDS[i];
+        const arm = (i % 2) * Math.PI;
+        const tail = sd.r * 0.65;
+        const rad = sep + tail * S * (0.85 + ip * 0.35);
+        const ang = omega + arm - tail * (3.2 + ip * 3.0) + sd.wob * 0.25;
+        const isCyan = i % 2 === 0;
+        pushLocal(
+          Math.cos(ang) * rad,
+          Math.sin(ang) * rad * 0.56,
+          sd.sz * 0.82,
+          isCyan ? 0.54 : 0.82, isCyan ? 0.88 : 0.68, 1.0,
+          (1.0 - tail * 1.15) * (0.45 + 0.5 * ip) * inEnv,
+        );
+      }
+    } else {
+      const kp = (p - mergeP) / (1 - mergeP);
+      const kEnv = decayEnv * alphaMaster;
+      const rExp = S * (0.18 + Math.pow(kp, 0.60) * 1.24);
+      for (let i = 0; i < 320; i += step) {
+        const sd = SEEDS[i];
+        const isPolar = sd.hue < 0.36;
+        const ang = isPolar
+          ? (sd.z >= 0 ? Math.PI * 0.5 : -Math.PI * 0.5) + sd.wob * 0.82
+          : (sd.z >= 0 ? 0 : Math.PI) + sd.wob * 1.15;
+        const dist = rExp * (0.28 + sd.r * 0.88);
+        pushLocal(
+          Math.cos(ang) * dist,
+          Math.sin(ang) * dist,
+          sd.sz * 0.92,
+          isPolar ? 0.38 : 1.0,
+          isPolar ? 0.94 : (0.62 + sd.r * 0.22),
+          isPolar ? 0.96 : 0.28,
+          (0.32 + 0.45 * sd.spd) * (1.0 - kp * 0.38) * kEnv,
+        );
+      }
+    }
+
+  /* 4. STELLAR SUPERFLARE — Coronal magnetic loop plasma droplets & CME solar-wind gusts */
+  } else if (type === 4) {
+    const sunR = evDraw.sunRadiusPx || S * 0.34;
+    const cmeP = Math.max(0, (p - 0.16) / 0.84);
+    const baseC = Math.cos(evDraw.angle || -0.58);
+    const baseS = Math.sin(evDraw.angle || -0.58);
+    for (let i = 0; i < 260; i += step) {
+      const sd = SEEDS[i];
+      const angOff = sd.z * (0.48 + cmeP * 0.22);
+      const front = sunR * (1.08 + Math.pow(cmeP, 0.72) * 3.1);
+      const rad = sunR * 0.98 + (front - sunR * 0.98) * ((sd.r + evT * 0.14 * sd.spd) % 1.0);
+      const lx = Math.cos(angOff) * rad;
+      const ly = Math.sin(angOff) * rad;
+      const sx = x + (lx * baseC - ly * baseS);
+      const sy = y + (lx * baseS + ly * baseC);
+      if (count >= maxPts || sx < -24 || sx > w + 24 || sy < -24 || sy > h + 24) continue;
+      const uRad = (rad - sunR) / Math.max(front - sunR, 1);
+      const off = count * 7;
+      buf[off] = sx * dpr;
+      buf[off + 1] = sy * dpr;
+      buf[off + 2] = Math.max(1.1, sd.sz * Math.max(0.45, sunR / 62)) * dpr;
+      buf[off + 3] = 1.0;
+      buf[off + 4] = 0.88 - uRad * 0.52;
+      buf[off + 5] = 0.52 - uRad * 0.38;
+      buf[off + 6] = Math.sin(uRad * Math.PI) * 0.58 * lifeEnv;
+      count++;
+    }
+
+  /* 5. GAMMA-RAY BURST — Ultra-fast collimated relativistic jet knots & cocoon sparks */
+  } else if (type === 5) {
+    const beamEnv = smoothstep(0.10, 0.24, p) * decayEnv * alphaMaster;
+    if (beamEnv > 0.005) {
+      const jetReach = S * (0.28 + smoothstep(0.12, 0.42, p) * 2.25);
+      for (let i = 0; i < 290; i += step) {
+        const sd = SEEDS[i];
+        const side = i % 2 === 0 ? 1 : -1;
+        const prog = (sd.ph + evT * (0.85 + sd.spd * 0.9)) % 1.0;
+        const along = prog * jetReach;
+        const spread = sd.z * (0.02 + Math.pow(prog, 0.82) * 0.26) * S;
+        const isCore = Math.abs(sd.z) < 0.36;
+        pushLocal(
+          side * along, spread,
+          sd.sz * (isCore ? 0.95 : 0.72),
+          isCore ? 0.95 : 0.64,
+          isCore ? 0.90 : 0.52,
+          1.0,
+          Math.sin(prog * Math.PI) * (isCore ? 0.76 : 0.48) * beamEnv,
+        );
+      }
+    }
+
+  /* 6. TIDAL DISRUPTION — Torn stellar plasma knots flowing down the parabolic tidal river */
+  } else if (type === 6) {
+    const streamEnv = smoothstep(0.08, 0.22, p) * decayEnv * alphaMaster;
+    const headT = Math.min(1.25, p * 1.38);
+    const tailT = Math.max(0.0, headT - 0.88);
+    for (let i = 0; i < 320; i += step) {
+      const sd = SEEDS[i];
+      const isDisk = i >= 220 && p > 0.36;
+      if (!isDisk) {
+        const u = (sd.r + evT * 0.14 * sd.spd) % 1.0;
+        const tc = tailT + (headT - tailT) * u;
+        const ang = -2.35 + tc * 6.4;
+        const rad = S * (0.22 + 1.08 * Math.exp(-tc * 1.62));
+        const spread = sd.z * S * (0.025 + u * 0.055);
+        const heat = Math.min(1.0, 0.32 + u * 0.65);
+        pushLocal(
+          Math.cos(ang) * rad + spread,
+          Math.sin(ang) * rad * 0.58 + spread * 0.6,
+          sd.sz * 0.86,
+          1.0, 0.38 + heat * 0.54, 0.16 + heat * 0.42,
+          Math.sin(u * Math.PI) * 0.62 * streamEnv,
+        );
+      } else {
+        const accEnv = smoothstep(0.36, 0.62, p) * decayEnv * alphaMaster;
+        const rBh = S * 0.21;
+        const rad = rBh * (1.2 + sd.r * 3.1);
+        const ang = sd.a + evT * (2.4 / Math.pow(1.0 + sd.r * 2.0, 0.8));
+        const lx = Math.cos(ang) * rad + rBh * 0.22;
+        const ly = Math.sin(ang) * rad * 0.24;
+        if (Math.sin(ang) < 0 && Math.hypot(lx, ly) < rBh) continue;
+        pushLocal(
+          lx, ly,
+          sd.sz * 0.82,
+          1.0, 0.68, 0.34,
+          0.52 * accEnv,
+        );
+      }
+    }
+
+  /* 7. COMET BREAKUP — Shimmering CN icy coma sparks & curved golden dust/meteor stream */
+  } else if (type === 7) {
+    const pathU = p - 0.48;
+    const hx = pathU * 1.42 * S;
+    const hy = (-pathU * 0.34 - pathU * pathU * 0.28) * S;
+    const splitP = smoothstep(0.16, 0.92, p);
+    const ionX = -0.94;
+    const ionY = 0.34;
+    const perpX = -0.34;
+    const perpY = -0.94;
+    for (let i = 0; i < 310; i += step) {
+      const sd = SEEDS[i];
+      const isIon = sd.hue < 0.44;
+      const along = sd.r * (0.8 + splitP * 1.25) * S;
+      const curve = isIon
+        ? Math.sin(along * 0.04 - evT * 3.5) * 0.015 * S
+        : 0.16 * (along / Math.max(S, 1)) * (along / Math.max(S, 1)) * S;
+      const lat = sd.z * (isIon ? 0.045 : 0.18) * (0.3 + sd.r) * S + curve;
+      const lx = hx + ionX * along + perpX * lat;
+      const ly = hy + ionY * along + perpY * lat;
+      const tw = 0.55 + 0.45 * Math.sin(evT * 4.5 + sd.ph * 40.0);
+      pushLocal(
+        lx, ly,
+        sd.sz * (isIon ? 0.78 : 0.92),
+        isIon ? 0.46 : 1.0,
+        isIon ? 0.92 : 0.88,
+        isIon ? 1.0 : 0.68,
+        (1.0 - sd.r * 0.82) * 0.62 * tw * lifeEnv,
+      );
+    }
+  }
+
+  return count;
+}
+
+/**
+ * Draw whisper-minimal observatory telescope field fiducials on the 2D HUD canvas
+ * while zoomed in (`obsBlend > 0.25`).
+ */
+export function drawCosmicEventHud(ctx, w, h, evDraw, centerShiftX = 0) {
+  if (!evDraw || evDraw.obsBlend <= 0.25 || evDraw.alpha <= 0.05) return;
+  const a = Math.max(0, (evDraw.obsBlend - 0.25) / 0.75) * 0.16 * evDraw.alpha;
+  const cx = w * 0.5 + centerShiftX * 0.55;
+  const cy = h * 0.5;
+  const rad = Math.min(w, h) * 0.42;
+  ctx.save();
+  ctx.strokeStyle = `rgba(186, 218, 255, ${a.toFixed(3)})`;
+  ctx.lineWidth = 1;
+  for (let i = 0; i < 4; i++) {
+    const ang = i * Math.PI * 0.5;
+    const r0 = rad * 0.94;
+    const r1 = rad * 0.985;
+    ctx.beginPath();
+    ctx.moveTo(cx + Math.cos(ang) * r0, cy + Math.sin(ang) * r0);
+    ctx.lineTo(cx + Math.cos(ang) * r1, cy + Math.sin(ang) * r1);
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
+/* ── High-Craft 2D Canvas Fallback (2D Eco Mode / Async Shader Warm-Up Bridge) ── */
+
+function drawDiffractionStar(ctx, x, y, span, angle, rgb, alpha) {
+  if (span <= 2 || alpha <= 0.008) return;
+  for (let k = 0; k < 3; k++) {
+    const a = angle + k * (Math.PI / 3);
+    const dx = Math.cos(a) * span;
+    const dy = Math.sin(a) * span;
+    const g = ctx.createLinearGradient(x - dx, y - dy, x + dx, y + dy);
+    g.addColorStop(0, `rgba(${rgb}, 0)`);
+    g.addColorStop(0.45, `rgba(${rgb}, ${(alpha * 0.65).toFixed(3)})`);
+    g.addColorStop(0.50, `rgba(255, 255, 255, ${Math.min(1, alpha).toFixed(3)})`);
+    g.addColorStop(0.55, `rgba(${rgb}, ${(alpha * 0.65).toFixed(3)})`);
+    g.addColorStop(1, `rgba(${rgb}, 0)`);
+    ctx.strokeStyle = g;
+    ctx.lineWidth = Math.max(0.9, span * 0.012);
+    ctx.beginPath();
+    ctx.moveTo(x - dx, y - dy);
+    ctx.lineTo(x + dx, y + dy);
+    ctx.stroke();
+  }
+}
+
+function drawFeatheredNebulaShell(ctx, x, y, rOut, innerRgb, midRgb, outerRgb, alpha) {
   if (rOut <= 2 || alpha <= 0.005) return;
-  const g = ctx.createRadialGradient(x, y, rOut * 0.68, x, y, rOut * 1.12);
+  const g = ctx.createRadialGradient(x, y, rOut * 0.56, x, y, rOut * 1.16);
   g.addColorStop(0, `rgba(${innerRgb}, 0)`);
-  g.addColorStop(0.42, `rgba(${innerRgb}, ${alpha * 0.45})`);
-  g.addColorStop(0.68, `rgba(${midRgb}, ${alpha * 0.85})`);
-  g.addColorStop(0.84, `rgba(${outerRgb}, ${alpha * 0.35})`);
+  g.addColorStop(0.44, `rgba(${innerRgb}, ${(alpha * 0.42).toFixed(3)})`);
+  g.addColorStop(0.70, `rgba(${midRgb}, ${(alpha * 0.82).toFixed(3)})`);
+  g.addColorStop(0.86, `rgba(${outerRgb}, ${(alpha * 0.34).toFixed(3)})`);
   g.addColorStop(1, `rgba(${outerRgb}, 0)`);
   ctx.fillStyle = g;
   ctx.beginPath();
-  ctx.arc(x, y, rOut * 1.12, 0, Math.PI * 2);
+  ctx.arc(x, y, rOut * 1.16, 0, Math.PI * 2);
   ctx.fill();
+}
+
+function drawClippedSphereImg(ctx, img, cx, cy, r, fallbackColors) {
+  ctx.save();
+  ctx.beginPath();
+  ctx.arc(cx, cy, r, 0, Math.PI * 2);
+  ctx.clip();
+  if (img) {
+    const iw = img.naturalWidth || img.width || 1;
+    const ih = img.naturalHeight || img.height || 1;
+    ctx.drawImage(img, 0, 0, iw * 0.5, ih, cx - r, cy - r, r * 2, r * 2);
+  } else {
+    const g = ctx.createRadialGradient(cx - r * 0.25, cy - r * 0.25, r * 0.1, cx, cy, r);
+    g.addColorStop(0, fallbackColors[0]);
+    g.addColorStop(0.6, fallbackColors[1]);
+    g.addColorStop(1, fallbackColors[2]);
+    ctx.fillStyle = g;
+    ctx.fillRect(cx - r, cy - r, r * 2, r * 2);
+  }
+  ctx.restore();
 }
 
 export function drawCosmicEventCanvas(ctx, w, h, active, pos, visibilityAlpha = 1.0) {
   if (!active || !pos || visibilityAlpha <= 0.01) return;
   const def = active.def;
   const p = Math.max(0, Math.min(1, active.elapsed / active.duration));
-  const scale = Math.max(0.14, pos.scale || 1);
-  const S = Math.min(w, h) * 0.23 * scale;
+  const S = pos.eventRadiusPx || (Math.min(w, h) * 0.24 * Math.max(0.14, pos.scale || 1));
   const x = pos.x;
   const y = pos.y;
   const focus = typeof pos.focusProgress === 'number' ? pos.focusProgress : (active.observing ? 1 : 0);
 
-  // Smooth fade-in (first 4%) & fade-out tail (final 10%) so distant events emerge and dissolve naturally
-  const startFade = p < 0.04 ? Math.max(0.15, p / 0.04) : 1;
-  const endFade = p > 0.90 ? Math.max(0, 1 - (p - 0.90) / 0.10) : 1;
-  // Slightly soften brilliance when far away so distant events sit naturally in deep space
-  const depthAtten = 0.72 + focus * 0.28;
+  // Smooth organic birth (0 -> 14%) and graceful afterglow fade (76 -> 100%)
+  const birthEnv = smoothstep(0.0, 0.14, p);
+  const decayEnv = smoothstep(1.0, 0.76, p);
+  const depthAtten = 0.76 + focus * 0.24;
+  const masterA = birthEnv * decayEnv * depthAtten * Math.max(0, Math.min(1, visibilityAlpha));
+  if (masterA <= 0.005) return;
+
+  const nebImg = getLoadedCosmosImage('nebula');
+  const sunImg = getLoadedCosmosImage('sun');
+  const rockImg = getLoadedCosmosImage('mars');
 
   ctx.save();
-  ctx.globalAlpha = startFade * endFade * depthAtten * Math.max(0, Math.min(1, visibilityAlpha));
+  ctx.globalAlpha = masterA;
   ctx.globalCompositeOperation = 'lighter';
 
   if (def.id === 'supernova') {
-    const flash = Math.exp(-Math.pow((p - 0.24) / 0.085, 2));
-    const expP = Math.max(0, (p - 0.18) / 0.82);
-
+    const flash = Math.exp(-Math.pow((p - 0.23) / 0.068, 2));
+    const expP = Math.max(0, (p - 0.19) / 0.81);
     if (expP > 0.01) {
-      const rOut = S * (0.20 + Math.pow(expP, 0.72) * 1.48);
-      const fade = Math.sin(Math.min(1, expP) * Math.PI * 0.92);
-
-      for (let lobe = 0; lobe < 5; lobe++) {
-        const la = lobe * 1.26 + 0.3;
-        const lx = x + Math.cos(la) * rOut * 0.26;
-        const ly = y + Math.sin(la) * rOut * 0.22;
-        const lr = rOut * (0.72 + (lobe % 2) * 0.18);
-        const neb = ctx.createRadialGradient(lx, ly, lr * 0.08, lx, ly, lr);
-        neb.addColorStop(0, lobe % 2 === 0 ? `rgba(148, 224, 255, ${0.26 * fade})` : `rgba(255, 168, 118, ${0.20 * fade})`);
-        neb.addColorStop(0.55, lobe % 2 === 0 ? `rgba(104, 146, 255, ${0.18 * fade})` : `rgba(220, 108, 168, ${0.14 * fade})`);
-        neb.addColorStop(1, 'rgba(40, 60, 140, 0)');
+      const rOut = S * (0.16 + Math.pow(expP, 0.62) * 1.32);
+      const env = smoothstep(0.0, 0.14, expP);
+      if (nebImg) {
+        ctx.save();
+        ctx.globalAlpha = masterA * 0.56 * env;
+        ctx.beginPath();
+        ctx.arc(x, y, rOut * 1.08, 0, Math.PI * 2);
+        ctx.clip();
+        ctx.drawImage(nebImg, x - rOut * 1.18, y - rOut * 1.18, rOut * 2.36, rOut * 2.36);
+        ctx.restore();
+      }
+      for (let lobe = 0; lobe < 6; lobe++) {
+        const la = lobe * 1.05 + 0.35;
+        const lx = x + Math.cos(la) * rOut * 0.28;
+        const ly = y + Math.sin(la) * rOut * 0.24;
+        const lr = rOut * (0.62 + (lobe % 2) * 0.22);
+        const neb = ctx.createRadialGradient(lx, ly, lr * 0.1, lx, ly, lr);
+        neb.addColorStop(0, lobe % 2 === 0 ? `rgba(116, 214, 255, ${(0.24 * env).toFixed(3)})` : `rgba(255, 134, 78, ${(0.22 * env).toFixed(3)})`);
+        neb.addColorStop(0.55, lobe % 2 === 0 ? `rgba(82, 138, 255, ${(0.15 * env).toFixed(3)})` : `rgba(218, 86, 132, ${(0.12 * env).toFixed(3)})`);
+        neb.addColorStop(1, 'rgba(30, 50, 120, 0)');
         ctx.fillStyle = neb;
         ctx.beginPath(); ctx.arc(lx, ly, lr, 0, Math.PI * 2); ctx.fill();
       }
-
-      drawFeatheredShell(ctx, x, y, rOut * 0.92, '142, 226, 255', '214, 242, 255', '255, 138, 92', 0.65 * (1 - expP * 0.62));
-
-      RAYS_SN.forEach((ray) => {
-        const rp = Math.max(0, expP - ray.delay);
-        if (rp <= 0) return;
-        const dist = rOut * (0.22 + ray.spd * 0.82);
-        const ang = ray.ang + ray.wobble * expP;
-        const hx = x + Math.cos(ang) * dist;
-        const hy = y + Math.sin(ang) * dist;
-        const tx = x + Math.cos(ang) * dist * 0.66;
-        const ty = y + Math.sin(ang) * dist * 0.66;
-        const col = ray.hue < 0.45 ? '156, 228, 255' : (ray.hue < 0.78 ? '255, 192, 132' : '212, 164, 255');
-        const g = ctx.createLinearGradient(tx, ty, hx, hy);
-        g.addColorStop(0, `rgba(${col}, 0)`);
-        g.addColorStop(0.7, `rgba(${col}, ${0.46 * (1 - expP * 0.62)})`);
-        g.addColorStop(1, `rgba(255, 255, 255, ${0.58 * (1 - expP * 0.68)})`);
-        ctx.beginPath(); ctx.moveTo(tx, ty); ctx.lineTo(hx, hy);
-        ctx.strokeStyle = g; ctx.lineWidth = ray.size * 0.44; ctx.lineCap = 'round'; ctx.stroke();
-      });
+      drawFeatheredNebulaShell(ctx, x, y, rOut * 0.96, '118, 216, 255', '255, 152, 92', '224, 72, 62', 0.62 * env);
     }
-
-    const coreR = S * (0.22 + flash * 0.88);
+    const coreR = S * (0.20 + flash * 0.72);
     const cg = ctx.createRadialGradient(x, y, 0, x, y, coreR);
-    cg.addColorStop(0, 'rgba(255, 255, 255, 0.98)');
-    cg.addColorStop(0.24, `rgba(176, 232, 255, ${0.72 + flash * 0.24})`);
-    cg.addColorStop(0.58, `rgba(104, 168, 255, ${0.28 + flash * 0.25})`);
-    cg.addColorStop(1, 'rgba(80, 140, 255, 0)');
+    cg.addColorStop(0, 'rgba(255, 255, 255, 0.96)');
+    cg.addColorStop(0.28, `rgba(164, 226, 255, ${(0.68 + flash * 0.25).toFixed(3)})`);
+    cg.addColorStop(1, 'rgba(72, 134, 255, 0)');
     ctx.fillStyle = cg;
     ctx.beginPath(); ctx.arc(x, y, coreR, 0, Math.PI * 2); ctx.fill();
-
-    const flareLen = S * (0.52 + flash * 1.55);
-    drawTaperedSpike(ctx, x, y, flareLen, 0, `rgba(190, 232, 255, ${0.38 + flash * 0.45})`, 1.7 * pos.scale);
-    drawTaperedSpike(ctx, x, y, flareLen * 0.78, Math.PI * 0.5, `rgba(190, 232, 255, ${0.32 + flash * 0.42})`, 1.5 * pos.scale);
-
-    if (expP > 0.22) {
-      const bAng = active.elapsed * 3.4;
-      const bLen = S * 0.72 * Math.min(1, (expP - 0.22) * 2.4);
-      drawTaperedSpike(ctx, x, y, bLen, bAng, 'rgba(154, 230, 255, 0.58)', 2.2 * pos.scale);
-    }
+    drawDiffractionStar(ctx, x, y, S * (0.48 + flash * 1.15), 0.22, '182, 230, 255', 0.35 + flash * 0.6);
   } else if (def.id === 'planet-shatter') {
-    const hitT = 0.20;
-    const rPl = S * 0.30;
-    if (p < hitT + 0.14) {
+    const hitT = 0.24;
+    const rPl = S * 0.34;
+    if (p < hitT + 0.35) {
+      const rem = 1 - smoothstep(hitT + 0.08, hitT + 0.35, p);
       ctx.save();
       ctx.globalCompositeOperation = 'source-over';
-      const pg = ctx.createRadialGradient(x - rPl * 0.3, y - rPl * 0.25, rPl * 0.08, x, y, rPl);
-      pg.addColorStop(0, '#a67b5e');
-      pg.addColorStop(0.55, '#4b2c20');
-      pg.addColorStop(1, '#120806');
-      ctx.fillStyle = pg;
-      ctx.beginPath(); ctx.arc(x, y, rPl, 0, Math.PI * 2); ctx.fill();
+      ctx.globalAlpha = masterA * rem;
+      drawClippedSphereImg(ctx, rockImg, x, y, rPl, ['#b87450', '#633322', '#170a06']);
       ctx.restore();
-
-      if (p < hitT) {
-        const ap = p / hitT;
-        const ix = x + (1 - ap) * S * 1.25;
-        const iy = y - (1 - ap) * S * 0.62;
-        const tail = ctx.createLinearGradient(ix, iy, ix + S * 0.42, iy - S * 0.21);
-        tail.addColorStop(0, 'rgba(255, 224, 168, 0.92)');
-        tail.addColorStop(0.45, 'rgba(255, 118, 48, 0.52)');
-        tail.addColorStop(1, 'rgba(255, 72, 24, 0)');
-        ctx.strokeStyle = tail; ctx.lineWidth = rPl * 0.42; ctx.lineCap = 'round';
-        ctx.beginPath(); ctx.moveTo(ix, iy); ctx.lineTo(ix + S * 0.42, iy - S * 0.21); ctx.stroke();
-      }
     }
-
     if (p >= hitT) {
       const bp = (p - hitT) / (1 - hitT);
-      const impactFlash = Math.exp(-Math.pow(bp / 0.15, 2));
-
-      for (let k = 0; k < 4; k++) {
-        const a = -0.5 + k * 1.52;
-        const px = x + Math.cos(a) * S * bp * 0.36;
-        const py = y + Math.sin(a) * S * bp * 0.26;
-        const pr = S * (0.28 + bp * 0.92);
-        const plg = ctx.createRadialGradient(px, py, 0, px, py, pr);
-        plg.addColorStop(0, `rgba(255, 214, 146, ${0.46 * (1 - bp * 0.58)})`);
-        plg.addColorStop(0.42, `rgba(255, 110, 44, ${0.32 * (1 - bp * 0.62)})`);
-        plg.addColorStop(1, 'rgba(180, 36, 16, 0)');
-        ctx.fillStyle = plg; ctx.beginPath(); ctx.arc(px, py, pr, 0, Math.PI * 2); ctx.fill();
-      }
-
-      drawFeatheredShell(ctx, x, y, S * (0.26 + Math.pow(bp, 0.78) * 1.38), '255, 166, 92', '255, 116, 52', '196, 44, 24', 0.56 * (1 - bp * 0.72));
-
-      if (bp < 0.78) {
-        const coreFade = 1 - bp / 0.78;
-        ctx.save();
-        ctx.globalCompositeOperation = 'source-over';
-        for (let c = 0; c < 6; c++) {
-          const ca = c * 1.04 + bp * 0.45;
-          const cd = S * (0.04 + bp * 0.42) * (0.7 + (c % 3) * 0.24);
-          const cx2 = x + Math.cos(ca) * cd;
-          const cy2 = y + Math.sin(ca) * cd * 0.78;
-          const cr = rPl * (0.26 - bp * 0.12) * (0.8 + (c % 2) * 0.35);
-          ctx.fillStyle = `rgba(34, 16, 12, ${0.88 * coreFade})`;
-          ctx.beginPath();
-          ctx.moveTo(cx2 + cr, cy2);
-          ctx.lineTo(cx2 + cr * 0.2, cy2 + cr * 0.85);
-          ctx.lineTo(cx2 - cr * 0.9, cy2 + cr * 0.3);
-          ctx.lineTo(cx2 - cr * 0.4, cy2 - cr * 0.8);
-          ctx.closePath();
-          ctx.fill();
-          ctx.strokeStyle = `rgba(255, 152, 68, ${0.85 * coreFade})`;
-          ctx.lineWidth = 1.4;
-          ctx.stroke();
-        }
-        ctx.restore();
-      }
-
-      RAYS_PLANET.forEach((sh) => {
-        const dist = S * (0.14 + Math.pow(bp, 0.74) * (0.58 + sh.spd * 1.02));
-        const swirl = bp * bp * 0.55;
-        const a = sh.ang + swirl;
-        const sx = x + Math.cos(a) * dist;
-        const sy = y + Math.sin(a) * dist * (0.68 + 0.32 * (1 - bp));
-        const tx = x + Math.cos(a - 0.04) * dist * 0.84;
-        const ty = y + Math.sin(a - 0.04) * dist * 0.84 * (0.68 + 0.32 * (1 - bp));
-        const heat = Math.max(0.14, 1 - bp * 0.72);
-        const col = sh.hue < 0.45 ? '255, 208, 128' : '255, 114, 52';
-        const tg = ctx.createLinearGradient(tx, ty, sx, sy);
-        tg.addColorStop(0, `rgba(${col}, 0)`);
-        tg.addColorStop(1, `rgba(${col}, ${heat})`);
-        ctx.strokeStyle = tg;
-        ctx.lineWidth = Math.max(1.1, sh.size * 0.58 * pos.scale * (1 - bp * 0.32));
-        ctx.lineCap = 'round';
-        ctx.beginPath(); ctx.moveTo(tx, ty); ctx.lineTo(sx, sy); ctx.stroke();
-      });
-
-      const fg = ctx.createRadialGradient(x, y, 0, x, y, S * (0.24 + impactFlash * 0.82));
-      fg.addColorStop(0, `rgba(255, 252, 238, ${0.95 * (0.35 + impactFlash * 0.65) * (1 - bp * 0.55)})`);
-      fg.addColorStop(0.38, `rgba(255, 168, 86, ${0.55 * (1 - bp * 0.62)})`);
-      fg.addColorStop(1, 'rgba(255, 80, 28, 0)');
-      ctx.fillStyle = fg; ctx.beginPath(); ctx.arc(x, y, S * (0.24 + impactFlash * 0.82), 0, Math.PI * 2); ctx.fill();
+      const impactFlash = Math.exp(-Math.pow(bp / 0.12, 2));
+      ctx.save();
+      ctx.translate(x, y);
+      ctx.rotate(-0.22);
+      ctx.scale(1, 0.27);
+      drawFeatheredNebulaShell(ctx, 0, 0, S * (0.46 + bp * 0.85), '255, 198, 126', '255, 114, 46', '172, 42, 18', 0.65 * smoothstep(0.08, 0.45, bp));
+      ctx.restore();
+      drawFeatheredNebulaShell(ctx, x + S * 0.16, y - S * 0.10, S * (0.24 + Math.pow(bp, 0.72) * 1.15), '255, 206, 134', '255, 118, 48', '186, 44, 22', 0.56 * (1 - bp * 0.55));
+      drawDiffractionStar(ctx, x + S * 0.22, y - S * 0.12, S * (0.5 + impactFlash * 0.9), 0.4, '255, 206, 140', impactFlash * 0.88);
     }
   } else if (def.id === 'blackhole-birth') {
-    const collapseP = Math.min(1, p / 0.28);
-    const birthP = Math.max(0, (p - 0.24) / 0.76);
+    const birthP = Math.max(0, (p - 0.23) / 0.77);
     if (p < 0.32) {
-      const starR = S * (0.65 * (1 - collapseP * 0.72));
-      const sg = ctx.createRadialGradient(x, y, 0, x, y, starR);
+      const rStar = S * (0.44 * (1 - Math.min(1, p / 0.28) * 0.75));
+      const sg = ctx.createRadialGradient(x, y, 0, x, y, rStar * 2.2);
       sg.addColorStop(0, '#ffffff');
-      sg.addColorStop(0.4, 'rgba(164, 214, 255, 0.85)');
-      sg.addColorStop(1, 'rgba(98, 134, 255, 0)');
-      ctx.fillStyle = sg; ctx.beginPath(); ctx.arc(x, y, starR, 0, Math.PI * 2); ctx.fill();
+      sg.addColorStop(0.36, 'rgba(164, 214, 255, 0.82)');
+      sg.addColorStop(1, 'rgba(84, 126, 255, 0)');
+      ctx.fillStyle = sg; ctx.beginPath(); ctx.arc(x, y, rStar * 2.2, 0, Math.PI * 2); ctx.fill();
     }
     if (birthP > 0) {
-      const ehR = S * 0.26 * Math.min(1, birthP * 2.2);
-      const jetEnv = Math.sin(Math.min(1, birthP * 1.15) * Math.PI);
+      const ehR = S * 0.24 * smoothstep(0.0, 0.18, birthP);
+      const jetEnv = smoothstep(0.04, 0.22, birthP) * (1 - smoothstep(0.58, 0.94, birthP));
       if (jetEnv > 0.01) {
-        drawTaperedSpike(ctx, x, y, S * 1.75 * Math.min(1, birthP * 1.8), -0.42, `rgba(170, 218, 255, ${0.75 * jetEnv})`, 4.8 * pos.scale * jetEnv);
+        drawDiffractionStar(ctx, x, y, S * 1.55 * smoothstep(0.04, 0.42, birthP), Math.PI * 0.5 - 0.22, '142, 208, 255', jetEnv * 0.85);
       }
-      drawFeatheredShell(ctx, x, y, ehR * 1.26, '255, 224, 156', '255, 152, 62', '180, 62, 18', 0.72 * Math.min(1, birthP * 2.2));
-      RAYS_BH.forEach((pt) => {
-        const prog = (pt.delay * 4 + birthP * (1.2 + pt.spd)) % 1;
-        const rad = ehR * (1.1 + (1 - prog) * 3.5);
-        const ang = pt.ang + active.elapsed * (2.6 / Math.max(0.6, rad / ehR));
-        const lx = Math.cos(ang) * rad, ly = Math.sin(ang) * rad * 0.25;
-        const rc = Math.cos(-0.2), rs = Math.sin(-0.2);
-        ctx.fillStyle = `rgba(255, ${Math.round(168 + prog * 70)}, ${Math.round(82 + prog * 95)}, ${0.72 * Math.sin(prog * Math.PI)})`;
-        ctx.beginPath(); ctx.arc(x + lx * rc - ly * rs, y + lx * rs + ly * rc, pt.size * 0.55 * pos.scale, 0, Math.PI * 2); ctx.fill();
-      });
+      drawFeatheredNebulaShell(ctx, x, y, ehR * 2.2, '255, 232, 178', '255, 154, 62', '180, 56, 16', 0.68);
+      ctx.save();
+      ctx.translate(x, y);
+      ctx.rotate(-0.22);
+      ctx.scale(1, 0.19);
+      drawFeatheredNebulaShell(ctx, 0, 0, ehR * 4.4, '255, 242, 210', '255, 166, 72', '184, 58, 18', 0.85);
+      ctx.restore();
       ctx.save();
       ctx.globalCompositeOperation = 'source-over';
       ctx.fillStyle = '#010205';
@@ -270,122 +573,144 @@ export function drawCosmicEventCanvas(ctx, w, h, active, pos, visibilityAlpha = 
     const mergeP = 0.42;
     if (p < mergeP) {
       const ip = p / mergeP;
-      const sep = S * 0.56 * Math.pow(1 - ip, 0.72);
+      const sep = S * 0.58 * Math.pow(1 - ip, 0.52);
       const ang = ip * ip * 18.0 + active.elapsed * 2.2;
       for (let k = 0; k < 2; k++) {
         const a = ang + k * Math.PI;
-        const nx = x + Math.cos(a) * sep, ny = y + Math.sin(a) * sep * 0.58;
+        const nx = x + Math.cos(a) * sep;
+        const ny = y + Math.sin(a) * sep * 0.56;
         const ng = ctx.createRadialGradient(nx, ny, 0, nx, ny, S * 0.24);
         ng.addColorStop(0, '#ffffff');
-        ng.addColorStop(0.32, k === 0 ? 'rgba(130, 216, 255, 0.9)' : 'rgba(186, 152, 255, 0.9)');
-        ng.addColorStop(1, 'rgba(110, 156, 255, 0)');
+        ng.addColorStop(0.32, k === 0 ? 'rgba(116, 224, 255, 0.88)' : 'rgba(192, 148, 255, 0.88)');
+        ng.addColorStop(1, 'rgba(92, 140, 255, 0)');
         ctx.fillStyle = ng; ctx.beginPath(); ctx.arc(nx, ny, S * 0.24, 0, Math.PI * 2); ctx.fill();
-      }
-      for (let wv = 0; wv < 3; wv++) {
-        const ph = (ip * 3.0 + wv * 0.33) % 1;
-        drawFeatheredShell(ctx, x, y, S * (0.20 + ph * 1.45), '132, 192, 255', '176, 168, 255', '104, 132, 255', (1 - ph) * 0.32);
       }
     } else {
       const kp = (p - mergeP) / (1 - mergeP);
-      const r = S * (0.25 + Math.pow(kp, 0.65) * 1.38);
-      const kg = ctx.createRadialGradient(x, y, 0, x, y, r);
-      kg.addColorStop(0, `rgba(255, 255, 255, ${0.95 * (1 - kp * 0.5)})`);
-      kg.addColorStop(0.32, `rgba(118, 240, 224, ${0.72 * (1 - kp * 0.55)})`);
-      kg.addColorStop(0.68, `rgba(255, 196, 108, ${0.42 * (1 - kp * 0.65)})`);
-      kg.addColorStop(1, 'rgba(140, 120, 255, 0)');
-      ctx.fillStyle = kg; ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); ctx.fill();
-      drawFeatheredShell(ctx, x, y, r * 1.05, '132, 244, 226', '255, 212, 136', '156, 132, 255', 0.55 * (1 - kp * 0.7));
+      const r = S * (0.20 + Math.pow(kp, 0.60) * 1.24);
+      const mFlash = Math.exp(-Math.pow((p - mergeP - 0.015) / 0.055, 2));
+      drawFeatheredNebulaShell(ctx, x, y, r * 0.95, '98, 232, 232', '255, 184, 72', '186, 82, 168', 0.66 * (1 - kp * 0.45));
+      drawDiffractionStar(ctx, x, y, S * (0.55 + mFlash * 1.0), 0.52, '182, 240, 255', mFlash * 0.85);
     }
   } else if (def.id === 'solar-flare') {
-    // Distant stellar superflare around a far-away yellow-white star (never overwrites our foreground Sun)
-    const starR = S * 0.22;
-    const erupt = Math.sin(p * Math.PI);
-    const flareR = starR * (1.25 + p * 3.9);
-    const baseAng = -0.68;
+    // High-craft 2D stellar superflare: real boiling sun texture + feathered corona + 3 magnetic arches + CME plumes
+    const starR = pos.sunRadiusPx || S * 0.34;
+    const flarePeak = Math.exp(-Math.pow((p - 0.32) / 0.13, 2));
+    const cmeP = Math.max(0, (p - 0.16) / 0.84);
+    const baseAng = pos.angle ?? -0.58;
 
-    const corona = ctx.createRadialGradient(x, y, starR * 0.2, x, y, starR * 2.8);
-    corona.addColorStop(0, 'rgba(255, 250, 232, 0.96)');
-    corona.addColorStop(0.28, 'rgba(255, 198, 108, 0.72)');
-    corona.addColorStop(0.65, 'rgba(255, 118, 42, 0.24)');
-    corona.addColorStop(1, 'rgba(255, 72, 20, 0)');
+    const corona = ctx.createRadialGradient(x, y, starR * 0.6, x, y, starR * 3.1);
+    corona.addColorStop(0, 'rgba(255, 242, 198, 0.86)');
+    corona.addColorStop(0.32, 'rgba(255, 162, 58, 0.44)');
+    corona.addColorStop(0.68, 'rgba(232, 82, 22, 0.14)');
+    corona.addColorStop(1, 'rgba(180, 42, 8, 0)');
     ctx.fillStyle = corona;
-    ctx.beginPath(); ctx.arc(x, y, starR * 2.8, 0, Math.PI * 2); ctx.fill();
+    ctx.beginPath(); ctx.arc(x, y, starR * 3.1, 0, Math.PI * 2); ctx.fill();
 
-    const cme = ctx.createRadialGradient(x, y, starR * 0.72, x, y, flareR);
-    cme.addColorStop(0, `rgba(255, 244, 200, ${0.76 * erupt})`);
-    cme.addColorStop(0.45, `rgba(255, 134, 48, ${0.48 * erupt})`);
-    cme.addColorStop(1, 'rgba(255, 68, 24, 0)');
-    ctx.fillStyle = cme;
-    ctx.beginPath(); ctx.moveTo(x, y); ctx.arc(x, y, flareR, baseAng - 0.64, baseAng + 0.64); ctx.closePath(); ctx.fill();
-
-    ctx.beginPath();
-    ctx.arc(x + Math.cos(baseAng) * starR * 0.92, y + Math.sin(baseAng) * starR * 0.92, starR * (0.50 + erupt * 1.35), baseAng - 0.85, baseAng + 0.85);
-    ctx.strokeStyle = `rgba(255, 178, 86, ${0.82 * erupt})`; ctx.lineWidth = Math.max(1.2, 3.8 * scale); ctx.stroke();
-
-    const starCore = ctx.createRadialGradient(x, y, 0, x, y, starR);
-    starCore.addColorStop(0, '#ffffff');
-    starCore.addColorStop(0.68, 'rgba(255, 224, 152, 0.96)');
-    starCore.addColorStop(1, 'rgba(255, 146, 54, 0.82)');
-    ctx.fillStyle = starCore;
-    ctx.beginPath(); ctx.arc(x, y, starR, 0, Math.PI * 2); ctx.fill();
-  } else if (def.id === 'gamma-burst') {
-    const beamEnv = Math.sin(p * Math.PI);
-    // Scale beam length proportionally with event scale so distant GRBs look far away instead of spanning the whole screen
-    const len = Math.min(Math.max(w, h) * 0.88, S * (3.1 + focus * 1.4)) * Math.min(1, p * 2.4);
-    drawTaperedSpike(ctx, x, y, len, -0.54, `rgba(196, 136, 255, ${0.58 * beamEnv})`, Math.max(2.4, 16 * scale * beamEnv));
-    drawTaperedSpike(ctx, x, y, len, -0.54, `rgba(248, 232, 255, ${0.95 * beamEnv})`, Math.max(1.0, 3.2 * scale * beamEnv));
-    const coreG = ctx.createRadialGradient(x, y, 0, x, y, S * 0.76 * (0.4 + beamEnv));
-    coreG.addColorStop(0, `rgba(255, 255, 255, ${0.96 * beamEnv})`);
-    coreG.addColorStop(0.35, `rgba(204, 152, 255, ${0.68 * beamEnv})`);
-    coreG.addColorStop(1, 'rgba(114, 78, 255, 0)');
-    ctx.fillStyle = coreG; ctx.beginPath(); ctx.arc(x, y, S * 0.76 * (0.4 + beamEnv), 0, Math.PI * 2); ctx.fill();
-  } else if (def.id === 'tidal-disruption') {
-    const bhR = S * 0.18;
-    drawFeatheredShell(ctx, x, y, bhR * 1.32, '255, 212, 146', '255, 134, 56', '180, 48, 22', 0.65);
-    ctx.beginPath();
-    for (let i = 0; i <= 90; i++) {
-      const u = i / 90;
-      const tCurve = Math.max(0, p * 1.25 - u * 0.65);
-      if (tCurve <= 0) continue;
-      const ang = -2.4 + tCurve * 5.8 + u * 1.4;
-      const rad = S * (1.05 * Math.exp(-tCurve * 1.55) + 0.18);
-      const sx = x + Math.cos(ang) * rad, sy = y + Math.sin(ang) * rad * 0.64;
-      if (i === 0) ctx.moveTo(sx, sy); else ctx.lineTo(sx, sy);
-    }
-    ctx.strokeStyle = 'rgba(255, 162, 86, 0.85)'; ctx.lineWidth = 4.4 * pos.scale; ctx.lineCap = 'round'; ctx.stroke();
-    const flare = Math.sin(p * Math.PI);
-    const tg = ctx.createRadialGradient(x, y, bhR, x, y, S * 0.88);
-    tg.addColorStop(0, `rgba(255, 224, 174, ${0.72 * flare})`);
-    tg.addColorStop(0.5, `rgba(255, 124, 58, ${0.32 * flare})`);
-    tg.addColorStop(1, 'rgba(255, 92, 42, 0)');
-    ctx.fillStyle = tg; ctx.beginPath(); ctx.arc(x, y, S * 0.88, 0, Math.PI * 2); ctx.fill();
+    // Textured photosphere disc with limb darkening
     ctx.save();
     ctx.globalCompositeOperation = 'source-over';
-    ctx.fillStyle = '#020308'; ctx.beginPath(); ctx.arc(x, y, bhR, 0, Math.PI * 2); ctx.fill();
+    drawClippedSphereImg(ctx, sunImg, x, y, starR, ['#fff7d4', '#ff9f34', '#be3808']);
+    const limb = ctx.createRadialGradient(x, y, starR * 0.3, x, y, starR);
+    limb.addColorStop(0, 'rgba(255, 248, 220, 0.18)');
+    limb.addColorStop(0.76, 'rgba(255, 148, 40, 0.08)');
+    limb.addColorStop(1, 'rgba(164, 34, 6, 0.62)');
+    ctx.fillStyle = limb;
+    ctx.beginPath(); ctx.arc(x, y, starR, 0, Math.PI * 2); ctx.fill();
+    ctx.restore();
+
+    // Soft feathered CME plumes (organic radial lobes, zero hard pie-wedge edges!)
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.rotate(baseAng);
+    for (let k = 0; k < 4; k++) {
+      const dist = starR * (1.15 + cmeP * (1.1 + k * 0.55));
+      const spread = (k - 1.5) * starR * 0.24 * (0.5 + cmeP);
+      const pr = starR * (0.48 + cmeP * 0.78);
+      const pg = ctx.createRadialGradient(dist, spread, pr * 0.1, dist, spread, pr);
+      pg.addColorStop(0, `rgba(255, 212, 128, ${(0.42 * (1 - cmeP * 0.35)).toFixed(3)})`);
+      pg.addColorStop(0.45, `rgba(255, 108, 34, ${(0.28 * (1 - cmeP * 0.4)).toFixed(3)})`);
+      pg.addColorStop(1, 'rgba(180, 32, 8, 0)');
+      ctx.fillStyle = pg;
+      ctx.beginPath(); ctx.arc(dist, spread, pr, 0, Math.PI * 2); ctx.fill();
+    }
+    // 3-strand feathered coronal magnetic arches
+    for (let k = 0; k < 3; k++) {
+      const archR = starR * (0.36 + k * 0.24) * (0.58 + 0.55 * Math.sin(Math.min(1, p * 1.35) * Math.PI));
+      ctx.strokeStyle = `rgba(255, ${172 - k * 28}, ${72 - k * 14}, ${(0.72 - k * 0.14).toFixed(2)})`;
+      ctx.lineWidth = Math.max(1.2, starR * (0.08 - k * 0.015));
+      ctx.beginPath();
+      ctx.ellipse(starR * 0.94, (k - 1) * starR * 0.08, archR * 1.15, archR * 0.72, 0, -Math.PI * 0.52, Math.PI * 0.52);
+      ctx.stroke();
+    }
+    ctx.restore();
+    drawDiffractionStar(ctx, x + Math.cos(baseAng) * starR * 1.04, y + Math.sin(baseAng) * starR * 1.04, starR * (1.2 + flarePeak * 1.4), 0.18, '255, 214, 134', flarePeak * 0.78);
+  } else if (def.id === 'gamma-burst') {
+    const beamEnv = smoothstep(0.10, 0.24, p);
+    const len = Math.min(Math.max(w, h) * 0.85, S * (2.6 + focus * 1.4)) * smoothstep(0.10, 0.38, p);
+    drawDiffractionStar(ctx, x, y, S * 0.95, 0.26, '206, 174, 255', beamEnv * 0.78);
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.rotate(pos.angle ?? -0.52);
+    const bg = ctx.createLinearGradient(-len, 0, len, 0);
+    bg.addColorStop(0, 'rgba(138, 102, 255, 0)');
+    bg.addColorStop(0.45, `rgba(168, 118, 255, ${(0.55 * beamEnv).toFixed(3)})`);
+    bg.addColorStop(0.50, `rgba(255, 248, 255, ${(0.95 * beamEnv).toFixed(3)})`);
+    bg.addColorStop(0.55, `rgba(116, 208, 255, ${(0.55 * beamEnv).toFixed(3)})`);
+    bg.addColorStop(1, 'rgba(116, 208, 255, 0)');
+    ctx.strokeStyle = bg;
+    ctx.lineWidth = Math.max(2.5, S * 0.095);
+    ctx.beginPath(); ctx.moveTo(-len, 0); ctx.lineTo(len, 0); ctx.stroke();
+    ctx.restore();
+  } else if (def.id === 'tidal-disruption') {
+    const bhR = S * 0.21;
+    drawFeatheredNebulaShell(ctx, x, y, bhR * 2.4, '255, 214, 148', '255, 126, 48', '172, 46, 18', 0.65);
+    const headT = Math.min(1.25, p * 1.38);
+    const tailT = Math.max(0, headT - 0.88);
+    for (let i = 0; i <= 36; i++) {
+      const u = i / 36;
+      const tc = tailT + (headT - tailT) * u;
+      const ang = -2.35 + tc * 6.4;
+      const rad = S * (0.22 + 1.08 * Math.exp(-tc * 1.62));
+      const sx = x + Math.cos(ang) * rad;
+      const sy = y + Math.sin(ang) * rad * 0.58;
+      const pr = S * (0.04 + u * 0.06);
+      const pg = ctx.createRadialGradient(sx, sy, 0, sx, sy, pr);
+      pg.addColorStop(0, `rgba(255, ${Math.round(160 + u * 80)}, ${Math.round(80 + u * 90)}, ${(0.42 * Math.sin(u * Math.PI)).toFixed(3)})`);
+      pg.addColorStop(1, 'rgba(255, 86, 28, 0)');
+      ctx.fillStyle = pg; ctx.beginPath(); ctx.arc(sx, sy, pr, 0, Math.PI * 2); ctx.fill();
+    }
+    ctx.save();
+    ctx.globalCompositeOperation = 'source-over';
+    ctx.fillStyle = '#020308';
+    ctx.beginPath(); ctx.arc(x, y, bhR, 0, Math.PI * 2); ctx.fill();
     ctx.restore();
   } else if (def.id === 'comet-breakup') {
-    const headX = x + (p - 0.5) * S * 1.6, headY = y - (p - 0.5) * S * 0.55;
-    const splitP = Math.max(0, (p - 0.18) / 0.82);
+    const pathU = p - 0.48;
+    const headX = x + pathU * S * 1.42;
+    const headY = y - (pathU * 0.34 + pathU * pathU * 0.28) * S;
+    const splitP = smoothstep(0.14, 0.92, p);
     for (let k = 0; k < 7; k++) {
-      const spread = (k - 3) * splitP * S * 0.16;
-      const lag = Math.abs(k - 3) * splitP * S * 0.14;
-      const fx = headX - lag * 0.8 + spread * 0.3, fy = headY + lag * 0.35 + spread * 0.65;
-      const tailLen = S * (0.55 + (1 - Math.abs(k - 3) * 0.1) * 0.45);
-      const tx = fx - tailLen * 0.92, ty = fy + tailLen * 0.34;
-      const cg = ctx.createLinearGradient(fx, fy, tx, ty);
-      cg.addColorStop(0, 'rgba(220, 250, 255, 0.92)');
-      cg.addColorStop(0.45, 'rgba(116, 218, 255, 0.44)');
-      cg.addColorStop(1, 'rgba(116, 218, 255, 0)');
-      ctx.strokeStyle = cg; ctx.lineWidth = (3.4 - Math.abs(k - 3) * 0.36) * pos.scale; ctx.lineCap = 'round';
-      ctx.beginPath(); ctx.moveTo(fx, fy); ctx.lineTo(tx, ty); ctx.stroke();
-      ctx.fillStyle = '#ffffff'; ctx.beginPath(); ctx.arc(fx, fy, (3.2 - Math.abs(k - 3) * 0.3) * pos.scale, 0, Math.PI * 2); ctx.fill();
+      const weight = Math.exp(-k * 0.24);
+      const lag = (k * 0.165) * splitP * S;
+      const fx = headX - lag * 0.94;
+      const fy = headY + lag * 0.34 + (k - 2.6) * splitP * S * 0.03;
+      const tLen = S * (0.36 + weight * 0.56);
+      const g = ctx.createLinearGradient(fx, fy, fx - tLen * 0.94, fy + tLen * 0.34);
+      g.addColorStop(0, 'rgba(220, 250, 255, 0.88)');
+      g.addColorStop(0.42, 'rgba(116, 218, 255, 0.42)');
+      g.addColorStop(1, 'rgba(255, 210, 142, 0)');
+      ctx.strokeStyle = g;
+      ctx.lineWidth = Math.max(1.2, (1.8 + weight * 2.8) * Math.max(0.4, pos.scale || 1));
+      ctx.lineCap = 'round';
+      ctx.beginPath(); ctx.moveTo(fx, fy); ctx.lineTo(fx - tLen * 0.94, fy + tLen * 0.34); ctx.stroke();
+      const coma = ctx.createRadialGradient(fx, fy, 0, fx, fy, Math.max(3, S * (0.02 + weight * 0.03)));
+      coma.addColorStop(0, 'rgba(255, 255, 255, 0.96)');
+      coma.addColorStop(0.45, 'rgba(108, 232, 255, 0.55)');
+      coma.addColorStop(1, 'rgba(72, 198, 255, 0)');
+      ctx.fillStyle = coma;
+      ctx.beginPath(); ctx.arc(fx, fy, Math.max(3, S * (0.02 + weight * 0.03)), 0, Math.PI * 2); ctx.fill();
     }
-    RAYS_COMET.forEach((pt) => {
-      const mx = headX - pt.spd * S * 0.95 * (0.3 + splitP * 0.7) + Math.cos(pt.ang) * S * 0.25 * splitP;
-      const my = headY + pt.spd * S * 0.35 * (0.3 + splitP * 0.7) + Math.sin(pt.ang) * S * 0.22 * splitP;
-      ctx.fillStyle = pt.hue < 0.6 ? 'rgba(164, 238, 255, 0.65)' : 'rgba(255, 224, 166, 0.55)';
-      ctx.beginPath(); ctx.arc(mx, my, pt.size * 0.4 * pos.scale, 0, Math.PI * 2); ctx.fill();
-    });
   }
 
   ctx.restore();

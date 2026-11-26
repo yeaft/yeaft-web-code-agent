@@ -32,12 +32,17 @@ import {
   unfocusCosmicEvent,
   stopCosmicEvent,
   tickCosmicEvents,
+  scrubCosmicEvent,
   pickRandomEventIndex,
   pickRandomDistantLocation,
   getEventScreenPosition,
+  computeEventFrame,
+  getEventLens,
+  getEventAmbient,
   getEventShockWave,
   getSolarTelescopeTransform,
   formatEventDistance,
+  formatEventPhysicalDistance,
 } from '../../web/cosmos/events-controller.js';
 import {
   projectAgentsForCosmos,
@@ -226,13 +231,15 @@ describe('Cosmos Planet Assignments & Constants Persistence', () => {
 
   it('persists and clamps cosmic constants including active flash, preview mode & auto events', () => {
     const storage = createMemoryStorage();
+    // Default autoZoom is false so spontaneous random events emerge gently in distant space
+    expect(loadCosmosConstants(storage).eventsAutoZoom).toBe(false);
     saveCosmosConstants({
       orbitSpeed: 99,
       starDensity: 0.1,
       activeFlash: false,
       livePreviewMode: '3',
       eventsAutoEnabled: false,
-      eventsAutoZoom: false,
+      eventsAutoZoom: true,
     }, storage);
 
     const loaded = loadCosmosConstants(storage);
@@ -241,7 +248,10 @@ describe('Cosmos Planet Assignments & Constants Persistence', () => {
     expect(loaded.activeFlash).toBe(false);
     expect(loaded.livePreviewMode).toBe('3');
     expect(loaded.eventsAutoEnabled).toBe(false);
-    expect(loaded.eventsAutoZoom).toBe(false);
+    expect(loaded.eventsAutoZoom).toBe(true);
+
+    saveCosmosConstants({ eventsAutoZoom: false }, storage);
+    expect(loadCosmosConstants(storage).eventsAutoZoom).toBe(false);
 
     expect(scaleBand(24)).toBe('web');
     expect(scaleBand(21)).toBe('galaxy');
@@ -387,6 +397,35 @@ describe('Cosmos Random-Interval Event Scheduler & Stop Control', () => {
     const hiddenShock = getEventShockWave(simPortal, 1440, 900, 0, [portalPt], 0.0);
     expect(distantShock[3]).toBeGreaterThan(0);
     expect(hiddenShock).toEqual([0, 0, 0, 0]);
+
+    // 6. Strict inverse-distance scaling (apparentRadius ∝ 1 / distance) & timeline scrubbing
+    const simInv = createCosmicEventState({ autoEnabled: true, autoZoom: false, rng });
+    startCosmicEvent(simInv, 'blackhole-birth', { observe: false, rng });
+    simInv.active.elapsed = simInv.active.duration * 0.5;
+    simInv.active.location = { sector: 'ne', x: 0.82, y: 0.24, depth: 0.2, distantScale: 0.40, yaw: -0.4, pitch: -0.2, distanceLy: 1260 };
+    const nearFrame = computeEventFrame(simInv, 1440, 900, 0, null, 1.0);
+    simInv.active.location = { sector: 'ne', x: 0.82, y: 0.24, depth: 0.8, distantScale: 0.20, yaw: -0.4, pitch: -0.2, distanceLy: 2520 };
+    const farFrame = computeEventFrame(simInv, 1440, 900, 0, null, 1.0);
+    expect(farFrame.effDist / nearFrame.effDist).toBeCloseTo(2.0, 4);
+    expect(farFrame.eventRadiusPx / nearFrame.eventRadiusPx).toBeCloseTo(0.5, 4);
+    expect(farFrame.layer).toBe('deep');
+
+    // Telescoping in at 2x zoom doubles apparent radius and engages gravitational lensing
+    simInv.focusProgress = 1.0;
+    simInv.fovZoom = 1.0;
+    const obs1x = computeEventFrame(simInv, 1440, 900, 0, null, 1.0);
+    simInv.fovZoom = 2.0;
+    const obs2x = computeEventFrame(simInv, 1440, 900, 0, null, 1.0);
+    expect(obs2x.eventRadiusPx / obs1x.eventRadiusPx).toBeCloseTo(2.0, 4);
+    expect(obs2x.layer).toBe('local');
+    const lens = getEventLens(obs2x, 1440, 900);
+    expect(lens[3]).toBeGreaterThan(0.5);
+    const ambient = getEventAmbient(obs2x);
+    expect(ambient[3]).toBeGreaterThan(0.1);
+    expect(formatEventPhysicalDistance(simInv.active.def, 1.0, true)).toMatch(/ly$/);
+
+    scrubCosmicEvent(simInv, 0.75);
+    expect(simInv.active.elapsed / simInv.active.duration).toBeCloseTo(0.75, 3);
   });
 });
 
@@ -753,8 +792,12 @@ describe('Cosmos Component & WebGL Review Regressions', () => {
     }
     unsubSeed();
 
+    const drawsBeforeEngine = drawArraysCount;
     const engine = createCosmosEngine(glCanvas, hudCanvas);
     expect(engine.isWebGL).toBe(true);
+    // Boot must NOT run 15-FBO procedural texture bake or pre-compile cosmic event shaders
+    expect(drawArraysCount).toBe(drawsBeforeEngine);
+    expect(engine.getCompiledEventShaderCount()).toBe(0);
     expect(engine.areRealTexturesReady()).toBe(true);
     expect(uploadedImages.length).toBeGreaterThanOrEqual(2);
     expect(typeof listeners.webglcontextlost).toBe('function');
@@ -774,12 +817,35 @@ describe('Cosmos Component & WebGL Review Regressions', () => {
     expect(drawArraysCount).toBe(drawsBeforeLost);
     expect(hudDraw).toHaveBeenCalledTimes(1);
 
-    // Simulate GPU context restored: resources re-bake, cached real NASA/ESO textures re-upload, GL resumes
+    // Simulate GPU context restored: cached real NASA/ESO textures re-upload immediately, and GL resumes cleanly
     lost = false;
     listeners.webglcontextrestored();
-    expect(drawArraysCount).toBeGreaterThan(drawsBeforeLost);
     expect(uploadedImages.length).toBeGreaterThanOrEqual(uploadsBeforeRestore + 2);
     expect(engine.areRealTexturesReady()).toBe(true);
+
+    // Render one frame with an active deep-space event -> resumes GL draws & lazily compiles ONLY that 1 event shader
+    const hudAfterRestore = vi.fn();
+    engine.renderFrame({
+      time: 1, realTime: 1, scaleLog: 13,
+      parallax: { x: 0, y: 0 }, camRot: { x: 0, y: 0 }, warp: 0, fovZoom: 1,
+      shockWave: [0, 0, 0, 0], eventLens: [0, 0, 0, 0], eventAmbient: [0, 0, 0, 0],
+      skyBright: 1, starDensity: 1,
+      bhParams: { x: 0, y: 0, radius: 0.017, strength: 0.9 },
+      galParams: { x: 0.4, y: -0.35, radius: 0.09, alpha: 0.7, tilt: 0.5 },
+      webParams: { x: -0.4, y: -0.35, radius: 0.08, alpha: 0.5 },
+      particleData: null, particleCount: 0,
+      eventDraw: {
+        id: 'supernova', eventType: 0, layer: 'deep',
+        x: 500, y: 120, eventRadiusPx: 64, quadRadiusPx: 156, sunRadiusPx: 22,
+        progress: 0.45, elapsed: 9.0, alpha: 0.9, obsBlend: 0, distNorm: 4.5, angle: 0.2, seed: 0.4,
+      },
+      eventParticleData: null, eventParticleCount: 0,
+      solarBodies: [], solarAlpha: 1,
+      hudDraw: hudAfterRestore,
+    });
+    expect(drawArraysCount).toBeGreaterThan(drawsBeforeLost);
+    expect(engine.getCompiledEventShaderCount()).toBe(1);
+    expect(hudAfterRestore).toHaveBeenCalledWith(expect.anything(), expect.any(Number), expect.any(Number), { eventRenderedInGL: true });
 
     engine.destroy();
     __resetCosmosTextureCacheForTests();
@@ -821,6 +887,15 @@ describe('Cosmos Component & WebGL Review Regressions', () => {
         },
       },
     });
+
+    // Deep-sky portals (Galaxy, Cosmic Web, Event Horizon) must render pure visual hit targets with zero visible text overlay
+    const portalButtons = wrapper.findAll('.cosmos-sky-anomaly');
+    expect(portalButtons).toHaveLength(3);
+    expect(wrapper.findAll('.cosmos-sky-anomaly-label')).toHaveLength(0);
+    for (const btn of portalButtons) {
+      expect(btn.text().trim()).toBe('');
+      expect(btn.attributes('aria-label')).toBeTruthy();
+    }
 
     // Touch down on planet then cancel -> must NOT open Quick Auto-Route Composer
     wrapper.vm.onPlanetPointerDown('earth', { pointerType: 'touch', pointerId: 1, button: 0, clientX: 100, clientY: 200 });

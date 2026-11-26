@@ -33,8 +33,9 @@ import {
   unfocusCosmicEvent,
   stopCosmicEvent,
   setCosmicEventZoom,
+  scrubCosmicEvent,
   pickRandomEventIndex,
-  formatEventDistance,
+  formatEventPhysicalDistance,
 } from '../../cosmos/events-controller.js';
 import { stepCosmosFrame } from '../../cosmos/stage-loop.js';
 import { projectAgentsForCosmos } from '../../cosmos/agent-projection.js';
@@ -67,6 +68,7 @@ export default {
         'is-workbench-widened': workbenchWidened,
         'is-workbench-maximized': drawerOpen && workbenchMaximized,
         'is-drag-mode': dragActive,
+        'is-observing-event': isObservingEvent,
       }"
       @wheel="onStageWheel"
     >
@@ -167,21 +169,19 @@ export default {
           </span>
         </button>
 
-        <!-- Deep-Sky Astronomical Portals -->
+        <!-- Deep-Sky Astronomical Portals (pure visual portals, zero text overlay) -->
         <button
           v-for="pt in portals"
           :key="pt.id"
           :ref="(el) => setMapRef(domRefs.portals, pt.id, el)"
           type="button"
           class="cosmos-sky-anomaly"
+          :data-portal-id="pt.id"
+          :aria-label="$t(pt.labelKey) + ' · ' + pt.scale"
           style="display:none"
           @click.stop="jumpToScale(pt.target)"
         >
-          <span class="cosmos-sky-anomaly-ring" :style="{ width: pt.ring + 'px', height: pt.ring + 'px' }"></span>
-          <span class="cosmos-sky-anomaly-label">
-            <span>{{ $t(pt.labelKey) }}</span>
-            <span class="cosmos-sky-anomaly-scale">{{ pt.scale }}</span>
-          </span>
+          <span class="cosmos-sky-anomaly-ring" :style="{ width: pt.ring + 'px', height: pt.ring + 'px' }" aria-hidden="true"></span>
         </button>
 
         <!-- Return to Solar System Beacon -->
@@ -288,6 +288,7 @@ export default {
         @replay="onReplayEvent"
         @next-random="onNextRandomEvent"
         @set-zoom="onSetEventZoom"
+        @scrub="onScrubEvent"
       />
 
       <!-- Cross-Scale Gravity Alert -->
@@ -574,10 +575,11 @@ export default {
     const eventCountdownSec = Vue.ref(eventSim.countdown);
     const isObservingEvent = Vue.computed(() => Boolean(eventActiveSnapshot.value?.observing));
     const eventBeaconCoords = Vue.computed(() => {
-      const loc = eventActiveSnapshot.value?.location;
-      if (!loc) return '';
+      const act = eventActiveSnapshot.value;
+      const loc = act?.location;
+      if (!act || !loc) return '';
       const dir = $t(`cosmos.events.dir.${loc.sector}`);
-      const dist = formatEventDistance(loc.distanceLy, getLocale() === 'en');
+      const dist = formatEventPhysicalDistance(act.def, act.effDist || act.ambientDist, getLocale() === 'en');
       return `${dir} · ${dist}`;
     });
     const eventBeaconAriaLabel = Vue.computed(() => {
@@ -611,11 +613,17 @@ export default {
     };
 
     const pools = createParticlePools();
-    const webGraph = createCosmicWebGraph();
+    let webGraph = null;
+    const getWebGraph = () => {
+      if (!webGraph) webGraph = createCosmicWebGraph();
+      return webGraph;
+    };
     const gpuParticles = new Float32Array(3100 * 7);
+    const eventGpuParticles = new Float32Array(520 * 7);
 
     let engine = null;
     let rafId = 0;
+    let mountRafId = 0;
     let hoverHideTimer = null;
     let hoverAnchoredPlanetId = null;
     let hoverEnterPointer = { x: 0, y: 0 };
@@ -1090,13 +1098,15 @@ export default {
       const loc = act.location;
       if (!loc) return name;
       const dir = $t(`cosmos.events.dir.${loc.sector}`);
-      const dist = formatEventDistance(loc.distanceLy, getLocale() === 'en');
+      const dist = formatEventPhysicalDistance(act.def, act.effDist || act.ambientDist, getLocale() === 'en');
       return $t('cosmos.events.distantToast', { name, dir, dist });
     }
-    function onObserveEvent(eventId) {
+    function onObserveEvent(payload) {
+      const eventId = typeof payload === 'string' ? payload : (payload?.eventId || null);
+      const forceObserve = Boolean(payload && typeof payload === 'object' && payload.forceObserve);
       if (scaleBand(anim.targetScaleLog) !== 'solar') jumpToScale(13.0);
       const isAlreadySame = Boolean(eventSim.active && (!eventId || eventSim.active.def.id === eventId));
-      const shouldZoomIn = isAlreadySame || Boolean(constants.eventsAutoZoom);
+      const shouldZoomIn = forceObserve || isAlreadySame || Boolean(constants.eventsAutoZoom);
       const act = startCosmicEvent(eventSim, eventId, { observe: shouldZoomIn });
       hideHoverImmediate();
       if (act.observing) {
@@ -1157,6 +1167,7 @@ export default {
       if (act) showToast(formatEventLocationToast(act));
     }
     function onSetEventZoom(z) { setCosmicEventZoom(eventSim, z); syncEventRefs(); }
+    function onScrubEvent(frac) { scrubCosmicEvent(eventSim, frac); syncEventRefs(); }
 
     function onUpdateConstant({ key, value }) {
       if (!(key in constants)) return;
@@ -1263,6 +1274,7 @@ export default {
     let unmounted = false;
     let consecutiveSlowFrames = 0;
     let autoDowngraded = false;
+    let lastFrameCostMs = 0;
 
     function resolveInitialQuality(override) {
       if (override) return override;
@@ -1276,6 +1288,8 @@ export default {
 
     function mountEngine(quality) {
       if (unmounted) return;
+      cancelAnimationFrame(mountRafId);
+      mountRafId = 0;
       cancelAnimationFrame(rafId);
       clearTimeout(softTimer);
       engine?.destroy?.();
@@ -1291,6 +1305,8 @@ export default {
     }
 
     function rebuildCosmosEngine(quality) {
+      cancelAnimationFrame(mountRafId);
+      mountRafId = 0;
       cancelAnimationFrame(rafId);
       clearTimeout(softTimer);
       engine?.destroy?.();
@@ -1305,7 +1321,7 @@ export default {
       if (!engine || unmounted) return;
       let delayMs = 0;
       if (!engine.isWebGL) delayMs = 30;
-      else if (engine.isSoftware) delayMs = 46;
+      else if (engine.isSoftware) delayMs = Math.max(46, Math.min(180, Math.round(lastFrameCostMs * 1.1)));
       else if (engine.isMobile && constants.renderQuality !== 'high') delayMs = 24;
 
       if (delayMs > 0) {
@@ -1322,7 +1338,7 @@ export default {
       if (!document.hidden) {
         const t0 = performance.now();
         stepCosmosFrame(now, {
-          engine, anim, eventSim, pools, webGraph, gpuParticles, constants, domRefs,
+          engine, anim, eventSim, pools, getWebGraph, gpuParticles, eventGpuParticles, constants, domRefs,
           getAgentsByPlanet: () => agentsByPlanet.value,
           getGalaxyBooks: () => galaxyBooks.value,
           getUiState: () => ({
@@ -1340,11 +1356,12 @@ export default {
           onUpdateHoverPos: updateHoverCardPosition,
         });
 
+        lastFrameCostMs = performance.now() - t0;
+
         // Adaptive guard for masked software renderers: if WebGL stays severely stalled
         // (>115ms per frame for 20 consecutive frames) in 'auto' mode, smoothly switch to 2D.
         if (engine.isWebGL && constants.renderQuality === 'auto' && !autoDowngraded) {
-          const frameCost = performance.now() - t0;
-          if (frameCost > 115) {
+          if (lastFrameCostMs > 115) {
             consecutiveSlowFrames += 1;
             if (consecutiveSlowFrames >= 20) {
               autoDowngraded = true;
@@ -1362,7 +1379,12 @@ export default {
 
     Vue.onMounted(() => {
       unmounted = false;
-      mountEngine();
+      // Yield 1 animation frame so the shell UI paints and WebSocket handshake begins
+      // immediately before initializing WebGL shaders and context buffers.
+      mountRafId = requestAnimationFrame(() => {
+        mountRafId = 0;
+        if (!unmounted) mountEngine();
+      });
       window.addEventListener('pointermove', onGlobalPointerMove);
       window.addEventListener('pointerup', onGlobalPointerUp);
       window.addEventListener('pointercancel', onGlobalPointerCancel);
@@ -1375,6 +1397,8 @@ export default {
     Vue.onBeforeUnmount(() => {
       unmounted = true;
       activeTouchPointers.clear();
+      cancelAnimationFrame(mountRafId);
+      mountRafId = 0;
       cancelAnimationFrame(rafId);
       clearTimeout(softTimer);
       clearTimeout(toastTimer);
@@ -1397,9 +1421,9 @@ export default {
       glCanvasRef, hudCanvasRef, hoverCardRef, drawerRef, domRefs, setMapRef, canvasEpoch, rendererMode,
       planets: PLANETS, bookDomains: BOOK_DOMAINS,
       portals: [
-        { id: 'to-galaxy', labelKey: 'cosmos.scale.galaxy', scale: '10²¹', target: 21.0, ring: 54 },
-        { id: 'to-web', labelKey: 'cosmos.scale.web', scale: '10²⁴', target: 24.0, ring: 50 },
-        { id: 'to-horizon', labelKey: 'cosmos.scale.horizon', scale: '10⁷', target: 7.0, ring: 46 },
+        { id: 'to-galaxy', labelKey: 'cosmos.scale.galaxy', scale: '10²¹', target: 21.0, ring: 64 },
+        { id: 'to-web', labelKey: 'cosmos.scale.web', scale: '10²⁴', target: 24.0, ring: 58 },
+        { id: 'to-horizon', labelKey: 'cosmos.scale.horizon', scale: '10⁷', target: 7.0, ring: 56 },
       ],
       scaleTicks: [
         { band: 'web', exp: '10²⁴', labelKey: 'cosmos.scale.web', target: 24.0 },
@@ -1421,7 +1445,7 @@ export default {
       onHoverCardEnter, onHoverCardLeave, onStageWheel, jumpToScale,
       openSessionInDrawer, openAgentConversationFromQuick, openCosmosSessionSearch, onDrawerSelectSession, toggleWorkbenchWiden, closeDrawer,
       emitTelemetryBeam, onAutoRouted, jumpToWaitingAgent, assignFromMenu,
-      onObserveEvent, onFocusDistantEvent, onReturnFromEvent, onStopEvent, onToggleAutoEvents, onToggleAutoZoom, onTogglePauseEvent, onReplayEvent, onNextRandomEvent, onSetEventZoom,
+      onObserveEvent, onFocusDistantEvent, onReturnFromEvent, onStopEvent, onToggleAutoEvents, onToggleAutoZoom, onTogglePauseEvent, onReplayEvent, onNextRandomEvent, onSetEventZoom, onScrubEvent,
       onUpdateConstant, onAssignPlanet, openYeaftSettings, openYeaftAgentSettings, openAgentLlmConfig, openSessionCreate, onSessionCreated,
       abandonCosmos, submitNewBook, showToast, runToastAction,
     };

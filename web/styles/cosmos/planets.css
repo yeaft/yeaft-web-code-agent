@@ -399,15 +399,16 @@
   color: var(--c-faint);
 }
 
-/* ── Deep-Sky Natural Astronomical Portals & Galaxy Book Dots ── */
+/* ── Deep-Sky Natural Astronomical Portals (pure visual portals, zero text overlay) ── */
 .cosmos-sky-anomaly {
   position: absolute;
   transform: translate(-50%, -50%);
   pointer-events: auto;
   display: flex;
-  flex-direction: column;
   align-items: center;
-  gap: 4px;
+  justify-content: center;
+  padding: 0;
+  border-radius: 50%;
   background: transparent;
   border: 0;
   cursor: pointer;
@@ -415,42 +416,20 @@
 
 .cosmos-sky-anomaly-ring {
   border-radius: 50%;
-  border: 1px dashed rgba(186, 214, 255, 0);
-  transition: border-color 220ms ease, transform 280ms var(--c-ease);
+  border: 1px solid rgba(186, 214, 255, 0);
+  box-shadow: 0 0 0 0 rgba(148, 206, 255, 0);
+  transition: border-color 240ms ease, box-shadow 260ms ease, transform 280ms var(--c-ease);
 }
 
 .cosmos-sky-anomaly:hover .cosmos-sky-anomaly-ring,
 .cosmos-sky-anomaly:focus-visible .cosmos-sky-anomaly-ring {
-  border-color: rgba(186, 214, 255, 0.36);
-  transform: scale(1.09);
+  border-color: rgba(186, 220, 255, 0.34);
+  box-shadow: 0 0 24px rgba(132, 198, 255, 0.16);
+  transform: scale(1.08);
 }
 
-.cosmos-sky-anomaly-label {
-  font-size: 10.5px;
-  color: rgba(212, 228, 252, 0.54);
-  letter-spacing: 0.04em;
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  padding: 2px 8px;
-  border-radius: 999px;
-  background: rgba(3, 6, 15, 0.44);
-  backdrop-filter: blur(6px);
-  white-space: nowrap;
-  border: 1px solid transparent;
-  transition: color 180ms ease, background 180ms ease, border-color 180ms ease;
-}
-
-.cosmos-sky-anomaly:hover .cosmos-sky-anomaly-label {
-  color: var(--c-ink);
-  background: rgba(8, 14, 28, 0.80);
-  border-color: rgba(186, 214, 255, 0.20);
-}
-
-.cosmos-sky-anomaly-scale {
-  font-family: var(--font-mono, monospace);
-  font-size: 9px;
-  color: var(--c-faint);
+.cosmos-sky-anomaly:focus-visible {
+  outline: none;
 }
 
 .cosmos-home-beacon {
@@ -549,9 +528,5 @@
   }
   .cosmos-live-snippet {
     font-size: 9.5px;
-  }
-  .cosmos-sky-anomaly-label {
-    font-size: 10px;
-    padding: 2px 7px;
   }
 }

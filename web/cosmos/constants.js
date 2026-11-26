@@ -48,7 +48,7 @@ export const DEFAULT_COSMOS_CONSTANTS = Object.freeze({
   livePreviewMode: '2', // '2' | '3' | 'hover'
   showEventsCountdown: true,
   eventsAutoEnabled: true,
-  eventsAutoZoom: true,
+  eventsAutoZoom: false,
   renderQuality: 'auto', // 'auto' | 'high' | 'lite'
 });
 
@@ -79,7 +79,7 @@ export function normalizeCosmosConstants(raw) {
     livePreviewMode: mode,
     showEventsCountdown: src.showEventsCountdown !== false,
     eventsAutoEnabled: src.eventsAutoEnabled !== false,
-    eventsAutoZoom: src.eventsAutoZoom !== false,
+    eventsAutoZoom: src.eventsAutoZoom === true,
     renderQuality,
   };
 }

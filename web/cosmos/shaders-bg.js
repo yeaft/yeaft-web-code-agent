@@ -28,6 +28,8 @@ export const BG_FRAG = `
   uniform float uWarp;
   uniform float uFovZoom;
   uniform vec4 uShockWave;
+  uniform vec4 uEventLens;
+  uniform vec4 uEventAmbient;
   uniform float uSkyBright;
   uniform float uStarDensity;
   uniform float uQuality;
@@ -169,13 +171,29 @@ export const BG_FRAG = `
       }
     }
 
-    /* 1b. Cosmic Event Shockwave / Gravitational-Wave Lensing */
+    /* 1b. Cosmic Event Gravitational Lensing & Spacetime Shockwave */
+    float evEinsteinBoost = 0.0;
+    if (uEventLens.w > 0.001 && uEventLens.z > 0.0005) {
+      vec2 dEv = lensedP - uEventLens.xy;
+      float rEv = length(dEv);
+      float evRs = uEventLens.z;
+      float evEin = evRs * 1.52;
+      if (rEv > evRs * 0.65 && rEv < evRs * 9.5) {
+        float fall = smoothstep(evRs * 9.5, evRs * 2.2, rEv);
+        float evBend = min((evEin * evEin) / max(rEv - evRs * 0.36, 0.0016), 0.36);
+        lensedP -= normalize(dEv + vec2(1e-5)) * evBend * 0.44 * uEventLens.w * fall;
+        evEinsteinBoost = exp(-pow((rEv - evEin * 1.04) / max(evRs * 0.42, 0.004), 2.0)) * 0.62 * uEventLens.w;
+      }
+    }
+
     if (uShockWave.w > 0.001) {
       vec2 dSw = lensedP - uShockWave.xy;
       float rSw = length(dSw);
-      float bandSw = exp(-pow((rSw - uShockWave.z) / 0.072, 2.0));
-      float rippleSw = sin((rSw - uShockWave.z) * 46.0) * bandSw * uShockWave.w;
-      lensedP += normalize(dSw + vec2(1e-5)) * rippleSw * 0.026;
+      float swWidth = clamp(uShockWave.z * 0.24, 0.014, 0.068);
+      float bandSw = exp(-pow((rSw - uShockWave.z) / swWidth, 2.0));
+      float freq = clamp(24.0 / max(swWidth * 10.0, 0.28), 28.0, 90.0);
+      float rippleSw = sin((rSw - uShockWave.z) * freq) * bandSw * uShockWave.w;
+      lensedP += normalize(dSw + vec2(1e-5)) * rippleSw * clamp(swWidth * 0.36, 0.005, 0.022);
     }
 
     /* 2. Wide-Field 3D Spherical Deep-Space Skybox (ESO Milky Way + Veil Nebula + JWST Deep Field) */
@@ -193,13 +211,23 @@ export const BG_FRAG = `
     vec2 nebUv = mirrorUv(skyUv * vec2(2.0, 1.6) + vec2(0.18 + uRealTime * 0.0005, -0.08));
     float nebMask = smoothstep(0.22, 0.62, sin(skyUv.x * TAU + 0.8) * 0.5 + 0.5)
                   * smoothstep(0.82, 0.28, abs(skyUv.y - 0.46) * 2.0);
-    vec3 neb = pow(max(texture2D(uTexNebula, nebUv).rgb, vec3(0.0)), vec3(1.65)) * 0.14 * nebMask * uSkyBright;
+    vec3 neb = nebMask > 0.008 ? pow(max(texture2D(uTexNebula, nebUv).rgb, vec3(0.0)), vec3(1.65)) * 0.14 * nebMask * uSkyBright : vec3(0.0);
     vec3 deepField = pow(max(texture2D(uTexDeep, mirrorUv(skyUv * vec2(3.6, 2.4) + vec2(0.31, 0.14))).rgb, vec3(0.0)), vec3(2.2)) * 0.11 * uSkyBright;
 
     float skyPresence = 1.0 - smoothstep(19.5, 23.8, uScaleLog) * 0.52;
     float horizonSkyBoost = 1.0 + smoothstep(11.0, 7.2, uScaleLog) * 0.42;
+    float totalEin = einsteinBoost + evEinsteinBoost;
     vec3 col = vec3(0.005, 0.009, 0.020)
-             + (eso + neb + deepField) * skyPresence * horizonSkyBoost * (1.0 + einsteinBoost);
+             + (eso + neb + deepField) * skyPresence * horizonSkyBoost * (1.0 + totalEin);
+
+    /* Subtle Interstellar Dust Illumination from Luminous Cosmic Events */
+    if (uEventAmbient.a > 0.001) {
+      float rAmb = length(p - uEventLens.xy);
+      float ambRad = max(uEventLens.z * 3.8, 0.16);
+      float dustLuma = dot(eso + neb, vec3(0.30, 0.58, 0.12));
+      float scatter = exp(-rAmb / ambRad) * (0.28 + dustLuma * 1.85);
+      col += uEventAmbient.rgb * scatter * uEventAmbient.a * 0.42;
+    }
 
     /* 3. Multi-Octave 3D Depth Starfield */
     float threshA = clamp(0.982 - 0.014 * uStarDensity, 0.942, 0.995);
@@ -221,7 +249,7 @@ export const BG_FRAG = `
     }
     vec2 deepSp = (lensedP / fovDiv) * (0.98 - scaleDelta * 0.006) + starDrift * 0.25;
     stars += starLayer(deepSp + 9.4, 132.0, threshB, 0.85, warpAmt * 0.3, radialDir) * 0.44;
-    col += stars * (1.0 - smoothstep(22.0, 24.0, uScaleLog) * 0.32) * (1.0 + einsteinBoost * 1.4);
+    col += stars * (1.0 - smoothstep(22.0, 24.0, uScaleLog) * 0.32) * (1.0 + totalEin * 1.4);
 
     /* 4. Spiral Galaxy (10^21 m — Hubble M51 + 4-Arm Galactic Disc) */
     if (uGalAlpha > 0.002) {
@@ -256,13 +284,16 @@ export const BG_FRAG = `
         vec3 wA = texture2D(uTexWeb, uvA).rgb;
         vec2 uvB = mirrorUv(rot2(-0.08 + sin(uRealTime * 0.04) * 0.02) * (wp * 0.46) + 0.49 + vec2(-uRealTime * 0.0021, uRealTime * 0.0013) + uParallax * 0.042);
         vec3 wB = texture2D(uTexWeb, uvB).rgb;
-        vec3 wBlur = (
-          texture2D(uTexWeb, mirrorUv(uvB + vec2(0.003, 0.0))).rgb +
-          texture2D(uTexWeb, mirrorUv(uvB - vec2(0.003, 0.0))).rgb +
-          texture2D(uTexWeb, mirrorUv(uvB + vec2(0.0, 0.003))).rgb +
-          texture2D(uTexWeb, mirrorUv(uvB - vec2(0.0, 0.003))).rgb
-        ) * 0.25;
-        vec3 wSharp = max(wB + (wB - wBlur) * 1.45, vec3(0.0));
+        vec3 wSharp = wB;
+        if (uWebRadius > 0.25) {
+          vec3 wBlur = (
+            texture2D(uTexWeb, mirrorUv(uvB + vec2(0.003, 0.0))).rgb +
+            texture2D(uTexWeb, mirrorUv(uvB - vec2(0.003, 0.0))).rgb +
+            texture2D(uTexWeb, mirrorUv(uvB + vec2(0.0, 0.003))).rgb +
+            texture2D(uTexWeb, mirrorUv(uvB - vec2(0.0, 0.003))).rgb
+          ) * 0.25;
+          wSharp = max(wB + (wB - wBlur) * 1.45, vec3(0.0));
+        }
         float ridge = max(wSharp.r, max(wSharp.g, wSharp.b));
         float wave1 = 0.5 + 0.5 * sin(wr * 8.5 - uRealTime * 1.35 + ridge * 6.0);
         float wave2 = 0.5 + 0.5 * sin(wp.x * 5.2 + wp.y * 4.4 - uRealTime * 0.95 + wA.b * 5.0);

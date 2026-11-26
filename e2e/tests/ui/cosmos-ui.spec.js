@@ -414,10 +414,21 @@ test.describe('Yeaft Cosmos UI', () => {
     await expect(page.locator('.cosmos-drawer')).toHaveAttribute('data-planet-theme', 'saturn');
     await page.keyboard.press('Escape');
 
-    // 4. Cosmic Event: open almanac, disable Auto-Zoom -> trigger distant event with spatial beacon -> click beacon to zoom in -> return to Solar View -> stop
+    // 3b. Verify the 3 deep-sky portals (Galaxy, Cosmic Web, Event Horizon) have ZERO overlaid text labels
+    const portals = page.locator('.cosmos-sky-anomaly');
+    await expect(portals).toHaveCount(3);
+    await expect(page.locator('.cosmos-sky-anomaly-label')).toHaveCount(0);
+    for (const pText of await portals.allTextContents()) {
+      expect(pText.trim()).toBe('');
+    }
+
+    // 4. Cosmic Event: open almanac (auto-zoom defaults to OFF for serene distant unfolding), verify toggle,
+    // trigger distant event with spatial beacon -> click beacon to zoom in -> verify timeline & telemetry -> stop
     await page.locator('.cosmos-event-main').click();
     await expect(page.locator('.cosmos-event-almanac')).toBeVisible();
     const autoZoomSwitch = page.locator('.cosmos-almanac-pref .cosmos-switch');
+    await expect(autoZoomSwitch).toHaveAttribute('aria-checked', 'false');
+    await autoZoomSwitch.click();
     await expect(autoZoomSwitch).toHaveAttribute('aria-checked', 'true');
     await autoZoomSwitch.click();
     await expect(autoZoomSwitch).toHaveAttribute('aria-checked', 'false');
@@ -427,10 +438,11 @@ test.describe('Yeaft Cosmos UI', () => {
     await expect(page.locator('.cosmos-watch-dock')).toHaveCount(0);
     await expect(page.locator('.cosmos-event-beacon')).toBeVisible({ timeout: 5000 });
 
-    // Click distant beacon -> telescope slews in & opens observation dock
+    // Click distant beacon -> telescope slews in & opens observation dock with bearing & scrubbable timeline
     await page.locator('.cosmos-event-beacon').click();
     await expect(page.locator('.cosmos-watch-dock')).toBeVisible({ timeout: 5000 });
     await expect(page.locator('.cosmos-ewd-bearing')).toBeVisible();
+    await expect(page.locator('.cosmos-ewd-timeline')).toBeVisible();
 
     // Stop immediately via watch dock stop button
     await page.locator('.cosmos-watch-dock .cosmos-ewd-btn.is-stop').click();
