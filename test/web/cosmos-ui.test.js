@@ -986,17 +986,21 @@ describe('Cosmos Component & WebGL Review Regressions', () => {
 
     // Legacy single-Agent fallback via production sidebarSessionCatalogRows adapter:
     // sidebarSessionCatalog is array-valued even for legacy servers and drops ownerless rows (agentId == null),
-    // yet Cosmos must still project an unambiguous single-Agent ownerless legacy row without guessing on multi-Agent.
+    // yet Cosmos must still project an unambiguous single-Agent ownerless legacy row ONLY after
+    // legacy readiness + auth checks pass — never while hydration is pending, failed, or auth is stale.
     const singleLegacyStore = {
       agents: [{ id: 'mac', name: 'MacBook', online: true, workDir: '/dev/yeaft', capabilities: [] }],
       currentAgent: 'mac',
       conversations: [],
       sessionCatalog: [],
-      sidebarLegacySessionCatalog: [],
+      sidebarLegacySessionCatalog: [
+        { catalogKey: 'yeaft:mac:s-retained', runtimeProvider: 'yeaft', routeRef: { runtimeProvider: 'yeaft', agentId: 'mac', sessionId: 's-retained' }, title: 'Retained-Read-Model' },
+      ],
       hiddenSessionCatalog: [],
       sessionProjects: [],
       sessionCatalogLoaded: false,
       sessionCatalogProtocolSupported: false,
+      sidebarSessionCatalogLoading: false,
       _hasHandledAgentList: true,
       _hasHandledYeaftSessionHydrate: true,
       yeaftSessionHydrateError: null,
@@ -1010,8 +1014,26 @@ describe('Cosmos Component & WebGL Review Regressions', () => {
       { id: 's-stamped', agentId: 'mac', name: 'Legacy-Stamped', updatedAt: now - 300 },
       { id: 's-legacy-hidden', agentId: null, name: 'Legacy-Hidden', hidden: true, updatedAt: now - 100 },
     ];
+
+    // Pending legacy hydration: must return only retained read model, never unaccepted sessionsStore rows
+    const pendingLegacyStore = { ...singleLegacyStore, _hasHandledYeaftSessionHydrate: false, sidebarSessionCatalogLoading: true };
+    pendingLegacyStore.sidebarSessionCatalog = sidebarSessionCatalogRows(pendingLegacyStore, legacySessions);
+    const pendingProjected = projectAgentsForCosmos({ chatStore: pendingLegacyStore, sessionsStore: { sessionList: legacySessions }, nowMs: now, isEn: true });
+    expect(pendingProjected.mac.sessions.map((s) => s.id)).toEqual(['s-retained']);
+
+    // Failed legacy hydration: must hold the visibility fence closed
+    const failedLegacyStore = { ...singleLegacyStore, yeaftSessionHydrateError: 'hydrate_failed', sidebarSessionCatalogLoading: true };
+    failedLegacyStore.sidebarSessionCatalog = sidebarSessionCatalogRows(failedLegacyStore, legacySessions);
+    const failedProjected = projectAgentsForCosmos({ chatStore: failedLegacyStore, sessionsStore: { sessionList: legacySessions }, nowMs: now, isEn: true });
+    expect(failedProjected.mac.sessions.map((s) => s.id)).toEqual(['s-retained']);
+
+    // Stale auth identity (sidebarSessionCatalog empty + loading true): must not leak cached sessions
+    const staleAuthLegacyStore = { ...singleLegacyStore, sidebarSessionCatalog: [], sidebarSessionCatalogLoading: true };
+    const staleAuthProjected = projectAgentsForCosmos({ chatStore: staleAuthLegacyStore, sessionsStore: { sessionList: legacySessions }, nowMs: now, isEn: true });
+    expect(staleAuthProjected.mac.sessions).toEqual([]);
+
+    // Accepted single-Agent legacy hydration: production adapter keeps s-stamped, Cosmos adds unambiguous s-ownerless
     singleLegacyStore.sidebarSessionCatalog = sidebarSessionCatalogRows(singleLegacyStore, legacySessions);
-    // Confirm production legacy adapter dropped the ownerless row, yet projectAgentsForCosmos recovers it cleanly
     expect(singleLegacyStore.sidebarSessionCatalog.map((r) => r.routeRef.sessionId)).toEqual(['s-stamped']);
     const legacySingleProjected = projectAgentsForCosmos({
       chatStore: singleLegacyStore,

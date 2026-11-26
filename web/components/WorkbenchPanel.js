@@ -497,6 +497,7 @@ export default {
       menu.style.top = `${pos.y}px`;
     };
     const openLauncher = (focusIndex = 0) => {
+      closeWorkbenchMenus();
       launcherOpen.value = true;
       updateLauncherMenuPosition();
       focusLauncherItem(focusIndex);
@@ -670,6 +671,7 @@ export default {
       items[boundedIndex]?.focus();
     });
     const openOpenItemsMenu = async (focusIndex = 0) => {
+      closeLauncher();
       tabContextMenu.visible = false;
       openItemsMenu.visible = true;
       await Vue.nextTick();
@@ -1069,8 +1071,26 @@ export default {
       }
     };
 
+    const repositionOpenMenus = () => {
+      if (launcherOpen.value) void updateLauncherMenuPosition();
+      if (openItemsMenu.visible) {
+        const rect = openItemsTrigger.value?.getBoundingClientRect();
+        if (rect && (rect.width > 0 || rect.height > 0)) {
+          Object.assign(openItemsMenu, positionFixedMenu(openItemsMenuElement.value, rect));
+        } else {
+          openItemsMenu.visible = false;
+        }
+      }
+      if (tabContextMenu.visible) {
+        tabContextMenu.visible = false;
+      }
+    };
+    const handleViewportResize = () => {
+      scheduleTabOverflowUpdate();
+      repositionOpenMenus();
+    };
     const handleDocumentKeydown = event => {
-      if (event.key !== 'Escape') return;
+      if (event.defaultPrevented || event.key !== 'Escape') return;
       if (tabContextMenu.visible) {
         event.preventDefault();
         const originatingItemId = tabContextMenu.itemId;
@@ -1089,11 +1109,12 @@ export default {
       if (typeof ResizeObserver !== 'undefined' && panelRoot.value) {
         panelResizeObserver = new ResizeObserver(() => {
           scheduleTabOverflowUpdate();
+          repositionOpenMenus();
           notifyWorkbenchResize();
         });
         panelResizeObserver.observe(panelRoot.value);
       }
-      window.addEventListener('resize', scheduleTabOverflowUpdate);
+      window.addEventListener('resize', handleViewportResize);
       scheduleTabOverflowUpdate();
     });
 
@@ -1111,7 +1132,7 @@ export default {
       window.removeEventListener('workbench-file-items-changed', handleFileItemsChanged);
       document.removeEventListener('click', handleDocumentClick);
       document.removeEventListener('keydown', handleDocumentKeydown);
-      window.removeEventListener('resize', scheduleTabOverflowUpdate);
+      window.removeEventListener('resize', handleViewportResize);
       panelResizeObserver?.disconnect();
       panelResizeObserver = null;
     });

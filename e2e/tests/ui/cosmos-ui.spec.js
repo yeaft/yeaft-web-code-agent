@@ -205,10 +205,20 @@ test.describe('Yeaft Cosmos UI', () => {
     await expect(wbHost).toBeVisible();
     await expect(filesTab.locator('.workbench-item-select')).toBeFocused();
 
-    // Open Tabs overflow menu in a short host (with ☰ history drawer open above Workbench)
-    // must stay bounded inside .cosmos-workbench-host and keep the final overflow tab reachable via scroll.
-    await page.locator('.cosmos-drawer-head-left .cosmos-icon-btn').first().click();
-    await expect(page.locator('.cosmos-history-drawer')).toBeVisible();
+    // Right-click tab context menu -> clicking Add closes tab context menu mutually exclusively,
+    // and Escape closes Add and restores focus to Add (NOT hijacked back to the tab).
+    await wbHost.locator('.workbench-item-tab[data-workbench-item-id="browser"]').click({ button: 'right', position: { x: 8, y: 12 } });
+    await expect(tabCtx).toBeVisible();
+    await addBtn.click();
+    await expect(tabCtx).toHaveCount(0);
+    await expect(addMenu).toBeVisible();
+    await page.keyboard.press('Escape');
+    await expect(addMenu).toHaveCount(0);
+    await expect(wbHost).toBeVisible();
+    await expect(addBtn).toBeFocused();
+
+    // Open Tabs overflow menu: open first at normal height, THEN shrink host while open
+    // (opening ☰ history drawer + shrinking viewport height) and verify dynamic height re-clamping & reachability.
     await page.evaluate(async () => {
       const { workbenchRouteKey, workbenchWorkspaceGeneration } = await import('/utils/workbench-route.js');
       const chat = window.Pinia.useChatStore();
@@ -229,11 +239,17 @@ test.describe('Yeaft Cosmos UI', () => {
     await openItemsBtn.click();
     const openItemsMenu = wbHost.locator('.workbench-open-items-menu');
     await expect(openItemsMenu).toBeVisible();
-    const [shortHostBox, openMenuBox] = await Promise.all([wbHost.boundingBox(), openItemsMenu.boundingBox()]);
-    expect(shortHostBox).not.toBeNull();
-    expect(openMenuBox).not.toBeNull();
-    expect(openMenuBox.y).toBeGreaterThanOrEqual(shortHostBox.y - 1);
-    expect(openMenuBox.y + openMenuBox.height).toBeLessThanOrEqual(shortHostBox.y + shortHostBox.height + 1);
+
+    // Now shrink the viewport height while Open Tabs menu is already open -> menu must dynamically re-clamp inside host
+    const originalViewport = page.viewportSize() || { width: 1280, height: 720 };
+    await page.setViewportSize({ width: originalViewport.width, height: 360 });
+    await expect(async () => {
+      const [shrunkHostBox, shrunkMenuBox] = await Promise.all([wbHost.boundingBox(), openItemsMenu.boundingBox()]);
+      expect(shrunkHostBox).not.toBeNull();
+      expect(shrunkMenuBox).not.toBeNull();
+      expect(shrunkMenuBox.y).toBeGreaterThanOrEqual(shrunkHostBox.y - 1);
+      expect(shrunkMenuBox.y + shrunkMenuBox.height).toBeLessThanOrEqual(shrunkHostBox.y + shrunkHostBox.height + 1);
+    }).toPass({ timeout: 3000 });
     const lastOverflowItem = openItemsMenu.locator('.workbench-menu-item').last();
     await lastOverflowItem.scrollIntoViewIfNeeded();
     await expect(lastOverflowItem).toBeVisible();
@@ -242,9 +258,7 @@ test.describe('Yeaft Cosmos UI', () => {
     await expect(openItemsMenu).toHaveCount(0);
     await expect(wbHost).toBeVisible();
     await expect(openItemsBtn).toBeFocused();
-    // Close ☰ history drawer before maximize check
-    await page.locator('.cosmos-drawer-head-left .cosmos-icon-btn').first().click();
-    await expect(page.locator('.cosmos-history-drawer')).toHaveCount(0);
+    await page.setViewportSize(originalViewport);
 
     // Workbench maximize expands the Cosmos drawer cleanly and restores
     const initialDrawerW = (await page.locator('.cosmos-drawer').boundingBox()).width;

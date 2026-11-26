@@ -8,6 +8,7 @@
  */
 import { shortenPath } from '../utils/path-display.js';
 import { buildProjectTree } from '../stores/helpers/project-tree.js';
+import { legacySidebarCatalogReady } from '../stores/helpers/sidebar-session-catalog.js';
 
 function buildSessionProjectLookup(projects) {
   const rows = Array.isArray(projects) ? projects : [];
@@ -260,13 +261,15 @@ export function projectAgentsForCosmos({ chatStore, sessionsStore, nowMs = Date.
     }
   }
   const isLegacyCatalogMode = chatStore?.sessionCatalogProtocolSupported === false;
-  const catalogAuthoritative = !isLegacyCatalogMode && (
-    hasSidebarCatalog
+  const legacyInventoryAccepted = isLegacyCatalogMode
+    && legacySidebarCatalogReady(chatStore)
+    && chatStore?.sidebarSessionCatalogLoading !== true;
+  const catalogAuthoritative = hasSidebarCatalog
     || chatStore?.sessionCatalogProtocolSupported === true
+    || (isLegacyCatalogMode && !legacyInventoryAccepted)
     || chatStore?.sessionCatalogLoaded === true
-    || hiddenCatalog.length > 0
-  );
-  const singleLegacyAgentId = !catalogAuthoritative
+    || hiddenCatalog.length > 0;
+  const singleLegacyAgentId = legacyInventoryAccepted
     && agents.length === 1
     && agents[0]?.id
     && (!chatStore?.currentAgent || chatStore.currentAgent === agents[0].id)
@@ -321,18 +324,19 @@ export function projectAgentsForCosmos({ chatStore, sessionsStore, nowMs = Date.
       });
     }
 
-    // 2. Enrich visible native Yeaft rows from live sessionsStore;
-    //    never resurrect hidden/absent sessions when the visible catalog is authoritative.
-    //    On the legacy single-Agent path, ownerless rows (agentId == null) still project
-    //    unambiguously onto that single Agent.
+    // 2. Enrich visible native Yeaft rows from live sessionsStore.
+    //    Keep sidebar/server catalog membership authoritative; only admit omitted
+    //    ownerless rows (agentId == null) for an unambiguous single Agent once
+    //    legacy inventory readiness and identity checks pass.
     for (const s of yeaftSessions) {
       if (!s?.id || s.hidden === true) continue;
+      const isOwnerlessLegacyRow = !s.agentId && Boolean(singleLegacyAgentId);
       const ownerAgentId = s.agentId || singleLegacyAgentId;
       if (!ownerAgentId || ownerAgentId !== agentId) continue;
       if (hiddenNativeKeys.has(`${agentId}\u001f${s.id}`)) continue;
       const key = `yeaft:${s.id}`;
       const existing = mergedMap.get(key);
-      if (catalogAuthoritative && !existing) continue;
+      if (catalogAuthoritative && !existing && !isOwnerlessLegacyRow) continue;
       const updatedMs = Math.max(
         existing?.updatedAt || 0,
         parseMs(s.latestActivityAt),
