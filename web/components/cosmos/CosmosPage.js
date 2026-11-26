@@ -13,6 +13,7 @@
 import {
   PLANETS,
   BOOK_DOMAINS,
+  COSMOS_DRAWER_WIDTH,
   loadCosmosConstants,
   saveCosmosConstants,
   loadPlanetBindings,
@@ -22,6 +23,9 @@ import {
   scaleBand,
   loadGalaxyBooks,
   saveGalaxyBooks,
+  clampCosmosDrawerWidth,
+  loadCosmosDrawerWidth,
+  saveCosmosDrawerWidth,
 } from '../../cosmos/constants.js';
 import { createCosmosEngine } from '../../cosmos/gl-engine.js';
 import { createParticlePools, createCosmicWebGraph } from '../../cosmos/particle-hud.js';
@@ -46,7 +50,7 @@ import CosmosConstantsPopover from './CosmosConstantsPopover.js';
 import CosmosEventsOverlay from './CosmosEventsOverlay.js';
 import SettingsPanel from '../SettingsPanel.js';
 import AgentSettingsPanel from '../AgentSettingsPanel.js';
-import SessionCreateModal from '../SessionCreateModal.js';
+import SessionSettingsModal from '../SessionSettingsModal.js';
 
 export default {
   name: 'CosmosPage',
@@ -57,17 +61,19 @@ export default {
     CosmosEventsOverlay,
     SettingsPanel,
     AgentSettingsPanel,
-    SessionCreateModal,
+    SessionSettingsModal,
   },
   template: `
     <div
       class="cosmos-page"
       :class="{
         'is-drawer-open': drawerOpen,
+        'is-drawer-resizing': drawerResizing,
         'is-workbench-widened': workbenchWidened,
         'is-workbench-maximized': drawerOpen && workbenchMaximized,
         'is-drag-mode': dragActive,
       }"
+      :style="cosmosPageStyle"
       @wheel="onStageWheel"
     >
       <canvas ref="glCanvasRef" :key="canvasEpoch" class="cosmos-gl-canvas" :class="{ 'is-orbiting': camOrbiting }" @pointerdown="onCanvasPointerDown" @dblclick="resetCamera"></canvas>
@@ -367,11 +373,21 @@ export default {
         :all-agents="projectedAgentList"
         :agent-to-planet="assignments.agentToPlanet"
         :widened="workbenchWidened"
+        :drawer-width="effectiveDrawerWidth"
+        :min-drawer-width="drawerMinWidth"
+        :max-drawer-width="drawerMaxWidth"
+        :viewport-width="viewportWidth"
+        :resizing="drawerResizing"
         @close="closeDrawer"
         @select-session="onDrawerSelectSession"
-        @create-session="openSessionCreate"
+        @open-quick-composer="openQuickComposerFromDrawer"
+        @open-session-settings="openSessionSettings"
         @open-llm-config="openAgentLlmConfig"
         @toggle-widen="toggleWorkbenchWiden"
+        @resize-start="onDrawerResizeStart"
+        @resize="onDrawerResize"
+        @resize-end="onDrawerResizeEnd"
+        @resize-reset="onDrawerResizeReset"
         @message-sent="emitTelemetryBeam"
       />
 
@@ -445,7 +461,14 @@ export default {
       <!-- Authentic Yeaft Modals -->
       <SettingsPanel v-if="settingsModal.open" :visible="settingsModal.open" :initial-tab="settingsModal.tab" :initial-sub-tab="settingsModal.subTab" @close="settingsModal.open = false" />
       <AgentSettingsPanel v-if="agentSettingsModal.open" :initial-agent-id="agentSettingsModal.agentId" :initial-category="agentSettingsModal.category" @close="agentSettingsModal.open = false" />
-      <SessionCreateModal v-if="sessionCreateModal.open" :initial-agent-id="sessionCreateModal.agentId" @close="sessionCreateModal.open = false" @created="onSessionCreated" />
+      <SessionSettingsModal
+        v-if="sessionSettingsModal.open && sessionSettingsModal.sessionId"
+        :group-id="sessionSettingsModal.sessionId"
+        :agent-id="sessionSettingsModal.agentId"
+        :initial-section="sessionSettingsModal.section"
+        @close="closeSessionSettings"
+        @open-vp-library="openVpLibraryFromSessionSettings"
+      />
     </div>
   `,
   setup() {
@@ -486,6 +509,35 @@ export default {
     const drawerAgentId = Vue.ref(null);
     const workbenchWidened = Vue.ref(false);
     const workbenchMaximized = Vue.computed(() => Boolean(store.workbenchExpanded && store.workbenchMaximized));
+    const viewportWidth = Vue.ref(typeof window !== 'undefined' ? (window.innerWidth || 1280) : 1280);
+    const customDrawerWidth = Vue.ref(loadCosmosDrawerWidth());
+    const drawerResizing = Vue.ref(false);
+    const drawerMinWidth = COSMOS_DRAWER_WIDTH.min;
+    const drawerMaxWidth = Vue.computed(() => (
+      Math.max(
+        COSMOS_DRAWER_WIDTH.min,
+        Math.min(COSMOS_DRAWER_WIDTH.max, Math.floor(viewportWidth.value - COSMOS_DRAWER_WIDTH.minRemaining)),
+      )
+    ));
+    const effectiveDrawerWidth = Vue.computed(() => {
+      const vw = viewportWidth.value;
+      if (vw <= 768) return vw;
+      if (workbenchMaximized.value) return Math.min(Math.round(vw * 0.94), COSMOS_DRAWER_WIDTH.max);
+      if (workbenchWidened.value) {
+        const customClamped = customDrawerWidth.value != null
+          ? clampCosmosDrawerWidth(customDrawerWidth.value, vw)
+          : 0;
+        const wideDefault = Math.min(760, Math.max(540, Math.round(vw * 0.50)));
+        return clampCosmosDrawerWidth(Math.max(customClamped, wideDefault), vw);
+      }
+      if (customDrawerWidth.value != null) {
+        return clampCosmosDrawerWidth(customDrawerWidth.value, vw);
+      }
+      return clampCosmosDrawerWidth(Math.min(488, Math.max(388, Math.round(vw * 0.34))), vw);
+    });
+    const cosmosPageStyle = Vue.computed(() => (
+      viewportWidth.value > 768 ? { '--c-panel-w': `${effectiveDrawerWidth.value}px` } : {}
+    ));
     const hoverPlanetId = Vue.ref(null);
     const hoverCardPinned = Vue.ref(false);
     const hoverCardStyle = Vue.ref({ left: '0px', top: '0px' });
@@ -500,7 +552,7 @@ export default {
 
     const settingsModal = Vue.reactive({ open: false, tab: 'general', subTab: '' });
     const agentSettingsModal = Vue.reactive({ open: false, agentId: null, category: 'llm' });
-    const sessionCreateModal = Vue.reactive({ open: false, agentId: null });
+    const sessionSettingsModal = Vue.reactive({ open: false, sessionId: null, agentId: null, section: 'session' });
 
     const dragActive = Vue.ref(false);
     const dragFromPlanetId = Vue.ref(null);
@@ -634,7 +686,7 @@ export default {
       if (!pos) return null;
       const w = 294, h = cardHeight || 190;
       const vw = window.innerWidth || 1280, vh = window.innerHeight || 720;
-      const panelW = drawerOpen.value ? (workbenchWidened.value ? Math.min(760, vw * 0.5) : Math.min(488, vw * 0.34)) : 0;
+      const panelW = drawerOpen.value ? effectiveDrawerWidth.value : 0;
       const rightLimit = vw - panelW - 18;
       let x = pos.x + pos.r + 12;
       if (x + w > rightLimit) x = pos.x - pos.r - w - 12;
@@ -962,7 +1014,7 @@ export default {
     }
 
     function onStageWheel(e) {
-      if (settingsModal.open || agentSettingsModal.open || sessionCreateModal.open) return;
+      if (settingsModal.open || agentSettingsModal.open || sessionSettingsModal.open) return;
       if (e.target.closest('.cosmos-drawer, .cosmos-quick-composer, .cosmos-constants-popover, .cosmos-hover-card, .cosmos-event-almanac, .cosmos-book-popover')) return;
       e.preventDefault();
       if (eventSim.active?.observing) {
@@ -1050,10 +1102,50 @@ export default {
     }
 
     function closeDrawer() {
+      drawerResizing.value = false;
       drawerOpen.value = false;
       drawerAgentId.value = null;
       workbenchWidened.value = false;
       collapseOpenWorkbench();
+    }
+
+    function openQuickComposerFromDrawer(agentId) {
+      const targetId = agentId || drawerAgentId.value || null;
+      closeDrawer();
+      if (targetId) quickAgentId.value = targetId;
+    }
+
+    function onDrawerResizeStart(measuredWidth) {
+      drawerResizing.value = true;
+      if (store.workbenchMaximized) {
+        if (typeof store.toggleWorkbenchMaximized === 'function') store.toggleWorkbenchMaximized();
+        else store.workbenchMaximized = false;
+      }
+      if (workbenchWidened.value) workbenchWidened.value = false;
+      const seed = Number.isFinite(measuredWidth) && measuredWidth > 0 ? measuredWidth : effectiveDrawerWidth.value;
+      customDrawerWidth.value = clampCosmosDrawerWidth(seed, viewportWidth.value);
+    }
+
+    function onDrawerResize(nextWidth) {
+      customDrawerWidth.value = clampCosmosDrawerWidth(nextWidth, viewportWidth.value);
+    }
+
+    function onDrawerResizeEnd() {
+      drawerResizing.value = false;
+      if (customDrawerWidth.value != null) {
+        saveCosmosDrawerWidth(customDrawerWidth.value);
+      }
+    }
+
+    function onDrawerResizeReset() {
+      drawerResizing.value = false;
+      if (store.workbenchMaximized) {
+        if (typeof store.toggleWorkbenchMaximized === 'function') store.toggleWorkbenchMaximized();
+        else store.workbenchMaximized = false;
+      }
+      workbenchWidened.value = false;
+      customDrawerWidth.value = null;
+      saveCosmosDrawerWidth(null);
     }
 
     function emitTelemetryBeam({ planetId }) {
@@ -1189,14 +1281,23 @@ export default {
       agentSettingsModal.open = true;
     }
     function openAgentLlmConfig(agentId) { openYeaftAgentSettings({ agentId, category: 'llm' }); }
-    function openSessionCreate(agentId) {
-      sessionCreateModal.agentId = agentId || drawerAgentId.value || store.currentAgent || null;
-      sessionCreateModal.open = true;
+    function openSessionSettings({ sessionId, agentId = null, section = 'session' } = {}) {
+      if (!sessionId) return;
+      constantsOpen.value = false;
+      sessionSettingsModal.sessionId = sessionId;
+      sessionSettingsModal.agentId = agentId || drawerAgentId.value || store.currentAgent || null;
+      sessionSettingsModal.section = section || 'session';
+      sessionSettingsModal.open = true;
     }
-    function onSessionCreated(created) {
-      sessionCreateModal.open = false;
-      const sid = created?.sessionId || created?.id;
-      if (created?.agentId && sid) openSessionInDrawer(created.agentId, { id: sid });
+    function closeSessionSettings() {
+      sessionSettingsModal.open = false;
+      sessionSettingsModal.sessionId = null;
+      sessionSettingsModal.agentId = null;
+      sessionSettingsModal.section = 'session';
+    }
+    function openVpLibraryFromSessionSettings() {
+      closeSessionSettings();
+      openYeaftSettings({ tab: 'yeaft', subTab: 'vp' });
     }
     function abandonCosmos() {
       constantsOpen.value = false;
@@ -1225,20 +1326,24 @@ export default {
     function onKeyDown(e) {
       if (e.defaultPrevented) return;
       if ((e.metaKey || e.ctrlKey) && !e.altKey && String(e.key || '').toLowerCase() === 'k') {
-        if (settingsModal.open || agentSettingsModal.open || sessionCreateModal.open) return;
+        if (settingsModal.open || agentSettingsModal.open || sessionSettingsModal.open) return;
         e.preventDefault();
         openCosmosSessionSearch();
         return;
       }
       if (e.key !== 'Escape') return;
+      if (sessionSettingsModal.open) { closeSessionSettings(); return; }
       if (settingsModal.open) { settingsModal.open = false; return; }
       if (agentSettingsModal.open) { agentSettingsModal.open = false; return; }
-      if (sessionCreateModal.open) { sessionCreateModal.open = false; return; }
       if (emptyPlanetMenu.value) { emptyPlanetMenu.value = null; return; }
       if (constantsOpen.value) { constantsOpen.value = false; return; }
       if (bookCreateOpen.value) { bookCreateOpen.value = false; return; }
       if (eventSim.active?.observing) { onReturnFromEvent(); return; }
       if (store.workbenchExpanded && drawerOpen.value) { collapseOpenWorkbench(); return; }
+      if (drawerOpen.value && drawerRef.value?.isSessionStatusOpen?.()) {
+        drawerRef.value.closeSessionStatus?.({ restoreFocus: true });
+        return;
+      }
       if (drawerOpen.value && drawerRef.value?.isHistoryOpen?.()) { drawerRef.value.closeSessionSwitcher?.(); return; }
       if (drawerOpen.value) { closeDrawer(); return; }
       if (quickAgentId.value) { quickAgentId.value = null; return; }
@@ -1328,6 +1433,7 @@ export default {
           getUiState: () => ({
             currentBand: currentBand.value,
             drawerOpen: drawerOpen.value,
+            drawerWidth: effectiveDrawerWidth.value,
             quickOpen: Boolean(quickAgentId.value),
             workbenchWidened: workbenchWidened.value || workbenchMaximized.value,
             focusedPlanetId: focusedPlanetId.value,
@@ -1360,9 +1466,15 @@ export default {
       scheduleNextFrame();
     }
 
+    function onWindowResize() {
+      viewportWidth.value = window.innerWidth || 1280;
+    }
+
     Vue.onMounted(() => {
       unmounted = false;
+      viewportWidth.value = window.innerWidth || 1280;
       mountEngine();
+      window.addEventListener('resize', onWindowResize);
       window.addEventListener('pointermove', onGlobalPointerMove);
       window.addEventListener('pointerup', onGlobalPointerUp);
       window.addEventListener('pointercancel', onGlobalPointerCancel);
@@ -1384,6 +1496,7 @@ export default {
         waitJumpTimer = null;
       }
       clearInterval(nowInterval);
+      window.removeEventListener('resize', onWindowResize);
       window.removeEventListener('pointermove', onGlobalPointerMove);
       window.removeEventListener('pointerup', onGlobalPointerUp);
       window.removeEventListener('pointercancel', onGlobalPointerCancel);
@@ -1409,20 +1522,22 @@ export default {
       ],
       constants, constantsOpen, galaxyBooks,
       quickAgentId, quickAgent, drawerOpen, drawerAgent, workbenchWidened, workbenchMaximized,
+      viewportWidth, drawerResizing, drawerMinWidth, drawerMaxWidth, effectiveDrawerWidth, cosmosPageStyle,
       hoverPlanetId, hoverCardAgent, hoverPreviewSessions, hoverCardStyle, emptyPlanetMenu,
       camOrbiting, currentBand, projectedAgentList, assignments, agentsByPlanet, focusedPlanetId, waitingAgent,
       dragActive, dragFromPlanetId, dragOverPlanetId, dragX, dragY, dragIsSwap, dragGhostText,
       bookCreateOpen, bookDraftTitle, bookDraftDomain, toast,
-      settingsModal, agentSettingsModal, sessionCreateModal,
+      settingsModal, agentSettingsModal, sessionSettingsModal,
       eventActiveSnapshot, eventNextIndex, eventCountdownSec, isObservingEvent,
       eventBeaconCoords, eventBeaconAriaLabel,
       planetTagClass, planetPipClass,
       onCanvasPointerDown, resetCamera, onPlanetPointerDown, onPlanetEnter, onPlanetLeave,
       onHoverCardEnter, onHoverCardLeave, onStageWheel, jumpToScale,
       openSessionInDrawer, openAgentConversationFromQuick, openCosmosSessionSearch, onDrawerSelectSession, toggleWorkbenchWiden, closeDrawer,
+      openQuickComposerFromDrawer, onDrawerResizeStart, onDrawerResize, onDrawerResizeEnd, onDrawerResizeReset,
       emitTelemetryBeam, onAutoRouted, jumpToWaitingAgent, assignFromMenu,
       onObserveEvent, onFocusDistantEvent, onReturnFromEvent, onStopEvent, onToggleAutoEvents, onToggleAutoZoom, onTogglePauseEvent, onReplayEvent, onNextRandomEvent, onSetEventZoom,
-      onUpdateConstant, onAssignPlanet, openYeaftSettings, openYeaftAgentSettings, openAgentLlmConfig, openSessionCreate, onSessionCreated,
+      onUpdateConstant, onAssignPlanet, openYeaftSettings, openYeaftAgentSettings, openAgentLlmConfig, openSessionSettings, closeSessionSettings, openVpLibraryFromSessionSettings,
       abandonCosmos, submitNewBook, showToast, runToastAction,
     };
   },

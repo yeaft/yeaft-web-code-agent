@@ -14,11 +14,15 @@ import {
 } from '../../web/stores/helpers/yeaft-auto-route.js';
 import {
   PLANETS,
+  COSMOS_DRAWER_WIDTH,
   loadCosmosConstants,
   saveCosmosConstants,
   resolvePlanetAssignments,
   moveOrSwapPlanetBinding,
   scaleBand,
+  clampCosmosDrawerWidth,
+  loadCosmosDrawerWidth,
+  saveCosmosDrawerWidth,
 } from '../../web/cosmos/constants.js';
 import {
   COSMIC_EVENTS,
@@ -2108,5 +2112,231 @@ describe('Cosmos Component & WebGL Review Regressions', () => {
       Object.defineProperty(window, 'visualViewport', { value: prevVV, configurable: true });
       anchorHost.remove();
     }
+  });
+});
+
+describe('Cosmos Drawer Waiting Suppression, Horizontal Drag Resize & Session Status', () => {
+  let prevVue;
+  let prevPinia;
+  let wrapper;
+
+  beforeEach(() => {
+    prevVue = globalThis.Vue;
+    prevPinia = globalThis.Pinia;
+    globalThis.Vue = Vue;
+  });
+
+  afterEach(() => {
+    wrapper?.unmount();
+    wrapper = null;
+    globalThis.Vue = prevVue;
+    globalThis.Pinia = prevPinia;
+  });
+
+  it('clamps and persists custom Cosmos drawer widths cleanly across viewports', () => {
+    const storage = createMemoryStorage();
+    expect(loadCosmosDrawerWidth(storage)).toBeNull();
+    expect(clampCosmosDrawerWidth(120, 1440)).toBe(COSMOS_DRAWER_WIDTH.min);
+    expect(clampCosmosDrawerWidth(2000, 1440)).toBe(1440 - COSMOS_DRAWER_WIDTH.minRemaining);
+    expect(clampCosmosDrawerWidth(2000, 2000)).toBe(COSMOS_DRAWER_WIDTH.max);
+    expect(saveCosmosDrawerWidth(820, storage)).toBe(820);
+    expect(loadCosmosDrawerWidth(storage)).toBe(820);
+    expect(saveCosmosDrawerWidth(null, storage)).toBeNull();
+    expect(loadCosmosDrawerWidth(storage)).toBeNull();
+  });
+
+  it('removes header create-session icon, suppresses MessageList waiting animations, supports horizontal resize, and integrates Session Status overlay/docked modes', async () => {
+    const stopYeaftTurn = vi.fn();
+    const cancelYeaftTask = vi.fn();
+    const toggleWorkbench = vi.fn(() => { drawerStore.workbenchExpanded = !drawerStore.workbenchExpanded; });
+
+    const activeSession = Vue.reactive({
+      id: 'sess-1',
+      name: 'Atmospheric Drawer',
+      agentId: 'ag-1',
+      sceneId: 'frontend',
+      announcement: 'Stay weightless',
+      roster: [{ id: 'vp-1' }],
+    });
+
+    const drawerStore = Vue.reactive({
+      connectionState: 'connected',
+      chatHistoryConnectionGeneration: 1,
+      currentView: 'yeaft',
+      currentAgent: 'ag-1',
+      yeaftActiveSessionFilter: 'sess-1',
+      yeaftConversationId: 'yeaft_ag-1',
+      yeaftConversationIdsByAgent: { 'ag-1': 'yeaft_ag-1' },
+      activeSessionRoute: { agentId: 'ag-1', sessionId: 'sess-1' },
+      workbenchExpanded: false,
+      agents: [{ id: 'ag-1', name: 'server', online: true, capabilities: ['session_scenes', 'session_scene_frontend'] }],
+      llmConfig: {
+        'ag-1': { agentConfig: { primaryModel: 'copilot/gemini-4-neon', defaultEffort: 'high', availableModels: [] } },
+      },
+      yeaftAvailableModels: [],
+      yeaftModel: 'copilot/gemini-4-neon',
+      yeaftModelEffort: 'high',
+      yeaftSessionTurnsBySession: {
+        'ag-1\u001fsess-1': {
+          connectionGeneration: 1,
+          conversationId: 'yeaft_ag-1',
+          turns: [{
+            userTurnId: 'ut-1',
+            userMessageId: 'u-1',
+            state: 'running',
+            startedAt: Date.now() - 8000,
+            executions: [{ vpId: 'vp-1', turnId: 't-1', threadId: 'th-1', state: 'running' }],
+          }],
+        },
+      },
+      activeVpTurns: {
+        'ag-1\u001ft-1': {
+          agentId: 'ag-1',
+          sessionId: 'sess-1',
+          vpId: 'vp-1',
+          turnId: 't-1',
+          threadId: 'th-1',
+          userTurnId: 'ut-1',
+          conversationId: 'yeaft_ag-1',
+          connectionGeneration: 1,
+          startedAt: Date.now() - 8000,
+        },
+      },
+      vpStatuses: {},
+      yeaftActiveTasksBySession: {
+        'ag-1\u001fsess-1': {
+          'bg-1': { id: 'bg-1', agentId: 'ag-1', sessionId: 'sess-1', kind: 'sub_agent', status: 'running', title: 'reviewer', startedAt: new Date().toISOString() },
+          'bg-done': { id: 'bg-done', agentId: 'ag-1', sessionId: 'sess-1', kind: 'shell', status: 'completed', title: 'old' },
+        },
+      },
+      yeaftStoppingTasksById: {},
+      messagesMap: { 'yeaft_ag-1': [] },
+      sessionProjects: [],
+      yeaftTurnDeleteHistoryBySession: {},
+      yeaftHistorySearchState: { results: [], loading: false, hasMore: false, error: null },
+      getYeaftHistoryOutlineState: () => ({ results: [], loading: false, hasMore: false, error: null }),
+      isYeaftSessionProcessing: () => true,
+      hasAgentCapability: () => true,
+      sessionModelSelectionFor: () => null,
+      pendingSessionSceneSelectionFor: () => '',
+      toggleWorkbench,
+      stopYeaftTurn,
+      cancelYeaftTask,
+    });
+
+    const sessionsStore = {
+      activeSessionId: 'sess-1',
+      sessionList: [activeSession],
+      sessionById: (id, aid) => (id === 'sess-1' && aid === 'ag-1' ? activeSession : null),
+    };
+    globalThis.Pinia = {
+      useChatStore: () => drawerStore,
+      useSessionsStore: () => sessionsStore,
+    };
+
+    const { default: CosmosConversationDrawer } = await import('../../web/components/cosmos/CosmosConversationDrawer.js');
+    const MessageListStub = {
+      name: 'MessageList',
+      props: ['hideSpeakerIdentity', 'hideWaitingAnimation', 'toolsInStatus', 'liveExecutionKeys', 'sessionActivity'],
+      template: '<div class="message-list-stub" />',
+    };
+    const VpTimelinePaneStub = {
+      name: 'VpTimelinePane',
+      props: ['rows', 'toolsByExecution', 'visible', 'tasks', 'announcementText', 'stoppingTasksById'],
+      emits: ['stop-turn', 'edit-announcement', 'cancel-task', 'close'],
+      template: '<aside class="vp-timeline-stub"><button class="yeaft-session-status-close" @click="$emit(\'close\')">x</button></aside>',
+    };
+    const ChatInputStub = {
+      name: 'ChatInput',
+      template: '<div class="chat-input-stub"><slot name="actions-end-before" /></div>',
+    };
+
+    wrapper = mount(CosmosConversationDrawer, {
+      props: {
+        agent: { id: 'ag-1', name: 'server', online: true, sessions: [{ id: 'sess-1', agentId: 'ag-1', runtimeProvider: 'yeaft', title: 'Atmospheric Drawer', status: 'running' }] },
+        planetId: 'jupiter',
+        drawerWidth: 460,
+        minDrawerWidth: 340,
+        maxDrawerWidth: 1100,
+        viewportWidth: 1440,
+      },
+      global: {
+        config: { globalProperties: { $t: (k) => k } },
+        stubs: {
+          MessageList: MessageListStub,
+          VpTimelinePane: VpTimelinePaneStub,
+          ChatInput: ChatInputStub,
+          WorkbenchPanel: { template: '<div class="wb-stub" />' },
+          YeaftConversationOutline: true,
+          ScheduledTaskBar: true,
+        },
+      },
+    });
+    await flushPromises();
+
+    // 1. Header has NO create-session icon, HAS Session Status toggle with live indicator dot
+    expect(wrapper.find('button[aria-label="cosmos.panel.newSession"]').exists()).toBe(false);
+    const statusToggle = wrapper.find('.cosmos-session-status-btn');
+    expect(statusToggle.exists()).toBe(true);
+    expect(statusToggle.classes()).toContain('has-live');
+
+    // 2. MessageList receives hideWaitingAnimation=true AND real object-wired sessionActivity + liveExecutionKeys
+    const msgList = wrapper.findComponent(MessageListStub);
+    expect(msgList.props('hideWaitingAnimation')).toBe(true);
+    expect(msgList.props('sessionActivity')).toHaveLength(1);
+    expect(msgList.props('sessionActivity')[0].userTurnId).toBe('ut-1');
+    expect(msgList.props('liveExecutionKeys').size).toBe(1);
+
+    // 3. Calm live Session Status strip renders while status pane is closed; clicking it opens overlay Session Status
+    const statusStrip = wrapper.find('.cosmos-status-strip');
+    expect(statusStrip.exists()).toBe(true);
+    await statusStrip.trigger('click');
+    await flushPromises();
+    expect(wrapper.find('.cosmos-status-strip').exists()).toBe(false);
+    expect(wrapper.find('.cosmos-status-host').classes()).toContain('is-overlay');
+    expect(wrapper.find('.cosmos-drawer-chat').attributes('inert')).toBeDefined();
+
+    // Real tasks (running only) and announcement flow into VpTimelinePane
+    const timeline = wrapper.findComponent(VpTimelinePaneStub);
+    expect(timeline.props('tasks')).toHaveLength(1);
+    expect(timeline.props('tasks')[0].id).toBe('bg-1');
+    expect(timeline.props('announcementText')).toBe('Stay weightless');
+
+    // Actions emit cleanly to store / parent
+    timeline.vm.$emit('stop-turn', msgList.props('sessionActivity')[0]);
+    expect(stopYeaftTurn).toHaveBeenCalledTimes(1);
+    timeline.vm.$emit('cancel-task', timeline.props('tasks')[0]);
+    expect(cancelYeaftTask).toHaveBeenCalledWith({ agentId: 'ag-1', sessionId: 'sess-1', taskId: 'bg-1' });
+    timeline.vm.$emit('edit-announcement');
+    expect(wrapper.emitted('open-session-settings')?.[0]?.[0]).toEqual({
+      sessionId: 'sess-1',
+      agentId: 'ag-1',
+      section: 'session',
+    });
+
+    // 4. Widening drawer >= 780px switches Session Status to side-by-side docked mode (chat no longer inert)
+    await wrapper.setProps({ drawerWidth: 840 });
+    await flushPromises();
+    expect(wrapper.find('.cosmos-status-host').classes()).toContain('is-docked');
+    expect(wrapper.find('.cosmos-drawer-chat').attributes('inert')).toBeUndefined();
+
+    // 5. Mutual exclusivity: opening Workbench closes Session Status
+    drawerStore.workbenchExpanded = true;
+    await flushPromises();
+    expect(wrapper.vm.sessionStatusOpen).toBe(false);
+
+    // 6. Horizontal resize handle supports keyboard arrows, Home reset, End maximize, and dblclick reset
+    const handle = wrapper.find('.cosmos-drawer-resize-handle');
+    expect(handle.attributes('role')).toBe('separator');
+    await handle.trigger('keydown', { key: 'ArrowLeft' });
+    expect(wrapper.emitted('resize')?.at(-1)?.[0]).toBe(864);
+    await handle.trigger('keydown', { key: 'ArrowRight', shiftKey: true });
+    expect(wrapper.emitted('resize')?.at(-1)?.[0]).toBe(776);
+    await handle.trigger('keydown', { key: 'End' });
+    expect(wrapper.emitted('resize')?.at(-1)?.[0]).toBe(1100);
+    await handle.trigger('keydown', { key: 'Home' });
+    expect(wrapper.emitted('resize-reset')).toHaveLength(1);
+    await handle.trigger('dblclick');
+    expect(wrapper.emitted('resize-reset')).toHaveLength(2);
   });
 });

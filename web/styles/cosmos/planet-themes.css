@@ -1,25 +1,28 @@
 /* ============================================================================
- *  Yeaft Cosmos — 8 Bespoke Planetary Atmospheric Skins (Translucent & Integrated)
- *  Shared across [data-planet-theme] surfaces (Conversation Drawer + Quick Composer)
+ *  Yeaft Cosmos — 8 Bespoke Planetary Atmospheric Skins (Luminous Deep-Space Glass)
+ *  Shared across [data-planet-theme] surfaces (Conversation Drawer + Quick Composer).
+ *  Every planet uses organic limb-glow nebulae (zero harsh stripes or grid noise)
+ *  so the living starfield breathes through while text stays crisp and legible.
  * ============================================================================ */
 [data-planet-theme] {
-  --p-tint-rgb: 8, 18, 36;
-  --p-bg-edge: rgba(6, 14, 28, 0.34);
-  --p-bg-top: rgba(6, 14, 28, 0.62);
-  --p-bg-bot: rgba(3, 8, 18, 0.74);
-  --p-head-bg: rgba(7, 16, 34, 0.36);
-  --p-surface: rgba(10, 20, 40, 0.48);
-  --p-surface-strong: rgba(10, 22, 44, 0.72);
+  --p-tint-rgb: 7, 15, 30;
+  --p-bg-edge: rgba(5, 11, 24, 0.16);
+  --p-bg-top: rgba(5, 11, 24, 0.34);
+  --p-bg-bot: rgba(2, 6, 15, 0.48);
+  --p-head-bg: rgba(5, 12, 26, 0.22);
+  --p-surface: rgba(8, 17, 34, 0.34);
+  --p-surface-strong: rgba(8, 18, 36, 0.64);
   --p-accent: #6ec4ff;
   --p-accent-rgb: 110, 196, 255;
-  --p-border: rgba(130, 200, 255, 0.18);
-  --p-border-strong: rgba(130, 200, 255, 0.42);
-  --p-ink: rgba(242, 248, 255, 0.96);
-  --p-muted: rgba(176, 204, 234, 0.80);
-  --p-faint: rgba(144, 174, 208, 0.56);
-  --p-user-bg: rgba(255, 255, 255, 0.05);
-  --p-user-border: rgba(255, 255, 255, 0.11);
-  --p-ai-bar: rgba(110, 232, 196, 0.48);
+  --p-code-ink: #d9ecff;
+  --p-border: rgba(130, 200, 255, 0.14);
+  --p-border-strong: rgba(130, 200, 255, 0.38);
+  --p-ink: rgba(244, 248, 255, 0.95);
+  --p-muted: rgba(182, 206, 236, 0.76);
+  --p-faint: rgba(146, 174, 208, 0.52);
+  --p-user-bg: rgba(126, 196, 255, 0.068);
+  --p-user-border: rgba(130, 200, 255, 0.11);
+  --p-ai-bar: rgba(110, 232, 196, 0.42);
   --p-radius: 13px;
   --p-send-ink: #03101d;
   --p-font-head: var(--font-sans, inherit);
@@ -27,27 +30,27 @@
 
 /* 1. Earth — Azure Orbital Station */
 [data-planet-theme="earth"] {
-  --p-tint-rgb: 7, 22, 44;
-  --p-bg-edge: rgba(5, 16, 34, 0.28);
-  --p-bg-top: rgba(6, 18, 38, 0.58);
-  --p-bg-bot: rgba(3, 10, 22, 0.72);
-  --p-head-bg: rgba(8, 24, 48, 0.32);
-  --p-surface: rgba(9, 24, 48, 0.44);
-  --p-surface-strong: rgba(9, 24, 48, 0.72);
+  --p-tint-rgb: 6, 17, 34;
+  --p-bg-edge: rgba(4, 13, 28, 0.15);
+  --p-bg-top: rgba(5, 14, 30, 0.32);
+  --p-bg-bot: rgba(2, 7, 17, 0.46);
+  --p-head-bg: rgba(6, 18, 38, 0.20);
+  --p-surface: rgba(8, 20, 40, 0.32);
+  --p-surface-strong: rgba(8, 20, 42, 0.64);
   --p-accent: #68c8ff;
   --p-accent-rgb: 104, 200, 255;
-  --p-border: rgba(118, 202, 255, 0.20);
-  --p-border-strong: rgba(118, 202, 255, 0.48);
-  --p-user-bg: rgba(118, 178, 232, 0.065);
-  --p-user-border: rgba(126, 200, 255, 0.15);
-  --p-ai-bar: #5ce0c4;
+  --p-code-ink: #d8eeff;
+  --p-border: rgba(118, 202, 255, 0.15);
+  --p-border-strong: rgba(118, 202, 255, 0.44);
+  --p-user-bg: rgba(104, 192, 255, 0.068);
+  --p-user-border: rgba(120, 200, 255, 0.11);
+  --p-ai-bar: rgba(92, 224, 196, 0.48);
   --p-radius: 14px;
 }
 .cosmos-drawer[data-planet-theme="earth"]::before {
   background:
-    radial-gradient(ellipse 320px 170px at 90% 4%, rgba(76, 178, 255, 0.18), transparent 72%),
-    radial-gradient(circle 220px at 14% 88%, rgba(56, 212, 172, 0.08), transparent 70%),
-    repeating-radial-gradient(circle at 104% -4%, transparent 0 46px, rgba(116, 206, 255, 0.045) 46px 47px);
+    radial-gradient(ellipse 380px 210px at 92% 0%, rgba(76, 182, 255, 0.16), transparent 72%),
+    radial-gradient(ellipse 300px 180px at 10% 96%, rgba(56, 214, 178, 0.08), transparent 74%);
 }
 [data-planet-theme="earth"] .cosmos-planet-emblem {
   background:
@@ -58,30 +61,31 @@
 
 /* 2. Saturn — Cassini Ring Terrace */
 [data-planet-theme="saturn"] {
-  --p-tint-rgb: 24, 18, 9;
-  --p-bg-edge: rgba(20, 15, 8, 0.28);
-  --p-bg-top: rgba(20, 15, 8, 0.60);
-  --p-bg-bot: rgba(10, 8, 5, 0.74);
-  --p-head-bg: rgba(32, 24, 12, 0.34);
-  --p-surface: rgba(29, 22, 12, 0.46);
-  --p-surface-strong: rgba(29, 22, 12, 0.76);
+  --p-tint-rgb: 18, 14, 8;
+  --p-bg-edge: rgba(14, 11, 6, 0.15);
+  --p-bg-top: rgba(14, 11, 7, 0.34);
+  --p-bg-bot: rgba(7, 6, 4, 0.48);
+  --p-head-bg: rgba(22, 17, 10, 0.22);
+  --p-surface: rgba(24, 18, 11, 0.34);
+  --p-surface-strong: rgba(24, 18, 11, 0.66);
   --p-accent: #f0c678;
   --p-accent-rgb: 240, 198, 120;
-  --p-border: rgba(240, 198, 120, 0.22);
-  --p-border-strong: rgba(240, 198, 120, 0.52);
-  --p-ink: rgba(253, 246, 234, 0.96);
-  --p-muted: rgba(224, 204, 172, 0.80);
-  --p-faint: rgba(190, 168, 132, 0.56);
-  --p-user-bg: rgba(240, 198, 120, 0.06);
-  --p-user-border: rgba(240, 198, 120, 0.16);
-  --p-ai-bar: rgba(240, 198, 120, 0.60);
-  --p-radius: 9px;
+  --p-code-ink: #f7e6c4;
+  --p-border: rgba(240, 198, 120, 0.15);
+  --p-border-strong: rgba(240, 198, 120, 0.44);
+  --p-ink: rgba(252, 247, 238, 0.95);
+  --p-muted: rgba(222, 204, 176, 0.76);
+  --p-faint: rgba(188, 168, 138, 0.52);
+  --p-user-bg: rgba(240, 198, 120, 0.064);
+  --p-user-border: rgba(240, 198, 120, 0.11);
+  --p-ai-bar: rgba(240, 198, 120, 0.48);
+  --p-radius: 10px;
   --p-send-ink: #1a1204;
 }
 .cosmos-drawer[data-planet-theme="saturn"]::before {
   background:
-    radial-gradient(ellipse 360px 140px at 84% 2%, rgba(242, 196, 110, 0.16), transparent 72%),
-    repeating-linear-gradient(-18deg, transparent 0 28px, rgba(240, 198, 120, 0.05) 28px 29px, transparent 29px 36px, rgba(240, 198, 120, 0.025) 36px 37px);
+    radial-gradient(ellipse 420px 180px at 88% 0%, rgba(244, 200, 116, 0.15), transparent 72%),
+    radial-gradient(ellipse 280px 150px at 86% 96%, rgba(196, 150, 82, 0.07), transparent 74%);
 }
 [data-planet-theme="saturn"] .cosmos-planet-emblem {
   background: radial-gradient(circle at 36% 32%, #f9e4b4, #c99d56 64%, #5e441e 100%);
@@ -100,30 +104,31 @@
 
 /* 3. Jupiter — Cyclone Storm Deck */
 [data-planet-theme="jupiter"] {
-  --p-tint-rgb: 28, 14, 10;
-  --p-bg-edge: rgba(24, 12, 8, 0.28);
-  --p-bg-top: rgba(24, 13, 9, 0.60);
-  --p-bg-bot: rgba(12, 7, 6, 0.74);
-  --p-head-bg: rgba(42, 20, 13, 0.34);
-  --p-surface: rgba(36, 18, 13, 0.46);
-  --p-surface-strong: rgba(36, 18, 13, 0.76);
-  --p-accent: #f09862;
-  --p-accent-rgb: 240, 152, 98;
-  --p-border: rgba(240, 152, 98, 0.22);
-  --p-border-strong: rgba(240, 152, 98, 0.50);
-  --p-ink: rgba(255, 244, 235, 0.96);
-  --p-muted: rgba(228, 192, 170, 0.80);
-  --p-faint: rgba(196, 154, 130, 0.56);
-  --p-user-bg: rgba(232, 146, 98, 0.06);
-  --p-user-border: rgba(240, 152, 98, 0.16);
-  --p-ai-bar: rgba(240, 166, 110, 0.58);
-  --p-radius: 15px;
+  --p-tint-rgb: 20, 11, 9;
+  --p-bg-edge: rgba(15, 9, 8, 0.15);
+  --p-bg-top: rgba(15, 9, 8, 0.34);
+  --p-bg-bot: rgba(7, 5, 6, 0.48);
+  --p-head-bg: rgba(26, 14, 11, 0.22);
+  --p-surface: rgba(26, 14, 12, 0.34);
+  --p-surface-strong: rgba(26, 14, 12, 0.66);
+  --p-accent: #f0a06c;
+  --p-accent-rgb: 240, 160, 108;
+  --p-code-ink: #f8e2d0;
+  --p-border: rgba(240, 160, 108, 0.15);
+  --p-border-strong: rgba(240, 160, 108, 0.44);
+  --p-ink: rgba(254, 246, 240, 0.95);
+  --p-muted: rgba(224, 194, 176, 0.76);
+  --p-faint: rgba(190, 156, 136, 0.52);
+  --p-user-bg: rgba(238, 156, 104, 0.064);
+  --p-user-border: rgba(240, 160, 108, 0.11);
+  --p-ai-bar: rgba(240, 166, 110, 0.48);
+  --p-radius: 14px;
   --p-send-ink: #1e0c04;
 }
 .cosmos-drawer[data-planet-theme="jupiter"]::before {
   background:
-    radial-gradient(ellipse 260px 130px at 86% 12%, rgba(234, 102, 58, 0.20), transparent 72%),
-    repeating-linear-gradient(180deg, rgba(236, 162, 114, 0.045) 0 16px, transparent 16px 38px, rgba(196, 94, 58, 0.038) 38px 50px, transparent 50px 80px);
+    radial-gradient(ellipse 360px 180px at 90% 4%, rgba(236, 122, 72, 0.15), transparent 72%),
+    radial-gradient(ellipse 260px 160px at 14% 94%, rgba(208, 142, 98, 0.07), transparent 74%);
 }
 [data-planet-theme="jupiter"] .cosmos-planet-emblem {
   background: linear-gradient(180deg, #d8b594 0%, #c67c52 24%, #ecd4ba 42%, #be6640 60%, #e4c29c 78%, #8f543b 100%);
@@ -131,32 +136,32 @@
 
 /* 4. Mars — Red Regolith Outpost */
 [data-planet-theme="mars"] {
-  --p-tint-rgb: 28, 10, 8;
-  --p-bg-edge: rgba(24, 9, 7, 0.28);
-  --p-bg-top: rgba(26, 9, 7, 0.62);
-  --p-bg-bot: rgba(14, 5, 5, 0.76);
-  --p-head-bg: rgba(46, 15, 10, 0.36);
-  --p-surface: rgba(38, 13, 10, 0.48);
-  --p-surface-strong: rgba(38, 13, 10, 0.78);
-  --p-accent: #f5704a;
-  --p-accent-rgb: 245, 112, 74;
-  --p-border: rgba(245, 112, 74, 0.24);
-  --p-border-strong: rgba(245, 112, 74, 0.54);
-  --p-ink: rgba(255, 241, 235, 0.96);
-  --p-muted: rgba(232, 182, 166, 0.80);
-  --p-faint: rgba(198, 140, 122, 0.56);
-  --p-user-bg: rgba(245, 118, 82, 0.06);
-  --p-user-border: rgba(245, 112, 74, 0.17);
-  --p-ai-bar: rgba(245, 112, 74, 0.64);
-  --p-radius: 5px;
+  --p-tint-rgb: 20, 9, 9;
+  --p-bg-edge: rgba(16, 7, 7, 0.15);
+  --p-bg-top: rgba(16, 7, 8, 0.34);
+  --p-bg-bot: rgba(8, 4, 6, 0.48);
+  --p-head-bg: rgba(28, 11, 10, 0.22);
+  --p-surface: rgba(28, 11, 10, 0.34);
+  --p-surface-strong: rgba(28, 11, 10, 0.66);
+  --p-accent: #f57a56;
+  --p-accent-rgb: 245, 122, 86;
+  --p-code-ink: #ffdcd0;
+  --p-border: rgba(245, 122, 86, 0.15);
+  --p-border-strong: rgba(245, 122, 86, 0.46);
+  --p-ink: rgba(255, 243, 238, 0.95);
+  --p-muted: rgba(228, 184, 170, 0.76);
+  --p-faint: rgba(192, 144, 128, 0.52);
+  --p-user-bg: rgba(245, 122, 86, 0.064);
+  --p-user-border: rgba(245, 122, 86, 0.11);
+  --p-ai-bar: rgba(245, 122, 86, 0.50);
+  --p-radius: 7px;
   --p-send-ink: #1f0602;
   --p-font-head: var(--font-mono, monospace);
 }
 .cosmos-drawer[data-planet-theme="mars"]::before {
   background:
-    radial-gradient(ellipse 300px 150px at 85% 4%, rgba(242, 92, 52, 0.18), transparent 70%),
-    linear-gradient(90deg, rgba(245, 112, 74, 0.04) 1px, transparent 1px) 0 0 / 32px 32px,
-    linear-gradient(0deg, rgba(245, 112, 74, 0.032) 1px, transparent 1px) 0 0 / 32px 32px;
+    radial-gradient(ellipse 360px 180px at 88% 2%, rgba(242, 98, 58, 0.15), transparent 72%),
+    radial-gradient(ellipse 260px 170px at 14% 94%, rgba(162, 60, 56, 0.075), transparent 74%);
 }
 [data-planet-theme="mars"] .cosmos-planet-emblem {
   background: radial-gradient(circle at 34% 30%, #f5946d, #c54c2c 60%, #5c1e12 100%);
@@ -164,29 +169,32 @@
 
 /* 5. Mercury — Solar Chrome Bay */
 [data-planet-theme="mercury"] {
-  --p-tint-rgb: 16, 18, 24;
-  --p-bg-edge: rgba(14, 15, 20, 0.30);
-  --p-bg-top: rgba(15, 16, 21, 0.62);
-  --p-bg-bot: rgba(8, 9, 12, 0.76);
-  --p-head-bg: rgba(26, 28, 36, 0.36);
-  --p-surface: rgba(22, 24, 31, 0.48);
-  --p-surface-strong: rgba(22, 24, 31, 0.78);
+  --p-tint-rgb: 12, 14, 20;
+  --p-bg-edge: rgba(10, 12, 17, 0.16);
+  --p-bg-top: rgba(11, 13, 18, 0.34);
+  --p-bg-bot: rgba(5, 6, 10, 0.48);
+  --p-head-bg: rgba(18, 20, 28, 0.22);
+  --p-surface: rgba(18, 20, 28, 0.34);
+  --p-surface-strong: rgba(18, 20, 28, 0.66);
   --p-accent: #dce5f2;
   --p-accent-rgb: 220, 229, 242;
-  --p-border: rgba(220, 229, 242, 0.20);
-  --p-border-strong: rgba(220, 229, 242, 0.48);
-  --p-ink: rgba(248, 250, 255, 0.96);
-  --p-muted: rgba(196, 204, 220, 0.78);
-  --p-faint: rgba(154, 162, 178, 0.56);
-  --p-user-bg: rgba(220, 229, 242, 0.055);
-  --p-user-border: rgba(220, 229, 242, 0.15);
-  --p-ai-bar: rgba(220, 229, 242, 0.54);
-  --p-radius: 3px;
+  --p-code-ink: #eef3fc;
+  --p-border: rgba(220, 229, 242, 0.14);
+  --p-border-strong: rgba(220, 229, 242, 0.42);
+  --p-ink: rgba(248, 250, 255, 0.95);
+  --p-muted: rgba(196, 204, 220, 0.76);
+  --p-faint: rgba(154, 162, 178, 0.52);
+  --p-user-bg: rgba(220, 229, 242, 0.06);
+  --p-user-border: rgba(220, 229, 242, 0.11);
+  --p-ai-bar: rgba(220, 229, 242, 0.46);
+  --p-radius: 6px;
   --p-send-ink: #0a0c10;
   --p-font-head: var(--font-mono, monospace);
 }
 .cosmos-drawer[data-planet-theme="mercury"]::before {
-  background: linear-gradient(135deg, rgba(255, 255, 255, 0.06) 0%, transparent 32%, transparent 72%, rgba(220, 229, 242, 0.05) 100%);
+  background:
+    radial-gradient(ellipse 360px 180px at 90% 2%, rgba(222, 232, 248, 0.11), transparent 72%),
+    radial-gradient(ellipse 240px 150px at 14% 96%, rgba(164, 178, 204, 0.055), transparent 74%);
 }
 [data-planet-theme="mercury"] .cosmos-planet-emblem {
   background: radial-gradient(circle at 34% 32%, #dfe5ee, #8d95a2 62%, #3a3f4a 100%);
@@ -194,30 +202,31 @@
 
 /* 6. Venus — Sulfur Amber Dome */
 [data-planet-theme="venus"] {
-  --p-tint-rgb: 28, 20, 8;
-  --p-bg-edge: rgba(24, 17, 7, 0.28);
-  --p-bg-top: rgba(26, 18, 7, 0.60);
-  --p-bg-bot: rgba(14, 9, 4, 0.74);
-  --p-head-bg: rgba(44, 29, 10, 0.34);
-  --p-surface: rgba(36, 24, 10, 0.46);
-  --p-surface-strong: rgba(36, 24, 10, 0.76);
-  --p-accent: #f8c05e;
-  --p-accent-rgb: 248, 192, 94;
-  --p-border: rgba(248, 192, 94, 0.22);
-  --p-border-strong: rgba(248, 192, 94, 0.50);
-  --p-ink: rgba(255, 248, 234, 0.96);
-  --p-muted: rgba(232, 206, 162, 0.80);
-  --p-faint: rgba(200, 170, 122, 0.56);
-  --p-user-bg: rgba(248, 192, 94, 0.06);
-  --p-user-border: rgba(248, 192, 94, 0.16);
-  --p-ai-bar: rgba(248, 192, 94, 0.58);
-  --p-radius: 18px;
+  --p-tint-rgb: 20, 15, 7;
+  --p-bg-edge: rgba(16, 12, 6, 0.15);
+  --p-bg-top: rgba(17, 12, 6, 0.34);
+  --p-bg-bot: rgba(8, 6, 4, 0.48);
+  --p-head-bg: rgba(28, 20, 9, 0.22);
+  --p-surface: rgba(26, 18, 9, 0.34);
+  --p-surface-strong: rgba(26, 18, 9, 0.66);
+  --p-accent: #f8c468;
+  --p-accent-rgb: 248, 196, 104;
+  --p-code-ink: #fceac6;
+  --p-border: rgba(248, 196, 104, 0.15);
+  --p-border-strong: rgba(248, 196, 104, 0.44);
+  --p-ink: rgba(255, 249, 238, 0.95);
+  --p-muted: rgba(230, 206, 168, 0.76);
+  --p-faint: rgba(196, 168, 126, 0.52);
+  --p-user-bg: rgba(248, 196, 104, 0.064);
+  --p-user-border: rgba(248, 196, 104, 0.11);
+  --p-ai-bar: rgba(248, 196, 104, 0.48);
+  --p-radius: 17px;
   --p-send-ink: #1d1202;
 }
 .cosmos-drawer[data-planet-theme="venus"]::before {
   background:
-    radial-gradient(circle 280px at 88% 8%, rgba(248, 190, 82, 0.20), transparent 72%),
-    radial-gradient(ellipse 280px 180px at 18% 72%, rgba(234, 148, 56, 0.10), transparent 72%);
+    radial-gradient(ellipse 360px 200px at 90% 4%, rgba(248, 192, 86, 0.15), transparent 72%),
+    radial-gradient(ellipse 280px 180px at 14% 88%, rgba(234, 148, 56, 0.075), transparent 74%);
 }
 [data-planet-theme="venus"] .cosmos-planet-emblem {
   background: radial-gradient(circle at 35% 32%, #ffebc0, #df9c42 64%, #764a16 100%);
@@ -225,30 +234,31 @@
 
 /* 7. Uranus — Axial Frost Chamber */
 [data-planet-theme="uranus"] {
-  --p-tint-rgb: 6, 22, 28;
-  --p-bg-edge: rgba(5, 19, 25, 0.28);
-  --p-bg-top: rgba(5, 20, 26, 0.60);
-  --p-bg-bot: rgba(3, 12, 17, 0.74);
-  --p-head-bg: rgba(8, 32, 42, 0.34);
-  --p-surface: rgba(8, 29, 38, 0.46);
-  --p-surface-strong: rgba(8, 29, 38, 0.76);
+  --p-tint-rgb: 5, 17, 22;
+  --p-bg-edge: rgba(4, 14, 19, 0.15);
+  --p-bg-top: rgba(4, 15, 20, 0.32);
+  --p-bg-bot: rgba(2, 8, 13, 0.46);
+  --p-head-bg: rgba(6, 22, 30, 0.20);
+  --p-surface: rgba(7, 22, 30, 0.32);
+  --p-surface-strong: rgba(7, 22, 30, 0.64);
   --p-accent: #74edf5;
   --p-accent-rgb: 116, 237, 245;
-  --p-border: rgba(116, 237, 245, 0.22);
-  --p-border-strong: rgba(116, 237, 245, 0.50);
-  --p-ink: rgba(236, 253, 255, 0.96);
-  --p-muted: rgba(168, 224, 232, 0.80);
-  --p-faint: rgba(128, 190, 202, 0.56);
-  --p-user-bg: rgba(116, 237, 245, 0.055);
-  --p-user-border: rgba(116, 237, 245, 0.16);
-  --p-ai-bar: rgba(116, 237, 245, 0.58);
-  --p-radius: 11px;
+  --p-code-ink: #d6fafc;
+  --p-border: rgba(116, 237, 245, 0.15);
+  --p-border-strong: rgba(116, 237, 245, 0.44);
+  --p-ink: rgba(238, 253, 255, 0.95);
+  --p-muted: rgba(172, 224, 232, 0.76);
+  --p-faint: rgba(132, 188, 200, 0.52);
+  --p-user-bg: rgba(116, 237, 245, 0.062);
+  --p-user-border: rgba(116, 237, 245, 0.11);
+  --p-ai-bar: rgba(116, 237, 245, 0.48);
+  --p-radius: 12px;
   --p-send-ink: #03191c;
 }
 .cosmos-drawer[data-planet-theme="uranus"]::before {
   background:
-    radial-gradient(ellipse 280px 170px at 90% 10%, rgba(102, 232, 245, 0.18), transparent 70%),
-    repeating-linear-gradient(82deg, transparent 0 40px, rgba(116, 237, 245, 0.048) 40px 41px);
+    radial-gradient(ellipse 360px 190px at 90% 4%, rgba(102, 232, 245, 0.14), transparent 72%),
+    radial-gradient(ellipse 260px 160px at 14% 92%, rgba(76, 192, 224, 0.07), transparent 74%);
 }
 [data-planet-theme="uranus"] .cosmos-planet-emblem {
   background: radial-gradient(circle at 36% 32%, #d2fbff, #65c8d8 64%, #1f5c6e 100%);
@@ -267,30 +277,31 @@
 
 /* 8. Neptune — Cobalt Abyss Stream */
 [data-planet-theme="neptune"] {
-  --p-tint-rgb: 5, 13, 40;
-  --p-bg-edge: rgba(4, 11, 34, 0.28);
-  --p-bg-top: rgba(4, 11, 35, 0.62);
-  --p-bg-bot: rgba(3, 6, 21, 0.76);
-  --p-head-bg: rgba(8, 19, 56, 0.36);
-  --p-surface: rgba(8, 18, 52, 0.48);
-  --p-surface-strong: rgba(8, 18, 52, 0.78);
-  --p-accent: #6c9cff;
-  --p-accent-rgb: 108, 156, 255;
-  --p-border: rgba(108, 156, 255, 0.24);
-  --p-border-strong: rgba(108, 156, 255, 0.54);
-  --p-ink: rgba(238, 244, 255, 0.96);
-  --p-muted: rgba(170, 192, 244, 0.80);
-  --p-faint: rgba(130, 158, 222, 0.56);
-  --p-user-bg: rgba(108, 156, 255, 0.065);
-  --p-user-border: rgba(108, 156, 255, 0.17);
-  --p-ai-bar: rgba(108, 156, 255, 0.62);
-  --p-radius: 12px;
+  --p-tint-rgb: 5, 11, 30;
+  --p-bg-edge: rgba(4, 9, 25, 0.15);
+  --p-bg-top: rgba(4, 9, 26, 0.34);
+  --p-bg-bot: rgba(2, 5, 16, 0.48);
+  --p-head-bg: rgba(7, 15, 42, 0.22);
+  --p-surface: rgba(7, 14, 38, 0.34);
+  --p-surface-strong: rgba(7, 15, 40, 0.66);
+  --p-accent: #74a2ff;
+  --p-accent-rgb: 116, 162, 255;
+  --p-code-ink: #d8e6ff;
+  --p-border: rgba(116, 162, 255, 0.15);
+  --p-border-strong: rgba(116, 162, 255, 0.46);
+  --p-ink: rgba(240, 245, 255, 0.95);
+  --p-muted: rgba(174, 196, 244, 0.76);
+  --p-faint: rgba(134, 160, 222, 0.52);
+  --p-user-bg: rgba(116, 162, 255, 0.068);
+  --p-user-border: rgba(116, 162, 255, 0.11);
+  --p-ai-bar: rgba(116, 162, 255, 0.50);
+  --p-radius: 13px;
   --p-send-ink: #02081c;
 }
 .cosmos-drawer[data-planet-theme="neptune"]::before {
   background:
-    radial-gradient(ellipse 340px 180px at 88% 8%, rgba(72, 126, 255, 0.20), transparent 72%),
-    repeating-linear-gradient(-8deg, transparent 0 24px, rgba(108, 156, 255, 0.048) 24px 25px);
+    radial-gradient(ellipse 380px 200px at 90% 4%, rgba(78, 134, 255, 0.16), transparent 72%),
+    radial-gradient(ellipse 280px 170px at 14% 94%, rgba(118, 98, 255, 0.075), transparent 74%);
 }
 [data-planet-theme="neptune"] .cosmos-planet-emblem {
   background: radial-gradient(circle at 34% 30%, #86b4ff, #2a55d4 62%, #0c1b5e 100%);

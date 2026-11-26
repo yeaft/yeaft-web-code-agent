@@ -1,15 +1,21 @@
 /**
  * Yeaft Cosmos — Feathered Translucent Right Planetary Conversation Drawer
  *
- * Mobile-Yeaft compact layout wrapped in the active planet's atmospheric skin:
- * - Single clean Header: [☰ Sessions] | Planet Emblem + Agent/Session Title | [Search] [Refresh] [New] [Workbench] [Widen] [Close]
- * - Zero redundant session pill bar and zero dashed meta header strip.
- * - Reuses authentic Yeaft MessageList (toolsInStatus=true -> pure user/AI messages + AskCard),
- *   ChatInput (attachments, model, effort, scene), YeaftConversationOutline and WorkbenchPanel.
+ * Atmospheric Mobile-Yeaft layout melted into the living cosmos:
+ * - Left-edge luminous optical drag handle for smooth horizontal resizing (persisted)
+ * - Clean Header: [☰ Sessions] | Planet Emblem + Agent/Session Title | [Search] [Refresh] [Session Status] [Workbench] [Widen] [Close]
+ * - Zero create-session icon in header, zero waiting animations in transcript
+ * - Authentic Yeaft MessageList (toolsInStatus=true, hideWaitingAnimation=true),
+ *   VpTimelinePane (Session Status — overlay when compact, side-by-side when dragged wide),
+ *   calm single-line live status strip when collapsed, ChatInput + CosmosComposerTuning,
+ *   YeaftConversationOutline and WorkbenchPanel.
  */
 import MessageList from '../MessageList.js';
 import ChatInput from '../ChatInput.js';
 import CosmosComposerTuning from './CosmosComposerTuning.js';
+import NavigationIcon from '../NavigationIcon.js';
+import VpTimelinePane from '../VpTimelinePane.js';
+import ScheduledTaskBar from '../ScheduledTaskBar.js';
 import {
   SESSION_SCENE_IDS,
   sessionScenesForAgent,
@@ -26,6 +32,8 @@ import {
   resolveSessionModelRef,
 } from '../../utils/modelRefs.js';
 import { sessionActivityRows } from '../../stores/helpers/session-activity.js';
+import { liveSessionToolsByExecution } from '../../stores/helpers/session-tool-details.js';
+import { formatElapsed } from '../../stores/helpers/turn-timing.js';
 import { revealOutlineResult } from '../../utils/message-search-navigation.js';
 import { alertDialog } from '../../utils/dialog.js';
 import {
@@ -37,12 +45,23 @@ import {
   supportsSessionDiscovery,
 } from '../../stores/helpers/session-discovery.js';
 
+const DOCKED_STATUS_MIN_DRAWER_WIDTH = 780;
+
+function sessionTaskSortTime(task) {
+  const raw = task?.updatedAt || task?.endedAt || task?.createdAt;
+  const ms = raw ? Date.parse(raw) : NaN;
+  return Number.isFinite(ms) ? ms : 0;
+}
+
 export default {
   name: 'CosmosConversationDrawer',
   components: {
     MessageList,
     ChatInput,
     CosmosComposerTuning,
+    NavigationIcon,
+    VpTimelinePane,
+    ScheduledTaskBar,
     WorkbenchPanel,
     YeaftConversationOutline,
   },
@@ -52,24 +71,61 @@ export default {
     allAgents: { type: Array, default: () => [] },
     agentToPlanet: { type: Object, default: () => ({}) },
     widened: { type: Boolean, default: false },
+    drawerWidth: { type: Number, default: 460 },
+    minDrawerWidth: { type: Number, default: 340 },
+    maxDrawerWidth: { type: Number, default: 960 },
+    viewportWidth: { type: Number, default: 1280 },
+    resizing: { type: Boolean, default: false },
   },
   emits: [
     'close',
     'select-session',
-    'create-session',
+    'open-quick-composer',
+    'open-session-settings',
     'open-llm-config',
     'toggle-widen',
+    'resize-start',
+    'resize',
+    'resize-end',
+    'resize-reset',
     'message-sent',
   ],
   template: `
     <aside
+      ref="drawerRootRef"
       class="cosmos-drawer"
+      :class="{
+        'is-resizing': resizing || isDraggingResize,
+        'has-docked-status': sessionStatusOpen && sessionStatusDocked,
+      }"
       :data-planet-theme="planetId"
       :aria-label="agent.name"
       @pointerdown.stop
       @wheel.stop
     >
-      <!-- Single Compact Mobile-Yeaft Header -->
+      <!-- Interactive Left-Edge Optical Filament Drag Handle -->
+      <div
+        ref="resizeHandleRef"
+        class="cosmos-drawer-resize-handle"
+        :class="{ 'is-dragging': isDraggingResize }"
+        role="separator"
+        tabindex="0"
+        aria-orientation="vertical"
+        :aria-label="$t('cosmos.panel.resize')"
+        :aria-valuemin="minDrawerWidth"
+        :aria-valuemax="maxDrawerWidth"
+        :aria-valuenow="Math.round(drawerWidth)"
+        :title="$t('cosmos.panel.resize')"
+        @pointerdown.stop="startDrawerResize"
+        @pointermove="moveDrawerResize"
+        @pointerup="endDrawerResize"
+        @pointercancel="endDrawerResize"
+        @lostpointercapture="endDrawerResize"
+        @keydown="onResizeHandleKeydown"
+        @dblclick.stop="resetDrawerResize"
+      ></div>
+
+      <!-- Single Compact Mobile-Yeaft Header (Zero Create-Session Icon) -->
       <header class="cosmos-drawer-head">
         <div class="cosmos-drawer-head-left">
           <button
@@ -129,13 +185,22 @@ export default {
           </button>
 
           <button
+            v-if="isYeaftView && activeGroup"
+            ref="sessionStatusToggleRef"
             type="button"
-            class="cosmos-icon-btn"
-            :title="$t('cosmos.panel.newSession')"
-            :aria-label="$t('cosmos.panel.newSession')"
-            @click="$emit('create-session', agent.id)"
+            class="cosmos-icon-btn cosmos-session-status-btn"
+            :class="{
+              'is-active': sessionStatusOpen,
+              'has-live': hasLiveSessionActivity,
+              'has-error': hasSessionActivityError,
+            }"
+            :aria-expanded="sessionStatusOpen ? 'true' : 'false'"
+            :title="sessionStatusOpen ? $t('yeaft.sessionStatus.hide') : $t('yeaft.sessionStatus.show')"
+            :aria-label="sessionStatusOpen ? $t('yeaft.sessionStatus.hide') : $t('yeaft.sessionStatus.show')"
+            @click="toggleSessionStatus"
           >
-            <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>
+            <NavigationIcon name="activity" :size="14" />
+            <span v-if="hasLiveSessionActivity || hasSessionActivityError" class="cosmos-status-btn-dot" aria-hidden="true"></span>
           </button>
 
           <button
@@ -302,18 +367,24 @@ export default {
         @close="closeSearch"
       />
 
-      <!-- Body Stack: Pure Conversation Stream + Slide-Over Real Workbench -->
-      <div class="cosmos-drawer-body">
+      <!-- Body Stack: Pure Conversation Stream + Session Status Pane + Slide-Over Real Workbench -->
+      <div
+        class="cosmos-drawer-body"
+        :class="{
+          'is-status-docked': sessionStatusOpen && sessionStatusDocked,
+          'is-overlay-open': chatCoveredByOverlay,
+        }"
+      >
         <div
           ref="drawerChatRef"
           class="cosmos-drawer-chat"
-          :inert="workbenchOpen || undefined"
-          :aria-hidden="workbenchOpen ? 'true' : undefined"
+          :inert="chatCoveredByOverlay || undefined"
+          :aria-hidden="chatCoveredByOverlay ? 'true' : undefined"
         >
           <div v-if="!hasSelectedSession" class="cosmos-drawer-empty">
             <span>{{ $t('cosmos.panel.empty') }}</span>
-            <button type="button" class="cosmos-drawer-cta" @click="$emit('create-session', agent.id)">
-              + {{ $t('cosmos.panel.newSession') }}
+            <button type="button" class="cosmos-drawer-cta" @click="$emit('open-quick-composer', agent.id)">
+              {{ $t('cosmos.panel.openQuick') }}
             </button>
           </div>
 
@@ -321,12 +392,32 @@ export default {
             <MessageList
               ref="messageListRef"
               :hide-speaker-identity="ordinarySession"
+              :hide-waiting-animation="true"
               :tools-in-status="true"
               :live-execution-keys="liveExecutionKeys"
               :session-activity="sessionActivity"
               @quote-message="setMessageQuote"
               @edit-message-as-new="editMessageAsNew"
             />
+
+            <!-- Calm Single-Line Live Session Status Bar (Zero Waiting Animation) -->
+            <button
+              v-if="showLiveStatusStrip"
+              type="button"
+              class="cosmos-status-strip"
+              :class="{ 'is-error': hasSessionActivityError }"
+              :aria-label="$t('yeaft.sessionStatus.show')"
+              @click="openSessionStatus"
+            >
+              <span class="cosmos-status-strip-main">
+                <span class="cosmos-status-strip-pip" :class="{ 'is-error': hasSessionActivityError }" aria-hidden="true"></span>
+                <span class="cosmos-status-strip-label">{{ liveStatusStripSummary }}</span>
+              </span>
+              <span class="cosmos-status-strip-cta">
+                <span>{{ $t('cosmos.panel.statusInspect') }}</span>
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg>
+              </span>
+            </button>
 
             <ChatInput
               ref="chatInputRef"
@@ -362,7 +453,7 @@ export default {
                   :scene-disabled="drawerSceneDisabled"
                   :scene-busy="Boolean(pendingDrawerScene)"
                   :scene-error="drawerSceneError"
-                  :disabled="workbenchOpen"
+                  :disabled="chatCoveredByOverlay"
                   :scope-key="composerDraftKey"
                   @open="onTuningOpen"
                   @select-model="onSelectModel"
@@ -373,6 +464,39 @@ export default {
               </template>
             </ChatInput>
           </template>
+        </div>
+
+        <!-- Authentic Yeaft Session Status Pane (Overlay on narrow/standard drawer, Docked side-by-side when dragged wide) -->
+        <div
+          v-if="isYeaftView && activeGroup"
+          v-show="sessionStatusOpen"
+          class="cosmos-status-host"
+          :class="sessionStatusDocked ? 'is-docked' : 'is-overlay'"
+        >
+          <VpTimelinePane
+            ref="sessionStatusPaneRef"
+            :key="sessionStatusIdentity"
+            :rows="sessionActivity"
+            :tools-by-execution="sessionToolsByExecution"
+            :visible="sessionStatusOpen"
+            :tasks="sessionStatusTasks"
+            :announcement-text="sessionStatusAnnouncementText"
+            :stopping-tasks-by-id="store.yeaftStoppingTasksById || {}"
+            @stop-turn="stopActivityTurn"
+            @edit-announcement="openAnnouncementSettings"
+            @cancel-task="onCancelTaskFromTimeline"
+            @close="dismissSessionStatus"
+          >
+            <template #scheduled-task>
+              <ScheduledTaskBar
+                v-if="activeGroup?.task"
+                :key="(activeGroup.agentId || agent.id) + ':' + activeGroup.id"
+                :session="activeGroup"
+                :agent-id="activeGroup.agentId || agent.id"
+                @configure="openScheduledTaskSettings"
+              />
+            </template>
+          </VpTimelinePane>
         </div>
 
         <!-- Real Yeaft Workbench (Files / Terminal / Git / Browser) -->
@@ -400,6 +524,17 @@ export default {
     let sessionSearchTimer = null;
     let sessionSearchController = null;
     let sessionDiscoveryGeneration = 0;
+
+    const drawerRootRef = Vue.ref(null);
+    const resizeHandleRef = Vue.ref(null);
+    const isDraggingResize = Vue.ref(false);
+    let activeResizeDrag = null;
+
+    const sessionStatusOpen = Vue.ref(false);
+    const sessionStatusToggleRef = Vue.ref(null);
+    const sessionStatusPaneRef = Vue.ref(null);
+    const statusStripNow = Vue.ref(Date.now());
+    let statusStripTimer = null;
 
     const searchOpen = Vue.ref(false);
     const searchActiveMessageId = Vue.ref('');
@@ -480,6 +615,12 @@ export default {
 
     const canUseWorkbench = Vue.computed(() => Boolean(props.agent?.online && hasSelectedSession.value && activeRoute.value));
     const workbenchOpen = Vue.computed(() => Boolean(canUseWorkbench.value && store.workbenchExpanded));
+    const sessionStatusDocked = Vue.computed(() => (
+      props.viewportWidth > 768 && props.drawerWidth >= DOCKED_STATUS_MIN_DRAWER_WIDTH
+    ));
+    const chatCoveredByOverlay = Vue.computed(() => (
+      workbenchOpen.value || (sessionStatusOpen.value && !sessionStatusDocked.value)
+    ));
 
     const ordinarySession = Vue.computed(() => {
       const roster = activeGroup.value?.roster;
@@ -505,20 +646,107 @@ export default {
     });
 
     const sessionActivity = Vue.computed(() => {
-      if (!isYeaftView.value || !activeGroup.value) return [];
+      if (!isYeaftView.value || !activeGroup.value || !props.agent?.id) return [];
       try {
-        return sessionActivityRows(store, activeGroup.value.id, props.agent.id) || [];
+        return sessionActivityRows(store, {
+          agentId: props.agent.id,
+          sessionId: activeGroup.value.id,
+          legacyRoster: activeGroup.value.sceneId ? [] : (activeGroup.value.roster || []),
+          sessions: sessionsStore?.sessionList || [],
+        }) || [];
       } catch {
         return [];
       }
     });
 
-    const liveExecutionKeys = Vue.computed(() => {
-      const set = new Set();
-      for (const row of sessionActivity.value) {
-        if (row?.live && row.executionKey) set.add(row.executionKey);
+    const liveExecutionKeys = Vue.computed(() => (
+      new Set(sessionActivity.value.flatMap((row) => row?.liveExecutionKeys || []))
+    ));
+
+    const sessionToolsByExecution = Vue.computed(() => {
+      const keys = liveExecutionKeys.value;
+      const agentId = props.agent?.id;
+      const sessionId = activeGroup.value?.id;
+      const conversationId = agentId ? store.yeaftConversationIdsByAgent?.[agentId] : null;
+      if (!sessionStatusOpen.value || !ordinarySession.value || !sessionId || !conversationId || !keys.size) {
+        return new Map();
       }
-      return set;
+      return liveSessionToolsByExecution(store, { agentId, conversationId, sessionId }, keys);
+    });
+
+    const sessionStatusTasks = Vue.computed(() => {
+      const sessionId = activeGroup.value?.id || store.yeaftActiveSessionFilter || sessionsStore?.activeSessionId || null;
+      if (!isYeaftView.value || !sessionId) return [];
+      const agentId = activeGroup.value?.agentId || props.agent?.id || store.currentAgent || null;
+      const taskKey = agentId ? `${agentId}\u001f${sessionId}` : sessionId;
+      const map = store.yeaftActiveTasksBySession?.[taskKey] || {};
+      return Object.values(map)
+        .filter((task) => task?.status === 'running')
+        .sort((a, b) => sessionTaskSortTime(b) - sessionTaskSortTime(a));
+    });
+
+    const sessionStatusAnnouncementText = Vue.computed(() => (
+      typeof activeGroup.value?.announcement === 'string' ? activeGroup.value.announcement : ''
+    ));
+
+    const sessionStatusIdentity = Vue.computed(() => JSON.stringify([props.agent?.id || '', activeGroup.value?.id || '']));
+
+    const hasSessionActivityError = Vue.computed(() => (
+      sessionActivity.value.some((row) => row?.status === 'error' || (row?.errors?.length > 0))
+    ));
+
+    const hasLiveSessionActivity = Vue.computed(() => (
+      isProcessing.value
+      || sessionActivity.value.some((row) => row?.status && row.status !== 'error')
+      || sessionStatusTasks.value.length > 0
+    ));
+
+    const showLiveStatusStrip = Vue.computed(() => Boolean(
+      isYeaftView.value
+      && activeGroup.value
+      && !sessionStatusOpen.value
+      && (hasLiveSessionActivity.value || hasSessionActivityError.value),
+    ));
+
+    const liveStatusStartedAt = Vue.computed(() => {
+      let earliest = 0;
+      for (const row of sessionActivity.value) {
+        const ts = Number(row?.startedAt || 0);
+        if (ts > 0 && (earliest === 0 || ts < earliest)) earliest = ts;
+      }
+      return earliest;
+    });
+
+    const liveStatusStripSummary = Vue.computed(() => {
+      const parts = [];
+      const primary = sessionActivity.value[0] || null;
+      if (hasSessionActivityError.value && !hasLiveSessionActivity.value) {
+        parts.push($t('cosmos.panel.statusError'));
+      } else if (primary?.status === 'queued') {
+        parts.push($t('cosmos.panel.statusQueued'));
+      } else if (primary || isProcessing.value) {
+        parts.push($t('cosmos.panel.statusActive'));
+      }
+
+      let toolCount = 0;
+      for (const row of sessionActivity.value) {
+        for (const obs of (row?.observations || [])) {
+          if (Number.isSafeInteger(obs?.toolExecutions) && obs.toolExecutions > 0) {
+            toolCount += obs.toolExecutions;
+          }
+        }
+      }
+      if (toolCount > 0) {
+        parts.push($t('cosmos.panel.statusTools', { count: toolCount }));
+      }
+      if (liveStatusStartedAt.value > 0) {
+        const elapsed = formatElapsed(Math.max(0, statusStripNow.value - liveStatusStartedAt.value));
+        if (elapsed) parts.push(elapsed);
+      }
+      if (sessionStatusTasks.value.length > 0) {
+        parts.push($t('cosmos.panel.statusTasks', { count: sessionStatusTasks.value.length }));
+      }
+      return parts.join(' · ') || $t('cosmos.panel.statusActive');
     });
 
     const historyOutlineState = Vue.computed(() => (
@@ -840,6 +1068,7 @@ export default {
         closeHistoryDrawer();
         return;
       }
+      if (sessionStatusOpen.value && !sessionStatusDocked.value) sessionStatusOpen.value = false;
       historyOpen.value = true;
       expandActiveProjectAncestors();
       Vue.nextTick(() => sessionSearchInputRef.value?.focus?.());
@@ -889,8 +1118,161 @@ export default {
     }
 
     function toggleWorkbench() {
+      if (!store.workbenchExpanded && sessionStatusOpen.value) {
+        sessionStatusOpen.value = false;
+      }
       store.toggleWorkbench?.();
     }
+
+    function openSessionStatus() {
+      if (!isYeaftView.value || !activeGroup.value) return;
+      if (store.workbenchExpanded) {
+        if (typeof store.toggleWorkbench === 'function') store.toggleWorkbench();
+        else store.workbenchExpanded = false;
+      }
+      if (historyOpen.value) closeHistoryDrawer();
+      sessionStatusOpen.value = true;
+      if (!sessionStatusDocked.value) {
+        Vue.nextTick(() => sessionStatusPaneRef.value?.$el?.querySelector?.('.yeaft-session-status-close')?.focus?.());
+      }
+    }
+
+    function closeSessionStatus({ restoreFocus = false } = {}) {
+      if (!sessionStatusOpen.value) return;
+      sessionStatusOpen.value = false;
+      if (restoreFocus) {
+        Vue.nextTick(() => sessionStatusToggleRef.value?.focus?.());
+      }
+    }
+
+    function dismissSessionStatus() {
+      closeSessionStatus({ restoreFocus: true });
+    }
+
+    function toggleSessionStatus() {
+      if (sessionStatusOpen.value) closeSessionStatus({ restoreFocus: false });
+      else openSessionStatus();
+    }
+
+    function stopActivityTurn(target) {
+      const row = sessionActivity.value.find((candidate) => (
+        candidate.key === target.key
+        && candidate.sessionId === target.sessionId
+        && candidate.agentId === target.agentId
+      ));
+      if (!row?.canStop || row.isStopping) return;
+      if (row.userTurnId) store.stopYeaftTurn?.(row);
+      else if (row.turnId) store.cancelVpTurn?.(row.turnId, row);
+      else if (row.legacyStop) {
+        const { agentId, sessionId, vpId } = row;
+        store.sendWsMessage?.({ type: 'yeaft_abort_turn', agentId, sessionId, vpId });
+      }
+    }
+
+    function onCancelTaskFromTimeline(task) {
+      if (!task?.id || !task.sessionId || typeof store.cancelYeaftTask !== 'function') return false;
+      return store.cancelYeaftTask({ agentId: task.agentId, sessionId: task.sessionId, taskId: task.id });
+    }
+
+    function openAnnouncementSettings() {
+      const sessionId = activeGroup.value?.id;
+      if (!sessionId) return;
+      emit('open-session-settings', {
+        sessionId,
+        agentId: activeGroup.value?.agentId || props.agent?.id || null,
+        section: 'session',
+      });
+    }
+
+    function openScheduledTaskSettings() {
+      const sessionId = activeGroup.value?.id;
+      if (!sessionId) return;
+      emit('open-session-settings', {
+        sessionId,
+        agentId: activeGroup.value?.agentId || props.agent?.id || null,
+        section: 'task',
+      });
+    }
+
+    function startDrawerResize(ev) {
+      if (!ev || !ev.isPrimary) return;
+      if (ev.pointerType !== 'touch' && ev.button !== 0) return;
+      ev.preventDefault();
+      endDrawerResize();
+      const handle = resizeHandleRef.value;
+      const measured = drawerRootRef.value?.getBoundingClientRect?.().width || props.drawerWidth;
+      const releaseFocus = document.activeElement !== handle;
+      handle?.focus?.({ preventScroll: true });
+      activeResizeDrag = {
+        pointerId: ev.pointerId,
+        startX: ev.clientX,
+        startWidth: measured,
+        releaseFocus,
+        prevCursor: document.body.style.cursor,
+        prevUserSelect: document.body.style.userSelect,
+      };
+      try { handle?.setPointerCapture?.(ev.pointerId); } catch { /* ignore */ }
+      isDraggingResize.value = true;
+      document.body.style.cursor = 'col-resize';
+      document.body.style.userSelect = 'none';
+      emit('resize-start', measured);
+    }
+
+    function moveDrawerResize(ev) {
+      if (!activeResizeDrag || ev.pointerId !== activeResizeDrag.pointerId) return;
+      const delta = activeResizeDrag.startX - ev.clientX;
+      emit('resize', activeResizeDrag.startWidth + delta);
+    }
+
+    function endDrawerResize(ev = null) {
+      const drag = activeResizeDrag;
+      if (!drag) return;
+      if (ev && ev.pointerId != null && ev.pointerId !== drag.pointerId) return;
+      activeResizeDrag = null;
+      isDraggingResize.value = false;
+      document.body.style.cursor = drag.prevCursor;
+      document.body.style.userSelect = drag.prevUserSelect;
+      const handle = resizeHandleRef.value;
+      try {
+        if (handle?.hasPointerCapture?.(drag.pointerId)) {
+          handle.releasePointerCapture(drag.pointerId);
+        }
+      } catch { /* ignore */ }
+      if (drag.releaseFocus && document.activeElement === handle) handle?.blur?.();
+      emit('resize-end');
+    }
+
+    function resetDrawerResize() {
+      emit('resize-reset');
+    }
+
+    function onResizeHandleKeydown(ev) {
+      const step = ev.shiftKey ? 64 : 24;
+      if (ev.key === 'ArrowLeft') {
+        ev.preventDefault();
+        emit('resize-start', props.drawerWidth);
+        emit('resize', props.drawerWidth + step);
+        emit('resize-end');
+      } else if (ev.key === 'ArrowRight') {
+        ev.preventDefault();
+        emit('resize-start', props.drawerWidth);
+        emit('resize', props.drawerWidth - step);
+        emit('resize-end');
+      } else if (ev.key === 'Home') {
+        ev.preventDefault();
+        emit('resize-reset');
+      } else if (ev.key === 'End') {
+        ev.preventDefault();
+        emit('resize-start', props.drawerWidth);
+        emit('resize', props.maxDrawerWidth);
+        emit('resize-end');
+      }
+    }
+
+    const onWindowBlurResize = () => endDrawerResize();
+    Vue.onMounted(() => {
+      window.addEventListener('blur', onWindowBlurResize);
+    });
 
     function clearSearchTimers() {
       if (historySearchTimer) {
@@ -1024,23 +1406,52 @@ export default {
     );
 
     Vue.watch(
-      () => workbenchOpen.value || historyOpen.value || searchOpen.value,
+      () => workbenchOpen.value || historyOpen.value || searchOpen.value || (sessionStatusOpen.value && !sessionStatusDocked.value),
       (overlayActive) => {
         if (overlayActive) tuningRef.value?.close?.(false);
       },
     );
 
-    Vue.watch(workbenchOpen, (open) => {
-      if (!open) return;
+    Vue.watch(chatCoveredByOverlay, (covered) => {
+      if (!covered) return;
       tuningRef.value?.close?.(false);
       if (drawerChatRef.value?.contains(document.activeElement)) {
         document.activeElement?.blur?.();
       }
     });
 
+    Vue.watch(workbenchOpen, (open) => {
+      if (open && sessionStatusOpen.value) sessionStatusOpen.value = false;
+    });
+
+    Vue.watch(
+      () => Boolean(isYeaftView.value && activeGroup.value),
+      (canShowStatus) => {
+        if (!canShowStatus) sessionStatusOpen.value = false;
+      },
+    );
+
+    function syncStatusStripTimer() {
+      const needsTick = showLiveStatusStrip.value && liveStatusStartedAt.value > 0;
+      if (needsTick) {
+        statusStripNow.value = Date.now();
+        if (!statusStripTimer) {
+          statusStripTimer = setInterval(() => {
+            statusStripNow.value = Date.now();
+          }, 1000);
+        }
+      } else if (statusStripTimer) {
+        clearInterval(statusStripTimer);
+        statusStripTimer = null;
+      }
+    }
+
+    Vue.watch([showLiveStatusStrip, liveStatusStartedAt], syncStatusStripTimer, { immediate: true });
+
     function onTuningOpen() {
       if (historyOpen.value) closeHistoryDrawer();
       if (searchOpen.value) closeSearch();
+      if (sessionStatusOpen.value && !sessionStatusDocked.value) closeSessionStatus({ restoreFocus: false });
     }
 
     async function applyModel(modelId, effort) {
@@ -1144,12 +1555,19 @@ export default {
     }
 
     Vue.onBeforeUnmount(() => {
+      window.removeEventListener('blur', onWindowBlurResize);
+      endDrawerResize();
+      if (statusStripTimer) {
+        clearInterval(statusStripTimer);
+        statusStripTimer = null;
+      }
       clearSearchTimers();
       cancelSessionDiscoverySearch();
     });
 
     expose({
       openSessionSwitcher({ focusSearch = true } = {}) {
+        if (sessionStatusOpen.value && !sessionStatusDocked.value) sessionStatusOpen.value = false;
         historyOpen.value = true;
         expandActiveProjectAncestors();
         if (focusSearch) Vue.nextTick(() => sessionSearchInputRef.value?.focus?.());
@@ -1160,10 +1578,22 @@ export default {
       isHistoryOpen() {
         return historyOpen.value;
       },
+      openSessionStatus() {
+        openSessionStatus();
+      },
+      closeSessionStatus(opts) {
+        closeSessionStatus(opts);
+      },
+      isSessionStatusOpen() {
+        return sessionStatusOpen.value;
+      },
     });
 
     return {
       store,
+      drawerRootRef,
+      resizeHandleRef,
+      isDraggingResize,
       historyOpen,
       sessionSearchQuery,
       sessionSearchInputRef,
@@ -1172,6 +1602,19 @@ export default {
       currentProjectTree,
       mergedSessionSearchResults,
       activeSessionProjectPath,
+      sessionStatusOpen,
+      sessionStatusDocked,
+      sessionStatusToggleRef,
+      sessionStatusPaneRef,
+      sessionToolsByExecution,
+      sessionStatusTasks,
+      sessionStatusAnnouncementText,
+      sessionStatusIdentity,
+      hasSessionActivityError,
+      hasLiveSessionActivity,
+      showLiveStatusStrip,
+      liveStatusStripSummary,
+      chatCoveredByOverlay,
       searchOpen,
       searchActiveMessageId,
       historySearchRef,
@@ -1216,6 +1659,19 @@ export default {
       pickSession,
       refreshHistory,
       toggleWorkbench,
+      openSessionStatus,
+      closeSessionStatus,
+      dismissSessionStatus,
+      toggleSessionStatus,
+      stopActivityTurn,
+      onCancelTaskFromTimeline,
+      openAnnouncementSettings,
+      openScheduledTaskSettings,
+      startDrawerResize,
+      moveDrawerResize,
+      endDrawerResize,
+      resetDrawerResize,
+      onResizeHandleKeydown,
       toggleSearch,
       closeSearch,
       onSearchQuery,

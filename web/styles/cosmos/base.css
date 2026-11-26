@@ -160,6 +160,10 @@
   right: calc(var(--c-panel-w) + 14px);
 }
 
+.cosmos-page.is-drawer-resizing .cosmos-corner-actions {
+  transition: none !important;
+}
+
 .cosmos-corner-icon {
   width: 31px;
   height: 31px;
