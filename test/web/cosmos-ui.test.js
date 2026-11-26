@@ -66,6 +66,7 @@ describe('Cosmos UI Mode & Auto-Route Store Helper', () => {
     const promise = sendYeaftAutoRouteMessage(store, {
       agentId: 'ag-1',
       text: 'Inspect Cosmos shader perf',
+      cosmosDelivery: true,
       attachments: [
         { fileId: 'f-1', isImage: true, previewUrl: 'blob:ignored', name: 'shot.png' },
         { fileId: '' },
@@ -78,6 +79,8 @@ describe('Cosmos UI Mode & Auto-Route Store Helper', () => {
     const frame = sentFrames[0];
     expect(frame.type).toBe('yeaft_auto_route_send');
     expect(frame.agentId).toBe('ag-1');
+    expect(frame.cosmosDelivery).toBe(true);
+    expect(frame).not.toHaveProperty('_knowledgeSessionIds');
     expect(frame.attachments).toEqual([{ fileId: 'f-1', isImage: true }]);
     expect(frame.preferredSceneId).toBeUndefined();
     expect(frame.quickSend).toEqual({ model: 'copilot/gpt-6.2-sol', effort: 'high' });
@@ -367,6 +370,7 @@ describe('Cosmos Component & WebGL Review Regressions', () => {
     expect(sendYeaftAutoRouteMessageMock).toHaveBeenCalledWith(expect.objectContaining({
       agentId: 'ag-cloud',
       quickSend: null,
+      cosmosDelivery: true,
     }));
     expect(wrapper.vm.routing).toBe(true);
 
@@ -400,6 +404,7 @@ describe('Cosmos Component & WebGL Review Regressions', () => {
     const beginYeaftHistoryReveal = vi.fn(() => revealLease);
     const revealYeaftHistoryResult = vi.fn().mockResolvedValue({ messageId: 'm-1', found: true });
     const finishYeaftHistoryReveal = vi.fn();
+    const sendYeaftSessionMessage = vi.fn(() => true);
 
     const store = Vue.reactive({
       currentView: 'yeaft',
@@ -416,6 +421,7 @@ describe('Cosmos Component & WebGL Review Regressions', () => {
       beginYeaftHistoryReveal,
       revealYeaftHistoryResult,
       finishYeaftHistoryReveal,
+      sendYeaftSessionMessage,
       hasCapability: (cap) => cap === 'session_history_window_prefetch',
     });
 
@@ -457,6 +463,10 @@ describe('Cosmos Component & WebGL Review Regressions', () => {
     expect(wrapper.vm.activeGroup?.id).toBe('sess-shared');
     expect(sessionById.mock.calls.every(([, ag]) => ag === 'ag-earth')).toBe(true);
     expect(wrapper.vm.historyOutlineState.results).toHaveLength(1);
+    expect(wrapper.vm.sendYeaftMessage('fixture')).toBe(true);
+    expect(sendYeaftSessionMessage).toHaveBeenCalledWith(expect.objectContaining({
+      groupId: 'sess-shared', text: 'fixture', cosmosDelivery: true,
+    }));
 
     // Toggle search opens outline via store.searchYeaftHistory('', { senderKey: 'user' })
     wrapper.vm.toggleSearch();

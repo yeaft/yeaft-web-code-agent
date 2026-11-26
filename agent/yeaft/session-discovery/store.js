@@ -155,12 +155,12 @@ function lexicalRuns(text) {
 }
 const unigram = char => `z1x${char.codePointAt(0).toString(16)}`;
 const bigrams = chars => chars.slice(1).map((char, i) => `z2x${chars[i].codePointAt(0).toString(16)}x${char.codePointAt(0).toString(16)}`);
-function termsForIndex(text) {
+export function termsForIndex(text) {
   return lexicalRuns(text).map(({ cjk, chars }) => cjk
     ? [...chars.map(unigram), ...bigrams(chars)].join(' ')
     : chars.join('')).join(' ');
 }
-function lexicalTermClauses(text) {
+export function lexicalTermClauses(text) {
   return [...new Set(lexicalRuns(text).slice(0, 20).map(({ cjk, chars }) => {
     if (!cjk) return `"${chars.join('')}"*`;
     return `"${chars.length === 1 ? unigram(chars[0]) : bigrams(chars).join(' ')}"`;
@@ -323,23 +323,42 @@ export function applyDailyIndexUpdates(db, {
   }
 }
 
-export function localSessionDirs(root, read, allowed = null) {
+export function localSessionDirs(root, read, allowed = null, { strict = false, entries = null } = {}) {
   const base = join(resolve(root), 'sessions');
   const dirs = new Map();
   try {
-    if (!lstatSync(base).isDirectory()) return dirs;
-    const manifest = JSON.parse(read(join(root, 'sessions-manifest.json')) || '{}');
-    if (manifest.version !== 1 || !Array.isArray(manifest.sessions)) return dirs;
+    const baseStat = lstatSync(base, { throwIfNoEntry: false });
+    if (!baseStat && !strict) return dirs;
+    if (baseStat && !baseStat.isDirectory()) {
+      if (strict) throw new Error('Invalid local Sessions directory');
+      return dirs;
+    }
+    const raw = read(join(root, 'sessions-manifest.json'));
+    if (strict && raw === undefined) return dirs;
+    const manifest = JSON.parse(raw || '{}');
+    if (manifest?.version !== 1 || !Array.isArray(manifest.sessions)) {
+      if (strict) throw new Error('Invalid local Sessions manifest');
+      return dirs;
+    }
     const seen = new Set();
     for (const row of manifest.sessions) {
       const { id, path } = row || {};
       if (typeof id !== 'string' || typeof path !== 'string' || !/^[a-zA-Z0-9_-][a-zA-Z0-9._-]{0,119}$/.test(id)) continue;
       if (allowed && !allowed.has(id)) continue;
-      if (seen.has(id)) { dirs.delete(id); continue; }
+      if (seen.has(id)) {
+        if (strict) throw new Error(`Duplicate local Session: ${id}`);
+        dirs.delete(id);
+        continue;
+      }
       seen.add(id);
       const dir = join(base, id);
       if (resolve(path) !== dir) continue;
-      try { if (lstatSync(dir).isDirectory()) dirs.set(id, dir); } catch { /* missing/archived/transient */ }
+      try {
+        if (lstatSync(dir).isDirectory()) {
+          dirs.set(id, dir);
+          entries?.set(id, row);
+        } else if (strict) throw new Error(`Invalid local Session directory: ${id}`);
+      } catch (error) { if (strict && error.code !== 'ENOENT') throw error; }
     }
   } catch (error) {
     if (error.code !== 'ENOENT') throw error;
@@ -363,7 +382,7 @@ function compareNumericFileNames(a, b, prefixLength, suffixLength) {
 // A clear/recreation replaces the transcript stream ID. Turn deletion has a
 // separate durable journal and invalidates derived text immediately, without
 // scheduling a second index pass. Normal appends do not change either fence.
-export function readSourceFence(root, sessionId, read, { includeSignature = false, list = null } = {}) {
+export function readSourceFence(root, sessionId, read, { includeSignature = false, list = null, allowEmptyConversation = false } = {}) {
   const sessionsDir = join(root, 'sessions');
   const dir = join(sessionsDir, sessionId);
   const conversation = join(dir, 'conversation');
@@ -373,7 +392,9 @@ export function readSourceFence(root, sessionId, read, { includeSignature = fals
       return stat.isDirectory() || stat.isFile() ? stat.mtimeMs : 0;
     } catch (error) { if (error.code === 'ENOENT') return 0; throw error; }
   };
-  if (!lstatSync(sessionsDir).isDirectory() || !lstatSync(dir).isDirectory() || !lstatSync(conversation).isDirectory()) return null;
+  if (!lstatSync(sessionsDir).isDirectory() || !lstatSync(dir).isDirectory()) return null;
+  const conversationStat = lstatSync(conversation, { throwIfNoEntry: !allowEmptyConversation });
+  if (conversationStat && !conversationStat.isDirectory()) return null;
   const metaRaw = read(join(dir, 'session.json')) ?? read(join(dir, 'group.json'));
   if (!metaRaw) return null;
   const meta = JSON.parse(metaRaw);

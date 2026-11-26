@@ -179,7 +179,7 @@ async function detectCapabilities() {
   // agent build can speak plaintext WS frames. New servers see this and
   // flip `agent.encryptOutbound = false`, stopping outbound encryption
   // to this peer. Old servers ignore the unknown capability token.
-  const capabilities = ['scheduled_tasks', 'scheduled_task_month_days', 'background_tasks', 'file_editor', 'ping_session', 'plaintext-ok', 'workbench_session_routes', 'workbench_request_correlation', 'workbench_terminal_cleanup_fence', 'workbench_file_content_chunks', 'workbench_video_stream', 'session_history_search', 'session_discovery', 'session_auto_route', 'session_history_outline', 'session_history_window_prefetch', 'session_fork_from_turn', 'session_fork_while_running', 'session_merge', 'session_delete_turn', 'session_scenes', 'file_reference_resolution', 'response_image_preview', 'yeaft_plugins', 'yeaft_managed_skills', 'settings_request_correlation', 'work_center_feature_settings'];
+  const capabilities = ['scheduled_tasks', 'scheduled_task_month_days', 'background_tasks', 'file_editor', 'ping_session', 'plaintext-ok', 'workbench_session_routes', 'workbench_request_correlation', 'workbench_terminal_cleanup_fence', 'workbench_file_content_chunks', 'workbench_video_stream', 'session_history_search', 'session_discovery', 'session_shared_knowledge', 'session_auto_route', 'session_history_outline', 'session_history_window_prefetch', 'session_fork_from_turn', 'session_fork_while_running', 'session_merge', 'session_delete_turn', 'session_scenes', 'file_reference_resolution', 'response_image_preview', 'yeaft_plugins', 'yeaft_managed_skills', 'settings_request_correlation', 'work_center_feature_settings'];
   capabilities.push('digital_person', 'session_attachment_refs', getAgentUpgradeCapability());
   // Scenes added after 'session_scenes' shipped are advertised one by one.
   capabilities.push(...Object.values(SESSION_SCENE_CAPABILITIES));
@@ -412,6 +412,10 @@ function cleanup() {
       const { stopSessionDiscovery } = await import('./yeaft/session-discovery/bridge.js');
       await stopSessionDiscovery();
     } catch {}
+    try {
+      const { stopDailySharedKnowledge } = await import('./yeaft/shared-knowledge/scheduler.js');
+      await stopDailySharedKnowledge();
+    } catch {}
     try { await shutdownBrowserRuntime(); } catch {}
     if (ctx.ws) ctx.ws.close();
   });
@@ -506,4 +510,6 @@ process.on('SIGTERM', async () => {
   // Runtime capabilities must reflect the effective startup state.
   ctx.agentCapabilities = await detectCapabilities();
   connect();
+  const { startDailySharedKnowledge } = await import('./yeaft/shared-knowledge/scheduler.js');
+  startDailySharedKnowledge(YEAFT_DIR);
 })();

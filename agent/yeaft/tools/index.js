@@ -29,6 +29,7 @@ import presentResponse from './present-response.js';
 import webSearch from './web-search.js';
 import webFetch from './web-fetch.js';
 import historySearch from './history-search.js';
+import sharedKnowledgeSearch from './shared-knowledge-search.js';
 import discoverTools from './discover-tools.js';
 
 // --- P0 File tools ---
@@ -98,6 +99,7 @@ export const allTools = [
   webSearch,
   webFetch,
   historySearch,
+  sharedKnowledgeSearch,
   discoverTools,
 
   // P0 File

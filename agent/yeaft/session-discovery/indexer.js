@@ -34,7 +34,7 @@ const MAX_SESSION_TAIL_BYTES = 48 * 1024 * 1024;
 const truncate = (text, limit) => text.length > limit ? `${text.slice(0, limit - 1)}…` : text;
 const seq = row => Number.isFinite(row?.seq) ? Number(row.seq) : parseSeqFromId(row?.id);
 
-function rowTimestamp(row) {
+export function rowTimestamp(row) {
   const raw = row?.ts ?? row?.time;
   if (typeof raw === 'number') return Number.isFinite(raw) ? raw : NaN;
   return Date.parse(raw);
@@ -64,7 +64,7 @@ function findTurnPruneStartSeq(rows, sessionId, existingLastSeq) {
  * Extract plain text only from a conversation row.
  * Images, binary/base64 blocks, attachments, tool calls, and tool results are excluded.
  */
-function extractPlainText(content) {
+export function extractPlainText(content) {
   if (typeof content === 'string') return content.trim();
   if (!Array.isArray(content)) return '';
   return content
@@ -74,7 +74,7 @@ function extractPlainText(content) {
     .trim();
 }
 
-function classifyAssistantResponseKind(row) {
+export function classifyAssistantResponseKind(row) {
   if (row?.incomplete === true || FAILED_RESPONSE_REASONS.has(row?.stopReason)) return 'progress';
   if (row?.responseKind === 'progress' || row?.responseKind === 'result') return row.responseKind;
   if (row?.stopReason === 'end_turn') return 'result';

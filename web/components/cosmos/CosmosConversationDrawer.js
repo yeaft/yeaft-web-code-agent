@@ -643,6 +643,7 @@ export default {
         mentions,
         attachments,
         quote,
+        cosmosDelivery: true,
         ...(quickSend ? { quickSend } : {}),
       });
       if (res !== false) {

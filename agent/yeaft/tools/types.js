@@ -30,6 +30,7 @@
  * @property {number} [historyBeforeSeq] — durable current-user boundary; default history recall excludes this sequence and later
  * @property {string} [shareOwnerId] — authenticated owner of manually saved Share items
  * @property {string[]} [agentSessionIds] — host-authorized same-owner, same-Agent Session IDs; absent means agent and share HistorySearch scopes are unavailable
+ * @property {string[]} [knowledgeSessionIds] - Server-authorized source IDs for a Cosmos Session turn
  * @property {string[]} [projectSessionIds] — same-Agent sibling Session ids in the current Project
  * @property {string} [threadId] — current Session thread id
  * @property {string} [currentVpId] — R6: VP id of the caller (set in multi-VP groups)

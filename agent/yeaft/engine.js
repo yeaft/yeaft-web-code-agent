@@ -1597,6 +1597,7 @@ export class Engine {
       sceneId: vpCtx?.vpPersona?.sceneId || null,
       webResearch: vpCtx?.webResearch,
       historyBeforeSeq: vpCtx?.historyBeforeSeq,
+      knowledgeSessionIds: vpCtx?.knowledgeSessionIds,
       agentSessionIds: vpCtx?.agentSessionIds,
       shareOwnerId: vpCtx?.shareOwnerId,
       yeaftDir: this.#yeaftDir,
@@ -2575,13 +2576,23 @@ export class Engine {
       : [];
     const canPublishResponse = Boolean(runtimeSessionId) && this.#canPersistConversation()
       && !isSubAgent && scenario === 'chat' && !vpPersona?.subAgent;
+    const knowledgeBeforeSeq = Number.isFinite(persistedQueryUser?.seq)
+      ? persistedQueryUser.seq : parseSeqFromId(persistedQueryUser?.id);
+    // Authority belongs only to this human Session envelope, not to the Engine
+    // instance, another VP's handoff, or a later/background turn.
+    const knowledgeSessionIds = runtimeSessionId && scenario === 'chat' && !isSubAgent && !vpPersona?.subAgent
+      && inboundEnvelope?.sessionId === runtimeSessionId
+      && inboundEnvelope?.msg?.role === 'user' && !inboundEnvelope.msg.meta?.injectedBy
+      && Number.isSafeInteger(knowledgeBeforeSeq) && Array.isArray(inboundEnvelope._knowledgeSessionIds)
+      ? inboundEnvelope._knowledgeSessionIds.slice() : null;
     const registeredToolNames = (this.#toolRegistry
       ? this.#toolRegistry.getToolNames({
           collabToolPolicy: effectiveCollabToolPolicy,
           plugins: this.#config?.plugins,
         })
       : Array.from(this.#tools.keys()))
-      .filter(name => name !== 'PresentResponse' || canPublishResponse);
+      .filter(name => (name !== 'PresentResponse' || canPublishResponse)
+        && (name !== 'SharedKnowledgeSearch' || knowledgeSessionIds?.length > 0));
     const registeredToolNameSet = new Set(registeredToolNames);
     const resolveCurrentActiveToolNames = () => this.#toolRegistry
       ? resolveActiveToolNames({
@@ -5241,7 +5252,8 @@ export class Engine {
         queryTurnId,
         causalRootId,
         webResearch,
-        historyBeforeSeq: Number.isFinite(persistedQueryUser?.seq) ? persistedQueryUser.seq : parseSeqFromId(persistedQueryUser?.id),
+        historyBeforeSeq: knowledgeBeforeSeq,
+        knowledgeSessionIds,
         router,
         senderVpId,
         sessionId: runtimeSessionId,

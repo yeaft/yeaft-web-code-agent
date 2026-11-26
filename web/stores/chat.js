@@ -3728,7 +3728,7 @@ export const useChatStore = defineStore('chat', {
      *                               isImage?:boolean,mimeType?:string}>,
      *           quote?:object}} payload
      */
-    sendYeaftSessionMessage({ groupId, text, mentions, attachments, quote, quickSend }) {
+    sendYeaftSessionMessage({ groupId, text, mentions, attachments, quote, quickSend, cosmosDelivery }) {
       // Route by the session's owning agent, not a page-level pointer. A
       // cross-agent click or a late session_ready replay used to leave the
       // old `yeaftAgentId` pointing at a different agent, so the send hit an
@@ -3745,7 +3745,7 @@ export const useChatStore = defineStore('chat', {
           if (!result?.ok || authGeneration !== Number(useAuthStore().authGeneration || 0)
               || connectionGeneration !== Number(this.chatHistoryConnectionGeneration || 0)
               || targetAgentId !== resolveAgentIdForSession(this, groupId)) return false;
-          return this.sendYeaftSessionMessage({ groupId, text, mentions, attachments, quote, quickSend });
+          return this.sendYeaftSessionMessage({ groupId, text, mentions, attachments, quote, quickSend, cosmosDelivery });
         }).catch(() => false);
       }
       // Presets originate from the visible Agent. Reject a stale cross-Agent send
@@ -3785,6 +3785,7 @@ export const useChatStore = defineStore('chat', {
         text: effectiveText,
         mentions: Array.isArray(mentions) ? mentions : [],
         perfTraceId,
+        ...(cosmosDelivery === true ? { cosmosDelivery: true } : {}),
         ...(quickSend ? { quickSend: {
           model: quickSend.model,
           effort: quickSend.effort ?? null,
