@@ -412,7 +412,11 @@ export function scoreRouteCandidates({
       hasNovelIdentifier,
       totalScore: Math.round(totalScore * 100) / 100,
       matchedTerms: matchedTerms.slice(0, 4).map(x => x.term),
-      matchedOlderSnippet: normLex >= 1.5 && info.bestOlderHitScore >= 3.0 ? info.bestOlderSnippet : '',
+      // A Session recalled from beyond the active window is only a candidate
+      // because of that content match, so always show the arbiter why.
+      matchedOlderSnippet: (cand?.outsideWindow === true || (normLex >= 1.5 && info.bestOlderHitScore >= 3.0))
+        ? info.bestOlderSnippet
+        : '',
     });
   }
 
@@ -420,6 +424,8 @@ export function scoreRouteCandidates({
   return { scored, metaExcluded, queryTerms: qTerms };
 }
 
+// `fastPathRule` keeps its wire name and records the local rule for both the
+// `fast_path` and the arbiter-failure `fallback` route sources.
 function buildLocalHit(candidate, { confidence, rule, detail = '', routeSource }) {
   const prefix = routeSource === 'fast_path' ? 'fast_path' : 'local_fallback';
   return {

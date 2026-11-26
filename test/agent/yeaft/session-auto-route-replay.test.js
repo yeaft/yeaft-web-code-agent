@@ -7,6 +7,7 @@ import { closeConversationHistoryIndexes } from '../../../agent/yeaft/conversati
 import { createSessionFromSpec } from '../../../agent/yeaft/sessions/session-crud.js';
 import { seedDefaultVps } from '../../../agent/yeaft/vp/seed-defaults.js';
 import {
+  assertDisjointTrees,
   buildHistoryPoints,
   loadSourceInstance,
   replayPass,
@@ -118,5 +119,35 @@ describe('auto-route historical replay harness', () => {
 
     expect(summarize(results).headline).toMatchObject({ n: 5, accuracy: 100, falseCreates: 0, wrongSession: 0, falseMerges: 0 });
     expect(snapshotTree(source)).toEqual(before);
+
+    // Neutral titles hide current Session names from every replayed prompt.
+    prompts.length = 0;
+    await replayPass({
+      sessions,
+      sourceDir: source,
+      outDir: join(tempRoot, 'out'),
+      points,
+      adapter: arbiter,
+      config: { decisionModel: 'proxy/decision-mini' },
+      collect: true,
+      neutralTitles: true,
+    });
+    const neutralTitlesSeen = prompts.flatMap(p => (p.payload.candidates || []).map(c => c.title));
+    expect(neutralTitlesSeen.length).toBeGreaterThan(0);
+    expect(neutralTitlesSeen.some(title => title === 'Alpha' || title === 'Beta')).toBe(false);
+  });
+
+  it('refuses an --out tree that overlaps the source instance in either direction', () => {
+    tempRoot = mkdtempSync(join(tmpdir(), 'yeaft-route-replay-guard-'));
+    const source = join(tempRoot, 'C1');
+    mkdirSync(join(source, 'sessions'), { recursive: true });
+    mkdirSync(join(tempRoot, 'C1-out'), { recursive: true });
+    expect(() => assertDisjointTrees(source, join(source, 'out'))).toThrow(/must not contain/);
+    expect(() => assertDisjointTrees(source, tempRoot)).toThrow(/must not contain/);
+    expect(() => assertDisjointTrees(source, source)).toThrow(/must not contain/);
+    expect(() => assertDisjointTrees(source, join(tempRoot, 'C1-out'))).not.toThrow();
+    if (process.platform === 'win32') {
+      expect(() => assertDisjointTrees(source, join(source.toUpperCase(), 'out'))).toThrow(/must not contain/);
+    }
   });
 });

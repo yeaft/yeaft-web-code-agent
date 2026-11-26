@@ -113,6 +113,10 @@ function getCachedMeta(yeaftDir, sessionId, metaCache) {
  * scheduled-task Sessions and already-running `excludeSessionIds`), merging
  * natural-language OR-scored FTS5 hits, recency cards from `discovery.db`, and
  * freshly-active manifest Sessions.
+ *
+ * `olderCandidates` (default 0) additionally admits up to that many of the
+ * lexically strongest Sessions whose last activity is BEFORE the window; they
+ * carry `outsideWindow: true` and their matched text as `matchedOlderSnippet`.
  */
 export function collectRecentIdleCandidates(yeaftDir, {
   allowedSessionIds = [],
@@ -180,6 +184,7 @@ export function collectRecentIdleCandidates(yeaftDir, {
               activeAt: hit.activeAt,
               preview: hit.snippet || '',
               matchedOlderSnippet: hit.matchedText || hit.snippet || '',
+              outsideWindow: true,
               windowMessages,
               recentMessages: windowMessages.slice(-4),
             });

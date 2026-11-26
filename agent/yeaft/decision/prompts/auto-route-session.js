@@ -14,8 +14,8 @@ export const AUTO_ROUTE_SESSION_SCENARIO_ID = 'auto-route-session';
 // scored 0.5-0.7 are right far more often than the "create" they used to be
 // downgraded to (a create always loses the conversation the user is continuing).
 export const DEFAULT_AUTO_ROUTE_MATCH_MIN_CONFIDENCE = 0.5;
-// Kept for API compatibility; short continuations now share the same floor.
-export const DEFAULT_AUTO_ROUTE_SHORT_CONT_MIN_CONFIDENCE = 0.5;
+/** @deprecated Short continuations share DEFAULT_AUTO_ROUTE_MATCH_MIN_CONFIDENCE; kept for existing importers. */
+export const DEFAULT_AUTO_ROUTE_SHORT_CONT_MIN_CONFIDENCE = DEFAULT_AUTO_ROUTE_MATCH_MIN_CONFIDENCE;
 
 // Per-candidate excerpt budgets (characters). The latest reply gets the most
 // room and keeps more of its tail, where offers and questions usually sit.

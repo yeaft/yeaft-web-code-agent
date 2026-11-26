@@ -641,6 +641,19 @@ describe('Workspace <=3 level folder snapshot & Sessionless auto-routing pipelin
         now,
       });
       expect(llmCalls).toBe(beforeCalls + 1);
+      // An arbiter outage must never turn a reply to a pending AskUser into a
+      // lexical guess (here the repeated utterance owned by Proxy-Server).
+      const degraded = await decideSessionAutoRoute({
+        yeaftDir,
+        text: askCase.text,
+        allowedSessionIds: allowedIds,
+        runningSessions: askCase.runningSessions,
+        adapter: failingAdapter,
+        config: { decisionModel: 'proxy/decision-mini' },
+        now,
+      });
+      expect(degraded).toMatchObject({ action: 'create', routeSource: 'fallback' });
+      expect(degraded.answeredQuestion).toBeUndefined();
     }
 
     // 7c. Stage 1 unauthorized sessionId rejection & explicit preferredWorkDir/preferredSceneId precedence.
@@ -723,6 +736,24 @@ describe('Workspace <=3 level folder snapshot & Sessionless auto-routing pipelin
     const genericQuery = '帮我把这段产品发布说明改成更克制、没有营销味的中文更新日志';
     expect(tryFastPathRoute({ query: genericQuery, scoredCandidates: scored })).toBeNull();
     expect(tryLocalFallbackRoute({ query: genericQuery, scoredCandidates: scored, metaExcluded })).toBeNull();
+
+    // 9. A Session recalled from beyond the window keeps its FTS match for the arbiter even on weak overlap.
+    const quiet = {
+      title: 'Archive',
+      activeAt: now - 9 * 24 * 3_600_000,
+      matchedOlderSnippet: '旧会话里讨论过的发布说明模板',
+      windowMessages: [{ role: 'assistant', text: '已整理模板。', createdAt: now - 9 * 24 * 3_600_000 }],
+    };
+    const { scored: quietScored } = scoreRouteCandidates({
+      query: '发布说明',
+      candidates: [
+        { ...quiet, sessionId: 's_quiet_outside', outsideWindow: true },
+        { ...quiet, sessionId: 's_quiet_inside' },
+      ],
+      now,
+    });
+    expect(quietScored.find(c => c.sessionId === 's_quiet_outside').matchedOlderSnippet).toBe('旧会话里讨论过的发布说明模板');
+    expect(quietScored.find(c => c.sessionId === 's_quiet_inside').matchedOlderSnippet).toBe('');
   });
 
   it('routes new-topic, quiet older, parallel running and AskUser messages through one arbiter call with per-Session turn state', async () => {
@@ -795,7 +826,11 @@ describe('Workspace <=3 level folder snapshot & Sessionless auto-routing pipelin
     scripted = payload => ({ decision: 'match', sessionId: payload.candidates.find(c => c.title === 'Image-Policy')?.id || null, answeredRequestId: null, confidence: 0.86, reason: 'returns to error-message persistence' });
     const older = await route('错误文案伪装成 Chat 消息塞进 conversation.Messages 的问题，帮我写修复方案');
     expect(older).toMatchObject({ action: 'continue', tier: 'recent', sessionId: sArchive.id, routeSource: 'llm' });
-    expect(payloads.at(-1).candidates.find(c => c.id === sArchive.id)).toMatchObject({ age: '8d ago', status: 'replied' });
+    expect(payloads.at(-1).candidates.find(c => c.id === sArchive.id)).toMatchObject({
+      age: '8d ago',
+      status: 'replied',
+      olderMatch: expect.stringContaining('conversation.Messages'),
+    });
 
     // 3. Several running Sessions: live progress is the reply the user reacts to, and a running match keeps tier "running".
     const running = [

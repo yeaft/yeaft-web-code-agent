@@ -6,9 +6,13 @@
  * The source instance is opened strictly read-only. The script rebuilds an
  * isolated replay root under `--out` and, for every evaluation point (a real
  * user message, a real AskUser answer, or a scripted scenario), advances the
- * replay Session manifest and `discovery.db` to exactly the rows that existed
- * before that moment (zero future leakage), reconstructs the running Sessions and
- * pending AskUser prompts at that instant, then calls the production router.
+ * replay Session manifest and `discovery.db` to exactly the transcript rows that
+ * existed before that moment, reconstructs the running Sessions and pending
+ * AskUser prompts at that instant, then calls the production router.
+ *
+ * Known limits: Session metadata (title, workDir, scene) is the CURRENT value
+ * because renames are not journaled (`--neutral-titles` measures how much titles
+ * matter), and Sessions deleted since are absent from earlier candidate pools.
  *
  * LLM calls are separated from the deterministic replay so it stays faithful
  * yet parallel:
@@ -27,7 +31,8 @@
  *     [--model Provider/model] [--effort high]           override the decision model/effort
  *     [--workers 6] [--concurrency 8]                    replay shards / parallel LLM calls
  *     [--scenarios <file.json>] [--only history|scenarios]
- *     [--no-fast-path] [--no-llm] [--keep-prompts] [--salt s1] [--label run] [--refresh-source]
+ *     [--no-fast-path] [--no-llm] [--keep-prompts] [--salt s1] [--neutral-titles]
+ *     [--label run] [--refresh-source]
  *
  * A scenario file is `{ "scenarios": [{ id, category, at, text, running?, replaceRunning?,
  * expect: { action?, sessionId?, anyOf?, answeredRequestId?, sceneId?, workDir? } }] }`;
@@ -40,10 +45,10 @@
 import { createHash } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import {
-  appendFileSync, copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync,
+  appendFileSync, copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync,
 } from 'node:fs';
 import { homedir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { basename, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createAgentHistoryScan } from '../agent/yeaft/conversation/search.js';
 import { isVisibleConversationRow } from '../agent/yeaft/conversation/internal-control.js';
@@ -61,6 +66,12 @@ const NO_SIGNAL_RE = /^(?:hi|hello|hey|test|ping|你好|在吗|测试)[!！。.?
 
 // ───────────────────────────── CLI ─────────────────────────────
 
+function parseTimeArg(flag, value) {
+  const ms = Date.parse(String(value || ''));
+  if (!Number.isFinite(ms)) throw new Error(`${flag} expects an ISO date/time, got "${value}"`);
+  return ms;
+}
+
 function parseArgs(argv) {
   const args = { concurrency: 6, llm: true, llmTimeoutMs: 12_000, only: 'all' };
   for (let i = 0; i < argv.length; i += 1) {
@@ -68,8 +79,8 @@ function parseArgs(argv) {
     const next = () => argv[++i];
     if (key === '--source') args.source = next();
     else if (key === '--out') args.out = next();
-    else if (key === '--since') args.since = Date.parse(next());
-    else if (key === '--until') args.until = Date.parse(next());
+    else if (key === '--since') args.since = parseTimeArg(key, next());
+    else if (key === '--until') args.until = parseTimeArg(key, next());
     else if (key === '--model') args.model = next();
     else if (key === '--concurrency') args.concurrency = Math.max(1, Number(next()) || 6);
     else if (key === '--no-llm') args.llm = false;
@@ -84,6 +95,7 @@ function parseArgs(argv) {
     else if (key === '--keep-prompts') args.keepPrompts = true;
     else if (key === '--effort') args.effort = next();
     else if (key === '--salt') args.salt = next();
+    else if (key === '--neutral-titles') args.neutralTitles = true;
     else if (key === '--help' || key === '-h') args.help = true;
     else throw new Error(`Unknown argument: ${key}`);
   }
@@ -264,7 +276,8 @@ export function loadSourceInstance(sourceDir) {
 // ─────────────────────────── Replay root ───────────────────────────
 
 class ReplayWorld {
-  constructor(rootDir, sessions, sourceDir) {
+  constructor(rootDir, sessions, sourceDir, { neutralTitles = false } = {}) {
+    this.neutralTitles = neutralTitles;
     this.root = rootDir;
     this.sessions = sessions;
     this.byId = new Map(sessions.map(s => [s.id, s]));
@@ -284,12 +297,21 @@ class ReplayWorld {
 
   close() { try { this.db?.close(); } catch { /* ignore */ } }
 
+  /**
+   * Session titles are the CURRENT ones (renames are not journaled), which can
+   * leak later naming into earlier points; neutral titles measure that effect.
+   */
+  titleOf(s) {
+    if (!this.neutralTitles) return s.meta.name || s.id;
+    return `${basename(s.meta.workDir || '') || 'session'}-${s.id.slice(-4)}`;
+  }
+
   writeManifest() {
     const sessions = [...this.existing].map(id => {
       const s = this.byId.get(id);
       return {
         id,
-        name: s.meta.name || id,
+        name: this.titleOf(s),
         path: join(this.root, 'sessions', id),
         createdAt: s.meta.createdAt,
         workDir: s.meta.workDir || '',
@@ -302,7 +324,7 @@ class ReplayWorld {
   materialize(s) {
     const dir = join(this.root, 'sessions', s.id);
     mkdirSync(join(dir, 'conversation', 'segments'), { recursive: true });
-    writeFileSync(join(dir, 'session.json'), JSON.stringify({ ...s.meta, metadataUpdatedAt: s.meta.createdAt }, null, 1));
+    writeFileSync(join(dir, 'session.json'), JSON.stringify({ ...s.meta, name: this.titleOf(s), metadataUpdatedAt: s.meta.createdAt }, null, 1));
     writeFileSync(join(dir, 'config.json'), JSON.stringify(s.sceneId ? { sceneId: s.sceneId } : {}, null, 1));
     writeFileSync(join(dir, 'conversation', 'lineage.json'), s.lineageRaw || JSON.stringify({ version: 1, streamId: `replay-${s.id}` }));
     this.existing.add(s.id);
@@ -349,7 +371,7 @@ class ReplayWorld {
         mode,
         pruneFromSeq,
         sessionId: id,
-        title: s.meta.name || id,
+        title: this.titleOf(s),
         workDir: s.meta.workDir || '',
         activeAt: extracted.activeAt,
         deletionGeneration: fence.key,
@@ -406,7 +428,7 @@ class ReplayWorld {
       const s = this.byId.get(id);
       out.push({
         sessionId: id,
-        title: s.meta.name || id,
+        title: this.titleOf(s),
         sceneId: s.sceneId,
         workDir: s.meta.workDir || '',
         state: pending.length ? 'waiting_input' : 'running',
@@ -534,6 +556,7 @@ function createCacheAdapter(cache, pending, { timeoutMs, effort = null, salt = n
   return {
     lastRequest: null,
     lastResponse: null,
+    lastLatencyMs: null,
     async call(rawRequest) {
       const request = effort ? { ...rawRequest, effort } : rawRequest;
       this.lastRequest = request;
@@ -541,6 +564,7 @@ function createCacheAdapter(cache, pending, { timeoutMs, effort = null, salt = n
       const key = salt ? `${promptKey(request)}#${salt}` : promptKey(request);
       const hit = cache.get(key);
       this.lastResponse = hit ? (hit.error ? `error:${hit.error}` : hit.text) : null;
+      this.lastLatencyMs = hit && Number.isFinite(hit.latencyMs) ? hit.latencyMs : null;
       if (hit) {
         if (hit.error || hit.latencyMs > timeoutMs) return { text: '', usage: null };
         return { text: hit.text, usage: hit.usage || null };
@@ -593,8 +617,8 @@ function twinOf(world, a, b, t) {
   return Boolean(ra) && ra === rb;
 }
 
-export async function replayPass({ sessions, sourceDir, outDir, points, adapter, config, collect, rootName = 'replay-root', fastPath = true, keepPrompts = false }) {
-  const world = new ReplayWorld(join(outDir, rootName), sessions, sourceDir);
+export async function replayPass({ sessions, sourceDir, outDir, points, adapter, config, collect, rootName = 'replay-root', fastPath = true, keepPrompts = false, neutralTitles = false }) {
+  const world = new ReplayWorld(join(outDir, rootName), sessions, sourceDir, { neutralTitles });
   const results = [];
   try {
     for (const point of points) {
@@ -606,7 +630,7 @@ export async function replayPass({ sessions, sourceDir, outDir, points, adapter,
           const s = world.byId.get(r.sessionId);
           return {
             sessionId: r.sessionId,
-            title: s?.meta?.name || r.sessionId,
+            title: s ? world.titleOf(s) : r.sessionId,
             sceneId: s?.sceneId || '',
             workDir: s?.meta?.workDir || '',
             state: r.pendingQuestions?.length ? 'waiting_input' : 'running',
@@ -620,7 +644,7 @@ export async function replayPass({ sessions, sourceDir, outDir, points, adapter,
         const overrideIds = new Set(overrides.map(o => o.sessionId));
         running = point.replaceRunning ? overrides : [...running.filter(r => !overrideIds.has(r.sessionId)), ...overrides];
       }
-      if (adapter) { adapter.lastRequest = null; adapter.lastResponse = null; }
+      if (adapter) { adapter.lastRequest = null; adapter.lastResponse = null; adapter.lastLatencyMs = null; }
       const started = performance.now();
       const decision = await decideSessionAutoRoute({
         yeaftDir: world.root,
@@ -629,6 +653,8 @@ export async function replayPass({ sessions, sourceDir, outDir, points, adapter,
         allowedSessionIds: allowed,
         runningSessions: running,
         fastPath,
+        // Production also offers recently touched, not-yet-indexed Sessions.
+        readRecentFallbackMessages: (id, limit) => (world.existing.has(id) ? world.recentVisible(id, point.t, limit, 500) : []),
         adapter,
         config,
         now: point.t,
@@ -700,6 +726,7 @@ export async function replayPass({ sessions, sourceDir, outDir, points, adapter,
         runningCount: runningIds.length,
         llmCandidateIds,
         llmRaw: adapter?.lastResponse ? String(adapter.lastResponse).slice(0, 400) : null,
+        llmLatencyMs: adapter?.lastLatencyMs ?? null,
         ...(keepPrompts && adapter?.lastRequest ? { llmPrompt: adapter.lastRequest.messages?.[0]?.content || '' } : {}),
         truthInLlmCandidates: llmCandidateIds && truthId ? llmCandidateIds.includes(truthId) : null,
         recentActive30m: recentActive,
@@ -722,6 +749,13 @@ export async function replayPass({ sessions, sourceDir, outDir, points, adapter,
 const HEADLINE_EXCLUDED = new Set(['copy-branch', 'beyond-window', 'no-signal']);
 
 function pct(n, d) { return d ? Math.round((n / d) * 1000) / 10 : null; }
+
+function percentiles(values) {
+  if (!values.length) return null;
+  const sorted = [...values].sort((a, b) => a - b);
+  const at = q => sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * q))];
+  return { n: sorted.length, p50: at(0.5), p90: at(0.9), p99: at(0.99) };
+}
 
 export function summarize(results) {
   const byCat = {};
@@ -766,6 +800,7 @@ export function summarize(results) {
       byRule: fastByRule,
     },
     routeSources: results.reduce((acc, r) => { acc[r.decision.routeSource || 'none'] = (acc[r.decision.routeSource || 'none'] || 0) + 1; return acc; }, {}),
+    arbiterLatencyMs: percentiles(results.map(r => r.llmLatencyMs).filter(Number.isFinite)),
   };
 }
 
@@ -780,34 +815,43 @@ function printSummary(summary, log) {
     log(`  ${cat.padEnd(20)} n=${String(c.n).padStart(4)}  acc=${c.accuracy}%  twin-ok=${c.accuracyTwinOk}%  strict=${c.strict}%`);
   }
   log(`Route sources: ${JSON.stringify(summary.routeSources)}`);
+  if (summary.arbiterLatencyMs) log(`Arbiter latency (recorded per answer): ${JSON.stringify(summary.arbiterLatencyMs)} ms`);
 }
 
 // ─────────────────────────── Main ───────────────────────────
 
-function sourceSignature(sourceDir) {
-  const manifest = readJson(join(sourceDir, 'sessions-manifest.json'));
-  const parts = [];
-  for (const entry of manifest?.sessions || []) {
-    const segDir = join(sourceDir, 'sessions', String(entry?.id || ''), 'conversation', 'segments');
-    if (!existsSync(segDir)) continue;
-    for (const file of readdirSync(segDir).sort()) {
-      try { const st = statSync(join(segDir, file)); parts.push(`${entry.id}/${file}:${st.size}:${Math.floor(st.mtimeMs)}`); } catch { /* ignore */ }
-    }
-  }
-  return createHash('sha256').update(parts.join('\n')).digest('hex');
-}
+const samePath = (a, b) => (process.platform === 'win32' ? a.toLowerCase() === b.toLowerCase() : a === b);
 
 /** Load (or reuse) the read-only source projection shared by every worker. */
 function loadProjection(sourceDir, outDir, log, { refresh = false } = {}) {
   const file = join(outDir, 'source-projection.json');
   const cached = existsSync(file) ? readJson(file) : null;
+  if (cached && !samePath(String(cached.sourceDir || ''), sourceDir) && !refresh) {
+    throw new Error(`${file} was built from ${cached.sourceDir}; pass --refresh-source or use another --out`);
+  }
   // Live instances keep appending; reuse the frozen projection unless asked to refresh.
   if (!refresh && Array.isArray(cached?.sessions)) return cached.sessions;
-  const signature = sourceSignature(sourceDir);
   log(`Loading source instance ${sourceDir} (read-only)…`);
   const sessions = loadSourceInstance(sourceDir);
-  writeFileSync(file, JSON.stringify({ signature, sessions }));
+  writeFileSync(file, JSON.stringify({ sourceDir, loadedAt: new Date().toISOString(), sessions }));
   return sessions;
+}
+
+/**
+ * The replay deletes and rewrites its own directories under --out, so --out and
+ * --source must be disjoint trees (case-insensitive on Windows, after realpath).
+ */
+export function assertDisjointTrees(sourceDir, outDir) {
+  const real = p => { try { return realpathSync(p); } catch { return resolve(p); } };
+  const norm = p => (process.platform === 'win32' ? real(p).toLowerCase() : real(p));
+  const a = norm(sourceDir);
+  const b = norm(outDir);
+  const inside = (parent, child) => {
+    const rel = relative(parent, child);
+    return rel === '' || (rel !== '..' && !rel.startsWith(`..${sep}`) && !isAbsolute(rel));
+  };
+  if (inside(a, b) || inside(b, a)) throw new Error('--out and --source must not contain each other');
+  if (existsSync(join(outDir, 'sessions-manifest.json'))) throw new Error('--out looks like a Yeaft instance (sessions-manifest.json); choose an empty directory');
 }
 
 function spawnShards(args, workers, label, log) {
@@ -843,8 +887,8 @@ async function main() {
   const sourceDir = resolve(expandHome(args.source));
   const outDir = resolve(expandHome(args.out));
   args.outDir = outDir;
-  if (outDir.startsWith(sourceDir)) throw new Error('--out must be outside the source instance');
   mkdirSync(outDir, { recursive: true });
+  assertDisjointTrees(sourceDir, outDir);
   const log = args.shard ? () => {} : msg => console.log(msg);
   const label = args.label || 'run';
 
@@ -866,7 +910,7 @@ async function main() {
     // Worker: replay a deterministic slice against the cache only; the parent calls the LLM.
     const [index, total] = args.shard.split('/').map(Number);
     const slice = points.filter((_, i) => i % total === index);
-    const shardResults = await replayPass({ sessions, sourceDir, outDir, points: slice, adapter: cacheAdapter, config, collect: true, rootName: `replay-root-${index}`, fastPath: args.fastPath !== false, keepPrompts: args.keepPrompts === true });
+    const shardResults = await replayPass({ sessions, sourceDir, outDir, points: slice, adapter: cacheAdapter, config, collect: true, rootName: `replay-root-${index}`, fastPath: args.fastPath !== false, keepPrompts: args.keepPrompts === true, neutralTitles: args.neutralTitles === true });
     writeFileSync(join(outDir, `${label}.shard-${index}.jsonl`), shardResults.map(r => JSON.stringify(r)).join('\n') + '\n');
     writeFileSync(join(outDir, `${label}.pending-${index}.jsonl`), [...pending.values()].map(p => JSON.stringify(p)).join('\n') + (pending.size ? '\n' : ''));
     return;
@@ -880,7 +924,7 @@ async function main() {
       for (const row of pendingRows) pending.set(row.key, row);
       return merged;
     }
-    return replayPass({ sessions, sourceDir, outDir, points, adapter: cacheAdapter, config, collect: true, fastPath: args.fastPath !== false, keepPrompts: args.keepPrompts === true });
+    return replayPass({ sessions, sourceDir, outDir, points, adapter: cacheAdapter, config, collect: true, fastPath: args.fastPath !== false, keepPrompts: args.keepPrompts === true, neutralTitles: args.neutralTitles === true });
   };
 
   log('Replay pass…');
