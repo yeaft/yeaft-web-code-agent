@@ -13,18 +13,39 @@
   --bg-hover: rgba(var(--p-accent-rgb), 0.14);
   --bg-active: rgba(var(--p-accent-rgb), 0.20);
   --bg-input: var(--p-surface);
+  --bg-input-wrapper: var(--p-surface);
   --bg-code: rgba(2, 6, 16, 0.56);
-  --bg-user-msg: rgba(var(--p-accent-rgb), 0.15);
-  --bg-user-msg-subtle: rgba(var(--p-accent-rgb), 0.09);
-  --surface-2: rgba(var(--p-accent-rgb), 0.12);
-  --bg-subtle: rgba(var(--p-accent-rgb), 0.08);
+  --bg-user-msg: rgba(255, 255, 255, 0.065);
+  --bg-user-msg-subtle: var(--p-user-bg);
+  --surface-2: rgba(var(--p-accent-rgb), 0.10);
+  --bg-subtle: rgba(var(--p-accent-rgb), 0.06);
+  --bg-workbench: rgba(var(--p-tint-rgb), 0.78);
+  --bg-elevated: rgba(var(--p-tint-rgb), 0.88);
+  --sidebar-hover: rgba(var(--p-accent-rgb), 0.12);
+  --session-active: rgba(var(--p-accent-rgb), 0.20);
+  --elevated-hover: rgba(var(--p-accent-rgb), 0.15);
+  --elevated-active: rgba(var(--p-accent-rgb), 0.22);
   --text-primary: var(--p-ink);
+  --text-main: var(--p-ink);
   --text-secondary: var(--p-muted);
   --text-muted: var(--p-faint);
   --border-color: var(--p-border);
+  --border-light: rgba(var(--p-accent-rgb), 0.10);
   --border-subtle: rgba(var(--p-accent-rgb), 0.12);
   --accent-color: var(--p-accent);
   --accent: var(--p-accent);
+  --accent-blue: var(--p-accent);
+  --accent-fg: var(--p-send-ink);
+  --code-bg: rgba(2, 6, 16, 0.68);
+  --code-header-bg: rgba(var(--p-tint-rgb), 0.72);
+  --code-text: var(--p-ink);
+  --diff-add-bg: rgba(96, 198, 134, 0.12);
+  --diff-add-border: rgba(96, 198, 134, 0.30);
+  --diff-add-text: #9ee0b4;
+  --diff-del-bg: rgba(232, 110, 122, 0.12);
+  --diff-del-border: rgba(232, 110, 122, 0.30);
+  --diff-del-text: #f2a6ae;
+  --diff-line-num: rgba(168, 192, 224, 0.48);
 
   position: fixed;
   top: 0;
@@ -155,9 +176,42 @@
 .cosmos-drawer-sub-row {
   display: flex;
   align-items: center;
-  gap: 5px;
-  margin-top: 1px;
+  gap: 6px;
+  margin-top: 2px;
   min-width: 0;
+}
+
+.cosmos-drawer-project-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  max-width: 48%;
+  padding: 0.5px 5.5px;
+  border-radius: calc(var(--p-radius) * 0.45);
+  background: rgba(var(--p-accent-rgb), 0.10);
+  border: 1px solid rgba(var(--p-accent-rgb), 0.22);
+  color: var(--p-accent);
+  font-size: 9.5px;
+  line-height: 1.45;
+  flex-shrink: 0;
+  min-width: 0;
+}
+
+.cosmos-drawer-project-chip svg {
+  width: 10px;
+  height: 11px;
+  flex-shrink: 0;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.cosmos-drawer-project-chip span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .cosmos-drawer-session-title {
@@ -207,22 +261,188 @@
   border-color: rgba(var(--p-accent-rgb), 0.34);
 }
 
-/* ── Embedded Sidebar History Drawer (Opened via Top-Left ☰) ── */
+/* ── Embedded Sidebar History, Project Tree & Session Search (Opened via Top-Left ☰) ── */
 .cosmos-history-drawer {
-  max-height: 52vh;
-  overflow-y: auto;
-  padding: 8px 10px 10px;
-  border-bottom: 1px solid rgba(var(--p-accent-rgb), 0.14);
-  background: rgba(2, 6, 16, 0.52);
-  backdrop-filter: blur(18px);
+  display: flex;
+  flex-direction: column;
+  max-height: 62vh;
+  border-bottom: 1px solid rgba(var(--p-accent-rgb), 0.18);
+  background: rgba(var(--p-tint-rgb), 0.92);
+  backdrop-filter: blur(22px) saturate(135%);
+  box-shadow: 0 14px 32px rgba(0, 0, 0, 0.46);
+  flex-shrink: 0;
+  z-index: 4;
+}
+
+.cosmos-history-search {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 8px 10px 6px;
+  padding: 0 8px;
+  height: 30px;
+  border-radius: calc(var(--p-radius) * 0.6);
+  background: rgba(255, 255, 255, 0.045);
+  border: 1px solid rgba(var(--p-accent-rgb), 0.20);
+  transition: border-color 140ms ease, background 140ms ease;
   flex-shrink: 0;
 }
 
+.cosmos-history-search:focus-within {
+  border-color: var(--p-border-strong);
+  background: rgba(var(--p-accent-rgb), 0.08);
+}
+
+.cosmos-history-search-icon {
+  width: 13px;
+  height: 13px;
+  flex-shrink: 0;
+  stroke: var(--p-faint);
+  fill: none;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.cosmos-history-search-input {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  border: 0;
+  background: transparent;
+  color: var(--p-ink);
+  font-size: 11.5px;
+  outline: none;
+}
+
+.cosmos-history-search-input::placeholder {
+  color: var(--p-faint);
+}
+
+.cosmos-history-search-input::-webkit-search-cancel-button {
+  -webkit-appearance: none;
+  appearance: none;
+}
+
+.cosmos-history-search-clear {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  border: 0;
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--p-muted);
+  font-size: 12px;
+  line-height: 1;
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.cosmos-history-search-clear:hover {
+  background: rgba(var(--p-accent-rgb), 0.20);
+  color: var(--p-ink);
+}
+
+.cosmos-history-scroll {
+  overflow-y: auto;
+  padding: 2px 10px 10px;
+  min-height: 0;
+}
+
 .cosmos-history-group-label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
   font-size: 10px;
   color: var(--p-faint);
-  letter-spacing: 0.05em;
-  padding: 4px 6px;
+  letter-spacing: 0.04em;
+  padding: 6px 6px 3px;
+}
+
+.cosmos-history-ungrouped-label,
+.cosmos-history-other-label {
+  margin-top: 6px;
+  padding-top: 7px;
+  border-top: 1px solid rgba(var(--p-accent-rgb), 0.10);
+}
+
+.cosmos-history-planet-tag {
+  font-size: 9.5px;
+  color: var(--p-muted);
+  opacity: 0.78;
+}
+
+.cosmos-history-folder {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 5.5px 8px 5.5px calc(6px + var(--tree-depth, 0) * 14px);
+  border-radius: calc(var(--p-radius) * 0.55);
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--p-muted);
+  text-align: left;
+  cursor: pointer;
+  transition: background 120ms ease, color 120ms ease;
+}
+
+.cosmos-history-folder:hover {
+  background: rgba(var(--p-accent-rgb), 0.10);
+  color: var(--p-ink);
+}
+
+.cosmos-history-chevron {
+  width: 12px;
+  height: 12px;
+  flex-shrink: 0;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.9;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  transform: rotate(90deg);
+  transition: transform 140ms ease;
+  opacity: 0.72;
+}
+
+.cosmos-history-folder.is-collapsed .cosmos-history-chevron {
+  transform: rotate(0deg);
+}
+
+.cosmos-history-folder-icon {
+  width: 13px;
+  height: 14px;
+  flex-shrink: 0;
+  fill: none;
+  stroke: var(--p-accent);
+  stroke-width: 1.75;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  opacity: 0.85;
+}
+
+.cosmos-history-folder-name {
+  flex: 1;
+  min-width: 0;
+  font-size: 11.5px;
+  font-weight: 500;
+  color: var(--p-ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cosmos-history-folder-count {
+  font-family: var(--font-mono, monospace);
+  font-size: 9.5px;
+  color: var(--p-faint);
+  padding: 0 5px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.05);
+  flex-shrink: 0;
 }
 
 .cosmos-history-row {
@@ -231,7 +451,7 @@
   justify-content: space-between;
   gap: 8px;
   width: 100%;
-  padding: 6.5px 8px;
+  padding: 6px 8px;
   border-radius: calc(var(--p-radius) * 0.55);
   background: transparent;
   border: 1px solid transparent;
@@ -241,13 +461,17 @@
   transition: background 120ms ease, border-color 120ms ease;
 }
 
+.cosmos-history-row.is-nested {
+  padding-left: calc(10px + var(--tree-depth, 1) * 14px);
+}
+
 .cosmos-history-row:hover {
-  background: rgba(var(--p-accent-rgb), 0.12);
+  background: rgba(var(--p-accent-rgb), 0.11);
 }
 
 .cosmos-history-row.is-active {
-  background: rgba(var(--p-accent-rgb), 0.18);
-  border-color: rgba(var(--p-accent-rgb), 0.32);
+  background: rgba(var(--p-accent-rgb), 0.17);
+  border-color: rgba(var(--p-accent-rgb), 0.30);
 }
 
 .cosmos-history-row-left {
@@ -255,6 +479,7 @@
   align-items: center;
   gap: 7px;
   min-width: 0;
+  flex: 1;
 }
 
 .cosmos-history-row-title {
@@ -263,6 +488,7 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  min-width: 0;
 }
 
 .cosmos-history-row-meta {
@@ -271,6 +497,91 @@
   color: var(--p-faint);
   white-space: nowrap;
   flex-shrink: 0;
+}
+
+.cosmos-history-search-hit {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 3px;
+  padding: 7px 8px;
+}
+
+.cosmos-history-hit-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+}
+
+.cosmos-history-hit-tags {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 5px;
+  padding-left: 13px;
+}
+
+.cosmos-history-project-pill,
+.cosmos-history-agent-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  max-width: 180px;
+  padding: 0.5px 5px;
+  border-radius: calc(var(--p-radius) * 0.4);
+  font-size: 9.5px;
+  line-height: 1.4;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.cosmos-history-project-pill {
+  background: rgba(var(--p-accent-rgb), 0.10);
+  border: 1px solid rgba(var(--p-accent-rgb), 0.20);
+  color: var(--p-accent);
+}
+
+.cosmos-history-project-pill svg {
+  width: 9.5px;
+  height: 10.5px;
+  flex-shrink: 0;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.cosmos-history-project-pill span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cosmos-history-agent-pill {
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--p-muted);
+}
+
+.cosmos-history-snippet {
+  padding-left: 13px;
+  font-size: 10.5px;
+  line-height: 1.4;
+  color: var(--p-muted);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.cosmos-history-status {
+  padding: 8px 6px;
+  font-size: 10.5px;
+  color: var(--p-faint);
+  text-align: center;
 }
 
 /* ── Main Stack: Pure Conversation + Slide-Over Real Workbench ── */
@@ -330,16 +641,42 @@
   gap: 12px;
 }
 
+/* Keep outer .message.user completely transparent so metadata sits cleanly outside
+   and ONLY the inner .message-user-block forms one restrained translucent glass bubble. */
 .cosmos-drawer .message.user,
-.cosmos-drawer .user-turn-block-main > .message.user,
-.cosmos-drawer .message-user .message-bubble,
-.cosmos-drawer .user-message-bubble {
+.cosmos-drawer .user-turn-block-main > .message.user {
+  background: transparent !important;
+  background-color: transparent !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  box-shadow: none !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+  padding: 0 !important;
+  color: var(--p-ink) !important;
+}
+
+.cosmos-drawer .message.user .message-user-block,
+.cosmos-drawer .user-turn-block-main > .message.user .message-user-block {
   background: var(--p-user-bg) !important;
-  background-color: rgba(var(--p-accent-rgb), 0.15) !important;
   border: 1px solid var(--p-user-border) !important;
   border-radius: var(--p-radius) var(--p-radius) 4px var(--p-radius) !important;
+  padding: 9px 13px !important;
   color: var(--p-ink) !important;
-  backdrop-filter: blur(8px);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+}
+
+.cosmos-drawer .message-user-meta {
+  margin: 0 4px 4px;
+  font-size: 10.5px;
+  color: var(--p-faint) !important;
+}
+
+.cosmos-drawer .message-user-author {
+  color: var(--p-muted) !important;
+  font-weight: 500;
 }
 
 .cosmos-drawer .message.user .message-content,
@@ -460,13 +797,27 @@
 
 /* ── Embedded Real Workbench Overlay Inside Planetary Drawer ── */
 .cosmos-workbench-host {
+  /* Restore solid dark-glass surface tokens for Workbench, Files, Git Diff, Terminal & Browser
+     so Light global theme never leaks white backgrounds behind light planetary text. */
+  --bg-main: rgba(var(--p-tint-rgb), 0.88);
+  --bg-workbench: rgba(var(--p-tint-rgb), 0.78);
+  --bg-sidebar: rgba(var(--p-tint-rgb), 0.84);
+  --bg-input: rgba(4, 10, 22, 0.70);
+  --bg-input-wrapper: rgba(4, 10, 22, 0.70);
+  --bg-elevated: rgba(var(--p-tint-rgb), 0.94);
+
   position: absolute;
   inset: 0;
   z-index: 15;
   display: flex;
   flex-direction: column;
-  background: linear-gradient(180deg, var(--p-surface-strong), var(--p-bg-bot));
-  backdrop-filter: blur(26px);
+  background: linear-gradient(
+    180deg,
+    rgba(var(--p-tint-rgb), 0.94),
+    rgba(var(--p-tint-rgb), 0.97)
+  );
+  backdrop-filter: blur(28px);
+  -webkit-backdrop-filter: blur(28px);
 }
 
 .cosmos-workbench-host .workbench-panel,
@@ -479,11 +830,27 @@
   height: 100% !important;
   border-left: 0 !important;
   background: transparent !important;
+  transform: none !important;
+  transition: none !important;
   flex: 1;
 }
 
+.cosmos-workbench-host .resize-handle,
 .cosmos-workbench-host .workbench-resize-handle {
   display: none !important;
+}
+
+.cosmos-workbench-host .ctx-menu {
+  background: rgba(6, 13, 28, 0.96);
+  border-color: rgba(var(--p-accent-rgb), 0.28);
+  color: var(--p-ink);
+  max-width: min(320px, calc(100% - 16px));
+  max-height: calc(100% - 16px);
+  overflow-y: auto;
+}
+
+.cosmos-workbench-host .workbench-add-menu {
+  width: min(196px, calc(100% - 16px));
 }
 
 /* ── Conversation Outline Search inside Cosmos Drawer ── */
@@ -500,5 +867,9 @@
   }
   .cosmos-drawer::after {
     display: none;
+  }
+  .cosmos-drawer-widen-btn,
+  .cosmos-workbench-host .workbench-maximize-btn {
+    display: none !important;
   }
 }

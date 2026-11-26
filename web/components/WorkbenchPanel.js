@@ -7,6 +7,7 @@ import {
   workbenchRouteKey,
   workbenchWorkspaceGeneration,
 } from '../utils/workbench-route.js';
+import { clampFixedMenuCoordinates } from '../utils/fixed-menu-position.js';
 
 export default {
   name: 'WorkbenchPanel',
@@ -184,7 +185,11 @@ export default {
           v-if="openItemsMenu.visible"
           ref="openItemsMenuElement"
           class="ctx-menu workbench-open-items-menu"
-          :style="{ left: openItemsMenu.x + 'px', top: openItemsMenu.y + 'px' }"
+          :style="{
+            left: openItemsMenu.x + 'px',
+            top: openItemsMenu.y + 'px',
+            maxHeight: openItemsMenu.maxHeight ? openItemsMenu.maxHeight + 'px' : undefined,
+          }"
           role="menu"
           @click.stop
         >
@@ -206,7 +211,11 @@ export default {
           v-if="tabContextMenu.visible"
           ref="tabContextMenuElement"
           class="ctx-menu workbench-tab-context-menu"
-          :style="{ left: tabContextMenu.x + 'px', top: tabContextMenu.y + 'px' }"
+          :style="{
+            left: tabContextMenu.x + 'px',
+            top: tabContextMenu.y + 'px',
+            maxHeight: tabContextMenu.maxHeight ? tabContextMenu.maxHeight + 'px' : undefined,
+          }"
           role="menu"
           @click.stop
         >
@@ -267,8 +276,8 @@ export default {
     const openItemsTrigger = Vue.ref(null);
     const openItemsMenuElement = Vue.ref(null);
     const tabContextMenuElement = Vue.ref(null);
-    const openItemsMenu = Vue.reactive({ visible: false, x: 0, y: 0 });
-    const tabContextMenu = Vue.reactive({ visible: false, x: 0, y: 0, itemId: '', index: -1 });
+    const openItemsMenu = Vue.reactive({ visible: false, x: 0, y: 0, maxHeight: 0 });
+    const tabContextMenu = Vue.reactive({ visible: false, x: 0, y: 0, maxHeight: 0, itemId: '', index: -1 });
     const hiddenWorkbenchItemIds = Vue.ref([]);
     const measuredTabWidths = new Map();
     let tabOverflowUpdatePending = false;
@@ -467,13 +476,28 @@ export default {
       const triggerRect = launcherTrigger.value?.getBoundingClientRect();
       const menu = launcherMenu.value;
       if (!triggerRect || !menu) return;
-      const margin = 8;
-      const menuWidth = Math.min(menu.getBoundingClientRect().width, window.innerWidth - margin * 2);
-      const viewportLeft = Math.max(margin, Math.min(triggerRect.left, window.innerWidth - menuWidth - margin));
-      menu.style.left = `${viewportLeft}px`;
-      menu.style.top = `${triggerRect.bottom + 4}px`;
+      const pre = clampFixedMenuCoordinates(menu, {
+        viewportX: triggerRect.left,
+        viewportY: triggerRect.bottom + 4,
+        maxHeightCap: 420,
+      });
+      if (pre.maxHeight > 0) {
+        menu.style.maxHeight = `${pre.maxHeight}px`;
+        menu.style.overflowY = 'auto';
+      }
+      const menuRect = menu.getBoundingClientRect();
+      const pos = clampFixedMenuCoordinates(menu, {
+        viewportX: triggerRect.left,
+        viewportY: triggerRect.bottom + 4,
+        width: menuRect.width || menu.offsetWidth || 190,
+        height: menuRect.height || menu.offsetHeight || 180,
+        maxHeightCap: 420,
+      });
+      menu.style.left = `${pos.x}px`;
+      menu.style.top = `${pos.y}px`;
     };
     const openLauncher = (focusIndex = 0) => {
+      closeWorkbenchMenus();
       launcherOpen.value = true;
       updateLauncherMenuPosition();
       focusLauncherItem(focusIndex);
@@ -614,13 +638,24 @@ export default {
       closeCapability(item.capabilityId);
     };
     const positionFixedMenu = (target, triggerRect) => {
-      const margin = 8;
+      const pre = clampFixedMenuCoordinates(target, {
+        viewportX: triggerRect.left,
+        viewportY: triggerRect.bottom + 4,
+        maxHeightCap: 420,
+      });
+      if (target && pre.maxHeight > 0) {
+        target.style.maxHeight = `${pre.maxHeight}px`;
+      }
       const width = target?.offsetWidth || 220;
       const height = target?.offsetHeight || 200;
-      return {
-        x: Math.max(margin, Math.min(triggerRect.left, window.innerWidth - width - margin)),
-        y: Math.max(margin, Math.min(triggerRect.bottom + 4, window.innerHeight - height - margin)),
-      };
+      const pos = clampFixedMenuCoordinates(target, {
+        viewportX: triggerRect.left,
+        viewportY: triggerRect.bottom + 4,
+        width,
+        height,
+        maxHeightCap: 420,
+      });
+      return { x: pos.x, y: pos.y, maxHeight: pos.maxHeight };
     };
     const closeWorkbenchMenus = () => {
       openItemsMenu.visible = false;
@@ -636,6 +671,7 @@ export default {
       items[boundedIndex]?.focus();
     });
     const openOpenItemsMenu = async (focusIndex = 0) => {
+      closeLauncher();
       tabContextMenu.visible = false;
       openItemsMenu.visible = true;
       await Vue.nextTick();
@@ -695,18 +731,43 @@ export default {
       closeLauncher();
       openItemsMenu.visible = false;
       const index = workbenchItems.value.findIndex(candidate => candidate.id === item.id);
+      const initial = clampFixedMenuCoordinates(panelRoot.value, {
+        viewportX: event.clientX,
+        viewportY: event.clientY,
+        width: 180,
+        height: 220,
+        maxHeightCap: 420,
+      });
       Object.assign(tabContextMenu, {
         visible: true,
-        x: event.clientX,
-        y: event.clientY,
+        x: initial.x,
+        y: initial.y,
+        maxHeight: initial.maxHeight,
         itemId: item.id,
         index,
       });
       await Vue.nextTick();
+      const targetEl = tabContextMenuElement.value || panelRoot.value;
+      const pre = clampFixedMenuCoordinates(targetEl, {
+        viewportX: event.clientX,
+        viewportY: event.clientY,
+        maxHeightCap: 420,
+      });
+      if (tabContextMenuElement.value && pre.maxHeight > 0) {
+        tabContextMenuElement.value.style.maxHeight = `${pre.maxHeight}px`;
+      }
       const width = tabContextMenuElement.value?.offsetWidth || 180;
       const height = tabContextMenuElement.value?.offsetHeight || 220;
-      tabContextMenu.x = Math.max(8, Math.min(event.clientX, window.innerWidth - width - 8));
-      tabContextMenu.y = Math.max(8, Math.min(event.clientY, window.innerHeight - height - 8));
+      const settled = clampFixedMenuCoordinates(targetEl, {
+        viewportX: event.clientX,
+        viewportY: event.clientY,
+        width,
+        height,
+        maxHeightCap: 420,
+      });
+      tabContextMenu.x = settled.x;
+      tabContextMenu.y = settled.y;
+      tabContextMenu.maxHeight = settled.maxHeight;
     };
     const closeFileItems = paths => new Promise(resolve => {
       window.dispatchEvent(new CustomEvent('workbench-close-file-items', {
@@ -872,12 +933,30 @@ export default {
       Vue.nextTick(scheduleTabOverflowUpdate);
     };
 
+    const repositionOpenItemsMenu = () => {
+      if (!openItemsMenu.visible) return;
+      const rect = openItemsTrigger.value?.getBoundingClientRect();
+      if (rect && (rect.width > 0 || rect.height > 0)) {
+        Object.assign(openItemsMenu, positionFixedMenu(openItemsMenuElement.value, rect));
+      } else {
+        openItemsMenu.visible = false;
+      }
+    };
+    const repositionOpenMenus = () => {
+      if (launcherOpen.value) void updateLauncherMenuPosition();
+      repositionOpenItemsMenu();
+      if (tabContextMenu.visible) {
+        tabContextMenu.visible = false;
+      }
+    };
+
     const scheduleTabOverflowUpdate = () => {
       if (tabOverflowUpdatePending) return;
       tabOverflowUpdatePending = true;
       Vue.nextTick(() => {
         tabOverflowUpdatePending = false;
         updateTabOverflow();
+        Vue.nextTick(repositionOpenMenus);
       });
     };
 
@@ -1010,26 +1089,79 @@ export default {
       }
     };
 
+    const handleViewportResize = () => {
+      scheduleTabOverflowUpdate();
+      repositionOpenMenus();
+    };
+    const isElementRendered = el => {
+      if (!el || !el.isConnected) return false;
+      if (typeof window === 'undefined' || typeof window.getComputedStyle !== 'function') return true;
+      for (let node = el; node && node !== document.documentElement; node = node.parentElement) {
+        const cs = window.getComputedStyle(node);
+        if (cs.display === 'none' || cs.visibility === 'hidden') return false;
+      }
+      return true;
+    };
+    const handleDocumentKeydown = event => {
+      if (event.defaultPrevented || event.key !== 'Escape' || !store.workbenchExpanded) return;
+      if (tabContextMenu.visible && isElementRendered(tabContextMenuElement.value)) {
+        event.preventDefault();
+        const originatingItemId = tabContextMenu.itemId;
+        tabContextMenu.visible = false;
+        if (originatingItemId) focusWorkbenchItem(originatingItemId);
+        return;
+      }
+      if (openItemsMenu.visible && isElementRendered(openItemsMenuElement.value)) {
+        event.preventDefault();
+        closeOpenItemsMenu(true);
+        return;
+      }
+      if (launcherOpen.value && isElementRendered(launcherMenu.value)) {
+        event.preventDefault();
+        closeLauncher(true);
+      }
+    };
+
     Vue.onMounted(() => {
       window.addEventListener('open-file-in-explorer', handleOpenFile);
       window.addEventListener('workbench-open-browser', handleOpenBrowser);
       window.addEventListener('workbench-open-capability', handleOpenCapability);
       window.addEventListener('workbench-file-items-changed', handleFileItemsChanged);
       document.addEventListener('click', handleDocumentClick);
+      document.addEventListener('keydown', handleDocumentKeydown);
       if (typeof ResizeObserver !== 'undefined' && panelRoot.value) {
         panelResizeObserver = new ResizeObserver(() => {
           scheduleTabOverflowUpdate();
+          repositionOpenMenus();
           notifyWorkbenchResize();
         });
         panelResizeObserver.observe(panelRoot.value);
       }
-      window.addEventListener('resize', scheduleTabOverflowUpdate);
+      window.addEventListener('resize', handleViewportResize);
       scheduleTabOverflowUpdate();
     });
 
     Vue.watch(
+      () => store.workbenchExpanded,
+      expanded => {
+        if (!expanded) {
+          closeLauncher(false);
+          closeWorkbenchMenus();
+        }
+      },
+    );
+
+    Vue.watch(
       [activeWorkbenchItemId, workbenchItems],
       () => Vue.nextTick(keepActiveItemVisible),
+      { flush: 'post' },
+    );
+
+    Vue.watch(
+      () => [openItemsMenu.visible, hiddenWorkbenchItemIds.value.length],
+      ([visible]) => {
+        if (visible) repositionOpenItemsMenu();
+      },
       { flush: 'post' },
     );
 
@@ -1040,7 +1172,8 @@ export default {
       window.removeEventListener('workbench-open-capability', handleOpenCapability);
       window.removeEventListener('workbench-file-items-changed', handleFileItemsChanged);
       document.removeEventListener('click', handleDocumentClick);
-      window.removeEventListener('resize', scheduleTabOverflowUpdate);
+      document.removeEventListener('keydown', handleDocumentKeydown);
+      window.removeEventListener('resize', handleViewportResize);
       panelResizeObserver?.disconnect();
       panelResizeObserver = null;
     });

@@ -65,6 +65,7 @@ export default {
       :class="{
         'is-drawer-open': drawerOpen,
         'is-workbench-widened': workbenchWidened,
+        'is-workbench-maximized': drawerOpen && workbenchMaximized,
         'is-drag-mode': dragActive,
       }"
       @wheel="onStageWheel"
@@ -241,6 +242,7 @@ export default {
                 <span class="cosmos-hover-title">{{ s.title }}</span>
                 <span class="cosmos-hover-time">{{ s.updatedLabel }}</span>
               </div>
+              <div v-if="s.projectPath" class="cosmos-hover-project" :title="s.projectPath">{{ s.projectPath }}</div>
               <div class="cosmos-hover-snippet" :class="{ 'is-waiting': s.status === 'waiting' }">{{ s.summary }}</div>
             </div>
           </button>
@@ -351,6 +353,7 @@ export default {
         :planet-id="assignments.agentToPlanet[quickAgent.id] || 'earth'"
         @close="quickAgentId = null"
         @open-conversation="openAgentConversationFromQuick"
+        @open-search="openCosmosSessionSearch($event?.agentId)"
         @routed="onAutoRouted"
         @open-llm-config="openAgentLlmConfig"
       />
@@ -358,15 +361,17 @@ export default {
       <!-- Right Feathered Planetary Conversation Drawer -->
       <CosmosConversationDrawer
         v-if="drawerOpen && drawerAgent"
+        ref="drawerRef"
         :agent="drawerAgent"
         :planet-id="assignments.agentToPlanet[drawerAgent.id] || 'earth'"
         :all-agents="projectedAgentList"
+        :agent-to-planet="assignments.agentToPlanet"
         :widened="workbenchWidened"
         @close="closeDrawer"
         @select-session="onDrawerSelectSession"
         @create-session="openSessionCreate"
         @open-llm-config="openAgentLlmConfig"
-        @toggle-widen="workbenchWidened = !workbenchWidened"
+        @toggle-widen="toggleWorkbenchWiden"
         @message-sent="emitTelemetryBeam"
       />
 
@@ -452,6 +457,7 @@ export default {
     const glCanvasRef = Vue.ref(null);
     const hudCanvasRef = Vue.ref(null);
     const hoverCardRef = Vue.ref(null);
+    const drawerRef = Vue.ref(null);
 
     const domRefs = {
       planets: {},
@@ -479,6 +485,7 @@ export default {
     const drawerOpen = Vue.ref(false);
     const drawerAgentId = Vue.ref(null);
     const workbenchWidened = Vue.ref(false);
+    const workbenchMaximized = Vue.computed(() => Boolean(store.workbenchExpanded && store.workbenchMaximized));
     const hoverPlanetId = Vue.ref(null);
     const hoverCardPinned = Vue.ref(false);
     const hoverCardStyle = Vue.ref({ left: '0px', top: '0px' });
@@ -1002,12 +1009,51 @@ export default {
       openSessionInDrawer(agentId, session);
     }
 
+    function openCosmosSessionSearch(preferredAgentId = null) {
+      const isValidAgent = (id) => Boolean(id && projectedAgentsMap.value[id]);
+      if (drawerOpen.value && drawerRef.value && isValidAgent(drawerAgentId.value)
+          && (!preferredAgentId || preferredAgentId === drawerAgentId.value)) {
+        drawerRef.value.openSessionSwitcher?.({ focusSearch: true });
+        return;
+      }
+      const targetId = [
+        preferredAgentId,
+        quickAgentId.value,
+        drawerAgentId.value,
+        store.currentAgent,
+        projectedAgentList.value[0]?.id,
+      ].find(isValidAgent) || null;
+      if (!targetId) return;
+      if (currentBand.value !== 'solar') jumpToScale(13.0);
+      openAgentConversationFromQuick({ agentId: targetId, sessionId: null });
+      Vue.nextTick(() => drawerRef.value?.openSessionSwitcher?.({ focusSearch: true }));
+    }
+
     function onDrawerSelectSession({ agentId, session }) { openSessionInDrawer(agentId, session); }
+
+    function collapseOpenWorkbench() {
+      if (store.workbenchExpanded) {
+        if (typeof store.toggleWorkbench === 'function') store.toggleWorkbench();
+        else store.workbenchExpanded = false;
+      }
+      if (store.workbenchMaximized) store.workbenchMaximized = false;
+    }
+
+    function toggleWorkbenchWiden() {
+      if (store.workbenchMaximized) {
+        if (typeof store.toggleWorkbenchMaximized === 'function') store.toggleWorkbenchMaximized();
+        else store.workbenchMaximized = false;
+        workbenchWidened.value = false;
+        return;
+      }
+      workbenchWidened.value = !workbenchWidened.value;
+    }
 
     function closeDrawer() {
       drawerOpen.value = false;
+      drawerAgentId.value = null;
       workbenchWidened.value = false;
-      if (store.workbenchExpanded) store.workbenchExpanded = false;
+      collapseOpenWorkbench();
     }
 
     function emitTelemetryBeam({ planetId }) {
@@ -1154,7 +1200,7 @@ export default {
     }
     function abandonCosmos() {
       constantsOpen.value = false;
-      if (store.workbenchExpanded) store.workbenchExpanded = false;
+      collapseOpenWorkbench();
       store.setUiMode('classic');
     }
 
@@ -1177,6 +1223,13 @@ export default {
     }
 
     function onKeyDown(e) {
+      if (e.defaultPrevented) return;
+      if ((e.metaKey || e.ctrlKey) && !e.altKey && String(e.key || '').toLowerCase() === 'k') {
+        if (settingsModal.open || agentSettingsModal.open || sessionCreateModal.open) return;
+        e.preventDefault();
+        openCosmosSessionSearch();
+        return;
+      }
       if (e.key !== 'Escape') return;
       if (settingsModal.open) { settingsModal.open = false; return; }
       if (agentSettingsModal.open) { agentSettingsModal.open = false; return; }
@@ -1185,7 +1238,8 @@ export default {
       if (constantsOpen.value) { constantsOpen.value = false; return; }
       if (bookCreateOpen.value) { bookCreateOpen.value = false; return; }
       if (eventSim.active?.observing) { onReturnFromEvent(); return; }
-      if (store.workbenchExpanded && drawerOpen.value) { store.workbenchExpanded = false; return; }
+      if (store.workbenchExpanded && drawerOpen.value) { collapseOpenWorkbench(); return; }
+      if (drawerOpen.value && drawerRef.value?.isHistoryOpen?.()) { drawerRef.value.closeSessionSwitcher?.(); return; }
       if (drawerOpen.value) { closeDrawer(); return; }
       if (quickAgentId.value) { quickAgentId.value = null; return; }
       if (currentBand.value !== 'solar') jumpToScale(13.0);
@@ -1275,7 +1329,7 @@ export default {
             currentBand: currentBand.value,
             drawerOpen: drawerOpen.value,
             quickOpen: Boolean(quickAgentId.value),
-            workbenchWidened: workbenchWidened.value,
+            workbenchWidened: workbenchWidened.value || workbenchMaximized.value,
             focusedPlanetId: focusedPlanetId.value,
             dragActive: dragActive.value,
             dragOverPlanetId: dragOverPlanetId.value,
@@ -1340,7 +1394,7 @@ export default {
     });
 
     return {
-      glCanvasRef, hudCanvasRef, hoverCardRef, domRefs, setMapRef, canvasEpoch, rendererMode,
+      glCanvasRef, hudCanvasRef, hoverCardRef, drawerRef, domRefs, setMapRef, canvasEpoch, rendererMode,
       planets: PLANETS, bookDomains: BOOK_DOMAINS,
       portals: [
         { id: 'to-galaxy', labelKey: 'cosmos.scale.galaxy', scale: '10²¹', target: 21.0, ring: 54 },
@@ -1354,7 +1408,7 @@ export default {
         { band: 'horizon', exp: '10⁷', labelKey: 'cosmos.scale.horizon', target: 7.0 },
       ],
       constants, constantsOpen, galaxyBooks,
-      quickAgentId, quickAgent, drawerOpen, drawerAgent, workbenchWidened,
+      quickAgentId, quickAgent, drawerOpen, drawerAgent, workbenchWidened, workbenchMaximized,
       hoverPlanetId, hoverCardAgent, hoverPreviewSessions, hoverCardStyle, emptyPlanetMenu,
       camOrbiting, currentBand, projectedAgentList, assignments, agentsByPlanet, focusedPlanetId, waitingAgent,
       dragActive, dragFromPlanetId, dragOverPlanetId, dragX, dragY, dragIsSwap, dragGhostText,
@@ -1365,7 +1419,7 @@ export default {
       planetTagClass, planetPipClass,
       onCanvasPointerDown, resetCamera, onPlanetPointerDown, onPlanetEnter, onPlanetLeave,
       onHoverCardEnter, onHoverCardLeave, onStageWheel, jumpToScale,
-      openSessionInDrawer, openAgentConversationFromQuick, onDrawerSelectSession, closeDrawer,
+      openSessionInDrawer, openAgentConversationFromQuick, openCosmosSessionSearch, onDrawerSelectSession, toggleWorkbenchWiden, closeDrawer,
       emitTelemetryBeam, onAutoRouted, jumpToWaitingAgent, assignFromMenu,
       onObserveEvent, onFocusDistantEvent, onReturnFromEvent, onStopEvent, onToggleAutoEvents, onToggleAutoZoom, onTogglePauseEvent, onReplayEvent, onNextRandomEvent, onSetEventZoom,
       onUpdateConstant, onAssignPlanet, openYeaftSettings, openYeaftAgentSettings, openAgentLlmConfig, openSessionCreate, onSessionCreated,

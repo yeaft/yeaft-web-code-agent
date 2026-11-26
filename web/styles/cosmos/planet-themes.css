@@ -17,8 +17,8 @@
   --p-ink: rgba(242, 248, 255, 0.96);
   --p-muted: rgba(176, 204, 234, 0.80);
   --p-faint: rgba(144, 174, 208, 0.56);
-  --p-user-bg: rgba(110, 196, 255, 0.14);
-  --p-user-border: rgba(110, 196, 255, 0.30);
+  --p-user-bg: rgba(255, 255, 255, 0.05);
+  --p-user-border: rgba(255, 255, 255, 0.11);
   --p-ai-bar: rgba(110, 232, 196, 0.48);
   --p-radius: 13px;
   --p-send-ink: #03101d;
@@ -38,8 +38,8 @@
   --p-accent-rgb: 104, 200, 255;
   --p-border: rgba(118, 202, 255, 0.20);
   --p-border-strong: rgba(118, 202, 255, 0.48);
-  --p-user-bg: linear-gradient(135deg, rgba(64, 166, 255, 0.20), rgba(54, 212, 186, 0.12));
-  --p-user-border: rgba(116, 206, 255, 0.34);
+  --p-user-bg: rgba(118, 178, 232, 0.065);
+  --p-user-border: rgba(126, 200, 255, 0.15);
   --p-ai-bar: #5ce0c4;
   --p-radius: 14px;
 }
@@ -72,8 +72,8 @@
   --p-ink: rgba(253, 246, 234, 0.96);
   --p-muted: rgba(224, 204, 172, 0.80);
   --p-faint: rgba(190, 168, 132, 0.56);
-  --p-user-bg: linear-gradient(135deg, rgba(240, 198, 120, 0.18), rgba(188, 138, 64, 0.10));
-  --p-user-border: rgba(240, 198, 120, 0.36);
+  --p-user-bg: rgba(240, 198, 120, 0.06);
+  --p-user-border: rgba(240, 198, 120, 0.16);
   --p-ai-bar: rgba(240, 198, 120, 0.60);
   --p-radius: 9px;
   --p-send-ink: #1a1204;
@@ -114,8 +114,8 @@
   --p-ink: rgba(255, 244, 235, 0.96);
   --p-muted: rgba(228, 192, 170, 0.80);
   --p-faint: rgba(196, 154, 130, 0.56);
-  --p-user-bg: linear-gradient(135deg, rgba(232, 124, 72, 0.20), rgba(186, 82, 50, 0.12));
-  --p-user-border: rgba(240, 152, 98, 0.38);
+  --p-user-bg: rgba(232, 146, 98, 0.06);
+  --p-user-border: rgba(240, 152, 98, 0.16);
   --p-ai-bar: rgba(240, 166, 110, 0.58);
   --p-radius: 15px;
   --p-send-ink: #1e0c04;
@@ -145,8 +145,8 @@
   --p-ink: rgba(255, 241, 235, 0.96);
   --p-muted: rgba(232, 182, 166, 0.80);
   --p-faint: rgba(198, 140, 122, 0.56);
-  --p-user-bg: rgba(245, 112, 74, 0.18);
-  --p-user-border: rgba(245, 112, 74, 0.42);
+  --p-user-bg: rgba(245, 118, 82, 0.06);
+  --p-user-border: rgba(245, 112, 74, 0.17);
   --p-ai-bar: rgba(245, 112, 74, 0.64);
   --p-radius: 5px;
   --p-send-ink: #1f0602;
@@ -178,8 +178,8 @@
   --p-ink: rgba(248, 250, 255, 0.96);
   --p-muted: rgba(196, 204, 220, 0.78);
   --p-faint: rgba(154, 162, 178, 0.56);
-  --p-user-bg: rgba(220, 229, 242, 0.13);
-  --p-user-border: rgba(220, 229, 242, 0.34);
+  --p-user-bg: rgba(220, 229, 242, 0.055);
+  --p-user-border: rgba(220, 229, 242, 0.15);
   --p-ai-bar: rgba(220, 229, 242, 0.54);
   --p-radius: 3px;
   --p-send-ink: #0a0c10;
@@ -208,8 +208,8 @@
   --p-ink: rgba(255, 248, 234, 0.96);
   --p-muted: rgba(232, 206, 162, 0.80);
   --p-faint: rgba(200, 170, 122, 0.56);
-  --p-user-bg: linear-gradient(135deg, rgba(248, 192, 94, 0.20), rgba(232, 146, 56, 0.12));
-  --p-user-border: rgba(248, 192, 94, 0.38);
+  --p-user-bg: rgba(248, 192, 94, 0.06);
+  --p-user-border: rgba(248, 192, 94, 0.16);
   --p-ai-bar: rgba(248, 192, 94, 0.58);
   --p-radius: 18px;
   --p-send-ink: #1d1202;
@@ -239,8 +239,8 @@
   --p-ink: rgba(236, 253, 255, 0.96);
   --p-muted: rgba(168, 224, 232, 0.80);
   --p-faint: rgba(128, 190, 202, 0.56);
-  --p-user-bg: rgba(116, 237, 245, 0.16);
-  --p-user-border: rgba(116, 237, 245, 0.38);
+  --p-user-bg: rgba(116, 237, 245, 0.055);
+  --p-user-border: rgba(116, 237, 245, 0.16);
   --p-ai-bar: rgba(116, 237, 245, 0.58);
   --p-radius: 11px;
   --p-send-ink: #03191c;
@@ -281,8 +281,8 @@
   --p-ink: rgba(238, 244, 255, 0.96);
   --p-muted: rgba(170, 192, 244, 0.80);
   --p-faint: rgba(130, 158, 222, 0.56);
-  --p-user-bg: linear-gradient(135deg, rgba(78, 128, 255, 0.22), rgba(52, 86, 228, 0.13));
-  --p-user-border: rgba(108, 156, 255, 0.42);
+  --p-user-bg: rgba(108, 156, 255, 0.065);
+  --p-user-border: rgba(108, 156, 255, 0.17);
   --p-ai-bar: rgba(108, 156, 255, 0.62);
   --p-radius: 12px;
   --p-send-ink: #02081c;

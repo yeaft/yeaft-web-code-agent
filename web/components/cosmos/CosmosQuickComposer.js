@@ -20,7 +20,7 @@ export default {
     agent: { type: Object, required: true },
     planetId: { type: String, required: true },
   },
-  emits: ['close', 'open-conversation', 'routed', 'open-llm-config'],
+  emits: ['close', 'open-conversation', 'open-search', 'routed', 'open-llm-config'],
   template: `
     <section
       class="cosmos-quick-composer"
@@ -38,6 +38,15 @@ export default {
           <span v-if="!hasRunningSessions" class="cosmos-quick-idle-hint">{{ $t('cosmos.quick.noRunningHint') }}</span>
         </div>
         <div class="cosmos-quick-head-actions">
+          <button
+            type="button"
+            class="cosmos-icon-btn"
+            :title="$t('cosmos.panel.searchSessions')"
+            :aria-label="$t('cosmos.panel.searchSessions')"
+            @click="$emit('open-search', { agentId: agent.id })"
+          >
+            <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+          </button>
           <button
             type="button"
             class="cosmos-quick-open-btn"

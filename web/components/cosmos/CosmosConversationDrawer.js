@@ -23,6 +23,14 @@ import {
 import { sessionActivityRows } from '../../stores/helpers/session-activity.js';
 import { revealOutlineResult } from '../../utils/message-search-navigation.js';
 import { alertDialog } from '../../utils/dialog.js';
+import {
+  buildCosmosProjectSessionTree,
+  filterCosmosSessions,
+} from '../../cosmos/agent-projection.js';
+import {
+  requestSessionDiscovery,
+  supportsSessionDiscovery,
+} from '../../stores/helpers/session-discovery.js';
 
 export default {
   name: 'CosmosConversationDrawer',
@@ -37,6 +45,7 @@ export default {
     agent: { type: Object, required: true },
     planetId: { type: String, required: true },
     allAgents: { type: Array, default: () => [] },
+    agentToPlanet: { type: Object, default: () => ({}) },
     widened: { type: Boolean, default: false },
   },
   emits: [
@@ -65,7 +74,7 @@ export default {
             :aria-expanded="historyOpen ? 'true' : 'false'"
             :title="$t('cosmos.panel.history')"
             :aria-label="$t('cosmos.panel.history')"
-            @click="historyOpen = !historyOpen"
+            @click="toggleHistoryDrawer"
           >
             <svg viewBox="0 0 24 24"><path d="M4 7h16M4 12h16M4 17h12"/></svg>
           </button>
@@ -78,6 +87,14 @@ export default {
               <span class="cosmos-drawer-planet-badge">{{ $t('cosmos.planets.' + planetId + '.name') }} · {{ $t('cosmos.planets.' + planetId + '.theme') }}</span>
             </div>
             <div class="cosmos-drawer-sub-row">
+              <span
+                v-if="activeSessionProjectPath"
+                class="cosmos-drawer-project-chip"
+                :title="activeSessionProjectPath"
+              >
+                <svg viewBox="0 0 20 24" aria-hidden="true"><path d="M2.5 7.5a2 2 0 0 1 2-2h4l1.8 2H15.5a2 2 0 0 1 2 2V18h-15z"/></svg>
+                <span>{{ activeSessionProjectPath }}</span>
+              </span>
               <span class="cosmos-drawer-session-title" :title="activeSessionTitle">{{ activeSessionTitle }}</span>
             </div>
           </div>
@@ -131,7 +148,7 @@ export default {
           <button
             v-if="workbenchOpen"
             type="button"
-            class="cosmos-icon-btn"
+            class="cosmos-icon-btn cosmos-drawer-widen-btn"
             :class="{ 'is-active': widened }"
             :title="$t('cosmos.panel.widen')"
             :aria-label="$t('cosmos.panel.widen')"
@@ -152,42 +169,115 @@ export default {
         </div>
       </header>
 
-      <!-- Sidebar History Switcher (opened via ☰) -->
+      <!-- Sidebar History, Project Tree & Session Search Switcher (opened via ☰) -->
       <div v-if="historyOpen" class="cosmos-history-drawer">
-        <div class="cosmos-history-group-label">{{ $t('cosmos.panel.allSessions') }}</div>
-        <button
-          v-for="s in agent.sessions"
-          :key="s.catalogKey"
-          type="button"
-          class="cosmos-history-row"
-          :class="{ 'is-active': isSessionSelected(s) }"
-          @click="pickSession(agent.id, s)"
+        <form
+          class="cosmos-history-search"
+          role="search"
+          :aria-label="$t('cosmos.panel.searchSessions')"
+          @submit.prevent="submitSessionSearch"
         >
-          <span class="cosmos-history-row-left">
-            <span class="cosmos-status-pip" :class="s.status"></span>
-            <span class="cosmos-history-row-title">{{ s.title }}</span>
-          </span>
-          <span class="cosmos-history-row-meta">{{ s.updatedLabel }}</span>
-        </button>
-        <div v-if="!agent.sessions.length" class="cosmos-hover-empty">{{ $t('cosmos.agent.noSessions') }}</div>
-
-        <template v-for="other in otherAgentsWithSessions" :key="other.id">
-          <div class="cosmos-history-group-label">{{ other.name }}</div>
+          <svg class="cosmos-history-search-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+          <input
+            ref="sessionSearchInputRef"
+            v-model="sessionSearchQuery"
+            type="search"
+            autocomplete="off"
+            maxlength="160"
+            class="cosmos-history-search-input"
+            :placeholder="$t('cosmos.panel.searchSessionsPlaceholder')"
+            :aria-label="$t('cosmos.panel.searchSessions')"
+            @keydown.esc.stop.prevent="onSessionSearchEsc"
+          />
           <button
-            v-for="s in other.sessions.slice(0, 6)"
-            :key="s.catalogKey"
+            v-if="sessionSearchQuery"
             type="button"
-            class="cosmos-history-row"
-            :class="{ 'is-active': isSessionSelected(s) }"
-            @click="pickSession(other.id, s)"
-          >
-            <span class="cosmos-history-row-left">
-              <span class="cosmos-status-pip" :class="s.status"></span>
-              <span class="cosmos-history-row-title">{{ s.title }}</span>
-            </span>
-            <span class="cosmos-history-row-meta">{{ s.updatedLabel }}</span>
-          </button>
-        </template>
+            class="cosmos-history-search-clear"
+            :title="$t('cosmos.panel.searchSessionsClear')"
+            :aria-label="$t('cosmos.panel.searchSessionsClear')"
+            @click="clearSessionSearch"
+          >×</button>
+        </form>
+
+        <div class="cosmos-history-scroll">
+          <!-- Filtered + Full-Text Discovery Results (Current Planet / Agent Only) -->
+          <template v-if="sessionSearchText">
+            <button
+              v-for="hit in mergedSessionSearchResults"
+              :key="hit.key"
+              type="button"
+              class="cosmos-history-row cosmos-history-search-hit"
+              :class="{ 'is-active': isSessionSelected(hit.session) }"
+              @click="pickSession(agent.id, hit.session)"
+            >
+              <div class="cosmos-history-hit-top">
+                <span class="cosmos-history-row-left">
+                  <span class="cosmos-status-pip" :class="hit.session.status"></span>
+                  <span class="cosmos-history-row-title">{{ hit.session.title }}</span>
+                </span>
+                <span class="cosmos-history-row-meta">{{ hit.session.updatedLabel }}</span>
+              </div>
+              <div v-if="hit.session.projectPath" class="cosmos-history-hit-tags">
+                <span class="cosmos-history-project-pill">
+                  <svg viewBox="0 0 20 24" aria-hidden="true"><path d="M2.5 7.5a2 2 0 0 1 2-2h4l1.8 2H15.5a2 2 0 0 1 2 2V18h-15z"/></svg>
+                  <span>{{ hit.session.projectPath }}</span>
+                </span>
+              </div>
+              <div v-if="hit.snippet" class="cosmos-history-snippet">{{ hit.snippet }}</div>
+            </button>
+
+            <div v-if="sessionSearchPending" class="cosmos-history-status" role="status">
+              {{ $t('cosmos.panel.searchSessionsLoading') }}
+            </div>
+            <div v-else-if="!mergedSessionSearchResults.length" class="cosmos-hover-empty">
+              {{ $t('cosmos.panel.searchSessionsEmpty') }}
+            </div>
+          </template>
+
+          <!-- Current Planet Project Folder Tree + Ungrouped Sessions -->
+          <template v-else>
+            <div class="cosmos-history-group-label">{{ $t('cosmos.panel.allSessions') }}</div>
+
+            <template v-for="item in currentProjectTree.items" :key="item.key">
+              <button
+                v-if="item.kind === 'folder'"
+                type="button"
+                class="cosmos-history-folder"
+                :class="{ 'is-collapsed': item.collapsed }"
+                :style="{ '--tree-depth': item.depth }"
+                :aria-expanded="item.collapsed ? 'false' : 'true'"
+                @click="toggleProjectFolder(item.project.id)"
+              >
+                <svg class="cosmos-history-chevron" viewBox="0 0 24 24" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg>
+                <svg class="cosmos-history-folder-icon" viewBox="0 0 20 24" aria-hidden="true"><path d="M2.5 7.5a2 2 0 0 1 2-2h4l1.8 2H15.5a2 2 0 0 1 2 2V18h-15z"/></svg>
+                <span class="cosmos-history-folder-name" :title="item.pathLabel">{{ item.project.name }}</span>
+                <span v-if="item.status === 'waiting' || item.status === 'running'" class="cosmos-status-pip" :class="item.status"></span>
+                <span class="cosmos-history-folder-count">{{ item.count }}</span>
+              </button>
+
+              <template v-else>
+                <div v-if="item.groupStart" class="cosmos-history-group-label cosmos-history-ungrouped-label">
+                  {{ $t('cosmos.panel.ungroupedSessions') }}
+                </div>
+                <button
+                  type="button"
+                  class="cosmos-history-row"
+                  :class="{ 'is-active': isSessionSelected(item.session), 'is-nested': item.depth > 0 }"
+                  :style="{ '--tree-depth': item.depth }"
+                  @click="pickSession(agent.id, item.session)"
+                >
+                  <span class="cosmos-history-row-left">
+                    <span class="cosmos-status-pip" :class="item.session.status"></span>
+                    <span class="cosmos-history-row-title">{{ item.session.title }}</span>
+                  </span>
+                  <span class="cosmos-history-row-meta">{{ item.session.updatedLabel }}</span>
+                </button>
+              </template>
+            </template>
+
+            <div v-if="!agent.sessions.length" class="cosmos-hover-empty">{{ $t('cosmos.agent.noSessions') }}</div>
+          </template>
+        </div>
       </div>
 
       <!-- Inline Conversation Outline Search -->
@@ -330,20 +420,31 @@ export default {
         </div>
 
         <!-- Real Yeaft Workbench (Files / Terminal / Git / Browser) -->
-        <div v-if="canUseWorkbench && workbenchOpen" class="cosmos-workbench-host">
-          <WorkbenchPanel :owner-route="activeRoute" :owner-work-dir="activeWorkDir" />
+        <!-- Bound directly to chatStore (no ownerRoute) so store.workbenchExpanded/Maximized stay live and tabs survive collapse. -->
+        <div v-if="canUseWorkbench" v-show="workbenchOpen" class="cosmos-workbench-host">
+          <WorkbenchPanel />
         </div>
       </div>
     </aside>
   `,
-  setup(props, { emit }) {
+  setup(props, { emit, expose }) {
     const store = Pinia.useChatStore();
     const sessionsStore = Pinia.useSessionsStore ? Pinia.useSessionsStore() : null;
     const { proxy } = Vue.getCurrentInstance();
     const $t = (k, p) => (proxy?.$t ? proxy.$t(k, p) : k);
 
     const DEFAULT_HISTORY_SENDER = 'user';
+    const SESSION_SEARCH_DEBOUNCE_MS = 220;
     const historyOpen = Vue.ref(false);
+    const sessionSearchQuery = Vue.ref('');
+    const sessionSearchInputRef = Vue.ref(null);
+    const sessionSearchPending = Vue.ref(false);
+    const sessionDiscoveryResponses = Vue.ref([]);
+    const collapsedProjectIds = Vue.ref(new Set());
+    let sessionSearchTimer = null;
+    let sessionSearchController = null;
+    let sessionDiscoveryGeneration = 0;
+
     const searchOpen = Vue.ref(false);
     const searchActiveMessageId = Vue.ref('');
     const historySearchQuery = Vue.ref('');
@@ -384,14 +485,39 @@ export default {
       return props.agent?.folder || $t('cosmos.panel.empty');
     });
 
-    const activeWorkDir = Vue.computed(() => (
-      activeGroup.value?.workDir
-      || store.effectiveWorkDir
-      || props.agent?.workDir
-      || ''
+    const activeProjectedSession = Vue.computed(() => (
+      (props.agent?.sessions || []).find((s) => isSessionSelected(s)) || null
     ));
 
-    const canUseWorkbench = Vue.computed(() => Boolean(props.agent?.online && hasSelectedSession.value));
+    const currentProjectTree = Vue.computed(() => (
+      buildCosmosProjectSessionTree(
+        store.sessionProjects || [],
+        props.agent?.sessions || [],
+        collapsedProjectIds.value,
+      )
+    ));
+
+    const activeSessionProjectPath = Vue.computed(() => {
+      if (activeProjectedSession.value?.projectPath) return activeProjectedSession.value.projectPath;
+      if (!isYeaftView.value) return '';
+      const sid = store.yeaftActiveSessionFilter || sessionsStore?.activeSessionId || null;
+      const aid = props.agent?.id || null;
+      if (!sid || !aid) return '';
+      const projects = Array.isArray(store.sessionProjects) ? store.sessionProjects : [];
+      for (const project of projects) {
+        const members = Array.isArray(project?.members)
+          ? project.members
+          : (project?.agentId ? (project.sessionIds || []).map((sessionId) => ({ agentId: project.agentId, sessionId })) : []);
+        if (members.some((m) => m?.agentId === aid && m?.sessionId === sid)) {
+          return currentProjectTree.value.tree.pathOf(project.id).map((p) => p.name).filter(Boolean).join(' / ')
+            || project.name
+            || '';
+        }
+      }
+      return '';
+    });
+
+    const canUseWorkbench = Vue.computed(() => Boolean(props.agent?.online && hasSelectedSession.value && activeRoute.value));
     const workbenchOpen = Vue.computed(() => Boolean(canUseWorkbench.value && store.workbenchExpanded));
 
     const ordinarySession = Vue.computed(() => {
@@ -457,9 +583,250 @@ export default {
       activeModelMeta.value,
     ));
 
-    const otherAgentsWithSessions = Vue.computed(() => (
-      (props.allAgents || []).filter((a) => a.id !== props.agent.id && a.sessions.length > 0)
+    // Strictly scoped to the active planet's Agent (never cross-planet)
+    const currentAgentScope = Vue.computed(() => (props.agent ? [props.agent] : []));
+
+    const planetLabelByAgentId = Vue.computed(() => {
+      if (!props.agent?.id) return {};
+      const pid = props.agentToPlanet?.[props.agent.id] || props.planetId || '';
+      return pid ? { [props.agent.id]: $t(`cosmos.planets.${pid}.name`) } : {};
+    });
+
+    const sessionSearchText = Vue.computed(() => (
+      historyOpen.value ? sessionSearchQuery.value.trim() : ''
     ));
+
+    const discoveryAgentId = Vue.computed(() => {
+      const aid = props.agent?.id;
+      if (!aid || store.sessionDiscoverySupported !== true || store.connectionState !== 'connected') return null;
+      const rawAgents = Array.isArray(store.agents) ? store.agents : [];
+      const match = rawAgents.find((a) => a?.id === aid && a.online && supportsSessionDiscovery(a));
+      return match ? aid : null;
+    });
+
+    const agentDeletionEpochKey = Vue.computed(() => {
+      const map = store.yeaftTurnDeleteHistoryBySession;
+      const aid = props.agent?.id;
+      if (!map || !aid) return '';
+      const parts = [];
+      for (const [key, deletion] of Object.entries(map)) {
+        if (deletion?.agentId === aid) {
+          parts.push(`${key}:${deletion.epoch ?? 0}`);
+        }
+      }
+      parts.sort();
+      return parts.join('|');
+    });
+
+    const localSessionSearchHits = Vue.computed(() => (
+      filterCosmosSessions(currentAgentScope.value, sessionSearchText.value, {
+        planetLabelByAgentId: planetLabelByAgentId.value,
+      })
+    ));
+
+    const canonicalSessionKey = (agentId, session) => (
+      session?.catalogKey
+      || `${agentId}\u001f${session?.runtimeProvider || 'yeaft'}\u001f${session?.id || ''}`
+    );
+
+    const mergedSessionSearchResults = Vue.computed(() => {
+      if (!sessionSearchText.value || !props.agent?.id) return [];
+      const currentAgentId = props.agent.id;
+      const byKey = new Map();
+      const ordered = [];
+
+      // FTS session_discovery returns native Yeaft sessions only; never join onto CLI rows.
+      const nativeYeaftBySessionId = new Map();
+      for (const s of (props.agent.sessions || [])) {
+        if (s?.runtimeProvider === 'yeaft' && s.id) {
+          nativeYeaftBySessionId.set(s.id, s);
+        }
+      }
+
+      for (const hit of localSessionSearchHits.value) {
+        if (hit.agent.id !== currentAgentId) continue;
+        const k = canonicalSessionKey(currentAgentId, hit.session);
+        if (byKey.has(k)) continue;
+        const entry = {
+          key: k,
+          agent: hit.agent,
+          session: hit.session,
+          snippet: '',
+        };
+        byKey.set(k, entry);
+        ordered.push(entry);
+      }
+
+      const ftsRows = [];
+      for (const resp of sessionDiscoveryResponses.value) {
+        if (resp?.agentId !== currentAgentId) continue;
+        const results = Array.isArray(resp.results) ? resp.results : [];
+        results.forEach((hit, rank) => {
+          if (!hit?.sessionId) return;
+          const nativeSession = nativeYeaftBySessionId.get(hit.sessionId);
+          if (!nativeSession) return;
+          const k = canonicalSessionKey(currentAgentId, nativeSession);
+          const snippet = typeof hit.snippet === 'string' ? hit.snippet.trim() : '';
+          if (byKey.has(k)) {
+            const existing = byKey.get(k);
+            if (!existing.snippet && snippet) existing.snippet = snippet;
+            return;
+          }
+          ftsRows.push({
+            k,
+            rank,
+            updatedAt: nativeSession.updatedAt || 0,
+            entry: {
+              key: k,
+              agent: props.agent,
+              session: nativeSession,
+              snippet,
+            },
+          });
+        });
+      }
+
+      ftsRows.sort((a, b) => a.rank - b.rank || b.updatedAt - a.updatedAt || a.k.localeCompare(b.k));
+      for (const item of ftsRows) {
+        if (byKey.has(item.k)) continue;
+        byKey.set(item.k, item.entry);
+        ordered.push(item.entry);
+      }
+
+      return ordered;
+    });
+
+    function cancelSessionDiscoverySearch() {
+      sessionDiscoveryGeneration += 1;
+      if (sessionSearchTimer) {
+        clearTimeout(sessionSearchTimer);
+        sessionSearchTimer = null;
+      }
+      sessionSearchController?.abort();
+      sessionSearchController = null;
+      sessionDiscoveryResponses.value = [];
+      sessionSearchPending.value = false;
+    }
+
+    async function runSessionDiscoverySearch(generation) {
+      const query = sessionSearchText.value;
+      const agentId = discoveryAgentId.value;
+      if (!query || !agentId || generation !== sessionDiscoveryGeneration) {
+        if (generation === sessionDiscoveryGeneration) sessionSearchPending.value = false;
+        return;
+      }
+      const controller = new AbortController();
+      const { signal } = controller;
+      sessionSearchController = controller;
+      try {
+        const data = await requestSessionDiscovery(store, agentId, 'search', { query }, signal);
+        if (!signal.aborted && generation === sessionDiscoveryGeneration
+            && props.agent?.id === agentId && Array.isArray(data?.results)) {
+          sessionDiscoveryResponses.value = [{ agentId, results: data.results }];
+        }
+      } catch {
+        // Local title/project hits remain visible even if FTS is unavailable or aborted.
+      } finally {
+        if (!signal.aborted && generation === sessionDiscoveryGeneration) {
+          sessionSearchPending.value = false;
+        }
+      }
+    }
+
+    function queueSessionDiscoverySearch(delay = SESSION_SEARCH_DEBOUNCE_MS) {
+      cancelSessionDiscoverySearch();
+      if (!sessionSearchText.value || !discoveryAgentId.value) return;
+      const generation = sessionDiscoveryGeneration;
+      sessionSearchPending.value = true;
+      sessionSearchTimer = setTimeout(() => {
+        sessionSearchTimer = null;
+        void runSessionDiscoverySearch(generation);
+      }, delay);
+    }
+
+    Vue.watch(
+      () => [sessionSearchText.value, discoveryAgentId.value, store.ws],
+      () => {
+        queueSessionDiscoverySearch();
+      },
+    );
+
+    Vue.watch(
+      agentDeletionEpochKey,
+      (next, prev) => {
+        if (next === prev || !sessionSearchText.value) return;
+        queueSessionDiscoverySearch(0);
+      },
+    );
+
+    Vue.watch(
+      () => props.agent?.id,
+      (next, prev) => {
+        if (next === prev) return;
+        sessionSearchQuery.value = '';
+        cancelSessionDiscoverySearch();
+      },
+    );
+
+    function expandActiveProjectAncestors() {
+      const pid = activeProjectedSession.value?.projectId;
+      if (!pid || !collapsedProjectIds.value.size) return;
+      const ancestors = currentProjectTree.value.tree.pathOf(pid);
+      if (!ancestors.length) return;
+      let changed = false;
+      const next = new Set(collapsedProjectIds.value);
+      for (const item of ancestors) {
+        if (next.delete(item.id)) changed = true;
+      }
+      if (changed) collapsedProjectIds.value = next;
+    }
+
+    function toggleProjectFolder(projectId) {
+      if (!projectId) return;
+      const next = new Set(collapsedProjectIds.value);
+      if (next.has(projectId)) next.delete(projectId);
+      else next.add(projectId);
+      collapsedProjectIds.value = next;
+    }
+
+    function closeHistoryDrawer() {
+      historyOpen.value = false;
+      sessionSearchQuery.value = '';
+      cancelSessionDiscoverySearch();
+    }
+
+    function toggleHistoryDrawer() {
+      if (historyOpen.value) {
+        closeHistoryDrawer();
+        return;
+      }
+      historyOpen.value = true;
+      expandActiveProjectAncestors();
+      Vue.nextTick(() => sessionSearchInputRef.value?.focus?.());
+    }
+
+    function clearSessionSearch() {
+      sessionSearchQuery.value = '';
+      cancelSessionDiscoverySearch();
+      Vue.nextTick(() => sessionSearchInputRef.value?.focus?.());
+    }
+
+    function onSessionSearchEsc() {
+      if (sessionSearchQuery.value) {
+        clearSessionSearch();
+      } else {
+        closeHistoryDrawer();
+      }
+    }
+
+    function submitSessionSearch() {
+      if (mergedSessionSearchResults.value.length > 0) {
+        const top = mergedSessionSearchResults.value[0];
+        pickSession(top.agent.id, top.session);
+      } else if (!sessionSearchPending.value && sessionSearchText.value) {
+        queueSessionDiscoverySearch(0);
+      }
+    }
 
     function isSessionSelected(s) {
       if (!s) return false;
@@ -471,7 +838,7 @@ export default {
     }
 
     function pickSession(agentId, session) {
-      historyOpen.value = false;
+      closeHistoryDrawer();
       closeSearch();
       emit('select-session', { agentId, session });
     }
@@ -677,12 +1044,34 @@ export default {
     Vue.onMounted(() => document.addEventListener('click', onDocClick));
     Vue.onBeforeUnmount(() => {
       clearSearchTimers();
+      cancelSessionDiscoverySearch();
       document.removeEventListener('click', onDocClick);
+    });
+
+    expose({
+      openSessionSwitcher({ focusSearch = true } = {}) {
+        historyOpen.value = true;
+        expandActiveProjectAncestors();
+        if (focusSearch) Vue.nextTick(() => sessionSearchInputRef.value?.focus?.());
+      },
+      closeSessionSwitcher() {
+        closeHistoryDrawer();
+      },
+      isHistoryOpen() {
+        return historyOpen.value;
+      },
     });
 
     return {
       store,
       historyOpen,
+      sessionSearchQuery,
+      sessionSearchInputRef,
+      sessionSearchText,
+      sessionSearchPending,
+      currentProjectTree,
+      mergedSessionSearchResults,
+      activeSessionProjectPath,
       searchOpen,
       searchActiveMessageId,
       historySearchRef,
@@ -695,7 +1084,6 @@ export default {
       activeGroup,
       hasSelectedSession,
       activeSessionTitle,
-      activeWorkDir,
       canUseWorkbench,
       workbenchOpen,
       ordinarySession,
@@ -710,8 +1098,13 @@ export default {
       activeModelLabel,
       effortOptions,
       activeEffort,
-      otherAgentsWithSessions,
       modelOptionMatchesRef,
+      toggleHistoryDrawer,
+      closeHistoryDrawer,
+      toggleProjectFolder,
+      clearSessionSearch,
+      onSessionSearchEsc,
+      submitSessionSearch,
       isSessionSelected,
       pickSession,
       refreshHistory,

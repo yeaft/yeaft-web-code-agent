@@ -1,5 +1,6 @@
 import { confirmDialog } from '../../utils/dialog.js';
 import { getFileType } from './fileEditor.js';
+import { clampFixedMenuCoordinates } from '../../utils/fixed-menu-position.js';
 
 /**
  * fileOperations — file CRUD operations composable for FilesTab.
@@ -149,12 +150,16 @@ export function createFileOperations(store, refs) {
   // Context menu
   const showContextMenu = (event, entry) => {
     const menuW = 180, menuH = 240;
-    let x = event.clientX, y = event.clientY;
-    if (x + menuW > window.innerWidth) x = window.innerWidth - menuW;
-    if (y + menuH > window.innerHeight) y = window.innerHeight - menuH;
+    const pos = clampFixedMenuCoordinates(event?.currentTarget || event?.target || null, {
+      viewportX: event.clientX,
+      viewportY: event.clientY,
+      width: menuW,
+      height: menuH,
+      margin: 4,
+    });
     contextMenu.entry = entry;
-    contextMenu.x = x;
-    contextMenu.y = y;
+    contextMenu.x = pos.x;
+    contextMenu.y = pos.y;
     contextMenu.visible = true;
   };
 
