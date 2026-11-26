@@ -138,11 +138,20 @@ export default {
         />
 
         <div class="sidebar-bottom">
-          <button class="sidebar-nav-item" @click="showSettingsPanel = true">
-            <NavigationIcon name="settings" :size="18" />
-            <span>{{ $t('chat.sidebar.settings') }}</span>
-            <span v-if="serverVersion" class="sidebar-version">{{ serverVersion }}</span>
-          </button>
+          <div class="sidebar-bottom-row">
+            <button class="sidebar-nav-item" @click="showSettingsPanel = true">
+              <NavigationIcon name="settings" :size="18" />
+              <span>{{ $t('chat.sidebar.settings') }}</span>
+              <span v-if="serverVersion" class="sidebar-version">{{ serverVersion }}</span>
+            </button>
+            <button
+              type="button"
+              class="sidebar-cosmos-btn"
+              :title="$t('cosmos.mode.enter')"
+              :aria-label="$t('cosmos.mode.enter')"
+              @click="store.setUiMode('cosmos')"
+            >✦</button>
+          </div>
         </div>
       </SessionSidebarShell>
       <SessionSidebarResizeHandle v-if="!store.workCenterOpen && !effectiveSidebarCollapsed && !isMobileView"

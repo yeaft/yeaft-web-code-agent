@@ -47,3 +47,11 @@
 @import './waiting/dragon.css';
 @import './waiting/cat.css';
 @import './waiting/dog.css';
+/* Yeaft Cosmos 4-scale universe UI modules */
+@import './cosmos/base.css';
+@import './cosmos/planets.css';
+@import './cosmos/events.css';
+@import './cosmos/planet-themes.css';
+@import './cosmos/conversation.css';
+@import './cosmos/quick-composer.css';
+@import './cosmos/constants.css';

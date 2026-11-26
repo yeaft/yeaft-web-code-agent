@@ -10,6 +10,7 @@ import en from './i18n/en.js';
 import LoginPage from './components/LoginPage.js';
 import ChatPage from './components/ChatPage.js';
 import YeaftPage from './components/YeaftPage.js';
+import CosmosPage from './components/cosmos/CosmosPage.js';
 import SplitPane from './components/SplitPane.js';
 import ToolLine from './components/ToolLine.js';
 import AppDialog from './components/AppDialog.js';
@@ -29,7 +30,7 @@ window.Pinia = {
 };
 
 const App = {
-  components: { LoginPage, ChatPage, YeaftPage, AppDialog, SessionMergeModal, UserShortcutsRuntime, PluginSaveNotices },
+  components: { LoginPage, ChatPage, YeaftPage, CosmosPage, AppDialog, SessionMergeModal, UserShortcutsRuntime, PluginSaveNotices },
   template: `
     <AppDialog />
     <div v-if="!authStore.initialized" class="auth-bootstrap" aria-busy="true"><span class="session-loading-spinner"></span></div>
@@ -38,7 +39,8 @@ const App = {
       <UserShortcutsRuntime />
       <PluginSaveNotices />
       <SessionMergeModal v-if="chatStore.sessionMergeSource" :source="chatStore.sessionMergeSource" @close="chatStore.sessionMergeSource = null" />
-      <YeaftPage v-if="chatStore.currentView === 'yeaft'" />
+      <CosmosPage v-if="chatStore.uiMode === 'cosmos'" />
+      <YeaftPage v-else-if="chatStore.currentView === 'yeaft'" />
       <ChatPage v-else />
     </template>
   `,

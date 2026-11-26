@@ -2,13 +2,14 @@ import { test as base } from '@playwright/test';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { TestServer, getAvailablePort, useTestServer, useMockAgent } from './test-server.js';
+import { TestServer, UI_MODE_FIXTURES, getAvailablePort, useTestServer, useMockAgent } from './test-server.js';
 import { MockAgent } from './mock-agent.js';
 
 // Each task scenario owns a fresh SQLite directory and ephemeral listen port.
 // Disconnected Agents/catalog rows from another case must not alter identity or
 // task/recents assertions; never reuse an online service or the developer DB.
 export const test = base.extend({
+  ...UI_MODE_FIXTURES,
   serverEnv: [{}, { option: true }],
   serverUrl: async ({ serverEnv }, use) => {
     const directory = await mkdtemp(join(tmpdir(), 'yeaft-task-browser-'));

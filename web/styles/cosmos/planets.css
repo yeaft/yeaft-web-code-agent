@@ -1,0 +1,529 @@
+/* ============================================================================
+ *  Yeaft Cosmos — Planetary Callouts, Active Flashing, Micro-Lists & Portals
+ * ============================================================================ */
+.cosmos-planet-node {
+  position: absolute;
+  left: 0;
+  top: 0;
+  transform: translate(-50%, -50%);
+  pointer-events: auto;
+  touch-action: none;
+}
+
+.cosmos-planet-hit {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  border-radius: 50%;
+  cursor: pointer;
+}
+
+.cosmos-planet-node.is-dragging .cosmos-planet-hit {
+  cursor: grabbing;
+}
+
+.cosmos-planet-tag {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 22px;
+  padding: 0 9px;
+  border-radius: 999px;
+  background: rgba(4, 9, 20, 0.62);
+  border: 1px solid rgba(186, 214, 255, 0.16);
+  backdrop-filter: blur(8px);
+  white-space: nowrap;
+  font-size: 11px;
+  letter-spacing: 0.01em;
+  color: rgba(238, 245, 255, 0.92);
+  transition: opacity 180ms ease, border-color 180ms ease, background 180ms ease, box-shadow 180ms ease;
+  cursor: pointer;
+}
+
+.cosmos-planet-tag.is-flashing-running {
+  border-color: rgba(124, 196, 255, 0.46);
+  animation: cosmos-tag-flash-cyan 2.2s ease-in-out infinite;
+}
+
+.cosmos-planet-tag.is-flashing-waiting {
+  border-color: rgba(255, 190, 92, 0.62);
+  animation: cosmos-tag-flash-amber 1.5s ease-in-out infinite;
+}
+
+@keyframes cosmos-tag-flash-cyan {
+  0%, 100% {
+    box-shadow: 0 0 6px rgba(124, 196, 255, 0.14);
+    border-color: rgba(124, 196, 255, 0.30);
+  }
+  50% {
+    box-shadow: 0 0 18px rgba(124, 196, 255, 0.54), inset 0 0 8px rgba(124, 196, 255, 0.18);
+    border-color: rgba(168, 224, 255, 0.86);
+  }
+}
+
+@keyframes cosmos-tag-flash-amber {
+  0%, 100% {
+    box-shadow: 0 0 8px rgba(255, 190, 92, 0.22);
+    border-color: rgba(255, 190, 92, 0.38);
+  }
+  50% {
+    box-shadow: 0 0 24px rgba(255, 190, 92, 0.66), inset 0 0 10px rgba(255, 190, 92, 0.24);
+    border-color: rgba(255, 220, 146, 0.96);
+  }
+}
+
+.cosmos-planet-node:hover .cosmos-planet-tag {
+  background: rgba(10, 18, 34, 0.86);
+  border-color: rgba(186, 214, 255, 0.38);
+  color: #fff;
+}
+
+.cosmos-planet-node.is-selected .cosmos-planet-tag {
+  border-color: rgba(124, 196, 255, 0.72);
+  background: rgba(10, 22, 44, 0.90);
+  box-shadow: 0 0 18px rgba(124, 196, 255, 0.28);
+  color: #fff;
+}
+
+.cosmos-planet-node.is-uninhabited .cosmos-planet-tag {
+  height: 19px;
+  padding: 0 7px;
+  font-size: 10px;
+  color: var(--c-muted);
+  background: rgba(4, 7, 15, 0.54);
+  border-color: rgba(186, 214, 255, 0.10);
+  opacity: 0;
+  pointer-events: none;
+}
+
+.cosmos-planet-node.is-uninhabited:hover .cosmos-planet-tag,
+.cosmos-page.is-drag-mode .cosmos-planet-node.is-uninhabited .cosmos-planet-tag {
+  opacity: 0.92;
+}
+
+.cosmos-planet-node.is-drop-target .cosmos-planet-tag {
+  opacity: 1 !important;
+  border-color: var(--c-gold);
+  color: #ffe3b3;
+  background: rgba(36, 24, 10, 0.90);
+  box-shadow: 0 0 22px rgba(244, 194, 122, 0.32);
+}
+
+.cosmos-planet-count {
+  font-family: var(--font-mono, monospace);
+  font-size: 10px;
+  color: var(--c-cyan);
+  padding-left: 2px;
+}
+
+.cosmos-planet-count.is-waiting {
+  color: var(--c-amber);
+}
+
+/* ── On-Stage Active Session Micro-List (2~3 Lines, Configurable) ── */
+.cosmos-live-card {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 214px;
+  padding: 5px 7px;
+  border-radius: 10px;
+  background: rgba(4, 9, 20, 0.56);
+  border: 1px solid rgba(186, 214, 255, 0.14);
+  backdrop-filter: blur(12px);
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.46);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  pointer-events: auto;
+  transition: opacity 200ms ease, border-color 180ms ease, background 180ms ease;
+}
+
+.cosmos-live-card:hover {
+  background: rgba(7, 14, 29, 0.82);
+  border-color: rgba(186, 214, 255, 0.34);
+}
+
+.cosmos-live-card.is-waiting {
+  border-color: rgba(255, 190, 92, 0.32);
+  background: rgba(18, 12, 5, 0.62);
+}
+
+.cosmos-live-row {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 3px 4px;
+  border-radius: 6px;
+  background: transparent;
+  border: 0;
+  color: inherit;
+  cursor: pointer;
+  transition: background 120ms ease;
+}
+
+.cosmos-live-row:hover {
+  background: rgba(255, 255, 255, 0.07);
+}
+
+.cosmos-live-row + .cosmos-live-row {
+  border-top: 1px solid rgba(186, 214, 255, 0.08);
+  padding-top: 5px;
+}
+
+.cosmos-live-top {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.cosmos-live-title {
+  flex: 1;
+  min-width: 0;
+  font-size: 10.5px;
+  font-weight: 500;
+  color: rgba(238, 246, 255, 0.94);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cosmos-live-time {
+  font-family: var(--font-mono, monospace);
+  font-size: 9px;
+  color: var(--c-faint);
+  flex-shrink: 0;
+}
+
+.cosmos-live-snippet {
+  margin-top: 2px;
+  padding-left: 11px;
+  font-size: 10px;
+  line-height: 1.38;
+  color: rgba(188, 208, 236, 0.80);
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.cosmos-live-snippet.lines-2 { -webkit-line-clamp: 2; }
+.cosmos-live-snippet.lines-3 { -webkit-line-clamp: 3; }
+
+.cosmos-live-snippet.is-waiting {
+  color: rgba(255, 216, 152, 0.92);
+}
+
+.cosmos-status-pip {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.cosmos-status-pip.running {
+  background: var(--c-cyan);
+  box-shadow: 0 0 8px var(--c-cyan);
+}
+
+.cosmos-status-pip.running.is-flashing {
+  animation: cosmos-pulse-cyan 1.6s ease-in-out infinite;
+}
+
+.cosmos-status-pip.waiting {
+  background: var(--c-amber);
+  box-shadow: 0 0 9px var(--c-amber);
+  animation: cosmos-pulse-amber 1.4s ease-in-out infinite;
+}
+
+.cosmos-status-pip.idle { background: var(--c-mint); }
+.cosmos-status-pip.done { background: var(--c-mint); opacity: 0.72; }
+.cosmos-status-pip.offline { background: rgba(142, 158, 186, 0.45); }
+
+/* ── Hover Session Preview Card (Click Session -> Opens Right Conversation Column) ── */
+.cosmos-hover-card {
+  position: fixed;
+  z-index: 28;
+  width: 294px;
+  padding: 10px 11px 9px;
+  border-radius: 14px;
+  background: rgba(5, 11, 24, 0.82);
+  border: 1px solid rgba(186, 214, 255, 0.18);
+  backdrop-filter: blur(22px) saturate(140%);
+  box-shadow: 0 18px 46px rgba(0, 0, 0, 0.64), inset 0 1px 0 rgba(255, 255, 255, 0.06);
+  pointer-events: auto;
+  animation: cosmos-hover-fade 120ms var(--c-ease);
+}
+
+@keyframes cosmos-hover-fade {
+  from { opacity: 0.25; }
+  to { opacity: 1; }
+}
+
+.cosmos-hover-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding-bottom: 7px;
+  border-bottom: 1px solid rgba(186, 214, 255, 0.09);
+  margin-bottom: 7px;
+}
+
+.cosmos-hover-id {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--c-ink);
+}
+
+.cosmos-hover-planet {
+  font-size: 10.5px;
+  color: var(--c-faint);
+  font-weight: 400;
+}
+
+.cosmos-hover-path {
+  font-family: var(--font-mono, monospace);
+  font-size: 10px;
+  color: var(--c-faint);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 112px;
+}
+
+.cosmos-hover-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.cosmos-hover-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  width: 100%;
+  text-align: left;
+  padding: 6px 7px;
+  border-radius: 9px;
+  background: rgba(255, 255, 255, 0.025);
+  border: 1px solid transparent;
+  color: inherit;
+  cursor: pointer;
+  transition: background 140ms ease, border-color 140ms ease;
+}
+
+.cosmos-hover-row:hover {
+  background: rgba(124, 196, 255, 0.13);
+  border-color: rgba(124, 196, 255, 0.28);
+}
+
+.cosmos-hover-row .cosmos-status-pip {
+  margin-top: 5px;
+}
+
+.cosmos-hover-main {
+  flex: 1;
+  min-width: 0;
+}
+
+.cosmos-hover-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+
+.cosmos-hover-title {
+  font-size: 11.5px;
+  color: rgba(238, 245, 255, 0.94);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cosmos-hover-time {
+  font-family: var(--font-mono, monospace);
+  font-size: 9.5px;
+  color: var(--c-faint);
+  flex-shrink: 0;
+}
+
+.cosmos-hover-snippet {
+  font-size: 10.5px;
+  color: var(--c-muted);
+  margin-top: 2px;
+  line-height: 1.4;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.cosmos-hover-snippet.is-waiting {
+  color: #ffd38c;
+}
+
+.cosmos-hover-empty {
+  padding: 8px 4px;
+  font-size: 11px;
+  color: var(--c-faint);
+  text-align: center;
+}
+
+.cosmos-hover-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 7px;
+  padding-top: 6px;
+  border-top: 1px solid rgba(186, 214, 255, 0.08);
+  font-size: 10px;
+  color: var(--c-faint);
+}
+
+/* ── Deep-Sky Natural Astronomical Portals & Galaxy Book Dots ── */
+.cosmos-sky-anomaly {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  pointer-events: auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+}
+
+.cosmos-sky-anomaly-ring {
+  border-radius: 50%;
+  border: 1px dashed rgba(186, 214, 255, 0);
+  transition: border-color 220ms ease, transform 280ms var(--c-ease);
+}
+
+.cosmos-sky-anomaly:hover .cosmos-sky-anomaly-ring,
+.cosmos-sky-anomaly:focus-visible .cosmos-sky-anomaly-ring {
+  border-color: rgba(186, 214, 255, 0.36);
+  transform: scale(1.09);
+}
+
+.cosmos-sky-anomaly-label {
+  font-size: 10.5px;
+  color: rgba(212, 228, 252, 0.54);
+  letter-spacing: 0.04em;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgba(3, 6, 15, 0.44);
+  backdrop-filter: blur(6px);
+  white-space: nowrap;
+  border: 1px solid transparent;
+  transition: color 180ms ease, background 180ms ease, border-color 180ms ease;
+}
+
+.cosmos-sky-anomaly:hover .cosmos-sky-anomaly-label {
+  color: var(--c-ink);
+  background: rgba(8, 14, 28, 0.80);
+  border-color: rgba(186, 214, 255, 0.20);
+}
+
+.cosmos-sky-anomaly-scale {
+  font-family: var(--font-mono, monospace);
+  font-size: 9px;
+  color: var(--c-faint);
+}
+
+.cosmos-home-beacon {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  pointer-events: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 10px;
+  border-radius: 999px;
+  background: rgba(14, 12, 6, 0.62);
+  border: 1px solid rgba(244, 194, 122, 0.34);
+  color: #ffe2ad;
+  font-size: 10.5px;
+  cursor: pointer;
+  backdrop-filter: blur(8px);
+  box-shadow: 0 0 18px rgba(244, 194, 122, 0.18);
+  transition: transform 180ms var(--c-ease), border-color 180ms ease, background 180ms ease;
+}
+
+.cosmos-home-beacon:hover {
+  transform: translate(-50%, -50%) scale(1.06);
+  border-color: rgba(244, 194, 122, 0.72);
+  background: rgba(24, 18, 8, 0.86);
+}
+
+.cosmos-book-dot {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  pointer-events: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgba(4, 8, 17, 0.54);
+  border: 1px solid rgba(186, 214, 255, 0.14);
+  backdrop-filter: blur(6px);
+  font-size: 10.5px;
+  color: rgba(226, 238, 255, 0.80);
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.cosmos-book-dot:hover {
+  color: #fff;
+  background: rgba(10, 18, 36, 0.84);
+  border-color: rgba(186, 214, 255, 0.36);
+}
+
+/* Zero-agent gentle onboarding pill anchored gently below bottom center */
+.cosmos-empty-agents-hint {
+  position: fixed;
+  left: 50%;
+  bottom: 28px;
+  transform: translateX(-50%);
+  z-index: 21;
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 14px;
+  border-radius: 999px;
+  background: rgba(6, 12, 24, 0.72);
+  border: 1px solid rgba(124, 196, 255, 0.24);
+  backdrop-filter: blur(16px);
+  color: var(--c-muted);
+  font-size: 11.5px;
+}
+
+.cosmos-empty-agents-cta {
+  height: 24px;
+  padding: 0 10px;
+  border-radius: 999px;
+  background: rgba(124, 196, 255, 0.20);
+  border: 1px solid rgba(124, 196, 255, 0.46);
+  color: #e6f5ff;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.cosmos-empty-agents-cta:hover {
+  background: rgba(124, 196, 255, 0.34);
+  color: #fff;
+}

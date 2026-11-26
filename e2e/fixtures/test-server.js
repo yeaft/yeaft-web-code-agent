@@ -118,8 +118,56 @@ export class TestServer {
   }
 }
 
+// Existing E2E suites assert classic sidebar/chat selectors; pass `uiMode: null`
+// in Cosmos E2E tests to exercise the default first-run Cosmos landing experience.
+export const UI_MODE_FIXTURES = {
+  uiMode: ['classic', { option: true, scope: 'worker' }],
+
+  browser: [async ({ browser, uiMode }, use) => {
+    if (!uiMode) {
+      await use(browser);
+      return;
+    }
+    const origNewContext = browser.newContext.bind(browser);
+    const wrapped = new Proxy(browser, {
+      get(target, prop, receiver) {
+        if (prop === 'newContext') {
+          return async (...args) => {
+            const ctx = await origNewContext(...args);
+            await ctx.addInitScript((mode) => {
+              try {
+                if (!window.localStorage.getItem('yeaft-ui-mode')) {
+                  window.localStorage.setItem('yeaft-ui-mode', mode);
+                }
+              } catch { /* ignore */ }
+            }, uiMode);
+            return ctx;
+          };
+        }
+        const value = Reflect.get(target, prop, receiver);
+        return typeof value === 'function' ? value.bind(target) : value;
+      },
+    });
+    await use(wrapped);
+  }, { scope: 'worker' }],
+
+  page: async ({ page, uiMode }, use) => {
+    if (uiMode) {
+      await page.addInitScript((mode) => {
+        try {
+          if (!window.localStorage.getItem('yeaft-ui-mode')) {
+            window.localStorage.setItem('yeaft-ui-mode', mode);
+          }
+        } catch { /* ignore */ }
+      }, uiMode);
+    }
+    await use(page);
+  },
+};
+
 export const test = base.extend({
   serverEnv: [{}, { option: true, scope: 'worker' }],
+  ...UI_MODE_FIXTURES,
 
   testServer: [async ({ serverEnv }, use) => {
     const port = await getAvailablePort();

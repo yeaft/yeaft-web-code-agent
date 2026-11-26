@@ -33,6 +33,7 @@ import * as sessionHelpers from './helpers/session.js';
 import * as watchdogHelpers from './helpers/watchdog.js';
 import { conversationRepositoryFor } from './helpers/conversation-repository.js';
 import * as yeaftViewHelpers from './helpers/yeaft-view.js';
+import * as yeaftAutoRouteHelpers from './helpers/yeaft-auto-route.js';
 import {
   clearYeaftConversationPromotion,
   migrateYeaftConversationState,
@@ -1025,6 +1026,9 @@ export const useChatStore = defineStore('chat', {
     // transition state stays separate so a cold Yeaft restore can still return
     // to the last Chat conversation after bootstrap replaces the active id.
     ...yeaftViewHelpers.createInitialConversationViewState(),
+    uiMode: yeaftAutoRouteHelpers.readUiMode(),
+    yeaftLastAutoRouteResult: null,
+    _pendingAutoRouteRequests: null,
     workCenterOpen: false,
     workCenterUiEnabled: localStorage.getItem('work-center-ui-enabled') !== 'false',
     workCenterAgentId: null,
@@ -1829,6 +1833,10 @@ export const useChatStore = defineStore('chat', {
         localStorage.setItem('work-center-ui-enabled', String(this.workCenterUiEnabled));
       } catch (_) { /* keep the in-memory preference when storage is unavailable */ }
       if (!this.workCenterUiEnabled) this.leaveWorkCenter();
+    },
+    setUiMode(mode) {
+      this.uiMode = yeaftAutoRouteHelpers.writeUiMode(mode);
+      return this.uiMode;
     },
     openPluginCenter(agentId = null) {
       const agents = pluginConfigHelpers.pluginCenterAgents(this);
@@ -3880,6 +3888,19 @@ export const useChatStore = defineStore('chat', {
         bytes: JSON.stringify(wsMsg).length,
       });
       return true;
+    },
+
+    sendYeaftAutoRouteMessage(payload) {
+      return yeaftAutoRouteHelpers.sendYeaftAutoRouteMessage(this, payload);
+    },
+    handleYeaftSessionRouted(msg) {
+      return yeaftAutoRouteHelpers.handleYeaftSessionRouted(this, msg, yeaftSessionIdentityKey);
+    },
+    handleYeaftAutoRouteError(msg) {
+      return yeaftAutoRouteHelpers.handleYeaftAutoRouteError(this, msg);
+    },
+    clearPendingAutoRoutes(reason = 'cancelled') {
+      yeaftAutoRouteHelpers.clearPendingAutoRoutes(this, reason);
     },
 
     cancelYeaftTask({ agentId = null, sessionId, taskId }) {
@@ -9376,6 +9397,8 @@ export const useChatStore = defineStore('chat', {
       this.sessionKey = null;
       this.agents = [];
       this.clearPluginState();
+      this.clearPendingAutoRoutes('logout');
+      this.yeaftLastAutoRouteResult = null;
       this.currentAgent = null;
       this.currentAgentInfo = null;
       this.yeaftStatusByAgent = {};

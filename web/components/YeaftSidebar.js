@@ -132,13 +132,22 @@ export default {
            SessionSettingsModal — opened via the kebab → unified modal at
            the proper section. YeaftPage owns the modal lifecycle. -->
 
-      <!-- task-342: sidebar bottom — Settings entry + version badge. -->
+      <!-- task-342: sidebar bottom — Settings entry + version badge + Cosmos toggle. -->
       <div class="sidebar-bottom">
-        <button class="sidebar-nav-item" @click="$emit('open-settings')">
-          <NavigationIcon name="settings" :size="18" />
-          <span>{{ tr('chat.sidebar.settings', 'Settings') }}</span>
-          <span v-if="serverVersion" class="sidebar-version">{{ serverVersion }}</span>
-        </button>
+        <div class="sidebar-bottom-row">
+          <button class="sidebar-nav-item" @click="$emit('open-settings')">
+            <NavigationIcon name="settings" :size="18" />
+            <span>{{ tr('chat.sidebar.settings', 'Settings') }}</span>
+            <span v-if="serverVersion" class="sidebar-version">{{ serverVersion }}</span>
+          </button>
+          <button
+            type="button"
+            class="sidebar-cosmos-btn"
+            :title="tr('cosmos.mode.enter', 'Cosmos UI')"
+            :aria-label="tr('cosmos.mode.enter', 'Cosmos UI')"
+            @click="chatStore?.setUiMode?.('cosmos')"
+          >✦</button>
+        </div>
       </div>
     </SessionSidebarShell>
   `,
