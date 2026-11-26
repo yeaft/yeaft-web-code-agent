@@ -125,14 +125,16 @@ export function createCosmosEngine(glCanvas, hudCanvas, opts = {}) {
     gl = null;
   }
 
-  const ctx2d = hudCanvas.getContext('2d');
-  if (!gl || !ctx2d) {
-    return createFallback2DEngine(glCanvas, hudCanvas, { isMobile });
-  }
-
   const releaseUnusedGl = () => {
+    if (!gl) return;
     try { gl.getExtension('WEBGL_lose_context')?.loseContext?.(); } catch { /* ignore */ }
   };
+
+  const ctx2d = hudCanvas.getContext('2d');
+  if (!gl || !ctx2d) {
+    releaseUnusedGl();
+    return createFallback2DEngine(glCanvas, hudCanvas, { isMobile });
+  }
 
   const isSoftware = detectSoftwareRenderer(gl);
   if (renderQuality === 'auto' && isSoftware) {

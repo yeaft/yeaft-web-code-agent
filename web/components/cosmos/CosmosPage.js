@@ -696,13 +696,27 @@ export default {
       return Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
     }
 
-    function cancelActiveDrags() {
-      anim.camDrag = null;
+    function matchesDragPointer(dragState, e) {
+      if (!dragState) return false;
+      if (dragState.pointerId == null || e?.pointerId == null) return true;
+      return dragState.pointerId === e.pointerId;
+    }
+
+    function cancelPlanetDrag() {
       anim.drag = null;
-      camOrbiting.value = false;
       dragActive.value = false;
       dragFromPlanetId.value = null;
       dragOverPlanetId.value = null;
+    }
+
+    function cancelCamDrag() {
+      anim.camDrag = null;
+      camOrbiting.value = false;
+    }
+
+    function cancelActiveDrags() {
+      cancelCamDrag();
+      cancelPlanetDrag();
     }
 
     function onCanvasPointerDown(e) {
@@ -717,7 +731,10 @@ export default {
           return;
         }
       }
-      anim.camDrag = { startX: e.clientX, startY: e.clientY, yaw0: anim.camRot.tx, pitch0: anim.camRot.ty, moved: false };
+      anim.camDrag = {
+        pointerId: e.pointerId ?? null,
+        startX: e.clientX, startY: e.clientY, yaw0: anim.camRot.tx, pitch0: anim.camRot.ty, moved: false,
+      };
       camOrbiting.value = true;
     }
     function resetCamera() {
@@ -748,6 +765,7 @@ export default {
         return;
       }
       anim.drag = {
+        pointerId: ev.pointerId ?? null,
         agentId: agent.id, fromPlanetId: planetId,
         startX: ev.clientX, startY: ev.clientY, currX: ev.clientX, currY: ev.clientY,
         active: false, overPlanetId: null,
@@ -806,7 +824,7 @@ export default {
       anim.parallax.tx = (e.clientX / Math.max(window.innerWidth, 1)) * 2 - 1;
       anim.parallax.ty = (e.clientY / Math.max(window.innerHeight, 1)) * 2 - 1;
 
-      if (anim.drag) {
+      if (matchesDragPointer(anim.drag, e)) {
         anim.drag.currX = e.clientX; anim.drag.currY = e.clientY;
         const dist = Math.hypot(e.clientX - anim.drag.startX, e.clientY - anim.drag.startY);
         if (!anim.drag.active && dist > 6) {
@@ -828,7 +846,7 @@ export default {
         }
         return;
       }
-      if (anim.camDrag) {
+      if (matchesDragPointer(anim.camDrag, e)) {
         const dx = e.clientX - anim.camDrag.startX, dy = e.clientY - anim.camDrag.startY;
         if (Math.hypot(dx, dy) > 4) anim.camDrag.moved = true;
         anim.camRot.tx = Math.max(-0.85, Math.min(0.85, anim.camDrag.yaw0 + dx * 0.0024));
@@ -855,7 +873,8 @@ export default {
         activeTouchPointers.delete(e.pointerId);
         if (activeTouchPointers.size < 2) pinchPrevDist = 0;
       }
-      cancelActiveDrags();
+      if (matchesDragPointer(anim.drag, e)) cancelPlanetDrag();
+      if (matchesDragPointer(anim.camDrag, e)) cancelCamDrag();
     }
 
     function onGlobalPointerUp(e) {
@@ -867,10 +886,9 @@ export default {
         activeTouchPointers.delete(e.pointerId);
         if (activeTouchPointers.size < 2) pinchPrevDist = 0;
       }
-      if (anim.drag) {
+      if (matchesDragPointer(anim.drag, e)) {
         const drag = anim.drag;
-        anim.drag = null;
-        dragActive.value = false; dragFromPlanetId.value = null; dragOverPlanetId.value = null;
+        cancelPlanetDrag();
         if (drag.active) {
           if (drag.overPlanetId) performMoveOrSwap(drag.agentId, drag.overPlanetId);
         } else {
@@ -881,10 +899,9 @@ export default {
         }
         return;
       }
-      if (anim.camDrag) {
+      if (matchesDragPointer(anim.camDrag, e)) {
         const moved = anim.camDrag.moved;
-        anim.camDrag = null;
-        camOrbiting.value = false;
+        cancelCamDrag();
         if (!moved) {
           if (quickAgentId.value) quickAgentId.value = null;
           if (drawerOpen.value) closeDrawer();

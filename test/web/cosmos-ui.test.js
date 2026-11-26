@@ -686,15 +686,44 @@ describe('Cosmos Component & WebGL Review Regressions', () => {
     expect(wrapper.vm.quickAgentId).toBeNull();
     expect(wrapper.vm.dragActive).toBe(false);
 
-    // Touch down on canvas while drawer is open, then cancel -> must NOT dismiss the drawer
+    // Touch down on canvas while drawer is open: unrelated pointercancel must leave active orbit intact
     wrapper.vm.drawerOpen = true;
     wrapper.vm.drawerAgentId = 'ag-earth';
-    wrapper.vm.onCanvasPointerDown({ pointerType: 'touch', pointerId: 2, button: 0, clientX: 50, clientY: 50 });
+    wrapper.vm.onCanvasPointerDown({ pointerType: 'mouse', pointerId: 2, button: 0, clientX: 50, clientY: 50 });
     expect(wrapper.vm.camOrbiting).toBe(true);
-    window.dispatchEvent(new PointerEvent('pointercancel', { pointerType: 'touch', pointerId: 2 }));
+    window.dispatchEvent(new PointerEvent('pointercancel', { pointerType: 'touch', pointerId: 99 }));
+    await flushPromises();
+    expect(wrapper.vm.camOrbiting).toBe(true);
+    expect(wrapper.vm.drawerOpen).toBe(true);
+
+    // Matching pointercancel aborts camOrbiting cleanly without dismissing the drawer
+    window.dispatchEvent(new PointerEvent('pointercancel', { pointerType: 'mouse', pointerId: 2 }));
     await flushPromises();
     expect(wrapper.vm.camOrbiting).toBe(false);
     expect(wrapper.vm.drawerOpen).toBe(true);
+
+    // Unrelated pointercancel during active planet drag must leave planet drag intact so matching pointerup still commits
+    wrapper.vm.drawerOpen = false;
+    wrapper.vm.onPlanetPointerDown('earth', { pointerType: 'mouse', pointerId: 3, button: 0, clientX: 120, clientY: 220 });
+    window.dispatchEvent(new PointerEvent('pointercancel', { pointerType: 'touch', pointerId: 100 }));
+    window.dispatchEvent(new PointerEvent('pointerup', { pointerType: 'mouse', pointerId: 3 }));
+    await flushPromises();
+    expect(wrapper.vm.quickAgentId).toBe('ag-earth');
+
+    // Missing HUD 2D context after acquiring WebGL must release the unused WebGL context before 2D fallback
+    const loseContext = vi.fn();
+    const glNoHud = {
+      getParameter: () => 'Mock GPU',
+      getExtension: (name) => (name === 'WEBGL_lose_context' ? { loseContext } : null),
+    };
+    const fallbackNoHud = createCosmosEngine(
+      { width: 0, height: 0, clientWidth: 640, clientHeight: 360, getContext: (k) => (k === 'webgl' ? glNoHud : null) },
+      { width: 0, height: 0, getContext: () => null },
+      { renderQuality: 'high' },
+    );
+    expect(fallbackNoHud.mode).toBe('2d');
+    expect(loseContext).toHaveBeenCalledTimes(1);
+    fallbackNoHud.destroy();
   });
 
   it('copies every web source directory in Dockerfile Stage 1 and ships all 18 Cosmos WebP assets', () => {
