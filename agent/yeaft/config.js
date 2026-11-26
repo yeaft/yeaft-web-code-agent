@@ -586,6 +586,8 @@ export function loadConfig(overrides = {}) {
     yeaft: normaliseYeaftSection(jsonConfig.yeaft),
     telemetry: normaliseTelemetrySection(jsonConfig.telemetry),
     workCenter: { enabled: jsonConfig.workCenter?.enabled === true },
+    // Explicit opt-in: this job sends historical excerpts to the configured model.
+    sharedKnowledge: { enabled: jsonConfig.sharedKnowledge?.enabled === true },
     // Dream runtime is disabled. Keep the stable shape but never honor a
     // persisted toggle from an older client.
     dream: { enabled: false },

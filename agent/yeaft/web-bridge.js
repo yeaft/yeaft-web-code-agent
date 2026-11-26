@@ -5788,6 +5788,8 @@ async function runYeaftSessionSend(msg) {
   if (!text?.trim() && !hasFiles) return;
   const mentions = Array.isArray(msg.mentions) ? msg.mentions : [];
   const quote = normalizeSessionMessageQuote(msg.quote);
+  const knowledgeSessionIds = ctx.serverCapabilities?.has('session_shared_knowledge') && Array.isArray(msg._knowledgeSessionIds)
+    ? msg._knowledgeSessionIds.slice() : null;
   const sessionId = (typeof msg.sessionId === 'string' && msg.sessionId.trim())
     ? msg.sessionId.trim()
     : 'grp_default';
@@ -5903,7 +5905,7 @@ async function runYeaftSessionSend(msg) {
   ingress.messageId = typeof msg.id === 'string' && msg.id ? msg.id : randomUUID();
   try {
     return await dispatchAcceptedSessionSend({
-      msg, text, mentions, quote, sessionId, yeaftDir, perfTraceId, perfStart, ingress,
+      msg, text, mentions, quote, sessionId, yeaftDir, perfTraceId, perfStart, ingress, knowledgeSessionIds,
       tracePerf, traceDuration, turnConfig, sceneId, sessionHandle, sessionRoot, sessionMetaForRuntime,
     });
   } finally {
@@ -5913,7 +5915,7 @@ async function runYeaftSessionSend(msg) {
 }
 
 async function dispatchAcceptedSessionSend({
-  msg, text, mentions, quote, sessionId, yeaftDir, perfTraceId, perfStart, ingress,
+  msg, text, mentions, quote, sessionId, yeaftDir, perfTraceId, perfStart, ingress, knowledgeSessionIds,
   tracePerf, traceDuration, turnConfig, sceneId, sessionHandle, sessionRoot, sessionMetaForRuntime,
 }) {
   const ensureSessionStart = perfNowMs();
@@ -6087,6 +6089,7 @@ async function dispatchAcceptedSessionSend({
         // Older Servers don't strip a browser-supplied _shareOwnerId.
         _shareOwnerId: ctx.serverCapabilities?.has('session_share_recall') && typeof msg._shareOwnerId === 'string'
           ? msg._shareOwnerId : null,
+        _knowledgeSessionIds: knowledgeSessionIds,
         _projectContext: msg.projectContext && typeof msg.projectContext === 'object'
           ? msg.projectContext
           : null,
@@ -8130,6 +8133,11 @@ export async function handleYeaftAutoRouteSend(msg = {}) {
         ...(Array.isArray(msg.files) && msg.files.length > 0 ? { files: msg.files } : {}),
         ...(perfTraceId ? { perfTraceId } : {}),
         _agentSessionIds: nextAgentSessionIds,
+        // Newly created targets may use authorized prior sources, but their
+        // own ID is not added to the Server's source allowlist.
+        ...(Array.isArray(msg._knowledgeSessionIds)
+          && (createdSession || msg._knowledgeSessionIds.includes(targetSessionId))
+          ? { _knowledgeSessionIds: msg._knowledgeSessionIds } : {}),
         ...(typeof msg._shareOwnerId === 'string' ? { _shareOwnerId: msg._shareOwnerId } : {}),
         projectContext: (!createdSession && msg._projectContextsBySession && msg._projectContextsBySession[targetSessionId])
           || {

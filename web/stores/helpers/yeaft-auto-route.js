@@ -103,6 +103,7 @@ export function sendYeaftAutoRouteMessage(store, {
   quickSend = null,
   mentions,
   quote = null,
+  cosmosDelivery = false,
   timeoutMs = AUTO_ROUTE_TIMEOUT_MS,
 } = {}) {
   const targetAgentId = typeof agentId === 'string' ? agentId.trim() : '';
@@ -145,6 +146,7 @@ export function sendYeaftAutoRouteMessage(store, {
     id: clientMessageId,
     requestId,
     text: trimmedText || '(attached files)',
+    ...(cosmosDelivery === true ? { cosmosDelivery: true } : {}),
     ...(Array.isArray(mentions) && mentions.length > 0 ? { mentions } : {}),
     ...(sceneId ? { preferredSceneId: sceneId } : {}),
     ...(typeof preferredWorkDir === 'string' && preferredWorkDir.trim() ? { preferredWorkDir: preferredWorkDir.trim() } : {}),

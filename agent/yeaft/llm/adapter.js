@@ -10,6 +10,7 @@
  * The engine sees only unified types — it never knows which API is underneath.
  */
 
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { Agent, EnvHttpProxyAgent } from 'undici';
 import { utf8PrefixWithinBytes } from '../utf8.js';
 
@@ -373,10 +374,33 @@ function getModelFetchDispatcher() {
   return cachedModelFetchDispatcher;
 }
 
+const modelFetchAdmission = new AsyncLocalStorage();
+
+/** Request-local admission for callers sending revocable data; retries inherit it. */
+export function withModelFetchAdmission(admit, run) {
+  return modelFetchAdmission.run(admit, run);
+}
+
 /** Stop the retry clock from interrupting healthy body streaming once headers arrive. */
 export async function fetchWithHeadersTimeout(url, init = {}, timeoutMs) {
-  const requestInit = init && typeof init === 'object' ? init : {};
+  let requestInit = init && typeof init === 'object' ? init : {};
   if (requestInit.signal?.aborted) throw new LLMAbortError();
+  const admit = modelFetchAdmission.getStore();
+  if (admit) {
+    await admit();
+    if (requestInit.signal?.aborted) throw new LLMAbortError();
+    // Use a non-replayable body: Fetch can otherwise resend a string POST
+    // on HTTP 421 without reentering the caller's admission guard. Keep the
+    // exact Content-Length so compatible endpoints need not accept chunking.
+    if (typeof requestInit.body !== 'string' || requestInit.method !== 'POST') {
+      throw new Error('Guarded model transport requires a serialized POST body');
+    }
+    const bytes = Buffer.from(requestInit.body, 'utf8');
+    const headers = new Headers(requestInit.headers);
+    headers.set('content-length', String(bytes.length));
+    const body = new ReadableStream({ start(controller) { controller.enqueue(bytes); controller.close(); } });
+    requestInit = { ...requestInit, headers, body, duplex: 'half', redirect: 'error' };
+  }
   if (Number.isFinite(timeoutMs) && timeoutMs <= 0) throw new LLMHeadersTimeoutError();
   const dispatcher = requestInit.dispatcher ?? getModelFetchDispatcher();
   if (!Number.isFinite(timeoutMs)) return fetch(url, { ...requestInit, dispatcher });

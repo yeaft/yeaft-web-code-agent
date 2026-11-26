@@ -22,9 +22,9 @@ export const isAgentHistorySessionId = id => typeof id === 'string' && /^[A-Za-z
 
 // Only the explicit agent scope uses these shared, per-call I/O bounds. The
 // configured instance root is trusted; no symlinks below it are traversed.
-export function createAgentHistoryScan(instanceRoot, telemetry, signal) {
+export function createAgentHistoryScan(instanceRoot, telemetry, signal, { maxScanBytes = MAX_AGENT_SCAN_BYTES } = {}) {
   const root = resolve(instanceRoot);
-  let remainingBytes = MAX_AGENT_SCAN_BYTES;
+  let remainingBytes = maxScanBytes;
   let remainingEntries = MAX_AGENT_DIRECTORY_ENTRIES;
   const limited = () => { telemetry.scanIncomplete = true; return null; };
   const stopped = () => signal?.aborted || remainingBytes <= 0 || remainingEntries <= 0;

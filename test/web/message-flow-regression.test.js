@@ -481,12 +481,14 @@ describe('message flow regressions', () => {
     expect(await send).toBe(false);
     expect(store.sendWsMessage).not.toHaveBeenCalled();
     const confirmed = store.switchYeaftModel('proxy/confirmed', 's', 'xhigh');
-    const sendAfterAck = store.sendYeaftSessionMessage({ groupId: 's', text: 'send after confirmation' });
+    const sendAfterAck = store.sendYeaftSessionMessage({ groupId: 's', text: 'send after confirmation', cosmosDelivery: true });
     expect(store.sendWsMessage).not.toHaveBeenCalled();
     pending[4].resolve({ ok: true });
     await confirmed;
     await sendAfterAck;
-    expect(store.sendWsMessage).toHaveBeenCalledWith(expect.objectContaining({ type: 'yeaft_session_send', sessionId: 's', agentId: 'a' }));
+    expect(store.sendWsMessage).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'yeaft_session_send', sessionId: 's', agentId: 'a', cosmosDelivery: true,
+    }));
 
     const disconnecting = store.switchYeaftModel('proxy/disconnecting', 's', 'xhigh');
     const queuedOffline = store.switchYeaftModel('proxy/queued-offline', 's', 'medium');

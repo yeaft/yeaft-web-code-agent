@@ -358,6 +358,7 @@ export default {
           preferredSceneId: selectedScene.value,
           quickSend,
           quote,
+          cosmosDelivery: true,
         });
 
         const isStillSameTarget = props.agent?.id === targetAgentId && activeSendSeq === sendSeq;

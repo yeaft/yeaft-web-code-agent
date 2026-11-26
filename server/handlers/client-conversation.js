@@ -1924,9 +1924,14 @@ export async function handleClientConversation(clientId, client, msg, checkAgent
           _allowedSessionIds: _untrustedAllowedIds,
           _projectContextsBySession: _untrustedProjectContexts,
           _shareOwnerId: _untrustedShareOwner,
+          _knowledgeSessionIds: _untrustedKnowledgeIds,
+          cosmosDelivery,
           ...rest
         } = msg;
         rest.type = relayType;
+        const wantsKnowledge = cosmosDelivery === true && client.authenticated && client.userId
+          && (!relayAgent?.ownerId || relayAgent.ownerId === client.userId)
+          && relayAgent?.capabilities?.includes('session_shared_knowledge');
         if (isAutoRouteSend) {
           rest._requestClientId = clientId;
           trackUserTurn(client.userId, Buffer.byteLength(JSON.stringify(msg)));
@@ -1938,6 +1943,10 @@ export async function handleClientConversation(clientId, client, msg, checkAgent
             if (relayAgent.capabilities?.includes('session_discovery')) {
               rest._agentSessionIds = ownedAgentSessionIds(client.userId, relayAgentId);
               rest._shareOwnerId = client.userId;
+            }
+            if (wantsKnowledge) {
+              // For the eventual Session delivery only; not part of route ranking.
+              rest._knowledgeSessionIds = rest._agentSessionIds ?? ownedAgentSessionIds(client.userId, relayAgentId);
             }
             const contextsBySession = {};
             for (const sid of visibleIds) {
@@ -1968,10 +1977,14 @@ export async function handleClientConversation(clientId, client, msg, checkAgent
           trackUserTurn(client.userId, Buffer.byteLength(JSON.stringify(msg)));
           const sessionId = typeof rest.sessionId === 'string' ? rest.sessionId.trim() : '';
           if (sessionId && client.userId) {
-            if (relayAgent.capabilities?.includes('session_discovery')
-                && yeaftSessionDb.getForAgent(client.userId, relayAgentId, sessionId)?.isArchived === false) {
+            const ownsActiveTarget = (wantsKnowledge || relayAgent.capabilities?.includes('session_discovery'))
+              && yeaftSessionDb.getForAgent(client.userId, relayAgentId, sessionId)?.isArchived === false;
+            if (ownsActiveTarget && relayAgent.capabilities?.includes('session_discovery')) {
               rest._agentSessionIds = ownedAgentSessionIds(client.userId, relayAgentId);
               rest._shareOwnerId = client.userId;
+            }
+            if (wantsKnowledge && ownsActiveTarget) {
+              rest._knowledgeSessionIds = rest._agentSessionIds ?? ownedAgentSessionIds(client.userId, relayAgentId);
             }
             const projectContext = yeaftProjectDb.contextForSession(
               client.userId,
