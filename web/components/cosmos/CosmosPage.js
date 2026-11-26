@@ -696,6 +696,15 @@ export default {
       return Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
     }
 
+    function cancelActiveDrags() {
+      anim.camDrag = null;
+      anim.drag = null;
+      camOrbiting.value = false;
+      dragActive.value = false;
+      dragFromPlanetId.value = null;
+      dragOverPlanetId.value = null;
+    }
+
     function onCanvasPointerDown(e) {
       if (e.pointerType !== 'touch' && e.button !== 0) return;
       emptyPlanetMenu.value = null;
@@ -703,10 +712,7 @@ export default {
       if (e.pointerType === 'touch') {
         activeTouchPointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
         if (activeTouchPointers.size >= 2) {
-          anim.camDrag = null;
-          anim.drag = null;
-          camOrbiting.value = false;
-          dragActive.value = false;
+          cancelActiveDrags();
           pinchPrevDist = getTouchPinchDist();
           return;
         }
@@ -724,9 +730,7 @@ export default {
       if (ev.pointerType === 'touch') {
         activeTouchPointers.set(ev.pointerId, { x: ev.clientX, y: ev.clientY });
         if (activeTouchPointers.size >= 2) {
-          anim.drag = null;
-          anim.camDrag = null;
-          dragActive.value = false;
+          cancelActiveDrags();
           pinchPrevDist = getTouchPinchDist();
           return;
         }
@@ -846,7 +850,19 @@ export default {
       }
     }
 
+    function onGlobalPointerCancel(e) {
+      if (e && e.pointerType === 'touch') {
+        activeTouchPointers.delete(e.pointerId);
+        if (activeTouchPointers.size < 2) pinchPrevDist = 0;
+      }
+      cancelActiveDrags();
+    }
+
     function onGlobalPointerUp(e) {
+      if (e?.type === 'pointercancel') {
+        onGlobalPointerCancel(e);
+        return;
+      }
       if (e && e.pointerType === 'touch') {
         activeTouchPointers.delete(e.pointerId);
         if (activeTouchPointers.size < 2) pinchPrevDist = 0;
@@ -1111,9 +1127,9 @@ export default {
       clearTimeout(softTimer);
       engine?.destroy?.();
       engine = null;
-      canvasEpoch.value += 1;
+      const epoch = (canvasEpoch.value += 1);
       Vue.nextTick(() => {
-        if (!unmounted) mountEngine(quality);
+        if (!unmounted && epoch === canvasEpoch.value) mountEngine(quality);
       });
     }
 
@@ -1181,7 +1197,7 @@ export default {
       mountEngine();
       window.addEventListener('pointermove', onGlobalPointerMove);
       window.addEventListener('pointerup', onGlobalPointerUp);
-      window.addEventListener('pointercancel', onGlobalPointerUp);
+      window.addEventListener('pointercancel', onGlobalPointerCancel);
       window.addEventListener('keydown', onKeyDown);
       document.addEventListener('click', onDocClick);
       nowInterval = setInterval(() => { nowTick.value = Date.now(); }, 15000);
@@ -1202,7 +1218,7 @@ export default {
       clearInterval(nowInterval);
       window.removeEventListener('pointermove', onGlobalPointerMove);
       window.removeEventListener('pointerup', onGlobalPointerUp);
-      window.removeEventListener('pointercancel', onGlobalPointerUp);
+      window.removeEventListener('pointercancel', onGlobalPointerCancel);
       window.removeEventListener('keydown', onKeyDown);
       document.removeEventListener('click', onDocClick);
       engine?.destroy?.();

@@ -507,6 +507,7 @@ describe('Cosmos Component & WebGL Review Regressions', () => {
     let currentTex = null;
     let lost = false;
     let drawArraysCount = 0;
+    const uploadedImages = [];
 
     const fakeGl = {
       VERTEX_SHADER: 1, FRAGMENT_SHADER: 2, COMPILE_STATUS: 3, LINK_STATUS: 4,
@@ -514,7 +515,7 @@ describe('Cosmos Component & WebGL Review Regressions', () => {
       TEXTURE_2D: 11, TEXTURE0: 12, RGBA: 13, UNSIGNED_BYTE: 14, LINEAR: 15,
       TEXTURE_MIN_FILTER: 16, TEXTURE_MAG_FILTER: 17, TEXTURE_WRAP_S: 18, TEXTURE_WRAP_T: 19,
       REPEAT: 20, CLAMP_TO_EDGE: 21, FRAMEBUFFER: 22, COLOR_ATTACHMENT0: 23,
-      BLEND: 24, ONE: 25, ONE_MINUS_SRC_ALPHA: 26, RENDERER: 27,
+      BLEND: 24, ONE: 25, ONE_MINUS_SRC_ALPHA: 26, RENDERER: 27, UNPACK_FLIP_Y_WEBGL: 28,
       createShader: () => ({}),
       shaderSource: () => {},
       compileShader: () => {},
@@ -540,7 +541,15 @@ describe('Cosmos Component & WebGL Review Regressions', () => {
       createTexture: () => { currentTex = { w: 0, h: 0 }; texCalls.push(currentTex); return currentTex; },
       bindTexture: (_t, tex) => { currentTex = tex; },
       deleteTexture: () => {},
-      texImage2D: (_t, _l, _i, w, h) => { if (currentTex) { currentTex.w = w; currentTex.h = h; } },
+      pixelStorei: () => {},
+      texImage2D: (...args) => {
+        if (args.length === 6 && args[5] && typeof args[5] === 'object') {
+          uploadedImages.push(args[5]);
+        } else if (typeof args[3] === 'number' && typeof args[4] === 'number' && currentTex) {
+          currentTex.w = args[3];
+          currentTex.h = args[4];
+        }
+      },
       texParameteri: (_t, pname, param) => {
         if ((pname === 18 || pname === 19) && currentTex) {
           wrapCalls.push({ w: currentTex.w, h: currentTex.h, param });
@@ -587,31 +596,105 @@ describe('Cosmos Component & WebGL Review Regressions', () => {
       getContext: () => ({ setTransform: () => {}, clearRect: () => {} }),
     };
 
+    // Seed cached real earth_day & milky images so we can verify restore re-uploads them
+    __resetCosmosTextureCacheForTests();
+    const seededImgs = [];
+    class SeedImage {
+      constructor() { this.naturalWidth = 1024; this.naturalHeight = 512; seededImgs.push(this); }
+      set src(v) { this._src = v; }
+      get src() { return this._src; }
+    }
+    const unsubSeed = requestCosmosTextureGroup('solar', null, { ImageCtor: SeedImage });
+    for (const im of seededImgs) {
+      if (im.src.endsWith('earth_day.webp') || im.src.endsWith('eso_milky_way.webp')) im.onload();
+    }
+    unsubSeed();
+
     const engine = createCosmosEngine(glCanvas, hudCanvas);
     expect(engine.isWebGL).toBe(true);
+    expect(engine.areRealTexturesReady()).toBe(true);
+    expect(uploadedImages.length).toBeGreaterThanOrEqual(2);
     expect(typeof listeners.webglcontextlost).toBe('function');
     expect(typeof listeners.webglcontextrestored).toBe('function');
 
-    // Simulate GPU context loss: preventDefault() must be called and GL draws skipped
+    // Simulate GPU context loss: preventDefault() must be called, real-ready flag cleared, GL draws skipped
     const lostEvent = { defaultPrevented: false, preventDefault() { this.defaultPrevented = true; } };
     lost = true;
     listeners.webglcontextlost(lostEvent);
     expect(lostEvent.defaultPrevented).toBe(true);
+    expect(engine.areRealTexturesReady()).toBe(false);
 
     const drawsBeforeLost = drawArraysCount;
+    const uploadsBeforeRestore = uploadedImages.length;
     const hudDraw = vi.fn();
     engine.renderFrame({ hudDraw });
     expect(drawArraysCount).toBe(drawsBeforeLost);
     expect(hudDraw).toHaveBeenCalledTimes(1);
 
-    // Simulate GPU context restored: resources re-bake and GL rendering resumes
+    // Simulate GPU context restored: resources re-bake, cached real NASA/ESO textures re-upload, GL resumes
     lost = false;
     listeners.webglcontextrestored();
     expect(drawArraysCount).toBeGreaterThan(drawsBeforeLost);
+    expect(uploadedImages.length).toBeGreaterThanOrEqual(uploadsBeforeRestore + 2);
+    expect(engine.areRealTexturesReady()).toBe(true);
 
     engine.destroy();
+    __resetCosmosTextureCacheForTests();
     expect(listeners.webglcontextlost).toBeUndefined();
     expect(listeners.webglcontextrestored).toBeUndefined();
+  });
+
+  it('aborts transient drags cleanly on pointercancel without opening Quick Composer or closing an open drawer', async () => {
+    vi.stubGlobal('Vue', Vue);
+    const store = Vue.reactive({
+      agents: [{ id: 'ag-earth', name: 'MacBook', online: true, capabilities: ['session_auto_route'] }],
+      sessionCatalog: [],
+      yeaftConversationIdsByAgent: {},
+      messagesMap: {},
+      workbenchExpanded: false,
+      isYeaftSessionProcessing: () => false,
+      isYeaftSessionUnread: () => false,
+      setUiMode: vi.fn(),
+    });
+    vi.stubGlobal('Pinia', {
+      defineStore: () => () => ({}),
+      useChatStore: () => store,
+      useSessionsStore: () => ({ sessionList: [] }),
+      useVpStore: () => ({}),
+    });
+
+    const { default: CosmosPage } = await import('../../web/components/cosmos/CosmosPage.js');
+    wrapper = mount(CosmosPage, {
+      global: {
+        config: { globalProperties: { $t: (k) => k } },
+        stubs: {
+          CosmosQuickComposer: true,
+          CosmosConversationDrawer: true,
+          CosmosConstantsPopover: true,
+          CosmosEventsOverlay: true,
+          SettingsPanel: true,
+          AgentSettingsPanel: true,
+          SessionCreateModal: true,
+        },
+      },
+    });
+
+    // Touch down on planet then cancel -> must NOT open Quick Auto-Route Composer
+    wrapper.vm.onPlanetPointerDown('earth', { pointerType: 'touch', pointerId: 1, button: 0, clientX: 100, clientY: 200 });
+    window.dispatchEvent(new PointerEvent('pointercancel', { pointerType: 'touch', pointerId: 1 }));
+    await flushPromises();
+    expect(wrapper.vm.quickAgentId).toBeNull();
+    expect(wrapper.vm.dragActive).toBe(false);
+
+    // Touch down on canvas while drawer is open, then cancel -> must NOT dismiss the drawer
+    wrapper.vm.drawerOpen = true;
+    wrapper.vm.drawerAgentId = 'ag-earth';
+    wrapper.vm.onCanvasPointerDown({ pointerType: 'touch', pointerId: 2, button: 0, clientX: 50, clientY: 50 });
+    expect(wrapper.vm.camOrbiting).toBe(true);
+    window.dispatchEvent(new PointerEvent('pointercancel', { pointerType: 'touch', pointerId: 2 }));
+    await flushPromises();
+    expect(wrapper.vm.camOrbiting).toBe(false);
+    expect(wrapper.vm.drawerOpen).toBe(true);
   });
 
   it('copies every web source directory in Dockerfile Stage 1 and ships all 18 Cosmos WebP assets', () => {

@@ -130,8 +130,13 @@ export function createCosmosEngine(glCanvas, hudCanvas, opts = {}) {
     return createFallback2DEngine(glCanvas, hudCanvas, { isMobile });
   }
 
+  const releaseUnusedGl = () => {
+    try { gl.getExtension('WEBGL_lose_context')?.loseContext?.(); } catch { /* ignore */ }
+  };
+
   const isSoftware = detectSoftwareRenderer(gl);
   if (renderQuality === 'auto' && isSoftware) {
+    releaseUnusedGl();
     return createFallback2DEngine(glCanvas, hudCanvas, { isMobile });
   }
 
@@ -281,13 +286,15 @@ export function createCosmosEngine(glCanvas, hudCanvas, opts = {}) {
       uTexRing: gl.getUniformLocation(bodyProg, 'uTexRing'),
     };
 
-    reuploadCachedRealTextures();
+    uploadedRealKeys.clear();
     return true;
   }
 
   if (!initGpuResources()) {
+    releaseUnusedGl();
     return createFallback2DEngine(glCanvas, hudCanvas, { isMobile });
   }
+  reuploadCachedRealTextures();
 
   // Stream photorealistic Solar NASA/ESO/Hubble/JWST maps asynchronously and hot-swap seamlessly.
   requestTextureGroup('solar');
@@ -301,12 +308,14 @@ export function createCosmosEngine(glCanvas, hudCanvas, opts = {}) {
   function onContextLost(e) {
     e?.preventDefault?.();
     contextLost = true;
+    uploadedRealKeys.clear();
   }
 
   function onContextRestored() {
     if (destroyed) return;
     if (initGpuResources()) {
       contextLost = false;
+      reuploadCachedRealTextures();
       resize();
     }
   }
