@@ -353,6 +353,9 @@ export function focusActiveCosmicEvent(sim) {
   sim.active.observing = true;
   sim.active.paused = false;
   sim.active.targetZoom = Math.max(sim.active.targetZoom || 1.0, sim.active.def.defaultZoom);
+  if (sim.active.duration > 0 && sim.active.elapsed / sim.active.duration > 0.84) {
+    sim.active.elapsed = sim.active.duration * 0.14;
+  }
   return sim.active;
 }
 
@@ -657,12 +660,12 @@ export function getEventAmbient(evDraw) {
   return [r, g, b, strength];
 }
 
-export function getEventShockWave(sim, w, h, centerShiftX = 0, avoidPoints = null, visibilityAlpha = 1.0) {
+export function getEventShockWave(sim, w, h, centerShiftX = 0, avoidPoints = null, visibilityAlpha = 1.0, camRot = null, parallax = null) {
   if (!sim.active || !sim.active.def.hasShock || visibilityAlpha <= 0.01) return [0, 0, 0, 0];
   const p = sim.active.elapsed / sim.active.duration;
   const startP = sim.active.def.id === 'kilonova' ? 0.36 : 0.18;
   if (p < startP || p > 0.90) return [0, 0, 0, 0];
-  const pos = getEventScreenPosition(sim, w, h, centerShiftX, avoidPoints);
+  const pos = getEventScreenPosition(sim, w, h, centerShiftX, avoidPoints, camRot, parallax);
   if (!pos) return [0, 0, 0, 0];
   const aspect = w / Math.max(h, 1);
   const sp = (p - startP) / (0.90 - startP);

@@ -2184,4 +2184,252 @@ describe('Cosmos Component & WebGL Review Regressions', () => {
       anchorHost.remove();
     }
   });
+
+  it('enforces WebGL event shader/particle orientation parity, async parallel compile failure fallback, non-leaking event textures, shockwave parallax, timeline a11y & cold-cache Mermaid drain', async () => {
+    vi.stubGlobal('Vue', Vue);
+    const { getEventFrag } = await import('../../web/cosmos/shaders-events.js');
+    const { fillEventGpuParticles } = await import('../../web/cosmos/events-renderer.js');
+    const { default: CosmosEventsOverlay } = await import('../../web/components/cosmos/CosmosEventsOverlay.js');
+    const { renderMermaidIn, resetMermaidForTests } = await import('../../web/utils/markdown.js');
+
+    // 1. All 8 modular event fragment shaders use strictly ascending GLSL ES 1.00 smoothstep / sstepDown
+    for (let t = 0; t < 8; t++) {
+      const src = getEventFrag(t);
+      expect(src).toContain('sstepDown');
+      // Check no literal numeric descending smoothstep(hi, lo, x)
+      const numericSmoothsteps = [...src.matchAll(/smoothstep\(\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*,/g)];
+      for (const m of numericSmoothsteps) {
+        expect(Number(m[1]), `Event ${t} descending smoothstep(${m[1]}, ${m[2]})`).toBeLessThan(Number(m[2]));
+      }
+    }
+
+    // 2. GPU event particles align pixel-for-pixel with EVENT_VERT (Y-up) + GLSL rot2(uAngle)
+    const buf = new Float32Array(520 * 7);
+    // Gamma-Ray Burst (uAngle = -0.52): shader beam runs along (cos(-0.52), -sin(-0.52)) = (+0.868, +0.497) in Y-down
+    // so particles with dx > 0 MUST have dy > 0 (same quadrant as shader beam, NOT counter-angled X!)
+    const grbCount = fillEventGpuParticles(buf, {
+      eventType: 5, x: 500, y: 400, eventRadiusPx: 200, progress: 0.45, elapsed: 9.0, alpha: 1.0, angle: -0.52, seed: 0.3,
+    }, 1000, 800, 1.0, 1.0);
+    expect(grbCount).toBeGreaterThan(50);
+    let grbAligned = 0;
+    for (let i = 0; i < grbCount; i++) {
+      const dx = buf[i * 7] - 500;
+      const dy = buf[i * 7 + 1] - 400;
+      if (Math.hypot(dx, dy) > 40 && dx * dy > 0) grbAligned++;
+    }
+    expect(grbAligned / grbCount).toBeGreaterThan(0.7);
+
+    // Stellar Superflare (Event 4, uAngle = -0.58): shader uses rot2(-uAngle) -> erupts upper-right (dx > 0, dy < 0 in Y-down)
+    const flareCount = fillEventGpuParticles(buf, {
+      eventType: 4, x: 500, y: 400, eventRadiusPx: 200, sunRadiusPx: 70, progress: 0.45, elapsed: 8.0, alpha: 1.0, angle: -0.58, seed: 0.2,
+    }, 1000, 800, 1.0, 1.0);
+    expect(flareCount).toBeGreaterThan(50);
+    let flareUpperRight = 0;
+    for (let i = 0; i < flareCount; i++) {
+      const dx = buf[i * 7] - 500;
+      const dy = buf[i * 7 + 1] - 400;
+      if (dx > 0 && dy < 0) flareUpperRight++;
+    }
+    expect(flareUpperRight / flareCount).toBeGreaterThan(0.65);
+
+    // Comet Breakup (Event 7, uAngle = 0): shader ionDir = (-0.94, +0.34) in Y-up -> trails up-left (dx < 0, dy < 0 in Y-down)
+    const cometCount = fillEventGpuParticles(buf, {
+      eventType: 7, x: 500, y: 400, eventRadiusPx: 200, progress: 0.48, elapsed: 9.0, alpha: 1.0, angle: 0, seed: 0.5,
+    }, 1000, 800, 1.0, 1.0);
+    expect(cometCount).toBeGreaterThan(50);
+    let cometUpLeft = 0;
+    for (let i = 0; i < cometCount; i++) {
+      const dx = buf[i * 7] - 500;
+      const dy = buf[i * 7 + 1] - 400;
+      if (dx < 0 && dy < 0) cometUpLeft++;
+    }
+    expect(cometUpLeft / cometCount).toBeGreaterThan(0.6);
+
+    // 3. Shockwave epicenter tracks camRot/parallax identically to computeEventFrame & focusActiveCosmicEvent rewinds >84%
+    const simSw = createCosmicEventState({ autoEnabled: true, autoZoom: false, rng: () => 0.4 });
+    startCosmicEvent(simSw, 'supernova', { observe: false, rng: () => 0.4 });
+    simSw.active.elapsed = simSw.active.duration * 0.5;
+    const camRot = { x: 0.45, y: -0.25 };
+    const parallax = { x: 0.6, y: -0.4 };
+    const evFrame = computeEventFrame(simSw, 1280, 720, 0, null, 1.0, camRot, parallax);
+    const sw = getEventShockWave(simSw, 1280, 720, 0, null, 1.0, camRot, parallax);
+    const expectedSwX = (evFrame.x / 1280 - 0.5) * (1280 / 720);
+    const expectedSwY = 0.5 - evFrame.y / 720;
+    expect(sw[0]).toBeCloseTo(expectedSwX, 5);
+    expect(sw[1]).toBeCloseTo(expectedSwY, 5);
+
+    simSw.active.elapsed = simSw.active.duration * 0.90;
+    focusActiveCosmicEvent(simSw);
+    expect(simSw.active.elapsed / simSw.active.duration).toBeCloseTo(0.14, 3);
+
+    // 4. KHR_parallel_shader_compile: async polling -> fatal link failure notifies onFatalError & sets isFailed()
+    const COMPLETION_STATUS_KHR = 0x91b1;
+    let compileDone = false;
+    let linkOk = false;
+    const disabledAttribs = [];
+    const makeParallelGl = (succeedLink) => {
+      compileDone = false;
+      linkOk = succeedLink;
+      return {
+        VERTEX_SHADER: 1, FRAGMENT_SHADER: 2, COMPILE_STATUS: 3, LINK_STATUS: 4,
+        ARRAY_BUFFER: 5, STATIC_DRAW: 6, DYNAMIC_DRAW: 7, TEXTURE_2D: 8,
+        RGBA: 9, UNSIGNED_BYTE: 10, LINEAR: 11, LINEAR_MIPMAP_LINEAR: 12,
+        TEXTURE_MIN_FILTER: 13, TEXTURE_MAG_FILTER: 14, TEXTURE_WRAP_S: 15, TEXTURE_WRAP_T: 16,
+        REPEAT: 17, CLAMP_TO_EDGE: 18, BLEND: 19, ONE: 20, ONE_MINUS_SRC_ALPHA: 21,
+        TRIANGLES: 22, POINTS: 23, FLOAT: 24, TEXTURE0: 25, COLOR_BUFFER_BIT: 26,
+        createShader: () => ({}),
+        shaderSource: () => {},
+        compileShader: () => {},
+        deleteShader: () => {},
+        createProgram: () => ({}),
+        attachShader: () => {},
+        bindAttribLocation: () => {},
+        linkProgram: () => {},
+        getProgramParameter: (_p, param) => (param === COMPLETION_STATUS_KHR ? compileDone : linkOk),
+        getProgramInfoLog: () => 'mock link error',
+        getShaderInfoLog: () => '',
+        deleteProgram: () => {},
+        createBuffer: () => ({}),
+        bindBuffer: () => {},
+        bufferData: () => {},
+        deleteBuffer: () => {},
+        createTexture: () => ({}),
+        bindTexture: () => {},
+        texImage2D: () => {},
+        texParameteri: () => {},
+        deleteTexture: () => {},
+        getAttribLocation: (_p, name) => (name === 'aPosPx' ? 0 : name === 'aSize' ? 1 : 2),
+        getUniformLocation: () => ({}),
+        useProgram: () => {},
+        enable: () => {},
+        disable: () => {},
+        blendFunc: () => {},
+        enableVertexAttribArray: () => {},
+        disableVertexAttribArray: (loc) => disabledAttribs.push(loc),
+        vertexAttribPointer: () => {},
+        viewport: () => {},
+        clearColor: () => {},
+        clear: () => {},
+        activeTexture: () => {},
+        uniform1i: () => {},
+        uniform1f: () => {},
+        uniform2f: () => {},
+        uniform3f: () => {},
+        uniform4f: () => {},
+        drawArrays: () => {},
+        getParameter: () => 'Mock GPU',
+        getExtension: (name) => (name === 'KHR_parallel_shader_compile' ? { COMPLETION_STATUS_KHR } : null),
+        isContextLost: () => false,
+      };
+    };
+
+    const onFatalError = vi.fn();
+    const mkCanvas = (mockGl) => ({
+      width: 0, height: 0, clientWidth: 640, clientHeight: 360,
+      getContext: (k) => (k === 'webgl' ? mockGl : null),
+      addEventListener: () => {}, removeEventListener: () => {},
+    });
+    const mkHud = () => ({ width: 0, height: 0, getContext: () => ({ setTransform: () => {}, clearRect: () => {} }) });
+
+    const failEngine = createCosmosEngine(mkCanvas(makeParallelGl(false)), mkHud(), { onFatalError });
+    expect(failEngine.isWebGL).toBe(true);
+    expect(failEngine.isFailed()).toBe(false);
+    // Frame 1: still compiling in background -> no fatal error yet
+    failEngine.renderFrame({ hudDraw: vi.fn() });
+    expect(onFatalError).not.toHaveBeenCalled();
+    // Frame 2: compile finishes with link failure -> fires onFatalError once & marks failed
+    compileDone = true;
+    failEngine.renderFrame({ hudDraw: vi.fn() });
+    failEngine.renderFrame({ hudDraw: vi.fn() });
+    expect(onFatalError).toHaveBeenCalledTimes(1);
+    expect(failEngine.isFailed()).toBe(true);
+    failEngine.destroy();
+
+    // Multi-frame drawCosmicEvent must disable aPosPx after drawParticles and never re-subscribe nebula
+    disabledAttribs.length = 0;
+    const okEngine = createCosmosEngine(mkCanvas(makeParallelGl(true)), mkHud());
+    compileDone = true;
+    const sampleFrame = {
+      time: 1, realTime: 1, scaleLog: 13,
+      parallax: { x: 0, y: 0 }, camRot: { x: 0, y: 0 }, warp: 0, fovZoom: 1,
+      shockWave: [0, 0, 0, 0], eventLens: [0, 0, 0, 0], eventAmbient: [0, 0, 0, 0],
+      skyBright: 1, starDensity: 1,
+      bhParams: { x: 0, y: 0, radius: 0.017, strength: 0.9 },
+      galParams: { x: 0.4, y: -0.35, radius: 0.09, alpha: 0.7, tilt: 0.5 },
+      webParams: { x: -0.4, y: -0.35, radius: 0.08, alpha: 0.5 },
+      particleData: new Float32Array(2 * 7), particleCount: 2,
+      eventDraw: {
+        id: 'supernova', eventType: 0, layer: 'deep',
+        x: 320, y: 180, eventRadiusPx: 80, quadRadiusPx: 196, sunRadiusPx: 27,
+        progress: 0.45, elapsed: 9, alpha: 0.9, obsBlend: 0, distNorm: 4, angle: 0.2, seed: 0.4,
+      },
+      eventParticleData: new Float32Array(3 * 7), eventParticleCount: 3,
+      solarBodies: [], solarAlpha: 1, hudDraw: vi.fn(),
+    };
+    okEngine.renderFrame(sampleFrame);
+    okEngine.renderFrame(sampleFrame);
+    expect(disabledAttribs).toContain(0);
+    expect(disabledAttribs).toContain(1);
+    expect(disabledAttribs).toContain(2);
+    okEngine.destroy();
+
+    // 5. CosmosEventsOverlay timeline APG keyboard nav, distinct zoom slider label & Watch forceObserve
+    wrapper = mount(CosmosEventsOverlay, {
+      props: {
+        visible: true,
+        autoEnabled: true,
+        autoZoom: false,
+        activeEvent: {
+          def: COSMIC_EVENTS[0],
+          location: { sector: 'ne', distanceLy: 1600 },
+          elapsed: 10.5,
+          duration: 21,
+          paused: false,
+          targetZoom: 1.55,
+          observing: true,
+          effDist: 1.1,
+          ambientDist: 4.5,
+        },
+        nextEventIndex: 1,
+        countdownSec: 45,
+      },
+      global: { config: { globalProperties: { $t: (k) => k } } },
+    });
+    const zoomSlider = wrapper.find('.cosmos-ewd-range');
+    expect(zoomSlider.attributes('aria-label')).toBe('cosmos.events.zoomRange');
+    const timeline = wrapper.find('.cosmos-ewd-timeline');
+    expect(timeline.attributes('aria-valuetext')).toContain('50%');
+    await timeline.trigger('keydown', { key: 'Home' });
+    await timeline.trigger('keydown', { key: 'End' });
+    await timeline.trigger('keydown', { key: 'PageUp' });
+    const scrubs = wrapper.emitted('scrub').map((a) => a[0]);
+    expect(scrubs[0]).toBeCloseTo(0.005, 3);
+    expect(scrubs[1]).toBeCloseTo(0.99, 3);
+    expect(scrubs[2]).toBeCloseTo(0.65, 2);
+    wrapper.unmount();
+    wrapper = null;
+
+    // 6. Cold-cache Mermaid auto-drain: calling renderMermaidIn before mermaid loads renders once loaded
+    resetMermaidForTests();
+    const prevMermaid = globalThis.mermaid;
+    delete globalThis.mermaid;
+    const host = document.createElement('div');
+    host.innerHTML = '<div class="code-block-wrapper"><pre><code class="language-mermaid">graph TD; A-->B;</code></pre></div>';
+    document.body.appendChild(host);
+    try {
+      await renderMermaidIn(host);
+      expect(host.querySelector('.mermaid-rendered')).toBeNull();
+      const renderMock = vi.fn(async () => ({ svg: '<svg><g/></svg>' }));
+      globalThis.mermaid = { initialize: vi.fn(), render: renderMock };
+      window.dispatchEvent(new Event('load'));
+      await flushPromises();
+      expect(renderMock).toHaveBeenCalledTimes(1);
+      expect(host.querySelector('.mermaid-rendered')).not.toBeNull();
+    } finally {
+      host.remove();
+      if (prevMermaid === undefined) delete globalThis.mermaid;
+      else globalThis.mermaid = prevMermaid;
+      resetMermaidForTests();
+    }
+  });
 });

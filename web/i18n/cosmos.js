@@ -141,6 +141,7 @@ export const zhCN = {
   'cosmos.events.nextRandom': '随机下一场',
   'cosmos.events.zoomIn': '放大焦距',
   'cosmos.events.zoomOut': '缩小焦距',
+  'cosmos.events.zoomRange': '调节望远镜焦距',
 
   'cosmos.events.supernova.name': '超新星爆发',
   'cosmos.events.supernova.desc': '蓝超巨星核心坍缩 · 丝状激波星云与脉冲星风云',
@@ -390,6 +391,7 @@ export const en = {
   'cosmos.events.nextRandom': 'Random next',
   'cosmos.events.zoomIn': 'Zoom in',
   'cosmos.events.zoomOut': 'Zoom out',
+  'cosmos.events.zoomRange': 'Telescope zoom magnification',
 
   'cosmos.events.supernova.name': 'Supernova',
   'cosmos.events.supernova.desc': 'Core collapse · Filamentary shockwave & pulsar nebula',

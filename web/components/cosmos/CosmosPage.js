@@ -1295,6 +1295,12 @@ export default {
       engine?.destroy?.();
       engine = createCosmosEngine(glCanvasRef.value, hudCanvasRef.value, {
         renderQuality: resolveInitialQuality(quality),
+        onFatalError: () => {
+          if (!unmounted && engine?.isWebGL) {
+            autoDowngraded = true;
+            rebuildCosmosEngine('lite');
+          }
+        },
       });
       rendererMode.value = engine?.mode || '2d';
       consecutiveSlowFrames = 0;
@@ -1357,6 +1363,12 @@ export default {
         });
 
         lastFrameCostMs = performance.now() - t0;
+
+        if (engine.isWebGL && engine.isFailed?.()) {
+          autoDowngraded = true;
+          rebuildCosmosEngine('lite');
+          return;
+        }
 
         // Adaptive guard for masked software renderers: if WebGL stays severely stalled
         // (>115ms per frame for 20 consecutive frames) in 'auto' mode, smoothly switch to 2D.

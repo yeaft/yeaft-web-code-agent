@@ -102,9 +102,18 @@ const COMMON_HEAD = `
     return clamp(abs(fract(uv * 0.5) * 2.0 - 1.0), 0.004, 0.996);
   }
 
+  /* Strictly ascending smoothstep falloff (GLSL ES 1.00 sec 8.3 safe when hi > lo) */
+  float sstepDown(float hi, float lo, float x) {
+    return 1.0 - smoothstep(lo, hi, x);
+  }
+
+  vec2 sstepDown2(float hi, float lo, vec2 x) {
+    return vec2(1.0) - smoothstep(lo, hi, x);
+  }
+
   vec3 sampleNebulaSoft(vec2 uv) {
     vec2 m = mirrorUv(uv);
-    vec2 border = smoothstep(0.0, 0.14, m) * smoothstep(1.0, 0.86, m);
+    vec2 border = smoothstep(0.0, 0.14, m) * sstepDown2(1.0, 0.86, m);
     float fade = 0.35 + 0.65 * border.x * border.y;
     return pow(max(texture2D(uTexNebula, m).rgb, vec3(0.0)), vec3(1.22)) * fade;
   }
@@ -202,7 +211,7 @@ const MAIN_OPEN = `
   void main() {
     float locR = length(vLocal);
     if (locR >= 1.0 || uAlpha <= 0.002) discard;
-    float edgeMask = smoothstep(1.0, 0.78, locR);
+    float edgeMask = sstepDown(1.0, 0.78, locR);
     float p = clamp(uProgress, 0.0, 1.0);
     float t = uRealTime;
     float evT = uElapsed;
@@ -212,7 +221,7 @@ const MAIN_OPEN = `
     vec3 solid = vec3(0.0);
     float solidA = 0.0;
     float birthEnv = smoothstep(0.0, 0.14, p);
-    float decayEnv = smoothstep(1.0, 0.76, p);
+    float decayEnv = sstepDown(1.0, 0.76, p);
     float lifeEnv = birthEnv * decayEnv;
 `;
 
@@ -252,7 +261,7 @@ const BODIES = {
 
       if (expP > 0.004) {
         float rShell = 0.14 + pow(expP, 0.62) * 1.36;
-        float nebEnv = smoothstep(0.0, 0.14, expP) * smoothstep(1.0, 0.72, p);
+        float nebEnv = smoothstep(0.0, 0.14, expP) * sstepDown(1.0, 0.72, p);
 
         float asym = 1.0
           + 0.16 * (fbm4(vec2(cos(ang) * 1.7 + uSeed, sin(ang) * 1.7 + 2.3)) - 0.5)
@@ -273,7 +282,7 @@ const BODIES = {
         float outerBand = exp(-pow((rw - rShell * 0.97) / max(rShell * 0.14, 0.038), 2.0));
         float outerWisps = outerBand * (0.18 + 1.55 * sharpFil * (0.42 + 0.95 * veilTex.r));
 
-        float midBand = smoothstep(rShell * 0.22, rShell * 0.62, rw) * smoothstep(rShell * 1.15, rShell * 0.74, rw);
+        float midBand = smoothstep(rShell * 0.22, rShell * 0.62, rw) * sstepDown(rShell * 1.15, rShell * 0.74, rw);
         float innerWeb = midBand * (0.10 + 1.15 * sharpFil) * (0.28 + 1.35 * max(veilTex.b, veilTex.g));
 
         float dustKnots = midBand * smoothstep(0.50, 0.82, filB) * (1.0 - sharpFil) * 0.30 * nebEnv;
@@ -287,7 +296,7 @@ const BODIES = {
 
         emit += colShock * outerWisps * (1.05 - cool * 0.32) * nebEnv;
         emit += colO3 * innerWeb * (0.78 - cool * 0.22) * nebEnv;
-        emit += mix(colO3, colViolet, filB) * smoothstep(rShell * 1.04, rShell * 0.28, rw) * filB * (0.25 + 0.55 * veilTex.r) * 0.28 * nebEnv;
+        emit += mix(colO3, colViolet, filB) * sstepDown(rShell * 1.04, rShell * 0.28, rw) * filB * (0.25 + 0.55 * veilTex.r) * 0.28 * nebEnv;
 
         float leadEdge = exp(-pow((rw - rShell * 1.03) / max(rShell * 0.032, 0.012), 2.0)) * (0.22 + 1.05 * sharpFil);
         emit += mix(vec3(0.76, 0.92, 1.0), vec3(1.0, 0.52, 0.28), 0.42 + 0.35 * cool) * leadEdge * 0.72 * nebEnv;
@@ -342,7 +351,7 @@ const BODIES = {
         if (alongW > -0.05 && alongW < 0.78) {
           float wWidth = 0.055 + alongW * 0.17;
           float wTurb = fbm4(vec2(alongW * 7.0 - evT * 4.2, perpW * 9.0 + uSeed * 4.0));
-          float wake = exp(-pow(perpW / wWidth, 2.0)) * smoothstep(0.78, 0.02, alongW) * (0.38 + 0.82 * wTurb);
+          float wake = exp(-pow(perpW / wWidth, 2.0)) * sstepDown(0.78, 0.02, alongW) * (0.38 + 0.82 * wTurb);
           emit += blackbody(0.26 + 0.50 * (1.0 - alongW / 0.78)) * wake * 0.92 * approachEnv;
         }
 
@@ -351,9 +360,9 @@ const BODIES = {
           float iz = sqrt(max(1.0 - ir * ir, 0.0));
           vec3 inorm = vec3(dImp / impR, iz);
           vec2 iuv = vec2(fract(atan(inorm.x, inorm.z) / TAU + evT * 0.18), clamp(0.5 - asin(clamp(inorm.y, -1.0, 1.0)) / PI, 0.01, 0.99));
-          float crackI = smoothstep(0.16, 0.02, voronoiEdge(iuv * 6.0));
+          float crackI = sstepDown(0.16, 0.02, voronoiEdge(iuv * 6.0));
           vec3 rockI = texture2D(uTexRock, iuv).rgb * (0.14 + 0.95 * max(dot(inorm, L), 0.0));
-          float iaa = smoothstep(1.03, 0.93, rImp / impR) * approachEnv;
+          float iaa = sstepDown(1.03, 0.93, rImp / impR) * approachEnv;
           solid = rockI;
           solidA = max(solidA, iaa);
           emit += blackbody(0.45 + 0.42 * crackI) * (crackI * 1.2 + pow(1.0 - iz, 2.8) * 0.55) * iaa;
@@ -375,15 +384,15 @@ const BODIES = {
           vec3 litP = rTex * (0.07 + pow(ndl, 0.85) * 1.16) + vec3(0.84, 0.44, 0.24) * pow(1.0 - pz, 3.6) * (0.06 + ndl * 0.34);
 
           float dHit = length(qr - hitPt * (rCurrPl / rPl));
-          float waveReach = smoothstep(bp * 1.42 + 0.04, bp * 1.42 - 0.14, dHit) * step(hitT - 0.01, p);
+          float waveReach = sstepDown(bp * 1.42 + 0.04, bp * 1.42 - 0.14, dHit) * step(hitT - 0.01, p);
           vec2 crackWarp = vec2(fbm4(puv * 6.4 + uSeed), fbm4(puv * 6.4 + vec2(4.7, 2.3))) - 0.5;
           float vEdge = voronoiEdge(puv * 7.8 + crackWarp * 0.72 + vec2(uSeed * 2.0, 0.4));
-          float fissure = smoothstep(0.068 + bp * 0.11, 0.006, vEdge) * waveReach;
+          float fissure = sstepDown(0.068 + bp * 0.11, 0.006, vEdge) * waveReach;
           float craterMelt = exp(-dHit * dHit * 20.0) * smoothstep(0.0, 0.08, bp);
           float lavaHeat = clamp(fissure * (0.90 + 0.45 * (1.0 - bp * 0.4)) + craterMelt * 1.15, 0.0, 1.35);
 
           float sectorBreak = smoothstep(0.36, 0.82, bp + fbm4(puv * 5.0) * 0.34 - dHit * 0.50);
-          float paa = smoothstep(1.02, 0.95, pr) * birthEnv * planetRemain * (1.0 - sectorBreak * 0.58);
+          float paa = sstepDown(1.02, 0.95, pr) * birthEnv * planetRemain * (1.0 - sectorBreak * 0.58);
 
           solid = mix(solid, litP * (1.0 - lavaHeat * 0.45), paa);
           solidA = max(solidA, paa);
@@ -400,14 +409,14 @@ const BODIES = {
           vec2 eq = vec2(rq.x, rq.y / 0.26);
           float eqR = length(eq);
           float ringRad = 0.44 + bp * 0.86;
-          float ringBand = smoothstep(ringRad * 0.48, ringRad * 0.78, eqR) * smoothstep(ringRad * 1.44, ringRad * 0.96, eqR);
+          float ringBand = smoothstep(ringRad * 0.48, ringRad * 0.78, eqR) * sstepDown(ringRad * 1.44, ringRad * 0.96, eqR);
           if (ringBand > 0.003) {
             vec2 rotEq = rot2(evT * (0.92 / max(eqR, 0.4)) + eqR * 4.2) * eq;
             float rn1 = fbm4(rotEq * 2.2 + uSeed * 3.0);
             float rn2 = pow(ridged4(rotEq * 3.8 + vec2(rn1 * 1.2, -rn1)), 1.45);
             float streaks = 0.22 + 0.95 * rn2 * (0.50 + 0.50 * sin(eqR * 22.0 + rn1 * 5.5));
             float ringHeat = clamp(0.56 - bp * 0.28 + rn2 * 0.26 - (eqR - ringRad * 0.6) * 0.32, 0.12, 0.78);
-            float frontRing = smoothstep(0.08, -0.06, rq.y);
+            float frontRing = sstepDown(0.08, -0.06, rq.y);
             float occ = mix(1.0 - solidA * 0.88, 1.0, frontRing);
             emit += blackbody(ringHeat) * ringBand * streaks * 0.54 * ringEnv * occ;
             float dustLane = ringBand * smoothstep(0.32, 0.75, rn1) * (1.0 - rn2) * 0.46 * ringEnv * frontRing;
@@ -423,10 +432,10 @@ const BODIES = {
           vec2 pDir = normalize(plumeOff + vec2(1e-5));
           float pN1 = fbm4(plumeOff * (2.8 / max(plumeMax, 0.2)) - pDir * bp * 1.8 + uSeed * 4.0);
           float pN2 = pow(ridged4(plumeOff * (4.2 / max(plumeMax, 0.2)) + vec2(pN1 * 1.3, -pN1)), 1.35);
-          float pMask = smoothstep(plumeMax * 1.15, plumeMax * 0.16, plumeR) * (0.16 + 1.05 * pN1 * (0.38 + 0.82 * pN2));
+          float pMask = sstepDown(plumeMax * 1.15, plumeMax * 0.16, plumeR) * (0.16 + 1.05 * pN1 * (0.38 + 0.82 * pN2));
           float shockArc = exp(-pow((plumeR - plumeMax * 0.94) / max(plumeMax * 0.10, 0.036), 2.0)) * (0.24 + 0.92 * pN2);
           float coolP = smoothstep(0.15, 0.92, bp);
-          float smoke = smoothstep(plumeMax * 1.0, plumeMax * 0.25, plumeR) * smoothstep(0.45, 0.82, pN1) * (1.0 - pN2) * 0.34 * (1.0 - bp * 0.45) * postEnv;
+          float smoke = sstepDown(plumeMax * 1.0, plumeMax * 0.25, plumeR) * smoothstep(0.45, 0.82, pN1) * (1.0 - pN2) * 0.34 * (1.0 - bp * 0.45) * postEnv;
           solid = mix(solid, vec3(0.07, 0.035, 0.025), smoke);
           solidA = max(solidA, smoke);
           emit += blackbody(clamp(0.70 - coolP * 0.38 + pN2 * 0.22, 0.14, 0.86)) * (pMask * 0.52 + shockArc * 0.68) * (1.0 - bp * 0.42) * postEnv;
@@ -443,12 +452,12 @@ const BODIES = {
             float cr = (0.042 + fract(fc * 0.67) * 0.032) * (1.0 - bp * 0.32);
             float sd = rockShardSdf(dCh, cr, fc * 0.73 + uSeed);
             if (sd < 0.025) {
-              float maskCh = smoothstep(0.008, -0.006, sd) * chEnv;
+              float maskCh = sstepDown(0.008, -0.006, sd) * chEnv;
               vec2 blastDir = normalize(hitPt - cPos + vec2(1e-4));
               float blastSide = clamp(dot(normalize(dCh + vec2(1e-4)), blastDir), 0.0, 1.0);
               vec3 rockTex = texture2D(uTexRock, mirrorUv(dCh * 5.0 + vec2(fc * 0.23, 0.3))).rgb;
               vec3 litShard = rockTex * (0.14 + 0.58 * clamp(dot(normalize(vec3(dCh / max(cr, 0.01), 0.7)), L), 0.0, 1.0));
-              float hotFace = smoothstep(-0.014, 0.004, sd) * smoothstep(0.014, -0.004, sd) * (0.28 + 0.72 * blastSide);
+              float hotFace = smoothstep(-0.014, 0.004, sd) * sstepDown(0.014, -0.004, sd) * (0.28 + 0.72 * blastSide);
               solid = mix(solid, litShard, maskCh);
               solidA = max(solidA, maskCh);
               emit += blackbody(0.46 - bp * 0.20) * hotFace * 0.75 * chEnv;
@@ -486,7 +495,7 @@ const BODIES = {
             vec2 suv = vec2(fract(ang / TAU + evT * 0.14), clamp(0.5 - (qr.y / max(rStar, 0.01)) * 0.45, 0.02, 0.98));
             vec3 gran = texture2D(uTexSun, mirrorUv(suv + vec2(fbm4(qr * 8.0 - evT) * 0.06))).rgb;
             vec3 hotStar = mix(gran * vec3(1.3, 0.95, 0.65), vec3(0.74, 0.90, 1.0), collP * 0.72) * (0.45 + 0.85 * pow(sz, 0.5));
-            emit += hotStar * smoothstep(1.04, 0.86, sr) * 1.55 * starEnv;
+            emit += hotStar * sstepDown(1.04, 0.86, sr) * 1.55 * starEnv;
           }
           float wind = exp(-max(sr - 0.85, 0.0) * 2.4) * (0.65 + 0.45 * fbm4(vec2(ang * 4.0 + evT * 1.6, sr * 2.4)));
           emit += mix(vec3(0.52, 0.82, 1.0), vec3(1.0, 0.86, 0.62), 0.35) * wind * 0.72 * starEnv;
@@ -512,10 +521,11 @@ const BODIES = {
           float jetReach = 0.28 + smoothstep(0.04, 0.42, birthP) * 1.68;
           if (along > rs * 0.98 && along < jetReach * 1.25) {
             float jWidth = 0.020 + pow(along, 0.82) * 0.088;
-            float knots = ridged4(vec2(along * 4.8 - evT * 5.2 * sign(qr.y + 1e-4), qr.x * 16.0 + sin(along * 9.0) * 0.6));
+            float poleSign = sign(qr.y + 1e-4);
+            float knots = ridged4(vec2(along * 4.8 - evT * 5.2 + poleSign * 3.7, qr.x * 16.0 + sin(along * 9.0) * 0.6));
             float spine = exp(-pow(perp / (jWidth * 0.36), 2.0)) * 1.25;
             float sheath = exp(-pow(perp / jWidth, 2.0)) * (0.34 + 0.92 * knots);
-            float lenMask = smoothstep(rs * 0.98, rs * 1.75, along) * smoothstep(jetReach * 1.15, jetReach * 0.22, along);
+            float lenMask = smoothstep(rs * 0.98, rs * 1.75, along) * sstepDown(jetReach * 1.15, jetReach * 0.22, along);
             vec3 jetCol = mix(vec3(0.46, 0.74, 1.0), vec3(0.92, 0.96, 1.0), clamp(spine * 0.7, 0.0, 1.0));
             emit += (jetCol * spine + vec3(0.54, 0.64, 1.0) * sheath * 0.68) * lenMask * jetRise * 1.05;
           }
@@ -532,11 +542,11 @@ const BODIES = {
 
           vec2 eq = vec2(bq.x, bq.y / 0.19);
           float eqR = length(eq);
-          float frontCross = smoothstep(0.06, -0.05, bq.y);
+          float frontCross = sstepDown(0.06, -0.05, bq.y);
           float diskGrow = smoothstep(0.02, 0.36, birthP);
-          float diskBand = smoothstep(1.14, 1.50, eqR) * smoothstep(1.8 + 4.2 * diskGrow, 1.95, eqR)
+          float diskBand = smoothstep(1.14, 1.50, eqR) * sstepDown(2.25 + 3.75 * diskGrow, 1.95, eqR)
                          * mix(smoothstep(0.95, 1.04, bqr), 1.0, frontCross);
-          float archMask = smoothstep(0.99, 1.14, bqr) * smoothstep(2.65, 1.15, bqr)
+          float archMask = smoothstep(0.99, 1.14, bqr) * sstepDown(2.65, 1.15, bqr)
                          * smoothstep(0.04, 0.62, abs(bq.y) / max(bqr, 0.16)) * diskGrow;
 
           float doppler = clamp(1.0 - 0.48 * (bq.x / max(bqr, 0.30)), 0.34, 1.76);
@@ -589,13 +599,14 @@ const BODIES = {
         float eqA = atan(eq.y, eq.x);
 
         float gwWave = sin(2.0 * (eqA - omega * 0.72) + eqR * (7.5 + ip * 10.0));
-        float gwMask = smoothstep(0.24, 0.52, eqR) * smoothstep(1.62, 0.45, eqR);
+        float gwMask = smoothstep(0.24, 0.52, eqR) * sstepDown(1.62, 0.45, eqR);
         emit += vec3(0.46, 0.68, 1.0) * pow(max(gwWave, 0.0), 3.5) * gwMask * (0.09 + 0.16 * ip) * inEnv;
 
-        float spiralArg = 2.0 * (eqA - omega) + (eqR - sep) * (5.2 + ip * 4.5);
+        float sepSafe = max(sep, 0.025);
+        float spiralArg = 2.0 * (eqA - omega) + (eqR - sepSafe) * (5.2 + ip * 4.5);
         float armRidge = exp(-pow(sin(spiralArg * 0.5), 2.0) * (11.0 + eqR * 6.5));
         float armTurb = fbm4(rot2(-omega * 0.35) * eq * 3.8 + uSeed * 3.0);
-        float armEnv = smoothstep(sep * 0.78, sep * 1.08, eqR) * smoothstep(sep + 0.76, sep + 0.08, eqR);
+        float armEnv = smoothstep(sepSafe * 0.78, sepSafe * 1.08, eqR) * sstepDown(sepSafe + 0.76, sepSafe + 0.08, eqR);
         emit += mix(vec3(0.36, 0.84, 1.0), vec3(0.76, 0.54, 1.0), 0.5 + 0.5 * sin(eqA - omega))
               * armRidge * (0.38 + 0.92 * armTurb) * armEnv * (0.45 + 0.85 * ip) * inEnv;
 
@@ -631,9 +642,9 @@ const BODIES = {
         float f1 = fbm4(qr * (2.8 / max(rExp, 0.2)) - flow * kp * 1.5 + uSeed * 5.0);
         float f2 = pow(ridged4(qr * (4.0 / max(rExp, 0.2)) + vec2(f1 * 1.25, -f1)), 1.55);
 
-        float cloudMask = smoothstep(1.22, 0.20, rScaled) * (0.14 + 1.15 * f1 * (0.34 + 0.92 * f2));
+        float cloudMask = sstepDown(1.22, 0.20, rScaled) * (0.14 + 1.15 * f1 * (0.34 + 0.92 * f2));
         float shellRim = exp(-pow((rScaled - 0.92) / 0.14, 2.0)) * (0.24 + 1.05 * f2);
-        float darkVeins = smoothstep(1.05, 0.22, rScaled) * smoothstep(0.48, 0.84, f1) * (1.0 - f2) * 0.34 * kEnv;
+        float darkVeins = sstepDown(1.05, 0.22, rScaled) * smoothstep(0.48, 0.84, f1) * (1.0 - f2) * 0.34 * kEnv;
         solid = mix(solid, vec3(0.04, 0.025, 0.045), darkVeins);
         solidA = max(solidA, darkVeins);
 
@@ -671,7 +682,7 @@ const BODIES = {
       float outerMask = smoothstep(0.90, 1.04, rSun);
       float corona = (exp(-max(rSun - 0.97, 0.0) * 3.4) * 0.82
                    + exp(-max(rSun - 0.94, 0.0) * 1.6) * 0.38 * streamer
-                   + pow(1.0 / max(rSun, 0.95), 2.8) * 0.20) * smoothstep(3.85, 1.02, rSun) * outerMask;
+                   + pow(1.0 / max(rSun, 0.95), 2.8) * 0.20) * sstepDown(3.85, 1.02, rSun) * outerMask;
       float prom = exp(-pow((rSun - 1.055) / 0.052, 2.0))
                  * smoothstep(0.56, 0.88, noise2(vec2(ang * 7.5 + t * 0.08, t * 0.16))) * 0.72;
       vec3 coronaCol = mix(vec3(0.98, 0.44, 0.12), vec3(1.00, 0.94, 0.80), exp(-max(rSun - 0.97, 0.0) * 2.8));
@@ -694,7 +705,7 @@ const BODIES = {
         vec3 photo = pow(max(gran, vec3(0.02)), vec3(0.88)) * vec3(1.24, 0.90, 0.52) * (0.22 + 0.78 * pow(z, 0.58))
                    + vec3(0.38, 0.26, 0.14) * pow(z, 2.2)
                    + vec3(1.0, 0.34, 0.06) * pow(1.0 - z, 2.4) * 0.78;
-        float aa = smoothstep(1.02, 0.94, rSun) * eruptEnv;
+        float aa = sstepDown(1.02, 0.94, rSun) * eruptEnv;
         solid = mix(solid, clamp(acesTone(photo), 0.0, 1.0), aa);
         solidA = max(solidA, aa);
       }
@@ -727,7 +738,7 @@ const BODIES = {
       if (cmeP > 0.01 && qr.x > 0.84) {
         float cmeEnv = smoothstep(0.0, 0.16, cmeP) * decayEnv;
         float coneAng = 0.66 + cmeP * 0.20;
-        float angMask = smoothstep(coneAng, coneAng * 0.22, abs(aOff));
+        float angMask = sstepDown(coneAng, coneAng * 0.22, abs(aOff));
         float frontR = 1.18 + pow(cmeP, 0.72) * 2.65;
         float radialU = (rSun - 0.98) / max(frontR - 0.98, 0.15);
 
@@ -740,7 +751,7 @@ const BODIES = {
           float rFrontWarped = radialU - (n1 - 0.5) * 0.15;
           float leadShock = exp(-pow((rFrontWarped - 0.94) / 0.095, 2.0)) * (0.32 + 1.05 * n2);
           float promCore = exp(-pow((rFrontWarped - 0.52) / 0.22, 2.0)) * (0.20 + 1.25 * n2 * sunTex.r);
-          float streamers = smoothstep(1.16, 0.08, radialU) * pow(0.5 + 0.5 * sin(aOff * 20.0 + n1 * 4.8), 2.5) * 0.34;
+          float streamers = sstepDown(1.16, 0.08, radialU) * pow(0.5 + 0.5 * sin(aOff * 20.0 + n1 * 4.8), 2.5) * 0.34;
 
           float heat = clamp(0.74 - radialU * 0.44 - cmeP * 0.20 + n2 * 0.26, 0.14, 0.86);
           emit += blackbody(heat) * (leadShock * 0.82 + promCore * 0.74 + streamers) * angMask * (1.0 - cmeP * 0.28) * cmeEnv;
@@ -767,13 +778,13 @@ const BODIES = {
       float beamEnv = smoothstep(0.10, 0.24, p) * decayEnv;
       if (beamEnv > 0.002) {
         float jetLen = 0.15 + smoothstep(0.0, 0.28, jetP) * (invS * 0.92);
-        float lenMask = smoothstep(jetLen, jetLen * 0.16, along);
+        float lenMask = sstepDown(jetLen, jetLen * 0.16, along);
 
         float coreW = 0.013 + along * 0.015;
         float sheathW = 0.042 + pow(along, 0.84) * 0.135;
         float dirSign = sign(qr.x + 1e-5);
-        float nJet = fbm4(vec2(along * 2.8 - evT * 6.5 * dirSign, qr.y * 8.0 + uSeed * 4.0));
-        float knots = ridged4(vec2(along * 4.4 - evT * 8.2 * dirSign, qr.y * 13.0 + nJet * 1.4));
+        float nJet = fbm4(vec2(along * 2.8 - evT * 6.5 + dirSign * 3.7, qr.y * 8.0 + uSeed * 4.0));
+        float knots = ridged4(vec2(along * 4.4 - evT * 8.2 + dirSign * 5.1, qr.y * 13.0 + nJet * 1.4));
 
         float needle = exp(-pow(perp / coreW, 2.0)) * (1.35 + 0.50 * knots);
         float sheath = exp(-pow(perp / sheathW, 2.0)) * (0.24 + 0.98 * knots);
@@ -783,7 +794,7 @@ const BODIES = {
         vec2 cocUv = (qr / max(bowR * 1.65, 0.2)) * 0.44 + 0.5 + vec2(uSeed * 0.2, 0.1);
         vec3 nebTex = sampleNebulaSoft(cocUv);
         float hourglass = abs(perp - (0.08 + pow(along, 0.72) * 0.42));
-        float cocoonShell = exp(-pow(hourglass / 0.10, 2.0)) * smoothstep(bowR * 1.25, bowR * 0.15, along)
+        float cocoonShell = exp(-pow(hourglass / 0.10, 2.0)) * sstepDown(bowR * 1.25, bowR * 0.15, along)
                           * (0.30 + 1.12 * knots * (0.38 + 0.82 * nebTex.b));
 
         vec2 eqT = vec2(qr.x / 0.20, qr.y);
@@ -880,7 +891,7 @@ const BODIES = {
         float sRidge = ridged4(qr * 7.6 + vec2(sTurb * 1.3, -sTurb));
         float streamSpine = exp(-pow(minD / (ribWidth * 0.38), 2.0)) * (0.72 + 0.58 * sRidge);
         float streamPlume = exp(-pow(minD / (ribWidth * 1.55), 2.0)) * (0.24 + 0.85 * sTurb);
-        float taper = smoothstep(0.0, 0.14, bestU) * smoothstep(1.0, 0.88, bestU);
+        float taper = smoothstep(0.0, 0.14, bestU) * sstepDown(1.0, 0.88, bestU);
         float streamHeat = clamp(0.24 + bestU * 0.52 + sRidge * 0.18, 0.14, 0.84);
         float occStream = smoothstep(0.92, 1.05, bqr);
         emit += blackbody(streamHeat) * (streamSpine * 0.92 + streamPlume * 0.48) * taper * streamEnv * occStream;
@@ -897,9 +908,9 @@ const BODIES = {
         vec2 bq = qr / rBh;
         vec2 eq = vec2(bq.x - 0.18, bq.y / 0.22);
         float eqR = length(eq);
-        float frontCross = smoothstep(0.06, -0.05, bq.y);
-        float diskBand = smoothstep(1.16, 1.54, eqR) * smoothstep(4.6, 1.90, eqR) * mix(smoothstep(0.96, 1.05, bqr), 1.0, frontCross);
-        float archMask = smoothstep(0.99, 1.15, bqr) * smoothstep(2.40, 1.14, bqr) * smoothstep(0.06, 0.62, abs(bq.y) / max(bqr, 0.16));
+        float frontCross = sstepDown(0.06, -0.05, bq.y);
+        float diskBand = smoothstep(1.16, 1.54, eqR) * sstepDown(4.6, 1.90, eqR) * mix(smoothstep(0.96, 1.05, bqr), 1.0, frontCross);
+        float archMask = smoothstep(0.99, 1.15, bqr) * sstepDown(2.40, 1.14, bqr) * smoothstep(0.06, 0.62, abs(bq.y) / max(bqr, 0.16));
         float doppler = clamp(1.0 - 0.44 * (bq.x / max(bqr, 0.32)), 0.38, 1.62);
         float flow = evT * 1.25;
         vec2 rotEq = rot2(flow * (0.95 / pow(max(eqR, 0.85), 0.75)) + eqR * 2.4) * eq;
@@ -944,14 +955,14 @@ const BODIES = {
         float dustCurve = perpI - 0.16 * alongI * alongI - 0.08 * alongI;
         float dustW = 0.060 + max(alongI, 0.0) * (0.23 + splitP * 0.12);
         float dNoise = fbm4(vec2(alongI * 3.2 - evT * 1.6, dustCurve * 7.5 + uSeed * 4.0));
-        float dustMask = exp(-pow(dustCurve / dustW, 2.0)) * smoothstep(-0.08, 0.12, alongI) * smoothstep(2.15, 0.18, alongI);
+        float dustMask = exp(-pow(dustCurve / dustW, 2.0)) * smoothstep(-0.08, 0.12, alongI) * sstepDown(2.15, 0.18, alongI);
         vec3 dustCol = mix(vec3(1.00, 0.90, 0.72), vec3(0.90, 0.66, 0.40), clamp(alongI * 0.55, 0.0, 1.0));
         emit += dustCol * dustMask * (0.28 + 0.72 * dNoise) * 0.52 * cometEnv;
 
         float ionWave = sin(alongI * 7.5 - evT * 4.6) * 0.018 * alongI;
         float ionW = 0.024 + max(alongI, 0.0) * 0.076;
         float ionFil = ridged4(vec2(alongI * 4.2 - evT * 3.2, (perpI + ionWave) * 18.0 + uSeed * 2.0));
-        float ionMask = exp(-pow((perpI + ionWave) / ionW, 2.0)) * smoothstep(-0.05, 0.08, alongI) * smoothstep(2.25, 0.12, alongI);
+        float ionMask = exp(-pow((perpI + ionWave) / ionW, 2.0)) * smoothstep(-0.05, 0.08, alongI) * sstepDown(2.25, 0.12, alongI);
         emit += mix(vec3(0.28, 0.80, 1.00), vec3(0.62, 0.94, 1.00), ionFil) * ionMask * (0.32 + 0.88 * ionFil) * 0.72 * cometEnv;
       }
 
@@ -969,7 +980,7 @@ const BODIES = {
         float fLen = (0.28 + weight * 0.48) * (1.0 - splitP * 0.16);
         if (fa > -0.03 && fa < fLen) {
           float fw = (0.010 + weight * 0.012) + max(fa, 0.0) * 0.058;
-          float ft = exp(-pow(fp / fw, 2.0)) * smoothstep(-0.015, 0.035, fa) * smoothstep(fLen, 0.04, fa);
+          float ft = exp(-pow(fp / fw, 2.0)) * smoothstep(-0.015, 0.035, fa) * sstepDown(fLen, 0.04, fa);
           emit += mix(vec3(0.50, 0.92, 1.0), vec3(1.0, 0.90, 0.72), clamp(fa / fLen, 0.0, 1.0)) * ft * (0.28 + weight * 0.34) * cometEnv;
         }
 

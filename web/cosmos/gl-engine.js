@@ -25,7 +25,7 @@ function compileShader(gl, type, src) {
   return sh;
 }
 
-function startProgram(gl, vsSrc, fsSrc) {
+function startProgram(gl, vsSrc, fsSrc, primaryAttr = null) {
   const vs = compileShader(gl, gl.VERTEX_SHADER, vsSrc);
   const fs = compileShader(gl, gl.FRAGMENT_SHADER, fsSrc);
   if (!vs || !fs) {
@@ -41,6 +41,9 @@ function startProgram(gl, vsSrc, fsSrc) {
   }
   gl.attachShader(prog, vs);
   gl.attachShader(prog, fs);
+  if (primaryAttr && typeof gl.bindAttribLocation === 'function') {
+    gl.bindAttribLocation(prog, 0, primaryAttr);
+  }
   gl.linkProgram(prog);
   return { prog, vs, fs };
 }
@@ -166,6 +169,8 @@ export function createCosmosEngine(glCanvas, hudCanvas, opts = {}) {
   let pendingCore = null;
   let coreReady = false;
   let coreFailed = false;
+  let fatalNotified = false;
+  let contextGen = 0;
   let bgProg = null;
   let bodyProg = null;
   let ptProg = null;
@@ -182,11 +187,19 @@ export function createCosmosEngine(glCanvas, hudCanvas, opts = {}) {
 
   const requestedGroups = new Set();
   const requestedTiers = new Set();
+  const requestedKeys = new Set();
   const textureUnsubs = [];
   const uploadedRealKeys = new Set();
-  const uploadQueue = []; // { key, source, spec, ownsBitmap }
+  const queuedUploadKeys = new Set();
+  const uploadQueue = []; // { key, source, spec, ownsBitmap, gen }
   const stageTimers = [];
   let idleHandle = 0;
+
+  function notifyFatalError(reason) {
+    if (fatalNotified || destroyed) return;
+    fatalNotified = true;
+    try { opts.onFatalError?.(reason); } catch { /* ignore callback errors */ }
+  }
 
   function clearPendingUploadQueue() {
     while (uploadQueue.length) {
@@ -195,52 +208,69 @@ export function createCosmosEngine(glCanvas, hudCanvas, opts = {}) {
         try { item.source.close(); } catch { /* ignore */ }
       }
     }
+    queuedUploadKeys.clear();
   }
 
   function applyRealSourceImmediate(key, source, spec, ownsBitmap = false) {
-    if (destroyed || contextLost || !textures || !textures[key] || gl.isContextLost?.()) {
+    try {
+      if (destroyed || contextLost || !textures || !textures[key] || gl.isContextLost?.()) {
+        return false;
+      }
+      const ok = uploadImageToWebGLTexture(gl, textures[key], source, spec);
+      if (ok) uploadedRealKeys.add(key);
+      return ok;
+    } catch (err) {
+      console.warn('[Cosmos] Texture upload warning:', key, err?.message || err);
+      return false;
+    } finally {
       if (ownsBitmap && typeof source?.close === 'function') {
         try { source.close(); } catch { /* ignore */ }
       }
-      return false;
     }
-    const ok = uploadImageToWebGLTexture(gl, textures[key], source, spec);
-    if (ownsBitmap && typeof source?.close === 'function') {
-      try { source.close(); } catch { /* ignore */ }
-    }
-    if (ok) uploadedRealKeys.add(key);
-    return ok;
   }
 
   function enqueueRealImage(key, img, spec) {
     if (destroyed || contextLost || !textures || !textures[key]) return;
+    if (uploadedRealKeys.has(key) || queuedUploadKeys.has(key)) return;
+    const gen = contextGen;
+    queuedUploadKeys.add(key);
     const isDomImage = typeof HTMLImageElement !== 'undefined' && img instanceof HTMLImageElement;
     if (isDomImage && typeof createImageBitmap === 'function') {
       createImageBitmap(img).then((bmp) => {
-        if (destroyed || contextLost) {
+        if (destroyed || contextLost || gen !== contextGen || uploadedRealKeys.has(key)) {
+          queuedUploadKeys.delete(key);
           try { bmp.close(); } catch { /* ignore */ }
           return;
         }
-        uploadQueue.push({ key, source: bmp, spec, ownsBitmap: true });
+        uploadQueue.push({ key, source: bmp, spec, ownsBitmap: true, gen });
       }, () => {
-        if (!destroyed && !contextLost) {
-          uploadQueue.push({ key, source: img, spec, ownsBitmap: false });
+        if (destroyed || contextLost || gen !== contextGen || uploadedRealKeys.has(key)) {
+          queuedUploadKeys.delete(key);
+          return;
         }
+        uploadQueue.push({ key, source: img, spec, ownsBitmap: false, gen });
       });
     } else {
       // Unit tests or environments without createImageBitmap
-      uploadQueue.push({ key, source: img, spec, ownsBitmap: false });
+      uploadQueue.push({ key, source: img, spec, ownsBitmap: false, gen });
     }
   }
 
   function flushUploadQueue() {
     if (!uploadQueue.length || destroyed || contextLost || !textures || gl.isContextLost?.()) return;
     const budgetMs = 4.0;
-    const maxPerFrame = 1;
+    const maxPerFrame = 2;
     const t0 = typeof performance !== 'undefined' ? performance.now() : 0;
     let done = 0;
     while (uploadQueue.length && done < maxPerFrame) {
       const item = uploadQueue.shift();
+      queuedUploadKeys.delete(item.key);
+      if (item.gen !== contextGen || uploadedRealKeys.has(item.key)) {
+        if (item.ownsBitmap && typeof item.source?.close === 'function') {
+          try { item.source.close(); } catch { /* ignore */ }
+        }
+        continue;
+      }
       applyRealSourceImmediate(item.key, item.source, item.spec, item.ownsBitmap);
       done += 1;
       if (t0 && (performance.now() - t0) >= budgetMs) break;
@@ -266,13 +296,12 @@ export function createCosmosEngine(glCanvas, hudCanvas, opts = {}) {
   }
 
   function ensureEventTextures() {
-    if (destroyed) return;
-    if (!uploadedRealKeys.has('nebula')) {
-      const unsub = requestCosmosTextureKeys(['nebula'], (key, img, spec) => {
-        enqueueRealImage(key, img, spec);
-      });
-      textureUnsubs.push(unsub);
-    }
+    if (destroyed || uploadedRealKeys.has('nebula') || requestedKeys.has('nebula')) return;
+    requestedKeys.add('nebula');
+    const unsub = requestCosmosTextureKeys(['nebula'], (key, img, spec) => {
+      enqueueRealImage(key, img, spec);
+    });
+    textureUnsubs.push(unsub);
   }
 
   function reuploadCachedRealTextures() {
@@ -370,6 +399,7 @@ export function createCosmosEngine(glCanvas, hudCanvas, opts = {}) {
       if (nextBody) gl.deleteProgram(nextBody);
       if (nextPt) gl.deleteProgram(nextPt);
       coreFailed = true;
+      notifyFatalError('shader_link_failed');
       return false;
     }
     bgProg = nextBg;
@@ -423,12 +453,12 @@ export function createCosmosEngine(glCanvas, hudCanvas, opts = {}) {
       }
       gl.attachShader(prog, sharedEventVert);
       gl.attachShader(prog, fs);
+      if (typeof gl.bindAttribLocation === 'function') {
+        gl.bindAttribLocation(prog, 0, 'aCorner');
+      }
       gl.linkProgram(prog);
       entry = { prog, fs, loc: null, ready: false, failed: false };
       eventCache[eventType] = entry;
-      if (!parallelExt) {
-        finalizeEventProgram(entry);
-      }
     }
     if (!entry.ready && !entry.failed) {
       finalizeEventProgram(entry);
@@ -472,9 +502,11 @@ export function createCosmosEngine(glCanvas, hudCanvas, opts = {}) {
   }
 
   function initGpuResources() {
+    contextGen += 1;
     parallelExt = gl.getExtension?.('KHR_parallel_shader_compile') || null;
     coreReady = false;
     coreFailed = false;
+    fatalNotified = false;
     bgProg = null;
     bodyProg = null;
     ptProg = null;
@@ -486,9 +518,9 @@ export function createCosmosEngine(glCanvas, hudCanvas, opts = {}) {
 
     // Kick off all 3 core programs in parallel so drivers compile them across worker threads.
     // Zero cosmic event shaders and zero procedural texture baker shaders compile at boot!
-    const bgH = startProgram(gl, BG_VERT, BG_FRAG);
-    const bodyH = startProgram(gl, BODY_VERT, BODY_FRAG);
-    const ptH = startProgram(gl, PARTICLE_VERT, PARTICLE_FRAG);
+    const bgH = startProgram(gl, BG_VERT, BG_FRAG, 'aPos');
+    const bodyH = startProgram(gl, BODY_VERT, BODY_FRAG, 'aCorner');
+    const ptH = startProgram(gl, PARTICLE_VERT, PARTICLE_FRAG, 'aPosPx');
     if (!bgH || !bodyH || !ptH) {
       for (const h of [bgH, bodyH, ptH]) {
         if (!h) continue;
@@ -517,9 +549,9 @@ export function createCosmosEngine(glCanvas, hudCanvas, opts = {}) {
     if (!nextTextures) {
       gl.deleteBuffer(nextQuadBuf);
       gl.deleteBuffer(nextPtBuf);
-      if (bgProg) gl.deleteProgram(bgProg);
-      if (bodyProg) gl.deleteProgram(bodyProg);
-      if (ptProg) gl.deleteProgram(ptProg);
+      if (bgProg) { gl.deleteProgram(bgProg); bgProg = null; }
+      if (bodyProg) { gl.deleteProgram(bodyProg); bodyProg = null; }
+      if (ptProg) { gl.deleteProgram(ptProg); ptProg = null; }
       if (pendingCore) {
         for (const h of Object.values(pendingCore)) {
           gl.deleteProgram(h.prog);
@@ -528,6 +560,7 @@ export function createCosmosEngine(glCanvas, hudCanvas, opts = {}) {
         }
         pendingCore = null;
       }
+      coreReady = false;
       return false;
     }
 
@@ -567,12 +600,13 @@ export function createCosmosEngine(glCanvas, hudCanvas, opts = {}) {
   let dpr = 1;
   let glDpr = 1;
   let adaptiveScale = 1.0;
-  let avgFrameMs = 16.6;
-  let lastFrameWall = 0;
+  let avgRenderMs = 8.0;
+  let adaptiveCooldown = 0;
   const qualityFactor = (isMobile && renderQuality !== 'high') ? 0.65 : 1.0;
 
   function onContextLost(e) {
     e?.preventDefault?.();
+    contextGen += 1;
     contextLost = true;
     coreReady = false;
     pendingCore = null;
@@ -654,6 +688,7 @@ export function createCosmosEngine(glCanvas, hudCanvas, opts = {}) {
     gl.vertexAttribPointer(ptLoc.aColor, 4, gl.FLOAT, false, stride, 3 * 4);
 
     gl.drawArrays(gl.POINTS, 0, count);
+    gl.disableVertexAttribArray(ptLoc.aPosPx);
     gl.disableVertexAttribArray(ptLoc.aSize);
     gl.disableVertexAttribArray(ptLoc.aColor);
   }
@@ -720,23 +755,7 @@ export function createCosmosEngine(glCanvas, hudCanvas, opts = {}) {
       return;
     }
 
-    // Smooth adaptive resolution governor in 'auto' mode for weak/integrated GPUs.
-    if (renderQuality === 'auto' && !isSoftware && typeof performance !== 'undefined') {
-      const now = performance.now();
-      if (lastFrameWall > 0) {
-        const wallDt = Math.min(120, now - lastFrameWall);
-        avgFrameMs = avgFrameMs * 0.90 + wallDt * 0.10;
-        if (avgFrameMs > 44 && adaptiveScale > 0.74) {
-          adaptiveScale = Math.max(0.72, adaptiveScale - 0.08);
-          avgFrameMs = 28;
-          resize();
-        } else if (avgFrameMs < 19 && adaptiveScale < 1.0) {
-          adaptiveScale = Math.min(1.0, adaptiveScale + 0.05);
-          resize();
-        }
-      }
-      lastFrameWall = now;
-    }
+    const renderStart = typeof performance !== 'undefined' ? performance.now() : 0;
 
     const {
       time, realTime, scaleLog, parallax, camRot, warp, fovZoom, shockWave,
@@ -861,6 +880,26 @@ export function createCosmosEngine(glCanvas, hudCanvas, opts = {}) {
 
     ctx2d.clearRect(0, 0, width, height);
     if (hudDraw) hudDraw(ctx2d, width, height, { eventRenderedInGL });
+
+    // Measure actual render cost (not intentional sleep intervals on mobile) and apply any
+    // adaptive resolution resize AFTER the frame completes so particle glDpr stays in sync.
+    if (renderQuality === 'auto' && !isSoftware && renderStart > 0) {
+      const renderMs = Math.min(120, performance.now() - renderStart);
+      avgRenderMs = avgRenderMs * 0.90 + renderMs * 0.10;
+      if (adaptiveCooldown > 0) {
+        adaptiveCooldown -= 1;
+      } else if (avgRenderMs > 28 && adaptiveScale > 0.74) {
+        adaptiveScale = Math.max(0.72, adaptiveScale - 0.08);
+        avgRenderMs = 14;
+        adaptiveCooldown = 25;
+        resize();
+      } else if (avgRenderMs < 10 && adaptiveScale < 1.0) {
+        adaptiveScale = Math.min(1.0, adaptiveScale + 0.05);
+        avgRenderMs = 14;
+        adaptiveCooldown = 35;
+        resize();
+      }
+    }
   }
 
   function destroy() {
@@ -913,6 +952,7 @@ export function createCosmosEngine(glCanvas, hudCanvas, opts = {}) {
     getSize: () => ({ width, height, dpr: glDpr, hudDpr: dpr }),
     areTexturesReady: () => true,
     areRealTexturesReady: () => uploadedRealKeys.has('earth_day') && uploadedRealKeys.has('milky'),
+    isFailed: () => coreFailed,
     getCompiledEventShaderCount: () => Object.values(eventCache).filter((e) => e?.ready).length,
     destroy,
   };

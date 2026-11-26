@@ -40,12 +40,11 @@
 <body>
   <div id="app"></div>
   <script type="module" src="app.js"></script>
-  <!-- Document Preview / Mermaid / Screenshot / SSO - deferred after app bootstrap -->
+  <!-- Optional deferred vendor libraries (xlsx.min.js is loaded on-demand inside spreadsheet-worker.js) -->
+  <script defer src="vendor/msal-browser.min.js"></script>
   <script defer src="vendor/jszip.min.js"></script>
   <script defer src="vendor/docx-preview.min.js"></script>
-  <script defer src="vendor/xlsx.min.js"></script>
-  <script defer src="vendor/mermaid.min.js"></script>
   <script defer src="vendor/html-to-image.min.js"></script>
-  <script defer src="vendor/msal-browser.min.js"></script>
+  <script defer src="vendor/mermaid.min.js"></script>
 </body>
 </html>

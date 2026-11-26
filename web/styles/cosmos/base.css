@@ -519,7 +519,7 @@
     bottom: calc(74px + env(safe-area-inset-bottom, 0px));
   }
   .cosmos-page.is-observing-event .cosmos-toast {
-    bottom: calc(154px + env(safe-area-inset-bottom, 0px));
+    bottom: calc(168px + env(safe-area-inset-bottom, 0px));
   }
 }
 

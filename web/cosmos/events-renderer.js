@@ -62,10 +62,14 @@ export function fillEventGpuParticles(buf, evDraw, w, h, dpr, densityScale = 1.0
   const lifeEnv = birthEnv * decayEnv * alphaMaster;
   if (lifeEnv <= 0.004) return 0;
 
+  // Exact inverse of EVENT_VERT (vLocal = (aCorner.x, -aCorner.y), Y-up) + GLSL column-major rot2(uAngle):
+  // qr = (c*qx + s*qy, -s*qx + c*qy) => q = (c*lx - s*ly, s*lx + c*ly), screen = (x + qx, y - qy).
   const pushLocal = (lx, ly, sz, r, g, b, a) => {
     if (count >= maxPts || a <= 0.01) return;
-    const sx = x + (lx * rotC - ly * rotS);
-    const sy = y + (lx * rotS + ly * rotC);
+    const qx = lx * rotC - ly * rotS;
+    const qy = lx * rotS + ly * rotC;
+    const sx = x + qx;
+    const sy = y - qy;
     if (sx < -24 || sx > w + 24 || sy < -24 || sy > h + 24) return;
     const off = count * 7;
     buf[off] = sx * dpr;
@@ -262,8 +266,11 @@ export function fillEventGpuParticles(buf, evDraw, w, h, dpr, densityScale = 1.0
       const rad = sunR * 0.98 + (front - sunR * 0.98) * ((sd.r + evT * 0.14 * sd.spd) % 1.0);
       const lx = Math.cos(angOff) * rad;
       const ly = Math.sin(angOff) * rad;
-      const sx = x + (lx * baseC - ly * baseS);
-      const sy = y + (lx * baseS + ly * baseC);
+      // Event 4 shader uses qr = rot2(-uAngle) * qs in Y-up space -> inverse is rot2(+uAngle), screenY = y - qy.
+      const qx = lx * baseC + ly * baseS;
+      const qy = -lx * baseS + ly * baseC;
+      const sx = x + qx;
+      const sy = y - qy;
       if (count >= maxPts || sx < -24 || sx > w + 24 || sy < -24 || sy > h + 24) continue;
       const uRad = (rad - sunR) / Math.max(front - sunR, 1);
       const off = count * 7;
@@ -468,7 +475,8 @@ export function drawCosmicEventCanvas(ctx, w, h, active, pos, visibilityAlpha = 
   // Smooth organic birth (0 -> 14%) and graceful afterglow fade (76 -> 100%)
   const birthEnv = smoothstep(0.0, 0.14, p);
   const decayEnv = smoothstep(1.0, 0.76, p);
-  const depthAtten = 0.76 + focus * 0.24;
+  // Avoid double-attenuating when `pos` already carries computed `alpha` from `computeEventFrame`.
+  const depthAtten = typeof pos.alpha === 'number' ? 1.0 : (0.76 + focus * 0.24);
   const masterA = birthEnv * decayEnv * depthAtten * Math.max(0, Math.min(1, visibilityAlpha));
   if (masterA <= 0.005) return;
 

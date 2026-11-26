@@ -163,7 +163,7 @@ export default {
             min="0.75"
             max="3.4"
             step="0.05"
-            :aria-label="$t('cosmos.events.zoomIn')"
+            :aria-label="$t('cosmos.events.zoomRange')"
             :value="activeEvent.targetZoom"
             @input="$emit('set-zoom', Number($event.target.value))"
           />
@@ -191,6 +191,7 @@ export default {
         aria-valuemin="0"
         aria-valuemax="100"
         :aria-valuenow="Math.round(activeProgress * 100)"
+        :aria-valuetext="timelineValueText"
         @pointerdown.stop="onTimelinePointerDown"
         @keydown="onTimelineKeyDown"
       >
@@ -228,6 +229,11 @@ export default {
       if (!act) return '';
       const phaseIdx = Math.min(3, Math.floor(activeProgress.value * 4));
       return $t(`cosmos.events.${act.def.id}.phase${phaseIdx}`);
+    });
+
+    const timelineValueText = Vue.computed(() => {
+      const pct = Math.round(activeProgress.value * 100);
+      return activePhaseLabel.value ? `${pct}% · ${activePhaseLabel.value}` : `${pct}%`;
     });
 
     const pillDistance = Vue.computed(() => {
@@ -313,10 +319,17 @@ export default {
     }
 
     function onTimelinePointerDown(e) {
+      if (e.pointerType !== 'touch' && e.button !== 0) return;
       clearScrubListeners();
+      const activePointerId = e.pointerId ?? null;
       applyScrubFromEvent(e);
-      const onMove = (me) => applyScrubFromEvent(me);
-      const onUp = () => clearScrubListeners();
+      const matchesPointer = (ev) => (activePointerId == null || ev?.pointerId == null || ev.pointerId === activePointerId);
+      const onMove = (me) => {
+        if (matchesPointer(me)) applyScrubFromEvent(me);
+      };
+      const onUp = (ue) => {
+        if (matchesPointer(ue)) clearScrubListeners();
+      };
       window.addEventListener('pointermove', onMove);
       window.addEventListener('pointerup', onUp);
       window.addEventListener('pointercancel', onUp);
@@ -328,12 +341,24 @@ export default {
     }
 
     function onTimelineKeyDown(e) {
-      if (e.key === 'ArrowLeft') {
+      if (e.key === 'ArrowLeft' || e.key === 'ArrowDown') {
         e.preventDefault();
         emit('scrub', Math.max(0.005, activeProgress.value - 0.05));
-      } else if (e.key === 'ArrowRight') {
+      } else if (e.key === 'ArrowRight' || e.key === 'ArrowUp') {
         e.preventDefault();
         emit('scrub', Math.min(0.99, activeProgress.value + 0.05));
+      } else if (e.key === 'PageDown') {
+        e.preventDefault();
+        emit('scrub', Math.max(0.005, activeProgress.value - 0.15));
+      } else if (e.key === 'PageUp') {
+        e.preventDefault();
+        emit('scrub', Math.min(0.99, activeProgress.value + 0.15));
+      } else if (e.key === 'Home') {
+        e.preventDefault();
+        emit('scrub', 0.005);
+      } else if (e.key === 'End') {
+        e.preventDefault();
+        emit('scrub', 0.99);
       }
     }
 
@@ -356,6 +381,7 @@ export default {
       activeAccentStyle,
       activeProgress,
       activePhaseLabel,
+      timelineValueText,
       pillDistance,
       activeBearingLabel,
       pillTitle,

@@ -456,15 +456,15 @@
 }
 
 .cosmos-ewd-mini {
-  width: 21px;
-  height: 21px;
+  width: 24px;
+  height: 24px;
   border-radius: 50%;
   border: 0;
   display: grid;
   place-items: center;
   color: var(--c-muted);
   background: rgba(255, 255, 255, 0.06);
-  font-size: 12px;
+  font-size: 13px;
   cursor: pointer;
 }
 
@@ -528,8 +528,13 @@
 
 .cosmos-ewd-timeline {
   width: 100%;
-  padding: 4px 0 2px;
+  min-height: 24px;
+  display: flex;
+  align-items: center;
+  padding: 0;
+  margin: -5px 0 -4px;
   cursor: pointer;
+  touch-action: none;
 }
 
 .cosmos-ewd-timeline:focus-visible {
@@ -537,14 +542,15 @@
 }
 
 .cosmos-ewd-timeline:focus-visible .cosmos-ewd-timeline-track {
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--ev-accent) 60%, transparent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--ev-accent) 72%, #ffffff);
 }
 
 .cosmos-ewd-timeline-track {
   position: relative;
-  height: 3px;
+  width: 100%;
+  height: 4px;
   border-radius: 999px;
-  background: rgba(186, 214, 255, 0.14);
+  background: rgba(186, 214, 255, 0.16);
   overflow: hidden;
 }
 

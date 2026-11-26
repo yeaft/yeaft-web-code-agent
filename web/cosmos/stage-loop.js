@@ -388,7 +388,7 @@ export function stepCosmosFrame(now, ctx) {
     warp: anim.warpEnergy,
     fovZoom: eventSim.fovZoom,
     shockWave: eventVisibilityAlpha > 0.01
-      ? getEventShockWave(eventSim, w, h, anim.centerShiftX, portalAvoidPoints, eventVisibilityAlpha)
+      ? getEventShockWave(eventSim, w, h, anim.centerShiftX, portalAvoidPoints, eventVisibilityAlpha, anim.camRot, anim.parallax)
       : [0, 0, 0, 0],
     eventLens,
     eventAmbient,

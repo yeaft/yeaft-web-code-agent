@@ -238,6 +238,20 @@ export const useAuthStore = defineStore('auth', {
         return false;
       }
 
+      // Wait briefly if deferred msal-browser.min.js is still finishing on cold cache
+      if (typeof msal === 'undefined' && typeof document !== 'undefined') {
+        const msalScript = document.querySelector('script[src*="msal-browser.min.js"]');
+        if (msalScript) {
+          await new Promise((resolve) => {
+            if (typeof msal !== 'undefined') { resolve(); return; }
+            const done = () => { clearTimeout(timer); resolve(); };
+            const timer = setTimeout(done, 5000);
+            msalScript.addEventListener('load', done, { once: true });
+            msalScript.addEventListener('error', done, { once: true });
+          });
+        }
+      }
+
       // Check if MSAL library is loaded
       if (typeof msal === 'undefined' || !msal.PublicClientApplication) {
         this.error = 'Microsoft authentication library not loaded';
