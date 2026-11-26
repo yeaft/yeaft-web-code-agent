@@ -187,24 +187,23 @@ function capabilityContext(protocol, effortContext) {
  * Resolve the non-disableable child ceiling using the actual model's capabilities.
  * Unknown/omitted parent wire defaults are conservative medium, never chat/max.
  * When `targetEffort` is explicitly supplied by the sub-agent delegation (e.g.
- * explicit `effort` arg or `designer` persona's `defaultEffort: 'xhigh'`),
+ * a configured persona target, a tool `effort`, or a persona default such as `xhigh`),
  * that validated target becomes the child's ceiling instead of the default
  * `medium` cap, while still enforcing model capability and wire invariants.
  */
 export function resolveSubAgentEffort({ parentDecision = null, model, effortContext = {}, protocol, targetEffort = null } = {}) {
   const parent = snapshotEffortDecision(parentDecision);
   const context = capabilityContext(protocol, effortContext);
-  const preserveNative = (protocol || effortContext?.protocol) === 'gemini';
-  const isChat = context.protocol === 'openai-chat-completions';
-  const explicitTarget = isChat ? normalizeChatEffort(targetEffort) : normalizeEffort(targetEffort, preserveNative);
+  // Selection already picked a supported tier. A different fallback protocol
+  // must not reinterpret a literal High/Low ceiling as X-High/Medium.
+  const explicitTarget = normalizeEffort(targetEffort, true);
 
   // An unsupported intermediate model has no wire effort, but must not erase
   // an inherited lower ceiling when it delegates again.
   let parentTarget = parent.effective || 'medium';
   if (parent.cap && atMost(parent.cap, parentTarget)) parentTarget = parent.cap;
-  // Explicit delegation effort (or persona defaultEffort like designer -> xhigh)
-  // overrides the default medium ceiling; omitted effort preserves the existing
-  // child ceiling so ordinary sub-agents stay conservative.
+  // A resolved delegation target replaces the default medium ceiling; without
+  // one, preserve the inherited ceiling for ordinary sub-agents.
   const target = explicitTarget || (atMost(parentTarget, 'medium') ? parentTarget : 'medium');
   const capability = getThinkingCapability(model, context);
   const isGeminiLevel = capability.thinkingProtocol === 'gemini' && capability.maxBudgetTokens === null;
@@ -212,7 +211,7 @@ export function resolveSubAgentEffort({ parentDecision = null, model, effortCont
     requested: explicitTarget || parentTarget,
     source: explicitTarget ? 'explicit' : (parent.effective ? 'inherited' : 'fallback'),
     model, cap: target, thinkingEnabled: false,
-    ...((['minimal', 'low'].includes(target) || ((isGeminiLevel || isChat) && target === 'high')) ? { nativeEffortCap: true } : {}),
+    ...(['minimal', 'low', 'high'].includes(target) ? { nativeEffortCap: true } : {}),
   };
   if (!capability.supportsThinking || capability.thinkingProtocol === 'none') {
     return snapshotEffortDecision({ ...base, effective: null, wireMode: 'unsupported' });

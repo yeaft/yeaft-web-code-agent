@@ -21,6 +21,7 @@ import { mutateAgentConfig, readAgentConfigForWrite } from './config-store.js';
 import { collectAmbiguousModelRefs, isGitHubCopilotProvider, normalizeKnownProviderForRuntime, serializeKnownProviderForPersistence } from './llm/known-providers.js';
 import { getWorkCenterFeatureState } from './work-center/feature.js';
 import { normalizeSubAgentSceneModels, validateSubAgentSceneModels } from './sub-agent/scene-models.js';
+import { publicSubAgentEffortSettings, validateSubAgentPersonaEfforts } from './sub-agent/persona-efforts.js';
 
 const VALID_PROTOCOLS = new Set(['anthropic', 'openai-responses', 'openai-chat-completions', 'gemini']);
 
@@ -123,7 +124,8 @@ function readLocalLlmConfig(dir) {
   const configPath = join(root, 'config.json');
 
   if (!existsSync(configPath)) {
-    return { providers: [], primaryModel: null, fastModel: null, decisionModel: null, subAgentSceneModels: {}, language: 'en', quickSends: [], availableModels: [], needsSetup: true };
+    return { providers: [], primaryModel: null, fastModel: null, decisionModel: null, subAgentSceneModels: {},
+      ...publicSubAgentEffortSettings(), language: 'en', quickSends: [], availableModels: [], needsSetup: true };
   }
 
   const raw = readFileSync(configPath, 'utf8');
@@ -135,6 +137,7 @@ function readLocalLlmConfig(dir) {
     primaryModel: json.primaryModel || null,
     fastModel: json.fastModel || null,
     subAgentSceneModels: normalizeSubAgentSceneModels(json.subAgentSceneModels),
+    ...publicSubAgentEffortSettings(json.subAgentPersonaEfforts),
     decisionModel: json.decisionModel || null,
     language: json.language || 'en',
     debug: json.debug === true,
@@ -226,7 +229,7 @@ function normalizeManagedModelDefaults(config) {
  * Update the LLM-relevant portion of config.json.
  * Merges into existing config — preserves fields like debug, maxContextTokens, etc.
  *
- * @param {object} update — { providers?, primaryModel?, fastModel?, subAgentSceneModels?, language? }
+ * @param {object} update — { providers?, primaryModel?, fastModel?, subAgentSceneModels?, subAgentPersonaEfforts?, language? }
  * @param {string} [dir] — Yeaft data directory
  * @returns {{ providers, primaryModel, fastModel, language } | { error: string }}
  */
@@ -300,11 +303,15 @@ export function updateLlmConfig(update, dir) {
           update.subAgentSceneModels, existing.subAgentSceneModels, availableModels, [...ambiguous],
         );
       }
+      if (update.subAgentPersonaEfforts !== undefined) {
+        existing.subAgentPersonaEfforts = validateSubAgentPersonaEfforts(update.subAgentPersonaEfforts);
+      }
       const agentConfig = {
         providers: Array.isArray(existing.providers) ? existing.providers.map(withGeminiDefault) : [],
         primaryModel: existing.primaryModel || null,
         fastModel: existing.fastModel || null,
         subAgentSceneModels: normalizeSubAgentSceneModels(existing.subAgentSceneModels),
+        ...publicSubAgentEffortSettings(existing.subAgentPersonaEfforts),
         decisionModel: existing.decisionModel || null,
         language: existing.language || 'en',
         debug: existing.debug === true,

@@ -201,6 +201,66 @@ describe('sub-agent model, effort, scene, and machine protocol', () => {
     expect(resolveSubAgentSelection({ config, personaData: { defaultEffort: 'high' } })).toMatchObject({ ok: true, explicitEffortTarget: 'high' });
   });
 
+  it('applies saved persona targets before tool overrides, without changing unrelated roles', () => {
+    const config = mkCatalogConfig({ subAgentPersonaEfforts: { explorer: 'max', designer: 'medium', reviewer: 'high' } });
+    const resolve = (personaId, extra) => resolveSubAgentSelection({ personaId, config, ...extra });
+    expect(resolve('designer', { requestedEffort: 'xhigh' })).toMatchObject({ effort: 'medium', effortSource: 'persona-config' });
+    expect(resolve('reviewer')).toMatchObject({ effort: 'medium', effortSource: 'persona-config' });
+    expect(resolve('explorer')).toMatchObject({ model: 'openai/gpt-5.4-mini', effort: 'xhigh', effortSource: 'persona-config' });
+    expect(resolve('implementer')).toMatchObject({ effort: null, effortSource: 'inherited' });
+    expect(resolve('reviewer', { requestedModel: 'proxy/plain-no-effort' })).toMatchObject({ effort: null, explicitEffortTarget: null });
+    expect(resolveSubAgentSelection({ personaId: 'reviewer', config: mkCatalogConfig(), requestedEffort: 'medium' }))
+      .toMatchObject({ effort: 'medium', effortSource: 'explicit' });
+    expect(resolve('reviewer', { config: { ...config, subAgentPersonaEfforts: { reviewer: 'low' } } }))
+      .toMatchObject({ ok: false, error: expect.stringContaining('without increasing it') });
+    expect(formatSubAgentModelCatalogNotice({ ...config, availableModels: [] })).toContain('reviewer → high');
+    // A literal High from a Chat/Gemini route doesn't mean X-High if a
+    // fallback model speaks Responses instead; keep it a real ceiling.
+    expect(resolveSubAgentEffort({ targetEffort: 'high', model: 'gpt-5.4', protocol: 'openai-responses' }))
+      .toMatchObject({ effective: 'medium', cap: 'high' });
+  });
+
+  it('sends the review preset over the actual provider route and records the wire effort', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'yeaft-review-effort-'));
+    const id = 'gemini-4-carbon', carbon = `chat/${id}`;
+    const config = mkCatalogConfig();
+    config.availableModels.push({ id, ref: carbon, provider: 'chat', protocol: 'openai-chat-completions' });
+    const adapter = new AdapterRouter({ providers: [
+      { name: 'chat', protocol: 'openai-chat-completions', baseUrl: 'https://chat.invalid/v1', apiKey: 'fixture', models: [id] },
+      { name: 'openai', protocol: 'openai-responses', baseUrl: 'https://openai.invalid/v1', apiKey: 'fixture', models: ['gpt-5.4'] },
+    ] });
+    const wire = [];
+    vi.stubGlobal('fetch', vi.fn(async (url, init) => {
+      wire.push([String(url), JSON.parse(init.body)]);
+      const events = String(url).endsWith('/chat/completions')
+        ? ['{"choices":[{"index":0,"delta":{"content":"status: done"},"finish_reason":"stop"}]}', '[DONE]']
+        : ['{"type":"response.output_text.delta","delta":"status: done"}', '{"type":"response.completed","response":{"id":"resp_1","status":"completed"}}'];
+      return new Response(events.map(event => `data: ${event}\n\n`).join(''), { headers: { 'content-type': 'text/event-stream' } });
+    }));
+    const taskManager = new TaskManager({ yeaftDir: dir });
+    try {
+      for (const [model, effort, override] of [[carbon, 'high', false], ['openai/gpt-5.4', 'xhigh', false], ['openai/gpt-5.4', 'medium', true]]) {
+        const ctx = { cwd: dir, sessionId: 's', sceneId: 'software', currentVpId: 'omni', taskManager,
+          parentEngineDeps: { adapter, config: { ...config, subAgentSceneModels: { software: model },
+            ...(override ? { subAgentPersonaEfforts: { reviewer: 'medium' } } : {}) },
+            trace: new NullTrace(), taskManager, yeaftDir: dir, subAgentLogDir: dir, parentToolRegistry: mkParentRegistry() } };
+        const spawn = JSON.parse(await agentTool.execute({ name: 'review', mission: 'Review the changed file', persona: 'reviewer',
+          ...(override ? { effort: 'xhigh' } : {}) }, ctx));
+        expect(spawn).toMatchObject({ success: true, model, effort });
+        await getAgentRegistry().get(spawn.agentId).driverPromise;
+        const [url, body] = wire.at(-1);
+        expect(url).toBe(model === carbon ? 'https://chat.invalid/v1/chat/completions' : 'https://openai.invalid/v1/responses');
+        expect(model === carbon ? body.reasoning_effort : body.reasoning?.effort).toBe(effort);
+        expect(taskManager.getTask('s', spawn.taskId)).toMatchObject({ status: 'succeeded',
+          subAgentRoute: { model, effort, sceneId: 'software' } });
+      }
+      expect(wire).toHaveLength(3);
+    } finally {
+      vi.unstubAllGlobals();
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it('validates and resolves designer persona, model whitelist, effort rules, and scene inheritance', () => {
     expect(listPersonaIds()).toContain('designer');
     const designer = getPersona('designer');

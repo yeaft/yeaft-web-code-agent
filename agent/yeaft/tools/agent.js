@@ -259,10 +259,10 @@ usage; max_turns counts query turns, not tools.
 Pick a preset persona to pre-wire a tool subset, model routing, and default effort:
   - explorer   : fast, read-only scout (Read/Grep/Glob/ListDir; defaults to fastModel if configured)
   - implementer: builder with full work tools (inherits current model)
-  - reviewer   : read-only critic with GitRead (inherits current model)
+  - reviewer   : read-only critic with GitRead (inherits current model; targets xhigh by default)
   - researcher : web-facing info gatherer (WebSearch/WebFetch/Read; defaults to fastModel if configured)
-  - designer   : read-only architect & decision maker (GitRead/Read/Grep/Glob/ListDir/WebSearch/WebFetch; defaults to effort=xhigh)
-Optionally pass scene to apply domain expertise practices (defaults to the parent Session scene, stripped of human-chat prose), and effort only when an explicit override is needed. User-configured scene routes pick the model automatically; only override model for an unmapped scene.
+  - designer   : read-only architect & decision maker (GitRead/Read/Grep/Glob/ListDir/WebSearch/WebFetch; targets xhigh by default)
+Use designer for design decisions and reviewer for independent review. Omit effort for these roles unless a one-off override is needed: the runtime selects a supported tier at or below their xhigh target. User-configured persona effort takes priority; omit effort for those roles. Scene defaults to the parent Session scene; a configured scene route picks the model automatically.
 
 Guidelines:
 - Give a clear, focused mission — what "done" looks like
@@ -287,10 +287,10 @@ stops or finalizes work no longer needed.`,
 选择预设 persona 来预配置工具子集、默认模型路由与 effort：
   - explorer   : 快速只读侦察（Read/Grep/Glob/ListDir；优先使用 fastModel）
   - implementer: 具备完整工作工具的构建者（继承当前模型）
-  - reviewer   : 带 GitRead 的只读审查者（继承当前模型）
+  - reviewer   : 带 GitRead 的只读审查者（继承当前模型；默认以 xhigh 为目标）
   - researcher : 面向网络的信息收集者（WebSearch/WebFetch/Read；优先使用 fastModel）
-  - designer   : 只读架构设计与决策者（GitRead/Read/Grep/Glob/ListDir/WebSearch/WebFetch；默认 effort=xhigh）
-可按需传入 scene 指定领域专业准则（默认继承父 Session 的 scene，且仅注入专业标准而非人类聊天语气），可按需覆写 effort。用户配置的场景路由自动选择模型；仅在没有场景路由时按需覆写 model。
+  - designer   : 只读架构设计与决策者（GitRead/Read/Grep/Glob/ListDir/WebSearch/WebFetch；默认以 xhigh 为目标）
+设计决策用 designer，独立审查用 reviewer。通常省略 effort，引擎会选择不高于 xhigh 的支持档位；用户配置了角色强度时以用户设置为准，请省略 effort。scene 默认继承父 Session 的场景；有场景路由时自动选模型。
 
 使用指南：
 - 给出清晰聚焦的 mission——"完成"是什么样子
@@ -353,8 +353,8 @@ stops or finalizes work no longer needed.`,
         type: 'string',
         enum: ['explorer', 'implementer', 'reviewer', 'researcher', 'designer'],
         description: {
-          en: 'Preset persona that pre-wires tool subset, default model tier, and default effort (designer defaults to xhigh)',
-          zh: '预设 persona，预装工具子集、默认模型层级与 effort（designer 默认 xhigh）',
+          en: 'Preset persona for tools, default model tier, and reasoning target (designer and reviewer target xhigh by default)',
+          zh: '预设 persona，预装工具子集、默认模型层级与推理目标（designer 和 reviewer 默认以 xhigh 为目标）',
         },
       },
       scene: {
@@ -376,8 +376,8 @@ stops or finalizes work no longer needed.`,
         type: 'string',
         enum: [...EFFORT_LEVELS],
         description: {
-          en: 'Optional reasoning effort override supported by the resolved model. Omit to use persona default (designer -> xhigh) or inherited sub-agent default.',
-          zh: '可选推理 effort 覆写，必须受目标模型支持；省略则使用 persona 默认（designer 为 xhigh）或继承子任务默认策略。',
+          en: 'Optional one-off effort supported by the resolved model. User-configured persona effort takes priority; omit to use configured, preset, or inherited effort.',
+          zh: '可选的单次推理强度，必须受目标模型支持。用户配置的角色强度优先；省略时使用用户配置、角色默认或继承策略。',
         },
       },
       budget: {

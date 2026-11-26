@@ -23,6 +23,8 @@ In **Agent Settings → LLM**, select a **Fast Model** or choose **Auto** to cle
 
 **Sub-agent models by scene** (`subAgentSceneModels`) applies to new native Session delegations. The scene is the one explicitly passed to `SpawnAgent`, or the parent Session's scene if omitted. A mapping must target a unique configured `provider/model`. An available mapped model takes priority over the `model` argument. **Auto** or an unavailable target restores ordinary model override, fast-persona, or parent-model routing. It does not change the parent Session, ongoing children, or the pinned model of a Digital Person.
 
+**Sub-agent effort by role** (`subAgentPersonaEfforts`) is resolved after model routing and applies to newly delegated native sub-agents. A setting takes priority over the `SpawnAgent.effort` argument. In **Auto**, a one-off `effort` argument can override the default if the resolved model supports that exact tier. Otherwise, Designer and Reviewer target `xhigh`; the other roles retain the normal inherited policy. The engine selects the highest supported level not above the target (for example, Carbon on Chat Completions uses `high` for an `xhigh` target). A model with no effort control omits the parameter. If an explicitly configured target is below every supported tier, delegation errors rather than silently raising the effort. Parent Sessions, already-started children, and Digital Person effort guards are unchanged.
+
 ## Module Layout
 
 ```

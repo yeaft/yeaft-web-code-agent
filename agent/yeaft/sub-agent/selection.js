@@ -15,17 +15,11 @@
  *         and routable, else parent model.
  *       * primary tier (`designer`, `implementer`, `reviewer`, or no persona):
  *         parent model.
- *   - Explicit `effort` is validated against the resolved model's supported
- *     effort options (fail-closed) and carries `explicit: true` so sub-agent
- *     enforcement honors it instead of clamping to the legacy `medium` ceiling.
- *   - Omitted `effort` follows persona defaults:
- *       * `designer` (or any persona declaring `defaultEffort`): adapts the
- *         persona's defaultEffort (`xhigh`) to the resolved model's closest
- *         supported tier at or below it (e.g. `high` on Gemini 3.x), and sets
- *         `targetEffort` so the child is not downgraded to `medium`.
- *       * Other personas / no persona: preserves the inherited parent effort
- *         floor/ceiling contract (at least `medium` when the parent ran at or
- *         above `medium`, or inheriting a lower native ceiling such as `low`).
+ *   - A user-configured persona effort is a portable ceiling and takes priority
+ *     over the tool argument. Otherwise an explicit tool effort must match the
+ *     resolved model exactly; omitted effort uses the persona's default target
+ *     (designer/reviewer → xhigh), or the existing inherited child ceiling.
+ *   - Portable targets choose the highest supported tier at or below them.
  *   - `scene` validates against `SESSION_SCENE_IDS`; omitted inherits parent
  *     Session `sceneId` (if any).
  */
@@ -33,18 +27,16 @@
 import { EFFORT_LEVELS } from '../effort.js';
 import { inferProtocolFromModelId, normalizeProtocolName } from '../llm/router.js';
 import {
-  getModelEffortOptions,
   getThinkingCapability,
-  normalizeChatEffort,
   normalizeEffort,
   parseModelRef,
-  resolveGeminiEffort,
 } from '../models.js';
 import { isZhLanguage } from '../prompts.js';
-import { findEffortModelEntry, usesNativeGeminiLevels } from '../sessions/session-config.js';
+import { findEffortModelEntry } from '../sessions/session-config.js';
 import { isSessionSceneId, SESSION_SCENE_IDS } from '../sessions/scene-ids.js';
 import { getPersona } from '../personas.js';
 import { findSceneModelEntry, normalizeSubAgentSceneModels } from './scene-models.js';
+import { normalizeSubAgentPersonaEfforts } from './persona-efforts.js';
 
 const effortRank = value => EFFORT_LEVELS.indexOf(normalizeEffort(value, true));
 
@@ -100,11 +92,9 @@ function supportedEffortsForModel(modelRef, entry, config) {
   const context = effortContextForEntry(modelRef, entry, config);
   const cap = getThinkingCapability(modelRef, context);
   if (!cap.supportsThinking || cap.thinkingProtocol === 'none') {
-    return { supportsThinking: false, preserveNative: false, protocol: context.protocol, options: [] };
+    return [];
   }
-  const options = getModelEffortOptions(modelRef, context);
-  const preserveNative = usesNativeGeminiLevels(modelRef, entry, context.protocol);
-  return { supportsThinking: options.length > 0, preserveNative, protocol: context.protocol, options };
+  return cap.effortOptions;
 }
 
 function modelMatchesRef(entry, requested) {
@@ -169,26 +159,6 @@ function resolveCatalogModel(requested, config) {
   return { ok: true, model: catalogEntryRef(matches[0]), entry: matches[0] };
 }
 
-function pickClosestAtOrBelow(target, options, { modelRef, protocol, preserveNative }) {
-  if (!Array.isArray(options) || options.length === 0) return null;
-  if (protocol === 'gemini') {
-    const resolved = resolveGeminiEffort(modelRef, target, options);
-    if (resolved) return resolved;
-  }
-  const normalizedTarget = protocol === 'openai-chat-completions' ? normalizeChatEffort(target) : normalizeEffort(target, preserveNative);
-  if (normalizedTarget && options.includes(normalizedTarget)) return normalizedTarget;
-  const targetRank = effortRank(target);
-  if (targetRank < 0) return null;
-  const eligible = options.filter(option => {
-    const rank = effortRank(option);
-    return rank >= 0 && rank <= targetRank;
-  });
-  if (eligible.length > 0) {
-    return eligible.sort((a, b) => effortRank(a) - effortRank(b)).at(-1);
-  }
-  return null;
-}
-
 function resolveInheritedModelRef(parentModel, config) {
   const explicitParent = cleanString(parentModel);
   const configModel = cleanString(config?.model);
@@ -223,7 +193,7 @@ function resolveInheritedModelRef(parentModel, config) {
  *   modelSource: 'scene-config'|'explicit'|'persona-fast'|'inherited',
  *   modelEntry: object|null,
  *   effort: string|null,
- *   effortSource: 'explicit'|'persona-default'|'inherited',
+ *   effortSource: 'persona-config'|'explicit'|'persona-default'|'inherited',
  *   sceneId: string|null,
  *   sceneSource: 'explicit'|'inherited'|'none',
  * } | { ok: false, error: string }}
@@ -299,65 +269,48 @@ export function resolveSubAgentSelection({
     }
   }
 
-  // 3. Effort resolution.
+  // 3. Resolve effort only after choosing the model. A saved user policy
+  // applies automatically; a one-off tool override is only for unmapped roles.
   const explicitEffort = cleanString(requestedEffort);
+  const personaKey = persona?.id || personaId;
+  const configuredEffort = personaKey && Object.hasOwn(config?.subAgentPersonaEfforts || {}, personaKey)
+    ? config.subAgentPersonaEfforts[personaKey] : null;
+  const configuredTarget = EFFORT_LEVELS.includes(configuredEffort) ? configuredEffort : null;
+  const options = model ? supportedEffortsForModel(model, modelEntry, config) : [];
   let effort = null;
   let effortSource = 'inherited';
 
-  if (explicitEffort) {
+  if (explicitEffort && !configuredTarget) {
     if (effortRank(explicitEffort) < 0) {
       return {
         ok: false,
         error: `invalid effort "${explicitEffort}"; valid levels: ${EFFORT_LEVELS.join(', ')}`,
       };
     }
-    if (model) {
-      const support = supportedEffortsForModel(model, modelEntry, config);
-      if (!support.supportsThinking || support.options.length === 0) {
-        return {
-          ok: false,
-          error: `Model "${model}" does not support reasoning effort overrides.`,
-        };
-      }
-      // Fail closed on explicit effort overrides: require exact membership in
-      // the resolved model's supported effort options (never silently escalate
-      // e.g. `low` -> `medium` or remap `high` -> `xhigh`).
-      if (!support.options.includes(explicitEffort)) {
-        return {
-          ok: false,
-          error: `Model "${model}" does not support effort "${explicitEffort}". Supported efforts: ${support.options.join(', ')}.`,
-        };
-      }
-      effort = explicitEffort;
-    } else {
-      effort = normalizeEffort(explicitEffort, true);
+    if (model && options.length === 0) {
+      return { ok: false, error: `Model "${model}" does not support reasoning effort overrides.` };
     }
+    if (model && !options.includes(explicitEffort)) {
+      return {
+        ok: false,
+        error: `Model "${model}" does not support effort "${explicitEffort}". Supported efforts: ${options.join(', ')}.`,
+      };
+    }
+    effort = explicitEffort;
     effortSource = 'explicit';
-  } else if (persona?.defaultEffort && model) {
-    const support = supportedEffortsForModel(model, modelEntry, config);
-    if (support.supportsThinking && support.options.length > 0) {
-      const adapted = pickClosestAtOrBelow(persona.defaultEffort, support.options, {
-        modelRef: model,
-        protocol: support.protocol,
-        preserveNative: support.preserveNative,
-      });
-      if (adapted) {
-        effort = adapted;
-        effortSource = 'persona-default';
+  } else {
+    const target = configuredTarget || normalizeEffort(persona?.defaultEffort, true);
+    if (target) {
+      effort = model ? EFFORT_LEVELS.slice(0, effortRank(target) + 1).findLast(level => options.includes(level)) || null : target;
+      if (configuredTarget && options.length > 0 && !effort) {
+        return {
+          ok: false,
+          error: `Model "${model}" cannot use the configured "${personaKey}" effort target "${target}" without increasing it. Update the persona effort in LLM settings or select a compatible model. Supported efforts: ${options.join(', ')}.`,
+        };
       }
+      if (effort) effortSource = configuredTarget ? 'persona-config' : 'persona-default';
     }
-  } else if (persona?.defaultEffort) {
-    effort = normalizeEffort(persona.defaultEffort, true);
-    effortSource = 'persona-default';
   }
-
-  // Only allow the child to rise above the legacy medium ceiling when the
-  // caller explicitly requested an effort or chose a persona with a higher
-  // default (e.g. designer -> xhigh). Keep Person's pinned child-provider
-  // untouched: Person's guard owns its own ceiling and ignores targetEffort.
-  const explicitEffortTarget = (effortSource === 'explicit' || effortSource === 'persona-default')
-    ? effort
-    : null;
 
   return {
     ok: true,
@@ -366,7 +319,7 @@ export function resolveSubAgentSelection({
     modelEntry,
     effort,
     effortSource,
-    explicitEffortTarget,
+    explicitEffortTarget: effort,
     sceneId,
     sceneSource,
   };
@@ -388,7 +341,13 @@ export function formatSubAgentModelCatalogNotice(config, language = 'en') {
   const sceneNotice = sceneRoutes.length === 0 ? '' : isZhLanguage(language)
     ? `用户配置的 SpawnAgent 场景路由（自动生效，优先于 model 参数，请省略 model）：${sceneRoutes.join('; ')}。`
     : `User-configured SpawnAgent scene routing applies automatically before any model argument (omit model for mapped scenes): ${sceneRoutes.join('; ')}.`;
-  if (catalog.length <= 1) return sceneNotice;
+  const personaRoutes = Object.entries(normalizeSubAgentPersonaEfforts(config?.subAgentPersonaEfforts))
+    .map(([persona, effort]) => `${persona} → ${effort}`);
+  const effortNotice = personaRoutes.length === 0 ? '' : isZhLanguage(language)
+    ? `用户配置的 SpawnAgent 角色推理强度（自动生效，请省略 effort）：${personaRoutes.join('; ')}。`
+    : `User-configured SpawnAgent persona efforts apply automatically (omit effort for configured personas): ${personaRoutes.join('; ')}.`;
+  const routingNotice = [sceneNotice, effortNotice].filter(Boolean).join('\n');
+  if (catalog.length <= 1) return routingNotice;
 
   const seen = new Set();
   const entries = [];
@@ -399,18 +358,18 @@ export function formatSubAgentModelCatalogNotice(config, language = 'en') {
     seen.add(ref);
     totalUnique += 1;
     if (entries.length >= 24) continue;
-    const support = supportedEffortsForModel(ref, item, config);
-    const efforts = support.supportsThinking && support.options.length
-      ? `[${support.options.join(',')}]`
+    const options = supportedEffortsForModel(ref, item, config);
+    const efforts = options.length
+      ? `[${options.join(',')}]`
       : '[no-effort]';
     entries.push(`${ref} ${efforts}`);
   }
-  if (entries.length <= 1) return sceneNotice;
+  if (entries.length <= 1) return routingNotice;
 
   const truncated = totalUnique > entries.length ? ` (+${totalUnique - entries.length} more)` : '';
   const list = entries.join('; ') + truncated;
   const notice = isZhLanguage(language)
-    ? `SpawnAgent 可选模型与 effort（没有场景路由时才按需覆写 model；explorer/researcher 默认优先 fastModel，其余继承当前模型；designer 默认 effort=xhigh）：${list}`
-    : `SpawnAgent available models and efforts (override model only for unmapped scenes; defaults to fastModel for explorer/researcher and the current model otherwise; designer defaults to effort=xhigh): ${list}`;
-  return [sceneNotice, notice].filter(Boolean).join('\n');
+    ? `SpawnAgent 可选模型与 effort（没有场景路由时才按需覆写 model；explorer/researcher 默认优先 fastModel，其余继承当前模型；designer/reviewer 默认以 xhigh 为目标）：${list}`
+    : `SpawnAgent available models and efforts (override model only for unmapped scenes; defaults to fastModel for explorer/researcher and the current model otherwise; designer/reviewer default to an xhigh target): ${list}`;
+  return [routingNotice, notice].filter(Boolean).join('\n');
 }
