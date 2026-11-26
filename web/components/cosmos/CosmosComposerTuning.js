@@ -333,17 +333,18 @@ export default {
       }
       const gapAboveAnchor = 10;
       const minUsableAbove = 120;
-      const availableAbove = Math.floor(anchorRect.top - gapAboveAnchor - topLimit);
-      if (availableAbove >= minUsableAbove) {
+      const intendedBottom = anchorRect.top - gapAboveAnchor;
+      const availableAbove = Math.floor(intendedBottom - topLimit);
+      if (availableAbove >= minUsableAbove && intendedBottom <= bottomLimit) {
         popoverLayout.value = {
           top: 'auto',
           bottom: `calc(100% + ${gapAboveAnchor}px)`,
           maxHeight: `${Math.min(440, availableAbove)}px`,
         };
       } else {
-        // Too little room above the anchor (e.g. very short viewport or mobile keyboard
-        // with multiline draft): keep the sheet strictly inside [topLimit, bottomLimit]
-        // so it never crosses the Drawer header or exits the visible viewport.
+        // Too little room above the anchor, or the anchor's upward edge lies below
+        // visualViewport bottom (e.g. mobile soft keyboard shrinks only visualViewport):
+        // keep the sheet strictly inside [topLimit, bottomLimit].
         const availableViewport = Math.max(0, Math.floor(bottomLimit - topLimit));
         const topOffset = Math.ceil(topLimit - anchorRect.top);
         popoverLayout.value = {
@@ -493,13 +494,20 @@ export default {
       event.stopPropagation();
       const targetIdx = enabledIndices[nextPos];
       // WAI-ARIA APG standalone radiogroup: arrow navigation moves focus AND selects
-      // through the existing guarded handlers (keeping pending/disabled writes safe).
+      // through the existing guarded handlers only when changing selection (so Home
+      // on an already-checked model never resets a custom effort or queues a no-op write).
       if (groupName === 'model' && props.modelRows[targetIdx]) {
-        onSelectModel(props.modelRows[targetIdx]);
+        if (!isModelActive(props.modelRows[targetIdx])) {
+          onSelectModel(props.modelRows[targetIdx]);
+        }
       } else if (groupName === 'effort' && props.effortOptions[targetIdx] !== undefined) {
-        onSelectEffort(props.effortOptions[targetIdx]);
+        if (props.effortOptions[targetIdx] !== effectiveEffort.value) {
+          onSelectEffort(props.effortOptions[targetIdx]);
+        }
       } else if (groupName === 'scene' && props.sceneOptions[targetIdx]) {
-        onSelectScene(props.sceneOptions[targetIdx].id);
+        if (props.sceneOptions[targetIdx].id !== props.activeScene) {
+          onSelectScene(props.sceneOptions[targetIdx].id);
+        }
       }
       rovingIndex[groupName] = targetIdx;
       const targetBtn = allRadios[targetIdx];

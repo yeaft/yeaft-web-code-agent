@@ -1950,6 +1950,16 @@ describe('Cosmos Component & WebGL Review Regressions', () => {
     expect(wrapper.find('.cosmos-tune-popover').element.contains(document.activeElement)).toBe(true);
     const modelRadios = wrapper.findAll('.cosmos-tune-model-row');
     expect(modelRadios.filter((r) => r.attributes('tabindex') === '0')).toHaveLength(1);
+    // Home on the already-checked first model preserves non-default effort and does NOT issue a Drawer write
+    sessionsMap['sess-1'].config = { model: 'copilot/model-a', modelEffort: 'medium' };
+    await flushPromises();
+    const callsBeforeHome = modelCalls.length;
+    await modelRadios[0].trigger('keydown', { key: 'Home' });
+    await flushPromises();
+    expect(document.activeElement).toBe(modelRadios[0].element);
+    expect(modelCalls).toHaveLength(callsBeforeHome);
+    expect(wrapper.vm.activeEffort).toBe('medium');
+
     // ArrowDown on the focused model radio moves focus, updates roving tabindex, AND immediately selects model-b
     // (WAI-ARIA APG standalone radiogroup: no click needed; first write is still pending!)
     await modelRadios[0].trigger('keydown', { key: 'ArrowDown' });
@@ -2040,5 +2050,63 @@ describe('Cosmos Component & WebGL Review Regressions', () => {
     wrapper.vm.selectModel('copilot/model-b', 'max');
     await flushPromises();
     expect(switchYeaftModel.mock.calls.length).toBe(beforeCalls);
+    wrapper.unmount();
+
+    // 3. visualViewport-only shrink (mobile soft keyboard keeping fixed layout anchor below visible bottom)
+    //    must switch to the viewport-contained fallback so both popover edges stay strictly inside visualViewport.
+    const { default: CosmosComposerTuning } = await import('../../web/components/cosmos/CosmosComposerTuning.js');
+    const anchorHost = document.createElement('div');
+    anchorHost.className = 'cosmos-quick-composer';
+    anchorHost.getBoundingClientRect = () => ({ left: 20, top: 680, width: 320, height: 140, right: 340, bottom: 820 });
+    document.body.appendChild(anchorHost);
+    const prevVV = window.visualViewport;
+    const vvMock = {
+      offsetTop: 0,
+      height: 360,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+    };
+    Object.defineProperty(window, 'visualViewport', { value: vvMock, configurable: true });
+    try {
+      wrapper = mount(CosmosComposerTuning, {
+        attachTo: anchorHost,
+        props: {
+          modelRows: [
+            { modelRef: 'copilot/model-a', label: 'model-a', model: { id: 'model-a', provider: 'copilot' } },
+            { modelRef: 'copilot/model-b', label: 'model-b', model: { id: 'model-b', provider: 'copilot' } },
+          ],
+          activeModel: 'copilot/model-a',
+          activeModelLabel: 'model-a',
+          effortOptions: ['medium', 'high'],
+          activeEffort: 'high',
+        },
+        global: { config: { globalProperties: { $t: tZh } } },
+      });
+      await wrapper.find('.cosmos-tune-trigger').trigger('click');
+      await flushPromises();
+      wrapper.vm.updatePopoverBounds();
+      await flushPromises();
+      const popEl = wrapper.find('.cosmos-tune-popover').element;
+      expect(popEl.style.bottom).toBe('auto');
+      const topPx = Number.parseFloat(popEl.style.top);
+      const maxHPx = Number.parseFloat(popEl.style.maxHeight);
+      const renderedTop = 680 + topPx;
+      expect(renderedTop).toBeGreaterThanOrEqual(0);
+      expect(renderedTop).toBeLessThanOrEqual(20);
+      expect(renderedTop + maxHPx).toBeLessThanOrEqual(vvMock.height);
+
+      // Home on the already-checked first model in Quick Composer preserves custom effort ('high') and emits nothing
+      const firstRow = wrapper.findAll('.cosmos-tune-model-row')[0];
+      firstRow.element.focus();
+      await firstRow.trigger('keydown', { key: 'Home' });
+      await flushPromises();
+      expect(wrapper.emitted('select-model')).toBeUndefined();
+      expect(wrapper.props('activeEffort')).toBe('high');
+    } finally {
+      wrapper?.unmount();
+      wrapper = null;
+      Object.defineProperty(window, 'visualViewport', { value: prevVV, configurable: true });
+      anchorHost.remove();
+    }
   });
 });
