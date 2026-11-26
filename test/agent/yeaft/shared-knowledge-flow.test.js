@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ConversationStore } from '../../../agent/yeaft/conversation/persist.js';
+import { AdapterRouter } from '../../../agent/yeaft/llm/router.js';
 import { commitSessionTurnDeletion } from '../../../agent/yeaft/conversation/turn-deletion-journal.js';
 import { createSessionFromSpec } from '../../../agent/yeaft/sessions/session-crud.js';
 import { runDailySharedKnowledge } from '../../../agent/yeaft/shared-knowledge/flow.js';
@@ -53,7 +54,10 @@ beforeEach(() => {
   a = createSessionFromSpec(root, { name: 'Fixture A' });
   b = createSessionFromSpec(root, { name: 'Fixture B' });
 });
-afterEach(() => rmSync(root, { recursive: true, force: true }));
+afterEach(() => {
+  vi.unstubAllGlobals();
+  rmSync(root, { recursive: true, force: true });
+});
 
 describe('one daily shared knowledge flow', () => {
   it('uses local 01:00 as the schedule and calculates the elapsed slot on catch-up', () => {
@@ -175,6 +179,27 @@ describe('one daily shared knowledge flow', () => {
     expect(fake.call.mock.calls[0][0].messages[0].content).not.toContain('fixture-5');
     expect(cursor(a)).toBeNull();
     expect(lookup()).toEqual([]);
+  });
+
+  it('revalidates source authority inside a real Anthropic cache retry before any second HTTP dispatch', async () => {
+    const source = append(a, 'sensitive-deletion-fixture');
+    const modelRef = 'fixture/claude-opus-4.8';
+    const adapter = new AdapterRouter({ providers: [{ name: 'fixture', protocol: 'anthropic',
+      baseUrl: 'https://test.invalid', apiKey: 'fake', models: ['claude-opus-4.8'] }] });
+    const fetch = vi.fn(async () => {
+      commitSessionTurnDeletion(root, a.id, [], { version: 1, sessionId: a.id, turnId: 'deleted', deletionId: 'd',
+        messageIds: [source.id], anchorMessageIds: [source.id], clientMessageIds: [], executionIds: [], referenceIds: [] });
+      return new Response(JSON.stringify({ error: { message: 'Unknown field: cache_control' } }), { status: 400 });
+    });
+    vi.stubGlobal('fetch', fetch);
+    expect(await run({ open: async () => ({ adapter, config: { primaryModel: modelRef } }) }))
+      .toMatchObject({ status: 'partial', failedSessions: 1 });
+    expect(fetch).toHaveBeenCalledTimes(1);
+    const init = fetch.mock.calls[0][1];
+    expect(init.body).toContain('sensitive-deletion-fixture');
+    expect(init.body).toContain('cache_control');
+    expect(init.redirect).toBe('error');
+    expect(cursor(a)).toBeNull();
   });
 
   it('ingests an in-place finalized assistant answer once, even below a committed newer user cursor', async () => {

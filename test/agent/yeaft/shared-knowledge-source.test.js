@@ -2,6 +2,9 @@ import { appendFileSync, mkdirSync, mkdtempSync, renameSync, rmSync, writeFileSy
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { DAY_MS, openDiscoveryStore } from '../../../agent/yeaft/session-discovery/store.js';
+import { runDailySharedKnowledge } from '../../../agent/yeaft/shared-knowledge/flow.js';
+import { openKnowledgeSourceWorker } from '../../../agent/yeaft/shared-knowledge/scheduler.js';
 import { listDigestSessions, readDigestSource } from '../../../agent/yeaft/shared-knowledge/source.js';
 import { claimKnowledgeJob, commitKnowledgeBatch, openKnowledgeWriter, readKnowledgeWatermark } from '../../../agent/yeaft/shared-knowledge/store.js';
 
@@ -116,6 +119,77 @@ describe('daily shared knowledge digest source', () => {
     expect(read({ watermark: before })).toMatchObject({ lastSeq: 2, pendingSeqs: [], messages: [{ seq: 2 }] });
   });
 
+  it('keeps the original five-day floor after a partial first run and in later slots', async () => {
+    const at = 6 * DAY_MS;
+    const floor = at - 5 * DAY_MS;
+    const wide = '字'.repeat(4_100);
+    writeFileSync(first, jsonl([
+      msg(1, 'user', floor, { content: wide }),
+      msg(2, 'user', at - 1, { content: wide }),
+      msg(3, 'user', floor - 1, { content: 'out-of-window history' }),
+      msg(4, 'user', at - 2, { content: wide }),
+    ]));
+    const run = (slot, cutoff, onExtract) => runDailySharedKnowledge({
+      slot, cutoff, clock: () => cutoff,
+      openSource: signal => openKnowledgeSourceWorker(root, signal),
+      openModel: async () => ({ config: { primaryModel: 'fake' }, adapter: {
+        call: async ({ messages }) => ({ text: onExtract(JSON.parse(messages[0].content).messages.map(row => row.seq)) }),
+      } }),
+    });
+    const attempts = [];
+    expect(await run(20260101, at, seqs => {
+      attempts.push(seqs);
+      return attempts.length === 1 ? '{"items":[]}' : '{"items":null}';
+    })).toMatchObject({ status: 'partial', messages: 2, failedSessions: 1 });
+    expect(attempts).toEqual([[1, 2], [4]]);
+    const db = openKnowledgeWriter(root);
+    try { expect(readKnowledgeWatermark(db, 's').lastSeq).toBe(2); } finally { db.close(); }
+
+    const retried = [];
+    const collect = seqs => { retried.push(seqs); return '{"items":[]}'; };
+    expect(await run(20260101, at, collect)).toMatchObject({ status: 'empty', messages: 1 });
+    appendFileSync(first, jsonl([msg(5, 'user', floor - 1), msg(6, 'user', floor)]));
+    expect(await run(20260102, at + DAY_MS, collect)).toMatchObject({ status: 'empty', messages: 1 });
+    expect(retried).toEqual([[4], [6]]);
+  });
+
+  it('upgrades ef924de20 watermarks in place without replaying preexisting holes', () => {
+    writeFileSync(first, jsonl([msg(1, 'user', 100), msg(2, 'assistant', 120, { responseKind: 'result' }),
+      msg(3, 'user', 140), msg(4, 'assistant', 150, { responseKind: 'progress' }), msg(5, 'user', 160)]));
+    const { identity, generation } = read();
+    const legacy = openDiscoveryStore(root);
+    try {
+      legacy.exec(`
+        CREATE TABLE knowledge_job (
+          id INTEGER PRIMARY KEY CHECK (id = 1), bootstrap_since INTEGER NOT NULL,
+          completed_slot INTEGER, lease TEXT, lease_until INTEGER
+        );
+        CREATE TABLE knowledge_watermarks (
+          session_id TEXT PRIMARY KEY, identity TEXT NOT NULL, generation TEXT NOT NULL, seq INTEGER NOT NULL
+        );
+        INSERT INTO knowledge_job(id, bootstrap_since, completed_slot) VALUES (1, 100, 1);
+      `);
+      legacy.prepare('INSERT INTO knowledge_watermarks VALUES (?, ?, ?, ?)').run('s', identity, generation, 3);
+    } finally { legacy.close(); }
+
+    const upgraded = openKnowledgeWriter(root);
+    try {
+      const watermark = readKnowledgeWatermark(upgraded, 's');
+      expect(watermark).toEqual({ identity, generation, lastSeq: 3, pendingSeqs: [] });
+      const job = { slot: 1, now: 1, bootstrapSince: 110, leaseMs: 100 };
+      expect(claimKnowledgeJob(upgraded, job)).toEqual({ status: 'done' });
+      const claim = claimKnowledgeJob(upgraded, { ...job, slot: 2 });
+      expect(claim).toMatchObject({ status: 'claimed', bootstrapSince: 100 });
+      const next = read({ watermark });
+      expect(next).toMatchObject({ messages: [{ seq: 5 }], pendingSeqs: [4], lastSeq: 5 });
+      expect(commitKnowledgeBatch(upgraded, { root, lease: claim.lease, actions: [], watermarks: [next], now: 1 })).toBe(true);
+    } finally { upgraded.close(); }
+    const reopened = openKnowledgeWriter(root);
+    try {
+      expect(readKnowledgeWatermark(reopened, 's')).toEqual({ identity, generation, lastSeq: 5, pendingSeqs: [4] });
+    } finally { reopened.close(); }
+  });
+
   it('persists pending-only first scans and drops deleted pending rows without advancing', () => {
     writeFileSync(first, jsonl([msg(2, 'assistant', 150, { responseKind: 'progress', stopReason: 'end_turn' })]));
     const before = read();
@@ -159,7 +233,8 @@ describe('daily shared knowledge digest source', () => {
     const after = read({ watermark: before });
     expect(after.identity).toBe(before.identity);
     expect(after.generation).not.toBe(before.generation);
-    expect(after.messages.map(m => m.seq)).toEqual([3]);
+    expect(after.messages).toEqual([]);
+    expect(after.lastSeq).toBe(3);
     lineage(conversation, 'new-stream');
     const replacement = read({ watermark: after });
     expect(replacement.identity).not.toBe(after.identity);

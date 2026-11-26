@@ -40,6 +40,15 @@ export function openKnowledgeWriter(root) {
       CREATE VIRTUAL TABLE IF NOT EXISTS shared_knowledge_fts USING fts5(title, body, tags);
       INSERT OR IGNORE INTO shared_knowledge_fts(shared_knowledge_fts, rank) VALUES ('secure-delete', 1);
     `);
+    transaction(db, () => {
+      // Serialize the schema check and ALTER across concurrent writers. The old
+      // schema didn't distinguish missed finalizations from already processed rows
+      // below the cursor. Preserve the cursor and start tracking new holes only,
+      // rather than replaying historical transcript text to the model.
+      if (!db.prepare('PRAGMA table_info(knowledge_watermarks)').all().some(column => column.name === 'pending_seqs')) {
+        db.exec("ALTER TABLE knowledge_watermarks ADD COLUMN pending_seqs TEXT NOT NULL DEFAULT '[]'");
+      }
+    });
     return db;
   } catch (error) {
     db.close();

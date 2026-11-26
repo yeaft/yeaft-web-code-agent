@@ -213,8 +213,9 @@ export function readDigestSource(root, sessionId, { watermark = null, bootstrapS
   }
   validatePendingSeqs(pendingSeqs);
   const { messages: projected } = extractIndexableTurnMessages(prefix, sessionId, cutoff);
-  // A pending-only watermark has not yet checkpointed the bootstrap prefix.
-  const messages = [...replay, ...projected.filter(message => previous >= 0 || message.createdAt >= bootstrapSince)];
+  // A sequence checkpoint does not establish time eligibility: later seqs can
+  // have older timestamps. Keep the original bootstrap floor on every scan.
+  const messages = [...replay, ...projected.filter(message => message.createdAt >= bootstrapSince)];
   const after = getFence();
   const current = getDir();
   if (after?.key !== source.key || after.meta.workDir !== source.meta.workDir || after.meta.task

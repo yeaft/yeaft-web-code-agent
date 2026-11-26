@@ -1,4 +1,5 @@
 import { runDecision } from '../decision/runner.js';
+import { withModelFetchAdmission } from '../llm/adapter.js';
 import { boundedText } from '../decision/prompts/shared.js';
 import { DAY_MS } from '../session-discovery/store.js';
 import { knowledgeExtractScenario, knowledgeMergeScenario, screenKnowledgeText } from './prompts.js';
@@ -60,14 +61,25 @@ export async function runDailySharedKnowledge({ slot, cutoff = Date.now(), clock
       model ||= await openModel(signal);
       // A buffered batch may have been deleted while a previous provider
       // request was in flight. Recheck immediately before each new dispatch.
-      if (!await rpc('check', dependencies)) {
-        throw Object.assign(new Error('knowledge_sources_changed'), { code: 'knowledge_sources_changed' });
-      }
+      let revoked = false;
+      const admit = async () => {
+        signal?.throwIfAborted();
+        if (revoked || !await rpc('check', dependencies)) {
+          revoked = true;
+          throw Object.assign(new Error('knowledge_sources_changed'), { code: 'knowledge_sources_changed' });
+        }
+      };
+      await admit();
       signal?.throwIfAborted();
       stats.modelCalls += 1;
-      const { result, meta } = await runDecision({ scenario, input, adapter: model.adapter, config: model.config,
-        model: model.config?.primaryModel || model.config?.model, signal });
+      // Native transports perform cache/credential retries inside adapter.call().
+      // Those attempts must recheck the source just like the initial dispatch.
+      const { result, meta } = await withModelFetchAdmission(admit, () => runDecision({
+        scenario, input, adapter: model.adapter, config: model.config,
+        model: model.config?.primaryModel || model.config?.model, signal,
+      }));
       signal?.throwIfAborted();
+      if (revoked) throw Object.assign(new Error('knowledge_sources_changed'), { code: 'knowledge_sources_changed' });
       if (meta.usedFallback) {
         const code = meta.fallbackReason?.startsWith('decision_error:') ? 'provider_error' : meta.fallbackReason;
         throw Object.assign(new Error('knowledge_model_failed'), { code });
