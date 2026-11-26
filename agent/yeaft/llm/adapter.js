@@ -389,9 +389,17 @@ export async function fetchWithHeadersTimeout(url, init = {}, timeoutMs) {
   if (admit) {
     await admit();
     if (requestInit.signal?.aborted) throw new LLMAbortError();
-    // A 307/308 can otherwise replay the same body inside fetch without
-    // reentering this admission boundary.
-    requestInit = { ...requestInit, redirect: 'error' };
+    // Use a non-replayable body: Fetch can otherwise resend a string POST
+    // on HTTP 421 without reentering the caller's admission guard. Keep the
+    // exact Content-Length so compatible endpoints need not accept chunking.
+    if (typeof requestInit.body !== 'string' || requestInit.method !== 'POST') {
+      throw new Error('Guarded model transport requires a serialized POST body');
+    }
+    const bytes = Buffer.from(requestInit.body, 'utf8');
+    const headers = new Headers(requestInit.headers);
+    headers.set('content-length', String(bytes.length));
+    const body = new ReadableStream({ start(controller) { controller.enqueue(bytes); controller.close(); } });
+    requestInit = { ...requestInit, headers, body, duplex: 'half', redirect: 'error' };
   }
   if (Number.isFinite(timeoutMs) && timeoutMs <= 0) throw new LLMHeadersTimeoutError();
   const dispatcher = requestInit.dispatcher ?? getModelFetchDispatcher();

@@ -1,4 +1,6 @@
 import { mkdtempSync, rmSync, readFileSync, writeFileSync } from 'node:fs';
+import { createServer } from 'node:http';
+import { fetchWithHeadersTimeout, withModelFetchAdmission } from '../../../agent/yeaft/llm/adapter.js';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -196,10 +198,41 @@ describe('one daily shared knowledge flow', () => {
       .toMatchObject({ status: 'partial', failedSessions: 1 });
     expect(fetch).toHaveBeenCalledTimes(1);
     const init = fetch.mock.calls[0][1];
-    expect(init.body).toContain('sensitive-deletion-fixture');
-    expect(init.body).toContain('cache_control');
+    const body = await new Response(init.body).text();
+    expect(body).toContain('sensitive-deletion-fixture');
+    expect(body).toContain('cache_control');
+    expect(init.headers.get('content-length')).toBe(String(Buffer.byteLength(body)));
     expect(init.redirect).toBe('error');
     expect(cursor(a)).toBeNull();
+  });
+
+  it('does not implicitly replay guarded POST data when a real HTTP server returns 421', async () => {
+    const input = JSON.stringify({ text: 'test fixture 中文' });
+    const received = [];
+    const server = createServer(async (req, res) => {
+      const buffers = [];
+      for await (const data of req) buffers.push(data);
+      received.push({ text: Buffer.concat(buffers).toString('utf8'), length: req.headers['content-length'] });
+      res.writeHead(received.length === 1 ? 421 : 200);
+      res.end('fixture');
+    });
+    await new Promise((resolve, reject) => {
+      server.once('error', reject);
+      server.listen(0, '127.0.0.1', resolve);
+    });
+    try {
+      const admit = vi.fn(async () => {});
+      const url = `http://127.0.0.1:${server.address().port}`;
+      const response = await withModelFetchAdmission(admit, () => fetchWithHeadersTimeout(url,
+        { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: input }, 2_000));
+      expect(await response.text()).toBe('fixture');
+      expect(response.status).toBe(421);
+      expect(received).toEqual([{ text: input, length: String(Buffer.byteLength(input)) }]);
+      expect(admit).toHaveBeenCalledTimes(1);
+    } finally {
+      server.closeAllConnections();
+      await new Promise(resolve => server.close(resolve));
+    }
   });
 
   it('ingests an in-place finalized assistant answer once, even below a committed newer user cursor', async () => {
