@@ -46,6 +46,12 @@
   --diff-del-border: rgba(232, 110, 122, 0.30);
   --diff-del-text: #f2a6ae;
   --diff-line-num: rgba(168, 192, 224, 0.48);
+  --error: #ff8c96;
+  --error-text: #ff8c96;
+  --error-bg: rgba(255, 118, 128, 0.15);
+  --status-busy: var(--p-accent);
+  --tool-bg: rgba(255, 255, 255, 0.055);
+  --session-content-width: 780px;
 
   position: fixed;
   top: 0;
@@ -55,22 +61,26 @@
   z-index: 32;
   display: flex;
   flex-direction: column;
-  /* Feathered left edge smoothly melting into the living starfield */
+  /* Feathered translucent glass smoothly dissolving into the living starfield */
   background: linear-gradient(
     90deg,
     rgba(var(--p-tint-rgb), 0.0) 0%,
-    rgba(var(--p-tint-rgb), 0.42) 28px,
-    var(--p-bg-top) 72px,
+    rgba(var(--p-tint-rgb), 0.12) 32px,
+    var(--p-bg-top) 96px,
     var(--p-bg-bot) 100%
   );
   border-left: 0;
-  backdrop-filter: blur(18px) saturate(132%);
-  -webkit-backdrop-filter: blur(18px) saturate(132%);
-  box-shadow: -32px 0 80px rgba(0, 0, 0, 0.34);
+  backdrop-filter: blur(16px) saturate(144%);
+  -webkit-backdrop-filter: blur(16px) saturate(144%);
+  box-shadow: -16px 0 56px rgba(0, 0, 0, 0.20);
   color: var(--p-ink);
   overflow: hidden;
   animation: cosmos-drawer-in 260ms var(--c-ease);
-  transition: width 240ms var(--c-ease), background 320ms ease;
+  transition: width 220ms var(--c-ease), background 320ms ease;
+}
+
+.cosmos-drawer.is-resizing {
+  transition: none !important;
 }
 
 .cosmos-drawer::before {
@@ -82,28 +92,82 @@
   opacity: 0.92;
 }
 
-/* Soft luminous optical edge line tapering cleanly at top & bottom */
-.cosmos-drawer::after {
-  content: '';
-  position: absolute;
-  left: 0;
-  top: 8%;
-  bottom: 8%;
-  width: 1.5px;
-  pointer-events: none;
-  z-index: 2;
-  background: linear-gradient(
-    180deg,
-    transparent 0%,
-    rgba(var(--p-accent-rgb), 0.56) 24%,
-    rgba(var(--p-accent-rgb), 0.18) 68%,
-    transparent 100%
-  );
-}
-
 .cosmos-drawer > * {
   position: relative;
   z-index: 1;
+}
+
+/* ── Interactive Left-Edge Optical Filament Drag Resize Handle ── */
+.cosmos-drawer > .cosmos-drawer-resize-handle {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 10px;
+  z-index: 28;
+  cursor: col-resize;
+  touch-action: none;
+  outline: none;
+}
+
+.cosmos-drawer-resize-handle::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 16%;
+  bottom: 16%;
+  width: 1px;
+  pointer-events: none;
+  background: linear-gradient(
+    180deg,
+    transparent 0%,
+    rgba(var(--p-accent-rgb), 0.24) 36%,
+    rgba(var(--p-accent-rgb), 0.12) 68%,
+    transparent 100%
+  );
+  transition: top 180ms var(--c-ease), bottom 180ms var(--c-ease), opacity 160ms ease, background 160ms ease, box-shadow 160ms ease, width 160ms ease;
+}
+
+.cosmos-drawer-resize-handle::after {
+  content: '';
+  position: absolute;
+  left: 2px;
+  top: 50%;
+  width: 3px;
+  height: 36px;
+  transform: translateY(-50%);
+  border-radius: 999px;
+  background: rgba(var(--p-accent-rgb), 0.72);
+  box-shadow: 0 0 12px rgba(var(--p-accent-rgb), 0.65);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 160ms ease, height 160ms var(--c-ease);
+}
+
+.cosmos-drawer-resize-handle:hover::before,
+.cosmos-drawer-resize-handle:focus-visible::before,
+.cosmos-drawer-resize-handle.is-dragging::before {
+  top: 6%;
+  bottom: 6%;
+  width: 2px;
+  background: linear-gradient(
+    180deg,
+    transparent 0%,
+    rgba(var(--p-accent-rgb), 0.86) 18%,
+    rgba(var(--p-accent-rgb), 0.86) 82%,
+    transparent 100%
+  );
+  box-shadow: 0 0 14px rgba(var(--p-accent-rgb), 0.48);
+}
+
+.cosmos-drawer-resize-handle:hover::after,
+.cosmos-drawer-resize-handle:focus-visible::after,
+.cosmos-drawer-resize-handle.is-dragging::after {
+  opacity: 0.92;
+}
+
+.cosmos-drawer-resize-handle.is-dragging::after {
+  height: 52px;
 }
 
 @keyframes cosmos-drawer-in {
@@ -111,7 +175,7 @@
   to { opacity: 1; transform: translateX(0); }
 }
 
-/* ── Compact Mobile-Yeaft Header (Weightless Atmospheric Strip, Zero Hard Dividers) ── */
+/* ── Compact Mobile-Yeaft Header (Weightless Atmospheric Mist, Zero Hard Dividers) ── */
 .cosmos-drawer-head {
   position: relative;
   z-index: 5;
@@ -119,8 +183,13 @@
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  padding: 11px 12px 10px 14px;
-  background: linear-gradient(180deg, rgba(var(--p-tint-rgb), 0.44) 0%, rgba(var(--p-tint-rgb), 0.08) 100%);
+  padding: 11px 12px 10px 16px;
+  background: linear-gradient(
+    180deg,
+    rgba(2, 5, 14, 0.36) 0%,
+    rgba(2, 5, 14, 0.10) 76%,
+    transparent 100%
+  );
   border-bottom: 0;
   flex-shrink: 0;
 }
@@ -128,7 +197,7 @@
 .cosmos-drawer-head::after {
   content: '';
   position: absolute;
-  left: 16px;
+  left: 18px;
   right: 16px;
   bottom: 0;
   height: 1px;
@@ -136,8 +205,8 @@
   background: linear-gradient(
     90deg,
     transparent 0%,
-    rgba(var(--p-accent-rgb), 0.18) 28%,
-    rgba(var(--p-accent-rgb), 0.14) 72%,
+    rgba(var(--p-accent-rgb), 0.14) 26%,
+    rgba(var(--p-accent-rgb), 0.10) 74%,
     transparent 100%
   );
 }
@@ -292,6 +361,27 @@
 .cosmos-icon-btn:focus-visible {
   outline: 1.5px solid rgba(var(--p-accent-rgb), 0.78);
   outline-offset: 2px;
+}
+
+.cosmos-session-status-btn {
+  position: relative;
+}
+
+.cosmos-status-btn-dot {
+  position: absolute;
+  top: 5px;
+  right: 5px;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--p-accent);
+  box-shadow: 0 0 8px rgba(var(--p-accent-rgb), 0.85);
+  pointer-events: none;
+}
+
+.cosmos-session-status-btn.has-error .cosmos-status-btn-dot {
+  background: #ff7e88;
+  box-shadow: 0 0 8px rgba(255, 126, 136, 0.85);
 }
 
 /* ── Embedded Sidebar History, Project Tree & Session Search (Opened via Top-Left ☰) ── */
@@ -618,7 +708,7 @@
   text-align: center;
 }
 
-/* ── Main Stack: Pure Conversation + Slide-Over Real Workbench ── */
+/* ── Main Stack: Pure Conversation + Docked/Overlay Session Status + Slide-Over Real Workbench ── */
 .cosmos-drawer-body {
   position: relative;
   flex: 1;
@@ -627,11 +717,23 @@
   flex-direction: column;
 }
 
+.cosmos-drawer-body.is-status-docked {
+  flex-direction: row;
+}
+
 .cosmos-drawer-chat {
   flex: 1;
+  min-width: 0;
   min-height: 0;
   display: flex;
   flex-direction: column;
+  transition: opacity 150ms ease;
+}
+
+.cosmos-drawer-body.is-overlay-open > .cosmos-drawer-chat {
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
 }
 
 .cosmos-drawer-empty {
@@ -649,34 +751,72 @@
 .cosmos-drawer-cta {
   height: 30px;
   padding: 0 14px;
-  border-radius: calc(var(--p-radius) * 0.7);
-  background: rgba(var(--p-accent-rgb), 0.18);
-  border: 1px solid rgba(var(--p-accent-rgb), 0.44);
+  border-radius: 999px;
+  background: rgba(var(--p-accent-rgb), 0.14);
+  border: 1px solid rgba(var(--p-accent-rgb), 0.28);
   color: var(--p-ink);
   font-size: 11.5px;
   cursor: pointer;
+  transition: background 150ms ease, border-color 150ms ease;
 }
 
 .cosmos-drawer-cta:hover {
-  background: rgba(var(--p-accent-rgb), 0.30);
+  background: rgba(var(--p-accent-rgb), 0.24);
+  border-color: rgba(var(--p-accent-rgb), 0.44);
 }
 
 /* ── Deep Visual Integration of Native MessageList inside Cosmos Drawer ── */
-.cosmos-drawer .messages-container {
+.cosmos-drawer .chat-container {
   flex: 1;
   min-height: 0;
   background: transparent !important;
-  padding: 12px 14px 10px !important;
+  padding: 12px 0 10px !important;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(var(--p-accent-rgb), 0.22) transparent;
 }
 
-.cosmos-drawer .message-list {
-  max-width: none !important;
-  padding: 0 !important;
-  gap: 12px;
+.cosmos-drawer .chat-container::-webkit-scrollbar,
+.cosmos-drawer .cosmos-history-scroll::-webkit-scrollbar,
+.cosmos-drawer .cosmos-status-host .yeaft-vp-timeline::-webkit-scrollbar,
+.cosmos-drawer .cosmos-tune-popover::-webkit-scrollbar,
+.cosmos-drawer .cosmos-tune-model-list::-webkit-scrollbar {
+  width: 5px;
+  height: 5px;
+}
+
+.cosmos-drawer .chat-container::-webkit-scrollbar-track,
+.cosmos-drawer .cosmos-history-scroll::-webkit-scrollbar-track,
+.cosmos-drawer .cosmos-status-host .yeaft-vp-timeline::-webkit-scrollbar-track,
+.cosmos-drawer .cosmos-tune-popover::-webkit-scrollbar-track,
+.cosmos-drawer .cosmos-tune-model-list::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.cosmos-drawer .chat-container::-webkit-scrollbar-thumb,
+.cosmos-drawer .cosmos-history-scroll::-webkit-scrollbar-thumb,
+.cosmos-drawer .cosmos-status-host .yeaft-vp-timeline::-webkit-scrollbar-thumb,
+.cosmos-drawer .cosmos-tune-popover::-webkit-scrollbar-thumb,
+.cosmos-drawer .cosmos-tune-model-list::-webkit-scrollbar-thumb {
+  background: rgba(var(--p-accent-rgb), 0.20);
+  border-radius: 999px;
+}
+
+.cosmos-drawer .chat-container::-webkit-scrollbar-thumb:hover,
+.cosmos-drawer .cosmos-history-scroll::-webkit-scrollbar-thumb:hover,
+.cosmos-drawer .cosmos-status-host .yeaft-vp-timeline::-webkit-scrollbar-thumb:hover {
+  background: rgba(var(--p-accent-rgb), 0.40);
+}
+
+.cosmos-drawer .messages {
+  max-width: var(--session-content-width);
+  width: 100%;
+  margin: 0 auto;
+  padding: 0 18px !important;
+  gap: 16px;
 }
 
 /* Keep outer .message.user completely transparent so metadata sits cleanly outside
-   and ONLY the inner .message-user-block forms one restrained translucent glass bubble. */
+   and ONLY the inner .message-user-block forms one delicate translucent starlight glass pill. */
 .cosmos-drawer .message.user,
 .cosmos-drawer .user-turn-block-main > .message.user {
   background: transparent !important;
@@ -692,14 +832,35 @@
 
 .cosmos-drawer .message.user .message-user-block,
 .cosmos-drawer .user-turn-block-main > .message.user .message-user-block {
-  background: var(--p-user-bg) !important;
-  border: 1px solid rgba(255, 255, 255, 0.075) !important;
-  border-radius: var(--p-radius) var(--p-radius) 4px var(--p-radius) !important;
-  padding: 9px 13px !important;
+  background-color: var(--p-user-bg) !important;
+  background-image: linear-gradient(
+    155deg,
+    rgba(var(--p-accent-rgb), 0.04) 0%,
+    rgba(255, 255, 255, 0.015) 100%
+  ) !important;
+  border: 1px solid rgba(var(--p-accent-rgb), 0.09) !important;
+  border-radius: calc(var(--p-radius) + 3px) calc(var(--p-radius) + 3px) 5px calc(var(--p-radius) + 3px) !important;
+  padding: 9px 14px !important;
   color: var(--p-ink) !important;
-  backdrop-filter: blur(8px);
-  -webkit-backdrop-filter: blur(8px);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  backdrop-filter: blur(12px) saturate(125%);
+  -webkit-backdrop-filter: blur(12px) saturate(125%);
+  box-shadow:
+    0 4px 18px rgba(0, 0, 0, 0.12),
+    inset 0 1px 0 rgba(255, 255, 255, 0.075) !important;
+}
+
+.cosmos-drawer .message.user .attachments-badge {
+  background: rgba(255, 255, 255, 0.065) !important;
+  border: 0 !important;
+  border-radius: 999px !important;
+  padding: 3px 9px !important;
+  color: var(--p-muted) !important;
+  font-size: 11.5px;
+}
+
+.cosmos-drawer .message.user .attachments-badge:hover {
+  background: rgba(var(--p-accent-rgb), 0.16) !important;
+  color: var(--p-ink) !important;
 }
 
 .cosmos-drawer .message-user-meta {
@@ -717,8 +878,8 @@
 .cosmos-drawer .message.user .markdown-body,
 .cosmos-drawer .user-turn-block .message-content {
   color: var(--p-ink) !important;
-  font-size: 13px;
-  line-height: 1.56;
+  font-size: 13.5px;
+  line-height: 1.58;
 }
 
 .cosmos-drawer .user-turn-header,
@@ -726,38 +887,75 @@
   color: var(--p-faint) !important;
 }
 
+/* Open editorial assistant typography floating directly on atmospheric cosmic glass */
 .cosmos-drawer .assistant-turn {
   background: transparent !important;
   border-radius: var(--p-radius);
 }
 
 .cosmos-drawer .assistant-turn .turn-message-block {
-  border-left: 2px solid var(--p-ai-bar);
-  padding-left: 11px;
+  border-left: 0;
+  padding-left: 2px;
 }
 
 .cosmos-drawer .assistant-turn .markdown-body {
   color: var(--p-ink);
-  font-size: 13px;
-  line-height: 1.62;
+  font-size: 13.5px;
+  line-height: 1.68;
 }
 
-.cosmos-drawer .assistant-turn .markdown-body code:not(pre code) {
-  background: rgba(var(--p-accent-rgb), 0.14);
+.cosmos-drawer .assistant-turn .markdown-body a {
   color: var(--p-accent);
+  text-decoration-color: rgba(var(--p-accent-rgb), 0.36);
+}
+
+.cosmos-drawer .assistant-turn .markdown-body blockquote {
+  border-left: 2px solid rgba(var(--p-accent-rgb), 0.34);
+  color: var(--p-muted);
+  background: transparent;
+}
+
+.cosmos-drawer .assistant-turn .markdown-body hr {
+  border-color: rgba(255, 255, 255, 0.08);
+}
+
+.cosmos-drawer .assistant-turn .markdown-body code:not(pre code),
+.cosmos-drawer .message .markdown-body code:not(pre code) {
+  background: rgba(255, 255, 255, 0.065);
+  color: var(--p-code-ink);
+  border: 1px solid rgba(var(--p-accent-rgb), 0.14);
   border-radius: 5px;
+  padding: 1px 5px;
+  font-size: 0.87em;
 }
 
 .cosmos-drawer .assistant-turn .markdown-body pre {
-  background: rgba(2, 6, 16, 0.62) !important;
-  border: 1px solid rgba(var(--p-accent-rgb), 0.16);
-  border-radius: calc(var(--p-radius) * 0.7);
+  background: rgba(2, 5, 14, 0.54) !important;
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  border-radius: calc(var(--p-radius) * 0.72);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05);
 }
 
 .cosmos-drawer .ask-card {
-  background: rgba(34, 22, 8, 0.62) !important;
-  border: 1px solid rgba(255, 190, 92, 0.40) !important;
+  background: rgba(30, 20, 8, 0.54) !important;
+  border: 1px solid rgba(255, 190, 92, 0.34) !important;
   border-radius: var(--p-radius) !important;
+  backdrop-filter: blur(14px);
+}
+
+.cosmos-drawer .transcript-navigation-btn {
+  background: rgba(4, 9, 20, 0.74) !important;
+  border: 1px solid rgba(var(--p-accent-rgb), 0.22) !important;
+  color: var(--p-ink) !important;
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+}
+
+.cosmos-drawer .typing-status-banner {
+  background: rgba(var(--p-tint-rgb), 0.56);
+  border: 1px solid rgba(var(--p-accent-rgb), 0.16);
+  color: var(--p-muted);
+  backdrop-filter: blur(12px);
 }
 
 /* Hide any residual non-Ask tool bars inside Cosmos pure conversation stream */
@@ -766,36 +964,132 @@
   display: none !important;
 }
 
+/* ── Calm Single-Line Live Session Status Bar (Zero Waiting Animation) ── */
+.cosmos-status-strip {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  width: calc(100% - 32px);
+  max-width: calc(var(--session-content-width) - 4px);
+  margin: 2px auto 6px;
+  padding: 5px 11px;
+  border: 1px solid rgba(var(--p-accent-rgb), 0.09);
+  border-radius: 999px;
+  background: linear-gradient(
+    90deg,
+    rgba(var(--p-accent-rgb), 0.065) 0%,
+    rgba(var(--p-tint-rgb), 0.24) 100%
+  );
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  color: var(--p-muted);
+  font: inherit;
+  font-size: 11px;
+  line-height: 1.35;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: border-color 150ms ease, background 150ms ease, color 150ms ease;
+}
+
+.cosmos-status-strip:hover {
+  border-color: rgba(var(--p-accent-rgb), 0.30);
+  background: rgba(var(--p-accent-rgb), 0.13);
+  color: var(--p-ink);
+}
+
+.cosmos-status-strip:focus-visible {
+  outline: 1.5px solid rgba(var(--p-accent-rgb), 0.78);
+  outline-offset: 2px;
+}
+
+.cosmos-status-strip.is-error {
+  border-color: rgba(255, 126, 136, 0.32);
+  background: rgba(255, 118, 128, 0.10);
+  color: #ffc8ce;
+}
+
+.cosmos-status-strip-main {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  flex: 1;
+}
+
+.cosmos-status-strip-pip {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background: var(--p-accent);
+  box-shadow: 0 0 8px rgba(var(--p-accent-rgb), 0.80);
+}
+
+.cosmos-status-strip-pip.is-error {
+  background: #ff7e88;
+  box-shadow: 0 0 8px rgba(255, 126, 136, 0.80);
+}
+
+.cosmos-status-strip-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.cosmos-status-strip-cta {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
+  color: var(--p-accent);
+  opacity: 0.88;
+}
+
+.cosmos-status-strip.is-error .cosmos-status-strip-cta {
+  color: #ffb8c0;
+}
+
+.cosmos-status-strip-cta svg {
+  width: 12px;
+  height: 12px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
 /* ── Deep Visual Integration of Native ChatInput inside Cosmos Drawer ── */
 .cosmos-drawer .input-area {
   position: relative;
   z-index: 4;
-  background: linear-gradient(
-    180deg,
-    transparent 0%,
-    rgba(var(--p-tint-rgb), 0.30) 34%,
-    rgba(var(--p-tint-rgb), 0.54) 100%
-  ) !important;
+  background: transparent !important;
   border-top: 0 !important;
-  padding: 6px 14px calc(14px + env(safe-area-inset-bottom, 0px)) !important;
+  padding: 4px 16px calc(12px + env(safe-area-inset-bottom, 0px)) !important;
   overflow: visible;
 }
 
 .cosmos-drawer .input-wrapper.chat-composer {
   position: relative;
+  max-width: var(--session-content-width);
+  width: 100%;
+  margin: 0 auto;
   background:
-    radial-gradient(ellipse 68% 72px at 50% -20px, rgba(var(--p-accent-rgb), 0.13), transparent 72%),
-    linear-gradient(172deg, rgba(var(--p-tint-rgb), 0.44) 0%, rgba(3, 7, 16, 0.68) 100%) !important;
-  border: 1px solid rgba(255, 255, 255, 0.06) !important;
+    radial-gradient(ellipse 64% 64px at 50% -18px, rgba(var(--p-accent-rgb), 0.13), transparent 72%),
+    linear-gradient(172deg, rgba(var(--p-tint-rgb), 0.28) 0%, rgba(3, 7, 16, 0.48) 100%) !important;
+  border: 1px solid rgba(var(--p-accent-rgb), 0.09) !important;
   border-radius: calc(var(--p-radius) + 6px) !important;
-  padding: 10px 12px 9px 14px !important;
-  gap: 6px !important;
-  backdrop-filter: blur(24px) saturate(142%);
-  -webkit-backdrop-filter: blur(24px) saturate(142%);
+  padding: 7px 10px 7px 13px !important;
+  gap: 4px !important;
+  backdrop-filter: blur(20px) saturate(142%);
+  -webkit-backdrop-filter: blur(20px) saturate(142%);
   box-shadow:
-    0 14px 38px rgba(0, 0, 0, 0.44),
-    0 0 28px rgba(var(--p-accent-rgb), 0.08),
-    inset 0 1px 0 rgba(255, 255, 255, 0.06) !important;
+    0 10px 28px rgba(0, 0, 0, 0.28),
+    0 0 24px rgba(var(--p-accent-rgb), 0.06),
+    inset 0 1px 0 rgba(255, 255, 255, 0.07) !important;
   overflow: visible;
   transition: border-color 200ms ease, box-shadow 220ms var(--c-ease) !important;
 }
@@ -811,7 +1105,7 @@
   background: linear-gradient(
     90deg,
     transparent 0%,
-    rgba(var(--p-accent-rgb), 0.52) 50%,
+    rgba(var(--p-accent-rgb), 0.54) 50%,
     transparent 100%
   );
   opacity: 0.72;
@@ -819,15 +1113,122 @@
 }
 
 .cosmos-drawer .input-wrapper.chat-composer:focus-within {
-  border-color: rgba(var(--p-accent-rgb), 0.14) !important;
+  border-color: rgba(var(--p-accent-rgb), 0.18) !important;
   box-shadow:
-    0 18px 46px rgba(0, 0, 0, 0.52),
-    0 0 36px rgba(var(--p-accent-rgb), 0.14),
+    0 16px 42px rgba(0, 0, 0, 0.44),
+    0 0 34px rgba(var(--p-accent-rgb), 0.14),
     inset 0 1px 0 rgba(255, 255, 255, 0.09) !important;
 }
 
 .cosmos-drawer .input-wrapper.chat-composer:focus-within::before {
   opacity: 1;
+}
+
+/* ── Embedded Authentic Yeaft Session Status Pane (Overlay on Compact, Docked Side-by-Side When Dragged Wide) ── */
+.cosmos-status-host {
+  --bg-main: transparent;
+  --bg-primary: rgba(var(--p-tint-rgb), 0.64);
+  --bg-secondary: rgba(var(--p-tint-rgb), 0.52);
+  --bg-elevated: rgba(var(--p-tint-rgb), 0.94);
+  --bg-input-wrapper: rgba(var(--p-accent-rgb), 0.10);
+  --sidebar-hover: rgba(var(--p-accent-rgb), 0.11);
+  --text-primary: var(--p-ink);
+  --text-secondary: var(--p-muted);
+  --text-muted: var(--p-faint);
+  --border-color: rgba(255, 255, 255, 0.08);
+  --accent-blue: var(--p-accent);
+  --accent: var(--p-accent);
+  --status-busy: var(--p-accent);
+  --error: #ff8c96;
+  --error-text: #ff8c96;
+  --error-bg: rgba(255, 118, 128, 0.15);
+
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.cosmos-status-host.is-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 12;
+  background: linear-gradient(
+    180deg,
+    rgba(var(--p-tint-rgb), 0.24) 0%,
+    rgba(3, 7, 16, 0.44) 100%
+  );
+}
+
+.cosmos-status-host.is-docked {
+  position: relative;
+  width: clamp(252px, 33%, 320px);
+  flex-shrink: 0;
+  border-left: 0;
+  background: linear-gradient(
+    180deg,
+    rgba(var(--p-tint-rgb), 0.20) 0%,
+    rgba(3, 7, 16, 0.34) 100%
+  );
+}
+
+.cosmos-status-host.is-docked::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 8%;
+  bottom: 8%;
+  width: 1px;
+  pointer-events: none;
+  background: linear-gradient(
+    180deg,
+    transparent 0%,
+    rgba(var(--p-accent-rgb), 0.18) 28%,
+    rgba(var(--p-accent-rgb), 0.14) 72%,
+    transparent 100%
+  );
+}
+
+.cosmos-status-host .yeaft-vp-timeline {
+  width: 100% !important;
+  min-width: 0 !important;
+  height: 100%;
+  flex: 1;
+  background: transparent !important;
+  padding: 10px 10px 16px;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(var(--p-accent-rgb), 0.22) transparent;
+}
+
+.cosmos-status-host .yeaft-vp-timeline-resize-handle {
+  display: none !important;
+}
+
+.cosmos-status-host .yeaft-session-status-header {
+  display: flex !important;
+  padding: 2px 6px 8px;
+  border-bottom: 1px solid rgba(var(--p-accent-rgb), 0.10);
+  margin-bottom: 4px;
+}
+
+.cosmos-status-host .yeaft-session-status-announcement-card {
+  background: rgba(255, 255, 255, 0.045);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.cosmos-status-host .yeaft-session-status-announcement-card:hover {
+  background: rgba(var(--p-accent-rgb), 0.12);
+  border-color: rgba(var(--p-accent-rgb), 0.22);
+}
+
+.cosmos-status-host .session-tool-list.yeaft-model-dropdown {
+  background: rgba(3, 8, 18, 0.78);
+  border: 1px solid rgba(var(--p-accent-rgb), 0.16);
+  border-radius: 10px;
+}
+
+.cosmos-status-host .yeaft-vp-task-detail {
+  background: rgba(2, 6, 15, 0.52);
+  border: 1px solid rgba(255, 255, 255, 0.07);
 }
 
 /* ── Embedded Real Workbench Overlay Inside Planetary Drawer ── */
@@ -898,10 +1299,13 @@
 @media (max-width: 768px) {
   .cosmos-drawer {
     border-left: 0;
-    background: linear-gradient(180deg, var(--p-bg-top), var(--p-bg-bot));
+    background: linear-gradient(180deg, rgba(var(--p-tint-rgb), 0.62), rgba(3, 6, 14, 0.80));
   }
-  .cosmos-drawer::after {
+  .cosmos-drawer-resize-handle {
     display: none;
+  }
+  .cosmos-drawer .messages {
+    padding: 0 14px !important;
   }
   .cosmos-drawer-agent {
     flex-shrink: 0;

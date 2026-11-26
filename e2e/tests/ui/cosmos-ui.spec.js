@@ -124,8 +124,50 @@ test.describe('Yeaft Cosmos UI', () => {
         },
       ]);
       chat.yeaftProcessingSessions = { [`${agentId}\u001fsess-earth-1`]: true };
+      chat.waitingAnimation = 'cat';
+      chat.chatHistoryConnectionGeneration = chat.chatHistoryConnectionGeneration || 1;
       const convId = `yeaft_${agentId}`;
       chat.yeaftConversationIdsByAgent = { ...(chat.yeaftConversationIdsByAgent || {}), [agentId]: convId };
+      chat.yeaftSessionTurnsBySession = {
+        [`${agentId}\u001fsess-earth-1`]: {
+          connectionGeneration: chat.chatHistoryConnectionGeneration,
+          conversationId: convId,
+          turns: [{
+            userTurnId: 'ut-earth-1',
+            userMessageId: 'm1',
+            state: 'running',
+            startedAt: now - 12000,
+            executions: [{ vpId: 'vp-1', turnId: 'turn-earth-1', threadId: 'th-1', state: 'running' }],
+          }],
+        },
+      };
+      chat.activeVpTurns = {
+        [`${agentId}\u001fturn-earth-1`]: {
+          agentId,
+          sessionId: 'sess-earth-1',
+          vpId: 'vp-1',
+          turnId: 'turn-earth-1',
+          threadId: 'th-1',
+          userTurnId: 'ut-earth-1',
+          conversationId: convId,
+          connectionGeneration: chat.chatHistoryConnectionGeneration,
+          startedAt: now - 12000,
+        },
+      };
+      chat.yeaftActiveTasksBySession = {
+        [`${agentId}\u001fsess-earth-1`]: {
+          'bg-task-1': {
+            id: 'bg-task-1',
+            agentId,
+            sessionId: 'sess-earth-1',
+            kind: 'sub_agent',
+            status: 'running',
+            title: 'shader-audit',
+            startedAt: new Date(now - 5000).toISOString(),
+            updatedAt: new Date(now - 1000).toISOString(),
+          },
+        },
+      };
       chat.messagesMap[convId] = [
         { id: 'm1', type: 'user', sessionId: 'sess-earth-1', content: 'Optimize procedural Earth and Saturn rings.', timestamp: now - 40000 },
         { id: 'm2', type: 'tool-use', sessionId: 'sess-earth-1', toolName: 'FileEdit', toolInput: { file_path: 'web/cosmos/shaders-bodies.js' }, timestamp: now - 35000 },
@@ -208,9 +250,54 @@ test.describe('Yeaft Cosmos UI', () => {
     await expect(page.locator('.cosmos-drawer')).toHaveAttribute('data-planet-theme', 'earth');
     // Verify Project chip appears in header subtitle
     await expect(page.locator('.cosmos-drawer-project-chip')).toContainText('Yeaft');
-    // Verify removed redundant elements (no session pill strip, no dashed meta bar)
+    // Verify removed redundant elements (no session pill strip, no dashed meta bar, NO header create-session icon, NO waiting cat animation)
     await expect(page.locator('.ap-session-strip')).toHaveCount(0);
     await expect(page.locator('.conv-meta-strip')).toHaveCount(0);
+    await expect(page.locator('.cosmos-drawer-head button[aria-label*="New session"], .cosmos-drawer-head button[aria-label*="新建会话"]')).toHaveCount(0);
+    await expect(page.locator('.cosmos-drawer .typing-indicator')).toHaveCount(0);
+
+    // Verify calm live Session Status strip opens authentic Session Status overlay,
+    // dragging the left optical resize handle widens the drawer & docks Session Status side-by-side,
+    // 1st Escape dismisses Session Status (restoring toggle focus) without closing drawer, and dblclick resets width.
+    const statusStrip = page.locator('.cosmos-drawer .cosmos-status-strip');
+    await expect(statusStrip).toBeVisible();
+    await statusStrip.click();
+    const statusHost = page.locator('.cosmos-drawer .cosmos-status-host');
+    await expect(statusHost).toBeVisible();
+    await expect(statusHost).toHaveClass(/is-overlay/);
+    await expect(statusHost.locator('.yeaft-vp-timeline')).toBeVisible();
+    await expect(statusHost).toContainText('shader-audit');
+    await expect(page.locator('.cosmos-drawer-chat')).toHaveAttribute('inert', '');
+
+    const drawerBeforeResize = (await page.locator('.cosmos-drawer').boundingBox()).width;
+    const resizeHandle = page.locator('.cosmos-drawer-resize-handle');
+    const handleBox = await resizeHandle.boundingBox();
+    expect(handleBox).not.toBeNull();
+    await page.mouse.move(handleBox.x + handleBox.width / 2, handleBox.y + handleBox.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(handleBox.x - 420, handleBox.y + handleBox.height / 2, { steps: 8 });
+    await page.mouse.up();
+    await expect(async () => {
+      const afterW = (await page.locator('.cosmos-drawer').boundingBox()).width;
+      expect(afterW).toBeGreaterThan(drawerBeforeResize + 280);
+    }).toPass({ timeout: 2000 });
+    // Wide drawer automatically docks Session Status side-by-side so chat becomes interactive again
+    await expect(statusHost).toHaveClass(/is-docked/);
+    await expect(page.locator('.cosmos-drawer-chat')).not.toHaveAttribute('inert', '');
+
+    // Escape closes Session Status and restores focus to toggle button while keeping drawer open
+    await page.keyboard.press('Escape');
+    await expect(statusHost).toBeHidden();
+    await expect(page.locator('.cosmos-drawer')).toBeVisible();
+    await expect(page.locator('.cosmos-session-status-btn')).toBeFocused();
+
+    // Double-click resize handle resets drawer width back to default
+    const wideHandleBox = await resizeHandle.boundingBox();
+    await page.mouse.dblclick(wideHandleBox.x + wideHandleBox.width / 2, wideHandleBox.y + wideHandleBox.height / 2);
+    await expect(async () => {
+      const resetW = (await page.locator('.cosmos-drawer').boundingBox()).width;
+      expect(Math.abs(resetW - drawerBeforeResize)).toBeLessThanOrEqual(8);
+    }).toPass({ timeout: 2000 });
 
     // Verify user message outer wrapper is transparent (no nested double-box background)
     const userMsgBg = await page.locator('.cosmos-drawer .message.user').first().evaluate((el) => {

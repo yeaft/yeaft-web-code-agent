@@ -117,10 +117,13 @@ export function stepCosmosFrame(now, ctx) {
   const { width: w, height: h, dpr } = engine.getSize();
   const aspect = w / Math.max(h, 1);
 
-  const panelW = ui.workbenchWidened ? Math.min(760, w * 0.50) : Math.min(488, w * 0.34);
-  anim.targetCenterShiftX = (ui.drawerOpen && w > 820) ? -panelW * 0.50 : 0;
+  const panelW = Number.isFinite(ui.drawerWidth) && ui.drawerWidth > 0
+    ? ui.drawerWidth
+    : (ui.workbenchWidened ? Math.min(760, w * 0.50) : Math.min(488, w * 0.34));
+  anim.targetCenterShiftX = (ui.drawerOpen && w > 820) ? -Math.min(panelW * 0.50, w * 0.36) : 0;
   anim.centerShiftX += (anim.targetCenterShiftX - anim.centerShiftX) * Math.min(1, dt * 6.5);
-  const panelScaleFactor = 1.0 - Math.min(1, Math.abs(anim.centerShiftX) / Math.max(panelW * 0.5, 1)) * 0.14;
+  const shiftDenom = Math.max(Math.min(panelW * 0.50, w * 0.36), 1);
+  const panelScaleFactor = 1.0 - Math.min(1, Math.abs(anim.centerShiftX) / shiftDenom) * 0.14;
 
   const s = anim.scaleLog;
   const band = scaleBand(s);

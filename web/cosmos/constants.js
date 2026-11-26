@@ -5,6 +5,14 @@
 export const COSMOS_CONSTANTS_KEY = 'yeaft-cosmos-constants-v1';
 export const COSMOS_BINDINGS_KEY = 'yeaft-cosmos-planet-bindings-v1';
 export const COSMOS_BOOKS_KEY = 'yeaft-cosmos-galaxy-books-v1';
+export const COSMOS_DRAWER_WIDTH_KEY = 'yeaft-cosmos-drawer-width-v1';
+
+export const COSMOS_DRAWER_WIDTH = Object.freeze({
+  min: 340,
+  default: 460,
+  max: 1280,
+  minRemaining: 220,
+});
 
 /** Default allocation priority when binding Agents to planets. */
 export const DEFAULT_PLANET_ORDER = Object.freeze([
@@ -220,4 +228,45 @@ export function saveGalaxyBooks(books, storage) {
   try {
     store.setItem(COSMOS_BOOKS_KEY, JSON.stringify(books.slice(0, 64)));
   } catch { /* ignore */ }
+}
+
+export function clampCosmosDrawerWidth(width, viewportWidth = 1280) {
+  const vw = Number.isFinite(viewportWidth) && viewportWidth > 0 ? viewportWidth : 1280;
+  const maxAllowed = Math.max(
+    COSMOS_DRAWER_WIDTH.min,
+    Math.min(COSMOS_DRAWER_WIDTH.max, Math.floor(vw - COSMOS_DRAWER_WIDTH.minRemaining)),
+  );
+  const numeric = Number(width);
+  if (!Number.isFinite(numeric)) {
+    return Math.min(maxAllowed, Math.max(COSMOS_DRAWER_WIDTH.min, Math.min(488, Math.round(vw * 0.34))));
+  }
+  return Math.round(Math.max(COSMOS_DRAWER_WIDTH.min, Math.min(maxAllowed, numeric)));
+}
+
+export function loadCosmosDrawerWidth(storage) {
+  const store = getStorage(storage);
+  if (!store) return null;
+  try {
+    const raw = store.getItem(COSMOS_DRAWER_WIDTH_KEY);
+    if (raw == null || raw === '') return null;
+    const n = Number(raw);
+    if (!Number.isFinite(n) || n < COSMOS_DRAWER_WIDTH.min) return null;
+    return Math.round(Math.min(COSMOS_DRAWER_WIDTH.max, n));
+  } catch {
+    return null;
+  }
+}
+
+export function saveCosmosDrawerWidth(width, storage) {
+  const store = getStorage(storage);
+  if (!store) return null;
+  if (width == null) {
+    try { store.removeItem(COSMOS_DRAWER_WIDTH_KEY); } catch { /* ignore */ }
+    return null;
+  }
+  const n = Number(width);
+  if (!Number.isFinite(n)) return null;
+  const clamped = Math.round(Math.max(COSMOS_DRAWER_WIDTH.min, Math.min(COSMOS_DRAWER_WIDTH.max, n)));
+  try { store.setItem(COSMOS_DRAWER_WIDTH_KEY, String(clamped)); } catch { /* ignore */ }
+  return clamped;
 }

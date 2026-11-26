@@ -40,8 +40,12 @@
   caret-color: var(--p-accent) !important;
   font-size: 13.5px !important;
   line-height: 1.56 !important;
-  min-height: 36px;
+  min-height: 32px;
   padding: 2px 2px 0 !important;
+}
+
+.cosmos-drawer .cosmos-composer-surface .textarea-wrapper textarea {
+  min-height: 26px;
 }
 
 .cosmos-composer-surface .textarea-wrapper textarea::placeholder {

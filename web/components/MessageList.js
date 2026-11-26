@@ -191,7 +191,7 @@ export default {
               @delete-turn="$emit('delete-turn', $event)"
               @fork-from-turn="$emit('fork-from-turn', $event)" />
           </template>
-          <template v-if="toolsInStatus" #after="{ turn }">
+          <template v-if="toolsInStatus && !hideWaitingAnimation" #after="{ turn }">
             <SessionLaneWait v-if="laneWaiting(turn)"
               :preference="store.waitingAnimation" :seed="turn.startedAt" :clock-key="waitClockKey + ':' + turn.userTurnId" :status="waitingStatus || ''" />
           </template>
@@ -268,14 +268,14 @@ export default {
         -->
         <!-- Waiting indicator: shown while processing but not streaming text. The
              chosen animation plays in it; with animations off, three dots. -->
-        <div v-if="previewShowTypingDots && !splitActive && (!toolsInStatus || store.isProcessing || isPreviewMode)" class="typing-indicator" :class="[animation ? 'is-' + animation.layout : '', waitingStatus ? ('status-' + waitingStatus) : '']">
+        <div v-if="!hideWaitingAnimation && previewShowTypingDots && !splitActive && (!toolsInStatus || store.isProcessing || isPreviewMode)" class="typing-indicator" :class="[animation ? 'is-' + animation.layout : '', waitingStatus ? ('status-' + waitingStatus) : '']">
           <component v-if="animation" :is="animation.component" :clock-key="waitClockKey" :status="waitingStatus || ''" />
           <template v-else><span></span><span></span><span></span></template>
         </div>
       </div>
 
       <!-- Preview mode: standalone typing indicator when no conversation -->
-      <div v-if="isPreviewMode && !store.currentConversation" class="typing-indicator preview-animation-indicator" :class="animation ? 'is-' + animation.layout : ''" style="position: fixed; bottom: 100px; left: 0; right: 0; padding-inline: var(--space-6); z-index: 100;">
+      <div v-if="!hideWaitingAnimation && isPreviewMode && !store.currentConversation" class="typing-indicator preview-animation-indicator" :class="animation ? 'is-' + animation.layout : ''" style="position: fixed; bottom: 100px; left: 0; right: 0; padding-inline: var(--space-6); z-index: 100;">
         <component v-if="animation" :is="animation.component" :clock-key="waitClockKey" />
         <template v-else><span></span><span></span><span></span></template>
       </div>
@@ -299,6 +299,7 @@ export default {
   `,
   props: {
     toolsInStatus: { type: Boolean, default: false },
+    hideWaitingAnimation: { type: Boolean, default: false },
     liveExecutionKeys: { type: Set, default: () => new Set() },
     sessionActivity: { type: Array, default: () => [] },
     hideSpeakerIdentity: { type: Boolean, default: false },
@@ -1201,6 +1202,7 @@ export default {
     let typingHideTimer = null;
 
     const previewShowTypingDots = Vue.computed(() => {
+      if (_props.hideWaitingAnimation) return false;
       if (isPreviewMode) return true;
       return displayTypingDots.value;
     });
@@ -1212,7 +1214,20 @@ export default {
     // is also the only way to see an animation that is hidden.
     const previewAnimation = waitingAnimation(urlPreview) ? urlPreview : 'cat';
     let turnAnimation = null;
+    const clearWaitingIndicatorState = () => {
+      if (typingHideTimer) { clearTimeout(typingHideTimer); typingHideTimer = null; }
+      if (typingTimer) { clearInterval(typingTimer); typingTimer = null; }
+      displayTypingDots.value = false;
+      typingStartTime.value = 0;
+      turnAnimation = null;
+      animationType.value = 'none';
+    };
+
     const startWaitingAnimation = () => {
+      if (_props.hideWaitingAnimation) {
+        animationType.value = 'none';
+        return;
+      }
       if (isPreviewMode) {
         animationType.value = previewAnimation;
         return;
@@ -1225,20 +1240,24 @@ export default {
     // A change in Settings applies to the wait already on screen.
     Vue.watch(() => store.waitingAnimation, () => {
       turnAnimation = null;
-      if (displayTypingDots.value) startWaitingAnimation();
+      if (!_props.hideWaitingAnimation && (displayTypingDots.value || isPreviewMode)) startWaitingAnimation();
     });
 
-    Vue.watch(showTypingDots, (show) => {
-      if (show) {
+    Vue.watch([showTypingDots, () => _props.hideWaitingAnimation], ([show, hidden]) => {
+      if (hidden) {
+        clearWaitingIndicatorState();
+        return;
+      }
+      if (show || isPreviewMode) {
         // Cancel any pending hide from a prior cycle — we're visible again.
         if (typingHideTimer) {
           clearTimeout(typingHideTimer);
           typingHideTimer = null;
         }
-        displayTypingDots.value = true;
+        if (show) displayTypingDots.value = true;
         typingStartTime.value = Date.now();
         now.value = Date.now();
-        if (!typingTimer) {
+        if (show && !typingTimer) {
           typingTimer = setInterval(() => {
             now.value = Date.now();
           }, 1000);
@@ -1261,13 +1280,6 @@ export default {
         }
       }
     }, { immediate: true });
-
-    // Preview mode initialization
-    if (isPreviewMode) {
-      typingStartTime.value = Date.now();
-      now.value = Date.now();
-      startWaitingAnimation();
-    }
 
     // Event-driven waiting status (replaces time-based waitingPhase)
     const waitingStatus = Vue.computed(() => {
