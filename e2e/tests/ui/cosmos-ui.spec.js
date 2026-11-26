@@ -159,13 +159,28 @@ test.describe('Yeaft Cosmos UI', () => {
     await expect(page.locator('.cosmos-drawer')).toHaveAttribute('data-planet-theme', 'saturn');
     await page.keyboard.press('Escape');
 
-    // 4. Cosmic Event: open almanac, observe Supernova, then STOP immediately
+    // 4. Cosmic Event: open almanac, disable Auto-Zoom -> trigger distant event with spatial beacon -> click beacon to zoom in -> return to Solar View -> stop
     await page.locator('.cosmos-event-main').click();
     await expect(page.locator('.cosmos-event-almanac')).toBeVisible();
+    const autoZoomSwitch = page.locator('.cosmos-almanac-pref .cosmos-switch');
+    await expect(autoZoomSwitch).toHaveAttribute('aria-checked', 'true');
+    await autoZoomSwitch.click();
+    await expect(autoZoomSwitch).toHaveAttribute('aria-checked', 'false');
     await page.locator('.cosmos-almanac-row').first().click();
-    await expect(page.locator('.cosmos-watch-dock')).toBeVisible();
+
+    // Auto-zoom is off: no full-screen observation dock yet, distant reticle beacon appears instead
+    await expect(page.locator('.cosmos-watch-dock')).toHaveCount(0);
+    await expect(page.locator('.cosmos-event-beacon')).toBeVisible({ timeout: 5000 });
+
+    // Click distant beacon -> telescope slews in & opens observation dock
+    await page.locator('.cosmos-event-beacon').click();
+    await expect(page.locator('.cosmos-watch-dock')).toBeVisible({ timeout: 5000 });
+    await expect(page.locator('.cosmos-ewd-bearing')).toBeVisible();
+
+    // Stop immediately via watch dock stop button
     await page.locator('.cosmos-watch-dock .cosmos-ewd-btn.is-stop').click();
     await expect(page.locator('.cosmos-watch-dock')).toHaveCount(0);
+    await expect(page.locator('.cosmos-event-beacon')).toHaveCount(0);
 
     // Silence automatic random cosmic events via stop button
     await page.locator('.cosmos-event-stop-btn').click();
