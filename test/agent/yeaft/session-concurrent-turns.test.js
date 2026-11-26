@@ -724,20 +724,27 @@ it.each(['hosted tool may have run', 'unconfirmed local tool call'])('does not a
   expect(events('session_turns').filter(frame => frame.sessionId === sessionId).at(-1).event.retryableTurns).toEqual([]);
 });
 
-it('does not make the provider retryable after a dispatched tool times out with unknown effects', async () => {
+it.each(['RPC timeout', 'confirmed nonzero exit'])('does not allow provider retry after a mutable tool fails with unknown effects: %s', async mode => {
+  const name = mode === 'RPC timeout' ? 'TestWrite' : 'Bash';
   let requests = 0;
   let executions = 0;
   const { sessionId, toolRegistry, send } = setup({ async *stream() {
     if (++requests === 1) {
-      yield { type: 'tool_call', id: 'mcp-write', name: 'TestWrite', input: {} };
+      yield { type: 'tool_call', id: 'mcp-write', name, input: {} };
       yield { type: 'stop', stopReason: 'tool_use' };
       return;
     }
     throw Object.assign(new LLMAuthError('Model request failed', 401), { providerFailure: false });
   } });
   ctx.serverCapabilities.add('session_turn_retry');
-  toolRegistry.register({ name: 'TestWrite', description: 'Simulate an MCP write timeout', inputSchema: { type: 'object' },
-    async execute() { executions++; throw new Error('RPC call "tools/call" timed out'); } });
+  toolRegistry.register({ name, description: 'Simulate a dispatched mutation', inputSchema: { type: 'object' },
+    errorOutput: 'json-error-envelope',
+    async execute() {
+      executions++;
+      if (mode === 'RPC timeout') throw new Error('RPC call "tools/call" timed out');
+      return { error: 'Command exited with code 1', code: 'bash_exit_nonzero', errorEffect: 'unknown', replaySafe: false,
+        failureType: 'exit_nonzero', exitCode: 1, terminationConfirmed: true, timedOut: false };
+    } });
   await send('timeout-root', 'Original task');
   await bridge.__testDrainVpDrivers();
   expect(executions).toBe(1);
@@ -771,4 +778,51 @@ it('revokes only the target retry on Stop and rejects a retry after a Project ch
   expect(retries()).toEqual([]);
   expect(frames().filter(frame => frame.type === 'yeaft_session_retry_result').map(frame => frame.ok)).toEqual([false, false]);
   expect(requests).toBe(2);
+});
+
+it('takes fresh reads after retry when a detached writer can still change state', async () => {
+  let requests = 0;
+  let writes = 0;
+  let reads = 0;
+  let data = 'before write';
+  const { sessionId, toolRegistry, send } = setup({ async *stream({ messages }) {
+    switch (++requests) {
+      case 1:
+        yield { type: 'tool_call', id: 'writer', name: 'StartWriter', input: {} };
+        break;
+      case 2:
+        throw Object.assign(new LLMAuthError('Model request failed', 401), { providerFailure: false });
+      case 3:
+        yield { type: 'tool_call', id: 'read-1', name: 'ReadValue', input: {} };
+        break;
+      case 4:
+        expect(messages.find(row => row.toolCallId === 'read-1')?.content).toBe('before write');
+        data = 'after write';
+        yield { type: 'tool_call', id: 'read-2', name: 'ReadValue', input: {} };
+        break;
+      case 5:
+        expect(messages.find(row => row.toolCallId === 'read-2')?.content).toBe('after write');
+        yield { type: 'text_delta', text: 'Read the final value.' };
+        yield { type: 'stop', stopReason: 'end_turn' };
+        return;
+      default: throw new Error('Unexpected request');
+    }
+    yield { type: 'stop', stopReason: 'tool_use' };
+  } });
+  ctx.serverCapabilities.add('session_turn_retry');
+  toolRegistry.register({ name: 'StartWriter', description: 'Start a detached writer', parameters: { type: 'object' },
+    mayMutateWorkspaceAfterReturn: true, async execute() { writes++; return 'writer started'; } });
+  toolRegistry.register({ name: 'ReadValue', description: 'Read the current value', parameters: { type: 'object' },
+    duplicateCallPolicy: () => 'allow', isReadOnly: () => true, cacheWithinQuery: true,
+    async execute() { reads++; return data; } });
+  await send('detached', 'Start the writer and check its value');
+  await bridge.__testDrainVpDrivers();
+  const [checkpoint] = events('session_turns').filter(frame => frame.sessionId === sessionId).at(-1).event.retryableTurns;
+  expect(checkpoint).toBeDefined();
+  await bridge.handleYeaftSessionRetry({ sessionId, turnId: checkpoint.turnId, retryToken: checkpoint.retryToken,
+    mode: 'plain', requestId: 'detached-retry', _requestClientId: 'owner-tab', _dispatchId: 'relay-nonce', _projectContext: { sessionIds: [] } });
+  await bridge.__testDrainVpDrivers();
+  expect(writes).toBe(1);
+  expect(reads).toBe(2);
+  expect(events('vp_turn_end').at(-1).event.reason).toBe('end_turn');
 });

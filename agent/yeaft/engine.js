@@ -2319,7 +2319,7 @@ export class Engine {
     // reuse for the remainder of this query rather than leaving a timing window
     // for stale entries to be repopulated.
     const readOnlyToolResults = new Map();
-    let readOnlyToolReuseDisabled = false;
+    let readOnlyToolReuseDisabled = resume?.readOnlyToolReuseDisabled === true;
     const invalidateReadOnlyToolReuse = () => {
       readOnlyToolResults.clear();
       readOnlyToolReuseDisabled = true;
@@ -4818,7 +4818,7 @@ export class Engine {
           // this checkpoint; it must never be serialized onto the wire.
           errorEvent.manualRetryState = {
             conversationMessages, turnStartIdx, relatedHistoryTurns, queryStartedAt,
-            deletionGeneration: postCompactState.deletionGeneration,
+            deletionGeneration: postCompactState.deletionGeneration, readOnlyToolReuseDisabled,
             queryProgress, queryNumber, queryToolCount, completedMutationKeys, queryDuplicateCounts, queryDuplicateSuppressions,
             queryValidationFailures, duplicateReminderAwaitingResponse, discoveredToolNames, discoveryTraversals,
             projectDocLoadedPathHints, projectDocScopes: [...projectDocContext.selectedScopes],

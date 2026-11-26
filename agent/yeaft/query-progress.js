@@ -38,14 +38,18 @@ function observationOutput(call, output) {
   } catch { return output; }
 }
 
-function failureKind(output, call, readOnly) {
+function toolFailureContract(output) {
   const text = typeof output === 'string' ? output : JSON.stringify(output) || '';
   const errorText = text.replace(/^Error:\s*/, '');
-  let contract;
   // MCP and legacy tools throw JSON envelopes; Engine prefixes their messages
   // with "Error: ". Preserve that contract for classification without changing
   // the raw persisted/UI tool output.
+  let contract;
   try { contract = typeof output === 'string' ? JSON.parse(errorText) : output; } catch { /* legacy text errors */ }
+  return { contract, errorText };
+}
+
+function failureKind(output, call, readOnly, { contract, errorText }) {
   // Confirmed nonzero exit is not rollback evidence. It is, however, a finished
   // command that can be revalidated after an edit or new input, unlike a timeout
   // or an operation whose lifecycle is still unknown.
@@ -165,8 +169,13 @@ export class QueryProgress {
     const hash = resultHash(observation);
     if (isError) {
       const prior = this.#failures.get(key);
-      const kind = failureKind(observation, call, readOnly);
-      if (executed && !readOnly && kind === 'uncertain') this.#uncertainMutation = true;
+      const failure = toolFailureContract(observation);
+      const kind = failureKind(observation, call, readOnly, failure);
+      // A stopped process confirms lifecycle, not rollback. Don't let
+      // the in-loop recovery category override the manual retry fence.
+      if (executed && !readOnly && (kind === 'uncertain' || failure.contract?.errorEffect === 'unknown'
+          || failure.contract?.replaySafe === false
+          || (kind === 'terminated_command' && failure.contract?.errorEffect !== 'none'))) this.#uncertainMutation = true;
       if (executed && !readOnly) {
         // A partial mutation may have changed even a previously unreadable
         // resource. Permit verification, never a replay of the mutation itself.
