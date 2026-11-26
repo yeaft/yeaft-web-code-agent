@@ -488,8 +488,9 @@ export function loadConfig(overrides = {}) {
     // `global:<provider>/<model>` from previous UI versions; strip the dead
     // namespace so runtime routing can match agent-local providers by model id.
     const isRemovedGlobalRef = parsed.providerName?.startsWith('global:');
-    model = parsed.modelId;
     if (isRemovedGlobalRef) primaryModel = parsed.modelId;
+    // Preserve the owning provider for dispatch, even when the vendor ID has a slash.
+    model = primaryModel;
     modelIdForInfo = parsed.modelId;
   }
 

@@ -203,9 +203,15 @@ function normalizeManagedModelDefaults(config) {
   const validPrimary = modelSelectionIsValid(config.primaryModel, providers, authoritativeManagedNames)
     ? config.primaryModel
     : managedFallback;
-  if (config.fastModel
-    && !modelSelectionIsValid(config.fastModel, providers, authoritativeManagedNames)) {
-    config.fastModel = validPrimary;
+  if (config.fastModel) {
+    const parsedFast = parseModelRef(config.fastModel);
+    const fastRef = parsedFast.providerName?.startsWith('global:') ? parsedFast.modelId : config.fastModel;
+    // Legacy fast model IDs can be shared or contain a slash. The runtime
+    // still routes a listed exact ref or bare alias; do not reset it on save.
+    if (!modelSelectionIsValid(fastRef, providers, authoritativeManagedNames)
+      && bareModelOwners(providers, fastRef).size === 0) {
+      config.fastModel = validPrimary;
+    }
   }
   // Unlike primaryModel/fastModel, null means Auto (follow fastModel -> primaryModel).
   // Never pin decisionModel to a heavyweight primary model when a managed catalog

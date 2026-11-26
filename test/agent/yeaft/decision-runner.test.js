@@ -95,6 +95,20 @@ describe('Agent-owned sub-agent scene routes', () => {
   });
 });
 
+describe('legacy Fast Model config', () => {
+  it('retains vendor-qualified legacy IDs when saving alongside a managed provider', () => {
+    const legacy = { name: 'proxy', baseUrl: 'https://proxy.invalid', models: ['github-copilot/legacy-fast'] };
+    const managed = { name: 'github-copilot', credentialProvider: 'github-copilot', models: ['gpt-5.4'] };
+    const providers = [legacy, managed];
+    const dir = createTempYeaftDir({ providers });
+    for (const fastModel of ['github-copilot/legacy-fast', 'global:old/github-copilot/legacy-fast']) {
+      expect(updateLlmConfig({ providers, fastModel }, dir).fastModel).toBe(fastModel);
+      expect(loadConfig({ dir }).fastModel).toBe('github-copilot/legacy-fast');
+    }
+    expect(updateLlmConfig({ providers, fastModel: 'github-copilot/removed' }, dir).fastModel).toBe('github-copilot/gpt-5.4');
+  });
+});
+
 describe('Decision model configuration & scenario-tailored runner', () => {
   it('resolves decisionModel via decisionModel -> fastModel -> primaryModel across config, config-api, and CLI helpers', () => {
     const dir = createTempYeaftDir({

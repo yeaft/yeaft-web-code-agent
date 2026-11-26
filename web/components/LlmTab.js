@@ -240,13 +240,13 @@ export default {
 
               <label class="llm-model-select-field">
                 <span class="llm-field-label" :id="fastModelHintId + '-label'">{{ $t('settings.llm.fastModel') }}</span>
-                <select class="sp-input llm-route-select" v-model="localFastModel" @change="markDirty"
+                <select class="sp-input llm-route-select" v-model="selectedFastModel" @change="markDirty"
                   :aria-labelledby="fastModelHintId + '-label'" :aria-describedby="fastModelHintId">
                   <option :value="null">{{ $t('settings.llm.fastModelAuto') }}</option>
-                  <option v-if="localFastModel && !allModelRefs.includes(localFastModel)" :value="localFastModel" :disabled="!legacyFastModelRef">
-                    {{ legacyFastModelRef || $t('settings.llm.modelUnavailable', { model: localFastModel }) }}
+                  <option v-if="localFastModel && !allModelRefs.includes(selectedFastModel)" :value="localFastModel" disabled>
+                    {{ $t('settings.llm.modelUnavailable', { model: localFastModel }) }}
                   </option>
-                  <option v-for="ref in fastModelRefs" :key="ref" :value="ref">{{ ref }}</option>
+                  <option v-for="ref in uniqueModelRefs" :key="ref" :value="ref">{{ ref }}</option>
                 </select>
                 <span class="llm-models-hint" :id="fastModelHintId">{{ $t('settings.llm.fastModelHint') }}</span>
               </label>
@@ -378,11 +378,15 @@ export default {
       if (!ref || this.allModelRefs.includes(ref)) return null;
       // Runtime interprets old global: provider selections as bare model IDs.
       const modelId = ref.startsWith('global:') ? ref.slice(ref.indexOf('/') + 1) : ref;
-      if (modelId.includes('/')) return null;
-      return this.allModelRefs.find(candidate => candidate.slice(candidate.indexOf('/') + 1) === modelId) || null;
+      return this.allModelRefs.find(candidate => candidate === modelId)
+        || this.allModelRefs.find(candidate => candidate.slice(candidate.indexOf('/') + 1) === modelId) || null;
     },
-    fastModelRefs() {
-      return [...new Set(this.allModelRefs)].filter(ref => ref !== this.legacyFastModelRef);
+    selectedFastModel: {
+      get() { return this.legacyFastModelRef || this.localFastModel; },
+      set(ref) { this.localFastModel = ref; },
+    },
+    uniqueModelRefs() {
+      return [...new Set(this.allModelRefs)];
     },
     sceneModelRefs() {
       const counts = new Map();
@@ -795,7 +799,7 @@ export default {
       if (this.localPrimaryModel && !remainingRefs.has(this.localPrimaryModel)) {
         this.localPrimaryModel = this.allModelRefs[0] || null;
       }
-      if (this.localFastModel && !remainingRefs.has(this.localFastModel)) {
+      if (this.localFastModel && !remainingRefs.has(this.localFastModel) && !this.legacyFastModelRef) {
         this.localFastModel = null;
       }
       if (this.localDecisionModel && !remainingRefs.has(this.localDecisionModel)) {

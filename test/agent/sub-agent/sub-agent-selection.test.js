@@ -357,6 +357,16 @@ describe('sub-agent model, effort, scene, and machine protocol', () => {
     expect(notice).not.toContain('retired/model');
   });
 
+  it('uses the first catalog owner for legacy slash-delimited fastModel IDs only if no exact ref exists', () => {
+    const catalog = mkCatalogConfig().availableModels;
+    const legacy = { id: 'upstream/gpt-fast', provider: 'proxy', ref: 'proxy/upstream/gpt-fast' };
+    const exact = { id: 'gpt-fast', provider: 'upstream', ref: 'upstream/gpt-fast' };
+    for (const [entries, model] of [[[legacy], legacy.ref], [[legacy, exact], exact.ref]]) {
+      const config = mkCatalogConfig({ fastModel: legacy.id, availableModels: [...catalog, ...entries] });
+      expect(resolveSubAgentSelection({ config, personaId: 'explorer' })).toMatchObject({ model, modelSource: 'persona-fast' });
+    }
+  });
+
   it('honors explicit targetEffort across OpenAI, Anthropic, and Gemini while preserving legacy medium ceiling by default', () => {
     const parentMax = { effective: 'max', source: 'user', wireMode: 'reasoning-effort', thinkingEnabled: true };
 

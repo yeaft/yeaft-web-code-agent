@@ -287,10 +287,9 @@ export function resolveSubAgentSelection({
         modelEntry = fastResolved.entry;
         modelSource = 'persona-fast';
       } else {
-        // Fallback for legacy configs where config.fastModel is an unqualified
-        // modelId that appears in multiple providers; match router.js's
-        // first-provider ownership so persona fast routing stays usable.
-        const fallbackEntry = findEffortModelEntry(config, fastCandidate);
+        // Exact refs win first. Then preserve the Router's first-owner
+        // preference for legacy bare model IDs, including vendor/model IDs.
+        const fallbackEntry = config?.availableModels?.find(entry => entry.id === fastCandidate);
         if (fallbackEntry) {
           model = catalogEntryRef(fallbackEntry);
           modelEntry = fallbackEntry;

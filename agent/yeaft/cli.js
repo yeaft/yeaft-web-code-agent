@@ -586,7 +586,7 @@ async function runREPL(config, args) {
 
               if (providerName) {
                 // Full ref: provider/model — update primaryModel
-                session.config.model = modelId;
+                session.config.model = modelRef;
                 session.config.primaryModel = modelRef;
               } else {
                 // Bare model ID
@@ -596,7 +596,7 @@ async function runREPL(config, args) {
               // Re-resolve model info from registry (adapter / baseUrl /
               // thinking metadata). Token limits come from the resolver
               // ladder — models.dev snapshot first, config fallback.
-              const newModelInfo = resolveModel(session.config.model);
+              const newModelInfo = resolveModel(modelId);
               if (newModelInfo) {
                 session.config.modelInfo = newModelInfo;
               }
