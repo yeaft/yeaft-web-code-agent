@@ -202,9 +202,9 @@ export function startSubAgent(agent, deps = {}) {
         ? Math.min(explicitOutputCap, modelMaxOutput)
         : modelMaxOutput;
     }
-    if (resolvedSelection.modelSource === 'explicit') {
-      // Fail-closed explicit model override must not silently fall back to an
-      // unrelated parent fallbackModel on transient provider retry exhaustion.
+    if (resolvedSelection.modelSource === 'explicit' || resolvedSelection.modelSource === 'scene-config') {
+      // A selected route must not silently fall back to an unrelated parent
+      // fallbackModel on transient provider retry exhaustion.
       childConfig.fallbackModel = null;
     }
     // Always set childConfig.modelEffort explicitly so ordinary sub-agents
@@ -573,6 +573,17 @@ async function driveSubAgent(agent, subEngine, vpPersona, deps) {
           parentEffortDecision: queuedPrompt.parentEffortDecision,
           subAgentTargetEffort: explicitEffortTarget,
           userEffort: explicitEffortTarget,
+          ...(agent.taskId && deps.taskManager?.setSubAgentRoute && agent.parentSessionId ? {
+            // Observe the provider request, not the selection estimate. Retries
+            // and follow-ups can change the actual model or wire effort.
+            onProviderRequestRoute: ({ model, effortDecision }) => {
+              deps.taskManager.setSubAgentRoute(agent.parentSessionId, agent.taskId, {
+                model,
+                ...(effortDecision ? { effort: effortDecision.effective } : {}),
+                sceneId: agent.scene,
+              });
+            },
+          } : {}),
           vpPersona,
           sessionId: agent.parentSessionId || deps.parentSessionId || null,
           threadId: agent.id,

@@ -1,3 +1,4 @@
+import { SESSION_SCENE_IDS } from './SessionSceneSelect.js';
 import { PROTOCOL_PRESET_MODELS } from '../utils/protocolPresets.js';
 import { GEMINI_BASE_URL } from '../utils/geminiEndpoint.js';
 import ProviderPresetPicker from './ProviderPresetPicker.js';
@@ -237,25 +238,38 @@ export default {
                 <p class="llm-models-hint">{{ $t('settings.llm.decisionModelHint') }}</p>
               </div>
 
-              <div class="llm-model-select-field" v-if="context !== 'yeaft'">
-                <label class="llm-field-label">{{ $t('settings.llm.fastModel') }}</label>
-                <div class="sp-custom-select" :class="{ open: openDropdown === 'fastModel' }" v-click-outside="() => closeDropdown('fastModel')">
-                  <button class="sp-custom-select-trigger" @click="toggleDropdown('fastModel')">
-                    <span>{{ localFastModel || $t('settings.llm.selectModel') }}</span>
-                    <svg class="sp-custom-select-chevron" viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M7 10l5 5 5-5z"/></svg>
-                  </button>
-                  <div class="sp-custom-select-menu llm-model-menu" v-show="openDropdown === 'fastModel'">
-                    <div class="sp-custom-select-option"
-                      v-for="ref in allModelRefs" :key="'fast-' + ref"
-                      :class="{ active: localFastModel === ref }"
-                      @click="localFastModel = ref; closeDropdown('fastModel'); markDirty()">
-                      {{ ref }}
-                      <svg v-if="localFastModel === ref" class="sp-custom-select-check" viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg>
-                    </div>
-                  </div>
-                </div>
-              </div>
+              <label class="llm-model-select-field">
+                <span class="llm-field-label" :id="fastModelHintId + '-label'">{{ $t('settings.llm.fastModel') }}</span>
+                <select class="sp-input llm-route-select" v-model="selectedFastModel" @change="markDirty"
+                  :aria-labelledby="fastModelHintId + '-label'" :aria-describedby="fastModelHintId">
+                  <option value="">{{ $t('settings.llm.fastModelAuto') }}</option>
+                  <option v-if="selectedFastModel && !allModelRefs.includes(selectedFastModel)" :value="selectedFastModel" disabled>
+                    {{ $t('settings.llm.modelUnavailable', { model: selectedFastModel }) }}
+                  </option>
+                  <option v-for="ref in uniqueModelRefs" :key="ref" :value="ref">{{ ref }}</option>
+                </select>
+                <span class="llm-models-hint" :id="fastModelHintId">{{ $t('settings.llm.fastModelHint') }}</span>
+              </label>
             </div>
+          </div>
+        </div>
+
+        <div v-if="context === 'yeaft' && sceneModelConfigSupported && (allModelRefs.length || Object.keys(localSubAgentSceneModels).length)" class="sp-group llm-section">
+          <div class="sp-group-title">{{ $t('settings.llm.subAgentSceneModels') }}</div>
+          <p class="sp-desc">{{ $t('settings.llm.subAgentSceneModelsHint') }}</p>
+          <div class="llm-model-select-row">
+            <label v-for="scene in sceneIds" :key="scene" class="llm-model-select-field">
+              <span class="llm-field-label">{{ $t('yeaft.session.scene.' + scene) }}</span>
+              <select class="sp-input llm-route-select" :value="localSubAgentSceneModels[scene] || ''"
+                @change="setSubAgentSceneModel(scene, $event.target.value)">
+                <option value="">{{ $t('settings.llm.subAgentSceneModelAuto') }}</option>
+                <option v-if="localSubAgentSceneModels[scene] && !sceneModelRefs.includes(localSubAgentSceneModels[scene])"
+                  :value="localSubAgentSceneModels[scene]" disabled>
+                  {{ $t('settings.llm.modelUnavailable', { model: localSubAgentSceneModels[scene] }) }}
+                </option>
+                <option v-for="ref in sceneModelRefs" :key="ref" :value="ref">{{ ref }}</option>
+              </select>
+            </label>
           </div>
         </div>
 
@@ -298,6 +312,9 @@ export default {
       }
     }
   },
+  setup() {
+    return { sceneIds: SESSION_SCENE_IDS, fastModelHintId: `llm-fast-model-hint-${Vue.useId()}` };
+  },
   data() {
     return {
       loading: false,
@@ -306,6 +323,10 @@ export default {
       providerModelsText: [],
       localPrimaryModel: null,
       localFastModel: null,
+      fastModelTarget: null,
+      fastModelFallbackOwner: null,
+      localSubAgentSceneModels: {},
+      sceneModelConfigSupported: false,
       localDecisionModel: null,
       localDebug: false,
       isDirty: false,
@@ -345,15 +366,27 @@ export default {
       return this.localProviders;
     },
     allModelRefs() {
-      const providers = this.localProviders;
-      const refs = [];
-      for (const p of providers) {
-        if (!p.name) continue;
-        const models = this.parseModelsFromProvider(p);
-        for (const m of models) refs.push(`${p.name}/${m}`);
-      }
-      return refs;
-    }
+      return this.modelRefsFor(this.localProviders);
+    },
+    selectedFastModel: {
+      get() {
+        if (!this.fastModelTarget) return this.fastModelForSave(this.localProviders) || '';
+        return this.allModelRefs.includes(this.fastModelTarget) ? this.fastModelTarget : '';
+      },
+      set(ref) {
+        this.localFastModel = ref || null;
+        this.fastModelTarget = ref || null;
+        this.fastModelFallbackOwner = null;
+      },
+    },
+    uniqueModelRefs() {
+      return [...new Set(this.allModelRefs)];
+    },
+    sceneModelRefs() {
+      const counts = new Map();
+      for (const ref of this.allModelRefs) counts.set(ref, (counts.get(ref) || 0) + 1);
+      return [...counts.keys()].filter(ref => counts.get(ref) === 1);
+    },
   },
   watch: {
     effectiveAgentId: {
@@ -371,6 +404,10 @@ export default {
           this.providerModelsText = [];
           this.localPrimaryModel = null;
           this.localFastModel = null;
+          this.fastModelTarget = null;
+          this.fastModelFallbackOwner = null;
+          this.localSubAgentSceneModels = {};
+          this.sceneModelConfigSupported = false;
           this.localDecisionModel = null;
           this.localDebug = false;
           this.isDirty = false;
@@ -548,11 +585,6 @@ export default {
       if (firstModelRef && !modelRefs.has(this.localPrimaryModel)) {
         this.localPrimaryModel = firstModelRef;
       }
-      if (firstModelRef
-        && this.localFastModel?.startsWith(`${provider.name}/`)
-        && !modelRefs.has(this.localFastModel)) {
-        this.localFastModel = firstModelRef;
-      }
       if (this.localDecisionModel?.startsWith(`${provider.name}/`)
         && !modelRefs.has(this.localDecisionModel)) {
         this.localDecisionModel = null;
@@ -635,6 +667,16 @@ export default {
 
       this.localPrimaryModel = config.agentConfig?.primaryModel || config.primaryModel || null;
       this.localFastModel = config.agentConfig?.fastModel || config.fastModel || null;
+      this.fastModelTarget = this.resolveFastModelRef(this.localFastModel, this.allModelRefs);
+      const normalizedFast = this.normalizeFastModelRef(this.localFastModel);
+      const owner = normalizedFast?.includes('/') ? normalizedFast.slice(0, normalizedFast.indexOf('/')) : null;
+      // Qualified fallbacks need not be listed (for example, a Chat Completions
+      // alias). Remember their owner without guessing whether the model exists.
+      this.fastModelFallbackOwner = !this.fastModelTarget && owner && this.localProviders.some(p => p.name === owner)
+        ? owner : null;
+      const sceneModels = config.agentConfig?.subAgentSceneModels;
+      this.sceneModelConfigSupported = !!sceneModels;
+      this.localSubAgentSceneModels = { ...sceneModels };
       this.localDecisionModel = config.agentConfig?.decisionModel || config.decisionModel || null;
       this.localDebug = config.agentConfig?.debug === true;
       this.isDirty = false;
@@ -670,6 +712,41 @@ export default {
       this.providerModelsText = this.editableProviders.map(p =>
         (p.models || []).map(m => this._modelId(m)).join(', ')
       );
+    },
+
+    modelRefsFor(providers) {
+      return providers.flatMap(provider => provider.name
+        ? this.parseModelsFromProvider(provider).map(id => `${provider.name}/${id}`) : []);
+    },
+
+    normalizeFastModelRef(ref) {
+      // Older runtime configs strip the removed global namespace before lookup.
+      return ref?.startsWith('global:') && ref.includes('/') ? ref.slice(ref.indexOf('/') + 1) : ref;
+    },
+
+    resolveFastModelRef(ref, refs) {
+      const normalized = this.normalizeFastModelRef(ref);
+      if (!normalized) return null;
+      return refs.find(candidate => candidate === normalized)
+        || refs.find(candidate => candidate.slice(candidate.indexOf('/') + 1) === normalized) || null;
+    },
+
+    fastModelForSave(providers) {
+      const stored = this.localFastModel;
+      if (!stored) return null;
+      const refs = this.modelRefsFor(providers);
+      const resolved = this.resolveFastModelRef(stored, refs);
+      const target = this.fastModelTarget;
+      if (target) {
+        if (!refs.includes(target)) return null;
+        // A catalog edit may shadow a legacy alias. Preserve its original
+        // provider without rewriting the alias on ordinary saves.
+        return resolved === target ? stored : target;
+      }
+      const fallbackOwner = this.fastModelFallbackOwner;
+      if (fallbackOwner && (!providers.some(p => p.name === fallbackOwner)
+        || (resolved && resolved !== this.normalizeFastModelRef(stored)))) return null;
+      return stored;
     },
 
     parseModelsFromProvider(provider) {
@@ -755,9 +832,6 @@ export default {
       if (this.localPrimaryModel && !remainingRefs.has(this.localPrimaryModel)) {
         this.localPrimaryModel = this.allModelRefs[0] || null;
       }
-      if (this.localFastModel && !remainingRefs.has(this.localFastModel)) {
-        this.localFastModel = null;
-      }
       if (this.localDecisionModel && !remainingRefs.has(this.localDecisionModel)) {
         this.localDecisionModel = null;
       }
@@ -829,6 +903,12 @@ export default {
       if (this.openDropdown === name) this.openDropdown = null;
     },
 
+    setSubAgentSceneModel(scene, ref) {
+      if (ref) this.localSubAgentSceneModels[scene] = ref;
+      else delete this.localSubAgentSceneModels[scene];
+      this.markDirty();
+    },
+
     markDirty() {
       this.draftRevision += 1;
       this.isDirty = true;
@@ -882,25 +962,15 @@ export default {
           return clean;
         });
 
-      // The Yeaft config UI hides fast/secondary model — Yeaft users only
-      // pick a primary, and the engine quietly falls back to primary when
-      // fastModel is unset (see engine.js: `config.fastModelId || config.model`).
-      // That fallback means recall and consolidation still work, but they
-      // run on the expensive primary model. Hiding the field is a UX choice,
-      // not a claim that the engine has no fast-model concept.
-      //
-      // We omit fastModel from the payload (instead of writing null) so
-      // updateLlmConfig's `if (update.fastModel !== undefined)` guard leaves
-      // any existing fastModel value untouched — switching contexts in the
-      // UI never silently clears another context's saved fastModel.
       const llmConfig = {
         providers,
         primaryModel: this.localPrimaryModel || null,
+        fastModel: this.fastModelForSave(providers),
         decisionModel: this.localDecisionModel || null,
         debug: this.localDebug === true,
       };
-      if (this.context !== 'yeaft') {
-        llmConfig.fastModel = this.localFastModel || null;
+      if (this.context === 'yeaft' && this.sceneModelConfigSupported) {
+        llmConfig.subAgentSceneModels = { ...this.localSubAgentSceneModels };
       }
 
       const requestId = `llm-save-${Date.now()}-${Math.random().toString(36).slice(2)}`;

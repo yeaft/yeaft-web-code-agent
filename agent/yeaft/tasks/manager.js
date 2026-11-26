@@ -33,6 +33,17 @@ function makeTaskId() {
   return `task_${Date.now().toString(36)}_${randomUUID().slice(0, 8)}`;
 }
 
+// An omitted effort means unobserved; null means the adapter reported no
+// effective tier. A legacy task has no route at all.
+function subAgentRouteSnapshot(kind, route) {
+  if (kind !== 'sub_agent' || !route || typeof route !== 'object') return undefined;
+  return {
+    ...(typeof route.model === 'string' && route.model ? { model: route.model } : {}),
+    ...(typeof route.effort === 'string' || route.effort === null ? { effort: route.effort } : {}),
+    ...(typeof route.sceneId === 'string' || route.sceneId === null ? { sceneId: route.sceneId } : {}),
+  };
+}
+
 function publicSnapshot(task) {
   if (!task) return null;
   return {
@@ -51,6 +62,7 @@ function publicSnapshot(task) {
     log: task.log || {},
     result: task.result || {},
     source: task.source || {},
+    ...(task.kind === 'sub_agent' && task.subAgentRoute ? { subAgentRoute: { ...task.subAgentRoute } } : {}),
   };
 }
 
@@ -130,13 +142,14 @@ export class TaskManager {
     }
   }
 
-  startTask({ sessionId, ownerVpId = null, kind = 'tool', title = '', runtime = {}, source = {}, logPath = null, resultDelivery = TASK_RESULT_DELIVERY.STATUS_ONLY } = {}) {
+  startTask({ sessionId, ownerVpId = null, kind = 'tool', title = '', runtime = {}, source = {}, logPath = null, resultDelivery = TASK_RESULT_DELIVERY.STATUS_ONLY, subAgentRoute = null } = {}) {
     const taskId = makeTaskId();
     const resolvedSessionId = sessionId || 'default';
     const normalizedResultDelivery = normalizeTaskResultDelivery(resultDelivery);
     if (normalizedResultDelivery !== resultDelivery) {
       console.warn(`[Yeaft] Invalid task resultDelivery ${String(resultDelivery)}; using ${TASK_RESULT_DELIVERY.STATUS_ONLY}.`);
     }
+    const route = subAgentRouteSnapshot(kind, subAgentRoute);
     const task = {
       id: taskId,
       sessionId: resolvedSessionId,
@@ -151,6 +164,7 @@ export class TaskManager {
       endedAt: null,
       source,
       runtime,
+      ...(route ? { subAgentRoute: route } : {}),
       log: {
         path: logPath || this.store.logPath(resolvedSessionId, taskId),
         bytes: 0,
@@ -167,6 +181,21 @@ export class TaskManager {
 
   completeTask(sessionId, taskId, opts = {}) {
     return this.#completeTask(sessionId, taskId, opts);
+  }
+
+  // Replace model and effort together so an unreported effort on a fallback
+  // request cannot be mistaken for the previous model's effort.
+  setSubAgentRoute(sessionId, taskId, route) {
+    const task = this.active.get(this.#key(sessionId, taskId));
+    const next = subAgentRouteSnapshot(task?.kind, route);
+    if (!next) return;
+    const previous = task.subAgentRoute;
+    if (previous && previous.model === next.model && previous.effort === next.effort
+      && previous.sceneId === next.sceneId) return;
+    const updated = { ...task, subAgentRoute: next, updatedAt: nowIso() };
+    this.store.writeTask(updated);
+    Object.assign(task, updated);
+    this.#emit('updated', task);
   }
 
   startShellTask({ command, cwd, sessionId, ownerVpId = null, title = '', source = {}, runtimePlatform = null } = {}) {

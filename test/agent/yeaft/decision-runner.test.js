@@ -70,6 +70,45 @@ describe('protocol-qualified Quick Send configuration', () => {
   });
 });
 
+describe('Agent-owned sub-agent scene routes', () => {
+  it('round-trips through LLM settings and runtime, rejects invalid writes atomically, and retains unavailable routes for repair', () => {
+    const providers = ['p1', 'p2'].map(name => ({ name, baseUrl: `https://${name}.test`, models: ['native', 'router/gpt-small'] }));
+    const dir = createTempYeaftDir({ providers, primaryModel: 'p1/native' });
+    expect(getLlmConfig(dir).agentConfig.subAgentSceneModels).toEqual({});
+    const routes = { software: 'p2/native', frontend: 'p1/router/gpt-small' };
+    const updated = updateLlmConfig({ fastModel: 'p1/native', subAgentSceneModels: routes }, dir);
+    expect(updated.error).toBeUndefined();
+    expect(updated.agentConfig.subAgentSceneModels).toEqual(routes);
+    expect(loadConfig({ dir }).subAgentSceneModels).toEqual(routes);
+    const before = readFileSync(join(dir, 'config.json'), 'utf8');
+    for (const invalid of [[], { notAScene: 'p1/native' }, { general: 'native' }, { general: 'p3/native' }]) {
+      expect(updateLlmConfig({ subAgentSceneModels: invalid }, dir).error).toBeTruthy();
+      expect(readFileSync(join(dir, 'config.json'), 'utf8')).toBe(before);
+    }
+    expect(updateLlmConfig({ providers: [...providers, providers[0]], subAgentSceneModels: { general: 'p1/native' } }, dir).error)
+      .toContain('unambiguous');
+    expect(updateLlmConfig({ providers: providers.slice(0, 1), subAgentSceneModels: routes }, dir).error).toBeUndefined();
+    expect(getLlmConfig(dir).subAgentSceneModels).toEqual(routes);
+    expect(updateLlmConfig({ debug: true }, dir).subAgentSceneModels).toEqual(routes);
+    expect(updateLlmConfig({ fastModel: null, subAgentSceneModels: {} }, dir).subAgentSceneModels).toEqual({});
+    expect(getLlmConfig(dir).fastModel).toBeNull();
+  });
+});
+
+describe('legacy Fast Model config', () => {
+  it('retains vendor-qualified legacy IDs when saving alongside a managed provider', () => {
+    const legacy = { name: 'proxy', baseUrl: 'https://proxy.invalid', models: ['github-copilot/legacy-fast'] };
+    const managed = { name: 'github-copilot', credentialProvider: 'github-copilot', models: ['gpt-5.4'] };
+    const providers = [legacy, managed];
+    const dir = createTempYeaftDir({ providers });
+    for (const fastModel of ['github-copilot/legacy-fast', 'global:old/github-copilot/legacy-fast']) {
+      expect(updateLlmConfig({ providers, fastModel }, dir).fastModel).toBe(fastModel);
+      expect(loadConfig({ dir }).fastModel).toBe('github-copilot/legacy-fast');
+    }
+    expect(updateLlmConfig({ providers, fastModel: 'github-copilot/removed' }, dir).fastModel).toBe('github-copilot/gpt-5.4');
+  });
+});
+
 describe('Decision model configuration & scenario-tailored runner', () => {
   it('resolves decisionModel via decisionModel -> fastModel -> primaryModel across config, config-api, and CLI helpers', () => {
     const dir = createTempYeaftDir({

@@ -17,6 +17,12 @@ The LLM form in Agent settings submits only when you click **Save**. Background 
 
 Drafts live only in the open editor, not in persistent browser storage. Closing the form, switching Agents, or reloading the page discards unsaved changes; save explicitly first.
 
+### Sub-agent model routing
+
+In **Agent Settings → LLM**, select a **Fast Model** or choose **Auto** to clear the explicit choice. Explorer and researcher sub-agents prefer the Fast Model when no scene rule applies. Some internal tasks also use it, and the Decision Model follows Fast or Primary when set to **Auto**.
+
+**Sub-agent models by scene** (`subAgentSceneModels`) applies to new native Session delegations. The scene is the one explicitly passed to `SpawnAgent`, or the parent Session's scene if omitted. A mapping must target a unique configured `provider/model`. An available mapped model takes priority over the `model` argument. **Auto** or an unavailable target restores ordinary model override, fast-persona, or parent-model routing. It does not change the parent Session, ongoing children, or the pinned model of a Digital Person.
+
 ## Module Layout
 
 ```

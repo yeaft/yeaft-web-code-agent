@@ -32,6 +32,7 @@ import { createDenyAllPluginConfig, normalizePluginConfig } from './plugins.js';
 import { normaliseBrowserRuntimeSection } from '../browser-runtime/config.js';
 import { readWorkspaceFile } from './workspace-file.js';
 import { DEFAULT_LIMITS } from './dream/limits.js';
+import { normalizeSubAgentSceneModels } from './sub-agent/scene-models.js';
 
 /** Default configuration values. */
 const DEFAULTS = {
@@ -487,8 +488,9 @@ export function loadConfig(overrides = {}) {
     // `global:<provider>/<model>` from previous UI versions; strip the dead
     // namespace so runtime routing can match agent-local providers by model id.
     const isRemovedGlobalRef = parsed.providerName?.startsWith('global:');
-    model = parsed.modelId;
     if (isRemovedGlobalRef) primaryModel = parsed.modelId;
+    // Preserve the owning provider for dispatch, even when the vendor ID has a slash.
+    model = primaryModel;
     modelIdForInfo = parsed.modelId;
   }
 
@@ -541,6 +543,7 @@ export function loadConfig(overrides = {}) {
     primaryModel: overrides.primaryModel || primaryModel,
     fastModel,
     fastModelId,
+    subAgentSceneModels: normalizeSubAgentSceneModels(jsonConfig.subAgentSceneModels),
     decisionModel,
     decisionModelId,
     fallbackModel: jsonConfig.fallbackModel || null,

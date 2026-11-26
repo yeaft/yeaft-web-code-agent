@@ -80,6 +80,26 @@ describe('Yeaft session-scoped model config', () => {
     } finally { fetch.mockRestore(); }
   });
 
+  it('preserves a configured primary owner and vendor model ID through inherited Session dispatch', async () => {
+    const root = makeDir();
+    const modelId = 'openai/gpt-5.4';
+    const primaryModel = `proxy/${modelId}`;
+    const providers = [
+      { name: 'proxy', protocol: 'openai-chat-completions', baseUrl: 'https://proxy.invalid/v1', apiKey: 'fixture', models: [modelId] },
+      { name: 'openai', protocol: 'openai-responses', baseUrl: 'https://openai.invalid/v1', apiKey: 'fixture', models: ['gpt-5.4'] },
+    ];
+    writeFileSync(join(root, 'config.json'), JSON.stringify({ providers, primaryModel }));
+    const config = loadConfig({ dir: root });
+    const inherited = resolveSessionConfig(config, {});
+    expect(inherited.model).toBe(primaryModel);
+    const fetch = vi.spyOn(globalThis, 'fetch').mockResolvedValue(Response.json({ choices: [{ message: { content: 'ok' }, finish_reason: 'stop' }] }));
+    try {
+      await new AdapterRouter({ providers: config.providers }).call({ model: inherited.model, messages: [{ role: 'user', content: 'Hi' }] });
+      expect(String(fetch.mock.calls[0][0])).toBe('https://proxy.invalid/v1/chat/completions');
+      expect(JSON.parse(fetch.mock.calls[0][1].body).model).toBe(modelId);
+    } finally { fetch.mockRestore(); }
+  });
+
   it('fails closed for an invalid config.json root and preserves every bad file', () => {
     const root = makeDir();
     const configPath = join(root, 'config.json');

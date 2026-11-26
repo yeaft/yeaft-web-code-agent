@@ -20,6 +20,7 @@ import { normalizePluginConfig } from './plugins.js';
 import { mutateAgentConfig, readAgentConfigForWrite } from './config-store.js';
 import { collectAmbiguousModelRefs, isGitHubCopilotProvider, normalizeKnownProviderForRuntime, serializeKnownProviderForPersistence } from './llm/known-providers.js';
 import { getWorkCenterFeatureState } from './work-center/feature.js';
+import { normalizeSubAgentSceneModels, validateSubAgentSceneModels } from './sub-agent/scene-models.js';
 
 const VALID_PROTOCOLS = new Set(['anthropic', 'openai-responses', 'openai-chat-completions', 'gemini']);
 
@@ -122,7 +123,7 @@ function readLocalLlmConfig(dir) {
   const configPath = join(root, 'config.json');
 
   if (!existsSync(configPath)) {
-    return { providers: [], primaryModel: null, fastModel: null, decisionModel: null, language: 'en', quickSends: [], availableModels: [], needsSetup: true };
+    return { providers: [], primaryModel: null, fastModel: null, decisionModel: null, subAgentSceneModels: {}, language: 'en', quickSends: [], availableModels: [], needsSetup: true };
   }
 
   const raw = readFileSync(configPath, 'utf8');
@@ -133,6 +134,7 @@ function readLocalLlmConfig(dir) {
     providers,
     primaryModel: json.primaryModel || null,
     fastModel: json.fastModel || null,
+    subAgentSceneModels: normalizeSubAgentSceneModels(json.subAgentSceneModels),
     decisionModel: json.decisionModel || null,
     language: json.language || 'en',
     debug: json.debug === true,
@@ -201,9 +203,15 @@ function normalizeManagedModelDefaults(config) {
   const validPrimary = modelSelectionIsValid(config.primaryModel, providers, authoritativeManagedNames)
     ? config.primaryModel
     : managedFallback;
-  if (config.fastModel
-    && !modelSelectionIsValid(config.fastModel, providers, authoritativeManagedNames)) {
-    config.fastModel = validPrimary;
+  if (config.fastModel) {
+    const parsedFast = parseModelRef(config.fastModel);
+    const fastRef = parsedFast.providerName?.startsWith('global:') ? parsedFast.modelId : config.fastModel;
+    // Legacy fast model IDs can be shared or contain a slash. The runtime
+    // still routes a listed exact ref or bare alias; do not reset it on save.
+    if (!modelSelectionIsValid(fastRef, providers, authoritativeManagedNames)
+      && bareModelOwners(providers, fastRef).size === 0) {
+      config.fastModel = validPrimary;
+    }
   }
   // Unlike primaryModel/fastModel, null means Auto (follow fastModel -> primaryModel).
   // Never pin decisionModel to a heavyweight primary model when a managed catalog
@@ -218,7 +226,7 @@ function normalizeManagedModelDefaults(config) {
  * Update the LLM-relevant portion of config.json.
  * Merges into existing config — preserves fields like debug, maxContextTokens, etc.
  *
- * @param {object} update — { providers?, primaryModel?, fastModel?, language? }
+ * @param {object} update — { providers?, primaryModel?, fastModel?, subAgentSceneModels?, language? }
  * @param {string} [dir] — Yeaft data directory
  * @returns {{ providers, primaryModel, fastModel, language } | { error: string }}
  */
@@ -283,10 +291,20 @@ export function updateLlmConfig(update, dir) {
       );
 
       const availableModels = quickSendModels(existing);
+      if (update.subAgentSceneModels !== undefined) {
+        const ambiguous = new Set([
+          ...collectAmbiguousModelRefs(update.providers ?? existing.providers),
+          ...collectAmbiguousModelRefs(existing.providers),
+        ]);
+        existing.subAgentSceneModels = validateSubAgentSceneModels(
+          update.subAgentSceneModels, existing.subAgentSceneModels, availableModels, [...ambiguous],
+        );
+      }
       const agentConfig = {
         providers: Array.isArray(existing.providers) ? existing.providers.map(withGeminiDefault) : [],
         primaryModel: existing.primaryModel || null,
         fastModel: existing.fastModel || null,
+        subAgentSceneModels: normalizeSubAgentSceneModels(existing.subAgentSceneModels),
         decisionModel: existing.decisionModel || null,
         language: existing.language || 'en',
         debug: existing.debug === true,

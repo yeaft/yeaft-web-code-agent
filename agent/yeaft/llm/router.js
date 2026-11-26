@@ -289,7 +289,7 @@ export class AdapterRouter extends LLMAdapter {
   /** @type {Map<string, {provider: object, entry: {id: string, protocol?: string}}>} */
   #modelToProvider;
 
-  /** @type {Map<string, LLMAdapter>} providerName::protocol → cached adapter */
+  /** @type {Map<string, LLMAdapter>} provider + endpoint + protocol + credential fingerprint → cached adapter */
   #adapterCache;
 
   /** @type {object[]} normalized providers array */
@@ -335,23 +335,24 @@ export class AdapterRouter extends LLMAdapter {
     this.#modelToProvider = new Map();
     this.#adapterCache = new Map();
 
-    // Build model id → { provider, entry } index. First provider wins if a
-    // model id appears in multiple providers. Each model entry may declare
-    // its own `protocol`; we keep the normalized entry so #effectiveProtocol
-    // can consult it later without re-parsing.
+    // Register exact provider/model refs before bare IDs. Some vendors use
+    // slash-delimited IDs, which must not shadow another provider's exact ref.
+    // Within each kind of lookup, the first configured provider still wins.
+    const rows = [];
     for (const provider of this.#providers) {
       if (!Array.isArray(provider.models)) continue;
       for (const raw of provider.models) {
         const entry = normalizeModelEntry(raw, provider.protocol);
         if (!entry) continue;
-        const ref = provider.name ? `${provider.name}/${entry.id}` : entry.id;
-        if (!this.#modelToProvider.has(ref)) {
-          this.#modelToProvider.set(ref, { provider, entry });
-        }
-        if (!this.#modelToProvider.has(entry.id)) {
-          this.#modelToProvider.set(entry.id, { provider, entry });
-        }
+        const row = { provider, entry };
+        rows.push(row);
+        if (!provider.name) continue;
+        const ref = `${provider.name}/${entry.id}`;
+        if (!this.#modelToProvider.has(ref)) this.#modelToProvider.set(ref, row);
       }
+    }
+    for (const row of rows) {
+      if (!this.#modelToProvider.has(row.entry.id)) this.#modelToProvider.set(row.entry.id, row);
     }
   }
 
@@ -540,7 +541,10 @@ export class AdapterRouter extends LLMAdapter {
       ? anthropicAuthHeaderModeForProvider(provider)
       : null;
     const authModeKey = anthropicAuthHeaderMode || 'default';
-    const cacheKey = `${provider.name}::${protocol}::${authModeKey}::${apiKeyFp}`;
+    // Split rows can have the same display name and serve distinct endpoints.
+    // Match the endpoint selected for this model, even with the same token.
+    const prefix = JSON.stringify([provider.name, provider.baseUrl, protocol, authModeKey]) + ':';
+    const cacheKey = prefix + apiKeyFp;
     const adapterCache = snapshot?.adapterCache || this.#adapterCache;
     const cached = adapterCache.get(cacheKey);
     if (cached) return { adapter: cached, modelId: entry.id, protocol, entry, credentialScopeId };
@@ -551,7 +555,6 @@ export class AdapterRouter extends LLMAdapter {
     // (Copilot tokens rotate every ~30 min). Static-apiKey providers never
     // change fingerprint, so this loop never finds anything to evict for
     // them — back-compat preserved.
-    const prefix = `${provider.name}::${protocol}::${authModeKey}::`;
     for (const key of adapterCache.keys()) {
       if (key.startsWith(prefix)) adapterCache.delete(key);
     }
@@ -737,8 +740,10 @@ export class AdapterRouter extends LLMAdapter {
       // the shared adapter: two models may use the same cached instance.
       const configuredTimeout = [resolved.entry?.streamIdleTimeoutMs, provider?.streamIdleTimeoutMs]
         .find(value => Number.isFinite(value) && value >= 0);
+      const modelRef = provider?.name ? `${provider.name}/${resolved.modelId}` : resolved.modelId;
       try {
         yield* resolved.adapter.stream({ ...finalAdapterParams(sanitized, resolved), model: resolved.modelId, effortContext, providerContext,
+          ...(params.onRequestStart ? { onRequestStart: policy => params.onRequestStart(policy, modelRef) } : {}),
           streamIdleTimeoutMs: configuredTimeout, rawExchangeMaxBytes: params.rawExchangeMaxBytes });
         return;
       } catch (err) {

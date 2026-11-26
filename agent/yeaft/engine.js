@@ -2036,6 +2036,8 @@ export class Engine {
    * @param {Function} [params.onProviderRequestStart] - Internal liveness policy
    *   before dispatch ({ effort, streamIdleTimeoutMs, headersTimeoutMs }) and
    *   when headers arrive (headersTimeoutMs cleared). Not persisted.
+   * @param {Function} [params.onProviderRequestRoute] - Observes the dispatched
+   *   model ref and adapter-resolved effort decision (null if not reported).
    * @yields {EngineEvent}
    */
   async *query(params = {}) {
@@ -2097,7 +2099,7 @@ export class Engine {
     }
   }
 
-  async *#queryLifecycle({ prompt, promptParts = null, messages = [], signal, turnConfig = null, userEffort = null, scenario = 'chat', isSubAgent = false, parentEffortDecision = null, subAgentTargetEffort = null, vpPersona, router, senderVpId, inboundEnvelope, taskId, taskMembers, sessionId, sessionMembers, projectSessionIds = null, agentSessionIds = null, shareOwnerId = null, projectInstruction = '', projectLabel = '', vpPlan, sessionAnnouncement, workCenterInstructions, workDir, userAlreadyPersisted = false, currentUserMessage = null, causalRootId = null, getCurrentTodos = null, setCurrentTodos = null, askUser = null, threadId = MAIN_THREAD_ID, vpTurnId = null, drainPendingUserMessages = null, getPeerContext = null, peerTurnIds = [], prepareProviderRequest = null, startProviderRequest = null, finishProviderRequest = null, failProviderRequest = null, closePendingUserInput = null, collabToolPolicy = null, onProviderRequestStart = null } = {}) {
+  async *#queryLifecycle({ prompt, promptParts = null, messages = [], signal, turnConfig = null, userEffort = null, scenario = 'chat', isSubAgent = false, parentEffortDecision = null, subAgentTargetEffort = null, vpPersona, router, senderVpId, inboundEnvelope, taskId, taskMembers, sessionId, sessionMembers, projectSessionIds = null, agentSessionIds = null, shareOwnerId = null, projectInstruction = '', projectLabel = '', vpPlan, sessionAnnouncement, workCenterInstructions, workDir, userAlreadyPersisted = false, currentUserMessage = null, causalRootId = null, getCurrentTodos = null, setCurrentTodos = null, askUser = null, threadId = MAIN_THREAD_ID, vpTurnId = null, drainPendingUserMessages = null, getPeerContext = null, peerTurnIds = [], prepareProviderRequest = null, startProviderRequest = null, finishProviderRequest = null, failProviderRequest = null, closePendingUserInput = null, collabToolPolicy = null, onProviderRequestStart = null, onProviderRequestRoute = null } = {}) {
     if (!prompt || typeof prompt !== 'string' || !prompt.trim()) {
       const error = new Error('prompt is required and must be a non-empty string');
       yield {
@@ -2190,7 +2192,7 @@ export class Engine {
       this.#currentThreadId = threadId || MAIN_THREAD_ID;
       this.#currentCausalRootId = effectiveCausalRootId;
       this.#currentUserTurnId = inboundEnvelope?._userTurnId || currentUserMessage?.userTurnId || null;
-      yield* this.#runQuery({ prompt: effectivePrompt, promptParts: effectivePromptParts, messages, signal: runSignal, turnConfig: turnConfig ? { model: turnConfig.model, effort: turnConfig.effort, maxOutputTokens: turnConfig.maxOutputTokens } : null, userEffort: explicitUserEffort, scenario, isSubAgent, parentEffortDecision, subAgentTargetEffort, vpPersona, router, senderVpId, inboundEnvelope, taskId, taskMembers, sessionId, sessionMembers, projectSessionIds, agentSessionIds, shareOwnerId, projectInstruction, projectLabel, vpPlan, sessionAnnouncement, workCenterInstructions, workDir, userAlreadyPersisted, currentUserMessage, causalRootId: effectiveCausalRootId, getCurrentTodos, setCurrentTodos, askUser, threadId: this.#currentThreadId, vpTurnId, drainPendingUserMessages, getPeerContext, peerTurnIds, prepareProviderRequest, startProviderRequest, finishProviderRequest, failProviderRequest, closePendingUserInput, collabToolPolicy: effectiveCollabToolPolicy, explicitSkillName: parsedSkill.skillName, retryLifecycle, onProviderRequestStart });
+      yield* this.#runQuery({ prompt: effectivePrompt, promptParts: effectivePromptParts, messages, signal: runSignal, turnConfig: turnConfig ? { model: turnConfig.model, effort: turnConfig.effort, maxOutputTokens: turnConfig.maxOutputTokens } : null, userEffort: explicitUserEffort, scenario, isSubAgent, parentEffortDecision, subAgentTargetEffort, vpPersona, router, senderVpId, inboundEnvelope, taskId, taskMembers, sessionId, sessionMembers, projectSessionIds, agentSessionIds, shareOwnerId, projectInstruction, projectLabel, vpPlan, sessionAnnouncement, workCenterInstructions, workDir, userAlreadyPersisted, currentUserMessage, causalRootId: effectiveCausalRootId, getCurrentTodos, setCurrentTodos, askUser, threadId: this.#currentThreadId, vpTurnId, drainPendingUserMessages, getPeerContext, peerTurnIds, prepareProviderRequest, startProviderRequest, finishProviderRequest, failProviderRequest, closePendingUserInput, collabToolPolicy: effectiveCollabToolPolicy, explicitSkillName: parsedSkill.skillName, retryLifecycle, onProviderRequestStart, onProviderRequestRoute });
     } finally {
       // Closing the async generator at a visible retry boundary means the
       // continuation never reached a provider. Keep it out of history and
@@ -2246,7 +2248,7 @@ export class Engine {
    * in a try/finally without indenting the whole loop.
    * @private
    */
-  async *#runQuery({ prompt, promptParts = null, messages, signal, turnConfig = null, userEffort = null, scenario = 'chat', isSubAgent = false, parentEffortDecision = null, subAgentTargetEffort = null, vpPersona, router, senderVpId, inboundEnvelope, taskId, taskMembers, sessionId, sessionMembers, projectSessionIds = null, agentSessionIds = null, shareOwnerId = null, projectInstruction = '', projectLabel = '', vpPlan, sessionAnnouncement, workCenterInstructions, workDir, userAlreadyPersisted = false, currentUserMessage = null, causalRootId = null, getCurrentTodos = null, setCurrentTodos = null, askUser = null, threadId = MAIN_THREAD_ID, vpTurnId = null, drainPendingUserMessages = null, getPeerContext = null, peerTurnIds = [], prepareProviderRequest = null, startProviderRequest = null, finishProviderRequest = null, failProviderRequest = null, closePendingUserInput = null, collabToolPolicy = null, explicitSkillName = null, retryLifecycle, onProviderRequestStart = null }) {
+  async *#runQuery({ prompt, promptParts = null, messages, signal, turnConfig = null, userEffort = null, scenario = 'chat', isSubAgent = false, parentEffortDecision = null, subAgentTargetEffort = null, vpPersona, router, senderVpId, inboundEnvelope, taskId, taskMembers, sessionId, sessionMembers, projectSessionIds = null, agentSessionIds = null, shareOwnerId = null, projectInstruction = '', projectLabel = '', vpPlan, sessionAnnouncement, workCenterInstructions, workDir, userAlreadyPersisted = false, currentUserMessage = null, causalRootId = null, getCurrentTodos = null, setCurrentTodos = null, askUser = null, threadId = MAIN_THREAD_ID, vpTurnId = null, drainPendingUserMessages = null, getPeerContext = null, peerTurnIds = [], prepareProviderRequest = null, startProviderRequest = null, finishProviderRequest = null, failProviderRequest = null, closePendingUserInput = null, collabToolPolicy = null, explicitSkillName = null, retryLifecycle, onProviderRequestStart = null, onProviderRequestRoute = null }) {
 
     const effectiveCollabToolPolicy = collabToolPolicy === COLLAB_TOOL_POLICY.SINGLE_VP || collabToolPolicy === COLLAB_TOOL_POLICY.MULTI_VP
       ? collabToolPolicy
@@ -3627,6 +3629,14 @@ export class Engine {
           startProviderRequest?.(activeProviderRequest);
           commitRetryContinuation();
         };
+        let routeObserved = false;
+        const observeRequestRoute = (dispatchedModel = currentModel) => {
+          routeObserved = true;
+          try {
+            onProviderRequestRoute?.({ model: dispatchedModel,
+              effortDecision: requestEffortDecisionReported ? requestEffortDecision : null });
+          } catch { /* diagnostics must not interrupt dispatch */ }
+        };
         const providerStream = markProviderFailures(captureStream({
           model: currentModel,
           system: systemPrompt,
@@ -3656,7 +3666,7 @@ export class Engine {
               onProviderRequestStart?.({ ...providerRequestPolicy, headersTimeoutMs: undefined });
             }
           },
-          onRequestStart: requestPolicy => {
+          onRequestStart: (requestPolicy, dispatchedModel) => {
             // Native adapters invoke this immediately before fetch(). A retry
             // continuation and Work Center EngineTurn become durable only when
             // their request crosses dispatch, never when turn_start is shown.
@@ -3665,6 +3675,7 @@ export class Engine {
             try {
               commitDispatch(!legacyDispatchReserved);
               legacyDispatchReserved = false;
+              if (onProviderRequestRoute) observeRequestRoute(dispatchedModel);
               const effectivePolicy = requestPolicy
                 && requestPolicy.streamIdleTimeoutMs === 0
                 && retryPreservedHighEffort
@@ -3700,6 +3711,9 @@ export class Engine {
         const requestAsyncTaskIds = deliveredTaskIds;
         let sawProviderStop = false;
         for await (let event of providerStream) {
+          // Stream-only adapters have no dispatch hook. Receiving an event
+          // confirms the request ran; do not guess an unreported effort.
+          if (onProviderRequestRoute && !routeObserved) observeRequestRoute();
           // task-325a (abort-stop fix): per-event abort short-circuit.
           // The adapter is expected to throw AbortError when fetch's
           // signal fires, but in practice undici/HTTP-2/proxy layers

@@ -18,6 +18,7 @@ import sendMessage from '../../../agent/yeaft/tools/send-message.js';
 import waitAgent from '../../../agent/yeaft/tools/wait-agent.js';
 import listAgents from '../../../agent/yeaft/tools/list-agents.js';
 import closeAgent from '../../../agent/yeaft/tools/close-agent.js';
+import { TaskManager } from '../../../agent/yeaft/tasks/manager.js';
 import { ToolRegistry } from '../../../agent/yeaft/tools/registry.js';
 import { defineTool } from '../../../agent/yeaft/tools/types.js';
 import { NullTrace } from '../../../agent/yeaft/debug-trace.js';
@@ -116,6 +117,74 @@ describe('sub-agent model, effort, scene, and machine protocol', () => {
     _resetAgentRegistry();
     _resetNotifications();
     vi.restoreAllMocks();
+  });
+
+  it('dispatches a scene-mapped child to its exact provider despite slash IDs and caches, then persists the wire effort', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'yeaft-sub-agent-task-route-'));
+    const events = [];
+    const taskManager = new TaskManager({ yeaftDir: dir, onEvent: event => events.push(event) });
+    const model = 'openai/gpt-5.4';
+    const config = mkCatalogConfig({ subAgentSceneModels: { frontend: model } });
+    const adapter = new AdapterRouter({ providers: [
+      { name: 'proxy', protocol: 'openai-chat-completions', baseUrl: 'https://proxy.invalid/v1',
+        apiKey: 'fixture', models: [model] },
+      { name: 'openai', protocol: 'openai-responses', baseUrl: 'https://alternate.invalid/v1',
+        apiKey: 'fixture', models: ['gpt-5.4-mini'] },
+      { name: 'openai', protocol: 'openai-responses', baseUrl: 'https://openai.invalid/v1',
+        apiKey: 'fixture', models: ['gpt-5.4'] },
+    ] });
+    let release;
+    const gate = new Promise(resolve => { release = resolve; });
+    let captureDispatch;
+    const dispatched = new Promise(resolve => { captureDispatch = resolve; });
+    const urls = [];
+    vi.stubGlobal('fetch', vi.fn(async (url, init) => {
+      urls.push(String(url));
+      if (urls.length > 1) {
+        captureDispatch(JSON.parse(init.body));
+        await gate;
+      }
+      return new Response([
+        'data: {"type":"response.output_text.delta","delta":"status: done"}',
+        'data: {"type":"response.completed","response":{"id":"resp_1","status":"completed"}}',
+        '', '',
+      ].join('\n\n'), { headers: { 'content-type': 'text/event-stream' } });
+    }));
+    let child;
+    try {
+      expect(adapter.getProtocolForModel(model)).toBe('openai-responses');
+      expect(adapter.getProviderForModel(model).baseUrl).toBe('https://openai.invalid/v1');
+      expect(adapter.getProviderForModel(`proxy/${model}`).name).toBe('proxy');
+      for await (const _event of adapter.stream({ model: 'gpt-5.4-mini', messages: [] })) { /* warm adapter cache */ }
+      const spawn = JSON.parse(await agentTool.execute({
+        name: 'route-test', mission: 'Check route', scene: 'frontend', model: config.model,
+      }, {
+        sessionId: 's', sceneId: 'software', currentVpId: 'omni', taskManager,
+        parentEngineDeps: { adapter, config, trace: new NullTrace(), taskManager,
+          yeaftDir: dir, subAgentLogDir: dir, parentToolRegistry: mkParentRegistry() },
+      }));
+      expect(spawn.success).toBe(true);
+      child = getAgentRegistry().get(spawn.agentId);
+      expect(events[0]).toMatchObject({ event: 'started', task: {
+        source: { sceneId: 'software' }, subAgentRoute: { model, sceneId: 'frontend' },
+      } });
+      expect(events[0].task.subAgentRoute).not.toHaveProperty('effort');
+      expect(await dispatched).toMatchObject({ model: 'gpt-5.4', reasoning: { effort: 'medium' } });
+      expect(urls).toEqual(['https://alternate.invalid/v1/responses', 'https://openai.invalid/v1/responses']);
+      const route = { model, effort: 'medium', sceneId: 'frontend' };
+      expect(events.some(event => event.event === 'updated' && event.task.subAgentRoute?.effort === 'medium')).toBe(true);
+      expect(taskManager.listActiveTasks('s')[0].subAgentRoute).toEqual(route);
+      expect(taskManager.store.readTask('s', spawn.taskId).subAgentRoute).toEqual(route);
+      release();
+      await child.driverPromise;
+      expect(events.find(event => event.event === 'completed')).toMatchObject({ event: 'completed', task: { status: 'succeeded', subAgentRoute: route } });
+      expect(new TaskManager({ yeaftDir: dir }).getTask('s', spawn.taskId).subAgentRoute).toEqual(route);
+    } finally {
+      release();
+      await child?.driverPromise;
+      vi.unstubAllGlobals();
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it('keeps Chat High in Person catalogs, pinned children, and SpawnAgent selections', async () => {
@@ -260,6 +329,42 @@ describe('sub-agent model, effort, scene, and machine protocol', () => {
     expect(noticeZhCn).toContain('openai/gpt-5.4 [medium,xhigh,max,ultra]');
     expect(noticeZhCn).toContain('proxy/plain-no-effort [no-effort]');
     expect(noticeZhCn).not.toContain('more)');
+  });
+
+  it('applies scene routes to both inherited and explicit scenes before any model override, then resolves effort', () => {
+    const config = mkCatalogConfig({ subAgentSceneModels: {
+      software: 'openai/gpt-5.4', frontend: 'google/gemini-3.8-flash', writing: 'retired/model',
+    } });
+    expect(resolveSubAgentSelection({ config, personaId: 'explorer', parentSceneId: 'software',
+      requestedModel: 'anthropic/claude-sonnet-4.6' })).toMatchObject({
+      model: 'openai/gpt-5.4', modelSource: 'scene-config', sceneSource: 'inherited',
+    });
+    const explicit = { config, personaId: 'designer', parentSceneId: 'software', requestedScene: 'frontend' };
+    expect(resolveSubAgentSelection(explicit)).toMatchObject({
+      model: 'google/gemini-3.8-flash', modelSource: 'scene-config',
+      sceneId: 'frontend', sceneSource: 'explicit', effort: 'high',
+    });
+    expect(resolveSubAgentSelection({ ...explicit, requestedEffort: 'xhigh' })).toMatchObject({
+      ok: false, error: expect.stringContaining('google/gemini-3.8-flash'),
+    });
+    expect(resolveSubAgentSelection({ config, personaId: 'explorer', requestedScene: 'writing' })).toMatchObject({
+      model: 'openai/gpt-5.4-mini', modelSource: 'persona-fast',
+    });
+    expect(resolveSubAgentSelection({ config: { ...config, ambiguousModelRefs: ['openai/gpt-5.4'] },
+      parentSceneId: 'software' })).toMatchObject({ model: config.model, modelSource: 'inherited' });
+    const notice = formatSubAgentModelCatalogNotice({ ...config, availableModels: [config.availableModels[1]] });
+    expect(notice).toContain('software → openai/gpt-5.4');
+    expect(notice).not.toContain('retired/model');
+  });
+
+  it('uses the first catalog owner for legacy slash-delimited fastModel IDs only if no exact ref exists', () => {
+    const catalog = mkCatalogConfig().availableModels;
+    const legacy = { id: 'upstream/gpt-fast', provider: 'proxy', ref: 'proxy/upstream/gpt-fast' };
+    const exact = { id: 'gpt-fast', provider: 'upstream', ref: 'upstream/gpt-fast' };
+    for (const [entries, model] of [[[legacy], legacy.ref], [[legacy, exact], exact.ref]]) {
+      const config = mkCatalogConfig({ fastModel: legacy.id, availableModels: [...catalog, ...entries] });
+      expect(resolveSubAgentSelection({ config, personaId: 'explorer' })).toMatchObject({ model, modelSource: 'persona-fast' });
+    }
   });
 
   it('honors explicit targetEffort across OpenAI, Anthropic, and Gemini while preserving legacy medium ceiling by default', () => {
@@ -504,13 +609,16 @@ describe('sub-agent model, effort, scene, and machine protocol', () => {
           models: ['gpt-5.4'],
         }],
       });
+      const wireCtx = { ...ctx, parentEngineDeps: { ...deps, adapter: router,
+        config: { ...config, subAgentSceneModels: { software: 'openai/gpt-5.4' } },
+      } };
       const wireSpawn = JSON.parse(await agentTool.execute({
         name: 'wire-designer',
-        mission: 'Verify wire effort',
+        mission: 'Verify the mapped model and effort on the wire',
         persona: 'designer',
-        model: 'openai/gpt-5.4',
-      }, { ...ctx, parentEngineDeps: { ...deps, adapter: router } }));
-      expect(wireSpawn.success).toBe(true);
+        model: 'anthropic/claude-sonnet-4.6',
+      }, wireCtx));
+      expect(wireSpawn).toMatchObject({ success: true, model: 'openai/gpt-5.4', scene: 'software', effort: 'xhigh' });
       spawnedIds.push(wireSpawn.agentId);
       const wireWait = JSON.parse(await waitAgent.execute({ agent_id: wireSpawn.agentId, timeout_ms: 2000 }, { ...ctx, parentEngineDeps: { ...deps, adapter: router } }));
       expect(wireWait.status).toBe(STATUS.IDLE);

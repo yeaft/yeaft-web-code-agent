@@ -96,6 +96,7 @@ export const E2E_TEST_FILES = Object.freeze([
   "e2e/tests/chat/messaging.spec.js",
   "e2e/tests/resilience/server-restart.spec.js",
   "e2e/tests/ui/composer.spec.js",
+  "e2e/tests/ui/llm-routing-settings.spec.js",
   "e2e/tests/gemini-api.spec.js",
   "e2e/tests/ui/digital-person-outputs.spec.js",
   "e2e/tests/ui/digital-person-parallel-turns.spec.js",

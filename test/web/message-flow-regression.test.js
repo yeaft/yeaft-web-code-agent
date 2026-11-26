@@ -503,6 +503,58 @@ describe('message flow regressions', () => {
     expect(await store.switchYeaftModel('proxy/offline', 's', 'xhigh')).toMatchObject({ ok: false, error: { code: 'agent_offline' } });
     expect(pending).toHaveLength(sentCount);
   });
+  it('shows native sub-agent route details from live events and refreshed snapshots only', async () => {
+    storeFactories.clear();
+    const store = useChatStore();
+    store.sendWsMessage = vi.fn(() => true);
+    const scope = { agentId: 'a', sessionId: 's', conversationId: 'conv' };
+    const frame = event => store.handleYeaftOutput({ ...scope, event });
+    const tasks = () => Object.values(store.yeaftActiveTasksBySession['a\u001fs'] || {});
+    const base = { sessionId: 's', kind: 'sub_agent', status: 'running', source: { sceneId: 'software' } };
+    const task = { ...base, id: 'new', title: 'Review model routing across two upstream endpoints with a long objective', subAgentRoute: { model: 'proxy/reviewer', sceneId: 'frontend' } };
+    const legacy = { ...base, id: 'old', title: 'Older review' };
+    const shell = { ...base, id: 'shell', kind: 'shell', runtime: { command: 'echo ok' } };
+    frame({ type: 'session_ready', ...scope, tasks: [task, legacy, shell] });
+    expect(tasks()).toHaveLength(3);
+    vi.stubGlobal('Vue', Vue);
+    const pane = mount(VpTimelinePane, { props: { rows: [], tasks: tasks() },
+      global: { config: { globalProperties: { $t: (key, args = {}) => (en[key] || key).replace(/\{(\w+)\}/g, (_, name) => args[name] ?? '') } } } });
+    try {
+      const [row, legacyRow, shellRow] = pane.findAll('.yeaft-vp-task-item');
+      const toggle = row.get('.yeaft-vp-task-toggle');
+      const preview = row.get('.yeaft-vp-task-route-preview');
+      expect(toggle.attributes('aria-expanded')).toBe('false');
+      expect(toggle.attributes('aria-describedby')).toBe(preview.attributes('id'));
+      expect(preview.text()).toContain('Effective effort: Not reported');
+      expect(preview.text()).toContain('Professional scene: Frontend');
+      expect(legacyRow.find('.yeaft-vp-task-route-preview').exists()).toBe(false);
+      expect(shellRow.find('.yeaft-vp-task-route-preview').exists()).toBe(false);
+      expect(shellRow.get('.yeaft-vp-task-toggle').attributes('title')).toContain('Command: echo ok');
+
+      const updated = { ...task, subAgentRoute: { model: 'proxy/fallback', effort: 'medium', sceneId: 'frontend' } };
+      frame({ type: 'yeaft_task_event', event: 'updated', task: updated });
+      await pane.setProps({ tasks: tasks() });
+      expect(preview.text()).toContain('Model: proxy/fallback');
+      await toggle.trigger('click');
+      expect(toggle.attributes('aria-expanded')).toBe('true');
+      expect(row.find('.yeaft-vp-task-route-preview').exists()).toBe(false);
+      expect(row.get('.yeaft-vp-task-detail-line').text()).toBe(task.title);
+      expect(row.get('.yeaft-vp-task-route').text()).toContain('Effective effort: medium');
+
+      frame({ type: 'session_ready', ...scope, tasks: [updated, legacy, shell] });
+      await pane.setProps({ tasks: tasks() });
+      expect(row.get('.yeaft-vp-task-route').text()).toContain('Model: proxy/fallback');
+      await legacyRow.get('.yeaft-vp-task-toggle').trigger('click');
+      expect(legacyRow.find('.yeaft-vp-task-route').exists()).toBe(false);
+      frame({ type: 'yeaft_task_event', event: 'completed', task: { ...updated, status: 'succeeded' } });
+      expect(tasks().map(entry => entry.id)).toEqual(['old', 'shell']);
+    } finally {
+      pane.unmount();
+      vi.unstubAllGlobals();
+      storeFactories.clear();
+    }
+  });
+
   it('shows exact scoped turn tokens, inline warnings and a failure-only drilldown', async () => {
     const base = { type: 'query_progress', sessionId: 's', vpId: 'v', turnId: 't', threadId: 'main',
       revision: 1, modelRequests: 187, toolExecutions: 363, reusedCalls: 0, repeatedCalls: 0, failedCalls: 5,

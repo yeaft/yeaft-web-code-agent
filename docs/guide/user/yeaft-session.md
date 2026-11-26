@@ -155,6 +155,8 @@ The Yeaft page provides:
 
 **Execution status** shows the model requests and actual tool executions for each running thread. Refreshing or reconnecting restores the latest counts from a supporting Agent, even if the page missed the start of the turn. These are live counts, not a count of tool entries in the conversation history.
 
+In **Session status → Background tasks**, hover over a running sub-agent or tab to its title to preview its model, effective reasoning effort, and professional scene. Click, tap, or press Enter on the title to keep the details open. The model and effort follow the latest dispatched request, including retries; effort is shown as not reported until the provider adapter resolves it. Older tasks without this metadata do not show these details.
+
 The execution panel shows errors for the latest turn and any turns that are still running. Once a new turn starts, older finished turns stop showing their errors in the panel. This does not change the conversation history.
 
 Debug output can contain project text and tool results. It is for the current owner and should not be exported or shared casually.

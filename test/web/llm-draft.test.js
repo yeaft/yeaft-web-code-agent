@@ -136,6 +136,122 @@ describe('native Gemini settings', () => {
     expect(wrapper.vm.localDecisionModel).toBeNull();
   });
 
+  it('saves Fast Model and explicit scene routes from the native settings and can restore Auto', async () => {
+    const store = await setup();
+    store.llmConfig['agent-a'] = config('scene-read', { subAgentSceneModels: { software: 'old/model' } });
+    await Vue.nextTick();
+    const findSelect = label => wrapper.findAll('label').find(item => item.text().startsWith(label) && item.find('select').exists()).get('select');
+    const fast = findSelect('Fast Model');
+    const software = findSelect(en['yeaft.session.scene.software']);
+    const frontend = findSelect(en['yeaft.session.scene.frontend']);
+    expect(software.element.value).toBe('old/model');
+    expect(software.get('option:disabled').element.value).toBe('old/model');
+    await software.setValue('');
+    await frontend.setValue('test/model-a');
+    await fast.setValue('test/model-b');
+    await saveButton().trigger('click');
+    const saved = pendingRequest(store);
+    expect(saved.config).toMatchObject({ fastModel: 'test/model-b', subAgentSceneModels: { frontend: 'test/model-a' } });
+    expect(saved.config.subAgentSceneModels).not.toHaveProperty('software');
+
+    store.llmConfig['agent-a'] = config(saved.requestId, saved.config);
+    await Vue.nextTick();
+    expect(frontend.element.value).toBe('test/model-a');
+    await fast.setValue('');
+    await frontend.setValue('');
+    await saveButton().trigger('click');
+    expect(pendingRequest(store).config).toMatchObject({ fastModel: null, subAgentSceneModels: {} });
+  });
+
+  it('displays legacy Fast Model owners and keeps the saved value when removing an unrelated provider', async () => {
+    const store = await setup();
+    for (const [id, ref] of [['model-b', 'model-b'], ['vendor/model-b', 'vendor/model-b'], ['vendor/model-b', 'global:legacy/vendor/model-b']]) {
+      store.llmConfig['agent-a'] = config('legacy-fast', { fastModel: ref, subAgentSceneModels: {}, providers: [
+        { name: 'test', baseUrl: 'https://example.test', models: ['model-a', id] },
+        { name: 'other', baseUrl: 'https://other.test', models: ['other-model'] },
+      ] });
+      await Vue.nextTick();
+      const select = wrapper.get('select.llm-route-select');
+      expect(select.element.value).toBe(`test/${id}`);
+      expect(select.element.selectedOptions[0].disabled).toBe(false);
+      wrapper.vm.removeProvider(1);
+      await Vue.nextTick();
+      expect(select.element.value).toBe(`test/${id}`);
+      await saveButton().trigger('click');
+      const saved = pendingRequest(store);
+      expect(saved.config.fastModel).toBe(ref);
+      store.llmConfig['agent-a'] = config(saved.requestId, saved.config);
+      await Vue.nextTick();
+    }
+  });
+
+  it('does not retarget a removed exact Fast Model to a different provider with the same bare ID', async () => {
+    const store = await setup();
+    store.llmConfig['agent-a'] = config('exact-fast', { fastModel: 'openai/gpt-5', providers: [
+      { name: 'proxy', baseUrl: 'https://proxy.test', models: ['main', 'openai/gpt-5'] },
+      { name: 'openai', baseUrl: 'https://openai.test', models: ['gpt-5'] },
+    ] });
+    await Vue.nextTick();
+    const select = wrapper.get('select.llm-route-select');
+    expect(select.element.value).toBe('openai/gpt-5');
+    wrapper.vm.removeProvider(1);
+    await Vue.nextTick();
+    expect(select.element.value).toBe('');
+    await saveButton().trigger('click');
+    expect(pendingRequest(store).config.fastModel).toBeNull();
+  });
+
+  it('preserves an unlisted Fast Model alias only while its original fallback owner is present', async () => {
+    const store = await setup();
+    const alias = 'proxy/unlisted-alias';
+    const providers = [
+      { name: 'main', baseUrl: 'https://main.test', models: ['one'] },
+      { name: 'proxy', baseUrl: 'https://proxy.test', protocol: 'openai-chat-completions', models: ['listed'] },
+    ];
+    store.llmConfig['agent-a'] = config('fallback-fast', { primaryModel: 'main/one', fastModel: alias, providers });
+    await Vue.nextTick();
+    await wrapper.get('.llm-toggle-row input').setValue(true);
+    await saveButton().trigger('click');
+    const saved = pendingRequest(store);
+    expect(saved.config.fastModel).toBe(alias);
+    store.llmConfig['agent-a'] = config(saved.requestId, saved.config);
+    await Vue.nextTick();
+    wrapper.vm.removeProvider(1);
+    await Vue.nextTick();
+    expect(wrapper.get('select.llm-route-select').element.value).toBe('');
+    await saveButton().trigger('click');
+    expect(pendingRequest(store).config.fastModel).toBeNull();
+  });
+
+  it('keeps a proxy Fast Model during Copilot discovery, even if a new exact ref shadows its legacy alias', async () => {
+    const store = await setup();
+    for (const [id, expected] of [['gpt-5.4', 'github-copilot/legacy-fast'], ['legacy-fast', 'proxy/github-copilot/legacy-fast']]) {
+      store.llmConfig['agent-a'] = config('legacy-fast', { fastModel: 'github-copilot/legacy-fast', providers: [
+        { name: 'proxy', baseUrl: 'https://proxy.test', models: ['github-copilot/legacy-fast'] },
+        { name: 'github-copilot', credentialProvider: 'github-copilot', models: ['old-model'] },
+      ] });
+      await Vue.nextTick();
+      wrapper.vm.applyDiscoveredProvider({ providerModels: [{ id }] });
+      await Vue.nextTick();
+      expect(wrapper.get('select.llm-route-select').element.value).toBe('proxy/github-copilot/legacy-fast');
+      await saveButton().trigger('click');
+      const saved = pendingRequest(store);
+      expect(saved.config.fastModel).toBe(expected);
+      store.llmConfig['agent-a'] = config(saved.requestId, saved.config);
+      await Vue.nextTick();
+    }
+  });
+
+  it('keeps Fast Model available with an older Agent without sending unrecognized scene mappings', async () => {
+    const store = await setup();
+    expect(wrapper.text()).toContain('Fast Model');
+    expect(wrapper.text()).not.toContain('Sub-agent models by scene');
+    await wrapper.get('select.llm-route-select').setValue('test/model-b');
+    await saveButton().trigger('click');
+    expect(pendingRequest(store).config.fastModel).toBe('test/model-b');
+    expect(pendingRequest(store).config).not.toHaveProperty('subAgentSceneModels');
+  });
+
   it('replaces OpenAI Compatible with Chat Completions and persists protocol openai-chat-completions explicitly', async () => {
     const store = await setup();
     store.llmConfig['agent-a'] = config('chat-comp-read', {
