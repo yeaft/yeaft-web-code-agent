@@ -246,10 +246,12 @@ describe('native Gemini settings', () => {
     const store = await setup();
     expect(wrapper.text()).toContain('Fast Model');
     expect(wrapper.text()).not.toContain('Sub-agent models by scene');
+    expect(wrapper.text()).not.toContain('Sub-agent effort by role');
     await wrapper.get('select.llm-route-select').setValue('test/model-b');
     await saveButton().trigger('click');
     expect(pendingRequest(store).config.fastModel).toBe('test/model-b');
     expect(pendingRequest(store).config).not.toHaveProperty('subAgentSceneModels');
+    expect(pendingRequest(store).config).not.toHaveProperty('subAgentPersonaEfforts');
   });
 
   it('replaces OpenAI Compatible with Chat Completions and persists protocol openai-chat-completions explicitly', async () => {

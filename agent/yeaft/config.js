@@ -33,6 +33,7 @@ import { normaliseBrowserRuntimeSection } from '../browser-runtime/config.js';
 import { readWorkspaceFile } from './workspace-file.js';
 import { DEFAULT_LIMITS } from './dream/limits.js';
 import { normalizeSubAgentSceneModels } from './sub-agent/scene-models.js';
+import { normalizeSubAgentPersonaEfforts } from './sub-agent/persona-efforts.js';
 
 /** Default configuration values. */
 const DEFAULTS = {
@@ -544,6 +545,7 @@ export function loadConfig(overrides = {}) {
     fastModel,
     fastModelId,
     subAgentSceneModels: normalizeSubAgentSceneModels(jsonConfig.subAgentSceneModels),
+    subAgentPersonaEfforts: normalizeSubAgentPersonaEfforts(jsonConfig.subAgentPersonaEfforts),
     decisionModel,
     decisionModelId,
     fallbackModel: jsonConfig.fallbackModel || null,
