@@ -156,20 +156,79 @@ test.describe('Yeaft Cosmos UI', () => {
     expect(userMsgBg.outerBorder).toBe('0px');
     expect(userMsgBg.innerBg).not.toBe('rgba(0, 0, 0, 0)');
 
-    // Open real Workbench inside Cosmos drawer and verify capability launcher renders & closes cleanly
+    // Open real Workbench inside Cosmos drawer and verify launcher, Add menu positioning, maximize & 2-step Escape under both themes
+    await page.evaluate(() => document.documentElement.setAttribute('data-theme', 'light'));
     await page.locator('.cosmos-drawer').getByRole('button', { name: /workbench/i }).click();
-    await expect(page.locator('.cosmos-workbench-host')).toBeVisible();
-    await expect(page.locator('.cosmos-workbench-host .workbench-content')).toBeVisible();
-    await expect(page.locator('.cosmos-workbench-host .workbench-capability-card').first()).toBeVisible();
-    await page.locator('.cosmos-workbench-host .workbench-panel-close').click();
-    await expect(page.locator('.cosmos-workbench-host')).toBeHidden();
+    const wbHost = page.locator('.cosmos-workbench-host');
+    await expect(wbHost).toBeVisible();
+    await expect(wbHost.locator('.workbench-content')).toBeVisible();
+    await expect(wbHost.locator('.workbench-capability-card').first()).toBeVisible();
 
-    // Toggle embedded sidebar history via top-left ☰ button: verify Project tree & Session search
+    // Open a capability, then open Workbench Add (+) menu and assert it stays inside .cosmos-workbench-host (not shifted offscreen by backdrop-filter!)
+    await wbHost.locator('.workbench-capability-card[data-workbench-capability="browser"]').click();
+    const addBtn = wbHost.locator('.workbench-add-btn');
+    await addBtn.click();
+    const addMenu = wbHost.locator('.workbench-add-menu');
+    await expect(addMenu).toBeVisible();
+    const [hostBox, addMenuBox] = await Promise.all([wbHost.boundingBox(), addMenu.boundingBox()]);
+    expect(hostBox).not.toBeNull();
+    expect(addMenuBox).not.toBeNull();
+    expect(addMenuBox.x).toBeGreaterThanOrEqual(hostBox.x - 1);
+    expect(addMenuBox.x + addMenuBox.width).toBeLessThanOrEqual(hostBox.x + hostBox.width + 1);
+    expect(addMenuBox.y).toBeGreaterThanOrEqual(hostBox.y - 1);
+    expect(addMenuBox.y + addMenuBox.height).toBeLessThanOrEqual(hostBox.y + hostBox.height + 1);
+
+    // 1st Escape closes the Add menu and restores focus to the Add button while keeping Workbench open
+    await page.keyboard.press('Escape');
+    await expect(addMenu).toHaveCount(0);
+    await expect(wbHost).toBeVisible();
+    await expect(addBtn).toBeFocused();
+
+    // Click an item inside Add menu to prove it is genuinely clickable in the docked drawer
+    await addBtn.click();
+    await expect(addMenu).toBeVisible();
+    await addMenu.locator('[data-workbench-capability="files"]').click();
+    await expect(wbHost.locator('.workbench-item-tab[data-workbench-item-id="files"]')).toBeVisible();
+
+    // Right-click tab context menu also stays strictly inside .cosmos-workbench-host bounds
+    await wbHost.locator('.workbench-item-tab[data-workbench-item-id="files"]').click({ button: 'right' });
+    const tabCtx = wbHost.locator('.workbench-tab-context-menu');
+    await expect(tabCtx).toBeVisible();
+    const tabCtxBox = await tabCtx.boundingBox();
+    expect(tabCtxBox).not.toBeNull();
+    expect(tabCtxBox.x).toBeGreaterThanOrEqual(hostBox.x - 1);
+    expect(tabCtxBox.x + tabCtxBox.width).toBeLessThanOrEqual(hostBox.x + hostBox.width + 1);
+    await wbHost.locator('.workbench-header').click({ position: { x: 10, y: 10 } });
+    await expect(tabCtx).toHaveCount(0);
+
+    // Workbench maximize expands the Cosmos drawer cleanly and restores
+    const initialDrawerW = (await page.locator('.cosmos-drawer').boundingBox()).width;
+    await wbHost.locator('.workbench-maximize-btn').click();
+    await expect(page.locator('.cosmos-page')).toHaveClass(/is-workbench-maximized/);
+    await expect(async () => {
+      const widenedW = (await page.locator('.cosmos-drawer').boundingBox()).width;
+      expect(widenedW).toBeGreaterThan(initialDrawerW + 120);
+    }).toPass({ timeout: 2000 });
+    await wbHost.locator('.workbench-maximize-btn').click();
+    await expect(page.locator('.cosmos-page')).not.toHaveClass(/is-workbench-maximized/);
+
+    // 2nd Escape (with no menu open) collapses Workbench while keeping the drawer open
+    await page.keyboard.press('Escape');
+    await expect(wbHost).toBeHidden();
+    await expect(page.locator('.cosmos-drawer')).toBeVisible();
+    await page.evaluate(() => document.documentElement.setAttribute('data-theme', 'dark'));
+
+    // Toggle embedded sidebar history via top-left ☰ button: verify Project tree & current-Agent-only Session search
     await page.locator('.cosmos-drawer-head-left .cosmos-icon-btn').first().click();
     await expect(page.locator('.cosmos-history-drawer')).toBeVisible();
     await expect(page.locator('.cosmos-history-folder-name').first()).toContainText('Yeaft');
+    // Current planet session matches cleanly
+    await page.locator('.cosmos-history-search-input').fill('Scratchpad');
+    await expect(page.locator('.cosmos-history-search-hit')).toHaveCount(1);
+    await expect(page.locator('.cosmos-history-search-hit').first()).toContainText('Quick Scratchpad');
+    // Other planet session MUST NOT appear (strictly current Agent search)
     await page.locator('.cosmos-history-search-input').fill('Ops');
-    await expect(page.locator('.cosmos-history-search-hit').first()).toContainText('Production Release Guard');
+    await expect(page.locator('.cosmos-history-search-hit')).toHaveCount(0);
     await page.locator('.cosmos-history-search-clear').click();
     await page.locator('.cosmos-drawer-head-left .cosmos-icon-btn').first().click();
     await expect(page.locator('.cosmos-history-drawer')).toHaveCount(0);
@@ -258,9 +317,22 @@ test.describe('Yeaft Cosmos UI', () => {
     await page.evaluate((agentId) => {
       const chat = window.Pinia.useChatStore();
       chat.agents = [
-        { id: agentId, name: 'MacBook-Pro', online: true, status: 'ready', workDir: '/Users/dev/yeaft', capabilities: ['session_auto_route'] },
+        { id: agentId, name: 'MacBook-Pro', online: true, status: 'ready', workDir: '/Users/dev/yeaft', capabilities: ['session_auto_route', 'workbench_session_routes', 'terminal', 'file_editor'] },
         { id: 'z-saturn-node', name: 'Cloud-Linux', online: true, status: 'ready', workDir: '/srv/prod', capabilities: ['session_auto_route'] },
       ];
+      chat.workbenchRouteProtocolSupported = true;
+      chat.applySessionCatalogSnapshot([
+        {
+          catalogKey: `yeaft:${agentId}:sess-mobile-1`,
+          runtimeProvider: 'yeaft',
+          routeRef: { runtimeProvider: 'yeaft', agentId, sessionId: 'sess-mobile-1' },
+          title: 'Mobile Workbench Check',
+          workDir: '/Users/dev/yeaft',
+          availability: 'online',
+          metadataUpdatedAt: new Date().toISOString(),
+          sortRank: 0,
+        },
+      ], []);
     }, mockAgent.agentId);
 
     const earthNode = page.locator('.cosmos-planet-node[data-planet-id="earth"]');
@@ -281,6 +353,17 @@ test.describe('Yeaft Cosmos UI', () => {
     await expect(page.locator('.cosmos-quick-composer')).toBeVisible();
     await page.locator('.cosmos-quick-open-btn').click();
     await expect(page.locator('.cosmos-drawer')).toBeVisible();
+    // Open Workbench on 390px phone and verify Add (+) menu stays inside 390px viewport
+    await page.locator('.cosmos-drawer').getByRole('button', { name: /workbench/i }).click();
+    const mobileWbHost = page.locator('.cosmos-workbench-host');
+    await expect(mobileWbHost).toBeVisible();
+    await mobileWbHost.locator('.workbench-add-btn').click();
+    const mobileMenuBox = await mobileWbHost.locator('.workbench-add-menu').boundingBox();
+    expect(mobileMenuBox).not.toBeNull();
+    expect(mobileMenuBox.x).toBeGreaterThanOrEqual(0);
+    expect(mobileMenuBox.x + mobileMenuBox.width).toBeLessThanOrEqual(390);
+    await mobileWbHost.locator('.workbench-panel-close').click();
+    await expect(mobileWbHost).toBeHidden();
     await page.keyboard.press('Escape');
     await expect(page.locator('.cosmos-drawer')).toHaveCount(0);
 

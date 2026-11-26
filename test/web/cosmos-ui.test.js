@@ -36,6 +36,7 @@ import {
   filterCosmosSessions,
 } from '../../web/cosmos/agent-projection.js';
 import { acceptSessionDiscoveryResponse } from '../../web/stores/helpers/session-discovery.js';
+import { clampFixedMenuCoordinates } from '../../web/utils/fixed-menu-position.js';
 import { bakeProceduralWebGLTextures } from '../../web/cosmos/gpu-texture-baker.js';
 import { createCosmosEngine } from '../../web/cosmos/gl-engine.js';
 import { computeSolarProjectionLayout } from '../../web/cosmos/stage-loop.js';
@@ -938,11 +939,69 @@ describe('Cosmos Component & WebGL Review Regressions', () => {
     const treeCollapsed = buildCosmosProjectSessionTree(projects, projected.mac.sessions, new Set(['proj-root']));
     expect(treeCollapsed.items.map((i) => i.key)).toEqual(['folder:proj-root', 'yeaft:mac:s-free']);
 
-    // Multi-token search matches across Project path, title, and Agent name
-    const allAgents = Object.values(projected);
-    expect(filterCosmosSessions(allAgents, 'yeaft cosmos').map((h) => h.session.id)).toEqual(['s-2']);
-    expect(filterCosmosSessions(allAgents, 'infra').map((h) => h.session.id)).toEqual(['s-3']);
-    expect(filterCosmosSessions(allAgents, 'scratch').map((h) => h.session.id)).toEqual(['s-free']);
+    // Multi-token search matches across Project path and title on a single Agent scope
+    expect(filterCosmosSessions([projected.mac], 'yeaft cosmos').map((h) => h.session.id)).toEqual(['s-2']);
+    expect(filterCosmosSessions([projected.mac], 'infra')).toEqual([]);
+    expect(filterCosmosSessions([projected.mac], 'scratch').map((h) => h.session.id)).toEqual(['s-free']);
+
+    // Hidden native session exclusion + restore + same-sessionId isolation across Agents:
+    // When server catalog is authoritative, a hidden session kept in live sessionsStore MUST NOT be resurrected,
+    // while the same session ID on another Agent stays visible, and restoring it brings it back.
+    const authChatStore = {
+      ...chatStore,
+      sessionCatalogLoaded: true,
+      sessionCatalogProtocolSupported: true,
+      sessionCatalog: [
+        { catalogKey: 'yeaft:mac:s-1', runtimeProvider: 'yeaft', routeRef: { runtimeProvider: 'yeaft', agentId: 'mac', sessionId: 's-1' }, title: 'Visible-Mac', metadataUpdatedAt: now - 1000 },
+        { catalogKey: 'yeaft:cloud:s-hidden', runtimeProvider: 'yeaft', routeRef: { runtimeProvider: 'yeaft', agentId: 'cloud', sessionId: 's-hidden' }, title: 'Cloud-Same-Id', metadataUpdatedAt: now - 1500 },
+      ],
+      hiddenSessionCatalog: [
+        { catalogKey: 'yeaft:mac:s-hidden', runtimeProvider: 'yeaft', routeRef: { runtimeProvider: 'yeaft', agentId: 'mac', sessionId: 's-hidden' }, title: 'Secret-Hidden', hidden: true },
+      ],
+    };
+    const liveSessionsStore = {
+      sessionList: [
+        { id: 's-1', agentId: 'mac', name: 'Visible-Mac', updatedAt: now - 500 },
+        { id: 's-hidden', agentId: 'mac', name: 'Secret-Hidden', updatedAt: now - 100 },
+        { id: 's-hidden', agentId: 'cloud', name: 'Cloud-Same-Id', updatedAt: now - 1500 },
+      ],
+    };
+    const projectedHidden = projectAgentsForCosmos({ chatStore: authChatStore, sessionsStore: liveSessionsStore, nowMs: now, isEn: true });
+    expect(projectedHidden.mac.sessions.map((s) => s.id)).toEqual(['s-1']);
+    expect(projectedHidden.cloud.sessions.map((s) => s.id)).toEqual(['s-hidden']);
+    expect(filterCosmosSessions([projectedHidden.mac], 'secret')).toEqual([]);
+
+    // Restore s-hidden back into visible catalog -> reappears cleanly
+    const restoredChatStore = {
+      ...authChatStore,
+      hiddenSessionCatalog: [],
+      sessionCatalog: [
+        ...authChatStore.sessionCatalog,
+        { catalogKey: 'yeaft:mac:s-hidden', runtimeProvider: 'yeaft', routeRef: { runtimeProvider: 'yeaft', agentId: 'mac', sessionId: 's-hidden' }, title: 'Secret-Hidden', hidden: false },
+      ],
+    };
+    const projectedRestored = projectAgentsForCosmos({ chatStore: restoredChatStore, sessionsStore: liveSessionsStore, nowMs: now, isEn: true });
+    expect(projectedRestored.mac.sessions.map((s) => s.id)).toContain('s-hidden');
+
+    // Legacy fallback (non-authoritative server) still populates from sessionsStore while skipping hidden rows
+    const legacyProjected = projectAgentsForCosmos({
+      chatStore: {
+        ...chatStore,
+        sessionCatalog: [],
+        sessionCatalogLoaded: false,
+        sessionCatalogProtocolSupported: false,
+        hiddenSessionCatalog: [],
+      },
+      sessionsStore: {
+        sessionList: [
+          { id: 's-legacy', agentId: 'mac', name: 'Legacy-Live', updatedAt: now - 200 },
+          { id: 's-legacy-hidden', agentId: 'mac', name: 'Legacy-Hidden', hidden: true, updatedAt: now - 100 },
+        ],
+      },
+      nowMs: now,
+      isEn: true,
+    });
+    expect(legacyProjected.mac.sessions.map((s) => s.id)).toEqual(['s-legacy']);
   });
 
   it('mounts real WorkbenchPanel bound to chatStore.workbenchExpanded (no ownerRoute shadowing) and runs Project tree + FTS session search', async () => {
@@ -967,10 +1026,17 @@ describe('Cosmos Component & WebGL Review Regressions', () => {
       yeaftHistorySearchState: { query: '', senderKey: 'user', loading: false, results: [], hasMore: false },
       workbenchExpanded: false,
       workbenchMaximized: false,
+      yeaftTurnDeleteHistoryBySession: {},
       agents: [
         {
           id: 'ag-earth',
           name: 'Earth-Mac',
+          online: true,
+          capabilities: ['session_discovery', 'workbench_session_routes', 'terminal', 'file_editor'],
+        },
+        {
+          id: 'ag-saturn',
+          name: 'Saturn-Cloud',
           online: true,
           capabilities: ['session_discovery', 'workbench_session_routes', 'terminal', 'file_editor'],
         },
@@ -1025,7 +1091,17 @@ describe('Cosmos Component & WebGL Review Regressions', () => {
       online: true,
       sessions: [
         { id: 'sess-1', agentId: 'ag-earth', runtimeProvider: 'yeaft', catalogKey: 'yeaft:ag-earth:sess-1', title: 'Yeaft-Agent', status: 'running', updatedLabel: 'now', projectId: 'p-yeaft', projectName: 'Yeaft', projectPath: 'Yeaft', summary: 'working' },
-        { id: 'sess-2', agentId: 'ag-earth', runtimeProvider: 'yeaft', catalogKey: 'yeaft:ag-earth:sess-2', title: 'Hidden-FTS-Hit', status: 'done', updatedLabel: '2h', projectId: 'p-yeaft', projectName: 'Yeaft', projectPath: 'Yeaft', summary: 'unrelated summary' },
+        { id: 'sess-shared', agentId: 'ag-earth', runtimeProvider: 'claude-code', catalogKey: 'chat:sess-shared', title: 'Collision CLI Chat', status: 'done', updatedLabel: '1h', projectId: null, projectName: '', projectPath: '', summary: 'cli session' },
+        { id: 'sess-shared', agentId: 'ag-earth', runtimeProvider: 'yeaft', catalogKey: 'yeaft:ag-earth:sess-shared', title: 'Collision Native Yeaft', status: 'done', updatedLabel: '2h', projectId: 'p-yeaft', projectName: 'Yeaft', projectPath: 'Yeaft', summary: 'native session' },
+        { id: 'sess-2', agentId: 'ag-earth', runtimeProvider: 'yeaft', catalogKey: 'yeaft:ag-earth:sess-2', title: 'Hidden-FTS-Hit', status: 'done', updatedLabel: '3h', projectId: 'p-yeaft', projectName: 'Yeaft', projectPath: 'Yeaft', summary: 'unrelated summary' },
+      ],
+    };
+    const saturnAgent = {
+      id: 'ag-saturn',
+      name: 'Saturn-Cloud',
+      online: true,
+      sessions: [
+        { id: 'sess-shared', agentId: 'ag-saturn', runtimeProvider: 'yeaft', catalogKey: 'yeaft:ag-saturn:sess-shared', title: 'Saturn-Collision-Only', status: 'done', updatedLabel: '4h', projectId: null, projectName: '', projectPath: '', summary: 'saturn only' },
       ],
     };
 
@@ -1033,8 +1109,8 @@ describe('Cosmos Component & WebGL Review Regressions', () => {
       props: {
         agent: earthAgent,
         planetId: 'earth',
-        allAgents: [earthAgent],
-        agentToPlanet: { 'ag-earth': 'earth' },
+        allAgents: [earthAgent, saturnAgent],
+        agentToPlanet: { 'ag-earth': 'earth', 'ag-saturn': 'saturn' },
       },
       global: {
         config: { globalProperties: { $t: (k) => k } },
@@ -1068,41 +1144,218 @@ describe('Cosmos Component & WebGL Review Regressions', () => {
     await flushPromises();
     expect(store.workbenchExpanded).toBe(false);
 
-    // 3. Open ☰ switcher -> shows Project folder tree + runs live FTS discovery search
+    // 3. Open ☰ switcher -> shows current planet's Project tree ONLY (never cross-planet)
     await wrapper.find('button[aria-label="cosmos.panel.history"]').trigger('click');
     await flushPromises();
     expect(wrapper.find('.cosmos-history-folder-name').text()).toBe('Yeaft');
+    expect(wrapper.find('.cosmos-history-drawer').text()).not.toContain('Saturn-Collision-Only');
 
+    // 4. Local mixed-provider collision keeps BOTH CLI and native Yeaft rows, never cross-planet,
+    //    and FTS joins ONLY onto the native Yeaft row and emits native Yeaft route on click.
     const input = wrapper.find('.cosmos-history-search-input');
-    await input.setValue('quantum-flux');
+    await input.setValue('Collision');
     vi.advanceTimersByTime(250);
     await flushPromises();
 
-    const searchFrame = sentFrames.find((f) => f.type === 'session_discovery_request');
-    expect(searchFrame).toBeDefined();
-    expect(searchFrame.payload).toEqual({ query: 'quantum-flux' });
+    const discoveryReqs1 = sentFrames.filter((f) => f.type === 'session_discovery_request');
+    expect(discoveryReqs1).toHaveLength(1);
+    expect(discoveryReqs1[0].agentId).toBe('ag-earth');
+    expect(discoveryReqs1.some((f) => f.agentId === 'ag-saturn')).toBe(false);
 
     acceptSessionDiscoveryResponse(store, {
-      requestId: searchFrame.requestId,
+      requestId: discoveryReqs1[0].requestId,
       agentId: 'ag-earth',
       op: 'search',
       ok: true,
       data: {
         indexedAt: Date.now(),
-        results: [{ sessionId: 'sess-2', snippet: 'Matched quantum-flux discussion in transcript' }],
+        results: [{ sessionId: 'sess-shared', snippet: 'Native Yeaft transcript match' }],
       },
     });
     await flushPromises();
 
-    const hits = wrapper.findAll('.cosmos-history-search-hit');
-    expect(hits).toHaveLength(1);
-    expect(hits[0].text()).toContain('Hidden-FTS-Hit');
-    expect(hits[0].text()).toContain('Matched quantum-flux discussion');
+    const collisionHits = wrapper.findAll('.cosmos-history-search-hit');
+    expect(collisionHits).toHaveLength(2);
+    const cliHit = collisionHits.find((el) => el.text().includes('Collision CLI Chat'));
+    const yeaftHit = collisionHits.find((el) => el.text().includes('Collision Native Yeaft'));
+    expect(cliHit).toBeDefined();
+    expect(yeaftHit).toBeDefined();
+    expect(cliHit.text()).not.toContain('Native Yeaft transcript match');
+    expect(yeaftHit.text()).toContain('Native Yeaft transcript match');
+    expect(wrapper.find('.cosmos-history-drawer').text()).not.toContain('Saturn-Collision-Only');
+
+    // 5. Turn deletion epoch change immediately clears stale FTS snippet, aborts obsolete in-flight
+    //    discovery response, and dispatches a fresh request for the active query.
+    await input.setValue('quantum-flux');
+    vi.advanceTimersByTime(250);
+    await flushPromises();
+    const firstQuantumReq = sentFrames.filter((f) => f.type === 'session_discovery_request').at(-1);
+    acceptSessionDiscoveryResponse(store, {
+      requestId: firstQuantumReq.requestId,
+      agentId: 'ag-earth',
+      op: 'search',
+      ok: true,
+      data: {
+        indexedAt: Date.now(),
+        results: [{ sessionId: 'sess-2', snippet: 'Pre-deletion snippet' }],
+      },
+    });
+    await flushPromises();
+    expect(wrapper.find('.cosmos-history-snippet').text()).toContain('Pre-deletion snippet');
+
+    // Trigger a second search + simulate turn deletion before its response arrives
+    store.yeaftTurnDeleteHistoryBySession = {
+      'ag-earth\u001fsess-2': { agentId: 'ag-earth', sessionId: 'sess-2', epoch: 1 },
+    };
+    await flushPromises();
+    // Stale pre-deletion snippet is cleared immediately
+    expect(wrapper.findAll('.cosmos-history-snippet')).toHaveLength(0);
+    vi.advanceTimersByTime(10);
+    await flushPromises();
+    const postDeleteReq = sentFrames.filter((f) => f.type === 'session_discovery_request').at(-1);
+    expect(postDeleteReq.requestId).not.toBe(firstQuantumReq.requestId);
+
+    // Trigger another deletion while postDeleteReq is in flight -> postDeleteReq must be aborted/ignored
+    store.yeaftTurnDeleteHistoryBySession = {
+      'ag-earth\u001fsess-2': { agentId: 'ag-earth', sessionId: 'sess-2', epoch: 2 },
+    };
+    await flushPromises();
+    acceptSessionDiscoveryResponse(store, {
+      requestId: postDeleteReq.requestId,
+      agentId: 'ag-earth',
+      op: 'search',
+      ok: true,
+      data: { indexedAt: Date.now(), results: [{ sessionId: 'sess-2', snippet: 'Stale delayed snippet' }] },
+    });
+    await flushPromises();
+    expect(wrapper.find('.cosmos-history-drawer').text()).not.toContain('Stale delayed snippet');
+
+    vi.advanceTimersByTime(10);
+    await flushPromises();
+    const freshReq = sentFrames.filter((f) => f.type === 'session_discovery_request').at(-1);
+    acceptSessionDiscoveryResponse(store, {
+      requestId: freshReq.requestId,
+      agentId: 'ag-earth',
+      op: 'search',
+      ok: true,
+      data: { indexedAt: Date.now(), results: [{ sessionId: 'sess-2', snippet: 'Fresh post-delete match' }] },
+    });
+    await flushPromises();
+    expect(wrapper.find('.cosmos-history-snippet').text()).toContain('Fresh post-delete match');
+
+    // Verify clicking the native FTS hit selects the native Yeaft session on ag-earth
+    await wrapper.find('.cosmos-history-search-hit').trigger('click');
+    const selected = wrapper.emitted('select-session');
+    expect(selected.at(-1)[0]).toMatchObject({
+      agentId: 'ag-earth',
+      session: expect.objectContaining({ id: 'sess-2', runtimeProvider: 'yeaft' }),
+    });
 
     // Verify user-bubble CSS keeps outer .message.user transparent and workbench host overrides light-theme tokens
     const convCss = readFileSync(join(resolve(process.cwd()), 'web', 'styles', 'cosmos', 'conversation.css'), 'utf-8');
     expect(convCss).toMatch(/\.cosmos-drawer\s+\.message\.user[\s\S]*?background:\s*transparent\s*!important/);
     expect(convCss).toMatch(/\.cosmos-workbench-host[\s\S]*?--bg-workbench:/);
     expect(convCss).toMatch(/\.cosmos-workbench-host\s+\.resize-handle/);
+  });
+
+  it('validates Cmd+K against live Agents, respects defaultPrevented on Escape, and computes containing-block-relative menu coordinates', async () => {
+    vi.stubGlobal('Vue', Vue);
+    const enterYeaft = vi.fn();
+    const toggleWorkbench = vi.fn(function () {
+      this.workbenchExpanded = !this.workbenchExpanded;
+      if (!this.workbenchExpanded) this.workbenchMaximized = false;
+    });
+    const store = Vue.reactive({
+      agents: [
+        { id: 'ag-removed', name: 'Old-Mac', online: true, workDir: '/old', capabilities: [] },
+        { id: 'ag-live', name: 'Live-Linux', online: true, workDir: '/live', capabilities: [] },
+      ],
+      currentAgent: 'ag-removed',
+      sessionCatalog: [],
+      yeaftConversationIdsByAgent: {},
+      messagesMap: {},
+      workbenchExpanded: false,
+      workbenchMaximized: false,
+      isYeaftSessionProcessing: () => false,
+      isYeaftSessionUnread: () => false,
+      enterYeaft,
+      toggleWorkbench,
+      setUiMode: vi.fn(),
+    });
+    vi.stubGlobal('Pinia', {
+      defineStore: () => () => ({}),
+      useChatStore: () => store,
+      useSessionsStore: () => ({ sessionList: [] }),
+      useVpStore: () => ({}),
+    });
+
+    const { default: CosmosPage } = await import('../../web/components/cosmos/CosmosPage.js');
+    wrapper = mount(CosmosPage, {
+      global: {
+        config: { globalProperties: { $t: (k) => k } },
+        stubs: {
+          CosmosQuickComposer: true,
+          CosmosConversationDrawer: { template: '<div />', methods: { openSessionSwitcher() {}, closeSessionSwitcher() {}, isHistoryOpen: () => false } },
+          CosmosConstantsPopover: true,
+          CosmosEventsOverlay: true,
+          SettingsPanel: true,
+          AgentSettingsPanel: true,
+          SessionCreateModal: true,
+        },
+      },
+    });
+
+    // Open drawer for ag-removed, close it, then remove ag-removed from inventory -> Cmd+K must fall back to ag-live
+    wrapper.vm.drawerOpen = true;
+    wrapper.vm.drawerAgentId = 'ag-removed';
+    wrapper.vm.closeDrawer();
+    store.agents = [{ id: 'ag-live', name: 'Live-Linux', online: true, workDir: '/live', capabilities: [] }];
+    store.currentAgent = 'ag-removed';
+    await flushPromises();
+
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', ctrlKey: true, cancelable: true }));
+    await flushPromises();
+    expect(wrapper.vm.drawerOpen).toBe(true);
+    expect(wrapper.vm.drawerAgent?.id).toBe('ag-live');
+    expect(enterYeaft).not.toHaveBeenCalledWith('ag-removed');
+
+    // Escape already consumed by a child menu (defaultPrevented=true) must NOT collapse Workbench
+    store.workbenchExpanded = true;
+    const consumedEsc = new KeyboardEvent('keydown', { key: 'Escape', cancelable: true });
+    consumedEsc.preventDefault();
+    window.dispatchEvent(consumedEsc);
+    await flushPromises();
+    expect(store.workbenchExpanded).toBe(true);
+
+    // Subsequent unhandled Escape DOES collapse Workbench cleanly
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', cancelable: true }));
+    await flushPromises();
+    expect(store.workbenchExpanded).toBe(false);
+
+    // If all agents disappear, Cmd+K must leave drawer closed and not call enterYeaft
+    wrapper.vm.closeDrawer();
+    enterYeaft.mockClear();
+    store.agents = [];
+    await flushPromises();
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', metaKey: true, cancelable: true }));
+    await flushPromises();
+    expect(wrapper.vm.drawerOpen).toBe(false);
+    expect(enterYeaft).not.toHaveBeenCalled();
+
+    // Containing-block-relative menu coordinates under a backdrop-filter ancestor
+    const host = document.createElement('div');
+    host.style.backdropFilter = 'blur(28px)';
+    host.getBoundingClientRect = () => ({ left: 952, top: 52, width: 488, height: 848, right: 1440, bottom: 900 });
+    const menu = document.createElement('div');
+    host.appendChild(menu);
+    document.body.appendChild(host);
+    try {
+      const pos = clampFixedMenuCoordinates(menu, { viewportX: 1350, viewportY: 100, width: 200, height: 180, margin: 8 });
+      // Clamped inside host's 488px width: 488 - 200 - 8 = 280; y = 100 - 52 = 48
+      expect(pos.x).toBe(280);
+      expect(pos.y).toBe(48);
+    } finally {
+      host.remove();
+    }
   });
 });

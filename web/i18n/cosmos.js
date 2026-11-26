@@ -77,8 +77,8 @@ export const zhCN = {
 
   'cosmos.panel.history': '会话与 Project',
   'cosmos.panel.search': '会话内搜索',
-  'cosmos.panel.searchSessions': '搜索会话或 Project',
-  'cosmos.panel.searchSessionsPlaceholder': '搜索会话、Project 或历史内容…',
+  'cosmos.panel.searchSessions': '搜索当前 Agent 会话或 Project',
+  'cosmos.panel.searchSessionsPlaceholder': '搜索当前行星会话、Project 或历史内容…',
   'cosmos.panel.searchSessionsClear': '清除搜索',
   'cosmos.panel.searchSessionsLoading': '正在全文检索会话…',
   'cosmos.panel.searchSessionsEmpty': '没有匹配的会话或 Project',
@@ -255,8 +255,8 @@ export const en = {
 
   'cosmos.panel.history': 'Sessions & Projects',
   'cosmos.panel.search': 'Search conversation',
-  'cosmos.panel.searchSessions': 'Search sessions & projects',
-  'cosmos.panel.searchSessionsPlaceholder': 'Search sessions, projects or content…',
+  'cosmos.panel.searchSessions': 'Search sessions & projects on this planet',
+  'cosmos.panel.searchSessionsPlaceholder': 'Search sessions, projects or content on this planet…',
   'cosmos.panel.searchSessionsClear': 'Clear search',
   'cosmos.panel.searchSessionsLoading': 'Searching session transcripts…',
   'cosmos.panel.searchSessionsEmpty': 'No matching sessions or projects',

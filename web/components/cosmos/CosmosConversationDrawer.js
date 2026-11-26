@@ -200,7 +200,7 @@ export default {
         </form>
 
         <div class="cosmos-history-scroll">
-          <!-- Filtered + Full-Text Discovery Results -->
+          <!-- Filtered + Full-Text Discovery Results (Current Planet / Agent Only) -->
           <template v-if="sessionSearchText">
             <button
               v-for="hit in mergedSessionSearchResults"
@@ -208,7 +208,7 @@ export default {
               type="button"
               class="cosmos-history-row cosmos-history-search-hit"
               :class="{ 'is-active': isSessionSelected(hit.session) }"
-              @click="pickSession(hit.agent.id, hit.session)"
+              @click="pickSession(agent.id, hit.session)"
             >
               <div class="cosmos-history-hit-top">
                 <span class="cosmos-history-row-left">
@@ -217,12 +217,11 @@ export default {
                 </span>
                 <span class="cosmos-history-row-meta">{{ hit.session.updatedLabel }}</span>
               </div>
-              <div v-if="hit.session.projectPath || hit.agent.id !== agent.id" class="cosmos-history-hit-tags">
-                <span v-if="hit.session.projectPath" class="cosmos-history-project-pill">
+              <div v-if="hit.session.projectPath" class="cosmos-history-hit-tags">
+                <span class="cosmos-history-project-pill">
                   <svg viewBox="0 0 20 24" aria-hidden="true"><path d="M2.5 7.5a2 2 0 0 1 2-2h4l1.8 2H15.5a2 2 0 0 1 2 2V18h-15z"/></svg>
                   <span>{{ hit.session.projectPath }}</span>
                 </span>
-                <span v-if="hit.agent.id !== agent.id" class="cosmos-history-agent-pill">{{ hit.agent.name }}</span>
               </div>
               <div v-if="hit.snippet" class="cosmos-history-snippet">{{ hit.snippet }}</div>
             </button>
@@ -235,7 +234,7 @@ export default {
             </div>
           </template>
 
-          <!-- Project Folder Tree + Ungrouped Sessions + Other Agents -->
+          <!-- Current Planet Project Folder Tree + Ungrouped Sessions -->
           <template v-else>
             <div class="cosmos-history-group-label">{{ $t('cosmos.panel.allSessions') }}</div>
 
@@ -277,28 +276,6 @@ export default {
             </template>
 
             <div v-if="!agent.sessions.length" class="cosmos-hover-empty">{{ $t('cosmos.agent.noSessions') }}</div>
-
-            <template v-for="other in otherAgentsWithSessions" :key="other.id">
-              <div class="cosmos-history-group-label cosmos-history-other-label">
-                <span>{{ other.name }}</span>
-                <span v-if="planetLabelForAgent(other.id)" class="cosmos-history-planet-tag">{{ planetLabelForAgent(other.id) }}</span>
-              </div>
-              <button
-                v-for="s in other.sessions.slice(0, 8)"
-                :key="s.catalogKey"
-                type="button"
-                class="cosmos-history-row"
-                :class="{ 'is-active': isSessionSelected(s) }"
-                @click="pickSession(other.id, s)"
-              >
-                <span class="cosmos-history-row-left">
-                  <span class="cosmos-status-pip" :class="s.status"></span>
-                  <span class="cosmos-history-row-title">{{ s.title }}</span>
-                  <span v-if="s.projectPath" class="cosmos-history-project-pill" :title="s.projectPath">{{ s.projectPath }}</span>
-                </span>
-                <span class="cosmos-history-row-meta">{{ s.updatedLabel }}</span>
-              </button>
-            </template>
           </template>
         </div>
       </div>
@@ -458,7 +435,6 @@ export default {
 
     const DEFAULT_HISTORY_SENDER = 'user';
     const SESSION_SEARCH_DEBOUNCE_MS = 220;
-    const SESSION_SEARCH_CONCURRENCY = 4;
     const historyOpen = Vue.ref(false);
     const sessionSearchQuery = Vue.ref('');
     const sessionSearchInputRef = Vue.ref(null);
@@ -467,6 +443,7 @@ export default {
     const collapsedProjectIds = Vue.ref(new Set());
     let sessionSearchTimer = null;
     let sessionSearchController = null;
+    let sessionDiscoveryGeneration = 0;
 
     const searchOpen = Vue.ref(false);
     const searchActiveMessageId = Vue.ref('');
@@ -606,67 +583,72 @@ export default {
       activeModelMeta.value,
     ));
 
-    const otherAgentsWithSessions = Vue.computed(() => (
-      (props.allAgents || []).filter((a) => a.id !== props.agent.id && a.sessions.length > 0)
-    ));
-
-    const searchableAgents = Vue.computed(() => {
-      const list = Array.isArray(props.allAgents) && props.allAgents.length ? props.allAgents : [props.agent];
-      return list.filter(Boolean);
-    });
+    // Strictly scoped to the active planet's Agent (never cross-planet)
+    const currentAgentScope = Vue.computed(() => (props.agent ? [props.agent] : []));
 
     const planetLabelByAgentId = Vue.computed(() => {
-      const map = {};
-      const bindings = props.agentToPlanet || {};
-      for (const ag of searchableAgents.value) {
-        const pid = bindings[ag.id] || (ag.id === props.agent?.id ? props.planetId : '');
-        if (pid) map[ag.id] = $t(`cosmos.planets.${pid}.name`);
-      }
-      return map;
+      if (!props.agent?.id) return {};
+      const pid = props.agentToPlanet?.[props.agent.id] || props.planetId || '';
+      return pid ? { [props.agent.id]: $t(`cosmos.planets.${pid}.name`) } : {};
     });
-
-    function planetLabelForAgent(agentId) {
-      return planetLabelByAgentId.value[agentId] || '';
-    }
 
     const sessionSearchText = Vue.computed(() => (
       historyOpen.value ? sessionSearchQuery.value.trim() : ''
     ));
 
-    const discoveryAgentIds = Vue.computed(() => {
-      if (store.sessionDiscoverySupported !== true || store.connectionState !== 'connected') return [];
+    const discoveryAgentId = Vue.computed(() => {
+      const aid = props.agent?.id;
+      if (!aid || store.sessionDiscoverySupported !== true || store.connectionState !== 'connected') return null;
       const rawAgents = Array.isArray(store.agents) ? store.agents : [];
-      return rawAgents
-        .filter((a) => a?.online && supportsSessionDiscovery(a))
-        .map((a) => a.id)
-        .sort();
+      const match = rawAgents.find((a) => a?.id === aid && a.online && supportsSessionDiscovery(a));
+      return match ? aid : null;
     });
 
-    const discoveryAgentKey = Vue.computed(() => JSON.stringify(discoveryAgentIds.value));
+    const agentDeletionEpochKey = Vue.computed(() => {
+      const map = store.yeaftTurnDeleteHistoryBySession;
+      const aid = props.agent?.id;
+      if (!map || !aid) return '';
+      const parts = [];
+      for (const [key, deletion] of Object.entries(map)) {
+        if (deletion?.agentId === aid) {
+          parts.push(`${key}:${deletion.epoch ?? 0}`);
+        }
+      }
+      parts.sort();
+      return parts.join('|');
+    });
 
     const localSessionSearchHits = Vue.computed(() => (
-      filterCosmosSessions(searchableAgents.value, sessionSearchText.value, {
+      filterCosmosSessions(currentAgentScope.value, sessionSearchText.value, {
         planetLabelByAgentId: planetLabelByAgentId.value,
       })
     ));
 
+    const canonicalSessionKey = (agentId, session) => (
+      session?.catalogKey
+      || `${agentId}\u001f${session?.runtimeProvider || 'yeaft'}\u001f${session?.id || ''}`
+    );
+
     const mergedSessionSearchResults = Vue.computed(() => {
-      if (!sessionSearchText.value) return [];
+      if (!sessionSearchText.value || !props.agent?.id) return [];
+      const currentAgentId = props.agent.id;
       const byKey = new Map();
       const ordered = [];
 
-      const sessionLookup = new Map();
-      for (const ag of searchableAgents.value) {
-        for (const s of (ag.sessions || [])) {
-          sessionLookup.set(`${ag.id}\u001f${s.id}`, { agent: ag, session: s });
+      // FTS session_discovery returns native Yeaft sessions only; never join onto CLI rows.
+      const nativeYeaftBySessionId = new Map();
+      for (const s of (props.agent.sessions || [])) {
+        if (s?.runtimeProvider === 'yeaft' && s.id) {
+          nativeYeaftBySessionId.set(s.id, s);
         }
       }
 
       for (const hit of localSessionSearchHits.value) {
-        const k = `${hit.agent.id}\u001f${hit.session.id}`;
+        if (hit.agent.id !== currentAgentId) continue;
+        const k = canonicalSessionKey(currentAgentId, hit.session);
         if (byKey.has(k)) continue;
         const entry = {
-          key: hit.session.catalogKey || k,
+          key: k,
           agent: hit.agent,
           session: hit.session,
           snippet: '',
@@ -677,12 +659,13 @@ export default {
 
       const ftsRows = [];
       for (const resp of sessionDiscoveryResponses.value) {
-        const results = Array.isArray(resp?.results) ? resp.results : [];
+        if (resp?.agentId !== currentAgentId) continue;
+        const results = Array.isArray(resp.results) ? resp.results : [];
         results.forEach((hit, rank) => {
           if (!hit?.sessionId) return;
-          const k = `${resp.agentId}\u001f${hit.sessionId}`;
-          const found = sessionLookup.get(k);
-          if (!found) return;
+          const nativeSession = nativeYeaftBySessionId.get(hit.sessionId);
+          if (!nativeSession) return;
+          const k = canonicalSessionKey(currentAgentId, nativeSession);
           const snippet = typeof hit.snippet === 'string' ? hit.snippet.trim() : '';
           if (byKey.has(k)) {
             const existing = byKey.get(k);
@@ -692,11 +675,11 @@ export default {
           ftsRows.push({
             k,
             rank,
-            updatedAt: found.session.updatedAt || 0,
+            updatedAt: nativeSession.updatedAt || 0,
             entry: {
-              key: found.session.catalogKey || k,
-              agent: found.agent,
-              session: found.session,
+              key: k,
+              agent: props.agent,
+              session: nativeSession,
               snippet,
             },
           });
@@ -714,6 +697,7 @@ export default {
     });
 
     function cancelSessionDiscoverySearch() {
+      sessionDiscoveryGeneration += 1;
       if (sessionSearchTimer) {
         clearTimeout(sessionSearchTimer);
         sessionSearchTimer = null;
@@ -724,50 +708,63 @@ export default {
       sessionSearchPending.value = false;
     }
 
-    async function runSessionDiscoverySearch() {
+    async function runSessionDiscoverySearch(generation) {
       const query = sessionSearchText.value;
-      const agents = discoveryAgentIds.value;
-      if (!query || !agents.length) {
-        sessionSearchPending.value = false;
+      const agentId = discoveryAgentId.value;
+      if (!query || !agentId || generation !== sessionDiscoveryGeneration) {
+        if (generation === sessionDiscoveryGeneration) sessionSearchPending.value = false;
         return;
       }
       const controller = new AbortController();
       const { signal } = controller;
       sessionSearchController = controller;
-      let next = 0;
-      const collected = [];
-      const worker = async () => {
-        for (let i; !signal.aborted && (i = next++) < agents.length;) {
-          const agentId = agents[i];
-          try {
-            const data = await requestSessionDiscovery(store, agentId, 'search', { query }, signal);
-            if (!signal.aborted && Array.isArray(data?.results)) {
-              collected.push({ agentId, results: data.results });
-              sessionDiscoveryResponses.value = [...collected];
-            }
-          } catch {
-            // Local title/project hits remain visible even if FTS is unavailable or aborted.
-          }
+      try {
+        const data = await requestSessionDiscovery(store, agentId, 'search', { query }, signal);
+        if (!signal.aborted && generation === sessionDiscoveryGeneration
+            && props.agent?.id === agentId && Array.isArray(data?.results)) {
+          sessionDiscoveryResponses.value = [{ agentId, results: data.results }];
         }
-      };
-      await Promise.all(agents.slice(0, SESSION_SEARCH_CONCURRENCY).map(worker));
-      if (!signal.aborted) sessionSearchPending.value = false;
+      } catch {
+        // Local title/project hits remain visible even if FTS is unavailable or aborted.
+      } finally {
+        if (!signal.aborted && generation === sessionDiscoveryGeneration) {
+          sessionSearchPending.value = false;
+        }
+      }
     }
 
     function queueSessionDiscoverySearch(delay = SESSION_SEARCH_DEBOUNCE_MS) {
       cancelSessionDiscoverySearch();
-      if (!sessionSearchText.value || !discoveryAgentIds.value.length) return;
+      if (!sessionSearchText.value || !discoveryAgentId.value) return;
+      const generation = sessionDiscoveryGeneration;
       sessionSearchPending.value = true;
       sessionSearchTimer = setTimeout(() => {
         sessionSearchTimer = null;
-        void runSessionDiscoverySearch();
+        void runSessionDiscoverySearch(generation);
       }, delay);
     }
 
     Vue.watch(
-      () => [sessionSearchText.value, discoveryAgentKey.value, store.ws],
+      () => [sessionSearchText.value, discoveryAgentId.value, store.ws],
       () => {
         queueSessionDiscoverySearch();
+      },
+    );
+
+    Vue.watch(
+      agentDeletionEpochKey,
+      (next, prev) => {
+        if (next === prev || !sessionSearchText.value) return;
+        queueSessionDiscoverySearch(0);
+      },
+    );
+
+    Vue.watch(
+      () => props.agent?.id,
+      (next, prev) => {
+        if (next === prev) return;
+        sessionSearchQuery.value = '';
+        cancelSessionDiscoverySearch();
       },
     );
 
@@ -1101,9 +1098,7 @@ export default {
       activeModelLabel,
       effortOptions,
       activeEffort,
-      otherAgentsWithSessions,
       modelOptionMatchesRef,
-      planetLabelForAgent,
       toggleHistoryDrawer,
       closeHistoryDrawer,
       toggleProjectFolder,

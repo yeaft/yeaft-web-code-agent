@@ -844,6 +844,11 @@
   background: rgba(6, 13, 28, 0.96);
   border-color: rgba(var(--p-accent-rgb), 0.28);
   color: var(--p-ink);
+  max-width: min(320px, calc(100% - 16px));
+}
+
+.cosmos-workbench-host .workbench-add-menu {
+  width: min(196px, calc(100% - 16px));
 }
 
 /* ── Conversation Outline Search inside Cosmos Drawer ── */

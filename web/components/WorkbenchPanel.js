@@ -7,6 +7,7 @@ import {
   workbenchRouteKey,
   workbenchWorkspaceGeneration,
 } from '../utils/workbench-route.js';
+import { clampFixedMenuCoordinates } from '../utils/fixed-menu-position.js';
 
 export default {
   name: 'WorkbenchPanel',
@@ -467,11 +468,15 @@ export default {
       const triggerRect = launcherTrigger.value?.getBoundingClientRect();
       const menu = launcherMenu.value;
       if (!triggerRect || !menu) return;
-      const margin = 8;
-      const menuWidth = Math.min(menu.getBoundingClientRect().width, window.innerWidth - margin * 2);
-      const viewportLeft = Math.max(margin, Math.min(triggerRect.left, window.innerWidth - menuWidth - margin));
-      menu.style.left = `${viewportLeft}px`;
-      menu.style.top = `${triggerRect.bottom + 4}px`;
+      const menuRect = menu.getBoundingClientRect();
+      const pos = clampFixedMenuCoordinates(menu, {
+        viewportX: triggerRect.left,
+        viewportY: triggerRect.bottom + 4,
+        width: menuRect.width || menu.offsetWidth || 190,
+        height: menuRect.height || menu.offsetHeight || 180,
+      });
+      menu.style.left = `${pos.x}px`;
+      menu.style.top = `${pos.y}px`;
     };
     const openLauncher = (focusIndex = 0) => {
       launcherOpen.value = true;
@@ -614,13 +619,15 @@ export default {
       closeCapability(item.capabilityId);
     };
     const positionFixedMenu = (target, triggerRect) => {
-      const margin = 8;
       const width = target?.offsetWidth || 220;
       const height = target?.offsetHeight || 200;
-      return {
-        x: Math.max(margin, Math.min(triggerRect.left, window.innerWidth - width - margin)),
-        y: Math.max(margin, Math.min(triggerRect.bottom + 4, window.innerHeight - height - margin)),
-      };
+      const pos = clampFixedMenuCoordinates(target, {
+        viewportX: triggerRect.left,
+        viewportY: triggerRect.bottom + 4,
+        width,
+        height,
+      });
+      return { x: pos.x, y: pos.y };
     };
     const closeWorkbenchMenus = () => {
       openItemsMenu.visible = false;
@@ -695,18 +702,30 @@ export default {
       closeLauncher();
       openItemsMenu.visible = false;
       const index = workbenchItems.value.findIndex(candidate => candidate.id === item.id);
+      const initial = clampFixedMenuCoordinates(panelRoot.value, {
+        viewportX: event.clientX,
+        viewportY: event.clientY,
+        width: 180,
+        height: 220,
+      });
       Object.assign(tabContextMenu, {
         visible: true,
-        x: event.clientX,
-        y: event.clientY,
+        x: initial.x,
+        y: initial.y,
         itemId: item.id,
         index,
       });
       await Vue.nextTick();
       const width = tabContextMenuElement.value?.offsetWidth || 180;
       const height = tabContextMenuElement.value?.offsetHeight || 220;
-      tabContextMenu.x = Math.max(8, Math.min(event.clientX, window.innerWidth - width - 8));
-      tabContextMenu.y = Math.max(8, Math.min(event.clientY, window.innerHeight - height - 8));
+      const settled = clampFixedMenuCoordinates(tabContextMenuElement.value || panelRoot.value, {
+        viewportX: event.clientX,
+        viewportY: event.clientY,
+        width,
+        height,
+      });
+      tabContextMenu.x = settled.x;
+      tabContextMenu.y = settled.y;
     };
     const closeFileItems = paths => new Promise(resolve => {
       window.dispatchEvent(new CustomEvent('workbench-close-file-items', {

@@ -247,7 +247,22 @@ function inspectLoadedMessages(messages, sessionId) {
  */
 export function projectAgentsForCosmos({ chatStore, sessionsStore, nowMs = Date.now(), isEn = false, t = null }) {
   const agents = Array.isArray(chatStore?.agents) ? chatStore.agents : [];
-  const catalog = Array.isArray(chatStore?.sessionCatalog) ? chatStore.sessionCatalog : [];
+  const hasSidebarCatalog = Array.isArray(chatStore?.sidebarSessionCatalog);
+  const catalog = hasSidebarCatalog
+    ? chatStore.sidebarSessionCatalog
+    : (Array.isArray(chatStore?.sessionCatalog) ? chatStore.sessionCatalog : []);
+  const hiddenCatalog = Array.isArray(chatStore?.hiddenSessionCatalog) ? chatStore.hiddenSessionCatalog : [];
+  const hiddenNativeKeys = new Set();
+  for (const row of hiddenCatalog) {
+    const ref = row?.routeRef;
+    if (ref?.runtimeProvider === 'yeaft' && ref.agentId && ref.sessionId) {
+      hiddenNativeKeys.add(`${ref.agentId}\u001f${ref.sessionId}`);
+    }
+  }
+  const catalogAuthoritative = hasSidebarCatalog
+    || chatStore?.sessionCatalogProtocolSupported === true
+    || chatStore?.sessionCatalogLoaded === true
+    || hiddenCatalog.length > 0;
   const yeaftSessions = Array.isArray(sessionsStore?.sessionList)
     ? sessionsStore.sessionList
     : Object.values(sessionsStore?.sessions || {});
@@ -277,10 +292,12 @@ export function projectAgentsForCosmos({ chatStore, sessionsStore, nowMs = Date.
 
     const mergedMap = new Map();
 
-    // 1. Pull catalog rows owned by this Agent (Yeaft + CLI)
+    // 1. Pull visible catalog rows owned by this Agent (Yeaft + CLI)
     for (const row of catalog) {
+      if (row?.hidden === true) continue;
       const ref = row?.routeRef;
       if (!ref || ref.agentId !== agentId || !ref.sessionId) continue;
+      if (ref.runtimeProvider === 'yeaft' && hiddenNativeKeys.has(`${agentId}\u001f${ref.sessionId}`)) continue;
       const key = `${ref.runtimeProvider}:${ref.sessionId}`;
       mergedMap.set(key, {
         id: ref.sessionId,
@@ -295,12 +312,15 @@ export function projectAgentsForCosmos({ chatStore, sessionsStore, nowMs = Date.
       });
     }
 
-    // 2. Merge live sessionsStore details for native Yeaft sessions
+    // 2. Enrich visible native Yeaft rows from live sessionsStore;
+    //    never resurrect hidden/absent sessions when the visible catalog is authoritative.
     for (const s of yeaftSessions) {
-      if (!s?.id || (s.agentId && s.agentId !== agentId)) continue;
+      if (!s?.id || s.hidden === true || (s.agentId && s.agentId !== agentId)) continue;
       if (!s.agentId && agentId !== chatStore?.currentAgent) continue;
+      if (hiddenNativeKeys.has(`${agentId}\u001f${s.id}`)) continue;
       const key = `yeaft:${s.id}`;
       const existing = mergedMap.get(key);
+      if (catalogAuthoritative && !existing) continue;
       const updatedMs = Math.max(
         existing?.updatedAt || 0,
         parseMs(s.latestActivityAt),

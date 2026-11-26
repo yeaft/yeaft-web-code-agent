@@ -961,16 +961,19 @@ export default {
     }
 
     function openCosmosSessionSearch(preferredAgentId = null) {
-      if (drawerOpen.value && (!preferredAgentId || preferredAgentId === drawerAgentId.value)) {
-        drawerRef.value?.openSessionSwitcher?.({ focusSearch: true });
+      const isValidAgent = (id) => Boolean(id && projectedAgentsMap.value[id]);
+      if (drawerOpen.value && drawerRef.value && isValidAgent(drawerAgentId.value)
+          && (!preferredAgentId || preferredAgentId === drawerAgentId.value)) {
+        drawerRef.value.openSessionSwitcher?.({ focusSearch: true });
         return;
       }
-      const targetId = preferredAgentId
-        || quickAgentId.value
-        || drawerAgentId.value
-        || store.currentAgent
-        || projectedAgentList.value[0]?.id
-        || null;
+      const targetId = [
+        preferredAgentId,
+        quickAgentId.value,
+        drawerAgentId.value,
+        store.currentAgent,
+        projectedAgentList.value[0]?.id,
+      ].find(isValidAgent) || null;
       if (!targetId) return;
       if (currentBand.value !== 'solar') jumpToScale(13.0);
       openAgentConversationFromQuick({ agentId: targetId, sessionId: null });
@@ -999,6 +1002,7 @@ export default {
 
     function closeDrawer() {
       drawerOpen.value = false;
+      drawerAgentId.value = null;
       workbenchWidened.value = false;
       collapseOpenWorkbench();
     }
@@ -1122,6 +1126,7 @@ export default {
     }
 
     function onKeyDown(e) {
+      if (e.defaultPrevented) return;
       if ((e.metaKey || e.ctrlKey) && !e.altKey && String(e.key || '').toLowerCase() === 'k') {
         if (settingsModal.open || agentSettingsModal.open || sessionCreateModal.open) return;
         e.preventDefault();
