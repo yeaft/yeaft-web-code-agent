@@ -357,26 +357,33 @@ describe('Workspace <=3 level folder snapshot & Sessionless auto-routing pipelin
       question: 'Which environment?',
       options: ['staging', 'prod'],
     }).then(res => { ask1Settled = true; return res; });
+    let ask2Settled = false;
     const ask2Promise = bridge.__testHooks.seedPendingUserPrompt({
       requestId: 'ask_port_2',
       sessionId: runningSession.id,
       question: 'Which port should I bind?',
       options: ['3000', '8080'],
-    });
+    }).then(res => { ask2Settled = true; return res; });
 
-    const rejected = await bridge.handleYeaftAutoRouteSend({
-      id: 'msg_bad_override',
-      requestId: 'req_bad_override',
-      text: 'also add rollback SQL (invalid override)',
-      quickSend: { model: 'not-a-model' },
-      _allowedSessionIds: [runningSession.id],
-      _shareOwnerId: 'user-1',
-      _requestClientId: 'client-1',
-    });
-    expect(rejected).toBeNull();
-    expect(allSent().filter(f => f.type === 'yeaft_session_routed' && f.requestId === 'req_bad_override')).toEqual([
-      expect.objectContaining({ ok: false, code: 'invalid_quick_send', clientMessageId: 'msg_bad_override', _requestClientId: 'client-1' }),
-    ]);
+    const sessionIdsBeforeReject = snapshotSessions(yeaftDir).map(s => s.id);
+    const decisionsBeforeReject = decisionCalls.length;
+    for (const [id, input] of [
+      ['new', { text: 'Start a new deployment', forceNew: true }],
+      ['answer', { text: 'choose port 8080' }],
+    ]) {
+      const rejected = await bridge.handleYeaftAutoRouteSend({
+        ...input, id: `msg_bad_${id}`, requestId: `req_bad_${id}`,
+        quickSend: { model: 'not-a-model' },
+        _allowedSessionIds: [runningSession.id], _shareOwnerId: 'user-1', _requestClientId: 'client-1',
+      });
+      expect(rejected).toBeNull();
+      expect(allSent().filter(f => f.type === 'yeaft_session_routed' && f.requestId === `req_bad_${id}`)).toEqual([
+        expect.objectContaining({ ok: false, code: 'invalid_quick_send', clientMessageId: `msg_bad_${id}`, _requestClientId: 'client-1' }),
+      ]);
+    }
+    expect(snapshotSessions(yeaftDir).map(s => s.id)).toEqual(sessionIdsBeforeReject);
+    expect(decisionCalls).toHaveLength(decisionsBeforeReject);
+    expect(store.loadAllBySession(runningSession.id).some(r => r.content === 'choose port 8080')).toBe(false);
 
     const tier1Res = await bridge.handleYeaftAutoRouteSend({
       id: 'msg_tier1_1',
@@ -399,6 +406,20 @@ describe('Workspace <=3 level folder snapshot & Sessionless auto-routing pipelin
     expect(allSent()[ackIndex]).toMatchObject({ ok: true, delivery: 'appended' });
     expect(adapterInputs.some(text => text.includes('also add rollback SQL'))).toBe(false);
 
+    // An intentional override asks for a distinct execution, not an implicit AskUser answer.
+    writeFileSync(join(yeaftDir, 'config.json'), JSON.stringify({
+      providers: [{ name: 'proxy', protocol: 'openai-responses', baseUrl: 'https://proxy.invalid/v1', apiKey: 'fixture', models: ['main-model'] }],
+      primaryModel: 'proxy/main-model',
+    }));
+    await bridge.handleYeaftAutoRouteSend({
+      id: 'msg_explicit_override', requestId: 'req_explicit_override', text: 'choose port 8080',
+      quickSend: { model: 'proxy/main-model' }, _allowedSessionIds: [runningSession.id], _shareOwnerId: 'user-1',
+    });
+    expect(allSent().find(f => f.type === 'yeaft_session_routed' && f.requestId === 'req_explicit_override')).toMatchObject({
+      ok: true, delivery: 'queued', sessionId: runningSession.id,
+    });
+    expect(ask2Settled).toBe(false);
+
     const askAnswerRes = await bridge.handleYeaftAutoRouteSend({
       id: 'msg_tier1_ask',
       requestId: 'req_tier1_ask',
@@ -414,7 +435,7 @@ describe('Workspace <=3 level folder snapshot & Sessionless auto-routing pipelin
     });
     expect(await ask2Promise).toEqual({ 'Which port should I bind?': 'choose port 8080' });
     expect(ask1Settled).toBe(false);
-    // Transcript must include the user's AskUser reply row
+    // Only the valid text-only answer settles the question.
     expect(store.loadAllBySession(runningSession.id).some(r => r.role === 'user' && r.content === 'choose port 8080')).toBe(true);
     bridge.__testHooks.settlePendingUserPromptForTest('ask_env_1', { answers: { 'Which environment?': 'staging' } });
     await ask1Promise;
@@ -437,7 +458,7 @@ describe('Workspace <=3 level folder snapshot & Sessionless auto-routing pipelin
     // Neither a history row nor a new execution would satisfy this assertion.
     expect(adapterInputs.filter(text => text.includes('also add rollback SQL to that migration'))).toHaveLength(1);
     const runningStarts = allSent().filter(f => f.sessionId === runningSession.id && f.event?.type === 'vp_turn_start');
-    expect(runningStarts).toHaveLength(1);
+    expect(runningStarts.map(f => f.userTurnId)).toEqual(['msg_run_root', 'msg_explicit_override']);
     expect(allSent().find(f => f.sessionId === runningSession.id && f.event?.type === 'vp_thread_user_append_consumed')).toMatchObject({
       turnId: runningTurn.turnId,
       event: { preview: expect.stringContaining('also add rollback SQL') },

@@ -1006,8 +1006,6 @@ function createThreadId() {
 const RUNNING_THREAD_STATES = new Set(['queued', 'typing', 'thinking', 'retrying', 'streaming', 'tool']);
 /** @type {Map<string, Map<string, object>>} */
 const vpThreads = new Map();
-/** @type {Map<string, Set<Promise<string|null>>>} */
-const routePromisesByMsgId = new Map();
 /** @type {Map<string, { workDir: string, skillManager: import('./skills.js').SkillManager, mcpManager: import('./mcp.js').MCPManager, mcpStatus: object, configuredMcpConfig: object, effectiveMcpConfig: object, status: { skills: number, mcpServers: string[], mcpFailed: object[], mcpSkipped: object[], tools: number } }>} */
 const projectRuntimes = new Map();
 /** @type {Map<string, Promise<any>>} */
@@ -1470,23 +1468,6 @@ function rememberThreadMessage(thread, msg) {
   thread.updatedAt = Date.now();
 }
 
-function registerRoutePromise(msgId, promise) {
-  if (!msgId) return;
-  let set = routePromisesByMsgId.get(msgId);
-  if (!set) {
-    set = new Set();
-    routePromisesByMsgId.set(msgId, set);
-  }
-  set.add(promise);
-  promise.finally(() => {
-    set.delete(promise);
-    if (set.size === 0 && routePromisesByMsgId.get(msgId) === set) {
-      routePromisesByMsgId.delete(msgId);
-    }
-  }).catch(() => {});
-}
-
-
 function buildVpPromptPayload(vpId, envelope) {
   const text = envelope?.msg?.text || '';
   const inboundSuffix = `${envelope?._promptSuffix || ''}${sessionMessageQuotePrompt(envelope?.msg?.meta?.quote)}`;
@@ -1563,11 +1544,6 @@ function readVpForClassifier(vpId) {
   } catch {
     return { vpId };
   }
-}
-
-async function waitForRoutePromises(msgId) {
-  const set = routePromisesByMsgId.get(msgId);
-  return set ? Promise.all(Array.from(set, p => p.catch(() => null))) : [];
 }
 
 /**
@@ -2427,11 +2403,6 @@ export function __testSeedVpThread({ sessionId, vpId, threadId, title = 'test th
   return thread.threadId;
 }
 
-/** Test-only: wait for thread classification/routing spawned by a msg id. */
-export async function __testWaitForRoutePromises(msgId) {
-  await waitForRoutePromises(msgId);
-}
-
 /** Test-only: route one coordinator envelope into the VP thread runtime. */
 export function __testEnqueueForVp(sessionId, vpId, envelope) {
   return enqueueForVp(sessionId, vpId, envelope);
@@ -2599,8 +2570,13 @@ function enqueueForVp(sessionId, vpId, envelope) {
       messageType: envelope?.trigger || 'user',
     });
   }
-  const routePromise = routeEnvelopeToVpThread(sessionId, vpId, envelope);
-  registerRoutePromise(envelope?.msg?.id, routePromise);
+  // This collector belongs to one ingress, never a caller-controlled message ID.
+  const { _routeOutcomes, ...deliveryEnvelope } = envelope;
+  const outcome = routeEnvelopeToVpThread(sessionId, vpId, deliveryEnvelope).catch(err => {
+    console.warn('[Yeaft] VP thread delivery failed:', err?.message || err);
+    return null;
+  });
+  _routeOutcomes?.push(outcome);
 }
 
 function scheduleTaskResultRescue({ taskId, sessionId, vpId, threadId = 'main', content, taskKind, taskStatus, causalRootId = null, userTurnId = null, sceneId = null }) {
@@ -5776,7 +5752,7 @@ export function validateQuickSend(value, config) {
   return { model, effort, maxOutputTokens };
 }
 
-async function runYeaftSessionSend(msg, { reportToSession = true } = {}) {
+async function runYeaftSessionSend(msg, { reportToSession = true, validatedTurnConfig } = {}) {
   if (!msg || typeof msg !== 'object') return;
   const { text } = msg;
   // PR #721: image-only send is allowed — text may be empty when the
@@ -5859,9 +5835,9 @@ async function runYeaftSessionSend(msg, { reportToSession = true } = {}) {
 
   // Reject malformed overrides before boot, roster changes, attachment writes,
   // or coordinator persistence. The error includes the client id for retry.
-  let turnConfig = null;
+  let turnConfig = validatedTurnConfig ?? null;
   try {
-    if (msg.quickSend !== undefined) {
+    if (validatedTurnConfig === undefined && msg.quickSend !== undefined) {
       turnConfig = validateQuickSend(msg.quickSend, loadConfig({ dir: yeaftDir }));
     }
   } catch (err) {
@@ -6055,8 +6031,10 @@ async function dispatchAcceptedSessionSend({
       const routing = await classifySessionUserInput(sessionId, messageId, text, ingress, turnConfig,
         sceneId ? [] : (mentions.length ? mentions : coord.parseMentions(text)), sceneId);
       if (!routing) return cancelled;
+      const routeOutcomes = [];
       const report = coord.ingest({
         id: messageId,
+        _routeOutcomes: routeOutcomes,
         _userTurnRouting: routing,
         _sceneId: sceneId,
         _userTurnId: routing.userTurnId,
@@ -6091,7 +6069,7 @@ async function dispatchAcceptedSessionSend({
       const routeWaitStart = perfNowMs();
       // Await only intake into the VP's append queue/inbox, not the model or
       // other running turns. The coordinator's target list alone is not an ack.
-      const outcomes = await waitForRoutePromises(report.message.id);
+      const outcomes = await Promise.all(routeOutcomes);
       traceDuration('session_send.wait_route_promises', routeWaitStart, { turnId: report.message.id });
       traceDuration('session_send.coordinator_ingest', ingestStart, {
         turnId: report.message.id,
@@ -6115,7 +6093,7 @@ async function dispatchAcceptedSessionSend({
 
 /**
  * Wait for a bounded set of driver keys. Production group chat uses
- * waitForRoutePromises() so a new message is fire-and-stream after its
+ * per-ingress routing promises so a new message is fire-and-stream after its
  * classification/target-thread decision. This helper remains for tests and
  * explicit barriers, but it must never wait for every group driver: an
  * unrelated long-running thread must not pin a fresh query.
@@ -6846,9 +6824,10 @@ async function runVpTurn({ prompt, promptParts = null, sessionId, vpId, threadId
         // Seal the append queue before the Engine commits to a terminal
         // response. A racing send either wins the last drain (same query) or
         // is actually queued for the driver rather than acknowledged as an append.
-        closePendingUserInput: () => {
+        closePendingUserInput: ({ handoff = false } = {}) => {
           if (!thread || escalationState?.escalated || vpAbort.signal.aborted) return true;
-          if (thread.pendingQueries.length) return false;
+          // In a handoff, only a new human instruction can keep this VP running.
+          if (thread.pendingQueries.some(item => !handoff || !item.internal)) return false;
           thread.userInputClosed = true;
           return true;
         },
@@ -7961,7 +7940,7 @@ function readRecentFallbackMessagesForAutoRoute(sessionId, limit = 4) {
 
 /**
  * Dedicated Sessionless auto-route + send entry point (`yeaft_auto_route_send`).
- * Leaves existing `yeaft_session_send` untouched for 100% backward compatibility:
+ * Keeps `yeaft_session_send` as the shared Session delivery path:
  *   1. Boots runtime if needed so `session.adapter` and `decisionModel` are available.
  *   2. Runs Tier 1 (running/AskUser) -> Tier 2 (5-day recent) -> Tier 3 (create new Session
  *      with LLM-selected `workDir` from <=3 level snapshot, `sceneId`, and `title`).
@@ -8000,6 +7979,15 @@ export async function handleYeaftAutoRouteSend(msg = {}) {
     ...result,
   });
   return withAutoRouteLock(ownerKey, async () => {
+    let validatedTurnConfig = null;
+    if (msg.quickSend !== undefined) {
+      try {
+        validatedTurnConfig = validateQuickSend(msg.quickSend, loadConfig({ dir: yeaftDir }));
+      } catch (err) {
+        await reply({ ok: false, code: 'invalid_quick_send', error: err.message });
+        return null;
+      }
+    }
     let receipt;
     let result;
     try {
@@ -8052,7 +8040,7 @@ export async function handleYeaftAutoRouteSend(msg = {}) {
       // that prompt AND persist the user's reply row into the Session transcript so
       // conversation history stays complete and no optimistic message is orphaned.
       let answeredAskUser = false;
-      if (!createdSession && decision.tier === 'running' && decision.answeredQuestion?.requestId && !hasFiles && text.trim()) {
+      if (!validatedTurnConfig && !createdSession && decision.tier === 'running' && decision.answeredQuestion?.requestId && !hasFiles && text.trim()) {
         const livePending = pendingUserPrompts.get(decision.answeredQuestion.requestId);
         if (livePending && livePending.sessionId === targetSessionId && livePending.expiresAt > Date.now()) {
           const questionKey = livePending.question || 'response';
@@ -8084,7 +8072,6 @@ export async function handleYeaftAutoRouteSend(msg = {}) {
           text: text.trim() ? text : '(attached files)',
           mentions: Array.isArray(msg.mentions) ? msg.mentions : [],
           ...(msg.quote ? { quote: msg.quote } : {}),
-          ...(msg.quickSend !== undefined ? { quickSend: msg.quickSend } : {}),
           ...(Array.isArray(msg.files) && msg.files.length > 0 ? { files: msg.files } : {}),
           ...(perfTraceId ? { perfTraceId } : {}),
           _agentSessionIds: nextAgentSessionIds,
@@ -8101,7 +8088,7 @@ export async function handleYeaftAutoRouteSend(msg = {}) {
               projectInstruction: '',
               sessionIds: [],
             },
-        }, { reportToSession: false })) || delivery;
+        }, { reportToSession: false, validatedTurnConfig })) || delivery;
       }
 
       const decisionType = createdSession ? 'created' : 'matched';
@@ -9465,12 +9452,6 @@ export const __testHooks = {
   decorateSessionsWithRuntimeState,
   async loadProjectRuntime(workDir) {
     return loadProjectRuntime(workDir);
-  },
-  registerRoutePromiseForTest(msgId, promise) {
-    registerRoutePromise(msgId, promise);
-  },
-  routePromiseEntryCountForTest() {
-    return routePromisesByMsgId.size;
   },
   getOrCreateVpEngineForTest: getOrCreateVpEngine,
   getOrCreateSessionContextForTest(sessionId, sessionHandle) {

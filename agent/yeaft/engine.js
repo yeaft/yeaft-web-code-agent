@@ -6050,14 +6050,15 @@ export class Engine {
       // and must not leak into a later provider-generated batch.
       if (toolBatchBarrier) endTurnRequested = null;
 
-      // task-707: tool-callable end-turn signal. If a tool in this batch
-      // called toolCtx.requestEndTurn(reason), break out of the outer
-      // while-loop now — DON'T call adapter.stream() again. The
-      // assistant(tool_use)+tool(tool_result) pairs are already in
-      // conversationMessages, so the next user-initiated turn sees a
-      // clean wire shape. Used by `route_forward` to hand off control
-      // to other VPs without continuing to generate.
-      //
+      // A handoff normally ends this execution. If a live Session already
+      // accepted a newer human instruction, finish the paired tool batch and
+      // let the next loop read it. The forward already happened; only its
+      // request to stop this VP is superseded. Otherwise seal the input queue
+      // so a late send cannot be acknowledged as joining an ending query.
+      if (endTurnRequested && !signal?.aborted && closePendingUserInput?.({ handoff: true }) === false) {
+        endTurnRequested = null;
+      }
+
       // A clean handoff must precede the abortedDuringTools check so it
       // does not get reported as 'aborted'.
       if (endTurnRequested && !toolBatchBarrier) {

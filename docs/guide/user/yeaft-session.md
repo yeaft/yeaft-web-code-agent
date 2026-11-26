@@ -42,11 +42,11 @@ Legacy browser-local section state is not imported into user preferences. The in
 
 模型与推理强度选择会立即预览，并等待 Agent 确认保存；保存失败会恢复已确认值并提示。连续切换按 Session 顺序应用，其他 Session 不受影响；若立即发送消息，会先等待所选模型确认，不会悄悄使用旧模型。切换模型时优先默认使用 `xhigh`，没有此档位时只从该模型支持的档位选择；已保存的 Session 强度不会被刷新覆盖。运行中的请求不被中断，新设置从下一次模型请求开始使用。
 
-### 从宇宙快捷输入补充正在执行的回复
+### Supplement a running turn from the Cosmos quick composer
 
-自动路由选中会话后，使用与会话内普通发送相同的规则。相关的补充消息会进入已有 Turn，在下一次模型调用时一起处理，不会打断正在进行的模型调用或工具。无关消息用独立 Turn；明确选择一次性的模型或推理强度也会另开 Turn，不会改变正在运行的回复。只显示默认模型不算手动选择。
+After Auto Router chooses a Session, it uses the same rules as sending from inside that Session. A related follow-up enters the current turn at the next model call, without interrupting an in-flight call or tool. Unrelated requests and explicit one-message model or effort overrides use a separate turn. Simply displaying the default model does not count as an override.
 
-新版 Agent 在接收补充或排入独立 Turn 后才确认发送。仅选中会话并不代表消息已送达。
+The Agent confirms the send after accepting it into a running turn or queuing a separate turn. Choosing a Session alone does not confirm delivery.
 
 ### Change the scene during a conversation
 
