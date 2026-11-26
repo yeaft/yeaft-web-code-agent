@@ -33,6 +33,10 @@
   --c-panel-w: clamp(540px, 50vw, 760px);
 }
 
+.cosmos-page.is-workbench-maximized {
+  --c-panel-w: min(94vw, 1280px);
+}
+
 .cosmos-gl-canvas,
 .cosmos-hud-canvas,
 .cosmos-spatial-layer {
@@ -484,7 +488,9 @@
 }
 
 @media (max-width: 768px) {
-  .cosmos-page {
+  .cosmos-page,
+  .cosmos-page.is-workbench-widened,
+  .cosmos-page.is-workbench-maximized {
     --c-panel-w: 100vw;
   }
   .cosmos-page.is-drawer-open .cosmos-corner-actions {

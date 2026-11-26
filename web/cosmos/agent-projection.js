@@ -7,6 +7,164 @@
  * - Relative timestamps for orbit micro-lists and hover cards
  */
 import { shortenPath } from '../utils/path-display.js';
+import { buildProjectTree } from '../stores/helpers/project-tree.js';
+import { legacySidebarCatalogReady } from '../stores/helpers/sidebar-session-catalog.js';
+
+function buildSessionProjectLookup(projects) {
+  const rows = Array.isArray(projects) ? projects : [];
+  const tree = buildProjectTree(rows);
+  const bySessionKey = new Map();
+  for (const project of rows) {
+    if (!project?.id) continue;
+    const pathLabel = tree.pathOf(project.id).map((item) => item.name).filter(Boolean).join(' / ') || project.name || '';
+    const members = Array.isArray(project.members)
+      ? project.members
+      : (project.agentId
+          ? (project.sessionIds || []).map((sessionId) => ({ agentId: project.agentId, sessionId }))
+          : []);
+    for (const member of members) {
+      if (member?.agentId && member?.sessionId) {
+        bySessionKey.set(`${member.agentId}\u001f${member.sessionId}`, {
+          project,
+          pathLabel,
+        });
+      }
+    }
+  }
+  return { tree, bySessionKey };
+}
+
+/**
+ * Flatten a planet's sessions into a collapsible Project folder tree + ungrouped sessions.
+ */
+export function buildCosmosProjectSessionTree(projects, sessions, collapsedIds = new Set()) {
+  const list = Array.isArray(sessions) ? sessions : [];
+  const { tree, bySessionKey } = buildSessionProjectLookup(projects);
+  const rowsByProject = new Map();
+  const ungrouped = [];
+
+  for (const session of list) {
+    const entry = session?.runtimeProvider === 'yeaft'
+      ? bySessionKey.get(`${session.agentId}\u001f${session.id}`)
+      : null;
+    if (entry?.project?.id) {
+      const pid = entry.project.id;
+      if (!rowsByProject.has(pid)) rowsByProject.set(pid, []);
+      rowsByProject.get(pid).push(session);
+    } else {
+      ungrouped.push(session);
+    }
+  }
+
+  const subtreeStats = new Map();
+  const computeStats = (projectId) => {
+    const direct = rowsByProject.get(projectId) || [];
+    let count = direct.length;
+    let hasWaiting = direct.some((s) => s.status === 'waiting');
+    let hasRunning = direct.some((s) => s.status === 'running');
+    for (const child of tree.childrenOf(projectId)) {
+      const cs = computeStats(child.id);
+      count += cs.count;
+      hasWaiting = hasWaiting || cs.hasWaiting;
+      hasRunning = hasRunning || cs.hasRunning;
+    }
+    const stat = { count, hasWaiting, hasRunning };
+    subtreeStats.set(projectId, stat);
+    return stat;
+  };
+  for (const root of tree.childrenOf(null)) computeStats(root.id);
+
+  const items = [];
+  const visit = (parentId, depth) => {
+    for (const project of tree.childrenOf(parentId)) {
+      const stats = subtreeStats.get(project.id);
+      if (!stats || stats.count === 0) continue;
+      const collapsed = collapsedIds.has(project.id);
+      items.push({
+        kind: 'folder',
+        key: `folder:${project.id}`,
+        project,
+        pathLabel: tree.pathOf(project.id).map((p) => p.name).filter(Boolean).join(' / ') || project.name,
+        depth,
+        collapsed,
+        count: stats.count,
+        status: stats.hasWaiting ? 'waiting' : (stats.hasRunning ? 'running' : 'done'),
+      });
+      if (collapsed) continue;
+      visit(project.id, depth + 1);
+      for (const session of (rowsByProject.get(project.id) || [])) {
+        items.push({
+          kind: 'session',
+          key: session.catalogKey || `${session.agentId}:${session.id}`,
+          session,
+          project,
+          depth: depth + 1,
+        });
+      }
+    }
+  };
+  visit(null, 0);
+
+  const hasFolders = items.length > 0;
+  ungrouped.forEach((session, idx) => {
+    items.push({
+      kind: 'session',
+      key: session.catalogKey || `${session.agentId}:${session.id}`,
+      session,
+      project: null,
+      depth: 0,
+      groupStart: hasFolders && idx === 0,
+    });
+  });
+
+  return { items, hasFolders, tree };
+}
+
+/**
+ * Instant multi-token local filter across all Agents' sessions by title, Project path, Agent name, or snippet.
+ */
+export function filterCosmosSessions(allAgents, query, { planetLabelByAgentId = {} } = {}) {
+  const trimmed = typeof query === 'string' ? query.trim().toLowerCase() : '';
+  if (!trimmed) return [];
+  const tokens = trimmed.split(/\s+/).filter(Boolean);
+  const scored = [];
+
+  for (const agent of (Array.isArray(allAgents) ? allAgents : [])) {
+    const agentName = String(agent?.name || agent?.id || '').toLowerCase();
+    const planetName = String(planetLabelByAgentId[agent?.id] || '').toLowerCase();
+    for (const session of (agent?.sessions || [])) {
+      const title = String(session?.title || '').toLowerCase();
+      const projectPath = String(session?.projectPath || session?.projectName || '').toLowerCase();
+      const summary = String(session?.summary || '').toLowerCase();
+      const workDir = String(session?.workDir || '').toLowerCase();
+      const haystack = `${title}\n${projectPath}\n${agentName}\n${planetName}\n${workDir}\n${summary}`;
+      if (!tokens.every((tok) => haystack.includes(tok))) continue;
+
+      let rank = 4;
+      if (title === trimmed) rank = 0;
+      else if (title.startsWith(trimmed)) rank = 1;
+      else if (tokens.every((tok) => title.includes(tok))) rank = 2;
+      else if (projectPath && tokens.every((tok) => projectPath.includes(tok) || title.includes(tok))) rank = 3;
+
+      scored.push({
+        agent,
+        session,
+        rank,
+        statusRank: session.status === 'waiting' ? 0 : (session.status === 'running' ? 1 : 2),
+        updatedAt: session.updatedAt || 0,
+      });
+    }
+  }
+
+  scored.sort((a, b) => (
+    a.rank - b.rank
+    || a.statusRank - b.statusRank
+    || b.updatedAt - a.updatedAt
+    || String(a.session.catalogKey || '').localeCompare(String(b.session.catalogKey || ''))
+  ));
+
+  return scored.map(({ agent, session }) => ({ agent, session, snippet: '' }));
+}
 
 function stripMarkdownPreview(raw) {
   if (!raw || typeof raw !== 'string') return '';
@@ -90,7 +248,33 @@ function inspectLoadedMessages(messages, sessionId) {
  */
 export function projectAgentsForCosmos({ chatStore, sessionsStore, nowMs = Date.now(), isEn = false, t = null }) {
   const agents = Array.isArray(chatStore?.agents) ? chatStore.agents : [];
-  const catalog = Array.isArray(chatStore?.sessionCatalog) ? chatStore.sessionCatalog : [];
+  const hasSidebarCatalog = Array.isArray(chatStore?.sidebarSessionCatalog);
+  const catalog = hasSidebarCatalog
+    ? chatStore.sidebarSessionCatalog
+    : (Array.isArray(chatStore?.sessionCatalog) ? chatStore.sessionCatalog : []);
+  const hiddenCatalog = Array.isArray(chatStore?.hiddenSessionCatalog) ? chatStore.hiddenSessionCatalog : [];
+  const hiddenNativeKeys = new Set();
+  for (const row of hiddenCatalog) {
+    const ref = row?.routeRef;
+    if (ref?.runtimeProvider === 'yeaft' && ref.agentId && ref.sessionId) {
+      hiddenNativeKeys.add(`${ref.agentId}\u001f${ref.sessionId}`);
+    }
+  }
+  const isLegacyCatalogMode = chatStore?.sessionCatalogProtocolSupported === false;
+  const legacyInventoryAccepted = isLegacyCatalogMode
+    && legacySidebarCatalogReady(chatStore)
+    && chatStore?.sidebarSessionCatalogLoading !== true;
+  const catalogAuthoritative = hasSidebarCatalog
+    || chatStore?.sessionCatalogProtocolSupported === true
+    || (isLegacyCatalogMode && !legacyInventoryAccepted)
+    || chatStore?.sessionCatalogLoaded === true
+    || hiddenCatalog.length > 0;
+  const singleLegacyAgentId = legacyInventoryAccepted
+    && agents.length === 1
+    && agents[0]?.id
+    && (!chatStore?.currentAgent || chatStore.currentAgent === agents[0].id)
+    ? agents[0].id
+    : '';
   const yeaftSessions = Array.isArray(sessionsStore?.sessionList)
     ? sessionsStore.sessionList
     : Object.values(sessionsStore?.sessions || {});
@@ -99,12 +283,13 @@ export function projectAgentsForCosmos({ chatStore, sessionsStore, nowMs = Date.
 
   const runningFallback = t ? t('cosmos.panel.runningFallback') : 'Working…';
   const waitingFallback = t ? t('cosmos.panel.waitingFallback') : 'Waiting for input';
+  const { bySessionKey: projectBySessionKey } = buildSessionProjectLookup(chatStore?.sessionProjects || []);
 
   // Index sessionsStore details by `${agentId}\u001f${sessionId}`
   const detailByKey = new Map();
   for (const s of yeaftSessions) {
     if (!s?.id) continue;
-    const aid = s.agentId || chatStore?.currentAgent || '';
+    const aid = s.agentId || singleLegacyAgentId;
     if (aid) detailByKey.set(`${aid}\u001f${s.id}`, s);
   }
 
@@ -119,10 +304,12 @@ export function projectAgentsForCosmos({ chatStore, sessionsStore, nowMs = Date.
 
     const mergedMap = new Map();
 
-    // 1. Pull catalog rows owned by this Agent (Yeaft + CLI)
+    // 1. Pull visible catalog rows owned by this Agent (Yeaft + CLI)
     for (const row of catalog) {
+      if (row?.hidden === true) continue;
       const ref = row?.routeRef;
       if (!ref || ref.agentId !== agentId || !ref.sessionId) continue;
+      if (ref.runtimeProvider === 'yeaft' && hiddenNativeKeys.has(`${agentId}\u001f${ref.sessionId}`)) continue;
       const key = `${ref.runtimeProvider}:${ref.sessionId}`;
       mergedMap.set(key, {
         id: ref.sessionId,
@@ -137,12 +324,19 @@ export function projectAgentsForCosmos({ chatStore, sessionsStore, nowMs = Date.
       });
     }
 
-    // 2. Merge live sessionsStore details for native Yeaft sessions
+    // 2. Enrich visible native Yeaft rows from live sessionsStore.
+    //    Keep sidebar/server catalog membership authoritative; only admit omitted
+    //    ownerless rows (agentId == null) for an unambiguous single Agent once
+    //    legacy inventory readiness and identity checks pass.
     for (const s of yeaftSessions) {
-      if (!s?.id || (s.agentId && s.agentId !== agentId)) continue;
-      if (!s.agentId && agentId !== chatStore?.currentAgent) continue;
+      if (!s?.id || s.hidden === true) continue;
+      const isOwnerlessLegacyRow = !s.agentId && Boolean(singleLegacyAgentId);
+      const ownerAgentId = s.agentId || singleLegacyAgentId;
+      if (!ownerAgentId || ownerAgentId !== agentId) continue;
+      if (hiddenNativeKeys.has(`${agentId}\u001f${s.id}`)) continue;
       const key = `yeaft:${s.id}`;
       const existing = mergedMap.get(key);
+      if (catalogAuthoritative && !existing && !isOwnerlessLegacyRow) continue;
       const updatedMs = Math.max(
         existing?.updatedAt || 0,
         parseMs(s.latestActivityAt),
@@ -188,6 +382,10 @@ export function projectAgentsForCosmos({ chatStore, sessionsStore, nowMs = Date.
         ? (msgInfo.askQuestion || waitingFallback)
         : (msgInfo.latestSnippet || (isProcessing ? runningFallback : (shortenPath(item.workDir || '') || item.title)));
 
+      const projectEntry = isYeaft
+        ? projectBySessionKey.get(`${agentId}\u001f${item.id}`) || null
+        : null;
+
       return {
         ...item,
         status,
@@ -196,6 +394,9 @@ export function projectAgentsForCosmos({ chatStore, sessionsStore, nowMs = Date.
         updatedLabel: formatRelativeTime(updatedMs, nowMs, isEn),
         summary: snippet,
         sceneId: detail?.sceneId || null,
+        projectId: projectEntry?.project?.id || null,
+        projectName: projectEntry?.project?.name || '',
+        projectPath: projectEntry?.pathLabel || '',
       };
     });
 

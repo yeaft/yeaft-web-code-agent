@@ -37,7 +37,7 @@ test.describe('Yeaft Cosmos UI', () => {
           online: true,
           status: 'ready',
           workDir: '/Users/dev/yeaft',
-          capabilities: ['session_auto_route', 'work_center', 'session_scenes'],
+          capabilities: ['session_auto_route', 'work_center', 'session_scenes', 'workbench_session_routes', 'terminal', 'file_editor'],
         },
         {
           id: 'z-agent-cloud',
@@ -45,9 +45,10 @@ test.describe('Yeaft Cosmos UI', () => {
           online: true,
           status: 'ready',
           workDir: '/srv/yeaft-prod',
-          capabilities: ['session_auto_route', 'work_center'],
+          capabilities: ['session_auto_route', 'work_center', 'workbench_session_routes', 'terminal', 'file_editor'],
         },
       ];
+      chat.workbenchRouteProtocolSupported = true;
       chat.currentAgent = agentId;
       chat.yeaftAvailableModels = [
         { id: 'copilot/gpt-6.2-sol', label: 'gpt-6.2-sol', provider: 'copilot', effortOptions: ['medium', 'high', 'xhigh'] },
@@ -67,6 +68,17 @@ test.describe('Yeaft Cosmos UI', () => {
           sortRank: 0,
         },
         {
+          catalogKey: `yeaft:${agentId}:sess-earth-2`,
+          runtimeProvider: 'yeaft',
+          routeRef: { runtimeProvider: 'yeaft', agentId, sessionId: 'sess-earth-2' },
+          title: 'Quick Scratchpad',
+          workDir: '/Users/dev/yeaft',
+          availability: 'online',
+          createdAt: new Date(now - 5400000).toISOString(),
+          metadataUpdatedAt: new Date(now - 50000).toISOString(),
+          sortRank: 1,
+        },
+        {
           catalogKey: 'yeaft:z-agent-cloud:sess-saturn-1',
           runtimeProvider: 'yeaft',
           routeRef: { runtimeProvider: 'yeaft', agentId: 'z-agent-cloud', sessionId: 'sess-saturn-1' },
@@ -75,9 +87,24 @@ test.describe('Yeaft Cosmos UI', () => {
           availability: 'online',
           createdAt: new Date(now - 7200000).toISOString(),
           metadataUpdatedAt: new Date(now - 10000).toISOString(),
-          sortRank: 1,
+          sortRank: 2,
         },
-      ], []);
+      ], [
+        {
+          id: 'proj-yeaft',
+          name: 'Yeaft',
+          parentId: null,
+          sortOrder: 0,
+          members: [{ agentId, sessionId: 'sess-earth-1' }],
+        },
+        {
+          id: 'proj-ops',
+          name: 'Ops',
+          parentId: null,
+          sortOrder: 1,
+          members: [{ agentId: 'z-agent-cloud', sessionId: 'sess-saturn-1' }],
+        },
+      ]);
       chat.yeaftProcessingSessions = { [`${agentId}\u001fsess-earth-1`]: true };
       const convId = `yeaft_${agentId}`;
       chat.yeaftConversationIdsByAgent = { ...(chat.yeaftConversationIdsByAgent || {}), [agentId]: convId };
@@ -131,13 +158,161 @@ test.describe('Yeaft Cosmos UI', () => {
     await page.locator('.cosmos-quick-open-btn').click();
     await expect(page.locator('.cosmos-drawer')).toBeVisible();
     await expect(page.locator('.cosmos-drawer')).toHaveAttribute('data-planet-theme', 'earth');
+    // Verify Project chip appears in header subtitle
+    await expect(page.locator('.cosmos-drawer-project-chip')).toContainText('Yeaft');
     // Verify removed redundant elements (no session pill strip, no dashed meta bar)
     await expect(page.locator('.ap-session-strip')).toHaveCount(0);
     await expect(page.locator('.conv-meta-strip')).toHaveCount(0);
 
-    // Toggle embedded sidebar history via top-left ☰ button
+    // Verify user message outer wrapper is transparent (no nested double-box background)
+    const userMsgBg = await page.locator('.cosmos-drawer .message.user').first().evaluate((el) => {
+      const outer = getComputedStyle(el);
+      const inner = el.querySelector('.message-user-block') ? getComputedStyle(el.querySelector('.message-user-block')) : null;
+      return { outerBg: outer.backgroundColor, outerBorder: outer.borderTopWidth, innerBg: inner?.backgroundColor || '' };
+    });
+    expect(userMsgBg.outerBg).toBe('rgba(0, 0, 0, 0)');
+    expect(userMsgBg.outerBorder).toBe('0px');
+    expect(userMsgBg.innerBg).not.toBe('rgba(0, 0, 0, 0)');
+
+    // Open real Workbench inside Cosmos drawer and verify launcher, Add menu positioning, maximize & 2-step Escape under both themes
+    await page.evaluate(() => document.documentElement.setAttribute('data-theme', 'light'));
+    await page.locator('.cosmos-drawer').getByRole('button', { name: /workbench/i }).click();
+    const wbHost = page.locator('.cosmos-workbench-host');
+    await expect(wbHost).toBeVisible();
+    await expect(wbHost.locator('.workbench-content')).toBeVisible();
+    await expect(wbHost.locator('.workbench-capability-card').first()).toBeVisible();
+
+    // Open a capability, then open Workbench Add (+) menu and assert it stays inside .cosmos-workbench-host (not shifted offscreen by backdrop-filter!)
+    await wbHost.locator('.workbench-capability-card[data-workbench-capability="browser"]').click();
+    const addBtn = wbHost.locator('.workbench-add-btn');
+    await addBtn.click();
+    const addMenu = wbHost.locator('.workbench-add-menu');
+    await expect(addMenu).toBeVisible();
+    const [hostBox, addMenuBox] = await Promise.all([wbHost.boundingBox(), addMenu.boundingBox()]);
+    expect(hostBox).not.toBeNull();
+    expect(addMenuBox).not.toBeNull();
+    expect(addMenuBox.x).toBeGreaterThanOrEqual(hostBox.x - 1);
+    expect(addMenuBox.x + addMenuBox.width).toBeLessThanOrEqual(hostBox.x + hostBox.width + 1);
+    expect(addMenuBox.y).toBeGreaterThanOrEqual(hostBox.y - 1);
+    expect(addMenuBox.y + addMenuBox.height).toBeLessThanOrEqual(hostBox.y + hostBox.height + 1);
+
+    // 1st Escape closes the Add menu and restores focus to the Add button while keeping Workbench open
+    await page.keyboard.press('Escape');
+    await expect(addMenu).toHaveCount(0);
+    await expect(wbHost).toBeVisible();
+    await expect(addBtn).toBeFocused();
+
+    // Click an item inside Add menu to prove it is genuinely clickable in the docked drawer
+    await addBtn.click();
+    await expect(addMenu).toBeVisible();
+    await addMenu.locator('[data-workbench-capability="files"]').click();
+    await expect(wbHost.locator('.workbench-item-tab[data-workbench-item-id="files"]')).toBeVisible();
+
+    // Right-click tab context menu stays strictly inside .cosmos-workbench-host bounds
+    // AND 1st Escape dismisses the tab context menu & restores tab focus without collapsing Workbench
+    const filesTab = wbHost.locator('.workbench-item-tab[data-workbench-item-id="files"]');
+    await filesTab.click({ button: 'right' });
+    const tabCtx = wbHost.locator('.workbench-tab-context-menu');
+    await expect(tabCtx).toBeVisible();
+    const tabCtxBox = await tabCtx.boundingBox();
+    expect(tabCtxBox).not.toBeNull();
+    expect(tabCtxBox.x).toBeGreaterThanOrEqual(hostBox.x - 1);
+    expect(tabCtxBox.x + tabCtxBox.width).toBeLessThanOrEqual(hostBox.x + hostBox.width + 1);
+    await page.keyboard.press('Escape');
+    await expect(tabCtx).toHaveCount(0);
+    await expect(wbHost).toBeVisible();
+    await expect(filesTab.locator('.workbench-item-select')).toBeFocused();
+
+    // Right-click tab context menu -> clicking Add closes tab context menu mutually exclusively,
+    // and Escape closes Add and restores focus to Add (NOT hijacked back to the tab).
+    await wbHost.locator('.workbench-item-tab[data-workbench-item-id="browser"]').click({ button: 'right', position: { x: 8, y: 12 } });
+    await expect(tabCtx).toBeVisible();
+    await addBtn.click();
+    await expect(tabCtx).toHaveCount(0);
+    await expect(addMenu).toBeVisible();
+    await page.keyboard.press('Escape');
+    await expect(addMenu).toHaveCount(0);
+    await expect(wbHost).toBeVisible();
+    await expect(addBtn).toBeFocused();
+
+    // Workbench maximize expands the Cosmos drawer cleanly; keep it maximized so fewer tabs overflow,
+    // open Open Tabs menu, THEN shrink BOTH width (forcing extra overflow rows into the open menu)
+    // AND height while open, asserting the menu gains rows, re-clamps strictly inside the host,
+    // and keeps its final item reachable.
+    const initialDrawerW = (await page.locator('.cosmos-drawer').boundingBox()).width;
+    await wbHost.locator('.workbench-maximize-btn').click();
+    await expect(page.locator('.cosmos-page')).toHaveClass(/is-workbench-maximized/);
+    await expect(async () => {
+      const widenedW = (await page.locator('.cosmos-drawer').boundingBox()).width;
+      expect(widenedW).toBeGreaterThan(initialDrawerW + 120);
+    }).toPass({ timeout: 2000 });
+    await page.evaluate(async () => {
+      const { workbenchRouteKey, workbenchWorkspaceGeneration } = await import('/utils/workbench-route.js');
+      const chat = window.Pinia.useChatStore();
+      const routeKey = workbenchRouteKey(chat.activeSessionRoute);
+      const workDir = chat.effectiveWorkDir || '';
+      const workspaceGeneration = workbenchWorkspaceGeneration(routeKey, workDir);
+      const files = Array.from({ length: 14 }, (_, idx) => ({
+        path: `${workDir || '/Users/dev/yeaft'}/module-${String(idx + 1).padStart(2, '0')}.js`,
+        name: `module-${String(idx + 1).padStart(2, '0')}.js`,
+        isDirty: false,
+      }));
+      window.dispatchEvent(new CustomEvent('workbench-file-items-changed', {
+        detail: { routeKey, workspaceGeneration, files, activePath: files[0].path },
+      }));
+    });
+    const openItemsBtn = wbHost.locator('.workbench-open-items-btn');
+    await expect(openItemsBtn).toBeVisible();
+    await openItemsBtn.click();
+    const openItemsMenu = wbHost.locator('.workbench-open-items-menu');
+    await expect(openItemsMenu).toBeVisible();
+    const initialOverflowCount = await openItemsMenu.locator('.workbench-menu-item').count();
+    expect(initialOverflowCount).toBeGreaterThan(0);
+
+    // Shrink BOTH width (across tab overflow threshold) and height while Open Tabs menu is already open
+    const originalViewport = page.viewportSize() || { width: 1280, height: 720 };
+    await page.setViewportSize({ width: 520, height: 360 });
+    await expect(async () => {
+      const afterOverflowCount = await openItemsMenu.locator('.workbench-menu-item').count();
+      expect(afterOverflowCount).toBeGreaterThan(initialOverflowCount);
+      const [shrunkHostBox, shrunkMenuBox] = await Promise.all([wbHost.boundingBox(), openItemsMenu.boundingBox()]);
+      expect(shrunkHostBox).not.toBeNull();
+      expect(shrunkMenuBox).not.toBeNull();
+      expect(shrunkMenuBox.x).toBeGreaterThanOrEqual(shrunkHostBox.x - 1);
+      expect(shrunkMenuBox.x + shrunkMenuBox.width).toBeLessThanOrEqual(shrunkHostBox.x + shrunkHostBox.width + 1);
+      expect(shrunkMenuBox.y).toBeGreaterThanOrEqual(shrunkHostBox.y - 1);
+      expect(shrunkMenuBox.y + shrunkMenuBox.height).toBeLessThanOrEqual(shrunkHostBox.y + shrunkHostBox.height + 1);
+    }).toPass({ timeout: 3000 });
+    const lastOverflowItem = openItemsMenu.locator('.workbench-menu-item').last();
+    await lastOverflowItem.scrollIntoViewIfNeeded();
+    await expect(lastOverflowItem).toBeVisible();
+    // 1st Escape closes Open Tabs menu and restores focus to Open Tabs trigger
+    await page.keyboard.press('Escape');
+    await expect(openItemsMenu).toHaveCount(0);
+    await expect(wbHost).toBeVisible();
+    await expect(openItemsBtn).toBeFocused();
+    await page.setViewportSize(originalViewport);
+    await wbHost.locator('.workbench-maximize-btn').click();
+    await expect(page.locator('.cosmos-page')).not.toHaveClass(/is-workbench-maximized/);
+
+    // 2nd Escape (with no menu open) collapses Workbench while keeping the drawer open
+    await page.keyboard.press('Escape');
+    await expect(wbHost).toBeHidden();
+    await expect(page.locator('.cosmos-drawer')).toBeVisible();
+    await page.evaluate(() => document.documentElement.setAttribute('data-theme', 'dark'));
+
+    // Toggle embedded sidebar history via top-left ☰ button: verify Project tree & current-Agent-only Session search
     await page.locator('.cosmos-drawer-head-left .cosmos-icon-btn').first().click();
     await expect(page.locator('.cosmos-history-drawer')).toBeVisible();
+    await expect(page.locator('.cosmos-history-folder-name').first()).toContainText('Yeaft');
+    // Current planet session matches cleanly
+    await page.locator('.cosmos-history-search-input').fill('Scratchpad');
+    await expect(page.locator('.cosmos-history-search-hit')).toHaveCount(1);
+    await expect(page.locator('.cosmos-history-search-hit').first()).toContainText('Quick Scratchpad');
+    // Other planet session MUST NOT appear (strictly current Agent search)
+    await page.locator('.cosmos-history-search-input').fill('Ops');
+    await expect(page.locator('.cosmos-history-search-hit')).toHaveCount(0);
+    await page.locator('.cosmos-history-search-clear').click();
     await page.locator('.cosmos-drawer-head-left .cosmos-icon-btn').first().click();
     await expect(page.locator('.cosmos-history-drawer')).toHaveCount(0);
 
@@ -240,9 +415,22 @@ test.describe('Yeaft Cosmos UI', () => {
     await page.evaluate((agentId) => {
       const chat = window.Pinia.useChatStore();
       chat.agents = [
-        { id: agentId, name: 'MacBook-Pro', online: true, status: 'ready', workDir: '/Users/dev/yeaft', capabilities: ['session_auto_route'] },
+        { id: agentId, name: 'MacBook-Pro', online: true, status: 'ready', workDir: '/Users/dev/yeaft', capabilities: ['session_auto_route', 'workbench_session_routes', 'terminal', 'file_editor'] },
         { id: 'z-saturn-node', name: 'Cloud-Linux', online: true, status: 'ready', workDir: '/srv/prod', capabilities: ['session_auto_route'] },
       ];
+      chat.workbenchRouteProtocolSupported = true;
+      chat.applySessionCatalogSnapshot([
+        {
+          catalogKey: `yeaft:${agentId}:sess-mobile-1`,
+          runtimeProvider: 'yeaft',
+          routeRef: { runtimeProvider: 'yeaft', agentId, sessionId: 'sess-mobile-1' },
+          title: 'Mobile Workbench Check',
+          workDir: '/Users/dev/yeaft',
+          availability: 'online',
+          metadataUpdatedAt: new Date().toISOString(),
+          sortRank: 0,
+        },
+      ], []);
     }, mockAgent.agentId);
 
     const earthNode = page.locator('.cosmos-planet-node[data-planet-id="earth"]');
@@ -263,6 +451,17 @@ test.describe('Yeaft Cosmos UI', () => {
     await expect(page.locator('.cosmos-quick-composer')).toBeVisible();
     await page.locator('.cosmos-quick-open-btn').click();
     await expect(page.locator('.cosmos-drawer')).toBeVisible();
+    // Open Workbench on 390px phone and verify Add (+) menu stays inside 390px viewport
+    await page.locator('.cosmos-drawer').getByRole('button', { name: /workbench/i }).click();
+    const mobileWbHost = page.locator('.cosmos-workbench-host');
+    await expect(mobileWbHost).toBeVisible();
+    await mobileWbHost.locator('.workbench-add-btn').click();
+    const mobileMenuBox = await mobileWbHost.locator('.workbench-add-menu').boundingBox();
+    expect(mobileMenuBox).not.toBeNull();
+    expect(mobileMenuBox.x).toBeGreaterThanOrEqual(0);
+    expect(mobileMenuBox.x + mobileMenuBox.width).toBeLessThanOrEqual(390);
+    await mobileWbHost.locator('.workbench-panel-close').click();
+    await expect(mobileWbHost).toBeHidden();
     await page.keyboard.press('Escape');
     await expect(page.locator('.cosmos-drawer')).toHaveCount(0);
 
