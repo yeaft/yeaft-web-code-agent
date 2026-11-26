@@ -32,6 +32,7 @@ import { createDenyAllPluginConfig, normalizePluginConfig } from './plugins.js';
 import { normaliseBrowserRuntimeSection } from '../browser-runtime/config.js';
 import { readWorkspaceFile } from './workspace-file.js';
 import { DEFAULT_LIMITS } from './dream/limits.js';
+import { normalizeSubAgentSceneModels } from './sub-agent/scene-models.js';
 
 /** Default configuration values. */
 const DEFAULTS = {
@@ -541,6 +542,7 @@ export function loadConfig(overrides = {}) {
     primaryModel: overrides.primaryModel || primaryModel,
     fastModel,
     fastModelId,
+    subAgentSceneModels: normalizeSubAgentSceneModels(jsonConfig.subAgentSceneModels),
     decisionModel,
     decisionModelId,
     fallbackModel: jsonConfig.fallbackModel || null,

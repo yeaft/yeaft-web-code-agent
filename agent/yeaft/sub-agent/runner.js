@@ -202,9 +202,9 @@ export function startSubAgent(agent, deps = {}) {
         ? Math.min(explicitOutputCap, modelMaxOutput)
         : modelMaxOutput;
     }
-    if (resolvedSelection.modelSource === 'explicit') {
-      // Fail-closed explicit model override must not silently fall back to an
-      // unrelated parent fallbackModel on transient provider retry exhaustion.
+    if (resolvedSelection.modelSource === 'explicit' || resolvedSelection.modelSource === 'scene-config') {
+      // A selected route must not silently fall back to an unrelated parent
+      // fallbackModel on transient provider retry exhaustion.
       childConfig.fallbackModel = null;
     }
     // Always set childConfig.modelEffort explicitly so ordinary sub-agents

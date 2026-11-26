@@ -262,7 +262,7 @@ Pick a preset persona to pre-wire a tool subset, model routing, and default effo
   - reviewer   : read-only critic with GitRead (inherits current model)
   - researcher : web-facing info gatherer (WebSearch/WebFetch/Read; defaults to fastModel if configured)
   - designer   : read-only architect & decision maker (GitRead/Read/Grep/Glob/ListDir/WebSearch/WebFetch; defaults to effort=xhigh)
-Optionally pass scene to apply domain expertise practices (defaults to the parent Session scene, stripped of human-chat prose), and model/effort only when an explicit override from the configured model catalog is needed.
+Optionally pass scene to apply domain expertise practices (defaults to the parent Session scene, stripped of human-chat prose), and effort only when an explicit override is needed. User-configured scene routes pick the model automatically; only override model for an unmapped scene.
 
 Guidelines:
 - Give a clear, focused mission — what "done" looks like
@@ -290,7 +290,7 @@ stops or finalizes work no longer needed.`,
   - reviewer   : 带 GitRead 的只读审查者（继承当前模型）
   - researcher : 面向网络的信息收集者（WebSearch/WebFetch/Read；优先使用 fastModel）
   - designer   : 只读架构设计与决策者（GitRead/Read/Grep/Glob/ListDir/WebSearch/WebFetch；默认 effort=xhigh）
-可按需传入 scene 指定领域专业准则（默认继承父 Session 的 scene，且仅注入专业标准而非人类聊天语气），并按需用 model/effort 从已配置模型白名单中显式覆写。
+可按需传入 scene 指定领域专业准则（默认继承父 Session 的 scene，且仅注入专业标准而非人类聊天语气），可按需覆写 effort。用户配置的场景路由自动选择模型；仅在没有场景路由时按需覆写 model。
 
 使用指南：
 - 给出清晰聚焦的 mission——"完成"是什么样子
@@ -368,8 +368,8 @@ stops or finalizes work no longer needed.`,
       model: {
         type: 'string',
         description: {
-          en: 'Optional model override from configured availableModels (provider/model or unambiguous modelId). Omit to use persona/parent default.',
-          zh: '可选模型覆写，必须在已配置的 availableModels 白名单内（provider/model 或无歧义 modelId）；省略则按 persona/父模型自动选择。',
+          en: 'Optional model override from configured availableModels (provider/model or unambiguous modelId). A user-configured scene route takes precedence; otherwise omit for the persona/parent default.',
+          zh: '可选模型覆写，必须在已配置的 availableModels 白名单内（provider/model 或无歧义 modelId）；用户配置的场景路由优先，否则省略时使用 persona/父模型默认值。',
         },
       },
       effort: {

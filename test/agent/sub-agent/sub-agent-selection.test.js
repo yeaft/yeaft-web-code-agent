@@ -262,6 +262,32 @@ describe('sub-agent model, effort, scene, and machine protocol', () => {
     expect(noticeZhCn).not.toContain('more)');
   });
 
+  it('applies scene routes to both inherited and explicit scenes before any model override, then resolves effort', () => {
+    const config = mkCatalogConfig({ subAgentSceneModels: {
+      software: 'openai/gpt-5.4', frontend: 'google/gemini-3.8-flash', writing: 'retired/model',
+    } });
+    expect(resolveSubAgentSelection({ config, personaId: 'explorer', parentSceneId: 'software',
+      requestedModel: 'anthropic/claude-sonnet-4.6' })).toMatchObject({
+      model: 'openai/gpt-5.4', modelSource: 'scene-config', sceneSource: 'inherited',
+    });
+    const explicit = { config, personaId: 'designer', parentSceneId: 'software', requestedScene: 'frontend' };
+    expect(resolveSubAgentSelection(explicit)).toMatchObject({
+      model: 'google/gemini-3.8-flash', modelSource: 'scene-config',
+      sceneId: 'frontend', sceneSource: 'explicit', effort: 'high',
+    });
+    expect(resolveSubAgentSelection({ ...explicit, requestedEffort: 'xhigh' })).toMatchObject({
+      ok: false, error: expect.stringContaining('google/gemini-3.8-flash'),
+    });
+    expect(resolveSubAgentSelection({ config, personaId: 'explorer', requestedScene: 'writing' })).toMatchObject({
+      model: 'openai/gpt-5.4-mini', modelSource: 'persona-fast',
+    });
+    expect(resolveSubAgentSelection({ config: { ...config, ambiguousModelRefs: ['openai/gpt-5.4'] },
+      parentSceneId: 'software' })).toMatchObject({ model: config.model, modelSource: 'inherited' });
+    const notice = formatSubAgentModelCatalogNotice({ ...config, availableModels: [config.availableModels[1]] });
+    expect(notice).toContain('software → openai/gpt-5.4');
+    expect(notice).not.toContain('retired/model');
+  });
+
   it('honors explicit targetEffort across OpenAI, Anthropic, and Gemini while preserving legacy medium ceiling by default', () => {
     const parentMax = { effective: 'max', source: 'user', wireMode: 'reasoning-effort', thinkingEnabled: true };
 
@@ -504,13 +530,16 @@ describe('sub-agent model, effort, scene, and machine protocol', () => {
           models: ['gpt-5.4'],
         }],
       });
+      const wireCtx = { ...ctx, parentEngineDeps: { ...deps, adapter: router,
+        config: { ...config, subAgentSceneModels: { software: 'openai/gpt-5.4' } },
+      } };
       const wireSpawn = JSON.parse(await agentTool.execute({
         name: 'wire-designer',
-        mission: 'Verify wire effort',
+        mission: 'Verify the mapped model and effort on the wire',
         persona: 'designer',
-        model: 'openai/gpt-5.4',
-      }, { ...ctx, parentEngineDeps: { ...deps, adapter: router } }));
-      expect(wireSpawn.success).toBe(true);
+        model: 'anthropic/claude-sonnet-4.6',
+      }, wireCtx));
+      expect(wireSpawn).toMatchObject({ success: true, model: 'openai/gpt-5.4', scene: 'software', effort: 'xhigh' });
       spawnedIds.push(wireSpawn.agentId);
       const wireWait = JSON.parse(await waitAgent.execute({ agent_id: wireSpawn.agentId, timeout_ms: 2000 }, { ...ctx, parentEngineDeps: { ...deps, adapter: router } }));
       expect(wireWait.status).toBe(STATUS.IDLE);

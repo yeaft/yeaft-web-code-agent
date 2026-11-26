@@ -80,6 +80,7 @@ export function createPersonChildProvider(provider, selection, instanceConfig = 
   Object.assign(config, {
     model, primaryModel: model, fastModel: model, fastModelId: modelId,
     decisionModel: model, decisionModelId: modelId, secondaryModel: model,
+    subAgentSceneModels: {}, // Person children remain pinned to the delegating episode model.
     fallbackModel: null, modelEffort: effort,
     models: { ...pinModels(config.models, model), primary: model, secondary: model, fast: model, decision: model },
     personaModels: pinModels(config.personaModels, model),

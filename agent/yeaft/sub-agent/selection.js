@@ -6,7 +6,8 @@
  * summaries never drift.
  *
  * Rules:
- *   - Explicit `model` must match an allowed entry in `config.availableModels`
+ *   - A configured, available model for the effective scene takes precedence.
+ *   - Otherwise, explicit `model` must match an allowed entry in `config.availableModels`
  *     (fail-closed: never silently fall back to another model). Supports exact
  *     `provider/model` refs and unambiguous bare `modelId`.
  *   - Omitted `model` routes by persona:
@@ -43,6 +44,7 @@ import { isZhLanguage } from '../prompts.js';
 import { findEffortModelEntry, usesNativeGeminiLevels } from '../sessions/session-config.js';
 import { isSessionSceneId, SESSION_SCENE_IDS } from '../sessions/scene-ids.js';
 import { getPersona } from '../personas.js';
+import { findSceneModelEntry, normalizeSubAgentSceneModels } from './scene-models.js';
 
 const effortRank = value => EFFORT_LEVELS.indexOf(normalizeEffort(value, true));
 
@@ -218,7 +220,7 @@ function resolveInheritedModelRef(parentModel, config) {
  * @returns {{
  *   ok: true,
  *   model: string|null,
- *   modelSource: 'explicit'|'persona-fast'|'inherited',
+ *   modelSource: 'scene-config'|'explicit'|'persona-fast'|'inherited',
  *   modelEntry: object|null,
  *   effort: string|null,
  *   effortSource: 'explicit'|'persona-default'|'inherited',
@@ -256,7 +258,9 @@ export function resolveSubAgentSelection({
     sceneSource = 'inherited';
   }
 
-  // 2. Model resolution (explicit fail-closed > persona fastModel > parent model).
+  // 2. Model resolution (user's scene policy > explicit > fast persona > parent).
+  const configuredSceneModel = sceneId && config?.subAgentSceneModels?.[sceneId];
+  const sceneEntry = findSceneModelEntry(configuredSceneModel, config?.availableModels, config?.ambiguousModelRefs);
   const explicitModel = cleanString(requestedModel);
   const rawInheritedModel = resolveInheritedModelRef(parentModel, config);
   let modelEntry = rawInheritedModel ? findEffortModelEntry(config, rawInheritedModel) || null : null;
@@ -264,7 +268,11 @@ export function resolveSubAgentSelection({
   let model = inheritedModel;
   let modelSource = 'inherited';
 
-  if (explicitModel) {
+  if (sceneEntry) {
+    model = configuredSceneModel;
+    modelEntry = sceneEntry;
+    modelSource = 'scene-config';
+  } else if (explicitModel) {
     const resolved = resolveCatalogModel(explicitModel, config);
     if (!resolved.ok) return resolved;
     model = resolved.model;
@@ -367,8 +375,7 @@ export function resolveSubAgentSelection({
 
 /**
  * Format a compact, single-block model+effort inventory for parent-model context
- * when multiple models are configured. Returns '' when <=1 model is available
- * so single-model sessions pay zero prompt token overhead.
+ * when multiple models or user-configured scene routes are available.
  *
  * @param {object|null} config
  * @param {'en'|'zh'} [language='en']
@@ -376,7 +383,13 @@ export function resolveSubAgentSelection({
  */
 export function formatSubAgentModelCatalogNotice(config, language = 'en') {
   const catalog = Array.isArray(config?.availableModels) ? config.availableModels : [];
-  if (catalog.length <= 1) return '';
+  const sceneRoutes = Object.entries(normalizeSubAgentSceneModels(config?.subAgentSceneModels))
+    .filter(([, ref]) => findSceneModelEntry(ref, catalog, config?.ambiguousModelRefs))
+    .map(([scene, ref]) => `${scene} → ${ref}`);
+  const sceneNotice = sceneRoutes.length === 0 ? '' : isZhLanguage(language)
+    ? `用户配置的 SpawnAgent 场景路由（自动生效，优先于 model 参数，请省略 model）：${sceneRoutes.join('; ')}。`
+    : `User-configured SpawnAgent scene routing applies automatically before any model argument (omit model for mapped scenes): ${sceneRoutes.join('; ')}.`;
+  if (catalog.length <= 1) return sceneNotice;
 
   const seen = new Set();
   const entries = [];
@@ -393,12 +406,12 @@ export function formatSubAgentModelCatalogNotice(config, language = 'en') {
       : '[no-effort]';
     entries.push(`${ref} ${efforts}`);
   }
-  if (entries.length <= 1) return '';
+  if (entries.length <= 1) return sceneNotice;
 
   const truncated = totalUnique > entries.length ? ` (+${totalUnique - entries.length} more)` : '';
   const list = entries.join('; ') + truncated;
-  if (isZhLanguage(language)) {
-    return `SpawnAgent 可选模型与 effort（仅按需覆写；省略 model 时 explorer/researcher 默认优先 fastModel，其余继承当前模型；designer 默认 effort=xhigh，其余默认至少 medium）：${list}`;
-  }
-  return `SpawnAgent available models and efforts (override only when needed; omitting model uses fastModel for explorer/researcher and inherits current model otherwise; designer defaults to effort=xhigh): ${list}`;
+  const notice = isZhLanguage(language)
+    ? `SpawnAgent 可选模型与 effort（没有场景路由时才按需覆写 model；explorer/researcher 默认优先 fastModel，其余继承当前模型；designer 默认 effort=xhigh）：${list}`
+    : `SpawnAgent available models and efforts (override model only for unmapped scenes; defaults to fastModel for explorer/researcher and the current model otherwise; designer defaults to effort=xhigh): ${list}`;
+  return [sceneNotice, notice].filter(Boolean).join('\n');
 }

@@ -1681,6 +1681,16 @@
   min-width: 0;
 }
 
+.llm-tab .llm-route-select {
+  min-height: 42px;
+  margin-bottom: 0;
+  text-overflow: ellipsis;
+}
+
+.llm-model-select-field > .llm-models-hint {
+  display: block;
+}
+
 .llm-model-menu {
   max-height: 220px;
   overflow-y: auto;

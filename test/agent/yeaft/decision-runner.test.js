@@ -70,6 +70,31 @@ describe('protocol-qualified Quick Send configuration', () => {
   });
 });
 
+describe('Agent-owned sub-agent scene routes', () => {
+  it('round-trips through LLM settings and runtime, rejects invalid writes atomically, and retains unavailable routes for repair', () => {
+    const providers = ['p1', 'p2'].map(name => ({ name, baseUrl: `https://${name}.test`, models: ['native', 'router/gpt-small'] }));
+    const dir = createTempYeaftDir({ providers, primaryModel: 'p1/native' });
+    expect(getLlmConfig(dir).agentConfig.subAgentSceneModels).toEqual({});
+    const routes = { software: 'p2/native', frontend: 'p1/router/gpt-small' };
+    const updated = updateLlmConfig({ fastModel: 'p1/native', subAgentSceneModels: routes }, dir);
+    expect(updated.error).toBeUndefined();
+    expect(updated.agentConfig.subAgentSceneModels).toEqual(routes);
+    expect(loadConfig({ dir }).subAgentSceneModels).toEqual(routes);
+    const before = readFileSync(join(dir, 'config.json'), 'utf8');
+    for (const invalid of [[], { notAScene: 'p1/native' }, { general: 'native' }, { general: 'p3/native' }]) {
+      expect(updateLlmConfig({ subAgentSceneModels: invalid }, dir).error).toBeTruthy();
+      expect(readFileSync(join(dir, 'config.json'), 'utf8')).toBe(before);
+    }
+    expect(updateLlmConfig({ providers: [...providers, providers[0]], subAgentSceneModels: { general: 'p1/native' } }, dir).error)
+      .toContain('unambiguous');
+    expect(updateLlmConfig({ providers: providers.slice(0, 1), subAgentSceneModels: routes }, dir).error).toBeUndefined();
+    expect(getLlmConfig(dir).subAgentSceneModels).toEqual(routes);
+    expect(updateLlmConfig({ debug: true }, dir).subAgentSceneModels).toEqual(routes);
+    expect(updateLlmConfig({ fastModel: null, subAgentSceneModels: {} }, dir).subAgentSceneModels).toEqual({});
+    expect(getLlmConfig(dir).fastModel).toBeNull();
+  });
+});
+
 describe('Decision model configuration & scenario-tailored runner', () => {
   it('resolves decisionModel via decisionModel -> fastModel -> primaryModel across config, config-api, and CLI helpers', () => {
     const dir = createTempYeaftDir({

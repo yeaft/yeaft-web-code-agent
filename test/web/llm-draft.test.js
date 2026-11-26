@@ -136,6 +136,43 @@ describe('native Gemini settings', () => {
     expect(wrapper.vm.localDecisionModel).toBeNull();
   });
 
+  it('saves Fast Model and explicit scene routes from the native settings and can restore Auto', async () => {
+    const store = await setup();
+    store.llmConfig['agent-a'] = config('scene-read', { subAgentSceneModels: { software: 'old/model' } });
+    await Vue.nextTick();
+    const findSelect = label => wrapper.findAll('label').find(item => item.text().startsWith(label) && item.find('select').exists()).get('select');
+    const fast = findSelect('Fast Model');
+    const software = findSelect(en['yeaft.session.scene.software']);
+    const frontend = findSelect(en['yeaft.session.scene.frontend']);
+    expect(software.element.value).toBe('old/model');
+    expect(software.get('option:disabled').element.value).toBe('old/model');
+    await software.setValue('');
+    await frontend.setValue('test/model-a');
+    await fast.setValue('test/model-b');
+    await saveButton().trigger('click');
+    const saved = pendingRequest(store);
+    expect(saved.config).toMatchObject({ fastModel: 'test/model-b', subAgentSceneModels: { frontend: 'test/model-a' } });
+    expect(saved.config.subAgentSceneModels).not.toHaveProperty('software');
+
+    store.llmConfig['agent-a'] = config(saved.requestId, saved.config);
+    await Vue.nextTick();
+    expect(frontend.element.value).toBe('test/model-a');
+    await fast.setValue('');
+    await frontend.setValue('');
+    await saveButton().trigger('click');
+    expect(pendingRequest(store).config).toMatchObject({ fastModel: null, subAgentSceneModels: {} });
+  });
+
+  it('keeps Fast Model available with an older Agent without sending unrecognized scene mappings', async () => {
+    const store = await setup();
+    expect(wrapper.text()).toContain('Fast Model');
+    expect(wrapper.text()).not.toContain('Sub-agent models by scene');
+    await wrapper.get('select.llm-route-select').setValue('test/model-b');
+    await saveButton().trigger('click');
+    expect(pendingRequest(store).config.fastModel).toBe('test/model-b');
+    expect(pendingRequest(store).config).not.toHaveProperty('subAgentSceneModels');
+  });
+
   it('replaces OpenAI Compatible with Chat Completions and persists protocol openai-chat-completions explicitly', async () => {
     const store = await setup();
     store.llmConfig['agent-a'] = config('chat-comp-read', {
