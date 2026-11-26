@@ -213,9 +213,10 @@ export default {
         >
           <div
             v-for="item in retryableFailedTurns"
-            :key="item.turnId"
+            :key="item.turnId + ':' + item.retryToken"
             class="typing-status-banner typing-status-banner-agent-offline yeaft-failed-turn-banner"
             :data-retry-turn-id="item.turnId"
+            :data-retry-token="item.retryToken"
           >
             <div class="yeaft-failed-turn-summary">
               <span class="typing-status-text typing-status-error yeaft-failed-turn-message">
@@ -1312,6 +1313,7 @@ export default {
         agentId: item.agentId,
         sessionId: item.sessionId,
         turnId: item.turnId,
+        retryToken: item.retryToken,
         mode,
       });
     }

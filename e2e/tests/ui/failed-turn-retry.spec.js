@@ -4,7 +4,7 @@ import { test } from '../../fixtures/test-server.js';
 
 test.use({ serverEnv: { SERVE_DIST: 'true', YEAFT_LOCAL_RUN: 'true' } });
 
-test('failed native Yeaft Session turn retry status bar, scoping, reconnect, keyboard and narrow layout', async ({ chatPage: page, mockAgent }, info) => {
+test('failed native Yeaft Session turn retry status bar, retryToken fencing, resume, reconnect, keyboard and narrow layout', async ({ chatPage: page, mockAgent }, info) => {
   test.setTimeout(60_000);
   await page.setViewportSize({ width: 1280, height: 840 });
 
@@ -46,7 +46,7 @@ test('failed native Yeaft Session turn retry status bar, scoping, reconnect, key
     };
   });
 
-  // Seed one user message so the retry status bar sits right after the failed turn.
+  // Seed a user turn plus partial assistant text so we can verify resume retains existing text.
   mockAgent.send({
     type: 'yeaft_output',
     conversationId,
@@ -55,9 +55,17 @@ test('failed native Yeaft Session turn retry status bar, scoping, reconnect, key
     turnId: 'turn-1',
     data: { type: 'user', message: { id: 'u-1', content: 'Run the build check' } },
   });
-  await expect(page.locator('.messages')).toContainText('Run the build check');
+  mockAgent.send({
+    type: 'yeaft_output',
+    conversationId,
+    sessionId: sessionA.id,
+    vpId: 'vp-retry',
+    turnId: 'turn-1',
+    data: { type: 'assistant', message: { id: 'a-1', content: [{ type: 'text', text: 'Partial build output' }] } },
+  });
+  await expect(page.locator('.messages')).toContainText('Partial build output');
 
-  // 1) Unknown error (no retryTurnId) must NOT render retry controls.
+  // 1) Unknown error (no retryTurnId/retryToken) must NOT render retry controls.
   mockAgent.send({
     type: 'yeaft_output',
     conversationId,
@@ -68,24 +76,39 @@ test('failed native Yeaft Session turn retry status bar, scoping, reconnect, key
   });
   await expect(page.locator('.yeaft-failed-turn-status-bar')).toHaveCount(0);
 
-  // 2) Retryable error renders controls in message list status bar with exact labels.
+  // 2) Error with retryTurnId + retryToken waits for authoritative session_turns before showing buttons.
   mockAgent.send({
     type: 'yeaft_output',
     conversationId,
     sessionId: sessionA.id,
     vpId: 'vp-retry',
     turnId: 'turn-1',
-    event: { type: 'error', message: '上游连接中断', retryTurnId: 'turn-1', reason: 'stream_idle_timeout' },
+    event: { type: 'error', message: '上游连接中断', retryTurnId: 'turn-1', retryToken: 'tok-1', reason: 'stream_idle_timeout' },
+  });
+  await expect(page.locator('.yeaft-failed-turn-status-bar')).toHaveCount(0);
+
+  // Authoritative session_turns publishes retryableTurns after terminal transition -> bar appears with error text.
+  mockAgent.send({
+    type: 'yeaft_output',
+    conversationId,
+    sessionId: sessionA.id,
+    event: {
+      type: 'session_turns',
+      sessionId: sessionA.id,
+      turns: [],
+      retryableTurns: [{ turnId: 'turn-1', vpId: 'vp-retry', threadId: 'main', retryToken: 'tok-1' }],
+    },
   });
   const bar = page.locator('.messages .yeaft-failed-turn-status-bar');
   await expect(bar).toBeVisible();
   await expect(bar).toContainText('上游连接中断');
-  const plainBtn = bar.locator('[data-retry-turn-id="turn-1"] button[data-retry-mode="plain"]');
-  const compactBtn = bar.locator('[data-retry-turn-id="turn-1"] button[data-retry-mode="compact"]');
+  const banner = bar.locator('[data-retry-turn-id="turn-1"][data-retry-token="tok-1"]');
+  const plainBtn = banner.locator('button[data-retry-mode="plain"]');
+  const compactBtn = banner.locator('button[data-retry-mode="compact"]');
   await expect(plainBtn).toHaveText('重试');
   await expect(compactBtn).toHaveText('压缩工具结果后重试');
 
-  // 3) Click plain retry -> single outbound frame, buttons disabled, duplicate click suppressed.
+  // 3) Click plain retry -> single outbound frame echoing retryToken, buttons disabled, duplicate click suppressed.
   const msgCountBefore = await page.evaluate(cid => (window.Pinia.useChatStore().messagesMap[cid] || []).length, conversationId);
   await plainBtn.click();
   await expect(plainBtn).toBeDisabled();
@@ -99,31 +122,29 @@ test('failed native Yeaft Session turn retry status bar, scoping, reconnect, key
     agentId: mockAgent.agentId,
     sessionId: sessionA.id,
     turnId: 'turn-1',
+    retryToken: 'tok-1',
     mode: 'plain',
   });
   const badFrames = await page.evaluate(() => window.__sentWsFrames.filter(f => ['yeaft_session_send', 'chat', 'yeaft_load_history'].includes(f?.type)));
   expect(badFrames).toHaveLength(0);
   expect(await page.evaluate(cid => (window.Pinia.useChatStore().messagesMap[cid] || []).length, conversationId)).toBe(msgCountBefore);
 
-  // 4) Relay failure ok:false re-enables buttons and surfaces inline error.
-  mockAgent.send({
-    type: 'yeaft_output',
-    conversationId,
-    sessionId: sessionA.id,
-    event: {
+  // 4) Standalone relay failure ok:false re-enables buttons and surfaces inline error string.
+  await page.evaluate(({ sessionId, turnId, requestId }) => {
+    window.Pinia.useChatStore().handleMessage({
       type: 'yeaft_session_retry_result',
-      sessionId: sessionA.id,
-      turnId: 'turn-1',
-      requestId: retryFrames1[0].requestId,
+      sessionId,
+      turnId,
+      requestId,
       ok: false,
       error: 'relay_unavailable',
-    },
-  });
+    });
+  }, { sessionId: sessionA.id, turnId: 'turn-1', requestId: retryFrames1[0].requestId });
   await expect(plainBtn).toBeEnabled();
   await expect(compactBtn).toBeEnabled();
   await expect(bar).toContainText('relay_unavailable');
 
-  // 5) Keyboard activation on compact button sends mode:'compact', ack ok:true clears bar.
+  // 5) Keyboard activation on compact button sends mode:'compact' with retryToken, ack ok:true clears bar.
   await compactBtn.focus();
   await page.keyboard.press('Enter');
   const retryFrames2 = await page.evaluate(() => window.__sentWsFrames.filter(f => f?.type === 'yeaft_session_retry'));
@@ -133,6 +154,7 @@ test('failed native Yeaft Session turn retry status bar, scoping, reconnect, key
     agentId: mockAgent.agentId,
     sessionId: sessionA.id,
     turnId: 'turn-1',
+    retryToken: 'tok-1',
     mode: 'compact',
   });
   await page.evaluate(({ sessionId, turnId, requestId }) => {
@@ -146,25 +168,50 @@ test('failed native Yeaft Session turn retry status bar, scoping, reconnect, key
   }, { sessionId: sessionA.id, turnId: 'turn-1', requestId: retryFrames2[1].requestId });
   await expect(bar).toHaveCount(0);
 
-  // 6) New attempt fails -> same logical turnId restores eligibility.
+  // Resumed vp_turn_start with retry:true retains existing partial assistant text.
   mockAgent.send({
     type: 'yeaft_output',
     conversationId,
     sessionId: sessionA.id,
     vpId: 'vp-retry',
     turnId: 'turn-1',
-    event: { type: 'error', message: '再次尝试仍超时', retryTurnId: 'turn-1' },
+    event: { type: 'vp_turn_start', sessionId: sessionA.id, vpId: 'vp-retry', turnId: 'turn-1', threadId: 'main', retry: true },
   });
-  // Second parallel turn in same session.
+  await expect(page.locator('.messages')).toContainText('Partial build output');
+
+  // 6) New attempt fails -> distinct retryToken restores same logical turnId + second parallel turn.
+  mockAgent.send({
+    type: 'yeaft_output',
+    conversationId,
+    sessionId: sessionA.id,
+    vpId: 'vp-retry',
+    turnId: 'turn-1',
+    event: { type: 'error', message: '再次尝试仍超时', retryTurnId: 'turn-1', retryToken: 'tok-2' },
+  });
   mockAgent.send({
     type: 'yeaft_output',
     conversationId,
     sessionId: sessionA.id,
     vpId: 'vp-retry',
     turnId: 'turn-2',
-    event: { type: 'error', message: '第二轮失败', retryTurnId: 'turn-2' },
+    event: { type: 'error', message: '第二轮失败', retryTurnId: 'turn-2', retryToken: 'tok-3' },
+  });
+  mockAgent.send({
+    type: 'yeaft_output',
+    conversationId,
+    sessionId: sessionA.id,
+    event: {
+      type: 'session_turns',
+      sessionId: sessionA.id,
+      turns: [],
+      retryableTurns: [
+        { turnId: 'turn-1', vpId: 'vp-retry', threadId: 'main', retryToken: 'tok-2' },
+        { turnId: 'turn-2', vpId: 'vp-retry', threadId: 't-2', retryToken: 'tok-3' },
+      ],
+    },
   });
   await expect(page.locator('.yeaft-failed-turn-banner')).toHaveCount(2);
+  await expect(page.locator('[data-retry-turn-id="turn-1"][data-retry-token="tok-2"]')).toBeVisible();
 
   // 7) Session scoping: switching to sessionB hides sessionA's retry bars.
   await page.evaluate(({ agentId, sessionId }) => {
@@ -180,7 +227,7 @@ test('failed native Yeaft Session turn retry status bar, scoping, reconnect, key
   }, { agentId: mockAgent.agentId, sessionId: sessionA.id });
   await expect(page.locator('.yeaft-failed-turn-banner')).toHaveCount(2);
 
-  // 8) Reconnect hides stale bars until authoritative session_turns snapshot restores them.
+  // 8) Reconnect hides stale bars until authoritative session_turns restores them without losing history.
   await page.evaluate(() => {
     const chat = window.Pinia.useChatStore();
     chat.connectionState = 'reconnecting';
@@ -198,11 +245,12 @@ test('failed native Yeaft Session turn retry status bar, scoping, reconnect, key
       type: 'session_turns',
       sessionId: sessionA.id,
       turns: [],
-      retryableTurns: [{ turnId: 'turn-1', vpId: 'vp-retry' }],
+      retryableTurns: [{ turnId: 'turn-1', vpId: 'vp-retry', threadId: 'main', retryToken: 'tok-2' }],
     },
   });
   await expect(page.locator('.yeaft-failed-turn-banner')).toHaveCount(1);
-  await expect(page.locator('[data-retry-turn-id="turn-1"]')).toBeVisible();
+  await expect(page.locator('[data-retry-turn-id="turn-1"][data-retry-token="tok-2"]')).toBeVisible();
+  await expect(page.locator('.messages')).toContainText('Run the build check');
 
   // 9) Visual & layout verification at 320px narrow width in light and dark themes (no horizontal overflow).
   await page.setViewportSize({ width: 320, height: 640 });
@@ -218,14 +266,17 @@ test('failed native Yeaft Session turn retry status bar, scoping, reconnect, key
   expect(darkOverflow).toBe(false);
   await page.screenshot({ path: info.outputPath('failed-turn-retry-320-dark.png') });
 
-  // 10) Terminal completion clears the bar.
+  // 10) Authoritative empty retryableTurns clears the bar.
   mockAgent.send({
     type: 'yeaft_output',
     conversationId,
     sessionId: sessionA.id,
-    vpId: 'vp-retry',
-    turnId: 'turn-1',
-    event: { type: 'vp_turn_end', sessionId: sessionA.id, vpId: 'vp-retry', turnId: 'turn-1', reason: 'end_turn' },
+    event: {
+      type: 'session_turns',
+      sessionId: sessionA.id,
+      turns: [],
+      retryableTurns: [],
+    },
   });
   await expect(page.locator('.yeaft-failed-turn-banner')).toHaveCount(0);
 });

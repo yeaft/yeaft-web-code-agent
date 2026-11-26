@@ -127,6 +127,7 @@ import {
   clearYeaftRetryableTurnsForScope,
   handleYeaftTurnRetryResult,
   interruptYeaftTurnRetries,
+  prepareYeaftTurnForRetryResume,
   reconcileYeaftRetryableTurns,
   recordYeaftRetryableError,
   requestYeaftTurnRetry,
@@ -4074,8 +4075,8 @@ export const useChatStore = defineStore('chat', {
       }
     },
 
-    retryYeaftFailedTurn({ agentId, sessionId, turnId, mode = 'plain' } = {}) {
-      return requestYeaftTurnRetry(this, { agentId, sessionId, turnId, mode });
+    retryYeaftFailedTurn({ agentId, sessionId, turnId, retryToken = null, mode = 'plain' } = {}) {
+      return requestYeaftTurnRetry(this, { agentId, sessionId, turnId, retryToken, mode });
     },
 
     handleYeaftTurnRetryResult(msg) {
@@ -6480,6 +6481,15 @@ export const useChatStore = defineStore('chat', {
             turnId: event.turnId,
             clearVpError: true,
           });
+          if (event.retry === true) {
+            prepareYeaftTurnForRetryResume(this, {
+              agentId: msg.agentId || null,
+              sessionId: event.sessionId || msg.sessionId || null,
+              vpId: event.vpId,
+              turnId: event.turnId,
+              conversationId: resolveYeaftEnvelopeConversationId(this, msg.agentId || null, msg.conversationId),
+            });
+          }
           const turnKey = yeaftTurnIdentityKey(msg.agentId || null, event.turnId) || event.turnId;
           this.activeVpTurns = {
             ...this.activeVpTurns,
