@@ -21,6 +21,7 @@ export default {
     warpingToId: { type: String, default: '' },
     planetFocused: { type: Boolean, default: false },
     drawerOpen: { type: Boolean, default: false },
+    panned: { type: Boolean, default: false },
   },
   emits: [
     'toggle-soar',
@@ -29,6 +30,7 @@ export default {
     'return-sol',
     'set-speed',
     'toggle-autopilot',
+    'recenter',
   ],
   template: `
     <div v-if="visible" class="cosmos-voyage-layer" :class="{ 'is-atlas-open': atlasOpen }" @pointerdown.stop>
@@ -162,6 +164,13 @@ export default {
           <span class="cosmos-voyage-dot" :style="{ background: activeSystem.accent, boxShadow: '0 0 8px ' + activeSystem.accent }" aria-hidden="true"></span>
           <span class="cosmos-voyage-dock-title">{{ $t('cosmos.voyage.systems.' + activeSystem.id + '.name') }}</span>
           <span class="cosmos-voyage-dock-meta">{{ activeSystem.spectral }}</span>
+          <button
+            v-if="panned"
+            type="button"
+            class="cosmos-ewd-btn"
+            :title="$t('cosmos.scale.recenterTitle')"
+            @click="$emit('recenter')"
+          >{{ $t('cosmos.scale.recenterShort') }}</button>
           <button
             type="button"
             class="cosmos-ewd-btn"

@@ -19,6 +19,9 @@ export const zhCN = {
   'cosmos.scale.homeSolar': '☉ 太阳系',
   'cosmos.scale.escapeSolar': '☉ 脱离视界',
   'cosmos.scale.resetView': '观测视角已复位',
+  'cosmos.scale.recenter': '☉ 归中',
+  'cosmos.scale.recenterShort': '归中',
+  'cosmos.scale.recenterTitle': '画布归中并复位视角（左键拖动画布 · 右键或 Shift+左键转视角 · 双击画布复位）',
 
   'cosmos.planets.mercury.name': '水星',
   'cosmos.planets.mercury.theme': '灼日金属舱',
@@ -341,6 +344,9 @@ export const en = {
   'cosmos.scale.homeSolar': '☉ Solar System',
   'cosmos.scale.escapeSolar': '☉ Escape Horizon',
   'cosmos.scale.resetView': 'Camera view reset',
+  'cosmos.scale.recenter': '☉ Recenter',
+  'cosmos.scale.recenterShort': 'Recenter',
+  'cosmos.scale.recenterTitle': 'Recenter canvas & reset camera (Left-drag to pan · Right-drag or Shift+drag to orbit · Double-click to reset)',
 
   'cosmos.planets.mercury.name': 'Mercury',
   'cosmos.planets.mercury.theme': 'Solar Chrome Bay',

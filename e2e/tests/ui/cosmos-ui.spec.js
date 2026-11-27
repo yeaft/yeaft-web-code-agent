@@ -1121,4 +1121,103 @@ test.describe('Yeaft Cosmos UI', () => {
 
     expect(errors).toEqual([]);
   });
+
+  test('supports left-drag canvas panning, right-drag 3D orbiting, floating recenter button, and auto-recenter on planet focus', async ({ page, serverUrl }) => {
+    test.setTimeout(60000);
+    const errors = [];
+    page.on('pageerror', (err) => errors.push(err.message));
+    page.on('console', (msg) => {
+      if (msg.type() === 'error') errors.push(msg.text());
+    });
+
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await page.goto(serverUrl);
+    await expect(page.locator('.cosmos-page')).toBeVisible({ timeout: 15000 });
+    await expect(page.locator('.cosmos-gl-canvas')).toBeVisible();
+
+    // Pause orbital motion via Cosmic Constants so planet position delta cleanly reflects canvas pan
+    await page.locator('.cosmos-corner-actions .cosmos-corner-icon').first().click();
+    await expect(page.locator('.cosmos-constants-popover')).toBeVisible();
+    const speedSlider = page.locator('.cosmos-constants-popover input[type="range"]').first();
+    await speedSlider.fill('0');
+    await speedSlider.dispatchEvent('input');
+    await page.keyboard.press('Escape');
+    await expect(page.locator('.cosmos-constants-popover')).toHaveCount(0);
+
+    const earthNode = page.locator('.cosmos-planet-node[data-planet-id="earth"]');
+    await expect(earthNode.locator('.cosmos-planet-tag')).toBeVisible({ timeout: 5000 });
+
+    const getEarthTranslate = () => earthNode.evaluate((el) => {
+      const m = /translate\(([-\d.]+)px,\s*([-\d.]+)px\)/.exec(el.style.transform || '');
+      return m ? { x: Number(m[1]), y: Number(m[2]) } : null;
+    });
+
+    const beforePan = await getEarthTranslate();
+    expect(beforePan).not.toBeNull();
+    await expect(page.locator('.cosmos-pan-reset-btn')).toHaveCount(0);
+
+    // 1. Left-button drag on open space pans the entire Solar System canvas right & down
+    await page.mouse.move(640, 180);
+    await page.mouse.down({ button: 'left' });
+    await page.mouse.move(860, 320, { steps: 10 });
+    await page.mouse.up({ button: 'left' });
+
+    const recenterBtn = page.locator('.cosmos-pan-reset-btn');
+    await expect(recenterBtn).toBeVisible({ timeout: 3000 });
+
+    await expect.poll(async () => {
+      const pos = await getEarthTranslate();
+      return pos ? pos.x - beforePan.x : 0;
+    }, { timeout: 3000 }).toBeGreaterThan(120);
+
+    await expect.poll(async () => {
+      const pos = await getEarthTranslate();
+      return pos ? pos.y - beforePan.y : 0;
+    }, { timeout: 3000 }).toBeGreaterThan(70);
+
+    // 2. Right-button drag adjusts 3D orbit angle without opening context menu or clearing recenter pill
+    await page.mouse.move(640, 180);
+    await page.mouse.down({ button: 'right' });
+    await page.mouse.move(760, 120, { steps: 8 });
+    await page.mouse.up({ button: 'right' });
+    await expect(recenterBtn).toBeVisible();
+
+    // 3. Clicking floating Recenter pill smoothly restores Solar System to center and hides the pill
+    await recenterBtn.click();
+    await expect(recenterBtn).toHaveCount(0);
+    await expect.poll(async () => {
+      const pos = await getEarthTranslate();
+      return pos ? Math.hypot(pos.x - beforePan.x, pos.y - beforePan.y) : 999;
+    }, { timeout: 4000 }).toBeLessThan(40);
+
+    // 4. Pan again, then double-click open canvas to recenter
+    await page.mouse.move(640, 180);
+    await page.mouse.down({ button: 'left' });
+    await page.mouse.move(800, 260, { steps: 8 });
+    await page.mouse.up({ button: 'left' });
+    await expect(recenterBtn).toBeVisible();
+    await page.mouse.dblclick(640, 180);
+    await expect(recenterBtn).toHaveCount(0);
+
+    // 5. Pan again, then click Earth -> auto-recenters pan and opens Planet Focus dock
+    await page.mouse.move(640, 180);
+    await page.mouse.down({ button: 'left' });
+    await page.mouse.move(800, 260, { steps: 8 });
+    await page.mouse.up({ button: 'left' });
+    await expect(recenterBtn).toBeVisible();
+    await page.waitForTimeout(350);
+    const pannedEarth = await getEarthTranslate();
+    expect(pannedEarth).not.toBeNull();
+    await page.mouse.click(pannedEarth.x, pannedEarth.y);
+    await expect(recenterBtn).toHaveCount(0);
+    await expect(page.locator('.cosmos-planet-focus-dock')).toBeVisible();
+    if (await page.locator('.settings-overlay').isVisible()) {
+      await page.keyboard.press('Escape');
+      await expect(page.locator('.settings-overlay')).toHaveCount(0);
+    }
+    await page.locator('.cosmos-pf-return').click();
+    await expect(page.locator('.cosmos-planet-focus-dock')).toHaveCount(0);
+
+    expect(errors).toEqual([]);
+  });
 });
