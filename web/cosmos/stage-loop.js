@@ -35,6 +35,25 @@ function smoothstep(e0, e1, x) {
 }
 
 /**
+ * Maximum normalized canvas pan radius (in units of current orbital span).
+ * Allows shifting the star off-center or near the viewport edge without losing the system.
+ */
+export const CAM_PAN_MAX = 0.85;
+
+/**
+ * Soft radial clamp for normalized Solar/Star-System canvas pan offset.
+ */
+export function clampCamPan(x, y, maxPan = CAM_PAN_MAX) {
+  const nx = Number.isFinite(x) ? x : 0;
+  const ny = Number.isFinite(y) ? y : 0;
+  const limit = Math.max(0.05, Number.isFinite(maxPan) ? maxPan : CAM_PAN_MAX);
+  const dist = Math.hypot(nx, ny);
+  if (dist <= limit || dist <= 1e-6) return { x: nx, y: ny };
+  const scale = limit / dist;
+  return { x: nx * scale, y: ny * scale };
+}
+
+/**
  * Pure aspect-aware Solar System layout calculator.
  * - Desktop / landscape: panoramic wide-field framing with dramatic perspective tilt.
  * - Portrait mobile (e.g. 390x844): keeps all 8 planet orbits comfortably inside viewport
@@ -47,6 +66,8 @@ export function computeSolarProjectionLayout(w, h, opts = {}) {
     parallaxX = 0,
     parallaxY = 0,
     camRotY = 0,
+    camPanX = 0,
+    camPanY = 0,
   } = opts;
 
   const safeW = Math.max(w || 1, 1);
@@ -58,16 +79,16 @@ export function computeSolarProjectionLayout(w, h, opts = {}) {
     const span = Math.min(safeW * 0.44, safeH * 0.35) * solarZoom;
     const baseTilt = Math.max(0.62, Math.min(1.12, (safeH / safeW) * 0.46));
     const tilt = Math.max(0.48, Math.min(1.22, baseTilt + camRotY * 0.34 + parallaxY * 0.03));
-    const cx = safeW * 0.50 + centerShiftX + parallaxX * 8;
-    const cy = safeH * 0.48 + parallaxY * 8;
+    const cx = safeW * 0.50 + centerShiftX + parallaxX * 8 + camPanX * span;
+    const cy = safeH * 0.48 + parallaxY * 8 + camPanY * span;
     const sunRadius = Math.max(17, Math.min(safeW * 0.068, 30) * solarZoom);
     const planetScale = (Math.max(Math.min(safeW, safeH), 510) / 900) * Math.min(28.0, solarZoom);
     return { isPortrait, isCompact, cx, cy, span, tilt, sunRadius, planetScale };
   }
 
-  const cx = safeW * 0.50 + centerShiftX + parallaxX * 14;
-  const cy = safeH * 0.51 + parallaxY * 10;
   const span = Math.max(safeW * 0.56, safeH * 0.88) * solarZoom;
+  const cx = safeW * 0.50 + centerShiftX + parallaxX * 14 + camPanX * span;
+  const cy = safeH * 0.51 + parallaxY * 10 + camPanY * span;
   const tilt = Math.max(0.24, Math.min(0.68, 0.40 + camRotY * 0.34 + parallaxY * 0.03));
   const sunRadius = Math.max(18, Math.min(safeW, safeH) * 0.068 * solarZoom);
   const planetScale = (Math.min(safeW, safeH) / 900) * Math.min(28.0, solarZoom);
@@ -96,7 +117,7 @@ export function stepCosmosFrame(now, ctx) {
   const {
     engine, anim, eventSim, voyage, pools, webGraph, getWebGraph, gpuParticles, eventGpuParticles,
     constants, domRefs, getAgentsByPlanet, getGalaxyBooks,
-    getUiState, onBandChange, onSyncEvents, onSyncVoyage, onUpdateHoverPos, formatEventLabel,
+    getUiState, onBandChange, onSyncEvents, onSyncVoyage, onPanAutoReset, onUpdateHoverPos, formatEventLabel,
   } = ctx;
 
   const dt = Math.min(0.05, Math.max(0.001, (now - anim.lastTs) / 1000));
@@ -190,6 +211,12 @@ export function stepCosmosFrame(now, ctx) {
   anim.parallax.y += (anim.parallax.ty - anim.parallax.y) * Math.min(1, dt * 4.2);
   anim.camRot.x += (anim.camRot.tx - anim.camRot.x) * Math.min(1, dt * 5.2);
   anim.camRot.y += (anim.camRot.ty - anim.camRot.y) * Math.min(1, dt * 5.2);
+  if (!anim.camPan) anim.camPan = { x: 0, y: 0, tx: 0, ty: 0 };
+  const panLerp = Math.min(1, dt * (reducedMotion ? 16.0 : 6.4));
+  anim.camPan.x += (anim.camPan.tx - anim.camPan.x) * panLerp;
+  anim.camPan.y += (anim.camPan.ty - anim.camPan.y) * panLerp;
+  if (anim.camPan.tx === 0 && Math.abs(anim.camPan.x) < 0.0004) anim.camPan.x = 0;
+  if (anim.camPan.ty === 0 && Math.abs(anim.camPan.y) < 0.0004) anim.camPan.y = 0;
 
   const { width: w, height: h, dpr } = engine.getSize();
   const aspect = w / Math.max(h, 1);
@@ -224,14 +251,30 @@ export function stepCosmosFrame(now, ctx) {
   const baseSolarZoom = Math.pow(1.42, 13.0 - s) * panelScaleFactor * telescope.zoomMul * voyageZoomMul;
   const solarZoom = baseSolarZoom * pfZoomFactor;
 
+  // Smoothly pull pan back to center when approaching Black Hole Event Horizon, focusing a planet,
+  // observing a cosmic event, soaring, or leaving the Solar System band.
+  if (isHomeSystem && s < 11.2 && anim.targetScaleLog < 11.2 && (anim.camPan.tx !== 0 || anim.camPan.ty !== 0)) {
+    anim.camPan.tx = 0;
+    anim.camPan.ty = 0;
+    onPanAutoReset?.();
+  }
+  const bhPanWeight = isHomeSystem ? smoothstep(10.5, 11.4, s) : 1.0;
+  const outPanWeight = smoothstep(16.6, 15.6, s);
+  const panWeight = (1.0 - pf.blend) * (1.0 - soarBlend) * (1.0 - telescope.focus) * bhPanWeight * outPanWeight;
+  const effectivePanX = anim.camPan.x * panWeight;
+  const effectivePanY = anim.camPan.y * panWeight;
+
   const layout = computeSolarProjectionLayout(w, h, {
     solarZoom,
     centerShiftX: anim.centerShiftX,
     parallaxX: anim.parallax.x * (1.0 - pf.blend * 0.85),
     parallaxY: anim.parallax.y * (1.0 - pf.blend * 0.85),
     camRotY: anim.camRot.y,
+    camPanX: effectivePanX,
+    camPanY: effectivePanY,
   });
   const { isPortrait, isCompact, span, tilt, sunRadius, planetScale } = layout;
+  anim.lastSpan = span;
 
   const yawCos = Math.cos(anim.camRot.x * 0.38);
   const yawSin = Math.sin(anim.camRot.x * 0.38);
@@ -620,11 +663,16 @@ export function stepCosmosFrame(now, ctx) {
 
   const { skyTint, soarVec } = getVoyageSkyUniforms(voyage);
 
+  const effectiveParallax = {
+    x: anim.parallax.x + effectivePanX * 0.42,
+    y: anim.parallax.y + effectivePanY * 0.42,
+  };
+
   engine.renderFrame({
     time: anim.time,
     realTime: anim.realTime,
     scaleLog: s,
-    parallax: anim.parallax,
+    parallax: effectiveParallax,
     camRot: effectiveCamRot,
     warp: anim.warpEnergy,
     fovZoom: eventSim.fovZoom,

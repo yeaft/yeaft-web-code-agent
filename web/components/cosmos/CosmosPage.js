@@ -56,7 +56,7 @@ import {
   getActiveStarSystem,
   formatSystemDistance,
 } from '../../cosmos/star-systems.js';
-import { stepCosmosFrame } from '../../cosmos/stage-loop.js';
+import { stepCosmosFrame, clampCamPan } from '../../cosmos/stage-loop.js';
 import { projectAgentsForCosmos } from '../../cosmos/agent-projection.js';
 import { buildCosmosSignalStream } from '../../cosmos/signal-stream.js';
 import { getLocale } from '../../utils/i18n.js';
@@ -105,7 +105,7 @@ export default {
       :style="cosmosPageStyle"
       @wheel="onStageWheel"
     >
-      <canvas ref="glCanvasRef" :key="canvasEpoch" class="cosmos-gl-canvas" :class="{ 'is-orbiting': camOrbiting }" @pointerdown="onCanvasPointerDown" @dblclick="onCanvasDblClick"></canvas>
+      <canvas ref="glCanvasRef" :key="canvasEpoch" class="cosmos-gl-canvas" :class="{ 'is-orbiting': camOrbiting }" @pointerdown="onCanvasPointerDown" @dblclick="onCanvasDblClick" @contextmenu="onCanvasContextMenu"></canvas>
       <canvas ref="hudCanvasRef" class="cosmos-hud-canvas"></canvas>
 
       <!-- Spatial Interactive Layer (Zero-VDOM-diff direct transform updates via refs) -->
@@ -306,12 +306,14 @@ export default {
         :warping-to-id="voyageWarpingToId"
         :planet-focused="Boolean(focusedCameraPlanetId)"
         :drawer-open="drawerOpen"
+        :panned="canvasPanned"
         @toggle-soar="onToggleSoar"
         @select-system="onSelectStarSystem"
         @next-system="onNextStarSystem"
         @return-sol="onReturnToSol"
         @set-speed="onSetSoarSpeed"
         @toggle-autopilot="onToggleSoarAutoPilot"
+        @recenter="resetCanvasPan({ withView: true })"
       />
 
       <!-- Top-Center Cosmic Event Countdown, Stop Control & Telescope Watch Dock -->
@@ -385,6 +387,16 @@ export default {
           @click="unfocusPlanet"
         >{{ voyageSystemId === 'sol' ? $t('cosmos.planetFocus.returnSun') : $t('cosmos.voyage.returnCenter') }}</button>
       </div>
+
+      <!-- Minimal Floating Recenter Pill when Solar System canvas is panned off-center -->
+      <button
+        v-if="canvasPanned && currentBand === 'solar' && voyageSystemId === 'sol' && !focusedCameraPlanetId && !isObservingEvent && !voyageSoaring && !voyageWarpingToId && !quickAgent"
+        type="button"
+        class="cosmos-pan-reset-btn"
+        :title="$t('cosmos.scale.recenterTitle')"
+        @pointerdown.stop
+        @click.stop="resetCanvasPan({ withView: true })"
+      >{{ $t('cosmos.scale.recenter') }}</button>
 
       <!-- Cross-Scale Gravity Alert -->
       <button
@@ -845,6 +857,7 @@ export default {
     const focusedCameraPlanetId = Vue.ref(null);
     const planetFocusZoom = Vue.ref(1.0);
     const planetFocusRotated = Vue.ref(false);
+    const canvasPanned = Vue.ref(false);
 
     // Interstellar Soaring & Multi-System Sightseeing state
     const voyage = createVoyageState();
@@ -899,11 +912,14 @@ export default {
       const next = toggleSoarMode(voyage, typeof forceState === 'boolean' ? forceState : null);
       if (next) {
         unfocusPlanet();
+        resetCanvasPan({ silent: true });
         hideHoverImmediate();
         emptyPlanetMenu.value = null;
         quickAgentId.value = null;
         if (drawerOpen.value) closeDrawer();
         showToast($t('cosmos.voyage.soarStartedToast'));
+      } else {
+        resetCanvasPan({ silent: true });
       }
       syncVoyageRefs();
     }
@@ -918,6 +934,7 @@ export default {
         anim.targetScaleLog = 13.0;
       }
       unfocusPlanet();
+      resetCanvasPan({ silent: true });
       hideHoverImmediate();
       emptyPlanetMenu.value = null;
       if (targetId !== 'sol') {
@@ -976,6 +993,8 @@ export default {
       scaleLog: 13.0, targetScaleLog: 13.0, warpEnergy: 0,
       parallax: { x: 0, y: 0, tx: 0, ty: 0 },
       camRot: { x: 0, y: 0, tx: 0, ty: 0 },
+      camPan: { x: 0, y: 0, tx: 0, ty: 0 },
+      lastSpan: 520,
       centerShiftX: 0, targetCenterShiftX: 0,
       mouseX: -999, mouseY: -999,
       hoverPlanetId: null, focusedPlanetId: null,
@@ -998,8 +1017,20 @@ export default {
       drag: null, camDrag: null, constants,
     };
 
+    function resetCanvasPan({ withView = false, silent = false } = {}) {
+      anim.camPan.tx = 0;
+      anim.camPan.ty = 0;
+      canvasPanned.value = false;
+      if (withView) {
+        anim.camRot.tx = 0;
+        anim.camRot.ty = 0;
+      }
+      if (!silent) showToast($t('cosmos.scale.resetView'));
+    }
+
     function focusPlanet(planetId, { defaultZoom = 2.2 } = {}) {
       if (!planetId) return;
+      resetCanvasPan({ silent: true });
       if (eventSim.active?.observing) {
         unfocusCosmicEvent(eventSim);
         syncEventRefs();
@@ -1173,6 +1204,7 @@ export default {
 
     function jumpToScale(targetLog) {
       unfocusPlanet();
+      resetCanvasPan({ silent: true });
       const targetBand = scaleBand(Math.max(7.0, Math.min(24.0, targetLog)));
       if (voyage.soaring || voyage.warp || (targetBand === 'horizon' && voyage.systemId !== 'sol')) {
         voyage.soaring = false;
@@ -1233,8 +1265,14 @@ export default {
       cancelPlanetDrag();
     }
 
+    function onCanvasContextMenu(e) {
+      if (currentBand.value === 'solar' || anim.camDrag) {
+        e.preventDefault();
+      }
+    }
+
     function onCanvasPointerDown(e) {
-      if (e.pointerType !== 'touch' && e.button !== 0) return;
+      if (e.pointerType !== 'touch' && e.button !== 0 && e.button !== 2) return;
       emptyPlanetMenu.value = null;
       constantsOpen.value = false;
       signalPopoverOpen.value = false;
@@ -1246,16 +1284,24 @@ export default {
           return;
         }
       }
+      const isRightOrShiftOrbit = e.pointerType !== 'touch' && (e.button === 2 || (e.button === 0 && e.shiftKey));
       const mode = eventSim.active?.observing
         ? 'event'
         : (voyage.soaring
           ? 'soar'
-          : (anim.planetFocus.planetId ? 'planet' : 'solar'));
+          : (anim.planetFocus.planetId
+            ? 'planet'
+            : (currentBand.value === 'solar' && !isRightOrShiftOrbit ? 'solar-pan' : 'solar-orbit')));
       anim.camDrag = {
         pointerId: e.pointerId ?? null,
+        pointerType: e.pointerType || 'mouse',
+        button: e.button ?? 0,
         mode,
         startX: e.clientX,
         startY: e.clientY,
+        panX0: anim.camPan.tx,
+        panY0: anim.camPan.ty,
+        span0: anim.lastSpan || 520,
         yaw0: mode === 'event'
           ? (eventSim.active?.targetViewYaw || 0)
           : (mode === 'soar'
@@ -1355,8 +1401,7 @@ export default {
         showToast($t('cosmos.scale.resetView'));
         return;
       }
-      anim.camRot.tx = 0; anim.camRot.ty = 0;
-      showToast($t('cosmos.scale.resetView'));
+      resetCanvasPan({ withView: true, silent: false });
     }
 
     function onCanvasDblClick(e) {
@@ -1465,6 +1510,9 @@ export default {
               const minScale = voyage.systemId === 'sol' ? 7.0 : 11.2;
               anim.targetScaleLog = Math.max(minScale, Math.min(24.0, anim.targetScaleLog + step));
               anim.warpEnergy = Math.min(1.0, anim.warpEnergy + Math.min(0.45, Math.abs(step) * 0.65));
+              if (voyage.systemId === 'sol' && anim.targetScaleLog < 11.2 && canvasPanned.value) {
+                resetCanvasPan({ silent: true });
+              }
               hideHoverImmediate();
               if (scaleBand(anim.targetScaleLog) !== 'solar') {
                 quickAgentId.value = null;
@@ -1521,6 +1569,15 @@ export default {
           anim.planetFocus.targetInspectYaw = anim.camDrag.yaw0 + dx * 0.0075;
           anim.planetFocus.targetInspectPitch = Math.max(-1.05, Math.min(1.05, anim.camDrag.pitch0 + dy * 0.0055));
           planetFocusRotated.value = Math.abs(anim.planetFocus.targetInspectYaw) > 0.04 || Math.abs(anim.planetFocus.targetInspectPitch) > 0.04;
+        } else if (anim.camDrag.mode === 'solar-pan') {
+          const baseSpan = Math.max(160, anim.camDrag.span0 || anim.lastSpan || 480);
+          const nextPan = clampCamPan(
+            anim.camDrag.panX0 + dx / baseSpan,
+            anim.camDrag.panY0 + dy / baseSpan,
+          );
+          anim.camPan.tx = nextPan.x;
+          anim.camPan.ty = nextPan.y;
+          canvasPanned.value = Math.hypot(anim.camPan.tx, anim.camPan.ty) > 0.025;
         } else {
           anim.camRot.tx = Math.max(-0.85, Math.min(0.85, anim.camDrag.yaw0 + dx * 0.0024));
           anim.camRot.ty = Math.max(-0.42, Math.min(0.45, anim.camDrag.pitch0 + dy * 0.0022));
@@ -1591,15 +1648,17 @@ export default {
       }
       if (matchesDragPointer(anim.camDrag, e)) {
         const moved = anim.camDrag.moved;
+        const isPrimaryClick = anim.camDrag.pointerType === 'touch' || anim.camDrag.button === 0;
         const clickX = e.clientX;
         const clickY = e.clientY;
         cancelCamDrag();
-        if (!moved) {
+        if (!moved && isPrimaryClick) {
           // 1. Direct click on an unfolding ambient cosmic event on the shared canvas
           if (currentBand.value === 'solar' && !eventSim.active?.observing) {
             const hitEv = hitTestAmbientEvent(anim.lastEventFrames, clickX, clickY);
             if (hitEv) {
               unfocusPlanet();
+              resetCanvasPan({ silent: true });
               const act = focusCosmicEventByUid(eventSim, hitEv.uid);
               hideHoverImmediate();
               quickAgentId.value = null;
@@ -1675,6 +1734,9 @@ export default {
       const minScale = voyage.systemId === 'sol' ? 7.0 : 11.2;
       anim.targetScaleLog = Math.max(minScale, Math.min(24.0, anim.targetScaleLog + step));
       anim.warpEnergy = Math.min(1.0, anim.warpEnergy + Math.min(0.45, Math.abs(step) * 0.55));
+      if (voyage.systemId === 'sol' && anim.targetScaleLog < 11.2 && canvasPanned.value) {
+        resetCanvasPan({ silent: true });
+      }
       hideHoverImmediate();
       if (scaleBand(anim.targetScaleLog) !== 'solar') {
         quickAgentId.value = null;
@@ -2008,6 +2070,7 @@ export default {
       }
       if (scaleBand(anim.targetScaleLog) !== 'solar') jumpToScale(13.0);
       unfocusPlanet();
+      resetCanvasPan({ silent: true });
       const act = uid ? focusCosmicEventByUid(eventSim, uid) : focusActiveCosmicEvent(eventSim);
       hideHoverImmediate();
       quickAgentId.value = null;
@@ -2194,6 +2257,7 @@ export default {
       if (drawerOpen.value) { closeDrawer(); return; }
       if (quickAgentId.value) { closeQuickComposer(); return; }
       if (anim.planetFocus.planetId) { unfocusPlanet(); return; }
+      if (canvasPanned.value && currentBand.value === 'solar') { resetCanvasPan({ withView: false }); return; }
       if (voyage.soaring) { onToggleSoar(false); return; }
       if (voyage.systemId !== 'sol') { onReturnToSol(); return; }
       if (currentBand.value !== 'solar') jumpToScale(13.0);
@@ -2315,6 +2379,7 @@ export default {
           onBandChange: (band) => { currentBand.value = band; },
           onSyncEvents: syncEventRefs,
           onSyncVoyage: syncVoyageRefs,
+          onPanAutoReset: () => { canvasPanned.value = false; },
           onUpdateHoverPos: updateHoverCardPosition,
           formatEventLabel: (ev) => {
             const name = $t(`cosmos.events.${ev.id}.name`);
@@ -2450,14 +2515,14 @@ export default {
       bookCreateOpen, bookDraftTitle, bookDraftDomain, toast,
       settingsModal, agentSettingsModal, sessionSettingsModal,
       eventActiveSnapshot, eventActiveList, eventNextIndex, eventCountdownSec, isObservingEvent,
-      focusedCameraPlanetId, focusedCameraBodyLabel, planetFocusZoom, planetFocusRotated,
+      focusedCameraPlanetId, focusedCameraBodyLabel, planetFocusZoom, planetFocusRotated, canvasPanned,
       starSystems: STAR_SYSTEMS, sightseeingBodies,
       voyageSystemId, voyageSoaring, voyageSoarSpeed, voyageAutoPilot, voyageWarpingToId,
       formatStarSystemDist, onToggleSoar, onSelectStarSystem, onNextStarSystem, onReturnToSol,
       onSetSoarSpeed, onToggleSoarAutoPilot, onClickSightseeingBody,
-      focusPlanet, unfocusPlanet, setPlanetZoom, resetPlanetInspect,
+      focusPlanet, unfocusPlanet, setPlanetZoom, resetPlanetInspect, resetCanvasPan,
       planetTagClass, planetPipClass,
-      onCanvasPointerDown, onCanvasDblClick, resetCamera, onPlanetPointerDown, onPlanetEnter, onPlanetLeave,
+      onCanvasPointerDown, onCanvasContextMenu, onCanvasDblClick, resetCamera, onPlanetPointerDown, onPlanetEnter, onPlanetLeave,
       onClickGalaxyStar, onDblClickGalaxyStar, openGalaxyCreation,
       onHoverCardEnter, onHoverCardLeave, onStageWheel, jumpToScale,
       openSessionInDrawer, openAgentConversationFromQuick, openCosmosSessionSearch, onDrawerSelectSession, toggleWorkbenchWiden, closeQuickComposer, closeDrawer,

@@ -85,7 +85,7 @@ import { sidebarSessionCatalogRows } from '../../web/stores/helpers/sidebar-sess
 import { clampFixedMenuCoordinates } from '../../web/utils/fixed-menu-position.js';
 import { bakeProceduralWebGLTextures } from '../../web/cosmos/gpu-texture-baker.js';
 import { createCosmosEngine } from '../../web/cosmos/gl-engine.js';
-import { computeSolarProjectionLayout } from '../../web/cosmos/stage-loop.js';
+import { computeSolarProjectionLayout, clampCamPan, CAM_PAN_MAX, stepCosmosFrame } from '../../web/cosmos/stage-loop.js';
 import {
   COSMOS_TEXTURE_MANIFEST,
   requestCosmosTextureGroup,
@@ -4000,5 +4000,118 @@ describe('Cosmos Interstellar Signal Stream (Unified Top-Right Replies, Schedule
       stepCosmosFrame(i * 50, ctx);
     }
     expect(anim.orbitBrake).toBeLessThan(0.2);
+  });
+
+  it('clamps normalized canvas pan radially, shifts solar projection layout proportionally to span, and pulls pan back to center near Black Hole Horizon', async () => {
+    // 1. Radial soft-boundary clamp
+    const inside = clampCamPan(0.3, -0.4);
+    expect(inside.x).toBeCloseTo(0.3, 6);
+    expect(inside.y).toBeCloseTo(-0.4, 6);
+
+    const outside = clampCamPan(3.0, 4.0);
+    expect(Math.hypot(outside.x, outside.y)).toBeCloseTo(CAM_PAN_MAX, 5);
+    expect(outside.x / outside.y).toBeCloseTo(0.75, 5);
+
+    const invalid = clampCamPan(Number.NaN, Number.POSITIVE_INFINITY);
+    expect(invalid).toEqual({ x: 0, y: 0 });
+
+    // 2. Projection layout applies normalized pan scaled by orbital span (desktop & portrait)
+    const baseDesktop = computeSolarProjectionLayout(1280, 720, { solarZoom: 1 });
+    const pannedDesktop = computeSolarProjectionLayout(1280, 720, { solarZoom: 1, camPanX: 0.25, camPanY: -0.2 });
+    expect(pannedDesktop.cx - baseDesktop.cx).toBeCloseTo(0.25 * baseDesktop.span, 4);
+    expect(pannedDesktop.cy - baseDesktop.cy).toBeCloseTo(-0.2 * baseDesktop.span, 4);
+
+    const basePortrait = computeSolarProjectionLayout(390, 844, { solarZoom: 1 });
+    const pannedPortrait = computeSolarProjectionLayout(390, 844, { solarZoom: 1, camPanX: -0.3, camPanY: 0.15 });
+    expect(pannedPortrait.cx - basePortrait.cx).toBeCloseTo(-0.3 * basePortrait.span, 4);
+    expect(pannedPortrait.cy - basePortrait.cy).toBeCloseTo(0.15 * basePortrait.span, 4);
+
+    // 3. stepCosmosFrame shifts Sun off-center with parallax linkage & auto-resets pan when diving toward Black Hole
+    let lastFrame = null;
+    let panAutoResetCount = 0;
+    const engine = {
+      isWebGL: false,
+      isMobile: false,
+      getSize: () => ({ width: 1280, height: 720, dpr: 1 }),
+      renderFrame: (f) => { lastFrame = f; },
+    };
+    const { createParticlePools } = await import('../../web/cosmos/particle-hud.js');
+    const { DEFAULT_COSMOS_CONSTANTS } = await import('../../web/cosmos/constants.js');
+    const anim = {
+      time: 0,
+      realTime: 0,
+      lastTs: 0,
+      scaleLog: 13.0,
+      targetScaleLog: 13.0,
+      warpEnergy: 0,
+      parallax: { x: 0, y: 0, tx: 0, ty: 0 },
+      camRot: { x: 0, y: 0, tx: 0, ty: 0 },
+      camPan: { x: 0.35, y: -0.22, tx: 0.35, ty: -0.22 },
+      lastSpan: 520,
+      centerShiftX: 0,
+      targetCenterShiftX: 0,
+      hoverPlanetId: null,
+      focusedPlanetId: null,
+      solarSunScreen: { x: 0, y: 0, r: 50 },
+      planetScreen: {},
+      planetFocus: {
+        planetId: null, lastPlanetId: null, blend: 0, zoom: 1.0, targetZoom: 1.0,
+        inspectYaw: 0, inspectPitch: 0, targetInspectYaw: 0, targetInspectPitch: 0,
+      },
+      lastEventUiSync: 0,
+      lastEventFrames: [],
+      meteors: [],
+      nextMeteorAt: 999,
+      orbitRipples: [],
+      telemetryBeams: [],
+      constants: { ...DEFAULT_COSMOS_CONSTANTS, orbitSpeed: 0, eventsAutoEnabled: false },
+    };
+    const ctx = {
+      engine,
+      anim,
+      eventSim: createCosmicEventState(),
+      voyage: createVoyageState(),
+      pools: createParticlePools(),
+      webGraph: null,
+      getWebGraph: () => null,
+      gpuParticles: new Float32Array(3100 * 7),
+      eventGpuParticles: new Float32Array(520 * 7),
+      constants: anim.constants,
+      domRefs: { planets: {}, hits: {}, tags: {}, portals: {}, books: {}, homeBeacon: { value: null }, eventBeacon: { value: null } },
+      getAgentsByPlanet: () => ({}),
+      getGalaxyBooks: () => [],
+      getUiState: () => ({
+        currentBand: 'solar',
+        focusedPlanetId: null,
+        hoverPlanetId: null,
+        dragActive: false,
+        dragOverPlanetId: null,
+        drawerOpen: false,
+        drawerWidth: 0,
+        workbenchWidened: false,
+        quickOpen: false,
+      }),
+      onBandChange: () => {},
+      onSyncEvents: () => {},
+      onSyncVoyage: () => {},
+      onPanAutoReset: () => { panAutoResetCount += 1; },
+      onUpdateHoverPos: () => {},
+      formatEventLabel: () => '',
+    };
+
+    stepCosmosFrame(50, ctx);
+    expect(anim.solarSunScreen.x).toBeGreaterThan(1280 * 0.5 + 150);
+    expect(anim.solarSunScreen.y).toBeLessThan(720 * 0.5 - 100);
+    // Background parallax receives subtle linked offset from canvas pan
+    expect(lastFrame.parallax.x).toBeGreaterThan(0.1);
+    expect(lastFrame.parallax.y).toBeLessThan(-0.05);
+
+    // Diving toward Black Hole Horizon (< 11.2) auto-resets pan back to center
+    anim.scaleLog = 10.9;
+    anim.targetScaleLog = 10.4;
+    stepCosmosFrame(100, ctx);
+    expect(anim.camPan.tx).toBe(0);
+    expect(anim.camPan.ty).toBe(0);
+    expect(panAutoResetCount).toBe(1);
   });
 });
