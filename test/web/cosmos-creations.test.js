@@ -2340,6 +2340,138 @@ describe('Cosmos Creations — End-to-End Web Store <-> Server Relay <-> Agent S
     }
   });
 
+  it('R16-F1: archiving the currently active Session during suppression reconciles to a remaining Session when the open fails', async () => {
+    const { sessions } = await registerBrowserStores();
+    const agentId = 'agent-a';
+    const activeId = 'active-to-archive';
+    const fallbackId = 'remaining-session';
+    sessions.applySnapshot([
+      { id: activeId, workDir: '/repo/active' },
+      { id: fallbackId, workDir: '/repo/fallback' },
+    ], agentId, { authoritative: true });
+    sessions.setActive(activeId, agentId);
+    chatStore.agents = [{ id: agentId, online: true }];
+    chatStore.connectionState = 'connected';
+    chatStore.currentAgent = agentId;
+    chatStore.currentView = 'yeaft';
+    chatStore.uiMode = 'classic';
+    chatStore.yeaftActiveSessionFilter = activeId;
+    const creation = serviceA.store.createCreation({ title: 'Failing Open', initializeFolder: true, sessionId: 'missing-session' });
+    const listStarted = deferred();
+    interceptSocket(chatStore, request => {
+      if (request.type === 'yeaft_list_sessions') {
+        listStarted.resolve(request);
+        return true;
+      }
+      if (request.type === 'yeaft_create_session') {
+        return sessionAck(chatStore, request, 'create', { ok: false, error: { code: 'denied', message: 'Create failed' } });
+      }
+    });
+    const openPromise = creationsStore.openCreationWorkspace({ agentId, creationId: creation.id });
+    const listReq = await listStarted.promise;
+    // Active Session is archived while Creation open is pending.
+    sessions.applyCrudResult({ ok: true, op: 'archive', sessionId: activeId }, agentId);
+    // Row is removed, but suppression prevents switching route while open is pending.
+    expect(sessions.activeSession).toBeNull();
+    expect(chatStore.yeaftActiveSessionFilter).toBe(activeId);
+    // Open fails -> suppression ends -> must reconcile off the dangling archived key to fallbackId.
+    sessionAck(chatStore, listReq, 'list', { sessions: [{ id: fallbackId, workDir: '/repo/fallback' }] });
+    await expect(openPromise).rejects.toThrow(/Create failed/);
+    expect(sessions.suppressAutoSelectDepth).toBe(0);
+    expect(sessions.activeSessionId).toBe(fallbackId);
+    expect(sessions.activeSession?.id).toBe(fallbackId);
+  });
+
+  it('R16-F2: a second-Agent roster delta for a provisional retired bare Session does not cancel a pending Classic open', async () => {
+    const { sessions } = await registerBrowserStores();
+    const { LAST_VIEWED_YEAFT_SESSION_KEY } = await import('../../web/stores/helpers/yeaft-session-identity.js');
+    const agentA = 'agent-a';
+    const agentB = 'agent-b';
+    const bareId = 'shared-bare-id';
+    const targetId = 'creation-target';
+    localStorage.setItem(LAST_VIEWED_YEAFT_SESSION_KEY, bareId);
+    try {
+      // Only Agent A has bareId initially, so retired-bare provisionally selects Agent A's row.
+      sessions.applySnapshot([{ id: bareId, workDir: '/repo/a' }], agentA, { authoritative: true });
+      expect(sessions.activeSessionId).toBe(bareId);
+      expect(sessions._retiredBareActiveSessionId).toBe(bareId);
+      const creation = serviceA.store.createCreation({ title: 'Bare Safe Open', initializeFolder: true, sessionId: targetId });
+      chatStore.agents = [{ id: agentA, online: true }, { id: agentB, online: true }];
+      chatStore.connectionState = 'connected';
+      chatStore.currentAgent = agentA;
+      chatStore.currentView = 'yeaft';
+      chatStore.uiMode = 'classic';
+      chatStore.yeaftActiveSessionFilter = bareId;
+      const listStarted = deferred();
+      interceptSocket(chatStore, request => {
+        if (request.type === 'yeaft_list_sessions') {
+          listStarted.resolve(request);
+          return true;
+        }
+      });
+      const openPromise = creationsStore.openCreationWorkspace({ agentId: agentA, creationId: creation.id });
+      const listReq = await listStarted.promise;
+      // Agent B publishes a roster delta with the same bareId while open is pending.
+      sessions.applyRosterChange({ sessionId: bareId, name: 'Duplicate Bare', roster: [] }, agentB);
+      // Suppression prevents retired-bare ambiguity from clearing the active filter and canceling open.
+      expect(chatStore.yeaftActiveSessionFilter).toBe(bareId);
+      sessionAck(chatStore, listReq, 'list', {
+        sessions: [
+          { id: bareId, workDir: '/repo/a' },
+          { id: targetId, workDir: creation.rootDir },
+        ],
+      });
+      const opened = await openPromise;
+      expect(opened).toMatchObject({ creation: { id: creation.id }, sessionId: targetId });
+      expect(chatStore.yeaftActiveSessionFilter).toBe(targetId);
+      expect(sessions._retiredBareActiveSessionId).toBeNull();
+    } finally {
+      localStorage.removeItem(LAST_VIEWED_YEAFT_SESSION_KEY);
+    }
+  });
+
+  it('R16-F3: hydration completing after a failed Agent A open still restores Agent B saved Session', async () => {
+    const { sessions } = await registerBrowserStores();
+    const { LAST_VIEWED_YEAFT_SESSION_KEY, yeaftSessionIdentityKey } = await import('../../web/stores/helpers/yeaft-session-identity.js');
+    const agentA = 'agent-a';
+    const agentB = 'agent-b';
+    const savedB = 'saved-on-agent-b';
+    localStorage.setItem(LAST_VIEWED_YEAFT_SESSION_KEY, yeaftSessionIdentityKey(agentB, savedB));
+    try {
+      const creation = serviceA.store.createCreation({ title: 'Agent A Failing Open', initializeFolder: true, sessionId: 'missing-a' });
+      chatStore.agents = [{ id: agentA, online: true }, { id: agentB, online: true }];
+      chatStore.connectionState = 'connected';
+      chatStore.currentAgent = agentA;
+      chatStore.currentView = 'yeaft';
+      chatStore.uiMode = 'classic';
+      chatStore.yeaftActiveSessionFilter = null;
+      chatStore.yeaftSessionHydrateRequestId = 'hyd-r16';
+      chatStore.yeaftSessionInventoryCompleteSupported = true;
+      chatStore.yeaftSessionHydrateSlices = [
+        { agentId: agentB, live: true, sessions: [{ id: savedB, workDir: '/repo/b' }] },
+      ];
+      interceptSocket(chatStore, request => {
+        if (request.type === 'yeaft_list_sessions') {
+          return sessionAck(chatStore, request, 'list', { sessions: [{ id: 'other-a', workDir: '/repo/a' }] });
+        }
+        if (request.type === 'yeaft_create_session') {
+          return sessionAck(chatStore, request, 'create', { ok: false, error: { code: 'denied', message: 'Agent A denied' } });
+        }
+      });
+      // Agent A open probes list (buffered under hyd-r16) and fails BEFORE hydration completes.
+      await expect(creationsStore.openCreationWorkspace({ agentId: agentA, creationId: creation.id }))
+        .rejects.toThrow(/Agent A denied/);
+      expect(sessions.suppressAutoSelectDepth).toBe(0);
+      // Hydration now completes: Agent B's saved Session must NOT stay stranded by Agent A's ended probe.
+      chatStore.handleMessage({ type: 'yeaft_session_hydrate_complete', requestId: 'hyd-r16' });
+      expect(sessions.activeSessionId).toBe(savedB);
+      expect(sessions.activeSession?.agentId).toBe(agentB);
+      expect(sessions.waitingForLastViewedSession).toBe(false);
+    } finally {
+      localStorage.removeItem(LAST_VIEWED_YEAFT_SESSION_KEY);
+    }
+  });
+
   it.each(['leave Galaxy and return', 'close the drawer'])('fences a pending Galaxy Creation open when users %s', async action => {
     const { sessions } = await registerBrowserStores();
     const { default: CosmosPage } = await import('../../web/components/cosmos/CosmosPage.js');

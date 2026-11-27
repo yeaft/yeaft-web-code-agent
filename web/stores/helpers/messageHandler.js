@@ -262,7 +262,6 @@ function commitBufferedYeaftSessionInventory(store) {
     sessions?.applySnapshot?.(slice.sessions || [], slice.agentId || null, {
       deferActivation: index < orderedSlices.length - 1,
       authoritative: slice.live === true,
-      suppressAutoSelect: slice.suppressAutoSelect === true,
     });
     reconcileScheduledTaskNotifications(store, slice.sessions, slice.agentId);
   });

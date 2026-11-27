@@ -154,7 +154,7 @@ function forgetSavedSessionKey(key) {
 function reconcileRetiredBareActiveSession(state) {
   const sessionId = state._retiredBareActiveSessionId;
   if (!sessionId) return false;
-  if (state.suppressAutoSelectDepth > 0 && !state.activeSessionKey) {
+  if (state.suppressAutoSelectDepth > 0) {
     state._deferredFallbackReconcile = true;
     return true;
   }
@@ -715,7 +715,8 @@ export const useSessionsStore = defineStore('sessions', {
       if (this.suppressAutoSelectDepth > 0) return;
       const hadDeferred = this._deferredFallbackReconcile;
       this._deferredFallbackReconcile = false;
-      if (!this.activeSessionKey && (hadDeferred || this._explicitPendingSessionKey || this._preferredExactSessionIdentity)) {
+      if (hadDeferred || !this.activeSession || this._explicitPendingSessionKey
+          || this._preferredExactSessionIdentity || this._retiredBareActiveSessionId) {
         reconcileInventorySelection(this);
       }
     },
