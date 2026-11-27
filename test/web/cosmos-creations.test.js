@@ -954,7 +954,6 @@ describe('Cosmos Creations — End-to-End Web Store <-> Server Relay <-> Agent S
         items,
         unreadCount: 1,
         badgeCount: 1,
-        dismissibleCount: 1,
         isCompact: false,
         suppressFloating: false,
         popoverOpen: false,
@@ -1504,7 +1503,7 @@ describe('Cosmos Creations — End-to-End Web Store <-> Server Relay <-> Agent S
       slots: {
         'signal-popover': () => Vue.h(CosmosSignalStream, {
           items: [{ signalKey: 's1', kind: 'unread', agentName: 'Alpha', sessionTitle: 'S1', preview: 'hi', dismissible: true }],
-          unreadCount: 1, badgeCount: 1, dismissibleCount: 1, popoverOpen: true, suppressFloating: true,
+          unreadCount: 1, badgeCount: 1, popoverOpen: true, suppressFloating: true,
         }),
       },
       global: { mocks: { $t } },
