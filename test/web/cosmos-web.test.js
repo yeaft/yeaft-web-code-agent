@@ -1939,12 +1939,14 @@ describe('Cosmic Web — Pinia store & interactive overlay', () => {
     expect(webStore.followUpThread[0].question).toBe('What about Q4 margins?');
     expect(webStore.followUpThread[0].answer).toBe('Pinned answer for item-b');
 
-    // Round 10 Blocker #2 (same-cluster reopen with retained default pin that changes on refresh):
-    // Reader is currently open on c-first-open with retained default 'item-b' & brief.
-    // Reopen triggers a slow detail refresh that promotes 'item-c' to default!
-    // While refresh is pending, user clicks 'engineering' perspective (2nd button) AND submits a follow-up via modal controls.
-    // Both MUST defer until repin + stale invalidation complete, then execute cleanly for 'item-c' with 'engineering' & ZERO stale item-b briefContext!
-    let resolveReopenDetail;
+    // Round 10 & 11 Blocker #2 (same-cluster reopen AND superseded reopen with retained default pin that changes on refresh):
+    // Reader is open on c-first-open with retained default 'item-b' & brief.
+    // Reopen #1 starts -> user clicks 'engineering' perspective AND submits a follow-up via modal controls ->
+    // THEN Reopen #2 supersedes Reopen #1 BEFORE Reopen #1 resolves (aborting Reopen #1 without changing readerSessionToken)!
+    // Deferred actions MUST stay attached to Reopen #2 (never firing against stale 'item-b' when Reopen #1 aborts),
+    // suppress default auto-brief on Reopen #2, and execute ONCE when Reopen #2 pins 'item-c'!
+    let resolveReopenDetail2;
+    let reopenDetailCallCount = 0;
     const reopenBriefBodies = [];
     const reopenFollowUpBodies = [];
     const midFetch = globalThis.fetch;
@@ -1957,8 +1959,19 @@ describe('Cosmic Web — Pinia store & interactive overlay', () => {
         json: async () => body,
       });
       if (u === '/api/cosmic-web/clusters/c-first-open') {
+        reopenDetailCallCount += 1;
+        if (reopenDetailCallCount === 1) {
+          // First reopen detail request: stays pending until aborted by Reopen #2
+          return new Promise((_resolve, reject) => {
+            opts?.signal?.addEventListener('abort', () => {
+              const err = new Error('Aborted');
+              err.name = 'AbortError';
+              reject(err);
+            }, { once: true });
+          });
+        }
         return new Promise((resolve) => {
-          resolveReopenDetail = () => resolve(jsonRes({
+          resolveReopenDetail2 = () => resolve(jsonRes({
             id: 'c-first-open',
             domainId: 'ai',
             headline: 'First Open Cluster Updated',
@@ -1993,21 +2006,26 @@ describe('Cosmic Web — Pinia store & interactive overlay', () => {
       }
       return midFetch(url, opts);
     });
-    const reopenDriftPromise = webStore.openClusterReader('c-first-open', { expanded: true });
+    const reopenDriftPromise1 = webStore.openClusterReader('c-first-open', { expanded: true });
     await flushPromises();
-    // Click 'engineering' perspective pill (index 1) AND submit a follow-up while same-cluster reopen detail is pending
+    // Click 'engineering' perspective pill (index 1) AND submit a follow-up while Reopen #1 is pending
     const reopenPerspBtns = wrapper.findAll('.cw-reader-modal .cw-persp-btn');
     await reopenPerspBtns[1].trigger('click');
     const reopenInput = wrapper.find('.cw-reader-modal .cw-composer-input');
     await reopenInput.setValue('What changed in breaking update?');
     await reopenInput.trigger('keydown.enter');
     await flushPromises();
-    // Neither should have fired against stale 'item-b' before reconcile completes!
+    // Now Reopen #2 supersedes Reopen #1 BEFORE Reopen #1 resolves -> aborts Reopen #1!
+    const reopenDriftPromise2 = webStore.openClusterReader('c-first-open', { expanded: true });
+    await reopenDriftPromise1;
+    await flushPromises();
+    // CRITICAL: Neither brief nor follow-up may fire prematurely against stale 'item-b' when Reopen #1 aborts!
+    expect(reopenDetailCallCount).toBe(2);
     expect(reopenBriefBodies).toHaveLength(0);
     expect(reopenFollowUpBodies).toHaveLength(0);
-    // Detail resolves promoting 'item-c' -> stale 'item-b' brief/thread cleared, deferred 'engineering' brief & follow-up run for 'item-c'!
-    resolveReopenDetail();
-    await reopenDriftPromise;
+    // Now Reopen #2 resolves promoting 'item-c' -> stale 'item-b' brief/thread cleared, deferred 'engineering' brief & follow-up run ONCE for 'item-c'!
+    resolveReopenDetail2();
+    await reopenDriftPromise2;
     await flushPromises();
     expect(webStore.resolvedSourceItemId).toBe('item-c');
     expect(reopenBriefBodies).toHaveLength(1);

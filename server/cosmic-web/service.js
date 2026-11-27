@@ -637,8 +637,8 @@ export function createCosmicWebService({ fetcher = safeFetch, dnsLookup, now = D
       }
     }
 
-    // 3. Scheme-relative //authority/... URL (supports IPv6, single-label hosts, userinfo & ports via WHATWG URL.canParse,
-    // while preserving prose comments like '// comment' or '//TODO').
+    // 3. Scheme-relative //authority/... URL (supports IPv6 including Markdown-escaped \[...\], single-label hosts,
+    // userinfo & ports via WHATWG URL.canParse on a Markdown-normalized candidate, while preserving '// comment' / '//TODO').
     if (offset + 3 < len && c0 === 47 && str.charCodeAt(offset + 1) === 47 && prev !== 58 && prev !== 47) {
       const next = str[offset + 2];
       if (next && !/[\s/<>"]/.test(next)) {
@@ -646,6 +646,13 @@ export function createCosmicWebService({ fetcher = safeFetch, dnsLookup, now = D
         const maxScan = Math.min(len, offset + 512);
         let openParens = 0, closeParens = 0, openBrackets = 0, closeBrackets = 0;
         while (k < maxScan && !/[\s<>"]/.test(str[k])) {
+          if (str[k] === '\\' && k + 1 < maxScan && !/[\s<>"]/.test(str[k + 1])) {
+            const esc = str[k + 1];
+            if (esc === '[') openBrackets++;
+            else if (esc === ']') closeBrackets++;
+            k += 2;
+            continue;
+          }
           const ch = str[k];
           if (ch === '(') openParens++;
           else if (ch === ')') closeParens++;
@@ -655,13 +662,15 @@ export function createCosmicWebService({ fetcher = safeFetch, dnsLookup, now = D
         }
         while (k > offset + 2) {
           const last = str[k - 1];
-          if (last === ')' && closeParens > openParens) { closeParens--; k--; continue; }
-          if (last === ']' && closeBrackets > openBrackets) { closeBrackets--; k--; continue; }
-          if (last === '\'' || last === '`' || last === '.' || last === ',' || last === ';' || last === '!' || last === '?') { k--; continue; }
+          const escaped = k >= offset + 4 && str[k - 2] === '\\';
+          if (last === ')' && !escaped && closeParens > openParens) { closeParens--; k--; continue; }
+          if (last === ']' && !escaped && closeBrackets > openBrackets) { closeBrackets--; k--; continue; }
+          if (!escaped && (last === '\'' || last === '`' || last === '.' || last === ',' || last === ';' || last === '!' || last === '?')) { k--; continue; }
           break;
         }
-        const candidate = str.slice(offset, k);
-        if (candidate.length > 2 && /[/?#:@.[]/.test(candidate.slice(2)) && URL.canParse(`https:${candidate}`)) return 2;
+        const rawCandidate = str.slice(offset, k);
+        const normalized = rawCandidate.replace(/\\([\\`*_{}\[\]<>#!|~.\-+=])/g, '$1');
+        if (normalized.length > 2 && /[/?#:@.[]/.test(normalized.slice(2)) && URL.canParse(`https:${normalized}`)) return 2;
       }
     }
     return 0;
@@ -691,12 +700,13 @@ export function createCosmicWebService({ fetcher = safeFetch, dnsLookup, now = D
           else if (ch === ']') closeBrackets++;
           j++;
         }
-        // Trim only trailing sentence/wrapper punctuation outside balanced URL parens/brackets.
+        // Trim only trailing unescaped sentence/wrapper punctuation outside balanced URL parens/brackets.
         while (j > i) {
           const last = noLinks[j - 1];
-          if (last === ')' && closeParens > openParens) { closeParens--; j--; continue; }
-          if (last === ']' && closeBrackets > openBrackets) { closeBrackets--; j--; continue; }
-          if (last === '\'' || last === '`' || last === '.' || last === ',' || last === ';' || last === '!' || last === '?') { j--; continue; }
+          const escaped = j >= i + 2 && noLinks[j - 2] === '\\';
+          if (last === ')' && !escaped && closeParens > openParens) { closeParens--; j--; continue; }
+          if (last === ']' && !escaped && closeBrackets > openBrackets) { closeBrackets--; j--; continue; }
+          if (!escaped && (last === '\'' || last === '`' || last === '.' || last === ',' || last === ';' || last === '!' || last === '?')) { j--; continue; }
           break;
         }
         i = j;

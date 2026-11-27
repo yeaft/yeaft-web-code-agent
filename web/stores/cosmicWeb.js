@@ -595,14 +595,22 @@ export const useCosmicWebStore = defineStore('cosmicWeb', {
       // OR same-cluster reopen defer cleanly until repin & stale invalidation complete.
       let capturedRev = this.sourceSelectionRev;
       const capturedGen = storeGeneration;
+      // If a same-session reopen supersedes an in-flight reconciliation, carry forward attached deferred UI flags
+      // so the superseding reconciliation continues suppressing default auto-briefs and preserves loading state.
+      const prevSameSessionReconcile = activeReaderReconcile
+        && activeReaderReconcile.clusterId === clusterId
+        && activeReaderReconcile.gen === capturedGen
+        && activeReaderReconcile.session === readerSessionToken
+        ? activeReaderReconcile
+        : null;
       const reconcileEntry = {
         clusterId,
         gen: capturedGen,
         session: readerSessionToken,
         promise: null,
-        hasDeferredBrief: false,
-        hasDeferredFollowUp: false,
-        hasDeferredArticle: false,
+        hasDeferredBrief: Boolean(prevSameSessionReconcile?.hasDeferredBrief),
+        hasDeferredFollowUp: Boolean(prevSameSessionReconcile?.hasDeferredFollowUp),
+        hasDeferredArticle: Boolean(prevSameSessionReconcile?.hasDeferredArticle),
       };
       const reconcileTask = (async () => {
         await this.loadClusterDetail(clusterId);
@@ -855,18 +863,25 @@ export const useCosmicWebStore = defineStore('cosmicWeb', {
 
     async loadArticle(clusterId, { force = false, url = null, itemId = null } = {}) {
       if (!clusterId) return;
-      // Defer implicit-source Clean Article requests during first-open OR same-cluster reopen until repin & stale invalidation finish.
+      // Defer implicit-source Clean Article requests across first-open, reopen, and superseded reopens until the latest reconciliation finishes.
       if (!itemId && activeReaderReconcile && activeReaderReconcile.clusterId === clusterId && activeReaderReconcile.gen === storeGeneration) {
         const myGen = storeGeneration;
         const mySession = readerSessionToken;
         const mySeq = ++deferredArticleSeq;
-        activeReaderReconcile.hasDeferredArticle = true;
         this.articleLoading = true;
         this.articleError = null;
-        await activeReaderReconcile.promise;
-        if (myGen !== storeGeneration || mySession !== readerSessionToken || mySeq !== deferredArticleSeq
-          || !this.readerOpen || this.readerClusterId !== clusterId) {
-          return;
+        while (
+          activeReaderReconcile
+          && activeReaderReconcile.clusterId === clusterId
+          && activeReaderReconcile.gen === myGen
+          && activeReaderReconcile.session === mySession
+        ) {
+          activeReaderReconcile.hasDeferredArticle = true;
+          await activeReaderReconcile.promise;
+          if (myGen !== storeGeneration || mySession !== readerSessionToken || mySeq !== deferredArticleSeq
+            || !this.readerOpen || this.readerClusterId !== clusterId) {
+            return;
+          }
         }
       }
       const { controller, seq, gen } = nextChannelRequest('article');
@@ -915,19 +930,26 @@ export const useCosmicWebStore = defineStore('cosmicWeb', {
 
     async generateAiBrief(clusterId, { mode = 'brief', agentId = null, perspective = null, force = false, itemId = null, url = null, research = true } = {}) {
       if (!clusterId) return;
-      // Defer implicit-source brief generation (e.g. perspective/Agent switch during first-open OR same-cluster reopen)
-      // until repin & stale invalidation finish, preserving the user's exact perspective and Agent selection.
+      // Defer implicit-source brief generation across first-open, reopen, and superseded reopens until the latest reconciliation finishes,
+      // preserving the user's exact perspective and Agent selection.
       if (!itemId && activeReaderReconcile && activeReaderReconcile.clusterId === clusterId && activeReaderReconcile.gen === storeGeneration) {
         const myGen = storeGeneration;
         const mySession = readerSessionToken;
         const mySeq = ++deferredBriefSeq;
-        activeReaderReconcile.hasDeferredBrief = true;
         this.aiBriefLoading = true;
         this.aiBriefError = null;
-        await activeReaderReconcile.promise;
-        if (myGen !== storeGeneration || mySession !== readerSessionToken || mySeq !== deferredBriefSeq
-          || !this.readerOpen || this.readerClusterId !== clusterId) {
-          return;
+        while (
+          activeReaderReconcile
+          && activeReaderReconcile.clusterId === clusterId
+          && activeReaderReconcile.gen === myGen
+          && activeReaderReconcile.session === mySession
+        ) {
+          activeReaderReconcile.hasDeferredBrief = true;
+          await activeReaderReconcile.promise;
+          if (myGen !== storeGeneration || mySession !== readerSessionToken || mySeq !== deferredBriefSeq
+            || !this.readerOpen || this.readerClusterId !== clusterId) {
+            return;
+          }
         }
       }
       const { controller, seq, gen } = nextChannelRequest('aiBrief');
@@ -986,19 +1008,26 @@ export const useCosmicWebStore = defineStore('cosmicWeb', {
     async askFollowUp(clusterId, question, { agentId = null, perspective = null, itemId = null, url = null } = {}) {
       const q = String(question || '').trim();
       if (!clusterId || !q) return null;
-      // Defer implicit-source follow-ups during first-open OR same-cluster reopen until repin & stale invalidation finish
+      // Defer implicit-source follow-ups across first-open, reopen, and superseded reopens until the latest reconciliation finishes
       // so submitted user questions never vanish and never carry stale briefContext from a replaced source!
       if (!itemId && activeReaderReconcile && activeReaderReconcile.clusterId === clusterId && activeReaderReconcile.gen === storeGeneration) {
         const myGen = storeGeneration;
         const mySession = readerSessionToken;
         const mySeq = ++deferredFollowUpSeq;
-        activeReaderReconcile.hasDeferredFollowUp = true;
         this.followUpLoading = true;
         this.followUpError = null;
-        await activeReaderReconcile.promise;
-        if (myGen !== storeGeneration || mySession !== readerSessionToken || mySeq !== deferredFollowUpSeq
-          || !this.readerOpen || this.readerClusterId !== clusterId) {
-          return null;
+        while (
+          activeReaderReconcile
+          && activeReaderReconcile.clusterId === clusterId
+          && activeReaderReconcile.gen === myGen
+          && activeReaderReconcile.session === mySession
+        ) {
+          activeReaderReconcile.hasDeferredFollowUp = true;
+          await activeReaderReconcile.promise;
+          if (myGen !== storeGeneration || mySession !== readerSessionToken || mySeq !== deferredFollowUpSeq
+            || !this.readerOpen || this.readerClusterId !== clusterId) {
+            return null;
+          }
         }
       }
       const { controller, seq, gen } = nextChannelRequest('followUp');

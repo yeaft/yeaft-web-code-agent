@@ -1065,16 +1065,16 @@ describe('2.0 graph and AI contracts', () => {
     const pubNode = marked.graph.nodes.find(n => n.clusterId === pubId);
     expect(pubNode?.mediaPreview?.proxyUrl).toContain('&sig=');
 
-    // CW2-01 & Round 3/4/5/6/7/8/9 Blocker: private RSS feed media, linked/angle-delimited/parenthesized/apostrophe, U+0130-preceded, bare www., and scheme-relative //host URLs in articleMarkdown AND summaryExcerpt are fully redacted while Clean Article stays intact
+    // CW2-01 & Round 3–11 Blocker: private RSS feed media and ALL embedded prose URL forms (alphanumeric sentinels so escapeMd can never mask a leak!)
     const secretMediaUrl = 'https://private.example/secret-token-img.png';
     const unicodePad = '\u0130'.repeat(120);
-    const excerptSecretUrl = "https://files.example/o'brien-summary(v1).png?token=EXCERPT_SECRET";
-    const unicodeSecretUrl = 'https://files.example/u0130.pdf?token=UNICODE_DRIFT_SECRET';
-    const wwwSecretUrl = 'www.private.example/sheet(1).pdf?token=WWW_SECRET';
-    const schemeRelSecretUrl = '//cdn.private.example/att(1).png?token=SCHEME_REL_SECRET';
-    const ipv6RelSecretUrl = '(//[2001:db8::1]/vault/a.pdf?token=IPV6_REL_SECRET)';
-    const singleHostRelSecretUrl = '//intranet/files/doc.pdf?token=SINGLE_HOST_SECRET';
-    const userinfoRelSecretUrl = '//user:pass@intranet:8080/doc?token=USERINFO_REL_SECRET';
+    const excerptSecretUrl = "https://files.example/o'brien-summary(v1).png?token=EXCERPTSECRET99";
+    const unicodeSecretUrl = 'https://files.example/u0130.pdf?token=UNICODEDRIFTSECRET99';
+    const wwwSecretUrl = 'www.private.example/sheet(1).pdf?token=WWWSECRET99';
+    const schemeRelSecretUrl = '//cdn.private.example/att(1).png?token=SCHEMERELSECRET99';
+    const ipv6RelSecretUrl = '(//[2001:db8::1]/vault/a.pdf?token=IPV6RELSECRET99)';
+    const singleHostRelSecretUrl = '//intranet/files/doc.pdf?token=SINGLEHOSTSECRET99';
+    const userinfoRelSecretUrl = '//user:pass@intranet:8080/doc?token=USERINFORELSECRET99';
     const privItemWithImg = {
       ...item('Private img note', 'https://private.example/img-note'),
       summaryExcerpt: `${unicodePad} Private brief note with ${excerptSecretUrl}, ${unicodeSecretUrl}, ${wwwSecretUrl}, ${schemeRelSecretUrl}, ${ipv6RelSecretUrl}, ${singleHostRelSecretUrl}, and ${userinfoRelSecretUrl} inside.`,
@@ -1089,48 +1089,38 @@ describe('2.0 graph and AI contracts', () => {
     const privDet = await svc.cluster('alice', privNode.clusterId);
     expect(privDet.media).toEqual([]);
     expect(JSON.stringify(privDet)).not.toContain(secretMediaUrl);
-    // Round 6/7/8/9/10 Blocker #1: test REAL extractCleanArticle -> aiBrief path with angle-delimited (<...>) unmatched ')', bare apostrophe, U+0130-preceded, bare www., and IPv6/single-label/userinfo scheme-relative //authority URLs
+    // Round 6–11 Blocker #1: REAL extractCleanArticle -> aiBrief path with Markdown-escaped IPv6 (//\[2001:db8::1\]/...), angle-delimited (<...>) unmatched ')', bare apostrophe, U+0130, bare www., single-label & userinfo
     const privItemId = privDet.items[0].id;
-    const angleParenUrl = 'https://files.example/report)v2.pdf?token=ANGLE_PAREN_SECRET';
-    const parenSecretUrl = 'https://files.example/chart(v2).png?token=PRIVATE_SENTINEL';
-    const aposSecretUrl = "https://files.example/team's-deck.pdf?token=APOS_SECRET";
+    const angleParenUrl = 'https://files.example/report)v2.pdf?token=ANGLEPARENSECRET99';
+    const parenSecretUrl = 'https://files.example/chart(v2).png?token=PRIVATESENTINEL99';
+    const aposSecretUrl = "https://files.example/team's-deck.pdf?token=APOSSECRET99";
     const extractedPrivate = extractCleanArticle(
       `<article><h1>Private Memo</h1><p>${unicodePad} Quarterly notes // keep prose comment, <a href="${angleParenUrl}">Attachment</a>, bare ${parenSecretUrl}, (${parenSecretUrl}), ${aposSecretUrl}, ${unicodeSecretUrl}, ${wwwSecretUrl}, ${schemeRelSecretUrl}, ${ipv6RelSecretUrl}, ${singleHostRelSecretUrl}, and ${userinfoRelSecretUrl}.</p></article>`,
       'https://private.example/img-note',
       'Private img note',
     );
     expect(extractedPrivate.markdown).toContain(`(<${angleParenUrl}>)`);
+    expect(extractedPrivate.markdown).toContain('//\\[2001:db8::1\\]/vault/a.pdf?token=IPV6RELSECRET99');
     db.setArticleCache('alice', privItemId, {
       ...extractedPrivate, itemId: privItemId, clusterId: privNode.clusterId, summaryExcerpt: privItemWithImg.summaryExcerpt,
     }, NOW + HOUR);
     const cleanPrivateArt = await svc.article('alice', privNode.clusterId, { itemId: privItemId });
-    expect(cleanPrivateArt.markdown).toContain('ANGLE_PAREN_SECRET');
+    expect(cleanPrivateArt.markdown).toContain('ANGLEPARENSECRET99');
     await svc.aiBrief('alice', 'user', privNode.clusterId, { research: true, force: true });
     const privBriefJson = JSON.stringify(requestAi.mock.lastCall[0].payload);
-    expect(privBriefJson).not.toContain(secretMediaUrl);
-    expect(privBriefJson).not.toContain('PRIVATE_SENTINEL');
-    expect(privBriefJson).not.toContain('ANGLE_PAREN_SECRET');
-    expect(privBriefJson).not.toContain('APOS_SECRET');
-    expect(privBriefJson).not.toContain('UNICODE_DRIFT_SECRET');
-    expect(privBriefJson).not.toContain('WWW_SECRET');
-    expect(privBriefJson).not.toContain('SCHEME_REL_SECRET');
-    expect(privBriefJson).not.toContain('IPV6_REL_SECRET');
-    expect(privBriefJson).not.toContain('SINGLE_HOST_SECRET');
-    expect(privBriefJson).not.toContain('USERINFO_REL_SECRET');
-    expect(privBriefJson).not.toContain('EXCERPT_SECRET');
+    for (const secret of [secretMediaUrl, 'PRIVATESENTINEL99', 'ANGLEPARENSECRET99', 'APOSSECRET99', 'UNICODEDRIFTSECRET99',
+      'WWWSECRET99', 'SCHEMERELSECRET99', 'IPV6RELSECRET99', 'SINGLEHOSTSECRET99', 'USERINFORELSECRET99', 'EXCERPTSECRET99']) {
+      expect(privBriefJson).not.toContain(secret);
+    }
     expect(requestAi.mock.lastCall[0].payload.articleMarkdown).toContain('Attachment');
     expect(requestAi.mock.lastCall[0].payload.articleMarkdown).toContain('// keep prose comment');
-    // Round 6/7/8/9/10: followUp redacts apostrophe-bearing, U+0130-preceded, bare www., and IPv6/single-label/userinfo scheme-relative sentinels in summaryExcerpt
+    // Round 6–11: followUp redacts all alphanumeric sentinels directly in summaryExcerpt
     await svc.followUp('alice', 'user', privNode.clusterId, { question: 'Any updates?', research: true });
     const privFuJson = JSON.stringify(requestAi.mock.lastCall[0].payload);
-    expect(privFuJson).not.toContain(secretMediaUrl);
-    expect(privFuJson).not.toContain('EXCERPT_SECRET');
-    expect(privFuJson).not.toContain('UNICODE_DRIFT_SECRET');
-    expect(privFuJson).not.toContain('WWW_SECRET');
-    expect(privFuJson).not.toContain('SCHEME_REL_SECRET');
-    expect(privFuJson).not.toContain('IPV6_REL_SECRET');
-    expect(privFuJson).not.toContain('SINGLE_HOST_SECRET');
-    expect(privFuJson).not.toContain('USERINFO_REL_SECRET');
+    for (const secret of [secretMediaUrl, 'EXCERPTSECRET99', 'UNICODEDRIFTSECRET99', 'WWWSECRET99',
+      'SCHEMERELSECRET99', 'IPV6RELSECRET99', 'SINGLEHOSTSECRET99', 'USERINFORELSECRET99']) {
+      expect(privFuJson).not.toContain(secret);
+    }
 
     // CW2-05 & Round 3 Blocker #1: legacy v1 Agent (no cosmic_web_cancel) retains remote slot accounting after caller abort,
     // defers subsequent requests, AND hands off freed slots when awakened waiters hit the rate boundary (never hanging).
