@@ -138,6 +138,13 @@ export function handleAgentList(store, msg) {
   // merely onopen with an old online Agent record. Routine broadcasts dedupe.
   store.workCenterActivityConnectionGeneration = Number(store.chatHistoryConnectionGeneration || 0);
   store._hasHandledAgentList = true;
+  if (hadAgentList) {
+    for (const agent of nextAgents) {
+      if (agent?.id && agent.online && !previouslyOnlineAgentIds.has(agent.id)) {
+        try { globalThis.Pinia?.useCreationsStore?.()?.reconcileAfterReconnect?.(agent.id); } catch {}
+      }
+    }
+  }
   for (const [agentId, operations] of Object.entries(store.agentOperations || {})) {
     const current = nextAgents.find(agent => agent.id === agentId);
     for (const operation of ['restart', 'upgrade']) {

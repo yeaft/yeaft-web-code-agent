@@ -414,6 +414,10 @@ export function connect(store) {
         store.reconnectAttempts = 0;
         store._wsCorrelatedHeartbeat = msg.webHeartbeatProbeProtocol === 1;
         store.startHeartbeat();
+        if (store._creationsReconnectPending) {
+          store._creationsReconnectPending = false;
+          try { globalThis.Pinia?.useCreationsStore?.()?.reconcileAfterReconnect?.(); } catch {}
+        }
       }
       if (msg.type === 'file_content') console.log('[WS.onmessage] Received file_content, path:', msg.filePath, 'contentLen:', msg.content?.length);
       store.handleMessage({ ...msg, _wsAuthToken: authToken, _wsAuthGeneration: authGeneration, _wsAuthOwnerId: authOwnerId });
@@ -497,6 +501,7 @@ export function connect(store) {
     // while offline. handleAgentList consumes and clears this one-shot flag;
     // routine agent_list broadcasts leave it false and skip those requests.
     store._yeaftReconnectCatchUpPending = true;
+    store._creationsReconnectPending = true;
 
     if (!replacing) store.scheduleReconnect(wasUpdating ? 2000 : undefined);
   };

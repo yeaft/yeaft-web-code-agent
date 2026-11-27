@@ -1,18 +1,13 @@
-import { randomUUID } from 'crypto';
-import multer from 'multer';
+import { createHash, randomUUID } from 'node:crypto';
 import { CONFIG } from '../config.js';
-import { userDb } from '../database.js';
 import { pendingFiles, previewFiles } from '../context.js';
 import { PREVIEW_FILE_TTL_MS, prunePreviewFiles } from '../preview-files.js';
 import { detectImageMime, yeaftAssetStore } from '../yeaft-asset-store.js';
+import { CREATION_MEDIA_CHUNK_BYTES, openCreationMedia } from '../creation-media-relay.js';
+import { CREATION_MEDIA_SNIFF_BYTES, verifiedCreationMediaType } from '../creation-media-type.js';
 import { readSessionAttachment } from '../session-attachment-relay.js';
 import { openWorkbenchVideo, readWorkbenchPreview, WORKBENCH_VIDEO_CHUNK_BYTES } from '../workbench-preview.js';
-
-// 文件上传配置 (存储在内存中)
-const upload = multer({
-  storage: multer.memoryStorage(),
-  limits: { fileSize: CONFIG.maxFileSize }
-});
+import { readPendingUploads } from './upload-intake.js';
 
 export function parseByteRange(header, size) {
   if (!header) return null;
@@ -101,6 +96,98 @@ export async function streamWorkbenchVideo(req, res, video) {
   }
 }
 
+function computeCreationMediaEtag(mediaKind, mediaId, totalSize, version) {
+  const identity = [mediaKind, mediaId, totalSize];
+  if (version !== null) identity.push(version);
+  return `"${createHash('sha256').update(JSON.stringify(identity)).digest('hex')}"`;
+}
+
+async function streamCreationMedia(req, res) {
+  const controller = new AbortController();
+  const abort = () => controller.abort();
+  // IncomingMessage also emits close after *normal* request completion. A
+  // disconnect after the GET is fully read is detected on ServerResponse.
+  const requestClosed = () => { if (!req.complete) abort(); };
+  req.once('close', requestClosed);
+  res.once('close', abort);
+  if (res.destroyed) abort();
+  res.setHeader('Accept-Ranges', 'bytes');
+  res.setHeader('Cache-Control', 'private, no-store, no-transform');
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('Cross-Origin-Resource-Policy', 'same-origin');
+
+  let transfer;
+  try {
+    transfer = openCreationMedia(req.user, req.params, controller.signal);
+    // Resolve the total before parsing suffix/open-ended ranges. Full GETs
+    // use their first pull as the probe so those bytes are not read twice.
+    const probeSize = req.method === 'HEAD' || req.headers.range ? CREATION_MEDIA_SNIFF_BYTES : CREATION_MEDIA_CHUNK_BYTES;
+    const first = await transfer.read(0, probeSize - 1);
+    const { totalSize, mimeType, filename } = first;
+    // Exports reuse their media ID across regenerations; pin to the version from the probe.
+    const expectedVersion = first.version ?? null;
+    const { mediaKind, mediaId } = req.params;
+    const etag = computeCreationMediaEtag(mediaKind, mediaId, totalSize, expectedVersion);
+    res.setHeader('ETag', etag);
+    // If-Range requires a strong match. We don't publish Last-Modified, so
+    // dates, weak tags and unknown validators all fall back to a full body.
+    const rangeHeader = req.headers['if-range'] === undefined || req.headers['if-range'] === etag
+      ? req.headers.range : undefined;
+    const requested = parseByteRange(rangeHeader, totalSize);
+    if (requested === false) {
+      res.setHeader('Content-Range', `bytes */${totalSize}`);
+      res.setHeader('Content-Length', '0');
+      return res.status(416).end();
+    }
+    const range = requested ?? { start: 0, end: totalSize - 1 };
+    const length = range.end - range.start + 1;
+    const verifiedMimeType = verifiedCreationMediaType(first.buffer, mimeType, totalSize);
+    const isSvg = verifiedMimeType === 'image/svg+xml';
+    const inline = req.query.download !== '1' && (!isSvg || mediaKind === 'asset') && verifiedMimeType;
+    const basename = filename.split(/[/\\]/).pop()?.replace(/[\x00-\x1f\x7f]/g, '') || 'media';
+    const encoded = encodeURIComponent(basename.toWellFormed()).replace(/['()*]/g, c => '%' + c.charCodeAt(0).toString(16));
+    res.status(requested ? 206 : 200);
+    res.setHeader('Content-Type', inline ? verifiedMimeType : 'application/octet-stream');
+    res.setHeader('Content-Disposition', `${inline ? 'inline' : 'attachment'}; filename*=UTF-8''${encoded}`);
+    res.setHeader('Content-Length', String(length));
+    if (requested) res.setHeader('Content-Range', `bytes ${range.start}-${range.end}/${totalSize}`);
+    if (inline && isSvg) res.setHeader('Content-Security-Policy', "default-src 'none'; style-src 'unsafe-inline'; sandbox");
+    if (req.method === 'HEAD' || length === 0) return res.end();
+
+    for (let start = range.start; start <= range.end;) {
+      const buffered = start <= first.end;
+      const end = Math.min(range.end, buffered ? first.end : start + Math.min(range.end - start, CREATION_MEDIA_CHUNK_BYTES - 1));
+      const chunk = buffered ? first : await transfer.read(start, end, { expectedVersion });
+      if ((chunk.version ?? null) !== expectedVersion || chunk.totalSize !== totalSize
+          || chunk.mimeType !== mimeType || chunk.filename !== filename || chunk.end < end) {
+        throw Object.assign(new Error('Creation media changed during transfer'), { status: 409 });
+      }
+      if (controller.signal.aborted) return;
+      // A stalled reader must not pin a transfer slot indefinitely.
+      const timer = setTimeout(() => res.destroy(), 60_000);
+      timer.unref?.();
+      try {
+        if (!await writeResponseChunk(res, chunk.buffer.subarray(start - chunk.start, end - chunk.start + 1))) return;
+      } finally {
+        clearTimeout(timer);
+      }
+      start = end + 1;
+    }
+    res.end();
+  } catch (error) {
+    if (res.destroyed || controller.signal.aborted) return;
+    if (res.headersSent) return res.destroy();
+    for (const header of ['Content-Length', 'Content-Range', 'Content-Type', 'Content-Disposition', 'Content-Security-Policy', 'ETag']) {
+      res.removeHeader(header);
+    }
+    res.status(error.status || 502).type('text/plain').send(error.status ? error.message : 'Creation media read failed');
+  } finally {
+    transfer?.close();
+    req.off('close', requestClosed);
+    res.off('close', abort);
+  }
+}
+
 export function extensionForMimeType(mimeType) {
   const type = String(mimeType || '').toLowerCase();
   if (type === 'image/png') return '.png';
@@ -121,15 +208,8 @@ export function fallbackUploadName(file, index) {
   return `${prefix}-${Date.now()}-${index + 1}${extensionForMimeType(file?.mimetype)}`;
 }
 
-// 定期清理超过 10 分钟的文件
-setInterval(() => {
-  const now = Date.now();
-  for (const [fileId, file] of pendingFiles) {
-    if (now - file.uploadedAt > CONFIG.fileCleanupInterval) {
-      pendingFiles.delete(fileId);
-    }
-  }
-}, 60 * 1000);
+// Expired staged files return their quota through the same path as consumers.
+setInterval(() => pendingFiles.prune(Date.now(), CONFIG.fileCleanupInterval), 60_000).unref();
 
 // Cleanup expired preview files every 60s.
 setInterval(() => prunePreviewFiles(), Math.min(60 * 1000, PREVIEW_FILE_TTL_MS));
@@ -138,21 +218,26 @@ setInterval(() => prunePreviewFiles(), Math.min(60 * 1000, PREVIEW_FILE_TTL_MS))
  * Register file upload and preview routes.
  */
 export function registerUploadRoutes(app, { requireAuth, requireSessionAuth = requireAuth }) {
-  app.post('/api/upload', requireAuth, upload.array('files', 10), (req, res) => {
+  app.route('/api/yeaft/creations/:agentId/:creationId/media/:mediaKind/:mediaId')
+    .head(requireSessionAuth, streamCreationMedia)
+    .get(requireSessionAuth, streamCreationMedia);
+
+  app.post('/api/upload', requireSessionAuth, readPendingUploads, (req, res) => {
     if (!req.files || req.files.length === 0) {
       return res.status(400).json({ error: 'No files uploaded' });
     }
 
-    const user = userDb.getOrCreate(req.user.username);
-    const userId = user?.id;
+    const userId = req.uploadUserId;
 
     const uploaded = req.files.map((file, index) => {
       const fileId = randomUUID();
       const name = fallbackUploadName(file, index);
+      const { buffer } = file.body;
+      file.release(); // Transfer the reservation into the staged store synchronously.
       pendingFiles.set(fileId, {
         name,
         mimeType: file.mimetype,
-        buffer: file.buffer,
+        buffer,
         uploadedAt: Date.now(),
         userId
       });

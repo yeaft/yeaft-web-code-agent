@@ -6,6 +6,13 @@
  * transforms via refs so animation incurs zero Vue re-renders.
  */
 import { PLANETS, keplerPos, scaleBand } from './constants.js';
+import {
+  STAR_SYSTEMS,
+  getActiveStarSystem,
+  tickVoyageState,
+  getVoyageSkyUniforms,
+  projectSoarBeacons,
+} from './star-systems.js';
 import { fillGpuParticles, drawCosmosHud } from './particle-hud.js';
 import {
   tickCosmicEvents,
@@ -87,9 +94,9 @@ function sunGalacticOffset(tVal, gt) {
 
 export function stepCosmosFrame(now, ctx) {
   const {
-    engine, anim, eventSim, pools, webGraph, getWebGraph, gpuParticles, eventGpuParticles,
+    engine, anim, eventSim, voyage, pools, webGraph, getWebGraph, gpuParticles, eventGpuParticles,
     constants, domRefs, getAgentsByPlanet, getGalaxyBooks,
-    getUiState, onBandChange, onSyncEvents, onUpdateHoverPos, formatEventLabel,
+    getUiState, onBandChange, onSyncEvents, onSyncVoyage, onUpdateHoverPos, formatEventLabel,
   } = ctx;
 
   const dt = Math.min(0.05, Math.max(0.001, (now - anim.lastTs) / 1000));
@@ -112,8 +119,11 @@ export function stepCosmosFrame(now, ctx) {
     targetInspectPitch: 0,
   });
 
-  const braking = Boolean(ui.hoverPlanetId || ui.dragActive || ui.drawerOpen || pf.planetId);
-  const targetBrake = pf.planetId ? 0.14 : (braking ? 0.08 : 1.0);
+  // Only brake orbital motion while dragging an agent onto a planet or hovering a moving
+  // planet in unfocused Solar System view. Focusing a planet or opening a conversation drawer
+  // keeps all celestial bodies orbiting at normal speed while the camera tracks the focused planet.
+  const braking = Boolean(ui.dragActive || (!pf.planetId && ui.hoverPlanetId));
+  const targetBrake = braking ? 0.08 : 1.0;
   if (typeof anim.orbitBrake !== 'number') anim.orbitBrake = 1.0;
   anim.orbitBrake += (targetBrake - anim.orbitBrake) * Math.min(1, dt * 6.0);
 
@@ -131,11 +141,31 @@ export function stepCosmosFrame(now, ctx) {
   pf.inspectYaw += ((pf.planetId ? pf.targetInspectYaw : 0) - pf.inspectYaw) * Math.min(1, dt * 7.0);
   pf.inspectPitch += ((pf.planetId ? pf.targetInspectPitch : 0) - pf.inspectPitch) * Math.min(1, dt * 7.0);
 
+  // Tick Interstellar Soaring & Multi-System Warp transitions
+  const voyageTick = voyage
+    ? tickVoyageState(voyage, dt, { reducedMotion })
+    : { systemChanged: false, warpFinished: false };
+  if (voyageTick.systemChanged || voyageTick.warpFinished) {
+    if (voyageTick.systemChanged && pf.planetId) {
+      pf.planetId = null;
+      pf.lastPlanetId = null;
+      pf.blend = 0;
+      pf.zoom = 1.0;
+      pf.targetZoom = 1.0;
+    }
+    onSyncVoyage?.({ systemChanged: voyageTick.systemChanged, warpFinished: voyageTick.warpFinished });
+  }
+  const activeSys = getActiveStarSystem(voyage);
+  const isHomeSystem = Boolean(activeSys.isHome);
+  const activeBodies = activeSys.bodies || PLANETS;
+  const soarBlend = voyage ? voyage.soarBlend : 0;
+  const isWarpingSystem = Boolean(voyage?.warp);
+
   tickCosmicEvents(eventSim, dt * (reducedMotion ? 0.5 : 1.0), {
-    showCountdown: constants.showEventsCountdown && ui.currentBand === 'solar',
-    autoEnabled: constants.eventsAutoEnabled,
+    showCountdown: constants.showEventsCountdown && ui.currentBand === 'solar' && isHomeSystem && !voyage?.soaring && !isWarpingSystem,
+    autoEnabled: constants.eventsAutoEnabled && isHomeSystem && !voyage?.soaring && !isWarpingSystem,
     autoZoom: constants.eventsAutoZoom === true,
-    canAutoZoom: ui.currentBand === 'solar' && !ui.drawerOpen && !ui.quickOpen && !ui.dragActive && !pf.planetId,
+    canAutoZoom: ui.currentBand === 'solar' && isHomeSystem && !voyage?.soaring && !isWarpingSystem && !ui.drawerOpen && !ui.quickOpen && !ui.dragActive && !pf.planetId,
     cameraDt: dt,
     reducedMotion,
   });
@@ -148,10 +178,12 @@ export function stepCosmosFrame(now, ctx) {
   const prevScale = anim.scaleLog;
   anim.scaleLog += (anim.targetScaleLog - anim.scaleLog) * Math.min(1, dt * 6.4);
   const flightWarp = reducedMotion ? 0 : getFlightWarpEnergy(eventSim);
+  const voyageWarp = reducedMotion ? 0 : (voyage?.warpEnergy || 0);
   anim.warpEnergy = Math.max(
     anim.warpEnergy * Math.exp(-dt * 4.5),
     Math.min(1.0, (Math.abs(anim.scaleLog - prevScale) / Math.max(dt, 0.001)) * 0.11),
     flightWarp,
+    voyageWarp,
   );
 
   anim.parallax.x += (anim.parallax.tx - anim.parallax.x) * Math.min(1, dt * 4.2);
@@ -181,13 +213,15 @@ export function stepCosmosFrame(now, ctx) {
   const telescopeHidden = observing || telescope.focus > 0.25;
 
   const baseSolarAlpha = s >= 10.2 && s <= 16.8 ? Math.min(1, Math.min((s - 10.2) / 1.4, (16.8 - s) / 1.8)) : 0;
-  const solarAlpha = baseSolarAlpha * telescope.alphaMul;
-  const galFullAlpha = s >= 17.6 && s <= 23.0 ? Math.min(1, Math.min((s - 17.6) / 1.5, (23.0 - s) / 1.3)) : 0;
-  const webFullAlpha = s >= 22.0 ? Math.min(1, (s - 22.0) / 1.2) : 0;
-  const bhFullStrength = s <= 10.6 ? Math.min(1, (10.6 - s) / 1.8) : 0;
+  const voyageVisMul = voyage ? voyage.systemAlphaMul : 1.0;
+  const solarAlpha = baseSolarAlpha * telescope.alphaMul * voyageVisMul;
+  const galFullAlpha = (s >= 17.6 && s <= 23.0 ? Math.min(1, Math.min((s - 17.6) / 1.5, (23.0 - s) / 1.3)) : 0) * (1 - soarBlend);
+  const webFullAlpha = (s >= 22.0 ? Math.min(1, (s - 22.0) / 1.2) : 0) * (1 - soarBlend);
+  const bhFullStrength = (s <= 10.6 ? Math.min(1, (10.6 - s) / 1.8) : 0) * (1 - soarBlend);
 
   const pfZoomFactor = 1.0 + (pf.zoom - 1.0) * pf.blend;
-  const baseSolarZoom = Math.pow(1.42, 13.0 - s) * panelScaleFactor * telescope.zoomMul;
+  const voyageZoomMul = voyage ? voyage.systemZoomMul : 1.0;
+  const baseSolarZoom = Math.pow(1.42, 13.0 - s) * panelScaleFactor * telescope.zoomMul * voyageZoomMul;
   const solarZoom = baseSolarZoom * pfZoomFactor;
 
   const layout = computeSolarProjectionLayout(w, h, {
@@ -212,13 +246,13 @@ export function stepCosmosFrame(now, ctx) {
   let focusShiftX = 0;
   let focusShiftY = 0;
   if (pf.blend > 0.002) {
-    const focusP = PLANETS.find((p) => p.id === (pf.planetId || pf.lastPlanetId));
+    const focusP = activeBodies.find((p) => p.id === (pf.planetId || pf.lastPlanetId));
     if (focusP) {
       pf.lastPlanetId = focusP.id;
       const wp = keplerPos(focusP, anim.time);
       const rx = wp.x * yawCos - wp.z * yawSin;
       const rz = wp.x * yawSin + wp.z * yawCos;
-      const persp = 1.0 / (1.0 - rz * 0.26);
+      const persp = 1.0 / (1.0 - Math.max(-0.85, Math.min(0.85, rz * 0.26)));
       focusShiftX = -rx * span * persp * pf.blend;
       focusShiftY = -(rz * span * tilt + wp.y * span) * persp * pf.blend;
     }
@@ -250,12 +284,29 @@ export function stepCosmosFrame(now, ctx) {
   const agentsByPlanet = getAgentsByPlanet();
 
   if (solarAlpha > 0.004) {
-    solarBodies.push({
-      bodyType: 0, texKey: 'sun', screenX: sunPt.x, screenY: sunPt.y, radiusPx: sunRadius,
-      camZ: 0, spin: anim.time * 0.075, tilt: 0.11, oblate: 1.0, lightDir: [0, 0, 1], atmo: [1, 0.72, 0.36], highlight: 0,
-    });
+    // Render active system's central star(s): single star, binary stars, or none (Sgr A* SMBH)
+    for (const star of (activeSys.stars || [])) {
+      const sAng = star.phase + anim.time * (star.speed || 0);
+      const sxWorld = (star.orbitR || 0) * Math.cos(sAng);
+      const szWorld = (star.orbitR || 0) * Math.sin(sAng);
+      const sPt = projectSolar(sxWorld, szWorld, 0, sunOffNow);
+      solarBodies.push({
+        bodyType: 0,
+        texKey: 'sun',
+        screenX: sPt.x,
+        screenY: sPt.y,
+        radiusPx: sunRadius * (star.sizeRatio || 1.0) * (sPt.persp || 1.0),
+        camZ: sPt.rz || 0,
+        spin: anim.time * 0.075 + (star.phase || 0),
+        tilt: 0.11,
+        oblate: 1.0,
+        lightDir: [0, 0, 1],
+        atmo: star.atmo || [1, 0.72, 0.36],
+        highlight: 0,
+      });
+    }
 
-    for (const p of PLANETS) {
+    for (const p of activeBodies) {
       const wp = keplerPos(p, anim.time);
       const pt = projectSolar(wp.x, wp.z, wp.y, sunOffNow);
       const sx = pt.x;
@@ -272,8 +323,8 @@ export function stepCosmosFrame(now, ctx) {
       const lLen = Math.hypot(lx, ly, lz) || 1;
       const lightDir = [lx / lLen, ly / lLen, lz / lLen];
       const isHovered = anim.hoverPlanetId === p.id;
-      const isSelected = ui.focusedPlanetId === p.id || isFocusedPlanet;
-      const isDrop = ui.dragOverPlanetId === p.id;
+      const isSelected = (isHomeSystem && ui.focusedPlanetId === p.id) || isFocusedPlanet;
+      const isDrop = isHomeSystem && ui.dragOverPlanetId === p.id;
       const closeup = isFocusedPlanet
         ? Math.max(0, Math.min(1.5, (pf.zoom - 1.05) / 3.4))
         : Math.max(0, Math.min(0.45, (rPx - 58) / 110));
@@ -323,44 +374,81 @@ export function stepCosmosFrame(now, ctx) {
         }
       }
 
-      const nodeEl = domRefs.planets[p.id];
-      if (nodeEl) {
-        const deepCloseup = isFocusedPlanet && pf.zoom > 3.2;
-        nodeEl.style.display = telescopeHidden ? 'none' : 'block';
-        nodeEl.style.opacity = String(solarAlpha);
-        nodeEl.style.transform = `translate(${sx}px, ${sy}px)`;
-        nodeEl.style.zIndex = String(Math.round(50 + rz * 25));
+      if (isHomeSystem) {
+        const nodeEl = domRefs.planets[p.id];
+        if (nodeEl) {
+          const deepCloseup = isFocusedPlanet && pf.zoom > 3.2;
+          nodeEl.style.display = telescopeHidden ? 'none' : 'block';
+          nodeEl.style.opacity = String(solarAlpha);
+          nodeEl.style.transform = `translate(${sx}px, ${sy}px)`;
+          nodeEl.style.zIndex = String(Math.round(50 + rz * 25));
 
-        const hitEl = domRefs.hits[p.id];
-        if (hitEl) {
-          const hitD = deepCloseup ? 0 : Math.max(isCompact ? 48 : 46, Math.min(220, rPx * (p.bodyType === 6 ? 3.2 : 2.3)));
-          hitEl.style.width = `${hitD}px`;
-          hitEl.style.height = `${hitD}px`;
+          const hitEl = domRefs.hits[p.id];
+          if (hitEl) {
+            const hitD = deepCloseup ? 0 : Math.max(isCompact ? 48 : 46, Math.min(220, rPx * (p.bodyType === 6 ? 3.2 : 2.3)));
+            hitEl.style.width = `${hitD}px`;
+            hitEl.style.height = `${hitD}px`;
+          }
+          const tagOffY = Math.min(h * 0.40, rPx * (p.bodyType === 6 ? 1.24 : 1.16) + (isCompact ? 10 : 12));
+          const tagEl = domRefs.tags[p.id];
+          if (tagEl) {
+            tagEl.style.display = deepCloseup ? 'none' : '';
+            const tagClampX = isCompact
+              ? (sx < 62 ? 62 - sx : (sx > w - 62 ? w - 62 - sx : 0))
+              : 0;
+            tagEl.style.transform = tagClampX !== 0
+              ? `translate(calc(-50% + ${Math.round(tagClampX)}px), ${tagOffY}px)`
+              : `translate(-50%, ${tagOffY}px)`;
+          }
         }
-        const tagOffY = Math.min(h * 0.40, rPx * (p.bodyType === 6 ? 1.24 : 1.16) + (isCompact ? 10 : 12));
-        const tagEl = domRefs.tags[p.id];
-        if (tagEl) {
-          tagEl.style.display = deepCloseup ? 'none' : '';
-          const tagClampX = isCompact
-            ? (sx < 62 ? 62 - sx : (sx > w - 62 ? w - 62 - sx : 0))
-            : 0;
-          tagEl.style.transform = tagClampX !== 0
-            ? `translate(calc(-50% + ${Math.round(tagClampX)}px), ${tagOffY}px)`
-            : `translate(-50%, ${tagOffY}px)`;
+      } else {
+        const sEl = domRefs.sightseeingNodes?.[p.id];
+        if (sEl) {
+          const deepCloseup = isFocusedPlanet && pf.zoom > 3.2;
+          sEl.style.display = (deepCloseup || solarAlpha < 0.08) ? 'none' : 'block';
+          sEl.style.opacity = String(solarAlpha);
+          sEl.style.transform = `translate(${sx}px, ${sy}px)`;
+          sEl.style.zIndex = String(Math.round(50 + rz * 25));
+          const sTag = domRefs.sightseeingTags?.[p.id];
+          if (sTag) {
+            const tagOffY = Math.min(h * 0.40, rPx * (p.bodyType === 6 ? 1.24 : 1.16) + (isCompact ? 10 : 12));
+            const tagClampX = isCompact
+              ? (sx < 62 ? 62 - sx : (sx > w - 62 ? w - 62 - sx : 0))
+              : 0;
+            sTag.style.transform = tagClampX !== 0
+              ? `translate(calc(-50% + ${Math.round(tagClampX)}px), ${tagOffY}px)`
+              : `translate(-50%, ${tagOffY}px)`;
+          }
         }
       }
     }
 
-    if (ui.hoverPlanetId) onUpdateHoverPos(ui.hoverPlanetId);
+    if (!isHomeSystem) {
+      for (const p of PLANETS) {
+        const nodeEl = domRefs.planets[p.id];
+        if (nodeEl) nodeEl.style.display = 'none';
+      }
+    } else if (domRefs.sightseeingNodes) {
+      for (const el of Object.values(domRefs.sightseeingNodes)) {
+        if (el) el.style.display = 'none';
+      }
+    }
+
+    if (isHomeSystem && ui.hoverPlanetId) onUpdateHoverPos(ui.hoverPlanetId);
   } else {
     for (const p of PLANETS) {
       const nodeEl = domRefs.planets[p.id];
       if (nodeEl) nodeEl.style.display = 'none';
     }
+    if (domRefs.sightseeingNodes) {
+      for (const el of Object.values(domRefs.sightseeingNodes)) {
+        if (el) el.style.display = 'none';
+      }
+    }
   }
 
   // Deep-sky portals & non-solar spatial nodes (Black Hole Horizon is entered ONLY via Sun zoom — no corner BH portal!)
-  const portalOpacity = (telescopeHidden || pf.blend > 0.25) ? 0 : solarAlpha * (1.0 - pf.blend * 4.0);
+  const portalOpacity = (telescopeHidden || pf.blend > 0.25 || !isHomeSystem) ? 0 : solarAlpha * (1.0 - pf.blend * 4.0);
   const galPortalX = (isPortrait ? 0.29 : 0.40) * aspect;
   const galPortalY = -0.35;
   const webPortalX = (isPortrait ? -0.29 : -0.40) * aspect;
@@ -372,9 +460,21 @@ export function stepCosmosFrame(now, ctx) {
   const webParams = webFullAlpha > 0.01
     ? { x: 0, y: 0, radius: 1.05, alpha: webFullAlpha }
     : { x: webPortalX, y: webPortalY, radius: isPortrait ? 0.068 : 0.085, alpha: portalOpacity * 0.52 };
+  const sgrBh = activeSys.centralBlackHole;
+  const sgrBhStrength = sgrBh ? solarAlpha * (sgrBh.strength || 1.0) : 0;
   const bhParams = bhFullStrength > 0.01
     ? { x: 0, y: 0, radius: (isPortrait ? 0.125 : 0.178) * Math.pow(1.14, 7.0 - s), strength: bhFullStrength }
-    : { x: 0, y: 0, radius: 0.01, strength: 0 };
+    : (sgrBhStrength > 0.01
+      ? {
+        x: (sunPt.x / Math.max(w, 1) - 0.5) * aspect,
+        y: 0.5 - sunPt.y / Math.max(h, 1),
+        radius: Math.max(0.032, Math.min(0.24, (isPortrait ? 0.082 : (sgrBh.radiusFactor || 0.125)) * Math.min(1.8, solarZoom))),
+        strength: sgrBhStrength,
+      }
+      : { x: 0, y: 0, radius: 0.01, strength: 0 });
+  if (sgrBhStrength > 0.01) {
+    anim.solarSunScreen = { x: sunPt.x, y: sunPt.y, r: Math.max(sunRadius, bhParams.radius * h) };
+  }
 
   const toScreen = (nx, ny) => ({ x: (nx / aspect + 0.5) * w, y: (0.5 - ny) * h });
   const placePortal = (id, nx, ny, vis) => {
@@ -423,24 +523,52 @@ export function stepCosmosFrame(now, ctx) {
   const gRad = Math.min(w, h) * 0.52;
   const gTilt = 0.54 + anim.camRot.y * 0.16;
   const gSpin = -anim.realTime * 0.016 - anim.time * 0.012;
-  for (const b of galaxyBooks) {
+  const hideGalaxyDomStars = ui.viewMode === 'catalog'
+    || ui.creationViewMode === 'catalog'
+    || Boolean(ui.interiorOpen || ui.creationInteriorOpen);
+  for (let i = 0; i < galaxyBooks.length; i++) {
+    const b = galaxyBooks[i];
+    if (!b) continue;
     const el = domRefs.books[b.id];
     if (!el) continue;
-    if (galFullAlpha < 0.15) {
+    if (galFullAlpha < 0.15 || hideGalaxyDomStars) {
       el.style.display = 'none';
       continue;
     }
-    const ang = b.theta + gSpin;
+    const rVal = typeof b.celestial?.r === 'number' ? b.celestial.r : (typeof b.r === 'number' ? b.r : 0.45);
+    const thetaVal = typeof b.celestial?.theta === 'number' ? b.celestial.theta : (typeof b.theta === 'number' ? b.theta : i * 1.1);
+    const ang = thetaVal + gSpin;
     el.style.display = 'inline-flex';
     el.style.opacity = String(galFullAlpha * 0.92);
-    el.style.left = `${w * 0.5 + anim.parallax.x * 12 + Math.cos(ang) * b.r * gRad}px`;
-    el.style.top = `${h * 0.5 + anim.parallax.y * 8 + Math.sin(ang) * b.r * gRad * gTilt - 18}px`;
+    el.style.left = `${w * 0.5 + anim.parallax.x * 12 + Math.cos(ang) * rVal * gRad}px`;
+    el.style.top = `${h * 0.5 + anim.parallax.y * 8 + Math.sin(ang) * rVal * gRad * gTilt - 18}px`;
+  }
+
+  // Update floating in-flight Star System Beacons (Zero-VDOM-churn direct DOM positioning)
+  if (domRefs.soarBeacons) {
+    const projectedBeacons = projectSoarBeacons(voyage, w, h, anim.camRot);
+    const visibleMap = Object.create(null);
+    for (const b of projectedBeacons) visibleMap[b.id] = b;
+    for (const sys of STAR_SYSTEMS) {
+      const el = domRefs.soarBeacons[sys.id];
+      if (!el) continue;
+      const b = visibleMap[sys.id];
+      if (!b) {
+        el.style.display = 'none';
+      } else {
+        el.style.display = 'inline-flex';
+        el.style.opacity = String(b.alpha);
+        el.style.transform = `translate(${b.x}px, ${b.y}px) translate(-50%, -50%)`;
+      }
+    }
   }
 
   const bhCenter = toScreen(bhParams.x, bhParams.y);
   const densityScale = !engine.isWebGL ? 0 : (engine.isMobile ? 0.55 : 1.0);
   const particleCount = fillGpuParticles(gpuParticles, pools, anim, {
-    w, h, dpr, cx: sunPt.x, cy: sunPt.y, span, tilt, solarAlpha, galAlpha: galFullAlpha,
+    w, h, dpr, cx: sunPt.x, cy: sunPt.y, span, tilt,
+    solarAlpha: activeSys.hasBelt ? solarAlpha : 0,
+    galAlpha: galFullAlpha,
     bhStrength: bhParams.strength, bhCx: bhCenter.x, bhCy: bhCenter.y, bhRadiusPx: bhParams.radius * h,
     densityScale,
   });
@@ -450,7 +578,7 @@ export function stepCosmosFrame(now, ctx) {
     toScreen(galPortalX, galPortalY),
     toScreen(webPortalX, webPortalY),
   ];
-  const eventVisibilityAlpha = baseSolarAlpha;
+  const eventVisibilityAlpha = (isHomeSystem && !voyage?.soaring && !isWarpingSystem) ? baseSolarAlpha : 0;
   const eventDraws = (eventVisibilityAlpha > 0.01 && (eventSim.events?.length > 0 || eventSim.active))
     ? computeEventFrames(
       eventSim,
@@ -490,6 +618,8 @@ export function stepCosmosFrame(now, ctx) {
     sunGalacticOffset,
   };
 
+  const { skyTint, soarVec } = getVoyageSkyUniforms(voyage);
+
   engine.renderFrame({
     time: anim.time,
     realTime: anim.realTime,
@@ -498,6 +628,9 @@ export function stepCosmosFrame(now, ctx) {
     camRot: effectiveCamRot,
     warp: anim.warpEnergy,
     fovZoom: eventSim.fovZoom,
+    skyTint,
+    soarVec,
+    soarBlend: reducedMotion ? 0 : soarBlend,
     shockWave: eventVisibilityAlpha > 0.01
       ? getEventShockWave(eventSim, w, h, anim.centerShiftX, portalAvoidPoints, eventVisibilityAlpha, anim.camRot, anim.parallax)
       : [0, 0, 0, 0],
@@ -529,6 +662,12 @@ export function stepCosmosFrame(now, ctx) {
         solarProj,
         planetFocusId: pf.planetId,
         planetZoom: pf.zoom,
+        activeBodies,
+        hasComets: activeSys.hasComets !== false,
+        isHomeSystem,
+        soarBlend: reducedMotion ? 0 : soarBlend,
+        soarPhase: voyage?.flightPhase || 0,
+        voyageWarp,
       }, (ec, ew, eh) => {
         if (eventDraws.length === 0) return;
         const renderedSet = renderInfo.renderedEventUids;

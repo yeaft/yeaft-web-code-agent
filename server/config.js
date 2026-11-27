@@ -150,6 +150,8 @@ export const CONFIG = {
 
   // File upload settings
   maxFileSize: parseInt(process.env.MAX_FILE_SIZE, 10) || 50 * 1024 * 1024, // 50MB
+  maxPendingUploadBytesPerUser: Math.max(1, parseInt(process.env.MAX_PENDING_UPLOAD_BYTES_PER_USER, 10) || 100 * 1024 * 1024),
+  maxPendingUploadBytes: Math.max(1, parseInt(process.env.MAX_PENDING_UPLOAD_BYTES, 10) || 256 * 1024 * 1024),
   fileCleanupInterval: parseInt(process.env.FILE_CLEANUP_INTERVAL, 10) || 600000, // 10 minutes
 
   // TOTP (Two-Factor Authentication) settings

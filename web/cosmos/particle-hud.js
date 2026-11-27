@@ -291,7 +291,16 @@ export function fillGpuParticles(gpuBuf, pools, st, params) {
 }
 
 export function drawCosmosHud(ctx, w, h, st, webGraph, galaxyBooks, agentsByPlanet, layout, drawEventFn) {
-  const { cx, cy, span, tilt, solarAlpha, galAlpha, webAlpha, solarProj, planetFocusId, planetZoom = 1.0 } = layout;
+  const {
+    cx, cy, span, tilt, solarAlpha, galAlpha, webAlpha, solarProj,
+    planetFocusId, planetZoom = 1.0,
+    activeBodies = PLANETS,
+    hasComets = true,
+    isHomeSystem = true,
+    soarBlend = 0,
+    soarPhase = 0,
+    voyageWarp = 0,
+  } = layout;
 
   if (solarAlpha > 0.015) {
     ctx.save();
@@ -316,7 +325,7 @@ export function drawCosmosHud(ctx, w, h, st, webGraph, galaxyBooks, agentsByPlan
     ctx.save();
     ctx.beginPath();
     ctx.rect(0, 0, w, h);
-    for (const p of PLANETS) {
+    for (const p of activeBodies) {
       const pos = st.planetScreen[p.id];
       if (!pos || pos.r <= 2) continue;
       ctx.moveTo(pos.x + pos.r * 0.99, pos.y);
@@ -325,8 +334,8 @@ export function drawCosmosHud(ctx, w, h, st, webGraph, galaxyBooks, agentsByPlan
     ctx.clip('evenodd');
 
     if (orbitOpacity > 0.02) {
-      PLANETS.forEach((p) => {
-        const agent = agentsByPlanet[p.id];
+      activeBodies.forEach((p) => {
+        const agent = isHomeSystem ? agentsByPlanet[p.id] : null;
         const isFocus = st.hoverPlanetId === p.id || st.focusedPlanetId === p.id || planetFocusId === p.id;
         ctx.beginPath();
         for (let i = 0; i <= 120; i++) {
@@ -337,7 +346,7 @@ export function drawCosmosHud(ctx, w, h, st, webGraph, galaxyBooks, agentsByPlan
         }
         ctx.strokeStyle = isFocus
           ? (agent && agent.status === 'waiting' ? `rgba(255, 190, 92, ${0.38 * orbitOpacity})` : `rgba(136, 206, 255, ${0.34 * orbitOpacity})`)
-          : (agent ? `rgba(176, 208, 255, ${0.14 * orbitOpacity})` : `rgba(156, 184, 228, ${0.068 * orbitOpacity})`);
+          : (agent ? `rgba(176, 208, 255, ${0.14 * orbitOpacity})` : `rgba(156, 184, 228, ${(isHomeSystem ? 0.068 : 0.125) * orbitOpacity})`);
         ctx.lineWidth = isFocus ? 1.15 : 0.85;
         ctx.stroke();
       });
@@ -345,9 +354,9 @@ export function drawCosmosHud(ctx, w, h, st, webGraph, galaxyBooks, agentsByPlan
 
     // Keplerian Orbit motion trails
     if (orbitOpacity > 0.02) {
-      PLANETS.forEach((p) => {
-        const agent = agentsByPlanet[p.id];
-        const dtArc = (agent ? 0.36 : 0.22) / Math.max(p.speed, 0.01);
+      activeBodies.forEach((p) => {
+        const agent = isHomeSystem ? agentsByPlanet[p.id] : null;
+        const dtArc = (agent ? 0.36 : 0.24) / Math.max(p.speed, 0.01);
         ctx.beginPath();
         let endPt = null;
         for (let i = 0; i <= 22; i++) {
@@ -359,11 +368,14 @@ export function drawCosmosHud(ctx, w, h, st, webGraph, galaxyBooks, agentsByPlan
         const pos = st.planetScreen[p.id];
         if (pos && endPt) {
           const grad = ctx.createLinearGradient(pos.x, pos.y, endPt.x, endPt.y);
-          const tint = agent && agent.status === 'waiting' ? '255, 190, 92' : '152, 208, 255';
-          grad.addColorStop(0, `rgba(${tint}, ${(agent ? 0.32 : 0.13) * Math.min(1.2, orbitOpacity)})`);
+          const [ar, ag, ab] = p.atmo || [0.6, 0.8, 1.0];
+          const tint = agent && agent.status === 'waiting'
+            ? '255, 190, 92'
+            : (isHomeSystem ? '152, 208, 255' : `${Math.round(ar * 255)}, ${Math.round(ag * 255)}, ${Math.round(ab * 255)}`);
+          grad.addColorStop(0, `rgba(${tint}, ${(agent ? 0.32 : (isHomeSystem ? 0.13 : 0.24)) * Math.min(1.2, orbitOpacity)})`);
           grad.addColorStop(1, `rgba(${tint}, 0)`);
           ctx.strokeStyle = grad;
-          ctx.lineWidth = agent ? 1.35 : 0.85;
+          ctx.lineWidth = agent ? 1.35 : 0.95;
           ctx.stroke();
         }
       });
@@ -407,8 +419,8 @@ export function drawCosmosHud(ctx, w, h, st, webGraph, galaxyBooks, agentsByPlan
       ctx.setLineDash([]);
 
       const helixSteps = 56;
-      PLANETS.forEach((p) => {
-        const agent = agentsByPlanet[p.id];
+      activeBodies.forEach((p) => {
+        const agent = isHomeSystem ? agentsByPlanet[p.id] : null;
         ctx.beginPath();
         let endPt = null;
         for (let i = 0; i <= helixSteps; i++) {
@@ -436,6 +448,7 @@ export function drawCosmosHud(ctx, w, h, st, webGraph, galaxyBooks, agentsByPlan
     ctx.restore(); // end sphere-clip
 
     // Photorealistic Volumetric Dual-Tail Comets (Additive Soft Gaussian Dust Fan + Feathered CO+ Ion Plume + Parabolic Coma)
+    if (hasComets) {
     ctx.save();
     ctx.globalCompositeOperation = 'lighter';
     for (let ci = 0; ci < COMETS.length; ci++) {
@@ -534,6 +547,7 @@ export function drawCosmosHud(ctx, w, h, st, webGraph, galaxyBooks, agentsByPlan
       ctx.fill();
     }
     ctx.restore();
+    }
 
     // Occasional Deep-Space Meteors
     if (st.realTime >= st.nextMeteorAt) {
@@ -553,10 +567,10 @@ export function drawCosmosHud(ctx, w, h, st, webGraph, galaxyBooks, agentsByPlan
       ctx.strokeStyle = mg; ctx.lineWidth = 1.25; ctx.stroke();
     }
 
-    // Active Session Flashing Halos & Sculpted 3D-Occluded Artificial Satellites
+    // Active Session Flashing Halos & Sculpted 3D-Occluded Artificial Satellites (Sol system only)
     const isCompactHud = w < 768 || Math.min(w, h) < 600;
     const satCloseupFade = planetFocusId ? Math.max(0, 1.0 - Math.max(0, (planetZoom - 5.5) / 3.0)) : 1.0;
-    Object.entries(agentsByPlanet).forEach(([planetId, agent]) => {
+    if (isHomeSystem) Object.entries(agentsByPlanet).forEach(([planetId, agent]) => {
       const pos = st.planetScreen[planetId];
       if (!pos || !agent) return;
       const liveSessions = agent.liveSessions || [];
@@ -588,11 +602,12 @@ export function drawCosmosHud(ctx, w, h, st, webGraph, galaxyBooks, agentsByPlan
       }
     });
 
-    // Orbit Swap Ripples, Telemetry Beams & Drag Arc
+    // Orbit Swap Ripples, Telemetry Beams & Drag Arc (drain always, draw only in Sol)
     for (let i = st.orbitRipples.length - 1; i >= 0; i--) {
       const rp = st.orbitRipples[i];
       rp.t += 0.022;
       if (rp.t >= 1) { st.orbitRipples.splice(i, 1); continue; }
+      if (!isHomeSystem) continue;
       const pos = st.planetScreen[rp.planetId];
       if (!pos) continue;
       ctx.beginPath(); ctx.arc(pos.x, pos.y, pos.r * (1.1 + rp.t * 2.1), 0, Math.PI * 2);
@@ -602,6 +617,7 @@ export function drawCosmosHud(ctx, w, h, st, webGraph, galaxyBooks, agentsByPlan
       const bm = st.telemetryBeams[i];
       bm.t += 0.030;
       if (bm.t >= 1) { st.telemetryBeams.splice(i, 1); continue; }
+      if (!isHomeSystem) continue;
       const pos = st.planetScreen[bm.planetId];
       if (!pos) continue;
       const p = bm.t, mx = (bm.x0 + pos.x) * 0.5, my = Math.min(bm.y0, pos.y) - 64;
@@ -635,16 +651,208 @@ export function drawCosmosHud(ctx, w, h, st, webGraph, galaxyBooks, agentsByPlan
 
   if (galAlpha > 0.06) {
     ctx.save();
-    ctx.globalAlpha = galAlpha * 0.85;
+    ctx.globalAlpha = galAlpha * 0.92;
     const gcx = w * 0.5 + st.parallax.x * 12, gcy = h * 0.5 + st.parallax.y * 8;
     const gRad = Math.min(w, h) * 0.52, gTilt = 0.54 + st.camRot.y * 0.16, spin = -st.realTime * 0.016 - st.time * 0.012;
-    (galaxyBooks || []).forEach((b) => {
-      const ang = b.theta + spin, bx = gcx + Math.cos(ang) * b.r * gRad, by = gcy + Math.sin(ang) * b.r * gRad * gTilt;
-      const pts = [];
-      for (let k = 0; k < 4; k++) pts.push([bx + Math.cos(ang + k * 1.48) * (10 + k * 5), by + Math.sin(ang + k * 1.48) * (10 + k * 5) * 0.7]);
-      ctx.beginPath(); pts.forEach((pt, idx) => (idx === 0 ? ctx.moveTo(pt[0], pt[1]) : ctx.lineTo(pt[0], pt[1])));
-      ctx.strokeStyle = 'rgba(196, 224, 255, 0.34)'; ctx.lineWidth = 0.85; ctx.stroke();
-      pts.forEach((pt) => { ctx.fillStyle = b.color; ctx.beginPath(); ctx.arc(pt[0], pt[1], 2.0, 0, Math.PI * 2); ctx.fill(); });
+    const t = st.realTime;
+
+    (galaxyBooks || []).forEach((b, idx) => {
+      if (!b) return;
+      const rVal = typeof b.celestial?.r === 'number' ? b.celestial.r : (typeof b.r === 'number' ? b.r : 0.45);
+      const thetaVal = typeof b.celestial?.theta === 'number' ? b.celestial.theta : (typeof b.theta === 'number' ? b.theta : idx * 1.1);
+      const ang = thetaVal + spin;
+      const bx = gcx + Math.cos(ang) * rVal * gRad;
+      const by = gcy + Math.sin(ang) * rVal * gRad * gTilt;
+
+      const kind = b.kind || 'book';
+      const status = b.status || 'active';
+      const unitCount = Math.max(0, Number(b.unitCount ?? b.readableUnitCount ?? 0));
+      const sourceCount = Math.min(4, Math.max(0, Number(b.sourceCount ?? 0)));
+      const sizeBoost = Math.min(4.8, Math.sqrt(unitCount) * 0.85);
+      const twinkle = 0.88 + 0.12 * Math.sin(t * 2.1 + thetaVal * 3.0);
+
+      if (kind === 'deck') {
+        // Ice-cyan ringed star: luminous core + tilted concentric ellipses
+        const coreR = (3.8 + sizeBoost * 0.55) * twinkle;
+        const glow = ctx.createRadialGradient(bx, by, 0, bx, by, coreR * 4.2);
+        glow.addColorStop(0, 'rgba(235, 252, 255, 0.96)');
+        glow.addColorStop(0.32, 'rgba(110, 211, 236, 0.52)');
+        glow.addColorStop(1, 'rgba(110, 211, 236, 0)');
+        ctx.fillStyle = glow;
+        ctx.beginPath();
+        ctx.arc(bx, by, coreR * 4.2, 0, Math.PI * 2);
+        ctx.fill();
+
+        ctx.save();
+        ctx.translate(bx, by);
+        ctx.rotate(-0.42 + Math.sin(t * 0.25 + thetaVal) * 0.08);
+        ctx.strokeStyle = 'rgba(148, 230, 250, 0.68)';
+        ctx.lineWidth = 1.15;
+        ctx.beginPath();
+        ctx.ellipse(0, 0, coreR * 2.6, coreR * 0.88, 0, 0, Math.PI * 2);
+        ctx.stroke();
+
+        ctx.strokeStyle = 'rgba(196, 244, 255, 0.36)';
+        ctx.lineWidth = 0.8;
+        ctx.beginPath();
+        ctx.ellipse(0, 0, coreR * 3.55, coreR * 1.2, 0, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.restore();
+
+        ctx.fillStyle = '#e8fbff';
+        ctx.beginPath();
+        ctx.arc(bx, by, coreR * 0.72, 0, Math.PI * 2);
+        ctx.fill();
+      } else if (kind === 'gallery') {
+        // Aurora violet/rose luminous nebula cluster (multi-lobe nebula + 3-4 sparkling nuclei)
+        const baseR = 9.5 + sizeBoost * 1.2;
+        const lobes = [
+          { dx: -baseR * 0.42, dy: -baseR * 0.22, r: baseR * 1.45, c0: 'rgba(218, 134, 245, 0.44)', c1: 'rgba(218, 134, 245, 0)' },
+          { dx: baseR * 0.45, dy: baseR * 0.20, r: baseR * 1.35, c0: 'rgba(244, 138, 188, 0.38)', c1: 'rgba(244, 138, 188, 0)' },
+          { dx: 0, dy: 0, r: baseR * 1.2, c0: 'rgba(255, 224, 248, 0.46)', c1: 'rgba(190, 128, 255, 0)' },
+        ];
+        for (const l of lobes) {
+          const g = ctx.createRadialGradient(bx + l.dx, by + l.dy, 0, bx + l.dx, by + l.dy, l.r);
+          g.addColorStop(0, l.c0);
+          g.addColorStop(1, l.c1);
+          ctx.fillStyle = g;
+          ctx.beginPath();
+          ctx.arc(bx + l.dx, by + l.dy, l.r, 0, Math.PI * 2);
+          ctx.fill();
+        }
+        const nuclei = [
+          [0, 0, 2.2],
+          [-baseR * 0.48, -baseR * 0.28, 1.5],
+          [baseR * 0.52, baseR * 0.18, 1.45],
+          [baseR * 0.14, -baseR * 0.46, 1.25],
+        ];
+        nuclei.forEach(([nx, ny, nr], k) => {
+          const spark = 0.72 + 0.28 * Math.sin(t * 2.8 + thetaVal + k * 1.7);
+          ctx.fillStyle = `rgba(255, 244, 255, ${spark})`;
+          ctx.beginPath();
+          ctx.arc(bx + nx, by + ny, nr, 0, Math.PI * 2);
+          ctx.fill();
+        });
+      } else if (kind === 'video') {
+        // Electric blue/cyan pulsar: core + slow rotating twin light beams + expanding pulse ring
+        const coreR = (3.8 + sizeBoost * 0.5) * twinkle;
+        const beamAng = t * 0.55 + thetaVal;
+        const beamLen = 17 + sizeBoost * 2.1;
+
+        ctx.save();
+        ctx.translate(bx, by);
+        ctx.rotate(beamAng);
+        const beamGrad = ctx.createLinearGradient(-beamLen, 0, beamLen, 0);
+        beamGrad.addColorStop(0, 'rgba(92, 174, 255, 0)');
+        beamGrad.addColorStop(0.35, 'rgba(130, 208, 255, 0.45)');
+        beamGrad.addColorStop(0.5, 'rgba(235, 250, 255, 0.92)');
+        beamGrad.addColorStop(0.65, 'rgba(130, 208, 255, 0.45)');
+        beamGrad.addColorStop(1, 'rgba(92, 174, 255, 0)');
+        ctx.fillStyle = beamGrad;
+        ctx.beginPath();
+        ctx.moveTo(0, -1.5);
+        ctx.lineTo(beamLen, -3.4);
+        ctx.lineTo(beamLen, 3.4);
+        ctx.lineTo(0, 1.5);
+        ctx.lineTo(-beamLen, 3.4);
+        ctx.lineTo(-beamLen, -3.4);
+        ctx.closePath();
+        ctx.fill();
+        ctx.restore();
+
+        // Expanding subtle pulse ring
+        const pulsePhase = (t * 0.42 + thetaVal * 0.37) % 1;
+        const pulseR = coreR * 1.4 + pulsePhase * (15 + sizeBoost);
+        ctx.strokeStyle = `rgba(116, 198, 255, ${(1 - pulsePhase) * 0.42})`;
+        ctx.lineWidth = 1.0;
+        ctx.beginPath();
+        ctx.arc(bx, by, pulseR, 0, Math.PI * 2);
+        ctx.stroke();
+
+        const glow = ctx.createRadialGradient(bx, by, 0, bx, by, coreR * 3.8);
+        glow.addColorStop(0, 'rgba(240, 250, 255, 0.98)');
+        glow.addColorStop(0.35, 'rgba(96, 170, 255, 0.62)');
+        glow.addColorStop(1, 'rgba(96, 170, 255, 0)');
+        ctx.fillStyle = glow;
+        ctx.beginPath();
+        ctx.arc(bx, by, coreR * 3.8, 0, Math.PI * 2);
+        ctx.fill();
+      } else {
+        // Book (default): warm amber/gold main-sequence star + 4-point subtle diffraction spikes
+        const coreR = (4.0 + sizeBoost * 0.6) * twinkle;
+        const glow = ctx.createRadialGradient(bx, by, 0, bx, by, coreR * 4.4);
+        glow.addColorStop(0, 'rgba(255, 250, 232, 0.98)');
+        glow.addColorStop(0.30, 'rgba(246, 192, 98, 0.62)');
+        glow.addColorStop(0.68, 'rgba(226, 148, 48, 0.18)');
+        glow.addColorStop(1, 'rgba(226, 148, 48, 0)');
+        ctx.fillStyle = glow;
+        ctx.beginPath();
+        ctx.arc(bx, by, coreR * 4.4, 0, Math.PI * 2);
+        ctx.fill();
+
+        const spikeLen = coreR * 3.4;
+        ctx.strokeStyle = 'rgba(255, 232, 180, 0.56)';
+        ctx.lineWidth = 0.95;
+        ctx.beginPath();
+        ctx.moveTo(bx - spikeLen, by);
+        ctx.lineTo(bx + spikeLen, by);
+        ctx.moveTo(bx, by - spikeLen);
+        ctx.lineTo(bx, by + spikeLen);
+        ctx.stroke();
+
+        ctx.fillStyle = b.color || '#ffe9b8';
+        ctx.beginPath();
+        ctx.arc(bx, by, coreR * 0.72, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
+      // Status overlays: generating, needs_attention, seed
+      if (b.activeRunStatus === 'running' || status === 'generating') {
+        const ringR = 14 + sizeBoost * 0.8;
+        const collapseR = ringR + (1 - ((t * 0.6 + idx * 0.23) % 1)) * 7;
+        ctx.strokeStyle = 'rgba(255, 196, 102, 0.34)';
+        ctx.lineWidth = 1.0;
+        ctx.beginPath();
+        ctx.arc(bx, by, collapseR, 0, Math.PI * 2);
+        ctx.stroke();
+
+        const progress = Math.max(0.08, Math.min(1, Number(b.activeRunProgress ?? 0.35)));
+        const startA = -Math.PI * 0.5 + t * 0.45;
+        ctx.strokeStyle = 'rgba(255, 206, 118, 0.90)';
+        ctx.lineWidth = 1.8;
+        ctx.beginPath();
+        ctx.arc(bx, by, ringR, startA, startA + Math.PI * 2 * progress);
+        ctx.stroke();
+      } else if (status === 'needs_attention') {
+        const pulse = 0.35 + 0.35 * Math.sin(t * 1.9 + idx);
+        const attnR = 13.5 + sizeBoost * 0.7;
+        ctx.strokeStyle = `rgba(255, 126, 136, ${pulse})`;
+        ctx.lineWidth = 1.45;
+        ctx.beginPath();
+        ctx.arc(bx, by, attnR, 0, Math.PI * 2);
+        ctx.stroke();
+      } else if (status === 'seed') {
+        ctx.save();
+        ctx.setLineDash([3, 3]);
+        ctx.strokeStyle = 'rgba(196, 224, 255, 0.42)';
+        ctx.lineWidth = 0.9;
+        ctx.beginPath();
+        ctx.arc(bx, by, 11.5, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.restore();
+      }
+
+      // Orbiting tiny satellite dots proportional to sourceCount (up to 4)
+      for (let sIdx = 0; sIdx < sourceCount; sIdx++) {
+        const satOrbit = 11.5 + sizeBoost * 0.7 + sIdx * 2.4;
+        const satAng = t * (0.45 + sIdx * 0.14) + thetaVal + sIdx * ((Math.PI * 2) / Math.max(sourceCount, 1));
+        const sx = bx + Math.cos(satAng) * satOrbit;
+        const sy = by + Math.sin(satAng) * satOrbit * 0.68;
+        ctx.fillStyle = 'rgba(216, 236, 255, 0.82)';
+        ctx.beginPath();
+        ctx.arc(sx, sy, 1.45, 0, Math.PI * 2);
+        ctx.fill();
+      }
     });
     ctx.restore();
   }
@@ -715,6 +923,52 @@ export function drawCosmosHud(ctx, w, h, st, webGraph, galaxyBooks, agentsByPlan
       g.addColorStop(0.28, n.color.replace(', 1)', `, ${Math.min(0.85, 0.48 * pulse)})`));
       g.addColorStop(1, 'rgba(130, 180, 255, 0)');
       ctx.fillStyle = g; ctx.beginPath(); ctx.arc(p.x, p.y, rad * 3.4, 0, Math.PI * 2); ctx.fill();
+    }
+    ctx.restore();
+  }
+
+  // 3D Interstellar Soaring & Warp Starlight Streamers
+  const streamIntensity = Math.max(soarBlend * 0.85, voyageWarp);
+  if (streamIntensity > 0.04) {
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    const vpx = w * 0.5 + st.parallax.x * 26 - st.camRot.x * 42;
+    const vpy = h * 0.48 + st.parallax.y * 18 - st.camRot.y * 34;
+    const maxR = Math.hypot(w, h) * 0.68;
+    const count = voyageWarp > 0.25 ? 72 : 46;
+    const palette = [
+      [158, 214, 255],
+      [236, 245, 255],
+      [255, 224, 174],
+      [194, 178, 255],
+    ];
+    for (let i = 0; i < count; i++) {
+      const h1 = ((i * 2654435761) >>> 0) / 4294967296;
+      const h2 = (((i + 37) * 2246822519) >>> 0) / 4294967296;
+      const ang = h1 * Math.PI * 2;
+      const z = (h2 + soarPhase * (0.28 + (i % 5) * 0.055)) % 1;
+      const depth = z * z;
+      const r0 = (0.04 + depth * 0.96) * maxR;
+      const streakLen = (10 + depth * (44 + voyageWarp * 115)) * streamIntensity;
+      const r1 = Math.max(4, r0 - streakLen);
+      const x0 = vpx + Math.cos(ang) * r0;
+      const y0 = vpy + Math.sin(ang) * r0;
+      if (x0 < -140 || x0 > w + 140 || y0 < -140 || y0 > h + 140) continue;
+      const x1 = vpx + Math.cos(ang) * r1;
+      const y1 = vpy + Math.sin(ang) * r1;
+      const [sr, sg, sb] = palette[i % palette.length];
+      const alpha = Math.sin(z * Math.PI) * (0.18 + depth * 0.52) * streamIntensity;
+      if (alpha < 0.015) continue;
+      const lg = ctx.createLinearGradient(x0, y0, x1, y1);
+      lg.addColorStop(0, `rgba(${sr}, ${sg}, ${sb}, ${alpha.toFixed(3)})`);
+      lg.addColorStop(1, `rgba(${sr}, ${sg}, ${sb}, 0)`);
+      ctx.strokeStyle = lg;
+      ctx.lineWidth = 0.7 + depth * 1.35;
+      ctx.lineCap = 'round';
+      ctx.beginPath();
+      ctx.moveTo(x1, y1);
+      ctx.lineTo(x0, y0);
+      ctx.stroke();
     }
     ctx.restore();
   }

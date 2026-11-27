@@ -14,6 +14,7 @@ import { handleAgentOutput } from './handlers/agent-output.js';
 import { handleAgentSessionTurnDelete } from './handlers/session-turn-delete.js';
 import { handleAgentSessionDiscovery } from './handlers/session-discovery.js';
 import { handleAgentWorkCenter } from './handlers/agent-work-center.js';
+import { handleAgentCreation } from './handlers/agent-creation.js';
 import { handleAgentPerson } from './handlers/client-person.js';
 import { handleAgentFileTerminal } from './handlers/agent-file-terminal.js';
 import { handleAgentSync } from './handlers/agent-sync.js';
@@ -21,6 +22,8 @@ import { recordPerfTraceEvent } from './perf-trace.js';
 import { clearWorkbenchCorrelationsForAgent } from './workbench-correlation.js';
 import { clearBrowserRuntimeForAgent } from './browser-runtime-routes.js';
 import { clearFileContentAssembliesForAgent } from './file-content-assembly.js';
+import { clearCreationRequestsForAgent } from './handlers/client-creation.js';
+import { closeCreationMediaReads } from './creation-media-relay.js';
 import { closeSessionAttachmentReads, handleSessionAttachmentChunk } from './session-attachment-relay.js';
 import { handleAgentBrowser } from './handlers/agent-browser.js';
 import { markAgentHeartbeatSeen } from './heartbeat-policy.js';
@@ -313,6 +316,8 @@ function handleAgentDisconnect(agentId, agentName, ws) {
   clearWorkbenchCorrelationsForAgent(agentId);
   clearFileContentAssembliesForAgent(agentId);
   closeSessionAttachmentReads(agentId, agent);
+  closeCreationMediaReads(agentId, agent);
+  clearCreationRequestsForAgent(agentId, agent);
   clearBrowserRuntimeForAgent(agentId);
   for (const pending of takeAgentSettingsRequestsForAgent(agentId)) {
     const client = webClients.get(pending.clientId);
@@ -410,6 +415,8 @@ function completeAgentRegistration(ws, agentId, agentName, workDir, sessionKey, 
 
   if (existingAgent?.ws && existingAgent.ws !== ws) {
     closeSessionAttachmentReads(agentId, existingAgent);
+    closeCreationMediaReads(agentId, existingAgent);
+    clearCreationRequestsForAgent(agentId, existingAgent);
     clearBrowserRuntimeForAgent(agentId);
     existingAgent.ws.close(1008, 'Superseded by a newer Agent connection');
   }
@@ -450,6 +457,7 @@ async function handleAgentMessage(agentId, msg, ws) {
   const agent = agents.get(agentId);
   if (!agent || agent.ws !== ws) return;
   if (handleSessionAttachmentChunk(agentId, agent, msg)) return;
+  if (await handleAgentCreation(agentId, agent, msg)) return;
   if (await handleAgentSessionTurnDelete(agentId, agent, msg)) return;
   if (await handleAgentSessionDiscovery(agentId, agent, msg)) return;
 

@@ -32,6 +32,8 @@ export default {
     streamHidden: { type: Boolean, default: false },
     /** Suppress overlapping when Cosmic Constants popover or telescope observation is active. */
     suppressed: { type: Boolean, default: false },
+    /** Suppress floating cards & mobile banner (e.g. in Galaxy band or Creation interior) while keeping popover accessible. */
+    suppressFloating: { type: Boolean, default: false },
   },
   emits: ['open-signal', 'dismiss-signal', 'mark-all-read', 'close-popover', 'restore-trigger-focus'],
   template: `
@@ -203,9 +205,11 @@ export default {
     <!-- 3. Popover / Sheet Mode (Drawer-Open Chain-Reader, Mobile Sheet, or Collapsed-Mode Popover) -->
     <section
       v-if="popoverOpen"
+      ref="popoverRef"
       class="cosmos-signal-popover"
       :class="{ 'is-drawer-docked': drawerOpen && !isCompact, 'is-mobile': isCompact }"
       role="dialog"
+      tabindex="-1"
       :aria-label="$t('cosmos.signals.title')"
       @pointerdown.stop
       @wheel.stop
@@ -316,6 +320,7 @@ export default {
       !props.drawerOpen
       && !props.isCompact
       && !props.suppressed
+      && !props.suppressFloating
       && !props.popoverOpen
       && !defaultCollapsed.value
       && !props.streamHidden
@@ -342,6 +347,7 @@ export default {
       && !props.drawerOpen
       && !props.popoverOpen
       && !props.suppressed
+      && !props.suppressFloating
       && !defaultCollapsed.value
       && Boolean(mobileBannerItem.value)
       && mobileBannerSignature.value !== dismissedBannerSignature.value
@@ -422,6 +428,21 @@ export default {
       }
     }
 
+    const popoverRef = Vue.ref(null);
+
+    function focusSignalPopover() {
+      Vue.nextTick(() => {
+        const root = popoverRef.value;
+        if (!root) return;
+        const focusable = root.querySelector('button:not([disabled]), [tabindex]:not([tabindex="-1"])');
+        (focusable || root).focus?.();
+      });
+    }
+
+    Vue.watch(() => [props.popoverOpen, popoverRef.value], ([open, el]) => {
+      if (open && el) focusSignalPopover();
+    }, { immediate: true, flush: 'post' });
+
     function dismissMobileBanner() {
       dismissedBannerSignature.value = mobileBannerSignature.value;
     }
@@ -434,6 +455,7 @@ export default {
     }
 
     return {
+      popoverRef,
       expanded,
       srAnnouncement,
       previewLines,
