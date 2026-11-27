@@ -775,15 +775,34 @@ export const useCosmicWebStore = defineStore('cosmicWeb', {
 
     async selectArticleSource(clusterId, { itemId = null, url = null, perspective = null, agentId = null } = {}) {
       if (!clusterId) return;
-      clearAutoBriefTimer();
-      readerSessionToken += 1;
-      this.sourceSelectionRev += 1;
       const nextUrl = url || null;
       const matched = !itemId && nextUrl && Array.isArray(this.activeClusterDetail?.items)
         ? this.activeClusterDetail.items.find((it) => it && it.url === nextUrl)
         : null;
       const resolvedItemId = itemId || matched?.id || null;
-      this.readerSelectionMode = itemId ? 'item' : (nextUrl ? 'url' : 'default');
+      const nextMode = itemId ? 'item' : (nextUrl ? 'url' : 'default');
+      // Clicking the already-active source chip in the same open story is a no-op:
+      // never cancel pending follow-ups/briefs or clear the thread when the source did not change.
+      const sameOpenStory = this.readerOpen && this.readerClusterId === clusterId;
+      const currentEffectiveItemId = this.activeArticleItemId || this.resolvedSourceItemId || null;
+      const isAlreadySelected = sameOpenStory && (
+        (resolvedItemId && resolvedItemId === currentEffectiveItemId)
+        || (!resolvedItemId && nextUrl && nextUrl === this.activeArticleUrl)
+      );
+      if (isAlreadySelected) {
+        if (resolvedItemId && !this.activeArticleItemId) {
+          this.readerSelectionMode = nextMode;
+          this.activeArticleItemId = resolvedItemId;
+          this.readerItemId = resolvedItemId;
+          this.activeArticleUrl = nextUrl;
+        }
+        return;
+      }
+
+      clearAutoBriefTimer();
+      readerSessionToken += 1;
+      this.sourceSelectionRev += 1;
+      this.readerSelectionMode = nextMode;
       this.readerItemId = resolvedItemId;
       this.activeArticleItemId = resolvedItemId;
       this.activeArticleUrl = nextUrl;

@@ -1080,9 +1080,12 @@ describe('2.0 graph and AI contracts', () => {
     const typoQuotePortUrl = '//user:TYPOQUOTEPASS99@intranet:8080';
     const cjkPeriodPortUrl = '//user:CJKPERIODPASS99@intranet:8080';
     const cjkBracketPortUrl = '//user:CJKBRACKETPASS99@intranet:8443';
+    const enDashHttpUrl = 'https://files.example/report\u2013draft.pdf?token=ENDASHSECRET99';
+    const enDashRelUrl = '//intranet/report\u2013draft.pdf?token=RELENDASHSECRET99';
+    const cjkQueryUrl = 'https://files.example/doc?title=总结，草案&token=CJKQUERYSECRET99';
     const privItemWithImg = {
       ...item('Private img note', 'https://private.example/img-note'),
-      summaryExcerpt: `${unicodePad} Private brief note with ${excerptSecretUrl}, ${unicodeSecretUrl}, ${wwwSecretUrl}, ${schemeRelSecretUrl}, ${ipv6RelSecretUrl}, ${singleHostRelSecretUrl}, ${userinfoRelSecretUrl}, **${boldUserinfoPortUrl}**, “${typoQuotePortUrl}”, 请看${cjkPeriodPortUrl}。以及【${cjkBracketPortUrl}】 inside.`,
+      summaryExcerpt: `${unicodePad} Private brief note with ${excerptSecretUrl}, ${unicodeSecretUrl}, ${wwwSecretUrl}, ${schemeRelSecretUrl}, ${ipv6RelSecretUrl}, ${singleHostRelSecretUrl}, ${userinfoRelSecretUrl}, **${boldUserinfoPortUrl}**, “${typoQuotePortUrl}”, 请看${cjkPeriodPortUrl}。以及【${cjkBracketPortUrl}】, ${enDashHttpUrl}, ${enDashRelUrl}, and ${cjkQueryUrl} inside.`,
       media: [{ url: secretMediaUrl, kind: 'image' }],
     };
     ingestCosmicWebItems(source('rss-priv-img', 'custom-sports', 'alice'), [privItemWithImg], NOW);
@@ -1094,13 +1097,13 @@ describe('2.0 graph and AI contracts', () => {
     const privDet = await svc.cluster('alice', privNode.clusterId);
     expect(privDet.media).toEqual([]);
     expect(JSON.stringify(privDet)).not.toContain(secretMediaUrl);
-    // Round 6–13 Blocker #1: REAL extractCleanArticle -> aiBrief path with localized typographic quotes/CJK punctuation, bold/italic explicit-port userinfo, Markdown-escaped IPv6, angle-delimited (<...>) unmatched ')', bare apostrophe, U+0130, bare www., single-label & userinfo
+    // Round 6–14 Blocker #1: REAL extractCleanArticle -> aiBrief path with Unicode punctuation INSIDE URLs (en dash U+2013, CJK comma in query) AND around URLs (typographic quotes, CJK punctuation, Markdown emphasis)
     const privItemId = privDet.items[0].id;
     const angleParenUrl = 'https://files.example/report)v2.pdf?token=ANGLEPARENSECRET99';
     const parenSecretUrl = 'https://files.example/chart(v2).png?token=PRIVATESENTINEL99';
     const aposSecretUrl = "https://files.example/team's-deck.pdf?token=APOSSECRET99";
     const extractedPrivate = extractCleanArticle(
-      `<article><h1>Private Memo</h1><p>${unicodePad} Quarterly notes // keep prose comment, <a href="${angleParenUrl}">Attachment</a>, bare ${parenSecretUrl}, (${parenSecretUrl}), ${aposSecretUrl}, ${unicodeSecretUrl}, ${wwwSecretUrl}, ${schemeRelSecretUrl}, ${ipv6RelSecretUrl}, ${singleHostRelSecretUrl}, ${userinfoRelSecretUrl}, <strong>${boldUserinfoPortUrl}</strong>, <em>${emUserinfoPortUrl}</em>, “${typoQuotePortUrl}”, 请看${cjkPeriodPortUrl}。以及【${cjkBracketPortUrl}】.</p></article>`,
+      `<article><h1>Private Memo</h1><p>${unicodePad} Quarterly notes // keep prose comment, <a href="${angleParenUrl}">Attachment</a>, bare ${parenSecretUrl}, (${parenSecretUrl}), ${aposSecretUrl}, ${unicodeSecretUrl}, ${wwwSecretUrl}, ${schemeRelSecretUrl}, ${ipv6RelSecretUrl}, ${singleHostRelSecretUrl}, ${userinfoRelSecretUrl}, <strong>${boldUserinfoPortUrl}</strong>, <em>${emUserinfoPortUrl}</em>, “${typoQuotePortUrl}”, 请看${cjkPeriodPortUrl}。以及【${cjkBracketPortUrl}】, ${enDashHttpUrl}, ${enDashRelUrl}, and ${cjkQueryUrl}.</p></article>`,
       'https://private.example/img-note',
       'Private img note',
     );
@@ -1110,6 +1113,7 @@ describe('2.0 graph and AI contracts', () => {
     expect(extractedPrivate.markdown).toContain(`*${emUserinfoPortUrl}*`);
     expect(extractedPrivate.markdown).toContain(`“${typoQuotePortUrl}”`);
     expect(extractedPrivate.markdown).toContain(`${cjkPeriodPortUrl}。`);
+    expect(extractedPrivate.markdown).toContain('report\u2013draft.pdf?token=ENDASHSECRET99');
     db.setArticleCache('alice', privItemId, {
       ...extractedPrivate, itemId: privItemId, clusterId: privNode.clusterId, summaryExcerpt: privItemWithImg.summaryExcerpt,
     }, NOW + HOUR);
@@ -1119,17 +1123,19 @@ describe('2.0 graph and AI contracts', () => {
     const privBriefJson = JSON.stringify(requestAi.mock.lastCall[0].payload);
     for (const secret of [secretMediaUrl, 'PRIVATESENTINEL99', 'ANGLEPARENSECRET99', 'APOSSECRET99', 'UNICODEDRIFTSECRET99',
       'WWWSECRET99', 'SCHEMERELSECRET99', 'IPV6RELSECRET99', 'SINGLEHOSTSECRET99', 'USERINFORELSECRET99',
-      'BOLDPORTPASS99', 'EMPORTPASS99', 'TYPOQUOTEPASS99', 'CJKPERIODPASS99', 'CJKBRACKETPASS99', 'EXCERPTSECRET99']) {
+      'BOLDPORTPASS99', 'EMPORTPASS99', 'TYPOQUOTEPASS99', 'CJKPERIODPASS99', 'CJKBRACKETPASS99',
+      'ENDASHSECRET99', 'RELENDASHSECRET99', 'CJKQUERYSECRET99', 'EXCERPTSECRET99']) {
       expect(privBriefJson).not.toContain(secret);
     }
     expect(requestAi.mock.lastCall[0].payload.articleMarkdown).toContain('Attachment');
     expect(requestAi.mock.lastCall[0].payload.articleMarkdown).toContain('// keep prose comment');
-    // Round 6–13: followUp redacts all alphanumeric sentinels directly in summaryExcerpt
+    // Round 6–14: followUp redacts all alphanumeric sentinels directly in summaryExcerpt
     await svc.followUp('alice', 'user', privNode.clusterId, { question: 'Any updates?', research: true });
     const privFuJson = JSON.stringify(requestAi.mock.lastCall[0].payload);
     for (const secret of [secretMediaUrl, 'EXCERPTSECRET99', 'UNICODEDRIFTSECRET99', 'WWWSECRET99',
       'SCHEMERELSECRET99', 'IPV6RELSECRET99', 'SINGLEHOSTSECRET99', 'USERINFORELSECRET99',
-      'BOLDPORTPASS99', 'TYPOQUOTEPASS99', 'CJKPERIODPASS99', 'CJKBRACKETPASS99']) {
+      'BOLDPORTPASS99', 'TYPOQUOTEPASS99', 'CJKPERIODPASS99', 'CJKBRACKETPASS99',
+      'ENDASHSECRET99', 'RELENDASHSECRET99', 'CJKQUERYSECRET99']) {
       expect(privFuJson).not.toContain(secret);
     }
 

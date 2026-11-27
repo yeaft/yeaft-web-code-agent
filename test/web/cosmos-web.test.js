@@ -2134,6 +2134,76 @@ describe('Cosmic Web — Pinia store & interactive overlay', () => {
       answer: 'Survived same-story reselect for item-c',
     });
 
+    // Round 14 Blocker #2: Explicitly select Source B ('item-b'), start a follow-up POST,
+    // and click the ALREADY-ACTIVE Source B chip while the POST is pending -> MUST be a no-op
+    // (does NOT abort the POST, does NOT clear followUpLoading or followUpThread)!
+    const beforeSourceBClick = webStore.selectArticleSource('c-first-open', { itemId: 'item-b', url: 'https://sb.example/b' });
+    await beforeSourceBClick;
+    await flushPromises();
+    expect(webStore.activeArticleItemId).toBe('item-b');
+    let resolveSourceBFollowUp;
+    let sourceBFollowUpAborted = false;
+    let sourceBBriefHits = 0;
+    const prevSourceBFetch = globalThis.fetch;
+    globalThis.fetch = vi.fn((url, opts) => {
+      const u = String(url);
+      const jsonRes = (body) => ({
+        ok: true,
+        status: 200,
+        headers: { get: (k) => (k.toLowerCase() === 'content-type' ? 'application/json' : null) },
+        json: async () => body,
+      });
+      if (u === '/api/cosmic-web/clusters/c-first-open/ai-brief') {
+        sourceBBriefHits += 1;
+        return Promise.resolve(jsonRes({
+          tldr: 'Should not regenerate on active source chip click',
+          sections: [{ heading: 'Body', body: 'Details' }],
+          bullets: ['b1', 'b2'],
+          impact: 'imp',
+          searchCount: 0,
+          evidenceCount: 0,
+          researched: false,
+          followUps: [],
+        }));
+      }
+      if (u === '/api/cosmic-web/clusters/c-first-open/follow-up') {
+        return new Promise((resolve, reject) => {
+          opts?.signal?.addEventListener('abort', () => {
+            sourceBFollowUpAborted = true;
+            const err = new Error('Aborted');
+            err.name = 'AbortError';
+            reject(err);
+          }, { once: true });
+          resolveSourceBFollowUp = () => resolve(jsonRes({
+            question: 'Source B pending question?',
+            answer: 'Survived clicking active Source B chip',
+            citations: [], media: [], searchCount: 0, evidenceCount: 0, researched: false,
+          }));
+        });
+      }
+      return prevSourceBFetch(url, opts);
+    });
+    await reopenInput.setValue('Source B pending question?');
+    await reopenInput.trigger('keydown.enter');
+    await flushPromises();
+    expect(webStore.followUpLoading).toBe(true);
+    expect(resolveSourceBFollowUp).toBeTypeOf('function');
+    // Click the ALREADY-ACTIVE Source B chip in the reader modal!
+    const activeSourceChip = wrapper.find('.cw-reader-modal .cw-footnote-switch.is-active');
+    expect(activeSourceChip.text()).toBe('Source B');
+    await activeSourceChip.trigger('click');
+    await flushPromises();
+    expect(sourceBFollowUpAborted).toBe(false);
+    expect(sourceBBriefHits).toBe(0);
+    expect(webStore.followUpLoading).toBe(true);
+    resolveSourceBFollowUp();
+    await flushPromises();
+    expect(webStore.followUpLoading).toBe(false);
+    expect(webStore.followUpThread.at(-1)).toMatchObject({
+      question: 'Source B pending question?',
+      answer: 'Survived clicking active Source B chip',
+    });
+
     // Restore original v1-only prop & fetch before remaining assertions
     globalThis.fetch = prevFetchFirst;
     await wrapper.setProps({

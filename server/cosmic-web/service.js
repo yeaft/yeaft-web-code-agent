@@ -604,7 +604,27 @@ export function createCosmicWebService({ fetcher = safeFetch, dnsLookup, now = D
   }
   const UNICODE_PUNCT_RE = /[\p{P}\p{S}]/u;
   const isNonAsciiPunct = ch => Boolean(ch && ch.charCodeAt(0) > 127 && UNICODE_PUNCT_RE.test(ch));
-  const isBareUrlStop = ch => !ch || /[\s<>"]/.test(ch) || isNonAsciiPunct(ch);
+  const isBareUrlStop = ch => !ch || /[\s<>"]/.test(ch);
+  function trimTrailingUrlPunct(str, start, end, openParens, closeParens, openBrackets, closeBrackets) {
+    let j = end;
+    while (j > start) {
+      const last = str[j - 1];
+      const escaped = j >= start + 2 && str[j - 2] === '\\';
+      if (last === ')' && !escaped && closeParens > openParens) { closeParens--; j--; continue; }
+      if (last === ']' && !escaped && closeBrackets > openBrackets) { closeBrackets--; j--; continue; }
+      if (!escaped && (last === '\'' || last === '`' || last === '*' || last === '_' || last === '~'
+        || last === '.' || last === ',' || last === ';' || last === ':' || last === '!' || last === '?' || isNonAsciiPunct(last))) {
+        j--;
+        continue;
+      }
+      break;
+    }
+    return j;
+  }
+  function isValidSchemeRelativeCandidate(rawCandidate) {
+    const normalized = rawCandidate.replace(/\\([\\`*_{}\[\]<>#!|~.\-+=])/g, '$1');
+    return normalized.length > 2 && /[/?#:@.[]/.test(normalized.slice(2)) && URL.canParse(`https:${normalized}`);
+  }
   function matchUrlStartAt(str, offset) {
     const len = str.length;
     const prev = offset > 0 ? str.charCodeAt(offset - 1) : 0;
@@ -641,14 +661,14 @@ export function createCosmicWebService({ fetcher = safeFetch, dnsLookup, now = D
     }
 
     // 3. Scheme-relative //authority/... URL (supports IPv6 including Markdown-escaped \[...\], single-label hosts,
-    // userinfo & ports via WHATWG URL.canParse on a Markdown-normalized candidate, stopping at localized Unicode punctuation
-    // and whitespace while preserving '// comment' / '//TODO').
+    // userinfo, explicit ports, and Unicode punctuation inside paths OR immediately following in localized prose).
     if (offset + 3 < len && c0 === 47 && str.charCodeAt(offset + 1) === 47 && prev !== 58 && prev !== 47) {
       const next = str[offset + 2];
-      if (next && next !== '/' && !isBareUrlStop(next)) {
+      if (next && next !== '/' && !isBareUrlStop(next) && !isNonAsciiPunct(next)) {
         let k = offset + 2;
         const maxScan = Math.min(len, offset + 512);
         let openParens = 0, closeParens = 0, openBrackets = 0, closeBrackets = 0;
+        let firstNonAsciiPunctIdx = -1;
         while (k < maxScan && !isBareUrlStop(str[k])) {
           if (str[k] === '\\' && k + 1 < maxScan && !isBareUrlStop(str[k + 1])) {
             const esc = str[k + 1];
@@ -658,27 +678,21 @@ export function createCosmicWebService({ fetcher = safeFetch, dnsLookup, now = D
             continue;
           }
           const ch = str[k];
+          if (firstNonAsciiPunctIdx === -1 && isNonAsciiPunct(ch)) firstNonAsciiPunctIdx = k;
           if (ch === '(') openParens++;
           else if (ch === ')') closeParens++;
           else if (ch === '[') openBrackets++;
           else if (ch === ']') closeBrackets++;
           k++;
         }
-        while (k > offset + 2) {
-          const last = str[k - 1];
-          const escaped = k >= offset + 4 && str[k - 2] === '\\';
-          if (last === ')' && !escaped && closeParens > openParens) { closeParens--; k--; continue; }
-          if (last === ']' && !escaped && closeBrackets > openBrackets) { closeBrackets--; k--; continue; }
-          if (!escaped && (last === '\'' || last === '`' || last === '*' || last === '_' || last === '~'
-            || last === '.' || last === ',' || last === ';' || last === ':' || last === '!' || last === '?' || isNonAsciiPunct(last))) {
-            k--;
-            continue;
-          }
-          break;
+        const trimmedEnd = trimTrailingUrlPunct(str, offset + 2, k, openParens, closeParens, openBrackets, closeBrackets);
+        if (isValidSchemeRelativeCandidate(str.slice(offset, trimmedEnd))) return 2;
+        // Fallback for localized prose without whitespace after sentence punctuation (e.g. '//user:pass@host:8080。下一句'):
+        // validate the prefix before the first non-ASCII prose delimiter.
+        if (firstNonAsciiPunctIdx > offset + 2) {
+          const prefixEnd = trimTrailingUrlPunct(str, offset + 2, firstNonAsciiPunctIdx, openParens, closeParens, openBrackets, closeBrackets);
+          if (isValidSchemeRelativeCandidate(str.slice(offset, prefixEnd))) return 2;
         }
-        const rawCandidate = str.slice(offset, k);
-        const normalized = rawCandidate.replace(/\\([\\`*_{}\[\]<>#!|~.\-+=])/g, '$1');
-        if (normalized.length > 2 && /[/?#:@.[]/.test(normalized.slice(2)) && URL.canParse(`https:${normalized}`)) return 2;
       }
     }
     return 0;
@@ -699,7 +713,8 @@ export function createCosmicWebService({ fetcher = safeFetch, dnsLookup, now = D
       if (prefixLen > 0) {
         let j = i + prefixLen;
         let openParens = 0, closeParens = 0, openBrackets = 0, closeBrackets = 0;
-        // Consume all legal RFC 3986 URI characters (including apostrophe ') until whitespace, angle bracket, double quote, or localized Unicode punctuation.
+        // Consume the entire non-whitespace/non-angle/non-quote token (including valid internal Unicode punctuation
+        // such as en dash '–' in paths or CJK chars in queries), trimming prose delimiters ONLY from the trailing end.
         while (j < len && !isBareUrlStop(noLinks[j])) {
           if (noLinks[j] === '\\' && j + 1 < len && !isBareUrlStop(noLinks[j + 1])) {
             const esc = noLinks[j + 1];
@@ -715,19 +730,7 @@ export function createCosmicWebService({ fetcher = safeFetch, dnsLookup, now = D
           else if (ch === ']') closeBrackets++;
           j++;
         }
-        // Trim only trailing unescaped sentence/wrapper/Markdown emphasis punctuation outside balanced URL parens/brackets.
-        while (j > i) {
-          const last = noLinks[j - 1];
-          const escaped = j >= i + 2 && noLinks[j - 2] === '\\';
-          if (last === ')' && !escaped && closeParens > openParens) { closeParens--; j--; continue; }
-          if (last === ']' && !escaped && closeBrackets > openBrackets) { closeBrackets--; j--; continue; }
-          if (!escaped && (last === '\'' || last === '`' || last === '*' || last === '_' || last === '~'
-            || last === '.' || last === ',' || last === ';' || last === ':' || last === '!' || last === '?' || isNonAsciiPunct(last))) {
-            j--;
-            continue;
-          }
-          break;
-        }
+        j = trimTrailingUrlPunct(noLinks, i, j, openParens, closeParens, openBrackets, closeBrackets);
         i = j;
         continue;
       }
