@@ -68,9 +68,12 @@ export async function streamWorkbenchVideo(req, res, video) {
     const partial = requested !== null;
     const isHead = req.method === 'HEAD';
     const firstEnd = video.size === 0 ? -1 : Math.min(range.end, range.start + WORKBENCH_VIDEO_CHUNK_BYTES - 1);
-    const firstChunk = isHead || firstEnd < range.start
-      ? null
-      : await video.read(range.start, firstEnd, abortController.signal);
+    let firstChunk;
+    if (isHead || firstEnd < range.start) {
+      if (typeof video.revalidate === 'function') await video.revalidate(abortController.signal);
+    } else {
+      firstChunk = await video.read(range.start, firstEnd, abortController.signal);
+    }
     res.status(partial ? 206 : 200);
     res.setHeader('Content-Type', video.mimeType);
     res.setHeader('Accept-Ranges', 'bytes');

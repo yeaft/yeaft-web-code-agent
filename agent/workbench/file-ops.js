@@ -268,6 +268,8 @@ export async function handleReadFile(msg) {
           _requestClientId,
           filePath: resolved,
           requestedFilePath: filePath,
+          mtimeMs: fileStat.mtimeMs,
+          size: fileStat.size,
         }, buffer, mimeType);
       } else {
         const content = buffer.toString('utf-8');
@@ -301,6 +303,8 @@ export async function handleReadFile(msg) {
           filePath: resolved,
           requestedFilePath: filePath,
           content,
+          mtimeMs: fileStat.mtimeMs,
+          size: fileStat.size,
           language: langMap[ext] || null
         });
       }
@@ -324,42 +328,55 @@ export async function handleReadFile(msg) {
 
 export async function handleWriteFile(msg) {
   const { conversationId, filePath, content, requestId, _requestUserId, _requestClientId } = msg;
-  const conv = ctx.conversations.get(conversationId);
-  const workDir = msg.workDir || conv?.workDir || ctx.CONFIG.workDir;
+  const reply = { type: 'file_saved', conversationId, requestId, _requestUserId, _requestClientId, requestedFilePath: filePath };
+  if (typeof content !== 'string') {
+    return sendWorkbenchResult(ctx, msg, {
+      ...reply, filePath, success: false, error: 'File content must be a string.', errorCode: 'INVALID_CONTENT',
+    });
+  }
 
   try {
-    const resolved = hasCreationScope(msg) ? await withCreationFiles(msg, async files => {
-      const path = files.target(filePath, { strictDescendant: true });
-      await files.file(path, async handle => {
-        await handle.truncate(0);
-        await handle.writeFile(content, 'utf-8');
-      }, { write: true });
-      return path;
-    }) : await resolveWorkItemPath(msg, filePath, workDir);
-    if (!hasCreationScope(msg)) await writeFile(resolved, content, 'utf-8');
-
-    sendWorkbenchResult(ctx, msg, {
-      type: 'file_saved',
-      conversationId,
-      requestId,
-      _requestUserId,
-      _requestClientId,
-      filePath: resolved,
-      requestedFilePath: filePath,
-      success: true
+    const encoded = Buffer.from(content, 'utf-8');
+    const conv = ctx.conversations.get(conversationId);
+    const workDir = msg.workDir || conv?.workDir || ctx.CONFIG.workDir;
+    let resolved, postStat;
+    if (hasCreationScope(msg)) {
+      [resolved, postStat] = await withCreationFiles(msg, async files => {
+        const path = files.target(filePath, { strictDescendant: true });
+        const result = await files.file(path, async handle => {
+          const preStat = await handle.stat();
+          if (msg.requireTextTarget === true && preStat.size > 0) {
+            const sample = Buffer.alloc(Math.min(8192, preStat.size));
+            const { bytesRead } = await handle.read(sample, 0, sample.length, 0);
+            if (sample.subarray(0, bytesRead).includes(0)) {
+              throw Object.assign(new Error('Cannot overwrite a binary file from text Canvas.'), { code: 'FILE_IS_BINARY' });
+            }
+          }
+          if ((msg.expectedSize != null && Number.isFinite(Number(msg.expectedSize)) && preStat.size !== Number(msg.expectedSize))
+            || (msg.expectedMtimeMs != null && Number.isFinite(Number(msg.expectedMtimeMs)) && Math.abs(preStat.mtimeMs - Number(msg.expectedMtimeMs)) > 2)) {
+            throw Object.assign(new Error('File changed on disk since it was loaded.'), { code: 'FILE_CONFLICT' });
+          }
+          await handle.truncate(0);
+          for (let offset = 0; offset < encoded.length;) {
+            const { bytesWritten } = await handle.write(encoded, offset, encoded.length - offset, offset);
+            if (!bytesWritten) throw new Error('Could not finish writing the file.');
+            offset += bytesWritten;
+          }
+          return handle.stat();
+        }, { write: true });
+        return [path, result];
+      });
+    } else {
+      resolved = await resolveWorkItemPath(msg, filePath, workDir);
+      await writeFile(resolved, encoded);
+    }
+    return sendWorkbenchResult(ctx, msg, {
+      ...reply, filePath: resolved, success: true,
+      ...(postStat && { mtimeMs: postStat.mtimeMs, size: postStat.size }),
     });
   } catch (e) {
-    sendWorkbenchResult(ctx, msg, {
-      type: 'file_saved',
-      conversationId,
-      requestId,
-      _requestUserId,
-      _requestClientId,
-      filePath,
-      requestedFilePath: filePath,
-      success: false,
-      error: e.message,
-      errorCode: e.code || null,
+    return sendWorkbenchResult(ctx, msg, {
+      ...reply, filePath, success: false, error: e.message, errorCode: e.code || null,
     });
   }
 }
@@ -623,8 +640,9 @@ export async function handleMoveFiles(msg) {
           const name = (newName && paths.length === 1) ? newName : basename(srcResolved);
           if (files) {
             const destPath = files.target(join(destResolved, name), { strictDescendant: true });
-            await files.directory(destResolved, () => {}, { create: true });
-            await files.move(srcResolved, destPath);
+            // Only create the requested destination directory, not extra parents from newName.
+            if (dirname(destPath) !== destResolved) throw new Error('Invalid destination filename.');
+            await files.move(srcResolved, destPath, { createParents: true });
           } else {
             const destPath = await resolveWorkItemPath(msg, join(destResolved, name), workDir);
             if (existsSync(destPath)) throw new Error('Target already exists: ' + name);

@@ -1,7 +1,8 @@
 import { CONFIG } from '../config.js';
 import { agents } from '../context.js';
+import { agentSupportsCreationWorkbenchFiles } from '../workbench-preview.js';
 import {
-  sendToWebClient, forwardToAgent,
+  sendToWebClient, forwardToAgent, sendToAgent,
   verifyConversationOwnership, getCachedDir
 } from '../ws-utils.js';
 import {
@@ -273,14 +274,30 @@ function correlateWorkbenchRequest({ agentId, clientId, client, msg, resolved, c
 }
 
 async function forwardCorrelatedWorkbenchRequest({ agentId, clientId, client, msg, resolved, canonical }) {
-  if (!canonical) {
+  const creationScoped = msg.creationId != null && msg.creationId !== '';
+  const agent = agents.get(agentId);
+  if (!canonical || (creationScoped && (resolved.legacy || !agentSupportsCreationWorkbenchFiles(agent)))) {
     await denyWorkbenchRoute(client, msg);
     return true;
   }
   const outbound = correlateWorkbenchRequest({ agentId, clientId, client, msg, resolved, canonical });
   if (!outbound) return false;
+  if (msg.type === 'read_file' || msg.type === 'video_metadata' || msg.type === 'resolve_file_references') {
+    console.log(`[Server] Forwarding ${msg.type} to agent ${agentId}, conv=${canonical.conversationId}${msg.filePath ? `, path=${msg.filePath}` : ''}`);
+  }
   try {
-    await forwardToAgent(agentId, outbound);
+    if (creationScoped) {
+      // Encryption can yield: do not send a scoped request on a replaced connection.
+      const sent = await sendToAgent(agent, outbound, {
+        shouldSend: () => agents.get(agentId) === agent && agentSupportsCreationWorkbenchFiles(agent),
+      });
+      if (!sent) {
+        deleteWorkbenchRequest({ agentId, requestId: outbound._workbenchRequestId });
+        await denyWorkbenchRoute(client, msg);
+      }
+    } else {
+      await forwardToAgent(agentId, outbound);
+    }
     return true;
   } catch (error) {
     if (outbound._workbenchRequestId) {
@@ -399,7 +416,6 @@ export async function handleClientWorkbench(clientId, client, msg, checkAgentAcc
         }));
         return;
       }
-      console.log(`[Server] Forwarding ${msg.type} to agent ${fileAgentId}, conv=${fileConvId}${msg.filePath ? `, path=${msg.filePath}` : ''}`);
       await forwardCorrelatedWorkbenchRequest({
         agentId: fileAgentId,
         clientId,

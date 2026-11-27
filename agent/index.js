@@ -27,6 +27,7 @@ import { loadConfig as loadYeaftConfig } from './yeaft/config.js';
 import { initYeaftDir } from './yeaft/init.js';
 import { SESSION_SCENE_CAPABILITIES } from './yeaft/sessions/scene-ids.js';
 import { updateBrowserRuntimeSettings } from './yeaft/config-api.js';
+import { supportsCreationWorkbenchFiles } from './workbench/work-item-path.js';
 import { bootBrowserRuntime, shutdownBrowserRuntime } from './browser-runtime/index.js';
 import {
   ensureManagedCliTools,
@@ -178,6 +179,7 @@ async function detectCapabilities() {
   // to this peer. Old servers ignore the unknown capability token.
   const capabilities = ['scheduled_tasks', 'scheduled_task_month_days', 'background_tasks', 'file_editor', 'ping_session', 'plaintext-ok', 'workbench_session_routes', 'workbench_request_correlation', 'workbench_terminal_cleanup_fence', 'workbench_file_content_chunks', 'workbench_video_stream', 'session_history_search', 'session_discovery', 'session_shared_knowledge', 'session_auto_route', 'session_history_outline', 'session_history_window_prefetch', 'session_fork_from_turn', 'session_fork_while_running', 'session_merge', 'session_delete_turn', 'session_turn_retry', 'session_scenes', 'file_reference_resolution', 'response_image_preview', 'yeaft_plugins', 'yeaft_managed_skills', 'settings_request_correlation', 'cosmic_web_briefing'];
   capabilities.push('creations', 'session_attachment_refs', getAgentUpgradeCapability());
+  if (supportsCreationWorkbenchFiles()) capabilities.push('creation_workbench_files');
   // Scenes added after 'session_scenes' shipped are advertised one by one.
   capabilities.push(...Object.values(SESSION_SCENE_CAPABILITIES));
   const pty = await loadNodePty();

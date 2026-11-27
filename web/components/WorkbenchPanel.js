@@ -340,7 +340,7 @@ export default {
       const selectedAgent = store.currentAgentInfo?.id === agentId ? store.currentAgentInfo : null;
       const caps = agent?.capabilities || selectedAgent?.capabilities || [];
       if (Array.isArray(caps) && caps.length > 0) {
-        return caps.includes('creations');
+        return caps.includes('creation_workbench_files');
       }
       return true;
     });

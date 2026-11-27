@@ -515,11 +515,14 @@ export default {
     Vue.watch([projectSelection, newProjectName], ([selection, name]) => {
       const state = resumeState.value;
       if (!state || (state.projectSelectionSnapshot === selection && state.newProjectNameSnapshot === name)) return;
-      Object.assign(state, { projectId: '', projectSelectionSnapshot: selection, newProjectNameSnapshot: name });
+      Object.assign(state, { projectId: '', projectAttempted: false, baselineProjectIds: [],
+        projectSelectionSnapshot: selection, newProjectNameSnapshot: name });
     }, { flush: 'sync' });
 
     Vue.watch([() => form.sessionMode, () => form.existingSessionId], () => {
-      if (resumeState.value) resumeState.value.sessionId = '';
+      if (resumeState.value) {
+        Object.assign(resumeState.value, { sessionId: '', sessionAttempted: false, baselineSessionIds: [] });
+      }
       unassignedResult.value = null;
     }, { flush: 'sync' });
 
@@ -639,6 +642,10 @@ export default {
           newProjectNameSnapshot: newProjectName.value,
           creationId: '',
           sessionId: '',
+          projectAttempted: false,
+          sessionAttempted: false,
+          baselineProjectIds: [],
+          baselineSessionIds: [],
         };
       }
       const state = resumeState.value;
@@ -661,6 +668,10 @@ export default {
           resumeProjectId: state.projectId || undefined,
           resumeCreationId: state.creationId || undefined,
           resumeSessionId: state.sessionId || undefined,
+          projectAttempted: state.projectAttempted,
+          sessionAttempted: state.sessionAttempted,
+          baselineProjectIds: state.baselineProjectIds,
+          baselineSessionIds: state.baselineSessionIds,
         });
         if (resumeState.value !== state) return;
         const warning = result?.projectAssignError || result?.projectWarning;
@@ -678,6 +689,10 @@ export default {
         state.projectId = err?.partialProjectId || state.projectId;
         state.creationId = err?.partialCreation?.id || err?.partialCreationId || state.creationId;
         state.sessionId = err?.partialSessionId || state.sessionId;
+        state.projectAttempted = err?.projectAttempted ?? state.projectAttempted;
+        state.sessionAttempted = err?.sessionAttempted ?? state.sessionAttempted;
+        state.baselineProjectIds = err?.baselineProjectIds ?? state.baselineProjectIds;
+        state.baselineSessionIds = err?.baselineSessionIds ?? state.baselineSessionIds;
         errorMessage.value = err?.message || tr('creation.create.failed', 'Failed to create Creation');
       } finally {
         if (resumeState.value === state) submitting.value = false;

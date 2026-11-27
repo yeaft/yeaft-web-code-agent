@@ -1746,6 +1746,58 @@ export default {
       openGalaxyCreation({ agentId: creationsStore.selectedAgentId, creationId: star.id, mode: 'read' });
     }
 
+    async function openCreationInDrawer({ agentId, sessionId, creationId, rootDir, initialPrompt, openSeq, maximize,
+      openedFromGalaxy = currentBand.value === 'galaxy' }) {
+      const epoch = ++openCreationEpoch;
+      const uiMode = store.uiMode;
+      const band = currentBand.value;
+      const authUser = currentAuthStore()?.userId;
+      const authGeneration = currentAuthStore()?.authGeneration;
+      const isOpenStillCurrent = () => !isUnmounted && epoch === openCreationEpoch
+        && openSeq === creationsStore.openWorkspaceSeq && store.uiMode === uiMode && currentBand.value === band
+        && currentAuthStore()?.userId === authUser && currentAuthStore()?.authGeneration === authGeneration;
+      if (!isOpenStillCurrent()) return;
+
+      creationsStore.inspectorTarget = null;
+      if (creationsStore.igniteDraft) creationsStore.igniteDraft.open = false;
+      // The drawer uses the existing Yeaft conversation projection without
+      // changing uiMode. WorkbenchPanel consumes the route-scoped pending target.
+      if (!openSessionInDrawer(agentId, sessionId ? { id: sessionId, runtimeProvider: 'yeaft' } : null, { keepBand: true, creationOpen: true })) {
+        showToast($t('creation.galaxy.offlineReadonly'));
+        return;
+      }
+      drawerOpenedFromGalaxy.value = openedFromGalaxy;
+      workbenchWidened.value = false;
+      if (!isOpenStillCurrent()) return;
+      if (!creationsStore.pendingWorkbenchTarget || creationsStore.pendingWorkbenchTarget.openSeq !== openSeq) {
+        creationsStore.setPendingWorkbenchTarget?.({ agentId, sessionId, creationId, rootDir, maximize, openSeq, openedFromGalaxy });
+      }
+      if (typeof initialPrompt !== 'string' || !initialPrompt.trim() || !sessionId) return;
+
+      const isDrawerTargetCurrent = () => isOpenStillCurrent() && drawerOpen.value
+        && drawerAgentId.value === agentId && store.currentAgent === agentId
+        && store.yeaftActiveSessionFilter === sessionId;
+      try {
+        await Vue.nextTick();
+        if (!isDrawerTargetCurrent()) return;
+        const result = await sendInitialCreationPrompt(agentId, sessionId, initialPrompt, {
+          isOpenStillCurrent: isDrawerTargetCurrent, routeReady: true, cosmosDelivery: true,
+        });
+        if (isDrawerTargetCurrent() && result?.error) showToast(result.error);
+      } catch (err) {
+        if (isDrawerTargetCurrent()) showToast(err?.message || $t('creation.galaxy.offlineReadonly'));
+      }
+    }
+
+    function onCosmosOpenCreationWorkspace(event) {
+      const detail = event.detail;
+      if (!detail?.agentId || !detail.creationId || !detail.sessionId
+        || !Number.isSafeInteger(detail.openSeq) || detail.openSeq !== creationsStore.openWorkspaceSeq
+        || store.uiMode !== 'cosmos') return;
+      detail.handled = true;
+      void openCreationInDrawer({ ...detail, openedFromGalaxy: detail.openedFromGalaxy || drawerOpenedFromGalaxy.value || currentBand.value === 'galaxy' });
+    }
+
     async function openGalaxyCreation({
       agentId,
       creationId,
@@ -1758,11 +1810,13 @@ export default {
       if (!targetAgentId || !creationId) return;
 
       const epoch = ++openCreationEpoch;
+      const openSeq = creationsStore.cancelPendingWorkspaceOpen?.();
       const startBand = currentBand.value;
       const startAgent = creationsStore.selectedAgentId || targetAgentId;
       const isStaleOpen = () => (
         isUnmounted
         || epoch !== openCreationEpoch
+        || openSeq !== creationsStore.openWorkspaceSeq
         || currentBand.value !== startBand
         || (creationsStore.selectedAgentId && startAgent && creationsStore.selectedAgentId !== startAgent)
       );
@@ -1792,44 +1846,10 @@ export default {
         if (!resolvedRootDir && creation?.rootDir) resolvedRootDir = String(creation.rootDir).trim();
         if (isStaleOpen()) return;
 
-        creationsStore.inspectorTarget = null;
-        if (creationsStore.igniteDraft) {
-          creationsStore.igniteDraft.open = false;
-        }
-
-        const opened = openSessionInDrawer(
-          targetAgentId,
-          resolvedSessionId ? { id: resolvedSessionId, runtimeProvider: 'yeaft' } : null,
-          { keepBand: true },
-        );
-        if (!opened) {
-          showToast($t('creation.galaxy.offlineReadonly'));
-          return;
-        }
-
-        drawerOpenedFromGalaxy.value = true;
-        workbenchWidened.value = false;
-
-        if (typeof creationsStore.setPendingWorkbenchTarget === 'function') {
-          creationsStore.setPendingWorkbenchTarget({
-            agentId: targetAgentId,
-            sessionId: resolvedSessionId || null,
-            creationId,
-            rootDir: resolvedRootDir || null,
-            maximize: mode === 'read',
-            openedFromGalaxy: true,
-          });
-        }
-
-        const cleanPrompt = String(promptToSend || '').trim();
-        if (cleanPrompt && resolvedSessionId) {
-          await Vue.nextTick();
-          if (isStaleOpen() || !drawerOpen.value) return;
-          const sendRes = await sendInitialCreationPrompt(targetAgentId, resolvedSessionId, cleanPrompt);
-          if (!isStaleOpen() && sendRes && sendRes.ok === false && sendRes.error) {
-            showToast(sendRes.error);
-          }
-        }
+        await openCreationInDrawer({
+          agentId: targetAgentId, sessionId: resolvedSessionId, creationId, rootDir: resolvedRootDir,
+          maximize: mode === 'read', initialPrompt: promptToSend, openSeq, openedFromGalaxy: true,
+        });
       } catch (err) {
         if (isStaleOpen()) return;
         showToast(err?.message || $t('creation.galaxy.offlineReadonly'));
@@ -2212,7 +2232,8 @@ export default {
       if (restoreFocus) focusSignalTrigger();
     }
 
-    function openSessionInDrawer(agentId, session, { keepBand = false } = {}) {
+    function openSessionInDrawer(agentId, session, { keepBand = false, creationOpen = false } = {}) {
+      if (!creationOpen) creationsStore.cancelPendingWorkspaceOpen?.();
       hideHoverImmediate();
       signalPopoverOpen.value = false;
       if (!agentId || !projectedAgentsMap.value[agentId]) return false;
@@ -2240,7 +2261,7 @@ export default {
         store.openCatalogSession?.(session.descriptor);
       } else if (session?.id) {
         store.enterYeaft?.(agentId, { deferBootstrap: true });
-        store.setActiveSessionFilter?.(session.id, { agentId, force: false });
+        store.setActiveSessionFilter?.(session.id, { agentId, force: creationOpen });
         store.reloadYeaftMessages?.();
       } else if (agentId) {
         store.enterYeaft?.(agentId);
@@ -2409,6 +2430,7 @@ export default {
     }
 
     function closeDrawer({ returnToSun = true } = {}) {
+      creationsStore.cancelPendingWorkspaceOpen?.();
       invalidateGalaxyCreationOpen();
       const wasFromGalaxy = drawerOpenedFromGalaxy.value;
       drawerResizing.value = false;
@@ -3053,6 +3075,7 @@ export default {
         mountRafId = 0;
         if (!unmounted) mountEngine();
       });
+      window.addEventListener('cosmos-open-creation-workspace', onCosmosOpenCreationWorkspace);
       window.addEventListener('resize', onWindowResize);
       window.addEventListener('blur', onWindowBlur);
       window.addEventListener('pagehide', onPageHide);
@@ -3072,6 +3095,7 @@ export default {
       flushPendingCloudConstants();
       isUnmounted = true;
       unmounted = true;
+      if (store.uiMode === 'cosmos') creationsStore.cancelPendingWorkspaceOpen?.();
       invalidateGalaxyCreationOpen();
       activeTouchPointers.clear();
       cancelAnimationFrame(mountRafId);
@@ -3085,6 +3109,7 @@ export default {
         waitJumpTimer = null;
       }
       clearInterval(nowInterval);
+      window.removeEventListener('cosmos-open-creation-workspace', onCosmosOpenCreationWorkspace);
       window.removeEventListener('resize', onWindowResize);
       window.removeEventListener('blur', onWindowBlur);
       window.removeEventListener('pagehide', onPageHide);

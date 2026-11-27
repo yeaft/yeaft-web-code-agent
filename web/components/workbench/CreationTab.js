@@ -11,11 +11,11 @@
  * `requestId` so `CreationTab` never interferes with `FilesTab`.
  */
 import { useChatStore } from '../../stores/chat.js';
-import { useSessionsStore } from '../../stores/sessions.js';
 import { useCreationsStore, sendInitialCreationPrompt } from '../../stores/creations.js';
 import { isSafeSameOriginPreviewUrl } from '../cosmos/creations/sanitize.js';
 import { createRouteBoundWorkbenchStore, workbenchRouteKey } from '../../utils/workbench-route.js';
-import FileCanvasView from './FileCanvasView.js';
+import FileCanvasView, { binaryDraftWarning } from './FileCanvasView.js';
+import { getLocale } from '../../utils/i18n.js';
 import CreationCreateModal from './CreationCreateModal.js';
 import NavigationIcon from '../NavigationIcon.js';
 import SvgPreview from '../files/SvgPreview.js';
@@ -395,7 +395,7 @@ export default {
               class="creation-wb-icon-btn"
               :title="tr('creation.workbench.switchCreation', 'Switch Creation')"
               :aria-label="tr('creation.workbench.switchCreation', 'Switch Creation')"
-              @click="showingSwitcher = true"
+              @click="showCreationSwitcher"
             >
               <svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true">
                 <path fill="currentColor" d="M6.99 11L3 15l3.99 4v-3H14v-2H6.99v-3zM21 9l-3.99-4v3H10v2h7.01v3L21 9z" />
@@ -825,7 +825,8 @@ export default {
     </div>
   `,
   setup(props) {
-    const liveStore = Vue.inject('workbench-store', null) || useChatStore();
+    const chatStore = useChatStore();
+    const liveStore = Vue.inject('workbench-store', null) || chatStore;
     const creationsStore = useCreationsStore();
     const instance = Vue.getCurrentInstance();
 
@@ -870,13 +871,10 @@ export default {
     const videoFiles = Vue.ref([]);
     const expandedDocFolders = Vue.reactive(new Set());
 
-    // Reactive local view and fallback when the store draft helpers are unavailable.
-    const draftsByAgent = Vue.reactive(new Map());
-    const draftsForAgent = (agentId) => {
-      if (!draftsByAgent.has(agentId)) draftsByAgent.set(agentId, new Map());
-      return draftsByAgent.get(agentId);
-    };
-    const docDrafts = Vue.computed(() => draftsForAgent(props.agentId));
+    // Only older hosts without a store draft API need component-owned buffers.
+    const fallbackDrafts = Vue.reactive(new Map());
+    const hasStoreDrafts = typeof creationsStore.getOrCreateDocDraft === 'function'
+      || typeof creationsStore.getDocDraft === 'function';
     const activeDocPath = Vue.ref('');
     const selectedImagePath = Vue.ref('');
     const selectedVideoPath = Vue.ref('');
@@ -885,39 +883,41 @@ export default {
     const makeDraftKey = (rootDir, docPath) => (
       `${normalizePath(rootDir)}::${normalizePath(docPath)}`
     );
+    const fallbackKey = (agentId, rootDir, docPath) => JSON.stringify([agentId, makeDraftKey(rootDir, docPath)]);
 
-    const getDraft = (rootDir, docPath, agentId = props.agentId) => (
-      creationsStore.getDocDraft?.(agentId, rootDir, docPath)
-      ?? draftsForAgent(agentId).get(makeDraftKey(rootDir, docPath))
-    );
+    const getDraft = (rootDir, docPath, agentId = props.agentId) => {
+      if (typeof creationsStore.getDocDraft === 'function') {
+        return creationsStore.getDocDraft(agentId, rootDir, docPath);
+      }
+      if (hasStoreDrafts) return creationsStore.getOrCreateDocDraft?.(agentId, rootDir, docPath);
+      return fallbackDrafts.get(fallbackKey(agentId, rootDir, docPath));
+    };
 
-    const mirrorDraft = (opCtx, draft) => {
-      // Transport state must not survive an unmount/reopen.
-      creationsStore.setDocDraft?.(opCtx.agentId, opCtx.rootDir, draft.path, {
-        ...draft, rootDir: opCtx.rootDir, loading: false, saving: false,
-      });
+    const getOrCreateDraft = (agentId, rootDir, docPath, initial) => {
+      if (typeof creationsStore.getOrCreateDocDraft === 'function') {
+        return creationsStore.getOrCreateDocDraft?.(agentId, rootDir, docPath, initial);
+      }
+      const existing = getDraft(rootDir, docPath, agentId);
+      if (existing) return existing;
+      if (hasStoreDrafts) {
+        // Legacy stores can publish the initial buffer once; never mirror edits.
+        creationsStore.setDocDraft?.(agentId, rootDir, docPath, initial);
+      } else {
+        fallbackDrafts.set(fallbackKey(agentId, rootDir, docPath), initial);
+      }
+      return getDraft(rootDir, docPath, agentId);
     };
 
     const dirtyDrafts = (rootDir = null) => {
       const agentId = props.agentId;
-      const normRoot = rootDir && normalizePath(rootDir);
-      const merged = new Map();
-      for (const [key, local] of docDrafts.value) {
-        if (normRoot && local.rootDir !== normRoot) continue;
-        const draft = getDraft(local.rootDir, local.path, agentId);
-        if (draft?.isDirty) merged.set(key, draft);
+      if (!hasStoreDrafts) {
+        return Array.from(fallbackDrafts.values()).filter(draft => draft.agentId === agentId
+          && draft.isDirty && (!rootDir || draft.rootDir === normalizePath(rootDir)));
       }
-      const stored = rootDir
-        ? creationsStore.listDirtyDocDrafts?.(agentId, rootDir)
-        : creationsStore.listDirtyDocDrafts?.(agentId);
-      for (const item of stored || []) {
+      return (creationsStore.listDirtyDocDrafts?.(agentId, rootDir) || []).map(item => {
         const draft = item.draft || item;
-        const path = item.filePath || draft.path;
-        const root = item.rootDir || draft.rootDir || rootDir;
-        if (!path || (!root && [...merged.values()].some(local => normalizePath(local.path) === normalizePath(path)))) continue;
-        merged.set(makeDraftKey(root, path), { ...draft, path });
-      }
-      return [...merged.values()];
+        return { path: item.filePath || draft.path, name: draft.name, relPath: draft.relPath };
+      });
     };
 
     const isDocDirty = (docPath, rootDir = activeRootDir.value) => (
@@ -1061,10 +1061,23 @@ export default {
     const docTree = Vue.computed(() => buildDocTree(docFiles.value, activeRootDir.value));
     const flattenedDocTree = Vue.computed(() => flattenDocTree(docTree.value, expandedDocFolders));
 
-    const activeDocFile = Vue.computed(() => {
+    const activeDocDraft = Vue.computed(() => {
       if (!activeRootDir.value || !activeDocPath.value) return null;
-      return docDrafts.value.get(makeDraftKey(activeRootDir.value, activeDocPath.value)) || null;
+      return getDraft(activeRootDir.value, activeDocPath.value) || null;
     });
+    // Expose the workspace's loaded documents as a view, not a second buffer cache.
+    const docDrafts = Vue.computed(() => {
+      const rootDir = activeRootDir.value;
+      const drafts = new Map();
+      if (rootDir) {
+        for (const file of docFiles.value) {
+          const draft = getDraft(rootDir, file.path);
+          if (draft) drafts.set(makeDraftKey(rootDir, file.path), draft);
+        }
+      }
+      return drafts;
+    });
+    const activeDocFile = activeDocDraft;
 
     const activeImageIndex = Vue.computed(() => (
       selectedImagePath.value
@@ -1210,63 +1223,63 @@ export default {
       await Promise.all(workers);
     };
 
-    const openDocFile = async (entry, { forceReload = false } = {}) => {
+    const openDocFile = async (entry, { forceReload = false, skipProbe = false } = {}) => {
       const opCtx = captureOp();
       const { agentId, rootDir } = opCtx;
       if (!entry?.path || !rootDir || !isOpCurrent(opCtx)) return;
-      const key = makeDraftKey(rootDir, entry.path);
-      const local = docDrafts.value.get(key);
-      const stored = getDraft(rootDir, entry.path, agentId);
-      // Keep the reactive object used by in-flight operations in this workspace.
-      const draft = local || Vue.reactive({
-        fileType: 'text',
-        loaded: false,
-        loadError: null,
-        isDirty: false,
-        ...stored,
-        path: entry.path,
-        loading: false,
-        saving: false,
+      const draft = getOrCreateDraft(agentId, rootDir, entry.path, {
+        agentId, rootDir, path: entry.path,
+        fileType: 'text', loaded: false, loadError: null, loading: false, saving: false,
+        isDirty: false, bufferVersion: 0, isBinary: false, diskChangedToBinary: false,
+        diskMtimeMs: null, diskSize: null,
       });
-      if (stored && stored !== draft && local && !local.loading && !local.saving) {
-        Object.assign(draft, stored);
-      }
-      draft.rootDir = rootDir;
+      if (!draft) return;
       draft.name = entry.name || draft.name;
       draft.relPath = entry.relPath || draft.relPath || relativePath(entry.path, rootDir);
-      docDrafts.value.set(key, draft);
-      mirrorDraft(opCtx, draft);
       activeDocPath.value = entry.path;
 
-      if (draft.loading || draft.isDirty || (local && draft.loaded && !forceReload)) return;
+      const probeOnly = Boolean(draft.isDirty);
+      if (draft.loading || draft.probingDisk || draft.saving
+        || (probeOnly ? (skipProbe || !forceReload) : draft.loaded && !forceReload)) return;
 
-      draft.loading = true;
+      const versionAtRead = draft.bufferVersion;
+      if (probeOnly) draft.probingDisk = true;
+      else draft.loading = true;
       draft.loadError = null;
       try {
         const msg = await sendCorrelatedRequest({ type: 'read_file', filePath: entry.path }, { opCtx });
-        if (!isOpCurrent(opCtx)) return;
+        if (getDraft(rootDir, entry.path, agentId) !== draft) return;
+        const preserveDraft = probeOnly || draft.isDirty || draft.bufferVersion !== versionAtRead;
+        const binary = msg.isBinary === true || Boolean(msg.binary)
+          || (!msg.error && typeof msg.content !== 'string');
+        if (probeOnly || !msg.error || binary) {
+          draft.diskMtimeMs = msg.mtimeMs ?? entry.mtimeMs ?? null;
+          draft.diskSize = msg.size ?? entry.size ?? null;
+        }
+        if (preserveDraft) {
+          if (binary) draft.diskChangedToBinary = true;
+          else if (typeof msg.content === 'string') draft.diskChangedToBinary = false;
+          return;
+        }
         if (msg.error) {
           draft.loadError = msg.error;
           return;
         }
         draft.loaded = true;
-        draft.isBinary = msg.isBinary === true || Boolean(msg.binary) || typeof msg.content !== 'string';
-        draft.blobUrl = draft.isBinary ? buildPreviewUrl(msg) : null;
-        if (!draft.isDirty) {
-          const text = draft.isBinary ? undefined : msg.content;
-          draft.content = text;
-          draft.savedContent = text;
-          draft.originalContent = text;
-        }
+        draft.isBinary = binary;
+        draft.diskChangedToBinary = false;
+        draft.blobUrl = binary ? buildPreviewUrl(msg) : null;
+        const text = binary ? undefined : msg.content;
+        draft.content = text;
+        draft.savedContent = text;
+        draft.originalContent = text;
       } catch (err) {
-        if (isOpCurrent(opCtx)) {
+        if (isOpCurrent(opCtx) && !probeOnly && !draft.isDirty && draft.bufferVersion === versionAtRead) {
           draft.loadError = err?.message || tr('files.readSendFailed', 'Failed to read file');
         }
       } finally {
-        if (isOpCurrent(opCtx)) {
-          draft.loading = false;
-          mirrorDraft(opCtx, draft);
-        }
+        if (probeOnly) draft.probingDisk = false;
+        else draft.loading = false;
       }
     };
 
@@ -1348,9 +1361,8 @@ export default {
                 path: fullPath,
                 name: entry.name,
                 relPath: rel,
-                size: entrySize,
-                mtimeMs: entryMtimeMs,
-                mtime: entryMtimeMs,
+                size: entry.size ?? null,
+                mtimeMs: entry.mtimeMs ?? entry.mtime ?? entry.modified ?? null,
               });
             } else if (IMAGE_EXTS.has(ext)) {
               const isSvg = ext === '.svg';
@@ -1467,9 +1479,6 @@ export default {
             path: draft.path,
             name: draft.name || normDocPath.split('/').pop() || draft.path,
             relPath: draft.relPath || relativePath(draft.path, rootDir),
-            size: typeof draft.content === 'string' ? draft.content.length : 0,
-            mtimeMs: 0,
-            mtime: 0,
           });
         }
 
@@ -1498,11 +1507,9 @@ export default {
           const stillExists = foundDocs.find(d => d.path === activeDocPath.value);
           if (!stillExists) {
             if (!currentDraft?.isDirty && !scanIncomplete) {
-              docDrafts.value.delete(makeDraftKey(rootDir, activeDocPath.value));
-              creationsStore.deleteDocDraft?.(opCtx.agentId, rootDir, activeDocPath.value);
               activeDocPath.value = '';
             }
-          } else if (reloadActiveDoc && (!currentDraft || !currentDraft.isDirty)) {
+          } else if (reloadActiveDoc) {
             await openDocFile(stillExists, { forceReload: true });
           }
         }
@@ -1513,7 +1520,7 @@ export default {
           const dirty = foundDocs.find(d => getDraft(rootDir, d.path, opCtx.agentId)?.isDirty);
           const readme = foundDocs.find(d => d.name.toLowerCase() === 'readme.md');
           const firstMd = foundDocs.find(d => getExt(d.name) === '.md');
-          await openDocFile(dirty || readme || firstMd || foundDocs[0]);
+          await openDocFile(dirty || readme || firstMd || foundDocs[0], { forceReload: true });
         }
 
         if (!isScanCurrent()) return;
@@ -1557,55 +1564,71 @@ export default {
       if (isNarrowContainer.value) {
         docTreeOpen.value = false;
       }
-      if (activeDocPath.value === node.path) return;
-      void openDocFile(node);
+      if (activeDocPath.value === node.path && !activeDocDraft.value?.loadError) return;
+      void openDocFile(docFiles.value.find(file => file.path === node.path) || node);
     };
 
     const onDocContentUpdate = (newContent) => {
       const opCtx = captureOp();
       if (!isOpCurrent(opCtx)) return;
-      const draft = activeDocFile.value;
+      const draft = activeDocDraft.value;
       if (typeof newContent !== 'string' || !draft || draft.loading || draft.isBinary || typeof draft.content !== 'string') return;
       draft.content = newContent;
-      draft.isDirty = newContent !== draft.savedContent;
-      mirrorDraft(opCtx, draft);
+      draft.bufferVersion = (draft.bufferVersion || 0) + 1;
+      draft.isDirty = draft.saving || newContent !== draft.savedContent;
     };
 
     const saveActiveDoc = async () => {
-      const draft = activeDocFile.value;
-      if (!draft || !draft.isDirty || draft.loading || draft.isBinary || draft.saving || typeof draft.content !== 'string') return;
+      const draft = activeDocDraft.value;
       const opCtx = captureOp();
-      if (!isOpCurrent(opCtx)) return;
+      if (!draft || !isOpCurrent(opCtx)) return;
+      if (draft.isBinary || draft.diskChangedToBinary) {
+        showFeedback(false, binaryDraftWarning());
+        return;
+      }
+      if (!draft.isDirty || draft.loading || draft.saving || typeof draft.content !== 'string') return;
+      if (draft.probingDisk) {
+        showFeedback(false, getLocale() === 'zh-CN'
+          ? '正在检查磁盘上的文件，请稍后再保存。' : 'Checking the file on disk. Try saving again shortly.');
+        return;
+      }
+      const submittedVersion = draft.bufferVersion;
+      const submittedContent = draft.content;
       draft.saving = true;
-      const contentSnapshot = draft.content;
       try {
         const msg = await sendCorrelatedRequest({
           type: 'write_file',
           filePath: draft.path,
-          content: contentSnapshot,
+          content: submittedContent,
+          requireTextTarget: true,
+          ...(draft.diskMtimeMs != null ? { expectedMtimeMs: draft.diskMtimeMs } : {}),
+          ...(draft.diskSize != null ? { expectedSize: draft.diskSize } : {}),
         }, { opCtx });
-        if (!isOpCurrent(opCtx)) return;
-        const succeeded = Boolean(
-          msg
-          && !msg.error
-          && msg.success !== false
-          && (!msg.type || msg.type === 'file_saved' || msg.type === 'file_op_result'),
-        );
-        if (!succeeded) {
-          showFeedback(false, msg?.error || tr('creation.workbench.saveFailed', 'Failed to save'));
-          return;
+        // This ACK belongs to the shared buffer even if its submitting tab is now inactive.
+        if (getDraft(opCtx.rootDir, draft.path, opCtx.agentId) !== draft) return;
+        const report = (ok, message) => { if (isOpCurrent(opCtx)) showFeedback(ok, message); };
+        if (msg?.errorCode === 'FILE_IS_BINARY') {
+          draft.diskChangedToBinary = true;
+          draft.isDirty = true;
+          report(false, binaryDraftWarning());
+        } else if (msg?.errorCode === 'FILE_CONFLICT') {
+          draft.isDirty = true;
+          report(false, getLocale() === 'zh-CN'
+            ? '磁盘上的文件已更改，未保存的草稿已保留。' : 'The file changed on disk. Your unsaved draft is preserved.');
+        } else if (!msg || msg.error || msg.success === false || (msg.type && msg.type !== 'file_saved' && msg.type !== 'file_op_result')) {
+          report(false, msg?.error || tr('creation.workbench.saveFailed', 'Failed to save'));
+        } else {
+          draft.diskMtimeMs = msg.mtimeMs ?? draft.diskMtimeMs;
+          draft.diskSize = msg.size ?? draft.diskSize;
+          draft.savedContent = submittedContent;
+          draft.originalContent = submittedContent;
+          if (draft.bufferVersion === submittedVersion) draft.isDirty = false;
+          report(true, tr('creation.workbench.saved', 'Saved'));
         }
-        draft.savedContent = contentSnapshot;
-        draft.originalContent = contentSnapshot;
-        draft.isDirty = draft.content !== contentSnapshot;
-        showFeedback(true, tr('creation.workbench.saved', 'Saved'));
       } catch (err) {
         if (isOpCurrent(opCtx)) showFeedback(false, err?.message || tr('creation.workbench.saveFailed', 'Failed to save'));
       } finally {
-        if (isOpCurrent(opCtx)) {
-          draft.saving = false;
-          mirrorDraft(opCtx, draft);
-        }
+        draft.saving = false;
       }
     };
 
@@ -1997,12 +2020,12 @@ export default {
       confirmDirty = true,
       bindCurrent = false,
     } = {}) => {
-      if (autoResolve && (activeRootDir.value || showingSwitcher.value)) return;
+      if (autoResolve && (activeRootDir.value || showingSwitcher.value)) return { accepted: false };
       const epoch = ++activationEpoch;
       const ctx = captureRoute();
       const { agentId, sessionId } = ctx;
       const isCurrent = () => epoch === activationEpoch && isRouteCurrent(ctx);
-      if (!agentId) return;
+      if (!agentId) return { accepted: false };
       bindingFolder.value = false;
       loadingCreations.value = false;
       onboardingError.value = '';
@@ -2016,7 +2039,7 @@ export default {
         } catch {} finally {
           if (isCurrent()) loadingCreations.value = false;
         }
-        if (!isCurrent()) return;
+        if (!isCurrent()) return { accepted: false };
       }
 
       const list = creationsStore.creationsForAgent(agentId) || [];
@@ -2025,7 +2048,7 @@ export default {
 
       // 2. Resolve target Creation / folder
       if (autoResolve) {
-        if (activeRootDir.value || showingSwitcher.value) return;
+        if (activeRootDir.value || showingSwitcher.value) return { accepted: false };
         if (props.sessionId) {
           resolvedCreation = list.find(c => c && c.sessionId === props.sessionId) || null;
         }
@@ -2036,14 +2059,14 @@ export default {
             } catch {
               resolvedCreation = null;
             }
-            if (!isCurrent()) return;
+            if (!isCurrent()) return { accepted: false };
           }
           if (!resolvedCreation) {
             const normWork = normalizePath(props.workDir);
             resolvedCreation = list.find(c => c && c.rootDir && normalizePath(c.rootDir) === normWork) || null;
           }
         }
-        if (!resolvedCreation) return;
+        if (!resolvedCreation) return { accepted: false };
         targetRootDir = resolvedCreation.rootDir || '';
       } else {
         if (!resolvedCreation && creationId) {
@@ -2051,14 +2074,14 @@ export default {
           if (!resolvedCreation && typeof creationsStore.ensureWorkspace === 'function') {
             try {
               const prepared = await creationsStore.ensureWorkspace(agentId, creationId, { rootDir: targetRootDir });
-              if (!isCurrent()) return;
+              if (!isCurrent()) return { accepted: false };
               if (prepared?.creation?.id === creationId) {
                 resolvedCreation = prepared.creation;
                 targetRootDir = prepared.rootDir || targetRootDir;
               }
             } catch (err) {
               if (isCurrent()) onboardingError.value = err?.message || tr('creation.workbench.workspaceFailed', 'Failed to prepare workspace');
-              return;
+              return { accepted: false };
             }
           }
         }
@@ -2071,7 +2094,7 @@ export default {
             } catch {
               // The bind action does its own lookup; surface its authoritative error.
             }
-            if (!isCurrent()) return;
+            if (!isCurrent()) return { accepted: false };
           }
         }
         if (!resolvedCreation?.id && !creationId && targetRootDir) {
@@ -2082,44 +2105,44 @@ export default {
               agentId, rootDir: targetRootDir, sessionId,
               ...(!bindCurrent ? { title: normalizePath(targetRootDir).split('/').filter(Boolean).pop() || 'Creation' } : {}),
             });
-            if (!isCurrent()) return;
+            if (!isCurrent()) return { accepted: false };
             if (result?.error) throw new Error(result.error);
             resolvedCreation = result?.creation || result;
             targetRootDir = result?.rootDir || resolvedCreation?.rootDir || targetRootDir;
             if (!resolvedCreation?.id) throw new Error();
           } catch (err) {
             if (isCurrent()) onboardingError.value = err?.message || tr('creation.workbench.bindFailed', 'Failed to open folder as Creation');
-            return;
+            return { accepted: false };
           } finally {
             if (isCurrent()) bindingFolder.value = false;
           }
         }
-        targetRootDir = resolvedCreation?.rootDir || targetRootDir;
+        targetRootDir ||= resolvedCreation?.rootDir || '';
 
         if (resolvedCreation?.id && !targetRootDir && typeof creationsStore.ensureWorkspace === 'function') {
           try {
             const ensured = await creationsStore.ensureWorkspace(agentId, resolvedCreation.id, { rootDir: targetRootDir });
-            if (!isCurrent()) return;
+            if (!isCurrent()) return { accepted: false };
             targetRootDir = ensured?.rootDir || ensured?.creation?.rootDir || targetRootDir;
             if (ensured?.creation) resolvedCreation = ensured.creation;
           } catch (err) {
             if (isCurrent()) {
               onboardingError.value = err?.message || tr('creation.workbench.workspaceFailed', 'Failed to prepare workspace');
             }
-            return;
+            return { accepted: false };
           }
         }
 
         if (!targetRootDir) {
           onboardingError.value = tr('creation.workbench.missingRootDir', 'This Creation does not have a workspace folder yet.');
-          return;
+          return { accepted: false };
         }
       }
 
-      if (!isCurrent()) return;
+      if (!isCurrent()) return { accepted: false };
       if (!targetRootDir || !resolvedCreation?.id || (resolvedCreation.agentId && resolvedCreation.agentId !== agentId)) {
         onboardingError.value = tr('creation.workbench.workspaceFailed', 'Failed to prepare workspace');
-        return;
+        return { accepted: false };
       }
 
       const nextNormRoot = normalizePath(targetRootDir);
@@ -2129,29 +2152,23 @@ export default {
         const confirmed = typeof window.confirm === 'function'
           ? window.confirm(tr('creation.workbench.unsavedSwitchConfirm', 'You have unsaved document changes in this Creation. Switch anyway?'))
           : true;
-        if (!confirmed || !isCurrent()) return;
+        if (!confirmed || !isCurrent()) return { accepted: false };
       }
 
       if (changed) resetWorkspace();
       activeCreation.value = resolvedCreation;
       activeRootDir.value = nextNormRoot;
       showingSwitcher.value = false;
-      await scanWorkspace({ opCtx: captureOp() });
+      void scanWorkspace({ opCtx: captureOp() });
+      return { accepted: true };
     };
 
     const resetWorkspace = () => {
       workspaceEpoch += 1;
       scanGeneration += 1;
       if (refreshTimer) clearTimeout(refreshTimer);
-      for (const drafts of draftsByAgent.values()) {
-        for (const [key, draft] of drafts) {
-          if (draft.isDirty) {
-            draft.loading = false;
-            draft.saving = false;
-          } else {
-            drafts.delete(key); // Revalidate clean buffers on the next visit.
-          }
-        }
+      for (const [key, draft] of fallbackDrafts) {
+        if (!draft.isDirty) fallbackDrafts.delete(key);
       }
       activeCreation.value = null;
       activeRootDir.value = '';
@@ -2170,7 +2187,13 @@ export default {
       revokeAllLocalBlobUrls();
     };
 
+    const showCreationSwitcher = () => {
+      creationsStore.cancelPendingWorkspaceOpen?.();
+      showingSwitcher.value = true;
+    };
+
     const openCreateModal = () => {
+      creationsStore.cancelPendingWorkspaceOpen?.();
       onboardingError.value = '';
       modalContext = { ...captureRoute(), epoch: activationEpoch };
       createModalOpen.value = true;
@@ -2180,63 +2203,45 @@ export default {
       const ctx = modalContext || { ...captureRoute(), epoch: activationEpoch };
       modalContext = null;
       if (!payload?.creation?.id || !isRouteCurrent(ctx) || ctx.epoch !== activationEpoch) return;
-      const targetAgentId = payload.agentId || payload.creation.agentId || ctx.agentId;
-      const targetSessionId = payload.sessionId || payload.creation.sessionId || '';
-      const rootDir = payload.rootDir || payload.creation.rootDir || '';
+      const created = payload.creation;
+      const targetAgentId = payload.agentId || created.agentId || ctx.agentId;
+      const targetSessionId = payload.sessionId || created.sessionId || '';
+      const rootDir = payload.rootDir || created.rootDir || '';
       const prompt = typeof payload.prompt === 'string' ? payload.prompt.trim() : '';
-      const crossRoute = targetAgentId !== ctx.agentId || (targetSessionId && targetSessionId !== ctx.sessionId);
-      let feedbackEpoch = ctx.epoch;
-      const reportError = message => {
-        if (!isRouteCurrent(ctx) || feedbackEpoch !== activationEpoch) return;
-        onboardingError.value = message;
-      };
+      const crossRoute = targetAgentId !== ctx.agentId || targetSessionId !== ctx.sessionId;
+      creationsStore.cancelPendingWorkspaceOpen?.();
+      const epoch = crossRoute ? ++activationEpoch : activationEpoch + 1;
+      const isCurrent = () => isRouteCurrent(ctx) && epoch === activationEpoch;
       try {
         if (crossRoute) {
-          if (typeof creationsStore.openCreationWorkspace === 'function') {
-            const result = await creationsStore.openCreationWorkspace({
-              agentId: targetAgentId, creationId: payload.creation.id, sessionId: targetSessionId,
-              rootDir, mode: 'studio', promptToSend: prompt, initialPrompt: prompt,
-            });
-            if (result?.promptError) reportError(result.promptError);
-            return; // Only the destination Workbench may scan this Creation.
-          }
-          if (!targetSessionId) {
-            // Older stores resolve the destination session themselves.
-            await creationsStore.openCreationInClassic({ agentId: targetAgentId, creationId: payload.creation.id, promptToSend: prompt });
-            return;
-          }
-          // The modal has already resolved the Session. Queue the exact destination
-          // and navigate synchronously, with no lookup that could complete after navigation.
-          const chat = useChatStore();
-          creationsStore.setPendingWorkbenchTarget({ agentId: targetAgentId, sessionId: targetSessionId, creationId: payload.creation.id, rootDir });
-          if (chat.uiMode === 'cosmos') chat.setUiMode('classic');
-          if (chat.currentAgent !== targetAgentId) chat.selectAgent(targetAgentId);
-          chat.enterYeaft(targetAgentId, { deferBootstrap: true });
-          useSessionsStore().setActive(targetSessionId, targetAgentId);
-          chat.setActiveSessionFilter(targetSessionId, { agentId: targetAgentId, force: true });
-          chat.openWorkbench();
-        } else {
-          // Start prompt delivery without waiting for a potentially slow file scan.
-          void activateTarget({ creation: payload.creation, rootDir });
-          feedbackEpoch = activationEpoch;
+          const result = await creationsStore.openCreationWorkspace(targetAgentId, created, {
+            sessionId: targetSessionId, rootDir, initialPrompt: prompt, uiMode: chatStore?.uiMode || 'classic',
+          });
+          if (result?.promptError && isCurrent()) onboardingError.value = result.promptError;
+          return; // Only the destination Workbench may scan this Creation.
         }
-        if (prompt && targetSessionId) {
-          const deliverPrompt = creationsStore.sendInitialCreationPrompt?.bind(creationsStore) || sendInitialCreationPrompt;
-          const result = await deliverPrompt(targetAgentId, targetSessionId, prompt);
-          if (result?.ok === false) reportError(result.error || 'Failed to send initial prompt');
-        }
+        const res = await activateTarget({ creation: created, rootDir });
+        if (res?.accepted !== true || !prompt || !targetSessionId) return;
+        const deliverPrompt = creationsStore.sendInitialCreationPrompt?.bind(creationsStore) || sendInitialCreationPrompt;
+        if (!isCurrent()) return;
+        const result = await deliverPrompt(targetAgentId, targetSessionId, prompt, {
+          isOpenStillCurrent: isCurrent, routeReady: true, cosmosDelivery: chatStore?.uiMode === 'cosmos',
+        });
+        if (result?.ok === false && isCurrent()) onboardingError.value = result.error || 'Failed to send initial prompt';
       } catch (err) {
-        reportError(err?.message || tr('creation.workbench.workspaceFailed', 'Failed to prepare workspace'));
+        if (isCurrent()) onboardingError.value = err?.message || tr('creation.workbench.workspaceFailed', 'Failed to prepare workspace');
       }
     };
 
     const bindCurrentFolder = () => {
       if (!props.workDir || bindingFolder.value) return;
+      creationsStore.cancelPendingWorkspaceOpen?.();
       void activateTarget({ rootDir: props.workDir, bindCurrent: true });
     };
 
     const selectExistingCreation = async (item) => {
       if (!item) return;
+      creationsStore.cancelPendingWorkspaceOpen?.();
       await activateTarget({
         creation: item,
         creationId: item.id || '',
@@ -2278,7 +2283,7 @@ export default {
     };
 
     const onRootKeydown = (event) => {
-      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 's') {
+      if (!event.defaultPrevented && (event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 's') {
         if (activeModality.value === 'docs' && activeDocFile.value?.isDirty) {
           event.preventDefault();
           void saveActiveDoc();
@@ -2447,6 +2452,7 @@ export default {
       docDrafts,
       activeDocPath,
       activeDocFile,
+      activeDocDraft,
       selectedImagePath,
       activeImageIndex,
       activeImageFile,
@@ -2459,6 +2465,7 @@ export default {
       kindSwatchClass,
       formatSize,
       isDocDirty,
+      showCreationSwitcher,
       openCreateModal,
       onCreationCreated,
       bindCurrentFolder,

@@ -1,6 +1,17 @@
 import { confirmDialog } from '../../utils/dialog.js';
 import { getFileType } from './fileEditor.js';
+import { isSafeSameOriginPreviewUrl } from '../cosmos/creations/sanitize.js';
 import { clampFixedMenuCoordinates } from '../../utils/fixed-menu-position.js';
+
+/** Resolve a binary file capability from the reply, including legacy fileId/token replies. */
+export function resolveFileContentPreviewUrl({ previewUrl, fileId, previewToken }) {
+  const rawUrl = previewUrl ?? (fileId && previewToken
+    ? `/api/preview/${encodeURIComponent(fileId)}?token=${encodeURIComponent(previewToken)}`
+    : '');
+  // File replies may supply HTTP preview capabilities, not browser-owned object URLs.
+  if (!isSafeSameOriginPreviewUrl(rawUrl) || /^blob:/i.test(rawUrl.trim())) return null;
+  return new URL(rawUrl, location.origin);
+}
 
 /**
  * fileOperations — file CRUD operations composable for FilesTab.

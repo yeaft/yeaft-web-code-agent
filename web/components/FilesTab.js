@@ -978,9 +978,13 @@ export default {
     const downloadActiveFile = () => {
       const file = tabs.activeFile.value;
       if (!file) return;
-      if (file.blobUrl) {
-        if (!isSafeSameOriginPreviewUrl(file.blobUrl)) return;
-        const url = new URL(file.blobUrl, location.origin);
+      const rawUrl = file.blobUrl;
+      if (file.previewUrlRejected || (rawUrl && !isSafeSameOriginPreviewUrl(rawUrl))) {
+        ops.showFileOpFeedback(false, t(file.fileType === 'video' ? 'files.videoStreamUnavailable' : 'files.previewUnavailable'));
+        return;
+      }
+      if (rawUrl) {
+        const url = new URL(rawUrl, location.origin);
         if (url.protocol !== 'blob:') url.searchParams.set('download', '1');
         const link = document.createElement('a');
         link.href = url.href;
@@ -1104,7 +1108,7 @@ export default {
       const selectedAgent = store.currentAgentInfo?.id === agentId ? store.currentAgentInfo : null;
       const caps = agent?.capabilities || selectedAgent?.capabilities || [];
       if (Array.isArray(caps) && caps.length > 0) {
-        return caps.includes('creations');
+        return caps.includes('creation_workbench_files');
       }
       return true;
     });

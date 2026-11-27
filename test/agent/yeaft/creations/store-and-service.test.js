@@ -1,17 +1,23 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
-import { open } from 'node:fs/promises';
+import { constants, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
+import { link, mkdir, open } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { deflateSync } from 'node:zlib';
 import ctx from '../../../../agent/context.js';
 import { resolveCreationWorkspaceRoot } from '../../../../agent/yeaft/creations/bridge.js';
-import { resolveWorkItemPath } from '../../../../agent/workbench/work-item-path.js';
+import { resolveWorkItemPath, supportsCreationWorkbenchFiles, withCreationFiles } from '../../../../agent/workbench/work-item-path.js';
 import { handleCopyFiles, handleCreateFile, handleDeleteFiles, handleListDirectory, handleMoveFiles, handleReadFile, handleUploadToDir, handleVideoChunk, handleVideoMetadata, handleWriteFile }
   from '../../../../agent/workbench/file-ops.js';
 import { BUFFERABLE_TYPES } from '../../../../agent/connection/buffer.js';
 import { createCreationBridge, createCreationService, createCreationStore, parseSource } from '../../../../agent/yeaft/creations/index.js';
+
+vi.mock('node:fs/promises', async importOriginal => {
+  const fs = await importOriginal();
+  return { ...fs, mkdir: vi.fn(fs.mkdir), open: vi.fn(fs.open), link: vi.fn(fs.link) };
+});
 
 let dir;
 let service;
@@ -74,8 +80,8 @@ describe('Creation folder workspaces', () => {
       throw new Error('abort deletion');
     })).toThrow('abort deletion');
     req('delete_creation', { creationId });
-    expect(readFileSync(join(root, 'sources', 'notes_scene.txt'), 'utf8')).toBe('Scene one');
-    expect(existsSync(join(store.root, creationId, 'sources'))).toBe(true);
+    expect(existsSync(root)).toBe(false);
+    expect(existsSync(join(store.root, '_creations', creationId))).toBe(false);
     expect(store.listCreations()).toEqual([]);
   });
 
@@ -125,13 +131,121 @@ describe('Creation folder workspaces', () => {
     } finally { first.close(); second.close(); }
   });
 
-  it('uses the reserved workspace container even when workspaces is a Creation ID', () => {
+  it('upgrades a legacy cache and allows the workspaces ID beside legacy workspace data', async () => {
+    const legacy = join(store.root, 'workspaces', 'other-id');
+    mkdirSync(legacy, { recursive: true });
+    writeFileSync(join(legacy, 'keep.txt'), 'legacy workspace');
+    store.createCreation({ id: 'old' });
+    const [source] = store.addSources('old', { textSources: ['legacy notes'] });
+    const asset = store.saveAsset('old', { ext: 'md', content: 'legacy asset' });
+    renameSync(join(store.root, '_creations', 'old'), join(store.root, 'old'));
+    store.db.exec('ALTER TABLE creations DROP COLUMN cache_dir');
+    const reader = createCreationStore({ yeaftDir: dir, readOnly: true });
+    try { expect(reader.getSource('old', source.id).chunks[0].text).toBe('legacy notes'); }
+    finally { reader.close(); }
+    await service.close();
+    service = createCreationService({ yeaftDir: dir });
+    store = service.store;
+    expect(store.one("SELECT cache_dir FROM creations WHERE id='old'").cache_dir).toBeNull();
+    expect(store.readMediaRange('old', 'asset', asset.id).bytes.toString()).toBe('legacy asset');
     const workspaces = store.createCreation({ id: 'workspaces', initializeFolder: true });
     expect(workspaces.rootDir).toBe(join(store.root, '_workspaces', 'workspaces'));
-    store.addSources('workspaces', { textSources: ['ID cache remains readable'] });
-    store.createCreation({ id: 'another' });
-    expect(store.ensureWorkspace('another').rootDir).toBe(join(store.root, '_workspaces', 'another'));
-    expect(store.listSources('workspaces')).toHaveLength(1);
+    const [current] = store.addSources('workspaces', { textSources: ['new cache'] });
+    const cache = join(store.root, '_creations', 'workspaces');
+    expect(store.one("SELECT cache_dir FROM creations WHERE id='workspaces'").cache_dir).toBe(cache);
+    expect(readFileSync(join(cache, 'sources', current.id, 'original'), 'utf8')).toBe('new cache');
+    store.deleteCreation('old');
+    expect(existsSync(join(store.root, 'old'))).toBe(false);
+    store.deleteCreation('workspaces');
+    expect(existsSync(cache)).toBe(false);
+    expect(readFileSync(join(legacy, 'keep.txt'), 'utf8')).toBe('legacy workspace');
+  });
+
+  it('reclaims new sources, revisions and exports and supports clean ID reuse', () => {
+    const external = join(dir, 'external');
+    mkdirSync(external);
+    writeFileSync(join(external, 'keep.txt'), 'user data');
+    for (const id of ['generated', 'external']) {
+      const { rootDir } = store.createCreation({ id, initializeFolder: true, ...(id === 'external' && { rootDir: external }) });
+      store.addSources(id, { textSources: ['source'] });
+      store.createNode(id, { id: 'draft', content: 'revision' });
+      store.saveAsset(id, { ext: 'md', content: 'export' }, { exportFile: true });
+      const cache = join(store.root, '_creations', id);
+      expect(readdirSync(cache).sort()).toEqual(['artifacts', 'assets', 'sources']);
+      store.deleteCreation(id);
+      expect(existsSync(cache)).toBe(false);
+      expect(existsSync(rootDir)).toBe(id === 'external');
+      expect(store.createCreation({ id }).rootDir).toBeNull();
+    }
+    expect(readFileSync(join(external, 'keep.txt'), 'utf8')).toBe('user data');
+  });
+
+  it.each(['protected', 'shared'])('preserves a %s generated workspace', mode => {
+    const { rootDir } = store.createCreation({ id: 'generated', initializeFolder: true });
+    if (mode === 'protected') store.run('INSERT INTO protected_workspaces VALUES (?)', rootDir);
+    else {
+      store.createCreation({ id: 'other' });
+      // Even without a history row, another live root reference is enough.
+      store.run("UPDATE creations SET data=json_set(data,'$.rootDir',?) WHERE id='other'", rootDir);
+      store.run('DELETE FROM protected_workspaces WHERE root_dir=?', rootDir);
+    }
+    store.deleteCreation('generated');
+    expect(readFileSync(join(rootDir, 'README.md'), 'utf8')).toContain('Untitled creation');
+  });
+
+  it.each(['edited', 'conflict'])('recovers a real interrupted external publication (%s)', mode => {
+    const id = 'journaled';
+    const rootDir = join(dir, 'external');
+    mkdirSync(rootDir);
+    store.createCreation({ id });
+    for (const [nodeId, title] of [['first', 'First'], ['second', 'Second'], ['third', 'Third']]) {
+      store.createNode(id, { id: nodeId, title, content: `Draft ${nodeId}` });
+    }
+    // Kill publication after the kernel link, before SQLite can record it.
+    const module = new URL('../../../../agent/yeaft/creations/store.js', import.meta.url).href;
+    const crashed = spawnSync(process.execPath, ['--input-type=module', '-e', `
+      import fs from 'node:fs';
+      import { syncBuiltinESMExports } from 'node:module';
+      import { createCreationStore } from ${JSON.stringify(module)};
+      const { linkSync } = fs;
+      fs.linkSync = (temp, path) => {
+        linkSync(temp, path);
+        if (path.endsWith('Second.md')) process.exit(79);
+      };
+      syncBuiltinESMExports();
+      createCreationStore({ yeaftDir: ${JSON.stringify(dir)} }).ensureWorkspace(${JSON.stringify(id)}, { rootDir: ${JSON.stringify(rootDir)} });
+    `], { encoding: 'utf8', timeout: 10000 });
+    expect(crashed.status, crashed.stderr).toBe(79);
+    const journal = () => store.one('SELECT * FROM creation_materialization_journal WHERE creation_id=?', id);
+    const row = journal();
+    expect(row.target_dir).toBe(rootDir);
+    const [temp] = JSON.parse(row.temp_files_json);
+    const docs = join(rootDir, 'docs');
+    const first = join(docs, 'First.md');
+    const second = join(docs, 'Second.md');
+    const third = join(docs, 'Third.md');
+    expect(statSync(temp).ino).toBe(statSync(second).ino);
+    expect(JSON.parse(row.published_outputs_json)).toMatchObject({ 'node:first': join('docs', 'First.md') });
+    expect(JSON.parse(row.planned_outputs_json)['node:third']).toEqual({ relPath: join('docs', 'Third.md'),
+      sha256: createHash('sha256').update('Draft third').digest('hex') });
+    writeFileSync(first, 'edited saved draft');
+    writeFileSync(second, 'edited before publication was recorded');
+    if (mode === 'conflict') {
+      writeFileSync(third, 'third-party draft');
+      expect(() => store.ensureWorkspace(id, { rootDir })).toThrow(err('CONFLICT'));
+      expect(store.getCreation(id).rootDir).toBeNull();
+      expect(journal()).toBeDefined();
+      expect(readFileSync(third, 'utf8')).toBe('third-party draft');
+    } else {
+      expect(store.ensureWorkspace(id, { rootDir })).toMatchObject({ rootDir, materialized: true });
+      expect(store.getCreation(id).rootDir).toBe(rootDir);
+      expect(journal()).toBeUndefined();
+      expect(readFileSync(third, 'utf8')).toBe('Draft third');
+    }
+    expect(existsSync(temp)).toBe(false);
+    expect(readdirSync(docs).sort()).toEqual(['First.md', 'Second.md', 'Third.md']);
+    expect(readFileSync(first, 'utf8')).toBe('edited saved draft');
+    expect(readFileSync(second, 'utf8')).toBe('edited before publication was recorded');
   });
 
   it.each(['external', 'generated'])('reconciles a partially published %s workspace without suffixing matching files', async location => {
@@ -180,6 +294,7 @@ describe('Creation folder workspaces', () => {
     async (workspace, unlink) => {
       store.createCreation({ id: 'cache-owner' });
       store.createCreation({ id: 'linked' });
+      store.run("UPDATE creations SET cache_dir=NULL WHERE id='cache-owner'");
       const cache = join(store.root, 'cache-owner');
       const rootDir = join(cache, workspace);
       mkdirSync(rootDir, { recursive: true });
@@ -297,7 +412,7 @@ describe('Creation folder workspaces', () => {
     const asset = store.saveAsset(id, { ext: 'html', content: '<p>Other</p>' });
     // Historical media can include video assets not accepted by the current asset writer.
     const video = Buffer.from([0, 255, 13]);
-    writeFileSync(join(store.root, id, 'assets', 'clip.mp4'), video);
+    writeFileSync(join(store.root, '_creations', id, 'assets', 'clip.mp4'), video);
     store.run('INSERT INTO creation_assets VALUES (?,?,?)', id, 'clip', JSON.stringify({ id: 'clip', ext: 'mp4' }));
     store.saveAsset(id, { ext: 'md', content: 'An export' }, { exportFile: true });
     store.saveAsset(id, { ext: 'json', content: '{}' }, { exportFile: true });
@@ -328,7 +443,7 @@ describe('Creation folder workspaces', () => {
     const image = store.saveAsset(id, { ext: 'svg', content: svg });
     const [source] = store.addSources(id, { files: [{ name: 'Source preview.svg', mimeType: 'image/svg+xml', data: b64(svg) }] });
     const video = Buffer.from('legacy video bytes');
-    writeFileSync(join(store.root, id, 'assets', 'clip.mp4'), video);
+    writeFileSync(join(store.root, '_creations', id, 'assets', 'clip.mp4'), video);
     store.run('INSERT INTO creation_assets VALUES (?,?,?)', id, 'clip', JSON.stringify({ id: 'clip', ext: 'mp4', name: 'Scene (cut).mp4' }));
     store.createNode(id, { title: 'Slides', modality: 'slide_deck', content: JSON.stringify({ title: 'The Deck', slides: [
       { title: 'Launch', bullets: ['First point', 'Second point'], body: 'Slide body', blocks: [{ text: 'Body block' }],
@@ -458,7 +573,7 @@ describe('Creations durable store and operations', () => {
     expect(() => req('reorder_nodes', { creationId: 'book', parentId: 'vol1', nodeIds: ['c2', 'c2'] })).toThrow(err('INVALID_REQUEST'));
     const second = req('update_node', { creationId: 'book', nodeId: 'c2', baseRevId: first.currentRevId, patch: { content: 'New draft' } }).node;
     expect(req('update_node', { creationId: 'book', nodeId: 'c2', baseRevId: first.currentRevId, content: 'Stale' })).toEqual({ conflict: true, currentRevId: second.currentRevId, currentContent: 'New draft' });
-    const path = join(dir, 'creations', 'book', 'artifacts', 'c2', 'revisions', `${first.currentRevId}.snap`);
+    const path = join(dir, 'creations', '_creations', 'book', 'artifacts', 'c2', 'revisions', `${first.currentRevId}.snap`);
     expect(readFileSync(path, 'utf8')).toBe('One original sentence');
     const restored = req('restore_revision', { creationId: 'book', nodeId: 'c2', revId: first.currentRevId, baseRevId: second.currentRevId }).node;
     expect(restored.currentRevId).not.toBe(first.currentRevId);
@@ -476,7 +591,7 @@ describe('Creations durable store and operations', () => {
     req('create_creation', { id: 'media', kind });
     const content = { [field]: [{ title: 'Scene A', [textField]: 'A painting of the sky' }] };
     const node = store.createNode('media', { id: 'scene', content });
-    expect(JSON.parse(readFileSync(join(dir, 'creations', 'media', 'artifacts', 'scene', 'revisions', `${node.currentRevId}.json`)))).toEqual(content);
+    expect(JSON.parse(readFileSync(join(dir, 'creations', '_creations', 'media', 'artifacts', 'scene', 'revisions', `${node.currentRevId}.json`)))).toEqual(content);
     expect(req('export_creation', { creationId: 'media' }).content).toContain('A painting of the sky');
     expect(JSON.parse(req('export_creation', { creationId: 'media', format: 'json' }).content).nodes[0].content).toEqual(content);
   });
@@ -492,7 +607,7 @@ describe('Creations durable store and operations', () => {
     expect(() => store.readMediaRange('c', 'source', id, 11)).toThrow(err('INVALID_RANGE'));
     expect(() => store.readMediaRange('c', 'source', '../secret')).toThrow(err('INVALID_REQUEST'));
     expect(() => store.readMediaRange('../c', 'source', id)).toThrow(err('INVALID_REQUEST'));
-    const raw = join(dir, 'creations', 'c', 'sources', id, 'original');
+    const raw = join(dir, 'creations', '_creations', 'c', 'sources', id, 'original');
     const outside = join(dir, 'secret');
     renameSync(raw, `${raw}.old`);
     writeFileSync(outside, 'hidden');
@@ -825,7 +940,7 @@ it('replaces a streamed export without accumulating assets or files', () => {
   expect(service.handleMediaRead({ requestId: 'relay', creationId: 'book', mediaKind: 'asset', mediaId: first.assetId, start: 101, end: 201 }))
     .toMatchObject({ type: 'creation_media_chunk', version: nextChunk.version, totalSize: firstChunk.totalSize });
   expect(store.listAssets('book').map(asset => asset.id)).toEqual([first.assetId, regular.id]);
-  expect(readdirSync(join(dir, 'creations', 'book', 'assets')).sort()).toEqual([
+  expect(readdirSync(join(dir, 'creations', '_creations', 'book', 'assets')).sort()).toEqual([
     `${first.assetId}.${nextChunk.version}.md`, `${regular.id}.${regular.version}.md`,
   ].sort());
   expect(read().bytes.toString()).toContain('New title');
@@ -1049,6 +1164,114 @@ describe('Creation-scoped Workbench files', () => {
       expect(entry.isSymlink).toBe(false);
       expect(entry.mtimeMs).toBeGreaterThan(0);
     }
+  });
+
+  it('advertises scoped I/O only when the required platform primitives exist', () => {
+    expect(supportsCreationWorkbenchFiles()).toBe(Boolean(constants.O_NOFOLLOW) && process.platform === 'linux' && existsSync('/proc/self/fd'));
+    const platform = process.platform;
+    Object.defineProperty(process, 'platform', { value: 'win32' });
+    try { expect(supportsCreationWorkbenchFiles()).toBe(false); }
+    finally { Object.defineProperty(process, 'platform', { value: platform }); }
+  });
+
+  it.each([true, false])('cleans up a new entry after its pinned parent moves outside the root (directory=%s)', async isDirectory => {
+    const relocated = join(outside, 'relocated');
+    const operation = isDirectory ? mkdir : open;
+    const real = operation.getMockImplementation();
+    const filePath = 'docs/new';
+    let moved = false;
+    operation.mockImplementation(async (path, ...args) => {
+      if (!moved && path.startsWith('/proc/self/fd/') && path.endsWith('/new')) {
+        moved = true;
+        renameSync(join(root, 'docs'), relocated);
+      }
+      return real(path, ...args);
+    });
+    try {
+      const response = isDirectory ? await invoke(handleCreateFile, { filePath, isDirectory })
+        : await invoke(handleWriteFile, { filePath, content: 'must not escape' });
+      expect(response).toMatchObject({ success: false, errorCode: 'FILE_OUTSIDE_WORKSPACE' });
+      expect(moved).toBe(true);
+      expect(readdirSync(relocated)).toEqual(['note.txt']);
+      expect(readFileSync(join(relocated, 'note.txt'), 'utf8')).toBe('inside');
+    } finally { operation.mockImplementation(real); }
+  });
+
+  it('uses kernel no-replace for raced file targets and fails closed on directory moves', async () => {
+    const real = link.getMockImplementation();
+    const source = join(root, 'docs', 'note.txt');
+    const target = join(root, 'target.txt');
+    let raced = false;
+    link.mockImplementation(async (src, dest) => {
+      raced = true;
+      writeFileSync(target, 'racer', { flag: 'wx' });
+      return real(src, dest);
+    });
+    try {
+      await expect(withCreationFiles(msg, files => files.move(source, target))).rejects.toMatchObject(err('EEXIST'));
+      expect(raced).toBe(true);
+      expect(readFileSync(target, 'utf8')).toBe('racer');
+      expect(readFileSync(source, 'utf8')).toBe('inside');
+      await expect(withCreationFiles(msg, files => files.move(join(root, 'docs'), join(root, 'moved')))).rejects.toMatchObject({
+        code: 'FILE_OUTSIDE_WORKSPACE', message: 'Creation-scoped directory move requires atomic no-replace support.',
+      });
+      expect(existsSync(join(root, 'moved'))).toBe(false);
+      expect(readFileSync(source, 'utf8')).toBe('inside');
+    } finally { link.mockImplementation(real); }
+  });
+
+  it.each(['source', 'target'])('rolls back the destination link when the %s parent moves during publication', async side => {
+    const real = link.getMockImplementation();
+    const source = join(root, 'docs', 'note.txt');
+    const targetDir = join(root, 'destination');
+    const relocated = join(outside, 'relocated');
+    mkdirSync(targetDir);
+    link.mockImplementation(async (src, dest) => {
+      await real(src, dest);
+      renameSync(side === 'source' ? dirname(source) : targetDir, relocated);
+    });
+    try {
+      await expect(withCreationFiles(msg, files => files.move(source, join(targetDir, 'note.txt'))))
+        .rejects.toMatchObject(err('FILE_OUTSIDE_WORKSPACE'));
+      expect(readFileSync(side === 'source' ? join(relocated, 'note.txt') : source, 'utf8')).toBe('inside');
+      expect(readdirSync(side === 'source' ? targetDir : relocated)).toEqual([]);
+    } finally { link.mockImplementation(real); }
+  });
+
+  it.each([{ content: null }, {}])('rejects invalid write content before resolving scope or opening a file (%j)', async args => {
+    const resolveRoot = vi.spyOn(bridge, 'resolveWorkspaceRoot');
+    try {
+      const filePath = 'docs/note.txt';
+      expect(await invoke(handleWriteFile, { filePath, ...args })).toMatchObject({ type: 'file_saved', success: false,
+        errorCode: 'INVALID_CONTENT', error: 'File content must be a string.' });
+      expect(resolveRoot).not.toHaveBeenCalled();
+      expect(readFileSync(join(root, filePath), 'utf8')).toBe('inside');
+      expect(await invoke(handleWriteFile, { filePath: join(outside, 'note.txt'), ...args }, {}))
+        .toMatchObject({ success: false, errorCode: 'INVALID_CONTENT' });
+      expect(readFileSync(join(outside, 'note.txt'), 'utf8')).toBe('outside');
+    } finally { resolveRoot.mockRestore(); }
+  });
+
+  it('checks the actual target for binary bytes and checks both write preconditions without truncating', async () => {
+    const filePath = 'docs/note.txt';
+    const absolute = join(root, filePath);
+    const before = await invoke(handleReadFile, { filePath });
+    expect(before).toMatchObject({ content: 'inside', size: 6, mtimeMs: statSync(absolute).mtimeMs });
+    const binary = Buffer.from([0x41, 0, 0x42]);
+    renameSync(absolute, `${absolute}.original`);
+    writeFileSync(absolute, binary);
+    const write = { filePath, content: 'é', requireTextTarget: true };
+    expect(await invoke(handleWriteFile, write)).toMatchObject({ success: false, errorCode: 'FILE_IS_BINARY' });
+    expect(readFileSync(absolute)).toEqual(binary);
+    writeFileSync(absolute, 'new copy');
+    const { size, mtimeMs } = statSync(absolute);
+    for (const conditions of [{ expectedSize: before.size, expectedMtimeMs: mtimeMs }, { expectedSize: size, expectedMtimeMs: mtimeMs - 1000 }]) {
+      expect(await invoke(handleWriteFile, { ...write, ...conditions })).toMatchObject({ success: false, errorCode: 'FILE_CONFLICT' });
+      expect(readFileSync(absolute, 'utf8')).toBe('new copy');
+    }
+    const saved = await invoke(handleWriteFile, { ...write, expectedSize: size, expectedMtimeMs: mtimeMs });
+    expect(saved).toMatchObject({ success: true, size: 2, mtimeMs: statSync(absolute).mtimeMs });
+    expect(readFileSync(absolute, 'utf8')).toBe('é');
   });
 
   it('reads, writes, creates, uploads and streams video inside the recorded root', async () => {

@@ -38,7 +38,7 @@ import { activeSessions, revokedSessions, revokedTokens } from '../../server/aut
 import { issueSessionToken, logout, maybeRenewToken, verifyToken } from '../../server/auth/token.js';
 import { handleWebConnection } from '../../server/ws-client.js';
 import { createCreationRelay } from '../../server/handlers/client-creation.js';
-import { createWorkbenchPreview, readWorkbenchPreview } from '../../server/workbench-preview.js';
+import { createWorkbenchPreview, openWorkbenchVideo, readWorkbenchPreview } from '../../server/workbench-preview.js';
 import { handleClientWorkbench } from '../../server/handlers/client-workbench.js';
 import { __testResetWorkbenchCorrelations, peekWorkbenchRequest } from '../../server/workbench-correlation.js';
 import { resolveAgentAccessError, setCachedDir } from '../../server/ws-utils.js';
@@ -80,7 +80,7 @@ beforeEach(() => {
   state.workbenchSessions.clear();
   state.users.set('alice', { id: 'user-a', deletion_state: 'active' });
   state.users.set('bob', { id: 'user-b', deletion_state: 'active' });
-  agent = { ownerId: 'user-a', conversations: new Map(), capabilities: ['creations'], encryptOutbound: false, ws: socket() };
+  agent = { ownerId: 'user-a', conversations: new Map(), capabilities: ['creations', 'creation_workbench_files'], encryptOutbound: false, ws: socket() };
   state.agents.set(agentId, agent);
   client = browser('user-a');
   peer = browser('user-a');
@@ -174,15 +174,44 @@ describe('Creation Workbench relay and previews', () => {
       .toMatchObject({ creationId: null, userId: 'user-a' });
   });
 
-  it('blocks legacy downgrades and bypasses the unscoped directory cache', async () => {
+  it('rejects a route-less Creation file read without forwarding or minting a preview', async () => {
     delete client.workbenchRouteProtocol;
-    agent.capabilities = ['creations'];
-    await send({ type: 'git_status', workbenchRoute: undefined });
+    agent.capabilities = ['creations', 'creation_workbench_files'];
+    await send({ type: 'read_file', filePath, workbenchRoute: undefined });
+    expect(agent.ws.send).not.toHaveBeenCalled();
+    const responses = client.ws.send.mock.calls.map(([wire]) => JSON.parse(wire));
+    expect(responses).toContainEqual(expect.objectContaining({
+      type: 'file_content', requestId: 'browser-1', error: 'Invalid Workbench Session route',
+    }));
+    expect(responses.every(response => !response.previewToken && !response.previewUrl)).toBe(true);
+    expect(state.previewFiles.size).toBe(0);
+  });
+
+  it('rejects Creation scope on the route-less directory picker and bypasses the unscoped directory cache on a routed list', async () => {
     await send({ type: 'list_directory', workbenchRoute: undefined, conversationId: '_workdir_picker', directoryPickerScope: 'agent' });
     expect(agent.ws.send).not.toHaveBeenCalled();
     setCachedDir(agentId, '.', [{ name: 'ordinary cached file' }]);
-    await send({ type: 'list_directory', workbenchRoute: undefined, dirPath: '.' });
+    await send({ type: 'list_directory', dirPath: '.' });
     expect(frame(agent)).toMatchObject({ creationId: 'creation-a', _requestUserId: 'user-a' });
+  });
+
+  function reconnectWithoutConfinement() {
+    const replacement = { ...agent, ws: socket(), capabilities: agent.capabilities.filter(cap => cap !== 'creation_workbench_files') };
+    state.agents.set(agentId, replacement);
+    return replacement;
+  }
+
+  it.each([
+    ['read_file', 'file_content'],
+    ['list_directory', 'directory_listing'],
+    ['video_metadata', 'video_metadata'],
+  ])('rejects Creation-scoped %s when Agent only advertises general Creation support', async (type, responseType) => {
+    const replacement = reconnectWithoutConfinement();
+    await send({ type, filePath, dirPath: '.' });
+    expect(replacement.ws.send).not.toHaveBeenCalled();
+    expect(client.ws.send.mock.calls.map(([wire]) => JSON.parse(wire))).toContainEqual(expect.objectContaining({
+      type: responseType, requestId: 'browser-1', error: 'Invalid Workbench Session route',
+    }));
   });
 
   async function mintImage() {
@@ -242,16 +271,77 @@ describe('Creation Workbench relay and previews', () => {
     expect((await Promise.all(reads)).map(file => file.buffer.toString())).toEqual(['creation-a', 'creation-b']);
   });
 
-  it('binds the video metadata handshake and HTTP range pulls to the Creation owner', async () => {
-    const metadata = { filePath: '/workspace/creation/clip.mp4', size: 8, mtimeMs: 1234, mimeType: 'video/mp4' };
+  const videoMetadata = { filePath: '/workspace/creation/clip.mp4', size: 8, mtimeMs: 1234, mimeType: 'video/mp4' };
+
+  async function mintVideo(metadata = videoMetadata) {
     await send({ type: 'video_metadata', filePath: metadata.filePath });
     const probe = frame(agent);
     expect(probe).toMatchObject({ type: 'video_metadata', creationId: 'creation-a', _requestUserId: 'user-a' });
     await handleAgentFileTerminal(agentId, agent, {
       type: 'video_metadata', _workbenchRequestId: probe._workbenchRequestId, conversationId: probe.conversationId, ...metadata,
     });
-    const { previewToken, previewUrl } = frame(client);
-    expect(previewToken).toMatch(/^wbv1\./);
+    const capability = frame(client);
+    expect(capability.previewToken).toMatch(/^wbv1\./);
+    return capability;
+  }
+
+  it.each([['disconnect', 503], ['downgraded reconnect', 403]])('blocks stale image previews after Agent %s and evicts cached bytes', async (event, status) => {
+    const { fileId, previewUrl } = await mintImage();
+    const replacement = event === 'disconnect' ? null : reconnectWithoutConfinement();
+    if (!replacement) state.agents.delete(agentId);
+    expect(state.previewFiles.has(fileId)).toBe(true);
+    await request(app).get(previewUrl).expect(status);
+    expect(state.previewFiles.has(fileId)).toBe(false);
+    expect(agent.ws.send).toHaveBeenCalledTimes(1);
+    if (replacement) expect(replacement.ws.send).not.toHaveBeenCalled();
+  });
+
+  it('checks the current Agent on every video pull and metadata revalidation even after opening a descriptor', async () => {
+    const { fileId, previewToken, previewUrl } = await mintVideo();
+    const video = openWorkbenchVideo(fileId, previewToken);
+    const replacement = reconnectWithoutConfinement();
+    await expect(video.read(0, 2)).rejects.toMatchObject({ status: 403 });
+    await expect(video.revalidate()).rejects.toMatchObject({ status: 403 });
+    await request(app).get(previewUrl).set('Range', 'bytes=0-2').expect(403);
+    expect(replacement.ws.send).not.toHaveBeenCalled();
+    expect(agent.ws.send).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    ['head', 8, 'FILE_OUTSIDE_WORKSPACE', 403],
+    ['get', 0, 'ENOENT', 404],
+  ])('revalidates Creation video on %s (size %i) and rejects revoked access', async (method, size, errorCode, status) => {
+    const metadata = { ...videoMetadata, size };
+    const { previewUrl } = await mintVideo(metadata);
+    let revoked = false;
+    agent.ws.send.mockImplementation(wire => {
+      const pull = JSON.parse(wire);
+      expect(pull).toMatchObject({
+        type: 'video_metadata', creationId: 'creation-a', _requestUserId: 'user-a',
+        filePath: metadata.filePath, workDir, workbenchRoute: route, workbenchWorkspaceGeneration: workspaceGeneration,
+      });
+      void handleAgentFileTerminal(agentId, agent, {
+        ...pull,
+        ...(revoked ? { error: 'Creation workspace is unavailable.', errorCode } : metadata),
+      });
+    });
+    const fetchPreview = () => {
+      const req = request(app)[method](previewUrl);
+      return method === 'head' ? req.set('Range', 'bytes=2-4') : req;
+    };
+    await fetchPreview().expect(method === 'head' ? 206 : 200)
+      .expect('Content-Type', 'video/mp4').expect('Content-Length', method === 'head' ? '3' : '0');
+    revoked = true;
+    const denied = await fetchPreview().expect(status);
+    expect(denied.headers['content-range']).toBeUndefined();
+    expect(denied.headers['content-disposition']).toBeUndefined();
+    expect(agent.ws.send).toHaveBeenCalledTimes(3);
+    expect(client.ws.send).toHaveBeenCalledTimes(1);
+  });
+
+  it('binds the video metadata handshake and HTTP range pulls to the Creation owner', async () => {
+    const metadata = videoMetadata;
+    const { previewUrl } = await mintVideo(metadata);
     let revoked = false;
     agent.ws.send.mockImplementation(wire => {
       const pull = JSON.parse(wire);

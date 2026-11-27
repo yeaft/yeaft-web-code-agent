@@ -1,5 +1,6 @@
 import { canonicalizeCreationUrl, isSafeCreationUrl, isSafeSameOriginPreviewUrl, sanitizeCreationHtml } from '../cosmos/creations/sanitize.js';
 import { openImagePreview } from '../../utils/imagePreview.js';
+import { getLocale } from '../../utils/i18n.js';
 import { addCanvasContextRef, formatTimestampLabel } from '../../utils/canvas-context.js';
 import SvgPreview from '../files/SvgPreview.js';
 
@@ -39,6 +40,12 @@ export function isCanvasSupportedFile(fileOrName) {
 export function isBinaryDocument(file) {
   return isCanvasSupportedFile(file) === 'doc'
     && (file.isBinary === true || file.fileType === 'binary' || typeof file.content !== 'string');
+}
+
+export function binaryDraftWarning() {
+  return getLocale() === 'zh-CN'
+    ? '磁盘上的文件已变为二进制文件，无法在此覆盖。你的文本草稿已保留。'
+    : 'The file on disk is now binary and cannot be overwritten here. Your draft text is preserved.';
 }
 
 function basenameOf(filePath) {
@@ -309,6 +316,10 @@ export default {
 
       <!-- ===================== DOCUMENT CANVAS ===================== -->
       <template v-else-if="canvasKind === 'doc'">
+        <div v-if="file?.diskChangedToBinary" class="creation-wb-banner" role="alert"
+          style="background: var(--warn-bg); color: var(--text-primary); border-inline-start: 3px solid var(--warn-text)">
+          {{ binaryDraftWarning() }}
+        </div>
         <div v-if="showHeader" class="canvas-toolbar" role="toolbar">
           <div class="canvas-toolbar-group">
             <div class="canvas-segmented" role="group">
@@ -377,7 +388,7 @@ export default {
               v-if="file.isDirty"
               type="button"
               class="canvas-tool-btn canvas-save-btn"
-              :disabled="saving"
+              :disabled="saving || file.diskChangedToBinary || file.probingDisk"
               @click="$emit('save')"
               :title="$t('common.save') + ' (Ctrl+S)'"
             >{{ $t('common.save') }}</button>
@@ -709,7 +720,6 @@ export default {
   `,
   setup(props, { emit }) {
     const t = Vue.inject('t', key => key);
-
     const canvasKind = Vue.computed(() => isCanvasSupportedFile(props.file));
     const binaryDocument = Vue.computed(() => canvasKind.value === 'doc' && (props.isBinary || isBinaryDocument(props.file)));
     const isMarkdown = Vue.computed(() => MARKDOWN_EXTS.has(getExtension(props.file)));
@@ -1137,6 +1147,7 @@ export default {
       PLAYBACK_RATES,
       canvasKind,
       binaryDocument,
+      binaryDraftWarning,
       isMarkdown,
       isSvgText,
       // Document

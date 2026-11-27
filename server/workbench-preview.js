@@ -2,7 +2,7 @@ import { createCipheriv, createDecipheriv, createHash, randomBytes, randomUUID }
 import { CONFIG } from './config.js';
 import { userDb } from './db/user-db.js';
 import { agents, previewFiles } from './context.js';
-import { forwardToAgent, resolveAgentAccessError } from './ws-utils.js';
+import { forwardToAgent, resolveAgentAccessError, sendToAgent } from './ws-utils.js';
 import { agentSupportsWorkbenchRequestCorrelation, currentWorkbenchWorkspaceGeneration, resolveWorkbenchRequest } from './workbench-route.js';
 import { registerWorkbenchRequest, deleteWorkbenchRequest } from './workbench-correlation.js';
 import { cachePreviewFile, MAX_PREVIEW_FILE_BYTES, prunePreviewFiles } from './preview-files.js';
@@ -14,6 +14,30 @@ let activeVideoReads = 0;
 export const WORKBENCH_VIDEO_CHUNK_BYTES = 1024 * 1024;
 const key = () => createHash('sha256').update(`workbench-preview:${CONFIG.jwtSecret}`).digest();
 const failure = (status, message) => Object.assign(new Error(message), { status });
+
+export function agentSupportsCreationWorkbenchFiles(agent) {
+  return Array.isArray(agent?.capabilities) && agent.capabilities.includes('creation_workbench_files');
+}
+
+function assertCreationWorkbenchFiles(source, agent) {
+  if (!source.creationId || agentSupportsCreationWorkbenchFiles(agent)) return;
+  previewFiles.delete(source.fileId);
+  if (!agent) throw failure(503, 'Agent is offline');
+  throw failure(403, 'Creation Workbench files are not supported by this Agent');
+}
+
+async function sendPreviewRequest(source, message, signal) {
+  if (!source.creationId) return forwardToAgent(source.agentId, message);
+  const agent = agents.get(source.agentId);
+  assertCreationWorkbenchFiles(source, agent);
+  const sent = await sendToAgent(agent, message, {
+    // Do not send on a superseded connection after asynchronous encryption.
+    shouldSend: () => !signal?.aborted && agents.get(source.agentId) === agent
+      && agentSupportsCreationWorkbenchFiles(agent),
+  });
+  if (!sent) assertCreationWorkbenchFiles(source, agents.get(source.agentId));
+  return sent;
+}
 
 /** Mint a non-expiring, encrypted capability for one authorized Agent/Session/file.
  * Only bytes are cached; the URL retains its source across eviction and Server restart.
@@ -71,7 +95,11 @@ function authorize(source) {
   }
   const client = { userId: source.userId, role: user?.role, workbenchRouteProtocol: 1 };
   const accessError = resolveAgentAccessError(source.agentId, client.userId, client.role);
-  if (accessError) throw failure(accessError === 'Agent access denied' ? 403 : 503, accessError);
+  if (accessError) {
+    if (source.creationId) previewFiles.delete(source.fileId);
+    throw failure(accessError === 'Agent access denied' ? 403 : 503, accessError);
+  }
+  assertCreationWorkbenchFiles(source, agents.get(source.agentId));
   const generation = currentWorkbenchWorkspaceGeneration({ ...client, route: source.route });
   if (generation === null || (generation && generation !== source.workspaceGeneration)) {
     throw failure(410, 'Preview Session or workspace is no longer available');
@@ -117,7 +145,7 @@ async function refill(source, token, { client, resolved }) {
         },
       });
       if (!requestId) return reject(failure(503, 'Preview read unavailable'));
-      Promise.resolve(forwardToAgent(source.agentId, {
+      sendPreviewRequest(source, {
         type: 'read_file', filePath: source.filePath, workDir: resolved.workDir, download: true,
         ...(source.creationId ? { creationId: source.creationId } : {}),
         ...(source.responseImagePreview === true ? { responseImagePreview: true } : {}),
@@ -128,9 +156,9 @@ async function refill(source, token, { client, resolved }) {
         workbenchRouteKey: resolved.routeKey, workbenchWorkspaceGeneration: source.workspaceGeneration,
         _workbenchRequestId: requestId, _requestUserId: source.userId,
         _requestClientId: clientId, requestId: publicRequestId,
-      })).then(sent => {
+      }).then(sent => {
         if (sent === false) reject(failure(503, 'Agent is offline'));
-      }, () => reject(failure(503, 'Agent read failed')));
+      }, error => reject(error.status ? error : failure(503, 'Agent read failed')));
     });
     authorize(source); // Ownership/workspace may have changed while the Agent was reading.
     // Creation reads always need a fresh Agent authorization; retaining the
@@ -142,11 +170,7 @@ async function refill(source, token, { client, resolved }) {
   }
 }
 
-async function requestVideoChunk(source, start, end, signal) {
-  if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end) || start < 0 || end < start
-      || end >= source.size || (end - start + 1) > WORKBENCH_VIDEO_CHUNK_BYTES) {
-    throw failure(416, 'Invalid video byte range');
-  }
+async function requestVideo(source, { type, signal, fields, validate }) {
   if (signal?.aborted) throw failure(499, 'Video request cancelled');
   if (activeVideoReads >= MAX_VIDEO_READS) throw failure(503, 'Video stream capacity exceeded; retry shortly');
   activeVideoReads += 1;
@@ -164,32 +188,26 @@ async function requestVideoChunk(source, start, end, signal) {
         allowLegacyCorrelation: false, route: source.route, routeKey: resolved.routeKey,
         conversationId: resolved.conversationId, workspaceGeneration: source.workspaceGeneration,
         role: client.role, creationId: source.creationId,
-        requestType: 'video_chunk', expectedResponseTypes: ['video_chunk'],
+        requestType: type, expectedResponseTypes: [type],
         onTimeout: (_pending, reason) => reject(failure(reason === 'timeout' ? 504 : 503, 'Video read timed out or disconnected')),
         onResponse: msg => {
-          if (msg.error) return reject(failure(msg.errorCode === 'ENOENT' ? 404 : msg.errorCode === 'VIDEO_FILE_CHANGED' ? 409 : 502, msg.error));
-          const buffer = Buffer.from(msg.content || '', 'base64');
-          if (msg.filePath !== source.filePath || msg.start !== start || msg.end !== end
-              || msg.size !== source.size || msg.mtimeMs !== source.mtimeMs
-              || msg.mimeType !== source.mimeType || buffer.length !== end - start + 1) {
-            return reject(failure(502, 'Invalid video stream response'));
-          }
-          resolve(buffer);
+          try { resolve(validate(msg)); }
+          catch (error) { reject(error); }
         },
       });
       if (!requestId) return reject(failure(503, 'Video stream unavailable'));
-      Promise.resolve(forwardToAgent(source.agentId, {
-        type: 'video_chunk', filePath: source.filePath, workDir: resolved.workDir,
+      sendPreviewRequest(source, {
+        type, filePath: source.filePath, workDir: resolved.workDir,
         ...(source.creationId ? { creationId: source.creationId } : {}),
         ...(source.workspaceBoundPreview !== false ? { workspaceBoundPreview: true } : {}),
         conversationId: resolved.conversationId, workbenchRoute: source.route,
         workbenchRouteKey: resolved.routeKey, workbenchWorkspaceGeneration: source.workspaceGeneration,
         _workbenchRequestId: requestId, _requestUserId: source.userId,
         _requestClientId: clientId, requestId: publicRequestId,
-        start, end, expectedSize: source.size, expectedMtimeMs: source.mtimeMs,
-      })).then(sent => {
+        ...fields,
+      }, signal).then(sent => {
         if (sent === false) reject(failure(503, 'Agent is offline'));
-      }, () => reject(failure(503, 'Video read failed')));
+      }, error => reject(error.status ? error : failure(503, 'Video read failed')));
     });
     authorize(source);
     return result;
@@ -200,21 +218,67 @@ async function requestVideoChunk(source, start, end, signal) {
   }
 }
 
+async function requestVideoChunk(source, start, end, signal) {
+  if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end) || start < 0 || end < start
+      || end >= source.size || (end - start + 1) > WORKBENCH_VIDEO_CHUNK_BYTES) {
+    throw failure(416, 'Invalid video byte range');
+  }
+  return requestVideo(source, {
+    type: 'video_chunk', signal,
+    fields: { start, end, expectedSize: source.size, expectedMtimeMs: source.mtimeMs },
+    validate(msg) {
+      if (msg.error) throw failure(msg.errorCode === 'ENOENT' ? 404 : msg.errorCode === 'VIDEO_FILE_CHANGED' ? 409 : 502, msg.error);
+      const buffer = Buffer.from(msg.content || '', 'base64');
+      if (msg.filePath !== source.filePath || msg.start !== start || msg.end !== end
+          || msg.size !== source.size || msg.mtimeMs !== source.mtimeMs
+          || msg.mimeType !== source.mimeType || buffer.length !== end - start + 1) {
+        throw failure(502, 'Invalid video stream response');
+      }
+      return buffer;
+    },
+  });
+}
+
+async function revalidateWorkbenchVideo(source, signal) {
+  try {
+    await requestVideo(source, {
+      type: 'video_metadata', signal,
+      validate(msg) {
+        if (msg.error || msg.errorCode || msg.ok === false) {
+          throw failure(msg.errorCode === 'ENOENT' ? 404 : 403, 'Video preview access denied');
+        }
+        // Headers come from the encrypted descriptor, so require the Agent
+        // to confirm the same file version rather than publish stale metadata.
+        if (msg.filePath !== source.filePath || msg.size !== source.size
+            || msg.mtimeMs !== source.mtimeMs || msg.mimeType !== source.mimeType) {
+          throw failure(404, 'Video preview is no longer available');
+        }
+      },
+    });
+  } catch (error) {
+    // The URL is stateless; never retain a cached entry after a failed check.
+    previewFiles.delete(source.fileId);
+    throw error;
+  }
+}
+
 export function openWorkbenchVideo(fileId, token) {
   const source = decodeSource(fileId, token, 'wbv1.');
   if (!Number.isSafeInteger(source.size) || source.size < 0 || !Number.isFinite(source.mtimeMs)
       || !source.mimeType?.startsWith('video/')) throw failure(403, 'Forbidden');
+  if (source.creationId) authorize(source);
   const agent = agents.get(source.agentId);
   if (!agent?.capabilities?.includes?.('workbench_video_stream')
       || !agentSupportsWorkbenchRequestCorrelation(agent)) {
     throw failure(410, 'Video streaming is no longer available');
   }
-  authorize(source);
+  if (!source.creationId) authorize(source);
   return {
     size: source.size,
     mimeType: source.mimeType,
     filename: source.filename || source.filePath.split(/[\\/]/).pop() || 'video',
     read: (start, end, signal) => requestVideoChunk(source, start, end, signal),
+    ...(source.creationId ? { revalidate: signal => revalidateWorkbenchVideo(source, signal) } : {}),
   };
 }
 

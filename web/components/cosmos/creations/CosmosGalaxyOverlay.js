@@ -660,13 +660,24 @@ export default {
     const isDraggingFiles = Vue.ref(false);
     const legacyBookmarks = Vue.ref(readLegacyGalaxyBookmarks());
     const importingLegacy = Vue.ref(false);
-    const igniteProjectSelection = Vue.ref('');
-    const igniteNewProjectName = Vue.ref('');
-    const igniteSessionMode = Vue.ref('new');
-    const igniteExistingSessionId = Vue.ref('');
-    const igniteResumeState = Vue.ref(null);
+    const resumeField = (key, invalidate) => Vue.computed({
+      get: () => creationsStore.igniteDraft?.resume?.[key],
+      set: value => {
+        const state = creationsStore.igniteDraft.resume;
+        if (state[key] === value) return;
+        state[key] = value;
+        Object.assign(state, invalidate());
+      },
+    });
+    const resetProject = () => ({ projectId: '', projectAttempted: false, baselineProjectIds: [] });
+    const resetSession = () => ({ sessionId: '', sessionAttempted: false, baselineSessionIds: [] });
+    const igniteProjectSelection = resumeField('projectSelection', resetProject);
+    const igniteNewProjectName = resumeField('newProjectName', resetProject);
+    const igniteSessionMode = resumeField('sessionMode', resetSession);
+    const igniteExistingSessionId = resumeField('existingSessionId', resetSession);
     let dragDepth = 0;
     let activeIgniteAttemptId = null;
+    let canOpenAfterIgnite = false;
 
     const selectedAgent = Vue.computed(() => {
       const id = creationsStore.selectedAgentId;
@@ -692,6 +703,7 @@ export default {
       () => [creationsStore.selectedAgentId, agentSessions.value.map((s) => s.id).join(',')],
       () => {
         const list = agentSessions.value;
+        if (!creationsStore.igniteDraft?.resume || creationsStore.igniteDraft.submitting) return;
         if (!list.length) {
           igniteExistingSessionId.value = '';
           if (igniteSessionMode.value === 'existing') igniteSessionMode.value = 'new';
@@ -927,27 +939,15 @@ export default {
       activeIgniteAttemptId = null;
     }
 
-    Vue.watch(() => creationsStore.selectedAgentId, () => {
+    Vue.watch(() => creationsStore.selectedAgentId, (agentId) => {
+      if (creationsStore.igniteDraft?.resume?.agentId === agentId) return;
       releaseIgniteAttempt();
-      igniteResumeState.value = null;
+      creationsStore.resetIgniteResume?.();
       if (creationsStore.igniteDraft) creationsStore.igniteDraft.error = null;
     }, { flush: 'sync' });
 
-    Vue.watch([() => props.visible, () => creationsStore.igniteDraft?.open], ([visible, open], [wasVisible, wasOpen]) => {
-      if ((wasVisible && !visible) || (wasOpen && !open)) {
-        releaseIgniteAttempt();
-        igniteResumeState.value = null;
-      }
-    });
-
-    Vue.watch([igniteProjectSelection, () => igniteNewProjectName.value.trim()], ([selection, name]) => {
-      const state = igniteResumeState.value;
-      if (!state || (state.projectSelectionSnapshot === selection && state.newProjectNameSnapshot === name)) return;
-      Object.assign(state, { projectId: '', projectSelectionSnapshot: selection, newProjectNameSnapshot: name });
-    }, { flush: 'sync' });
-
-    Vue.watch([igniteSessionMode, igniteExistingSessionId], () => {
-      if (igniteResumeState.value) igniteResumeState.value.sessionId = '';
+    Vue.watch(() => props.visible, visible => {
+      if (!visible) canOpenAfterIgnite = false;
     }, { flush: 'sync' });
 
     async function submitIgnite() {
@@ -956,6 +956,7 @@ export default {
       const startSeq = creationsStore.openActivationSeq;
       const myAttemptId = creationsStore.beginIgniteAttempt();
       activeIgniteAttemptId = myAttemptId;
+      canOpenAfterIgnite = props.visible;
       const isStillCurrent = () => (
         activeIgniteAttemptId === myAttemptId
         && creationsStore.igniteDraft.attemptId === myAttemptId
@@ -981,18 +982,10 @@ export default {
       const existingSessionIdVal = sessionModeVal === 'existing'
         ? (igniteExistingSessionId.value || undefined)
         : undefined;
-      if (!igniteResumeState.value) {
-        igniteResumeState.value = {
-          agentId: submitAgentId,
-          attemptKey: newCreationAttemptKey(),
-          projectId: '',
-          projectSelectionSnapshot: igniteProjectSelection.value,
-          newProjectNameSnapshot: igniteNewProjectName.value.trim(),
-          creationId: '',
-          sessionId: '',
-        };
+      const resumeState = liveDraft.resume;
+      if (!resumeState.attemptKey) {
+        Object.assign(resumeState, { agentId: submitAgentId, attemptKey: newCreationAttemptKey() });
       }
-      const resumeState = igniteResumeState.value;
 
       try {
         const fallbackTitle = promptText
@@ -1012,6 +1005,10 @@ export default {
               rawFiles: filesToSend,
               celestial: celestialVal,
               attemptKey: resumeState.attemptKey,
+              projectAttempted: resumeState.projectAttempted,
+              sessionAttempted: resumeState.sessionAttempted,
+              baselineProjectIds: resumeState.baselineProjectIds,
+              baselineSessionIds: resumeState.baselineSessionIds,
               ...(resumeState.projectId ? { resumeProjectId: resumeState.projectId } : {}),
               ...(resumeState.creationId ? { resumeCreationId: resumeState.creationId } : {}),
               ...(resumeState.sessionId ? { resumeSessionId: resumeState.sessionId } : {}),
@@ -1026,9 +1023,19 @@ export default {
             });
         if (!isStillCurrent()) return;
         const created = res?.creation || res;
+        // Store completed IDs even if the launcher is no longer mounted. Do
+        // not clear a hidden draft or auto-navigate when the user returns.
+        if (!canOpenAfterIgnite || creationsStore.openActivationSeq !== startSeq) {
+          Object.assign(resumeState, {
+            projectId: res?.requestedProjectId || res?.projectId || resumeState.projectId,
+            creationId: created?.id || resumeState.creationId,
+            sessionId: res?.sessionId || created?.sessionId || resumeState.sessionId,
+          });
+          return;
+        }
         const currentDraft = creationsStore.igniteDraft;
         currentDraft.pendingFiles = currentDraft.pendingFiles.filter((f) => !submittedFileSet.has(f));
-        igniteResumeState.value = null;
+        creationsStore.resetIgniteResume();
 
         if (res?.initialTurnError) {
           emit('toast', res.initialTurnError);
@@ -1044,10 +1051,6 @@ export default {
         }
         if (currentDraft.celestial === submittedCelestial) {
           currentDraft.celestial = null;
-        }
-        if (igniteProjectSelection.value === '__new__') {
-          igniteProjectSelection.value = '';
-          igniteNewProjectName.value = '';
         }
         if (
           !currentDraft.title.trim()
@@ -1079,6 +1082,10 @@ export default {
         resumeState.projectId = err?.partialProjectId || resumeState.projectId;
         resumeState.creationId = err?.partialCreation?.id || err?.partialCreationId || resumeState.creationId;
         resumeState.sessionId = err?.partialSessionId || resumeState.sessionId;
+        resumeState.projectAttempted = err?.projectAttempted ?? resumeState.projectAttempted;
+        resumeState.sessionAttempted = err?.sessionAttempted ?? resumeState.sessionAttempted;
+        resumeState.baselineProjectIds = err?.baselineProjectIds ?? resumeState.baselineProjectIds;
+        resumeState.baselineSessionIds = err?.baselineSessionIds ?? resumeState.baselineSessionIds;
         creationsStore.igniteDraft.error = err?.message || 'Failed to ignite creation';
       } finally {
         creationsStore.finishIgniteAttempt(myAttemptId);
@@ -1151,6 +1158,9 @@ export default {
     });
 
     Vue.onBeforeUnmount(() => {
+      // Release this component's submission lock on unmount while preserving
+      // durable attempt checkpoints on `igniteDraft.resume` in Pinia.
+      canOpenAfterIgnite = false;
       releaseIgniteAttempt();
       window.removeEventListener('dragenter', onWindowDragEnter);
       window.removeEventListener('dragover', onWindowDragOver);

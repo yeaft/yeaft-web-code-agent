@@ -7,6 +7,7 @@
  */
 import { useChatStore } from './chat.js';
 import { useAuthStore } from './auth.js';
+import { yeaftSessionIdentityKey } from './helpers/yeaft-session-identity.js';
 import * as canvasContext from '../utils/canvas-context.js';
 
 const { defineStore } = Pinia;
@@ -59,7 +60,9 @@ function extractProjectId(res) {
  * @param {string} text
  * @returns {Promise<{ ok: boolean, error?: string, result?: any }>}
  */
-export async function sendInitialCreationPrompt(agentId, sessionId, text) {
+export async function sendInitialCreationPrompt(agentId, sessionId, text, {
+  isOpenStillCurrent = () => true, routeReady = false, cosmosDelivery = false,
+} = {}) {
   const targetAgentId = String(agentId || '').trim();
   const targetSessionId = String(sessionId || '').trim();
   const trimmedText = String(text || '').trim();
@@ -73,39 +76,52 @@ export async function sendInitialCreationPrompt(agentId, sessionId, text) {
     return { ok: false, error: 'Chat store unavailable' };
   }
 
-  if (chatStore.currentAgent !== targetAgentId && typeof chatStore.selectAgent === 'function') {
-    chatStore.selectAgent(targetAgentId);
-  }
-  if (typeof chatStore.enterYeaft === 'function') {
-    chatStore.enterYeaft(targetAgentId, { deferBootstrap: true });
-  }
-  if (typeof sessionsStore?.setActive === 'function') {
-    sessionsStore.setActive(targetSessionId, targetAgentId);
-  }
-  if (typeof chatStore.setActiveSessionFilter === 'function') {
-    chatStore.setActiveSessionFilter(targetSessionId, { agentId: targetAgentId, force: true });
+  if (!isOpenStillCurrent()) return { ok: false };
+  if (!routeReady) {
+    if (chatStore.currentAgent !== targetAgentId) chatStore.selectAgent?.(targetAgentId);
+    chatStore.enterYeaft?.(targetAgentId, { deferBootstrap: true });
+    sessionsStore?.setActive?.(targetSessionId, targetAgentId);
+    chatStore.setActiveSessionFilter?.(targetSessionId, { agentId: targetAgentId, force: true });
   }
 
-  const activeSession = sessionsStore?.activeSessionKey
-    ? sessionsStore.sessions?.[sessionsStore.activeSessionKey]
-    : null;
-  const activeRouteMatches = (
-    (activeSession?.id === targetSessionId && (!activeSession.agentId || activeSession.agentId === targetAgentId))
-    || (chatStore.currentAgent === targetAgentId
-      && (!chatStore.yeaftActiveSessionFilter || chatStore.yeaftActiveSessionFilter === targetSessionId))
-  );
-  if (!activeRouteMatches) {
-    return { ok: false, error: 'Active session route does not match target creation session' };
+  const authStore = useAuthStore();
+  const sessionKey = yeaftSessionIdentityKey(targetAgentId, targetSessionId);
+  const routeState = () => [chatStore.currentAgent, chatStore.currentView, chatStore.uiMode,
+    chatStore.yeaftActiveSessionFilter, chatStore.activeSessionRoute?.agentId,
+    chatStore.activeSessionRoute?.sessionId, authStore?.authGeneration,
+    chatStore.chatHistoryConnectionGeneration];
+  const startRoute = routeState();
+  let routeChanged = false;
+  const stop = globalThis.Vue?.watch?.(routeState, () => { routeChanged = true; }, { flush: 'sync' });
+  const canSend = () => isOpenStillCurrent() && !routeChanged
+    && routeState().every((value, i) => value === startRoute[i]);
+  const matchesRoute = () => chatStore.currentAgent === targetAgentId
+    && (!chatStore.yeaftActiveSessionFilter || chatStore.yeaftActiveSessionFilter === targetSessionId)
+    && (chatStore.resolveYeaftSessionAgentId?.(targetSessionId) ?? targetAgentId) === targetAgentId;
+  const sendError = { ok: false, error: 'Failed to send initial creation prompt' };
+  try {
+    if (!matchesRoute()) return { ok: false, error: 'Active session route does not match target creation session' };
+    // chat.js recursively sends after pending config promises, without a navigation
+    // fence. Drain that same queue here so the actual send starts synchronously.
+    const pendingConfig = () => chatStore._sessionSceneSwitches?.get(sessionKey)?.promise
+      || chatStore._sessionModelSwitchQueue?.get(sessionKey);
+    for (let pending = pendingConfig(); pending; pending = pendingConfig()) {
+      const result = await pending.catch(() => null);
+      if (!canSend()) return { ok: false };
+      if (!result?.ok || pendingConfig() === pending) return sendError;
+    }
+    if (!matchesRoute()) return sendError;
+    if (!canSend()) return { ok: false };
+    const sent = await chatStore.sendYeaftSessionMessage({
+      groupId: targetSessionId,
+      text: trimmedText,
+      ...(cosmosDelivery ? { cosmosDelivery: true } : {}),
+    });
+    if (!canSend()) return { ok: false };
+    return sent === false ? sendError : { ok: true, result: sent };
+  } finally {
+    stop?.();
   }
-
-  const sent = await chatStore.sendYeaftSessionMessage({
-    groupId: targetSessionId,
-    text: trimmedText,
-  });
-  if (sent === false) {
-    return { ok: false, error: 'Failed to send initial creation prompt' };
-  }
-  return { ok: true, result: sent };
 }
 
 /**
@@ -170,6 +186,14 @@ function emptyAgentBucket() {
   return { list: [], loaded: false, loading: false, error: null };
 }
 
+function defaultIgniteResume() {
+  return {
+    agentId: '', attemptKey: '', projectId: '', creationId: '', sessionId: '',
+    projectSelection: '', newProjectName: '', sessionMode: 'new', existingSessionId: '',
+    baselineProjectIds: [], baselineSessionIds: [], projectAttempted: false, sessionAttempted: false,
+  };
+}
+
 function defaultIgniteDraft() {
   return {
     open: false,
@@ -181,6 +205,7 @@ function defaultIgniteDraft() {
     submitting: false,
     attemptId: 0,
     error: null,
+    resume: defaultIgniteResume(),
   };
 }
 
@@ -368,12 +393,36 @@ export const useCreationsStore = defineStore('creations', {
       return this.docDraftsByAgent[agentId]?.[normalizeDraftKey(rootDir, filePath)] ?? null;
     },
 
-    setDocDraft(agentId, rootDir, filePath, draft) {
-      if (!agentId) return;
+    getOrCreateDocDraft(agentId, rootDir, filePath, initial = {}) {
+      if (!agentId) return null;
+      const existing = this.getDocDraft(agentId, rootDir, filePath);
+      if (existing) return existing;
       if (!Object.hasOwn(this.docDraftsByAgent, agentId)) {
         this.docDraftsByAgent = { ...this.docDraftsByAgent, [agentId]: {} };
       }
-      this.docDraftsByAgent[agentId][normalizeDraftKey(rootDir, filePath)] = draft;
+      const bucket = this.docDraftsByAgent[agentId];
+      const key = normalizeDraftKey(rootDir, filePath);
+      bucket[key] = Vue.reactive({
+        content: '', loaded: false, loading: false, saving: false, loadError: null,
+        diskMtimeMs: null, diskSize: null, isBinary: false, diskChangedToBinary: false,
+        isDirty: initial?.dirty ?? false,
+        ...initial,
+        rootDir: normalizeDraftPath(rootDir),
+        path: normalizeDraftPath(filePath),
+        bufferVersion: 1,
+      });
+      return bucket[key];
+    },
+
+    setDocDraft(agentId, rootDir, filePath, draft = {}) {
+      const existing = this.getDocDraft(agentId, rootDir, filePath);
+      if (!existing) return this.getOrCreateDocDraft(agentId, rootDir, filePath, draft);
+      const patch = { ...draft };
+      if (!Object.hasOwn(patch, 'isDirty') && Object.hasOwn(patch, 'dirty')) patch.isDirty = patch.dirty;
+      const changed = ['content', 'isDirty'].some(key => Object.hasOwn(patch, key) && patch[key] !== existing[key]);
+      const bufferVersion = existing.bufferVersion + (changed ? 1 : 0);
+      Object.assign(existing, patch, { bufferVersion });
+      return existing;
     },
 
     deleteDocDraft(agentId, rootDir, filePath) {
@@ -392,6 +441,10 @@ export const useCreationsStore = defineStore('creations', {
       return Object.entries(this.docDraftsByAgent[agentId])
         .filter(([key, draft]) => key.startsWith(prefix) && (draft?.isDirty ?? draft?.dirty))
         .map(([, draft]) => draft);
+    },
+
+    resetIgniteResume() {
+      this.igniteDraft.resume = defaultIgniteResume();
     },
 
     beginIgniteAttempt() {
@@ -672,6 +725,10 @@ export const useCreationsStore = defineStore('creations', {
       resumeCreationId = null,
       resumeSessionId = null,
       attemptKey = null,
+      baselineProjectIds,
+      baselineSessionIds,
+      projectAttempted = false,
+      sessionAttempted = false,
     } = {}) {
       const targetId = String(agentId || this.selectedAgentId || '').trim();
       const gen = storeGeneration;
@@ -684,6 +741,20 @@ export const useCreationsStore = defineStore('creations', {
       const trimmedRootDir = String(rootDir || '').trim();
       const trimmedResumeId = String(resumeCreationId || '').trim();
       let created = null;
+      let didAttemptProject = projectAttempted;
+      let didAttemptSession = sessionAttempted;
+      const projectRows = () => chatStore?.yeaftProjects || chatStore?.sessionProjects || [];
+      const sessionRows = () => sessionsStore?.sessionsForAgent?.(targetId) || chatStore?.yeaftSessions || [];
+      const idsOf = rows => rows.map(row => row?.id).filter(Boolean);
+      // An empty inventory is a valid baseline if the mutation was already attempted.
+      const capturedBaselineProjects = Array.isArray(baselineProjectIds) && (projectAttempted || baselineProjectIds.length)
+        ? [...baselineProjectIds] : idsOf(projectRows());
+      let capturedBaselineSessions = Array.isArray(baselineSessionIds) ? [...baselineSessionIds] : [];
+      const refreshNativeInventory = async () => {
+        const res = await chatStore?.sessionCrudRequest?.('list', {}, { agentId: targetId });
+        if (res?.ok === false) throw new Error(ackErrorMessage(res, 'Failed to refresh Session inventory'));
+        return res;
+      };
       const ensureSameStore = () => {
         if (gen !== storeGeneration) throw new Error('Creations store cleared');
       };
@@ -691,13 +762,27 @@ export const useCreationsStore = defineStore('creations', {
       try {
         if (!targetId) throw new Error('No Agent selected');
         // Project creation is checkpointed before any workspace/session RPC.
+        if (!targetProjectId && trimmedProjectName && projectAttempted) {
+          const loadProjects = chatStore?.loadYeaftProjects || chatStore?.fetchProjects;
+          const snapshot = loadProjects ? await loadProjects.call(chatStore) : await refreshNativeInventory();
+          ensureSameStore();
+          const rows = Array.isArray(snapshot) ? snapshot : (snapshot?.projects || projectRows());
+          const matches = rows.filter(p => p?.id && p.name === trimmedProjectName && !capturedBaselineProjects.includes(p.id));
+          if (matches.length > 1) throw new Error('Multiple Projects match the previous creation attempt');
+          if (matches.length === 1) targetProjectId = matches[0].id;
+        }
         if (!targetProjectId && trimmedProjectName) {
           if (typeof chatStore?.mutateProject !== 'function') {
             throw new Error('Project creation unavailable');
           }
+          didAttemptProject = true;
           const projRes = await chatStore.mutateProject('create', { name: trimmedProjectName }, targetId);
           const createdProjectId = extractProjectId(projRes);
-          if (!projRes || projRes.ok === false || !createdProjectId) {
+          if (projRes && projRes.ok === false) {
+            didAttemptProject = false;
+            throw new Error(ackErrorMessage(projRes, 'Failed to create Project'));
+          }
+          if (!projRes || !createdProjectId) {
             throw new Error(ackErrorMessage(projRes, 'Failed to create Project'));
           }
           targetProjectId = createdProjectId;
@@ -743,6 +828,28 @@ export const useCreationsStore = defineStore('creations', {
         }
 
         // Step 3: Resolve or create the linked Yeaft Session with strict ack validation.
+        if (!Array.isArray(baselineSessionIds) || (!sessionAttempted && !baselineSessionIds.length)) {
+          capturedBaselineSessions = idsOf(sessionRows());
+        }
+        if (!targetSessionId && sessionMode === 'new') {
+          targetSessionId = created.sessionId || null;
+          if (!targetSessionId && sessionAttempted) {
+            const snapshot = typeof chatStore?.loadYeaftSessions === 'function'
+              ? await chatStore.loadYeaftSessions(targetId) : await refreshNativeInventory();
+            ensureSameStore();
+            const scopedRows = Array.isArray(snapshot) ? snapshot : snapshot?.sessions;
+            const workspace = normalizeDraftPath(created.rootDir);
+            const sessionTitle = created.title || trimmedTitle;
+            const matches = (scopedRows || sessionRows()).filter(s => s?.id
+              && (s.agentId === targetId || (scopedRows && !s.agentId))
+              && (!s.runtimeProvider || s.runtimeProvider === 'yeaft')
+              && !capturedBaselineSessions.includes(s.id)
+              && ((workspace && normalizeDraftPath(s.workDir) === workspace)
+                || (sessionTitle && (s.displayName || s.name || s.title) === sessionTitle)));
+            if (matches.length > 1) throw new Error('Multiple Sessions match the previous creation attempt');
+            if (matches.length === 1) targetSessionId = matches[0].id;
+          }
+        }
         if (sessionMode === 'existing' && (!targetSessionId || targetSessionId === existingSessionId)) {
           const existingSession = sessionsStore?.sessionById?.(existingSessionId, targetId) || null;
           const hasKnownSession = Boolean(
@@ -769,13 +876,18 @@ export const useCreationsStore = defineStore('creations', {
           if (typeof chatStore?.createYeaftSession !== 'function') {
             throw new Error('Session creation unavailable');
           }
+          didAttemptSession = true;
           const sessionRes = await chatStore.createYeaftSession({
             displayName: created.title || trimmedTitle || 'Creation',
             workDir: created.rootDir || trimmedRootDir || undefined,
             agentId: targetId,
           });
           const createdSessionId = extractSessionId(sessionRes);
-          if (!sessionRes || sessionRes.ok === false || !createdSessionId) {
+          if (sessionRes && sessionRes.ok === false) {
+            didAttemptSession = false;
+            throw new Error(ackErrorMessage(sessionRes, 'Failed to create Session'));
+          }
+          if (!sessionRes || !createdSessionId) {
             throw new Error(ackErrorMessage(sessionRes, 'Failed to create Session'));
           }
           targetSessionId = createdSessionId;
@@ -806,15 +918,29 @@ export const useCreationsStore = defineStore('creations', {
         const updated = await this.updateCreation(targetId, created.id, {
           sessionId: targetSessionId,
           projectId: appliedProjectId,
+          ...(trimmedResumeId && trimmedTitle && trimmedTitle !== created.title ? { title: trimmedTitle } : {}),
+          ...(trimmedResumeId && kind && kind !== created.kind ? { kind } : {}),
         });
         ensureSameStore();
         if (!updated?.id) {
           throw new Error('Failed to save Creation session link');
         }
 
+        if (attemptKey && this.igniteDraft?.resume?.attemptKey === attemptKey && this.igniteDraft.resume.agentId === targetId) {
+          Object.assign(this.igniteDraft.resume, {
+            projectId: appliedProjectId || targetProjectId || this.igniteDraft.resume.projectId,
+            creationId: created?.id || this.igniteDraft.resume.creationId,
+            sessionId: targetSessionId || this.igniteDraft.resume.sessionId,
+            projectAttempted: didAttemptProject,
+            sessionAttempted: didAttemptSession,
+            baselineProjectIds: capturedBaselineProjects,
+            baselineSessionIds: capturedBaselineSessions,
+          });
+        }
+
         return {
           agentId: targetId,
-          creation: updated,
+          creation: { ...created, ...updated },
           sessionId: targetSessionId,
           projectId: appliedProjectId,
           ...(projectWarning ? { projectWarning, requestedProjectId: targetProjectId } : {}),
@@ -826,6 +952,21 @@ export const useCreationsStore = defineStore('creations', {
         wrapped.partialProjectId = targetProjectId || null;
         wrapped.partialCreation = created || (trimmedResumeId ? { id: trimmedResumeId } : null);
         wrapped.partialSessionId = targetSessionId;
+        wrapped.projectAttempted = didAttemptProject;
+        wrapped.sessionAttempted = didAttemptSession;
+        wrapped.baselineProjectIds = capturedBaselineProjects;
+        wrapped.baselineSessionIds = capturedBaselineSessions;
+        if (gen === storeGeneration && attemptKey && this.igniteDraft?.resume?.attemptKey === attemptKey && this.igniteDraft.resume.agentId === targetId) {
+          Object.assign(this.igniteDraft.resume, {
+            projectId: targetProjectId || this.igniteDraft.resume.projectId,
+            creationId: created?.id || trimmedResumeId || this.igniteDraft.resume.creationId,
+            sessionId: targetSessionId || this.igniteDraft.resume.sessionId,
+            projectAttempted: didAttemptProject,
+            sessionAttempted: didAttemptSession,
+            baselineProjectIds: capturedBaselineProjects,
+            baselineSessionIds: capturedBaselineSessions,
+          });
+        }
         throw wrapped;
       }
     },
@@ -921,22 +1062,21 @@ export const useCreationsStore = defineStore('creations', {
     },
 
     openCreationInClassic(options) {
-      return this.openCreationWorkspace(options);
+      return this.openCreationWorkspace({ ...options, uiMode: 'classic' });
     },
 
-    async openCreationWorkspace({
-      agentId,
-      creationId,
-      mode = 'studio',
-      promptToSend = '',
-      initialPrompt = promptToSend,
-      openedFromGalaxy = false,
-    } = {}) {
-      const mySeq = ++this.openWorkspaceSeq;
+    async openCreationWorkspace(agentOrOptions, creationOrId, openOptions = {}) {
+      const options = typeof agentOrOptions === 'string'
+        ? { ...openOptions, agentId: agentOrOptions, creationId: creationOrId?.id || creationOrId }
+        : (agentOrOptions || {});
+      const { agentId, creationId, mode = 'studio', promptToSend = '', initialPrompt = promptToSend,
+        openedFromGalaxy = false, maximize = mode === 'read' } = options;
+      const mySeq = this.cancelPendingWorkspaceOpen();
       const targetId = String(agentId || this.selectedAgentId || '').trim();
       if (!targetId || !creationId) throw new Error('Missing agentId or creationId');
 
       const chatStore = getChatStoreSafe();
+      const targetUiMode = options.uiMode || chatStore?.uiMode || 'classic';
       const sessionsStore = getSessionsStoreSafe();
       const authStore = useAuthStore();
       const authUser = () => authStore?.userId || authStore?.username || '';
@@ -970,10 +1110,14 @@ export const useCreationsStore = defineStore('creations', {
       );
       try {
         const dKey = creationDetailKey(targetId, creationId);
-        let creation = this.detailsByKey[dKey]?.creation
+        const acknowledgedSessionId = typeof options.sessionId === 'string' ? options.sessionId.trim() : '';
+        const acknowledgedRootDir = typeof options.rootDir === 'string' ? options.rootDir.trim() : '';
+        const hasAcknowledgedRoute = Boolean(acknowledgedSessionId && acknowledgedRootDir);
+        let creation = (creationOrId?.id ? creationOrId : null) || this.detailsByKey[dKey]?.creation
           || (this.byAgent[targetId]?.list || []).find((c) => c && c.id === creationId)
           || null;
 
+        if (!creation && hasAcknowledgedRoute) creation = { id: creationId };
         if (!creation) {
           const res = await this.request(targetId, 'get_creation', { creationId });
           if (!isOpenStillCurrent()) return null;
@@ -982,19 +1126,35 @@ export const useCreationsStore = defineStore('creations', {
         }
         if (!creation?.id) throw new Error('Creation not found');
 
-        const resolved = await this.resolveCreationSession(
-          targetId,
-          creation,
-          { createIfMissing: true },
-        );
+        const resolved = hasAcknowledgedRoute
+          ? { creation: { ...creation, sessionId: acknowledgedSessionId, rootDir: acknowledgedRootDir },
+              sessionId: acknowledgedSessionId, rootDir: acknowledgedRootDir }
+          : await this.resolveCreationSession(targetId, creation, { createIfMissing: true });
         if (!isOpenStillCurrent()) return null;
         if (!resolved?.sessionId) throw new Error('Failed to resolve Creation session');
         const { creation: latest, sessionId, rootDir } = resolved;
+        const target = {
+          agentId: targetId, sessionId, creationId: latest.id,
+          rootDir: rootDir || latest.rootDir || '', maximize, openSeq: mySeq,
+          openedFromGalaxy: Boolean(openedFromGalaxy),
+        };
 
-        // The remaining route writes are one synchronous transaction. Do not
-        // mistake our own route changes for the user navigating away.
+        // The drawer (or Classic route commit below) owns its synchronous route changes.
         stopWatchingRoute?.();
         applyingRoute = true;
+        if (targetUiMode === 'cosmos') {
+          if (!isOpenStillCurrent()) return null;
+          this.setPendingWorkbenchTarget(target);
+          if (!isOpenStillCurrent()) return null;
+          const detail = { ...target, initialPrompt: initialPrompt || '', handled: false };
+          if (typeof window !== 'undefined') {
+            window.dispatchEvent(new CustomEvent('cosmos-open-creation-workspace', { detail }));
+          }
+          if (detail.handled) {
+            return { creation: latest, sessionId, rootDir };
+          }
+        }
+
         if (chatStore.uiMode === 'cosmos') chatStore.setUiMode?.('classic');
         if (!isOpenStillCurrent()) return null;
         if (chatStore.currentAgent !== targetId) chatStore.selectAgent?.(targetId);
@@ -1003,14 +1163,7 @@ export const useCreationsStore = defineStore('creations', {
         chatStore.setActiveSessionFilter?.(sessionId, { agentId: targetId, force: true });
 
         if (!isOpenStillCurrent()) return null;
-        this.setPendingWorkbenchTarget({
-          agentId: targetId,
-          sessionId,
-          creationId: latest.id,
-          rootDir: rootDir || latest.rootDir || '',
-          maximize: mode === 'read',
-          openedFromGalaxy: Boolean(openedFromGalaxy),
-        });
+        this.setPendingWorkbenchTarget(target);
 
         if (!isOpenStillCurrent()) return null;
         chatStore.openWorkbench?.();
@@ -1019,7 +1172,7 @@ export const useCreationsStore = defineStore('creations', {
         const trimmedPrompt = String(initialPrompt || '').trim();
         if (trimmedPrompt) {
           if (!isOpenStillCurrent()) return null;
-          const sendRes = await sendInitialCreationPrompt(targetId, sessionId, trimmedPrompt);
+          const sendRes = await sendInitialCreationPrompt(targetId, sessionId, trimmedPrompt, { isOpenStillCurrent, routeReady: true });
           if (!isOpenStillCurrent()) return null;
           if (!sendRes?.ok) promptError = sendRes?.error || 'Failed to send initial creation prompt';
         }
@@ -1039,7 +1192,11 @@ export const useCreationsStore = defineStore('creations', {
     },
 
     cancelPendingWorkspaceOpen() {
-      this.openWorkspaceSeq += 1;
+      const seq = ++this.openWorkspaceSeq;
+      if (this.pendingWorkbenchTarget?.openSeq != null && this.pendingWorkbenchTarget.openSeq !== seq) {
+        this.clearPendingWorkbenchTarget(this.pendingWorkbenchTarget.seq);
+      }
+      return seq;
     },
 
     invalidatePendingOpen() {

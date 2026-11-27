@@ -1,5 +1,5 @@
-import { constants } from 'node:fs';
-import { lstat, mkdir, open, readdir, realpath, rename, rmdir, unlink } from 'node:fs/promises';
+import { constants, existsSync } from 'node:fs';
+import { lstat, mkdir, open, readdir, realpath, link, rmdir, unlink } from 'node:fs/promises';
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { resolveCreationWorkspaceRoot } from '../yeaft/creations/bridge.js';
 
@@ -123,11 +123,12 @@ async function verifyNamed(path, handle, expected) {
   return info;
 }
 
-async function withDirectory(path, anchor, expected, action) {
+async function withDirectory(path, anchor, expected, action, verifyParent) {
   if (!expected?.isDirectory()) throw outsideWorkspace('Expected a Creation workspace directory.');
   const handle = await open(anchor, dirFlags());
   try {
     await verifyNamed(path, handle, expected);
+    await verifyParent?.();
     return await action(handle);
   } finally { await handle.close(); }
 }
@@ -150,12 +151,31 @@ class CreationFiles {
       const anchor = join(fdPath(handle), parts[index]);
       const next = join(canonical, parts[index]);
       let info = await noLinkStat(anchor);
+      let createdNow = false;
+      const verifyParent = async () => {
+        await verifyNamed(this.root, this.handle);
+        if (handle !== this.handle) await verifyNamed(canonical, handle);
+      };
       if (!info && create) {
-        await verifyNamed(canonical, handle);
-        await mkdir(anchor).catch(error => { if (error.code !== 'EEXIST') throw error; });
-        info = await noLinkStat(anchor);
+        await verifyParent();
+        try {
+          await mkdir(anchor);
+          createdNow = true;
+        } catch (error) { if (error.code !== 'EEXIST') throw error; }
       }
-      return withDirectory(next, anchor, info, child => walk(index + 1, next, child));
+      let verified = false;
+      try {
+        if (!info) info = await noLinkStat(anchor);
+        return await withDirectory(next, anchor, info, child => {
+          verified = true;
+          return walk(index + 1, next, child);
+        }, verifyParent);
+      } catch (error) {
+        // Only undo this mkdir, not a pre-existing directory or a later operation.
+        if (!createdNow || verified) throw error;
+        await rmdir(anchor).catch(() => {});
+        throw changed();
+      }
     };
     return walk(0, this.root, this.handle);
   }
@@ -181,15 +201,21 @@ class CreationFiles {
         throw outsideWorkspace('Expected a regular file in the Creation workspace.');
       }
       if (existing && exclusive) throw Object.assign(new Error('File already exists.'), { code: 'EEXIST' });
-      const flags = (write ? constants.O_WRONLY : constants.O_RDONLY) | constants.O_NOFOLLOW
+      const flags = (write ? (existing ? constants.O_RDWR : constants.O_WRONLY) : constants.O_RDONLY) | constants.O_NOFOLLOW
         | (constants.O_NONBLOCK ?? 0) | (existing ? 0 : constants.O_CREAT | constants.O_EXCL);
       const handle = await open(anchor, flags);
       try {
         const info = await verifyNamed(path, handle, existing);
-        if (info.isSymbolicLink() || !info.isFile()) throw outsideWorkspace('Expected a regular Creation workspace file.');
+        if (!info.isFile()) throw changed();
         await verifyParent();
-        return await action(handle);
-      } finally { await handle.close(); }
+      } catch {
+        const info = !existing && await handle.stat(inodeOptions).catch(() => null);
+        await handle.close().catch(() => {});
+        if (info && sameInode(info, await noLinkStat(anchor).catch(() => null))) await unlink(anchor).catch(() => {});
+        throw changed();
+      }
+      try { return await action(handle); }
+      finally { await handle.close(); }
     }, { create: createParents });
   }
 
@@ -225,16 +251,27 @@ class CreationFiles {
     });
   }
 
-  async move(source, target) {
-    await this.checkTree(source);
-    return this.leaf(source, (src, info, verifySource) => this.leaf(target, async (dest, existing, verifyTarget) => {
-      if (existing) throw new Error('Target already exists: ' + basename(target));
-      await verifySource();
-      await verifyTarget();
-      if (!sameInode(info, await noLinkStat(src)) || await noLinkStat(dest)) throw changed();
-      // rename never dereferences a leaf, even if it is replaced here.
-      await rename(src, dest);
-    }));
+  async move(source, target, { createParents = false } = {}) {
+    return this.leaf(source, (src, info, verifySource) => {
+      if (info?.isDirectory()) throw outsideWorkspace('Creation-scoped directory move requires atomic no-replace support.');
+      if (!info?.isFile()) throw outsideWorkspace('Expected a regular file.');
+      return this.leaf(target, async (dest, existing, verifyTarget) => {
+        if (existing) throw Object.assign(new Error('Target already exists: ' + basename(target)), { code: 'EEXIST' });
+        await verifySource();
+        await verifyTarget();
+        if (!sameInode(info, await noLinkStat(src))) throw changed();
+        await link(src, dest);
+        try {
+          await verifySource();
+          await verifyTarget();
+          if (!sameInode(info, await noLinkStat(src)) || !sameInode(info, await noLinkStat(dest))) throw changed();
+        } catch {
+          if (sameInode(info, await noLinkStat(dest).catch(() => null))) await unlink(dest).catch(() => {});
+          throw changed();
+        }
+        await unlink(src);
+      }, { create: createParents });
+    });
   }
 
   async copy(source, target) {
@@ -276,9 +313,13 @@ class CreationFiles {
   }
 }
 
+export function supportsCreationWorkbenchFiles() {
+  return Boolean(constants.O_NOFOLLOW) && process.platform === 'linux' && existsSync('/proc/self/fd');
+}
+
 /** Run a scoped file operation, holding the canonical workspace root open. */
 export async function withCreationFiles(msg, action) {
-  if (!constants.O_NOFOLLOW || process.platform !== 'linux') {
+  if (!supportsCreationWorkbenchFiles()) {
     throw outsideWorkspace('Safe Creation workspace file access is not supported on this platform.');
   }
   const root = await lookupCreationRoot(msg);

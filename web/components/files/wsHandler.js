@@ -4,6 +4,8 @@
  */
 import { getFileType, isPreviewableTextFile } from './fileEditor.js';
 import { requestFileContent } from './fileTabs.js';
+import { resolveFileContentPreviewUrl } from './fileOperations.js';
+import { isSafeSameOriginPreviewUrl } from '../cosmos/creations/sanitize.js';
 import { isWorkbenchMessageForRoute, workbenchMessageScope } from '../../utils/workbench-route.js';
 
 export function createWsHandler({
@@ -52,14 +54,16 @@ export function createWsHandler({
       case 'video_metadata': {
         const nFilePath = normalizePath(msg.requestedFilePath || msg.filePath);
         const downloadPath = ops.takePendingDownload(msg.requestId);
+        const safePreview = msg.videoStream && isSafeSameOriginPreviewUrl(msg.previewUrl)
+          && !/^blob:/i.test(msg.previewUrl.trim());
         if (downloadPath) {
-          if (msg.error || !msg.videoStream || !msg.previewUrl) {
+          if (msg.error || !safePreview) {
             ops.showFileOpFeedback?.(false, msg.error || t('files.videoStreamUnavailable'));
             return;
           }
           const downloadName = normalizePath(downloadPath).split('/').pop() || 'video';
           const a = document.createElement('a');
-          const downloadUrl = new URL(msg.previewUrl, `${location.protocol}//${location.host}`);
+          const downloadUrl = new URL(msg.previewUrl, location.origin);
           downloadUrl.searchParams.set('download', '1');
           a.href = downloadUrl.href;
           a.download = downloadName;
@@ -80,14 +84,16 @@ export function createWsHandler({
           responseTab.previewError = msg.error;
           return;
         }
-        if (!msg.videoStream || !msg.previewUrl) {
+        responseTab.previewUrlRejected = !safePreview;
+        if (!safePreview) {
+          responseTab.blobUrl = null;
           responseTab.loadError = t('files.videoStreamUnavailable');
           responseTab.previewLoading = false;
           responseTab.previewError = responseTab.loadError;
           return;
         }
         responseTab.fileType = 'video';
-        responseTab.blobUrl = new URL(msg.previewUrl, `${location.protocol}//${location.host}`).href;
+        responseTab.blobUrl = new URL(msg.previewUrl, location.origin).href;
         responseTab.previewLoading = true;
         responseTab.previewError = null;
         saveTabsState(store.currentConversation);
@@ -112,10 +118,15 @@ export function createWsHandler({
           }
           try {
             const downloadName = normalizePath(downloadPath).split('/').pop() || 'download';
-            if (msg.binary) {
-              const dlUrl = `${location.protocol}//${location.host}/api/preview/${msg.fileId}?token=${msg.previewToken}&download=1`;
+            if (msg.binary || msg.isBinary === true || msg.previewUrl != null) {
+              const dlUrl = resolveFileContentPreviewUrl(msg);
+              if (!dlUrl) {
+                ops.showFileOpFeedback?.(false, t('files.previewUnavailable'));
+                return;
+              }
+              dlUrl.searchParams.set('download', '1');
               const a = document.createElement('a');
-              a.href = dlUrl; a.download = downloadName;
+              a.href = dlUrl.href; a.download = downloadName;
               document.body.appendChild(a); a.click(); document.body.removeChild(a);
             } else {
               const blob = new Blob([msg.content || ''], { type: 'application/octet-stream' });
@@ -154,11 +165,8 @@ export function createWsHandler({
         if (tabIndex >= 0) {
           const file = responseTab;
           file.loadError = null;
-          if (msg.binary) {
-            const origin = `${location.protocol}//${location.host}`;
-            const previewBaseUrl = msg.previewUrl
-              ? new URL(msg.previewUrl, origin).href
-              : `${origin}/api/preview/${msg.fileId}?token=${msg.previewToken}`;
+          if (msg.binary || msg.isBinary === true) {
+            const previewBaseUrl = resolveFileContentPreviewUrl(msg)?.href || null;
             // A binary reply is authoritative, even for an unknown/text extension.
             // MIME is only used to confirm a supported renderer, never to render
             // arbitrary active content or infer HTML from an untrusted file.
@@ -173,6 +181,12 @@ export function createWsHandler({
             file.fileType = msg.mimeType && expectedMime[ft] && !expectedMime[ft].includes(msg.mimeType) ? 'binary' : ft;
             file.mimeType = msg.mimeType || 'application/octet-stream';
             file.blobUrl = previewBaseUrl;
+            file.previewUrlRejected = msg.previewUrl != null && !previewBaseUrl;
+            if (!previewBaseUrl) {
+              file.previewLoading = false;
+              file.previewError = t('files.previewUnavailable');
+              return;
+            }
             file.previewError = null;
             file.previewLoading = file.fileType === 'image' || file.fileType === 'audio';
             if (file.fileType === 'office') {
@@ -211,6 +225,7 @@ export function createWsHandler({
             file.previewError = t('files.previewUnavailable');
             return;
           }
+          file.previewUrlRejected = false;
           file.content = msg.content || '';
           file.originalContent = msg.content || '';
           file.isDirty = false;
