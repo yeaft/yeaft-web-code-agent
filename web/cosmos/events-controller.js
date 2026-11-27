@@ -349,6 +349,7 @@ export function createCosmicEventState(opts = {}) {
     events: [],
     active: null,
     focusedUid: null,
+    lastFocusedUid: null,
     nextIdx: firstIdx,
     lastPlayedIdx: -1,
     lastSector: null,
@@ -413,6 +414,7 @@ export function startCosmicEvent(
       }
       sim.lastLocation = existing.location;
       sim.lastDistDepth = existing.distDepth;
+      sim.lastFocusedUid = existing.uid;
     }
     syncActivePointer(sim);
     return existing;
@@ -465,6 +467,7 @@ export function startCosmicEvent(
   };
 
   sim.events.push(instance);
+  if (effectiveObserve) sim.lastFocusedUid = instance.uid;
   sim.nextIdx = pickRandomEventIndex(getExcludedIndices(sim), rng);
   // Schedule next staggered event (shorter overlap window if below concurrency cap)
   sim.countdown = sim.events.length < MAX_CONCURRENT_EVENTS
@@ -492,6 +495,7 @@ export function focusCosmicEventByUid(sim, uid = null) {
   }
   sim.lastLocation = target.location;
   sim.lastDistDepth = target.distDepth;
+  sim.lastFocusedUid = target.uid;
   syncActivePointer(sim);
   return target;
 }
@@ -528,6 +532,7 @@ export function stopCosmicEvent(sim, { uid = null, rng = Math.random } = {}) {
   sim.events = [];
   sim.active = null;
   sim.focusedUid = null;
+  sim.lastFocusedUid = null;
   sim.hoveredUid = null;
   sim.nextIdx = pickRandomEventIndex(sim.lastPlayedIdx, rng);
   sim.countdown = pickRandomCooldownSec(MIN_EVENT_INTERVAL_SEC, MAX_EVENT_INTERVAL_SEC, rng);
@@ -646,7 +651,10 @@ export function tickCosmicEvents(
     sim.flightT = Math.max(0, prevT - camStep / Math.max(flightDur, 0.05));
   }
   sim.focusProgress = easeInOutQuint(sim.flightT);
-  if (sim.flightT <= 0.001) sim.focusProgress = 0;
+  if (sim.flightT <= 0.001) {
+    sim.focusProgress = 0;
+    if (!isObserving) sim.lastFocusedUid = null;
+  }
   if (sim.flightT >= 0.999) sim.focusProgress = 1;
 
   const f = sim.focusProgress;
@@ -685,7 +693,10 @@ function computeSingleEventPosition(sim, ev, w, h, centerShiftX = 0, avoidPoints
   const safeW = Math.max(w || 1, 1);
   const safeH = Math.max(h || 1, 1);
   const isCompact = safeW < 768 || Math.min(safeW, safeH) < 600;
-  const isFocused = Boolean(ev.observing || (ev === sim.active && (sim.focusProgress || 0) > 0));
+  const isFocused = Boolean(
+    ev.observing
+    || ((sim.focusProgress || 0) > 0 && (sim.lastFocusedUid ? ev.uid === sim.lastFocusedUid : ev === sim.active)),
+  );
   const f = isFocused ? clamp(sim.focusProgress || 0, 0, 1) : 0;
   const globalObs = clamp(sim.focusProgress || 0, 0, 1);
 
@@ -895,7 +906,8 @@ export function getSolarTelescopeTransform(sim, w, h) {
   if (f <= EVENT_CAMERA_RETURN_EPS) {
     return { active: false, focus: 0, offsetX: 0, offsetY: 0, zoomMul: 1, alphaMul: 1 };
   }
-  const focused = (sim.events || []).find((e) => e.observing) || sim.active;
+  const focused = (sim.events || []).find((e) => e.observing)
+    || (sim.lastFocusedUid ? (sim.events || []).find((e) => e.uid === sim.lastFocusedUid) : null);
   const loc = focused?.location || sim.lastLocation || { x: 0.84, y: 0.19 };
   const zoom = focused?.zoom || sim.fovZoom || 1.5;
   const dirX = loc.x - 0.5;
@@ -973,7 +985,8 @@ export function getEventAmbient(evDraw) {
 }
 
 export function getEventShockWave(sim, w, h, centerShiftX = 0, avoidPoints = null, visibilityAlpha = 1.0, camRot = null, parallax = null) {
-  const target = (sim?.events || []).find((e) => e.observing) || sim?.active;
+  const target = (sim?.events || []).find((e) => e.observing)
+    || (sim?.lastFocusedUid ? (sim.events || []).find((e) => e.uid === sim.lastFocusedUid) : sim?.active);
   // Never draw a distracting shockwave circle on the Solar System ambient view
   if (!target || !target.def?.hasShock || visibilityAlpha <= 0.01 || (sim.focusProgress || 0) <= 0.08) {
     return [0, 0, 0, 0];

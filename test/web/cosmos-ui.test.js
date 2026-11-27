@@ -3071,12 +3071,25 @@ describe('Cosmos Drawer Waiting Suppression, Horizontal Drag Resize & Session St
     expect(simMulti.events.length).toBe(2);
     expect(simMulti.active?.uid).toBe(frames[0].uid);
     expect(simMulti.active?.observing).toBe(true);
-
+    // Advance flight to arrival, then unfocus: sibling event[1] must NEVER teleport to center and Solar pan direction stays anchored to event[0]
+    for (let k = 0; k < 70; k++) {
+      tickCosmicEvents(simMulti, 0.05, { showCountdown: false, autoEnabled: false, rng: seqRng });
+    }
+    const panBeforeExit = getSolarTelescopeTransform(simMulti, 1440, 900);
     // Scrolling out below 0.62x smoothly returns to Solar System while preserving concurrent events
     const zoomOutRes = setCosmicEventZoom(simMulti, 0.55, { allowExit: true });
     expect(zoomOutRes.exited).toBe(true);
     expect(simMulti.events.length).toBe(2);
     expect(simMulti.events.some((e) => e.observing)).toBe(false);
+    // Mid-return frame: sibling event[1] stays distant (focusProgress === 0), and Solar pan keeps the exact same quadrant sign
+    tickCosmicEvents(simMulti, 0.1, { showCountdown: false, autoEnabled: false, rng: seqRng });
+    const midReturnFrames = computeEventFrames(simMulti, 1440, 900, 0, null, 1.0);
+    const siblingMid = midReturnFrames.find((f) => f.uid === frames[1].uid);
+    expect(siblingMid?.isDistant).toBe(true);
+    expect(siblingMid?.focusProgress).toBe(0);
+    const panMidReturn = getSolarTelescopeTransform(simMulti, 1440, 900);
+    expect(Math.sign(panMidReturn.offsetX)).toBe(Math.sign(panBeforeExit.offsetX));
+    expect(Math.sign(panMidReturn.offsetY)).toBe(Math.sign(panBeforeExit.offsetY));
 
     // Cap concurrency cleanly at MAX_CONCURRENT_EVENTS
     for (let k = 0; k < 5; k++) {
