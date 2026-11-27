@@ -1038,11 +1038,13 @@ export default {
         }
         const currentDraft = creationsStore.igniteDraft;
         const snapshot = res?._submittedSnapshot;
-        const actuallySubmittedFiles = new Set(Array.isArray(snapshot?.files) ? snapshot.files : []);
-        if (res && !Object.hasOwn(res, '_submittedSnapshot')) {
-          for (const file of filesToSend) actuallySubmittedFiles.add(file);
+        const actuallySubmittedFiles = new Set(Array.isArray(snapshot?.files) ? snapshot.files.map(Vue.toRaw) : []);
+        // Legacy create responses have no snapshot. A deduplicated ACK does
+        // not confirm ingestion of any files sent by the retry.
+        if (res && !Object.hasOwn(res, '_submittedSnapshot') && !res.deduplicated && !created?.deduplicated) {
+          for (const file of filesToSend) actuallySubmittedFiles.add(Vue.toRaw(file));
         }
-        currentDraft.pendingFiles = currentDraft.pendingFiles.filter(f => !actuallySubmittedFiles.has(f));
+        currentDraft.pendingFiles = currentDraft.pendingFiles.filter(f => !actuallySubmittedFiles.has(Vue.toRaw(f)));
         creationsStore.resetIgniteResume();
 
         if (res?.initialTurnError) {

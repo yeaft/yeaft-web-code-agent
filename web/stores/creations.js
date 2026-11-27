@@ -218,20 +218,16 @@ function defaultIgniteDraft() {
   };
 }
 
-function normalizeDraftPath(path) {
-  if (!path) return '';
-  return String(path).replace(/\\/g, '/').replace(/\/+$/, '') || '/';
-}
-
-function normalizeWorkspacePath(raw) {
+export function normalizeWorkspacePath(raw) {
   const path = String(raw ?? '').trim();
   if (!path) return '';
-  const unc = /^\\\\/.test(path);
+  const unc = /^\\\\[^\\/]/.test(path) || /^\/\/[^\\/]/.test(path);
   const drive = /^[A-Za-z]:[\\/]/.test(path);
   const normalized = (unc || drive ? path.replace(/\\/g, '/') : path).replace(/\/+/g, '/');
-  if (unc) return `/${normalized.replace(/\/+$/, '') || '/'}`;
+  if (unc) return `/${normalized.replace(/\/+$/, '')}`;
   if (drive) {
     const withLowerDrive = normalized[0].toLowerCase() + normalized.slice(1);
+    // Keep a bare drive root absolute (c:/, not c:).
     return withLowerDrive.length === 3 ? withLowerDrive : withLowerDrive.replace(/\/+$/, '');
   }
   return normalized.replace(/\/+$/, '') || '/';
@@ -247,7 +243,7 @@ function folderImportKey(folderIdentity) {
 }
 
 function normalizeDraftKey(rootDir, filePath) {
-  return `${normalizeDraftPath(rootDir)}::${normalizeDraftPath(filePath)}`;
+  return `${normalizeWorkspacePath(rootDir)}::${normalizeWorkspacePath(filePath)}`;
 }
 
 /** Only the native Sessions inventory is eligible for linking a Creation. */
@@ -440,9 +436,10 @@ export const useCreationsStore = defineStore('creations', {
         diskMtimeMs: null, diskSize: null, isBinary: false, diskChangedToBinary: false,
         isDirty: initial?.dirty ?? false,
         ...initial,
-        rootDir: normalizeDraftPath(rootDir),
-        path: normalizeDraftPath(filePath),
+        rootDir,
+        path: filePath,
         bufferVersion: 1,
+        probeSeq: 0,
       });
       return bucket[key];
     },
@@ -971,7 +968,7 @@ export const useCreationsStore = defineStore('creations', {
             throw new Error('Failed to resume Creation');
           }
         } else {
-          uploadedFilesThisCall = Array.isArray(rawFiles) ? rawFiles.slice() : [];
+          const filesToSubmit = Array.isArray(rawFiles) ? rawFiles.slice() : [];
           createRes = await this.createCreation(targetId, {
             ...(trimmedTitle ? { title: trimmedTitle } : {}),
             kind,
@@ -982,12 +979,27 @@ export const useCreationsStore = defineStore('creations', {
             autoPlan: false,
             ...(attemptKey ? { importKey: attemptKey } : {}),
             ...(celestial ? { celestial } : {}),
-            ...(uploadedFilesThisCall.length ? { rawFiles: uploadedFilesThisCall } : {}),
+            ...(filesToSubmit.length ? { rawFiles: filesToSubmit } : {}),
           });
           created = createRes?.creation || (createRes?.id ? createRes : null);
           ensureSameStore();
           if (!created?.id) {
             throw new Error('Failed to create Creation');
+          }
+          if (created.deduplicated || createRes?.deduplicated) {
+            // importKey deduplication happens before attachment ingestion. Only
+            // consume files that the Agent confirms were already attached.
+            const sources = createRes?.sources ?? this.detailsByKey[creationDetailKey(targetId, created.id)]?.sources;
+            if (Array.isArray(sources)) {
+              uploadedFilesThisCall = filesToSubmit.filter(file => (
+                // A filename/size collision in the dock cannot identify which File was ingested.
+                !filesToSubmit.some(other => other !== file && other.name === file.name && other.size === file.size)
+                && sources.some(source => (source?.filename ?? source?.name) === file.name
+                  && Number(source.sizeBytes ?? source.size ?? source.byteLength) === file.size)
+              ));
+            }
+          } else {
+            uploadedFilesThisCall = filesToSubmit;
           }
         }
 
@@ -1325,7 +1337,7 @@ export const useCreationsStore = defineStore('creations', {
         const isPromptTargetCurrent = () => isOpenStillCurrent() && liveWorkspaceGeneration() === workspaceGeneration;
         const trimmedPrompt = String(initialPrompt || '').trim();
         const activationPromise = trimmedPrompt && this.hasMountedCreationTab(targetId, sessionId)
-          && this.listDirtyDocDrafts(targetId).length > 0
+          && (!String(creation.rootDir || '').trim() || this.listDirtyDocDrafts(targetId).length > 0)
           ? this.waitForCreationActivation(mySeq, target) : null;
         this.setPendingWorkbenchTarget(target);
 

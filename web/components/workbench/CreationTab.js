@@ -12,6 +12,7 @@
  */
 import { useChatStore } from '../../stores/chat.js';
 import { useCreationsStore, sendInitialCreationPrompt } from '../../stores/creations.js';
+import * as creationStores from '../../stores/creations.js';
 import { isSafeSameOriginPreviewUrl } from '../cosmos/creations/sanitize.js';
 import { createRouteBoundWorkbenchStore, workbenchRouteKey } from '../../utils/workbench-route.js';
 import FileCanvasView, { binaryDraftWarning } from './FileCanvasView.js';
@@ -37,16 +38,32 @@ const SCAN_MAX_DEPTH = 4;
 const SCAN_MAX_ENTRIES = 600;
 const THUMB_CONCURRENCY = 4;
 
-export function normalizePath(p) {
-  if (!p) return '';
-  return String(p).replace(/\\/g, '/').replace(/\/+$/, '') || '/';
+// Compatibility for hosts/tests that mock the store without the shared helper.
+function normalizeWorkspacePathFallback(raw) {
+  const path = String(raw ?? '').trim();
+  if (!path) return '';
+  const unc = /^\\\\[^\\/]/.test(path) || /^\/\/[^\\/]/.test(path);
+  const drive = /^[A-Za-z]:[\\/]/.test(path);
+  const normalized = (unc || drive ? path.replace(/\\/g, '/') : path).replace(/\/+/g, '/');
+  if (unc) return `/${normalized.replace(/\/+$/, '')}`;
+  if (drive) {
+    const withLowerDrive = normalized[0].toLowerCase() + normalized.slice(1);
+    // Keep a bare drive root absolute (c:/, not c:).
+    return withLowerDrive.length === 3 ? withLowerDrive : withLowerDrive.replace(/\/+$/, '');
+  }
+  return normalized.replace(/\/+$/, '') || '/';
 }
 
+export const normalizePath = 'normalizeWorkspacePath' in creationStores
+  ? creationStores.normalizeWorkspacePath : normalizeWorkspacePathFallback;
+
 export function joinPath(base, name) {
-  const cleanBase = String(base || '').replace(/[/\\]+$/, '');
-  const cleanName = String(name || '').replace(/^[/\\]+/, '');
-  if (!cleanBase) return cleanName;
-  const sep = cleanBase.includes('\\') && !cleanBase.includes('/') ? '\\' : '/';
+  const rawBase = String(base || '');
+  const windows = /^[A-Za-z]:[\\/]/.test(rawBase) || /^\\\\[^\\/]/.test(rawBase) || /^\/\/[^\\/]/.test(rawBase);
+  const cleanBase = rawBase.replace(windows ? /[/\\]+$/ : /\/+$/, '');
+  const cleanName = String(name || '').replace(windows ? /^[/\\]+/ : /^\/+/, '');
+  if (!rawBase) return cleanName;
+  const sep = windows && rawBase.includes('\\') && !rawBase.includes('/') ? '\\' : '/';
   return `${cleanBase}${sep}${cleanName}`;
 }
 
@@ -107,7 +124,7 @@ export function isPathInsideRoot(candidatePath, rootDir) {
   if (!normRoot || !normCandidate || normCandidate === normRoot) return false;
   const segments = normCandidate.split('/');
   if (segments.includes('..') || segments.includes('.')) return false;
-  const prefix = normRoot === '/' ? '/' : `${normRoot}/`;
+  const prefix = normRoot.endsWith('/') ? normRoot : `${normRoot}/`;
   return normCandidate.startsWith(prefix);
 }
 
@@ -873,10 +890,12 @@ export default {
     const videoFiles = Vue.ref([]);
     const expandedDocFolders = Vue.reactive(new Set());
     const probedPathsThisVisit = new Set();
+    const pendingLocalReprobes = new Set();
     let visitEpoch = 0;
     const resetDocProbes = () => {
       visitEpoch += 1;
       probedPathsThisVisit.clear();
+      pendingLocalReprobes.clear();
     };
 
     // Only older hosts without a store draft API need component-owned buffers.
@@ -920,7 +939,7 @@ export default {
       const agentId = props.agentId;
       if (!hasStoreDrafts) {
         return Array.from(fallbackDrafts.values()).filter(draft => draft.agentId === agentId
-          && draft.isDirty && (!rootDir || draft.rootDir === normalizePath(rootDir)));
+          && draft.isDirty && (!rootDir || normalizePath(draft.rootDir) === normalizePath(rootDir)));
       }
       return (creationsStore.listDirtyDocDrafts?.(agentId, rootDir) || []).map(item => {
         const draft = item.draft || item;
@@ -1271,7 +1290,7 @@ export default {
       const probeOnly = Boolean(draft.isDirty);
       const shouldProbe = !skipProbe && (forceReload || !probedPathsThisVisit.has(entry.path));
       if (probeOnly && draft.probingDisk) {
-        if (shouldProbe) draft.needsReprobe = true;
+        if (!skipProbe) pendingLocalReprobes.add(entry.path);
         return;
       }
       if (draft.loading || draft.probingDisk || draft.saving
@@ -1283,6 +1302,7 @@ export default {
         if (probeVisitEpoch === visitEpoch && isOpCurrent(opCtx)) probedPathsThisVisit.add(entry.path);
       };
       if (probeOnly) {
+        pendingLocalReprobes.delete(entry.path);
         probedPathsThisVisit.delete(entry.path);
         draft.probingDisk = true;
       } else draft.loading = true;
@@ -1343,16 +1363,19 @@ export default {
       } finally {
         if (probeOnly) {
           draft.probingDisk = false;
-          if (draft.needsReprobe) {
-            draft.needsReprobe = false;
-            if (!disposed && !isDeactivated && activeDocPath.value === entry.path && draft.isDirty
-              && getDraft(activeRootDir.value, entry.path) === draft) {
-              void openDocFile(entry, { forceReload: true });
-            }
-          }
+          draft.probeSeq = (draft.probeSeq || 0) + 1;
         } else draft.loading = false;
       }
     };
+
+    // The pending intent belongs to this tab, not to the shared buffer or
+    // whichever (possibly deactivated) tab finishes the preceding probe.
+    Vue.watch(() => [activeDocFile.value?.probingDisk, activeDocFile.value?.probeSeq], ([probing]) => {
+      const path = activeDocPath.value;
+      if (probing || disposed || isDeactivated || !path || !pendingLocalReprobes.delete(path)) return;
+      const activeEntry = docFiles.value.find(entry => entry.path === path);
+      if (activeEntry && activeDocFile.value?.isDirty) void openDocFile(activeEntry, { forceReload: true });
+    });
 
     const scanWorkspace = async ({
       reloadActiveDoc = false,
@@ -1410,7 +1433,7 @@ export default {
             }
             totalEntries += 1;
 
-            const fullPath = normalizePath(entry.path || joinPath(dirPath, entry.name));
+            const fullPath = entry.path || joinPath(dirPath, entry.name);
             if (!isPathInsideRoot(fullPath, rootDir)) continue;
             const rel = relativePath(fullPath, rootDir);
 
@@ -2153,9 +2176,9 @@ export default {
 
       const list = creationsStore.creationsForAgent(agentId) || [];
       let resolvedCreation = creation || null;
-      let targetRootDir = rootDir || resolvedCreation?.rootDir || '';
+      const requestedRoot = String(rootDir || '').trim();
 
-      // 2. Resolve target Creation / folder
+      // 2. Resolve target Creation / folder.
       if (autoResolve) {
         if (activeRootDir.value || showingSwitcher.value) return { accepted: false };
         if (props.sessionId) {
@@ -2176,30 +2199,16 @@ export default {
           }
         }
         if (!resolvedCreation) return { accepted: false };
-        targetRootDir = resolvedCreation.rootDir || '';
       } else {
         if (!resolvedCreation && creationId) {
           resolvedCreation = list.find(c => c?.id === creationId) || null;
-          if (!resolvedCreation && typeof creationsStore.ensureWorkspace === 'function') {
-            try {
-              const prepared = await creationsStore.ensureWorkspace(agentId, creationId, { rootDir: targetRootDir });
-              if (!isCurrent()) return { accepted: false };
-              if (prepared?.creation?.id === creationId) {
-                resolvedCreation = prepared.creation;
-                targetRootDir = prepared.rootDir || targetRootDir;
-              }
-            } catch (err) {
-              if (isCurrent()) onboardingError.value = err?.message || tr('creation.workbench.workspaceFailed', 'Failed to prepare workspace');
-              return { accepted: false };
-            }
-          }
         }
-        if (!resolvedCreation && !creationId && targetRootDir && !bindCurrent) {
-          const normTarget = normalizePath(targetRootDir);
+        if (!resolvedCreation && !creationId && requestedRoot && !bindCurrent) {
+          const normTarget = normalizePath(requestedRoot);
           resolvedCreation = list.find(c => c?.rootDir && normalizePath(c.rootDir) === normTarget) || null;
           if (!resolvedCreation) {
             try {
-              const found = await creationsStore.findByFolder?.(agentId, targetRootDir);
+              const found = await creationsStore.findByFolder?.(agentId, requestedRoot);
               // Pending bindings still need the store to resume materialization.
               if (found?.rootDir) resolvedCreation = found;
             } catch {
@@ -2208,19 +2217,17 @@ export default {
             if (!isCurrent()) return { accepted: false };
           }
         }
-        if (!resolvedCreation?.id && !creationId && targetRootDir) {
+        if (!resolvedCreation?.id && !creationId && requestedRoot) {
           bindingFolder.value = true;
           try {
-            // The store's bind action accepts a single options object.
             const result = await creationsStore.bindFolderAsCreation({
-              agentId, rootDir: targetRootDir, sessionId,
-              ...(!bindCurrent ? { title: normalizePath(targetRootDir).split('/').filter(Boolean).pop() || 'Creation' } : {}),
+              agentId, rootDir: requestedRoot, sessionId,
+              ...(!bindCurrent ? { title: normalizePath(requestedRoot).split('/').filter(Boolean).pop() || 'Creation' } : {}),
             });
             if (!isCurrent()) return { accepted: false };
             if (result?.error) throw new Error(result.error);
             resolvedCreation = result?.creation || result;
-            if (!resolvedCreation?.id || !resolvedCreation.rootDir?.trim()) throw new Error();
-            targetRootDir = resolvedCreation.rootDir;
+            if (!resolvedCreation?.id || !String(resolvedCreation.rootDir || '').trim()) throw new Error();
           } catch (err) {
             if (isCurrent()) onboardingError.value = err?.message || tr('creation.workbench.bindFailed', 'Failed to open folder as Creation');
             return { accepted: false };
@@ -2228,35 +2235,32 @@ export default {
             if (isCurrent()) bindingFolder.value = false;
           }
         }
-        targetRootDir ||= resolvedCreation?.rootDir || '';
+      }
 
-        if (resolvedCreation?.id && !targetRootDir && typeof creationsStore.ensureWorkspace === 'function') {
-          try {
-            const ensured = await creationsStore.ensureWorkspace(agentId, resolvedCreation.id, { rootDir: targetRootDir });
-            if (!isCurrent()) return { accepted: false };
-            targetRootDir = ensured?.rootDir || ensured?.creation?.rootDir || targetRootDir;
-            if (ensured?.creation) resolvedCreation = ensured.creation;
-          } catch (err) {
-            if (isCurrent()) {
-              onboardingError.value = err?.message || tr('creation.workbench.workspaceFailed', 'Failed to prepare workspace');
-            }
-            return { accepted: false };
-          }
-        }
-
-        if (!targetRootDir) {
-          onboardingError.value = tr('creation.workbench.missingRootDir', 'This Creation does not have a workspace folder yet.');
+      const resolvedId = resolvedCreation?.id || creationId;
+      if (resolvedId && !String(resolvedCreation?.rootDir || '').trim()) {
+        try {
+          const ensured = await creationsStore.ensureWorkspace(agentId, resolvedId, requestedRoot ? { rootDir: requestedRoot } : {});
+          if (!isCurrent()) return { accepted: false };
+          if (ensured?.creation?.id === resolvedId) resolvedCreation = ensured.creation;
+        } catch (err) {
+          if (isCurrent()) onboardingError.value = err?.message || tr('creation.workbench.workspaceFailed', 'Failed to prepare workspace');
           return { accepted: false };
         }
       }
 
       if (!isCurrent()) return { accepted: false };
-      if (!targetRootDir || !resolvedCreation?.id || (resolvedCreation.agentId && resolvedCreation.agentId !== agentId)) {
+      const recordedRoot = resolvedCreation?.rootDir;
+      if (!String(recordedRoot || '').trim()) {
+        onboardingError.value = tr('creation.workbench.missingRootDir', 'This Creation does not have a workspace folder yet.');
+        return { accepted: false };
+      }
+      if (!resolvedCreation?.id || (resolvedCreation.agentId && resolvedCreation.agentId !== agentId)) {
         onboardingError.value = tr('creation.workbench.workspaceFailed', 'Failed to prepare workspace');
         return { accepted: false };
       }
 
-      const nextNormRoot = normalizePath(targetRootDir);
+      const nextNormRoot = normalizePath(recordedRoot);
       const prevNormRoot = normalizePath(activeRootDir.value);
       const changed = prevNormRoot !== nextNormRoot || activeCreation.value?.id !== resolvedCreation.id;
       if (changed && prevNormRoot && confirmDirty && dirtyDrafts(prevNormRoot).length) {
@@ -2268,7 +2272,7 @@ export default {
 
       if (changed) resetWorkspace();
       activeCreation.value = resolvedCreation;
-      activeRootDir.value = nextNormRoot;
+      activeRootDir.value = recordedRoot;
       showingSwitcher.value = false;
       acceptActivation();
       void scanWorkspace({ opCtx: captureOp() });
