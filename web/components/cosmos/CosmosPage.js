@@ -83,6 +83,7 @@ import SettingsPanel from '../SettingsPanel.js';
 import AgentSettingsPanel from '../AgentSettingsPanel.js';
 import SessionSettingsModal from '../SessionSettingsModal.js';
 import { useCreationsStore, sendInitialCreationPrompt } from '../../stores/creations.js';
+import { workbenchRouteKey, workbenchWorkspaceGeneration } from '../../utils/workbench-route.js';
 import { useCosmicWebStore } from '../../stores/cosmicWeb.js';
 
 const COSMIC_WEB_INTENT_KEYS = Object.freeze({
@@ -1769,18 +1770,22 @@ export default {
       drawerOpenedFromGalaxy.value = openedFromGalaxy;
       workbenchWidened.value = false;
       if (!isOpenStillCurrent()) return;
+      const liveWorkspaceGeneration = () => workbenchWorkspaceGeneration(
+        workbenchRouteKey(store.activeSessionRoute), store.effectiveWorkDir,
+      );
+      const workspaceGeneration = liveWorkspaceGeneration();
       const hasPrompt = typeof initialPrompt === 'string' && initialPrompt.trim() && sessionId;
       const activationPromise = hasPrompt && creationsStore.hasMountedCreationTab(agentId, sessionId)
         && creationsStore.listDirtyDocDrafts(agentId).length > 0
-        ? creationsStore.waitForCreationActivation(openSeq, { agentId, sessionId }) : null;
+        ? creationsStore.waitForCreationActivation(openSeq, { agentId, sessionId, workspaceGeneration }) : null;
       if (!creationsStore.pendingWorkbenchTarget || creationsStore.pendingWorkbenchTarget.openSeq !== openSeq) {
-        creationsStore.setPendingWorkbenchTarget?.({ agentId, sessionId, creationId, rootDir, maximize, openSeq, openedFromGalaxy });
+        creationsStore.setPendingWorkbenchTarget?.({ agentId, sessionId, creationId, rootDir, maximize, openSeq, openedFromGalaxy, workspaceGeneration });
       }
       if (!hasPrompt) return;
 
       const isDrawerTargetCurrent = () => isOpenStillCurrent() && drawerOpen.value
         && drawerAgentId.value === agentId && store.currentAgent === agentId
-        && store.yeaftActiveSessionFilter === sessionId;
+        && store.yeaftActiveSessionFilter === sessionId && liveWorkspaceGeneration() === workspaceGeneration;
       try {
         await Vue.nextTick();
         if (activationPromise && !(await activationPromise)) return;

@@ -213,7 +213,12 @@ describe('Creation folder workspaces', () => {
       store.createNode(id, { id: 'draft', content: 'revision' });
       store.saveAsset(id, { ext: 'md', content: 'export' }, { exportFile: true });
       const cache = join(store.root, '_creations', id);
-      expect(readdirSync(cache).sort()).toEqual(['artifacts', 'assets', 'sources']);
+      const expected = ['artifacts', 'assets', 'sources'];
+      if (id === 'external') {
+        expected.unshift('.staging');
+        expect(readdirSync(join(cache, '.staging'))).toEqual([]);
+      }
+      expect(readdirSync(cache).sort()).toEqual(expected);
       const doc = join(rootDir, 'docs', 'keep.md');
       writeFileSync(doc, 'user draft');
       if (id === 'generated') store.deleteCreation(id);
@@ -237,6 +242,36 @@ describe('Creation folder workspaces', () => {
     }
     store.deleteCreation('generated', { purgeWorkspace: true });
     expect(readFileSync(join(rootDir, 'README.md'), 'utf8')).toContain('Untitled creation');
+  });
+
+  it.each([false, true])('uses an exclusive final-path write on EXDEV (concurrent file=%s)', concurrent => {
+    const rootDir = join(dir, 'external');
+    mkdirSync(rootDir);
+    const module = new URL('../../../../agent/yeaft/creations/store.js', import.meta.url).href;
+    const result = spawnSync(process.execPath, ['--input-type=module', '-e', `
+      import fs from 'node:fs';
+      import { syncBuiltinESMExports } from 'node:module';
+      import { createCreationStore } from ${JSON.stringify(module)};
+      fs.linkSync = (temp, dest) => {
+        if (${concurrent}) fs.writeFileSync(dest, 'concurrent user file');
+        throw Object.assign(new Error('cross-device link'), { code: 'EXDEV' });
+      };
+      syncBuiltinESMExports();
+      const store = createCreationStore({ yeaftDir: ${JSON.stringify(dir)} });
+      try {
+        store.createCreation({ id: 'cross-device', initializeFolder: true, rootDir: ${JSON.stringify(rootDir)} });
+      } catch (error) {
+        if (!${concurrent} || error.code !== 'CONFLICT') throw error;
+        process.exitCode = 79;
+      }
+    `], { encoding: 'utf8', timeout: 10000 });
+    expect(result.status, result.stderr).toBe(concurrent ? 79 : 0);
+    expect(readFileSync(join(rootDir, 'README.md'), 'utf8')).toBe(concurrent ? 'concurrent user file' : '# Untitled creation\n\n\n');
+    expect(readdirSync(rootDir).sort()).toEqual(['README.md', 'docs', 'images', 'sources', 'videos']);
+    expect(store.getCreation('cross-device').rootDir).toBe(concurrent ? null : rootDir);
+    store.deleteCreation('cross-device');
+    expect(existsSync(join(store.root, '_creations', 'cross-device'))).toBe(false);
+    expect(existsSync(join(rootDir, 'README.md'))).toBe(true);
   });
 
   it.each(['edited', 'conflict'])('recovers a real interrupted external publication (%s)', mode => {
@@ -266,11 +301,13 @@ describe('Creation folder workspaces', () => {
     const row = journal();
     expect(row.target_dir).toBe(rootDir);
     const [{ path: temp }] = JSON.parse(row.temp_files_json);
+    expect(dirname(temp)).toBe(join(store.root, '_creations', id, '.staging'));
     const docs = join(rootDir, 'docs');
     const first = join(docs, 'First.md');
     const second = join(docs, 'Second.md');
     const third = join(docs, 'Third.md');
     expect(statSync(temp).ino).toBe(statSync(second).ino);
+    expect(readdirSync(docs).sort()).toEqual(['First.md', 'Second.md']);
     expect(JSON.parse(row.published_outputs_json)).toMatchObject({ 'node:first': join('docs', 'First.md') });
     expect(JSON.parse(row.planned_outputs_json)['node:third']).toEqual({ relPath: join('docs', 'Third.md'),
       sha256: createHash('sha256').update('Draft third').digest('hex') });
@@ -298,7 +335,7 @@ describe('Creation folder workspaces', () => {
     const id = 'journaled-import';
     const rootDir = join(dir, 'external');
     mkdirSync(rootDir);
-    const payload = { id, importKey: 'upload:journaled', initializeFolder: true, rootDir, title: 'Journaled',
+    const payload = { id, importKey: 'bind-folder:journaled', initializeFolder: true, rootDir, title: 'Journaled',
       textSources: [{ name: 'Initial.txt', text: 'raw source' }], starterNode: { title: 'Draft', content: 'initial draft' } };
     const module = new URL('../../../../agent/yeaft/creations/service.js', import.meta.url).href;
     const crashed = spawnSync(process.execPath, ['--input-type=module', '-e', `
@@ -325,10 +362,12 @@ describe('Creation folder workspaces', () => {
     expect(req('find_by_folder', { rootDir })).toMatchObject({ creation: { id, rootDir: null } });
     const [tempEntry] = JSON.parse(row.temp_files_json);
     const { path: temp } = tempEntry;
+    expect(dirname(temp)).toBe(join(store.root, '_creations', id, '.staging'));
     const sources = join(rootDir, 'sources');
     const published = join(sources, 'Initial.txt');
     const { dev, ino } = statSync(published, { bigint: true });
-    expect(tempEntry).toEqual({ path: temp, dev: String(dev), ino: String(ino) });
+    expect(tempEntry).toEqual({ path: temp, dev: String(dev), ino: String(ino), relPath: join('sources', 'Initial.txt') });
+    expect(readdirSync(sources)).toEqual(['Initial.txt']);
     expect(statSync(temp, { bigint: true }).ino).toBe(ino);
     if (replaced) {
       rmSync(temp);
@@ -339,9 +378,11 @@ describe('Creation folder workspaces', () => {
     const expectedSource = replaced && outcome === 'retry' ? 'raw source' : 'user edited';
     writeFileSync(published, expectedSource);
     const legacyTemp = join(rootDir, '.creation-tmp-legacy');
-    writeFileSync(legacyTemp, 'legacy path has no recorded identity');
+    writeFileSync(legacyTemp, 'legacy external file');
+    const legacyStat = lstatSync(legacyTemp, { bigint: true });
+    const legacyEntry = { path: legacyTemp, dev: String(legacyStat.dev), ino: String(legacyStat.ino) };
     store.run('UPDATE creation_materialization_journal SET temp_files_json=? WHERE creation_id=?',
-      JSON.stringify([tempEntry, legacyTemp]), id);
+      JSON.stringify([tempEntry, legacyEntry]), id);
     if (outcome === 'retry') {
       const retry = req('create_creation', { ...payload, id: 'ignored-on-retry', textSources: ['do not ingest again'] });
       expect(retry).toMatchObject({ deduplicated: true, creation: { id, rootDir } });
@@ -357,7 +398,7 @@ describe('Creation folder workspaces', () => {
       writeFileSync(unownedFile, 'inside');
       symlinkSync(outsideTemp, symbolicTemp);
       store.run('UPDATE creation_materialization_journal SET temp_files_json=? WHERE creation_id=?',
-        JSON.stringify([tempEntry, legacyTemp, ...[outsideTemp, unownedFile, symbolicTemp].map(path => {
+        JSON.stringify([tempEntry, legacyEntry, ...[outsideTemp, unownedFile, symbolicTemp].map(path => {
           const { dev, ino } = lstatSync(path, { bigint: true });
           return { path, dev: String(dev), ino: String(ino) };
         })]), id);
@@ -369,12 +410,12 @@ describe('Creation folder workspaces', () => {
       expect(lstatSync(symbolicTemp).isSymbolicLink()).toBe(true);
     }
     expect(journal()).toBeUndefined();
-    expect(existsSync(temp)).toBe(replaced);
-    if (replaced) expect(readFileSync(temp, 'utf8')).toBe('replacement file');
-    expect(readdirSync(sources).sort()).toEqual(replaced ? [basename(temp), 'Initial.txt'] : ['Initial.txt']);
+    expect(existsSync(temp)).toBe(replaced && outcome === 'retry');
+    if (replaced && outcome === 'retry') expect(readFileSync(temp, 'utf8')).toBe('replacement file');
+    expect(readdirSync(sources)).toEqual(['Initial.txt']);
     expect(readFileSync(published, 'utf8')).toBe(expectedSource);
     expect(readFileSync(join(rootDir, 'README.md'), 'utf8')).toBe('# Journaled\n\n\n');
-    expect(readFileSync(legacyTemp, 'utf8')).toBe('legacy path has no recorded identity');
+    expect(readFileSync(legacyTemp, 'utf8')).toBe('legacy external file');
   });
 
   it.each(['external', 'generated'])('reconciles a partially published %s workspace without suffixing matching files', async location => {
@@ -521,22 +562,82 @@ describe('Creation folder workspaces', () => {
     expect(readdirSync(rootDir)).toEqual([]);
   });
 
-  it.each(['sources symlink', 'sources file', 'nested docs symlink'])('preflights an external bind with a %s before committing', layout => {
+  it.each([
+    ['sources', 'directory symlink'], ['sources', 'file'], ['docs/Chapter', 'directory symlink'], ['docs/Chapter', 'file'],
+    ['README.md', 'file symlink'], ['README.md', 'directory'], ['sources/Notes.txt', 'file symlink'],
+    ['docs/Draft.md', 'file symlink'], ['docs/Draft.md', 'directory'],
+  ])('preflights an external bind with %s blocked by a %s before committing', (relative, type) => {
     const rootDir = join(dir, 'external');
-    mkdirSync(join(rootDir, 'docs'), { recursive: true });
-    const blocked = join(rootDir, layout.startsWith('sources') ? 'sources' : 'docs/Chapter');
-    if (layout.endsWith('symlink')) symlinkSync(dir, blocked, 'dir');
-    else writeFileSync(blocked, 'not a directory');
-    const payload = { initializeFolder: true, rootDir, textSources: ['Upload'], starterNode: { type: 'folder', title: 'Chapter' } };
+    const blocked = join(rootDir, ...relative.split('/'));
+    mkdirSync(dirname(blocked), { recursive: true });
+    const target = join(dir, 'target');
+    writeFileSync(target, 'unchanged');
+    if (type === 'directory symlink') symlinkSync(dir, blocked, 'dir');
+    if (type === 'file symlink') symlinkSync(target, blocked, 'file');
+    if (type === 'file') writeFileSync(blocked, 'not a directory');
+    if (type === 'directory') mkdirSync(blocked);
+    const before = readdirSync(rootDir, { recursive: true }).sort();
+    const payload = { importKey: 'bind-folder:preflight', initializeFolder: true, rootDir, textSources: ['Upload'],
+      starterNode: relative === 'docs/Chapter' ? { type: 'folder', title: 'Chapter' } : { title: 'Draft', content: 'Draft' } };
     expect(() => req('create_creation', payload)).toThrow(err('INVALID_PATH'));
-    expect(existsSync(join(dir, 'Notes.txt'))).toBe(false);
+    expect(readFileSync(target, 'utf8')).toBe('unchanged');
+    expect(readdirSync(rootDir, { recursive: true }).sort()).toEqual(before);
     expect(store.listCreations()).toEqual([]);
+    expect(store.all('SELECT * FROM creation_import_keys')).toEqual([]);
     expect(store.all('SELECT * FROM creation_materialization_journal')).toEqual([]);
     expect(req('find_by_folder', { rootDir })).toEqual({ creation: null });
-    unlinkSync(blocked);
+    rmSync(blocked, { recursive: true });
     const { creation } = req('create_creation', payload);
     expect(creation.rootDir).toBe(rootDir);
     expect(store.listCreations()).toEqual([creation]);
+  });
+
+  it('resumes a keyed bind interrupted just after the journal commit', () => {
+    const rootDir = join(dir, 'external');
+    mkdirSync(rootDir);
+    const payload = { importKey: 'bind-folder:pending', initializeFolder: true, rootDir };
+    const publication = vi.spyOn(store, 'ensureWorkspace').mockImplementationOnce(() => { throw new Error('interrupted'); });
+    try { expect(() => store.createCreation(payload)).toThrow('interrupted'); }
+    finally { publication.mockRestore(); }
+    const [pending] = store.listCreations();
+    expect(pending.rootDir).toBeNull();
+    expect(store.one('SELECT target_dir FROM creation_materialization_journal WHERE creation_id=?', pending.id).target_dir).toBe(rootDir);
+    expect(readdirSync(rootDir)).toEqual([]);
+    expect(store.createCreation(payload)).toMatchObject({ id: pending.id, rootDir, deduplicated: true });
+    expect(store.all('SELECT * FROM creation_materialization_journal')).toEqual([]);
+    expect(store.listCreations()).toHaveLength(1);
+  });
+
+  it.each(['relink', 'unlink'])('retires folder bind keys on %s and binds the original folder again', action => {
+    const a = join(dir, 'a');
+    const b = join(dir, 'b');
+    mkdirSync(a);
+    mkdirSync(b);
+    const importKey = 'bind-folder:a';
+    const payload = { rootDir: a, importKey, initializeFolder: true };
+    const first = store.createCreation(payload);
+    const newRoot = action === 'relink' ? b : null;
+    expect(store.updateCreation(first.id, { rootDir: newRoot }).rootDir).toBe(newRoot);
+    expect(store.one('SELECT creation_id FROM creation_import_keys WHERE import_key=?', importKey)).toBeUndefined();
+    const second = store.createCreation(payload);
+    expect(second.rootDir).toBe(a);
+    expect(second.id).not.toBe(first.id);
+    expect(store.getCreation(first.id).rootDir).toBe(newRoot);
+    expect(store.createCreation(payload)).toMatchObject({ id: second.id, rootDir: a, deduplicated: true });
+  });
+
+  it.skipIf(process.platform === 'win32')('does not deduplicate distinct POSIX folders that share a folder bind key', () => {
+    const literal = join(dir, 'part\\leaf');
+    const nested = join(dir, 'part', 'leaf');
+    mkdirSync(literal);
+    mkdirSync(nested, { recursive: true });
+    const payload = { importKey: 'bind-folder:collision', initializeFolder: true };
+    const first = store.createCreation({ ...payload, rootDir: literal });
+    expect(store.findByFolder(nested)).toEqual({ creation: null });
+    const second = store.createCreation({ ...payload, rootDir: nested });
+    expect(second.id).not.toBe(first.id);
+    expect(store.findByFolder(literal)).toEqual({ creation: first });
+    expect(store.findByFolder(nested)).toEqual({ creation: second });
   });
 
   it('materializes legacy nodes, canon and binary media without clobbering files; it only emits once', async () => {

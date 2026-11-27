@@ -601,7 +601,7 @@ export default {
       detail.accepted = true;
     };
 
-    const providedCreationTarget = Vue.reactive({ routeKey: '', agentId: '', creationId: '', rootDir: '', openSeq: null, seq: 0 });
+    const providedCreationTarget = Vue.reactive({ routeKey: '', agentId: '', creationId: '', rootDir: '', workspaceGeneration: null, openSeq: null, seq: 0 });
     Vue.provide('workbench-creation-target', providedCreationTarget);
     Vue.provide('workbench-has-creations', hasCreations);
 
@@ -614,10 +614,12 @@ export default {
       else if (maximize === false) store.workbenchMaximized = false;
       const targetRouteKey = activeRouteKey.value;
       const targetAgentId = activeRoute.value?.agentId || '';
+      const workspaceGeneration = routeHostState.value?.routeProps?.workspaceGeneration ?? null;
       providedCreationTarget.routeKey = targetRouteKey;
       providedCreationTarget.agentId = targetAgentId;
       providedCreationTarget.creationId = creationId || '';
       providedCreationTarget.rootDir = rootDir || '';
+      providedCreationTarget.workspaceGeneration = workspaceGeneration;
       providedCreationTarget.openSeq = openSeq;
       providedCreationTarget.seq += 1;
       const dispatchedSeq = providedCreationTarget.seq;
@@ -628,6 +630,7 @@ export default {
             agentId: targetAgentId,
             creationId: creationId || '',
             rootDir: rootDir || '',
+            workspaceGeneration,
             seq: dispatchedSeq,
             openSeq,
           },
@@ -669,6 +672,12 @@ export default {
       if (!target || !activeRouteKey.value || !hasCreations.value) return;
       if (target.agentId && activeRoute.value?.agentId !== target.agentId) return;
       if (target.sessionId && activeRoute.value?.sessionId !== target.sessionId) return;
+      if (target.workspaceGeneration != null && target.workspaceGeneration !== activeWorkspaceGeneration.value) {
+        if (target.openSeq != null && target.openSeq === creationsStore.openWorkspaceSeq) {
+          creationsStore.cancelPendingWorkspaceOpen?.();
+        } else creationsStore.clearPendingWorkbenchTarget?.(target.seq);
+        return;
+      }
       if (!openCreationWorkspaceTarget({
         creationId: target.creationId,
         rootDir: target.rootDir,
@@ -960,6 +969,16 @@ export default {
       workbenchContextKey,
       (contextKey, previousContextKey) => {
         if (contextKey === previousContextKey) return;
+        if (previousContextKey?.split('\u0000', 1)[0] === activeRouteKey.value) {
+          const routeKey = activeRouteKey.value;
+          const nextWorkspaceGeneration = activeWorkspaceGeneration.value;
+          const canceled = creationsStore.cancelStaleGenerationActivations?.(routeKey, nextWorkspaceGeneration);
+          const pending = creationsStore.pendingWorkbenchTarget;
+          const targetsOldGeneration = pending?.openSeq != null
+            && pending.agentId === activeRoute.value?.agentId && pending.sessionId === activeRoute.value?.sessionId
+            && pending.workspaceGeneration != null && pending.workspaceGeneration !== nextWorkspaceGeneration;
+          if (canceled || targetsOldGeneration) creationsStore.cancelPendingWorkspaceOpen?.();
+        }
         const retainedNavigation = browserNavigationByContext.get(contextKey);
         if (retainedNavigation) retainBrowserNavigation(retainedNavigation);
         cancelActiveResize();

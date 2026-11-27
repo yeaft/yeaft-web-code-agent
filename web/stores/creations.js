@@ -8,7 +8,7 @@
 import { useChatStore } from './chat.js';
 import { useAuthStore } from './auth.js';
 import { yeaftSessionIdentityKey } from './helpers/yeaft-session-identity.js';
-import { workbenchRouteKey } from '../utils/workbench-route.js';
+import { workbenchRouteKey, workbenchWorkspaceGeneration } from '../utils/workbench-route.js';
 import * as canvasContext from '../utils/canvas-context.js';
 
 const { defineStore } = Pinia;
@@ -223,6 +223,20 @@ function normalizeDraftPath(path) {
   return String(path).replace(/\\/g, '/').replace(/\/+$/, '') || '/';
 }
 
+function normalizeWorkspacePath(raw) {
+  const path = String(raw ?? '').trim();
+  if (!path) return '';
+  const unc = /^\\\\/.test(path);
+  const drive = /^[A-Za-z]:[\\/]/.test(path);
+  const normalized = (unc || drive ? path.replace(/\\/g, '/') : path).replace(/\/+/g, '/');
+  if (unc) return `/${normalized.replace(/\/+$/, '') || '/'}`;
+  if (drive) {
+    const withLowerDrive = normalized[0].toLowerCase() + normalized.slice(1);
+    return withLowerDrive.length === 3 ? withLowerDrive : withLowerDrive.replace(/\/+$/, '');
+  }
+  return normalized.replace(/\/+$/, '') || '/';
+}
+
 function folderImportKey(folderIdentity) {
   // FNV-1a over the serialized tuple works even outside a secure browser context.
   let hash = 0xcbf29ce484222325n;
@@ -230,16 +244,6 @@ function folderImportKey(folderIdentity) {
     hash = BigInt.asUintN(64, (hash ^ BigInt(byte)) * 0x100000001b3n);
   }
   return `bind-folder:${hash.toString(16).padStart(16, '0')}`;
-}
-
-function workspaceSubmissionSnapshot(entry) {
-  return {
-    files: entry.submittedFiles,
-    title: entry.submittedTitle,
-    prompt: entry.submittedPrompt,
-    kind: entry.submittedKind,
-    celestial: entry.submittedCelestial,
-  };
 }
 
 function normalizeDraftKey(rootDir, filePath) {
@@ -472,13 +476,14 @@ export const useCreationsStore = defineStore('creations', {
         .map(([, draft]) => draft);
     },
 
-    registerCreationTabRoute(routeKey, { agentId, sessionId } = {}) {
+    registerCreationTabRoute(routeKey, { agentId, sessionId, workspaceGeneration } = {}) {
       if (!routeKey) return;
       const previous = Object.hasOwn(this.mountedCreationTabRoutes, routeKey)
         ? this.mountedCreationTabRoutes[routeKey] : null;
       this.mountedCreationTabRoutes[routeKey] = {
         agentId: agentId ?? previous?.agentId,
         sessionId: sessionId ?? previous?.sessionId,
+        workspaceGeneration: workspaceGeneration ?? previous?.workspaceGeneration,
         count: (previous?.count || 0) + 1,
       };
     },
@@ -504,22 +509,36 @@ export const useCreationsStore = defineStore('creations', {
       ));
     },
 
-    waitForCreationActivation(openSeq, { agentId, sessionId }) {
+    waitForCreationActivation(openSeq, { agentId, sessionId, workspaceGeneration }) {
       if (!Number.isSafeInteger(openSeq) || openSeq !== this.openWorkspaceSeq) return Promise.resolve(false);
       const existing = pendingOpenActivations.get(openSeq);
       if (existing) return existing.promise;
       let resolve;
       const promise = new Promise(done => { resolve = done; });
       if (!this.hasMountedCreationTab(agentId, sessionId)) return Promise.resolve(false);
-      pendingOpenActivations.set(openSeq, { agentId, sessionId, resolve, promise });
+      const routeKey = workbenchRouteKey({ runtimeProvider: 'yeaft', agentId, sessionId });
+      pendingOpenActivations.set(openSeq, { agentId, sessionId, routeKey, workspaceGeneration, resolve, promise });
       return promise;
     },
 
-    resolveCreationActivation(openSeq, accepted) {
+    resolveCreationActivation(openSeq, accepted, { workspaceGeneration } = {}) {
       const pending = pendingOpenActivations.get(openSeq);
       if (!pending) return;
       pendingOpenActivations.delete(openSeq);
-      pending.resolve(accepted === true && openSeq === this.openWorkspaceSeq);
+      pending.resolve(accepted === true && openSeq === this.openWorkspaceSeq
+        && (pending.workspaceGeneration == null || workspaceGeneration === pending.workspaceGeneration));
+    },
+
+    cancelStaleGenerationActivations(routeKey, liveWorkspaceGeneration) {
+      let canceled = false;
+      for (const [openSeq, pending] of pendingOpenActivations) {
+        if (pending.routeKey === routeKey && pending.workspaceGeneration != null
+          && pending.workspaceGeneration !== liveWorkspaceGeneration) {
+          this.resolveCreationActivation(openSeq, false);
+          canceled = true;
+        }
+      }
+      return canceled;
     },
 
     resetIgniteResume() {
@@ -739,21 +758,27 @@ export const useCreationsStore = defineStore('creations', {
         throw new Error('Missing agentId or rootDir');
       }
 
-      const dedupeKey = JSON.stringify([targetId, normalizeDraftPath(trimmedDir)]);
+      const dedupeKey = JSON.stringify([targetId, normalizeWorkspacePath(trimmedDir)]);
       if (inFlightBindFolder.has(dedupeKey)) {
         return inFlightBindFolder.get(dedupeKey);
       }
 
       const run = (async () => {
-        const existing = await this.findByFolder(targetId, trimmedDir);
-        if (existing && existing.id) {
+        const found = await this.findByFolder(targetId, trimmedDir);
+        if (found?.id) {
+          let existing = found;
+          if (!String(found.rootDir ?? '').trim()) {
+            const ensured = await this.ensureWorkspace(targetId, found.id, { rootDir: trimmedDir });
+            existing = ensured?.creation || ensured;
+            if (!String(existing?.rootDir ?? '').trim()) throw new Error('Failed to prepare workspace');
+          }
           if ((sessionId && !existing.sessionId) || (projectId && !existing.projectId)) {
             const patch = {
               ...(sessionId && !existing.sessionId ? { sessionId } : {}),
               ...(projectId && !existing.projectId ? { projectId } : {}),
             };
-            const updated = await this.updateCreation(targetId, existing.id, patch);
-            return { creation: updated, existed: true };
+            const updated = await this.updateCreation(targetId, found.id, patch);
+            return { creation: { ...existing, ...updated, rootDir: updated?.rootDir || existing.rootDir }, existed: true };
           }
           this._upsertSummary(targetId, existing);
           return { creation: existing, existed: true };
@@ -791,7 +816,7 @@ export const useCreationsStore = defineStore('creations', {
 
     async createCreationWithWorkspace(options = {}) {
       const targetId = String(options.agentId || this.selectedAgentId || '').trim();
-      const { attemptKey, title, kind = 'book', prompt, rawFiles, celestial } = options;
+      const { attemptKey, title, kind = 'book', rawFiles } = options;
       const trimmedTitle = String(title || '').trim();
       const flightKey = typeof attemptKey === 'string' && attemptKey.trim() ? `${targetId}::${attemptKey}` : null;
       const gen = storeGeneration;
@@ -809,27 +834,24 @@ export const useCreationsStore = defineStore('creations', {
         return {
           ...baseRes,
           ...(updated ? { creation: { ...baseRes.creation, ...updated } } : {}),
-          _submittedSnapshot: workspaceSubmissionSnapshot(existing),
+          _submittedSnapshot: { ...baseRes._submittedSnapshot, files: existing.submittedFiles },
         };
       }
 
-      const entry = {
-        promise: null,
-        submittedFiles: Array.isArray(rawFiles) ? rawFiles.slice() : [],
-        submittedTitle: trimmedTitle,
-        submittedPrompt: String(prompt || ''),
-        submittedKind: kind,
-        submittedCelestial: celestial || null,
-      };
+      const entry = { promise: null, submittedFiles: [] };
+      const filesAtStart = Array.isArray(rawFiles) ? rawFiles.slice() : [];
       // Reserve the attempt before issuing any RPC; remounts reuse this promise.
       entry.promise = Promise.resolve().then(() => {
         if (gen !== storeGeneration) throw new Error('Creations store cleared');
-        return this._createWorkspace(targetId, { ...options, rawFiles: entry.submittedFiles });
+        return this._createWorkspace(targetId, { ...options, rawFiles: filesAtStart });
+      }).then(result => {
+        entry.submittedFiles = result._submittedSnapshot.files;
+        return result;
       }).finally(() => {
         if (flightKey && inFlightWorkspaceCreates.get(flightKey) === entry) inFlightWorkspaceCreates.delete(flightKey);
       });
       if (flightKey) inFlightWorkspaceCreates.set(flightKey, entry);
-      return { ...await entry.promise, _submittedSnapshot: workspaceSubmissionSnapshot(entry) };
+      return entry.promise;
     },
 
     async _createWorkspace(targetId, {
@@ -863,6 +885,7 @@ export const useCreationsStore = defineStore('creations', {
       const trimmedResumeId = String(resumeCreationId || '').trim();
       let created = null;
       let createRes = null;
+      let uploadedFilesThisCall = [];
       let didAttemptProject = projectAttempted;
       let didAttemptSession = sessionAttempted;
       const projectRows = () => chatStore?.yeaftProjects || chatStore?.sessionProjects || [];
@@ -948,6 +971,7 @@ export const useCreationsStore = defineStore('creations', {
             throw new Error('Failed to resume Creation');
           }
         } else {
+          uploadedFilesThisCall = Array.isArray(rawFiles) ? rawFiles.slice() : [];
           createRes = await this.createCreation(targetId, {
             ...(trimmedTitle ? { title: trimmedTitle } : {}),
             kind,
@@ -958,7 +982,7 @@ export const useCreationsStore = defineStore('creations', {
             autoPlan: false,
             ...(attemptKey ? { importKey: attemptKey } : {}),
             ...(celestial ? { celestial } : {}),
-            ...(Array.isArray(rawFiles) && rawFiles.length ? { rawFiles } : {}),
+            ...(uploadedFilesThisCall.length ? { rawFiles: uploadedFilesThisCall } : {}),
           });
           created = createRes?.creation || (createRes?.id ? createRes : null);
           ensureSameStore();
@@ -980,13 +1004,13 @@ export const useCreationsStore = defineStore('creations', {
               ? await chatStore.loadYeaftSessions(targetId) : await refreshNativeInventory();
             ensureSameStore();
             const scopedRows = Array.isArray(snapshot) ? snapshot : snapshot?.sessions;
-            const workspace = normalizeDraftPath(created.rootDir);
+            const workspace = normalizeWorkspacePath(created.rootDir);
             const sessionTitle = created.title || trimmedTitle;
             const matches = (scopedRows || sessionRows()).filter(s => s?.id
               && (s.agentId === targetId || (scopedRows && !s.agentId))
               && (!s.runtimeProvider || s.runtimeProvider === 'yeaft')
               && !capturedBaselineSessions.includes(s.id)
-              && (workspace ? normalizeDraftPath(s.workDir) === workspace
+              && (workspace ? normalizeWorkspacePath(s.workDir) === workspace
                 : sessionTitle && (s.displayName || s.name || s.title) === sessionTitle));
             if (matches.length > 1) throw new Error('Multiple Sessions match the previous creation attempt');
             if (matches.length === 1) targetSessionId = matches[0].id;
@@ -1081,6 +1105,9 @@ export const useCreationsStore = defineStore('creations', {
           ...(projectWarning ? { projectWarning, requestedProjectId: targetProjectId } : {}),
           rootDir: updated?.rootDir || created.rootDir || trimmedRootDir || '',
           prompt,
+          _submittedSnapshot: {
+            files: uploadedFilesThisCall, title: trimmedTitle, prompt: String(prompt || ''), kind, celestial: celestial || null,
+          },
         };
       } catch (err) {
         const wrapped = err instanceof Error ? err : new Error(String(err || 'Failed to create Creation'));
@@ -1290,6 +1317,12 @@ export const useCreationsStore = defineStore('creations', {
           agentId: chatStore.currentAgent, sessionId: sessionIdForRoute() };
         applyingRoute = false;
         if (!isOpenStillCurrent()) return null;
+        const liveWorkspaceGeneration = () => workbenchWorkspaceGeneration(
+          workbenchRouteKey(chatStore.activeSessionRoute), chatStore.effectiveWorkDir,
+        );
+        const workspaceGeneration = liveWorkspaceGeneration();
+        target.workspaceGeneration = workspaceGeneration;
+        const isPromptTargetCurrent = () => isOpenStillCurrent() && liveWorkspaceGeneration() === workspaceGeneration;
         const trimmedPrompt = String(initialPrompt || '').trim();
         const activationPromise = trimmedPrompt && this.hasMountedCreationTab(targetId, sessionId)
           && this.listDirtyDocDrafts(targetId).length > 0
@@ -1301,8 +1334,10 @@ export const useCreationsStore = defineStore('creations', {
 
         let promptError = null;
         if (trimmedPrompt && (!activationPromise || await activationPromise)) {
-          if (!isOpenStillCurrent()) return null;
-          const sendRes = await sendInitialCreationPrompt(targetId, sessionId, trimmedPrompt, { isOpenStillCurrent, routeReady: true });
+          if (!isPromptTargetCurrent()) return null;
+          const sendRes = await sendInitialCreationPrompt(targetId, sessionId, trimmedPrompt, {
+            isOpenStillCurrent: isPromptTargetCurrent, routeReady: true,
+          });
           if (!isOpenStillCurrent()) return null;
           if (!sendRes?.ok) promptError = sendRes?.error || 'Failed to send initial creation prompt';
         }

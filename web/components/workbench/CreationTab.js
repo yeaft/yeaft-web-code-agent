@@ -873,9 +873,9 @@ export default {
     const videoFiles = Vue.ref([]);
     const expandedDocFolders = Vue.reactive(new Set());
     const probedPathsThisVisit = new Set();
-    let probeVisit = 0;
+    let visitEpoch = 0;
     const resetDocProbes = () => {
-      probeVisit += 1;
+      visitEpoch += 1;
       probedPathsThisVisit.clear();
     };
 
@@ -955,6 +955,7 @@ export default {
     let modalContext = null;
     let uploadPickerContext = null;
     let disposed = false;
+    let isDeactivated = false;
     let registeredRouteKey = '';
     let pendingActivation = null;
     let refreshTimer = null;
@@ -976,6 +977,7 @@ export default {
       creationsStore.registerCreationTabRoute?.(registeredRouteKey, {
         agentId: currentAgentId.value,
         sessionId: props.sessionId,
+        workspaceGeneration: props.workspaceGeneration,
       });
     };
 
@@ -1268,13 +1270,17 @@ export default {
 
       const probeOnly = Boolean(draft.isDirty);
       const shouldProbe = !skipProbe && (forceReload || !probedPathsThisVisit.has(entry.path));
+      if (probeOnly && draft.probingDisk) {
+        if (shouldProbe) draft.needsReprobe = true;
+        return;
+      }
       if (draft.loading || draft.probingDisk || draft.saving
         || (probeOnly ? !shouldProbe : draft.loaded && !forceReload && !draft.loadError)) return;
 
       const versionAtRead = draft.bufferVersion;
-      const visitAtRead = probeVisit;
+      const probeVisitEpoch = visitEpoch;
       const markProbed = () => {
-        if (visitAtRead === probeVisit && isOpCurrent(opCtx)) probedPathsThisVisit.add(entry.path);
+        if (probeVisitEpoch === visitEpoch && isOpCurrent(opCtx)) probedPathsThisVisit.add(entry.path);
       };
       if (probeOnly) {
         probedPathsThisVisit.delete(entry.path);
@@ -1335,8 +1341,16 @@ export default {
           draft.loadError = err?.message || tr('files.readSendFailed', 'Failed to read file');
         }
       } finally {
-        if (probeOnly) draft.probingDisk = false;
-        else draft.loading = false;
+        if (probeOnly) {
+          draft.probingDisk = false;
+          if (draft.needsReprobe) {
+            draft.needsReprobe = false;
+            if (!disposed && !isDeactivated && activeDocPath.value === entry.path && draft.isDirty
+              && getDraft(activeRootDir.value, entry.path) === draft) {
+              void openDocFile(entry, { forceReload: true });
+            }
+          }
+        } else draft.loading = false;
       }
     };
 
@@ -2118,7 +2132,7 @@ export default {
       const epoch = ++activationEpoch;
       const ctx = captureRoute();
       const { agentId, sessionId } = ctx;
-      const isCurrent = () => epoch === activationEpoch && isRouteCurrent(ctx)
+      const isCurrent = () => !isDeactivated && epoch === activationEpoch && isRouteCurrent(ctx)
         && (openSeq == null || openSeq === creationsStore.openWorkspaceSeq);
       if (!agentId || !isCurrent()) return { accepted: false };
       bindingFolder.value = false;
@@ -2185,7 +2199,9 @@ export default {
           resolvedCreation = list.find(c => c?.rootDir && normalizePath(c.rootDir) === normTarget) || null;
           if (!resolvedCreation) {
             try {
-              resolvedCreation = await creationsStore.findByFolder?.(agentId, targetRootDir);
+              const found = await creationsStore.findByFolder?.(agentId, targetRootDir);
+              // Pending bindings still need the store to resume materialization.
+              if (found?.rootDir) resolvedCreation = found;
             } catch {
               // The bind action does its own lookup; surface its authoritative error.
             }
@@ -2203,8 +2219,8 @@ export default {
             if (!isCurrent()) return { accepted: false };
             if (result?.error) throw new Error(result.error);
             resolvedCreation = result?.creation || result;
-            targetRootDir = result?.rootDir || resolvedCreation?.rootDir || targetRootDir;
-            if (!resolvedCreation?.id) throw new Error();
+            if (!resolvedCreation?.id || !resolvedCreation.rootDir?.trim()) throw new Error();
+            targetRootDir = resolvedCreation.rootDir;
           } catch (err) {
             if (isCurrent()) onboardingError.value = err?.message || tr('creation.workbench.bindFailed', 'Failed to open folder as Creation');
             return { accepted: false };
@@ -2251,7 +2267,6 @@ export default {
       }
 
       if (changed) resetWorkspace();
-      else resetDocProbes();
       activeCreation.value = resolvedCreation;
       activeRootDir.value = nextNormRoot;
       showingSwitcher.value = false;
@@ -2263,17 +2278,24 @@ export default {
     const settleActivation = (receipt, accepted) => {
       if (!receipt || pendingActivation !== receipt) return;
       pendingActivation = null;
-      creationsStore.resolveCreationActivation?.(receipt.openSeq, accepted);
+      creationsStore.resolveCreationActivation?.(receipt.openSeq, accepted && !isDeactivated
+        && receipt.workspaceGeneration === props.workspaceGeneration, { workspaceGeneration: props.workspaceGeneration });
     };
 
     const activateTarget = async (target = {}) => {
+      if (isDeactivated || (target.workspaceGeneration != null && target.workspaceGeneration !== props.workspaceGeneration)) {
+        return { accepted: false };
+      }
       if (target.openSeq != null && target.openSeq === pendingActivation?.openSeq) return;
       if (disposed || (target.autoResolve && (activeRootDir.value || showingSwitcher.value))) {
-        if (target.openSeq != null) creationsStore.resolveCreationActivation?.(target.openSeq, false);
+        if (target.openSeq != null) creationsStore.resolveCreationActivation?.(target.openSeq, false,
+          { workspaceGeneration: props.workspaceGeneration });
         return { accepted: false };
       }
       settleActivation(pendingActivation, false);
-      const receipt = target.openSeq != null ? { openSeq: target.openSeq } : null;
+      resetDocProbes();
+      const receipt = target.openSeq != null
+        ? { openSeq: target.openSeq, workspaceGeneration: props.workspaceGeneration } : null;
       pendingActivation = receipt;
       try {
         return await activateWorkspace(target, () => settleActivation(receipt, true));
@@ -2394,9 +2416,9 @@ export default {
       }
     };
 
-    const handleCreationTargetEvent = (event) => {
-      const detail = event?.detail;
-      if (!detail) return;
+    const receiveCreationTarget = (detail) => {
+      if (!detail || isDeactivated || disposed) return;
+      if (detail.workspaceGeneration != null && detail.workspaceGeneration !== props.workspaceGeneration) return;
       if (detail.routeKey && detail.routeKey !== props.routeKey) return;
       if (detail.agentId && detail.agentId !== props.agentId) return;
       if (detail.seq && detail.seq <= lastHandledTargetSeq) return;
@@ -2405,8 +2427,10 @@ export default {
         creationId: detail.creationId || '',
         rootDir: detail.rootDir || '',
         openSeq: detail.openSeq,
+        workspaceGeneration: detail.workspaceGeneration,
       });
     };
+    const handleCreationTargetEvent = event => receiveCreationTarget(event?.detail);
 
     const handleDocumentClick = (event) => {
       if (addMenuOpen.value && !addMenuWrap.value?.contains(event.target)) {
@@ -2423,7 +2447,7 @@ export default {
       }
     };
 
-    Vue.watch(() => [props.routeKey, props.agentId, props.sessionId], registerTabRoute);
+    Vue.watch(() => [props.routeKey, props.agentId, props.sessionId, props.workspaceGeneration], registerTabRoute);
     Vue.watch(() => [props.agentId, props.sessionId, props.routeKey, props.workspaceGeneration], () => {
       resetWorkspace();
       showingSwitcher.value = false;
@@ -2435,17 +2459,7 @@ export default {
     if (injectedCreationTarget) {
       Vue.watch(
         () => injectedCreationTarget.seq,
-        (seq) => {
-          if (!seq || seq <= lastHandledTargetSeq) return;
-          if (injectedCreationTarget.routeKey && injectedCreationTarget.routeKey !== props.routeKey) return;
-          if (injectedCreationTarget.agentId && injectedCreationTarget.agentId !== props.agentId) return;
-          lastHandledTargetSeq = seq;
-          void activateTarget({
-            creationId: injectedCreationTarget.creationId || '',
-            rootDir: injectedCreationTarget.rootDir || '',
-            openSeq: injectedCreationTarget.openSeq,
-          });
-        },
+        seq => { if (seq) receiveCreationTarget(injectedCreationTarget); },
         { immediate: true },
       );
     }
@@ -2458,7 +2472,8 @@ export default {
       Vue.watch(
         () => creationsStore.pendingWorkbenchTarget,
         (target) => {
-          if (!target) return;
+          if (!target || isDeactivated) return;
+          if (target.workspaceGeneration != null && target.workspaceGeneration !== props.workspaceGeneration) return;
           if (target.seq && target.seq === lastConsumedTargetSeq) return;
           if (target.agentId && target.agentId !== props.agentId) return;
           if (target.sessionId && target.sessionId !== props.sessionId) return;
@@ -2467,6 +2482,7 @@ export default {
             creationId: target.creationId || '',
             rootDir: target.rootDir || '',
             openSeq: target.openSeq,
+            workspaceGeneration: target.workspaceGeneration,
           });
           creationsStore.clearPendingWorkbenchTarget?.(target.seq);
         },
@@ -2530,8 +2546,22 @@ export default {
       }
     });
 
+    Vue.onDeactivated(() => {
+      isDeactivated = true;
+      if (pendingActivation) cancelTargetActivation();
+      else activationEpoch += 1;
+      bindingFolder.value = false;
+      loadingCreations.value = false;
+    });
+
     Vue.onActivated(() => {
+      const reactivated = isDeactivated;
+      isDeactivated = false;
       resetDocProbes();
+      receiveCreationTarget(injectedCreationTarget?.seq ? injectedCreationTarget : null);
+      if (reactivated && !activeRootDir.value && !pendingActivation && !loadingCreations.value) {
+        void activateTarget({ autoResolve: true });
+      }
       if (activeDocFile.value?.isDirty) {
         const entry = docFiles.value.find(d => d.path === activeDocPath.value);
         if (entry) void openDocFile(entry, { forceReload: true });

@@ -1038,7 +1038,10 @@ export default {
         }
         const currentDraft = creationsStore.igniteDraft;
         const snapshot = res?._submittedSnapshot;
-        const actuallySubmittedFiles = new Set(snapshot?.files || filesToSend);
+        const actuallySubmittedFiles = new Set(Array.isArray(snapshot?.files) ? snapshot.files : []);
+        if (res && !Object.hasOwn(res, '_submittedSnapshot')) {
+          for (const file of filesToSend) actuallySubmittedFiles.add(file);
+        }
         currentDraft.pendingFiles = currentDraft.pendingFiles.filter(f => !actuallySubmittedFiles.has(f));
         creationsStore.resetIgniteResume();
 
