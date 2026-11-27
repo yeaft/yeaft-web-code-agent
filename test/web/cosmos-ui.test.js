@@ -2993,12 +2993,21 @@ describe('Cosmos Drawer Waiting Suppression, Horizontal Drag Resize & Session St
 
 describe('Cosmos Interstellar Signal Stream (Unified Top-Right Replies, Scheduled Notices & Stage Subtraction)', () => {
   let wrapper = null;
+  let savedGlobalPinia;
+  let savedWindowPinia;
+
+  beforeEach(() => {
+    savedGlobalPinia = globalThis.Pinia;
+    savedWindowPinia = window.Pinia;
+  });
 
   afterEach(() => {
     if (wrapper) {
       wrapper.unmount();
       wrapper = null;
     }
+    globalThis.Pinia = savedGlobalPinia;
+    window.Pinia = savedWindowPinia;
   });
 
   it('tracks reply previews across pruning, marks unread accurately when Cosmos drawer is closed, acknowledges signals atomically, and orders waiting > unread > running', async () => {
@@ -3015,46 +3024,67 @@ describe('Cosmos Interstellar Signal Stream (Unified Top-Right Replies, Schedule
     } = await import('../../web/stores/helpers/yeaft-reply-preview.js');
     const { buildCosmosSignalStream } = await import('../../web/cosmos/signal-stream.js');
 
-    // 1. Reply preview helper strips markdown, keeps latest assistant text, and scopes AskUser clearing
+    // 1. Reply preview helper strips markdown, isolates unscoped rows, avoids no-op map clones, and scopes AskUser clearing
     const previewStore = { yeaftSessionReplyPreviewByKey: {} };
     const extracted = extractLatestAssistantPreview([
       { type: 'user', sessionId: 's1', content: 'Check deployment status' },
       { type: 'assistant', sessionId: 's1', turnId: 't1', content: '## Status\nAll **3 clusters** healthy (`v1.0.799`).', timestamp: 2000 },
+      { type: 'assistant', content: 'Unscoped message must NOT bleed into s1', timestamp: 3000 },
     ], 's1', 't1');
     expect(extracted.text).toBe('Status All 3 clusters healthy (v1.0.799).');
 
-    recordYeaftSessionReplyPreview(previewStore, {
+    expect(recordYeaftSessionReplyPreview(previewStore, {
       catalogKey: 'yeaft:ag-1:s1',
       text: extracted.text,
       at: 2000,
-    });
+    })).toBe(true);
+    const mapRefAfterFirst = previewStore.yeaftSessionReplyPreviewByKey;
+    // Identical streaming preview must NOT clone the preview map again
+    expect(recordYeaftSessionReplyPreview(previewStore, {
+      catalogKey: 'yeaft:ag-1:s1',
+      text: extracted.text,
+      at: 2100,
+    })).toBe(false);
+    expect(previewStore.yeaftSessionReplyPreviewByKey).toBe(mapRefAfterFirst);
+
     recordYeaftSessionReplyPreview(previewStore, {
       catalogKey: 'yeaft:ag-1:s1',
       askQuestion: 'Deploy canary to **eu-west**?',
       askRequestId: 'ask-9',
+      askTurnId: 'turn-ask-9',
+      askExpiresAt: 10000,
       at: 2500,
     });
     expect(previewStore.yeaftSessionReplyPreviewByKey['yeaft:ag-1:s1'].askQuestion).toBe('Deploy canary to eu-west?');
-    // Mismatched askRequestId must NOT clear the active question
+    // Mismatched askRequestId / askTurnId must NOT clear the active question
     expect(recordYeaftSessionReplyPreview(previewStore, {
       catalogKey: 'yeaft:ag-1:s1',
       clearAsk: true,
       askRequestId: 'ask-other',
     })).toBe(false);
-    expect(previewStore.yeaftSessionReplyPreviewByKey['yeaft:ag-1:s1'].askQuestion).toBe('Deploy canary to eu-west?');
-    // Matching askRequestId clears askQuestion while retaining the assistant reply preview
     expect(recordYeaftSessionReplyPreview(previewStore, {
       catalogKey: 'yeaft:ag-1:s1',
       clearAsk: true,
-      askRequestId: 'ask-9',
+      askTurnId: 'turn-other',
+    })).toBe(false);
+    expect(previewStore.yeaftSessionReplyPreviewByKey['yeaft:ag-1:s1'].askQuestion).toBe('Deploy canary to eu-west?');
+    // Matching askTurnId clears askQuestion while retaining the assistant reply preview
+    expect(recordYeaftSessionReplyPreview(previewStore, {
+      catalogKey: 'yeaft:ag-1:s1',
+      clearAsk: true,
+      askTurnId: 'turn-ask-9',
     })).toBe(true);
     expect(previewStore.yeaftSessionReplyPreviewByKey['yeaft:ag-1:s1'].askQuestion).toBe('');
     expect(previewStore.yeaftSessionReplyPreviewByKey['yeaft:ag-1:s1'].text).toBe('Status All 3 clusters healthy (v1.0.799).');
     clearYeaftSessionReplyPreview(previewStore, 'yeaft:ag-1:s1');
     expect(previewStore.yeaftSessionReplyPreviewByKey['yeaft:ag-1:s1']).toBeUndefined();
 
-    // 2. Real chatStore: yeaftConversationCovered=true marks even the last-viewed session unread;
-    //    acknowledgeYeaftSessionSignals / acknowledgeAllYeaftSessionSignals clear unread + scheduled task notices atomically.
+    // 2. Real chatStore:
+    //    - yeaftConversationCovered=true marks even the last-viewed session unread;
+    //    - Classic Yeaft returning from overlay clears active unread via markVisibleScheduledTaskSessionRead();
+    //    - Card dismissal (sessionRead:false) sends exact-run receipts ONLY (NEVER sessionRead:true for deleted/non-Yeaft sessions);
+    //    - Single-session deletion & full history clear wipe reply previews & unread keys;
+    //    - Aborted / ended turns & expired askExpiresAt never leave a session permanently stuck in waiting.
     const runtimeStores = new Map();
     const miniDefineStore = (id, options) => () => {
       if (runtimeStores.has(id)) return runtimeStores.get(id);
@@ -3094,37 +3124,74 @@ describe('Cosmos Interstellar Signal Stream (Unified Top-Right Replies, Schedule
     chatStore.currentAgent = 'owner:ag-1';
     chatStore.yeaftActiveSessionFilter = 'sess-1';
     chatStore.agents = [{ id: 'owner:ag-1', name: 'Earth-Mac', online: true }, { id: 'ag-2', name: 'Saturn-Srv', online: true }];
-    chatStore.yeaftSessionAgentById = { 'sess-1': 'owner:ag-1', 'sess-2': 'ag-2' };
-    chatStore.sendWsMessage = vi.fn(() => true);
+    chatStore.yeaftSessionAgentById = { 'sess-1': 'owner:ag-1', 'sess-2': 'ag-2', 'sess-deleted': 'ag-2' };
+    const sentFrames = [];
+    chatStore.sendWsMessage = vi.fn((frame) => { sentFrames.push(frame); return true; });
     chatStore.scheduledTaskReceiptProtocolSupported = true;
 
     // Drawer open & uncovered on sess-1 -> NOT marked unread
     chatStore.yeaftConversationCovered = false;
     expect(chatStore.markYeaftSessionUnread('sess-1', 'owner:ag-1')).toBe(false);
-    // Cosmos drawer closed (yeaftConversationCovered=true) -> SAME session IS marked unread!
+    // Cosmos drawer closed / Classic modal open (yeaftConversationCovered=true) -> SAME session IS marked unread!
     chatStore.yeaftConversationCovered = true;
     expect(chatStore.markYeaftSessionUnread('sess-1', 'owner:ag-1')).toBe(true);
     expect(chatStore.isYeaftSessionUnread('sess-1', 'owner:ag-1')).toBe(true);
-    expect(chatStore.markYeaftSessionUnread('sess-2', 'ag-2')).toBe(true);
+    // Classic Yeaft overlay closes -> markVisibleScheduledTaskSessionRead clears unread on the active session
+    chatStore.yeaftConversationCovered = false;
+    expect(chatStore.markVisibleScheduledTaskSessionRead()).toBe(true);
+    expect(chatStore.isYeaftSessionUnread('sess-1', 'owner:ag-1')).toBe(false);
 
-    // Scheduled task notification for sess-2 + colon-containing agentId owner:ag-1 both acknowledge cleanly
+    // Dismissing a deleted-session scheduled task card (sessionRead: false) MUST send exact run receipt ONLY (no sessionRead:true!)
+    chatStore.yeaftConversationCovered = true;
+    expect(chatStore.markYeaftSessionUnread('sess-1', 'owner:ag-1')).toBe(true);
+    expect(chatStore.markYeaftSessionUnread('sess-deleted', 'ag-2')).toBe(true);
     chatStore.scheduledTaskNotifications = [{
-      id: JSON.stringify(['ag-2', 'sess-2', 'run-1']),
+      id: JSON.stringify(['ag-2', 'sess-deleted', 'run-del-1']),
       agentId: 'ag-2',
-      sessionId: 'sess-2',
-      runId: 'run-1',
-      taskName: 'Nightly Backup',
+      sessionId: 'sess-deleted',
+      runId: 'run-del-1',
+      taskName: 'Deleted Task',
       status: 'completed',
       error: '',
       createdAt: 5000,
     }];
-    expect(chatStore.acknowledgeYeaftSessionSignals('sess-2', 'ag-2')).toBe(true);
-    expect(chatStore.isYeaftSessionUnread('sess-2', 'ag-2')).toBe(false);
+    sentFrames.length = 0;
+    expect(chatStore.acknowledgeYeaftSessionSignals('sess-deleted', 'ag-2', { sessionRead: false })).toBe(true);
+    expect(chatStore.isYeaftSessionUnread('sess-deleted', 'ag-2')).toBe(false);
     expect(chatStore.scheduledTaskNotifications).toHaveLength(0);
+    expect(sentFrames.some((f) => f?.sessionRead === true)).toBe(false);
 
     expect(chatStore.acknowledgeAllYeaftSessionSignals()).toBe(true);
     expect(chatStore.isYeaftSessionUnread('sess-1', 'owner:ag-1')).toBe(false);
     expect(Object.keys(chatStore.yeaftUnreadSessionKeys)).toHaveLength(0);
+    expect(sentFrames.some((f) => f?.sessionRead === true)).toBe(false);
+
+    // Single-session deletion & full history clear wipe preview & unread cleanly
+    chatStore.yeaftUnreadSessionKeys = { 'yeaft:ag-2:sess-2': true, 'yeaft:owner:ag-1:sess-1': true };
+    chatStore.recordYeaftSessionPreview('sess-2', 'ag-2', { text: 'Confidential reply', at: 6000 });
+    chatStore.recordYeaftSessionPreview('sess-1', 'owner:ag-1', { text: 'Keep until full clear', at: 6000 });
+    chatStore.clearYeaftHistoryMemory({ agentId: 'ag-2', sessionId: 'sess-2' });
+    expect(chatStore.yeaftSessionReplyPreviewByKey['yeaft:ag-2:sess-2']).toBeUndefined();
+    expect(chatStore.isYeaftSessionUnread('sess-2', 'ag-2')).toBe(false);
+    expect(chatStore.isYeaftSessionUnread('sess-1', 'owner:ag-1')).toBe(true);
+    chatStore.clearYeaftHistoryMemory();
+    expect(Object.keys(chatStore.yeaftUnreadSessionKeys)).toHaveLength(0);
+    expect(Object.keys(chatStore.yeaftSessionReplyPreviewByKey)).toHaveLength(0);
+
+    // Aborted turn clears matching pending askQuestion in preview cache
+    chatStore.recordYeaftSessionPreview('sess-1', 'owner:ag-1', {
+      askQuestion: 'Pending before abort?',
+      askRequestId: 'ask-abort',
+      askTurnId: 'turn-abort-1',
+      at: 7000,
+    });
+    chatStore.handleYeaftOutput({
+      agentId: 'owner:ag-1',
+      conversationId: 'yeaft_owner:ag-1',
+      sessionId: 'sess-1',
+      event: { type: 'yeaft_aborted', sessionId: 'sess-1' },
+    });
+    expect(chatStore.yeaftSessionReplyPreviewByKey['yeaft:owner:ag-1:sess-1']?.askQuestion || '').toBe('');
 
     // 3. Projection + Signal Stream builder: priority waiting > unread > running, deduped with scheduled notices,
     //    preserves same signalKey across running -> unread transition, and hides active drawer unread session.
@@ -3328,18 +3395,39 @@ describe('Cosmos Interstellar Signal Stream (Unified Top-Right Replies, Schedule
     expect(wrapper.find('.cosmos-live-card').exists()).toBe(false);
     expect(pageStore.yeaftConversationCovered).toBe(true);
 
-    // Opening drawer marks conversation uncovered & acknowledges session signals
-    wrapper.vm.openSessionInDrawer('ag-1', { id: 'sess-1' });
+    // Opening drawer marks conversation uncovered & acknowledges native Yeaft session signals (with sessionRead:true),
+    // while CLI Chat sessions NEVER trigger acknowledgeYeaftSessionSignals!
+    pageStore.currentView = 'chat';
+    wrapper.vm.openSessionInDrawer('ag-1', { id: 'cli-1', runtimeProvider: 'claude-code' });
     await flushPromises();
-    expect(pageStore.yeaftConversationCovered).toBe(false);
-    expect(ackSpy).toHaveBeenCalledWith('sess-1', 'ag-1');
+    expect(ackSpy).not.toHaveBeenCalled();
 
-    // Expanding Workbench covers conversation again
+    // Opening a native signal while Workbench is expanded collapses Workbench first so the reply is visible
+    pageStore.currentView = 'yeaft';
     pageStore.workbenchExpanded = true;
     await flushPromises();
     expect(pageStore.yeaftConversationCovered).toBe(true);
-    pageStore.workbenchExpanded = false;
+    wrapper.vm.openSessionInDrawer('ag-1', { id: 'sess-1', runtimeProvider: 'yeaft' });
     await flushPromises();
+    expect(pageStore.workbenchExpanded).toBe(false);
+    expect(pageStore.yeaftConversationCovered).toBe(false);
+    expect(ackSpy).toHaveBeenCalledWith('sess-1', 'ag-1', { sessionRead: true });
+
+    // Opening an orphan signal for an unknown/offline Agent must NOT open a ghost drawer
+    wrapper.vm.closeDrawer();
+    await flushPromises();
+    ackSpy.mockClear();
+    wrapper.vm.onOpenSignal({ agentId: 'ghost-agent', sessionId: 's-ghost', scheduledTask: { id: 't-ghost' } });
+    await flushPromises();
+    expect(wrapper.vm.drawerOpen).toBe(false);
+    expect(ackSpy).toHaveBeenCalledWith('s-ghost', 'ghost-agent', { sessionRead: false });
+
+    // Re-open drawer, test modal cover sync, signal trigger popover toggle & Escape focus restore
+    wrapper.vm.openSessionInDrawer('ag-1', { id: 'sess-1', runtimeProvider: 'yeaft' });
+    await flushPromises();
+    wrapper.vm.openYeaftSettings({ tab: 'general' });
+    expect(pageStore.yeaftConversationCovered).toBe(true);
+    wrapper.vm.settingsModal.open = false;
     expect(pageStore.yeaftConversationCovered).toBe(false);
 
     // Clicking signal trigger while drawer is open opens popover; 1st Escape closes ONLY popover

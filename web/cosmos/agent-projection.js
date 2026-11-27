@@ -215,8 +215,8 @@ function inspectLoadedMessages(messages, sessionId) {
   for (let i = messages.length - 1; i >= 0; i--) {
     const row = messages[i];
     if (!row) continue;
-    const rowSessionId = row.sessionId ?? row.groupId;
-    if (sessionId && rowSessionId && rowSessionId !== sessionId) continue;
+    const rowSessionId = row.sessionId ?? row.groupId ?? '';
+    if (sessionId && rowSessionId !== sessionId) continue;
 
     if (!hasPendingAsk && row.type === 'tool-use'
       && (row.toolName === 'AskUser' || row.toolName === 'AskUserQuestion')
@@ -413,8 +413,11 @@ export function projectAgentsForCosmos({ chatStore, sessionsStore, nowMs = Date.
         : inspectLoadedMessages(messagesMap[item.id], null);
       const cachedPreview = isYeaft ? (replyPreviewByKey[item.catalogKey] || null) : null;
 
-      const hasPendingAsk = msgInfo.hasPendingAsk || Boolean(cachedPreview?.askQuestion);
-      const askQuestion = msgInfo.askQuestion || cachedPreview?.askQuestion || '';
+      const cachedAskExpiresAt = parseMs(cachedPreview?.askExpiresAt);
+      const cachedAskValid = Boolean(cachedPreview?.askQuestion)
+        && !(cachedAskExpiresAt > 0 && nowMs >= cachedAskExpiresAt);
+      const hasPendingAsk = msgInfo.hasPendingAsk || cachedAskValid;
+      const askQuestion = msgInfo.askQuestion || (cachedAskValid ? cachedPreview.askQuestion : '');
 
       const cachedReplyText = cachedPreview?.text || '';
       const cachedReplyAt = parseMs(cachedPreview?.at);

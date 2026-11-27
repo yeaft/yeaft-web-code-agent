@@ -291,6 +291,7 @@ export default {
       <!-- Top-Right Immersive Controls: Signal Stream Capsule + Cosmic Constants (Λ) + Abandon Cosmos -->
       <div class="cosmos-corner-actions" @pointerdown.stop>
         <button
+          ref="signalTriggerRef"
           type="button"
           class="cosmos-signal-trigger"
           :class="{
@@ -350,7 +351,7 @@ export default {
         @open-signal="onOpenSignal"
         @dismiss-signal="onDismissSignal"
         @mark-all-read="onMarkAllSignalsRead"
-        @close-popover="signalPopoverOpen = false"
+        @close-popover="closeSignalPopover({ restoreFocus: true })"
       />
 
       <!-- Cosmic Constants + Authentic Yeaft Settings Popover -->
@@ -503,6 +504,7 @@ export default {
     const hudCanvasRef = Vue.ref(null);
     const hoverCardRef = Vue.ref(null);
     const drawerRef = Vue.ref(null);
+    const signalTriggerRef = Vue.ref(null);
 
     const domRefs = {
       planets: {},
@@ -621,8 +623,18 @@ export default {
     });
     const waitingAgent = Vue.computed(() => projectedAgentList.value.find((a) => a.status === 'waiting') || null);
     const activeDrawerSessionKey = Vue.computed(() => {
-      if (!drawerOpen.value || currentBand.value !== 'solar' || store.workbenchExpanded || !drawerAgentId.value) return '';
-      const sid = store.yeaftActiveSessionFilter || sessionsStore?.activeSessionId || '';
+      if (!drawerOpen.value
+        || currentBand.value !== 'solar'
+        || store.workbenchExpanded
+        || !drawerAgentId.value
+        || store.currentView !== 'yeaft'
+        || store.currentAgent !== drawerAgentId.value) return '';
+      const route = store.activeSessionRoute;
+      if (route) {
+        if (route.runtimeProvider !== 'yeaft' || route.agentId !== drawerAgentId.value || !route.sessionId) return '';
+        return `${drawerAgentId.value}\u001f${route.sessionId}`;
+      }
+      const sid = store.yeaftActiveSessionFilter || '';
       return sid ? `${drawerAgentId.value}\u001f${sid}` : '';
     });
     const signalStream = Vue.computed(() => buildCosmosSignalStream({
@@ -640,8 +652,9 @@ export default {
         : $t('cosmos.signals.triggerIdleAria')
     ));
     const signalTriggerExpanded = Vue.computed(() => {
+      if (signalPopoverOpen.value) return true;
       if (drawerOpen.value || isCompactViewport.value || constants.livePreviewMode === 'collapsed' || signalStream.value.totalCount === 0) {
-        return signalPopoverOpen.value;
+        return false;
       }
       return !signalStreamHidden.value && !constantsOpen.value && !isObservingEvent.value;
     });
@@ -887,6 +900,7 @@ export default {
       if (e.pointerType !== 'touch' && e.button !== 0) return;
       emptyPlanetMenu.value = null;
       constantsOpen.value = false;
+      signalPopoverOpen.value = false;
       if (e.pointerType === 'touch') {
         activeTouchPointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
         if (activeTouchPointers.size >= 2) {
@@ -918,6 +932,7 @@ export default {
       }
       emptyPlanetMenu.value = null;
       constantsOpen.value = false;
+      signalPopoverOpen.value = false;
       const agent = agentsByPlanet.value[planetId];
       if (!agent) {
         if (projectedAgentList.value.length === 0) { openYeaftSettings({ tab: 'security' }); return; }
@@ -1099,14 +1114,24 @@ export default {
       }
     }
 
+    function closeSignalPopover({ restoreFocus = false } = {}) {
+      if (!signalPopoverOpen.value) return;
+      signalPopoverOpen.value = false;
+      if (restoreFocus) {
+        Vue.nextTick(() => signalTriggerRef.value?.focus?.());
+      }
+    }
+
     function openSessionInDrawer(agentId, session) {
       hideHoverImmediate();
       signalPopoverOpen.value = false;
+      if (!agentId || !projectedAgentsMap.value[agentId]) return false;
       if (currentBand.value !== 'solar') jumpToScale(13.0);
       if (eventSim.active?.observing) {
         unfocusCosmicEvent(eventSim);
         syncEventRefs();
       }
+      if (store.workbenchExpanded) collapseOpenWorkbench();
       quickAgentId.value = null;
       drawerAgentId.value = agentId;
       drawerOpen.value = true;
@@ -1119,9 +1144,11 @@ export default {
       } else if (agentId) {
         store.enterYeaft?.(agentId);
       }
-      if (session?.id && agentId) {
-        store.acknowledgeYeaftSessionSignals?.(session.id, agentId);
+      const isNativeYeaft = !session?.runtimeProvider || session.runtimeProvider === 'yeaft';
+      if (isNativeYeaft && session?.id && agentId) {
+        store.acknowledgeYeaftSessionSignals?.(session.id, agentId, { sessionRead: true });
       }
+      return true;
     }
 
     function onToggleConstants() {
@@ -1131,12 +1158,16 @@ export default {
 
     function onToggleSignalTrigger() {
       constantsOpen.value = false;
+      if (signalPopoverOpen.value) {
+        signalPopoverOpen.value = false;
+        return;
+      }
       const usePopover = drawerOpen.value
         || isCompactViewport.value
         || constants.livePreviewMode === 'collapsed'
         || signalStream.value.totalCount === 0;
       if (usePopover) {
-        signalPopoverOpen.value = !signalPopoverOpen.value;
+        signalPopoverOpen.value = true;
       } else {
         signalStreamHidden.value = !signalStreamHidden.value;
       }
@@ -1144,13 +1175,19 @@ export default {
 
     function onOpenSignal(item) {
       if (!item?.agentId) return;
-      openSessionInDrawer(item.agentId, item.session || { id: item.sessionId });
+      if (!projectedAgentsMap.value[item.agentId]) {
+        signalPopoverOpen.value = false;
+        onDismissSignal(item);
+        showToast($t('cosmos.signals.agentUnavailable'));
+        return;
+      }
+      openSessionInDrawer(item.agentId, item.session || { id: item.sessionId, runtimeProvider: 'yeaft' });
     }
 
     function onDismissSignal(item) {
       if (!item) return;
       if (item.sessionId && item.agentId && typeof store.acknowledgeYeaftSessionSignals === 'function') {
-        store.acknowledgeYeaftSessionSignals(item.sessionId, item.agentId);
+        store.acknowledgeYeaftSessionSignals(item.sessionId, item.agentId, { sessionRead: false });
       } else {
         if (item.sessionId && item.agentId) store.markYeaftSessionRead?.(item.sessionId, item.agentId);
         if (item.scheduledTask?.id) store.dismissScheduledTaskNotification?.(item.scheduledTask.id);
@@ -1475,7 +1512,7 @@ export default {
       if (settingsModal.open) { settingsModal.open = false; return; }
       if (agentSettingsModal.open) { agentSettingsModal.open = false; return; }
       if (emptyPlanetMenu.value) { emptyPlanetMenu.value = null; return; }
-      if (signalPopoverOpen.value) { signalPopoverOpen.value = false; return; }
+      if (signalPopoverOpen.value) { closeSignalPopover({ restoreFocus: true }); return; }
       if (constantsOpen.value) { constantsOpen.value = false; return; }
       if (bookCreateOpen.value) { bookCreateOpen.value = false; return; }
       if (eventSim.active?.observing) { onReturnFromEvent(); return; }
@@ -1640,11 +1677,13 @@ export default {
     }
 
     Vue.watch(
-      () => !(drawerOpen.value && currentBand.value === 'solar') || Boolean(store.workbenchExpanded),
+      () => !(drawerOpen.value && currentBand.value === 'solar')
+        || Boolean(store.workbenchExpanded)
+        || Boolean(settingsModal.open || agentSettingsModal.open || sessionSettingsModal.open),
       (covered) => {
         store.yeaftConversationCovered = covered;
       },
-      { immediate: true },
+      { immediate: true, flush: 'sync' },
     );
 
     Vue.watch(activeDrawerSessionKey, (key) => {
@@ -1653,7 +1692,7 @@ export default {
       if (sepIdx <= 0) return;
       const aid = key.slice(0, sepIdx);
       const sid = key.slice(sepIdx + 1);
-      if (aid && sid) store.acknowledgeYeaftSessionSignals?.(sid, aid);
+      if (aid && sid) store.acknowledgeYeaftSessionSignals?.(sid, aid, { sessionRead: true });
     });
 
     Vue.watch([drawerOpen, isCompactViewport], () => {
@@ -1707,7 +1746,7 @@ export default {
     });
 
     return {
-      glCanvasRef, hudCanvasRef, hoverCardRef, drawerRef, domRefs, setMapRef, canvasEpoch, rendererMode,
+      glCanvasRef, hudCanvasRef, hoverCardRef, drawerRef, signalTriggerRef, domRefs, setMapRef, canvasEpoch, rendererMode,
       planets: PLANETS, bookDomains: BOOK_DOMAINS,
       portals: [
         { id: 'to-galaxy', labelKey: 'cosmos.scale.galaxy', scale: '10²¹', target: 21.0, ring: 64 },
@@ -1735,7 +1774,7 @@ export default {
       onCanvasPointerDown, resetCamera, onPlanetPointerDown, onPlanetEnter, onPlanetLeave,
       onHoverCardEnter, onHoverCardLeave, onStageWheel, jumpToScale,
       openSessionInDrawer, openAgentConversationFromQuick, openCosmosSessionSearch, onDrawerSelectSession, toggleWorkbenchWiden, closeDrawer,
-      onToggleConstants, onToggleSignalTrigger, onOpenSignal, onDismissSignal, onMarkAllSignalsRead,
+      onToggleConstants, onToggleSignalTrigger, closeSignalPopover, onOpenSignal, onDismissSignal, onMarkAllSignalsRead,
       openQuickComposerFromDrawer, onDrawerResizeStart, onDrawerResize, onDrawerResizeEnd, onDrawerResizeReset,
       emitTelemetryBeam, onAutoRouted, jumpToWaitingAgent, assignFromMenu,
       onObserveEvent, onFocusDistantEvent, onReturnFromEvent, onStopEvent, onToggleAutoEvents, onToggleAutoZoom, onTogglePauseEvent, onReplayEvent, onNextRandomEvent, onSetEventZoom, onScrubEvent,

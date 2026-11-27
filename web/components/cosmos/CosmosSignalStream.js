@@ -34,15 +34,17 @@ export default {
     /** Suppress overlapping when Cosmic Constants popover or telescope observation is active. */
     suppressed: { type: Boolean, default: false },
   },
-  emits: ['open-signal', 'dismiss-signal', 'mark-all-read', 'close-popover', 'toggle-stream'],
+  emits: ['open-signal', 'dismiss-signal', 'mark-all-read', 'close-popover'],
   template: `
+    <!-- Quiet screen-reader announcement strictly on newly arrived waiting/unread signals -->
+    <div class="cosmos-sr-only" role="status" aria-live="polite" aria-atomic="true">{{ srAnnouncement }}</div>
+
     <!-- 1. Desktop Free-Stage Floating Signal Stream (Frameless Atmospheric Cards) -->
     <aside
       v-if="showFreeFloatingStream"
       class="cosmos-signal-stream"
       :class="{ 'is-expanded': expanded }"
       :aria-label="$t('cosmos.signals.title')"
-      aria-live="polite"
       @pointerdown.stop
       @wheel.stop
     >
@@ -274,6 +276,8 @@ export default {
 
     const expanded = Vue.ref(false);
     const dismissedBannerSignature = Vue.ref('');
+    const srAnnouncement = Vue.ref('');
+    let seenAttentionKeys = new Set();
 
     const previewLines = Vue.computed(() => (props.previewMode === '3' ? 3 : 2));
     const defaultCollapsed = Vue.computed(() => props.previewMode === 'collapsed');
@@ -319,6 +323,22 @@ export default {
       && mobileBannerSignature.value !== dismissedBannerSignature.value
     ));
 
+    Vue.watch(
+      () => props.items.filter((i) => i.kind === 'waiting' || i.kind === 'unread').map((i) => `${i.signalKey}:${i.kind}`),
+      (nextKeys, prevKeys) => {
+        const currentSet = new Set(nextKeys);
+        if (Array.isArray(prevKeys)) {
+          const fresh = props.items.find((i) => (i.kind === 'waiting' || i.kind === 'unread')
+            && !seenAttentionKeys.has(`${i.signalKey}:${i.kind}`));
+          if (fresh) {
+            srAnnouncement.value = `${fresh.agentName} · ${fresh.sessionTitle}: ${fresh.preview}`;
+          }
+        }
+        seenAttentionKeys = currentSet;
+      },
+      { immediate: true },
+    );
+
     Vue.watch(() => props.items.length, (len) => {
       if (len <= MAX_FLOATING_CARDS) expanded.value = false;
     });
@@ -340,6 +360,7 @@ export default {
 
     return {
       expanded,
+      srAnnouncement,
       previewLines,
       showFreeFloatingStream,
       visibleFloatingItems,
