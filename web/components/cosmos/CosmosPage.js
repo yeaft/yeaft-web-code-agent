@@ -1104,6 +1104,9 @@ export default {
         if (glCanvasRef.value) {
           glCanvasRef.value.style.cursor = hitEv ? 'pointer' : '';
         }
+      } else if (eventSim.hoveredUid || glCanvasRef.value?.style.cursor) {
+        eventSim.hoveredUid = null;
+        if (glCanvasRef.value) glCanvasRef.value.style.cursor = '';
       }
 
       if (hoverPlanetId.value && !anim.hoverPlanetId && !hoverCardPinned.value) {

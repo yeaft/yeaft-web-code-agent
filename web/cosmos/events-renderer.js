@@ -426,7 +426,11 @@ export function drawCosmicEventHud(ctx, w, h, evDrawOrList, _centerShiftX = 0, o
 
   ctx.fillStyle = 'rgba(7, 13, 28, 0.72)';
   ctx.beginPath();
-  ctx.roundRect(bx, by, boxW, boxH, 11);
+  if (typeof ctx.roundRect === 'function') {
+    ctx.roundRect(bx, by, boxW, boxH, 11);
+  } else {
+    ctx.rect(bx, by, boxW, boxH);
+  }
   ctx.fill();
 
   ctx.fillStyle = 'rgba(232, 242, 255, 0.94)';

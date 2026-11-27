@@ -849,11 +849,13 @@ export function createCosmosEngine(glCanvas, hudCanvas, opts = {}) {
     }
 
     let eventRenderedInGL = false;
+    const renderedEventUids = new Set();
     let renderedDeepCount = 0;
     for (let i = 0; i < deepEvents.length; i++) {
       if (drawCosmicEvent(deepEvents[i], realTime)) {
         eventRenderedInGL = true;
         renderedDeepCount += 1;
+        renderedEventUids.add(deepEvents[i].uid || deepEvents[i].id);
       }
     }
     if (renderedDeepCount > 0 && localEvents.length === 0) {
@@ -913,14 +915,22 @@ export function createCosmosEngine(glCanvas, hudCanvas, opts = {}) {
       if (drawCosmicEvent(localEvents[i], realTime)) {
         eventRenderedInGL = true;
         renderedLocalCount += 1;
+        renderedEventUids.add(localEvents[i].uid || localEvents[i].id);
       }
     }
-    if (renderedLocalCount > 0) {
+    if (renderedLocalCount > 0 || (renderedDeepCount > 0 && localEvents.length > 0)) {
       drawParticles(eventParticleData, eventParticleCount);
     }
 
     ctx2d.clearRect(0, 0, width, height);
-    if (hudDraw) hudDraw(ctx2d, width, height, { eventRenderedInGL });
+    if (hudDraw) {
+      hudDraw(
+        ctx2d,
+        width,
+        height,
+        Array.isArray(eventDraws) ? { eventRenderedInGL, renderedEventUids } : { eventRenderedInGL },
+      );
+    }
 
     // Measure actual render cost (not intentional sleep intervals on mobile) and apply any
     // adaptive resolution resize AFTER the frame completes so particle glDpr stays in sync.

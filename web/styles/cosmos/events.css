@@ -700,77 +700,6 @@
   }
 }
 
-@media (max-width: 768px) {
-  .cosmos-event-wrap {
-    left: calc(12px + env(safe-area-inset-left, 0px));
-    transform: none;
-    align-items: flex-start;
-    max-width: calc(100vw - 106px);
-  }
-  .cosmos-event-pill {
-    max-width: 100%;
-    gap: 4px;
-    padding: 0 4px 0 8px;
-  }
-  .cosmos-event-main {
-    min-width: 0;
-    overflow: hidden;
-    gap: 4px;
-  }
-  .cosmos-event-name {
-    max-width: 88px;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-  .cosmos-event-dist {
-    display: none;
-  }
-  .cosmos-event-watch-btn,
-  .cosmos-event-stop-btn {
-    padding: 0 7px;
-  }
-  .cosmos-watch-dock {
-    width: calc(100vw - 20px);
-    padding: 8px 10px 7px;
-    border-radius: 14px;
-  }
-  .cosmos-ewd-phase {
-    display: none;
-  }
-  .cosmos-ewd-zoom {
-    border-left: 0;
-    border-right: 0;
-    padding: 0;
-  }
-  .cosmos-page.is-drawer-open .cosmos-event-wrap,
-  .cosmos-page.is-drawer-open .cosmos-watch-dock,
-  .cosmos-page.is-drawer-open .cosmos-planet-focus-dock,
-  .cosmos-page.is-drawer-open .cosmos-event-beacon {
-    opacity: 0;
-    pointer-events: none;
-  }
-  .cosmos-event-beacon-tag {
-    height: 20px;
-    padding: 0 7px;
-  }
-  .cosmos-event-beacon-coords {
-    display: none;
-  }
-  .cosmos-planet-focus-dock {
-    max-width: calc(100vw - 20px);
-    padding: 6px 10px;
-    gap: 6px;
-  }
-  .cosmos-planet-focus-dock.is-corner-dock {
-    opacity: 0;
-    pointer-events: none;
-  }
-  .cosmos-pf-range {
-    width: 68px;
-  }
-}
-
 /* Concurrent cosmic events count badge on top pill */
 .cosmos-event-multi {
   display: inline-flex;
@@ -847,4 +776,75 @@
 .cosmos-pf-return:hover {
   background: rgba(255, 196, 112, 0.16);
   border-color: rgba(255, 204, 128, 0.46);
+}
+
+@media (max-width: 768px) {
+  .cosmos-event-wrap {
+    left: calc(12px + env(safe-area-inset-left, 0px));
+    transform: none;
+    align-items: flex-start;
+    max-width: calc(100vw - 106px);
+  }
+  .cosmos-event-pill {
+    max-width: 100%;
+    gap: 4px;
+    padding: 0 4px 0 8px;
+  }
+  .cosmos-event-main {
+    min-width: 0;
+    overflow: hidden;
+    gap: 4px;
+  }
+  .cosmos-event-name {
+    max-width: 88px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .cosmos-event-dist {
+    display: none;
+  }
+  .cosmos-event-watch-btn,
+  .cosmos-event-stop-btn {
+    padding: 0 7px;
+  }
+  .cosmos-watch-dock {
+    width: calc(100vw - 20px);
+    padding: 8px 10px 7px;
+    border-radius: 14px;
+  }
+  .cosmos-ewd-phase {
+    display: none;
+  }
+  .cosmos-ewd-zoom {
+    border-left: 0;
+    border-right: 0;
+    padding: 0;
+  }
+  .cosmos-page.is-drawer-open .cosmos-event-wrap,
+  .cosmos-page.is-drawer-open .cosmos-watch-dock,
+  .cosmos-page.is-drawer-open .cosmos-planet-focus-dock,
+  .cosmos-page.is-drawer-open .cosmos-event-beacon {
+    opacity: 0;
+    pointer-events: none;
+  }
+  .cosmos-event-beacon-tag {
+    height: 20px;
+    padding: 0 7px;
+  }
+  .cosmos-event-beacon-coords {
+    display: none;
+  }
+  .cosmos-planet-focus-dock {
+    max-width: calc(100vw - 20px);
+    padding: 6px 10px;
+    gap: 6px;
+  }
+  .cosmos-planet-focus-dock.is-corner-dock {
+    opacity: 0;
+    pointer-events: none;
+  }
+  .cosmos-pf-range {
+    width: 68px;
+  }
 }

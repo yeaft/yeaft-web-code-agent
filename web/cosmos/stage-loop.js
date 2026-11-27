@@ -543,8 +543,12 @@ export function stepCosmosFrame(now, ctx) {
         planetZoom: pf.zoom,
       }, (ec, ew, eh) => {
         if (eventDraws.length === 0) return;
-        if (!renderInfo.eventRenderedInGL && !renderInfo.eventRenderedIn2D) {
-          for (const ev of eventDraws) {
+        const renderedSet = renderInfo.renderedEventUids;
+        for (const ev of eventDraws) {
+          const alreadyRendered = renderedSet
+            ? renderedSet.has(ev.uid || ev.id)
+            : Boolean(renderInfo.eventRenderedInGL || renderInfo.eventRenderedIn2D);
+          if (!alreadyRendered) {
             const inst = ev.instance || eventSim.active;
             if (inst) drawCosmicEventCanvas(ec, ew, eh, inst, ev, ev.alpha);
           }
