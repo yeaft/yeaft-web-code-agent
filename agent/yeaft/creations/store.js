@@ -145,6 +145,8 @@ const publicationPath = output => output?.relPath ?? output;
 const isIncompletePublication = output => output?.complete === false;
 const fdPath = fd => `/proc/self/fd/${fd}`;
 const sameInode = (a, b) => a?.dev === b.dev && a?.ino === b.ino;
+const rootIdentityOf = stat => ({ dev: String(stat.dev), ino: String(stat.ino) });
+const matchesRootIdentity = (stat, identity) => String(stat.dev) === identity.dev && String(stat.ino) === identity.ino;
 
 function requirePinnedWorkspace() {
   if (!fs.constants.O_NOFOLLOW || !fs.constants.O_DIRECTORY || process.platform !== 'linux' || !fs.existsSync('/proc/self/fd')) {
@@ -518,7 +520,7 @@ export class CreationStore {
       (SELECT COUNT(*) FROM creation_proposals WHERE creation_id=? AND status='pending') AS pendingProposalCount`, row.id, row.id);
     const active = data(this.one(`SELECT data FROM creation_runs WHERE creation_id=? AND status IN ('running','paused')
       ORDER BY status='running' DESC,rowid DESC LIMIT 1`, row.id));
-    const { ownsWorkspace, workspaceIdentity, ...rec } = data(row);
+    const { ownsWorkspace, workspaceIdentity, boundRootIdentity, ...rec } = data(row);
     return { ...rec, sessionId: rec.sessionId ?? null, projectId: rec.projectId ?? null, rootDir: rec.rootDir ?? null,
       summary: rec.description || rec.mission || '', celestial: rec.placement, updatedAt: row.updated_at, ...counts, ...totals, hasReadableContent: counts.readableUnitCount > 0,
       activeRunStatus: active?.status ?? null, activeRunProgress: active?.progress?.total > 0 ? active.progress.completed / active.progress.total : null };
@@ -529,6 +531,7 @@ export class CreationStore {
   // External publication runs only after that transaction commits.
   createCreation(input, { prepare } = {}) {
     const nested = Boolean(this.tx);
+    let newlyCreatedJournalToken;
     const result = this.transaction(() => {
       const { importKey } = input;
       if (importKey !== undefined) {
@@ -565,9 +568,11 @@ export class CreationStore {
         mission: '', description: '', status: 'draft', readingNodeId: null, readingOffset: 0,
         sessionId: null, projectId: null, rootDir: null, placement: defaultCelestialPlacement(kind, index) }, input);
       const externalRoot = input.initializeFolder === true && record.rootDir;
+      const externalRootIdentity = externalRoot ? record.boundRootIdentity : undefined;
       if (externalRoot) {
         if (nested) fail('INVALID_STATE', 'External materialization cannot run inside another transaction');
         record.rootDir = null;
+        delete record.boundRootIdentity;
       } else if (input.initializeFolder === true) {
         this.#initializeWorkspace(record);
       }
@@ -581,9 +586,11 @@ export class CreationStore {
       if (externalRoot) {
         // Preparation can add nodes, canon and assets. Validate the full plan
         // without touching the external folder, then checkpoint it with the inputs.
-        const { planned, published, rootIdentity } = this.#planAndPreflightExternalFolder(id, externalRoot, data(this.#creation(id)));
-        this.run('INSERT INTO creation_materialization_journal VALUES (?,?,?,?,?,?)',
-          id, externalRoot, '[]', this.#journalPlanJson(planned, rootIdentity), json(published), Date.now());
+        const { planned, published, rootIdentity } = this.#planAndPreflightExternalFolder(
+          id, externalRoot, data(this.#creation(id)), {}, {}, externalRootIdentity);
+        newlyCreatedJournalToken = { target_dir: externalRoot, temp_files_json: '[]',
+          planned_outputs_json: this.#journalPlanJson(planned, rootIdentity), published_outputs_json: json(published), updated_at: Date.now() };
+        this.run('INSERT INTO creation_materialization_journal VALUES (?,?,?,?,?,?)', id, ...Object.values(newlyCreatedJournalToken));
       }
       return this.getCreation(id);
     });
@@ -593,7 +600,7 @@ export class CreationStore {
         if (input.initializeFolder === true && input.rootDir != null && folderPath(input.rootDir) !== pending.target_dir) {
           fail('CONFLICT', 'Resume materialization in the original target folder');
         }
-        const { creation } = this.ensureWorkspace(result.id, { rootDir: pending.target_dir });
+        const { creation } = this.ensureWorkspace(result.id, { rootDir: pending.target_dir, newlyCreatedJournalToken });
         return result.deduplicated ? { ...creation, deduplicated: true } : creation;
       }
     }
@@ -606,6 +613,13 @@ export class CreationStore {
       if (record.rootDir !== rootDir) {
         delete record.ownsWorkspace;
         delete record.workspaceIdentity;
+      }
+      if (rootDir == null) delete record.boundRootIdentity;
+      else if (!record.workspaceIdentity) {
+        // An unchanged path must not silently adopt a replacement inode.
+        const boundRootIdentity = record.rootDir === rootDir ? record.boundRootIdentity : undefined;
+        const stat = this.#canonicalDirectoryStat(rootDir, { code: 'INVALID_REQUEST', boundRootIdentity });
+        record.boundRootIdentity = rootIdentityOf(stat);
       }
       record.rootDir = rootDir;
     }
@@ -710,24 +724,28 @@ export class CreationStore {
     }
   }
 
-  #recordedWorkspace(id, path, { allowMissing = false } = {}) {
+  #recordedWorkspace(id, { rootDir: path, boundRootIdentity }, { allowMissing = false } = {}) {
     if (typeof path !== 'string' || !isAbsolute(path) || path.includes('\0') || resolve(path) !== path) {
       fail('INVALID_PATH', 'Invalid recorded workspace path');
     }
     if (path !== this.#workspacePath(id) && path !== this.#workspacePath(id, LEGACY_WORKSPACE_CONTAINER)) {
       this.#assertExternalFolder(path);
     }
-    return this.#assertNoSymlinkDir(path, { code: 'INVALID_REQUEST', allowMissing });
+    return this.#assertNoSymlinkDir(path, { code: 'INVALID_REQUEST', allowMissing, boundRootIdentity });
   }
 
   resolveWorkspaceRoot(id) {
-    const { rootDir } = data(this.#creation(id));
-    return rootDir == null ? null : this.#recordedWorkspace(id, rootDir);
+    const record = data(this.#creation(id));
+    return record.rootDir == null ? null : this.#recordedWorkspace(id, record);
   }
 
-  #assertNoSymlinkDir(dirPath, { code = 'INVALID_PATH', allowMissing = false, root = dirPath } = {}) {
+  #assertNoSymlinkDir(dirPath, options) {
+    return this.#canonicalDirectoryStat(dirPath, options) ? dirPath : null;
+  }
+
+  #canonicalDirectoryStat(dirPath, { code = 'INVALID_PATH', allowMissing = false, root = dirPath, boundRootIdentity } = {}) {
     try {
-      const stat = fs.lstatSync(dirPath, { throwIfNoEntry: false });
+      const stat = fs.lstatSync(dirPath, { bigint: true, throwIfNoEntry: false });
       if (!stat && allowMissing) {
         // ENOENT can also mean that an ancestor is a dangling symlink or
         // redirects to a directory where the final component is absent.
@@ -741,7 +759,12 @@ export class CreationStore {
       }
       if (stat?.isDirectory() && !stat.isSymbolicLink()) {
         const canonical = fs.realpathSync(dirPath);
-        if (canonical === dirPath && (canonical === root || contains(root, canonical))) return canonical;
+        if (canonical === dirPath && (canonical === root || contains(root, canonical))) {
+          if (boundRootIdentity != null && !matchesRootIdentity(stat, boundRootIdentity)) {
+            fail('INVALID_PATH', 'Bound workspace directory changed');
+          }
+          return stat;
+        }
       }
     } catch (error) {
       if (!['ENOENT', 'ENOTDIR', 'ELOOP', 'EACCES', 'EPERM', 'ENAMETOOLONG'].includes(error.code)) throw error;
@@ -864,6 +887,7 @@ export class CreationStore {
     };
     delete record.ownsWorkspace;
     delete record.workspaceIdentity;
+    delete record.boundRootIdentity;
     const rootDir = this.#workspacePath(record.id);
     const parent = this.#walkWorkspace(this.root, dirname(rootDir), true);
     // BEGIN IMMEDIATE serializes attempts. The delimiter cannot occur in an ID.
@@ -1055,8 +1079,7 @@ export class CreationStore {
           fs.fsyncSync(parentFd);
         }
         const stat = fs.fstatSync(fd, { bigint: true });
-        if (!stat.isDirectory() || (parentFd === undefined && rootIdentity
-          && (String(stat.dev) !== rootIdentity.dev || String(stat.ino) !== rootIdentity.ino))) invalid();
+        if (!stat.isDirectory() || (parentFd === undefined && rootIdentity && !matchesRootIdentity(stat, rootIdentity))) invalid();
         verify({ fd, anchor, canonical, stat });
         handles.push({ fd, anchor, canonical, stat });
         const held = fd;
@@ -1119,9 +1142,7 @@ export class CreationStore {
   }
 
   #planAndPreflightExternalFolder(id, root, record, planned = {}, published = {}, rootIdentity) {
-    rootIdentity ??= this.#withExternalDirectory(root, root, {}, (_fd, _check, _path, stat) => ({
-      dev: String(stat.dev), ino: String(stat.ino),
-    }));
+    rootIdentity ??= this.#withExternalDirectory(root, root, {}, (_fd, _check, _path, stat) => rootIdentityOf(stat));
     const claimed = new Set();
     for (const { relPath } of Object.values(planned)) {
       const folded = relPath.toLowerCase();
@@ -1166,7 +1187,7 @@ export class CreationStore {
         const path = this.#journalPath(root, planned[key].relPath);
         const { entry, matches } = this.#inspectExternalOutput(root, path, bytes, { rootIdentity });
         if (sha256 !== planned[key].sha256 || (entry && !matches)) workspaceOccupied();
-        if (matches) published[key] = planned[key].relPath;
+        if (matches) published[key] = { relPath: planned[key].relPath, adopted: true };
         else {
           // A resumed output can still use an older planned directory spelling.
           let ancestor = dirname(path);
@@ -1187,7 +1208,7 @@ export class CreationStore {
         claimed.add(folded);
         const relPath = relative(root, actualPath);
         planned[key] = { relPath, sha256 };
-        if (entry) published[key] = relPath; // Preserve an existing user README too.
+        if (entry) published[key] = { relPath, adopted: true }; // Preserve an existing user README too.
         else writeAncestors.add(existingAncestors.get(dir));
         return actualPath;
       }
@@ -1277,7 +1298,7 @@ export class CreationStore {
     });
   }
 
-  #materializeExternal(id, root) {
+  #materializeExternal(id, root, newlyCreatedJournalToken) {
     let planned, published, temps, checkpoint, rootIdentity;
     let createdJournalInThisCall = false;
     let createdDirsInTarget = 0;
@@ -1292,43 +1313,49 @@ export class CreationStore {
           updated_at=excluded.updated_at`, id, ...Object.values(next));
       this.tx.afterCommit.push(() => { checkpoint = next; });
     };
-    const matchesCheckpoint = current => current && checkpoint && Object.keys(checkpoint).every(key => current[key] === checkpoint[key]);
+    const matchesCheckpoint = (current, expected = checkpoint) => current && expected
+      && Object.keys(expected).every(key => current[key] === expected[key]);
     const assertCheckpoint = () => {
       if (!matchesCheckpoint(journal())) {
         fail('CONFLICT', 'Workspace materialization changed during setup; retry');
       }
     };
     const stagingDir = this.#stagingDir(id);
-    const existingRoot = record => record.rootDir && this.#recordedWorkspace(id, record.rootDir, { allowMissing: true });
-    const early = this.transaction(() => {
-      const record = data(this.#creation(id));
-      if (existingRoot(record)) return { creation: this.getCreation(id), rootDir: record.rootDir, materialized: false };
-      const previous = journal();
-      if (previous && previous.target_dir !== root) fail('CONFLICT', 'Resume materialization in the original target folder');
-      const { root_dev: dev, root_ino: ino, ...outputs } = JSON.parse(previous?.planned_outputs_json ?? '{}');
-      planned = outputs;
-      published = JSON.parse(previous?.published_outputs_json ?? '{}');
-      temps = JSON.parse(previous?.temp_files_json ?? '[]');
-      if (previous) {
-        // Pre-identity journals cannot prove the path still names the original folder.
-        if (typeof dev !== 'string' || typeof ino !== 'string') fail('CONFLICT', 'Materialization journal has no verified root identity');
-        rootIdentity = { dev, ino };
-        checkpoint = previous;
-        this.#withExternalDirectory(root, root, { rootIdentity }, () => {});
-        this.#reconcileWorkspacePublications(root, stagingDir, planned, published, temps, rootIdentity);
-      } else {
-        ({ rootIdentity } = this.#planAndPreflightExternalFolder(id, root, record, planned, published));
-        createdJournalInThisCall = true;
-      }
-      save(); // Commit the initial plan or inferred publications before touching the filesystem.
-    });
-    if (early) return early;
-
     const removeTemps = () => {
       this.#cleanupJournalTemps(stagingDir, temps);
       temps = [];
     };
     try {
+      const early = this.transaction(() => {
+        const record = data(this.#creation(id));
+        if (record.rootDir && this.#recordedWorkspace(id, record, { allowMissing: true })) {
+          return { creation: this.getCreation(id), rootDir: record.rootDir, materialized: false };
+        }
+        const previous = journal();
+        if (previous?.target_dir === root && newlyCreatedJournalToken) {
+          createdJournalInThisCall = matchesCheckpoint(previous, newlyCreatedJournalToken);
+        }
+        const { root_dev: dev, root_ino: ino, ...outputs } = JSON.parse(previous?.planned_outputs_json ?? '{}');
+        planned = outputs;
+        published = JSON.parse(previous?.published_outputs_json ?? '{}');
+        temps = JSON.parse(previous?.temp_files_json ?? '[]');
+        checkpoint = previous;
+        this.#linkableRootFolder(root);
+        if (previous && previous.target_dir !== root) fail('CONFLICT', 'Resume materialization in the original target folder');
+        if (previous) {
+          // Pre-identity journals cannot prove the path still names the original folder.
+          if (typeof dev !== 'string' || typeof ino !== 'string') fail('CONFLICT', 'Materialization journal has no verified root identity');
+          rootIdentity = { dev, ino };
+          this.#withExternalDirectory(root, root, { rootIdentity }, () => {});
+          this.#reconcileWorkspacePublications(root, stagingDir, planned, published, temps, rootIdentity);
+        } else {
+          ({ rootIdentity } = this.#planAndPreflightExternalFolder(id, root, record, planned, published));
+          createdJournalInThisCall = true;
+        }
+        save(); // Commit the initial plan or inferred publications before touching the filesystem.
+      });
+      if (early) return early;
+
       this.transaction(() => {
         assertCheckpoint();
         removeTemps();
@@ -1379,7 +1406,7 @@ export class CreationStore {
               tempEntry = { path: temp, dev: String(dev), ino: String(ino), relPath: output.relPath };
               temps.push(tempEntry);
             } else {
-              published[key] = output.relPath;
+              published[key] = { relPath: output.relPath, adopted: true };
             }
             save(); // Commit the temp identity before writing or publishing bytes.
           });
@@ -1400,7 +1427,8 @@ export class CreationStore {
         });
         return dest;
       }, path => directories.get(relative(root, path).toLowerCase()));
-      return this.transaction(() => {
+      // The directory helper releases its descriptor only after this transaction commits.
+      return this.#withExternalDirectory(root, root, { rootIdentity }, (_fd, check) => this.transaction(() => {
         assertCheckpoint();
         const current = data(this.#creation(id));
         if (current.rootDir !== record.rootDir) fail('CONFLICT', 'Creation folder changed during materialization');
@@ -1408,18 +1436,18 @@ export class CreationStore {
           fail('CONFLICT', 'Incomplete external materialization output remains unresolved');
         }
         current.rootDir = root;
+        current.boundRootIdentity = rootIdentity;
         delete current.ownsWorkspace;
         delete current.workspaceIdentity;
-        return this.#withExternalDirectory(root, root, { rootIdentity }, (_fd, check) => {
-          this.run('UPDATE creations SET updated_at=?,data=? WHERE id=?', now(), json(current), id);
-          this.run('DELETE FROM creation_materialization_journal WHERE creation_id=?', id);
-          const creation = this.getCreation(id);
-          check();
-          return { creation, rootDir: root, materialized: true };
-        });
-      });
+        this.run('UPDATE creations SET updated_at=?,data=? WHERE id=?', now(), json(current), id);
+        this.run('DELETE FROM creation_materialization_journal WHERE creation_id=?', id);
+        const creation = this.getCreation(id);
+        check();
+        return { creation, rootDir: root, materialized: true };
+      }));
     } catch (error) {
-      if (createdJournalInThisCall && Object.keys(published).length === 0 && createdDirsInTarget === 0 && !createdOutputInTarget) {
+      if (createdJournalInThisCall && checkpoint && createdDirsInTarget === 0 && !createdOutputInTarget
+        && Object.values(published).every(output => output?.adopted === true)) {
         try {
           this.transaction(() => {
             // Never retire a checkpoint another call has advanced.
@@ -1435,18 +1463,18 @@ export class CreationStore {
     }
   }
 
-  ensureWorkspace(id, { rootDir } = {}) {
+  ensureWorkspace(id, { rootDir, newlyCreatedJournalToken } = {}) {
     const record = data(this.#creation(id));
-    if (record.rootDir && this.#recordedWorkspace(id, record.rootDir, { allowMissing: true })) {
+    if (record.rootDir && this.#recordedWorkspace(id, record, { allowMissing: true })) {
       return { creation: this.getCreation(id), rootDir: record.rootDir, materialized: false };
     }
     if (rootDir != null) {
       if (this.tx) fail('INVALID_STATE', 'External materialization cannot run inside another transaction');
-      return this.#materializeExternal(id, this.#linkableRootFolder(rootDir));
+      return this.#materializeExternal(id, folderPath(rootDir), newlyCreatedJournalToken);
     }
     return this.transaction(() => {
       const current = data(this.#creation(id));
-      if (current.rootDir && this.#recordedWorkspace(id, current.rootDir, { allowMissing: true })) {
+      if (current.rootDir && this.#recordedWorkspace(id, current, { allowMissing: true })) {
         return { creation: this.getCreation(id), rootDir: current.rootDir, materialized: false };
       }
       if (this.one('SELECT creation_id FROM creation_materialization_journal WHERE creation_id=?', id)) {

@@ -82,7 +82,7 @@ import CosmosWebOverlay from './web/CosmosWebOverlay.js';
 import SettingsPanel from '../SettingsPanel.js';
 import AgentSettingsPanel from '../AgentSettingsPanel.js';
 import SessionSettingsModal from '../SessionSettingsModal.js';
-import { useCreationsStore, sendInitialCreationPrompt } from '../../stores/creations.js';
+import { useCreationsStore, sendInitialCreationPrompt, creationDetailKey } from '../../stores/creations.js';
 import { workbenchRouteKey, workbenchWorkspaceGeneration } from '../../utils/workbench-route.js';
 import { useCosmicWebStore } from '../../stores/cosmicWeb.js';
 
@@ -1747,8 +1747,14 @@ export default {
       openGalaxyCreation({ agentId: creationsStore.selectedAgentId, creationId: star.id, mode: 'read' });
     }
 
+    function cachedCreationFor(agentId, creationId) {
+      return creationsStore.detailsByKey?.[creationDetailKey(agentId, creationId)]?.creation
+        || creationsStore.creationsForAgent(agentId).find(c => c?.id === creationId)
+        || null;
+    }
+
     async function openCreationInDrawer({ agentId, sessionId, creationId, rootDir, initialPrompt, openSeq, maximize,
-      hasRecordedRoot = Boolean(String(rootDir || '').trim()),
+      hasRecordedRoot = false,
       openedFromGalaxy = currentBand.value === 'galaxy', keepIgniteDockOpen = false }) {
       const epoch = ++openCreationEpoch;
       const uiMode = store.uiMode;
@@ -1776,7 +1782,9 @@ export default {
       );
       const workspaceGeneration = liveWorkspaceGeneration();
       const hasPrompt = typeof initialPrompt === 'string' && initialPrompt.trim() && sessionId;
-      const needsActivationReceipt = !hasRecordedRoot || (hasPrompt && creationsStore.hasMountedCreationTab(agentId, sessionId)
+      const cachedCreation = cachedCreationFor(agentId, creationId);
+      const recordedRootConfirmed = hasRecordedRoot === true && (!cachedCreation || Boolean(String(cachedCreation.rootDir || '').trim()));
+      const needsActivationReceipt = !recordedRootConfirmed || (hasPrompt && creationsStore.hasMountedCreationTab(agentId, sessionId)
         && creationsStore.listDirtyDocDrafts(agentId).length > 0);
       const activationPromise = hasPrompt && needsActivationReceipt
         ? creationsStore.waitForCreationActivation(openSeq, { agentId, sessionId, workspaceGeneration }) : null;
@@ -1838,15 +1846,16 @@ export default {
       );
 
       try {
-        let creation = creationsStore.creationsForAgent(targetAgentId).find((c) => c && c.id === creationId) || null;
+        let creation = cachedCreationFor(targetAgentId, creationId);
         if (!creation && typeof creationsStore.listCreations === 'function') {
           await creationsStore.listCreations(targetAgentId).catch(() => {});
           if (isStaleOpen()) return;
-          creation = creationsStore.creationsForAgent(targetAgentId).find((c) => c && c.id === creationId) || null;
+          creation = cachedCreationFor(targetAgentId, creationId);
         }
 
         let resolvedSessionId = String(sessionId || '').trim();
         let resolvedRootDir = String(rootDir || '').trim();
+        let recordedRootDir = String(creation?.rootDir || '').trim();
 
         if ((!resolvedSessionId || !resolvedRootDir) && typeof creationsStore.resolveCreationSession === 'function') {
           const resolved = await creationsStore.resolveCreationSession(
@@ -1857,14 +1866,15 @@ export default {
           if (isStaleOpen()) return;
           if (!resolvedSessionId && resolved?.sessionId) resolvedSessionId = String(resolved.sessionId).trim();
           if (!resolvedRootDir && resolved?.rootDir) resolvedRootDir = String(resolved.rootDir).trim();
+          recordedRootDir = String(resolved?.creation?.rootDir || '').trim() || recordedRootDir;
         }
         if (!resolvedSessionId && creation?.sessionId) resolvedSessionId = String(creation.sessionId).trim();
-        if (!resolvedRootDir && creation?.rootDir) resolvedRootDir = String(creation.rootDir).trim();
+        if (!resolvedRootDir) resolvedRootDir = recordedRootDir;
         if (isStaleOpen()) return;
 
         await openCreationInDrawer({
           agentId: targetAgentId, sessionId: resolvedSessionId, creationId, rootDir: resolvedRootDir,
-          maximize: mode === 'read', initialPrompt: promptToSend, openSeq, openedFromGalaxy: true, keepIgniteDockOpen,
+          hasRecordedRoot: Boolean(recordedRootDir), maximize: mode === 'read', initialPrompt: promptToSend, openSeq, openedFromGalaxy: true, keepIgniteDockOpen,
         });
       } catch (err) {
         if (isStaleOpen()) return;

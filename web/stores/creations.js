@@ -993,10 +993,11 @@ export const useCreationsStore = defineStore('creations', {
             const sources = createRes?.sources ?? this.detailsByKey[creationDetailKey(targetId, created.id)]?.sources;
             const subtle = globalThis.crypto?.subtle;
             if (Array.isArray(sources) && subtle?.digest) {
-              // File name and size cannot distinguish a replacement from the original.
+              // Each stored source can confirm only one selection, even for identical files.
+              const remainingSources = sources.filter(source => typeof source?.name === 'string' && source.name.trim()
+                && typeof source.sha256 === 'string' && source.sha256.trim());
               for (const file of filesToSubmit) {
-                const candidates = sources.filter(source => source?.sha256 && (source.filename ?? source.name) === file.name);
-                if (!candidates.length) continue;
+                if (!remainingSources.some(source => source.name === file.name)) continue;
                 let fileSha256;
                 try {
                   const digest = await subtle.digest('SHA-256', await file.arrayBuffer());
@@ -1004,7 +1005,10 @@ export const useCreationsStore = defineStore('creations', {
                 } catch {
                   continue; // An unreadable file or unavailable digest cannot confirm ingestion.
                 }
-                if (fileSha256 && candidates.some(source => source.sha256 === fileSha256)) uploadedFilesThisCall.push(file);
+                const confirmedIndex = remainingSources.findIndex(source => source.name === file.name && source.sha256 === fileSha256);
+                if (confirmedIndex < 0) continue;
+                remainingSources.splice(confirmedIndex, 1);
+                uploadedFilesThisCall.push(file);
               }
               ensureSameStore();
             }

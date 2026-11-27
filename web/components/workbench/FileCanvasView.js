@@ -71,17 +71,20 @@ export function resolveWorkspaceRelativePath(baseFilePath, rawHref) {
     && !/^[a-z][a-z0-9+.-]*:/i.test(value.replace(/\s+/g, ''));
   if (!isRelative(cleanRef)) return null;
 
-  let posixRel;
+  let decodedRef;
   try {
-    posixRel = canonicalizeCreationUrl(decodeURIComponent(cleanRef));
+    // Decode the original path, not the slash-normalized validation form.
+    decodedRef = decodeURIComponent(rawHref.trim().split(/[?#]/)[0]);
   } catch {
     return null;
   }
-  if (!isRelative(posixRel)) return null;
+  const canonicalRef = canonicalizeCreationUrl(decodedRef);
+  if (!isRelative(canonicalRef)) return null;
 
   const baseStr = typeof baseFilePath === 'string' ? baseFilePath.trim() : '';
   const drive = /^[A-Za-z]:[\\/]/.test(baseStr);
   const unc = /^(\\\\|\/\/)[^\\/]/.test(baseStr);
+  const relativePath = drive || unc ? canonicalRef : decodedRef.trim();
   const baseParts = (drive || unc ? baseStr.replace(/\\/g, '/') : baseStr).split('/').filter(Boolean);
   let root = baseStr.startsWith('/') ? '/' : '';
   if (unc) {
@@ -94,7 +97,7 @@ export function resolveWorkspaceRelativePath(baseFilePath, rawHref) {
   baseParts.pop(); // Resolve from the directory containing the Markdown file.
 
   const resolvedParts = [];
-  for (const seg of [...baseParts, ...posixRel.split('/')]) {
+  for (const seg of [...baseParts, ...relativePath.split('/')]) {
     if (!seg || seg === '.') continue;
     if (seg === '..') {
       if (resolvedParts.length > 0) {

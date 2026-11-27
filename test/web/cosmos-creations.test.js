@@ -1150,7 +1150,7 @@ describe('Cosmos Creations — End-to-End Web Store <-> Server Relay <-> Agent S
     }
   });
 
-  it.each(['added', 'replaced', 'digest missing'])('R7-F1: retains unconfirmed attachments after a lost Ignite create ACK (%s)', async scenario => {
+  it.each(['added', 'replaced', 'digest missing', 'identical duplicate'])('R8-F1: retains unconfirmed attachments after a lost Ignite create ACK (%s)', async scenario => {
     await registerBrowserStores();
     const { default: CosmosGalaxyOverlay } = await import('../../web/components/cosmos/creations/CosmosGalaxyOverlay.js');
     const { agentId } = route;
@@ -1160,12 +1160,14 @@ describe('Cosmos Creations — End-to-End Web Store <-> Server Relay <-> Agent S
     const committed = deferred();
     const handleResponse = creationsStore.handleCreationResponse;
     let droppedAck = false;
+    let retryAck;
     vi.spyOn(creationsStore, 'handleCreationResponse').mockImplementation(msg => {
       if (msg.op !== 'create_creation' || !msg.ok) return handleResponse(msg);
       if (droppedAck) {
-        // Exercise the digest-capable wire contract even on Agents that omit the optional field.
-        const sha256 = scenario === 'digest missing' ? undefined : createHash('sha256').update('hello').digest('hex');
-        const sources = msg.data.sources.map(source => ({ ...source, sha256 }));
+        retryAck = msg.data;
+        if (scenario !== 'digest missing') return handleResponse(msg);
+        // Only the compatibility case emulates an older Agent that omits the digest.
+        const sources = msg.data.sources.map(({ sha256, ...source }) => source);
         return handleResponse({ ...msg, data: { ...msg.data, sources } });
       }
       droppedAck = true;
@@ -1175,7 +1177,8 @@ describe('Cosmos Creations — End-to-End Web Store <-> Server Relay <-> Agent S
       if (msg.type === 'yeaft_create_session') return sessionAck(chatStore, msg, 'create', { session: { id: 'linked-session' } });
     });
     const file1 = new File(['hello'], 'brief.txt', { type: 'text/plain' });
-    const file2 = new File(['world'], scenario === 'added' ? 'second.txt' : 'brief.txt', { type: 'text/plain' });
+    const file2 = new File([scenario === 'identical duplicate' ? 'hello' : 'world'],
+      scenario === 'added' ? 'second.txt' : 'brief.txt', { type: 'text/plain' });
     let uploadSeq = 0;
     vi.spyOn(creationsStore, 'uploadRawFiles').mockImplementation(async files => Promise.all(files.map(async file => {
       const fileId = `${file.name}-${++uploadSeq}`;
@@ -1203,11 +1206,17 @@ describe('Cosmos Creations — End-to-End Web Store <-> Server Relay <-> Agent S
       const creates = send.mock.calls.map(([msg]) => msg.payload).filter(payload => payload?.importKey);
       expect(creates).toHaveLength(2);
       expect(creates[1].importKey).toBe(creates[0].importKey);
-      expect(creates[1].attachments).toEqual(scenario === 'added'
-        ? [{ fileId: 'brief.txt-2' }, { fileId: 'second.txt-3' }] : [{ fileId: 'brief.txt-2' }]);
+      expect(creates[1].attachments).toEqual([
+        { fileId: 'brief.txt-2' },
+        ...(['added', 'identical duplicate'].includes(scenario) ? [{ fileId: `${file2.name}-3` }] : []),
+      ]);
+      expect(retryAck).toMatchObject({ deduplicated: true, creation: { id }, sources: [expect.objectContaining({
+        name: file1.name, sha256: createHash('sha256').update('hello').digest('hex'),
+      })] });
       expect(serviceA.store.listCreations()).toHaveLength(1);
       expect(serviceA.store.listSources(id)).toEqual([expect.objectContaining({ name: file1.name, byteLength: file1.size })]);
-      expect(draft.pendingFiles).toEqual([scenario === 'digest missing' ? file1 : file2]);
+      expect(draft.pendingFiles).toHaveLength(1);
+      expect(Vue.toRaw(draft.pendingFiles[0])).toBe(scenario === 'digest missing' ? file1 : file2);
       expect(draft.open).toBe(true);
       expect(galaxy.emitted('toast')).toContainEqual([expect.stringMatching(/Unuploaded attachments|未上传的附件/)]);
       expect(galaxy.emitted('open-creation')).toEqual([[expect.objectContaining({ creationId: id, keepIgniteDockOpen: true })]]);
@@ -1843,7 +1852,7 @@ describe('Cosmos Creations — End-to-End Web Store <-> Server Relay <-> Agent S
     }
   });
 
-  it('R7-F2: a clean Cosmos tab must accept an unrecorded Creation before its initial prompt', async () => {
+  it.each(['workspace event', 'direct Galaxy open', 'workspace event with claimed root'])('R8-F2: a clean Cosmos tab must accept an unrecorded Creation before its initial prompt (%s)', async entry => {
     const { sessions } = await registerBrowserStores();
     const [{ default: CosmosPage }, { default: CreationTab }] = await Promise.all([
       import('../../web/components/cosmos/CosmosPage.js'), import('../../web/components/workbench/CreationTab.js'),
@@ -1878,17 +1887,27 @@ describe('Cosmos Creations — End-to-End Web Store <-> Server Relay <-> Agent S
     });
     const wait = vi.spyOn(creationsStore, 'waitForCreationActivation');
     const sendPrompt = vi.spyOn(chatStore, 'sendYeaftSessionMessage').mockResolvedValue({ ok: true });
-    const openSeq = creationsStore.cancelPendingWorkspaceOpen();
-    const detail = { agentId, sessionId, creationId: next.id, rootDir: null, initialPrompt: 'Plan the next atlas', openSeq };
-    fireWindowEvent('cosmos-open-creation-workspace', detail);
+    expect(creationsStore.creationsForAgent(agentId)).toContainEqual(expect.objectContaining({ id: next.id, rootDir: null }));
+    const hint = entry === 'workspace event' ? null : '/hint/path';
+    const prompt = 'Plan the next atlas';
+    let opening;
+    if (entry === 'direct Galaxy open') {
+      opening = page.vm.openGalaxyCreation({ agentId, sessionId, creationId: next.id, rootDir: hint, promptToSend: prompt });
+    } else {
+      const openSeq = creationsStore.cancelPendingWorkspaceOpen();
+      const detail = { agentId, sessionId, creationId: next.id, rootDir: hint, initialPrompt: prompt, openSeq,
+        ...(hint ? { hasRecordedRoot: true } : {}) };
+      fireWindowEvent('cosmos-open-creation-workspace', detail);
+      expect(detail.handled).toBe(true);
+    }
     await flushPromises();
-    expect(detail.handled).toBe(true);
-    expect(ensure).toHaveBeenCalledExactlyOnceWith(agentId, next.id, {});
-    expect(wait).toHaveBeenCalledExactlyOnceWith(openSeq, expect.objectContaining({ agentId, sessionId }));
+    expect(ensure).toHaveBeenCalledExactlyOnceWith(agentId, next.id, hint ? { rootDir: hint } : {});
+    expect(wait).toHaveBeenCalledExactlyOnceWith(creationsStore.openWorkspaceSeq, expect.objectContaining({ agentId, sessionId }));
     expect(sendPrompt).not.toHaveBeenCalled();
 
     gate.resolve();
     expect(await wait.mock.results[0].value).toBe(false);
+    await opening;
     await flushPromises();
     expect(tab.get('.creation-wb-target-error').text()).toContain('Agent rejected the workspace');
     expect(tab.vm.activeCreation.id).toBe(current.id);
@@ -2237,10 +2256,12 @@ describe('File Canvas and route-scoped composer references', () => {
 
   it.each([
     [String.raw`/repo/team\docs/README.md`, 'notes.md', String.raw`/repo/team\docs/notes.md`],
-    [String.raw`\\host\share\docs\README.md`, 'notes.md', '//host/share/docs/notes.md'],
+    ['repo/README.md', 'chapter%5Cdraft.md', String.raw`repo/chapter\draft.md`],
+    [String.raw`\\host\share\docs\README.md`, 'chapter%5Cdraft.md', '//host/share/docs/chapter/draft.md'],
     ['//host/share/docs/README.md', 'notes.md', '//host/share/docs/notes.md'],
     ['//host/share/docs/../docs/README.md', '../../../notes.md', '//host/share/notes.md'],
     [String.raw`C:\docs\README.md`, '../../notes.md', 'C:/notes.md'],
+    ['C:/docs/README.md', 'chapter%5Cdraft.md', 'C:/docs/chapter/draft.md'],
   ])('R7-F3: resolves Canvas links from %s with target %s', async (path, href, targetPath) => {
     const file = { name: 'README.md', path, content: `[Notes](${href})` };
     const wrapper = render(FileCanvasView, { props: { routeKey, file } });
@@ -3859,6 +3880,38 @@ describe('Folder Creation and Files in Workbench', () => {
     expect(filesAfterScan.map(item => item.path)).toEqual([`${rootDir}/${added}`, `${rootDir}/${initial}`]);
     expect(wrapper.get('.creation-wb-media-counter').text()).toBe('2 / 2');
     expect(selection()).toMatchObject({ path: `${rootDir}/${initial}`, fileType: kind });
+  });
+
+  it('R8-F3: opens the literal POSIX backslash file from Markdown and blocks network paths', async () => {
+    const repo = '/repo';
+    const readme = `${repo}/README.md`;
+    const literal = String.raw`/repo/chapter\draft.md`;
+    const nested = `${repo}/chapter/draft.md`;
+    creations.byAgent[route.agentId].list = [{ id: 'backslash-links', rootDir: repo, sessionId: route.sessionId }];
+    const send = mockWorkbenchFiles(chat, {
+      [repo]: [{ name: 'README.md', type: 'file' }, { name: 'chapter', type: 'directory' },
+        { name: String.raw`chapter\draft.md`, type: 'file' }],
+      [`${repo}/chapter`]: [{ name: 'draft.md', type: 'file' }],
+    }, {
+      [readme]: String.raw`[draft](chapter%5Cdraft.md) [evil](\\\evil.example/x) [evil](/\evil.example/x)`,
+      [literal]: '# Literal backslash',
+      [nested]: '# Nested file',
+    });
+    const wrapper = render(CreationTab, { props: { ...routeProps, workDir: repo,
+      workspaceGeneration: workbenchWorkspaceGeneration(routeKey, repo) } });
+    await flushPromises();
+    expect(wrapper.vm.docFiles.map(file => file.path)).toEqual(expect.arrayContaining([literal, nested]));
+    const canvas = wrapper.getComponent(FileCanvasView);
+    expect(canvas.props('file').path).toBe(readme);
+    const [draftLink, ...unsafeLinks] = canvas.findAll('.canvas-doc-content a');
+    expect(unsafeLinks.map(link => [link.text(), link.attributes('href'), link.attributes('data-workspace-href')]))
+      .toEqual([['evil', undefined, undefined], ['evil', undefined, undefined]]);
+    await draftLink.trigger('click');
+    await flushPromises();
+    expect(canvas.props('file').path).toBe(literal);
+    expect(canvas.get('h1').text()).toBe('Literal backslash');
+    expect(send.mock.calls.map(([msg]) => msg).filter(msg => msg.type === 'read_file').map(msg => msg.filePath))
+      .toEqual([readme, literal]);
   });
 
   it('onboards an unbound folder, scans its nested files into modality tabs, saves a document and opens Files', async () => {
