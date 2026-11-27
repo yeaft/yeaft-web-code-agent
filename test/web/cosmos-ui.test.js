@@ -23,24 +23,34 @@ import {
   clampCosmosDrawerWidth,
   loadCosmosDrawerWidth,
   saveCosmosDrawerWidth,
+  keplerPos,
+  keplerOrbitPoint,
 } from '../../web/cosmos/constants.js';
 import {
   COSMIC_EVENTS,
   MIN_EVENT_INTERVAL_SEC,
   MAX_EVENT_INTERVAL_SEC,
+  MAX_CONCURRENT_EVENTS,
   EVENT_DISTANT_MIN_SCALE,
   EVENT_DISTANT_MAX_SCALE,
   createCosmicEventState,
   startCosmicEvent,
   focusActiveCosmicEvent,
+  focusCosmicEventByUid,
   unfocusCosmicEvent,
   stopCosmicEvent,
+  setCosmicEventZoom,
   tickCosmicEvents,
   scrubCosmicEvent,
   pickRandomEventIndex,
   pickRandomDistantLocation,
   getEventScreenPosition,
   computeEventFrame,
+  computeEventFrames,
+  hitTestAmbientEvent,
+  computeEventDistDepth,
+  computeEventFlightDuration,
+  getFlightWarpEnergy,
   getEventLens,
   getEventAmbient,
   getEventShockWave,
@@ -340,7 +350,8 @@ describe('Cosmos Random-Interval Event Scheduler & Stop Control', () => {
     // Clicking the distant beacon focuses in -> camera slews to center and Solar System recedes
     focusActiveCosmicEvent(simOff);
     expect(simOff.active.observing).toBe(true);
-    for (let f = 0; f < 40; f++) {
+    // Slower distance-correlated S-curve flight takes ~2.0-3.4s to arrive smoothly
+    for (let f = 0; f < 80; f++) {
       tickCosmicEvents(simOff, 0.05, { showCountdown: true, autoEnabled: true, autoZoom: false, rng });
     }
     expect(simOff.focusProgress).toBeGreaterThan(0.92);
@@ -349,15 +360,17 @@ describe('Cosmos Random-Interval Event Scheduler & Stop Control', () => {
     expect(Math.abs(focusedPos.x - 720)).toBeLessThan(20);
     expect(Math.abs(focusedPos.y - 450)).toBeLessThan(20);
     expect(focusedPos.scale).toBeGreaterThan(1.2);
+    // Shared canvas: Solar System smoothly pans aside instead of cutting to black
     const zoomedSolar = getSolarTelescopeTransform(simOff, 1440, 900);
     expect(zoomedSolar.active).toBe(true);
-    expect(zoomedSolar.alphaMul).toBeLessThan(0.1);
+    expect(Math.hypot(zoomedSolar.offsetX, zoomedSolar.offsetY)).toBeGreaterThan(300);
+    expect(zoomedSolar.alphaMul).toBeGreaterThan(0.5);
 
     // Unfocusing keeps the distant event playing while camera glides smoothly back to Solar System
     expect(unfocusCosmicEvent(simOff)).toBe(true);
     expect(simOff.active).not.toBeNull();
     expect(simOff.active.observing).toBe(false);
-    for (let f = 0; f < 60; f++) {
+    for (let f = 0; f < 80; f++) {
       tickCosmicEvents(simOff, 0.05, { showCountdown: true, autoEnabled: true, autoZoom: false, rng });
     }
     expect(simOff.focusProgress).toBeLessThan(0.05);
@@ -368,15 +381,15 @@ describe('Cosmos Random-Interval Event Scheduler & Stop Control', () => {
     simOn.countdown = 0.5;
     tickCosmicEvents(simOn, 1.0, { showCountdown: true, autoEnabled: true, autoZoom: true, canAutoZoom: true, rng });
     expect(simOn.active?.observing).toBe(true);
-    for (let f = 0; f < 25; f++) {
+    for (let f = 0; f < 75; f++) {
       tickCosmicEvents(simOn, 0.05, { showCountdown: true, autoEnabled: true, autoZoom: true, rng });
     }
     expect(simOn.focusProgress).toBeGreaterThan(0.85);
     // Advance past end of event -> active clears and camera smoothly returns to Solar System
-    tickCosmicEvents(simOn, simOn.active.duration + 1, { showCountdown: true, autoEnabled: true, autoZoom: true, rng });
+    tickCosmicEvents(simOn, simOn.active.duration + 1, { showCountdown: true, autoEnabled: false, autoZoom: true, rng });
     expect(simOn.active).toBeNull();
     for (let f = 0; f < 80; f++) {
-      tickCosmicEvents(simOn, 0.05, { showCountdown: true, autoEnabled: true, autoZoom: true, rng });
+      tickCosmicEvents(simOn, 0.05, { showCountdown: true, autoEnabled: false, autoZoom: true, rng });
     }
     expect(simOn.focusProgress).toBe(0);
     expect(getSolarTelescopeTransform(simOn, 1440, 900).active).toBe(false);
@@ -388,7 +401,7 @@ describe('Cosmos Random-Interval Event Scheduler & Stop Control', () => {
     expect(simBusy.active).not.toBeNull();
     expect(simBusy.active.observing).toBe(false);
 
-    // 5. Portal avoidance keeps distant event & beacon clear of corner portals, and shockwave respects visibilityAlpha
+    // 5. Portal avoidance keeps distant event clear of corner portals; shockwave ring is suppressed in ambient view and active only when observing
     const simPortal = createCosmicEventState({ autoEnabled: true, autoZoom: false, rng });
     startCosmicEvent(simPortal, 'supernova', { observe: false, rng });
     simPortal.active.location = { sector: 'nw', x: 0.14, y: 0.16, depth: 0.5, distantScale: 0.32, yaw: 0.34, pitch: -0.22, distanceLy: 1200 };
@@ -397,9 +410,13 @@ describe('Cosmos Random-Interval Event Scheduler & Stop Control', () => {
     const nudged = getEventScreenPosition(simPortal, 1440, 900, 0, [portalPt]);
     expect(Math.hypot(nudged.restX - portalPt.x, nudged.restY - portalPt.y)).toBeGreaterThanOrEqual(115);
 
-    const distantShock = getEventShockWave(simPortal, 1440, 900, 0, [portalPt], 1.0);
+    const ambientShock = getEventShockWave(simPortal, 1440, 900, 0, [portalPt], 1.0);
+    expect(ambientShock).toEqual([0, 0, 0, 0]);
+    simPortal.active.observing = true;
+    simPortal.focusProgress = 0.85;
+    const obsShock = getEventShockWave(simPortal, 1440, 900, 0, [portalPt], 1.0);
     const hiddenShock = getEventShockWave(simPortal, 1440, 900, 0, [portalPt], 0.0);
-    expect(distantShock[3]).toBeGreaterThan(0);
+    expect(obsShock[3]).toBeGreaterThan(0);
     expect(hiddenShock).toEqual([0, 0, 0, 0]);
 
     // 6. Strict inverse-distance scaling (apparentRadius ∝ 1 / distance) & timeline scrubbing
@@ -892,9 +909,9 @@ describe('Cosmos Component & WebGL Review Regressions', () => {
       },
     });
 
-    // Deep-sky portals (Galaxy, Cosmic Web, Event Horizon) must render pure visual hit targets with zero visible text overlay
+    // Deep-sky portals (Galaxy, Cosmic Web) must render pure visual hit targets with zero visible text overlay (Black Hole Horizon is entered via Sun zoom only)
     const portalButtons = wrapper.findAll('.cosmos-sky-anomaly');
-    expect(portalButtons).toHaveLength(3);
+    expect(portalButtons).toHaveLength(2);
     expect(wrapper.findAll('.cosmos-sky-anomaly-label')).toHaveLength(0);
     for (const btn of portalButtons) {
       expect(btn.text().trim()).toBe('');
@@ -2249,10 +2266,11 @@ describe('Cosmos Component & WebGL Review Regressions', () => {
     }
     expect(cometUpLeft / cometCount).toBeGreaterThan(0.6);
 
-    // 3. Shockwave epicenter tracks camRot/parallax identically to computeEventFrame & focusActiveCosmicEvent rewinds >84%
+    // 3. Shockwave epicenter tracks camRot/parallax identically to computeEventFrame (while observing) & focusActiveCosmicEvent rewinds >84%
     const simSw = createCosmicEventState({ autoEnabled: true, autoZoom: false, rng: () => 0.4 });
-    startCosmicEvent(simSw, 'supernova', { observe: false, rng: () => 0.4 });
+    startCosmicEvent(simSw, 'supernova', { observe: true, rng: () => 0.4 });
     simSw.active.elapsed = simSw.active.duration * 0.5;
+    simSw.focusProgress = 0.6;
     const camRot = { x: 0.45, y: -0.25 };
     const parallax = { x: 0.6, y: -0.4 };
     const evFrame = computeEventFrame(simSw, 1280, 720, 0, null, 1.0, camRot, parallax);
@@ -2988,5 +3006,153 @@ describe('Cosmos Drawer Waiting Suppression, Horizontal Drag Resize & Session St
     } finally {
       Object.defineProperty(window, 'innerWidth', { value: prevInnerWidth, configurable: true });
     }
+  });
+
+  it('supports staggered multi-event concurrency, distance-correlated slower flight, Keplerian orbits & Sun-only Black Hole zoom', async () => {
+    // 1. Keplerian elliptical orbits (Sun at focus) & 11 3D natural moons
+    const mercury = PLANETS.find((p) => p.id === 'mercury');
+    const peri = keplerOrbitPoint(mercury, 0);
+    const aph = keplerOrbitPoint(mercury, Math.PI);
+    expect(Math.hypot(peri.x, peri.z, peri.y)).toBeLessThan(Math.hypot(aph.x, aph.z, aph.y));
+    const pNow = keplerPos(mercury, 1.5);
+    expect(Number.isFinite(pNow.x) && Number.isFinite(pNow.y) && Number.isFinite(pNow.z)).toBe(true);
+    const totalMoons = PLANETS.reduce((sum, p) => sum + (p.moons?.length || 0), 0);
+    expect(totalMoons).toBe(11);
+
+    // 2. Distance-correlated slower S-curve flight: Mly > ly > AU
+    const evAu = COSMIC_EVENTS.find((e) => e.id === 'comet-breakup');
+    const evLy = COSMIC_EVENTS.find((e) => e.id === 'supernova');
+    const evMly = COSMIC_EVENTS.find((e) => e.id === 'gamma-burst');
+    const dAu = computeEventDistDepth(evAu, { depth: 0.5 });
+    const dLy = computeEventDistDepth(evLy, { depth: 0.5 });
+    const dMly = computeEventDistDepth(evMly, { depth: 0.5 });
+    expect(dMly).toBeGreaterThan(dLy);
+    expect(dLy).toBeGreaterThan(dAu);
+    expect(computeEventFlightDuration(dMly, false)).toBeGreaterThan(computeEventFlightDuration(dLy, false));
+    expect(computeEventFlightDuration(dLy, false)).toBeGreaterThan(computeEventFlightDuration(dAu, false));
+    expect(computeEventFlightDuration(dMly, false)).toBeGreaterThanOrEqual(3.0);
+
+    // Mid-flight warp energy is nonzero and scales with distance depth
+    const simFlight = createCosmicEventState({ autoEnabled: true, autoZoom: false, rng: () => 0.5 });
+    startCosmicEvent(simFlight, 'gamma-burst', { observe: true, rng: () => 0.5 });
+    tickCosmicEvents(simFlight, 0.8, { showCountdown: true, autoEnabled: false, rng: () => 0.5 });
+    // After 0.8s of a ~3.2s flight, we are still smoothly approaching (NOT snapped to 1.0!)
+    expect(simFlight.focusProgress).toBeGreaterThan(0.02);
+    expect(simFlight.focusProgress).toBeLessThan(0.5);
+    expect(getFlightWarpEnergy(simFlight)).toBeGreaterThan(0.2);
+
+    // 3. Multiple staggered concurrent cosmic events (independent lifecycles, distinct types & sky sectors)
+    let seq = 0;
+    const seqRng = () => {
+      seq = (seq + 0.27) % 1;
+      return seq;
+    };
+    const simMulti = createCosmicEventState({ autoEnabled: true, autoZoom: false, rng: seqRng });
+    simMulti.countdown = 0.2;
+    tickCosmicEvents(simMulti, 0.5, { showCountdown: true, autoEnabled: true, autoZoom: false, rng: seqRng });
+    expect(simMulti.events.length).toBe(1);
+    const firstEv = simMulti.events[0];
+    // Staggered second event spawns naturally while first event is still unfolding!
+    simMulti.countdown = 0.2;
+    tickCosmicEvents(simMulti, 0.5, { showCountdown: true, autoEnabled: true, autoZoom: false, rng: seqRng });
+    expect(simMulti.events.length).toBe(2);
+    expect(simMulti.events[1].def.id).not.toBe(firstEv.def.id);
+    expect(simMulti.events[1].location.sector).not.toBe(firstEv.location.sector);
+    expect(simMulti.events[0].elapsed).toBeGreaterThan(simMulti.events[1].elapsed);
+
+    // computeEventFrames returns both events & hitTestAmbientEvent hits each independently
+    const frames = computeEventFrames(simMulti, 1440, 900, 0, null, 1.0);
+    expect(frames.length).toBe(2);
+    const hitSecond = hitTestAmbientEvent(frames, frames[1].x, frames[1].y);
+    expect(hitSecond?.uid).toBe(frames[1].uid);
+
+    // Focusing one concurrent event keeps the sibling event alive on the shared canvas
+    focusCosmicEventByUid(simMulti, frames[0].uid);
+    expect(simMulti.events.length).toBe(2);
+    expect(simMulti.active?.uid).toBe(frames[0].uid);
+    expect(simMulti.active?.observing).toBe(true);
+    // Advance flight to arrival, then unfocus: sibling event[1] must NEVER teleport to center and Solar pan direction stays anchored to event[0]
+    for (let k = 0; k < 70; k++) {
+      tickCosmicEvents(simMulti, 0.05, { showCountdown: false, autoEnabled: false, rng: seqRng });
+    }
+    const panBeforeExit = getSolarTelescopeTransform(simMulti, 1440, 900);
+    // Scrolling out below 0.62x smoothly returns to Solar System while preserving concurrent events
+    const zoomOutRes = setCosmicEventZoom(simMulti, 0.55, { allowExit: true });
+    expect(zoomOutRes.exited).toBe(true);
+    expect(simMulti.events.length).toBe(2);
+    expect(simMulti.events.some((e) => e.observing)).toBe(false);
+    // Mid-return frame: sibling event[1] stays distant (focusProgress === 0), and Solar pan keeps the exact same quadrant sign
+    tickCosmicEvents(simMulti, 0.1, { showCountdown: false, autoEnabled: false, rng: seqRng });
+    const midReturnFrames = computeEventFrames(simMulti, 1440, 900, 0, null, 1.0);
+    const siblingMid = midReturnFrames.find((f) => f.uid === frames[1].uid);
+    expect(siblingMid?.isDistant).toBe(true);
+    expect(siblingMid?.focusProgress).toBe(0);
+    const panMidReturn = getSolarTelescopeTransform(simMulti, 1440, 900);
+    expect(Math.sign(panMidReturn.offsetX)).toBe(Math.sign(panBeforeExit.offsetX));
+    expect(Math.sign(panMidReturn.offsetY)).toBe(Math.sign(panBeforeExit.offsetY));
+
+    // Cap concurrency cleanly at MAX_CONCURRENT_EVENTS
+    for (let k = 0; k < 5; k++) {
+      startCosmicEvent(simMulti, COSMIC_EVENTS[k % COSMIC_EVENTS.length].id, { observe: false, rng: seqRng });
+    }
+    expect(simMulti.events.length).toBeLessThanOrEqual(MAX_CONCURRENT_EVENTS);
+
+    // 4. CosmosPage planet focus locks camera, allows 0.8x-24x zoom, and NEVER enters Black Hole Horizon while focused on a planet
+    const focusStore = Vue.reactive({
+      agents: [{ id: 'ag-earth', name: 'EarthBot', online: true, capabilities: ['yeaft'] }],
+      currentAgent: 'ag-earth',
+      currentView: 'yeaft',
+      workbenchExpanded: false,
+      workbenchMaximized: false,
+      sessionCatalog: [],
+      sessionProjects: [],
+      yeaftProcessingSessions: {},
+      yeaftActiveTasksBySession: {},
+      messagesMap: {},
+      setUiMode: vi.fn(),
+    });
+    globalThis.Pinia = {
+      defineStore: () => () => ({}),
+      useChatStore: () => focusStore,
+      useSessionsStore: () => ({ sessionList: [], activeSessionId: null, sessionById: () => null }),
+    };
+    const { default: CosmosPageMod } = await import('../../web/components/cosmos/CosmosPage.js');
+    const wrapper = mount(CosmosPageMod, {
+      global: {
+        config: { globalProperties: { $t: (k) => k } },
+        stubs: {
+          CosmosQuickComposer: true,
+          CosmosConversationDrawer: true,
+          CosmosConstantsPopover: true,
+          CosmosEventsOverlay: true,
+          SettingsPanel: true,
+          AgentSettingsPanel: true,
+          SessionSettingsModal: true,
+        },
+      },
+    });
+    await flushPromises();
+    wrapper.vm.focusPlanet('earth', { defaultZoom: 2.4 });
+    await flushPromises();
+    expect(wrapper.vm.focusedCameraPlanetId).toBe('earth');
+    expect(wrapper.find('.cosmos-planet-focus-dock').exists()).toBe(true);
+    // Repeated zoom-in wheel events while focused on Earth zoom Earth up to 24x, staying strictly in 'solar' band
+    for (let i = 0; i < 20; i++) {
+      wrapper.vm.onStageWheel({
+        deltaY: -120,
+        preventDefault: () => {},
+        target: { closest: () => null },
+      });
+    }
+    expect(wrapper.vm.planetFocusZoom).toBeGreaterThan(10);
+    expect(wrapper.vm.planetFocusZoom).toBeLessThanOrEqual(24);
+    expect(wrapper.vm.currentBand).toBe('solar');
+
+    // Return to Sun clears planet focus cleanly
+    wrapper.vm.unfocusPlanet();
+    await flushPromises();
+    expect(wrapper.vm.focusedCameraPlanetId).toBeNull();
+    expect(wrapper.find('.cosmos-planet-focus-dock').exists()).toBe(false);
+    wrapper.unmount();
   });
 });

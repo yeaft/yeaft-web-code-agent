@@ -39,13 +39,28 @@ function smoothstep(e0, e1, x) {
 }
 
 /**
- * Populate GPU additive particle buffer matching the active WebGL cosmic event shader.
+ * Populate GPU additive particle buffer matching one or more active WebGL cosmic events.
  */
-export function fillEventGpuParticles(buf, evDraw, w, h, dpr, densityScale = 1.0) {
+export function fillEventGpuParticles(buf, evDrawOrList, w, h, dpr, densityScale = 1.0) {
+  if (!buf || !evDrawOrList || densityScale <= 0) return 0;
+  if (Array.isArray(evDrawOrList)) {
+    const live = evDrawOrList.filter((e) => e && e.alpha > 0.004);
+    if (live.length === 0) return 0;
+    let total = 0;
+    const perScale = live.length > 1 ? densityScale / Math.sqrt(live.length) : densityScale;
+    for (const ev of live) {
+      total += fillSingleEventGpuParticles(buf, total, ev, w, h, dpr, ev.observing ? densityScale : perScale);
+    }
+    return total;
+  }
+  return fillSingleEventGpuParticles(buf, 0, evDrawOrList, w, h, dpr, densityScale);
+}
+
+function fillSingleEventGpuParticles(buf, startCount, evDraw, w, h, dpr, densityScale = 1.0) {
   if (!buf || !evDraw || evDraw.alpha <= 0.004 || densityScale <= 0) return 0;
-  const maxPts = 520;
+  const maxPts = Math.min(520, Math.floor(buf.length / 7));
   const step = densityScale < 0.7 ? 2 : 1;
-  let count = 0;
+  let count = startCount;
 
   const p = evDraw.progress;
   const evT = evDraw.elapsed;
@@ -53,8 +68,9 @@ export function fillEventGpuParticles(buf, evDraw, w, h, dpr, densityScale = 1.0
   const y = evDraw.y;
   const S = evDraw.eventRadiusPx;
   const alphaMaster = evDraw.alpha;
-  const rotC = Math.cos(evDraw.angle || 0);
-  const rotS = Math.sin(evDraw.angle || 0);
+  const yawAngle = (evDraw.angle || 0) + (evDraw.viewYaw || 0) * 0.55;
+  const rotC = Math.cos(yawAngle);
+  const rotS = Math.sin(yawAngle);
   const sizeScale = Math.max(0.42, Math.min(1.42, S / 215));
 
   const birthEnv = smoothstep(0.0, 0.14, p);
@@ -381,31 +397,46 @@ export function fillEventGpuParticles(buf, evDraw, w, h, dpr, densityScale = 1.0
     }
   }
 
-  return count;
+  return count - startCount;
 }
 
 /**
- * Draw whisper-minimal observatory telescope field fiducials on the 2D HUD canvas
- * while zoomed in (`obsBlend > 0.25`).
+ * Draw whisper-minimal hover-only text label for ambient sky events (zero reticle circles).
  */
-export function drawCosmicEventHud(ctx, w, h, evDraw, centerShiftX = 0) {
-  if (!evDraw || evDraw.obsBlend <= 0.25 || evDraw.alpha <= 0.05) return;
-  const a = Math.max(0, (evDraw.obsBlend - 0.25) / 0.75) * 0.16 * evDraw.alpha;
-  const cx = w * 0.5 + centerShiftX * 0.55;
-  const cy = h * 0.5;
-  const rad = Math.min(w, h) * 0.42;
+export function drawCosmicEventHud(ctx, w, h, evDrawOrList, _centerShiftX = 0, opts = {}) {
+  const list = Array.isArray(evDrawOrList) ? evDrawOrList : (evDrawOrList ? [evDrawOrList] : []);
+  if (list.length === 0) return;
+  const hoveredUid = opts?.hoveredUid || null;
+  if (!hoveredUid) return;
+  const ev = list.find((e) => e && (e.uid === hoveredUid || e.id === hoveredUid) && !e.observing && e.alpha > 0.08);
+  if (!ev) return;
+
+  const label = opts?.formatLabel ? opts.formatLabel(ev) : '';
+  if (!label) return;
+  const x = ev.x;
+  const y = ev.y + Math.max(22, Math.min(64, ev.eventRadiusPx * 0.85)) + 14;
   ctx.save();
-  ctx.strokeStyle = `rgba(186, 218, 255, ${a.toFixed(3)})`;
-  ctx.lineWidth = 1;
-  for (let i = 0; i < 4; i++) {
-    const ang = i * Math.PI * 0.5;
-    const r0 = rad * 0.94;
-    const r1 = rad * 0.985;
-    ctx.beginPath();
-    ctx.moveTo(cx + Math.cos(ang) * r0, cy + Math.sin(ang) * r0);
-    ctx.lineTo(cx + Math.cos(ang) * r1, cy + Math.sin(ang) * r1);
-    ctx.stroke();
+  ctx.font = '500 11.5px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
+  const tw = ctx.measureText(label).width;
+  const px = 10;
+  const boxW = tw + px * 2;
+  const boxH = 22;
+  const bx = Math.max(12, Math.min(w - boxW - 12, x - boxW * 0.5));
+  const by = Math.max(12, Math.min(h - boxH - 12, y - boxH * 0.5));
+
+  ctx.fillStyle = 'rgba(7, 13, 28, 0.72)';
+  ctx.beginPath();
+  if (typeof ctx.roundRect === 'function') {
+    ctx.roundRect(bx, by, boxW, boxH, 11);
+  } else {
+    ctx.rect(bx, by, boxW, boxH);
   }
+  ctx.fill();
+
+  ctx.fillStyle = 'rgba(232, 242, 255, 0.94)';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(label, bx + boxW * 0.5, by + boxH * 0.5 + 0.5);
   ctx.restore();
 }
 

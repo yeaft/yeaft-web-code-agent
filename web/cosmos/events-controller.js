@@ -1,23 +1,27 @@
 /**
- * Yeaft Cosmos — Inverse-Distance Cosmic Event Scheduler, Physical Telemetry & Telescope Controller
+ * Yeaft Cosmos — Multi-Event Staggered Scheduler, Distance-Correlated Cinematic Approach
+ * & Shared-Canvas Telescope Controller
  *
  * Guarantees:
+ * - Multiple cosmic events (up to MAX_CONCURRENT_EVENTS = 3) can unfold simultaneously on
+ *   independent, staggered timelines in non-overlapping sky quadrants (never starting all at once).
  * - Strict inverse-distance scaling (`apparentRadius ∝ 1 / effDist`, `distantScale ∝ 1 / distanceLy`):
- *   farther events appear proportionally smaller and more locked to the deep skybox; zooming
- *   the telescope halves effective optical distance and doubles apparent radius smoothly on a
- *   logarithmic approach curve.
- * - Events never overwrite the foreground Solar System: spontaneous events emerge softly in
- *   peripheral deep-sky quadrants behind the planets (authentic 3D depth occlusion), with
- *   smooth precursor build-up and graceful afterglow fade-out.
- * - Random events default to non-intrusive deep-sky unfolding (`autoZoom: false`) so they
- *   never abruptly hijack the user's Solar System workspace; clicking the event, its subtle
- *   beacon, or the top Observe button smoothly slews the telescope in and returns on exit.
+ *   farther events appear proportionally smaller and more locked to the deep skybox.
+ * - Slower, distance-correlated S-curve approach (`easeInOutQuint`): local AU events glide in
+ *   ~2.0s, galactic ly events in ~2.8s, extragalactic Mly events in ~3.3s with proportional
+ *   deep-space star-warp and continuous logarithmic distance closure.
+ * - Shared canvas with the Solar System: flying to an event smoothly pans the Solar System aside
+ *   on the exact same canvas (no black-screen cut), supports 360° 3D drag orbit inspection, and
+ *   scrolling out smoothly flies back to the Solar System while active events keep unfolding.
  */
 
 export const MIN_EVENT_INTERVAL_SEC = 75;
 export const MAX_EVENT_INTERVAL_SEC = 165;
 export const INITIAL_EVENT_MIN_SEC = 45;
 export const INITIAL_EVENT_MAX_SEC = 95;
+export const OVERLAP_EVENT_MIN_SEC = 18;
+export const OVERLAP_EVENT_MAX_SEC = 42;
+export const MAX_CONCURRENT_EVENTS = 3;
 
 export const EVENT_DISTANT_MIN_SCALE = 0.16;
 export const EVENT_DISTANT_MAX_SCALE = 0.44;
@@ -25,16 +29,17 @@ export const EVENT_CAMERA_RETURN_EPS = 0.015;
 
 const DIST_NORM_MIN = 2.2;
 const DIST_NORM_MAX = 6.0;
-const DIST_SCALE_NUMERATOR = DIST_NORM_MIN * EVENT_DISTANT_MAX_SCALE; // 0.968 -> exact 0.44 at d=2.2, 0.161 at d=6.0
+const DIST_SCALE_NUMERATOR = DIST_NORM_MIN * EVENT_DISTANT_MAX_SCALE; // 0.968 -> 0.44 at d=2.2, 0.161 at d=6.0
 const DIST_LY_PER_NORM = 520;
 
 export const COSMIC_EVENTS = Object.freeze([
   {
     id: 'supernova',
     eventType: 0,
+    layer: 'deep',
     swatch: '#78d2ff',
     glowRgb: [0.42, 0.80, 1.0],
-    duration: 21,
+    duration: 24,
     defaultZoom: 1.55,
     hasShock: true,
     hasLens: false,
@@ -48,9 +53,10 @@ export const COSMIC_EVENTS = Object.freeze([
   {
     id: 'planet-shatter',
     eventType: 1,
+    layer: 'local',
     swatch: '#ff8a4c',
     glowRgb: [1.0, 0.56, 0.24],
-    duration: 20,
+    duration: 22,
     defaultZoom: 1.65,
     hasShock: true,
     hasLens: false,
@@ -64,9 +70,10 @@ export const COSMIC_EVENTS = Object.freeze([
   {
     id: 'blackhole-birth',
     eventType: 2,
+    layer: 'deep',
     swatch: '#f6ba64',
     glowRgb: [1.0, 0.72, 0.36],
-    duration: 22,
+    duration: 25,
     defaultZoom: 1.60,
     hasShock: true,
     hasLens: true,
@@ -80,9 +87,10 @@ export const COSMIC_EVENTS = Object.freeze([
   {
     id: 'kilonova',
     eventType: 3,
+    layer: 'deep',
     swatch: '#9cb8ff',
     glowRgb: [0.58, 0.84, 1.0],
-    duration: 21,
+    duration: 24,
     defaultZoom: 1.55,
     hasShock: true,
     hasLens: true,
@@ -96,9 +104,10 @@ export const COSMIC_EVENTS = Object.freeze([
   {
     id: 'solar-flare',
     eventType: 4,
+    layer: 'deep',
     swatch: '#ffad48',
     glowRgb: [1.0, 0.62, 0.22],
-    duration: 19,
+    duration: 21,
     defaultZoom: 1.50,
     hasShock: false,
     hasLens: false,
@@ -112,9 +121,10 @@ export const COSMIC_EVENTS = Object.freeze([
   {
     id: 'gamma-burst',
     eventType: 5,
+    layer: 'deep',
     swatch: '#c89bff',
     glowRgb: [0.74, 0.56, 1.0],
-    duration: 20,
+    duration: 23,
     defaultZoom: 1.50,
     hasShock: true,
     hasLens: false,
@@ -128,9 +138,10 @@ export const COSMIC_EVENTS = Object.freeze([
   {
     id: 'tidal-disruption',
     eventType: 6,
+    layer: 'deep',
     swatch: '#ff9668',
     glowRgb: [1.0, 0.58, 0.30],
-    duration: 21,
+    duration: 24,
     defaultZoom: 1.60,
     hasShock: false,
     hasLens: true,
@@ -144,9 +155,10 @@ export const COSMIC_EVENTS = Object.freeze([
   {
     id: 'comet-breakup',
     eventType: 7,
+    layer: 'local',
     swatch: '#7ceeff',
     glowRgb: [0.46, 0.88, 1.0],
-    duration: 19,
+    duration: 21,
     defaultZoom: 1.50,
     hasShock: false,
     hasLens: false,
@@ -161,8 +173,6 @@ export const COSMIC_EVENTS = Object.freeze([
 
 /**
  * 8-sector peripheral deep-sky ring surrounding the Solar System (clockwise from North).
- * Keeps distant phenomena clearly outside the central solar ecliptic and away from
- * the top-center event pill, top-right corner actions, and deep-sky portals.
  */
 const DISTANT_SECTORS = Object.freeze([
   { id: 'n',  x: 0.50, y: 0.16, jitterX: 0.08, jitterY: 0.025, yaw:  0.00, pitch: -0.26, azDeg:   0 },
@@ -175,6 +185,8 @@ const DISTANT_SECTORS = Object.freeze([
   { id: 'nw', x: 0.29, y: 0.17, jitterX: 0.05, jitterY: 0.03,  yaw:  0.34, pitch: -0.22, azDeg: 315 },
 ]);
 
+let eventUidSeq = 1;
+
 function clamp(v, lo, hi) {
   return Math.max(lo, Math.min(hi, v));
 }
@@ -184,31 +196,60 @@ function smoothstep(e0, e1, x) {
   return t * t * (3 - 2 * t);
 }
 
-function easeOutCubic(t) {
-  const u = 1 - clamp(t, 0, 1);
-  return 1 - u * u * u;
+/** Smooth cubic S-curve for immediate yet graceful "approaching from afar" camera flight. */
+export function easeInOutQuint(t) {
+  const x = clamp(t, 0, 1);
+  return x < 0.5
+    ? 4 * x * x * x
+    : 1 - Math.pow(-2 * x + 2, 3) / 2;
+}
+
+/**
+ * Compute normalized cosmological distance depth in [0.18, 1.0]:
+ * - Local AU events: ~0.22 - 0.38 (closer, faster approach, stronger parallax)
+ * - Galactic ly events: ~0.54 - 0.76 (mid-depth Milky Way voyage)
+ * - Extragalactic Mly events: ~0.78 - 1.00 (longest deep-space approach & star-warp)
+ */
+export function computeEventDistDepth(def, location) {
+  const localDepth = clamp(typeof location?.depth === 'number' ? location.depth : 0.5, 0, 1);
+  if (def?.unit === 'AU') return Number((0.20 + localDepth * 0.18).toFixed(3));
+  if (def?.unit === 'Mly') return Number((0.78 + localDepth * 0.22).toFixed(3));
+  return Number((0.52 + localDepth * 0.24).toFixed(3));
+}
+
+/**
+ * Distance-correlated flight duration in seconds.
+ * Farther phenomena take noticeably longer to fly to so the user feels traversing real space.
+ */
+export function computeEventFlightDuration(distDepth, returning = false) {
+  const d = clamp(Number(distDepth) || 0.55, 0.15, 1.0);
+  if (returning) return Number((1.35 + d * 0.90).toFixed(2));
+  return Number((1.65 + d * 1.70).toFixed(2));
 }
 
 /**
  * Sample a random 3D deep-sky location around the outer skybox (never overlapping the
- * central Solar System). Enforces strict inverse-distance scaling (`distantScale ∝ 1 / distanceLy`).
+ * central Solar System or any excluded sectors). Enforces strict inverse-distance scaling.
  */
-export function pickRandomDistantLocation(excludeSectorId = null, rng = Math.random) {
-  const n = DISTANT_SECTORS.length;
-  let idx = Math.floor(rng() * n) % n;
-  if (excludeSectorId && DISTANT_SECTORS[idx].id === excludeSectorId) {
-    idx = (idx + 1 + Math.floor(rng() * (n - 1))) % n;
-  }
-  const sector = DISTANT_SECTORS[idx];
+export function pickRandomDistantLocation(excludeSectors = null, rng = Math.random) {
+  const excluded = new Set(
+    Array.isArray(excludeSectors)
+      ? excludeSectors.filter(Boolean)
+      : (excludeSectors ? [excludeSectors] : []),
+  );
+  const available = DISTANT_SECTORS.filter((s) => !excluded.has(s.id));
+  const pool = available.length > 0 ? available : DISTANT_SECTORS;
+  const sector = pool[Math.floor(rng() * pool.length) % pool.length];
+
   const jx = (rng() * 2 - 1) * sector.jitterX;
   const jy = (rng() * 2 - 1) * sector.jitterY;
   const x = clamp(sector.x + jx, 0.08, 0.92);
   const y = clamp(sector.y + jy, 0.11, 0.89);
 
-  // Sample depth with a slight mid-far bias so spontaneous events feel poised and unobtrusive.
+  // Slight mid-far bias so spontaneous events feel poised and unobtrusive.
   const rawDepth = clamp(rng(), 0, 1);
   const depth = Math.pow(rawDepth, 0.85);
-  // Physical normalized distance d in [2.2, 6.0]: apparent scale = 0.968 / d (strict 1/d law!).
+  // Physical normalized distance d in [2.2, 6.0]: apparent scale = 0.968 / d (strict 1/d law).
   const distNorm = DIST_NORM_MIN + depth * (DIST_NORM_MAX - DIST_NORM_MIN);
   const distantScale = Number(clamp(DIST_SCALE_NUMERATOR / distNorm, EVENT_DISTANT_MIN_SCALE, EVENT_DISTANT_MAX_SCALE).toFixed(3));
   const distanceLy = Math.round(distNorm * DIST_LY_PER_NORM);
@@ -258,14 +299,20 @@ export function formatEventPhysicalDistance(def, effDist, isEn = false) {
   return formatEventDistance(val, isEn);
 }
 
-export function pickRandomEventIndex(excludeIndex = -1, rng = Math.random) {
+export function pickRandomEventIndex(excludeIndices = -1, rng = Math.random) {
   const n = COSMIC_EVENTS.length;
   if (n <= 1) return 0;
-  let idx = Math.floor(rng() * n) % n;
-  if (idx === excludeIndex) {
-    idx = (idx + 1 + Math.floor(rng() * (n - 1))) % n;
+  const excluded = new Set(
+    Array.isArray(excludeIndices)
+      ? excludeIndices
+      : (typeof excludeIndices === 'number' && excludeIndices >= 0 ? [excludeIndices] : []),
+  );
+  const candidates = [];
+  for (let i = 0; i < n; i++) {
+    if (!excluded.has(i)) candidates.push(i);
   }
-  return idx;
+  const pool = candidates.length > 0 ? candidates : Array.from({ length: n }, (_, i) => i);
+  return pool[Math.floor(rng() * pool.length) % pool.length];
 }
 
 export function pickRandomCooldownSec(minSec = MIN_EVENT_INTERVAL_SEC, maxSec = MAX_EVENT_INTERVAL_SEC, rng = Math.random) {
@@ -281,24 +328,64 @@ export function formatEventCountdown(sec) {
   return `T-${String(m).padStart(2, '0')}:${String(r).padStart(2, '0')}`;
 }
 
+function syncActivePointer(sim) {
+  if (!Array.isArray(sim.events)) sim.events = [];
+  const focused = sim.events.find((e) => e.observing && !e.exiting) || null;
+  if (focused) {
+    sim.active = focused;
+    sim.focusedUid = focused.uid;
+    return focused;
+  }
+  const live = sim.events.filter((e) => !e.exiting);
+  sim.active = live.length > 0 ? live[live.length - 1] : null;
+  sim.focusedUid = null;
+  return sim.active;
+}
+
 export function createCosmicEventState(opts = {}) {
   const rng = opts.rng || Math.random;
   const firstIdx = pickRandomEventIndex(-1, rng);
   return {
+    events: [],
     active: null,
+    focusedUid: null,
+    lastFocusedUid: null,
     nextIdx: firstIdx,
     lastPlayedIdx: -1,
     lastSector: null,
     countdown: pickRandomCooldownSec(INITIAL_EVENT_MIN_SEC, INITIAL_EVENT_MAX_SEC, rng),
     autoEnabled: opts.autoEnabled !== false,
     autoZoom: opts.autoZoom === true,
-    // Smooth telescope camera transition state (returns cleanly to 0 / 1.0 after observation)
+    // Smooth distance-correlated S-curve camera flight state
+    flightT: 0,
     focusProgress: 0,
     fovZoom: 1.0,
     camYawOffset: 0,
     camPitchOffset: 0,
     lastLocation: null,
+    lastDistDepth: 0.6,
+    hoveredUid: null,
+    exitCooldownUntil: 0,
   };
+}
+
+function getExcludedIndices(sim) {
+  const indices = [];
+  if (sim.lastPlayedIdx >= 0) indices.push(sim.lastPlayedIdx);
+  for (const ev of (sim.events || [])) {
+    const i = COSMIC_EVENTS.findIndex((c) => c.id === ev.def.id);
+    if (i >= 0) indices.push(i);
+  }
+  return indices;
+}
+
+function getExcludedSectors(sim) {
+  const sectors = [];
+  if (sim.lastSector) sectors.push(sim.lastSector);
+  for (const ev of (sim.events || [])) {
+    if (ev.location?.sector) sectors.push(ev.location.sector);
+  }
+  return sectors;
 }
 
 export function startCosmicEvent(
@@ -306,85 +393,191 @@ export function startCosmicEvent(
   eventId = null,
   { observe = false, autoZoom = null, rng = Math.random } = {},
 ) {
+  if (!Array.isArray(sim.events)) sim.events = [];
   let idx = eventId ? COSMIC_EVENTS.findIndex((e) => e.id === eventId) : sim.nextIdx;
-  if (idx < 0 || idx >= COSMIC_EVENTS.length) idx = pickRandomEventIndex(sim.lastPlayedIdx, rng);
+  if (idx < 0 || idx >= COSMIC_EVENTS.length) idx = pickRandomEventIndex(getExcludedIndices(sim), rng);
   const def = COSMIC_EVENTS[idx];
   const shouldFocus = Boolean(observe);
 
-  // Clicking to focus an already-running distant event slews smoothly to its existing coordinates
-  if (sim.active && sim.active.def.id === def.id && shouldFocus) {
-    sim.active.observing = true;
-    sim.active.paused = false;
-    sim.active.targetZoom = Math.max(sim.active.targetZoom, def.defaultZoom);
-    if (sim.active.elapsed / sim.active.duration > 0.84) {
-      sim.active.elapsed = sim.active.duration * 0.14;
+  // Focusing an already-running event flies smoothly to its existing coordinates without restarting others
+  const existing = sim.events.find((e) => !e.exiting && e.def.id === def.id);
+  if (existing) {
+    if (shouldFocus) {
+      for (const other of sim.events) {
+        if (other !== existing) other.observing = false;
+      }
+      existing.observing = true;
+      existing.paused = false;
+      existing.targetZoom = Math.max(existing.targetZoom || 1.0, def.defaultZoom);
+      if (existing.elapsed / existing.duration > 0.84) {
+        existing.elapsed = existing.duration * 0.14;
+      }
+      sim.lastLocation = existing.location;
+      sim.lastDistDepth = existing.distDepth;
+      sim.lastFocusedUid = existing.uid;
     }
-    return sim.active;
+    syncActivePointer(sim);
+    return existing;
   }
 
-  const location = pickRandomDistantLocation(sim.lastSector, rng);
+  // Enforce concurrency cap by gracefully evicting the oldest non-observed ambient event
+  if (sim.events.length >= MAX_CONCURRENT_EVENTS) {
+    const dropIdx = sim.events.findIndex((e) => !e.observing);
+    if (dropIdx >= 0) sim.events.splice(dropIdx, 1);
+  }
+
+  const location = pickRandomDistantLocation(getExcludedSectors(sim), rng);
   sim.lastPlayedIdx = idx;
   sim.lastSector = location.sector;
-  sim.lastLocation = location;
-  sim.nextIdx = pickRandomEventIndex(idx, rng);
-  sim.countdown = pickRandomCooldownSec(MIN_EVENT_INTERVAL_SEC, MAX_EVENT_INTERVAL_SEC, rng);
   const effectiveObserve = shouldFocus || (autoZoom === true);
-  const ambientDist = def.obsDist / Math.max(location.distantScale, 0.1);
+  if (effectiveObserve) {
+    for (const other of sim.events) other.observing = false;
+    sim.lastLocation = location;
+  } else if (!sim.lastLocation) {
+    sim.lastLocation = location;
+  }
 
-  sim.active = {
+  const ambientDist = def.obsDist / Math.max(location.distantScale, 0.1);
+  const distDepth = computeEventDistDepth(def, location);
+  const flightDuration = computeEventFlightDuration(distDepth, false);
+  if (effectiveObserve) sim.lastDistDepth = distDepth;
+
+  const instance = {
+    uid: `ev_${eventUidSeq++}`,
     def,
     location,
     elapsed: 0.01,
     duration: def.duration,
     paused: false,
+    zoom: effectiveObserve ? def.defaultZoom : 1.0,
     targetZoom: def.defaultZoom,
     observing: effectiveObserve,
     ambientDist,
     effDist: ambientDist,
+    distDepth,
+    flightDuration,
     angle: def.baseAngle + (effectiveObserve ? 0 : (rng() - 0.5) * 0.42),
     seed: Number(rng().toFixed(4)),
+    viewYaw: 0,
+    viewPitch: 0,
+    targetViewYaw: 0,
+    targetViewPitch: 0,
+    exitFade: 1.0,
+    exiting: false,
   };
-  return sim.active;
+
+  sim.events.push(instance);
+  if (effectiveObserve) sim.lastFocusedUid = instance.uid;
+  sim.nextIdx = pickRandomEventIndex(getExcludedIndices(sim), rng);
+  // Schedule next staggered event (shorter overlap window if below concurrency cap)
+  sim.countdown = sim.events.length < MAX_CONCURRENT_EVENTS
+    ? pickRandomCooldownSec(OVERLAP_EVENT_MIN_SEC, OVERLAP_EVENT_MAX_SEC, rng)
+    : pickRandomCooldownSec(MIN_EVENT_INTERVAL_SEC, MAX_EVENT_INTERVAL_SEC, rng);
+  syncActivePointer(sim);
+  return instance;
+}
+
+/** Slew/fly the camera to observe a specific concurrent event by UID (or current primary active). */
+export function focusCosmicEventByUid(sim, uid = null) {
+  if (!Array.isArray(sim.events) || sim.events.length === 0) return null;
+  const target = uid
+    ? sim.events.find((e) => e.uid === uid && !e.exiting)
+    : (sim.active && !sim.active.exiting ? sim.active : sim.events[sim.events.length - 1]);
+  if (!target) return null;
+  for (const other of sim.events) {
+    if (other !== target) other.observing = false;
+  }
+  target.observing = true;
+  target.paused = false;
+  target.targetZoom = Math.max(target.targetZoom || 1.0, target.def.defaultZoom);
+  if (target.duration > 0 && target.elapsed / target.duration > 0.84) {
+    target.elapsed = target.duration * 0.14;
+  }
+  sim.lastLocation = target.location;
+  sim.lastDistDepth = target.distDepth;
+  sim.lastFocusedUid = target.uid;
+  syncActivePointer(sim);
+  return target;
 }
 
 /** Slew the telescope in to observe the currently unfolding distant event. */
 export function focusActiveCosmicEvent(sim) {
-  if (!sim.active) return null;
-  sim.active.observing = true;
-  sim.active.paused = false;
-  sim.active.targetZoom = Math.max(sim.active.targetZoom || 1.0, sim.active.def.defaultZoom);
-  if (sim.active.duration > 0 && sim.active.elapsed / sim.active.duration > 0.84) {
-    sim.active.elapsed = sim.active.duration * 0.14;
-  }
-  return sim.active;
+  return focusCosmicEventByUid(sim, sim.active?.uid || null);
 }
 
-/** Pull camera smoothly back to the Solar System while letting the distant event finish in place. */
+/** Pull camera smoothly back to the Solar System while letting all active events finish in place. */
 export function unfocusCosmicEvent(sim) {
-  if (!sim.active || !sim.active.observing) return false;
-  sim.active.observing = false;
-  sim.active.paused = false;
+  const focused = (sim.events || []).find((e) => e.observing);
+  if (!focused) return false;
+  focused.observing = false;
+  focused.paused = false;
+  focused.targetViewYaw = 0;
+  focused.targetViewPitch = 0;
+  sim.exitCooldownUntil = Date.now() + 320;
+  syncActivePointer(sim);
   return true;
 }
 
-/** Immediately stop any running/observed cosmic event and smoothly return camera to the Solar System. */
-export function stopCosmicEvent(sim, { rng = Math.random } = {}) {
-  const wasActive = Boolean(sim.active);
+/** Immediately stop running/observed cosmic event(s) and smoothly return camera to the Solar System. */
+export function stopCosmicEvent(sim, { uid = null, rng = Math.random } = {}) {
+  if (!Array.isArray(sim.events)) sim.events = [];
+  if (uid) {
+    const idx = sim.events.findIndex((e) => e.uid === uid);
+    if (idx < 0) return false;
+    sim.events.splice(idx, 1);
+    syncActivePointer(sim);
+    return true;
+  }
+  const wasActive = sim.events.length > 0 || Boolean(sim.active);
+  sim.events = [];
   sim.active = null;
+  sim.focusedUid = null;
+  sim.lastFocusedUid = null;
+  sim.hoveredUid = null;
   sim.nextIdx = pickRandomEventIndex(sim.lastPlayedIdx, rng);
   sim.countdown = pickRandomCooldownSec(MIN_EVENT_INTERVAL_SEC, MAX_EVENT_INTERVAL_SEC, rng);
   return wasActive;
 }
 
-export function setCosmicEventZoom(sim, zoom) {
-  if (!sim.active) return;
-  sim.active.targetZoom = clamp(Number(zoom) || 1.0, 0.75, 3.4);
+export function setCosmicEventZoom(sim, zoom, { allowExit = false } = {}) {
+  const target = (sim.events || []).find((e) => e.observing) || sim.active;
+  if (!target) return { exited: false };
+  const val = Number(zoom);
+  if (allowExit && Number.isFinite(val) && val < 0.62) {
+    unfocusCosmicEvent(sim);
+    return { exited: true };
+  }
+  target.targetZoom = clamp(Number.isFinite(val) ? val : 1.0, 0.55, 4.5);
+  return { exited: false };
+}
+
+export function setCosmicEventViewAngles(sim, yaw, pitch) {
+  const target = (sim.events || []).find((e) => e.observing) || sim.active;
+  if (!target) return;
+  target.targetViewYaw = Number(yaw) || 0;
+  target.targetViewPitch = clamp(Number(pitch) || 0, -0.88, 0.88);
+}
+
+export function resetCosmicEventView(sim) {
+  const target = (sim.events || []).find((e) => e.observing) || sim.active;
+  if (!target) return;
+  target.targetViewYaw = 0;
+  target.targetViewPitch = 0;
+  target.targetZoom = target.def.defaultZoom;
 }
 
 export function scrubCosmicEvent(sim, frac) {
-  if (!sim.active) return;
+  const target = (sim.events || []).find((e) => e.observing) || sim.active;
+  if (!target) return;
   const clamped = clamp(Number(frac) || 0, 0.005, 0.99);
-  sim.active.elapsed = clamped * sim.active.duration;
+  target.elapsed = clamped * target.duration;
+}
+
+export function getFlightWarpEnergy(sim) {
+  const t = clamp(sim?.flightT || 0, 0, 1);
+  if (t <= 0.01 || t >= 0.99) return 0;
+  const distDepth = clamp(sim?.lastDistDepth ?? 0.6, 0.15, 1.0);
+  return Math.sin(t * Math.PI) * (0.14 + 0.52 * distDepth);
 }
 
 export function tickCosmicEvents(
@@ -396,88 +589,132 @@ export function tickCosmicEvents(
     autoZoom = sim.autoZoom === true,
     canAutoZoom = true,
     cameraDt = dt,
+    reducedMotion = false,
     rng = Math.random,
   } = {},
 ) {
+  if (!Array.isArray(sim.events)) sim.events = [];
   sim.autoEnabled = Boolean(autoEnabled);
   sim.autoZoom = Boolean(autoZoom);
 
-  if (sim.active) {
-    if (!sim.active.paused) {
-      sim.active.elapsed += dt;
-      // Single-shot completion: finish naturally, release telescope back to Solar System, and enter quiet cooldown.
-      if (sim.active.elapsed >= sim.active.duration) {
-        sim.active = null;
-        sim.nextIdx = pickRandomEventIndex(sim.lastPlayedIdx, rng);
-        sim.countdown = pickRandomCooldownSec(MIN_EVENT_INTERVAL_SEC, MAX_EVENT_INTERVAL_SEC, rng);
-      }
+  // 1. Tick every concurrent event independently
+  const remaining = [];
+  let finishedAny = false;
+  for (const ev of sim.events) {
+    if (!ev.paused) {
+      ev.elapsed += dt;
     }
-  } else if (showCountdown && autoEnabled) {
+    if (ev.elapsed >= ev.duration) {
+      finishedAny = true;
+      continue;
+    }
+    ev.zoom += (ev.targetZoom - ev.zoom) * Math.min(1, dt * 4.8);
+    ev.viewYaw += ((ev.targetViewYaw || 0) - (ev.viewYaw || 0)) * Math.min(1, dt * 6.5);
+    ev.viewPitch += ((ev.targetViewPitch || 0) - (ev.viewPitch || 0)) * Math.min(1, dt * 6.5);
+    remaining.push(ev);
+  }
+  sim.events = remaining;
+  if (finishedAny) {
+    sim.nextIdx = pickRandomEventIndex(getExcludedIndices(sim), rng);
+    if (sim.events.length === 0) {
+      sim.countdown = pickRandomCooldownSec(MIN_EVENT_INTERVAL_SEC, MAX_EVENT_INTERVAL_SEC, rng);
+    }
+  }
+
+  // 2. Staggered spontaneous spawning (continues even while 1..2 events are already live!)
+  if (showCountdown && autoEnabled && sim.events.length < MAX_CONCURRENT_EVENTS) {
     sim.countdown -= dt;
     if (sim.countdown <= 0) {
+      const alreadyObserving = sim.events.some((e) => e.observing);
       startCosmicEvent(sim, null, {
-        observe: Boolean(autoZoom && canAutoZoom),
+        observe: Boolean(!alreadyObserving && autoZoom && canAutoZoom),
         rng,
       });
     }
   }
 
-  const camStep = Math.max(0, Number(cameraDt) || 0);
-  const isObserving = Boolean(sim.active && sim.active.observing);
-  const goalFocus = isObserving ? 1.0 : 0.0;
-  const focusRate = isObserving ? 3.0 : 2.5;
-  sim.focusProgress += (goalFocus - sim.focusProgress) * Math.min(1, camStep * focusRate);
-  if (Math.abs(sim.focusProgress - goalFocus) < 0.002) {
-    sim.focusProgress = goalFocus;
-  }
+  const focused = sim.events.find((e) => e.observing) || null;
+  syncActivePointer(sim);
 
-  const loc = sim.active?.location || sim.lastLocation;
-  const goalZoom = isObserving ? sim.active.targetZoom : 1.0;
-  sim.fovZoom += (goalZoom - sim.fovZoom) * Math.min(1, camStep * (isObserving ? 3.8 : 3.2));
+  // 3. Slower, distance-correlated S-curve camera flight
+  const camStep = Math.max(0, Number(cameraDt) || 0);
+  const isObserving = Boolean(focused);
+  const activeDepth = focused?.distDepth ?? sim.lastDistDepth ?? 0.6;
+  const flightDur = reducedMotion
+    ? 0.22
+    : computeEventFlightDuration(activeDepth, !isObserving);
+
+  const prevT = clamp(sim.flightT || 0, 0, 1);
+  if (isObserving) {
+    sim.flightT = Math.min(1, prevT + camStep / Math.max(flightDur, 0.05));
+  } else {
+    sim.flightT = Math.max(0, prevT - camStep / Math.max(flightDur, 0.05));
+  }
+  sim.focusProgress = easeInOutQuint(sim.flightT);
+  if (sim.flightT <= 0.001) {
+    sim.focusProgress = 0;
+    if (!isObserving) sim.lastFocusedUid = null;
+  }
+  if (sim.flightT >= 0.999) sim.focusProgress = 1;
+
+  const f = sim.focusProgress;
+  const loc = focused?.location || sim.lastLocation;
+  const goalZoom = isObserving ? focused.targetZoom : 1.0;
+  sim.fovZoom += (goalZoom - sim.fovZoom) * Math.min(1, camStep * (isObserving ? 3.2 : 3.4));
 
   const goalYaw = isObserving && loc ? loc.yaw : 0;
   const goalPitch = isObserving && loc ? loc.pitch : 0;
-  sim.camYawOffset += (goalYaw - sim.camYawOffset) * Math.min(1, camStep * 3.1);
-  sim.camPitchOffset += (goalPitch - sim.camPitchOffset) * Math.min(1, camStep * 3.1);
+  sim.camYawOffset = goalYaw * f;
+  sim.camPitchOffset = goalPitch * f;
 
-  if (sim.active) {
-    const f = easeOutCubic(sim.focusProgress || 0);
-    const distantScale = typeof loc?.distantScale === 'number' ? loc.distantScale : 0.28;
-    const ambientDist = sim.active.def.obsDist / Math.max(distantScale, 0.1);
-    const focusedDist = sim.active.def.obsDist / Math.max(0.75, sim.fovZoom || 1.0);
-    sim.active.ambientDist = ambientDist;
-    sim.active.effDist = Math.exp(
-      Math.log(Math.max(ambientDist, 0.2)) * (1 - f) + Math.log(Math.max(focusedDist, 0.2)) * f,
-    );
+  // 4. Update each event's effective optical distance (logarithmic inverse-distance approach)
+  for (const ev of sim.events) {
+    const distantScale = typeof ev.location?.distantScale === 'number' ? ev.location.distantScale : 0.28;
+    const ambientDist = ev.def.obsDist / Math.max(distantScale, 0.1);
+    ev.ambientDist = ambientDist;
+    if (ev.observing) {
+      const focusedDist = ev.def.obsDist / Math.max(0.55, ev.zoom || sim.fovZoom || 1.0);
+      ev.effDist = Math.exp(
+        Math.log(Math.max(ambientDist, 0.2)) * (1 - f) + Math.log(Math.max(focusedDist, 0.2)) * f,
+      );
+    } else {
+      ev.effDist = ambientDist;
+    }
   }
 }
 
 /**
- * Compute viewport coordinates and strict inverse-distance perspective scale for the active event.
- * - At `focusProgress === 0`: `scale === distantScale = obsDist / ambientDist`, strictly inversely
- *   proportional to distance (`scale(2d) = 0.5 * scale(d)`).
- * - As `focusProgress -> 1`: effective optical distance interpolates logarithmically to
- *   `obsDist / fovZoom`, gliding the phenomenon smoothly to the telescope center.
+ * Compute viewport coordinates and strict inverse-distance perspective scale for a specific event.
  */
-export function getEventScreenPosition(sim, w, h, centerShiftX = 0, avoidPoints = null, camRot = null, parallax = null) {
-  if (!sim.active) return null;
-  const def = sim.active.def;
-  const loc = sim.active.location || def.anchor;
+function computeSingleEventPosition(sim, ev, w, h, centerShiftX = 0, avoidPoints = null, camRot = null, parallax = null, solarZoom = 1.0) {
+  if (!ev) return null;
+  const def = ev.def;
+  const loc = ev.location || def.anchor;
   const safeW = Math.max(w || 1, 1);
   const safeH = Math.max(h || 1, 1);
   const isCompact = safeW < 768 || Math.min(safeW, safeH) < 600;
-  const f = easeOutCubic(sim.focusProgress || 0);
+  const isFocused = Boolean(
+    ev.observing
+    || ((sim.focusProgress || 0) > 0 && (sim.lastFocusedUid ? ev.uid === sim.lastFocusedUid : ev === sim.active)),
+  );
+  const f = isFocused ? clamp(sim.focusProgress || 0, 0, 1) : 0;
+  const globalObs = clamp(sim.focusProgress || 0, 0, 1);
 
   const distantScale = typeof loc.distantScale === 'number' ? loc.distantScale : 0.30;
-  const focusedScale = Math.max(0.75, sim.fovZoom || 1.0);
+  const focusedScale = Math.max(0.55, (isFocused ? sim.fovZoom : ev.zoom) || 1.0);
   const ambientDist = (def.obsDist || 1.6) / Math.max(distantScale, 0.1);
   const focusedDist = (def.obsDist || 1.6) / focusedScale;
-  // Exact logarithmic inverse-distance interpolation: equals distantScale at f=0 and focusedScale at f=1.
-  const effDist = Math.exp(Math.log(ambientDist) * (1 - f) + Math.log(focusedDist) * f);
+
+  // Distance-correlated scale coupling: local AU events scale with Solar System zoom
+  const localScaleMul = def.layer === 'local'
+    ? (1.0 / clamp(solarZoom || 1.0, 0.25, 3.0))
+    : 1.0;
+  const baseAmbientDist = ambientDist * (1.0 + (localScaleMul - 1.0) * (1.0 - f));
+  const effDist = Math.exp(Math.log(Math.max(baseAmbientDist, 0.2)) * (1 - f) + Math.log(Math.max(focusedDist, 0.2)) * f);
   const scale = (def.obsDist || 1.6) / effDist;
 
-  // Depth-dependent skybox parallax (farther events stay more locked to the background Milky Way).
-  const pDepth = clamp(1.1 / Math.max(effDist, 1.0), 0.08, 0.45) * (1 - f);
+  // Distance-correlated skybox parallax: nearer AU events shift more with Solar tilt; Mly events lock deep
+  const pDepth = clamp(1.25 / Math.max(effDist, 0.9), 0.06, 0.55) * (1 - f);
   const skyShiftX = camRot || parallax
     ? (-(camRot?.x || 0) * 0.16 - (parallax?.x || 0) * 0.022) * safeW * pDepth
     : 0;
@@ -485,13 +722,23 @@ export function getEventScreenPosition(sim, w, h, centerShiftX = 0, avoidPoints 
     ? (-(camRot?.y || 0) * 0.12 - (parallax?.y || 0) * 0.018) * safeH * pDepth
     : 0;
 
+  // When observing ANOTHER event, ambient sibling events gently pan aside on the shared canvas
+  let siblingPanX = 0;
+  let siblingPanY = 0;
+  if (!isFocused && globalObs > 0.005 && sim.lastLocation) {
+    const fdx = sim.lastLocation.x - 0.5;
+    const fdy = sim.lastLocation.y - 0.5;
+    siblingPanX = -fdx * safeW * 0.85 * globalObs;
+    siblingPanY = -fdy * safeH * 0.85 * globalObs;
+  }
+
   const marginX = isCompact ? 68 : 104;
   const marginTop = 84;
   const marginBottom = isCompact ? 96 : 74;
-  let restX = clamp(loc.x * safeW + centerShiftX * 0.25 + skyShiftX, marginX, Math.max(marginX, safeW - marginX));
-  let restY = clamp(loc.y * safeH + skyShiftY, marginTop, Math.max(marginTop, safeH - marginBottom));
+  let restX = clamp(loc.x * safeW + centerShiftX * 0.25 + skyShiftX, marginX, Math.max(marginX, safeW - marginX)) + siblingPanX;
+  let restY = clamp(loc.y * safeH + skyShiftY, marginTop, Math.max(marginTop, safeH - marginBottom)) + siblingPanY;
 
-  if (Array.isArray(avoidPoints) && avoidPoints.length > 0) {
+  if (!isFocused && globalObs <= 0.01 && Array.isArray(avoidPoints) && avoidPoints.length > 0) {
     const minClear = isCompact ? 92 : 126;
     for (const pt of avoidPoints) {
       if (!pt) continue;
@@ -511,7 +758,6 @@ export function getEventScreenPosition(sim, w, h, centerShiftX = 0, avoidPoints 
 
   const centerX = safeW * 0.5 + centerShiftX * 0.55;
   const centerY = safeH * 0.5;
-
   const x = restX + (centerX - restX) * f;
   const y = restY + (centerY - restY) * f;
 
@@ -526,7 +772,7 @@ export function getEventScreenPosition(sim, w, h, centerShiftX = 0, avoidPoints 
     scale,
     distantScale,
     effDist,
-    ambientDist,
+    ambientDist: baseAmbientDist,
     eventRadiusPx,
     focusProgress: f,
     isDistant: f < 0.35,
@@ -537,7 +783,81 @@ export function getEventScreenPosition(sim, w, h, centerShiftX = 0, avoidPoints 
 }
 
 /**
- * Compute complete WebGL shader + GPU particle + HUD render frame descriptor.
+ * Backward-compatible single-event screen position helper for `sim.active`.
+ */
+export function getEventScreenPosition(sim, w, h, centerShiftX = 0, avoidPoints = null, camRot = null, parallax = null, solarZoom = 1.0) {
+  if (!sim?.active) return null;
+  return computeSingleEventPosition(sim, sim.active, w, h, centerShiftX, avoidPoints, camRot, parallax, solarZoom);
+}
+
+/**
+ * Compute complete WebGL shader + GPU particle + HUD render descriptors for ALL concurrent events.
+ */
+export function computeEventFrames(
+  sim,
+  w,
+  h,
+  centerShiftX = 0,
+  avoidPoints = null,
+  visibilityAlpha = 1.0,
+  camRot = null,
+  parallax = null,
+  solarZoom = 1.0,
+) {
+  const list = Array.isArray(sim?.events) && sim.events.length > 0
+    ? sim.events
+    : (sim?.active ? [sim.active] : []);
+  if (list.length === 0 || visibilityAlpha <= 0.005) return [];
+
+  const frames = [];
+  for (const ev of list) {
+    if (!ev) continue;
+    const pos = computeSingleEventPosition(sim, ev, w, h, centerShiftX, avoidPoints, camRot, parallax, solarZoom);
+    if (!pos) continue;
+    const def = ev.def;
+    const p = clamp(ev.elapsed / ev.duration, 0, 1);
+    const obs = pos.focusProgress;
+    const distCrisp = clamp(0.76 + (1.35 / Math.max(pos.effDist, 1.0)) * 0.24, 0.78, 1.0);
+    const alpha = clamp(visibilityAlpha * (ev.exitFade ?? 1.0) * (obs + (1.0 - obs) * distCrisp), 0, 1);
+
+    let quadPad = 2.45;
+    if (def.id === 'gamma-burst') quadPad = 4.4;
+    else if (def.id === 'solar-flare') quadPad = 3.6;
+    else if (def.id === 'comet-breakup') quadPad = 2.85;
+    else if (def.id === 'blackhole-birth' || def.id === 'tidal-disruption') quadPad = 2.65;
+
+    const quadRadiusPx = Math.min(Math.max(w, h) * 1.15, Math.max(38, pos.eventRadiusPx * quadPad));
+    const sunRadiusPx = pos.eventRadiusPx * 0.34;
+    const layer = (def.layer === 'local' || obs > 0.55) ? 'local' : 'deep';
+
+    frames.push({
+      ...pos,
+      uid: ev.uid || def.id,
+      id: def.id,
+      eventType: def.eventType,
+      layer,
+      observing: Boolean(ev.observing),
+      quadRadiusPx,
+      sunRadiusPx,
+      progress: p,
+      elapsed: ev.elapsed,
+      alpha,
+      obsBlend: obs,
+      distNorm: pos.effDist,
+      distDepth: ev.distDepth ?? 0.6,
+      angle: typeof ev.angle === 'number' ? ev.angle : (def.baseAngle || 0),
+      seed: typeof ev.seed === 'number' ? ev.seed : 0.42,
+      viewYaw: ev.viewYaw || 0,
+      viewPitch: ev.viewPitch || 0,
+      def,
+      instance: ev,
+    });
+  }
+  return frames;
+}
+
+/**
+ * Backward-compatible single-event frame descriptor helper (returns focused or primary event).
  */
 export function computeEventFrame(
   sim,
@@ -548,129 +868,138 @@ export function computeEventFrame(
   visibilityAlpha = 1.0,
   camRot = null,
   parallax = null,
+  solarZoom = 1.0,
 ) {
-  if (!sim.active || visibilityAlpha <= 0.005) return null;
-  const pos = getEventScreenPosition(sim, w, h, centerShiftX, avoidPoints, camRot, parallax);
-  if (!pos) return null;
-
-  const ev = sim.active;
-  const def = ev.def;
-  const p = clamp(ev.elapsed / ev.duration, 0, 1);
-  const obs = pos.focusProgress;
-
-  // Subtle depth attenuation when very distant so far-away events blend organically into deep space.
-  const distCrisp = clamp(0.76 + (1.35 / Math.max(pos.effDist, 1.0)) * 0.24, 0.78, 1.0);
-  const alpha = clamp(visibilityAlpha * (obs + (1.0 - obs) * distCrisp), 0, 1);
-
-  let quadPad = 2.45;
-  if (def.id === 'gamma-burst') quadPad = 4.4;
-  else if (def.id === 'solar-flare') quadPad = 3.6;
-  else if (def.id === 'comet-breakup') quadPad = 2.85;
-  else if (def.id === 'blackhole-birth' || def.id === 'tidal-disruption') quadPad = 2.65;
-
-  const quadRadiusPx = Math.min(Math.max(w, h) * 1.15, Math.max(38, pos.eventRadiusPx * quadPad));
-  const sunRadiusPx = pos.eventRadiusPx * 0.34;
-  // Distant events live behind Solar System planets; zoomed-in observation renders cleanly in front.
-  const layer = obs > 0.72 ? 'local' : 'deep';
-
-  return {
-    ...pos,
-    id: def.id,
-    eventType: def.eventType,
-    layer,
-    quadRadiusPx,
-    sunRadiusPx,
-    progress: p,
-    elapsed: ev.elapsed,
-    alpha,
-    obsBlend: obs,
-    distNorm: pos.effDist,
-    angle: typeof ev.angle === 'number' ? ev.angle : (def.baseAngle || 0),
-    seed: typeof ev.seed === 'number' ? ev.seed : 0.42,
-    def,
-  };
+  const frames = computeEventFrames(sim, w, h, centerShiftX, avoidPoints, visibilityAlpha, camRot, parallax, solarZoom);
+  if (frames.length === 0) return null;
+  return frames.find((f) => f.observing) || frames[frames.length - 1];
 }
 
 /**
- * Compute how the foreground Solar System should gently drift and recede while the
- * telescope slews away to observe a distant deep-sky event, then glide right back.
+ * Hit-test all live ambient (non-observed) cosmic events on the shared canvas.
+ * Returns the closest hit frame or null.
+ */
+export function hitTestAmbientEvent(frames, clientX, clientY) {
+  if (!Array.isArray(frames) || frames.length === 0) return null;
+  let best = null;
+  let bestDist = Infinity;
+  for (const ev of frames) {
+    if (!ev || ev.observing || ev.alpha < 0.08) continue;
+    const hitR = clamp(ev.eventRadiusPx * 0.95, 28, 92);
+    const d = Math.hypot(clientX - ev.x, clientY - ev.y);
+    if (d <= hitR && d < bestDist) {
+      bestDist = d;
+      best = ev;
+    }
+  }
+  return best;
+}
+
+/**
+ * Shared-canvas Solar System camera shift when flying toward / zooming into an event:
+ * Instead of cutting/fading the Solar System to black, the Solar System physically glides
+ * off-screen in the opposite direction of the event's sky coordinates and smoothly returns
+ * as you zoom back out!
  */
 export function getSolarTelescopeTransform(sim, w, h) {
-  const f = easeOutCubic(sim.focusProgress || 0);
+  const f = clamp(sim?.focusProgress || 0, 0, 1);
   if (f <= EVENT_CAMERA_RETURN_EPS) {
     return { active: false, focus: 0, offsetX: 0, offsetY: 0, zoomMul: 1, alphaMul: 1 };
   }
-  const loc = sim.active?.location || sim.lastLocation || { x: 0.84, y: 0.19 };
+  const focused = (sim.events || []).find((e) => e.observing)
+    || (sim.lastFocusedUid ? (sim.events || []).find((e) => e.uid === sim.lastFocusedUid) : null);
+  const loc = focused?.location || sim.lastLocation || { x: 0.84, y: 0.19 };
+  const zoom = focused?.zoom || sim.fovZoom || 1.5;
   const dirX = loc.x - 0.5;
   const dirY = loc.y - 0.5;
-  const norm = Math.hypot(dirX, dirY) || 1;
-  const travel = Math.min(w || 1280, h || 720) * 0.72 * f;
+  const distFromCenter = Math.hypot(dirX, dirY);
+  const ux = distFromCenter > 0.05 ? dirX / distFromCenter : 0.78;
+  const uy = distFromCenter > 0.05 ? dirY / distFromCenter : -0.62;
+  const safeW = w || 1280;
+  const safeH = h || 720;
+  const pull = f * (0.92 + Math.max(0, zoom - 0.65) * 0.68);
+  const offsetX = -(dirX * 1.65 + ux * 0.36) * safeW * pull;
+  const offsetY = -(dirY * 1.65 + uy * 0.32) * safeH * pull;
+  const zoomMul = 1.0 / (1.0 + Math.max(0, zoom - 0.75) * 0.42 * f);
+  // Keep Solar System visibly panning aside on the shared canvas (no black-screen cut)
+  const alphaMul = clamp(1.0 - smoothstep(0.86, 1.0, f) * 0.35, 0.65, 1.0);
   return {
     active: true,
     focus: f,
-    offsetX: -(dirX / norm) * travel,
-    offsetY: -(dirY / norm) * travel,
-    zoomMul: Math.max(0.38, 1.0 - f * 0.52),
-    alphaMul: Math.max(0.0, 1.0 - Math.min(1, f * 1.28)),
+    offsetX,
+    offsetY,
+    zoomMul,
+    alphaMul,
   };
 }
 
 export function getEventLens(evDraw, w, h) {
-  if (!evDraw || evDraw.alpha <= 0.01) return [0, 0, 0, 0];
+  const target = Array.isArray(evDraw)
+    ? (evDraw.find((e) => e.observing) || evDraw.find((e) => e.def?.hasLens) || evDraw[0])
+    : evDraw;
+  if (!target || target.alpha <= 0.01) return [0, 0, 0, 0];
   const aspect = w / Math.max(h, 1);
-  const nx = (evDraw.x / Math.max(w, 1) - 0.5) * aspect;
-  const ny = 0.5 - evDraw.y / Math.max(h, 1);
-  const radNorm = evDraw.eventRadiusPx / Math.max(h, 1);
+  const nx = (target.x / Math.max(w, 1) - 0.5) * aspect;
+  const ny = 0.5 - target.y / Math.max(h, 1);
+  const radNorm = target.eventRadiusPx / Math.max(h, 1);
 
-  if (!evDraw.def?.hasLens) {
+  if (!target.def?.hasLens) {
     return [nx, ny, radNorm * 0.65, 0.0];
   }
 
-  const p = evDraw.progress;
+  const p = target.progress;
   let lensStr = 0;
   let rsNorm = radNorm * 0.25;
-  if (evDraw.id === 'blackhole-birth') {
+  if (target.id === 'blackhole-birth') {
     const birthP = Math.max(0, (p - 0.22) / 0.78);
     lensStr = smoothstep(0.0, 0.16, birthP) * smoothstep(1.0, 0.76, p) * 0.92;
     rsNorm = radNorm * 0.25 * smoothstep(0.0, 0.18, birthP);
-  } else if (evDraw.id === 'tidal-disruption') {
+  } else if (target.id === 'tidal-disruption') {
     lensStr = smoothstep(0.0, 0.16, p) * smoothstep(1.0, 0.76, p) * 0.84;
     rsNorm = radNorm * 0.21;
-  } else if (evDraw.id === 'kilonova') {
+  } else if (target.id === 'kilonova') {
     const mPeak = p >= 0.36 ? Math.exp(-Math.pow((p - 0.44) / 0.14, 2)) * smoothstep(0.36, 0.42, p) : 0;
     lensStr = mPeak * 0.38;
     rsNorm = radNorm * 0.16;
   }
-  return [nx, ny, rsNorm, lensStr * evDraw.alpha];
+  return [nx, ny, rsNorm, lensStr * target.alpha];
 }
 
 export function getEventAmbient(evDraw) {
-  if (!evDraw || evDraw.alpha <= 0.01) return [0, 0, 0, 0];
-  const p = evDraw.progress;
+  const target = Array.isArray(evDraw)
+    ? (evDraw.find((e) => e.observing) || evDraw[evDraw.length - 1])
+    : evDraw;
+  if (!target || target.alpha <= 0.01) return [0, 0, 0, 0];
+  const p = target.progress;
   const env = smoothstep(0.0, 0.16, p) * smoothstep(1.0, 0.74, p);
-  const peak = evDraw.id === 'supernova'
+  const peak = target.id === 'supernova'
     ? (0.42 + 0.85 * Math.exp(-Math.pow((p - 0.23) / 0.10, 2)))
-    : (evDraw.id === 'kilonova'
+    : (target.id === 'kilonova'
       ? (0.36 + 0.75 * Math.exp(-Math.pow((p - 0.43) / 0.11, 2)))
-      : (evDraw.id === 'gamma-burst'
+      : (target.id === 'gamma-burst'
         ? (0.48 + 0.65 * Math.exp(-Math.pow((p - 0.28) / 0.14, 2)))
         : 0.42));
-  const [r, g, b] = evDraw.def?.glowRgb || [0.5, 0.8, 1.0];
-  const strength = env * peak * evDraw.alpha * (0.38 + 0.62 * evDraw.obsBlend);
+  const [r, g, b] = target.def?.glowRgb || [0.5, 0.8, 1.0];
+  const strength = env * peak * target.alpha * (0.38 + 0.62 * target.obsBlend);
   return [r, g, b, strength];
 }
 
 export function getEventShockWave(sim, w, h, centerShiftX = 0, avoidPoints = null, visibilityAlpha = 1.0, camRot = null, parallax = null) {
-  if (!sim.active || !sim.active.def.hasShock || visibilityAlpha <= 0.01) return [0, 0, 0, 0];
-  const p = sim.active.elapsed / sim.active.duration;
-  const startP = sim.active.def.id === 'kilonova' ? 0.36 : 0.18;
+  const target = (sim?.events || []).find((e) => e.observing)
+    || (sim?.lastFocusedUid ? (sim.events || []).find((e) => e.uid === sim.lastFocusedUid) : sim?.active);
+  // Never draw a distracting shockwave circle on the Solar System ambient view
+  if (!target || !target.def?.hasShock || visibilityAlpha <= 0.01 || (sim.focusProgress || 0) <= 0.08) {
+    return [0, 0, 0, 0];
+  }
+  const p = target.elapsed / target.duration;
+  const startP = target.def.id === 'kilonova' ? 0.36 : 0.18;
   if (p < startP || p > 0.90) return [0, 0, 0, 0];
-  const pos = getEventScreenPosition(sim, w, h, centerShiftX, avoidPoints, camRot, parallax);
+  const pos = computeSingleEventPosition(sim, target, w, h, centerShiftX, avoidPoints, camRot, parallax);
   if (!pos) return [0, 0, 0, 0];
   const aspect = w / Math.max(h, 1);
   const sp = (p - startP) / (0.90 - startP);
   const maxR = (pos.eventRadiusPx / Math.max(h, 1)) * 2.1;
-  const amp = Math.sin(sp * Math.PI) * (0.30 + 0.56 * pos.focusProgress) * clamp(maxR * 1.4, 0.20, 1.0) * clamp(visibilityAlpha, 0, 1);
+  const amp = Math.sin(sp * Math.PI) * (0.54 * pos.focusProgress) * clamp(maxR * 1.4, 0.20, 1.0) * clamp(visibilityAlpha, 0, 1);
   return [
     (pos.x / w - 0.5) * aspect,
     0.5 - pos.y / h,

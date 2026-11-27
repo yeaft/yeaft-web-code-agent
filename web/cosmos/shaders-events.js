@@ -40,6 +40,7 @@ const COMMON_HEAD = `
   uniform float uAngle;
   uniform float uSeed;
   uniform float uSunRadiusPx;
+  uniform vec2 uViewAngles;
 
   uniform sampler2D uTexNebula;
   uniform sampler2D uTexSun;
@@ -223,6 +224,10 @@ const MAIN_OPEN = `
     float birthEnv = smoothstep(0.0, 0.14, p);
     float decayEnv = sstepDown(1.0, 0.76, p);
     float lifeEnv = birthEnv * decayEnv;
+    float vYaw = uViewAngles.x;
+    float vPitch = uViewAngles.y;
+    float pitchSin = sin(vPitch);
+    float pitchCos = cos(vPitch);
 `;
 
 const MAIN_CLOSE = `
@@ -239,9 +244,10 @@ const BODIES = {
   0: {
     extra: '',
     body: `
-      vec2 qr = rot2(uAngle) * q;
+      vec2 qr = rot2(uAngle + vYaw * 0.65) * q;
       float r = length(qr);
       float ang = atan(qr.y, qr.x);
+      float torTilt = clamp(0.46 + pitchSin * 0.42, 0.16, 0.92);
 
       float prePhase = smoothstep(0.0, 0.13, p) * (1.0 - smoothstep(0.20, 0.30, p));
       float collapsePinch = 1.0 - 0.55 * smoothstep(0.14, 0.21, p);
@@ -249,8 +255,8 @@ const BODIES = {
         float pulse = 0.90 + 0.14 * sin(evT * 11.0) + 0.08 * sin(evT * 19.0);
         float starCore = exp(-r * r * (44.0 / max(collapsePinch * collapsePinch, 0.12))) * pulse;
         float starHalo = exp(-r * 6.8) * 0.38;
-        vec2 rRing = vec2(qr.x, qr.y / 0.44);
-        float eqRing = exp(-pow((length(rRing) - 0.46) / 0.038, 2.0)) * (0.65 + 0.35 * noise2(vec2(ang * 6.0, uSeed)));
+        vec2 rRing = vec2(qr.x, qr.y / torTilt);
+        float eqRing = exp(-pow((length(rRing) - 0.46) / 0.038, 2.0)) * (0.65 + 0.35 * noise2(vec2(ang * 6.0 + vYaw * 2.0, uSeed)));
         emit += vec3(0.66, 0.88, 1.00) * (starCore * 1.75 + starHalo) * prePhase;
         emit += vec3(0.92, 0.72, 0.50) * eqRing * 0.42 * prePhase;
       }
@@ -303,12 +309,12 @@ const BODIES = {
 
         float pwnEnv = smoothstep(0.22, 0.48, expP) * decayEnv;
         if (pwnEnv > 0.002 && r < 0.62) {
-          vec2 pTor = vec2(qr.x, qr.y / 0.46);
+          vec2 pTor = vec2(qr.x, qr.y / torTilt);
           float pr = length(pTor);
-          float torus = exp(-pow((pr - 0.14) / 0.038, 2.0)) * (0.62 + 0.38 * sin(ang * 4.0 - evT * 3.0));
+          float torus = exp(-pow((pr - 0.14) / 0.038, 2.0)) * (0.62 + 0.38 * sin(ang * 4.0 - evT * 3.0 + vYaw));
           float torus2 = exp(-pow((pr - 0.23) / 0.048, 2.0)) * 0.36;
           vec2 jetP = rot2(-evT * 2.8) * qr;
-          float pBeam = exp(-abs(jetP.y) * 36.0) * exp(-abs(jetP.x) * 3.4) * (0.68 + 0.32 * sin(evT * 14.0));
+          float pBeam = exp(-abs(jetP.y) * 36.0) * exp(-abs(jetP.x) * (3.4 / max(0.45, pitchCos))) * (0.68 + 0.32 * sin(evT * 14.0));
           emit += vec3(0.42, 0.90, 1.00) * (torus * 0.64 + torus2 * 0.34 + pBeam * 0.54) * pwnEnv;
           emit += vec3(0.95, 0.98, 1.00) * exp(-r * r * 180.0) * 1.25 * pwnEnv;
         }
@@ -329,10 +335,10 @@ const BODIES = {
   1: {
     extra: VORONOI_HELPER,
     body: `
-      vec2 qr = rot2(uAngle) * q;
+      vec2 qr = rot2(uAngle + vYaw * 0.45) * q;
       float hitT = 0.24;
       float rPl = 0.36;
-      vec3 L = normalize(vec3(-0.62, 0.42, 0.66));
+      vec3 L = normalize(vec3(-0.62 * cos(vYaw * 0.45) + 0.35 * sin(vYaw * 0.45), 0.42 + pitchSin * 0.35, 0.66));
       float bp = clamp((p - hitT) / (1.0 - hitT), 0.0, 1.0);
       float impactFlash = exp(-pow(bp / 0.12, 2.0)) * step(hitT - 0.02, p);
       vec2 hitPt = vec2(0.24, -0.14);
@@ -378,7 +384,7 @@ const BODIES = {
           float rc = min(pr, 1.0);
           float pz = sqrt(max(1.0 - rc * rc, 0.0));
           vec3 pn = vec3(qr / max(rCurrPl, 0.01), pz);
-          vec2 puv = vec2(fract(atan(pn.x, pn.z) / TAU + 0.32 + evT * 0.055), clamp(0.5 - asin(clamp(pn.y, -1.0, 1.0)) / PI, 0.005, 0.995));
+          vec2 puv = vec2(fract(atan(pn.x, pn.z) / TAU + 0.32 + evT * 0.055 + vYaw * 0.26), clamp(0.5 - asin(clamp(pn.y * pitchCos - pn.z * pitchSin, -1.0, 1.0)) / PI, 0.005, 0.995));
           vec3 rTex = texture2D(uTexRock, puv).rgb;
           float ndl = max(dot(pn, L), 0.0);
           vec3 litP = rTex * (0.07 + pow(ndl, 0.85) * 1.16) + vec3(0.84, 0.44, 0.24) * pow(1.0 - pz, 3.6) * (0.06 + ndl * 0.34);
@@ -479,9 +485,10 @@ const BODIES = {
   2: {
     extra: '',
     body: `
-      vec2 qr = rot2(uAngle) * q;
+      vec2 qr = rot2(uAngle + vYaw * 0.55) * q;
       float r = length(qr);
       float ang = atan(qr.y, qr.x);
+      float diskTilt = clamp(0.19 + pitchSin * 0.54, 0.10, 0.86);
       float collP = clamp(p / 0.28, 0.0, 1.0);
       float birthP = clamp((p - 0.23) / 0.77, 0.0, 1.0);
 
@@ -540,7 +547,7 @@ const BODIES = {
           float secRing = exp(-pow((bqr - 1.10) / 0.105, 2.0)) * 0.42;
           float innerGlow = exp(-max(bqr - 1.0, 0.0) * 2.2) * smoothstep(0.95, 1.02, bqr) * 0.38;
 
-          vec2 eq = vec2(bq.x, bq.y / 0.19);
+          vec2 eq = vec2(bq.x, bq.y / diskTilt);
           float eqR = length(eq);
           float frontCross = sstepDown(0.06, -0.05, bq.y);
           float diskGrow = smoothstep(0.02, 0.36, birthP);
@@ -585,7 +592,8 @@ const BODIES = {
   3: {
     extra: '',
     body: `
-      vec2 qr = rot2(uAngle) * q;
+      vec2 qr = rot2(uAngle + vYaw * 0.60) * q;
+      float orbTilt = clamp(0.56 + pitchSin * 0.38, 0.18, 0.96);
       float mergeP = 0.42;
 
       if (p < mergeP + 0.04) {
@@ -594,7 +602,7 @@ const BODIES = {
         float sep = 0.62 * pow(1.0 - ip, 0.52);
         float omega = ip * ip * 20.0 + evT * 2.4;
 
-        vec2 eq = vec2(qr.x, qr.y / 0.56);
+        vec2 eq = vec2(qr.x, qr.y / orbTilt);
         float eqR = length(eq);
         float eqA = atan(eq.y, eq.x);
 
@@ -667,7 +675,8 @@ const BODIES = {
     extra: SPHERE_UV_HELPER,
     body: `
       vec2 qs = (vLocal * uQuadRadiusPx) / max(uSunRadiusPx, 1.0);
-      vec2 qr = rot2(-uAngle) * qs;
+      vec2 qr = rot2(-uAngle - vYaw * 0.72) * qs;
+      qr.y /= max(0.68, 1.0 - abs(pitchSin) * 0.28);
       float rSun = length(qr);
       float aOff = atan(qr.y, qr.x);
 
@@ -764,9 +773,9 @@ const BODIES = {
   5: {
     extra: '',
     body: `
-      vec2 qr = rot2(uAngle) * q;
+      vec2 qr = rot2(uAngle + vYaw * 0.72) * q;
       float r = length(qr);
-      float along = abs(qr.x);
+      float along = abs(qr.x) / max(0.42, pitchCos);
       float perp = abs(qr.y);
 
       float preEnv = birthEnv * (1.0 - smoothstep(0.18, 0.30, p));
@@ -820,7 +829,8 @@ const BODIES = {
   6: {
     extra: SEG_HELPER,
     body: `
-      vec2 qr = rot2(uAngle) * q;
+      vec2 qr = rot2(uAngle + vYaw * 0.55) * q;
+      float accTilt = clamp(0.22 + pitchSin * 0.50, 0.11, 0.84);
       float rBh = 0.21;
       float bqr = length(qr) / rBh;
       float tdeEnv = lifeEnv;
@@ -906,7 +916,7 @@ const BODIES = {
       float accP = smoothstep(0.34, 0.62, p) * decayEnv;
       if (accP > 0.002 && bqr < 6.2) {
         vec2 bq = qr / rBh;
-        vec2 eq = vec2(bq.x - 0.18, bq.y / 0.22);
+        vec2 eq = vec2(bq.x - 0.18, bq.y / accTilt);
         float eqR = length(eq);
         float frontCross = sstepDown(0.06, -0.05, bq.y);
         float diskBand = smoothstep(1.16, 1.54, eqR) * sstepDown(4.6, 1.90, eqR) * mix(smoothstep(0.96, 1.05, bqr), 1.0, frontCross);
@@ -937,7 +947,8 @@ const BODIES = {
   7: {
     extra: '',
     body: `
-      vec2 qr = rot2(uAngle) * q;
+      vec2 qr = rot2(uAngle + vYaw * 0.65) * q;
+      qr.y /= max(0.58, 1.0 - abs(pitchSin) * 0.38);
       float cometEnv = birthEnv * decayEnv;
 
       float pathU = p - 0.48;
