@@ -2052,6 +2052,88 @@ describe('Cosmos Creations — End-to-End Web Store <-> Server Relay <-> Agent S
     expect(sessions.suppressAutoSelectDepth).toBe(0);
   });
 
+  it('R13-F1: adopts a live Session restored by snapshot while get_creation is pending instead of replacing it', async () => {
+    const { sessions } = await registerBrowserStores();
+    const agentId = 'agent-a';
+    const sessionId = 'restored-during-get';
+    const creation = serviceA.store.createCreation({ title: 'Restored Mid-Get', initializeFolder: true, sessionId });
+    chatStore.agents = [{ id: agentId, online: true }];
+    chatStore.connectionState = 'connected';
+    // Browser still holds an old deletion receipt when resolution begins.
+    sessions.applyCrudResult({ ok: true, op: 'archive', sessionId }, agentId);
+    expect(sessions.isConfirmedDeletedSession(agentId, sessionId)).toBe(true);
+    const getHeld = deferred();
+    const getStarted = deferred();
+    const send = interceptSocket(chatStore, request => {
+      if (request.type === 'creation_request' && request.op === 'get_creation') {
+        getStarted.resolve(request);
+        void getHeld.promise.then(async () => {
+          const data = await serviceA.request({ op: request.op, payload: request.payload });
+          creationsStore.handleCreationResponse({ ...request, type: 'creation_response', ok: true, data });
+        });
+        return true;
+      }
+    });
+    const resolution = creationsStore.resolveCreationSession(agentId, creation);
+    await getStarted.promise;
+    // Live authoritative Agent snapshot restores the original Session before get_creation returns.
+    chatStore.handleMessage({
+      type: 'yeaft_output',
+      agentId,
+      event: { type: 'session_list_updated', sessions: [{ id: sessionId, workDir: creation.rootDir }] },
+    });
+    expect(sessions.isConfirmedDeletedSession(agentId, sessionId)).toBe(false);
+    getHeld.resolve();
+    const resolved = await resolution;
+    expect(resolved).toMatchObject({ creation: { id: creation.id }, sessionId });
+    expect(send).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'yeaft_create_session' }));
+    expect(serviceA.store.getCreation(creation.id).sessionId).toBe(sessionId);
+  });
+
+  it('R13-F2: restores the current exact Session if reconnect inventory commits during a failed or canceled open', async () => {
+    const { sessions } = await registerBrowserStores();
+    const agentId = 'agent-a';
+    const currentSessionId = 'current-session';
+    sessions.applySnapshot([{ id: currentSessionId, workDir: '/repo/current' }], agentId, { authoritative: true });
+    sessions.setActive(currentSessionId, agentId);
+    chatStore.agents = [{ id: agentId, online: true }];
+    chatStore.connectionState = 'connected';
+    chatStore.currentAgent = agentId;
+    chatStore.currentView = 'yeaft';
+    chatStore.uiMode = 'classic';
+    chatStore.yeaftActiveSessionFilter = currentSessionId;
+    const creation = serviceA.store.createCreation({ title: 'Failing Open', initializeFolder: true, sessionId: 'missing-session' });
+    const listHeld = deferred();
+    const listStarted = deferred();
+    interceptSocket(chatStore, request => {
+      if (request.type === 'yeaft_list_sessions') {
+        listStarted.resolve(request);
+        return true;
+      }
+      if (request.type === 'yeaft_create_session') {
+        return sessionAck(chatStore, request, 'create', { ok: false, error: { code: 'denied', message: 'Create failed' } });
+      }
+    });
+    const openPromise = creationsStore.openCreationWorkspace({ agentId, creationId: creation.id });
+    const listReq = await listStarted.promise;
+    // Reconnect inventory commit clears activeSessionKey, remembers currentSessionId, and imports it.
+    sessions.beginInventoryCommit(currentSessionId, agentId);
+    expect(sessions.activeSessionKey).toBeNull();
+    sessions.applySnapshot([{ id: currentSessionId, workDir: '/repo/current' }], agentId, { authoritative: true });
+    // Exact current Session is restored immediately without triggering fallback route change.
+    expect(sessions.activeSessionId).toBe(currentSessionId);
+    expect(sessions.activeSessionKey).toBeTruthy();
+    // Now cancel the open without sending any further snapshot (and let the recovery settle cleanly).
+    creationsStore.cancelPendingWorkspaceOpen();
+    sessionAck(chatStore, listReq, 'list', { ok: false, error: { code: 'timeout' } });
+    listHeld.resolve();
+    expect(await openPromise).toBeNull();
+    expect(sessions.suppressAutoSelectDepth).toBe(0);
+    expect(sessions.activeSessionId).toBe(currentSessionId);
+    expect(sessions.activeSessionKey).toBeTruthy();
+    expect(chatStore.yeaftActiveSessionFilter).toBe(currentSessionId);
+  });
+
   it.each(['leave Galaxy and return', 'close the drawer'])('fences a pending Galaxy Creation open when users %s', async action => {
     const { sessions } = await registerBrowserStores();
     const { default: CosmosPage } = await import('../../web/components/cosmos/CosmosPage.js');

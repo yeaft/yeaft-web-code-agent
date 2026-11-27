@@ -180,7 +180,7 @@ function reconcileRetiredBareActiveSession(state) {
   return true;
 }
 
-function reconcileInventorySelection(state) {
+function reconcileInventorySelection(state, { suppressFallback = false } = {}) {
   const openingKey = state._explicitPendingSessionKey;
   if (openingKey) {
     // The operator explicitly opened a catalog route before the Agent's live
@@ -191,7 +191,7 @@ function reconcileInventorySelection(state) {
     }
     return;
   }
-  if (!state._preferredExactSessionIdentity && !state._retiredBareActiveSessionId && !state.activeSession) {
+  if (!suppressFallback && !state._preferredExactSessionIdentity && !state._retiredBareActiveSessionId && !state.activeSession) {
     const saved = readLastViewedYeaftSession();
     if (saved.agentId && saved.sessionId) {
       state._preferredExactSessionIdentity = storeKeyFor(saved.agentId, saved.sessionId);
@@ -204,9 +204,13 @@ function reconcileInventorySelection(state) {
     const row = state.sessions[preferredKey];
     // An absent row may belong to a temporarily offline Agent. Don't select
     // a different Session (including one with the same id) while waiting.
-    if (row) state._preferredExactSessionIdentity = null;
-    activateInventorySession(state, row ? preferredKey : null);
-  } else if (!reconcileRetiredBareActiveSession(state)) {
+    if (row) {
+      state._preferredExactSessionIdentity = null;
+      activateInventorySession(state, preferredKey);
+    } else if (!suppressFallback) {
+      activateInventorySession(state, null);
+    }
+  } else if (!suppressFallback && !reconcileRetiredBareActiveSession(state)) {
     const first = state.sessionList[0];
     activateInventorySession(state, state.activeSession ? state.activeSessionKey
       : (first ? findSessionKey(state, first.id, first.agentId) || null : null));
@@ -564,7 +568,7 @@ export const useSessionsStore = defineStore('sessions', {
         };
         chat.applyServerPinSnapshot(agentId, pinnedInSnapshot, isOwnedByAgent);
       }
-      if (!deferActivation && !suppressAutoSelect) reconcileInventorySelection(this);
+      if (!deferActivation) reconcileInventorySelection(this, { suppressFallback: suppressAutoSelect });
     },
 
     /** Apply a `group_roster_changed` delta (in-place merge). */
@@ -676,12 +680,10 @@ export const useSessionsStore = defineStore('sessions', {
         ...this._normalize(session, effectiveAgentId, isPinnedRow(prev)),
       };
       if (!existed) this.sessionOrder.push(key);
-      if (!suppressAutoSelect) {
-        if (key === this._explicitPendingSessionKey || key === this._preferredExactSessionIdentity) {
-          reconcileInventorySelection(this);
-        } else {
-          reconcileRetiredBareActiveSession(this);
-        }
+      if (key === this._explicitPendingSessionKey || key === this._preferredExactSessionIdentity) {
+        reconcileInventorySelection(this, { suppressFallback: suppressAutoSelect });
+      } else if (!suppressAutoSelect) {
+        reconcileRetiredBareActiveSession(this);
       }
       return key;
     },
@@ -692,6 +694,10 @@ export const useSessionsStore = defineStore('sessions', {
 
     endSuppressAutoSelect() {
       this.suppressAutoSelectDepth = Math.max(0, this.suppressAutoSelectDepth - 1);
+      if (this.suppressAutoSelectDepth === 0 && !this.activeSessionKey
+          && (this._explicitPendingSessionKey || this._preferredExactSessionIdentity)) {
+        reconcileInventorySelection(this, { suppressFallback: true });
+      }
     },
 
     setActive(sessionId, agentId = null) {

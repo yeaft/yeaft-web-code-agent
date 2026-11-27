@@ -1231,8 +1231,9 @@ export const useCreationsStore = defineStore('creations', {
         const currentId = linkedSessionId(current);
         latest = { ...latest, ...current };
         rootDir = current.rootDir || rootDir;
-        // The earlier inventory may predate this newer link. Don't replace it on that evidence.
+        // The earlier inventory may predate this newer link or a live restore. Don't replace it on stale evidence.
         if (currentId && currentId !== expectedSessionId && !isDeleted(currentId)) return useLink(latest, currentId);
+        if (currentId && hasLiveSession(currentId)) return useLink(latest, currentId);
         expectedSessionId = currentId;
 
         let sessionId;
