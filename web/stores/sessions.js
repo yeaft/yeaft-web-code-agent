@@ -195,17 +195,20 @@ function reconcileInventorySelection(state, { suppressFallback = false } = {}) {
     const saved = readLastViewedYeaftSession();
     if (saved.agentId && saved.sessionId) {
       state._preferredExactSessionIdentity = storeKeyFor(saved.agentId, saved.sessionId);
+      state._preferredIdentityIsSavedFallback = true;
     } else if (saved.sessionId) {
       state._retiredBareActiveSessionId = saved.sessionId;
     }
   }
   const preferredKey = state._preferredExactSessionIdentity;
   if (preferredKey) {
+    if (suppressFallback && state._preferredIdentityIsSavedFallback) return;
     const row = state.sessions[preferredKey];
     // An absent row may belong to a temporarily offline Agent. Don't select
     // a different Session (including one with the same id) while waiting.
     if (row) {
       state._preferredExactSessionIdentity = null;
+      state._preferredIdentityIsSavedFallback = false;
       activateInventorySession(state, preferredKey);
     } else if (!suppressFallback) {
       activateInventorySession(state, null);
@@ -299,6 +302,7 @@ export const useSessionsStore = defineStore('sessions', {
     inventoryIdentityMode: 'empty',
     _retiredBareActiveSessionId: null,
     _preferredExactSessionIdentity: null,
+    _preferredIdentityIsSavedFallback: false,
     _explicitPendingSessionKey: null,
     lastSnapshotAt: 0,
     authoritativeSnapshotAgents: {},
@@ -695,7 +699,7 @@ export const useSessionsStore = defineStore('sessions', {
     endSuppressAutoSelect() {
       this.suppressAutoSelectDepth = Math.max(0, this.suppressAutoSelectDepth - 1);
       if (this.suppressAutoSelectDepth === 0 && !this.activeSessionKey
-          && (this._explicitPendingSessionKey || this._preferredExactSessionIdentity)) {
+          && (this._explicitPendingSessionKey || (this._preferredExactSessionIdentity && !this._preferredIdentityIsSavedFallback))) {
         reconcileInventorySelection(this, { suppressFallback: true });
       }
     },
@@ -792,6 +796,7 @@ export const useSessionsStore = defineStore('sessions', {
       this.inventoryIdentityMode = 'empty';
       this._retiredBareActiveSessionId = null;
       this._preferredExactSessionIdentity = null;
+      this._preferredIdentityIsSavedFallback = false;
       this._explicitPendingSessionKey = null;
       this.lastSnapshotAt = 0;
       this.authoritativeSnapshotAgents = {};
@@ -802,27 +807,42 @@ export const useSessionsStore = defineStore('sessions', {
       const key = activeKey || (agentId && storeKeyFor(agentId, sessionId));
       if (!key) return;
       this._preferredExactSessionIdentity = null;
+      this._preferredIdentityIsSavedFallback = false;
       this._retiredBareActiveSessionId = null;
       this._explicitPendingSessionKey = activeKey ? null : key;
       try { localStorage.setItem(LAST_VIEWED_YEAFT_SESSION_KEY, key); } catch {}
     },
 
     preferredInventoryIdentity() {
-      const exactKey = this._explicitPendingSessionKey || this._preferredExactSessionIdentity;
-      if (exactKey) return parseYeaftSessionIdentity(exactKey);
-      if (this._retiredBareActiveSessionId) return { agentId: null, sessionId: this._retiredBareActiveSessionId };
+      if (this._explicitPendingSessionKey) {
+        return { ...parseYeaftSessionIdentity(this._explicitPendingSessionKey), fromSavedFallback: false };
+      }
+      if (this._preferredExactSessionIdentity) {
+        return {
+          ...parseYeaftSessionIdentity(this._preferredExactSessionIdentity),
+          fromSavedFallback: Boolean(this._preferredIdentityIsSavedFallback),
+        };
+      }
+      if (this._retiredBareActiveSessionId) {
+        return { agentId: null, sessionId: this._retiredBareActiveSessionId, fromSavedFallback: false };
+      }
       const active = this.activeSession;
-      return active ? { agentId: active.agentId, sessionId: active.id } : readLastViewedYeaftSession();
+      if (active) return { agentId: active.agentId, sessionId: active.id, fromSavedFallback: false };
+      return { ...readLastViewedYeaftSession(), fromSavedFallback: true };
     },
 
-    beginInventoryCommit(preferredSessionId = null, preferredAgentId = null) {
+    beginInventoryCommit(preferredSessionId = null, preferredAgentId = null, { fromSavedFallback = false } = {}) {
       const openingKey = this._explicitPendingSessionKey;
       // Replaying the Server's shadow inventory cannot invalidate an Agent deletion receipt.
       this.resetInventory({ preserveDeletionReceipts: true });
       this._explicitPendingSessionKey = openingKey;
       if (!openingKey && preferredSessionId) {
-        if (preferredAgentId) this._preferredExactSessionIdentity = storeKeyFor(preferredAgentId, preferredSessionId);
-        else this._retiredBareActiveSessionId = preferredSessionId;
+        if (preferredAgentId) {
+          this._preferredExactSessionIdentity = storeKeyFor(preferredAgentId, preferredSessionId);
+          this._preferredIdentityIsSavedFallback = Boolean(fromSavedFallback);
+        } else {
+          this._retiredBareActiveSessionId = preferredSessionId;
+        }
       }
     },
 

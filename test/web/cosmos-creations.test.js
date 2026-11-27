@@ -2134,6 +2134,103 @@ describe('Cosmos Creations — End-to-End Web Store <-> Server Relay <-> Agent S
     expect(chatStore.yeaftActiveSessionFilter).toBe(currentSessionId);
   });
 
+  it('R14-F1: adopts a live Session buffered during inventory hydration before get_creation returns without creating a replacement', async () => {
+    const { sessions } = await registerBrowserStores();
+    const agentId = 'agent-a';
+    const sessionId = 'restored-while-buffered';
+    const creation = serviceA.store.createCreation({ title: 'Buffered Restore', initializeFolder: true, sessionId });
+    chatStore.agents = [{ id: agentId, online: true }];
+    chatStore.connectionState = 'connected';
+    sessions.applyCrudResult({ ok: true, op: 'archive', sessionId }, agentId);
+    expect(sessions.isConfirmedDeletedSession(agentId, sessionId)).toBe(true);
+    // Simulate active inventory hydration buffering live session_list_updated frames.
+    chatStore.yeaftSessionHydrateRequestId = 'hyd-1';
+    chatStore.yeaftSessionInventoryCompleteSupported = true;
+    chatStore.yeaftSessionHydrateSlices = [];
+    const getHeld = deferred();
+    const getStarted = deferred();
+    const send = interceptSocket(chatStore, request => {
+      if (request.type === 'creation_request' && request.op === 'get_creation') {
+        getStarted.resolve(request);
+        void getHeld.promise.then(async () => {
+          const data = await serviceA.request({ op: request.op, payload: request.payload });
+          creationsStore.handleCreationResponse({ ...request, type: 'creation_response', ok: true, data });
+        });
+        return true;
+      }
+    });
+    const resolution = creationsStore.resolveCreationSession(agentId, creation);
+    await getStarted.promise;
+    // Live authoritative session_list_updated arrives while hydration is still open (buffered!).
+    chatStore.handleMessage({
+      type: 'yeaft_output',
+      agentId,
+      event: { type: 'session_list_updated', sessions: [{ id: sessionId, workDir: creation.rootDir }] },
+    });
+    // get_creation returns BEFORE yeaft_session_hydrate_complete arrives.
+    getHeld.resolve();
+    const resolved = await resolution;
+    expect(resolved).toMatchObject({ creation: { id: creation.id }, sessionId });
+    expect(send).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'yeaft_create_session' }));
+    // Subsequent hydration completion commits the buffered live slice cleanly.
+    chatStore.handleMessage({ type: 'yeaft_session_hydrate_complete', requestId: 'hyd-1' });
+    expect(sessions.isConfirmedDeletedSession(agentId, sessionId)).toBe(false);
+    expect(sessions.sessionById(sessionId, agentId)).not.toBeNull();
+  });
+
+  it('R14-F2: a persisted localStorage last-viewed Session returning during inventory commit does not preempt an explicit Creation open', async () => {
+    const { sessions } = await registerBrowserStores();
+    const { LAST_VIEWED_YEAFT_SESSION_KEY, yeaftSessionIdentityKey } = await import('../../web/stores/helpers/yeaft-session-identity.js');
+    const agentId = 'agent-a';
+    const savedId = 'offline-saved-session';
+    const targetId = 'creation-target-session';
+    // Persist saved preference in localStorage while no Session is currently active.
+    localStorage.setItem(LAST_VIEWED_YEAFT_SESSION_KEY, yeaftSessionIdentityKey(agentId, savedId));
+    try {
+      const creation = serviceA.store.createCreation({ title: 'Explicit Open', initializeFolder: true, sessionId: targetId });
+      chatStore.agents = [{ id: agentId, online: true }];
+      chatStore.connectionState = 'connected';
+      chatStore.currentAgent = agentId;
+      chatStore.currentView = 'yeaft';
+      chatStore.uiMode = 'classic';
+      chatStore.yeaftActiveSessionFilter = null;
+      expect(sessions.activeSessionKey).toBeNull();
+      const listStarted = deferred();
+      interceptSocket(chatStore, request => {
+        if (request.type === 'yeaft_list_sessions') {
+          listStarted.resolve(request);
+          return true;
+        }
+      });
+      const openPromise = creationsStore.openCreationWorkspace({ agentId, creationId: creation.id });
+      const listReq = await listStarted.promise;
+      // Inventory commit arrives with the previously offline saved-fallback Session.
+      const preferred = sessions.preferredInventoryIdentity();
+      expect(preferred).toEqual({ agentId, sessionId: savedId, fromSavedFallback: true });
+      sessions.beginInventoryCommit(preferred.sessionId, preferred.agentId, { fromSavedFallback: preferred.fromSavedFallback });
+      sessions.applySnapshot([
+        { id: savedId, workDir: '/repo/saved' },
+        { id: targetId, workDir: creation.rootDir },
+      ], agentId, { authoritative: true });
+      // Saved localStorage preference MUST NOT preempt the route or cancel the explicit open.
+      expect(sessions.activeSessionKey).toBeNull();
+      expect(chatStore.yeaftActiveSessionFilter).toBeNull();
+      sessionAck(chatStore, listReq, 'list', {
+        sessions: [
+          { id: savedId, workDir: '/repo/saved' },
+          { id: targetId, workDir: creation.rootDir },
+        ],
+      });
+      const opened = await openPromise;
+      expect(opened).toMatchObject({ creation: { id: creation.id }, sessionId: targetId });
+      expect(chatStore.yeaftActiveSessionFilter).toBe(targetId);
+      expect(chatStore.workbenchExpanded).toBe(true);
+      expect(sessions.suppressAutoSelectDepth).toBe(0);
+    } finally {
+      localStorage.removeItem(LAST_VIEWED_YEAFT_SESSION_KEY);
+    }
+  });
+
   it.each(['leave Galaxy and return', 'close the drawer'])('fences a pending Galaxy Creation open when users %s', async action => {
     const { sessions } = await registerBrowserStores();
     const { default: CosmosPage } = await import('../../web/components/cosmos/CosmosPage.js');

@@ -8,6 +8,7 @@
 import { useChatStore } from './chat.js';
 import { useAuthStore } from './auth.js';
 import { yeaftSessionIdentityKey } from './helpers/yeaft-session-identity.js';
+import { hasBufferedLiveYeaftSession } from './helpers/messageHandler.js';
 import { workbenchRouteKey, workbenchWorkspaceGeneration } from '../utils/workbench-route.js';
 import * as canvasContext from '../utils/canvas-context.js';
 
@@ -1180,7 +1181,10 @@ export const useCreationsStore = defineStore('creations', {
         const linkedSessionId = record => String(record?.sessionId || '').trim() || null;
         let expectedSessionId = linkedSessionId(latest);
         const isDeleted = id => sessionsStore?.isConfirmedDeletedSession?.(targetId, id);
-        const hasLiveSession = id => !isDeleted(id) && sessionsStore?.sessionById?.(id, targetId);
+        const hasLiveSession = id => (
+          (!isDeleted(id) && Boolean(sessionsStore?.sessionById?.(id, targetId)))
+          || hasBufferedLiveYeaftSession(chatStore, targetId, id)
+        );
         const creationId = latest.id;
         const getLatestCreation = async () => {
           const res = await this.request(targetId, 'get_creation', { creationId });

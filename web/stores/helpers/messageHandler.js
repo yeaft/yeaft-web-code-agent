@@ -218,14 +218,29 @@ function applyYeaftSessionInventoryDeltas(slices, deltas) {
   return [...result.values()];
 }
 
+export function hasBufferedLiveYeaftSession(store, agentId, sessionId) {
+  if (!store?.yeaftSessionHydrateRequestId || !agentId || !sessionId) return false;
+  const deltas = store.yeaftSessionHydrateCrudDeltas?.requestId === store.yeaftSessionHydrateRequestId
+    ? store.yeaftSessionHydrateCrudDeltas?.agents : null;
+  const merged = applyYeaftSessionInventoryDeltas(
+    Array.isArray(store.yeaftSessionHydrateSlices) ? store.yeaftSessionHydrateSlices : [],
+    deltas,
+  );
+  const slice = merged.find(s => s && s.agentId === agentId && s.live === true);
+  return Boolean(slice && Array.isArray(slice.sessions) && slice.sessions.some(row => row?.id === sessionId));
+}
+
 // New Servers send an explicit completion frame. Older Servers do not, so the
 // quiet timer below synthesizes that boundary. Both paths commit the same
 // buffered snapshot and never expose per-Agent slices to the live store.
 function commitBufferedYeaftSessionInventory(store) {
   const sessions = sessionsStore();
-  const preferred = sessions?.preferredInventoryIdentity?.() || readLastViewedYeaftSession();
+  const preferred = sessions?.preferredInventoryIdentity?.()
+    || { ...readLastViewedYeaftSession(), fromSavedFallback: true };
   if (typeof sessions?.beginInventoryCommit === 'function') {
-    sessions.beginInventoryCommit(preferred.sessionId, preferred.agentId);
+    sessions.beginInventoryCommit(preferred.sessionId, preferred.agentId, {
+      fromSavedFallback: Boolean(preferred.fromSavedFallback),
+    });
   } else if (typeof sessions?.resetInventory === 'function') {
     sessions.resetInventory();
   }
