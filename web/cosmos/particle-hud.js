@@ -613,11 +613,12 @@ export function drawCosmosHud(ctx, w, h, st, webGraph, galaxyBooks, agentsByPlan
       });
     });
 
-    // Orbit Swap Ripples, Telemetry Beams & Drag Arc
+    // Orbit Swap Ripples, Telemetry Beams & Drag Arc (drain always, draw only in Sol)
     for (let i = st.orbitRipples.length - 1; i >= 0; i--) {
       const rp = st.orbitRipples[i];
       rp.t += 0.022;
       if (rp.t >= 1) { st.orbitRipples.splice(i, 1); continue; }
+      if (!isHomeSystem) continue;
       const pos = st.planetScreen[rp.planetId];
       if (!pos) continue;
       ctx.beginPath(); ctx.arc(pos.x, pos.y, pos.r * (1.1 + rp.t * 2.1), 0, Math.PI * 2);
@@ -627,6 +628,7 @@ export function drawCosmosHud(ctx, w, h, st, webGraph, galaxyBooks, agentsByPlan
       const bm = st.telemetryBeams[i];
       bm.t += 0.030;
       if (bm.t >= 1) { st.telemetryBeams.splice(i, 1); continue; }
+      if (!isHomeSystem) continue;
       const pos = st.planetScreen[bm.planetId];
       if (!pos) continue;
       const p = bm.t, mx = (bm.x0 + pos.x) * 0.5, my = Math.min(bm.y0, pos.y) - 64;

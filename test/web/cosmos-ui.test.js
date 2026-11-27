@@ -3690,9 +3690,12 @@ describe('Cosmos Interstellar Signal Stream (Unified Top-Right Replies, Schedule
     expect(beacons.length).toBeGreaterThan(0);
     expect(beacons.every((b) => b.id !== 'sol')).toBe(true);
 
-    // Warp to Alpha Centauri: midpoint swaps systemId and blends skyTint
+    // Warp to Alpha Centauri from deep soaring: skips departed-system ghosting (jumps straight to arrival half)
     expect(startSystemWarp(voyage, 'alpha-centauri')).toBe(true);
     expect(voyage.soaring).toBe(false);
+    expect(voyage.systemId).toBe('alpha-centauri');
+    // Duplicate warp to same destination does NOT restart warp
+    expect(startSystemWarp(voyage, 'alpha-centauri')).toBe(false);
     let swapped = false;
     let finished = false;
     for (let i = 0; i < 120 && !finished; i++) {
@@ -3704,6 +3707,16 @@ describe('Cosmos Interstellar Signal Stream (Unified Top-Right Replies, Schedule
     expect(finished).toBe(true);
     expect(voyage.systemId).toBe('alpha-centauri');
     expect(getNextStarSystemId('sgr-a')).toBe('sol');
+
+    // Outbound warp from Alpha Centauri -> Sgr A*: canceling back to origin before midpoint cancels cleanly
+    expect(startSystemWarp(voyage, 'sgr-a')).toBe(true);
+    tickVoyageState(voyage, 0.1);
+    expect(startSystemWarp(voyage, 'alpha-centauri')).toBe(false);
+    expect(voyage.warp).toBeNull();
+    // Entering soar mode cancels any active warp
+    expect(startSystemWarp(voyage, 'sgr-a')).toBe(true);
+    expect(toggleSoarMode(voyage, true)).toBe(true);
+    expect(voyage.warp).toBeNull();
 
     // Verify all sightseeing system & body i18n keys exist in both zh-CN and en
     const { zhCN: cosmosZhCN, en: cosmosEn } = await import('../../web/i18n/cosmos.js');

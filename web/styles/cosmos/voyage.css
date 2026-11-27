@@ -11,10 +11,14 @@
   -webkit-user-select: none;
 }
 
+.cosmos-voyage-layer.is-atlas-open {
+  z-index: 31;
+}
+
 .cosmos-voyage-anchor {
   position: fixed;
-  top: 16px;
-  left: 16px;
+  top: calc(16px + env(safe-area-inset-top, 0px));
+  left: calc(16px + env(safe-area-inset-left, 0px));
   pointer-events: auto;
   display: flex;
   flex-direction: column;
@@ -67,7 +71,8 @@
 .cosmos-voyage-sys-btn:focus-visible,
 .cosmos-voyage-soar-btn:focus-visible,
 .cosmos-voyage-atlas-item:focus-visible,
-.cosmos-soar-beacon:focus-visible {
+.cosmos-soar-beacon:focus-visible,
+.cosmos-sightseeing-tag:focus-visible {
   outline: 2px solid var(--c-cyan);
   outline-offset: 2px;
 }
@@ -248,7 +253,7 @@
 .cosmos-voyage-dock {
   position: fixed;
   left: 50%;
-  bottom: 22px;
+  bottom: calc(22px + env(safe-area-inset-bottom, 0px));
   transform: translateX(-50%);
   pointer-events: auto;
   display: inline-flex;
@@ -368,23 +373,47 @@
   border-color: rgba(124, 196, 255, 0.48);
 }
 
-@media (max-width: 640px) {
+@media (max-width: 768px) {
+  .cosmos-page.is-drawer-open .cosmos-voyage-layer {
+    display: none;
+  }
+
   .cosmos-voyage-anchor {
-    top: 12px;
-    left: 12px;
+    top: calc(12px + env(safe-area-inset-top, 0px));
+    left: calc(10px + env(safe-area-inset-left, 0px));
+    max-width: calc(100vw - 148px - env(safe-area-inset-left, 0px) - env(safe-area-inset-right, 0px));
   }
 
   .cosmos-voyage-sys-dist {
     display: none;
   }
 
+  .cosmos-voyage-sys-name {
+    max-width: min(118px, 34vw);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
   .cosmos-voyage-dock {
-    bottom: 14px;
+    bottom: calc(14px + env(safe-area-inset-bottom, 0px));
     flex-wrap: wrap;
     justify-content: center;
     border-radius: 18px;
     padding: 7px 10px;
     gap: 6px;
+  }
+}
+
+@media (max-width: 420px) {
+  .cosmos-voyage-sys-btn,
+  .cosmos-voyage-soar-btn {
+    padding: 0 8px;
+    gap: 5px;
+  }
+
+  .cosmos-voyage-soar-btn span {
+    display: none;
   }
 }
 

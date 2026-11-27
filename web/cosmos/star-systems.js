@@ -358,6 +358,8 @@ export function toggleSoarMode(voyage, forceState = null) {
   const next = typeof forceState === 'boolean' ? forceState : !voyage.soaring;
   voyage.soaring = next;
   if (next) {
+    // Abort any in-flight warp cleanly so soaring and warping never run simultaneously
+    voyage.warp = null;
     voyage.autoPilot = true;
     voyage.targetSoarSpeed = clamp(voyage.targetSoarSpeed || SOAR_DEFAULT_SPEED, SOAR_MIN_SPEED, SOAR_MAX_SPEED);
   }
@@ -376,20 +378,48 @@ export function toggleSoarAutoPilot(voyage, forceState = null) {
  */
 export function startSystemWarp(voyage, targetSystemId) {
   if (!voyage || !STAR_SYSTEM_MAP[targetSystemId]) return false;
+  // Already warping to this exact destination -> do not restart from elapsed = 0
+  if (voyage.warp && voyage.warp.toId === targetSystemId) {
+    return false;
+  }
+  // Clicking the origin system before midpoint cancels the outbound warp cleanly
+  if (voyage.warp && !voyage.warp.swapped && targetSystemId === voyage.systemId) {
+    voyage.warp = null;
+    return false;
+  }
   if (voyage.systemId === targetSystemId && !voyage.warp) {
     voyage.soaring = false;
     return false;
   }
   const fromId = voyage.systemId;
   const duration = computeSystemWarpDuration(fromId, targetSystemId);
+  const alreadyHidden = voyage.soarBlend > 0.72 || (voyage.warp && voyage.warp.swapped) || voyage.systemAlphaMul < 0.12;
+  const fromAlpha = alreadyHidden ? 0 : clamp(voyage.systemAlphaMul ?? 1.0, 0, 1);
   voyage.soaring = false;
-  voyage.warp = {
-    fromId,
-    toId: targetSystemId,
-    elapsed: 0,
-    duration,
-    swapped: false,
-  };
+  if (alreadyHidden) {
+    // Skip fade-out phase when already deep in soaring/mid-warp so departed system never ghosts back in
+    voyage.soarBlend = 0;
+    voyage.systemId = targetSystemId;
+    voyage.warp = {
+      fromId,
+      toId: targetSystemId,
+      elapsed: duration * 0.5,
+      duration,
+      swapped: true,
+      fromAlpha: 0,
+      pendingSwapNotify: true,
+    };
+  } else {
+    voyage.warp = {
+      fromId,
+      toId: targetSystemId,
+      elapsed: 0,
+      duration,
+      swapped: false,
+      fromAlpha,
+      pendingSwapNotify: false,
+    };
+  }
   return true;
 }
 
@@ -437,6 +467,10 @@ export function tickVoyageState(voyage, dt, opts = {}) {
 
   if (voyage.warp) {
     const w = voyage.warp;
+    if (w.pendingSwapNotify) {
+      w.pendingSwapNotify = false;
+      systemChanged = true;
+    }
     w.elapsed += safeDt * (reducedMotion ? 2.4 : 1.0);
     const p = clamp(w.elapsed / Math.max(w.duration, 0.2), 0, 1);
 
@@ -446,7 +480,8 @@ export function tickVoyageState(voyage, dt, opts = {}) {
 
     if (p < 0.5) {
       const outT = easeInOutCubic(p / 0.5);
-      warpAlphaMul = 1.0 - outT;
+      const startAlpha = typeof w.fromAlpha === 'number' ? w.fromAlpha : 1.0;
+      warpAlphaMul = startAlpha * (1.0 - outT);
       warpZoomMul = 1.0 + outT * 1.65;
     } else {
       if (!w.swapped) {
@@ -531,8 +566,10 @@ export function projectSoarBeacons(voyage, width, height, camRot = { x: 0, y: 0 
     if (Math.abs(dAz) > 1.05 || Math.abs(dEl) > 0.72) continue;
     const nx = dAz / 1.05;
     const ny = dEl / 0.72;
-    const x = safeW * (0.5 + nx * 0.40);
-    const y = safeH * (0.48 - ny * 0.34);
+    const marginX = Math.min(82, safeW * 0.25);
+    const rawX = safeW * (0.5 + nx * 0.40);
+    const x = clamp(rawX, marginX, safeW - marginX);
+    const y = clamp(safeH * (0.48 - ny * 0.34), 76, safeH - 96);
     const edgeFade = Math.max(0, 1 - Math.hypot(nx, ny) * 0.62);
     const alpha = clamp((voyage.soarBlend - 0.32) / 0.68, 0, 1) * clamp(edgeFade, 0.25, 1);
     if (alpha > 0.08) {

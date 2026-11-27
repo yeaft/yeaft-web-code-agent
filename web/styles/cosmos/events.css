@@ -780,6 +780,7 @@
 
 @media (max-width: 768px) {
   .cosmos-event-wrap {
+    top: calc(54px + env(safe-area-inset-top, 0px));
     left: calc(10px + env(safe-area-inset-left, 0px));
     transform: none;
     align-items: flex-start;

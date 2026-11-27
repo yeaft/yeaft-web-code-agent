@@ -13,6 +13,7 @@ export default {
   name: 'CosmosVoyageOverlay',
   props: {
     visible: { type: Boolean, default: true },
+    currentBand: { type: String, default: 'solar' },
     systemId: { type: String, default: 'sol' },
     soaring: { type: Boolean, default: false },
     soarSpeed: { type: Number, default: 1.25 },
@@ -30,15 +31,17 @@ export default {
     'toggle-autopilot',
   ],
   template: `
-    <div v-if="visible" class="cosmos-voyage-layer" @pointerdown.stop>
+    <div v-if="visible" class="cosmos-voyage-layer" :class="{ 'is-atlas-open': atlasOpen }" @pointerdown.stop>
       <!-- Top-Left Voyage Pill & Star Atlas Dropdown -->
       <div class="cosmos-voyage-anchor">
         <div class="cosmos-voyage-bar" :class="{ 'is-soaring': soaring, 'is-warping': Boolean(warpingToId) }">
           <button
+            ref="sysBtnRef"
             type="button"
             class="cosmos-voyage-sys-btn"
+            aria-haspopup="menu"
             :aria-expanded="atlasOpen ? 'true' : 'false'"
-            :aria-label="$t('cosmos.voyage.atlasTitle')"
+            :aria-label="$t('cosmos.voyage.atlasTitle') + ' · ' + $t('cosmos.voyage.systems.' + activeSystem.id + '.name')"
             @click="atlasOpen = !atlasOpen"
           >
             <span class="cosmos-voyage-dot" :style="{ background: activeSystem.accent, boxShadow: '0 0 8px ' + activeSystem.accent }" aria-hidden="true"></span>
@@ -85,6 +88,7 @@ export default {
               type="button"
               role="menuitem"
               class="cosmos-voyage-atlas-item"
+              :aria-current="sys.id === systemId && !warpingToId ? 'true' : undefined"
               :class="{
                 'is-current': sys.id === systemId && !warpingToId,
                 'is-target': sys.id === warpingToId,
@@ -139,6 +143,7 @@ export default {
             type="button"
             class="cosmos-ewd-btn"
             :class="{ 'is-active': autoPilot }"
+            :aria-pressed="autoPilot ? 'true' : 'false'"
             @click="$emit('toggle-autopilot')"
           >{{ $t('cosmos.voyage.autoPilot') }}</button>
           <button
@@ -171,8 +176,9 @@ export default {
       </div>
     </div>
   `,
-  setup(props, { emit }) {
+  setup(props, { emit, expose }) {
     const atlasOpen = Vue.ref(false);
+    const sysBtnRef = Vue.ref(null);
     const systems = STAR_SYSTEMS;
 
     const activeSystem = Vue.computed(
@@ -183,11 +189,25 @@ export default {
     );
     const showFlightDock = Vue.computed(() => {
       if (props.planetFocused || props.drawerOpen) return false;
+      if (props.currentBand !== 'solar' && !props.soaring && !props.warpingToId) return false;
       return Boolean(props.warpingToId || props.soaring || props.systemId !== 'sol');
     });
 
     function formatDist(ly) {
       return formatSystemDistance(ly, getLocale() === 'en');
+    }
+
+    function closeAtlas({ restoreFocus = false } = {}) {
+      if (!atlasOpen.value) return false;
+      atlasOpen.value = false;
+      if (restoreFocus) {
+        Vue.nextTick(() => sysBtnRef.value?.focus?.());
+      }
+      return true;
+    }
+
+    function isAtlasOpen() {
+      return Boolean(atlasOpen.value);
     }
 
     function onPickSystem(id) {
@@ -206,15 +226,22 @@ export default {
       atlasOpen.value = false;
     }
 
+    Vue.watch(() => props.visible, (vis) => {
+      if (!vis) atlasOpen.value = false;
+    });
+
     Vue.onMounted(() => {
-      window.addEventListener('pointerdown', onGlobalPointerDown);
+      window.addEventListener('pointerdown', onGlobalPointerDown, true);
     });
     Vue.onUnmounted(() => {
-      window.removeEventListener('pointerdown', onGlobalPointerDown);
+      window.removeEventListener('pointerdown', onGlobalPointerDown, true);
     });
+
+    expose({ isAtlasOpen, closeAtlas });
 
     return {
       atlasOpen,
+      sysBtnRef,
       systems,
       activeSystem,
       warpTargetSystem,

@@ -1052,22 +1052,28 @@ test.describe('Yeaft Cosmos UI', () => {
     await flightDock.locator('.cosmos-ewd-mini').nth(1).click();
     await expect(flightDock.locator('.cosmos-voyage-speed-val')).not.toHaveText(initialSpeed || '');
 
-    // Wait briefly for soarBlend > 0.32 so floating star beacons appear
-    await page.waitForTimeout(550);
-    const visibleBeaconCount = await page.locator('.cosmos-soar-beacon').evaluateAll(
+    // Poll until soarBlend > 0.32 and floating star beacons project into the 3D skybox
+    await expect.poll(async () => page.locator('.cosmos-soar-beacon').evaluateAll(
       (els) => els.filter((el) => el.style.display !== 'none').length,
-    );
-    expect(visibleBeaconCount).toBeGreaterThan(0);
+    ), { timeout: 4000 }).toBeGreaterThan(0);
 
-    // 3. Open Star Atlas and warp to Alpha Centauri (Binary Star System)
+    // 3. Open Star Atlas, verify Escape closes Star Atlas first (without exiting soar)
     await voyageBar.locator('.cosmos-voyage-sys-btn').click();
     const atlas = page.locator('.cosmos-voyage-atlas');
+    await expect(atlas).toBeVisible();
+    await page.keyboard.press('Escape');
+    await expect(atlas).toHaveCount(0);
+    await expect(voyageBar).toHaveClass(/is-soaring/);
+
+    // Re-open Star Atlas and warp to Alpha Centauri (Binary Star System)
+    await voyageBar.locator('.cosmos-voyage-sys-btn').click();
     await expect(atlas).toBeVisible();
     await expect(atlas.locator('.cosmos-voyage-atlas-item')).toHaveCount(5);
     await atlas.locator('.cosmos-voyage-atlas-item').nth(1).click();
 
     // Wait for warp completion into Alpha Centauri
     await expect(voyageBar.locator('.cosmos-voyage-sys-btn')).toContainText(/半人马座|Alpha Centauri/, { timeout: 6000 });
+    await expect(voyageBar).not.toHaveClass(/is-warping/, { timeout: 6000 });
     await expect(page.locator('.cosmos-sightseeing-tag').first()).toBeVisible({ timeout: 5000 });
 
     // 4. Click an exoplanet tag in Alpha Centauri -> centers & opens Planet Focus Inspection Dock
@@ -1080,9 +1086,23 @@ test.describe('Yeaft Cosmos UI', () => {
     await voyageBar.locator('.cosmos-voyage-sys-btn').click();
     await page.locator('.cosmos-voyage-atlas-item').nth(4).click();
     await expect(voyageBar.locator('.cosmos-voyage-sys-btn')).toContainText(/Sgr A\*|人马座/, { timeout: 7000 });
+    await expect(voyageBar).not.toHaveClass(/is-warping/, { timeout: 7000 });
 
     await page.locator('.cosmos-voyage-home-btn').click();
     await expect(voyageBar.locator('.cosmos-voyage-sys-btn')).toContainText(/太阳系|Solar System/, { timeout: 7000 });
+    await expect(voyageBar).not.toHaveClass(/is-warping/, { timeout: 7000 });
+
+    // 6. Verify 390x844 mobile portrait layout: Voyage Bar never overlaps Events pill or Corner Actions
+    await page.setViewportSize({ width: 390, height: 844 });
+    const vBox = await voyageBar.boundingBox();
+    const evBox = await page.locator('.cosmos-event-wrap').boundingBox();
+    const cornerBox = await page.locator('.cosmos-corner-actions').boundingBox();
+    expect(vBox).not.toBeNull();
+    expect(cornerBox).not.toBeNull();
+    expect(vBox.x + vBox.width).toBeLessThanOrEqual(cornerBox.x + 2);
+    if (evBox) {
+      expect(evBox.y).toBeGreaterThanOrEqual(vBox.y + vBox.height - 1);
+    }
 
     expect(errors).toEqual([]);
   });

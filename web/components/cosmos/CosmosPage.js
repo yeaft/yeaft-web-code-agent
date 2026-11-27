@@ -226,7 +226,7 @@ export default {
 
       <!-- Hover Session Preview Card (Click specific session -> Opens Right Conversation Drawer) -->
       <div
-        v-if="hoverCardAgent && !dragActive && currentBand === 'solar' && !isObservingEvent && !isCompactViewport"
+        v-if="hoverCardAgent && !dragActive && currentBand === 'solar' && voyageSystemId === 'sol' && !voyageSoaring && !voyageWarpingToId && !isObservingEvent && !isCompactViewport"
         ref="hoverCardRef"
         class="cosmos-hover-card"
         :style="hoverCardStyle"
@@ -289,7 +289,9 @@ export default {
 
       <!-- Top-Left Interstellar Soaring & Multi-System Sightseeing HUD -->
       <CosmosVoyageOverlay
+        ref="voyageOverlayRef"
         :visible="!isObservingEvent"
+        :current-band="currentBand"
         :system-id="voyageSystemId"
         :soaring="voyageSoaring"
         :soar-speed="voyageSoarSpeed"
@@ -372,7 +374,7 @@ export default {
         <button
           type="button"
           class="cosmos-ewd-btn cosmos-pf-return"
-          :title="$t('cosmos.planetFocus.returnSunTitle')"
+          :title="voyageSystemId === 'sol' ? $t('cosmos.planetFocus.returnSunTitle') : $t('cosmos.voyage.returnCenter')"
           @click="unfocusPlanet"
         >{{ voyageSystemId === 'sol' ? $t('cosmos.planetFocus.returnSun') : $t('cosmos.voyage.returnCenter') }}</button>
       </div>
@@ -468,7 +470,7 @@ export default {
       />
 
       <!-- Zero-Agent Gentle Onboarding Pill -->
-      <div v-if="projectedAgentList.length === 0 && currentBand === 'solar' && !drawerOpen && !quickAgent" class="cosmos-empty-agents-hint">
+      <div v-if="projectedAgentList.length === 0 && currentBand === 'solar' && voyageSystemId === 'sol' && !voyageSoaring && !voyageWarpingToId && !drawerOpen && !quickAgent" class="cosmos-empty-agents-hint">
         <span>{{ $t('cosmos.agent.noAgentsTitle') }}</span>
         <button type="button" class="cosmos-empty-agents-cta" @click="openYeaftSettings({ tab: 'security' })">
           {{ $t('cosmos.agent.connectAgent') }}
@@ -477,7 +479,7 @@ export default {
 
       <!-- Click-Planet Quick Auto-Route Composer -->
       <CosmosQuickComposer
-        v-if="quickAgent && !drawerOpen && currentBand === 'solar'"
+        v-if="quickAgent && !drawerOpen && currentBand === 'solar' && voyageSystemId === 'sol' && !voyageSoaring && !voyageWarpingToId"
         :agent="quickAgent"
         :planet-id="assignments.agentToPlanet[quickAgent.id] || 'earth'"
         @close="quickAgentId = null"
@@ -605,6 +607,7 @@ export default {
     const hoverCardRef = Vue.ref(null);
     const drawerRef = Vue.ref(null);
     const signalTriggerRef = Vue.ref(null);
+    const voyageOverlayRef = Vue.ref(null);
 
     const domRefs = {
       planets: {},
@@ -827,13 +830,18 @@ export default {
       return formatSystemDistance(ly, getLocale() === 'en');
     }
 
-    function syncVoyageRefs() {
+    function syncVoyageRefs(meta = null) {
       voyageSystemId.value = voyage.systemId;
       voyageSoaring.value = voyage.soaring;
       voyageSoarSpeed.value = voyage.targetSoarSpeed;
       voyageAutoPilot.value = voyage.autoPilot;
       voyageWarpingToId.value = voyage.warp ? voyage.warp.toId : '';
-      if (voyage.systemId !== 'sol' && anim.planetFocus.planetId) {
+      if (meta?.systemChanged || (focusedCameraPlanetId.value && !anim.planetFocus.planetId)) {
+        focusedCameraPlanetId.value = null;
+        planetFocusZoom.value = 1.0;
+        planetFocusRotated.value = false;
+      }
+      if (anim.planetFocus.planetId) {
         const sys = getActiveStarSystem(voyage);
         const valid = (sys.bodies || []).some((b) => b.id === anim.planetFocus.planetId);
         if (!valid) unfocusPlanet();
@@ -852,6 +860,7 @@ export default {
       if (next) {
         unfocusPlanet();
         hideHoverImmediate();
+        emptyPlanetMenu.value = null;
         quickAgentId.value = null;
         if (drawerOpen.value) closeDrawer();
         showToast($t('cosmos.voyage.soarStartedToast'));
@@ -870,6 +879,7 @@ export default {
       }
       unfocusPlanet();
       hideHoverImmediate();
+      emptyPlanetMenu.value = null;
       if (targetId !== 'sol') {
         quickAgentId.value = null;
         if (drawerOpen.value) closeDrawer();
@@ -906,7 +916,7 @@ export default {
     }
 
     function onClickSightseeingBody(bodyId) {
-      if (!bodyId || voyage.soaring) return;
+      if (!bodyId || voyage.soaring || voyage.warp) return;
       focusPlanet(bodyId, { defaultZoom: 2.3 });
     }
 
@@ -1056,7 +1066,7 @@ export default {
 
     function onPlanetEnter(planetId, e) {
       if (e?.pointerType === 'touch') return;
-      if (anim.drag?.active || currentBand.value !== 'solar' || isObservingEvent.value) return;
+      if (anim.drag?.active || currentBand.value !== 'solar' || isObservingEvent.value || voyage.systemId !== 'sol' || voyage.soaring || voyage.warp) return;
       clearHoverHideTimer();
       anim.hoverPlanetId = planetId;
       hoverEnterPointer = { x: e?.clientX ?? anim.mouseX, y: e?.clientY ?? anim.mouseY };
@@ -1123,8 +1133,11 @@ export default {
 
     function jumpToScale(targetLog) {
       unfocusPlanet();
-      if (voyage.soaring) {
-        toggleSoarMode(voyage, false);
+      const targetBand = scaleBand(Math.max(7.0, Math.min(24.0, targetLog)));
+      if (voyage.soaring || voyage.warp || (targetBand === 'horizon' && voyage.systemId !== 'sol')) {
+        voyage.soaring = false;
+        voyage.warp = null;
+        if (targetBand === 'horizon') voyage.systemId = 'sol';
         syncVoyageRefs();
       }
       const prev = anim.targetScaleLog;
@@ -1214,6 +1227,14 @@ export default {
         onResetEventView();
         return;
       }
+      if (voyage.soaring) {
+        voyage.headingYaw = 0;
+        voyage.headingPitch = 0;
+        voyage.autoPilot = true;
+        syncVoyageRefs();
+        showToast($t('cosmos.scale.resetView'));
+        return;
+      }
       if (anim.planetFocus.planetId) {
         resetPlanetInspect();
         showToast($t('cosmos.scale.resetView'));
@@ -1224,6 +1245,7 @@ export default {
     }
 
     function onPlanetPointerDown(planetId, ev) {
+      if (voyage.systemId !== 'sol' || voyage.soaring || voyage.warp) return;
       if (ev.pointerType !== 'touch' && ev.button !== 0) return;
       if (ev.pointerType === 'touch') {
         activeTouchPointers.set(ev.pointerId, { x: ev.clientX, y: ev.clientY });
@@ -1290,13 +1312,17 @@ export default {
               const res = setCosmicEventZoom(eventSim, eventSim.active.targetZoom + zoomDelta, { allowExit: true });
               syncEventRefs();
               if (res?.exited) showToast($t('cosmos.events.returnedToast'));
+            } else if (voyage.soaring) {
+              const ratio = dist / Math.max(pinchPrevDist, 1);
+              onSetSoarSpeed(voyage.targetSoarSpeed * Math.pow(ratio, 1.2));
             } else if (anim.planetFocus.planetId) {
               const ratio = dist / Math.max(pinchPrevDist, 1);
               setPlanetZoom(anim.planetFocus.targetZoom * Math.pow(ratio, 1.35));
             } else {
               const ratio = pinchPrevDist / dist;
               const step = Math.max(-1.2, Math.min(1.2, Math.log(ratio) * 4.4));
-              anim.targetScaleLog = Math.max(7.0, Math.min(24.0, anim.targetScaleLog + step));
+              const minScale = voyage.systemId === 'sol' ? 7.0 : 11.2;
+              anim.targetScaleLog = Math.max(minScale, Math.min(24.0, anim.targetScaleLog + step));
               anim.warpEnergy = Math.min(1.0, anim.warpEnergy + Math.min(0.45, Math.abs(step) * 0.65));
               hideHoverImmediate();
               if (scaleBand(anim.targetScaleLog) !== 'solar') {
@@ -1451,7 +1477,7 @@ export default {
             }
           }
           // 3. Direct click on a zoomed planet / sightseeing body
-          if (currentBand.value === 'solar' && !eventSim.active?.observing && !voyage.soaring) {
+          if (currentBand.value === 'solar' && !eventSim.active?.observing && !voyage.soaring && !voyage.warp) {
             const activeSys = getActiveStarSystem(voyage);
             for (const p of (activeSys.bodies || PLANETS)) {
               const pos = anim.planetScreen[p.id];
@@ -1762,11 +1788,9 @@ export default {
 
     function jumpToWaitingAgent() {
       const ag = waitingAgent.value;
-      if (voyage.soaring) toggleSoarMode(voyage, false);
-      if (voyage.systemId !== 'sol') {
-        voyage.systemId = 'sol';
-        voyage.warp = null;
-      }
+      voyage.soaring = false;
+      voyage.warp = null;
+      voyage.systemId = 'sol';
       syncVoyageRefs();
       jumpToScale(13.0);
       if (waitJumpTimer) {
@@ -1793,6 +1817,12 @@ export default {
     function onObserveEvent(payload) {
       const eventId = typeof payload === 'string' ? payload : (payload?.eventId || null);
       const forceObserve = Boolean(payload && typeof payload === 'object' && payload.forceObserve);
+      if (voyage.soaring || voyage.warp || voyage.systemId !== 'sol') {
+        voyage.soaring = false;
+        voyage.warp = null;
+        voyage.systemId = 'sol';
+        syncVoyageRefs();
+      }
       if (scaleBand(anim.targetScaleLog) !== 'solar') jumpToScale(13.0);
       const existingLive = (eventSim.events || []).find((e) => !eventId || e.def.id === eventId) || null;
       const shouldZoomIn = forceObserve || Boolean(existingLive) || Boolean(constants.eventsAutoZoom);
@@ -1815,6 +1845,12 @@ export default {
     }
     function onFocusDistantEvent(uid = null) {
       if (!eventSim.active && (!eventSim.events || eventSim.events.length === 0)) return;
+      if (voyage.soaring || voyage.warp || voyage.systemId !== 'sol') {
+        voyage.soaring = false;
+        voyage.warp = null;
+        voyage.systemId = 'sol';
+        syncVoyageRefs();
+      }
       if (scaleBand(anim.targetScaleLog) !== 'solar') jumpToScale(13.0);
       unfocusPlanet();
       const act = uid ? focusCosmicEventByUid(eventSim, uid) : focusActiveCosmicEvent(eventSim);
@@ -1946,9 +1982,15 @@ export default {
         openCosmosSessionSearch();
         return;
       }
-      if (voyage.soaring && !settingsModal.open && !agentSettingsModal.open && !sessionSettingsModal.open) {
+      if (
+        voyage.soaring
+        && !(e.ctrlKey || e.metaKey || e.altKey)
+        && !settingsModal.open && !agentSettingsModal.open && !sessionSettingsModal.open
+        && !constantsOpen.value && !signalPopoverOpen.value
+        && !voyageOverlayRef.value?.isAtlasOpen?.()
+      ) {
         const tag = String(e.target?.tagName || '').toLowerCase();
-        const isTyping = tag === 'input' || tag === 'textarea' || e.target?.isContentEditable;
+        const isTyping = tag === 'input' || tag === 'textarea' || tag === 'select' || e.target?.isContentEditable;
         if (!isTyping) {
           const k = String(e.key || '').toLowerCase();
           if (k === 'w' || k === 'arrowup') {
@@ -1969,6 +2011,7 @@ export default {
       if (settingsModal.open) { settingsModal.open = false; return; }
       if (agentSettingsModal.open) { agentSettingsModal.open = false; return; }
       if (emptyPlanetMenu.value) { emptyPlanetMenu.value = null; return; }
+      if (voyageOverlayRef.value?.isAtlasOpen?.()) { voyageOverlayRef.value.closeAtlas({ restoreFocus: true }); return; }
       if (signalPopoverOpen.value) { closeSignalPopover({ restoreFocus: true }); return; }
       if (constantsOpen.value) { constantsOpen.value = false; return; }
       if (bookCreateOpen.value) { bookCreateOpen.value = false; return; }
@@ -2214,7 +2257,7 @@ export default {
     });
 
     return {
-      glCanvasRef, hudCanvasRef, hoverCardRef, drawerRef, signalTriggerRef, domRefs, setMapRef, canvasEpoch, rendererMode,
+      glCanvasRef, hudCanvasRef, hoverCardRef, drawerRef, signalTriggerRef, voyageOverlayRef, domRefs, setMapRef, canvasEpoch, rendererMode,
       planets: PLANETS, bookDomains: BOOK_DOMAINS,
       portals: [
         { id: 'to-galaxy', labelKey: 'cosmos.scale.galaxy', scale: '10²¹', target: 21.0, ring: 64 },

@@ -235,7 +235,7 @@ export const BG_FRAG = `
     /* 3. Multi-Octave 3D Depth Starfield */
     float threshA = clamp(0.982 - 0.014 * uStarDensity, 0.942, 0.995);
     float threshB = clamp(0.968 - 0.020 * uStarDensity, 0.922, 0.992);
-    float zPhase = scaleDelta * 0.48 + uRealTime * 0.0018 - uSoarVec.z * 0.22;
+    float zPhase = scaleDelta * 0.48 + uRealTime * 0.0018 + uSoarVec.z * 0.22;
     vec2 starDrift = vec2(uRealTime * 0.0024, uRealTime * 0.00085) + uParallax * 0.032 + uCamRot * 0.12 + uSoarVec.xy * 0.14;
     float warpAmt = uWarp * clamp(pRad * 1.4, 0.0, 1.35);
     vec3 stars = vec3(0.0);

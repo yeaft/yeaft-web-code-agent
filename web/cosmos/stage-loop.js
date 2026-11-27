@@ -150,7 +150,7 @@ export function stepCosmosFrame(now, ctx) {
       pf.zoom = 1.0;
       pf.targetZoom = 1.0;
     }
-    onSyncVoyage?.();
+    onSyncVoyage?.({ systemChanged: voyageTick.systemChanged, warpFinished: voyageTick.warpFinished });
   }
   const activeSys = getActiveStarSystem(voyage);
   const isHomeSystem = Boolean(activeSys.isHome);
@@ -409,7 +409,12 @@ export function stepCosmosFrame(now, ctx) {
           const sTag = domRefs.sightseeingTags?.[p.id];
           if (sTag) {
             const tagOffY = Math.min(h * 0.40, rPx * (p.bodyType === 6 ? 1.24 : 1.16) + (isCompact ? 10 : 12));
-            sTag.style.transform = `translate(-50%, ${tagOffY}px)`;
+            const tagClampX = isCompact
+              ? (sx < 62 ? 62 - sx : (sx > w - 62 ? w - 62 - sx : 0))
+              : 0;
+            sTag.style.transform = tagClampX !== 0
+              ? `translate(calc(-50% + ${Math.round(tagClampX)}px), ${tagOffY}px)`
+              : `translate(-50%, ${tagOffY}px)`;
           }
         }
       }
@@ -464,6 +469,9 @@ export function stepCosmosFrame(now, ctx) {
         strength: sgrBhStrength,
       }
       : { x: 0, y: 0, radius: 0.01, strength: 0 });
+  if (sgrBhStrength > 0.01) {
+    anim.solarSunScreen = { x: sunPt.x, y: sunPt.y, r: Math.max(sunRadius, bhParams.radius * h) };
+  }
 
   const toScreen = (nx, ny) => ({ x: (nx / aspect + 0.5) * w, y: (0.5 - ny) * h });
   const placePortal = (id, nx, ny, vis) => {
@@ -612,6 +620,7 @@ export function stepCosmosFrame(now, ctx) {
     fovZoom: eventSim.fovZoom,
     skyTint,
     soarVec,
+    soarBlend: reducedMotion ? 0 : soarBlend,
     shockWave: eventVisibilityAlpha > 0.01
       ? getEventShockWave(eventSim, w, h, anim.centerShiftX, portalAvoidPoints, eventVisibilityAlpha, anim.camRot, anim.parallax)
       : [0, 0, 0, 0],
@@ -646,7 +655,7 @@ export function stepCosmosFrame(now, ctx) {
         activeBodies,
         hasComets: activeSys.hasComets !== false,
         isHomeSystem,
-        soarBlend,
+        soarBlend: reducedMotion ? 0 : soarBlend,
         soarPhase: voyage?.flightPhase || 0,
         voyageWarp,
       }, (ec, ew, eh) => {

@@ -429,6 +429,7 @@ export function createFallback2DEngine(glCanvas, hudCanvas, opts = {}) {
         fovZoom = 1.0,
         skyTint = [1.0, 1.0, 1.0],
         soarVec = [0.0, 0.0, 0.0],
+        soarBlend = 0,
         skyBright = 1.05,
         starDensity = 1.18,
         bhParams = { x: 0, y: 0, radius: 0, strength: 0 },
@@ -469,21 +470,6 @@ export function createFallback2DEngine(glCanvas, hudCanvas, opts = {}) {
         drawCtx.drawImage(milkyImg, mwW * 0.5 - shiftX, shiftY, mwW, mwH);
         drawCtx.restore();
 
-        // Subtle per-star-system celestial nebula atmosphere tint
-        if (Math.abs((skyTint[0] ?? 1) - 1) > 0.03 || Math.abs((skyTint[1] ?? 1) - 1) > 0.03 || Math.abs((skyTint[2] ?? 1) - 1) > 0.03) {
-          drawCtx.save();
-          drawCtx.globalCompositeOperation = 'screen';
-          const tr = Math.min(255, Math.round(Math.max(0, (skyTint[0] || 1) - 0.55) * 160));
-          const tg = Math.min(255, Math.round(Math.max(0, (skyTint[1] || 1) - 0.55) * 145));
-          const tb = Math.min(255, Math.round(Math.max(0, (skyTint[2] || 1) - 0.55) * 185));
-          const ng = drawCtx.createRadialGradient(width * 0.5, height * 0.48, 20, width * 0.5, height * 0.5, Math.max(width, height) * 0.72);
-          ng.addColorStop(0, `rgba(${tr}, ${tg}, ${tb}, 0.24)`);
-          ng.addColorStop(1, `rgba(${tr}, ${tg}, ${tb}, 0)`);
-          drawCtx.fillStyle = ng;
-          drawCtx.fillRect(0, 0, width, height);
-          drawCtx.restore();
-        }
-
         // Feather top/bottom galactic poles seamlessly into deep space void
         const vig = drawCtx.createRadialGradient(
           width * 0.5, height * 0.5, Math.min(width, height) * 0.22,
@@ -502,6 +488,21 @@ export function createFallback2DEngine(glCanvas, hudCanvas, opts = {}) {
         drawCtx.fillRect(0, 0, width, height);
       }
 
+      // Per-star-system celestial nebula atmosphere tint (runs regardless of Milky Way texture load state)
+      if (Math.abs((skyTint[0] ?? 1) - 1) > 0.03 || Math.abs((skyTint[1] ?? 1) - 1) > 0.03 || Math.abs((skyTint[2] ?? 1) - 1) > 0.03) {
+        drawCtx.save();
+        drawCtx.globalCompositeOperation = 'screen';
+        const tr = Math.min(255, Math.round(Math.max(0, (skyTint[0] || 1) - 0.55) * 160));
+        const tg = Math.min(255, Math.round(Math.max(0, (skyTint[1] || 1) - 0.55) * 145));
+        const tb = Math.min(255, Math.round(Math.max(0, (skyTint[2] || 1) - 0.55) * 185));
+        const ng = drawCtx.createRadialGradient(width * 0.5, height * 0.48, 20, width * 0.5, height * 0.5, Math.max(width, height) * 0.72);
+        ng.addColorStop(0, `rgba(${tr}, ${tg}, ${tb}, 0.24)`);
+        ng.addColorStop(1, `rgba(${tr}, ${tg}, ${tb}, 0)`);
+        drawCtx.fillStyle = ng;
+        drawCtx.fillRect(0, 0, width, height);
+        drawCtx.restore();
+      }
+
       // 3. Spectral Starfield with warp streaking
       const count = Math.min(stars.length, Math.round(stars.length * Math.min(1.4, Math.max(0.35, starDensity * 0.85))));
       const cx0 = width * 0.5;
@@ -510,17 +511,19 @@ export function createFallback2DEngine(glCanvas, hudCanvas, opts = {}) {
       const soarDepth = soarVec[2] || 0;
       const soarYawPx = (soarVec[0] || 0) * 85;
       const soarPitchPx = (soarVec[1] || 0) * 65;
+      const flyActivity = Math.max(0, Math.min(1, Math.max(soarBlend || 0, warp || 0)));
       for (let i = 0; i < count; i++) {
         const st = stars[i];
         const zCycle = (st.depth + soarDepth * 0.14) % 1;
-        const zScale = soarDepth > 0.001 ? (0.45 + zCycle * 1.45) : 1.0;
+        const zScale = 1.0 + ((0.45 + zCycle * 1.45) - 1.0) * flyActivity;
+        const flyEnv = 1.0 - flyActivity * (1.0 - Math.sin(Math.PI * zCycle));
         const baseRawX = (((st.x * width + parallax.x * 28 * st.depth + (camRot.x * 95 + soarYawPx) * st.depth + realTime * 1.4 * st.depth) % width) + width) % width;
         const baseRawY = (((st.y * height + parallax.y * 22 * st.depth + (camRot.y * 70 + soarPitchPx) * st.depth) % height) + height) % height;
         const sx = cx0 + (baseRawX - cx0) * starZoom * zScale;
         const sy = cy0 + (baseRawY - cy0) * starZoom * zScale;
         if (sx < -24 || sx > width + 24 || sy < -24 || sy > height + 24) continue;
         const tw = 0.82 + 0.18 * Math.sin(realTime * st.speed + st.phase);
-        const alpha = st.alpha * tw;
+        const alpha = st.alpha * tw * flyEnv;
         const [cr, cg, cb] = st.col;
 
         if (warp > 0.08) {
