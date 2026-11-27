@@ -1,5 +1,6 @@
 // @vitest-environment happy-dom
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { createHash, webcrypto } from 'node:crypto';
 import { mkdtempSync, rmSync, readFileSync, readdirSync, mkdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { runInNewContext } from 'node:vm';
@@ -1149,7 +1150,7 @@ describe('Cosmos Creations — End-to-End Web Store <-> Server Relay <-> Agent S
     }
   });
 
-  it('R6-F3: retains an attachment added before retrying a lost Ignite create ACK', async () => {
+  it.each(['added', 'replaced', 'digest missing'])('R7-F1: retains unconfirmed attachments after a lost Ignite create ACK (%s)', async scenario => {
     await registerBrowserStores();
     const { default: CosmosGalaxyOverlay } = await import('../../web/components/cosmos/creations/CosmosGalaxyOverlay.js');
     const { agentId } = route;
@@ -1160,22 +1161,29 @@ describe('Cosmos Creations — End-to-End Web Store <-> Server Relay <-> Agent S
     const handleResponse = creationsStore.handleCreationResponse;
     let droppedAck = false;
     vi.spyOn(creationsStore, 'handleCreationResponse').mockImplementation(msg => {
-      if (msg.op !== 'create_creation' || droppedAck || !msg.ok) return handleResponse(msg);
+      if (msg.op !== 'create_creation' || !msg.ok) return handleResponse(msg);
+      if (droppedAck) {
+        // Exercise the digest-capable wire contract even on Agents that omit the optional field.
+        const sha256 = scenario === 'digest missing' ? undefined : createHash('sha256').update('hello').digest('hex');
+        const sources = msg.data.sources.map(source => ({ ...source, sha256 }));
+        return handleResponse({ ...msg, data: { ...msg.data, sources } });
+      }
       droppedAck = true;
       committed.resolve(msg.data);
     });
     const send = interceptSocket(chatStore, msg => {
       if (msg.type === 'yeaft_create_session') return sessionAck(chatStore, msg, 'create', { session: { id: 'linked-session' } });
     });
-    const file1 = new File(['sent'], 'first.txt', { type: 'text/plain' });
-    const file2 = new File(['unsent'], 'second.txt', { type: 'text/plain' });
+    const file1 = new File(['hello'], 'brief.txt', { type: 'text/plain' });
+    const file2 = new File(['world'], scenario === 'added' ? 'second.txt' : 'brief.txt', { type: 'text/plain' });
     let uploadSeq = 0;
-    vi.spyOn(creationsStore, 'uploadRawFiles').mockImplementation(async files => files.map(file => {
+    vi.spyOn(creationsStore, 'uploadRawFiles').mockImplementation(async files => Promise.all(files.map(async file => {
       const fileId = `${file.name}-${++uploadSeq}`;
       uploads.set(fileId, { userId: 'alice', name: file.name, mimeType: file.type, uploadedAt: Date.now(),
-        buffer: Buffer.from(file.name === file1.name ? 'sent' : 'unsent') });
+        buffer: Buffer.from(await file.arrayBuffer()) });
       return { fileId };
-    }));
+    })));
+    vi.stubGlobal('crypto', webcrypto);
     const draft = creationsStore.igniteDraft;
     const galaxy = render(CosmosGalaxyOverlay, { props: { visible: true, agents: chatStore.agents } });
     Object.assign(draft, { open: true, title: 'Atlas', pendingFiles: [file1] });
@@ -1188,21 +1196,24 @@ describe('Cosmos Creations — End-to-End Web Store <-> Server Relay <-> Agent S
       await firstSubmit;
       expect(draft.error).toMatch(/timed out/);
       expect(galaxy.emitted('open-creation')).toBeUndefined();
-      draft.pendingFiles.push(file2);
+      if (scenario === 'replaced') galaxy.vm.removePendingFile(0);
+      if (scenario !== 'digest missing') galaxy.vm.onFilePicked({ target: { files: [file2] } });
       await galaxy.vm.submitIgnite();
       expect(draft.error).toBeNull();
       const creates = send.mock.calls.map(([msg]) => msg.payload).filter(payload => payload?.importKey);
       expect(creates).toHaveLength(2);
       expect(creates[1].importKey).toBe(creates[0].importKey);
-      expect(creates[1].attachments).toEqual([{ fileId: 'first.txt-2' }, { fileId: 'second.txt-3' }]);
+      expect(creates[1].attachments).toEqual(scenario === 'added'
+        ? [{ fileId: 'brief.txt-2' }, { fileId: 'second.txt-3' }] : [{ fileId: 'brief.txt-2' }]);
       expect(serviceA.store.listCreations()).toHaveLength(1);
       expect(serviceA.store.listSources(id)).toEqual([expect.objectContaining({ name: file1.name, byteLength: file1.size })]);
-      expect(draft.pendingFiles).toEqual([file2]);
+      expect(draft.pendingFiles).toEqual([scenario === 'digest missing' ? file1 : file2]);
       expect(draft.open).toBe(true);
       expect(galaxy.emitted('toast')).toContainEqual([expect.stringMatching(/Unuploaded attachments|未上传的附件/)]);
       expect(galaxy.emitted('open-creation')).toEqual([[expect.objectContaining({ creationId: id, keepIgniteDockOpen: true })]]);
     } finally {
       vi.useRealTimers();
+      vi.unstubAllGlobals();
     }
   });
 
@@ -1832,6 +1843,58 @@ describe('Cosmos Creations — End-to-End Web Store <-> Server Relay <-> Agent S
     }
   });
 
+  it('R7-F2: a clean Cosmos tab must accept an unrecorded Creation before its initial prompt', async () => {
+    const { sessions } = await registerBrowserStores();
+    const [{ default: CosmosPage }, { default: CreationTab }] = await Promise.all([
+      import('../../web/components/cosmos/CosmosPage.js'), import('../../web/components/workbench/CreationTab.js'),
+    ]);
+    const { agentId, sessionId } = route;
+    chatStore.agents = [{ id: agentId, online: true, capabilities: ['creations', 'file_editor', 'creation_workbench_files', 'workbench_session_routes'] }];
+    Object.assign(chatStore, { uiMode: 'cosmos', currentAgent: agentId, currentView: 'yeaft',
+      yeaftActiveSessionFilter: sessionId, workbenchRouteProtocolSupported: true });
+    const current = serviceA.store.createCreation({ title: 'Current', initializeFolder: true, sessionId });
+    const next = serviceA.store.createCreation({ title: 'Unrecorded', sessionId });
+    expect(next.rootDir).toBeNull();
+    sessions.applySnapshotUpsert({ id: sessionId, workDir: current.rootDir }, agentId);
+    await creationsStore.selectGalaxyAgent(agentId);
+    mockWorkbenchFiles(chatStore);
+    vi.spyOn(globalThis, 'requestAnimationFrame').mockReturnValue(1);
+    const page = render(CosmosPage, { stubs: {
+      CosmosQuickComposer: true, CosmosGalaxyOverlay: true, SettingsPanel: true,
+      AgentSettingsPanel: true, SessionSettingsModal: true, MessageList: true, ChatInput: true, Teleport: true,
+    } });
+    page.vm.currentBand = 'galaxy';
+    await Vue.nextTick();
+    await page.vm.openGalaxyCreation({ agentId, creationId: current.id, sessionId, rootDir: current.rootDir });
+    await flushPromises();
+    const tab = page.getComponent(CreationTab);
+    expect(tab.vm.activeCreation.id).toBe(current.id);
+    expect(creationsStore.listDirtyDocDrafts(agentId)).toEqual([]);
+
+    const gate = deferred();
+    const ensure = vi.spyOn(creationsStore, 'ensureWorkspace').mockImplementation(async () => {
+      await gate.promise;
+      throw new Error('Agent rejected the workspace');
+    });
+    const wait = vi.spyOn(creationsStore, 'waitForCreationActivation');
+    const sendPrompt = vi.spyOn(chatStore, 'sendYeaftSessionMessage').mockResolvedValue({ ok: true });
+    const openSeq = creationsStore.cancelPendingWorkspaceOpen();
+    const detail = { agentId, sessionId, creationId: next.id, rootDir: null, initialPrompt: 'Plan the next atlas', openSeq };
+    fireWindowEvent('cosmos-open-creation-workspace', detail);
+    await flushPromises();
+    expect(detail.handled).toBe(true);
+    expect(ensure).toHaveBeenCalledExactlyOnceWith(agentId, next.id, {});
+    expect(wait).toHaveBeenCalledExactlyOnceWith(openSeq, expect.objectContaining({ agentId, sessionId }));
+    expect(sendPrompt).not.toHaveBeenCalled();
+
+    gate.resolve();
+    expect(await wait.mock.results[0].value).toBe(false);
+    await flushPromises();
+    expect(tab.get('.creation-wb-target-error').text()).toContain('Agent rejected the workspace');
+    expect(tab.vm.activeCreation.id).toBe(current.id);
+    expect(sendPrompt).not.toHaveBeenCalled();
+  });
+
   it('R5-F4: cancels a stale Cosmos activation and does not send its prompt after a same-Session workDir change', async () => {
     const { sessions } = await registerBrowserStores();
     const [{ default: CosmosPage }, { default: CreationTab }] = await Promise.all([
@@ -2170,6 +2233,19 @@ describe('File Canvas and route-scoped composer references', () => {
       expect(resolveMediaUrl).toHaveBeenCalledExactlyOnceWith(`${rootDir}/cover.png`);
       expect(canvas.find('img[src]').exists()).toBe(url === '/api/preview/local');
     }
+  });
+
+  it.each([
+    [String.raw`/repo/team\docs/README.md`, 'notes.md', String.raw`/repo/team\docs/notes.md`],
+    [String.raw`\\host\share\docs\README.md`, 'notes.md', '//host/share/docs/notes.md'],
+    ['//host/share/docs/README.md', 'notes.md', '//host/share/docs/notes.md'],
+    ['//host/share/docs/../docs/README.md', '../../../notes.md', '//host/share/notes.md'],
+    [String.raw`C:\docs\README.md`, '../../notes.md', 'C:/notes.md'],
+  ])('R7-F3: resolves Canvas links from %s with target %s', async (path, href, targetPath) => {
+    const file = { name: 'README.md', path, content: `[Notes](${href})` };
+    const wrapper = render(FileCanvasView, { props: { routeKey, file } });
+    await wrapper.get('.canvas-doc-content a').trigger('click');
+    expect(wrapper.emitted('open-relative-link')).toEqual([[expect.objectContaining({ targetPath })]]);
   });
 
   it.each([['png', 'img', 'load'], ['mp4', 'video', 'loadeddata']])(
@@ -2988,6 +3064,51 @@ describe('Folder Creation and Files in Workbench', () => {
       expect(sendPrompt).not.toHaveBeenCalled();
       expect(tab.get('.creation-wb-target-error').text()).toContain(outcome === 'rejected'
         ? 'Agent rejected the workspace' : t('creation.workbench.missingRootDir'));
+    }
+  });
+
+  it.each([false, true])('R7-F2: Classic first mount waits for the destination receipt (accepted: %s)', async accepted => {
+    const { sessions } = await registerBrowserStores();
+    const { default: WorkbenchPanel } = await import('../../web/components/WorkbenchPanel.js');
+    sessions.applySnapshotUpsert({ id: route.sessionId, workDir: rootDir }, route.agentId);
+    const creation = { id: 'unrecorded', rootDir: null, sessionId: route.sessionId };
+    creations.byAgent[route.agentId].list = [creation];
+    mockWorkbenchFiles(chat);
+    const gate = deferred();
+    const ensure = vi.spyOn(creations, 'ensureWorkspace')
+      .mockResolvedValueOnce({ creation, rootDir: null }) // Session resolution leaves the workspace unrecorded.
+      .mockImplementation(async () => {
+        await gate.promise;
+        if (!accepted) throw new Error('Agent rejected the workspace');
+        return { creation: { ...creation, rootDir }, rootDir };
+      });
+    const wait = vi.spyOn(creations, 'waitForCreationActivation');
+    const sendPrompt = vi.spyOn(chat, 'sendYeaftSessionMessage').mockResolvedValue({ ok: true });
+    const panel = render(WorkbenchPanel);
+    expect(panel.findComponent(CreationTab).exists()).toBe(false);
+    expect(creations.hasMountedCreationTab(route.agentId, route.sessionId)).toBe(false);
+    expect(creations.listDirtyDocDrafts(route.agentId)).toEqual([]);
+
+    const opening = creations.openCreationWorkspace({ ...route, creationId: creation.id,
+      initialPrompt: 'Plan the next atlas', uiMode: 'classic' });
+    await flushPromises();
+    const tab = panel.getComponent(CreationTab);
+    expect(ensure.mock.calls).toEqual([[route.agentId, creation.id], [route.agentId, creation.id, {}]]);
+    expect(wait).toHaveBeenCalledTimes(1);
+    const settled = vi.fn();
+    void wait.mock.results[0].value.then(settled);
+    await Vue.nextTick();
+    expect(settled).not.toHaveBeenCalled();
+    expect(sendPrompt).not.toHaveBeenCalled();
+
+    gate.resolve();
+    await opening;
+    expect(settled).toHaveBeenCalledExactlyOnceWith(accepted);
+    if (accepted) {
+      expect(sendPrompt).toHaveBeenCalledExactlyOnceWith({ groupId: route.sessionId, text: 'Plan the next atlas' });
+    } else {
+      expect(tab.get('.creation-wb-target-error').text()).toContain('Agent rejected the workspace');
+      expect(sendPrompt).not.toHaveBeenCalled();
     }
   });
 

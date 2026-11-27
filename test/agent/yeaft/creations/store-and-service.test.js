@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { constants, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, unlinkSync, utimesSync, writeFileSync } from 'node:fs';
+import { chmodSync, constants, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, unlinkSync, utimesSync, writeFileSync } from 'node:fs';
 import { mkdir, open } from 'node:fs/promises';
 import { basename, dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -342,7 +342,44 @@ describe('Creation folder workspaces', () => {
     if (mode === 'unavailable') expect(store.all('SELECT * FROM creation_materialization_journal')).toEqual([]);
   });
 
-  it.each(['empty', 'partial', 'different inode', 'non-prefix'])('recovers or rejects an interrupted EXDEV write (%s)', mode => {
+  it('rejects a root inode replacement after publication and on retry', () => {
+    const id = 'replaced-root';
+    const rootDir = join(dir, 'external');
+    const moved = join(dir, 'original');
+    mkdirSync(rootDir);
+    const { dev, ino } = statSync(rootDir, { bigint: true });
+    store.createCreation({ id });
+    store.createNode(id, { id: 'draft', title: 'Draft', content: 'Draft body' });
+    const journal = () => store.one('SELECT * FROM creation_materialization_journal WHERE creation_id=?', id);
+    const result = runExternalWorker(`
+      const tx = store.transaction.bind(store);
+      let swapped = false;
+      store.transaction = fn => tx(() => {
+        const row = store.one('SELECT * FROM creation_materialization_journal WHERE creation_id=?', ${JSON.stringify(id)});
+        if (!swapped && row?.temp_files_json === '[]' && JSON.parse(row.published_outputs_json)['node:draft']) {
+          fs.renameSync(${JSON.stringify(rootDir)}, ${JSON.stringify(moved)});
+          fs.mkdirSync(${JSON.stringify(rootDir)});
+          swapped = true;
+        }
+        return fn();
+      });
+      assert.throws(() => store.ensureWorkspace(${JSON.stringify(id)}, { rootDir: ${JSON.stringify(rootDir)} }),
+        error => ['CONFLICT', 'INVALID_PATH'].includes(error.code));
+      assert.ok(swapped);
+    `);
+    expect(result.status, result.stderr).toBe(0);
+    expect(statSync(rootDir, { bigint: true }).ino).not.toBe(ino);
+    expect(store.getCreation(id).rootDir).toBeNull();
+    const retained = journal();
+    expect(JSON.parse(retained.planned_outputs_json)).toMatchObject({ root_dev: String(dev), root_ino: String(ino) });
+    expect(JSON.parse(retained.published_outputs_json)['node:draft']).toBe(join('docs', 'Draft.md'));
+    expect(() => store.ensureWorkspace(id, { rootDir })).toThrow(err('INVALID_PATH'));
+    expect(journal()).toEqual(retained);
+    expect(readdirSync(rootDir)).toEqual([]);
+    expect(readFileSync(join(moved, 'docs', 'Draft.md'), 'utf8')).toBe('Draft body');
+  });
+
+  it.each(['empty', 'partial', 'different inode', 'non-prefix', 'deleted node'])('recovers or rejects an interrupted EXDEV write (%s)', mode => {
     const id = 'cross-device-retry';
     const rootDir = join(dir, 'external');
     mkdirSync(rootDir);
@@ -372,7 +409,15 @@ describe('Creation folder workspaces', () => {
       sha256: createHash('sha256').update('Draft body').digest('hex') };
     expect(JSON.parse(journal().published_outputs_json)['node:draft']).toEqual(pending);
     expect(readFileSync(dest, 'utf8')).toBe(mode === 'empty' ? '' : 'Draf');
-    if (mode === 'different inode' || mode === 'non-prefix') {
+    if (mode === 'deleted node') {
+      store.deleteNode(id, 'draft');
+      expect(() => store.ensureWorkspace(id, { rootDir })).toThrow(expect.objectContaining({
+        code: 'CONFLICT', message: 'Incomplete external materialization output remains unresolved',
+      }));
+      expect(JSON.parse(journal().published_outputs_json)['node:draft']).toEqual(pending);
+      expect(store.getCreation(id).rootDir).toBeNull();
+      expect(readFileSync(dest, 'utf8')).toBe('Draf');
+    } else if (mode === 'different inode' || mode === 'non-prefix') {
       if (mode === 'different inode') renameSync(dest, join(rootDir, 'original'));
       const userBytes = mode === 'different inode' ? 'Draf' : 'user';
       writeFileSync(dest, userBytes);
@@ -736,6 +781,70 @@ describe('Creation folder workspaces', () => {
     expect(result.rootDir).toBe(retry === 'external' ? valid : join(store.root, '_workspaces', id));
   });
 
+  it.each(['root', 'existing subdirectory'])('preflights write access before journaling (%s)', blocked => {
+    const id = 'read-only';
+    const rootDir = join(dir, 'external');
+    const readOnly = blocked === 'root' ? rootDir : join(rootDir, 'docs');
+    mkdirSync(readOnly, { recursive: true });
+    chmodSync(readOnly, 0o555);
+    store.createCreation({ id });
+    store.createNode(id, { title: 'Draft', content: 'Draft body' });
+    try {
+      const result = runExternalWorker(`
+        const { accessSync } = fs;
+        const ancestor = ${JSON.stringify(readOnly)};
+        const mode = fs.constants.W_OK | fs.constants.X_OK;
+        // A privileged test runner can bypass chmod; inject the same kernel error in that case.
+        try {
+          accessSync(ancestor, mode);
+          fs.accessSync = (filename, flags) => {
+            if (filename === ancestor && flags === mode) throw Object.assign(new Error('read only'), { code: 'EACCES' });
+            return accessSync(filename, flags);
+          };
+          syncBuiltinESMExports();
+        } catch (error) { assert.equal(error.code, 'EACCES'); }
+        const run = store.run.bind(store);
+        store.run = (sql, ...args) => {
+          assert.ok(!sql.startsWith('INSERT INTO creation_materialization_journal'), 'must fail before journaling');
+          return run(sql, ...args);
+        };
+        assert.throws(() => store.ensureWorkspace(${JSON.stringify(id)}, { rootDir: ${JSON.stringify(rootDir)} }), { code: 'EACCES' });
+      `);
+      expect(result.status, result.stderr).toBe(0);
+      expect(store.all('SELECT * FROM creation_materialization_journal')).toEqual([]);
+      expect(readdirSync(rootDir)).toEqual(blocked === 'root' ? [] : ['docs']);
+      expect(store.ensureWorkspace(id)).toMatchObject({ materialized: true, rootDir: join(store.root, '_workspaces', id) });
+    } finally { chmodSync(readOnly, 0o700); }
+  });
+
+  it.each(['mkdir', 'link'])('retires an untouched journal if the first external %s fails after preflight', operation => {
+    const id = 'late-read-only';
+    const rootDir = join(dir, 'external');
+    mkdirSync(rootDir);
+    const existingDirs = operation === 'link' ? ['docs', 'images', 'sources', 'videos'] : [];
+    for (const name of existingDirs) mkdirSync(join(rootDir, name));
+    store.createCreation({ id });
+    const result = runExternalWorker(`
+      const { mkdirSync, linkSync } = fs;
+      const failWrite = () => {
+        assert.ok(store.one('SELECT * FROM creation_materialization_journal WHERE creation_id=?', ${JSON.stringify(id)}));
+        throw Object.assign(new Error('read-only filesystem'), { code: 'EROFS' });
+      };
+      fs.mkdirSync = (filename, ...args) => ${JSON.stringify(operation)} === 'mkdir' && filename.endsWith('/docs')
+        ? failWrite() : mkdirSync(filename, ...args);
+      fs.linkSync = (source, dest) => ${JSON.stringify(operation)} === 'link' && dest.endsWith('/README.md')
+        ? failWrite() : linkSync(source, dest);
+      syncBuiltinESMExports();
+      assert.throws(() => store.ensureWorkspace(${JSON.stringify(id)}, { rootDir: ${JSON.stringify(rootDir)} }), { code: 'EROFS' });
+    `);
+    expect(result.status, result.stderr).toBe(0);
+    expect(store.all('SELECT * FROM creation_materialization_journal')).toEqual([]);
+    expect(readdirSync(rootDir).sort()).toEqual(existingDirs);
+    const staging = join(store.root, '_creations', id, '.staging');
+    if (existsSync(staging)) expect(readdirSync(staging)).toEqual([]);
+    expect(store.ensureWorkspace(id)).toMatchObject({ materialized: true, rootDir: join(store.root, '_workspaces', id) });
+  });
+
   it('checkpoints distinct case-folded output names and accounts for differently cased disk entries', () => {
     const id = 'folded';
     const rootDir = join(dir, 'external');
@@ -745,19 +854,21 @@ describe('Creation folder workspaces', () => {
     store.createCreation({ id, textSources: [
       { name: 'Notes.md', text: 'first' }, { name: 'notes.md', text: 'second' }, { name: 'legacy.md', text: 'third' },
     ] });
-    const run = store.run.bind(store);
-    const checkpoint = vi.spyOn(store, 'run').mockImplementation((sql, ...args) => {
-      if (sql.startsWith('INSERT INTO creation_materialization_journal')) {
-        run(sql, ...args);
-        store.tx.afterCommit.push(() => { throw new Error('stop after first checkpoint'); });
-        return;
-      }
-      return run(sql, ...args);
-    });
-    try { expect(() => store.ensureWorkspace(id, { rootDir })).toThrow('stop after first checkpoint'); }
-    finally { checkpoint.mockRestore(); }
+    const interrupted = runExternalWorker(`
+      const run = store.run.bind(store);
+      store.run = (sql, ...args) => {
+        const result = run(sql, ...args);
+        if (sql.startsWith('INSERT INTO creation_materialization_journal')) store.tx.afterCommit.push(() => process.exit(79));
+        return result;
+      };
+      store.ensureWorkspace(${JSON.stringify(id)}, { rootDir: ${JSON.stringify(rootDir)} });
+    `);
+    expect(interrupted.status, interrupted.stderr).toBe(79);
     const row = store.one('SELECT planned_outputs_json FROM creation_materialization_journal WHERE creation_id=?', id);
-    expect(Object.values(JSON.parse(row.planned_outputs_json)).map(output => output.relPath)).toEqual([
+    const { root_dev, root_ino, ...outputs } = JSON.parse(row.planned_outputs_json);
+    expect(root_dev).toBe(String(statSync(rootDir, { bigint: true }).dev));
+    expect(root_ino).toBe(String(statSync(rootDir, { bigint: true }).ino));
+    expect(Object.values(outputs).map(output => output.relPath)).toEqual([
       'README.md', join('Sources', 'Notes.md'), join('Sources', 'notes-2.md'), join('Sources', 'legacy-2.md'),
     ]);
     expect(readdirSync(rootDir)).toEqual(['Sources']);
@@ -805,6 +916,26 @@ describe('Creation folder workspaces', () => {
     expect(store.findByFolder(a)).toEqual({ creation: null });
     expect(readFileSync(join(a, 'README.md'), 'utf8')).toBe('# Untitled creation\n\n\n');
     expect(readdirSync(b)).toEqual([]);
+  });
+
+  it('keeps committed rows and files when a post-commit cleanup throws', () => {
+    const id = 'cleanup-failure';
+    store.createCreation({ id });
+    const rollback = vi.fn();
+    const nextCleanup = vi.fn();
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      expect(store.transaction(() => {
+        const node = store.createNode(id, { id: 'draft', title: 'Draft', content: 'Committed bytes' });
+        store.tx.rollback.push(rollback);
+        store.tx.afterCommit.push(() => { throw new Error('forced staging cleanup failure'); }, nextCleanup);
+        return node;
+      })).toMatchObject({ id: 'draft' });
+      expect(warn).toHaveBeenCalledWith('[CreationStore] post-commit cleanup failed:', 'forced staging cleanup failure');
+    } finally { warn.mockRestore(); }
+    expect(rollback).not.toHaveBeenCalled();
+    expect(nextCleanup).toHaveBeenCalledOnce();
+    expect(store.getNode(id, 'draft')).toMatchObject({ id: 'draft', content: 'Committed bytes' });
   });
 
   it('resumes a keyed bind interrupted just after the journal commit', () => {
@@ -1279,7 +1410,7 @@ it('does not evict active turns or batches when the owner cache overflows or ser
     }
     const mediaRead = { type: 'creation_media_read', ownerId: 'fifth', requestId: 'media', creationId: 'book', mediaKind: 'source', mediaId: sources[0].id };
     await bridge.mediaRead(mediaRead);
-    expect(sent.at(-1)).toMatchObject({ ok: true, data: b64('fifth owner'), version: sources[0].createdAt });
+    expect(sent.at(-1)).toMatchObject({ ok: true, data: b64('fifth owner'), version: sources[0].sha256 });
     expect(runtimes).toHaveLength(4); // An uncached media read did not start a runner.
     await request(bridge, 'fifth', 'list_creations');
     expect(runtimes).toHaveLength(5);

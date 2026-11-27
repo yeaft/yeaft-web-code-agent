@@ -1748,6 +1748,7 @@ export default {
     }
 
     async function openCreationInDrawer({ agentId, sessionId, creationId, rootDir, initialPrompt, openSeq, maximize,
+      hasRecordedRoot = Boolean(String(rootDir || '').trim()),
       openedFromGalaxy = currentBand.value === 'galaxy', keepIgniteDockOpen = false }) {
       const epoch = ++openCreationEpoch;
       const uiMode = store.uiMode;
@@ -1775,8 +1776,9 @@ export default {
       );
       const workspaceGeneration = liveWorkspaceGeneration();
       const hasPrompt = typeof initialPrompt === 'string' && initialPrompt.trim() && sessionId;
-      const activationPromise = hasPrompt && creationsStore.hasMountedCreationTab(agentId, sessionId)
-        && creationsStore.listDirtyDocDrafts(agentId).length > 0
+      const needsActivationReceipt = !hasRecordedRoot || (hasPrompt && creationsStore.hasMountedCreationTab(agentId, sessionId)
+        && creationsStore.listDirtyDocDrafts(agentId).length > 0);
+      const activationPromise = hasPrompt && needsActivationReceipt
         ? creationsStore.waitForCreationActivation(openSeq, { agentId, sessionId, workspaceGeneration }) : null;
       if (!creationsStore.pendingWorkbenchTarget || creationsStore.pendingWorkbenchTarget.openSeq !== openSeq) {
         creationsStore.setPendingWorkbenchTarget?.({ agentId, sessionId, creationId, rootDir, maximize, openSeq, openedFromGalaxy, workspaceGeneration });
@@ -1788,7 +1790,10 @@ export default {
         && store.yeaftActiveSessionFilter === sessionId && liveWorkspaceGeneration() === workspaceGeneration;
       try {
         await Vue.nextTick();
-        if (activationPromise && !(await activationPromise)) return;
+        if (activationPromise) {
+          if (!creationsStore.hasMountedCreationTab(agentId, sessionId)) creationsStore.resolveCreationActivation(openSeq, false);
+          if (!(await activationPromise)) return;
+        }
         if (!isDrawerTargetCurrent()) return;
         const result = await sendInitialCreationPrompt(agentId, sessionId, initialPrompt, {
           isOpenStillCurrent: isDrawerTargetCurrent, routeReady: true, cosmosDelivery: true,

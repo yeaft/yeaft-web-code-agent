@@ -491,7 +491,9 @@ export const useCreationsStore = defineStore('creations', {
       if (route.count > 1) route.count -= 1;
       else delete this.mountedCreationTabRoutes[routeKey];
       for (const [openSeq, { agentId, sessionId }] of pendingOpenActivations) {
-        if (!this.hasMountedCreationTab(agentId, sessionId)) this.resolveCreationActivation(openSeq, false);
+        if (route.agentId === agentId && route.sessionId === sessionId && !this.hasMountedCreationTab(agentId, sessionId)) {
+          this.resolveCreationActivation(openSeq, false);
+        }
       }
     },
 
@@ -512,7 +514,6 @@ export const useCreationsStore = defineStore('creations', {
       if (existing) return existing.promise;
       let resolve;
       const promise = new Promise(done => { resolve = done; });
-      if (!this.hasMountedCreationTab(agentId, sessionId)) return Promise.resolve(false);
       const routeKey = workbenchRouteKey({ runtimeProvider: 'yeaft', agentId, sessionId });
       pendingOpenActivations.set(openSeq, { agentId, sessionId, routeKey, workspaceGeneration, resolve, promise });
       return promise;
@@ -990,13 +991,22 @@ export const useCreationsStore = defineStore('creations', {
             // importKey deduplication happens before attachment ingestion. Only
             // consume files that the Agent confirms were already attached.
             const sources = createRes?.sources ?? this.detailsByKey[creationDetailKey(targetId, created.id)]?.sources;
-            if (Array.isArray(sources)) {
-              uploadedFilesThisCall = filesToSubmit.filter(file => (
-                // A filename/size collision in the dock cannot identify which File was ingested.
-                !filesToSubmit.some(other => other !== file && other.name === file.name && other.size === file.size)
-                && sources.some(source => (source?.filename ?? source?.name) === file.name
-                  && Number(source.sizeBytes ?? source.size ?? source.byteLength) === file.size)
-              ));
+            const subtle = globalThis.crypto?.subtle;
+            if (Array.isArray(sources) && subtle?.digest) {
+              // File name and size cannot distinguish a replacement from the original.
+              for (const file of filesToSubmit) {
+                const candidates = sources.filter(source => source?.sha256 && (source.filename ?? source.name) === file.name);
+                if (!candidates.length) continue;
+                let fileSha256;
+                try {
+                  const digest = await subtle.digest('SHA-256', await file.arrayBuffer());
+                  fileSha256 = Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, '0')).join('');
+                } catch {
+                  continue; // An unreadable file or unavailable digest cannot confirm ingestion.
+                }
+                if (fileSha256 && candidates.some(source => source.sha256 === fileSha256)) uploadedFilesThisCall.push(file);
+              }
+              ensureSameStore();
             }
           } else {
             uploadedFilesThisCall = filesToSubmit;
@@ -1298,6 +1308,8 @@ export const useCreationsStore = defineStore('creations', {
         if (!isOpenStillCurrent()) return null;
         if (!resolved?.sessionId) throw new Error('Failed to resolve Creation session');
         const { creation: latest, sessionId, rootDir } = resolved;
+        // A caller-supplied path can be a materialization hint for a cached, unbound Creation.
+        const hasRecordedRoot = Boolean(String((hasAcknowledgedRoute ? creation.rootDir : rootDir) || '').trim());
         const target = {
           agentId: targetId, sessionId, creationId: latest.id,
           rootDir: rootDir || latest.rootDir || '', maximize, openSeq: mySeq,
@@ -1309,7 +1321,7 @@ export const useCreationsStore = defineStore('creations', {
         if (targetUiMode === 'cosmos') {
           if (!isOpenStillCurrent()) return null;
           // CosmosPage must register its activation waiter before publishing the target.
-          const detail = { ...target, initialPrompt: initialPrompt || '', handled: false };
+          const detail = { ...target, hasRecordedRoot, initialPrompt: initialPrompt || '', handled: false };
           if (typeof window !== 'undefined') {
             window.dispatchEvent(new CustomEvent('cosmos-open-creation-workspace', { detail }));
           }
@@ -1336,15 +1348,20 @@ export const useCreationsStore = defineStore('creations', {
         target.workspaceGeneration = workspaceGeneration;
         const isPromptTargetCurrent = () => isOpenStillCurrent() && liveWorkspaceGeneration() === workspaceGeneration;
         const trimmedPrompt = String(initialPrompt || '').trim();
-        const activationPromise = trimmedPrompt && this.hasMountedCreationTab(targetId, sessionId)
-          && (!String(creation.rootDir || '').trim() || this.listDirtyDocDrafts(targetId).length > 0)
-          ? this.waitForCreationActivation(mySeq, target) : null;
+        const needsActivationReceipt = !hasRecordedRoot || (this.hasMountedCreationTab(targetId, sessionId)
+          && this.listDirtyDocDrafts(targetId).length > 0);
+        const activationPromise = trimmedPrompt && needsActivationReceipt ? this.waitForCreationActivation(mySeq, target) : null;
         this.setPendingWorkbenchTarget(target);
 
         if (!isOpenStillCurrent()) return null;
         chatStore.openWorkbench?.();
 
         let promptError = null;
+        if (activationPromise) {
+          // Give Workbench a render cycle to mount the destination before treating it as absent.
+          await globalThis.Vue?.nextTick?.();
+          if (!this.hasMountedCreationTab(targetId, sessionId)) this.resolveCreationActivation(mySeq, false);
+        }
         if (trimmedPrompt && (!activationPromise || await activationPromise)) {
           if (!isPromptTargetCurrent()) return null;
           const sendRes = await sendInitialCreationPrompt(targetId, sessionId, trimmedPrompt, {

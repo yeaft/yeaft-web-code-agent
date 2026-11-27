@@ -370,16 +370,24 @@ export class CreationStore {
     if (this.tx) return fn();
     this.db.exec('BEGIN IMMEDIATE');
     const tx = this.tx = { rollback: [], afterCommit: [] };
+    let committed = false;
+    let result;
     try {
-      const result = fn();
+      result = fn();
       this.db.exec('COMMIT');
-      for (const cleanup of tx.afterCommit) cleanup();
-      return result;
+      committed = true;
     } catch (error) {
-      try { this.db.exec('ROLLBACK'); } catch {}
-      for (const cleanup of tx.rollback.reverse()) cleanup();
+      if (!committed) {
+        try { this.db.exec('ROLLBACK'); } catch {}
+        for (const cleanup of tx.rollback.reverse()) cleanup();
+      }
       throw error;
     } finally { this.tx = null; }
+    for (const hook of tx.afterCommit) {
+      try { hook(); }
+      catch (err) { console.warn('[CreationStore] post-commit cleanup failed:', err?.message || err); }
+    }
+    return result;
   }
   one(sql, ...args) { return this.db.prepare(sql).get(...args); }
   all(sql, ...args) { return this.db.prepare(sql).all(...args); }
@@ -573,9 +581,9 @@ export class CreationStore {
       if (externalRoot) {
         // Preparation can add nodes, canon and assets. Validate the full plan
         // without touching the external folder, then checkpoint it with the inputs.
-        const { planned, published } = this.#planAndPreflightExternalFolder(id, externalRoot, data(this.#creation(id)));
+        const { planned, published, rootIdentity } = this.#planAndPreflightExternalFolder(id, externalRoot, data(this.#creation(id)));
         this.run('INSERT INTO creation_materialization_journal VALUES (?,?,?,?,?,?)',
-          id, externalRoot, '[]', json(planned), json(published), Date.now());
+          id, externalRoot, '[]', this.#journalPlanJson(planned, rootIdentity), json(published), Date.now());
       }
       return this.getCreation(id);
     });
@@ -995,20 +1003,24 @@ export class CreationStore {
     }
   }
 
-  #reconcileWorkspacePublications(root, stagingDir, planned, published, temps) {
+  #journalPlanJson(planned, { dev, ino }) {
+    return json({ root_dev: dev, root_ino: ino, ...planned });
+  }
+
+  #reconcileWorkspacePublications(root, stagingDir, planned, published, temps, rootIdentity) {
     const keys = new Map(Object.entries(planned).map(([key, output]) => [output.relPath, key]));
     for (const entry of temps) {
       if (!this.#isRecordedStagingTemp(stagingDir, entry)) continue;
       const key = keys.get(entry.relPath);
       if (key === undefined || own(published, key)) continue;
       const dest = this.#journalPath(root, entry.relPath);
-      const { entry: stat } = this.#inspectExternalOutput(root, dest);
+      const { entry: stat } = this.#inspectExternalOutput(root, dest, undefined, { rootIdentity });
       // A surviving hard link proves publication only if it is still our temp.
       if (stat && String(stat.dev) === entry.dev && String(stat.ino) === entry.ino) published[key] = entry.relPath;
     }
   }
 
-  #withExternalDirectory(root, path, { create = false, allowMissing = false, matchCase = false }, use) {
+  #withExternalDirectory(root, path, { rootIdentity, onCreate, allowMissing = false, matchCase = false }, use) {
     requirePinnedWorkspace();
     if (!isWithin(root, path)) fail('INVALID_PATH', 'Invalid workspace directory');
     const handles = [];
@@ -1033,15 +1045,18 @@ export class CreationStore {
         catch (error) {
           if (error.code !== 'ENOENT' || parentFd === undefined) throw error;
           check();
-          if (!create && allowMissing) return;
-          if (!create) throw error;
-          try { fs.mkdirSync(anchor, { mode: 0o700 }); }
-          catch (error) { if (error.code !== 'EEXIST') throw error; }
+          if (!onCreate && allowMissing) return;
+          if (!onCreate) throw error;
+          try {
+            fs.mkdirSync(anchor, { mode: 0o700 });
+            onCreate();
+          } catch (error) { if (error.code !== 'EEXIST') throw error; }
           fd = fs.openSync(anchor, flags);
           fs.fsyncSync(parentFd);
         }
         const stat = fs.fstatSync(fd, { bigint: true });
-        if (!stat.isDirectory()) invalid();
+        if (!stat.isDirectory() || (parentFd === undefined && rootIdentity
+          && (String(stat.dev) !== rootIdentity.dev || String(stat.ino) !== rootIdentity.ino))) invalid();
         verify({ fd, anchor, canonical, stat });
         handles.push({ fd, anchor, canonical, stat });
         const held = fd;
@@ -1064,7 +1079,7 @@ export class CreationStore {
         if (fd === undefined) return;
       }
       check();
-      return use(fd, check, canonical);
+      return use(fd, check, canonical, handles[0].stat);
     } finally {
       for (const handle of handles.reverse()) fs.closeSync(handle.fd);
     }
@@ -1076,8 +1091,8 @@ export class CreationStore {
     return matches[0] ?? name;
   }
 
-  #inspectExternalOutput(root, path, bytes, { matchCase = false } = {}) {
-    return this.#withExternalDirectory(root, dirname(path), { allowMissing: true }, (dirFd, check) => {
+  #inspectExternalOutput(root, path, bytes, { rootIdentity, matchCase = false } = {}) {
+    return this.#withExternalDirectory(root, dirname(path), { rootIdentity, allowMissing: true }, (dirFd, check) => {
       const name = this.#externalEntryName(dirFd, basename(path));
       if (!matchCase && name !== basename(path)) workspaceOccupied();
       const actualPath = join(dirname(path), name);
@@ -1103,8 +1118,10 @@ export class CreationStore {
     this.#materializeWorkspace(id, root, write, directory);
   }
 
-  #planAndPreflightExternalFolder(id, root, record, planned = {}, published = {}) {
-    requirePinnedWorkspace();
+  #planAndPreflightExternalFolder(id, root, record, planned = {}, published = {}, rootIdentity) {
+    rootIdentity ??= this.#withExternalDirectory(root, root, {}, (_fd, _check, _path, stat) => ({
+      dev: String(stat.dev), ino: String(stat.ino),
+    }));
     const claimed = new Set();
     for (const { relPath } of Object.values(planned)) {
       const folded = relPath.toLowerCase();
@@ -1112,14 +1129,20 @@ export class CreationStore {
       claimed.add(folded);
     }
     const directories = new Map();
+    const existingAncestors = new Map([[root, root]]);
+    const writeAncestors = new Set();
     const directory = path => {
       const key = relative(root, path).toLowerCase();
       if (!directories.has(key)) {
         // Resolve existing entries by their real spelling, including ancestors of missing directories.
         const parent = dirname(path) === root ? root : directory(dirname(path));
         const requested = join(parent, basename(path));
-        const canonical = this.#withExternalDirectory(root, requested, { allowMissing: true, matchCase: true },
-          (_fd, _check, actual) => actual) ?? requested;
+        const existing = this.#withExternalDirectory(root, requested, { rootIdentity, allowMissing: true, matchCase: true },
+          (_fd, _check, actual) => actual);
+        const canonical = existing ?? requested;
+        const ancestor = existing ?? existingAncestors.get(parent);
+        if (!existing) writeAncestors.add(ancestor);
+        existingAncestors.set(canonical, ancestor);
         directories.set(key, canonical);
       }
       return directories.get(key);
@@ -1136,14 +1159,22 @@ export class CreationStore {
       }
       if (own(published, key)) {
         const path = this.#journalPath(root, publicationPath(publication));
-        if (this.#inspectExternalOutput(root, path).entry) return path; // Published bytes belong to the user now.
+        if (this.#inspectExternalOutput(root, path, undefined, { rootIdentity }).entry) return path; // Published bytes belong to the user now.
         delete published[key];
       }
       if (own(planned, key)) {
         const path = this.#journalPath(root, planned[key].relPath);
-        const { entry, matches } = this.#inspectExternalOutput(root, path, bytes);
+        const { entry, matches } = this.#inspectExternalOutput(root, path, bytes, { rootIdentity });
         if (sha256 !== planned[key].sha256 || (entry && !matches)) workspaceOccupied();
         if (matches) published[key] = planned[key].relPath;
+        else {
+          // A resumed output can still use an older planned directory spelling.
+          let ancestor = dirname(path);
+          while (!this.#withExternalDirectory(root, ancestor, { rootIdentity, allowMissing: true }, () => true)) {
+            ancestor = dirname(ancestor);
+          }
+          writeAncestors.add(ancestor);
+        }
         return path;
       }
       const ext = extname(name);
@@ -1151,23 +1182,30 @@ export class CreationStore {
         const path = join(dir, index === 1 ? name : `${name.slice(0, name.length - ext.length)}-${index}${ext}`);
         const folded = relative(root, path).toLowerCase();
         if (claimed.has(folded)) continue;
-        const { entry, matches, path: actualPath } = this.#inspectExternalOutput(root, path, bytes, { matchCase: true });
+        const { entry, matches, path: actualPath } = this.#inspectExternalOutput(root, path, bytes, { rootIdentity, matchCase: true });
         if (entry && !matches && key !== 'readme') continue;
         claimed.add(folded);
         const relPath = relative(root, actualPath);
         planned[key] = { relPath, sha256 };
         if (entry) published[key] = relPath; // Preserve an existing user README too.
+        else writeAncestors.add(existingAncestors.get(dir));
         return actualPath;
       }
     }, directory);
     for (const folded of claimed) {
       if (directories.has(folded)) fail('INVALID_PATH', 'A workspace path cannot be both an output file and a directory');
     }
-    return { planned, published, directories };
+    for (const ancestor of writeAncestors) {
+      this.#withExternalDirectory(root, ancestor, { rootIdentity }, (_fd, check) => {
+        fs.accessSync(ancestor, fs.constants.W_OK | fs.constants.X_OK);
+        check();
+      });
+    }
+    return { planned, published, directories, rootIdentity };
   }
 
-  #publishExternalOutput(root, dest, bytes, temp, pending, { assertCheckpoint, savePublication, output }) {
-    this.#withExternalDirectory(root, dirname(dest), {}, (dirFd, check) => {
+  #publishExternalOutput(root, dest, bytes, temp, pending, { rootIdentity, onCreate, assertCheckpoint, savePublication, output }) {
+    this.#withExternalDirectory(root, dirname(dest), { rootIdentity }, (dirFd, check) => {
       const name = basename(dest);
       const anchor = `${fdPath(dirFd)}/${name}`;
       const checkName = () => {
@@ -1188,11 +1226,13 @@ export class CreationStore {
               checkName();
               try { fd = fs.openSync(anchor, CREATE_EXCLUSIVE, 0o600); }
               catch (error) { if (error.code === 'EEXIST') workspaceOccupied(); throw error; }
+              onCreate();
               const stat = fs.fstatSync(fd, { bigint: true });
               savePublication(pending = { ...output, dev: String(stat.dev), ino: String(stat.ino), complete: false });
               fs.fsyncSync(dirFd);
               return false;
             }
+            onCreate();
             checkName();
             if (!sameInode(fs.lstatSync(anchor, { bigint: true, throwIfNoEntry: false }), fs.lstatSync(temp, { bigint: true }))) {
               workspaceOccupied();
@@ -1238,19 +1278,23 @@ export class CreationStore {
   }
 
   #materializeExternal(id, root) {
-    let planned, published, temps, checkpoint;
+    let planned, published, temps, checkpoint, rootIdentity;
+    let createdJournalInThisCall = false;
+    let createdDirsInTarget = 0;
+    let createdOutputInTarget = false;
     const journal = () => this.one('SELECT * FROM creation_materialization_journal WHERE creation_id=?', id);
     const save = () => {
-      checkpoint = { target_dir: root, temp_files_json: json(temps), planned_outputs_json: json(planned),
-        published_outputs_json: json(published) };
+      const next = { target_dir: root, temp_files_json: json(temps), planned_outputs_json: this.#journalPlanJson(planned, rootIdentity),
+        published_outputs_json: json(published), updated_at: Math.max(Date.now(), (checkpoint?.updated_at ?? 0) + 1) };
       this.run(`INSERT INTO creation_materialization_journal VALUES (?,?,?,?,?,?)
         ON CONFLICT(creation_id) DO UPDATE SET target_dir=excluded.target_dir, temp_files_json=excluded.temp_files_json,
           planned_outputs_json=excluded.planned_outputs_json, published_outputs_json=excluded.published_outputs_json,
-          updated_at=excluded.updated_at`, id, ...Object.values(checkpoint), Date.now());
+          updated_at=excluded.updated_at`, id, ...Object.values(next));
+      this.tx.afterCommit.push(() => { checkpoint = next; });
     };
+    const matchesCheckpoint = current => current && checkpoint && Object.keys(checkpoint).every(key => current[key] === checkpoint[key]);
     const assertCheckpoint = () => {
-      const current = journal();
-      if (!current || Object.keys(checkpoint).some(key => current[key] !== checkpoint[key])) {
+      if (!matchesCheckpoint(journal())) {
         fail('CONFLICT', 'Workspace materialization changed during setup; retry');
       }
     };
@@ -1261,11 +1305,21 @@ export class CreationStore {
       if (existingRoot(record)) return { creation: this.getCreation(id), rootDir: record.rootDir, materialized: false };
       const previous = journal();
       if (previous && previous.target_dir !== root) fail('CONFLICT', 'Resume materialization in the original target folder');
-      planned = JSON.parse(previous?.planned_outputs_json ?? '{}');
+      const { root_dev: dev, root_ino: ino, ...outputs } = JSON.parse(previous?.planned_outputs_json ?? '{}');
+      planned = outputs;
       published = JSON.parse(previous?.published_outputs_json ?? '{}');
       temps = JSON.parse(previous?.temp_files_json ?? '[]');
-      if (previous) this.#reconcileWorkspacePublications(root, stagingDir, planned, published, temps);
-      else this.#planAndPreflightExternalFolder(id, root, record, planned, published);
+      if (previous) {
+        // Pre-identity journals cannot prove the path still names the original folder.
+        if (typeof dev !== 'string' || typeof ino !== 'string') fail('CONFLICT', 'Materialization journal has no verified root identity');
+        rootIdentity = { dev, ino };
+        checkpoint = previous;
+        this.#withExternalDirectory(root, root, { rootIdentity }, () => {});
+        this.#reconcileWorkspacePublications(root, stagingDir, planned, published, temps, rootIdentity);
+      } else {
+        ({ rootIdentity } = this.#planAndPreflightExternalFolder(id, root, record, planned, published));
+        createdJournalInThisCall = true;
+      }
       save(); // Commit the initial plan or inferred publications before touching the filesystem.
     });
     if (early) return early;
@@ -1274,86 +1328,111 @@ export class CreationStore {
       this.#cleanupJournalTemps(stagingDir, temps);
       temps = [];
     };
-    this.transaction(() => {
-      assertCheckpoint();
-      removeTemps();
-      save();
-    });
-
-    const { record, directories } = this.transaction(() => {
-      assertCheckpoint();
-      const record = data(this.#creation(id));
-      const { directories } = this.#planAndPreflightExternalFolder(id, root, record, planned, published);
-      for (const dir of directories.values()) this.#withExternalDirectory(root, dir, { create: true }, () => {});
-      save(); // All planned paths are durable before any temporary file is opened.
-      return { record, directories };
-    });
-    this.#visitExternalOutputs(id, root, record, (key, _dir, _name, content) => {
-      const publication = published[key];
-      const pending = isIncompletePublication(publication) ? publication : undefined;
-      if (own(published, key) && !pending) {
-        const path = this.#journalPath(root, publicationPath(publication));
-        if (!this.#inspectExternalOutput(root, path).entry) workspaceOccupied();
-        return path;
-      }
-      const bytes = Buffer.from(content);
-      const output = planned[key];
-      if (!output || output.sha256 !== workspaceDigest(bytes)) workspaceOccupied();
-      const dest = this.#journalPath(root, output.relPath);
-      const publish = temp => this.#publishExternalOutput(root, dest, bytes, temp, pending, {
-        assertCheckpoint, output, savePublication: entry => { published[key] = entry; save(); },
-      });
-      if (pending) {
-        publish();
-        return dest;
-      }
-      const temp = join(stagingDir, `.creation-tmp-${randomUUID()}`);
-      let fd, tempEntry;
-      try {
-        this.transaction(() => {
-          assertCheckpoint();
-          const { entry, matches } = this.#inspectExternalOutput(root, dest, bytes);
-          if (entry && !matches) workspaceOccupied();
-          if (!entry) {
-            this.#directory(stagingDir);
-            fd = fs.openSync(temp, CREATE_EXCLUSIVE, 0o600);
-            const { dev, ino } = fs.fstatSync(fd, { bigint: true });
-            tempEntry = { path: temp, dev: String(dev), ino: String(ino), relPath: output.relPath };
-            temps.push(tempEntry);
-          } else {
-            published[key] = output.relPath;
-          }
-          save(); // Commit the temp identity before writing or publishing bytes.
-        });
-        if (tempEntry) this.transaction(() => {
-          assertCheckpoint();
-          assertWorkspaceDescriptor(fd, temp);
-          fs.writeFileSync(fd, bytes);
-          fs.fsyncSync(fd);
-          if (!this.#isRecordedStagingTemp(stagingDir, tempEntry)) workspaceOccupied();
-          syncWorkspaceDirectory(stagingDir);
-        });
-        if (tempEntry) publish(temp); // Keep the temp link until publication is committed in SQLite.
-      } finally { if (fd !== undefined) fs.closeSync(fd); }
+    try {
       this.transaction(() => {
         assertCheckpoint();
         removeTemps();
         save();
       });
-      return dest;
-    }, path => directories.get(relative(root, path).toLowerCase()));
-    return this.transaction(() => {
-      assertCheckpoint();
-      const current = data(this.#creation(id));
-      if (current.rootDir !== record.rootDir) fail('CONFLICT', 'Creation folder changed during materialization');
-      this.#assertNoSymlinkDir(root);
-      current.rootDir = root;
-      delete current.ownsWorkspace;
-      delete current.workspaceIdentity;
-      this.run('UPDATE creations SET updated_at=?,data=? WHERE id=?', now(), json(current), id);
-      this.run('DELETE FROM creation_materialization_journal WHERE creation_id=?', id);
-      return { creation: this.getCreation(id), rootDir: root, materialized: true };
-    });
+
+      const { record, directories } = this.transaction(() => {
+        assertCheckpoint();
+        const record = data(this.#creation(id));
+        const { directories } = this.#planAndPreflightExternalFolder(id, root, record, planned, published, rootIdentity);
+        for (const dir of directories.values()) {
+          this.#withExternalDirectory(root, dir, { rootIdentity, onCreate: () => { createdDirsInTarget++; } }, () => {});
+        }
+        save(); // All planned paths are durable before any temporary file is opened.
+        return { record, directories };
+      });
+      this.#visitExternalOutputs(id, root, record, (key, _dir, _name, content) => {
+        const publication = published[key];
+        const pending = isIncompletePublication(publication) ? publication : undefined;
+        if (own(published, key) && !pending) {
+          const path = this.#journalPath(root, publicationPath(publication));
+          if (!this.#inspectExternalOutput(root, path, undefined, { rootIdentity }).entry) workspaceOccupied();
+          return path;
+        }
+        const bytes = Buffer.from(content);
+        const output = planned[key];
+        if (!output || output.sha256 !== workspaceDigest(bytes)) workspaceOccupied();
+        const dest = this.#journalPath(root, output.relPath);
+        const publish = temp => this.#publishExternalOutput(root, dest, bytes, temp, pending, {
+          rootIdentity, onCreate: () => { createdOutputInTarget = true; },
+          assertCheckpoint, output, savePublication: entry => { published[key] = entry; save(); },
+        });
+        if (pending) {
+          publish();
+          return dest;
+        }
+        const temp = join(stagingDir, `.creation-tmp-${randomUUID()}`);
+        let fd, tempEntry;
+        try {
+          this.transaction(() => {
+            assertCheckpoint();
+            const { entry, matches } = this.#inspectExternalOutput(root, dest, bytes, { rootIdentity });
+            if (entry && !matches) workspaceOccupied();
+            if (!entry) {
+              this.#directory(stagingDir);
+              fd = fs.openSync(temp, CREATE_EXCLUSIVE, 0o600);
+              const { dev, ino } = fs.fstatSync(fd, { bigint: true });
+              tempEntry = { path: temp, dev: String(dev), ino: String(ino), relPath: output.relPath };
+              temps.push(tempEntry);
+            } else {
+              published[key] = output.relPath;
+            }
+            save(); // Commit the temp identity before writing or publishing bytes.
+          });
+          if (tempEntry) this.transaction(() => {
+            assertCheckpoint();
+            assertWorkspaceDescriptor(fd, temp);
+            fs.writeFileSync(fd, bytes);
+            fs.fsyncSync(fd);
+            if (!this.#isRecordedStagingTemp(stagingDir, tempEntry)) workspaceOccupied();
+            syncWorkspaceDirectory(stagingDir);
+          });
+          if (tempEntry) publish(temp); // Keep the temp link until publication is committed in SQLite.
+        } finally { if (fd !== undefined) fs.closeSync(fd); }
+        this.transaction(() => {
+          assertCheckpoint();
+          removeTemps();
+          save();
+        });
+        return dest;
+      }, path => directories.get(relative(root, path).toLowerCase()));
+      return this.transaction(() => {
+        assertCheckpoint();
+        const current = data(this.#creation(id));
+        if (current.rootDir !== record.rootDir) fail('CONFLICT', 'Creation folder changed during materialization');
+        if (Object.values(published).some(isIncompletePublication)) {
+          fail('CONFLICT', 'Incomplete external materialization output remains unresolved');
+        }
+        current.rootDir = root;
+        delete current.ownsWorkspace;
+        delete current.workspaceIdentity;
+        return this.#withExternalDirectory(root, root, { rootIdentity }, (_fd, check) => {
+          this.run('UPDATE creations SET updated_at=?,data=? WHERE id=?', now(), json(current), id);
+          this.run('DELETE FROM creation_materialization_journal WHERE creation_id=?', id);
+          const creation = this.getCreation(id);
+          check();
+          return { creation, rootDir: root, materialized: true };
+        });
+      });
+    } catch (error) {
+      if (createdJournalInThisCall && Object.keys(published).length === 0 && createdDirsInTarget === 0 && !createdOutputInTarget) {
+        try {
+          this.transaction(() => {
+            // Never retire a checkpoint another call has advanced.
+            if (!matchesCheckpoint(journal())) return;
+            this.run('DELETE FROM creation_materialization_journal WHERE creation_id=?', id);
+            this.tx.afterCommit.push(() => this.#cleanupJournalTemps(stagingDir, temps));
+          });
+        } catch (cleanupError) {
+          console.warn('[CreationStore] untouched journal cleanup failed:', cleanupError?.message || cleanupError);
+        }
+      }
+      throw error;
+    }
   }
 
   ensureWorkspace(id, { rootDir } = {}) {
@@ -1413,6 +1492,7 @@ export class CreationStore {
         this.#write(this.#path(id, 'sources', sourceId, 'parsed.json'), json(parsed));
         const record = { id: sourceId, creationId: id, name, mimeType, detectedMimeType,
           playableVideo: detectedMimeType === 'video/mp4' || detectedMimeType === 'video/webm', byteLength: bytes.length,
+          sha256: createHash('sha256').update(bytes).digest('hex'),
           kind: parsed.kind, summary: parsed.summary, chunkCount: parsed.chunks.length, truncated: parsed.truncated, createdAt: now() };
         this.run('INSERT INTO creation_sources VALUES (?,?,?)', id, sourceId, json(record));
         if (rootDir) this.#copyWorkspaceSource(rootDir, record, bytes);
