@@ -333,6 +333,8 @@ export function createCosmosEngine(glCanvas, hudCanvas, opts = {}) {
       uSkyBright: gl.getUniformLocation(bgProg, 'uSkyBright'),
       uStarDensity: gl.getUniformLocation(bgProg, 'uStarDensity'),
       uQuality: gl.getUniformLocation(bgProg, 'uQuality'),
+      uSkyTint: gl.getUniformLocation(bgProg, 'uSkyTint'),
+      uSoarVec: gl.getUniformLocation(bgProg, 'uSoarVec'),
       uBhPos: gl.getUniformLocation(bgProg, 'uBhPos'),
       uBhRadius: gl.getUniformLocation(bgProg, 'uBhRadius'),
       uBhStrength: gl.getUniformLocation(bgProg, 'uBhStrength'),
@@ -774,7 +776,7 @@ export function createCosmosEngine(glCanvas, hudCanvas, opts = {}) {
 
     const {
       time, realTime, scaleLog, parallax, camRot, warp, fovZoom, shockWave,
-      eventLens, eventAmbient,
+      eventLens, eventAmbient, skyTint, soarVec,
       skyBright, starDensity, bhParams, galParams, webParams,
       particleData, particleCount,
       eventDraw, eventDraws, eventParticleData, eventParticleCount,
@@ -808,6 +810,10 @@ export function createCosmosEngine(glCanvas, hudCanvas, opts = {}) {
     gl.uniform1f(bgLoc.uSkyBright, skyBright);
     gl.uniform1f(bgLoc.uStarDensity, starDensity);
     gl.uniform1f(bgLoc.uQuality, qualityFactor);
+    const stCol = skyTint || [1.0, 1.0, 1.0];
+    if (bgLoc.uSkyTint) gl.uniform3f(bgLoc.uSkyTint, stCol[0], stCol[1], stCol[2]);
+    const sv = soarVec || [0.0, 0.0, 0.0];
+    if (bgLoc.uSoarVec) gl.uniform3f(bgLoc.uSoarVec, sv[0], sv[1], sv[2]);
 
     gl.uniform2f(bgLoc.uBhPos, bhParams.x, bhParams.y);
     gl.uniform1f(bgLoc.uBhRadius, bhParams.radius);

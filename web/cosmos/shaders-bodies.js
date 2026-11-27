@@ -227,8 +227,10 @@ export const BODY_FRAG = `
       float prom = exp(-pow((r - 1.055) / 0.052, 2.0)) * smoothstep(0.56, 0.88, noise2(vec2(ang * 7.5 + t * 0.08, t * 0.16))) * 0.78;
       float anamorphic = exp(-abs(p.y) * 9.5) * exp(-abs(p.x) * 0.88) * sstepDown(3.6, 0.9, abs(p.x)) * 0.18;
 
-      vec3 coronaCol = mix(vec3(0.98, 0.44, 0.12), vec3(1.00, 0.94, 0.80), exp(-max(r - 0.97, 0.0) * 2.8));
-      vec3 coronaLight = coronaCol * corona + vec3(1.0, 0.30, 0.08) * prom + vec3(1.0, 0.86, 0.68) * anamorphic;
+      vec3 starSpec = clamp(uAtmoColor / vec3(1.0, 0.72, 0.36), vec3(0.28), vec3(2.4));
+      vec3 starCoreSpec = mix(vec3(1.0), starSpec, 0.76);
+      vec3 coronaCol = mix(vec3(0.98, 0.44, 0.12) * starSpec, vec3(1.00, 0.94, 0.80) * starCoreSpec, exp(-max(r - 0.97, 0.0) * 2.8));
+      vec3 coronaLight = coronaCol * corona + vec3(1.0, 0.30, 0.08) * starSpec * prom + vec3(1.0, 0.86, 0.68) * starCoreSpec * anamorphic;
       vec3 col = coronaLight;
       float a = clamp(max(corona, prom + anamorphic) * 0.92, 0.0, 1.0);
 
@@ -239,8 +241,9 @@ export const BODY_FRAG = `
         vec2 uv2 = sphereUv(n, -uSpin * 0.62 + 0.37 - t * 0.011, -0.07);
         vec2 warp = vec2(noise2(uv1 * 18.0 + vec2(t * 0.12, -t * 0.08)) - 0.5, noise2(uv1 * 18.0 + vec2(-t * 0.09, t * 0.11)) - 0.5) * 0.012;
         vec3 gran = mix(texture2D(uTexMain, fract(uv1 + warp)).rgb, texture2D(uTexMain, fract(uv2 * 1.55 + vec2(t * 0.008, 0.0))).rgb, 0.36);
-        vec3 photo = pow(gran, vec3(0.84)) * vec3(1.42, 1.10, 0.72) * (0.24 + 0.76 * pow(z, 0.56))
-                   + vec3(0.56, 0.44, 0.26) * pow(z, 2.2) + vec3(1.0, 0.36, 0.08) * pow(1.0 - z, 2.5) * 0.85;
+        vec3 photo = (pow(gran, vec3(0.84)) * vec3(1.42, 1.10, 0.72) * (0.24 + 0.76 * pow(z, 0.56))
+                   + vec3(0.56, 0.44, 0.26) * pow(z, 2.2)) * starCoreSpec
+                   + vec3(1.0, 0.36, 0.08) * starSpec * pow(1.0 - z, 2.5) * 0.85;
         float aa = sstepDown(1.015, 0.945, r);
         col = mix(coronaLight, photo, aa);
         a = clamp(max(aa, max(corona, prom + anamorphic) * 0.95), 0.0, 1.0);

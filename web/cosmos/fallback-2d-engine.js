@@ -122,14 +122,21 @@ function drawPlanetaryRingHalf(ctx, b, front) {
 
 function drawSun2D(ctx, b, realTime) {
   const { screenX: cx, screenY: cy, radiusPx: r } = b;
+  const [ar, ag, ab] = b.atmo || [1.0, 0.72, 0.36];
+  const sr = Math.min(255, Math.round(ar * 255));
+  const sg = Math.min(255, Math.round(ag * 255));
+  const sb = Math.min(255, Math.round(ab * 255));
+  const coreR = Math.min(255, Math.round(255 * 0.52 + sr * 0.48));
+  const coreG = Math.min(255, Math.round(255 * 0.52 + sg * 0.48));
+  const coreB = Math.min(255, Math.round(255 * 0.52 + sb * 0.48));
 
   // Outer multi-stop flowing corona
   const coronaR = r * 3.45;
   const cg = ctx.createRadialGradient(cx, cy, r * 0.75, cx, cy, coronaR);
-  cg.addColorStop(0, 'rgba(255, 244, 206, 0.92)');
-  cg.addColorStop(0.28, 'rgba(255, 178, 72, 0.46)');
-  cg.addColorStop(0.56, 'rgba(240, 108, 28, 0.16)');
-  cg.addColorStop(1, 'rgba(240, 88, 16, 0)');
+  cg.addColorStop(0, `rgba(${coreR}, ${coreG}, ${coreB}, 0.92)`);
+  cg.addColorStop(0.28, `rgba(${sr}, ${sg}, ${sb}, 0.48)`);
+  cg.addColorStop(0.56, `rgba(${Math.round(sr * 0.9)}, ${Math.round(sg * 0.68)}, ${Math.round(sb * 0.65)}, 0.16)`);
+  cg.addColorStop(1, `rgba(${sr}, ${sg}, ${sb}, 0)`);
   ctx.fillStyle = cg;
   ctx.beginPath();
   ctx.arc(cx, cy, coronaR, 0, Math.PI * 2);
@@ -138,9 +145,9 @@ function drawSun2D(ctx, b, realTime) {
   // Subtle horizontal anamorphic lens flare
   const flareW = r * 3.5;
   const fg = ctx.createLinearGradient(cx - flareW, cy, cx + flareW, cy);
-  fg.addColorStop(0, 'rgba(255, 216, 154, 0)');
-  fg.addColorStop(0.5, 'rgba(255, 232, 190, 0.24)');
-  fg.addColorStop(1, 'rgba(255, 216, 154, 0)');
+  fg.addColorStop(0, `rgba(${coreR}, ${coreG}, ${coreB}, 0)`);
+  fg.addColorStop(0.5, `rgba(${coreR}, ${coreG}, ${coreB}, 0.24)`);
+  fg.addColorStop(1, `rgba(${coreR}, ${coreG}, ${coreB}, 0)`);
   ctx.fillStyle = fg;
   ctx.fillRect(cx - flareW, cy - Math.max(1.5, r * 0.08), flareW * 2, Math.max(3, r * 0.16));
 
@@ -155,18 +162,18 @@ function drawSun2D(ctx, b, realTime) {
     drawTiledEquirectTexture(ctx, sunImg, cx, cy, r, r, (b.spin || 0) + realTime * 0.015);
   } else {
     const pg = ctx.createRadialGradient(cx, cy, r * 0.1, cx, cy, r);
-    pg.addColorStop(0, '#fff9e6');
-    pg.addColorStop(0.7, '#ffae3d');
-    pg.addColorStop(1, '#d94b0e');
+    pg.addColorStop(0, `rgb(${coreR}, ${coreG}, ${coreB})`);
+    pg.addColorStop(0.7, `rgb(${sr}, ${sg}, ${sb})`);
+    pg.addColorStop(1, `rgb(${Math.round(sr * 0.65)}, ${Math.round(sg * 0.45)}, ${Math.round(sb * 0.35)})`);
     ctx.fillStyle = pg;
     ctx.fillRect(cx - r, cy - r, r * 2, r * 2);
   }
 
-  // Limb darkening & warm glowing core
-  const limb = ctx.createRadialGradient(cx, cy, r * 0.25, cx, cy, r);
-  limb.addColorStop(0, 'rgba(255, 250, 224, 0.26)');
-  limb.addColorStop(0.74, 'rgba(255, 168, 52, 0.06)');
-  limb.addColorStop(1, 'rgba(186, 48, 8, 0.56)');
+  // Spectral tint & limb darkening
+  const limb = ctx.createRadialGradient(cx, cy, r * 0.22, cx, cy, r);
+  limb.addColorStop(0, `rgba(${coreR}, ${coreG}, ${coreB}, 0.34)`);
+  limb.addColorStop(0.72, `rgba(${sr}, ${sg}, ${sb}, 0.26)`);
+  limb.addColorStop(1, `rgba(${Math.round(sr * 0.6)}, ${Math.round(sg * 0.38)}, ${Math.round(sb * 0.32)}, 0.62)`);
   ctx.fillStyle = limb;
   ctx.fillRect(cx - r, cy - r, r * 2, r * 2);
   ctx.restore();
@@ -420,6 +427,9 @@ export function createFallback2DEngine(glCanvas, hudCanvas, opts = {}) {
         camRot = { x: 0, y: 0 },
         warp = 0,
         fovZoom = 1.0,
+        skyTint = [1.0, 1.0, 1.0],
+        soarVec = [0.0, 0.0, 0.0],
+        soarBlend = 0,
         skyBright = 1.05,
         starDensity = 1.18,
         bhParams = { x: 0, y: 0, radius: 0, strength: 0 },
@@ -454,8 +464,8 @@ export function createFallback2DEngine(glCanvas, hudCanvas, opts = {}) {
         const diag = Math.hypot(width, height);
         const mwW = Math.max(diag * 1.35, height * 2.1);
         const mwH = mwW * 0.5;
-        const shiftX = (((camRot.x * 160 + parallax.x * 26 + realTime * 2.4) % mwW) + mwW) % mwW;
-        const shiftY = -mwH * 0.5 + camRot.y * 45 + parallax.y * 14;
+        const shiftX = ((((camRot.x + (soarVec[0] || 0) * 0.8) * 160 + parallax.x * 26 + realTime * 2.4) % mwW) + mwW) % mwW;
+        const shiftY = -mwH * 0.5 + (camRot.y + (soarVec[1] || 0) * 0.6) * 45 + parallax.y * 14;
         drawCtx.drawImage(milkyImg, -mwW * 0.5 - shiftX, shiftY, mwW, mwH);
         drawCtx.drawImage(milkyImg, mwW * 0.5 - shiftX, shiftY, mwW, mwH);
         drawCtx.restore();
@@ -478,20 +488,42 @@ export function createFallback2DEngine(glCanvas, hudCanvas, opts = {}) {
         drawCtx.fillRect(0, 0, width, height);
       }
 
+      // Per-star-system celestial nebula atmosphere tint (runs regardless of Milky Way texture load state)
+      if (Math.abs((skyTint[0] ?? 1) - 1) > 0.03 || Math.abs((skyTint[1] ?? 1) - 1) > 0.03 || Math.abs((skyTint[2] ?? 1) - 1) > 0.03) {
+        drawCtx.save();
+        drawCtx.globalCompositeOperation = 'screen';
+        const tr = Math.min(255, Math.round(Math.max(0, (skyTint[0] || 1) - 0.55) * 160));
+        const tg = Math.min(255, Math.round(Math.max(0, (skyTint[1] || 1) - 0.55) * 145));
+        const tb = Math.min(255, Math.round(Math.max(0, (skyTint[2] || 1) - 0.55) * 185));
+        const ng = drawCtx.createRadialGradient(width * 0.5, height * 0.48, 20, width * 0.5, height * 0.5, Math.max(width, height) * 0.72);
+        ng.addColorStop(0, `rgba(${tr}, ${tg}, ${tb}, 0.24)`);
+        ng.addColorStop(1, `rgba(${tr}, ${tg}, ${tb}, 0)`);
+        drawCtx.fillStyle = ng;
+        drawCtx.fillRect(0, 0, width, height);
+        drawCtx.restore();
+      }
+
       // 3. Spectral Starfield with warp streaking
       const count = Math.min(stars.length, Math.round(stars.length * Math.min(1.4, Math.max(0.35, starDensity * 0.85))));
       const cx0 = width * 0.5;
       const cy0 = height * 0.5;
       const starZoom = 1 + (safeFovZoom - 1) * 0.42;
+      const soarDepth = soarVec[2] || 0;
+      const soarYawPx = (soarVec[0] || 0) * 85;
+      const soarPitchPx = (soarVec[1] || 0) * 65;
+      const flyActivity = Math.max(0, Math.min(1, Math.max(soarBlend || 0, warp || 0)));
       for (let i = 0; i < count; i++) {
         const st = stars[i];
-        const rawX = (((st.x * width + parallax.x * 28 * st.depth + camRot.x * 95 * st.depth + realTime * 1.4 * st.depth) % width) + width) % width;
-        const rawY = (((st.y * height + parallax.y * 22 * st.depth + camRot.y * 70 * st.depth) % height) + height) % height;
-        const sx = cx0 + (rawX - cx0) * starZoom;
-        const sy = cy0 + (rawY - cy0) * starZoom;
+        const zCycle = (st.depth + soarDepth * 0.14) % 1;
+        const zScale = 1.0 + ((0.45 + zCycle * 1.45) - 1.0) * flyActivity;
+        const flyEnv = 1.0 - flyActivity * (1.0 - Math.sin(Math.PI * zCycle));
+        const baseRawX = (((st.x * width + parallax.x * 28 * st.depth + (camRot.x * 95 + soarYawPx) * st.depth + realTime * 1.4 * st.depth) % width) + width) % width;
+        const baseRawY = (((st.y * height + parallax.y * 22 * st.depth + (camRot.y * 70 + soarPitchPx) * st.depth) % height) + height) % height;
+        const sx = cx0 + (baseRawX - cx0) * starZoom * zScale;
+        const sy = cy0 + (baseRawY - cy0) * starZoom * zScale;
         if (sx < -24 || sx > width + 24 || sy < -24 || sy > height + 24) continue;
         const tw = 0.82 + 0.18 * Math.sin(realTime * st.speed + st.phase);
-        const alpha = st.alpha * tw;
+        const alpha = st.alpha * tw * flyEnv;
         const [cr, cg, cb] = st.col;
 
         if (warp > 0.08) {

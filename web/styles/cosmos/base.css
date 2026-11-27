@@ -228,8 +228,8 @@
 /* ── Cross-Scale Gravitational Alert Pill ── */
 .cosmos-gravity-alert {
   position: fixed;
-  top: 16px;
-  left: 16px;
+  top: calc(58px + env(safe-area-inset-top, 0px));
+  left: calc(16px + env(safe-area-inset-left, 0px));
   z-index: 25;
   display: inline-flex;
   align-items: center;
