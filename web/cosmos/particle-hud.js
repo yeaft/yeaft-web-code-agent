@@ -290,7 +290,16 @@ export function fillGpuParticles(gpuBuf, pools, st, params) {
 }
 
 export function drawCosmosHud(ctx, w, h, st, webGraph, galaxyBooks, agentsByPlanet, layout, drawEventFn) {
-  const { cx, cy, span, tilt, solarAlpha, galAlpha, webAlpha, solarProj, planetFocusId, planetZoom = 1.0 } = layout;
+  const {
+    cx, cy, span, tilt, solarAlpha, galAlpha, webAlpha, solarProj,
+    planetFocusId, planetZoom = 1.0,
+    activeBodies = PLANETS,
+    hasComets = true,
+    isHomeSystem = true,
+    soarBlend = 0,
+    soarPhase = 0,
+    voyageWarp = 0,
+  } = layout;
 
   if (solarAlpha > 0.015) {
     ctx.save();
@@ -315,7 +324,7 @@ export function drawCosmosHud(ctx, w, h, st, webGraph, galaxyBooks, agentsByPlan
     ctx.save();
     ctx.beginPath();
     ctx.rect(0, 0, w, h);
-    for (const p of PLANETS) {
+    for (const p of activeBodies) {
       const pos = st.planetScreen[p.id];
       if (!pos || pos.r <= 2) continue;
       ctx.moveTo(pos.x + pos.r * 0.99, pos.y);
@@ -324,8 +333,8 @@ export function drawCosmosHud(ctx, w, h, st, webGraph, galaxyBooks, agentsByPlan
     ctx.clip('evenodd');
 
     if (orbitOpacity > 0.02) {
-      PLANETS.forEach((p) => {
-        const agent = agentsByPlanet[p.id];
+      activeBodies.forEach((p) => {
+        const agent = isHomeSystem ? agentsByPlanet[p.id] : null;
         const isFocus = st.hoverPlanetId === p.id || st.focusedPlanetId === p.id || planetFocusId === p.id;
         ctx.beginPath();
         for (let i = 0; i <= 120; i++) {
@@ -336,7 +345,7 @@ export function drawCosmosHud(ctx, w, h, st, webGraph, galaxyBooks, agentsByPlan
         }
         ctx.strokeStyle = isFocus
           ? (agent && agent.status === 'waiting' ? `rgba(255, 190, 92, ${0.38 * orbitOpacity})` : `rgba(136, 206, 255, ${0.34 * orbitOpacity})`)
-          : (agent ? `rgba(176, 208, 255, ${0.14 * orbitOpacity})` : `rgba(156, 184, 228, ${0.068 * orbitOpacity})`);
+          : (agent ? `rgba(176, 208, 255, ${0.14 * orbitOpacity})` : `rgba(156, 184, 228, ${(isHomeSystem ? 0.068 : 0.125) * orbitOpacity})`);
         ctx.lineWidth = isFocus ? 1.15 : 0.85;
         ctx.stroke();
       });
@@ -344,9 +353,9 @@ export function drawCosmosHud(ctx, w, h, st, webGraph, galaxyBooks, agentsByPlan
 
     // Keplerian Orbit motion trails
     if (orbitOpacity > 0.02) {
-      PLANETS.forEach((p) => {
-        const agent = agentsByPlanet[p.id];
-        const dtArc = (agent ? 0.36 : 0.22) / Math.max(p.speed, 0.01);
+      activeBodies.forEach((p) => {
+        const agent = isHomeSystem ? agentsByPlanet[p.id] : null;
+        const dtArc = (agent ? 0.36 : 0.24) / Math.max(p.speed, 0.01);
         ctx.beginPath();
         let endPt = null;
         for (let i = 0; i <= 22; i++) {
@@ -358,11 +367,14 @@ export function drawCosmosHud(ctx, w, h, st, webGraph, galaxyBooks, agentsByPlan
         const pos = st.planetScreen[p.id];
         if (pos && endPt) {
           const grad = ctx.createLinearGradient(pos.x, pos.y, endPt.x, endPt.y);
-          const tint = agent && agent.status === 'waiting' ? '255, 190, 92' : '152, 208, 255';
-          grad.addColorStop(0, `rgba(${tint}, ${(agent ? 0.32 : 0.13) * Math.min(1.2, orbitOpacity)})`);
+          const [ar, ag, ab] = p.atmo || [0.6, 0.8, 1.0];
+          const tint = agent && agent.status === 'waiting'
+            ? '255, 190, 92'
+            : (isHomeSystem ? '152, 208, 255' : `${Math.round(ar * 255)}, ${Math.round(ag * 255)}, ${Math.round(ab * 255)}`);
+          grad.addColorStop(0, `rgba(${tint}, ${(agent ? 0.32 : (isHomeSystem ? 0.13 : 0.24)) * Math.min(1.2, orbitOpacity)})`);
           grad.addColorStop(1, `rgba(${tint}, 0)`);
           ctx.strokeStyle = grad;
-          ctx.lineWidth = agent ? 1.35 : 0.85;
+          ctx.lineWidth = agent ? 1.35 : 0.95;
           ctx.stroke();
         }
       });
@@ -406,8 +418,8 @@ export function drawCosmosHud(ctx, w, h, st, webGraph, galaxyBooks, agentsByPlan
       ctx.setLineDash([]);
 
       const helixSteps = 56;
-      PLANETS.forEach((p) => {
-        const agent = agentsByPlanet[p.id];
+      activeBodies.forEach((p) => {
+        const agent = isHomeSystem ? agentsByPlanet[p.id] : null;
         ctx.beginPath();
         let endPt = null;
         for (let i = 0; i <= helixSteps; i++) {
@@ -435,6 +447,7 @@ export function drawCosmosHud(ctx, w, h, st, webGraph, galaxyBooks, agentsByPlan
     ctx.restore(); // end sphere-clip
 
     // Photorealistic Volumetric Dual-Tail Comets (Additive Soft Gaussian Dust Fan + Feathered CO+ Ion Plume + Parabolic Coma)
+    if (hasComets) {
     ctx.save();
     ctx.globalCompositeOperation = 'lighter';
     for (let ci = 0; ci < COMETS.length; ci++) {
@@ -533,6 +546,7 @@ export function drawCosmosHud(ctx, w, h, st, webGraph, galaxyBooks, agentsByPlan
       ctx.fill();
     }
     ctx.restore();
+    }
 
     // Occasional Deep-Space Meteors
     if (st.realTime >= st.nextMeteorAt) {
@@ -552,8 +566,8 @@ export function drawCosmosHud(ctx, w, h, st, webGraph, galaxyBooks, agentsByPlan
       ctx.strokeStyle = mg; ctx.lineWidth = 1.25; ctx.stroke();
     }
 
-    // Active Session Flashing Halos & Orbiting Satellites (converged on deep close-up)
-    Object.entries(agentsByPlanet).forEach(([planetId, agent]) => {
+    // Active Session Flashing Halos & Orbiting Satellites (converged on deep close-up, Sol system only)
+    if (isHomeSystem) Object.entries(agentsByPlanet).forEach(([planetId, agent]) => {
       const pos = st.planetScreen[planetId];
       if (!pos || !agent) return;
       if (planetFocusId === planetId && closeupFade < 0.05) return;
@@ -726,6 +740,52 @@ export function drawCosmosHud(ctx, w, h, st, webGraph, galaxyBooks, agentsByPlan
       g.addColorStop(0.28, n.color.replace(', 1)', `, ${Math.min(0.85, 0.48 * pulse)})`));
       g.addColorStop(1, 'rgba(130, 180, 255, 0)');
       ctx.fillStyle = g; ctx.beginPath(); ctx.arc(p.x, p.y, rad * 3.4, 0, Math.PI * 2); ctx.fill();
+    }
+    ctx.restore();
+  }
+
+  // 3D Interstellar Soaring & Warp Starlight Streamers
+  const streamIntensity = Math.max(soarBlend * 0.85, voyageWarp);
+  if (streamIntensity > 0.04) {
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    const vpx = w * 0.5 + st.parallax.x * 26 - st.camRot.x * 42;
+    const vpy = h * 0.48 + st.parallax.y * 18 - st.camRot.y * 34;
+    const maxR = Math.hypot(w, h) * 0.68;
+    const count = voyageWarp > 0.25 ? 72 : 46;
+    const palette = [
+      [158, 214, 255],
+      [236, 245, 255],
+      [255, 224, 174],
+      [194, 178, 255],
+    ];
+    for (let i = 0; i < count; i++) {
+      const h1 = ((i * 2654435761) >>> 0) / 4294967296;
+      const h2 = (((i + 37) * 2246822519) >>> 0) / 4294967296;
+      const ang = h1 * Math.PI * 2;
+      const z = (h2 + soarPhase * (0.28 + (i % 5) * 0.055)) % 1;
+      const depth = z * z;
+      const r0 = (0.04 + depth * 0.96) * maxR;
+      const streakLen = (10 + depth * (44 + voyageWarp * 115)) * streamIntensity;
+      const r1 = Math.max(4, r0 - streakLen);
+      const x0 = vpx + Math.cos(ang) * r0;
+      const y0 = vpy + Math.sin(ang) * r0;
+      if (x0 < -140 || x0 > w + 140 || y0 < -140 || y0 > h + 140) continue;
+      const x1 = vpx + Math.cos(ang) * r1;
+      const y1 = vpy + Math.sin(ang) * r1;
+      const [sr, sg, sb] = palette[i % palette.length];
+      const alpha = Math.sin(z * Math.PI) * (0.18 + depth * 0.52) * streamIntensity;
+      if (alpha < 0.015) continue;
+      const lg = ctx.createLinearGradient(x0, y0, x1, y1);
+      lg.addColorStop(0, `rgba(${sr}, ${sg}, ${sb}, ${alpha.toFixed(3)})`);
+      lg.addColorStop(1, `rgba(${sr}, ${sg}, ${sb}, 0)`);
+      ctx.strokeStyle = lg;
+      ctx.lineWidth = 0.7 + depth * 1.35;
+      ctx.lineCap = 'round';
+      ctx.beginPath();
+      ctx.moveTo(x1, y1);
+      ctx.lineTo(x0, y0);
+      ctx.stroke();
     }
     ctx.restore();
   }

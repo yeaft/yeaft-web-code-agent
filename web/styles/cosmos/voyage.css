@@ -1,0 +1,395 @@
+/* ============================================================================
+ *  Yeaft Cosmos — Interstellar Soaring & Multi-System Sightseeing HUD
+ * ============================================================================ */
+
+.cosmos-voyage-layer {
+  position: fixed;
+  inset: 0;
+  z-index: 24;
+  pointer-events: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.cosmos-voyage-anchor {
+  position: fixed;
+  top: 16px;
+  left: 16px;
+  pointer-events: auto;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.cosmos-voyage-bar {
+  display: inline-flex;
+  align-items: center;
+  height: 34px;
+  padding: 2px;
+  border-radius: 999px;
+  background: rgba(8, 14, 28, 0.72);
+  border: 1px solid var(--c-line);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  box-shadow: 0 8px 26px rgba(0, 0, 0, 0.34);
+  transition: border-color 180ms var(--c-ease), box-shadow 180ms var(--c-ease);
+}
+
+.cosmos-voyage-bar.is-soaring {
+  border-color: rgba(124, 196, 255, 0.42);
+  box-shadow: 0 8px 28px rgba(12, 34, 68, 0.46), 0 0 0 1px rgba(124, 196, 255, 0.14);
+}
+
+.cosmos-voyage-sys-btn,
+.cosmos-voyage-soar-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  height: 28px;
+  padding: 0 11px;
+  border: none;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--c-ink);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 150ms var(--c-ease), color 150ms var(--c-ease);
+}
+
+.cosmos-voyage-sys-btn:hover,
+.cosmos-voyage-soar-btn:hover {
+  background: rgba(186, 214, 255, 0.10);
+}
+
+.cosmos-voyage-sys-btn:focus-visible,
+.cosmos-voyage-soar-btn:focus-visible,
+.cosmos-voyage-atlas-item:focus-visible,
+.cosmos-soar-beacon:focus-visible {
+  outline: 2px solid var(--c-cyan);
+  outline-offset: 2px;
+}
+
+.cosmos-voyage-sys-dist {
+  font-size: 11px;
+  color: var(--c-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.cosmos-voyage-caret {
+  width: 12px;
+  height: 12px;
+  fill: none;
+  stroke: var(--c-muted);
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  transition: transform 180ms var(--c-ease);
+}
+
+.cosmos-voyage-caret.is-open {
+  transform: rotate(180deg);
+}
+
+.cosmos-voyage-sep {
+  width: 1px;
+  height: 16px;
+  background: var(--c-line);
+  flex-shrink: 0;
+}
+
+.cosmos-voyage-soar-btn {
+  color: var(--c-muted);
+}
+
+.cosmos-voyage-soar-btn svg {
+  width: 13px;
+  height: 13px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.7;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.cosmos-voyage-soar-btn.is-active {
+  background: rgba(124, 196, 255, 0.20);
+  color: #cbe8ff;
+}
+
+.cosmos-voyage-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.cosmos-voyage-dot.is-lg {
+  width: 9px;
+  height: 9px;
+  margin-top: 4px;
+}
+
+.cosmos-voyage-dot.is-pulse {
+  animation: cosmos-voyage-pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes cosmos-voyage-pulse {
+  0%, 100% { transform: scale(1); opacity: 0.9; }
+  50% { transform: scale(1.45); opacity: 1; }
+}
+
+/* ── Star Atlas Dropdown ── */
+.cosmos-voyage-atlas {
+  width: min(336px, calc(100vw - 32px));
+  padding: 10px;
+  border-radius: 16px;
+  background: rgba(7, 13, 26, 0.88);
+  border: 1px solid var(--c-line-strong);
+  backdrop-filter: blur(22px);
+  -webkit-backdrop-filter: blur(22px);
+  box-shadow: 0 18px 46px rgba(0, 0, 0, 0.56);
+}
+
+.cosmos-voyage-atlas-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 2px 6px 8px;
+  border-bottom: 1px solid var(--c-line);
+  margin-bottom: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--c-ink);
+}
+
+.cosmos-voyage-atlas-sub {
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--c-faint);
+}
+
+.cosmos-voyage-atlas-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: min(62vh, 360px);
+  overflow-y: auto;
+}
+
+.cosmos-voyage-atlas-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  width: 100%;
+  padding: 9px 10px;
+  border: 1px solid transparent;
+  border-radius: 11px;
+  background: transparent;
+  color: var(--c-ink);
+  text-align: left;
+  cursor: pointer;
+  transition: background 150ms var(--c-ease), border-color 150ms var(--c-ease);
+}
+
+.cosmos-voyage-atlas-item:hover {
+  background: rgba(186, 214, 255, 0.08);
+  border-color: var(--c-line);
+}
+
+.cosmos-voyage-atlas-item.is-current {
+  background: rgba(124, 196, 255, 0.13);
+  border-color: rgba(124, 196, 255, 0.34);
+}
+
+.cosmos-voyage-atlas-item.is-target {
+  background: rgba(255, 190, 92, 0.12);
+  border-color: rgba(255, 190, 92, 0.34);
+}
+
+.cosmos-voyage-item-main {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1;
+}
+
+.cosmos-voyage-item-top {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.cosmos-voyage-item-name {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--c-ink);
+}
+
+.cosmos-voyage-item-meta {
+  font-size: 11px;
+  color: var(--c-muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.cosmos-voyage-item-desc {
+  font-size: 11.5px;
+  line-height: 1.4;
+  color: var(--c-muted);
+}
+
+/* ── Bottom-Center Flight / Sightseeing Dock ── */
+.cosmos-voyage-dock {
+  position: fixed;
+  left: 50%;
+  bottom: 22px;
+  transform: translateX(-50%);
+  pointer-events: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 12px;
+  border-radius: 999px;
+  background: rgba(7, 13, 26, 0.78);
+  border: 1px solid var(--c-line-strong);
+  backdrop-filter: blur(18px);
+  -webkit-backdrop-filter: blur(18px);
+  box-shadow: 0 12px 34px rgba(0, 0, 0, 0.45);
+  max-width: calc(100vw - 24px);
+}
+
+.cosmos-voyage-dock-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--c-ink);
+  white-space: nowrap;
+}
+
+.cosmos-voyage-dock-meta {
+  font-size: 11px;
+  color: var(--c-muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.cosmos-voyage-speed {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.cosmos-voyage-speed-val {
+  min-width: 34px;
+  text-align: center;
+  font-size: 11.5px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: var(--c-cyan);
+}
+
+.cosmos-voyage-dock .cosmos-ewd-btn.is-active {
+  background: rgba(124, 196, 255, 0.22);
+  border-color: rgba(124, 196, 255, 0.48);
+  color: #d6efff;
+}
+
+.cosmos-voyage-home-btn {
+  border-color: rgba(255, 190, 92, 0.34);
+  color: #ffdca2;
+}
+
+/* ── In-Flight Floating Star System Beacons & Sightseeing World Tags ── */
+.cosmos-soar-beacon {
+  position: fixed;
+  top: 0;
+  left: 0;
+  z-index: 16;
+  pointer-events: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 5px 11px;
+  border-radius: 999px;
+  background: rgba(8, 15, 30, 0.66);
+  border: 1px solid rgba(186, 214, 255, 0.24);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  color: var(--c-ink);
+  font-size: 11.5px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: border-color 160ms var(--c-ease), background 160ms var(--c-ease);
+}
+
+.cosmos-soar-beacon:hover {
+  background: rgba(16, 28, 54, 0.88);
+  border-color: rgba(124, 196, 255, 0.56);
+}
+
+.cosmos-soar-beacon-dist {
+  font-size: 10.5px;
+  color: var(--c-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.cosmos-sightseeing-node {
+  position: fixed;
+  top: 0;
+  left: 0;
+  pointer-events: none;
+}
+
+.cosmos-sightseeing-tag {
+  position: absolute;
+  top: 0;
+  left: 0;
+  pointer-events: auto;
+  padding: 3px 9px;
+  border-radius: 999px;
+  background: rgba(6, 12, 24, 0.62);
+  border: 1px solid rgba(186, 214, 255, 0.20);
+  color: rgba(232, 242, 255, 0.90);
+  font-size: 11px;
+  white-space: nowrap;
+  cursor: pointer;
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  transition: background 150ms var(--c-ease), border-color 150ms var(--c-ease);
+}
+
+.cosmos-sightseeing-tag:hover {
+  background: rgba(18, 32, 58, 0.84);
+  border-color: rgba(124, 196, 255, 0.48);
+}
+
+@media (max-width: 640px) {
+  .cosmos-voyage-anchor {
+    top: 12px;
+    left: 12px;
+  }
+
+  .cosmos-voyage-sys-dist {
+    display: none;
+  }
+
+  .cosmos-voyage-dock {
+    bottom: 14px;
+    flex-wrap: wrap;
+    justify-content: center;
+    border-radius: 18px;
+    padding: 7px 10px;
+    gap: 6px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cosmos-voyage-dot.is-pulse {
+    animation: none;
+  }
+}

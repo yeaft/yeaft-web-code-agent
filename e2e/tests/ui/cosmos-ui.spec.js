@@ -1026,4 +1026,64 @@ test.describe('Yeaft Cosmos UI', () => {
     expect(failedAssets).toEqual([]);
     expect(errors).toEqual([]);
   });
+
+  test('supports interstellar soaring free-flight, star atlas warp to Alpha Centauri & Sgr A*, exoplanet zoom, and return to Sol', async ({ page, serverUrl }) => {
+    const errors = [];
+    page.on('pageerror', (err) => errors.push(err.message));
+    page.on('console', (msg) => {
+      if (msg.type() === 'error') errors.push(msg.text());
+    });
+
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await page.goto(serverUrl);
+    await expect(page.locator('.cosmos-page')).toBeVisible({ timeout: 15000 });
+
+    // 1. Top-left Voyage Bar is visible in Solar System
+    const voyageBar = page.locator('.cosmos-voyage-bar');
+    await expect(voyageBar).toBeVisible();
+    await expect(voyageBar.locator('.cosmos-voyage-sys-btn')).toContainText(/太阳系|Solar System/);
+
+    // 2. Enter Interstellar Soar Mode -> flight dock appears, speed adjusts, floating star beacons project
+    await voyageBar.locator('.cosmos-voyage-soar-btn').click();
+    await expect(voyageBar).toHaveClass(/is-soaring/);
+    const flightDock = page.locator('.cosmos-voyage-dock');
+    await expect(flightDock).toBeVisible();
+    const initialSpeed = await flightDock.locator('.cosmos-voyage-speed-val').textContent();
+    await flightDock.locator('.cosmos-ewd-mini').nth(1).click();
+    await expect(flightDock.locator('.cosmos-voyage-speed-val')).not.toHaveText(initialSpeed || '');
+
+    // Wait briefly for soarBlend > 0.32 so floating star beacons appear
+    await page.waitForTimeout(550);
+    const visibleBeaconCount = await page.locator('.cosmos-soar-beacon').evaluateAll(
+      (els) => els.filter((el) => el.style.display !== 'none').length,
+    );
+    expect(visibleBeaconCount).toBeGreaterThan(0);
+
+    // 3. Open Star Atlas and warp to Alpha Centauri (Binary Star System)
+    await voyageBar.locator('.cosmos-voyage-sys-btn').click();
+    const atlas = page.locator('.cosmos-voyage-atlas');
+    await expect(atlas).toBeVisible();
+    await expect(atlas.locator('.cosmos-voyage-atlas-item')).toHaveCount(5);
+    await atlas.locator('.cosmos-voyage-atlas-item').nth(1).click();
+
+    // Wait for warp completion into Alpha Centauri
+    await expect(voyageBar.locator('.cosmos-voyage-sys-btn')).toContainText(/半人马座|Alpha Centauri/, { timeout: 6000 });
+    await expect(page.locator('.cosmos-sightseeing-tag').first()).toBeVisible({ timeout: 5000 });
+
+    // 4. Click an exoplanet tag in Alpha Centauri -> centers & opens Planet Focus Inspection Dock
+    await page.locator('.cosmos-sightseeing-tag').first().click();
+    await expect(page.locator('.cosmos-planet-focus-dock')).toBeVisible();
+    await page.locator('.cosmos-pf-return').click();
+    await expect(page.locator('.cosmos-planet-focus-dock')).toHaveCount(0);
+
+    // 5. Warp to Sagittarius A* (Galactic Core SMBH + S-stars) and then return home to Sol
+    await voyageBar.locator('.cosmos-voyage-sys-btn').click();
+    await page.locator('.cosmos-voyage-atlas-item').nth(4).click();
+    await expect(voyageBar.locator('.cosmos-voyage-sys-btn')).toContainText(/Sgr A\*|人马座/, { timeout: 7000 });
+
+    await page.locator('.cosmos-voyage-home-btn').click();
+    await expect(voyageBar.locator('.cosmos-voyage-sys-btn')).toContainText(/太阳系|Solar System/, { timeout: 7000 });
+
+    expect(errors).toEqual([]);
+  });
 });

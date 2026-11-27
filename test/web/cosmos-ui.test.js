@@ -59,6 +59,23 @@ import {
   formatEventPhysicalDistance,
 } from '../../web/cosmos/events-controller.js';
 import {
+  STAR_SYSTEMS,
+  SOAR_MIN_SPEED,
+  SOAR_MAX_SPEED,
+  createVoyageState,
+  toggleSoarMode,
+  setSoarSpeed,
+  toggleSoarAutoPilot,
+  startSystemWarp,
+  getNextStarSystemId,
+  getActiveStarSystem,
+  computeSystemWarpDuration,
+  tickVoyageState,
+  getVoyageSkyUniforms,
+  projectSoarBeacons,
+  formatSystemDistance,
+} from '../../web/cosmos/star-systems.js';
+import {
   projectAgentsForCosmos,
   buildCosmosProjectSessionTree,
   filterCosmosSessions,
@@ -3633,5 +3650,114 @@ describe('Cosmos Interstellar Signal Stream (Unified Top-Right Replies, Schedule
     wrapper.unmount();
     wrapper = null;
     expect(pageStore.yeaftConversationCovered).toBe(false);
+  });
+
+  it('supports interstellar soaring, distance-correlated warp transitions, and 5 sightseeing star systems', async () => {
+    expect(STAR_SYSTEMS.map((s) => s.id)).toEqual([
+      'sol', 'alpha-centauri', 'trappist-1', 'orion-nursery', 'sgr-a',
+    ]);
+    // Alpha Centauri has 2 orbiting binary stars; TRAPPIST-1 has 7 planets; Sgr A* has a central SMBH & 5 S-stars
+    expect(STAR_SYSTEMS.find((s) => s.id === 'alpha-centauri').stars.length).toBe(2);
+    expect(STAR_SYSTEMS.find((s) => s.id === 'trappist-1').bodies.length).toBe(7);
+    const sgrA = STAR_SYSTEMS.find((s) => s.id === 'sgr-a');
+    expect(sgrA.centralBlackHole?.strength).toBe(1.0);
+    expect(sgrA.bodies.length).toBe(5);
+
+    // Distance-correlated warp duration: Sgr A* (26,670 ly) takes longer than Alpha Centauri (4.37 ly)
+    const dAlpha = computeSystemWarpDuration('sol', 'alpha-centauri');
+    const dSgr = computeSystemWarpDuration('sol', 'sgr-a');
+    expect(dSgr).toBeGreaterThan(dAlpha);
+    expect(formatSystemDistance(0, false)).toContain('母星');
+    expect(formatSystemDistance(4.37, true)).toBe('4.37 ly');
+
+    // Pure voyage state machine: soaring, speed clamping, autopilot, projected sky beacons
+    const voyage = createVoyageState();
+    expect(getActiveStarSystem(voyage).id).toBe('sol');
+    expect(toggleSoarMode(voyage, true)).toBe(true);
+    expect(setSoarSpeed(voyage, 99)).toBe(SOAR_MAX_SPEED);
+    expect(setSoarSpeed(voyage, 0.01)).toBe(SOAR_MIN_SPEED);
+    expect(setSoarSpeed(voyage, 2.0)).toBe(2.0);
+    expect(toggleSoarAutoPilot(voyage)).toBe(false);
+
+    // Step frames so soarBlend rises and flightPhase advances
+    for (let i = 0; i < 40; i++) tickVoyageState(voyage, 0.05);
+    expect(voyage.soarBlend).toBeGreaterThan(0.8);
+    expect(voyage.flightPhase).toBeGreaterThan(1.0);
+    const sky = getVoyageSkyUniforms(voyage);
+    expect(sky.soarVec[2]).toBeGreaterThan(1.0);
+
+    const beacons = projectSoarBeacons(voyage, 1280, 720, { x: 0, y: 0 });
+    expect(beacons.length).toBeGreaterThan(0);
+    expect(beacons.every((b) => b.id !== 'sol')).toBe(true);
+
+    // Warp to Alpha Centauri: midpoint swaps systemId and blends skyTint
+    expect(startSystemWarp(voyage, 'alpha-centauri')).toBe(true);
+    expect(voyage.soaring).toBe(false);
+    let swapped = false;
+    let finished = false;
+    for (let i = 0; i < 120 && !finished; i++) {
+      const res = tickVoyageState(voyage, 0.04);
+      if (res.systemChanged) swapped = true;
+      if (res.warpFinished) finished = true;
+    }
+    expect(swapped).toBe(true);
+    expect(finished).toBe(true);
+    expect(voyage.systemId).toBe('alpha-centauri');
+    expect(getNextStarSystemId('sgr-a')).toBe('sol');
+
+    // Verify all sightseeing system & body i18n keys exist in both zh-CN and en
+    const { zhCN: cosmosZhCN, en: cosmosEn } = await import('../../web/i18n/cosmos.js');
+    for (const sys of STAR_SYSTEMS) {
+      expect(cosmosZhCN[`cosmos.voyage.systems.${sys.id}.name`]).toBeTruthy();
+      expect(cosmosEn[`cosmos.voyage.systems.${sys.id}.name`]).toBeTruthy();
+      expect(cosmosZhCN[`cosmos.voyage.systems.${sys.id}.desc`]).toBeTruthy();
+      expect(cosmosEn[`cosmos.voyage.systems.${sys.id}.desc`]).toBeTruthy();
+      if (!sys.isHome) {
+        for (const b of sys.bodies) {
+          expect(cosmosZhCN[`cosmos.voyage.bodies.${b.id}`]).toBeTruthy();
+          expect(cosmosEn[`cosmos.voyage.bodies.${b.id}`]).toBeTruthy();
+        }
+      }
+    }
+
+    // Mount CosmosVoyageOverlay and verify Star Atlas + Soar + Return to Sol interactions
+    const CosmosVoyageOverlay = (await import('../../web/components/cosmos/CosmosVoyageOverlay.js')).default;
+    const prevVue = globalThis.Vue;
+    globalThis.Vue = Vue;
+    let ov = null;
+    try {
+      ov = mount(CosmosVoyageOverlay, {
+        props: {
+          visible: true,
+          systemId: 'alpha-centauri',
+          soaring: false,
+          soarSpeed: 1.5,
+          autoPilot: true,
+          warpingToId: '',
+          planetFocused: false,
+          drawerOpen: false,
+        },
+        global: {
+          mocks: { $t: (k) => cosmosZhCN[k] || k },
+        },
+      });
+      // Open Star Atlas and click TRAPPIST-1
+      await ov.find('.cosmos-voyage-sys-btn').trigger('click');
+      const items = ov.findAll('.cosmos-voyage-atlas-item');
+      expect(items.length).toBe(5);
+      await items[2].trigger('click');
+      expect(ov.emitted('select-system')?.[0]).toEqual(['trappist-1']);
+
+      // Click Soar button
+      await ov.find('.cosmos-voyage-soar-btn').trigger('click');
+      expect(ov.emitted('toggle-soar')?.length).toBe(1);
+
+      // Click Return to Sol in sightseeing dock
+      await ov.find('.cosmos-voyage-home-btn').trigger('click');
+      expect(ov.emitted('return-sol')?.length).toBe(1);
+    } finally {
+      ov?.unmount();
+      globalThis.Vue = prevVue;
+    }
   });
 });
