@@ -185,6 +185,7 @@ export function createUserPreferencesState(auth, { request = (...args) => fetch(
     if (!authenticated() || (!ready.value && !allowBeforeReady)) return Promise.resolve(false);
     const expectedGeneration = generation;
     const expectedRevision = ++revision;
+    initialLoadInFlight = false;
     const wasIdle = pendingWrites === 0;
     pendingPatches.set(expectedRevision, patch);
     showConfirmed();

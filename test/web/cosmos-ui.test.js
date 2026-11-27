@@ -4644,17 +4644,24 @@ describe('Cosmos Interstellar Signal Stream (Unified Top-Right Replies, Schedule
     // and settle BOTH Promises cleanly on both success AND failure paths (never shadowing showConfirmed).
     for (const shouldSucceed of [true, false]) {
       const sentBodies = [];
-      let resolveKaPatch;
+      let resolveStaleGet;
+      const patchResolversKa = [];
       const kaReq = vi.fn((_url, init = {}) => {
         if ((init.method || 'GET') === 'GET') {
-          return new Promise(() => {}); // initial GET stays in flight
+          return new Promise((resolve) => {
+            resolveStaleGet = () => resolve({
+              ok: true,
+              json: async () => ({ sidebarActionsCompact: false, sidebarCollapsedProjects: {}, cosmosConfig: { constants: { orbitSpeed: 0.1 } } }),
+            });
+          });
         }
         const parsed = JSON.parse(init.body).cosmosConfig;
+        const callIdx = sentBodies.length;
         sentBodies.push({ keepalive: Boolean(init.keepalive), cosmosConfig: parsed });
         return new Promise((resolve) => {
-          resolveKaPatch = () => resolve(shouldSucceed
+          patchResolversKa.push(() => resolve((callIdx === 0 ? shouldSucceed : true)
             ? { ok: true, json: async () => ({ sidebarActionsCompact: false, sidebarCollapsedProjects: {}, cosmosConfig: parsed }) }
-            : { ok: false, json: async () => ({ error: 'boom' }) });
+            : { ok: false, json: async () => ({ error: 'boom' }) }));
         });
       });
       const kaAuth = Vue.reactive({ isAuthenticated: true, userId: `user-ka-${shouldSucceed}`, token: 'tok', authGeneration: 1 });
@@ -4669,12 +4676,24 @@ describe('Cosmos Interstellar Signal Stream (Unified Top-Right Replies, Schedule
       });
       // While P2 is in flight, optimistic state MUST show P2 (1.7), NOT older P1 (0.3)
       expect(kaPrefs.preferences.value.cosmosConfig.constants.orbitSpeed).toBe(1.7);
-      resolveKaPatch();
+      patchResolversKa[0]();
       expect(await p1).toBe(shouldSucceed);
       expect(await p2).toBe(shouldSucceed);
-      // After failure, P1 must NOT remain stuck shadowing showConfirmed()
+      // After failure (while stale initial GET is STILL in flight), P1 must NOT shadow showConfirmed(),
+      // and a follow-up non-keepalive saveCosmosConfig(P3) MUST dispatch directly and resolve cleanly
+      // even when the stale initial GET settles afterward.
       if (!shouldSucceed) {
         expect(kaPrefs.preferences.value.cosmosConfig).toEqual({});
+        const p3 = kaPrefs.saveCosmosConfig({ constants: { orbitSpeed: 1.1 } });
+        await flushPromises();
+        expect(sentBodies).toHaveLength(2);
+        expect(sentBodies[1]).toEqual({ keepalive: false, cosmosConfig: { constants: { orbitSpeed: 1.1 } } });
+        resolveStaleGet();
+        await flushPromises();
+        patchResolversKa[1]();
+        expect(await p3).toBe(true);
+        expect(kaPrefs.ready.value).toBe(true);
+        expect(kaPrefs.preferences.value.cosmosConfig.constants.orbitSpeed).toBe(1.1);
       } else {
         expect(kaPrefs.preferences.value.cosmosConfig.constants.orbitSpeed).toBe(1.7);
       }
