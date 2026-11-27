@@ -106,6 +106,7 @@ export default {
     window.addEventListener('keydown', this.onKeyDown);
   },
   beforeUnmount() {
+    this._unmounted = true;
     this.syncStoreDirty(false);
     window.removeEventListener('keydown', this.onKeyDown);
   },
@@ -204,7 +205,8 @@ export default {
       try {
         const res = await this.creationsStore.uploadSources(targetAgentId, targetCreationId, files, []);
         if (
-          this.agentId !== targetAgentId
+          this._unmounted
+          || this.agentId !== targetAgentId
           || this.creationId !== targetCreationId
           || this.node?.id !== targetNodeId
           || !this.canMutate()
@@ -255,7 +257,8 @@ export default {
         baseRevId: this.editBaseRevId,
       };
       const sameTarget = () => (
-        this.agentId === targetAgentId
+        !this._unmounted
+        && this.agentId === targetAgentId
         && this.creationId === targetCreationId
         && this.node?.id === targetNodeId
       );

@@ -1737,6 +1737,54 @@ describe('Cosmos Creations — End-to-End Web Store <-> Server Relay <-> Agent S
     expect(bookUndoWrap.vm.editBaseRevId).toBe('rev-2');
     bookUndoWrap.unmount();
 
+    // R10-#1: BookReader unmounting mid-save (e.g., switching Read <-> Studio) must NOT re-mark the store dirty when the save settles!
+    let resolveUnmountSave;
+    const unmountNodeKey = `agent-a\u001f${res.creation.id}\u001fbook-unmount`;
+    creationsStore.nodeContentsByKey[unmountNodeKey] = {
+      content: 'Version A', revisions: [], loading: false, loaded: true, loadedRevId: 'rev-1', dirty: false,
+    };
+    const bookUnmountWrap = mount(BookReader, {
+      props: {
+        node: { id: 'book-unmount', title: 'Chapter Unmount', modality: 'markdown_doc', currentRevId: 'rev-1' },
+        content: 'Version A',
+        contentLoaded: true,
+        loadedRevId: 'rev-1',
+        agentId: 'agent-a',
+        creationId: res.creation.id,
+        onSaveContent: vi.fn(() => new Promise((r) => { resolveUnmountSave = r; })),
+      },
+      global: { mocks: { $t } },
+    });
+    bookUnmountWrap.vm.enterEditMode();
+    bookUnmountWrap.vm.draftText = 'Version B';
+    bookUnmountWrap.vm.onEditorInput();
+    const unmountSavePromise = bookUnmountWrap.vm.saveEdit(false);
+    // Type C after submitting B, then unmount reader before save settles
+    bookUnmountWrap.vm.draftText = 'Version C';
+    bookUnmountWrap.vm.onEditorInput();
+    expect(creationsStore.nodeContentsByKey[unmountNodeKey].dirty).toBe(true);
+    bookUnmountWrap.unmount();
+    expect(creationsStore.nodeContentsByKey[unmountNodeKey].dirty).toBe(false);
+    // Late save response settles after unmount -> store dirty flag MUST stay false!
+    resolveUnmountSave({ node: { id: 'book-unmount', currentRevId: 'rev-2' } });
+    await unmountSavePromise;
+    await flushPromises();
+    expect(creationsStore.nodeContentsByKey[unmountNodeKey].dirty).toBe(false);
+
+    // R10-#2: Galaxy overlay top padding clears top-left Voyage bar (height 34px + top 16px/12px) on BOTH desktop and <=768px mobile!
+    const creationsCssText = readFileSync(resolve(process.cwd(), 'web/styles/cosmos/creations.css'), 'utf8');
+    const voyageCssText = readFileSync(resolve(process.cwd(), 'web/styles/cosmos/voyage.css'), 'utf8');
+    const voyageBarH = Number(voyageCssText.match(/\.cosmos-voyage-bar\s*\{[^}]*height:\s*(\d+)px/s)?.[1]);
+    const voyageTopDesktop = Number(voyageCssText.match(/\.cosmos-voyage-anchor\s*\{[^}]*top:\s*calc\((\d+)px/s)?.[1]);
+    const voyageMobileBlock = voyageCssText.slice(voyageCssText.indexOf('@media (max-width: 768px)'));
+    const voyageTopMobile = Number(voyageMobileBlock.match(/\.cosmos-voyage-anchor\s*\{[^}]*top:\s*calc\((\d+)px/s)?.[1]);
+    const overlayDesktopTop = Number(creationsCssText.match(/\.creation-galaxy-overlay\s*\{[^}]*padding:\s*calc\((\d+)px/s)?.[1]);
+    const overlayMobileBlock = creationsCssText.slice(creationsCssText.indexOf('@media (max-width: 768px)'));
+    const overlayMobileTop = Number(overlayMobileBlock.match(/\.creation-galaxy-overlay\s*\{[^}]*padding:\s*calc\((\d+)px/s)?.[1]);
+    expect(creationsCssText).toMatch(/\.creation-galaxy-overlay\s*\{[^}]*pointer-events:\s*none/s);
+    expect(overlayDesktopTop).toBeGreaterThanOrEqual(voyageTopDesktop + voyageBarH);
+    expect(overlayMobileTop).toBeGreaterThanOrEqual(voyageTopMobile + voyageBarH);
+
     creationsStore.uploadSources = origUploadSources;
     creationsStore.request = origRequest;
   });

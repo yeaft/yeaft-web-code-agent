@@ -79,6 +79,7 @@ export default {
       dirty: false,
       pendingSaveCount: 0,
       saveSessionSeq: 0,
+      isUnmounted: false,
       editBaseRevId: null,
       conflictError: '',
       saveError: '',
@@ -171,6 +172,9 @@ export default {
     document.addEventListener('selectionchange', this.onSelectionChange);
   },
   beforeUnmount() {
+    this.isUnmounted = true;
+    this.saveSessionSeq += 1;
+    this.pendingSaveCount = 0;
     this.syncStoreDirty(false);
     document.removeEventListener('selectionchange', this.onSelectionChange);
     if (this._scrollSaveTimer) clearTimeout(this._scrollSaveTimer);
@@ -248,7 +252,8 @@ export default {
         baseRevId: this.editBaseRevId,
       };
       const sameTarget = () => (
-        this.agentId === targetAgentId
+        !this.isUnmounted
+        && this.agentId === targetAgentId
         && this.creationId === targetCreationId
         && this.node?.id === targetNodeId
         && this.saveSessionSeq === startSessionSeq

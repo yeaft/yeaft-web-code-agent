@@ -196,6 +196,7 @@ export default {
     },
   },
   beforeUnmount() {
+    this._unmounted = true;
     this.syncStoreDirty(false);
     this.stopStoryboardPlayback();
   },
@@ -339,7 +340,8 @@ export default {
         baseRevId: this.editBaseRevId,
       };
       const sameTarget = () => (
-        this.agentId === targetAgentId
+        !this._unmounted
+        && this.agentId === targetAgentId
         && this.creationId === targetCreationId
         && this.node?.id === targetNodeId
       );

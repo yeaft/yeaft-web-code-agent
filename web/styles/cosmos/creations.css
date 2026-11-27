@@ -57,7 +57,7 @@
   display: flex;
   flex-direction: column;
   justify-content: space-between;
-  padding: calc(14px + env(safe-area-inset-top, 0px)) 56px calc(18px + env(safe-area-inset-bottom, 0px)) 56px;
+  padding: calc(58px + env(safe-area-inset-top, 0px)) 56px calc(18px + env(safe-area-inset-bottom, 0px)) 56px;
 }
 
 .creation-galaxy-overlay * {
@@ -1317,7 +1317,7 @@
 
 @media (max-width: 768px) {
   .creation-galaxy-overlay {
-    padding: calc(10px + env(safe-area-inset-top, 0px)) 12px calc(12px + env(safe-area-inset-bottom, 0px)) 12px;
+    padding: calc(56px + env(safe-area-inset-top, 0px)) 12px calc(12px + env(safe-area-inset-bottom, 0px)) 12px;
   }
 
   .creation-galaxy-hud {
