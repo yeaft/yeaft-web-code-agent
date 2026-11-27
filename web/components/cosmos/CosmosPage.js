@@ -14,6 +14,7 @@ import {
   PLANETS,
   BOOK_DOMAINS,
   COSMOS_DRAWER_WIDTH,
+  DEFAULT_COSMOS_CONSTANTS,
   loadCosmosConstants,
   saveCosmosConstants,
   loadPlanetBindings,
@@ -484,6 +485,7 @@ export default {
         :agent-to-planet="assignments.agentToPlanet"
         :renderer-mode="rendererMode"
         @update-constant="onUpdateConstant"
+        @reset-constants="onResetConstants"
         @assign-planet="onAssignPlanet"
         @open-settings="openYeaftSettings"
         @open-agent-settings="openYeaftAgentSettings"
@@ -1017,7 +1019,7 @@ export default {
     }
 
     const anim = {
-      time: 0, realTime: 0, lastTs: 0, lastEventUiSync: 0,
+      time: 0, realTime: 0, spinTime: 0, lastTs: 0, lastEventUiSync: 0,
       scaleLog: 13.0, targetScaleLog: 13.0, warpEnergy: 0,
       parallax: { x: 0, y: 0, tx: 0, ty: 0 },
       camRot: { x: 0, y: 0, tx: 0, ty: 0 },
@@ -2176,6 +2178,18 @@ export default {
         rebuildCosmosEngine(value);
       }
     }
+    function onResetConstants() {
+      const prevQuality = constants.renderQuality;
+      Object.assign(constants, DEFAULT_COSMOS_CONSTANTS);
+      saveCosmosConstants(constants);
+      eventSim.autoEnabled = Boolean(constants.eventsAutoEnabled);
+      eventSim.autoZoom = Boolean(constants.eventsAutoZoom);
+      if (prevQuality !== constants.renderQuality) {
+        rebuildCosmosEngine(constants.renderQuality);
+      }
+      syncEventRefs();
+      showToast($t('cosmos.constants.resetToast'));
+    }
     function onAssignPlanet({ agentId, planetId }) { if (agentId && planetId) performMoveOrSwap(agentId, planetId); }
 
     function openYeaftSettings({ tab = 'general', subTab = '' } = {}) {
@@ -2569,7 +2583,7 @@ export default {
       openQuickComposerFromDrawer, onDrawerResizeStart, onDrawerResize, onDrawerResizeEnd, onDrawerResizeReset,
       emitTelemetryBeam, onAutoRouted, jumpToWaitingAgent, assignFromMenu,
       onObserveEvent, onFocusDistantEvent, onReturnFromEvent, onStopEvent, onToggleAutoEvents, onToggleAutoZoom, onTogglePauseEvent, onReplayEvent, onNextRandomEvent, onSetEventZoom, onResetEventView, onScrubEvent,
-      onUpdateConstant, onAssignPlanet, openYeaftSettings, openYeaftAgentSettings, openAgentLlmConfig, openSessionSettings, closeSessionSettings, openVpLibraryFromSessionSettings,
+      onUpdateConstant, onResetConstants, onAssignPlanet, openYeaftSettings, openYeaftAgentSettings, openAgentLlmConfig, openSessionSettings, closeSessionSettings, openVpLibraryFromSessionSettings,
       abandonCosmos, submitNewBook, showToast, runToastAction,
     };
   },

@@ -4500,4 +4500,164 @@ describe('Cosmos Interstellar Signal Stream (Unified Top-Right Replies, Schedule
     expect(anim.camPan.ty).toBe(0);
     expect(panAutoResetCount).toBe(1);
   });
+
+  it('controls planetary spin speed, body scale, distant event scale, and cosmic constants reset cleanly', async () => {
+    const { default: CosmosConstantsPopover } = await import('../../web/components/cosmos/CosmosConstantsPopover.js');
+    const { DEFAULT_COSMOS_CONSTANTS } = await import('../../web/cosmos/constants.js');
+    const { stepCosmosFrame } = await import('../../web/cosmos/stage-loop.js');
+    const storage = createMemoryStorage();
+
+    // 1. Normalization, legacy backward-compat & persistence of new constants
+    storage.setItem('yeaft-cosmos-constants-v1', JSON.stringify({ orbitSpeed: 1.2 }));
+    const legacyLoaded = loadCosmosConstants(storage);
+    expect(legacyLoaded.orbitSpeed).toBe(1.2);
+    expect(legacyLoaded.spinSpeed).toBe(0.45);
+    expect(legacyLoaded.planetScale).toBe(1.0);
+    expect(legacyLoaded.eventScale).toBe(1.0);
+
+    const saved = saveCosmosConstants({
+      spinSpeed: 9.9,
+      planetScale: 0.1,
+      eventScale: 5.0,
+    }, storage);
+    expect(saved.spinSpeed).toBe(2.5);
+    expect(saved.planetScale).toBe(0.65);
+    expect(saved.eventScale).toBe(1.8);
+    expect(DEFAULT_COSMOS_CONSTANTS.spinSpeed).toBe(0.45);
+    expect(DEFAULT_COSMOS_CONSTANTS.planetScale).toBe(1.0);
+    expect(DEFAULT_COSMOS_CONSTANTS.eventScale).toBe(1.0);
+    expect(loadCosmosConstants(storage)).toEqual(saved);
+
+    // 2. Distant cosmic events stay naturally poised (<= 0.20) & stratify AU nearer than Mly
+    const auLoc = pickRandomDistantLocation(null, () => 0.5, 'AU');
+    const lyLoc = pickRandomDistantLocation(null, () => 0.5, 'ly');
+    const mlyLoc = pickRandomDistantLocation(null, () => 0.5, 'Mly');
+    expect(auLoc.distantScale).toBeLessThanOrEqual(EVENT_DISTANT_MAX_SCALE);
+    expect(auLoc.distantScale).toBeGreaterThan(lyLoc.distantScale);
+    expect(lyLoc.distantScale).toBeGreaterThan(mlyLoc.distantScale);
+    expect(mlyLoc.distantScale).toBeGreaterThanOrEqual(EVENT_DISTANT_MIN_SCALE);
+
+    // 3. stepCosmosFrame respects spinSpeed (smooth accumulator), planetScale, and eventScale
+    let lastFrame = null;
+    const engine = {
+      isWebGL: true,
+      isMobile: false,
+      getSize: () => ({ width: 1280, height: 720, dpr: 1 }),
+      renderFrame: (frame) => { lastFrame = frame; },
+    };
+    const anim = {
+      lastTs: 0,
+      time: 0,
+      realTime: 0,
+      spinTime: 0,
+      lastEventUiSync: 0,
+      scaleLog: 13.0,
+      targetScaleLog: 13.0,
+      warpEnergy: 0,
+      orbitBrake: 1.0,
+      parallax: { x: 0, y: 0, tx: 0, ty: 0 },
+      camRot: { x: 0, y: 0, tx: 0, ty: 0 },
+      centerShiftX: 0,
+      targetCenterShiftX: 0,
+      planetScreen: {},
+      solarSunScreen: { x: 640, y: 360, r: 48 },
+      planetFocus: { planetId: null, blend: 0, zoom: 1, targetZoom: 1, inspectYaw: 0, inspectPitch: 0, targetInspectYaw: 0, targetInspectPitch: 0 },
+    };
+    const eventSim = createCosmicEventState({ autoEnabled: false, autoZoom: false, rng: () => 0.4 });
+    startCosmicEvent(eventSim, 'solar-flare', { observe: false, rng: () => 0.4 });
+    const constants = { ...DEFAULT_COSMOS_CONSTANTS, spinSpeed: 0.0, planetScale: 1.0, eventScale: 1.0, eventsAutoEnabled: false };
+    anim.constants = constants;
+    const ctx = {
+      engine,
+      anim,
+      eventSim,
+      voyage: null,
+      pools: { belt: [], dust: [], solarWind: [], gal: [], bh: [] },
+      gpuParticles: new Float32Array(256 * 7),
+      eventGpuParticles: new Float32Array(256 * 7),
+      constants,
+      domRefs: { planets: {}, hits: {}, tags: {}, portals: {}, books: {}, homeBeacon: { value: null } },
+      getAgentsByPlanet: () => ({}),
+      getGalaxyBooks: () => [],
+      getUiState: () => ({ currentBand: 'solar', drawerOpen: false, quickOpen: false, dragActive: false }),
+      onBandChange: () => {},
+      onSyncEvents: () => {},
+      onUpdateHoverPos: () => {},
+      formatEventLabel: () => '',
+    };
+
+    stepCosmosFrame(50, ctx);
+    const sunAt0 = lastFrame.solarBodies.find((b) => b.bodyType === 0);
+    const earthAt0 = lastFrame.solarBodies.find((b) => b.bodyType === 3);
+    const evRadiusAt1 = lastFrame.eventDraws[0].eventRadiusPx;
+    const evEffDistAt1 = lastFrame.eventDraws[0].effDist;
+    const spin0 = earthAt0.spin;
+    const sunSpin0 = sunAt0.spin;
+    const radAt1 = earthAt0.radiusPx;
+    const sunRadAt1 = sunAt0.radiusPx;
+
+    // With spinSpeed = 0, neither Earth nor Sun spins
+    stepCosmosFrame(100, ctx);
+    expect(lastFrame.solarBodies.find((b) => b.bodyType === 3).spin).toBeCloseTo(spin0, 6);
+    expect(lastFrame.solarBodies.find((b) => b.bodyType === 0).spin).toBeCloseTo(sunSpin0, 6);
+
+    // Increase spinSpeed to 2.0, planetScale to 1.4, eventScale to 1.5
+    constants.spinSpeed = 2.0;
+    constants.planetScale = 1.4;
+    constants.eventScale = 1.5;
+    stepCosmosFrame(150, ctx);
+    const earthAfter = lastFrame.solarBodies.find((b) => b.bodyType === 3);
+    const sunAfter = lastFrame.solarBodies.find((b) => b.bodyType === 0);
+    expect(earthAfter.spin).toBeGreaterThan(spin0);
+    expect(sunAfter.spin).toBeGreaterThan(sunSpin0);
+    expect(earthAfter.radiusPx / radAt1).toBeCloseTo(1.4, 1);
+    expect(sunAfter.radiusPx / sunRadAt1).toBeCloseTo(1.4, 2);
+    // eventScale scales visual ambient radius without distorting physical effDist
+    expect(lastFrame.eventDraws[0].eventRadiusPx / evRadiusAt1).toBeCloseTo(1.5, 2);
+    expect(lastFrame.eventDraws[0].effDist).toBeCloseTo(evEffDistAt1, 5);
+
+    // Lowering spinSpeed from 2.0 -> 0.2 continues monotonically without phase jump (smooth accumulator)
+    const spinBeforeSlow = earthAfter.spin;
+    constants.spinSpeed = 0.2;
+    stepCosmosFrame(200, ctx);
+    const earthSlow = lastFrame.solarBodies.find((b) => b.bodyType === 3);
+    expect(earthSlow.spin).toBeGreaterThan(spinBeforeSlow);
+    expect(earthSlow.spin - spinBeforeSlow).toBeLessThan(earthAfter.spin - spin0);
+
+    // NaN spinSpeed is guarded and never poisons anim.spinTime
+    constants.spinSpeed = Number.NaN;
+    stepCosmosFrame(250, ctx);
+    expect(Number.isFinite(anim.spinTime)).toBe(true);
+
+    // Focused event (focusProgress = 1) is unaffected by ambient eventScale
+    eventSim.active.observing = true;
+    eventSim.flightT = 1;
+    eventSim.focusProgress = 1;
+    const focusedAt1 = computeEventFrame(eventSim, 1280, 720, 0, null, 1, null, null, 1.0, 1.0);
+    const focusedAt18 = computeEventFrame(eventSim, 1280, 720, 0, null, 1, null, null, 1.0, 1.8);
+    expect(focusedAt18.eventRadiusPx).toBeCloseTo(focusedAt1.eventRadiusPx, 4);
+
+    // 4. CosmosConstantsPopover renders accessible new sliders + reset button and emits events
+    const wrapper = mount(CosmosConstantsPopover, {
+      props: {
+        constants: { ...DEFAULT_COSMOS_CONSTANTS },
+        agents: [],
+        agentToPlanet: {},
+        rendererMode: 'webgl2',
+      },
+      global: {
+        mocks: { $t: (k) => k },
+      },
+    });
+    expect(wrapper.text()).toContain('cosmos.constants.spinSpeed');
+    expect(wrapper.text()).toContain('cosmos.constants.planetScale');
+    expect(wrapper.text()).toContain('cosmos.constants.eventScale');
+    const spinInput = wrapper.find('input[aria-label="cosmos.constants.spinSpeed"]');
+    expect(spinInput.exists()).toBe(true);
+    await spinInput.setValue('1.25');
+    expect(wrapper.emitted('update-constant')?.[0]?.[0]).toEqual({ key: 'spinSpeed', value: 1.25 });
+    await wrapper.find('.cosmos-const-reset-btn').trigger('click');
+    expect(wrapper.emitted('reset-constants')).toHaveLength(1);
+    wrapper.unmount();
+  });
 });
