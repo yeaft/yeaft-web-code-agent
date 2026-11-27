@@ -16,6 +16,7 @@ export default {
     autoEnabled: { type: Boolean, default: true },
     autoZoom: { type: Boolean, default: false },
     activeEvent: { type: Object, default: null },
+    activeEvents: { type: Array, default: () => [] },
     nextEventIndex: { type: Number, default: 0 },
     countdownSec: { type: Number, default: 60 },
   },
@@ -29,6 +30,7 @@ export default {
     'replay',
     'next-random',
     'set-zoom',
+    'reset-view',
     'scrub',
   ],
   template: `
@@ -47,6 +49,7 @@ export default {
           @click.stop="almanacOpen = !almanacOpen"
         >
           <span class="cosmos-event-name">{{ pillTitle }}</span>
+          <span v-if="extraConcurrentCount > 0" class="cosmos-event-multi">{{ $t('cosmos.events.concurrentCount', { count: extraConcurrentCount }) }}</span>
           <span v-if="activeEvent && pillDistance" class="cosmos-event-dist">{{ pillDistance }}</span>
           <span class="cosmos-event-timer">{{ pillTimer }}</span>
           <svg class="cosmos-event-chev" viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
@@ -120,7 +123,7 @@ export default {
             :key="ev.id"
             type="button"
             class="cosmos-almanac-row"
-            :class="{ 'is-active': activeEvent && activeEvent.def.id === ev.id }"
+            :class="{ 'is-active': Boolean(findActiveById(ev.id)) }"
             @click.stop="pickEvent(ev.id)"
           >
             <div class="cosmos-almanac-left">
@@ -160,8 +163,8 @@ export default {
           <input
             type="range"
             class="cosmos-ewd-range"
-            min="0.75"
-            max="3.4"
+            min="0.55"
+            max="4.5"
             step="0.05"
             :aria-label="$t('cosmos.events.zoomRange')"
             :value="activeEvent.targetZoom"
@@ -172,6 +175,7 @@ export default {
         </div>
 
         <div class="cosmos-ewd-actions">
+          <button v-if="isViewRotated" type="button" class="cosmos-ewd-btn" @click="$emit('reset-view')">{{ $t('cosmos.events.resetView') }}</button>
           <button type="button" class="cosmos-ewd-btn" @click="$emit('toggle-pause')">
             {{ activeEvent.paused ? $t('cosmos.events.resume') : $t('cosmos.events.pause') }}
           </button>
@@ -268,18 +272,37 @@ export default {
       return formatEventCountdown(props.countdownSec);
     });
 
+    const liveEventsList = Vue.computed(() => {
+      if (Array.isArray(props.activeEvents) && props.activeEvents.length > 0) return props.activeEvents;
+      return props.activeEvent ? [props.activeEvent] : [];
+    });
+
+    const extraConcurrentCount = Vue.computed(() => Math.max(0, liveEventsList.value.length - 1));
+
+    const isViewRotated = Vue.computed(() => {
+      const act = props.activeEvent;
+      if (!act) return false;
+      return Math.abs(act.targetViewYaw || 0) > 0.04 || Math.abs(act.targetViewPitch || 0) > 0.04;
+    });
+
+    function findActiveById(evId) {
+      return liveEventsList.value.find((e) => e?.def?.id === evId) || null;
+    }
+
     function rowDistanceBadge(ev) {
       const isEn = getLocale() === 'en';
       const band = $t(`cosmos.events.${ev.id}.band`);
-      const sampleDist = (props.activeEvent && props.activeEvent.def.id === ev.id)
-        ? (props.activeEvent.ambientDist || ev.obsDist * 3.2)
+      const live = findActiveById(ev.id);
+      const sampleDist = live
+        ? (live.ambientDist || ev.obsDist * 3.2)
         : ev.obsDist * 3.4;
       return `${band} · ${formatEventPhysicalDistance(ev, sampleDist, isEn)}`;
     }
 
     function rowCta(ev, idx) {
-      if (props.activeEvent && props.activeEvent.def.id === ev.id) {
-        return props.activeEvent.observing ? $t('cosmos.events.focusing') : $t('cosmos.events.watch');
+      const live = findActiveById(ev.id);
+      if (live) {
+        return live.observing ? $t('cosmos.events.focusing') : $t('cosmos.events.watch');
       }
       if (!props.activeEvent && props.autoEnabled && props.nextEventIndex === idx) {
         return formatEventCountdown(props.countdownSec);
@@ -386,6 +409,9 @@ export default {
       activeBearingLabel,
       pillTitle,
       pillTimer,
+      extraConcurrentCount,
+      isViewRotated,
+      findActiveById,
       rowDistanceBadge,
       rowCta,
       pickEvent,

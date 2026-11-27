@@ -665,9 +665,11 @@ test.describe('Yeaft Cosmos UI', () => {
     await page.locator('.cosmos-drawer-head-left .cosmos-icon-btn').first().click();
     await expect(page.locator('.cosmos-history-drawer')).toHaveCount(0);
 
-    // Close drawer via Escape
+    // Close drawer via Escape, then return from planet focus to Sun center via Escape
     await page.keyboard.press('Escape');
     await expect(page.locator('.cosmos-drawer')).toHaveCount(0);
+    await page.keyboard.press('Escape');
+    await expect(page.locator('.cosmos-planet-focus-dock')).toHaveCount(0);
 
     // 3. Hover planet -> click specific session -> opens right planetary drawer
     // Note: after closing the drawer, camera centerShiftX smoothly lerps back,
@@ -682,17 +684,18 @@ test.describe('Yeaft Cosmos UI', () => {
     await expect(page.locator('.cosmos-drawer')).toBeVisible();
     await expect(page.locator('.cosmos-drawer')).toHaveAttribute('data-planet-theme', 'saturn');
     await page.keyboard.press('Escape');
+    await page.keyboard.press('Escape');
 
-    // 3b. Verify the 3 deep-sky portals (Galaxy, Cosmic Web, Event Horizon) have ZERO overlaid text labels
+    // 3b. Verify the 2 deep-sky portals (Galaxy, Cosmic Web) have ZERO overlaid text labels (Event Horizon is Sun-zoom only)
     const portals = page.locator('.cosmos-sky-anomaly');
-    await expect(portals).toHaveCount(3);
+    await expect(portals).toHaveCount(2);
     await expect(page.locator('.cosmos-sky-anomaly-label')).toHaveCount(0);
     for (const pText of await portals.allTextContents()) {
       expect(pText.trim()).toBe('');
     }
 
-    // 4. Cosmic Event: open almanac (auto-zoom defaults to OFF for serene distant unfolding), verify toggle,
-    // trigger distant event with spatial beacon -> click beacon to zoom in -> verify timeline & telemetry -> stop
+    // 4. Cosmic Events: open almanac (auto-zoom defaults to OFF for serene distant unfolding), verify toggle,
+    // trigger TWO concurrent distant events with ZERO reticle circles -> verify +1 badge -> observe -> stop
     await page.locator('.cosmos-event-main').click();
     await expect(page.locator('.cosmos-event-almanac')).toBeVisible();
     const autoZoomSwitch = page.locator('.cosmos-almanac-pref .cosmos-switch');
@@ -703,12 +706,18 @@ test.describe('Yeaft Cosmos UI', () => {
     await expect(autoZoomSwitch).toHaveAttribute('aria-checked', 'false');
     await page.locator('.cosmos-almanac-row').first().click();
 
-    // Auto-zoom is off: no full-screen observation dock yet, distant reticle beacon appears instead
+    // Auto-zoom is off: no observation dock yet, ZERO distracting circular reticle beacons
     await expect(page.locator('.cosmos-watch-dock')).toHaveCount(0);
-    await expect(page.locator('.cosmos-event-beacon')).toBeVisible({ timeout: 5000 });
+    await expect(page.locator('.cosmos-event-beacon')).toHaveCount(0);
 
-    // Click distant beacon -> telescope slews in & opens observation dock with bearing & scrubbable timeline
-    await page.locator('.cosmos-event-beacon').click();
+    // Trigger a 2nd concurrent event from Almanac -> +1 concurrent badge appears on pill
+    await page.locator('.cosmos-event-main').click();
+    await expect(page.locator('.cosmos-event-almanac')).toBeVisible();
+    await page.locator('.cosmos-almanac-row').nth(2).click();
+    await expect(page.locator('.cosmos-event-multi')).toContainText('+1');
+
+    // Click top Watch button -> smoothly approaches on shared canvas & opens observation dock with bearing & timeline
+    await page.locator('.cosmos-event-watch-btn').click();
     await expect(page.locator('.cosmos-watch-dock')).toBeVisible({ timeout: 5000 });
     await expect(page.locator('.cosmos-ewd-bearing')).toBeVisible();
     await expect(page.locator('.cosmos-ewd-timeline')).toBeVisible();
@@ -716,7 +725,7 @@ test.describe('Yeaft Cosmos UI', () => {
     // Stop immediately via watch dock stop button
     await page.locator('.cosmos-watch-dock .cosmos-ewd-btn.is-stop').click();
     await expect(page.locator('.cosmos-watch-dock')).toHaveCount(0);
-    await expect(page.locator('.cosmos-event-beacon')).toHaveCount(0);
+    await expect(page.locator('.cosmos-event-multi')).toHaveCount(0);
 
     // Silence automatic random cosmic events via stop button
     await page.locator('.cosmos-event-stop-btn').click();
