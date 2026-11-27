@@ -552,7 +552,6 @@ export default {
             :unread-count="signalStream.unreadCount"
             :running-count="signalStream.runningCount"
             :badge-count="signalStream.badgeCount"
-            :dismissible-count="signalStream.dismissibleCount"
             :drawer-open="false"
             :is-compact="isCompactViewport"
             :preview-mode="constants.livePreviewMode"
@@ -564,6 +563,7 @@ export default {
             @dismiss-signal="onDismissSignal"
             @mark-all-read="onMarkAllSignalsRead"
             @close-popover="closeSignalPopover({ restoreFocus: true })"
+            @restore-trigger-focus="focusSignalTrigger"
           />
         </template>
       </CreationInteriorModal>

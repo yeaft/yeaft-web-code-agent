@@ -806,8 +806,9 @@ test.describe('Yeaft Cosmos UI', () => {
 
     // 6. Scale switching to Galaxy -> Cosmic Web -> Event Horizon -> Solar
     await page.locator('.cosmos-scale-tick').nth(1).click();
-    await expect(page.locator('.cosmos-corner-dock')).toBeVisible({ timeout: 5000 });
+    await expect(page.locator('.creation-galaxy-overlay')).toBeVisible({ timeout: 5000 });
     await page.locator('.cosmos-scale-tick').nth(3).click();
+    await expect(page.locator('.cosmos-corner-dock')).toBeVisible({ timeout: 5000 });
     await expect(page.locator('.cosmos-whisper-note')).toBeVisible({ timeout: 5000 });
     await page.locator('.cosmos-scale-tick').nth(2).click();
 
