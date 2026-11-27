@@ -5,6 +5,7 @@ export const CORE_TEST_FILES = Object.freeze([
   "test/agent-installer.test.js",
   "test/agent-package-bin.test.js",
   "test/agent/file-reference-resolver.test.js",
+  "test/agent/cosmic-web-briefing.test.js",
   "test/agent/unix-upgrade.test.js",
   "test/agent/retired-features.test.js",
   "test/agent/sub-agent/execution-control.test.js",
@@ -72,6 +73,7 @@ export const CORE_TEST_FILES = Object.freeze([
   "test/server/agent-connection-fence.test.js",
   "test/server/agent-file-terminal.test.js",
   "test/server/auth-token-uniqueness.test.js",
+  "test/server/cosmic-web.test.js",
   "test/server/creation-relay.test.js",
   "test/server/person-relay.test.js",
   "test/server/request-auth.test.js",
@@ -100,6 +102,7 @@ export const CORE_TEST_FILES = Object.freeze([
   "test/web/waiting-hoops.test.js",
   "test/web/cosmos-ui.test.js",
   "test/web/cosmos-creations.test.js",
+  "test/web/cosmos-web.test.js",
   "test/web/brand-icons.test.js"
 ]);
 

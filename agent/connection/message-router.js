@@ -36,6 +36,7 @@ import { startYeaftStatusRefresh, forceRefreshYeaftStatus } from '../yeaft/statu
 import { handleSessionDiscovery, startSessionDiscovery } from '../yeaft/session-discovery/bridge.js';
 import { handleSessionAttachmentRead } from '../yeaft/session-attachment-read.js';
 import { handleCreationRequest, handleCreationMediaRead } from '../yeaft/creations/bridge.js';
+import { handleCosmicWebAiRequest } from '../yeaft/cosmic-web-briefing.js';
 import { handleBrowserRuntimeMessage } from '../browser-runtime/messages.js';
 
 export async function applyLlmConfigUpdate(msg, dependencies = {}) {
@@ -849,6 +850,17 @@ export async function handleMessage(msg) {
     case 'creation_media_read':
       await handleCreationMediaRead(msg);
       break;
+
+    case 'cosmic_web_ai_request': {
+      const originWs = ctx.ws;
+      const isCurrent = () => !!originWs && ctx.ws === originWs && originWs.readyState === 1;
+      if (!isCurrent()) break;
+      void handleCosmicWebAiRequest(msg, {
+        yeaftDir: ctx.CONFIG?.yeaftDir,
+        sendToServer: reply => isCurrent() && sendToServer(reply, { isCurrent }),
+      });
+      break;
+    }
 
     case 'session_discovery_request':
       if (!ctx.serverCapabilities?.has('session_discovery')) break;

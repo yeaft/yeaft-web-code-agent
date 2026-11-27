@@ -28,6 +28,7 @@ function clearPluginBrowserState() {
 function clearVpBrowserState() {
   try { globalThis.Pinia?.useVpStore?.()?.clearSnapshots?.(); } catch {}
   try { globalThis.Pinia?.useCreationsStore?.()?.clearAll?.(); } catch {}
+  try { globalThis.Pinia?.useCosmicWebStore?.()?.reset?.(); } catch {}
   try {
     const chat = globalThis.Pinia?.useChatStore?.();
     if (chat) chat._yeaftVpSubscribedAgentKey = null;

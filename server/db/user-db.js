@@ -1,5 +1,6 @@
 import { randomUUID } from 'crypto';
 import db, { stmts, generateUserId, generateAgentSecret, transaction } from './connection.js';
+import { purgeUserCosmicWebData } from './cosmic-web-db.js';
 
 
 export const userDb = {
@@ -62,7 +63,7 @@ export const userDb = {
   },
 
   beginDeletion(userId, now = Date.now()) {
-    return transaction(() => {
+    const pending = transaction(() => {
       const user = stmts.getUserById.get(userId);
       if (!user) return null;
       const deletionId = user.deletion_id || `deletion_${randomUUID()}`;
@@ -76,13 +77,27 @@ export const userDb = {
       }
       return { deletionId, status: 'pending', operationId: null };
     })();
+    // Commit deactivation first: if the companion DB is unavailable, reconciliation retries the purge.
+    if (pending) {
+      try {
+        purgeUserCosmicWebData(userId);
+      } catch (err) {
+        console.error('[AccountDeletion] Cosmic Web purge deferred:', err.message);
+      }
+    }
+    return pending;
   },
 
   reconcilePendingDeletions() {
     const pending = db.prepare("SELECT id FROM users WHERE deletion_state = 'pending'").all();
     let finalized = 0;
     for (const user of pending) {
-      if (this.deleteUser(user.id, { requirePending: true })) finalized++;
+      try {
+        // A failed companion purge rolls back this user's main DB transaction.
+        if (this.deleteUser(user.id, { requirePending: true })) finalized++;
+      } catch (err) {
+        console.error('[AccountDeletion] Finalization deferred:', err.message);
+      }
     }
     return finalized;
   },
@@ -200,6 +215,7 @@ export const userDb = {
       if (requirePending) {
         stmts.insertUserDeletionTombstone.run(user.username, user.deletion_id, Date.now());
       }
+      purgeUserCosmicWebData(id);
       const result = stmts.deleteUserById.run(id);
       return result.changes > 0;
     });

@@ -24,6 +24,7 @@ import { clearCreationRequestsForAgent } from './handlers/client-creation.js';
 import { closeCreationMediaReads } from './creation-media-relay.js';
 import { closeSessionAttachmentReads, handleSessionAttachmentChunk } from './session-attachment-relay.js';
 import { handleAgentBrowser } from './handlers/agent-browser.js';
+import { handleCosmicWebAiResponse, clearCosmicWebAiRequestsForAgent } from './cosmic-web/ai-bridge.js';
 import { markAgentHeartbeatSeen } from './heartbeat-policy.js';
 
 /**
@@ -316,6 +317,7 @@ function handleAgentDisconnect(agentId, agentName, ws) {
   closeSessionAttachmentReads(agentId, agent);
   closeCreationMediaReads(agentId, agent);
   clearCreationRequestsForAgent(agentId, agent);
+  clearCosmicWebAiRequestsForAgent(agentId, agent);
   clearBrowserRuntimeForAgent(agentId);
   for (const pending of takeAgentSettingsRequestsForAgent(agentId)) {
     const client = webClients.get(pending.clientId);
@@ -371,6 +373,7 @@ function completeAgentRegistration(ws, agentId, agentName, workDir, sessionKey, 
     ? latestAgentVersion
     : null;
 
+  if (existingAgent) clearCosmicWebAiRequestsForAgent(agentId, existingAgent);
   agents.set(agentId, {
     ws,
     name: agentName,
@@ -456,6 +459,10 @@ async function handleAgentMessage(agentId, msg, ws) {
   if (await handleAgentCreation(agentId, agent, msg)) return;
   if (await handleAgentSessionTurnDelete(agentId, agent, msg)) return;
   if (await handleAgentSessionDiscovery(agentId, agent, msg)) return;
+  if (msg.type === 'cosmic_web_ai_response') {
+    handleCosmicWebAiResponse(agentId, msg);
+    return;
+  }
 
   // Security: 需要 conversationId 的消息类型，验证该 conversation 属于此 agent.
   // The conversation-id check only authorizes Chat flows where the
