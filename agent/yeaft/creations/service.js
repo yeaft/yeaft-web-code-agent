@@ -72,7 +72,7 @@ export function createCreationService({ yeaftDir, storageRoot, namespaceKey, nam
         const id = creation.id;
         if (creation.deduplicated) return { ...detail(id), deduplicated: true };
         boundedText(prompt, LIMITS.promptBytes, 'creation prompt');
-        const sources = store.addSources(id, input).map(source => media(source, 'source'));
+        const sources = store.addSources(id, input, { copyToWorkspace: input.initializeFolder === true }).map(source => media(source, 'source'));
         const thread = store.getThread(id);
         const starter = input.starterNode;
         if (starter != null && starter !== false) store.createNode(id, starter === true ? {} : object(starter, 'starter node'));
@@ -81,7 +81,8 @@ export function createCreationService({ yeaftDir, storageRoot, namespaceKey, nam
       if (result.deduplicated) return result;
       const { id } = result.creation;
       emit('creation_upserted', id, { creation: result.creation });
-      if (prompt.trim() && input.autoPlan !== false) {
+      const autoPlan = input.initializeFolder === true ? input.autoPlan === true : input.autoPlan !== false;
+      if (prompt.trim() && autoPlan) {
         try {
           result.initialTurn = runner.runThreadTurn({ creationId: id, threadId: result.thread.id, userText: prompt, attachedSourceIds: result.sources.map(source => source.id), model: input.model, effort: input.effort });
           result.creation = store.getCreation(id);
@@ -93,6 +94,12 @@ export function createCreationService({ yeaftDir, storageRoot, namespaceKey, nam
       return result;
     },
     get_creation: id => detail(id),
+    ensure_workspace: (id, { rootDir }) => {
+      const result = store.ensureWorkspace(id, { rootDir });
+      if (result.materialized) emit('creation_upserted', id, { creation: result.creation });
+      return result;
+    },
+    find_by_folder: (_, { rootDir }) => store.findByFolder(rootDir),
     update_creation: (id, p) => {
       const creation = store.updateCreation(id, p.patch == null ? p : object(p.patch, 'creation patch'));
       emit('creation_upserted', id, { creation });

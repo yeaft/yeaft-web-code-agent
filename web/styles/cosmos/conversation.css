@@ -226,6 +226,45 @@
   flex: 1;
 }
 
+.cosmos-back-galaxy-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 28px;
+  padding: 0 10px 0 7px;
+  border-radius: 999px;
+  border: 1px solid rgba(var(--p-accent-rgb), 0.28);
+  background: rgba(var(--p-accent-rgb), 0.12);
+  color: var(--p-ink);
+  font-size: 11.5px;
+  font-weight: 500;
+  white-space: nowrap;
+  flex-shrink: 0;
+  cursor: pointer;
+  transition: background 150ms ease, border-color 150ms ease, transform 150ms ease;
+}
+
+.cosmos-back-galaxy-btn svg {
+  width: 13px;
+  height: 13px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  flex-shrink: 0;
+}
+
+.cosmos-back-galaxy-btn:hover {
+  background: rgba(var(--p-accent-rgb), 0.22);
+  border-color: rgba(var(--p-accent-rgb), 0.48);
+}
+
+.cosmos-back-galaxy-btn:focus-visible {
+  outline: 2px solid rgba(var(--p-accent-rgb), 0.72);
+  outline-offset: 2px;
+}
+
 .cosmos-planet-emblem {
   width: 20px;
   height: 20px;
@@ -724,7 +763,8 @@
   flex-direction: column;
 }
 
-.cosmos-drawer-body.is-status-docked {
+.cosmos-drawer-body.is-status-docked,
+.cosmos-drawer-body.is-workbench-split {
   flex-direction: row;
 }
 
@@ -735,6 +775,20 @@
   display: flex;
   flex-direction: column;
   transition: opacity 150ms ease;
+}
+
+.cosmos-drawer-body.is-workbench-split > .cosmos-drawer-chat {
+  flex: 0 0 42%;
+  min-width: 340px;
+  border-right: 1px solid rgba(var(--p-accent-rgb), 0.14);
+}
+
+.cosmos-drawer-body.is-workbench-split > .cosmos-workbench-host {
+  position: relative;
+  inset: auto;
+  z-index: 2;
+  flex: 1;
+  min-width: 0;
 }
 
 .cosmos-drawer-body.is-overlay-open > .cosmos-drawer-chat {

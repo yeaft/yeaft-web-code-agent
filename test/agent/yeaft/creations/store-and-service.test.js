@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createHash } from 'node:crypto';
-import { mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { deflateSync } from 'node:zlib';
@@ -22,6 +22,168 @@ afterEach(async () => {
 const req = (op, payload = {}) => service.request({ op, payload });
 const b64 = value => Buffer.from(value).toString('base64');
 const err = code => expect.objectContaining({ code });
+
+describe('Creation folder workspaces', () => {
+  it('defaults missing linkage on old records and validates, trims, and clears linkage', () => {
+    const id = 'book';
+    const defaults = { sessionId: null, projectId: null, rootDir: null };
+    expect(store.createCreation({ id })).toMatchObject(defaults);
+    store.run("UPDATE creations SET data=json_remove(data,'$.sessionId','$.projectId','$.rootDir') WHERE id=?", id);
+    expect(store.getCreation(id)).toMatchObject(defaults);
+    const alias = join(dir, 'alias');
+    symlinkSync(dir, alias, 'dir');
+    const links = { sessionId: ' session:1 ', projectId: ' project-2 ', rootDir: alias };
+    const canonical = { sessionId: 'session:1', projectId: 'project-2', rootDir: realpathSync(dir) };
+    expect(store.updateCreation(id, links)).toMatchObject(canonical);
+    expect(store.updateCreation(id, { title: 'Renamed' })).toMatchObject(canonical);
+    expect(store.createCreation({ ...links, id: 'linked' })).toMatchObject(canonical);
+    expect(store.updateCreation(id, { sessionId: ' ', projectId: null, rootDir: null })).toMatchObject(defaults);
+    for (const value of [1, 'invalid\0id', 'x'.repeat(257)]) {
+      expect(() => store.updateCreation(id, { sessionId: value })).toThrow(err('INVALID_REQUEST'));
+      expect(() => store.createCreation({ projectId: value })).toThrow(err('INVALID_REQUEST'));
+    }
+  });
+
+  it('initializes a private folder, copies original sources, and leaves planning to the native Session by default', () => {
+    const creationId = 'workspace-book';
+    const { creation, initialTurn } = req('create_creation', {
+      id: creationId, title: 'Sky', prompt: 'Draft the story', initializeFolder: true,
+      files: [{ name: 'notes/scene.txt', data: b64('Scene one') }, { name: 'notes\\scene.txt', data: b64('Scene two') }],
+    });
+    const root = realpathSync(join(store.root, 'workspaces', creationId));
+    expect(creation.rootDir).toBe(root);
+    expect(initialTurn).toBeUndefined();
+    expect(store.listRuns(creationId)).toEqual([]);
+    for (const name of ['docs', 'images', 'videos', 'sources']) {
+      const stat = statSync(join(root, name));
+      expect(stat.isDirectory()).toBe(true);
+      if (process.platform !== 'win32') expect(stat.mode & 0o777).toBe(0o700);
+    }
+    expect(readFileSync(join(root, 'README.md'), 'utf8')).toBe('# Sky\n\nDraft the story\n');
+    expect(readFileSync(join(root, 'sources', 'notes_scene.txt'), 'utf8')).toBe('Scene one');
+    expect(readFileSync(join(root, 'sources', 'notes_scene-2.txt'), 'utf8')).toBe('Scene two');
+    expect(() => store.transaction(() => {
+      store.deleteCreation(creationId);
+      expect(existsSync(root)).toBe(true);
+      throw new Error('abort deletion');
+    })).toThrow('abort deletion');
+    req('delete_creation', { creationId });
+    expect(existsSync(root)).toBe(false);
+  });
+
+  it('preserves user files and never removes a supplied folder, even at the dedicated workspace pathname', () => {
+    const rootDir = join(store.root, 'workspaces', 'provided');
+    mkdirSync(join(rootDir, 'sources'), { recursive: true });
+    writeFileSync(join(rootDir, 'README.md'), 'User readme');
+    writeFileSync(join(rootDir, 'sources', 'Notes.txt'), 'User notes');
+    const alias = join(dir, 'provided-alias');
+    symlinkSync(rootDir, alias, 'dir');
+    const { creation } = req('create_creation', { id: 'provided', initializeFolder: true, rootDir: alias, textSources: ['Upload'] });
+    expect(creation.rootDir).toBe(realpathSync(rootDir));
+    expect(readFileSync(join(rootDir, 'README.md'), 'utf8')).toBe('User readme');
+    expect(readFileSync(join(rootDir, 'sources', 'Notes.txt'), 'utf8')).toBe('User notes');
+    expect(readFileSync(join(rootDir, 'sources', 'Notes-2.txt'), 'utf8')).toBe('Upload');
+    req('delete_creation', { creationId: 'provided' });
+    expect(existsSync(join(rootDir, 'README.md'))).toBe(true);
+    req('create_creation', { id: 'provided', initializeFolder: true });
+    req('delete_creation', { creationId: 'provided' });
+    expect(existsSync(join(rootDir, 'README.md'))).toBe(true);
+    const external = join(dir, 'external');
+    mkdirSync(external);
+    req('create_creation', { id: 'external', initializeFolder: true, rootDir: external });
+    req('delete_creation', { creationId: 'external' });
+    expect(existsSync(external)).toBe(true);
+  });
+
+  it('rolls back copies and workspace setup on failure and will not follow a sources directory symlink', () => {
+    const id = 'rejected';
+    const payload = { id, initializeFolder: true, files: [
+      { name: 'valid.txt', data: b64('first') }, { name: 'sub/../unsafe.txt', data: b64('second') },
+    ] };
+    expect(() => req('create_creation', payload)).toThrow(err('INVALID_REQUEST'));
+    expect(existsSync(join(store.root, 'workspaces', id))).toBe(false);
+    expect(store.listCreations()).toEqual([]);
+    const rootDir = join(dir, 'external');
+    mkdirSync(rootDir);
+    expect(() => req('create_creation', { ...payload, rootDir })).toThrow(err('INVALID_REQUEST'));
+    expect(readdirSync(rootDir)).toEqual([]);
+    symlinkSync(dir, join(rootDir, 'sources'), 'dir');
+    expect(() => req('create_creation', { id, initializeFolder: true, rootDir, textSources: ['Upload'] })).toThrow(err('INVALID_PATH'));
+    expect(existsSync(join(dir, 'Notes.txt'))).toBe(false);
+  });
+
+  it('materializes legacy nodes, canon and binary media without clobbering files; it only emits once', async () => {
+    await service.close();
+    const events = [];
+    service = createCreationService({ yeaftDir: dir, emitEvent: event => events.push(event) });
+    store = service.store;
+    const id = 'legacy';
+    store.createCreation({ id, title: 'Legacy' });
+    store.createNode(id, { id: 'part', type: 'folder', title: 'Part / One' });
+    store.createNode(id, { parentId: 'part', title: 'Chapter', content: '# Chapter' });
+    store.createNode(id, { title: 'Outline only', outlineMd: 'Not written yet' });
+    store.createNode(id, { title: 'Slides', modality: 'slide_deck', content: { slides: ['Slide'] } });
+    store.upsertCanon(id, { title: 'The Rule', contentMd: 'The rule text' });
+    store.addSources(id, { textSources: ['Legacy notes'] });
+    const image = store.saveAsset(id, { ext: 'svg', content: '<svg></svg>' });
+    const asset = store.saveAsset(id, { ext: 'html', content: '<p>Other</p>' });
+    // Historical media can include video assets not accepted by the current asset writer.
+    const video = Buffer.from([0, 255, 13]);
+    writeFileSync(join(store.root, id, 'assets', 'clip.mp4'), video);
+    store.run('INSERT INTO creation_assets VALUES (?,?,?)', id, 'clip', JSON.stringify({ id: 'clip', ext: 'mp4' }));
+    store.saveAsset(id, { ext: 'md', content: 'An export' }, { exportFile: true });
+    store.saveAsset(id, { ext: 'json', content: '{}' }, { exportFile: true });
+    const rootDir = join(dir, 'destination');
+    mkdirSync(join(rootDir, 'docs', 'Part _ One'), { recursive: true });
+    writeFileSync(join(rootDir, 'docs', 'Part _ One', 'Chapter.md'), 'Existing draft');
+    const result = req('ensure_workspace', { creationId: id, rootDir });
+    expect(result).toMatchObject({ creation: { id, rootDir }, rootDir, materialized: true });
+    const read = (...parts) => readFileSync(join(rootDir, ...parts), 'utf8');
+    expect(read('docs', 'Part _ One', 'Chapter.md')).toBe('Existing draft');
+    expect(read('docs', 'Part _ One', 'Chapter-2.md')).toBe('# Chapter');
+    expect(existsSync(join(rootDir, 'docs', 'Outline only.md'))).toBe(false);
+    expect(JSON.parse(read('docs', 'Slides.json'))).toEqual({ slides: ['Slide'] });
+    expect(read('docs', 'canon', 'The Rule.md')).toBe('The rule text');
+    expect(read('sources', 'Notes.txt')).toBe('Legacy notes');
+    expect(read('images', `${image.id}.svg`)).toBe('<svg></svg>');
+    expect(readFileSync(join(rootDir, 'videos', 'clip.mp4'))).toEqual(video);
+    expect(readdirSync(join(rootDir, 'assets'))).toEqual([`${asset.id}.html`]);
+    expect(req('ensure_workspace', { creationId: id })).toEqual({ ...result, materialized: false });
+    expect(readdirSync(join(rootDir, 'docs', 'Part _ One')).sort()).toEqual(['Chapter-2.md', 'Chapter.md']);
+    expect(events).toEqual([{ type: 'creation_upserted', creationId: id, creation: result.creation }]);
+  });
+
+  it('finds canonical and missing linked paths, misses unrelated folders, and can recreate a missing workspace', () => {
+    const rootDir = join(dir, 'old');
+    mkdirSync(rootDir);
+    const id = 'legacy';
+    const creation = store.createCreation({ id, rootDir });
+    const alias = join(dir, 'alias');
+    symlinkSync(rootDir, alias, 'dir');
+    expect(req('find_by_folder', { rootDir: alias })).toEqual({ creation });
+    expect(req('find_by_folder', { rootDir: dir })).toEqual({ creation: null });
+    expect(req('find_by_folder', { rootDir: join(dir, 'missing') })).toEqual({ creation: null });
+    rmSync(rootDir, { recursive: true });
+    expect(req('find_by_folder', { rootDir })).toEqual({ creation });
+    const workspace = join(realpathSync(store.root), 'workspaces', id);
+    expect(req('ensure_workspace', { creationId: id })).toMatchObject({ rootDir: workspace, materialized: true });
+    expect(req('find_by_folder', { rootDir: workspace }).creation.id).toBe(id);
+  });
+
+  it('rejects invalid and non-directory rootDir values', () => {
+    store.createCreation({ id: 'book' });
+    const file = join(dir, 'file');
+    writeFileSync(file, 'not a directory');
+    for (const rootDir of [12, '', '  ', 'invalid\0path', 'x'.repeat(4097), file, join(dir, 'missing')]) {
+      expect(() => store.createCreation({ rootDir })).toThrow(err('INVALID_REQUEST'));
+      expect(() => store.updateCreation('book', { rootDir })).toThrow(err('INVALID_REQUEST'));
+      expect(() => store.ensureWorkspace('book', { rootDir })).toThrow(err('INVALID_REQUEST'));
+    }
+    for (const rootDir of [undefined, null, 12, ' ', 'invalid\0path']) {
+      expect(() => req('find_by_folder', { rootDir })).toThrow(err('INVALID_REQUEST'));
+    }
+  });
+});
 
 describe('Creations durable store and operations', () => {
   it('uses WAL/FKs, provides summaries, scopes data, and persists across reopen', async () => {

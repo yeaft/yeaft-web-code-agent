@@ -22,6 +22,7 @@ const HOUR_MS = 60 * 60 * 1000;
 const DAY_MS = 24 * HOUR_MS;
 
 import SessionCreateModal from './SessionCreateModal.js';
+import CreationCreateModal from './workbench/CreationCreateModal.js';
 import SidebarAgentHeader from './SidebarAgentHeader.js';
 import SidebarWorkCenter from './SidebarWorkCenter.js';
 import SidebarDigitalPerson from './SidebarDigitalPerson.js';
@@ -29,10 +30,11 @@ import SessionSidebarShell from './SessionSidebarShell.js';
 import UnifiedSessionList from './UnifiedSessionList.js';
 import { shortenPath } from '../utils/path-display.js';
 import { buildYeaftSidebarSessionList } from '../stores/helpers/yeaft-sidebar-sessions.js';
+import { useCreationsStore, formatAgentDisplayName } from '../stores/creations.js';
 
 export default {
   name: 'YeaftSidebar',
-  components: { NavigationIcon, SessionCreateModal, SidebarAgentHeader, SidebarWorkCenter, SidebarDigitalPerson, SessionSidebarShell, UnifiedSessionList },
+  components: { NavigationIcon, SessionCreateModal, CreationCreateModal, SidebarAgentHeader, SidebarWorkCenter, SidebarDigitalPerson, SessionSidebarShell, UnifiedSessionList },
   emits: ['select-group', 'select-chat', 'toggle-sidebar', 'back', 'open-settings', 'open-agent-settings', 'open-group-settings'],
   template: `
     <SessionSidebarShell class="yeaft-sidebar" :collapsed="collapsed">
@@ -46,6 +48,14 @@ export default {
         <button v-if="!chatStore?.digitalPersonOpen" class="collapsed-icon-btn" @click="$emit('back')" :title="tr('yeaft.back', 'Back')">
           <NavigationIcon name="back" :size="18" />
         </button>
+        <button
+          v-if="creationCapableOnlineAgents.length > 0 || sidebarCreations.length > 0"
+          type="button"
+          class="collapsed-icon-btn sidebar-creations-collapsed-btn"
+          :title="tr('creation.sidebar.title', 'Creations')"
+          :aria-label="tr('creation.sidebar.title', 'Creations')"
+          @click="onCollapsedCreationsClick"
+        >✦</button>
         <SidebarDigitalPerson :collapsed="true" />
         <SidebarWorkCenter
           v-if="chatStore?.legacyProductSurfacesEnabled && chatStore.workCenterUiEnabled"
@@ -127,6 +137,78 @@ export default {
         @created="onSessionCreated"
       />
 
+      <CreationCreateModal
+        v-if="creationCreateOpen"
+        :visible="creationCreateOpen"
+        :initial-agent-id="defaultCreationAgentId"
+        @close="closeCreationCreate"
+        @created="onCreationCreated"
+      />
+
+      <!-- Creations collapsible section (Classic sidebar parity) -->
+      <section
+        v-if="creationCapableOnlineAgents.length > 0 || sidebarCreations.length > 0"
+        class="sidebar-creations"
+        :aria-label="tr('creation.sidebar.title', 'Creations')"
+      >
+        <div class="sidebar-creations-header">
+          <button
+            type="button"
+            class="sidebar-creations-toggle"
+            :aria-expanded="creationsExpanded ? 'true' : 'false'"
+            @click="toggleCreationsSection"
+          >
+            <svg
+              class="sidebar-section-chevron"
+              :class="{ collapsed: !creationsExpanded }"
+              viewBox="0 0 16 16"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.6"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              aria-hidden="true"
+            >
+              <path d="M4.5 6.5L8 10l3.5-3.5" />
+            </svg>
+            <span class="sidebar-creations-glyph" aria-hidden="true">✦</span>
+            <span class="sidebar-creations-label">{{ tr('creation.sidebar.title', 'Creations') }}</span>
+            <span class="sidebar-creations-count">{{ sidebarCreations.length }}</span>
+          </button>
+          <button
+            type="button"
+            class="sidebar-creations-add-btn"
+            :disabled="creationCapableOnlineAgents.length === 0"
+            :title="tr('creation.sidebar.new', 'New Creation')"
+            :aria-label="tr('creation.sidebar.new', 'New Creation')"
+            @click="openCreationCreate"
+          >
+            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" aria-hidden="true">
+              <path d="M8 3.5v9M3.5 8h9" />
+            </svg>
+          </button>
+        </div>
+
+        <div v-if="creationsExpanded" class="sidebar-creations-list">
+          <div v-if="sidebarCreations.length === 0" class="sidebar-creations-empty">
+            {{ tr('creation.sidebar.empty', 'No creations yet') }}
+          </div>
+          <button
+            v-for="item in sidebarCreations"
+            :key="item.key"
+            type="button"
+            class="sidebar-creations-item"
+            :class="{ active: isCreationActive(item) }"
+            :title="item.title"
+            @click="onOpenSidebarCreation(item)"
+          >
+            <span class="sidebar-creations-swatch" :class="'is-' + item.kind" aria-hidden="true"></span>
+            <span class="sidebar-creations-title">{{ item.title }}</span>
+            <span v-if="showCreationAgentTag && item.agentLabel" class="sidebar-creations-agent">{{ item.agentLabel }}</span>
+          </button>
+        </div>
+      </section>
+
       <!-- task-yeaft-group-editor: Per-group rename/delete formerly lived
            in inline overlays here. They've been folded into the unified
            SessionSettingsModal — opened via the kebab → unified modal at
@@ -166,6 +248,8 @@ export default {
       sessionCreateOpen: false,
       sessionCreateTaskMode: false,
       sessionCreateProject: null,
+      creationsExpanded: false,
+      creationCreateOpen: false,
       // task-yeaft-group-editor: per-row action menu only — the rename
       // and delete modals have been folded into the unified
       // SessionSettingsModal owned by YeaftPage.
@@ -313,6 +397,59 @@ export default {
     workCenterAgents() {
       return this.onlineAgents.filter(agent => Array.isArray(agent.capabilities) && agent.capabilities.includes('work_center'));
     },
+    creationsStore() {
+      try {
+        return useCreationsStore();
+      } catch (_) { /* no-pinia test env */ }
+      return null;
+    },
+    creationCapableOnlineAgents() {
+      return this.onlineAgents.filter((agent) => {
+        if (!agent) return false;
+        if (Array.isArray(agent.capabilities)) {
+          return agent.capabilities.includes('creations');
+        }
+        if (agent.capabilities && typeof agent.capabilities === 'object') {
+          return agent.capabilities.creations !== false;
+        }
+        return false;
+      });
+    },
+    defaultCreationAgentId() {
+      const current = this.chatStore?.currentAgent || '';
+      if (current && this.creationCapableOnlineAgents.some((a) => a.id === current)) {
+        return current;
+      }
+      return this.creationCapableOnlineAgents[0]?.id || current || '';
+    },
+    sidebarCreations() {
+      const cStore = this.creationsStore;
+      if (!cStore) return [];
+      const rows = [];
+      for (const agent of this.onlineAgents) {
+        const list = cStore.creationsForAgent?.(agent.id) || cStore.byAgent?.[agent.id]?.list || [];
+        const agentLabel = formatAgentDisplayName(agent);
+        for (const creation of list) {
+          if (!creation || !creation.id || creation.status === 'archived') continue;
+          rows.push({
+            key: `${agent.id}\u001f${creation.id}`,
+            agentId: agent.id,
+            agentLabel,
+            creation,
+            title: creation.title || creation.id,
+            kind: creation.kind || 'book',
+            sortTs: Number(creation.updatedAt || creation.createdAt || 0),
+          });
+        }
+      }
+      rows.sort((a, b) => b.sortTs - a.sortTs);
+      return rows;
+    },
+    showCreationAgentTag() {
+      if (this.creationCapableOnlineAgents.length > 1) return true;
+      const distinct = new Set(this.sidebarCreations.map((item) => item.agentId));
+      return distinct.size > 1;
+    },
     currentAgentName() {
       const s = this.chatStore || this.store;
       if (!s || !Array.isArray(s.agents)) return '';
@@ -345,7 +482,81 @@ export default {
     // task-yeaft-remove-sidebar-search: retired query-related computeds
     // and placeholder helpers were removed with the old query UI.
   },
+  watch: {
+    creationCapableOnlineAgents: {
+      immediate: true,
+      handler(agents) {
+        if (Array.isArray(agents) && agents.length > 0) {
+          this.ensureCreationsLoaded();
+        }
+      },
+    },
+  },
   methods: {
+    ensureCreationsLoaded() {
+      const cStore = this.creationsStore;
+      if (!cStore || typeof cStore.listCreations !== 'function') return;
+      for (const agent of this.creationCapableOnlineAgents) {
+        const bucket = cStore.byAgent?.[agent.id];
+        if (!bucket?.loaded && !bucket?.loading) {
+          cStore.listCreations(agent.id).catch(() => {});
+        }
+      }
+    },
+    toggleCreationsSection() {
+      this.creationsExpanded = !this.creationsExpanded;
+      if (this.creationsExpanded) {
+        this.ensureCreationsLoaded();
+      }
+    },
+    onCollapsedCreationsClick() {
+      this.creationsExpanded = true;
+      this.ensureCreationsLoaded();
+      this.$emit('toggle-sidebar');
+    },
+    openCreationCreate() {
+      this.creationCreateOpen = true;
+    },
+    closeCreationCreate() {
+      this.creationCreateOpen = false;
+    },
+    isCreationActive(item) {
+      if (!item?.creation?.sessionId) return false;
+      return item.creation.sessionId === this.activeSessionId && Boolean(this.chatStore?.workbenchOpen);
+    },
+    async onOpenSidebarCreation(item) {
+      if (!item?.agentId || !item?.creation?.id) return;
+      const cStore = this.creationsStore;
+      if (!cStore || typeof cStore.openCreationInClassic !== 'function') return;
+      try {
+        await cStore.openCreationInClassic({
+          agentId: item.agentId,
+          creationId: item.creation.id,
+          mode: 'studio',
+        });
+      } catch (err) {
+        await alertDialog(err?.message || this.tr('creation.create.failed', 'Failed to open Creation'));
+      }
+    },
+    async onCreationCreated(payload) {
+      this.closeCreationCreate();
+      this.creationsExpanded = true;
+      const creation = payload?.creation;
+      const agentId = payload?.agentId;
+      if (!agentId || !creation?.id) return;
+      const cStore = this.creationsStore;
+      if (!cStore || typeof cStore.openCreationInClassic !== 'function') return;
+      try {
+        await cStore.openCreationInClassic({
+          agentId,
+          creationId: creation.id,
+          mode: 'studio',
+          promptToSend: payload?.prompt || '',
+        });
+      } catch (err) {
+        await alertDialog(err?.message || this.tr('creation.create.failed', 'Failed to open Creation'));
+      }
+    },
     // task-341: i18n lookup for keys outside the yeaft.sidebar namespace.
     tr(fullKey, fallback) {
       if (typeof this.$t === 'function') {

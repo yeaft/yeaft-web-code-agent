@@ -1,0 +1,711 @@
+/* ==========================================================================
+   File-Level Canvas (FileCanvasView), FilesTab Canvas Toggle &
+   Composer Canvas Context Reference Chips.
+   Uses ONLY semantic design tokens from variables.css (Light / Dark / Cosmos).
+   ========================================================================== */
+
+/* --- Root Canvas Shell --- */
+.file-canvas-view {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  background: var(--bg-main);
+  color: var(--text-primary);
+  font-family: var(--font-sans);
+  overflow: hidden;
+}
+
+.canvas-state {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  padding: var(--space-6);
+  color: var(--text-secondary);
+  font-size: var(--font-size-sm);
+}
+
+.canvas-state-error {
+  color: var(--error);
+}
+
+/* --- Compact Canvas Toolbar --- */
+.canvas-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  padding: var(--space-1-5) var(--space-3);
+  border-bottom: 1px solid var(--border-light);
+  background: var(--bg-workbench);
+  flex-shrink: 0;
+  min-height: 40px;
+}
+
+.canvas-toolbar-group {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-1-5);
+  min-width: 0;
+}
+
+.canvas-toolbar-right {
+  margin-left: auto;
+}
+
+/* Segmented Read / Edit control */
+.canvas-segmented {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px;
+  border-radius: var(--radius-md);
+  background: var(--bg-sidebar);
+  border: 1px solid var(--border-color);
+  gap: 2px;
+}
+
+.canvas-seg-btn {
+  appearance: none;
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  font-family: inherit;
+  font-size: var(--font-size-xs);
+  font-weight: 500;
+  line-height: 1;
+  padding: 5px 10px;
+  min-height: 24px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: background var(--duration-fast) var(--ease-out),
+              color var(--duration-fast) var(--ease-out);
+}
+
+.canvas-seg-btn:hover {
+  color: var(--text-primary);
+  background: var(--sidebar-hover);
+}
+
+.canvas-seg-btn.active {
+  background: var(--bg-elevated);
+  color: var(--text-primary);
+  box-shadow: var(--shadow-sm);
+}
+
+.canvas-seg-btn:focus-visible,
+.canvas-tool-btn:focus-visible,
+.canvas-toc-item:focus-visible,
+.canvas-selection-btn:focus-visible,
+.canvas-marker-jump:focus-visible,
+.canvas-marker-action:focus-visible,
+.canvas-chip-remove:focus-visible {
+  outline: 2px solid var(--focus-ring-color, var(--accent-blue));
+  outline-offset: 1px;
+}
+
+/* Toolbar buttons */
+.canvas-tool-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-1);
+  min-height: 28px;
+  padding: 0 var(--space-2);
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-secondary);
+  font-family: inherit;
+  font-size: var(--font-size-xs);
+  font-weight: 500;
+  line-height: 1;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background var(--duration-fast) var(--ease-out),
+              color var(--duration-fast) var(--ease-out),
+              border-color var(--duration-fast) var(--ease-out);
+}
+
+.canvas-tool-btn:hover:not(:disabled) {
+  background: var(--sidebar-hover);
+  color: var(--text-primary);
+}
+
+.canvas-tool-btn.active {
+  background: var(--session-active);
+  color: var(--text-primary);
+  border-color: var(--border-color);
+}
+
+.canvas-tool-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.canvas-tool-compact {
+  min-width: 28px;
+  padding: 0 var(--space-1-5);
+}
+
+.canvas-tool-icon {
+  min-width: 28px;
+  padding: 0 var(--space-1-5);
+}
+
+.canvas-font-controls {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.canvas-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 16px;
+  padding: 0 5px;
+  border-radius: var(--radius-pill);
+  background: var(--bg-sidebar);
+  color: var(--text-muted);
+  font-size: var(--font-size-2xs);
+  font-variant-numeric: tabular-nums;
+}
+
+.canvas-word-count,
+.canvas-zoom-readout,
+.canvas-timecode {
+  font-size: var(--font-size-xs);
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  padding: 0 var(--space-1);
+}
+
+.canvas-timecode {
+  font-family: var(--font-mono);
+}
+
+/* Primary action: Reference in Session */
+.canvas-ref-btn {
+  background: color-mix(in srgb, var(--accent-blue) 12%, transparent);
+  color: var(--accent-blue);
+  border-color: color-mix(in srgb, var(--accent-blue) 28%, transparent);
+}
+
+.canvas-ref-btn:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--accent-blue) 20%, transparent);
+  color: var(--accent-blue);
+  border-color: color-mix(in srgb, var(--accent-blue) 45%, transparent);
+}
+
+.canvas-save-btn {
+  background: var(--accent);
+  color: var(--accent-fg);
+  border-color: var(--accent);
+}
+
+.canvas-save-btn:hover:not(:disabled) {
+  opacity: 0.9;
+  background: var(--accent);
+  color: var(--accent-fg);
+}
+
+/* --- Document Canvas Layout --- */
+.canvas-doc-layout {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.canvas-toc-rail {
+  width: 210px;
+  flex-shrink: 0;
+  border-right: 1px solid var(--border-light);
+  background: var(--bg-sidebar);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow-y: auto;
+  padding: var(--space-3) var(--space-2);
+}
+
+.canvas-toc-title {
+  font-size: var(--font-size-2xs);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+  padding: 0 var(--space-2) var(--space-2);
+}
+
+.canvas-toc-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.canvas-toc-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  font-family: inherit;
+  font-size: var(--font-size-xs);
+  line-height: 1.4;
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-xs);
+  cursor: pointer;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  transition: background var(--duration-fast) var(--ease-out),
+              color var(--duration-fast) var(--ease-out);
+}
+
+.canvas-toc-item:hover {
+  background: var(--sidebar-hover);
+  color: var(--text-primary);
+}
+
+.canvas-toc-level-1 { padding-left: var(--space-2); font-weight: 600; color: var(--text-primary); }
+.canvas-toc-level-2 { padding-left: calc(var(--space-2) + 10px); }
+.canvas-toc-level-3 { padding-left: calc(var(--space-2) + 20px); font-size: var(--font-size-2xs); }
+.canvas-toc-level-4 { padding-left: calc(var(--space-2) + 30px); font-size: var(--font-size-2xs); color: var(--text-muted); }
+
+/* Document Scroll & Pages Reading Column */
+.canvas-doc-scroll {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  overflow-y: auto;
+  background: var(--bg-main);
+  padding: var(--space-8) var(--space-6);
+}
+
+.canvas-doc-page {
+  max-width: 720px;
+  margin: 0 auto;
+  color: var(--text-primary);
+  line-height: 1.75;
+  word-wrap: break-word;
+}
+
+.canvas-doc-content {
+  color: var(--text-primary);
+  line-height: 1.75;
+}
+
+.canvas-doc-content h1,
+.canvas-doc-content h2,
+.canvas-doc-content h3,
+.canvas-doc-content h4 {
+  color: var(--text-primary);
+  scroll-margin-top: var(--space-4);
+}
+
+.canvas-txt-content p {
+  margin-bottom: var(--space-4);
+  white-space: pre-wrap;
+}
+
+/* Floating Selection Quote Bar */
+.canvas-selection-bar {
+  position: absolute;
+  z-index: 20;
+  display: inline-flex;
+  align-items: center;
+  padding: 2px;
+  border-radius: var(--radius-md);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-color);
+  box-shadow: var(--shadow-md);
+}
+
+.canvas-selection-btn {
+  appearance: none;
+  border: none;
+  background: transparent;
+  color: var(--accent-blue);
+  font-family: inherit;
+  font-size: var(--font-size-xs);
+  font-weight: 600;
+  padding: 5px 10px;
+  min-height: 26px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.canvas-selection-btn:hover {
+  background: color-mix(in srgb, var(--accent-blue) 12%, transparent);
+}
+
+/* Distraction-free Pages Writing Canvas */
+.canvas-doc-editor-wrap {
+  max-width: 720px;
+  min-height: 100%;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+}
+
+.canvas-doc-editor {
+  width: 100%;
+  flex: 1;
+  min-height: 60vh;
+  border: none;
+  outline: none;
+  resize: none;
+  background: transparent;
+  color: var(--text-primary);
+  font-family: var(--font-sans);
+  line-height: 1.75;
+  padding: 0;
+  tab-size: 4;
+}
+
+/* --- Image Canvas Stage --- */
+.canvas-image-stage {
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  overflow: auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-6);
+  background: var(--bg-main);
+}
+
+.canvas-image-viewport {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 0;
+  min-height: 0;
+}
+
+.canvas-image-viewport.is-fit {
+  width: 100%;
+  height: 100%;
+}
+
+.canvas-image-el {
+  display: block;
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-sm);
+  cursor: zoom-in;
+  transition: transform var(--duration-fast) var(--ease-out);
+}
+
+.canvas-image-el.is-fit {
+  max-width: 100%;
+  max-height: 100%;
+  width: auto;
+  height: auto;
+  object-fit: contain;
+}
+
+.canvas-image-svg-wrap {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: transform var(--duration-fast) var(--ease-out);
+}
+
+/* --- Video Canvas Stage --- */
+.canvas-rate-wrap {
+  display: inline-flex;
+  align-items: center;
+}
+
+.canvas-rate-select {
+  height: 28px;
+  padding: 0 26px 0 var(--space-2);
+  font-size: var(--font-size-xs);
+  border-radius: var(--radius-sm);
+  background-color: var(--bg-input);
+  border-color: var(--border-color);
+  color: var(--text-primary);
+}
+
+.canvas-video-stage {
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-4);
+  padding: var(--space-5);
+  background: var(--bg-main);
+}
+
+.canvas-video-player-wrap {
+  width: 100%;
+  max-width: 960px;
+  display: flex;
+  justify-content: center;
+}
+
+.canvas-video-el {
+  width: 100%;
+  max-height: 68vh;
+  border-radius: var(--radius-md);
+  background: var(--bg-sidebar);
+  box-shadow: var(--shadow-md);
+}
+
+.canvas-video-markers {
+  width: 100%;
+  max-width: 960px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.canvas-video-marker {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px 4px 2px 8px;
+  border-radius: var(--radius-pill);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-color);
+  box-shadow: var(--shadow-sm);
+}
+
+.canvas-marker-jump {
+  appearance: none;
+  border: none;
+  background: transparent;
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: var(--font-size-xs);
+  font-variant-numeric: tabular-nums;
+  padding: 2px 4px;
+  cursor: pointer;
+}
+
+.canvas-marker-jump:hover {
+  color: var(--accent-blue);
+}
+
+.canvas-marker-time {
+  font-family: var(--font-mono);
+  font-size: var(--font-size-xs);
+  font-variant-numeric: tabular-nums;
+  color: var(--text-primary);
+}
+
+.canvas-marker-action {
+  appearance: none;
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  width: 24px;
+  height: 24px;
+  border-radius: var(--radius-pill);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: var(--font-size-xs);
+  cursor: pointer;
+}
+
+.canvas-marker-action:hover {
+  background: var(--sidebar-hover);
+  color: var(--accent-blue);
+}
+
+.canvas-marker-remove:hover {
+  color: var(--error);
+}
+
+/* --- FilesTab Canvas Toggle Button --- */
+.file-action-btn.file-action-canvas {
+  color: var(--accent-blue);
+}
+
+.file-action-btn.file-action-canvas.active {
+  background: color-mix(in srgb, var(--accent-blue) 14%, transparent);
+  color: var(--accent-blue);
+  border-color: color-mix(in srgb, var(--accent-blue) 32%, transparent);
+}
+
+/* --- Composer Canvas Context Reference Chips --- */
+.canvas-context-bar {
+  max-width: var(--session-content-width);
+  margin: 0 auto var(--space-2);
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1-5);
+  align-items: center;
+}
+
+.canvas-context-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1-5);
+  max-width: 100%;
+  min-height: 28px;
+  padding: 3px 6px 3px 8px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-color);
+  background: var(--bg-elevated);
+  color: var(--text-primary);
+  font-size: var(--font-size-xs);
+  line-height: 1.3;
+  box-shadow: var(--shadow-sm);
+}
+
+.canvas-chip-badge {
+  flex-shrink: 0;
+  font-size: var(--font-size-xs);
+}
+
+.canvas-chip-name {
+  font-weight: 500;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 160px;
+}
+
+.canvas-chip-loc {
+  flex-shrink: 0;
+  font-family: var(--font-mono);
+  font-size: var(--font-size-2xs);
+  font-variant-numeric: tabular-nums;
+  color: var(--accent-blue);
+}
+
+.canvas-chip-snippet {
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 180px;
+}
+
+.canvas-chip-remove {
+  appearance: none;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  width: 24px;
+  height: 24px;
+  margin-left: 2px;
+  border-radius: var(--radius-xs);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: var(--font-size-md);
+  line-height: 1;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.canvas-chip-remove:hover {
+  background: var(--sidebar-hover);
+  color: var(--text-primary);
+}
+
+/* --- Cosmos Glass Theme Coherence --- */
+.cosmos-workbench-host .file-canvas-view {
+  background: transparent;
+}
+
+.cosmos-workbench-host .canvas-toolbar {
+  background: var(--bg-workbench);
+  border-bottom-color: var(--border-color);
+}
+
+.cosmos-workbench-host .canvas-toc-rail {
+  background: var(--bg-sidebar);
+  border-right-color: var(--border-color);
+}
+
+.cosmos-workbench-host .canvas-doc-scroll,
+.cosmos-workbench-host .canvas-image-stage,
+.cosmos-workbench-host .canvas-video-stage {
+  background: var(--bg-main);
+}
+
+.cosmos-workbench-host .canvas-selection-bar {
+  background: var(--bg-elevated);
+  border-color: var(--border-color);
+}
+
+.cosmos-drawer .canvas-context-bar {
+  max-width: none;
+  margin-bottom: var(--space-2);
+}
+
+.cosmos-drawer .canvas-context-chip {
+  background: var(--bg-elevated);
+  border-color: var(--border-color);
+  color: var(--text-primary);
+}
+
+/* --- Responsive (down to 320px) --- */
+@media (max-width: 640px) {
+  .canvas-toolbar {
+    padding: var(--space-1-5) var(--space-2);
+    gap: var(--space-1-5);
+  }
+
+  .canvas-doc-layout {
+    flex-direction: column;
+  }
+
+  .canvas-toc-rail {
+    width: 100%;
+    max-height: 140px;
+    border-right: none;
+    border-bottom: 1px solid var(--border-light);
+    padding: var(--space-2);
+  }
+
+  .canvas-doc-scroll {
+    padding: var(--space-4) var(--space-3);
+  }
+
+  .canvas-image-stage,
+  .canvas-video-stage {
+    padding: var(--space-3);
+  }
+
+  .canvas-chip-name {
+    max-width: 120px;
+  }
+
+  .canvas-chip-snippet {
+    max-width: 110px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .canvas-seg-btn,
+  .canvas-tool-btn,
+  .canvas-toc-item,
+  .canvas-image-el,
+  .canvas-image-svg-wrap {
+    transition: none;
+  }
+}

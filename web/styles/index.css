@@ -10,6 +10,8 @@
 @import './chat.css';
 @import './workbench.css';
 @import './files.css';
+@import './canvas.css';
+@import './creation-workbench.css';
 @import './terminal.css';
 @import './settings.css';
 @import './agent-installer.css';

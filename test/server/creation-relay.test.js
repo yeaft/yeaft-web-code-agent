@@ -211,6 +211,15 @@ describe('Creation WebSocket relay', () => {
     expect(frame(agent).requestId).not.toBe('browser-1');
   });
 
+  it.each(['ensure_workspace', 'find_by_folder'])('allowlists %s for the owner only', async op => {
+    const payload = { ...(op === 'ensure_workspace' ? { creationId: 'creation-a' } : {}), rootDir: '/workspace/example' };
+    await relay.request(other, msg({ op, payload }));
+    expect(frame(other)).toMatchObject({ op, ok: false, errorCode: 'forbidden' });
+    expect(agent.ws.send).not.toHaveBeenCalled();
+    await relay.request(client, msg({ op, payload }));
+    expect(frame(agent)).toMatchObject({ type: 'creation_request', op, ownerId: 'user-a', payload });
+  });
+
   it.each([
     ['another user', 'forbidden', () => other],
     ['inactive owner', 'forbidden', () => { state.users.get('alice').deletion_state = 'pending'; return client; }],

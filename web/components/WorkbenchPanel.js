@@ -2,6 +2,7 @@ import WorkbenchCapabilityHost from './WorkbenchCapabilityHost.js';
 import BrowserPanel from './BrowserPanel.js';
 import { normalizeBrowserAddress } from '../utils/browser-address.js';
 import NavigationIcon from './NavigationIcon.js';
+import { useCreationsStore } from '../stores/creations.js';
 import {
   workbenchConversationId,
   workbenchRouteKey,
@@ -142,6 +143,7 @@ export default {
                   <svg v-if="capability.id === 'terminal'" viewBox="0 0 24 24"><path fill="currentColor" d="M20 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm0 14H4V8h16v10zM7 16l4-4-4-4 1.4-1.4L13.8 12l-5.4 5.4L7 16zm6 0h5v-2h-5v2z"/></svg>
                   <svg v-else-if="capability.id === 'git'" viewBox="0 0 24 24"><path fill="currentColor" d="M21.62 11.11l-8.73-8.73a1.32 1.32 0 00-1.87 0L8.89 4.51l2.35 2.35a1.57 1.57 0 012 2l2.27 2.27a1.57 1.57 0 11-.94.88l-2.12-2.12v5.57a1.57 1.57 0 11-1.29 0V9.72a1.57 1.57 0 01-.85-2.06L8 5.34 2.38 11a1.32 1.32 0 000 1.87l8.73 8.73a1.32 1.32 0 001.87 0l8.64-8.64a1.32 1.32 0 000-1.85z"/></svg>
                   <svg v-else-if="capability.id === 'files'" viewBox="0 0 24 24"><path fill="currentColor" d="M10 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2h-8l-2-2z"/></svg>
+                  <svg v-else-if="capability.id === 'creation'" viewBox="0 0 24 24"><path fill="currentColor" d="M12 2l2.4 6.6L21 11l-6.6 2.4L12 20l-2.4-6.6L3 11l6.6-2.4L12 2zm7 14l1.1 3L23 20l-2.9 1L19 24l-1.1-3L15 20l2.9-1L19 16z"/></svg>
                   <svg v-else viewBox="0 0 24 24"><path fill="currentColor" d="M20 4H4a2 2 0 00-2 2v12a2 2 0 002 2h16a2 2 0 002-2V6a2 2 0 00-2-2zm0 14H4V9h16v9zM4 7V6h16v1H4zm2-1h2v1H6V6z"/></svg>
                 </span>
                 <span class="workbench-capability-copy">
@@ -234,6 +236,7 @@ export default {
   `,
   setup(props, { emit, expose }) {
     const chatStore = Pinia.useChatStore();
+    const creationsStore = useCreationsStore();
     const ownedState = Vue.reactive({ workbenchExpanded: false, workbenchMaximized: false });
     const ownedPanels = new Map();
     const ownedActions = {
@@ -261,6 +264,13 @@ export default {
           if (Object.hasOwn(ownedActions, key)) return ownedActions[key];
         }
         return Reflect.get(target, key);
+      },
+      set(target, key, value) {
+        if (props.ownerRoute && Object.hasOwn(ownedState, key)) {
+          ownedState[key] = value;
+          return true;
+        }
+        return Reflect.set(target, key, value);
       },
     });
     Vue.provide('workbench-store', store);
@@ -337,6 +347,7 @@ export default {
       capabilityCard('terminal', 'workbench.terminal', hasTerminal.value),
       capabilityCard('git', 'workbench.git', hasExplorer.value),
       capabilityCard('files', 'workbench.files', hasExplorer.value),
+      capabilityCard('creation', 'workbench.creation', hasExplorer.value),
       capabilityCard(
         'browser',
         'workbench.browser',
@@ -383,7 +394,7 @@ export default {
     ));
     const activeToolCapability = Vue.computed(() => {
       if (!activeCapabilityDefinition.value?.available) return null;
-      return ['terminal', 'git', 'files'].includes(activeCapability.value)
+      return ['terminal', 'git', 'files', 'creation'].includes(activeCapability.value)
         && isCapabilityActivated(activeCapability.value)
         ? activeCapability.value
         : null;
@@ -391,7 +402,7 @@ export default {
     const routeHostState = Vue.computed(() => ({
       openCapabilities: openCapabilities.filter(capabilityId => {
         const definition = capabilityCards.value.find(capability => capability.id === capabilityId);
-        return definition?.available && ['terminal', 'git', 'files'].includes(capabilityId);
+        return definition?.available && ['terminal', 'git', 'files', 'creation'].includes(capabilityId);
       }),
       routeProps: { ...routeProps.value },
     }));
@@ -544,7 +555,7 @@ export default {
 
     const openCapability = capabilityId => {
       if (!capabilityCards.value.some(capability => capability.id === capabilityId)) return false;
-      if (['terminal', 'git', 'files'].includes(capabilityId) && !activeRouteKey.value) return false;
+      if (['terminal', 'git', 'files', 'creation'].includes(capabilityId) && !activeRouteKey.value) return false;
       ensureOpenCapability(capabilityId);
       activatedCapabilities.add(capabilityActivationKey(capabilityId));
       activeCapability.value = capabilityId;
@@ -569,11 +580,68 @@ export default {
     const handleOpenCapability = event => {
       const detail = event.detail;
       if (!detail || detail.routeKey !== activeRouteKey.value
-        || !['terminal', 'files', 'git', 'browser'].includes(detail.capabilityId)
+        || !['terminal', 'files', 'git', 'creation', 'browser'].includes(detail.capabilityId)
         || !capabilityCards.value.some(item => item.id === detail.capabilityId && item.available)) return;
       if (!openCapability(detail.capabilityId)) return;
       store.openWorkbench();
       detail.accepted = true;
+    };
+
+    const providedCreationTarget = Vue.reactive({ routeKey: '', agentId: '', creationId: '', rootDir: '', seq: 0 });
+    Vue.provide('workbench-creation-target', providedCreationTarget);
+
+    const openCreationWorkspaceTarget = ({ creationId = '', rootDir = '', maximize } = {}) => {
+      if (!activeRouteKey.value || !openCapability('creation')) return false;
+      store.openWorkbench();
+      if (maximize === true) store.workbenchMaximized = true;
+      else if (maximize === false) store.workbenchMaximized = false;
+      const targetRouteKey = activeRouteKey.value;
+      const targetAgentId = activeRoute.value?.agentId || '';
+      providedCreationTarget.routeKey = targetRouteKey;
+      providedCreationTarget.agentId = targetAgentId;
+      providedCreationTarget.creationId = creationId || '';
+      providedCreationTarget.rootDir = rootDir || '';
+      providedCreationTarget.seq += 1;
+      Vue.nextTick(() => {
+        window.dispatchEvent(new CustomEvent('workbench-creation-target', {
+          detail: {
+            routeKey: targetRouteKey,
+            agentId: targetAgentId,
+            creationId: creationId || '',
+            rootDir: rootDir || '',
+          },
+        }));
+      });
+      return true;
+    };
+
+    const handleOpenCreation = event => {
+      const detail = event.detail;
+      if (!detail || !activeRouteKey.value) return;
+      const routeMatches = detail.routeKey
+        ? detail.routeKey === activeRouteKey.value
+        : (!detail.agentId || activeRoute.value?.agentId === detail.agentId);
+      if (!routeMatches) return;
+      if (openCreationWorkspaceTarget({
+        creationId: detail.creationId,
+        rootDir: detail.rootDir,
+        maximize: detail.maximize,
+      })) {
+        detail.accepted = true;
+      }
+    };
+
+    const consumePendingCreationTarget = () => {
+      const target = creationsStore.pendingWorkbenchTarget;
+      if (!target || !activeRouteKey.value) return;
+      if (target.agentId && activeRoute.value?.agentId !== target.agentId) return;
+      if (target.sessionId && activeRoute.value?.sessionId !== target.sessionId) return;
+      if (!openCreationWorkspaceTarget({
+        creationId: target.creationId,
+        rootDir: target.rootDir,
+        maximize: target.maximize,
+      })) return;
+      creationsStore.clearPendingWorkbenchTarget?.(target.seq);
     };
 
     const confirmFilesCapabilityClose = ({ routeKey, workspaceGeneration }) => new Promise(resolve => {
@@ -1126,6 +1194,7 @@ export default {
       window.addEventListener('open-file-in-explorer', handleOpenFile);
       window.addEventListener('workbench-open-browser', handleOpenBrowser);
       window.addEventListener('workbench-open-capability', handleOpenCapability);
+      window.addEventListener('workbench-open-creation', handleOpenCreation);
       window.addEventListener('workbench-file-items-changed', handleFileItemsChanged);
       document.addEventListener('click', handleDocumentClick);
       document.addEventListener('keydown', handleDocumentKeydown);
@@ -1139,7 +1208,14 @@ export default {
       }
       window.addEventListener('resize', handleViewportResize);
       scheduleTabOverflowUpdate();
+      consumePendingCreationTarget();
     });
+
+    Vue.watch(
+      () => [creationsStore.pendingWorkbenchTarget, activeRouteKey.value],
+      () => consumePendingCreationTarget(),
+      { flush: 'post' },
+    );
 
     Vue.watch(
       () => store.workbenchExpanded,
@@ -1170,6 +1246,7 @@ export default {
       window.removeEventListener('open-file-in-explorer', handleOpenFile);
       window.removeEventListener('workbench-open-browser', handleOpenBrowser);
       window.removeEventListener('workbench-open-capability', handleOpenCapability);
+      window.removeEventListener('workbench-open-creation', handleOpenCreation);
       window.removeEventListener('workbench-file-items-changed', handleFileItemsChanged);
       document.removeEventListener('click', handleDocumentClick);
       document.removeEventListener('keydown', handleDocumentKeydown);

@@ -7,7 +7,7 @@ import { userDb } from '../database.js';
 import { resolveAgentAccessError, sendToAgent, sendToWebClient } from '../ws-utils.js';
 
 const OPS = new Set([
-  'list_creations', 'create_creation', 'get_creation', 'update_creation', 'delete_creation',
+  'list_creations', 'create_creation', 'get_creation', 'update_creation', 'delete_creation', 'ensure_workspace', 'find_by_folder',
   'add_sources', 'get_source', 'delete_source', 'upsert_canon', 'get_canon', 'delete_canon',
   'create_node', 'get_node', 'update_node', 'reorder_nodes', 'delete_node', 'restore_revision',
   'list_proposals', 'get_proposal', 'resolve_proposal', 'get_thread', 'send_message', 'start_batch_run', 'control_run', 'export_creation',
