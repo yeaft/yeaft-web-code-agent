@@ -20,6 +20,8 @@ function clearSidebarSessionCatalog(store) {
   store.sessionCatalogProtocolSupported = null;
   store.scheduledTaskProtocolSupported = false;
   store.scheduledTaskReceiptProtocolSupported = false;
+  store.yeaftUnreadSessionKeys = {};
+  store.yeaftSessionReplyPreviewByKey = {};
 }
 
 const CONNECT_TIMEOUT_MS = 15_000;
