@@ -1746,6 +1746,46 @@ describe('Cosmos Creations — End-to-End Web Store <-> Server Relay <-> Agent S
     expect(wrapper.emitted('open-creation')).toBeUndefined();
   });
 
+  it('R9-F1: refreshes cached Creation detail and opens the Session linked by another browser', async () => {
+    await registerBrowserStores();
+    const { creationDetailKey } = await import('../../web/stores/creations.js');
+    const { default: CosmosPage } = await import('../../web/components/cosmos/CosmosPage.js');
+    const agentId = 'agent-a';
+    chatStore.agents = [{ id: agentId, name: 'Alpha', online: true, capabilities: ['creations'] }];
+    const { creation } = await creationsStore.createCreation(agentId, { title: 'Unlinked Atlas' });
+    await creationsStore.selectGalaxyAgent(agentId);
+    expect(creationsStore.activeCreation).toBeNull();
+    const detail = creationsStore.detailsByKey[creationDetailKey(agentId, creation.id)];
+    const stale = { ...detail.creation, sessionId: null, rootDir: null, detailOnly: 'preserved' };
+    detail.creation = stale;
+    const linked = { id: creation.id, title: 'Linked Atlas', status: 'active', projectId: 'linked-project',
+      sessionId: 'linked-by-other-browser', rootDir: '/workspace/linked' };
+    const request = creationsStore.request.bind(creationsStore);
+    const requests = vi.spyOn(creationsStore, 'request').mockImplementation((target, action, payload) => (
+      action === 'list_creations' ? Promise.resolve({ creations: [linked] }) : request(target, action, payload)
+    ));
+    await creationsStore.reconcileAfterReconnect(agentId);
+    expect(detail.creation).toMatchObject({ ...linked, detailOnly: 'preserved' });
+
+    // Also cover Galaxy's read precedence independently of cache reconciliation.
+    detail.creation = stale;
+    const createSession = vi.spyOn(chatStore, 'createYeaftSession').mockRejectedValue(new Error('Unexpected Session creation'));
+    vi.spyOn(globalThis, 'requestAnimationFrame').mockReturnValue(1);
+    const wrapper = render(CosmosPage, { stubs: {
+      CosmosQuickComposer: true, CosmosConversationDrawer: true, CosmosGalaxyOverlay: true,
+      SettingsPanel: true, AgentSettingsPanel: true, SessionSettingsModal: true,
+    } });
+    wrapper.vm.currentBand = 'galaxy';
+    await Vue.nextTick();
+    await wrapper.vm.openGalaxyCreation({ agentId, creationId: creation.id });
+    expect(wrapper.vm.drawerOpen).toBe(true);
+    expect(chatStore.yeaftActiveSessionFilter).toBe(linked.sessionId);
+    expect(creationsStore.pendingWorkbenchTarget).toMatchObject({ agentId, creationId: creation.id,
+      sessionId: linked.sessionId, rootDir: linked.rootDir });
+    expect(createSession).not.toHaveBeenCalled();
+    expect(requests.mock.calls.map(([, action]) => action)).not.toContain('update_creation');
+  });
+
   it.each(['leave Galaxy and return', 'close the drawer'])('fences a pending Galaxy Creation open when users %s', async action => {
     await registerBrowserStores();
     const { default: CosmosPage } = await import('../../web/components/cosmos/CosmosPage.js');

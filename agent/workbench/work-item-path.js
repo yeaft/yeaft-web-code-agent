@@ -1,7 +1,7 @@
 import { constants, existsSync } from 'node:fs';
 import { lstat, mkdir, open, readdir, realpath, rmdir, unlink } from 'node:fs/promises';
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
-import { resolveCreationWorkspaceRoot } from '../yeaft/creations/bridge.js';
+import { resolveCreationWorkspaceBinding } from '../yeaft/creations/bridge.js';
 
 function outsideWorkspace(message) {
   return Object.assign(new Error(message), { code: 'FILE_OUTSIDE_WORKSPACE' });
@@ -14,26 +14,22 @@ function assertWithin(root, candidate, message = 'File is outside the WorkItem w
 
 export const hasCreationScope = msg => msg.creationId !== undefined;
 
-async function lookupCreationRoot(msg, lookupRoot = resolveCreationWorkspaceRoot) {
+async function lookupCreationRoot(msg, lookupRoot = resolveCreationWorkspaceBinding) {
   const unavailable = 'Creation workspace is unavailable.';
   const creationId = typeof msg.creationId === 'string' && msg.creationId.trim();
   if (!creationId || typeof msg._requestUserId !== 'string' || !msg._requestUserId.trim()) {
     throw outsideWorkspace(unavailable);
   }
-  let canonicalRoot;
   try {
-    const root = await lookupRoot(msg._requestUserId, creationId);
-    if (typeof root !== 'string' || !isAbsolute(root) || !(await lstat(root)).isDirectory()) {
-      throw outsideWorkspace(unavailable);
-    }
-    canonicalRoot = await realpath(root);
+    const result = await lookupRoot(msg._requestUserId, creationId);
+    const { rootDir, boundRootIdentity = null } = typeof result === 'string' ? { rootDir: result } : (result ?? {});
     // The Agent records canonical paths; do not accept a replaced ancestor.
-    if (canonicalRoot !== root) throw outsideWorkspace(unavailable);
+    if (typeof rootDir !== 'string' || !isAbsolute(rootDir) || !(await lstat(rootDir)).isDirectory()
+      || await realpath(rootDir) !== rootDir) throw outsideWorkspace(unavailable);
+    return { rootDir, boundRootIdentity };
   } catch {
     throw outsideWorkspace(unavailable);
   }
-
-  return canonicalRoot;
 }
 
 function creationTarget(root, filePath, strictDescendant) {
@@ -44,7 +40,7 @@ function creationTarget(root, filePath, strictDescendant) {
 }
 
 async function resolveCreationPath(msg, filePath, { resolveCreationWorkspaceRoot: lookupRoot, strictDescendant }) {
-  const canonicalRoot = await lookupCreationRoot(msg, lookupRoot);
+  const { rootDir: canonicalRoot } = await lookupCreationRoot(msg, lookupRoot);
   const candidate = creationTarget(canonicalRoot, filePath, strictDescendant);
   const outside = 'File is outside the Creation workspace.';
   assertWithin(canonicalRoot, candidate, outside);
@@ -318,6 +314,20 @@ export async function withCreationFiles(msg, action) {
   if (!supportsCreationWorkbenchFiles()) {
     throw outsideWorkspace('Safe Creation workspace file access is not supported on this platform.');
   }
-  const root = await lookupCreationRoot(msg);
-  return withDirectory(root, root, await noLinkStat(root), handle => action(new CreationFiles(root, handle)));
+  const { rootDir, boundRootIdentity } = await lookupCreationRoot(msg);
+  let handle;
+  try {
+    try {
+      const expected = await noLinkStat(rootDir);
+      if (!expected?.isDirectory()) throw changed();
+      handle = await open(rootDir, dirFlags());
+      const stat = await verifyNamed(rootDir, handle, expected);
+      // A replacement may already have been in place when expected was read.
+      if (boundRootIdentity != null && (String(stat.dev) !== boundRootIdentity.dev
+        || String(stat.ino) !== boundRootIdentity.ino)) throw changed();
+    } catch {
+      throw changed();
+    }
+    return await action(new CreationFiles(rootDir, handle));
+  } finally { await handle?.close(); }
 }

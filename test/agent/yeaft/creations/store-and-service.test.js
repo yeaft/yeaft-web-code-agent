@@ -7,7 +7,7 @@ import { basename, dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { deflateSync } from 'node:zlib';
 import ctx from '../../../../agent/context.js';
-import { resolveCreationWorkspaceRoot } from '../../../../agent/yeaft/creations/bridge.js';
+import { resolveCreationWorkspaceBinding, resolveCreationWorkspaceRoot } from '../../../../agent/yeaft/creations/bridge.js';
 import { resolveWorkItemPath, supportsCreationWorkbenchFiles, withCreationFiles } from '../../../../agent/workbench/work-item-path.js';
 import { handleCopyFiles, handleCreateFile, handleDeleteFiles, handleListDirectory, handleMoveFiles, handleReadFile, handleUploadToDir, handleVideoChunk, handleVideoMetadata, handleWriteFile }
   from '../../../../agent/workbench/file-ops.js';
@@ -84,7 +84,8 @@ describe('Creation folder workspaces', () => {
     expect(stored()).toMatchObject({ rootDir: first, boundRootIdentity: identity(first) });
     renameSync(first, join(dir, 'first-original'));
     mkdirSync(first);
-    expect(() => store.resolveWorkspaceRoot(id)).toThrow(err('INVALID_PATH'));
+    expect(store.resolveWorkspaceBinding(id)).toBeNull();
+    expect(store.resolveWorkspaceRoot(id)).toBeNull();
     store.updateCreation(id, { rootDir: second });
     expect(stored()).toMatchObject({ rootDir: second, boundRootIdentity: identity(second) });
     expect(store.resolveWorkspaceRoot(id)).toBe(second);
@@ -168,7 +169,7 @@ describe('Creation folder workspaces', () => {
         expect(() => first.updateCreation('book', { rootDir })).toThrow(err('INVALID_PATH'));
         expect(() => first.ensureWorkspace('book', { rootDir })).toThrow(err('INVALID_PATH'));
         first.run("UPDATE creations SET data=json_set(data,'$.rootDir',?) WHERE id='book'", rootDir);
-        expect(() => first.resolveWorkspaceRoot('book')).toThrow(err('INVALID_PATH'));
+        expect(first.resolveWorkspaceRoot('book')).toBeNull();
         first.run("UPDATE creations SET data=json_remove(data,'$.rootDir') WHERE id='book'");
       }
       first.run("UPDATE creations SET data=json_set(data,'$.rootDir',?) WHERE id='book'", sibling);
@@ -1042,6 +1043,66 @@ describe('Creation folder workspaces', () => {
     expect(store.listCreations()).toHaveLength(1);
   });
 
+  it.each(['createCreation', 'findByFolder', 'different folder', 'generated workspace', 'clear root', 'update root'])(
+    'retains a keyed bind after the untouched journal retires and handles %s', retry => {
+      const id = 'retry-bind';
+      const rootDir = join(realpathSync(dir), 'original');
+      mkdirSync(rootDir);
+      const payload = { id, importKey: 'bind-folder:retry', initializeFolder: true, rootDir,
+        textSources: [{ name: 'Notes.txt', text: 'Original source' }] };
+      const result = runExternalWorker(`
+        const payload = ${JSON.stringify(payload)};
+        const { mkdirSync } = fs;
+        fs.mkdirSync = (filename, ...args) => {
+          if (filename.endsWith('/docs')) {
+            assert.ok(store.one('SELECT * FROM creation_materialization_journal WHERE creation_id=?', payload.id));
+            throw Object.assign(new Error('read-only filesystem'), { code: 'EROFS' });
+          }
+          return mkdirSync(filename, ...args);
+        };
+        syncBuiltinESMExports();
+        assert.throws(() => store.createCreation(payload), { code: 'EROFS' });
+      `);
+      expect(result.status, result.stderr).toBe(0);
+      const journal = () => store.all('SELECT * FROM creation_materialization_journal');
+      const record = () => JSON.parse(store.one('SELECT data FROM creations WHERE id=?', id).data);
+      expect(journal()).toEqual([]);
+      expect(readdirSync(rootDir)).toEqual([]);
+      expect(record()).toMatchObject({ rootDir: null, pendingBindTarget: rootDir });
+      const sources = store.listSources(id);
+      expect(sources).toHaveLength(1);
+
+      let target = rootDir;
+      if (retry === 'createCreation') {
+        expect(store.createCreation({ ...payload, textSources: ['Must not replace the original'] }))
+          .toMatchObject({ id, rootDir, deduplicated: true });
+      } else if (retry === 'findByFolder') {
+        const { creation } = store.findByFolder(rootDir);
+        expect(creation).toMatchObject({ id, rootDir: null });
+        expect(store.ensureWorkspace(creation.id, { rootDir })).toMatchObject({ rootDir, materialized: true });
+      } else if (retry === 'generated workspace') {
+        target = join(store.root, '_workspaces', id);
+        expect(store.ensureWorkspace(id)).toMatchObject({ rootDir: target, materialized: true });
+      } else if (retry === 'clear root' || retry === 'update root') {
+        target = retry === 'clear root' ? null : join(realpathSync(dir), 'different');
+        if (target) mkdirSync(target);
+        expect(store.updateCreation(id, { rootDir: target })).toMatchObject({ rootDir: target });
+        expect(store.one('SELECT creation_id FROM creation_import_keys WHERE import_key=?', payload.importKey)).toBeUndefined();
+      } else {
+        target = join(realpathSync(dir), 'different');
+        mkdirSync(target);
+        expect(store.ensureWorkspace(id, { rootDir: target })).toMatchObject({ rootDir: target, materialized: true });
+      }
+      if (target && retry !== 'update root') {
+        expect(readFileSync(join(target, 'sources', 'Notes.txt'), 'utf8')).toBe('Original source');
+      }
+      expect(record()).not.toHaveProperty('pendingBindTarget');
+      expect(store.findByFolder(rootDir).creation?.id ?? null).toBe(target === rootDir ? id : null);
+      expect(store.listCreations()).toEqual([expect.objectContaining({ id, rootDir: target, sourceCount: 1 })]);
+      expect(store.listSources(id)).toEqual(sources);
+      expect(journal()).toEqual([]);
+    });
+
   it.each(['relink', 'unlink'])('retires folder bind keys on %s and binds the original folder again', action => {
     const a = join(dir, 'a');
     const b = join(dir, 'b');
@@ -1806,14 +1867,43 @@ describe('Creation-scoped Workbench files', () => {
 
   it('resolves only the authenticated namespace, even without a live runtime', async () => {
     expect(ctx.creationBridge).toBe(bridge);
+    const { dev, ino } = lstatSync(root, { bigint: true });
+    const binding = { rootDir: root, boundRootIdentity: { dev: String(dev), ino: String(ino) } };
+    expect(await resolveCreationWorkspaceBinding(owner, creationId)).toEqual(binding);
     expect(await resolveCreationWorkspaceRoot(owner, creationId)).toBe(root);
     await bridge.close();
     expect(await resolveCreationWorkspaceRoot(owner, creationId)).toBeNull();
     bridge = createCreationBridge();
+    expect(await resolveCreationWorkspaceBinding(owner, creationId)).toEqual(binding);
     expect(await resolveCreationWorkspaceRoot(owner, creationId)).toBe(root);
     expect(await resolveCreationWorkspaceRoot('owner-b', creationId)).toBeNull();
     expect(await resolveCreationWorkspaceRoot(owner, 'missing')).toBeNull();
     expect(await resolveCreationWorkspaceRoot(owner, '../bad')).toBeNull();
+  });
+
+  it('rejects a workspace replacement after authenticated lookup and before scoped I/O', async () => {
+    const original = join(realpathSync(dir), 'original-workspace');
+    const filePath = 'docs/note.txt';
+    const resolveBinding = bridge.resolveWorkspaceBinding.bind(bridge);
+    const lookup = vi.spyOn(bridge, 'resolveWorkspaceBinding').mockImplementationOnce(async (...args) => {
+      const binding = await resolveBinding(...args);
+      const { dev, ino } = lstatSync(root, { bigint: true });
+      expect(binding).toEqual({ rootDir: root, boundRootIdentity: { dev: String(dev), ino: String(ino) } });
+      renameSync(root, original);
+      mkdirSync(join(root, 'docs'), { recursive: true });
+      writeFileSync(join(root, filePath), 'replacement');
+      return binding;
+    });
+    const action = vi.fn();
+    const beforeOpen = open.mock.calls.length;
+    try {
+      await expect(withCreationFiles(msg, action)).rejects.toMatchObject(err('FILE_OUTSIDE_WORKSPACE'));
+      expect(lookup).toHaveBeenCalledWith(owner, creationId);
+      expect(open.mock.calls.slice(beforeOpen)).toEqual([[root, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_DIRECTORY]]);
+      expect(action).not.toHaveBeenCalled();
+      expect(readFileSync(join(original, filePath), 'utf8')).toBe('inside');
+      expect(readFileSync(join(root, filePath), 'utf8')).toBe('replacement');
+    } finally { lookup.mockRestore(); }
   });
 
   it('pins the external binding through commit and rejects an ordinary replacement in scoped file ops', async () => {
@@ -1853,7 +1943,7 @@ describe('Creation-scoped Workbench files', () => {
       expect(record.boundRootIdentity).toEqual({ dev: String(dev), ino: String(ino) });
       expect(record).not.toHaveProperty('ownsWorkspace');
       expect(record).not.toHaveProperty('workspaceIdentity');
-      expect(() => writer.resolveWorkspaceRoot(id)).toThrow(err('INVALID_PATH'));
+      expect(writer.resolveWorkspaceRoot(id)).toBeNull();
       expect(await resolveCreationWorkspaceRoot(owner, id)).toBeNull();
       for (const [handler, args] of [[handleReadFile, { filePath }], [handleWriteFile, { filePath, content: 'overwrite' }]]) {
         expect(await invoke(handler, args, { ...msg, creationId: id })).toMatchObject({ errorCode: 'FILE_OUTSIDE_WORKSPACE' });
@@ -1874,6 +1964,8 @@ describe('Creation-scoped Workbench files', () => {
     for (const path of ['../outside/note.txt', join(outside, 'note.txt'), 'external/note.txt', 'internal/new.txt', 'linked.txt', 'dangling']) {
       await expect(resolveWorkItemPath(msg, path, outside)).rejects.toMatchObject(err('FILE_OUTSIDE_WORKSPACE'));
     }
+    expect(await resolveWorkItemPath(msg, 'docs/note.txt', outside, { resolveCreationWorkspaceRoot: async () => root }))
+      .toBe(join(root, 'docs', 'note.txt'));
     for (const fakeRoot of ['relative', join(root, 'linked.txt'), join(root, 'internal'), join(root, 'missing')]) {
       await expect(resolveWorkItemPath(msg, '.', outside, { resolveCreationWorkspaceRoot: async () => fakeRoot }))
         .rejects.toMatchObject(err('FILE_OUTSIDE_WORKSPACE'));
@@ -1953,7 +2045,7 @@ describe('Creation-scoped Workbench files', () => {
   });
 
   it.each([{ content: null }, {}])('rejects invalid write content before resolving scope or opening a file (%j)', async args => {
-    const resolveRoot = vi.spyOn(bridge, 'resolveWorkspaceRoot');
+    const resolveRoot = vi.spyOn(bridge, 'resolveWorkspaceBinding');
     try {
       const filePath = 'docs/note.txt';
       expect(await invoke(handleWriteFile, { filePath, ...args })).toMatchObject({ type: 'file_saved', success: false,
@@ -2111,6 +2203,7 @@ describe('Creation-scoped Workbench files', () => {
       mkdirSync(legacy, { recursive: true });
       // Model a pre-identity row, not a path change with a stale binding identity.
       writer.run("UPDATE creations SET data=json_set(json_remove(data,'$.boundRootIdentity'),'$.rootDir',?) WHERE id=?", legacy, creationId);
+      expect(await resolveCreationWorkspaceBinding(owner, creationId)).toEqual({ rootDir: legacy, boundRootIdentity: null });
       expect(await resolveCreationWorkspaceRoot(owner, creationId)).toBe(legacy);
     } finally { writer.close(); }
   });

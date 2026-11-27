@@ -1441,6 +1441,11 @@ export const useCreationsStore = defineStore('creations', {
           : (Array.isArray(res?.items) ? res.items : (Array.isArray(res) ? res : []));
         const currentBucket = this._ensureAgentBucket(targetId);
         currentBucket.list = list;
+        for (const item of list) {
+          if (!item?.id) continue;
+          const detail = this.detailsByKey[creationDetailKey(targetId, item.id)];
+          if (detail?.creation) detail.creation = { ...detail.creation, ...item };
+        }
         currentBucket.loaded = true;
         currentBucket.loading = false;
         currentBucket.error = null;

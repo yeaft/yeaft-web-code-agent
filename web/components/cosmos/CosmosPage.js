@@ -1748,9 +1748,9 @@ export default {
     }
 
     function cachedCreationFor(agentId, creationId) {
-      return creationsStore.detailsByKey?.[creationDetailKey(agentId, creationId)]?.creation
-        || creationsStore.creationsForAgent(agentId).find(c => c?.id === creationId)
-        || null;
+      const summary = creationsStore.creationsForAgent(agentId).find(c => c?.id === creationId);
+      const detail = creationsStore.detailsByKey?.[creationDetailKey(agentId, creationId)]?.creation;
+      return summary ? { ...detail, ...summary } : (detail || null);
     }
 
     async function openCreationInDrawer({ agentId, sessionId, creationId, rootDir, initialPrompt, openSeq, maximize,
@@ -1853,9 +1853,15 @@ export default {
           creation = cachedCreationFor(targetAgentId, creationId);
         }
 
+        let recordedRootDir = String(creation?.rootDir || '').trim();
         let resolvedSessionId = String(sessionId || '').trim();
         let resolvedRootDir = String(rootDir || '').trim();
-        let recordedRootDir = String(creation?.rootDir || '').trim();
+        // A complete recorded link can be opened even if Session inventory is still catching up.
+        const recordedSessionId = String(creation?.sessionId || '').trim();
+        if (recordedSessionId && recordedRootDir) {
+          resolvedSessionId ||= recordedSessionId;
+          resolvedRootDir ||= recordedRootDir;
+        }
 
         if ((!resolvedSessionId || !resolvedRootDir) && typeof creationsStore.resolveCreationSession === 'function') {
           const resolved = await creationsStore.resolveCreationSession(

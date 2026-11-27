@@ -520,7 +520,7 @@ export class CreationStore {
       (SELECT COUNT(*) FROM creation_proposals WHERE creation_id=? AND status='pending') AS pendingProposalCount`, row.id, row.id);
     const active = data(this.one(`SELECT data FROM creation_runs WHERE creation_id=? AND status IN ('running','paused')
       ORDER BY status='running' DESC,rowid DESC LIMIT 1`, row.id));
-    const { ownsWorkspace, workspaceIdentity, boundRootIdentity, ...rec } = data(row);
+    const { ownsWorkspace, workspaceIdentity, boundRootIdentity, pendingBindTarget, ...rec } = data(row);
     return { ...rec, sessionId: rec.sessionId ?? null, projectId: rec.projectId ?? null, rootDir: rec.rootDir ?? null,
       summary: rec.description || rec.mission || '', celestial: rec.placement, updatedAt: row.updated_at, ...counts, ...totals, hasReadableContent: counts.readableUnitCount > 0,
       activeRunStatus: active?.status ?? null, activeRunProgress: active?.progress?.total > 0 ? active.progress.completed / active.progress.total : null };
@@ -532,6 +532,7 @@ export class CreationStore {
   createCreation(input, { prepare } = {}) {
     const nested = Boolean(this.tx);
     let newlyCreatedJournalToken;
+    let retryBindTarget;
     const result = this.transaction(() => {
       const { importKey } = input;
       if (importKey !== undefined) {
@@ -539,13 +540,18 @@ export class CreationStore {
           || !importKey.isWellFormed()) fail('INVALID_REQUEST', 'Invalid import key');
         const existing = this.one('SELECT creation_id FROM creation_import_keys WHERE import_key=?', importKey);
         if (existing) {
-          const creation = this.getCreation(existing.creation_id);
+          const row = this.#creation(existing.creation_id);
+          const creation = this.#summary(row);
           if (!importKey.startsWith('bind-folder:') || input.rootDir == null) {
             return { ...creation, deduplicated: true };
           }
           const targetRoot = this.#linkableRootFolder(input.rootDir);
           const pending = this.one('SELECT target_dir FROM creation_materialization_journal WHERE creation_id=?', creation.id);
           if (creation.rootDir === targetRoot || (creation.rootDir == null && pending?.target_dir === targetRoot)) {
+            return { ...creation, deduplicated: true };
+          }
+          if (creation.rootDir == null && input.initializeFolder === true && data(row).pendingBindTarget === targetRoot) {
+            retryBindTarget = targetRoot;
             return { ...creation, deduplicated: true };
           }
           this.run('DELETE FROM creation_import_keys WHERE import_key=?', importKey);
@@ -573,6 +579,8 @@ export class CreationStore {
         if (nested) fail('INVALID_STATE', 'External materialization cannot run inside another transaction');
         record.rootDir = null;
         delete record.boundRootIdentity;
+        // Retry intent survives retirement of an untouched mutation journal.
+        if (importKey?.startsWith('bind-folder:')) record.pendingBindTarget = externalRoot;
       } else if (input.initializeFolder === true) {
         this.#initializeWorkspace(record);
       }
@@ -596,11 +604,12 @@ export class CreationStore {
     });
     if (result.rootDir == null) {
       const pending = this.one('SELECT target_dir FROM creation_materialization_journal WHERE creation_id=?', result.id);
-      if (pending) {
-        if (input.initializeFolder === true && input.rootDir != null && folderPath(input.rootDir) !== pending.target_dir) {
+      const target = pending?.target_dir ?? retryBindTarget;
+      if (target) {
+        if (input.initializeFolder === true && input.rootDir != null && folderPath(input.rootDir) !== target) {
           fail('CONFLICT', 'Resume materialization in the original target folder');
         }
-        const { creation } = this.ensureWorkspace(result.id, { rootDir: pending.target_dir, newlyCreatedJournalToken });
+        const { creation } = this.ensureWorkspace(result.id, { rootDir: target, newlyCreatedJournalToken });
         return result.deduplicated ? { ...creation, deduplicated: true } : creation;
       }
     }
@@ -658,7 +667,8 @@ export class CreationStore {
       this.#creationFields(record, patch);
       if (own(patch, 'rootDir')) {
         const journal = this.one('SELECT temp_files_json FROM creation_materialization_journal WHERE creation_id=?', id);
-        if ((record.rootDir ?? null) !== previousRoot || (record.rootDir == null && journal)) {
+        if ((record.rootDir ?? null) !== previousRoot || (record.rootDir == null && (journal || record.pendingBindTarget))) {
+          delete record.pendingBindTarget;
           this.run('DELETE FROM creation_materialization_journal WHERE creation_id=?', id);
           this.run("DELETE FROM creation_import_keys WHERE creation_id=? AND import_key LIKE 'bind-folder:%'", id);
           if (journal) {
@@ -734,9 +744,19 @@ export class CreationStore {
     return this.#assertNoSymlinkDir(path, { code: 'INVALID_REQUEST', allowMissing, boundRootIdentity });
   }
 
+  resolveWorkspaceBinding(id) {
+    try {
+      const record = data(this.#creation(id));
+      if (record?.rootDir == null) return null;
+      return { rootDir: this.#recordedWorkspace(id, record), boundRootIdentity: record.boundRootIdentity ?? null };
+    } catch (error) {
+      if (['NOT_FOUND', 'INVALID_REQUEST', 'INVALID_PATH'].includes(error.code)) return null;
+      throw error;
+    }
+  }
+
   resolveWorkspaceRoot(id) {
-    const record = data(this.#creation(id));
-    return record.rootDir == null ? null : this.#recordedWorkspace(id, record);
+    return this.resolveWorkspaceBinding(id)?.rootDir ?? null;
   }
 
   #assertNoSymlinkDir(dirPath, options) {
@@ -914,6 +934,7 @@ export class CreationStore {
       syncWorkspaceDirectory(parent);
     }
     record.rootDir = rootDir;
+    delete record.pendingBindTarget;
   }
   #unsafeSourceName(name) { return name.split(/[\\/]/).includes('..'); }
   #copyWorkspaceSource(root, source, bytes, { legacy = false, write,
@@ -1437,6 +1458,7 @@ export class CreationStore {
         }
         current.rootDir = root;
         current.boundRootIdentity = rootIdentity;
+        delete current.pendingBindTarget;
         delete current.ownsWorkspace;
         delete current.workspaceIdentity;
         this.run('UPDATE creations SET updated_at=?,data=? WHERE id=?', now(), json(current), id);
@@ -1489,15 +1511,18 @@ export class CreationStore {
     const canonical = this.#rootFolder(rootDir, { allowMissing: true });
     const row = this.one(`SELECT c.* FROM creations c
       LEFT JOIN creation_materialization_journal j ON j.creation_id=c.id
-      WHERE json_extract(c.data,'$.rootDir')=? OR (json_extract(c.data,'$.rootDir') IS NULL AND j.target_dir=?)
-      ORDER BY (json_extract(c.data,'$.rootDir') IS ?) DESC,c.updated_at DESC,c.id LIMIT 1`, canonical, canonical, canonical);
+      WHERE json_extract(c.data,'$.rootDir')=? OR (json_extract(c.data,'$.rootDir') IS NULL AND
+        (j.target_dir=? OR (j.target_dir IS NULL AND json_extract(c.data,'$.pendingBindTarget')=?)))
+      ORDER BY (json_extract(c.data,'$.rootDir') IS ?) DESC,(j.target_dir IS NOT NULL) DESC,c.updated_at DESC,c.id LIMIT 1`,
+      canonical, canonical, canonical, canonical);
     return { creation: row ? this.#summary(row) : null };
   }
 
   listSources(id) { return this.all('SELECT data FROM creation_sources WHERE creation_id=? ORDER BY rowid', safeId(id)).map(data); }
   addSources(id, { files = [], textSources = [] }, { copyToWorkspace = false, validateWorkspaceNames = false } = {}) {
-    const rootDir = copyToWorkspace ? this.resolveWorkspaceRoot(id) : null;
-    if (!copyToWorkspace) this.#creation(id);
+    const row = this.#creation(id);
+    const creation = copyToWorkspace ? data(row) : null;
+    const rootDir = creation?.rootDir == null ? null : this.#recordedWorkspace(id, creation);
     const incoming = [...boundedList(files, LIMITS.sources, 'files').map(file => ({ file })),
       ...boundedList(textSources, LIMITS.sources, 'text sources').map(item => ({ item }))];
     return this.transaction(() => {
