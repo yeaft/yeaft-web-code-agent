@@ -58,7 +58,7 @@ import {
 } from '../../cosmos/star-systems.js';
 import { stepCosmosFrame, clampCamPan } from '../../cosmos/stage-loop.js';
 import { projectAgentsForCosmos } from '../../cosmos/agent-projection.js';
-import { buildCosmosSignalStream } from '../../cosmos/signal-stream.js';
+import { buildCosmosSignalStream, computeSignalStateSignature } from '../../cosmos/signal-stream.js';
 import { getLocale } from '../../utils/i18n.js';
 import { setThemeColorSurface } from '../../utils/document-theme.js';
 
@@ -462,7 +462,6 @@ export default {
         :unread-count="signalStream.unreadCount"
         :running-count="signalStream.runningCount"
         :badge-count="signalStream.badgeCount"
-        :dismissible-count="signalStream.dismissibleCount"
         :drawer-open="drawerOpen"
         :is-compact="isCompactViewport"
         :preview-mode="constants.livePreviewMode"
@@ -474,6 +473,7 @@ export default {
         @dismiss-signal="onDismissSignal"
         @mark-all-read="onMarkAllSignalsRead"
         @close-popover="closeSignalPopover({ restoreFocus: true })"
+        @restore-trigger-focus="focusSignalTrigger"
       />
 
       <!-- Cosmic Constants + Authentic Yeaft Settings Popover -->
@@ -564,7 +564,6 @@ export default {
             :unread-count="signalStream.unreadCount"
             :running-count="signalStream.runningCount"
             :badge-count="signalStream.badgeCount"
-            :dismissible-count="signalStream.dismissibleCount"
             :drawer-open="false"
             :is-compact="isCompactViewport"
             :preview-mode="constants.livePreviewMode"
@@ -576,6 +575,7 @@ export default {
             @dismiss-signal="onDismissSignal"
             @mark-all-read="onMarkAllSignalsRead"
             @close-popover="closeSignalPopover({ restoreFocus: true })"
+            @restore-trigger-focus="focusSignalTrigger"
           />
         </template>
       </CreationInteriorModal>
@@ -789,15 +789,43 @@ export default {
       const sid = store.yeaftActiveSessionFilter || '';
       return sid ? `${drawerAgentId.value}\u001f${sid}` : '';
     });
+    const localDismissedSignals = Vue.ref({});
+    const activeDismissedSignals = Vue.computed(() => (
+      store.cosmosDismissedSignalsByKey && typeof store.dismissCosmosSignal === 'function'
+        ? store.cosmosDismissedSignalsByKey
+        : localDismissedSignals.value
+    ));
     const signalStream = Vue.computed(() => buildCosmosSignalStream({
       projectedAgents: projectedAgentList.value,
       agentToPlanet: assignments.value.agentToPlanet,
       scheduledTaskNotifications: store.scheduledTaskNotifications || [],
+      dismissedSignals: activeDismissedSignals.value,
       activeDrawerKey: activeDrawerSessionKey.value,
       nowMs: nowTick.value,
       isEn: getLocale() === 'en',
       t: $t,
     }));
+    Vue.watch(
+      () => signalStream.value.rawSignatures,
+      (rawSigs) => {
+        if (projectedAgentList.value.length === 0 && Object.keys(rawSigs || {}).length === 0) return;
+        if (typeof store.pruneCosmosDismissedSignals === 'function') {
+          store.pruneCosmosDismissedSignals(rawSigs);
+          return;
+        }
+        const prev = localDismissedSignals.value;
+        const entries = Object.entries(prev);
+        if (entries.length === 0) return;
+        let changed = false;
+        const next = {};
+        for (const [k, sig] of entries) {
+          if (rawSigs && rawSigs[k] === sig) next[k] = sig;
+          else changed = true;
+        }
+        if (changed) localDismissedSignals.value = next;
+      },
+      { flush: 'post', immediate: true },
+    );
     const signalTriggerLabel = Vue.computed(() => (
       signalStream.value.badgeCount > 0
         ? $t('cosmos.signals.triggerAria', { count: signalStream.value.badgeCount })
@@ -1744,18 +1772,20 @@ export default {
       }
     }
 
+    function focusSignalTrigger() {
+      Vue.nextTick(() => {
+        if (creationsStore.activeCreation) {
+          creationInteriorRef.value?.focusSignalTrigger?.();
+        } else {
+          signalTriggerRef.value?.focus?.();
+        }
+      });
+    }
+
     function closeSignalPopover({ restoreFocus = false } = {}) {
       if (!signalPopoverOpen.value) return;
       signalPopoverOpen.value = false;
-      if (restoreFocus) {
-        Vue.nextTick(() => {
-          if (creationsStore.activeCreation) {
-            creationInteriorRef.value?.focusSignalTrigger?.();
-          } else {
-            signalTriggerRef.value?.focus?.();
-          }
-        });
-      }
+      if (restoreFocus) focusSignalTrigger();
     }
 
     function openSessionInDrawer(agentId, session) {
@@ -1834,7 +1864,7 @@ export default {
       const targetSession = item.session || { id: item.sessionId, runtimeProvider: 'yeaft' };
       if (!projectedAgentsMap.value[item.agentId] || !hasProjectedOrKnownSession(item.agentId, targetSession)) {
         closeSignalPopover({ restoreFocus: true });
-        onDismissSignal(item);
+        onDismissSignal(item, { forceAcknowledge: true });
         showToast($t(!projectedAgentsMap.value[item.agentId]
           ? 'cosmos.signals.agentUnavailable'
           : 'cosmos.signals.sessionUnavailable'));
@@ -1848,8 +1878,17 @@ export default {
       openSessionInDrawer(item.agentId, targetSession);
     }
 
-    function onDismissSignal(item) {
+    function onDismissSignal(item, { forceAcknowledge = false } = {}) {
       if (!item) return;
+      const sig = item.stateSignature || computeSignalStateSignature(item);
+      if (item.signalKey && sig) {
+        if (typeof store.dismissCosmosSignal === 'function') {
+          store.dismissCosmosSignal(item.signalKey, sig);
+        } else {
+          localDismissedSignals.value = { ...localDismissedSignals.value, [item.signalKey]: sig };
+        }
+      }
+      if (!forceAcknowledge && item.kind && item.kind !== 'unread') return;
       if (item.sessionId && item.agentId && typeof store.acknowledgeYeaftSessionSignals === 'function') {
         store.acknowledgeYeaftSessionSignals(item.sessionId, item.agentId, { sessionRead: false });
       } else {
@@ -1863,7 +1902,7 @@ export default {
         store.acknowledgeAllYeaftSessionSignals();
       } else {
         for (const item of signalStream.value.items) {
-          if (item.dismissible) onDismissSignal(item);
+          if (item.kind === 'unread') onDismissSignal(item);
         }
       }
       if (signalPopoverOpen.value && signalStream.value.waitingCount === 0 && signalStream.value.runningCount === 0) {
@@ -2526,7 +2565,7 @@ export default {
       onClickGalaxyStar, onDblClickGalaxyStar, openGalaxyCreation,
       onHoverCardEnter, onHoverCardLeave, onStageWheel, jumpToScale,
       openSessionInDrawer, openAgentConversationFromQuick, openCosmosSessionSearch, onDrawerSelectSession, toggleWorkbenchWiden, closeQuickComposer, closeDrawer,
-      onToggleConstants, onToggleSignalTrigger, closeSignalPopover, onOpenSignal, onDismissSignal, onMarkAllSignalsRead,
+      onToggleConstants, onToggleSignalTrigger, focusSignalTrigger, closeSignalPopover, onOpenSignal, onDismissSignal, onMarkAllSignalsRead,
       openQuickComposerFromDrawer, onDrawerResizeStart, onDrawerResize, onDrawerResizeEnd, onDrawerResizeReset,
       emitTelemetryBeam, onAutoRouted, jumpToWaitingAgent, assignFromMenu,
       onObserveEvent, onFocusDistantEvent, onReturnFromEvent, onStopEvent, onToggleAutoEvents, onToggleAutoZoom, onTogglePauseEvent, onReplayEvent, onNextRandomEvent, onSetEventZoom, onResetEventView, onScrubEvent,

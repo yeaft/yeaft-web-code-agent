@@ -237,11 +237,67 @@ function yeaftTurnStateKey(state, agentId, turnId) {
   return scopedKey || turnId || '';
 }
 
+const MAX_COSMOS_DISMISSED_SIGNALS = 160;
+
+function clearCosmosDismissedSignalsForScope(state, { agentId = null, sessionId = null, kinds = null } = {}) {
+  const map = state?.cosmosDismissedSignalsByKey;
+  if (!map) return false;
+  if (sessionId && !agentId) return false;
+  const keys = Object.keys(map);
+  if (keys.length === 0) return false;
+  const kindList = Array.isArray(kinds) && kinds.length > 0 ? kinds : null;
+  const matchesKind = (sig) => !kindList || (typeof sig === 'string' && kindList.some((k) => sig.startsWith(`${k}\u001f`)));
+  if (!agentId && !sessionId && !kindList) {
+    state.cosmosDismissedSignalsByKey = {};
+    return true;
+  }
+  const exactKey = agentId && sessionId ? `${agentId}\u001f${sessionId}` : null;
+  const agentPrefix = agentId && !sessionId ? `${agentId}\u001f` : null;
+  let changed = false;
+  const next = {};
+  for (const [key, sig] of Object.entries(map)) {
+    const scopeMatch = exactKey
+      ? key === exactKey
+      : (agentPrefix ? key.startsWith(agentPrefix) : true);
+    if (scopeMatch && matchesKind(sig)) {
+      changed = true;
+      continue;
+    }
+    next[key] = sig;
+  }
+  if (!changed) return false;
+  state.cosmosDismissedSignalsByKey = next;
+  return true;
+}
+
+function resolveCliConversationAgentId(state, conversationId, explicitAgentId = null) {
+  if (!conversationId) return null;
+  if (explicitAgentId) return explicitAgentId;
+  const conv = (state?.conversations || []).find((c) => c?.id === conversationId);
+  if (conv?.agentId) return conv.agentId;
+  for (const list of [state?.sidebarSessionCatalog, state?.sessionCatalog]) {
+    if (!Array.isArray(list)) continue;
+    const matches = list.filter((row) => row?.routeRef?.runtimeProvider !== 'yeaft' && row?.routeRef?.sessionId === conversationId && row?.routeRef?.agentId);
+    if (matches.length === 1) return matches[0].routeRef.agentId;
+  }
+  const dismissedMap = state?.cosmosDismissedSignalsByKey;
+  if (dismissedMap) {
+    const suffix = `\u001f${conversationId}`;
+    const matchingKeys = Object.keys(dismissedMap).filter((k) => k.endsWith(suffix) && dismissedMap[k]?.startsWith('running\u001f'));
+    if (matchingKeys.length === 1) {
+      const sep = matchingKeys[0].indexOf('\u001f');
+      if (sep > 0) return matchingKeys[0].slice(0, sep);
+    }
+  }
+  return state?.currentAgent || null;
+}
+
 function clearYeaftAgentRuntimeState(state, agentId) {
   clearSessionTurns(state, agentId);
   clearYeaftRetryableTurnsForScope(state, agentId);
   clearLiveSessionTools(state, { agentId });
   clearYeaftAgentAskPreviews(state, agentId);
+  clearCosmosDismissedSignalsForScope(state, { agentId: agentId || null, kinds: ['running', 'waiting'] });
   if (!agentId) {
     state.activeVpTurns = {};
     state.yeaftQueryProgressByTurn = {};
@@ -767,6 +823,10 @@ export const useChatStore = defineStore('chat', {
     // so Cosmos Signal Stream can display 2~3 lines of real AI output even after background
     // message retention pruning.
     yeaftSessionReplyPreviewByKey: {},
+    // Per-client map of Cosmos Signal Stream items explicitly dismissed by the user
+    // (`${agentId}\u001f${sessionId}` -> stateSignature). Hidden until a genuine state
+    // change occurs (status change, new AskUser prompt, new completion/reply, or new run).
+    cosmosDismissedSignalsByKey: {},
     scheduledTaskNotifications: [],
     scheduledTaskNotificationOwnerId: null,
     scheduledTaskReceiptProtocolSupported: false,
@@ -4177,9 +4237,11 @@ export const useChatStore = defineStore('chat', {
         this.yeaftTurnDeleteHistoryBySession = {};
         this.yeaftUnreadSessionKeys = {};
         this.clearYeaftSessionPreview();
+        clearCosmosDismissedSignalsForScope(this);
       } else if (targetAgentId && targetSessionId && !preserveLiveRows) {
         this.clearYeaftSessionPreview(targetSessionId, targetAgentId);
         this.markYeaftSessionRead(targetSessionId, targetAgentId);
+        clearCosmosDismissedSignalsForScope(this, { agentId: targetAgentId, sessionId: targetSessionId });
       }
       const sessionKey = targetAgentId && targetSessionId
         ? yeaftHistoryIdentityKey(targetAgentId, targetSessionId)
@@ -6932,12 +6994,25 @@ export const useChatStore = defineStore('chat', {
             }
             this.vpStatuses = merged;
           }
-          this.yeaftProcessingSessions = projectYeaftProcessingSnapshot(
+          const prevProcessing = this.yeaftProcessingSessions || {};
+          const nextProcessing = projectYeaftProcessingSnapshot(
             this,
             msg.agentId || null,
             statuses,
             eventSessionId == null ? null : eventSessionId,
           );
+          this.yeaftProcessingSessions = nextProcessing;
+          for (const key of Object.keys(prevProcessing)) {
+            if (!prevProcessing[key] || nextProcessing[key]) continue;
+            const sep = key.indexOf('\u001f');
+            if (sep > 0) {
+              const aid = key.slice(0, sep);
+              const sid = key.slice(sep + 1);
+              if (aid && sid) clearCosmosDismissedSignalsForScope(this, { agentId: aid, sessionId: sid, kinds: ['running'] });
+            } else if (msg.agentId && key) {
+              clearCosmosDismissedSignalsForScope(this, { agentId: msg.agentId, sessionId: key, kinds: ['running'] });
+            }
+          }
           retireSettledQueryProgress(this, msg.agentId, msg.conversationId, statuses);
           reconcileQueryProgressSnapshot(this, msg, statuses);
           if (Array.isArray(event.retryableTurns)) {
@@ -7149,10 +7224,16 @@ export const useChatStore = defineStore('chat', {
       if (!sessionId) return false;
       const ownerAgentId = resolveAgentIdForSession(this, sessionId, agentId);
       if (!ownerAgentId) return false;
-      return recordYeaftSessionReplyPreview(this, {
+      const changed = recordYeaftSessionReplyPreview(this, {
         catalogKey: yeaftCatalogKey(ownerAgentId, sessionId),
         ...patch,
       });
+      if (patch?.clearAsk) {
+        clearCosmosDismissedSignalsForScope(this, { agentId: ownerAgentId, sessionId, kinds: ['waiting'] });
+      } else if (changed && patch?.askQuestion) {
+        clearCosmosDismissedSignalsForScope(this, { agentId: ownerAgentId, sessionId });
+      }
+      return changed;
     },
 
     clearYeaftSessionPreview(sessionId = null, agentId = null) {
@@ -7160,6 +7241,63 @@ export const useChatStore = defineStore('chat', {
       const ownerAgentId = resolveAgentIdForSession(this, sessionId, agentId);
       if (!ownerAgentId) return false;
       return clearYeaftSessionReplyPreview(this, yeaftCatalogKey(ownerAgentId, sessionId));
+    },
+
+    dismissCosmosSignal(signalKey, stateSignature) {
+      if (!signalKey || typeof stateSignature !== 'string' || !stateSignature) return false;
+      const prev = this.cosmosDismissedSignalsByKey || {};
+      if (prev[signalKey] === stateSignature) return false;
+      const next = { ...prev, [signalKey]: stateSignature };
+      const keys = Object.keys(next);
+      if (keys.length > MAX_COSMOS_DISMISSED_SIGNALS) {
+        const excess = keys.length - MAX_COSMOS_DISMISSED_SIGNALS;
+        for (let i = 0; i < excess; i++) {
+          if (keys[i] !== signalKey) delete next[keys[i]];
+        }
+      }
+      this.cosmosDismissedSignalsByKey = next;
+      return true;
+    },
+
+    clearCosmosDismissedSignal(sessionId = null, agentId = null, opts = {}) {
+      if (!sessionId && !agentId) return clearCosmosDismissedSignalsForScope(this, opts);
+      const resolvedAgentId = sessionId ? resolveAgentIdForSession(this, sessionId, agentId) : agentId;
+      if (sessionId && !resolvedAgentId) return false;
+      return clearCosmosDismissedSignalsForScope(this, {
+        agentId: resolvedAgentId || null,
+        sessionId: sessionId || null,
+        kinds: opts?.kinds || null,
+      });
+    },
+
+    clearCliCosmosDismissedSignal(conversationId, explicitAgentId = null) {
+      if (!conversationId) return false;
+      const agentId = resolveCliConversationAgentId(this, conversationId, explicitAgentId);
+      if (!agentId) return false;
+      return clearCosmosDismissedSignalsForScope(this, {
+        agentId,
+        sessionId: conversationId,
+        kinds: ['running'],
+      });
+    },
+
+    pruneCosmosDismissedSignals(rawSignatures) {
+      const prev = this.cosmosDismissedSignalsByKey;
+      if (!prev) return false;
+      const entries = Object.entries(prev);
+      if (entries.length === 0) return false;
+      let changed = false;
+      const next = {};
+      for (const [key, sig] of entries) {
+        if (rawSignatures && rawSignatures[key] === sig) {
+          next[key] = sig;
+        } else {
+          changed = true;
+        }
+      }
+      if (!changed) return false;
+      this.cosmosDismissedSignalsByKey = next;
+      return true;
     },
 
     markYeaftSessionUnread(sessionId, agentId = null) {
@@ -7175,7 +7313,9 @@ export const useChatStore = defineStore('chat', {
         && !(this.workbenchExpanded && this.workbenchMaximized)
         && this.yeaftActiveSessionFilter === sessionId
         && resolveAgentIdForSession(this, sessionId) === ownerAgentId;
-      if (visible || this.yeaftUnreadSessionKeys?.[catalogKey]) return false;
+      if (visible) return false;
+      clearCosmosDismissedSignalsForScope(this, { agentId: ownerAgentId, sessionId });
+      if (this.yeaftUnreadSessionKeys?.[catalogKey]) return false;
       this.yeaftUnreadSessionKeys = {
         ...this.yeaftUnreadSessionKeys,
         [catalogKey]: true,
@@ -8863,6 +9003,9 @@ export const useChatStore = defineStore('chat', {
       if (processingKey) delete next[processingKey];
       if (hasUniqueLegacyYeaftSessionOwner(this, sessionId, resolvedAgentId)) delete next[sessionId];
       this.yeaftProcessingSessions = next;
+      if (resolvedAgentId && sessionId) {
+        clearCosmosDismissedSignalsForScope(this, { agentId: resolvedAgentId, sessionId, kinds: ['running'] });
+      }
       const conversationId = this.yeaftConversationIdsByAgent?.[resolvedAgentId];
       const prefix = yeaftAgentSessionIdentityPrefix(resolvedAgentId);
       if (conversationId && !Object.keys(next).some(key => key.startsWith(prefix))
@@ -9687,6 +9830,7 @@ export const useChatStore = defineStore('chat', {
       this.yeaftStatusByAgent = {};
       this.yeaftUnreadSessionKeys = {};
       this.yeaftSessionReplyPreviewByKey = {};
+      this.cosmosDismissedSignalsByKey = {};
       this.yeaftConversationCovered = false;
       this._yeaftRetiredCatalogEpochsByAgent = {};
       this.conversations = [];

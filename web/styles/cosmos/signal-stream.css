@@ -151,6 +151,7 @@
   position: relative;
   display: flex;
   align-items: stretch;
+  flex-shrink: 0;
   border-radius: 13px;
   background:
     radial-gradient(ellipse 80% 70% at 0% 0%, rgba(var(--p-accent-rgb, 110, 196, 255), 0.11), transparent 68%),
@@ -217,9 +218,9 @@
 
 /* Priority 2: Running — Ultra-Light 1-Line Subordinate Whisper */
 .cosmos-signal-card.is-running {
-  background: linear-gradient(155deg, rgba(5, 11, 24, 0.48) 0%, rgba(3, 7, 16, 0.56) 100%);
-  border-color: rgba(var(--p-accent-rgb, 110, 196, 255), 0.11);
-  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.24);
+  background: linear-gradient(155deg, rgba(5, 11, 24, 0.64) 0%, rgba(3, 7, 16, 0.72) 100%);
+  border-color: rgba(var(--p-accent-rgb, 110, 196, 255), 0.13);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.28);
 }
 
 .cosmos-signal-card.is-running::before {
@@ -229,6 +230,14 @@
 .cosmos-signal-card.is-running .cosmos-signal-main {
   padding: 7px 11px 7px 13px;
   gap: 2px;
+}
+
+.cosmos-signal-card.is-running:has(.cosmos-signal-ack) .cosmos-signal-main {
+  padding-right: 34px;
+}
+
+.cosmos-signal-card.is-running:has(.cosmos-signal-ack) .cosmos-signal-head {
+  padding-right: 0;
 }
 
 .cosmos-signal-main {
@@ -323,12 +332,10 @@
   align-items: center;
   gap: 5px;
   flex-shrink: 0;
-  transition: opacity 140ms ease;
 }
 
-.cosmos-signal-card:has(.cosmos-signal-ack):hover .cosmos-signal-meta,
-.cosmos-signal-card:has(.cosmos-signal-ack):focus-within .cosmos-signal-meta {
-  opacity: 0;
+.cosmos-signal-card:has(.cosmos-signal-ack) .cosmos-signal-head {
+  padding-right: 22px;
 }
 
 .cosmos-signal-chip {
@@ -408,103 +415,214 @@
   -webkit-line-clamp: 3;
 }
 
-/* Hover/Focus-Reveal Single-Click Mark-as-Read Button */
+/* Subtle Always-Reachable Single-Click Close / Dismiss Button */
 .cosmos-signal-ack {
   position: absolute;
-  top: 7px;
-  right: 7px;
+  top: 6px;
+  right: 6px;
   width: 24px;
   height: 24px;
   border-radius: 50%;
   display: grid;
   place-items: center;
-  background: rgba(8, 16, 32, 0.82);
-  border: 1px solid rgba(var(--p-accent-rgb, 110, 196, 255), 0.24);
-  color: rgba(208, 228, 252, 0.84);
+  background: transparent;
+  border: 1px solid transparent;
+  color: rgba(196, 218, 246, 0.78);
   cursor: pointer;
-  opacity: 0;
-  pointer-events: none;
-  transition: opacity 140ms ease, background 140ms ease, border-color 140ms ease, color 140ms ease;
+  opacity: 0.44;
+  transition: opacity 140ms ease, background 140ms ease, border-color 140ms ease, color 140ms ease, transform 140ms ease;
+}
+
+.cosmos-signal-card.is-running .cosmos-signal-ack {
+  top: 50%;
+  right: 6px;
+  transform: translateY(-50%);
+}
+
+.cosmos-signal-card.is-waiting .cosmos-signal-ack {
+  color: rgba(255, 224, 170, 0.84);
 }
 
 .cosmos-signal-card:hover .cosmos-signal-ack,
 .cosmos-signal-card:focus-within .cosmos-signal-ack {
-  opacity: 1;
-  pointer-events: auto;
+  opacity: 0.88;
 }
 
 .cosmos-signal-ack:hover,
 .cosmos-signal-ack:focus-visible {
-  background: rgba(var(--p-accent-rgb, 110, 196, 255), 0.24);
-  border-color: rgba(var(--p-accent-rgb, 110, 196, 255), 0.56);
+  opacity: 1;
+  background: rgba(var(--p-accent-rgb, 110, 196, 255), 0.20);
+  border-color: rgba(var(--p-accent-rgb, 110, 196, 255), 0.46);
   color: #fff;
+  outline: none;
+}
+
+.cosmos-signal-ack:focus-visible {
+  box-shadow: 0 0 0 1.5px rgba(138, 206, 255, 0.85);
+}
+
+.cosmos-signal-card.is-waiting .cosmos-signal-ack:hover,
+.cosmos-signal-card.is-waiting .cosmos-signal-ack:focus-visible {
+  background: rgba(255, 190, 92, 0.22);
+  border-color: rgba(255, 206, 122, 0.56);
 }
 
 .cosmos-signal-ack svg {
-  width: 12px;
-  height: 12px;
+  width: 11px;
+  height: 11px;
   stroke: currentColor;
   fill: none;
-  stroke-width: 2.1;
+  stroke-width: 2.0;
   stroke-linecap: round;
   stroke-linejoin: round;
 }
 
-/* ── Subtle Footer Bar (Overflow + Mark All Read) ── */
-.cosmos-signal-footer {
+/* ── Integrated Deck Header (Expanded) & Stacked-Card Peek Strip (Collapsed Overflow) ── */
+.cosmos-signal-deck-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  padding: 2px 4px;
+  min-height: 30px;
+  padding: 3px 10px 3px 12px;
+  border-radius: 11px;
+  background: linear-gradient(155deg, rgba(6, 13, 28, 0.72) 0%, rgba(4, 9, 20, 0.78) 100%);
+  border: 1px solid rgba(186, 214, 255, 0.14);
+  backdrop-filter: blur(18px) saturate(140%);
+  -webkit-backdrop-filter: blur(18px) saturate(140%);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.32), inset 0 1px 0 rgba(255, 255, 255, 0.05);
   pointer-events: auto;
 }
 
-.cosmos-signal-foot-spacer {
-  flex: 1;
+.cosmos-signal-deck-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  font-size: 11px;
+  font-weight: 500;
+  color: rgba(214, 230, 252, 0.80);
+  letter-spacing: 0.02em;
+}
+
+.cosmos-signal-deck-label > span:first-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.cosmos-signal-deck-num {
+  flex-shrink: 0;
+  font-family: var(--font-mono, monospace);
+  font-size: 10.5px;
+  color: rgba(154, 188, 228, 0.74);
+  font-variant-numeric: tabular-nums;
+}
+
+.cosmos-signal-deck-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.cosmos-signal-deck-div {
+  width: 1px;
+  height: 10px;
+  background: rgba(186, 214, 255, 0.16);
+  flex-shrink: 0;
+}
+
+/* Tactile folded-stack peek bar tucked neatly beneath card #3 */
+.cosmos-signal-deck-peek {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: -2px 8px 0;
+  min-height: 28px;
+  padding: 2px 10px 2px 12px;
+  border-radius: 10px;
+  background: linear-gradient(180deg, rgba(6, 13, 28, 0.56) 0%, rgba(4, 9, 20, 0.68) 100%);
+  border: 1px solid rgba(186, 214, 255, 0.12);
+  backdrop-filter: blur(16px) saturate(135%);
+  -webkit-backdrop-filter: blur(16px) saturate(135%);
+  box-shadow: 0 8px 22px rgba(0, 0, 0, 0.28), inset 0 1px 0 rgba(255, 255, 255, 0.05);
+  pointer-events: auto;
+  transition: border-color 160ms ease, background 160ms ease;
+}
+
+.cosmos-signal-deck-peek:hover {
+  border-color: rgba(186, 214, 255, 0.28);
+  background: linear-gradient(180deg, rgba(9, 18, 36, 0.72) 0%, rgba(5, 11, 24, 0.78) 100%);
+}
+
+.cosmos-signal-quiet-row {
+  display: flex;
+  justify-content: flex-end;
+  padding: 0 4px;
+  pointer-events: none;
 }
 
 .cosmos-signal-foot-btn {
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  height: 24px;
-  padding: 0 9px;
-  border-radius: 999px;
-  background: rgba(5, 11, 24, 0.58);
-  border: 1px solid rgba(186, 214, 255, 0.14);
-  backdrop-filter: blur(14px);
-  -webkit-backdrop-filter: blur(14px);
-  color: rgba(196, 216, 244, 0.82);
+  min-height: 24px;
+  padding: 0 4px;
+  border-radius: 6px;
+  background: transparent;
+  border: 0;
+  color: rgba(196, 218, 246, 0.78);
   font-size: 11px;
+  font-weight: 450;
+  white-space: nowrap;
+  flex-shrink: 0;
   cursor: pointer;
-  transition: color 140ms ease, border-color 140ms ease, background 140ms ease;
+  pointer-events: auto;
+  transition: color 140ms ease, background 140ms ease;
 }
 
 .cosmos-signal-foot-btn:hover {
   color: #fff;
-  background: rgba(12, 22, 42, 0.84);
-  border-color: rgba(186, 214, 255, 0.34);
+  background: rgba(186, 214, 255, 0.08);
+}
+
+.cosmos-signal-foot-btn.is-peek-expand {
+  flex: 1;
+  min-width: 0;
+  justify-content: flex-start;
+  min-height: 24px;
+  padding: 0;
+  color: rgba(206, 226, 252, 0.84);
+}
+
+.cosmos-signal-foot-btn.is-peek-expand:hover {
+  background: transparent;
+  color: #fff;
 }
 
 .cosmos-signal-foot-btn.is-mark-all {
-  background: transparent;
-  border-color: transparent;
-  backdrop-filter: none;
-  color: rgba(178, 204, 238, 0.76);
-}
-
-.cosmos-signal-stream .cosmos-signal-foot-btn.is-mark-all {
-  background: rgba(5, 11, 24, 0.56);
-  border-color: rgba(186, 214, 255, 0.12);
-  backdrop-filter: blur(14px);
-  -webkit-backdrop-filter: blur(14px);
+  color: rgba(176, 204, 238, 0.72);
+  padding: 0 5px;
 }
 
 .cosmos-signal-foot-btn.is-mark-all:hover {
   color: #fff;
-  background: rgba(186, 214, 255, 0.10);
-  border-color: rgba(186, 214, 255, 0.16);
+  background: rgba(186, 214, 255, 0.09);
+}
+
+.cosmos-signal-foot-btn.is-bare {
+  min-height: 24px;
+  padding: 0 5px;
+  color: rgba(186, 212, 244, 0.66);
+  text-shadow: 0 1px 6px rgba(0, 0, 0, 0.85);
+}
+
+.cosmos-signal-foot-btn.is-bare:hover {
+  color: #fff;
+  background: rgba(6, 13, 28, 0.48);
 }
 
 .cosmos-signal-chev {
@@ -736,17 +854,21 @@
   transition: transform 240ms var(--c-ease);
 }
 
-/* Touch devices: keep single-tap mark-read visible without requiring hover */
+/* Touch devices: raise resting visibility and tap area for single-tap dismiss */
 @media (hover: none) {
   .cosmos-signal-ack {
-    opacity: 0.82;
-    pointer-events: auto;
+    opacity: 0.78;
+    width: 26px;
+    height: 26px;
   }
   .cosmos-signal-card:has(.cosmos-signal-ack) .cosmos-signal-head {
     padding-right: 26px;
   }
-  .cosmos-signal-card:has(.cosmos-signal-ack):hover .cosmos-signal-meta {
-    opacity: 1;
+  .cosmos-signal-card.is-running:has(.cosmos-signal-ack) .cosmos-signal-main {
+    padding-right: 36px;
+  }
+  .cosmos-signal-card.is-running:has(.cosmos-signal-ack) .cosmos-signal-head {
+    padding-right: 0;
   }
 }
 

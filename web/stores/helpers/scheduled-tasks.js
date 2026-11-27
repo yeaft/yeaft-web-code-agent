@@ -188,6 +188,7 @@ export function acceptScheduledTaskNotification(store, event, agentId) {
   };
   store.scheduledTaskNotifications = [...(store.scheduledTaskNotifications || []), item].slice(-MAX_NOTIFICATIONS);
   store.markYeaftSessionUnread?.(item.sessionId, agentId);
+  store.clearCosmosDismissedSignal?.(item.sessionId, agentId);
   // Permission is never requested during background execution. In-app notices
   // remain available regardless of browser desktop-notification permission.
   if (typeof Notification !== 'undefined' && Notification.permission === 'granted') {

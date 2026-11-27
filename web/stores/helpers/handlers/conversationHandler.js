@@ -386,6 +386,7 @@ export function handleConversationResumed(store, msg) {
 }
 
 export function handleConversationDeleted(store, msg) {
+  const deletedConv = (store.conversations || []).find(c => c.id === msg.conversationId);
   store.conversations = store.conversations.filter(c => c.id !== msg.conversationId);
   delete store.messagesMap[msg.conversationId];
   // perf-chat-session-switch-cache: mirror messagesMap cleanup — see
@@ -395,6 +396,7 @@ export function handleConversationDeleted(store, msg) {
   delete store.conversationTitles[msg.conversationId];
   delete store.customConversationTitles[msg.conversationId];
   delete store.processingConversations[msg.conversationId];
+  store.clearCliCosmosDismissedSignal?.(msg.conversationId, msg.agentId || deletedConv?.agentId || null);
   if (store._closedAt) delete store._closedAt[msg.conversationId];
   stopProcessingWatchdog(store, msg.conversationId);
   delete store.executionStatusMap[msg.conversationId];
