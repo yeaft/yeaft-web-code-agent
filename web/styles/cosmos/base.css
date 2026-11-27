@@ -35,7 +35,8 @@
 .cosmos-spatial-layer,
 .cosmos-scale-gauge,
 .cosmos-corner-actions,
-.cosmos-corner-dock,
+.cosmos-whisper-btn,
+.cosmos-whisper-note,
 .cosmos-drag-ghost,
 .cosmos-event-pill,
 .cosmos-watch-dock,
@@ -340,6 +341,7 @@
   color: var(--c-ink);
   font-size: 12px;
   user-select: text;
+  -webkit-user-select: text;
 }
 
 .cosmos-book-foot {

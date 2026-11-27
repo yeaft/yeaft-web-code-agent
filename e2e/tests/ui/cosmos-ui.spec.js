@@ -355,10 +355,23 @@ test.describe('Yeaft Cosmos UI', () => {
     await page.evaluate(() => window.getSelection()?.removeAllRanges?.());
 
     // Dragging the 3D stage outside the drawer applies transient .is-orbiting user-select guard and clears on release
-    await page.mouse.move(Math.max(24, drawerEdgeBox.x - 80), 220);
+    const emptyCanvasPt = await page.evaluate((maxX) => {
+      const candidatesX = [Math.max(120, maxX - 80), Math.max(120, maxX - 180), Math.max(120, maxX - 280), 220];
+      const candidatesY = [140, 220, 560, 620, 320];
+      for (const y of candidatesY) {
+        for (const x of candidatesX) {
+          if (x >= maxX - 24) continue;
+          const el = document.elementFromPoint(x, y);
+          if (el && el.classList?.contains('cosmos-gl-canvas')) return { x, y };
+        }
+      }
+      return null;
+    }, drawerEdgeBox.x);
+    expect(emptyCanvasPt).not.toBeNull();
+    await page.mouse.move(emptyCanvasPt.x, emptyCanvasPt.y);
     await page.mouse.down();
     await expect(page.locator('.cosmos-page')).toHaveClass(/is-orbiting/);
-    await page.mouse.move(Math.max(24, drawerEdgeBox.x - 120), 235, { steps: 3 });
+    await page.mouse.move(Math.max(24, emptyCanvasPt.x - 40), emptyCanvasPt.y + 15, { steps: 3 });
     await page.mouse.up();
     await expect(page.locator('.cosmos-page')).not.toHaveClass(/is-orbiting/);
     await expect(page.locator('.cosmos-drawer')).toBeVisible();

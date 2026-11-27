@@ -2976,6 +2976,8 @@ describe('Cosmos Drawer Waiting Suppression, Horizontal Drag Resize & Session St
       expect(rootRuleMatch).toBeTruthy();
       expect(rootRuleMatch[1]).not.toMatch(/user-select\s*:\s*none/i);
       expect(baseCss).toMatch(/\.cosmos-page\.is-orbiting[\s\S]*?user-select\s*:\s*none/i);
+      expect(baseCss).not.toMatch(/\.cosmos-corner-dock[^{]*\{[^}]*user-select\s*:\s*none/i);
+      expect(baseCss).toMatch(/\.cosmos-book-input\s*\{[^}]*-webkit-user-select\s*:\s*text/i);
       const glCanvas = wrapper.find('.cosmos-gl-canvas');
       await glCanvas.trigger('pointerdown', { pointerType: 'mouse', button: 0, pointerId: 31, clientX: 200, clientY: 200 });
       await flushPromises();
