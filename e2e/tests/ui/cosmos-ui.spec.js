@@ -310,11 +310,24 @@ test.describe('Yeaft Cosmos UI', () => {
       await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
     }
 
-    // 1. Clicking a planet opens Quick Auto-Route Composer (NOT right drawer)
+    // 1. Clicking a planet opens Quick Auto-Route Composer (NOT right drawer);
+    //    clicking its Close button closes the composer AND returns camera focus to the Sun.
     await expect(async () => {
       const b = await earthTag.boundingBox();
       expect(Boolean(b && b.x > 10 && b.x + b.width < 1270 && b.y > 10 && b.y + b.height < 710)).toBe(true);
     }).toPass({ timeout: 3000 });
+    await clickOrbiting(earthTag);
+    await expect(page.locator('.cosmos-quick-composer')).toBeVisible();
+    await expect(page.locator('.cosmos-planet-focus-dock')).toBeVisible();
+    await page.locator('.cosmos-quick-close-btn').click();
+    await expect(page.locator('.cosmos-quick-composer')).toHaveCount(0);
+    await expect(page.locator('.cosmos-planet-focus-dock')).toHaveCount(0);
+
+    // Re-open Quick Auto-Route Composer on Earth for tuning & send checks
+    await expect(async () => {
+      const b = await earthTag.boundingBox();
+      expect(Boolean(b && b.x > 10 && b.x + b.width < 1270 && b.y > 10 && b.y + b.height < 710)).toBe(true);
+    }).toPass({ timeout: 5000 });
     await clickOrbiting(earthTag);
     await expect(page.locator('.cosmos-quick-composer')).toBeVisible();
     await expect(page.locator('.cosmos-drawer')).toHaveCount(0);
@@ -673,13 +686,13 @@ test.describe('Yeaft Cosmos UI', () => {
     await page.locator('.cosmos-drawer-head-left .cosmos-icon-btn').first().click();
     await expect(page.locator('.cosmos-history-drawer')).toHaveCount(0);
 
-    // Close drawer via Escape, then return from planet focus to Sun center via Escape
+    // Close drawer via Escape -> automatically returns camera focus from planet to Sun center
     await page.keyboard.press('Escape');
     await expect(page.locator('.cosmos-drawer')).toHaveCount(0);
-    await page.keyboard.press('Escape');
     await expect(page.locator('.cosmos-planet-focus-dock')).toHaveCount(0);
 
-    // 3. Hover planet -> click specific session -> opens right planetary drawer
+    // 3. Hover planet -> click specific session -> opens right planetary drawer;
+    //    clicking the drawer Close button closes it AND returns camera focus to the Sun.
     // Note: after closing the drawer, camera centerShiftX smoothly lerps back,
     // so track Saturn's live screen position until the hover card opens.
     const saturnTag = page.locator('.cosmos-planet-node[data-planet-id="saturn"] .cosmos-planet-tag');
@@ -691,8 +704,10 @@ test.describe('Yeaft Cosmos UI', () => {
     await page.locator('.cosmos-hover-row').first().click();
     await expect(page.locator('.cosmos-drawer')).toBeVisible();
     await expect(page.locator('.cosmos-drawer')).toHaveAttribute('data-planet-theme', 'saturn');
-    await page.keyboard.press('Escape');
-    await page.keyboard.press('Escape');
+    await expect(page.locator('.cosmos-planet-focus-dock')).toBeVisible();
+    await page.locator('.cosmos-drawer-head .cosmos-icon-btn').last().click();
+    await expect(page.locator('.cosmos-drawer')).toHaveCount(0);
+    await expect(page.locator('.cosmos-planet-focus-dock')).toHaveCount(0);
 
     // 3b. Verify the 2 deep-sky portals (Galaxy, Cosmic Web) have ZERO overlaid text labels (Event Horizon is Sun-zoom only)
     const portals = page.locator('.cosmos-sky-anomaly');

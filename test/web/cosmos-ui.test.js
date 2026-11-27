@@ -3634,4 +3634,111 @@ describe('Cosmos Interstellar Signal Stream (Unified Top-Right Replies, Schedule
     wrapper = null;
     expect(pageStore.yeaftConversationCovered).toBe(false);
   });
+
+  it('returns camera focus to the Sun when closing either Quick Auto-Route Composer or Session Drawer', async () => {
+    const pageStore = Vue.reactive({
+      agents: [{ id: 'ag-1', name: 'Earth-Mac', online: true, workDir: '/srv', capabilities: ['session_auto_route'] }],
+      currentAgent: 'ag-1',
+      currentView: 'yeaft',
+      yeaftActiveSessionFilter: 'sess-1',
+      yeaftConversationCovered: false,
+      workbenchExpanded: false,
+      workbenchMaximized: false,
+      sessionCatalog: [{
+        catalogKey: 'yeaft:ag-1:sess-1',
+        runtimeProvider: 'yeaft',
+        routeRef: { runtimeProvider: 'yeaft', agentId: 'ag-1', sessionId: 'sess-1' },
+        title: 'Live Orbit Session',
+        metadataUpdatedAt: new Date().toISOString(),
+      }],
+      sessionProjects: [],
+      yeaftProcessingSessions: {},
+      yeaftUnreadSessionKeys: {},
+      yeaftSessionReplyPreviewByKey: {},
+      scheduledTaskNotifications: [],
+      yeaftActiveTasksBySession: {},
+      messagesMap: {},
+      isYeaftSessionProcessing: () => false,
+      isYeaftSessionUnread: () => false,
+      acknowledgeYeaftSessionSignals: vi.fn(),
+    });
+    globalThis.Pinia = {
+      defineStore: () => () => ({}),
+      useChatStore: () => pageStore,
+      useSessionsStore: () => ({ sessionList: [], activeSessionId: 'sess-1', sessionById: () => null }),
+    };
+
+    const { default: CosmosPage } = await import('../../web/components/cosmos/CosmosPage.js');
+    wrapper = mount(CosmosPage, {
+      global: {
+        config: { globalProperties: { $t: (k) => k } },
+        stubs: {
+          CosmosQuickComposer: {
+            props: ['agent', 'planetId'],
+            emits: ['close'],
+            template: '<div class="quick-stub"><button class="quick-stub-close" @click="$emit(\'close\')">x</button></div>',
+          },
+          CosmosConversationDrawer: {
+            props: ['agent', 'planetId'],
+            emits: ['close'],
+            template: '<div class="drawer-stub"><button class="drawer-stub-close" @click="$emit(\'close\')">x</button></div>',
+          },
+          CosmosConstantsPopover: true,
+          CosmosEventsOverlay: true,
+          SettingsPanel: true,
+          AgentSettingsPanel: true,
+          SessionSettingsModal: true,
+        },
+      },
+    });
+    await flushPromises();
+
+    // 1. Quick Auto-Route Composer: clicking close returns camera focus to the Sun
+    wrapper.vm.focusPlanet('earth');
+    wrapper.vm.quickAgentId = 'ag-1';
+    await flushPromises();
+    expect(wrapper.vm.focusedCameraPlanetId).toBe('earth');
+    expect(wrapper.find('.cosmos-planet-focus-dock').exists()).toBe(true);
+    await wrapper.find('.quick-stub-close').trigger('click');
+    await flushPromises();
+    expect(wrapper.vm.quickAgentId).toBeNull();
+    expect(wrapper.vm.focusedCameraPlanetId).toBeNull();
+    expect(wrapper.find('.cosmos-planet-focus-dock').exists()).toBe(false);
+
+    // 2. Session Conversation Drawer: clicking close returns camera focus to the Sun
+    wrapper.vm.openSessionInDrawer('ag-1', { id: 'sess-1', runtimeProvider: 'yeaft' });
+    await flushPromises();
+    expect(wrapper.vm.drawerOpen).toBe(true);
+    expect(wrapper.vm.focusedCameraPlanetId).toBe('earth');
+    await wrapper.find('.drawer-stub-close').trigger('click');
+    await flushPromises();
+    expect(wrapper.vm.drawerOpen).toBe(false);
+    expect(wrapper.vm.focusedCameraPlanetId).toBeNull();
+    expect(wrapper.find('.cosmos-planet-focus-dock').exists()).toBe(false);
+
+    // 3. Switching from Drawer -> Quick Composer preserves planet focus; closing Quick Composer returns to the Sun
+    wrapper.vm.openSessionInDrawer('ag-1', { id: 'sess-1', runtimeProvider: 'yeaft' });
+    await flushPromises();
+    wrapper.vm.openQuickComposerFromDrawer('ag-1');
+    await flushPromises();
+    expect(wrapper.vm.drawerOpen).toBe(false);
+    expect(wrapper.vm.quickAgentId).toBe('ag-1');
+    expect(wrapper.vm.focusedCameraPlanetId).toBe('earth');
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', cancelable: true }));
+    await flushPromises();
+    expect(wrapper.vm.quickAgentId).toBeNull();
+    expect(wrapper.vm.focusedCameraPlanetId).toBeNull();
+
+    // 4. Pressing Escape while Session Drawer is open closes drawer AND returns to the Sun
+    wrapper.vm.openSessionInDrawer('ag-1', { id: 'sess-1', runtimeProvider: 'yeaft' });
+    await flushPromises();
+    expect(wrapper.vm.focusedCameraPlanetId).toBe('earth');
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', cancelable: true }));
+    await flushPromises();
+    expect(wrapper.vm.drawerOpen).toBe(false);
+    expect(wrapper.vm.focusedCameraPlanetId).toBeNull();
+
+    wrapper.unmount();
+    wrapper = null;
+  });
 });
