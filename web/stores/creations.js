@@ -13,6 +13,8 @@ const { defineStore } = Pinia;
 const KEY_SEP = '\u001f';
 const pendingRequests = new Map();
 let requestSeq = 0;
+let storeGeneration = 0;
+let openActivationSeq = 0;
 
 export function creationDetailKey(agentId, creationId) {
   return `${agentId}${KEY_SEP}${creationId}`;
@@ -67,6 +69,7 @@ function ensureDetailBucket(state, agentId, creationId) {
       nodes: [],
       canon: [],
       sources: [],
+      assets: [],
       threads: [],
       proposals: [],
       runs: [],
@@ -74,6 +77,11 @@ function ensureDetailBucket(state, agentId, creationId) {
     };
   }
   return state.detailsByKey[key];
+}
+
+function isFolderNode(node) {
+  if (!node) return false;
+  return node.kind === 'folder' || node.nodeType === 'folder' || node.type === 'folder' || node.isFolder === true;
 }
 
 function deleteKeysWithPrefix(mapObj, prefix) {
@@ -275,7 +283,49 @@ export const useCreationsStore = defineStore('creations', {
         }));
     },
 
+    _syncCreationSummaryFromDetail(agentId, creationId, creationPatch = null) {
+      const bucket = this.byAgent[agentId];
+      const dKey = creationDetailKey(agentId, creationId);
+      const detail = this.detailsByKey[dKey];
+      if (!bucket || !Array.isArray(bucket.list)) return;
+      const idx = bucket.list.findIndex((c) => c && c.id === creationId);
+      if (idx < 0 && !creationPatch) return;
+
+      const patch = {};
+      if (detail) {
+        if (Array.isArray(detail.nodes)) {
+          const units = detail.nodes.filter((n) => n && !isFolderNode(n));
+          patch.unitCount = units.length;
+          const readableUnits = units.filter((u) => (u.wordCount || 0) > 0 || u.hasContent || u.status === 'draft' || u.status === 'final');
+          patch.readableUnitCount = readableUnits.length;
+          patch.hasReadableContent = readableUnits.length > 0;
+          patch.wordCount = units.reduce((sum, u) => sum + (Number(u.wordCount) || 0), 0);
+        }
+        if (Array.isArray(detail.sources)) {
+          patch.sourceCount = detail.sources.length;
+        }
+        if (Array.isArray(detail.proposals)) {
+          patch.pendingProposalCount = detail.proposals.filter((p) => p && p.status === 'pending').length;
+        }
+      }
+      if (creationPatch && typeof creationPatch === 'object') {
+        Object.assign(patch, creationPatch);
+      }
+
+      if (idx >= 0) {
+        const next = bucket.list.slice();
+        next[idx] = { ...next[idx], ...patch };
+        bucket.list = next;
+        if (detail && detail.creation) {
+          detail.creation = { ...detail.creation, ...patch };
+        }
+      } else if (creationPatch && creationPatch.id) {
+        bucket.list = upsertById(bucket.list, { ...creationPatch, ...patch });
+      }
+    },
+
     async selectGalaxyAgent(agentId, { force = false } = {}) {
+      openActivationSeq += 1;
       const nextId = String(agentId || '').trim();
       this.selectedAgentId = nextId;
 
@@ -295,23 +345,29 @@ export const useCreationsStore = defineStore('creations', {
       const targetId = String(agentId || this.selectedAgentId || '').trim();
       if (!targetId) return [];
 
+      const gen = storeGeneration;
       const bucket = this._ensureAgentBucket(targetId);
       bucket.loading = true;
       bucket.error = null;
 
       try {
         const res = await this.request(targetId, 'list_creations', opts);
+        if (gen !== storeGeneration) return [];
         const list = Array.isArray(res?.creations)
           ? res.creations
           : (Array.isArray(res?.items) ? res.items : (Array.isArray(res) ? res : []));
-        bucket.list = list;
-        bucket.loaded = true;
-        bucket.loading = false;
-        bucket.error = null;
+        const currentBucket = this._ensureAgentBucket(targetId);
+        currentBucket.list = list;
+        currentBucket.loaded = true;
+        currentBucket.loading = false;
+        currentBucket.error = null;
         return list;
       } catch (err) {
-        bucket.loading = false;
-        bucket.error = err?.message || 'Failed to load creations';
+        if (gen === storeGeneration) {
+          const currentBucket = this._ensureAgentBucket(targetId);
+          currentBucket.loading = false;
+          currentBucket.error = err?.message || 'Failed to load creations';
+        }
         throw err;
       }
     },
@@ -320,6 +376,7 @@ export const useCreationsStore = defineStore('creations', {
       const targetId = String(agentId || this.selectedAgentId || '').trim();
       if (!targetId) throw new Error('No Agent selected');
 
+      const gen = storeGeneration;
       const { rawFiles, ...rest } = payload || {};
       let attachments = Array.isArray(rest.attachments) ? rest.attachments.slice() : [];
       if (rawFiles && rawFiles.length > 0) {
@@ -333,6 +390,7 @@ export const useCreationsStore = defineStore('creations', {
       };
 
       const res = await this.request(targetId, 'create_creation', reqPayload);
+      if (gen !== storeGeneration) return res;
       const creation = res?.creation || (res?.id ? res : null);
 
       if (creation && creation.id) {
@@ -345,6 +403,7 @@ export const useCreationsStore = defineStore('creations', {
         if (Array.isArray(res?.nodes)) detail.nodes = res.nodes;
         if (Array.isArray(res?.canon)) detail.canon = res.canon;
         if (Array.isArray(res?.sources)) detail.sources = res.sources;
+        if (Array.isArray(res?.assets)) detail.assets = res.assets;
         if (Array.isArray(res?.threads)) detail.threads = res.threads;
         if (Array.isArray(res?.proposals)) detail.proposals = res.proposals;
         if (Array.isArray(res?.runs)) detail.runs = res.runs;
@@ -358,11 +417,17 @@ export const useCreationsStore = defineStore('creations', {
       const targetId = String(agentId || this.selectedAgentId || '').trim();
       if (!targetId || !creationId) throw new Error('Missing agentId or creationId');
 
+      const gen = storeGeneration;
+      const seq = ++openActivationSeq;
+
       const res = await this.request(targetId, 'get_creation', { creationId });
+      if (gen !== storeGeneration) return null;
+
       const creation = res?.creation || res || {};
       const nodes = Array.isArray(res?.nodes) ? res.nodes : [];
       const canon = Array.isArray(res?.canon) ? res.canon : [];
       const sources = Array.isArray(res?.sources) ? res.sources : [];
+      const assets = Array.isArray(res?.assets) ? res.assets : [];
       const threads = Array.isArray(res?.threads) ? res.threads : [];
       const proposals = Array.isArray(res?.proposals) ? res.proposals : [];
       const runs = Array.isArray(res?.runs) ? res.runs : [];
@@ -373,6 +438,7 @@ export const useCreationsStore = defineStore('creations', {
         nodes,
         canon,
         sources,
+        assets,
         threads,
         proposals,
         runs,
@@ -384,6 +450,10 @@ export const useCreationsStore = defineStore('creations', {
         bucket.list = upsertById(bucket.list, creation);
       }
 
+      if (seq !== openActivationSeq) {
+        return this.detailsByKey[dKey];
+      }
+
       const defaultMode = (creation.hasReadableContent || (creation.readableUnitCount || 0) > 0)
         ? 'read'
         : 'studio';
@@ -391,7 +461,7 @@ export const useCreationsStore = defineStore('creations', {
 
       const readingId = creation.readingNodeId;
       const hasReadingNode = readingId && nodes.some((n) => n && n.id === readingId);
-      const firstUnit = nodes.find((n) => n && (n.nodeType === 'unit' || n.type === 'unit' || !n.isFolder))
+      const firstUnit = nodes.find((n) => n && !isFolderNode(n))
         || nodes[0]
         || null;
       const initialNodeId = hasReadingNode ? readingId : (firstUnit?.id || null);
@@ -414,10 +484,11 @@ export const useCreationsStore = defineStore('creations', {
         }
       }
 
-      return this.detailsByKey[dKey];
+      return gen === storeGeneration ? (this.detailsByKey[dKey] || null) : null;
     },
 
     closeCreation() {
+      openActivationSeq += 1;
       this.activeCreation = null;
     },
 
@@ -594,6 +665,7 @@ export const useCreationsStore = defineStore('creations', {
     },
 
     async loadNode(agentId, creationId, nodeId) {
+      const gen = storeGeneration;
       const nKey = creationNodeKey(agentId, creationId, nodeId);
       const prev = this.nodeContentsByKey[nKey] || {
         content: '',
@@ -605,6 +677,7 @@ export const useCreationsStore = defineStore('creations', {
 
       try {
         const res = await this.request(agentId, 'get_node', { creationId, nodeId });
+        if (gen !== storeGeneration) return null;
         const content = res?.content !== undefined
           ? res.content
           : (res?.node?.content !== undefined ? res.node.content : '');
@@ -628,13 +701,20 @@ export const useCreationsStore = defineStore('creations', {
         }
         return this.nodeContentsByKey[nKey];
       } catch (err) {
-        this.nodeContentsByKey[nKey] = { ...prev, loading: false };
+        if (gen === storeGeneration) {
+          this.nodeContentsByKey[nKey] = { ...prev, loading: false };
+        }
         throw err;
       }
     },
 
     async updateNode(agentId, creationId, nodeId, patch = {}) {
+      const gen = storeGeneration;
       const res = await this.request(agentId, 'update_node', { creationId, nodeId, ...patch });
+      if (gen !== storeGeneration) return res;
+      if (res?.conflict === true) {
+        return res;
+      }
       const nKey = creationNodeKey(agentId, creationId, nodeId);
       const prev = this.nodeContentsByKey[nKey] || {
         content: '',
@@ -658,6 +738,7 @@ export const useCreationsStore = defineStore('creations', {
       if (res?.node && res.node.id) {
         const detail = ensureDetailBucket(this, agentId, creationId);
         detail.nodes = upsertById(detail.nodes, res.node);
+        this._syncCreationSummaryFromDetail(agentId, creationId, res?.creation || null);
       }
       return res;
     },
@@ -698,12 +779,19 @@ export const useCreationsStore = defineStore('creations', {
       return res;
     },
 
-    async restoreRevision(agentId, creationId, nodeId, revisionId) {
-      const res = await this.request(agentId, 'restore_revision', {
+    async restoreRevision(agentId, creationId, nodeId, revisionId, opts = {}) {
+      const gen = storeGeneration;
+      const reqPayload = {
         creationId,
         nodeId,
         revisionId,
-      });
+        ...(opts && Object.hasOwn(opts, 'baseRevId') ? { baseRevId: opts.baseRevId } : {}),
+      };
+      const res = await this.request(agentId, 'restore_revision', reqPayload);
+      if (gen !== storeGeneration) return res;
+      if (res?.conflict === true) {
+        return res;
+      }
       const nKey = creationNodeKey(agentId, creationId, nodeId);
       const prev = this.nodeContentsByKey[nKey] || {
         content: '',
@@ -721,17 +809,36 @@ export const useCreationsStore = defineStore('creations', {
       if (res?.node && res.node.id) {
         const detail = ensureDetailBucket(this, agentId, creationId);
         detail.nodes = upsertById(detail.nodes, res.node);
+        this._syncCreationSummaryFromDetail(agentId, creationId, res?.creation || null);
       }
       return res;
     },
 
+    async listProposals(agentId, creationId, opts = {}) {
+      const gen = storeGeneration;
+      const res = await this.request(agentId, 'list_proposals', { creationId, ...opts });
+      if (gen !== storeGeneration) return [];
+      const proposals = Array.isArray(res?.proposals) ? res.proposals : (Array.isArray(res) ? res : []);
+      const detail = ensureDetailBucket(this, agentId, creationId);
+      for (const prop of proposals) {
+        detail.proposals = upsertById(detail.proposals, prop);
+      }
+      this._syncCreationSummaryFromDetail(agentId, creationId);
+      return proposals;
+    },
+
     async resolveProposal(agentId, creationId, proposalId, decision, editedPayload) {
+      const gen = storeGeneration;
       const res = await this.request(agentId, 'resolve_proposal', {
         creationId,
         proposalId,
         decision,
         ...(editedPayload !== undefined ? { editedPayload } : {}),
       });
+      if (gen !== storeGeneration) return res;
+      if (res?.conflict === true) {
+        return res;
+      }
       const detail = ensureDetailBucket(this, agentId, creationId);
       if (res?.proposal && res.proposal.id) {
         detail.proposals = upsertById(detail.proposals, res.proposal);
@@ -756,15 +863,18 @@ export const useCreationsStore = defineStore('creations', {
       if (res?.canon && res.canon.id) {
         detail.canon = upsertById(detail.canon, res.canon);
       }
+      this._syncCreationSummaryFromDetail(agentId, creationId, res?.creation || null);
       return res;
     },
 
     async loadThread(agentId, creationId, scopeType = 'global', scopeId = null) {
+      const gen = storeGeneration;
       const res = await this.request(agentId, 'get_thread', {
         creationId,
         scopeType,
         scopeId: scopeId || null,
       });
+      if (gen !== storeGeneration) return null;
       const thread = res?.thread || {
         id: res?.threadId || `${scopeType}:${scopeId || 'global'}`,
         scopeType,
@@ -775,14 +885,29 @@ export const useCreationsStore = defineStore('creations', {
 
       const tKey = creationThreadKey(agentId, creationId, thread.id);
       const prev = this.threadMessagesByKey[tKey];
+      const detail = ensureDetailBucket(this, agentId, creationId);
+      const activeThreadRun = (detail.runs || []).find(
+        (r) => r && r.status === 'running' && (r.type === 'thread' || r.threadId) && r.threadId === thread.id,
+      );
+      const assistantAlreadyPresent = Boolean(
+        activeThreadRun && messages.some(
+          (m) => m && m.role === 'assistant' && (
+            (activeThreadRun.assistantMessageId && m.id === activeThreadRun.assistantMessageId)
+            || (activeThreadRun.id && m.runId === activeThreadRun.id)
+          ),
+        ),
+      );
+      const reconciledStream = (activeThreadRun && !assistantAlreadyPresent)
+        ? (prev?.streamingMessage || null)
+        : null;
+
       this.threadMessagesByKey[tKey] = {
         thread,
         messages,
         contextPreview,
-        streamingMessage: prev?.streamingMessage || null,
+        streamingMessage: reconciledStream,
       };
 
-      const detail = ensureDetailBucket(this, agentId, creationId);
       detail.threads = upsertById(detail.threads, thread);
       return this.threadMessagesByKey[tKey];
     },
@@ -866,7 +991,9 @@ export const useCreationsStore = defineStore('creations', {
       pendingRequests.delete(msg.requestId);
 
       if (msg.ok === false || msg.error) {
-        pending.reject(new Error(msg.error || msg.message || `Creation ${pending.op} failed`));
+        const err = new Error(msg.error || msg.message || `Creation ${pending.op} failed`);
+        if (msg.errorCode) err.errorCode = msg.errorCode;
+        pending.reject(err);
         return;
       }
 
@@ -918,6 +1045,7 @@ export const useCreationsStore = defineStore('creations', {
           if (this.detailsByKey[dKey]) {
             this.detailsByKey[dKey].nodes = upsertById(this.detailsByKey[dKey].nodes, node);
           }
+          this._syncCreationSummaryFromDetail(agentId, creationId, payload.creation || null);
           break;
         }
 
@@ -941,6 +1069,7 @@ export const useCreationsStore = defineStore('creations', {
           ) {
             this.activeCreation = { ...this.activeCreation, activeNodeId: null };
           }
+          this._syncCreationSummaryFromDetail(agentId, creationId, payload.creation || null);
           break;
         }
 
@@ -950,6 +1079,7 @@ export const useCreationsStore = defineStore('creations', {
           if (this.detailsByKey[dKey]) {
             this.detailsByKey[dKey].nodes = payload.nodes;
           }
+          this._syncCreationSummaryFromDetail(agentId, creationId, payload.creation || null);
           break;
         }
 
@@ -1000,6 +1130,7 @@ export const useCreationsStore = defineStore('creations', {
               this.detailsByKey[dKey].nodes = upsertById(this.detailsByKey[dKey].nodes, payload.node);
             }
           }
+          this._syncCreationSummaryFromDetail(agentId, creationId, payload.creation || null);
           break;
         }
 
@@ -1030,6 +1161,7 @@ export const useCreationsStore = defineStore('creations', {
           if (this.detailsByKey[dKey]) {
             this.detailsByKey[dKey].sources = upsertById(this.detailsByKey[dKey].sources, source);
           }
+          this._syncCreationSummaryFromDetail(agentId, creationId, payload.creation || null);
           break;
         }
 
@@ -1039,6 +1171,20 @@ export const useCreationsStore = defineStore('creations', {
           const dKey = creationDetailKey(agentId, creationId);
           if (this.detailsByKey[dKey]) {
             this.detailsByKey[dKey].sources = removeById(this.detailsByKey[dKey].sources, sourceId);
+          }
+          this._syncCreationSummaryFromDetail(agentId, creationId, payload.creation || null);
+          break;
+        }
+
+        case 'asset_saved': {
+          const asset = payload.asset || payload;
+          if (!creationId || !asset || !asset.id) return;
+          const dKey = creationDetailKey(agentId, creationId);
+          if (this.detailsByKey[dKey]) {
+            if (!Array.isArray(this.detailsByKey[dKey].assets)) {
+              this.detailsByKey[dKey].assets = [];
+            }
+            this.detailsByKey[dKey].assets = upsertById(this.detailsByKey[dKey].assets, asset);
           }
           break;
         }
@@ -1050,6 +1196,7 @@ export const useCreationsStore = defineStore('creations', {
           if (this.detailsByKey[dKey]) {
             this.detailsByKey[dKey].proposals = upsertById(this.detailsByKey[dKey].proposals, proposal);
           }
+          this._syncCreationSummaryFromDetail(agentId, creationId, payload.creation || null);
           break;
         }
 
@@ -1067,6 +1214,7 @@ export const useCreationsStore = defineStore('creations', {
               ));
             }
           }
+          this._syncCreationSummaryFromDetail(agentId, creationId, payload.creation || null);
           break;
         }
 
@@ -1156,20 +1304,36 @@ export const useCreationsStore = defineStore('creations', {
           if (this.detailsByKey[dKey]) {
             this.detailsByKey[dKey].runs = upsertById(this.detailsByKey[dKey].runs, run);
           }
-          // Mirror active run progress onto the Galaxy list item if present.
+
+          // Clear matching streamingMessage when a thread run reaches terminal state.
+          const isTerminal = run.status === 'completed' || run.status === 'failed' || run.status === 'cancelled';
+          if (isTerminal && (run.type === 'thread' || run.threadId)) {
+            const prefix = `${creationDetailKey(agentId, creationId)}${KEY_SEP}`;
+            for (const key of Object.keys(this.threadMessagesByKey)) {
+              if (!key.startsWith(prefix)) continue;
+              if (run.threadId && key !== creationThreadKey(agentId, creationId, run.threadId)) continue;
+              const tb = this.threadMessagesByKey[key];
+              if (tb && tb.streamingMessage) {
+                this.threadMessagesByKey[key] = { ...tb, streamingMessage: null };
+              }
+            }
+          }
+
+          // Mirror active run status & progress onto the Galaxy list item without clobbering persisted creation.status.
           const bucket = this.byAgent[agentId];
           if (bucket && Array.isArray(bucket.list)) {
             const idx = bucket.list.findIndex((c) => c && c.id === creationId);
             if (idx >= 0) {
               const next = bucket.list.slice();
               const isRunning = run.status === 'running';
+              const isPaused = run.status === 'paused';
               const progress = typeof run.progress === 'number'
                 ? run.progress
                 : (run.totalUnits > 0 ? (run.completedUnits || 0) / run.totalUnits : next[idx].activeRunProgress);
               next[idx] = {
                 ...next[idx],
-                activeRunProgress: isRunning ? progress : null,
-                status: isRunning ? 'generating' : (next[idx].status === 'generating' ? 'active' : next[idx].status),
+                activeRunStatus: isRunning ? 'running' : (isPaused ? 'paused' : null),
+                activeRunProgress: (isRunning || isPaused) ? progress : null,
               };
               bucket.list = next;
             }
@@ -1183,6 +1347,8 @@ export const useCreationsStore = defineStore('creations', {
     },
 
     clearAll() {
+      storeGeneration += 1;
+      openActivationSeq += 1;
       for (const [, pending] of pendingRequests) {
         clearTimeout(pending.timer);
         pending.reject(new Error('Creations store cleared'));

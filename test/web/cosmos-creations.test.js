@@ -421,6 +421,258 @@ describe('Cosmos Creations — End-to-End Web Store <-> Server Relay <-> Agent S
     await flushPromises();
     expect(interiorWrapper.text()).toContain('Book Ch 1');
 
+    // Mount Gallery modality inside CreationInteriorModal (B11)
+    const galleryNode = await creationsStore.createNode('agent-a', res.creation.id, {
+      nodeType: 'unit', modality: 'image_gallery', title: 'Concept Art',
+      content: JSON.stringify({
+        frames: [{ frameId: 'f1', title: 'Nebula Gate', caption: 'Opening frame', assetId: 'asset-1' }],
+      }),
+    });
+    await creationsStore.selectNode(galleryNode.node.id);
+    await flushPromises();
+    expect(interiorWrapper.text()).toContain('Nebula Gate');
+    const imgEl = interiorWrapper.find('.creation-gallery-img');
+    expect(imgEl.exists()).toBe(true);
+    expect(imgEl.attributes('src')).toBe(`/api/yeaft/creations/agent-a/${res.creation.id}/media/asset/asset-1`);
+
     interiorWrapper.unmount();
+  });
+
+  it('B03: GalleryReader renders sandboxed img mediaUrl and NEVER injects svgMarkup via v-html', async () => {
+    const { default: GalleryReader } = await import('../../web/components/cosmos/creations/readers/GalleryReader.js');
+    const $t = (k) => creationsZh[k] || k;
+    const wrapper = mount(GalleryReader, {
+      props: {
+        node: { id: 'n-gal', title: 'Art', modality: 'image_gallery', currentRevId: 'rev-1' },
+        agentId: 'agent-a',
+        creationId: 'cre-1',
+        content: JSON.stringify({
+          frames: [
+            {
+              frameId: 'f-asset',
+              title: 'Safe Asset',
+              assetId: 'a-123',
+              svgMarkup: '<svg onload="alert(1)"><script>window.__xss=1</script></svg>',
+            },
+            {
+              frameId: 'f-svg-only',
+              title: 'Untrusted SVG Only',
+              prompt: 'Starfield sketch',
+              svgMarkup: '<svg><script>window.__xss2=1</script><circle cx="10" cy="10" r="5" /></svg>',
+            },
+          ],
+        }),
+      },
+      global: { mocks: { $t } },
+    });
+    await flushPromises();
+
+    // Asset frame renders via <img> pointing to authenticated mediaUrl
+    const imgs = wrapper.findAll('img.creation-gallery-img');
+    expect(imgs.length).toBe(1);
+    expect(imgs[0].attributes('src')).toBe('/api/yeaft/creations/agent-a/cre-1/media/asset/a-123');
+
+    // No inline <svg> or <script> injected anywhere in Grid or Lightbox
+    expect(wrapper.find('svg').exists()).toBe(false);
+    expect(wrapper.find('script').exists()).toBe(false);
+    expect(wrapper.text()).toContain('Starfield sketch');
+
+    // Open Lightbox on the svgMarkup-only frame -> still no <svg>
+    await wrapper.findAll('.creation-gallery-media')[1].trigger('click');
+    await flushPromises();
+    expect(wrapper.find('.creation-gallery-lightbox').exists()).toBe(true);
+    expect(wrapper.find('svg').exists()).toBe(false);
+    wrapper.unmount();
+  });
+
+  it('B03: BookReader and DirectorChatPane sanitize script, onerror, and javascript: links before DOM insertion', async () => {
+    const [{ default: BookReader }, { default: DirectorChatPane }, { sanitizeCreationHtml }] = await Promise.all([
+      import('../../web/components/cosmos/creations/readers/BookReader.js'),
+      import('../../web/components/cosmos/creations/studio/DirectorChatPane.js'),
+      import('../../web/components/cosmos/creations/sanitize.js'),
+    ]);
+
+    const hostileHtml = '<p>Safe</p><script>alert(1)</script><img src="https://example.com/a.png" onerror="alert(2)"><a href="javascript:alert(3)">click</a><iframe src="about:blank"></iframe><svg onload="alert(4)"></svg>';
+    const cleaned = sanitizeCreationHtml(hostileHtml);
+    expect(cleaned).toContain('Safe');
+    expect(cleaned).not.toContain('<script');
+    expect(cleaned).not.toContain('onerror');
+    expect(cleaned).not.toContain('javascript:');
+    expect(cleaned).not.toContain('<iframe');
+    expect(cleaned).not.toContain('<svg');
+
+    const $t = (k) => creationsZh[k] || k;
+    const bookWrapper = mount(BookReader, {
+      props: {
+        node: { id: 'n-book', title: 'Ch 1', modality: 'markdown_doc', currentRevId: 'r1' },
+        agentId: 'agent-a',
+        creationId: 'cre-1',
+        content: 'Hello <script>alert(1)</script> <img src="x" onerror="alert(2)"> <a href="javascript:alert(3)">bad</a>',
+      },
+      global: { mocks: { $t } },
+    });
+    await flushPromises();
+    const bookHtml = bookWrapper.find('.markdown-body').html();
+    expect(bookHtml).not.toContain('<script');
+    expect(bookHtml).not.toContain('onerror');
+    expect(bookHtml).not.toContain('javascript:');
+    bookWrapper.unmount();
+
+    const tKey = `agent-a\u001fcre-1\u001fglobal:global`;
+    creationsStore.threadMessagesByKey[tKey] = {
+      thread: { id: 'global:global', scopeType: 'global', scopeId: null },
+      messages: [
+        { id: 'm1', role: 'assistant', content: 'Hi <script>alert(1)</script><img src="x" onerror="alert(2)"><a href="javascript:alert(3)">x</a>' },
+      ],
+      contextPreview: null,
+      streamingMessage: {
+        id: 'm-stream',
+        role: 'assistant',
+        content: 'Streaming <script>alert(9)</script><img src="y" onerror="alert(9)">',
+        toolStatus: null,
+      },
+    };
+    const origLoadThread = creationsStore.loadThread;
+    creationsStore.loadThread = vi.fn().mockResolvedValue(creationsStore.threadMessagesByKey[tKey]);
+    const directorWrapper = mount(DirectorChatPane, {
+      props: { agentId: 'agent-a', creationId: 'cre-1' },
+      global: { mocks: { $t } },
+    });
+    await flushPromises();
+    const directorHtml = directorWrapper.find('.creation-chat-messages').html();
+    expect(directorHtml).not.toContain('<script');
+    expect(directorHtml).not.toContain('onerror');
+    expect(directorHtml).not.toContain('javascript:');
+    creationsStore.loadThread = origLoadThread;
+    directorWrapper.unmount();
+  });
+
+  it('B04: CAS revision conflict in updateNode preserves server content and surfaces conflict banner without closing editor', async () => {
+    const { default: BookReader } = await import('../../web/components/cosmos/creations/readers/BookReader.js');
+    const res = await creationsStore.createCreation('agent-a', {
+      title: 'CAS Novel',
+      kind: 'book',
+      autoPlan: false,
+    });
+    const created = await creationsStore.createNode('agent-a', res.creation.id, {
+      nodeType: 'unit',
+      modality: 'markdown_doc',
+      title: 'Chapter 1',
+      content: 'Server v1',
+    });
+    await creationsStore.openCreation('agent-a', res.creation.id, { mode: 'read' });
+    const rev1 = creationsStore.activeNode.currentRevId;
+
+    // Simulate a concurrent server update to v2
+    await creationsStore.updateNode('agent-a', res.creation.id, created.node.id, {
+      content: 'Server v2',
+      baseRevId: rev1,
+    });
+    expect(creationsStore.activeNodeContent.content).toBe('Server v2');
+
+    // Attempt stale CAS save with rev1 -> store must NOT overwrite server content!
+    const conflictRes = await creationsStore.updateNode('agent-a', res.creation.id, created.node.id, {
+      content: 'Stale local draft',
+      baseRevId: rev1,
+    });
+    expect(conflictRes.conflict).toBe(true);
+    expect(creationsStore.activeNodeContent.content).toBe('Server v2');
+
+    // BookReader surfaces conflict banner & stays in edit mode
+    const $t = (k) => creationsZh[k] || k;
+    const bookWrapper = mount(BookReader, {
+      props: {
+        node: { ...creationsStore.activeNode, currentRevId: rev1 },
+        content: 'Server v1',
+        agentId: 'agent-a',
+        creationId: res.creation.id,
+        onSaveContent: vi.fn().mockResolvedValue({ conflict: true }),
+      },
+      global: { mocks: { $t } },
+    });
+    bookWrapper.vm.enterEditMode();
+    bookWrapper.vm.draftText = 'Edited locally';
+    bookWrapper.vm.dirty = true;
+    const saved = await bookWrapper.vm.saveEdit(true);
+    await flushPromises();
+    expect(saved).toBe(false);
+    expect(bookWrapper.vm.editing).toBe(true);
+    expect(bookWrapper.find('.creation-conflict-banner').exists()).toBe(true);
+    bookWrapper.unmount();
+  });
+
+  it('B06: DirectorChatPane uses folder scopeType, ignores stale loadThread responses, and preserves draft on send failure', async () => {
+    const { default: DirectorChatPane } = await import('../../web/components/cosmos/creations/studio/DirectorChatPane.js');
+    const $t = (k) => creationsZh[k] || k;
+
+    let resolveFirst;
+    let resolveSecond;
+    const firstPromise = new Promise((r) => { resolveFirst = r; });
+    const secondPromise = new Promise((r) => { resolveSecond = r; });
+
+    const loadCalls = [];
+    creationsStore.loadThread = vi.fn((aId, cId, scopeType, scopeId) => {
+      loadCalls.push({ scopeType, scopeId });
+      return loadCalls.length === 1 ? firstPromise : secondPromise;
+    });
+    creationsStore.sendMessage = vi.fn().mockRejectedValue(new Error('Network offline'));
+
+    const folderNode = { id: 'folder-1', title: 'Volume 1', type: 'folder', isFolder: true };
+    const unitNode = { id: 'unit-1', title: 'Chapter 1', type: 'unit', isFolder: false };
+
+    const wrapper = mount(DirectorChatPane, {
+      props: { agentId: 'agent-a', creationId: 'cre-1', activeNode: folderNode },
+      global: { mocks: { $t } },
+    });
+
+    expect(loadCalls[0]).toEqual({ scopeType: 'folder', scopeId: 'folder-1' });
+    expect(wrapper.vm.loadingThread).toBe(true);
+
+    // Switch quickly to unitNode before first load resolves
+    await wrapper.setProps({ activeNode: unitNode });
+    expect(loadCalls[1]).toEqual({ scopeType: 'unit', scopeId: 'unit-1' });
+
+    // Resolve second (newer) load first
+    resolveSecond({ thread: { id: 'thr-unit-1', scopeType: 'unit', scopeId: 'unit-1' }, messages: [] });
+    await flushPromises();
+    expect(wrapper.vm.activeThreadId).toBe('thr-unit-1');
+    expect(wrapper.vm.loadingThread).toBe(false);
+
+    // Now resolve first (stale) load -> MUST be ignored!
+    resolveFirst({ thread: { id: 'thr-folder-1', scopeType: 'folder', scopeId: 'folder-1' }, messages: [] });
+    await flushPromises();
+    expect(wrapper.vm.activeThreadId).toBe('thr-unit-1');
+
+    // Draft preserved & inline error displayed when sendMessage fails
+    wrapper.vm.inputText = 'Keep this important prompt';
+    await wrapper.vm.sendMessage();
+    await flushPromises();
+    expect(wrapper.vm.inputText).toBe('Keep this important prompt');
+    expect(wrapper.vm.sendError).toContain('Network offline');
+    wrapper.unmount();
+  });
+
+  it('B08: clearAll() during in-flight loadNode never repopulates cleared store', async () => {
+    let resolveReq;
+    const origRequest = creationsStore.request;
+    creationsStore.request = vi.fn(() => new Promise((r) => { resolveReq = r; }));
+
+    const loadPromise = creationsStore.loadNode('agent-a', 'cre-1', 'node-1');
+    creationsStore.clearAll();
+    resolveReq({ content: 'Stale content after logout', node: { id: 'node-1', title: 'Ghost' } });
+    await loadPromise;
+
+    expect(Object.keys(creationsStore.nodeContentsByKey)).toEqual([]);
+    expect(Object.keys(creationsStore.detailsByKey)).toEqual([]);
+    creationsStore.request = origRequest;
+  });
+
+  it('B11: creations.css defines mobile 3-tab switching rules and Read Mode scroll stage', () => {
+    const css = readFileSync(resolve(process.cwd(), 'web/styles/cosmos/creations.css'), 'utf8');
+    expect(css).toContain('.creation-studio-layout[data-mobile-tab="tree"]');
+    expect(css).toContain('.creation-studio-layout[data-mobile-tab="canvas"]');
+    expect(css).toContain('.creation-studio-layout[data-mobile-tab="director"]');
+    expect(css).toContain('.creation-read-stage');
+    expect(css).not.toMatch(/#[0-9a-fA-F]{3,8}\b|rgba?\(/);
   });
 });

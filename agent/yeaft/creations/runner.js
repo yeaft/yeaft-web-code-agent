@@ -53,13 +53,24 @@ export class CreationRunner {
   #emitRun(run) {
     if (run) this.#emit('run_updated', run.creationId, { run: { ...run, totalUnits: run.progress?.total, completedUnits: run.progress?.completed } });
   }
+  #emitThreadComplete(run, message) {
+    this.#emit('thread_message_complete', run.creationId, { threadId: run.threadId, runId: run.id, messageId: message.id,
+      message, contextPreview: message.contextMeta });
+    this.#emitRun(run);
+  }
   #schedule(run, fn) {
     const controller = new AbortController();
-    const task = { run, controller, done: null };
+    const task = { run, controller, done: null, output: '', contextMeta: null };
     this.active.set(run.id, task);
-    task.done = Promise.resolve().then(() => fn(controller.signal)).catch(() => {
-      const next = this.store.updateRun(run.creationId, run.id, run, { status: run.type === 'batch' ? 'paused' : 'failed', reason: 'execution_failed' });
-      this.#emitRun(next);
+    task.done = Promise.resolve().then(() => fn(controller.signal, task)).catch(() => {
+      if (run.type === 'thread') {
+        const result = this.store.transaction(() => {
+          const next = this.#patch(run, { status: 'failed', reason: 'execution_failed' });
+          return next && { run: next, message: this.store.ensureAssistantMessage(next,
+            { status: 'failed', text: task.output, contextMeta: task.contextMeta }) };
+        });
+        if (result) this.#emitThreadComplete(result.run, result.message);
+      } else this.#emitRun(this.#patch(run, { status: 'paused', reason: 'execution_failed' }));
     }).finally(() => { if (this.active.get(run.id) === task) this.active.delete(run.id); });
     // Service calls return a durable start acknowledgment, not this promise.
     task.done.catch(() => {});
@@ -107,44 +118,47 @@ export class CreationRunner {
   }
 
   runThreadTurn({ creationId, threadId, scopeType, scopeId, userText, anchor = null, excludedContextIds = [],
-    model, effort, files = [], textSources = [] }) {
+    model, effort, files = [], textSources = [], attachedSourceIds = [] }) {
     this.#assertOpen();
     userText = boundedText(userText, LIMITS.promptBytes, 'message');
     if (anchor !== null) boundedText(JSON.stringify(anchor), 8192, 'anchor');
     boundedList(excludedContextIds, 256, 'excluded context').forEach(id => boundedText(id, 128, 'context ID', { required: true }));
+    boundedList(attachedSourceIds, LIMITS.sources, 'attached sources').forEach(safeId);
     const result = this.store.transaction(() => {
       const thread = this.store.getThread(creationId, { threadId, scopeType, scopeId });
       const sources = this.store.addSources(creationId, { files, textSources });
-      if (!userText.trim() && !sources.length) fail('INVALID_REQUEST', 'Enter a message or attach a source');
-      const message = this.store.addMessage(creationId, thread.id, { role: 'user', text: userText, content: userText, anchor, sourceIds: sources.map(source => source.id) });
+      const sourceIds = [...new Set([...sources.map(source => source.id), ...attachedSourceIds])];
+      if (!userText.trim() && !sourceIds.length) fail('INVALID_REQUEST', 'Enter a message or attach a source');
+      const message = this.store.addMessage(creationId, thread.id, { role: 'user', text: userText, content: userText, anchor, sourceIds });
       const assistantMessageId = randomUUID();
       const run = this.store.createRun(creationId, { type: 'thread', threadId: thread.id, scopeId: thread.scopeId, userMessageId: message.id,
         assistantMessageId, bootId: this.bootId, ...modelOptions({ model, effort }), progress: progress(0, 1) });
       const context = buildCreationContext({ store: this.store, creationId, threadId: thread.id,
-        prompt: `${userText} ${sources.map(source => source.name).join(' ')}`, anchor, excludedContextIds, excludeMessageId: message.id });
+        prompt: userText, anchor, excludedContextIds, attachedSourceIds: sourceIds, excludeMessageId: message.id });
       return { thread, message, sources, run, context };
     });
     const { thread, message, sources, run, context } = result;
-    this.#schedule(run, signal => this.#thread(run, thread, message, context, signal));
+    this.#schedule(run, (signal, task) => this.#thread(run, message, context, signal, task));
     for (const source of sources) this.#emit('source_added', creationId, { source: this.mediaUrlFor ? { ...source, url: this.mediaUrlFor(creationId, 'source', source.id) } : source });
+    if (sources.length) this.#emit('creation_upserted', creationId, { creation: this.store.getCreation(creationId) });
     this.#emit('thread_message_complete', creationId, { threadId: thread.id, runId: run.id, message });
     this.#emitRun(run);
     return { thread, threadId: thread.id, message, userMessage: message, sources, run, contextMeta: context.contextMeta, contextPreview: context.contextMeta };
   }
-  async #thread(run, thread, message, context, controllerSignal) {
+  async #thread(run, message, context, controllerSignal, task) {
     const signal = AbortSignal.any([controllerSignal, AbortSignal.timeout(LIMITS.turnTimeoutMs)]);
-    const { creationId, id: runId, assistantMessageId: messageId } = run;
-    const identity = { threadId: thread.id, runId, messageId };
-    let output = '';
+    const { creationId, id: runId, assistantMessageId: messageId, threadId } = run;
+    const identity = { threadId, runId, messageId };
+    task.contextMeta = context.contextMeta;
     let status = 'complete';
     const openTools = new Map();
     try {
-      await this.#query(run, signal, { context, userText: message.text || 'Review the newly attached sources.', threadId: thread.id,
+      await this.#query(run, signal, { context, userText: message.text || 'Review the newly attached sources.', threadId,
         registry: this.#registry(run, signal), onEvent: event => {
           if (event.type === 'text_delta' && typeof event.text === 'string') {
-            const delta = event.text.slice(0, LIMITS.responseChars - output.length);
+            const delta = event.text.slice(0, LIMITS.responseChars - task.output.length);
             if (!delta) return;
-            output += delta;
+            task.output += delta;
             this.#emit('thread_message_delta', creationId, { ...identity, delta, contextMeta: context.contextMeta });
           } else if (event.type === 'tool_start' || event.type === 'tool_end') {
             if (event.type === 'tool_start') openTools.set(event.id, event.name);
@@ -153,21 +167,19 @@ export class CreationRunner {
               status: event.type === 'tool_start' ? 'running' : event.isError ? 'failed' : 'complete' });
           }
         } });
-    } catch { status = controllerSignal.aborted ? 'cancelled' : 'failed'; }
+    } catch {
+      if (controllerSignal.aborted) return; // controlRun/close already persisted the terminal state.
+      status = 'failed';
+    }
     for (const [toolId, name] of openTools) this.#emit('thread_tool_status', creationId, { ...identity, toolId, name, status: 'failed' });
     const result = this.store.transaction(() => {
       const finalRun = this.#patch(run, { status: status === 'complete' ? 'completed' : status,
         reason: status === 'failed' ? 'turn_failed' : null, progress: progress(status === 'complete' ? 1 : 0, 1) });
       if (!finalRun) return null; // controlRun/close invalidated the lease
-      return { run: finalRun, message: this.store.addMessage(creationId, thread.id, { id: messageId, role: 'assistant', text: output, content: output,
-        status, runId, contextMeta: context.contextMeta }) };
+      return { run: finalRun, message: this.store.ensureAssistantMessage(finalRun,
+        { status, text: task.output, contextMeta: context.contextMeta }) };
     });
-    if (result) {
-      this.#emit('thread_message_complete', creationId, { ...identity, message: result.message, contextPreview: context.contextMeta });
-      this.#emitRun(result.run);
-    } else if (controllerSignal.aborted && !this.closed) {
-      this.#emit('thread_message_complete', creationId, { ...identity, message: { id: messageId, role: 'assistant', text: '', status } });
-    }
+    if (result) this.#emitThreadComplete(result.run, result.message);
   }
 
   startBatchRun({ creationId, nodeIds, instruction = '', checkpointEvery = 0, model, effort }) {
@@ -179,7 +191,7 @@ export class CreationRunner {
     const run = this.store.transaction(() => {
       for (const id of nodeIds) {
         const node = this.store.getNode(creationId, id);
-        if (node.type !== 'unit' || node.status === 'final' || node.userEdited) fail('REVIEW_REQUIRED', 'Batch accepts only units without final or user-edited content');
+        if (!node.batchEligible) fail('REVIEW_REQUIRED', 'Batch accepts only units without final or user-edited content');
       }
       return this.store.createRun(creationId, { type: 'batch', nodeIds, instruction, checkpointEvery, ...modelOptions({ model, effort }),
         bootId: this.bootId, progress: progress(0, nodeIds.length), completedNodeIds: [], currentNodeId: null, failedNodeId: null });
@@ -200,7 +212,7 @@ export class CreationRunner {
         if (!current) return;
         this.#emitRun(current);
         original = this.store.getNode(creationId, nodeId);
-        if (original.type !== 'unit' || original.status === 'final' || original.userEdited) fail('REVIEW_REQUIRED', 'Batch unit now requires review');
+        if (!original.batchEligible) fail('REVIEW_REQUIRED', 'Batch unit now requires review');
         const context = buildCreationContext({ store: this.store, creationId, nodeId, prompt: run.instruction });
         let staged = null;
         let summaryMd;
@@ -247,6 +259,7 @@ export class CreationRunner {
           return { node, next };
         });
         this.#emit('node_content_updated', creationId, { runId, nodeId, node: result.node, content: result.node.content, revisions: this.store.listRevisions(creationId, nodeId) });
+        this.#emit('creation_upserted', creationId, { creation: this.store.getCreation(creationId) });
         this.#emitRun(result.next);
         if (status !== 'running') return;
       } catch (error) {
@@ -263,21 +276,30 @@ export class CreationRunner {
   controlRun({ creationId, runId, action }) {
     this.#assertOpen();
     const previous = this.store.getRun(creationId, runId);
-    const run = this.store.controlRun(creationId, runId, action, this.bootId);
+    if (previous.type !== 'batch' && ['pause', 'resume'].includes(action)) fail('INVALID_STATE', 'Only batch runs can pause or resume');
+    const task = this.active.get(runId);
+    const { run, message } = this.store.transaction(() => {
+      const next = this.store.controlRun(creationId, runId, action, this.bootId);
+      const assistant = previous.type === 'thread' && previous.status === 'running' && action === 'cancel'
+        ? this.store.ensureAssistantMessage(next, { status: 'cancelled', text: task?.output ?? '', contextMeta: task?.contextMeta })
+        : null;
+      return { run: next, message: assistant };
+    });
     if ((action === 'pause' || action === 'cancel') && previous.currentNodeId) {
       const node = this.store.getNode(creationId, previous.currentNodeId);
       this.#emit('node_content_delta', creationId, { runId, nodeId: node.id, replace: true, delta: '', content: node.content, discarded: true });
     }
     if (action === 'resume') this.#schedule(run, signal => this.#batch(run, signal));
-    else this.active.get(runId)?.controller.abort();
-    this.#emitRun(run);
+    else task?.controller.abort();
+    if (message) this.#emitThreadComplete(run, message);
+    else this.#emitRun(run);
     return run;
   }
   async close() {
     this.closed = true;
     const tasks = [...this.active.values()];
     for (const { run, controller } of tasks) {
-      this.#patch(run, { status: 'paused', reason: 'agent_restarted', currentNodeId: null, leaseEpoch: run.leaseEpoch + 1 });
+      this.store.interruptRun(run);
       controller.abort();
     }
     await Promise.allSettled(tasks.map(task => task.done));

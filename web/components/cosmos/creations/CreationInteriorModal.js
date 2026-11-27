@@ -48,6 +48,7 @@ export default {
       studioLeftOpen: true,
       studioRightOpen: true,
       mobileTab: 'canvas', // 'tree' | 'canvas' | 'director'
+      showRootOutlineBoard: false,
       anchorDrawerOpen: false,
       activeAnchor: null,
       revisionsOpen: false,
@@ -108,6 +109,7 @@ export default {
       return this.sources.find((s) => s && s.id === id) || null;
     },
     activeSelection() {
+      if (this.showRootOutlineBoard) return { type: 'root-board', id: null };
       if (this.activeCanon) return { type: 'canon', id: this.activeCanon.id };
       if (this.activeSource) return { type: 'source', id: this.activeSource.id };
       if (this.activeNode) return { type: 'node', id: this.activeNode.id };
@@ -140,7 +142,10 @@ export default {
     },
     activeBatchRun() {
       const runs = this.creationsStore.activeRunsForActive || [];
-      return runs[0] || null;
+      return runs.find((r) => r && r.type === 'batch') || runs[0] || null;
+    },
+    isBatchRun() {
+      return this.activeBatchRun?.type === 'batch';
     },
     batchDoneCount() {
       const r = this.activeBatchRun;
@@ -154,6 +159,26 @@ export default {
       if (!this.activeSource) return '';
       return this.creationsStore.mediaUrl(this.agentId, this.creationId, 'source', this.activeSource.id);
     },
+    activeSourceBytes() {
+      const s = this.activeSource;
+      if (!s) return null;
+      const val = s.byteLength ?? s.size;
+      return typeof val === 'number' && Number.isFinite(val) ? val : null;
+    },
+    activeSourceText() {
+      const s = this.activeSource;
+      if (!s) return '';
+      const chunks = Array.isArray(s.chunks)
+        ? s.chunks
+        : (Array.isArray(s.parsed?.chunks) ? s.parsed.chunks : null);
+      if (chunks && chunks.length > 0) {
+        return chunks
+          .map((c) => (typeof c === 'string' ? c : (c?.text || c?.content || '')))
+          .filter(Boolean)
+          .join('\n\n');
+      }
+      return s.extractedText || s.text || '';
+    },
     isSourceImage() {
       return String(this.activeSource?.mimeType || '').toLowerCase().startsWith('image/');
     },
@@ -161,6 +186,7 @@ export default {
   watch: {
     creationId() {
       this.renamingTitle = false;
+      this.showRootOutlineBoard = false;
       this.anchorDrawerOpen = false;
       this.activeAnchor = null;
       this.revisionsOpen = false;
@@ -244,15 +270,32 @@ export default {
     },
     async restoreRevision(revId) {
       const nodeId = this.activeNode?.id || this.effectiveReadUnit?.id;
-      if (!nodeId || !revId) return;
-      await this.creationsStore.restoreRevision(this.agentId, this.creationId, nodeId, revId);
+      if (!nodeId || !revId) return null;
+      return this.creationsStore.restoreRevision(this.agentId, this.creationId, nodeId, revId, {
+        baseRevId: this.activeNode?.currentRevId ?? null,
+      });
     },
     async handleExport(format) {
       this.exportMenuOpen = false;
       this.exporting = true;
       try {
         const result = await this.creationsStore.exportCreation(this.agentId, this.creationId, format);
-        if (result && (result.content !== undefined || result.blob)) {
+        if (!result) return;
+        const safeTitle = String(this.creation?.title || 'creation').replace(/[^\w\u4e00-\u9fff-]+/g, '_');
+        const filename = result.filename || `${safeTitle}.${format === 'json' ? 'json' : 'md'}`;
+
+        if (result.downloadUrl) {
+          const a = document.createElement('a');
+          a.href = result.downloadUrl;
+          a.download = filename;
+          a.rel = 'noopener noreferrer';
+          document.body.appendChild(a);
+          a.click();
+          a.remove();
+          return;
+        }
+
+        if (result.content !== undefined || result.blob) {
           const blob = result.blob instanceof Blob
             ? result.blob
             : new Blob(
@@ -262,8 +305,7 @@ export default {
           const url = URL.createObjectURL(blob);
           const a = document.createElement('a');
           a.href = url;
-          const safeTitle = String(this.creation?.title || 'creation').replace(/[^\w\u4e00-\u9fff-]+/g, '_');
-          a.download = result.filename || `${safeTitle}.${format === 'json' ? 'json' : 'md'}`;
+          a.download = filename;
           document.body.appendChild(a);
           a.click();
           a.remove();
@@ -276,18 +318,30 @@ export default {
     async toggleBatchPause() {
       const run = this.activeBatchRun;
       if (!run) return;
-      const action = run.status === 'running' ? 'pause' : 'resume';
-      await this.creationsStore.controlRun(this.agentId, this.creationId, run.id, action);
+      if (run.type === 'batch') {
+        const action = run.status === 'running' ? 'pause' : 'resume';
+        await this.creationsStore.controlRun(this.agentId, this.creationId, run.id, action);
+      } else {
+        await this.creationsStore.controlRun(this.agentId, this.creationId, run.id, 'cancel');
+      }
+    },
+    openRootOutlineBoard() {
+      this.showRootOutlineBoard = true;
+      this.creationsStore.selectNode(null);
+      this.mobileTab = 'canvas';
     },
     selectNode(nodeId) {
+      this.showRootOutlineBoard = false;
       this.creationsStore.selectNode(nodeId);
       this.mobileTab = 'canvas';
     },
     selectCanon(canonId) {
+      this.showRootOutlineBoard = false;
       this.creationsStore.selectCanon(canonId);
       this.mobileTab = 'canvas';
     },
     selectSource(sourceId) {
+      this.showRootOutlineBoard = false;
       this.creationsStore.selectSource(sourceId);
       this.mobileTab = 'canvas';
     },
@@ -316,12 +370,16 @@ export default {
     async handleDeleteSource(sourceId) {
       await this.creationsStore.deleteSource(this.agentId, this.creationId, sourceId);
     },
-    async handleSaveContent({ nodeId, content, baseRevId }) {
+    async handleSaveContent(payload = {}) {
+      const { nodeId, content } = payload;
+      const baseRevId = Object.hasOwn(payload, 'baseRevId')
+        ? payload.baseRevId
+        : (this.activeNode?.currentRevId ?? null);
       this.saving = true;
       try {
-        await this.creationsStore.updateNode(this.agentId, this.creationId, nodeId, {
+        return await this.creationsStore.updateNode(this.agentId, this.creationId, nodeId, {
           content,
-          ...(baseRevId ? { baseRevId } : {}),
+          baseRevId,
         });
       } finally {
         this.saving = false;
@@ -436,11 +494,17 @@ export default {
 
         <!-- Right Controls -->
         <div class="creation-topbar-right">
-          <!-- Live Active Batch Run Pill -->
+          <!-- Live Active Run Pill -->
           <div v-if="activeBatchRun" class="creation-status-pill is-generating">
-            <span>{{ batchDoneCount }}/{{ batchTotalCount }}</span>
+            <span v-if="isBatchRun">{{ batchDoneCount }}/{{ batchTotalCount }}</span>
+            <span v-else>{{ $t('creation.status.running') }}</span>
             <button type="button" class="creation-icon-mini" @click="toggleBatchPause">
-              {{ activeBatchRun.status === 'running' ? $t('creation.studio.pause') : $t('creation.studio.resume') }}
+              <template v-if="isBatchRun">
+                {{ activeBatchRun.status === 'running' ? $t('creation.studio.pause') : $t('creation.studio.resume') }}
+              </template>
+              <template v-else>
+                {{ $t('creation.studio.stop') }}
+              </template>
             </button>
           </div>
 
@@ -516,11 +580,13 @@ export default {
               :node="effectiveReadUnit"
               :content="activeNodeContent"
               :nodes="nodes"
+              :sources="sources"
               mode="read"
               :agent-id="agentId"
               :creation-id="creationId"
               :revisions="revisions"
               :saving="saving"
+              :on-save-content="handleSaveContent"
               @save-content="handleSaveContent"
               @select-node="selectNode"
               @request-ai-edit="handleRequestAiEdit"
@@ -560,6 +626,7 @@ export default {
               :sources="sources"
               :active-selection="activeSelection"
               @select-node="selectNode"
+              @select-root-board="openRootOutlineBoard"
               @select-canon="selectCanon"
               @select-source="selectSource"
               @create-node="handleCreateNode"
@@ -573,10 +640,10 @@ export default {
 
           <!-- Center Studio Canvas -->
           <main class="creation-studio-center">
-            <!-- Folder Selected -> OutlineBoard -->
+            <!-- Folder or Root Outline Board Selected -> OutlineBoard -->
             <OutlineBoard
-              v-if="activeNode && isFolderNode(activeNode)"
-              :folder="activeNode"
+              v-if="(activeNode && isFolderNode(activeNode)) || showRootOutlineBoard"
+              :folder="showRootOutlineBoard ? null : activeNode"
               :nodes="nodes"
               :agent-id="agentId"
               :creation-id="creationId"
@@ -600,11 +667,13 @@ export default {
                 :node="activeNode"
                 :content="activeNodeContent"
                 :nodes="nodes"
+                :sources="sources"
                 mode="studio"
                 :agent-id="agentId"
                 :creation-id="creationId"
                 :revisions="revisions"
                 :saving="saving"
+                :on-save-content="handleSaveContent"
                 @save-content="handleSaveContent"
                 @select-node="selectNode"
                 @request-ai-edit="handleRequestAiEdit"
@@ -629,19 +698,22 @@ export default {
                   <h2 class="creation-source-viewer-title">{{ activeSource.name || activeSource.filename || activeSource.id }}</h2>
                   <div class="creation-source-viewer-meta">
                     <span v-if="activeSource.mimeType">{{ activeSource.mimeType }}</span>
-                    <span v-if="activeSource.size">{{ Math.round(activeSource.size / 1024) }} KB</span>
+                    <span v-if="activeSourceBytes != null">{{ Math.max(1, Math.round(activeSourceBytes / 1024)) }} KB</span>
                     <span class="creation-status-pill">{{ activeSource.parseStatus || activeSource.status || $t('creation.sources.parsedReady') }}</span>
                   </div>
                 </div>
-                <a
-                  v-if="activeSourceUrl"
-                  :href="activeSourceUrl"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  class="creation-glass-btn"
-                >
-                  {{ $t('creation.sources.preview') }} ↗
-                </a>
+                <div class="creation-source-viewer-actions">
+                  <a
+                    v-if="activeSourceUrl"
+                    :href="activeSourceUrl"
+                    :download="activeSource.name || activeSource.filename || activeSource.id"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    class="creation-glass-btn"
+                  >
+                    {{ $t('creation.sources.preview') }} ↗
+                  </a>
+                </div>
               </header>
 
               <div class="creation-source-viewer-body">
@@ -654,8 +726,8 @@ export default {
                 <div v-if="activeSource.summary" class="creation-source-section">
                   <p>{{ activeSource.summary }}</p>
                 </div>
-                <div v-if="activeSource.extractedText || activeSource.text" class="creation-source-section">
-                  <pre class="creation-source-text">{{ activeSource.extractedText || activeSource.text }}</pre>
+                <div v-if="activeSourceText" class="creation-source-section">
+                  <pre class="creation-source-text">{{ activeSourceText }}</pre>
                 </div>
               </div>
             </section>
@@ -712,7 +784,7 @@ export default {
           <nav class="creation-studio-mobile-tabs" role="tablist">
             <button
               type="button"
-              class="creation-mobile-tab"
+              class="creation-studio-mobile-tab"
               :class="{ 'is-active': mobileTab === 'tree' }"
               @click="mobileTab = 'tree'"
             >
@@ -720,7 +792,7 @@ export default {
             </button>
             <button
               type="button"
-              class="creation-mobile-tab"
+              class="creation-studio-mobile-tab"
               :class="{ 'is-active': mobileTab === 'canvas' }"
               @click="mobileTab = 'canvas'"
             >
@@ -728,7 +800,7 @@ export default {
             </button>
             <button
               type="button"
-              class="creation-mobile-tab"
+              class="creation-studio-mobile-tab"
               :class="{ 'is-active': mobileTab === 'director' }"
               @click="mobileTab = 'director'"
             >

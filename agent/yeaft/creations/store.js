@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import * as fs from 'node:fs';
 import { dirname, join, resolve, relative, isAbsolute, sep } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
@@ -59,6 +59,20 @@ CREATE UNIQUE INDEX IF NOT EXISTS creation_run_running ON creation_runs(creation
 `;
 const now = () => new Date().toISOString();
 const json = value => JSON.stringify(value);
+const PAGE_BYTES = 1.5 * 1024 * 1024;
+const jsonBytes = value => Buffer.byteLength(json(value));
+const clipBytes = (value, max) => {
+  const bytes = Buffer.from(value.slice(0, max));
+  // Skip an incomplete UTF-8 character at the boundary.
+  return new TextDecoder().decode(bytes.subarray(0, max), { stream: true });
+};
+const nodeFields = node => ({ ...node, batchEligible: node.type === 'unit' && node.status !== 'final' && !node.userEdited });
+
+export function compactProposal({ proposedContent, patch, anchor, summary, ...proposal }) {
+  const content = proposedContent ?? patch?.contentMd ?? '';
+  return { ...proposal, ...(patch ? { patch: { id: patch.id, title: patch.title, type: patch.type, pinned: patch.pinned } } : {}),
+    summary: clipBytes(summary ?? '', 2048), preview: clipBytes(typeof content === 'string' ? content : json(content), 2048) };
+}
 const data = row => row ? JSON.parse(row.data) : null;
 const idFor = input => input == null ? randomUUID() : safeId(input);
 const notFound = name => fail('NOT_FOUND', `${name} not found`);
@@ -97,10 +111,11 @@ function contentRecord(value, modality) {
 }
 
 const ASSET_TYPES = {
-  svg: 'image/svg+xml', html: 'text/html', png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp',
+  md: 'text/markdown', json: 'application/json', svg: 'image/svg+xml', html: 'text/html', png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp',
 };
 function validAsset(ext, bytes) {
   switch (ext) {
+    case 'md': case 'json': return true; // UTF-8 export buffers, always downloaded.
     case 'svg': return /^\s*(?:<\?xml[^>]*>\s*)?<svg(?:\s|>)/i.test(bytes.toString('utf8'));
     case 'html': return /^\s*(?:<!doctype\s+html\b|<[a-z][\w-]*(?:\s|>))/i.test(bytes.toString('utf8'));
     case 'png': return bytes.subarray(0, 8).equals(Buffer.from('89504e470d0a1a0a', 'hex'));
@@ -112,12 +127,36 @@ function validAsset(ext, bytes) {
 }
 
 export class CreationStore {
-  constructor({ yeaftDir }) {
+  constructor({ yeaftDir, storageRoot, namespaceKey, namespaceBinding }) {
     if (!yeaftDir) fail('INVALID_REQUEST', 'Missing Agent data directory');
     fs.mkdirSync(yeaftDir, { recursive: true, mode: 0o700 });
-    const root = join(fs.realpathSync(yeaftDir), 'creations');
-    fs.mkdirSync(root, { recursive: true, mode: 0o700 });
-    if (fs.realpathSync(root) !== root) fail('INVALID_PATH', 'Invalid Creations storage directory');
+    const base = storageRoot == null ? join(fs.realpathSync(yeaftDir), 'creations') : resolve(storageRoot);
+    fs.mkdirSync(base, { recursive: true, mode: 0o700 });
+    if (fs.realpathSync(base) !== base) fail('INVALID_PATH', 'Invalid Creations storage directory');
+    const root = namespaceKey == null ? base : join(base, `ns-${safeId(namespaceKey)}`);
+    if (namespaceKey != null || namespaceBinding != null) {
+      const { serverUrl, agentId, ownerId } = namespaceBinding ?? {};
+      if (![serverUrl, agentId, ownerId].every(value => typeof value === 'string' && value && !value.includes('\0'))
+        || createHash('sha256').update(`${serverUrl}\0${agentId}\0${ownerId}`).digest('hex').slice(0, 24) !== namespaceKey) {
+        fail('INVALID_REQUEST', 'Invalid Creations namespace binding');
+      }
+      fs.mkdirSync(root, { recursive: true, mode: 0o700 });
+      if (fs.realpathSync(root) !== root) fail('INVALID_PATH', 'Invalid Creations namespace directory');
+      const marker = join(root, '.namespace.json');
+      const binding = { serverUrl, agentId, ownerId };
+      if (!fs.lstatSync(marker, { throwIfNoEntry: false })) {
+        if (fs.readdirSync(root).length) fail('INVALID_PATH', 'Creations namespace is missing its binding');
+        try { fs.writeFileSync(marker, json(binding), { flag: 'wx', mode: 0o600 }); }
+        catch (error) { if (error.code !== 'EEXIST') throw error; }
+      }
+      const stat = fs.lstatSync(marker);
+      if (!stat.isFile() || stat.size > 32768) fail('INVALID_PATH', 'Invalid Creations namespace marker');
+      let saved;
+      try { saved = JSON.parse(fs.readFileSync(marker, 'utf8')); } catch { /* reject malformed bindings */ }
+      if (saved?.serverUrl !== serverUrl || saved?.agentId !== agentId || saved?.ownerId !== ownerId) {
+        fail('INVALID_PATH', 'Creations namespace binding does not match');
+      }
+    }
     this.root = root;
     this.dbPath = join(root, 'creations.db');
     for (const path of [this.dbPath, `${this.dbPath}-wal`, `${this.dbPath}-shm`]) {
@@ -406,7 +445,7 @@ export class CreationStore {
   }
 
   listNodes(id) {
-    return this.all('SELECT data FROM creation_nodes WHERE creation_id=? ORDER BY position,id', safeId(id)).map(data);
+    return this.all('SELECT data FROM creation_nodes WHERE creation_id=? ORDER BY position,id', safeId(id)).map(row => nodeFields(data(row)));
   }
   getStructure(id, { includeContent = false } = {}) {
     this.#creation(id);
@@ -420,13 +459,13 @@ export class CreationStore {
     return data(this.one('SELECT data FROM creation_nodes WHERE creation_id=? AND id=?', safeId(id), safeId(nodeId))) ?? notFound('Node');
   }
   #withContent(node) {
-    if (!node.currentRevId) return { ...node, content: '' };
-    return { ...node, content: this.getRevision(node.creationId, node.id, node.currentRevId).content };
+    if (!node.currentRevId) return { ...nodeFields(node), content: '' };
+    return { ...nodeFields(node), content: this.getRevision(node.creationId, node.id, node.currentRevId).content };
   }
   getNode(id, nodeId) { return this.#withContent(this.#node(id, nodeId)); }
-  listRevisions(id, nodeId) {
+  listRevisions(id, nodeId, { limit = 50 } = {}) {
     this.#node(id, nodeId);
-    return this.all('SELECT data FROM creation_revisions WHERE creation_id=? AND node_id=? ORDER BY rowid DESC', id, nodeId).map(data);
+    return this.all('SELECT data FROM creation_revisions WHERE creation_id=? AND node_id=? ORDER BY rowid DESC LIMIT ?', id, nodeId, limit).map(data);
   }
   getRevision(id, nodeId, revId) {
     const rev = data(this.one('SELECT data FROM creation_revisions WHERE creation_id=? AND node_id=? AND id=?',
@@ -495,7 +534,7 @@ export class CreationStore {
       const initialContent = own(input, 'content') ? input.content : (own(input, 'initialContent') ? input.initialContent : undefined);
       if (initialContent !== undefined) return this.updateNode(id, nodeId, { content: initialContent }, { actor });
       this.#touch(id);
-      return { ...fields, content: '' };
+      return this.#withContent(fields);
     });
   }
   updateNode(id, nodeId, patch, { actor = 'user', restoredFromRevId = null } = {}) {
@@ -551,11 +590,11 @@ export class CreationStore {
       const removed = this.all(`WITH RECURSIVE subtree(id) AS (SELECT ? UNION ALL SELECT n.id FROM creation_nodes n
         JOIN subtree s ON n.parent_id=s.id WHERE n.creation_id=?) SELECT id FROM subtree`, nodeId, id).map(row => row.id);
       const targets = new Set(removed);
-      for (const proposal of this.listProposals(id, { status: 'pending', includeContent: false })) {
-        if (proposal.type === 'unit_edit' && targets.has(proposal.nodeId)) {
-          const stored = data(this.one('SELECT data FROM creation_proposals WHERE creation_id=? AND id=?', id, proposal.id));
-          this.#settleProposal(stored, 'rejected', 'node_deleted');
-        }
+      const pending = this.all(`SELECT id FROM creation_proposals WHERE creation_id=? AND status='pending'
+        AND json_extract(data,'$.type')='unit_edit' AND json_extract(data,'$.nodeId') IN (${removed.map(() => '?').join(',')})`, id, ...removed);
+      for (const row of pending) {
+        const proposal = data(this.one('SELECT data FROM creation_proposals WHERE creation_id=? AND id=?', id, row.id));
+        this.#settleProposal(proposal, 'rejected', 'node_deleted');
       }
       const running = data(this.one("SELECT data FROM creation_runs WHERE creation_id=? AND status='running'", id));
       if (running?.nodeIds?.some(target => targets.has(target)) || targets.has(running?.scopeId)) fail('BUSY', 'Node belongs to an active run');
@@ -607,14 +646,37 @@ export class CreationStore {
         summary: text(input.summary ?? '', LIMITS.promptBytes, 'proposal summary'), diffStats: diffStats(encoded, proposed.encoded) });
     });
   }
-  listProposals(id, { status, includeContent = true, limit = LIMITS.proposalCount, offset = 0 } = {}) {
+  listProposals(id, { status, nodeId, includeContent = true, limit = LIMITS.proposalCount, offset = 0 } = {}) {
     this.#creation(id);
-    if (status != null) pick(status, PROPOSAL_STATUSES, 'proposal status');
-    if (!Number.isSafeInteger(limit) || limit < 1 || limit > LIMITS.proposalCount
+    const filters = ['creation_id=?'];
+    const params = [id];
+    if (status != null) {
+      filters.push('status=?');
+      params.push(pick(status, PROPOSAL_STATUSES, 'proposal status'));
+    }
+    if (nodeId != null) {
+      filters.push("json_extract(data,'$.nodeId')=?");
+      params.push(safeId(nodeId));
+    }
+    if (typeof includeContent !== 'boolean' || !Number.isSafeInteger(limit) || limit < 1 || limit > LIMITS.proposalCount
       || !Number.isSafeInteger(offset) || offset < 0) fail('INVALID_REQUEST', 'Invalid proposal page');
-    const projection = includeContent ? 'data' : "json_remove(data,'$.proposedContent','$.patch.contentMd','$.patch.state') AS data";
-    return (status == null ? this.all(`SELECT ${projection} FROM creation_proposals WHERE creation_id=? ORDER BY rowid DESC LIMIT ? OFFSET ?`, id, limit, offset)
-      : this.all(`SELECT ${projection} FROM creation_proposals WHERE creation_id=? AND status=? ORDER BY rowid DESC LIMIT ? OFFSET ?`, id, status, limit, offset)).map(data);
+    const statement = this.db.prepare(`SELECT data FROM creation_proposals WHERE ${filters.join(' AND ')} ORDER BY rowid DESC LIMIT ? OFFSET ?`);
+    const proposals = [];
+    let bytes = 2; // Array brackets; count commas as entries are appended.
+    for (const row of statement.iterate(...params, limit, offset)) {
+      const proposal = data(row);
+      let item = includeContent ? proposal : compactProposal(proposal);
+      let size = jsonBytes(item);
+      if (includeContent && size + 2 > PAGE_BYTES) {
+        item = { ...compactProposal(proposal), contentTruncated: true };
+        size = jsonBytes(item);
+      }
+      const entryBytes = size + Number(proposals.length > 0);
+      if (bytes + entryBytes > PAGE_BYTES) break;
+      bytes += entryBytes;
+      proposals.push(item);
+    }
+    return proposals;
   }
   #settleProposal(proposal, status, reason = null, outcome = {}) {
     Object.assign(proposal, { status, reason, resolvedAt: now(), ...outcome });
@@ -648,7 +710,9 @@ export class CreationStore {
     this.#creation(id);
     if (threadId != null) {
       const thread = data(this.one('SELECT data FROM creation_threads WHERE creation_id=? AND id=?', id, safeId(threadId))) ?? notFound('Thread');
-      if ((scopeType != null && this.#scopeType(scopeType) !== thread.scopeType) || (scopeId != null && scopeId !== (thread.scopeType === 'global' ? id : thread.scopeId))) {
+      const scopeMatches = scopeType === 'node' ? ['unit', 'folder'].includes(thread.scopeType)
+        : scopeType == null || this.#scopeType(scopeType) === thread.scopeType;
+      if (!scopeMatches || (scopeId != null && scopeId !== (thread.scopeType === 'global' ? id : thread.scopeId))) {
         fail('INVALID_REQUEST', 'Thread scope does not match');
       }
       return thread;
@@ -675,14 +739,44 @@ export class CreationStore {
     return this.all('SELECT data FROM creation_threads WHERE creation_id=? ORDER BY rowid', id).map(data);
   }
   #scopeType(type) { return type === 'node' ? 'unit' : pick(type, ['global', 'folder', 'unit'], 'thread scope'); }
-  listMessages(id, threadId, { limit = 100, beforeId } = {}) {
+  #messageRows(id, threadId, { limit = 100, beforeId } = {}, extra = 0) {
     this.getThread(id, { threadId });
     if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) fail('INVALID_REQUEST', 'Invalid message limit');
     const before = beforeId == null ? null : this.one('SELECT rowid FROM creation_messages WHERE creation_id=? AND thread_id=? AND id=?',
       id, threadId, safeId(beforeId)) ?? notFound('Message');
-    const rows = before ? this.all('SELECT data FROM creation_messages WHERE creation_id=? AND thread_id=? AND rowid<? ORDER BY rowid DESC LIMIT ?', id, threadId, before.rowid, limit)
-      : this.all('SELECT data FROM creation_messages WHERE creation_id=? AND thread_id=? ORDER BY rowid DESC LIMIT ?', id, threadId, limit);
-    return rows.reverse().map(data);
+    return before
+      ? this.db.prepare('SELECT data FROM creation_messages WHERE creation_id=? AND thread_id=? AND rowid<? ORDER BY rowid DESC LIMIT ?').iterate(id, threadId, before.rowid, limit + extra)
+      : this.db.prepare('SELECT data FROM creation_messages WHERE creation_id=? AND thread_id=? ORDER BY rowid DESC LIMIT ?').iterate(id, threadId, limit + extra);
+  }
+  listMessages(id, threadId, options) { return Array.from(this.#messageRows(id, threadId, options), data).reverse(); }
+  pageMessages(id, threadId, options = {}) {
+    const messages = [];
+    let bytes = 2;
+    let hasMore = false;
+    for (const row of this.#messageRows(id, threadId, options, 1)) {
+      if (messages.length >= (options.limit ?? 100)) { hasMore = true; break; }
+      let message = data(row);
+      let size = Buffer.byteLength(row.data);
+      if (!messages.length && size + bytes > PAGE_BYTES) {
+        // An older individual message may exceed the whole page after JSON escaping.
+        // Include a preview (with its original cursor ID) so paging can still advance.
+        const { id, creationId, threadId, createdAt, role, runId, status, text } = message;
+        const preview = clipBytes(text ?? '', 64 * 1024);
+        message = { id, creationId, threadId, createdAt, role, runId, status, text: preview, content: preview, contentTruncated: true };
+        size = jsonBytes(message);
+      }
+      const entryBytes = size + Number(messages.length > 0);
+      if (bytes + entryBytes > PAGE_BYTES) { hasMore = true; break; }
+      bytes += entryBytes;
+      messages.push(message);
+    }
+    messages.reverse();
+    return { messages, hasMore, nextBeforeId: hasMore ? messages[0]?.id ?? null : null };
+  }
+  ensureAssistantMessage(run, { status, text, contextMeta }) {
+    const { creationId, threadId, assistantMessageId: id } = run;
+    return data(this.one('SELECT data FROM creation_messages WHERE creation_id=? AND thread_id=? AND id=?', creationId, threadId, id))
+      ?? this.addMessage(creationId, threadId, { id, role: 'assistant', status, text, content: text, runId: run.id, contextMeta });
   }
   addMessage(id, threadId, message) {
     this.getThread(id, { threadId });
@@ -740,26 +834,35 @@ export class CreationStore {
       return this.#saveRun({ ...run, status, reason: action === 'pause' ? 'user_paused' : 'user_cancelled', currentNodeId: null, leaseEpoch: run.leaseEpoch + 1 });
     });
   }
+  interruptRun(run) {
+    return this.transaction(() => {
+      const next = this.updateRun(run.creationId, run.id, run, { status: run.type === 'thread' ? 'failed' : 'paused',
+        reason: 'agent_restarted', currentNodeId: null, leaseEpoch: run.leaseEpoch + 1 });
+      if (next?.type === 'thread') this.ensureAssistantMessage(next, { status: 'failed', text: 'Turn interrupted by Agent restart.' });
+      return next;
+    });
+  }
   recoverInterruptedRuns(bootId) {
     safeId(bootId);
     return this.transaction(() => this.all("SELECT data FROM creation_runs WHERE status='running' AND boot_id<>?", bootId)
-      .map(data).map(run => this.#saveRun({ ...run, status: 'paused', reason: 'agent_restarted', currentNodeId: null, leaseEpoch: run.leaseEpoch + 1 })));
+      .map(row => this.interruptRun(data(row))));
   }
 
-  saveAsset(id, input) {
+  saveAsset(id, input, { exportFile = false } = {}) {
     return this.transaction(() => {
       this.#creation(id);
       if (this.one('SELECT COUNT(*) AS count FROM creation_assets WHERE creation_id=?', id).count >= LIMITS.assets) fail('LIMIT_EXCEEDED', 'Too many assets');
       const ext = String(input.ext ?? input.extension ?? '').toLowerCase();
       if (!own(ASSET_TYPES, ext)) fail('INVALID_REQUEST', 'Unsupported asset type');
-      const bytes = Buffer.isBuffer(input.bytes) ? input.bytes : typeof input.content === 'string' && ['html', 'svg'].includes(ext)
+      const isExportType = ext === 'md' || ext === 'json';
+      const bytes = Buffer.isBuffer(input.bytes) ? input.bytes : typeof input.content === 'string' && ['html', 'svg', 'md', 'json'].includes(ext)
         ? Buffer.from(boundedText(input.content, LIMITS.assetBytes, 'asset content'))
         : decodeBase64(input.base64 ?? input.dataBase64, LIMITS.assetBytes);
-      if (bytes.length > LIMITS.assetBytes || !validAsset(ext, bytes)) fail('INVALID_REQUEST', 'Invalid asset bytes or size');
+      if ((bytes.length > LIMITS.assetBytes && !(exportFile && isExportType && Buffer.isBuffer(input.bytes))) || !validAsset(ext, bytes)) fail('INVALID_REQUEST', 'Invalid asset bytes or size');
       const assetId = randomUUID();
-      const asset = { id: assetId, creationId: id, ext, mimeType: ASSET_TYPES[ext], byteLength: bytes.length,
+      const asset = { id: assetId, creationId: id, ext, ...(exportFile ? { name: `${id}.${ext}` } : {}), mimeType: ASSET_TYPES[ext], byteLength: bytes.length,
         // Active formats must be served as downloads or inside a sandbox by the relay/UI.
-        disposition: ['html', 'svg'].includes(ext) ? 'attachment' : 'inline', createdAt: now() };
+        disposition: (isExportType || ['html', 'svg'].includes(ext)) ? 'attachment' : 'inline', createdAt: now() };
       this.#write(this.#path(id, 'assets', `${assetId}.${ext}`), bytes);
       this.run('INSERT INTO creation_assets VALUES (?,?,?)', id, assetId, json(asset));
       this.#touch(id);

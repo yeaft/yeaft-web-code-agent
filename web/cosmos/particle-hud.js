@@ -616,7 +616,7 @@ export function drawCosmosHud(ctx, w, h, st, webGraph, galaxyBooks, agentsByPlan
       }
 
       // Status overlays: generating, needs_attention, seed
-      if (status === 'generating') {
+      if (b.activeRunStatus === 'running' || status === 'generating') {
         const ringR = 14 + sizeBoost * 0.8;
         const collapseR = ringR + (1 - ((t * 0.6 + idx * 0.23) % 1)) * 7;
         ctx.strokeStyle = 'rgba(255, 196, 102, 0.34)';

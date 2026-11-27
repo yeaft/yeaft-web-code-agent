@@ -1,7 +1,8 @@
 import { randomUUID } from 'node:crypto';
 import { CONFIG } from '../config.js';
 import { agents, pendingFiles } from '../context.js';
-import { validateCreationAttachments } from '../creation-attachment-policy.js';
+import { isClientSessionValid } from '../auth/client-session.js';
+import { MAX_CREATION_IN_FLIGHT_BYTES, MAX_CREATION_IN_FLIGHT_BYTES_PER_USER, validateCreationAttachments } from '../creation-attachment-policy.js';
 import { userDb } from '../database.js';
 import { resolveAgentAccessError, sendToAgent, sendToWebClient } from '../ws-utils.js';
 
@@ -14,6 +15,7 @@ const OPS = new Set([
 const UPLOAD_OPS = new Set(['create_creation', 'add_sources', 'send_message']);
 const MAX_PENDING_PER_CLIENT = 32;
 const MAX_PENDING = 1024;
+const MAX_AGENT_BUFFERED_BYTES = 16 * 1024 * 1024;
 
 /** Keep browser correlations private and bind each request to the exact Agent connection. */
 export function createCreationRelay({
@@ -25,7 +27,9 @@ export function createCreationRelay({
 } = {}) {
   const pending = new Map();
   const counts = new Map();
-  const active = client => client.authenticated && (skipAuth() || (client.userId && isActive(client.userId)));
+  const bytesByUser = new Map();
+  let inFlightBytes = 0;
+  const active = client => isClientSessionValid(client, { skipAuth: skipAuth(), isActive });
   const reply = (client, agentId, requestId, op, value) => send(client, { type: 'creation_response', agentId, requestId, op, ...value });
   function forget(id) {
     const row = pending.get(id);
@@ -35,6 +39,12 @@ export function createCreationRelay({
     const remaining = counts.get(row.client) - 1;
     if (remaining) counts.set(row.client, remaining);
     else counts.delete(row.client);
+    if (row.uploadBytes) {
+      inFlightBytes -= row.uploadBytes;
+      const userBytes = bytesByUser.get(row.userKey) - row.uploadBytes;
+      if (userBytes) bytesByUser.set(row.userKey, userBytes);
+      else bytesByUser.delete(row.userKey);
+    }
     return true;
   }
 
@@ -46,7 +56,7 @@ export function createCreationRelay({
       const op = typeof msg.op === 'string' ? msg.op : '';
       const reject = (errorCode, error) => reply(client, agentId, browserRequestId, op, { ok: false, error, errorCode });
       if (!active(client)) {
-        await reject('forbidden', 'Authentication required');
+        if (client?.authenticated) await reject('forbidden', 'Authentication required');
         return true;
       }
       if (!agentId || !browserRequestId || !OPS.has(op)) {
@@ -67,12 +77,18 @@ export function createCreationRelay({
         await reject('busy', 'Too many pending Creation requests');
         return true;
       }
+      if (agent.ws?.bufferedAmount > MAX_AGENT_BUFFERED_BYTES) {
+        await reject('busy', 'Agent send queue is full');
+        return true;
+      }
       if (msg.payload != null && (typeof msg.payload !== 'object' || Array.isArray(msg.payload))) {
         await reject('invalid_request', 'Invalid Creation payload');
         return true;
       }
       const source = msg.payload ?? {};
       const { files: _clientFiles, ...payload } = source;
+      let entries = [];
+      let uploadBytes = 0;
       if (UPLOAD_OPS.has(op)) {
         const result = validateCreationAttachments(client, source, { uploads, skipAuth: skipAuth(), uploadTtlMs, now });
         if (!result.ok) {
@@ -80,21 +96,35 @@ export function createCreationRelay({
           return true;
         }
         delete payload.attachments;
-        if (result.files.length) payload.files = result.files;
+        ({ entries, totalBytes: uploadBytes } = result);
       }
 
       const serverRequestId = randomUUID();
-      const ownerId = client.userId || 'local-development';
+      const ownerId = client.username || 'local-development';
+      const userKey = client.userId || ownerId;
+      const userBytes = bytesByUser.get(userKey) || 0;
+      if (userBytes + uploadBytes > MAX_CREATION_IN_FLIGHT_BYTES_PER_USER
+          || inFlightBytes + uploadBytes > MAX_CREATION_IN_FLIGHT_BYTES) {
+        await reject('busy', 'Too many Creation attachment bytes in flight');
+        return true;
+      }
+      if (uploadBytes) {
+        bytesByUser.set(userKey, userBytes + uploadBytes);
+        inFlightBytes += uploadBytes;
+      }
       const timer = setTimeout(() => {
-        if (forget(serverRequestId) && active(client) && (client.userId || 'local-development') === ownerId) {
+        if (forget(serverRequestId) && active(client) && (client.userId || ownerId) === userKey) {
           void Promise.resolve().then(() => reject('timeout', 'Creation request timed out; refresh before retrying')).catch(() => {});
         }
       }, timeoutMs);
       timer.unref?.();
-      pending.set(serverRequestId, { client, agent, agentId, browserRequestId, op, timer });
+      pending.set(serverRequestId, { client, agent, agentId, browserRequestId, op, timer, userKey, uploadBytes });
       counts.set(client, (counts.get(client) || 0) + 1);
       let sent;
       try {
+        if (entries.length) payload.files = entries.map(({ name, mimeType, buffer }) => ({
+          name, mimeType, data: buffer.toString('base64'), size: buffer.length,
+        }));
         sent = await forward(agent, { type: 'creation_request', requestId: serverRequestId, op, payload, ownerId });
       } catch {
         // A thrown transport error does not prove a mutation was never delivered.
@@ -118,6 +148,14 @@ export function createCreationRelay({
         });
       return true;
     },
+    clearAgent(agentId, agent) {
+      for (const [id, row] of pending) {
+        if (row.agentId !== agentId || row.agent !== agent || !forget(id) || !active(row.client)) continue;
+        void Promise.resolve().then(() => reply(row.client, agentId, row.browserRequestId, row.op, {
+          ok: false, errorCode: 'outcome_unknown', error: 'Agent disconnected; refresh before retrying',
+        })).catch(() => {});
+      }
+    },
     clearClient(client) {
       for (const [id, row] of pending) if (row.client === client) forget(id);
     },
@@ -129,3 +167,4 @@ const relay = createCreationRelay();
 export const handleClientCreation = (client, msg) => relay.request(client, msg);
 export const deliverCreationResponse = (agentId, agent, msg) => relay.response(agentId, agent, msg);
 export const clearCreationRequestsForClient = client => relay.clearClient(client);
+export const clearCreationRequestsForAgent = (agentId, agent) => relay.clearAgent(agentId, agent);

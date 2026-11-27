@@ -5,6 +5,9 @@ export const MAX_CREATION_ATTACHMENTS = 10;
 export const MAX_CREATION_ATTACHMENT_BYTES = 25 * 1024 * 1024;
 export const MAX_CREATION_ATTACHMENT_TOTAL_BYTES = 50 * 1024 * 1024;
 
+export const MAX_CREATION_IN_FLIGHT_BYTES_PER_USER = 50 * 1024 * 1024;
+export const MAX_CREATION_IN_FLIGHT_BYTES = 128 * 1024 * 1024;
+
 const invalid = (error, errorCode = 'invalid_request') => ({ ok: false, files: [], error, errorCode });
 
 /** Resolve only server-stored uploads; keep entries reusable until their original TTL. */
@@ -45,7 +48,5 @@ export function validateCreationAttachments(client, payload, {
     }
     entries.push(entry);
   }
-  return { ok: true, files: entries.map(({ name, mimeType, buffer }) => ({
-    name, mimeType, data: buffer.toString('base64'), size: buffer.length,
-  })) };
+  return { ok: true, entries, totalBytes: total };
 }

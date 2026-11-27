@@ -7,6 +7,12 @@
  */
 import { useCreationsStore, creationThreadKey } from '../../../../stores/creations.js';
 import { renderMarkdown } from '../../../../utils/markdown.js';
+import { sanitizeCreationHtml } from '../sanitize.js';
+
+function isFolderNode(n) {
+  if (!n) return false;
+  return n.kind === 'folder' || n.nodeType === 'folder' || n.type === 'folder' || n.isFolder === true;
+}
 
 const SLASH_PRESETS = [
   { key: 'slashOutline', cmd: '/outline ' },
@@ -37,9 +43,13 @@ export default {
       manualScope: 'global', // 'global' | 'node'
       openContextGroup: null,
       excludedIds: [],
-      uploading: false,
+      pendingFiles: [],
       sending: false,
+      sendError: '',
+      loadingThread: false,
       activeThreadId: '',
+      loadedThreadScopeKey: '',
+      _threadLoadSeq: 0,
       slashPresets: SLASH_PRESETS,
     };
   },
@@ -51,22 +61,33 @@ export default {
       return this.creationId || this.creationsStore.activeCreation?.creationId || '';
     },
     effectiveScope() {
-      if (this.anchorMode) return 'node';
-      if (this.followSelection && this.activeNode) return 'node';
-      return this.manualScope === 'node' && this.activeNode ? 'node' : 'global';
+      if (this.anchorMode) {
+        return isFolderNode(this.activeNode) ? 'folder' : 'unit';
+      }
+      if (this.followSelection && this.activeNode) {
+        return isFolderNode(this.activeNode) ? 'folder' : 'unit';
+      }
+      if (this.manualScope === 'node' && this.activeNode) {
+        return isFolderNode(this.activeNode) ? 'folder' : 'unit';
+      }
+      return 'global';
     },
     scopeNodeId() {
       if (this.anchorMode && this.anchor?.nodeId) return this.anchor.nodeId;
-      return this.effectiveScope === 'node' ? this.activeNode?.id || null : null;
+      return this.effectiveScope !== 'global' ? this.activeNode?.id || null : null;
+    },
+    currentScopeKey() {
+      return `${this.resolvedAgentId}:${this.resolvedCreationId}:${this.effectiveScope}:${this.scopeNodeId || 'global'}`;
     },
     threadBucket() {
       const aId = this.resolvedAgentId;
       const cId = this.resolvedCreationId;
       if (!aId || !cId) return null;
-      if (this.activeThreadId) {
+      if (this.activeThreadId && this.loadedThreadScopeKey === this.currentScopeKey) {
         const direct = this.creationsStore.threadMessagesByKey[creationThreadKey(aId, cId, this.activeThreadId)];
         if (direct) return direct;
       }
+      if (this.loadingThread) return null;
       const fallbackId = `${this.effectiveScope}:${this.scopeNodeId || 'global'}`;
       return this.creationsStore.threadMessagesByKey[creationThreadKey(aId, cId, fallbackId)] || null;
     },
@@ -79,9 +100,15 @@ export default {
     isStreaming() {
       return Boolean(this.sending || this.streamingMessage);
     },
+    canSend() {
+      return !this.loadingThread && !this.isStreaming && Boolean(this.inputText.trim() || this.pendingFiles.length > 0);
+    },
     activeBatchRun() {
       const runs = this.creationsStore.activeRunsForActive || [];
-      return runs[0] || null;
+      return runs.find((r) => r && r.type === 'batch') || runs[0] || null;
+    },
+    isBatchRun() {
+      return this.activeBatchRun?.type === 'batch';
     },
     batchDoneCount() {
       const r = this.activeBatchRun;
@@ -134,7 +161,7 @@ export default {
   },
   methods: {
     renderMd(text) {
-      return renderMarkdown(String(text || ''));
+      return sanitizeCreationHtml(renderMarkdown(String(text || '')));
     },
     scrollToBottom() {
       const el = this.$refs.streamEl;
@@ -143,19 +170,37 @@ export default {
     async syncThread() {
       const aId = this.resolvedAgentId;
       const cId = this.resolvedCreationId;
-      if (!aId || !cId) return;
+      this.activeThreadId = '';
+      this.loadedThreadScopeKey = '';
+      if (!aId || !cId) {
+        this.loadingThread = false;
+        return;
+      }
+      const seq = ++this._threadLoadSeq;
+      const scopeKey = this.currentScopeKey;
+      const scopeType = this.effectiveScope;
+      const scopeId = this.scopeNodeId;
+      this.loadingThread = true;
       try {
-        const bucket = await this.creationsStore.loadThread(aId, cId, this.effectiveScope, this.scopeNodeId);
+        const bucket = await this.creationsStore.loadThread(aId, cId, scopeType, scopeId);
+        if (seq !== this._threadLoadSeq || scopeKey !== this.currentScopeKey) {
+          return;
+        }
         if (bucket?.thread?.id) {
           this.activeThreadId = bucket.thread.id;
+          this.loadedThreadScopeKey = scopeKey;
         }
       } catch {
         // non-fatal if offline
+      } finally {
+        if (seq === this._threadLoadSeq) {
+          this.loadingThread = false;
+        }
       }
     },
     toggleScope() {
       if (this.anchorMode) return;
-      if (this.effectiveScope === 'node') {
+      if (this.effectiveScope !== 'global') {
         this.followSelection = false;
         this.manualScope = 'global';
       } else if (this.activeNode) {
@@ -190,36 +235,47 @@ export default {
         this.sendMessage();
       }
     },
-    async onAttachFiles(e) {
+    onAttachFiles(e) {
       const files = Array.from(e.target?.files || []);
       if (e.target) e.target.value = '';
       if (!files.length) return;
-      this.uploading = true;
-      try {
-        await this.creationsStore.uploadSources(this.resolvedAgentId, this.resolvedCreationId, files, []);
-      } finally {
-        this.uploading = false;
-      }
+      this.pendingFiles = [...this.pendingFiles, ...files];
+    },
+    removePendingFile(idx) {
+      const next = this.pendingFiles.slice();
+      next.splice(idx, 1);
+      this.pendingFiles = next;
     },
     async sendMessage() {
       const text = this.inputText.trim();
-      if (!text || this.isStreaming) return;
-      this.inputText = '';
+      const filesToSend = this.pendingFiles.slice();
+      if ((!text && filesToSend.length === 0) || this.isStreaming || this.loadingThread) return;
+      this.sendError = '';
       this.openContextGroup = null;
       this.sending = true;
+      const scopeKey = this.currentScopeKey;
+      const threadId = (this.activeThreadId && this.loadedThreadScopeKey === scopeKey)
+        ? this.activeThreadId
+        : undefined;
       try {
         const res = await this.creationsStore.sendMessage(this.resolvedAgentId, this.resolvedCreationId, {
           text,
           content: text,
-          threadId: this.activeThreadId || undefined,
+          threadId,
           scopeType: this.effectiveScope,
           scopeId: this.scopeNodeId,
           anchor: this.anchorMode ? this.anchor : null,
           excludedContextIds: [...this.excludedIds],
+          ...(filesToSend.length > 0 ? { rawFiles: filesToSend } : {}),
         });
-        if (res?.threadId || res?.thread?.id) {
+        this.inputText = '';
+        this.pendingFiles = [];
+        if (scopeKey === this.currentScopeKey && (res?.threadId || res?.thread?.id)) {
           this.activeThreadId = res.threadId || res.thread.id;
+          this.loadedThreadScopeKey = scopeKey;
         }
+      } catch (err) {
+        this.sendError = err?.message || 'Failed to send message';
       } finally {
         this.sending = false;
       }
@@ -247,10 +303,10 @@ export default {
           <button
             type="button"
             class="creation-scope-pill"
-            :class="{ 'is-node': effectiveScope === 'node' }"
+            :class="{ 'is-node': effectiveScope !== 'global' }"
             @click="toggleScope"
           >
-            <template v-if="effectiveScope === 'node' && (anchor?.label || activeNode?.title)">
+            <template v-if="effectiveScope !== 'global' && (anchor?.label || activeNode?.title)">
               {{ $t('creation.director.scopeNode') }}: {{ anchor?.label || activeNode?.title }}
             </template>
             <template v-else>
@@ -315,26 +371,33 @@ export default {
           <p v-else class="creation-context-popover-empty">{{ $t('creation.director.contextMounted') }}: 0</p>
         </div>
 
-        <!-- Active Batch Run Status Bar -->
+        <!-- Active Run Status Bar -->
         <div v-if="activeBatchRun" class="creation-batch-status-bar">
           <div class="creation-batch-status-top">
             <span class="creation-batch-status-label">
-              {{ activeBatchRun.status === 'paused' ? $t('creation.studio.batchPaused') : $t('creation.studio.batchRunning') }}
-              ({{ batchDoneCount }}/{{ batchTotalCount }})
+              <template v-if="isBatchRun">
+                {{ activeBatchRun.status === 'paused' ? $t('creation.studio.batchPaused') : $t('creation.studio.batchRunning') }}
+                ({{ batchDoneCount }}/{{ batchTotalCount }})
+              </template>
+              <template v-else>
+                {{ $t('creation.director.thinking') }}
+              </template>
             </span>
             <div class="creation-batch-status-btns">
-              <button
-                v-if="activeBatchRun.status === 'running'"
-                type="button"
-                class="creation-glass-btn"
-                @click="controlBatch('pause')"
-              >{{ $t('creation.studio.pause') }}</button>
-              <button
-                v-else
-                type="button"
-                class="creation-glass-btn is-primary"
-                @click="controlBatch('resume')"
-              >{{ $t('creation.studio.resume') }}</button>
+              <template v-if="isBatchRun">
+                <button
+                  v-if="activeBatchRun.status === 'running'"
+                  type="button"
+                  class="creation-glass-btn"
+                  @click="controlBatch('pause')"
+                >{{ $t('creation.studio.pause') }}</button>
+                <button
+                  v-else
+                  type="button"
+                  class="creation-glass-btn is-primary"
+                  @click="controlBatch('resume')"
+                >{{ $t('creation.studio.resume') }}</button>
+              </template>
               <button
                 type="button"
                 class="creation-glass-btn is-danger"
@@ -342,7 +405,7 @@ export default {
               >{{ $t('creation.studio.stop') }}</button>
             </div>
           </div>
-          <div class="creation-progress-track">
+          <div v-if="isBatchRun" class="creation-progress-track">
             <div class="creation-progress-fill" :style="{ width: batchPercent + '%' }"></div>
           </div>
         </div>
@@ -416,6 +479,22 @@ export default {
         </div>
 
         <div class="creation-composer-box">
+          <div v-if="pendingFiles.length > 0" class="creation-ignite-files">
+            <span
+              v-for="(file, idx) in pendingFiles"
+              :key="(file.name || 'file') + '-' + idx"
+              class="creation-file-chip"
+            >
+              <span class="creation-file-chip-name">{{ file.name }}</span>
+              <button
+                type="button"
+                class="creation-file-chip-remove"
+                :aria-label="$t('creation.sources.delete')"
+                @click="removePendingFile(idx)"
+              >✕</button>
+            </span>
+          </div>
+
           <textarea
             ref="composerInput"
             v-model="inputText"
@@ -425,16 +504,20 @@ export default {
             @keydown="onComposerKeyDown"
           ></textarea>
 
+          <div v-if="sendError" class="creation-ignite-error" role="alert">
+            {{ sendError }}
+          </div>
+
           <div class="creation-composer-foot">
             <label class="creation-glass-btn creation-upload-label" :title="$t('creation.sources.upload')">
-              <input type="file" multiple hidden :disabled="uploading" @change="onAttachFiles" />
+              <input type="file" multiple hidden :disabled="sending" @change="onAttachFiles" />
               <span>📎 {{ $t('creation.galaxy.igniteAttach') }}</span>
             </label>
 
             <button
               type="button"
               class="creation-glass-btn is-primary"
-              :disabled="isStreaming || !inputText.trim()"
+              :disabled="!canSend"
               @click="sendMessage"
             >
               {{ anchorMode ? $t('creation.book.send') : $t('creation.director.send') }}

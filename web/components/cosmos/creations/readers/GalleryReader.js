@@ -10,16 +10,6 @@ function makeFrameId() {
   return `frame_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`;
 }
 
-function sanitizeSvg(svgMarkup) {
-  const raw = String(svgMarkup || '').trim();
-  if (!raw || !raw.toLowerCase().includes('<svg')) return '';
-  return raw
-    .replace(/<script[\s\S]*?<\/script>/gi, '')
-    .replace(/<foreignObject[\s\S]*?<\/foreignObject>/gi, '')
-    .replace(/\son[a-z]+\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)/gi, '')
-    .replace(/javascript:/gi, '');
-}
-
 function normalizeFrame(raw, idx) {
   return {
     frameId: raw?.frameId || raw?.id || makeFrameId(),
@@ -27,7 +17,6 @@ function normalizeFrame(raw, idx) {
     caption: typeof raw?.caption === 'string' ? raw.caption : '',
     assetId: raw?.assetId || '',
     sourceId: raw?.sourceId || '',
-    svgMarkup: typeof raw?.svgMarkup === 'string' ? raw.svgMarkup : '',
     prompt: typeof raw?.prompt === 'string' ? raw.prompt : '',
     tags: Array.isArray(raw?.tags) ? raw.tags.map((t) => String(t)) : [],
   };
@@ -63,6 +52,7 @@ export default {
     agentId: { type: String, default: '' },
     creationId: { type: String, default: '' },
     saving: { type: Boolean, default: false },
+    onSaveContent: { type: Function, default: null },
   },
   emits: ['save-content', 'request-ai-edit', 'finalize-node'],
   data() {
@@ -70,6 +60,9 @@ export default {
       gallery: parseGalleryContent(this.content),
       editing: false,
       dirty: false,
+      editBaseRevId: this.node?.currentRevId ?? null,
+      conflictError: '',
+      saveError: '',
       lightboxIndex: -1,
       zoomLevel: 1,
       uploading: false,
@@ -88,12 +81,16 @@ export default {
     content(newVal) {
       if (!this.dirty) {
         this.gallery = parseGalleryContent(newVal);
+        this.editBaseRevId = this.node?.currentRevId ?? null;
       }
     },
     'node.id'() {
       this.gallery = parseGalleryContent(this.content);
       this.dirty = false;
       this.editing = false;
+      this.editBaseRevId = this.node?.currentRevId ?? null;
+      this.conflictError = '';
+      this.saveError = '';
       this.lightboxIndex = -1;
       this.zoomLevel = 1;
     },
@@ -105,7 +102,7 @@ export default {
     window.removeEventListener('keydown', this.onKeyDown);
   },
   methods: {
-    frameMediaUrl(frame) {
+    frameImageUrl(frame) {
       if (!frame) return '';
       if (frame.assetId) {
         return this.creationsStore.mediaUrl(this.agentId, this.creationId, 'asset', frame.assetId);
@@ -115,8 +112,13 @@ export default {
       }
       return '';
     },
-    safeSvg(frame) {
-      return sanitizeSvg(frame?.svgMarkup);
+    toggleEditing() {
+      if (!this.editing && !this.dirty) {
+        this.editBaseRevId = this.node?.currentRevId ?? null;
+        this.conflictError = '';
+        this.saveError = '';
+      }
+      this.editing = !this.editing;
     },
     openLightbox(idx) {
       this.lightboxIndex = idx;
@@ -148,15 +150,18 @@ export default {
       }
     },
     markDirty() {
+      if (!this.dirty) {
+        this.editBaseRevId = this.node?.currentRevId ?? null;
+      }
       this.dirty = true;
     },
     addEmptyFrame() {
+      this.markDirty();
       this.gallery.frames.push(normalizeFrame({
         title: `#${this.frames.length + 1}`,
         caption: '',
         prompt: '',
       }, this.frames.length));
-      this.dirty = true;
       this.editing = true;
     },
     async onUploadImage(e) {
@@ -169,15 +174,15 @@ export default {
         const added = Array.isArray(res?.sources) ? res.sources : (res?.source ? [res.source] : []);
         for (const src of added) {
           if (src && src.id) {
+            this.markDirty();
             this.gallery.frames.push(normalizeFrame({
               title: (src.name || src.filename || 'Image').replace(/\.[^.]+$/, ''),
               caption: '',
               sourceId: src.id,
             }, this.frames.length));
-            this.dirty = true;
           }
         }
-        if (this.dirty) this.saveGallery();
+        if (this.dirty) await this.saveGallery();
       } finally {
         this.uploading = false;
       }
@@ -185,23 +190,46 @@ export default {
     moveFrame(idx, delta) {
       const target = idx + delta;
       if (target < 0 || target >= this.frames.length) return;
+      this.markDirty();
       const [item] = this.gallery.frames.splice(idx, 1);
       this.gallery.frames.splice(target, 0, item);
-      this.dirty = true;
     },
     deleteFrame(idx) {
+      this.markDirty();
       this.gallery.frames.splice(idx, 1);
       if (this.lightboxIndex === idx) this.closeLightbox();
       else if (this.lightboxIndex > idx) this.lightboxIndex -= 1;
-      this.dirty = true;
     },
-    saveGallery() {
-      this.$emit('save-content', {
+    async saveGallery() {
+      this.conflictError = '';
+      this.saveError = '';
+      const payload = {
         nodeId: this.node.id,
         content: JSON.stringify({ frames: this.frames }, null, 2),
-        baseRevId: this.node.currentRevId || null,
-      });
+        baseRevId: this.editBaseRevId,
+      };
+      if (this.onSaveContent) {
+        try {
+          const res = await this.onSaveContent(payload);
+          if (res?.conflict === true) {
+            this.conflictError = this.$t('creation.interior.conflictDesc');
+            return false;
+          }
+          this.editBaseRevId = res?.node?.currentRevId ?? this.node?.currentRevId ?? this.editBaseRevId;
+          this.dirty = false;
+          return true;
+        } catch (err) {
+          if (err?.errorCode === 'revision_conflict') {
+            this.conflictError = this.$t('creation.interior.conflictDesc');
+          } else {
+            this.saveError = err?.message || 'Save failed';
+          }
+          return false;
+        }
+      }
+      this.$emit('save-content', payload);
       this.dirty = false;
+      return true;
     },
     requestAiRedraw(frame, idx) {
       this.$emit('request-ai-edit', {
@@ -237,7 +265,7 @@ export default {
             type="button"
             class="creation-glass-btn"
             :class="{ 'is-active': editing }"
-            @click="editing = !editing"
+            @click="toggleEditing"
           >
             ✎ {{ editing ? $t('creation.book.doneEdit') : $t('creation.book.inlineEdit') }}
           </button>
@@ -252,6 +280,15 @@ export default {
             {{ $t('creation.interior.save') }}
           </button>
         </div>
+      </div>
+
+      <!-- Conflict / Save Error Banner -->
+      <div v-if="conflictError || saveError" class="creation-conflict-banner" role="alert">
+        <strong>⚠ {{ conflictError ? $t('creation.interior.conflictTitle') : saveError }}</strong>
+        <span v-if="conflictError">{{ conflictError }}</span>
+        <button type="button" class="creation-glass-btn" @click="conflictError = ''; saveError = ''">
+          {{ $t('creation.canon.dismiss') }}
+        </button>
       </div>
 
       <!-- Gallery Grid -->
@@ -276,17 +313,12 @@ export default {
           <article v-for="(frame, idx) in frames" :key="frame.frameId" class="creation-gallery-frame">
             <div class="creation-gallery-media" @click="openLightbox(idx)">
               <img
-                v-if="frameMediaUrl(frame)"
-                :src="frameMediaUrl(frame)"
+                v-if="frameImageUrl(frame)"
+                :src="frameImageUrl(frame)"
                 :alt="frame.title || frame.caption"
                 loading="lazy"
                 class="creation-gallery-img"
               />
-              <div
-                v-else-if="safeSvg(frame)"
-                class="creation-gallery-svg"
-                v-html="safeSvg(frame)"
-              ></div>
               <div v-else class="creation-gallery-placeholder">
                 <span class="creation-gallery-placeholder-prompt">{{ frame.prompt || $t('creation.gallery.captionPlaceholder') }}</span>
               </div>
@@ -358,18 +390,12 @@ export default {
           <button v-if="frames.length > 1" type="button" class="creation-lightbox-nav is-prev" @click="stepLightbox(-1)">‹</button>
           <div class="creation-lightbox-viewport">
             <img
-              v-if="frameMediaUrl(lightboxFrame)"
-              :src="frameMediaUrl(lightboxFrame)"
+              v-if="frameImageUrl(lightboxFrame)"
+              :src="frameImageUrl(lightboxFrame)"
               :alt="lightboxFrame.title"
               class="creation-lightbox-img"
               :style="{ transform: 'scale(' + zoomLevel + ')' }"
             />
-            <div
-              v-else-if="safeSvg(lightboxFrame)"
-              class="creation-lightbox-svg"
-              :style="{ transform: 'scale(' + zoomLevel + ')' }"
-              v-html="safeSvg(lightboxFrame)"
-            ></div>
             <div v-else class="creation-lightbox-placeholder">
               {{ lightboxFrame.prompt || $t('creation.gallery.captionPlaceholder') }}
             </div>

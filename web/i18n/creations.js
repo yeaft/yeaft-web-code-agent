@@ -52,6 +52,10 @@ export const zhCN = {
   'creation.galaxy.totalCount': '{count} 颗星体',
   'creation.galaxy.generatingCount': '{count} 个生成中',
   'creation.galaxy.selectAgentHint': '请选择一个 Agent 查看其银河创作空间。',
+  'creation.galaxy.legacyFound': '发现 {count} 条旧版星图记录',
+  'creation.galaxy.legacyImport': '导入到当前 Agent',
+  'creation.galaxy.legacyDismiss': '忽略',
+  'creation.galaxy.legacyImported': '已导入 {count} 条旧版星图记录',
 
   // Orbital Inspector (L2)
   'creation.inspector.landRead': '着陆阅读',
@@ -137,6 +141,7 @@ export const zhCN = {
   'creation.video.emptyVideo': '这个视频脉冲还没有分镜脚本。',
   'creation.video.storyboardMode': '分镜预览',
   'creation.video.sourceVideoMode': '成片播放',
+  'creation.video.linkSource': '关联视频素材',
 
   // Studio Left Rail & Views
   'creation.studio.tabArtifacts': '章节',
@@ -159,6 +164,7 @@ export const zhCN = {
   'creation.studio.stop': '停止',
   'creation.studio.noFolders': '暂无分卷，可直接创建章节或先建立结构。',
   'creation.studio.addChapter': '添加章节',
+  'creation.studio.batchSkipped': '已跳过批量',
 
   // Canon
   'creation.canon.world': '世界观',
@@ -273,6 +279,10 @@ export const en = {
   'creation.galaxy.totalCount': '{count} stars',
   'creation.galaxy.generatingCount': '{count} generating',
   'creation.galaxy.selectAgentHint': 'Select an Agent to explore its Galaxy creations.',
+  'creation.galaxy.legacyFound': 'Found {count} legacy star-map bookmarks',
+  'creation.galaxy.legacyImport': 'Import to current Agent',
+  'creation.galaxy.legacyDismiss': 'Dismiss',
+  'creation.galaxy.legacyImported': 'Imported {count} legacy bookmarks',
 
   // Orbital Inspector (L2)
   'creation.inspector.landRead': 'Land & Read',
@@ -358,6 +368,7 @@ export const en = {
   'creation.video.emptyVideo': 'This video pulsar has no storyboard scenes yet.',
   'creation.video.storyboardMode': 'Storyboard',
   'creation.video.sourceVideoMode': 'Video',
+  'creation.video.linkSource': 'Link video source',
 
   // Studio Left Rail & Views
   'creation.studio.tabArtifacts': 'Units',
@@ -380,6 +391,7 @@ export const en = {
   'creation.studio.stop': 'Stop',
   'creation.studio.noFolders': 'No sections yet. Add a unit or create a folder to organize.',
   'creation.studio.addChapter': 'Add chapter',
+  'creation.studio.batchSkipped': 'Skipped in batch',
 
   // Canon
   'creation.canon.world': 'World',

@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import ctx from '../../context.js';
 import { sendToServer } from '../../connection/buffer.js';
 import { safeId, fail } from './constants.js';
@@ -13,21 +14,64 @@ function safeError(error) {
 // or a different Agent. Requests and media pulls never use Session routing.
 export function createCreationBridge({ context = ctx, send = sendToServer,
   createService = async options => (await import('./service.js')).createCreationService(options) } = {}) {
-  let servicePromise;
+  let active;
   let closed = false;
-  function service() {
-    if (closed) fail('INVALID_STATE', 'Creations is closed');
+  let pending = Promise.resolve();
+  function serialize(fn) {
+    const operation = pending.then(fn);
+    pending = operation.catch(() => {});
+    return operation;
+  }
+  const validOwner = ownerId => typeof ownerId === 'string' && ownerId.length > 0 && ownerId.length <= 128 && !ownerId.includes('\0');
+  function readIdentity(ownerId) {
+    const serverUrl = context.CONFIG?.serverUrl;
+    const agentId = context.agentId || context.AGENT_ID;
     const yeaftDir = context.CONFIG?.yeaftDir;
-    if (!yeaftDir) fail('INVALID_STATE', 'Agent data directory is unavailable');
-    servicePromise ??= Promise.resolve().then(() => createService({ yeaftDir,
-      emitEvent: event => send({ type: 'creation_event', event }),
-      mediaUrlFor: (creationId, mediaKind, mediaId) => {
-        const agentId = context.agentId || context.AGENT_ID;
-        if (!agentId) return undefined;
-        return `/api/yeaft/creations/${encodeURIComponent(agentId)}/${safeId(creationId)}/media/${mediaKind}/${safeId(mediaId)}`;
+    return { yeaftDir, serverUrl, agentId, ownerId };
+  }
+  function identity(ownerId) {
+    const current = readIdentity(ownerId);
+    if (!Object.values(current).every(value => typeof value === 'string' && value && !value.includes('\0'))) {
+      fail('INVALID_STATE', 'Agent storage identity is unavailable');
+    }
+    return current;
+  }
+  const matches = (scope, { yeaftDir, serverUrl, agentId, ownerId }) => scope?.yeaftDir === yeaftDir
+    && scope.binding.serverUrl === serverUrl && scope.binding.agentId === agentId && scope.binding.ownerId === ownerId;
+  async function retire() {
+    const scope = active;
+    active = undefined; // Fence events before shutdown settles any outstanding turns.
+    await scope?.runtime.close();
+  }
+  async function service(current, socket, { media = false } = {}) {
+    const { yeaftDir, ...binding } = current;
+    const { serverUrl, agentId, ownerId } = binding;
+    const stillCurrent = () => !closed && socket === context.ws && matches({ yeaftDir, binding }, readIdentity(ownerId));
+    if (!stillCurrent()) fail('INVALID_STATE', 'Agent storage identity changed');
+    if (matches(active, current)) {
+      active.socket = socket;
+      return active.runtime;
+    }
+    if (media) fail('INVALID_REQUEST', 'Creations media request does not match authenticated ownership');
+    await retire();
+    if (!stillCurrent()) fail('INVALID_STATE', 'Agent storage identity changed');
+    const namespaceKey = createHash('sha256').update(`${serverUrl}\0${agentId}\0${ownerId}`).digest('hex').slice(0, 24);
+    const scope = { yeaftDir, binding, socket };
+    scope.runtime = await createService({ yeaftDir, namespaceKey, namespaceBinding: binding,
+      emitEvent: event => {
+        const eventSocket = scope.socket;
+        const isCurrent = () => !closed && active === scope && context.ws === eventSocket && matches(scope, readIdentity(ownerId));
+        if (isCurrent()) return send({ type: 'creation_event', event }, { isCurrent });
       },
-    })).catch(error => { servicePromise = undefined; throw error; });
-    return servicePromise;
+      mediaUrlFor: (creationId, mediaKind, mediaId) =>
+        `/api/yeaft/creations/${encodeURIComponent(agentId)}/${safeId(creationId)}/media/${mediaKind}/${safeId(mediaId)}`,
+    });
+    active = scope;
+    if (!stillCurrent()) {
+      await retire();
+      fail('INVALID_STATE', 'Agent storage identity changed');
+    }
+    return scope.runtime;
   }
   function correlation(msg) {
     return typeof msg.requestId === 'string' && msg.requestId.length > 0 && msg.requestId.length <= 128 ? msg.requestId : null;
@@ -36,36 +80,42 @@ export function createCreationBridge({ context = ctx, send = sendToServer,
     async request(msg) {
       if (msg?.type !== 'creation_request') return false;
       const response = { type: 'creation_response', requestId: correlation(msg), op: typeof msg.op === 'string' ? msg.op : '' };
+      const socket = context.ws;
       try {
-        if (!response.requestId || typeof msg.ownerId !== 'string' || !msg.ownerId || msg.ownerId.length > 128) {
+        if (!response.requestId || !validOwner(msg.ownerId)) {
           fail('INVALID_REQUEST', 'Creations request requires authenticated ownership');
         }
-        const runtime = await service();
-        if (closed) fail('INVALID_STATE', 'Creations is closed');
-        response.data = await runtime.request({ op: response.op, payload: msg.payload ?? {} });
+        const current = identity(msg.ownerId);
+        response.data = await serialize(async () => {
+          const runtime = await service(current, socket);
+          if (closed) fail('INVALID_STATE', 'Creations is closed');
+          return runtime.request({ op: response.op, payload: msg.payload ?? {} });
+        });
         response.ok = true;
       } catch (error) { Object.assign(response, { ok: false, ...safeError(error) }); }
-      await send(response);
+      if (context.ws === socket) await send(response);
       return true;
     },
     async mediaRead(msg) {
       if (msg?.type !== 'creation_media_read') return false;
       const requestId = correlation(msg);
+      const socket = context.ws;
       let response;
       try {
-        if (!requestId) fail('INVALID_REQUEST', 'Invalid Creations media request');
-        const runtime = await service();
-        if (closed) fail('INVALID_STATE', 'Creations is closed');
-        response = await runtime.handleMediaRead(msg);
+        if (!requestId || !validOwner(msg.ownerId)) fail('INVALID_REQUEST', 'Creations media request requires authenticated ownership');
+        const current = identity(msg.ownerId);
+        response = await serialize(async () => {
+          const runtime = await service(current, socket, { media: true });
+          if (closed) fail('INVALID_STATE', 'Creations is closed');
+          return runtime.handleMediaRead(msg);
+        });
       } catch (error) { response = { type: 'creation_media_chunk', requestId, ok: false, ...safeError(error) }; }
-      await send(response);
+      if (context.ws === socket) await send(response);
       return true;
     },
     async close() {
       closed = true;
-      if (servicePromise) {
-        try { await (await servicePromise).close(); } catch { /* shutdown is best effort */ }
-      }
+      try { await serialize(retire); } catch { /* shutdown is best effort */ }
     },
   };
 }

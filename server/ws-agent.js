@@ -22,6 +22,7 @@ import { recordPerfTraceEvent } from './perf-trace.js';
 import { clearWorkbenchCorrelationsForAgent } from './workbench-correlation.js';
 import { clearBrowserRuntimeForAgent } from './browser-runtime-routes.js';
 import { clearFileContentAssembliesForAgent } from './file-content-assembly.js';
+import { clearCreationRequestsForAgent } from './handlers/client-creation.js';
 import { closeCreationMediaReads } from './creation-media-relay.js';
 import { closeSessionAttachmentReads, handleSessionAttachmentChunk } from './session-attachment-relay.js';
 import { handleAgentBrowser } from './handlers/agent-browser.js';
@@ -316,6 +317,7 @@ function handleAgentDisconnect(agentId, agentName, ws) {
   clearFileContentAssembliesForAgent(agentId);
   closeSessionAttachmentReads(agentId, agent);
   closeCreationMediaReads(agentId, agent);
+  clearCreationRequestsForAgent(agentId, agent);
   clearBrowserRuntimeForAgent(agentId);
   for (const pending of takeAgentSettingsRequestsForAgent(agentId)) {
     const client = webClients.get(pending.clientId);
@@ -414,6 +416,7 @@ function completeAgentRegistration(ws, agentId, agentName, workDir, sessionKey, 
   if (existingAgent?.ws && existingAgent.ws !== ws) {
     closeSessionAttachmentReads(agentId, existingAgent);
     closeCreationMediaReads(agentId, existingAgent);
+    clearCreationRequestsForAgent(agentId, existingAgent);
     clearBrowserRuntimeForAgent(agentId);
     existingAgent.ws.close(1008, 'Superseded by a newer Agent connection');
   }

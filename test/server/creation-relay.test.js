@@ -1,3 +1,5 @@
+import { EventEmitter } from 'node:events';
+import jwt from 'jsonwebtoken';
 import express from 'express';
 import request from 'supertest';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -7,14 +9,23 @@ const state = vi.hoisted(() => ({
   users: new Map(), trackMessageBytesSent: () => {},
 }));
 vi.mock('../../server/context.js', () => state);
-vi.mock('../../server/config.js', () => ({ CONFIG: { skipAuth: false, fileCleanupInterval: 600_000 } }));
+vi.mock('../../server/config.js', () => ({
+  CONFIG: { skipAuth: false, jwtSecret: 'creation-relay-test-secret', jwtExpiresIn: '5m', browserRuntime: {}, fileCleanupInterval: 600_000 },
+  getUserByUsername: username => state.users.get(username),
+}));
+vi.mock('../../server/auth.js', () => ({}));
 vi.mock('../../server/database.js', () => ({ userDb: {
   isActive: id => [...state.users.values()].some(user => user.id === id && user.deletion_state === 'active'),
   getByUsername: username => state.users.get(username),
-} }));
+  updateLogin: () => {},
+}, scheduledTaskReceiptDb: { getByUser: () => [] } }));
 vi.mock('../../server/yeaft-asset-store.js', () => ({ yeaftAssetStore: {} }));
 vi.mock('../../server/workbench-preview.js', () => ({}));
 
+import { CONFIG } from '../../server/config.js';
+import { activeSessions, revokedTokens } from '../../server/auth/session-store.js';
+import { issueSessionToken, logout } from '../../server/auth/token.js';
+import { handleWebConnection } from '../../server/ws-client.js';
 import { createCreationRelay } from '../../server/handlers/client-creation.js';
 import { handleAgentCreation } from '../../server/handlers/agent-creation.js';
 import { validateCreationAttachments, MAX_CREATION_ATTACHMENT_BYTES } from '../../server/creation-attachment-policy.js';
@@ -26,8 +37,8 @@ const owner = { username: 'alice', role: 'pro' };
 const source = { agentId, creationId: 'creation-a', mediaKind: 'asset', mediaId: 'media-a' };
 const url = `/api/yeaft/creations/${agentId}/creation-a/media/asset/media-a`;
 const msg = (extra = {}) => ({ type: 'creation_request', requestId: 'browser-1', agentId, op: 'get_creation', ...extra });
-const socket = () => ({ readyState: 1, send: vi.fn() });
-const browser = userId => ({ authenticated: true, userId, role: 'pro', encryptOutbound: false, ws: socket() });
+const socket = () => Object.assign(new EventEmitter(), { readyState: 1, send: vi.fn(), close: vi.fn() });
+const browser = userId => ({ authenticated: true, userId, username: userId === 'user-a' ? 'alice' : 'bob', role: 'pro', encryptOutbound: false, ws: socket() });
 const app = express();
 registerUploadRoutes(app, {
   requireAuth: (_req, res) => res.sendStatus(500),
@@ -44,6 +55,7 @@ beforeEach(() => {
   state.agents.clear();
   state.webClients.clear();
   state.pendingFiles.clear();
+  state.users.clear();
   state.users.set('alice', { id: 'user-a', deletion_state: 'active' });
   state.users.set('bob', { id: 'user-b', deletion_state: 'active' });
   agent = { ownerId: 'user-a', capabilities: ['creations'], encryptOutbound: false, ws: socket() };
@@ -57,6 +69,8 @@ beforeEach(() => {
 afterEach(() => {
   relay.close();
   closeCreationMediaReads(agentId, agent);
+  activeSessions.clear();
+  revokedTokens.clear();
   vi.useRealTimers();
 });
 const frame = connection => JSON.parse(connection.ws.send.mock.lastCall[0]);
@@ -80,9 +94,52 @@ const binaryParser = (res, callback) => {
 const get = (path = url, username = 'alice') => request(app).get(path).set('test-user', username).buffer(true).parse(binaryParser);
 
 describe('Creation WebSocket relay', () => {
+  it.each(['email_verify', 'totp_verify', 'temp', 'totp-setup'])('rejects a %s token before registering the socket', type => {
+    const token = jwt.sign({ username: 'alice', type }, CONFIG.jwtSecret, { expiresIn: '5m' });
+    const ws = socket();
+    handleWebConnection(ws, new URL(`https://example.test/ws?token=${token}`));
+    expect(ws.close).toHaveBeenCalledWith(1008, 'Authentication required');
+    expect(frame({ ws })).toMatchObject({ type: 'auth_result', success: false });
+    expect([...state.webClients.values()].some(c => c.ws === ws)).toBe(false);
+    expect(ws.emit('message', Buffer.from(JSON.stringify(msg())))).toBe(false);
+    expect(agent.ws.send).not.toHaveBeenCalled();
+  });
+
+  it('retains the full session token and rejects incoming frames after logout', async () => {
+    vi.useFakeTimers();
+    agent.conversations = new Map();
+    const token = issueSessionToken('alice');
+    const ws = socket();
+    handleWebConnection(ws, new URL('https://example.test/ws'), { headers: { cookie: `yeaft_session=${token}` } });
+    expect(frame({ ws })).toMatchObject({ type: 'auth_result', success: true });
+    expect([...state.webClients.values()].find(c => c.ws === ws)?.authToken).toBe(token);
+    logout(token);
+    const [receive] = ws.listeners('message');
+    await receive(Buffer.from(JSON.stringify(msg())));
+    expect(ws.close).toHaveBeenCalledWith(1008, 'Session no longer valid');
+    expect(agent.ws.send).not.toHaveBeenCalled();
+  });
+
+  it.each(['request', 'response', 'event'])('closes a revoked session and blocks Creation %s delivery', async kind => {
+    client.authToken = issueSessionToken('alice');
+    if (kind === 'response') await relay.request(client, msg());
+    logout(client.authToken);
+    if (kind === 'request') {
+      await relay.request(client, msg());
+      expect(agent.ws.send).not.toHaveBeenCalled();
+    } else if (kind === 'response') {
+      await relay.response(agentId, agent, { type: 'creation_response', requestId: frame(agent).requestId, ok: true });
+    } else {
+      await handleAgentCreation(agentId, agent, { type: 'creation_event', event: { type: 'creation_updated' } });
+      expect(frame(peer).type).toBe('creation_event');
+    }
+    expect(client.ws.close).toHaveBeenCalledWith(1008, 'Session no longer valid');
+    expect(client.ws.send).not.toHaveBeenCalled();
+  });
+
   it('authorizes the owner, replaces the correlation ID and does not trust browser identity', async () => {
     await relay.request(client, msg({ ownerId: 'spoofed', payload: { creationId: 'creation-a' } }));
-    expect(frame(agent)).toEqual({ type: 'creation_request', requestId: expect.stringMatching(/^[0-9a-f-]{36}$/), op: 'get_creation', ownerId: 'user-a', payload: { creationId: 'creation-a' } });
+    expect(frame(agent)).toEqual({ type: 'creation_request', requestId: expect.stringMatching(/^[0-9a-f-]{36}$/), op: 'get_creation', ownerId: 'alice', payload: { creationId: 'creation-a' } });
     expect(frame(agent).requestId).not.toBe('browser-1');
   });
 
@@ -179,6 +236,77 @@ describe('Creation upload attachment policy', () => {
     expect(agent.ws.send).toHaveBeenCalledTimes(1);
   });
 
+  it('requires the session middleware for POST uploads', async () => {
+    await request(app).post('/api/upload').attach('files', Buffer.from('notes'), 'notes.txt').expect(401);
+    await request(app).post('/api/upload').set('test-user', 'alice').expect(400);
+  });
+
+  it.each(['response', 'timeout', 'browser disconnect', 'Agent disconnect', 'transport error', 'offline'])('releases the shared per-user upload budget after %s', async exit => {
+    vi.useFakeTimers();
+    entry.buffer = Buffer.alloc(MAX_CREATION_ATTACHMENT_BYTES);
+    const encode = vi.spyOn(entry.buffer, 'toString').mockReturnValue('encoded');
+    const large = msg({ op: 'add_sources', payload: { attachments: [ref, { fileId: 'upload-two' }] } });
+    state.pendingFiles.set('upload-two', entry);
+    const forward = vi.fn(async () => {
+      if (exit === 'transport error') throw new Error('Transport failure');
+      return exit !== 'offline';
+    });
+    relay = createCreationRelay({ forward });
+    await relay.request(client, large);
+    if (!['transport error', 'offline'].includes(exit)) {
+      await relay.request(peer, msg({ op: 'add_sources', payload }));
+      expect(frame(peer)).toMatchObject({ ok: false, errorCode: 'busy' });
+      expect(forward).toHaveBeenCalledTimes(1);
+      expect(encode).toHaveBeenCalledTimes(2);
+      if (exit === 'response') await relay.response(agentId, agent, {
+        type: 'creation_response', requestId: forward.mock.calls[0][1].requestId, ok: true,
+      });
+      if (exit === 'timeout') await vi.advanceTimersByTimeAsync(45_000);
+      if (exit === 'browser disconnect') relay.clearClient(client);
+      if (exit === 'Agent disconnect') relay.clearAgent(agentId, agent);
+    }
+    await relay.request(peer, large);
+    expect(forward).toHaveBeenCalledTimes(2);
+  });
+
+  it('enforces the global upload budget across users', async () => {
+    const bytes = Buffer.alloc(MAX_CREATION_ATTACHMENT_BYTES);
+    vi.spyOn(bytes, 'toString').mockReturnValue('encoded');
+    const forward = vi.fn(async () => true);
+    const adminAgent = { ...agent, ownerId: null };
+    state.agents.set(agentId, adminAgent);
+    state.users.set('carol', { id: 'user-c', deletion_state: 'active' });
+    relay = createCreationRelay({ forward });
+    const upload = async userId => {
+      const requester = { ...browser(userId), role: 'admin' };
+      const attachments = [0, 1].map(index => {
+        const fileId = `${userId}-${index}`;
+        state.pendingFiles.set(fileId, { ...entry, userId, buffer: bytes });
+        return { fileId };
+      });
+      await relay.request(requester, msg({ op: 'add_sources', payload: { attachments } }));
+      return requester;
+    };
+    const first = await upload('user-a');
+    await upload('user-b');
+    expect(frame(await upload('user-c'))).toMatchObject({ ok: false, errorCode: 'busy' });
+    expect(forward).toHaveBeenCalledTimes(2);
+    relay.clearClient(first);
+    await upload('user-c');
+    expect(forward).toHaveBeenCalledTimes(3);
+  });
+
+  it('rejects forwarding above 16 MiB of Agent socket backpressure', async () => {
+    agent.ws.bufferedAmount = 16 * 1024 * 1024 + 1;
+    const upload = msg({ op: 'add_sources', payload });
+    await relay.request(client, upload);
+    expect(frame(client)).toMatchObject({ ok: false, errorCode: 'busy' });
+    expect(agent.ws.send).not.toHaveBeenCalled();
+    agent.ws.bufferedAmount--;
+    await relay.request(client, upload);
+    expect(agent.ws.send).toHaveBeenCalledTimes(1);
+  });
+
   it('requires upload ownership and checks the original TTL, including the exact expiry boundary', () => {
     expect(validateCreationAttachments(other, payload)).toMatchObject({ ok: false, errorCode: 'forbidden' });
     expect(validateCreationAttachments(other, payload, { skipAuth: true }).ok).toBe(true);
@@ -201,6 +329,7 @@ describe('Creation media HTTP streaming', () => {
   const bytes = Buffer.from('0123456789');
   it('streams a full body in bounded chunks with authenticated, no-transform headers', async () => {
     const big = Buffer.alloc(CREATION_MEDIA_CHUNK_BYTES + 7, 'a');
+    big.write('ID3');
     serveMedia(big);
     const response = await get().expect(200).expect('Content-Length', String(big.length))
       .expect('Accept-Ranges', 'bytes').expect('X-Content-Type-Options', 'nosniff')
@@ -222,12 +351,37 @@ describe('Creation media HTTP streaming', () => {
       .expect(206).expect('Content-Range', 'bytes 7-9/10').expect('Content-Length', '3');
     expect(response.text).toBeUndefined();
     expect(agent.ws.send).toHaveBeenCalledTimes(1);
-    expect(frame(agent)).toMatchObject({ start: 0, end: 0 });
+    expect(frame(agent)).toMatchObject({ start: 0, end: 4095 });
   });
 
   it.each(['bytes=10-', 'bytes=4-2', 'bytes=0-1,3-4', 'items=0-1'])('rejects unsatisfiable or malformed range %s', async range => {
     serveMedia(bytes);
     await get().set('Range', range).expect(416).expect('Content-Range', 'bytes */10').expect('Content-Length', '0');
+  });
+
+  it('applies strong If-Range comparison and serves the complete representation for a mismatch', async () => {
+    const fullBytes = Buffer.alloc(CREATION_MEDIA_CHUNK_BYTES + 7, 'x');
+    fullBytes.write('ID3');
+    serveMedia(fullBytes);
+    const { headers: { etag } } = await request(app).head(url).set('test-user', 'alice').expect(200);
+    expect(etag).toMatch(/^"[a-f0-9]{64}"$/);
+    const partial = await get().set('Range', 'bytes=2-4').set('If-Range', etag).expect(206).expect('ETag', etag);
+    expect(partial.body.equals(fullBytes.subarray(2, 5))).toBe(true);
+    for (const validator of ['"different"', `W/${etag}`, 'Wed, 21 Oct 2015 07:28:00 GMT']) {
+      const full = await get().set('Range', 'bytes=2-4').set('If-Range', validator).expect(200).expect('ETag', etag);
+      expect(full.headers['content-range']).toBeUndefined();
+      expect(full.body.equals(fullBytes)).toBe(true);
+    }
+  });
+
+  it('checks the representation prefix on GET, ranged GET and HEAD before serving an inline MIME type', async () => {
+    const spoof = Buffer.concat([Buffer.from('<script>/*'), Buffer.from('89504e470d0a1a0a', 'hex'), Buffer.from('*/</script>')]);
+    serveMedia(spoof, 'image/png', 'image.png');
+    for (const [response, code] of [[get(), 200], [get().set('Range', 'bytes=10-17'), 206], [request(app).head(url).set('test-user', 'alice'), 200]]) {
+      await response.expect(code).expect('Content-Type', 'application/octet-stream').expect('Content-Disposition', /^attachment;/);
+    }
+    serveMedia(Buffer.from('89504e470d0a1a0a0000', 'hex'), 'image/png', 'image.png');
+    await get().set('Range', 'bytes=9-').expect(206).expect('Content-Type', 'image/png').expect('Content-Disposition', /^inline;/);
   });
 
   it('handles zero-byte files', async () => {
@@ -269,6 +423,7 @@ describe('Creation media chunk correlation and limits', () => {
 
   it('ignores spoofed socket and agent ID, and validates canonical base64', async () => {
     const pending = read();
+    expect(frame(agent)).toMatchObject({ type: 'creation_media_read', ownerId: 'alice' });
     const response = reply('YQ==');
     await handleAgentCreation(agentId, { ...agent }, response);
     await handleAgentCreation('other-id', agent, response);

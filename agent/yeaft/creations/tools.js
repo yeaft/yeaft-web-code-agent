@@ -20,8 +20,10 @@ export function buildCreationToolRegistry({ store, creationId, emitEvent = () =>
   safeId(creationId);
   const registry = new ToolRegistry();
   const emit = (type, fields) => emitEvent({ type, creationId, ...fields });
+  const summaryChanged = () => emit('creation_upserted', { creation: store.getCreation(creationId) });
   const proposalResult = proposal => {
     emit('proposal_created', { proposal });
+    summaryChanged();
     return { proposal };
   };
   const add = (name, description, parameters, execute, readOnly = false) => registry.register(defineTool({
@@ -59,6 +61,7 @@ export function buildCreationToolRegistry({ store, creationId, emitEvent = () =>
       });
       if (item.canon) emit('canon_upserted', item);
       else emit('proposal_created', item);
+      summaryChanged();
       return item;
     });
   add('upsert_outlines', 'Create or update folders and unit outlines in order (parents before children). Existing prose and status are preserved.',
@@ -83,6 +86,7 @@ export function buildCreationToolRegistry({ store, creationId, emitEvent = () =>
         });
       });
       for (const node of nodes) emit('node_upserted', { node });
+      if (nodes.length) summaryChanged();
       return { nodes };
     });
   function requireBatchTarget(nodeId) {
@@ -102,6 +106,7 @@ export function buildCreationToolRegistry({ store, creationId, emitEvent = () =>
       });
       if (result.node) emit('node_content_updated', { nodeId, node: result.node, content: result.node.content, revisions: store.listRevisions(creationId, nodeId) });
       if (result.proposal) emit('proposal_created', result);
+      if (!result.conflict) summaryChanged();
       return result;
     });
   add('propose_unit_edit', 'Submit a reviewable replacement for a unit with an optional revision and anchor.',
@@ -117,6 +122,7 @@ export function buildCreationToolRegistry({ store, creationId, emitEvent = () =>
       if (store.getNode(creationId, nodeId).type !== 'unit') fail('INVALID_REQUEST', 'Expected a unit');
       const { content: _content, ...node } = store.updateNode(creationId, nodeId, { summaryMd }, { actor: 'ai' });
       emit('node_upserted', { nodeId, node });
+      summaryChanged();
       return { node };
     });
   add('save_asset', 'Save a generated SVG or HTML string, or a base64 PNG, JPEG, GIF or WebP image.',

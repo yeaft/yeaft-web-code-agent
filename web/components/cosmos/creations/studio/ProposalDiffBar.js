@@ -7,9 +7,19 @@
  */
 import { useCreationsStore } from '../../../../stores/creations.js';
 
+function normalizeDiffText(val) {
+  if (typeof val === 'string') return val;
+  if (val == null) return '';
+  try {
+    return JSON.stringify(val, null, 2);
+  } catch {
+    return String(val);
+  }
+}
+
 function computeLineDiff(oldText, newText) {
-  const a = String(oldText || '').split('\n');
-  const b = String(newText || '').split('\n');
+  const a = normalizeDiffText(oldText).split('\n');
+  const b = normalizeDiffText(newText).split('\n');
   const MAX_LINES = 600;
   if (a.length > MAX_LINES || b.length > MAX_LINES) {
     const ops = [];

@@ -9,7 +9,7 @@ const instructions = `You are a creative collaborator working in one Creation. U
 
 /** Deterministic layers; metadata lists exactly the records included in each layer. */
 export function buildCreationContext({ store, creationId, threadId, scopeType, scopeId, nodeId, prompt = '', anchor = null,
-  excludedContextIds = [], excludeMessageId } = {}) {
+  excludedContextIds = [], attachedSourceIds = [], excludeMessageId } = {}) {
   const creation = store.getCreation(creationId);
   const thread = threadId ? store.getThread(creationId, { threadId, scopeType, scopeId }) : null;
   const targetId = nodeId ?? thread?.scopeId ?? scopeId;
@@ -46,7 +46,15 @@ export function buildCreationContext({ store, creationId, threadId, scopeType, s
       continuity.push({ id: prior.id, title: prior.title, summary: clip(prior.summaryMd, 1400) });
     }
   }
-  const sources = store.searchSources(creationId, query, { limit: 5, excludedContextIds });
+  // Explicit attachments take precedence over recall/exclusion chips for this turn.
+  const attached = [...new Set(attachedSourceIds)].slice(0, 4);
+  const sources = attached.flatMap(sourceId => {
+    const { name, chunks, summary } = store.getSource(creationId, sourceId);
+    return (chunks.length ? chunks.slice(0, 2) : [{ index: null, text: summary }])
+      .map(({ index, text }) => ({ sourceId, name, index, text: text.slice(0, 3000) }));
+  });
+  sources.push(...store.searchSources(creationId, query, { limit: 5, excludedContextIds: [...excludedContextIds, ...attached] })
+    .map(({ sourceId, name, index, text }) => ({ sourceId, name, index, text: clip(text, 1250) })));
   const history = thread ? store.listMessages(creationId, thread.id, { limit: LIMITS.threadHistory + 1 })
     .filter(message => message.id !== excludeMessageId && !excluded.has(message.id)).slice(-LIMITS.threadHistory)
     .map(({ role, text, status }) => ({ role, text: clip(text, 850), status })) : [];
@@ -59,7 +67,7 @@ export function buildCreationContext({ store, creationId, threadId, scopeType, s
       node: node ? { id: node.id, title: node.title, status: node.status, currentRevId: node.currentRevId,
         outline: clip(node.outlineMd, 4200), content: clip(node.content, 7000) } : null,
       anchor: anchor === null ? null : clip(anchor, 3500),
-      sources: sources.map(({ sourceId, name, index, text }) => ({ sourceId, name, index, text: clip(text, 1250) })), history,
+      sources, history,
     }],
   ];
   return { systemInstructions: instructions, promptContext: sections.map(([heading, entry]) => `## ${heading}\n${JSON.stringify(entry)}`).join('\n\n'),

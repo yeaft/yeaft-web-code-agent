@@ -1,4 +1,4 @@
-import { createCreationStore } from './store.js';
+import { compactProposal, createCreationStore } from './store.js';
 import { createCreationRunner } from './runner.js';
 import { boundedText, fail, LIMITS } from './constants.js';
 
@@ -7,7 +7,8 @@ const object = (value, name) => {
   return value;
 };
 
-export function createCreationService({ yeaftDir, store = createCreationStore({ yeaftDir }), emitEvent = () => {}, mediaUrlFor, engineFactory, bootId } = {}) {
+export function createCreationService({ yeaftDir, storageRoot, namespaceKey, namespaceBinding,
+  store = createCreationStore({ yeaftDir, storageRoot, namespaceKey, namespaceBinding }), emitEvent = () => {}, mediaUrlFor, engineFactory, bootId } = {}) {
   const publish = event => {
     try { Promise.resolve(emitEvent(event)).catch(() => {}); } catch { /* transport never rolls back writes */ }
   };
@@ -16,6 +17,7 @@ export function createCreationService({ yeaftDir, store = createCreationStore({ 
   catch (error) { store.close(); throw error; }
   let closing = null;
   const emit = (type, creationId, fields) => publish({ type, creationId, ...fields });
+  const summaryChanged = id => emit('creation_upserted', id, { creation: store.getCreation(id) });
   const media = (record, kind) => mediaUrlFor ? { ...record, url: mediaUrlFor(record.creationId, kind, record.id) } : record;
   function detail(id) {
     const creation = store.getCreation(id);
@@ -28,12 +30,18 @@ export function createCreationService({ yeaftDir, store = createCreationStore({ 
     return { creation, nodes: flatNodes(id), canon: store.listCanon(id),
       sources: store.listSources(id).map(source => media(source, 'source')),
       assets: store.listAssets(id).map(asset => media(asset, 'asset')), runs,
-      thread, threads: store.listThreads(id), proposals: store.listProposals(id, { status: 'pending', includeContent: true, limit: 50 }) };
+      thread, threads: store.listThreads(id), proposals: store.listProposals(id, { status: 'pending', includeContent: false, limit: 50 }) };
   }
   const flatNodes = id => store.listNodes(id).map(node => ({ ...node, sortOrder: node.position, isFolder: node.type === 'folder' }));
-  const nodeResult = (id, node) => node.conflict ? node : { node, content: node.content, revisions: store.listRevisions(id, node.id) };
+  const nodeResult = (id, node) => {
+    if (node.conflict) return node;
+    const { content, ...metadata } = node;
+    const revisions = store.listRevisions(id, node.id);
+    // Keep both legacy content fields unless JSON escaping would duplicate a huge body.
+    return { node: Buffer.byteLength(JSON.stringify(content)) > 1.5 * 1024 * 1024 ? metadata : node, content, revisions };
+  };
   function nodeChanged(id, node, type = 'node_content_updated') {
-    if (!node.conflict) emit(type, id, { nodeId: node.id, node, ...(type === 'node_content_updated' ? { content: node.content, revisions: store.listRevisions(id, node.id) } : {}) });
+    if (!node.conflict) emit(type, id, { nodeId: node.id, ...(type === 'node_content_updated' ? nodeResult(id, node) : { node }) });
     return node;
   }
   const ops = {
@@ -53,7 +61,7 @@ export function createCreationService({ yeaftDir, store = createCreationStore({ 
       emit('creation_upserted', id, { creation: result.creation });
       if (prompt.trim() && input.autoPlan !== false) {
         try {
-          result.initialTurn = runner.runThreadTurn({ creationId: id, threadId: result.thread.id, userText: prompt, model: input.model, effort: input.effort });
+          result.initialTurn = runner.runThreadTurn({ creationId: id, threadId: result.thread.id, userText: prompt, attachedSourceIds: result.sources.map(source => source.id), model: input.model, effort: input.effort });
           result.creation = store.getCreation(id);
         } catch {
           // Creation is already durable. A retry must not create a duplicate.
@@ -76,51 +84,71 @@ export function createCreationService({ yeaftDir, store = createCreationStore({ 
     add_sources: (id, p) => {
       const sources = store.addSources(id, p).map(source => media(source, 'source'));
       for (const source of sources) emit('source_added', id, { source });
+      if (sources.length) summaryChanged(id);
       return { sources, creation: store.getCreation(id) };
     },
     get_source: (id, p) => ({ source: media(store.getSource(id, p.sourceId), 'source') }),
     delete_source: (id, p) => {
       const result = store.deleteSource(id, p.sourceId);
       emit('source_deleted', id, { sourceId: p.sourceId });
+      summaryChanged(id);
       return result;
     },
     upsert_canon: (id, p) => {
       const canon = store.upsertCanon(id, p.canon == null && p.item == null ? p : object(p.canon ?? p.item, 'canon item'));
       emit('canon_upserted', id, { canon });
+      summaryChanged(id);
       return { canon };
     },
     delete_canon: (id, p) => {
       const result = store.deleteCanon(id, p.canonId);
       emit('canon_deleted', id, { canonId: p.canonId });
+      summaryChanged(id);
       return result;
     },
-    create_node: (id, p) => ({ node: nodeChanged(id, store.createNode(id, p.node == null ? p : object(p.node, 'node')), 'node_upserted') }),
+    create_node: (id, p) => {
+      const node = nodeChanged(id, store.createNode(id, p.node == null ? p : object(p.node, 'node')), 'node_upserted');
+      summaryChanged(id);
+      return { node };
+    },
     get_node: (id, p) => {
-      const node = p.revId == null ? store.getNode(id, p.nodeId) : { ...store.getNode(id, p.nodeId),
-        revision: store.getRevision(id, p.nodeId, p.revId) };
-      const pendingProposals = store.listProposals(id, { status: 'pending', includeContent: true, limit: 50 })
-        .filter(item => item.type === 'unit_edit' && item.nodeId === node.id);
-      return { node, content: node.content, revisions: store.listRevisions(id, p.nodeId), pendingProposals };
+      const node = store.getNode(id, p.nodeId);
+      const pendingProposals = store.listProposals(id, { status: 'pending', nodeId: node.id, includeContent: true, limit: 50 });
+      const result = { ...nodeResult(id, node), pendingProposals };
+      if (p.revId != null) {
+        const revision = store.getRevision(id, p.nodeId, p.revId);
+        result.node = { ...result.node, revision };
+        if (Buffer.byteLength(JSON.stringify(result)) > MAX_RESPONSE_BYTES) {
+          // The requested revision body takes precedence over a second copy of live prose.
+          delete result.node.content;
+          delete result.content;
+        }
+      }
+      return result;
     },
     update_node: (id, p) => {
       const patch = p.patch == null ? p : { ...(Object.hasOwn(p, 'baseRevId') ? { baseRevId: p.baseRevId } : {}), ...object(p.patch, 'node patch') };
       const node = nodeChanged(id, store.updateNode(id, p.nodeId, patch), Object.hasOwn(patch, 'content') ? 'node_content_updated' : 'node_upserted');
+      if (!node.conflict) summaryChanged(id);
       return nodeResult(id, node);
     },
     reorder_nodes: (id, p) => {
       store.reorderNodes(id, p.parentId, p.nodeIds ?? p.orderedNodeIds ?? p.orderedIds);
       const nodes = flatNodes(id);
       emit('structure_updated', id, { nodes });
+      summaryChanged(id);
       return { nodes };
     },
     delete_node: (id, p) => {
       const result = store.deleteNode(id, p.nodeId);
       emit('node_deleted', id, { nodeId: p.nodeId, nodeIds: result.nodeIds });
+      summaryChanged(id);
       return result;
     },
     restore_revision: (id, p) => {
       const node = nodeChanged(id, store.restoreRevision(id, p.nodeId, p.revId ?? p.revisionId,
         Object.hasOwn(p, 'baseRevId') ? { baseRevId: p.baseRevId } : {}));
+      if (!node.conflict) summaryChanged(id);
       return nodeResult(id, node);
     },
     list_proposals: (id, p) => ({ proposals: store.listProposals(id, { limit: 10, ...p }) }),
@@ -129,15 +157,22 @@ export function createCreationService({ yeaftDir, store = createCreationStore({ 
       if (!result.conflict && !result.unchanged) {
         if (result.node) nodeChanged(id, result.node);
         if (result.canon) emit('canon_upserted', id, { canon: result.canon });
-        emit('proposal_resolved', id, { proposal: result.proposal });
+        emit('proposal_resolved', id, { proposal: compactProposal(result.proposal) });
+        summaryChanged(id);
+      }
+      if (result.node) {
+        const revisions = store.listRevisions(id, result.node.id);
+        const response = { ...result, revisions };
+        return Buffer.byteLength(JSON.stringify(response)) <= MAX_RESPONSE_BYTES
+          ? response : { ...response, proposal: compactProposal(result.proposal) };
       }
       return result;
     },
     get_thread: (id, p) => {
       const thread = store.getThread(id, p);
-      const messages = store.listMessages(id, thread.id, p);
-      const contextPreview = messages.findLast(message => message.contextMeta)?.contextMeta ?? null;
-      return { thread, contextPreview, messages };
+      const page = store.pageMessages(id, thread.id, p);
+      const contextPreview = page.messages.findLast(message => message.contextMeta)?.contextMeta ?? null;
+      return { thread, ...page, contextPreview };
     },
     send_message: (id, p) => runner.runThreadTurn({ ...p, creationId: id, userText: p.userText ?? p.text ?? '' }),
     start_batch_run: (id, p) => ({ run: runner.startBatchRun({ ...p, creationId: id }) }),
@@ -150,9 +185,17 @@ export function createCreationService({ yeaftDir, store = createCreationStore({ 
       const assets = store.listAssets(id).map(asset => media(asset, 'asset'));
       const canon = store.listCanon(id);
       const nodes = store.getStructure(id, { includeContent: true });
-      if (format === 'json') return { format: 'json', filename: `${id}.json`, mimeType: 'application/json',
-        content: JSON.stringify({ version: 1, creation, nodes, canon, sources, assets }, null, 2) };
-      return { format: 'markdown', filename: `${id}.md`, mimeType: 'text/markdown', content: exportMarkdown(creation, nodes) };
+      const ext = format === 'json' ? 'json' : 'md';
+      const content = ext === 'json' ? JSON.stringify({ version: 1, creation, nodes, canon, sources, assets }, null, 2)
+        : exportMarkdown(creation, nodes);
+      const meta = { format: ext === 'json' ? 'json' : 'markdown', filename: `${id}.${ext}`,
+        mimeType: ext === 'json' ? 'application/json' : 'text/markdown' };
+      const byteLength = Buffer.byteLength(content);
+      const inline = { ...meta, content };
+      const maxInlineBytes = 3 * 1024 * 1024;
+      if (byteLength <= maxInlineBytes && Buffer.byteLength(JSON.stringify(inline)) <= maxInlineBytes) return inline;
+      const asset = store.saveAsset(id, { ext, bytes: Buffer.from(content) }, { exportFile: true });
+      return { ...meta, streamed: true, assetId: asset.id, downloadUrl: mediaUrlFor?.(id, 'asset', asset.id), byteLength };
     },
   };
 
@@ -174,8 +217,9 @@ export function createCreationService({ yeaftDir, store = createCreationStore({ 
 }
 
 // Leave room for the WebSocket envelope and optional transport encryption.
+const MAX_RESPONSE_BYTES = 5 * 1024 * 1024;
 function boundedResponse(value) {
-  if (Buffer.byteLength(JSON.stringify(value)) > 5 * 1024 * 1024) {
+  if (Buffer.byteLength(JSON.stringify(value)) > MAX_RESPONSE_BYTES) {
     fail('LIMIT_EXCEEDED', 'Creation response exceeds the relay limit; list smaller pages or read units individually');
   }
   return value;

@@ -6,6 +6,7 @@
  * (light edit / AI rewrite anchor / capture to Canon), and prev/next chapter navigation.
  */
 import { renderMarkdown } from '../../../../utils/markdown.js';
+import { sanitizeCreationHtml } from '../sanitize.js';
 
 const PREFS_STORAGE_KEY = 'yeaft_creation_book_prefs';
 const DEFAULT_PREFS = {
@@ -53,6 +54,7 @@ export default {
     creationId: { type: String, default: '' },
     revisions: { type: Array, default: () => [] },
     saving: { type: Boolean, default: false },
+    onSaveContent: { type: Function, default: null },
   },
   emits: [
     'save-content',
@@ -68,6 +70,9 @@ export default {
       editing: false,
       draftText: this.content || '',
       dirty: false,
+      editBaseRevId: null,
+      conflictError: '',
+      saveError: '',
       selectionBar: {
         visible: false,
         top: 0,
@@ -81,7 +86,7 @@ export default {
     renderedHtml() {
       const text = this.editing ? this.draftText : (this.content || '');
       if (!text.trim()) return '';
-      return renderMarkdown(text);
+      return sanitizeCreationHtml(renderMarkdown(text));
     },
     bookUnits() {
       return (this.nodes || [])
@@ -120,7 +125,7 @@ export default {
     },
     scrollStorageKey() {
       if (!this.creationId || !this.node?.id) return '';
-      return `yeaft_creation_book_scroll_${this.creationId}_${this.node.id}`;
+      return `yeaft_creation_book_scroll_${this.agentId || 'default'}:${this.creationId}:${this.node.id}`;
     },
   },
   watch: {
@@ -134,6 +139,9 @@ export default {
       this.editing = false;
       this.draftText = this.content || '';
       this.dirty = false;
+      this.editBaseRevId = null;
+      this.conflictError = '';
+      this.saveError = '';
       this.hideSelectionBar();
       this.$nextTick(() => this.restoreScrollPosition());
     },
@@ -167,6 +175,9 @@ export default {
     enterEditMode() {
       this.hideSelectionBar();
       this.draftText = this.content || '';
+      this.editBaseRevId = this.node?.currentRevId ?? null;
+      this.conflictError = '';
+      this.saveError = '';
       this.editing = true;
       this.dirty = false;
       this.$nextTick(() => {
@@ -178,6 +189,9 @@ export default {
     cancelEditMode() {
       this.draftText = this.content || '';
       this.dirty = false;
+      this.editBaseRevId = null;
+      this.conflictError = '';
+      this.saveError = '';
       this.editing = false;
     },
     onEditorInput() {
@@ -190,20 +204,47 @@ export default {
       ta.style.height = 'auto';
       ta.style.height = `${Math.max(360, ta.scrollHeight)}px`;
     },
-    saveEdit(exitAfter = false) {
-      this.$emit('save-content', {
+    async saveEdit(exitAfter = false) {
+      this.conflictError = '';
+      this.saveError = '';
+      const payload = {
         nodeId: this.node.id,
         content: this.draftText,
-        baseRevId: this.node.currentRevId || null,
-      });
+        baseRevId: this.editBaseRevId,
+      };
+      if (this.onSaveContent) {
+        try {
+          const res = await this.onSaveContent(payload);
+          if (res?.conflict === true) {
+            this.conflictError = this.$t('creation.interior.conflictDesc');
+            return false;
+          }
+          this.editBaseRevId = res?.node?.currentRevId ?? this.node?.currentRevId ?? this.editBaseRevId;
+          this.dirty = false;
+          if (exitAfter) {
+            this.editing = false;
+          }
+          return true;
+        } catch (err) {
+          if (err?.errorCode === 'revision_conflict') {
+            this.conflictError = this.$t('creation.interior.conflictDesc');
+          } else {
+            this.saveError = err?.message || 'Save failed';
+          }
+          return false;
+        }
+      }
+      this.$emit('save-content', payload);
       this.dirty = false;
       if (exitAfter) {
         this.editing = false;
       }
+      return true;
     },
-    onFinalize() {
+    async onFinalize() {
       if (this.editing && this.dirty) {
-        this.saveEdit(false);
+        const ok = await this.saveEdit(false);
+        if (!ok) return;
       }
       this.$emit('finalize-node', { nodeId: this.node.id });
     },
@@ -280,11 +321,13 @@ export default {
     },
     onScroll() {
       const el = this.$refs.scrollContainer;
-      if (!el || !this.scrollStorageKey) return;
+      const key = this.scrollStorageKey;
+      if (!el || !key) return;
+      const top = Math.round(el.scrollTop);
       if (this._scrollSaveTimer) clearTimeout(this._scrollSaveTimer);
       this._scrollSaveTimer = setTimeout(() => {
         try {
-          localStorage.setItem(this.scrollStorageKey, String(Math.round(el.scrollTop)));
+          localStorage.setItem(key, String(top));
         } catch {
           // ignore
         }
@@ -394,6 +437,15 @@ export default {
             ✓ {{ $t('creation.status.final') }}
           </button>
         </div>
+      </div>
+
+      <!-- Conflict / Save Error Banner -->
+      <div v-if="conflictError || saveError" class="creation-conflict-banner" role="alert">
+        <strong>⚠ {{ conflictError ? $t('creation.interior.conflictTitle') : saveError }}</strong>
+        <span v-if="conflictError">{{ conflictError }}</span>
+        <button type="button" class="creation-glass-btn" @click="conflictError = ''; saveError = ''">
+          {{ $t('creation.canon.dismiss') }}
+        </button>
       </div>
 
       <!-- Reading / Editing Column -->

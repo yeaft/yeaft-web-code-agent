@@ -42,6 +42,7 @@ export default {
   },
   emits: [
     'select-node',
+    'select-root-board',
     'select-canon',
     'select-source',
     'create-node',
@@ -83,6 +84,31 @@ export default {
         map.get(n.parentId).push(n);
       }
       return map;
+    },
+    flatTreeItems() {
+      const result = [];
+      const visited = new Set();
+      const visit = (list, depth) => {
+        for (const node of list) {
+          if (!node || !node.id || visited.has(node.id)) continue;
+          visited.add(node.id);
+          const folder = isFolderNode(node);
+          const children = folder ? (this.childrenByParent.get(node.id) || []) : [];
+          const isExpanded = folder && !this.collapsedFolders[node.id];
+          result.push({
+            node,
+            depth,
+            isFolder: folder,
+            hasChildren: children.length > 0,
+            isExpanded,
+          });
+          if (isExpanded && children.length > 0) {
+            visit(children, depth + 1);
+          }
+        }
+      };
+      visit(this.rootNodes, 0);
+      return result;
     },
     canonGroups() {
       return CANON_GROUPS.map((type) => ({
@@ -207,6 +233,14 @@ export default {
       <!-- TAB 1: Artifacts Tree -->
       <div v-if="activeTab === 'artifacts'" class="creation-tree-panel">
         <div class="creation-tree-actions">
+          <button
+            type="button"
+            class="creation-glass-btn"
+            :class="{ 'is-active': activeSelection?.type === 'root-board' }"
+            @click="$emit('select-root-board')"
+          >
+            ⊞ {{ $t('creation.studio.outlineBoard') }}
+          </button>
           <button type="button" class="creation-glass-btn" @click="openCreateNode('folder', null)">
             + {{ $t('creation.studio.newFolder') }}
           </button>
@@ -234,69 +268,47 @@ export default {
           </div>
         </form>
 
-        <div v-if="rootNodes.length === 0" class="creation-tree-empty">
+        <div v-if="flatTreeItems.length === 0" class="creation-tree-empty">
           {{ $t('creation.studio.noFolders') }}
         </div>
 
         <ul v-else class="creation-tree-list">
-          <li v-for="node in rootNodes" :key="node.id" class="creation-tree-item-wrap">
-            <template v-if="isFolderNode(node)">
-              <div
-                class="creation-tree-row is-folder"
-                :class="{ 'is-selected': isSelected('node', node.id) }"
-                @click="$emit('select-node', node.id)"
-              >
-                <button type="button" class="creation-tree-caret" @click.stop="toggleFolder(node.id)">
-                  {{ isFolderCollapsed(node.id) ? '▸' : '▾' }}
-                </button>
-                <span class="creation-tree-title">{{ node.title }}</span>
-                <span class="creation-tree-row-actions" @click.stop>
-                  <button type="button" class="creation-icon-mini" :title="$t('creation.studio.newUnit')" @click="openCreateNode('unit', node.id)">+</button>
-                  <button type="button" class="creation-icon-mini is-danger" :title="$t('creation.inspector.delete')" @click="$emit('delete-node', node.id)">×</button>
-                </span>
-              </div>
-
-              <ul v-if="!isFolderCollapsed(node.id)" class="creation-tree-children">
-                <li
-                  v-for="child in childrenOf(node.id)"
-                  :key="child.id"
-                  class="creation-tree-row is-unit"
-                  :class="{ 'is-selected': isSelected('node', child.id) }"
-                  @click="$emit('select-node', child.id)"
-                >
-                  <span class="creation-node-status" :class="'is-' + (child.status || 'outline')">
-                    {{ statusIcon(child.status) }}
-                  </span>
-                  <span class="creation-node-mod" aria-hidden="true">{{ modalityIcon(child.modality) }}</span>
-                  <span class="creation-tree-title">{{ child.title }}</span>
-                  <span v-if="child.wordCount" class="creation-tree-wc">{{ child.wordCount }}</span>
-                  <button
-                    type="button"
-                    class="creation-icon-mini is-danger creation-tree-del"
-                    :title="$t('creation.inspector.delete')"
-                    @click.stop="$emit('delete-node', child.id)"
-                  >×</button>
-                </li>
-              </ul>
-            </template>
+          <li v-for="entry in flatTreeItems" :key="entry.node.id" class="creation-tree-item-wrap">
+            <div
+              v-if="entry.isFolder"
+              class="creation-tree-row is-folder"
+              :class="{ 'is-selected': isSelected('node', entry.node.id) }"
+              :style="{ paddingLeft: (8 + entry.depth * 14) + 'px' }"
+              @click="$emit('select-node', entry.node.id)"
+            >
+              <button type="button" class="creation-tree-caret" @click.stop="toggleFolder(entry.node.id)">
+                {{ entry.isExpanded ? '▾' : '▸' }}
+              </button>
+              <span class="creation-tree-title">{{ entry.node.title }}</span>
+              <span class="creation-tree-row-actions" @click.stop>
+                <button type="button" class="creation-icon-mini" :title="$t('creation.studio.newUnit')" @click="openCreateNode('unit', entry.node.id)">+</button>
+                <button type="button" class="creation-icon-mini is-danger" :title="$t('creation.inspector.delete')" @click="$emit('delete-node', entry.node.id)">×</button>
+              </span>
+            </div>
 
             <div
               v-else
               class="creation-tree-row is-unit"
-              :class="{ 'is-selected': isSelected('node', node.id) }"
-              @click="$emit('select-node', node.id)"
+              :class="{ 'is-selected': isSelected('node', entry.node.id) }"
+              :style="{ paddingLeft: (12 + entry.depth * 14) + 'px' }"
+              @click="$emit('select-node', entry.node.id)"
             >
-              <span class="creation-node-status" :class="'is-' + (node.status || 'outline')">
-                {{ statusIcon(node.status) }}
+              <span class="creation-node-status" :class="'is-' + (entry.node.status || 'outline')">
+                {{ statusIcon(entry.node.status) }}
               </span>
-              <span class="creation-node-mod" aria-hidden="true">{{ modalityIcon(node.modality) }}</span>
-              <span class="creation-tree-title">{{ node.title }}</span>
-              <span v-if="node.wordCount" class="creation-tree-wc">{{ node.wordCount }}</span>
+              <span class="creation-node-mod" aria-hidden="true">{{ modalityIcon(entry.node.modality) }}</span>
+              <span class="creation-tree-title">{{ entry.node.title }}</span>
+              <span v-if="entry.node.wordCount" class="creation-tree-wc">{{ entry.node.wordCount }}</span>
               <button
                 type="button"
                 class="creation-icon-mini is-danger creation-tree-del"
                 :title="$t('creation.inspector.delete')"
-                @click.stop="$emit('delete-node', node.id)"
+                @click.stop="$emit('delete-node', entry.node.id)"
               >×</button>
             </div>
           </li>

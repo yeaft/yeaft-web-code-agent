@@ -166,6 +166,7 @@ it('commits all batch units before completed, without pausing at the final check
   await service.runner.waitForRun(run.id);
   expect(service.store.getRun('book', run.id)).toMatchObject({ status: 'completed', progress: { completed: 2, total: 2 } });
   expect(service.store.getCreation('book')).toMatchObject({ activeRunStatus: null, readableUnitCount: 2 });
+  expect(events.findLast(event => event.type === 'creation_upserted')?.creation).toMatchObject({ activeRunStatus: null, readableUnitCount: 2 });
 });
 
 it('pauses an in-flight unit and fences its old tools across immediate resume', async () => {
@@ -192,4 +193,81 @@ it('pauses an in-flight unit and fences its old tools across immediate resume', 
   await service.runner.waitForRun(run.id);
   expect(service.store.getNode('book', 'unit').content).toBe('Resumed draft');
   expect(service.store.listRevisions('book', 'unit')).toHaveLength(1);
+});
+
+it('includes explicit attachments before lexical hits, even with no matching filename or text', async () => {
+  let prompt;
+  const { store } = setup(() => ({ async *query(params) { prompt = params.prompt; yield terminal; } }));
+  store.createCreation({ id: 'book' });
+  const [attached, relevant] = store.addSources('book', { textSources: [
+    { name: 'input.txt', text: 'Unique first excerpt. ' + 'z'.repeat(4500) },
+    { name: 'reference.txt', text: 'Review the comet' },
+  ] });
+  const context = buildCreationContext({ store, creationId: 'book', prompt: 'Review the comet', attachedSourceIds: [attached.id, attached.id] });
+  expect(context.promptContext).toContain('Unique first excerpt.');
+  expect(context.contextMeta.sources.map(item => item.id)).toEqual([attached.id, attached.id, relevant.id]);
+  const turn = req('send_message', { creationId: 'book', text: 'Review the comet', attachedSourceIds: [attached.id],
+    textSources: [{ name: 'input2.txt', text: 'Newly uploaded exhibit' }] });
+  await service.runner.waitForRun(turn.run.id);
+  expect(prompt).toContain('Newly uploaded exhibit');
+  expect(prompt).toContain('Unique first excerpt.');
+  expect(turn.message.sourceIds).toEqual([turn.sources[0].id, attached.id]);
+  expect(turn.contextMeta.sources.map(item => item.id)).toEqual([turn.sources[0].id, attached.id, attached.id, relevant.id]);
+  expect(events.findLast(e => e.type === 'creation_upserted').creation.sourceCount).toBe(3);
+});
+
+it('atomically persists partial cancelled turns and emits exactly one matching terminal message', async () => {
+  let arrived;
+  const streamed = new Promise(resolve => { arrived = resolve; });
+  setup(() => ({ async *query() {
+    yield { type: 'text_delta', text: 'Partial prose' };
+    arrived();
+    await new Promise(() => {});
+  } }));
+  req('create_creation', { id: 'book' });
+  const { run, thread } = req('send_message', { creationId: 'book', text: 'Draft a scene' });
+  const control = action => req('control_run', { creationId: 'book', runId: run.id, action });
+  await streamed;
+  for (const action of ['pause', 'resume']) expect(() => control(action)).toThrow(expect.objectContaining({ code: 'INVALID_STATE' }));
+  expect(control('cancel').run).toMatchObject({ status: 'cancelled', reason: 'user_cancelled' });
+  const persisted = req('get_thread', { creationId: 'book', threadId: thread.id }).messages.at(-1);
+  expect(persisted).toMatchObject({ id: run.assistantMessageId, role: 'assistant', status: 'cancelled', text: 'Partial prose', content: 'Partial prose', runId: run.id });
+  expect(events.slice(-2)).toMatchObject([{ type: 'thread_message_complete', message: persisted }, { type: 'run_updated', run: { status: 'cancelled' } }]);
+  await service.runner.waitForRun(run.id);
+  control('cancel');
+  expect(events.filter(e => e.type === 'thread_message_complete' && e.message.id === run.assistantMessageId)).toHaveLength(1);
+});
+
+it('projects canonical eligibility and refreshes L1 summaries on service and AI mutations', async () => {
+  const { store } = setup();
+  const creationId = 'book';
+  req('create_creation', { id: creationId });
+  const summary = () => events.findLast(event => event.type === 'creation_upserted').creation;
+  const sameAsStore = () => expect(summary()).toEqual(store.getCreation(creationId));
+  const folder = req('create_node', { creationId, node: { type: 'folder' } }).node;
+  const node = req('create_node', { creationId }).node;
+  expect(folder.batchEligible).toBe(false);
+  expect(node.batchEligible).toBe(true);
+  expect(summary().unitCount).toBe(1);
+  const registry = buildCreationToolRegistry({ store, creationId, emitEvent: e => events.push(e) });
+  await tool(registry, 'write_unit', { nodeId: node.id, content: 'Three little words' });
+  expect(summary()).toMatchObject({ readableUnitCount: 1, wordCount: 3, hasReadableContent: true });
+  const updated = req('update_node', { creationId, nodeId: node.id, patch: { status: 'final' } }).node;
+  expect(updated.batchEligible).toBe(false);
+  expect(store.getNode(creationId, node.id).batchEligible).toBe(false);
+  expect(store.listNodes(creationId).every(n => !n.batchEligible)).toBe(true);
+  const { proposal } = await tool(registry, 'write_unit', { nodeId: node.id, content: 'Review' });
+  expect(summary().pendingProposalCount).toBe(1);
+  req('resolve_proposal', { creationId, proposalId: proposal.id, action: 'reject' });
+  expect(summary().pendingProposalCount).toBe(0);
+  const [source] = req('add_sources', { creationId, textSources: ['Source'] }).sources;
+  expect(summary().sourceCount).toBe(1);
+  req('delete_source', { creationId, sourceId: source.id });
+  expect(summary().sourceCount).toBe(0);
+  req('upsert_canon', { creationId, canon: { id: 'canon', title: 'Canon' } });
+  expect(events.at(-1).type).toBe('creation_upserted');
+  sameAsStore();
+  req('delete_node', { creationId, nodeId: node.id });
+  expect(summary()).toMatchObject({ unitCount: 0, readableUnitCount: 0, wordCount: 0, hasReadableContent: false });
+  sameAsStore();
 });

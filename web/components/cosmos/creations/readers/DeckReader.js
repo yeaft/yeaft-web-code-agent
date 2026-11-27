@@ -89,6 +89,7 @@ export default {
     agentId: { type: String, default: '' },
     creationId: { type: String, default: '' },
     saving: { type: Boolean, default: false },
+    onSaveContent: { type: Function, default: null },
   },
   emits: ['save-content', 'request-ai-edit', 'finalize-node'],
   data() {
@@ -98,6 +99,9 @@ export default {
       activeIndex: 0,
       editing: false,
       dirty: false,
+      editBaseRevId: this.node?.currentRevId ?? null,
+      conflictError: '',
+      saveError: '',
       notesOpen: true,
       isFullscreen: false,
       layouts: SLIDE_LAYOUTS,
@@ -127,8 +131,8 @@ export default {
       },
       set(val) {
         if (!this.activeSlide) return;
+        this.markDirty();
         this.activeSlide.bullets = String(val || '').split('\n');
-        this.dirty = true;
       },
     },
   },
@@ -136,6 +140,7 @@ export default {
     content(newVal) {
       if (!this.dirty) {
         this.deck = parseDeckContent(newVal, this.node?.title);
+        this.editBaseRevId = this.node?.currentRevId ?? null;
         if (this.activeIndex >= this.deck.slides.length) {
           this.activeIndex = Math.max(0, this.deck.slides.length - 1);
         }
@@ -146,6 +151,9 @@ export default {
       this.activeIndex = 0;
       this.dirty = false;
       this.editing = false;
+      this.editBaseRevId = this.node?.currentRevId ?? null;
+      this.conflictError = '';
+      this.saveError = '';
     },
   },
   mounted() {
@@ -184,10 +192,22 @@ export default {
         document.exitFullscreen?.().catch(() => {});
       }
     },
+    toggleEditing() {
+      if (!this.editing && !this.dirty) {
+        this.editBaseRevId = this.node?.currentRevId ?? null;
+        this.conflictError = '';
+        this.saveError = '';
+      }
+      this.editing = !this.editing;
+    },
     markDirty() {
+      if (!this.dirty) {
+        this.editBaseRevId = this.node?.currentRevId ?? null;
+      }
       this.dirty = true;
     },
     addSlide() {
+      this.markDirty();
       const next = normalizeSlide({
         layout: 'bullets',
         title: `#${this.slides.length + 1}`,
@@ -195,27 +215,28 @@ export default {
       }, this.slides.length);
       this.deck.slides.splice(this.activeIndex + 1, 0, next);
       this.activeIndex += 1;
-      this.dirty = true;
       this.editing = true;
     },
     deleteSlide(idx) {
       if (this.slides.length <= 1) return;
+      this.markDirty();
       this.deck.slides.splice(idx, 1);
       if (this.activeIndex >= this.deck.slides.length) {
         this.activeIndex = this.deck.slides.length - 1;
       }
-      this.dirty = true;
     },
     moveSlide(idx, delta) {
       const target = idx + delta;
       if (target < 0 || target >= this.slides.length) return;
+      this.markDirty();
       const [item] = this.deck.slides.splice(idx, 1);
       this.deck.slides.splice(target, 0, item);
       if (this.activeIndex === idx) this.activeIndex = target;
       else if (this.activeIndex === target) this.activeIndex = idx;
-      this.dirty = true;
     },
-    saveDeck() {
+    async saveDeck() {
+      this.conflictError = '';
+      this.saveError = '';
       const cleanDeck = {
         theme: this.deck.theme || 'minimal',
         slides: this.slides.map((s) => ({
@@ -223,12 +244,33 @@ export default {
           bullets: (s.bullets || []).map((b) => String(b).trim()).filter(Boolean),
         })),
       };
-      this.$emit('save-content', {
+      const payload = {
         nodeId: this.node.id,
         content: JSON.stringify(cleanDeck, null, 2),
-        baseRevId: this.node.currentRevId || null,
-      });
+        baseRevId: this.editBaseRevId,
+      };
+      if (this.onSaveContent) {
+        try {
+          const res = await this.onSaveContent(payload);
+          if (res?.conflict === true) {
+            this.conflictError = this.$t('creation.interior.conflictDesc');
+            return false;
+          }
+          this.editBaseRevId = res?.node?.currentRevId ?? this.node?.currentRevId ?? this.editBaseRevId;
+          this.dirty = false;
+          return true;
+        } catch (err) {
+          if (err?.errorCode === 'revision_conflict') {
+            this.conflictError = this.$t('creation.interior.conflictDesc');
+          } else {
+            this.saveError = err?.message || 'Save failed';
+          }
+          return false;
+        }
+      }
+      this.$emit('save-content', payload);
       this.dirty = false;
+      return true;
     },
     requestAiRemake() {
       const s = this.activeSlide;
@@ -268,7 +310,7 @@ export default {
             type="button"
             class="creation-glass-btn"
             :class="{ 'is-active': editing }"
-            @click="editing = !editing"
+            @click="toggleEditing"
           >
             ✎ {{ editing ? $t('creation.book.doneEdit') : $t('creation.book.inlineEdit') }}
           </button>
@@ -291,6 +333,15 @@ export default {
             {{ isFullscreen ? $t('creation.deck.exitFullscreen') : $t('creation.deck.fullscreen') }}
           </button>
         </div>
+      </div>
+
+      <!-- Conflict / Save Error Banner -->
+      <div v-if="conflictError || saveError" class="creation-conflict-banner" role="alert">
+        <strong>⚠ {{ conflictError ? $t('creation.interior.conflictTitle') : saveError }}</strong>
+        <span v-if="conflictError">{{ conflictError }}</span>
+        <button type="button" class="creation-glass-btn" @click="conflictError = ''; saveError = ''">
+          {{ $t('creation.canon.dismiss') }}
+        </button>
       </div>
 
       <!-- Main Deck Workspace -->

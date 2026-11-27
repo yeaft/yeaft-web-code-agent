@@ -43,14 +43,20 @@ export default {
     resolvedCreationId() {
       return this.creationId || this.creationsStore.activeCreation?.creationId || '';
     },
-    childUnits() {
+    allSiblings() {
       const folderId = this.folder?.id || null;
       return (this.nodes || [])
-        .filter((n) => n && !isFolderNode(n) && (folderId ? n.parentId === folderId : !n.parentId))
+        .filter((n) => n && (folderId ? n.parentId === folderId : !n.parentId))
         .sort((a, b) => (a.sortOrder ?? a.order ?? 0) - (b.sortOrder ?? b.order ?? 0));
     },
+    childUnits() {
+      return this.allSiblings.filter((n) => !isFolderNode(n));
+    },
+    eligibleUnits() {
+      return this.childUnits.filter((u) => this.isBatchEligible(u));
+    },
     allSelected() {
-      return this.childUnits.length > 0 && this.selectedIds.length === this.childUnits.length;
+      return this.eligibleUnits.length > 0 && this.eligibleUnits.every((u) => this.selectedIds.includes(u.id));
     },
     boardTitle() {
       return this.folder?.title || this.$t('creation.studio.outlineBoard');
@@ -63,10 +69,17 @@ export default {
     },
   },
   methods: {
+    isBatchEligible(node) {
+      if (!node) return false;
+      return node.batchEligible !== false && node.status !== 'final' && !node.userEdited;
+    },
     isSelected(id) {
       return this.selectedIds.includes(id);
     },
-    toggleSelect(id) {
+    toggleSelect(unitOrId) {
+      const unit = typeof unitOrId === 'object' ? unitOrId : this.childUnits.find((u) => u.id === unitOrId);
+      if (!unit || !this.isBatchEligible(unit)) return;
+      const id = unit.id;
       if (this.isSelected(id)) {
         this.selectedIds = this.selectedIds.filter((x) => x !== id);
       } else {
@@ -74,21 +87,22 @@ export default {
       }
     },
     toggleSelectAll() {
-      this.selectedIds = this.allSelected ? [] : this.childUnits.map((u) => u.id);
+      this.selectedIds = this.allSelected ? [] : this.eligibleUnits.map((u) => u.id);
     },
     getSummaryDraft(unit) {
       return this.editingSummaries[unit.id] !== undefined
         ? this.editingSummaries[unit.id]
-        : (unit.summary || '');
+        : (unit.outlineMd ?? unit.summary ?? '');
     },
     onSummaryInput(unit, value) {
       this.editingSummaries = { ...this.editingSummaries, [unit.id]: value };
     },
     async saveSummary(unit) {
       if (this.editingSummaries[unit.id] === undefined) return;
-      const summary = this.editingSummaries[unit.id];
-      if (summary !== (unit.summary || '')) {
-        await this.creationsStore.updateNode(this.resolvedAgentId, this.resolvedCreationId, unit.id, { summary });
+      const outlineMd = this.editingSummaries[unit.id];
+      const prevOutline = unit.outlineMd ?? unit.summary ?? '';
+      if (outlineMd !== prevOutline) {
+        await this.creationsStore.updateNode(this.resolvedAgentId, this.resolvedCreationId, unit.id, { outlineMd });
       }
       const next = { ...this.editingSummaries };
       delete next[unit.id];
@@ -97,9 +111,15 @@ export default {
     async moveUnit(idx, delta) {
       const target = idx + delta;
       if (target < 0 || target >= this.childUnits.length) return;
-      const ordered = this.childUnits.map((u) => u.id);
-      const [moved] = ordered.splice(idx, 1);
-      ordered.splice(target, 0, moved);
+      const unitA = this.childUnits[idx];
+      const unitB = this.childUnits[target];
+      if (!unitA || !unitB) return;
+      const ordered = this.allSiblings.map((s) => s.id);
+      const posA = ordered.indexOf(unitA.id);
+      const posB = ordered.indexOf(unitB.id);
+      if (posA < 0 || posB < 0) return;
+      ordered[posA] = unitB.id;
+      ordered[posB] = unitA.id;
       await this.creationsStore.reorderNodes(
         this.resolvedAgentId,
         this.resolvedCreationId,
@@ -109,8 +129,8 @@ export default {
     },
     async startBatch() {
       const ids = this.selectedIds.length > 0
-        ? this.childUnits.filter((u) => this.selectedIds.includes(u.id)).map((u) => u.id)
-        : this.childUnits.filter((u) => u.status !== 'final').map((u) => u.id);
+        ? this.eligibleUnits.filter((u) => this.selectedIds.includes(u.id)).map((u) => u.id)
+        : this.eligibleUnits.map((u) => u.id);
       if (!ids.length) return;
       this.startingBatch = true;
       try {
@@ -130,7 +150,7 @@ export default {
       this.$emit('create-unit', {
         parentId: this.folder?.id || null,
         title,
-        summary: this.newUnitSummary.trim(),
+        outlineMd: this.newUnitSummary.trim(),
         modality: 'markdown_doc',
       });
       this.newUnitTitle = '';
@@ -178,7 +198,7 @@ export default {
         <button
           type="button"
           class="creation-glass-btn is-primary"
-          :disabled="startingBatch || childUnits.length === 0"
+          :disabled="startingBatch || eligibleUnits.length === 0"
           @click="startBatch"
         >
           ✦ {{ $t('creation.studio.startBatch') }}
@@ -219,12 +239,20 @@ export default {
         >
           <div class="creation-outline-card-head">
             <label class="creation-outline-check" @click.stop>
-              <input type="checkbox" :checked="isSelected(unit.id)" @change="toggleSelect(unit.id)" />
+              <input
+                type="checkbox"
+                :checked="isSelected(unit.id)"
+                :disabled="!isBatchEligible(unit)"
+                @change="toggleSelect(unit)"
+              />
             </label>
             <button type="button" class="creation-outline-card-title" @click="$emit('select-node', unit.id)">
               {{ unit.title }}
             </button>
-            <span class="creation-status-pill" :class="'is-' + (unit.status || 'outline')">
+            <span v-if="!isBatchEligible(unit)" class="creation-status-pill is-locked">
+              {{ unit.status === 'final' ? $t('creation.status.final') : $t('creation.studio.batchSkipped') }}
+            </span>
+            <span v-else class="creation-status-pill" :class="'is-' + (unit.status || 'outline')">
               {{ $t('creation.status.' + (unit.status || 'outline')) }}
             </span>
           </div>

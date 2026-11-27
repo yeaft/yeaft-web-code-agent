@@ -2,6 +2,7 @@ import { randomUUID } from 'crypto';
 import { WebSocket } from 'ws';
 import { CONFIG } from './config.js';
 import { generateSkipAuthSession } from './auth.js';
+import { isClientSessionValid } from './auth/client-session.js';
 import { authenticateRequest } from './auth/request-auth.js';
 import { encodeKey } from './encryption.js';
 import { scheduledTaskReceiptDb, userDb } from './database.js';
@@ -57,6 +58,8 @@ export function handleWebConnection(ws, url, req = {}) {
 
   let authenticated = false;
   let sessionKey = null;
+  let authToken = null;
+  let authExpiresAt;
   let username = null;
   let userId = null;
   let role = null;
@@ -72,8 +75,10 @@ export function handleWebConnection(ws, url, req = {}) {
     const result = authenticateRequest({
       cookieHeader: req.headers?.cookie,
       queryToken: url.searchParams.get('token'),
-    });
+    }, { fullSession: true });
     authenticated = !!result;
+    authToken = result?.token ?? null;
+    if (Number.isFinite(result?.exp)) authExpiresAt = result.exp * 1000;
     sessionKey = result?.sessionKey || null;
     username = result?.username || null;
     role = result?.role === 'admin' ? 'admin' : (result ? 'pro' : null);
@@ -111,6 +116,8 @@ export function handleWebConnection(ws, url, req = {}) {
     connectionGeneration: connectionId,
     ws,
     authenticated,
+    authToken,
+    authExpiresAt,
     username,
     userId,
     role,
@@ -164,6 +171,7 @@ export function handleWebConnection(ws, url, req = {}) {
 
   ws.on('message', async (data) => {
     const client = webClients.get(clientId);
+    if (!requireValidClientSession(client)) return;
     const msg = await parseMessage(data, client?.sessionKey);
     if (!msg) return;
     if (msg.perfTraceId) {
@@ -252,14 +260,18 @@ const WORKBENCH_TYPES = new Set([
   'proxy_update_ports', 'update_file_tabs', 'restore_file_tabs'
 ]);
 
-async function handleWebMessage(clientId, msg) {
-  const client = webClients.get(clientId);
-  if (!client || !client.authenticated) return;
-  if (!CONFIG.skipAuth && !userDb.isActive(client.userId)) {
+function requireValidClientSession(client) {
+  if (isClientSessionValid(client)) return true;
+  if (client?.authenticated) {
     client.authenticated = false;
     client.ws.close(1008, 'Account disabled');
-    return;
   }
+  return false;
+}
+
+async function handleWebMessage(clientId, msg) {
+  const client = webClients.get(clientId);
+  if (!requireValidClientSession(client)) return;
 
   // feat-ws-plaintext-negotiation: early capability frame from new web
   // clients. Tells the server "you may stop encrypting outbound to me".

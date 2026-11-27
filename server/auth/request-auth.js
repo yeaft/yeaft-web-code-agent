@@ -32,7 +32,7 @@ function readCookieToken(cookieHeader) {
  * Explicit bearer/query tokens remain the compatibility path; a valid
  * HttpOnly cookie is the browser fallback when that token is absent or stale.
  */
-export function authenticateRequest({ authorizationHeader, cookieHeader, queryToken } = {}) {
+export function authenticateRequest({ authorizationHeader, cookieHeader, queryToken } = {}, { fullSession = false } = {}) {
   const candidates = [
     ['bearer', readBearerToken(authorizationHeader)],
     ['query', typeof queryToken === 'string' && queryToken ? queryToken : null],
@@ -43,7 +43,7 @@ export function authenticateRequest({ authorizationHeader, cookieHeader, queryTo
     if (!token || seen.has(token)) continue;
     seen.add(token);
     const result = verifyToken(token);
-    if (result.valid) return { ...result, token, source };
+    if (result.valid) return fullSession && result.type ? null : { ...result, token, source };
   }
   return null;
 }

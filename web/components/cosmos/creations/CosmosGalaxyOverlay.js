@@ -5,6 +5,23 @@
  */
 import { useCreationsStore } from '../../../stores/creations.js';
 import { t } from '../../../utils/i18n.js';
+import { COSMOS_BOOKS_KEY } from '../../../cosmos/constants.js';
+
+const LEGACY_BOOKS_DISMISSED_KEY = 'yeaft-cosmos-legacy-books-dismissed-v1';
+
+function readLegacyGalaxyBookmarks() {
+  try {
+    if (typeof localStorage === 'undefined') return [];
+    if (localStorage.getItem(LEGACY_BOOKS_DISMISSED_KEY) === '1') return [];
+    const raw = localStorage.getItem(COSMOS_BOOKS_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter((b) => b && typeof b.title === 'string' && b.title.trim());
+  } catch {
+    return [];
+  }
+}
 
 const KIND_FILTERS = [
   { id: 'all', labelKey: 'creation.kind.all', swatch: null },
@@ -134,7 +151,7 @@ export default {
           </div>
         </div>
 
-        <!-- Status Banners (Offline / Unsupported / Error) -->
+        <!-- Status Banners (Offline / Unsupported / Error / Legacy Import) -->
         <div v-if="selectedAgent && !selectedAgent.online" class="creation-galaxy-banner" role="status">
           <span>{{ $t('creation.galaxy.offlineReadonly') }}</span>
         </div>
@@ -143,6 +160,31 @@ export default {
         </div>
         <div v-else-if="agentState.error" class="creation-galaxy-banner is-error" role="alert">
           <span>{{ agentState.error }}</span>
+        </div>
+        <div
+          v-if="legacyBookmarks.length > 0"
+          class="creation-galaxy-banner creation-legacy-banner"
+          role="status"
+        >
+          <span>{{ $t('creation.galaxy.legacyFound', { count: legacyBookmarks.length }) }}</span>
+          <div class="creation-legacy-banner-actions">
+            <button
+              type="button"
+              class="creation-glass-btn is-primary"
+              :disabled="!canMutateSelectedAgent || importingLegacy"
+              @click="importLegacyBookmarks"
+            >
+              {{ $t('creation.galaxy.legacyImport') }}
+            </button>
+            <button
+              type="button"
+              class="creation-glass-btn"
+              :disabled="importingLegacy"
+              @click="dismissLegacyBookmarks"
+            >
+              {{ $t('creation.galaxy.legacyDismiss') }}
+            </button>
+          </div>
         </div>
       </div>
 
@@ -164,8 +206,8 @@ export default {
                   <span class="creation-kind-swatch" :class="'is-' + (item.kind || 'book')"></span>
                   <span>{{ $t('creation.celestial.' + (item.kind || 'book')) }}</span>
                 </span>
-                <span class="creation-status-pill" :class="'is-' + (item.status || 'active')">
-                  {{ $t('creation.status.' + (item.status || 'active')) }}
+                <span class="creation-status-pill" :class="'is-' + displayStatusFor(item)">
+                  {{ $t('creation.status.' + displayStatusFor(item)) }}
                 </span>
               </div>
 
@@ -263,8 +305,8 @@ export default {
               <span class="creation-kind-swatch" :class="'is-' + (inspectedCreation.kind || 'book')"></span>
               <span>{{ $t('creation.celestial.' + (inspectedCreation.kind || 'book')) }}</span>
             </span>
-            <span class="creation-status-pill" :class="'is-' + (inspectedCreation.status || 'active')">
-              {{ $t('creation.status.' + (inspectedCreation.status || 'active')) }}
+            <span class="creation-status-pill" :class="'is-' + displayStatusFor(inspectedCreation)">
+              {{ $t('creation.status.' + displayStatusFor(inspectedCreation)) }}
             </span>
           </div>
           <button
@@ -300,7 +342,7 @@ export default {
         </div>
 
         <div
-          v-if="inspectedCreation.status === 'generating' || inspectedCreation.activeRunProgress != null"
+          v-if="inspectedCreation.activeRunStatus === 'running' || inspectedCreation.status === 'generating' || inspectedCreation.activeRunProgress != null"
           class="creation-inspector-progress"
         >
           <div class="creation-card-stats">
@@ -449,6 +491,8 @@ export default {
     const igniteInputRef = Vue.ref(null);
     const fileInputRef = Vue.ref(null);
     const isDraggingFiles = Vue.ref(false);
+    const legacyBookmarks = Vue.ref(readLegacyGalaxyBookmarks());
+    const importingLegacy = Vue.ref(false);
     let dragDepth = 0;
 
     const selectedAgent = Vue.computed(() => {
@@ -463,7 +507,12 @@ export default {
     const isUnsupportedAgent = Vue.computed(() => {
       const ag = selectedAgent.value;
       if (!ag) return false;
-      if (ag.capabilities && ag.capabilities.creations === false) return true;
+      if (ag.online && Array.isArray(ag.capabilities)) {
+        return !ag.capabilities.includes('creations');
+      }
+      if (ag.capabilities && !Array.isArray(ag.capabilities) && ag.capabilities.creations === false) {
+        return true;
+      }
       const err = String(agentState.value.error || '').toLowerCase();
       return err.includes('unsupported') && err.includes('creation');
     });
@@ -520,6 +569,55 @@ export default {
       },
       { immediate: true },
     );
+
+    function displayStatusFor(item) {
+      if (!item) return 'active';
+      if (item.activeRunStatus === 'running') return 'generating';
+      return item.status || 'active';
+    }
+
+    function dismissLegacyBookmarks() {
+      try {
+        localStorage.setItem(LEGACY_BOOKS_DISMISSED_KEY, '1');
+      } catch {
+        // ignore storage errors
+      }
+      legacyBookmarks.value = [];
+    }
+
+    async function importLegacyBookmarks() {
+      if (!canMutateSelectedAgent.value || importingLegacy.value || legacyBookmarks.value.length === 0) return;
+      const agentId = creationsStore.selectedAgentId;
+      importingLegacy.value = true;
+      let imported = 0;
+      try {
+        const toImport = legacyBookmarks.value.slice();
+        for (const bm of toImport) {
+          const title = String(bm.title || '').trim();
+          if (!title) continue;
+          const celestial = (Number.isFinite(bm.arm) || Number.isFinite(bm.r) || Number.isFinite(bm.theta))
+            ? {
+                ...(Number.isFinite(bm.arm) ? { arm: bm.arm } : {}),
+                ...(Number.isFinite(bm.r) ? { r: bm.r } : {}),
+                ...(Number.isFinite(bm.theta) ? { theta: bm.theta } : {}),
+              }
+            : undefined;
+          await creationsStore.createCreation(agentId, {
+            title,
+            kind: 'book',
+            autoPlan: false,
+            ...(celestial ? { celestial } : {}),
+          });
+          imported += 1;
+        }
+        dismissLegacyBookmarks();
+        emit('toast', t('creation.galaxy.legacyImported', { count: imported }));
+      } catch (err) {
+        emit('toast', err?.message || 'Import failed');
+      } finally {
+        importingLegacy.value = false;
+      }
+    }
 
     function selectAgent(agentId) {
       creationsStore.selectGalaxyAgent(agentId).catch(() => {});
@@ -604,6 +702,9 @@ export default {
           celestial: draft.celestial || undefined,
         });
         const created = res?.creation || res;
+        if (res?.initialTurnError) {
+          emit('toast', res.initialTurnError);
+        }
         draft.title = '';
         draft.prompt = '';
         draft.pendingFiles = [];
@@ -682,24 +783,11 @@ export default {
       searchInputRef.value?.focus?.();
     }
 
-    function onWindowKeyDown(e) {
-      if (!props.visible || creationsStore.activeCreation) return;
-      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
-        e.preventDefault();
-        focusSearch();
-        return;
-      }
-      if (e.key === 'Escape' && creationsStore.inspectorTarget) {
-        creationsStore.inspectorTarget = null;
-      }
-    }
-
     Vue.onMounted(() => {
       window.addEventListener('dragenter', onWindowDragEnter);
       window.addEventListener('dragover', onWindowDragOver);
       window.addEventListener('dragleave', onWindowDragLeave);
       window.addEventListener('drop', onWindowDrop);
-      window.addEventListener('keydown', onWindowKeyDown);
     });
 
     Vue.onBeforeUnmount(() => {
@@ -707,7 +795,6 @@ export default {
       window.removeEventListener('dragover', onWindowDragOver);
       window.removeEventListener('dragleave', onWindowDragLeave);
       window.removeEventListener('drop', onWindowDrop);
-      window.removeEventListener('keydown', onWindowKeyDown);
     });
 
     return {
@@ -719,6 +806,8 @@ export default {
       igniteInputRef,
       fileInputRef,
       isDraggingFiles,
+      legacyBookmarks,
+      importingLegacy,
       selectedAgent,
       agentState,
       filteredCreations,
@@ -728,6 +817,9 @@ export default {
       isIgniteExpanded,
       canSubmitIgnite,
       showGalaxyEmptyState,
+      displayStatusFor,
+      dismissLegacyBookmarks,
+      importLegacyBookmarks,
       selectAgent,
       defaultModeFor,
       openCreationItem,

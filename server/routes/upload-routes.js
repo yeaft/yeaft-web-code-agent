@@ -1,4 +1,4 @@
-import { randomUUID } from 'crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import multer from 'multer';
 import { CONFIG } from '../config.js';
 import { userDb } from '../database.js';
@@ -6,6 +6,7 @@ import { pendingFiles, previewFiles } from '../context.js';
 import { PREVIEW_FILE_TTL_MS, prunePreviewFiles } from '../preview-files.js';
 import { detectImageMime, yeaftAssetStore } from '../yeaft-asset-store.js';
 import { CREATION_MEDIA_CHUNK_BYTES, openCreationMedia } from '../creation-media-relay.js';
+import { CREATION_MEDIA_SNIFF_BYTES, matchesCreationMediaType } from '../creation-media-type.js';
 import { readSessionAttachment } from '../session-attachment-relay.js';
 import { openWorkbenchVideo, readWorkbenchPreview, WORKBENCH_VIDEO_CHUNK_BYTES } from '../workbench-preview.js';
 
@@ -102,12 +103,6 @@ export async function streamWorkbenchVideo(req, res, video) {
   }
 }
 
-const INLINE_CREATION_MEDIA = new Set([
-  'image/avif', 'image/bmp', 'image/gif', 'image/jpeg', 'image/png', 'image/webp', 'image/x-icon',
-  'audio/aac', 'audio/flac', 'audio/mp4', 'audio/mpeg', 'audio/ogg', 'audio/wav', 'audio/webm', 'audio/x-wav',
-  'video/mp4', 'video/mpeg', 'video/ogg', 'video/quicktime', 'video/webm', 'application/pdf',
-]);
-
 async function streamCreationMedia(req, res) {
   const controller = new AbortController();
   const abort = () => controller.abort();
@@ -127,9 +122,18 @@ async function streamCreationMedia(req, res) {
     transfer = openCreationMedia(req.user, req.params, controller.signal);
     // Resolve the total before parsing suffix/open-ended ranges. Full GETs
     // use their first pull as the probe so those bytes are not read twice.
-    const first = await transfer.read(0, req.method === 'HEAD' || req.headers.range ? 0 : CREATION_MEDIA_CHUNK_BYTES - 1);
+    const probeSize = req.method === 'HEAD' || req.headers.range ? CREATION_MEDIA_SNIFF_BYTES : CREATION_MEDIA_CHUNK_BYTES;
+    const first = await transfer.read(0, probeSize - 1);
     const { totalSize, mimeType, filename } = first;
-    const requested = parseByteRange(req.headers.range, totalSize);
+    // Creation media IDs identify immutable blobs; replacements get new IDs.
+    const { mediaKind, mediaId } = req.params;
+    const etag = `"${createHash('sha256').update(JSON.stringify([mediaKind, mediaId, totalSize])).digest('hex')}"`;
+    res.setHeader('ETag', etag);
+    // If-Range requires a strong match. We don't publish Last-Modified, so
+    // dates, weak tags and unknown validators all fall back to a full body.
+    const rangeHeader = req.headers['if-range'] === undefined || req.headers['if-range'] === etag
+      ? req.headers.range : undefined;
+    const requested = parseByteRange(rangeHeader, totalSize);
     if (requested === false) {
       res.setHeader('Content-Range', `bytes */${totalSize}`);
       res.setHeader('Content-Length', '0');
@@ -138,8 +142,8 @@ async function streamCreationMedia(req, res) {
     const range = requested ?? { start: 0, end: totalSize - 1 };
     const length = range.end - range.start + 1;
     const isSvg = mimeType === 'image/svg+xml';
-    const inline = req.query.download !== '1' && (INLINE_CREATION_MEDIA.has(mimeType)
-      || (isSvg && req.params.mediaKind === 'asset'));
+    const inline = req.query.download !== '1' && (!isSvg || mediaKind === 'asset')
+      && matchesCreationMediaType(first.buffer, mimeType);
     const basename = filename.split(/[/\\]/).pop()?.replace(/[\x00-\x1f\x7f]/g, '') || 'media';
     const encoded = encodeURIComponent(basename.toWellFormed()).replace(/['()*]/g, c => '%' + c.charCodeAt(0).toString(16));
     res.status(requested ? 206 : 200);
@@ -151,8 +155,9 @@ async function streamCreationMedia(req, res) {
     if (req.method === 'HEAD' || length === 0) return res.end();
 
     for (let start = range.start; start <= range.end;) {
-      const end = start + Math.min(range.end - start, CREATION_MEDIA_CHUNK_BYTES - 1);
-      const chunk = start === first.start && end <= first.end ? first : await transfer.read(start, end);
+      const buffered = start <= first.end;
+      const end = Math.min(range.end, buffered ? first.end : start + Math.min(range.end - start, CREATION_MEDIA_CHUNK_BYTES - 1));
+      const chunk = buffered ? first : await transfer.read(start, end);
       if (chunk.totalSize !== totalSize || chunk.mimeType !== mimeType || chunk.filename !== filename || chunk.end < end) {
         throw Object.assign(new Error('Creation media changed during transfer'), { status: 409 });
       }
@@ -161,7 +166,7 @@ async function streamCreationMedia(req, res) {
       const timer = setTimeout(() => res.destroy(), 60_000);
       timer.unref?.();
       try {
-        if (!await writeResponseChunk(res, chunk.buffer.subarray(0, end - start + 1))) return;
+        if (!await writeResponseChunk(res, chunk.buffer.subarray(start - chunk.start, end - chunk.start + 1))) return;
       } finally {
         clearTimeout(timer);
       }
@@ -171,7 +176,7 @@ async function streamCreationMedia(req, res) {
   } catch (error) {
     if (res.destroyed || controller.signal.aborted) return;
     if (res.headersSent) return res.destroy();
-    for (const header of ['Content-Length', 'Content-Range', 'Content-Type', 'Content-Disposition', 'Content-Security-Policy']) {
+    for (const header of ['Content-Length', 'Content-Range', 'Content-Type', 'Content-Disposition', 'Content-Security-Policy', 'ETag']) {
       res.removeHeader(header);
     }
     res.status(error.status || 502).type('text/plain').send(error.status ? error.message : 'Creation media read failed');
@@ -223,7 +228,7 @@ export function registerUploadRoutes(app, { requireAuth, requireSessionAuth = re
     .head(requireSessionAuth, streamCreationMedia)
     .get(requireSessionAuth, streamCreationMedia);
 
-  app.post('/api/upload', requireAuth, upload.array('files', 10), (req, res) => {
+  app.post('/api/upload', requireSessionAuth, upload.array('files', 10), (req, res) => {
     if (!req.files || req.files.length === 0) {
       return res.status(400).json({ error: 'No files uploaded' });
     }

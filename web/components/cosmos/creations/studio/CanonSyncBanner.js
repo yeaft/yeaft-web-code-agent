@@ -50,16 +50,32 @@ export default {
     toggleItem(id) {
       this.selectedMap = { ...this.selectedMap, [id]: !this.selectedMap[id] };
     },
+    formatPatchPreview(p) {
+      const parts = [];
+      const contentMd = p?.patch?.contentMd ?? p?.canonPayload?.contentMd ?? p?.canonItem?.contentMd;
+      if (typeof contentMd === 'string' && contentMd.trim()) {
+        parts.push(contentMd.trim().slice(0, 180));
+      }
+      const stateVal = p?.patch?.state ?? p?.canonPayload?.state ?? p?.canonItem?.state;
+      if (stateVal && typeof stateVal === 'object' && Object.keys(stateVal).length > 0) {
+        try {
+          parts.push(JSON.stringify(stateVal).slice(0, 180));
+        } catch {
+          // ignore
+        }
+      }
+      return parts.join(' · ');
+    },
     async syncSelected() {
       this.busy = true;
       try {
         for (const p of this.proposals) {
-          const decision = this.selectedMap[p.id] ? 'accept' : 'reject';
+          if (!this.selectedMap[p.id]) continue;
           await this.creationsStore.resolveProposal(
             this.resolvedAgentId,
             this.resolvedCreationId,
             p.id,
-            decision
+            'accept'
           );
         }
       } finally {
@@ -114,6 +130,7 @@ export default {
             <input type="checkbox" :checked="Boolean(selectedMap[p.id])" @change="toggleItem(p.id)" />
             <strong class="creation-canon-sync-name">{{ p.title || p.patch?.title || p.canonItem?.title || p.canonPayload?.title || p.id }}</strong>
             <span v-if="p.summary" class="creation-canon-sync-summary">{{ p.summary }}</span>
+            <span v-if="formatPatchPreview(p)" class="creation-canon-sync-preview">{{ formatPatchPreview(p) }}</span>
           </label>
         </li>
       </ul>

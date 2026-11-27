@@ -794,7 +794,14 @@ export default {
         quickAgentId.value = null;
         if (drawerOpen.value) closeDrawer();
       }
-      if (scaleBand(anim.targetScaleLog) !== 'galaxy') bookCreateOpen.value = false;
+      if (scaleBand(anim.targetScaleLog) !== 'galaxy') {
+        bookCreateOpen.value = false;
+        creationsStore.inspectorTarget = null;
+        if (creationsStore.igniteDraft?.open) {
+          creationsStore.igniteDraft = { ...creationsStore.igniteDraft, open: false };
+        }
+        creationsStore.closeCreation();
+      }
     }
 
     const activeTouchPointers = new Map();
@@ -881,8 +888,16 @@ export default {
       }
     }
 
-    Vue.watch([currentBand, projectedAgentList], ([band]) => {
-      if (band === 'galaxy') ensureGalaxyAgentSelected();
+    Vue.watch([currentBand, projectedAgentList], ([band], prev) => {
+      if (band === 'galaxy') {
+        ensureGalaxyAgentSelected();
+      } else if (prev && prev[0] === 'galaxy') {
+        creationsStore.inspectorTarget = null;
+        if (creationsStore.igniteDraft?.open) {
+          creationsStore.igniteDraft = { ...creationsStore.igniteDraft, open: false };
+        }
+        creationsStore.closeCreation();
+      }
     }, { immediate: true });
 
     function onClickGalaxyStar(star) {
@@ -1419,6 +1434,11 @@ export default {
     }
     function abandonCosmos() {
       constantsOpen.value = false;
+      creationsStore.inspectorTarget = null;
+      if (creationsStore.igniteDraft?.open) {
+        creationsStore.igniteDraft = { ...creationsStore.igniteDraft, open: false };
+      }
+      creationsStore.closeCreation();
       collapseOpenWorkbench();
       store.setUiMode('classic');
     }
@@ -1461,8 +1481,8 @@ export default {
       if (agentSettingsModal.open) { agentSettingsModal.open = false; return; }
       if (emptyPlanetMenu.value) { emptyPlanetMenu.value = null; return; }
       if (constantsOpen.value) { constantsOpen.value = false; return; }
-      if (creationsStore.inspectorTarget) { creationsStore.inspectorTarget = null; return; }
-      if (creationsStore.igniteDraft?.open) { creationsStore.igniteDraft = { ...creationsStore.igniteDraft, open: false }; return; }
+      if (currentBand.value === 'galaxy' && creationsStore.inspectorTarget) { creationsStore.inspectorTarget = null; return; }
+      if (currentBand.value === 'galaxy' && creationsStore.igniteDraft?.open) { creationsStore.igniteDraft = { ...creationsStore.igniteDraft, open: false }; return; }
       if (bookCreateOpen.value) { bookCreateOpen.value = false; return; }
       if (eventSim.active?.observing) { onReturnFromEvent(); return; }
       if (drawerOpen.value && drawerRef.value?.isHistoryOpen?.()) { drawerRef.value.closeSessionSwitcher?.(); return; }

@@ -30,11 +30,11 @@ function parseVideoContent(content, fallbackTitle) {
   if (raw) {
     try {
       const parsed = JSON.parse(raw);
-      if (parsed && Array.isArray(parsed.scenes)) {
+      if (parsed && typeof parsed === 'object' && (Array.isArray(parsed.scenes) || parsed.videoAssetId || parsed.videoSourceId)) {
         return {
           videoAssetId: parsed.videoAssetId || '',
           videoSourceId: parsed.videoSourceId || '',
-          scenes: parsed.scenes.map((s, i) => normalizeScene(s, i)),
+          scenes: Array.isArray(parsed.scenes) ? parsed.scenes.map((s, i) => normalizeScene(s, i)) : [],
         };
       }
     } catch {
@@ -77,22 +77,36 @@ export default {
     mode: { type: String, default: 'read' },
     agentId: { type: String, default: '' },
     creationId: { type: String, default: '' },
+    sources: { type: Array, default: () => [] },
     saving: { type: Boolean, default: false },
+    onSaveContent: { type: Function, default: null },
   },
   emits: ['save-content', 'request-ai-edit', 'finalize-node'],
   data() {
     return {
       episode: parseVideoContent(this.content, this.node?.title),
       currentTime: 0,
+      nativeDuration: 0,
       playing: false,
       editing: false,
       dirty: false,
+      editBaseRevId: this.node?.currentRevId ?? null,
+      conflictError: '',
+      saveError: '',
       _playTimer: null,
     };
   },
   computed: {
     scenes() {
       return this.episode.scenes || [];
+    },
+    videoSources() {
+      return (this.sources || []).filter((s) => {
+        if (!s || !s.id) return false;
+        const mime = String(s.mimeType || '').toLowerCase();
+        const name = String(s.name || s.filename || '').toLowerCase();
+        return mime.startsWith('video/') || /\.(mp4|webm|mov|mkv|m4v)$/.test(name);
+      });
     },
     videoUrl() {
       if (this.episode.videoAssetId) {
@@ -113,6 +127,7 @@ export default {
       });
     },
     totalDuration() {
+      if (this.videoUrl && this.nativeDuration > 0) return this.nativeDuration;
       if (!this.sceneTimeline.length) return 0;
       return this.sceneTimeline[this.sceneTimeline.length - 1].end;
     },
@@ -149,14 +164,19 @@ export default {
     content(newVal) {
       if (!this.dirty) {
         this.episode = parseVideoContent(newVal, this.node?.title);
+        this.editBaseRevId = this.node?.currentRevId ?? null;
       }
     },
     'node.id'() {
       this.stopStoryboardPlayback();
       this.episode = parseVideoContent(this.content, this.node?.title);
       this.currentTime = 0;
+      this.nativeDuration = 0;
       this.dirty = false;
       this.editing = false;
+      this.editBaseRevId = this.node?.currentRevId ?? null;
+      this.conflictError = '';
+      this.saveError = '';
     },
   },
   beforeUnmount() {
@@ -164,11 +184,38 @@ export default {
   },
   methods: {
     formatTime,
+    toggleEditing() {
+      if (!this.editing && !this.dirty) {
+        this.editBaseRevId = this.node?.currentRevId ?? null;
+        this.conflictError = '';
+        this.saveError = '';
+      }
+      this.editing = !this.editing;
+    },
     markDirty() {
+      if (!this.dirty) {
+        this.editBaseRevId = this.node?.currentRevId ?? null;
+      }
       this.dirty = true;
+    },
+    onVideoLoadedMetadata(e) {
+      const dur = Number(e.target?.duration);
+      if (Number.isFinite(dur) && dur > 0) {
+        this.nativeDuration = dur;
+      }
     },
     onVideoTimeUpdate(e) {
       this.currentTime = Number(e.target?.currentTime) || 0;
+    },
+    onSelectVideoSource(e) {
+      const nextSourceId = String(e.target?.value || '');
+      this.markDirty();
+      this.episode = {
+        ...this.episode,
+        videoSourceId: nextSourceId,
+        videoAssetId: nextSourceId ? '' : this.episode.videoAssetId,
+      };
+      this.nativeDuration = 0;
     },
     toggleStoryboardPlay() {
       if (this.videoUrl) {
@@ -203,7 +250,8 @@ export default {
       }
     },
     seekTo(sec) {
-      const clamped = Math.max(0, Math.min(this.totalDuration || 0, Number(sec) || 0));
+      const maxDur = this.videoUrl && this.nativeDuration > 0 ? this.nativeDuration : (this.totalDuration || 0);
+      const clamped = maxDur > 0 ? Math.max(0, Math.min(maxDur, Number(sec) || 0)) : Math.max(0, Number(sec) || 0);
       this.currentTime = clamped;
       if (this.videoUrl && this.$refs.videoEl) {
         this.$refs.videoEl.currentTime = clamped;
@@ -213,6 +261,7 @@ export default {
       this.seekTo(Number(e.target?.value) || 0);
     },
     addScene() {
+      this.markDirty();
       this.episode.scenes.push(normalizeScene({
         title: `${this.$t('creation.video.scenes')} ${this.scenes.length + 1}`,
         durationSec: 6,
@@ -220,27 +269,49 @@ export default {
         caption: '',
         visualPrompt: '',
       }, this.scenes.length));
-      this.dirty = true;
       this.editing = true;
     },
     moveScene(idx, delta) {
       const target = idx + delta;
       if (target < 0 || target >= this.scenes.length) return;
+      this.markDirty();
       const [item] = this.episode.scenes.splice(idx, 1);
       this.episode.scenes.splice(target, 0, item);
-      this.dirty = true;
     },
     deleteScene(idx) {
+      this.markDirty();
       this.episode.scenes.splice(idx, 1);
-      this.dirty = true;
     },
-    saveEpisode() {
-      this.$emit('save-content', {
+    async saveEpisode() {
+      this.conflictError = '';
+      this.saveError = '';
+      const payload = {
         nodeId: this.node.id,
         content: JSON.stringify(this.episode, null, 2),
-        baseRevId: this.node.currentRevId || null,
-      });
+        baseRevId: this.editBaseRevId,
+      };
+      if (this.onSaveContent) {
+        try {
+          const res = await this.onSaveContent(payload);
+          if (res?.conflict === true) {
+            this.conflictError = this.$t('creation.interior.conflictDesc');
+            return false;
+          }
+          this.editBaseRevId = res?.node?.currentRevId ?? this.node?.currentRevId ?? this.editBaseRevId;
+          this.dirty = false;
+          return true;
+        } catch (err) {
+          if (err?.errorCode === 'revision_conflict') {
+            this.conflictError = this.$t('creation.interior.conflictDesc');
+          } else {
+            this.saveError = err?.message || 'Save failed';
+          }
+          return false;
+        }
+      }
+      this.$emit('save-content', payload);
       this.dirty = false;
+      return true;
     },
     requestAiRewriteScene(scene, idx) {
       this.$emit('request-ai-edit', {
@@ -266,6 +337,19 @@ export default {
         </div>
 
         <div class="creation-reader-actions">
+          <select
+            v-if="videoSources.length > 0"
+            class="creation-compact-select"
+            :value="episode.videoSourceId || ''"
+            :aria-label="$t('creation.video.linkSource')"
+            @change="onSelectVideoSource"
+          >
+            <option value="">{{ $t('creation.video.linkSource') }}</option>
+            <option v-for="src in videoSources" :key="src.id" :value="src.id">
+              {{ src.name || src.filename || src.id }}
+            </option>
+          </select>
+
           <button type="button" class="creation-glass-btn" @click="addScene">
             + {{ $t('creation.video.addScene') }}
           </button>
@@ -273,7 +357,7 @@ export default {
             type="button"
             class="creation-glass-btn"
             :class="{ 'is-active': editing }"
-            @click="editing = !editing"
+            @click="toggleEditing"
           >
             ✎ {{ editing ? $t('creation.book.doneEdit') : $t('creation.book.inlineEdit') }}
           </button>
@@ -289,6 +373,15 @@ export default {
         </div>
       </div>
 
+      <!-- Conflict / Save Error Banner -->
+      <div v-if="conflictError || saveError" class="creation-conflict-banner" role="alert">
+        <strong>⚠ {{ conflictError ? $t('creation.interior.conflictTitle') : saveError }}</strong>
+        <span v-if="conflictError">{{ conflictError }}</span>
+        <button type="button" class="creation-glass-btn" @click="conflictError = ''; saveError = ''">
+          {{ $t('creation.canon.dismiss') }}
+        </button>
+      </div>
+
       <!-- Cinema Player + Synchronized Transcript Split -->
       <div class="creation-video-layout">
         <section class="creation-video-stage">
@@ -299,6 +392,7 @@ export default {
               controls
               preload="metadata"
               :src="videoUrl"
+              @loadedmetadata="onVideoLoadedMetadata"
               @timeupdate="onVideoTimeUpdate"
             ></video>
           </div>
