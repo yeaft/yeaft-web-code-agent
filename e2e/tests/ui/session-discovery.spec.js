@@ -99,8 +99,8 @@ test('sidebar Session search updates as you type, with scoped results and no dia
   socket.enableDiscovery();
   await expect(trigger).toBeVisible();
   const order = await sidebar.locator('.sidebar-primary-actions > button').evaluateAll(buttons => buttons.map(button => button.className));
-  expect(order.findIndex(classes => classes.includes('sidebar-search-trigger')) + 1)
-    .toBe(order.findIndex(classes => classes.includes('sidebar-person-trigger')));
+  expect(order.findIndex(classes => classes.includes('sidebar-search-trigger'))).toBe(order.length - 1);
+  await expect(sidebar.locator('.sidebar-person-trigger')).toHaveCount(0);
   await trigger.press('Enter');
   const query = sidebar.getByRole('searchbox');
   await expect(query).toBeFocused();
