@@ -9,6 +9,8 @@
  * with generation fencing and per-channel `AbortController` to ignore stale/aborted responses.
  */
 
+import { getLocale } from '../utils/i18n.js';
+
 const { defineStore } = Pinia;
 
 const FEED_PAGE_SIZE = 30;
@@ -16,6 +18,7 @@ let storeGeneration = 0;
 let pulseSeq = 0;
 const channelControllers = new Map();
 const channelSeq = new Map();
+const mutationControllers = new Set();
 
 function defaultPrefs() {
   return {
@@ -47,14 +50,27 @@ function normalizePrefs(raw) {
   const base = defaultPrefs();
   if (!raw || typeof raw !== 'object') return base;
   return {
-    ...base,
-    ...raw,
-    enabledDomains: Array.isArray(raw.enabledDomains) ? raw.enabledDomains : base.enabledDomains,
+    onboarded: typeof raw.onboarded === 'boolean' ? raw.onboarded : base.onboarded,
+    enabledDomains: Array.isArray(raw.enabledDomains)
+      ? raw.enabledDomains
+      : (Array.isArray(raw.enabledDomainIds) ? raw.enabledDomainIds : base.enabledDomains),
     disabledSources: Array.isArray(raw.disabledSources) ? raw.disabledSources : base.disabledSources,
     customDomains: Array.isArray(raw.customDomains) ? raw.customDomains : base.customDomains,
     watchKeywords: Array.isArray(raw.watchKeywords) ? raw.watchKeywords : base.watchKeywords,
     muteKeywords: Array.isArray(raw.muteKeywords) ? raw.muteKeywords : base.muteKeywords,
+    preferredAgentId: typeof raw.preferredAgentId === 'string' ? raw.preferredAgentId : base.preferredAgentId,
+    defaultPerspective: typeof raw.defaultPerspective === 'string' ? raw.defaultPerspective : base.defaultPerspective,
+    autoRefreshMinutes: Number.isInteger(raw.autoRefreshMinutes) ? raw.autoRefreshMinutes : base.autoRefreshMinutes,
   };
+}
+
+function invalidateChannel(channel) {
+  const prev = channelControllers.get(channel);
+  if (prev) {
+    try { prev.abort(); } catch { /* ignore */ }
+    channelControllers.delete(channel);
+  }
+  channelSeq.set(channel, (channelSeq.get(channel) || 0) + 1);
 }
 
 function nextChannelRequest(channel) {
@@ -73,11 +89,35 @@ function isStaleRequest(channel, seq, gen) {
   return gen !== storeGeneration || channelSeq.get(channel) !== seq;
 }
 
+function createMutationRequest() {
+  const controller = new AbortController();
+  mutationControllers.add(controller);
+  const gen = storeGeneration;
+  return {
+    controller,
+    gen,
+    release() {
+      mutationControllers.delete(controller);
+    },
+  };
+}
+
 function abortAllChannels() {
+  for (const ch of channelSeq.keys()) {
+    channelSeq.set(ch, (channelSeq.get(ch) || 0) + 1);
+  }
   for (const ctrl of channelControllers.values()) {
     try { ctrl.abort(); } catch { /* ignore */ }
   }
   channelControllers.clear();
+  for (const ctrl of mutationControllers.values()) {
+    try { ctrl.abort(); } catch { /* ignore */ }
+  }
+  mutationControllers.clear();
+}
+
+function currentUiLanguage() {
+  return getLocale() === 'en' ? 'en' : 'zh-CN';
 }
 
 async function apiJson(url, options = {}) {
@@ -132,8 +172,14 @@ export const useCosmicWebStore = defineStore('cosmicWeb', {
     searchQuery: '',
     sortMode: 'heat', // 'heat' | 'latest'
 
+    activeInWebBand: false,
+    staleOnReentry: false,
+
     hoveredClusterId: null,
+    cursorClusterId: null,
     selectedClusterId: null,
+    readerClusterId: null,
+    readerItemId: null,
     focusedDomainId: null,
 
     activeClusterDetail: null,
@@ -147,6 +193,7 @@ export const useCosmicWebStore = defineStore('cosmicWeb', {
     articleData: null,
     articleError: null,
     activeArticleUrl: null,
+    activeArticleItemId: null,
 
     aiBriefLoading: false,
     aiBriefData: null,
@@ -165,27 +212,36 @@ export const useCosmicWebStore = defineStore('cosmicWeb', {
 
   getters: {
     enabledDomainList(state) {
-      const enabledSet = new Set(state.prefs?.enabledDomains || []);
-      const builtIn = (state.domains || []).filter((d) => !d.isCustom && (enabledSet.size === 0 || enabledSet.has(d.id)));
-      const custom = (state.prefs?.customDomains || []).map((c) => ({
-        id: c.id,
-        labelZh: c.name || c.labelZh || c.id,
-        labelEn: c.name || c.labelEn || c.id,
-        colorToken: c.colorToken || 'violet',
-        isCustom: true,
-        unreadCount: Number(state.domains?.find((d) => d.id === c.id)?.unreadCount || 0),
-        itemCount: Number(state.domains?.find((d) => d.id === c.id)?.itemCount || 0),
-        sources: Array.isArray(c.rssUrls) ? c.rssUrls : [],
-      }));
+      const enabledSet = new Set(Array.isArray(state.prefs?.enabledDomains) ? state.prefs.enabledDomains : []);
+      const builtIn = (state.domains || []).filter((d) => d && !d.isCustom && enabledSet.has(d.id));
+      const custom = (state.prefs?.customDomains || [])
+        .filter((c) => c && c.enabled !== false)
+        .map((c) => ({
+          id: c.id,
+          labelZh: c.name || c.labelZh || c.id,
+          labelEn: c.name || c.labelEn || c.id,
+          colorToken: c.colorToken || 'violet',
+          isCustom: true,
+          unreadCount: Number(state.domains?.find((d) => d.id === c.id)?.unreadCount || 0),
+          itemCount: Number(state.domains?.find((d) => d.id === c.id)?.itemCount || 0),
+          sources: Array.isArray(c.rssUrls) ? c.rssUrls : [],
+        }));
       return [...builtIn, ...custom];
     },
 
     activeClusterSummary(state) {
-      if (!state.selectedClusterId) return null;
-      return state.feedItems.find((item) => item && item.id === state.selectedClusterId) || null;
+      const targetId = state.readerClusterId || (!state.readerOpen ? state.selectedClusterId : null);
+      if (!targetId) return null;
+      return state.feedItems.find((item) => item && item.id === targetId) || null;
     },
 
     activeCluster(state) {
+      if (state.readerOpen && state.readerClusterId) {
+        if (state.activeClusterDetail && state.activeClusterDetail.id === state.readerClusterId) {
+          return state.activeClusterDetail;
+        }
+        return state.feedItems.find((item) => item && item.id === state.readerClusterId) || null;
+      }
       return state.activeClusterDetail || this.activeClusterSummary || null;
     },
 
@@ -367,22 +423,39 @@ export const useCosmicWebStore = defineStore('cosmicWeb', {
       await this.fetchFeed({ reset: true });
     },
 
-    async openClusterReader(clusterId, { tab = 'article', expanded = false } = {}) {
+    async openClusterReader(clusterId, { tab = 'article', expanded = false, itemId = null } = {}) {
       if (!clusterId) return;
+
+      // Immediately abort/invalidate any in-flight reader requests from previous story
+      invalidateChannel('detail');
+      invalidateChannel('article');
+      invalidateChannel('aiBrief');
+      this.detailLoading = false;
+      this.articleLoading = false;
+      this.aiBriefLoading = false;
+
+      const isNewCluster = this.readerClusterId !== clusterId || this.activeClusterDetail?.id !== clusterId;
+      this.cursorClusterId = clusterId;
       this.selectedClusterId = clusterId;
+      this.readerClusterId = clusterId;
       this.readerOpen = true;
       this.readerExpanded = Boolean(expanded);
       this.readerTab = tab === 'ai' ? 'ai' : 'article';
       this.drawerCollapsed = false;
 
       // Reset transient reader state for new cluster
-      if (this.activeClusterDetail?.id !== clusterId) {
+      if (isNewCluster) {
         this.activeClusterDetail = null;
         this.articleData = null;
         this.articleError = null;
         this.activeArticleUrl = null;
+        this.activeArticleItemId = itemId || null;
+        this.readerItemId = itemId || null;
         this.aiBriefData = null;
         this.aiBriefError = null;
+      } else if (itemId) {
+        this.activeArticleItemId = itemId;
+        this.readerItemId = itemId;
       }
 
       this.emitPulse({ clusterId, count: 10 });
@@ -392,27 +465,37 @@ export const useCosmicWebStore = defineStore('cosmicWeb', {
 
       // Load detail + article in parallel
       const detailTask = this.loadClusterDetail(clusterId);
-      const articleTask = this.loadArticle(clusterId);
+      const articleTask = this.loadArticle(clusterId, { itemId: this.activeArticleItemId || undefined });
 
       if (this.readerTab === 'ai') {
-        this.generateAiBrief(clusterId);
+        this.generateAiBrief(clusterId, { itemId: this.activeArticleItemId || undefined });
       }
       await Promise.allSettled([detailTask, articleTask]);
     },
 
     closeClusterReader() {
+      invalidateChannel('detail');
+      invalidateChannel('article');
+      invalidateChannel('aiBrief');
+      this.detailLoading = false;
+      this.articleLoading = false;
+      this.aiBriefLoading = false;
       this.readerOpen = false;
       this.readerExpanded = false;
+      this.readerClusterId = null;
+      this.readerItemId = null;
+      this.activeArticleItemId = null;
     },
 
     async loadClusterDetail(clusterId) {
+      if (!clusterId) return;
       const { controller, seq, gen } = nextChannelRequest('detail');
       this.detailLoading = true;
       try {
         const data = await apiJson(`/api/cosmic-web/clusters/${encodeURIComponent(clusterId)}`, {
           signal: controller.signal,
         });
-        if (isStaleRequest('detail', seq, gen)) return;
+        if (isStaleRequest('detail', seq, gen) || !this.readerOpen || this.readerClusterId !== clusterId) return;
         this.activeClusterDetail = data.cluster || data;
         if (data.aiBrief && !this.aiBriefData) {
           this.aiBriefData = data.aiBrief;
@@ -426,15 +509,19 @@ export const useCosmicWebStore = defineStore('cosmicWeb', {
       }
     },
 
-    async loadArticle(clusterId, { force = false, url = null } = {}) {
+    async loadArticle(clusterId, { force = false, url = null, itemId = null } = {}) {
       if (!clusterId) return;
       const { controller, seq, gen } = nextChannelRequest('article');
+      const targetItemId = itemId || null;
       this.articleLoading = true;
       this.articleError = null;
       this.activeArticleUrl = url || null;
+      this.activeArticleItemId = targetItemId;
+      this.readerItemId = targetItemId;
 
       const params = new URLSearchParams();
       if (force) params.set('force', '1');
+      if (targetItemId) params.set('itemId', targetItemId);
       if (url) params.set('url', url);
       const qs = params.toString();
 
@@ -443,10 +530,22 @@ export const useCosmicWebStore = defineStore('cosmicWeb', {
           `/api/cosmic-web/clusters/${encodeURIComponent(clusterId)}/article${qs ? `?${qs}` : ''}`,
           { signal: controller.signal },
         );
-        if (isStaleRequest('article', seq, gen)) return;
-        this.articleData = data.article || data;
+        if (
+          isStaleRequest('article', seq, gen)
+          || !this.readerOpen
+          || this.readerClusterId !== clusterId
+          || (targetItemId && this.activeArticleItemId !== targetItemId)
+        ) {
+          return;
+        }
+        const article = data.article || data;
+        this.articleData = article;
+        if (article?.itemId && !this.activeArticleItemId) {
+          this.activeArticleItemId = article.itemId;
+          this.readerItemId = article.itemId;
+        }
       } catch (err) {
-        if (isAbortError(err) || isStaleRequest('article', seq, gen)) return;
+        if (isAbortError(err) || isStaleRequest('article', seq, gen) || !this.readerOpen || this.readerClusterId !== clusterId) return;
         this.articleError = err.message || 'Failed to load article';
       } finally {
         if (!isStaleRequest('article', seq, gen)) {
@@ -455,26 +554,39 @@ export const useCosmicWebStore = defineStore('cosmicWeb', {
       }
     },
 
-    async generateAiBrief(clusterId, { mode = 'brief', agentId = null, perspective = null, force = false } = {}) {
+    async generateAiBrief(clusterId, { mode = 'brief', agentId = null, perspective = null, force = false, itemId = null } = {}) {
       if (!clusterId) return;
       const { controller, seq, gen } = nextChannelRequest('aiBrief');
+      const effectiveItemId = itemId || this.activeArticleItemId || this.readerItemId || undefined;
       this.aiBriefLoading = true;
       this.aiBriefError = null;
       try {
+        const body = {
+          mode,
+          perspective: perspective || this.prefs.defaultPerspective || 'balanced',
+          language: currentUiLanguage(),
+          force: Boolean(force),
+        };
+        if (effectiveItemId) body.itemId = effectiveItemId;
+        const explicitAgentId = typeof agentId === 'string' && agentId.trim() ? agentId.trim() : null;
+        if (explicitAgentId) body.agentId = explicitAgentId;
+
         const data = await apiJson(`/api/cosmic-web/clusters/${encodeURIComponent(clusterId)}/ai-brief`, {
           method: 'POST',
-          body: JSON.stringify({
-            mode,
-            agentId: agentId || this.prefs.preferredAgentId || undefined,
-            perspective: perspective || this.prefs.defaultPerspective || 'balanced',
-            force: Boolean(force),
-          }),
+          body: JSON.stringify(body),
           signal: controller.signal,
         });
-        if (isStaleRequest('aiBrief', seq, gen)) return;
+        if (
+          isStaleRequest('aiBrief', seq, gen)
+          || !this.readerOpen
+          || this.readerClusterId !== clusterId
+          || (effectiveItemId && this.activeArticleItemId && this.activeArticleItemId !== effectiveItemId)
+        ) {
+          return;
+        }
         this.aiBriefData = data.brief || data;
       } catch (err) {
-        if (isAbortError(err) || isStaleRequest('aiBrief', seq, gen)) return;
+        if (isAbortError(err) || isStaleRequest('aiBrief', seq, gen) || !this.readerOpen || this.readerClusterId !== clusterId) return;
         this.aiBriefError = err.message || 'Failed to generate AI brief';
       } finally {
         if (!isStaleRequest('aiBrief', seq, gen)) {
@@ -490,19 +602,23 @@ export const useCosmicWebStore = defineStore('cosmicWeb', {
       this.dailyBriefingLoading = true;
       this.dailyBriefingError = null;
       try {
+        const body = {
+          perspective: perspective || this.prefs.defaultPerspective || 'balanced',
+          language: currentUiLanguage(),
+          force: Boolean(force),
+        };
+        const explicitAgentId = typeof agentId === 'string' && agentId.trim() ? agentId.trim() : null;
+        if (explicitAgentId) body.agentId = explicitAgentId;
+
         const data = await apiJson('/api/cosmic-web/daily-briefing', {
           method: 'POST',
-          body: JSON.stringify({
-            agentId: agentId || this.prefs.preferredAgentId || undefined,
-            perspective: perspective || this.prefs.defaultPerspective || 'balanced',
-            force: Boolean(force),
-          }),
+          body: JSON.stringify(body),
           signal: controller.signal,
         });
-        if (isStaleRequest('dailyBriefing', seq, gen)) return;
+        if (isStaleRequest('dailyBriefing', seq, gen) || !this.dailyBriefingOpen) return;
         this.dailyBriefingData = data.briefing || data;
       } catch (err) {
-        if (isAbortError(err) || isStaleRequest('dailyBriefing', seq, gen)) return;
+        if (isAbortError(err) || isStaleRequest('dailyBriefing', seq, gen) || !this.dailyBriefingOpen) return;
         this.dailyBriefingError = err.message || 'Failed to generate daily briefing';
       } finally {
         if (!isStaleRequest('dailyBriefing', seq, gen)) {
@@ -512,6 +628,8 @@ export const useCosmicWebStore = defineStore('cosmicWeb', {
     },
 
     closeDailyBriefing() {
+      invalidateChannel('dailyBriefing');
+      this.dailyBriefingLoading = false;
       this.dailyBriefingOpen = false;
     },
 
@@ -539,7 +657,9 @@ export const useCosmicWebStore = defineStore('cosmicWeb', {
 
     async toggleBookmark(clusterId) {
       if (!clusterId) return;
-      const existing = this.feedItems.find((it) => it.id === clusterId) || this.activeClusterDetail;
+      const { controller, gen, release } = createMutationRequest();
+      const existing = this.feedItems.find((it) => it && it.id === clusterId)
+        || (this.activeClusterDetail?.id === clusterId ? this.activeClusterDetail : null);
       const prev = Boolean(existing?.isBookmarked ?? existing?.bookmarked);
       const nextVal = !prev;
       this._patchClusterLocal(clusterId, { isBookmarked: nextVal, bookmarked: nextVal });
@@ -548,95 +668,148 @@ export const useCosmicWebStore = defineStore('cosmicWeb', {
         await apiJson(`/api/cosmic-web/clusters/${encodeURIComponent(clusterId)}/state`, {
           method: 'PATCH',
           body: JSON.stringify({ bookmarked: nextVal }),
+          signal: controller.signal,
         });
+        if (gen !== storeGeneration) return;
       } catch {
+        if (gen !== storeGeneration) return;
         // Revert on failure
         this._patchClusterLocal(clusterId, { isBookmarked: prev, bookmarked: prev });
         this.stats.bookmarkedCount = Math.max(0, Number(this.stats.bookmarkedCount || 0) + (prev ? 1 : -1));
+      } finally {
+        release();
       }
     },
 
     async markRead(clusterId, read = true) {
       if (!clusterId) return;
-      const existing = this.feedItems.find((it) => it.id === clusterId) || this.activeClusterDetail;
+      const existing = this.feedItems.find((it) => it && it.id === clusterId)
+        || (this.activeClusterDetail?.id === clusterId ? this.activeClusterDetail : null);
       const wasRead = Boolean(existing?.isRead ?? (existing?.unread === false));
       if (wasRead === Boolean(read)) return;
+      const { controller, gen, release } = createMutationRequest();
       this._patchClusterLocal(clusterId, { isRead: Boolean(read), unread: !read });
       this.stats.unreadCount = Math.max(0, Number(this.stats.unreadCount || 0) + (read ? -1 : 1));
       try {
         await apiJson(`/api/cosmic-web/clusters/${encodeURIComponent(clusterId)}/state`, {
           method: 'PATCH',
           body: JSON.stringify({ read: Boolean(read) }),
+          signal: controller.signal,
         });
+        if (gen !== storeGeneration) return;
       } catch {
+        if (gen !== storeGeneration) return;
         // Revert on failure
         this._patchClusterLocal(clusterId, { isRead: wasRead, unread: !wasRead });
         this.stats.unreadCount = Math.max(0, Number(this.stats.unreadCount || 0) + (wasRead ? -1 : 1));
+      } finally {
+        release();
       }
     },
 
     async muteCluster(clusterId) {
       if (!clusterId) return;
+      const { controller, gen, release } = createMutationRequest();
       const prevItems = this.feedItems.slice();
       this.feedItems = this.feedItems.filter((it) => it && it.id !== clusterId);
-      if (this.selectedClusterId === clusterId) {
+      if (this.readerClusterId === clusterId || this.selectedClusterId === clusterId) {
         this.closeClusterReader();
         this.selectedClusterId = null;
+      }
+      if (this.cursorClusterId === clusterId) {
+        this.cursorClusterId = null;
       }
       try {
         await apiJson(`/api/cosmic-web/clusters/${encodeURIComponent(clusterId)}/state`, {
           method: 'PATCH',
           body: JSON.stringify({ muted: true }),
+          signal: controller.signal,
         });
+        if (gen !== storeGeneration) return;
       } catch {
+        if (gen !== storeGeneration) return;
         this.feedItems = prevItems;
+      } finally {
+        release();
       }
     },
 
-    async markAllRead(domainId = null) {
-      const targetDomain = domainId && !['all', 'watch', 'bookmarked', 'unread'].includes(domainId)
-        ? domainId
-        : null;
+    async markAllRead(domainIdArg = null) {
+      const { controller, gen, release } = createMutationRequest();
+      const active = domainIdArg || this.activeDomain || 'all';
+      const isSpecial = ['all', 'watch', 'bookmarked', 'unread'].includes(active);
+      const targetDomain = !isSpecial ? active : null;
+      const targetFilter = ['watch', 'bookmarked', 'unread'].includes(active) ? active : null;
+      const targetQ = String(this.searchQuery || '').trim() || null;
+
       const prevItems = this.feedItems.slice();
+      const prevStats = { ...this.stats };
       this.feedItems = this.feedItems.map((it) => {
         if (!it) return it;
-        if (!targetDomain || it.domainId === targetDomain || (Array.isArray(it.domainIds) && it.domainIds.includes(targetDomain))) {
+        if (
+          !targetDomain
+          || it.domainId === targetDomain
+          || (Array.isArray(it.domainIds) && it.domainIds.includes(targetDomain))
+        ) {
           return { ...it, isRead: true, unread: false };
         }
         return it;
       });
       try {
+        const body = {};
+        if (targetDomain) body.domainId = targetDomain;
+        if (targetFilter) body.filter = targetFilter;
+        if (targetQ) body.q = targetQ;
+
         const data = await apiJson('/api/cosmic-web/mark-all-read', {
           method: 'POST',
-          body: JSON.stringify({ domainId: targetDomain }),
+          body: JSON.stringify(body),
+          signal: controller.signal,
         });
+        if (gen !== storeGeneration) return;
         if (data.stats) this.stats = { ...this.stats, ...data.stats };
-        else if (!targetDomain) this.stats.unreadCount = 0;
+        else if (!targetDomain && !targetFilter && !targetQ) this.stats.unreadCount = 0;
         if (Array.isArray(data.domains)) this.domains = data.domains;
+        if (data.graph) this.graph = data.graph;
+        if (Array.isArray(data.items) || Array.isArray(data.clusters)) {
+          this.feedItems = Array.isArray(data.items) ? data.items : data.clusters;
+        } else if (targetFilter === 'unread' && this.activeDomain === 'unread') {
+          this.feedItems = [];
+        }
       } catch {
+        if (gen !== storeGeneration) return;
         this.feedItems = prevItems;
+        this.stats = prevStats;
+      } finally {
+        release();
       }
     },
 
     async savePreferences(nextPrefs) {
+      const { controller, seq, gen } = nextChannelRequest('savePreferences');
       const merged = normalizePrefs({ ...this.prefs, ...nextPrefs });
       const data = await apiJson('/api/cosmic-web/preferences', {
         method: 'PUT',
         body: JSON.stringify(merged),
+        signal: controller.signal,
       });
+      if (isStaleRequest('savePreferences', seq, gen)) return null;
       this.prefs = normalizePrefs(data.prefs || data.preferences || merged);
       if (Array.isArray(data.domains)) this.domains = data.domains;
       if (data.graph) this.graph = data.graph;
       if (data.stats) this.stats = { ...this.stats, ...data.stats };
       this.emitPulse({ count: 16 });
+      if (isStaleRequest('savePreferences', seq, gen)) return null;
       await Promise.all([
         data.graph ? Promise.resolve() : this.fetchGraph(),
         this.fetchFeed({ reset: true }),
       ]);
+      if (isStaleRequest('savePreferences', seq, gen)) return null;
       return this.prefs;
     },
 
     async completeOnboarding({ enabledDomains, watchKeywords = [], customDomains = [] } = {}) {
+      const gen = storeGeneration;
       const next = {
         ...this.prefs,
         onboarded: true,
@@ -646,11 +819,16 @@ export const useCosmicWebStore = defineStore('cosmicWeb', {
         watchKeywords: Array.isArray(watchKeywords) ? watchKeywords : this.prefs.watchKeywords,
         customDomains: Array.isArray(customDomains) ? customDomains : this.prefs.customDomains,
       };
-      await this.savePreferences(next);
+      const saved = await this.savePreferences(next);
+      if (gen !== storeGeneration || !saved) return;
       await this.refreshNow({ force: false });
     },
 
     async handleExternalUpdate(msg) {
+      if (!this.activeInWebBand) {
+        this.staleOnReentry = true;
+        return;
+      }
       const domainId = msg?.domainId || null;
       const clusterId = msg?.clusterId || null;
       this.emitPulse({ domainId, clusterId, count: 10 });
@@ -661,13 +839,35 @@ export const useCosmicWebStore = defineStore('cosmicWeb', {
       ]);
     },
 
-    onLeaveWebBand() {
+    async enterWebBand() {
+      this.activeInWebBand = true;
+      const shouldForce = Boolean(this.staleOnReentry);
+      this.staleOnReentry = false;
+      await this.bootstrap({ force: shouldForce });
+    },
+
+    leaveWebBand() {
+      this.activeInWebBand = false;
       abortAllChannels();
+      this.loading = false;
+      this.refreshing = false;
+      this.feedLoading = false;
+      this.detailLoading = false;
+      this.articleLoading = false;
+      this.aiBriefLoading = false;
+      this.dailyBriefingLoading = false;
       this.hoveredClusterId = null;
       this.readerOpen = false;
       this.readerExpanded = false;
+      this.readerClusterId = null;
+      this.readerItemId = null;
+      this.activeArticleItemId = null;
       this.dailyBriefingOpen = false;
       this.prefsModalOpen = false;
+    },
+
+    onLeaveWebBand() {
+      this.leaveWebBand();
     },
 
     reset() {

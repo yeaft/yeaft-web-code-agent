@@ -52,7 +52,9 @@ export default {
   data() {
     return {
       dispatchAgentId: '',
+      dispatchPresetId: 'deepdive',
       dispatchPrompt: '',
+      selectedAiFollowUp: '',
       briefPerspective: 'balanced',
       briefAgentId: '',
       copySuccess: false,
@@ -109,15 +111,22 @@ export default {
       if (!md) return '';
       return renderSafeMessageMarkdown(md);
     },
-    renderedDailySummaryHtml() {
-      const md = this.daily?.overview || this.daily?.summaryMarkdown || this.daily?.summary || this.daily?.fullMarkdown || '';
-      if (!md) return '';
-      return renderSafeMessageMarkdown(md);
-    },
     dailySignals() {
       if (Array.isArray(this.daily?.signalsToWatch) && this.daily.signalsToWatch.length) return this.daily.signalsToWatch;
-      if (Array.isArray(this.daily?.signals) && this.daily.signals.length) return this.daily.signals;
       return [];
+    },
+    capableAgentSet() {
+      return new Set(
+        (this.webStore.capableAgents || [])
+          .filter((a) => (typeof a === 'string' ? Boolean(a) : Boolean(a?.id && a.online !== false)))
+          .map((a) => (typeof a === 'string' ? a : a.id)),
+      );
+    },
+    eligibleBriefingAgents() {
+      const fromProps = (this.agents || []).filter((a) => a && a.online !== false && this.capableAgentSet.has(a.id));
+      if (fromProps.length) return fromProps;
+      return (this.webStore.capableAgents || [])
+        .filter((a) => a && typeof a === 'object' && a.id && a.online !== false);
     },
     availableAgents() {
       const list = Array.isArray(this.agents) ? this.agents : [];
@@ -136,16 +145,30 @@ export default {
   watch: {
     isOpen(open) {
       if (open) {
+        this._previousActiveElement = typeof document !== 'undefined' ? document.activeElement : null;
         this.briefPerspective = this.webStore.prefs?.defaultPerspective || 'balanced';
-        this.briefAgentId = this.webStore.prefs?.preferredAgentId || '';
+        const prefAgent = this.webStore.prefs?.preferredAgentId || '';
+        this.briefAgentId = this.eligibleBriefingAgents.some((a) => a.id === prefAgent) ? prefAgent : '';
         this.dispatchAgentId = this.effectiveDispatchAgentId;
         this.$nextTick(() => {
           this.$refs.modalShell?.focus?.();
         });
+      } else {
+        const prevEl = this._previousActiveElement;
+        this._previousActiveElement = null;
+        if (prevEl && typeof prevEl.focus === 'function') {
+          this.$nextTick(() => {
+            if (typeof document === 'undefined' || document.contains(prevEl)) {
+              prevEl.focus();
+            }
+          });
+        }
       }
     },
-    'webStore.selectedClusterId'() {
+    'webStore.readerClusterId'() {
       this.dispatchPrompt = '';
+      this.selectedAiFollowUp = '';
+      this.dispatchPresetId = 'deepdive';
       this.copySuccess = false;
     },
   },
@@ -154,6 +177,30 @@ export default {
       const d = (this.webStore.domains || []).find((x) => x.id === domainId);
       if (!d) return domainId || '';
       return getLocale() === 'en' ? (d.labelEn || d.labelZh || d.id) : (d.labelZh || d.labelEn || d.id);
+    },
+    handleTabTrap(e) {
+      const root = this.$refs.modalShell;
+      if (!root) return;
+      const focusables = Array.from(
+        root.querySelectorAll('button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'),
+      ).filter((el) => !el.disabled && el.getAttribute('aria-hidden') !== 'true');
+      if (!focusables.length) {
+        e.preventDefault();
+        root.focus();
+        return;
+      }
+      const first = focusables[0];
+      const last = focusables[focusables.length - 1];
+      const active = document.activeElement;
+      if (e.shiftKey) {
+        if (active === first || active === root || !root.contains(active)) {
+          e.preventDefault();
+          last.focus();
+        }
+      } else if (active === last || !root.contains(active)) {
+        e.preventDefault();
+        first.focus();
+      }
     },
     closeModal() {
       if (this.isDailyMode) {
@@ -175,12 +222,16 @@ export default {
         this.webStore.generateAiBrief(this.cluster.id, {
           perspective: this.briefPerspective,
           agentId: this.briefAgentId || undefined,
+          itemId: this.webStore.activeArticleItemId || undefined,
         });
       }
     },
     selectSource(src) {
-      if (!this.cluster?.id || !src?.url) return;
-      this.webStore.loadArticle(this.cluster.id, { url: src.url });
+      if (!this.cluster?.id || (!src?.id && !src?.url)) return;
+      this.webStore.loadArticle(this.cluster.id, {
+        itemId: src.id || null,
+        url: src.url || null,
+      });
     },
     triggerAiSynthesis() {
       if (!this.cluster?.id) return;
@@ -189,6 +240,7 @@ export default {
         mode: 'synthesize',
         perspective: this.briefPerspective,
         agentId: this.briefAgentId || undefined,
+        itemId: this.webStore.activeArticleItemId || undefined,
         force: true,
       });
     },
@@ -198,6 +250,7 @@ export default {
         mode: 'brief',
         perspective: this.briefPerspective,
         agentId: this.briefAgentId || undefined,
+        itemId: this.webStore.activeArticleItemId || undefined,
         force: true,
       });
     },
@@ -208,24 +261,19 @@ export default {
         force: true,
       });
     },
-    openStoryFromDaily(clusterId) {
-      if (!clusterId) return;
-      this.webStore.closeDailyBriefing();
-      this.webStore.openClusterReader(clusterId, { tab: 'article', expanded: true });
-    },
     applyPreset(preset) {
-      const title = this.isDailyMode
-        ? (this.daily?.title || t('cosmos.web.daily.title'))
-        : (this.cluster?.headline || this.cluster?.title || '');
-      const base = t(preset.labelKey);
-      this.dispatchPrompt = title ? `${base}：${title}` : base;
+      if (!preset?.id) return;
+      this.dispatchPresetId = preset.id;
     },
     applyFollowUp(question) {
       if (!question) return;
-      this.dispatchPrompt = String(question);
+      this.selectedAiFollowUp = String(question).trim();
       this.$nextTick(() => {
         this.$refs.dispatchInput?.focus?.();
       });
+    },
+    clearSelectedAiFollowUp() {
+      this.selectedAiFollowUp = '';
     },
     submitDispatch(mode = 'fly') {
       const agentId = this.effectiveDispatchAgentId;
@@ -234,27 +282,32 @@ export default {
         return;
       }
       const title = this.isDailyMode
-        ? (this.daily?.title || t('cosmos.web.daily.title'))
+        ? (this.daily?.headline || t('cosmos.web.daily.title'))
         : (this.cluster?.headline || this.cluster?.title || '');
-      const custom = String(this.dispatchPrompt || '').trim();
-      const prompt = custom || t('cosmos.web.dispatch.defaultPrompt', { title });
+      const userNote = String(this.dispatchPrompt || '').trim();
       const planetId = this.agentToPlanet?.[agentId] || null;
 
       this.$emit('dispatch-to-planet', {
         agentId,
         planetId,
         mode, // 'fly' | 'background'
-        prompt,
+        intent: this.dispatchPresetId || 'deepdive',
+        userNote,
+        aiFollowUp: this.selectedAiFollowUp || null,
         clusterId: this.isDailyMode ? null : (this.cluster?.id || null),
         headline: title,
-        url: this.primarySafeUrl || null,
-        summary: this.aiBrief?.tldr || this.article?.excerpt || this.daily?.summary || '',
+        url: this.isDailyMode ? null : (this.primarySafeUrl || null),
+        summary: this.isDailyMode
+          ? (this.daily?.overview || '')
+          : (this.aiBrief?.tldr || this.article?.excerpt || ''),
       });
 
       this.$emit('toast', mode === 'fly'
         ? t('cosmos.web.dispatch.sentFly')
         : t('cosmos.web.dispatch.sentBackground'));
       this.dispatchPrompt = '';
+      this.selectedAiFollowUp = '';
+      this.dispatchPresetId = 'deepdive';
       if (mode === 'fly') {
         this.closeAllReader();
       }
@@ -295,11 +348,12 @@ export default {
       class="cw-modal-backdrop"
       role="dialog"
       aria-modal="true"
-      :aria-label="isDailyMode ? $t('cosmos.web.daily.title') : (cluster?.headline || $t('cosmos.web.reader.title'))"
+      :aria-label="isDailyMode ? (daily?.headline || $t('cosmos.web.daily.title')) : (cluster?.headline || $t('cosmos.web.reader.title'))"
       @pointerdown.stop
       @wheel.stop
       @click.self="closeModal"
       @keydown.esc.stop.prevent="closeModal"
+      @keydown.tab="handleTabTrap"
     >
       <div ref="modalShell" class="cw-modal-shell cw-reader-modal" tabindex="-1">
         <!-- Fixed Header -->
@@ -307,7 +361,7 @@ export default {
           <div class="cw-modal-header-left">
             <template v-if="isDailyMode">
               <span class="cw-badge cw-badge-accent">{{ $t('cosmos.web.daily.badge') }}</span>
-              <h2 class="cw-modal-title">{{ daily?.title || $t('cosmos.web.daily.title') }}</h2>
+              <h2 class="cw-modal-title">{{ daily?.headline || $t('cosmos.web.daily.title') }}</h2>
             </template>
             <template v-else>
               <span v-if="cluster?.domainId" class="cw-badge" :class="'cw-tone-' + (cluster?.colorToken || 'cyan')">
@@ -378,12 +432,12 @@ export default {
                   </option>
                 </select>
               </label>
-              <label v-if="availableAgents.length" class="cw-inline-field">
+              <label class="cw-inline-field">
                 <span>{{ $t('cosmos.web.prefs.agentLabel') }}</span>
                 <select v-model="briefAgentId" class="cw-select">
                   <option value="">{{ $t('cosmos.web.prefs.agentAuto') }}</option>
-                  <option v-for="ag in availableAgents" :key="ag.id" :value="ag.id">
-                    {{ ag.name || ag.id }}{{ ag.online ? '' : ' (' + $t('cosmos.web.status.offline') + ')' }}
+                  <option v-for="ag in eligibleBriefingAgents" :key="ag.id" :value="ag.id">
+                    {{ ag.name || ag.id }}
                   </option>
                 </select>
               </label>
@@ -413,7 +467,7 @@ export default {
                 <span v-if="daily.generatedAt">{{ formatTime(daily.generatedAt) }}</span>
               </div>
 
-              <div v-if="renderedDailySummaryHtml" class="cw-markdown-prose" v-html="renderedDailySummaryHtml"></div>
+              <p v-if="daily.overview" class="cw-daily-overview">{{ daily.overview }}</p>
 
               <!-- Multi-domain briefing sections -->
               <section
@@ -425,21 +479,8 @@ export default {
                   <span v-if="sec.colorToken" class="cw-dot" :class="'cw-dot-' + sec.colorToken"></span>
                   {{ sec.domain || sec.title || domainLabel(sec.domainId) }}
                 </h3>
-                <p v-if="sec.summary" class="cw-section-summary">{{ sec.summary }}</p>
-                <ul v-if="Array.isArray(sec.bullets) && sec.bullets.length" class="cw-ai-bullets">
+                <ul v-if="Array.isArray(sec.bullets) && sec.bullets.length" class="cw-bullet-list">
                   <li v-for="(b, bIdx) in sec.bullets" :key="bIdx">{{ b }}</li>
-                </ul>
-                <ul v-if="Array.isArray(sec.stories) && sec.stories.length" class="cw-ref-list">
-                  <li v-for="(st, sIdx) in sec.stories" :key="st.clusterId || sIdx">
-                    <button
-                      type="button"
-                      class="cw-ref-story-btn"
-                      @click="openStoryFromDaily(st.clusterId || st.id)"
-                    >
-                      <span class="cw-ref-title">{{ st.headline || st.title }}</span>
-                      <span v-if="st.takeaway" class="cw-ref-takeaway">{{ st.takeaway }}</span>
-                    </button>
-                  </li>
                 </ul>
               </section>
 
@@ -502,10 +543,10 @@ export default {
             <div v-if="sourceItems.length > 1" class="cw-source-pills" role="list">
               <button
                 v-for="(src, idx) in sourceItems"
-                :key="src.url || idx"
+                :key="src.id || src.url || idx"
                 type="button"
                 class="cw-source-pill"
-                :class="{ 'is-active': (webStore.activeArticleUrl || sourceItems[0]?.url) === src.url }"
+                :class="{ 'is-active': (webStore.activeArticleItemId && src.id) ? webStore.activeArticleItemId === src.id : (webStore.activeArticleUrl || sourceItems[0]?.url) === src.url }"
                 @click="selectSource(src)"
               >{{ src.sourceName || src.sourceId || $t('cosmos.web.reader.sourceN', { n: idx + 1 }) }}</button>
             </div>
@@ -523,7 +564,7 @@ export default {
                   <button
                     type="button"
                     class="cw-btn cw-btn-subtle"
-                    @click="webStore.loadArticle(cluster.id, { force: true, url: webStore.activeArticleUrl })"
+                    @click="webStore.loadArticle(cluster.id, { force: true, itemId: webStore.activeArticleItemId || null, url: webStore.activeArticleUrl || null })"
                   >{{ $t('cosmos.web.action.retry') }}</button>
                   <button type="button" class="cw-btn cw-btn-primary" @click="triggerAiSynthesis">
                     {{ $t('cosmos.web.reader.aiSynthesizeCta') }}
@@ -571,6 +612,15 @@ export default {
                   <select v-model="briefPerspective" class="cw-select">
                     <option v-for="opt in PERSPECTIVE_OPTIONS" :key="opt.id" :value="opt.id">
                       {{ $t(opt.labelKey) }}
+                    </option>
+                  </select>
+                </label>
+                <label class="cw-inline-field">
+                  <span>{{ $t('cosmos.web.prefs.agentLabel') }}</span>
+                  <select v-model="briefAgentId" class="cw-select">
+                    <option value="">{{ $t('cosmos.web.prefs.agentAuto') }}</option>
+                    <option v-for="ag in eligibleBriefingAgents" :key="ag.id" :value="ag.id">
+                      {{ ag.name || ag.id }}
                     </option>
                   </select>
                 </label>
@@ -650,8 +700,21 @@ export default {
               :key="preset.id"
               type="button"
               class="cw-chip"
+              :class="{ 'cw-chip-accent': dispatchPresetId === preset.id }"
+              :aria-pressed="dispatchPresetId === preset.id"
               @click="applyPreset(preset)"
             >{{ $t(preset.labelKey) }}</button>
+          </div>
+          <div v-if="selectedAiFollowUp" class="cw-dispatch-followup-pill">
+            <span class="cw-chip cw-chip-accent">
+              <span>{{ selectedAiFollowUp }}</span>
+              <button
+                type="button"
+                class="cw-chip-remove"
+                :aria-label="$t('cosmos.web.action.remove')"
+                @click="clearSelectedAiFollowUp"
+              >×</button>
+            </span>
           </div>
           <div class="cw-dispatch-row">
             <select

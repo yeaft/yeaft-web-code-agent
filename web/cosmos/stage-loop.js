@@ -618,7 +618,7 @@ export function stepCosmosFrame(now, ctx) {
 
   // Update interactive 3D Cosmic Web DOM star & hub markers via shared projection (zero VDOM churn)
   if (domRefs.webNodes) {
-    const hideWebNodes = webFullAlpha < 0.18 || Boolean(ui.webModalOpen) || !activeWebGraph || activeWebGraph.isAmbient;
+    const hideWebNodes = ui.currentBand !== 'web' || webFullAlpha < 0.18 || Boolean(ui.webModalOpen) || !activeWebGraph || activeWebGraph.isAmbient;
     const projectedWeb = hideWebNodes
       ? []
       : projectCosmicWeb(activeWebGraph, w, h, anim, { centerShiftX: webCenterShiftX });

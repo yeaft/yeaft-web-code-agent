@@ -192,7 +192,9 @@ wss.on('connection', (ws, req) => {
 // =====================
 // HTTP Upgrade handler
 // =====================
+let shuttingDown = false;
 server.on('upgrade', (req, socket, head) => {
+  if (shuttingDown) { socket.destroy(); return; }
   const url = new URL(req.url, `http://${req.headers.host}`);
 
   // Check if this is a proxy WebSocket request
@@ -263,7 +265,7 @@ async function startServers() {
     console.log(`Users configured: ${CONFIG.users.length}`);
     console.log(`Email verification: ${isEmailConfigured() ? 'ENABLED' : 'DISABLED'}`);
   }
-  startCosmicWebScheduler();
+  if (!shuttingDown) startCosmicWebScheduler();
 }
 
 startServers().catch(err => {
@@ -275,44 +277,34 @@ startServers().catch(err => {
 // 优雅关闭（Graceful Shutdown）
 // =====================
 async function gracefulShutdown(signal) {
+  if (shuttingDown) return;
+  shuttingDown = true;
   console.log(`\n[Shutdown] Received ${signal}, starting graceful shutdown...`);
   clearInterval(accountDeletionTimer);
   stopCosmicWebScheduler();
 
-  // 1. 通知所有 web client 服务即将更新
-  const updateMsg = { type: 'server_updating' };
-  for (const [, client] of webClients) {
-    try {
-      await sendToWebClient(client, updateMsg);
-    } catch (e) { /* ignore send errors during shutdown */ }
-  }
-
-  // 2. 短暂等待，确保消息发送完毕
-  await new Promise(resolve => setTimeout(resolve, 500));
-
-  // 3. 关闭所有 WebSocket 连接
-  for (const [, client] of webClients) {
-    try { client.ws.close(1012, 'Server restarting'); } catch (e) {}
-  }
-  for (const [, agent] of agents) {
-    try { agent.ws.close(1012, 'Server restarting'); } catch (e) {}
-  }
-
-  // 4. 停止接受新连接
-  server.close(() => {
-    console.log('[Shutdown] HTTP server closed');
-    // Flush pending user stats before closing DB
-    flushUserStats();
-    closeCosmicWebDb();
-    closeDb();
-    process.exit(0);
-  });
-
-  // 5. 强制退出兜底（5 秒超时）
-  setTimeout(() => {
+  // Stop HTTP admission immediately; existing requests and WebSockets can drain.
+  const httpClosed = new Promise(resolve => server.close(resolve));
+  const deadline = setTimeout(() => {
     console.warn('[Shutdown] Forced exit after timeout');
     process.exit(1);
   }, 5000);
+
+  // Bound the notice window so a slow client cannot delay closing other sockets.
+  await Promise.race([
+    Promise.allSettled([...webClients.values()].map(client => sendToWebClient(client, { type: 'server_updating' }))),
+    new Promise(resolve => setTimeout(resolve, 500)),
+  ]);
+  for (const ws of wss.clients) ws.close(1012, 'Server restarting');
+  const wsClosed = new Promise(resolve => wss.close(resolve));
+  await Promise.all([httpClosed, wsClosed]);
+
+  console.log('[Shutdown] HTTP and WebSocket servers closed');
+  flushUserStats();
+  closeCosmicWebDb();
+  closeDb();
+  clearTimeout(deadline);
+  process.exit(0);
 }
 
 process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));

@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { parseSkill, SkillManager } from '../../agent/yeaft/skills.js';
 import {
   COSMIC_WEB_BRIEFING_CAPABILITY,
+  abortActiveCosmicWebBriefings,
   handleCosmicWebAiRequest,
   loadCosmicWebSkillGuidance,
   runCosmicWebBriefing,
@@ -247,6 +248,23 @@ describe('handleCosmicWebAiRequest', () => {
     await Promise.all([second, fourth]);
     expect(options.sendToServer.mock.calls.map(([reply]) => [reply.requestId, reply.ok]))
       .toEqual([['third', false], ['first', true], ['second', true], ['fourth', true]]);
+  });
+
+  it('aborts socket-orphaned provider calls, never replies late, and frees their slots', async () => {
+    let finish;
+    const adapter = { call: vi.fn(() => new Promise(resolve => { finish = resolve; })) };
+    const options = wsOptions(adapter);
+    const pending = request('old-socket', options);
+    await vi.waitFor(() => expect(adapter.call).toHaveBeenCalledTimes(1));
+    abortActiveCosmicWebBriefings();
+    await pending;
+    expect(adapter.call.mock.lastCall[0].signal.aborted).toBe(true);
+    finish({ text: JSON.stringify(story) });
+    await Promise.resolve();
+    expect(options.sendToServer).not.toHaveBeenCalled();
+    const next = wsOptions();
+    await request('new-socket', next);
+    expect(next.sendToServer).toHaveBeenCalledWith(expect.objectContaining({ requestId: 'new-socket', ok: true }));
   });
 
   it('does not reject when the response transport disconnects', async () => {

@@ -69,14 +69,16 @@ export default {
       searchTimer: null,
       isOffline: typeof navigator !== 'undefined' ? !navigator.onLine : false,
 
-      // Onboarding draft
-      onboardDomains: ['ai', 'dev', 'tech', 'finance'],
+      // Onboarding draft (populated from server catalog defaultEnabled domains)
+      onboardDomains: [],
       onboardKeywordsInput: '',
       onboardSubmitting: false,
 
       // Inline reader dispatch state
       dispatchAgentId: '',
+      dispatchPresetId: 'deepdive',
       dispatchPrompt: '',
+      selectedAiFollowUp: '',
 
       // Keyboard navigation cursor index
       focusedFeedIdx: -1,
@@ -164,20 +166,31 @@ export default {
       immediate: true,
       handler(val, prev) {
         if (val) {
-          this.webStore?.bootstrap?.();
+          this.webStore?.enterWebBand?.();
           this.searchDraft = this.webStore?.searchQuery || '';
         } else if (prev === true) {
-          this.webStore?.onLeaveWebBand?.();
+          if (this.searchTimer) {
+            clearTimeout(this.searchTimer);
+            this.searchTimer = null;
+          }
+          this.webStore?.leaveWebBand?.();
         }
       },
     },
-    'webStore.domains'(list) {
-      if (Array.isArray(list) && list.length && this.onboardDomains.length === 0) {
-        this.onboardDomains = list.filter((d) => !d.isCustom).slice(0, 4).map((d) => d.id);
-      }
+    'webStore.domains': {
+      immediate: true,
+      handler(list) {
+        if (Array.isArray(list) && list.length && this.onboardDomains.length === 0) {
+          const builtIns = list.filter((d) => d && !d.isCustom);
+          const defaults = builtIns.filter((d) => d.defaultEnabled).map((d) => d.id);
+          this.onboardDomains = defaults.length > 0 ? defaults : builtIns.slice(0, 4).map((d) => d.id);
+        }
+      },
     },
-    'webStore.selectedClusterId'(id) {
+    'webStore.readerClusterId'(id) {
       this.dispatchPrompt = '';
+      this.selectedAiFollowUp = '';
+      this.dispatchPresetId = 'deepdive';
       if (id) {
         const idx = this.webStore.feedItems.findIndex((it) => it && it.id === id);
         if (idx >= 0) this.focusedFeedIdx = idx;
@@ -193,7 +206,10 @@ export default {
     window.removeEventListener('keydown', this.handleGlobalKeydown);
     window.removeEventListener('online', this.handleOnlineChange);
     window.removeEventListener('offline', this.handleOnlineChange);
-    if (this.searchTimer) clearTimeout(this.searchTimer);
+    if (this.searchTimer) {
+      clearTimeout(this.searchTimer);
+      this.searchTimer = null;
+    }
   },
   methods: {
     handleOnlineChange() {
@@ -252,9 +268,19 @@ export default {
         const keywords = useDefaults
           ? []
           : String(this.onboardKeywordsInput || '').split(/[,，\n]+/).map((s) => s.trim()).filter(Boolean);
-        const domains = useDefaults || this.onboardDomains.length === 0
-          ? this.builtInDomains.slice(0, 4).map((d) => d.id)
+        const validIds = new Set(this.builtInDomains.map((d) => d.id));
+        const defaultCatalogIds = this.builtInDomains.filter((d) => d.defaultEnabled).map((d) => d.id);
+        const fallbackDefaults = defaultCatalogIds.length > 0
+          ? defaultCatalogIds
+          : (this.builtInDomains.length > 0
+            ? this.builtInDomains.slice(0, 4).map((d) => d.id)
+            : ['ai', 'tech', 'finance', 'product']);
+        const filteredDraft = validIds.size > 0
+          ? this.onboardDomains.filter((id) => validIds.has(id))
           : [...this.onboardDomains];
+        const domains = useDefaults || filteredDraft.length === 0
+          ? fallbackDefaults
+          : filteredDraft;
         await this.webStore.completeOnboarding({
           enabledDomains: domains,
           watchKeywords: keywords,
@@ -294,7 +320,8 @@ export default {
         agentId,
         planetId: this.agentToPlanet?.[agentId] || null,
         mode: 'fly',
-        prompt: t('cosmos.web.dispatch.defaultPrompt', { title }),
+        intent: 'deepdive',
+        userNote: '',
         clusterId: item.id,
         headline: title,
         url: isSafeHttpUrl(item.primaryUrl || item.url) ? (item.primaryUrl || item.url) : null,
@@ -310,25 +337,33 @@ export default {
     switchInlineTab(tab) {
       this.webStore.readerTab = tab;
       if (tab === 'ai' && !this.webStore.aiBriefData && !this.webStore.aiBriefLoading && this.activeCluster?.id) {
-        this.webStore.generateAiBrief(this.activeCluster.id);
+        this.webStore.generateAiBrief(this.activeCluster.id, {
+          itemId: this.webStore.activeArticleItemId || undefined,
+        });
       }
     },
     triggerAiSynthesis() {
       if (!this.activeCluster?.id) return;
       this.webStore.readerTab = 'ai';
-      this.webStore.generateAiBrief(this.activeCluster.id, { mode: 'synthesize', force: true });
+      this.webStore.generateAiBrief(this.activeCluster.id, {
+        mode: 'synthesize',
+        itemId: this.webStore.activeArticleItemId || undefined,
+        force: true,
+      });
     },
     applyPreset(preset) {
-      const title = this.activeCluster?.headline || this.activeCluster?.title || '';
-      const base = t(preset.labelKey);
-      this.dispatchPrompt = title ? `${base}：${title}` : base;
+      if (!preset?.id) return;
+      this.dispatchPresetId = preset.id;
     },
     applyFollowUp(question) {
       if (!question) return;
-      this.dispatchPrompt = String(question);
+      this.selectedAiFollowUp = String(question).trim();
       this.$nextTick(() => {
         this.$refs.inlineDispatchInput?.focus?.();
       });
+    },
+    clearSelectedAiFollowUp() {
+      this.selectedAiFollowUp = '';
     },
     submitInlineDispatch(mode = 'fly') {
       const agentId = this.effectiveDispatchAgentId;
@@ -337,13 +372,14 @@ export default {
         return;
       }
       const title = this.activeCluster?.headline || this.activeCluster?.title || '';
-      const custom = String(this.dispatchPrompt || '').trim();
-      const prompt = custom || t('cosmos.web.dispatch.defaultPrompt', { title });
+      const userNote = String(this.dispatchPrompt || '').trim();
       this.$emit('dispatch-to-planet', {
         agentId,
         planetId: this.agentToPlanet?.[agentId] || null,
         mode,
-        prompt,
+        intent: this.dispatchPresetId || 'deepdive',
+        userNote,
+        aiFollowUp: this.selectedAiFollowUp || null,
         clusterId: this.activeCluster?.id || null,
         headline: title,
         url: this.primarySafeUrl || null,
@@ -353,6 +389,8 @@ export default {
         ? t('cosmos.web.dispatch.sentFly')
         : t('cosmos.web.dispatch.sentBackground'));
       this.dispatchPrompt = '';
+      this.selectedAiFollowUp = '';
+      this.dispatchPresetId = 'deepdive';
     },
     formatTime(ts) {
       if (!ts) return '';
@@ -404,7 +442,8 @@ export default {
         this.focusedFeedIdx = Math.min(items.length - 1, this.focusedFeedIdx + 1);
         const item = items[this.focusedFeedIdx];
         if (item) {
-          this.webStore.selectedClusterId = item.id;
+          this.webStore.cursorClusterId = item.id;
+          if (!this.webStore.readerOpen) this.webStore.selectedClusterId = item.id;
           this.webStore.hoveredClusterId = item.id;
           this.webStore.emitPulse({ clusterId: item.id, domainId: item.domainId, count: 6 });
         }
@@ -414,24 +453,31 @@ export default {
         this.focusedFeedIdx = Math.max(0, this.focusedFeedIdx <= 0 ? 0 : this.focusedFeedIdx - 1);
         const item = items[this.focusedFeedIdx];
         if (item) {
-          this.webStore.selectedClusterId = item.id;
+          this.webStore.cursorClusterId = item.id;
+          if (!this.webStore.readerOpen) this.webStore.selectedClusterId = item.id;
           this.webStore.hoveredClusterId = item.id;
           this.webStore.emitPulse({ clusterId: item.id, domainId: item.domainId, count: 6 });
         }
       } else if (key === 'Enter') {
-        const targetId = this.webStore.selectedClusterId || items[this.focusedFeedIdx]?.id;
+        const targetId = this.webStore.cursorClusterId || this.webStore.selectedClusterId || items[this.focusedFeedIdx]?.id;
         if (targetId && !this.webStore.readerOpen) {
           e.preventDefault();
           this.webStore.openClusterReader(targetId, { tab: 'article', expanded: false });
         }
       } else if (key === 's' || key === 'S') {
-        const targetId = this.webStore.selectedClusterId || items[this.focusedFeedIdx]?.id;
+        const targetId = (this.webStore.readerOpen ? this.webStore.readerClusterId : null)
+          || this.webStore.cursorClusterId
+          || this.webStore.selectedClusterId
+          || items[this.focusedFeedIdx]?.id;
         if (targetId) {
           e.preventDefault();
           this.webStore.toggleBookmark(targetId);
         }
       } else if (key === 'a' || key === 'A') {
-        const targetId = this.webStore.selectedClusterId || items[this.focusedFeedIdx]?.id;
+        const targetId = (this.webStore.readerOpen ? this.webStore.readerClusterId : null)
+          || this.webStore.cursorClusterId
+          || this.webStore.selectedClusterId
+          || items[this.focusedFeedIdx]?.id;
         if (targetId) {
           e.preventDefault();
           this.webStore.openClusterReader(targetId, { tab: 'ai', expanded: this.webStore.readerExpanded });
@@ -740,11 +786,11 @@ export default {
             <div v-if="sourceItems.length > 1" class="cw-source-pills">
               <button
                 v-for="(src, idx) in sourceItems"
-                :key="src.url || idx"
+                :key="src.id || src.url || idx"
                 type="button"
                 class="cw-source-pill"
-                :class="{ 'is-active': (webStore.activeArticleUrl || sourceItems[0]?.url) === src.url }"
-                @click="activeCluster && webStore.loadArticle(activeCluster.id, { url: src.url })"
+                :class="{ 'is-active': (webStore.activeArticleItemId && src.id) ? webStore.activeArticleItemId === src.id : (webStore.activeArticleUrl || sourceItems[0]?.url) === src.url }"
+                @click="activeCluster && webStore.loadArticle(activeCluster.id, { itemId: src.id || null, url: src.url || null })"
               >{{ src.sourceName || src.sourceId || $t('cosmos.web.reader.sourceN', { n: idx + 1 }) }}</button>
             </div>
 
@@ -760,7 +806,7 @@ export default {
                   <button
                     type="button"
                     class="cw-btn cw-btn-subtle"
-                    @click="activeCluster && webStore.loadArticle(activeCluster.id, { force: true, url: webStore.activeArticleUrl })"
+                    @click="activeCluster && webStore.loadArticle(activeCluster.id, { force: true, itemId: webStore.activeArticleItemId || null, url: webStore.activeArticleUrl || null })"
                   >{{ $t('cosmos.web.action.retry') }}</button>
                   <button type="button" class="cw-btn cw-btn-primary" @click="triggerAiSynthesis">
                     {{ $t('cosmos.web.reader.aiSynthesizeCta') }}
@@ -796,7 +842,7 @@ export default {
                 <button
                   type="button"
                   class="cw-btn cw-btn-primary"
-                  @click="activeCluster && webStore.generateAiBrief(activeCluster.id, { force: true })"
+                  @click="activeCluster && webStore.generateAiBrief(activeCluster.id, { itemId: webStore.activeArticleItemId || undefined, force: true })"
                 >{{ $t('cosmos.web.action.retry') }}</button>
               </div>
               <div v-else-if="activeAiBrief" class="cw-ai-card">
@@ -833,7 +879,7 @@ export default {
                 <button
                   type="button"
                   class="cw-btn cw-btn-primary"
-                  @click="activeCluster && webStore.generateAiBrief(activeCluster.id, { force: true })"
+                  @click="activeCluster && webStore.generateAiBrief(activeCluster.id, { itemId: webStore.activeArticleItemId || undefined, force: true })"
                 >{{ $t('cosmos.web.ai.generateNow') }}</button>
               </div>
             </template>
@@ -847,8 +893,21 @@ export default {
                 :key="preset.id"
                 type="button"
                 class="cw-chip"
+                :class="{ 'cw-chip-accent': dispatchPresetId === preset.id }"
+                :aria-pressed="dispatchPresetId === preset.id"
                 @click="applyPreset(preset)"
               >{{ $t(preset.labelKey) }}</button>
+            </div>
+            <div v-if="selectedAiFollowUp" class="cw-dispatch-followup-pill">
+              <span class="cw-chip cw-chip-accent">
+                <span>{{ selectedAiFollowUp }}</span>
+                <button
+                  type="button"
+                  class="cw-chip-remove"
+                  :aria-label="$t('cosmos.web.action.remove')"
+                  @click="clearSelectedAiFollowUp"
+                >×</button>
+              </span>
             </div>
             <div class="cw-dispatch-compact-row">
               <select
@@ -917,7 +976,7 @@ export default {
                 type="button"
                 class="cw-text-btn"
                 :title="$t('cosmos.web.action.markAllRead')"
-                @click="webStore.markAllRead(webStore.activeDomain)"
+                @click="webStore.markAllRead()"
               >{{ $t('cosmos.web.action.markAllRead') }}</button>
             </div>
           </div>
@@ -964,12 +1023,12 @@ export default {
                 :class="{
                   'is-unread': item.unread !== false && !item.isRead,
                   'is-watch-hit': Boolean(item.watchHit),
-                  'is-selected': webStore.selectedClusterId === item.id || focusedFeedIdx === idx,
+                  'is-selected': (webStore.cursorClusterId || webStore.selectedClusterId) === item.id || focusedFeedIdx === idx,
                 }"
                 @mouseenter="onCardEnter(item)"
                 @mouseleave="onCardLeave(item)"
                 @click="openStory(item, 'article')"
-                @keydown.enter.prevent="openStory(item, 'article')"
+                @keydown.enter.self.prevent="openStory(item, 'article')"
               >
                 <div class="cw-card-top">
                   <div class="cw-card-badges">
@@ -982,7 +1041,7 @@ export default {
 
                 <h3 class="cw-card-headline">{{ item.headline || item.title }}</h3>
 
-                <p v-if="item.excerpt" class="cw-card-excerpt">{{ item.excerpt }}</p>
+                <p v-if="item.summaryExcerpt || item.excerpt" class="cw-card-excerpt">{{ item.summaryExcerpt || item.excerpt }}</p>
 
                 <div class="cw-card-bottom">
                   <div class="cw-card-meta">

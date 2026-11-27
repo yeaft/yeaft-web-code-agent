@@ -101,38 +101,75 @@ export default {
     },
     capableAgentSet() {
       return new Set(
-        (this.webStore.capableAgents || []).map((a) => (typeof a === 'string' ? a : a?.id)).filter(Boolean),
+        (this.webStore.capableAgents || [])
+          .filter((a) => (typeof a === 'string' ? Boolean(a) : Boolean(a?.id && a.online !== false)))
+          .map((a) => (typeof a === 'string' ? a : a.id)),
       );
     },
-    sortedAgents() {
-      return (this.agents || []).slice().sort((a, b) => {
-        const aCap = this.capableAgentSet.has(a?.id) ? 1 : 0;
-        const bCap = this.capableAgentSet.has(b?.id) ? 1 : 0;
-        if (bCap !== aCap) return bCap - aCap;
-        return Number(Boolean(b?.online)) - Number(Boolean(a?.online));
-      });
+    eligibleBriefingAgents() {
+      const fromProps = (this.agents || []).filter((a) => a && a.online !== false && this.capableAgentSet.has(a.id));
+      if (fromProps.length) return fromProps;
+      return (this.webStore.capableAgents || [])
+        .filter((a) => a && typeof a === 'object' && a.id && a.online !== false);
     },
   },
   watch: {
     isOpen(open) {
       if (open) {
+        this._previousActiveElement = typeof document !== 'undefined' ? document.activeElement : null;
         this.initDraftFromStore();
         this.$nextTick(() => {
           this.$refs.prefsShell?.focus?.();
         });
+      } else {
+        const prevEl = this._previousActiveElement;
+        this._previousActiveElement = null;
+        if (prevEl && typeof prevEl.focus === 'function') {
+          this.$nextTick(() => {
+            if (typeof document === 'undefined' || document.contains(prevEl)) {
+              prevEl.focus();
+            }
+          });
+        }
       }
     },
   },
   methods: {
+    handleTabTrap(e) {
+      const root = this.$refs.prefsShell;
+      if (!root) return;
+      const focusables = Array.from(
+        root.querySelectorAll('button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'),
+      ).filter((el) => !el.disabled && el.getAttribute('aria-hidden') !== 'true');
+      if (!focusables.length) {
+        e.preventDefault();
+        root.focus();
+        return;
+      }
+      const first = focusables[0];
+      const last = focusables[focusables.length - 1];
+      const active = document.activeElement;
+      if (e.shiftKey) {
+        if (active === first || active === root || !root.contains(active)) {
+          e.preventDefault();
+          last.focus();
+        }
+      } else if (active === last || !root.contains(active)) {
+        e.preventDefault();
+        first.focus();
+      }
+    },
     initDraftFromStore() {
       const p = this.webStore.prefs || {};
+      const prefAgent = p.preferredAgentId || '';
+      const validPrefAgent = this.eligibleBriefingAgents.some((a) => a.id === prefAgent) ? prefAgent : '';
       this.draft = {
         enabledDomains: Array.isArray(p.enabledDomains) ? [...p.enabledDomains] : [],
         disabledSources: Array.isArray(p.disabledSources) ? [...p.disabledSources] : [],
         customDomains: Array.isArray(p.customDomains) ? cloneJson(p.customDomains) : [],
         watchKeywords: Array.isArray(p.watchKeywords) ? [...p.watchKeywords] : [],
         muteKeywords: Array.isArray(p.muteKeywords) ? [...p.muteKeywords] : [],
-        preferredAgentId: p.preferredAgentId || '',
+        preferredAgentId: validPrefAgent,
         defaultPerspective: p.defaultPerspective || 'balanced',
       };
       this.saveError = null;
@@ -333,6 +370,7 @@ export default {
       @wheel.stop
       @click.self="close"
       @keydown.esc.stop.prevent="close"
+      @keydown.tab="handleTabTrap"
     >
       <div ref="prefsShell" class="cw-modal-shell cw-prefs-modal" tabindex="-1">
         <!-- Fixed Header -->
@@ -423,7 +461,7 @@ export default {
                       <span class="cw-source-name">{{ src.name || src.id }}</span>
                       <span class="cw-source-health">
                         <span v-if="src.lastError" class="cw-health-err">{{ $t('cosmos.web.prefs.sourceError') }}</span>
-                        <span v-else class="cw-health-ok">{{ formatSyncTime(src.lastSyncedAt) }}</span>
+                        <span v-else class="cw-health-ok">{{ formatSyncTime(src.lastSuccessAt || src.lastSyncedAt) }}</span>
                         <span v-if="src.itemCount !== undefined">· {{ src.itemCount }}</span>
                       </span>
                     </span>
@@ -633,7 +671,7 @@ export default {
                   <span class="cw-agent-radio-title">{{ $t('cosmos.web.prefs.agentAuto') }}</span>
                 </label>
                 <label
-                  v-for="ag in sortedAgents"
+                  v-for="ag in eligibleBriefingAgents"
                   :key="ag.id"
                   class="cw-agent-radio-item"
                   :class="{ 'is-selected': draft.preferredAgentId === ag.id }"
@@ -643,9 +681,9 @@ export default {
                     type="radio"
                     :value="ag.id"
                   />
-                  <span class="cw-status-dot" :class="{ 'is-online': ag.online }"></span>
+                  <span class="cw-status-dot is-online"></span>
                   <span class="cw-agent-radio-title">{{ ag.name || ag.id }}</span>
-                  <span v-if="capableAgentSet.has(ag.id)" class="cw-badge cw-badge-mint">
+                  <span class="cw-badge cw-badge-mint">
                     {{ $t('cosmos.web.prefs.briefingCapable') }}
                   </span>
                 </label>

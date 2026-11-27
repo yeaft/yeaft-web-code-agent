@@ -1,4 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
+import { CONFIG } from '../config.js';
+import { userDb } from '../db/user-db.js';
 import * as db from '../db/cosmic-web-db.js';
 import { webClients } from '../context.js';
 import { sendToWebClient } from '../ws-utils.js';
@@ -109,9 +111,18 @@ function keywords(value, label) {
 
 export function createCosmicWebService({ fetcher = safeFetch, dnsLookup, now = Date.now, notify = true,
   autoRefresh = () => process.env.NODE_ENV !== 'test' && process.env.COSMIC_WEB_DISABLE_SCHEDULER !== '1',
+  isUserActive = id => (CONFIG.skipAuth && id === 'dev-user') || userDb.isActive(id),
   requestAi = requestCosmicWebAi } = {}) {
   const inflight = new Map(), cooling = new Map(), articleInflight = new Map(), aiInflight = new Map();
-  let controller = new AbortController(), generation = 0, timer, initialTimer, schedulerRun;
+  let controller = new AbortController(), timer, initialTimer, schedulerRun;
+  let stopping = false;
+  const ensureRunning = (signal = controller.signal) => {
+    if (stopping || signal.aborted) throw error(503, 'Cosmic Web is stopping');
+  };
+  const ensureActive = userId => {
+    if (!isUserActive(userId)) throw error(403, 'User is no longer active');
+  };
+  const sourceIsActive = source => !source.ownerUserId || isUserActive(source.ownerUserId);
   // Keep outbound concurrency bounded even when several users refresh at once.
   const queue = [];
   let running = 0;
@@ -151,14 +162,16 @@ export function createCosmicWebService({ fetcher = safeFetch, dnsLookup, now = D
     if (!force && s.lastAttemptAt != null && now() - s.lastAttemptAt < refreshTtl) return Promise.resolve({ skipped: true });
     const { signal } = controller;
     const task = limit(async () => {
-      if (signal.aborted || !db.getSource(s.id, s.ownerUserId)) return { skipped: true };
+      const canWrite = () => !signal.aborted && sourceIsActive(s) && db.getSource(s.id, s.ownerUserId);
+      if (!canWrite()) return { skipped: true };
       let items;
       try { items = await fetchSource(s, { fetcher, dnsLookup, signal, now: now() }); }
       catch {
-        if (!signal.aborted) db.recordSourceRefresh(s.id, s.ownerUserId, now(), 'source_unavailable');
-        return { failed: !signal.aborted };
+        if (!canWrite()) return { skipped: true };
+        db.recordSourceRefresh(s.id, s.ownerUserId, now(), 'source_unavailable');
+        return { failed: true };
       }
-      if (signal.aborted || !db.getSource(s.id, s.ownerUserId)) return { skipped: true };
+      if (!canWrite()) return { skipped: true };
       const added = ingestCosmicWebItems(s, items, now());
       db.recordSourceRefresh(s.id, s.ownerUserId, now());
       if (added) update(s, signal);
@@ -169,8 +182,8 @@ export function createCosmicWebService({ fetcher = safeFetch, dnsLookup, now = D
   }
   function refreshRows(rows, force = false) { return Promise.all(rows.map(row => refreshSource(row, force))); }
   function swr(userId, prefs) {
-    if (!autoRefresh()) return;
-    try { seed(); void refreshRows(sourcesFor(userId, prefs)).catch(err => console.error('[CosmicWeb] Refresh failed:', err.message)); }
+    if (stopping || !autoRefresh() || !isUserActive(userId)) return;
+    try { seed(); void refreshRows(sourcesFor(userId, prefs)).catch(err => { if (err.status !== 503) console.error('[CosmicWeb] Refresh failed:', err.message); }); }
     catch (err) { console.error('[CosmicWeb] Refresh failed:', err.message); }
   }
   function cluster(userId, id) {
@@ -199,55 +212,76 @@ export function createCosmicWebService({ fetcher = safeFetch, dnsLookup, now = D
   }
   const summary = ({ items, ...rest }) => rest;
 
-  async function article(userId, id, options = {}) {
-    const c = cluster(userId, id);
-    const { itemId, url, force } = typeof options === 'string' ? { itemId: options } : options;
-    // URL selection must be an exact match to a scoped, stored cluster item.
-    const item = itemId != null ? c.items.find(i => i.id === itemId) : url != null ? c.items.find(i => i.url === url) : c.items[0];
+  // Selection must be an exact match to a scoped, stored cluster item.
+  function selectItem(cluster, { itemId, url }) {
+    const item = itemId != null ? cluster.items.find(i => i.id === itemId) :
+      url != null ? cluster.items.find(i => i.url === url) : cluster.items[0];
     if (!item) throw error(404, 'Article not found');
-    const cached = db.getArticleCache(userId, item.id, now());
-    if (cached && force !== true && force !== '1') return cached;
-    if (articleInflight.has(item.id)) return articleInflight.get(item.id);
-    const { signal } = controller;
-    const task = limit(async () => {
-      if (signal.aborted) throw error(503, 'Cosmic Web is stopping');
-      let value = extractCleanArticle(null, item.url, item.title);
-      if (value.quality !== 'search_only') {
-        try {
-          const res = await fetcher(item.url, { dnsLookup, signal });
-          if (res.status >= 200 && res.status < 300) value = extractCleanArticle(await res.text(), res.url ?? item.url, item.title);
-        } catch { /* Use the blocked fallback and a short negative cache. */ }
-      }
-      if (signal.aborted) throw error(503, 'Cosmic Web is stopping');
-      const result = { ...value, itemId: item.id, clusterId: id, summaryExcerpt: item.summaryExcerpt };
-      db.setArticleCache(userId, item.id, result, now() + (value.quality === 'blocked' ? minute : 24 * 60 * minute));
-      return result;
-    }).finally(() => { if (articleInflight.get(item.id) === task) articleInflight.delete(item.id); });
-    articleInflight.set(item.id, task);
-    return task;
+    return item;
   }
 
-  async function ai(userId, userRole, mode, body, payload) {
+  async function article(userId, id, options = {}) {
+    const { signal } = controller;
+    ensureRunning(signal);
+    ensureActive(userId);
+    const selection = typeof options === 'string' ? { itemId: options } : options;
+    const item = selectItem(cluster(userId, id), selection);
+    const { force } = selection;
+    const toArticle = result => ({ ...result, sourceUrl: item.url, contentMd: result.markdown });
+    const cached = db.getArticleCache(userId, item.id, now());
+    if (cached && force !== true && force !== '1') return toArticle(cached);
+    let task = articleInflight.get(item.id);
+    if (!task) {
+      task = limit(async () => {
+        ensureRunning(signal);
+        let value = extractCleanArticle(null, item.url, item.title);
+        if (value.quality !== 'search_only') {
+          try {
+            const res = await fetcher(item.url, { dnsLookup, signal });
+            if (res.status >= 200 && res.status < 300) value = extractCleanArticle(await res.text(), res.url ?? item.url, item.title);
+          } catch { /* Use the blocked fallback and a short negative cache. */ }
+        }
+        ensureRunning(signal);
+        return { ...value, itemId: item.id, clusterId: id, summaryExcerpt: item.summaryExcerpt };
+      }).finally(() => { if (articleInflight.get(item.id) === task) articleInflight.delete(item.id); });
+      articleInflight.set(item.id, task);
+    }
+    const result = await task;
+    ensureRunning(signal);
+    ensureActive(userId);
+    db.setArticleCache(userId, item.id, result, now() + (result.quality === 'blocked' ? minute : 24 * 60 * minute));
+    return toArticle(result);
+  }
+
+  function briefingOptions(userId, userRole, body, prefs = preferred(userId)) {
     if (!object(body)) fail('Invalid briefing options');
-    const prefs = preferred(userId);
     const perspective = body.perspective ?? prefs.defaultPerspective;
     if (!['balanced', 'engineering', 'product', 'investing'].includes(perspective)) fail('Invalid briefing perspective');
-    const language = trim(body.language, 30) || 'zh-CN';
+    const language = body.language === 'en' ? 'en' : 'zh-CN';
     const available = listCapableAgentsForUser(userId, userRole);
-    const agentId = body.agentId ?? available.find(a => a.id === prefs.preferredAgentId)?.id ?? available[0]?.id;
-    if (body.agentId != null && !available.some(a => a.id === body.agentId)) throw error(403, 'Agent is not available to this user');
-    const key = hash(1, mode, perspective, language, payload);
+    const explicitAgentId = body.agentId === '' ? null : body.agentId ?? null;
+    const agent = explicitAgentId === null ? available.find(a => a.id === prefs.preferredAgentId) ?? available[0] :
+      available.find(a => a.id === explicitAgentId);
+    if (explicitAgentId !== null && !agent) throw error(403, 'Agent is not available to this user');
+    return { perspective, language, explicitAgentId, agent };
+  }
+
+  async function ai(userId, userRole, mode, body, payload, signal, options) {
+    ensureRunning(signal);
+    ensureActive(userId);
+    const { perspective, language, explicitAgentId, agent } = options;
+    // Version the rendering contract too: old cached Markdown may contain autolinks.
+    const key = hash(2, mode, perspective, language, explicitAgentId, payload);
     const cached = db.getAiCache(userId, key, now());
     if (cached && body.force !== true) return { ...cached, cached: true };
-    if (!agentId) throw error(503, 'No capable Agent is online');
-    if (typeof agentId !== 'string' || !available.some(a => a.id === agentId)) throw error(403, 'Agent is not available to this user');
+    if (!agent) throw error(503, 'No capable Agent is online');
+    const agentId = agent.id;
     const scope = hash(userId, key, agentId);
     if (aiInflight.has(scope)) return aiInflight.get(scope);
-    const epoch = generation;
-    const agentMeta = available.find(a => a.id === agentId);
-    const task = Promise.resolve(requestAi({ userId, userRole, agentId, mode, perspective, language, payload })).then(result => {
-      if (epoch !== generation) throw error(503, 'Cosmic Web is stopping');
-      const enriched = { ...result, agentId, agentName: agentMeta?.name ?? agentId, perspective, generatedAt: now() };
+    const task = Promise.resolve(requestAi({ userId, userRole, agentId, mode, perspective, language, payload, signal })).then(result => {
+      ensureRunning(signal);
+      ensureActive(userId);
+      const enriched = { ...result, agentId, agentName: agent.name, perspective, generatedAt: now() };
       db.setAiCache(userId, key, enriched, now() + 6 * 60 * minute);
       return { ...enriched, cached: false };
     }).finally(() => { if (aiInflight.get(scope) === task) aiInflight.delete(scope); });
@@ -258,6 +292,9 @@ export function createCosmicWebService({ fetcher = safeFetch, dnsLookup, now = D
     publishedAt: c.publishedAt, sourceNames: c.sourceNames.slice(0, 4) });
 
   async function savePreferences(userId, patch) {
+    const { signal } = controller;
+    ensureRunning(signal);
+    ensureActive(userId);
     if (!object(patch)) fail('Expected preference object');
     const previous = preferred(userId);
     const prefs = { ...previous };
@@ -305,13 +342,13 @@ export function createCosmicWebService({ fetcher = safeFetch, dnsLookup, now = D
           colorToken: colors.has(d.colorToken) ? d.colorToken : 'cyan', icon: trim(d.icon, 8) || '✧', enabled: d.enabled !== false,
           keywords: keywords(d.keywords ?? d.matchKeywords ?? [], 'custom domain keywords'), rssUrls: [...new Set(rssUrls)] };
       });
-      const { signal } = controller;
       await Promise.all([...toValidate].map(async url => {
         try { await validateExternalUrl(url, { dnsLookup, signal }); }
         catch { throw signal.aborted ? error(503, 'Cosmic Web is stopping') : error(400, 'Custom RSS URL must resolve only to public HTTP(S) addresses'); }
       }));
-      if (signal.aborted) throw error(503, 'Cosmic Web is stopping');
     }
+    ensureRunning(signal);
+    ensureActive(userId);
     db.cosmicWebTransaction(() => {
       // Merge disjoint patches made while DNS validation was pending.
       const current = preferred(userId);
@@ -326,11 +363,11 @@ export function createCosmicWebService({ fetcher = safeFetch, dnsLookup, now = D
       }
     });
     swr(userId, prefs);
-    return publicPrefs(prefs);
+    const clusters = filtered(userId, {}, false);
+    return { ...publicPrefs(prefs), ...metadata(userId, prefs, clusters), graph: graphProjection(prefs, clusters) };
   }
 
-  function stats(userId, prefs) {
-    const rows = filtered(userId, {}, false);
+  function stats(userId, prefs, rows) {
     const states = db.listUserClusterStates(userId);
     const sources = sourcesFor(userId, prefs);
     return { totalClusters: rows.length, unreadCount: rows.filter(c => c.unread).length,
@@ -340,6 +377,9 @@ export function createCosmicWebService({ fetcher = safeFetch, dnsLookup, now = D
   }
 
   async function refresh(userId, body = {}) {
+    const { signal } = controller;
+    ensureRunning(signal);
+    ensureActive(userId);
     const time = now();
     for (const [id, expires] of cooling) if (expires <= time) cooling.delete(id);
     if (cooling.has(userId)) throw error(429, 'Refresh is limited to once every 20 seconds');
@@ -347,16 +387,29 @@ export function createCosmicWebService({ fetcher = safeFetch, dnsLookup, now = D
     seed();
     const prefs = preferred(userId);
     const results = await refreshRows(sourcesFor(userId, prefs, trim(body?.domainId, 80)), body?.force !== false);
-    return { added: results.reduce((sum, r) => sum + (r.added ?? 0), 0), failed: results.filter(r => r.failed).length, updatedAt: now(), stats: stats(userId, prefs) };
+    ensureRunning(signal);
+    ensureActive(userId);
+    return { added: results.reduce((sum, r) => sum + (r.added ?? 0), 0), failed: results.filter(r => r.failed).length,
+      updatedAt: now(), ...metadata(userId, preferred(userId)) };
   }
   function startScheduler() {
     if (timer || !autoRefresh()) return false;
+    if (stopping) {
+      controller = new AbortController();
+      stopping = false;
+    }
     const tick = () => {
-      if (schedulerRun) return;
+      if (stopping || schedulerRun) return;
       try {
         seed();
         db.pruneCosmicWebDb(now());
-        const run = refreshRows([...db.listSources(), ...db.listActivePrivateSources()]);
+        const ownerActive = new Map();
+        const privateSources = db.listActivePrivateSources().filter(row => {
+          const owner = row.owner_user_id;
+          if (!ownerActive.has(owner)) ownerActive.set(owner, isUserActive(owner));
+          return ownerActive.get(owner);
+        });
+        const run = refreshRows([...db.listSources(), ...privateSources]);
         schedulerRun = run;
         void run.catch(err => { if (err.status !== 503) console.error('[CosmicWeb] Scheduled refresh failed:', err.message); })
           .finally(() => { if (schedulerRun === run) schedulerRun = undefined; });
@@ -369,17 +422,17 @@ export function createCosmicWebService({ fetcher = safeFetch, dnsLookup, now = D
     return true;
   }
   function stopScheduler() {
+    stopping = true;
     clearTimeout(initialTimer); clearInterval(timer);
     initialTimer = timer = schedulerRun = undefined;
-    controller.abort(); generation++;
-    controller = new AbortController();
+    controller.abort();
     for (const job of queue.splice(0)) job.reject(error(503, 'Cosmic Web is stopping'));
     inflight.clear(); articleInflight.clear(); aiInflight.clear(); cooling.clear();
   }
 
-  function enrichedDomains(userId, prefs) {
-    const dbSources = new Map([...db.listSources(), ...db.listSources(userId)].map(s => [s.id, s]));
-    const clusters = filtered(userId, {}, false);
+  function enrichedDomains(userId, prefs, clusters) {
+    const privateSources = db.listSources(userId);
+    const dbSources = new Map([...db.listSources(), ...privateSources].map(s => [s.id, s]));
     const countsByDomain = new Map();
     for (const c of clusters) {
       const seen = new Set([c.domainId, ...c.relatedDomains]);
@@ -390,8 +443,9 @@ export function createCosmicWebService({ fetcher = safeFetch, dnsLookup, now = D
         countsByDomain.set(dId, entry);
       }
     }
-    return BUILTIN_DOMAINS.map(d => {
-      const domainSources = BUILTIN_SOURCES.filter(s => s.domainId === d.id).map(s => {
+    const sources = [...BUILTIN_SOURCES, ...privateSources.map(sourceFromRow)];
+    return [...BUILTIN_DOMAINS, ...prefs.customDomains].map(d => {
+      const domainSources = sources.filter(s => s.domainId === d.id).map(s => {
         const row = dbSources.get(s.id);
         return {
           ...s,
@@ -407,12 +461,19 @@ export function createCosmicWebService({ fetcher = safeFetch, dnsLookup, now = D
         ...d,
         labelZh: d.nameZh,
         labelEn: d.nameEn,
-        isCustom: false,
+        isCustom: !domainIds.has(d.id),
         itemCount: counts.itemCount,
         unreadCount: counts.unreadCount,
         sources: domainSources,
       };
     });
+  }
+
+  function metadata(userId, prefs, clusters = filtered(userId, {}, false)) {
+    return { domains: enrichedDomains(userId, prefs, clusters), stats: stats(userId, prefs, clusters) };
+  }
+  function graphProjection(prefs, clusters) {
+    return buildGraphProjection({ prefs, clusters, domains: BUILTIN_DOMAINS });
   }
 
   return {
@@ -421,17 +482,16 @@ export function createCosmicWebService({ fetcher = safeFetch, dnsLookup, now = D
       swr(userId, preferences);
       const capableAgents = listCapableAgentsForUser(userId, userRole).map(a => ({ ...a, online: true, supportsBriefing: true }));
       const prefsPub = publicPrefs(preferences);
-      const domains = enrichedDomains(userId, preferences);
-      const graph = buildGraphProjection({ prefs: preferences, clusters: filtered(userId, {}, false), domains: BUILTIN_DOMAINS });
+      const clusters = filtered(userId, {}, false);
+      const graph = graphProjection(preferences, clusters);
       return {
-        domains,
+        ...metadata(userId, preferences, clusters),
         sources: [...BUILTIN_SOURCES, ...db.listSources(userId).map(sourceFromRow)],
         preferences: prefsPub,
         prefs: prefsPub,
         graph,
         agents: capableAgents,
         capableAgents,
-        stats: stats(userId, preferences),
       };
     },
     feed(userId, query = {}) {
@@ -443,29 +503,55 @@ export function createCosmicWebService({ fetcher = safeFetch, dnsLookup, now = D
     },
     graph(userId, query) {
       const prefs = preferred(userId);
-      return buildGraphProjection({ prefs, clusters: filtered(userId, query), domains: BUILTIN_DOMAINS });
+      return { ...graphProjection(prefs, filtered(userId, query)), ...metadata(userId, prefs) };
     },
     cluster, article,
-    aiBrief(userId, userRole, id, body = {}) {
-      if (!object(body)) fail('Invalid briefing options');
+    async aiBrief(userId, userRole, id, body = {}) {
+      const { signal } = controller;
+      ensureRunning(signal);
+      ensureActive(userId);
+      let options = briefingOptions(userId, userRole, body);
       const c = cluster(userId, id);
       const mode = body.mode ?? 'brief';
       if (!['brief', 'synthesize'].includes(mode)) fail('Invalid briefing mode');
-      const item = body.itemId == null ? c.items[0] : c.items.find(i => i.id === body.itemId);
-      if (!item) throw error(404, 'Article not found');
-      const cached = db.getArticleCache(userId, item.id, now());
-      return ai(userId, userRole, mode, body, { headline: c.headline, sourceUrl: item.url,
-        articleMarkdown: cached?.markdown?.slice(0, 12_000), quality: cached?.quality, sources: c.items.slice(0, 12) });
+      const item = selectItem(c, body);
+      let content = db.getArticleCache(userId, item.id, now());
+      if (!content && body.skipArticleFetch !== true) {
+        try { content = await article(userId, id, { itemId: item.id }); }
+        catch { /* Article unavailable; still brief from the stored headline and excerpts. */ }
+        // Availability may have changed while the article was being fetched.
+        ensureRunning(signal);
+        ensureActive(userId);
+        options = briefingOptions(userId, userRole, body);
+      }
+      return ai(userId, userRole, mode, body, { headline: item.title, sourceUrl: item.url,
+        articleMarkdown: content?.markdown?.slice(0, 12_000), quality: content?.quality, sources: c.items.slice(0, 12) }, signal, options);
     },
-    dailyBriefing(userId, userRole, body = {}) {
+    async dailyBriefing(userId, userRole, body = {}) {
+      const { signal } = controller;
+      ensureRunning(signal);
+      ensureActive(userId);
       const prefs = preferred(userId);
-      const clusters = filtered(userId, {}, false).filter(c => c.publishedAt >= now() - 24 * 60 * minute).slice(0, 24);
-      const domains = [...BUILTIN_DOMAINS, ...prefs.customDomains].filter(d => enabledIds(prefs).has(d.id));
-      return ai(userId, userRole, 'daily_briefing', body, { date: new Date(now()).toISOString().slice(0, 10),
-        domains: domains.map(({ id, nameZh, nameEn }) => ({ id, nameZh, nameEn, stories: clusters
-          .filter(c => c.domainId === id || c.relatedDomains.includes(id)).slice(0, 8).map(storyContext) })) });
+      const options = briefingOptions(userId, userRole, body, prefs);
+      const time = now();
+      const recent = c => c.publishedAt >= time - 24 * 60 * minute;
+      const clusters = filtered(userId, {}, false).filter(recent);
+      const enabled = enabledIds(prefs);
+      const ranked = [...BUILTIN_DOMAINS, ...prefs.customDomains].filter(d => enabled.has(d.id))
+        .map(({ id, nameZh, nameEn }) => ({ id, nameZh, nameEn, stories: clusters.filter(c => c.domainIds.includes(id)) }))
+        .filter(d => d.stories.length)
+        .sort((a, b) => b.stories.length - a.stories.length || b.stories[0].heatScore - a.stories[0].heatScore)
+        .slice(0, 8);
+      if (!ranked.length) {
+        const top = listClusters(userId, prefs, time).filter(c => !c.muted && recent(c))
+          .sort((a, b) => b.heatScore - a.heatScore || b.publishedAt - a.publishedAt).slice(0, 8);
+        if (top.length) ranked.push({ id: 'top-stories', nameZh: '热门新闻', nameEn: 'Top stories', stories: top });
+      }
+      const domains = ranked.map(d => ({ ...d, stories: d.stories.slice(0, 8).map(storyContext) }));
+      return ai(userId, userRole, 'daily_briefing', body, { date: new Date(time).toISOString().slice(0, 10), domains }, signal, options);
     },
     setClusterState(userId, id, patch) {
+      ensureActive(userId);
       if (!object(patch)) fail('Invalid cluster state');
       const unread = patch.unread ?? (typeof patch.read === 'boolean' ? !patch.read : undefined);
       const { bookmarked, muted } = patch;
@@ -475,10 +561,13 @@ export function createCosmicWebService({ fetcher = safeFetch, dnsLookup, now = D
       if (!state) throw error(404, 'Cluster not found');
       return state;
     },
-    markAllRead(userId, query) {
+    markAllRead(userId, query = {}) {
+      ensureActive(userId);
       const rows = filtered(userId, query, false).filter(c => c.unread);
       db.cosmicWebTransaction(() => { for (const c of rows) db.saveUserClusterState(userId, c.id, { unread: false }, now()); });
-      return { updated: rows.length, stats: stats(userId, preferred(userId)) };
+      const prefs = preferred(userId);
+      const clusters = filtered(userId, {}, false);
+      return { updated: rows.length, ...metadata(userId, prefs, clusters), graph: graphProjection(prefs, clusters) };
     },
     getPreferences: userId => publicPrefs(preferred(userId)), savePreferences, refresh, startScheduler, stopScheduler,
   };

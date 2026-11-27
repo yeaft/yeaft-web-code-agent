@@ -24,6 +24,14 @@ vi.mock('../../server/config.js', async importOriginal => {
 });
 import { registerCosmicWebRoutes } from '../../server/routes/cosmic-web-routes.js';
 
+// Keep the actual account database isolated too, so deletion exercises real transactions.
+vi.hoisted(() => {
+  delete process.env.SERVER_DATA_DIR;
+  process.env.TEST_DB_PATH = ':memory:';
+});
+import { userDb } from '../../server/db/user-db.js';
+import { runCosmicWebBriefing } from '../../agent/yeaft/cosmic-web-briefing.js';
+
 vi.mock('../../server/database.js', () => ({
   userDb: { getByUsername: name => ['alice', 'bob'].includes(name) ? { id: name, role: 'user' } : undefined },
   sessionDb: {}, yeaftProjectDb: {}, yeaftSessionDb: {}, sessionUiMetadataDb: {},
@@ -65,7 +73,7 @@ function transport(fn) {
   });
 }
 function stream(parts, headers = {}, statusCode = 200) { return Object.assign(Readable.from(parts), { headers, statusCode }); }
-function makeService(options = {}) { return service = createCosmicWebService({ now: () => NOW, dnsLookup: dns, autoRefresh: () => false, ...options }); }
+function makeService(options = {}) { return service = createCosmicWebService({ now: () => NOW, dnsLookup: dns, autoRefresh: () => false, isUserActive: () => true, ...options }); }
 function agent(id, ownerId, caps = ['cosmic_web_briefing']) {
   const frames = [];
   agents.set(id, { ownerId, name: id, capabilities: caps, encryptOutbound: false, ws: { readyState: 1, send: value => frames.push(JSON.parse(value)) } });
@@ -129,6 +137,16 @@ describe('feed parsing and source adapters', () => {
     expect(parseFeedXml(atom, 'https://example.com')[0]).toEqual({ title: '测试 "English"', url: 'https://atom.example/story', publishedAt: NOW, summaryExcerpt: '概要 & news' });
     expect(parseFeedXml('<rdf:RDF><item><title>A</title><link>https://example.com/</link><dc:date>2026-11-27T12:00:00Z</dc:date></item></rdf:RDF>')[0].publishedAt).toBe(NOW);
     expect(parseFeedXml('<feed><entry><title>X</title><link href="javascript:alert(1)"/></entry></feed>')).toEqual([]);
+  });
+  it('bounds long unassigned attributes and repeated unterminated tag starts in both parsers', () => {
+    const unassigned = 'a'.repeat(50_000);
+    const unfinished = '<entry '.repeat(8_000) + '"unterminated';
+    const start = performance.now();
+    expect(parseFeedXml(`<feed><entry ${unassigned}><title>A</title><link href="https://example.com/"/></entry>${unfinished}`))
+      .toMatchObject([{ title: 'A', url: 'https://example.com/' }]);
+    expect(extractCleanArticle(`<main ${unassigned}><script>if (a < b) {}</script><p>Visible</p></main>${unfinished}`, 'https://example.com').markdown)
+      .toBe('Visible');
+    expect(performance.now() - start).toBeLessThan(100);
   });
   it('normalizes fetched feed, signed CLS and embedded Baidu data', async () => {
     expect(BUILTIN_SOURCES).toHaveLength(23);
@@ -216,7 +234,10 @@ describe('clustering, isolation and retention', () => {
     expect(() => db.insertItem({ ...item('Invalid scope'), id: 'rogue', clusterId: id, sourceId: 'aihot', domainId: 'ai' })).toThrow('FOREIGN KEY');
   });
   it('opens isolated WAL SQLite and prunes old unbookmarked records and expired caches', () => {
-    expect(db.resolveCosmicWebDbPath({ TEST_DB_PATH: `${dir}/other.db` })).toBe(join(dir, 'cosmic-web.db'));
+    expect(db.resolveCosmicWebDbPath({ TEST_DB_PATH: `${dir}/other.db` })).toBe(`${dir}/other.db.cosmic-web.db`);
+    expect(db.resolveCosmicWebDbPath({ TEST_DB_PATH: `${dir}/another.db` })).toBe(`${dir}/another.db.cosmic-web.db`);
+    expect(db.resolveCosmicWebDbPath({ TEST_DB_PATH: ':memory:' })).toBe(':memory:');
+    expect(db.resolveCosmicWebDbPath({ TEST_DB_DIR: dir, TEST_DB_PATH: ':memory:' })).toBe(join(dir, 'cosmic-web.db'));
     expect(db.resolveCosmicWebDbPath({ COSMIC_WEB_DB_PATH: 'custom.db', SERVER_DATA_DIR: dir })).toBe('custom.db');
     expect(db.resolveCosmicWebDbPath({ SERVER_DATA_DIR: 'server-data', TEST_DB_DIR: 'test-data' })).toBe(join('server-data', 'cosmic-web.db'));
     expect(db.getCosmicWebDb().prepare('PRAGMA journal_mode').get().journal_mode).toBe('wal');
@@ -252,6 +273,34 @@ describe('AI bridge', () => {
     handleCosmicWebAiResponse('allowed', { ...msg, requestId: requests[1].requestId, result: { tldr: 'missing fields' } });
     await invalid;
   });
+  it('clears only the superseded connection and rejects stale replies', async () => {
+    const previousFrames = agent('allowed', 'alice');
+    const previous = agents.get('allowed');
+    const dropped = expect(ask()).rejects.toMatchObject({ status: 503 });
+    const currentFrames = agent('allowed', 'alice');
+    const live = ask();
+    clearCosmicWebAiRequestsForAgent('allowed', previous);
+    await dropped;
+    expect(handleCosmicWebAiResponse('allowed', { requestId: previousFrames[0].requestId, ok: true, result: storyResult })).toBe(false);
+    expect(handleCosmicWebAiResponse('allowed', { requestId: currentFrames[0].requestId, ok: true, result: storyResult })).toBe(true);
+    await expect(live).resolves.toEqual(storyResult);
+  });
+  it.each(['https://example.com', 'http://example.com', 'www.example.com', 'mailto:edit@example.com', '<edit@example.com>'])
+    ('rejects unsafe Markdown (%s) but accepts the Agent-generated fallback', async fullMarkdown => {
+      const frames = agent('allowed', 'alice');
+      const request = () => requestCosmicWebAi({ userId: 'alice', userRole: 'user', agentId: 'allowed', mode: 'daily_briefing' });
+      const respond = result => handleCosmicWebAiResponse('allowed', { requestId: frames.at(-1).requestId, ok: true, result });
+      const rejected = expect(request()).rejects.toMatchObject({ status: 502 });
+      respond({ ...dailyResult, fullMarkdown });
+      await rejected;
+      const { result } = await runCosmicWebBriefing({ mode: 'daily_briefing', language: 'en', config: { decisionModel: 'test/decision' },
+        adapter: { call: async () => ({ text: JSON.stringify({ ...dailyResult, fullMarkdown,
+          headline: 'News from HTTPS://example.com', sections: [{ domain: 'AI', bullets: ['[brackets](parens); www.example.com; mailto:edit@example.com'] }] }) }) } });
+      expect(result.fullMarkdown).not.toMatch(/https?:\/\/|www\.|mailto:/i);
+      const accepted = request();
+      expect(respond(result)).toBe(true);
+      await expect(accepted).resolves.toEqual(result);
+    });
   it('limits concurrency and rate, times out and clears on disconnect', async () => {
     vi.useFakeTimers(); const requests = agent('allowed', 'alice');
     const timeout = expect(ask()).rejects.toMatchObject({ status: 504 });
@@ -308,7 +357,8 @@ describe('REST and scheduler', () => {
     expect(boot.body.domains).toHaveLength(6); expect(boot.body.agents.map(a => a.id)).toEqual(['alice-agent']);
     expect((await authed('get', `/feed?q=${encodeURIComponent('中国')}`).expect(200)).body.clusters[0].id).toBe(id);
     expect((await authed('get', '/graph').expect(200)).body.nodes[0].clusterId).toBe(id);
-    await authed('put', '/preferences').send({ userId: 'bob', watchKeywords: ['模型'] }).expect(200);
+    const saved = await authed('put', '/preferences').send({ userId: 'bob', watchKeywords: ['模型'] }).expect(200);
+    expect(saved.body).toMatchObject({ preferences: { watchKeywords: ['模型'] }, domains: expect.any(Array), graph: expect.any(Object), stats: { watchHitCount: 1 } });
     expect((await authed('get', '/preferences?userId=bob').expect(200)).body.watchKeywords).toEqual(['模型']);
     expect((await authed('get', '/preferences', 'bob').expect(200)).body.watchKeywords).toEqual([]);
     await authed('put', '/preferences').send({ customDomains: [{ name: 'Blocked', rssUrls: ['http://127.0.0.1/news'] }] }).expect(400);
@@ -325,8 +375,142 @@ describe('REST and scheduler', () => {
     expect((await authed('post', `${cluster}/ai-brief`, 'bob').send({ perspective: 'engineering' }).expect(200)).body.cached).toBe(false);
     await authed('post', '/daily-briefing').send({}).expect(200);
     expect(calls.at(-1).payload.domains[0].stories[0].headline).toBe('中国模型 Open Source');
-    await authed('post', '/refresh').expect(200);
+    const refreshed = await authed('post', '/refresh').expect(200);
+    expect(refreshed.body).toMatchObject({ domains: expect.any(Array), stats: expect.any(Object) });
     await authed('post', '/refresh').expect(429);
+  });
+  it('awaits cold selected articles, isolates explicit Agent caches, and uses the available Auto Agent', async () => {
+    let finishFetch;
+    const fetcher = vi.fn(url => new Promise(resolve => { finishFetch = () => resolve(response(story, `${url}/redirected`)); }));
+    const requestAi = vi.fn(async () => storyResult);
+    const svc = makeService({ fetcher, requestAi });
+    agent('first', 'alice'); agent('second', 'alice');
+    await svc.savePreferences('alice', { preferredAgentId: 'offline' });
+    const firstUrl = 'https://example.com/first', secondUrl = 'https://example.com/second';
+    ingestCosmicWebItems(source(), [item('Same story', secondUrl, NOW - 1), item('Same story', firstUrl)], NOW);
+    const { id } = svc.feed('alice').clusters[0];
+    const selected = svc.cluster('alice', id).items.find(i => i.url === secondUrl);
+    await expect(svc.aiBrief('alice', 'user', id, { url: `${secondUrl}/` })).rejects.toMatchObject({ status: 404 });
+    await expect(svc.aiBrief('alice', 'user', id, { agentId: 'offline' })).rejects.toMatchObject({ status: 403 });
+    await svc.aiBrief('alice', 'user', id, { url: firstUrl, skipArticleFetch: true });
+    expect(fetcher).not.toHaveBeenCalled();
+    expect(requestAi).toHaveBeenLastCalledWith(expect.objectContaining({ language: 'zh-CN', payload: expect.objectContaining({ sourceUrl: firstUrl, articleMarkdown: undefined }) }));
+    requestAi.mockClear();
+    const brief = svc.aiBrief('alice', 'user', id, { itemId: selected.id, language: 'en', agentId: '' });
+    await Promise.resolve();
+    expect(fetcher).toHaveBeenCalledWith(secondUrl, expect.any(Object));
+    expect(requestAi).not.toHaveBeenCalled();
+    finishFetch();
+    await expect(brief).resolves.toMatchObject({ agentId: 'first', cached: false });
+    expect(requestAi).toHaveBeenLastCalledWith(expect.objectContaining({ language: 'en', payload: expect.objectContaining({ sourceUrl: secondUrl, articleMarkdown: expect.stringContaining('Important') }) }));
+    const article = await svc.article('alice', id, { url: secondUrl });
+    expect(article).toMatchObject({ itemId: selected.id, sourceUrl: secondUrl, contentMd: article.markdown });
+    const explicit = agentId => svc.aiBrief('alice', 'user', id, { url: secondUrl, language: 'en', agentId });
+    await expect(explicit('first')).resolves.toMatchObject({ agentId: 'first', cached: false });
+    await expect(explicit('second')).resolves.toMatchObject({ agentId: 'second', cached: false });
+    await expect(explicit('second')).resolves.toMatchObject({ agentId: 'second', cached: true });
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    expect(requestAi).toHaveBeenCalledTimes(3);
+  });
+  it('ranks nonempty daily domains before truncation, and falls back to top stories', async () => {
+    const requestAi = vi.fn(async () => dailyResult);
+    const svc = makeService({ requestAi });
+    agent('allowed', 'alice');
+    const customDomains = [{ id: 'empty', name: 'Empty' }, ...Array.from({ length: 9 }, (_, i) => ({ id: `d${i}`, name: `Domain ${i}` }))];
+    await svc.savePreferences('alice', { enabledDomainIds: [], customDomains });
+    for (let i = 0; i < 9; i++) ingestCosmicWebItems(source(`s${i}`, `d${i}`), [item(`News${i}`, `https://example.com/${i}`, NOW - (8 - i) * HOUR)], NOW);
+    ingestCosmicWebItems(source('s0', 'd0'), [item('More', 'https://example.com/more', NOW - 9 * HOUR)], NOW);
+    const brief = () => svc.dailyBriefing('alice', 'user', { language: 'en' });
+    await expect(brief()).resolves.toEqual({ ...dailyResult, agentId: 'allowed', agentName: 'allowed', perspective: 'balanced', generatedAt: NOW, cached: false });
+    expect(requestAi.mock.lastCall[0].payload.domains.map(d => d.id)).toEqual(['d0', 'd8', 'd7', 'd6', 'd5', 'd4', 'd3', 'd2']);
+    await expect(brief()).resolves.toMatchObject({ cached: true });
+    await svc.savePreferences('alice', { customDomains: [] });
+    await brief();
+    expect(requestAi.mock.lastCall[0].payload.domains).toMatchObject([{ id: 'top-stories', stories: [expect.objectContaining({ headline: 'News8' }), ...Array(7).fill(expect.any(Object))] }]);
+  });
+  it('marks only the exact filtered feed and returns updated metadata and graph', async () => {
+    const svc = makeService();
+    const prefs = await svc.savePreferences('alice', { enabledDomains: ['ai', 'tech'], watchKeywords: ['watched'] });
+    expect(prefs).toMatchObject({ domains: expect.any(Array), stats: { unreadCount: 0 } });
+    for (const [index, [title, domain]] of [['target watched', 'ai'], ['target outside', 'ai'], ['unrelated watched', 'ai'], ['target watched tech', 'tech'], ['target watched unbookmarked', 'ai'], ['target watched already read', 'ai']].entries()) {
+      // Separate scopes/sources alone do not prevent similarity merging; seed deterministic clusters.
+      const id = `state${index}`;
+      db.upsertSource(source(id, domain));
+      db.upsertCluster({ id, headline: title, summaryExcerpt: '', keywords: [], publishedAt: NOW });
+      db.insertItem({ ...item(title), id, clusterId: id, domainId: domain, sourceId: id });
+      if (index !== 4) svc.setClusterState('alice', id, { bookmarked: true, unread: index !== 5 });
+    }
+    const query = { domain: 'ai', filter: 'bookmarked', bookmarked: true, unread: '1', watch: true, q: 'target' };
+    expect(svc.feed('alice', query).clusters.map(c => c.id)).toEqual(['state0']);
+    const result = svc.markAllRead('alice', query);
+    expect(result).toMatchObject({ updated: 1, stats: { unreadCount: 4 }, domains: expect.any(Array),
+      graph: { nodes: expect.arrayContaining([expect.objectContaining({ clusterId: 'state0', unread: false })]) } });
+    expect(svc.feed('alice', { unread: true }).clusters.map(c => c.id)).toEqual(['state1', 'state2', 'state3', 'state4']);
+    expect(svc.graph('alice')).toMatchObject({ stats: result.stats, domains: result.domains });
+  });
+  it('purges user preferences as soon as the account becomes pending', () => {
+    const owner = userDb.createFull('pending-cleanup-fixture', 'unused').id;
+    db.saveUserPrefs(owner, {}, NOW);
+    expect(userDb.beginDeletion(owner)).toMatchObject({ status: 'pending' });
+    expect(userDb.get(owner).deletion_state).toBe('pending');
+    expect(db.loadUserPrefs(owner)).toBeNull();
+    expect(userDb.reconcilePendingDeletions()).toBe(1);
+  });
+  it('purges a pending account, retries failed purge on reconciliation, and fences in-flight writes and polling', async () => {
+    const owner = userDb.createFull('deletion-fixture', 'unused').id;
+    const direct = userDb.createFull('hard-deletion-fixture', 'unused').id;
+    const url = 'https://private.example/feed';
+    let allowSWR = false, finishRefresh, finishDns;
+    const fetcher = vi.fn(async requested => requested !== url ? response('', requested) : new Promise(resolve => {
+      finishRefresh = () => resolve(response(rss, requested));
+    }));
+    const svc = makeService({ isUserActive: undefined, autoRefresh: () => allowSWR, fetcher,
+      dnsLookup: host => host === 'pending.example' ? new Promise(resolve => { finishDns = () => resolve(dns()); }) : dns() });
+    const domain = { id: 'private', name: 'Mine', rssUrls: [url] };
+    await svc.savePreferences(owner, { enabledDomains: [], customDomains: [domain] });
+    const privateSource = db.listSources(owner)[0];
+    ingestCosmicWebItems({ ...source(privateSource.id, domain.id, owner), url }, [item('Private article')], NOW);
+    ingestCosmicWebItems(source(), [item('Public article')], NOW);
+    const id = svc.feed(owner).clusters[0].id;
+    const itemId = svc.cluster(owner, id).items[0].id;
+    const publicId = db.listVisibleClusters(direct)[0].id;
+    const publicItemId = db.listVisibleItems(direct, [publicId])[0].id;
+    svc.setClusterState(owner, id, { bookmarked: true });
+    db.saveUserClusterState(owner, publicId, { unread: false });
+    db.setArticleCache(owner, itemId, { markdown: 'private' }, NOW + 1);
+    db.setArticleCache(owner, publicItemId, { markdown: 'public' }, NOW + 1);
+    db.setAiCache(owner, 'key', {}, NOW + 1);
+    db.saveUserPrefs(direct, {}, NOW);
+    expect(userDb.deleteUser(direct)).toBe(true);
+    expect(db.loadUserPrefs(direct)).toBeNull();
+    const refreshing = expect(svc.refresh(owner)).rejects.toMatchObject({ status: 403 });
+    const saving = expect(svc.savePreferences(owner, { customDomains: [{ ...domain, rssUrls: ['https://pending.example/feed'] }] }))
+      .rejects.toMatchObject({ status: 403 });
+    await vi.waitFor(() => { expect(finishRefresh).toBeTypeOf('function'); expect(finishDns).toBeTypeOf('function'); });
+    db.getCosmicWebDb().exec(`CREATE TRIGGER fail_purge BEFORE DELETE ON cw_user_prefs BEGIN SELECT RAISE(ABORT, 'test purge failure'); END`);
+    expect(() => userDb.beginDeletion(owner)).toThrow('test purge failure');
+    expect(userDb.isActive(owner)).toBe(false);
+    expect(db.loadUserPrefs(owner)).not.toBeNull();
+    finishRefresh(); finishDns();
+    await Promise.all([refreshing, saving]);
+    // The failing purge left the source enabled and present, but the in-flight write must not land.
+    expect(db.listSources(owner)[0].last_attempt_at).toBeNull();
+    expect(db.listVisibleItems(owner, db.listVisibleClusters(owner).map(c => c.id))).toHaveLength(2);
+    allowSWR = true;
+    vi.useFakeTimers();
+    expect(svc.startScheduler()).toBe(true);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(fetcher.mock.calls.filter(([target]) => target === url)).toHaveLength(1);
+    db.getCosmicWebDb().exec('DROP TRIGGER fail_purge');
+    expect(userDb.reconcilePendingDeletions()).toBe(1);
+    expect(userDb.get(owner)).toBeUndefined();
+    expect(db.loadUserPrefs(owner)).toBeNull();
+    expect(db.listUserClusterStates(owner).size).toBe(0);
+    expect(db.getAiCache(owner, 'key', NOW)).toBeNull();
+    expect(db.getArticleCache(owner, itemId, NOW)).toBeNull();
+    expect(db.getArticleCache(owner, publicItemId, NOW)).toEqual({ markdown: 'public' });
+    expect(db.listActivePrivateSources()).toEqual([]);
+    expect(db.listVisibleClusters(owner).some(c => c.owner_user_id === owner)).toBe(false);
   });
   it('deduplicates public refresh, isolates failed sources and limits notifications to enabled domains and owners', async () => {
     const messages = Object.fromEntries(['alice', 'bob', 'charlie'].map(id => [id, []]));
@@ -360,6 +544,16 @@ describe('REST and scheduler', () => {
     await new Promise(resolve => setImmediate(resolve));
     expect(fetcher).toHaveBeenCalledTimes(2);
   });
+  it('aborts pending bridge work without a reply or cache write on scheduler stop', async () => {
+    const svc = makeService();
+    const frames = agent('allowed', 'alice');
+    const pending = expect(svc.dailyBriefing('alice', 'user')).rejects.toMatchObject({ status: 503 });
+    expect(frames).toHaveLength(1);
+    svc.stopScheduler();
+    await pending;
+    expect(handleCosmicWebAiResponse('allowed', { requestId: frames[0].requestId, ok: true, result: dailyResult })).toBe(false);
+    expect(db.getCosmicWebDb().prepare('SELECT count(*) AS count FROM cw_ai_cache').get().count).toBe(0);
+  });
   it('skips default scheduler in tests, starts idempotently and aborts in-flight work on stop', async () => {
     expect(startCosmicWebScheduler()).toBe(false);
     vi.useFakeTimers();
@@ -371,6 +565,13 @@ describe('REST and scheduler', () => {
     await vi.advanceTimersByTimeAsync(1); expect(signals.length).toBeGreaterThan(0);
     svc.stopScheduler(); svc.stopScheduler();
     expect(signals.every(signal => signal.aborted)).toBe(true);
+    for (const pending of [svc.refresh('alice'), svc.savePreferences('alice', {}), svc.article('alice', 'missing'),
+      svc.aiBrief('alice', 'user', 'missing'), svc.dailyBriefing('alice', 'user')]) {
+      await expect(pending).rejects.toMatchObject({ status: 503 });
+    }
     await vi.advanceTimersByTimeAsync(1); expect(vi.getTimerCount()).toBe(0);
+    expect(svc.startScheduler()).toBe(true);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(signals.some(signal => !signal.aborted)).toBe(true);
   });
 });

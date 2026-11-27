@@ -32,6 +32,9 @@ export function registerCosmicWebRoutes(app, { requireSessionAuth, cosmicWeb = c
   route('patch', '/clusters/:id/state', (id, _, req) => cosmicWeb.setClusterState(id, req.params.id, req.body));
   route('post', '/mark-all-read', (id, _, req) => cosmicWeb.markAllRead(id, req.body ?? {}));
   route('get', '/preferences', id => cosmicWeb.getPreferences(id));
-  route('put', '/preferences', async (id, _, req) => ({ preferences: await cosmicWeb.savePreferences(id, req.body) }));
+  route('put', '/preferences', async (id, _, req) => {
+    const { domains, graph, stats, ...preferences } = await cosmicWeb.savePreferences(id, req.body);
+    return { preferences, prefs: preferences, domains, graph, stats };
+  });
   route('post', '/refresh', (id, _, req) => cosmicWeb.refresh(id, req.body));
 }

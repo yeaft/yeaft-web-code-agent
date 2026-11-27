@@ -319,7 +319,7 @@ function handleAgentDisconnect(agentId, agentName, ws) {
   closeSessionAttachmentReads(agentId, agent);
   closeCreationMediaReads(agentId, agent);
   clearCreationRequestsForAgent(agentId, agent);
-  clearCosmicWebAiRequestsForAgent(agentId);
+  clearCosmicWebAiRequestsForAgent(agentId, agent);
   clearBrowserRuntimeForAgent(agentId);
   for (const pending of takeAgentSettingsRequestsForAgent(agentId)) {
     const client = webClients.get(pending.clientId);
@@ -377,6 +377,7 @@ function completeAgentRegistration(ws, agentId, agentName, workDir, sessionKey, 
     ? latestAgentVersion
     : null;
 
+  if (existingAgent) clearCosmicWebAiRequestsForAgent(agentId, existingAgent);
   agents.set(agentId, {
     ws,
     name: agentName,

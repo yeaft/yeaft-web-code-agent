@@ -5,8 +5,10 @@ import { fileURLToPath } from 'node:url';
 
 let db;
 export function resolveCosmicWebDbPath(env = process.env) {
-  return env.COSMIC_WEB_DB_PATH ?? join(env.SERVER_DATA_DIR ?? env.TEST_DB_DIR ??
-    (env.TEST_DB_PATH ? dirname(env.TEST_DB_PATH) : fileURLToPath(new URL('../../data/', import.meta.url))), 'cosmic-web.db');
+  const dir = env.SERVER_DATA_DIR || env.TEST_DB_DIR;
+  if (env.COSMIC_WEB_DB_PATH) return env.COSMIC_WEB_DB_PATH;
+  if (!dir && env.TEST_DB_PATH) return env.TEST_DB_PATH === ':memory:' ? ':memory:' : `${env.TEST_DB_PATH}.cosmic-web.db`;
+  return join(dir || fileURLToPath(new URL('../../data/', import.meta.url)), 'cosmic-web.db');
 }
 
 export function openCosmicWebDb(customPath = resolveCosmicWebDbPath()) {
@@ -84,6 +86,19 @@ export function cosmicWebTransaction(fn) {
   conn.exec('BEGIN IMMEDIATE');
   try { const result = fn(); conn.exec('COMMIT'); return result; }
   catch (err) { conn.exec('ROLLBACK'); throw err; }
+}
+
+export function purgeUserCosmicWebData(userId) {
+  if (!userId) throw new Error('Expected Cosmic Web user');
+  return cosmicWebTransaction(() => {
+    for (const table of ['cw_user_prefs', 'cw_user_cluster_state', 'cw_ai_cache']) {
+      sql(`DELETE FROM ${table} WHERE user_id=?`).run(userId);
+    }
+    // Article cache is scoped by item, not user; private entries cascade from cw_items.
+    for (const table of ['cw_items', 'cw_clusters', 'cw_sources']) {
+      sql(`DELETE FROM ${table} WHERE owner_user_id=?`).run(userId);
+    }
+  });
 }
 
 export function upsertSource(source) {

@@ -5,6 +5,7 @@ import { startAgentHeartbeat, stopAgentHeartbeat, scheduleReconnect } from './he
 import { handleMessage } from './message-router.js';
 import { cleanupTerminalsForDisconnect } from '../terminal.js';
 import { invalidateYeaftProjectContexts } from '../yeaft/web-bridge.js';
+import { abortActiveCosmicWebBriefings } from '../yeaft/cosmic-web-briefing.js';
 
 export function resetConnectionTransport() {
   invalidateYeaftProjectContexts();
@@ -17,6 +18,7 @@ export function resetConnectionTransport() {
 export function connect(WebSocketImpl = WebSocket) {
   // Transport negotiation is connection-scoped. Always start conservatively;
   // only the registered frame from this socket may enable plaintext outbound.
+  abortActiveCosmicWebBriefings();
   resetConnectionTransport();
 
   // Don't include secret in URL - it will be sent via WebSocket message after connection.
@@ -98,7 +100,7 @@ export function connect(WebSocketImpl = WebSocket) {
     // Decryption can yield after a reconnect replaces this socket. Fence again
     // before a stale command can mutate Agent-local config or runtime state.
     if (socket !== ctx.ws) return;
-    if (msg) {
+    if (msg && socket.readyState === WebSocket.OPEN) {
       handleMessage(msg).catch(err => {
         console.error('[WS] handleMessage error:', err.message || err);
       });
@@ -107,6 +109,7 @@ export function connect(WebSocketImpl = WebSocket) {
 
   socket.on('close', (code, reason) => {
     if (socket !== ctx.ws) return;
+    abortActiveCosmicWebBriefings();
     console.log(`Disconnected from server: ${code} ${reason}`);
     invalidateYeaftProjectContexts();
     ctx.sessionKey = null;

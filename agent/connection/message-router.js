@@ -916,12 +916,16 @@ export async function handleMessage(msg) {
       await handleCreationMediaRead(msg);
       break;
 
-    case 'cosmic_web_ai_request':
+    case 'cosmic_web_ai_request': {
+      const originWs = ctx.ws;
+      const isCurrent = () => !!originWs && ctx.ws === originWs && originWs.readyState === 1;
+      if (!isCurrent()) break;
       void handleCosmicWebAiRequest(msg, {
         yeaftDir: ctx.CONFIG?.yeaftDir,
-        sendToServer,
+        sendToServer: reply => isCurrent() && sendToServer(reply, { isCurrent }),
       });
       break;
+    }
 
     case 'session_discovery_request':
       if (!ctx.serverCapabilities?.has('session_discovery')) break;

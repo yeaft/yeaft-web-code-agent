@@ -21,11 +21,13 @@ function settle(key, error, value) {
   if (!entry) return false;
   pending.delete(key);
   clearTimeout(entry.timer);
+  entry.signal?.removeEventListener('abort', entry.onAbort);
   if (error) entry.reject(error); else entry.resolve(value);
   return true;
 }
 
-export async function requestCosmicWebAi({ userId, userRole, agentId, mode, perspective, language, payload }) {
+export async function requestCosmicWebAi({ userId, userRole, agentId, mode, perspective, language, payload, signal }) {
+  if (signal?.aborted) throw fail(503, 'Cosmic Web is stopping');
   const agent = agents.get(agentId);
   if (!userId || !agent || !owns(agent, userId, userRole)) throw fail(403, 'Agent is not available to this user');
   if (!hasCapability(agent)) throw fail(409, 'Agent does not support Cosmic Web briefing');
@@ -41,7 +43,9 @@ export async function requestCosmicWebAi({ userId, userRole, agentId, mode, pers
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => settle(key, fail(504, 'Agent briefing timed out')), 45_000);
     timer.unref();
-    pending.set(key, { userId, userRole, agentId, agent, mode, resolve, reject, timer });
+    const onAbort = () => settle(key, fail(503, 'Cosmic Web is stopping'));
+    pending.set(key, { userId, userRole, agentId, agent, mode, resolve, reject, timer, signal, onAbort });
+    signal?.addEventListener('abort', onAbort, { once: true });
     sendToAgent(agent, { type: 'cosmic_web_ai_request', requestId, mode, perspective, language, payload })
       .then(sent => { if (!sent) settle(key, fail(503, 'Agent disconnected')); }, () => settle(key, fail(503, 'Agent send failed')));
   });
@@ -55,8 +59,15 @@ const list = (value, min, max, test) => Array.isArray(value) && value.length >= 
 const bullet = value => text(value, 500);
 const question = value => text(value, 320);
 
+// Keep this rule in sync with agent/yeaft/cosmic-web-briefing.js.
+function restrictedMarkdown(markdown) {
+  if (/[<>]|https?:\/\/|www\.|mailto:|@[a-z0-9-]+\./i.test(markdown)) return false;
+  // Unescaped brackets can form inline, reference, or image links.
+  for (const [token] of markdown.matchAll(/\\[\\\[\]]|[\[\]]/g)) if (token.length === 1) return false;
+  return true;
+}
 function validResult(result, mode) {
-  if (!object(result) || !text(result.fullMarkdown, 12_000) || /<[^>]*>|(?<!\\)!?(?<!\\)\[(?:\\.|[^\]\\])*(?<!\\)\]\s*[([\:]/.test(result.fullMarkdown)) return false;
+  if (!object(result) || !text(result.fullMarkdown, 12_000) || !restrictedMarkdown(result.fullMarkdown)) return false;
   if (mode === 'daily_briefing') {
     return only(result, ['headline', 'overview', 'sections', 'signalsToWatch', 'followUps', 'fullMarkdown']) &&
       text(result.headline, 250) && text(result.overview, 1500) &&
@@ -80,8 +91,10 @@ export function handleCosmicWebAiResponse(agentId, msg) {
   return settle(key, null, result);
 }
 
-export function clearCosmicWebAiRequestsForAgent(agentId) {
-  for (const [key, entry] of pending) if (entry.agentId === agentId) settle(key, fail(503, 'Agent disconnected'));
+export function clearCosmicWebAiRequestsForAgent(agentId, targetAgent = null) {
+  for (const [key, entry] of pending) {
+    if (entry.agentId === agentId && (targetAgent == null || entry.agent === targetAgent)) settle(key, fail(503, 'Agent disconnected'));
+  }
 }
 export function clearAllCosmicWebAiRequests() {
   for (const key of pending.keys()) settle(key, fail(503, 'Cosmic Web is stopping'));

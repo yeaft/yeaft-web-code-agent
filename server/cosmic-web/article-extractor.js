@@ -1,4 +1,4 @@
-import { decodeEntities, parseAttributes, resolveHttpUrl } from './rss-parser.js';
+import { decodeEntities, parseAttributesLinear, resolveHttpUrl, scanMarkup } from './rss-parser.js';
 
 const discard = new Set('script style noscript svg nav header footer aside form iframe template button'.split(' '));
 const rawTags = new Set(['script', 'style', 'iframe']);
@@ -12,30 +12,25 @@ const escapeMd = text => text.replace(/[\\`*_{}\[\]<>#!|~]/g, '\\$&').replace(/^
 function tree(html) {
   const root = { tag: 'root', attrs: {}, children: [] };
   const stack = [root];
-  let raw = null;
-  for (const [token] of html.matchAll(/<!--[\s\S]*?(?:-->|$)|<![^>]*>|<\/?[a-z][\w:-]*(?:[^>"']|"[^"]*"|'[^']*')*>|[^<]+|</gi)) {
-    const m = /^<(\/?)([a-z][\w:-]*)([\s\S]*?)>$/i.exec(token);
-    if (raw) { if (m?.[1] && m[2].toLowerCase() === raw) raw = null; continue; }
-    if (!m) {
-      if (!token.startsWith('<!') && !stack.at(-1).hidden) stack.at(-1).children.push(decodeEntities(token));
+  for (const token of scanMarkup(html, { rawTags })) {
+    if (token.type !== 'tag') {
+      if (!stack.at(-1).hidden) stack.at(-1).children.push(decodeEntities(token.text));
       continue;
     }
-    const [, close, name, attrText] = m;
-    const tag = name.toLowerCase();
+    const { name: tag, closing: close, attrsText, selfClosing } = token;
     if (close) {
       const at = stack.findLastIndex(n => n.tag === tag);
       if (at > 0) stack.length = at;
       continue;
     }
-    if (rawTags.has(tag)) { raw = tag; continue; }
     if ((tag === 'p' || blocks.has(tag)) && stack.at(-1).tag === 'p') stack.pop();
     if (tag === 'li' && stack.at(-1).tag === 'li') stack.pop();
-    const attrs = parseAttributes(attrText);
+    const attrs = parseAttributesLinear(attrsText);
     const hidden = stack.at(-1).hidden || discard.has(tag) || attrs['aria-hidden'] === 'true' ||
-      /(?:^|\s)hidden(?:\s|=|$)/i.test(attrText) || noise.test(`${attrs.id ?? ''} ${attrs.class ?? ''}`);
+      Object.hasOwn(attrs, 'hidden') || noise.test(`${attrs.id ?? ''} ${attrs.class ?? ''}`);
     const node = { tag, attrs, hidden, children: [] };
     if (!hidden) stack.at(-1).children.push(node);
-    if (!voidTags.has(tag) && !/\/>$/.test(token)) {
+    if (!voidTags.has(tag) && !selfClosing) {
       if (stack.length >= 128) throw new Error('Article nesting exceeds limit');
       stack.push(node);
     }
@@ -85,12 +80,12 @@ export function extractCleanArticle(html, sourceUrl, fallbackTitle = '') {
   if (url) {
     const { hostname, pathname } = new URL(url);
     if (['s.weibo.com', 'top.baidu.com', 'search.bilibili.com'].includes(hostname) ||
-        (/(^|\.)toutiao\.com$/.test(hostname) && /^\/(?:trending|hot-event)(?:\/|$)/.test(pathname))) {
+        ((hostname === 'toutiao.com' || hostname.endsWith('.toutiao.com')) && /^\/(?:trending|hot-event)(?:\/|$)/.test(pathname))) {
       return { ...base, quality: 'search_only' };
     }
   }
   if (!html) return { ...base, quality: 'blocked' };
-  const root = tree(String(html).slice(0, 4 * 1024 ** 2));
+  const root = tree(html);
   let best = root, bestScore = -1, title = '', heading = '';
   function measure(node) {
     if (typeof node === 'string') return [normalize(node).length, 0];

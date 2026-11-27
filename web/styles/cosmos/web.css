@@ -1024,6 +1024,11 @@
   flex-wrap: wrap;
   gap: 6px;
 }
+.cw-dispatch-followup-pill {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
 .cw-dispatch-row {
   display: flex;
   align-items: center;
@@ -1167,6 +1172,14 @@
   gap: 6px;
   font-size: 12px;
   color: var(--cw-muted);
+}
+
+.cw-daily-overview {
+  margin: 0 0 14px;
+  font-size: 14px;
+  line-height: 1.65;
+  color: var(--cw-ink);
+  white-space: pre-line;
 }
 
 .cw-brief-section {
@@ -1551,6 +1564,31 @@
   .cw-source-grid,
   .cw-perspective-grid {
     grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 640px) {
+  .cw-modal-header {
+    flex-wrap: wrap;
+    row-gap: 8px;
+    padding: 12px 14px;
+  }
+  .cw-modal-header-left {
+    flex: 1 1 auto;
+    flex-wrap: wrap;
+    min-width: 0;
+    gap: 6px;
+  }
+  .cw-modal-header-actions {
+    flex: 0 1 auto;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    gap: 4px;
+  }
+  .cw-modal-title {
+    white-space: normal;
+    font-size: 15px;
+    line-height: 1.35;
   }
 }
 
