@@ -1347,6 +1347,7 @@ export const useCreationsStore = defineStore('creations', {
         },
         { flush: 'sync' },
       );
+      sessionsStore?.beginSuppressAutoSelect?.();
       try {
         const dKey = creationDetailKey(targetId, creationId);
         const acknowledgedSessionId = typeof options.sessionId === 'string' ? options.sessionId.trim() : '';
@@ -1365,21 +1366,13 @@ export const useCreationsStore = defineStore('creations', {
         }
         if (!creation?.id) throw new Error('Creation not found');
 
-        let resolved;
-        if (hasAcknowledgedRoute) {
-          resolved = {
-            creation: { ...creation, sessionId: acknowledgedSessionId, rootDir: acknowledgedRootDir },
-            sessionId: acknowledgedSessionId,
-            rootDir: acknowledgedRootDir,
-          };
-        } else {
-          sessionsStore?.beginSuppressAutoSelect?.();
-          try {
-            resolved = await this.resolveCreationSession(targetId, creation, { createIfMissing: true });
-          } finally {
-            sessionsStore?.endSuppressAutoSelect?.();
-          }
-        }
+        const resolved = hasAcknowledgedRoute
+          ? {
+              creation: { ...creation, sessionId: acknowledgedSessionId, rootDir: acknowledgedRootDir },
+              sessionId: acknowledgedSessionId,
+              rootDir: acknowledgedRootDir,
+            }
+          : await this.resolveCreationSession(targetId, creation, { createIfMissing: true });
         if (!isOpenStillCurrent()) return null;
         if (!resolved?.sessionId) throw new Error('Failed to resolve Creation session');
         const { creation: latest, sessionId, rootDir } = resolved;
@@ -1458,6 +1451,7 @@ export const useCreationsStore = defineStore('creations', {
         throw err;
       } finally {
         stopWatchingRoute?.();
+        sessionsStore?.endSuppressAutoSelect?.();
       }
     },
 

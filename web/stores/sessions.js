@@ -154,6 +154,10 @@ function forgetSavedSessionKey(key) {
 function reconcileRetiredBareActiveSession(state) {
   const sessionId = state._retiredBareActiveSessionId;
   if (!sessionId) return false;
+  if (state.suppressAutoSelectDepth > 0 && !state.activeSessionKey) {
+    state._deferredFallbackReconcile = true;
+    return true;
+  }
   if (state.inventoryIdentityMode === 'legacy-bare') {
     const row = state.sessions[sessionId];
     if (!row || row.agentId) {
@@ -181,17 +185,19 @@ function reconcileRetiredBareActiveSession(state) {
 }
 
 function reconcileInventorySelection(state, { suppressFallback = false } = {}) {
+  const suppress = Boolean(suppressFallback || state.suppressAutoSelectDepth > 0);
   const openingKey = state._explicitPendingSessionKey;
   if (openingKey) {
     // The operator explicitly opened a catalog route before the Agent's live
     // row arrived. A delayed or incomplete inventory must not close it.
     if (state.sessions[openingKey]) {
       state._explicitPendingSessionKey = null;
+      state._deferredFallbackReconcile = false;
       activateInventorySession(state, openingKey);
     }
     return;
   }
-  if (!suppressFallback && !state._preferredExactSessionIdentity && !state._retiredBareActiveSessionId && !state.activeSession) {
+  if (!suppress && !state._preferredExactSessionIdentity && !state._retiredBareActiveSessionId && !state.activeSession) {
     const saved = readLastViewedYeaftSession();
     if (saved.agentId && saved.sessionId) {
       state._preferredExactSessionIdentity = storeKeyFor(saved.agentId, saved.sessionId);
@@ -202,19 +208,26 @@ function reconcileInventorySelection(state, { suppressFallback = false } = {}) {
   }
   const preferredKey = state._preferredExactSessionIdentity;
   if (preferredKey) {
-    if (suppressFallback && state._preferredIdentityIsSavedFallback) return;
+    if (suppress && state._preferredIdentityIsSavedFallback) {
+      state._deferredFallbackReconcile = true;
+      return;
+    }
     const row = state.sessions[preferredKey];
     // An absent row may belong to a temporarily offline Agent. Don't select
     // a different Session (including one with the same id) while waiting.
     if (row) {
       state._preferredExactSessionIdentity = null;
       state._preferredIdentityIsSavedFallback = false;
+      state._deferredFallbackReconcile = false;
       activateInventorySession(state, preferredKey);
-    } else if (!suppressFallback) {
+    } else if (!suppress) {
       activateInventorySession(state, null);
     }
-  } else if (!suppressFallback && !reconcileRetiredBareActiveSession(state)) {
+  } else if (suppress) {
+    if (!state.activeSession) state._deferredFallbackReconcile = true;
+  } else if (!reconcileRetiredBareActiveSession(state)) {
     const first = state.sessionList[0];
+    state._deferredFallbackReconcile = false;
     activateInventorySession(state, state.activeSession ? state.activeSessionKey
       : (first ? findSessionKey(state, first.id, first.agentId) || null : null));
   }
@@ -308,6 +321,7 @@ export const useSessionsStore = defineStore('sessions', {
     authoritativeSnapshotAgents: {},
     confirmedDeletedSessionKeys: {},
     suppressAutoSelectDepth: 0,
+    _deferredFallbackReconcile: false,
     /**
      * Most recent CRUD result for the UI to surface as toast/modal error.
      * Shape: { op, ok, error?:{code,sessionId,message}, at }
@@ -698,9 +712,11 @@ export const useSessionsStore = defineStore('sessions', {
 
     endSuppressAutoSelect() {
       this.suppressAutoSelectDepth = Math.max(0, this.suppressAutoSelectDepth - 1);
-      if (this.suppressAutoSelectDepth === 0 && !this.activeSessionKey
-          && (this._explicitPendingSessionKey || (this._preferredExactSessionIdentity && !this._preferredIdentityIsSavedFallback))) {
-        reconcileInventorySelection(this, { suppressFallback: true });
+      if (this.suppressAutoSelectDepth > 0) return;
+      const hadDeferred = this._deferredFallbackReconcile;
+      this._deferredFallbackReconcile = false;
+      if (!this.activeSessionKey && (hadDeferred || this._explicitPendingSessionKey || this._preferredExactSessionIdentity)) {
+        reconcileInventorySelection(this);
       }
     },
 
@@ -709,6 +725,7 @@ export const useSessionsStore = defineStore('sessions', {
       if (sessionId && key && this.sessions[key]) {
         this.activeSessionId = sessionId;
         this.activeSessionKey = key;
+        this._deferredFallbackReconcile = false;
       } else {
         this.activeSessionId = null;
         this.activeSessionKey = null;

@@ -2231,6 +2231,115 @@ describe('Cosmos Creations — End-to-End Web Store <-> Server Relay <-> Agent S
     }
   });
 
+  it('R15-F1: archiving the saved Session after hydration completes does not cancel a pending Classic Creation open', async () => {
+    const { sessions } = await registerBrowserStores();
+    const { LAST_VIEWED_YEAFT_SESSION_KEY, yeaftSessionIdentityKey } = await import('../../web/stores/helpers/yeaft-session-identity.js');
+    const agentId = 'agent-a';
+    const savedId = 'saved-to-archive';
+    const otherId = 'unrelated-other-session';
+    const targetId = 'creation-target-session';
+    localStorage.setItem(LAST_VIEWED_YEAFT_SESSION_KEY, yeaftSessionIdentityKey(agentId, savedId));
+    try {
+      const creation = serviceA.store.createCreation({ title: 'Archive Safe Open', initializeFolder: true, sessionId: targetId });
+      chatStore.agents = [{ id: agentId, online: true }];
+      chatStore.connectionState = 'connected';
+      chatStore.currentAgent = agentId;
+      chatStore.currentView = 'yeaft';
+      chatStore.uiMode = 'classic';
+      chatStore.yeaftActiveSessionFilter = null;
+      chatStore.yeaftSessionHydrateRequestId = 'hyd-r15';
+      chatStore.yeaftSessionInventoryCompleteSupported = true;
+      chatStore.yeaftSessionHydrateSlices = [
+        {
+          agentId,
+          live: false,
+          sessions: [
+            { id: savedId, workDir: '/repo/saved' },
+            { id: otherId, workDir: '/repo/other' },
+          ],
+        },
+      ];
+      const listStarted = deferred();
+      interceptSocket(chatStore, request => {
+        if (request.type === 'yeaft_list_sessions') {
+          listStarted.resolve(request);
+          return true;
+        }
+      });
+      const openPromise = creationsStore.openCreationWorkspace({ agentId, creationId: creation.id });
+      const listReq = await listStarted.promise;
+      // Real hydration-complete frame commits savedId + otherId + targetId while open is pending.
+      chatStore.handleMessage({ type: 'yeaft_session_hydrate_complete', requestId: 'hyd-r15' });
+      expect(sessions.activeSessionKey).toBeNull();
+      // Another tab archives the saved Session while the Creation open is still awaiting listReq.
+      chatStore.handleMessage({
+        type: 'yeaft_output',
+        agentId,
+        event: { type: 'yeaft_session_crud_result', ok: true, op: 'archive', sessionId: savedId },
+      });
+      // Archive receipt MUST NOT auto-select otherId or cancel the pending Creation open.
+      expect(sessions.activeSessionKey).toBeNull();
+      expect(chatStore.yeaftActiveSessionFilter).toBeNull();
+      sessionAck(chatStore, listReq, 'list', {
+        sessions: [
+          { id: otherId, workDir: '/repo/other' },
+          { id: targetId, workDir: creation.rootDir },
+        ],
+      });
+      const opened = await openPromise;
+      expect(opened).toMatchObject({ creation: { id: creation.id }, sessionId: targetId });
+      expect(chatStore.yeaftActiveSessionFilter).toBe(targetId);
+      expect(chatStore.workbenchExpanded).toBe(true);
+      expect(sessions.suppressAutoSelectDepth).toBe(0);
+    } finally {
+      localStorage.removeItem(LAST_VIEWED_YEAFT_SESSION_KEY);
+    }
+  });
+
+  it('R15-F2: a failed Creation open reconciles an available saved Session immediately without waiting for another snapshot', async () => {
+    const { sessions } = await registerBrowserStores();
+    const { LAST_VIEWED_YEAFT_SESSION_KEY, yeaftSessionIdentityKey } = await import('../../web/stores/helpers/yeaft-session-identity.js');
+    const agentId = 'agent-a';
+    const savedId = 'available-saved-session';
+    localStorage.setItem(LAST_VIEWED_YEAFT_SESSION_KEY, yeaftSessionIdentityKey(agentId, savedId));
+    try {
+      const creation = serviceA.store.createCreation({ title: 'Failing Open', initializeFolder: true, sessionId: 'deleted-session' });
+      chatStore.agents = [{ id: agentId, online: true }];
+      chatStore.connectionState = 'connected';
+      chatStore.currentAgent = agentId;
+      chatStore.currentView = 'yeaft';
+      chatStore.uiMode = 'classic';
+      chatStore.yeaftActiveSessionFilter = null;
+      const listStarted = deferred();
+      interceptSocket(chatStore, request => {
+        if (request.type === 'yeaft_list_sessions') {
+          listStarted.resolve(request);
+          return true;
+        }
+        if (request.type === 'yeaft_create_session') {
+          return sessionAck(chatStore, request, 'create', { ok: false, error: { code: 'denied', message: 'Cannot create replacement' } });
+        }
+      });
+      const openPromise = creationsStore.openCreationWorkspace({ agentId, creationId: creation.id });
+      const listReq = await listStarted.promise;
+      // Saved Session arrives via inventory commit while suppressed.
+      const preferred = sessions.preferredInventoryIdentity();
+      sessions.beginInventoryCommit(preferred.sessionId, preferred.agentId, { fromSavedFallback: preferred.fromSavedFallback });
+      sessions.applySnapshot([{ id: savedId, workDir: '/repo/saved' }], agentId, { authoritative: true });
+      expect(sessions.activeSessionKey).toBeNull();
+      // List confirms deleted-session is absent -> create_session fails -> open fails!
+      sessionAck(chatStore, listReq, 'list', { sessions: [{ id: savedId, workDir: '/repo/saved' }] });
+      await expect(openPromise).rejects.toThrow(/Cannot create replacement/);
+      // No later snapshot is sent; savedId must immediately become active and not show "unavailable".
+      expect(sessions.suppressAutoSelectDepth).toBe(0);
+      expect(sessions.activeSessionId).toBe(savedId);
+      expect(sessions.activeSessionKey).toBeTruthy();
+      expect(sessions.waitingForLastViewedSession).toBe(false);
+    } finally {
+      localStorage.removeItem(LAST_VIEWED_YEAFT_SESSION_KEY);
+    }
+  });
+
   it.each(['leave Galaxy and return', 'close the drawer'])('fences a pending Galaxy Creation open when users %s', async action => {
     const { sessions } = await registerBrowserStores();
     const { default: CosmosPage } = await import('../../web/components/cosmos/CosmosPage.js');
