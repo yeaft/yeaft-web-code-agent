@@ -1097,9 +1097,13 @@ describe('2.0 graph and AI contracts', () => {
     const underscoreRelUrl = '//user:UNDERSCOREPASS99@intranet:8080';
     const underscoreHttpUrl = 'https://files.example/u?token=UNDERHTTP99';
     const idnWwwUrl = 'www.例子.中国/a?token=IDNWWWSECRET99';
+    const ideoDotWwwUrl = 'www\u3002例子\u3002中国/a?token=IDEODOTSECRET99';
+    const snowmanWwwUrl = 'www.\u2603.example/a?token=SNOWMANSECRET99';
+    const snowmanPortWwwUrl = 'www.\u2603.example:8080\u3002下一句';
+    const fwDotWwwUrl = 'www\uff0efiles\uff0eexample/doc?token=FWDOTSECRET99';
     const privItemWithImg = {
       ...item('Private img note', 'https://private.example/img-note'),
-      summaryExcerpt: `${unicodePad} Private brief note with ${excerptSecretUrl}, ${unicodeSecretUrl}, ${wwwSecretUrl}, ${schemeRelSecretUrl}, ${ipv6RelSecretUrl}, ${singleHostRelSecretUrl}, ${userinfoRelSecretUrl}, **${boldUserinfoPortUrl}**, “${typoQuotePortUrl}”, 请看${cjkPeriodPortUrl}。以及【${cjkBracketPortUrl}】, 请看${userinfoUnicodeProseUrl}。下一句 请看${proseAtUrl}。通知@ops:值班 ${leadingPunctUserUrl} 请看${comma70UserUrl}。下一句 ${emojiPortUrl}📌下一句 [${bracketPortUrl}] [${bracketProsePortUrl}]下一句 {${bracePortUrl}} |${pipePortUrl}| [${wrappedIpv6PortUrl}] [${wrappedIpv6NoPortUrl}]下一句 _${underscoreRelUrl}_ _${underscoreHttpUrl}_ _${idnWwwUrl}_ foo_www.keepme ${enDashHttpUrl}, ${enDashRelUrl}, and ${cjkQueryUrl} //user:TRUNCDB99@`,
+      summaryExcerpt: `${unicodePad} Private brief note visit www. with ${excerptSecretUrl}, ${unicodeSecretUrl}, ${wwwSecretUrl}, ${schemeRelSecretUrl}, ${ipv6RelSecretUrl}, ${singleHostRelSecretUrl}, ${userinfoRelSecretUrl}, **${boldUserinfoPortUrl}**, “${typoQuotePortUrl}”, 请看${cjkPeriodPortUrl}。以及【${cjkBracketPortUrl}】, 请看${userinfoUnicodeProseUrl}。下一句 请看${proseAtUrl}。通知@ops:值班 ${leadingPunctUserUrl} 请看${comma70UserUrl}。下一句 ${emojiPortUrl}📌下一句 [${bracketPortUrl}] [${bracketProsePortUrl}]下一句 {${bracePortUrl}} |${pipePortUrl}| [${wrappedIpv6PortUrl}] [${wrappedIpv6NoPortUrl}]下一句 _${underscoreRelUrl}_ _${underscoreHttpUrl}_ _${idnWwwUrl}_ ${ideoDotWwwUrl} ${snowmanWwwUrl} ${snowmanPortWwwUrl} ${fwDotWwwUrl} foo_www.keepme ${enDashHttpUrl}, ${enDashRelUrl}, and ${cjkQueryUrl} //user:9876543210`,
       media: [{ url: secretMediaUrl, kind: 'image' }],
     };
     ingestCosmicWebItems(source('rss-priv-img', 'custom-sports', 'alice'), [privItemWithImg], NOW);
@@ -1111,13 +1115,13 @@ describe('2.0 graph and AI contracts', () => {
     const privDet = await svc.cluster('alice', privNode.clusterId);
     expect(privDet.media).toEqual([]);
     expect(JSON.stringify(privDet)).not.toContain(secretMediaUrl);
-    // Round 6–20 Blocker #1/#2/#3: REAL extractCleanArticle -> aiBrief path with IDN bare www. (_www.例子.中国/..._), truncated trailing creds, wrapped portless IPv6 + prose, underscore-wrapped URLs, identifier preservation, and linear 39k-backslash scan
+    // Round 6–21 Blocker #1/#2/#3: REAL extractCleanArticle -> aiBrief path with WHATWG bare www (ideographic dots, symbol hosts, port+prose), truncated numeric password at EOF, wrapped portless IPv6, underscore-wrapped URLs, identifier preservation, and linear/bounded stress checks
     const privItemId = privDet.items[0].id;
     const angleParenUrl = 'https://files.example/report)v2.pdf?token=ANGLEPARENSECRET99';
     const parenSecretUrl = 'https://files.example/chart(v2).png?token=PRIVATESENTINEL99';
     const aposSecretUrl = "https://files.example/team's-deck.pdf?token=APOSSECRET99";
     const extractedPrivate = extractCleanArticle(
-      `<article><h1>Private Memo</h1><p>${unicodePad} Quarterly notes // keep prose comment, //\u2013note: kept, foo_www.keepme, <a href="${angleParenUrl}">Attachment</a>, bare ${parenSecretUrl}, (${parenSecretUrl}), ${aposSecretUrl}, ${unicodeSecretUrl}, ${wwwSecretUrl}, ${schemeRelSecretUrl}, ${ipv6RelSecretUrl}, ${singleHostRelSecretUrl}, ${userinfoRelSecretUrl}, <strong>${boldUserinfoPortUrl}</strong>, <em>${emUserinfoPortUrl}</em>, “${typoQuotePortUrl}”, 请看${cjkPeriodPortUrl}。以及【${cjkBracketPortUrl}】, 请看${userinfoUnicodeProseUrl}。下一句 请看${proseAtUrl}。通知@ops:值班 ${leadingPunctUserUrl} 请看${comma70UserUrl}。下一句 ${emojiPortUrl}📌下一句 [${bracketPortUrl}] [${bracketProsePortUrl}]下一句 {${bracePortUrl}} |${pipePortUrl}| [${wrappedIpv6PortUrl}] [${wrappedIpv6NoPortUrl}]下一句 _${underscoreRelUrl}_ _${underscoreHttpUrl}_ _${idnWwwUrl}_ ${enDashHttpUrl}, ${enDashRelUrl}, and ${cjkQueryUrl}.</p></article>`,
+      `<article><h1>Private Memo</h1><p>${unicodePad} Quarterly notes visit www. // keep prose comment, //\u2013note: kept, foo_www.keepme, <a href="${angleParenUrl}">Attachment</a>, bare ${parenSecretUrl}, (${parenSecretUrl}), ${aposSecretUrl}, ${unicodeSecretUrl}, ${wwwSecretUrl}, ${schemeRelSecretUrl}, ${ipv6RelSecretUrl}, ${singleHostRelSecretUrl}, ${userinfoRelSecretUrl}, <strong>${boldUserinfoPortUrl}</strong>, <em>${emUserinfoPortUrl}</em>, “${typoQuotePortUrl}”, 请看${cjkPeriodPortUrl}。以及【${cjkBracketPortUrl}】, 请看${userinfoUnicodeProseUrl}。下一句 请看${proseAtUrl}。通知@ops:值班 ${leadingPunctUserUrl} 请看${comma70UserUrl}。下一句 ${emojiPortUrl}📌下一句 [${bracketPortUrl}] [${bracketProsePortUrl}]下一句 {${bracePortUrl}} |${pipePortUrl}| [${wrappedIpv6PortUrl}] [${wrappedIpv6NoPortUrl}]下一句 _${underscoreRelUrl}_ _${underscoreHttpUrl}_ _${idnWwwUrl}_ ${ideoDotWwwUrl} ${snowmanWwwUrl} ${snowmanPortWwwUrl} ${fwDotWwwUrl} ${enDashHttpUrl}, ${enDashRelUrl}, and ${cjkQueryUrl}.</p></article>`,
       'https://private.example/img-note',
       'Private img note',
     );
@@ -1128,6 +1132,8 @@ describe('2.0 graph and AI contracts', () => {
     expect(extractedPrivate.markdown).toContain('\\[//user:IPV6NOPORT99@\\[2001:db8::1\\]\\]下一句');
     expect(extractedPrivate.markdown).toContain(`\\_${underscoreRelUrl}\\_`);
     expect(extractedPrivate.markdown).toContain(`\\_${idnWwwUrl}\\_`);
+    expect(extractedPrivate.markdown).toContain(ideoDotWwwUrl);
+    expect(extractedPrivate.markdown).toContain(snowmanWwwUrl);
     expect(extractedPrivate.markdown).toContain(`**${boldUserinfoPortUrl}**`);
     expect(extractedPrivate.markdown).toContain(`*${emUserinfoPortUrl}*`);
     expect(extractedPrivate.markdown).toContain(`“${typoQuotePortUrl}”`);
@@ -1150,17 +1156,23 @@ describe('2.0 graph and AI contracts', () => {
       'BOLDPORTPASS99', 'EMPORTPASS99', 'TYPOQUOTEPASS99', 'CJKPERIODPASS99', 'CJKBRACKETPASS99',
       'USERINFODASHPASS99', 'PROSEATPASS99', 'LEADPUNCTPASS99', 'COMMA70PASS99', 'PINEMOJIPASS99',
       'BRACKETPASS99', 'BRACKETPROSE99', 'BRACEPASS99', 'PIPEPASS99', 'IPV6WRAPPASS99',
-      'IPV6NOPORT99', 'UNDERSCOREPASS99', 'UNDERHTTP99', 'IDNWWWSECRET99', 'TRUNCDB99',
+      'IPV6NOPORT99', 'UNDERSCOREPASS99', 'UNDERHTTP99', 'IDNWWWSECRET99', 'IDEODOTSECRET99',
+      'SNOWMANSECRET99', 'FWDOTSECRET99', '9876543210',
       'ENDASHSECRET99', 'RELENDASHSECRET99', 'CJKQUERYSECRET99', 'EXCERPTSECRET99']) {
       expect(privBriefJson).not.toContain(secret);
     }
     expect(requestAi.mock.lastCall[0].payload.articleMarkdown).toContain('Attachment');
+    expect(requestAi.mock.lastCall[0].payload.articleMarkdown).toContain('visit www.');
     expect(requestAi.mock.lastCall[0].payload.articleMarkdown).toContain('// keep prose comment');
     expect(requestAi.mock.lastCall[0].payload.articleMarkdown).toContain('//\u2013note: kept');
     expect(requestAi.mock.lastCall[0].payload.articleMarkdown).toContain('foo\\_www.keepme');
-    // Round 20 Blocker #1: Real private RSS ingestion clips AFTER private URL redaction so a credential URL straddling char 1,000 never leaks '//user:CLIPPASS99@'
+    // Round 20 & 21 Blocker #1/#2: Real private RSS ingestion redacts BEFORE 1,000-char clip AND bounds CPU fail-closed on a ~1.8 MiB adversarial dense-invalid-authority payload!
     const pad982 = 'x'.repeat(982);
-    const boundaryRss = `<rss><channel><item><title>Boundary RSS Memo</title><link>https://private.example/boundary</link><description>${pad982} //user:CLIPPASS99@intranet:8080 trailing</description></item></channel></rss>`;
+    const dosPayload = `${'//a.b:bad,c,d,e,f,g,h '.repeat(80_000)} //user:DOSTAIL99@intranet:8080`;
+    const boundaryRss = `<rss><channel>
+      <item><title>Boundary RSS Memo</title><link>https://private.example/boundary</link><description>${pad982} //user:CLIPPASS99@intranet:8080 trailing</description></item>
+      <item><title>Adversarial Dense RSS</title><link>https://private.example/dos</link><description>${dosPayload}</description></item>
+    </channel></rss>`;
     const rssSvc = makeService({
       fetcher: async () => ({ status: 200, url: 'https://private.example/boundary.xml', text: async () => boundaryRss }),
       requestAi,
@@ -1169,14 +1181,19 @@ describe('2.0 graph and AI contracts', () => {
       enabledDomainIds: [],
       customDomains: [{ id: 'priv-clip', name: 'Priv Clip', colorToken: 'cyan', enabled: true, keywords: [], rssUrls: ['https://private.example/boundary.xml'] }],
     });
+    const tDos0 = performance.now();
     await rssSvc.refresh('grace', { domainId: 'priv-clip', force: true });
+    expect(performance.now() - tDos0).toBeLessThan(250);
     const graceFeed = rssSvc.feed('grace', { domainId: 'priv-clip' });
-    expect(graceFeed.clusters).toHaveLength(1);
-    expect(graceFeed.clusters[0].summaryExcerpt).not.toContain('CLIPPASS99');
+    expect(graceFeed.clusters).toHaveLength(2);
+    const boundaryCluster = graceFeed.clusters.find(c => c.headline === 'Boundary RSS Memo');
+    const dosCluster = graceFeed.clusters.find(c => c.headline === 'Adversarial Dense RSS');
+    expect(boundaryCluster.summaryExcerpt).not.toContain('CLIPPASS99');
+    expect(dosCluster.summaryExcerpt).not.toContain('DOSTAIL99');
     agents.set('v2-grace', { ownerId: 'grace', name: 'v2-grace', capabilities: ['cosmic_web_briefing', 'cosmic_web_follow_up'], encryptOutbound: false, ws: { readyState: 1, send: () => {} } });
-    await rssSvc.aiBrief('grace', 'user', graceFeed.clusters[0].id, { skipArticleFetch: true, research: true });
+    await rssSvc.aiBrief('grace', 'user', boundaryCluster.id, { skipArticleFetch: true, research: true });
     expect(JSON.stringify(requestAi.mock.lastCall[0].payload)).not.toContain('CLIPPASS99');
-    await rssSvc.followUp('grace', 'user', graceFeed.clusters[0].id, { question: 'Summary?', research: true });
+    await rssSvc.followUp('grace', 'user', boundaryCluster.id, { question: 'Summary?', research: true });
     expect(JSON.stringify(requestAi.mock.lastCall[0].payload)).not.toContain('CLIPPASS99');
     // Round 19 Blocker #3: 39,000-backslash run after URL must redact linearly (< 150ms, never quadratic)
     db.setArticleCache('alice', privItemId, {
@@ -1187,7 +1204,7 @@ describe('2.0 graph and AI contracts', () => {
     await svc.aiBrief('alice', 'user', privNode.clusterId, { research: true, force: true });
     expect(performance.now() - tBs0).toBeLessThan(150);
     expect(JSON.stringify(requestAi.mock.lastCall[0].payload)).not.toContain('BSSTRESS99');
-    // Round 6–20: followUp redacts all alphanumeric sentinels directly in summaryExcerpt
+    // Round 6–21: followUp redacts all alphanumeric sentinels directly in summaryExcerpt (including truncated numeric password at EOF & WHATWG bare www)
     await svc.followUp('alice', 'user', privNode.clusterId, { question: 'Any updates?', research: true });
     const privFuJson = JSON.stringify(requestAi.mock.lastCall[0].payload);
     for (const secret of [secretMediaUrl, 'EXCERPTSECRET99', 'UNICODEDRIFTSECRET99', 'WWWSECRET99',
@@ -1195,11 +1212,13 @@ describe('2.0 graph and AI contracts', () => {
       'BOLDPORTPASS99', 'TYPOQUOTEPASS99', 'CJKPERIODPASS99', 'CJKBRACKETPASS99',
       'USERINFODASHPASS99', 'PROSEATPASS99', 'LEADPUNCTPASS99', 'COMMA70PASS99', 'PINEMOJIPASS99',
       'BRACKETPASS99', 'BRACKETPROSE99', 'BRACEPASS99', 'PIPEPASS99', 'IPV6WRAPPASS99',
-      'IPV6NOPORT99', 'UNDERSCOREPASS99', 'UNDERHTTP99', 'IDNWWWSECRET99', 'TRUNCDB99',
+      'IPV6NOPORT99', 'UNDERSCOREPASS99', 'UNDERHTTP99', 'IDNWWWSECRET99', 'IDEODOTSECRET99',
+      'SNOWMANSECRET99', 'FWDOTSECRET99', '9876543210',
       'ENDASHSECRET99', 'RELENDASHSECRET99', 'CJKQUERYSECRET99']) {
       expect(privFuJson).not.toContain(secret);
     }
     expect(requestAi.mock.lastCall[0].payload.summaryExcerpt).toContain('foo_www.keepme');
+    expect(requestAi.mock.lastCall[0].payload.summaryExcerpt).toContain('visit www.');
 
     // CW2-05 & Round 3 Blocker #1: legacy v1 Agent (no cosmic_web_cancel) retains remote slot accounting after caller abort,
     // defers subsequent requests, AND hands off freed slots when awakened waiters hit the rate boundary (never hanging).

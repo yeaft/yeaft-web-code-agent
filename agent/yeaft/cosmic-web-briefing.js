@@ -146,13 +146,16 @@ function commentItem(item) {
   return { ...comment, ...(sourceUrl ? { sourceUrl } : {}) };
 }
 
-/** Linear-time Markdown link/image/URL stripper for private briefings (defense-in-depth). */
-function stripBracketedLinks(text, imagesOnly) {
+/** Bounded linear-time Markdown link/image/URL stripper for private briefings (defense-in-depth). */
+function stripBracketedLinks(text, imagesOnly, maxSteps = 200_000) {
+  if (imagesOnly ? !text.includes('![') : !text.includes('](')) return text;
   let out = '';
   let i = 0;
+  let steps = 0;
   const len = text.length;
   let nextClose = text.indexOf(']');
   while (i < len) {
+    if (++steps > maxSteps) return out; // Fail closed: discard unprocessed tail on budget exhaustion.
     const matchOpen = imagesOnly ? (text[i] === '!' && text[i + 1] === '[') : (text[i] === '[');
     if (matchOpen && nextClose !== -1) {
       const labelStart = imagesOnly ? i + 2 : i + 1;
@@ -160,22 +163,25 @@ function stripBracketedLinks(text, imagesOnly) {
       if (nextClose !== -1 && nextClose - labelStart <= 512 && text[nextClose + 1] === '(') {
         let j = nextClose + 2;
         const limit = Math.min(len, nextClose + 2 + 2048);
-        while (j < limit && (text[j] === ' ' || text[j] === '\t')) j++;
+        while (j < limit && (text[j] === ' ' || text[j] === '\t')) { j++; steps++; }
         let matchedClose = false;
         if (j < limit && text[j] === '<') {
           // Angle-delimited destination (<...>) emitted by extractCleanArticle: scan as a single unit ignoring ')' inside <...>.
           j++;
           while (j < limit && text[j] !== '>' && text[j] !== '\n') {
+            if (++steps > maxSteps) return out;
             if (text[j] === '\\' && j + 1 < limit) { j += 2; continue; }
             j++;
           }
           if (j < limit && text[j] === '>') {
             j++;
             while (j < limit && text[j] !== ')' && text[j] !== '\n') {
+              if (++steps > maxSteps) return out;
               if (text[j] === '\\' && j + 1 < limit) { j += 2; continue; }
               if (text[j] === '"' || text[j] === "'") {
                 const q = text[j++];
                 while (j < limit && text[j] !== q && text[j] !== '\n') {
+                  if (++steps > maxSteps) return out;
                   if (text[j] === '\\' && j + 1 < limit) { j += 2; continue; }
                   j++;
                 }
@@ -192,6 +198,7 @@ function stripBracketedLinks(text, imagesOnly) {
         } else {
           let depth = 1;
           while (j < limit && depth > 0) {
+            if (++steps > maxSteps) return out;
             if (text[j] === '\\' && j + 1 < limit) { j += 2; continue; }
             if (text[j] === '(') depth++;
             else if (text[j] === ')') depth--;
@@ -213,7 +220,7 @@ function stripBracketedLinks(text, imagesOnly) {
 }
 
 const UNICODE_PUNCT_RE = /[\p{P}\p{S}]/u;
-const UNICODE_ALNUM_RE = /[\p{L}\p{N}]/u;
+const isWhatwgDot = code => code === 0x002e || code === 0x3002 || code === 0xff0e || code === 0xff61;
 function codePointAtInfo(str, idx) {
   const cp = str.codePointAt(idx);
   const width = cp > 0xffff ? 2 : 1;
@@ -262,12 +269,28 @@ function trimTrailingUrlPunct(str, start, end, openParens, closeParens, openBrac
   return j;
 }
 
-function isValidSchemeRelativeCandidate(rawCandidate) {
+function isValidSchemeRelativeCandidate(rawCandidate, budget) {
   const normalized = rawCandidate.replace(/\\([\\`*_{}\[\]<>#!|~.\-+=])/g, '$1');
-  return normalized.length > 2 && /[/?#:@.[]/.test(normalized.slice(2)) && URL.canParse(`https:${normalized}`);
+  if (normalized.length <= 2 || !/[/?#:@.[]/.test(normalized.slice(2))) return false;
+  if (budget) {
+    if (budget.urlChecks >= budget.maxUrlChecks) { budget.exhausted = true; return false; }
+    budget.urlChecks++;
+  }
+  return URL.canParse(`https:${normalized}`);
 }
 
-function matchUrlStartAt(str, offset, identBeforeUnderscores = false) {
+function isValidBareWwwCandidate(rawCandidate, budget) {
+  const normalized = rawCandidate.replace(/\\([\\`*_{}\[\]<>#!|~.\-+=])/g, '$1');
+  if (normalized.length <= 4) return false;
+  if (budget) {
+    if (budget.urlChecks >= budget.maxUrlChecks) { budget.exhausted = true; return false; }
+    budget.urlChecks++;
+  }
+  const parsed = URL.parse(`https://${normalized}`);
+  return Boolean(parsed && parsed.hostname.startsWith('www.') && parsed.hostname.length > 4);
+}
+
+function matchUrlStartAt(str, offset, identBeforeUnderscores = false, budget = null) {
   const len = str.length;
   const prev = offset > 0 ? str.charCodeAt(offset - 1) : 0;
   const prevIsAlnum = (prev >= 48 && prev <= 57) || (prev >= 65 && prev <= 90) || (prev >= 97 && prev <= 122);
@@ -289,22 +312,59 @@ function matchUrlStartAt(str, offset, identBeforeUnderscores = false) {
     if (k + 2 < len && str.charCodeAt(k) === 58 && str.charCodeAt(k + 1) === 47 && str.charCodeAt(k + 2) === 47) {
       return (k + 3) - offset;
     }
-    // 2. Bare www.<host> URL (supports internationalized Unicode host labels such as www.例子.中国/...)
+    // 2. Bare www.<host> URL using WHATWG dot separators (., 。, ．, ｡) and WHATWG URL host normalization
+    // (covers www。例子。中国/..., www.☃.example/..., and explicit ports followed by adjacent localized prose).
     if (offset + 5 <= len
       && (c0 | 32) === 119
       && (str.charCodeAt(offset + 1) | 32) === 119
       && (str.charCodeAt(offset + 2) | 32) === 119
-      && str.charCodeAt(offset + 3) === 46) {
-      const { ch: nextCh } = codePointAtInfo(str, offset + 4);
-      if (UNICODE_ALNUM_RE.test(nextCh)) {
-        return 4;
+      && isWhatwgDot(str.charCodeAt(offset + 3))) {
+      let k = offset + 4;
+      const maxScan = Math.min(len, offset + 512);
+      let openParens = 0, closeParens = 0, openBrackets = 0, closeBrackets = 0;
+      let inPath = false;
+      let seenPortColon = false;
+      let portEndCut = -1;
+      while (k < maxScan && !isBareUrlStop(str[k])) {
+        if (budget && ++budget.scanSteps > budget.maxScanSteps) { budget.exhausted = true; return 0; }
+        if (str[k] === '\\' && k + 1 < maxScan && !isBareUrlStop(str[k + 1])) {
+          const esc = str[k + 1];
+          if (esc === '[') openBrackets++;
+          else if (esc === ']') closeBrackets++;
+          k += 2;
+          continue;
+        }
+        const { cp, width, ch } = codePointAtInfo(str, k);
+        if (!inPath) {
+          if (width === 1 && (ch === '/' || ch === '?' || ch === '#')) {
+            inPath = true;
+          } else if (width === 1 && ch === ':') {
+            seenPortColon = true;
+          } else if (seenPortColon && portEndCut === -1 && !(width === 1 && cp >= 48 && cp <= 57)) {
+            portEndCut = k;
+          }
+        }
+        if (width === 1) {
+          if (ch === '(') openParens++;
+          else if (ch === ')') closeParens++;
+          else if (ch === '[') openBrackets++;
+          else if (ch === ']') closeBrackets++;
+        }
+        k += width;
+      }
+      const trimmedEnd = trimTrailingUrlPunct(str, offset + 4, k, openParens, closeParens, openBrackets, closeBrackets);
+      if (isValidBareWwwCandidate(str.slice(offset, trimmedEnd), budget)) return 4;
+      if (budget?.exhausted) return 0;
+      if (portEndCut > offset + 4) {
+        const portPrefixEnd = trimTrailingUrlPunct(str, offset + 4, portEndCut, openParens, closeParens, openBrackets, closeBrackets);
+        if (isValidBareWwwCandidate(str.slice(offset, portPrefixEnd), budget)) return 4;
       }
     }
   }
 
   // 3. Scheme-relative //authority/... URL: allows leading '_' emphasis wrappers (_//user:pass@host:8080_),
-  // scans by full Unicode code point, snapshots per-cut bracket/paren counts so later brackets never break IPv6 cuts,
-  // and separates pre/post-'@' cut budgets.
+  // scans by full Unicode code point within a shared global CPU/validation budget, snapshots per-cut bracket/paren counts,
+  // and fails closed on truncated credential/authority fragments at EOF (including digit-only numeric passwords).
   if (!prevIsAlnum && offset + 3 < len && c0 === 47 && str.charCodeAt(offset + 1) === 47 && prev !== 58 && prev !== 47) {
     const next = str[offset + 2];
     if (next && next !== '/' && !isBareUrlStop(next)) {
@@ -321,6 +381,7 @@ function matchUrlStartAt(str, offset, identBeforeUnderscores = false) {
       const preAtCuts = [];
       const postAtCuts = [];
       while (k < maxScan && !isBareUrlStop(str[k])) {
+        if (budget && ++budget.scanSteps > budget.maxScanSteps) { budget.exhausted = true; return 0; }
         if (str[k] === '\\' && k + 1 < maxScan && !isBareUrlStop(str[k + 1])) {
           const esc = str[k + 1];
           const isEscWrapDelim = (esc === ']' && closeBrackets >= openBrackets)
@@ -350,7 +411,6 @@ function matchUrlStartAt(str, offset, identBeforeUnderscores = false) {
           || ch === '\'' || ch === '`' || ch === '*' || ch === '_' || ch === '~'
         ));
         if (isDelim) {
-          // Separate pre-'@' and post-'@' cut budgets and snapshot prefix bracket/paren state at each cut.
           const couldBeComplete = seenUrlSignal && (seenAt || seenPath || !hasNonPortAfterColon);
           if (!prevWasDelim && couldBeComplete) {
             const bucket = seenAt ? postAtCuts : preAtCuts;
@@ -386,42 +446,51 @@ function matchUrlStartAt(str, offset, identBeforeUnderscores = false) {
         k += width;
       }
       const trimmedEnd = trimTrailingUrlPunct(str, offset + 2, k, openParens, closeParens, openBrackets, closeBrackets);
-      if (isValidSchemeRelativeCandidate(str.slice(offset, trimmedEnd))) return 2;
+      if (isValidSchemeRelativeCandidate(str.slice(offset, trimmedEnd), budget)) return 2;
+      if (budget?.exhausted) return 0;
       for (const c of postAtCuts) {
         const prefixEnd = trimTrailingUrlPunct(str, offset + 2, c.cut, c.openParens, c.closeParens, c.openBrackets, c.closeBrackets);
-        if (isValidSchemeRelativeCandidate(str.slice(offset, prefixEnd))) return 2;
+        if (isValidSchemeRelativeCandidate(str.slice(offset, prefixEnd), budget)) return 2;
+        if (budget?.exhausted) return 0;
       }
       for (const c of preAtCuts) {
         const prefixEnd = trimTrailingUrlPunct(str, offset + 2, c.cut, c.openParens, c.closeParens, c.openBrackets, c.closeBrackets);
-        if (isValidSchemeRelativeCandidate(str.slice(offset, prefixEnd))) return 2;
+        if (isValidSchemeRelativeCandidate(str.slice(offset, prefixEnd), budget)) return 2;
+        if (budget?.exhausted) return 0;
       }
-      // Discard truncated credential-bearing or unclosed-IPv6 authority fragments at the end of a clipped field
-      // (e.g. a 1,000-char RSS excerpt ending in '//user:PRIVATE99@', '//user:PRIVATE99', or '//[2001:db8').
-      if (k === len && (seenAt || inBrackets || (seenPortColon && hasNonPortAfterColon))) return 2;
+      // Fail closed on any truncated credential-bearing (including digit-only numeric passwords) or unclosed-IPv6
+      // authority fragment at the end of a clipped field (e.g. '//user:1234567890', '//user:PRIVATE99@', '//[2001:db8').
+      if (k === len && (seenAt || inBrackets || seenPortColon)) return 2;
     }
   }
   return 0;
 }
 
-function stripPrivateUrls(text) {
+function stripPrivateUrls(text, { maxOutputChars = Infinity, maxUrlChecks = 256, maxScanSteps = 128_000 } = {}) {
   if (typeof text !== 'string' || !text) return text;
   const noLinks = stripBracketedLinks(stripBracketedLinks(text, true), false);
+  const budget = { urlChecks: 0, scanSteps: 0, maxUrlChecks, maxScanSteps, exhausted: false };
   let out = '';
   let i = 0;
   const len = noLinks.length;
   let nextGt = noLinks.indexOf('>');
   let identBeforeUnderscores = false;
   while (i < len) {
-    if (noLinks[i] === '<' && matchUrlStartAt(noLinks, i + 1, false) > 0) {
+    if (out.length >= maxOutputChars) break;
+    if (++budget.scanSteps > budget.maxScanSteps) { budget.exhausted = true; break; }
+    if (noLinks[i] === '<' && matchUrlStartAt(noLinks, i + 1, false, budget) > 0) {
       while (nextGt !== -1 && nextGt <= i) nextGt = noLinks.indexOf('>', nextGt + 1);
       if (nextGt !== -1) { i = nextGt + 1; identBeforeUnderscores = false; continue; }
     }
-    const prefixLen = matchUrlStartAt(noLinks, i, identBeforeUnderscores);
+    if (budget.exhausted) break; // Fail closed: discard unprocessed remainder.
+    const prefixLen = matchUrlStartAt(noLinks, i, identBeforeUnderscores, budget);
+    if (budget.exhausted) break; // Fail closed: discard unprocessed remainder.
     if (prefixLen > 0) {
       let j = i + prefixLen;
       let openParens = 0, closeParens = 0, openBrackets = 0, closeBrackets = 0;
       // Consume the entire non-whitespace/non-angle/non-quote token by full code point, trimming trailing delimiters only from the end.
       while (j < len && !isBareUrlStop(noLinks[j])) {
+        if (++budget.scanSteps > budget.maxScanSteps) { budget.exhausted = true; break; }
         if (noLinks[j] === '\\' && j + 1 < len && !isBareUrlStop(noLinks[j + 1])) {
           const esc = noLinks[j + 1];
           if (esc === '[') openBrackets++;
@@ -438,6 +507,7 @@ function stripPrivateUrls(text) {
         }
         j += width;
       }
+      if (budget.exhausted) break; // Fail closed: discard partially scanned URL and remainder.
       j = trimTrailingUrlPunct(noLinks, i, j, openParens, closeParens, openBrackets, closeBrackets);
       i = j;
       identBeforeUnderscores = false;
@@ -458,12 +528,16 @@ function stripPrivateUrls(text) {
 function buildNewsData(payload) {
   const input = isRecord(payload) ? payload : {};
   const isPrivate = input.isPrivateSource === true;
-  const projected = projectText(input, { headline: 500, articleMarkdown: 12_000, url: MAX_URL, sourceUrl: MAX_URL, quality: 40, date: 32,
+  // Scrub private evidence BEFORE clipping to field limits so boundary-straddling URLs/credentials cannot survive.
+  const scrubbedInput = isPrivate ? {
+    ...input,
+    ...(typeof input.articleMarkdown === 'string' ? { articleMarkdown: stripPrivateUrls(input.articleMarkdown, { maxOutputChars: 12_000 }) } : {}),
+    ...(typeof input.summaryExcerpt === 'string' ? { summaryExcerpt: stripPrivateUrls(input.summaryExcerpt, { maxOutputChars: 1000 }) } : {}),
+    ...(typeof input.context === 'string' ? { context: stripPrivateUrls(input.context, { maxOutputChars: 3000 }) } : {}),
+    ...(typeof input.briefContext === 'string' ? { briefContext: stripPrivateUrls(input.briefContext, { maxOutputChars: 3000 }) } : {}),
+  } : input;
+  const projected = projectText(scrubbedInput, { headline: 500, articleMarkdown: 12_000, url: MAX_URL, sourceUrl: MAX_URL, quality: 40, date: 32,
     question: 500, topic: 300, topicName: 300, query: 300, tldr: 400, context: 3000, briefContext: 3000, summaryExcerpt: 1000 });
-  if (isPrivate) {
-    if (projected.articleMarkdown) projected.articleMarkdown = stripPrivateUrls(projected.articleMarkdown);
-    if (projected.summaryExcerpt) projected.summaryExcerpt = stripPrivateUrls(projected.summaryExcerpt);
-  }
   return {
     ...projected,
     ...(input.keywords ? { keywords: (Array.isArray(input.keywords) ? take(input.keywords, 12) : [input.keywords])
@@ -471,10 +545,13 @@ function buildNewsData(payload) {
     ...(!isPrivate && Array.isArray(input.media) ? { media: take(input.media, 12).map(mediaItem).filter(Boolean) } : {}),
     ...(Array.isArray(input.communityComments) ? { communityComments: take(input.communityComments, 24).map(commentItem).filter(Boolean) } : {}),
     sources: take(input.sources, 12).map(source => {
-      const evidence = projectEvidence(source, 1000);
-      if (isPrivate && isRecord(evidence) && evidence.summaryExcerpt) {
-        evidence.summaryExcerpt = stripPrivateUrls(evidence.summaryExcerpt);
-      }
+      const scrubbedSource = isPrivate && isRecord(source) ? {
+        ...source,
+        ...(typeof source.summaryExcerpt === 'string' ? { summaryExcerpt: stripPrivateUrls(source.summaryExcerpt, { maxOutputChars: 1000 }) } : {}),
+        ...(typeof source.excerpt === 'string' ? { excerpt: stripPrivateUrls(source.excerpt, { maxOutputChars: 1000 }) } : {}),
+        ...(typeof source.summary === 'string' ? { summary: stripPrivateUrls(source.summary, { maxOutputChars: 1000 }) } : {}),
+      } : source;
+      const evidence = projectEvidence(scrubbedSource, 1000);
       return !isPrivate && Array.isArray(source?.media) && isRecord(evidence)
         ? { ...evidence, media: take(source.media, 8).map(mediaItem).filter(Boolean) } : evidence;
     }),
