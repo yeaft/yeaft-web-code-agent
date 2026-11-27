@@ -7,7 +7,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const state = vi.hoisted(() => ({
   agents: new Map(), webClients: new Map(), previewFiles: new Map(),
-  users: new Map(), trackMessageBytesSent: () => {},
+  users: new Map(), workbenchSessions: new Map(), trackMessageBytesSent: () => {},
+  directoryCache: new Map(), DIR_CACHE_TTL: 60_000, DIR_CACHE_MAX_SIZE: 100,
 }));
 vi.mock('../../server/context.js', async () => {
   const { PendingFileStore } = await import('../../server/pending-files.js');
@@ -25,13 +26,24 @@ vi.mock('../../server/database.js', () => ({ userDb: {
   updateLogin: () => {},
 }, scheduledTaskReceiptDb: { getByUser: () => [] } }));
 vi.mock('../../server/yeaft-asset-store.js', () => ({ yeaftAssetStore: {} }));
-vi.mock('../../server/workbench-preview.js', () => ({}));
+vi.mock('../../server/db/user-db.js', () => ({ userDb: {
+  get: id => [...state.users.values()].find(user => user.id === id),
+} }));
+vi.mock('../../server/db/yeaft-session-db.js', () => ({ yeaftSessionDb: {
+  getForAgent: (userId, agentId, id) => state.workbenchSessions.get(JSON.stringify([userId, agentId, id])),
+} }));
 
 import { CONFIG } from '../../server/config.js';
 import { activeSessions, revokedSessions, revokedTokens } from '../../server/auth/session-store.js';
 import { issueSessionToken, logout, maybeRenewToken, verifyToken } from '../../server/auth/token.js';
 import { handleWebConnection } from '../../server/ws-client.js';
 import { createCreationRelay } from '../../server/handlers/client-creation.js';
+import { createWorkbenchPreview, openWorkbenchVideo, readWorkbenchPreview } from '../../server/workbench-preview.js';
+import { handleClientWorkbench } from '../../server/handlers/client-workbench.js';
+import { __testResetWorkbenchCorrelations, peekWorkbenchRequest } from '../../server/workbench-correlation.js';
+import { resolveAgentAccessError, setCachedDir } from '../../server/ws-utils.js';
+import { workbenchRouteKey, workbenchWorkspaceGeneration } from '../../server/workbench-route.js';
+import { handleAgentFileTerminal } from '../../server/handlers/agent-file-terminal.js';
 import { handleAgentCreation } from '../../server/handlers/agent-creation.js';
 import { validateCreationAttachments, MAX_CREATION_ATTACHMENT_BYTES } from '../../server/creation-attachment-policy.js';
 import { closeCreationMediaReads, CREATION_MEDIA_CHUNK_BYTES, readCreationMediaChunk } from '../../server/creation-media-relay.js';
@@ -63,9 +75,12 @@ beforeEach(() => {
   state.webClients.clear();
   state.pendingFiles.clear();
   state.users.clear();
+  state.previewFiles.clear();
+  state.directoryCache.clear();
+  state.workbenchSessions.clear();
   state.users.set('alice', { id: 'user-a', deletion_state: 'active' });
   state.users.set('bob', { id: 'user-b', deletion_state: 'active' });
-  agent = { ownerId: 'user-a', conversations: new Map(), capabilities: ['creations'], encryptOutbound: false, ws: socket() };
+  agent = { ownerId: 'user-a', conversations: new Map(), capabilities: ['creations', 'creation_workbench_files'], encryptOutbound: false, ws: socket() };
   state.agents.set(agentId, agent);
   client = browser('user-a');
   peer = browser('user-a');
@@ -75,6 +90,7 @@ beforeEach(() => {
 });
 afterEach(() => {
   relay.close();
+  __testResetWorkbenchCorrelations();
   closeCreationMediaReads(agentId, agent);
   activeSessions.clear();
   revokedTokens.clear();
@@ -103,6 +119,269 @@ const binaryParser = (res, callback) => {
   res.on('end', () => callback(null, Buffer.concat(chunks)));
 };
 const get = (path = url, username = 'alice') => request(app).get(path).set('test-user', username).buffer(true).parse(binaryParser);
+
+describe('Creation Workbench relay and previews', () => {
+  const route = { runtimeProvider: 'yeaft', agentId, sessionId: 'session-a' };
+  const workDir = '/workspace/session';
+  const routeKey = workbenchRouteKey(route);
+  const workspaceGeneration = workbenchWorkspaceGeneration(routeKey, workDir);
+  const filePath = '/workspace/creation/cover.png';
+  const bytes = Buffer.from('art');
+  const send = extra => handleClientWorkbench('client', client, {
+    agentId, workbenchRoute: route, requestId: 'browser-1', creationId: ' creation-a ',
+    _requestUserId: 'spoofed', _requestClientId: 'other', _workbenchRequestId: 'spoofed', ...extra,
+  }, id => !resolveAgentAccessError(id, client.userId, client.role));
+
+  beforeEach(() => {
+    client.workbenchRouteProtocol = 1;
+    state.users.get('alice').role = 'pro';
+    state.workbenchSessions.set(JSON.stringify(['user-a', agentId, route.sessionId]), { id: route.sessionId, workDir });
+    agent.capabilities.push('workbench_session_routes', 'workbench_request_correlation', 'workbench_video_stream', 'response_image_preview');
+  });
+
+  it.each(['list_directory', 'read_file', 'write_file', 'upload_to_dir'])('stamps the authenticated owner on correlated %s', async type => {
+    expect(await send({ type, filePath, dirPath: '.' })).toBe(true);
+    const outbound = frame(agent);
+    expect(outbound).toMatchObject({ type, creationId: 'creation-a', _requestUserId: 'user-a' });
+    expect(outbound._requestClientId).toBeUndefined();
+    expect(outbound._workbenchRequestId).toMatch(/^[0-9a-f-]{36}$/);
+  });
+
+  it('stamps the owner when a routed Agent does not support opaque correlation', async () => {
+    agent.capabilities = agent.capabilities.filter(cap => cap !== 'workbench_request_correlation');
+    await send({ type: 'read_file', filePath });
+    expect(frame(agent)).toMatchObject({ creationId: 'creation-a', _requestUserId: 'user-a', _requestClientId: 'client' });
+  });
+
+  it.each(['terminal_create', 'git_status', 'file_search', 'search_files', 'video_chunk'])('rejects Creation scope on %s', async type => {
+    expect(await send({ type })).toBe(true);
+    expect(frame(client)).toMatchObject({ type: 'error', message: 'Invalid Workbench Session route' });
+    expect(agent.ws.send).not.toHaveBeenCalled();
+  });
+
+  it.each([false, {}, '   ', 'a\0b', '../creation-a', 'a'.repeat(257)])('rejects malformed Creation scope (%j)', async creationId => {
+    expect(await send({ type: 'read_file', filePath, creationId })).toBe(true);
+    expect(frame(client).type).toBe('error');
+    expect(agent.ws.send).not.toHaveBeenCalled();
+  });
+
+  it.each([null, ''])('keeps ordinary correlated requests unscoped for %j', async creationId => {
+    await send({ type: 'read_file', filePath, creationId });
+    const outbound = frame(agent);
+    expect(outbound).not.toHaveProperty('creationId');
+    expect(outbound).not.toHaveProperty('_requestUserId');
+    expect(peekWorkbenchRequest({ agentId, requestId: outbound._workbenchRequestId, responseType: 'file_content' }))
+      .toMatchObject({ creationId: null, userId: 'user-a' });
+  });
+
+  it('rejects a route-less Creation file read without forwarding or minting a preview', async () => {
+    delete client.workbenchRouteProtocol;
+    agent.capabilities = ['creations', 'creation_workbench_files'];
+    await send({ type: 'read_file', filePath, workbenchRoute: undefined });
+    expect(agent.ws.send).not.toHaveBeenCalled();
+    const responses = client.ws.send.mock.calls.map(([wire]) => JSON.parse(wire));
+    expect(responses).toContainEqual(expect.objectContaining({
+      type: 'file_content', requestId: 'browser-1', error: 'Invalid Workbench Session route',
+    }));
+    expect(responses.every(response => !response.previewToken && !response.previewUrl)).toBe(true);
+    expect(state.previewFiles.size).toBe(0);
+  });
+
+  it('rejects Creation scope on the route-less directory picker and bypasses the unscoped directory cache on a routed list', async () => {
+    await send({ type: 'list_directory', workbenchRoute: undefined, conversationId: '_workdir_picker', directoryPickerScope: 'agent' });
+    expect(agent.ws.send).not.toHaveBeenCalled();
+    setCachedDir(agentId, '.', [{ name: 'ordinary cached file' }]);
+    await send({ type: 'list_directory', dirPath: '.' });
+    expect(frame(agent)).toMatchObject({ creationId: 'creation-a', _requestUserId: 'user-a' });
+  });
+
+  function reconnectWithoutConfinement() {
+    const replacement = { ...agent, ws: socket(), capabilities: agent.capabilities.filter(cap => cap !== 'creation_workbench_files') };
+    state.agents.set(agentId, replacement);
+    return replacement;
+  }
+
+  it.each([
+    ['read_file', 'file_content'],
+    ['list_directory', 'directory_listing'],
+    ['video_metadata', 'video_metadata'],
+  ])('rejects Creation-scoped %s when Agent only advertises general Creation support', async (type, responseType) => {
+    const replacement = reconnectWithoutConfinement();
+    await send({ type, filePath, dirPath: '.' });
+    expect(replacement.ws.send).not.toHaveBeenCalled();
+    expect(client.ws.send.mock.calls.map(([wire]) => JSON.parse(wire))).toContainEqual(expect.objectContaining({
+      type: responseType, requestId: 'browser-1', error: 'Invalid Workbench Session route',
+    }));
+  });
+
+  async function mintImage() {
+    await send({ type: 'read_file', filePath, responseImagePreview: true });
+    const { _workbenchRequestId, conversationId } = frame(agent);
+    const pending = peekWorkbenchRequest({ agentId, requestId: _workbenchRequestId, responseType: 'file_content' });
+    expect(pending).toMatchObject({ userId: 'user-a', creationId: 'creation-a', routeKey, workspaceGeneration });
+    // The response does not have to echo any user or Creation fields.
+    await handleAgentFileTerminal(agentId, agent, {
+      type: 'file_content', _workbenchRequestId, conversationId, filePath,
+      binary: true, mimeType: 'image/png', content: bytes.toString('base64'),
+    });
+    const { fileId, previewToken, previewUrl } = frame(client);
+    expect(previewToken).toMatch(/^wb1\./);
+    return { fileId, previewToken, previewUrl, pending };
+  }
+
+  it('revalidates minted image previews even on a cache hit, and evicts stale bytes on denial', async () => {
+    const { fileId, previewToken, previewUrl } = await mintImage();
+    expect(state.previewFiles.get(fileId)).toMatchObject({ token: previewToken, buffer: bytes });
+    let revoked = false;
+    agent.ws.send.mockImplementation(wire => {
+      const pull = JSON.parse(wire);
+      expect(pull).toMatchObject({ type: 'read_file', creationId: 'creation-a', _requestUserId: 'user-a',
+        filePath, download: true, responseImagePreview: true, workDir, workbenchRoute: route,
+        workbenchWorkspaceGeneration: workspaceGeneration });
+      void handleAgentFileTerminal(agentId, agent, {
+        ...pull, type: 'file_content', binary: !revoked, mimeType: 'image/png',
+        ...(revoked ? { error: 'Creation workspace is unavailable.', errorCode: 'FILE_OUTSIDE_WORKSPACE' }
+          : { content: bytes.toString('base64') }),
+      });
+    });
+    // Simulate unlinking after minting, before any cached bytes can be served.
+    revoked = true;
+    await request(app).get(previewUrl).expect(502, 'Creation workspace is unavailable.');
+    expect(state.previewFiles.has(fileId)).toBe(false);
+    // The same capability can refill after the Agent recognizes the link again.
+    revoked = false;
+    const response = await get(previewUrl).expect(200);
+    expect(response.body).toEqual(bytes);
+    expect(agent.ws.send).toHaveBeenCalledTimes(3);
+  });
+
+  it('does not share refill bytes across Creations even for the same file ID and path', async () => {
+    const { fileId, previewToken, pending } = await mintImage();
+    const siblingToken = createWorkbenchPreview(fileId, { ...pending, creationId: 'creation-b' }, filePath);
+    const reads = [readWorkbenchPreview(fileId, previewToken), readWorkbenchPreview(fileId, siblingToken)];
+    const pulls = agent.ws.send.mock.calls.slice(1).map(([wire]) => JSON.parse(wire));
+    expect(pulls.map(pull => pull.creationId)).toEqual(['creation-a', 'creation-b']);
+    for (const pull of pulls.toReversed()) {
+      expect(pull._requestUserId).toBe('user-a');
+      await handleAgentFileTerminal(agentId, agent, {
+        ...pull, type: 'file_content', binary: true, mimeType: 'image/png',
+        content: Buffer.from(pull.creationId).toString('base64'),
+      });
+    }
+    expect((await Promise.all(reads)).map(file => file.buffer.toString())).toEqual(['creation-a', 'creation-b']);
+  });
+
+  const videoMetadata = { filePath: '/workspace/creation/clip.mp4', size: 8, mtimeMs: 1234, mimeType: 'video/mp4' };
+
+  async function mintVideo(metadata = videoMetadata) {
+    await send({ type: 'video_metadata', filePath: metadata.filePath });
+    const probe = frame(agent);
+    expect(probe).toMatchObject({ type: 'video_metadata', creationId: 'creation-a', _requestUserId: 'user-a' });
+    await handleAgentFileTerminal(agentId, agent, {
+      type: 'video_metadata', _workbenchRequestId: probe._workbenchRequestId, conversationId: probe.conversationId, ...metadata,
+    });
+    const capability = frame(client);
+    expect(capability.previewToken).toMatch(/^wbv1\./);
+    return capability;
+  }
+
+  it.each([['disconnect', 503], ['downgraded reconnect', 403]])('blocks stale image previews after Agent %s and evicts cached bytes', async (event, status) => {
+    const { fileId, previewUrl } = await mintImage();
+    const replacement = event === 'disconnect' ? null : reconnectWithoutConfinement();
+    if (!replacement) state.agents.delete(agentId);
+    expect(state.previewFiles.has(fileId)).toBe(true);
+    await request(app).get(previewUrl).expect(status);
+    expect(state.previewFiles.has(fileId)).toBe(false);
+    expect(agent.ws.send).toHaveBeenCalledTimes(1);
+    if (replacement) expect(replacement.ws.send).not.toHaveBeenCalled();
+  });
+
+  it('checks the current Agent on every video pull and metadata revalidation even after opening a descriptor', async () => {
+    const { fileId, previewToken, previewUrl } = await mintVideo();
+    const video = openWorkbenchVideo(fileId, previewToken);
+    const replacement = reconnectWithoutConfinement();
+    await expect(video.read(0, 2)).rejects.toMatchObject({ status: 403 });
+    await expect(video.revalidate()).rejects.toMatchObject({ status: 403 });
+    await request(app).get(previewUrl).set('Range', 'bytes=0-2').expect(403);
+    expect(replacement.ws.send).not.toHaveBeenCalled();
+    expect(agent.ws.send).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    ['head', 8, 'FILE_OUTSIDE_WORKSPACE', 403],
+    ['get', 0, 'ENOENT', 404],
+  ])('revalidates Creation video on %s (size %i) and rejects revoked access', async (method, size, errorCode, status) => {
+    const metadata = { ...videoMetadata, size };
+    const { previewUrl } = await mintVideo(metadata);
+    let revoked = false;
+    agent.ws.send.mockImplementation(wire => {
+      const pull = JSON.parse(wire);
+      expect(pull).toMatchObject({
+        type: 'video_metadata', creationId: 'creation-a', _requestUserId: 'user-a',
+        filePath: metadata.filePath, workDir, workbenchRoute: route, workbenchWorkspaceGeneration: workspaceGeneration,
+      });
+      void handleAgentFileTerminal(agentId, agent, {
+        ...pull,
+        ...(revoked ? { error: 'Creation workspace is unavailable.', errorCode } : metadata),
+      });
+    });
+    const fetchPreview = () => {
+      const req = request(app)[method](previewUrl);
+      return method === 'head' ? req.set('Range', 'bytes=2-4') : req;
+    };
+    await fetchPreview().expect(method === 'head' ? 206 : 200)
+      .expect('Content-Type', 'video/mp4').expect('Content-Length', method === 'head' ? '3' : '0');
+    revoked = true;
+    const denied = await fetchPreview().expect(status);
+    expect(denied.headers['content-range']).toBeUndefined();
+    expect(denied.headers['content-disposition']).toBeUndefined();
+    expect(agent.ws.send).toHaveBeenCalledTimes(3);
+    expect(client.ws.send).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    ['HEAD with an unsatisfiable range', 'head', 8, 'bytes=9999-', 'FILE_OUTSIDE_WORKSPACE', 403],
+    ['GET with a range on a zero-byte video', 'get', 0, 'bytes=0-0', 'ENOENT', 404],
+  ])('rejects a revoked Creation video capability on %s without disclosing its size', async (_label, method, size, range, errorCode, status) => {
+    const { previewUrl } = await mintVideo({ ...videoMetadata, size });
+    agent.ws.send.mockImplementation(wire => {
+      const pull = JSON.parse(wire);
+      expect(pull).toMatchObject({
+        type: 'video_metadata', creationId: 'creation-a', _requestUserId: 'user-a',
+        filePath: videoMetadata.filePath, workDir, workbenchRoute: route, workbenchWorkspaceGeneration: workspaceGeneration,
+      });
+      void handleAgentFileTerminal(agentId, agent, {
+        ...pull, error: 'Creation workspace is unavailable.', errorCode,
+      });
+    });
+
+    const denied = await request(app)[method](previewUrl).set('Range', range).expect(status);
+    expect(denied.headers['content-range']).toBeUndefined();
+    expect(agent.ws.send).toHaveBeenCalledTimes(2);
+  });
+
+  it('binds the video metadata handshake and HTTP range pulls to the Creation owner', async () => {
+    const metadata = videoMetadata;
+    const { previewUrl } = await mintVideo(metadata);
+    let revoked = false;
+    agent.ws.send.mockImplementation(wire => {
+      const pull = JSON.parse(wire);
+      expect(pull).toMatchObject({ type: 'video_chunk', creationId: 'creation-a', _requestUserId: 'user-a',
+        filePath: metadata.filePath, workDir, workbenchRoute: route, workbenchWorkspaceGeneration: workspaceGeneration,
+        start: 2, end: 4, expectedSize: metadata.size, expectedMtimeMs: metadata.mtimeMs });
+      void handleAgentFileTerminal(agentId, agent, {
+        ...pull, ...metadata,
+        ...(revoked ? { error: 'Creation workspace is unavailable.', errorCode: 'FILE_OUTSIDE_WORKSPACE' }
+          : { content: bytes.toString('base64') }),
+      });
+    });
+    const response = await get(previewUrl).set('Range', 'bytes=2-4').expect(206).expect('Content-Range', 'bytes 2-4/8');
+    expect(response.body).toEqual(bytes);
+    revoked = true;
+    await request(app).get(previewUrl).set('Range', 'bytes=2-4').expect(502, 'Creation workspace is unavailable.');
+    expect(agent.ws.send).toHaveBeenCalledTimes(3);
+  });
+});
 
 describe('Creation WebSocket relay', () => {
   it.each(['email_verify', 'totp_verify', 'temp', 'totp-setup'])('rejects a %s token before registering the socket', type => {
@@ -209,6 +488,19 @@ describe('Creation WebSocket relay', () => {
     await relay.request(client, msg({ ownerId: 'spoofed', payload: { creationId: 'creation-a' } }));
     expect(frame(agent)).toEqual({ type: 'creation_request', requestId: expect.stringMatching(/^[0-9a-f-]{36}$/), op: 'get_creation', ownerId: 'user-a', payload: { creationId: 'creation-a' } });
     expect(frame(agent).requestId).not.toBe('browser-1');
+  });
+
+  it.each(['ensure_workspace', 'find_by_folder'])('allowlists %s for the owner only', async op => {
+    const payload = { ...(op === 'ensure_workspace' ? { creationId: 'creation-a' } : {}), rootDir: '/workspace/example' };
+    await relay.request(other, msg({ op, payload }));
+    expect(frame(other)).toMatchObject({ op, ok: false, errorCode: 'forbidden' });
+    expect(agent.ws.send).not.toHaveBeenCalled();
+    await relay.request(client, msg({ op, payload }));
+    expect(frame(agent)).toMatchObject({ type: 'creation_request', op, ownerId: 'user-a', payload });
+    await relay.response(agentId, agent, { type: 'creation_response', requestId: frame(agent).requestId,
+      ok: false, errorCode: 'invalid_request', error: 'Expected a canonical directory with no symbolic links' });
+    expect(frame(client)).toMatchObject({ op, requestId: 'browser-1', ok: false, errorCode: 'invalid_request',
+      error: expect.stringContaining('symbolic links') });
   });
 
   it.each([
@@ -335,7 +627,10 @@ describe('Creation upload attachment policy', () => {
       });
       if (exit === 'timeout') {
         await vi.advanceTimersByTimeAsync(45_000);
-        expect(frame(client)).toMatchObject({ ok: false, errorCode: 'timeout' });
+        const responses = client.ws.send.mock.calls.map(([wire]) => JSON.parse(wire));
+        expect(responses).toContainEqual(expect.objectContaining({
+          type: 'creation_response', requestId: large.requestId, ok: false, errorCode: 'timeout',
+        }));
         await relay.response(agentId, agent, { type: 'creation_response', requestId, ok: true });
       }
       if (exit === 'browser disconnect') relay.clearClient(client);

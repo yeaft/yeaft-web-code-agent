@@ -3,9 +3,40 @@
  *
  * Strictly uses Pinia `useCreationsStore`, `$t()` i18n keys, and CSS tokens from `creations.css`.
  */
-import { useCreationsStore } from '../../../stores/creations.js';
-import { t } from '../../../utils/i18n.js';
+import * as creationsStoreModule from '../../../stores/creations.js';
+import { useChatStore } from '../../../stores/chat.js';
+import { useSessionsStore } from '../../../stores/sessions.js';
+import { getLocale, t } from '../../../utils/i18n.js';
 import { COSMOS_BOOKS_KEY } from '../../../cosmos/constants.js';
+
+const { creationSessionsForAgent, newCreationAttemptKey, useCreationsStore } = creationsStoreModule;
+
+function formatAgentDisplayName(ag) {
+  if (typeof creationsStoreModule.formatAgentDisplayName === 'function') {
+    return creationsStoreModule.formatAgentDisplayName(ag);
+  }
+  if (!ag) return '';
+  if (typeof ag === 'string') {
+    return ag.replace(/^user_\d+_[a-z0-9]+:/i, '') || ag;
+  }
+  const rawName = String(ag.name || '').trim();
+  if (rawName && !/^user_\d+_[a-z0-9]+:/i.test(rawName)) return rawName;
+  const rawId = String(ag.id || rawName || '').trim();
+  return rawId.replace(/^user_\d+_[a-z0-9]+:/i, '') || rawId;
+}
+
+function tOr(key, fallback, params) {
+  const translated = t(key, params);
+  return translated && translated !== key ? translated : fallback;
+}
+
+function formatShortDirPath(dirPath) {
+  const raw = String(dirPath || '').trim().replace(/\\/g, '/').replace(/\/+$/, '');
+  if (!raw) return '';
+  const parts = raw.split('/').filter(Boolean);
+  if (parts.length <= 2) return raw;
+  return `…/${parts.slice(-2).join('/')}`;
+}
 
 const LEGACY_BOOKS_DISMISSED_KEY = 'yeaft-cosmos-legacy-books-dismissed-v1';
 const LEGACY_BOOKS_IMPORTED_KEY = 'yeaft-cosmos-legacy-books-imported-v1';
@@ -118,7 +149,7 @@ export default {
                 @click="selectAgent(ag.id)"
               >
                 <span class="creation-agent-dot" :class="{ 'is-online': ag.online }"></span>
-                <span>{{ ag.name || ag.id }}</span>
+                <span>{{ formatAgentDisplayName(ag) }}</span>
                 <span class="creation-agent-count">{{ creationsStore.creationsForAgent(ag.id).length }}</span>
               </button>
             </div>
@@ -245,6 +276,10 @@ export default {
               <div class="creation-card-title">{{ item.title || $t('creation.kind.' + (item.kind || 'book')) }}</div>
               <div class="creation-card-summary">{{ item.summary || '' }}</div>
 
+              <div v-if="projectNameFor(item.projectId)" class="creation-inspector-meta">
+                <span class="creation-meta-badge">{{ projectNameFor(item.projectId) }}</span>
+              </div>
+
               <div class="creation-card-stats">
                 <span>{{ $t('creation.inspector.units', { count: item.unitCount || 0 }) }}</span>
                 <span>·</span>
@@ -258,17 +293,16 @@ export default {
                   <button
                     type="button"
                     class="creation-glass-btn is-primary"
-                    @click="openCreationItem(item, defaultModeFor(item))"
+                    @click="openCreationItem(item, 'read')"
                   >
-                    {{ defaultModeFor(item) === 'read' ? $t('creation.inspector.landRead') : $t('creation.inspector.enterStudio') }}
+                    {{ $t('creation.inspector.landRead') }}
                   </button>
                   <button
-                    v-if="defaultModeFor(item) === 'read'"
                     type="button"
                     class="creation-glass-btn"
                     @click="openCreationItem(item, 'studio')"
                   >
-                    {{ $t('creation.inspector.enterStudio') }}
+                    {{ tOr('creation.galaxy.openSession', 'Open Session') }}
                   </button>
                 </div>
                 <button
@@ -357,6 +391,26 @@ export default {
           {{ inspectedCreation.summary }}
         </div>
 
+        <div class="creation-inspector-meta">
+          <span v-if="inspectorAgentDisplayName" class="creation-meta-badge">
+            <span class="creation-agent-dot" :class="{ 'is-online': selectedAgent?.online }"></span>
+            <span>{{ inspectorAgentDisplayName }}</span>
+          </span>
+          <span v-if="inspectorProjectName" class="creation-meta-badge is-project">
+            <span>{{ inspectorProjectName }}</span>
+          </span>
+          <span v-if="inspectorSessionLabel" class="creation-meta-badge is-session" :title="inspectorSessionLabel">
+            <span>{{ inspectorSessionLabel }}</span>
+          </span>
+          <span
+            v-if="inspectedCreation.rootDir"
+            class="creation-meta-badge creation-meta-path"
+            :title="inspectedCreation.rootDir"
+          >
+            <span>{{ formatShortDirPath(inspectedCreation.rootDir) }}</span>
+          </span>
+        </div>
+
         <div class="creation-inspector-metrics">
           <div class="creation-inspector-metric">
             {{ $t('creation.inspector.units', { count: inspectedCreation.unitCount || 0 }) }}
@@ -392,17 +446,16 @@ export default {
           <button
             type="button"
             class="creation-glass-btn is-primary"
-            @click="openCreationItem(inspectedCreation, defaultModeFor(inspectedCreation))"
+            @click="openCreationItem(inspectedCreation, 'read')"
           >
-            {{ defaultModeFor(inspectedCreation) === 'read' ? $t('creation.inspector.landRead') : $t('creation.inspector.enterStudio') }}
+            {{ $t('creation.inspector.landRead') }}
           </button>
           <button
-            v-if="defaultModeFor(inspectedCreation) === 'read'"
             type="button"
             class="creation-glass-btn"
             @click="openCreationItem(inspectedCreation, 'studio')"
           >
-            {{ $t('creation.inspector.enterStudio') }}
+            {{ tOr('creation.galaxy.openSession', 'Open Session') }}
           </button>
           <button
             type="button"
@@ -480,7 +533,7 @@ export default {
           </span>
         </div>
 
-        <!-- Expanded Title & Kind Selector Row -->
+        <!-- Expanded Title & Inline Agent / Project / Session Selectors -->
         <div v-if="isIgniteExpanded" class="creation-ignite-extra">
           <input
             v-model="creationsStore.igniteDraft.title"
@@ -489,6 +542,87 @@ export default {
             :placeholder="$t('creation.galaxy.igniteTitle')"
             :disabled="!canMutateSelectedAgent || creationsStore.igniteDraft.submitting"
           />
+
+          <div class="creation-ignite-selectors">
+            <!-- Agent Selector -->
+            <label v-if="agents.length" class="creation-ignite-selector-field">
+              <span class="creation-ignite-selector-label">{{ $t('creation.galaxy.agentLabel') }}</span>
+              <select
+                class="creation-glass-select"
+                :value="creationsStore.selectedAgentId"
+                :disabled="creationsStore.igniteDraft.submitting"
+                @change="selectAgent($event.target.value)"
+              >
+                <option
+                  v-for="ag in agents"
+                  :key="ag.id"
+                  :value="ag.id"
+                >
+                  {{ formatAgentDisplayName(ag) }}{{ ag.online ? '' : ' (' + tOr('common.offline', 'Offline') + ')' }}
+                </option>
+              </select>
+            </label>
+
+            <!-- Project Selector -->
+            <label class="creation-ignite-selector-field">
+              <span class="creation-ignite-selector-label">{{ $t('creation.create.project') }}</span>
+              <select
+                v-model="igniteProjectSelection"
+                class="creation-glass-select"
+                :disabled="!canMutateSelectedAgent || creationsStore.igniteDraft.submitting"
+              >
+                <option value="">{{ $t('creation.create.noProject') }}</option>
+                <option
+                  v-for="proj in availableProjects"
+                  :key="proj.id"
+                  :value="proj.id"
+                >
+                  {{ proj.name || proj.id }}
+                </option>
+                <option value="__new__">+ {{ $t('creation.create.newProject') }}</option>
+              </select>
+            </label>
+
+            <input
+              v-if="igniteProjectSelection === '__new__'"
+              v-model="igniteNewProjectName"
+              type="text"
+              class="creation-ignite-inline-input"
+              :placeholder="$t('creation.create.newProjectPlaceholder')"
+              :disabled="!canMutateSelectedAgent || creationsStore.igniteDraft.submitting"
+            />
+
+            <!-- Session Mode Selector -->
+            <label class="creation-ignite-selector-field">
+              <span class="creation-ignite-selector-label">{{ $t('creation.create.session') }}</span>
+              <select
+                v-model="igniteSessionMode"
+                class="creation-glass-select"
+                :disabled="!canMutateSelectedAgent || creationsStore.igniteDraft.submitting"
+              >
+                <option value="new">{{ $t('creation.create.sessionNew') }}</option>
+                <option value="existing" :disabled="agentSessions.length === 0">
+                  {{ $t('creation.create.sessionExisting') }}
+                </option>
+              </select>
+            </label>
+
+            <select
+              v-if="igniteSessionMode === 'existing'"
+              v-model="igniteExistingSessionId"
+              class="creation-glass-select is-session-picker"
+              :disabled="!canMutateSelectedAgent || creationsStore.igniteDraft.submitting || agentSessions.length === 0"
+              :aria-label="$t('creation.create.selectSession')"
+            >
+              <option
+                v-for="sess in agentSessions"
+                :key="sess.id"
+                :value="sess.id"
+              >
+                {{ sess.title || sess.name || sess.id }}
+              </option>
+            </select>
+          </div>
         </div>
 
         <div class="creation-ignite-footer">
@@ -518,19 +652,69 @@ export default {
   `,
   setup(props, { emit }) {
     const creationsStore = useCreationsStore();
+    const chatStore = useChatStore();
+    const sessionsStore = useSessionsStore();
     const searchInputRef = Vue.ref(null);
     const igniteInputRef = Vue.ref(null);
     const fileInputRef = Vue.ref(null);
     const isDraggingFiles = Vue.ref(false);
     const legacyBookmarks = Vue.ref(readLegacyGalaxyBookmarks());
     const importingLegacy = Vue.ref(false);
+    const resumeField = (key, invalidate) => Vue.computed({
+      get: () => creationsStore.igniteDraft?.resume?.[key],
+      set: value => {
+        const state = creationsStore.igniteDraft.resume;
+        if (state[key] === value) return;
+        state[key] = value;
+        Object.assign(state, invalidate());
+      },
+    });
+    const resetProject = () => ({ projectId: '', projectAttempted: false, baselineProjectIds: [] });
+    const resetSession = () => ({ sessionId: '', sessionAttempted: false, baselineSessionIds: [] });
+    const igniteProjectSelection = resumeField('projectSelection', resetProject);
+    const igniteNewProjectName = resumeField('newProjectName', resetProject);
+    const igniteSessionMode = resumeField('sessionMode', resetSession);
+    const igniteExistingSessionId = resumeField('existingSessionId', resetSession);
     let dragDepth = 0;
+    let activeIgniteAttemptId = null;
+    let canOpenAfterIgnite = false;
 
     const selectedAgent = Vue.computed(() => {
       const id = creationsStore.selectedAgentId;
       if (!id) return null;
       return (props.agents || []).find((a) => a && a.id === id) || null;
     });
+
+    const availableProjects = Vue.computed(() => (
+      Array.isArray(chatStore.sessionProjects) ? chatStore.sessionProjects.filter((p) => p && p.id) : []
+    ));
+
+    function projectNameFor(projectId) {
+      if (!projectId) return '';
+      const found = availableProjects.value.find((p) => p.id === projectId);
+      return found?.name || '';
+    }
+
+    const agentSessions = Vue.computed(() => (
+      creationSessionsForAgent(sessionsStore, creationsStore.selectedAgentId)
+    ));
+
+    Vue.watch(
+      () => [creationsStore.selectedAgentId, agentSessions.value.map((s) => s.id).join(',')],
+      () => {
+        const list = agentSessions.value;
+        if (!creationsStore.igniteDraft?.resume || creationsStore.igniteDraft.submitting) return;
+        if (!list.length) {
+          igniteExistingSessionId.value = '';
+          if (igniteSessionMode.value === 'existing') igniteSessionMode.value = 'new';
+          return;
+        }
+        if (!list.some((s) => s.id === igniteExistingSessionId.value)) {
+          igniteExistingSessionId.value = list[0].id;
+        }
+      },
+      { immediate: true },
+    );
 
     const agentState = Vue.computed(() => creationsStore.currentAgentState);
     const filteredCreations = Vue.computed(() => creationsStore.currentAgentCreations);
@@ -559,6 +743,28 @@ export default {
       return list.find((c) => c && c.id === target.creationId) || null;
     });
 
+    const inspectorAgentDisplayName = Vue.computed(() => {
+      const target = creationsStore.inspectorTarget;
+      const aid = target?.agentId || inspectedCreation.value?.agentId || creationsStore.selectedAgentId;
+      if (!aid) return '';
+      const ag = (props.agents || []).find((a) => a && a.id === aid) || aid;
+      return formatAgentDisplayName(ag);
+    });
+
+    const inspectorProjectName = Vue.computed(() => (
+      projectNameFor(inspectedCreation.value?.projectId)
+    ));
+
+    const inspectorSessionLabel = Vue.computed(() => {
+      const item = inspectedCreation.value;
+      if (!item || !item.sessionId) return '';
+      const aid = creationsStore.inspectorTarget?.agentId || item.agentId || creationsStore.selectedAgentId;
+      const sess = sessionsStore?.sessionById?.(item.sessionId, aid)
+        || agentSessions.value.find((s) => s.id === item.sessionId)
+        || null;
+      return sess?.title || sess?.name || tOr('creation.galaxy.linkedSession', 'Session');
+    });
+
     const isIgniteExpanded = Vue.computed(() => {
       const d = creationsStore.igniteDraft;
       return Boolean(d.open || d.title.trim() || d.prompt.trim() || d.pendingFiles.length);
@@ -567,6 +773,8 @@ export default {
     const canSubmitIgnite = Vue.computed(() => {
       const d = creationsStore.igniteDraft;
       if (!canMutateSelectedAgent.value || d.submitting) return false;
+      if (igniteProjectSelection.value === '__new__' && !igniteNewProjectName.value.trim()) return false;
+      if (igniteSessionMode.value === 'existing' && !agentSessions.value.some(s => s.id === igniteExistingSessionId.value)) return false;
       return Boolean(d.title.trim() || d.prompt.trim() || d.pendingFiles.length);
     });
 
@@ -725,57 +933,145 @@ export default {
       creationsStore.igniteDraft.pendingFiles = next;
     }
 
+    function releaseIgniteAttempt() {
+      if (activeIgniteAttemptId === null) return;
+      creationsStore.finishIgniteAttempt(activeIgniteAttemptId);
+      activeIgniteAttemptId = null;
+    }
+
+    Vue.watch(() => creationsStore.selectedAgentId, (agentId) => {
+      if (creationsStore.igniteDraft?.resume?.agentId === agentId) return;
+      releaseIgniteAttempt();
+      creationsStore.resetIgniteResume?.();
+      if (creationsStore.igniteDraft) creationsStore.igniteDraft.error = null;
+    }, { flush: 'sync' });
+
+    Vue.watch(() => props.visible, visible => {
+      if (!visible) canOpenAfterIgnite = false;
+    }, { flush: 'sync' });
+
     async function submitIgnite() {
       if (!canSubmitIgnite.value) return;
       const submitAgentId = creationsStore.selectedAgentId;
       const startSeq = creationsStore.openActivationSeq;
+      const myAttemptId = creationsStore.beginIgniteAttempt();
+      activeIgniteAttemptId = myAttemptId;
+      canOpenAfterIgnite = props.visible;
+      const isStillCurrent = () => (
+        activeIgniteAttemptId === myAttemptId
+        && creationsStore.igniteDraft.attemptId === myAttemptId
+        && creationsStore.selectedAgentId === submitAgentId
+      );
       const liveDraft = creationsStore.igniteDraft;
       const submittedTitle = liveDraft.title;
       const submittedPrompt = liveDraft.prompt;
-      const submittedFiles = new Set(liveDraft.pendingFiles);
+      const filesToSend = liveDraft.pendingFiles.slice();
       const submittedCelestial = liveDraft.celestial;
       const titleText = submittedTitle.trim();
       const promptText = submittedPrompt.trim();
       const kindVal = liveDraft.kind || 'book';
-      const filesToSend = liveDraft.pendingFiles.slice();
       const celestialVal = submittedCelestial || undefined;
-
-      liveDraft.submitting = true;
-      liveDraft.error = null;
+      const projectIdVal = (igniteProjectSelection.value && igniteProjectSelection.value !== '__new__')
+        ? igniteProjectSelection.value
+        : undefined;
+      const newProjectNameVal = igniteProjectSelection.value === '__new__'
+        ? igniteNewProjectName.value.trim() || undefined
+        : undefined;
+      const sessionModeVal = igniteSessionMode.value || 'new';
+      const existingSessionIdVal = sessionModeVal === 'existing'
+        ? (igniteExistingSessionId.value || undefined)
+        : undefined;
+      // The selected Agent may have changed while the overlay was unmounted.
+      if (liveDraft.resume.agentId && liveDraft.resume.agentId !== submitAgentId) {
+        creationsStore.resetIgniteResume();
+      }
+      const resumeState = liveDraft.resume;
+      if (!resumeState.attemptKey) {
+        Object.assign(resumeState, { agentId: submitAgentId, attemptKey: newCreationAttemptKey() });
+      }
 
       try {
         const fallbackTitle = promptText
           ? promptText.split(/\r?\n/)[0].trim().slice(0, 48)
           : (filesToSend[0]?.name ? filesToSend[0].name.replace(/\.[^.]+$/, '').slice(0, 48) : '');
-        const res = await creationsStore.createCreation(submitAgentId, {
-          title: titleText || fallbackTitle || undefined,
-          kind: kindVal,
-          prompt: promptText || undefined,
-          rawFiles: filesToSend,
-          celestial: celestialVal,
-        });
+        const resolvedTitle = titleText || fallbackTitle || undefined;
+        const res = typeof creationsStore.createWorkspaceCreation === 'function'
+          ? await creationsStore.createWorkspaceCreation({
+              agentId: submitAgentId,
+              title: resolvedTitle,
+              kind: kindVal,
+              projectId: projectIdVal,
+              newProjectName: newProjectNameVal,
+              sessionMode: sessionModeVal,
+              existingSessionId: existingSessionIdVal,
+              prompt: promptText || undefined,
+              rawFiles: filesToSend,
+              celestial: celestialVal,
+              attemptKey: resumeState.attemptKey,
+              projectAttempted: resumeState.projectAttempted,
+              sessionAttempted: resumeState.sessionAttempted,
+              baselineProjectIds: resumeState.baselineProjectIds,
+              baselineSessionIds: resumeState.baselineSessionIds,
+              ...(resumeState.projectId ? { resumeProjectId: resumeState.projectId } : {}),
+              ...(resumeState.creationId ? { resumeCreationId: resumeState.creationId } : {}),
+              ...(resumeState.sessionId ? { resumeSessionId: resumeState.sessionId } : {}),
+            })
+          : await creationsStore.createCreation(submitAgentId, {
+              title: resolvedTitle,
+              kind: kindVal,
+              prompt: promptText || undefined,
+              rawFiles: filesToSend,
+              celestial: celestialVal,
+              importKey: resumeState.attemptKey,
+            });
+        if (!isStillCurrent()) return;
         const created = res?.creation || res;
+        // Store completed IDs even if the launcher is no longer mounted. Do
+        // not clear a hidden draft or auto-navigate when the user returns.
+        if (!canOpenAfterIgnite || creationsStore.openActivationSeq !== startSeq) {
+          Object.assign(resumeState, {
+            projectId: res?.requestedProjectId || res?.projectId || resumeState.projectId,
+            creationId: created?.id || resumeState.creationId,
+            sessionId: res?.sessionId || created?.sessionId || resumeState.sessionId,
+          });
+          return;
+        }
+        const currentDraft = creationsStore.igniteDraft;
+        const snapshot = res?._submittedSnapshot;
+        const actuallySubmittedFiles = new Set(Array.isArray(snapshot?.files) ? snapshot.files.map(Vue.toRaw) : []);
+        // Legacy create responses have no snapshot. A deduplicated ACK does
+        // not confirm ingestion of any files sent by the retry.
+        if (res && !Object.hasOwn(res, '_submittedSnapshot') && !res.deduplicated && !created?.deduplicated) {
+          for (const file of filesToSend) actuallySubmittedFiles.add(Vue.toRaw(file));
+        }
+        currentDraft.pendingFiles = currentDraft.pendingFiles.filter(f => !actuallySubmittedFiles.has(Vue.toRaw(f)));
+        creationsStore.resetIgniteResume();
+
         if (res?.initialTurnError) {
           emit('toast', res.initialTurnError);
         }
-        const currentDraft = creationsStore.igniteDraft;
-        const stillOnSubmitAgent = creationsStore.selectedAgentId === submitAgentId;
-        if (stillOnSubmitAgent && currentDraft.title === submittedTitle) {
+        if (res?.projectWarning) {
+          emit('toast', res.projectWarning);
+        }
+        const persistedTitle = snapshot ? currentDraft.title.trim() : currentDraft.title;
+        if (persistedTitle === (snapshot?.title ?? submittedTitle)
+          || (snapshot && persistedTitle === created?.title)) {
           currentDraft.title = '';
         }
-        if (stillOnSubmitAgent && currentDraft.prompt === submittedPrompt) {
+        if ((snapshot ? currentDraft.prompt.trim() : currentDraft.prompt) === (snapshot?.prompt ?? submittedPrompt)) {
           currentDraft.prompt = '';
         }
-        currentDraft.pendingFiles = currentDraft.pendingFiles.filter((f) => !submittedFiles.has(f));
-        if (stillOnSubmitAgent && currentDraft.celestial === submittedCelestial) {
+        if (currentDraft.celestial === (snapshot ? snapshot.celestial : submittedCelestial)) {
           currentDraft.celestial = null;
         }
-        if (
-          stillOnSubmitAgent
-          && !currentDraft.title.trim()
-          && !currentDraft.prompt.trim()
-          && currentDraft.pendingFiles.length === 0
-        ) {
+        const hasRemainingAttachments = currentDraft.pendingFiles.length > 0;
+        if (hasRemainingAttachments) {
+          currentDraft.open = true;
+          // Locale dictionaries are outside the scope of this fix.
+          emit('toast', getLocale() === 'zh-CN'
+            ? '未上传的附件已保留在创作栏中。'
+            : 'Unuploaded attachments were kept in the Ignite dock.');
+        } else if (!currentDraft.title.trim() && !currentDraft.prompt.trim()) {
           currentDraft.open = false;
         }
         currentDraft.error = null;
@@ -784,19 +1080,32 @@ export default {
           created
           && created.id
           && props.visible
-          && creationsStore.selectedAgentId === submitAgentId
+          && isStillCurrent()
           && creationsStore.openActivationSeq === startSeq
         ) {
           emit('open-creation', {
             agentId: submitAgentId,
             creationId: created.id,
+            sessionId: res?.sessionId || created.sessionId || undefined,
+            rootDir: res?.rootDir || created.rootDir || undefined,
             mode: 'studio',
+            promptToSend: snapshot?.prompt ?? promptText,
+            ...(hasRemainingAttachments ? { keepIgniteDockOpen: true } : {}),
           });
         }
       } catch (err) {
+        if (!isStillCurrent()) return;
+        resumeState.projectId = err?.partialProjectId || resumeState.projectId;
+        resumeState.creationId = err?.partialCreation?.id || err?.partialCreationId || resumeState.creationId;
+        resumeState.sessionId = err?.partialSessionId || resumeState.sessionId;
+        resumeState.projectAttempted = err?.projectAttempted ?? resumeState.projectAttempted;
+        resumeState.sessionAttempted = err?.sessionAttempted ?? resumeState.sessionAttempted;
+        resumeState.baselineProjectIds = err?.baselineProjectIds ?? resumeState.baselineProjectIds;
+        resumeState.baselineSessionIds = err?.baselineSessionIds ?? resumeState.baselineSessionIds;
         creationsStore.igniteDraft.error = err?.message || 'Failed to ignite creation';
       } finally {
-        creationsStore.igniteDraft.submitting = false;
+        creationsStore.finishIgniteAttempt(myAttemptId);
+        if (activeIgniteAttemptId === myAttemptId) activeIgniteAttemptId = null;
       }
     }
 
@@ -865,6 +1174,11 @@ export default {
     });
 
     Vue.onBeforeUnmount(() => {
+      // Release this component's submission lock on unmount while preserving
+      // the attempt key and checkpoints in Pinia. A remount can join the same
+      // in-flight workspace creation without letting this instance navigate.
+      canOpenAfterIgnite = false;
+      releaseIgniteAttempt();
       window.removeEventListener('dragenter', onWindowDragEnter);
       window.removeEventListener('dragover', onWindowDragOver);
       window.removeEventListener('dragleave', onWindowDragLeave);
@@ -882,15 +1196,28 @@ export default {
       isDraggingFiles,
       legacyBookmarks,
       importingLegacy,
+      igniteProjectSelection,
+      igniteNewProjectName,
+      igniteSessionMode,
+      igniteExistingSessionId,
       selectedAgent,
+      availableProjects,
+      agentSessions,
       agentState,
       filteredCreations,
       isUnsupportedAgent,
       canMutateSelectedAgent,
       inspectedCreation,
+      inspectorAgentDisplayName,
+      inspectorProjectName,
+      inspectorSessionLabel,
       isIgniteExpanded,
       canSubmitIgnite,
       showGalaxyEmptyState,
+      formatAgentDisplayName,
+      tOr,
+      formatShortDirPath,
+      projectNameFor,
       displayStatusFor,
       dismissLegacyBookmarks,
       importLegacyBookmarks,

@@ -6464,7 +6464,9 @@ export const useChatStore = defineStore('chat', {
           // sidebar. Older agents/servers omit the field — the store
           // falls back to the legacy whole-replacement path.
           if (gs) {
-            gs.applySnapshot(rows, msg.agentId || null);
+            gs.applySnapshot(rows, msg.agentId || null, {
+              authoritative: event.type !== 'yeaft_session_hydrate' && Array.isArray(event.sessions),
+            });
             scheduledTaskHelpers.reconcileScheduledTaskNotifications(this, rows, msg.agentId);
             this._hasHandledYeaftSessionHydrate = true;
             this.yeaftSessionHydrateError = null;
@@ -6491,6 +6493,7 @@ export const useChatStore = defineStore('chat', {
           if (gs) gs.applyRosterChange(event, msg.agentId || null);
           break;
         }
+        case 'yeaft_session_crud_result':
         case 'group_crud_result':
         case 'session_crud_result': {
           const gs = window.Pinia?.useSessionsStore?.() || (window.__useSessionsStore && window.__useSessionsStore());
@@ -6533,18 +6536,32 @@ export const useChatStore = defineStore('chat', {
             pending.resolve({ ok: false, op: pending.op, error: { code: 'stale_request' } });
             break;
           }
-          if (isBranchResult && event.projectsAuthoritative === true && Array.isArray(event.projects)) {
-            this.applySessionCatalogSnapshot(this.sessionCatalog, event.projects, null, { authoritative: false });
+          if (pending && (event.op === 'list' || pending.op === 'list') && (
+            event.op !== pending.op || (msg.agentId && pending.agentId && msg.agentId !== pending.agentId)
+          )) break;
+          const isListResult = event.ok && event.op === 'list';
+          const suppressAutoSelect = pending?.suppressAutoSelect === true;
+          if ((isBranchResult || isListResult) && Array.isArray(event.projects)) {
+            if (event.projectsAuthoritative === true) {
+              this.applySessionCatalogSnapshot(this.sessionCatalog, event.projects, null, { authoritative: false });
+            } else if (isListResult && msg.agentId) {
+              this.applyLegacyProjectSnapshot(event.projects, msg.agentId);
+            }
           }
           if (this.yeaftSessionHydrateRequestId && this.yeaftSessionInventoryCompleteSupported === true
               && event.ok && event.op === 'list' && Array.isArray(event.sessions)) {
             // A successful direct Agent list is useful even if the Server's
             // replay later fails. Apply it below and also keep it at commit.
-            handlerHelpers.bufferYeaftSessionInventorySlice(this, { agentId: msg.agentId, sessions: event.sessions }, { live: true });
+            handlerHelpers.bufferYeaftSessionInventorySlice(this, { agentId: msg.agentId, sessions: event.sessions }, {
+              live: true, suppressAutoSelect,
+            });
           }
           handlerHelpers.bufferYeaftSessionCrudDelta(this, event, msg.agentId || null);
           // The initiating create/restore/branch UI owns navigation.
-          if (gs) gs.applyCrudResult(event, msg.agentId || null);
+          if (gs) gs.applyCrudResult(event, msg.agentId || null, {
+            authoritative: isListResult === true,
+            suppressAutoSelect,
+          });
           if (event.ok && event.op === 'delete' && event.sessionId && msg.agentId) {
             this.clearYeaftHistoryMemory({
               agentId: msg.agentId,
@@ -6581,6 +6598,7 @@ export const useChatStore = defineStore('chat', {
                 sourceSessionId: event.sourceSessionId || null,
                 otherSessionId: event.otherSessionId || null,
                 sessions: resolvedSessionList,
+                projects: Array.isArray(event.projects) ? event.projects : null,
                 config: event.config || null,
                 error: event.error || null,
               });
@@ -7126,6 +7144,7 @@ export const useChatStore = defineStore('chat', {
     // Legacy callers may still pass `groupId`; the agent web-bridge accepts
     // both fields, so we pass the payload through as-is.
     sessionCrudRequest(op, data, opts = {}) {
+      const { suppressAutoSelect = false } = opts;
       if (!this._sessionCrudPending || typeof this._sessionCrudPending.get !== 'function') {
         this._sessionCrudPending = new Map();
       }
@@ -7186,11 +7205,12 @@ export const useChatStore = defineStore('chat', {
           if (this._sessionCrudPending && this._sessionCrudPending.has(requestId)) {
             this._sessionCrudPending.delete(requestId);
             if (gs?.pending) delete gs.pending[requestId];
-            resolve({ ok: false, op, error: { code: 'timeout', message: 'session_crud timeout' } });
+            resolve({ ok: false, op, ambiguous: true, error: { code: 'timeout', message: 'session_crud timeout' } });
           }
         }, timeoutMs);
         this._sessionCrudPending.set(requestId, {
           op,
+          suppressAutoSelect,
           authGeneration: Number(useAuthStore().authGeneration || 0),
           sessionId: data?.sessionId || null,
           otherSessionId: data?.otherSessionId || null,
@@ -7199,7 +7219,8 @@ export const useChatStore = defineStore('chat', {
           resolve: (result) => {
             if (timer) clearTimeout(timer);
             if (gs?.pending) delete gs.pending[requestId];
-            resolve(result);
+            // The socket/Agent disconnect handlers settle this same receipt.
+            resolve(result?.receiptInterrupted ? { ...result, ambiguous: true } : result);
           },
         });
         const sent = this.sendWsMessage(msg);
@@ -7207,7 +7228,7 @@ export const useChatStore = defineStore('chat', {
           if (timer) clearTimeout(timer);
           this._sessionCrudPending.delete(requestId);
           if (gs?.pending) delete gs.pending[requestId];
-          resolve({ ok: false, op, error: { code: 'agent_offline' } });
+          resolve({ ok: false, op, ambiguous: true, error: { code: 'agent_offline' } });
         }
       });
     },
@@ -8105,12 +8126,15 @@ export const useChatStore = defineStore('chat', {
       return new Promise(resolve => {
         const timer = setTimeout(() => {
           delete this.projectMutationRequests[requestId];
-          resolve({ ok: false, error: { code: 'timeout' } });
+          resolve({ ok: false, ambiguous: true, error: { code: 'timeout' } });
         }, 10000);
         this.projectMutationRequests[requestId] = {
           connectionGeneration: Number(this.chatHistoryConnectionGeneration || 0),
           catalogOrder: Array.isArray(payload.catalogOrder) ? payload.catalogOrder : null,
-          resolve: result => { clearTimeout(timer); resolve(result); },
+          resolve: result => {
+            clearTimeout(timer);
+            resolve(result?.error?.code === 'connection_changed' ? { ...result, ambiguous: true } : result);
+          },
         };
         const sent = this.sendWsMessage({
           type: 'yeaft_project_mutation',
@@ -8122,7 +8146,7 @@ export const useChatStore = defineStore('chat', {
         if (!sent) {
           clearTimeout(timer);
           delete this.projectMutationRequests[requestId];
-          resolve({ ok: false, error: { code: 'send_failed' } });
+          resolve({ ok: false, ambiguous: true, error: { code: 'send_failed' } });
         }
       });
     },

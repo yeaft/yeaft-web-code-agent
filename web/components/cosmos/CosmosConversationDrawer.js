@@ -44,8 +44,23 @@ import {
   requestSessionDiscovery,
   supportsSessionDiscovery,
 } from '../../stores/helpers/session-discovery.js';
+import * as creationsStoreModule from '../../stores/creations.js';
 
 const DOCKED_STATUS_MIN_DRAWER_WIDTH = 780;
+
+function formatAgentDisplayName(ag) {
+  if (typeof creationsStoreModule.formatAgentDisplayName === 'function') {
+    return creationsStoreModule.formatAgentDisplayName(ag);
+  }
+  if (!ag) return '';
+  if (typeof ag === 'string') {
+    return ag.replace(/^user_\d+_[a-z0-9]+:/i, '') || ag;
+  }
+  const rawName = String(ag.name || '').trim();
+  if (rawName && !/^user_\d+_[a-z0-9]+:/i.test(rawName)) return rawName;
+  const rawId = String(ag.id || rawName || '').trim();
+  return rawId.replace(/^user_\d+_[a-z0-9]+:/i, '') || rawId;
+}
 
 function sessionTaskSortTime(task) {
   const raw = task?.updatedAt || task?.endedAt || task?.createdAt;
@@ -76,9 +91,11 @@ export default {
     maxDrawerWidth: { type: Number, default: 960 },
     viewportWidth: { type: Number, default: 1280 },
     resizing: { type: Boolean, default: false },
+    openedFromGalaxy: { type: Boolean, default: false },
   },
   emits: [
     'close',
+    'return-galaxy',
     'select-session',
     'open-quick-composer',
     'open-session-settings',
@@ -97,9 +114,10 @@ export default {
       :class="{
         'is-resizing': resizing || isDraggingResize,
         'has-docked-status': sessionStatusOpen && sessionStatusDocked,
+        'is-workbench-split': workbenchSplit,
       }"
       :data-planet-theme="planetId"
-      :aria-label="agent.name"
+      :aria-label="agentDisplayName"
       @pointerdown.stop
       @wheel.stop
     >
@@ -129,6 +147,17 @@ export default {
       <header class="cosmos-drawer-head">
         <div class="cosmos-drawer-head-left">
           <button
+            v-if="openedFromGalaxy"
+            type="button"
+            class="cosmos-back-galaxy-btn"
+            :title="tOr('creation.interior.ascend', 'Back to Galaxy')"
+            @click="$emit('return-galaxy')"
+          >
+            <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M10.5 3.5L6 8l4.5 4.5" /></svg>
+            <span>{{ tOr('creation.interior.ascend', 'Back to Galaxy') }}</span>
+          </button>
+
+          <button
             type="button"
             class="cosmos-icon-btn"
             :class="{ 'is-active': historyOpen }"
@@ -144,7 +173,7 @@ export default {
 
           <div class="cosmos-drawer-titles">
             <div class="cosmos-drawer-name-row">
-              <span class="cosmos-drawer-agent">{{ agent.name }}</span>
+              <span class="cosmos-drawer-agent">{{ agentDisplayName }}</span>
               <span class="cosmos-drawer-planet-badge">{{ $t('cosmos.planets.' + planetId + '.name') }} · {{ $t('cosmos.planets.' + planetId + '.theme') }}</span>
             </div>
             <div class="cosmos-drawer-sub-row">
@@ -367,11 +396,12 @@ export default {
         @close="closeSearch"
       />
 
-      <!-- Body Stack: Pure Conversation Stream + Session Status Pane + Slide-Over Real Workbench -->
+      <!-- Body Stack: Pure Conversation Stream + Session Status Pane + Slide-Over / Split Real Workbench -->
       <div
         class="cosmos-drawer-body"
         :class="{
           'is-status-docked': sessionStatusOpen && sessionStatusDocked,
+          'is-workbench-split': workbenchSplit,
           'is-overlay-open': chatCoveredByOverlay,
         }"
       >
@@ -594,12 +624,26 @@ export default {
 
     const canUseWorkbench = Vue.computed(() => Boolean(props.agent?.online && hasSelectedSession.value && activeRoute.value));
     const workbenchOpen = Vue.computed(() => Boolean(canUseWorkbench.value && store.workbenchExpanded));
+    const workbenchSplit = Vue.computed(() => Boolean(
+      workbenchOpen.value
+      && !store.workbenchMaximized
+      && props.widened
+      && props.viewportWidth >= 1024
+    ));
     const sessionStatusDocked = Vue.computed(() => (
-      props.viewportWidth > 768 && props.drawerWidth >= DOCKED_STATUS_MIN_DRAWER_WIDTH
+      props.viewportWidth > 768
+      && props.drawerWidth >= DOCKED_STATUS_MIN_DRAWER_WIDTH
+      && !workbenchSplit.value
     ));
     const chatCoveredByOverlay = Vue.computed(() => (
-      workbenchOpen.value || (sessionStatusOpen.value && !sessionStatusDocked.value)
+      (!workbenchSplit.value && workbenchOpen.value)
+      || (sessionStatusOpen.value && !sessionStatusDocked.value)
     ));
+    const agentDisplayName = Vue.computed(() => formatAgentDisplayName(props.agent));
+    function tOr(key, fallback, params) {
+      const translated = $t(key, params);
+      return translated && translated !== key ? translated : fallback;
+    }
 
     const ordinarySession = Vue.computed(() => {
       const roster = activeGroup.value?.roster;
@@ -1593,6 +1637,9 @@ export default {
       activeSessionTitle,
       canUseWorkbench,
       workbenchOpen,
+      workbenchSplit,
+      agentDisplayName,
+      tOr,
       ordinarySession,
       sceneSession,
       isProcessing,

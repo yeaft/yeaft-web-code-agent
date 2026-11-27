@@ -10,6 +10,13 @@ import VpMentionAutocomplete, {
 import MessageComposer from './MessageComposer.js';
 import { useComposerAttachments, sessionUploadBatches, uploadSessionAttachments, hasAttachmentFileId, SESSION_FILE_ACCEPT } from '../utils/composer-attachments.js';
 import { useUserShortcuts, matchShortcut } from '../utils/user-shortcuts.js';
+import {
+  getCanvasContextRefs,
+  removeCanvasContextRef,
+  removeCanvasContextRefsByIds,
+  formatCanvasContextPrefix,
+} from '../utils/canvas-context.js';
+import { workbenchRouteKey } from '../utils/workbench-route.js';
 
 export default {
   name: 'ChatInput',
@@ -35,7 +42,11 @@ export default {
     /** Structured Session message quote shown above the composer. */
     quote: { type: Object, default: null },
     disabled: { type: Boolean, default: false },
-    disabledPlaceholderKey: { type: String, default: '' }
+    disabledPlaceholderKey: { type: String, default: '' },
+    /** Enable Workbench Canvas context reference chips & prefixing. */
+    enableCanvasRefs: { type: Boolean, default: true },
+    /** Explicit Canvas route key scope. When provided, never falls back to global activeSessionRoute. */
+    canvasRouteKey: { type: String, default: undefined }
   },
   emits: ['remove-quote', 'quote-consumed', 'close-start-actions'],
   template: `
@@ -53,6 +64,28 @@ export default {
           </div>
         </div>
         <button type="button" class="input-quote-remove" @click="$emit('remove-quote')" :title="$t('message.removeQuote')" :aria-label="$t('message.removeQuote')">×</button>
+      </div>
+      <div v-if="canvasRefs.length > 0" class="canvas-context-bar" role="list">
+        <div
+          v-for="refItem in canvasRefs"
+          :key="refItem.id"
+          class="canvas-context-chip"
+          :class="'canvas-chip-' + refItem.kind"
+          role="listitem"
+          :title="refItem.filePath || refItem.fileName"
+        >
+          <span class="canvas-chip-badge" aria-hidden="true">{{ canvasKindBadge(refItem.kind) }}</span>
+          <span class="canvas-chip-name">{{ refItem.fileName }}</span>
+          <span v-if="canvasRefLocation(refItem)" class="canvas-chip-loc">{{ canvasRefLocation(refItem) }}</span>
+          <span v-if="refItem.snippet" class="canvas-chip-snippet">{{ refItem.snippet }}</span>
+          <button
+            type="button"
+            class="canvas-chip-remove"
+            @click="removeCanvasRef(refItem.id)"
+            :title="$t('creation.canvas.contextChipRemove')"
+            :aria-label="$t('creation.canvas.contextChipRemove')"
+          >×</button>
+        </div>
       </div>
       <div class="expert-chips-bar" v-if="!sendFn && !store.btwMode && expertSelections.length > 0">
         <span
@@ -451,9 +484,54 @@ export default {
     });
     const { attachments, uploading, filesReady, addFiles, retryAttachment, removeAttachment } = attachmentQueue;
     const hasValidFileId = hasAttachmentFileId;
+    const activeRouteKey = Vue.computed(() => {
+      if (!props.enableCanvasRefs) return '';
+      if (props.canvasRouteKey !== undefined) return props.canvasRouteKey || '';
+      return workbenchRouteKey(store.activeSessionRoute) || '';
+    });
+    const canvasRefs = Vue.computed(() => {
+      const key = activeRouteKey.value;
+      return key ? getCanvasContextRefs(key) : [];
+    });
+    const canvasKindBadge = (kind) => {
+      if (kind === 'image') return '🖼';
+      if (kind === 'video') return '🎬';
+      return '📄';
+    };
+    const canvasRefLocation = (ref) => {
+      if (!ref) return '';
+      if (ref.kind === 'video' && ref.timestampLabel) return `@ ${ref.timestampLabel}`;
+      if (ref.lineStart != null && ref.lineEnd != null && ref.lineEnd !== ref.lineStart) {
+        return `(L${ref.lineStart}-L${ref.lineEnd})`;
+      }
+      if (ref.lineStart != null) return `(L${ref.lineStart})`;
+      return '';
+    };
+    const removeCanvasRef = (id) => {
+      const key = activeRouteKey.value;
+      if (!key) return;
+      removeCanvasContextRef(key, id);
+    };
+    const handleCanvasContextAdded = (event) => {
+      if (!props.enableCanvasRefs || !activeRouteKey.value) return;
+      if (event?.detail?.routeKey === activeRouteKey.value) {
+        focusInput();
+      }
+    };
+    Vue.onMounted(() => {
+      if (typeof window !== 'undefined') {
+        window.addEventListener('canvas-context-added', handleCanvasContextAdded);
+      }
+    });
+
     let sendGeneration = 0;
     Vue.watch(attachmentScope, () => { sendGeneration++; sending.value = false; }, { flush: 'sync' });
-    Vue.onBeforeUnmount(() => { sendGeneration++; });
+    Vue.onBeforeUnmount(() => {
+      sendGeneration++;
+      if (typeof window !== 'undefined') {
+        window.removeEventListener('canvas-context-added', handleCanvasContextAdded);
+      }
+    });
 
     const connectionHint = Vue.computed(() => {
       if (store.networkOffline) return 'chat.connection.offlineDraft';
@@ -485,17 +563,18 @@ export default {
       if (sending.value) return false;
       const hasText = !!inputText.value.trim();
       const hasAttachments = attachments.value.length > 0;
+      const hasCanvasRefs = canvasRefs.value.length > 0;
 
       // Custom send mode (e.g. Yeaft page): simplified check — no conversation needed
       if (isCustomSend.value) {
         const notUploading = filesReady.value;
-        return (hasText || hasAttachments) && notUploading;
+        return (hasText || hasAttachments || hasCanvasRefs) && notUploading;
       }
 
       const hasExperts = expertSelections.value.length > 0;
-      // Can send if: (text OR attachments OR (experts with action — pure role needs text))
+      // Can send if: (text OR attachments OR canvasRefs OR (experts with action — pure role needs text))
       const hasActionExpert = expertSelections.value.some(s => s.action);
-      const hasContent = hasText || hasAttachments || (hasExperts && (hasText || hasActionExpert));
+      const hasContent = hasText || hasAttachments || hasCanvasRefs || (hasExperts && (hasText || hasActionExpert));
       const notUploading = filesReady.value;
       return hasContent && store.currentAgent && store.currentConversation && notUploading;
     });
@@ -617,6 +696,13 @@ export default {
       showVpAutocomplete.value = false;
 
       const trimmed = inputText.value.trim();
+      const snapshotRouteKey = activeRouteKey.value;
+      const sentCanvasRefs = canvasRefs.value.slice();
+      const snapshotRefIds = sentCanvasRefs.map(r => r.id);
+      const canvasPrefix = sentCanvasRefs.length > 0 ? formatCanvasContextPrefix(sentCanvasRefs) : '';
+      const outgoingText = canvasPrefix
+        ? (trimmed ? `${canvasPrefix}\n\n${trimmed}` : canvasPrefix)
+        : trimmed;
 
       // Custom send mode: delegate to provided function
       if (props.sendFn) {
@@ -637,7 +723,11 @@ export default {
         const identity = attachmentScope();
         const g = ++sendGeneration;
         const accept = accepted => {
-          if (accepted === false || g !== sendGeneration || identity !== attachmentScope()) return;
+          if (accepted === false) return;
+          if (snapshotRouteKey && snapshotRefIds.length > 0) {
+            removeCanvasContextRefsByIds(snapshotRouteKey, snapshotRefIds);
+          }
+          if (g !== sendGeneration || identity !== attachmentScope()) return;
           // Sent previews belong to the message projection, not the composer.
           attachmentQueue.release(sentRows);
           if (sentQuote && props.quote === sentQuote) emit('quote-consumed');
@@ -651,8 +741,8 @@ export default {
         sending.value = true;
         try {
           const accepted = quickSend
-            ? props.sendFn(trimmed, attachmentPayload, sentQuote, quickSend)
-            : sentQuote ? props.sendFn(trimmed, attachmentPayload, sentQuote) : props.sendFn(trimmed, attachmentPayload);
+            ? props.sendFn(outgoingText, attachmentPayload, sentQuote, quickSend)
+            : sentQuote ? props.sendFn(outgoingText, attachmentPayload, sentQuote) : props.sendFn(outgoingText, attachmentPayload);
           if (accepted && typeof accepted.then === 'function') {
             Promise.resolve(accepted).then(accept).catch(error => console.error('Send failed:', error))
               .finally(() => { if (g === sendGeneration) sending.value = false; });
@@ -684,7 +774,10 @@ export default {
 
       // In btw mode, all sends go through btw channel
       if (store.btwMode) {
-        if (store.sendBtwQuestion(trimmed) === false) return;
+        if (store.sendBtwQuestion(outgoingText) === false) return;
+        if (snapshotRouteKey && snapshotRefIds.length > 0) {
+          removeCanvasContextRefsByIds(snapshotRouteKey, snapshotRefIds);
+        }
         inputText.value = '';
         if (effectiveDraftKey.value) delete store.inputDrafts[effectiveDraftKey.value];
         resetTextareaSize();
@@ -704,8 +797,11 @@ export default {
         }));
 
       const currentExpertSelections = [...expertSelections.value];
-      if (store.sendMessage(trimmed, attachmentInfos, { expertSelections: currentExpertSelections }) === false) return;
+      if (store.sendMessage(outgoingText, attachmentInfos, { expertSelections: currentExpertSelections }) === false) return;
 
+      if (snapshotRouteKey && snapshotRefIds.length > 0) {
+        removeCanvasContextRefsByIds(snapshotRouteKey, snapshotRefIds);
+      }
       attachmentQueue.release();
       inputText.value = '';
       store.expertSelections = [];
@@ -901,6 +997,11 @@ export default {
       appendMention,
       replaceDraft,
       focusInput,
+      // Canvas Context Reference Chips
+      canvasRefs,
+      canvasKindBadge,
+      canvasRefLocation,
+      removeCanvasRef,
     };
   }
 };

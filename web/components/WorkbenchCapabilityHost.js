@@ -1,16 +1,18 @@
 import TerminalTab from './TerminalTab.js';
 import GitStatusTab from './GitStatusTab.js';
 import FilesTab from './FilesTab.js';
+import CreationTab from './workbench/CreationTab.js';
 
 const TOOL_COMPONENTS = Object.freeze({
   terminal: 'TerminalTab',
   git: 'GitStatusTab',
   files: 'FilesTab',
+  creation: 'CreationTab',
 });
 
 export default {
   name: 'WorkbenchCapabilityHost',
-  components: { TerminalTab, GitStatusTab, FilesTab },
+  components: { TerminalTab, GitStatusTab, FilesTab, CreationTab },
   props: {
     activeCapability: { type: String, default: null },
     retainedCapabilities: { type: Array, default: () => [] },

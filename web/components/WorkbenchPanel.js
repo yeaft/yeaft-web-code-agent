@@ -2,6 +2,7 @@ import WorkbenchCapabilityHost from './WorkbenchCapabilityHost.js';
 import BrowserPanel from './BrowserPanel.js';
 import { normalizeBrowserAddress } from '../utils/browser-address.js';
 import NavigationIcon from './NavigationIcon.js';
+import { useCreationsStore } from '../stores/creations.js';
 import {
   workbenchConversationId,
   workbenchRouteKey,
@@ -142,6 +143,7 @@ export default {
                   <svg v-if="capability.id === 'terminal'" viewBox="0 0 24 24"><path fill="currentColor" d="M20 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm0 14H4V8h16v10zM7 16l4-4-4-4 1.4-1.4L13.8 12l-5.4 5.4L7 16zm6 0h5v-2h-5v2z"/></svg>
                   <svg v-else-if="capability.id === 'git'" viewBox="0 0 24 24"><path fill="currentColor" d="M21.62 11.11l-8.73-8.73a1.32 1.32 0 00-1.87 0L8.89 4.51l2.35 2.35a1.57 1.57 0 012 2l2.27 2.27a1.57 1.57 0 11-.94.88l-2.12-2.12v5.57a1.57 1.57 0 11-1.29 0V9.72a1.57 1.57 0 01-.85-2.06L8 5.34 2.38 11a1.32 1.32 0 000 1.87l8.73 8.73a1.32 1.32 0 001.87 0l8.64-8.64a1.32 1.32 0 000-1.85z"/></svg>
                   <svg v-else-if="capability.id === 'files'" viewBox="0 0 24 24"><path fill="currentColor" d="M10 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2h-8l-2-2z"/></svg>
+                  <svg v-else-if="capability.id === 'creation'" viewBox="0 0 24 24"><path fill="currentColor" d="M12 2l2.4 6.6L21 11l-6.6 2.4L12 20l-2.4-6.6L3 11l6.6-2.4L12 2zm7 14l1.1 3L23 20l-2.9 1L19 24l-1.1-3L15 20l2.9-1L19 16z"/></svg>
                   <svg v-else viewBox="0 0 24 24"><path fill="currentColor" d="M20 4H4a2 2 0 00-2 2v12a2 2 0 002 2h16a2 2 0 002-2V6a2 2 0 00-2-2zm0 14H4V9h16v9zM4 7V6h16v1H4zm2-1h2v1H6V6z"/></svg>
                 </span>
                 <span class="workbench-capability-copy">
@@ -234,6 +236,7 @@ export default {
   `,
   setup(props, { emit, expose }) {
     const chatStore = Pinia.useChatStore();
+    const creationsStore = useCreationsStore();
     const ownedState = Vue.reactive({ workbenchExpanded: false, workbenchMaximized: false });
     const ownedPanels = new Map();
     const ownedActions = {
@@ -261,6 +264,13 @@ export default {
           if (Object.hasOwn(ownedActions, key)) return ownedActions[key];
         }
         return Reflect.get(target, key);
+      },
+      set(target, key, value) {
+        if (props.ownerRoute && Object.hasOwn(ownedState, key)) {
+          ownedState[key] = value;
+          return true;
+        }
+        return Reflect.set(target, key, value);
       },
     });
     Vue.provide('workbench-store', store);
@@ -320,6 +330,20 @@ export default {
       && store.hasAgentCapability(activeRoute.value?.agentId, 'terminal'));
     const hasExplorer = Vue.computed(() => hasSessionRoutes.value
       && store.hasAgentCapability(activeRoute.value?.agentId, 'file_editor'));
+    const hasCreations = Vue.computed(() => {
+      if (!hasExplorer.value) return false;
+      const agentId = activeRoute.value?.agentId;
+      if (!agentId) return false;
+      const agent = Array.isArray(store.agents)
+        ? store.agents.find(candidate => candidate?.id === agentId)
+        : null;
+      const selectedAgent = store.currentAgentInfo?.id === agentId ? store.currentAgentInfo : null;
+      const caps = agent?.capabilities || selectedAgent?.capabilities || [];
+      if (Array.isArray(caps) && caps.length > 0) {
+        return caps.includes('creation_workbench_files');
+      }
+      return true;
+    });
     // Browser is client-only; Agent capabilities and transport do not gate it.
     const canOpenBrowser = Vue.computed(() => Boolean(activeRouteKey.value));
     const hasBrowser = canOpenBrowser;
@@ -337,6 +361,7 @@ export default {
       capabilityCard('terminal', 'workbench.terminal', hasTerminal.value),
       capabilityCard('git', 'workbench.git', hasExplorer.value),
       capabilityCard('files', 'workbench.files', hasExplorer.value),
+      capabilityCard('creation', 'workbench.creation', hasCreations.value),
       capabilityCard(
         'browser',
         'workbench.browser',
@@ -383,7 +408,7 @@ export default {
     ));
     const activeToolCapability = Vue.computed(() => {
       if (!activeCapabilityDefinition.value?.available) return null;
-      return ['terminal', 'git', 'files'].includes(activeCapability.value)
+      return ['terminal', 'git', 'files', 'creation'].includes(activeCapability.value)
         && isCapabilityActivated(activeCapability.value)
         ? activeCapability.value
         : null;
@@ -391,7 +416,7 @@ export default {
     const routeHostState = Vue.computed(() => ({
       openCapabilities: openCapabilities.filter(capabilityId => {
         const definition = capabilityCards.value.find(capability => capability.id === capabilityId);
-        return definition?.available && ['terminal', 'git', 'files'].includes(capabilityId);
+        return definition?.available && ['terminal', 'git', 'files', 'creation'].includes(capabilityId);
       }),
       routeProps: { ...routeProps.value },
     }));
@@ -544,7 +569,7 @@ export default {
 
     const openCapability = capabilityId => {
       if (!capabilityCards.value.some(capability => capability.id === capabilityId)) return false;
-      if (['terminal', 'git', 'files'].includes(capabilityId) && !activeRouteKey.value) return false;
+      if (['terminal', 'git', 'files', 'creation'].includes(capabilityId) && !activeRouteKey.value) return false;
       ensureOpenCapability(capabilityId);
       activatedCapabilities.add(capabilityActivationKey(capabilityId));
       activeCapability.value = capabilityId;
@@ -569,11 +594,97 @@ export default {
     const handleOpenCapability = event => {
       const detail = event.detail;
       if (!detail || detail.routeKey !== activeRouteKey.value
-        || !['terminal', 'files', 'git', 'browser'].includes(detail.capabilityId)
+        || !['terminal', 'files', 'git', 'creation', 'browser'].includes(detail.capabilityId)
         || !capabilityCards.value.some(item => item.id === detail.capabilityId && item.available)) return;
       if (!openCapability(detail.capabilityId)) return;
       store.openWorkbench();
       detail.accepted = true;
+    };
+
+    const providedCreationTarget = Vue.reactive({ routeKey: '', agentId: '', creationId: '', rootDir: '', workspaceGeneration: null, openSeq: null, seq: 0 });
+    Vue.provide('workbench-creation-target', providedCreationTarget);
+    Vue.provide('workbench-has-creations', hasCreations);
+
+    const openCreationWorkspaceTarget = ({ creationId = '', rootDir = '', maximize, openSeq = null, supersedePending = false } = {}) => {
+      if (!activeRouteKey.value || !hasCreations.value) return false;
+      if (!openCapability('creation')) return false;
+      if (supersedePending) creationsStore.cancelPendingWorkspaceOpen?.();
+      store.openWorkbench();
+      if (maximize === true) store.workbenchMaximized = true;
+      else if (maximize === false) store.workbenchMaximized = false;
+      const targetRouteKey = activeRouteKey.value;
+      const targetAgentId = activeRoute.value?.agentId || '';
+      const workspaceGeneration = routeHostState.value?.routeProps?.workspaceGeneration ?? null;
+      providedCreationTarget.routeKey = targetRouteKey;
+      providedCreationTarget.agentId = targetAgentId;
+      providedCreationTarget.creationId = creationId || '';
+      providedCreationTarget.rootDir = rootDir || '';
+      providedCreationTarget.workspaceGeneration = workspaceGeneration;
+      providedCreationTarget.openSeq = openSeq;
+      providedCreationTarget.seq += 1;
+      const dispatchedSeq = providedCreationTarget.seq;
+      Vue.nextTick(() => {
+        window.dispatchEvent(new CustomEvent('workbench-creation-target', {
+          detail: {
+            routeKey: targetRouteKey,
+            agentId: targetAgentId,
+            creationId: creationId || '',
+            rootDir: rootDir || '',
+            workspaceGeneration,
+            seq: dispatchedSeq,
+            openSeq,
+          },
+        }));
+      });
+      window.dispatchEvent(new CustomEvent('workbench-creation-opened', {
+        detail: {
+          routeKey: targetRouteKey,
+          agentId: targetAgentId,
+          creationId: creationId || '',
+          rootDir: rootDir || '',
+          expanded: Boolean(store.workbenchExpanded),
+          maximized: Boolean(store.workbenchMaximized),
+        },
+      }));
+      return true;
+    };
+
+    const handleOpenCreation = event => {
+      const detail = event.detail;
+      if (!detail || !activeRouteKey.value || !hasCreations.value) return;
+      const routeMatches = detail.routeKey
+        ? detail.routeKey === activeRouteKey.value
+        : (!detail.agentId || activeRoute.value?.agentId === detail.agentId);
+      if (!routeMatches) return;
+      if (openCreationWorkspaceTarget({
+        creationId: detail.creationId,
+        rootDir: detail.rootDir,
+        maximize: detail.maximize,
+        openSeq: detail.openSeq ?? null,
+        supersedePending: detail.openSeq == null,
+      })) {
+        detail.accepted = true;
+      }
+    };
+
+    const consumePendingCreationTarget = () => {
+      const target = creationsStore.pendingWorkbenchTarget;
+      if (!target || !activeRouteKey.value || !hasCreations.value) return;
+      if (target.agentId && activeRoute.value?.agentId !== target.agentId) return;
+      if (target.sessionId && activeRoute.value?.sessionId !== target.sessionId) return;
+      if (target.workspaceGeneration != null && target.workspaceGeneration !== activeWorkspaceGeneration.value) {
+        if (target.openSeq != null && target.openSeq === creationsStore.openWorkspaceSeq) {
+          creationsStore.cancelPendingWorkspaceOpen?.();
+        } else creationsStore.clearPendingWorkbenchTarget?.(target.seq);
+        return;
+      }
+      if (!openCreationWorkspaceTarget({
+        creationId: target.creationId,
+        rootDir: target.rootDir,
+        maximize: target.maximize,
+        openSeq: target.openSeq ?? null,
+      })) return;
+      creationsStore.clearPendingWorkbenchTarget?.(target.seq);
     };
 
     const confirmFilesCapabilityClose = ({ routeKey, workspaceGeneration }) => new Promise(resolve => {
@@ -607,6 +718,26 @@ export default {
           workspaceGeneration: activeWorkspaceGeneration.value,
         });
         if (!confirmed || workbenchContextKey.value !== initiatingContextKey) return false;
+      }
+      if (target === 'creation' && hasCreations.value && isCapabilityActivated(target)) {
+        const detail = {
+          routeKey: activeRouteKey.value,
+          workspaceGeneration: activeWorkspaceGeneration.value,
+          dirtyCount: 0,
+          dirtyFiles: [],
+        };
+        window.dispatchEvent(new CustomEvent('creation-check-dirty', { detail }));
+        if (detail.dirtyCount > 0) {
+          const firstDirty = detail.dirtyFiles[0];
+          const firstDirtyName = typeof firstDirty === 'string'
+            ? firstDirty
+            : (firstDirty?.name || firstDirty?.relPath || firstDirty?.path || '');
+          const message = detail.dirtyCount === 1
+            ? t('files.unsavedConfirm', { name: firstDirtyName })
+            : t('files.unsavedBatchConfirm', { count: detail.dirtyCount });
+          const confirmed = typeof window.confirm === 'function' ? window.confirm(message) : true;
+          if (!confirmed || workbenchContextKey.value !== initiatingContextKey) return false;
+        }
       }
       return removeCapability(target);
     };
@@ -838,6 +969,16 @@ export default {
       workbenchContextKey,
       (contextKey, previousContextKey) => {
         if (contextKey === previousContextKey) return;
+        if (previousContextKey?.split('\u0000', 1)[0] === activeRouteKey.value) {
+          const routeKey = activeRouteKey.value;
+          const nextWorkspaceGeneration = activeWorkspaceGeneration.value;
+          const canceled = creationsStore.cancelStaleGenerationActivations?.(routeKey, nextWorkspaceGeneration);
+          const pending = creationsStore.pendingWorkbenchTarget;
+          const targetsOldGeneration = pending?.openSeq != null
+            && pending.agentId === activeRoute.value?.agentId && pending.sessionId === activeRoute.value?.sessionId
+            && pending.workspaceGeneration != null && pending.workspaceGeneration !== nextWorkspaceGeneration;
+          if (canceled || targetsOldGeneration) creationsStore.cancelPendingWorkspaceOpen?.();
+        }
         const retainedNavigation = browserNavigationByContext.get(contextKey);
         if (retainedNavigation) retainBrowserNavigation(retainedNavigation);
         cancelActiveResize();
@@ -1126,6 +1267,7 @@ export default {
       window.addEventListener('open-file-in-explorer', handleOpenFile);
       window.addEventListener('workbench-open-browser', handleOpenBrowser);
       window.addEventListener('workbench-open-capability', handleOpenCapability);
+      window.addEventListener('workbench-open-creation', handleOpenCreation);
       window.addEventListener('workbench-file-items-changed', handleFileItemsChanged);
       document.addEventListener('click', handleDocumentClick);
       document.addEventListener('keydown', handleDocumentKeydown);
@@ -1139,7 +1281,14 @@ export default {
       }
       window.addEventListener('resize', handleViewportResize);
       scheduleTabOverflowUpdate();
+      consumePendingCreationTarget();
     });
+
+    Vue.watch(
+      () => [creationsStore.pendingWorkbenchTarget, activeRouteKey.value, hasCreations.value],
+      () => consumePendingCreationTarget(),
+      { flush: 'post' },
+    );
 
     Vue.watch(
       () => store.workbenchExpanded,
@@ -1170,6 +1319,7 @@ export default {
       window.removeEventListener('open-file-in-explorer', handleOpenFile);
       window.removeEventListener('workbench-open-browser', handleOpenBrowser);
       window.removeEventListener('workbench-open-capability', handleOpenCapability);
+      window.removeEventListener('workbench-open-creation', handleOpenCreation);
       window.removeEventListener('workbench-file-items-changed', handleFileItemsChanged);
       document.removeEventListener('click', handleDocumentClick);
       document.removeEventListener('keydown', handleDocumentKeydown);
@@ -1225,6 +1375,7 @@ export default {
       isCapabilityActivated,
       hasTerminal,
       hasExplorer,
+      hasCreations,
       canOpenBrowser,
       hasBrowser,
       panelStyle,

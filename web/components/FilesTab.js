@@ -3,17 +3,19 @@ import { getFileIconSvg, getFolderIconSvg } from '../utils/fileIcons.js';
 import { createFindReplace } from './files/findReplace.js';
 import { createFileOperations } from './files/fileOperations.js';
 import { createFileTree } from './files/fileTree.js';
-import { createFileEditor, getFileType, isPreviewableTextFile } from './files/fileEditor.js';
+import { createFileEditor, getFileType, isPreviewableTextFile, updateFileText } from './files/fileEditor.js';
 import { createFilePreview } from './files/filePreview.js';
 import SvgPreview from './files/SvgPreview.js';
 import CsvPreview from './files/CsvPreview.js';
 import FilePreviewFallback from './files/FilePreviewFallback.js';
 import SpreadsheetPreview from './files/SpreadsheetPreview.js';
+import FileCanvasView, { isBinaryDocument, isCanvasSupportedFile } from './workbench/FileCanvasView.js';
+import { isSafeSameOriginPreviewUrl } from './cosmos/creations/sanitize.js';
 import { createQuickOpen } from './files/quickOpen.js';
 import { createFolderPicker } from './files/folderPicker.js';
 import { createFileTabs } from './files/fileTabs.js';
 import { createWsHandler } from './files/wsHandler.js';
-import { directoryBreadcrumbs, normalizeBrowserPath } from '../utils/folder-picker-path.js';
+import { directoryBreadcrumbs, normalizeBrowserPath, parentDirectory } from '../utils/folder-picker-path.js';
 import { openImagePreview } from '../utils/imagePreview.js';
 import NavigationIcon from './NavigationIcon.js';
 import {
@@ -132,7 +134,7 @@ export function createFileCloseEventHandlers({ liveStore, props, tabs, isDispose
 
 export default {
   name: 'FilesTab',
-  components: { NavigationIcon, SvgPreview, CsvPreview, FilePreviewFallback, SpreadsheetPreview },
+  components: { NavigationIcon, SvgPreview, CsvPreview, FilePreviewFallback, SpreadsheetPreview, FileCanvasView },
   props: {
     treeInitiallyVisible: { type: Boolean, default: true },
     routeKey: { type: String, required: true },
@@ -204,6 +206,9 @@ export default {
               </button>
               <button v-if="!workspaceLocked" class="vscode-action-btn" @click="openFolderPicker" :title="$t('files.openFolder')">
                 <svg viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M20 6h-8l-2-2H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2zm0 12H4V8h16v10z"/></svg>
+              </button>
+              <button v-if="canOpenCreation" type="button" class="vscode-action-btn" @click="openFolderInCreation(treeRootPath)" :title="$t('files.openFolderInCreation')" :aria-label="$t('files.openFolderInCreation')">
+                <span aria-hidden="true">✦</span>
               </button>
             </div>
             <button
@@ -318,7 +323,7 @@ export default {
           <span class="mobile-file-name">
             <span v-if="activeFile?.isDirty">● </span>{{ activeFile?.name }}
           </span>
-          <button class="file-action-btn" :class="{ active: activeFile?.isDirty }" @click="saveFile" :disabled="!activeFile?.isDirty || fileSaving">
+          <button v-if="!activeBinaryDocument" class="file-action-btn" :class="{ active: activeFile?.isDirty }" @click="saveFile" :disabled="!activeFile?.isDirty || fileSaving">
             <svg viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M17 3H5c-1.11 0-2 .89-2 2v14c0 1.1.89 2 2 2h14c1.1 0 2-.9 2-2V7l-4-4zm-5 16c-1.66 0-3-1.34-3-3s1.34-3 3-3 3 1.34 3 3-1.34 3-3 3zm3-10H5V5h10v4z"/></svg>
           </button>
         </div>
@@ -333,22 +338,30 @@ export default {
             <span v-if="activeFile.isDirty" class="file-content-dirty" :title="$t('files.unsaved')">●</span>
           </nav>
           <div class="file-content-actions">
-            <template v-if="isActiveTextPreview">
-              <button type="button" class="file-action-btn file-action-text" :class="{ active: textPreviewMode }" :aria-pressed="textPreviewMode" @click="switchToTextPreview">{{ $t('files.preview') }}</button>
-              <button type="button" class="file-action-btn file-action-text" :class="{ active: !textPreviewMode }" :aria-pressed="!textPreviewMode" @click="switchToTextEdit">{{ $t('files.edit') }}</button>
+            <template v-if="isActiveTextPreview && !activeBinaryDocument">
+              <button type="button" class="file-action-btn file-action-text" :class="{ active: textPreviewMode && !activeCanvasMode }" :aria-pressed="textPreviewMode && !activeCanvasMode" @click="onSwitchToTextPreview">{{ $t('files.preview') }}</button>
+              <button type="button" class="file-action-btn file-action-text" :class="{ active: !textPreviewMode && !activeCanvasMode }" :aria-pressed="!textPreviewMode && !activeCanvasMode" @click="onSwitchToTextEdit">{{ $t('files.edit') }}</button>
             </template>
+            <button
+              v-if="activeCanvasSupported"
+              type="button"
+              class="file-action-btn file-action-text file-action-canvas"
+              :class="{ active: activeCanvasMode }"
+              :aria-pressed="activeCanvasMode"
+              @click="toggleCanvasMode"
+            >✦ {{ $t('files.canvas') }}</button>
             <template v-if="isTextZoomAvailable">
               <button type="button" class="zoom-btn" @click="zoomOut" :title="$t('git.zoomOut')">−</button>
               <span class="zoom-label">{{ fontSize }}</span>
               <button type="button" class="zoom-btn" @click="zoomIn" :title="$t('git.zoomIn')">+</button>
             </template>
             <button
-              v-if="activeFile.fileType !== 'text' || activeFile.loadError"
+              v-if="activeBinaryDocument || activeFile.fileType !== 'text' || activeFile.loadError"
               type="button"
               class="file-action-btn file-action-text"
               @click="downloadActiveFile"
             >{{ $t('files.download') }}</button>
-            <button type="button" class="file-action-btn" :class="{ active: activeFile.isDirty }" @click="saveFile" :disabled="!activeFile.isDirty || fileSaving" :title="$t('common.save') + ' (Ctrl+S)'">
+            <button v-if="!activeBinaryDocument" type="button" class="file-action-btn" :class="{ active: activeFile.isDirty }" @click="saveFile" :disabled="!activeFile.isDirty || fileSaving" :title="$t('common.save') + ' (Ctrl+S)'">
               <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M17 3H5c-1.11 0-2 .89-2 2v14c0 1.1.89 2 2 2h14c1.1 0 2-.9 2-2V7l-4-4zm-5 16c-1.66 0-3-1.34-3-3s1.34-3 3-3 3 1.34 3 3-1.34 3-3 3zm3-10H5V5h10v4z"/></svg>
             </button>
           </div>
@@ -359,6 +372,25 @@ export default {
         </div>
         <FilePreviewFallback v-else-if="activeFile?.loadError" :file="activeFile" :error="activeFile.loadError" @download="downloadActiveFile" />
         <template v-else-if="activeFile">
+          <FileCanvasView
+            v-if="activeCanvasMode || activeBinaryDocument"
+            :is-binary="activeBinaryDocument"
+            :key="activeFile.path"
+            :file="activeFile"
+            :route-key="routeKey"
+            :saving="fileSaving"
+            :show-header="true"
+            :show-promote-folder="true"
+            :resolve-media-url="resolveCanvasRelativeMediaUrl"
+            @update:content="onCanvasContentUpdate"
+            @save="saveFile"
+            @download="downloadActiveFile"
+            @promote-folder="openFolderInCreation"
+            @open-relative-link="onCanvasRelativeLink"
+            @media-load="onCanvasMediaLoad"
+            @media-error="onCanvasMediaError"
+          />
+          <template v-else>
           <!-- 文本文件: CodeMirror 编辑器 -->
           <template v-if="!activeFile.fileType || activeFile.fileType === 'text'">
           <!-- Markdown 渲染预览 -->
@@ -497,6 +529,7 @@ export default {
             </template>
           </div>
           <FilePreviewFallback v-else :file="activeFile" @download="downloadActiveFile" />
+          </template>
         </template>
       </div>
       <div class="file-col-placeholder" v-if="openFiles.length === 0">
@@ -659,6 +692,20 @@ export default {
           <svg viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/></svg>
           {{ $t('common.delete') }}
         </div>
+        <template v-if="canOpenCreation && contextMenu.entry?.type === 'directory'">
+          <div class="ctx-menu-separator"></div>
+          <div
+            class="ctx-menu-item"
+            role="menuitem"
+            tabindex="0"
+            @click="ctxOpenInCreation"
+            @keydown.enter.prevent="ctxOpenInCreation"
+            @keydown.space.prevent="ctxOpenInCreation"
+          >
+            <span aria-hidden="true">✦</span>
+            {{ $t('files.openFolderInCreation') }}
+          </div>
+        </template>
         <template v-if="contextMenu.entry?.type === 'file'">
           <div class="ctx-menu-separator"></div>
           <div class="ctx-menu-item" @click="ctxDownload">
@@ -735,8 +782,18 @@ export default {
     };
     const zoomIn = () => setFontSize(fontSize.value + 1);
     const zoomOut = () => setFontSize(fontSize.value - 1);
+    // --- Per-file Canvas mode ---
+    const canvasModeByPath = Vue.reactive({});
+    const activeBinaryDocument = Vue.computed(() => isBinaryDocument(tabsRef.value?.activeFile.value));
+    const activeCanvasSupported = Vue.computed(() => !activeBinaryDocument.value && !!isCanvasSupportedFile(tabsRef.value?.activeFile.value));
+    const activeCanvasMode = Vue.computed(() => {
+      const file = tabsRef.value?.activeFile.value;
+      return !!(file && activeCanvasSupported.value && canvasModeByPath[file.path]);
+    });
+
     const isTextZoomAvailable = Vue.computed(() => {
       const file = tabs?.activeFile.value;
+      if (activeCanvasMode.value || activeBinaryDocument.value) return false;
       return !!file && (!file.fileType || file.fileType === 'text')
         && !((preview?.isActiveHtml.value || preview?.isActiveSvg.value) && preview.textPreviewMode.value);
     });
@@ -800,8 +857,8 @@ export default {
       editorContainer, fontSize,
       clearFindMarkers: find.clearFindMarkers,
       openFindBar: find.openFindBar,
-      saveFile: () => tabs.saveFile(),
-      canCreateEditor: file => !isPreviewableTextFile(file.name) || !preview.textPreviewMode.value
+      saveFile: () => saveFile(),
+      canCreateEditor: file => !isBinaryDocument(file) && !canvasModeByPath[file.path] && (!isPreviewableTextFile(file.name) || !preview.textPreviewMode.value)
     });
 
     // 3. File preview
@@ -895,6 +952,19 @@ export default {
       workspaceGeneration: props.workspaceGeneration,
     });
 
+    // Normalize document reads before the legacy handler can coerce absent
+    // content to an editable empty string. Keep its request/route correlation.
+    const handleWorkbenchMessage = event => {
+      const msg = event.detail;
+      if (msg?.type === 'file_content' && !msg.error && !msg.binary
+        && isCanvasSupportedFile(msg.requestedFilePath || msg.filePath) === 'doc'
+        && (msg.isBinary === true || typeof msg.content !== 'string')) {
+        ws.handleWorkbenchMessage({ detail: { ...msg, binary: true } });
+        return;
+      }
+      ws.handleWorkbenchMessage(event);
+    };
+
     // --- Wrapped operation callbacks (pass t at init time) ---
     const deleteSingleFile = (entry) => ops.deleteSingleFile(entry, t);
     const deleteSelected = () => ops.deleteSelected(t);
@@ -902,12 +972,20 @@ export default {
     const onDrop = (event, entry) => ops.onDrop(event, entry, ops.handleExternalFileDrop);
     const onTreeDrop = (event) => ops.onTreeDrop(event, tree.treeRootPath.value, ops.handleExternalFileDrop);
     const goToLineConfirm = () => qo.goToLineConfirm(tabs.activeFile);
+    const saveFile = () => {
+      if (!activeBinaryDocument.value) tabs.saveFile();
+    };
     const downloadActiveFile = () => {
       const file = tabs.activeFile.value;
       if (!file) return;
-      if (file.blobUrl) {
-        const url = new URL(file.blobUrl, location.href);
-        url.searchParams.set('download', '1');
+      const rawUrl = file.blobUrl;
+      if (file.previewUrlRejected || (rawUrl && !isSafeSameOriginPreviewUrl(rawUrl))) {
+        ops.showFileOpFeedback(false, t(file.fileType === 'video' ? 'files.videoStreamUnavailable' : 'files.previewUnavailable'));
+        return;
+      }
+      if (rawUrl) {
+        const url = new URL(rawUrl, location.origin);
+        if (url.protocol !== 'blob:') url.searchParams.set('download', '1');
         const link = document.createElement('a');
         link.href = url.href;
         link.download = file.name;
@@ -916,6 +994,171 @@ export default {
         link.remove();
       } else {
         ops.downloadFile({ path: file.path, type: 'file' });
+      }
+    };
+
+    const toggleCanvasMode = () => {
+      const file = tabs.activeFile.value;
+      if (!file || !activeCanvasSupported.value) return;
+      const isText = !file.fileType || file.fileType === 'text';
+      if (canvasModeByPath[file.path]) {
+        canvasModeByPath[file.path] = false;
+        if (isText && (!isPreviewableTextFile(file.name) || !preview.textPreviewMode.value)) {
+          Vue.nextTick(() => {
+            const current = tabs.activeFile.value;
+            if (current && current.path === file.path && !current.cmInstance && editorContainer.value) {
+              editor.createEditor(current);
+            }
+          });
+        }
+      } else {
+        if (isText) {
+          editor.saveCurrentUndoHistory();
+          editor.destroyEditor();
+          find.closeFindBar();
+        }
+        canvasModeByPath[file.path] = true;
+      }
+    };
+
+    const onSwitchToTextPreview = () => {
+      const file = tabs.activeFile.value;
+      if (file) canvasModeByPath[file.path] = false;
+      preview.switchToTextPreview();
+    };
+
+    const onSwitchToTextEdit = () => {
+      const file = tabs.activeFile.value;
+      const wasCanvas = !!(file && canvasModeByPath[file.path]);
+      if (file) canvasModeByPath[file.path] = false;
+      if (preview.textPreviewMode.value) {
+        preview.switchToTextEdit();
+      } else if (wasCanvas && file) {
+        Vue.nextTick(() => {
+          const current = tabs.activeFile.value;
+          if (current && current.path === file.path && !current.cmInstance && editorContainer.value) {
+            editor.createEditor(current);
+          }
+        });
+      }
+    };
+
+    const onCanvasContentUpdate = (nextContent) => {
+      const file = tabs.activeFile.value;
+      if (!file || isBinaryDocument(file)) return;
+      const prevContent = file.content;
+      updateFileText(file, nextContent);
+      if (file.content !== prevContent) {
+        file.cmState = null;
+        editor.cleanupUndoHistory(store.currentConversation, file.path);
+      }
+    };
+
+    const findMatchingCanvasMediaFile = (payload) => {
+      const targetPath = payload?.path || '';
+      const targetUrl = payload?.url || '';
+      if (!targetPath || !targetUrl) return null;
+      return tabs.openFiles.value.find(
+        f => f && f.path === targetPath && f.blobUrl === targetUrl
+      ) || null;
+    };
+
+    const onCanvasMediaLoad = (payload) => {
+      const file = findMatchingCanvasMediaFile(payload);
+      if (!file) return;
+      file.previewLoading = false;
+      file.previewError = null;
+    };
+
+    const onCanvasMediaError = (payload) => {
+      const file = findMatchingCanvasMediaFile(payload);
+      if (!file) return;
+      file.previewLoading = false;
+      file.previewError = file.fileType === 'video'
+        ? t('files.videoPreviewLoadFailed')
+        : t('files.previewLoadFailed');
+    };
+
+    const resolveCanvasRelativeMediaUrl = (resolvedPath) => {
+      if (!resolvedPath) return '';
+      const targetNorm = normalizePath(resolvedPath);
+      const opened = tabs.openFiles.value.find(
+        f => f && normalizePath(f.path) === targetNorm && f.blobUrl
+      );
+      return opened?.blobUrl || '';
+    };
+
+    const onCanvasRelativeLink = (payload) => {
+      const targetPath = typeof payload?.targetPath === 'string' ? payload.targetPath.trim() : '';
+      if (!targetPath) return;
+      const normalized = normalizePath(targetPath);
+      const parts = normalized.split('/').filter(Boolean);
+      const name = parts[parts.length - 1] || normalized;
+      tabs.openFileInTab(normalized, name);
+    };
+
+    const workbenchHasCreations = Vue.inject('workbench-has-creations', null);
+    const canOpenCreation = Vue.computed(() => {
+      if (workbenchHasCreations) return Boolean(workbenchHasCreations.value);
+      const agentId = props.agentId || store.currentAgent;
+      if (!agentId) return false;
+      const agent = Array.isArray(store.agents)
+        ? store.agents.find(candidate => candidate?.id === agentId)
+        : null;
+      const selectedAgent = store.currentAgentInfo?.id === agentId ? store.currentAgentInfo : null;
+      const caps = agent?.capabilities || selectedAgent?.capabilities || [];
+      if (Array.isArray(caps) && caps.length > 0) {
+        return caps.includes('creation_workbench_files');
+      }
+      return true;
+    });
+
+    const openFolderInCreation = (dirPath) => {
+      if (!canOpenCreation.value) return;
+      let targetDir = typeof dirPath === 'string' ? dirPath.trim() : '';
+      if (!targetDir) {
+        const activePath = tabs.activeFile.value?.path;
+        targetDir = activePath ? parentDirectory(normalizePath(activePath)) : (tree.treeRootPath.value || getEffectiveWorkDir());
+      }
+      if (!targetDir) return;
+      window.dispatchEvent(new CustomEvent('workbench-open-creation', {
+        detail: {
+          routeKey: props.routeKey,
+          agentId: props.agentId,
+          sessionId: props.sessionId,
+          rootDir: targetDir,
+        },
+      }));
+    };
+
+    const ctxOpenInCreation = () => {
+      const dirPath = ops.contextMenu.entry?.path;
+      ops.hideContextMenu();
+      if (dirPath) openFolderInCreation(dirPath);
+    };
+
+    const handleFilesOpenDir = async (event) => {
+      const detail = event?.detail;
+      if (!detail || detail.routeKey !== props.routeKey) return;
+      if (detail.workspaceGeneration && detail.workspaceGeneration !== props.workspaceGeneration) return;
+      const dirPath = typeof detail.dirPath === 'string' ? detail.dirPath.trim() : '';
+      if (!dirPath) return;
+      const gen = props.workspaceGeneration;
+      const targetRouteKey = props.routeKey;
+      const isCurrentGeneration = () => (
+        !disposed
+        && props.routeKey === targetRouteKey
+        && props.workspaceGeneration === gen
+      );
+      if (!isCurrentGeneration()) return;
+      treeVisible.value = true;
+      if (isMobile.value) mobileView.value = 'tree';
+      qo.clearSearch();
+      const revealed = await Promise.resolve(tree.revealPath(dirPath, 'directory'));
+      if (!isCurrentGeneration()) return;
+      if (!revealed && !props.workspaceLocked) {
+        tree.treePath.value = dirPath;
+        await Promise.resolve(tree.loadRootDirectory());
       }
     };
 
@@ -968,6 +1211,7 @@ export default {
       (newContent, oldContent) => {
         const file = tabs.activeFile.value;
         if (file && newContent != null && oldContent == null && !file.cmInstance && (!file.fileType || file.fileType === 'text')) {
+          if (canvasModeByPath[file.path]) return;
           if (isPreviewableTextFile(file.name) && preview.textPreviewMode.value) return;
           Vue.nextTick(() => { setTimeout(() => { if (!file.cmInstance) editor.createEditor(file); }, 150); });
         }
@@ -1072,12 +1316,13 @@ export default {
 
     // --- Lifecycle ---
     Vue.onMounted(() => {
-      window.addEventListener('workbench-message', ws.handleWorkbenchMessage);
+      window.addEventListener('workbench-message', handleWorkbenchMessage);
       window.addEventListener('workbench-open-file-in-active-view', ws.handleOpenFile);
       window.addEventListener('workbench-select-file-item', handleSelectFileItem);
       window.addEventListener('workbench-close-file-item', handleCloseFileItem);
       window.addEventListener('workbench-close-file-items', handleCloseFileItems);
       window.addEventListener('workbench-close-files-capability', handleCloseFilesCapability);
+      window.addEventListener('workbench-files-open-dir', handleFilesOpenDir);
       window.addEventListener('conversation-deleted', tabs.handleConversationDeleted);
       window.addEventListener('keydown', handleGlobalKeydown);
       document.addEventListener('click', handleDocumentClick);
@@ -1109,12 +1354,13 @@ export default {
       disposed = true;
       tree.cancelReveal();
       tabs.saveTabsState(store.currentConversation);
-      window.removeEventListener('workbench-message', ws.handleWorkbenchMessage);
+      window.removeEventListener('workbench-message', handleWorkbenchMessage);
       window.removeEventListener('workbench-open-file-in-active-view', ws.handleOpenFile);
       window.removeEventListener('workbench-select-file-item', handleSelectFileItem);
       window.removeEventListener('workbench-close-file-item', handleCloseFileItem);
       window.removeEventListener('workbench-close-file-items', handleCloseFileItems);
       window.removeEventListener('workbench-close-files-capability', handleCloseFilesCapability);
+      window.removeEventListener('workbench-files-open-dir', handleFilesOpenDir);
       window.removeEventListener('conversation-deleted', tabs.handleConversationDeleted);
       window.removeEventListener('keydown', handleGlobalKeydown);
       document.removeEventListener('click', handleDocumentClick);
@@ -1147,6 +1393,11 @@ export default {
       isActiveMarkdown: preview.isActiveMarkdown, textPreviewMode: preview.textPreviewMode,
       mdRenderedHtml: preview.mdRenderedHtml, switchToTextEdit: preview.switchToTextEdit,
       switchToTextPreview: preview.switchToTextPreview,
+      activeBinaryDocument, activeCanvasSupported, activeCanvasMode, toggleCanvasMode,
+      onSwitchToTextPreview, onSwitchToTextEdit, onCanvasContentUpdate,
+      onCanvasMediaLoad, onCanvasMediaError,
+      resolveCanvasRelativeMediaUrl, onCanvasRelativeLink,
+      canOpenCreation, openFolderInCreation, ctxOpenInCreation,
       isActiveTextPreview: preview.isActiveTextPreview, isActiveHtml: preview.isActiveHtml, isActiveSvg: preview.isActiveSvg, isActiveCsv: preview.isActiveCsv,
       htmlPreviewDocument: preview.htmlPreviewDocument,
       folderPickerOpen: fp.folderPickerOpen, folderPickerPath: fp.folderPickerPath,
@@ -1196,7 +1447,7 @@ export default {
       onTreeDragOver: ops.onTreeDragOver, onTreeDragLeave: ops.onTreeDragLeave, onTreeDrop,
       loadRootDirectory: tree.loadRootDirectory, onTreeItemClick: tree.onTreeItemClick,
       openFileInTab: tabs.openFileInTab,
-      switchToTab: tabs.switchToTab, closeFileTab: tabs.closeFileTab, saveFile: tabs.saveFile,
+      switchToTab: tabs.switchToTab, closeFileTab: tabs.closeFileTab, saveFile,
       openFolderPicker: fp.openFolderPicker, folderPickerNavigateUp: fp.folderPickerNavigateUp,
       folderPickerSelectItem: fp.folderPickerSelectItem, folderPickerEnter: fp.folderPickerEnter,
       confirmFolderPicker: fp.confirmFolderPicker,

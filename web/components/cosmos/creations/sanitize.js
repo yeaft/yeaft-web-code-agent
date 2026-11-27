@@ -106,35 +106,39 @@ function escapeHtml(text) {
   })[ch]);
 }
 
-/**
- * Validate a URL for `href` or `src`.
- * Allows `http:`, `https:`, `mailto:` (href only), and safe relative URLs.
- * Rejects `javascript:`, `vbscript:`, `data:`, protocol-relative `//`, etc.
- */
+// Normalize before classifying. Never let a leading backslash become an
+// authority delimiter, or let the browser reinterpret embedded controls.
+export function canonicalizeCreationUrl(rawUrl) {
+  if (typeof rawUrl !== 'string' || /[\u0000-\u001f\u007f]/.test(rawUrl)) return '';
+  const trimmed = rawUrl.trim();
+  if (trimmed.startsWith('\\')) return '';
+  const normalized = trimmed.replace(/\\/g, '/');
+  return normalized.startsWith('//') ? '' : normalized;
+}
+
+/** Allows HTTP(S), mailto on links, and relative URLs. Data URLs are not allowed. */
 export function isSafeCreationUrl(rawUrl, { allowMailto = false } = {}) {
-  const trimmed = String(rawUrl ?? '').trim();
-  if (!trimmed) return false;
-  // Strip control characters and whitespace before scheme inspection
-  const normalized = trimmed.replace(/[\u0000-\u001f\u007f\s]+/g, '');
-  if (!normalized) return false;
-  if (normalized.startsWith('//')) return false;
-  if (
-    normalized.startsWith('/')
-    || normalized.startsWith('./')
-    || normalized.startsWith('../')
-    || normalized.startsWith('#')
-  ) {
-    return true;
+  const url = canonicalizeCreationUrl(rawUrl);
+  if (!url) return false;
+  const scheme = url.replace(/\s+/g, '').match(/^([a-z][a-z0-9+.-]*):/i)?.[1].toLowerCase();
+  return !scheme || scheme === 'http' || scheme === 'https' || (allowMailto && scheme === 'mailto');
+}
+
+/** Allow browser blob URLs and same-origin API preview URLs, never arbitrary navigation. */
+export function isSafeSameOriginPreviewUrl(rawUrl) {
+  const url = canonicalizeCreationUrl(rawUrl);
+  // Callers use the original value at the sink. Reject any changed separators.
+  if (!url || url !== rawUrl.trim()) return false;
+  try {
+    const origin = globalThis.location?.origin || 'http://localhost';
+    const parsed = new URL(url, origin);
+    if (parsed.protocol === 'blob:') return Boolean(parsed.pathname);
+    return (parsed.protocol === 'http:' || parsed.protocol === 'https:')
+      && parsed.origin === origin
+      && (parsed.pathname.startsWith('/api/preview/') || parsed.pathname.startsWith('/api/yeaft/creations/'));
+  } catch {
+    return false;
   }
-  const schemeMatch = normalized.match(/^([a-zA-Z][a-zA-Z0-9+.-]*):/);
-  if (!schemeMatch) {
-    // Relative path without leading slash (e.g. "assets/img.png")
-    return true;
-  }
-  const scheme = schemeMatch[1].toLowerCase();
-  if (scheme === 'http' || scheme === 'https') return true;
-  if (allowMailto && scheme === 'mailto') return true;
-  return false;
 }
 
 function sanitizeClassValue(raw) {
@@ -178,11 +182,11 @@ function sanitizeNode(node, doc) {
 
       if (name === 'href') {
         if (isSafeCreationUrl(value, { allowMailto: true })) {
-          el.setAttribute('href', value.trim());
+          el.setAttribute('href', canonicalizeCreationUrl(value));
         }
       } else if (name === 'src') {
         if (isSafeCreationUrl(value, { allowMailto: false })) {
-          el.setAttribute('src', value.trim());
+          el.setAttribute('src', canonicalizeCreationUrl(value));
         }
       } else if (name === 'class') {
         const cleanClass = sanitizeClassValue(value);

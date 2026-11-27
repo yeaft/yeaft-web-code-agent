@@ -161,7 +161,7 @@ function sessionsStore() {
     || (window.__useSessionsStore && window.__useSessionsStore());
 }
 
-export function bufferYeaftSessionInventorySlice(store, msg, { live = false } = {}) {
+export function bufferYeaftSessionInventorySlice(store, msg, { live = false, suppressAutoSelect = false } = {}) {
   const agentId = msg.agentId || null;
   const slices = Array.isArray(store.yeaftSessionHydrateSlices) ? store.yeaftSessionHydrateSlices : [];
   // The initial Server replay may still be in transit after a live, full
@@ -172,6 +172,7 @@ export function bufferYeaftSessionInventorySlice(store, msg, { live = false } = 
     agentId,
     sessions: Array.isArray(msg.sessions) ? msg.sessions : [],
     live,
+    suppressAutoSelect,
   }];
 }
 
@@ -202,18 +203,31 @@ export function bufferYeaftSessionCrudDelta(store, event, agentId) {
 
 function applyYeaftSessionInventoryDeltas(slices, deltas) {
   if (!deltas?.size) return slices;
-  const result = new Map(slices.map(slice => [slice.agentId, slice.sessions]));
+  const result = new Map(slices.map(slice => [slice.agentId, slice]));
   for (const [agentId, updates] of deltas) {
-    const rows = new Map((result.get(agentId) || []).filter(row => row?.id).map(row => [row.id, row]));
+    const slice = result.get(agentId);
+    const rows = new Map((slice?.sessions || []).filter(row => row?.id).map(row => [row.id, row]));
     for (const [sessionId, delta] of updates) {
       if (!delta) rows.delete(sessionId);
       else if (delta.insert || rows.has(sessionId)) {
         rows.set(sessionId, { ...rows.get(sessionId), ...delta.patch });
       }
     }
-    if (rows.size || result.has(agentId)) result.set(agentId, [...rows.values()]);
+    if (rows.size || slice) result.set(agentId, { ...slice, agentId, sessions: [...rows.values()] });
   }
-  return [...result].map(([agentId, sessions]) => ({ agentId, sessions }));
+  return [...result.values()];
+}
+
+export function hasBufferedLiveYeaftSession(store, agentId, sessionId) {
+  if (!store?.yeaftSessionHydrateRequestId || !agentId || !sessionId) return false;
+  const deltas = store.yeaftSessionHydrateCrudDeltas?.requestId === store.yeaftSessionHydrateRequestId
+    ? store.yeaftSessionHydrateCrudDeltas?.agents : null;
+  const merged = applyYeaftSessionInventoryDeltas(
+    Array.isArray(store.yeaftSessionHydrateSlices) ? store.yeaftSessionHydrateSlices : [],
+    deltas,
+  );
+  const slice = merged.find(s => s && s.agentId === agentId && s.live === true);
+  return Boolean(slice && Array.isArray(slice.sessions) && slice.sessions.some(row => row?.id === sessionId));
 }
 
 // New Servers send an explicit completion frame. Older Servers do not, so the
@@ -221,9 +235,12 @@ function applyYeaftSessionInventoryDeltas(slices, deltas) {
 // buffered snapshot and never expose per-Agent slices to the live store.
 function commitBufferedYeaftSessionInventory(store) {
   const sessions = sessionsStore();
-  const preferred = sessions?.preferredInventoryIdentity?.() || readLastViewedYeaftSession();
+  const preferred = sessions?.preferredInventoryIdentity?.()
+    || { ...readLastViewedYeaftSession(), fromSavedFallback: true };
   if (typeof sessions?.beginInventoryCommit === 'function') {
-    sessions.beginInventoryCommit(preferred.sessionId, preferred.agentId);
+    sessions.beginInventoryCommit(preferred.sessionId, preferred.agentId, {
+      fromSavedFallback: Boolean(preferred.fromSavedFallback),
+    });
   } else if (typeof sessions?.resetInventory === 'function') {
     sessions.resetInventory();
   }
@@ -240,10 +257,11 @@ function commitBufferedYeaftSessionInventory(store) {
         ...slices.filter(slice => slice.agentId !== preferred.agentId),
       ]
     : slices;
-  if (orderedSlices.length === 0) sessions?.applySnapshot?.([], null);
+  if (orderedSlices.length === 0) sessions?.applySnapshot?.([], null, { authoritative: false });
   orderedSlices.forEach((slice, index) => {
     sessions?.applySnapshot?.(slice.sessions || [], slice.agentId || null, {
       deferActivation: index < orderedSlices.length - 1,
+      authoritative: slice.live === true,
     });
     reconcileScheduledTaskNotifications(store, slice.sessions, slice.agentId);
   });

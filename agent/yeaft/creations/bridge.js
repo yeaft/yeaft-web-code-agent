@@ -98,7 +98,31 @@ export function createCreationBridge({ context = ctx, send = sendToServer,
   function correlation(msg) {
     return typeof msg.requestId === 'string' && msg.requestId.length > 0 && msg.requestId.length <= 128 ? msg.requestId : null;
   }
-  return {
+  const bridge = {
+    async resolveWorkspaceBinding(ownerId, creationId) {
+      if (!validOwner(ownerId)) return null;
+      try {
+        safeId(creationId);
+        const current = readIdentity(ownerId);
+        const socket = context.ws;
+        return await serialize(async () => {
+          assertCurrent(current, socket);
+          if (context.creationBridge !== bridge) return null;
+          const cached = cacheIdentity && sameAgent(cacheIdentity, current) && scopes.get(ownerId);
+          if (cached) return cached.runtime.store.resolveWorkspaceBinding(creationId);
+          // File operations after restart must not create namespaces or recover runs.
+          const { createCreationStore } = await import('./store.js');
+          assertCurrent(current, socket);
+          if (context.creationBridge !== bridge) return null;
+          const store = createCreationStore({ ...storageOptions(current), readOnly: true });
+          try { return store.resolveWorkspaceBinding(creationId); }
+          finally { store.close(); }
+        });
+      } catch { return null; }
+    },
+    async resolveWorkspaceRoot(ownerId, creationId) {
+      return (await bridge.resolveWorkspaceBinding(ownerId, creationId))?.rootDir ?? null;
+    },
     async request(msg) {
       if (msg?.type !== 'creation_request') return false;
       const response = { type: 'creation_response', requestId: correlation(msg), op: typeof msg.op === 'string' ? msg.op : '' };
@@ -144,9 +168,21 @@ export function createCreationBridge({ context = ctx, send = sendToServer,
     },
     async close() {
       closed = true;
+      if (context.creationBridge === bridge) delete context.creationBridge;
       await serialize(retireAll);
     },
   };
+  context.creationBridge = bridge;
+  return bridge;
+}
+
+/** Resolve an Agent-recorded workspace binding for the Server-authenticated owner only. */
+export async function resolveCreationWorkspaceBinding(ownerId, creationId, { context = ctx } = {}) {
+  return (await context?.creationBridge?.resolveWorkspaceBinding(ownerId, creationId)) ?? null;
+}
+
+export async function resolveCreationWorkspaceRoot(ownerId, creationId, options) {
+  return (await resolveCreationWorkspaceBinding(ownerId, creationId, options))?.rootDir ?? null;
 }
 
 const bridge = createCreationBridge();

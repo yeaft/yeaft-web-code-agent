@@ -67,21 +67,20 @@ export function createCreationService({ yeaftDir, storageRoot, namespaceKey, nam
     list_creations: () => ({ creations: store.listCreations() }),
     create_creation: (_, input) => {
       const prompt = input.prompt ?? '';
-      const result = store.transaction(() => {
-        const creation = store.createCreation({ ...input, mission: input.mission ?? prompt });
-        const id = creation.id;
-        if (creation.deduplicated) return { ...detail(id), deduplicated: true };
+      let thread;
+      const creation = store.createCreation({ ...input, mission: input.mission ?? prompt }, { prepare: id => {
         boundedText(prompt, LIMITS.promptBytes, 'creation prompt');
-        const sources = store.addSources(id, input).map(source => media(source, 'source'));
-        const thread = store.getThread(id);
+        thread = store.getThread(id);
         const starter = input.starterNode;
         if (starter != null && starter !== false) store.createNode(id, starter === true ? {} : object(starter, 'starter node'));
-        return { creation: store.getCreation(id), nodes: outlineNodes(id), sources, thread, threads: [thread] };
-      });
-      if (result.deduplicated) return result;
-      const { id } = result.creation;
+      } });
+      const { id } = creation;
+      if (creation.deduplicated) return { ...detail(id), deduplicated: true };
+      const sources = store.listSources(id).map(source => media(source, 'source'));
+      const result = { creation, nodes: outlineNodes(id), sources, thread, threads: [thread] };
       emit('creation_upserted', id, { creation: result.creation });
-      if (prompt.trim() && input.autoPlan !== false) {
+      const autoPlan = input.initializeFolder === true ? input.autoPlan === true : input.autoPlan !== false;
+      if (prompt.trim() && autoPlan) {
         try {
           result.initialTurn = runner.runThreadTurn({ creationId: id, threadId: result.thread.id, userText: prompt, attachedSourceIds: result.sources.map(source => source.id), model: input.model, effort: input.effort });
           result.creation = store.getCreation(id);
@@ -93,13 +92,22 @@ export function createCreationService({ yeaftDir, storageRoot, namespaceKey, nam
       return result;
     },
     get_creation: id => detail(id),
+    ensure_workspace: (id, { rootDir }) => {
+      const result = store.ensureWorkspace(id, { rootDir });
+      if (result.materialized) emit('creation_upserted', id, { creation: result.creation });
+      return result;
+    },
+    find_by_folder: (_, { rootDir }) => store.findByFolder(rootDir),
     update_creation: (id, p) => {
       const creation = store.updateCreation(id, p.patch == null ? p : object(p.patch, 'creation patch'));
       emit('creation_upserted', id, { creation });
       return { creation };
     },
-    delete_creation: id => {
-      const result = store.deleteCreation(id);
+    delete_creation: (id, p) => {
+      if (p.purgeWorkspace !== undefined && typeof p.purgeWorkspace !== 'boolean') {
+        fail('INVALID_REQUEST', 'purgeWorkspace must be a boolean');
+      }
+      const result = store.deleteCreation(id, { purgeWorkspace: p.purgeWorkspace === true });
       emit('creation_deleted', id, result);
       return result;
     },

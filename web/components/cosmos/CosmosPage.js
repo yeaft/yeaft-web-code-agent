@@ -84,12 +84,12 @@ import CosmosEventsOverlay from './CosmosEventsOverlay.js';
 import CosmosVoyageOverlay from './CosmosVoyageOverlay.js';
 import CosmosSignalStream from './CosmosSignalStream.js';
 import CosmosGalaxyOverlay from './creations/CosmosGalaxyOverlay.js';
-import CreationInteriorModal from './creations/CreationInteriorModal.js';
 import CosmosWebOverlay from './web/CosmosWebOverlay.js';
 import SettingsPanel from '../SettingsPanel.js';
 import AgentSettingsPanel from '../AgentSettingsPanel.js';
 import SessionSettingsModal from '../SessionSettingsModal.js';
-import { useCreationsStore } from '../../stores/creations.js';
+import { useCreationsStore, sendInitialCreationPrompt, creationDetailKey } from '../../stores/creations.js';
+import { workbenchRouteKey, workbenchWorkspaceGeneration } from '../../utils/workbench-route.js';
 import { useCosmicWebStore } from '../../stores/cosmicWeb.js';
 
 const COSMIC_WEB_INTENT_KEYS = Object.freeze({
@@ -150,7 +150,6 @@ export default {
     CosmosVoyageOverlay,
     CosmosSignalStream,
     CosmosGalaxyOverlay,
-    CreationInteriorModal,
     CosmosWebOverlay,
     SettingsPanel,
     AgentSettingsPanel,
@@ -590,10 +589,10 @@ export default {
         :drawer-open="drawerOpen"
         :is-compact="isCompactViewport"
         :preview-mode="constants.livePreviewMode"
-        :popover-open="signalPopoverOpen && !creationsStore.activeCreation && !isWebModalBlocking"
+        :popover-open="signalPopoverOpen && !isWebModalBlocking"
         :stream-hidden="signalStreamHidden"
         :suppressed="constantsOpen || isObservingEvent"
-        :suppress-floating="currentBand === 'galaxy' || currentBand === 'web' || Boolean(creationsStore.activeCreation)"
+        :suppress-floating="currentBand === 'galaxy' || currentBand === 'web'"
         @open-signal="onOpenSignal"
         @dismiss-signal="onDismissSignal"
         @mark-all-read="onMarkAllSignalsRead"
@@ -649,7 +648,9 @@ export default {
         :max-drawer-width="drawerMaxWidth"
         :viewport-width="viewportWidth"
         :resizing="drawerResizing"
+        :opened-from-galaxy="drawerOpenedFromGalaxy"
         @close="closeDrawer()"
+        @return-galaxy="onReturnToGalaxy"
         @select-session="onDrawerSelectSession"
         @open-quick-composer="openQuickComposerFromDrawer"
         @open-session-settings="openSessionSettings"
@@ -666,7 +667,7 @@ export default {
       <CosmosGalaxyOverlay
         ref="galaxyOverlayRef"
         :agents="projectedAgentList"
-        :visible="currentBand === 'galaxy'"
+        :visible="currentBand === 'galaxy' && !drawerOpen"
         @open-creation="openGalaxyCreation"
         @toast="showToast"
       />
@@ -694,41 +695,6 @@ export default {
         @web-zoom-delta="onWebZoomDelta"
         @web-zoom-reset="onWebZoomReset"
       />
-
-      <!-- L3 Full-Screen Creation Interior (Read Mode & Co-Creation Studio) -->
-      <CreationInteriorModal
-        v-if="creationsStore.activeCreation"
-        ref="creationInteriorRef"
-        :signal-count="signalStream.badgeCount"
-        :signal-waiting-count="signalStream.waitingCount"
-        :signal-running-count="signalStream.runningCount"
-        :signal-open="signalPopoverOpen"
-        :signal-label="signalTriggerLabel"
-        @toggle-signal="onToggleSignalTrigger"
-        @close-signal="closeSignalPopover({ restoreFocus: true })"
-      >
-        <template #signal-popover>
-          <CosmosSignalStream
-            :items="signalStream.items"
-            :waiting-count="signalStream.waitingCount"
-            :unread-count="signalStream.unreadCount"
-            :running-count="signalStream.runningCount"
-            :badge-count="signalStream.badgeCount"
-            :drawer-open="false"
-            :is-compact="isCompactViewport"
-            :preview-mode="constants.livePreviewMode"
-            :popover-open="signalPopoverOpen"
-            :stream-hidden="true"
-            :suppressed="false"
-            :suppress-floating="true"
-            @open-signal="onOpenSignal"
-            @dismiss-signal="onDismissSignal"
-            @mark-all-read="onMarkAllSignalsRead"
-            @close-popover="closeSignalPopover({ restoreFocus: true })"
-            @restore-trigger-focus="focusSignalTrigger"
-          />
-        </template>
-      </CreationInteriorModal>
 
       <!-- Black Hole Horizon Minimal Whisper Dock -->
       <div v-if="currentBand === 'horizon'" class="cosmos-corner-dock" @pointerdown.stop>
@@ -800,7 +766,6 @@ export default {
     const drawerRef = Vue.ref(null);
     const galaxyOverlayRef = Vue.ref(null);
     const webOverlayRef = Vue.ref(null);
-    const creationInteriorRef = Vue.ref(null);
     const signalTriggerRef = Vue.ref(null);
     const voyageOverlayRef = Vue.ref(null);
 
@@ -916,8 +881,19 @@ export default {
     const quickAgentId = Vue.ref(null);
     const drawerOpen = Vue.ref(false);
     const drawerAgentId = Vue.ref(null);
+    const drawerOpenedFromGalaxy = Vue.ref(false);
     const workbenchWidened = Vue.ref(false);
     const workbenchMaximized = Vue.computed(() => Boolean(store.workbenchExpanded && store.workbenchMaximized));
+    Vue.watch(
+      () => store.workbenchExpanded,
+      (expanded) => {
+        if (expanded && drawerOpen.value && drawerOpenedFromGalaxy.value) {
+          workbenchWidened.value = true;
+        } else if (!expanded && workbenchWidened.value) {
+          workbenchWidened.value = false;
+        }
+      },
+    );
     const viewportWidth = Vue.ref(typeof window !== 'undefined' ? (window.innerWidth || 1280) : 1280);
     const isCompactViewport = Vue.computed(() => viewportWidth.value <= 768);
     const customDrawerWidth = Vue.ref(loadCosmosDrawerWidth());
@@ -932,8 +908,13 @@ export default {
     const effectiveDrawerWidth = Vue.computed(() => {
       const vw = viewportWidth.value;
       if (vw <= 768) return vw;
-      if (workbenchMaximized.value) return drawerMaxWidth.value;
+      if (workbenchMaximized.value) {
+        return drawerMaxWidth.value;
+      }
       if (workbenchWidened.value) {
+        if (vw >= 1024) {
+          return Math.max(drawerMinWidth, Math.min(drawerMaxWidth.value, Math.max(960, Math.floor(vw * 0.85))));
+        }
         const customClamped = customDrawerWidth.value != null
           ? clampCosmosDrawerWidth(customDrawerWidth.value, vw)
           : 0;
@@ -1067,7 +1048,7 @@ export default {
         : $t('cosmos.signals.triggerIdleAria')
     ));
     const signalFloatingSuppressed = Vue.computed(() => (
-      currentBand.value === 'galaxy' || Boolean(creationsStore.activeCreation)
+      currentBand.value === 'galaxy'
     ));
     const signalTriggerExpanded = Vue.computed(() => {
       if (signalPopoverOpen.value) return true;
@@ -1903,18 +1884,33 @@ export default {
       }
     }, { immediate: true });
 
+    let openCreationEpoch = 0;
+    let isUnmounted = false;
+
+    function invalidateGalaxyCreationOpen() {
+      openCreationEpoch += 1;
+      creationsStore.clearPendingWorkbenchTarget?.();
+    }
+
     Vue.watch([currentBand, projectedAgentList], ([band], prev) => {
       if (band === 'galaxy') {
         ensureGalaxyAgentSelected();
-      } else if (prev && prev[0] === 'galaxy') {
+      } else if (prev && prev[0] === 'galaxy' && (!drawerOpen.value || !drawerOpenedFromGalaxy.value)) {
+        invalidateGalaxyCreationOpen();
         creationsStore.invalidatePendingOpen?.();
         creationsStore.inspectorTarget = null;
         if (creationsStore.igniteDraft) {
           creationsStore.igniteDraft.open = false;
         }
-        creationsStore.closeCreation();
+        creationsStore.closeCreation?.();
       }
     }, { immediate: true });
+
+    Vue.watch(() => creationsStore.selectedAgentId, (next, prev) => {
+      if (prev && next !== prev) {
+        invalidateGalaxyCreationOpen();
+      }
+    });
 
     function onClickGalaxyStar(star) {
       if (!star?.id || !creationsStore.selectedAgentId) return;
@@ -1923,15 +1919,144 @@ export default {
 
     function onDblClickGalaxyStar(star) {
       if (!star?.id || !creationsStore.selectedAgentId) return;
-      openGalaxyCreation({ agentId: creationsStore.selectedAgentId, creationId: star.id });
+      openGalaxyCreation({ agentId: creationsStore.selectedAgentId, creationId: star.id, mode: 'read' });
     }
 
-    async function openGalaxyCreation({ agentId, creationId, mode } = {}) {
+    function cachedCreationFor(agentId, creationId) {
+      const summary = creationsStore.creationsForAgent(agentId).find(c => c?.id === creationId);
+      const detail = creationsStore.detailsByKey?.[creationDetailKey(agentId, creationId)]?.creation;
+      return summary ? { ...detail, ...summary } : (detail || null);
+    }
+
+    async function openCreationInDrawer({ agentId, sessionId, creationId, rootDir, initialPrompt, openSeq, maximize,
+      hasRecordedRoot = false,
+      openedFromGalaxy = currentBand.value === 'galaxy', keepIgniteDockOpen = false }) {
+      const epoch = ++openCreationEpoch;
+      const uiMode = store.uiMode;
+      const band = currentBand.value;
+      const authUser = currentAuthStore()?.userId;
+      const authGeneration = currentAuthStore()?.authGeneration;
+      const isOpenStillCurrent = () => !isUnmounted && epoch === openCreationEpoch
+        && openSeq === creationsStore.openWorkspaceSeq && store.uiMode === uiMode && currentBand.value === band
+        && currentAuthStore()?.userId === authUser && currentAuthStore()?.authGeneration === authGeneration;
+      if (!isOpenStillCurrent()) return;
+
+      creationsStore.inspectorTarget = null;
+      if (!keepIgniteDockOpen && creationsStore.igniteDraft) creationsStore.igniteDraft.open = false;
+      // The drawer uses the existing Yeaft conversation projection without
+      // changing uiMode. WorkbenchPanel consumes the route-scoped pending target.
+      if (!openSessionInDrawer(agentId, sessionId ? { id: sessionId, runtimeProvider: 'yeaft' } : null, { keepBand: true, creationOpen: true })) {
+        showToast($t('creation.galaxy.offlineReadonly'));
+        return;
+      }
+      drawerOpenedFromGalaxy.value = openedFromGalaxy;
+      workbenchWidened.value = false;
+      if (!isOpenStillCurrent()) return;
+      const liveWorkspaceGeneration = () => workbenchWorkspaceGeneration(
+        workbenchRouteKey(store.activeSessionRoute), store.effectiveWorkDir,
+      );
+      const workspaceGeneration = liveWorkspaceGeneration();
+      const hasPrompt = typeof initialPrompt === 'string' && initialPrompt.trim() && sessionId;
+      const cachedCreation = cachedCreationFor(agentId, creationId);
+      const recordedRootConfirmed = hasRecordedRoot === true && (!cachedCreation || Boolean(String(cachedCreation.rootDir || '').trim()));
+      const needsActivationReceipt = !recordedRootConfirmed || (hasPrompt && creationsStore.hasMountedCreationTab(agentId, sessionId)
+        && creationsStore.listDirtyDocDrafts(agentId).length > 0);
+      const activationPromise = hasPrompt && needsActivationReceipt
+        ? creationsStore.waitForCreationActivation(openSeq, { agentId, sessionId, workspaceGeneration }) : null;
+      if (!creationsStore.pendingWorkbenchTarget || creationsStore.pendingWorkbenchTarget.openSeq !== openSeq) {
+        creationsStore.setPendingWorkbenchTarget?.({ agentId, sessionId, creationId, rootDir, maximize, openSeq, openedFromGalaxy, workspaceGeneration });
+      }
+      if (!hasPrompt) return;
+
+      const isDrawerTargetCurrent = () => isOpenStillCurrent() && drawerOpen.value
+        && drawerAgentId.value === agentId && store.currentAgent === agentId
+        && store.yeaftActiveSessionFilter === sessionId && liveWorkspaceGeneration() === workspaceGeneration;
+      try {
+        await Vue.nextTick();
+        if (activationPromise) {
+          if (!creationsStore.hasMountedCreationTab(agentId, sessionId)) creationsStore.resolveCreationActivation(openSeq, false);
+          if (!(await activationPromise)) return;
+        }
+        if (!isDrawerTargetCurrent()) return;
+        const result = await sendInitialCreationPrompt(agentId, sessionId, initialPrompt, {
+          isOpenStillCurrent: isDrawerTargetCurrent, routeReady: true, cosmosDelivery: true,
+        });
+        if (isDrawerTargetCurrent() && result?.error) showToast(result.error);
+      } catch (err) {
+        if (isDrawerTargetCurrent()) showToast(err?.message || $t('creation.galaxy.offlineReadonly'));
+      }
+    }
+
+    function onCosmosOpenCreationWorkspace(event) {
+      const detail = event.detail;
+      if (!detail?.agentId || !detail.creationId || !detail.sessionId
+        || !Number.isSafeInteger(detail.openSeq) || detail.openSeq !== creationsStore.openWorkspaceSeq
+        || store.uiMode !== 'cosmos') return;
+      detail.handled = true;
+      void openCreationInDrawer({ ...detail, openedFromGalaxy: detail.openedFromGalaxy || drawerOpenedFromGalaxy.value || currentBand.value === 'galaxy' });
+    }
+
+    async function openGalaxyCreation({
+      agentId,
+      creationId,
+      sessionId = '',
+      rootDir = '',
+      mode = 'read',
+      promptToSend = '',
+      keepIgniteDockOpen = false,
+    } = {}) {
       const targetAgentId = agentId || creationsStore.selectedAgentId;
       if (!targetAgentId || !creationId) return;
+
+      const epoch = ++openCreationEpoch;
+      const openSeq = creationsStore.cancelPendingWorkspaceOpen?.();
+      const startBand = currentBand.value;
+      const startAgent = creationsStore.selectedAgentId || targetAgentId;
+      const isStaleOpen = () => (
+        isUnmounted
+        || epoch !== openCreationEpoch
+        || openSeq !== creationsStore.openWorkspaceSeq
+        || currentBand.value !== startBand
+        || (creationsStore.selectedAgentId && startAgent && creationsStore.selectedAgentId !== startAgent)
+      );
+
       try {
-        await creationsStore.openCreation(targetAgentId, creationId, { mode });
+        let creation = cachedCreationFor(targetAgentId, creationId);
+        if (!creation && typeof creationsStore.listCreations === 'function') {
+          await creationsStore.listCreations(targetAgentId).catch(() => {});
+          if (isStaleOpen()) return;
+          creation = cachedCreationFor(targetAgentId, creationId);
+        }
+
+        let recordedRootDir = String(creation?.rootDir || '').trim();
+        let resolvedSessionId = String(sessionId || '').trim();
+        let resolvedRootDir = String(rootDir || '').trim();
+        // Only Ignite supplies both explicit route inputs. A recorded link
+        // from Galaxy inventory still needs the shared resolver's check.
+        const hasVerifiedRoute = resolvedSessionId && resolvedRootDir && (
+          sessionsStore?.sessionById?.(resolvedSessionId, targetAgentId)
+          || store.hasKnownYeaftSession?.(resolvedSessionId, targetAgentId)
+        );
+        if (!hasVerifiedRoute) {
+          const resolved = await creationsStore.resolveCreationSession(
+            targetAgentId,
+            creation || { id: creationId },
+            { createIfMissing: true },
+          );
+          if (isStaleOpen()) return;
+          if (!resolved?.sessionId) throw new Error('Failed to resolve Creation session');
+          resolvedSessionId = String(resolved.sessionId).trim();
+          recordedRootDir = String(resolved.creation?.rootDir || '').trim() || recordedRootDir;
+          resolvedRootDir = String(resolved.rootDir || recordedRootDir).trim();
+        }
+        if (isStaleOpen()) return;
+
+        await openCreationInDrawer({
+          agentId: targetAgentId, sessionId: resolvedSessionId, creationId, rootDir: resolvedRootDir,
+          hasRecordedRoot: Boolean(recordedRootDir), maximize: mode === 'read', initialPrompt: promptToSend, openSeq, openedFromGalaxy: true, keepIgniteDockOpen,
+        });
       } catch (err) {
+        if (isStaleOpen()) return;
         showToast(err?.message || $t('creation.galaxy.offlineReadonly'));
       }
     }
@@ -1965,7 +2090,7 @@ export default {
       if (
         currentBand.value === 'galaxy'
         && creationsStore.viewMode === 'galaxy'
-        && !creationsStore.activeCreation
+        && !drawerOpen.value
         && creationsStore.selectedAgentId
       ) {
         const w = window.innerWidth || 1280;
@@ -2271,8 +2396,8 @@ export default {
     }
 
     function onStageWheel(e) {
-      if (settingsModal.open || agentSettingsModal.open || sessionSettingsModal.open || creationsStore.activeCreation || isWebModalBlocking.value) return;
-      if (e.target.closest('.cosmos-drawer, .cosmos-quick-composer, .cosmos-constants-popover, .cosmos-hover-card, .cosmos-event-almanac, .cosmos-book-popover, .cosmos-signal-stream, .cosmos-signal-popover, .cosmos-signal-mobile-banner, .cosmos-voyage-atlas, .cosmos-voyage-dock, .creation-galaxy-hud, .creation-catalog-panel, .creation-inspector-card, .creation-ignite-dock, .creation-interior-modal, .cw-hud-bar, .cw-drawer, .cw-onboarding-card, .cw-modal-backdrop, .cw-hover-preview, .cw-zoom-dock, .cw-lightbox-backdrop, .cosmos-web-sat-card')) return;
+      if (settingsModal.open || agentSettingsModal.open || sessionSettingsModal.open || isWebModalBlocking.value) return;
+      if (e.target.closest('.cosmos-drawer, .cosmos-quick-composer, .cosmos-constants-popover, .cosmos-hover-card, .cosmos-event-almanac, .cosmos-book-popover, .cosmos-signal-stream, .cosmos-signal-popover, .cosmos-signal-mobile-banner, .cosmos-voyage-atlas, .cosmos-voyage-dock, .creation-galaxy-hud, .creation-catalog-panel, .creation-inspector-card, .creation-ignite-dock, .cw-hud-bar, .cw-drawer, .cw-onboarding-card, .cw-modal-backdrop, .cw-hover-preview, .cw-zoom-dock, .cw-lightbox-backdrop, .cosmos-web-sat-card')) return;
       e.preventDefault();
       if (eventSim.active?.observing) {
         const delta = -Math.sign(e.deltaY) * Math.min(Math.abs(e.deltaY), 100) * 0.0032;
@@ -2333,19 +2458,18 @@ export default {
         resetCanvasPan({ silent: true });
       }
       hideHoverImmediate();
-      if (scaleBand(anim.targetScaleLog) !== 'solar') {
+      const nextBand = scaleBand(anim.targetScaleLog);
+      if (nextBand !== 'solar') {
         quickAgentId.value = null;
-        if (drawerOpen.value) closeDrawer();
+        if (drawerOpen.value && !(drawerOpenedFromGalaxy.value && nextBand === 'galaxy')) {
+          closeDrawer();
+        }
       }
     }
 
     function focusSignalTrigger() {
       Vue.nextTick(() => {
-        if (creationsStore.activeCreation) {
-          creationInteriorRef.value?.focusSignalTrigger?.();
-        } else {
-          signalTriggerRef.value?.focus?.();
-        }
+        signalTriggerRef.value?.focus?.();
       });
     }
 
@@ -2355,24 +2479,28 @@ export default {
       if (restoreFocus) focusSignalTrigger();
     }
 
-    function openSessionInDrawer(agentId, session) {
+    function openSessionInDrawer(agentId, session, { keepBand = false, creationOpen = false } = {}) {
+      if (!creationOpen) creationsStore.cancelPendingWorkspaceOpen?.();
       hideHoverImmediate();
       signalPopoverOpen.value = false;
       if (!agentId || !projectedAgentsMap.value[agentId]) return false;
-      if (voyage.soaring || voyage.systemId !== 'sol' || voyage.warp) {
+      if (!keepBand && (voyage.soaring || voyage.systemId !== 'sol' || voyage.warp)) {
         voyage.soaring = false;
         voyage.warp = null;
         voyage.systemId = 'sol';
         syncVoyageRefs();
       }
-      if (currentBand.value !== 'solar') jumpToScale(13.0);
+      if (!keepBand && currentBand.value !== 'solar') jumpToScale(13.0);
       if (eventSim.active?.observing) {
         unfocusCosmicEvent(eventSim);
         syncEventRefs();
       }
       if (store.workbenchExpanded) collapseOpenWorkbench();
-      const targetPlanetId = assignments.value.agentToPlanet[agentId];
-      if (targetPlanetId) focusPlanet(targetPlanetId, { defaultZoom: 1.9 });
+      if (!keepBand) {
+        drawerOpenedFromGalaxy.value = false;
+        const targetPlanetId = assignments.value.agentToPlanet[agentId];
+        if (targetPlanetId) focusPlanet(targetPlanetId, { defaultZoom: 1.9 });
+      }
       quickAgentId.value = null;
       drawerAgentId.value = agentId;
       drawerOpen.value = true;
@@ -2380,7 +2508,7 @@ export default {
         store.openCatalogSession?.(session.descriptor);
       } else if (session?.id) {
         store.enterYeaft?.(agentId, { deferBootstrap: true });
-        store.setActiveSessionFilter?.(session.id, { agentId, force: false });
+        store.setActiveSessionFilter?.(session.id, { agentId, force: creationOpen });
         store.reloadYeaftMessages?.();
       } else if (agentId) {
         store.enterYeaft?.(agentId);
@@ -2549,12 +2677,24 @@ export default {
     }
 
     function closeDrawer({ returnToSun = true } = {}) {
+      creationsStore.cancelPendingWorkspaceOpen?.();
+      invalidateGalaxyCreationOpen();
+      const wasFromGalaxy = drawerOpenedFromGalaxy.value;
       drawerResizing.value = false;
       drawerOpen.value = false;
       drawerAgentId.value = null;
+      drawerOpenedFromGalaxy.value = false;
       workbenchWidened.value = false;
       collapseOpenWorkbench();
-      if (returnToSun) unfocusPlanet();
+      if (returnToSun && !wasFromGalaxy && currentBand.value === 'solar') unfocusPlanet();
+    }
+
+    function onReturnToGalaxy() {
+      // Closing the drawer invalidates navigation, not the store-owned document drafts.
+      closeDrawer({ returnToSun: false });
+      if (currentBand.value !== 'galaxy') {
+        jumpToScale(21.0);
+      }
     }
 
     function openQuickComposerFromDrawer(agentId) {
@@ -2818,11 +2958,10 @@ export default {
 
     function onKeyDown(e) {
       if (e.defaultPrevented) return;
-      if (creationsStore.activeCreation) return;
       if ((e.metaKey || e.ctrlKey) && !e.altKey && String(e.key || '').toLowerCase() === 'k') {
         if (settingsModal.open || agentSettingsModal.open || sessionSettingsModal.open || isWebModalBlocking.value) return;
         e.preventDefault();
-        if (currentBand.value === 'galaxy') {
+        if (currentBand.value === 'galaxy' && !drawerOpen.value) {
           galaxyOverlayRef.value?.focusSearch?.();
           return;
         }
@@ -2988,7 +3127,7 @@ export default {
           getUiState: () => ({
             currentBand: currentBand.value,
             viewMode: creationsStore.viewMode,
-            interiorOpen: Boolean(creationsStore.activeCreation),
+            interiorOpen: Boolean(drawerOpen.value && currentBand.value === 'galaxy'),
             drawerOpen: drawerOpen.value,
             drawerWidth: effectiveDrawerWidth.value,
             quickOpen: Boolean(quickAgentId.value),
@@ -3203,6 +3342,7 @@ export default {
         mountRafId = 0;
         if (!unmounted) mountEngine();
       });
+      window.addEventListener('cosmos-open-creation-workspace', onCosmosOpenCreationWorkspace);
       window.addEventListener('resize', onWindowResize);
       window.addEventListener('blur', onWindowBlur);
       window.addEventListener('pagehide', onPageHide);
@@ -3220,7 +3360,10 @@ export default {
 
     Vue.onBeforeUnmount(() => {
       flushPendingCloudConstants();
+      isUnmounted = true;
       unmounted = true;
+      if (store.uiMode === 'cosmos') creationsStore.cancelPendingWorkspaceOpen?.();
+      invalidateGalaxyCreationOpen();
       activeTouchPointers.clear();
       cancelAnimationFrame(mountRafId);
       mountRafId = 0;
@@ -3233,6 +3376,7 @@ export default {
         waitJumpTimer = null;
       }
       clearInterval(nowInterval);
+      window.removeEventListener('cosmos-open-creation-workspace', onCosmosOpenCreationWorkspace);
       window.removeEventListener('resize', onWindowResize);
       window.removeEventListener('blur', onWindowBlur);
       window.removeEventListener('pagehide', onPageHide);
@@ -3249,7 +3393,7 @@ export default {
     });
 
     return {
-      glCanvasRef, hudCanvasRef, hoverCardRef, drawerRef, galaxyOverlayRef, webOverlayRef, creationInteriorRef, signalTriggerRef, voyageOverlayRef, domRefs, setMapRef, canvasEpoch, rendererMode,
+      glCanvasRef, hudCanvasRef, hoverCardRef, drawerRef, galaxyOverlayRef, webOverlayRef, signalTriggerRef, voyageOverlayRef, domRefs, setMapRef, canvasEpoch, rendererMode,
       creationsStore, activeGalaxyStars, cosmicWebStore, agentsLiveForCosmos, isWebModalBlocking, activeWebDomNodes, activeWebSatellites, failedSatMediaUrls, onSatMediaError,
       webCameraZoomRef, webLodTierRef, webDrawerWidth, webDrawerMaxWidth,
       onWebDrawerResize, onWebDrawerResizeEnd, onWebDrawerResizeReset, onWebZoomDelta, onWebZoomReset,
@@ -3266,7 +3410,7 @@ export default {
         { band: 'horizon', exp: '10⁷', labelKey: 'cosmos.scale.horizon', target: 7.0 },
       ],
       constants, constantsOpen, signalPopoverOpen, signalStreamHidden, galaxyBooks,
-      quickAgentId, quickAgent, drawerOpen, drawerAgent, workbenchWidened, workbenchMaximized,
+      quickAgentId, quickAgent, drawerOpen, drawerAgent, drawerOpenedFromGalaxy, workbenchWidened, workbenchMaximized,
       viewportWidth, isCompactViewport, drawerResizing, drawerMinWidth, drawerMaxWidth, effectiveDrawerWidth, cosmosPageStyle,
       hoverPlanetId, hoverCardAgent, hoverPreviewSessions, hoverCardStyle, emptyPlanetMenu,
       camOrbiting, currentBand, projectedAgentList, assignments, agentsByPlanet, focusedPlanetId, waitingAgent,
@@ -3285,7 +3429,7 @@ export default {
       onCanvasPointerDown, onCanvasContextMenu, onCanvasDblClick, resetCamera, onPlanetPointerDown, onPlanetEnter, onPlanetLeave,
       onClickGalaxyStar, onDblClickGalaxyStar, openGalaxyCreation,
       onHoverCardEnter, onHoverCardLeave, onStageWheel, jumpToScale,
-      openSessionInDrawer, openAgentConversationFromQuick, openCosmosSessionSearch, onDrawerSelectSession, toggleWorkbenchWiden, closeQuickComposer, closeDrawer,
+      openSessionInDrawer, openAgentConversationFromQuick, openCosmosSessionSearch, onDrawerSelectSession, toggleWorkbenchWiden, closeQuickComposer, closeDrawer, onReturnToGalaxy,
       onToggleConstants, onToggleSignalTrigger, focusSignalTrigger, closeSignalPopover, onOpenSignal, onDismissSignal, onMarkAllSignalsRead,
       openQuickComposerFromDrawer, onDrawerResizeStart, onDrawerResize, onDrawerResizeEnd, onDrawerResizeReset,
       emitTelemetryBeam, onAutoRouted, jumpToWaitingAgent, assignFromMenu,

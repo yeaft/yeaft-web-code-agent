@@ -104,7 +104,7 @@ function findSessionKey(state, sessionId, agentId = null) {
   return keys[0] || '';
 }
 
-function enterAgentScopedInventory(state) {
+function enterAgentScopedInventory(state, suppressAutoSelect = false) {
   if (state.inventoryIdentityMode === 'legacy-bare') {
     const activeRow = state.activeSessionKey ? state.sessions[state.activeSessionKey] : null;
     const bareActiveRow = activeRow && !activeRow.agentId
@@ -114,7 +114,7 @@ function enterAgentScopedInventory(state) {
       ? bareActiveRow.id || null
       : null;
     state.sessionOrder = state.sessionOrder.filter(key => state.sessions[key]?.agentId);
-    if (state._retiredBareActiveSessionId) {
+    if (state._retiredBareActiveSessionId && !suppressAutoSelect) {
       state.activeSessionId = null;
       state.activeSessionKey = null;
     }
@@ -154,6 +154,10 @@ function forgetSavedSessionKey(key) {
 function reconcileRetiredBareActiveSession(state) {
   const sessionId = state._retiredBareActiveSessionId;
   if (!sessionId) return false;
+  if (state.suppressAutoSelectDepth > 0) {
+    state._deferredFallbackReconcile = true;
+    return true;
+  }
   if (state.inventoryIdentityMode === 'legacy-bare') {
     const row = state.sessions[sessionId];
     if (!row || row.agentId) {
@@ -180,34 +184,50 @@ function reconcileRetiredBareActiveSession(state) {
   return true;
 }
 
-function reconcileInventorySelection(state) {
+function reconcileInventorySelection(state, { suppressFallback = false } = {}) {
+  const suppress = Boolean(suppressFallback || state.suppressAutoSelectDepth > 0);
   const openingKey = state._explicitPendingSessionKey;
   if (openingKey) {
     // The operator explicitly opened a catalog route before the Agent's live
     // row arrived. A delayed or incomplete inventory must not close it.
     if (state.sessions[openingKey]) {
       state._explicitPendingSessionKey = null;
+      state._deferredFallbackReconcile = false;
       activateInventorySession(state, openingKey);
     }
     return;
   }
-  if (!state._preferredExactSessionIdentity && !state._retiredBareActiveSessionId && !state.activeSession) {
+  if (!suppress && !state._preferredExactSessionIdentity && !state._retiredBareActiveSessionId && !state.activeSession) {
     const saved = readLastViewedYeaftSession();
     if (saved.agentId && saved.sessionId) {
       state._preferredExactSessionIdentity = storeKeyFor(saved.agentId, saved.sessionId);
+      state._preferredIdentityIsSavedFallback = true;
     } else if (saved.sessionId) {
       state._retiredBareActiveSessionId = saved.sessionId;
     }
   }
   const preferredKey = state._preferredExactSessionIdentity;
   if (preferredKey) {
+    if (suppress && state._preferredIdentityIsSavedFallback) {
+      state._deferredFallbackReconcile = true;
+      return;
+    }
     const row = state.sessions[preferredKey];
     // An absent row may belong to a temporarily offline Agent. Don't select
     // a different Session (including one with the same id) while waiting.
-    if (row) state._preferredExactSessionIdentity = null;
-    activateInventorySession(state, row ? preferredKey : null);
+    if (row) {
+      state._preferredExactSessionIdentity = null;
+      state._preferredIdentityIsSavedFallback = false;
+      state._deferredFallbackReconcile = false;
+      activateInventorySession(state, preferredKey);
+    } else if (!suppress) {
+      activateInventorySession(state, null);
+    }
+  } else if (suppress) {
+    if (!state.activeSession) state._deferredFallbackReconcile = true;
   } else if (!reconcileRetiredBareActiveSession(state)) {
     const first = state.sessionList[0];
+    state._deferredFallbackReconcile = false;
     activateInventorySession(state, state.activeSession ? state.activeSessionKey
       : (first ? findSessionKey(state, first.id, first.agentId) || null : null));
   }
@@ -295,8 +315,13 @@ export const useSessionsStore = defineStore('sessions', {
     inventoryIdentityMode: 'empty',
     _retiredBareActiveSessionId: null,
     _preferredExactSessionIdentity: null,
+    _preferredIdentityIsSavedFallback: false,
     _explicitPendingSessionKey: null,
     lastSnapshotAt: 0,
+    authoritativeSnapshotAgents: {},
+    confirmedDeletedSessionKeys: {},
+    suppressAutoSelectDepth: 0,
+    _deferredFallbackReconcile: false,
     /**
      * Most recent CRUD result for the UI to surface as toast/modal error.
      * Shape: { op, ok, error?:{code,sessionId,message}, at }
@@ -352,6 +377,9 @@ export const useSessionsStore = defineStore('sessions', {
       const key = findSessionKey(state, id, agentId);
       return key ? (state.sessions[key] || null) : null;
     },
+    isConfirmedDeletedSession: (state) => (agentId, sessionId) => (
+      !!agentId && !!sessionId && state.confirmedDeletedSessionKeys[storeKeyFor(agentId, sessionId)] === true
+    ),
     activeSession(state) {
       return state.activeSessionKey ? (state.sessions[state.activeSessionKey] || null) : null;
     },
@@ -386,7 +414,9 @@ export const useSessionsStore = defineStore('sessions', {
      * to stamp it), falls back to the legacy whole-store replacement
      * for back-compat.
      */
-    applySnapshot(sessions, agentId = null, { deferActivation = false } = {}) {
+    applySnapshot(sessions, agentId = null, options = {}) {
+      const { authoritative, deferActivation } = options;
+      const suppressAutoSelect = Boolean(options?.suppressAutoSelect || this.suppressAutoSelectDepth > 0);
       const arr = Array.isArray(sessions) ? sessions : [];
       if (!agentId) {
         // Legacy path — single-agent stores only. Once this inventory has
@@ -412,7 +442,7 @@ export const useSessionsStore = defineStore('sessions', {
       } else {
         // Per-agent replacement: drop only rows owned by this agent,
         // then merge in the new ones, preserving snapshot order.
-        enterAgentScopedInventory(this);
+        enterAgentScopedInventory(this, suppressAutoSelect);
         const nextMap = { ...this.sessions };
         const incomingKeys = new Set();
         for (const s of arr) {
@@ -506,6 +536,12 @@ export const useSessionsStore = defineStore('sessions', {
           }
         }
         this.sessionOrder = nextOrder;
+        if (authoritative === true && Array.isArray(sessions)) {
+          this.authoritativeSnapshotAgents[agentId] = true;
+          for (const key of incomingKeys) delete this.confirmedDeletedSessionKeys[key];
+        } else {
+          delete this.authoritativeSnapshotAgents[agentId];
+        }
       }
       this.lastSnapshotAt = Date.now();
       const chat = _getChatStoreSafe();
@@ -550,7 +586,7 @@ export const useSessionsStore = defineStore('sessions', {
         };
         chat.applyServerPinSnapshot(agentId, pinnedInSnapshot, isOwnedByAgent);
       }
-      if (!deferActivation) reconcileInventorySelection(this);
+      if (!deferActivation) reconcileInventorySelection(this, { suppressFallback: suppressAutoSelect });
     },
 
     /** Apply a `group_roster_changed` delta (in-place merge). */
@@ -586,7 +622,7 @@ export const useSessionsStore = defineStore('sessions', {
     },
 
     /** Record a `group_crud_result` for UI feedback. */
-    applyCrudResult(result, agentId = null) {
+    applyCrudResult(result, agentId = null, snapshotOptions = {}) {
       if (!result) return;
       this.lastCrudResult = { ...result, at: Date.now() };
       if (result.requestId && this.pending[result.requestId]) {
@@ -595,7 +631,7 @@ export const useSessionsStore = defineStore('sessions', {
       const session = result.session || result.group || null;
       const mutationAgentId = agentId || result.agentId || session?.agentId || null;
       if (result.ok && result.op === 'list' && Array.isArray(result.sessions)) {
-        this.applySnapshot(result.sessions, mutationAgentId);
+        this.applySnapshot(result.sessions, mutationAgentId, snapshotOptions);
       }
       if (result.ok && (result.op === 'create' || result.op === 'copy' || result.op === 'merge' || result.op === 'restore') && session && session.id) {
         this.applySnapshotUpsert(session, mutationAgentId);
@@ -617,6 +653,7 @@ export const useSessionsStore = defineStore('sessions', {
       if (result.ok && (result.op === 'archive' || result.op === 'delete') && opSessionId
           && (mutationAgentId || allowOwnerlessMutation)) {
         const key = opKey || storeKeyFor(mutationAgentId, opSessionId);
+        if (mutationAgentId) this.confirmedDeletedSessionKeys[storeKeyFor(mutationAgentId, opSessionId)] = true;
         const wasActive = this.activeSessionKey === key || this._explicitPendingSessionKey === key;
         if (this._explicitPendingSessionKey === key) this._explicitPendingSessionKey = null;
         const wasPreferred = this._preferredExactSessionIdentity === key;
@@ -649,9 +686,11 @@ export const useSessionsStore = defineStore('sessions', {
     applySnapshotUpsert(session, agentId = null) {
       if (!session || !session.id) return '';
       const effectiveAgentId = agentId || session.agentId || null;
-      if (effectiveAgentId) enterAgentScopedInventory(this);
+      const suppressAutoSelect = this.suppressAutoSelectDepth > 0;
+      if (effectiveAgentId) enterAgentScopedInventory(this, suppressAutoSelect);
       else if (this.inventoryIdentityMode !== 'legacy-bare') return '';
       const key = findSessionKey(this, session.id, effectiveAgentId) || storeKeyFor(effectiveAgentId, session.id);
+      delete this.confirmedDeletedSessionKeys[key];
       const existed = !!this.sessions[key];
       const prev = this.sessions[key] || {};
       this.sessions[key] = {
@@ -660,11 +699,26 @@ export const useSessionsStore = defineStore('sessions', {
       };
       if (!existed) this.sessionOrder.push(key);
       if (key === this._explicitPendingSessionKey || key === this._preferredExactSessionIdentity) {
-        reconcileInventorySelection(this);
-      } else {
+        reconcileInventorySelection(this, { suppressFallback: suppressAutoSelect });
+      } else if (!suppressAutoSelect) {
         reconcileRetiredBareActiveSession(this);
       }
       return key;
+    },
+
+    beginSuppressAutoSelect() {
+      this.suppressAutoSelectDepth += 1;
+    },
+
+    endSuppressAutoSelect() {
+      this.suppressAutoSelectDepth = Math.max(0, this.suppressAutoSelectDepth - 1);
+      if (this.suppressAutoSelectDepth > 0) return;
+      const hadDeferred = this._deferredFallbackReconcile;
+      this._deferredFallbackReconcile = false;
+      if (hadDeferred || !this.activeSession || this._explicitPendingSessionKey
+          || this._preferredExactSessionIdentity || this._retiredBareActiveSessionId) {
+        reconcileInventorySelection(this);
+      }
     },
 
     setActive(sessionId, agentId = null) {
@@ -672,6 +726,7 @@ export const useSessionsStore = defineStore('sessions', {
       if (sessionId && key && this.sessions[key]) {
         this.activeSessionId = sessionId;
         this.activeSessionKey = key;
+        this._deferredFallbackReconcile = false;
       } else {
         this.activeSessionId = null;
         this.activeSessionKey = null;
@@ -751,7 +806,7 @@ export const useSessionsStore = defineStore('sessions', {
       this.lastCrudResult = null;
     },
 
-    resetInventory() {
+    resetInventory({ preserveDeletionReceipts = false } = {}) {
       this.sessions = {};
       this.sessionOrder = [];
       this.activeSessionId = null;
@@ -759,34 +814,53 @@ export const useSessionsStore = defineStore('sessions', {
       this.inventoryIdentityMode = 'empty';
       this._retiredBareActiveSessionId = null;
       this._preferredExactSessionIdentity = null;
+      this._preferredIdentityIsSavedFallback = false;
       this._explicitPendingSessionKey = null;
       this.lastSnapshotAt = 0;
+      this.authoritativeSnapshotAgents = {};
+      if (!preserveDeletionReceipts) this.confirmedDeletedSessionKeys = {};
     },
 
     rememberSessionSelection(sessionId, agentId, activeKey) {
       const key = activeKey || (agentId && storeKeyFor(agentId, sessionId));
       if (!key) return;
       this._preferredExactSessionIdentity = null;
+      this._preferredIdentityIsSavedFallback = false;
       this._retiredBareActiveSessionId = null;
       this._explicitPendingSessionKey = activeKey ? null : key;
       try { localStorage.setItem(LAST_VIEWED_YEAFT_SESSION_KEY, key); } catch {}
     },
 
     preferredInventoryIdentity() {
-      const exactKey = this._explicitPendingSessionKey || this._preferredExactSessionIdentity;
-      if (exactKey) return parseYeaftSessionIdentity(exactKey);
-      if (this._retiredBareActiveSessionId) return { agentId: null, sessionId: this._retiredBareActiveSessionId };
+      if (this._explicitPendingSessionKey) {
+        return { ...parseYeaftSessionIdentity(this._explicitPendingSessionKey), fromSavedFallback: false };
+      }
+      if (this._preferredExactSessionIdentity) {
+        return {
+          ...parseYeaftSessionIdentity(this._preferredExactSessionIdentity),
+          fromSavedFallback: Boolean(this._preferredIdentityIsSavedFallback),
+        };
+      }
+      if (this._retiredBareActiveSessionId) {
+        return { agentId: null, sessionId: this._retiredBareActiveSessionId, fromSavedFallback: false };
+      }
       const active = this.activeSession;
-      return active ? { agentId: active.agentId, sessionId: active.id } : readLastViewedYeaftSession();
+      if (active) return { agentId: active.agentId, sessionId: active.id, fromSavedFallback: false };
+      return { ...readLastViewedYeaftSession(), fromSavedFallback: true };
     },
 
-    beginInventoryCommit(preferredSessionId = null, preferredAgentId = null) {
+    beginInventoryCommit(preferredSessionId = null, preferredAgentId = null, { fromSavedFallback = false } = {}) {
       const openingKey = this._explicitPendingSessionKey;
-      this.resetInventory();
+      // Replaying the Server's shadow inventory cannot invalidate an Agent deletion receipt.
+      this.resetInventory({ preserveDeletionReceipts: true });
       this._explicitPendingSessionKey = openingKey;
       if (!openingKey && preferredSessionId) {
-        if (preferredAgentId) this._preferredExactSessionIdentity = storeKeyFor(preferredAgentId, preferredSessionId);
-        else this._retiredBareActiveSessionId = preferredSessionId;
+        if (preferredAgentId) {
+          this._preferredExactSessionIdentity = storeKeyFor(preferredAgentId, preferredSessionId);
+          this._preferredIdentityIsSavedFallback = Boolean(fromSavedFallback);
+        } else {
+          this._retiredBareActiveSessionId = preferredSessionId;
+        }
       }
     },
 
