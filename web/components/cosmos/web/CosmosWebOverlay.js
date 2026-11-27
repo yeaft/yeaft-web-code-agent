@@ -49,6 +49,10 @@ export default {
       type: Array,
       default: () => [],
     },
+    agentsLive: {
+      type: Boolean,
+      default: true,
+    },
     agentToPlanet: {
       type: Object,
       default: () => ({}),
@@ -190,6 +194,9 @@ export default {
         const idx = this.webStore.feedItems.findIndex((it) => it && it.id === id);
         if (idx >= 0) this.focusedFeedIdx = idx;
       }
+    },
+    'webStore.sourceSelectionRev'() {
+      this.selectedAiFollowUp = '';
     },
   },
   mounted() {
@@ -1110,6 +1117,7 @@ export default {
       <!-- Full-Screen Centered Reader & Daily Briefing Modal -->
       <CosmosWebReaderModal
         :agents="agents"
+        :agents-live="agentsLive"
         :agent-to-planet="agentToPlanet"
         @toast="$emit('toast', $event)"
         @dispatch-to-planet="$emit('dispatch-to-planet', $event)"
@@ -1119,6 +1127,7 @@ export default {
       <!-- Domain & Preferences Studio Modal -->
       <CosmosWebPrefsModal
         :agents="agents"
+        :agents-live="agentsLive"
         @toast="$emit('toast', $event)"
       />
     </div>

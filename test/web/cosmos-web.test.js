@@ -1134,4 +1134,217 @@ describe('Cosmic Web — Pinia store & interactive overlay', () => {
     wrapper.unmount();
     outsideBtn.remove();
   });
+
+  it('clears source-bound AI follow-up state in both inline and expanded readers on same-cluster source switch (#6)', async () => {
+    mockApi([
+      {
+        match: (u) => u.startsWith('/api/cosmic-web/clusters/c-src/article'),
+        body: { title: 'Source B', markdown: 'Body B', quality: 'full', sourceUrl: 'https://b.example/story' },
+      },
+    ]);
+    const webStore = useCosmicWebStore();
+    webStore.bootstrapped = true;
+    webStore.prefs.onboarded = true;
+    webStore.readerOpen = true;
+    webStore.readerClusterId = 'c-src';
+    webStore.readerItemId = 'item-a';
+    webStore.activeArticleItemId = 'item-a';
+    webStore.activeArticleUrl = 'https://a.example/story';
+    webStore.activeClusterDetail = {
+      id: 'c-src',
+      domainId: 'ai',
+      headline: 'Multi-source story',
+      primaryUrl: 'https://a.example/story',
+      items: [
+        { id: 'item-a', sourceName: 'Source A', title: 'A', url: 'https://a.example/story' },
+        { id: 'item-b', sourceName: 'Source B', title: 'B', url: 'https://b.example/story' },
+      ],
+    };
+    webStore.aiBriefData = { tldr: 'Summary A', bullets: ['b1'], impact: 'imp', followUps: ['Question from A?'] };
+
+    const wrapper = mount(CosmosWebOverlay, {
+      props: {
+        visible: true,
+        agents: [{ id: 'a1', name: 'Alpha', online: true, capabilities: ['cosmic_web_briefing'] }],
+        agentsLive: true,
+        agentToPlanet: { a1: 'earth' },
+        isCompact: false,
+      },
+      global: { mocks: { $t: (k) => cosmosZh[k] || k } },
+    });
+    await flushPromises();
+
+    // Select follow-up from source A in inline reader & expanded reader
+    wrapper.vm.applyFollowUp('Question from A?');
+    expect(wrapper.vm.selectedAiFollowUp).toBe('Question from A?');
+
+    // Switch to source B within the same cluster
+    await webStore.selectArticleSource('c-src', { itemId: 'item-b', url: 'https://b.example/story' });
+    await flushPromises();
+
+    expect(wrapper.vm.selectedAiFollowUp).toBe('');
+    wrapper.vm.submitInlineDispatch('fly');
+    const emitted = wrapper.emitted('dispatch-to-planet');
+    expect(emitted).toBeTruthy();
+    expect(emitted[0][0].aiFollowUp).toBeNull();
+    expect(emitted[0][0].url).toBe('https://b.example/story');
+
+    // Now verify expanded reader modal also clears selectedAiFollowUp on source switch
+    webStore.readerExpanded = true;
+    await flushPromises();
+    const modal = wrapper.findComponent({ name: 'CosmosWebReaderModal' });
+    modal.vm.applyFollowUp('Expanded question from B?');
+    expect(modal.vm.selectedAiFollowUp).toBe('Expanded question from B?');
+
+    await webStore.selectArticleSource('c-src', { itemId: 'item-a', url: 'https://a.example/story' });
+    await flushPromises();
+    expect(modal.vm.selectedAiFollowUp).toBe('');
+
+    wrapper.unmount();
+  });
+
+  it('gates Briefing pickers on live WS inventory and resets Preferences draft to Auto when selected Agent disconnects (#7)', async () => {
+    const webStore = useCosmicWebStore();
+    webStore.bootstrapped = true;
+    webStore.prefs.onboarded = true;
+    webStore.prefs.preferredAgentId = 'a1';
+    webStore.prefsModalOpen = true;
+
+    const wrapper = mount(CosmosWebOverlay, {
+      props: {
+        visible: true,
+        agents: [
+          { id: 'a1', name: 'Alpha', online: true, capabilities: ['cosmic_web_briefing'] },
+          { id: 'a2', name: 'Beta', online: true, capabilities: ['cosmic_web_briefing'] },
+        ],
+        agentsLive: true,
+        agentToPlanet: { a1: 'earth', a2: 'mars' },
+        isCompact: false,
+      },
+      global: { mocks: { $t: (k) => cosmosZh[k] || k } },
+    });
+    await flushPromises();
+
+    const prefsModal = wrapper.findComponent({ name: 'CosmosWebPrefsModal' });
+    expect(prefsModal.vm.briefingCapableAgents.map((a) => a.id)).toEqual(['a1', 'a2']);
+    prefsModal.vm.draft.preferredAgentId = 'a2';
+    await flushPromises();
+
+    // Agent a2 disconnects -> draft must immediately revert to Auto (''), not stay checked as offline radio
+    await wrapper.setProps({
+      agents: [
+        { id: 'a1', name: 'Alpha', online: true, capabilities: ['cosmic_web_briefing'] },
+        { id: 'a2', name: 'Beta', online: false, capabilities: ['cosmic_web_briefing'] },
+      ],
+    });
+    await flushPromises();
+    expect(prefsModal.vm.draft.preferredAgentId).toBe('');
+
+    // Browser WS disconnects (agentsLive -> false) -> stale agent list must yield zero eligible briefing agents
+    await wrapper.setProps({ agentsLive: false });
+    await flushPromises();
+    expect(prefsModal.vm.briefingCapableAgents).toEqual([]);
+    expect(prefsModal.vm.savedOfflinePreferredAgent?.id).toBe('a1');
+    // Saved offline note must NOT be a radio input option for draft.preferredAgentId
+    const radioValues = prefsModal.findAll('input[type="radio"]').map((r) => r.element.value);
+    expect(radioValues).not.toContain('a1');
+
+    wrapper.unmount();
+  });
+
+  it('does not start a feed reload when markAllRead is aborted by leaving the Web band (#9/#10)', async () => {
+    let resolveMark;
+    let feedCallsAfterLeave = 0;
+    let leftBand = false;
+    globalThis.fetch = vi.fn((url, opts = {}) => {
+      const urlStr = String(url);
+      if (urlStr === '/api/cosmic-web/mark-all-read') {
+        return new Promise((resolve, reject) => {
+          resolveMark = resolve;
+          opts.signal?.addEventListener('abort', () => {
+            reject(Object.assign(new Error('Aborted'), { name: 'AbortError' }));
+          }, { once: true });
+        });
+      }
+      if (urlStr.startsWith('/api/cosmic-web/feed')) {
+        if (leftBand) feedCallsAfterLeave += 1;
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          headers: { get: () => 'application/json' },
+          json: async () => ({ clusters: [], total: 0, nextCursor: null }),
+          text: async () => '{}',
+        });
+      }
+      return Promise.resolve({
+        ok: true,
+        status: 200,
+        headers: { get: () => 'application/json' },
+        json: async () => ({}),
+        text: async () => '{}',
+      });
+    });
+
+    const webStore = useCosmicWebStore();
+    webStore.bootstrapped = true;
+    webStore.feedLoaded = true;
+    webStore.activeInWebBand = true;
+    webStore.feedItems = [{ id: 'c1', domainId: 'ai', unread: true, isRead: false }];
+
+    const markPromise = webStore.markAllRead();
+    leftBand = true;
+    webStore.leaveWebBand();
+    await markPromise;
+    await flushPromises();
+
+    expect(feedCallsAfterLeave).toBe(0);
+    expect(webStore.staleOnReentry).toBe(true);
+    expect(resolveMark).toBeTypeOf('function');
+  });
+
+  it('restores focus to the drawer when Docking after expanding via keyboard from a persistent HUD button (#12)', async () => {
+    const webStore = useCosmicWebStore();
+    webStore.bootstrapped = true;
+    webStore.prefs.onboarded = true;
+    webStore.readerOpen = true;
+    webStore.readerClusterId = 'c1';
+    webStore.activeClusterDetail = { id: 'c1', domainId: 'ai', headline: 'Story 1', items: [] };
+    webStore.articleData = { title: 'Story 1', markdown: 'Body', quality: 'full' };
+
+    const wrapper = mount(CosmosWebOverlay, {
+      attachTo: document.body,
+      props: {
+        visible: true,
+        agents: [],
+        agentsLive: true,
+        agentToPlanet: {},
+        isCompact: false,
+      },
+      global: { mocks: { $t: (k) => cosmosZh[k] || k } },
+    });
+    await flushPromises();
+
+    // Focus a persistent HUD button (dailyBriefingBtn stays mounted in DOM)
+    const hudBtn = wrapper.vm.$refs.dailyBriefingBtn;
+    expect(hudBtn).toBeTruthy();
+    hudBtn.focus();
+    expect(document.activeElement).toBe(hudBtn);
+
+    // Press 'e' while focused on persistent HUD button to expand reader modal
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'e', bubbles: true, cancelable: true }));
+    await flushPromises();
+    expect(webStore.readerExpanded).toBe(true);
+
+    // Activate Dock button inside modal -> focus MUST move to drawer (inlineExpandBtn), NOT back to hudBtn
+    const modal = wrapper.findComponent({ name: 'CosmosWebReaderModal' });
+    modal.vm.collapseToDrawer();
+    await flushPromises();
+    await flushPromises();
+
+    expect(webStore.readerExpanded).toBe(false);
+    expect(document.activeElement).toBe(wrapper.vm.$refs.inlineExpandBtn);
+    expect(document.activeElement).not.toBe(hudBtn);
+
+    wrapper.unmount();
+  });
 });

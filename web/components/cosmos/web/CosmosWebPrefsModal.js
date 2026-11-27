@@ -47,6 +47,10 @@ export default {
       type: Array,
       default: () => [],
     },
+    agentsLive: {
+      type: Boolean,
+      default: true,
+    },
   },
   emits: ['toast'],
   setup() {
@@ -100,22 +104,30 @@ export default {
       return (this.webStore.domains || []).filter((d) => d && !d.isCustom);
     },
     briefingCapableAgents() {
+      if (!this.agentsLive) return [];
       return (this.agents || []).filter(
         (a) => Boolean(a && a.online && Array.isArray(a.capabilities) && a.capabilities.includes('cosmic_web_briefing')),
       );
     },
     savedOfflinePreferredAgent() {
-      const id = this.draft.preferredAgentId;
-      if (!id) return null;
-      if (this.briefingCapableAgents.some((a) => a.id === id)) return null;
-      const matched = (this.agents || []).find((a) => a && a.id === id);
+      const savedId = typeof this.webStore.prefs?.preferredAgentId === 'string'
+        ? this.webStore.prefs.preferredAgentId
+        : '';
+      if (!savedId) return null;
+      if (this.briefingCapableAgents.some((a) => a.id === savedId)) return null;
+      const matched = (this.agents || []).find((a) => a && a.id === savedId);
       return {
-        id,
-        name: matched?.name || id,
+        id: savedId,
+        name: matched?.name || savedId,
       };
     },
   },
   watch: {
+    briefingCapableAgents(list) {
+      if (this.draft.preferredAgentId && !list.some((a) => a.id === this.draft.preferredAgentId)) {
+        this.draft.preferredAgentId = '';
+      }
+    },
     isOpen: {
       immediate: true,
       handler(open, prev) {
@@ -211,7 +223,10 @@ export default {
         customDomains: Array.isArray(p.customDomains) ? cloneJson(p.customDomains) : [],
         watchKeywords: Array.isArray(p.watchKeywords) ? [...p.watchKeywords] : [],
         muteKeywords: Array.isArray(p.muteKeywords) ? [...p.muteKeywords] : [],
-        preferredAgentId: typeof p.preferredAgentId === 'string' ? p.preferredAgentId : '',
+        preferredAgentId: (
+          typeof p.preferredAgentId === 'string'
+          && this.briefingCapableAgents.some((a) => a.id === p.preferredAgentId)
+        ) ? p.preferredAgentId : '',
         defaultPerspective: p.defaultPerspective || 'balanced',
       };
       this.saveError = null;
@@ -728,21 +743,17 @@ export default {
                     {{ $t('cosmos.web.prefs.briefingCapable') }}
                   </span>
                 </label>
-                <label
+                <div
                   v-if="savedOfflinePreferredAgent"
-                  class="cw-agent-radio-item is-selected"
+                  class="cw-agent-radio-item"
+                  role="note"
                 >
-                  <input
-                    v-model="draft.preferredAgentId"
-                    type="radio"
-                    :value="savedOfflinePreferredAgent.id"
-                  />
                   <span class="cw-status-dot"></span>
                   <span class="cw-agent-radio-title">{{ savedOfflinePreferredAgent.name }}</span>
                   <span class="cw-badge">
                     {{ $t('cosmos.web.status.offline') }}
                   </span>
-                </label>
+                </div>
               </div>
             </div>
 

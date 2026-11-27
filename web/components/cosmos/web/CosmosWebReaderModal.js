@@ -39,6 +39,10 @@ export default {
       type: Array,
       default: () => [],
     },
+    agentsLive: {
+      type: Boolean,
+      default: true,
+    },
     agentToPlanet: {
       type: Object,
       default: () => ({}),
@@ -116,6 +120,7 @@ export default {
       return [];
     },
     briefingCapableAgents() {
+      if (!this.agentsLive) return [];
       return (this.agents || []).filter(
         (a) => Boolean(a && a.online && Array.isArray(a.capabilities) && a.capabilities.includes('cosmic_web_briefing')),
       );
@@ -144,6 +149,7 @@ export default {
       immediate: true,
       handler(open, prev) {
         if (open) {
+          this._dockRequested = false;
           this._previousActiveElement = typeof document !== 'undefined' ? document.activeElement : null;
           this._lastOpenMode = this.isDailyMode ? 'daily' : 'article';
           this.briefPerspective = this.webStore.prefs?.defaultPerspective || 'balanced';
@@ -159,8 +165,14 @@ export default {
           if (prev === true) {
             const prevEl = this._previousActiveElement;
             const closedMode = this._lastOpenMode || 'article';
+            const dockRequested = Boolean(this._dockRequested);
             this._previousActiveElement = null;
+            this._dockRequested = false;
             this.$nextTick(() => {
+              if (dockRequested) {
+                this.$emit('restore-focus', { mode: closedMode, reason: 'dock' });
+                return;
+              }
               const canRestorePrev = Boolean(
                 prevEl
                 && prevEl !== document.body
@@ -182,6 +194,10 @@ export default {
       this.dispatchPrompt = '';
       this.selectedAiFollowUp = '';
       this.dispatchPresetId = 'deepdive';
+      this.copySuccess = false;
+    },
+    'webStore.sourceSelectionRev'() {
+      this.selectedAiFollowUp = '';
       this.copySuccess = false;
     },
   },
@@ -262,6 +278,7 @@ export default {
       this.webStore.closeClusterReader();
     },
     collapseToDrawer() {
+      this._dockRequested = true;
       this.webStore.readerExpanded = false;
     },
     switchTab(tab) {

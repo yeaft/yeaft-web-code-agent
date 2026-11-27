@@ -16,7 +16,9 @@ const { defineStore } = Pinia;
 const FEED_PAGE_SIZE = 30;
 let storeGeneration = 0;
 let pulseSeq = 0;
+let bandSessionSeq = 0;
 let bootstrapInflight = null;
+let feedRetryInflight = null;
 const channelControllers = new Map();
 const channelSeq = new Map();
 const mutationControllers = new Set();
@@ -798,6 +800,8 @@ export const useCosmicWebStore = defineStore('cosmicWeb', {
     async markAllRead(domainIdArg = null) {
       const { controller, gen, release } = createMutationRequest();
       const capturedFeedRev = this.feedQueryRev;
+      const capturedBandSeq = bandSessionSeq;
+      const wasActiveInBand = this.activeInWebBand;
       const active = domainIdArg || this.activeDomain || 'all';
       const isSpecial = ['all', 'watch', 'bookmarked', 'unread'].includes(active);
       const targetDomain = !isSpecial ? active : null;
@@ -816,6 +820,12 @@ export const useCosmicWebStore = defineStore('cosmicWeb', {
         }
         return it;
       });
+      const isAbandoned = () => (
+        gen !== storeGeneration
+        || controller.signal.aborted
+        || capturedBandSeq !== bandSessionSeq
+        || (wasActiveInBand && !this.activeInWebBand)
+      );
       try {
         const body = {};
         if (targetDomain) body.domainId = targetDomain;
@@ -828,6 +838,10 @@ export const useCosmicWebStore = defineStore('cosmicWeb', {
           signal: controller.signal,
         });
         if (gen !== storeGeneration) return;
+        if (isAbandoned()) {
+          this.staleOnReentry = true;
+          return;
+        }
         if (data.stats) this.stats = { ...this.stats, ...data.stats };
         else if (!targetDomain && !targetFilter && !targetQ) this.stats.unreadCount = 0;
         if (Array.isArray(data.domains)) this.domains = data.domains;
@@ -835,6 +849,10 @@ export const useCosmicWebStore = defineStore('cosmicWeb', {
         await this.fetchFeed({ reset: true });
       } catch {
         if (gen !== storeGeneration) return;
+        if (isAbandoned()) {
+          this.staleOnReentry = true;
+          return;
+        }
         if (this.feedQueryRev === capturedFeedRev) {
           await this.fetchFeed({ reset: true });
         }
@@ -908,7 +926,17 @@ export const useCosmicWebStore = defineStore('cosmicWeb', {
         if (shouldForceBootstrap) {
           await this.bootstrap({ force: true });
         } else {
-          await this.fetchFeed({ reset: true });
+          if (feedRetryInflight && feedRetryInflight.gen === storeGeneration) {
+            return feedRetryInflight.promise;
+          }
+          const gen = storeGeneration;
+          const promise = this.fetchFeed({ reset: true }).finally(() => {
+            if (feedRetryInflight && feedRetryInflight.promise === promise) {
+              feedRetryInflight = null;
+            }
+          });
+          feedRetryInflight = { gen, promise };
+          await promise;
         }
       }
     },
@@ -917,9 +945,11 @@ export const useCosmicWebStore = defineStore('cosmicWeb', {
       if (this.loading || this.feedLoading || this.refreshing || !this.feedLoaded) {
         this.staleOnReentry = true;
       }
+      bandSessionSeq += 1;
       this.sourceSelectionRev += 1;
       this.activeInWebBand = false;
       bootstrapInflight = null;
+      feedRetryInflight = null;
       abortAllChannels();
       this.loading = false;
       this.refreshing = false;
@@ -944,7 +974,9 @@ export const useCosmicWebStore = defineStore('cosmicWeb', {
 
     reset() {
       storeGeneration += 1;
+      bandSessionSeq += 1;
       bootstrapInflight = null;
+      feedRetryInflight = null;
       abortAllChannels();
       channelSeq.clear();
       this.$reset();

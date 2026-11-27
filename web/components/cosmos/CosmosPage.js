@@ -614,6 +614,7 @@ export default {
         ref="webOverlayRef"
         :visible="currentBand === 'web'"
         :agents="projectedAgentList"
+        :agents-live="agentsLiveForCosmos"
         :agent-to-planet="assignments.agentToPlanet"
         :is-compact="isCompactViewport"
         @toast="showToast"
@@ -1394,6 +1395,12 @@ export default {
         creationsStore.selectGalaxyAgent(preferred.id).catch(() => {});
       }
     }
+
+    const agentsLiveForCosmos = Vue.computed(() => Boolean(
+      store.authenticated
+      && store._hasHandledAgentList
+      && store.connectionState === 'connected',
+    ));
 
     const isWebModalBlocking = Vue.computed(() => Boolean(
       cosmicWebStore.readerExpanded
@@ -2692,7 +2699,7 @@ export default {
 
     return {
       glCanvasRef, hudCanvasRef, hoverCardRef, drawerRef, galaxyOverlayRef, webOverlayRef, creationInteriorRef, signalTriggerRef, voyageOverlayRef, domRefs, setMapRef, canvasEpoch, rendererMode,
-      creationsStore, activeGalaxyStars, cosmicWebStore, isWebModalBlocking, activeWebDomNodes,
+      creationsStore, activeGalaxyStars, cosmicWebStore, agentsLiveForCosmos, isWebModalBlocking, activeWebDomNodes,
       webNodeDisplayLabel, onEnterWebNode, onLeaveWebNode, onClickWebNode, onDispatchCosmicWebToPlanet,
       planets: PLANETS, bookDomains: BOOK_DOMAINS,
       portals: [
