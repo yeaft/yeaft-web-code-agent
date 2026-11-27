@@ -1747,7 +1747,7 @@ export default {
     }
 
     async function openCreationInDrawer({ agentId, sessionId, creationId, rootDir, initialPrompt, openSeq, maximize,
-      openedFromGalaxy = currentBand.value === 'galaxy' }) {
+      openedFromGalaxy = currentBand.value === 'galaxy', keepIgniteDockOpen = false }) {
       const epoch = ++openCreationEpoch;
       const uiMode = store.uiMode;
       const band = currentBand.value;
@@ -1759,7 +1759,7 @@ export default {
       if (!isOpenStillCurrent()) return;
 
       creationsStore.inspectorTarget = null;
-      if (creationsStore.igniteDraft) creationsStore.igniteDraft.open = false;
+      if (!keepIgniteDockOpen && creationsStore.igniteDraft) creationsStore.igniteDraft.open = false;
       // The drawer uses the existing Yeaft conversation projection without
       // changing uiMode. WorkbenchPanel consumes the route-scoped pending target.
       if (!openSessionInDrawer(agentId, sessionId ? { id: sessionId, runtimeProvider: 'yeaft' } : null, { keepBand: true, creationOpen: true })) {
@@ -1772,7 +1772,7 @@ export default {
       const hasPrompt = typeof initialPrompt === 'string' && initialPrompt.trim() && sessionId;
       const activationPromise = hasPrompt && creationsStore.hasMountedCreationTab(agentId, sessionId)
         && creationsStore.listDirtyDocDrafts(agentId).length > 0
-        ? creationsStore.waitForCreationActivation(openSeq) : null;
+        ? creationsStore.waitForCreationActivation(openSeq, { agentId, sessionId }) : null;
       if (!creationsStore.pendingWorkbenchTarget || creationsStore.pendingWorkbenchTarget.openSeq !== openSeq) {
         creationsStore.setPendingWorkbenchTarget?.({ agentId, sessionId, creationId, rootDir, maximize, openSeq, openedFromGalaxy });
       }
@@ -1810,6 +1810,7 @@ export default {
       rootDir = '',
       mode = 'read',
       promptToSend = '',
+      keepIgniteDockOpen = false,
     } = {}) {
       const targetAgentId = agentId || creationsStore.selectedAgentId;
       if (!targetAgentId || !creationId) return;
@@ -1853,7 +1854,7 @@ export default {
 
         await openCreationInDrawer({
           agentId: targetAgentId, sessionId: resolvedSessionId, creationId, rootDir: resolvedRootDir,
-          maximize: mode === 'read', initialPrompt: promptToSend, openSeq, openedFromGalaxy: true,
+          maximize: mode === 'read', initialPrompt: promptToSend, openSeq, openedFromGalaxy: true, keepIgniteDockOpen,
         });
       } catch (err) {
         if (isStaleOpen()) return;

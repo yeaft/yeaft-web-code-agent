@@ -360,12 +360,17 @@ export async function handleWriteFile(msg) {
     if (hasCreationScope(msg)) {
       [resolved, postStat] = await withCreationFiles(msg, async files => {
         const path = files.target(filePath, { strictDescendant: true });
-        const result = await files.file(path, async handle => {
-          const preStat = await handle.stat();
-          if (msg.requireTextTarget === true && preStat.size > 0) await assertTextTarget(handle);
-          if ((msg.expectedSize != null && Number.isFinite(Number(msg.expectedSize)) && preStat.size !== Number(msg.expectedSize))
-            || (msg.expectedMtimeMs != null && Number.isFinite(Number(msg.expectedMtimeMs)) && Math.abs(preStat.mtimeMs - Number(msg.expectedMtimeMs)) > 2)) {
+        const result = await files.file(path, async (handle, verifyCurrent) => {
+          const preStat = await handle.stat({ bigint: true });
+          if ((msg.expectedSize != null && Number.isFinite(Number(msg.expectedSize)) && Number(preStat.size) !== Number(msg.expectedSize))
+            || (msg.expectedMtimeMs != null && Number.isFinite(Number(msg.expectedMtimeMs)) && Math.abs(Number(preStat.mtimeNs) / 1e6 - Number(msg.expectedMtimeMs)) > 2)) {
             throw Object.assign(new Error('File changed on disk since it was loaded.'), { code: 'FILE_CONFLICT' });
+          }
+          if (msg.requireTextTarget === true && preStat.size > 0n) await assertTextTarget(handle);
+          await verifyCurrent(preStat);
+          const postScanStat = await handle.stat({ bigint: true });
+          if (postScanStat.size !== preStat.size || postScanStat.mtimeNs !== preStat.mtimeNs || postScanStat.ctimeNs !== preStat.ctimeNs) {
+            throw Object.assign(new Error('File changed on disk during save validation.'), { code: 'FILE_CONFLICT' });
           }
           await handle.truncate(0);
           for (let offset = 0; offset < encoded.length;) {

@@ -223,6 +223,25 @@ function normalizeDraftPath(path) {
   return String(path).replace(/\\/g, '/').replace(/\/+$/, '') || '/';
 }
 
+function folderImportKey(folderIdentity) {
+  // FNV-1a over the serialized tuple works even outside a secure browser context.
+  let hash = 0xcbf29ce484222325n;
+  for (const byte of new TextEncoder().encode(folderIdentity)) {
+    hash = BigInt.asUintN(64, (hash ^ BigInt(byte)) * 0x100000001b3n);
+  }
+  return `bind-folder:${hash.toString(16).padStart(16, '0')}`;
+}
+
+function workspaceSubmissionSnapshot(entry) {
+  return {
+    files: entry.submittedFiles,
+    title: entry.submittedTitle,
+    prompt: entry.submittedPrompt,
+    kind: entry.submittedKind,
+    celestial: entry.submittedCelestial,
+  };
+}
+
 function normalizeDraftKey(rootDir, filePath) {
   return `${normalizeDraftPath(rootDir)}::${normalizeDraftPath(filePath)}`;
 }
@@ -469,6 +488,9 @@ export const useCreationsStore = defineStore('creations', {
       const route = this.mountedCreationTabRoutes[routeKey];
       if (route.count > 1) route.count -= 1;
       else delete this.mountedCreationTabRoutes[routeKey];
+      for (const [openSeq, { agentId, sessionId }] of pendingOpenActivations) {
+        if (!this.hasMountedCreationTab(agentId, sessionId)) this.resolveCreationActivation(openSeq, false);
+      }
     },
 
     isCreationTabMounted(routeKey) {
@@ -482,14 +504,14 @@ export const useCreationsStore = defineStore('creations', {
       ));
     },
 
-    waitForCreationActivation(openSeq, timeoutMs = 4000) {
+    waitForCreationActivation(openSeq, { agentId, sessionId }) {
       if (!Number.isSafeInteger(openSeq) || openSeq !== this.openWorkspaceSeq) return Promise.resolve(false);
       const existing = pendingOpenActivations.get(openSeq);
       if (existing) return existing.promise;
       let resolve;
       const promise = new Promise(done => { resolve = done; });
-      const timer = setTimeout(() => this.resolveCreationActivation(openSeq, false), timeoutMs);
-      pendingOpenActivations.set(openSeq, { resolve, timer, promise });
+      if (!this.hasMountedCreationTab(agentId, sessionId)) return Promise.resolve(false);
+      pendingOpenActivations.set(openSeq, { agentId, sessionId, resolve, promise });
       return promise;
     },
 
@@ -497,7 +519,6 @@ export const useCreationsStore = defineStore('creations', {
       const pending = pendingOpenActivations.get(openSeq);
       if (!pending) return;
       pendingOpenActivations.delete(openSeq);
-      clearTimeout(pending.timer);
       pending.resolve(accepted === true && openSeq === this.openWorkspaceSeq);
     },
 
@@ -718,7 +739,7 @@ export const useCreationsStore = defineStore('creations', {
         throw new Error('Missing agentId or rootDir');
       }
 
-      const dedupeKey = `${targetId}::${trimmedDir}`;
+      const dedupeKey = JSON.stringify([targetId, normalizeDraftPath(trimmedDir)]);
       if (inFlightBindFolder.has(dedupeKey)) {
         return inFlightBindFolder.get(dedupeKey);
       }
@@ -746,6 +767,7 @@ export const useCreationsStore = defineStore('creations', {
           title: resolvedTitle,
           kind,
           rootDir: trimmedDir,
+          importKey: folderImportKey(dedupeKey),
           ...(sessionId ? { sessionId } : {}),
           ...(projectId ? { projectId } : {}),
           initializeFolder: true,
@@ -769,21 +791,45 @@ export const useCreationsStore = defineStore('creations', {
 
     async createCreationWithWorkspace(options = {}) {
       const targetId = String(options.agentId || this.selectedAgentId || '').trim();
-      const { attemptKey } = options;
+      const { attemptKey, title, kind = 'book', prompt, rawFiles, celestial } = options;
+      const trimmedTitle = String(title || '').trim();
       const flightKey = typeof attemptKey === 'string' && attemptKey.trim() ? `${targetId}::${attemptKey}` : null;
-      if (!flightKey) return this._createWorkspace(targetId, options);
-      if (inFlightWorkspaceCreates.has(flightKey)) return await inFlightWorkspaceCreates.get(flightKey);
-
-      // Reserve the attempt before issuing any RPC; remounts reuse this promise.
       const gen = storeGeneration;
-      const run = Promise.resolve().then(() => {
+      const existing = flightKey && inFlightWorkspaceCreates.get(flightKey);
+      if (existing) {
+        const baseRes = await existing.promise;
         if (gen !== storeGeneration) throw new Error('Creations store cleared');
-        return this._createWorkspace(targetId, options);
+        const patch = {
+          ...(trimmedTitle && trimmedTitle !== baseRes.creation.title ? { title: trimmedTitle } : {}),
+          ...(kind !== baseRes.creation.kind ? { kind } : {}),
+        };
+        const updated = Object.keys(patch).length
+          ? await this.updateCreation(targetId, baseRes.creation.id, patch) : null;
+        if (gen !== storeGeneration) throw new Error('Creations store cleared');
+        return {
+          ...baseRes,
+          ...(updated ? { creation: { ...baseRes.creation, ...updated } } : {}),
+          _submittedSnapshot: workspaceSubmissionSnapshot(existing),
+        };
+      }
+
+      const entry = {
+        promise: null,
+        submittedFiles: Array.isArray(rawFiles) ? rawFiles.slice() : [],
+        submittedTitle: trimmedTitle,
+        submittedPrompt: String(prompt || ''),
+        submittedKind: kind,
+        submittedCelestial: celestial || null,
+      };
+      // Reserve the attempt before issuing any RPC; remounts reuse this promise.
+      entry.promise = Promise.resolve().then(() => {
+        if (gen !== storeGeneration) throw new Error('Creations store cleared');
+        return this._createWorkspace(targetId, { ...options, rawFiles: entry.submittedFiles });
       }).finally(() => {
-        if (inFlightWorkspaceCreates.get(flightKey) === run) inFlightWorkspaceCreates.delete(flightKey);
+        if (flightKey && inFlightWorkspaceCreates.get(flightKey) === entry) inFlightWorkspaceCreates.delete(flightKey);
       });
-      inFlightWorkspaceCreates.set(flightKey, run);
-      return await run;
+      if (flightKey) inFlightWorkspaceCreates.set(flightKey, entry);
+      return { ...await entry.promise, _submittedSnapshot: workspaceSubmissionSnapshot(entry) };
     },
 
     async _createWorkspace(targetId, {
@@ -940,8 +986,8 @@ export const useCreationsStore = defineStore('creations', {
               && (s.agentId === targetId || (scopedRows && !s.agentId))
               && (!s.runtimeProvider || s.runtimeProvider === 'yeaft')
               && !capturedBaselineSessions.includes(s.id)
-              && ((workspace && normalizeDraftPath(s.workDir) === workspace)
-                || (sessionTitle && (s.displayName || s.name || s.title) === sessionTitle)));
+              && (workspace ? normalizeDraftPath(s.workDir) === workspace
+                : sessionTitle && (s.displayName || s.name || s.title) === sessionTitle));
             if (matches.length > 1) throw new Error('Multiple Sessions match the previous creation attempt');
             if (matches.length === 1) targetSessionId = matches[0].id;
           }
@@ -1247,7 +1293,7 @@ export const useCreationsStore = defineStore('creations', {
         const trimmedPrompt = String(initialPrompt || '').trim();
         const activationPromise = trimmedPrompt && this.hasMountedCreationTab(targetId, sessionId)
           && this.listDirtyDocDrafts(targetId).length > 0
-          ? this.waitForCreationActivation(mySeq) : null;
+          ? this.waitForCreationActivation(mySeq, target) : null;
         this.setPendingWorkbenchTarget(target);
 
         if (!isOpenStillCurrent()) return null;
@@ -1279,7 +1325,7 @@ export const useCreationsStore = defineStore('creations', {
     cancelPendingWorkspaceOpen() {
       const seq = ++this.openWorkspaceSeq;
       for (const openSeq of pendingOpenActivations.keys()) {
-        if (openSeq !== seq) this.resolveCreationActivation(openSeq, false);
+        this.resolveCreationActivation(openSeq, false);
       }
       if (this.pendingWorkbenchTarget?.openSeq != null && this.pendingWorkbenchTarget.openSeq !== seq) {
         this.clearPendingWorkbenchTarget(this.pendingWorkbenchTarget.seq);

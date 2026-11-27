@@ -1,9 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { chmodSync, constants, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
-import { link, mkdir, open, unlink } from 'node:fs/promises';
-import { dirname, join } from 'node:path';
+import { constants, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, unlinkSync, utimesSync, writeFileSync } from 'node:fs';
+import { mkdir, open } from 'node:fs/promises';
+import { basename, dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { deflateSync } from 'node:zlib';
 import ctx from '../../../../agent/context.js';
@@ -16,7 +16,7 @@ import { createCreationBridge, createCreationService, createCreationStore, parse
 
 vi.mock('node:fs/promises', async importOriginal => {
   const fs = await importOriginal();
-  return { ...fs, mkdir: vi.fn(fs.mkdir), open: vi.fn(fs.open), link: vi.fn(fs.link), unlink: vi.fn(fs.unlink) };
+  return { ...fs, mkdir: vi.fn(fs.mkdir), open: vi.fn(fs.open) };
 });
 
 let dir;
@@ -83,6 +83,15 @@ describe('Creation folder workspaces', () => {
     expect(existsSync(root)).toBe(false);
     expect(existsSync(join(store.root, '_creations', creationId))).toBe(false);
     expect(store.listCreations()).toEqual([]);
+  });
+
+  it.each(['false', 1])('rejects non-boolean purgeWorkspace %j without deleting user files', purgeWorkspace => {
+    const { creation } = req('create_creation', { initializeFolder: true });
+    const note = join(creation.rootDir, 'docs', 'user.txt');
+    writeFileSync(note, 'keep this');
+    expect(() => req('delete_creation', { creationId: creation.id, purgeWorkspace })).toThrow(err('INVALID_REQUEST'));
+    expect(store.getCreation(creation.id)).toEqual(creation);
+    expect(readFileSync(note, 'utf8')).toBe('keep this');
   });
 
   it('preserves user files in supplied folders and protects historically linked legacy workspaces', () => {
@@ -256,7 +265,7 @@ describe('Creation folder workspaces', () => {
     const journal = () => store.one('SELECT * FROM creation_materialization_journal WHERE creation_id=?', id);
     const row = journal();
     expect(row.target_dir).toBe(rootDir);
-    const [temp] = JSON.parse(row.temp_files_json);
+    const [{ path: temp }] = JSON.parse(row.temp_files_json);
     const docs = join(rootDir, 'docs');
     const first = join(docs, 'First.md');
     const second = join(docs, 'Second.md');
@@ -285,7 +294,7 @@ describe('Creation folder workspaces', () => {
     expect(readFileSync(second, 'utf8')).toBe('edited before publication was recorded');
   });
 
-  it.each(['retry', 'delete'])('handles %s after external create_creation dies publishing its initial source', outcome => {
+  it.each([['retry', false], ['retry', true], ['delete', false], ['delete', true]])('handles %s after external publication crashes (temp replaced=%s)', (outcome, replaced) => {
     const id = 'journaled-import';
     const rootDir = join(dir, 'external');
     mkdirSync(rootDir);
@@ -313,12 +322,26 @@ describe('Creation folder workspaces', () => {
     const row = journal();
     expect(row.target_dir).toBe(rootDir);
     expect(JSON.parse(row.published_outputs_json)).toMatchObject({ readme: 'README.md' });
-    const [temp] = JSON.parse(row.temp_files_json);
+    expect(req('find_by_folder', { rootDir })).toMatchObject({ creation: { id, rootDir: null } });
+    const [tempEntry] = JSON.parse(row.temp_files_json);
+    const { path: temp } = tempEntry;
     const sources = join(rootDir, 'sources');
     const published = join(sources, 'Initial.txt');
-    expect(statSync(temp).ino).toBe(statSync(published).ino);
-    // Reconciliation must keep edits made after the initial hard link was published.
-    writeFileSync(published, 'user edited');
+    const { dev, ino } = statSync(published, { bigint: true });
+    expect(tempEntry).toEqual({ path: temp, dev: String(dev), ino: String(ino) });
+    expect(statSync(temp, { bigint: true }).ino).toBe(ino);
+    if (replaced) {
+      rmSync(temp);
+      writeFileSync(temp, 'replacement file');
+      expect(statSync(temp, { bigint: true }).ino).not.toBe(ino);
+    }
+    // Reconciliation can prove ownership of an edited output only if the original temp survives.
+    const expectedSource = replaced && outcome === 'retry' ? 'raw source' : 'user edited';
+    writeFileSync(published, expectedSource);
+    const legacyTemp = join(rootDir, '.creation-tmp-legacy');
+    writeFileSync(legacyTemp, 'legacy path has no recorded identity');
+    store.run('UPDATE creation_materialization_journal SET temp_files_json=? WHERE creation_id=?',
+      JSON.stringify([tempEntry, legacyTemp]), id);
     if (outcome === 'retry') {
       const retry = req('create_creation', { ...payload, id: 'ignored-on-retry', textSources: ['do not ingest again'] });
       expect(retry).toMatchObject({ deduplicated: true, creation: { id, rootDir } });
@@ -334,7 +357,10 @@ describe('Creation folder workspaces', () => {
       writeFileSync(unownedFile, 'inside');
       symlinkSync(outsideTemp, symbolicTemp);
       store.run('UPDATE creation_materialization_journal SET temp_files_json=? WHERE creation_id=?',
-        JSON.stringify([temp, outsideTemp, unownedFile, symbolicTemp]), id);
+        JSON.stringify([tempEntry, legacyTemp, ...[outsideTemp, unownedFile, symbolicTemp].map(path => {
+          const { dev, ino } = lstatSync(path, { bigint: true });
+          return { path, dev: String(dev), ino: String(ino) };
+        })]), id);
       expect(store.deleteCreation(id)).toEqual({ deleted: true, id });
       expect(store.listCreations()).toEqual([]);
       expect(existsSync(join(store.root, '_creations', id))).toBe(false);
@@ -343,11 +369,12 @@ describe('Creation folder workspaces', () => {
       expect(lstatSync(symbolicTemp).isSymbolicLink()).toBe(true);
     }
     expect(journal()).toBeUndefined();
-    expect(existsSync(temp)).toBe(false);
-    expect(readdirSync(sources)).toEqual(['Initial.txt']);
-    expect(readFileSync(published, 'utf8')).toBe('user edited');
+    expect(existsSync(temp)).toBe(replaced);
+    if (replaced) expect(readFileSync(temp, 'utf8')).toBe('replacement file');
+    expect(readdirSync(sources).sort()).toEqual(replaced ? [basename(temp), 'Initial.txt'] : ['Initial.txt']);
+    expect(readFileSync(published, 'utf8')).toBe(expectedSource);
     expect(readFileSync(join(rootDir, 'README.md'), 'utf8')).toBe('# Journaled\n\n\n');
-    expect(readdirSync(rootDir).filter(name => name.startsWith('.creation-tmp-'))).toEqual(outcome === 'delete' ? ['.creation-tmp-symlink'] : []);
+    expect(readFileSync(legacyTemp, 'utf8')).toBe('legacy path has no recorded identity');
   });
 
   it.each(['external', 'generated'])('reconciles a partially published %s workspace without suffixing matching files', async location => {
@@ -480,7 +507,7 @@ describe('Creation folder workspaces', () => {
     else expect(readdirSync(target)).toEqual([]);
   });
 
-  it('rolls back copies and workspace setup on failure and will not follow a sources directory symlink', () => {
+  it('rolls back copies and workspace setup on an invalid source filename', () => {
     const id = 'rejected';
     const payload = { id, initializeFolder: true, files: [
       { name: 'valid.txt', data: b64('first') }, { name: 'sub/../unsafe.txt', data: b64('second') },
@@ -492,9 +519,24 @@ describe('Creation folder workspaces', () => {
     mkdirSync(rootDir);
     expect(() => req('create_creation', { ...payload, rootDir })).toThrow(err('INVALID_REQUEST'));
     expect(readdirSync(rootDir)).toEqual([]);
-    symlinkSync(dir, join(rootDir, 'sources'), 'dir');
-    expect(() => req('create_creation', { id, initializeFolder: true, rootDir, textSources: ['Upload'] })).toThrow(err('INVALID_PATH'));
+  });
+
+  it.each(['sources symlink', 'sources file', 'nested docs symlink'])('preflights an external bind with a %s before committing', layout => {
+    const rootDir = join(dir, 'external');
+    mkdirSync(join(rootDir, 'docs'), { recursive: true });
+    const blocked = join(rootDir, layout.startsWith('sources') ? 'sources' : 'docs/Chapter');
+    if (layout.endsWith('symlink')) symlinkSync(dir, blocked, 'dir');
+    else writeFileSync(blocked, 'not a directory');
+    const payload = { initializeFolder: true, rootDir, textSources: ['Upload'], starterNode: { type: 'folder', title: 'Chapter' } };
+    expect(() => req('create_creation', payload)).toThrow(err('INVALID_PATH'));
     expect(existsSync(join(dir, 'Notes.txt'))).toBe(false);
+    expect(store.listCreations()).toEqual([]);
+    expect(store.all('SELECT * FROM creation_materialization_journal')).toEqual([]);
+    expect(req('find_by_folder', { rootDir })).toEqual({ creation: null });
+    unlinkSync(blocked);
+    const { creation } = req('create_creation', payload);
+    expect(creation.rootDir).toBe(rootDir);
+    expect(store.listCreations()).toEqual([creation]);
   });
 
   it('materializes legacy nodes, canon and binary media without clobbering files; it only emits once', async () => {
@@ -1299,93 +1341,29 @@ describe('Creation-scoped Workbench files', () => {
     } finally { operation.mockImplementation(real); }
   });
 
-  it('uses kernel no-replace for raced file targets and fails closed on directory moves', async () => {
-    const real = link.getMockImplementation();
-    const source = join(root, 'docs', 'note.txt');
-    const target = join(root, 'target.txt');
-    let raced = false;
-    link.mockImplementation(async (src, dest) => {
-      raced = true;
-      writeFileSync(target, 'racer', { flag: 'wx' });
-      return real(src, dest);
-    });
-    try {
-      await expect(withCreationFiles(msg, files => files.move(source, target))).rejects.toMatchObject(err('EEXIST'));
-      expect(raced).toBe(true);
-      expect(readFileSync(target, 'utf8')).toBe('racer');
-      expect(readFileSync(source, 'utf8')).toBe('inside');
-      await expect(withCreationFiles(msg, files => files.move(join(root, 'docs'), join(root, 'moved')))).rejects.toMatchObject({
-        code: 'FILE_OUTSIDE_WORKSPACE', message: 'Creation-scoped directory move requires atomic no-replace support.',
-      });
-      expect(existsSync(join(root, 'moved'))).toBe(false);
-      expect(readFileSync(source, 'utf8')).toBe('inside');
-    } finally { link.mockImplementation(real); }
-  });
-
-  it.each(['source', 'target'])('rolls back the destination link when the %s parent moves during publication', async side => {
-    const real = link.getMockImplementation();
-    const source = join(root, 'docs', 'note.txt');
-    const targetDir = join(root, 'destination');
-    const relocated = join(outside, 'relocated');
-    mkdirSync(targetDir);
-    link.mockImplementation(async (src, dest) => {
-      await real(src, dest);
-      renameSync(side === 'source' ? dirname(source) : targetDir, relocated);
-    });
-    try {
-      await expect(withCreationFiles(msg, files => files.move(source, join(targetDir, 'note.txt'))))
-        .rejects.toMatchObject(err('FILE_OUTSIDE_WORKSPACE'));
-      expect(readFileSync(side === 'source' ? join(relocated, 'note.txt') : source, 'utf8')).toBe('inside');
-      expect(readdirSync(side === 'source' ? targetDir : relocated)).toEqual([]);
-    } finally { link.mockImplementation(real); }
-  });
-
-  it('rolls back a linked destination when source unlink is denied and allows a clean retry', async () => {
-    const source = join(root, 'docs', 'note.txt');
-    const target = join(root, 'moved.txt');
-    const originalUnlink = unlink.getMockImplementation();
-    const privileged = process.getuid?.() === 0;
-    if (privileged) {
-      // Root can unlink despite chmod; keep the real link and rollback calls.
-      unlink.mockImplementation(async path => {
-        if (path.endsWith('/note.txt')) {
-          expect(statSync(target).ino).toBe(statSync(source).ino);
-          throw Object.assign(new Error('denied'), { code: 'EACCES' });
-        }
-        return originalUnlink(path);
-      });
-    } else chmodSync(dirname(source), 0o555);
-    try {
-      await expect(withCreationFiles(msg, files => files.move(source, target))).rejects.toMatchObject(err('EACCES'));
-      expect(existsSync(target)).toBe(false);
-      expect(statSync(source).nlink).toBe(1);
-    } finally {
-      if (privileged) unlink.mockImplementation(originalUnlink);
-      else chmodSync(dirname(source), 0o755);
-    }
-    await withCreationFiles(msg, files => files.move(source, target));
-    expect(existsSync(source)).toBe(false);
-    expect(readFileSync(target, 'utf8')).toBe('inside');
-  });
-
-  it('preserves a replacement destination when source unlink fails', async () => {
-    const source = join(root, 'docs', 'note.txt');
-    const target = join(root, 'moved.txt');
-    const originalUnlink = unlink.getMockImplementation();
-    unlink.mockImplementation(async path => {
-      if (path.endsWith('/note.txt')) {
-        expect(statSync(target).ino).toBe(statSync(source).ino);
-        rmSync(target);
-        writeFileSync(target, 'replacement');
-        throw Object.assign(new Error('denied'), { code: 'EACCES' });
-      }
-      return originalUnlink(path);
-    });
-    try {
-      await expect(withCreationFiles(msg, files => files.move(source, target))).rejects.toMatchObject(err('EACCES'));
-      expect(readFileSync(target, 'utf8')).toBe('replacement');
-      expect(readFileSync(source, 'utf8')).toBe('inside');
-    } finally { unlink.mockImplementation(originalUnlink); }
+  it.each(['docs/note.txt', 'docs'])('fails closed moving %s without touching either side', async source => {
+    const reason = 'Creation-scoped move requires atomic no-replace rename support.';
+    const dest = join(root, 'destination');
+    const name = basename(source);
+    const note = join(root, 'docs', 'note.txt');
+    const original = statSync(note);
+    await expect(withCreationFiles(msg, files => files.move(join(root, source), join(dest, name), { createParents: true })))
+      .rejects.toMatchObject({ code: 'FILE_OUTSIDE_WORKSPACE', message: reason });
+    expect(await invoke(handleMoveFiles, { paths: [source], destination: 'destination' }))
+      .toMatchObject({ success: false, movedCount: 0, message: `Failed: ${name}: ${reason}` });
+    expect(existsSync(dest)).toBe(false);
+    mkdirSync(dest);
+    const existing = join(dest, name);
+    writeFileSync(existing, 'existing destination');
+    const before = statSync(existing);
+    expect(await invoke(handleMoveFiles, { paths: [source], destination: 'destination' }))
+      .toMatchObject({ success: false, movedCount: 0, message: `Failed: ${name}: ${reason}` });
+    expect(statSync(existing)).toMatchObject({ ino: before.ino, ctimeMs: before.ctimeMs });
+    expect(readFileSync(existing, 'utf8')).toBe('existing destination');
+    expect(readdirSync(dest)).toEqual([name]);
+    expect(statSync(note)).toMatchObject({ ino: original.ino, ctimeMs: original.ctimeMs, nlink: original.nlink });
+    expect(readdirSync(join(root, 'docs'))).toEqual(['note.txt']);
+    expect(readFileSync(note, 'utf8')).toBe('inside');
   });
 
   it.each([{ content: null }, {}])('rejects invalid write content before resolving scope or opening a file (%j)', async args => {
@@ -1435,6 +1413,39 @@ describe('Creation-scoped Workbench files', () => {
     expect(await invoke(handleWriteFile, { filePath, content: 'replacement', requireTextTarget: true }))
       .toMatchObject({ success: false, errorCode: 'FILE_IS_BINARY', error: 'Cannot overwrite a binary file from text Canvas.' });
     expect(readFileSync(target)).toEqual(bytes);
+  });
+
+  it.each(['edited in place', 'replaced'])('rejects a text save when a multi-chunk file is %s mid-scan', async change => {
+    const filePath = 'docs/note.txt';
+    const target = join(root, filePath);
+    const displaced = `${target}.original`;
+    const initial = Buffer.alloc(128 * 1024, 'a');
+    const newer = Buffer.alloc(initial.length, 'b');
+    writeFileSync(target, initial);
+    utimesSync(target, 1, 1);
+    const { size: expectedSize, mtimeMs: expectedMtimeMs, ino } = statSync(target);
+    const handle = await open(target, 'r');
+    const prototype = Object.getPrototypeOf(handle);
+    await handle.close();
+    const { read } = prototype;
+    let chunks = 0;
+    const spy = vi.spyOn(prototype, 'read').mockImplementation(async function (...args) {
+      const result = await read.apply(this, args);
+      if (result.bytesRead && ++chunks === 1) {
+        expect(result.bytesRead).toBe(64 * 1024);
+        if (change === 'replaced') renameSync(target, displaced);
+        writeFileSync(target, newer);
+      }
+      return result;
+    });
+    try {
+      expect(await invoke(handleWriteFile, { filePath, content: 'stale save', requireTextTarget: true, expectedSize, expectedMtimeMs }))
+        .toMatchObject({ success: false, errorCode: 'FILE_CONFLICT', error: 'File changed on disk during save validation.' });
+      expect(chunks).toBe(2);
+      expect(readFileSync(target)).toEqual(newer);
+      if (change === 'replaced') expect(readFileSync(displaced)).toEqual(initial);
+      else expect(statSync(target).ino).toBe(ino);
+    } finally { spy.mockRestore(); }
   });
 
   it('accepts a UTF-8 character split across the 64 KiB scan boundary', async () => {
@@ -1533,8 +1544,7 @@ describe('Creation-scoped Workbench files', () => {
       expect(await invoke(handleCopyFiles, { paths: [path], destination: 'copied' })).toMatchObject({ success: false });
     }
     expect(await invoke(handleCopyFiles, { paths: ['docs/note.txt'], destination: 'copied' })).toMatchObject({ success: true });
-    expect(await invoke(handleMoveFiles, { paths: ['copied/note.txt'], destination: 'moved' })).toMatchObject({ success: true });
-    expect(readFileSync(join(root, 'moved', 'note.txt'), 'utf8')).toBe('inside');
+    expect(readFileSync(join(root, 'copied', 'note.txt'), 'utf8')).toBe('inside');
     expect(await invoke(handleDeleteFiles, { paths: ['docs/note.txt'] })).toMatchObject({ success: true, deletedCount: 1 });
     expect(existsSync(join(root, 'docs', 'note.txt'))).toBe(false);
     expect(statSync(root).isDirectory()).toBe(true);

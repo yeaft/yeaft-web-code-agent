@@ -2112,13 +2112,15 @@ export default {
       autoResolve = false,
       confirmDirty = true,
       bindCurrent = false,
+      openSeq,
     } = {}, acceptActivation) => {
       if (autoResolve && (activeRootDir.value || showingSwitcher.value)) return { accepted: false };
       const epoch = ++activationEpoch;
       const ctx = captureRoute();
       const { agentId, sessionId } = ctx;
-      const isCurrent = () => epoch === activationEpoch && isRouteCurrent(ctx);
-      if (!agentId) return { accepted: false };
+      const isCurrent = () => epoch === activationEpoch && isRouteCurrent(ctx)
+        && (openSeq == null || openSeq === creationsStore.openWorkspaceSeq);
+      if (!agentId || !isCurrent()) return { accepted: false };
       bindingFolder.value = false;
       loadingCreations.value = false;
       onboardingError.value = '';
@@ -2525,6 +2527,14 @@ export default {
       }
       if (activationEpoch === 0) {
         void activateTarget({ autoResolve: true });
+      }
+    });
+
+    Vue.onActivated(() => {
+      resetDocProbes();
+      if (activeDocFile.value?.isDirty) {
+        const entry = docFiles.value.find(d => d.path === activeDocPath.value);
+        if (entry) void openDocFile(entry, { forceReload: true });
       }
     });
 

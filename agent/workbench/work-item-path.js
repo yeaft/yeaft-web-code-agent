@@ -1,5 +1,5 @@
 import { constants, existsSync } from 'node:fs';
-import { lstat, mkdir, open, readdir, realpath, link, rmdir, unlink } from 'node:fs/promises';
+import { lstat, mkdir, open, readdir, realpath, rmdir, unlink } from 'node:fs/promises';
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { resolveCreationWorkspaceRoot } from '../yeaft/creations/bridge.js';
 
@@ -219,7 +219,16 @@ class CreationFiles {
         if (info && sameInode(info, await noLinkStat(anchor).catch(() => null))) await unlink(anchor).catch(() => {});
         throw changed();
       }
-      try { return await action(handle); }
+      const verifyCurrent = async expected => {
+        try {
+          await verifyParent();
+          await verifyNamed(path, handle, expected);
+          if (!sameInode(expected, await noLinkStat(anchor))) throw changed();
+        } catch (error) {
+          throw Object.assign(new Error('File changed on disk during save validation.', { cause: error }), { code: 'FILE_CONFLICT' });
+        }
+      };
+      try { return await action(handle, verifyCurrent); }
       finally { await handle.close(); }
     }, { create: createParents });
   }
@@ -256,27 +265,9 @@ class CreationFiles {
     });
   }
 
-  async move(source, target, { createParents = false } = {}) {
-    return this.leaf(source, (src, info, verifySource) => {
-      if (info?.isDirectory()) throw outsideWorkspace('Creation-scoped directory move requires atomic no-replace support.');
-      if (!info?.isFile()) throw outsideWorkspace('Expected a regular file.');
-      return this.leaf(target, async (dest, existing, verifyTarget) => {
-        if (existing) throw Object.assign(new Error('Target already exists: ' + basename(target)), { code: 'EEXIST' });
-        await verifySource();
-        await verifyTarget();
-        if (!sameInode(info, await noLinkStat(src))) throw changed();
-        await link(src, dest);
-        try {
-          await verifySource();
-          await verifyTarget();
-          if (!sameInode(info, await noLinkStat(src)) || !sameInode(info, await noLinkStat(dest))) throw changed();
-          await unlink(src);
-        } catch (error) {
-          if (sameInode(info, await noLinkStat(dest).catch(() => null))) await unlink(dest).catch(() => {});
-          throw error;
-        }
-      }, { create: createParents });
-    });
+  async move() {
+    // Node does not expose an atomic no-replace rename on pinned directories.
+    throw outsideWorkspace('Creation-scoped move requires atomic no-replace rename support.');
   }
 
   async copy(source, target) {

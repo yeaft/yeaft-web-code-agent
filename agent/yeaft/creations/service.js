@@ -104,7 +104,10 @@ export function createCreationService({ yeaftDir, storageRoot, namespaceKey, nam
       return { creation };
     },
     delete_creation: (id, p) => {
-      const result = store.deleteCreation(id, { purgeWorkspace: Boolean(p.purgeWorkspace) });
+      if (p.purgeWorkspace !== undefined && typeof p.purgeWorkspace !== 'boolean') {
+        fail('INVALID_REQUEST', 'purgeWorkspace must be a boolean');
+      }
+      const result = store.deleteCreation(id, { purgeWorkspace: p.purgeWorkspace === true });
       emit('creation_deleted', id, result);
       return result;
     },

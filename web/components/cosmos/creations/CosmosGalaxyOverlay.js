@@ -6,7 +6,7 @@
 import * as creationsStoreModule from '../../../stores/creations.js';
 import { useChatStore } from '../../../stores/chat.js';
 import { useSessionsStore } from '../../../stores/sessions.js';
-import { t } from '../../../utils/i18n.js';
+import { getLocale, t } from '../../../utils/i18n.js';
 import { COSMOS_BOOKS_KEY } from '../../../cosmos/constants.js';
 
 const { creationSessionsForAgent, newCreationAttemptKey, useCreationsStore } = creationsStoreModule;
@@ -966,7 +966,6 @@ export default {
       const submittedTitle = liveDraft.title;
       const submittedPrompt = liveDraft.prompt;
       const filesToSend = liveDraft.pendingFiles.slice();
-      const submittedFileSet = new Set(filesToSend);
       const submittedCelestial = liveDraft.celestial;
       const titleText = submittedTitle.trim();
       const promptText = submittedPrompt.trim();
@@ -1038,7 +1037,9 @@ export default {
           return;
         }
         const currentDraft = creationsStore.igniteDraft;
-        currentDraft.pendingFiles = currentDraft.pendingFiles.filter((f) => !submittedFileSet.has(f));
+        const snapshot = res?._submittedSnapshot;
+        const actuallySubmittedFiles = new Set(snapshot?.files || filesToSend);
+        currentDraft.pendingFiles = currentDraft.pendingFiles.filter(f => !actuallySubmittedFiles.has(f));
         creationsStore.resetIgniteResume();
 
         if (res?.initialTurnError) {
@@ -1047,20 +1048,25 @@ export default {
         if (res?.projectWarning) {
           emit('toast', res.projectWarning);
         }
-        if (currentDraft.title === submittedTitle) {
+        const persistedTitle = snapshot ? currentDraft.title.trim() : currentDraft.title;
+        if (persistedTitle === (snapshot?.title ?? submittedTitle)
+          || (snapshot && persistedTitle === created?.title)) {
           currentDraft.title = '';
         }
-        if (currentDraft.prompt === submittedPrompt) {
+        if ((snapshot ? currentDraft.prompt.trim() : currentDraft.prompt) === (snapshot?.prompt ?? submittedPrompt)) {
           currentDraft.prompt = '';
         }
-        if (currentDraft.celestial === submittedCelestial) {
+        if (currentDraft.celestial === (snapshot ? snapshot.celestial : submittedCelestial)) {
           currentDraft.celestial = null;
         }
-        if (
-          !currentDraft.title.trim()
-          && !currentDraft.prompt.trim()
-          && currentDraft.pendingFiles.length === 0
-        ) {
+        const hasRemainingAttachments = currentDraft.pendingFiles.length > 0;
+        if (hasRemainingAttachments) {
+          currentDraft.open = true;
+          // Locale dictionaries are outside the scope of this fix.
+          emit('toast', getLocale() === 'zh-CN'
+            ? '未上传的附件已保留在创作栏中。'
+            : 'Unuploaded attachments were kept in the Ignite dock.');
+        } else if (!currentDraft.title.trim() && !currentDraft.prompt.trim()) {
           currentDraft.open = false;
         }
         currentDraft.error = null;
@@ -1078,7 +1084,8 @@ export default {
             sessionId: res?.sessionId || created.sessionId || undefined,
             rootDir: res?.rootDir || created.rootDir || undefined,
             mode: 'studio',
-            promptToSend: promptText || '',
+            promptToSend: snapshot?.prompt ?? promptText,
+            ...(hasRemainingAttachments ? { keepIgniteDockOpen: true } : {}),
           });
         }
       } catch (err) {
