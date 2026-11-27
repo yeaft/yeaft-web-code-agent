@@ -5,7 +5,7 @@
  * Wired to creationsStore's Agent-scoped state (`activeCreation`, `activeDetail`,
  * `activeNode`, `activeNodeContent`, `pendingProposalsForActive`, `activeRunsForActive`).
  */
-import { useCreationsStore } from '../../../stores/creations.js';
+import { useCreationsStore, creationNodeKey } from '../../../stores/creations.js';
 import BookReader from './readers/BookReader.js';
 import DeckReader from './readers/DeckReader.js';
 import GalleryReader from './readers/GalleryReader.js';
@@ -36,6 +36,14 @@ export default {
     CanonSyncBanner,
     DirectorChatPane,
   },
+  props: {
+    signalCount: { type: Number, default: 0 },
+    signalWaitingCount: { type: Number, default: 0 },
+    signalRunningCount: { type: Number, default: 0 },
+    signalOpen: { type: Boolean, default: false },
+    signalLabel: { type: String, default: '' },
+  },
+  emits: ['toggle-signal', 'close-signal'],
   setup() {
     const creationsStore = useCreationsStore();
     return { creationsStore };
@@ -97,6 +105,47 @@ export default {
     effectiveReadUnit() {
       if (this.activeNode && !isFolderNode(this.activeNode)) return this.activeNode;
       return this.unitNodes[0] || null;
+    },
+    displayedReadNode() {
+      return this.effectiveReadUnit;
+    },
+    displayedReadContentObj() {
+      const node = this.displayedReadNode;
+      if (!node || !node.id || !this.agentId || !this.creationId) return null;
+      return this.creationsStore.nodeContentsByKey[
+        creationNodeKey(this.agentId, this.creationId, node.id)
+      ] || null;
+    },
+    displayedReadContentLoaded() {
+      return Boolean(this.displayedReadContentObj?.loaded);
+    },
+    displayedReadLoadedRevId() {
+      return this.displayedReadContentObj?.loadedRevId ?? null;
+    },
+    displayedReadContent() {
+      const raw = this.displayedReadContentObj?.content;
+      if (typeof raw === 'string') return raw;
+      if (raw && typeof raw === 'object') {
+        try { return JSON.stringify(raw, null, 2); } catch { return ''; }
+      }
+      return '';
+    },
+    displayedReadRevisions() {
+      return Array.isArray(this.displayedReadContentObj?.revisions)
+        ? this.displayedReadContentObj.revisions
+        : [];
+    },
+    readLoadKey() {
+      return `${this.agentId}|${this.creationId}|${this.mode}|${this.effectiveReadUnit?.id || ''}`;
+    },
+    resolvedSignalLabel() {
+      if (this.signalLabel) return this.signalLabel;
+      return this.signalCount > 0
+        ? this.$t('cosmos.signals.triggerAria', { count: this.signalCount })
+        : this.$t('cosmos.signals.triggerIdleAria');
+    },
+    drawerRevisions() {
+      return this.mode === 'read' ? this.displayedReadRevisions : this.revisions;
     },
     activeCanon() {
       const id = this.activeRef?.activeCanonId;
@@ -204,6 +253,18 @@ export default {
         this.anchorDrawerOpen = false;
       }
     },
+    readLoadKey: {
+      immediate: true,
+      handler() {
+        if (this.mode !== 'read') return;
+        const unit = this.effectiveReadUnit;
+        if (!unit?.id || !this.agentId || !this.creationId) return;
+        const obj = this.displayedReadContentObj;
+        if (!obj?.loaded && !obj?.loading) {
+          this.creationsStore.loadNode(this.agentId, this.creationId, unit.id).catch(() => {});
+        }
+      },
+    },
   },
   mounted() {
     window.addEventListener('keydown', this.onKeyDown);
@@ -228,6 +289,10 @@ export default {
         return;
       }
       if (e.key === 'Escape') {
+        if (this.signalOpen) {
+          this.$emit('close-signal');
+          return;
+        }
         if (this.renamingTitle) {
           this.renamingTitle = false;
           return;
@@ -269,16 +334,21 @@ export default {
     async toggleRevisions() {
       this.exportMenuOpen = false;
       this.revisionsOpen = !this.revisionsOpen;
-      const nodeId = this.activeNode?.id || this.effectiveReadUnit?.id;
+      const nodeId = this.mode === 'read'
+        ? this.displayedReadNode?.id
+        : (this.activeNode?.id || this.effectiveReadUnit?.id);
       if (this.revisionsOpen && nodeId) {
         await this.creationsStore.loadNode(this.agentId, this.creationId, nodeId);
       }
     },
     async restoreRevision(revId) {
-      const nodeId = this.activeNode?.id || this.effectiveReadUnit?.id;
+      const targetNode = this.mode === 'read'
+        ? this.displayedReadNode
+        : (this.activeNode || this.effectiveReadUnit);
+      const nodeId = targetNode?.id;
       if (!nodeId || !revId) return null;
       return this.creationsStore.restoreRevision(this.agentId, this.creationId, nodeId, revId, {
-        baseRevId: this.activeNode?.currentRevId ?? null,
+        baseRevId: targetNode?.currentRevId ?? null,
       });
     },
     async handleExport(format) {
@@ -548,6 +618,27 @@ export default {
             </div>
           </div>
 
+          <!-- Signal Stream Trigger -->
+          <button
+            type="button"
+            class="creation-glass-btn creation-signal-trigger"
+            :class="{
+              'is-active': signalOpen,
+              'has-waiting': signalWaitingCount > 0,
+              'has-unread': signalWaitingCount === 0 && signalCount > 0,
+            }"
+            :aria-expanded="signalOpen ? 'true' : 'false'"
+            :aria-label="resolvedSignalLabel"
+            :title="resolvedSignalLabel"
+            @click.stop="$emit('toggle-signal')"
+          >
+            <svg class="creation-signal-icon" viewBox="0 0 24 24" width="14" height="14" fill="currentColor" aria-hidden="true">
+              <path d="M12 3l1.9 5.6L19.5 10.5l-5.6 1.9L12 18l-1.9-5.6-5.6-1.9 5.6-1.9Z"/>
+            </svg>
+            <span v-if="signalCount > 0" class="creation-signal-badge">{{ signalCount }}</span>
+            <span v-else-if="signalRunningCount > 0" class="creation-signal-pulse" aria-hidden="true"></span>
+          </button>
+
           <!-- Agent Ownership Badge -->
           <span v-if="creation.agentName || agentId" class="creation-agent-pill is-active" :title="agentId">
             {{ creation.agentName || agentId }}
@@ -585,18 +676,18 @@ export default {
           <!-- Main Modality Reader Stage -->
           <main class="creation-read-stage">
             <component
-              v-if="effectiveReadUnit"
-              :is="readerComponentFor(effectiveReadUnit)"
-              :node="effectiveReadUnit"
-              :content="activeNodeContent"
-              :content-loaded="activeNodeContentLoaded"
-              :loaded-rev-id="activeNodeLoadedRevId"
+              v-if="displayedReadNode"
+              :is="readerComponentFor(displayedReadNode)"
+              :node="displayedReadNode"
+              :content="displayedReadContent"
+              :content-loaded="displayedReadContentLoaded"
+              :loaded-rev-id="displayedReadLoadedRevId"
               :nodes="nodes"
               :sources="sources"
               mode="read"
               :agent-id="agentId"
               :creation-id="creationId"
-              :revisions="revisions"
+              :revisions="displayedReadRevisions"
               :saving="saving"
               :on-save-content="handleSaveContent"
               @save-content="handleSaveContent"
@@ -831,11 +922,11 @@ export default {
           <button type="button" class="creation-icon-mini" @click="revisionsOpen = false">✕</button>
         </header>
         <div class="creation-revisions-body">
-          <p v-if="revisions.length === 0" class="creation-revisions-empty">
+          <p v-if="drawerRevisions.length === 0" class="creation-revisions-empty">
             {{ $t('creation.proposal.noProposals') }}
           </p>
           <ul v-else class="creation-revisions-list">
-            <li v-for="rev in revisions" :key="rev.revId || rev.id" class="creation-revision-item">
+            <li v-for="rev in drawerRevisions" :key="rev.revId || rev.id" class="creation-revision-item">
               <div class="creation-revision-meta">
                 <span class="creation-revision-time">{{ formatRevTime(rev.createdAt) }}</span>
                 <span v-if="rev.author" class="creation-revision-author">{{ rev.author }}</span>

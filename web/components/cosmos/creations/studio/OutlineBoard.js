@@ -31,6 +31,7 @@ export default {
       batchInstruction: '',
       startingBatch: false,
       editingSummaries: {},
+      loadingOutlineIds: {},
       addingUnit: false,
       newUnitTitle: '',
       newUnitSummary: '',
@@ -66,6 +67,7 @@ export default {
     'folder.id'() {
       this.selectedIds = [];
       this.editingSummaries = {};
+      this.loadingOutlineIds = {};
     },
   },
   methods: {
@@ -96,6 +98,17 @@ export default {
     },
     onSummaryInput(unit, value) {
       this.editingSummaries = { ...this.editingSummaries, [unit.id]: value };
+    },
+    async loadFullOutline(unit) {
+      if (!unit?.id || this.loadingOutlineIds[unit.id]) return;
+      this.loadingOutlineIds = { ...this.loadingOutlineIds, [unit.id]: true };
+      try {
+        await this.creationsStore.loadNode(this.resolvedAgentId, this.resolvedCreationId, unit.id);
+      } finally {
+        const next = { ...this.loadingOutlineIds };
+        delete next[unit.id];
+        this.loadingOutlineIds = next;
+      }
     },
     async saveSummary(unit) {
       if (this.editingSummaries[unit.id] === undefined) return;
@@ -257,7 +270,19 @@ export default {
             </span>
           </div>
 
+          <div v-if="unit.outlineTruncated === true" class="creation-outline-truncated">
+            <p class="creation-outline-preview">{{ unit.outlineMd ?? unit.summary ?? '' }}</p>
+            <button
+              type="button"
+              class="creation-glass-btn creation-outline-load-btn"
+              :disabled="Boolean(loadingOutlineIds[unit.id])"
+              @click="loadFullOutline(unit)"
+            >
+              {{ loadingOutlineIds[unit.id] ? $t('creation.studio.loadingFullOutline') : $t('creation.studio.loadFullOutline') }}
+            </button>
+          </div>
           <textarea
+            v-else
             class="creation-outline-summary"
             rows="3"
             :value="getSummaryDraft(unit)"

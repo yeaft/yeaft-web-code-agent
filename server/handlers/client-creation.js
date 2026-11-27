@@ -88,6 +88,7 @@ export function createCreationRelay({
       const source = msg.payload ?? {};
       const { files: _clientFiles, ...payload } = source;
       let entries = [];
+      let fileIds = [];
       let uploadBytes = 0;
       if (UPLOAD_OPS.has(op)) {
         const result = validateCreationAttachments(client, source, { uploads, skipAuth: skipAuth(), uploadTtlMs, now });
@@ -96,7 +97,7 @@ export function createCreationRelay({
           return true;
         }
         delete payload.attachments;
-        ({ entries, totalBytes: uploadBytes } = result);
+        ({ entries, fileIds, totalBytes: uploadBytes } = result);
       }
 
       const serverRequestId = randomUUID();
@@ -120,7 +121,7 @@ export function createCreationRelay({
         }
       }, timeoutMs);
       timer.unref?.();
-      pending.set(serverRequestId, { client, agent, agentId, browserRequestId, op, timer, userKey, uploadBytes });
+      pending.set(serverRequestId, { client, agent, agentId, browserRequestId, op, timer, userKey, uploadBytes, fileIds });
       counts.set(client, (counts.get(client) || 0) + 1);
       let sent;
       try {
@@ -141,6 +142,10 @@ export function createCreationRelay({
       const row = pending.get(msg.requestId);
       if (!row || row.agentId !== agentId || row.agent !== agent || agentMap.get(agentId) !== agent) return true;
       forget(msg.requestId);
+      // Ingestion succeeded even if the browser is no longer authorized to see the reply.
+      if (msg.ok === true) {
+        for (const fileId of row.fileIds) uploads.delete(fileId);
+      }
       if (!active(row.client) || accessError(agentId, row.client.userId, row.client.role)) return true;
       await reply(row.client, row.agentId, row.browserRequestId, row.op, msg.ok === true
         ? { ok: true, data: msg.data }

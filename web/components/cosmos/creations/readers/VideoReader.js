@@ -11,7 +11,8 @@ const PLAYABLE_VIDEO_EXT = /\.(mp4|webm|mov)$/i;
 
 function isPlayableVideoSource(src) {
   if (!src || !src.id) return false;
-  const mime = String(src.mimeType || '').toLowerCase().trim();
+  if (src.playableVideo === true) return true;
+  const mime = String(src.detectedMimeType || src.mimeType || '').toLowerCase().trim();
   const name = String(src.name || src.filename || '').toLowerCase().trim();
   return PLAYABLE_VIDEO_MIMES.has(mime) || PLAYABLE_VIDEO_EXT.test(name);
 }
@@ -103,7 +104,7 @@ export default {
       playbackError: false,
       editing: false,
       dirty: false,
-      editBaseRevId: this.loadedRevId ?? this.node?.currentRevId ?? null,
+      editBaseRevId: this.contentLoaded ? this.loadedRevId : (this.loadedRevId ?? this.node?.currentRevId ?? null),
       conflictError: '',
       saveError: '',
       _playTimer: null,
@@ -115,12 +116,6 @@ export default {
     },
     videoSources() {
       return (this.sources || []).filter((s) => isPlayableVideoSource(s));
-    },
-    selectedVideoSourceUnsupported() {
-      if (!this.episode.videoSourceId) return false;
-      const src = (this.sources || []).find((s) => s && s.id === this.episode.videoSourceId);
-      if (!src) return false;
-      return !isPlayableVideoSource(src);
     },
     videoUrl() {
       if (this.episode.videoAssetId) {
@@ -178,13 +173,14 @@ export default {
     content(newVal) {
       if (!this.dirty) {
         this.episode = parseVideoContent(newVal, this.node?.title);
-        this.editBaseRevId = this.loadedRevId ?? this.node?.currentRevId ?? null;
+        this.editBaseRevId = this.contentLoaded ? this.loadedRevId : (this.loadedRevId ?? this.node?.currentRevId ?? null);
       }
     },
     videoUrl() {
       this.playbackError = false;
     },
-    'node.id'() {
+    'node.id'(newId, oldId) {
+      if (oldId) this.syncStoreDirty(false, oldId);
       this.stopStoryboardPlayback();
       this.episode = parseVideoContent(this.content, this.node?.title);
       this.currentTime = 0;
@@ -192,33 +188,46 @@ export default {
       this.playbackError = false;
       this.dirty = false;
       this.editing = false;
-      this.editBaseRevId = this.loadedRevId ?? this.node?.currentRevId ?? null;
+      this.editBaseRevId = this.contentLoaded ? this.loadedRevId : (this.loadedRevId ?? this.node?.currentRevId ?? null);
       this.conflictError = '';
       this.saveError = '';
     },
   },
   beforeUnmount() {
+    this.syncStoreDirty(false);
     this.stopStoryboardPlayback();
   },
   methods: {
     formatTime,
+    syncStoreDirty(isDirty, nodeId = this.node?.id) {
+      if (this.agentId && this.creationId && nodeId) {
+        this.creationsStore.setNodeDirty(this.agentId, this.creationId, nodeId, isDirty);
+      }
+    },
     toggleEditing() {
       if (!this.editing) {
         if (!this.contentLoaded) return;
         if (!this.dirty) {
-          this.editBaseRevId = this.loadedRevId ?? this.node?.currentRevId ?? null;
+          this.editBaseRevId = this.loadedRevId;
           this.conflictError = '';
           this.saveError = '';
         }
+        this.editing = true;
+        this.syncStoreDirty(true);
+        return;
       }
-      this.editing = !this.editing;
+      this.editing = false;
+      if (!this.dirty) {
+        this.syncStoreDirty(false);
+      }
     },
     markDirty() {
       if (!this.contentLoaded) return;
       if (!this.dirty) {
-        this.editBaseRevId = this.loadedRevId ?? this.node?.currentRevId ?? null;
+        this.editBaseRevId = this.loadedRevId;
       }
       this.dirty = true;
+      this.syncStoreDirty(true);
     },
     onVideoLoadedMetadata(e) {
       this.playbackError = false;
@@ -324,8 +333,9 @@ export default {
             this.conflictError = this.$t('creation.interior.conflictDesc');
             return false;
           }
-          this.editBaseRevId = res?.node?.currentRevId ?? this.node?.currentRevId ?? this.editBaseRevId;
+          this.editBaseRevId = res?.node?.currentRevId ?? this.loadedRevId ?? this.editBaseRevId;
           this.dirty = false;
+          this.syncStoreDirty(false, payload.nodeId);
           return true;
         } catch (err) {
           if (err?.errorCode === 'revision_conflict') {
@@ -338,6 +348,7 @@ export default {
       }
       this.$emit('save-content', payload);
       this.dirty = false;
+      this.syncStoreDirty(false, payload.nodeId);
       return true;
     },
     requestAiRewriteScene(scene, idx) {
@@ -415,7 +426,7 @@ export default {
         <section class="creation-video-stage">
           <div v-if="videoUrl" class="creation-video-native-wrap">
             <video
-              v-if="!playbackError && !selectedVideoSourceUnsupported"
+              v-if="!playbackError"
               ref="videoEl"
               class="creation-video-el"
               controls

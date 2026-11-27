@@ -7,6 +7,7 @@
  */
 import { renderMarkdown } from '../../../../utils/markdown.js';
 import { sanitizeCreationHtml } from '../sanitize.js';
+import { useCreationsStore } from '../../../../stores/creations.js';
 
 const PREFS_STORAGE_KEY = 'yeaft_creation_book_prefs';
 const DEFAULT_PREFS = {
@@ -45,6 +46,10 @@ function saveReaderPrefs(prefs) {
 
 export default {
   name: 'BookReader',
+  setup() {
+    const creationsStore = useCreationsStore();
+    return { creationsStore };
+  },
   props: {
     node: { type: Object, required: true },
     content: { type: String, default: '' },
@@ -137,7 +142,8 @@ export default {
         this.dirty = false;
       }
     },
-    'node.id'() {
+    'node.id'(newId, oldId) {
+      if (oldId) this.syncStoreDirty(false, oldId);
       this.editing = false;
       this.draftText = this.content || '';
       this.dirty = false;
@@ -153,10 +159,16 @@ export default {
     document.addEventListener('selectionchange', this.onSelectionChange);
   },
   beforeUnmount() {
+    this.syncStoreDirty(false);
     document.removeEventListener('selectionchange', this.onSelectionChange);
     if (this._scrollSaveTimer) clearTimeout(this._scrollSaveTimer);
   },
   methods: {
+    syncStoreDirty(isDirty, nodeId = this.node?.id) {
+      if (this.agentId && this.creationId && nodeId) {
+        this.creationsStore.setNodeDirty(this.agentId, this.creationId, nodeId, isDirty);
+      }
+    },
     updatePref(key, value) {
       this.prefs = { ...this.prefs, [key]: value };
       saveReaderPrefs(this.prefs);
@@ -178,11 +190,12 @@ export default {
       if (!this.contentLoaded) return;
       this.hideSelectionBar();
       this.draftText = this.content || '';
-      this.editBaseRevId = this.loadedRevId ?? this.node?.currentRevId ?? null;
+      this.editBaseRevId = this.loadedRevId;
       this.conflictError = '';
       this.saveError = '';
       this.editing = true;
       this.dirty = false;
+      this.syncStoreDirty(true);
       this.$nextTick(() => {
         this.autoResizeTextarea();
         const ta = this.$refs.editorTextarea;
@@ -196,9 +209,11 @@ export default {
       this.conflictError = '';
       this.saveError = '';
       this.editing = false;
+      this.syncStoreDirty(false);
     },
     onEditorInput() {
       this.dirty = this.draftText !== (this.content || '');
+      this.syncStoreDirty(this.dirty || this.editing);
       this.autoResizeTextarea();
     },
     autoResizeTextarea() {
@@ -228,6 +243,7 @@ export default {
           if (this.node?.id === targetNodeId) {
             this.editBaseRevId = savedRevId;
             this.dirty = false;
+            this.syncStoreDirty(false, targetNodeId);
             if (exitAfter) {
               this.editing = false;
             }
@@ -245,6 +261,7 @@ export default {
       this.$emit('save-content', payload);
       this._lastSavedRevId = this.editBaseRevId;
       this.dirty = false;
+      this.syncStoreDirty(false, targetNodeId);
       if (exitAfter) {
         this.editing = false;
       }
@@ -253,7 +270,7 @@ export default {
     async finalizeChapter() {
       if (!this.contentLoaded) return;
       const targetNodeId = this.node.id;
-      let baseRevId = this.loadedRevId ?? this.node?.currentRevId ?? null;
+      let baseRevId = this.loadedRevId;
       if (this.editing && this.dirty) {
         this._lastSavedRevId = null;
         const ok = await this.saveEdit(false);

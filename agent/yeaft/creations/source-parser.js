@@ -136,17 +136,48 @@ function pdfText(input) {
   return { text: parts.join('\n'), truncated: bytes.length < input.length || expired() };
 }
 
+// Identify the container from bytes, not the upload name or declared MIME.
+// A signature match does not guarantee that the file's codecs can be decoded.
+export function sniffSourceMimeType(bytes) {
+  const at = (signature, offset = 0) => bytes.subarray(offset, offset + signature.length)
+    .equals(Buffer.from(signature, 'latin1'));
+  if (at('\x89PNG\r\n\x1a\n')) return 'image/png';
+  if (at('\xff\xd8\xff')) return 'image/jpeg';
+  if (at('GIF87a') || at('GIF89a')) return 'image/gif';
+  if (at('RIFF') && at('WEBP', 8)) return 'image/webp';
+  if (at('%PDF-')) return 'application/pdf';
+  if (at('\x1a\x45\xdf\xa3')) return 'video/webm';
+
+  // QuickTime uses the same box layout, including ftyp with a "qt  " brand.
+  if (bytes.length >= 8) {
+    const box = bytes.toString('latin1', 4, 8);
+    let size = bytes.readUInt32BE(0);
+    let headerSize = 8;
+    if (size === 1 && bytes.length >= 16) {
+      size = Number(bytes.readBigUInt64BE(8));
+      headerSize = 16;
+    }
+    if (size <= bytes.length) {
+      if (box === 'ftyp' && size >= headerSize + 8 && (size - headerSize) % 4 === 0
+        && /^[ -~]{4}$/.test(bytes.toString('latin1', headerSize, headerSize + 4))) return 'video/mp4';
+      if ((box === 'moov' || box === 'mdat') && size > headerSize) return 'video/mp4';
+    }
+  }
+  return null;
+}
+
 export function parseSource(bytes, { name = '', mimeType = 'application/octet-stream' } = {}) {
   const ext = extname(name).slice(1).toLowerCase();
-  const pdf = ext === 'pdf' || mimeType === 'application/pdf' || bytes.subarray(0, 5).toString() === '%PDF-';
-  const media = /^(image|audio|video)\//i.exec(mimeType)?.[1]?.toLowerCase()
+  const detectedMimeType = sniffSourceMimeType(bytes);
+  const pdf = detectedMimeType === 'application/pdf' || (!detectedMimeType && (ext === 'pdf' || mimeType === 'application/pdf'));
+  const media = /^(image|audio|video)\//i.exec(detectedMimeType ?? mimeType)?.[1]?.toLowerCase()
     ?? (/^(png|jpe?g|gif|webp|svg|avif|bmp)$/.test(ext) ? 'image'
       : /^(mp3|wav|ogg|m4a|flac|aac)$/.test(ext) ? 'audio' : /^(mp4|webm|mov|mkv|avi)$/.test(ext) ? 'video' : 'binary');
   let text = '';
   let kind = pdf ? 'pdf' : media;
   let pdfTruncated = false;
   if (pdf) ({ text, truncated: pdfTruncated } = pdfText(bytes));
-  else if (TEXT_EXT.has(ext) || TEXT_MIME.test(mimeType)) {
+  else if (!detectedMimeType && (TEXT_EXT.has(ext) || TEXT_MIME.test(mimeType))) {
     if (!bytes.subarray(0, 4096).includes(0)) {
       text = UTF8.decode(bytes.subarray(0, LIMITS.parsedChars * 4));
       kind = 'text';
@@ -171,7 +202,7 @@ export function parseSource(bytes, { name = '', mimeType = 'application/octet-st
     chunks.push({ index: chunks.length, text: text.slice(start, end) });
     start = end;
   }
-  return { version: 1, kind, name, mimeType, byteLength: bytes.length, truncated, chunks,
+  return { version: 1, kind, name, mimeType, detectedMimeType, byteLength: bytes.length, truncated, chunks,
     summary: text ? text.slice(0, 600) : `${name} (${kind}, ${bytes.length} bytes; no extractable text)` };
 }
 

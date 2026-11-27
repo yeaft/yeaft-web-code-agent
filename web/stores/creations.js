@@ -55,6 +55,17 @@ function upsertById(list, item) {
   return [...list, item];
 }
 
+function replaceById(list, item) {
+  if (!item || !item.id) return list;
+  const idx = list.findIndex((entry) => entry && entry.id === item.id);
+  if (idx >= 0) {
+    const next = list.slice();
+    next[idx] = item;
+    return next;
+  }
+  return [...list, item];
+}
+
 function removeById(list, id) {
   if (!id || !Array.isArray(list)) return list || [];
   return list.filter((entry) => entry && entry.id !== id);
@@ -638,8 +649,10 @@ export const useCreationsStore = defineStore('creations', {
       if (gen !== storeGeneration) return null;
       const item = res?.canon || res?.item || (res?.id ? res : null);
       if (item && item.id) {
+        const normalized = { ...item, contentTruncated: false, stateTruncated: false };
         const detail = ensureDetailBucket(this, agentId, creationId);
-        detail.canon = upsertById(detail.canon, { ...item, contentTruncated: false });
+        detail.canon = replaceById(detail.canon, normalized);
+        return normalized;
       }
       return item || res;
     },
@@ -648,8 +661,10 @@ export const useCreationsStore = defineStore('creations', {
       const res = await this.request(agentId, 'upsert_canon', { creationId, item });
       const saved = res?.canon || res?.item || (res?.id ? res : item);
       if (saved && saved.id) {
+        const normalized = { ...saved, contentTruncated: false, stateTruncated: false };
         const detail = ensureDetailBucket(this, agentId, creationId);
-        detail.canon = upsertById(detail.canon, saved);
+        detail.canon = replaceById(detail.canon, normalized);
+        return normalized;
       }
       return saved;
     },
@@ -723,10 +738,16 @@ export const useCreationsStore = defineStore('creations', {
 
         if (res?.node && res.node.id) {
           const detail = ensureDetailBucket(this, agentId, creationId);
-          detail.nodes = upsertById(detail.nodes, res.node);
+          detail.nodes = upsertById(detail.nodes, { ...res.node, outlineTruncated: false });
           if (Array.isArray(res?.pendingProposals)) {
             for (const prop of res.pendingProposals) {
-              detail.proposals = upsertById(detail.proposals, prop);
+              if (prop && prop.id) {
+                const normalizedProp = {
+                  ...prop,
+                  contentTruncated: prop.contentTruncated === true ? true : false,
+                };
+                detail.proposals = replaceById(detail.proposals, normalizedProp);
+              }
             }
           }
         }
@@ -773,10 +794,27 @@ export const useCreationsStore = defineStore('creations', {
 
       if (res?.node && res.node.id) {
         const detail = ensureDetailBucket(this, agentId, creationId);
-        detail.nodes = upsertById(detail.nodes, res.node);
+        detail.nodes = upsertById(detail.nodes, { ...res.node, outlineTruncated: false });
         this._syncCreationSummaryFromDetail(agentId, creationId, res?.creation || null);
       }
       return res;
+    },
+
+    setNodeDirty(agentId, creationId, nodeId, dirty) {
+      if (!agentId || !creationId || !nodeId) return;
+      const nKey = creationNodeKey(agentId, creationId, nodeId);
+      const prev = this.nodeContentsByKey[nKey] || {
+        content: '',
+        revisions: [],
+        loading: false,
+        dirty: false,
+        loaded: false,
+        loadedRevId: null,
+      };
+      this.nodeContentsByKey[nKey] = {
+        ...prev,
+        dirty: Boolean(dirty),
+      };
     },
 
     async reorderNodes(agentId, creationId, parentId, orderedIds = []) {
@@ -873,8 +911,13 @@ export const useCreationsStore = defineStore('creations', {
       if (gen !== storeGeneration) return null;
       const proposal = res?.proposal || (res?.id ? res : null);
       if (proposal && proposal.id) {
+        const hydrated = {
+          ...proposal,
+          contentTruncated: proposal.contentTruncated === true ? true : false,
+        };
         const detail = ensureDetailBucket(this, agentId, creationId);
-        detail.proposals = upsertById(detail.proposals, proposal);
+        detail.proposals = replaceById(detail.proposals, hydrated);
+        return hydrated;
       }
       return proposal || res;
     },
@@ -1494,6 +1537,26 @@ export const useCreationsStore = defineStore('creations', {
             if (creation?.id) {
               const bucket = this._ensureAgentBucket(aId);
               bucket.list = upsertById(bucket.list, creation);
+            }
+
+            const currentActive = this.activeCreation;
+            if (currentActive && currentActive.agentId === aId && currentActive.creationId === cId) {
+              const activeNodeObj = currentActive.activeNodeId
+                ? nodes.find((n) => n && n.id === currentActive.activeNodeId) || null
+                : null;
+              let targetNodeId = currentActive.activeNodeId || null;
+              if (currentActive.mode === 'read' && (!activeNodeObj || isFolderNode(activeNodeObj))) {
+                const firstUnit = nodes
+                  .filter((n) => n && !isFolderNode(n))
+                  .sort((a, b) => (a.sortOrder ?? a.position ?? a.order ?? 0) - (b.sortOrder ?? b.position ?? b.order ?? 0))[0] || null;
+                targetNodeId = firstUnit?.id || null;
+              }
+              if (targetNodeId) {
+                const nKey = creationNodeKey(aId, cId, targetNodeId);
+                if (!this.nodeContentsByKey[nKey]?.dirty) {
+                  await this.loadNode(aId, cId, targetNodeId).catch(() => {});
+                }
+              }
             }
 
             const prefix = `${dKey}${KEY_SEP}`;

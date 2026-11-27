@@ -10,7 +10,7 @@ export const MAX_CREATION_IN_FLIGHT_BYTES = 128 * 1024 * 1024;
 
 const invalid = (error, errorCode = 'invalid_request') => ({ ok: false, files: [], error, errorCode });
 
-/** Resolve only server-stored uploads; keep entries reusable until their original TTL. */
+/** Resolve server-stored uploads without consuming them; the relay releases them on success. */
 export function validateCreationAttachments(client, payload, {
   uploads = pendingFiles, skipAuth = CONFIG.skipAuth,
   uploadTtlMs = CONFIG.fileCleanupInterval ?? 600_000, now = Date.now,
@@ -48,5 +48,5 @@ export function validateCreationAttachments(client, payload, {
     }
     entries.push(entry);
   }
-  return { ok: true, entries, totalBytes: total };
+  return { ok: true, entries, fileIds: [...seen], totalBytes: total };
 }

@@ -1463,6 +1463,59 @@
   padding: var(--space-2) 0;
 }
 
+.creation-outline-truncated {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-2-5);
+  border-radius: var(--radius-md);
+  background: var(--creation-surface-subtle);
+  border: 1px dashed var(--creation-border);
+}
+
+.creation-outline-preview {
+  margin: 0;
+  font-size: var(--font-size-xs);
+  line-height: 1.5;
+  color: var(--text-secondary);
+  white-space: pre-wrap;
+  max-height: 5.5em;
+  overflow: hidden;
+}
+
+.creation-outline-load-btn {
+  align-self: flex-start;
+}
+
+.creation-signal-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1-5);
+}
+
+.creation-signal-trigger.has-waiting {
+  border-color: var(--creation-status-attention);
+  color: var(--creation-status-attention);
+}
+
+.creation-signal-trigger.has-unread {
+  border-color: var(--creation-accent);
+  color: var(--creation-accent);
+}
+
+.creation-signal-badge {
+  font-size: var(--font-size-2xs);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.creation-signal-pulse {
+  width: 6px;
+  height: 6px;
+  border-radius: var(--radius-pill);
+  background: var(--creation-accent);
+}
+
 @media (prefers-reduced-motion: reduce) {
   .creation-drop-ring {
     animation: none !important;

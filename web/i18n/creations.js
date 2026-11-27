@@ -167,6 +167,8 @@ export const zhCN = {
   'creation.studio.noFolders': '暂无分卷，可直接创建章节或先建立结构。',
   'creation.studio.addChapter': '添加章节',
   'creation.studio.batchSkipped': '已跳过批量',
+  'creation.studio.loadFullOutline': '加载完整大纲并编辑',
+  'creation.studio.loadingFullOutline': '正在加载完整大纲…',
 
   // Canon
   'creation.canon.world': '世界观',
@@ -187,6 +189,8 @@ export const zhCN = {
   'creation.canon.syncAll': '全部采纳',
   'creation.canon.dismiss': '忽略',
   'creation.canon.syncApplied': '设定已同步更新',
+  'creation.canon.hydrateFailed': '完整设定加载失败，请重试后再保存。',
+  'creation.canon.retryHydrate': '重试加载',
 
   // Sources
   'creation.sources.upload': '上传素材文件',
@@ -399,6 +403,8 @@ export const en = {
   'creation.studio.noFolders': 'No sections yet. Add a unit or create a folder to organize.',
   'creation.studio.addChapter': 'Add chapter',
   'creation.studio.batchSkipped': 'Skipped in batch',
+  'creation.studio.loadFullOutline': 'Load full outline to edit',
+  'creation.studio.loadingFullOutline': 'Loading full outline…',
 
   // Canon
   'creation.canon.world': 'World',
@@ -419,6 +425,8 @@ export const en = {
   'creation.canon.syncAll': 'Apply all',
   'creation.canon.dismiss': 'Dismiss',
   'creation.canon.syncApplied': 'Canon updated',
+  'creation.canon.hydrateFailed': 'Failed to load full canon entry. Retry before saving.',
+  'creation.canon.retryHydrate': 'Retry',
 
   // Sources
   'creation.sources.upload': 'Upload files',

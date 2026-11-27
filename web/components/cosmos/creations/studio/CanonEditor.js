@@ -54,7 +54,8 @@ export default {
       pinned: false,
       locked: false,
       saving: false,
-      loadingFull: false,
+      hydrating: false,
+      hydrateFailed: false,
       dirty: false,
       _canonFetchSeq: 0,
     };
@@ -66,6 +67,12 @@ export default {
     resolvedCreationId() {
       return this.creationId || this.creationsStore.activeCreation?.creationId || '';
     },
+    isTruncated() {
+      return Boolean(this.item?.contentTruncated || this.item?.stateTruncated);
+    },
+    saveDisabled() {
+      return Boolean(this.saving || this.hydrating || this.hydrateFailed || this.isTruncated || !this.dirty);
+    },
   },
   watch: {
     item: {
@@ -73,10 +80,11 @@ export default {
       handler(val) {
         if (!val) return;
         this.applyItem(val);
-        if (val.contentTruncated && val.id) {
+        this.hydrateFailed = false;
+        if ((val.contentTruncated || val.stateTruncated) && val.id) {
           this.fetchFullCanon(val.id);
         } else {
-          this.loadingFull = false;
+          this.hydrating = false;
         }
       },
     },
@@ -96,20 +104,30 @@ export default {
     async fetchFullCanon(canonId) {
       const aId = this.resolvedAgentId;
       const cId = this.resolvedCreationId;
-      if (!aId || !cId || typeof this.creationsStore.getCanon !== 'function') return;
+      if (!aId || !cId || typeof this.creationsStore.getCanon !== 'function') {
+        this.hydrateFailed = true;
+        this.hydrating = false;
+        return;
+      }
       const seq = ++this._canonFetchSeq;
-      this.loadingFull = true;
+      this.hydrating = true;
+      this.hydrateFailed = false;
       try {
         const full = await this.creationsStore.getCanon(aId, cId, canonId);
         if (seq !== this._canonFetchSeq || this.item?.id !== canonId) return;
         if (full && typeof full === 'object') {
           this.applyItem(full);
+          this.hydrateFailed = false;
+        } else {
+          this.hydrateFailed = true;
         }
       } catch {
-        // Keep truncated preview if fetch fails.
+        if (seq === this._canonFetchSeq && this.item?.id === canonId) {
+          this.hydrateFailed = true;
+        }
       } finally {
         if (seq === this._canonFetchSeq) {
-          this.loadingFull = false;
+          this.hydrating = false;
         }
       }
     },
@@ -143,6 +161,7 @@ export default {
       this.dirty = true;
     },
     async saveCanon() {
+      if (this.hydrating || this.hydrateFailed || this.isTruncated) return;
       this.saving = true;
       try {
         const payload = {
@@ -210,7 +229,7 @@ export default {
           <button
             type="button"
             class="creation-glass-btn is-primary"
-            :disabled="saving || loadingFull || !dirty"
+            :disabled="saveDisabled"
             @click="saveCanon"
           >
             {{ saving ? $t('creation.interior.saving') : $t('creation.interior.save') }}
@@ -224,6 +243,18 @@ export default {
           </button>
         </div>
       </header>
+
+      <div v-if="hydrateFailed" class="creation-conflict-banner" role="alert">
+        <span>{{ $t('creation.canon.hydrateFailed') }}</span>
+        <button
+          type="button"
+          class="creation-glass-btn"
+          :disabled="hydrating"
+          @click="fetchFullCanon(item.id)"
+        >
+          {{ $t('creation.canon.retryHydrate') }}
+        </button>
+      </div>
 
       <div class="creation-canon-editor-body">
         <!-- Entity Canon -->

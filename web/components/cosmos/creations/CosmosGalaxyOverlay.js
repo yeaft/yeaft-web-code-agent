@@ -730,11 +730,15 @@ export default {
       const submitAgentId = creationsStore.selectedAgentId;
       const startSeq = creationsStore.openActivationSeq;
       const liveDraft = creationsStore.igniteDraft;
-      const titleText = liveDraft.title.trim();
-      const promptText = liveDraft.prompt.trim();
+      const submittedTitle = liveDraft.title;
+      const submittedPrompt = liveDraft.prompt;
+      const submittedFiles = new Set(liveDraft.pendingFiles);
+      const submittedCelestial = liveDraft.celestial;
+      const titleText = submittedTitle.trim();
+      const promptText = submittedPrompt.trim();
       const kindVal = liveDraft.kind || 'book';
       const filesToSend = liveDraft.pendingFiles.slice();
-      const celestialVal = liveDraft.celestial || undefined;
+      const celestialVal = submittedCelestial || undefined;
 
       liveDraft.submitting = true;
       liveDraft.error = null;
@@ -754,12 +758,27 @@ export default {
         if (res?.initialTurnError) {
           emit('toast', res.initialTurnError);
         }
-        creationsStore.igniteDraft.title = '';
-        creationsStore.igniteDraft.prompt = '';
-        creationsStore.igniteDraft.pendingFiles = [];
-        creationsStore.igniteDraft.celestial = null;
-        creationsStore.igniteDraft.open = false;
-        creationsStore.igniteDraft.error = null;
+        const currentDraft = creationsStore.igniteDraft;
+        const stillOnSubmitAgent = creationsStore.selectedAgentId === submitAgentId;
+        if (stillOnSubmitAgent && currentDraft.title === submittedTitle) {
+          currentDraft.title = '';
+        }
+        if (stillOnSubmitAgent && currentDraft.prompt === submittedPrompt) {
+          currentDraft.prompt = '';
+        }
+        currentDraft.pendingFiles = currentDraft.pendingFiles.filter((f) => !submittedFiles.has(f));
+        if (stillOnSubmitAgent && currentDraft.celestial === submittedCelestial) {
+          currentDraft.celestial = null;
+        }
+        if (
+          stillOnSubmitAgent
+          && !currentDraft.title.trim()
+          && !currentDraft.prompt.trim()
+          && currentDraft.pendingFiles.length === 0
+        ) {
+          currentDraft.open = false;
+        }
+        currentDraft.error = null;
 
         if (
           created

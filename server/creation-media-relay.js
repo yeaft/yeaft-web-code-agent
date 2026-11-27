@@ -86,7 +86,8 @@ function decodeChunk(msg, params, start, end) {
   }
   const buffer = Buffer.from(data, 'base64');
   if (buffer.length !== length || buffer.toString('base64') !== data) throw failure(502, 'Invalid Creation media data');
-  return { mimeType: mimeType.toLowerCase(), filename, totalSize, start, end: expectedEnd, buffer };
+  const version = typeof msg.version === 'string' ? msg.version : null;
+  return { mimeType: mimeType.toLowerCase(), filename, totalSize, version, start, end: expectedEnd, buffer };
 }
 
 /** Reserve a slot for a transfer (including pauses for HTTP backpressure). Call close in finally. */

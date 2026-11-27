@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import ctx from '../../context.js';
 import { sendToServer } from '../../connection/buffer.js';
 import { safeId, fail } from './constants.js';
+import { readMediaChunk } from './media.js';
 
 const MAX_NAMESPACES = 4;
 const PUBLIC_ERRORS = new Set(['INVALID_REQUEST', 'INVALID_STATE', 'LIMIT_EXCEEDED', 'INVALID_PATH', 'INVALID_RANGE',
@@ -38,47 +39,53 @@ export function createCreationBridge({ context = ctx, send = sendToServer,
     cacheIdentity = undefined;
     await Promise.allSettled(retired.map(async scope => scope.runtime.close()));
   }
-  async function serviceForOwner(current, socket) {
-    const { yeaftDir, serverUrl, agentId, ownerId } = current;
-    const stillCurrent = () => !closed && socket === context.ws && sameAgent(current, readIdentity(ownerId));
-    if (cacheIdentity && !sameAgent(cacheIdentity, readIdentity(ownerId))) await retireAll();
-    if (!stillCurrent()) fail('INVALID_STATE', 'Agent storage identity changed');
-    if (![yeaftDir, serverUrl, agentId].every(value => typeof value === 'string' && value && !value.includes('\0'))) {
+  const isCurrent = (current, socket) => !closed && socket === context.ws && sameAgent(current, readIdentity(current.ownerId));
+  function assertCurrent(current, socket) {
+    if (!isCurrent(current, socket)) fail('INVALID_STATE', 'Agent storage identity changed');
+    if (![current.yeaftDir, current.serverUrl, current.agentId].every(value => typeof value === 'string' && value && !value.includes('\0'))) {
       fail('INVALID_STATE', 'Agent storage identity is unavailable');
     }
-    // All cached owners share the same Agent identity. Refresh a hit's LRU position.
-    const cached = scopes.get(ownerId);
-    if (cached) {
-      cached.socket = socket;
-      scopes.delete(ownerId);
-      scopes.set(ownerId, cached);
-      return cached.runtime;
-    }
-    if (scopes.size >= MAX_NAMESPACES) {
-      const [oldestOwner, oldest] = scopes.entries().next().value;
-      scopes.delete(oldestOwner);
-      await oldest.runtime.close();
-      if (!stillCurrent()) {
-        if (!sameAgent(current, readIdentity(ownerId))) await retireAll();
-        fail('INVALID_STATE', 'Agent storage identity changed');
-      }
-    }
-    const binding = { serverUrl, agentId, ownerId };
+  }
+  function storageOptions({ yeaftDir, serverUrl, agentId, ownerId }) {
     const namespaceKey = createHash('sha256').update(`${serverUrl}\0${agentId}\0${ownerId}`).digest('hex').slice(0, 24);
+    return { yeaftDir, namespaceKey, namespaceBinding: { serverUrl, agentId, ownerId } };
+  }
+  function touchScope(ownerId, scope, socket) {
+    scope.socket = socket;
+    scopes.delete(ownerId);
+    scopes.set(ownerId, scope);
+    return scope.runtime;
+  }
+  async function pruneIdle(maxSize, protectedOwner) {
+    while (scopes.size > maxSize) {
+      const oldestIdle = [...scopes].find(([ownerId, scope]) => ownerId !== protectedOwner && !scope.runtime.hasActiveWork());
+      if (!oldestIdle) break; // Active namespaces may temporarily exceed the limit.
+      const [ownerId, scope] = oldestIdle;
+      scopes.delete(ownerId);
+      await scope.runtime.close();
+    }
+  }
+  async function serviceForOwner(current, socket) {
+    const { agentId, ownerId } = current;
+    if (cacheIdentity && !sameAgent(cacheIdentity, readIdentity(ownerId))) await retireAll();
+    assertCurrent(current, socket);
+    const cached = scopes.get(ownerId);
+    await pruneIdle(cached ? MAX_NAMESPACES : MAX_NAMESPACES - 1, ownerId);
+    assertCurrent(current, socket);
+    if (cached) return touchScope(ownerId, cached, socket);
     const scope = { socket };
-    scope.runtime = await createService({ yeaftDir, namespaceKey, namespaceBinding: binding,
+    scope.runtime = await createService({ ...storageOptions(current),
       emitEvent: event => {
         const eventSocket = scope.socket;
-        const isCurrent = () => !closed && scopes.get(ownerId) === scope && context.ws === eventSocket
-          && sameAgent(current, readIdentity(ownerId));
-        if (isCurrent()) return send({ type: 'creation_event', ownerId, event }, { isCurrent });
+        const isCurrentEvent = () => scopes.get(ownerId) === scope && isCurrent(current, eventSocket);
+        if (isCurrentEvent()) return send({ type: 'creation_event', ownerId, event }, { isCurrent: isCurrentEvent });
       },
       mediaUrlFor: (creationId, mediaKind, mediaId) =>
         `/api/yeaft/creations/${encodeURIComponent(agentId)}/${safeId(creationId)}/media/${mediaKind}/${safeId(mediaId)}`,
     });
     cacheIdentity = current;
     scopes.set(ownerId, scope);
-    if (!stillCurrent()) {
+    if (!isCurrent(current, socket)) {
       if (!sameAgent(current, readIdentity(ownerId))) await retireAll();
       else {
         scopes.delete(ownerId);
@@ -120,9 +127,16 @@ export function createCreationBridge({ context = ctx, send = sendToServer,
         if (!requestId || !validOwner(msg.ownerId)) fail('INVALID_REQUEST', 'Creations media request requires authenticated ownership');
         const current = readIdentity(msg.ownerId);
         response = await serialize(async () => {
-          const runtime = await serviceForOwner(current, socket);
-          if (closed) fail('INVALID_STATE', 'Creations is closed');
-          return runtime.handleMediaRead(msg);
+          assertCurrent(current, socket);
+          const { ownerId } = current;
+          const cached = cacheIdentity && sameAgent(cacheIdentity, current) && scopes.get(ownerId);
+          if (cached) return touchScope(ownerId, cached, socket).handleMediaRead(msg);
+          // Media pulls must not recover runs, create namespaces, or evict cached runtimes.
+          const { createCreationStore } = await import('./store.js');
+          assertCurrent(current, socket);
+          const store = createCreationStore({ ...storageOptions(current), readOnly: true });
+          try { return readMediaChunk(store, msg); }
+          finally { store.close(); }
         });
       } catch (error) { response = { type: 'creation_media_chunk', requestId, ok: false, ...safeError(error) }; }
       if (context.ws === socket) await send(response);

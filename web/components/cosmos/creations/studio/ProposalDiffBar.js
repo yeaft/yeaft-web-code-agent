@@ -157,7 +157,11 @@ export default {
       try {
         const full = await this.creationsStore.getProposal(aId, cId, proposal.id);
         if (full && typeof full === 'object') {
-          this.fetchedMap = { ...this.fetchedMap, [proposal.id]: full };
+          const normalized = {
+            ...full,
+            contentTruncated: full.contentTruncated === true ? true : false,
+          };
+          this.fetchedMap = { ...this.fetchedMap, [proposal.id]: normalized };
         }
       } catch {
         // Fallback button remains available for manual retry.

@@ -1013,4 +1013,414 @@ describe('Cosmos Creations — End-to-End Web Store <-> Server Relay <-> Agent S
     expect(dlLink.attributes('href')).toBe('/api/yeaft/creations/agent-a/cre-1/media/source/src-mp4');
     wrapper.unmount();
   });
+
+  it('R3-#1 (B04): Switching from Studio folder to Read loads & binds displayed chapter body and preserves loadedRevId=null', async () => {
+    const { default: CreationInteriorModal } = await import('../../web/components/cosmos/creations/CreationInteriorModal.js');
+    const { default: BookReader } = await import('../../web/components/cosmos/creations/readers/BookReader.js');
+    const { creationDetailKey, creationNodeKey } = await import('../../web/stores/creations.js');
+    const $t = (k) => creationsZh[k] || k;
+
+    const created = await creationsStore.createCreation('agent-a', { title: 'R3 Book', kind: 'book' });
+    const cid = created.creation.id;
+    const folderRes = await creationsStore.createNode('agent-a', cid, { kind: 'folder', nodeType: 'folder', title: 'Part I' });
+    const folderId = folderRes.node.id;
+    const unitRes = await creationsStore.createNode('agent-a', cid, {
+      parentId: folderId,
+      kind: 'unit',
+      nodeType: 'unit',
+      title: 'Chapter 1',
+      modality: 'markdown_doc',
+    });
+    const unitId = unitRes.node.id;
+    const upd = await creationsStore.updateNode('agent-a', cid, unitId, { content: 'Real chapter body text.' });
+    const realRevId = upd.node.currentRevId;
+
+    await creationsStore.openCreation('agent-a', cid, { mode: 'studio' });
+    // Clear cached unit body to prove Read mode triggers loadNode for displayedReadNode
+    delete creationsStore.nodeContentsByKey[creationNodeKey('agent-a', cid, unitId)];
+    await creationsStore.selectNode(folderId);
+    expect(creationsStore.activeCreation.activeNodeId).toBe(folderId);
+
+    const loadSpy = vi.spyOn(creationsStore, 'loadNode');
+    const wrapper = mount(CreationInteriorModal, {
+      global: { mocks: { $t } },
+    });
+    await flushPromises();
+
+    // Switch to Read mode while folder is still activeNodeId
+    creationsStore.setActiveMode('read');
+    await flushPromises();
+
+    expect(loadSpy).toHaveBeenCalledWith('agent-a', cid, unitId);
+    expect(wrapper.vm.displayedReadNode?.id).toBe(unitId);
+    expect(wrapper.vm.displayedReadContent).toBe('Real chapter body text.');
+    expect(wrapper.vm.displayedReadContentLoaded).toBe(true);
+    expect(wrapper.vm.displayedReadLoadedRevId).toBe(realRevId);
+    expect(wrapper.text()).toContain('Real chapter body text.');
+    loadSpy.mockRestore();
+    wrapper.unmount();
+
+    // Also verify BookReader captures loadedRevId=null directly when contentLoaded=true
+    const brWrapper = mount(BookReader, {
+      props: {
+        node: { id: 'u-first', title: 'First Write', currentRevId: 'stale-rev-from-list' },
+        content: '',
+        contentLoaded: true,
+        loadedRevId: null,
+        agentId: 'agent-a',
+        creationId: cid,
+      },
+      global: { mocks: { $t } },
+    });
+    brWrapper.vm.enterEditMode();
+    expect(brWrapper.vm.editBaseRevId).toBeNull();
+    brWrapper.unmount();
+
+    // Verify detail key still intact
+    expect(creationsStore.detailsByKey[creationDetailKey('agent-a', cid)]).toBeTruthy();
+  });
+
+  it('R3-#2 (B05): OutlineBoard renders truncated outline read-only until full loadNode hydrates it', async () => {
+    const { default: OutlineBoard } = await import('../../web/components/cosmos/creations/studio/OutlineBoard.js');
+    const { creationDetailKey } = await import('../../web/stores/creations.js');
+    const $t = (k) => creationsZh[k] || k;
+
+    const created = await creationsStore.createCreation('agent-a', { title: 'Outline Book', kind: 'book' });
+    const cid = created.creation.id;
+    const unitRes = await creationsStore.createNode('agent-a', cid, {
+      kind: 'unit',
+      title: 'Chapter Trunc',
+      outlineMd: 'Full complete outline text for chapter one.',
+    });
+    const uid = unitRes.node.id;
+
+    // Simulate truncated snapshot from get_creation
+    const dKey = creationDetailKey('agent-a', cid);
+    creationsStore.detailsByKey[dKey].nodes = [
+      { ...unitRes.node, outlineMd: 'Full complete...', outlineTruncated: true },
+    ];
+
+    const wrapper = mount(OutlineBoard, {
+      props: {
+        folder: null,
+        nodes: creationsStore.detailsByKey[dKey].nodes,
+        agentId: 'agent-a',
+        creationId: cid,
+      },
+      global: { mocks: { $t } },
+    });
+    await flushPromises();
+
+    // No editable summary textarea while truncated; load button is shown
+    expect(wrapper.find('textarea.creation-outline-summary').exists()).toBe(false);
+    const loadBtn = wrapper.find('.creation-outline-load-btn');
+    expect(loadBtn.exists()).toBe(true);
+
+    await loadBtn.trigger('click');
+    await flushPromises();
+
+    // Store cleared outlineTruncated: false
+    const hydratedNode = creationsStore.detailsByKey[dKey].nodes.find((n) => n.id === uid);
+    expect(hydratedNode.outlineTruncated).toBe(false);
+    expect(hydratedNode.outlineMd).toBe('Full complete outline text for chapter one.');
+
+    await wrapper.setProps({ nodes: creationsStore.detailsByKey[dKey].nodes });
+    await flushPromises();
+    expect(wrapper.find('textarea.creation-outline-summary').exists()).toBe(true);
+    expect(wrapper.find('textarea.creation-outline-summary').element.value).toBe('Full complete outline text for chapter one.');
+    wrapper.unmount();
+  });
+
+  it('R3-#3 (B05): CanonEditor fetches full canon when stateTruncated=true and blocks Save until hydrated', async () => {
+    const { default: CanonEditor } = await import('../../web/components/cosmos/creations/studio/CanonEditor.js');
+    const $t = (k) => creationsZh[k] || k;
+
+    const origGetCanon = creationsStore.getCanon;
+    let resolveCanon;
+    creationsStore.getCanon = vi.fn(() => new Promise((r) => { resolveCanon = r; }));
+
+    const truncatedItem = {
+      id: 'canon-1',
+      type: 'entity',
+      title: 'Hero',
+      contentMd: 'Short bio',
+      contentTruncated: false,
+      stateTruncated: true,
+      state: {},
+    };
+
+    const wrapper = mount(CanonEditor, {
+      props: {
+        item: truncatedItem,
+        agentId: 'agent-a',
+        creationId: 'cre-canon',
+      },
+      global: { mocks: { $t } },
+    });
+    await flushPromises();
+
+    expect(creationsStore.getCanon).toHaveBeenCalledWith('agent-a', 'cre-canon', 'canon-1');
+    wrapper.vm.markDirty();
+    await flushPromises();
+    expect(wrapper.vm.saveDisabled).toBe(true);
+
+    // Resolve full canon
+    const fullItem = {
+      ...truncatedItem,
+      state: { hp: '100', role: 'captain' },
+      contentTruncated: false,
+      stateTruncated: false,
+    };
+    resolveCanon(fullItem);
+    await flushPromises();
+
+    await wrapper.setProps({ item: fullItem });
+    wrapper.vm.markDirty();
+    await flushPromises();
+    expect(wrapper.vm.saveDisabled).toBe(false);
+    expect(wrapper.vm.statePairs).toEqual([
+      { key: 'hp', value: '100' },
+      { key: 'role', value: 'captain' },
+    ]);
+
+    // Failure case keeps Save disabled and renders retry button
+    creationsStore.getCanon = vi.fn().mockRejectedValue(new Error('network error'));
+    const failWrapper = mount(CanonEditor, {
+      props: {
+        item: { ...truncatedItem, id: 'canon-2' },
+        agentId: 'agent-a',
+        creationId: 'cre-canon',
+      },
+      global: { mocks: { $t } },
+    });
+    await flushPromises();
+    failWrapper.vm.markDirty();
+    await flushPromises();
+    expect(failWrapper.vm.hydrateFailed).toBe(true);
+    expect(failWrapper.vm.saveDisabled).toBe(true);
+    expect(failWrapper.find('.creation-conflict-banner').exists()).toBe(true);
+
+    creationsStore.getCanon = origGetCanon;
+    wrapper.unmount();
+    failWrapper.unmount();
+  });
+
+  it('R3-#4 (B05): getProposal clears contentTruncated so ProposalDiffBar enables Diff & Accept', async () => {
+    const { default: ProposalDiffBar } = await import('../../web/components/cosmos/creations/studio/ProposalDiffBar.js');
+    const { creationDetailKey } = await import('../../web/stores/creations.js');
+    const $t = (k) => creationsZh[k] || k;
+
+    const dKey = creationDetailKey('agent-a', 'cre-prop');
+    creationsStore.detailsByKey[dKey] = {
+      creation: { id: 'cre-prop', title: 'Prop Test' },
+      nodes: [{ id: 'n-1', title: 'Ch 1', currentRevId: 'rev-1' }],
+      canon: [],
+      sources: [],
+      assets: [],
+      threads: [],
+      proposals: [
+        { id: 'p-1', nodeId: 'n-1', status: 'pending', summary: 'Polish intro', contentTruncated: true },
+      ],
+      runs: [],
+      loadedAt: Date.now(),
+    };
+
+    const origReq = creationsStore.request;
+    creationsStore.request = vi.fn(async (_agentId, op) => {
+      if (op === 'get_proposal') {
+        // Server returns full proposal without contentTruncated field
+        return {
+          proposal: {
+            id: 'p-1',
+            nodeId: 'n-1',
+            status: 'pending',
+            summary: 'Polish intro',
+            proposedContent: 'Polished line 1\nPolished line 2',
+          },
+        };
+      }
+      return origReq.call(creationsStore, _agentId, op);
+    });
+
+    const wrapper = mount(ProposalDiffBar, {
+      props: {
+        node: { id: 'n-1', title: 'Ch 1', currentRevId: 'rev-1' },
+        currentContent: 'Old line 1',
+        proposals: creationsStore.detailsByKey[dKey].proposals,
+        agentId: 'agent-a',
+        creationId: 'cre-prop',
+      },
+      global: { mocks: { $t } },
+    });
+    await flushPromises();
+
+    // Store entry has contentTruncated normalized to false
+    expect(creationsStore.detailsByKey[dKey].proposals[0].contentTruncated).toBe(false);
+    // ProposalDiffBar marks contentReady and enables Diff & Accept
+    expect(wrapper.vm.enrichedProposals[0].contentReady).toBe(true);
+    const buttons = wrapper.findAll('.creation-proposal-actions button');
+    const diffBtn = buttons.find((b) => b.text().includes('Diff'));
+    const acceptBtn = buttons.find((b) => b.text().includes(creationsZh['creation.proposal.accept']));
+    expect(diffBtn.attributes('disabled')).toBeUndefined();
+    expect(acceptBtn.attributes('disabled')).toBeUndefined();
+
+    creationsStore.request = origReq;
+    wrapper.unmount();
+  });
+
+  it('R3-#7 (B07): reconcileAfterReconnect refreshes clean active node body and preserves dirty draft', async () => {
+    const { creationNodeKey } = await import('../../web/stores/creations.js');
+    const created = await creationsStore.createCreation('agent-a', { title: 'Reconnect Book', kind: 'book' });
+    const cid = created.creation.id;
+    const unitRes = await creationsStore.createNode('agent-a', cid, { kind: 'unit', title: 'Ch 1' });
+    const uid = unitRes.node.id;
+    await creationsStore.updateNode('agent-a', cid, uid, { content: 'Version 1' });
+    await creationsStore.openCreation('agent-a', cid, { mode: 'read' });
+
+    const nKey = creationNodeKey('agent-a', cid, uid);
+    expect(creationsStore.nodeContentsByKey[nKey].content).toBe('Version 1');
+
+    // Simulate remote update on backend while client disconnected
+    serviceA.store.updateNode(cid, uid, { content: 'Version 2 from server' });
+
+    // Clean node -> reconcileAfterReconnect fetches updated body
+    await creationsStore.reconcileAfterReconnect('agent-a');
+    expect(creationsStore.nodeContentsByKey[nKey].content).toBe('Version 2 from server');
+
+    // Mark node dirty with local unsaved draft
+    creationsStore.setNodeDirty('agent-a', cid, uid, true);
+    creationsStore.nodeContentsByKey[nKey].content = 'Unsaved local draft';
+    serviceA.store.updateNode(cid, uid, { content: 'Version 3 from server' });
+
+    // Dirty node -> reconcileAfterReconnect skips loadNode and preserves local draft
+    await creationsStore.reconcileAfterReconnect('agent-a');
+    expect(creationsStore.nodeContentsByKey[nKey].content).toBe('Unsaved local draft');
+    expect(creationsStore.nodeContentsByKey[nKey].dirty).toBe(true);
+  });
+
+  it('R3-#8 (B08): Ignite preserves newly queued files and draft when switching Agent mid-submit', async () => {
+    const { default: CosmosGalaxyOverlay } = await import('../../web/components/cosmos/creations/CosmosGalaxyOverlay.js');
+    const $t = (k) => creationsZh[k] || k;
+
+    await creationsStore.selectGalaxyAgent('agent-a', { force: true });
+
+    let resolveCreate;
+    const origCreate = creationsStore.createCreation;
+    creationsStore.createCreation = vi.fn(() => new Promise((r) => { resolveCreate = r; }));
+
+    const wrapper = mount(CosmosGalaxyOverlay, {
+      props: {
+        visible: true,
+        agents: [
+          { id: 'agent-a', name: 'Alpha', online: true, capabilities: ['creations'] },
+          { id: 'agent-b', name: 'Beta', online: true, capabilities: ['creations'] },
+        ],
+      },
+      global: { mocks: { $t } },
+    });
+    await flushPromises();
+
+    const fileA = new File(['hello'], 'notes-a.txt', { type: 'text/plain' });
+    const fileB = new File(['world'], 'notes-b.txt', { type: 'text/plain' });
+    creationsStore.igniteDraft.title = 'Draft A';
+    creationsStore.igniteDraft.prompt = 'Prompt A';
+    creationsStore.igniteDraft.pendingFiles = [fileA];
+    creationsStore.igniteDraft.open = true;
+
+    const submitPromise = wrapper.vm.submitIgnite();
+
+    // User switches to agent-b and queues fileB + new prompt mid-flight
+    creationsStore.selectedAgentId = 'agent-b';
+    creationsStore.igniteDraft.title = 'Draft B';
+    creationsStore.igniteDraft.prompt = 'Prompt B';
+    creationsStore.igniteDraft.pendingFiles = [...creationsStore.igniteDraft.pendingFiles, fileB];
+
+    resolveCreate({ creation: { id: 'cre-a-new', title: 'Draft A' } });
+    await submitPromise;
+    await flushPromises();
+
+    // fileA removed, fileB preserved; agent-b's title/prompt/open preserved
+    expect(creationsStore.igniteDraft.pendingFiles).toEqual([fileB]);
+    expect(creationsStore.igniteDraft.title).toBe('Draft B');
+    expect(creationsStore.igniteDraft.prompt).toBe('Prompt B');
+    expect(creationsStore.igniteDraft.open).toBe(true);
+
+    creationsStore.createCreation = origCreate;
+    wrapper.unmount();
+  });
+
+  it('R3-#9 (B11): VideoReader honors verified detectedMimeType / playableVideo and does not preemptively block playback', async () => {
+    const { default: VideoReader } = await import('../../web/components/cosmos/creations/readers/VideoReader.js');
+    const $t = (k) => creationsZh[k] || k;
+
+    const sniffedSource = {
+      id: 's1',
+      name: 'video.bin',
+      mimeType: 'application/octet-stream',
+      detectedMimeType: 'video/mp4',
+      playableVideo: true,
+    };
+    const wrapper = mount(VideoReader, {
+      props: {
+        node: { id: 'v-sniff', title: 'Sniffed Ep', modality: 'video_episode', currentRevId: 'rev-1' },
+        content: JSON.stringify({ videoSourceId: 's1', scenes: [] }),
+        contentLoaded: true,
+        loadedRevId: 'rev-1',
+        agentId: 'agent-a',
+        creationId: 'cre-1',
+        sources: [sniffedSource],
+      },
+      global: { mocks: { $t } },
+    });
+    await flushPromises();
+
+    expect(wrapper.vm.videoSources.map((s) => s.id)).toEqual(['s1']);
+    expect(wrapper.find('video.creation-video-el').exists()).toBe(true);
+    expect(wrapper.find('.creation-video-fallback').exists()).toBe(false);
+    wrapper.unmount();
+  });
+
+  it('R3-#11: CreationInteriorModal exposes accessible Signal Stream trigger and signal popover z-index exceeds L3 modal', async () => {
+    const { default: CreationInteriorModal } = await import('../../web/components/cosmos/creations/CreationInteriorModal.js');
+    const $t = (k) => creationsZh[k] || k;
+
+    const created = await creationsStore.createCreation('agent-a', { title: 'Signal Test', kind: 'book' });
+    await creationsStore.openCreation('agent-a', created.creation.id, { mode: 'studio' });
+
+    const wrapper = mount(CreationInteriorModal, {
+      props: {
+        signalCount: 3,
+        signalWaitingCount: 1,
+        signalOpen: false,
+        signalLabel: '3 signals waiting',
+      },
+      global: { mocks: { $t } },
+    });
+    await flushPromises();
+
+    const trigger = wrapper.find('.creation-signal-trigger');
+    expect(trigger.exists()).toBe(true);
+    expect(trigger.attributes('aria-label')).toBe('3 signals waiting');
+    expect(trigger.attributes('aria-expanded')).toBe('false');
+    expect(trigger.text()).toContain('3');
+
+    await trigger.trigger('click');
+    expect(wrapper.emitted('toggle-signal')).toHaveLength(1);
+
+    // Pressing Escape when signalOpen=true emits close-signal instead of closing L3
+    await wrapper.setProps({ signalOpen: true });
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+    await flushPromises();
+    expect(wrapper.emitted('close-signal')).toHaveLength(1);
+    expect(creationsStore.activeCreation).not.toBeNull();
+
+    // Verify CSS z-index layering: .cosmos-signal-popover > .creation-interior-overlay
+    const signalCss = readFileSync(resolve(process.cwd(), 'web/styles/cosmos/signal-stream.css'), 'utf8');
+    const creationsCss = readFileSync(resolve(process.cwd(), 'web/styles/cosmos/creations.css'), 'utf8');
+    const popoverZ = Number(signalCss.match(/\.cosmos-signal-popover\s*\{[^}]*z-index:\s*(\d+)/s)?.[1]);
+    const interiorZ = Number(creationsCss.match(/\.creation-interior-overlay\s*\{[^}]*z-index:\s*(\d+)/s)?.[1]);
+    expect(popoverZ).toBeGreaterThan(interiorZ);
+
+    wrapper.unmount();
+  });
 });

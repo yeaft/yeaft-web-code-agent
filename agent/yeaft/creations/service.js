@@ -1,5 +1,6 @@
 import { compactProposal, createCreationStore } from './store.js';
 import { createCreationRunner } from './runner.js';
+import { readMediaChunk } from './media.js';
 import { boundedText, fail, LIMITS } from './constants.js';
 
 const object = (value, name) => {
@@ -225,16 +226,16 @@ export function createCreationService({ yeaftDir, storageRoot, namespaceKey, nam
 
   return {
     store, runner,
+    hasActiveWork: () => runner.hasActiveWork(),
     request({ op, payload = {} }) {
       if (closing) fail('INVALID_STATE', 'Creations is closed');
       if (typeof op !== 'string' || !Object.hasOwn(ops, op)) fail('UNSUPPORTED', 'Unknown Creations operation');
       object(payload, 'Creations payload');
       return boundedResponse(ops[op](payload.creationId ?? (op === 'create_creation' ? undefined : payload.id), payload));
     },
-    handleMediaRead({ requestId, creationId, mediaKind, mediaId, start, end }) {
+    handleMediaRead(msg) {
       if (closing) fail('INVALID_STATE', 'Creations is closed');
-      const { bytes, ...info } = store.readMediaRange(creationId, mediaKind, mediaId, start, end);
-      return { type: 'creation_media_chunk', requestId, creationId, mediaKind, mediaId, ok: true, ...info, data: bytes.toString('base64') };
+      return readMediaChunk(store, msg);
     },
     close() { return closing ??= runner.close().finally(() => store.close()); },
   };

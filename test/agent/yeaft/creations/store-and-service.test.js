@@ -122,6 +122,35 @@ describe('Creations durable store and operations', () => {
     expect(store.getCreation('c').sourceCount).toBe(2);
   });
 
+  it('persists verified source MIME and video flags independently of upload names and declarations', () => {
+    const { sources } = req('create_creation', { id: 'sources', textSources: ['Notes'], files: [
+      { name: 'video.bin', mimeType: 'application/octet-stream', data: b64(Buffer.from('000000186674797069736f6d0000020069736f6d6d703431', 'hex')) },
+      { name: 'fake.mp4', mimeType: 'video/mp4', data: b64('<!doctype html><html>Not a movie</html>') },
+    ] });
+    const expected = [
+      { name: 'video.bin', mimeType: 'application/octet-stream', kind: 'video', detectedMimeType: 'video/mp4', playableVideo: true },
+      { name: 'fake.mp4', detectedMimeType: null, playableVideo: false },
+      { name: 'Notes.txt', detectedMimeType: null, playableVideo: false },
+    ];
+    expect(sources).toMatchObject(expected);
+    expect(req('get_creation', { creationId: 'sources' }).sources).toMatchObject(expected);
+  });
+
+  it.each([
+    ['0000001466747970717420200000000071742020', 'video/mp4'],
+    ['000000096d6f6f7600', 'video/mp4'],
+    ['000000096d64617400', 'video/mp4'],
+    ['000000186674797069736f6d', null], // Truncated ftyp box.
+    ['1a45dfa3', 'video/webm'],
+    ['89504e470d0a1a0a', 'image/png'],
+    ['ffd8ff', 'image/jpeg'],
+    ['474946383961', 'image/gif'],
+    ['524946460000000057454250', 'image/webp'],
+    ['255044462d', 'application/pdf'],
+  ])('detects source signature %s as %s', (hex, mimeType) => {
+    expect(parseSource(Buffer.from(hex, 'hex')).detectedMimeType).toBe(mimeType);
+  });
+
   it('extracts simple PDF/Flate text, bounds large text, and emits binary metadata', () => {
     const pdf = Buffer.concat([Buffer.from('%PDF-1.4\n1 0 obj\n<< /Filter /FlateDecode >>\nstream\n'),
       deflateSync('BT (Hello\\040PDF) Tj [(A) 20 <42>] TJ ET'), Buffer.from('\nendstream\nendobj')]);
@@ -251,6 +280,63 @@ it('binds runtime storage to all three authenticated identity fields and fences 
   expect(runtimes.every(r => r.closed)).toBe(true);
 });
 
+it('does not evict active turns or batches when the owner cache overflows or serves uncached media', async () => {
+  const context = { CONFIG: { yeaftDir: dir, serverUrl: 'wss://one.example' }, agentId: 'agent:1' };
+  const sent = [], runtimes = [], signals = [];
+  const { promise: finish, resolve: release } = Promise.withResolvers();
+  const writer = createCreationBridge({ context, send: msg => sent.push(msg) });
+  const bridge = createCreationBridge({ context, send: msg => sent.push(msg), createService: options => {
+    const runtime = createCreationService({ ...options, engineFactory: ({ run, signal, toolRegistry }) => {
+      signals.push(signal);
+      return { async *query() {
+        await finish;
+        if (run.type === 'batch') await toolRegistry.execute('creation_write_unit', { nodeId: 'unit', content: 'A full draft.' });
+        yield { type: 'turn_end', stopReason: 'end_turn', terminal: true };
+      } };
+    } });
+    const record = { runtime, ownerId: options.namespaceBinding.ownerId, closed: false };
+    runtimes.push(record);
+    return { ...runtime, close() { record.closed = true; return runtime.close(); } };
+  } });
+  const request = async (target, ownerId, op, payload = {}) => {
+    await target.request({ type: 'creation_request', ownerId, requestId: 'req', op, payload });
+    expect(sent.at(-1)).toMatchObject({ ok: true });
+    return sent.at(-1).data;
+  };
+  try {
+    const { sources } = await request(writer, 'fifth', 'create_creation', { id: 'book', textSources: ['fifth owner'] });
+    await writer.close();
+    const runIds = [];
+    for (let i = 0; i < 4; i++) {
+      const ownerId = `owner${i}`;
+      await request(bridge, ownerId, 'create_creation', { id: 'book', starterNode: { id: 'unit' } });
+      const { run } = i % 2 === 0
+        ? await request(bridge, ownerId, 'send_message', { creationId: 'book', text: 'Plan the book' })
+        : await request(bridge, ownerId, 'start_batch_run', { creationId: 'book', nodeIds: ['unit'] });
+      runIds.push(run.id);
+    }
+    const mediaRead = { type: 'creation_media_read', ownerId: 'fifth', requestId: 'media', creationId: 'book', mediaKind: 'source', mediaId: sources[0].id };
+    await bridge.mediaRead(mediaRead);
+    expect(sent.at(-1)).toMatchObject({ ok: true, data: b64('fifth owner'), version: sources[0].createdAt });
+    expect(runtimes).toHaveLength(4); // An uncached media read did not start a runner.
+    await request(bridge, 'fifth', 'list_creations');
+    expect(runtimes).toHaveLength(5);
+    expect(signals).toHaveLength(4);
+    expect(signals.every(signal => !signal.aborted)).toBe(true);
+    expect(runtimes.every(record => !record.closed)).toBe(true);
+    for (const [i, { runtime }] of runtimes.slice(0, 4).entries()) {
+      expect(runtime.store.getRun('book', runIds[i]).status).toBe('running');
+    }
+    release();
+    await Promise.all(runIds.map((id, i) => runtimes[i].runtime.runner.waitForRun(id)));
+    for (const [i, { runtime }] of runtimes.slice(0, 4).entries()) {
+      expect(runtime.store.getRun('book', runIds[i]).status).toBe('completed');
+    }
+    await request(bridge, 'fifth', 'list_creations');
+    expect(runtimes.filter(record => record.closed).map(record => record.ownerId)).toEqual(['owner0']);
+  } finally { release(); await Promise.all([writer.close(), bridge.close()]); }
+});
+
 it('compacts large snapshot proposals and returns byte-budgeted, node-filtered full pages', () => {
   store.createCreation({ id: 'book' });
   store.createNode('book', { id: 'chapter' });
@@ -329,20 +415,33 @@ it('serves large Markdown and JSON exports as downloadable ranged assets', () =>
 it('replaces a streamed export without accumulating assets or files', () => {
   store.createCreation({ id: 'book' });
   const outlineMd = 'x'.repeat(32 * 1024);
-  for (let i = 0; i < 100; i++) store.createNode('book', { id: `node${i}`, outlineMd });
+  for (let i = 0; i < 100; i++) store.createNode('book', { id: `node${i}`, title: 'Old title', outlineMd });
   const exportAgain = format => req('export_creation', { creationId: 'book', format });
   const first = exportAgain('markdown');
+  expect(first.streamed).toBe(true);
+  const read = (start = 0) => store.readMediaRange('book', 'asset', first.assetId, start, start + 100);
+  const firstChunk = read();
+  expect(firstChunk.version).toEqual(expect.any(String));
+  expect(firstChunk.bytes.toString()).toContain('Old title');
   const regular = store.saveAsset('book', { ext: 'md', content: 'Separate asset' });
   store.updateNode('book', 'node0', { title: 'New title' });
   expect(() => store.transaction(() => {
     exportAgain('markdown');
     throw new Error('roll back export');
   })).toThrow('roll back export');
-  expect(store.readMediaRange('book', 'asset', first.assetId, 0, 100).bytes.toString()).not.toContain('New title');
-  for (let i = 0; i < 3; i++) expect(exportAgain('md').assetId).toBe(first.assetId);
+  expect(read()).toEqual(firstChunk);
+  for (let i = 0; i < 3; i++) expect(exportAgain('md')).toMatchObject({ assetId: first.assetId, byteLength: first.byteLength });
+  const nextChunk = read(101);
+  expect(nextChunk.totalSize).toBe(firstChunk.totalSize);
+  expect(nextChunk.version).not.toBe(firstChunk.version);
+  expect(read().version).toBe(nextChunk.version);
+  expect(service.handleMediaRead({ requestId: 'relay', creationId: 'book', mediaKind: 'asset', mediaId: first.assetId, start: 101, end: 201 }))
+    .toMatchObject({ type: 'creation_media_chunk', version: nextChunk.version, totalSize: firstChunk.totalSize });
   expect(store.listAssets('book').map(asset => asset.id)).toEqual([first.assetId, regular.id]);
-  expect(readdirSync(join(dir, 'creations', 'book', 'assets'))).toHaveLength(2);
-  expect(store.readMediaRange('book', 'asset', first.assetId, 0, 100).bytes.toString()).toContain('New title');
+  expect(readdirSync(join(dir, 'creations', 'book', 'assets')).sort()).toEqual([
+    `${first.assetId}.${nextChunk.version}.md`, `${regular.id}.${regular.version}.md`,
+  ].sort());
+  expect(read().bytes.toString()).toContain('New title');
 });
 
 it('reads persisted namespace media after restart without a prior Creation RPC', async () => {

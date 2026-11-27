@@ -14,7 +14,7 @@ vi.mock('../../server/context.js', async () => {
   return Object.assign(state, { pendingFiles: new PendingFileStore() });
 });
 vi.mock('../../server/config.js', () => ({
-  CONFIG: { skipAuth: false, jwtSecret: 'creation-relay-test-secret', jwtExpiresIn: '5m', jwtRenewThresholdMs: 120_000, maxFileSize: 2 * 1024 * 1024, browserRuntime: {}, fileCleanupInterval: 600_000 },
+  CONFIG: { skipAuth: false, jwtSecret: 'creation-relay-test-secret', jwtExpiresIn: '5m', jwtRenewThresholdMs: 120_000, maxFileSize: 50 * 1024 * 1024, browserRuntime: {}, fileCleanupInterval: 600_000 },
   getUserByUsername: username => state.users.get(username),
 }));
 vi.mock('../../server/auth.js', async () => ({ logout: (await import('../../server/auth/token.js')).logout }));
@@ -86,12 +86,12 @@ afterEach(() => {
 });
 const frame = connection => JSON.parse(connection.ws.send.mock.lastCall[0]);
 
-function serveMedia(bytes, mimeType = 'audio/mpeg', filename = 'media.mp3') {
+function serveMedia(bytes, mimeType = 'audio/mpeg', filename = 'media.mp3', version) {
   agent.ws.send.mockImplementation(wire => {
     const pull = JSON.parse(wire);
     const end = Math.min(bytes.length - 1, pull.end);
     void handleAgentCreation(agentId, agent, {
-      ...pull, type: 'creation_media_chunk', mimeType, filename, totalSize: bytes.length, end,
+      ...pull, type: 'creation_media_chunk', mimeType, filename, totalSize: bytes.length, end, version,
       data: bytes.subarray(pull.start, end + 1).toString('base64'),
     });
   });
@@ -302,6 +302,8 @@ describe('Creation upload attachment policy', () => {
     await relay.request(client, msg({ op, payload: { ...payload, files: [] } }));
     expect(frame(client)).toMatchObject({ ok: false, errorCode: 'invalid_request' });
     expect(agent.ws.send).toHaveBeenCalledTimes(1);
+    await relay.response(agentId, agent, { type: 'creation_response', requestId: frame(agent).requestId, ok: true });
+    expect(state.pendingFiles.has(ref.fileId)).toBe(false);
   });
 
   it('requires the session middleware for POST uploads', async () => {
@@ -309,7 +311,7 @@ describe('Creation upload attachment policy', () => {
     await request(app).post('/api/upload').set('test-user', 'alice').expect(400);
   });
 
-  it.each(['response', 'timeout', 'browser disconnect', 'Agent disconnect', 'transport error', 'offline'])('releases the shared per-user upload budget after %s', async exit => {
+  it.each(['success', 'failure', 'timeout', 'browser disconnect', 'Agent disconnect', 'transport error', 'offline'])('releases the in-flight budget after %s and retains staged files unless ingestion succeeded', async exit => {
     vi.useFakeTimers();
     entry = { ...entry, buffer: Buffer.alloc(MAX_CREATION_ATTACHMENT_BYTES) };
     state.pendingFiles.set(ref.fileId, entry);
@@ -327,12 +329,21 @@ describe('Creation upload attachment policy', () => {
       expect(frame(peer)).toMatchObject({ ok: false, errorCode: 'busy' });
       expect(forward).toHaveBeenCalledTimes(1);
       expect(encode).toHaveBeenCalledTimes(2);
-      if (exit === 'response') await relay.response(agentId, agent, {
-        type: 'creation_response', requestId: forward.mock.calls[0][1].requestId, ok: true,
+      const requestId = forward.mock.calls[0][1].requestId;
+      if (['success', 'failure'].includes(exit)) await relay.response(agentId, agent, {
+        type: 'creation_response', requestId, ok: exit === 'success',
       });
-      if (exit === 'timeout') await vi.advanceTimersByTimeAsync(45_000);
+      if (exit === 'timeout') {
+        await vi.advanceTimersByTimeAsync(45_000);
+        expect(frame(client)).toMatchObject({ ok: false, errorCode: 'timeout' });
+        await relay.response(agentId, agent, { type: 'creation_response', requestId, ok: true });
+      }
       if (exit === 'browser disconnect') relay.clearClient(client);
       if (exit === 'Agent disconnect') relay.clearAgent(agentId, agent);
+    }
+    for (const fileId of [ref.fileId, 'upload-two']) {
+      expect(state.pendingFiles.get(fileId)).toBe(exit === 'success' ? undefined : entry);
+      if (exit === 'success') state.pendingFiles.set(fileId, entry);
     }
     await relay.request(peer, large);
     expect(forward).toHaveBeenCalledTimes(2);
@@ -443,6 +454,57 @@ describe('Creation media HTTP streaming', () => {
       expect(full.headers['content-range']).toBeUndefined();
       expect(full.body.equals(fullBytes)).toBe(true);
     }
+  });
+
+  it('aborts on a same-size export regeneration and serves a full body for its old If-Range tag', async () => {
+    const exportUrl = url.replace('media-a', 'export-markdown');
+    const original = Buffer.alloc(CREATION_MEDIA_CHUNK_BYTES + 7, 'a');
+    const regenerated = Buffer.alloc(original.length, 'b');
+    serveMedia(original, 'text/markdown', 'export.md', 'v1');
+    const { headers: { etag } } = await request(app).head(exportUrl).set('test-user', 'alice').expect(200);
+    await get(exportUrl).set('Range', 'bytes=2-4').set('If-Range', etag).expect(206).expect('ETag', etag);
+
+    agent.ws.send.mockClear();
+    agent.ws.send.mockImplementationOnce(agent.ws.send.getMockImplementation());
+    serveMedia(regenerated, 'text/markdown', 'export.md', 'v2');
+    const server = app.listen(0);
+    try {
+      const received = await new Promise((resolve, reject) => {
+        const req = httpRequest({ port: server.address().port, path: exportUrl, headers: { 'test-user': 'alice' } }, res => {
+          const chunks = [];
+          res.on('data', chunk => chunks.push(chunk));
+          res.on('error', error => {
+            if (error.code === 'ECONNRESET' && !res.complete) resolve(Buffer.concat(chunks));
+            else reject(error);
+          });
+          res.on('end', () => reject(new Error('Expected the mixed-version response to abort')));
+        });
+        req.on('error', reject);
+        req.setTimeout(3000, () => req.destroy(new Error('Media response did not abort')));
+        req.end();
+      });
+      expect(received.length).toBeGreaterThan(0);
+      expect(received.length).toBeLessThanOrEqual(CREATION_MEDIA_CHUNK_BYTES);
+      expect(received.equals(original.subarray(0, received.length))).toBe(true);
+    } finally {
+      await new Promise(resolve => server.close(resolve));
+    }
+    expect(agent.ws.send).toHaveBeenCalledTimes(2);
+
+    const response = await get(exportUrl).set('Range', 'bytes=2-4').set('If-Range', etag).expect(200);
+    expect(response.headers.etag).not.toBe(etag);
+    expect(response.headers['content-range']).toBeUndefined();
+    expect(response.body.equals(regenerated)).toBe(true);
+  });
+
+  it('returns 409 if the export version disappears after probing but before writing the requested range', async () => {
+    const exportUrl = url.replace('media-a', 'export-markdown');
+    const original = Buffer.alloc(8192, 'a');
+    serveMedia(original, 'text/markdown', 'export.md', 'v1');
+    agent.ws.send.mockImplementationOnce(agent.ws.send.getMockImplementation());
+    serveMedia(Buffer.alloc(original.length, 'b'), 'text/markdown', 'export.md');
+    const response = await get(exportUrl).set('Range', 'bytes=4096-').expect(409);
+    expect(response.body.toString()).toBe('Creation media changed during transfer');
   });
 
   it('checks the representation prefix on GET, ranged GET and HEAD before serving an inline MIME type', async () => {
@@ -575,6 +637,31 @@ describe('Staged upload intake quota', () => {
     state.pendingFiles.prune(Date.now() + CONFIG.fileCleanupInterval, CONFIG.fileCleanupInterval);
     expect(state.pendingFiles.size).toBe(0);
     await upload('bob', 64).expect(200);
+  });
+
+  it('admits five consecutive 25 MiB Creation imports under a 100 MiB user quota', async () => {
+    const fileSize = MAX_CREATION_ATTACHMENT_BYTES;
+    CONFIG.maxPendingUploadBytesPerUser = 100 * 1024 * 1024;
+    CONFIG.maxPendingUploadBytes = 256 * 1024 * 1024;
+    const forward = vi.fn(async () => true);
+    relay = createCreationRelay({ forward });
+
+    for (let i = 0; i < 5; i++) {
+      const { body: { files: [{ fileId }] } } = await upload('alice', fileSize).expect(200);
+      const entry = state.pendingFiles.get(fileId);
+      expect(entry.buffer.length).toBe(fileSize);
+      // The staged bytes and intake quota are real; avoid creating large base64 frames for the mock Agent.
+      const encode = vi.spyOn(entry.buffer, 'toString').mockReturnValue('encoded');
+      await relay.request(client, msg({ op: 'add_sources', payload: { attachments: [{ fileId }] } }));
+      encode.mockRestore();
+      const { requestId } = forward.mock.lastCall[1];
+      await relay.response(agentId, agent, { type: 'creation_response', requestId, ok: true });
+      expect(frame(client)).toMatchObject({ ok: true });
+      expect(state.pendingFiles.has(fileId)).toBe(false);
+      expect(state.pendingFiles.available('user-a', CONFIG.maxPendingUploadBytesPerUser, CONFIG.maxPendingUploadBytes))
+        .toBe(CONFIG.maxPendingUploadBytesPerUser);
+    }
+    expect(forward).toHaveBeenCalledTimes(5);
   });
 
   it('releases all prior parts when a later file exceeds the budget', async () => {

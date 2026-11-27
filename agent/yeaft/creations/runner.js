@@ -76,6 +76,7 @@ export class CreationRunner {
     task.done.catch(() => {});
     return task.done;
   }
+  hasActiveWork() { return this.active.size > 0; }
   waitForRun(runId) { return this.active.get(safeId(runId))?.done ?? Promise.resolve(); }
   #assertOpen() { if (this.closed) fail('INVALID_STATE', 'Creations runner is closed'); }
   #assertActive(run, signal) {

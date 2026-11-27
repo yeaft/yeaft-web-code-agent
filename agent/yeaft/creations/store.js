@@ -7,7 +7,7 @@ import {
   CREATION_KINDS, MODALITIES, MODALITY_BY_KIND, CREATION_STATUSES, CANON_TYPES, NODE_STATUSES, PROPOSAL_STATUSES, RUN_STATUSES,
   LIMITS, boundedText, decodeBase64, defaultCelestialPlacement, fail, safeId,
 } from './constants.js';
-import { parseSource, searchTerms } from './source-parser.js';
+import { parseSource, searchTerms, sniffSourceMimeType } from './source-parser.js';
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS creations (id TEXT PRIMARY KEY, updated_at TEXT NOT NULL, data TEXT NOT NULL);
@@ -120,20 +120,19 @@ function validAsset(ext, bytes) {
     case 'md': case 'json': return true; // UTF-8 export buffers, always downloaded.
     case 'svg': return /^\s*(?:<\?xml[^>]*>\s*)?<svg(?:\s|>)/i.test(bytes.toString('utf8'));
     case 'html': return /^\s*(?:<!doctype\s+html\b|<[a-z][\w-]*(?:\s|>))/i.test(bytes.toString('utf8'));
-    case 'png': return bytes.subarray(0, 8).equals(Buffer.from('89504e470d0a1a0a', 'hex'));
-    case 'jpg': case 'jpeg': return bytes.subarray(0, 3).equals(Buffer.from('ffd8ff', 'hex'));
-    case 'gif': return /^GIF8[79]a$/.test(bytes.subarray(0, 6).toString());
-    case 'webp': return bytes.subarray(0, 4).toString() === 'RIFF' && bytes.subarray(8, 12).toString() === 'WEBP';
+    case 'png': case 'jpg': case 'jpeg': case 'gif': case 'webp': return sniffSourceMimeType(bytes) === ASSET_TYPES[ext];
     default: return false;
   }
 }
 
 export class CreationStore {
-  constructor({ yeaftDir, storageRoot, namespaceKey, namespaceBinding }) {
+  constructor({ yeaftDir, storageRoot, namespaceKey, namespaceBinding, readOnly = false }) {
     if (!yeaftDir) fail('INVALID_REQUEST', 'Missing Agent data directory');
-    fs.mkdirSync(yeaftDir, { recursive: true, mode: 0o700 });
+    if (readOnly && storageRoot == null && !fs.existsSync(yeaftDir)) notFound('Creations storage');
+    if (!readOnly) fs.mkdirSync(yeaftDir, { recursive: true, mode: 0o700 });
     const base = storageRoot == null ? join(fs.realpathSync(yeaftDir), 'creations') : resolve(storageRoot);
-    fs.mkdirSync(base, { recursive: true, mode: 0o700 });
+    if (readOnly && !fs.lstatSync(base, { throwIfNoEntry: false })) notFound('Creations storage');
+    if (!readOnly) fs.mkdirSync(base, { recursive: true, mode: 0o700 });
     if (fs.realpathSync(base) !== base) fail('INVALID_PATH', 'Invalid Creations storage directory');
     const root = namespaceKey == null ? base : join(base, `ns-${safeId(namespaceKey)}`);
     if (namespaceKey != null || namespaceBinding != null) {
@@ -142,11 +141,13 @@ export class CreationStore {
         || createHash('sha256').update(`${serverUrl}\0${agentId}\0${ownerId}`).digest('hex').slice(0, 24) !== namespaceKey) {
         fail('INVALID_REQUEST', 'Invalid Creations namespace binding');
       }
-      fs.mkdirSync(root, { recursive: true, mode: 0o700 });
+      if (readOnly && !fs.lstatSync(root, { throwIfNoEntry: false })) notFound('Creations namespace');
+      if (!readOnly) fs.mkdirSync(root, { recursive: true, mode: 0o700 });
       if (fs.realpathSync(root) !== root) fail('INVALID_PATH', 'Invalid Creations namespace directory');
       const marker = join(root, '.namespace.json');
       const binding = { serverUrl, agentId, ownerId };
       if (!fs.lstatSync(marker, { throwIfNoEntry: false })) {
+        if (readOnly) fail('INVALID_PATH', 'Creations namespace is missing its binding');
         if (fs.readdirSync(root).length) fail('INVALID_PATH', 'Creations namespace is missing its binding');
         try { fs.writeFileSync(marker, json(binding), { flag: 'wx', mode: 0o600 }); }
         catch (error) { if (error.code !== 'EEXIST') throw error; }
@@ -164,11 +165,15 @@ export class CreationStore {
     for (const path of [this.dbPath, `${this.dbPath}-wal`, `${this.dbPath}-shm`]) {
       const stat = fs.lstatSync(path, { throwIfNoEntry: false });
       if (stat && !stat.isFile()) fail('INVALID_PATH', 'Invalid Creations database path');
+      if (readOnly && path === this.dbPath && !stat) notFound('Creations database');
     }
-    this.db = new DatabaseSync(this.dbPath);
+    this.db = new DatabaseSync(this.dbPath, { readOnly });
     try {
-      this.db.exec('PRAGMA busy_timeout=5000; PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;');
-      this.transaction(() => this.db.exec(SCHEMA));
+      this.db.exec('PRAGMA busy_timeout=5000; PRAGMA foreign_keys=ON;');
+      if (!readOnly) {
+        this.db.exec('PRAGMA journal_mode=WAL;');
+        this.transaction(() => this.db.exec(SCHEMA));
+      }
     } catch (error) { this.db.close(); throw error; }
   }
 
@@ -354,9 +359,11 @@ export class CreationStore {
         total += bytes.length;
         if (total > LIMITS.sourceBatchBytes) fail('LIMIT_EXCEEDED', 'Source batch is too large');
         const parsed = parseSource(bytes, { name, mimeType });
+        const { detectedMimeType } = parsed;
         this.#write(this.#path(id, 'sources', sourceId, 'original'), bytes);
         this.#write(this.#path(id, 'sources', sourceId, 'parsed.json'), json(parsed));
-        const record = { id: sourceId, creationId: id, name, mimeType, byteLength: bytes.length,
+        const record = { id: sourceId, creationId: id, name, mimeType, detectedMimeType,
+          playableVideo: detectedMimeType === 'video/mp4' || detectedMimeType === 'video/webm', byteLength: bytes.length,
           kind: parsed.kind, summary: parsed.summary, chunkCount: parsed.chunks.length, truncated: parsed.truncated, createdAt: now() };
         this.run('INSERT INTO creation_sources VALUES (?,?,?)', id, sourceId, json(record));
         return record;
@@ -863,6 +870,15 @@ export class CreationStore {
       .map(row => this.interruptRun(data(row))));
   }
 
+  #assetPath(id, record) {
+    if (!own(ASSET_TYPES, record.ext)) fail('INVALID_PATH', 'Invalid stored asset type');
+    const assetId = safeId(record.id);
+    if (record.file == null) return this.#path(id, 'assets', `${safeId(record.fileId ?? assetId)}.${record.ext}`);
+    const file = `${assetId}.${safeId(record.version)}.${record.ext}`;
+    if (record.file !== file) fail('INVALID_PATH', 'Invalid stored asset filename');
+    return this.#path(id, 'assets', file);
+  }
+
   saveAsset(id, input, { exportFile = false } = {}) {
     return this.transaction(() => {
       this.#creation(id);
@@ -882,26 +898,26 @@ export class CreationStore {
       const asset = { id: assetId, creationId: id, ext, ...(exportFile ? { name: `${id}.${ext}` } : {}), mimeType: ASSET_TYPES[ext], byteLength: bytes.length,
         // Active formats must be served as downloads or inside a sandbox by the relay/UI.
         disposition: (isExportType || ['html', 'svg'].includes(ext)) ? 'attachment' : 'inline', createdAt: now() };
+      const version = randomUUID();
+      const record = { ...asset, version, file: `${assetId}.${version}.${ext}` };
+      // Stage immutable bytes before publishing the new record. Rollback keeps the old export readable.
+      this.#write(this.#assetPath(id, record), bytes);
       if (exportFile) {
-        // Stage a new file before switching the stable asset ID to it. A failed
-        // transaction leaves the old export readable rather than replacing its bytes.
         const previous = data(this.one('SELECT data FROM creation_assets WHERE creation_id=? AND id=?', id, assetId));
-        const fileId = randomUUID();
-        this.#write(this.#path(id, 'assets', `${fileId}.${ext}`), bytes);
+        const previousPath = previous ? this.#assetPath(id, previous) : null;
         this.run(`INSERT INTO creation_assets VALUES (?,?,?) ON CONFLICT(creation_id,id) DO UPDATE SET data=excluded.data`,
-          id, assetId, json({ ...asset, fileId }));
-        if (previous) this.tx.afterCommit.push(() => this.#remove(this.#path(id, 'assets', `${safeId(previous.fileId ?? assetId)}.${ext}`)));
+          id, assetId, json(record));
+        if (previousPath) this.tx.afterCommit.push(() => this.#remove(previousPath));
       } else {
-        this.#write(this.#path(id, 'assets', `${assetId}.${ext}`), bytes);
-        this.run('INSERT INTO creation_assets VALUES (?,?,?)', id, assetId, json(asset));
+        this.run('INSERT INTO creation_assets VALUES (?,?,?)', id, assetId, json(record));
       }
       this.#touch(id);
-      return asset;
+      return { ...asset, version };
     });
   }
   listAssets(id) {
     return this.all('SELECT data FROM creation_assets WHERE creation_id=? ORDER BY rowid', safeId(id))
-      .map(row => { const { fileId, ...asset } = data(row); return asset; });
+      .map(row => { const { fileId, file, ...asset } = data(row); return asset; });
   }
   readMediaRange(id, mediaKind, mediaId, start = 0, end = undefined) {
     this.#creation(id);
@@ -910,8 +926,7 @@ export class CreationStore {
     let path;
     if (mediaKind === 'asset' || mediaKind === 'assets') {
       record = data(this.one('SELECT data FROM creation_assets WHERE creation_id=? AND id=?', id, mediaId)) ?? notFound('Asset');
-      if (!own(ASSET_TYPES, record.ext)) fail('INVALID_PATH', 'Invalid stored asset type');
-      path = this.#path(id, 'assets', `${safeId(record.fileId ?? mediaId)}.${record.ext}`);
+      path = this.#assetPath(id, record);
     } else if (mediaKind === 'source' || mediaKind === 'sources') {
       record = data(this.one('SELECT data FROM creation_sources WHERE creation_id=? AND id=?', id, mediaId)) ?? notFound('Source');
       path = this.#path(id, 'sources', mediaId, 'original');
@@ -933,6 +948,7 @@ export class CreationStore {
       }
       const safeInline = /^(?:image\/(?:png|jpeg|gif|webp)|audio\/(?:mpeg|wav|ogg|mp4)|video\/(?:mp4|webm|ogg))$/.test(record.mimeType);
       return { bytes, start, end: start + offset - 1, totalSize: size, mimeType: record.mimeType,
+        version: record.version ?? record.sha256 ?? record.updatedAt ?? record.createdAt,
         filename: (record.name ?? `${record.id}.${record.ext}`).slice(0, 255).toWellFormed(),
         disposition: record.disposition ?? (safeInline ? 'inline' : 'attachment') };
     } finally { fs.closeSync(fd); }

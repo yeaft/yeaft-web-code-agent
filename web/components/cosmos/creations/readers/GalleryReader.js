@@ -66,7 +66,7 @@ export default {
       gallery: parseGalleryContent(this.content),
       editing: false,
       dirty: false,
-      editBaseRevId: this.loadedRevId ?? this.node?.currentRevId ?? null,
+      editBaseRevId: this.contentLoaded ? this.loadedRevId : (this.loadedRevId ?? this.node?.currentRevId ?? null),
       conflictError: '',
       saveError: '',
       lightboxIndex: -1,
@@ -87,14 +87,15 @@ export default {
     content(newVal) {
       if (!this.dirty) {
         this.gallery = parseGalleryContent(newVal);
-        this.editBaseRevId = this.loadedRevId ?? this.node?.currentRevId ?? null;
+        this.editBaseRevId = this.contentLoaded ? this.loadedRevId : (this.loadedRevId ?? this.node?.currentRevId ?? null);
       }
     },
-    'node.id'() {
+    'node.id'(newId, oldId) {
+      if (oldId) this.syncStoreDirty(false, oldId);
       this.gallery = parseGalleryContent(this.content);
       this.dirty = false;
       this.editing = false;
-      this.editBaseRevId = this.loadedRevId ?? this.node?.currentRevId ?? null;
+      this.editBaseRevId = this.contentLoaded ? this.loadedRevId : (this.loadedRevId ?? this.node?.currentRevId ?? null);
       this.conflictError = '';
       this.saveError = '';
       this.lightboxIndex = -1;
@@ -105,9 +106,15 @@ export default {
     window.addEventListener('keydown', this.onKeyDown);
   },
   beforeUnmount() {
+    this.syncStoreDirty(false);
     window.removeEventListener('keydown', this.onKeyDown);
   },
   methods: {
+    syncStoreDirty(isDirty, nodeId = this.node?.id) {
+      if (this.agentId && this.creationId && nodeId) {
+        this.creationsStore.setNodeDirty(this.agentId, this.creationId, nodeId, isDirty);
+      }
+    },
     frameImageUrl(frame) {
       if (!frame) return '';
       if (frame.assetId) {
@@ -122,12 +129,18 @@ export default {
       if (!this.editing) {
         if (!this.contentLoaded) return;
         if (!this.dirty) {
-          this.editBaseRevId = this.loadedRevId ?? this.node?.currentRevId ?? null;
+          this.editBaseRevId = this.loadedRevId;
           this.conflictError = '';
           this.saveError = '';
         }
+        this.editing = true;
+        this.syncStoreDirty(true);
+        return;
       }
-      this.editing = !this.editing;
+      this.editing = false;
+      if (!this.dirty) {
+        this.syncStoreDirty(false);
+      }
     },
     openLightbox(idx) {
       this.lightboxIndex = idx;
@@ -161,9 +174,10 @@ export default {
     markDirty() {
       if (!this.contentLoaded) return;
       if (!this.dirty) {
-        this.editBaseRevId = this.loadedRevId ?? this.node?.currentRevId ?? null;
+        this.editBaseRevId = this.loadedRevId;
       }
       this.dirty = true;
+      this.syncStoreDirty(true);
     },
     addEmptyFrame() {
       if (!this.contentLoaded) return;
@@ -226,8 +240,9 @@ export default {
             this.conflictError = this.$t('creation.interior.conflictDesc');
             return false;
           }
-          this.editBaseRevId = res?.node?.currentRevId ?? this.node?.currentRevId ?? this.editBaseRevId;
+          this.editBaseRevId = res?.node?.currentRevId ?? this.loadedRevId ?? this.editBaseRevId;
           this.dirty = false;
+          this.syncStoreDirty(false, payload.nodeId);
           return true;
         } catch (err) {
           if (err?.errorCode === 'revision_conflict') {
@@ -240,6 +255,7 @@ export default {
       }
       this.$emit('save-content', payload);
       this.dirty = false;
+      this.syncStoreDirty(false, payload.nodeId);
       return true;
     },
     requestAiRedraw(frame, idx) {

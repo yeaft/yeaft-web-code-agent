@@ -96,6 +96,12 @@ export async function streamWorkbenchVideo(req, res, video) {
   }
 }
 
+function computeCreationMediaEtag(mediaKind, mediaId, totalSize, version) {
+  const identity = [mediaKind, mediaId, totalSize];
+  if (version !== null) identity.push(version);
+  return `"${createHash('sha256').update(JSON.stringify(identity)).digest('hex')}"`;
+}
+
 async function streamCreationMedia(req, res) {
   const controller = new AbortController();
   const abort = () => controller.abort();
@@ -118,9 +124,10 @@ async function streamCreationMedia(req, res) {
     const probeSize = req.method === 'HEAD' || req.headers.range ? CREATION_MEDIA_SNIFF_BYTES : CREATION_MEDIA_CHUNK_BYTES;
     const first = await transfer.read(0, probeSize - 1);
     const { totalSize, mimeType, filename } = first;
-    // Creation media IDs identify immutable blobs; replacements get new IDs.
+    // Exports reuse their media ID across regenerations; pin to the version from the probe.
+    const expectedVersion = first.version ?? null;
     const { mediaKind, mediaId } = req.params;
-    const etag = `"${createHash('sha256').update(JSON.stringify([mediaKind, mediaId, totalSize])).digest('hex')}"`;
+    const etag = computeCreationMediaEtag(mediaKind, mediaId, totalSize, expectedVersion);
     res.setHeader('ETag', etag);
     // If-Range requires a strong match. We don't publish Last-Modified, so
     // dates, weak tags and unknown validators all fall back to a full body.
@@ -151,7 +158,8 @@ async function streamCreationMedia(req, res) {
       const buffered = start <= first.end;
       const end = Math.min(range.end, buffered ? first.end : start + Math.min(range.end - start, CREATION_MEDIA_CHUNK_BYTES - 1));
       const chunk = buffered ? first : await transfer.read(start, end);
-      if (chunk.totalSize !== totalSize || chunk.mimeType !== mimeType || chunk.filename !== filename || chunk.end < end) {
+      if ((chunk.version ?? null) !== expectedVersion || chunk.totalSize !== totalSize
+          || chunk.mimeType !== mimeType || chunk.filename !== filename || chunk.end < end) {
         throw Object.assign(new Error('Creation media changed during transfer'), { status: 409 });
       }
       if (controller.signal.aborted) return;

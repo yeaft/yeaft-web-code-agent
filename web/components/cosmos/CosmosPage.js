@@ -469,7 +469,16 @@ export default {
       />
 
       <!-- L3 Full-Screen Creation Interior (Read Mode & Co-Creation Studio) -->
-      <CreationInteriorModal v-if="creationsStore.activeCreation" />
+      <CreationInteriorModal
+        v-if="creationsStore.activeCreation"
+        :signal-count="signalStream.badgeCount"
+        :signal-waiting-count="signalStream.waitingCount"
+        :signal-running-count="signalStream.runningCount"
+        :signal-open="signalPopoverOpen"
+        :signal-label="signalTriggerLabel"
+        @toggle-signal="onToggleSignalTrigger"
+        @close-signal="closeSignalPopover({ restoreFocus: false })"
+      />
 
       <!-- Black Hole Horizon Minimal Whisper Dock -->
       <div v-if="currentBand === 'horizon'" class="cosmos-corner-dock" @pointerdown.stop>
@@ -1885,7 +1894,7 @@ export default {
     function onDocClick(e) {
       if (emptyPlanetMenu.value && !e.target.closest('.cosmos-context-menu')) emptyPlanetMenu.value = null;
       if (constantsOpen.value && !e.target.closest('.cosmos-constants-popover, .cosmos-corner-actions')) constantsOpen.value = false;
-      if (signalPopoverOpen.value && !e.target.closest('.cosmos-signal-popover, .cosmos-corner-actions')) signalPopoverOpen.value = false;
+      if (signalPopoverOpen.value && !e.target.closest('.cosmos-signal-popover, .cosmos-corner-actions, .creation-signal-trigger')) signalPopoverOpen.value = false;
     }
 
     function planetTagClass(id) {
