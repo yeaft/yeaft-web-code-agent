@@ -482,7 +482,7 @@ export default {
         v-if="quickAgent && !drawerOpen && currentBand === 'solar' && voyageSystemId === 'sol' && !voyageSoaring && !voyageWarpingToId"
         :agent="quickAgent"
         :planet-id="assignments.agentToPlanet[quickAgent.id] || 'earth'"
-        @close="quickAgentId = null"
+        @close="closeQuickComposer()"
         @open-conversation="openAgentConversationFromQuick"
         @open-search="openCosmosSessionSearch($event?.agentId)"
         @routed="onAutoRouted"
@@ -503,7 +503,7 @@ export default {
         :max-drawer-width="drawerMaxWidth"
         :viewport-width="viewportWidth"
         :resizing="drawerResizing"
-        @close="closeDrawer"
+        @close="closeDrawer()"
         @select-session="onDrawerSelectSession"
         @open-quick-composer="openQuickComposerFromDrawer"
         @open-session-settings="openSessionSettings"
@@ -1442,8 +1442,8 @@ export default {
         } else {
           // Single click on planet -> Center camera on planet + open Quick Auto-Route Composer
           hideHoverImmediate();
+          if (drawerOpen.value) closeDrawer({ returnToSun: false });
           focusPlanet(drag.fromPlanetId);
-          if (drawerOpen.value) closeDrawer();
           quickAgentId.value = drag.agentId;
         }
         return;
@@ -1462,7 +1462,7 @@ export default {
               const act = focusCosmicEventByUid(eventSim, hitEv.uid);
               hideHoverImmediate();
               quickAgentId.value = null;
-              if (drawerOpen.value) closeDrawer();
+              if (drawerOpen.value) closeDrawer({ returnToSun: false });
               syncEventRefs();
               if (act) showToast(formatEventLocationToast(act));
               return;
@@ -1485,20 +1485,16 @@ export default {
               const hitR = pos.r * (p.bodyType === 6 ? 1.55 : 1.08);
               if (Math.hypot(clickX - pos.x, clickY - pos.y) <= hitR) {
                 if (anim.planetFocus.planetId !== p.id) {
+                  const ag = activeSys.isHome ? agentsByPlanet.value[p.id] : null;
+                  if (ag && drawerOpen.value) closeDrawer({ returnToSun: false });
                   focusPlanet(p.id);
-                  if (activeSys.isHome) {
-                    const ag = agentsByPlanet.value[p.id];
-                    if (ag) {
-                      if (drawerOpen.value) closeDrawer();
-                      quickAgentId.value = ag.id;
-                    }
-                  }
+                  if (ag) quickAgentId.value = ag.id;
                 }
                 return;
               }
             }
           }
-          if (quickAgentId.value) quickAgentId.value = null;
+          if (quickAgentId.value) closeQuickComposer();
           if (drawerOpen.value) closeDrawer();
         }
       }
@@ -1726,17 +1722,23 @@ export default {
       workbenchWidened.value = true;
     }
 
-    function closeDrawer() {
+    function closeQuickComposer({ returnToSun = true } = {}) {
+      quickAgentId.value = null;
+      if (returnToSun) unfocusPlanet();
+    }
+
+    function closeDrawer({ returnToSun = true } = {}) {
       drawerResizing.value = false;
       drawerOpen.value = false;
       drawerAgentId.value = null;
       workbenchWidened.value = false;
       collapseOpenWorkbench();
+      if (returnToSun) unfocusPlanet();
     }
 
     function openQuickComposerFromDrawer(agentId) {
       const targetId = agentId || drawerAgentId.value || null;
-      closeDrawer();
+      closeDrawer({ returnToSun: false });
       if (targetId) quickAgentId.value = targetId;
     }
 
@@ -2024,7 +2026,7 @@ export default {
         return;
       }
       if (drawerOpen.value) { closeDrawer(); return; }
-      if (quickAgentId.value) { quickAgentId.value = null; return; }
+      if (quickAgentId.value) { closeQuickComposer(); return; }
       if (anim.planetFocus.planetId) { unfocusPlanet(); return; }
       if (voyage.soaring) { onToggleSoar(false); return; }
       if (voyage.systemId !== 'sol') { onReturnToSol(); return; }
@@ -2288,7 +2290,7 @@ export default {
       planetTagClass, planetPipClass,
       onCanvasPointerDown, resetCamera, onPlanetPointerDown, onPlanetEnter, onPlanetLeave,
       onHoverCardEnter, onHoverCardLeave, onStageWheel, jumpToScale,
-      openSessionInDrawer, openAgentConversationFromQuick, openCosmosSessionSearch, onDrawerSelectSession, toggleWorkbenchWiden, closeDrawer,
+      openSessionInDrawer, openAgentConversationFromQuick, openCosmosSessionSearch, onDrawerSelectSession, toggleWorkbenchWiden, closeQuickComposer, closeDrawer,
       onToggleConstants, onToggleSignalTrigger, closeSignalPopover, onOpenSignal, onDismissSignal, onMarkAllSignalsRead,
       openQuickComposerFromDrawer, onDrawerResizeStart, onDrawerResize, onDrawerResizeEnd, onDrawerResizeReset,
       emitTelemetryBeam, onAutoRouted, jumpToWaitingAgent, assignFromMenu,
