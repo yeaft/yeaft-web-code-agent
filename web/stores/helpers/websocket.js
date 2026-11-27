@@ -22,6 +22,7 @@ function clearSidebarSessionCatalog(store) {
   store.scheduledTaskReceiptProtocolSupported = false;
   store.yeaftUnreadSessionKeys = {};
   store.yeaftSessionReplyPreviewByKey = {};
+  store.cosmosDismissedSignalsByKey = {};
 }
 
 const CONNECT_TIMEOUT_MS = 15_000;

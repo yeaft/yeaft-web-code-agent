@@ -48,6 +48,32 @@ export default {
       @pointerdown.stop
       @wheel.stop
     >
+      <!-- Pinned Top Deck Bar when Expanded (keeps Collapse & Mark-All-Read anchored right under the trigger) -->
+      <div v-if="expanded" class="cosmos-signal-deck-head">
+        <span class="cosmos-signal-deck-label">
+          <span>{{ $t('cosmos.signals.title') }}</span>
+          <span class="cosmos-signal-deck-num">{{ items.length }}</span>
+        </span>
+        <span class="cosmos-signal-deck-actions">
+          <button
+            v-if="unreadCount > 0"
+            type="button"
+            class="cosmos-signal-foot-btn is-mark-all"
+            @click="$emit('mark-all-read')"
+          >{{ $t('cosmos.signals.markAllRead') }}</button>
+          <span v-if="unreadCount > 0" class="cosmos-signal-deck-div" aria-hidden="true"></span>
+          <button
+            type="button"
+            class="cosmos-signal-foot-btn is-toggle"
+            aria-expanded="true"
+            @click="expanded = false"
+          >
+            <span>{{ $t('cosmos.signals.collapse') }}</span>
+            <svg class="cosmos-signal-chev is-open" viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
+          </button>
+        </span>
+      </div>
+
       <TransitionGroup name="cosmos-sig" tag="div" class="cosmos-signal-stack">
         <article
           v-for="item in visibleFloatingItems"
@@ -97,36 +123,43 @@ export default {
           </button>
 
           <button
-            v-if="item.dismissible"
+            v-if="item.dismissible !== false"
             type="button"
             class="cosmos-signal-ack"
-            :title="$t('cosmos.signals.markRead')"
-            :aria-label="$t('cosmos.signals.markRead')"
-            @click.stop="$emit('dismiss-signal', item)"
+            :title="dismissTitle(item)"
+            :aria-label="dismissTitle(item)"
+            @click.stop="onDismissClick($event, item)"
           >
-            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12.5 4.5 4.5L19 7.5"/></svg>
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6.5 6.5 17.5 17.5M17.5 6.5 6.5 17.5"/></svg>
           </button>
         </article>
       </TransitionGroup>
 
-      <!-- Subtle Overflow & Mark-All-Read Footer Bar -->
-      <div v-if="showFooterBar" class="cosmos-signal-footer">
+      <!-- Collapsed Overflow: Tactile Stacked-Card Peek Strip tucked beneath card #3 -->
+      <div v-if="!expanded && hiddenCount > 0" class="cosmos-signal-deck-peek">
         <button
-          v-if="hiddenCount > 0 || expanded"
           type="button"
-          class="cosmos-signal-foot-btn"
-          :aria-expanded="expanded ? 'true' : 'false'"
-          @click="expanded = !expanded"
+          class="cosmos-signal-foot-btn is-peek-expand"
+          aria-expanded="false"
+          @click="expanded = true"
         >
-          <span>{{ expanded ? $t('cosmos.signals.collapse') : $t('cosmos.signals.more', { count: hiddenCount }) }}</span>
-          <svg class="cosmos-signal-chev" :class="{ 'is-open': expanded }" viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
+          <span>{{ $t('cosmos.signals.more', { count: hiddenCount }) }}</span>
+          <svg class="cosmos-signal-chev" viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
         </button>
-        <span v-else class="cosmos-signal-foot-spacer"></span>
-
+        <span v-if="unreadCount > 0" class="cosmos-signal-deck-div" aria-hidden="true"></span>
         <button
-          v-if="dismissibleCount > 0"
+          v-if="unreadCount > 0"
           type="button"
           class="cosmos-signal-foot-btn is-mark-all"
+          @click="$emit('mark-all-read')"
+        >{{ $t('cosmos.signals.markAllRead') }}</button>
+      </div>
+
+      <!-- Quiet Bare Typographic Action when <= 3 cards and multiple unread -->
+      <div v-else-if="!expanded && unreadCount >= 2" class="cosmos-signal-quiet-row">
+        <button
+          type="button"
+          class="cosmos-signal-foot-btn is-mark-all is-bare"
           @click="$emit('mark-all-read')"
         >{{ $t('cosmos.signals.markAllRead') }}</button>
       </div>
@@ -185,7 +218,7 @@ export default {
         </div>
         <div class="cosmos-signal-pop-actions">
           <button
-            v-if="dismissibleCount > 0"
+            v-if="unreadCount > 0"
             type="button"
             class="cosmos-signal-foot-btn is-mark-all"
             @click="$emit('mark-all-read')"
@@ -255,20 +288,20 @@ export default {
           </button>
 
           <button
-            v-if="item.dismissible"
+            v-if="item.dismissible !== false"
             type="button"
             class="cosmos-signal-ack"
-            :title="$t('cosmos.signals.markRead')"
-            :aria-label="$t('cosmos.signals.markRead')"
-            @click.stop="$emit('dismiss-signal', item)"
+            :title="dismissTitle(item)"
+            :aria-label="dismissTitle(item)"
+            @click.stop="onDismissClick($event, item)"
           >
-            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12.5 4.5 4.5L19 7.5"/></svg>
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6.5 6.5 17.5 17.5M17.5 6.5 6.5 17.5"/></svg>
           </button>
         </article>
       </div>
     </section>
   `,
-  setup(props) {
+  setup(props, { emit }) {
     const { proxy } = Vue.getCurrentInstance();
     const $t = (k, p) => (proxy?.$t ? proxy.$t(k, p) : k);
 
@@ -295,12 +328,6 @@ export default {
     ));
 
     const hiddenCount = Vue.computed(() => Math.max(0, props.items.length - MAX_FLOATING_CARDS));
-
-    const showFooterBar = Vue.computed(() => (
-      hiddenCount.value > 0
-      || expanded.value
-      || props.dismissibleCount >= 2
-    ));
 
     const mobileBannerItem = Vue.computed(() => (
       props.items.find((item) => item.kind === 'waiting' || item.kind === 'unread') || null
@@ -345,6 +372,25 @@ export default {
       if (open) expanded.value = false;
     });
 
+    function dismissTitle(item) {
+      return item?.kind === 'unread'
+        ? $t('cosmos.signals.dismissUnread')
+        : $t('cosmos.signals.dismissItem');
+    }
+
+    function onDismissClick(e, item) {
+      const container = e?.currentTarget?.closest?.('.cosmos-signal-popover, .cosmos-signal-stream') || null;
+      const keyboardTriggered = e?.detail === 0;
+      emit('dismiss-signal', item);
+      if (keyboardTriggered && container) {
+        Vue.nextTick(() => {
+          const nextFocus = container.querySelector('.cosmos-signal-card .cosmos-signal-main')
+            || container.querySelector('.cosmos-signal-pop-close');
+          nextFocus?.focus?.();
+        });
+      }
+    }
+
     function dismissMobileBanner() {
       dismissedBannerSignature.value = mobileBannerSignature.value;
     }
@@ -363,9 +409,10 @@ export default {
       showFreeFloatingStream,
       visibleFloatingItems,
       hiddenCount,
-      showFooterBar,
       mobileBannerItem,
       showMobileBanner,
+      dismissTitle,
+      onDismissClick,
       dismissMobileBanner,
       scheduledTooltip,
     };

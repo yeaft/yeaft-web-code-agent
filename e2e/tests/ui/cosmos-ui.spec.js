@@ -249,9 +249,21 @@ test.describe('Yeaft Cosmos UI', () => {
     await expect(signalStreamEl).toBeVisible();
     await expect(signalCards).toHaveCount(1);
     await expect(signalCards.nth(0)).toHaveClass(/is-running/);
-    // Simulate Earth's background turn completing while drawer is closed (real handleYeaftOutput vp_turn_end):
-    // verifies it does NOT vanish, instead evolves in-place into an unread 2~3 line reply card.
     const earthSignalKeyBefore = await signalCards.nth(0).getAttribute('data-signal-key');
+    // Dismiss the running card via × -> stays hidden across streaming preview updates until state changes
+    await signalCards.nth(0).locator('.cosmos-signal-ack').click();
+    await expect(signalStreamEl).toHaveCount(0);
+    await page.evaluate((agentId) => {
+      const chat = window.Pinia.useChatStore();
+      chat.recordYeaftSessionPreview('sess-earth-1', agentId, {
+        text: 'Streaming shader pass 2/4…',
+        at: Date.now(),
+      });
+    }, mockAgent.agentId);
+    await expect(signalStreamEl).toHaveCount(0);
+
+    // Simulate Earth's background turn completing while drawer is closed (real handleYeaftOutput vp_turn_end):
+    // state change (running -> unread) immediately resurfaces the card with its final 2~3 line reply.
     await page.evaluate((agentId) => {
       const chat = window.Pinia.useChatStore();
       chat.handleYeaftOutput({
@@ -263,11 +275,41 @@ test.describe('Yeaft Cosmos UI', () => {
       chat.yeaftSessionTurnsBySession[`${agentId}\u001fsess-earth-1`].turns = [];
       chat.yeaftProcessingSessions = {};
     }, mockAgent.agentId);
+    await expect(signalStreamEl).toBeVisible();
     await expect(signalCards).toHaveCount(1);
     await expect(signalCards.nth(0)).toHaveAttribute('data-signal-key', earthSignalKeyBefore);
     await expect(signalCards.nth(0)).toHaveClass(/is-unread/);
     await expect(signalCards.nth(0)).toContainText('Procedural textures and ray-traced lighting');
     await expect(page.locator('.cosmos-signal-trigger .cosmos-signal-trigger-count')).toHaveText('1');
+
+    // Dismissing a waiting (AskUser) card hides it until a new AskUser / state change arrives
+    await page.evaluate((agentId) => {
+      const chat = window.Pinia.useChatStore();
+      chat.recordYeaftSessionPreview('sess-earth-1', agentId, {
+        askQuestion: 'Approve orbital deployment?',
+        askRequestId: 'e2e-ask-1',
+        askTurnId: 'turn-ask-1',
+        at: Date.now(),
+      });
+    }, mockAgent.agentId);
+    await expect(signalCards.nth(0)).toHaveClass(/is-waiting/);
+    await signalCards.nth(0).locator('.cosmos-signal-ack').click();
+    await expect(signalStreamEl).toHaveCount(0);
+    await page.evaluate((agentId) => {
+      const chat = window.Pinia.useChatStore();
+      chat.recordYeaftSessionPreview('sess-earth-1', agentId, {
+        askQuestion: 'Approve orbital deployment?',
+        askRequestId: 'e2e-ask-2',
+        askTurnId: 'turn-ask-2',
+        at: Date.now() + 1000,
+      });
+    }, mockAgent.agentId);
+    await expect(signalStreamEl).toBeVisible();
+    await expect(signalCards.nth(0)).toHaveClass(/is-waiting/);
+    await page.evaluate((agentId) => {
+      const chat = window.Pinia.useChatStore();
+      chat.recordYeaftSessionPreview('sess-earth-1', agentId, { clearAsk: true, askRequestId: 'e2e-ask-2' });
+    }, mockAgent.agentId);
     // Re-arm running state for subsequent Drawer Session Status & auto-route checks
     await page.evaluate((agentId) => {
       const chat = window.Pinia.useChatStore();

@@ -31,12 +31,41 @@ function scheduledStatusText(notice, t) {
 }
 
 /**
+ * Stable state fingerprint used to keep a user-dismissed signal hidden until
+ * a genuine state change occurs (status change, new AskUser prompt, new
+ * completion/reply, or new scheduled-task run), while ignoring routine
+ * streaming deltas and relative-time clock ticks.
+ */
+export function computeSignalStateSignature(item) {
+  if (!item || !item.kind) return '';
+  const schedToken = item.scheduledTask
+    ? `${item.scheduledTask.id || ''}:${item.scheduledTask.status || ''}`
+    : '';
+  if (item.kind === 'waiting') {
+    const askToken = item.askRequestId || item.askTurnId || item.preview || '';
+    return `waiting\u001f${askToken}\u001f${schedToken}`;
+  }
+  if (item.kind === 'running') {
+    return `running\u001f${schedToken}`;
+  }
+  const replyToken = item.replyAt ? String(item.replyAt) : (item.preview || '');
+  return `unread\u001f${replyToken}\u001f${schedToken}`;
+}
+
+function readDismissedSignature(dismissedSignals, signalKey) {
+  if (!dismissedSignals || !signalKey) return '';
+  if (dismissedSignals instanceof Map) return dismissedSignals.get(signalKey) || '';
+  return dismissedSignals[signalKey] || '';
+}
+
+/**
  * Build deduplicated, priority-ordered Signal Stream entries across all Agents.
  */
 export function buildCosmosSignalStream({
   projectedAgents = [],
   agentToPlanet = {},
   scheduledTaskNotifications = [],
+  dismissedSignals = null,
   activeDrawerKey = '',
   nowMs = Date.now(),
   isEn = false,
@@ -104,9 +133,12 @@ export function buildCosmosSignalStream({
         sessionTitle: s.title || s.id,
         projectPath: s.projectPath || '',
         preview,
+        replyAt: parseMs(s.replyAt),
+        askRequestId: s.askRequestId || '',
+        askTurnId: s.askTurnId || '',
         activityAt,
         timeLabel: formatRelativeTime(activityAt, nowMs, isEn),
-        dismissible: kind === 'unread',
+        dismissible: true,
         scheduledTask: notice
           ? {
               id: notice.id,
@@ -159,6 +191,9 @@ export function buildCosmosSignalStream({
       sessionTitle: notice.taskName || notice.sessionId,
       projectPath: '',
       preview: scheduledStatusText(notice, t) || completedFallback,
+      replyAt: 0,
+      askRequestId: '',
+      askTurnId: '',
       activityAt: noticeAt,
       timeLabel: formatRelativeTime(noticeAt, nowMs, isEn),
       dismissible: true,
@@ -178,7 +213,18 @@ export function buildCosmosSignalStream({
     });
   }
 
-  const items = Array.from(bySignalKey.values());
+  const rawItems = Array.from(bySignalKey.values());
+  const rawSignatures = {};
+  const items = [];
+  for (const item of rawItems) {
+    const stateSignature = computeSignalStateSignature(item);
+    item.stateSignature = stateSignature;
+    rawSignatures[item.signalKey] = stateSignature;
+    const dismissedSig = readDismissedSignature(dismissedSignals, item.signalKey);
+    if (dismissedSig && dismissedSig === stateSignature) continue;
+    items.push(item);
+  }
+
   items.sort((a, b) => (
     a.priority - b.priority
     || b.activityAt - a.activityAt
@@ -202,5 +248,7 @@ export function buildCosmosSignalStream({
     badgeCount: waitingCount + unreadCount,
     dismissibleCount: unreadCount,
     totalCount: items.length,
+    rawTotalCount: rawItems.length,
+    rawSignatures,
   };
 }

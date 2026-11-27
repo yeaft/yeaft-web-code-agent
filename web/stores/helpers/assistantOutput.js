@@ -402,15 +402,17 @@ export function handleAssistantOutputFrame(store, conversationId, data, frameAge
   } else if (data.type === 'result') {
     // CLI results finish the conversation. Native results finish only their
     // execution; sibling turns keep their processing state and watchdog.
+    const resultConv = store.conversations.find(c => c.id === conversationId);
     if (!store._currentYeaftSessionId) {
       delete store.processingConversations[conversationId];
       stopProcessingWatchdog(store, conversationId);
+      const cliAgentId = frameAgentId || resultConv?.agentId || store.currentAgent || null;
+      if (cliAgentId) store.clearCosmosDismissedSignal?.(conversationId, cliAgentId, { kinds: ['running'] });
     }
 
     // A terminal result also resolves the connecting state: either the backend
     // session booted (init already cleared it) or boot failed and surfaced this
     // error frame — either way the row is no longer "connecting".
-    const resultConv = store.conversations.find(c => c.id === conversationId);
     if (resultConv && resultConv.connecting) resultConv.connecting = false;
 
     // Clear per-VP turn tracking if this result belongs to a specific turnId.

@@ -2,6 +2,7 @@
  * Yeaft Cosmos — GPU Living Particle Pools, 3D Cosmic Web Graph & 2D Vector Astronomical HUD
  */
 import { PLANETS, keplerPos, keplerOrbitPoint } from './constants.js';
+import { drawSessionSatellites } from './session-satellites.js';
 
 /* Two realistic long-period comets on high-eccentricity Keplerian ellipses (Sun at focus) */
 const COMETS = [
@@ -552,51 +553,39 @@ export function drawCosmosHud(ctx, w, h, st, webGraph, galaxyBooks, agentsByPlan
       ctx.strokeStyle = mg; ctx.lineWidth = 1.25; ctx.stroke();
     }
 
-    // Active Session Flashing Halos & Orbiting Satellites (converged on deep close-up)
+    // Active Session Flashing Halos & Sculpted 3D-Occluded Artificial Satellites
+    const isCompactHud = w < 768 || Math.min(w, h) < 600;
+    const satCloseupFade = planetFocusId ? Math.max(0, 1.0 - Math.max(0, (planetZoom - 5.5) / 3.0)) : 1.0;
     Object.entries(agentsByPlanet).forEach(([planetId, agent]) => {
       const pos = st.planetScreen[planetId];
       if (!pos || !agent) return;
-      if (planetFocusId === planetId && closeupFade < 0.05) return;
       const liveSessions = agent.liveSessions || [];
+      if (liveSessions.length === 0) return;
 
-      if (st.constants.activeFlash && liveSessions.length > 0) {
+      const flashFade = planetFocusId === planetId ? closeupFade : 1.0;
+      if (st.constants.activeFlash && flashFade >= 0.05) {
         const isWait = agent.status === 'waiting';
         const rgb = isWait ? '255, 190, 92' : '116, 202, 255';
         const rings = isWait ? 2 : 1;
-        const fadeMul = planetFocusId === planetId ? closeupFade : 1.0;
         for (let k = 0; k < rings; k++) {
           const ph = (st.realTime * (isWait ? 0.42 : 0.34) + k * 0.5) % 1.0;
           ctx.beginPath();
           ctx.arc(pos.x, pos.y, pos.r * (1.22 + ph * (isWait ? 1.22 : 0.88)), 0, Math.PI * 2);
-          ctx.strokeStyle = `rgba(${rgb}, ${(1.0 - ph) * (isWait ? 0.52 : 0.36) * fadeMul})`;
+          ctx.strokeStyle = `rgba(${rgb}, ${(1.0 - ph) * (isWait ? 0.52 : 0.36) * flashFade})`;
           ctx.lineWidth = isWait ? 1.35 : 1.1;
           ctx.stroke();
         }
       }
 
-      liveSessions.slice(0, 4).forEach((s, idx) => {
-        const satOrbit = pos.r * (1.42 + idx * 0.28);
-        const tiltSat = 0.46 + idx * 0.16, rotSat = -0.34 + idx * 0.52;
-        const sAng = st.realTime * (0.78 - idx * 0.14) + idx * 2.4;
-        const rc = Math.cos(rotSat), rs = Math.sin(rotSat);
-        const satRgb = s.status === 'waiting' ? '255, 198, 102' : '124, 196, 255';
-        ctx.beginPath();
-        for (let tStep = 0; tStep <= 10; tStep++) {
-          const a = sAng - tStep * 0.075;
-          const lx = Math.cos(a) * satOrbit, ly = Math.sin(a) * satOrbit * tiltSat;
-          const sx = pos.x + lx * rc - ly * rs, sy = pos.y + lx * rs + ly * rc;
-          if (tStep === 0) ctx.moveTo(sx, sy); else ctx.lineTo(sx, sy);
-        }
-        ctx.strokeStyle = `rgba(${satRgb}, 0.44)`; ctx.lineWidth = 1.05; ctx.stroke();
-
-        const lx0 = Math.cos(sAng) * satOrbit, ly0 = Math.sin(sAng) * satOrbit * tiltSat;
-        const sx0 = pos.x + lx0 * rc - ly0 * rs, sy0 = pos.y + lx0 * rs + ly0 * rc;
-        const glow = ctx.createRadialGradient(sx0, sy0, 0, sx0, sy0, 7.5);
-        glow.addColorStop(0, `rgba(${satRgb}, 0.98)`);
-        glow.addColorStop(0.4, `rgba(${satRgb}, 0.35)`);
-        glow.addColorStop(1, `rgba(${satRgb}, 0)`);
-        ctx.fillStyle = glow; ctx.beginPath(); ctx.arc(sx0, sy0, 7.5, 0, Math.PI * 2); ctx.fill();
-      });
+      const satFade = planetFocusId === planetId ? satCloseupFade : 1.0;
+      if (satFade >= 0.04) {
+        drawSessionSatellites(ctx, w, h, pos, planetId, liveSessions, st.realTime, {
+          sunPt,
+          orbitOpacity,
+          isCompact: isCompactHud,
+          fadeMul: satFade,
+        });
+      }
     });
 
     // Orbit Swap Ripples, Telemetry Beams & Drag Arc

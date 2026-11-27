@@ -195,6 +195,8 @@ function inspectLoadedMessages(messages, sessionId) {
     return {
       hasPendingAsk: false,
       askQuestion: '',
+      askRequestId: '',
+      askTurnId: '',
       askAt: 0,
       latestAssistantSnippet: '',
       latestAssistantAt: 0,
@@ -206,6 +208,8 @@ function inspectLoadedMessages(messages, sessionId) {
   }
   let hasPendingAsk = false;
   let askQuestion = '';
+  let askRequestId = '';
+  let askTurnId = '';
   let askAt = 0;
   let latestAssistantSnippet = '';
   let latestAssistantAt = 0;
@@ -225,6 +229,8 @@ function inspectLoadedMessages(messages, sessionId) {
       const qs = row.toolInput?.questions || row.askQuestions;
       const firstQ = Array.isArray(qs) && qs[0]?.question ? qs[0].question : (row.toolInput?.question || '');
       askQuestion = stripMarkdownPreview(firstQ);
+      askRequestId = row.askRequestId || row.toolId || row.id || '';
+      askTurnId = row.turnId || '';
       askAt = parseMs(row.askCreatedAt || row.timestamp || row.createdAt);
     }
 
@@ -254,6 +260,8 @@ function inspectLoadedMessages(messages, sessionId) {
   return {
     hasPendingAsk,
     askQuestion,
+    askRequestId,
+    askTurnId,
     askAt,
     latestAssistantSnippet,
     latestAssistantAt,
@@ -418,6 +426,8 @@ export function projectAgentsForCosmos({ chatStore, sessionsStore, nowMs = Date.
         && !(cachedAskExpiresAt > 0 && nowMs >= cachedAskExpiresAt);
       const hasPendingAsk = msgInfo.hasPendingAsk || cachedAskValid;
       const askQuestion = msgInfo.askQuestion || (cachedAskValid ? cachedPreview.askQuestion : '');
+      const askRequestId = msgInfo.askRequestId || (cachedAskValid ? (cachedPreview.askRequestId || '') : '');
+      const askTurnId = msgInfo.askTurnId || (cachedAskValid ? (cachedPreview.askTurnId || '') : '');
 
       const cachedReplyText = cachedPreview?.text || '';
       const cachedReplyAt = parseMs(cachedPreview?.at);
@@ -455,6 +465,8 @@ export function projectAgentsForCosmos({ chatStore, sessionsStore, nowMs = Date.
         replyPreview,
         replyAt,
         askQuestion,
+        askRequestId,
+        askTurnId,
         scheduledNotice,
         sceneId: detail?.sceneId || null,
         projectId: projectEntry?.project?.id || null,
