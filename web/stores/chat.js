@@ -6533,8 +6533,13 @@ export const useChatStore = defineStore('chat', {
             pending.resolve({ ok: false, op: pending.op, error: { code: 'stale_request' } });
             break;
           }
-          if (isBranchResult && event.projectsAuthoritative === true && Array.isArray(event.projects)) {
-            this.applySessionCatalogSnapshot(this.sessionCatalog, event.projects, null, { authoritative: false });
+          const isListResult = event.ok && event.op === 'list';
+          if ((isBranchResult || isListResult) && Array.isArray(event.projects)) {
+            if (event.projectsAuthoritative === true) {
+              this.applySessionCatalogSnapshot(this.sessionCatalog, event.projects, null, { authoritative: false });
+            } else if (isListResult && msg.agentId) {
+              this.applyLegacyProjectSnapshot(event.projects, msg.agentId);
+            }
           }
           if (this.yeaftSessionHydrateRequestId && this.yeaftSessionInventoryCompleteSupported === true
               && event.ok && event.op === 'list' && Array.isArray(event.sessions)) {
@@ -6581,6 +6586,7 @@ export const useChatStore = defineStore('chat', {
                 sourceSessionId: event.sourceSessionId || null,
                 otherSessionId: event.otherSessionId || null,
                 sessions: resolvedSessionList,
+                projects: Array.isArray(event.projects) ? event.projects : null,
                 config: event.config || null,
                 error: event.error || null,
               });
@@ -7186,7 +7192,7 @@ export const useChatStore = defineStore('chat', {
           if (this._sessionCrudPending && this._sessionCrudPending.has(requestId)) {
             this._sessionCrudPending.delete(requestId);
             if (gs?.pending) delete gs.pending[requestId];
-            resolve({ ok: false, op, error: { code: 'timeout', message: 'session_crud timeout' } });
+            resolve({ ok: false, op, ambiguous: true, error: { code: 'timeout', message: 'session_crud timeout' } });
           }
         }, timeoutMs);
         this._sessionCrudPending.set(requestId, {
@@ -7199,7 +7205,8 @@ export const useChatStore = defineStore('chat', {
           resolve: (result) => {
             if (timer) clearTimeout(timer);
             if (gs?.pending) delete gs.pending[requestId];
-            resolve(result);
+            // The socket/Agent disconnect handlers settle this same receipt.
+            resolve(result?.receiptInterrupted ? { ...result, ambiguous: true } : result);
           },
         });
         const sent = this.sendWsMessage(msg);
@@ -7207,7 +7214,7 @@ export const useChatStore = defineStore('chat', {
           if (timer) clearTimeout(timer);
           this._sessionCrudPending.delete(requestId);
           if (gs?.pending) delete gs.pending[requestId];
-          resolve({ ok: false, op, error: { code: 'agent_offline' } });
+          resolve({ ok: false, op, ambiguous: true, error: { code: 'agent_offline' } });
         }
       });
     },
@@ -8105,12 +8112,15 @@ export const useChatStore = defineStore('chat', {
       return new Promise(resolve => {
         const timer = setTimeout(() => {
           delete this.projectMutationRequests[requestId];
-          resolve({ ok: false, error: { code: 'timeout' } });
+          resolve({ ok: false, ambiguous: true, error: { code: 'timeout' } });
         }, 10000);
         this.projectMutationRequests[requestId] = {
           connectionGeneration: Number(this.chatHistoryConnectionGeneration || 0),
           catalogOrder: Array.isArray(payload.catalogOrder) ? payload.catalogOrder : null,
-          resolve: result => { clearTimeout(timer); resolve(result); },
+          resolve: result => {
+            clearTimeout(timer);
+            resolve(result?.error?.code === 'connection_changed' ? { ...result, ambiguous: true } : result);
+          },
         };
         const sent = this.sendWsMessage({
           type: 'yeaft_project_mutation',
@@ -8122,7 +8132,7 @@ export const useChatStore = defineStore('chat', {
         if (!sent) {
           clearTimeout(timer);
           delete this.projectMutationRequests[requestId];
-          resolve({ ok: false, error: { code: 'send_failed' } });
+          resolve({ ok: false, ambiguous: true, error: { code: 'send_failed' } });
         }
       });
     },

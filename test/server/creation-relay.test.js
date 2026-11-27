@@ -339,6 +339,27 @@ describe('Creation Workbench relay and previews', () => {
     expect(client.ws.send).toHaveBeenCalledTimes(1);
   });
 
+  it.each([
+    ['HEAD with an unsatisfiable range', 'head', 8, 'bytes=9999-', 'FILE_OUTSIDE_WORKSPACE', 403],
+    ['GET with a range on a zero-byte video', 'get', 0, 'bytes=0-0', 'ENOENT', 404],
+  ])('rejects a revoked Creation video capability on %s without disclosing its size', async (_label, method, size, range, errorCode, status) => {
+    const { previewUrl } = await mintVideo({ ...videoMetadata, size });
+    agent.ws.send.mockImplementation(wire => {
+      const pull = JSON.parse(wire);
+      expect(pull).toMatchObject({
+        type: 'video_metadata', creationId: 'creation-a', _requestUserId: 'user-a',
+        filePath: videoMetadata.filePath, workDir, workbenchRoute: route, workbenchWorkspaceGeneration: workspaceGeneration,
+      });
+      void handleAgentFileTerminal(agentId, agent, {
+        ...pull, error: 'Creation workspace is unavailable.', errorCode,
+      });
+    });
+
+    const denied = await request(app)[method](previewUrl).set('Range', range).expect(status);
+    expect(denied.headers['content-range']).toBeUndefined();
+    expect(agent.ws.send).toHaveBeenCalledTimes(2);
+  });
+
   it('binds the video metadata handshake and HTTP range pulls to the Creation owner', async () => {
     const metadata = videoMetadata;
     const { previewUrl } = await mintVideo(metadata);

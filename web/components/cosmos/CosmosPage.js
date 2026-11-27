@@ -1769,16 +1769,21 @@ export default {
       drawerOpenedFromGalaxy.value = openedFromGalaxy;
       workbenchWidened.value = false;
       if (!isOpenStillCurrent()) return;
+      const hasPrompt = typeof initialPrompt === 'string' && initialPrompt.trim() && sessionId;
+      const activationPromise = hasPrompt && creationsStore.hasMountedCreationTab(agentId, sessionId)
+        && creationsStore.listDirtyDocDrafts(agentId).length > 0
+        ? creationsStore.waitForCreationActivation(openSeq) : null;
       if (!creationsStore.pendingWorkbenchTarget || creationsStore.pendingWorkbenchTarget.openSeq !== openSeq) {
         creationsStore.setPendingWorkbenchTarget?.({ agentId, sessionId, creationId, rootDir, maximize, openSeq, openedFromGalaxy });
       }
-      if (typeof initialPrompt !== 'string' || !initialPrompt.trim() || !sessionId) return;
+      if (!hasPrompt) return;
 
       const isDrawerTargetCurrent = () => isOpenStillCurrent() && drawerOpen.value
         && drawerAgentId.value === agentId && store.currentAgent === agentId
         && store.yeaftActiveSessionFilter === sessionId;
       try {
         await Vue.nextTick();
+        if (activationPromise && !(await activationPromise)) return;
         if (!isDrawerTargetCurrent()) return;
         const result = await sendInitialCreationPrompt(agentId, sessionId, initialPrompt, {
           isOpenStillCurrent: isDrawerTargetCurrent, routeReady: true, cosmosDelivery: true,

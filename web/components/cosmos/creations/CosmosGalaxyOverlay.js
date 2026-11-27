@@ -982,6 +982,10 @@ export default {
       const existingSessionIdVal = sessionModeVal === 'existing'
         ? (igniteExistingSessionId.value || undefined)
         : undefined;
+      // The selected Agent may have changed while the overlay was unmounted.
+      if (liveDraft.resume.agentId && liveDraft.resume.agentId !== submitAgentId) {
+        creationsStore.resetIgniteResume();
+      }
       const resumeState = liveDraft.resume;
       if (!resumeState.attemptKey) {
         Object.assign(resumeState, { agentId: submitAgentId, attemptKey: newCreationAttemptKey() });
@@ -1159,7 +1163,8 @@ export default {
 
     Vue.onBeforeUnmount(() => {
       // Release this component's submission lock on unmount while preserving
-      // durable attempt checkpoints on `igniteDraft.resume` in Pinia.
+      // the attempt key and checkpoints in Pinia. A remount can join the same
+      // in-flight workspace creation without letting this instance navigate.
       canOpenAfterIgnite = false;
       releaseIgniteAttempt();
       window.removeEventListener('dragenter', onWindowDragEnter);

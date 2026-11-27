@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { constants, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
-import { link, mkdir, open } from 'node:fs/promises';
+import { chmodSync, constants, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
+import { link, mkdir, open, unlink } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { deflateSync } from 'node:zlib';
@@ -16,7 +16,7 @@ import { createCreationBridge, createCreationService, createCreationStore, parse
 
 vi.mock('node:fs/promises', async importOriginal => {
   const fs = await importOriginal();
-  return { ...fs, mkdir: vi.fn(fs.mkdir), open: vi.fn(fs.open), link: vi.fn(fs.link) };
+  return { ...fs, mkdir: vi.fn(fs.mkdir), open: vi.fn(fs.open), link: vi.fn(fs.link), unlink: vi.fn(fs.unlink) };
 });
 
 let dir;
@@ -79,7 +79,7 @@ describe('Creation folder workspaces', () => {
       expect(existsSync(root)).toBe(true);
       throw new Error('abort deletion');
     })).toThrow('abort deletion');
-    req('delete_creation', { creationId });
+    req('delete_creation', { creationId, purgeWorkspace: true });
     expect(existsSync(root)).toBe(false);
     expect(existsSync(join(store.root, '_creations', creationId))).toBe(false);
     expect(store.listCreations()).toEqual([]);
@@ -95,7 +95,7 @@ describe('Creation folder workspaces', () => {
     expect(readFileSync(join(external, 'README.md'), 'utf8')).toBe('User readme');
     expect(readFileSync(join(external, 'sources', 'Notes.txt'), 'utf8')).toBe('User notes');
     expect(readFileSync(join(external, 'sources', 'Notes-2.txt'), 'utf8')).toBe('Upload');
-    req('delete_creation', { creationId: 'provided' });
+    req('delete_creation', { creationId: 'provided', purgeWorkspace: true });
     expect(existsSync(join(external, 'README.md'))).toBe(true);
 
     const legacy = join(store.root, 'workspaces', 'legacy');
@@ -161,20 +161,57 @@ describe('Creation folder workspaces', () => {
     expect(readFileSync(join(legacy, 'keep.txt'), 'utf8')).toBe('legacy workspace');
   });
 
-  it('reclaims new sources, revisions and exports and supports clean ID reuse', () => {
+  it('migrates only the recorded payloads of a pre-upgrade workspaces Creation', async () => {
+    const id = 'workspaces';
+    const legacy = join(store.root, id);
+    const cache = join(store.root, '_creations', id);
+    store.createCreation({ id });
+    const [source] = store.addSources(id, { textSources: ['legacy notes'] });
+    const asset = store.saveAsset(id, { ext: 'md', content: 'legacy asset' });
+    const node = store.createNode(id, { id: 'draft', content: 'legacy revision' });
+    renameSync(cache, legacy);
+    const sibling = join(legacy, 'other-id', 'README.md');
+    mkdirSync(dirname(sibling));
+    writeFileSync(sibling, 'sibling workspace');
+    const originalSibling = statSync(sibling);
+    const unrelated = join(legacy, 'sources', 'unrecorded.txt');
+    writeFileSync(unrelated, 'leave alone');
+    store.db.exec('ALTER TABLE creations DROP COLUMN cache_dir');
+    await service.close();
+    service = createCreationService({ yeaftDir: dir });
+    store = service.store;
+    expect(store.one('SELECT cache_dir FROM creations WHERE id=?', id).cache_dir).toBe(cache);
+    expect(store.getSource(id, source.id).chunks[0].text).toBe('legacy notes');
+    expect(store.readMediaRange(id, 'source', source.id).bytes.toString()).toBe('legacy notes');
+    expect(store.readMediaRange(id, 'asset', asset.id).bytes.toString()).toBe('legacy asset');
+    expect(store.getRevision(id, node.id, node.currentRevId).content).toBe('legacy revision');
+    expect(readdirSync(join(cache, 'sources'))).toEqual([source.id]);
+    expect(existsSync(join(cache, 'other-id'))).toBe(false);
+    store.deleteCreation(id, { purgeWorkspace: true });
+    expect(existsSync(cache)).toBe(false);
+    expect(readFileSync(unrelated, 'utf8')).toBe('leave alone');
+    expect(readFileSync(sibling, 'utf8')).toBe('sibling workspace');
+    expect(statSync(sibling)).toMatchObject({ ino: originalSibling.ino, mtimeMs: originalSibling.mtimeMs });
+  });
+
+  it('reclaims caches by default and only purges generated workspaces on explicit opt-in', () => {
     const external = join(dir, 'external');
     mkdirSync(external);
     writeFileSync(join(external, 'keep.txt'), 'user data');
-    for (const id of ['generated', 'external']) {
+    for (const id of ['generated', 'purged', 'external']) {
       const { rootDir } = store.createCreation({ id, initializeFolder: true, ...(id === 'external' && { rootDir: external }) });
       store.addSources(id, { textSources: ['source'] });
       store.createNode(id, { id: 'draft', content: 'revision' });
       store.saveAsset(id, { ext: 'md', content: 'export' }, { exportFile: true });
       const cache = join(store.root, '_creations', id);
       expect(readdirSync(cache).sort()).toEqual(['artifacts', 'assets', 'sources']);
-      store.deleteCreation(id);
+      const doc = join(rootDir, 'docs', 'keep.md');
+      writeFileSync(doc, 'user draft');
+      if (id === 'generated') store.deleteCreation(id);
+      else store.deleteCreation(id, { purgeWorkspace: true });
       expect(existsSync(cache)).toBe(false);
-      expect(existsSync(rootDir)).toBe(id === 'external');
+      if (id === 'purged') expect(existsSync(rootDir)).toBe(false);
+      else expect(readFileSync(doc, 'utf8')).toBe('user draft');
       expect(store.createCreation({ id }).rootDir).toBeNull();
     }
     expect(readFileSync(join(external, 'keep.txt'), 'utf8')).toBe('user data');
@@ -189,7 +226,7 @@ describe('Creation folder workspaces', () => {
       store.run("UPDATE creations SET data=json_set(data,'$.rootDir',?) WHERE id='other'", rootDir);
       store.run('DELETE FROM protected_workspaces WHERE root_dir=?', rootDir);
     }
-    store.deleteCreation('generated');
+    store.deleteCreation('generated', { purgeWorkspace: true });
     expect(readFileSync(join(rootDir, 'README.md'), 'utf8')).toContain('Untitled creation');
   });
 
@@ -246,6 +283,71 @@ describe('Creation folder workspaces', () => {
     expect(readdirSync(docs).sort()).toEqual(['First.md', 'Second.md', 'Third.md']);
     expect(readFileSync(first, 'utf8')).toBe('edited saved draft');
     expect(readFileSync(second, 'utf8')).toBe('edited before publication was recorded');
+  });
+
+  it.each(['retry', 'delete'])('handles %s after external create_creation dies publishing its initial source', outcome => {
+    const id = 'journaled-import';
+    const rootDir = join(dir, 'external');
+    mkdirSync(rootDir);
+    const payload = { id, importKey: 'upload:journaled', initializeFolder: true, rootDir, title: 'Journaled',
+      textSources: [{ name: 'Initial.txt', text: 'raw source' }], starterNode: { title: 'Draft', content: 'initial draft' } };
+    const module = new URL('../../../../agent/yeaft/creations/service.js', import.meta.url).href;
+    const crashed = spawnSync(process.execPath, ['--input-type=module', '-e', `
+      import fs from 'node:fs';
+      import { syncBuiltinESMExports } from 'node:module';
+      import { createCreationService } from ${JSON.stringify(module)};
+      const { linkSync } = fs;
+      fs.linkSync = (temp, path) => {
+        linkSync(temp, path);
+        if (path.endsWith('Initial.txt')) process.exit(79);
+      };
+      syncBuiltinESMExports();
+      createCreationService({ yeaftDir: ${JSON.stringify(dir)} }).request({ op: 'create_creation', payload: ${JSON.stringify(payload)} });
+    `], { encoding: 'utf8', timeout: 10000 });
+    expect(crashed.status, crashed.stderr).toBe(79);
+    const journal = () => store.one('SELECT * FROM creation_materialization_journal WHERE creation_id=?', id);
+    expect(store.getCreation(id).rootDir).toBeNull();
+    expect(store.one('SELECT creation_id FROM creation_import_keys WHERE import_key=?', payload.importKey)?.creation_id).toBe(id);
+    const [source] = store.listSources(id);
+    expect(store.readMediaRange(id, 'source', source.id).bytes.toString()).toBe('raw source');
+    const row = journal();
+    expect(row.target_dir).toBe(rootDir);
+    expect(JSON.parse(row.published_outputs_json)).toMatchObject({ readme: 'README.md' });
+    const [temp] = JSON.parse(row.temp_files_json);
+    const sources = join(rootDir, 'sources');
+    const published = join(sources, 'Initial.txt');
+    expect(statSync(temp).ino).toBe(statSync(published).ino);
+    // Reconciliation must keep edits made after the initial hard link was published.
+    writeFileSync(published, 'user edited');
+    if (outcome === 'retry') {
+      const retry = req('create_creation', { ...payload, id: 'ignored-on-retry', textSources: ['do not ingest again'] });
+      expect(retry).toMatchObject({ deduplicated: true, creation: { id, rootDir } });
+      expect(retry.sources.map(item => item.id)).toEqual([source.id]);
+      expect(retry.nodes).toHaveLength(1);
+      expect(store.listCreations()).toHaveLength(1);
+      expect(readFileSync(join(rootDir, 'docs', 'Draft.md'), 'utf8')).toBe('initial draft');
+    } else {
+      const outsideTemp = join(dir, '.creation-tmp-outside');
+      const unownedFile = join(rootDir, 'user-file');
+      const symbolicTemp = join(rootDir, '.creation-tmp-symlink');
+      writeFileSync(outsideTemp, 'outside');
+      writeFileSync(unownedFile, 'inside');
+      symlinkSync(outsideTemp, symbolicTemp);
+      store.run('UPDATE creation_materialization_journal SET temp_files_json=? WHERE creation_id=?',
+        JSON.stringify([temp, outsideTemp, unownedFile, symbolicTemp]), id);
+      expect(store.deleteCreation(id)).toEqual({ deleted: true, id });
+      expect(store.listCreations()).toEqual([]);
+      expect(existsSync(join(store.root, '_creations', id))).toBe(false);
+      expect(readFileSync(outsideTemp, 'utf8')).toBe('outside');
+      expect(readFileSync(unownedFile, 'utf8')).toBe('inside');
+      expect(lstatSync(symbolicTemp).isSymbolicLink()).toBe(true);
+    }
+    expect(journal()).toBeUndefined();
+    expect(existsSync(temp)).toBe(false);
+    expect(readdirSync(sources)).toEqual(['Initial.txt']);
+    expect(readFileSync(published, 'utf8')).toBe('user edited');
+    expect(readFileSync(join(rootDir, 'README.md'), 'utf8')).toBe('# Journaled\n\n\n');
+    expect(readdirSync(rootDir).filter(name => name.startsWith('.creation-tmp-'))).toEqual(outcome === 'delete' ? ['.creation-tmp-symlink'] : []);
   });
 
   it.each(['external', 'generated'])('reconciles a partially published %s workspace without suffixing matching files', async location => {
@@ -341,7 +443,7 @@ describe('Creation folder workspaces', () => {
       rmSync(parent, { recursive: true });
       symlinkSync(target, parent, 'dir');
     }
-    store.deleteCreation(id);
+    store.deleteCreation(id, { purgeWorkspace: true });
     expect(readFileSync(join(replacementDir, 'keep.txt'), 'utf8')).toBe('replacement data');
     expect(readFileSync(join(moved, 'README.md'), 'utf8')).toContain('# Untitled creation');
     if (replacement === 'symlink') expect(lstatSync(rootDir).isSymbolicLink()).toBe(true);
@@ -1238,6 +1340,54 @@ describe('Creation-scoped Workbench files', () => {
     } finally { link.mockImplementation(real); }
   });
 
+  it('rolls back a linked destination when source unlink is denied and allows a clean retry', async () => {
+    const source = join(root, 'docs', 'note.txt');
+    const target = join(root, 'moved.txt');
+    const originalUnlink = unlink.getMockImplementation();
+    const privileged = process.getuid?.() === 0;
+    if (privileged) {
+      // Root can unlink despite chmod; keep the real link and rollback calls.
+      unlink.mockImplementation(async path => {
+        if (path.endsWith('/note.txt')) {
+          expect(statSync(target).ino).toBe(statSync(source).ino);
+          throw Object.assign(new Error('denied'), { code: 'EACCES' });
+        }
+        return originalUnlink(path);
+      });
+    } else chmodSync(dirname(source), 0o555);
+    try {
+      await expect(withCreationFiles(msg, files => files.move(source, target))).rejects.toMatchObject(err('EACCES'));
+      expect(existsSync(target)).toBe(false);
+      expect(statSync(source).nlink).toBe(1);
+    } finally {
+      if (privileged) unlink.mockImplementation(originalUnlink);
+      else chmodSync(dirname(source), 0o755);
+    }
+    await withCreationFiles(msg, files => files.move(source, target));
+    expect(existsSync(source)).toBe(false);
+    expect(readFileSync(target, 'utf8')).toBe('inside');
+  });
+
+  it('preserves a replacement destination when source unlink fails', async () => {
+    const source = join(root, 'docs', 'note.txt');
+    const target = join(root, 'moved.txt');
+    const originalUnlink = unlink.getMockImplementation();
+    unlink.mockImplementation(async path => {
+      if (path.endsWith('/note.txt')) {
+        expect(statSync(target).ino).toBe(statSync(source).ino);
+        rmSync(target);
+        writeFileSync(target, 'replacement');
+        throw Object.assign(new Error('denied'), { code: 'EACCES' });
+      }
+      return originalUnlink(path);
+    });
+    try {
+      await expect(withCreationFiles(msg, files => files.move(source, target))).rejects.toMatchObject(err('EACCES'));
+      expect(readFileSync(target, 'utf8')).toBe('replacement');
+      expect(readFileSync(source, 'utf8')).toBe('inside');
+    } finally { unlink.mockImplementation(originalUnlink); }
+  });
+
   it.each([{ content: null }, {}])('rejects invalid write content before resolving scope or opening a file (%j)', async args => {
     const resolveRoot = vi.spyOn(bridge, 'resolveWorkspaceRoot');
     try {
@@ -1272,6 +1422,37 @@ describe('Creation-scoped Workbench files', () => {
     const saved = await invoke(handleWriteFile, { ...write, expectedSize: size, expectedMtimeMs: mtimeMs });
     expect(saved).toMatchObject({ success: true, size: 2, mtimeMs: statSync(absolute).mtimeMs });
     expect(readFileSync(absolute, 'utf8')).toBe('é');
+  });
+
+  it.each([
+    ['invalid UTF-8 with no NUL', Buffer.from([0x41, 0xff, 0x42])],
+    ['NUL at 16 KiB', Buffer.concat([Buffer.alloc(16 * 1024, 0x41), Buffer.from([0])])],
+    ['incomplete final UTF-8 sequence', Buffer.concat([Buffer.alloc(64 * 1024, 0x41), Buffer.from([0xe2, 0x82])])],
+  ])('rejects a text save on %s without truncating', async (_, bytes) => {
+    const filePath = 'docs/note.txt';
+    const target = join(root, filePath);
+    writeFileSync(target, bytes);
+    expect(await invoke(handleWriteFile, { filePath, content: 'replacement', requireTextTarget: true }))
+      .toMatchObject({ success: false, errorCode: 'FILE_IS_BINARY', error: 'Cannot overwrite a binary file from text Canvas.' });
+    expect(readFileSync(target)).toEqual(bytes);
+  });
+
+  it('accepts a UTF-8 character split across the 64 KiB scan boundary', async () => {
+    const filePath = 'docs/note.txt';
+    const target = join(root, filePath);
+    writeFileSync(target, `${'a'.repeat(64 * 1024 - 1)}€`);
+    expect(await invoke(handleWriteFile, { filePath, content: 'saved', requireTextTarget: true })).toMatchObject({ success: true });
+    expect(readFileSync(target, 'utf8')).toBe('saved');
+  });
+
+  it.each(['expectedSize', 'expectedMtimeMs'])('does not recreate a loaded file deleted before saving with %s', async key => {
+    const filePath = 'docs/note.txt';
+    const target = join(root, filePath);
+    const { size, mtimeMs } = await invoke(handleReadFile, { filePath });
+    rmSync(target);
+    expect(await invoke(handleWriteFile, { filePath, content: 'saved', requireTextTarget: true, [key]: key === 'expectedSize' ? size : mtimeMs }))
+      .toMatchObject({ success: false, errorCode: 'FILE_CONFLICT', error: 'File no longer exists on disk.' });
+    expect(existsSync(target)).toBe(false);
   });
 
   it('reads, writes, creates, uploads and streams video inside the recorded root', async () => {

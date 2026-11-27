@@ -327,6 +327,7 @@ export class CreationStore {
           if (!this.all('PRAGMA table_info(creations)').some(column => column.name === 'cache_dir')) {
             this.db.exec('ALTER TABLE creations ADD COLUMN cache_dir TEXT');
           }
+          this.#migrateSharedLegacyCache();
         });
       }
     } catch (error) { this.db.close(); throw error; }
@@ -358,9 +359,45 @@ export class CreationStore {
   }
   #path(id, ...parts) {
     const { cache_dir: cache } = this.#creation(id);
-    const root = cache == null ? this.#legacyCachePath(id) : cache === this.#cachePath(id) ? cache : null;
+    const root = cache == null ? join(this.root, safeId(id)) : cache === this.#cachePath(id) ? cache : null;
     if (!root) fail('INVALID_PATH', 'Invalid Creation cache directory');
     return join(root, ...parts);
+  }
+  #migrateSharedLegacyCache() {
+    for (const { id } of this.all('SELECT id FROM creations WHERE id = ? COLLATE NOCASE AND cache_dir IS NULL', LEGACY_WORKSPACE_CONTAINER)) {
+      const legacy = join(this.root, safeId(id));
+      const cache = this.#cachePath(id);
+      const copy = (...parts) => {
+        const source = join(legacy, ...parts);
+        if (!fs.lstatSync(source, { throwIfNoEntry: false })) return;
+        const { fd } = this.#openCacheFile(legacy, source);
+        let bytes;
+        try { bytes = fs.readFileSync(fd); } finally { fs.closeSync(fd); }
+        const dest = join(cache, ...parts);
+        if (fs.lstatSync(dest, { throwIfNoEntry: false })) {
+          // A previous upgrade may have copied this leaf before SQLite committed.
+          const { fd } = this.#openCacheFile(cache, dest);
+          try {
+            if (!fs.readFileSync(fd).equals(bytes)) fail('CONFLICT', 'Migrated Creation file already exists with different bytes');
+          } finally { fs.closeSync(fd); }
+        } else {
+          this.#write(dest, bytes);
+        }
+      };
+      // The legacy root is shared with workspaces. Never traverse or remove it;
+      // copy only recorded cache leaves, leaving the old layout readable too.
+      for (const row of this.all('SELECT id FROM creation_sources WHERE creation_id=?', id)) {
+        copy('sources', safeId(row.id), 'original');
+        copy('sources', safeId(row.id), 'parsed.json');
+      }
+      for (const row of this.all('SELECT id,node_id,data FROM creation_revisions WHERE creation_id=?', id)) {
+        copy('artifacts', safeId(row.node_id), 'revisions', `${safeId(row.id)}.${data(row).structured ? 'json' : 'snap'}`);
+      }
+      for (const row of this.all('SELECT id,data FROM creation_assets WHERE creation_id=?', id)) {
+        copy('assets', this.#assetFilename({ ...data(row), id: row.id }, { legacy: true }));
+      }
+      this.run('UPDATE creations SET cache_dir=? WHERE id=?', cache, id);
+    }
   }
   #directory(path) {
     if (!contains(this.root, path)) fail('INVALID_PATH', 'Invalid Creations file path');
@@ -368,8 +405,13 @@ export class CreationStore {
     if (fs.realpathSync(current) !== current) fail('INVALID_PATH', 'Invalid Creations directory');
     for (const part of relative(this.root, path).split(sep)) {
       current = join(current, part);
-      fs.mkdirSync(current, { recursive: true, mode: 0o700 });
-      if (fs.realpathSync(current) !== current) fail('INVALID_PATH', 'Invalid Creations directory');
+      let created = false;
+      try {
+        fs.mkdirSync(current, { mode: 0o700 });
+        created = true;
+      } catch (error) { if (error.code !== 'EEXIST') throw error; }
+      if (!this.#ownedDirectory(current)) fail('INVALID_PATH', 'Invalid Creations directory');
+      if (created) syncWorkspaceDirectory(dirname(current));
     }
   }
   #write(path, bytes) {
@@ -392,8 +434,9 @@ export class CreationStore {
       }
     } catch { /* unreachable files are not exposed by the database */ }
   }
-  #open(creationId, path) {
-    const creationRoot = this.#path(creationId);
+  #open(creationId, path) { return this.#openCacheFile(this.#path(creationId), path); }
+
+  #openCacheFile(creationRoot, path) {
     let real;
     try { real = fs.realpathSync(path); }
     catch (error) { if (error.code === 'ENOENT') notFound('Creation file'); throw error; }
@@ -442,8 +485,11 @@ export class CreationStore {
   }
   listCreations() { return this.all('SELECT * FROM creations ORDER BY updated_at DESC,id').map(row => this.#summary(row)); }
   getCreation(id) { return this.#summary(this.#creation(id)); }
-  createCreation(input) {
-    return this.transaction(() => {
+  // Prepare related records in the same transaction as the Creation and its inputs.
+  // External publication runs only after that transaction commits.
+  createCreation(input, { prepare } = {}) {
+    const nested = Boolean(this.tx);
+    const result = this.transaction(() => {
       const { importKey } = input;
       if (importKey !== undefined) {
         if (typeof importKey !== 'string' || importKey.length > 128 || !importKey.trim() || importKey.includes('\0')
@@ -467,11 +513,37 @@ export class CreationStore {
       const record = this.#creationFields({ id, kind, modality, createdAt, title: 'Untitled creation',
         mission: '', description: '', status: 'draft', readingNodeId: null, readingOffset: 0,
         sessionId: null, projectId: null, rootDir: null, placement: defaultCelestialPlacement(kind, index) }, input);
-      if (input.initializeFolder === true) this.#initializeWorkspace(record, record.rootDir);
+      const externalRoot = input.initializeFolder === true && record.rootDir;
+      if (externalRoot) {
+        if (nested) fail('INVALID_STATE', 'External materialization cannot run inside another transaction');
+        record.rootDir = null;
+      } else if (input.initializeFolder === true) {
+        this.#initializeWorkspace(record);
+      }
       this.run('INSERT INTO creations (id,updated_at,data,cache_dir) VALUES (?,?,?,?)', id, createdAt, json(record), cache);
       if (importKey !== undefined) this.run('INSERT INTO creation_import_keys VALUES (?,?)', importKey, id);
+      if (input.files !== undefined || input.textSources !== undefined) {
+        this.addSources(id, input, { copyToWorkspace: !externalRoot && input.initializeFolder === true,
+          validateWorkspaceNames: Boolean(externalRoot) });
+      }
+      prepare?.(id);
+      if (externalRoot) {
+        // Checkpoint the target in the same commit as the raw inputs and import key.
+        this.run('INSERT INTO creation_materialization_journal VALUES (?,?,?,?,?,?)', id, externalRoot, '[]', '{}', '{}', Date.now());
+      }
       return this.getCreation(id);
     });
+    if (result.rootDir == null) {
+      const pending = this.one('SELECT target_dir FROM creation_materialization_journal WHERE creation_id=?', result.id);
+      if (pending) {
+        if (input.initializeFolder === true && input.rootDir != null && folderPath(input.rootDir) !== pending.target_dir) {
+          fail('CONFLICT', 'Resume materialization in the original target folder');
+        }
+        const { creation } = this.ensureWorkspace(result.id, { rootDir: pending.target_dir });
+        return result.deduplicated ? { ...creation, deduplicated: true } : creation;
+      }
+    }
+    return result;
   }
   #creationFields(record, input) {
     for (const key of ['sessionId', 'projectId']) if (own(input, key)) record[key] = optionalLinkId(input[key], key);
@@ -518,7 +590,7 @@ export class CreationStore {
       return this.getCreation(id);
     });
   }
-  deleteCreation(id) {
+  deleteCreation(id, { purgeWorkspace = false } = {}) {
     return this.transaction(() => {
       const row = this.#creation(id);
       if (this.one("SELECT id FROM creation_runs WHERE creation_id=? AND status='running'", id)) fail('BUSY', 'Creation has an active run');
@@ -536,10 +608,12 @@ export class CreationStore {
           this.#reclaimAfterCommit(cache, stat);
         }
       }
-      if (ownsWorkspace === true && rootDir === workspace && !protectedPath(workspace)) {
+      if (purgeWorkspace === true && ownsWorkspace === true && rootDir === workspace && !protectedPath(workspace)) {
         const stat = this.#ownedDirectory(workspace);
         if (stat && workspaceIdentity?.dev === stat.dev && workspaceIdentity?.ino === stat.ino) this.#reclaimAfterCommit(workspace, stat);
       }
+      const journal = this.one('SELECT target_dir,temp_files_json FROM creation_materialization_journal WHERE creation_id=?', id);
+      if (journal) this.#removeWorkspaceTemps(journal.target_dir, JSON.parse(journal.temp_files_json));
       this.run('DELETE FROM creation_materialization_journal WHERE creation_id=?', id);
       this.run('DELETE FROM creations WHERE id=?', id);
       return { deleted: true, id };
@@ -716,7 +790,7 @@ export class CreationStore {
       return size === expected.length && bytes.subarray(0, size).equals(expected);
     } finally { fs.closeSync(fd); }
   }
-  #initializeWorkspace(record, rootDir, { materialize = false } = {}) {
+  #initializeWorkspace(record, { materialize = false } = {}) {
     const populate = dir => {
       for (const name of WORKSPACE_DIRS) this.#walkWorkspace(dir, join(dir, name), true);
       this.#writeWorkspaceFile(dir, dir, 'README.md', `# ${record.title}\n\n${record.mission || record.description}\n`, { dedupe: false });
@@ -724,40 +798,37 @@ export class CreationStore {
     };
     delete record.ownsWorkspace;
     delete record.workspaceIdentity;
-    if (rootDir != null) {
+    const rootDir = this.#workspacePath(record.id);
+    const parent = this.#walkWorkspace(this.root, dirname(rootDir), true);
+    // BEGIN IMMEDIATE serializes attempts. The delimiter cannot occur in an ID.
+    const prefix = `.staging-${record.id}.`;
+    for (const entry of fs.readdirSync(parent, { withFileTypes: true })) {
+      if (entry.isDirectory() && entry.name.startsWith(prefix)) this.#remove(join(parent, entry.name));
+    }
+    if (this.#assertNoSymlinkDir(rootDir, { allowMissing: true })) {
       populate(rootDir);
     } else {
-      rootDir = this.#workspacePath(record.id);
-      const parent = this.#walkWorkspace(this.root, dirname(rootDir), true);
-      // BEGIN IMMEDIATE serializes attempts. The delimiter cannot occur in an ID.
-      const prefix = `.staging-${record.id}.`;
-      for (const entry of fs.readdirSync(parent, { withFileTypes: true })) {
-        if (entry.isDirectory() && entry.name.startsWith(prefix)) this.#remove(join(parent, entry.name));
-      }
-      if (this.#assertNoSymlinkDir(rootDir, { allowMissing: true })) {
-        populate(rootDir);
-      } else {
-        const staging = fs.mkdtempSync(join(parent, prefix));
-        this.tx.rollback.push(() => this.#remove(staging));
-        populate(staging);
-        this.#assertNoSymlinkDir(parent);
-        if (fs.lstatSync(rootDir, { throwIfNoEntry: false })) fail('CONFLICT', 'Workspace directory appeared during initialization');
-        const { dev, ino } = fs.lstatSync(staging);
-        fs.renameSync(staging, rootDir);
-        record.ownsWorkspace = true;
-        record.workspaceIdentity = { dev, ino };
-        this.tx.rollback.push(() => {
-          const stat = fs.lstatSync(rootDir, { throwIfNoEntry: false });
-          if (stat?.dev === dev && stat.ino === ino) this.#remove(rootDir);
-        });
-        syncWorkspaceDirectory(parent);
-      }
+      const staging = fs.mkdtempSync(join(parent, prefix));
+      this.tx.rollback.push(() => this.#remove(staging));
+      populate(staging);
+      this.#assertNoSymlinkDir(parent);
+      if (fs.lstatSync(rootDir, { throwIfNoEntry: false })) fail('CONFLICT', 'Workspace directory appeared during initialization');
+      const { dev, ino } = fs.lstatSync(staging);
+      fs.renameSync(staging, rootDir);
+      record.ownsWorkspace = true;
+      record.workspaceIdentity = { dev, ino };
+      this.tx.rollback.push(() => {
+        const stat = fs.lstatSync(rootDir, { throwIfNoEntry: false });
+        if (stat?.dev === dev && stat.ino === ino) this.#remove(rootDir);
+      });
+      syncWorkspaceDirectory(parent);
     }
     record.rootDir = rootDir;
   }
+  #unsafeSourceName(name) { return name.split(/[\\/]/).includes('..'); }
   #copyWorkspaceSource(root, source, bytes, { legacy = false, write } = {}) {
     let name = source.name;
-    if (name.split(/[\\/]/).includes('..')) {
+    if (this.#unsafeSourceName(name)) {
       if (!legacy) fail('INVALID_REQUEST', 'Invalid workspace source filename');
       // Old uploads could use traversal-like display names. Recover their bytes under a safe ID.
       name = source.id;
@@ -844,6 +915,21 @@ export class CreationStore {
     return path;
   }
 
+  #isWorkspaceTemp(root, path) {
+    return isAbsolute(root) && resolve(root) === root && typeof path === 'string' && contains(root, path)
+      && resolve(path) === path && /^\.creation-tmp-[a-zA-Z0-9-]+$/.test(basename(path));
+  }
+
+  #removeWorkspaceTemps(root, temps) {
+    for (const path of temps) {
+      if (!this.#isWorkspaceTemp(root, path) || !this.#ownedDirectory(dirname(path))) continue;
+      const info = fs.lstatSync(path, { throwIfNoEntry: false });
+      if (!info?.isFile()) continue;
+      fs.unlinkSync(path);
+      syncWorkspaceDirectory(dirname(path));
+    }
+  }
+
   #reconcileWorkspacePublications(root, planned, published, temps) {
     const byInode = new Map();
     for (const [key, { relPath }] of Object.entries(planned)) {
@@ -854,7 +940,7 @@ export class CreationStore {
       if (stat?.isFile()) byInode.set(`${dirname(dest)}:${stat.dev}:${stat.ino}`, [key, relPath]);
     }
     for (const path of temps) {
-      if (!contains(root, path) || resolve(path) !== path || !/^\.creation-tmp-[a-zA-Z0-9-]+$/.test(basename(path))) {
+      if (!this.#isWorkspaceTemp(root, path)) {
         fail('INVALID_PATH', 'Invalid materialization temp path');
       }
       if (!this.#assertNoSymlinkDir(dirname(path), { root, allowMissing: true })) continue;
@@ -904,14 +990,7 @@ export class CreationStore {
     if (early) return early;
 
     const removeTemps = () => {
-      for (const temp of temps) {
-        if (!this.#assertNoSymlinkDir(dirname(temp), { root, allowMissing: true })) continue;
-        const info = fs.lstatSync(temp, { throwIfNoEntry: false });
-        if (info?.isFile()) {
-          fs.unlinkSync(temp);
-          syncWorkspaceDirectory(dirname(temp));
-        }
-      }
+      this.#removeWorkspaceTemps(root, temps);
       temps = [];
     };
     this.transaction(() => {
@@ -1038,7 +1117,7 @@ export class CreationStore {
       if (this.one('SELECT creation_id FROM creation_materialization_journal WHERE creation_id=?', id)) {
         fail('CONFLICT', 'Resume materialization in the original target folder');
       }
-      this.#initializeWorkspace(current, null, { materialize: true });
+      this.#initializeWorkspace(current, { materialize: true });
       this.run('UPDATE creations SET updated_at=?,data=? WHERE id=?', now(), json(current), id);
       return { creation: this.getCreation(id), rootDir: current.rootDir, materialized: true };
     });
@@ -1050,7 +1129,7 @@ export class CreationStore {
   }
 
   listSources(id) { return this.all('SELECT data FROM creation_sources WHERE creation_id=? ORDER BY rowid', safeId(id)).map(data); }
-  addSources(id, { files = [], textSources = [] }, { copyToWorkspace = false } = {}) {
+  addSources(id, { files = [], textSources = [] }, { copyToWorkspace = false, validateWorkspaceNames = false } = {}) {
     const rootDir = copyToWorkspace ? this.resolveWorkspaceRoot(id) : null;
     if (!copyToWorkspace) this.#creation(id);
     const incoming = [...boundedList(files, LIMITS.sources, 'files').map(file => ({ file })),
@@ -1062,6 +1141,7 @@ export class CreationStore {
         if ((file !== undefined && (!file || typeof file !== 'object')) || (file === undefined && item == null)) fail('INVALID_REQUEST', 'Invalid source');
         const sourceId = randomUUID();
         const name = title(file?.name ?? file?.filename ?? item?.name ?? item?.title ?? 'Notes.txt');
+        if (validateWorkspaceNames && this.#unsafeSourceName(name)) fail('INVALID_REQUEST', 'Invalid workspace source filename');
         const mimeType = String(file?.mimeType ?? file?.mime ?? file?.contentType ?? file?.type ?? (file ? 'application/octet-stream' : 'text/plain')).toLowerCase();
         if (!/^[a-z0-9][a-z0-9!#$&^_.+\-]*\/[a-z0-9][a-z0-9!#$&^_.+\-]*$/.test(mimeType) || mimeType.length > 128) fail('INVALID_REQUEST', 'Invalid source media type');
         const bytes = file ? decodeBase64(file.base64 ?? file.dataBase64 ?? file.contentBase64 ?? file.data, LIMITS.sourceBytes)
@@ -1583,15 +1663,17 @@ export class CreationStore {
       .map(row => this.interruptRun(data(row))));
   }
 
-  #assetPath(id, record, { legacy = false } = {}) {
+  #assetPath(id, record, options) { return this.#path(id, 'assets', this.#assetFilename(record, options)); }
+
+  #assetFilename(record, { legacy = false } = {}) {
     if (!own(ASSET_TYPES, record.ext) && !(legacy && typeof record.ext === 'string' && /^[a-z0-9]{1,12}$/i.test(record.ext))) {
       fail('INVALID_PATH', 'Invalid stored asset type');
     }
     const assetId = safeId(record.id);
-    if (record.file == null) return this.#path(id, 'assets', `${safeId(record.fileId ?? assetId)}.${record.ext}`);
+    if (record.file == null) return `${safeId(record.fileId ?? assetId)}.${record.ext}`;
     const file = `${assetId}.${safeId(record.version)}.${record.ext}`;
     if (record.file !== file) fail('INVALID_PATH', 'Invalid stored asset filename');
-    return this.#path(id, 'assets', file);
+    return file;
   }
 
   saveAsset(id, input, { exportFile = false } = {}) {

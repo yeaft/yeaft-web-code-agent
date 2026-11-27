@@ -601,13 +601,14 @@ export default {
       detail.accepted = true;
     };
 
-    const providedCreationTarget = Vue.reactive({ routeKey: '', agentId: '', creationId: '', rootDir: '', seq: 0 });
+    const providedCreationTarget = Vue.reactive({ routeKey: '', agentId: '', creationId: '', rootDir: '', openSeq: null, seq: 0 });
     Vue.provide('workbench-creation-target', providedCreationTarget);
     Vue.provide('workbench-has-creations', hasCreations);
 
-    const openCreationWorkspaceTarget = ({ creationId = '', rootDir = '', maximize } = {}) => {
+    const openCreationWorkspaceTarget = ({ creationId = '', rootDir = '', maximize, openSeq = null, supersedePending = false } = {}) => {
       if (!activeRouteKey.value || !hasCreations.value) return false;
       if (!openCapability('creation')) return false;
+      if (supersedePending) creationsStore.cancelPendingWorkspaceOpen?.();
       store.openWorkbench();
       if (maximize === true) store.workbenchMaximized = true;
       else if (maximize === false) store.workbenchMaximized = false;
@@ -617,6 +618,7 @@ export default {
       providedCreationTarget.agentId = targetAgentId;
       providedCreationTarget.creationId = creationId || '';
       providedCreationTarget.rootDir = rootDir || '';
+      providedCreationTarget.openSeq = openSeq;
       providedCreationTarget.seq += 1;
       const dispatchedSeq = providedCreationTarget.seq;
       Vue.nextTick(() => {
@@ -627,6 +629,7 @@ export default {
             creationId: creationId || '',
             rootDir: rootDir || '',
             seq: dispatchedSeq,
+            openSeq,
           },
         }));
       });
@@ -654,6 +657,8 @@ export default {
         creationId: detail.creationId,
         rootDir: detail.rootDir,
         maximize: detail.maximize,
+        openSeq: detail.openSeq ?? null,
+        supersedePending: detail.openSeq == null,
       })) {
         detail.accepted = true;
       }
@@ -668,6 +673,7 @@ export default {
         creationId: target.creationId,
         rootDir: target.rootDir,
         maximize: target.maximize,
+        openSeq: target.openSeq ?? null,
       })) return;
       creationsStore.clearPendingWorkbenchTarget?.(target.seq);
     };

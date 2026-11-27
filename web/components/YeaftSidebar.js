@@ -562,7 +562,9 @@ export default {
           agentId,
           creationId: creation.id,
           mode: 'studio',
-          promptToSend: payload?.prompt || '',
+          sessionId: payload?.sessionId || creation.sessionId,
+          rootDir: payload?.rootDir || creation.rootDir,
+          initialPrompt: payload?.prompt || '',
         });
       } catch (err) {
         await alertDialog(err?.message || this.tr('creation.create.failed', 'Failed to open Creation'));

@@ -290,7 +290,7 @@ export default {
     resolveMediaUrl: { type: Function, default: null },
     mediaUrlVersion: { type: Number, default: 0 },
   },
-  emits: ['update:content', 'save', 'download', 'open-in-files', 'promote-folder', 'referenced', 'media-load', 'media-error', 'open-relative-link'],
+  emits: ['update:content', 'save', 'reload-from-disk', 'overwrite-disk', 'download', 'open-in-files', 'promote-folder', 'referenced', 'media-load', 'media-error', 'open-relative-link'],
   template: `
     <div class="file-canvas-view" :class="'canvas-kind-' + (canvasKind || 'unknown')">
       <!-- Loading / Error states -->
@@ -319,6 +319,16 @@ export default {
         <div v-if="file?.diskChangedToBinary" class="creation-wb-banner" role="alert"
           style="background: var(--warn-bg); color: var(--text-primary); border-inline-start: 3px solid var(--warn-text)">
           {{ binaryDraftWarning() }}
+        </div>
+        <div v-else-if="file?.diskChangedOnDisk" class="creation-wb-banner" style="flex-wrap: wrap;
+          background: var(--warn-bg); color: var(--text-primary); border-inline-start: 3px solid var(--warn-text)">
+          <span role="alert">{{ diskConflictMessage }}</span>
+          <div class="canvas-toolbar-group" style="flex-wrap: wrap">
+            <button type="button" class="btn-secondary" :disabled="saving || file.probingDisk"
+              @click="$emit('reload-from-disk')">{{ reloadFromDiskLabel }}</button>
+            <button type="button" class="btn-secondary" :disabled="saving || file.probingDisk || !file.isDirty"
+              @click="$emit('overwrite-disk')">{{ overwriteDiskLabel }}</button>
+          </div>
         </div>
         <div v-if="showHeader" class="canvas-toolbar" role="toolbar">
           <div class="canvas-toolbar-group">
@@ -388,7 +398,7 @@ export default {
               v-if="file.isDirty"
               type="button"
               class="canvas-tool-btn canvas-save-btn"
-              :disabled="saving || file.diskChangedToBinary || file.probingDisk"
+              :disabled="saveBlocked"
               @click="$emit('save')"
               :title="$t('common.save') + ' (Ctrl+S)'"
             >{{ $t('common.save') }}</button>
@@ -720,6 +730,14 @@ export default {
   `,
   setup(props, { emit }) {
     const t = Vue.inject('t', key => key);
+    const isChinese = Vue.computed(() => getLocale() === 'zh-CN');
+    const diskConflictMessage = Vue.computed(() => isChinese.value
+      ? '磁盘上的文件在你开始编辑后发生了变化。重新加载会丢弃草稿，覆盖则会替换磁盘上的版本。'
+      : 'The file on disk changed since you started editing. Reloading discards your draft; overwriting replaces the version on disk.');
+    const reloadFromDiskLabel = Vue.computed(() => isChinese.value ? '从磁盘重新加载' : 'Reload from disk');
+    const overwriteDiskLabel = Vue.computed(() => isChinese.value ? '覆盖磁盘文件' : 'Overwrite disk');
+    const saveBlocked = Vue.computed(() => props.saving || props.file?.diskChangedToBinary
+      || props.file?.diskChangedOnDisk || props.file?.probingDisk);
     const canvasKind = Vue.computed(() => isCanvasSupportedFile(props.file));
     const binaryDocument = Vue.computed(() => canvasKind.value === 'doc' && (props.isBinary || isBinaryDocument(props.file)));
     const isMarkdown = Vue.computed(() => MARKDOWN_EXTS.has(getExtension(props.file)));
@@ -904,7 +922,7 @@ export default {
       if (binaryDocument.value) return;
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 's') {
         event.preventDefault();
-        emit('save');
+        if (!saveBlocked.value) emit('save');
       }
     };
 
@@ -1148,6 +1166,10 @@ export default {
       canvasKind,
       binaryDocument,
       binaryDraftWarning,
+      diskConflictMessage,
+      reloadFromDiskLabel,
+      overwriteDiskLabel,
+      saveBlocked,
       isMarkdown,
       isSvgText,
       // Document

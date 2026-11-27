@@ -8,6 +8,7 @@
 import { useChatStore } from './chat.js';
 import { useAuthStore } from './auth.js';
 import { yeaftSessionIdentityKey } from './helpers/yeaft-session-identity.js';
+import { workbenchRouteKey } from '../utils/workbench-route.js';
 import * as canvasContext from '../utils/canvas-context.js';
 
 const { defineStore } = Pinia;
@@ -17,6 +18,8 @@ const USER_PREFIX_RE = /^user_\d+_[a-zA-Z0-9]+:/;
 const pendingRequests = new Map();
 const inFlightBindFolder = new Map();
 const inFlightResolveSession = new Map();
+const inFlightWorkspaceCreates = new Map();
+const pendingOpenActivations = new Map();
 let requestSeq = 0;
 let pendingWorkbenchSeq = 0;
 let igniteAttemptSeq = 0;
@@ -33,6 +36,12 @@ function ackErrorMessage(res, fallback) {
     return `${fallback} (${res.error.code.trim()})`;
   }
   return fallback;
+}
+
+function isAmbiguousRpcResult(res) {
+  return !res || res.ambiguous === true
+    || ['timeout', 'disconnected', 'connection_closed', 'offline'].includes(res.error?.code)
+    || /timed?\s*out|disconnect|connection\s+closed|offline/i.test(String(res.error?.message || res.error || ''));
 }
 
 function extractSessionId(res) {
@@ -302,6 +311,7 @@ export const useCreationsStore = defineStore('creations', {
     searchQuery: '',
     openActivationSeq: 0,
     openWorkspaceSeq: 0,
+    mountedCreationTabRoutes: {},
     docDraftsByAgent: {},
     pendingWorkbenchTarget: null,
     igniteDraft: defaultIgniteDraft(),
@@ -441,6 +451,54 @@ export const useCreationsStore = defineStore('creations', {
       return Object.entries(this.docDraftsByAgent[agentId])
         .filter(([key, draft]) => key.startsWith(prefix) && (draft?.isDirty ?? draft?.dirty))
         .map(([, draft]) => draft);
+    },
+
+    registerCreationTabRoute(routeKey, { agentId, sessionId } = {}) {
+      if (!routeKey) return;
+      const previous = Object.hasOwn(this.mountedCreationTabRoutes, routeKey)
+        ? this.mountedCreationTabRoutes[routeKey] : null;
+      this.mountedCreationTabRoutes[routeKey] = {
+        agentId: agentId ?? previous?.agentId,
+        sessionId: sessionId ?? previous?.sessionId,
+        count: (previous?.count || 0) + 1,
+      };
+    },
+
+    unregisterCreationTabRoute(routeKey) {
+      if (!Object.hasOwn(this.mountedCreationTabRoutes, routeKey)) return;
+      const route = this.mountedCreationTabRoutes[routeKey];
+      if (route.count > 1) route.count -= 1;
+      else delete this.mountedCreationTabRoutes[routeKey];
+    },
+
+    isCreationTabMounted(routeKey) {
+      return Number(this.mountedCreationTabRoutes[routeKey]?.count || 0) > 0;
+    },
+
+    hasMountedCreationTab(agentId, sessionId) {
+      const routeKey = workbenchRouteKey({ runtimeProvider: 'yeaft', agentId, sessionId });
+      return this.isCreationTabMounted(routeKey) || Object.values(this.mountedCreationTabRoutes).some(route => (
+        route.count > 0 && route.agentId === agentId && route.sessionId === sessionId
+      ));
+    },
+
+    waitForCreationActivation(openSeq, timeoutMs = 4000) {
+      if (!Number.isSafeInteger(openSeq) || openSeq !== this.openWorkspaceSeq) return Promise.resolve(false);
+      const existing = pendingOpenActivations.get(openSeq);
+      if (existing) return existing.promise;
+      let resolve;
+      const promise = new Promise(done => { resolve = done; });
+      const timer = setTimeout(() => this.resolveCreationActivation(openSeq, false), timeoutMs);
+      pendingOpenActivations.set(openSeq, { resolve, timer, promise });
+      return promise;
+    },
+
+    resolveCreationActivation(openSeq, accepted) {
+      const pending = pendingOpenActivations.get(openSeq);
+      if (!pending) return;
+      pendingOpenActivations.delete(openSeq);
+      clearTimeout(pending.timer);
+      pending.resolve(accepted === true && openSeq === this.openWorkspaceSeq);
     },
 
     resetIgniteResume() {
@@ -709,8 +767,26 @@ export const useCreationsStore = defineStore('creations', {
       return this.createCreationWithWorkspace(options);
     },
 
-    async createCreationWithWorkspace({
-      agentId,
+    async createCreationWithWorkspace(options = {}) {
+      const targetId = String(options.agentId || this.selectedAgentId || '').trim();
+      const { attemptKey } = options;
+      const flightKey = typeof attemptKey === 'string' && attemptKey.trim() ? `${targetId}::${attemptKey}` : null;
+      if (!flightKey) return this._createWorkspace(targetId, options);
+      if (inFlightWorkspaceCreates.has(flightKey)) return await inFlightWorkspaceCreates.get(flightKey);
+
+      // Reserve the attempt before issuing any RPC; remounts reuse this promise.
+      const gen = storeGeneration;
+      const run = Promise.resolve().then(() => {
+        if (gen !== storeGeneration) throw new Error('Creations store cleared');
+        return this._createWorkspace(targetId, options);
+      }).finally(() => {
+        if (inFlightWorkspaceCreates.get(flightKey) === run) inFlightWorkspaceCreates.delete(flightKey);
+      });
+      inFlightWorkspaceCreates.set(flightKey, run);
+      return await run;
+    },
+
+    async _createWorkspace(targetId, {
       title,
       kind = 'book',
       projectId = null,
@@ -729,8 +805,7 @@ export const useCreationsStore = defineStore('creations', {
       baselineSessionIds,
       projectAttempted = false,
       sessionAttempted = false,
-    } = {}) {
-      const targetId = String(agentId || this.selectedAgentId || '').trim();
+    }) {
       const gen = storeGeneration;
       const chatStore = getChatStoreSafe();
       const sessionsStore = getSessionsStoreSafe();
@@ -741,6 +816,7 @@ export const useCreationsStore = defineStore('creations', {
       const trimmedRootDir = String(rootDir || '').trim();
       const trimmedResumeId = String(resumeCreationId || '').trim();
       let created = null;
+      let createRes = null;
       let didAttemptProject = projectAttempted;
       let didAttemptSession = sessionAttempted;
       const projectRows = () => chatStore?.yeaftProjects || chatStore?.sessionProjects || [];
@@ -759,6 +835,20 @@ export const useCreationsStore = defineStore('creations', {
         if (gen !== storeGeneration) throw new Error('Creations store cleared');
       };
 
+      const checkpointResume = () => {
+        const resume = this.igniteDraft?.resume;
+        if (gen !== storeGeneration || !attemptKey || resume?.attemptKey !== attemptKey || resume.agentId !== targetId) return;
+        Object.assign(resume, {
+          projectId: targetProjectId || resume.projectId,
+          creationId: created?.id || trimmedResumeId || resume.creationId,
+          sessionId: targetSessionId || resume.sessionId,
+          projectAttempted: didAttemptProject,
+          sessionAttempted: didAttemptSession,
+          baselineProjectIds: capturedBaselineProjects,
+          baselineSessionIds: capturedBaselineSessions,
+        });
+      };
+
       try {
         if (!targetId) throw new Error('No Agent selected');
         // Project creation is checkpointed before any workspace/session RPC.
@@ -766,7 +856,8 @@ export const useCreationsStore = defineStore('creations', {
           const loadProjects = chatStore?.loadYeaftProjects || chatStore?.fetchProjects;
           const snapshot = loadProjects ? await loadProjects.call(chatStore) : await refreshNativeInventory();
           ensureSameStore();
-          const rows = Array.isArray(snapshot) ? snapshot : (snapshot?.projects || projectRows());
+          const rows = Array.isArray(snapshot?.projects) ? snapshot.projects
+            : Array.isArray(snapshot) ? snapshot : projectRows();
           const matches = rows.filter(p => p?.id && p.name === trimmedProjectName && !capturedBaselineProjects.includes(p.id));
           if (matches.length > 1) throw new Error('Multiple Projects match the previous creation attempt');
           if (matches.length === 1) targetProjectId = matches[0].id;
@@ -776,10 +867,11 @@ export const useCreationsStore = defineStore('creations', {
             throw new Error('Project creation unavailable');
           }
           didAttemptProject = true;
+          checkpointResume();
           const projRes = await chatStore.mutateProject('create', { name: trimmedProjectName }, targetId);
           const createdProjectId = extractProjectId(projRes);
           if (projRes && projRes.ok === false) {
-            didAttemptProject = false;
+            if (!isAmbiguousRpcResult(projRes)) didAttemptProject = false;
             throw new Error(ackErrorMessage(projRes, 'Failed to create Project'));
           }
           if (!projRes || !createdProjectId) {
@@ -788,6 +880,8 @@ export const useCreationsStore = defineStore('creations', {
           targetProjectId = createdProjectId;
           ensureSameStore();
         }
+
+        checkpointResume();
 
         // Step 2: Create or resume the folder-backed Creation.
         // Do NOT persist targetProjectId before move_session succeeds.
@@ -808,7 +902,7 @@ export const useCreationsStore = defineStore('creations', {
             throw new Error('Failed to resume Creation');
           }
         } else {
-          const createRes = await this.createCreation(targetId, {
+          createRes = await this.createCreation(targetId, {
             ...(trimmedTitle ? { title: trimmedTitle } : {}),
             kind,
             mission: prompt || '',
@@ -826,6 +920,8 @@ export const useCreationsStore = defineStore('creations', {
             throw new Error('Failed to create Creation');
           }
         }
+
+        checkpointResume();
 
         // Step 3: Resolve or create the linked Yeaft Session with strict ack validation.
         if (!Array.isArray(baselineSessionIds) || (!sessionAttempted && !baselineSessionIds.length)) {
@@ -859,6 +955,7 @@ export const useCreationsStore = defineStore('creations', {
             throw new Error('Selected session does not exist on this Agent');
           }
           targetSessionId = existingSessionId;
+          checkpointResume();
           if (created.rootDir && existingSession && !existingSession.workDir) {
             if (typeof chatStore?.sessionCrudRequest === 'function') {
               const updRes = await chatStore.sessionCrudRequest(
@@ -877,6 +974,7 @@ export const useCreationsStore = defineStore('creations', {
             throw new Error('Session creation unavailable');
           }
           didAttemptSession = true;
+          checkpointResume();
           const sessionRes = await chatStore.createYeaftSession({
             displayName: created.title || trimmedTitle || 'Creation',
             workDir: created.rootDir || trimmedRootDir || undefined,
@@ -884,7 +982,7 @@ export const useCreationsStore = defineStore('creations', {
           });
           const createdSessionId = extractSessionId(sessionRes);
           if (sessionRes && sessionRes.ok === false) {
-            didAttemptSession = false;
+            if (!isAmbiguousRpcResult(sessionRes)) didAttemptSession = false;
             throw new Error(ackErrorMessage(sessionRes, 'Failed to create Session'));
           }
           if (!sessionRes || !createdSessionId) {
@@ -893,6 +991,8 @@ export const useCreationsStore = defineStore('creations', {
           targetSessionId = createdSessionId;
           ensureSameStore();
         }
+
+        checkpointResume();
 
         // Step 4: Assign the Session to the Project (only persist projectId when ack succeeds).
         let appliedProjectId = null;
@@ -915,27 +1015,16 @@ export const useCreationsStore = defineStore('creations', {
         }
 
         // Step 5: Persist confirmed sessionId & appliedProjectId on the Creation.
+        const isResumedOrDeduplicated = Boolean(trimmedResumeId || created?.deduplicated || createRes?.deduplicated);
         const updated = await this.updateCreation(targetId, created.id, {
           sessionId: targetSessionId,
           projectId: appliedProjectId,
-          ...(trimmedResumeId && trimmedTitle && trimmedTitle !== created.title ? { title: trimmedTitle } : {}),
-          ...(trimmedResumeId && kind && kind !== created.kind ? { kind } : {}),
+          ...(isResumedOrDeduplicated && trimmedTitle && trimmedTitle !== created.title ? { title: trimmedTitle } : {}),
+          ...(isResumedOrDeduplicated && kind && kind !== created.kind ? { kind } : {}),
         });
         ensureSameStore();
         if (!updated?.id) {
           throw new Error('Failed to save Creation session link');
-        }
-
-        if (attemptKey && this.igniteDraft?.resume?.attemptKey === attemptKey && this.igniteDraft.resume.agentId === targetId) {
-          Object.assign(this.igniteDraft.resume, {
-            projectId: appliedProjectId || targetProjectId || this.igniteDraft.resume.projectId,
-            creationId: created?.id || this.igniteDraft.resume.creationId,
-            sessionId: targetSessionId || this.igniteDraft.resume.sessionId,
-            projectAttempted: didAttemptProject,
-            sessionAttempted: didAttemptSession,
-            baselineProjectIds: capturedBaselineProjects,
-            baselineSessionIds: capturedBaselineSessions,
-          });
         }
 
         return {
@@ -956,17 +1045,7 @@ export const useCreationsStore = defineStore('creations', {
         wrapped.sessionAttempted = didAttemptSession;
         wrapped.baselineProjectIds = capturedBaselineProjects;
         wrapped.baselineSessionIds = capturedBaselineSessions;
-        if (gen === storeGeneration && attemptKey && this.igniteDraft?.resume?.attemptKey === attemptKey && this.igniteDraft.resume.agentId === targetId) {
-          Object.assign(this.igniteDraft.resume, {
-            projectId: targetProjectId || this.igniteDraft.resume.projectId,
-            creationId: created?.id || trimmedResumeId || this.igniteDraft.resume.creationId,
-            sessionId: targetSessionId || this.igniteDraft.resume.sessionId,
-            projectAttempted: didAttemptProject,
-            sessionAttempted: didAttemptSession,
-            baselineProjectIds: capturedBaselineProjects,
-            baselineSessionIds: capturedBaselineSessions,
-          });
-        }
+        checkpointResume();
         throw wrapped;
       }
     },
@@ -1092,11 +1171,12 @@ export const useCreationsStore = defineStore('creations', {
         && authStore?.authGeneration === startAuthGeneration
       );
       let applyingRoute = false;
+      let appliedRoute = null;
       const isOpenStillCurrent = () => ownsOpen() && (applyingRoute || (
-        chatStore.currentView === startView
-        && chatStore.uiMode === startUiMode
-        && chatStore.currentAgent === startRoute.agentId
-        && sessionIdForRoute() === startRoute.sessionId
+        chatStore.currentView === (appliedRoute?.view ?? startView)
+        && chatStore.uiMode === (appliedRoute?.uiMode ?? startUiMode)
+        && chatStore.currentAgent === (appliedRoute?.agentId ?? startRoute.agentId)
+        && sessionIdForRoute() === (appliedRoute?.sessionId ?? startRoute.sessionId)
       ));
 
       // Capture navigation even if the user returns to the original route before the ACK.
@@ -1104,7 +1184,7 @@ export const useCreationsStore = defineStore('creations', {
         [() => chatStore.currentView, () => chatStore.uiMode, () => chatStore.currentAgent,
           sessionIdForRoute, authUser, () => authStore?.authGeneration],
         () => {
-          if (this.openWorkspaceSeq === mySeq) this.cancelPendingWorkspaceOpen();
+          if (this.openWorkspaceSeq === mySeq && !applyingRoute) this.cancelPendingWorkspaceOpen();
         },
         { flush: 'sync' },
       );
@@ -1140,12 +1220,10 @@ export const useCreationsStore = defineStore('creations', {
         };
 
         // The drawer (or Classic route commit below) owns its synchronous route changes.
-        stopWatchingRoute?.();
         applyingRoute = true;
         if (targetUiMode === 'cosmos') {
           if (!isOpenStillCurrent()) return null;
-          this.setPendingWorkbenchTarget(target);
-          if (!isOpenStillCurrent()) return null;
+          // CosmosPage must register its activation waiter before publishing the target.
           const detail = { ...target, initialPrompt: initialPrompt || '', handled: false };
           if (typeof window !== 'undefined') {
             window.dispatchEvent(new CustomEvent('cosmos-open-creation-workspace', { detail }));
@@ -1162,21 +1240,28 @@ export const useCreationsStore = defineStore('creations', {
         sessionsStore?.setActive?.(sessionId, targetId);
         chatStore.setActiveSessionFilter?.(sessionId, { agentId: targetId, force: true });
 
+        appliedRoute = { view: chatStore.currentView, uiMode: chatStore.uiMode,
+          agentId: chatStore.currentAgent, sessionId: sessionIdForRoute() };
+        applyingRoute = false;
         if (!isOpenStillCurrent()) return null;
+        const trimmedPrompt = String(initialPrompt || '').trim();
+        const activationPromise = trimmedPrompt && this.hasMountedCreationTab(targetId, sessionId)
+          && this.listDirtyDocDrafts(targetId).length > 0
+          ? this.waitForCreationActivation(mySeq) : null;
         this.setPendingWorkbenchTarget(target);
 
         if (!isOpenStillCurrent()) return null;
         chatStore.openWorkbench?.();
 
         let promptError = null;
-        const trimmedPrompt = String(initialPrompt || '').trim();
-        if (trimmedPrompt) {
+        if (trimmedPrompt && (!activationPromise || await activationPromise)) {
           if (!isOpenStillCurrent()) return null;
           const sendRes = await sendInitialCreationPrompt(targetId, sessionId, trimmedPrompt, { isOpenStillCurrent, routeReady: true });
           if (!isOpenStillCurrent()) return null;
           if (!sendRes?.ok) promptError = sendRes?.error || 'Failed to send initial creation prompt';
         }
 
+        if (!isOpenStillCurrent()) return null;
         return {
           creation: latest,
           sessionId,
@@ -1193,6 +1278,9 @@ export const useCreationsStore = defineStore('creations', {
 
     cancelPendingWorkspaceOpen() {
       const seq = ++this.openWorkspaceSeq;
+      for (const openSeq of pendingOpenActivations.keys()) {
+        if (openSeq !== seq) this.resolveCreationActivation(openSeq, false);
+      }
       if (this.pendingWorkbenchTarget?.openSeq != null && this.pendingWorkbenchTarget.openSeq !== seq) {
         this.clearPendingWorkbenchTarget(this.pendingWorkbenchTarget.seq);
       }
@@ -2478,6 +2566,7 @@ export const useCreationsStore = defineStore('creations', {
       pendingRequests.clear();
       inFlightBindFolder.clear();
       inFlightResolveSession.clear();
+      inFlightWorkspaceCreates.clear();
       this.clearPendingWorkbenchTarget();
       if (typeof canvasContext.clearAllCanvasContextRefs === 'function') {
         canvasContext.clearAllCanvasContextRefs();
@@ -2488,6 +2577,7 @@ export const useCreationsStore = defineStore('creations', {
       this.selectedAgentId = '';
       this.byAgent = {};
       this.docDraftsByAgent = {};
+      this.mountedCreationTabRoutes = {};
       this.detailsByKey = {};
       this.nodeContentsByKey = {};
       this.threadMessagesByKey = {};

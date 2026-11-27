@@ -369,7 +369,7 @@ export default {
               :disabled="scanning"
               :title="tr('creation.workbench.refresh', 'Refresh folder')"
               :aria-label="tr('creation.workbench.refresh', 'Refresh folder')"
-              @click="scanWorkspace({ reloadActiveDoc: true })"
+              @click="refreshWorkspace"
             >
               <svg :class="{ 'is-spinning': scanning }" viewBox="0 0 24 24" width="15" height="15" aria-hidden="true">
                 <path fill="currentColor" d="M17.65 6.35A7.958 7.958 0 0012 4c-4.42 0-7.99 3.58-7.99 8s3.57 8 7.99 8c3.73 0 6.84-2.55 7.73-6h-2.08A5.99 5.99 0 0112 18c-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z" />
@@ -615,7 +615,9 @@ export default {
               :resolve-media-url="resolveCreationRelativeMediaUrl"
               :media-url-version="mediaPreviewVersion"
               @update:content="onDocContentUpdate"
-              @save="saveActiveDoc"
+              @save="saveDoc()"
+              @reload-from-disk="reloadActiveDocFromDisk"
+              @overwrite-disk="overwriteActiveDocOnDisk"
               @download="downloadFile(activeDocFile)"
               @open-in-files="openFileInFiles(activeDocFile)"
               @open-relative-link="onCanvasRelativeLink"
@@ -870,6 +872,12 @@ export default {
     const imageFiles = Vue.ref([]);
     const videoFiles = Vue.ref([]);
     const expandedDocFolders = Vue.reactive(new Set());
+    const probedPathsThisVisit = new Set();
+    let probeVisit = 0;
+    const resetDocProbes = () => {
+      probeVisit += 1;
+      probedPathsThisVisit.clear();
+    };
 
     // Only older hosts without a store draft API need component-owned buffers.
     const fallbackDrafts = Vue.reactive(new Map());
@@ -947,11 +955,29 @@ export default {
     let modalContext = null;
     let uploadPickerContext = null;
     let disposed = false;
+    let registeredRouteKey = '';
+    let pendingActivation = null;
     let refreshTimer = null;
     let lastHandledTargetSeq = 0;
     let lastConsumedTargetSeq = 0;
     let containerResizeObserver = null;
     const localBlobUrls = new Set();
+
+    const currentAgentId = Vue.computed(() => props.agentId);
+    const unregisterTabRoute = () => {
+      if (!registeredRouteKey) return;
+      creationsStore.unregisterCreationTabRoute?.(registeredRouteKey);
+      registeredRouteKey = '';
+    };
+    const registerTabRoute = () => {
+      unregisterTabRoute();
+      if (disposed || !props.routeKey) return;
+      registeredRouteKey = props.routeKey;
+      creationsStore.registerCreationTabRoute?.(registeredRouteKey, {
+        agentId: currentAgentId.value,
+        sessionId: props.sessionId,
+      });
+    };
 
     const captureRoute = () => ({
       agentId: props.agentId,
@@ -1231,7 +1257,9 @@ export default {
         agentId, rootDir, path: entry.path,
         fileType: 'text', loaded: false, loadError: null, loading: false, saving: false,
         isDirty: false, bufferVersion: 0, isBinary: false, diskChangedToBinary: false,
-        diskMtimeMs: null, diskSize: null,
+        baseMtimeMs: null, baseSize: null, diskMtimeMs: null, diskSize: null,
+        observedDiskMtimeMs: null, observedDiskSize: null,
+        diskChangedOnDisk: false, diskConflictError: false,
       });
       if (!draft) return;
       draft.name = entry.name || draft.name;
@@ -1239,12 +1267,19 @@ export default {
       activeDocPath.value = entry.path;
 
       const probeOnly = Boolean(draft.isDirty);
+      const shouldProbe = !skipProbe && (forceReload || !probedPathsThisVisit.has(entry.path));
       if (draft.loading || draft.probingDisk || draft.saving
-        || (probeOnly ? (skipProbe || !forceReload) : draft.loaded && !forceReload)) return;
+        || (probeOnly ? !shouldProbe : draft.loaded && !forceReload && !draft.loadError)) return;
 
       const versionAtRead = draft.bufferVersion;
-      if (probeOnly) draft.probingDisk = true;
-      else draft.loading = true;
+      const visitAtRead = probeVisit;
+      const markProbed = () => {
+        if (visitAtRead === probeVisit && isOpCurrent(opCtx)) probedPathsThisVisit.add(entry.path);
+      };
+      if (probeOnly) {
+        probedPathsThisVisit.delete(entry.path);
+        draft.probingDisk = true;
+      } else draft.loading = true;
       draft.loadError = null;
       try {
         const msg = await sendCorrelatedRequest({ type: 'read_file', filePath: entry.path }, { opCtx });
@@ -1252,13 +1287,23 @@ export default {
         const preserveDraft = probeOnly || draft.isDirty || draft.bufferVersion !== versionAtRead;
         const binary = msg.isBinary === true || Boolean(msg.binary)
           || (!msg.error && typeof msg.content !== 'string');
-        if (probeOnly || !msg.error || binary) {
-          draft.diskMtimeMs = msg.mtimeMs ?? entry.mtimeMs ?? null;
-          draft.diskSize = msg.size ?? entry.size ?? null;
-        }
         if (preserveDraft) {
-          if (binary) draft.diskChangedToBinary = true;
-          else if (typeof msg.content === 'string') draft.diskChangedToBinary = false;
+          if (msg.error) return;
+          if (binary) {
+            draft.diskChangedToBinary = true;
+            markProbed();
+          } else if (typeof msg.content === 'string') {
+            draft.diskChangedToBinary = false;
+            // Probe results describe the disk, not the version this draft was based on.
+            draft.observedDiskMtimeMs = msg.mtimeMs ?? null;
+            draft.observedDiskSize = msg.size ?? null;
+            if (draft.observedDiskMtimeMs !== (draft.baseMtimeMs ?? null)
+              || draft.observedDiskSize !== (draft.baseSize ?? null)
+              || msg.content !== draft.savedContent) {
+              draft.diskChangedOnDisk = true;
+            }
+            markProbed();
+          }
           return;
         }
         if (msg.error) {
@@ -1268,11 +1313,23 @@ export default {
         draft.loaded = true;
         draft.isBinary = binary;
         draft.diskChangedToBinary = false;
+        draft.diskChangedOnDisk = false;
+        draft.diskConflictError = false;
+        draft.observedDiskMtimeMs = null;
+        draft.observedDiskSize = null;
+        if (!binary) {
+          draft.baseMtimeMs = msg.mtimeMs ?? null;
+          draft.baseSize = msg.size ?? null;
+          draft.diskMtimeMs = draft.baseMtimeMs;
+          draft.diskSize = draft.baseSize;
+          markProbed();
+        }
         draft.blobUrl = binary ? buildPreviewUrl(msg) : null;
         const text = binary ? undefined : msg.content;
         draft.content = text;
         draft.savedContent = text;
         draft.originalContent = text;
+        return true;
       } catch (err) {
         if (isOpCurrent(opCtx) && !probeOnly && !draft.isDirty && draft.bufferVersion === versionAtRead) {
           draft.loadError = err?.message || tr('files.readSendFailed', 'Failed to read file');
@@ -1509,8 +1566,8 @@ export default {
             if (!currentDraft?.isDirty && !scanIncomplete) {
               activeDocPath.value = '';
             }
-          } else if (reloadActiveDoc) {
-            await openDocFile(stillExists, { forceReload: true });
+          } else if (reloadActiveDoc || currentDraft?.isDirty) {
+            await openDocFile(stillExists, { forceReload: reloadActiveDoc });
           }
         }
 
@@ -1554,6 +1611,11 @@ export default {
       }
     };
 
+    const refreshWorkspace = () => {
+      resetDocProbes();
+      return scanWorkspace({ reloadActiveDoc: true });
+    };
+
     // ==================== Document Actions ====================
     const onDocTreeClick = (node) => {
       if (node.type === 'folder') {
@@ -1564,7 +1626,6 @@ export default {
       if (isNarrowContainer.value) {
         docTreeOpen.value = false;
       }
-      if (activeDocPath.value === node.path && !activeDocDraft.value?.loadError) return;
       void openDocFile(docFiles.value.find(file => file.path === node.path) || node);
     };
 
@@ -1576,9 +1637,10 @@ export default {
       draft.content = newContent;
       draft.bufferVersion = (draft.bufferVersion || 0) + 1;
       draft.isDirty = draft.saving || newContent !== draft.savedContent;
+      probedPathsThisVisit.add(activeDocPath.value);
     };
 
-    const saveActiveDoc = async () => {
+    const saveDoc = async ({ forceOverwrite = false } = {}) => {
       const draft = activeDocDraft.value;
       const opCtx = captureOp();
       if (!draft || !isOpCurrent(opCtx)) return;
@@ -1592,6 +1654,7 @@ export default {
           ? '正在检查磁盘上的文件，请稍后再保存。' : 'Checking the file on disk. Try saving again shortly.');
         return;
       }
+      if (draft.diskChangedOnDisk && !forceOverwrite) return;
       const submittedVersion = draft.bufferVersion;
       const submittedContent = draft.content;
       draft.saving = true;
@@ -1601,8 +1664,8 @@ export default {
           filePath: draft.path,
           content: submittedContent,
           requireTextTarget: true,
-          ...(draft.diskMtimeMs != null ? { expectedMtimeMs: draft.diskMtimeMs } : {}),
-          ...(draft.diskSize != null ? { expectedSize: draft.diskSize } : {}),
+          ...(!forceOverwrite && draft.baseMtimeMs != null ? { expectedMtimeMs: draft.baseMtimeMs } : {}),
+          ...(!forceOverwrite && draft.baseSize != null ? { expectedSize: draft.baseSize } : {}),
         }, { opCtx });
         // This ACK belongs to the shared buffer even if its submitting tab is now inactive.
         if (getDraft(opCtx.rootDir, draft.path, opCtx.agentId) !== draft) return;
@@ -1612,14 +1675,22 @@ export default {
           draft.isDirty = true;
           report(false, binaryDraftWarning());
         } else if (msg?.errorCode === 'FILE_CONFLICT') {
+          draft.diskChangedOnDisk = true;
+          draft.diskConflictError = true;
           draft.isDirty = true;
           report(false, getLocale() === 'zh-CN'
             ? '磁盘上的文件已更改，未保存的草稿已保留。' : 'The file changed on disk. Your unsaved draft is preserved.');
-        } else if (!msg || msg.error || msg.success === false || (msg.type && msg.type !== 'file_saved' && msg.type !== 'file_op_result')) {
+        } else if (msg?.type !== 'file_saved' || msg.error || msg.success === false) {
           report(false, msg?.error || tr('creation.workbench.saveFailed', 'Failed to save'));
         } else {
-          draft.diskMtimeMs = msg.mtimeMs ?? draft.diskMtimeMs;
-          draft.diskSize = msg.size ?? draft.diskSize;
+          draft.baseMtimeMs = msg.mtimeMs ?? draft.baseMtimeMs;
+          draft.baseSize = msg.size ?? draft.baseSize;
+          draft.diskMtimeMs = draft.baseMtimeMs;
+          draft.diskSize = draft.baseSize;
+          draft.observedDiskMtimeMs = null;
+          draft.observedDiskSize = null;
+          draft.diskChangedOnDisk = false;
+          draft.diskConflictError = false;
           draft.savedContent = submittedContent;
           draft.originalContent = submittedContent;
           if (draft.bufferVersion === submittedVersion) draft.isDirty = false;
@@ -1631,6 +1702,28 @@ export default {
         draft.saving = false;
       }
     };
+
+    const reloadActiveDocFromDisk = async () => {
+      const draft = activeDocDraft.value;
+      const opCtx = captureOp();
+      if (!draft || !isOpCurrent(opCtx) || draft.loading || draft.saving || draft.probingDisk
+        || !draft.diskChangedOnDisk || draft.diskChangedToBinary) return;
+      const entry = docFiles.value.find(file => file.path === activeDocPath.value) || draft;
+      const { isDirty, bufferVersion } = draft;
+      draft.isDirty = false;
+      draft.diskChangedOnDisk = false;
+      draft.diskChangedToBinary = false;
+      if (await openDocFile(entry, { forceReload: true })) return;
+      // A failed reload must not make the existing buffer look saved.
+      if (draft.bufferVersion !== bufferVersion) return;
+      draft.isDirty = isDirty;
+      draft.diskChangedOnDisk = true;
+      const error = draft.loadError;
+      draft.loadError = null;
+      if (isOpCurrent(opCtx)) showFeedback(false, error || tr('files.readSendFailed', 'Failed to read file'));
+    };
+
+    const overwriteActiveDocOnDisk = () => saveDoc({ forceOverwrite: true });
 
     // ==================== Media Selection & Video Metadata ====================
     const findMediaItemByPath = (path) => (
@@ -2012,14 +2105,14 @@ export default {
     };
 
     // ==================== Single Fenced Creation Activation ====================
-    const activateTarget = async ({
+    const activateWorkspace = async ({
       creation = null,
       creationId = '',
       rootDir = '',
       autoResolve = false,
       confirmDirty = true,
       bindCurrent = false,
-    } = {}) => {
+    } = {}, acceptActivation) => {
       if (autoResolve && (activeRootDir.value || showingSwitcher.value)) return { accepted: false };
       const epoch = ++activationEpoch;
       const ctx = captureRoute();
@@ -2156,15 +2249,40 @@ export default {
       }
 
       if (changed) resetWorkspace();
+      else resetDocProbes();
       activeCreation.value = resolvedCreation;
       activeRootDir.value = nextNormRoot;
       showingSwitcher.value = false;
+      acceptActivation();
       void scanWorkspace({ opCtx: captureOp() });
       return { accepted: true };
     };
 
+    const settleActivation = (receipt, accepted) => {
+      if (!receipt || pendingActivation !== receipt) return;
+      pendingActivation = null;
+      creationsStore.resolveCreationActivation?.(receipt.openSeq, accepted);
+    };
+
+    const activateTarget = async (target = {}) => {
+      if (target.openSeq != null && target.openSeq === pendingActivation?.openSeq) return;
+      if (disposed || (target.autoResolve && (activeRootDir.value || showingSwitcher.value))) {
+        if (target.openSeq != null) creationsStore.resolveCreationActivation?.(target.openSeq, false);
+        return { accepted: false };
+      }
+      settleActivation(pendingActivation, false);
+      const receipt = target.openSeq != null ? { openSeq: target.openSeq } : null;
+      pendingActivation = receipt;
+      try {
+        return await activateWorkspace(target, () => settleActivation(receipt, true));
+      } finally {
+        settleActivation(receipt, false);
+      }
+    };
+
     const resetWorkspace = () => {
       workspaceEpoch += 1;
+      resetDocProbes();
       scanGeneration += 1;
       if (refreshTimer) clearTimeout(refreshTimer);
       for (const [key, draft] of fallbackDrafts) {
@@ -2187,12 +2305,22 @@ export default {
       revokeAllLocalBlobUrls();
     };
 
+    const cancelTargetActivation = () => {
+      if (!pendingActivation) return;
+      activationEpoch += 1;
+      settleActivation(pendingActivation, false);
+      bindingFolder.value = false;
+      loadingCreations.value = false;
+    };
+
     const showCreationSwitcher = () => {
+      cancelTargetActivation();
       creationsStore.cancelPendingWorkspaceOpen?.();
       showingSwitcher.value = true;
     };
 
     const openCreateModal = () => {
+      cancelTargetActivation();
       creationsStore.cancelPendingWorkspaceOpen?.();
       onboardingError.value = '';
       modalContext = { ...captureRoute(), epoch: activationEpoch };
@@ -2210,6 +2338,7 @@ export default {
       const prompt = typeof payload.prompt === 'string' ? payload.prompt.trim() : '';
       const crossRoute = targetAgentId !== ctx.agentId || targetSessionId !== ctx.sessionId;
       creationsStore.cancelPendingWorkspaceOpen?.();
+      if (crossRoute) cancelTargetActivation();
       const epoch = crossRoute ? ++activationEpoch : activationEpoch + 1;
       const isCurrent = () => isRouteCurrent(ctx) && epoch === activationEpoch;
       try {
@@ -2273,6 +2402,7 @@ export default {
       void activateTarget({
         creationId: detail.creationId || '',
         rootDir: detail.rootDir || '',
+        openSeq: detail.openSeq,
       });
     };
 
@@ -2286,10 +2416,17 @@ export default {
       if (!event.defaultPrevented && (event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 's') {
         if (activeModality.value === 'docs' && activeDocFile.value?.isDirty) {
           event.preventDefault();
-          void saveActiveDoc();
+          void saveDoc();
         }
       }
     };
+
+    Vue.watch(() => [props.routeKey, props.agentId, props.sessionId], registerTabRoute);
+    Vue.watch(() => [props.agentId, props.sessionId, props.routeKey, props.workspaceGeneration], () => {
+      resetWorkspace();
+      showingSwitcher.value = false;
+      void activateTarget({ autoResolve: true });
+    });
 
     // Watch injected target from WorkbenchPanel (covers first-mount race before window listener attaches)
     const injectedCreationTarget = Vue.inject('workbench-creation-target', null);
@@ -2304,6 +2441,7 @@ export default {
           void activateTarget({
             creationId: injectedCreationTarget.creationId || '',
             rootDir: injectedCreationTarget.rootDir || '',
+            openSeq: injectedCreationTarget.openSeq,
           });
         },
         { immediate: true },
@@ -2326,6 +2464,7 @@ export default {
           void activateTarget({
             creationId: target.creationId || '',
             rootDir: target.rootDir || '',
+            openSeq: target.openSeq,
           });
           creationsStore.clearPendingWorkbenchTarget?.(target.seq);
         },
@@ -2357,12 +2496,6 @@ export default {
       }
     });
 
-    Vue.watch(() => [props.agentId, props.sessionId, props.routeKey, props.workspaceGeneration], () => {
-      resetWorkspace();
-      showingSwitcher.value = false;
-      void activateTarget({ autoResolve: true });
-    });
-
     const syncContainerNarrowState = (width) => {
       if (!width || width <= 0) return;
       const narrow = width <= 680;
@@ -2378,6 +2511,7 @@ export default {
       window.addEventListener('creation-check-dirty', handleCreationCheckDirty);
       window.addEventListener('workbench-close-creation-capability', handleCreationCheckDirty);
       document.addEventListener('click', handleDocumentClick);
+      registerTabRoute();
       if (rootEl.value) {
         const rectWidth = rootEl.value.getBoundingClientRect?.().width || rootEl.value.clientWidth || 0;
         syncContainerNarrowState(rectWidth);
@@ -2396,6 +2530,8 @@ export default {
 
     Vue.onBeforeUnmount(() => {
       disposed = true;
+      settleActivation(pendingActivation, false);
+      unregisterTabRoute();
       window.removeEventListener('creation-check-dirty', handleCreationCheckDirty);
       window.removeEventListener('workbench-close-creation-capability', handleCreationCheckDirty);
       revokeAllLocalBlobUrls();
@@ -2471,9 +2607,12 @@ export default {
       bindCurrentFolder,
       selectExistingCreation,
       scanWorkspace,
+      refreshWorkspace,
       onDocTreeClick,
       onDocContentUpdate,
-      saveActiveDoc,
+      saveDoc,
+      reloadActiveDocFromDisk,
+      overwriteActiveDocOnDisk,
       selectImageAt,
       selectVideoAt,
       resolveCreationRelativeMediaUrl,

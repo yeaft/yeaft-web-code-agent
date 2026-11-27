@@ -13,10 +13,12 @@ const MAX_RESPONSE_IMAGE_PREVIEW_BYTES = 20 * 1024 * 1024;
 export const WORKBENCH_FILE_CHUNK_BYTES = 1024 * 1024;
 export const WORKBENCH_VIDEO_CHUNK_BYTES = 1024 * 1024;
 
+const hasBinaryControlBytes = buffer => buffer.some(byte => byte < 32 && byte !== 9 && byte !== 10 && byte !== 12 && byte !== 13);
+
 // Unknown extensions may be binary. Never open lossy UTF-8 or control bytes in
 // an editable buffer: saving that buffer could irreversibly corrupt the file.
 export function isBinaryFileContent(buffer) {
-  if (buffer.some(byte => byte === 0 || (byte < 32 && ![9, 10, 12, 13].includes(byte)))) return true;
+  if (hasBinaryControlBytes(buffer)) return true;
   try {
     new TextDecoder('utf-8', { fatal: true }).decode(buffer);
     return false;
@@ -251,7 +253,7 @@ export async function handleReadFile(msg) {
         let invalidUtf8 = false;
         try { new TextDecoder('utf-8', { fatal: true }).decode(prefix, { stream: bytesRead < fileStat.size }); }
         catch { invalidUtf8 = true; }
-        if (invalidUtf8 || prefix.some(byte => byte === 0 || (byte < 32 && ![9, 10, 12, 13].includes(byte)))) {
+        if (invalidUtf8 || hasBinaryControlBytes(prefix)) {
           mimeType = 'application/octet-stream';
           assertPreviewSize(fileStat.size, limitBytes);
         }
@@ -326,6 +328,21 @@ export async function handleReadFile(msg) {
   }
 }
 
+async function assertTextTarget(handle) {
+  const binary = () => Object.assign(new Error('Cannot overwrite a binary file from text Canvas.'), { code: 'FILE_IS_BINARY' });
+  const chunk = Buffer.alloc(64 * 1024);
+  const decoder = new TextDecoder('utf-8', { fatal: true });
+  for (let offset = 0; ;) {
+    const { bytesRead } = await handle.read(chunk, 0, chunk.length, offset);
+    if (!bytesRead) break;
+    const slice = chunk.subarray(0, bytesRead);
+    if (hasBinaryControlBytes(slice)) throw binary();
+    try { decoder.decode(slice, { stream: true }); } catch { throw binary(); }
+    offset += bytesRead;
+  }
+  try { decoder.decode(); } catch { throw binary(); }
+}
+
 export async function handleWriteFile(msg) {
   const { conversationId, filePath, content, requestId, _requestUserId, _requestClientId } = msg;
   const reply = { type: 'file_saved', conversationId, requestId, _requestUserId, _requestClientId, requestedFilePath: filePath };
@@ -345,13 +362,7 @@ export async function handleWriteFile(msg) {
         const path = files.target(filePath, { strictDescendant: true });
         const result = await files.file(path, async handle => {
           const preStat = await handle.stat();
-          if (msg.requireTextTarget === true && preStat.size > 0) {
-            const sample = Buffer.alloc(Math.min(8192, preStat.size));
-            const { bytesRead } = await handle.read(sample, 0, sample.length, 0);
-            if (sample.subarray(0, bytesRead).includes(0)) {
-              throw Object.assign(new Error('Cannot overwrite a binary file from text Canvas.'), { code: 'FILE_IS_BINARY' });
-            }
-          }
+          if (msg.requireTextTarget === true && preStat.size > 0) await assertTextTarget(handle);
           if ((msg.expectedSize != null && Number.isFinite(Number(msg.expectedSize)) && preStat.size !== Number(msg.expectedSize))
             || (msg.expectedMtimeMs != null && Number.isFinite(Number(msg.expectedMtimeMs)) && Math.abs(preStat.mtimeMs - Number(msg.expectedMtimeMs)) > 2)) {
             throw Object.assign(new Error('File changed on disk since it was loaded.'), { code: 'FILE_CONFLICT' });
@@ -363,7 +374,7 @@ export async function handleWriteFile(msg) {
             offset += bytesWritten;
           }
           return handle.stat();
-        }, { write: true });
+        }, { write: true, allowCreate: msg.expectedMtimeMs == null && msg.expectedSize == null });
         return [path, result];
       });
     } else {

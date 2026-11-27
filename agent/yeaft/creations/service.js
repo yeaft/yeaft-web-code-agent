@@ -67,19 +67,17 @@ export function createCreationService({ yeaftDir, storageRoot, namespaceKey, nam
     list_creations: () => ({ creations: store.listCreations() }),
     create_creation: (_, input) => {
       const prompt = input.prompt ?? '';
-      const result = store.transaction(() => {
-        const creation = store.createCreation({ ...input, mission: input.mission ?? prompt });
-        const id = creation.id;
-        if (creation.deduplicated) return { ...detail(id), deduplicated: true };
+      let thread;
+      const creation = store.createCreation({ ...input, mission: input.mission ?? prompt }, { prepare: id => {
         boundedText(prompt, LIMITS.promptBytes, 'creation prompt');
-        const sources = store.addSources(id, input, { copyToWorkspace: input.initializeFolder === true }).map(source => media(source, 'source'));
-        const thread = store.getThread(id);
+        thread = store.getThread(id);
         const starter = input.starterNode;
         if (starter != null && starter !== false) store.createNode(id, starter === true ? {} : object(starter, 'starter node'));
-        return { creation: store.getCreation(id), nodes: outlineNodes(id), sources, thread, threads: [thread] };
-      });
-      if (result.deduplicated) return result;
-      const { id } = result.creation;
+      } });
+      const { id } = creation;
+      if (creation.deduplicated) return { ...detail(id), deduplicated: true };
+      const sources = store.listSources(id).map(source => media(source, 'source'));
+      const result = { creation, nodes: outlineNodes(id), sources, thread, threads: [thread] };
       emit('creation_upserted', id, { creation: result.creation });
       const autoPlan = input.initializeFolder === true ? input.autoPlan === true : input.autoPlan !== false;
       if (prompt.trim() && autoPlan) {
@@ -105,8 +103,8 @@ export function createCreationService({ yeaftDir, storageRoot, namespaceKey, nam
       emit('creation_upserted', id, { creation });
       return { creation };
     },
-    delete_creation: id => {
-      const result = store.deleteCreation(id);
+    delete_creation: (id, p) => {
+      const result = store.deleteCreation(id, { purgeWorkspace: Boolean(p.purgeWorkspace) });
       emit('creation_deleted', id, result);
       return result;
     },

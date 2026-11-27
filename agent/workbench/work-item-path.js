@@ -195,15 +195,20 @@ class CreationFiles {
     }, options);
   }
 
-  async file(path, action, { write = false, exclusive = false, createParents = false } = {}) {
+  async file(path, action, { write = false, exclusive = false, createParents = false, allowCreate = true } = {}) {
+    const missing = () => Object.assign(new Error('File no longer exists on disk.'), { code: 'FILE_CONFLICT' });
     return this.leaf(path, async (anchor, existing, verifyParent) => {
+      if (!existing && !allowCreate) throw missing();
       if ((existing && !existing.isFile()) || (!existing && !write)) {
         throw outsideWorkspace('Expected a regular file in the Creation workspace.');
       }
       if (existing && exclusive) throw Object.assign(new Error('File already exists.'), { code: 'EEXIST' });
       const flags = (write ? (existing ? constants.O_RDWR : constants.O_WRONLY) : constants.O_RDONLY) | constants.O_NOFOLLOW
         | (constants.O_NONBLOCK ?? 0) | (existing ? 0 : constants.O_CREAT | constants.O_EXCL);
-      const handle = await open(anchor, flags);
+      const handle = await open(anchor, flags).catch(error => {
+        if (!allowCreate && error.code === 'ENOENT') throw missing();
+        throw error;
+      });
       try {
         const info = await verifyNamed(path, handle, existing);
         if (!info.isFile()) throw changed();
@@ -265,11 +270,11 @@ class CreationFiles {
           await verifySource();
           await verifyTarget();
           if (!sameInode(info, await noLinkStat(src)) || !sameInode(info, await noLinkStat(dest))) throw changed();
-        } catch {
+          await unlink(src);
+        } catch (error) {
           if (sameInode(info, await noLinkStat(dest).catch(() => null))) await unlink(dest).catch(() => {});
-          throw changed();
+          throw error;
         }
-        await unlink(src);
       }, { create: createParents });
     });
   }

@@ -56,24 +56,18 @@ export async function streamWorkbenchVideo(req, res, video) {
   res.once?.('close', abort);
   try {
     const requested = parseByteRange(req.headers?.range, video.size);
-    if (requested === false) {
+    const invalidRange = requested === false || (video.size === 0 && requested !== null);
+    const skipRead = req.method === 'HEAD' || video.size === 0 || invalidRange;
+    // Without a read, revalidate before returning any metadata, including the size in a 416.
+    if (skipRead && typeof video.revalidate === 'function') await video.revalidate(abortController.signal);
+    if (invalidRange) {
       res.setHeader('Content-Range', `bytes */${video.size}`);
-      return res.status(416).end();
-    }
-    if (video.size === 0 && requested) {
-      res.setHeader('Content-Range', 'bytes */0');
       return res.status(416).end();
     }
     const range = requested || { start: 0, end: video.size - 1 };
     const partial = requested !== null;
-    const isHead = req.method === 'HEAD';
-    const firstEnd = video.size === 0 ? -1 : Math.min(range.end, range.start + WORKBENCH_VIDEO_CHUNK_BYTES - 1);
-    let firstChunk;
-    if (isHead || firstEnd < range.start) {
-      if (typeof video.revalidate === 'function') await video.revalidate(abortController.signal);
-    } else {
-      firstChunk = await video.read(range.start, firstEnd, abortController.signal);
-    }
+    const firstEnd = Math.min(range.end, range.start + WORKBENCH_VIDEO_CHUNK_BYTES - 1);
+    const firstChunk = skipRead ? undefined : await video.read(range.start, firstEnd, abortController.signal);
     res.status(partial ? 206 : 200);
     res.setHeader('Content-Type', video.mimeType);
     res.setHeader('Accept-Ranges', 'bytes');
@@ -84,7 +78,7 @@ export async function streamWorkbenchVideo(req, res, video) {
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Cache-Control', 'no-store');
-    if (isHead || video.size === 0) return res.end();
+    if (skipRead) return res.end();
     if (!await writeResponseChunk(res, firstChunk)) return;
     for (let start = firstEnd + 1; start <= range.end;) {
       const end = Math.min(range.end, start + WORKBENCH_VIDEO_CHUNK_BYTES - 1);
