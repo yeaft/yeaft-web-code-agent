@@ -172,7 +172,7 @@ export default {
       }
     },
     markDirty() {
-      if (!this.contentLoaded) return;
+      if (!this.contentLoaded && !this.editing) return;
       if (!this.dirty) {
         this.editBaseRevId = this.loadedRevId;
       }
@@ -354,7 +354,7 @@ export default {
             </div>
 
             <div class="creation-gallery-card-body">
-              <template v-if="editing">
+              <template v-if="editing && contentLoaded">
                 <input
                   v-model="frame.title"
                   class="creation-inline-input"

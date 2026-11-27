@@ -1511,9 +1511,46 @@ describe('Cosmos Creations — End-to-End Web Store <-> Server Relay <-> Agent S
     });
     await flushPromises();
     const modalEl = modalWrap.find('[aria-modal="true"]');
-    expect(modalEl.find('.cosmos-signal-popover').exists()).toBe(true);
+    const popoverEl = modalEl.find('.cosmos-signal-popover');
+    expect(popoverEl.exists()).toBe(true);
+    // R5-#11: Even when mounted with popoverOpen=true initially, focus moves into the popover immediately!
+    expect(popoverEl.element.contains(document.activeElement)).toBe(true);
     modalWrap.vm.focusSignalTrigger();
     expect(document.activeElement).toBe(modalWrap.find('.creation-signal-trigger').element);
     modalWrap.unmount();
+
+    // R5-#7: Delayed get_node response does NOT discard edits typed while refresh is in flight
+    let resolveDelayedNode;
+    const origRequest = creationsStore.request.bind(creationsStore);
+    creationsStore.request = vi.fn((agentId, op, payload) => {
+      if (op === 'get_node') {
+        return new Promise((resolve) => { resolveDelayedNode = resolve; });
+      }
+      return origRequest(agentId, op, payload);
+    });
+    const key = `agent-a\u001f${res.creation.id}\u001fn-delayed`;
+    creationsStore.detailsByKey[`agent-a\u001f${res.creation.id}`].nodes = [
+      { id: 'n-delayed', title: 'Ch', type: 'unit', modality: 'slide_deck', currentRevId: 'rev-remote' },
+    ];
+    creationsStore.nodeContentsByKey[key] = {
+      content: '{"slides":[{"slideId":"s1","title":"V1"}]}',
+      revisions: [], loading: false, loaded: true, loadedRevId: 'rev-local', dirty: false,
+    };
+    const pendingRefresh = creationsStore.loadNode('agent-a', res.creation.id, 'n-delayed');
+    // Remote rev differs -> loaded becomes false while refresh is in flight
+    expect(creationsStore.nodeContentsByKey[key].loaded).toBe(false);
+    // Simulate edit becoming dirty while get_node is in flight
+    creationsStore.setNodeDirty('agent-a', res.creation.id, 'n-delayed', true);
+    resolveDelayedNode({
+      node: { id: 'n-delayed', title: 'Ch', type: 'unit', modality: 'slide_deck', currentRevId: 'rev-remote', content: '{"slides":[{"slideId":"s1","title":"V2-remote"}]}' },
+      content: '{"slides":[{"slideId":"s1","title":"V2-remote"}]}',
+      revisions: [{ id: 'rev-remote' }],
+    });
+    await pendingRefresh;
+    // Dirty draft and original loadedRevId must be preserved rather than overwritten by delayed refresh!
+    expect(creationsStore.nodeContentsByKey[key].dirty).toBe(true);
+    expect(creationsStore.nodeContentsByKey[key].content).toContain('V1');
+    expect(creationsStore.nodeContentsByKey[key].loadedRevId).toBe('rev-local');
+    creationsStore.request = origRequest;
   });
 });

@@ -353,15 +353,18 @@ export default {
 
     const popoverRef = Vue.ref(null);
 
-    Vue.watch(() => props.popoverOpen, (open) => {
-      if (!open) return;
+    function focusSignalPopover() {
       Vue.nextTick(() => {
         const root = popoverRef.value;
         if (!root) return;
         const focusable = root.querySelector('button:not([disabled]), [tabindex]:not([tabindex="-1"])');
         (focusable || root).focus?.();
       });
-    });
+    }
+
+    Vue.watch(() => [props.popoverOpen, popoverRef.value], ([open, el]) => {
+      if (open && el) focusSignalPopover();
+    }, { immediate: true, flush: 'post' });
 
     function dismissMobileBanner() {
       dismissedBannerSignature.value = mobileBannerSignature.value;

@@ -224,7 +224,7 @@ export default {
       }
     },
     markDirty() {
-      if (!this.contentLoaded) return;
+      if (!this.contentLoaded && !this.editing) return;
       if (!this.dirty) {
         this.editBaseRevId = this.loadedRevId;
       }
@@ -510,7 +510,7 @@ export default {
               <div class="creation-scene-id-group">
                 <span class="creation-scene-timecode">{{ formatTime(entry.start) }}</span>
                 <input
-                  v-if="editing"
+                  v-if="editing && contentLoaded"
                   v-model="entry.scene.title"
                   class="creation-inline-input"
                   @click.stop
@@ -519,7 +519,7 @@ export default {
                 <strong v-else class="creation-scene-title">{{ entry.scene.title }}</strong>
               </div>
               <div class="creation-scene-controls" @click.stop>
-                <label v-if="editing" class="creation-scene-dur-wrap">
+                <label v-if="editing && contentLoaded" class="creation-scene-dur-wrap">
                   <input
                     v-model.number="entry.scene.durationSec"
                     type="number"
@@ -542,7 +542,7 @@ export default {
               </div>
             </div>
 
-            <div v-if="editing" class="creation-scene-edit-fields" @click.stop>
+            <div v-if="editing && contentLoaded" class="creation-scene-edit-fields" @click.stop>
               <label class="creation-field-label">
                 <span>{{ $t('creation.video.transcript') }}</span>
                 <textarea

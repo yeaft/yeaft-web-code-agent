@@ -726,15 +726,25 @@ export const useCreationsStore = defineStore('creations', {
           : (res?.node?.content !== undefined ? res.node.content : '');
         const revisions = Array.isArray(res?.revisions) ? res.revisions : prev.revisions;
         const loadedRevId = res?.node?.currentRevId ?? prev.loadedRevId ?? null;
+        const live = this.nodeContentsByKey[nKey];
 
-        this.nodeContentsByKey[nKey] = {
-          content,
-          revisions,
-          loading: false,
-          dirty: false,
-          loaded: true,
-          loadedRevId,
-        };
+        if (live?.dirty === true) {
+          // User started editing while this refresh was in flight: preserve the dirty draft & base rev.
+          this.nodeContentsByKey[nKey] = {
+            ...live,
+            revisions,
+            loading: false,
+          };
+        } else {
+          this.nodeContentsByKey[nKey] = {
+            content,
+            revisions,
+            loading: false,
+            dirty: false,
+            loaded: true,
+            loadedRevId,
+          };
+        }
 
         if (res?.node && res.node.id) {
           const detail = ensureDetailBucket(this, agentId, creationId);
@@ -754,7 +764,8 @@ export const useCreationsStore = defineStore('creations', {
         return this.nodeContentsByKey[nKey];
       } catch (err) {
         if (gen === storeGeneration) {
-          this.nodeContentsByKey[nKey] = { ...prev, loading: false };
+          const live = this.nodeContentsByKey[nKey] || prev;
+          this.nodeContentsByKey[nKey] = { ...live, loading: false };
         }
         throw err;
       }

@@ -222,7 +222,7 @@ export default {
       }
     },
     markDirty() {
-      if (!this.contentLoaded) return;
+      if (!this.contentLoaded && !this.editing) return;
       if (!this.dirty) {
         this.editBaseRevId = this.loadedRevId;
       }
@@ -414,7 +414,7 @@ export default {
               <template v-if="activeSlide.layout === 'title'">
                 <div class="creation-slide-center">
                   <input
-                    v-if="editing"
+                    v-if="editing && contentLoaded"
                     v-model="activeSlide.title"
                     class="creation-slide-input is-title"
                     :placeholder="$t('creation.deck.titlePlaceholder')"
@@ -423,7 +423,7 @@ export default {
                   <h1 v-else class="creation-slide-title" @click="startEditing">{{ activeSlide.title }}</h1>
 
                   <input
-                    v-if="editing"
+                    v-if="editing && contentLoaded"
                     v-model="activeSlide.subtitle"
                     class="creation-slide-input is-subtitle"
                     :placeholder="$t('creation.deck.bulletPlaceholder')"
@@ -436,7 +436,7 @@ export default {
               <template v-else-if="activeSlide.layout === 'quote'">
                 <div class="creation-slide-center">
                   <textarea
-                    v-if="editing"
+                    v-if="editing && contentLoaded"
                     v-model="activeSlide.body"
                     class="creation-slide-textarea is-quote"
                     :placeholder="$t('creation.deck.bulletPlaceholder')"
@@ -446,7 +446,7 @@ export default {
                     {{ activeSlide.body || activeSlide.title }}
                   </blockquote>
                   <input
-                    v-if="editing"
+                    v-if="editing && contentLoaded"
                     v-model="activeSlide.subtitle"
                     class="creation-slide-input is-subtitle"
                     @input="markDirty"
@@ -456,17 +456,17 @@ export default {
               </template>
 
               <template v-else-if="activeSlide.layout === 'two_column'">
-                <input v-if="editing" v-model="activeSlide.title" class="creation-slide-input is-heading" @input="markDirty" />
+                <input v-if="editing && contentLoaded" v-model="activeSlide.title" class="creation-slide-input is-heading" @input="markDirty" />
                 <h2 v-else class="creation-slide-heading" @click="startEditing">{{ activeSlide.title }}</h2>
                 <div class="creation-slide-two-col">
                   <div class="creation-slide-col">
-                    <textarea v-if="editing" v-model="bulletsText" class="creation-slide-textarea" :placeholder="$t('creation.deck.bulletPlaceholder')"></textarea>
+                    <textarea v-if="editing && contentLoaded" v-model="bulletsText" class="creation-slide-textarea" :placeholder="$t('creation.deck.bulletPlaceholder')"></textarea>
                     <ul v-else class="creation-slide-bullets" @click="startEditing">
                       <li v-for="(b, bi) in activeSlide.bullets" :key="bi">{{ b }}</li>
                     </ul>
                   </div>
                   <div class="creation-slide-col">
-                    <textarea v-if="editing" v-model="activeSlide.body" class="creation-slide-textarea" @input="markDirty"></textarea>
+                    <textarea v-if="editing && contentLoaded" v-model="activeSlide.body" class="creation-slide-textarea" @input="markDirty"></textarea>
                     <div v-else class="creation-slide-body" @click="startEditing">
                       <img v-if="activeSlideImageUrl" :src="activeSlideImageUrl" :alt="activeSlide.title" class="creation-slide-img" />
                       <p v-if="activeSlide.body">{{ activeSlide.body }}</p>
@@ -476,7 +476,7 @@ export default {
               </template>
 
               <template v-else-if="activeSlide.layout === 'image_focus'">
-                <input v-if="editing" v-model="activeSlide.title" class="creation-slide-input is-heading" @input="markDirty" />
+                <input v-if="editing && contentLoaded" v-model="activeSlide.title" class="creation-slide-input is-heading" @input="markDirty" />
                 <h2 v-else class="creation-slide-heading" @click="startEditing">{{ activeSlide.title }}</h2>
                 <div class="creation-slide-image-stage">
                   <img v-if="activeSlideImageUrl" :src="activeSlideImageUrl" :alt="activeSlide.title" class="creation-slide-img-hero" />
@@ -484,14 +484,14 @@ export default {
                     <span>{{ activeSlide.body || $t('creation.deck.emptyDeck') }}</span>
                   </div>
                 </div>
-                <input v-if="editing" v-model="activeSlide.subtitle" class="creation-slide-input is-caption" @input="markDirty" />
+                <input v-if="editing && contentLoaded" v-model="activeSlide.subtitle" class="creation-slide-input is-caption" @input="markDirty" />
                 <p v-else-if="activeSlide.subtitle" class="creation-slide-caption">{{ activeSlide.subtitle }}</p>
               </template>
 
               <template v-else>
-                <input v-if="editing" v-model="activeSlide.title" class="creation-slide-input is-heading" @input="markDirty" />
+                <input v-if="editing && contentLoaded" v-model="activeSlide.title" class="creation-slide-input is-heading" @input="markDirty" />
                 <h2 v-else class="creation-slide-heading" @click="startEditing">{{ activeSlide.title }}</h2>
-                <textarea v-if="editing" v-model="bulletsText" class="creation-slide-textarea" :placeholder="$t('creation.deck.bulletPlaceholder')"></textarea>
+                <textarea v-if="editing && contentLoaded" v-model="bulletsText" class="creation-slide-textarea" :placeholder="$t('creation.deck.bulletPlaceholder')"></textarea>
                 <ul v-else-if="activeSlide.bullets.length" class="creation-slide-bullets" @click="startEditing">
                   <li v-for="(b, bi) in activeSlide.bullets" :key="bi">{{ b }}</li>
                 </ul>
@@ -516,6 +516,7 @@ export default {
               <textarea
                 v-model="activeSlide.speakerNotes"
                 class="creation-deck-notes-input"
+                :disabled="!contentLoaded"
                 :placeholder="$t('creation.deck.notesPlaceholder')"
                 @input="markDirty"
               ></textarea>

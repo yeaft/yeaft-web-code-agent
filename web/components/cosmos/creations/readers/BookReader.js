@@ -553,6 +553,7 @@ export default {
               v-model="draftText"
               class="creation-book-textarea"
               :style="proseStyle"
+              :disabled="!contentLoaded && !dirty"
               :placeholder="$t('creation.book.anchorPlaceholder')"
               @input="onEditorInput"
               @keydown.meta.s.prevent="saveEdit(false)"
