@@ -213,19 +213,34 @@ function stripBracketedLinks(text, imagesOnly) {
 }
 
 const UNICODE_PUNCT_RE = /[\p{P}\p{S}]/u;
-const isNonAsciiPunct = ch => Boolean(ch && ch.charCodeAt(0) > 127 && UNICODE_PUNCT_RE.test(ch));
+function codePointAtInfo(str, idx) {
+  const cp = str.codePointAt(idx);
+  const width = cp > 0xffff ? 2 : 1;
+  return { cp, width, ch: width === 2 ? str.slice(idx, idx + 2) : str[idx] };
+}
+function prevCodePointInfo(str, endIdx) {
+  if (endIdx >= 2) {
+    const lo = str.charCodeAt(endIdx - 1);
+    const hi = str.charCodeAt(endIdx - 2);
+    if (lo >= 0xdc00 && lo <= 0xdfff && hi >= 0xd800 && hi <= 0xdbff) {
+      return { cp: str.codePointAt(endIdx - 2), width: 2, ch: str.slice(endIdx - 2, endIdx) };
+    }
+  }
+  return { cp: str.charCodeAt(endIdx - 1), width: 1, ch: str[endIdx - 1] };
+}
+const isNonAsciiPunct = (cp, ch) => cp > 127 && UNICODE_PUNCT_RE.test(ch);
 const isBareUrlStop = ch => !ch || /[\s<>"]/.test(ch);
 
 function trimTrailingUrlPunct(str, start, end, openParens, closeParens, openBrackets, closeBrackets) {
   let j = end;
   while (j > start) {
-    const last = str[j - 1];
-    const escaped = j >= start + 2 && str[j - 2] === '\\';
-    if (last === ')' && !escaped && closeParens > openParens) { closeParens--; j--; continue; }
-    if (last === ']' && !escaped && closeBrackets > openBrackets) { closeBrackets--; j--; continue; }
+    const { cp, width, ch: last } = prevCodePointInfo(str, j);
+    const escaped = j - width >= start + 1 && str[j - width - 1] === '\\';
+    if (width === 1 && last === ')' && !escaped && closeParens > openParens) { closeParens--; j--; continue; }
+    if (width === 1 && last === ']' && !escaped && closeBrackets > openBrackets) { closeBrackets--; j--; continue; }
     if (!escaped && (last === '\'' || last === '`' || last === '*' || last === '_' || last === '~'
-      || last === '.' || last === ',' || last === ';' || last === ':' || last === '!' || last === '?' || isNonAsciiPunct(last))) {
-      j--;
+      || last === '.' || last === ',' || last === ';' || last === ':' || last === '!' || last === '?' || isNonAsciiPunct(cp, last))) {
+      j -= width;
       continue;
     }
     break;
@@ -273,48 +288,78 @@ function matchUrlStartAt(str, offset) {
     }
   }
 
-  // 3. Scheme-relative //authority/... URL (supports IPv6 including Markdown-escaped \[...\], leading punctuation in userinfo
-  // such as //–user:pass@host:8080, single-label hosts, explicit ports, and adjacent localized prose with later '@' mentions,
-  // while preserving ordinary '// comment', '//TODO', and '//–note: ok' prose).
+  // 3. Scheme-relative //authority/... URL: scan by full Unicode code point (so supplementary-plane symbols like 📌
+  // are recognized with exact UTF-16 slice offsets) and reserve cut-point budget for complete authority candidates
+  // (skipping pre-'@' userinfo noise that cannot form a valid host[:port]).
   if (offset + 3 < len && c0 === 47 && str.charCodeAt(offset + 1) === 47 && prev !== 58 && prev !== 47) {
     const next = str[offset + 2];
     if (next && next !== '/' && !isBareUrlStop(next)) {
       let k = offset + 2;
-      const maxScan = Math.min(len, offset + 512);
+      const maxScan = Math.min(len, offset + 2048);
       let openParens = 0, closeParens = 0, openBrackets = 0, closeBrackets = 0;
       let seenUrlSignal = false;
+      let seenAt = false;
+      let seenPath = false;
+      let inBrackets = false;
+      let seenPortColon = false;
+      let hasNonPortAfterColon = false;
       let prevWasDelim = false;
-      const cutPoints = [];
+      const preAtCuts = [];
+      const postAtCuts = [];
       while (k < maxScan && !isBareUrlStop(str[k])) {
         if (str[k] === '\\' && k + 1 < maxScan && !isBareUrlStop(str[k + 1])) {
           const esc = str[k + 1];
-          if (esc === '[') { openBrackets++; seenUrlSignal = true; }
-          else if (esc === ']') closeBrackets++;
+          if (esc === '[') { openBrackets++; inBrackets = true; seenUrlSignal = true; }
+          else if (esc === ']') { closeBrackets++; inBrackets = false; }
           else if (esc === '/' || esc === '?' || esc === '#' || esc === ':' || esc === '@' || esc === '.') seenUrlSignal = true;
           prevWasDelim = false;
           k += 2;
           continue;
         }
-        const ch = str[k];
-        const isDelim = isNonAsciiPunct(ch) || ch === ',' || ch === ';' || ch === '!' || ch === ')' || ch === '\'' || ch === '`' || ch === '*' || ch === '_' || ch === '~';
+        const { cp, width, ch } = codePointAtInfo(str, k);
+        const isDelim = isNonAsciiPunct(cp, ch) || (width === 1 && (ch === ',' || ch === ';' || ch === '!' || ch === ')' || ch === '\'' || ch === '`' || ch === '*' || ch === '_' || ch === '~'));
         if (isDelim) {
-          if (!prevWasDelim && seenUrlSignal && cutPoints.length < 64) cutPoints.push(k);
+          // Separate pre-'@' and post-'@' cut budgets so userinfo punctuation can never exhaust host/port cut slots,
+          // and later prose '@' mentions can never erase an earlier validated cut.
+          const couldBeComplete = seenUrlSignal && (seenAt || seenPath || !hasNonPortAfterColon);
+          if (!prevWasDelim && couldBeComplete) {
+            const bucket = seenAt ? postAtCuts : preAtCuts;
+            if (bucket.length < 64) bucket.push(k);
+          }
+          if (!seenAt && !seenPath && seenPortColon) hasNonPortAfterColon = true;
           prevWasDelim = true;
         } else {
           prevWasDelim = false;
-          if (ch === '/' || ch === '?' || ch === '#' || ch === ':' || ch === '@' || ch === '.' || ch === '[') seenUrlSignal = true;
+          if (width === 1) {
+            if (ch === '@') { seenAt = true; seenUrlSignal = true; }
+            else if (ch === '/' || ch === '?' || ch === '#') { seenPath = true; seenUrlSignal = true; }
+            else if (ch === '[') { openBrackets++; inBrackets = true; seenUrlSignal = true; }
+            else if (ch === ']') { closeBrackets++; inBrackets = false; }
+            else if (ch === '(') openParens++;
+            else if (ch === ')') closeParens++;
+            else if (ch === '.') seenUrlSignal = true;
+            else if (ch === ':') {
+              seenUrlSignal = true;
+              if (!inBrackets && !seenAt && !seenPath) {
+                if (seenPortColon) hasNonPortAfterColon = true;
+                else seenPortColon = true;
+              }
+            } else if (!seenAt && !seenPath && seenPortColon && !(cp >= 48 && cp <= 57)) {
+              hasNonPortAfterColon = true;
+            }
+          } else if (!seenAt && !seenPath && seenPortColon) {
+            hasNonPortAfterColon = true;
+          }
         }
-        if (ch === '(') openParens++;
-        else if (ch === ')') closeParens++;
-        else if (ch === '[') openBrackets++;
-        else if (ch === ']') closeBrackets++;
-        k++;
+        k += width;
       }
       const trimmedEnd = trimTrailingUrlPunct(str, offset + 2, k, openParens, closeParens, openBrackets, closeBrackets);
       if (isValidSchemeRelativeCandidate(str.slice(offset, trimmedEnd))) return 2;
-      // Bounded fallback across delimiter-run starts after the first URL signal so a valid host:port boundary
-      // (e.g. '。' in '//user:DEMO@intranet:8080。通知@ops:值班') is never masked by earlier userinfo punctuation or later prose '@'.
-      for (const cut of cutPoints) {
+      for (const cut of postAtCuts) {
+        const prefixEnd = trimTrailingUrlPunct(str, offset + 2, cut, openParens, closeParens, openBrackets, closeBrackets);
+        if (isValidSchemeRelativeCandidate(str.slice(offset, prefixEnd))) return 2;
+      }
+      for (const cut of preAtCuts) {
         const prefixEnd = trimTrailingUrlPunct(str, offset + 2, cut, openParens, closeParens, openBrackets, closeBrackets);
         if (isValidSchemeRelativeCandidate(str.slice(offset, prefixEnd))) return 2;
       }
@@ -339,8 +384,7 @@ function stripPrivateUrls(text) {
     if (prefixLen > 0) {
       let j = i + prefixLen;
       let openParens = 0, closeParens = 0, openBrackets = 0, closeBrackets = 0;
-      // Consume the entire non-whitespace/non-angle/non-quote token (including valid internal Unicode punctuation
-      // such as en dash '–' in paths or CJK chars in queries), trimming prose delimiters ONLY from the trailing end.
+      // Consume the entire non-whitespace/non-angle/non-quote token by full code point, trimming trailing delimiters only from the end.
       while (j < len && !isBareUrlStop(noLinks[j])) {
         if (noLinks[j] === '\\' && j + 1 < len && !isBareUrlStop(noLinks[j + 1])) {
           const esc = noLinks[j + 1];
@@ -349,12 +393,14 @@ function stripPrivateUrls(text) {
           j += 2;
           continue;
         }
-        const ch = noLinks[j];
-        if (ch === '(') openParens++;
-        else if (ch === ')') closeParens++;
-        else if (ch === '[') openBrackets++;
-        else if (ch === ']') closeBrackets++;
-        j++;
+        const { width, ch } = codePointAtInfo(noLinks, j);
+        if (width === 1) {
+          if (ch === '(') openParens++;
+          else if (ch === ')') closeParens++;
+          else if (ch === '[') openBrackets++;
+          else if (ch === ']') closeBrackets++;
+        }
+        j += width;
       }
       j = trimTrailingUrlPunct(noLinks, i, j, openParens, closeParens, openBrackets, closeBrackets);
       i = j;
