@@ -48,15 +48,18 @@ function waitForLegacySlot(agentId, userId, signal, remainingMs) {
       reject(fail(504, 'Agent briefing timed out'));
       return;
     }
+    // Enforce per-user waiter cap across ALL Agent queues, plus per-Agent cap.
+    let userWaiters = 0;
+    for (const q of legacySlotWaiters.values()) {
+      for (const item of q) if (item.userId === userId) userWaiters++;
+    }
+    if (userWaiters >= maxLegacyWaitersPerUser) {
+      reject(fail(429, 'Too many active briefing requests'));
+      return;
+    }
     let set = legacySlotWaiters.get(agentId);
     if (set) {
       if (set.size >= maxLegacyWaitersPerAgent) {
-        reject(fail(429, 'Too many active briefing requests'));
-        return;
-      }
-      let userWaiters = 0;
-      for (const item of set) if (item.userId === userId) userWaiters++;
-      if (userWaiters >= maxLegacyWaitersPerUser) {
         reject(fail(429, 'Too many active briefing requests'));
         return;
       }
@@ -120,11 +123,27 @@ function settle(key, error, value) {
   if (!entry) return false;
   pending.delete(key);
   clearTimeout(entry.timer);
+  clearTimeout(entry.remoteTimer);
   entry.signal?.removeEventListener('abort', entry.onAbort);
   notifyLegacySlotWaiters(entry.agentId);
   if (entry.abandoned) return true;
   if (error) entry.reject(error); else entry.resolve(value);
   return true;
+}
+
+function abandonLegacyEntry(key, entry, callerErr) {
+  if (entry.abandoned) return;
+  entry.abandoned = true;
+  clearTimeout(entry.timer);
+  entry.timer = null;
+  entry.signal?.removeEventListener('abort', entry.onAbort);
+  entry.reject(callerErr);
+  // Keep remote slot accounted until legacy Agent replies, disconnects, or reaches dispatch-based remote deadline.
+  const remoteRemainingMs = Math.max(1, (entry.dispatchedAt || Date.now()) + requestTimeoutMs - Date.now());
+  entry.remoteTimer = setTimeout(() => {
+    settle(key, fail(504, 'Agent briefing timed out'));
+  }, remoteRemainingMs);
+  entry.remoteTimer.unref();
 }
 
 export async function requestCosmicWebAi({ userId, userRole, agentId, mode, perspective, language, payload, signal }) {
@@ -194,10 +213,20 @@ export async function requestCosmicWebAi({ userId, userRole, agentId, mode, pers
   const requestId = randomUUID();
   const key = keyFor(agentId, requestId);
   return new Promise((resolve, reject) => {
-    const entry = { userId, userRole, agentId, agent, mode, resolve, reject, timer: null, signal, onAbort: null, sent: false, abandoned: false };
+    const entry = {
+      userId, userRole, agentId, agent, mode, resolve, reject,
+      timer: null, remoteTimer: null, dispatchedAt: Date.now(),
+      signal, onAbort: null, sent: false, abandoned: false,
+    };
     const timer = setTimeout(() => {
+      const timeoutErr = fail(504, 'Agent briefing timed out');
+      if (!supportsCancel && entry.sent) {
+        // Legacy v1 Agent cannot be cancelled: reject caller on time, retain remote slot until reply/disconnect/remote deadline.
+        abandonLegacyEntry(key, entry, timeoutErr);
+        return;
+      }
       const wasSent = entry.sent;
-      if (settle(key, fail(504, 'Agent briefing timed out')) && wasSent && supportsCancel) {
+      if (settle(key, timeoutErr) && wasSent && supportsCancel) {
         void sendToAgent(agent, { type: 'cosmic_web_ai_cancel', requestId }).catch(() => {});
       }
     }, remainingExecutionMs);
@@ -206,11 +235,8 @@ export async function requestCosmicWebAi({ userId, userRole, agentId, mode, pers
       const err = signal?.reason?.status === 499 ? fail(499, 'Cosmic Web request cancelled') : fail(503, 'Cosmic Web is stopping');
       const isShutdown = err.status === 503;
       if (!supportsCancel && entry.sent && !isShutdown) {
-        // Legacy v1 Agent ignores cancel frames: reject caller now, but keep accounting for
-        // the occupied remote slot until the legacy Agent replies, times out, or disconnects.
-        entry.abandoned = true;
-        entry.signal?.removeEventListener('abort', onAbort);
-        reject(err);
+        // Legacy v1 Agent ignores cancel frames: reject caller now, retain remote slot until reply/disconnect/remote deadline.
+        abandonLegacyEntry(key, entry, err);
         return;
       }
       const wasSent = entry.sent;
@@ -227,7 +253,10 @@ export async function requestCosmicWebAi({ userId, userRole, agentId, mode, pers
     })
       .then(sent => {
         if (!sent) settle(key, fail(503, 'Agent disconnected'));
-        else entry.sent = true;
+        else {
+          entry.sent = true;
+          entry.dispatchedAt = Date.now();
+        }
       }, () => settle(key, fail(503, 'Agent send failed')));
   });
 }

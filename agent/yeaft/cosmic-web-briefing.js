@@ -146,18 +146,85 @@ function commentItem(item) {
   return { ...comment, ...(sourceUrl ? { sourceUrl } : {}) };
 }
 
+/** Linear-time Markdown link/image/URL stripper for private briefings (defense-in-depth). */
+function stripBracketedLinks(text, imagesOnly) {
+  let out = '';
+  let i = 0;
+  const len = text.length;
+  let nextClose = text.indexOf(']');
+  while (i < len) {
+    const matchOpen = imagesOnly ? (text[i] === '!' && text[i + 1] === '[') : (text[i] === '[');
+    if (matchOpen && nextClose !== -1) {
+      const labelStart = imagesOnly ? i + 2 : i + 1;
+      while (nextClose !== -1 && nextClose < labelStart) nextClose = text.indexOf(']', nextClose + 1);
+      if (nextClose !== -1 && nextClose - labelStart <= 512 && text[nextClose + 1] === '(') {
+        let depth = 1;
+        let j = nextClose + 2;
+        const limit = Math.min(len, nextClose + 2 + 2048);
+        while (j < limit && depth > 0) {
+          if (text[j] === '\\' && j + 1 < limit) { j += 2; continue; }
+          if (text[j] === '(') depth++;
+          else if (text[j] === ')') depth--;
+          j++;
+        }
+        if (depth === 0) {
+          out += text.slice(labelStart, nextClose);
+          i = j;
+          continue;
+        }
+      }
+    }
+    out += text[i];
+    i++;
+  }
+  return out;
+}
+
+function stripPrivateUrls(text) {
+  if (typeof text !== 'string' || !text) return text;
+  const noLinks = stripBracketedLinks(stripBracketedLinks(text, true), false);
+  let out = '';
+  let i = 0;
+  const len = noLinks.length;
+  const lower = noLinks.toLowerCase();
+  let nextGt = noLinks.indexOf('>');
+  while (i < len) {
+    if (noLinks[i] === '<' && (lower.startsWith('http://', i + 1) || lower.startsWith('https://', i + 1))) {
+      while (nextGt !== -1 && nextGt <= i) nextGt = noLinks.indexOf('>', nextGt + 1);
+      if (nextGt !== -1) { i = nextGt + 1; continue; }
+    }
+    if (lower.startsWith('http://', i) || lower.startsWith('https://', i)) {
+      let j = i + (lower.startsWith('https://', i) ? 8 : 7);
+      while (j < len && !/[\s<>"')\]]/.test(noLinks[j])) j++;
+      i = j;
+      continue;
+    }
+    out += noLinks[i];
+    i++;
+  }
+  return out;
+}
+
 function buildNewsData(payload) {
   const input = isRecord(payload) ? payload : {};
   const isPrivate = input.isPrivateSource === true;
+  const projected = projectText(input, { headline: 500, articleMarkdown: 12_000, url: MAX_URL, sourceUrl: MAX_URL, quality: 40, date: 32,
+    question: 500, topic: 300, topicName: 300, query: 300, tldr: 400, context: 3000, briefContext: 3000, summaryExcerpt: 1000 });
+  if (isPrivate) {
+    if (projected.articleMarkdown) projected.articleMarkdown = stripPrivateUrls(projected.articleMarkdown);
+    if (projected.summaryExcerpt) projected.summaryExcerpt = stripPrivateUrls(projected.summaryExcerpt);
+  }
   return {
-    ...projectText(input, { headline: 500, articleMarkdown: 12_000, url: MAX_URL, sourceUrl: MAX_URL, quality: 40, date: 32,
-      question: 500, topic: 300, topicName: 300, query: 300, tldr: 400, context: 3000, briefContext: 3000, summaryExcerpt: 1000 }),
+    ...projected,
     ...(input.keywords ? { keywords: (Array.isArray(input.keywords) ? take(input.keywords, 12) : [input.keywords])
       .map(keyword => boundedText(keyword, 120)).filter(Boolean) } : {}),
     ...(!isPrivate && Array.isArray(input.media) ? { media: take(input.media, 12).map(mediaItem).filter(Boolean) } : {}),
     ...(Array.isArray(input.communityComments) ? { communityComments: take(input.communityComments, 24).map(commentItem).filter(Boolean) } : {}),
     sources: take(input.sources, 12).map(source => {
       const evidence = projectEvidence(source, 1000);
+      if (isPrivate && isRecord(evidence) && evidence.summaryExcerpt) {
+        evidence.summaryExcerpt = stripPrivateUrls(evidence.summaryExcerpt);
+      }
       return !isPrivate && Array.isArray(source?.media) && isRecord(evidence)
         ? { ...evidence, media: take(source.media, 8).map(mediaItem).filter(Boolean) } : evidence;
     }),

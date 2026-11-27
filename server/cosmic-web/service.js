@@ -33,13 +33,15 @@ const preferred = userId => {
   const stored = db.loadUserPrefs(userId);
   const prefs = { ...defaults(), ...stored };
   const normalizedCustom = prefs.customDomains.map(d => ({ aiRadar: false, ...d }));
-  const colliding = normalizedCustom.filter(d => domainIds.has(d.id));
-  if (!colliding.length) {
+  const persistedIds = db.listPersistedUserDomainIds(userId);
+  const activeColliding = normalizedCustom.filter(d => domainIds.has(d.id));
+  const activeCollidingIds = new Set(activeColliding.map(d => d.id));
+  const retiredColliding = persistedIds.filter(id => domainIds.has(id) && !activeCollidingIds.has(id));
+  if (!activeColliding.length && !retiredColliding.length) {
     return { ...prefs, customDomains: normalizedCustom };
   }
-  // Idempotent migration: remap any legacy custom domain ID that now collides with a built-in domain.
-  // Reserve both active custom IDs AND any retired domain IDs still referenced in cw_sources/cw_items.
-  const persistedIds = db.listPersistedUserDomainIds(userId);
+  // Idempotent migration: remap any active or retired legacy owner-private domain ID that collides with a built-in domain.
+  // Reserve built-ins, active custom IDs, AND all persisted domain IDs in cw_sources/cw_items.
   const usedIds = new Set([
     ...domainIds,
     ...persistedIds,
@@ -54,8 +56,14 @@ const preferred = userId => {
     remaps.push([d.id, candidate]);
     return { ...d, id: candidate };
   });
+  for (const oldId of retiredColliding) {
+    let candidate = `retired-${oldId}`;
+    for (let n = 2; usedIds.has(candidate); n++) candidate = `retired-${oldId}-${n}`;
+    usedIds.add(candidate);
+    remaps.push([oldId, candidate]);
+  }
   const remappedDisabled = new Set(Array.isArray(prefs.disabledSources) ? prefs.disabledSources : []);
-  if (stored && remaps.length) {
+  if (remaps.length) {
     db.cosmicWebTransaction(() => {
       for (const [oldId, newId] of remaps) {
         const existingSources = db.listSourcesForUserDomain(userId, oldId);
@@ -76,8 +84,10 @@ const preferred = userId => {
         // Catch any remaining items/sources referencing oldId directly
         db.migrateCustomDomainId(userId, oldId, newId);
       }
-      const persistedPrefs = { ...prefs, customDomains: migratedCustom, disabledSources: [...remappedDisabled] };
-      db.saveUserPrefs(userId, persistedPrefs, Date.now());
+      if (stored || activeColliding.length) {
+        const persistedPrefs = { ...prefs, customDomains: migratedCustom, disabledSources: [...remappedDisabled] };
+        db.saveUserPrefs(userId, persistedPrefs, Date.now());
+      }
     });
     return { ...prefs, customDomains: migratedCustom, disabledSources: [...remappedDisabled] };
   }
@@ -156,10 +166,14 @@ function listClusters(userId, prefs, now, id) {
       : toItem(articleRow));
     const keywords = JSON.parse(row.keywords_json);
     const fields = [row.headline, row.summary_excerpt, ...items.map(i => i.title), ...keywords];
-    const actual = [...new Set(items.map(i => i.domainId))];
+    // Owner-private rows belong only to custom domains; never project them into built-in domains.
+    const actual = [...new Set(items
+      .filter((i, idx) => articles[idx].owner_user_id === null || !domainIds.has(i.domainId))
+      .map(i => i.domainId))];
     const custom = prefs.customDomains.filter(d => d.enabled && d.keywords.length && matches(d.keywords, fields)).map(d => d.id);
     const allDomains = [...new Set([...actual, ...custom])];
-    const domainId = allDomains.find(d => enabled.has(d)) ?? actual[0];
+    if (!allDomains.length) return [];
+    const domainId = allDomains.find(d => enabled.has(d)) ?? actual[0] ?? allDomains[0];
     const sourceNames = [...new Set(items.map(i => i.sourceName))];
     const state = states.get(row.id) ?? { unread: true, bookmarked: false };
     const domain = [...BUILTIN_DOMAINS, ...prefs.customDomains].find(d => d.id === domainId);
@@ -523,7 +537,71 @@ export function createCosmicWebService({ fetcher = safeFetch, dnsLookup, now = D
       );
     });
   }
-  const storyContext = c => ({ headline: c.headline, summaryExcerpt: c.summaryExcerpt,
+  /** Linear-time Markdown link/image/URL stripper for private briefings (keeps Clean Article cache intact). */
+  function stripBracketedLinks(text, imagesOnly) {
+    let out = '';
+    let i = 0;
+    const len = text.length;
+    let nextClose = text.indexOf(']');
+    while (i < len) {
+      const matchOpen = imagesOnly ? (text[i] === '!' && text[i + 1] === '[') : (text[i] === '[');
+      if (matchOpen && nextClose !== -1) {
+        const labelStart = imagesOnly ? i + 2 : i + 1;
+        while (nextClose !== -1 && nextClose < labelStart) nextClose = text.indexOf(']', nextClose + 1);
+        if (nextClose !== -1 && nextClose - labelStart <= 512 && text[nextClose + 1] === '(') {
+          let depth = 1;
+          let j = nextClose + 2;
+          const limit = Math.min(len, nextClose + 2 + 2048);
+          while (j < limit && depth > 0) {
+            if (text[j] === '\\' && j + 1 < limit) { j += 2; continue; }
+            if (text[j] === '(') depth++;
+            else if (text[j] === ')') depth--;
+            j++;
+          }
+          if (depth === 0) {
+            out += text.slice(labelStart, nextClose);
+            i = j;
+            continue;
+          }
+        }
+      }
+      out += text[i];
+      i++;
+    }
+    return out;
+  }
+  function stripPrivateUrls(text) {
+    if (typeof text !== 'string' || !text) return text;
+    const noLinks = stripBracketedLinks(stripBracketedLinks(text, true), false);
+    let out = '';
+    let i = 0;
+    const len = noLinks.length;
+    const lowerText = noLinks.toLowerCase();
+    let nextGt = noLinks.indexOf('>');
+    while (i < len) {
+      if (noLinks[i] === '<' && (lowerText.startsWith('http://', i + 1) || lowerText.startsWith('https://', i + 1))) {
+        while (nextGt !== -1 && nextGt <= i) nextGt = noLinks.indexOf('>', nextGt + 1);
+        if (nextGt !== -1) { i = nextGt + 1; continue; }
+      }
+      if (lowerText.startsWith('http://', i) || lowerText.startsWith('https://', i)) {
+        let j = i + (lowerText.startsWith('https://', i) ? 8 : 7);
+        while (j < len && !/[\s<>"')\]]/.test(noLinks[j])) j++;
+        i = j;
+        continue;
+      }
+      out += noLinks[i];
+      i++;
+    }
+    return out;
+  }
+  function prioritizeSelectedSources(items, selected, isPrivateSource, max = 12) {
+    const ordered = selected ? [selected, ...items.filter(it => it.id !== selected.id)] : items;
+    const bounded = ordered.slice(0, max);
+    if (!isPrivateSource) return bounded;
+    return bounded.map(it => ({ ...it, media: [], summaryExcerpt: stripPrivateUrls(it.summaryExcerpt) }));
+  }
+  const storyContext = c => ({ headline: c.headline,
+    summaryExcerpt: c.isPrivateSource ? stripPrivateUrls(c.summaryExcerpt) : c.summaryExcerpt,
     publishedAt: c.publishedAt, sourceNames: c.sourceNames.slice(0, 4) });
 
   async function savePreferences(userId, patch) {
@@ -768,12 +846,16 @@ export function createCosmicWebService({ fetcher = safeFetch, dnsLookup, now = D
       ]);
       // Never enable outbound web research for owner-private feeds or legacy v1 Agents.
       const allowResearch = !c.isPrivateSource && body.research === true && Boolean(options.agent?.supportsResearch);
+      const safeArticleMd = c.isPrivateSource && content?.markdown
+        ? stripPrivateUrls(content.markdown).slice(0, 12_000)
+        : content?.markdown?.slice(0, 12_000);
+      const safeExcerpt = c.isPrivateSource ? stripPrivateUrls(item.summaryExcerpt) : item.summaryExcerpt;
       const result = await ai(userId, userRole, mode, body, {
-        headline: item.title, sourceUrl: item.url, summaryExcerpt: item.summaryExcerpt,
+        headline: item.title, sourceUrl: item.url, summaryExcerpt: safeExcerpt,
         isPrivateSource: c.isPrivateSource,
         research: allowResearch,
-        articleMarkdown: content?.markdown?.slice(0, 12_000), quality: content?.quality,
-        sources: c.items.slice(0, 12), ...context,
+        articleMarkdown: safeArticleMd, quality: content?.quality,
+        sources: prioritizeSelectedSources(c.items, item, c.isPrivateSource, 12), ...context,
       }, signal, options);
       ensureRunning(signal);
       ensureActive(userId);
@@ -792,11 +874,12 @@ export function createCosmicWebService({ fetcher = safeFetch, dnsLookup, now = D
       const briefContext = (options.agent && db.getAiCache(userId, briefKey(id, item.id, options.agent.id), now()))
         || (typeof body.briefContext === 'string' ? body.briefContext.trim().slice(0, 1500) : undefined);
       const allowResearch = !c.isPrivateSource && body.research === true && Boolean(options.agent?.supportsResearch);
+      const safeExcerpt = c.isPrivateSource ? stripPrivateUrls(item.summaryExcerpt) : item.summaryExcerpt;
       return ai(userId, userRole, 'follow_up', body, {
-        ...storyContext(c), headline: item.title, sourceUrl: item.url,
+        ...storyContext(c), headline: item.title, sourceUrl: item.url, summaryExcerpt: safeExcerpt,
         isPrivateSource: c.isPrivateSource,
         question: body.question.trim(), research: allowResearch, briefContext: briefContext ?? undefined,
-        sources: c.items.slice(0, 12), ...context,
+        sources: prioritizeSelectedSources(c.items, item, c.isPrivateSource, 12), ...context,
       }, signal, options);
     },
     async radarScan(userId, userRole, domainId, body = {}, reqSignal) {

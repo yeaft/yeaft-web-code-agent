@@ -533,7 +533,8 @@ export const useCosmicWebStore = defineStore('cosmicWeb', {
 
       const isNewCluster = this.readerClusterId !== clusterId || this.activeClusterDetail?.id !== clusterId;
       const nextUrl = url || null;
-      const matchedExisting = !isNewCluster && !itemId && nextUrl
+      const isUrlOnlySelection = !itemId && Boolean(nextUrl);
+      const matchedExisting = !isNewCluster && isUrlOnlySelection
         ? (Array.isArray(this.activeClusterDetail?.items)
           ? this.activeClusterDetail.items.find((it) => it && it.url === nextUrl)
           : null)
@@ -588,12 +589,13 @@ export const useCosmicWebStore = defineStore('cosmicWeb', {
       }
 
       const detail = this.activeClusterDetail;
-      // Resolve URL-only selections against stored cluster items once so excerpt, clean article, AI brief, and follow-up agree.
-      if (!this.activeArticleItemId && this.activeArticleUrl && Array.isArray(detail?.items)) {
+      // Always re-resolve URL-only selections against fresh detail items so stale IDs from prior cache cannot linger.
+      if (isUrlOnlySelection && this.activeArticleUrl && Array.isArray(detail?.items)) {
         const matched = detail.items.find((it) => it && it.url === this.activeArticleUrl);
-        if (matched?.id) {
-          this.activeArticleItemId = matched.id;
-          this.readerItemId = matched.id;
+        const freshId = matched?.id || null;
+        if (freshId !== this.activeArticleItemId) {
+          this.activeArticleItemId = freshId;
+          this.readerItemId = freshId;
         }
       }
       if (!detail?.isPrivateSource && !(Array.isArray(detail?.communityComments) && detail.communityComments.length)) {

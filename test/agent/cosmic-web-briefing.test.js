@@ -599,20 +599,26 @@ describe('Cosmic Web bounded research', () => {
     expect(replies[0].ok).toBe(true);
     expect(Object.keys(replies[0].result).sort()).toEqual(['bullets', 'followUps', 'fullMarkdown', 'impact', 'tldr']);
 
-    // Round 3 Blocker #2 (defense-in-depth): private source payload strips media from top-level and sources before reaching the model
+    // Round 3 & 4 Blocker #2 (defense-in-depth): private source payload strips media AND linked/bare URLs from articleMarkdown/excerpts before reaching the model
     const privateAdapter = stubAdapter(story);
     await run({
       adapter: privateAdapter,
       payload: {
         isPrivateSource: true,
         headline: 'Private memo',
+        summaryExcerpt: 'Summary with https://private.example/secret-exc.png inside.',
+        articleMarkdown: 'Body with [![Chart](https://private.example/secret-fig.png)](https://private.example/secret-fig.png) and [doc](https://private.example/secret-md.png).',
         media: [{ url: 'https://private.example/secret-top.png', kind: 'image' }],
-        sources: [{ title: 'Memo', url: 'https://private.example/memo', media: [{ url: 'https://private.example/secret-source.png', kind: 'image' }] }],
+        sources: [{ title: 'Memo', url: 'https://private.example/memo', summaryExcerpt: 'Source https://private.example/secret-src-exc.png', media: [{ url: 'https://private.example/secret-source.png', kind: 'image' }] }],
       },
     });
     const sentPrompt = JSON.stringify(privateAdapter.call.mock.lastCall[0].messages);
     expect(sentPrompt).not.toContain('secret-top.png');
     expect(sentPrompt).not.toContain('secret-source.png');
+    expect(sentPrompt).not.toContain('secret-fig.png');
+    expect(sentPrompt).not.toContain('secret-md.png');
+    expect(sentPrompt).not.toContain('secret-exc.png');
+    expect(sentPrompt).not.toContain('secret-src-exc.png');
   });
 });
 

@@ -1077,8 +1077,17 @@ describe('2.0 graph and AI contracts', () => {
     const privDet = await svc.cluster('alice', privNode.clusterId);
     expect(privDet.media).toEqual([]);
     expect(JSON.stringify(privDet)).not.toContain(secretMediaUrl);
-    await svc.aiBrief('alice', 'user', privNode.clusterId, { research: true });
+    // Round 4 Blocker #2: linked/bare private media URLs inside cached articleMarkdown must be stripped from AI payloads while Clean Article stays intact
+    const privItemId = privDet.items[0].id;
+    const linkedPrivateMd = `Quarterly notes with [![Chart](${secretMediaUrl})](${secretMediaUrl}) and [Figure](${secretMediaUrl}) and ${secretMediaUrl}.`;
+    db.setArticleCache('alice', privItemId, {
+      title: 'Private img note', markdown: linkedPrivateMd, quality: 'full', itemId: privItemId, clusterId: privNode.clusterId, summaryExcerpt: 'Note',
+    }, NOW + HOUR);
+    const cleanPrivateArt = await svc.article('alice', privNode.clusterId, { itemId: privItemId });
+    expect(cleanPrivateArt.markdown).toContain(secretMediaUrl);
+    await svc.aiBrief('alice', 'user', privNode.clusterId, { research: true, force: true });
     expect(JSON.stringify(requestAi.mock.lastCall[0].payload)).not.toContain(secretMediaUrl);
+    expect(requestAi.mock.lastCall[0].payload.articleMarkdown).toContain('Quarterly notes');
     await svc.followUp('alice', 'user', privNode.clusterId, { question: 'Any updates?', research: true });
     expect(JSON.stringify(requestAi.mock.lastCall[0].payload)).not.toContain(secretMediaUrl);
 
@@ -1180,5 +1189,112 @@ describe('2.0 graph and AI contracts', () => {
     expect(carolBoot.preferences.customDomains[0].id).toBe('custom-sports-2');
     expect(svc.feed('carol', { domainId: 'custom-sports-2' }).total).toBe(1);
     await expect(svc.savePreferences('carol', { ...carolBoot.preferences })).resolves.toBeTruthy();
+
+    // Round 4 Blocker #3: retired legacy custom domain 'sports' (persisted rows only, absent from current prefs.customDomains)
+    // must migrate to retired-sports and NEVER resurrect when the user enables built-in Sports.
+    const erinFeed = 'https://feeds.example.com/erin-retired-hoops.xml';
+    const erinLegacySrc = `rss-${createHash('sha256').update(JSON.stringify(['erin', 'sports', erinFeed])).digest('hex')}`;
+    ingestCosmicWebItems({ id: erinLegacySrc, ownerUserId: 'erin', domainId: 'sports', name: 'Erin Retired Hoops', url: erinFeed, kind: 'rss' }, [item('Retired private hoops leak', 'https://retired.example/1')], NOW);
+    db.saveUserPrefs('erin', {
+      enabledDomainIds: ['sports'], customDomains: [], watchKeywords: [], muteKeywords: [],
+      disabledSources: [], preferredAgentId: '', defaultPerspective: 'balanced', onboarded: true, autoRefreshMinutes: 15,
+    }, NOW);
+    const erinBoot = svc.bootstrap('erin', 'user');
+    expect(JSON.stringify(erinBoot.graph)).not.toContain('Retired private hoops leak');
+    expect(svc.feed('erin', { domainId: 'sports' }).clusters.some(c => c.headline === 'Retired private hoops leak')).toBe(false);
+    expect(db.listPersistedUserDomainIds('erin')).toContain('retired-sports');
+    expect(db.listPersistedUserDomainIds('erin')).not.toContain('sports');
+
+    // Round 4 Blocker #4: followUp & aiBrief send selected item's OWN summaryExcerpt AND include selected item in bounded sources even beyond index 12.
+    const manyClusterId = 'cluster-14-sources';
+    db.upsertCluster({ id: manyClusterId, ownerUserId: null, headline: 'Cluster Head 0', summaryExcerpt: 'Cluster Excerpt 0', keywords: ['nba'], publishedAt: NOW });
+    let last14Id = '';
+    for (let i = 0; i < 14; i++) {
+      const sid = `pub-many-${i}`;
+      db.upsertSource({ id: sid, ownerUserId: null, domainId: 'ai', name: `Wire ${i}`, url: `https://wire${i}.example/feed`, kind: 'rss' });
+      const iid = `many-item-${i}`;
+      last14Id = iid;
+      db.insertItem({
+        id: iid, ownerUserId: null, clusterId: manyClusterId, sourceId: sid, domainId: 'ai',
+        url: `https://wire${i}.example/story`, title: `Headline ${i}`, summaryExcerpt: `Excerpt from source ${i}`,
+        publishedAt: NOW - i * 1000, hasHotMetric: false, media: [], sourceName: `Wire ${i}`,
+      });
+    }
+    agents.clear();
+    agent('v2-many', 'alice', ['cosmic_web_briefing', 'cosmic_web_research', 'cosmic_web_follow_up', 'cosmic_web_radar', 'cosmic_web_cancel']);
+    await svc.followUp('alice', 'user', manyClusterId, { itemId: last14Id, question: 'What did Wire 13 report?' });
+    const fuPayload = requestAi.mock.lastCall[0].payload;
+    expect(fuPayload.headline).toBe('Headline 13');
+    expect(fuPayload.sourceUrl).toBe('https://wire13.example/story');
+    expect(fuPayload.summaryExcerpt).toBe('Excerpt from source 13');
+    expect(fuPayload.sources.some(s => s.id === last14Id)).toBe(true);
+    expect(fuPayload.sources).toHaveLength(12);
+
+    // Round 4 Blocker #1 + Nit 1 (fake timers): late-dispatched legacy requests reaching caller deadline reject caller (504)
+    // while retaining remote slot accounting until reply/remote deadline; per-user waiter cap (4) spans across Agents.
+    vi.useFakeTimers();
+    try {
+      agents.clear();
+      const ftFramesA = agent('legacy-ft-a', 'frank', ['cosmic_web_briefing']);
+      const ftFramesB = agent('legacy-ft-b', 'frank', ['cosmic_web_briefing']);
+      // Fill both slots on Agent A and abandon them at t=0
+      const a1 = new AbortController(), a2 = new AbortController();
+      const pA1 = requestCosmicWebAi({ userId: 'frank', userRole: 'user', agentId: 'legacy-ft-a', mode: 'brief', signal: a1.signal });
+      const pA2 = requestCosmicWebAi({ userId: 'frank', userRole: 'user', agentId: 'legacy-ft-a', mode: 'brief', signal: a2.signal });
+      await Promise.resolve();
+      a1.abort(Object.assign(new Error('c'), { status: 499 }));
+      a2.abort(Object.assign(new Error('c'), { status: 499 }));
+      await expect(pA1).rejects.toMatchObject({ status: 499 });
+      await expect(pA2).rejects.toMatchObject({ status: 499 });
+      // Fill both slots on Agent B and abandon them too (for cross-Agent waiter cap test)
+      const b1 = new AbortController(), b2 = new AbortController();
+      const pB1 = requestCosmicWebAi({ userId: 'frank', userRole: 'user', agentId: 'legacy-ft-b', mode: 'brief', signal: b1.signal });
+      const pB2 = requestCosmicWebAi({ userId: 'frank', userRole: 'user', agentId: 'legacy-ft-b', mode: 'brief', signal: b2.signal });
+      await Promise.resolve();
+      b1.abort(Object.assign(new Error('c'), { status: 499 }));
+      b2.abort(Object.assign(new Error('c'), { status: 499 }));
+      await expect(pB1).rejects.toMatchObject({ status: 499 });
+      await expect(pB2).rejects.toMatchObject({ status: 499 });
+
+      // Queue 2 waiters on Agent A + 2 waiters on Agent B = 4 total for frank -> 5th waiter on Agent B rejects 429
+      const qa1 = requestCosmicWebAi({ userId: 'frank', userRole: 'user', agentId: 'legacy-ft-a', mode: 'brief' });
+      const qa2 = requestCosmicWebAi({ userId: 'frank', userRole: 'user', agentId: 'legacy-ft-a', mode: 'brief' });
+      const qb1 = requestCosmicWebAi({ userId: 'frank', userRole: 'user', agentId: 'legacy-ft-b', mode: 'brief' });
+      const qb2 = requestCosmicWebAi({ userId: 'frank', userRole: 'user', agentId: 'legacy-ft-b', mode: 'brief' });
+      await expect(requestCosmicWebAi({ userId: 'frank', userRole: 'user', agentId: 'legacy-ft-b', mode: 'brief' }))
+        .rejects.toMatchObject({ status: 429 });
+      // Clean up Agent B waiters via disconnect
+      agents.delete('legacy-ft-b');
+      clearCosmicWebAiRequestsForAgent('legacy-ft-b');
+      await expect(qb1).rejects.toMatchObject({ status: 503 });
+      await expect(qb2).rejects.toMatchObject({ status: 503 });
+
+      // Advance 50s -> both abandoned slots on Agent A finish -> qa1 and qa2 dispatch late with only 25s caller deadline left!
+      vi.advanceTimersByTime(50_000);
+      handleCosmicWebAiResponse('legacy-ft-a', { requestId: ftFramesA[0].requestId, ok: true, result: storyResult });
+      handleCosmicWebAiResponse('legacy-ft-a', { requestId: ftFramesA[1].requestId, ok: true, result: storyResult });
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(ftFramesA).toHaveLength(4);
+      // Advance 26s (total 76s > 75s caller deadline, but only 26s since dispatch < 75s remote deadline)
+      vi.advanceTimersByTime(26_000);
+      await expect(qa1).rejects.toMatchObject({ status: 504 });
+      await expect(qa2).rejects.toMatchObject({ status: 504 });
+      // Both remote slots on legacy-ft-a are STILL occupied -> a new request MUST wait, NOT send a 5th frame!
+      const lateReq = requestCosmicWebAi({ userId: 'frank', userRole: 'user', agentId: 'legacy-ft-a', mode: 'brief' });
+      await Promise.resolve();
+      expect(ftFramesA).toHaveLength(4);
+      // Once remote qa1 actually replies -> slot frees -> lateReq dispatches cleanly!
+      handleCosmicWebAiResponse('legacy-ft-a', { requestId: ftFramesA[2].requestId, ok: true, result: storyResult });
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(ftFramesA).toHaveLength(5);
+      handleCosmicWebAiResponse('legacy-ft-a', { requestId: ftFramesA[4].requestId, ok: true, result: storyResult });
+      await expect(lateReq).resolves.toEqual(storyResult);
+      // Advance past dispatch-based remote deadline for qa2 so no timers leak
+      vi.advanceTimersByTime(75_000);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

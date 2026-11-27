@@ -1603,7 +1603,13 @@ describe('Cosmic Web — Pinia store & interactive overlay', () => {
       },
       {
         match: (u, m) => u.startsWith('/api/cosmic-web/clusters/c-multi/article') && m === 'GET',
-        body: { title: 'Source 2 Clean', markdown: 'Clean extracted article paragraph without AI.', quality: 'full', itemId: 'item-2' },
+        body: (u) => {
+          const qs = new URL(u, 'http://local').searchParams;
+          const isSecond = qs.get('itemId') === 'item-2' || qs.get('url') === 'https://s2.example/b';
+          return isSecond
+            ? { title: 'Source 2 Clean', markdown: 'Clean extracted article paragraph without AI.', quality: 'full', itemId: 'item-2' }
+            : { title: 'Source 1 Clean', markdown: 'Clean article for Source 1.', quality: 'full', itemId: 'item-1' };
+        },
       },
       {
         match: (u, m) => u === '/api/cosmic-web/clusters/c-multi/community' && m === 'GET',
@@ -1696,12 +1702,13 @@ describe('Cosmic Web — Pinia store & interactive overlay', () => {
     expect(webStore.activeArticleItemId).toBeNull();
     expect(webStore.aiBriefData?.tldr).toBe('Brief for default');
 
-    // Round 3 Blocker #4: URL-only selection of source 2 aligns excerpt, active chip, Clean Article, AI brief, AND follow-up
+    // Round 3 Blocker #4 & Round 4 Nit 2: URL-only selection of source 2 aligns excerpt, active chip, Clean Article query, AI brief, AND follow-up
     const priorFollowUps = followUpBodies.length;
     await webStore.openClusterReader('c-multi', { url: 'https://s2.example/b', expanded: true });
     await flushPromises();
     expect(webStore.activeArticleItemId).toBe('item-2');
     expect(webStore.aiBriefData?.tldr).toBe('Brief for item-2');
+    expect(wrapper.find('.cw-reader-modal .cw-footnote-switch.is-active').text()).toBe('Source 2');
     webStore.aiBriefLoading = true;
     await flushPromises();
     expect(wrapper.find('.cw-reader-modal .cw-immediate-excerpt').text()).toContain('Excerpt 2');
