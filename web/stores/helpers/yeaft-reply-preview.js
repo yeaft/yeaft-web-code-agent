@@ -260,9 +260,11 @@ function deriveTopLevelFromRoots(roots, fallbackText, fallbackAt, fallbackTurnId
     };
   }
 
-  let text = fallbackText || '';
-  let at = fallbackAt || 0;
-  let turnId = fallbackTurnId || null;
+  // Once roots exist, derive finished/live text exclusively from roots — NEVER fall back
+  // to the mixed top-level `fallbackText` (which could contain an interrupted live stream).
+  let text = '';
+  let at = 0;
+  let turnId = null;
   let rootId = latestRoot.rootId;
   let finalizedEmptyTurnId = null;
 
@@ -287,7 +289,7 @@ function deriveTopLevelFromRoots(roots, fallbackText, fallbackAt, fallbackTurnId
     turnId = latestRoot.finalizedTurnId;
   } else if (latestRoot.finalizedEmpty) {
     text = '';
-    at = latestRoot.finalizedAt || latestRoot.startedAt || fallbackAt || 0;
+    at = latestRoot.finalizedAt || latestRoot.startedAt || 0;
     turnId = latestRoot.finalizedTurnId;
     finalizedEmptyTurnId = latestRoot.rootId;
   } else if (latestCompleted) {
@@ -365,7 +367,7 @@ function entriesStructurallyEqual(prev, next) {
     for (const ek of nExecKeys) {
       const pe = pr.executions?.[ek];
       const ne = nr.executions[ek];
-      if (!pe || pe.state !== ne.state || pe.text !== ne.text) return false;
+      if (!pe || pe.state !== ne.state || pe.text !== ne.text || Boolean(pe.explicitTerminal) !== Boolean(ne.explicitTerminal)) return false;
     }
   }
   return true;
@@ -534,12 +536,19 @@ export function recordYeaftSessionReplyPreview(store, {
             hasAction = true;
           }
         } else if (execLive && existingExec.state !== 'running') {
-          delete root.executions[PENDING_EXEC_KEY];
-          existingExec.state = 'running';
-          existingExec.seq = nextSeq();
-          hasAction = true;
+          // Do not reopen an explicit non-success terminal execution unless a live retry starts via vp_turn_start.
+          if (existingExec.explicitTerminal !== true || existingExec.state === 'completed') {
+            delete root.executions[PENDING_EXEC_KEY];
+            existingExec.state = 'running';
+            existingExec.explicitTerminal = false;
+            existingExec.seq = nextSeq();
+            hasAction = true;
+          }
         } else if (!execLive && existingExec.state === 'running') {
+          // Snapshot-derived completion is provisional until `vp_turn_end` confirms
+          // whether the reason was `end_turn` vs `route_forward` / `aborted` / `errored`.
           existingExec.state = exec.state === 'completed' ? 'completed' : 'cancelled';
+          existingExec.explicitTerminal = false;
           existingExec.seq = nextSeq();
           hasAction = true;
         }
@@ -620,6 +629,7 @@ export function recordYeaftSessionReplyPreview(store, {
     root.executions[execKey] = {
       turnId: normTurnId,
       state: 'completed',
+      explicitTerminal: true,
       text: resolvedText,
       at: resolvedText ? Math.max(ts, prevExec?.at || 0) : ts,
       seq: nextSeq(),
@@ -632,23 +642,42 @@ export function recordYeaftSessionReplyPreview(store, {
       ? 'route_forward'
       : (reason === 'errored' || reason === 'error' ? 'errored' : 'cancelled');
     if (normTurnId) {
-      const ownerRootId = normRootId || findRootOwningTurn(roots, normTurnId);
-      if (ownerRootId && roots[ownerRootId]) {
-        const root = roots[ownerRootId];
-        const ex = root.executions[normTurnId];
-        if (ex && ex.state === 'running') {
-          ex.state = terminalState;
-          ex.seq = nextSeq();
-          roots[ownerRootId] = summarizeRoot(root);
-          hasAction = true;
-        }
+      let ownerRootId = normRootId || findRootOwningTurn(roots, normTurnId);
+      if (normTurnId && ownerRootId && ownerRootId !== `turn:${normTurnId}` && roots[`turn:${normTurnId}`]) {
+        mergeRootInto(roots, `turn:${normTurnId}`, ownerRootId);
+      }
+      if (!ownerRootId) ownerRootId = `turn:${normTurnId}`;
+      let root = roots[ownerRootId];
+      if (!root) {
+        root = { rootId: ownerRootId, seq: nextSeq(), startedAt: now, executions: {} };
+        roots[ownerRootId] = root;
+      }
+      const ex = root.executions[normTurnId];
+      // An explicit non-success terminal event (`route_forward`, `aborted`, `errored`)
+      // MUST override both `running` and a provisional snapshot-derived `completed` state.
+      const canOverride = !ex
+        || ex.state === 'running'
+        || (ex.state === 'completed' && ex.explicitTerminal !== true);
+      if (canOverride) {
+        delete root.executions[PENDING_EXEC_KEY];
+        root.executions[normTurnId] = {
+          turnId: normTurnId,
+          state: terminalState,
+          explicitTerminal: true,
+          text: ex?.text || '',
+          at: ex?.at || 0,
+          seq: nextSeq(),
+        };
+        roots[ownerRootId] = summarizeRoot(root);
+        hasAction = true;
       }
     } else if (normRootId && roots[normRootId]) {
       const root = roots[normRootId];
       let touched = false;
       for (const ex of Object.values(root.executions || {})) {
-        if (ex && ex.state === 'running') {
+        if (ex && (ex.state === 'running' || (ex.state === 'completed' && ex.explicitTerminal !== true))) {
           ex.state = terminalState;
+          ex.explicitTerminal = true;
           ex.seq = nextSeq();
           touched = true;
         }
@@ -908,7 +937,14 @@ export function reconcileYeaftReplyPreviewsFromStatuses(store, {
     }
     if (!entryMutated) continue;
 
-    const derived = deriveTopLevelFromRoots(roots, entry.text, entry.at, entry.turnId, entry.kind);
+    const hadRoots = Object.keys(entry.roots || {}).length > 0;
+    const derived = deriveTopLevelFromRoots(
+      roots,
+      hadRoots ? '' : (entry.inFlight ? '' : entry.text),
+      hadRoots ? 0 : (entry.inFlight ? 0 : entry.at),
+      hadRoots ? null : (entry.inFlight ? null : entry.turnId),
+      entry.kind,
+    );
     nextMap[key] = {
       ...entry,
       seq,
@@ -996,7 +1032,14 @@ export function clearYeaftAgentAskPreviews(store, agentId = null) {
           }
         }
       }
-      const derived = deriveTopLevelFromRoots(roots, entry.text, entry.at, entry.turnId, entry.kind);
+      const hadRoots = Object.keys(entry.roots || {}).length > 0;
+      const derived = deriveTopLevelFromRoots(
+        roots,
+        hadRoots ? '' : (entry.inFlight ? '' : entry.text),
+        hadRoots ? 0 : (entry.inFlight ? 0 : entry.at),
+        hadRoots ? null : (entry.inFlight ? null : entry.turnId),
+        entry.kind,
+      );
       if (derived.text || derived.finalizedEmptyTurnId || Object.keys(roots).length > 0) {
         nextMap[key] = {
           ...entry,

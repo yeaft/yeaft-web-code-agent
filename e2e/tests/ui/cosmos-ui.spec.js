@@ -381,6 +381,12 @@ test.describe('Yeaft Cosmos UI', () => {
     await expect(signalCards.nth(0)).not.toContainText('Procedural textures and ray-traced lighting');
 
     // Late Turn 1 `result` frame arriving AFTER Turn 2 completed MUST NOT replace Turn 2's unread reply!
+    // Stamp a sentinel on m3 before sending, then wait for browser consumption of the exact frame before asserting.
+    await page.evaluate((convId) => {
+      const chat = window.Pinia.useChatStore();
+      const m3 = (chat.messagesMap[convId] || []).find((row) => row.id === 'm3');
+      if (m3) m3.turnEndAt = 1;
+    }, relayConvId);
     mockAgent.send({
       type: 'yeaft_output',
       conversationId: relayConvId,
@@ -390,6 +396,11 @@ test.describe('Yeaft Cosmos UI', () => {
       userTurnId: 'ut-earth-1',
       data: { type: 'result', ts: t2Now + 200, result_text: '' },
     });
+    await expect.poll(() => page.evaluate((convId) => {
+      const chat = window.Pinia.useChatStore();
+      const m3 = (chat.messagesMap[convId] || []).find((row) => row.id === 'm3');
+      return m3?.turnEndAt || 0;
+    }, relayConvId), { timeout: 5000 }).toBeGreaterThan(1);
     await expect(signalCards.nth(0)).toHaveClass(/is-unread/);
     await expect(signalCards.nth(0)).toContainText('WebGL shader frame time reduced to 2.1ms.');
     await expect(signalCards.nth(0)).not.toContainText('Procedural textures and ray-traced lighting');

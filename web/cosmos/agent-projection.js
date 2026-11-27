@@ -103,19 +103,43 @@ function findRunningModelReentryTask(chatStore, agentId, sessionId, scopedRootId
   return fallbackUnscoped;
 }
 
+function findNewerPendingOptimisticRoot(rootsMap, chosenRootId, currentTurns) {
+  if (!rootsMap) return null;
+  const chosenSeq = chosenRootId && rootsMap[chosenRootId] ? (rootsMap[chosenRootId].seq || 0) : 0;
+  const knownTurnIds = new Set();
+  for (const turn of (currentTurns || [])) {
+    if (turn?.userTurnId) knownTurnIds.add(turn.userTurnId);
+    if (turn?.userMessageId) knownTurnIds.add(turn.userMessageId);
+  }
+  let bestPending = null;
+  for (const root of Object.values(rootsMap)) {
+    if (!root?.hasLiveExecution || root.rootId === chosenRootId) continue;
+    const execKeys = Object.keys(root.executions || {});
+    const isPendingOnly = execKeys.length === 1 && execKeys[0] === '__pending__';
+    if (!isPendingOnly) continue;
+    if (knownTurnIds.has(root.rootId)) continue;
+    if ((root.seq || 0) > chosenSeq && (!bestPending || (root.seq || 0) > (bestPending.seq || 0))) {
+      bestPending = root;
+    }
+  }
+  return bestPending;
+}
+
 /**
  * Select the single authoritative active user-turn root and its active execution IDs
  * for a running Yeaft Session, keeping parallel user turns isolated while allowing
  * sibling VP fan-out executions within the same root to share ownership.
  */
 function selectActiveYeaftRoot(chatStore, agentId, sessionId, convId, cachedPreview) {
+  const rootsMap = cachedPreview?.roots || {};
   const sessionKey = yeaftSessionIdentityKey(agentId, sessionId);
   const turnSnap = sessionKey ? chatStore?.yeaftSessionTurnsBySession?.[sessionKey] : null;
   const currentTurns = isCurrentRuntimeRow(chatStore, turnSnap, convId)
     ? (Array.isArray(turnSnap?.turns) ? turnSnap.turns : [])
     : [];
 
-  // 1. Prefer authoritative current-generation `session_turns`: pick the newest live user-turn root.
+  // 1. Prefer authoritative current-generation `session_turns`: pick the newest live user-turn root,
+  //    unless an even newer optimistic send / newly routed `new` turn is still awaiting execution IDs.
   let chosenTurn = null;
   let chosenTurnAt = -1;
   for (const turn of currentTurns) {
@@ -127,6 +151,15 @@ function selectActiveYeaftRoot(chatStore, agentId, sessionId, convId, cachedPrev
     }
   }
   if (chosenTurn) {
+    const newerPending = findNewerPendingOptimisticRoot(rootsMap, chosenTurn.userTurnId || null, currentTurns);
+    if (newerPending) {
+      return {
+        rootId: newerPending.rootId,
+        turnIds: new Set(),
+        hasExplicitRoot: true,
+        isPendingOptimistic: true,
+      };
+    }
     const turnIds = new Set();
     for (const exec of (chosenTurn.executions || [])) {
       if (exec?.turnId && LIVE_SESSION_TURN_STATES.has(exec.state)) {
@@ -137,6 +170,7 @@ function selectActiveYeaftRoot(chatStore, agentId, sessionId, convId, cachedPrev
       rootId: chosenTurn.userTurnId || null,
       turnIds,
       hasExplicitRoot: true,
+      isPendingOptimistic: false,
     };
   }
 
@@ -152,7 +186,6 @@ function selectActiveYeaftRoot(chatStore, agentId, sessionId, convId, cachedPrev
     if (turnId) group.turnIds.add(turnId);
     if (startedAt > group.startedAt) group.startedAt = startedAt;
   };
-  const rootsMap = cachedPreview?.roots || {};
   const ownerRootForTurn = (turnId) => {
     if (!turnId) return null;
     for (const [rid, r] of Object.entries(rootsMap)) {
@@ -192,16 +225,28 @@ function selectActiveYeaftRoot(chatStore, agentId, sessionId, convId, cachedPrev
         best = group;
       }
     }
+    const newerPending = findNewerPendingOptimisticRoot(rootsMap, best.rootId || null, currentTurns);
+    if (newerPending) {
+      return {
+        rootId: newerPending.rootId,
+        turnIds: new Set(),
+        hasExplicitRoot: true,
+        isPendingOptimistic: true,
+      };
+    }
     return {
       rootId: best.rootId,
       turnIds: best.turnIds,
       hasExplicitRoot: Boolean(best.rootId),
+      isPendingOptimistic: false,
     };
   }
 
   // 3. Optimistic send before broker/turn events arrive (e.g., pending clientMessageId root).
   const latestCachedRoot = cachedPreview?.latestRootId ? rootsMap[cachedPreview.latestRootId] : null;
   if (latestCachedRoot?.hasLiveExecution) {
+    const execKeys = Object.keys(latestCachedRoot.executions || {});
+    const isPendingOptimistic = execKeys.length === 1 && execKeys[0] === '__pending__';
     const turnIds = new Set();
     for (const ex of Object.values(latestCachedRoot.executions || {})) {
       if (ex?.state === 'running' && ex.turnId) turnIds.add(ex.turnId);
@@ -210,6 +255,7 @@ function selectActiveYeaftRoot(chatStore, agentId, sessionId, convId, cachedPrev
       rootId: latestCachedRoot.rootId,
       turnIds,
       hasExplicitRoot: true,
+      isPendingOptimistic,
     };
   }
 
@@ -217,12 +263,13 @@ function selectActiveYeaftRoot(chatStore, agentId, sessionId, convId, cachedPrev
     rootId: null,
     turnIds: new Set(),
     hasExplicitRoot: false,
+    isPendingOptimistic: false,
   };
 }
 
 /**
  * Select the most recent settled user-turn root from authoritative `session_turns`
- * or the root-indexed preview cache.
+ * or the root-indexed preview cache, preserving lifecycle order across reopened roots.
  */
 function selectSettledYeaftRoot(chatStore, agentId, sessionId, convId, cachedPreview) {
   const rootsMap = cachedPreview?.roots || {};
@@ -233,17 +280,37 @@ function selectSettledYeaftRoot(chatStore, agentId, sessionId, convId, cachedPre
     : [];
 
   let latestTurn = null;
-  let latestTurnAt = -1;
+  let latestTurnSeq = -1;
+  let latestTurnOrder = -1;
   for (const turn of currentTurns) {
     if (!turn?.userTurnId) continue;
-    const at = turn.activeSince || turn.startedAt || 0;
-    if (!latestTurn || at >= latestTurnAt) {
+    const cached = rootsMap[turn.userTurnId];
+    const cachedSeq = cached && (cached.finalizedText || cached.finalizedEmpty) ? (cached.seq || 0) : -1;
+    // Use monotonic cache seq when both candidates are cached (handles reopened roots cleanly);
+    // otherwise use authoritative settlement timestamp (`endedAt`, then `activeSince`/`startedAt`).
+    const order = turn.endedAt || turn.activeSince || turn.startedAt || 0;
+    const wins = !latestTurn
+      || (cachedSeq >= 0 && latestTurnSeq >= 0 && cachedSeq !== latestTurnSeq
+        ? cachedSeq > latestTurnSeq
+        : order >= latestTurnOrder);
+    if (wins) {
       latestTurn = turn;
-      latestTurnAt = at;
+      latestTurnSeq = cachedSeq;
+      latestTurnOrder = order;
     }
   }
-  if (latestTurn?.userTurnId && rootsMap[latestTurn.userTurnId]) {
-    return rootsMap[latestTurn.userTurnId];
+  if (latestTurn?.userTurnId) {
+    const matched = rootsMap[latestTurn.userTurnId];
+    if (matched && (matched.finalizedText || matched.finalizedEmpty)) return matched;
+    // If an uncached newer settled turn beat every cached root by `endedAt`, do not fall back to an older cached root.
+    if (Object.keys(rootsMap).length > 0) {
+      const latestCached = Object.values(rootsMap)
+        .filter((r) => r && (r.finalizedText || r.finalizedEmpty))
+        .sort((a, b) => (b.seq || 0) - (a.seq || 0))[0] || null;
+      if (latestCached && latestTurnOrder > (latestCached.finalizedAt || latestCached.startedAt || 0)) {
+        return null;
+      }
+    }
   }
 
   let latestCompleted = null;
@@ -274,11 +341,40 @@ function resolveRunningStatusText(chatStore, {
   convId,
   activeRootId,
   activeTurnIds,
+  isPendingOptimistic = false,
   msgInfo,
   runningTask,
   isEn,
   t,
 }) {
+  // 0a. Optimistic new send awaiting routing/execution IDs -> show queued immediately,
+  //     never borrowing tools/phase from an older parallel turn.
+  if (isYeaft && isPendingOptimistic) {
+    return translateSignal(t, isEn, 'cosmos.signals.stageQueued', null, 'Queued…', '排队处理中…');
+  }
+
+  // 0b. Explicit cancellation of the selected root takes highest precedence over progress/tools.
+  if (isYeaft) {
+    const sessionKey = yeaftSessionIdentityKey(agentId, sessionId);
+    const turnSnap = sessionKey ? chatStore?.yeaftSessionTurnsBySession?.[sessionKey] : null;
+    const turns = isCurrentRuntimeRow(chatStore, turnSnap, convId) ? (turnSnap?.turns || []) : [];
+    const selectedCancelling = turns.some((turn) => (
+      turn?.state === 'cancelling'
+      && (!activeRootId || !turn.userTurnId || turn.userTurnId === activeRootId)
+    ));
+    if (selectedCancelling) {
+      return translateSignal(t, isEn, 'cosmos.signals.stageStopping', null, 'Stopping…', '正在停止…');
+    }
+    if (activeTurnIds?.size > 0) {
+      const stoppingMap = chatStore?.stoppingVpTurnIds || {};
+      for (const tid of activeTurnIds) {
+        if (stoppingMap[tid] || (agentId && stoppingMap[`${agentId}\u001f${tid}`])) {
+          return translateSignal(t, isEn, 'cosmos.signals.stageStopping', null, 'Stopping…', '正在停止…');
+        }
+      }
+    }
+  }
+
   // 1. Live executing non-inline tool name (highest precision, uniform across Yeaft and CLI)
   let runningToolName = '';
   if (isYeaft) {
@@ -839,8 +935,11 @@ export function projectAgentsForCosmos({ chatStore, sessionsStore, nowMs = Date.
       const scheduledNotice = isYeaft
         ? (scheduledTaskNoticesBySession.get(`${agentId}\u001f${item.id}`) || null)
         : null;
+      const isSessionUnread = isYeaft
+        ? Boolean(chatStore?.isYeaftSessionUnread?.(item.id, agentId))
+        : false;
       const isUnread = isYeaft
-        ? Boolean(chatStore?.isYeaftSessionUnread?.(item.id, agentId) || scheduledNotice)
+        ? Boolean(isSessionUnread || scheduledNotice)
         : false;
       const cachedPreview = isYeaft ? (replyPreviewByKey[item.catalogKey] || null) : null;
       const hasRuntimeTruth = isYeaft && hasAuthoritativeYeaftRuntime(chatStore, agentId, item.id, convId);
@@ -853,7 +952,7 @@ export function projectAgentsForCosmos({ chatStore, sessionsStore, nowMs = Date.
 
       const activeRoot = isYeaft && isVpProcessing
         ? selectActiveYeaftRoot(chatStore, agentId, item.id, convId, cachedPreview)
-        : { rootId: null, turnIds: new Set(), hasExplicitRoot: false };
+        : { rootId: null, turnIds: new Set(), hasExplicitRoot: false, isPendingOptimistic: false };
       const settledRoot = isYeaft && !isVpProcessing
         ? selectSettledYeaftRoot(chatStore, agentId, item.id, convId, cachedPreview)
         : null;
@@ -862,6 +961,19 @@ export function projectAgentsForCosmos({ chatStore, sessionsStore, nowMs = Date.
       const runningModelReentryTask = isYeaft
         ? findRunningModelReentryTask(chatStore, agentId, item.id, selectedRootId)
         : null;
+
+      // Track non-reply terminal executions (route_forward / cancelled / errored) so
+      // transcript fallback can never resurrect handoff/aborted prose as a finished answer.
+      const nonReplyTurnIds = new Set();
+      if (isYeaft && cachedPreview?.roots) {
+        for (const root of Object.values(cachedPreview.roots)) {
+          for (const ex of Object.values(root?.executions || {})) {
+            if (ex?.turnId && (ex.state === 'route_forward' || ex.state === 'cancelled' || ex.state === 'errored')) {
+              nonReplyTurnIds.add(ex.turnId);
+            }
+          }
+        }
+      }
 
       const msgInfo = isYeaft
         ? inspectLoadedMessages(loadedMsgs, item.id, {
@@ -950,6 +1062,7 @@ export function projectAgentsForCosmos({ chatStore, sessionsStore, nowMs = Date.
             replyPreview = rootText;
             replyAt = rootAt;
           } else if (msgInfo.currentTurnAssistantSnippet
+            && (!msgInfo.currentTurnAssistantTurnId || !nonReplyTurnIds.has(msgInfo.currentTurnAssistantTurnId))
             && (!msgInfo.currentTurnAssistantTurnId || rootExecTurnIds.size === 0 || rootExecTurnIds.has(msgInfo.currentTurnAssistantTurnId))) {
             replyPreview = msgInfo.currentTurnAssistantSnippet;
             replyAt = msgInfo.currentTurnAssistantAt;
@@ -980,22 +1093,27 @@ export function projectAgentsForCosmos({ chatStore, sessionsStore, nowMs = Date.
             ),
           );
           const validCachedReply = cachedReplyText && !cachedBelongsToPriorTurn ? cachedReplyText : '';
-          const msgReply = msgInfo.currentTurnAssistantSnippet;
+          const msgReply = (msgInfo.currentTurnAssistantTurnId && nonReplyTurnIds.has(msgInfo.currentTurnAssistantTurnId))
+            ? ''
+            : msgInfo.currentTurnAssistantSnippet;
           const useCachedReply = Boolean(validCachedReply)
             && (!msgReply || cachedReplyAt >= msgInfo.currentTurnAssistantAt);
           replyPreview = useCachedReply ? validCachedReply : msgReply;
-          replyAt = useCachedReply ? cachedReplyAt : msgInfo.currentTurnAssistantAt;
+          replyAt = useCachedReply ? cachedReplyAt : (msgReply ? msgInfo.currentTurnAssistantAt : 0);
         }
       }
 
-      // Gate background model_reentry task liveness on task ownership + whether the selected
-      // root actually produced an unread reply (so a silent handoff stays running even if an
-      // unrelated older unread flag or scheduled notice exists on the Session).
-      const currentRootHasReply = Boolean(replyPreview);
+      // Gate background model_reentry task liveness on session unread evidence for the
+      // selected root's finalized reply (independently of scheduled-task notices).
+      const hasUnreadFinalizedReply = Boolean(
+        isSessionUnread
+        && replyPreview
+        && (!settledRoot || !settledRoot.finalizedEmpty),
+      );
       const runningTaskOwnsWaitingState = Boolean(
         !isVpProcessing
         && runningModelReentryTask
-        && (!isUnread || !currentRootHasReply),
+        && !hasUnreadFinalizedReply,
       );
       const isProcessing = isVpProcessing || runningTaskOwnsWaitingState;
       if (runningTaskOwnsWaitingState) {
@@ -1013,6 +1131,7 @@ export function projectAgentsForCosmos({ chatStore, sessionsStore, nowMs = Date.
           convId: isYeaft ? convId : item.id,
           activeRootId: selectedRootId,
           activeTurnIds: activeRoot.turnIds,
+          isPendingOptimistic: activeRoot.isPendingOptimistic,
           msgInfo,
           runningTask: runningModelReentryTask,
           isEn,
