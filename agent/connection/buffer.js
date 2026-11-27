@@ -9,7 +9,7 @@ export const BUFFERABLE_TYPES = new Set([
   'session_id_update', 'compact_status', 'slash_commands_update',
   'background_task_started', 'background_task_output',
   'subagent_started', 'subagent_message', 'subagent_completed',
-  'work_center_event'
+  'work_center_event', 'creation_event'
 ]);
 
 function messageBytes(msg) {

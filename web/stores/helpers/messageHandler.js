@@ -8,6 +8,7 @@ import { acceptPersonResponse } from './digital-person.js';
 import { acceptPluginConfigReply, acceptPluginSkillDetailReply } from './plugin-config.js';
 import { applyScheduledTaskReceipts, bindScheduledTaskNotificationOwner, reconcileScheduledTaskNotifications } from './scheduled-tasks.js';
 import { useAuthStore } from '../auth.js';
+import { useCreationsStore } from '../creations.js';
 import { decodeKey } from '../../utils/encryption.js';
 import { t } from '../../utils/i18n.js';
 import { stopProcessingWatchdog, startLegacyWatchdog } from './watchdog.js';
@@ -1647,6 +1648,14 @@ export function handleMessage(store, msg) {
       if (msg.conversationId && msg.subagentId) {
         store.completeSubagent(msg.conversationId, msg.subagentId);
       }
+      break;
+
+    case 'creation_response':
+      useCreationsStore().handleCreationResponse(msg);
+      break;
+
+    case 'creation_event':
+      useCreationsStore().handleCreationEvent(msg);
       break;
 
   }

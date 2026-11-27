@@ -4,6 +4,7 @@
 import { zhCN as quickSend } from './quick-send.js';
 import { zhCN as userShortcuts } from './user-shortcuts.js';
 import { zhCN as cosmos } from './cosmos.js';
+import { zhCN as creations } from './creations.js';
 
 export default {
   "sessionDiscovery.search": "搜索会话",
@@ -469,6 +470,7 @@ export default {
   ...quickSend,
   ...userShortcuts,
   ...cosmos,
+  ...creations,
   'quickSend.composer.label': '快捷发送',
   'quickSend.composer.send': '快捷发送 {number}：{name}',
   // ============ Common ============

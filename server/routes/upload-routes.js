@@ -5,6 +5,7 @@ import { userDb } from '../database.js';
 import { pendingFiles, previewFiles } from '../context.js';
 import { PREVIEW_FILE_TTL_MS, prunePreviewFiles } from '../preview-files.js';
 import { detectImageMime, yeaftAssetStore } from '../yeaft-asset-store.js';
+import { CREATION_MEDIA_CHUNK_BYTES, openCreationMedia } from '../creation-media-relay.js';
 import { readSessionAttachment } from '../session-attachment-relay.js';
 import { openWorkbenchVideo, readWorkbenchPreview, WORKBENCH_VIDEO_CHUNK_BYTES } from '../workbench-preview.js';
 
@@ -101,6 +102,86 @@ export async function streamWorkbenchVideo(req, res, video) {
   }
 }
 
+const INLINE_CREATION_MEDIA = new Set([
+  'image/avif', 'image/bmp', 'image/gif', 'image/jpeg', 'image/png', 'image/webp', 'image/x-icon',
+  'audio/aac', 'audio/flac', 'audio/mp4', 'audio/mpeg', 'audio/ogg', 'audio/wav', 'audio/webm', 'audio/x-wav',
+  'video/mp4', 'video/mpeg', 'video/ogg', 'video/quicktime', 'video/webm', 'application/pdf',
+]);
+
+async function streamCreationMedia(req, res) {
+  const controller = new AbortController();
+  const abort = () => controller.abort();
+  // IncomingMessage also emits close after *normal* request completion. A
+  // disconnect after the GET is fully read is detected on ServerResponse.
+  const requestClosed = () => { if (!req.complete) abort(); };
+  req.once('close', requestClosed);
+  res.once('close', abort);
+  if (res.destroyed) abort();
+  res.setHeader('Accept-Ranges', 'bytes');
+  res.setHeader('Cache-Control', 'private, no-store, no-transform');
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('Cross-Origin-Resource-Policy', 'same-origin');
+
+  let transfer;
+  try {
+    transfer = openCreationMedia(req.user, req.params, controller.signal);
+    // Resolve the total before parsing suffix/open-ended ranges. Full GETs
+    // use their first pull as the probe so those bytes are not read twice.
+    const first = await transfer.read(0, req.method === 'HEAD' || req.headers.range ? 0 : CREATION_MEDIA_CHUNK_BYTES - 1);
+    const { totalSize, mimeType, filename } = first;
+    const requested = parseByteRange(req.headers.range, totalSize);
+    if (requested === false) {
+      res.setHeader('Content-Range', `bytes */${totalSize}`);
+      res.setHeader('Content-Length', '0');
+      return res.status(416).end();
+    }
+    const range = requested ?? { start: 0, end: totalSize - 1 };
+    const length = range.end - range.start + 1;
+    const isSvg = mimeType === 'image/svg+xml';
+    const inline = req.query.download !== '1' && (INLINE_CREATION_MEDIA.has(mimeType)
+      || (isSvg && req.params.mediaKind === 'asset'));
+    const basename = filename.split(/[/\\]/).pop()?.replace(/[\x00-\x1f\x7f]/g, '') || 'media';
+    const encoded = encodeURIComponent(basename.toWellFormed()).replace(/['()*]/g, c => '%' + c.charCodeAt(0).toString(16));
+    res.status(requested ? 206 : 200);
+    res.setHeader('Content-Type', inline ? mimeType : 'application/octet-stream');
+    res.setHeader('Content-Disposition', `${inline ? 'inline' : 'attachment'}; filename*=UTF-8''${encoded}`);
+    res.setHeader('Content-Length', String(length));
+    if (requested) res.setHeader('Content-Range', `bytes ${range.start}-${range.end}/${totalSize}`);
+    if (inline && isSvg) res.setHeader('Content-Security-Policy', "default-src 'none'; style-src 'unsafe-inline'; sandbox");
+    if (req.method === 'HEAD' || length === 0) return res.end();
+
+    for (let start = range.start; start <= range.end;) {
+      const end = start + Math.min(range.end - start, CREATION_MEDIA_CHUNK_BYTES - 1);
+      const chunk = start === first.start && end <= first.end ? first : await transfer.read(start, end);
+      if (chunk.totalSize !== totalSize || chunk.mimeType !== mimeType || chunk.filename !== filename || chunk.end < end) {
+        throw Object.assign(new Error('Creation media changed during transfer'), { status: 409 });
+      }
+      if (controller.signal.aborted) return;
+      // A stalled reader must not pin a transfer slot indefinitely.
+      const timer = setTimeout(() => res.destroy(), 60_000);
+      timer.unref?.();
+      try {
+        if (!await writeResponseChunk(res, chunk.buffer.subarray(0, end - start + 1))) return;
+      } finally {
+        clearTimeout(timer);
+      }
+      start = end + 1;
+    }
+    res.end();
+  } catch (error) {
+    if (res.destroyed || controller.signal.aborted) return;
+    if (res.headersSent) return res.destroy();
+    for (const header of ['Content-Length', 'Content-Range', 'Content-Type', 'Content-Disposition', 'Content-Security-Policy']) {
+      res.removeHeader(header);
+    }
+    res.status(error.status || 502).type('text/plain').send(error.status ? error.message : 'Creation media read failed');
+  } finally {
+    transfer?.close();
+    req.off('close', requestClosed);
+    res.off('close', abort);
+  }
+}
+
 export function extensionForMimeType(mimeType) {
   const type = String(mimeType || '').toLowerCase();
   if (type === 'image/png') return '.png';
@@ -138,6 +219,10 @@ setInterval(() => prunePreviewFiles(), Math.min(60 * 1000, PREVIEW_FILE_TTL_MS))
  * Register file upload and preview routes.
  */
 export function registerUploadRoutes(app, { requireAuth, requireSessionAuth = requireAuth }) {
+  app.route('/api/yeaft/creations/:agentId/:creationId/media/:mediaKind/:mediaId')
+    .head(requireSessionAuth, streamCreationMedia)
+    .get(requireSessionAuth, streamCreationMedia);
+
   app.post('/api/upload', requireAuth, upload.array('files', 10), (req, res) => {
     if (!req.files || req.files.length === 0) {
       return res.status(400).json({ error: 'No files uploaded' });

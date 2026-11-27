@@ -430,6 +430,37 @@ select option:checked {
   --plugin-center-transition-duration: 0.15s;
   --plugin-center-loader-duration: 0.8s;
   --plugin-center-card-description-lines: 2;
+
+  /* Yeaft Cosmos Creations tokens (light) */
+  --creation-surface: #faf9f6;
+  --creation-surface-elevated: #ffffff;
+  --creation-surface-subtle: #f3f2ee;
+  --creation-surface-paper: #fdfcf9;
+  --creation-surface-sepia: #f5eedc;
+  --creation-surface-night: #17191e;
+  --creation-text-paper: #262421;
+  --creation-text-sepia: #3d3122;
+  --creation-text-night: #dcd9d0;
+  --creation-border: #e2dfd9;
+  --creation-border-strong: #cdc8bf;
+  --creation-star-book: #d98a1e;
+  --creation-star-deck: #2188a8;
+  --creation-star-gallery: #a04fb8;
+  --creation-star-video: #2f6fd6;
+  --creation-diff-add-bg: rgba(46, 140, 67, 0.10);
+  --creation-diff-add-text: #216e35;
+  --creation-diff-del-bg: rgba(200, 70, 70, 0.10);
+  --creation-diff-del-text: #a83232;
+  --creation-glass-bg: rgba(8, 14, 28, 0.72);
+  --creation-glass-bg-strong: rgba(6, 11, 24, 0.88);
+  --creation-glass-border: rgba(186, 214, 255, 0.18);
+  --creation-glass-border-strong: rgba(186, 214, 255, 0.36);
+  --creation-glass-ink: rgba(242, 247, 255, 0.94);
+  --creation-glass-muted: rgba(182, 198, 224, 0.76);
+  --creation-accent: var(--accent-blue);
+  --creation-status-generating: #d98a1e;
+  --creation-status-attention: #c74650;
+  --creation-status-ready: #3a8f58;
 }
 
 /* Dark Theme - warm, eye-friendly tones */
@@ -720,6 +751,37 @@ select option:checked {
   --plugin-center-transition-duration: 0.15s;
   --plugin-center-loader-duration: 0.8s;
   --plugin-center-card-description-lines: 2;
+
+  /* Yeaft Cosmos Creations tokens (dark) */
+  --creation-surface: #181817;
+  --creation-surface-elevated: #21201f;
+  --creation-surface-subtle: #141413;
+  --creation-surface-paper: #f7f5ef;
+  --creation-surface-sepia: #efe5ce;
+  --creation-surface-night: #16171a;
+  --creation-text-paper: #262421;
+  --creation-text-sepia: #3d3122;
+  --creation-text-night: #e2dfd7;
+  --creation-border: #34322e;
+  --creation-border-strong: #4a4640;
+  --creation-star-book: #f4b856;
+  --creation-star-deck: #6ed3ec;
+  --creation-star-gallery: #d68ef0;
+  --creation-star-video: #6ca8ff;
+  --creation-diff-add-bg: rgba(74, 174, 100, 0.16);
+  --creation-diff-add-text: #86d99a;
+  --creation-diff-del-bg: rgba(220, 88, 88, 0.16);
+  --creation-diff-del-text: #f29494;
+  --creation-glass-bg: rgba(7, 12, 24, 0.74);
+  --creation-glass-bg-strong: rgba(5, 10, 20, 0.90);
+  --creation-glass-border: rgba(186, 214, 255, 0.18);
+  --creation-glass-border-strong: rgba(186, 214, 255, 0.38);
+  --creation-glass-ink: rgba(242, 247, 255, 0.94);
+  --creation-glass-muted: rgba(182, 198, 224, 0.76);
+  --creation-accent: #7cc4ff;
+  --creation-status-generating: #ffbe5c;
+  --creation-status-attention: #ff7e88;
+  --creation-status-ready: #6be4b8;
 }
 
 .terminal-output {

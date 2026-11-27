@@ -15,6 +15,8 @@ export const CORE_TEST_FILES = Object.freeze([
   "test/agent/yeaft/decision-runner.test.js",
   "test/agent/yeaft/engine.test.js",
   "test/agent/yeaft/context-rollover.test.js",
+  "test/agent/yeaft/creations/runner-and-tools.test.js",
+  "test/agent/yeaft/creations/store-and-service.test.js",
   "test/agent/yeaft/gemini-adapter.test.js",
   "test/agent/yeaft/gemini-endpoint.test.js",
   "test/agent/yeaft/gemini-continuity.test.js",
@@ -69,6 +71,7 @@ export const CORE_TEST_FILES = Object.freeze([
   "test/server/agent-connection-fence.test.js",
   "test/server/agent-file-terminal.test.js",
   "test/server/auth-token-uniqueness.test.js",
+  "test/server/creation-relay.test.js",
   "test/server/person-relay.test.js",
   "test/server/request-auth.test.js",
   "test/server/scheduled-tasks.test.js",
@@ -93,7 +96,8 @@ export const CORE_TEST_FILES = Object.freeze([
   "test/web/stores/load-more-yeaft-history.test.js",
   "test/web/stores/websocket-auth-token-race.test.js",
   "test/web/waiting-hoops.test.js",
-  "test/web/cosmos-ui.test.js"
+  "test/web/cosmos-ui.test.js",
+  "test/web/cosmos-creations.test.js"
 ]);
 
 export const E2E_TEST_FILES = Object.freeze([
