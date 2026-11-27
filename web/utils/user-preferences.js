@@ -247,9 +247,25 @@ export function createUserPreferencesState(auth, { request = (...args) => fetch(
     if (Object.keys(clean).length === 0 || !authenticated()) return Promise.resolve(false);
     // Only queue while the initial GET is actively in flight with no writes started yet.
     // Once initial GET has settled (succeeded or failed), or a write is already serialized
-    // on `queue`, or this is a pagehide keepalive flush, dispatch directly onto savePatch.
+    // on `queue`, or this is a pagehide keepalive flush, dispatch directly onto savePatch
+    // (merging and draining any earlier queuedCosmosPatch beneath `clean` so ordering
+    // and waiter Promises remain strictly intact).
     if (ready.value || !initialLoadInFlight || pendingWrites > 0 || keepalive) {
-      return savePatch({ cosmosConfig: clean }, { allowBeforeReady: true, keepalive });
+      let payload = clean;
+      let waiters = null;
+      if (queuedCosmosPatch) {
+        payload = mergeCosmosConfig(queuedCosmosPatch, clean);
+        waiters = queuedCosmosWaiters;
+        queuedCosmosPatch = null;
+        queuedCosmosWaiters = [];
+      }
+      const writePromise = savePatch({ cosmosConfig: payload }, { allowBeforeReady: true, keepalive });
+      if (waiters && waiters.length > 0) {
+        writePromise.then((ok) => {
+          for (const resolve of waiters) resolve(ok);
+        });
+      }
+      return writePromise;
     }
     queuedCosmosPatch = mergeCosmosConfig(queuedCosmosPatch, clean);
     showConfirmed();

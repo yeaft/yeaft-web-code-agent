@@ -1160,7 +1160,15 @@ test.describe('Yeaft Cosmos UI', () => {
     await expect(page.locator('.cosmos-const-engine-badge')).toContainText(/WebGL/i, { timeout: 5000 });
     await rendererSelect.selectOption('lite');
     await expect(page.locator('.cosmos-const-engine-badge')).toContainText(/2D/i, { timeout: 5000 });
-    const resetRenderPatch = page.waitForResponse((res) => res.url().includes('/api/user/preferences') && res.request().method() === 'PATCH' && res.status() === 200);
+    const resetRenderPatch = page.waitForResponse((res) => {
+      if (!res.url().includes('/api/user/preferences') || res.request().method() !== 'PATCH' || res.status() !== 200) return false;
+      try {
+        const body = JSON.parse(res.request().postData() || '{}');
+        return body?.cosmosConfig?.constants?.renderQuality === 'auto';
+      } catch {
+        return false;
+      }
+    });
     await rendererSelect.selectOption('auto');
     await resetRenderPatch;
 

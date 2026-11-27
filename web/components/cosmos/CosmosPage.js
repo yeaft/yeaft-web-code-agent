@@ -698,6 +698,7 @@ export default {
     const SLIDER_CONSTANT_KEYS = new Set(['orbitSpeed', 'spinSpeed', 'planetScale', 'eventScale', 'starDensity', 'skyBright', 'orbitLines']);
     let pendingCloudConstants = null;
     let cloudConstantsTimer = null;
+    let lastCloudUserId = initialUserId ? String(initialUserId) : '';
     let lastCloudAuthKey = initialUserId ? `${initialUserId}:${currentAuthStore()?.authGeneration || 0}` : '';
     let migratedCloudAuthKey = '';
 
@@ -2588,16 +2589,20 @@ export default {
       ],
       ([isReady, cloud, userId, authGen]) => {
         const authKey = userId ? `${userId}:${authGen}` : '';
+        const prevUserId = lastCloudUserId;
         const authChanged = authKey !== lastCloudAuthKey;
         if (authChanged) {
           // Cancel any in-flight slider debounce timer belonging to the previous auth session
           // so it can never write into the next user's cloud preferences.
           cancelPendingCloudConstants();
           lastCloudAuthKey = authKey;
+          lastCloudUserId = userId ? String(userId) : '';
         }
         if (userId) {
           const prevOwner = readLocalCosmosPreferencesOwner();
-          if (prevOwner && prevOwner !== String(userId)) {
+          const switchedUser = (prevOwner && prevOwner !== String(userId))
+            || (prevUserId && prevUserId !== String(userId));
+          if (switchedUser) {
             const prevQuality = constants.renderQuality;
             clearLocalCosmosPreferences(undefined, { includeUiMode: true });
             Object.assign(constants, DEFAULT_COSMOS_CONSTANTS);

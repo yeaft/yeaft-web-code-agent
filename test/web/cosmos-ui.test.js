@@ -4639,6 +4639,48 @@ describe('Cosmos Interstellar Signal Stream (Unified Top-Right Replies, Schedule
     expect(flakyPrefs.preferences.value.cosmosConfig.constants.orbitSpeed).toBe(0.9);
     flakyPrefs.dispose();
 
+    // Regression: queued saveCosmosConfig(P1) during in-flight initial GET followed by
+    // saveCosmosConfig(P2, { keepalive: true }) MUST merge P1 beneath P2 into one keepalive PATCH
+    // and settle BOTH Promises cleanly on both success AND failure paths (never shadowing showConfirmed).
+    for (const shouldSucceed of [true, false]) {
+      const sentBodies = [];
+      let resolveKaPatch;
+      const kaReq = vi.fn((_url, init = {}) => {
+        if ((init.method || 'GET') === 'GET') {
+          return new Promise(() => {}); // initial GET stays in flight
+        }
+        const parsed = JSON.parse(init.body).cosmosConfig;
+        sentBodies.push({ keepalive: Boolean(init.keepalive), cosmosConfig: parsed });
+        return new Promise((resolve) => {
+          resolveKaPatch = () => resolve(shouldSucceed
+            ? { ok: true, json: async () => ({ sidebarActionsCompact: false, sidebarCollapsedProjects: {}, cosmosConfig: parsed }) }
+            : { ok: false, json: async () => ({ error: 'boom' }) });
+        });
+      });
+      const kaAuth = Vue.reactive({ isAuthenticated: true, userId: `user-ka-${shouldSucceed}`, token: 'tok', authGeneration: 1 });
+      const kaPrefs = createUserPreferencesState(kaAuth, { request: kaReq });
+      const p1 = kaPrefs.saveCosmosConfig({ constants: { orbitSpeed: 0.3 }, planetBindings: { 'ag-1': 'venus' } });
+      const p2 = kaPrefs.saveCosmosConfig({ constants: { orbitSpeed: 1.7, skyBright: 1.2 } }, { keepalive: true });
+      // Synchronous keepalive dispatch on idle queue includes BOTH P1 & P2 merged with P2 winning conflicts
+      expect(sentBodies).toHaveLength(1);
+      expect(sentBodies[0]).toEqual({
+        keepalive: true,
+        cosmosConfig: { constants: { orbitSpeed: 1.7, skyBright: 1.2 }, planetBindings: { 'ag-1': 'venus' } },
+      });
+      // While P2 is in flight, optimistic state MUST show P2 (1.7), NOT older P1 (0.3)
+      expect(kaPrefs.preferences.value.cosmosConfig.constants.orbitSpeed).toBe(1.7);
+      resolveKaPatch();
+      expect(await p1).toBe(shouldSucceed);
+      expect(await p2).toBe(shouldSucceed);
+      // After failure, P1 must NOT remain stuck shadowing showConfirmed()
+      if (!shouldSucceed) {
+        expect(kaPrefs.preferences.value.cosmosConfig).toEqual({});
+      } else {
+        expect(kaPrefs.preferences.value.cosmosConfig.constants.orbitSpeed).toBe(1.7);
+      }
+      kaPrefs.dispose();
+    }
+
     // Auth switch resets state cleanly
     auth.userId = 'user-b';
     auth.authGeneration = 2;
