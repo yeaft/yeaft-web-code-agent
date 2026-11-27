@@ -36,6 +36,131 @@ export function isCanvasSupportedFile(fileOrName) {
   return null;
 }
 
+function basenameOf(filePath) {
+  const raw = String(filePath || '').trim();
+  if (!raw) return '';
+  const parts = raw.split(/[\\/]/).filter(Boolean);
+  return parts[parts.length - 1] || raw;
+}
+
+/**
+ * Resolve a workspace-relative Markdown href/src against `baseFilePath`'s directory.
+ * Returns `null` for external/scheme URLs (`http:`, `https:`, `mailto:`, `tel:`,
+ * `data:`, `blob:`, `javascript:`, `//`, `#` fragments, absolute `/...`, or empty).
+ *
+ * @param {string} baseFilePath
+ * @param {string} rawHref
+ * @returns {string|null}
+ */
+export function resolveWorkspaceRelativePath(baseFilePath, rawHref) {
+  if (!rawHref || typeof rawHref !== 'string') return null;
+  const trimmed = rawHref.trim();
+  if (!trimmed || trimmed.includes('\u0000')) return null;
+
+  const compact = trimmed.replace(/[\u0000-\u001f\u007f\s]+/g, '');
+  if (!compact || compact.startsWith('#') || compact.startsWith('//')) return null;
+  if (/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(compact)) return null;
+
+  const cleanRef = trimmed.split(/[?#]/)[0];
+  if (!cleanRef) return null;
+
+  let decoded = cleanRef;
+  try {
+    decoded = decodeURIComponent(cleanRef);
+  } catch {
+    return null;
+  }
+  if (!decoded || decoded.includes('\u0000')) return null;
+
+  const posixRel = decoded.replace(/\\/g, '/');
+  if (posixRel.startsWith('/')) return null;
+
+  const baseStr = typeof baseFilePath === 'string' ? baseFilePath.trim().replace(/\\/g, '/') : '';
+  const hasLeadingSlash = baseStr.startsWith('/');
+  const baseParts = baseStr.split('/').filter(Boolean);
+  if (baseParts.length > 0) {
+    baseParts.pop();
+  }
+
+  const resolvedParts = [...baseParts];
+  for (const seg of posixRel.split('/')) {
+    if (!seg || seg === '.') continue;
+    if (seg === '..') {
+      if (resolvedParts.length > 0) {
+        resolvedParts.pop();
+      } else if (!hasLeadingSlash) {
+        return null;
+      }
+    } else {
+      resolvedParts.push(seg);
+    }
+  }
+
+  if (resolvedParts.length === 0) return null;
+  return (hasLeadingSlash ? '/' : '') + resolvedParts.join('/');
+}
+
+function isSafeResolvedMediaUrl(url, resolvedPath) {
+  if (!url || typeof url !== 'string') return false;
+  const trimmed = url.trim();
+  if (!trimmed) return false;
+  if (getExtension(resolvedPath) === '.svg') return false;
+  if (trimmed.startsWith('blob:')) return true;
+  if (trimmed.startsWith('/api/preview/') || trimmed.startsWith('/api/yeaft/creations/')) {
+    return !trimmed.startsWith('//');
+  }
+  try {
+    const origin = typeof window !== 'undefined' ? window.location?.origin : '';
+    if (!origin || origin === 'null') return false;
+    const parsed = new URL(trimmed, origin);
+    return (
+      parsed.origin === origin
+      && (parsed.pathname.startsWith('/api/preview/') || parsed.pathname.startsWith('/api/yeaft/creations/'))
+    );
+  } catch {
+    return false;
+  }
+}
+
+function rewriteRelativeMarkdownNodes(cleanHtml, baseFilePath, resolveMediaUrl) {
+  if (!cleanHtml || typeof DOMParser === 'undefined') return cleanHtml;
+  const doc = new DOMParser().parseFromString(cleanHtml, 'text/html');
+  if (!doc?.body) return cleanHtml;
+
+  for (const img of Array.from(doc.body.querySelectorAll('img'))) {
+    const rawSrc = img.getAttribute('src') || '';
+    const resolved = resolveWorkspaceRelativePath(baseFilePath, rawSrc);
+    if (!resolved) continue;
+    const previewUrl = typeof resolveMediaUrl === 'function' ? (resolveMediaUrl(resolved) || '') : '';
+    if (isSafeResolvedMediaUrl(previewUrl, resolved)) {
+      img.setAttribute('src', previewUrl);
+      img.setAttribute('data-workspace-src', resolved);
+      img.setAttribute('loading', 'lazy');
+    } else {
+      const btn = doc.createElement('button');
+      btn.setAttribute('type', 'button');
+      btn.setAttribute('class', 'canvas-rel-media-link canvas-rel-img-pending');
+      btn.setAttribute('data-workspace-href', resolved);
+      btn.setAttribute('data-workspace-src', resolved);
+      const label = (img.getAttribute('alt') || '').trim() || basenameOf(resolved);
+      btn.textContent = label;
+      img.replaceWith(btn);
+    }
+  }
+
+  for (const link of Array.from(doc.body.querySelectorAll('a'))) {
+    const rawHref = link.getAttribute('href') || '';
+    const resolved = resolveWorkspaceRelativePath(baseFilePath, rawHref);
+    if (!resolved) continue;
+    link.setAttribute('data-workspace-href', resolved);
+    link.setAttribute('href', '#');
+    link.removeAttribute('target');
+    link.removeAttribute('rel');
+  }
+
+  return doc.body.innerHTML;
+}
+
 function escapeHtml(text) {
   return String(text ?? '').replace(/[&<>"']/g, ch => ({
     '&': '&amp;',
@@ -160,8 +285,10 @@ export default {
     showHeader: { type: Boolean, default: true },
     showOpenInFiles: { type: Boolean, default: false },
     showPromoteFolder: { type: Boolean, default: false },
+    resolveMediaUrl: { type: Function, default: null },
+    mediaUrlVersion: { type: Number, default: 0 },
   },
-  emits: ['update:content', 'save', 'download', 'open-in-files', 'promote-folder', 'referenced', 'media-load', 'media-error'],
+  emits: ['update:content', 'save', 'download', 'open-in-files', 'promote-folder', 'referenced', 'media-load', 'media-error', 'open-relative-link'],
   template: `
     <div class="file-canvas-view" :class="'canvas-kind-' + (canvasKind || 'unknown')">
       <!-- Loading / Error states -->
@@ -310,8 +437,9 @@ export default {
               <div
                 ref="readerContentRef"
                 class="canvas-doc-content"
-                :class="{ 'markdown-body': isMarkdown, 'canvas-txt-content': !isMarkdown }"
+                :class="{ 'markdown-body': isMarkdown, 'canvas-markdown-body': isMarkdown, 'canvas-txt-content': !isMarkdown }"
                 v-html="sanitizedDocHtml"
+                @click="onMarkdownClick"
               ></div>
             </article>
 
@@ -430,6 +558,8 @@ export default {
             <img
               :key="file.blobUrl"
               :src="file.blobUrl"
+              :data-canvas-path="file.path"
+              :data-canvas-url="file.blobUrl"
               :alt="file.name"
               class="canvas-image-el"
               :class="{ 'is-fit': imageZoomMode === 'fit' }"
@@ -520,6 +650,8 @@ export default {
                 ref="videoRef"
                 :key="file.blobUrl"
                 :src="file.blobUrl"
+                :data-canvas-path="file.path"
+                :data-canvas-url="file.blobUrl"
                 :aria-label="file.name"
                 class="canvas-video-el"
                 controls
@@ -594,6 +726,8 @@ export default {
     ));
 
     const sanitizedDocHtml = Vue.computed(() => {
+      // Reactive dependency so Markdown re-renders when parent finishes loading workspace previews
+      void props.mediaUrlVersion;
       const content = props.file?.content || '';
       if (!content) return '';
       if (isMarkdown.value) {
@@ -607,7 +741,8 @@ export default {
         } catch {
           rawHtml = `<pre>${escapeHtml(content)}</pre>`;
         }
-        return sanitizeCreationHtml(rawHtml);
+        const cleanHtml = sanitizeCreationHtml(rawHtml);
+        return rewriteRelativeMarkdownNodes(cleanHtml, props.file?.path || '', props.resolveMediaUrl);
       }
       // Plain text (.txt): preserve paragraphs and line breaks safely
       const paragraphs = content
@@ -616,6 +751,16 @@ export default {
         .join('');
       return sanitizeCreationHtml(paragraphs);
     });
+
+    const onMarkdownClick = (event) => {
+      const target = event?.target?.closest?.('[data-workspace-href], [data-workspace-src]');
+      if (!target) return;
+      const targetPath = target.getAttribute('data-workspace-href') || target.getAttribute('data-workspace-src') || '';
+      if (!targetPath) return;
+      event.preventDefault();
+      const kind = isCanvasSupportedFile(targetPath) || 'other';
+      emit('open-relative-link', { targetPath, rawHref: targetPath, kind });
+    };
 
     const assignHeadingAnchors = () => {
       const el = readerContentRef.value;
@@ -850,12 +995,19 @@ export default {
       });
     };
 
-    const onImageLoad = () => {
-      emit('media-load', { path: props.file?.path || '', url: props.file?.blobUrl || '' });
+    const readMediaEventMeta = (e) => {
+      const target = e?.currentTarget;
+      const path = target?.dataset?.canvasPath || props.file?.path || '';
+      const url = target?.dataset?.canvasUrl || props.file?.blobUrl || '';
+      return { path, url };
     };
 
-    const onImageError = () => {
-      emit('media-error', { path: props.file?.path || '', url: props.file?.blobUrl || '' });
+    const onImageLoad = (e) => {
+      emit('media-load', readMediaEventMeta(e));
+    };
+
+    const onImageError = (e) => {
+      emit('media-error', readMediaEventMeta(e));
     };
 
     const referenceImage = () => {
@@ -883,20 +1035,21 @@ export default {
       currentTime.value = videoRef.value.currentTime || 0;
     };
 
-    const onVideoMediaLoad = () => {
-      emit('media-load', { path: props.file?.path || '', url: props.file?.blobUrl || '' });
+    const onVideoMediaLoad = (e) => {
+      emit('media-load', readMediaEventMeta(e));
     };
 
-    const onVideoMediaError = () => {
-      emit('media-error', { path: props.file?.path || '', url: props.file?.blobUrl || '' });
+    const onVideoMediaError = (e) => {
+      emit('media-error', readMediaEventMeta(e));
     };
 
-    const onVideoLoadedMetadata = () => {
-      if (videoRef.value) {
-        duration.value = Number.isFinite(videoRef.value.duration) ? videoRef.value.duration : 0;
-        videoRef.value.playbackRate = playbackRate.value;
+    const onVideoLoadedMetadata = (e) => {
+      const target = e?.currentTarget || videoRef.value;
+      if (target) {
+        duration.value = Number.isFinite(target.duration) ? target.duration : 0;
+        target.playbackRate = playbackRate.value;
       }
-      onVideoMediaLoad();
+      onVideoMediaLoad(e);
     };
 
     const onVideoRateChange = () => {
@@ -986,6 +1139,7 @@ export default {
       wordCount,
       headings,
       sanitizedDocHtml,
+      onMarkdownClick,
       hasActiveDocSelection,
       setDocMode,
       adjustFontSize,

@@ -830,6 +830,16 @@ export default {
     const drawerOpenedFromGalaxy = Vue.ref(false);
     const workbenchWidened = Vue.ref(false);
     const workbenchMaximized = Vue.computed(() => Boolean(store.workbenchExpanded && store.workbenchMaximized));
+    Vue.watch(
+      () => store.workbenchExpanded,
+      (expanded) => {
+        if (expanded && drawerOpen.value && drawerOpenedFromGalaxy.value) {
+          workbenchWidened.value = true;
+        } else if (!expanded && workbenchWidened.value) {
+          workbenchWidened.value = false;
+        }
+      },
+    );
     const viewportWidth = Vue.ref(typeof window !== 'undefined' ? (window.innerWidth || 1280) : 1280);
     const isCompactViewport = Vue.computed(() => viewportWidth.value <= 768);
     const customDrawerWidth = Vue.ref(loadCosmosDrawerWidth());
@@ -1798,6 +1808,7 @@ export default {
         }
 
         drawerOpenedFromGalaxy.value = true;
+        workbenchWidened.value = false;
 
         if (typeof creationsStore.setPendingWorkbenchTarget === 'function') {
           creationsStore.setPendingWorkbenchTarget({
@@ -1809,14 +1820,6 @@ export default {
             openedFromGalaxy: true,
           });
         }
-
-        workbenchWidened.value = true;
-        if (typeof store.openWorkbench === 'function') {
-          store.openWorkbench();
-        } else {
-          store.workbenchExpanded = true;
-        }
-        store.workbenchMaximized = (mode === 'read');
 
         const cleanPrompt = String(promptToSend || '').trim();
         if (cleanPrompt && resolvedSessionId) {

@@ -45,6 +45,10 @@ import { zhCN as creationsZh, en as creationsEn } from '../../web/i18n/creations
 import en from '../../web/i18n/en.js';
 import zhCN from '../../web/i18n/zh-CN.js';
 import { drawCosmosHud } from '../../web/cosmos/particle-hud.js';
+// The native image worker is unrelated to Session CRUD and cannot load in happy-dom.
+vi.mock('../../agent/yeaft/image-preview.js', () => ({ makeImagePreview: vi.fn() }));
+
+import { parseMentions } from '../../agent/yeaft/sessions/pre-flow.js';
 import { createCreationService } from '../../agent/yeaft/creations/service.js';
 import { createCreationRelay } from '../../server/handlers/client-creation.js';
 
@@ -113,9 +117,14 @@ describe('Cosmos Creations — i18n, styles & celestial HUD', () => {
       }
     }
     expect(missing).toEqual([]);
-    expect(readFileSync('web/styles/cosmos/creations.css', 'utf8')).toMatch(/\.creation-legacy-banner\s*\{/);
+    const cosmosCss = readFileSync('web/styles/cosmos/creations.css', 'utf8');
+    const wbCss = readFileSync('web/styles/creation-workbench.css', 'utf8');
+    expect(cosmosCss).toMatch(/\.creation-legacy-banner\s*\{/);
+    expect(cosmosCss).toMatch(/\.creation-galaxy-overlay\s+\.creation-kind-pill\s*\{/);
+    expect(cosmosCss).not.toMatch(/(^|\n)\s*\.creation-kind-pill\b/);
+    expect(wbCss).toMatch(/\.creation-create-modal\s+\.creation-kind-pill\s*\{/);
     expect(readFileSync('web/styles/canvas.css', 'utf8')).toMatch(/@container canvas-pane\b/);
-    expect(readFileSync('web/styles/creation-workbench.css', 'utf8')).toMatch(/@container creation-wb\b/);
+    expect(wbCss).toMatch(/@container creation-wb\b/);
   });
 
   it('uses theme tokens in Galaxy, Workbench, and Canvas sources', () => {
@@ -468,24 +477,54 @@ describe('Cosmos Creations — End-to-End Web Store <-> Server Relay <-> Agent S
   it('links an existing Session and replaces an unknown Session only when requested', async () => {
     const { sessions } = await registerBrowserStores();
     sessions.applySnapshotUpsert({ id: 'session-shared', name: 'Existing Atlas Session' }, 'agent-a');
+    const [{ default: ctx }, { handleYeaftUpdateSession }, { createSession }, { sessionsRoot }] = await Promise.all([
+      import('../../agent/context.js'), import('../../agent/yeaft/web-bridge.js'),
+      import('../../agent/yeaft/sessions/session-store.js'), import('../../agent/yeaft/sessions/session-crud.js'),
+    ]);
+    createSession(sessionsRoot(tempDirA), { id: 'session-shared', roster: ['omni'] }).close();
+    const agentSend = vi.fn(wire => chatStore.handleYeaftOutput({ ...JSON.parse(wire), agentId: 'agent-a' }));
+    const fixture = {
+      CONFIG: { yeaftDir: tempDirA }, ws: { readyState: WebSocket.OPEN, send: agentSend },
+      outboundSendQueue: [], outboundSendQueueActive: false, outboundSendQueueBytes: 0, serverEncryptionRequired: false,
+    };
+    const previous = Object.fromEntries(Object.keys(fixture).map(key => [key, ctx[key]]));
+    Object.assign(ctx, fixture);
     const send = interceptSocket(chatStore, request => {
-      if (request.type === 'yeaft_update_session') return sessionAck(chatStore, request, 'update', { session: { id: request.sessionId, workDir: request.workDir } });
+      if (request.type === 'yeaft_update_session') {
+        handleYeaftUpdateSession(request);
+        return true;
+      }
       if (request.type === 'yeaft_create_session') return sessionAck(chatStore, request, 'create', { session: { id: 'session-replacement' } });
     });
-    vi.spyOn(chatStore, 'sessionCrudRequest');
-    vi.spyOn(chatStore, 'createYeaftSession');
-    const { creation, rootDir } = await creationsStore.createWorkspaceCreation({
-      agentId: 'agent-a', title: 'Existing Atlas', sessionMode: 'existing', existingSessionId: 'session-shared',
-    });
-    expect(creation.sessionId).toBe('session-shared');
-    expect(chatStore.sessionCrudRequest).toHaveBeenCalledExactlyOnceWith(
-      'update', { sessionId: 'session-shared', workDir: rootDir }, { agentId: 'agent-a' },
-    );
-    expect(send).toHaveBeenCalledWith(expect.objectContaining({
-      type: 'yeaft_update_session', agentId: 'agent-a', sessionId: 'session-shared', workDir: rootDir,
-    }));
-    expect(sessions.sessionById('session-shared', 'agent-a').workDir).toBe(rootDir);
-    expect(chatStore.createYeaftSession).not.toHaveBeenCalled();
+    let creation, rootDir;
+    try {
+      handleYeaftUpdateSession({ requestId: 'flat-update', sessionId: 'session-shared', workDir: tempDirA });
+      await flushPromises();
+      expect(agentSend.mock.calls.map(([wire]) => JSON.parse(wire).event)).toContainEqual(expect.objectContaining({
+        type: 'session_crud_result', op: 'update', requestId: 'flat-update', ok: false,
+        error: expect.objectContaining({ code: 'invalid_patch' }),
+      }));
+      vi.spyOn(chatStore, 'sessionCrudRequest');
+      vi.spyOn(chatStore, 'createYeaftSession');
+      ({ creation, rootDir } = await creationsStore.createWorkspaceCreation({
+        agentId: 'agent-a', title: 'Existing Atlas', sessionMode: 'existing', existingSessionId: 'session-shared',
+      }));
+      expect(creation.sessionId).toBe('session-shared');
+      expect(chatStore.sessionCrudRequest).toHaveBeenCalledExactlyOnceWith(
+        'update', { sessionId: 'session-shared', patch: { workDir: rootDir } }, { agentId: 'agent-a' },
+      );
+      expect(send).toHaveBeenCalledWith(expect.objectContaining({
+        type: 'yeaft_update_session', agentId: 'agent-a', sessionId: 'session-shared', patch: { workDir: rootDir },
+      }));
+      expect(agentSend.mock.calls.map(([wire]) => JSON.parse(wire).event)).toContainEqual(expect.objectContaining({
+        type: 'session_crud_result', op: 'update', ok: true, session: expect.objectContaining({ id: 'session-shared', workDir: rootDir }),
+      }));
+      expect(sessions.sessionById('session-shared', 'agent-a').workDir).toBe(rootDir);
+      expect(chatStore.createYeaftSession).not.toHaveBeenCalled();
+    } finally {
+      await flushPromises();
+      Object.assign(ctx, previous);
+    }
 
     const stale = await creationsStore.updateCreation('agent-a', creation.id, { sessionId: 'unknown-session' });
     expect(await creationsStore.resolveCreationSession('agent-a', stale, { createIfMissing: false })).toMatchObject({ sessionId: null, rootDir });
@@ -495,6 +534,63 @@ describe('Cosmos Creations — End-to-End Web Store <-> Server Relay <-> Agent S
       agentId: 'agent-a', displayName: 'Existing Atlas', workDir: rootDir,
     });
     expect(await creationsStore.findByFolder('agent-a', rootDir)).toMatchObject({ id: creation.id, sessionId: 'session-replacement' });
+  });
+
+  it.each(['CreationCreateModal', 'CosmosGalaxyOverlay'])('%s retries a partial creation without duplicating the Project or workspace', async launcher => {
+    await registerBrowserStores();
+    chatStore.agents = [{ id: 'agent-a', name: 'Alpha', online: true, capabilities: ['creations'] }];
+    chatStore.currentAgent = 'agent-a';
+    await creationsStore.selectGalaxyAgent('agent-a');
+    let sessionAttempts = 0;
+    const send = interceptSocket(chatStore, request => {
+      if (request.type === 'yeaft_create_session') return sessionAck(chatStore, request, 'create',
+        ++sessionAttempts === 1 ? { ok: false, error: { code: 'denied', message: 'Session denied' } }
+          : { session: { id: 'resumed-session' } });
+      if (request.type === 'yeaft_project_mutation') return projectAck(chatStore, request, { result: { id: 'resumed-project' } });
+    });
+    const create = vi.spyOn(creationsStore, 'createWorkspaceCreation');
+    let wrapper, submit;
+    if (launcher === 'CreationCreateModal') {
+      const { default: Modal } = await import('../../web/components/workbench/CreationCreateModal.js');
+      wrapper = render(Modal, { stubs: { Teleport: true } });
+      await wrapper.get('#creation-create-title').setValue('Resumable Atlas');
+      await wrapper.get('.creation-create-inline-toggle').trigger('click');
+      await wrapper.get('input#creation-create-project').setValue('New Maps');
+      submit = () => wrapper.get('form').trigger('submit');
+    } else {
+      const { default: Overlay } = await import('../../web/components/cosmos/creations/CosmosGalaxyOverlay.js');
+      wrapper = render(Overlay, { props: { visible: true, agents: chatStore.agents } });
+      await flushPromises();
+      Object.assign(creationsStore.igniteDraft, { open: true, title: 'Resumable Atlas' });
+      await Vue.nextTick();
+      await wrapper.get('.creation-ignite-selectors select:has(option[value="__new__"])').setValue('__new__');
+      await wrapper.get('.creation-ignite-inline-input').setValue('New Maps');
+      submit = () => wrapper.vm.submitIgnite();
+    }
+    await submit();
+    await flushPromises();
+    const failure = await create.mock.results[0].value.catch(error => error);
+    expect(failure).toMatchObject({ message: 'Session denied', partialProjectId: 'resumed-project', partialCreation: { id: expect.any(String) } });
+    expect(wrapper.text()).toContain('Session denied');
+    expect(wrapper.emitted('created')).toBeUndefined();
+    expect(wrapper.emitted('open-creation')).toBeUndefined();
+
+    await submit();
+    await flushPromises();
+    const id = failure.partialCreation.id;
+    expect(create).toHaveBeenCalledTimes(2);
+    expect(create).toHaveBeenNthCalledWith(2, expect.objectContaining({ resumeProjectId: 'resumed-project', resumeCreationId: id }));
+    expect(await create.mock.results[1].value).toMatchObject({ creation: { id }, sessionId: 'resumed-session', projectId: 'resumed-project' });
+    const requests = send.mock.calls.map(([msg]) => msg);
+    expect(requests.filter(msg => msg.type === 'yeaft_project_mutation').map(msg => msg.op)).toEqual(['create', 'move_session']);
+    expect(requests.filter(msg => msg.type === 'creation_request' && msg.op === 'create_creation')).toHaveLength(1);
+    expect(serviceA.store.listCreations().map(item => item.id)).toEqual([id]);
+    expect(sessionAttempts).toBe(2);
+    const completion = launcher === 'CreationCreateModal' ? wrapper.emitted('created') : wrapper.emitted('open-creation');
+    expect(completion).toHaveLength(1);
+    expect(completion[0][0]).toMatchObject({ agentId: 'agent-a', sessionId: 'resumed-session',
+      ...(launcher === 'CreationCreateModal' ? { creation: { id } } : { creationId: id }),
+    });
   });
 
   it('surfaces a denied Project move without persisting unconfirmed membership', async () => {
@@ -645,26 +741,37 @@ describe('Cosmos Creations — End-to-End Web Store <-> Server Relay <-> Agent S
     try {
       const db = serviceA.store;
       const { id } = db.createCreation({ title: 'Legacy reader' });
-      const svg = '<svg xmlns="http://www.w3.org/2000/svg"><title>Legacy illustration</title></svg>';
-      const image = db.saveAsset(id, { ext: 'svg', content: svg });
+      const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLbtAAAAABJRU5ErkJggg==', 'base64');
+      const image = db.saveAsset(id, { ext: 'png', bytes: png });
       // MP4 was a legacy asset format; seed the original metadata and bytes, not a workspace file.
       const video = Buffer.from('Legacy video bytes');
       writeFileSync(join(db.root, id, 'assets', 'legacy-clip.mp4'), video);
       db.run('INSERT INTO creation_assets VALUES (?,?,?)', id, 'legacy-clip',
         JSON.stringify({ id: 'legacy-clip', ext: 'mp4', name: 'Legacy Clip.mp4' }));
-      db.createNode(id, { title: 'Slides', type: 'unit', modality: 'slide_deck', content: { slides: [{ title: 'Launch', bullets: ['Legacy talking point'], imageAssetId: image.id }] } });
+      db.createNode(id, { title: 'Slides', type: 'unit', modality: 'slide_deck', content: { description: '[Gallery](./Gallery.md)', slides: [{ title: 'Launch', bullets: ['Legacy talking point'], imageAssetId: image.id }] } });
       db.createNode(id, { title: 'Gallery', type: 'unit', modality: 'image_gallery', content: { frames: [{ title: 'Cover frame', caption: 'Legacy caption', assetId: image.id }] } });
       db.createNode(id, { title: 'Episode', type: 'unit', modality: 'video_episode', content: { videoAssetId: 'legacy-clip', scenes: [{ title: 'Intro', durationSec: 5, narration: 'Legacy narration' }] } });
       expect(db.getCreation(id).rootDir).toBeFalsy();
       const workspace = await creationsStore.ensureWorkspace(route.agentId, id);
       expect(workspace).toMatchObject({ materialized: true, creation: { id } });
       const folder = workspace.rootDir;
-      expect(readFileSync(join(folder, 'images', `${image.id}.svg`), 'utf8')).toBe(svg);
+      const imagePath = join(folder, 'images', `${image.id}.png`);
+      const videoPath = join(folder, 'videos', 'Legacy Clip.mp4');
+      const imageUrl = '/api/preview/migrated-cover?token=image-capability';
+      const videoUrl = '/api/preview/migrated-video?token=video-capability';
+      expect(readFileSync(imagePath)).toEqual(png);
       expect(readFileSync(join(folder, 'videos', 'Legacy Clip.mp4'))).toEqual(video);
-      mockWorkbenchFiles(chatStore, {}, {}, request => {
+      const send = mockWorkbenchFiles(chatStore, {}, {}, request => {
         if (request.type === 'list_directory') return { type: 'directory_listing', entries: readdirSync(request.dirPath, { withFileTypes: true }).map(entry => ({
           name: entry.name, path: join(request.dirPath, entry.name), type: entry.isDirectory() ? 'directory' : 'file',
         })) };
+        if (request.type === 'read_file' && request.filePath === imagePath) {
+          expect(readFileSync(request.filePath)).toEqual(png);
+          return { type: 'file_content', binary: true, mimeType: 'image/png', previewUrl: imageUrl };
+        }
+        if (request.type === 'video_metadata' && request.filePath === videoPath) {
+          return { type: 'video_metadata', videoStream: true, previewUrl: videoUrl };
+        }
         if (request.type === 'read_file') return { type: 'file_content', content: readFileSync(request.filePath, 'utf8') };
       });
       const wrapper = render(CreationTab, { props: { ...routeProps, workDir: folder } });
@@ -682,11 +789,40 @@ describe('Cosmos Creations — End-to-End Web Store <-> Server Relay <-> Agent S
         expect(wrapper.get('.file-canvas-view').findAll('h2').map(el => el.text())).toContain(heading);
         expect(wrapper.get('.file-canvas-view').text()).toContain(body);
       }
-      await tabs[1].trigger('click');
+      await wrapper.get('.creation-wb-tree-row[title="docs/Slides.md"]').trigger('click');
       await flushPromises();
-      expect(wrapper.get('.creation-wb-image-card').text()).toContain(`${image.id}.svg`);
-      await tabs[2].trigger('click');
-      expect(wrapper.get('.creation-wb-video-card').text()).toContain('Legacy Clip.mp4');
+      const docCanvas = () => wrapper.get('.creation-wb-doc-canvas .file-canvas-view');
+      expect(readFileSync(join(folder, 'docs', 'Slides.md'), 'utf8')).toContain(`../images/${image.id}.png`);
+      expect(send).toHaveBeenCalledWith(expect.objectContaining({ type: 'read_file', filePath: imagePath, creationId: id }));
+      expect(docCanvas().find('img[src^="../images/"]').exists()).toBe(false);
+      await docCanvas().get('.canvas-doc-content [data-workspace-src]').trigger('click');
+      await flushPromises();
+      expect(tabs[1].attributes('aria-selected')).toBe('true');
+      expect(wrapper.get('.canvas-kind-image img').attributes('data-canvas-path')).toBe(imagePath);
+      await tabs[0].trigger('click');
+      await docCanvas().get('a[data-workspace-href$="/Gallery.md"]').trigger('click');
+      await flushPromises();
+      expect(docCanvas().get('h1').text()).toBe('Gallery');
+
+      await wrapper.get('.creation-wb-tree-row[title="docs/Episode.md"]').trigger('click');
+      await flushPromises();
+      expect(readFileSync(join(folder, 'docs', 'Episode.md'), 'utf8')).toContain('../videos/');
+      const episodeLink = docCanvas().get('a[data-workspace-href]');
+      expect(episodeLink.attributes()).toMatchObject({ href: '#', 'data-workspace-href': videoPath });
+      await episodeLink.trigger('click');
+      await flushPromises();
+      expect(tabs[2].attributes('aria-selected')).toBe('true');
+      const player = wrapper.get('.canvas-kind-video video');
+      expect(player.attributes('data-canvas-path')).toBe(videoPath);
+      expect(new URL(player.attributes('src'), location.origin).href).toBe(new URL(videoUrl, location.origin).href);
+      expect(send).toHaveBeenCalledWith(expect.objectContaining({ type: 'video_metadata', filePath: videoPath, creationId: id }));
+
+      await tabs[0].trigger('click');
+      await wrapper.get('.creation-wb-tree-row[title="docs/Slides.md"]').trigger('click');
+      await flushPromises();
+      const embedded = docCanvas().get('.canvas-doc-content img');
+      expect(new URL(embedded.attributes('src'), location.origin).href).toBe(new URL(imageUrl, location.origin).href);
+      expect(embedded.attributes('data-workspace-src')).toBe(imagePath);
     } finally {
       vi.unstubAllGlobals();
     }
@@ -969,55 +1105,77 @@ describe('Cosmos Creations — End-to-End Web Store <-> Server Relay <-> Agent S
     expect(chatStore.workbenchMaximized).toBe(false);
   });
 
-  it('Ignite preserves newly queued files and draft when switching Agent mid-submit', async () => {
+  it('leaves the Workbench collapsed when Cosmos opens a Creation target that Workbench refuses', async () => {
+    const { sessions } = await registerBrowserStores();
+    const { default: CosmosPage } = await import('../../web/components/cosmos/CosmosPage.js');
+    const { default: WorkbenchPanel } = await import('../../web/components/WorkbenchPanel.js');
+    const creation = serviceA.store.createCreation({ title: 'Unavailable Creation', initializeFolder: true });
+    await creationsStore.selectGalaxyAgent('agent-a');
+    chatStore.agents = [{ id: 'agent-a', name: 'Alpha', online: true, capabilities: ['file_editor', 'workbench_session_routes'] }];
+    chatStore.workbenchRouteProtocolSupported = true;
+    sessions.applySnapshotUpsert({ id: 'ready-session', name: 'Ready', workDir: creation.rootDir }, 'agent-a');
+    vi.spyOn(globalThis, 'requestAnimationFrame').mockReturnValue(1);
+    const open = vi.spyOn(chatStore, 'openWorkbench');
+    const wrapper = render(CosmosPage, { stubs: {
+      CosmosQuickComposer: true, CosmosGalaxyOverlay: true, SettingsPanel: true,
+      AgentSettingsPanel: true, SessionSettingsModal: true, MessageList: true, ChatInput: true,
+    } });
+    wrapper.vm.currentBand = 'galaxy';
+    await Vue.nextTick();
+    await wrapper.vm.openGalaxyCreation({ agentId: 'agent-a', creationId: creation.id,
+      sessionId: 'ready-session', rootDir: creation.rootDir, mode: 'read' });
+    await flushPromises();
+    expect(wrapper.vm.drawerOpen).toBe(true);
+    expect(creationsStore.pendingWorkbenchTarget).toMatchObject({ creationId: creation.id, maximize: true });
+    const panel = wrapper.getComponent(WorkbenchPanel);
+    expect(panel.get('[data-workbench-capability="creation"]').classes()).toContain('unavailable');
+    expect(panel.classes()).not.toContain('expanded');
+    expect(open).not.toHaveBeenCalled();
+    expect(wrapper.vm.workbenchWidened).toBe(false);
+    expect(chatStore.workbenchExpanded).toBe(false);
+    expect(chatStore.workbenchMaximized).toBe(false);
+  });
+
+  it.each([
+    ['Agent switch', 'success'], ['unmount', 'success'], ['unmount', 'failure'],
+  ])('fences all Ignite %s completion effects on late %s', async (transition, outcome) => {
     const { default: CosmosGalaxyOverlay } = await import('../../web/components/cosmos/creations/CosmosGalaxyOverlay.js');
-    const $t = (k) => creationsZh[k] || k;
-
     await creationsStore.selectGalaxyAgent('agent-a', { force: true });
-
-    let resolveCreate;
-    const origCreate = creationsStore.createWorkspaceCreation;
-    creationsStore.createWorkspaceCreation = vi.fn(() => new Promise((r) => { resolveCreate = r; }));
-
-    const wrapper = mount(CosmosGalaxyOverlay, {
-      props: {
-        visible: true,
-        agents: [
-          { id: 'agent-a', name: 'Alpha', online: true, capabilities: ['creations'] },
-          { id: 'agent-b', name: 'Beta', online: true, capabilities: ['creations'] },
-        ],
-      },
-      global: { mocks: { $t } },
+    const reply = deferred();
+    const submit = vi.spyOn(creationsStore, 'createWorkspaceCreation').mockImplementation(async () => {
+      await reply.promise;
+      if (outcome === 'failure') throw new Error('Stale failure');
+      return { creation: { id: 'cre-a-new' }, projectWarning: 'Stale warning' };
     });
+    const wrapper = render(CosmosGalaxyOverlay, { props: {
+      visible: true,
+      agents: ['agent-a', 'agent-b'].map(id => ({ id, online: true, capabilities: ['creations'] })),
+    } });
     await flushPromises();
 
-    const fileA = new File(['hello'], 'notes-a.txt', { type: 'text/plain' });
-    const fileB = new File(['world'], 'notes-b.txt', { type: 'text/plain' });
-    creationsStore.igniteDraft.title = 'Draft A';
-    creationsStore.igniteDraft.prompt = 'Prompt A';
-    creationsStore.igniteDraft.pendingFiles = [fileA];
-    creationsStore.igniteDraft.open = true;
-
-    const submitPromise = wrapper.vm.submitIgnite();
-
-    // User switches to agent-b and queues fileB + new prompt mid-flight
-    creationsStore.selectedAgentId = 'agent-b';
-    creationsStore.igniteDraft.title = 'Draft B';
-    creationsStore.igniteDraft.prompt = 'Prompt B';
-    creationsStore.igniteDraft.pendingFiles = [...creationsStore.igniteDraft.pendingFiles, fileB];
-
-    resolveCreate({ creation: { id: 'cre-a-new', title: 'Draft A' } });
-    await submitPromise;
+    const fileA = new File(['hello'], 'notes-a.txt');
+    const fileB = new File(['world'], 'notes-b.txt');
+    const draft = creationsStore.igniteDraft;
+    Object.assign(draft, { title: 'Draft A', prompt: 'Prompt A', open: true, pendingFiles: [fileA] });
+    await Vue.nextTick();
+    const completion = wrapper.vm.submitIgnite();
+    expect(submit).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ agentId: 'agent-a', rawFiles: [fileA] }));
+    expect(draft.submitting).toBe(true);
+    if (transition === 'unmount') wrapper.unmount();
+    else creationsStore.selectedAgentId = 'agent-b';
+    await Vue.nextTick();
+    // Keep the submitted file as well as the newer one: a stale completion owns neither.
+    Object.assign(draft, { title: 'Draft B', prompt: 'Prompt B', pendingFiles: [fileA, fileB],
+      error: 'New draft status', submitting: true });
+    const current = { ...draft };
+    reply.resolve();
+    await completion;
     await flushPromises();
-
-    // fileA removed, fileB preserved; agent-b's title/prompt/open preserved
-    expect(creationsStore.igniteDraft.pendingFiles).toEqual([fileB]);
-    expect(creationsStore.igniteDraft.title).toBe('Draft B');
-    expect(creationsStore.igniteDraft.prompt).toBe('Prompt B');
-    expect(creationsStore.igniteDraft.open).toBe(true);
-
-    creationsStore.createWorkspaceCreation = origCreate;
-    wrapper.unmount();
+    expect(draft).toEqual(current);
+    expect(draft.pendingFiles).toBe(current.pendingFiles);
+    expect(draft.pendingFiles).toEqual([fileA, fileB]);
+    expect(wrapper.emitted('open-creation')).toBeUndefined();
+    expect(wrapper.emitted('toast')).toBeUndefined();
   });
 
 });
@@ -1160,6 +1318,39 @@ describe('File Canvas and route-scoped composer references', () => {
       + '> [Canvas Image] `/atlas/cover.png`\n\n> [Canvas Video] `/atlas/trailer.mp4` @ 01:05');
   });
 
+  it('neutralizes mentions in each Canvas reference field without changing user mention routing', () => {
+    for (const ref of [
+      { kind: 'image', filePath: '/atlas/cover @bot.png' },
+      { kind: 'image', fileName: 'cover @bot.png' },
+      { kind: 'video', filePath: '/atlas/trailer.mp4', timestampLabel: '01:05 @bot' },
+      { kind: 'doc', filePath: '/atlas/intro.md', snippet: 'First line\r\n@bot second line' },
+    ]) {
+      const prefix = context.formatCanvasContextPrefix([ref]);
+      expect(prefix).toContain('@\u200Bbot');
+      expect(parseMentions(prefix)).toEqual([]);
+      expect(parseMentions(`${prefix}\n\nPlease review this @alice`)).toEqual(['alice']);
+    }
+  });
+
+  it.each([['png', 'img', 'load'], ['mp4', 'video', 'loadeddata']])(
+    'correlates late %s media events with the emitting DOM node, not the current file',
+    async (ext, tag, loadEvent) => {
+      const file = Vue.reactive({ name: `old.${ext}`, path: `/atlas/old.${ext}`, blobUrl: '/api/preview/old' });
+      const wrapper = render(FileCanvasView, { props: { routeKey, file } });
+      const media = wrapper.get(tag);
+      const old = { path: file.path, url: file.blobUrl };
+      expect(media.attributes()).toMatchObject({ 'data-canvas-path': old.path, 'data-canvas-url': old.url });
+      // The input changes before Vue patches the DOM node whose resource finished loading.
+      Object.assign(file, { name: `new.${ext}`, path: `/atlas/new.${ext}`, blobUrl: '/api/preview/new' });
+      const loaded = media.trigger(loadEvent);
+      const failed = media.trigger('error');
+      await Promise.all([loaded, failed]);
+      expect(wrapper.emitted('media-load')).toEqual([[old]]);
+      expect(wrapper.emitted('media-error')).toEqual([[old]]);
+      expect(wrapper.get(tag).attributes('data-canvas-path')).toBe(file.path);
+    },
+  );
+
   it('classifies supported documents, images and videos but not source files or archives', async () => {
     const { isCanvasSupportedFile } = await import('../../web/components/workbench/FileCanvasView.js');
     for (const [kind, extensions] of [['doc', ['md', 'txt']], ['image', ['png', 'svg', 'webp']], ['video', ['mp4', 'webm']], [null, ['js', 'json', 'zip']]]) {
@@ -1178,7 +1369,18 @@ describe('File Canvas and route-scoped composer references', () => {
     expect(reader.get('h1').text()).toBe('Atlas');
     expect(reader.get('h2').text()).toBe('Opening');
     expect(reader.get('strong').text()).toBe('Bold');
-    expect(reader.get('img').attributes('src')).toBe('./cover.png');
+    expect(reader.find('img').exists()).toBe(false);
+    const unresolved = reader.get('button.canvas-rel-media-link');
+    expect(unresolved.attributes('data-workspace-href')).toBe('/atlas/cover.png');
+    await unresolved.trigger('click');
+    expect(wrapper.emitted('open-relative-link')).toEqual([[{ targetPath: '/atlas/cover.png', rawHref: '/atlas/cover.png', kind: 'image' }]]);
+    const resolveMediaUrl = vi.fn(path => path === '/atlas/cover.png' ? '/api/preview/atlas-cover?token=fixture' : '');
+    await wrapper.setProps({ resolveMediaUrl });
+    expect(resolveMediaUrl).toHaveBeenCalledWith('/atlas/cover.png');
+    expect(reader.get('img').attributes()).toMatchObject({
+      src: '/api/preview/atlas-cover?token=fixture', 'data-workspace-src': '/atlas/cover.png',
+    });
+    expect(reader.find('img[src="./cover.png"]').exists()).toBe(false);
     expect(reader.get('a').text()).toBe('Unsafe link');
     expect(reader.html()).not.toMatch(/<script|onerror|javascript:/i);
 
@@ -1469,9 +1671,19 @@ describe('Folder Creation and Files in Workbench', () => {
     window.addEventListener('workbench-open-creation', open);
     try {
       await wrapper.get('[data-tree-path$="/docs"]').trigger('contextmenu');
-      await button(wrapper, `✦ ${t('files.openFolderInCreation')}`, '.ctx-menu .ctx-menu-item').trigger('click');
+      const openItem = button(wrapper, `✦ ${t('files.openFolderInCreation')}`, '.ctx-menu .ctx-menu-item');
+      expect(openItem.attributes('role')).toBe('menuitem');
+      expect(openItem.attributes('tabindex')).toBe('0');
+      await openItem.trigger('keydown.enter');
       expect(open).toHaveBeenCalledTimes(1);
       expect(open.mock.calls[0][0].detail).toMatchObject({ routeKey, rootDir: `${rootDir}/docs` });
+      // Capability gating: hide root and context-menu Creation actions when agent lacks 'creations'
+      chat.agents = [{ id: route.agentId, name: 'No Creations', online: true, capabilities: ['file_editor'] }];
+      chat.currentAgentInfo = chat.agents[0];
+      await Vue.nextTick();
+      expect(wrapper.find(`[aria-label="${t('files.openFolderInCreation')}"]`).exists()).toBe(false);
+      await wrapper.get('[data-tree-path$="/docs"]').trigger('contextmenu');
+      expect(wrapper.findAll('.ctx-menu .ctx-menu-item').some(el => el.text().includes(t('files.openFolderInCreation')))).toBe(false);
     } finally {
       window.removeEventListener('workbench-open-creation', open);
     }
@@ -1528,6 +1740,107 @@ describe('Folder Creation and Files in Workbench', () => {
     expect(wrapper.findComponent(CreationTab).exists()).toBe(false);
   });
 
+  it('dispatches the route-scoped Creation dirty check and respects a canceled Workbench close', async () => {
+    const { default: WorkbenchPanel } = await import('../../web/components/WorkbenchPanel.js');
+    const readme = `${rootDir}/README.md`;
+    creations.byAgent[route.agentId].list = [{ id: 'dirty', rootDir, sessionId: route.sessionId }];
+    mockWorkbenchFiles(chat, { [rootDir]: [{ name: 'README.md', type: 'file' }] }, { [readme]: '# On disk' });
+    const wrapper = render(WorkbenchPanel, { props: { ownerRoute: route, ownerWorkDir: rootDir } });
+    fireWindowEvent('workbench-open-creation', { routeKey, rootDir, creationId: 'dirty' });
+    await flushPromises();
+    const tab = wrapper.getComponent(CreationTab);
+    const canvas = tab.getComponent(FileCanvasView);
+    await button(canvas, t('creation.canvas.edit')).trigger('click');
+    await canvas.get('textarea').setValue('# Do not lose this');
+    const check = vi.fn();
+    const confirm = vi.fn(() => false);
+    vi.stubGlobal('confirm', confirm);
+    window.addEventListener('creation-check-dirty', check);
+    try {
+      expect(await wrapper.vm.closeCapability('creation')).toBe(false);
+      expect(check).toHaveBeenCalledTimes(1);
+      expect(check.mock.calls[0][0].detail).toEqual({ routeKey, workspaceGeneration: tab.props('workspaceGeneration'),
+        dirtyCount: 1, dirtyFiles: ['README.md'] });
+      expect(confirm).toHaveBeenCalledExactlyOnceWith(t('files.unsavedConfirm'));
+      expect(wrapper.getComponent(CreationTab).get('textarea').element.value).toBe('# Do not lose this');
+      confirm.mockReturnValue(true);
+      expect(await wrapper.vm.closeCapability('creation')).toBe(true);
+      await Vue.nextTick();
+      expect(wrapper.findComponent(CreationTab).exists()).toBe(false);
+    } finally {
+      window.removeEventListener('creation-check-dirty', check);
+    }
+  });
+
+  it('delivers the prompt from the Workbench Creation modal created event to the linked Session', async () => {
+    const { default: CreationCreateModal } = await import('../../web/components/workbench/CreationCreateModal.js');
+    const { sessions } = await registerBrowserStores();
+    sessions.applySnapshotUpsert({ id: route.sessionId, name: 'Atlas', workDir: rootDir }, route.agentId);
+    const send = mockWorkbenchFiles(chat, {}, {}, request => request.type === 'yeaft_session_send' ? true : undefined);
+    const wrapper = render(CreationTab, { props: routeProps });
+    await flushPromises();
+    wrapper.getComponent(CreationCreateModal).vm.$emit('created', {
+      agentId: route.agentId, sessionId: route.sessionId, creation: { id: 'new-atlas', rootDir },
+      rootDir, prompt: '  Start planning the atlas  ',
+    });
+    await flushPromises();
+    expect(wrapper.vm.activeCreation.id).toBe('new-atlas');
+    expect(send.mock.calls.map(([msg]) => msg).filter(msg => msg.type === 'yeaft_session_send')).toEqual([
+      expect.objectContaining({ agentId: route.agentId, sessionId: route.sessionId, text: 'Start planning the atlas' }),
+    ]);
+  });
+
+  it('does not let a slow current-folder bind replace a newer explicit Creation selection', async () => {
+    const chosen = { id: 'selected', title: 'Newer selection', rootDir: `${rootDir}/selected` };
+    creations.byAgent[route.agentId].list = [chosen];
+    const pending = deferred();
+    const bind = vi.spyOn(creations, 'bindFolderAsCreation').mockReturnValue(pending.promise);
+    const send = mockWorkbenchFiles(chat);
+    const wrapper = render(CreationTab, { props: routeProps });
+    await flushPromises();
+    const onboarding = wrapper.get('.creation-wb-onboarding');
+    await onboarding.findAll('.creation-wb-action-card')[1].trigger('click');
+    expect(bind).toHaveBeenCalledExactlyOnceWith({ agentId: route.agentId, sessionId: route.sessionId, rootDir });
+    await onboarding.get('.creation-wb-existing-card').trigger('click');
+    await flushPromises();
+    expect(wrapper.vm.activeCreation.id).toBe(chosen.id);
+    pending.resolve({ creation: { id: 'stale-bind', rootDir } });
+    await flushPromises();
+    expect(wrapper.vm.activeCreation.id).toBe(chosen.id);
+    expect(send.mock.calls.map(([msg]) => msg).filter(msg => msg.type === 'list_directory')).toEqual([
+      expect.objectContaining({ dirPath: chosen.rootDir, creationId: chosen.id }),
+    ]);
+  });
+
+  it('immediately reloads a selected video when only its mtime changes on rescan', async () => {
+    const path = `${rootDir}/intro.mp4`;
+    const entry = { name: 'intro.mp4', type: 'file', size: 42, mtimeMs: 1000 };
+    creations.byAgent[route.agentId].list = [{ id: 'video-refresh', rootDir, sessionId: route.sessionId }];
+    const send = mockWorkbenchFiles(chat, { [rootDir]: [entry] }, {}, request => {
+      if (request.type === 'video_metadata') return { type: 'video_metadata', videoStream: true, previewUrl: `/api/preview/intro-${entry.mtimeMs}` };
+    });
+    const wrapper = render(CreationTab, { props: routeProps });
+    await flushPromises();
+    await wrapper.findAll('.creation-wb-tab')[2].trigger('click');
+    await wrapper.get('.creation-wb-video-card').trigger('click');
+    await flushPromises();
+    const requests = () => send.mock.calls.map(([msg]) => msg).filter(msg => msg.type === 'video_metadata');
+    const video = () => wrapper.get('video');
+    expect(requests()).toHaveLength(1);
+    expect(video().attributes('src')).toBe(new URL('/api/preview/intro-1000', location.origin).href);
+    const rescan = async () => {
+      await wrapper.get(`[aria-label="${t('creation.workbench.refresh')}"]`).trigger('click');
+      await flushPromises();
+    };
+    await rescan();
+    expect(requests()).toHaveLength(1);
+    entry.mtimeMs = 2000;
+    await rescan();
+    expect(requests()).toEqual(Array.from({ length: 2 }, () => expect.objectContaining({ filePath: path, creationId: 'video-refresh' })));
+    expect(video().attributes()).toMatchObject({ src: new URL('/api/preview/intro-2000', location.origin).href, 'data-canvas-path': path });
+    expect(wrapper.find('.canvas-media-loading-overlay').exists()).toBe(false);
+  });
+
   it('renders SVG in the gallery and Canvas without an SVG ObjectURL, and rejects unsafe image/video URLs', async () => {
     const { default: SvgPreview } = await import('../../web/components/files/SvgPreview.js');
     const objectUrl = vi.spyOn(URL, 'createObjectURL');
@@ -1550,6 +1863,8 @@ describe('Folder Creation and Files in Workbench', () => {
     await flushPromises();
     const cards = wrapper.findAll('.creation-wb-image-card');
     expect(cards[0].getComponent(SvgPreview).props('content')).toBe(svg);
+    expect(cards[0].element.tagName).toBe('BUTTON');
+    expect(cards[0].element.querySelectorAll('button')).toHaveLength(0);
     expect(cards[1].find('img').exists()).toBe(false);
     await cards[0].trigger('click');
     expect(wrapper.getComponent(FileCanvasView).getComponent(SvgPreview).props('content')).toBe(svg);
@@ -1601,10 +1916,12 @@ describe('Folder Creation and Files in Workbench', () => {
     await select('docs/First.md');
     expect(wrapper.vm.activeDocFile).toMatchObject({ path: first, content: '# First draft', isDirty: true });
     expect([...wrapper.vm.docDrafts.keys()].sort()).toEqual([`${rootDir}::${second}`, `${rootDir}::${first}`].sort());
+    await select('README.md');
     failSubdir = true;
     await wrapper.get(`[aria-label="${t('creation.workbench.refresh')}"]`).trigger('click');
     await flushPromises();
-    expect(wrapper.find('.creation-wb-tree-row[title="docs/First.md"]').exists()).toBe(false);
+    expect(wrapper.vm.activeDocFile).toMatchObject({ path: second, content: '# Readme draft', isDirty: true });
+    await select('docs/First.md');
     expect(wrapper.vm.activeDocFile).toMatchObject({ path: first, content: '# First draft', isDirty: true });
     expect(wrapper.vm.docDrafts.get(`${rootDir}::${second}`).content).toBe('# Readme draft');
     expect(send.mock.calls.filter(([request]) => request.type === 'read_file').map(([request]) => request.filePath)).toEqual([second, first]);
@@ -1744,7 +2061,10 @@ describe('Folder Creation and Files in Workbench', () => {
       [rootDir]: [{ name: 'README.md', type: 'file' }, { name: 'chapters', type: 'directory' }, { name: 'cover.png', type: 'file' }, { name: 'intro.mp4', type: 'file' }, { name: 'build.js', type: 'file' }],
       [`${rootDir}/chapters`]: [{ name: 'part-1', type: 'directory' }],
       [`${rootDir}/chapters/part-1`]: [{ name: 'opening.md', type: 'file' }],
-    }, { [`${rootDir}/README.md`]: '# Atlas overview', [chapter]: '# Opening chapter' });
+    }, { [`${rootDir}/README.md`]: '# Atlas overview', [chapter]: '# Opening chapter' }, request => {
+      if (request.type === 'create_file') return { type: 'file_op_result', operation: 'create', success: true };
+      if (request.type === 'video_metadata') return { type: 'video_metadata', videoStream: true, previewUrl: '/api/preview/intro' };
+    });
     interceptSocket(chat, request => {
       if (request.type !== 'creation_request') return;
       let data;
@@ -1782,6 +2102,9 @@ describe('Folder Creation and Files in Workbench', () => {
     await tabs[2].trigger('click');
     expect(tabs[2].attributes('aria-selected')).toBe('true');
     expect(wrapper.get('.creation-wb-video-card').text()).toContain('intro.mp4');
+    await wrapper.get('.creation-wb-video-card').trigger('click');
+    await flushPromises();
+    expect(wrapper.get('video').attributes('data-canvas-path')).toBe(`${rootDir}/intro.mp4`);
     await tabs[0].trigger('click');
     expect(wrapper.getComponent(FileCanvasView).get('h1').text()).toBe('Atlas overview');
     expect(wrapper.find('.creation-wb-tree-row[title="chapters/part-1/opening.md"]').exists()).toBe(false);
@@ -1797,6 +2120,16 @@ describe('Folder Creation and Files in Workbench', () => {
     await flushPromises();
     expect(send).toHaveBeenCalledWith(expect.objectContaining({ type: 'write_file', filePath: chapter, content: '# Revised chapter', workbenchRoute: route }));
     expect(canvas.find('.canvas-save-btn').exists()).toBe(false);
+    await wrapper.get(`[aria-label="${t('creation.workbench.addMenu')}"]`).trigger('click');
+    await button(wrapper, t('creation.workbench.newDoc'), '[role="menuitem"]').trigger('click');
+    await wrapper.get('.creation-wb-mini-input').setValue('notes.md');
+    await wrapper.get('.creation-wb-mini-input').trigger('keydown.enter');
+    await flushPromises();
+    const types = ['list_directory', 'read_file', 'write_file', 'create_file', 'video_metadata'];
+    const calls = send.mock.calls.map(([msg]) => msg).filter(msg => types.includes(msg.type));
+    expect(new Set(calls.map(msg => msg.type))).toEqual(new Set(types));
+    for (const msg of calls) expect(msg, msg.type).toMatchObject({ creationId: creation.id, workbenchRoute: route });
+    expect(calls).toContainEqual(expect.objectContaining({ type: 'create_file', filePath: `${rootDir}/notes.md`, isDirectory: false }));
     const openFiles = vi.fn();
     const openDir = vi.fn();
     window.addEventListener('workbench-open-capability', openFiles);
@@ -1804,7 +2137,7 @@ describe('Folder Creation and Files in Workbench', () => {
     try {
       await wrapper.get(`.creation-wb-header-actions button[title="${t('creation.workbench.openInFiles')}"]`).trigger('click');
       expect(openFiles.mock.calls[0][0].detail).toEqual({ routeKey, capabilityId: 'files' });
-      expect(openDir.mock.calls[0][0].detail).toEqual({ routeKey, agentId: route.agentId, dirPath: rootDir });
+      expect(openDir.mock.calls[0][0].detail).toEqual({ routeKey, agentId: route.agentId, dirPath: rootDir, workspaceGeneration: routeProps.workspaceGeneration });
     } finally {
       window.removeEventListener('workbench-open-capability', openFiles);
       window.removeEventListener('workbench-files-open-dir', openDir);

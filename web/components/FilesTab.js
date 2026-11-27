@@ -206,7 +206,7 @@ export default {
               <button v-if="!workspaceLocked" class="vscode-action-btn" @click="openFolderPicker" :title="$t('files.openFolder')">
                 <svg viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M20 6h-8l-2-2H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2zm0 12H4V8h16v10z"/></svg>
               </button>
-              <button type="button" class="vscode-action-btn" @click="openFolderInCreation(treeRootPath)" :title="$t('files.openFolderInCreation')" :aria-label="$t('files.openFolderInCreation')">
+              <button v-if="canOpenCreation" type="button" class="vscode-action-btn" @click="openFolderInCreation(treeRootPath)" :title="$t('files.openFolderInCreation')" :aria-label="$t('files.openFolderInCreation')">
                 <span aria-hidden="true">✦</span>
               </button>
             </div>
@@ -379,10 +379,12 @@ export default {
             :saving="fileSaving"
             :show-header="true"
             :show-promote-folder="true"
+            :resolve-media-url="resolveCanvasRelativeMediaUrl"
             @update:content="onCanvasContentUpdate"
             @save="saveFile"
             @download="downloadActiveFile"
             @promote-folder="openFolderInCreation"
+            @open-relative-link="onCanvasRelativeLink"
             @media-load="onCanvasMediaLoad"
             @media-error="onCanvasMediaError"
           />
@@ -688,9 +690,16 @@ export default {
           <svg viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/></svg>
           {{ $t('common.delete') }}
         </div>
-        <template v-if="contextMenu.entry?.type === 'directory'">
+        <template v-if="canOpenCreation && contextMenu.entry?.type === 'directory'">
           <div class="ctx-menu-separator"></div>
-          <div class="ctx-menu-item" @click="ctxOpenInCreation">
+          <div
+            class="ctx-menu-item"
+            role="menuitem"
+            tabindex="0"
+            @click="ctxOpenInCreation"
+            @keydown.enter.prevent="ctxOpenInCreation"
+            @keydown.space.prevent="ctxOpenInCreation"
+          >
             <span aria-hidden="true">✦</span>
             {{ $t('files.openFolderInCreation') }}
           </div>
@@ -1046,7 +1055,42 @@ export default {
         : t('files.previewLoadFailed');
     };
 
+    const resolveCanvasRelativeMediaUrl = (resolvedPath) => {
+      if (!resolvedPath) return '';
+      const targetNorm = normalizePath(resolvedPath);
+      const opened = tabs.openFiles.value.find(
+        f => f && normalizePath(f.path) === targetNorm && f.blobUrl
+      );
+      return opened?.blobUrl || '';
+    };
+
+    const onCanvasRelativeLink = (payload) => {
+      const targetPath = typeof payload?.targetPath === 'string' ? payload.targetPath.trim() : '';
+      if (!targetPath) return;
+      const normalized = normalizePath(targetPath);
+      const parts = normalized.split('/').filter(Boolean);
+      const name = parts[parts.length - 1] || normalized;
+      tabs.openFileInTab(normalized, name);
+    };
+
+    const workbenchHasCreations = Vue.inject('workbench-has-creations', null);
+    const canOpenCreation = Vue.computed(() => {
+      if (workbenchHasCreations) return Boolean(workbenchHasCreations.value);
+      const agentId = props.agentId || store.currentAgent;
+      if (!agentId) return false;
+      const agent = Array.isArray(store.agents)
+        ? store.agents.find(candidate => candidate?.id === agentId)
+        : null;
+      const selectedAgent = store.currentAgentInfo?.id === agentId ? store.currentAgentInfo : null;
+      const caps = agent?.capabilities || selectedAgent?.capabilities || [];
+      if (Array.isArray(caps) && caps.length > 0) {
+        return caps.includes('creations');
+      }
+      return true;
+    });
+
     const openFolderInCreation = (dirPath) => {
+      if (!canOpenCreation.value) return;
       let targetDir = typeof dirPath === 'string' ? dirPath.trim() : '';
       if (!targetDir) {
         const activePath = tabs.activeFile.value?.path;
@@ -1328,7 +1372,8 @@ export default {
       activeCanvasSupported, activeCanvasMode, toggleCanvasMode,
       onSwitchToTextPreview, onSwitchToTextEdit, onCanvasContentUpdate,
       onCanvasMediaLoad, onCanvasMediaError,
-      openFolderInCreation, ctxOpenInCreation,
+      resolveCanvasRelativeMediaUrl, onCanvasRelativeLink,
+      canOpenCreation, openFolderInCreation, ctxOpenInCreation,
       isActiveTextPreview: preview.isActiveTextPreview, isActiveHtml: preview.isActiveHtml, isActiveSvg: preview.isActiveSvg, isActiveCsv: preview.isActiveCsv,
       htmlPreviewDocument: preview.htmlPreviewDocument,
       folderPickerOpen: fp.folderPickerOpen, folderPickerPath: fp.folderPickerPath,

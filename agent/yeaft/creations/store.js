@@ -11,6 +11,21 @@ import { parseSource, searchTerms, sniffSourceMimeType } from './source-parser.j
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS creations (id TEXT PRIMARY KEY, updated_at TEXT NOT NULL, data TEXT NOT NULL);
+-- Keep workspace history independent of the Creation row. Backfill legacy
+-- links and capture OLD values even when an existing link is cleared.
+CREATE TABLE IF NOT EXISTS protected_workspaces (root_dir TEXT PRIMARY KEY NOT NULL);
+INSERT OR IGNORE INTO protected_workspaces SELECT json_extract(data,'$.rootDir')
+  FROM creations WHERE json_type(data,'$.rootDir')='text';
+CREATE TRIGGER IF NOT EXISTS creation_workspace_insert AFTER INSERT ON creations BEGIN
+  INSERT OR IGNORE INTO protected_workspaces SELECT json_extract(new.data,'$.rootDir') WHERE json_type(new.data,'$.rootDir')='text';
+END;
+CREATE TRIGGER IF NOT EXISTS creation_workspace_update AFTER UPDATE OF data ON creations BEGIN
+  INSERT OR IGNORE INTO protected_workspaces SELECT json_extract(old.data,'$.rootDir') WHERE json_type(old.data,'$.rootDir')='text';
+  INSERT OR IGNORE INTO protected_workspaces SELECT json_extract(new.data,'$.rootDir') WHERE json_type(new.data,'$.rootDir')='text';
+END;
+CREATE TRIGGER IF NOT EXISTS creation_workspace_delete BEFORE DELETE ON creations BEGIN
+  INSERT OR IGNORE INTO protected_workspaces SELECT json_extract(old.data,'$.rootDir') WHERE json_type(old.data,'$.rootDir')='text';
+END;
 CREATE TABLE IF NOT EXISTS creation_import_keys (
   import_key TEXT PRIMARY KEY, creation_id TEXT NOT NULL UNIQUE REFERENCES creations ON DELETE CASCADE);
 CREATE TABLE IF NOT EXISTS creation_sources (
@@ -110,6 +125,22 @@ function workspaceName(value, fallback) {
   return clipBytes(name, 180).replace(/[. ]+$/g, '') || fallback;
 }
 const WORKSPACE_DIRS = ['docs', 'images', 'videos', 'sources'];
+const CACHE_DIRS = ['sources', 'artifacts', 'assets', 'exports'];
+const WORKSPACE_MARKERS = new Set(['readme.md', '.creation-workspace', '.workspace']);
+
+function isWithin(root, path) { return relative(root, path) === '' || contains(root, path); }
+
+function hasWorkspaceMarker(path) {
+  const pending = [path];
+  while (pending.length) {
+    const dir = pending.pop();
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      if (WORKSPACE_MARKERS.has(entry.name.toLowerCase())) return true;
+      if (entry.isDirectory()) pending.push(join(dir, entry.name));
+    }
+  }
+  return false;
+}
 const IMAGE_EXT = /^(?:png|jpe?g|gif|webp|svg|avif|bmp|ico|tiff?)$/i;
 const VIDEO_EXT = /^(?:mp4|webm|mov|mkv|avi|ogv|m4v|mpeg|mpg)$/i;
 
@@ -418,7 +449,7 @@ export class CreationStore {
   #creationFields(record, input) {
     for (const key of ['sessionId', 'projectId']) if (own(input, key)) record[key] = optionalLinkId(input[key], key);
     if (own(input, 'rootDir')) {
-      const rootDir = input.rootDir == null ? null : this.#rootFolder(input.rootDir);
+      const rootDir = input.rootDir == null ? null : this.#linkableRootFolder(input.rootDir);
       record.rootDir = rootDir;
     }
     if (own(input, 'title')) record.title = title(input.title);
@@ -450,18 +481,32 @@ export class CreationStore {
   }
   deleteCreation(id) {
     return this.transaction(() => {
-      const record = data(this.#creation(id));
+      this.#creation(id);
       if (this.one("SELECT id FROM creation_runs WHERE creation_id=? AND status='running'", id)) fail('BUSY', 'Creation has an active run');
       this.run('DELETE FROM creations WHERE id=?', id);
-      const cache = this.#path(id);
-      // Workspaces are user data, even when provisioned by the Agent. Do not
-      // recurse into the cache if it overlaps a workspace rooted there.
-      const linkedRoots = this.all("SELECT json_extract(data,'$.rootDir') AS rootDir FROM creations WHERE json_type(data,'$.rootDir')='text'");
-      if (id !== 'workspaces' && ![record, ...linkedRoots].some(({ rootDir }) => rootDir && (cache === rootDir || contains(cache, rootDir)))) {
-        this.tx.afterCommit.push(() => this.#remove(cache));
-      }
+      if (id.toLowerCase() !== 'workspaces') this.tx.afterCommit.push(() => this.#removeCreationCache(id));
       return { deleted: true, id };
     });
+  }
+
+  #removeCreationCache(id) {
+    const cache = this.#path(id);
+    try {
+      this.#assertNoSymlinkDir(cache);
+      const roots = this.all('SELECT root_dir FROM protected_workspaces')
+        .map(({ root_dir }) => root_dir).filter(isAbsolute).map(path => resolve(path));
+      if (roots.some(root => isWithin(root, cache))
+        || fs.readdirSync(cache).some(name => WORKSPACE_MARKERS.has(name.toLowerCase()))) return;
+      for (const name of CACHE_DIRS) {
+        const path = join(cache, name);
+        if (roots.some(root => isWithin(root, path) || isWithin(path, root))) continue;
+        try {
+          if (this.#assertNoSymlinkDir(path, { allowMissing: true }) && !hasWorkspaceMarker(path)) this.#remove(path);
+        } catch { /* Preserve paths that cannot be verified. */ }
+      }
+      // Unknown children (including historical custom workspaces) are never removed.
+      if (!roots.some(root => isWithin(cache, root)) && fs.realpathSync(cache) === cache) fs.rmdirSync(cache);
+    } catch { /* Missing, non-empty or unverifiable caches are left alone. */ }
   }
 
   #workspacePath(id) { return join(this.root, 'workspaces', safeId(id)); }
@@ -491,6 +536,13 @@ export class CreationStore {
   #rootFolder(value, { allowMissing = false } = {}) {
     const path = folderPath(value);
     return this.#assertNoSymlinkDir(path, { code: 'INVALID_REQUEST', allowMissing }) ?? path;
+  }
+  #linkableRootFolder(value) {
+    const path = folderPath(value);
+    if (isWithin(this.root, path) && !contains(join(this.root, 'workspaces'), path)) {
+      fail('INVALID_PATH', 'Cannot link a workspace inside Creation cache storage');
+    }
+    return this.#assertNoSymlinkDir(path, { code: 'INVALID_REQUEST' });
   }
   #walkWorkspace(root, path, create = false) {
     if (path !== root && !contains(root, path)) fail('INVALID_PATH', 'Invalid workspace path');
@@ -652,7 +704,7 @@ export class CreationStore {
       if (record.rootDir && this.#assertNoSymlinkDir(record.rootDir, { code: 'INVALID_REQUEST', allowMissing: true })) {
         return { creation: this.getCreation(id), rootDir: record.rootDir, materialized: false };
       }
-      this.#initializeWorkspace(record, rootDir == null ? null : this.#rootFolder(rootDir));
+      this.#initializeWorkspace(record, rootDir == null ? null : this.#linkableRootFolder(rootDir));
       this.#materializeWorkspace(id, record.rootDir);
       this.run('UPDATE creations SET updated_at=?,data=? WHERE id=?', now(), json(record), id);
       return { creation: this.getCreation(id), rootDir: record.rootDir, materialized: true };

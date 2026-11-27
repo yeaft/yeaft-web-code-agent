@@ -4,6 +4,11 @@ import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSyn
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { deflateSync } from 'node:zlib';
+import ctx from '../../../../agent/context.js';
+import { resolveCreationWorkspaceRoot } from '../../../../agent/yeaft/creations/bridge.js';
+import { resolveWorkItemPath } from '../../../../agent/workbench/work-item-path.js';
+import { handleCreateFile, handleListDirectory, handleReadFile, handleUploadToDir, handleVideoChunk, handleVideoMetadata, handleWriteFile }
+  from '../../../../agent/workbench/file-ops.js';
 import { BUFFERABLE_TYPES } from '../../../../agent/connection/buffer.js';
 import { createCreationBridge, createCreationService, createCreationStore, parseSource } from '../../../../agent/yeaft/creations/index.js';
 
@@ -94,17 +99,56 @@ describe('Creation folder workspaces', () => {
     expect(readFileSync(join(external, 'keep.txt'), 'utf8')).toBe('external data');
   });
 
-  it('preserves a linked workspace inside a legacy cache directory', () => {
-    const id = 'cache-overlap';
-    store.createCreation({ id });
-    const rootDir = join(store.root, id, 'project');
+  it('rejects new cache-tree links on create, update and workspace setup', () => {
+    store.createCreation({ id: 'cache-owner' });
+    store.createCreation({ id: 'linked' });
+    const rootDir = join(store.root, 'cache-owner', 'sources');
     mkdirSync(rootDir, { recursive: true });
     writeFileSync(join(rootDir, 'keep.txt'), 'workspace data');
-    store.updateCreation(id, { rootDir });
-    store.deleteCreation(id);
-    expect(readFileSync(join(rootDir, 'keep.txt'), 'utf8')).toBe('workspace data');
-    expect(store.listCreations()).toEqual([]);
+    for (const path of [rootDir, store.root, join(store.root, 'cache-owner', 'missing')]) {
+      expect(() => store.createCreation({ id: 'new-link', rootDir: path })).toThrow(err('INVALID_PATH'));
+      expect(() => store.updateCreation('linked', { rootDir: path })).toThrow(err('INVALID_PATH'));
+      expect(() => store.ensureWorkspace('linked', { rootDir: path })).toThrow(err('INVALID_PATH'));
+    }
+    expect(store.getCreation('linked').rootDir).toBeNull();
+    expect(readdirSync(rootDir)).toEqual(['keep.txt']);
   });
+
+  it.each([['sources', false], ['sources/nested', true], ['custom-ws', false]])(
+    'preserves legacy %s workspace after its link is removed (unlink=%s) and the cache owner is deleted',
+    async (workspace, unlink) => {
+      store.createCreation({ id: 'cache-owner' });
+      store.createCreation({ id: 'linked' });
+      const cache = join(store.root, 'cache-owner');
+      const rootDir = join(cache, workspace);
+      mkdirSync(rootDir, { recursive: true });
+      writeFileSync(join(rootDir, 'keep.txt'), 'workspace data without a marker');
+      mkdirSync(join(cache, 'exports'));
+      writeFileSync(join(cache, 'exports', 'discard.txt'), 'internal cache');
+      mkdirSync(join(cache, 'assets', 'marked'), { recursive: true });
+      writeFileSync(join(cache, 'assets', 'marked', 'README.md'), 'unregistered workspace marker');
+
+      // Emulate the pre-guard schema and upgrade with a legacy root already stored.
+      store.db.exec(`DROP TRIGGER creation_workspace_insert; DROP TRIGGER creation_workspace_update;
+        DROP TRIGGER creation_workspace_delete; DROP TABLE protected_workspaces;`);
+      store.run("UPDATE creations SET data=json_set(data,'$.rootDir',?) WHERE id='linked'", rootDir);
+      const reopen = async () => {
+        await service.close();
+        service = createCreationService({ yeaftDir: dir });
+        store = service.store;
+      };
+      await reopen();
+      expect(store.one('SELECT root_dir FROM protected_workspaces WHERE root_dir=?', rootDir)).toMatchObject({ root_dir: rootDir });
+      if (unlink) store.updateCreation('linked', { rootDir: null });
+      store.deleteCreation('linked');
+      await reopen();
+      store.deleteCreation('cache-owner');
+      expect(readFileSync(join(rootDir, 'keep.txt'), 'utf8')).toBe('workspace data without a marker');
+      expect(readFileSync(join(cache, 'assets', 'marked', 'README.md'), 'utf8')).toBe('unregistered workspace marker');
+      expect(existsSync(join(cache, 'exports'))).toBe(false);
+      expect(store.listCreations()).toEqual([]);
+    },
+  );
 
   it.each(['directory', 'symlink', 'ancestor symlink'])('preserves workspace bytes after replacement by a %s', replacement => {
     const id = 'replaced';
@@ -858,4 +902,139 @@ it('rejects plain Matroska EBML without WebM DocType as non-playable video and c
   const asset = store.saveAsset('book', { id: 'export-markdown', ext: 'md', bytes: Buffer.from('short') });
   expect(() => store.readMediaRange('book', 'asset', asset.id, 9999, 10050, { expectedVersion: 'stale-version' }))
     .toThrow(err('CONFLICT'));
+});
+
+describe('Creation-scoped Workbench files', () => {
+  const owner = 'owner-a';
+  const creationId = 'files';
+  let root;
+  let outside;
+  let bridge;
+  let savedContext;
+  let replies;
+  let msg;
+
+  beforeEach(async () => {
+    const base = realpathSync(dir);
+    root = join(base, 'workspace');
+    outside = join(base, 'outside');
+    mkdirSync(join(root, 'docs'), { recursive: true });
+    mkdirSync(outside);
+    writeFileSync(join(root, 'docs', 'note.txt'), 'inside');
+    writeFileSync(join(root, 'clip.mp4'), 'video');
+    writeFileSync(join(outside, 'note.txt'), 'outside');
+    symlinkSync(outside, join(root, 'external'), 'dir');
+    symlinkSync(join(root, 'docs'), join(root, 'internal'), 'dir');
+    symlinkSync(join(root, 'docs', 'note.txt'), join(root, 'linked.txt'), 'file');
+    symlinkSync(join(root, 'missing'), join(root, 'dangling'), 'file');
+    savedContext = Object.fromEntries(['CONFIG', 'agentId', 'creationBridge', 'sendToServer'].map(key => [key, ctx[key]]));
+    replies = [];
+    Object.assign(ctx, {
+      CONFIG: { yeaftDir: dir, serverUrl: 'wss://workbench.example', workDir: outside },
+      agentId: 'workbench-agent', sendToServer: async reply => { replies.push(reply); return 'sent'; },
+    });
+    bridge = createCreationBridge({ send: reply => replies.push(reply) });
+    await bridge.request({ type: 'creation_request', ownerId: owner, requestId: 'setup', op: 'create_creation', payload: { id: creationId, rootDir: root } });
+    expect(replies.pop()).toMatchObject({ ok: true });
+    msg = { creationId, _requestUserId: owner, workDir: outside, rootDir: outside };
+  });
+
+  afterEach(async () => {
+    try { await bridge?.close(); }
+    finally { Object.assign(ctx, savedContext); }
+  });
+
+  async function invoke(handler, args = {}, request = msg) {
+    await handler({ ...request, ...args });
+    return replies.pop();
+  }
+
+  it('resolves only the authenticated namespace, even without a live runtime', async () => {
+    expect(ctx.creationBridge).toBe(bridge);
+    expect(await resolveCreationWorkspaceRoot(owner, creationId)).toBe(root);
+    await bridge.close();
+    expect(await resolveCreationWorkspaceRoot(owner, creationId)).toBeNull();
+    bridge = createCreationBridge();
+    expect(await resolveCreationWorkspaceRoot(owner, creationId)).toBe(root);
+    expect(await resolveCreationWorkspaceRoot('owner-b', creationId)).toBeNull();
+    expect(await resolveCreationWorkspaceRoot(owner, 'missing')).toBeNull();
+    expect(await resolveCreationWorkspaceRoot(owner, '../bad')).toBeNull();
+  });
+
+  it('checks traversal, absolute paths, every symlink segment, and the registered root', async () => {
+    expect(await resolveWorkItemPath({ ...msg, creationId: ` ${creationId} `, workbenchRoute: { runtimeProvider: 'work-center' } },
+      'docs/note.txt', outside)).toBe(join(root, 'docs', 'note.txt'));
+    expect(await resolveWorkItemPath(msg, 'docs/new/deep.txt', outside)).toBe(join(root, 'docs', 'new', 'deep.txt'));
+    for (const path of ['../outside/note.txt', join(outside, 'note.txt'), 'external/note.txt', 'internal/new.txt', 'linked.txt', 'dangling']) {
+      await expect(resolveWorkItemPath(msg, path, outside)).rejects.toMatchObject(err('FILE_OUTSIDE_WORKSPACE'));
+    }
+    for (const fakeRoot of ['relative', join(root, 'linked.txt'), join(root, 'internal'), join(root, 'missing')]) {
+      await expect(resolveWorkItemPath(msg, '.', outside, { resolveCreationWorkspaceRoot: async () => fakeRoot }))
+        .rejects.toMatchObject(err('FILE_OUTSIDE_WORKSPACE'));
+    }
+  });
+
+  it('lists the recorded root by default, filters links, and reports listing metadata', async () => {
+    const ordinary = await invoke(handleListDirectory, { dirPath: root }, {});
+    expect(ordinary.entries).toEqual(expect.arrayContaining([
+      expect.objectContaining({ name: 'docs', isSymlink: false, mtimeMs: statSync(join(root, 'docs')).mtimeMs }),
+      expect.objectContaining({ name: 'external', isSymlink: true, mtimeMs: statSync(outside).mtimeMs }),
+      expect.objectContaining({ name: 'dangling', isSymlink: true, mtimeMs: 0 }),
+    ]));
+    const scoped = await invoke(handleListDirectory);
+    expect(scoped.dirPath).toBe(root);
+    expect(scoped.entries.map(entry => entry.name)).toEqual(['docs', 'clip.mp4']);
+    for (const entry of scoped.entries) {
+      expect(entry.isSymlink).toBe(false);
+      expect(entry.mtimeMs).toBeGreaterThan(0);
+    }
+  });
+
+  it('reads, writes, creates, uploads and streams video inside the recorded root', async () => {
+    expect(await invoke(handleReadFile, { filePath: 'docs/note.txt', workspaceBoundPreview: true })).toMatchObject({ content: 'inside' });
+    expect(await invoke(handleWriteFile, { filePath: 'docs/new.txt', content: 'write' })).toMatchObject({ success: true });
+    expect(await invoke(handleCreateFile, { filePath: 'nested/new.txt' })).toMatchObject({ success: true });
+    expect(await invoke(handleUploadToDir, { dirPath: 'uploads/new', files: [{ name: 'upload.txt', data: b64('uploaded') }] }))
+      .toMatchObject({ success: true, uploadedCount: 1 });
+    expect(readFileSync(join(root, 'docs', 'new.txt'), 'utf8')).toBe('write');
+    expect(readFileSync(join(root, 'nested', 'new.txt'), 'utf8')).toBe('');
+    expect(readFileSync(join(root, 'uploads', 'new', 'upload.txt'), 'utf8')).toBe('uploaded');
+    const video = await invoke(handleVideoMetadata, { filePath: 'clip.mp4' });
+    expect(video).toMatchObject({ size: 5, mimeType: 'video/mp4' });
+    expect(await invoke(handleVideoChunk, { filePath: video.filePath, start: 0, end: 4, expectedSize: video.size, expectedMtimeMs: video.mtimeMs }))
+      .toMatchObject({ content: b64('video') });
+  });
+
+  it('rejects escaping paths and both internal and external symlinks across handlers', async () => {
+    for (const path of ['../outside', outside, 'external', 'internal']) {
+      expect(await invoke(handleListDirectory, { dirPath: path })).toMatchObject({ entries: [], errorCode: 'FILE_OUTSIDE_WORKSPACE' });
+      expect(await invoke(handleReadFile, { filePath: `${path}/note.txt` })).toMatchObject({ errorCode: 'FILE_OUTSIDE_WORKSPACE' });
+      expect(await invoke(handleWriteFile, { filePath: `${path}/note.txt`, content: 'overwrite' })).toMatchObject({ success: false, errorCode: 'FILE_OUTSIDE_WORKSPACE' });
+      expect(await invoke(handleCreateFile, { filePath: `${path}/new.txt` })).toMatchObject({ success: false, errorCode: 'FILE_OUTSIDE_WORKSPACE' });
+      expect(await invoke(handleUploadToDir, { dirPath: path, files: [{ name: 'new.txt', data: b64('upload') }] }))
+        .toMatchObject({ success: false, errorCode: 'FILE_OUTSIDE_WORKSPACE' });
+      expect(await invoke(handleVideoMetadata, { filePath: `${path}/clip.mp4` })).toMatchObject({ errorCode: 'FILE_OUTSIDE_WORKSPACE' });
+      expect(await invoke(handleVideoChunk, { filePath: `${path}/clip.mp4` })).toMatchObject({ errorCode: 'FILE_OUTSIDE_WORKSPACE' });
+    }
+    expect(await invoke(handleReadFile, { filePath: join(outside, 'note.txt'), responseImagePreview: true })).toMatchObject({ errorCode: 'FILE_OUTSIDE_WORKSPACE' });
+    expect(await invoke(handleUploadToDir, { files: ['linked.txt', 'dangling', '../outside/note.txt'].map(name => ({ name, data: b64('overwrite') })) }))
+      .toMatchObject({ success: false, errorCount: 3 });
+    expect(readFileSync(join(root, 'docs', 'note.txt'), 'utf8')).toBe('inside');
+    expect(readdirSync(join(root, 'docs'))).toEqual(['note.txt']);
+    expect(readFileSync(join(outside, 'note.txt'), 'utf8')).toBe('outside');
+    expect(readdirSync(outside)).toEqual(['note.txt']);
+  });
+
+  it('fails closed for missing or unowned creations and absent authenticated ownership', async () => {
+    for (const args of [{ creationId: 'missing' }, { creationId: '' }, { _requestUserId: 'owner-b' }, { _requestUserId: undefined }]) {
+      await expect(resolveWorkItemPath({ ...msg, ...args }, '.', outside)).rejects.toMatchObject(err('FILE_OUTSIDE_WORKSPACE'));
+      for (const [handler, payload] of [
+        [handleListDirectory, {}], [handleReadFile, { filePath: 'docs/note.txt' }],
+        [handleWriteFile, { filePath: 'docs/note.txt', content: 'overwrite' }], [handleCreateFile, { filePath: 'new.txt' }],
+        [handleUploadToDir, { files: [{ name: 'new.txt', data: b64('upload') }] }],
+      ]) {
+        expect(await invoke(handler, { ...args, ...payload })).toMatchObject({ errorCode: 'FILE_OUTSIDE_WORKSPACE' });
+      }
+    }
+  });
 });

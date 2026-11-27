@@ -12,7 +12,7 @@
 
 - **归属入口**：集成在 `Workbench -> Files`（`web/components/FilesTab.js`）内，按文件扩展名（`isCanvasSupportedFile`）自动识别并允许切换进入画布视图（`web/components/workbench/FileCanvasView.js`、`web/styles/canvas.css`）。
 - **支持的文件类型与能力**：
-  - **文档**（`.md` / `.markdown` / `.mdx` / `.txt`）：Apple Pages 风格阅读/编辑双态切换、Markdown 标题目录（H1–H4 Heading TOC）、字数统计、字号缩放，以及阅读态/编辑态划词选区引用（自动匹配 `lineStart`–`lineEnd` 行号范围）。
+  - **文档**（`.md` / `.markdown` / `.mdx` / `.txt`）：Apple Pages 风格阅读/编辑双态切换、Markdown 标题目录（H1–H4 Heading TOC）、字数统计、字号缩放，以及阅读态/编辑态划词选区引用（自动匹配 `lineStart`–`lineEnd` 行号范围）；支持将工作区相对路径 Markdown 图片（如 `../images/cover.png`）解析为受权预览地址展示，并拦截文内相对文档/媒体链接以在 `CreationTab` 内直接跳转至对应文档、图片或视频视图。
   - **图片**（`.png` / `.jpg` / `.jpeg` / `.gif` / `.webp` / `.svg` / `.bmp` / `.avif`）：自适应/百分比缩放、全屏灯箱预览（`openImagePreview`）、基于不透明源（opaque-origin `data:image/svg+xml` + `<img>`）的安全 SVG 预览（`<SvgPreview>`，不作为活跃文档或同源 Blob 执行）及一键引用图片到对话。
   - **视频**（`.mp4` / `.webm` / `.mov` / `.m4v` / `.ogg` / `.ogv`）：基于 HTTP `Range` 的流式播放、倍速控制（`0.75x / 1x / 1.25x / 1.5x / 2x`）、时间戳书签标记（`videoMarkers`）及当前时间点/书签引用。
 - **Canvas → Session Composer 引用链路**（`web/utils/canvas-context.js` → `web/components/ChatInput.js`）：
@@ -27,7 +27,7 @@
   - 递归扫描绑定的真实工作区文件夹（跳过 `.git`、`node_modules`、`.yeaft`、`dist`、`__pycache__`、`.DS_Store` 以及所有符号链接条目 `isSymlink` / `type === 'symlink'`，深度上限 4、条目上限 600），按 **Documents（多级目录树 `buildDocTree`）**、**Images**、**Videos** 三个视图组织文件。
   - 直接复用 `FileCanvasView` 完成文档读写、图片预览、视频播放及向当前 Session 的上下文引用；图片网格与预览对 SVG 统一使用不透明源 `<SvgPreview>`。
   - **严格请求关联与单调围栏**：所有 Workbench WS 文件请求（`list_directory`、`read_file`、`write_file`、`create_file`、`video_metadata`、`upload_to_dir`）均经由 `createRouteBoundWorkbenchStore` 绑定路由并强制校验唯一 `requestId`（拒绝无 ID 或不匹配的回复），避免与 `FilesTab` 互相干扰；工作区激活与扫描统一由单调递增围栏（`activationEpoch` + `routeKey` + `workspaceGeneration`）保护，丢弃过期异步回调。
-  - **路径校验、草稿保护与媒体刷新**：发起新建/上传等 Workbench 请求前强制执行相对名称校验（`isSafeRelativeChildName`）与根目录包含校验（`isPathInsideRoot`）；文档编辑采用按 `${rootDir}::${docPath}` 隔离的草稿缓冲（`docDrafts`），在切换文档、局部刷新及保存失败时均保留未保存改动（切走 Creation 前校验脏草稿）；图片与视频采用基于路径的选中态（`selectedImagePath` / `selectedVideoPath`），重扫时比对 `size` 与 `mtime` 并在文件变更时自动失效重建预览缓存。
+  - **路径校验、草稿保护与媒体刷新**：发起新建/上传等 Workbench 请求前强制执行相对名称校验（`isSafeRelativeChildName`）与根目录包含校验（`isPathInsideRoot`），并携带 `creationId` 由 Agent 侧强制隔离；文档编辑采用按 `${rootDir}::${docPath}` 隔离的草稿缓冲（`docDrafts`），在切换文档、局部刷新及保存失败时均保留未保存改动（切换 Creation 或关闭 Workbench `'creation'` 能力标签页时均触发未保存脏草稿拦截确认）；图片与视频采用基于路径的选中态（`selectedImagePath` / `selectedVideoPath`），重扫时比对 `size` 与 `mtimeMs` 并在文件变更时自动失效重建预览缓存。
   - **窄面板容器响应**：`CreationTab`（`@container creation-wb (max-width: 680px)`）与 `FileCanvasView`（`@container canvas-pane (max-width: 640px)`）通过 CSS Container Queries 在窄分屏面板下自动将文档目录树折叠为浮层抽屉、将 Markdown TOC 栏折叠至正文上方，确保正文编辑区可读。
 - **三选一文件夹引导（Onboarding）**：当当前 Session 尚未绑定 Creation 或用户切换工作区时，提供三种入口：
   1. **新建 Creation（New Creation）**：唤起 `CreationCreateModal` 创建并初始化目录；
@@ -72,17 +72,17 @@
   - **旧版结构化作品迁移**：旧版 `slide_deck`（幻灯片、内容块、讲者备注）、`image_gallery`（画幅、说明、提示词及内联 SVG）与 `video_episode`（分镜、时间戳、旁白、字幕、视觉提示词）单元均经 `legacyMarkdown` 转换为可读的 Markdown 文件写入 `docs/`，并将其引用的图片/视频资源（含内联 SVG 帧与媒体类型 `sources`）物化到 `images/` 与 `videos/` 目录中，使 `CreationTab` 无需旧版专用阅读器即可直接浏览。
   - 若 `rootDir` 已指向有效的无符号链接目录，则直接返回 `materialized: false`。
 - **`find_by_folder`**：对传入 `rootDir` 执行 `lstatSync` + `realpathSync` 规范化与无符号链接校验，按 `json_extract(data, '$.rootDir')` 检索同命名空间下已绑定的 Creation。
-- **删除保护策略（永不删除磁盘工作区）**：`delete_creation` 仅删除 SQLite 中的 Creation 记录与内部缓存目录（`<namespaceRoot>/<creationId>`，且若缓存路径与任一工作区 `rootDir` 重叠或 `id === 'workspaces'` 时亦跳过缓存目录清理）；**所有磁盘工作区目录（无论是用户绑定的外部文件夹，还是 Agent 自动初始化的 `workspaces/<creationId>`）一律永久保留，永不递归删除**。
+- **删除保护策略（永不删除磁盘工作区）**：`create_creation` / `update_creation` / `find_by_folder` 拒绝与内部缓存树（`<namespaceRoot>/<creationId>` 或 `<namespaceRoot>/` 缓存子树）重叠的 `rootDir`，并在 SQLite 中维护受保护工作区表（`protected_workspaces`）记录历史落盘路径；`delete_creation` 仅删除 SQLite 中的 Creation 记录并只清理已知内部缓存子目录（`sources` / `artifacts` / `assets`），若路径命中受保护工作区或存在 `rootDir` 重叠（含 `id === 'workspaces'`）则跳过清理；**所有磁盘工作区目录（无论是用户绑定的外部文件夹，还是 Agent 自动初始化的 `workspaces/<creationId>`）一律永久保留，永不递归删除**。
 
 ### 3.3 真实 Session 与 Server 权威 Project 联动
 
 前端 `web/stores/creations.js`（`createWorkspaceCreation` / `resolveCreationSession`）取代已下线的孤立组件 `CreationInteriorModal`、`DirectorChatPane` 及旧 `readers/*`、`studio/*`：
 
-1. 若用户选择新建 Project，先调用 Server 权威 `yeaft_project_mutation`（`create`）创建 Project。
-2. 调用 `create_creation`（`initializeFolder: true`、`autoPlan: false`）在目标 Agent 上落盘工作区。
-3. 创建真实 Yeaft Session（`createYeaftSession`，默认 `workDir = rootDir`）或复用已有 Session（若其尚无 `workDir` 则补充绑定）。
+1. 若用户选择新建 Project，先调用 Server 权威 `yeaft_project_mutation`（`create`）创建 Project；若失败重试携带 `resumeProjectId`，则直接复用已有 Project 避免重复创建。
+2. 调用 `create_creation`（`initializeFolder: true`、`autoPlan: false`）在目标 Agent 上落盘工作区；若失败重试携带 `resumeCreationId`，则复用已创建的 Creation。
+3. 创建真实 Yeaft Session（`createYeaftSession`，默认 `workDir = rootDir`）或复用已有 Session（若其尚无 `workDir`，则通过 `sessionCrudRequest('update', { sessionId, patch: { workDir } }, { agentId })` 补充绑定）。
 4. 若指定了 Project，通过 `yeaft_project_mutation`（`move_session`）将 Session 归入对应 Project。
-5. 调用 `update_creation` 将最终的 `sessionId` 与 `projectId` 回写至 Creation 记录；后续打开旧 Creation 时若缺少 Session，由 `resolveCreationSession` 自动补建并关联。
+5. 调用 `update_creation` 将最终的 `sessionId` 与 `projectId` 回写至 Creation 记录；任意后续步骤失败时均在异常对象上附带 `partialProjectId` 与 `partialCreation` 供 `CreationCreateModal` / `CosmosGalaxyOverlay` 幂等续传重试；后续打开旧 Creation 时若缺少 Session，由 `resolveCreationSession` 自动补建并关联。
 
 ## 4. 跨模式统一体验（Classic UI 与 Cosmos Galaxy）
 
@@ -101,8 +101,8 @@
 - **分屏、阅读态、异步围栏与一键返回银河**（`web/components/cosmos/CosmosConversationDrawer.js`、`web/components/cosmos/CosmosPage.js`、`web/components/cosmos/creations/CosmosGalaxyOverlay.js`）：
   - **桌面并排分屏**：仅当 `viewportWidth >= 1024 && widened && workbenchOpen && !workbenchMaximized` 同时满足时启用 `is-workbench-split` 并排分屏布局，同时展示真实 Session 对话与 `CreationTab` 画布；桌面端抽屉宽度经 `effectiveDrawerWidth <= drawerMaxWidth` 严格钳制（含加宽态与最大化态），为星图保留最小可见余量。
   - **窄面板响应式折叠**：Workbench 内部面板通过 CSS `@container` 查询自适应折叠——`CreationTab` 在 `<= 680px` 时收起侧边目录树为顶部切换浮层，`FileCanvasView` 在 `<= 640px` 时将 Markdown 标题目录栏折叠至正文上方。
-  - **Epoch 异步围栏**：星体打开（`CosmosPage.js` 的 `openCreationEpoch`）与 Omni-Ignite 切换 Agent / 提交创建（`CosmosGalaxyOverlay.js` 的 `igniteReqEpoch`）均由单调递增 epoch 保护，确保快速连点星体或切换 Agent 时过期异步响应不会覆写当前抽屉或 Ignite 草稿状态。
-  - **全抽屉阅读模式**：以 `mode: 'read'` 着陆或在抽屉内点击最大化时，设置 `workbenchMaximized = true` 隐藏对话栏，提供纯粹的全抽屉阅读与编辑体验。
+  - **Epoch 异步围栏与卸载失效**：星体打开（`CosmosPage.js` 的 `openCreationEpoch`）与 Omni-Ignite 切换 Agent / 提交创建（`CosmosGalaxyOverlay.js` 的 `igniteReqEpoch` + `isUnmounted` 标记）均由单调递增 epoch 保护，在修改 `pendingFiles`、草稿、错误或续传状态前先行校验围栏，确保快速连点星体、切换 Agent 或组件卸载时过期异步响应不会覆写当前抽屉或 Ignite 草稿状态。
+  - **Workbench 接管展开与全抽屉阅读模式**：`openGalaxyCreation` 仅打开抽屉并写入 `pendingWorkbenchTarget`（携带 `maximize: mode === 'read'`），由 `WorkbenchPanel` 在 `hasCreations` 且 `openCapability('creation')` 真正接受目标后统一执行 `store.openWorkbench()` 与 `store.workbenchMaximized`；`CosmosPage` 监听 `store.workbenchExpanded` 同步 `workbenchWidened`，避免在目标被拒绝时误拉宽或强制最大化抽屉。以 `mode: 'read'` 着陆或在抽屉内点击最大化时，隐藏对话栏提供纯粹的全抽屉阅读与编辑体验。
   - **一键返回银河**：从银河打开抽屉时（`openedFromGalaxy`），顶部提供「返回银河（`return-galaxy`）」按钮，收起抽屉与 Workbench 并平滑回到星图视角。
 
 ## 5. 通信与安全边界
@@ -117,9 +117,9 @@
   - Server 强校验活跃账号、Agent 归属权（`resolveAgentAccessError`）与能力；对上传附件执行同用户归属与 TTL 校验，拒绝客户端伪造 `payload.files`。
   - Agent → Server → Client：`creation_response` 仅投递给原请求连接（使用服务端派生的 `agentId` 与原 `requestId`）；`creation_event` 按 owner 作用域广播并支持 Agent 断线缓冲。
 - **文件系统与命名空间隔离**：
-  - Agent 侧校验 `namespaceKey` 与 `.namespace.json` 一致性，`ensure_workspace`、`initializeFolder` 与 `find_by_folder` 均采用 `lstatSync` + `O_NOFOLLOW` 及规范路径包含检查拒绝符号链接，杜绝路径穿越与符号链接逃逸；内部资产读写采用原子写入（`writeAtomic` + 硬链接发布）。
-  - `delete_creation` 仅清理 DB 记录与不重叠的内部缓存目录，所有磁盘工作区目录（包括外部目录与自动初始化的 `workspaces/<creationId>`）一律保留。
-  - 前端 `CreationTab` 在递归扫描时跳过符号链接条目，并在发出 Workbench 文件请求前校验相对路径名与根目录包含关系；底层原生 Session Workbench 操作遵循常规 Agent Workbench 权限模型。
+  - Agent 侧校验 `namespaceKey` 与 `.namespace.json` 一致性，`ensure_workspace`、`initializeFolder` 与 `find_by_folder` 均采用 `lstatSync` + `O_NOFOLLOW` 及规范路径包含检查拒绝符号链接，并禁止 `rootDir` 与内部缓存树重叠；内部资产读写采用原子写入（`writeAtomic` + 硬链接发布）。
+  - `delete_creation` 结合受保护工作区表（`protected_workspaces`）与 `rootDir` 重叠检测，仅清理 DB 记录与不重叠的内部已知缓存子目录（`sources` / `artifacts` / `assets`），所有磁盘工作区目录（包括外部目录与自动初始化的 `workspaces/<creationId>`）一律保留。
+  - Agent Workbench 文件操作层（`agent/workbench/work-item-path.js` 与 `agent/workbench/file-ops.js`）强制执行基于 `creationId` 的工作区目录边界隔离（confinement），并在目录枚举中返回 `isSymlink` 与 `mtimeMs`；前端 `CreationTab` 在递归扫描时跳过符号链接条目，并在发出 Workbench 文件请求前校验相对路径名与根目录包含关系。
 - **媒体流 HTTP 通道**：
   - `GET / HEAD /api/yeaft/creations/:agentId/:creationId/media/:mediaKind/:mediaId`（`requireSessionAuth`），经 `creation_media_read` / `creation_media_chunk` 拉取 1 MiB 有界分块，支持 HTTP `Range`（`200` / `206` / `416`）与背压取消；Server 侧强制 `X-Content-Type-Options: nosniff` 并对 SVG 施加 CSP `sandbox`。
   - Workbench 文件画布内的图片/视频预览复用 `/api/preview/:fileId` 受权预览通道，同样支持 HTTP `Range` 视频拖动播放。

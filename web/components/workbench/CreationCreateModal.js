@@ -381,6 +381,10 @@ export default {
     const errorMessage = Vue.ref('');
     const dragOver = Vue.ref(false);
     const folderExpanded = Vue.ref(Boolean(props.initialRootDir));
+    const resumeState = Vue.ref({ agentId: '', projectId: '', creationId: '' });
+    const resetResumeState = () => {
+      resumeState.value = { agentId: '', projectId: '', creationId: '' };
+    };
 
     const form = Vue.reactive({
       agentId: props.initialAgentId || '',
@@ -490,14 +494,31 @@ export default {
       folderExpanded.value = Boolean(props.initialRootDir);
       errorMessage.value = '';
       submitting.value = false;
+      resetResumeState();
     };
 
     Vue.watch(() => props.visible, (isVisible) => {
       if (isVisible) {
         syncInitialState();
         Vue.nextTick(() => titleInputRef.value?.focus());
+      } else {
+        resetResumeState();
       }
     }, { immediate: true });
+
+    Vue.watch(
+      () => [
+        form.agentId,
+        form.title,
+        form.rootDir,
+        form.creatingProject,
+        form.projectId,
+        form.newProjectName,
+      ],
+      () => {
+        resetResumeState();
+      },
+    );
 
     Vue.watch(() => form.agentId, () => {
       if (form.sessionMode === 'existing') {
@@ -585,6 +606,7 @@ export default {
       submitting.value = true;
       errorMessage.value = '';
       try {
+        const canResume = resumeState.value.agentId === form.agentId;
         const result = await creationsStore.createWorkspaceCreation({
           agentId: form.agentId,
           title: form.title.trim(),
@@ -597,7 +619,10 @@ export default {
           prompt: form.prompt.trim(),
           rawFiles: form.files.slice(),
           celestial: props.celestial || null,
+          resumeProjectId: (canResume && resumeState.value.projectId) || undefined,
+          resumeCreationId: (canResume && resumeState.value.creationId) || undefined,
         });
+        resetResumeState();
         const creation = result?.creation || result || null;
         emit('created', {
           agentId: result?.agentId || form.agentId,
@@ -609,6 +634,15 @@ export default {
         });
         emit('close');
       } catch (err) {
+        const partialProjectId = err?.partialProjectId || '';
+        const partialCreationId = err?.partialCreation?.id || err?.partialCreationId || '';
+        if (partialProjectId || partialCreationId) {
+          resumeState.value = {
+            agentId: form.agentId,
+            projectId: partialProjectId || (resumeState.value.agentId === form.agentId ? resumeState.value.projectId : ''),
+            creationId: partialCreationId || (resumeState.value.agentId === form.agentId ? resumeState.value.creationId : ''),
+          };
+        }
         errorMessage.value = err?.message || tr('creation.create.failed', 'Failed to create Creation');
       } finally {
         submitting.value = false;

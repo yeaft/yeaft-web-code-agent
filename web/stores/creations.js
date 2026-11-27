@@ -595,6 +595,7 @@ export const useCreationsStore = defineStore('creations', {
       prompt = '',
       rawFiles = [],
       celestial = null,
+      resumeProjectId = null,
       resumeCreationId = null,
     } = {}) {
       const targetId = String(agentId || this.selectedAgentId || '').trim();
@@ -604,9 +605,10 @@ export const useCreationsStore = defineStore('creations', {
       const sessionsStore = getSessionsStoreSafe();
 
       // Step 1: Optionally create a new Project (strict ack check before creating orphan state).
-      let targetProjectId = projectId || null;
+      // Reuse `resumeProjectId` on retry so partial failures do not create duplicate Projects.
+      let targetProjectId = String(resumeProjectId || projectId || '').trim() || null;
       const trimmedProjectName = String(newProjectName || '').trim();
-      if (trimmedProjectName) {
+      if (!targetProjectId && trimmedProjectName) {
         if (typeof chatStore?.mutateProject !== 'function') {
           throw new Error('Project creation unavailable');
         }
@@ -618,134 +620,132 @@ export const useCreationsStore = defineStore('creations', {
         targetProjectId = createdProjectId;
       }
 
-      // Step 2: Create or resume the folder-backed Creation.
-      // Do NOT persist targetProjectId before move_session succeeds.
       const trimmedTitle = String(title || '').trim();
       const trimmedRootDir = String(rootDir || '').trim();
       const trimmedResumeId = String(resumeCreationId || '').trim();
       let created = null;
-      if (trimmedResumeId) {
-        const dKey = creationDetailKey(targetId, trimmedResumeId);
-        created = this.detailsByKey[dKey]?.creation
-          || (this.byAgent[targetId]?.list || []).find((c) => c && c.id === trimmedResumeId)
-          || null;
-        if (!created) {
-          const getRes = await this.request(targetId, 'get_creation', { creationId: trimmedResumeId });
-          created = getRes?.creation || (getRes?.id ? getRes : null);
-          if (created?.id) {
-            this._upsertSummary(targetId, created);
-          }
-        }
-        if (!created?.id) {
-          throw new Error('Failed to resume Creation');
-        }
-      } else {
-        const createRes = await this.createCreation(targetId, {
-          ...(trimmedTitle ? { title: trimmedTitle } : {}),
-          kind,
-          mission: prompt || '',
-          prompt: prompt || '',
-          ...(trimmedRootDir ? { rootDir: trimmedRootDir } : {}),
-          initializeFolder: true,
-          autoPlan: false,
-          ...(celestial ? { celestial } : {}),
-          ...(Array.isArray(rawFiles) && rawFiles.length ? { rawFiles } : {}),
-        });
-        created = createRes?.creation || (createRes?.id ? createRes : null);
-        if (!created?.id) {
-          throw new Error('Failed to create Creation');
-        }
-      }
 
-      // Step 3: Resolve or create the linked Yeaft Session with strict ack validation.
-      let targetSessionId = null;
-      if (sessionMode === 'existing' && existingSessionId) {
-        const existingSession = sessionsStore?.sessionById?.(existingSessionId, targetId) || null;
-        const hasKnownSession = Boolean(
-          existingSession || chatStore?.hasKnownYeaftSession?.(existingSessionId, targetId),
-        );
-        if (!hasKnownSession) {
-          const err = new Error('Selected session does not exist on this Agent');
-          err.partialCreation = created;
-          throw err;
-        }
-        targetSessionId = existingSessionId;
-        if (created.rootDir && existingSession && !existingSession.workDir) {
-          if (typeof chatStore?.sessionCrudRequest === 'function') {
-            const updRes = await chatStore.sessionCrudRequest(
-              'update',
-              { sessionId: existingSessionId, workDir: created.rootDir },
-              { agentId: targetId },
-            );
-            if (!updRes || updRes.ok === false) {
-              const err = new Error(ackErrorMessage(updRes, 'Failed to update session working directory'));
-              err.partialCreation = created;
-              throw err;
+      try {
+        // Step 2: Create or resume the folder-backed Creation.
+        // Do NOT persist targetProjectId before move_session succeeds.
+        if (trimmedResumeId) {
+          const dKey = creationDetailKey(targetId, trimmedResumeId);
+          created = this.detailsByKey[dKey]?.creation
+            || (this.byAgent[targetId]?.list || []).find((c) => c && c.id === trimmedResumeId)
+            || null;
+          if (!created) {
+            const getRes = await this.request(targetId, 'get_creation', { creationId: trimmedResumeId });
+            created = getRes?.creation || (getRes?.id ? getRes : null);
+            if (created?.id) {
+              this._upsertSummary(targetId, created);
             }
           }
-        }
-      } else {
-        if (typeof chatStore?.createYeaftSession !== 'function') {
-          const err = new Error('Session creation unavailable');
-          err.partialCreation = created;
-          throw err;
-        }
-        const sessionRes = await chatStore.createYeaftSession({
-          displayName: created.title || trimmedTitle || 'Creation',
-          workDir: created.rootDir || trimmedRootDir || undefined,
-          agentId: targetId,
-        });
-        targetSessionId = extractSessionId(sessionRes);
-        if (!sessionRes || sessionRes.ok === false || !targetSessionId) {
-          const err = new Error(ackErrorMessage(sessionRes, 'Failed to create Session'));
-          err.partialCreation = created;
-          throw err;
-        }
-      }
-
-      // Step 4: Assign the Session to the Project (only persist projectId when ack succeeds).
-      let appliedProjectId = null;
-      let projectWarning = null;
-      if (targetProjectId && targetSessionId) {
-        if (typeof chatStore?.mutateProject === 'function') {
-          try {
-            const moveRes = await chatStore.mutateProject('move_session', {
-              sessionId: targetSessionId,
-              projectId: targetProjectId,
-            }, targetId);
-            if (moveRes !== false && moveRes?.ok !== false) {
-              appliedProjectId = targetProjectId;
-            } else {
-              projectWarning = ackErrorMessage(moveRes, 'Failed to assign session to project');
-            }
-          } catch (moveErr) {
-            projectWarning = moveErr?.message || 'Failed to assign session to project';
+          if (!created?.id) {
+            throw new Error('Failed to resume Creation');
           }
         } else {
-          projectWarning = 'Project assignment unavailable';
+          const createRes = await this.createCreation(targetId, {
+            ...(trimmedTitle ? { title: trimmedTitle } : {}),
+            kind,
+            mission: prompt || '',
+            prompt: prompt || '',
+            ...(trimmedRootDir ? { rootDir: trimmedRootDir } : {}),
+            initializeFolder: true,
+            autoPlan: false,
+            ...(celestial ? { celestial } : {}),
+            ...(Array.isArray(rawFiles) && rawFiles.length ? { rawFiles } : {}),
+          });
+          created = createRes?.creation || (createRes?.id ? createRes : null);
+          if (!created?.id) {
+            throw new Error('Failed to create Creation');
+          }
         }
-      }
 
-      // Step 5: Persist confirmed sessionId & appliedProjectId on the Creation.
-      const updated = await this.updateCreation(targetId, created.id, {
-        sessionId: targetSessionId,
-        projectId: appliedProjectId,
-      });
-      if (!updated?.id) {
-        const err = new Error('Failed to save Creation session link');
-        err.partialCreation = created;
-        throw err;
-      }
+        // Step 3: Resolve or create the linked Yeaft Session with strict ack validation.
+        let targetSessionId = null;
+        if (sessionMode === 'existing' && existingSessionId) {
+          const existingSession = sessionsStore?.sessionById?.(existingSessionId, targetId) || null;
+          const hasKnownSession = Boolean(
+            existingSession || chatStore?.hasKnownYeaftSession?.(existingSessionId, targetId),
+          );
+          if (!hasKnownSession) {
+            throw new Error('Selected session does not exist on this Agent');
+          }
+          targetSessionId = existingSessionId;
+          if (created.rootDir && existingSession && !existingSession.workDir) {
+            if (typeof chatStore?.sessionCrudRequest === 'function') {
+              const updRes = await chatStore.sessionCrudRequest(
+                'update',
+                { sessionId: existingSessionId, patch: { workDir: created.rootDir } },
+                { agentId: targetId },
+              );
+              if (!updRes || updRes.ok === false) {
+                throw new Error(ackErrorMessage(updRes, 'Failed to update session working directory'));
+              }
+            }
+          }
+        } else {
+          if (typeof chatStore?.createYeaftSession !== 'function') {
+            throw new Error('Session creation unavailable');
+          }
+          const sessionRes = await chatStore.createYeaftSession({
+            displayName: created.title || trimmedTitle || 'Creation',
+            workDir: created.rootDir || trimmedRootDir || undefined,
+            agentId: targetId,
+          });
+          targetSessionId = extractSessionId(sessionRes);
+          if (!sessionRes || sessionRes.ok === false || !targetSessionId) {
+            throw new Error(ackErrorMessage(sessionRes, 'Failed to create Session'));
+          }
+        }
 
-      return {
-        agentId: targetId,
-        creation: updated,
-        sessionId: targetSessionId,
-        projectId: appliedProjectId,
-        ...(projectWarning ? { projectWarning } : {}),
-        rootDir: updated?.rootDir || created.rootDir || trimmedRootDir || '',
-        prompt,
-      };
+        // Step 4: Assign the Session to the Project (only persist projectId when ack succeeds).
+        let appliedProjectId = null;
+        let projectWarning = null;
+        if (targetProjectId && targetSessionId) {
+          if (typeof chatStore?.mutateProject === 'function') {
+            try {
+              const moveRes = await chatStore.mutateProject('move_session', {
+                sessionId: targetSessionId,
+                projectId: targetProjectId,
+              }, targetId);
+              if (moveRes !== false && moveRes?.ok !== false) {
+                appliedProjectId = targetProjectId;
+              } else {
+                projectWarning = ackErrorMessage(moveRes, 'Failed to assign session to project');
+              }
+            } catch (moveErr) {
+              projectWarning = moveErr?.message || 'Failed to assign session to project';
+            }
+          } else {
+            projectWarning = 'Project assignment unavailable';
+          }
+        }
+
+        // Step 5: Persist confirmed sessionId & appliedProjectId on the Creation.
+        const updated = await this.updateCreation(targetId, created.id, {
+          sessionId: targetSessionId,
+          projectId: appliedProjectId,
+        });
+        if (!updated?.id) {
+          throw new Error('Failed to save Creation session link');
+        }
+
+        return {
+          agentId: targetId,
+          creation: updated,
+          sessionId: targetSessionId,
+          projectId: appliedProjectId,
+          ...(projectWarning ? { projectWarning } : {}),
+          rootDir: updated?.rootDir || created.rootDir || trimmedRootDir || '',
+          prompt,
+        };
+      } catch (err) {
+        const wrapped = err instanceof Error ? err : new Error(String(err || 'Failed to create Creation'));
+        wrapped.partialProjectId = targetProjectId || null;
+        wrapped.partialCreation = created || null;
+        throw wrapped;
+      }
     },
 
     async resolveCreationSession(agentId, creation, { createIfMissing = true } = {}) {

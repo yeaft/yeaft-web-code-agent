@@ -1191,14 +1191,14 @@
   box-shadow: 0 0 0 2px var(--focus-ring);
 }
 
-/* Kind Pills */
-.creation-kind-pills {
+/* Kind Pills (scoped to CreationCreateModal so Session styling is never overridden by Galaxy glass) */
+.creation-create-modal .creation-kind-pills {
   display: flex;
   flex-wrap: wrap;
   gap: var(--space-2);
 }
 
-.creation-kind-pill {
+.creation-create-modal .creation-kind-pill {
   display: inline-flex;
   align-items: center;
   gap: var(--space-1-5);
@@ -1216,12 +1216,12 @@
     color var(--duration-fast) var(--ease-out);
 }
 
-.creation-kind-pill:hover:not(:disabled) {
+.creation-create-modal .creation-kind-pill:hover:not(:disabled) {
   background: var(--sidebar-hover);
   color: var(--text-primary);
 }
 
-.creation-kind-pill.active {
+.creation-create-modal .creation-kind-pill.active {
   background: var(--session-active);
   border-color: var(--accent-blue);
   color: var(--text-primary);

@@ -10,19 +10,24 @@ export default {
   props: {
     content: { type: String, default: '' },
     name: { type: String, required: true },
+    interactive: { type: Boolean, default: true },
   },
   template: `
-    <div class="file-preview-container svg-preview-container">
-      <div class="html-preview-note">{{ $t('files.svgPreviewSafe') }}</div>
+    <div class="file-preview-container svg-preview-container" :class="{ 'svg-preview-non-interactive': !interactive }">
+      <div v-if="interactive" class="html-preview-note">{{ $t('files.svgPreviewSafe') }}</div>
       <div v-if="loading" class="preview-loading" role="status">
         <span class="spinner-mini" aria-hidden="true"></span> {{ $t('files.loadingPreview') }}
       </div>
       <div v-if="failed" class="preview-error" role="alert">{{ $t('files.svgPreviewLoadFailed') }}</div>
-      <button v-else type="button" v-show="!loading" class="file-preview-image-button"
+      <button v-else-if="interactive" type="button" v-show="!loading" class="file-preview-image-button"
         :aria-label="$t('message.imagePreview')" @click="openPreview($event.currentTarget)">
         <img :key="previewUrl" :src="previewUrl" :alt="name" class="file-preview-image svg-preview-image"
           referrerpolicy="no-referrer" @load="onLoad" @error="onError" />
       </button>
+      <div v-else v-show="!loading" class="file-preview-image-static">
+        <img :key="previewUrl" :src="previewUrl" :alt="name" class="file-preview-image svg-preview-image"
+          referrerpolicy="no-referrer" @load="onLoad" @error="onError" />
+      </div>
     </div>
   `,
   setup(props) {
@@ -54,7 +59,7 @@ export default {
       failed.value = error;
     };
     const openPreview = trigger => {
-      if (loading.value || failed.value) return;
+      if (!props.interactive || loading.value || failed.value) return;
       closePreview();
       previewController = new AbortController();
       openImagePreview(previewUrl.value, {

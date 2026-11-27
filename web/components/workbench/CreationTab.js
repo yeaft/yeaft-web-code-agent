@@ -11,7 +11,7 @@
  * `requestId` so `CreationTab` never interferes with `FilesTab`.
  */
 import { useChatStore } from '../../stores/chat.js';
-import { useCreationsStore } from '../../stores/creations.js';
+import { useCreationsStore, sendInitialCreationPrompt } from '../../stores/creations.js';
 import { createRouteBoundWorkbenchStore } from '../../utils/workbench-route.js';
 import FileCanvasView from './FileCanvasView.js';
 import CreationCreateModal from './CreationCreateModal.js';
@@ -626,10 +626,13 @@ export default {
               :show-header="true"
               :show-open-in-files="true"
               :show-promote-folder="false"
+              :resolve-media-url="resolveCreationRelativeMediaUrl"
+              :media-url-version="mediaPreviewVersion"
               @update:content="onDocContentUpdate"
               @save="saveActiveDoc"
               @download="downloadFile(activeDocFile)"
               @open-in-files="openFileInFiles(activeDocFile)"
+              @open-relative-link="onCanvasRelativeLink"
             />
             <div v-else class="creation-wb-canvas-empty">
               <p>{{ tr('creation.workbench.selectOrCreateDoc', 'Select a document from the tree or create a new one.') }}</p>
@@ -715,7 +718,7 @@ export default {
               >
                 <div class="creation-wb-image-thumb">
                   <div v-if="img.isSvg && img.svgText !== null" class="creation-wb-thumb-svg">
-                    <SvgPreview :content="img.svgText" :name="img.name" />
+                    <SvgPreview :content="img.svgText" :name="img.name" :interactive="false" />
                   </div>
                   <img
                     v-else-if="img.previewUrl"
@@ -886,6 +889,7 @@ export default {
     const activeDocPath = Vue.ref('');
     const selectedImagePath = Vue.ref('');
     const selectedVideoPath = Vue.ref('');
+    const mediaPreviewVersion = Vue.ref(0);
 
     const makeDraftKey = (rootDir, docPath) => (
       `${normalizePath(rootDir)}::${normalizePath(docPath)}`
@@ -967,8 +971,10 @@ export default {
         const entry = { requestId, resolve, reject, timer };
         pendingRequests.set(requestId, entry);
 
+        const activeCreationId = activeCreation.value?.id;
         const sent = wbStore.sendWsMessage({
           ...payload,
+          ...(activeCreationId ? { creationId: activeCreationId } : {}),
           requestId,
           conversationId: props.conversationId || '_explorer',
           agentId: props.agentId,
@@ -1075,7 +1081,7 @@ export default {
       return isSafeMediaUrl(candidate, localBlobUrls) ? candidate : '';
     };
 
-    const loadImageThumbnail = async (item, expectedGen) => {
+    const loadImageThumbnail = async (item, expectedGen = scanGeneration) => {
       if (!item || item.loadingThumb || disposed) return;
       if (item.isSvg ? item.svgText !== null : Boolean(item.previewUrl)) return;
       item.loadingThumb = true;
@@ -1137,6 +1143,11 @@ export default {
         }
       } finally {
         item.loadingThumb = false;
+        if (!disposed && expectedGen === scanGeneration) {
+          item.loading = false;
+          item.previewLoading = false;
+          mediaPreviewVersion.value += 1;
+        }
       }
     };
 
@@ -1249,9 +1260,12 @@ export default {
       const foundVideos = [];
       const prevImageByPath = new Map(imageFiles.value.map(item => [item.path, item]));
       const prevVideoByPath = new Map(videoFiles.value.map(item => [item.path, item]));
+      let invalidatedSelectedImage = null;
+      let invalidatedSelectedVideo = null;
       let totalEntries = 0;
       let scanHadErrors = false;
       let hitEntryCap = false;
+      let hitDepthCap = false;
 
       const queue = [{ dirPath: rootDir, depth: 0 }];
 
@@ -1291,13 +1305,15 @@ export default {
             if (entry.type === 'directory') {
               if (depth < SCAN_MAX_DEPTH) {
                 queue.push({ dirPath: fullPath, depth: depth + 1 });
+              } else {
+                hitDepthCap = true;
               }
               continue;
             }
 
             const ext = getExt(entry.name);
             const entrySize = Number(entry.size) || 0;
-            const entryMtime = entry.mtime ?? entry.mtimeMs ?? entry.modified ?? 0;
+            const entryMtimeMs = entry.mtimeMs ?? entry.mtime ?? entry.modified ?? 0;
 
             if (DOC_EXTS.has(ext)) {
               foundDocs.push({
@@ -1305,16 +1321,19 @@ export default {
                 name: entry.name,
                 relPath: rel,
                 size: entrySize,
-                mtime: entryMtime,
+                mtimeMs: entryMtimeMs,
+                mtime: entryMtimeMs,
               });
             } else if (IMAGE_EXTS.has(ext)) {
               const isSvg = ext === '.svg';
               const prev = prevImageByPath.get(fullPath);
               if (prev) {
-                if (prev.size !== entrySize || prev.mtime !== entryMtime) {
+                const prevMtimeMs = prev.mtimeMs ?? prev.mtime ?? 0;
+                if (prev.size !== entrySize || prevMtimeMs !== entryMtimeMs) {
                   revokeLocalBlobUrl(prev.blobUrl);
                   prev.size = entrySize;
-                  prev.mtime = entryMtime;
+                  prev.mtimeMs = entryMtimeMs;
+                  prev.mtime = entryMtimeMs;
                   prev.previewUrl = '';
                   prev.blobUrl = isSvg ? '' : null;
                   prev.svgText = null;
@@ -1322,6 +1341,9 @@ export default {
                   prev.thumbError = null;
                   prev.previewError = null;
                   prev.loadError = null;
+                  if (selectedImagePath.value && prev.path === selectedImagePath.value) {
+                    invalidatedSelectedImage = prev;
+                  }
                 }
                 foundImages.push(prev);
               } else {
@@ -1330,7 +1352,8 @@ export default {
                   name: entry.name,
                   relPath: rel,
                   size: entrySize,
-                  mtime: entryMtime,
+                  mtimeMs: entryMtimeMs,
+                  mtime: entryMtimeMs,
                   isSvg,
                   fileType: isSvg ? 'text' : 'image',
                   content: null,
@@ -1349,13 +1372,18 @@ export default {
             } else if (VIDEO_EXTS.has(ext)) {
               const prev = prevVideoByPath.get(fullPath);
               if (prev) {
-                if (prev.size !== entrySize || prev.mtime !== entryMtime) {
+                const prevMtimeMs = prev.mtimeMs ?? prev.mtime ?? 0;
+                if (prev.size !== entrySize || prevMtimeMs !== entryMtimeMs) {
                   revokeLocalBlobUrl(prev.blobUrl);
                   prev.size = entrySize;
-                  prev.mtime = entryMtime;
+                  prev.mtimeMs = entryMtimeMs;
+                  prev.mtime = entryMtimeMs;
                   prev.blobUrl = null;
                   prev.previewError = null;
                   prev.loadError = null;
+                  if (selectedVideoPath.value && prev.path === selectedVideoPath.value) {
+                    invalidatedSelectedVideo = prev;
+                  }
                 }
                 foundVideos.push(prev);
               } else {
@@ -1364,7 +1392,8 @@ export default {
                   name: entry.name,
                   relPath: rel,
                   size: entrySize,
-                  mtime: entryMtime,
+                  mtimeMs: entryMtimeMs,
+                  mtime: entryMtimeMs,
                   fileType: 'video',
                   content: null,
                   blobUrl: null,
@@ -1379,10 +1408,15 @@ export default {
           }
         }
 
+        if (queue.length > 0) {
+          hitEntryCap = true;
+        }
         if (!isScanCurrent()) return;
 
+        const scanIncomplete = scanHadErrors || hitEntryCap || hitDepthCap;
+
         // Revoke any local blob URLs for media files removed on a clean, complete scan
-        if (!scanHadErrors && !hitEntryCap) {
+        if (!scanIncomplete) {
           const nextImgPaths = new Set(foundImages.map(i => i.path));
           for (const [oldPath, oldItem] of prevImageByPath.entries()) {
             if (!nextImgPaths.has(oldPath)) revokeLocalBlobUrl(oldItem.blobUrl);
@@ -1390,6 +1424,28 @@ export default {
           const nextVidPaths = new Set(foundVideos.map(v => v.path));
           for (const [oldPath, oldItem] of prevVideoByPath.entries()) {
             if (!nextVidPaths.has(oldPath)) revokeLocalBlobUrl(oldItem.blobUrl);
+          }
+        }
+
+        // Merge any dirty documents in docDrafts belonging to this workspace that were
+        // omitted by the scan (e.g. scan error or entry cap) so they stay reachable in the tree.
+        const normScanRoot = normalizePath(rootDir);
+        if (normScanRoot) {
+          const draftPrefix = `${normScanRoot}::`;
+          const foundDocPathSet = new Set(foundDocs.map(d => normalizePath(d.path)));
+          for (const [key, draft] of docDrafts.entries()) {
+            if (!key.startsWith(draftPrefix) || !draft?.isDirty || !draft.path) continue;
+            const normDocPath = normalizePath(draft.path);
+            if (foundDocPathSet.has(normDocPath)) continue;
+            foundDocPathSet.add(normDocPath);
+            foundDocs.push({
+              path: draft.path,
+              name: draft.name || normDocPath.split('/').pop() || draft.path,
+              relPath: draft.relPath || relativePath(draft.path, rootDir),
+              size: typeof draft.content === 'string' ? draft.content.length : 0,
+              mtimeMs: 0,
+              mtime: 0,
+            });
           }
         }
 
@@ -1417,7 +1473,7 @@ export default {
           const currentDraft = docDrafts.get(makeDraftKey(rootDir, activeDocPath.value));
           const stillExists = foundDocs.find(d => d.path === activeDocPath.value);
           if (!stillExists) {
-            if (!currentDraft?.isDirty && !scanHadErrors && !hitEntryCap) {
+            if (!currentDraft?.isDirty && !scanIncomplete) {
               activeDocPath.value = '';
             }
           } else if (reloadActiveDoc && (!currentDraft || !currentDraft.isDirty)) {
@@ -1436,13 +1492,23 @@ export default {
         if (!isScanCurrent()) return;
 
         // Clear selected media path only if removed on a complete, error-free scan
-        if (!scanHadErrors && !hitEntryCap) {
+        if (!scanIncomplete) {
           if (selectedImagePath.value && !foundImages.some(i => i.path === selectedImagePath.value)) {
             selectedImagePath.value = '';
           }
           if (selectedVideoPath.value && !foundVideos.some(v => v.path === selectedVideoPath.value)) {
             selectedVideoPath.value = '';
           }
+        }
+
+        // Immediately reload active selected media if its cached preview was invalidated on rescan
+        if (invalidatedSelectedImage && selectedImagePath.value === invalidatedSelectedImage.path) {
+          invalidatedSelectedImage.loading = true;
+          invalidatedSelectedImage.previewLoading = true;
+          void loadImageThumbnail(invalidatedSelectedImage, myGen);
+        }
+        if (invalidatedSelectedVideo && selectedVideoPath.value === invalidatedSelectedVideo.path) {
+          void loadVideo(invalidatedSelectedVideo, myGen);
         }
 
         // Kick off lazy thumbnail loading when images exist
@@ -1553,13 +1619,9 @@ export default {
       }
     };
 
-    const selectVideoAt = async (index) => {
-      if (index < 0 || index >= videoFiles.value.length) return;
-      const item = videoFiles.value[index];
-      if (!item) return;
-      selectedVideoPath.value = item.path;
+    const loadVideo = async (item, expectedGen = scanGeneration) => {
+      if (!item || disposed) return;
       if (item.blobUrl) return;
-      const expectedGen = scanGeneration;
       item.loading = true;
       item.loadError = null;
       item.previewLoading = true;
@@ -1595,6 +1657,62 @@ export default {
           item.loadError = err?.message || tr('files.videoStreamUnavailable', 'Video stream unavailable');
           item.previewError = item.loadError;
         }
+      }
+    };
+
+    const selectVideoAt = async (index) => {
+      if (index < 0 || index >= videoFiles.value.length) return;
+      const item = videoFiles.value[index];
+      if (!item) return;
+      selectedVideoPath.value = item.path;
+      await loadVideo(item, scanGeneration);
+    };
+
+    const matchesWorkspaceTargetPath = (item, normTarget) => {
+      if (!item || !normTarget) return false;
+      const normItemPath = normalizePath(item.path);
+      if (normItemPath === normTarget) return true;
+      if (item.relPath && normalizePath(item.relPath) === normTarget) return true;
+      if (activeRootDir.value) {
+        const joined = normalizePath(joinPath(activeRootDir.value, normTarget));
+        if (joined === normItemPath) return true;
+      }
+      return false;
+    };
+
+    const resolveCreationRelativeMediaUrl = (resolvedPath) => {
+      const norm = normalizePath(resolvedPath);
+      if (!norm) return '';
+      const img = imageFiles.value.find(item => matchesWorkspaceTargetPath(item, norm));
+      if (!img || img.isSvg || getExt(img.name) === '.svg') return '';
+      if (img.previewUrl && isSafeMediaUrl(img.previewUrl, localBlobUrls)) {
+        return img.previewUrl;
+      }
+      if (!img.loadingThumb && !img.thumbError) {
+        void loadImageThumbnail(img, scanGeneration);
+      }
+      return '';
+    };
+
+    const onCanvasRelativeLink = (payload) => {
+      const norm = normalizePath(payload?.targetPath || '');
+      if (!norm) return;
+      const vidIdx = videoFiles.value.findIndex(item => matchesWorkspaceTargetPath(item, norm));
+      if (vidIdx >= 0) {
+        activeModality.value = 'videos';
+        void selectVideoAt(vidIdx);
+        return;
+      }
+      const imgIdx = imageFiles.value.findIndex(item => matchesWorkspaceTargetPath(item, norm));
+      if (imgIdx >= 0) {
+        activeModality.value = 'images';
+        void selectImageAt(imgIdx);
+        return;
+      }
+      const doc = docFiles.value.find(item => matchesWorkspaceTargetPath(item, norm));
+      if (doc) {
+        activeModality.value = 'docs';
+        void openDocFile(doc);
       }
     };
 
@@ -1741,6 +1859,7 @@ export default {
           window.dispatchEvent(new CustomEvent('workbench-files-open-dir', {
             detail: {
               routeKey: props.routeKey,
+              workspaceGeneration: props.workspaceGeneration,
               agentId: props.agentId,
               dirPath: targetDir,
             },
@@ -1974,10 +2093,30 @@ export default {
         creation: payload.creation || null,
         rootDir: payload.rootDir || payload.creation?.rootDir || '',
       });
+      const trimmedPrompt = typeof payload.prompt === 'string' ? payload.prompt.trim() : '';
+      if (trimmedPrompt && payload.sessionId) {
+        const targetAgentId = payload.agentId || props.agentId;
+        const deliverPrompt = typeof creationsStore.sendInitialCreationPrompt === 'function'
+          ? (aId, sId, text) => creationsStore.sendInitialCreationPrompt(aId, sId, text)
+          : sendInitialCreationPrompt;
+        if (typeof deliverPrompt === 'function') {
+          try {
+            const res = await deliverPrompt(targetAgentId, payload.sessionId, trimmedPrompt);
+            if (res && res.ok === false && res.error) {
+              showFeedback(false, res.error);
+            }
+          } catch (err) {
+            showFeedback(false, err?.message || 'Failed to send initial prompt');
+          }
+        }
+      }
     };
 
     const bindCurrentFolder = async () => {
       if (!props.workDir || bindingFolder.value) return;
+      const epoch = ++activationEpoch;
+      const reqRoute = props.routeKey;
+      const reqGen = props.workspaceGeneration;
       bindingFolder.value = true;
       onboardingError.value = '';
       try {
@@ -1986,15 +2125,22 @@ export default {
           rootDir: props.workDir,
           sessionId: props.sessionId,
         });
+        if (disposed || epoch !== activationEpoch || props.routeKey !== reqRoute || props.workspaceGeneration !== reqGen) {
+          return;
+        }
         const creation = res?.creation || res || null;
         await activateTarget({
           creation,
           rootDir: res?.rootDir || creation?.rootDir || props.workDir,
         });
       } catch (err) {
-        onboardingError.value = err?.message || tr('creation.workbench.bindFailed', 'Failed to open folder as Creation');
+        if (!disposed && epoch === activationEpoch && props.routeKey === reqRoute && props.workspaceGeneration === reqGen) {
+          onboardingError.value = err?.message || tr('creation.workbench.bindFailed', 'Failed to open folder as Creation');
+        }
       } finally {
-        bindingFolder.value = false;
+        if (!disposed) {
+          bindingFolder.value = false;
+        }
       }
     };
 
@@ -2008,6 +2154,24 @@ export default {
     };
 
     // ==================== Event Listeners & Watchers ====================
+    const handleCreationCheckDirty = (event) => {
+      const detail = event?.detail;
+      if (!detail || disposed) return;
+      if (detail.routeKey && detail.routeKey !== props.routeKey) return;
+      if (detail.workspaceGeneration && detail.workspaceGeneration !== props.workspaceGeneration) return;
+      const normRoot = normalizePath(activeRootDir.value);
+      if (!normRoot) return;
+      const prefix = `${normRoot}::`;
+      for (const [key, draft] of docDrafts.entries()) {
+        if (key.startsWith(prefix) && draft?.isDirty) {
+          detail.dirtyCount = (detail.dirtyCount || 0) + 1;
+          if (Array.isArray(detail.dirtyFiles)) {
+            detail.dirtyFiles.push(draft.name || draft.relPath || draft.path);
+          }
+        }
+      }
+    };
+
     const handleCreationTargetEvent = (event) => {
       const detail = event?.detail;
       if (!detail) return;
@@ -2117,6 +2281,7 @@ export default {
     Vue.onMounted(() => {
       window.addEventListener('workbench-message', handleWorkbenchMessage);
       window.addEventListener('workbench-creation-target', handleCreationTargetEvent);
+      window.addEventListener('creation-check-dirty', handleCreationCheckDirty);
       document.addEventListener('click', handleDocumentClick);
       if (rootEl.value) {
         const rectWidth = rootEl.value.getBoundingClientRect?.().width || rootEl.value.clientWidth || 0;
@@ -2135,6 +2300,7 @@ export default {
     });
 
     Vue.onBeforeUnmount(() => {
+      window.removeEventListener('creation-check-dirty', handleCreationCheckDirty);
       revokeAllLocalBlobUrls();
     });
 
@@ -2195,6 +2361,7 @@ export default {
       selectedVideoPath,
       activeVideoIndex,
       activeVideoFile,
+      mediaPreviewVersion,
       tr,
       shortenPath,
       kindSwatchClass,
@@ -2210,6 +2377,8 @@ export default {
       saveActiveDoc,
       selectImageAt,
       selectVideoAt,
+      resolveCreationRelativeMediaUrl,
+      onCanvasRelativeLink,
       onMediaLoad,
       onMediaError,
       openMiniDialog,

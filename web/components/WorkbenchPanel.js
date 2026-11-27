@@ -603,6 +603,7 @@ export default {
 
     const providedCreationTarget = Vue.reactive({ routeKey: '', agentId: '', creationId: '', rootDir: '', seq: 0 });
     Vue.provide('workbench-creation-target', providedCreationTarget);
+    Vue.provide('workbench-has-creations', hasCreations);
 
     const openCreationWorkspaceTarget = ({ creationId = '', rootDir = '', maximize } = {}) => {
       if (!activeRouteKey.value || !hasCreations.value) return false;
@@ -629,6 +630,16 @@ export default {
           },
         }));
       });
+      window.dispatchEvent(new CustomEvent('workbench-creation-opened', {
+        detail: {
+          routeKey: targetRouteKey,
+          agentId: targetAgentId,
+          creationId: creationId || '',
+          rootDir: rootDir || '',
+          expanded: Boolean(store.workbenchExpanded),
+          maximized: Boolean(store.workbenchMaximized),
+        },
+      }));
       return true;
     };
 
@@ -692,6 +703,26 @@ export default {
           workspaceGeneration: activeWorkspaceGeneration.value,
         });
         if (!confirmed || workbenchContextKey.value !== initiatingContextKey) return false;
+      }
+      if (target === 'creation' && hasCreations.value && isCapabilityActivated(target)) {
+        const detail = {
+          routeKey: activeRouteKey.value,
+          workspaceGeneration: activeWorkspaceGeneration.value,
+          dirtyCount: 0,
+          dirtyFiles: [],
+        };
+        window.dispatchEvent(new CustomEvent('creation-check-dirty', { detail }));
+        if (detail.dirtyCount > 0) {
+          const firstDirty = detail.dirtyFiles[0];
+          const firstDirtyName = typeof firstDirty === 'string'
+            ? firstDirty
+            : (firstDirty?.name || firstDirty?.relPath || firstDirty?.path || '');
+          const message = detail.dirtyCount === 1
+            ? t('files.unsavedConfirm', { name: firstDirtyName })
+            : t('files.unsavedBatchConfirm', { count: detail.dirtyCount });
+          const confirmed = typeof window.confirm === 'function' ? window.confirm(message) : true;
+          if (!confirmed || workbenchContextKey.value !== initiatingContextKey) return false;
+        }
       }
       return removeCapability(target);
     };

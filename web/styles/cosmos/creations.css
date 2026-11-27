@@ -159,8 +159,8 @@
   flex-shrink: 0;
 }
 
-/* Kind filter pills */
-.creation-kind-pills {
+/* Kind filter pills (scoped to Galaxy overlay so Classic CreationCreateModal keeps Session styling) */
+.creation-galaxy-overlay .creation-kind-pills {
   display: inline-flex;
   align-items: center;
   gap: 3px;
@@ -170,7 +170,7 @@
   border: 1px solid var(--creation-glass-divider);
 }
 
-.creation-kind-pill {
+.creation-galaxy-overlay .creation-kind-pill {
   display: inline-flex;
   align-items: center;
   gap: 5px;
@@ -186,26 +186,26 @@
   transition: background var(--duration-fast) ease, color var(--duration-fast) ease;
 }
 
-.creation-kind-pill:hover {
+.creation-galaxy-overlay .creation-kind-pill:hover {
   color: var(--creation-glass-ink);
 }
 
-.creation-kind-pill.is-active {
+.creation-galaxy-overlay .creation-kind-pill.is-active {
   background: var(--creation-glass-active);
   color: var(--creation-glass-ink);
 }
 
-.creation-kind-swatch {
+.creation-galaxy-overlay .creation-kind-swatch {
   width: 6px;
   height: 6px;
   border-radius: 50%;
   flex-shrink: 0;
 }
 
-.creation-kind-swatch.is-book { background: var(--creation-star-book); }
-.creation-kind-swatch.is-deck { background: var(--creation-star-deck); }
-.creation-kind-swatch.is-gallery { background: var(--creation-star-gallery); }
-.creation-kind-swatch.is-video { background: var(--creation-star-video); }
+.creation-galaxy-overlay .creation-kind-swatch.is-book { background: var(--creation-star-book); }
+.creation-galaxy-overlay .creation-kind-swatch.is-deck { background: var(--creation-star-deck); }
+.creation-galaxy-overlay .creation-kind-swatch.is-gallery { background: var(--creation-star-gallery); }
+.creation-galaxy-overlay .creation-kind-swatch.is-video { background: var(--creation-star-video); }
 
 /* Search + View Mode Controls */
 .creation-hud-search {
@@ -1038,7 +1038,7 @@
 }
 
 @media (max-width: 380px) {
-  .creation-kind-pill {
+  .creation-galaxy-overlay .creation-kind-pill {
     padding: 0 var(--space-2);
     font-size: var(--font-size-2xs);
   }

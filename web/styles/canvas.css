@@ -322,6 +322,46 @@
   white-space: pre-wrap;
 }
 
+/* Workspace-relative Markdown image/media fallback buttons & clickable images */
+.canvas-rel-media-link {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  max-width: 100%;
+  min-height: 28px;
+  padding: 2px var(--space-2);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  background: var(--bg-elevated);
+  color: var(--accent-blue);
+  font-family: inherit;
+  font-size: var(--font-size-xs);
+  font-weight: 500;
+  line-height: 1.4;
+  cursor: pointer;
+  vertical-align: middle;
+  transition: background var(--duration-fast) var(--ease-out),
+              border-color var(--duration-fast) var(--ease-out);
+}
+
+.canvas-rel-media-link:hover {
+  background: color-mix(in srgb, var(--accent-blue) 12%, var(--bg-elevated));
+  border-color: color-mix(in srgb, var(--accent-blue) 38%, var(--border-color));
+}
+
+.canvas-rel-media-link:focus-visible {
+  outline: 2px solid var(--focus-ring-color, var(--accent-blue));
+  outline-offset: 1px;
+}
+
+.canvas-rel-img-pending {
+  color: var(--text-secondary);
+}
+
+.canvas-doc-content img[data-workspace-src] {
+  cursor: pointer;
+}
+
 /* Floating Selection Quote Bar */
 .canvas-selection-bar {
   position: absolute;
@@ -757,6 +797,7 @@
   .canvas-seg-btn,
   .canvas-tool-btn,
   .canvas-toc-item,
+  .canvas-rel-media-link,
   .canvas-image-el,
   .canvas-image-svg-wrap {
     transition: none;

@@ -192,8 +192,21 @@ export function getCanvasContextRefs(routeKey) {
   return ensureList(routeKey);
 }
 
-function neutralizeSnippetMentions(text) {
-  return String(text ?? '').replace(/(^|[\s(])@([A-Za-z0-9_\-\u4e00-\u9fff])/g, '$1@\u200B$2');
+/**
+ * Neutralize `@`-mentions in reference-derived text so the production mention
+ * parser (`agent/yeaft/sessions/pre-flow.js` MENTION_RE: `/(^|\s)@([A-Za-z0-9_][A-Za-z0-9_-]*)/g`)
+ * never extracts unintended VP mentions from file names, paths, timestamps, or
+ * quoted snippets. User-authored text appended after the prefix is untouched.
+ *
+ * @param {string} text
+ * @returns {string}
+ */
+function neutralizeMentions(text) {
+  return String(text ?? '').replace(/(^|[\s(`"'\[{])@([A-Za-z0-9_\-\u4e00-\u9fff])/g, '$1@\u200B$2');
+}
+
+function sanitizeHeaderField(text) {
+  return neutralizeMentions(String(text ?? '').replace(/[\r\n]+/g, ' ').trim());
 }
 
 /**
@@ -209,20 +222,21 @@ export function formatCanvasContextPrefix(refs) {
   const blocks = [];
   for (const ref of refs) {
     if (!ref) continue;
-    const labelPath = ref.filePath || ref.fileName || 'file';
+    const labelPath = sanitizeHeaderField(ref.filePath || ref.fileName || 'file') || 'file';
     if (ref.kind === 'image') {
       blocks.push(`> [Canvas Image] \`${labelPath}\``);
       continue;
     }
     if (ref.kind === 'video') {
-      const ts = ref.timestampLabel || (ref.timestampSec != null ? formatTimestampLabel(ref.timestampSec) : '');
+      const rawTs = ref.timestampLabel || (ref.timestampSec != null ? formatTimestampLabel(ref.timestampSec) : '');
+      const ts = sanitizeHeaderField(rawTs);
       const header = ts
         ? `> [Canvas Video] \`${labelPath}\` @ ${ts}`
         : `> [Canvas Video] \`${labelPath}\``;
       if (ref.snippet) {
         const lines = String(ref.snippet)
           .split(/\r?\n/)
-          .map(line => `> ${neutralizeSnippetMentions(line)}`);
+          .map(line => `> ${neutralizeMentions(line)}`);
         blocks.push([header, ...lines].join('\n'));
       } else {
         blocks.push(header);
@@ -240,7 +254,7 @@ export function formatCanvasContextPrefix(refs) {
     if (ref.snippet) {
       const lines = String(ref.snippet)
         .split(/\r?\n/)
-        .map(line => `> ${neutralizeSnippetMentions(line)}`);
+        .map(line => `> ${neutralizeMentions(line)}`);
       blocks.push([header, ...lines].join('\n'));
     } else {
       blocks.push(header);

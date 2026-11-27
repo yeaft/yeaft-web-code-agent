@@ -1,4 +1,4 @@
-import { open, readFile, realpath, writeFile, readdir, stat, unlink, rename, mkdir, rm, copyFile, cp } from 'fs/promises';
+import { lstat, open, readFile, realpath, writeFile, readdir, stat, unlink, rename, mkdir, rm, copyFile, cp } from 'fs/promises';
 import { existsSync } from 'fs';
 import { execFile } from 'node:child_process';
 import { join, basename, dirname, extname, isAbsolute, relative, resolve } from 'path';
@@ -66,6 +66,12 @@ async function validateResponseImagePath(filePath, workDir) {
  */
 async function canonicalWorkbenchReadPath(msg, filePath, workDir) {
   const resolved = await resolveWorkItemPath(msg, filePath, workDir);
+  if (msg.creationId !== undefined) {
+    if ((await lstat(resolved)).isSymbolicLink()) {
+      throw Object.assign(new Error('Symlinks are not allowed inside a Creation workspace.'), { code: 'FILE_OUTSIDE_WORKSPACE' });
+    }
+    return resolved;
+  }
   // Old preview capabilities predate explicit external reads. Preserve their
   // original workspace boundary on cache refills, without an image-only check.
   return msg.workspaceBoundPreview === true
@@ -211,10 +217,13 @@ export async function handleReadFile(msg) {
   const workDir = msg.workDir || conv?.workDir || ctx.CONFIG.workDir;
 
   try {
-    const resolved = msg.responseImagePreview
+    const resolved = msg.responseImagePreview && msg.creationId === undefined
       ? await validateResponseImagePath(filePath, workDir)
       : await canonicalWorkbenchReadPath(msg, filePath, workDir);
     const ext = extname(resolved).toLowerCase();
+    if (msg.responseImagePreview && !BINARY_EXTENSIONS[ext]?.startsWith('image/')) {
+      throw new Error('Response preview only supports image files.');
+    }
     if (VIDEO_EXTENSIONS[ext]) {
       const error = new Error('Video files require the Workbench streaming protocol.');
       error.code = 'VIDEO_STREAM_REQUIRED';
@@ -340,7 +349,8 @@ export async function handleWriteFile(msg) {
       filePath,
       requestedFilePath: filePath,
       success: false,
-      error: e.message
+      error: e.message,
+      errorCode: e.code || null,
     });
   }
 }
@@ -369,16 +379,39 @@ function listWindowsFixedDrives() {
     if (drives.some(drive => !/^[A-Za-z]:\\$/.test(drive))) {
       throw new Error('Invalid Windows drive listing');
     }
-    return drives.sort().map(drive => ({ name: drive.slice(0, 2), type: 'directory', size: 0 }));
+    return drives.sort().map(drive => ({ name: drive.slice(0, 2), type: 'directory', size: 0, isSymlink: false, mtimeMs: 0 }));
   }).finally(() => {
     pendingWindowsDrives = null;
   });
   return pendingWindowsDrives;
 }
 
+async function listDirectoryEntries(path, { creationScoped = false } = {}) {
+  const entries = await readdir(path, { withFileTypes: true });
+  const result = [];
+  const skipDirs = new Set(['.git', 'node_modules', '__pycache__', '.next', '.nuxt', '.cache']);
+  for (const entry of entries) {
+    const isSymlink = entry.isSymbolicLink();
+    if ((creationScoped && isSymlink) || (entry.isDirectory() && skipDirs.has(entry.name))) continue;
+    const fullPath = join(path, entry.name);
+    const s = await (creationScoped ? lstat(fullPath) : stat(fullPath)).catch(() => null);
+    if (creationScoped && s?.isSymbolicLink()) continue;
+    result.push({
+      name: entry.name,
+      type: entry.isDirectory() ? 'directory' : 'file',
+      size: s?.size ?? 0,
+      isSymlink,
+      mtimeMs: Number.isFinite(s?.mtimeMs) ? s.mtimeMs : 0,
+    });
+  }
+  return result;
+}
+
 export async function handleListDirectory(msg) {
   const { conversationId, requestId, _requestUserId, _requestClientId } = msg;
-  const dirPath = msg.dirPath || (msg.workbenchRoute?.runtimeProvider === 'work-center' ? msg.workDir : msg.dirPath);
+  const dirPath = msg.creationId !== undefined
+    ? msg.dirPath || '.'
+    : msg.dirPath || (msg.workbenchRoute?.runtimeProvider === 'work-center' ? msg.workDir : msg.dirPath);
   const directoryPickerScope = msg.directoryPickerScope === 'agent' ? 'agent' : undefined;
   const conv = ctx.conversations.get(conversationId);
   const workDir = msg.workDir || conv?.workDir || ctx.CONFIG.workDir;
@@ -400,12 +433,7 @@ export async function handleListDirectory(msg) {
         });
       } else {
         // Unix: 列出根目录
-        const entries = await readdir('/', { withFileTypes: true });
-        const SKIP_DIRS = new Set(['.git', 'node_modules', '__pycache__', '.next', '.nuxt', '.cache']);
-        const result = entries
-          .filter(e => !(e.isDirectory() && SKIP_DIRS.has(e.name)))
-          .map(e => ({ name: e.name, type: e.isDirectory() ? 'directory' : 'file', size: 0 }))
-          .sort((a, b) => a.name.localeCompare(b.name));
+        const result = (await listDirectoryEntries('/')).sort((a, b) => a.name.localeCompare(b.name));
         sendWorkbenchResult(ctx, msg, {
           type: 'directory_listing',
           conversationId,
@@ -435,31 +463,7 @@ export async function handleListDirectory(msg) {
 
   try {
     const resolved = await resolveWorkItemPath(msg, dirPath, workDir);
-    const entries = await readdir(resolved, { withFileTypes: true });
-    const result = [];
-
-    const SKIP_DIRS = new Set(['.git', 'node_modules', '__pycache__', '.next', '.nuxt', '.cache']);
-
-    for (const entry of entries) {
-      // 跳过大型/内部目录（.git, node_modules 等），但显示 dotfiles（.env, .gitignore 等）
-      if (entry.isDirectory() && SKIP_DIRS.has(entry.name)) continue;
-
-      try {
-        const fullPath = join(resolved, entry.name);
-        const s = await stat(fullPath);
-        result.push({
-          name: entry.name,
-          type: entry.isDirectory() ? 'directory' : 'file',
-          size: s.size
-        });
-      } catch {
-        result.push({
-          name: entry.name,
-          type: entry.isDirectory() ? 'directory' : 'file',
-          size: 0
-        });
-      }
-    }
+    const result = await listDirectoryEntries(resolved, { creationScoped: msg.creationId !== undefined });
 
     // 排序：目录在前，文件在后，各自按名称排序
     result.sort((a, b) => {
@@ -487,7 +491,8 @@ export async function handleListDirectory(msg) {
       _requestClientId,
       dirPath: dirPath || workDir,
       entries: [],
-      error: e.message
+      error: e.message,
+      errorCode: e.code || null,
     });
   }
 }
@@ -519,7 +524,7 @@ export async function handleCreateFile(msg) {
   } catch (e) {
     sendWorkbenchResult(ctx, msg, {
       type: 'file_op_result', conversationId, _requestUserId,
-      operation: 'create', success: false, error: e.message
+      operation: 'create', success: false, error: e.message, errorCode: e.code || null
     });
   }
 }
@@ -651,7 +656,7 @@ export async function handleCopyFiles(msg) {
         if (srcStat.isDirectory()) {
           await cp(srcResolved, destPath, {
             recursive: true,
-            ...(msg.workbenchRoute?.runtimeProvider === 'work-center' ? {
+            ...(msg.creationId !== undefined || msg.workbenchRoute?.runtimeProvider === 'work-center' ? {
               filter: async (source, target) => {
                 await resolveWorkItemPath(msg, source, workDir);
                 await resolveWorkItemPath(msg, target, workDir);
@@ -693,7 +698,8 @@ export async function handleUploadToDir(msg) {
   try {
     if (!files || files.length === 0) throw new Error('No files specified');
 
-    const targetDir = await resolveWorkItemPath(msg, dirPath || workDir, workDir);
+    const creationScoped = msg.creationId !== undefined;
+    const targetDir = await resolveWorkItemPath(msg, dirPath || (creationScoped ? '.' : workDir), workDir);
     await mkdir(targetDir, { recursive: true });
 
     const saved = [];
@@ -701,7 +707,10 @@ export async function handleUploadToDir(msg) {
 
     for (const file of files) {
       try {
-        const dest = await resolveWorkItemPath(msg, join(targetDir, file.name), workDir);
+        const safeName = file.name;
+        if (creationScoped && (typeof safeName !== 'string' || !safeName || safeName === '.' || safeName === '..'
+          || /[\\/:\0]/.test(safeName))) throw new Error('Invalid upload filename.');
+        const dest = await resolveWorkItemPath(msg, join(targetDir, safeName), workDir);
         const buffer = Buffer.from(file.data, 'base64');
         await writeFile(dest, buffer);
         saved.push(file.name);
@@ -722,7 +731,7 @@ export async function handleUploadToDir(msg) {
   } catch (e) {
     sendWorkbenchResult(ctx, msg, {
       type: 'file_op_result', conversationId, _requestUserId,
-      operation: 'upload', success: false, error: e.message
+      operation: 'upload', success: false, error: e.message, errorCode: e.code || null
     });
   }
 }

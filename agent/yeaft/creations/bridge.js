@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { isAbsolute } from 'node:path';
 import ctx from '../../context.js';
 import { sendToServer } from '../../connection/buffer.js';
 import { safeId, fail } from './constants.js';
@@ -98,7 +99,32 @@ export function createCreationBridge({ context = ctx, send = sendToServer,
   function correlation(msg) {
     return typeof msg.requestId === 'string' && msg.requestId.length > 0 && msg.requestId.length <= 128 ? msg.requestId : null;
   }
-  return {
+  const bridge = {
+    async resolveWorkspaceRoot(ownerId, creationId) {
+      if (!validOwner(ownerId)) return null;
+      try {
+        safeId(creationId);
+        const current = readIdentity(ownerId);
+        const socket = context.ws;
+        return await serialize(async () => {
+          assertCurrent(current, socket);
+          if (context.creationBridge !== bridge) return null;
+          const cached = cacheIdentity && sameAgent(cacheIdentity, current) && scopes.get(ownerId);
+          const rootFor = store => {
+            const root = store.getCreation(creationId).rootDir;
+            return typeof root === 'string' && !root.includes('\0') && isAbsolute(root) ? root : null;
+          };
+          if (cached) return rootFor(cached.runtime.store);
+          // File operations after restart must not create namespaces or recover runs.
+          const { createCreationStore } = await import('./store.js');
+          assertCurrent(current, socket);
+          if (context.creationBridge !== bridge) return null;
+          const store = createCreationStore({ ...storageOptions(current), readOnly: true });
+          try { return rootFor(store); }
+          finally { store.close(); }
+        });
+      } catch { return null; }
+    },
     async request(msg) {
       if (msg?.type !== 'creation_request') return false;
       const response = { type: 'creation_response', requestId: correlation(msg), op: typeof msg.op === 'string' ? msg.op : '' };
@@ -144,9 +170,17 @@ export function createCreationBridge({ context = ctx, send = sendToServer,
     },
     async close() {
       closed = true;
+      if (context.creationBridge === bridge) delete context.creationBridge;
       await serialize(retireAll);
     },
   };
+  context.creationBridge = bridge;
+  return bridge;
+}
+
+/** Resolve an Agent-recorded root for the Server-authenticated owner only. */
+export async function resolveCreationWorkspaceRoot(ownerId, creationId, { context = ctx } = {}) {
+  return (await context?.creationBridge?.resolveWorkspaceRoot(ownerId, creationId)) ?? null;
 }
 
 const bridge = createCreationBridge();

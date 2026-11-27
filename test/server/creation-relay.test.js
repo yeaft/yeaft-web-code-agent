@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const state = vi.hoisted(() => ({
   agents: new Map(), webClients: new Map(), previewFiles: new Map(),
-  users: new Map(), trackMessageBytesSent: () => {},
+  users: new Map(), workbenchSessions: new Map(), trackMessageBytesSent: () => {},
 }));
 vi.mock('../../server/context.js', async () => {
   const { PendingFileStore } = await import('../../server/pending-files.js');
@@ -25,13 +25,21 @@ vi.mock('../../server/database.js', () => ({ userDb: {
   updateLogin: () => {},
 }, scheduledTaskReceiptDb: { getByUser: () => [] } }));
 vi.mock('../../server/yeaft-asset-store.js', () => ({ yeaftAssetStore: {} }));
-vi.mock('../../server/workbench-preview.js', () => ({}));
+vi.mock('../../server/db/user-db.js', () => ({ userDb: {
+  get: id => [...state.users.values()].find(user => user.id === id),
+} }));
+vi.mock('../../server/db/yeaft-session-db.js', () => ({ yeaftSessionDb: {
+  getForAgent: (userId, agentId, id) => state.workbenchSessions.get(JSON.stringify([userId, agentId, id])),
+} }));
 
 import { CONFIG } from '../../server/config.js';
 import { activeSessions, revokedSessions, revokedTokens } from '../../server/auth/session-store.js';
 import { issueSessionToken, logout, maybeRenewToken, verifyToken } from '../../server/auth/token.js';
 import { handleWebConnection } from '../../server/ws-client.js';
 import { createCreationRelay } from '../../server/handlers/client-creation.js';
+import { createWorkbenchPreview, createWorkbenchVideo, openWorkbenchVideo, readWorkbenchPreview } from '../../server/workbench-preview.js';
+import { workbenchRouteKey, workbenchWorkspaceGeneration } from '../../server/workbench-route.js';
+import { handleAgentFileTerminal } from '../../server/handlers/agent-file-terminal.js';
 import { handleAgentCreation } from '../../server/handlers/agent-creation.js';
 import { validateCreationAttachments, MAX_CREATION_ATTACHMENT_BYTES } from '../../server/creation-attachment-policy.js';
 import { closeCreationMediaReads, CREATION_MEDIA_CHUNK_BYTES, readCreationMediaChunk } from '../../server/creation-media-relay.js';
@@ -63,6 +71,8 @@ beforeEach(() => {
   state.webClients.clear();
   state.pendingFiles.clear();
   state.users.clear();
+  state.previewFiles.clear();
+  state.workbenchSessions.clear();
   state.users.set('alice', { id: 'user-a', deletion_state: 'active' });
   state.users.set('bob', { id: 'user-b', deletion_state: 'active' });
   agent = { ownerId: 'user-a', conversations: new Map(), capabilities: ['creations'], encryptOutbound: false, ws: socket() };
@@ -103,6 +113,43 @@ const binaryParser = (res, callback) => {
   res.on('end', () => callback(null, Buffer.concat(chunks)));
 };
 const get = (path = url, username = 'alice') => request(app).get(path).set('test-user', username).buffer(true).parse(binaryParser);
+
+it('preserves the pending Creation ID across Workbench preview refills and video range reads', async () => {
+  const route = { runtimeProvider: 'yeaft', agentId, sessionId: 'session-a' };
+  const workDir = '/workspace/session';
+  const workspaceGeneration = workbenchWorkspaceGeneration(workbenchRouteKey(route), workDir);
+  state.users.get('alice').role = 'pro';
+  state.workbenchSessions.set(JSON.stringify(['user-a', agentId, route.sessionId]), { id: route.sessionId, workDir });
+  agent.capabilities.push('workbench_session_routes', 'workbench_request_correlation', 'workbench_video_stream');
+  const pending = { agentId, userId: 'user-a', route, workspaceGeneration, creationId: 'creation-a' };
+  const imagePath = '/workspace/creation/cover.png';
+  const metadata = { filePath: '/workspace/creation/clip.mp4', size: 8, mtimeMs: 1234, mimeType: 'video/mp4' };
+  const imageToken = createWorkbenchPreview('cover', pending, imagePath);
+  const videoToken = createWorkbenchVideo('clip', pending, metadata);
+  expect(imageToken).toMatch(/^wb1\./);
+  expect(videoToken).toMatch(/^wbv1\./);
+  expect(state.previewFiles.has('cover')).toBe(false);
+
+  const bytes = Buffer.from('art');
+  const image = readWorkbenchPreview('cover', imageToken);
+  const read = frame(agent);
+  await handleAgentFileTerminal(agentId, agent, {
+    ...read, type: 'file_content', binary: true, mimeType: 'image/png', content: bytes.toString('base64'),
+  });
+  await expect(image).resolves.toMatchObject({ buffer: bytes });
+  expect(read).toMatchObject({ type: 'read_file', creationId: pending.creationId, filePath: imagePath, download: true,
+    workDir, workbenchRoute: route, workbenchWorkspaceGeneration: workspaceGeneration });
+
+  const video = openWorkbenchVideo('clip', videoToken);
+  const range = video.read(2, 4);
+  const chunk = frame(agent);
+  await handleAgentFileTerminal(agentId, agent, { ...chunk, ...metadata, content: bytes.toString('base64') });
+  await expect(range).resolves.toEqual(bytes);
+  expect(chunk).toMatchObject({ type: 'video_chunk', creationId: pending.creationId, filePath: metadata.filePath,
+    workDir, workbenchRoute: route, workbenchWorkspaceGeneration: workspaceGeneration, start: 2, end: 4,
+    expectedSize: metadata.size, expectedMtimeMs: metadata.mtimeMs });
+  expect(agent.ws.send).toHaveBeenCalledTimes(2);
+});
 
 describe('Creation WebSocket relay', () => {
   it.each(['email_verify', 'totp_verify', 'temp', 'totp-setup'])('rejects a %s token before registering the socket', type => {
