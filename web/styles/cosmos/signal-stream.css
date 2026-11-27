@@ -1,0 +1,733 @@
+/* ============================================================================
+ *  Yeaft Cosmos — Interstellar Signal Stream (Top-Right Unified Signal Feed)
+ *  Frameless atmospheric glass cards with 2px planetary limb filaments;
+ *  auto-docks into a luminous capsule beside the open Conversation Drawer.
+ * ============================================================================ */
+
+/* ── Top-Right Signal Stream Trigger / Capsule (inside .cosmos-corner-actions) ── */
+.cosmos-signal-trigger {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  min-width: 31px;
+  height: 31px;
+  padding: 0 8px;
+  border-radius: 999px;
+  background: rgba(5, 10, 22, 0.56);
+  border: 1px solid rgba(186, 214, 255, 0.16);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  color: rgba(214, 230, 252, 0.80);
+  font-size: 11.5px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+  transition: color 180ms ease, border-color 180ms ease, background 180ms ease, box-shadow 180ms ease, transform 180ms var(--c-ease);
+}
+
+.cosmos-signal-trigger.is-icon-only {
+  width: 31px;
+  padding: 0;
+}
+
+.cosmos-signal-trigger svg {
+  width: 14px;
+  height: 14px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  flex-shrink: 0;
+}
+
+.cosmos-signal-trigger:hover,
+.cosmos-signal-trigger[aria-expanded="true"] {
+  color: #fff;
+  background: rgba(12, 22, 42, 0.86);
+  border-color: rgba(186, 214, 255, 0.42);
+  transform: translateY(-1px);
+}
+
+.cosmos-signal-trigger.has-unread {
+  color: #e4f2ff;
+  border-color: rgba(124, 196, 255, 0.40);
+  background: rgba(8, 19, 38, 0.72);
+  box-shadow: 0 0 18px rgba(104, 192, 255, 0.22);
+}
+
+.cosmos-signal-trigger.has-waiting {
+  color: #ffe3b2;
+  border-color: rgba(255, 190, 92, 0.56);
+  background: rgba(28, 18, 7, 0.78);
+  box-shadow: 0 0 20px rgba(255, 186, 82, 0.30);
+}
+
+.cosmos-signal-trigger.has-running-only {
+  color: #bfe2ff;
+  border-color: rgba(124, 196, 255, 0.28);
+}
+
+.cosmos-signal-trigger-count {
+  font-family: var(--font-mono, monospace);
+  font-size: 11px;
+  line-height: 1;
+}
+
+.cosmos-signal-trigger-pulse {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--c-cyan);
+  box-shadow: 0 0 8px rgba(124, 196, 255, 0.85);
+  animation: cosmos-pulse-cyan 2.2s ease-in-out infinite;
+}
+
+/* ── 1. Desktop Free-Stage Floating Signal Stream (Frameless) ── */
+.cosmos-signal-stream {
+  position: fixed;
+  top: calc(54px + env(safe-area-inset-top, 0px));
+  right: calc(16px + env(safe-area-inset-right, 0px));
+  z-index: 25;
+  width: min(312px, calc(100vw - 32px));
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  pointer-events: none;
+}
+
+.cosmos-signal-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  pointer-events: none;
+}
+
+.cosmos-signal-stream.is-expanded .cosmos-signal-stack {
+  max-height: calc(100vh - 126px - env(safe-area-inset-top, 0px));
+  overflow-y: auto;
+  padding-right: 3px;
+  pointer-events: auto;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(168, 206, 255, 0.24) transparent;
+}
+
+.cosmos-signal-stream.is-expanded .cosmos-signal-stack::-webkit-scrollbar,
+.cosmos-signal-pop-list::-webkit-scrollbar {
+  width: 4px;
+}
+
+.cosmos-signal-stream.is-expanded .cosmos-signal-stack::-webkit-scrollbar-thumb,
+.cosmos-signal-pop-list::-webkit-scrollbar-thumb {
+  background: rgba(168, 206, 255, 0.24);
+  border-radius: 999px;
+}
+
+/* ── Individual Atmospheric Glass Signal Card ── */
+.cosmos-signal-card {
+  position: relative;
+  display: flex;
+  align-items: stretch;
+  border-radius: 13px;
+  background:
+    radial-gradient(ellipse 80% 70% at 0% 0%, rgba(var(--p-accent-rgb, 110, 196, 255), 0.11), transparent 68%),
+    linear-gradient(155deg, rgba(var(--p-tint-rgb, 7, 15, 30), 0.64) 0%, rgba(4, 9, 20, 0.74) 100%);
+  border: 1px solid rgba(var(--p-accent-rgb, 110, 196, 255), 0.12);
+  backdrop-filter: blur(18px) saturate(142%);
+  -webkit-backdrop-filter: blur(18px) saturate(142%);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.36), inset 0 1px 0 rgba(255, 255, 255, 0.05);
+  overflow: hidden;
+  pointer-events: auto;
+  transition: border-color 180ms ease, background 200ms ease, box-shadow 200ms ease, transform 180ms var(--c-ease);
+}
+
+/* 2px Planetary Atmospheric Limb Filament */
+.cosmos-signal-card::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 7px;
+  bottom: 7px;
+  width: 2px;
+  border-radius: 999px;
+  background: linear-gradient(
+    180deg,
+    rgba(var(--p-accent-rgb, 110, 196, 255), 0.94) 0%,
+    rgba(var(--p-accent-rgb, 110, 196, 255), 0.30) 100%
+  );
+  box-shadow: 0 0 10px rgba(var(--p-accent-rgb, 110, 196, 255), 0.50);
+  pointer-events: none;
+}
+
+.cosmos-signal-card:hover {
+  border-color: rgba(var(--p-accent-rgb, 110, 196, 255), 0.42);
+  box-shadow: 0 14px 36px rgba(0, 0, 0, 0.48), 0 0 22px rgba(var(--p-accent-rgb, 110, 196, 255), 0.12);
+  transform: translateY(-1px);
+}
+
+/* Priority 0: Waiting (AskUser) — Warm Amber Beacon */
+.cosmos-signal-card.is-waiting {
+  background:
+    radial-gradient(ellipse 85% 75% at 0% 0%, rgba(255, 190, 92, 0.16), transparent 70%),
+    linear-gradient(155deg, rgba(24, 15, 6, 0.76) 0%, rgba(10, 8, 6, 0.80) 100%);
+  border-color: rgba(255, 190, 92, 0.25);
+}
+
+.cosmos-signal-card.is-waiting::before {
+  background: linear-gradient(180deg, #ffca6a 0%, rgba(255, 190, 92, 0.38) 100%);
+  box-shadow: 0 0 12px rgba(255, 190, 92, 0.68);
+}
+
+.cosmos-signal-card.is-waiting:hover {
+  border-color: rgba(255, 206, 122, 0.62);
+}
+
+/* Scheduled Task Failure / Interruption Accent */
+.cosmos-signal-card.is-error {
+  border-color: rgba(255, 126, 136, 0.34);
+}
+
+.cosmos-signal-card.is-error::before {
+  background: linear-gradient(180deg, #ff8892 0%, rgba(255, 126, 136, 0.35) 100%);
+  box-shadow: 0 0 10px rgba(255, 126, 136, 0.56);
+}
+
+/* Priority 2: Running — Ultra-Light 1-Line Subordinate Whisper */
+.cosmos-signal-card.is-running {
+  background: linear-gradient(155deg, rgba(5, 11, 24, 0.48) 0%, rgba(3, 7, 16, 0.56) 100%);
+  border-color: rgba(var(--p-accent-rgb, 110, 196, 255), 0.11);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.24);
+}
+
+.cosmos-signal-card.is-running::before {
+  opacity: 0.62;
+}
+
+.cosmos-signal-card.is-running .cosmos-signal-main {
+  padding: 7px 11px 7px 13px;
+  gap: 2px;
+}
+
+.cosmos-signal-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 9px 12px 9px 14px;
+  background: transparent;
+  border: 0;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.cosmos-signal-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+}
+
+.cosmos-signal-origin {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  flex: 1;
+}
+
+.cosmos-signal-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background: var(--p-accent, #7cc4ff);
+  box-shadow: 0 0 8px rgba(var(--p-accent-rgb, 110, 196, 255), 0.72);
+}
+
+.cosmos-signal-dot.waiting {
+  background: var(--c-amber);
+  box-shadow: 0 0 10px rgba(255, 190, 92, 0.88);
+  animation: cosmos-pulse-amber 1.8s ease-in-out infinite;
+}
+
+.cosmos-signal-dot.running {
+  animation: cosmos-pulse-cyan 2.2s ease-in-out infinite;
+}
+
+.cosmos-signal-agent {
+  flex-shrink: 0;
+  max-width: 88px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+  color: rgba(188, 210, 238, 0.74);
+}
+
+.cosmos-signal-sep {
+  flex-shrink: 0;
+  color: rgba(164, 188, 220, 0.42);
+  font-size: 10px;
+}
+
+.cosmos-signal-title {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11.5px;
+  font-weight: 500;
+  color: rgba(244, 248, 255, 0.94);
+}
+
+.cosmos-signal-card.is-running .cosmos-signal-title {
+  color: rgba(224, 236, 252, 0.84);
+  font-weight: 450;
+}
+
+.cosmos-signal-meta {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  flex-shrink: 0;
+  transition: opacity 140ms ease;
+}
+
+.cosmos-signal-card:has(.cosmos-signal-ack):hover .cosmos-signal-meta,
+.cosmos-signal-card:has(.cosmos-signal-ack):focus-within .cosmos-signal-meta {
+  opacity: 0;
+}
+
+.cosmos-signal-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  height: 16px;
+  padding: 0 5px;
+  border-radius: 999px;
+  font-size: 9.5px;
+  font-weight: 500;
+  letter-spacing: 0.01em;
+}
+
+.cosmos-signal-chip svg {
+  width: 10px;
+  height: 10px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.cosmos-signal-chip.is-waiting {
+  background: rgba(255, 190, 92, 0.16);
+  color: #ffd790;
+}
+
+.cosmos-signal-chip.is-scheduled {
+  padding: 0 4px;
+  background: rgba(var(--p-accent-rgb, 110, 196, 255), 0.14);
+  color: var(--p-accent, #8acaff);
+}
+
+.cosmos-signal-chip.is-error {
+  background: rgba(255, 126, 136, 0.16);
+  color: #ffb0b8;
+}
+
+.cosmos-signal-time {
+  font-size: 10px;
+  color: rgba(154, 178, 210, 0.58);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.cosmos-signal-body {
+  font-size: 12px;
+  line-height: 1.48;
+  color: rgba(218, 232, 248, 0.86);
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  word-break: break-word;
+}
+
+.cosmos-signal-card.is-waiting .cosmos-signal-body {
+  color: #fff2dc;
+}
+
+.cosmos-signal-card.is-running .cosmos-signal-body {
+  font-size: 11px;
+  line-height: 1.38;
+  color: rgba(176, 198, 226, 0.66);
+}
+
+.cosmos-signal-body.lines-1 {
+  -webkit-line-clamp: 1;
+}
+
+.cosmos-signal-body.lines-2 {
+  -webkit-line-clamp: 2;
+}
+
+.cosmos-signal-body.lines-3 {
+  -webkit-line-clamp: 3;
+}
+
+/* Hover/Focus-Reveal Single-Click Mark-as-Read Button */
+.cosmos-signal-ack {
+  position: absolute;
+  top: 7px;
+  right: 7px;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  background: rgba(8, 16, 32, 0.82);
+  border: 1px solid rgba(var(--p-accent-rgb, 110, 196, 255), 0.24);
+  color: rgba(208, 228, 252, 0.84);
+  cursor: pointer;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 140ms ease, background 140ms ease, border-color 140ms ease, color 140ms ease;
+}
+
+.cosmos-signal-card:hover .cosmos-signal-ack,
+.cosmos-signal-card:focus-within .cosmos-signal-ack {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.cosmos-signal-ack:hover,
+.cosmos-signal-ack:focus-visible {
+  background: rgba(var(--p-accent-rgb, 110, 196, 255), 0.24);
+  border-color: rgba(var(--p-accent-rgb, 110, 196, 255), 0.56);
+  color: #fff;
+}
+
+.cosmos-signal-ack svg {
+  width: 12px;
+  height: 12px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 2.1;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+/* ── Subtle Footer Bar (Overflow + Mark All Read) ── */
+.cosmos-signal-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 2px 4px;
+  pointer-events: auto;
+}
+
+.cosmos-signal-foot-spacer {
+  flex: 1;
+}
+
+.cosmos-signal-foot-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 24px;
+  padding: 0 9px;
+  border-radius: 999px;
+  background: rgba(5, 11, 24, 0.58);
+  border: 1px solid rgba(186, 214, 255, 0.14);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  color: rgba(196, 216, 244, 0.82);
+  font-size: 11px;
+  cursor: pointer;
+  transition: color 140ms ease, border-color 140ms ease, background 140ms ease;
+}
+
+.cosmos-signal-foot-btn:hover {
+  color: #fff;
+  background: rgba(12, 22, 42, 0.84);
+  border-color: rgba(186, 214, 255, 0.34);
+}
+
+.cosmos-signal-foot-btn.is-mark-all {
+  background: transparent;
+  border-color: transparent;
+  backdrop-filter: none;
+  color: rgba(178, 204, 238, 0.76);
+}
+
+.cosmos-signal-stream .cosmos-signal-foot-btn.is-mark-all {
+  background: rgba(5, 11, 24, 0.56);
+  border-color: rgba(186, 214, 255, 0.12);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+}
+
+.cosmos-signal-foot-btn.is-mark-all:hover {
+  color: #fff;
+  background: rgba(186, 214, 255, 0.10);
+  border-color: rgba(186, 214, 255, 0.16);
+}
+
+.cosmos-signal-chev {
+  width: 11px;
+  height: 11px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.9;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  transition: transform 180ms var(--c-ease);
+}
+
+.cosmos-signal-chev.is-open {
+  transform: rotate(180deg);
+}
+
+/* ── 2. Popover / Sheet (Drawer-Docked Chain-Reader, Mobile Sheet, Collapsed Popover) ── */
+.cosmos-signal-popover {
+  position: fixed;
+  top: calc(54px + env(safe-area-inset-top, 0px));
+  right: calc(16px + env(safe-area-inset-right, 0px));
+  z-index: 38;
+  width: min(332px, calc(100vw - 28px));
+  max-height: calc(100vh - 82px - env(safe-area-inset-top, 0px));
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+  border-radius: 16px;
+  background: rgba(5, 11, 24, 0.84);
+  border: 1px solid rgba(186, 214, 255, 0.20);
+  backdrop-filter: blur(24px) saturate(148%);
+  -webkit-backdrop-filter: blur(24px) saturate(148%);
+  box-shadow: 0 22px 60px rgba(0, 0, 0, 0.66);
+  animation: cosmos-hover-pop 180ms var(--c-ease);
+}
+
+.cosmos-signal-popover.is-drawer-docked {
+  right: calc(var(--c-panel-w) + 14px);
+  max-width: min(332px, calc(100vw - var(--c-panel-w) - 28px));
+}
+
+.cosmos-signal-pop-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 2px 4px;
+}
+
+.cosmos-signal-pop-title-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.cosmos-signal-pop-title {
+  font-size: 12px;
+  font-weight: 500;
+  color: rgba(240, 247, 255, 0.94);
+  letter-spacing: 0.02em;
+}
+
+.cosmos-signal-pop-count {
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--font-mono, monospace);
+  font-size: 10.5px;
+  background: rgba(124, 196, 255, 0.16);
+  color: #b8e0ff;
+}
+
+.cosmos-signal-pop-count.is-waiting {
+  background: rgba(255, 190, 92, 0.20);
+  color: #ffd790;
+}
+
+.cosmos-signal-pop-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.cosmos-signal-pop-close {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  background: transparent;
+  border: 0;
+  color: rgba(182, 206, 236, 0.72);
+  cursor: pointer;
+}
+
+.cosmos-signal-pop-close:hover {
+  color: #fff;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.cosmos-signal-pop-close svg {
+  width: 13px;
+  height: 13px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+}
+
+.cosmos-signal-pop-list {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  overflow-y: auto;
+  padding-right: 2px;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(168, 206, 255, 0.24) transparent;
+}
+
+.cosmos-signal-empty {
+  padding: 22px 12px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  color: rgba(168, 192, 224, 0.66);
+  font-size: 12px;
+  text-align: center;
+}
+
+.cosmos-signal-empty-star {
+  font-size: 16px;
+  color: rgba(124, 196, 255, 0.56);
+}
+
+/* ── 3. Mobile Compact Arrival Micro-Banner ── */
+.cosmos-signal-mobile-banner {
+  position: fixed;
+  top: calc(56px + env(safe-area-inset-top, 0px));
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 26;
+  width: min(360px, calc(100vw - 24px));
+  display: flex;
+  align-items: stretch;
+  border-radius: 13px;
+  background:
+    radial-gradient(ellipse 80% 70% at 0% 0%, rgba(var(--p-accent-rgb, 110, 196, 255), 0.14), transparent 70%),
+    rgba(5, 11, 24, 0.80);
+  border: 1px solid rgba(var(--p-accent-rgb, 110, 196, 255), 0.28);
+  backdrop-filter: blur(18px) saturate(142%);
+  -webkit-backdrop-filter: blur(18px) saturate(142%);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.52);
+  overflow: hidden;
+  animation: cosmos-hover-pop 200ms var(--c-ease);
+}
+
+.cosmos-signal-mobile-banner::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 7px;
+  bottom: 7px;
+  width: 2px;
+  border-radius: 999px;
+  background: var(--p-accent, #7cc4ff);
+}
+
+.cosmos-signal-mobile-banner.is-waiting {
+  border-color: rgba(255, 190, 92, 0.44);
+}
+
+.cosmos-signal-mobile-banner.is-waiting::before {
+  background: var(--c-amber);
+}
+
+.cosmos-signal-mobile-banner .cosmos-signal-main {
+  padding-right: 34px;
+}
+
+.cosmos-signal-banner-close {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  background: transparent;
+  border: 0;
+  color: rgba(188, 210, 238, 0.72);
+  cursor: pointer;
+}
+
+.cosmos-signal-banner-close svg {
+  width: 13px;
+  height: 13px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+}
+
+/* ── Smooth Card Enter / Leave / In-Place Reorder Transitions ── */
+.cosmos-sig-enter-active,
+.cosmos-sig-leave-active {
+  transition: opacity 220ms var(--c-ease), transform 220ms var(--c-ease);
+}
+
+.cosmos-sig-enter-from {
+  opacity: 0;
+  transform: translateX(14px) scale(0.98);
+}
+
+.cosmos-sig-leave-to {
+  opacity: 0;
+  transform: translateX(18px) scale(0.97);
+}
+
+.cosmos-sig-move {
+  transition: transform 240ms var(--c-ease);
+}
+
+/* Touch devices: keep single-tap mark-read visible without requiring hover */
+@media (hover: none) {
+  .cosmos-signal-ack {
+    opacity: 0.82;
+    pointer-events: auto;
+  }
+  .cosmos-signal-card:has(.cosmos-signal-ack) .cosmos-signal-head {
+    padding-right: 26px;
+  }
+  .cosmos-signal-card:has(.cosmos-signal-ack):hover .cosmos-signal-meta {
+    opacity: 1;
+  }
+}
+
+@media (max-width: 768px) {
+  .cosmos-signal-popover.is-mobile {
+    left: 12px;
+    right: 12px;
+    width: auto;
+    max-width: none;
+    max-height: min(64dvh, calc(100dvh - 88px));
+  }
+}

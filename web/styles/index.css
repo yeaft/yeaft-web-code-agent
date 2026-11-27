@@ -53,6 +53,7 @@
 @import './cosmos/events.css';
 @import './cosmos/planet-themes.css';
 @import './cosmos/composer.css';
+@import './cosmos/signal-stream.css';
 @import './cosmos/conversation.css';
 @import './cosmos/quick-composer.css';
 @import './cosmos/constants.css';

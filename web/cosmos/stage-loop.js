@@ -217,18 +217,6 @@ export function stepCosmosFrame(now, ctx) {
             ? `translate(calc(-50% + ${Math.round(tagClampX)}px), ${tagOffY}px)`
             : `translate(-50%, ${tagOffY}px)`;
         }
-
-        const liveEl = domRefs.liveCards[p.id];
-        if (liveEl) {
-          const hideForQuickOnCompact = isCompact && Boolean(ui.quickOpen);
-          const canShow = !telescopeHidden && !ui.dragActive && !hideForQuickOnCompact && (!ui.drawerOpen || sx < w - panelW - 115);
-          liveEl.style.display = canShow ? 'flex' : 'none';
-          if (canShow) {
-            const halfCard = isCompact ? 92 : 120;
-            const clampX = sx < halfCard ? halfCard - sx : (sx > w - halfCard ? w - halfCard - sx : 0);
-            liveEl.style.transform = `translate(calc(-50% + ${Math.round(clampX)}px), ${tagOffY + 27}px)`;
-          }
-        }
       }
     }
 

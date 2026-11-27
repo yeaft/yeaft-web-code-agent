@@ -54,6 +54,11 @@
   animation: cosmos-tag-flash-amber 1.5s ease-in-out infinite;
 }
 
+.cosmos-planet-tag.is-has-unread {
+  border-color: rgba(138, 206, 255, 0.44);
+  box-shadow: 0 0 14px rgba(108, 192, 255, 0.24);
+}
+
 @keyframes cosmos-tag-flash-cyan {
   0%, 100% {
     box-shadow: 0 0 6px rgba(124, 196, 255, 0.14);
@@ -124,97 +129,9 @@
   color: var(--c-amber);
 }
 
-/* ── On-Stage Active Session Micro-List (2~3 Lines, Configurable) ── */
-.cosmos-live-card {
-  position: absolute;
-  left: 50%;
-  top: 50%;
-  width: 214px;
-  padding: 5px 7px;
-  border-radius: 10px;
-  background: rgba(4, 9, 20, 0.56);
-  border: 1px solid rgba(186, 214, 255, 0.14);
-  backdrop-filter: blur(12px);
-  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.46);
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  pointer-events: auto;
-  transition: opacity 200ms ease, border-color 180ms ease, background 180ms ease;
-}
-
-.cosmos-live-card:hover {
-  background: rgba(7, 14, 29, 0.82);
-  border-color: rgba(186, 214, 255, 0.34);
-}
-
-.cosmos-live-card.is-waiting {
-  border-color: rgba(255, 190, 92, 0.32);
-  background: rgba(18, 12, 5, 0.62);
-}
-
-.cosmos-live-row {
-  display: block;
-  width: 100%;
-  text-align: left;
-  padding: 3px 4px;
-  border-radius: 6px;
-  background: transparent;
-  border: 0;
-  color: inherit;
-  cursor: pointer;
-  transition: background 120ms ease;
-}
-
-.cosmos-live-row:hover {
-  background: rgba(255, 255, 255, 0.07);
-}
-
-.cosmos-live-row + .cosmos-live-row {
-  border-top: 1px solid rgba(186, 214, 255, 0.08);
-  padding-top: 5px;
-}
-
-.cosmos-live-top {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-}
-
-.cosmos-live-title {
-  flex: 1;
-  min-width: 0;
-  font-size: 10.5px;
-  font-weight: 500;
-  color: rgba(238, 246, 255, 0.94);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.cosmos-live-time {
-  font-family: var(--font-mono, monospace);
-  font-size: 9px;
-  color: var(--c-faint);
-  flex-shrink: 0;
-}
-
-.cosmos-live-snippet {
-  margin-top: 2px;
-  padding-left: 11px;
-  font-size: 10px;
-  line-height: 1.38;
-  color: rgba(188, 208, 236, 0.80);
-  display: -webkit-box;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
-}
-
-.cosmos-live-snippet.lines-2 { -webkit-line-clamp: 2; }
-.cosmos-live-snippet.lines-3 { -webkit-line-clamp: 3; }
-
-.cosmos-live-snippet.is-waiting {
-  color: rgba(255, 216, 152, 0.92);
+.cosmos-planet-count.is-unread {
+  color: #bce4ff;
+  text-shadow: 0 0 8px rgba(124, 196, 255, 0.72);
 }
 
 .cosmos-status-pip {
@@ -240,6 +157,8 @@
 }
 
 .cosmos-status-pip.idle { background: var(--c-mint); }
+.cosmos-status-pip.idle.is-unread,
+.cosmos-status-pip.done.is-unread { background: var(--c-cyan); opacity: 1; box-shadow: 0 0 8px rgba(124, 196, 255, 0.78); }
 .cosmos-status-pip.done { background: var(--c-mint); opacity: 0.72; }
 .cosmos-status-pip.offline { background: rgba(142, 158, 186, 0.45); }
 
@@ -526,12 +445,5 @@
     height: 21px;
     padding: 0 7px;
     font-size: 10.5px;
-  }
-  .cosmos-live-card {
-    width: 152px;
-    padding: 4px 5px;
-  }
-  .cosmos-live-snippet {
-    font-size: 9.5px;
   }
 }

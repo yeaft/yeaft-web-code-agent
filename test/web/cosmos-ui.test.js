@@ -2990,3 +2990,370 @@ describe('Cosmos Drawer Waiting Suppression, Horizontal Drag Resize & Session St
     }
   });
 });
+
+describe('Cosmos Interstellar Signal Stream (Unified Top-Right Replies, Scheduled Notices & Stage Subtraction)', () => {
+  let wrapper = null;
+
+  afterEach(() => {
+    if (wrapper) {
+      wrapper.unmount();
+      wrapper = null;
+    }
+  });
+
+  it('tracks reply previews across pruning, marks unread accurately when Cosmos drawer is closed, acknowledges signals atomically, and orders waiting > unread > running', async () => {
+    const {
+      normalizeCosmosConstants,
+    } = await import('../../web/cosmos/constants.js');
+    expect(normalizeCosmosConstants({ livePreviewMode: 'hover' }).livePreviewMode).toBe('collapsed');
+    expect(normalizeCosmosConstants({ livePreviewMode: 'collapsed' }).livePreviewMode).toBe('collapsed');
+
+    const {
+      recordYeaftSessionReplyPreview,
+      clearYeaftSessionReplyPreview,
+      extractLatestAssistantPreview,
+    } = await import('../../web/stores/helpers/yeaft-reply-preview.js');
+    const { buildCosmosSignalStream } = await import('../../web/cosmos/signal-stream.js');
+
+    // 1. Reply preview helper strips markdown, keeps latest assistant text, and scopes AskUser clearing
+    const previewStore = { yeaftSessionReplyPreviewByKey: {} };
+    const extracted = extractLatestAssistantPreview([
+      { type: 'user', sessionId: 's1', content: 'Check deployment status' },
+      { type: 'assistant', sessionId: 's1', turnId: 't1', content: '## Status\nAll **3 clusters** healthy (`v1.0.799`).', timestamp: 2000 },
+    ], 's1', 't1');
+    expect(extracted.text).toBe('Status All 3 clusters healthy (v1.0.799).');
+
+    recordYeaftSessionReplyPreview(previewStore, {
+      catalogKey: 'yeaft:ag-1:s1',
+      text: extracted.text,
+      at: 2000,
+    });
+    recordYeaftSessionReplyPreview(previewStore, {
+      catalogKey: 'yeaft:ag-1:s1',
+      askQuestion: 'Deploy canary to **eu-west**?',
+      askRequestId: 'ask-9',
+      at: 2500,
+    });
+    expect(previewStore.yeaftSessionReplyPreviewByKey['yeaft:ag-1:s1'].askQuestion).toBe('Deploy canary to eu-west?');
+    // Mismatched askRequestId must NOT clear the active question
+    expect(recordYeaftSessionReplyPreview(previewStore, {
+      catalogKey: 'yeaft:ag-1:s1',
+      clearAsk: true,
+      askRequestId: 'ask-other',
+    })).toBe(false);
+    expect(previewStore.yeaftSessionReplyPreviewByKey['yeaft:ag-1:s1'].askQuestion).toBe('Deploy canary to eu-west?');
+    // Matching askRequestId clears askQuestion while retaining the assistant reply preview
+    expect(recordYeaftSessionReplyPreview(previewStore, {
+      catalogKey: 'yeaft:ag-1:s1',
+      clearAsk: true,
+      askRequestId: 'ask-9',
+    })).toBe(true);
+    expect(previewStore.yeaftSessionReplyPreviewByKey['yeaft:ag-1:s1'].askQuestion).toBe('');
+    expect(previewStore.yeaftSessionReplyPreviewByKey['yeaft:ag-1:s1'].text).toBe('Status All 3 clusters healthy (v1.0.799).');
+    clearYeaftSessionReplyPreview(previewStore, 'yeaft:ag-1:s1');
+    expect(previewStore.yeaftSessionReplyPreviewByKey['yeaft:ag-1:s1']).toBeUndefined();
+
+    // 2. Real chatStore: yeaftConversationCovered=true marks even the last-viewed session unread;
+    //    acknowledgeYeaftSessionSignals / acknowledgeAllYeaftSessionSignals clear unread + scheduled task notices atomically.
+    const runtimeStores = new Map();
+    const miniDefineStore = (id, options) => () => {
+      if (runtimeStores.has(id)) return runtimeStores.get(id);
+      const instance = Vue.reactive({ ...(typeof options.state === 'function' ? options.state() : {}) });
+      for (const [name, getter] of Object.entries(options.getters || {})) {
+        Object.defineProperty(instance, name, {
+          enumerable: true,
+          get() { return getter.call(instance, instance); },
+        });
+      }
+      for (const [name, action] of Object.entries(options.actions || {})) {
+        instance[name] = action.bind(instance);
+      }
+      runtimeStores.set(id, instance);
+      return instance;
+    };
+    const stubSessionsStore = { sessionList: [], sessionById: () => null };
+    const stubAuthStore = { userId: 'u-1', authGeneration: 1, skipAuth: false, logout: () => {} };
+    globalThis.Pinia = {
+      defineStore: miniDefineStore,
+      useAuthStore: () => stubAuthStore,
+      useSessionsStore: () => stubSessionsStore,
+    };
+    window.Pinia = globalThis.Pinia;
+    vi.resetModules();
+    const { useAuthStore } = await import('../../web/stores/auth.js');
+    const { useChatStore } = await import('../../web/stores/chat.js');
+    globalThis.Pinia.useAuthStore = useAuthStore;
+    globalThis.Pinia.useChatStore = useChatStore;
+
+    const authStore = useAuthStore();
+    const chatStore = useChatStore();
+    chatStore.sidebarCatalogAuthGeneration = authStore.authGeneration;
+    chatStore.sidebarCatalogOwnerId = authStore.userId || null;
+    chatStore.sessionCatalogProtocolSupported = true;
+    chatStore.currentView = 'yeaft';
+    chatStore.currentAgent = 'owner:ag-1';
+    chatStore.yeaftActiveSessionFilter = 'sess-1';
+    chatStore.agents = [{ id: 'owner:ag-1', name: 'Earth-Mac', online: true }, { id: 'ag-2', name: 'Saturn-Srv', online: true }];
+    chatStore.yeaftSessionAgentById = { 'sess-1': 'owner:ag-1', 'sess-2': 'ag-2' };
+    chatStore.sendWsMessage = vi.fn(() => true);
+    chatStore.scheduledTaskReceiptProtocolSupported = true;
+
+    // Drawer open & uncovered on sess-1 -> NOT marked unread
+    chatStore.yeaftConversationCovered = false;
+    expect(chatStore.markYeaftSessionUnread('sess-1', 'owner:ag-1')).toBe(false);
+    // Cosmos drawer closed (yeaftConversationCovered=true) -> SAME session IS marked unread!
+    chatStore.yeaftConversationCovered = true;
+    expect(chatStore.markYeaftSessionUnread('sess-1', 'owner:ag-1')).toBe(true);
+    expect(chatStore.isYeaftSessionUnread('sess-1', 'owner:ag-1')).toBe(true);
+    expect(chatStore.markYeaftSessionUnread('sess-2', 'ag-2')).toBe(true);
+
+    // Scheduled task notification for sess-2 + colon-containing agentId owner:ag-1 both acknowledge cleanly
+    chatStore.scheduledTaskNotifications = [{
+      id: JSON.stringify(['ag-2', 'sess-2', 'run-1']),
+      agentId: 'ag-2',
+      sessionId: 'sess-2',
+      runId: 'run-1',
+      taskName: 'Nightly Backup',
+      status: 'completed',
+      error: '',
+      createdAt: 5000,
+    }];
+    expect(chatStore.acknowledgeYeaftSessionSignals('sess-2', 'ag-2')).toBe(true);
+    expect(chatStore.isYeaftSessionUnread('sess-2', 'ag-2')).toBe(false);
+    expect(chatStore.scheduledTaskNotifications).toHaveLength(0);
+
+    expect(chatStore.acknowledgeAllYeaftSessionSignals()).toBe(true);
+    expect(chatStore.isYeaftSessionUnread('sess-1', 'owner:ag-1')).toBe(false);
+    expect(Object.keys(chatStore.yeaftUnreadSessionKeys)).toHaveLength(0);
+
+    // 3. Projection + Signal Stream builder: priority waiting > unread > running, deduped with scheduled notices,
+    //    preserves same signalKey across running -> unread transition, and hides active drawer unread session.
+    chatStore.yeaftUnreadSessionKeys = { 'yeaft:ag-2:sess-unread': true };
+    chatStore.yeaftSessionReplyPreviewByKey = {
+      'yeaft:ag-2:sess-unread': {
+        text: 'Build succeeded with zero warnings and 379 tests passing.',
+        at: 9000,
+        kind: 'assistant',
+        askQuestion: '',
+        updatedAt: 9000,
+      },
+      'yeaft:owner:ag-1:sess-wait': {
+        text: '',
+        at: 8000,
+        kind: 'assistant',
+        askQuestion: 'Approve production tag v1.0.800?',
+        askRequestId: 'ask-1',
+        askAt: 9500,
+        updatedAt: 9500,
+      },
+    };
+    chatStore.yeaftProcessingSessions = { 'owner:ag-1\u001fsess-run': true };
+    chatStore.applySessionCatalogSnapshot([
+      { catalogKey: 'yeaft:owner:ag-1:sess-wait', runtimeProvider: 'yeaft', routeRef: { runtimeProvider: 'yeaft', agentId: 'owner:ag-1', sessionId: 'sess-wait' }, title: 'Release Gate', availability: 'online', metadataUpdatedAt: new Date(9500).toISOString() },
+      { catalogKey: 'yeaft:owner:ag-1:sess-run', runtimeProvider: 'yeaft', routeRef: { runtimeProvider: 'yeaft', agentId: 'owner:ag-1', sessionId: 'sess-run' }, title: 'Shader Audit', availability: 'online', metadataUpdatedAt: new Date(9200).toISOString() },
+      { catalogKey: 'yeaft:ag-2:sess-unread', runtimeProvider: 'yeaft', routeRef: { runtimeProvider: 'yeaft', agentId: 'ag-2', sessionId: 'sess-unread' }, title: 'CI Verification', availability: 'online', metadataUpdatedAt: new Date(9000).toISOString() },
+    ], []);
+
+    const projected = projectAgentsForCosmos({
+      chatStore,
+      sessionsStore: { sessionList: [] },
+      nowMs: 10000,
+      isEn: true,
+    });
+    expect(projected['owner:ag-1'].attentionCount).toBe(1);
+    expect(projected['ag-2'].unreadCount).toBe(1);
+    expect(projected['ag-2'].hasUnread).toBe(true);
+
+    const stream = buildCosmosSignalStream({
+      projectedAgents: Object.values(projected),
+      agentToPlanet: { 'owner:ag-1': 'earth', 'ag-2': 'saturn' },
+      scheduledTaskNotifications: [{
+        id: JSON.stringify(['ag-2', 'sess-orphan-task', 'run-7']),
+        agentId: 'ag-2',
+        sessionId: 'sess-orphan-task',
+        runId: 'run-7',
+        taskName: 'Hourly Health Check',
+        status: 'failed',
+        error: 'Gateway timeout 504',
+        createdAt: 9600,
+      }],
+      activeDrawerKey: '',
+      nowMs: 10000,
+      isEn: true,
+    });
+    expect(stream.items.map((x) => `${x.kind}:${x.sessionId}`)).toEqual([
+      'waiting:sess-wait',
+      'unread:sess-orphan-task',
+      'unread:sess-unread',
+      'running:sess-run',
+    ]);
+    expect(stream.items[0].preview).toBe('Approve production tag v1.0.800?');
+    expect(stream.items[1].isError).toBe(true);
+    expect(stream.items[2].planetId).toBe('saturn');
+    expect(stream.items[2].preview).toContain('Build succeeded');
+    expect(stream.badgeCount).toBe(3);
+    expect(stream.runningCount).toBe(1);
+
+    // Same signalKey when running finishes into unread (in-place evolution!)
+    const runningKey = stream.items[3].signalKey;
+    chatStore.yeaftProcessingSessions = {};
+    chatStore.yeaftUnreadSessionKeys = { ...chatStore.yeaftUnreadSessionKeys, 'yeaft:owner:ag-1:sess-run': true };
+    chatStore.yeaftSessionReplyPreviewByKey['yeaft:owner:ag-1:sess-run'] = {
+      text: 'All shaders verified at 60fps.',
+      at: 9900,
+      kind: 'assistant',
+      updatedAt: 9900,
+    };
+    const projectedAfter = projectAgentsForCosmos({ chatStore, sessionsStore: { sessionList: [] }, nowMs: 10000, isEn: true });
+    const streamAfter = buildCosmosSignalStream({
+      projectedAgents: Object.values(projectedAfter),
+      agentToPlanet: { 'owner:ag-1': 'earth', 'ag-2': 'saturn' },
+      activeDrawerKey: 'ag-2\u001fsess-unread',
+      nowMs: 10000,
+      isEn: true,
+    });
+    // Active drawer session is hidden from unread stream; evolved session keeps identical signalKey
+    expect(streamAfter.items.some((x) => x.sessionId === 'sess-unread')).toBe(false);
+    const evolved = streamAfter.items.find((x) => x.sessionId === 'sess-run');
+    expect(evolved?.signalKey).toBe(runningKey);
+    expect(evolved?.kind).toBe('unread');
+    expect(evolved?.preview).toBe('All shaders verified at 60fps.');
+  });
+
+  it('renders frameless Signal Stream cards with 3-card cap, drawer-docked popover, mobile micro-banner, and CosmosPage stage subtraction', async () => {
+    const { default: CosmosSignalStream } = await import('../../web/components/cosmos/CosmosSignalStream.js');
+    const items = [
+      { signalKey: 'a:1', kind: 'waiting', agentId: 'a', agentName: 'Earth-Mac', planetId: 'earth', sessionId: '1', sessionTitle: 'Deploy Gate', preview: 'Proceed with rollout?', timeLabel: 'now', dismissible: false, scheduledTask: null, isError: false },
+      { signalKey: 'b:2', kind: 'unread', agentId: 'b', agentName: 'Saturn-Srv', planetId: 'saturn', sessionId: '2', sessionTitle: 'Test Run', preview: 'All 379 tests passed cleanly.', timeLabel: '1m', dismissible: true, scheduledTask: null, isError: false },
+      { signalKey: 'b:3', kind: 'unread', agentId: 'b', agentName: 'Saturn-Srv', planetId: 'saturn', sessionId: '3', sessionTitle: 'Nightly Task', preview: 'Backup completed.', timeLabel: '2m', dismissible: true, scheduledTask: { id: 't1', status: 'completed' }, isError: false },
+      { signalKey: 'a:4', kind: 'running', agentId: 'a', agentName: 'Earth-Mac', planetId: 'earth', sessionId: '4', sessionTitle: 'Index Build', preview: 'Scanning workspace…', timeLabel: 'now', dismissible: false, scheduledTask: null, isError: false },
+    ];
+
+    wrapper = mount(CosmosSignalStream, {
+      props: {
+        items,
+        waitingCount: 1,
+        unreadCount: 2,
+        runningCount: 1,
+        badgeCount: 3,
+        dismissibleCount: 2,
+        drawerOpen: false,
+        isCompact: false,
+        previewMode: '2',
+        popoverOpen: false,
+      },
+      global: { config: { globalProperties: { $t: (k) => k } } },
+    });
+
+    // 1. Desktop free stage caps at 3 cards, never nests buttons, emits dismiss & mark-all-read
+    expect(wrapper.findAll('.cosmos-signal-stream .cosmos-signal-card')).toHaveLength(3);
+    expect(wrapper.findAll('button button')).toHaveLength(0);
+    await wrapper.find('.cosmos-signal-ack').trigger('click');
+    expect(wrapper.emitted('dismiss-signal')?.[0]?.[0]?.signalKey).toBe('b:2');
+
+    // Expand shows all 4 cards
+    await wrapper.find('.cosmos-signal-foot-btn:not(.is-mark-all)').trigger('click');
+    expect(wrapper.findAll('.cosmos-signal-stream .cosmos-signal-card')).toHaveLength(4);
+    await wrapper.find('.cosmos-signal-foot-btn.is-mark-all').trigger('click');
+    expect(wrapper.emitted('mark-all-read')).toHaveLength(1);
+
+    // 2. Drawer open hides free-floating stream and renders docked popover when opened
+    await wrapper.setProps({ drawerOpen: true, popoverOpen: true });
+    expect(wrapper.find('.cosmos-signal-stream').exists()).toBe(false);
+    expect(wrapper.find('.cosmos-signal-popover.is-drawer-docked').exists()).toBe(true);
+    expect(wrapper.findAll('.cosmos-signal-popover .cosmos-signal-card')).toHaveLength(4);
+
+    // 3. Mobile compact renders single arrival micro-banner instead of floating stack and supports banner close
+    await wrapper.setProps({ drawerOpen: false, isCompact: true, popoverOpen: false });
+    expect(wrapper.find('.cosmos-signal-stream').exists()).toBe(false);
+    expect(wrapper.find('.cosmos-signal-mobile-banner').exists()).toBe(true);
+    await wrapper.find('.cosmos-signal-banner-close').trigger('click');
+    expect(wrapper.find('.cosmos-signal-mobile-banner').exists()).toBe(false);
+    wrapper.unmount();
+    wrapper = null;
+
+    // 4. CosmosPage stage subtraction: NO per-planet .cosmos-live-card, syncs yeaftConversationCovered,
+    //    and Escape dismisses signalPopoverOpen BEFORE closing the open drawer.
+    const ackSpy = vi.fn();
+    const pageStore = Vue.reactive({
+      agents: [{ id: 'ag-1', name: 'Earth-Mac', online: true, workDir: '/srv', capabilities: [] }],
+      currentAgent: 'ag-1',
+      currentView: 'yeaft',
+      yeaftActiveSessionFilter: 'sess-1',
+      yeaftConversationCovered: false,
+      workbenchExpanded: false,
+      workbenchMaximized: false,
+      sessionCatalog: [{
+        catalogKey: 'yeaft:ag-1:sess-1',
+        runtimeProvider: 'yeaft',
+        routeRef: { runtimeProvider: 'yeaft', agentId: 'ag-1', sessionId: 'sess-1' },
+        title: 'Live Orbit Session',
+        metadataUpdatedAt: new Date().toISOString(),
+      }],
+      sessionProjects: [],
+      yeaftProcessingSessions: { 'ag-1\u001fsess-1': true },
+      yeaftUnreadSessionKeys: {},
+      yeaftSessionReplyPreviewByKey: {},
+      scheduledTaskNotifications: [],
+      yeaftActiveTasksBySession: {},
+      messagesMap: {},
+      isYeaftSessionProcessing: (sid, aid) => Boolean(pageStore.yeaftProcessingSessions[`${aid}\u001f${sid}`]),
+      isYeaftSessionUnread: () => false,
+      acknowledgeYeaftSessionSignals: ackSpy,
+    });
+    globalThis.Pinia = {
+      defineStore: () => () => ({}),
+      useChatStore: () => pageStore,
+      useSessionsStore: () => ({ sessionList: [], activeSessionId: 'sess-1', sessionById: () => null }),
+    };
+
+    const { default: CosmosPage } = await import('../../web/components/cosmos/CosmosPage.js');
+    wrapper = mount(CosmosPage, {
+      global: {
+        config: { globalProperties: { $t: (k) => k } },
+        stubs: {
+          CosmosQuickComposer: true,
+          CosmosConversationDrawer: { template: '<div class="drawer-stub" />' },
+          CosmosConstantsPopover: true,
+          CosmosEventsOverlay: true,
+          SettingsPanel: true,
+          AgentSettingsPanel: true,
+          SessionSettingsModal: true,
+        },
+      },
+    });
+    await flushPromises();
+
+    // Zero per-planet micro-list cards on stage; conversation is covered while drawer is closed
+    expect(wrapper.find('.cosmos-live-card').exists()).toBe(false);
+    expect(pageStore.yeaftConversationCovered).toBe(true);
+
+    // Opening drawer marks conversation uncovered & acknowledges session signals
+    wrapper.vm.openSessionInDrawer('ag-1', { id: 'sess-1' });
+    await flushPromises();
+    expect(pageStore.yeaftConversationCovered).toBe(false);
+    expect(ackSpy).toHaveBeenCalledWith('sess-1', 'ag-1');
+
+    // Expanding Workbench covers conversation again
+    pageStore.workbenchExpanded = true;
+    await flushPromises();
+    expect(pageStore.yeaftConversationCovered).toBe(true);
+    pageStore.workbenchExpanded = false;
+    await flushPromises();
+    expect(pageStore.yeaftConversationCovered).toBe(false);
+
+    // Clicking signal trigger while drawer is open opens popover; 1st Escape closes ONLY popover
+    await wrapper.find('.cosmos-signal-trigger').trigger('click');
+    await flushPromises();
+    expect(wrapper.vm.signalPopoverOpen).toBe(true);
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', cancelable: true }));
+    await flushPromises();
+    expect(wrapper.vm.signalPopoverOpen).toBe(false);
+    expect(wrapper.vm.drawerOpen).toBe(true);
+
+    // Unmounting CosmosPage resets yeaftConversationCovered to false for Classic mode
+    wrapper.unmount();
+    wrapper = null;
+    expect(pageStore.yeaftConversationCovered).toBe(false);
+  });
+});

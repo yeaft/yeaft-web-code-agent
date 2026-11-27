@@ -35,6 +35,11 @@ import { conversationRepositoryFor } from './helpers/conversation-repository.js'
 import * as yeaftViewHelpers from './helpers/yeaft-view.js';
 import * as yeaftAutoRouteHelpers from './helpers/yeaft-auto-route.js';
 import {
+  extractLatestAssistantPreview,
+  recordYeaftSessionReplyPreview,
+  clearYeaftSessionReplyPreview,
+} from './helpers/yeaft-reply-preview.js';
+import {
   clearYeaftConversationPromotion,
   migrateYeaftConversationState,
   pendingYeaftConversationPromotion,
@@ -754,6 +759,10 @@ export const useChatStore = defineStore('chat', {
     // source Session unread until the user opens it. Key by catalog identity so
     // equal sessionIds owned by different Agents never clear each other.
     yeaftUnreadSessionKeys: {},
+    // Bounded per-Session latest reply & AskUser plain-text cache (keyed by yeaftCatalogKey)
+    // so Cosmos Signal Stream can display 2~3 lines of real AI output even after background
+    // message retention pruning.
+    yeaftSessionReplyPreviewByKey: {},
     scheduledTaskNotifications: [],
     scheduledTaskNotificationOwnerId: null,
     scheduledTaskReceiptProtocolSupported: false,
@@ -4124,6 +4133,7 @@ export const useChatStore = defineStore('chat', {
       })).size;
       this.clearYeaftHistoryMemory({ agentId, sessionId, preserveLiveRows: true,
         preserveSessionOwner: true, preserveTranscript: true });
+      this.clearYeaftSessionPreview(sessionId, agentId);
       this.yeaftTurnDeleteHistoryBySession = {
         ...this.yeaftTurnDeleteHistoryBySession,
         [key]: { agentId, sessionId, epoch: crypto.randomUUID(), lastDeletedTurnId: turnId || previous?.lastDeletedTurnId,
@@ -4157,6 +4167,7 @@ export const useChatStore = defineStore('chat', {
           settleYeaftTurnDeletion(this, pending, { ok: false, errorCode: 'stale' });
         }
         this.yeaftTurnDeleteHistoryBySession = {};
+        this.clearYeaftSessionPreview();
       }
       const sessionKey = targetAgentId && targetSessionId
         ? yeaftHistoryIdentityKey(targetAgentId, targetSessionId)
@@ -5524,6 +5535,18 @@ export const useChatStore = defineStore('chat', {
           const conversationId = resolveYeaftEnvelopeConversationId(this, msg.agentId || null, msg.conversationId);
           if (!conversationId || !event.requestId) break;
           const identity = askUserEventIdentity(msg, event, conversationId);
+          if (identity.sessionId && !event.answered && !event.expired) {
+            const firstQuestion = Array.isArray(event.questions) && event.questions[0]?.question
+              ? event.questions[0].question
+              : (event.question || '');
+            if (firstQuestion) {
+              this.recordYeaftSessionPreview(identity.sessionId, identity.agentId, {
+                askQuestion: firstQuestion,
+                askRequestId: event.requestId,
+                at: event.createdAt || Date.now(),
+              });
+            }
+          }
           const linkPrompt = () => {
             const messages = this.messagesMap[conversationId] || [];
             const existingRow = findAskUserRow(messages, identity, conversationId);
@@ -5596,6 +5619,12 @@ export const useChatStore = defineStore('chat', {
           if (!conversationId || !event.requestId) break;
           const messages = this.messagesMap[conversationId] || [];
           const identity = askUserEventIdentity(msg, event, conversationId);
+          if (identity.sessionId && !(event.type === 'ask_user_answer_rejected' && event.reason === 'agent_unavailable')) {
+            this.recordYeaftSessionPreview(identity.sessionId, identity.agentId, {
+              clearAsk: true,
+              askRequestId: event.requestId,
+            });
+          }
           const askMsg = findAskUserRow(messages, identity, conversationId);
           if (!askMsg) {
             rememberAskUserTerminal(this, identity, event);
@@ -6589,6 +6618,16 @@ export const useChatStore = defineStore('chat', {
               mutated = true;
             }
             if (mutated) this.messagesMap = { ...this.messagesMap, [conv]: rows.slice() };
+            if (terminalSessionId) {
+              const replyPreview = extractLatestAssistantPreview(rows, terminalSessionId, event.turnId || null);
+              if (replyPreview.text) {
+                this.recordYeaftSessionPreview(terminalSessionId, terminalAgentId, {
+                  text: replyPreview.text,
+                  at: replyPreview.at || stampedAt,
+                  kind: 'assistant',
+                });
+              }
+            }
             // The provider `result` normally arrives first, but metadata is the
             // guaranteed terminal boundary for every VP. Re-prune idempotently
             // here so dropped/reordered data frames cannot leave live rows
@@ -7050,12 +7089,34 @@ export const useChatStore = defineStore('chat', {
     // on disk after a refresh/re-entry; switching back to that group must
     // still ask the agent for authoritative history unless this group has
     // already completed a history load in the current UI lifecycle.
+    recordYeaftSessionPreview(sessionId, agentId = null, patch = {}) {
+      if (!sessionId) return false;
+      const ownerAgentId = resolveAgentIdForSession(this, sessionId, agentId);
+      if (!ownerAgentId) return false;
+      return recordYeaftSessionReplyPreview(this, {
+        catalogKey: yeaftCatalogKey(ownerAgentId, sessionId),
+        ...patch,
+      });
+    },
+
+    clearYeaftSessionPreview(sessionId = null, agentId = null) {
+      if (!sessionId) return clearYeaftSessionReplyPreview(this, null);
+      const ownerAgentId = resolveAgentIdForSession(this, sessionId, agentId);
+      if (!ownerAgentId) return false;
+      return clearYeaftSessionReplyPreview(this, yeaftCatalogKey(ownerAgentId, sessionId));
+    },
+
     markYeaftSessionUnread(sessionId, agentId = null) {
       if (!sessionId) return false;
       const ownerAgentId = resolveAgentIdForSession(this, sessionId, agentId);
       if (!ownerAgentId) return false;
       const catalogKey = yeaftCatalogKey(ownerAgentId, sessionId);
       const visible = this.currentView === 'yeaft'
+        && !this.yeaftConversationCovered
+        && !this.workCenterOpen
+        && !this.pluginCenterOpen
+        && !this.digitalPersonOpen
+        && !(this.workbenchExpanded && this.workbenchMaximized)
         && this.yeaftActiveSessionFilter === sessionId
         && resolveAgentIdForSession(this, sessionId) === ownerAgentId;
       if (visible || this.yeaftUnreadSessionKeys?.[catalogKey]) return false;
@@ -7075,6 +7136,61 @@ export const useChatStore = defineStore('chat', {
       const { [catalogKey]: _read, ...remainingUnread } = this.yeaftUnreadSessionKeys;
       this.yeaftUnreadSessionKeys = remainingUnread;
       return true;
+    },
+
+    acknowledgeYeaftSessionSignals(sessionId, agentId = null) {
+      if (!sessionId) return false;
+      const ownerAgentId = resolveAgentIdForSession(this, sessionId, agentId);
+      if (!ownerAgentId) return false;
+      const readUnread = this.markYeaftSessionRead(sessionId, ownerAgentId);
+      const lastRun = getSessionsStore()?.sessionById?.(sessionId, ownerAgentId)?.task?.lastRun || null;
+      const readTasks = scheduledTaskHelpers.markScheduledTaskSessionRead(this, sessionId, ownerAgentId, lastRun);
+      return readUnread || readTasks;
+    },
+
+    acknowledgeAllYeaftSessionSignals() {
+      const pairs = new Map();
+      const catalogByKey = new Map();
+      for (const row of [...(this.sidebarSessionCatalog || []), ...(this.sessionCatalog || [])]) {
+        const ref = row?.routeRef;
+        if (row?.catalogKey && ref?.runtimeProvider === 'yeaft' && ref.agentId && ref.sessionId) {
+          catalogByKey.set(row.catalogKey, { agentId: ref.agentId, sessionId: ref.sessionId });
+        }
+      }
+      for (const catalogKey of Object.keys(this.yeaftUnreadSessionKeys || {})) {
+        const matched = catalogByKey.get(catalogKey);
+        if (matched) {
+          pairs.set(`${matched.agentId}\u001f${matched.sessionId}`, matched);
+          continue;
+        }
+        if (!catalogKey.startsWith('yeaft:')) continue;
+        const rest = catalogKey.slice('yeaft:'.length);
+        const idx = rest.lastIndexOf(':');
+        if (idx <= 0 || idx >= rest.length - 1) continue;
+        const agentId = rest.slice(0, idx);
+        const sessionId = rest.slice(idx + 1);
+        pairs.set(`${agentId}\u001f${sessionId}`, { agentId, sessionId });
+      }
+      const leftoverTaskIds = [];
+      for (const item of (this.scheduledTaskNotifications || [])) {
+        if (item?.agentId && item?.sessionId) {
+          pairs.set(`${item.agentId}\u001f${item.sessionId}`, { agentId: item.agentId, sessionId: item.sessionId });
+        } else if (item?.id) {
+          leftoverTaskIds.push(item.id);
+        }
+      }
+      let changed = false;
+      for (const { agentId, sessionId } of pairs.values()) {
+        if (this.acknowledgeYeaftSessionSignals(sessionId, agentId)) changed = true;
+      }
+      for (const id of leftoverTaskIds) {
+        if (this.dismissScheduledTaskNotification(id)) changed = true;
+      }
+      if (this.yeaftUnreadSessionKeys && Object.keys(this.yeaftUnreadSessionKeys).length > 0) {
+        this.yeaftUnreadSessionKeys = {};
+        changed = true;
+      }
+      return changed;
     },
 
     setActiveSessionFilter(groupId, opts = {}) {
@@ -9488,6 +9604,9 @@ export const useChatStore = defineStore('chat', {
       this.currentAgent = null;
       this.currentAgentInfo = null;
       this.yeaftStatusByAgent = {};
+      this.yeaftUnreadSessionKeys = {};
+      this.yeaftSessionReplyPreviewByKey = {};
+      this.yeaftConversationCovered = false;
       this._yeaftRetiredCatalogEpochsByAgent = {};
       this.conversations = [];
       this.activeConversations = [];

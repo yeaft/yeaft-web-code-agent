@@ -7,6 +7,27 @@ import { sameUserMessage } from './dedup.js';
 import { applyToolResult, recordLiveSessionTool, recordLiveSessionToolResult } from './session-tool-details.js';
 import { isQueryExecutionSettled } from './query-progress.js';
 import { markTurnResponseKinds } from '../../utils/turn-response.js';
+import { extractLatestAssistantPreview } from './yeaft-reply-preview.js';
+
+function syncLiveReplyPreview(store, conversationId, frameAgentId, sessionId, turnId, explicitText = '', ts = null) {
+  if (!store?.recordYeaftSessionPreview || !frameAgentId || !sessionId) return;
+  if (explicitText) {
+    store.recordYeaftSessionPreview(sessionId, frameAgentId, {
+      text: explicitText,
+      at: ts || Date.now(),
+      kind: 'assistant',
+    });
+    return;
+  }
+  const latest = extractLatestAssistantPreview(store.messagesMap?.[conversationId], sessionId, turnId || null);
+  if (latest.text) {
+    store.recordYeaftSessionPreview(sessionId, frameAgentId, {
+      text: latest.text,
+      at: latest.at || ts || Date.now(),
+      kind: 'assistant',
+    });
+  }
+}
 
 function promoteOrInvalidateOutline(store, row, frameAgentId = null) {
   if (!frameAgentId) return false;
@@ -124,6 +145,10 @@ export function handleAssistantOutputFrame(store, conversationId, data, frameAge
         threadId: store._currentYeaftThreadId,
       });
       promoteOrInvalidateOutline(store, row, frameAgentId);
+      if (!data.history && !data.isHistory) {
+        syncLiveReplyPreview(store, conversationId, frameAgentId, sessionId, turnId,
+          row?.presentation?.summary || row?.content || '', data.ts || Date.now());
+      }
       return;
     }
 
@@ -149,6 +174,9 @@ export function handleAssistantOutputFrame(store, conversationId, data, frameAge
         turnId: store._currentYeaftTurnId || null,
         threadId: store._currentYeaftThreadId || null,
       });
+      if (!data.history && !data.isHistory) {
+        syncLiveReplyPreview(store, conversationId, frameAgentId, sessionId, turnId, '', data.ts || Date.now());
+      }
       return;
     }
     if (!Array.isArray(content)) return;
@@ -159,8 +187,10 @@ export function handleAssistantOutputFrame(store, conversationId, data, frameAge
       return;
     }
 
+    let appendedText = false;
     for (const block of content) {
       if (block.type === 'text') {
+        appendedText = true;
         store.appendToAssistantMessageForConversation(conversationId, block.text, {
           id: data.message?.id || data.message?.messageId || null,
           ts: data.ts || data.message?.ts || data.message?.time || null,
@@ -216,6 +246,9 @@ export function handleAssistantOutputFrame(store, conversationId, data, frameAge
         if (liveToolOwner) recordLiveSessionTool(store, liveToolOwner, toolRow);
         store.addMessageToConversation(conversationId, toolRow);
       }
+    }
+    if (appendedText && !data.history && !data.isHistory) {
+      syncLiveReplyPreview(store, conversationId, frameAgentId, sessionId, turnId, '', data.ts || Date.now());
     }
   } else if (data.type === 'user') {
     // Yeaft and provider adapters may use a user-role frame for model-only
@@ -450,6 +483,9 @@ export function handleAssistantOutputFrame(store, conversationId, data, frameAge
       }
     }
     store.finishStreamingForConversation(conversationId);
+    if (!data.history && !data.isHistory && completedYeaftSessionId) {
+      syncLiveReplyPreview(store, conversationId, frameAgentId || store._currentYeaftAgentId, completedYeaftSessionId, store._currentYeaftTurnId, '', data.ts || Date.now());
+    }
     if (completedYeaftSessionId && store._currentYeaftTurnId) {
       const settled = msgs.find(row => row.type === 'assistant' && row.turnId === store._currentYeaftTurnId
         && (row.sessionId ?? row.groupId) === completedYeaftSessionId

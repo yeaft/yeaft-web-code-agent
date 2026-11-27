@@ -53,7 +53,7 @@ export const DEFAULT_COSMOS_CONSTANTS = Object.freeze({
   skyBright: 1.05,
   orbitLines: 0.60,
   activeFlash: true,
-  livePreviewMode: '2', // '2' | '3' | 'hover'
+  livePreviewMode: '2', // '2' | '3' | 'collapsed' (legacy 'hover' maps to 'collapsed')
   showEventsCountdown: true,
   eventsAutoEnabled: true,
   eventsAutoZoom: false,
@@ -76,7 +76,8 @@ export function clampNum(val, min, max, fallback) {
 
 export function normalizeCosmosConstants(raw) {
   const src = raw && typeof raw === 'object' ? raw : {};
-  const mode = ['2', '3', 'hover'].includes(src.livePreviewMode) ? src.livePreviewMode : DEFAULT_COSMOS_CONSTANTS.livePreviewMode;
+  const rawMode = src.livePreviewMode === 'hover' ? 'collapsed' : src.livePreviewMode;
+  const mode = ['2', '3', 'collapsed'].includes(rawMode) ? rawMode : DEFAULT_COSMOS_CONSTANTS.livePreviewMode;
   const renderQuality = ['auto', 'high', 'lite'].includes(src.renderQuality) ? src.renderQuality : DEFAULT_COSMOS_CONSTANTS.renderQuality;
   return {
     orbitSpeed: clampNum(src.orbitSpeed, 0, 2.5, DEFAULT_COSMOS_CONSTANTS.orbitSpeed),

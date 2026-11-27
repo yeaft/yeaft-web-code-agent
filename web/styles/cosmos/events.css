@@ -702,33 +702,42 @@
 
 @media (max-width: 768px) {
   .cosmos-event-wrap {
-    left: calc(12px + env(safe-area-inset-left, 0px));
+    left: calc(10px + env(safe-area-inset-left, 0px));
     transform: none;
     align-items: flex-start;
-    max-width: calc(100vw - 106px);
+    max-width: calc(100vw - 152px - env(safe-area-inset-left, 0px) - env(safe-area-inset-right, 0px));
   }
   .cosmos-event-pill {
     max-width: 100%;
-    gap: 4px;
-    padding: 0 4px 0 8px;
+    gap: 3px;
+    padding: 0 4px 0 7px;
+    overflow: hidden;
   }
   .cosmos-event-main {
     min-width: 0;
+    flex: 1 1 auto;
     overflow: hidden;
     gap: 4px;
   }
   .cosmos-event-name {
-    max-width: 88px;
+    min-width: 0;
+    max-width: 66px;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+  .cosmos-event-timer {
+    font-size: 9.5px;
+    flex-shrink: 0;
   }
   .cosmos-event-dist {
     display: none;
   }
   .cosmos-event-watch-btn,
   .cosmos-event-stop-btn {
-    padding: 0 7px;
+    padding: 0 6px;
+    font-size: 10px;
+    flex-shrink: 0;
   }
   .cosmos-watch-dock {
     width: calc(100vw - 20px);
@@ -754,6 +763,12 @@
     padding: 0 7px;
   }
   .cosmos-event-beacon-coords {
+    display: none;
+  }
+}
+
+@media (max-width: 375px) {
+  .cosmos-event-name {
     display: none;
   }
 }
