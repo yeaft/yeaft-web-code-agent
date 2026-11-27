@@ -8,6 +8,7 @@ import {
   clearWorkCenterBrowserOwner,
 } from './helpers/work-center-browser-state.js';
 import { clearLocalCosmosPreferences } from '../cosmos/constants.js';
+import { clearAllCanvasContextRefs } from '../utils/canvas-context.js';
 const { defineStore } = Pinia;
 
 function clearYeaftHistoryMemory() {
@@ -28,6 +29,7 @@ function clearPluginBrowserState() {
 function clearVpBrowserState() {
   try { globalThis.Pinia?.useVpStore?.()?.clearSnapshots?.(); } catch {}
   try { globalThis.Pinia?.useCreationsStore?.()?.clearAll?.(); } catch {}
+  try { clearAllCanvasContextRefs(); } catch {}
   try { globalThis.Pinia?.useCosmicWebStore?.()?.reset?.(); } catch {}
   try {
     const chat = globalThis.Pinia?.useChatStore?.();

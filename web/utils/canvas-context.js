@@ -138,6 +138,27 @@ export function removeCanvasContextRef(routeKey, id) {
 }
 
 /**
+ * Remove only the Canvas Context References whose id is in `ids` for a route,
+ * preserving any references added while an async send was in flight.
+ *
+ * @param {string} routeKey
+ * @param {Iterable<string>} ids
+ */
+export function removeCanvasContextRefsByIds(routeKey, ids) {
+  if (!ids) return;
+  const idSet = new Set(Array.isArray(ids) ? ids : [...ids]);
+  if (idSet.size === 0) return;
+  const key = normalizeRouteKey(routeKey);
+  const list = contextMap[key];
+  if (!Array.isArray(list) || list.length === 0) return;
+  for (let i = list.length - 1; i >= 0; i -= 1) {
+    if (idSet.has(list[i]?.id)) {
+      list.splice(i, 1);
+    }
+  }
+}
+
+/**
  * Clear all Canvas Context References for a route.
  *
  * @param {string} routeKey
@@ -150,6 +171,18 @@ export function clearCanvasContextRefs(routeKey) {
 }
 
 /**
+ * Clear all Canvas Context References across every route (e.g. logout / auth reset).
+ */
+export function clearAllCanvasContextRefs() {
+  for (const key of Object.keys(contextMap)) {
+    if (Array.isArray(contextMap[key])) {
+      contextMap[key].splice(0, contextMap[key].length);
+    }
+    delete contextMap[key];
+  }
+}
+
+/**
  * Return the reactive array of Canvas Context References for a route.
  *
  * @param {string} routeKey
@@ -157,6 +190,10 @@ export function clearCanvasContextRefs(routeKey) {
  */
 export function getCanvasContextRefs(routeKey) {
   return ensureList(routeKey);
+}
+
+function neutralizeSnippetMentions(text) {
+  return String(text ?? '').replace(/(^|[\s(])@([A-Za-z0-9_\-\u4e00-\u9fff])/g, '$1@\u200B$2');
 }
 
 /**
@@ -183,7 +220,9 @@ export function formatCanvasContextPrefix(refs) {
         ? `> [Canvas Video] \`${labelPath}\` @ ${ts}`
         : `> [Canvas Video] \`${labelPath}\``;
       if (ref.snippet) {
-        const lines = String(ref.snippet).split(/\r?\n/).map(line => `> ${line}`);
+        const lines = String(ref.snippet)
+          .split(/\r?\n/)
+          .map(line => `> ${neutralizeSnippetMentions(line)}`);
         blocks.push([header, ...lines].join('\n'));
       } else {
         blocks.push(header);
@@ -199,7 +238,9 @@ export function formatCanvasContextPrefix(refs) {
     }
     const header = `> [Canvas Doc] \`${labelPath}\`${lineRange}`;
     if (ref.snippet) {
-      const lines = String(ref.snippet).split(/\r?\n/).map(line => `> ${line}`);
+      const lines = String(ref.snippet)
+        .split(/\r?\n/)
+        .map(line => `> ${neutralizeSnippetMentions(line)}`);
       blocks.push([header, ...lines].join('\n'));
     } else {
       blocks.push(header);

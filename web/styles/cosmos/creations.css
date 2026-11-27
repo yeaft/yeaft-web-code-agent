@@ -296,6 +296,24 @@
   border-color: color-mix(in srgb, var(--creation-status-attention) 55%, transparent);
 }
 
+.creation-legacy-banner {
+  border-color: var(--creation-glass-accent-border);
+  background: var(--creation-glass-bg-strong);
+  color: var(--creation-glass-ink);
+  border-radius: var(--radius-lg, 14px);
+  padding: var(--space-2) var(--space-3);
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: var(--space-2) var(--space-3);
+}
+
+.creation-legacy-banner-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1-5);
+  flex-shrink: 0;
+}
+
 /* ── Full-Galaxy Drag & Drop Overlay ── */
 .creation-drop-overlay {
   position: fixed;

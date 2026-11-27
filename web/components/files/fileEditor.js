@@ -73,9 +73,15 @@ export function getModeForFile(filename) {
 /** Editors normalize line endings; a full undo must restore the original text. */
 export function updateFileText(file, current) {
   const original = file.originalContent || '';
+  const prevContent = file.content;
   const normalize = text => text.replace(/\r\n?/g, '\n');
   file.content = normalize(current) === normalize(original) ? original : current;
   file.isDirty = file.content !== original;
+  // External edits (e.g. Canvas edit while CodeMirror is unmounted) invalidate
+  // any saved CodeMirror history/state so returning to Edit starts cleanly.
+  if (!file.cmInstance && file.content !== prevContent) {
+    file.cmState = null;
+  }
 }
 
 export function createFileEditor(store, {
@@ -161,7 +167,12 @@ export function createFileEditor(store, {
       cm.getWrapperElement().style.fontSize = fontSize.value + 'px';
 
       const convId = store.currentConversation;
-      if (convId && undoHistoryMap[convId]?.[fileObj.path]) {
+      if (fileObj.cmState === null) {
+        if (convId && undoHistoryMap[convId]) {
+          delete undoHistoryMap[convId][fileObj.path];
+        }
+        fileObj.cmState = undefined;
+      } else if (convId && undoHistoryMap[convId]?.[fileObj.path]) {
         cm.setHistory(undoHistoryMap[convId][fileObj.path]);
       }
 

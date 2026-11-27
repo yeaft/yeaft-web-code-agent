@@ -3,6 +3,7 @@
  * Manages Markdown and HTML preview/rendering, Mermaid diagrams, Office/PDF/Image/SVG/CSV preview.
  */
 import { renderMermaidIn } from '../../utils/markdown.js';
+import { sanitizeCreationHtml } from '../cosmos/creations/sanitize.js';
 import { isMarkdownFile, isHtmlFile, isSvgFile, isCsvFile, isPreviewableTextFile } from './fileEditor.js';
 
 /** Build an inert, network-free document; never insert workspace HTML into the app DOM. */
@@ -84,17 +85,29 @@ export function createFilePreview(activeFile, { editorContainer, createEditor, d
   // tab temporarily changes its index, but must not exit the active file's Edit.
   Vue.watch(activeFile, () => { textPreviewMode.value = true; });
 
+  const escapeHtml = (text) => String(text ?? '').replace(/[&<>"']/g, ch => ({
+    '&': '&amp;',
+    '<': '&lt;',
+    '>': '&gt;',
+    '"': '&quot;',
+    '\'': '&#39;',
+  })[ch]);
+
   const mdRenderedHtml = Vue.computed(() => {
     const f = activeFile.value;
     if (!f || !isMarkdownFile(f.name) || f.content == null) return '';
+    let rawHtml = '';
     try {
       if (typeof marked !== 'undefined') {
-        return marked.parse(f.content);
+        rawHtml = marked.parse(f.content);
+      } else {
+        rawHtml = '<pre>' + escapeHtml(f.content || '') + '</pre>';
       }
     } catch (e) {
       console.error('Markdown parse error:', e);
+      rawHtml = '<pre>' + escapeHtml(f.content || '') + '</pre>';
     }
-    return '<pre>' + (f.content || '') + '</pre>';
+    return sanitizeCreationHtml(rawHtml);
   });
 
   function initMermaid() {

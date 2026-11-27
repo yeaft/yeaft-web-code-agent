@@ -77,6 +77,7 @@ export default {
         :draft-key="'cosmos-quick:' + agent.id"
         :send-fn="handleQuickSend"
         :hide-vp-mentions="true"
+        :enable-canvas-refs="false"
         :disabled="!agent.online || routing"
         placeholder-key="cosmos.quick.inputPlaceholder"
         disabled-placeholder-key="cosmos.quick.offlineInputPlaceholder"

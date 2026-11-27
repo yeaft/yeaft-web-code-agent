@@ -82,7 +82,7 @@ import CosmosWebOverlay from './web/CosmosWebOverlay.js';
 import SettingsPanel from '../SettingsPanel.js';
 import AgentSettingsPanel from '../AgentSettingsPanel.js';
 import SessionSettingsModal from '../SessionSettingsModal.js';
-import { useCreationsStore } from '../../stores/creations.js';
+import { useCreationsStore, sendInitialCreationPrompt } from '../../stores/creations.js';
 import { useCosmicWebStore } from '../../stores/cosmicWeb.js';
 
 const COSMIC_WEB_INTENT_KEYS = Object.freeze({
@@ -1698,10 +1698,19 @@ export default {
       }
     }, { immediate: true });
 
+    let openCreationEpoch = 0;
+    let isUnmounted = false;
+
+    function invalidateGalaxyCreationOpen() {
+      openCreationEpoch += 1;
+      creationsStore.clearPendingWorkbenchTarget?.();
+    }
+
     Vue.watch([currentBand, projectedAgentList], ([band], prev) => {
       if (band === 'galaxy') {
         ensureGalaxyAgentSelected();
-      } else if (prev && prev[0] === 'galaxy' && !drawerOpen.value) {
+      } else if (prev && prev[0] === 'galaxy' && (!drawerOpen.value || !drawerOpenedFromGalaxy.value)) {
+        invalidateGalaxyCreationOpen();
         creationsStore.invalidatePendingOpen?.();
         creationsStore.inspectorTarget = null;
         if (creationsStore.igniteDraft) {
@@ -1710,6 +1719,12 @@ export default {
         creationsStore.closeCreation?.();
       }
     }, { immediate: true });
+
+    Vue.watch(() => creationsStore.selectedAgentId, (next, prev) => {
+      if (prev && next !== prev) {
+        invalidateGalaxyCreationOpen();
+      }
+    });
 
     function onClickGalaxyStar(star) {
       if (!star?.id || !creationsStore.selectedAgentId) return;
@@ -1732,10 +1747,21 @@ export default {
       const targetAgentId = agentId || creationsStore.selectedAgentId;
       if (!targetAgentId || !creationId) return;
 
+      const epoch = ++openCreationEpoch;
+      const startBand = currentBand.value;
+      const startAgent = creationsStore.selectedAgentId || targetAgentId;
+      const isStaleOpen = () => (
+        isUnmounted
+        || epoch !== openCreationEpoch
+        || currentBand.value !== startBand
+        || (creationsStore.selectedAgentId && startAgent && creationsStore.selectedAgentId !== startAgent)
+      );
+
       try {
         let creation = creationsStore.creationsForAgent(targetAgentId).find((c) => c && c.id === creationId) || null;
         if (!creation && typeof creationsStore.listCreations === 'function') {
           await creationsStore.listCreations(targetAgentId).catch(() => {});
+          if (isStaleOpen()) return;
           creation = creationsStore.creationsForAgent(targetAgentId).find((c) => c && c.id === creationId) || null;
         }
 
@@ -1748,11 +1774,13 @@ export default {
             creation || { id: creationId },
             { createIfMissing: true },
           );
+          if (isStaleOpen()) return;
           if (!resolvedSessionId && resolved?.sessionId) resolvedSessionId = String(resolved.sessionId).trim();
           if (!resolvedRootDir && resolved?.rootDir) resolvedRootDir = String(resolved.rootDir).trim();
         }
         if (!resolvedSessionId && creation?.sessionId) resolvedSessionId = String(creation.sessionId).trim();
         if (!resolvedRootDir && creation?.rootDir) resolvedRootDir = String(creation.rootDir).trim();
+        if (isStaleOpen()) return;
 
         creationsStore.inspectorTarget = null;
         if (creationsStore.igniteDraft) {
@@ -1791,14 +1819,16 @@ export default {
         store.workbenchMaximized = (mode === 'read');
 
         const cleanPrompt = String(promptToSend || '').trim();
-        if (cleanPrompt && resolvedSessionId && typeof store.sendYeaftSessionMessage === 'function') {
-          store.sendYeaftSessionMessage({
-            groupId: resolvedSessionId,
-            text: cleanPrompt,
-            agentId: targetAgentId,
-          });
+        if (cleanPrompt && resolvedSessionId) {
+          await Vue.nextTick();
+          if (isStaleOpen() || !drawerOpen.value) return;
+          const sendRes = await sendInitialCreationPrompt(targetAgentId, resolvedSessionId, cleanPrompt);
+          if (!isStaleOpen() && sendRes && sendRes.ok === false && sendRes.error) {
+            showToast(sendRes.error);
+          }
         }
       } catch (err) {
+        if (isStaleOpen()) return;
         showToast(err?.message || $t('creation.galaxy.offlineReadonly'));
       }
     }
@@ -2376,6 +2406,7 @@ export default {
     }
 
     function closeDrawer({ returnToSun = true } = {}) {
+      invalidateGalaxyCreationOpen();
       const wasFromGalaxy = drawerOpenedFromGalaxy.value;
       drawerResizing.value = false;
       drawerOpen.value = false;
@@ -2387,6 +2418,7 @@ export default {
     }
 
     function onReturnToGalaxy() {
+      invalidateGalaxyCreationOpen();
       closeDrawer({ returnToSun: false });
       if (currentBand.value !== 'galaxy') {
         jumpToScale(21.0);
@@ -3035,7 +3067,9 @@ export default {
 
     Vue.onBeforeUnmount(() => {
       flushPendingCloudConstants();
+      isUnmounted = true;
       unmounted = true;
+      invalidateGalaxyCreationOpen();
       activeTouchPointers.clear();
       cancelAnimationFrame(mountRafId);
       mountRafId = 0;

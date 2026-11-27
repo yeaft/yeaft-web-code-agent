@@ -3,7 +3,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, rmSync, readFileSync, readdirSync, mkdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { runInNewContext } from 'node:vm';
-import { join, resolve } from 'node:path';
+import { basename, join, resolve } from 'node:path';
 import * as Vue from 'vue';
 import { mount, flushPromises, enableAutoUnmount } from '@vue/test-utils';
 
@@ -49,6 +49,7 @@ import { createCreationService } from '../../agent/yeaft/creations/service.js';
 import { createCreationRelay } from '../../server/handlers/client-creation.js';
 
 enableAutoUnmount(afterEach);
+afterEach(() => vi.restoreAllMocks());
 
 function makeMockCanvasCtx() {
   const grad = { addColorStop: vi.fn() };
@@ -93,6 +94,28 @@ describe('Cosmos Creations — i18n, styles & celestial HUD', () => {
       expect(typeof creationsEn[key]).toBe('string');
       expect(creationsEn[key].trim().length).toBeGreaterThan(0);
     }
+  });
+
+  it('defines every literal Creation UI translation in both locales and keeps responsive styles', () => {
+    const components = [
+      'cosmos/creations/CosmosGalaxyOverlay.js', 'workbench/CreationTab.js',
+      'workbench/CreationCreateModal.js', 'workbench/FileCanvasView.js',
+    ];
+    const missing = [];
+    for (const component of components) {
+      const source = readFileSync(`web/components/${component}`, 'utf8');
+      const keys = new Set([...source.matchAll(/(?:\$t|\btr)\(\s*(['"])([^'"]+)\1\s*[,)]/g)].map(match => match[2]));
+      expect(keys.size, component).toBeGreaterThan(0);
+      for (const key of keys) {
+        for (const [locale, dictionary] of [['en', en], ['zh-CN', zhCN]]) {
+          if (!Object.hasOwn(dictionary, key) || !dictionary[key]?.trim()) missing.push(`${component}: ${locale}: ${key}`);
+        }
+      }
+    }
+    expect(missing).toEqual([]);
+    expect(readFileSync('web/styles/cosmos/creations.css', 'utf8')).toMatch(/\.creation-legacy-banner\s*\{/);
+    expect(readFileSync('web/styles/canvas.css', 'utf8')).toMatch(/@container canvas-pane\b/);
+    expect(readFileSync('web/styles/creation-workbench.css', 'utf8')).toMatch(/@container creation-wb\b/);
   });
 
   it('uses theme tokens in Galaxy, Workbench, and Canvas sources', () => {
@@ -404,8 +427,12 @@ describe('Cosmos Creations — End-to-End Web Store <-> Server Relay <-> Agent S
   it('creates a folder-backed Session/Project linkage and routes it from Cosmos to Classic Workbench', async () => {
     const { sessions } = await registerBrowserStores();
     // The Creation RPC travels through the real relay/service; Session and Project RPCs are separate boundaries.
-    chatStore.createYeaftSession = vi.fn().mockResolvedValue({ session: { id: 'session-new' } });
-    chatStore.mutateProject = vi.fn().mockResolvedValueOnce({ result: { id: 'project-new' } });
+    interceptSocket(chatStore, request => {
+      if (request.type === 'yeaft_create_session') return sessionAck(chatStore, request, 'create', { session: { id: 'session-new' } });
+      if (request.type === 'yeaft_project_mutation') return projectAck(chatStore, request, { result: { id: 'project-new' } });
+    });
+    vi.spyOn(chatStore, 'createYeaftSession');
+    vi.spyOn(chatStore, 'mutateProject');
     const result = await creationsStore.createWorkspaceCreation({
       agentId: 'agent-a', title: 'Atlas', newProjectName: 'New maps', sessionMode: 'new', prompt: 'Plan the atlas',
     });
@@ -441,15 +468,23 @@ describe('Cosmos Creations — End-to-End Web Store <-> Server Relay <-> Agent S
   it('links an existing Session and replaces an unknown Session only when requested', async () => {
     const { sessions } = await registerBrowserStores();
     sessions.applySnapshotUpsert({ id: 'session-shared', name: 'Existing Atlas Session' }, 'agent-a');
-    chatStore.updateYeaftSessionWorkDir = vi.fn().mockResolvedValue(true);
-    chatStore.createYeaftSession = vi.fn().mockResolvedValue({ session: { id: 'session-replacement' } });
+    const send = interceptSocket(chatStore, request => {
+      if (request.type === 'yeaft_update_session') return sessionAck(chatStore, request, 'update', { session: { id: request.sessionId, workDir: request.workDir } });
+      if (request.type === 'yeaft_create_session') return sessionAck(chatStore, request, 'create', { session: { id: 'session-replacement' } });
+    });
+    vi.spyOn(chatStore, 'sessionCrudRequest');
+    vi.spyOn(chatStore, 'createYeaftSession');
     const { creation, rootDir } = await creationsStore.createWorkspaceCreation({
       agentId: 'agent-a', title: 'Existing Atlas', sessionMode: 'existing', existingSessionId: 'session-shared',
     });
     expect(creation.sessionId).toBe('session-shared');
-    expect(chatStore.updateYeaftSessionWorkDir).toHaveBeenCalledExactlyOnceWith({
-      agentId: 'agent-a', sessionId: 'session-shared', workDir: rootDir,
-    });
+    expect(chatStore.sessionCrudRequest).toHaveBeenCalledExactlyOnceWith(
+      'update', { sessionId: 'session-shared', workDir: rootDir }, { agentId: 'agent-a' },
+    );
+    expect(send).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'yeaft_update_session', agentId: 'agent-a', sessionId: 'session-shared', workDir: rootDir,
+    }));
+    expect(sessions.sessionById('session-shared', 'agent-a').workDir).toBe(rootDir);
     expect(chatStore.createYeaftSession).not.toHaveBeenCalled();
 
     const stale = await creationsStore.updateCreation('agent-a', creation.id, { sessionId: 'unknown-session' });
@@ -460,6 +495,201 @@ describe('Cosmos Creations — End-to-End Web Store <-> Server Relay <-> Agent S
       agentId: 'agent-a', displayName: 'Existing Atlas', workDir: rootDir,
     });
     expect(await creationsStore.findByFolder('agent-a', rootDir)).toMatchObject({ id: creation.id, sessionId: 'session-replacement' });
+  });
+
+  it('surfaces a denied Project move without persisting unconfirmed membership', async () => {
+    await registerBrowserStores();
+    const send = interceptSocket(chatStore, request => {
+      if (request.type === 'yeaft_create_session') return sessionAck(chatStore, request, 'create', { session: { id: 'unassigned-session' } });
+      if (request.type === 'yeaft_project_mutation') return projectAck(chatStore, request, {
+        ok: false, error: { code: 'forbidden', message: 'Project move denied' },
+      });
+    });
+    const result = await creationsStore.createWorkspaceCreation({
+      agentId: 'agent-a', title: 'Unassigned Atlas', projectId: 'restricted-project',
+    });
+    expect(send).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'yeaft_project_mutation', op: 'move_session', agentId: 'agent-a',
+      sessionId: 'unassigned-session', projectId: 'restricted-project',
+    }));
+    expect(result).toMatchObject({ sessionId: 'unassigned-session', projectId: null, projectWarning: 'Project move denied' });
+    expect(serviceA.store.getCreation(result.creation.id)).toMatchObject({ sessionId: 'unassigned-session', projectId: null });
+    const writes = send.mock.calls.map(([request]) => request).filter(request =>
+      request.type === 'creation_request' && ['create_creation', 'update_creation'].includes(request.op));
+    expect(writes.map(request => request.op)).toEqual(['create_creation', 'update_creation']);
+    expect(writes.every(request => request.payload.projectId == null)).toBe(true);
+  });
+
+  it('rejects a failed Session create with partialCreation and retries against the same workspace', async () => {
+    await registerBrowserStores();
+    let attempts = 0;
+    const send = interceptSocket(chatStore, request => {
+      if (request.type === 'yeaft_create_session') return sessionAck(chatStore, request, 'create',
+        ++attempts === 1 ? { ok: false, error: { code: 'denied', message: 'Session denied' } }
+          : { session: { id: 'resumed-session' } });
+    });
+    const payload = { agentId: 'agent-a', title: 'Resumable Atlas' };
+    const failure = await creationsStore.createWorkspaceCreation(payload).catch(error => error);
+    expect(failure).toBeInstanceOf(Error);
+    expect(failure).toMatchObject({ message: 'Session denied', partialCreation: { id: expect.any(String), rootDir: expect.any(String) } });
+    const { id, rootDir } = failure.partialCreation;
+    expect(serviceA.store.getCreation(id).sessionId).toBeFalsy();
+    const result = await creationsStore.createWorkspaceCreation({ ...payload, resumeCreationId: id });
+    expect(result).toMatchObject({ rootDir, sessionId: 'resumed-session', creation: { id } });
+    expect(serviceA.store.getCreation(id).sessionId).toBe('resumed-session');
+    expect(send.mock.calls.filter(([request]) => request.op === 'create_creation')).toHaveLength(1);
+    expect(serviceA.store.listCreations().map(creation => creation.id)).toEqual([id]);
+    expect(attempts).toBe(2);
+  });
+
+  it('deduplicates concurrent folder bindings and linked Session creation', async () => {
+    await registerBrowserStores();
+    const folder = join(tempDirA, 'concurrent');
+    mkdirSync(folder);
+    const bind = rootDir => creationsStore.bindFolderAsCreation({ agentId: 'agent-a', rootDir });
+    const [first, second] = await Promise.all([bind(folder), bind(folder)]);
+    expect(second.creation.id).toBe(first.creation.id);
+    expect(chatStore.sendWsMessage.mock.calls.filter(([request]) => request.op === 'find_by_folder')).toHaveLength(1);
+    expect(chatStore.sendWsMessage.mock.calls.filter(([request]) => request.op === 'create_creation')).toHaveLength(1);
+    expect(serviceA.store.listCreations().map(creation => creation.id)).toEqual([first.creation.id]);
+
+    const receipt = deferred();
+    const send = interceptSocket(chatStore, request => {
+      if (request.type !== 'yeaft_create_session') return;
+      void receipt.promise.then(() => sessionAck(chatStore, request, 'create', { session: { id: 'single-session' } }));
+      return true;
+    });
+    const resolveSession = () => creationsStore.resolveCreationSession('agent-a', first.creation);
+    const results = Promise.all([resolveSession(), resolveSession()]);
+    receipt.resolve();
+    expect((await results).map(result => result.sessionId)).toEqual(['single-session', 'single-session']);
+    expect(send.mock.calls.filter(([request]) => request.type === 'yeaft_create_session')).toHaveLength(1);
+    expect(serviceA.store.getCreation(first.creation.id).sessionId).toBe('single-session');
+  });
+
+  it('awaits the real list and folder lookup, ignoring an unrelated ID-less Workbench reply', async () => {
+    await registerBrowserStores();
+    const { default: CreationTab } = await import('../../web/components/workbench/CreationTab.js');
+    // Another browser can bind the folder after this browser has listed Creations.
+    const lookup = deferred();
+    const lookupStarted = deferred();
+    const listingStarted = deferred();
+    const send = mockWorkbenchFiles(chatStore, {}, {}, request => {
+      if (request.type !== 'list_directory') return;
+      listingStarted.resolve(request);
+      return true;
+    });
+    const socket = interceptSocket(chatStore, request => {
+      if (request.op !== 'find_by_folder') return;
+      lookupStarted.resolve(request);
+      void lookup.promise.then(() => send(request));
+      return true;
+    });
+    const wrapper = render(CreationTab, { props: { ...routeProps, workDir: tempDirA } });
+    expect(await lookupStarted.promise).toMatchObject({ agentId: route.agentId, payload: { rootDir: tempDirA } });
+    expect(socket.mock.calls.map(([request]) => request.op)).toEqual(['list_creations', 'find_by_folder']);
+    expect(creationsStore.byAgent[route.agentId]).toMatchObject({ loaded: true, list: [] });
+    expect(wrapper.vm.activeRootDir).toBe('');
+    expect(socket.mock.calls.some(([request]) => request.type === 'list_directory')).toBe(false);
+    const linked = serviceA.store.createCreation({ title: 'Found asynchronously', rootDir: tempDirA });
+    lookup.resolve();
+    const listing = await listingStarted.promise;
+    expect(wrapper.vm.activeCreation.id).toBe(linked.id);
+    const unrelated = { ...listing };
+    delete unrelated.requestId;
+    fireWindowEvent('workbench-message', { ...unrelated, type: 'directory_listing', entries: [{ name: 'Unrelated.md', type: 'file' }] });
+    await flushPromises();
+    expect(wrapper.vm.scanning).toBe(true);
+    expect(wrapper.vm.docFiles).toEqual([]);
+    respondWorkbench(listing, { type: 'directory_listing', entries: [] });
+    await flushPromises();
+    expect(wrapper.vm.scanning).toBe(false);
+    expect(wrapper.vm.docFiles).toEqual([]);
+    expect(wrapper.text()).toContain('Found asynchronously');
+  });
+
+  it('does not activate an older ensureWorkspace result after a newer Creation target', async () => {
+    await registerBrowserStores();
+    const { default: CreationTab } = await import('../../web/components/workbench/CreationTab.js');
+    const slow = serviceA.store.createCreation({ title: 'Slow legacy target' });
+    const fast = serviceA.store.createCreation({ title: 'Newer target', initializeFolder: true });
+    const send = mockWorkbenchFiles(chatStore);
+    const ensure = deferred();
+    const ensureStarted = deferred();
+    interceptSocket(chatStore, request => {
+      if (request.op !== 'ensure_workspace') return;
+      ensureStarted.resolve(request);
+      void ensure.promise.then(() => send(request));
+      return true;
+    });
+    const wrapper = render(CreationTab, { props: { ...routeProps, workDir: '' } });
+    await flushPromises();
+    fireWindowEvent('workbench-creation-target', { routeKey, creationId: slow.id, seq: 1 });
+    expect(await ensureStarted.promise).toMatchObject({ payload: { creationId: slow.id } });
+    fireWindowEvent('workbench-creation-target', { routeKey, creationId: fast.id, seq: 2 });
+    await flushPromises();
+    expect(wrapper.vm.activeCreation.id).toBe(fast.id);
+    ensure.resolve();
+    await vi.waitFor(() => expect(creationsStore.creationsForAgent(route.agentId).find(c => c.id === slow.id).rootDir).toBeTruthy());
+    await flushPromises();
+    expect(wrapper.vm.activeCreation.id).toBe(fast.id);
+    expect(wrapper.vm.activeRootDir).toBe(fast.rootDir);
+    expect(send.mock.calls.filter(([request]) => request.type === 'list_directory').map(([request]) => request.dirPath))
+      .toEqual([fast.rootDir]);
+  });
+
+  it('reads migrated legacy slides, gallery and video from the actual materialized workspace', async () => {
+    await registerBrowserStores();
+    const { default: CreationTab } = await import('../../web/components/workbench/CreationTab.js');
+    installMarkdownParser();
+    try {
+      const db = serviceA.store;
+      const { id } = db.createCreation({ title: 'Legacy reader' });
+      const svg = '<svg xmlns="http://www.w3.org/2000/svg"><title>Legacy illustration</title></svg>';
+      const image = db.saveAsset(id, { ext: 'svg', content: svg });
+      // MP4 was a legacy asset format; seed the original metadata and bytes, not a workspace file.
+      const video = Buffer.from('Legacy video bytes');
+      writeFileSync(join(db.root, id, 'assets', 'legacy-clip.mp4'), video);
+      db.run('INSERT INTO creation_assets VALUES (?,?,?)', id, 'legacy-clip',
+        JSON.stringify({ id: 'legacy-clip', ext: 'mp4', name: 'Legacy Clip.mp4' }));
+      db.createNode(id, { title: 'Slides', type: 'unit', modality: 'slide_deck', content: { slides: [{ title: 'Launch', bullets: ['Legacy talking point'], imageAssetId: image.id }] } });
+      db.createNode(id, { title: 'Gallery', type: 'unit', modality: 'image_gallery', content: { frames: [{ title: 'Cover frame', caption: 'Legacy caption', assetId: image.id }] } });
+      db.createNode(id, { title: 'Episode', type: 'unit', modality: 'video_episode', content: { videoAssetId: 'legacy-clip', scenes: [{ title: 'Intro', durationSec: 5, narration: 'Legacy narration' }] } });
+      expect(db.getCreation(id).rootDir).toBeFalsy();
+      const workspace = await creationsStore.ensureWorkspace(route.agentId, id);
+      expect(workspace).toMatchObject({ materialized: true, creation: { id } });
+      const folder = workspace.rootDir;
+      expect(readFileSync(join(folder, 'images', `${image.id}.svg`), 'utf8')).toBe(svg);
+      expect(readFileSync(join(folder, 'videos', 'Legacy Clip.mp4'))).toEqual(video);
+      mockWorkbenchFiles(chatStore, {}, {}, request => {
+        if (request.type === 'list_directory') return { type: 'directory_listing', entries: readdirSync(request.dirPath, { withFileTypes: true }).map(entry => ({
+          name: entry.name, path: join(request.dirPath, entry.name), type: entry.isDirectory() ? 'directory' : 'file',
+        })) };
+        if (request.type === 'read_file') return { type: 'file_content', content: readFileSync(request.filePath, 'utf8') };
+      });
+      const wrapper = render(CreationTab, { props: { ...routeProps, workDir: folder } });
+      await flushPromises();
+      expect(wrapper.vm.activeCreation.id).toBe(id);
+      const tabs = wrapper.findAll('.creation-wb-tab');
+      expect(tabs.map(tab => tab.get('.creation-wb-tab-count').text())).toEqual(['4', '1', '1']);
+      for (const [name, heading, body] of [
+        ['Slides', 'Slide 1: Launch', 'Legacy talking point'],
+        ['Gallery', 'Cover frame', 'Legacy caption'],
+        ['Episode', 'Scene 1: Intro', 'Legacy narration'],
+      ]) {
+        await wrapper.get(`.creation-wb-tree-row[title="docs/${name}.md"]`).trigger('click');
+        await flushPromises();
+        expect(wrapper.get('.file-canvas-view').findAll('h2').map(el => el.text())).toContain(heading);
+        expect(wrapper.get('.file-canvas-view').text()).toContain(body);
+      }
+      await tabs[1].trigger('click');
+      await flushPromises();
+      expect(wrapper.get('.creation-wb-image-card').text()).toContain(`${image.id}.svg`);
+      await tabs[2].trigger('click');
+      expect(wrapper.get('.creation-wb-video-card').text()).toContain('Legacy Clip.mp4');
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 
   it('B04: CAS revision conflict in updateNode preserves server content', async () => {
@@ -644,6 +874,101 @@ describe('Cosmos Creations — End-to-End Web Store <-> Server Relay <-> Agent S
     expect(creationsStore.nodeContentsByKey[nKey].dirty).toBe(true);
   });
 
+  it.each([['acceptance', true], ['rejection', false]])('keeps the new Agent Ignite error and selectors after stale %s', async (_outcome, ok) => {
+    const { sessions } = await registerBrowserStores();
+    const { default: CosmosGalaxyOverlay } = await import('../../web/components/cosmos/creations/CosmosGalaxyOverlay.js');
+    const agents = [
+      { id: 'agent-a', name: 'Alpha', online: true, capabilities: ['creations'] },
+      { id: 'agent-b', name: 'Beta', online: true, capabilities: ['creations'] },
+    ];
+    chatStore.agents = agents;
+    const sessionStarted = deferred();
+    const receipt = deferred();
+    interceptSocket(chatStore, request => {
+      if (request.type !== 'yeaft_create_session') return;
+      sessionStarted.resolve(request);
+      void receipt.promise.then(() => sessionAck(chatStore, request, 'create', ok
+        ? { session: { id: 'old-agent-session' } }
+        : { ok: false, error: { code: 'denied', message: 'Alpha Session denied' } }));
+      return true;
+    });
+    sessions.applySnapshotUpsert({ id: 'beta-session', name: 'Beta Session' }, 'agent-b');
+    await creationsStore.selectGalaxyAgent('agent-a');
+    const wrapper = render(CosmosGalaxyOverlay, { props: { visible: true, agents } });
+    Object.assign(creationsStore.igniteDraft, { title: 'Alpha draft', open: true });
+    const submit = wrapper.vm.submitIgnite();
+    expect(await sessionStarted.promise).toMatchObject({ agentId: 'agent-a' });
+    expect(creationsStore.igniteDraft.submitting).toBe(true);
+    await creationsStore.selectGalaxyAgent('agent-b');
+    await Vue.nextTick();
+    expect(creationsStore.igniteDraft.submitting).toBe(false);
+    creationsStore.igniteDraft.error = 'Beta validation error';
+    const [, project, sessionMode] = wrapper.findAll('.creation-ignite-selectors label select');
+    await project.setValue('__new__');
+    await wrapper.get('.creation-ignite-inline-input').setValue('Beta project name');
+    await sessionMode.setValue('existing');
+    await wrapper.get('.is-session-picker').setValue('beta-session');
+    receipt.resolve();
+    await submit;
+    await flushPromises();
+    expect(wrapper.get('.creation-ignite-error').text()).toBe('Beta validation error');
+    expect(project.element.value).toBe('__new__');
+    expect(wrapper.get('.creation-ignite-inline-input').element.value).toBe('Beta project name');
+    expect(sessionMode.element.value).toBe('existing');
+    expect(wrapper.get('.is-session-picker').element.value).toBe('beta-session');
+    expect(wrapper.emitted('open-creation')).toBeUndefined();
+  });
+
+  it.each(['leave Galaxy and return', 'close the drawer'])('fences a pending Galaxy Creation open when users %s', async action => {
+    await registerBrowserStores();
+    const { default: CosmosPage } = await import('../../web/components/cosmos/CosmosPage.js');
+    chatStore.agents = [{ id: 'agent-a', name: 'Alpha', online: true, capabilities: ['creations'] }];
+    const ready = serviceA.store.createCreation({ title: 'Open now', initializeFolder: true });
+    const slow = serviceA.store.createCreation({ title: 'Open slowly', initializeFolder: true });
+    await creationsStore.selectGalaxyAgent('agent-a');
+    const requested = deferred();
+    const receipt = deferred();
+    interceptSocket(chatStore, request => {
+      if (request.type !== 'yeaft_create_session') return;
+      requested.resolve(request);
+      void receipt.promise.then(() => sessionAck(chatStore, request, 'create', { session: { id: 'late-session' } }));
+      return true;
+    });
+    // Keep real page navigation and watchers, without mounting the WebGL renderer in happy-dom.
+    vi.spyOn(globalThis, 'requestAnimationFrame').mockReturnValue(1);
+    const wrapper = render(CosmosPage, { stubs: {
+      CosmosQuickComposer: true, CosmosConversationDrawer: true, CosmosGalaxyOverlay: true,
+      SettingsPanel: true, AgentSettingsPanel: true, SessionSettingsModal: true,
+    } });
+    wrapper.vm.currentBand = 'galaxy'; // Input normally delivered by the particle engine's onBandChange.
+    await Vue.nextTick();
+    expect(wrapper.vm.projectedAgentList.map(agent => agent.id)).toContain('agent-a');
+    if (action === 'close the drawer') {
+      await wrapper.vm.openGalaxyCreation({ agentId: 'agent-a', creationId: ready.id, sessionId: 'ready-session', rootDir: ready.rootDir });
+      expect(wrapper.vm.drawerOpen).toBe(true);
+    }
+    const open = wrapper.vm.openGalaxyCreation({ agentId: 'agent-a', creationId: slow.id });
+    expect(await requested.promise).toMatchObject({ agentId: 'agent-a', payload: { workDir: slow.rootDir } });
+    if (action === 'close the drawer') {
+      wrapper.vm.closeDrawer();
+    } else {
+      wrapper.vm.currentBand = 'solar';
+      await Vue.nextTick();
+      wrapper.vm.currentBand = 'galaxy';
+    }
+    await Vue.nextTick();
+    expect(wrapper.vm.drawerOpen).toBe(false);
+    expect(creationsStore.pendingWorkbenchTarget).toBeNull();
+    receipt.resolve();
+    await open;
+    await flushPromises();
+    expect(serviceA.store.getCreation(slow.id).sessionId).toBe('late-session');
+    expect(wrapper.vm.drawerOpen).toBe(false);
+    expect(wrapper.vm.drawerOpenedFromGalaxy).toBe(false);
+    expect(creationsStore.pendingWorkbenchTarget).toBeNull();
+    expect(chatStore.workbenchMaximized).toBe(false);
+  });
+
   it('Ignite preserves newly queued files and draft when switching Agent mid-submit', async () => {
     const { default: CosmosGalaxyOverlay } = await import('../../web/components/cosmos/creations/CosmosGalaxyOverlay.js');
     const $t = (k) => creationsZh[k] || k;
@@ -704,6 +1029,34 @@ const routeKey = 'yeaft:agent-a:session-a';
 const routeProps = { ...route, routeKey, workDir: rootDir, conversationId: `_workbench:${routeKey}`, workspaceGeneration: 'atlas-generation' };
 const hostileHtml = '<script>alert(1)</script><img src="./cover.png" onerror="alert(2)"><a href="javascript:alert(3)">Unsafe link</a>';
 
+function interceptSocket(chat, handle) {
+  const send = chat.sendWsMessage.bind(chat);
+  return (chat.sendWsMessage = vi.fn(request => handle(request) ?? send(request)));
+}
+
+function sessionAck(chat, request, op, fields) {
+  queueMicrotask(() => chat.handleYeaftOutput({
+    type: 'yeaft_output', agentId: request.agentId,
+    event: { type: 'session_crud_result', requestId: request.requestId, op, ok: true, ...fields },
+  }));
+  return true;
+}
+
+function projectAck(chat, request, fields) {
+  queueMicrotask(() => chat.handleYeaftOutput({
+    type: 'yeaft_output', agentId: request.agentId,
+    event: { type: 'project_mutation_result', projectsAuthoritative: true,
+      requestId: request.requestId, op: request.op, ok: true, ...fields },
+  }));
+  return true;
+}
+
+function deferred() {
+  let resolve;
+  const promise = new Promise(res => { resolve = res; });
+  return { promise, resolve };
+}
+
 function fireWindowEvent(type, detail) {
   window.dispatchEvent(new CustomEvent(type, { detail }));
 }
@@ -730,7 +1083,7 @@ async function registerBrowserStores() {
     import('../../web/stores/auth.js'), import('../../web/stores/vp.js'),
   ]);
   Object.assign(Pinia, { useChatStore, useSessionsStore, useAuthStore, useVpStore });
-  return { chat: useChatStore(), sessions: useSessionsStore() };
+  return { chat: useChatStore(), sessions: useSessionsStore(), auth: useAuthStore() };
 }
 
 function expectWorkspace(path, title) {
@@ -902,6 +1255,79 @@ describe('File Canvas and route-scoped composer references', () => {
     expect(wrapper.find('.canvas-video-marker').exists()).toBe(false);
   });
 
+  it.each([
+    ['disabled (Quick Composer)', { enableCanvasRefs: false }, []],
+    ['explicit empty (unbound Split Pane)', { canvasRouteKey: '' }, []],
+    ['explicit route (Split Pane)', { canvasRouteKey: otherRoute }, ['local.png']],
+  ])('does not inherit active Session refs with Canvas refs %s', async (_mode, props, names) => {
+    const ChatInput = await configureComposerRoute();
+    context.addCanvasContextRef(routeKey, { kind: 'image', filePath: '/atlas/global.png' });
+    context.addCanvasContextRef(otherRoute, { kind: 'image', filePath: '/other/local.png' });
+    const sendFn = vi.fn(() => true);
+    const wrapper = render(ChatInput, { props: { ...props, sendFn } });
+    expect(wrapper.findAll('.canvas-chip-name').map(chip => chip.text())).toEqual(names);
+    await wrapper.get('textarea').setValue('Send');
+    await wrapper.get('button.send-btn').trigger('click');
+    expect(sendFn).toHaveBeenCalledTimes(1);
+    expect(sendFn.mock.calls[0][0]).not.toContain('global.png');
+    if (names.length) expect(sendFn.mock.calls[0][0]).toContain('local.png');
+    else expect(sendFn.mock.calls[0][0]).toBe('Send');
+    expect(context.getCanvasContextRefs(routeKey)).toHaveLength(1);
+  });
+
+  it('clears only the send snapshot on the original route, even after navigation', async () => {
+    const ChatInput = await configureComposerRoute();
+    const original = context.addCanvasContextRef(routeKey, { kind: 'doc', filePath: '/atlas/first.md', snippet: '@vp is quoted' });
+    const other = context.addCanvasContextRef(otherRoute, { kind: 'image', filePath: '/other/local.png' });
+    const acknowledgment = deferred();
+    const sendFn = vi.fn(() => acknowledgment.promise);
+    const wrapper = render(ChatInput, { props: { canvasRouteKey: routeKey, sendFn } });
+    await wrapper.get('button.send-btn').trigger('click');
+    const prefix = context.formatCanvasContextPrefix([original]);
+    expect(prefix).toContain('> @\u200Bvp is quoted');
+    expect(prefix).not.toContain('@vp');
+    expect(sendFn).toHaveBeenCalledExactlyOnceWith(prefix, undefined);
+    const late = context.addCanvasContextRef(routeKey, { kind: 'doc', filePath: '/atlas/later.md' });
+    await wrapper.setProps({ canvasRouteKey: otherRoute });
+    expect(wrapper.get('.canvas-chip-name').text()).toBe('local.png');
+    expect(context.getCanvasContextRefs(routeKey)).toEqual([original, late]);
+    acknowledgment.resolve(true);
+    await flushPromises();
+    expect(context.getCanvasContextRefs(routeKey)).toEqual([late]);
+    expect(context.getCanvasContextRefs(otherRoute)).toEqual([other]);
+  });
+
+  it('clears all route refs through the Canvas API, Creations clearAll, and auth reset', async () => {
+    const { auth } = await registerBrowserStores();
+    const { useCreationsStore } = await import('../../web/stores/creations.js');
+    const creations = useCreationsStore();
+    const seed = () => {
+      for (const key of [routeKey, otherRoute]) {
+        context.addCanvasContextRef(key, { kind: 'image', filePath: '/atlas/cover.png' });
+        expect(context.getCanvasContextRefs(key)).toHaveLength(1);
+      }
+    };
+    const expectEmpty = () => {
+      for (const key of [routeKey, otherRoute]) expect(context.getCanvasContextRefs(key)).toEqual([]);
+    };
+    seed();
+    context.clearAllCanvasContextRefs();
+    expectEmpty();
+    seed();
+    creations.clearAll();
+    expectEmpty();
+    seed();
+    // The reset must clear refs directly even if Creations has not registered.
+    const registered = Pinia.useCreationsStore;
+    delete Pinia.useCreationsStore;
+    try {
+      auth.reset();
+      expectEmpty();
+    } finally {
+      if (registered) Pinia.useCreationsStore = registered;
+    }
+  });
+
   it('sends Canvas refs through the real composer, preserving them on rejection and clearing them on acceptance', async () => {
     const { chat } = await registerBrowserStores();
     chat.currentView = 'yeaft';
@@ -938,11 +1364,27 @@ describe('File Canvas and route-scoped composer references', () => {
   });
 });
 
+async function configureComposerRoute() {
+  const { chat } = await registerBrowserStores();
+  Object.assign(chat, { currentView: 'yeaft', connectionState: 'connected', authenticated: true,
+    currentAgent: route.agentId, yeaftActiveSessionFilter: route.sessionId });
+  expect(chat.activeSessionRoute).toEqual(route);
+  return (await import('../../web/components/ChatInput.js')).default;
+}
+
 // Simulate only the Workbench transport. Keep the real route metadata and request IDs
 // so file navigation, response correlation, and component lifecycle all run normally.
-function mockWorkbenchFiles(chat, listings = {}, contents = {}) {
-  chat.sendWsMessage = vi.fn(request => {
-    let response;
+function respondWorkbench(request, response) {
+  queueMicrotask(() => fireWindowEvent('workbench-message', { ...request, ...response }));
+  return true;
+}
+
+function mockWorkbenchFiles(chat, listings = {}, contents = {}, reply = () => undefined) {
+  return interceptSocket(chat, request => {
+    if (['restore_file_tabs', 'update_file_tabs'].includes(request.type)) return true;
+    let response = reply(request);
+    if (response === true) return true; // Response is held by the fixture.
+    if (response) return respondWorkbench(request, response);
     if (request.type === 'list_directory') {
       response = { type: 'directory_listing', entries: (listings[request.dirPath] || []).map(entry => ({ ...entry })) };
     } else if (request.type === 'read_file') {
@@ -951,12 +1393,10 @@ function mockWorkbenchFiles(chat, listings = {}, contents = {}) {
         : { type: 'file_content', error: 'Fixture has no preview' };
     } else if (request.type === 'write_file') {
       contents[request.filePath] = request.content;
-      response = { type: 'file_op_result', success: true };
+      response = { type: 'file_saved', success: true };
     }
-    if (response) queueMicrotask(() => fireWindowEvent('workbench-message', { ...request, ...response }));
-    return true;
+    if (response) return respondWorkbench(request, response);
   });
-  return chat.sendWsMessage;
 }
 
 describe('Folder Creation and Files in Workbench', () => {
@@ -993,7 +1433,7 @@ describe('Folder Creation and Files in Workbench', () => {
     const { default: FilesTab } = await import('../../web/components/FilesTab.js');
     mockWorkbenchFiles(chat, {
       [rootDir]: [{ name: 'docs', type: 'directory' }, { name: 'atlas.md', type: 'file' }, { name: 'build.js', type: 'file' }],
-    }, { [`${rootDir}/atlas.md`]: '# Atlas', [`${rootDir}/build.js`]: 'const edition = 1;' });
+    }, { [`${rootDir}/atlas.md`]: `# Atlas\n\n${hostileHtml}`, [`${rootDir}/build.js`]: 'const edition = 1;' });
     const wrapper = render(FilesTab, { props: routeProps });
     await flushPromises();
     await wrapper.get('[data-tree-path$="/atlas.md"]').trigger('click');
@@ -1003,7 +1443,11 @@ describe('Folder Creation and Files in Workbench', () => {
     const edit = () => button(wrapper, t('files.edit'), '.file-content-actions button');
     expect(canvas().text()).toBe(`✦ ${t('files.canvas')}`);
     await preview().trigger('click');
-    expect(wrapper.get('.md-file-preview').text()).toBe('Atlas');
+    const markdown = wrapper.get('.md-file-preview');
+    expect(markdown.get('h1').text()).toBe('Atlas');
+    expect(markdown.get('img').attributes('src')).toBe('./cover.png');
+    expect(markdown.get('a').text()).toBe('Unsafe link');
+    expect(markdown.html()).not.toMatch(/<script|onerror|javascript:/i);
     await canvas().trigger('click');
     expect(canvas().attributes('aria-pressed')).toBe('true');
     expect(wrapper.getComponent(FileCanvasView).get('h1').text()).toBe('Atlas');
@@ -1015,7 +1459,7 @@ describe('Folder Creation and Files in Workbench', () => {
     await edit().trigger('click');
     expect(wrapper.findComponent(FileCanvasView).exists()).toBe(false);
     expect(edit().attributes('aria-pressed')).toBe('true');
-    expect(wrapper.get('textarea').element.value).toBe('# Atlas');
+    expect(wrapper.get('textarea').element.value).toBe(`# Atlas\n\n${hostileHtml}`);
 
     await wrapper.get('[data-tree-path$="/build.js"]').trigger('click');
     await flushPromises();
@@ -1071,19 +1515,247 @@ describe('Folder Creation and Files in Workbench', () => {
     expect(creations.pendingWorkbenchTarget).toBeNull();
   });
 
+  it('refuses a Creation open request when the Agent does not offer that capability', async () => {
+    const { default: WorkbenchPanel } = await import('../../web/components/WorkbenchPanel.js');
+    chat.agents[0].capabilities = ['file_editor', 'workbench_session_routes'];
+    const wrapper = render(WorkbenchPanel, { props: { ownerRoute: route, ownerWorkDir: rootDir } });
+    const detail = { routeKey, rootDir, maximize: true };
+    expect(chat.workbenchMaximized).toBe(false);
+    fireWindowEvent('workbench-open-creation', detail);
+    await Vue.nextTick();
+    expect(detail.accepted).toBeUndefined();
+    expect(chat.workbenchMaximized).toBe(false);
+    expect(wrapper.findComponent(CreationTab).exists()).toBe(false);
+  });
+
+  it('renders SVG in the gallery and Canvas without an SVG ObjectURL, and rejects unsafe image/video URLs', async () => {
+    const { default: SvgPreview } = await import('../../web/components/files/SvgPreview.js');
+    const objectUrl = vi.spyOn(URL, 'createObjectURL');
+    const svg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"><circle cx="5" cy="5" r="4"/></svg>';
+    const jsUrl = 'javascript:alert(1)';
+    const external = 'https://evil.test/api/preview/external';
+    creations.byAgent[route.agentId].list = [{ id: 'media', rootDir, sessionId: route.sessionId }];
+    mockWorkbenchFiles(chat, {
+      [rootDir]: ['diagram.svg', 'unsafe.png', 'unsafe.mp4'].map(name => ({ name, type: 'file' })),
+    }, { [`${rootDir}/diagram.svg`]: svg }, request => {
+      if (request.type === 'read_file' && request.filePath.endsWith('/unsafe.png')) {
+        return { type: 'file_content', binary: true, mimeType: 'image/png', previewUrl: jsUrl };
+      }
+      if (request.type === 'video_metadata') return { type: 'video_metadata', videoStream: true, previewUrl: external };
+    });
+    const wrapper = render(CreationTab, { props: routeProps });
+    await flushPromises();
+    const tabs = wrapper.findAll('.creation-wb-tab');
+    await tabs[1].trigger('click');
+    await flushPromises();
+    const cards = wrapper.findAll('.creation-wb-image-card');
+    expect(cards[0].getComponent(SvgPreview).props('content')).toBe(svg);
+    expect(cards[1].find('img').exists()).toBe(false);
+    await cards[0].trigger('click');
+    expect(wrapper.getComponent(FileCanvasView).getComponent(SvgPreview).props('content')).toBe(svg);
+    await cards[1].trigger('click');
+    await flushPromises();
+    const canvas = wrapper.getComponent(FileCanvasView);
+    expect(canvas.get('[role="alert"]').text()).toBe(t('creation.workbench.previewUnavailable'));
+    expect(canvas.find('img').exists()).toBe(false);
+    await tabs[2].trigger('click');
+    await wrapper.get('.creation-wb-video-card').trigger('click');
+    await flushPromises();
+    const videoCanvas = wrapper.getComponent('.canvas-kind-video');
+    expect(videoCanvas.get('[role="alert"]').text()).toBe(t('files.videoStreamUnavailable'));
+    expect(wrapper.find('video').exists()).toBe(false);
+    expect(wrapper.html()).not.toContain(external);
+    expect(wrapper.html()).not.toContain(jsUrl);
+    expect(objectUrl.mock.calls.map(([blob]) => blob.type)).not.toContain('image/svg+xml');
+  });
+
+  it('keeps independent dirty drafts when switching documents and a partial refresh cannot list one', async () => {
+    const first = `${rootDir}/docs/First.md`;
+    const second = `${rootDir}/README.md`;
+    let failSubdir = false;
+    creations.byAgent[route.agentId].list = [{ id: 'drafts', rootDir, sessionId: route.sessionId }];
+    const send = mockWorkbenchFiles(chat, {
+      [rootDir]: [{ name: 'docs', type: 'directory' }, { name: 'README.md', type: 'file' }],
+      [`${rootDir}/docs`]: [{ name: 'First.md', type: 'file' }],
+    }, { [first]: '# First on disk', [second]: '# Readme on disk' }, request => {
+      if (failSubdir && request.type === 'list_directory' && request.dirPath === `${rootDir}/docs`) {
+        return { type: 'directory_listing', error: 'Permission denied' };
+      }
+    });
+    const wrapper = render(CreationTab, { props: routeProps });
+    await flushPromises();
+    const edit = async text => {
+      const canvas = wrapper.getComponent(FileCanvasView);
+      if (!canvas.find('textarea').exists()) await button(canvas, t('creation.canvas.edit')).trigger('click');
+      await canvas.get('textarea').setValue(text);
+    };
+    const select = async path => {
+      await wrapper.get(`.creation-wb-tree-row[title="${path}"]`).trigger('click');
+      await flushPromises();
+    };
+    await edit('# Readme draft');
+    await select('docs/First.md');
+    await edit('# First draft');
+    await select('README.md');
+    expect(wrapper.vm.activeDocFile).toMatchObject({ path: second, content: '# Readme draft', isDirty: true });
+    await select('docs/First.md');
+    expect(wrapper.vm.activeDocFile).toMatchObject({ path: first, content: '# First draft', isDirty: true });
+    expect([...wrapper.vm.docDrafts.keys()].sort()).toEqual([`${rootDir}::${second}`, `${rootDir}::${first}`].sort());
+    failSubdir = true;
+    await wrapper.get(`[aria-label="${t('creation.workbench.refresh')}"]`).trigger('click');
+    await flushPromises();
+    expect(wrapper.find('.creation-wb-tree-row[title="docs/First.md"]').exists()).toBe(false);
+    expect(wrapper.vm.activeDocFile).toMatchObject({ path: first, content: '# First draft', isDirty: true });
+    expect(wrapper.vm.docDrafts.get(`${rootDir}::${second}`).content).toBe('# Readme draft');
+    expect(send.mock.calls.filter(([request]) => request.type === 'read_file').map(([request]) => request.filePath)).toEqual([second, first]);
+  });
+
+  it('keeps failed saves dirty and compares a delayed save acknowledgment against its submitted text', async () => {
+    const path = `${rootDir}/README.md`;
+    const writes = [];
+    creations.byAgent[route.agentId].list = [{ id: 'save', rootDir, sessionId: route.sessionId }];
+    mockWorkbenchFiles(chat, { [rootDir]: [{ name: 'README.md', type: 'file' }] }, { [path]: '# On disk' }, request => {
+      if (request.type !== 'write_file') return;
+      writes.push(request);
+      return true;
+    });
+    const wrapper = render(CreationTab, { props: routeProps });
+    await flushPromises();
+    const canvas = wrapper.getComponent(FileCanvasView);
+    await button(canvas, t('creation.canvas.edit')).trigger('click');
+    await canvas.get('textarea').setValue('# Submitted');
+    const save = () => canvas.get('.canvas-save-btn').trigger('click');
+    await save();
+    expect(writes[0]).toMatchObject({ filePath: path, content: '# Submitted' });
+    respondWorkbench(writes[0], { type: 'file_saved', success: false, error: 'Disk full' });
+    await flushPromises();
+    expect(wrapper.text()).toContain('Disk full');
+    expect(wrapper.vm.activeDocFile).toMatchObject({ isDirty: true, savedContent: '# On disk', saving: false });
+    await save();
+    expect(writes[1]).toMatchObject({ filePath: path, content: '# Submitted' });
+    expect(wrapper.vm.activeDocFile.saving).toBe(true);
+    await canvas.get('textarea').setValue('# Typed while saving');
+    respondWorkbench(writes[1], { type: 'file_saved', success: true });
+    await flushPromises();
+    expect(wrapper.vm.activeDocFile).toMatchObject({
+      content: '# Typed while saving', savedContent: '# Submitted', isDirty: true, saving: false,
+    });
+    expect(canvas.get('.canvas-save-btn').element.disabled).toBe(false);
+  });
+
+  it.each([
+    ['cover.png', 'img.canvas-image-el', 'load', 'media-load'],
+    ['cover.png', 'img.canvas-image-el', 'error', 'media-error'],
+    ['clip.mp4', 'video.canvas-video-el', 'loadedmetadata', 'media-load'],
+    ['clip.mp4', 'video.canvas-video-el', 'error', 'media-error'],
+  ])('mounts %s (%s) while loading and propagates %s to Files', async (name, selector, event, emitted) => {
+    const { default: FilesTab } = await import('../../web/components/FilesTab.js');
+    const isVideo = name.endsWith('.mp4');
+    const path = `${rootDir}/${name}`;
+    const previewUrl = `/api/preview/${name}?token=fixture`;
+    mockWorkbenchFiles(chat, { [rootDir]: [{ name, type: 'file' }] }, {}, request => {
+      if (request.type === 'read_file' && request.filePath === path) {
+        return { type: 'file_content', binary: true, mimeType: 'image/png', previewUrl };
+      }
+      if (request.type === 'video_metadata' && request.filePath === path) {
+        return { type: 'video_metadata', videoStream: true, mimeType: 'video/mp4', previewUrl };
+      }
+    });
+    const wrapper = render(FilesTab, { props: routeProps });
+    await flushPromises();
+    await wrapper.get(`[data-tree-path="${path}"]`).trigger('click');
+    await flushPromises();
+    await wrapper.get('.file-action-canvas').trigger('click');
+    const canvas = wrapper.getComponent(FileCanvasView);
+    const file = canvas.props('file');
+    expect(file).toMatchObject({ path, previewLoading: true });
+    expect(canvas.find('.canvas-media-loading-overlay').exists()).toBe(true);
+    const media = canvas.get(selector);
+    const url = new URL(previewUrl, location.href).href;
+    expect(media.attributes('src')).toBe(url);
+    await media.trigger(event);
+    expect(canvas.emitted(emitted)).toEqual([[{ path, url }]]);
+    expect(file.previewLoading).toBe(false);
+    expect(file.previewError).toBe(event === 'error'
+      ? t(isVideo ? 'files.videoPreviewLoadFailed' : 'files.previewLoadFailed') : null);
+    expect(canvas.find('.canvas-media-loading-overlay').exists()).toBe(false);
+  });
+
+  it('invalidates cached CodeMirror state when Canvas edits a Files text buffer', async () => {
+    const [{ default: FilesTab }, { updateFileText }] = await Promise.all([
+      import('../../web/components/FilesTab.js'), import('../../web/components/files/fileEditor.js'),
+    ]);
+    const path = `${rootDir}/README.md`;
+    mockWorkbenchFiles(chat, { [rootDir]: [{ name: 'README.md', type: 'file' }] }, { [path]: '# Original' });
+    const wrapper = render(FilesTab, { props: routeProps });
+    await flushPromises();
+    await wrapper.get(`[data-tree-path="${path}"]`).trigger('click');
+    await flushPromises();
+    await wrapper.get('.file-action-canvas').trigger('click');
+    const canvas = wrapper.getComponent(FileCanvasView);
+    const file = canvas.props('file');
+    file.cmState = { cached: 'old CodeMirror document' };
+    await button(canvas, t('creation.canvas.edit')).trigger('click');
+    await canvas.get('textarea').setValue('# Updated in Canvas');
+    expect(file).toMatchObject({ content: '# Updated in Canvas', isDirty: true, cmState: null });
+    // Test the shared helper too: FilesTab's defensive invalidation must not hide a regression here.
+    const buffer = { content: '# Original', originalContent: '# Original', cmState: { cached: true } };
+    updateFileText(buffer, '# Edited');
+    expect(buffer).toMatchObject({ content: '# Edited', isDirty: true, cmState: null });
+  });
+
+  it.each([
+    [1, 'image', 'png', '.creation-wb-image-card'],
+    [2, 'video', 'mp4', '.creation-wb-video-card'],
+  ])('keeps the selection in tab %s (%s) by path after a rescan prepends a file', async (tab, kind, ext, card) => {
+    const initial = `Z-selected.${ext}`;
+    const added = `A-prepended.${ext}`;
+    const files = [{ name: initial, type: 'file' }];
+    creations.byAgent[route.agentId].list = [{ id: 'rescan', rootDir, sessionId: route.sessionId }];
+    mockWorkbenchFiles(chat, { [rootDir]: files }, {}, request => {
+      const previewUrl = `/api/preview/${basename(request.filePath || 'unused')}?token=fixture`;
+      if (request.type === 'read_file') return { type: 'file_content', binary: true, mimeType: 'image/png', previewUrl };
+      if (request.type === 'video_metadata') return { type: 'video_metadata', videoStream: true, previewUrl };
+    });
+    const wrapper = render(CreationTab, { props: routeProps });
+    await flushPromises();
+    await wrapper.findAll('.creation-wb-tab')[tab].trigger('click');
+    await flushPromises();
+    await wrapper.get(card).trigger('click');
+    await flushPromises();
+    const selection = () => wrapper.getComponent(FileCanvasView).props('file');
+    expect(selection()).toMatchObject({ path: `${rootDir}/${initial}`, fileType: kind });
+    files.unshift({ name: added, type: 'file' });
+    await wrapper.get(`[aria-label="${t('creation.workbench.refresh')}"]`).trigger('click');
+    await flushPromises();
+    const filesAfterScan = kind === 'image' ? wrapper.vm.imageFiles : wrapper.vm.videoFiles;
+    expect(filesAfterScan.map(item => item.path)).toEqual([`${rootDir}/${added}`, `${rootDir}/${initial}`]);
+    expect(wrapper.get('.creation-wb-media-counter').text()).toBe('2 / 2');
+    expect(selection()).toMatchObject({ path: `${rootDir}/${initial}`, fileType: kind });
+  });
+
   it('onboards an unbound folder, scans its nested files into modality tabs, saves a document and opens Files', async () => {
     const existing = { id: 'other', title: 'Other Creation', rootDir: '/workspace/other' };
     const creation = { id: 'atlas', title: 'Atlas Creation', rootDir, sessionId: route.sessionId };
     creations.byAgent[route.agentId].list = [existing];
-    // This test starts unbound; the store integration above tests the actual folder binding RPC.
-    creations.findByFolder = vi.fn().mockReturnValue(null);
-    creations.bindFolderAsCreation = vi.fn().mockResolvedValue({ creation });
+    vi.spyOn(creations, 'bindFolderAsCreation');
     const chapter = `${rootDir}/chapters/part-1/opening.md`;
     const send = mockWorkbenchFiles(chat, {
       [rootDir]: [{ name: 'README.md', type: 'file' }, { name: 'chapters', type: 'directory' }, { name: 'cover.png', type: 'file' }, { name: 'intro.mp4', type: 'file' }, { name: 'build.js', type: 'file' }],
       [`${rootDir}/chapters`]: [{ name: 'part-1', type: 'directory' }],
       [`${rootDir}/chapters/part-1`]: [{ name: 'opening.md', type: 'file' }],
     }, { [`${rootDir}/README.md`]: '# Atlas overview', [chapter]: '# Opening chapter' });
+    interceptSocket(chat, request => {
+      if (request.type !== 'creation_request') return;
+      let data;
+      if (request.op === 'find_by_folder') data = { creation: null };
+      else if (request.op === 'create_creation') data = { creation, nodes: [], sources: [] };
+      else return;
+      queueMicrotask(() => creations.handleCreationResponse({
+        type: 'creation_response', agentId: request.agentId, requestId: request.requestId, op: request.op, ok: true, data,
+      }));
+      return true;
+    });
     const wrapper = render(CreationTab, { props: routeProps });
     await flushPromises();
     const onboarding = wrapper.get('.creation-wb-onboarding');
@@ -1095,6 +1767,7 @@ describe('Folder Creation and Files in Workbench', () => {
     await onboarding.findAll('.creation-wb-action-card')[1].trigger('click');
     await flushPromises();
     expect(creations.bindFolderAsCreation).toHaveBeenCalledWith({ agentId: route.agentId, sessionId: route.sessionId, rootDir });
+    expect(creations.creationsForAgent(route.agentId)).toContainEqual(creation);
     expect(wrapper.find('.creation-wb-onboarding').exists()).toBe(false);
     expect(send.mock.calls.map(([msg]) => msg).filter(msg => msg.type === 'list_directory').map(msg => msg.dirPath))
       .toEqual([rootDir, `${rootDir}/chapters`, `${rootDir}/chapters/part-1`]);
@@ -1275,6 +1948,27 @@ describe('Creation launchers in Classic and Cosmos', () => {
     expect(back.get('svg').attributes('aria-hidden')).toBe('true');
     await back.trigger('click');
     expect(wrapper.emitted('return-galaxy')).toEqual([[]]);
+  });
+
+  it('highlights a sidebar Creation only when both Agent and Session match', async () => {
+    const { default: YeaftSidebar } = await import('../../web/components/YeaftSidebar.js');
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ json: async () => ({ version: '1.0.0' }) }));
+    creations.byAgent[alpha.id].list.push({ ...atlas, id: 'other-session', title: 'Different Session', sessionId: 'other' });
+    creations.byAgent[beta.id].list = [{ ...film, sessionId: linkedSession.id }];
+    chat.currentView = 'yeaft';
+    chat.yeaftActiveSessionFilter = linkedSession.id;
+    chat.yeaftAgentId = alpha.id;
+    const wrapper = render(YeaftSidebar, { stubs: { Teleport: true } });
+    await flushPromises();
+    await wrapper.get('.sidebar-creations-toggle').trigger('click');
+    const rows = () => Object.fromEntries(wrapper.findAll('.sidebar-creations-item').map(row => [
+      row.get('.sidebar-creations-title').text(), row.classes().includes('active'),
+    ]));
+    expect(rows()).toEqual({ 'Field Atlas': true, 'Night Film': false, 'Different Session': false });
+    chat.yeaftAgentId = beta.id;
+    chat.currentAgent = beta.id;
+    await Vue.nextTick();
+    expect(rows()).toEqual({ 'Field Atlas': false, 'Night Film': true, 'Different Session': false });
   });
 
   it('lists distinct per-Agent Creations in the Classic sidebar and opens the real create modal', async () => {

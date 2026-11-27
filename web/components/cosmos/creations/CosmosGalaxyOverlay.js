@@ -565,13 +565,13 @@ export default {
 
             <!-- Project Selector -->
             <label class="creation-ignite-selector-field">
-              <span class="creation-ignite-selector-label">{{ tOr('creation.ignite.project', 'Project') }}</span>
+              <span class="creation-ignite-selector-label">{{ $t('creation.create.project') }}</span>
               <select
                 v-model="igniteProjectSelection"
                 class="creation-glass-select"
                 :disabled="!canMutateSelectedAgent || creationsStore.igniteDraft.submitting"
               >
-                <option value="">{{ tOr('creation.ignite.noProject', 'No Project') }}</option>
+                <option value="">{{ $t('creation.create.noProject') }}</option>
                 <option
                   v-for="proj in availableProjects"
                   :key="proj.id"
@@ -579,7 +579,7 @@ export default {
                 >
                   {{ proj.name || proj.id }}
                 </option>
-                <option value="__new__">+ {{ tOr('creation.ignite.newProject', 'New Project') }}</option>
+                <option value="__new__">+ {{ $t('creation.create.newProject') }}</option>
               </select>
             </label>
 
@@ -588,21 +588,21 @@ export default {
               v-model="igniteNewProjectName"
               type="text"
               class="creation-ignite-inline-input"
-              :placeholder="tOr('creation.ignite.newProjectPlaceholder', 'Project name…')"
+              :placeholder="$t('creation.create.newProjectPlaceholder')"
               :disabled="!canMutateSelectedAgent || creationsStore.igniteDraft.submitting"
             />
 
             <!-- Session Mode Selector -->
             <label class="creation-ignite-selector-field">
-              <span class="creation-ignite-selector-label">{{ tOr('creation.ignite.session', 'Session') }}</span>
+              <span class="creation-ignite-selector-label">{{ $t('creation.create.session') }}</span>
               <select
                 v-model="igniteSessionMode"
                 class="creation-glass-select"
                 :disabled="!canMutateSelectedAgent || creationsStore.igniteDraft.submitting"
               >
-                <option value="new">{{ tOr('creation.ignite.newSession', 'New Session') }}</option>
+                <option value="new">{{ $t('creation.create.sessionNew') }}</option>
                 <option value="existing" :disabled="agentSessions.length === 0">
-                  {{ tOr('creation.ignite.existingSession', 'Existing Session') }}
+                  {{ $t('creation.create.sessionExisting') }}
                 </option>
               </select>
             </label>
@@ -612,7 +612,7 @@ export default {
               v-model="igniteExistingSessionId"
               class="creation-glass-select is-session-picker"
               :disabled="!canMutateSelectedAgent || creationsStore.igniteDraft.submitting || agentSessions.length === 0"
-              :aria-label="tOr('creation.ignite.selectSession', 'Select Session')"
+              :aria-label="$t('creation.create.selectSession')"
             >
               <option
                 v-for="sess in agentSessions"
@@ -665,6 +665,7 @@ export default {
     const igniteSessionMode = Vue.ref('new');
     const igniteExistingSessionId = Vue.ref('');
     let dragDepth = 0;
+    let igniteReqEpoch = 0;
 
     const selectedAgent = Vue.computed(() => {
       const id = creationsStore.selectedAgentId;
@@ -755,7 +756,7 @@ export default {
       const sess = sessionsStore?.sessionById?.(item.sessionId, aid)
         || agentSessions.value.find((s) => s.id === item.sessionId)
         || null;
-      return sess?.title || sess?.name || tOr('creation.inspector.linkedSession', 'Session');
+      return sess?.title || sess?.name || tOr('creation.galaxy.linkedSession', 'Session');
     });
 
     const isIgniteExpanded = Vue.computed(() => {
@@ -924,10 +925,25 @@ export default {
       creationsStore.igniteDraft.pendingFiles = next;
     }
 
+    Vue.watch(
+      () => creationsStore.selectedAgentId,
+      (next, prev) => {
+        if (prev && next !== prev) {
+          igniteReqEpoch += 1;
+          creationsStore.igniteDraft.submitting = false;
+          creationsStore.igniteDraft.error = null;
+        }
+      },
+    );
+
     async function submitIgnite() {
       if (!canSubmitIgnite.value) return;
+      const epoch = ++igniteReqEpoch;
       const submitAgentId = creationsStore.selectedAgentId;
       const startSeq = creationsStore.openActivationSeq;
+      const isStillCurrent = () => (
+        creationsStore.selectedAgentId === submitAgentId && epoch === igniteReqEpoch
+      );
       const liveDraft = creationsStore.igniteDraft;
       const submittedTitle = liveDraft.title;
       const submittedPrompt = liveDraft.prompt;
@@ -978,19 +994,23 @@ export default {
               celestial: celestialVal,
             });
         const created = res?.creation || res;
+        const currentDraft = creationsStore.igniteDraft;
+        currentDraft.pendingFiles = currentDraft.pendingFiles.filter((f) => !submittedFiles.has(f));
+        if (!isStillCurrent()) return;
+
         if (res?.initialTurnError) {
           emit('toast', res.initialTurnError);
         }
-        const currentDraft = creationsStore.igniteDraft;
-        const stillOnSubmitAgent = creationsStore.selectedAgentId === submitAgentId;
-        if (stillOnSubmitAgent && currentDraft.title === submittedTitle) {
+        if (res?.projectWarning) {
+          emit('toast', res.projectWarning);
+        }
+        if (currentDraft.title === submittedTitle) {
           currentDraft.title = '';
         }
-        if (stillOnSubmitAgent && currentDraft.prompt === submittedPrompt) {
+        if (currentDraft.prompt === submittedPrompt) {
           currentDraft.prompt = '';
         }
-        currentDraft.pendingFiles = currentDraft.pendingFiles.filter((f) => !submittedFiles.has(f));
-        if (stillOnSubmitAgent && currentDraft.celestial === submittedCelestial) {
+        if (currentDraft.celestial === submittedCelestial) {
           currentDraft.celestial = null;
         }
         if (igniteProjectSelection.value === '__new__') {
@@ -998,8 +1018,7 @@ export default {
           igniteNewProjectName.value = '';
         }
         if (
-          stillOnSubmitAgent
-          && !currentDraft.title.trim()
+          !currentDraft.title.trim()
           && !currentDraft.prompt.trim()
           && currentDraft.pendingFiles.length === 0
         ) {
@@ -1011,7 +1030,7 @@ export default {
           created
           && created.id
           && props.visible
-          && creationsStore.selectedAgentId === submitAgentId
+          && isStillCurrent()
           && creationsStore.openActivationSeq === startSeq
         ) {
           emit('open-creation', {
@@ -1024,9 +1043,12 @@ export default {
           });
         }
       } catch (err) {
+        if (!isStillCurrent()) return;
         creationsStore.igniteDraft.error = err?.message || 'Failed to ignite creation';
       } finally {
-        creationsStore.igniteDraft.submitting = false;
+        if (isStillCurrent()) {
+          creationsStore.igniteDraft.submitting = false;
+        }
       }
     }
 

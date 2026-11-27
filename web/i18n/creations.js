@@ -73,7 +73,7 @@ export const zhCN = {
   'creation.inspector.sources': '{count} 素材',
   'creation.inspector.proposals': '{count} 待审',
   'creation.inspector.delete': '删除',
-  'creation.inspector.confirmDelete': '确认删除“{title}”？此操作将移除该作品及其全部章节与记录。',
+  'creation.inspector.confirmDelete': '确认移除“{title}”？此操作将删除该创作条目及其索引记录，磁盘上的工作区文件会被保留。',
   'creation.inspector.close': '关闭检视卡',
 
   // Interior Topbar & Modes (L3)
@@ -317,6 +317,9 @@ export const zhCN = {
   'creation.workbench.uploaded': '上传完成',
   'creation.workbench.uploading': '上传中…',
   'creation.workbench.workspaceFailed': '初始化创作目录失败',
+  'creation.workbench.invalidPath': '无效的文件或目录路径',
+  'creation.workbench.unsafeUrl': '已拦截不安全的媒体链接',
+  'creation.workbench.unsavedSwitchConfirm': '当前创作中有未保存的修改，确定切换并放弃未保存更改吗？',
   'common.create': '创建',
   'common.next': '下一个',
   'common.offline': '离线',
@@ -352,6 +355,9 @@ export const zhCN = {
   'creation.create.dropFilesHint': '拖拽文件到此处，或点击浏览选择',
   'creation.create.submit': '创建创作',
   'creation.create.creating': '创建中…',
+  'creation.create.newSessionOnlineHint': '新建会话需要所选 Agent 处于在线状态',
+  'creation.create.noCreationsCap': '不支持创作空间',
+  'creation.create.noEligibleAgent': '暂无可用的在线创作 Agent，请先上线支持创作能力的 Agent。',
   'creation.create.failed': '创建创作失败',
 
   // Classic Sidebar Creations Section
@@ -433,7 +439,7 @@ export const en = {
   'creation.inspector.sources': '{count} sources',
   'creation.inspector.proposals': '{count} pending',
   'creation.inspector.delete': 'Delete',
-  'creation.inspector.confirmDelete': 'Delete “{title}”? All units, canon, and history will be removed.',
+  'creation.inspector.confirmDelete': 'Remove “{title}”? This deletes the Creation entry and index while preserving workspace files on disk.',
   'creation.inspector.close': 'Close inspector',
 
   // Interior Topbar & Modes (L3)
@@ -677,6 +683,9 @@ export const en = {
   'creation.workbench.uploaded': 'Uploaded',
   'creation.workbench.uploading': 'Uploading…',
   'creation.workbench.workspaceFailed': 'Failed to initialize Creation workspace',
+  'creation.workbench.invalidPath': 'Invalid file or folder path',
+  'creation.workbench.unsafeUrl': 'Blocked unsafe media URL',
+  'creation.workbench.unsavedSwitchConfirm': 'You have unsaved edits in this Creation. Switch anyway?',
   'common.create': 'Create',
   'common.next': 'Next',
   'common.offline': 'Offline',
@@ -712,6 +721,9 @@ export const en = {
   'creation.create.dropFilesHint': 'Drop files here or click to browse',
   'creation.create.submit': 'Create Creation',
   'creation.create.creating': 'Creating…',
+  'creation.create.newSessionOnlineHint': 'Creating a new Session requires the selected Agent to be online',
+  'creation.create.noCreationsCap': 'Creations unavailable',
+  'creation.create.noEligibleAgent': 'No online Agent with Creations capability is available.',
   'creation.create.failed': 'Failed to create Creation',
 
   // Classic Sidebar Creations Section

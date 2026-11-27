@@ -7,15 +7,105 @@
  */
 import { useChatStore } from './chat.js';
 import { useAuthStore } from './auth.js';
+import * as canvasContext from '../utils/canvas-context.js';
 
 const { defineStore } = Pinia;
 
 const KEY_SEP = '\u001f';
 const USER_PREFIX_RE = /^user_\d+_[a-zA-Z0-9]+:/;
 const pendingRequests = new Map();
+const inFlightBindFolder = new Map();
+const inFlightResolveSession = new Map();
 let requestSeq = 0;
 let pendingWorkbenchSeq = 0;
 let storeGeneration = 0;
+
+function ackErrorMessage(res, fallback) {
+  if (!res) return fallback;
+  if (typeof res.error === 'string' && res.error.trim()) return res.error.trim();
+  if (res.error && typeof res.error.message === 'string' && res.error.message.trim()) {
+    return res.error.message.trim();
+  }
+  if (typeof res.message === 'string' && res.message.trim()) return res.message.trim();
+  if (res.error && typeof res.error.code === 'string' && res.error.code.trim()) {
+    return `${fallback} (${res.error.code.trim()})`;
+  }
+  return fallback;
+}
+
+function extractSessionId(res) {
+  return res?.session?.id
+    || res?.group?.id
+    || res?.sessionId
+    || res?.id
+    || null;
+}
+
+function extractProjectId(res) {
+  return res?.result?.id
+    || res?.project?.id
+    || res?.id
+    || null;
+}
+
+/**
+ * Explicitly switch the active route to `(agentId, sessionId)`, verify that the
+ * active route matches before sending, and dispatch the initial creation prompt
+ * using the exact `sendYeaftSessionMessage` contract.
+ *
+ * @param {string} agentId
+ * @param {string} sessionId
+ * @param {string} text
+ * @returns {Promise<{ ok: boolean, error?: string, result?: any }>}
+ */
+export async function sendInitialCreationPrompt(agentId, sessionId, text) {
+  const targetAgentId = String(agentId || '').trim();
+  const targetSessionId = String(sessionId || '').trim();
+  const trimmedText = String(text || '').trim();
+  if (!targetAgentId || !targetSessionId || !trimmedText) {
+    return { ok: false, error: 'Missing agentId, sessionId, or prompt text' };
+  }
+
+  const chatStore = getChatStoreSafe();
+  const sessionsStore = getSessionsStoreSafe();
+  if (!chatStore || typeof chatStore.sendYeaftSessionMessage !== 'function') {
+    return { ok: false, error: 'Chat store unavailable' };
+  }
+
+  if (chatStore.currentAgent !== targetAgentId && typeof chatStore.selectAgent === 'function') {
+    chatStore.selectAgent(targetAgentId);
+  }
+  if (typeof chatStore.enterYeaft === 'function') {
+    chatStore.enterYeaft(targetAgentId, { deferBootstrap: true });
+  }
+  if (typeof sessionsStore?.setActive === 'function') {
+    sessionsStore.setActive(targetSessionId, targetAgentId);
+  }
+  if (typeof chatStore.setActiveSessionFilter === 'function') {
+    chatStore.setActiveSessionFilter(targetSessionId, { agentId: targetAgentId, force: true });
+  }
+
+  const activeSession = sessionsStore?.activeSessionKey
+    ? sessionsStore.sessions?.[sessionsStore.activeSessionKey]
+    : null;
+  const activeRouteMatches = (
+    (activeSession?.id === targetSessionId && (!activeSession.agentId || activeSession.agentId === targetAgentId))
+    || (chatStore.currentAgent === targetAgentId
+      && (!chatStore.yeaftActiveSessionFilter || chatStore.yeaftActiveSessionFilter === targetSessionId))
+  );
+  if (!activeRouteMatches) {
+    return { ok: false, error: 'Active session route does not match target creation session' };
+  }
+
+  const sent = await chatStore.sendYeaftSessionMessage({
+    groupId: targetSessionId,
+    text: trimmedText,
+  });
+  if (sent === false) {
+    return { ok: false, error: 'Failed to send initial creation prompt' };
+  }
+  return { ok: true, result: sent };
+}
 
 /**
  * Return a human-readable Agent display name, stripping internal `user_<ts>_<rand>:` prefixes
@@ -448,35 +538,49 @@ export const useCreationsStore = defineStore('creations', {
         throw new Error('Missing agentId or rootDir');
       }
 
-      const existing = await this.findByFolder(targetId, trimmedDir);
-      if (existing && existing.id) {
-        if ((sessionId && !existing.sessionId) || (projectId && !existing.projectId)) {
-          const patch = {
-            ...(sessionId && !existing.sessionId ? { sessionId } : {}),
-            ...(projectId && !existing.projectId ? { projectId } : {}),
-          };
-          const updated = await this.updateCreation(targetId, existing.id, patch);
-          return { creation: updated, existed: true };
-        }
-        this._upsertSummary(targetId, existing);
-        return { creation: existing, existed: true };
+      const dedupeKey = `${targetId}::${trimmedDir}`;
+      if (inFlightBindFolder.has(dedupeKey)) {
+        return inFlightBindFolder.get(dedupeKey);
       }
 
-      const normalized = trimmedDir.replace(/[\\/]+$/, '');
-      const lastSegment = normalized.split(/[\\/]/).filter(Boolean).pop() || 'Creation';
-      const resolvedTitle = String(title || '').trim() || lastSegment;
+      const run = (async () => {
+        const existing = await this.findByFolder(targetId, trimmedDir);
+        if (existing && existing.id) {
+          if ((sessionId && !existing.sessionId) || (projectId && !existing.projectId)) {
+            const patch = {
+              ...(sessionId && !existing.sessionId ? { sessionId } : {}),
+              ...(projectId && !existing.projectId ? { projectId } : {}),
+            };
+            const updated = await this.updateCreation(targetId, existing.id, patch);
+            return { creation: updated, existed: true };
+          }
+          this._upsertSummary(targetId, existing);
+          return { creation: existing, existed: true };
+        }
 
-      const res = await this.createCreation(targetId, {
-        title: resolvedTitle,
-        kind,
-        rootDir: trimmedDir,
-        ...(sessionId ? { sessionId } : {}),
-        ...(projectId ? { projectId } : {}),
-        initializeFolder: true,
-        autoPlan: false,
+        const normalized = trimmedDir.replace(/[\\/]+$/, '');
+        const lastSegment = normalized.split(/[\\/]/).filter(Boolean).pop() || 'Creation';
+        const resolvedTitle = String(title || '').trim() || lastSegment;
+
+        const res = await this.createCreation(targetId, {
+          title: resolvedTitle,
+          kind,
+          rootDir: trimmedDir,
+          ...(sessionId ? { sessionId } : {}),
+          ...(projectId ? { projectId } : {}),
+          initializeFolder: true,
+          autoPlan: false,
+        });
+        const created = res?.creation || (res?.id ? res : null);
+        return { creation: created, existed: false };
+      })().finally(() => {
+        if (inFlightBindFolder.get(dedupeKey) === run) {
+          inFlightBindFolder.delete(dedupeKey);
+        }
       });
-      const created = res?.creation || (res?.id ? res : null);
-      return { creation: created, existed: false };
+
+      inFlightBindFolder.set(dedupeKey, run);
+      return run;
     },
 
     async createWorkspaceCreation({
@@ -491,6 +595,7 @@ export const useCreationsStore = defineStore('creations', {
       prompt = '',
       rawFiles = [],
       celestial = null,
+      resumeCreationId = null,
     } = {}) {
       const targetId = String(agentId || this.selectedAgentId || '').trim();
       if (!targetId) throw new Error('No Agent selected');
@@ -498,91 +603,146 @@ export const useCreationsStore = defineStore('creations', {
       const chatStore = getChatStoreSafe();
       const sessionsStore = getSessionsStoreSafe();
 
-      // Step 1: Optionally create a new Project.
+      // Step 1: Optionally create a new Project (strict ack check before creating orphan state).
       let targetProjectId = projectId || null;
       const trimmedProjectName = String(newProjectName || '').trim();
-      if (trimmedProjectName && typeof chatStore?.mutateProject === 'function') {
-        const projRes = await chatStore.mutateProject('create', { name: trimmedProjectName }, targetId);
-        const createdProjectId = projRes?.result?.id || projRes?.project?.id || projRes?.id || null;
-        if (createdProjectId) {
-          targetProjectId = createdProjectId;
+      if (trimmedProjectName) {
+        if (typeof chatStore?.mutateProject !== 'function') {
+          throw new Error('Project creation unavailable');
         }
+        const projRes = await chatStore.mutateProject('create', { name: trimmedProjectName }, targetId);
+        const createdProjectId = extractProjectId(projRes);
+        if (!projRes || projRes.ok === false || !createdProjectId) {
+          throw new Error(ackErrorMessage(projRes, 'Failed to create Project'));
+        }
+        targetProjectId = createdProjectId;
       }
 
-      // Step 2: Create the folder-backed Creation.
+      // Step 2: Create or resume the folder-backed Creation.
+      // Do NOT persist targetProjectId before move_session succeeds.
       const trimmedTitle = String(title || '').trim();
       const trimmedRootDir = String(rootDir || '').trim();
-      const createRes = await this.createCreation(targetId, {
-        ...(trimmedTitle ? { title: trimmedTitle } : {}),
-        kind,
-        mission: prompt || '',
-        prompt: prompt || '',
-        ...(trimmedRootDir ? { rootDir: trimmedRootDir } : {}),
-        ...(targetProjectId ? { projectId: targetProjectId } : {}),
-        initializeFolder: true,
-        autoPlan: false,
-        ...(celestial ? { celestial } : {}),
-        ...(Array.isArray(rawFiles) && rawFiles.length ? { rawFiles } : {}),
-      });
-      const created = createRes?.creation || (createRes?.id ? createRes : null);
-      if (!created?.id) {
-        throw new Error('Failed to create Creation');
+      const trimmedResumeId = String(resumeCreationId || '').trim();
+      let created = null;
+      if (trimmedResumeId) {
+        const dKey = creationDetailKey(targetId, trimmedResumeId);
+        created = this.detailsByKey[dKey]?.creation
+          || (this.byAgent[targetId]?.list || []).find((c) => c && c.id === trimmedResumeId)
+          || null;
+        if (!created) {
+          const getRes = await this.request(targetId, 'get_creation', { creationId: trimmedResumeId });
+          created = getRes?.creation || (getRes?.id ? getRes : null);
+          if (created?.id) {
+            this._upsertSummary(targetId, created);
+          }
+        }
+        if (!created?.id) {
+          throw new Error('Failed to resume Creation');
+        }
+      } else {
+        const createRes = await this.createCreation(targetId, {
+          ...(trimmedTitle ? { title: trimmedTitle } : {}),
+          kind,
+          mission: prompt || '',
+          prompt: prompt || '',
+          ...(trimmedRootDir ? { rootDir: trimmedRootDir } : {}),
+          initializeFolder: true,
+          autoPlan: false,
+          ...(celestial ? { celestial } : {}),
+          ...(Array.isArray(rawFiles) && rawFiles.length ? { rawFiles } : {}),
+        });
+        created = createRes?.creation || (createRes?.id ? createRes : null);
+        if (!created?.id) {
+          throw new Error('Failed to create Creation');
+        }
       }
 
-      // Step 3: Resolve or create the linked Yeaft Session.
+      // Step 3: Resolve or create the linked Yeaft Session with strict ack validation.
       let targetSessionId = null;
       if (sessionMode === 'existing' && existingSessionId) {
+        const existingSession = sessionsStore?.sessionById?.(existingSessionId, targetId) || null;
+        const hasKnownSession = Boolean(
+          existingSession || chatStore?.hasKnownYeaftSession?.(existingSessionId, targetId),
+        );
+        if (!hasKnownSession) {
+          const err = new Error('Selected session does not exist on this Agent');
+          err.partialCreation = created;
+          throw err;
+        }
         targetSessionId = existingSessionId;
-        try {
-          const existingSession = sessionsStore?.sessionById?.(existingSessionId, targetId) || null;
-          if (created.rootDir && existingSession && !existingSession.workDir) {
-            if (typeof chatStore?.updateYeaftSessionWorkDir === 'function') {
-              await chatStore.updateYeaftSessionWorkDir({
-                sessionId: existingSessionId,
-                workDir: created.rootDir,
-                agentId: targetId,
-              });
+        if (created.rootDir && existingSession && !existingSession.workDir) {
+          if (typeof chatStore?.sessionCrudRequest === 'function') {
+            const updRes = await chatStore.sessionCrudRequest(
+              'update',
+              { sessionId: existingSessionId, workDir: created.rootDir },
+              { agentId: targetId },
+            );
+            if (!updRes || updRes.ok === false) {
+              const err = new Error(ackErrorMessage(updRes, 'Failed to update session working directory'));
+              err.partialCreation = created;
+              throw err;
             }
           }
-        } catch {
-          // non-fatal
         }
-      } else if (typeof chatStore?.createYeaftSession === 'function') {
+      } else {
+        if (typeof chatStore?.createYeaftSession !== 'function') {
+          const err = new Error('Session creation unavailable');
+          err.partialCreation = created;
+          throw err;
+        }
         const sessionRes = await chatStore.createYeaftSession({
           displayName: created.title || trimmedTitle || 'Creation',
           workDir: created.rootDir || trimmedRootDir || undefined,
           agentId: targetId,
         });
-        targetSessionId = sessionRes?.session?.id
-          || sessionRes?.group?.id
-          || sessionRes?.sessionId
-          || sessionRes?.id
-          || null;
-      }
-
-      // Step 4: Assign the Session to the Project (non-fatal).
-      if (targetProjectId && targetSessionId && typeof chatStore?.mutateProject === 'function') {
-        try {
-          await chatStore.mutateProject('move_session', {
-            sessionId: targetSessionId,
-            projectId: targetProjectId,
-          }, targetId);
-        } catch {
-          // non-fatal so creation succeeds even if project assignment fails
+        targetSessionId = extractSessionId(sessionRes);
+        if (!sessionRes || sessionRes.ok === false || !targetSessionId) {
+          const err = new Error(ackErrorMessage(sessionRes, 'Failed to create Session'));
+          err.partialCreation = created;
+          throw err;
         }
       }
 
-      // Step 5: Persist sessionId & projectId on the Creation.
+      // Step 4: Assign the Session to the Project (only persist projectId when ack succeeds).
+      let appliedProjectId = null;
+      let projectWarning = null;
+      if (targetProjectId && targetSessionId) {
+        if (typeof chatStore?.mutateProject === 'function') {
+          try {
+            const moveRes = await chatStore.mutateProject('move_session', {
+              sessionId: targetSessionId,
+              projectId: targetProjectId,
+            }, targetId);
+            if (moveRes !== false && moveRes?.ok !== false) {
+              appliedProjectId = targetProjectId;
+            } else {
+              projectWarning = ackErrorMessage(moveRes, 'Failed to assign session to project');
+            }
+          } catch (moveErr) {
+            projectWarning = moveErr?.message || 'Failed to assign session to project';
+          }
+        } else {
+          projectWarning = 'Project assignment unavailable';
+        }
+      }
+
+      // Step 5: Persist confirmed sessionId & appliedProjectId on the Creation.
       const updated = await this.updateCreation(targetId, created.id, {
-        sessionId: targetSessionId || null,
-        projectId: targetProjectId || null,
+        sessionId: targetSessionId,
+        projectId: appliedProjectId,
       });
+      if (!updated?.id) {
+        const err = new Error('Failed to save Creation session link');
+        err.partialCreation = created;
+        throw err;
+      }
 
       return {
         agentId: targetId,
         creation: updated,
         sessionId: targetSessionId,
-        projectId: targetProjectId,
+        projectId: appliedProjectId,
+        ...(projectWarning ? { projectWarning } : {}),
         rootDir: updated?.rootDir || created.rootDir || trimmedRootDir || '',
         prompt,
       };
@@ -594,59 +754,81 @@ export const useCreationsStore = defineStore('creations', {
         throw new Error('Missing agentId or creation');
       }
 
-      let latest = creation;
-      let rootDir = latest.rootDir || '';
-      if (!rootDir) {
-        const wsRes = await this.ensureWorkspace(targetId, latest.id);
-        if (wsRes?.creation) {
-          latest = { ...latest, ...wsRes.creation };
-        }
-        rootDir = wsRes?.rootDir || latest.rootDir || '';
+      const dedupeKey = `${targetId}::${creation.id}`;
+      if (inFlightResolveSession.has(dedupeKey)) {
+        return inFlightResolveSession.get(dedupeKey);
       }
 
-      const chatStore = getChatStoreSafe();
-      const sessionsStore = getSessionsStoreSafe();
-      let sessionId = latest.sessionId || null;
-      const hasKnownSession = Boolean(
-        sessionId && (
-          sessionsStore?.sessionById?.(sessionId, targetId)
-          || chatStore?.hasKnownYeaftSession?.(sessionId, targetId)
-        ),
-      );
-
-      if (!hasKnownSession) {
-        if (!createIfMissing) {
-          return { creation: latest, sessionId: null, rootDir };
+      const run = (async () => {
+        let latest = creation;
+        let rootDir = latest.rootDir || '';
+        if (!rootDir) {
+          const wsRes = await this.ensureWorkspace(targetId, latest.id);
+          if (wsRes?.creation) {
+            latest = { ...latest, ...wsRes.creation };
+          }
+          rootDir = wsRes?.rootDir || latest.rootDir || '';
         }
-        if (typeof chatStore?.createYeaftSession === 'function') {
+
+        const chatStore = getChatStoreSafe();
+        const sessionsStore = getSessionsStoreSafe();
+        let sessionId = latest.sessionId || null;
+        const hasKnownSession = Boolean(
+          sessionId && (
+            sessionsStore?.sessionById?.(sessionId, targetId)
+            || chatStore?.hasKnownYeaftSession?.(sessionId, targetId)
+          ),
+        );
+
+        if (!hasKnownSession) {
+          if (!createIfMissing) {
+            return { creation: latest, sessionId: null, rootDir };
+          }
+          if (typeof chatStore?.createYeaftSession !== 'function') {
+            throw new Error('Session creation unavailable');
+          }
           const sessionRes = await chatStore.createYeaftSession({
             displayName: latest.title || 'Creation',
             workDir: rootDir || undefined,
             agentId: targetId,
           });
-          sessionId = sessionRes?.session?.id
-            || sessionRes?.group?.id
-            || sessionRes?.sessionId
-            || sessionRes?.id
-            || null;
+          sessionId = extractSessionId(sessionRes);
+          if (!sessionRes || sessionRes.ok === false || !sessionId) {
+            throw new Error(ackErrorMessage(sessionRes, 'Failed to create Session'));
+          }
 
-          if (sessionId && latest.projectId && typeof chatStore?.mutateProject === 'function') {
+          let projectPatch = {};
+          if (latest.projectId && typeof chatStore?.mutateProject === 'function') {
             try {
-              await chatStore.mutateProject('move_session', {
+              const moveRes = await chatStore.mutateProject('move_session', {
                 sessionId,
                 projectId: latest.projectId,
               }, targetId);
+              if (!moveRes || moveRes.ok === false) {
+                projectPatch = { projectId: null };
+              }
             } catch {
-              // non-fatal
+              projectPatch = { projectId: null };
             }
           }
-          if (sessionId) {
-            latest = await this.updateCreation(targetId, latest.id, { sessionId });
+          latest = await this.updateCreation(targetId, latest.id, {
+            sessionId,
+            ...projectPatch,
+          });
+          if (!latest?.id) {
+            throw new Error('Failed to save Creation session link');
           }
         }
-      }
 
-      return { creation: latest, sessionId, rootDir };
+        return { creation: latest, sessionId, rootDir };
+      })().finally(() => {
+        if (inFlightResolveSession.get(dedupeKey) === run) {
+          inFlightResolveSession.delete(dedupeKey);
+        }
+      });
+
+      inFlightResolveSession.set(dedupeKey, run);
+      return run;
     },
 
     async openCreationInClassic({
@@ -683,24 +865,29 @@ export const useCreationsStore = defineStore('creations', {
         { createIfMissing: true },
       );
 
+      if (!sessionId) {
+        throw new Error('Failed to resolve Creation session');
+      }
+
       const chatStore = getChatStoreSafe();
       const sessionsStore = getSessionsStoreSafe();
       if (typeof chatStore?.setUiMode === 'function' && chatStore.uiMode === 'cosmos') {
         chatStore.setUiMode('classic');
       }
+      if (chatStore?.currentAgent !== targetId && typeof chatStore?.selectAgent === 'function') {
+        chatStore.selectAgent(targetId);
+      }
       if (typeof chatStore?.enterYeaft === 'function') {
         chatStore.enterYeaft(targetId, { deferBootstrap: true });
       }
-      if (sessionId) {
-        sessionsStore?.setActive?.(sessionId, targetId);
-        if (typeof chatStore?.setActiveSessionFilter === 'function') {
-          chatStore.setActiveSessionFilter(sessionId, { agentId: targetId, force: true });
-        }
+      sessionsStore?.setActive?.(sessionId, targetId);
+      if (typeof chatStore?.setActiveSessionFilter === 'function') {
+        chatStore.setActiveSessionFilter(sessionId, { agentId: targetId, force: true });
       }
 
       this.setPendingWorkbenchTarget({
         agentId: targetId,
-        sessionId: sessionId || null,
+        sessionId,
         creationId: latest.id,
         rootDir: rootDir || latest.rootDir || '',
         maximize: mode === 'read',
@@ -711,22 +898,21 @@ export const useCreationsStore = defineStore('creations', {
         chatStore.openWorkbench();
       }
 
+      let promptError = null;
       const trimmedPrompt = String(promptToSend || '').trim();
-      if (trimmedPrompt && sessionId && typeof chatStore?.sendYeaftSessionMessage === 'function') {
-        setTimeout(() => {
-          try {
-            chatStore.sendYeaftSessionMessage({
-              groupId: sessionId,
-              text: trimmedPrompt,
-              agentId: targetId,
-            });
-          } catch {
-            // non-fatal
-          }
-        }, 60);
+      if (trimmedPrompt) {
+        const sendRes = await sendInitialCreationPrompt(targetId, sessionId, trimmedPrompt);
+        if (!sendRes?.ok) {
+          promptError = sendRes?.error || 'Failed to send initial creation prompt';
+        }
       }
 
-      return { creation: latest, sessionId, rootDir };
+      return {
+        creation: latest,
+        sessionId,
+        rootDir,
+        ...(promptError ? { promptError } : {}),
+      };
     },
 
     invalidatePendingOpen() {
@@ -1996,6 +2182,14 @@ export const useCreationsStore = defineStore('creations', {
         pending.reject(new Error('Creations store cleared'));
       }
       pendingRequests.clear();
+      inFlightBindFolder.clear();
+      inFlightResolveSession.clear();
+      this.clearPendingWorkbenchTarget();
+      if (typeof canvasContext.clearAllCanvasContextRefs === 'function') {
+        canvasContext.clearAllCanvasContextRefs();
+      } else if (typeof canvasContext.clearCanvasContextRefs === 'function') {
+        canvasContext.clearCanvasContextRefs();
+      }
 
       this.selectedAgentId = '';
       this.byAgent = {};

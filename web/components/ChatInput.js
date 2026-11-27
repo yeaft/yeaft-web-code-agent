@@ -13,7 +13,7 @@ import { useUserShortcuts, matchShortcut } from '../utils/user-shortcuts.js';
 import {
   getCanvasContextRefs,
   removeCanvasContextRef,
-  clearCanvasContextRefs,
+  removeCanvasContextRefsByIds,
   formatCanvasContextPrefix,
 } from '../utils/canvas-context.js';
 import { workbenchRouteKey } from '../utils/workbench-route.js';
@@ -42,7 +42,11 @@ export default {
     /** Structured Session message quote shown above the composer. */
     quote: { type: Object, default: null },
     disabled: { type: Boolean, default: false },
-    disabledPlaceholderKey: { type: String, default: '' }
+    disabledPlaceholderKey: { type: String, default: '' },
+    /** Enable Workbench Canvas context reference chips & prefixing. */
+    enableCanvasRefs: { type: Boolean, default: true },
+    /** Explicit Canvas route key scope. When provided, never falls back to global activeSessionRoute. */
+    canvasRouteKey: { type: String, default: undefined }
   },
   emits: ['remove-quote', 'quote-consumed', 'close-start-actions'],
   template: `
@@ -480,8 +484,15 @@ export default {
     });
     const { attachments, uploading, filesReady, addFiles, retryAttachment, removeAttachment } = attachmentQueue;
     const hasValidFileId = hasAttachmentFileId;
-    const activeRouteKey = Vue.computed(() => workbenchRouteKey(store.activeSessionRoute));
-    const canvasRefs = Vue.computed(() => getCanvasContextRefs(activeRouteKey.value));
+    const activeRouteKey = Vue.computed(() => {
+      if (!props.enableCanvasRefs) return '';
+      if (props.canvasRouteKey !== undefined) return props.canvasRouteKey || '';
+      return workbenchRouteKey(store.activeSessionRoute) || '';
+    });
+    const canvasRefs = Vue.computed(() => {
+      const key = activeRouteKey.value;
+      return key ? getCanvasContextRefs(key) : [];
+    });
     const canvasKindBadge = (kind) => {
       if (kind === 'image') return '🖼';
       if (kind === 'video') return '🎬';
@@ -497,12 +508,13 @@ export default {
       return '';
     };
     const removeCanvasRef = (id) => {
-      removeCanvasContextRef(activeRouteKey.value, id);
+      const key = activeRouteKey.value;
+      if (!key) return;
+      removeCanvasContextRef(key, id);
     };
     const handleCanvasContextAdded = (event) => {
-      const incomingKey = event?.detail?.routeKey;
-      const currentKey = activeRouteKey.value || '__active__';
-      if (incomingKey === currentKey) {
+      if (!props.enableCanvasRefs || !activeRouteKey.value) return;
+      if (event?.detail?.routeKey === activeRouteKey.value) {
         focusInput();
       }
     };
@@ -684,8 +696,9 @@ export default {
       showVpAutocomplete.value = false;
 
       const trimmed = inputText.value.trim();
+      const snapshotRouteKey = activeRouteKey.value;
       const sentCanvasRefs = canvasRefs.value.slice();
-      const sentRouteKey = activeRouteKey.value;
+      const snapshotRefIds = sentCanvasRefs.map(r => r.id);
       const canvasPrefix = sentCanvasRefs.length > 0 ? formatCanvasContextPrefix(sentCanvasRefs) : '';
       const outgoingText = canvasPrefix
         ? (trimmed ? `${canvasPrefix}\n\n${trimmed}` : canvasPrefix)
@@ -710,11 +723,14 @@ export default {
         const identity = attachmentScope();
         const g = ++sendGeneration;
         const accept = accepted => {
-          if (accepted === false || g !== sendGeneration || identity !== attachmentScope()) return;
+          if (accepted === false) return;
+          if (snapshotRouteKey && snapshotRefIds.length > 0) {
+            removeCanvasContextRefsByIds(snapshotRouteKey, snapshotRefIds);
+          }
+          if (g !== sendGeneration || identity !== attachmentScope()) return;
           // Sent previews belong to the message projection, not the composer.
           attachmentQueue.release(sentRows);
           if (sentQuote && props.quote === sentQuote) emit('quote-consumed');
-          if (sentCanvasRefs.length > 0) clearCanvasContextRefs(sentRouteKey);
           if (inputText.value === before) {
             inputText.value = '';
             if (effectiveDraftKey.value) delete store.inputDrafts[effectiveDraftKey.value];
@@ -759,7 +775,9 @@ export default {
       // In btw mode, all sends go through btw channel
       if (store.btwMode) {
         if (store.sendBtwQuestion(outgoingText) === false) return;
-        if (sentCanvasRefs.length > 0) clearCanvasContextRefs(sentRouteKey);
+        if (snapshotRouteKey && snapshotRefIds.length > 0) {
+          removeCanvasContextRefsByIds(snapshotRouteKey, snapshotRefIds);
+        }
         inputText.value = '';
         if (effectiveDraftKey.value) delete store.inputDrafts[effectiveDraftKey.value];
         resetTextareaSize();
@@ -781,7 +799,9 @@ export default {
       const currentExpertSelections = [...expertSelections.value];
       if (store.sendMessage(outgoingText, attachmentInfos, { expertSelections: currentExpertSelections }) === false) return;
 
-      if (sentCanvasRefs.length > 0) clearCanvasContextRefs(sentRouteKey);
+      if (snapshotRouteKey && snapshotRefIds.length > 0) {
+        removeCanvasContextRefsByIds(snapshotRouteKey, snapshotRefIds);
+      }
       attachmentQueue.release();
       inputText.value = '';
       store.expertSelections = [];

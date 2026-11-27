@@ -16,6 +16,7 @@ import { createRouteBoundWorkbenchStore } from '../../utils/workbench-route.js';
 import FileCanvasView from './FileCanvasView.js';
 import CreationCreateModal from './CreationCreateModal.js';
 import NavigationIcon from '../NavigationIcon.js';
+import SvgPreview from '../files/SvgPreview.js';
 
 const IGNORED_DIRS = new Set([
   '.git',
@@ -53,6 +54,75 @@ export function shortenPath(fullPath) {
   const parts = norm.split('/').filter(Boolean);
   if (parts.length <= 3) return norm;
   return `…/${parts.slice(-3).join('/')}`;
+}
+
+/**
+ * Validate that a media preview/download URL is safe:
+ * - Same-origin `/api/preview/...` or `/api/yeaft/creations/...`, OR
+ * - A locally created non-SVG `blob:` URL tracked in `allowedBlobUrls`.
+ * Rejects external origins, protocol-relative URLs, `data:`, `javascript:`, etc.
+ * @param {string} url
+ * @param {Set<string>|null} [allowedBlobUrls]
+ * @returns {boolean}
+ */
+export function isSafeMediaUrl(url, allowedBlobUrls = null) {
+  if (typeof url !== 'string') return false;
+  const trimmed = url.trim();
+  if (!trimmed) return false;
+  if (trimmed.startsWith('blob:')) {
+    return Boolean(allowedBlobUrls && allowedBlobUrls.has(trimmed));
+  }
+  if (/^(?:javascript|data|vbscript|file):/i.test(trimmed)) return false;
+  if (trimmed.startsWith('//')) return false;
+  try {
+    const origin = typeof location !== 'undefined' && location?.host
+      ? `${location.protocol}//${location.host}`
+      : 'http://localhost';
+    const parsed = new URL(trimmed, origin);
+    if (parsed.origin !== origin) return false;
+    return parsed.pathname.startsWith('/api/preview/')
+      || parsed.pathname.startsWith('/api/yeaft/creations/');
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Validate a relative file or folder name before creating/uploading inside a Creation workspace.
+ * Rejects empty strings, leading slashes, Windows drive prefixes, `..` or `.` segments,
+ * NUL bytes, and ASCII control characters.
+ * @param {string} name
+ * @returns {boolean}
+ */
+export function isSafeRelativeChildName(name) {
+  if (typeof name !== 'string') return false;
+  const raw = name.trim();
+  if (!raw) return false;
+  if (/[\u0000-\u001f\u007f]/.test(raw)) return false;
+  if (/^[/\\]/.test(raw) || /^[a-zA-Z]:/.test(raw)) return false;
+  const segments = raw.replace(/\\/g, '/').split('/');
+  for (const seg of segments) {
+    if (!seg || seg === '.' || seg === '..') return false;
+  }
+  return true;
+}
+
+/**
+ * Verify that `candidatePath` stays strictly inside `rootDir` (no traversal or root escape).
+ * @param {string} candidatePath
+ * @param {string} rootDir
+ * @returns {boolean}
+ */
+export function isPathInsideRoot(candidatePath, rootDir) {
+  if (typeof candidatePath !== 'string' || typeof rootDir !== 'string') return false;
+  if (/[\u0000-\u001f\u007f]/.test(candidatePath)) return false;
+  const normRoot = normalizePath(rootDir);
+  const normCandidate = normalizePath(candidatePath);
+  if (!normRoot || !normCandidate || normCandidate === normRoot) return false;
+  const segments = normCandidate.split('/');
+  if (segments.includes('..') || segments.includes('.')) return false;
+  const prefix = normRoot === '/' ? '/' : `${normRoot}/`;
+  return normCandidate.startsWith(prefix);
 }
 
 function getExt(name) {
@@ -159,7 +229,7 @@ function formatSize(bytes) {
 
 export default {
   name: 'CreationTab',
-  components: { FileCanvasView, CreationCreateModal, NavigationIcon },
+  components: { FileCanvasView, CreationCreateModal, NavigationIcon, SvgPreview },
   props: {
     routeKey: { type: String, required: true },
     runtimeProvider: { type: String, required: true },
@@ -172,7 +242,7 @@ export default {
     workspaceLocked: { type: Boolean, default: false },
   },
   template: `
-    <div class="creation-wb-root" ref="rootEl" @keydown="onRootKeydown">
+    <div class="creation-wb creation-wb-root" ref="rootEl" @keydown="onRootKeydown">
       <!-- ==================== ONBOARDING / SWITCHER VIEW ==================== -->
       <section v-if="showOnboarding" class="creation-wb-onboarding">
         <div class="creation-wb-onboarding-header">
@@ -435,8 +505,33 @@ export default {
         </div>
 
         <!-- ==================== DOCUMENTS PANE ==================== -->
-        <div v-show="activeModality === 'docs'" class="creation-wb-docs-pane" role="tabpanel">
-          <!-- Collapsed tree rail -->
+        <div v-show="activeModality === 'docs'" class="creation-wb-docs-pane" :class="{ 'is-tree-open': docTreeOpen }" role="tabpanel">
+          <!-- Narrow-container collapsible top bar -->
+          <div class="creation-wb-docs-bar">
+            <button
+              type="button"
+              class="creation-wb-text-btn creation-wb-docs-bar-toggle"
+              :aria-expanded="docTreeOpen"
+              :title="docTreeOpen ? tr('files.hideTree', 'Hide tree') : tr('files.showTree', 'Show tree')"
+              @click="docTreeOpen = !docTreeOpen"
+            >
+              <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true">
+                <path fill="currentColor" d="M10 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2h-8l-2-2zm10 14H4V8h16v10z" />
+              </svg>
+              <span>{{ tr('creation.workbench.docs', 'Documents') }}</span>
+            </button>
+            <span v-if="activeDocFile" class="creation-wb-docs-bar-name" :title="activeDocFile.relPath">
+              {{ activeDocFile.name }}<span v-if="activeDocFile.isDirty" class="creation-wb-dirty-dot" aria-hidden="true"> ●</span>
+            </span>
+            <button
+              type="button"
+              class="creation-wb-tree-btn"
+              :title="tr('creation.workbench.newDoc', 'New Document')"
+              @click="openMiniDialog('doc')"
+            >+ {{ tr('creation.workbench.docShort', 'Doc') }}</button>
+          </div>
+
+          <!-- Collapsed tree rail (wide container) -->
           <div v-if="!docTreeOpen" class="creation-wb-tree-rail">
             <button
               type="button"
@@ -499,7 +594,8 @@ export default {
                 class="creation-wb-tree-row"
                 :class="{
                   'is-folder': node.type === 'folder',
-                  'is-active': node.type === 'file' && activeDocFile && activeDocFile.path === node.path,
+                  'is-active': node.type === 'file' && activeDocPath === node.path,
+                  'is-dirty': node.type === 'file' && isDocDirty(node.path),
                 }"
                 :style="{ paddingLeft: (8 + node.depth * 14) + 'px' }"
                 :title="node.relPath"
@@ -512,7 +608,7 @@ export default {
                 <span v-else class="creation-wb-tree-caret is-spacer" aria-hidden="true"></span>
                 <span class="creation-wb-tree-name">{{ node.name }}</span>
                 <span
-                  v-if="node.type === 'file' && activeDocFile && activeDocFile.path === node.path && activeDocFile.isDirty"
+                  v-if="node.type === 'file' && isDocDirty(node.path)"
                   class="creation-wb-dirty-dot"
                   aria-hidden="true"
                 >●</span>
@@ -526,7 +622,7 @@ export default {
               v-if="activeDocFile"
               :file="activeDocFile"
               :route-key="routeKey"
-              :saving="docSaving"
+              :saving="Boolean(activeDocFile.saving)"
               :show-header="true"
               :show-open-in-files="true"
               :show-promote-folder="false"
@@ -549,7 +645,7 @@ export default {
           <!-- Image Canvas Detail View -->
           <div v-if="activeImageFile" class="creation-wb-media-detail">
             <div class="creation-wb-media-bar">
-              <button type="button" class="creation-wb-text-btn" @click="activeImageIndex = -1">
+              <button type="button" class="creation-wb-text-btn" @click="selectedImagePath = ''">
                 ← {{ tr('creation.workbench.backToGrid', 'Back to Grid') }}
               </button>
               <span class="creation-wb-media-bar-name" :title="activeImageFile.relPath">{{ activeImageFile.name }}</span>
@@ -579,6 +675,8 @@ export default {
                 :show-promote-folder="false"
                 @download="downloadFile(activeImageFile)"
                 @open-in-files="openFileInFiles(activeImageFile)"
+                @media-load="onMediaLoad"
+                @media-error="onMediaError"
               />
             </div>
           </div>
@@ -616,8 +714,11 @@ export default {
                 @click="selectImageAt(idx)"
               >
                 <div class="creation-wb-image-thumb">
+                  <div v-if="img.isSvg && img.svgText !== null" class="creation-wb-thumb-svg">
+                    <SvgPreview :content="img.svgText" :name="img.name" />
+                  </div>
                   <img
-                    v-if="img.previewUrl"
+                    v-else-if="img.previewUrl"
                     :src="img.previewUrl"
                     :alt="img.name"
                     loading="lazy"
@@ -639,7 +740,7 @@ export default {
           <!-- Video Canvas Detail View -->
           <div v-if="activeVideoFile" class="creation-wb-media-detail">
             <div class="creation-wb-media-bar">
-              <button type="button" class="creation-wb-text-btn" @click="activeVideoIndex = -1">
+              <button type="button" class="creation-wb-text-btn" @click="selectedVideoPath = ''">
                 ← {{ tr('creation.workbench.backToGrid', 'Back to Grid') }}
               </button>
               <span class="creation-wb-media-bar-name" :title="activeVideoFile.relPath">{{ activeVideoFile.name }}</span>
@@ -669,6 +770,8 @@ export default {
                 :show-promote-folder="false"
                 @download="downloadFile(activeVideoFile)"
                 @open-in-files="openFileInFiles(activeVideoFile)"
+                @media-load="onMediaLoad"
+                @media-error="onMediaError"
               />
             </div>
           </div>
@@ -758,6 +861,7 @@ export default {
 
     const activeModality = Vue.ref('docs');
     const docTreeOpen = Vue.ref(true);
+    const isNarrowContainer = Vue.ref(false);
     const addMenuOpen = Vue.ref(false);
     const scanning = Vue.ref(false);
     const uploading = Vue.ref(false);
@@ -777,10 +881,30 @@ export default {
     const videoFiles = Vue.ref([]);
     const expandedDocFolders = Vue.reactive(new Set());
 
-    const activeDocFile = Vue.ref(null);
-    const docSaving = Vue.ref(false);
-    const activeImageIndex = Vue.ref(-1);
-    const activeVideoIndex = Vue.ref(-1);
+    // Per-workspace/per-path document drafts keyed by `${normalizePath(rootDir)}::${normalizePath(docPath)}`
+    const docDrafts = Vue.reactive(new Map());
+    const activeDocPath = Vue.ref('');
+    const selectedImagePath = Vue.ref('');
+    const selectedVideoPath = Vue.ref('');
+
+    const makeDraftKey = (rootDir, docPath) => (
+      `${normalizePath(rootDir)}::${normalizePath(docPath)}`
+    );
+
+    const isDocDirty = (docPath, rootDir = activeRootDir.value) => {
+      if (!rootDir || !docPath) return false;
+      return Boolean(docDrafts.get(makeDraftKey(rootDir, docPath))?.isDirty);
+    };
+
+    const hasDirtyDraftsInWorkspace = (rootDir = activeRootDir.value) => {
+      const normRoot = normalizePath(rootDir);
+      if (!normRoot) return false;
+      const prefix = `${normRoot}::`;
+      for (const [key, draft] of docDrafts.entries()) {
+        if (key.startsWith(prefix) && draft?.isDirty) return true;
+      }
+      return false;
+    };
 
     // Dynamic getter-backed route object so `workDir` always reflects `activeRootDir || props.workDir`
     const dynamicRoute = {
@@ -799,12 +923,28 @@ export default {
     // Request correlation map (strictly scoped to CreationTab's own unique requestIds)
     const pendingRequests = new Map();
     let reqSeq = 0;
-    let pendingFileOpFallback = null;
     let scanGeneration = 0;
+    let activationEpoch = 0;
     let disposed = false;
     let refreshTimer = null;
+    let lastHandledTargetSeq = 0;
     let lastConsumedTargetSeq = 0;
-    const svgBlobUrls = [];
+    let containerResizeObserver = null;
+    const localBlobUrls = new Set();
+
+    const revokeLocalBlobUrl = (url) => {
+      if (typeof url === 'string' && localBlobUrls.has(url)) {
+        localBlobUrls.delete(url);
+        try { URL.revokeObjectURL(url); } catch {}
+      }
+    };
+
+    const revokeAllLocalBlobUrls = () => {
+      for (const url of localBlobUrls) {
+        try { URL.revokeObjectURL(url); } catch {}
+      }
+      localBlobUrls.clear();
+    };
 
     const nextReqId = (prefix) => (
       `creation-wb-${prefix}-${Date.now()}-${++reqSeq}-${Math.random().toString(36).slice(2, 7)}`
@@ -816,18 +956,16 @@ export default {
       feedbackTimer = setTimeout(() => { feedback.value = null; }, 4500);
     };
 
-    const sendCorrelatedRequest = (payload, { timeoutMs = 20000, expectFileOp = false } = {}) => {
+    const sendCorrelatedRequest = (payload, { timeoutMs = 20000 } = {}) => {
       const requestId = nextReqId(payload.type || 'req');
       return new Promise((resolve, reject) => {
         const timer = setTimeout(() => {
           pendingRequests.delete(requestId);
-          if (pendingFileOpFallback?.requestId === requestId) pendingFileOpFallback = null;
           reject(new Error(`Request ${payload.type} timed out`));
         }, timeoutMs);
 
-        const entry = { requestId, resolve, reject, timer, expectFileOp };
+        const entry = { requestId, resolve, reject, timer };
         pendingRequests.set(requestId, entry);
-        if (expectFileOp) pendingFileOpFallback = entry;
 
         const sent = wbStore.sendWsMessage({
           ...payload,
@@ -841,7 +979,6 @@ export default {
         if (sent === false) {
           clearTimeout(timer);
           pendingRequests.delete(requestId);
-          if (pendingFileOpFallback?.requestId === requestId) pendingFileOpFallback = null;
           reject(new Error('WebSocket unavailable'));
         }
       });
@@ -850,26 +987,12 @@ export default {
     const handleWorkbenchMessage = (event) => {
       const msg = event?.detail;
       if (!msg || disposed) return;
+      if (!msg.requestId || !pendingRequests.has(msg.requestId)) return;
 
-      if (msg.requestId && pendingRequests.has(msg.requestId)) {
-        const pending = pendingRequests.get(msg.requestId);
-        pendingRequests.delete(msg.requestId);
-        if (pendingFileOpFallback?.requestId === msg.requestId) pendingFileOpFallback = null;
-        clearTimeout(pending.timer);
-        pending.resolve(msg);
-        return;
-      }
-
-      // Fallback for older Agents that omit requestId on file_op_result
-      if (msg.type === 'file_op_result' && !msg.requestId && pendingFileOpFallback) {
-        if (!msg.agentId || msg.agentId === props.agentId) {
-          const pending = pendingFileOpFallback;
-          pendingFileOpFallback = null;
-          pendingRequests.delete(pending.requestId);
-          clearTimeout(pending.timer);
-          pending.resolve(msg);
-        }
-      }
+      const pending = pendingRequests.get(msg.requestId);
+      pendingRequests.delete(msg.requestId);
+      clearTimeout(pending.timer);
+      pending.resolve(msg);
     };
 
     // ==================== Computed Views ====================
@@ -890,10 +1013,37 @@ export default {
     const docTree = Vue.computed(() => buildDocTree(docFiles.value, activeRootDir.value));
     const flattenedDocTree = Vue.computed(() => flattenDocTree(docTree.value, expandedDocFolders));
 
-    const activeImageFile = Vue.computed(() => (
-      activeImageIndex.value >= 0 && activeImageIndex.value < imageFiles.value.length
-        ? imageFiles.value[activeImageIndex.value]
-        : null
+    const activeDocFile = Vue.computed(() => {
+      if (!activeRootDir.value || !activeDocPath.value) return null;
+      return docDrafts.get(makeDraftKey(activeRootDir.value, activeDocPath.value)) || null;
+    });
+
+    const activeImageIndex = Vue.computed(() => (
+      selectedImagePath.value
+        ? imageFiles.value.findIndex(item => item.path === selectedImagePath.value)
+        : -1
+    ));
+
+    const activeImageFile = Vue.computed(() => {
+      const idx = activeImageIndex.value;
+      if (idx < 0 || idx >= imageFiles.value.length) return null;
+      const item = imageFiles.value[idx];
+      if (!item) return null;
+      if (item.isSvg) {
+        return {
+          ...item,
+          fileType: 'text',
+          content: item.svgText ?? item.content ?? '',
+          blobUrl: '',
+        };
+      }
+      return item;
+    });
+
+    const activeVideoIndex = Vue.computed(() => (
+      selectedVideoPath.value
+        ? videoFiles.value.findIndex(item => item.path === selectedVideoPath.value)
+        : -1
     ));
 
     const activeVideoFile = Vue.computed(() => (
@@ -911,15 +1061,23 @@ export default {
     // ==================== Recursive Folder Scanner ====================
     const buildPreviewUrl = (msg) => {
       const origin = `${location.protocol}//${location.host}`;
-      if (msg.previewUrl) return new URL(msg.previewUrl, origin).href;
-      if (msg.fileId && msg.previewToken) {
-        return `${origin}/api/preview/${msg.fileId}?token=${msg.previewToken}`;
+      let candidate = '';
+      if (msg.previewUrl) {
+        if (!isSafeMediaUrl(msg.previewUrl, localBlobUrls)) return '';
+        try {
+          candidate = new URL(msg.previewUrl, origin).href;
+        } catch {
+          return '';
+        }
+      } else if (msg.fileId && msg.previewToken) {
+        candidate = `${origin}/api/preview/${encodeURIComponent(String(msg.fileId))}?token=${encodeURIComponent(String(msg.previewToken))}`;
       }
-      return '';
+      return isSafeMediaUrl(candidate, localBlobUrls) ? candidate : '';
     };
 
     const loadImageThumbnail = async (item, expectedGen) => {
-      if (!item || item.previewUrl || item.loadingThumb || disposed) return;
+      if (!item || item.loadingThumb || disposed) return;
+      if (item.isSvg ? item.svgText !== null : Boolean(item.previewUrl)) return;
       item.loadingThumb = true;
       item.thumbError = null;
       try {
@@ -932,21 +1090,41 @@ export default {
           item.thumbError = msg.error;
           item.previewError = msg.error;
           item.loadError = msg.error;
+          item.previewLoading = false;
+          item.loading = false;
+          return;
+        }
+        if (item.isSvg) {
+          if (typeof msg.content === 'string') {
+            item.fileType = 'text';
+            item.content = msg.content;
+            item.svgText = msg.content;
+            item.previewUrl = '';
+            item.blobUrl = '';
+            item.previewLoading = false;
+            item.loading = false;
+          } else {
+            const errText = tr('creation.workbench.previewUnavailable', 'Preview unavailable');
+            item.thumbError = errText;
+            item.previewError = errText;
+            item.previewLoading = false;
+            item.loading = false;
+          }
           return;
         }
         if (msg.binary) {
           const url = buildPreviewUrl(msg);
+          if (!url) {
+            const errText = tr('creation.workbench.previewUnavailable', 'Preview unavailable');
+            item.thumbError = errText;
+            item.previewError = errText;
+            item.previewLoading = false;
+            item.loading = false;
+            return;
+          }
+          revokeLocalBlobUrl(item.blobUrl);
           item.previewUrl = url;
           item.blobUrl = url;
-          item.previewLoading = false;
-          item.loading = false;
-        } else if (getExt(item.name) === '.svg' && typeof msg.content === 'string') {
-          const blob = new Blob([msg.content], { type: 'image/svg+xml;charset=utf-8' });
-          const blobUrl = URL.createObjectURL(blob);
-          svgBlobUrls.push(blobUrl);
-          item.content = msg.content;
-          item.previewUrl = blobUrl;
-          item.blobUrl = blobUrl;
           item.previewLoading = false;
           item.loading = false;
         }
@@ -954,6 +1132,8 @@ export default {
         if (!disposed && expectedGen === scanGeneration) {
           item.thumbError = err?.message || 'Failed to load thumbnail';
           item.previewError = item.thumbError;
+          item.previewLoading = false;
+          item.loading = false;
         }
       } finally {
         item.loadingThumb = false;
@@ -965,7 +1145,8 @@ export default {
       const worker = async () => {
         while (!disposed && expectedGen === scanGeneration && cursor < items.length) {
           const item = items[cursor++];
-          if (!item.previewUrl) {
+          const alreadyLoaded = item.isSvg ? item.svgText !== null : Boolean(item.previewUrl);
+          if (!alreadyLoaded) {
             await loadImageThumbnail(item, expectedGen);
           }
         }
@@ -974,53 +1155,94 @@ export default {
       await Promise.all(workers);
     };
 
-    const openDocFile = async (entry) => {
-      if (!entry?.path) return;
-      const fileObj = Vue.reactive({
-        path: entry.path,
-        name: entry.name,
-        relPath: entry.relPath || relativePath(entry.path, activeRootDir.value),
-        fileType: 'text',
-        content: '',
-        originalContent: '',
-        blobUrl: null,
-        loading: true,
-        loadError: null,
-        previewLoading: false,
-        previewError: null,
-        isDirty: false,
-      });
-      activeDocFile.value = fileObj;
+    const openDocFile = async (entry, { forceReload = false } = {}) => {
+      const rootDir = activeRootDir.value;
+      if (!entry?.path || !rootDir) return;
+      const key = makeDraftKey(rootDir, entry.path);
+      let draft = docDrafts.get(key);
+      if (!draft) {
+        draft = Vue.reactive({
+          path: entry.path,
+          name: entry.name,
+          relPath: entry.relPath || relativePath(entry.path, rootDir),
+          fileType: 'text',
+          content: '',
+          savedContent: '',
+          originalContent: '',
+          blobUrl: null,
+          loading: true,
+          loaded: false,
+          loadError: null,
+          previewLoading: false,
+          previewError: null,
+          isDirty: false,
+          saving: false,
+        });
+        docDrafts.set(key, draft);
+      } else {
+        draft.name = entry.name || draft.name;
+        draft.relPath = entry.relPath || draft.relPath;
+      }
+
+      activeDocPath.value = entry.path;
+
+      // Preserve existing loaded/dirty draft without overwriting edits
+      if (draft.loaded && (!forceReload || draft.isDirty)) {
+        return;
+      }
+
+      draft.loading = true;
+      draft.loadError = null;
+      const expectedRouteKey = props.routeKey;
+      const expectedGen = props.workspaceGeneration;
 
       try {
         const msg = await sendCorrelatedRequest({
           type: 'read_file',
           filePath: entry.path,
         });
-        if (disposed || activeDocFile.value?.path !== entry.path) return;
-        fileObj.loading = false;
+        if (disposed || props.routeKey !== expectedRouteKey || props.workspaceGeneration !== expectedGen) return;
+        draft.loading = false;
         if (msg.error) {
-          fileObj.loadError = msg.error;
+          draft.loadError = msg.error;
           return;
         }
         const text = typeof msg.content === 'string' ? msg.content : '';
-        fileObj.content = text;
-        fileObj.originalContent = text;
-        fileObj.isDirty = false;
+        draft.loaded = true;
+        if (!draft.isDirty) {
+          draft.content = text;
+          draft.savedContent = text;
+          draft.originalContent = text;
+          draft.isDirty = false;
+        }
       } catch (err) {
-        if (activeDocFile.value?.path === entry.path) {
-          fileObj.loading = false;
-          fileObj.loadError = err?.message || tr('files.readSendFailed', 'Failed to read file');
+        if (!disposed && props.routeKey === expectedRouteKey && props.workspaceGeneration === expectedGen) {
+          draft.loading = false;
+          draft.loadError = err?.message || tr('files.readSendFailed', 'Failed to read file');
         }
       }
     };
 
-    const scanWorkspace = async ({ reloadActiveDoc = false, selectPath = '' } = {}) => {
+    const scanWorkspace = async ({
+      reloadActiveDoc = false,
+      selectPath = '',
+      expectedEpoch = null,
+      expectedRouteKey = props.routeKey,
+      expectedGen = props.workspaceGeneration,
+    } = {}) => {
       const rootDir = activeRootDir.value;
       if (!rootDir || disposed) return;
 
       const myGen = ++scanGeneration;
       scanning.value = true;
+
+      const isScanCurrent = () => (
+        !disposed
+        && myGen === scanGeneration
+        && props.routeKey === expectedRouteKey
+        && props.workspaceGeneration === expectedGen
+        && (expectedEpoch === null || expectedEpoch === activationEpoch)
+      );
 
       const foundDocs = [];
       const foundImages = [];
@@ -1028,11 +1250,13 @@ export default {
       const prevImageByPath = new Map(imageFiles.value.map(item => [item.path, item]));
       const prevVideoByPath = new Map(videoFiles.value.map(item => [item.path, item]));
       let totalEntries = 0;
+      let scanHadErrors = false;
+      let hitEntryCap = false;
 
       const queue = [{ dirPath: rootDir, depth: 0 }];
 
       try {
-        while (queue.length > 0 && totalEntries < SCAN_MAX_ENTRIES && !disposed && myGen === scanGeneration) {
+        while (queue.length > 0 && totalEntries < SCAN_MAX_ENTRIES && isScanCurrent()) {
           const { dirPath, depth } = queue.shift();
           let msg;
           try {
@@ -1041,18 +1265,27 @@ export default {
               dirPath,
             }, { timeoutMs: 15000 });
           } catch {
+            scanHadErrors = true;
             continue;
           }
-          if (disposed || myGen !== scanGeneration) return;
-          if (msg.error || !Array.isArray(msg.entries)) continue;
+          if (!isScanCurrent()) return;
+          if (msg.error || !Array.isArray(msg.entries)) {
+            scanHadErrors = true;
+            continue;
+          }
 
           for (const entry of msg.entries) {
             if (!entry || !entry.name) continue;
+            if (entry.isSymlink || entry.type === 'symlink') continue;
             if (IGNORED_DIRS.has(entry.name)) continue;
-            if (totalEntries >= SCAN_MAX_ENTRIES) break;
+            if (totalEntries >= SCAN_MAX_ENTRIES) {
+              hitEntryCap = true;
+              break;
+            }
             totalEntries += 1;
 
             const fullPath = normalizePath(entry.path || joinPath(dirPath, entry.name));
+            if (!isPathInsideRoot(fullPath, rootDir)) continue;
             const rel = relativePath(fullPath, rootDir);
 
             if (entry.type === 'directory') {
@@ -1063,48 +1296,102 @@ export default {
             }
 
             const ext = getExt(entry.name);
+            const entrySize = Number(entry.size) || 0;
+            const entryMtime = entry.mtime ?? entry.mtimeMs ?? entry.modified ?? 0;
+
             if (DOC_EXTS.has(ext)) {
-              foundDocs.push({ path: fullPath, name: entry.name, relPath: rel, size: entry.size || 0 });
-            } else if (IMAGE_EXTS.has(ext)) {
-              const prev = prevImageByPath.get(fullPath);
-              foundImages.push(prev || Vue.reactive({
+              foundDocs.push({
                 path: fullPath,
                 name: entry.name,
                 relPath: rel,
-                size: entry.size || 0,
-                fileType: 'image',
-                content: null,
-                blobUrl: null,
-                previewUrl: '',
-                loading: false,
-                loadError: null,
-                previewLoading: false,
-                previewError: null,
-                loadingThumb: false,
-                thumbError: null,
-                isDirty: false,
-              }));
+                size: entrySize,
+                mtime: entryMtime,
+              });
+            } else if (IMAGE_EXTS.has(ext)) {
+              const isSvg = ext === '.svg';
+              const prev = prevImageByPath.get(fullPath);
+              if (prev) {
+                if (prev.size !== entrySize || prev.mtime !== entryMtime) {
+                  revokeLocalBlobUrl(prev.blobUrl);
+                  prev.size = entrySize;
+                  prev.mtime = entryMtime;
+                  prev.previewUrl = '';
+                  prev.blobUrl = isSvg ? '' : null;
+                  prev.svgText = null;
+                  prev.content = null;
+                  prev.thumbError = null;
+                  prev.previewError = null;
+                  prev.loadError = null;
+                }
+                foundImages.push(prev);
+              } else {
+                foundImages.push(Vue.reactive({
+                  path: fullPath,
+                  name: entry.name,
+                  relPath: rel,
+                  size: entrySize,
+                  mtime: entryMtime,
+                  isSvg,
+                  fileType: isSvg ? 'text' : 'image',
+                  content: null,
+                  svgText: null,
+                  blobUrl: isSvg ? '' : null,
+                  previewUrl: '',
+                  loading: false,
+                  loadError: null,
+                  previewLoading: false,
+                  previewError: null,
+                  loadingThumb: false,
+                  thumbError: null,
+                  isDirty: false,
+                }));
+              }
             } else if (VIDEO_EXTS.has(ext)) {
               const prev = prevVideoByPath.get(fullPath);
-              foundVideos.push(prev || Vue.reactive({
-                path: fullPath,
-                name: entry.name,
-                relPath: rel,
-                size: entry.size || 0,
-                fileType: 'video',
-                content: null,
-                blobUrl: null,
-                loading: false,
-                loadError: null,
-                previewLoading: false,
-                previewError: null,
-                isDirty: false,
-              }));
+              if (prev) {
+                if (prev.size !== entrySize || prev.mtime !== entryMtime) {
+                  revokeLocalBlobUrl(prev.blobUrl);
+                  prev.size = entrySize;
+                  prev.mtime = entryMtime;
+                  prev.blobUrl = null;
+                  prev.previewError = null;
+                  prev.loadError = null;
+                }
+                foundVideos.push(prev);
+              } else {
+                foundVideos.push(Vue.reactive({
+                  path: fullPath,
+                  name: entry.name,
+                  relPath: rel,
+                  size: entrySize,
+                  mtime: entryMtime,
+                  fileType: 'video',
+                  content: null,
+                  blobUrl: null,
+                  loading: false,
+                  loadError: null,
+                  previewLoading: false,
+                  previewError: null,
+                  isDirty: false,
+                }));
+              }
             }
           }
         }
 
-        if (disposed || myGen !== scanGeneration) return;
+        if (!isScanCurrent()) return;
+
+        // Revoke any local blob URLs for media files removed on a clean, complete scan
+        if (!scanHadErrors && !hitEntryCap) {
+          const nextImgPaths = new Set(foundImages.map(i => i.path));
+          for (const [oldPath, oldItem] of prevImageByPath.entries()) {
+            if (!nextImgPaths.has(oldPath)) revokeLocalBlobUrl(oldItem.blobUrl);
+          }
+          const nextVidPaths = new Set(foundVideos.map(v => v.path));
+          for (const [oldPath, oldItem] of prevVideoByPath.entries()) {
+            if (!nextVidPaths.has(oldPath)) revokeLocalBlobUrl(oldItem.blobUrl);
+          }
+        }
 
         foundDocs.sort((a, b) => a.relPath.localeCompare(b.relPath));
         foundImages.sort((a, b) => a.relPath.localeCompare(b.relPath));
@@ -1119,31 +1406,44 @@ export default {
           if (node.type === 'folder') expandedDocFolders.add(node.relPath);
         }
 
-        // Document selection / reload
+        // Document selection / safe refresh (NEVER discard dirty docs or on partial/errored scans)
         const targetSelect = selectPath
           ? foundDocs.find(d => normalizePath(d.path) === normalizePath(selectPath))
           : null;
 
         if (targetSelect) {
           await openDocFile(targetSelect);
-        } else if (activeDocFile.value) {
-          const stillExists = foundDocs.find(d => d.path === activeDocFile.value.path);
+        } else if (activeDocPath.value) {
+          const currentDraft = docDrafts.get(makeDraftKey(rootDir, activeDocPath.value));
+          const stillExists = foundDocs.find(d => d.path === activeDocPath.value);
           if (!stillExists) {
-            activeDocFile.value = null;
-          } else if (reloadActiveDoc && !activeDocFile.value.isDirty) {
-            await openDocFile(stillExists);
+            if (!currentDraft?.isDirty && !scanHadErrors && !hitEntryCap) {
+              activeDocPath.value = '';
+            }
+          } else if (reloadActiveDoc && (!currentDraft || !currentDraft.isDirty)) {
+            await openDocFile(stillExists, { forceReload: true });
           }
         }
 
-        if (!activeDocFile.value && foundDocs.length > 0) {
+        if (!isScanCurrent()) return;
+
+        if (!activeDocPath.value && foundDocs.length > 0) {
           const readme = foundDocs.find(d => d.name.toLowerCase() === 'readme.md');
           const firstMd = foundDocs.find(d => getExt(d.name) === '.md');
           await openDocFile(readme || firstMd || foundDocs[0]);
         }
 
-        // Clamp media detail indices
-        if (activeImageIndex.value >= foundImages.length) activeImageIndex.value = -1;
-        if (activeVideoIndex.value >= foundVideos.length) activeVideoIndex.value = -1;
+        if (!isScanCurrent()) return;
+
+        // Clear selected media path only if removed on a complete, error-free scan
+        if (!scanHadErrors && !hitEntryCap) {
+          if (selectedImagePath.value && !foundImages.some(i => i.path === selectedImagePath.value)) {
+            selectedImagePath.value = '';
+          }
+          if (selectedVideoPath.value && !foundVideos.some(v => v.path === selectedVideoPath.value)) {
+            selectedVideoPath.value = '';
+          }
+        }
 
         // Kick off lazy thumbnail loading when images exist
         if (activeModality.value === 'images' && foundImages.length > 0) {
@@ -1161,47 +1461,90 @@ export default {
         else expandedDocFolders.add(node.relPath);
         return;
       }
-      if (activeDocFile.value?.path === node.path) return;
+      if (isNarrowContainer.value) {
+        docTreeOpen.value = false;
+      }
+      if (activeDocPath.value === node.path) return;
       void openDocFile(node);
     };
 
     const onDocContentUpdate = (newContent) => {
-      if (!activeDocFile.value) return;
-      activeDocFile.value.content = newContent;
-      activeDocFile.value.isDirty = newContent !== activeDocFile.value.originalContent;
+      const draft = activeDocFile.value;
+      if (!draft) return;
+      draft.content = newContent;
+      draft.isDirty = newContent !== draft.savedContent;
     };
 
     const saveActiveDoc = async () => {
-      const file = activeDocFile.value;
-      if (!file || !file.isDirty || docSaving.value) return;
-      docSaving.value = true;
-      const contentToSave = file.content;
+      const draft = activeDocFile.value;
+      if (!draft || !draft.isDirty || draft.saving) return;
+      draft.saving = true;
+      const contentSnapshot = draft.content;
       try {
         const msg = await sendCorrelatedRequest({
           type: 'write_file',
-          filePath: file.path,
-          content: contentToSave,
+          filePath: draft.path,
+          content: contentSnapshot,
         });
-        if (msg.error) {
-          showFeedback(false, msg.error);
+        const succeeded = Boolean(
+          msg
+          && !msg.error
+          && msg.success !== false
+          && (!msg.type || msg.type === 'file_saved' || msg.type === 'file_op_result'),
+        );
+        if (!succeeded) {
+          draft.isDirty = true;
+          showFeedback(false, msg?.error || tr('creation.workbench.saveFailed', 'Failed to save'));
           return;
         }
-        file.originalContent = contentToSave;
-        file.isDirty = file.content !== file.originalContent;
+        draft.savedContent = contentSnapshot;
+        draft.originalContent = contentSnapshot;
+        draft.isDirty = draft.content !== contentSnapshot;
         showFeedback(true, tr('creation.workbench.saved', 'Saved'));
       } catch (err) {
+        draft.isDirty = true;
         showFeedback(false, err?.message || tr('creation.workbench.saveFailed', 'Failed to save'));
       } finally {
-        docSaving.value = false;
+        draft.saving = false;
       }
     };
 
     // ==================== Media Selection & Video Metadata ====================
+    const findMediaItemByPath = (path) => (
+      imageFiles.value.find(item => item.path === path)
+      || videoFiles.value.find(item => item.path === path)
+      || null
+    );
+
+    const onMediaLoad = (payload) => {
+      const path = payload?.path;
+      const url = payload?.url;
+      if (!path) return;
+      const item = findMediaItemByPath(path);
+      if (!item) return;
+      if (url && item.blobUrl && item.blobUrl !== url) return;
+      item.previewLoading = false;
+      item.previewError = null;
+    };
+
+    const onMediaError = (payload) => {
+      const path = payload?.path;
+      const url = payload?.url;
+      if (!path) return;
+      const item = findMediaItemByPath(path);
+      if (!item) return;
+      if (url && item.blobUrl && item.blobUrl !== url) return;
+      item.previewLoading = false;
+      item.previewError = payload?.message || tr('creation.workbench.previewUnavailable', 'Preview unavailable');
+    };
+
     const selectImageAt = async (index) => {
       if (index < 0 || index >= imageFiles.value.length) return;
-      activeImageIndex.value = index;
       const item = imageFiles.value[index];
-      if (!item.blobUrl && !item.previewUrl) {
+      if (!item) return;
+      selectedImagePath.value = item.path;
+      const alreadyLoaded = item.isSvg ? item.svgText !== null : Boolean(item.blobUrl || item.previewUrl);
+      if (!alreadyLoaded) {
         item.loading = true;
         item.previewLoading = true;
         await loadImageThumbnail(item, scanGeneration);
@@ -1212,9 +1555,11 @@ export default {
 
     const selectVideoAt = async (index) => {
       if (index < 0 || index >= videoFiles.value.length) return;
-      activeVideoIndex.value = index;
       const item = videoFiles.value[index];
+      if (!item) return;
+      selectedVideoPath.value = item.path;
       if (item.blobUrl) return;
+      const expectedGen = scanGeneration;
       item.loading = true;
       item.loadError = null;
       item.previewLoading = true;
@@ -1224,6 +1569,7 @@ export default {
           type: 'video_metadata',
           filePath: item.path,
         }, { timeoutMs: 20000 });
+        if (disposed || expectedGen !== scanGeneration) return;
         item.loading = false;
         if (msg.error || !msg.videoStream || !msg.previewUrl) {
           const errText = msg.error || tr('files.videoStreamUnavailable', 'Video stream unavailable');
@@ -1232,13 +1578,23 @@ export default {
           item.previewLoading = false;
           return;
         }
-        item.blobUrl = buildPreviewUrl(msg);
+        const safeUrl = buildPreviewUrl(msg);
+        if (!safeUrl) {
+          const errText = tr('files.videoStreamUnavailable', 'Video stream unavailable');
+          item.loadError = errText;
+          item.previewError = errText;
+          item.previewLoading = false;
+          return;
+        }
+        item.blobUrl = safeUrl;
         item.previewLoading = false;
       } catch (err) {
-        item.loading = false;
-        item.previewLoading = false;
-        item.loadError = err?.message || tr('files.videoStreamUnavailable', 'Video stream unavailable');
-        item.previewError = item.loadError;
+        if (!disposed && expectedGen === scanGeneration) {
+          item.loading = false;
+          item.previewLoading = false;
+          item.loadError = err?.message || tr('files.videoStreamUnavailable', 'Video stream unavailable');
+          item.previewError = item.loadError;
+        }
       }
     };
 
@@ -1254,15 +1610,23 @@ export default {
     const confirmMiniDialog = async () => {
       const name = miniDialog.name.trim();
       if (!name || !activeRootDir.value || miniDialog.submitting) return;
-      miniDialog.submitting = true;
+      if (!isSafeRelativeChildName(name)) {
+        showFeedback(false, tr('creation.workbench.invalidPath', 'Invalid file or folder name'));
+        return;
+      }
       const filePath = joinPath(activeRootDir.value, name);
+      if (!isPathInsideRoot(filePath, activeRootDir.value)) {
+        showFeedback(false, tr('creation.workbench.invalidPath', 'Path must stay inside the Creation folder'));
+        return;
+      }
+      miniDialog.submitting = true;
       const isDirectory = miniDialog.mode === 'folder';
       try {
         const msg = await sendCorrelatedRequest({
           type: 'create_file',
           filePath,
           isDirectory,
-        }, { expectFileOp: true });
+        });
         if (msg.success === false || msg.error) {
           showFeedback(false, msg.error || tr('creation.workbench.createFailed', 'Create failed'));
           return;
@@ -1293,9 +1657,32 @@ export default {
       if (event.target) event.target.value = '';
       if (!selected.length || !activeRootDir.value) return;
 
+      const subdir = uploadTargetSubdir.value;
+      if (!isSafeRelativeChildName(subdir)) {
+        showFeedback(false, tr('creation.workbench.invalidPath', 'Invalid upload folder'));
+        return;
+      }
+      const targetDir = joinPath(activeRootDir.value, subdir);
+      if (!isPathInsideRoot(targetDir, activeRootDir.value)) {
+        showFeedback(false, tr('creation.workbench.invalidPath', 'Upload destination must stay inside the Creation folder'));
+        return;
+      }
+
+      const safeSelected = selected.filter(file => (
+        file
+        && isSafeRelativeChildName(file.name)
+        && !String(file.name).includes('/')
+        && !String(file.name).includes('\\')
+        && isPathInsideRoot(joinPath(targetDir, file.name), activeRootDir.value)
+      ));
+      if (!safeSelected.length) {
+        showFeedback(false, tr('creation.workbench.invalidPath', 'Invalid filename for upload'));
+        return;
+      }
+
       uploading.value = true;
       try {
-        const filesPayload = await Promise.all(selected.map(file => new Promise((resolve) => {
+        const filesPayload = await Promise.all(safeSelected.map(file => new Promise((resolve) => {
           const reader = new FileReader();
           reader.onload = () => {
             const bytes = new Uint8Array(reader.result);
@@ -1312,21 +1699,20 @@ export default {
         const validFiles = filesPayload.filter(Boolean);
         if (!validFiles.length) return;
 
-        const targetDir = joinPath(activeRootDir.value, uploadTargetSubdir.value);
         // Ensure target subdir exists (ignore error if already exists)
         try {
           await sendCorrelatedRequest({
             type: 'create_file',
             filePath: targetDir,
             isDirectory: true,
-          }, { expectFileOp: true, timeoutMs: 10000 });
+          }, { timeoutMs: 10000 });
         } catch {}
 
         const msg = await sendCorrelatedRequest({
           type: 'upload_to_dir',
           files: validFiles,
           dirPath: targetDir,
-        }, { expectFileOp: true, timeoutMs: 30000 });
+        }, { timeoutMs: 30000 });
 
         if (msg.success === false || msg.error) {
           showFeedback(false, msg.error || tr('creation.workbench.uploadFailed', 'Upload failed'));
@@ -1380,14 +1766,42 @@ export default {
     const downloadFile = (file) => {
       if (!file) return;
       const name = file.name || 'download';
-      if (file.blobUrl) {
-        const a = document.createElement('a');
+      const isSvgFile = Boolean(file.isSvg) || getExt(name) === '.svg';
+
+      // For SVGs (and any text content), download via attachment-only application/octet-stream Blob revoked immediately
+      if (isSvgFile && typeof (file.svgText ?? file.content) === 'string') {
+        const blob = new Blob([file.svgText ?? file.content], { type: 'application/octet-stream' });
+        const url = URL.createObjectURL(blob);
         try {
-          const url = new URL(file.blobUrl, `${location.protocol}//${location.host}`);
-          if (!file.blobUrl.startsWith('blob:')) url.searchParams.set('download', '1');
-          a.href = url.href;
-        } catch {
+          const a = document.createElement('a');
+          a.href = url;
+          a.download = name;
+          document.body.appendChild(a);
+          a.click();
+          document.body.removeChild(a);
+        } finally {
+          URL.revokeObjectURL(url);
+        }
+        return;
+      }
+
+      if (file.blobUrl) {
+        if (!isSafeMediaUrl(file.blobUrl, localBlobUrls)) {
+          showFeedback(false, tr('creation.workbench.unsafeUrl', 'Blocked unsafe download URL'));
+          return;
+        }
+        const a = document.createElement('a');
+        if (file.blobUrl.startsWith('blob:')) {
           a.href = file.blobUrl;
+        } else {
+          try {
+            const url = new URL(file.blobUrl, `${location.protocol}//${location.host}`);
+            url.searchParams.set('download', '1');
+            a.href = url.href;
+          } catch {
+            showFeedback(false, tr('creation.workbench.unsafeUrl', 'Blocked unsafe download URL'));
+            return;
+          }
         }
         a.download = name;
         document.body.appendChild(a);
@@ -1395,105 +1809,157 @@ export default {
         document.body.removeChild(a);
         return;
       }
+
       if (typeof file.content === 'string') {
-        const blob = new Blob([file.content], { type: 'text/plain;charset=utf-8' });
+        const blob = new Blob([file.content], { type: 'application/octet-stream' });
         const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = name;
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-        URL.revokeObjectURL(url);
+        try {
+          const a = document.createElement('a');
+          a.href = url;
+          a.download = name;
+          document.body.appendChild(a);
+          a.click();
+          document.body.removeChild(a);
+        } finally {
+          URL.revokeObjectURL(url);
+        }
       }
     };
 
-    // ==================== Creation Activation & Onboarding ====================
-    const activateCreation = async (creation, rootDirOverride = '') => {
-      onboardingError.value = '';
-      let resolvedCreation = creation || null;
-      let rootDir = rootDirOverride || resolvedCreation?.rootDir || '';
+    // ==================== Single Fenced Creation Activation ====================
+    const activateTarget = async ({
+      creation = null,
+      creationId = '',
+      rootDir = '',
+      autoResolve = false,
+      confirmDirty = true,
+    } = {}) => {
+      if (autoResolve && (activeRootDir.value || showingSwitcher.value)) return;
+      const epoch = ++activationEpoch;
+      const routeKey = props.routeKey;
+      const gen = props.workspaceGeneration;
+      const agentId = props.agentId;
 
-      if (resolvedCreation?.id && !rootDir && typeof creationsStore.ensureWorkspace === 'function') {
+      const isCurrent = () => (
+        !disposed
+        && epoch === activationEpoch
+        && routeKey === props.routeKey
+        && gen === props.workspaceGeneration
+      );
+
+      if (!agentId) return;
+
+      // 1. Ensure Creations list is loaded for this Agent (using actual `listCreations` method)
+      const bucket = creationsStore.byAgent?.[agentId];
+      if (!bucket?.loaded && typeof creationsStore.listCreations === 'function') {
+        loadingCreations.value = true;
         try {
-          const ensured = await creationsStore.ensureWorkspace(props.agentId, resolvedCreation.id, { rootDir });
-          rootDir = ensured?.rootDir || ensured?.creation?.rootDir || rootDir;
-          if (ensured?.creation) resolvedCreation = ensured.creation;
-        } catch (err) {
-          onboardingError.value = err?.message || tr('creation.workbench.workspaceFailed', 'Failed to prepare workspace');
+          await creationsStore.listCreations(agentId);
+        } catch {} finally {
+          if (isCurrent()) loadingCreations.value = false;
+        }
+        if (!isCurrent()) return;
+      }
+
+      const list = creationsStore.creationsForAgent(agentId) || [];
+      let resolvedCreation = creation || null;
+      let targetRootDir = rootDir || resolvedCreation?.rootDir || '';
+
+      // 2. Resolve target Creation / folder
+      if (autoResolve) {
+        if (activeRootDir.value || showingSwitcher.value) return;
+        if (props.sessionId) {
+          resolvedCreation = list.find(c => c && c.sessionId === props.sessionId) || null;
+        }
+        if (!resolvedCreation && props.workDir) {
+          if (typeof creationsStore.findByFolder === 'function') {
+            try {
+              resolvedCreation = (await creationsStore.findByFolder(agentId, props.workDir)) || null;
+            } catch {
+              resolvedCreation = null;
+            }
+            if (!isCurrent()) return;
+          }
+          if (!resolvedCreation) {
+            const normWork = normalizePath(props.workDir);
+            resolvedCreation = list.find(c => c && c.rootDir && normalizePath(c.rootDir) === normWork) || null;
+          }
+        }
+        if (!resolvedCreation) return;
+        targetRootDir = resolvedCreation.rootDir || '';
+      } else {
+        onboardingError.value = '';
+        if (!resolvedCreation && creationId) {
+          resolvedCreation = list.find(c => c && c.id === creationId) || null;
+        }
+        if (!resolvedCreation && targetRootDir && typeof creationsStore.findByFolder === 'function') {
+          try {
+            resolvedCreation = (await creationsStore.findByFolder(agentId, targetRootDir)) || null;
+          } catch {
+            resolvedCreation = null;
+          }
+          if (!isCurrent()) return;
+        }
+        if (!resolvedCreation && targetRootDir) {
+          const normTarget = normalizePath(targetRootDir);
+          resolvedCreation = list.find(c => c && c.rootDir && normalizePath(c.rootDir) === normTarget) || null;
+        }
+        targetRootDir = targetRootDir || resolvedCreation?.rootDir || '';
+
+        if (resolvedCreation?.id && !targetRootDir && typeof creationsStore.ensureWorkspace === 'function') {
+          try {
+            const ensured = await creationsStore.ensureWorkspace(agentId, resolvedCreation.id, { rootDir: targetRootDir });
+            if (!isCurrent()) return;
+            targetRootDir = ensured?.rootDir || ensured?.creation?.rootDir || targetRootDir;
+            if (ensured?.creation) resolvedCreation = ensured.creation;
+          } catch (err) {
+            if (isCurrent()) {
+              onboardingError.value = err?.message || tr('creation.workbench.workspaceFailed', 'Failed to prepare workspace');
+            }
+            return;
+          }
+        }
+
+        if (!targetRootDir) {
+          onboardingError.value = tr('creation.workbench.missingRootDir', 'This Creation does not have a workspace folder yet.');
           return;
         }
       }
 
-      if (!rootDir) {
-        onboardingError.value = tr('creation.workbench.missingRootDir', 'This Creation does not have a workspace folder yet.');
-        return;
+      if (!isCurrent()) return;
+
+      const nextNormRoot = normalizePath(targetRootDir);
+      const prevNormRoot = normalizePath(activeRootDir.value);
+      const changed = prevNormRoot !== nextNormRoot;
+
+      // 3. Guard unsaved drafts before switching away from current Creation
+      if (changed && prevNormRoot && confirmDirty && hasDirtyDraftsInWorkspace(prevNormRoot)) {
+        const confirmed = typeof window.confirm === 'function'
+          ? window.confirm(tr('creation.workbench.unsavedSwitchConfirm', 'You have unsaved document changes in this Creation. Switch anyway?'))
+          : true;
+        if (!confirmed || !isCurrent()) return;
       }
 
-      const changed = normalizePath(activeRootDir.value) !== normalizePath(rootDir);
       activeCreation.value = resolvedCreation;
-      activeRootDir.value = normalizePath(rootDir);
+      activeRootDir.value = nextNormRoot;
       showingSwitcher.value = false;
 
       if (changed) {
-        activeDocFile.value = null;
-        activeImageIndex.value = -1;
-        activeVideoIndex.value = -1;
+        activeDocPath.value = '';
+        selectedImagePath.value = '';
+        selectedVideoPath.value = '';
         docFiles.value = [];
         imageFiles.value = [];
         videoFiles.value = [];
         expandedDocFolders.clear();
       }
 
-      await scanWorkspace();
-    };
-
-    const resolveCreationTarget = async ({ creationId = '', rootDir = '' } = {}) => {
-      const list = creationsStore.creationsForAgent(props.agentId) || [];
-      let found = null;
-      if (creationId) found = list.find(c => c && c.id === creationId) || null;
-      if (!found && rootDir && typeof creationsStore.findByFolder === 'function') {
-        found = creationsStore.findByFolder(props.agentId, rootDir) || null;
-      }
-      if (!found && rootDir) {
-        found = list.find(c => c && c.rootDir && normalizePath(c.rootDir) === normalizePath(rootDir)) || null;
-      }
-      await activateCreation(found, rootDir || found?.rootDir || '');
-    };
-
-    const autoResolveFromRoute = async () => {
-      if (activeRootDir.value || showingSwitcher.value) return;
-      const list = creationsStore.creationsForAgent(props.agentId) || [];
-      let match = null;
-      if (props.sessionId) {
-        match = list.find(c => c && c.sessionId === props.sessionId) || null;
-      }
-      if (!match && props.workDir) {
-        if (typeof creationsStore.findByFolder === 'function') {
-          match = creationsStore.findByFolder(props.agentId, props.workDir) || null;
-        }
-        if (!match) {
-          const normWork = normalizePath(props.workDir);
-          match = list.find(c => c && c.rootDir && normalizePath(c.rootDir) === normWork) || null;
-        }
-      }
-      if (match) {
-        await activateCreation(match, match.rootDir || '');
-      }
-    };
-
-    const ensureCreationsLoaded = async () => {
-      if (!props.agentId) return;
-      const bucket = creationsStore.byAgent?.[props.agentId];
-      if (!bucket?.loaded && typeof creationsStore.loadCreations === 'function') {
-        loadingCreations.value = true;
-        try {
-          await creationsStore.loadCreations(props.agentId);
-        } catch {} finally {
-          loadingCreations.value = false;
-        }
-      }
-      await autoResolveFromRoute();
+      await scanWorkspace({
+        expectedEpoch: epoch,
+        expectedRouteKey: routeKey,
+        expectedGen: gen,
+      });
+      if (!isCurrent()) return;
     };
 
     const openCreateModal = () => {
@@ -1504,7 +1970,10 @@ export default {
     const onCreationCreated = async (payload) => {
       if (!payload) return;
       if (payload.agentId && payload.agentId !== props.agentId) return;
-      await activateCreation(payload.creation || null, payload.rootDir || payload.creation?.rootDir || '');
+      await activateTarget({
+        creation: payload.creation || null,
+        rootDir: payload.rootDir || payload.creation?.rootDir || '',
+      });
     };
 
     const bindCurrentFolder = async () => {
@@ -1518,7 +1987,10 @@ export default {
           sessionId: props.sessionId,
         });
         const creation = res?.creation || res || null;
-        await activateCreation(creation, res?.rootDir || creation?.rootDir || props.workDir);
+        await activateTarget({
+          creation,
+          rootDir: res?.rootDir || creation?.rootDir || props.workDir,
+        });
       } catch (err) {
         onboardingError.value = err?.message || tr('creation.workbench.bindFailed', 'Failed to open folder as Creation');
       } finally {
@@ -1528,7 +2000,11 @@ export default {
 
     const selectExistingCreation = async (item) => {
       if (!item) return;
-      await activateCreation(item, item.rootDir || '');
+      await activateTarget({
+        creation: item,
+        creationId: item.id || '',
+        rootDir: item.rootDir || '',
+      });
     };
 
     // ==================== Event Listeners & Watchers ====================
@@ -1537,7 +2013,9 @@ export default {
       if (!detail) return;
       if (detail.routeKey && detail.routeKey !== props.routeKey) return;
       if (detail.agentId && detail.agentId !== props.agentId) return;
-      void resolveCreationTarget({
+      if (detail.seq && detail.seq <= lastHandledTargetSeq) return;
+      if (detail.seq) lastHandledTargetSeq = detail.seq;
+      void activateTarget({
         creationId: detail.creationId || '',
         rootDir: detail.rootDir || '',
       });
@@ -1560,16 +2038,15 @@ export default {
 
     // Watch injected target from WorkbenchPanel (covers first-mount race before window listener attaches)
     const injectedCreationTarget = Vue.inject('workbench-creation-target', null);
-    let lastInjectedTargetSeq = 0;
     if (injectedCreationTarget) {
       Vue.watch(
         () => injectedCreationTarget.seq,
         (seq) => {
-          if (!seq || seq === lastInjectedTargetSeq) return;
+          if (!seq || seq <= lastHandledTargetSeq) return;
           if (injectedCreationTarget.routeKey && injectedCreationTarget.routeKey !== props.routeKey) return;
           if (injectedCreationTarget.agentId && injectedCreationTarget.agentId !== props.agentId) return;
-          lastInjectedTargetSeq = seq;
-          void resolveCreationTarget({
+          lastHandledTargetSeq = seq;
+          void activateTarget({
             creationId: injectedCreationTarget.creationId || '',
             rootDir: injectedCreationTarget.rootDir || '',
           });
@@ -1581,7 +2058,7 @@ export default {
     // Watch pendingWorkbenchTarget only when CreationTab is mounted standalone
     // (without a parent WorkbenchPanel). When inside WorkbenchPanel, the panel
     // owns consuming pendingWorkbenchTarget (so maximize/expand is always applied)
-    // and forwards the target via `providedCreationTarget` + `workbench-creation-target`.
+    // and forwards the target via `providedCreationTarget`.
     if (!injectedCreationTarget) {
       Vue.watch(
         () => creationsStore.pendingWorkbenchTarget,
@@ -1591,7 +2068,7 @@ export default {
           if (target.agentId && target.agentId !== props.agentId) return;
           if (target.sessionId && target.sessionId !== props.sessionId) return;
           lastConsumedTargetSeq = target.seq || Date.now();
-          void resolveCreationTarget({
+          void activateTarget({
             creationId: target.creationId || '',
             rootDir: target.rootDir || '',
           });
@@ -1624,33 +2101,60 @@ export default {
       }
     });
 
-    Vue.watch(() => props.agentId, () => {
-      void ensureCreationsLoaded();
+    Vue.watch(() => [props.agentId, props.routeKey, props.workspaceGeneration], () => {
+      void activateTarget({ autoResolve: true });
     });
+
+    const syncContainerNarrowState = (width) => {
+      if (!width || width <= 0) return;
+      const narrow = width <= 680;
+      if (narrow !== isNarrowContainer.value) {
+        isNarrowContainer.value = narrow;
+        docTreeOpen.value = !narrow;
+      }
+    };
 
     Vue.onMounted(() => {
       window.addEventListener('workbench-message', handleWorkbenchMessage);
       window.addEventListener('workbench-creation-target', handleCreationTargetEvent);
       document.addEventListener('click', handleDocumentClick);
-      void ensureCreationsLoaded();
+      if (rootEl.value) {
+        const rectWidth = rootEl.value.getBoundingClientRect?.().width || rootEl.value.clientWidth || 0;
+        syncContainerNarrowState(rectWidth);
+        if (typeof ResizeObserver !== 'undefined') {
+          containerResizeObserver = new ResizeObserver((entries) => {
+            const w = entries[0]?.contentRect?.width || rootEl.value?.clientWidth || 0;
+            syncContainerNarrowState(w);
+          });
+          containerResizeObserver.observe(rootEl.value);
+        }
+      }
+      if (activationEpoch === 0) {
+        void activateTarget({ autoResolve: true });
+      }
+    });
+
+    Vue.onBeforeUnmount(() => {
+      revokeAllLocalBlobUrls();
     });
 
     Vue.onUnmounted(() => {
       disposed = true;
+      activationEpoch += 1;
       window.removeEventListener('workbench-message', handleWorkbenchMessage);
       window.removeEventListener('workbench-creation-target', handleCreationTargetEvent);
       document.removeEventListener('click', handleDocumentClick);
       if (feedbackTimer) clearTimeout(feedbackTimer);
       if (refreshTimer) clearTimeout(refreshTimer);
+      if (containerResizeObserver) {
+        containerResizeObserver.disconnect();
+        containerResizeObserver = null;
+      }
       for (const entry of pendingRequests.values()) {
         clearTimeout(entry.timer);
       }
       pendingRequests.clear();
-      pendingFileOpFallback = null;
-      for (const url of svgBlobUrls) {
-        try { URL.revokeObjectURL(url); } catch {}
-      }
-      svgBlobUrls.length = 0;
+      revokeAllLocalBlobUrls();
     });
 
     return {
@@ -1670,6 +2174,7 @@ export default {
       activeTitle,
       activeModality,
       docTreeOpen,
+      isNarrowContainer,
       addMenuOpen,
       scanning,
       uploading,
@@ -1681,16 +2186,20 @@ export default {
       videoFiles,
       expandedDocFolders,
       flattenedDocTree,
+      docDrafts,
+      activeDocPath,
       activeDocFile,
-      docSaving,
+      selectedImagePath,
       activeImageIndex,
       activeImageFile,
+      selectedVideoPath,
       activeVideoIndex,
       activeVideoFile,
       tr,
       shortenPath,
       kindSwatchClass,
       formatSize,
+      isDocDirty,
       openCreateModal,
       onCreationCreated,
       bindCurrentFolder,
@@ -1701,6 +2210,8 @@ export default {
       saveActiveDoc,
       selectImageAt,
       selectVideoAt,
+      onMediaLoad,
+      onMediaError,
       openMiniDialog,
       confirmMiniDialog,
       triggerMediaUpload,

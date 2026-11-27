@@ -40,6 +40,11 @@
 }
 
 /* ==================== CreationTab Root ==================== */
+.creation-wb {
+  container-type: inline-size;
+  container-name: creation-wb;
+}
+
 .creation-wb-root {
   display: flex;
   flex-direction: column;
@@ -554,6 +559,32 @@
   min-width: 0;
   display: flex;
   overflow: hidden;
+  position: relative;
+}
+
+.creation-wb-docs-bar {
+  display: none;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-1-5) var(--space-2-5);
+  border-bottom: 1px solid var(--border-light);
+  background: var(--bg-sidebar);
+  flex-shrink: 0;
+}
+
+.creation-wb-docs-bar-toggle {
+  flex-shrink: 0;
+}
+
+.creation-wb-docs-bar-name {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--font-size-xs);
+  font-weight: 500;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .creation-wb-tree-rail {
@@ -810,6 +841,46 @@
   display: block;
 }
 
+.creation-wb-thumb-svg {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+  overflow: hidden;
+}
+
+.creation-wb-thumb-svg .svg-preview-container {
+  width: 100%;
+  height: 100%;
+  padding: var(--space-1);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.creation-wb-thumb-svg .html-preview-note {
+  display: none;
+}
+
+.creation-wb-thumb-svg .file-preview-image-button {
+  width: 100%;
+  height: 100%;
+  padding: 0;
+  border: none;
+  background: transparent;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.creation-wb-thumb-svg .svg-preview-image {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+}
+
 .creation-wb-thumb-loading,
 .creation-wb-thumb-fallback {
   font-size: var(--font-size-2xs);
@@ -1019,6 +1090,17 @@
   background: var(--error-bg);
   color: var(--error);
   font-size: var(--font-size-xs);
+}
+
+.creation-create-hint {
+  margin: 0;
+  font-size: var(--font-size-2xs);
+  color: var(--text-muted);
+  line-height: var(--line-height-normal);
+}
+
+.creation-create-hint.is-warning {
+  color: var(--error);
 }
 
 .creation-create-field {
@@ -1317,6 +1399,45 @@
 .cosmos-workbench-host .creation-wb-doc-canvas,
 .cosmos-workbench-host .creation-wb-media-pane {
   background: transparent;
+}
+
+/* ==================== Narrow Container Responsive (<= 680px) ==================== */
+@container creation-wb (max-width: 680px) {
+  .creation-wb-docs-pane {
+    flex-direction: column;
+  }
+
+  .creation-wb-docs-bar {
+    display: flex;
+  }
+
+  .creation-wb-tree-rail {
+    display: none;
+  }
+
+  .creation-wb-doc-tree {
+    position: absolute;
+    top: calc(var(--control-height-sm) + var(--space-3) + 1px);
+    left: 0;
+    right: 0;
+    width: 100%;
+    min-width: 0;
+    max-width: 100%;
+    max-height: 55%;
+    z-index: 25;
+    border-right: none;
+    border-bottom: 1px solid var(--border-color);
+    box-shadow: var(--shadow-md);
+  }
+
+  .creation-wb-doc-canvas {
+    width: 100%;
+  }
+
+  .creation-wb-media-bar {
+    flex-wrap: wrap;
+    row-gap: var(--space-1);
+  }
 }
 
 /* ==================== Mobile Responsive (<= 768px) ==================== */

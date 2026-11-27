@@ -145,11 +145,14 @@ export default {
                       v-for="ag in agentOptions"
                       :key="ag.id"
                       :value="ag.id"
-                      :disabled="!ag.online"
+                      :disabled="!ag.eligible"
                     >
-                      {{ ag.label }}{{ !ag.online ? ' (' + tr('common.offline', 'offline') + ')' : '' }}
+                      {{ ag.label }}{{ !ag.online ? ' (' + tr('common.offline', 'offline') + ')' : (!ag.hasCreationCap ? ' (' + tr('creation.create.noCreationsCap', 'unsupported') + ')' : '') }}
                     </option>
                   </select>
+                  <p v-if="!hasEligibleAgent" class="creation-create-hint is-warning" role="status">
+                    {{ tr('creation.create.noEligibleAgent', 'No online Agent with Creations support is available.') }}
+                  </p>
                 </div>
 
                 <div class="creation-create-field">
@@ -224,6 +227,10 @@ export default {
                     {{ tr('creation.create.linkExistingSession', 'Link existing Session') }}
                   </button>
                 </div>
+
+                <p v-if="form.sessionMode === 'new'" class="creation-create-hint">
+                  {{ tr('creation.create.newSessionOnlineHint', 'Creating a new Yeaft Session requires an online Agent connection.') }}
+                </p>
 
                 <div v-if="form.sessionMode === 'existing'" class="creation-existing-session-wrap">
                   <select
@@ -393,16 +400,19 @@ export default {
       const rawAgents = Array.isArray(chatStore.agents) ? chatStore.agents : [];
       const mapped = rawAgents.map(ag => {
         const caps = Array.isArray(ag.capabilities) ? ag.capabilities : [];
-        const hasCreationCap = caps.length === 0 || caps.includes('creations') || caps.includes('file_editor');
+        const hasCreationCap = caps.includes('creations');
+        const online = Boolean(ag.online);
         return {
           id: ag.id,
           label: (ag.name && String(ag.name).trim()) || shortAgentLabel(ag.id),
-          online: Boolean(ag.online),
+          online,
           hasCreationCap,
+          eligible: online && hasCreationCap,
         };
       });
       // Online Creation-capable first, then other online, then offline
       mapped.sort((a, b) => {
+        if (a.eligible !== b.eligible) return a.eligible ? -1 : 1;
         if (a.online !== b.online) return a.online ? -1 : 1;
         if (a.hasCreationCap !== b.hasCreationCap) return a.hasCreationCap ? -1 : 1;
         return a.label.localeCompare(b.label);
@@ -410,17 +420,21 @@ export default {
       return mapped;
     });
 
+    const hasEligibleAgent = Vue.computed(() => (
+      agentOptions.value.some(a => a.eligible)
+    ));
+
     const pickDefaultAgentId = () => {
       const list = agentOptions.value;
       if (list.length === 0) return '';
-      if (props.initialAgentId && list.some(a => a.id === props.initialAgentId && a.online)) {
+      if (props.initialAgentId && list.some(a => a.id === props.initialAgentId && a.eligible)) {
         return props.initialAgentId;
       }
-      if (chatStore.currentAgent && list.some(a => a.id === chatStore.currentAgent && a.online)) {
+      if (chatStore.currentAgent && list.some(a => a.id === chatStore.currentAgent && a.eligible)) {
         return chatStore.currentAgent;
       }
-      const firstOnline = list.find(a => a.online && a.hasCreationCap) || list.find(a => a.online);
-      return firstOnline ? firstOnline.id : list[0].id;
+      const firstEligible = list.find(a => a.eligible);
+      return firstEligible ? firstEligible.id : '';
     };
 
     const projectOptions = Vue.computed(() => {
@@ -448,14 +462,14 @@ export default {
         }));
     });
 
-    const selectedAgentOnline = Vue.computed(() => (
-      agentOptions.value.some(a => a.id === form.agentId && a.online)
+    const selectedAgentEligible = Vue.computed(() => (
+      agentOptions.value.some(a => a.id === form.agentId && a.eligible)
     ));
 
     const canSubmit = Vue.computed(() => {
       if (submitting.value) return false;
       if (!form.title.trim()) return false;
-      if (!form.agentId || !selectedAgentOnline.value) return false;
+      if (!form.agentId || !selectedAgentEligible.value) return false;
       if (form.creatingProject && !form.newProjectName.trim()) return false;
       if (form.sessionMode === 'existing' && !form.existingSessionId) return false;
       return true;
@@ -613,6 +627,7 @@ export default {
       dragOver,
       folderExpanded,
       agentOptions,
+      hasEligibleAgent,
       projectOptions,
       existingSessionOptions,
       canSubmit,

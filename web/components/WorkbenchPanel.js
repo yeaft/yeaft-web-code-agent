@@ -330,6 +330,20 @@ export default {
       && store.hasAgentCapability(activeRoute.value?.agentId, 'terminal'));
     const hasExplorer = Vue.computed(() => hasSessionRoutes.value
       && store.hasAgentCapability(activeRoute.value?.agentId, 'file_editor'));
+    const hasCreations = Vue.computed(() => {
+      if (!hasExplorer.value) return false;
+      const agentId = activeRoute.value?.agentId;
+      if (!agentId) return false;
+      const agent = Array.isArray(store.agents)
+        ? store.agents.find(candidate => candidate?.id === agentId)
+        : null;
+      const selectedAgent = store.currentAgentInfo?.id === agentId ? store.currentAgentInfo : null;
+      const caps = agent?.capabilities || selectedAgent?.capabilities || [];
+      if (Array.isArray(caps) && caps.length > 0) {
+        return caps.includes('creations');
+      }
+      return true;
+    });
     // Browser is client-only; Agent capabilities and transport do not gate it.
     const canOpenBrowser = Vue.computed(() => Boolean(activeRouteKey.value));
     const hasBrowser = canOpenBrowser;
@@ -347,7 +361,7 @@ export default {
       capabilityCard('terminal', 'workbench.terminal', hasTerminal.value),
       capabilityCard('git', 'workbench.git', hasExplorer.value),
       capabilityCard('files', 'workbench.files', hasExplorer.value),
-      capabilityCard('creation', 'workbench.creation', hasExplorer.value),
+      capabilityCard('creation', 'workbench.creation', hasCreations.value),
       capabilityCard(
         'browser',
         'workbench.browser',
@@ -591,7 +605,8 @@ export default {
     Vue.provide('workbench-creation-target', providedCreationTarget);
 
     const openCreationWorkspaceTarget = ({ creationId = '', rootDir = '', maximize } = {}) => {
-      if (!activeRouteKey.value || !openCapability('creation')) return false;
+      if (!activeRouteKey.value || !hasCreations.value) return false;
+      if (!openCapability('creation')) return false;
       store.openWorkbench();
       if (maximize === true) store.workbenchMaximized = true;
       else if (maximize === false) store.workbenchMaximized = false;
@@ -602,6 +617,7 @@ export default {
       providedCreationTarget.creationId = creationId || '';
       providedCreationTarget.rootDir = rootDir || '';
       providedCreationTarget.seq += 1;
+      const dispatchedSeq = providedCreationTarget.seq;
       Vue.nextTick(() => {
         window.dispatchEvent(new CustomEvent('workbench-creation-target', {
           detail: {
@@ -609,6 +625,7 @@ export default {
             agentId: targetAgentId,
             creationId: creationId || '',
             rootDir: rootDir || '',
+            seq: dispatchedSeq,
           },
         }));
       });
@@ -617,7 +634,7 @@ export default {
 
     const handleOpenCreation = event => {
       const detail = event.detail;
-      if (!detail || !activeRouteKey.value) return;
+      if (!detail || !activeRouteKey.value || !hasCreations.value) return;
       const routeMatches = detail.routeKey
         ? detail.routeKey === activeRouteKey.value
         : (!detail.agentId || activeRoute.value?.agentId === detail.agentId);
@@ -633,7 +650,7 @@ export default {
 
     const consumePendingCreationTarget = () => {
       const target = creationsStore.pendingWorkbenchTarget;
-      if (!target || !activeRouteKey.value) return;
+      if (!target || !activeRouteKey.value || !hasCreations.value) return;
       if (target.agentId && activeRoute.value?.agentId !== target.agentId) return;
       if (target.sessionId && activeRoute.value?.sessionId !== target.sessionId) return;
       if (!openCreationWorkspaceTarget({
@@ -1212,7 +1229,7 @@ export default {
     });
 
     Vue.watch(
-      () => [creationsStore.pendingWorkbenchTarget, activeRouteKey.value],
+      () => [creationsStore.pendingWorkbenchTarget, activeRouteKey.value, hasCreations.value],
       () => consumePendingCreationTarget(),
       { flush: 'post' },
     );
@@ -1302,6 +1319,7 @@ export default {
       isCapabilityActivated,
       hasTerminal,
       hasExplorer,
+      hasCreations,
       canOpenBrowser,
       hasBrowser,
       panelStyle,

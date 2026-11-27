@@ -521,8 +521,15 @@ export default {
       this.creationCreateOpen = false;
     },
     isCreationActive(item) {
-      if (!item?.creation?.sessionId) return false;
-      return item.creation.sessionId === this.activeSessionId && Boolean(this.chatStore?.workbenchOpen);
+      const sessionId = item?.sessionId || item?.creation?.sessionId || null;
+      if (!item?.agentId || !sessionId) return false;
+      const route = this.chatStore?.activeSessionRoute || null;
+      const activeKey = this.sessionsStore?.activeSessionKey || null;
+      const activeRow = activeKey ? this.sessionsStore?.sessions?.[activeKey] : null;
+      const activeSessionId = route?.sessionId || this.activeSessionId || null;
+      const activeAgentId = route?.agentId || activeRow?.agentId || this.chatStore?.currentAgent || null;
+      if (!activeAgentId || !activeSessionId) return false;
+      return item.agentId === activeAgentId && sessionId === activeSessionId;
     },
     async onOpenSidebarCreation(item) {
       if (!item?.agentId || !item?.creation?.id) return;

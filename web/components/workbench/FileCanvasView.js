@@ -161,7 +161,7 @@ export default {
     showOpenInFiles: { type: Boolean, default: false },
     showPromoteFolder: { type: Boolean, default: false },
   },
-  emits: ['update:content', 'save', 'download', 'open-in-files', 'promote-folder', 'referenced'],
+  emits: ['update:content', 'save', 'download', 'open-in-files', 'promote-folder', 'referenced', 'media-load', 'media-error'],
   template: `
     <div class="file-canvas-view" :class="'canvas-kind-' + (canvasKind || 'unknown')">
       <!-- Loading / Error states -->
@@ -418,17 +418,24 @@ export default {
           <div v-else-if="isSvgText" class="canvas-image-svg-wrap" :style="svgZoomStyle">
             <SvgPreview :key="file.path" :content="file.content || ''" :name="file.name" />
           </div>
-          <div v-else-if="file.previewLoading || !file.blobUrl" class="canvas-state" role="status">
+          <div v-else-if="!file.blobUrl" class="canvas-state" role="status">
             <span class="spinner-mini" aria-hidden="true"></span>
             <span>{{ $t('files.loadingPreview') }}</span>
           </div>
           <div v-else class="canvas-image-viewport" :class="{ 'is-fit': imageZoomMode === 'fit' }">
+            <div v-if="file.previewLoading" class="canvas-media-loading-overlay" role="status" aria-live="polite">
+              <span class="spinner-mini" aria-hidden="true"></span>
+              <span>{{ $t('files.loadingPreview') }}</span>
+            </div>
             <img
+              :key="file.blobUrl"
               :src="file.blobUrl"
               :alt="file.name"
               class="canvas-image-el"
               :class="{ 'is-fit': imageZoomMode === 'fit' }"
               :style="imageZoomStyle"
+              @load="onImageLoad"
+              @error="onImageError"
               @click="openLightbox($event.currentTarget)"
             />
           </div>
@@ -499,12 +506,16 @@ export default {
           <div v-if="file.previewError" class="canvas-state canvas-state-error" role="alert">
             <span>{{ file.previewError }}</span>
           </div>
-          <div v-else-if="file.previewLoading || !file.blobUrl" class="canvas-state" role="status">
+          <div v-else-if="!file.blobUrl" class="canvas-state" role="status">
             <span class="spinner-mini" aria-hidden="true"></span>
             <span>{{ $t('files.loadingPreview') }}</span>
           </div>
           <template v-else>
             <div class="canvas-video-player-wrap">
+              <div v-if="file.previewLoading" class="canvas-media-loading-overlay" role="status" aria-live="polite">
+                <span class="spinner-mini" aria-hidden="true"></span>
+                <span>{{ $t('files.loadingPreview') }}</span>
+              </div>
               <video
                 ref="videoRef"
                 :key="file.blobUrl"
@@ -516,6 +527,9 @@ export default {
                 playsinline
                 @timeupdate="onVideoTimeUpdate"
                 @loadedmetadata="onVideoLoadedMetadata"
+                @loadeddata="onVideoMediaLoad"
+                @canplay="onVideoMediaLoad"
+                @error="onVideoMediaError"
                 @ratechange="onVideoRateChange"
               ></video>
             </div>
@@ -836,6 +850,14 @@ export default {
       });
     };
 
+    const onImageLoad = () => {
+      emit('media-load', { path: props.file?.path || '', url: props.file?.blobUrl || '' });
+    };
+
+    const onImageError = () => {
+      emit('media-error', { path: props.file?.path || '', url: props.file?.blobUrl || '' });
+    };
+
     const referenceImage = () => {
       const ref = addCanvasContextRef(props.routeKey, {
         kind: 'image',
@@ -861,10 +883,20 @@ export default {
       currentTime.value = videoRef.value.currentTime || 0;
     };
 
+    const onVideoMediaLoad = () => {
+      emit('media-load', { path: props.file?.path || '', url: props.file?.blobUrl || '' });
+    };
+
+    const onVideoMediaError = () => {
+      emit('media-error', { path: props.file?.path || '', url: props.file?.blobUrl || '' });
+    };
+
     const onVideoLoadedMetadata = () => {
-      if (!videoRef.value) return;
-      duration.value = Number.isFinite(videoRef.value.duration) ? videoRef.value.duration : 0;
-      videoRef.value.playbackRate = playbackRate.value;
+      if (videoRef.value) {
+        duration.value = Number.isFinite(videoRef.value.duration) ? videoRef.value.duration : 0;
+        videoRef.value.playbackRate = playbackRate.value;
+      }
+      onVideoMediaLoad();
     };
 
     const onVideoRateChange = () => {
@@ -974,6 +1006,8 @@ export default {
       setImageActualSize,
       zoomImage,
       openLightbox,
+      onImageLoad,
+      onImageError,
       referenceImage,
       // Video
       videoRef,
@@ -983,6 +1017,8 @@ export default {
       videoMarkers,
       onVideoTimeUpdate,
       onVideoLoadedMetadata,
+      onVideoMediaLoad,
+      onVideoMediaError,
       onVideoRateChange,
       setPlaybackRate,
       addVideoMarker,

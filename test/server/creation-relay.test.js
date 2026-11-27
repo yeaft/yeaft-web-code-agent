@@ -218,6 +218,10 @@ describe('Creation WebSocket relay', () => {
     expect(agent.ws.send).not.toHaveBeenCalled();
     await relay.request(client, msg({ op, payload }));
     expect(frame(agent)).toMatchObject({ type: 'creation_request', op, ownerId: 'user-a', payload });
+    await relay.response(agentId, agent, { type: 'creation_response', requestId: frame(agent).requestId,
+      ok: false, errorCode: 'invalid_request', error: 'Expected a canonical directory with no symbolic links' });
+    expect(frame(client)).toMatchObject({ op, requestId: 'browser-1', ok: false, errorCode: 'invalid_request',
+      error: expect.stringContaining('symbolic links') });
   });
 
   it.each([

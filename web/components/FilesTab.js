@@ -383,6 +383,8 @@ export default {
             @save="saveFile"
             @download="downloadActiveFile"
             @promote-folder="openFolderInCreation"
+            @media-load="onCanvasMediaLoad"
+            @media-error="onCanvasMediaError"
           />
           <template v-else>
           <!-- 文本文件: CodeMirror 编辑器 -->
@@ -1011,7 +1013,37 @@ export default {
     const onCanvasContentUpdate = (nextContent) => {
       const file = tabs.activeFile.value;
       if (!file) return;
+      const prevContent = file.content;
       updateFileText(file, nextContent);
+      if (file.content !== prevContent) {
+        file.cmState = null;
+        editor.cleanupUndoHistory(store.currentConversation, file.path);
+      }
+    };
+
+    const findMatchingCanvasMediaFile = (payload) => {
+      const targetPath = payload?.path || '';
+      const targetUrl = payload?.url || '';
+      if (!targetPath || !targetUrl) return null;
+      return tabs.openFiles.value.find(
+        f => f && f.path === targetPath && f.blobUrl === targetUrl
+      ) || null;
+    };
+
+    const onCanvasMediaLoad = (payload) => {
+      const file = findMatchingCanvasMediaFile(payload);
+      if (!file) return;
+      file.previewLoading = false;
+      file.previewError = null;
+    };
+
+    const onCanvasMediaError = (payload) => {
+      const file = findMatchingCanvasMediaFile(payload);
+      if (!file) return;
+      file.previewLoading = false;
+      file.previewError = file.fileType === 'video'
+        ? t('files.videoPreviewLoadFailed')
+        : t('files.previewLoadFailed');
     };
 
     const openFolderInCreation = (dirPath) => {
@@ -1037,16 +1069,28 @@ export default {
       if (dirPath) openFolderInCreation(dirPath);
     };
 
-    const handleOpenDirInFiles = (event) => {
-      if (event.detail?.routeKey !== props.routeKey) return;
-      const dirPath = typeof event.detail?.dirPath === 'string' ? event.detail.dirPath.trim() : '';
+    const handleFilesOpenDir = async (event) => {
+      const detail = event?.detail;
+      if (!detail || detail.routeKey !== props.routeKey) return;
+      if (detail.workspaceGeneration && detail.workspaceGeneration !== props.workspaceGeneration) return;
+      const dirPath = typeof detail.dirPath === 'string' ? detail.dirPath.trim() : '';
       if (!dirPath) return;
+      const gen = props.workspaceGeneration;
+      const targetRouteKey = props.routeKey;
+      const isCurrentGeneration = () => (
+        !disposed
+        && props.routeKey === targetRouteKey
+        && props.workspaceGeneration === gen
+      );
+      if (!isCurrentGeneration()) return;
       treeVisible.value = true;
       if (isMobile.value) mobileView.value = 'tree';
       qo.clearSearch();
-      if (!tree.revealPath(dirPath, 'directory') && !props.workspaceLocked) {
+      const revealed = await Promise.resolve(tree.revealPath(dirPath, 'directory'));
+      if (!isCurrentGeneration()) return;
+      if (!revealed && !props.workspaceLocked) {
         tree.treePath.value = dirPath;
-        tree.loadRootDirectory();
+        await Promise.resolve(tree.loadRootDirectory());
       }
     };
 
@@ -1210,7 +1254,7 @@ export default {
       window.addEventListener('workbench-close-file-item', handleCloseFileItem);
       window.addEventListener('workbench-close-file-items', handleCloseFileItems);
       window.addEventListener('workbench-close-files-capability', handleCloseFilesCapability);
-      window.addEventListener('workbench-files-open-dir', handleOpenDirInFiles);
+      window.addEventListener('workbench-files-open-dir', handleFilesOpenDir);
       window.addEventListener('conversation-deleted', tabs.handleConversationDeleted);
       window.addEventListener('keydown', handleGlobalKeydown);
       document.addEventListener('click', handleDocumentClick);
@@ -1248,7 +1292,7 @@ export default {
       window.removeEventListener('workbench-close-file-item', handleCloseFileItem);
       window.removeEventListener('workbench-close-file-items', handleCloseFileItems);
       window.removeEventListener('workbench-close-files-capability', handleCloseFilesCapability);
-      window.removeEventListener('workbench-files-open-dir', handleOpenDirInFiles);
+      window.removeEventListener('workbench-files-open-dir', handleFilesOpenDir);
       window.removeEventListener('conversation-deleted', tabs.handleConversationDeleted);
       window.removeEventListener('keydown', handleGlobalKeydown);
       document.removeEventListener('click', handleDocumentClick);
@@ -1283,6 +1327,7 @@ export default {
       switchToTextPreview: preview.switchToTextPreview,
       activeCanvasSupported, activeCanvasMode, toggleCanvasMode,
       onSwitchToTextPreview, onSwitchToTextEdit, onCanvasContentUpdate,
+      onCanvasMediaLoad, onCanvasMediaError,
       openFolderInCreation, ctxOpenInCreation,
       isActiveTextPreview: preview.isActiveTextPreview, isActiveHtml: preview.isActiveHtml, isActiveSvg: preview.isActiveSvg, isActiveCsv: preview.isActiveCsv,
       htmlPreviewDocument: preview.htmlPreviewDocument,

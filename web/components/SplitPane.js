@@ -14,6 +14,7 @@ import ExpertPanel from './ExpertPanel.js';
 import SubAgentPanel from './SubAgentPanel.js';
 import { appendTurnResponseSegment, finalizeTurnResponseSegments } from '../utils/turn-response.js';
 import { readWaitClock } from '../utils/wait-clock.js';
+import { workbenchRouteKey } from '../utils/workbench-route.js';
 import { pickWaitingAnimation, waitingAnimation } from './waiting/index.js';
 
 export default {
@@ -72,6 +73,7 @@ export default {
                 :sendFn="sendFn"
                 :cancelFn="cancelFn"
                 :conversationId="conversationId"
+                :canvas-route-key="paneRouteKey"
                 :showStop="isProcessing"
               />
             </div>
@@ -116,6 +118,19 @@ export default {
     const conversationId = Vue.computed(() => {
       const panel = store.panels.find(p => p.id === props.paneId);
       return panel?.conversationId || null;
+    });
+
+    // Exact Workbench route key for this pane's conversation (never falls back to global route)
+    const paneRouteKey = Vue.computed(() => {
+      const convId = conversationId.value;
+      if (!convId) return '';
+      const conv = store.conversations.find(c => c?.id === convId && c.type !== 'yeaft');
+      if (!conv) return '';
+      return workbenchRouteKey({
+        runtimeProvider: conv.provider === 'copilot' ? 'copilot' : 'claude-code',
+        agentId: conv.agentId || store.currentAgent || null,
+        sessionId: convId,
+      }) || '';
     });
 
 
@@ -426,6 +441,7 @@ export default {
       containerRef,
       isActivePanel,
       conversationId,
+      paneRouteKey,
       messages,
       isProcessing,
       showTypingDots,
