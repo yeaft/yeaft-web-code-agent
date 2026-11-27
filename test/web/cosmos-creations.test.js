@@ -1656,8 +1656,50 @@ describe('Cosmos Creations — End-to-End Web Store <-> Server Relay <-> Agent S
     expect(galleryWrap.vm.frames.map((f) => f.title)).toEqual(['B1']);
     expect(onSaveGallery).not.toHaveBeenCalled();
     galleryWrap.unmount();
-    creationsStore.uploadSources = origUploadSources;
 
+    // R8: Deferred Gallery A autosave response after switching to Gallery B and editing B must NOT clear B's dirty state or baseRevId!
+    let resolveSaveA;
+    creationsStore.uploadSources = vi.fn(async () => ({ sources: [{ id: 'src-a2', name: 'a2.png' }] }));
+    const deferredSaveA = vi.fn(() => new Promise((r) => { resolveSaveA = r; }));
+    const galleryRaceWrap = mount(GalleryReader, {
+      props: {
+        node: { id: 'gal-A', title: 'Gallery A', modality: 'image_gallery', currentRevId: 'rev-a1' },
+        content: JSON.stringify({ frames: [{ frameId: 'fa', title: 'A1', caption: '' }] }),
+        contentLoaded: true,
+        loadedRevId: 'rev-a1',
+        agentId: 'agent-a',
+        creationId: res.creation.id,
+        onSaveContent: deferredSaveA,
+      },
+      global: { mocks: { $t } },
+    });
+    const autoSavePromise = galleryRaceWrap.vm.onUploadImage({
+      target: { files: [{ name: 'a2.png' }], value: 'a2.png' },
+    });
+    await flushPromises();
+    expect(deferredSaveA).toHaveBeenCalledTimes(1);
+    // Switch to Gallery B and add an unsaved frame while Gallery A's save is still pending
+    await galleryRaceWrap.setProps({
+      node: { id: 'gal-B', title: 'Gallery B', modality: 'image_gallery', currentRevId: 'rev-b1' },
+      content: JSON.stringify({ frames: [{ frameId: 'fb', title: 'B1', caption: '' }] }),
+      contentLoaded: true,
+      loadedRevId: 'rev-b1',
+    });
+    galleryRaceWrap.vm.addEmptyFrame();
+    await flushPromises();
+    expect(galleryRaceWrap.vm.dirty).toBe(true);
+    expect(galleryRaceWrap.vm.editBaseRevId).toBe('rev-b1');
+    // Now resolve Gallery A's stale save response
+    resolveSaveA({ node: { id: 'gal-A', currentRevId: 'rev-a2' } });
+    await autoSavePromise;
+    await flushPromises();
+    // Gallery B's unsaved draft, dirty flag, Save button, and base revision MUST remain untouched!
+    expect(galleryRaceWrap.vm.dirty).toBe(true);
+    expect(galleryRaceWrap.vm.editBaseRevId).toBe('rev-b1');
+    expect(galleryRaceWrap.find('button.is-primary').exists()).toBe(true);
+    galleryRaceWrap.unmount();
+
+    creationsStore.uploadSources = origUploadSources;
     creationsStore.request = origRequest;
   });
 });

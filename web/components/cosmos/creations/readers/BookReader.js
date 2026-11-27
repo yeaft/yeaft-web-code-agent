@@ -233,23 +233,34 @@ export default {
     async saveEdit(exitAfter = false) {
       this.conflictError = '';
       this.saveError = '';
+      const targetAgentId = this.agentId;
+      const targetCreationId = this.creationId;
       const targetNodeId = this.node.id;
+      const submittedText = this.draftText;
       const payload = {
         nodeId: targetNodeId,
-        content: this.draftText,
+        content: submittedText,
         baseRevId: this.editBaseRevId,
       };
+      const sameTarget = () => (
+        this.agentId === targetAgentId
+        && this.creationId === targetCreationId
+        && this.node?.id === targetNodeId
+      );
       if (this.onSaveContent) {
         try {
           const res = await this.onSaveContent(payload);
           if (res?.conflict === true) {
-            this.conflictError = this.$t('creation.interior.conflictDesc');
+            if (sameTarget()) {
+              this.conflictError = this.$t('creation.interior.conflictDesc');
+            }
             return false;
           }
-          const savedRevId = res?.node?.currentRevId ?? this.loadedRevId ?? this.editBaseRevId;
+          const savedRevId = res?.node?.currentRevId ?? (sameTarget() ? this.loadedRevId : null) ?? payload.baseRevId;
           this._lastSavedRevId = savedRevId;
-          if (this.node?.id === targetNodeId) {
-            this.editBaseRevId = savedRevId;
+          if (!sameTarget()) return true;
+          this.editBaseRevId = savedRevId;
+          if (this.draftText === submittedText) {
             this.dirty = false;
             this.syncStoreDirty(false, targetNodeId);
             if (exitAfter) {
@@ -258,6 +269,7 @@ export default {
           }
           return true;
         } catch (err) {
+          if (!sameTarget()) return false;
           if (err?.errorCode === 'revision_conflict') {
             this.conflictError = this.$t('creation.interior.conflictDesc');
           } else {

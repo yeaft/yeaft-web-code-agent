@@ -245,23 +245,37 @@ export default {
     async saveGallery() {
       this.conflictError = '';
       this.saveError = '';
+      const targetAgentId = this.agentId;
+      const targetCreationId = this.creationId;
+      const targetNodeId = this.node.id;
+      const submittedContent = JSON.stringify({ frames: this.frames }, null, 2);
       const payload = {
-        nodeId: this.node.id,
-        content: JSON.stringify({ frames: this.frames }, null, 2),
+        nodeId: targetNodeId,
+        content: submittedContent,
         baseRevId: this.editBaseRevId,
       };
+      const sameTarget = () => (
+        this.agentId === targetAgentId
+        && this.creationId === targetCreationId
+        && this.node?.id === targetNodeId
+      );
       if (this.onSaveContent) {
         try {
           const res = await this.onSaveContent(payload);
+          if (!sameTarget()) return res?.conflict !== true;
           if (res?.conflict === true) {
             this.conflictError = this.$t('creation.interior.conflictDesc');
             return false;
           }
           this.editBaseRevId = res?.node?.currentRevId ?? this.loadedRevId ?? this.editBaseRevId;
-          this.dirty = false;
-          this.syncStoreDirty(false, payload.nodeId);
+          const stillMatchesSubmitted = JSON.stringify({ frames: this.frames }, null, 2) === submittedContent;
+          if (stillMatchesSubmitted) {
+            this.dirty = false;
+            this.syncStoreDirty(false, targetNodeId);
+          }
           return true;
         } catch (err) {
+          if (!sameTarget()) return false;
           if (err?.errorCode === 'revision_conflict') {
             this.conflictError = this.$t('creation.interior.conflictDesc');
           } else {
@@ -272,7 +286,7 @@ export default {
       }
       this.$emit('save-content', payload);
       this.dirty = false;
-      this.syncStoreDirty(false, payload.nodeId);
+      this.syncStoreDirty(false, targetNodeId);
       return true;
     },
     requestAiRedraw(frame, idx) {
