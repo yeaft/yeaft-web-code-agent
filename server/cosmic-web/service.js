@@ -660,34 +660,36 @@ export function createCosmicWebService({ fetcher = safeFetch, dnsLookup, now = D
       }
     }
 
-    // 3. Scheme-relative //authority/... URL (supports IPv6 including Markdown-escaped \[...\], single-label hosts,
-    // userinfo with Unicode punctuation, explicit ports, and adjacent localized prose without whitespace).
+    // 3. Scheme-relative //authority/... URL (supports IPv6 including Markdown-escaped \[...\], leading punctuation in userinfo
+    // such as //–user:pass@host:8080, single-label hosts, explicit ports, and adjacent localized prose with later '@' mentions,
+    // while preserving ordinary '// comment', '//TODO', and '//–note: ok' prose).
     if (offset + 3 < len && c0 === 47 && str.charCodeAt(offset + 1) === 47 && prev !== 58 && prev !== 47) {
       const next = str[offset + 2];
-      if (next && next !== '/' && !isBareUrlStop(next) && !isNonAsciiPunct(next)) {
+      if (next && next !== '/' && !isBareUrlStop(next)) {
         let k = offset + 2;
         const maxScan = Math.min(len, offset + 512);
         let openParens = 0, closeParens = 0, openBrackets = 0, closeBrackets = 0;
-        let inPath = false;
-        let authorityBoundaryIdx = -1;
+        let seenUrlSignal = false;
+        let prevWasDelim = false;
+        const cutPoints = [];
         while (k < maxScan && !isBareUrlStop(str[k])) {
           if (str[k] === '\\' && k + 1 < maxScan && !isBareUrlStop(str[k + 1])) {
             const esc = str[k + 1];
-            if (esc === '[') openBrackets++;
+            if (esc === '[') { openBrackets++; seenUrlSignal = true; }
             else if (esc === ']') closeBrackets++;
+            else if (esc === '/' || esc === '?' || esc === '#' || esc === ':' || esc === '@' || esc === '.') seenUrlSignal = true;
+            prevWasDelim = false;
             k += 2;
             continue;
           }
           const ch = str[k];
-          if (!inPath) {
-            if (ch === '@') {
-              // Userinfo ended; host:port begins after '@', so ignore any earlier punctuation inside userinfo.
-              authorityBoundaryIdx = -1;
-            } else if (ch === '/' || ch === '?' || ch === '#') {
-              inPath = true;
-            } else if (authorityBoundaryIdx === -1 && (isNonAsciiPunct(ch) || ch === ',' || ch === ';' || ch === '!' || ch === ')' || ch === '\'' || ch === '`' || ch === '*' || ch === '_' || ch === '~')) {
-              authorityBoundaryIdx = k;
-            }
+          const isDelim = isNonAsciiPunct(ch) || ch === ',' || ch === ';' || ch === '!' || ch === ')' || ch === '\'' || ch === '`' || ch === '*' || ch === '_' || ch === '~';
+          if (isDelim) {
+            if (!prevWasDelim && seenUrlSignal && cutPoints.length < 64) cutPoints.push(k);
+            prevWasDelim = true;
+          } else {
+            prevWasDelim = false;
+            if (ch === '/' || ch === '?' || ch === '#' || ch === ':' || ch === '@' || ch === '.' || ch === '[') seenUrlSignal = true;
           }
           if (ch === '(') openParens++;
           else if (ch === ')') closeParens++;
@@ -697,10 +699,10 @@ export function createCosmicWebService({ fetcher = safeFetch, dnsLookup, now = D
         }
         const trimmedEnd = trimTrailingUrlPunct(str, offset + 2, k, openParens, closeParens, openBrackets, closeBrackets);
         if (isValidSchemeRelativeCandidate(str.slice(offset, trimmedEnd))) return 2;
-        // Authority-aware fallback for localized prose/punctuation immediately following host:port without whitespace
-        // (e.g. '//user:demo–pass@intranet:8080。下一句' or '//user:demo–pass@host:8080**。下一句').
-        if (authorityBoundaryIdx > offset + 2) {
-          const prefixEnd = trimTrailingUrlPunct(str, offset + 2, authorityBoundaryIdx, openParens, closeParens, openBrackets, closeBrackets);
+        // Bounded fallback across delimiter-run starts after the first URL signal so a valid host:port boundary
+        // (e.g. '。' in '//user:DEMO@intranet:8080。通知@ops:值班') is never masked by earlier userinfo punctuation or later prose '@'.
+        for (const cut of cutPoints) {
+          const prefixEnd = trimTrailingUrlPunct(str, offset + 2, cut, openParens, closeParens, openBrackets, closeBrackets);
           if (isValidSchemeRelativeCandidate(str.slice(offset, prefixEnd))) return 2;
         }
       }
