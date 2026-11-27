@@ -6,6 +6,7 @@ import { useBrowserStore } from './stores/browser.js';
 import { useCreationsStore } from './stores/creations.js';
 import { createI18n } from './utils/i18n.js';
 import { installAuthFetch } from './utils/auth-fetch.js';
+import { useUserPreferences } from './utils/user-preferences.js';
 import zhCN from './i18n/zh-CN.js';
 import en from './i18n/en.js';
 import LoginPage from './components/LoginPage.js';
@@ -48,6 +49,18 @@ const App = {
   setup() {
     const chatStore = useChatStore();
     const authStore = useAuthStore();
+    const userPreferences = useUserPreferences();
+
+    Vue.watch(
+      [() => userPreferences.ready.value, () => userPreferences.preferences.value?.cosmosConfig?.uiMode],
+      ([isReady, cloudMode]) => {
+        if (!isReady || (cloudMode !== 'cosmos' && cloudMode !== 'classic')) return;
+        if (chatStore.uiMode !== cloudMode) {
+          chatStore.setUiMode(cloudMode, { persistCloud: false });
+        }
+      },
+      { immediate: true },
+    );
 
     Vue.watch([
       () => JSON.stringify(chatStore.activeSessionRoute),

@@ -1,13 +1,21 @@
+import { normalizeCosmosConfigPatch } from '../cosmos/constants.js';
+
 const instances = new WeakMap();
 // The Server still stores the retired Projects/Recents split (ratio and
 // section collapse) for older pages; this client no longer reads or writes it.
 const defaultPreferences = () => ({
   sidebarActionsCompact: false,
   sidebarCollapsedProjects: {},
+  cosmosConfig: {},
 });
 const collapseFields = ['sidebarCollapsedProjects'];
-const patchFieldKeys = patch => Object.entries(patch).flatMap(([field, value]) =>
-  collapseFields.includes(field) ? Object.keys(value).map(key => `${field}:${key}`) : [field]);
+const patchFieldKeys = patch => Object.entries(patch).flatMap(([field, value]) => {
+  if (collapseFields.includes(field)) return Object.keys(value).map(key => `${field}:${key}`);
+  if (field === 'cosmosConfig' && value && typeof value === 'object') {
+    return Object.keys(value).map(key => `cosmosConfig:${key}`);
+  }
+  return [field];
+});
 const validProjectKey = key => typeof key === 'string' && key.length > 0 && key.length <= 200
   && !['__proto__', 'constructor', 'prototype'].includes(key);
 // The sidebar waits for the first load, so a stalled request falls back to the
@@ -35,10 +43,30 @@ function normalizeCollapseMap(value) {
     typeof collapsed === 'boolean' && validProjectKey(key)));
 }
 
+function mergeCosmosConfig(base, patch) {
+  const prev = base && typeof base === 'object' ? base : {};
+  const next = { ...prev };
+  if (!patch || typeof patch !== 'object') return next;
+  if (Object.hasOwn(patch, 'constants')) {
+    next.constants = { ...(prev.constants || {}), ...patch.constants };
+  }
+  if (Object.hasOwn(patch, 'planetBindings')) {
+    next.planetBindings = { ...patch.planetBindings };
+  }
+  if (Object.hasOwn(patch, 'drawerWidth')) {
+    next.drawerWidth = patch.drawerWidth;
+  }
+  if (Object.hasOwn(patch, 'uiMode')) {
+    next.uiMode = patch.uiMode;
+  }
+  return next;
+}
+
 function normalizePreferences(value) {
   return {
-    sidebarActionsCompact: value.sidebarActionsCompact === true,
-    sidebarCollapsedProjects: normalizeCollapseMap(value.sidebarCollapsedProjects),
+    sidebarActionsCompact: value?.sidebarActionsCompact === true,
+    sidebarCollapsedProjects: normalizeCollapseMap(value?.sidebarCollapsedProjects),
+    cosmosConfig: normalizeCosmosConfigPatch(value?.cosmosConfig),
   };
 }
 
@@ -56,6 +84,8 @@ export function createUserPreferencesState(auth, { request = (...args) => fetch(
   let confirmed = defaultPreferences();
   // Reapply later local choices over each server response while writes drain.
   const pendingPatches = new Map();
+  let queuedCosmosPatch = null;
+  let queuedCosmosWaiters = [];
   const failedFields = new Set();
   const showConfirmed = () => {
     const visible = { ...confirmed };
@@ -64,8 +94,16 @@ export function createUserPreferencesState(auth, { request = (...args) => fetch(
       Object.assign(visible, patch);
       // Each click owns only one folder/section, not the snapshot of its map.
       for (const field of collapseFields) {
-        visible[field] = { ...preferencesBeforePatch[field], ...patch[field] };
+        if (patch[field]) {
+          visible[field] = { ...preferencesBeforePatch[field], ...patch[field] };
+        }
       }
+      if (patch.cosmosConfig) {
+        visible.cosmosConfig = mergeCosmosConfig(preferencesBeforePatch.cosmosConfig, patch.cosmosConfig);
+      }
+    }
+    if (queuedCosmosPatch) {
+      visible.cosmosConfig = mergeCosmosConfig(visible.cosmosConfig, queuedCosmosPatch);
     }
     preferences.value = visible;
   };
@@ -100,11 +138,32 @@ export function createUserPreferencesState(auth, { request = (...args) => fetch(
         if (generation !== expectedGeneration || revision !== expectedRevision) return;
         confirmed = normalizePreferences(value);
         failedFields.clear();
-        showConfirmed();
         ready.value = true;
         error.value = null;
+        if (queuedCosmosPatch) {
+          const flushPatch = queuedCosmosPatch;
+          const waiters = queuedCosmosWaiters;
+          queuedCosmosPatch = null;
+          queuedCosmosWaiters = [];
+          showConfirmed();
+          const ok = await savePatch({ cosmosConfig: flushPatch });
+          for (const resolve of waiters) resolve(ok);
+        } else {
+          showConfirmed();
+        }
       } catch {
-        if (generation === expectedGeneration && revision === expectedRevision) error.value = 'load';
+        if (generation === expectedGeneration && revision === expectedRevision) {
+          error.value = 'load';
+          if (queuedCosmosPatch) {
+            const flushPatch = queuedCosmosPatch;
+            const waiters = queuedCosmosWaiters;
+            queuedCosmosPatch = null;
+            queuedCosmosWaiters = [];
+            showConfirmed();
+            const ok = await savePatch({ cosmosConfig: flushPatch }, { allowBeforeReady: true });
+            for (const resolve of waiters) resolve(ok);
+          }
+        }
       } finally {
         done();
       }
@@ -113,8 +172,8 @@ export function createUserPreferencesState(auth, { request = (...args) => fetch(
     try { await work; } finally { if (loading === work) loading = null; }
   }
 
-  function savePatch(patch) {
-    if (!authenticated() || !ready.value) return Promise.resolve(false);
+  function savePatch(patch, { allowBeforeReady = false } = {}) {
+    if (!authenticated() || (!ready.value && !allowBeforeReady)) return Promise.resolve(false);
     const expectedGeneration = generation;
     const expectedRevision = ++revision;
     pendingPatches.set(expectedRevision, patch);
@@ -132,6 +191,7 @@ export function createUserPreferencesState(auth, { request = (...args) => fetch(
         const result = await response.json();
         if (generation !== expectedGeneration) return false;
         confirmed = normalizePreferences(result);
+        if (!ready.value) ready.value = true;
         for (const field of patchFieldKeys(patch)) failedFields.delete(field);
         error.value = failedFields.size ? 'save' : null;
         return true;
@@ -164,6 +224,19 @@ export function createUserPreferencesState(auth, { request = (...args) => fetch(
     return savePatch({ sidebarCollapsedProjects: { [projectId]: collapsed } });
   }
 
+  function saveCosmosConfig(cosmosPatch) {
+    const clean = normalizeCosmosConfigPatch(cosmosPatch);
+    if (Object.keys(clean).length === 0 || !authenticated()) return Promise.resolve(false);
+    if (ready.value) return savePatch({ cosmosConfig: clean });
+    if (error.value === 'load') return savePatch({ cosmosConfig: clean }, { allowBeforeReady: true });
+    queuedCosmosPatch = mergeCosmosConfig(queuedCosmosPatch, clean);
+    showConfirmed();
+    return new Promise((resolve) => {
+      queuedCosmosWaiters.push(resolve);
+      if (!loading) void refresh();
+    });
+  }
+
   scope.run(() => Vue.watch(
     () => [auth?.isAuthenticated, auth?.userId, auth?.authGeneration],
     () => {
@@ -175,6 +248,10 @@ export function createUserPreferencesState(auth, { request = (...args) => fetch(
       queue = Promise.resolve();
       pendingWrites = 0;
       pendingPatches.clear();
+      const staleWaiters = queuedCosmosWaiters;
+      queuedCosmosPatch = null;
+      queuedCosmosWaiters = [];
+      for (const resolve of staleWaiters) resolve(false);
       failedFields.clear();
       confirmed = defaultPreferences();
       showConfirmed();
@@ -186,8 +263,16 @@ export function createUserPreferencesState(auth, { request = (...args) => fetch(
   ));
   return {
     preferences: Vue.readonly(preferences), ready: Vue.readonly(ready), error: Vue.readonly(error), pending,
-    refresh, saveSidebarActionsCompact, saveSidebarProjectCollapsed,
-    dispose() { generation++; controller?.abort(); scope.stop(); },
+    refresh, saveSidebarActionsCompact, saveSidebarProjectCollapsed, saveCosmosConfig,
+    dispose() {
+      generation++;
+      controller?.abort();
+      const staleWaiters = queuedCosmosWaiters;
+      queuedCosmosPatch = null;
+      queuedCosmosWaiters = [];
+      for (const resolve of staleWaiters) resolve(false);
+      scope.stop();
+    },
   };
 }
 

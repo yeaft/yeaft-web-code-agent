@@ -4500,4 +4500,96 @@ describe('Cosmos Interstellar Signal Stream (Unified Top-Right Replies, Schedule
     expect(anim.camPan.ty).toBe(0);
     expect(panAutoResetCount).toBe(1);
   });
+
+  it('syncs Cosmos constants, planet bindings, drawer width, and uiMode with cloud user_preferences while isolating accounts', async () => {
+    const {
+      COSMOS_CONSTANTS_KEY,
+      COSMOS_BINDINGS_KEY,
+      COSMOS_DRAWER_WIDTH_KEY,
+      saveCosmosConstants,
+      savePlanetBindings,
+      saveCosmosDrawerWidth,
+      writeLocalCosmosPreferencesOwner,
+      clearLocalCosmosPreferences,
+      readLegacyLocalCosmosConfig,
+    } = await import('../../web/cosmos/constants.js');
+    const { createUserPreferencesState } = await import('../../web/utils/user-preferences.js');
+
+    // 1. Legacy localStorage migration reads pre-cloud settings only when owner matches or is unset
+    const mem = createMemoryStorage();
+    saveCosmosConstants({ orbitSpeed: 0.4, skyBright: 1.4 }, mem);
+    savePlanetBindings({ 'ag-1': 'mars' }, mem);
+    saveCosmosDrawerWidth(680, mem);
+    expect(readLegacyLocalCosmosConfig(mem, 'user-a')).toEqual({
+      constants: expect.objectContaining({ orbitSpeed: 0.4, skyBright: 1.4 }),
+      planetBindings: { 'ag-1': 'mars' },
+      drawerWidth: 680,
+    });
+    writeLocalCosmosPreferencesOwner('user-a', mem);
+    expect(readLegacyLocalCosmosConfig(mem, 'user-b')).toBeNull();
+    clearLocalCosmosPreferences(mem);
+    expect(mem.getItem(COSMOS_CONSTANTS_KEY)).toBeNull();
+    expect(mem.getItem(COSMOS_BINDINGS_KEY)).toBeNull();
+    expect(mem.getItem(COSMOS_DRAWER_WIDTH_KEY)).toBeNull();
+
+    // 2. createUserPreferencesState queues early saveCosmosConfig while initial GET is in flight,
+    //    flushes cleanly over server response, and resets cleanly on authGeneration change.
+    let resolveInitialGet;
+    const calls = [];
+    let serverCosmos = { constants: { orbitSpeed: 0.5 }, planetBindings: { 'ag-1': 'saturn' } };
+    const mockRequest = vi.fn((url, init = {}) => {
+      calls.push({ url, method: init.method || 'GET', body: init.body ? JSON.parse(init.body) : null });
+      if ((init.method || 'GET') === 'GET') {
+        return new Promise((resolve) => {
+          resolveInitialGet = () => resolve({
+            ok: true,
+            json: async () => ({ sidebarActionsCompact: false, sidebarCollapsedProjects: {}, cosmosConfig: serverCosmos }),
+          });
+        });
+      }
+      const patch = JSON.parse(init.body).cosmosConfig || {};
+      serverCosmos = {
+        ...serverCosmos,
+        ...(patch.constants ? { constants: { ...(serverCosmos.constants || {}), ...patch.constants } } : {}),
+        ...(Object.hasOwn(patch, 'planetBindings') ? { planetBindings: { ...patch.planetBindings } } : {}),
+        ...(Object.hasOwn(patch, 'drawerWidth') ? { drawerWidth: patch.drawerWidth } : {}),
+        ...(Object.hasOwn(patch, 'uiMode') ? { uiMode: patch.uiMode } : {}),
+      };
+      return Promise.resolve({
+        ok: true,
+        json: async () => ({ sidebarActionsCompact: false, sidebarCollapsedProjects: {}, cosmosConfig: serverCosmos }),
+      });
+    });
+
+    const auth = Vue.reactive({ isAuthenticated: true, userId: 'user-a', token: 'tok-a', authGeneration: 1 });
+    const prefs = createUserPreferencesState(auth, { request: mockRequest });
+    expect(prefs.ready.value).toBe(false);
+
+    // Early edit before GET settles stays queued & optimistically visible
+    const queuedPromise = prefs.saveCosmosConfig({ planetBindings: { 'ag-1': 'jupiter' } });
+    expect(prefs.preferences.value.cosmosConfig.planetBindings).toEqual({ 'ag-1': 'jupiter' });
+    resolveInitialGet();
+    expect(await queuedPromise).toBe(true);
+    expect(prefs.ready.value).toBe(true);
+    expect(prefs.preferences.value.cosmosConfig.constants.orbitSpeed).toBe(0.5);
+    expect(prefs.preferences.value.cosmosConfig.planetBindings).toEqual({ 'ag-1': 'jupiter' });
+    expect(calls.filter((c) => c.method === 'PATCH')).toHaveLength(1);
+
+    // Subsequent edit writes directly
+    expect(await prefs.saveCosmosConfig({ constants: { skyBright: 1.5 }, drawerWidth: 820 })).toBe(true);
+    expect(prefs.preferences.value.cosmosConfig.constants).toEqual({ orbitSpeed: 0.5, skyBright: 1.5 });
+    expect(prefs.preferences.value.cosmosConfig.drawerWidth).toBe(820);
+
+    // Auth switch resets state cleanly
+    auth.userId = 'user-b';
+    auth.authGeneration = 2;
+    expect(prefs.ready.value).toBe(false);
+    expect(prefs.preferences.value.cosmosConfig).toEqual({});
+    prefs.dispose();
+
+    // 3. Wide Cosmos Drawer CSS eliminates fixed 780px centering cap & shares unified responsive gutter
+    const convCss = readFileSync(resolve(process.cwd(), 'web/styles/cosmos/conversation.css'), 'utf8');
+    expect(convCss).toContain('--session-content-width: 100%;');
+    expect(convCss).toContain('--c-drawer-gutter:');
+  });
 });

@@ -22,6 +22,8 @@ import { setLocale, getLocale } from '../utils/i18n.js';
 import { applyDocumentTheme } from '../utils/document-theme.js';
 import { agentSupportsYeaftPlugins } from '../utils/yeaft-plugin-capability.js';
 import { agentSupportsYeaftManagedSkills } from '../utils/yeaft-managed-skill-capability.js';
+import { useUserPreferences } from '../utils/user-preferences.js';
+import { clearLocalCosmosPreferences } from '../cosmos/constants.js';
 
 // Helper modules
 import * as wsHelpers from './helpers/websocket.js';
@@ -1924,8 +1926,11 @@ export const useChatStore = defineStore('chat', {
       } catch (_) { /* keep the in-memory preference when storage is unavailable */ }
       if (!this.workCenterUiEnabled) this.leaveWorkCenter();
     },
-    setUiMode(mode) {
+    setUiMode(mode, { persistCloud = true } = {}) {
       this.uiMode = yeaftAutoRouteHelpers.writeUiMode(mode);
+      if (persistCloud) {
+        try { useUserPreferences().saveCosmosConfig?.({ uiMode: this.uiMode }); } catch (_) { /* ignore in isolated test hosts */ }
+      }
       return this.uiMode;
     },
     openPluginCenter(agentId = null) {
@@ -9831,6 +9836,7 @@ export const useChatStore = defineStore('chat', {
       this.yeaftUnreadSessionKeys = {};
       this.yeaftSessionReplyPreviewByKey = {};
       this.cosmosDismissedSignalsByKey = {};
+      clearLocalCosmosPreferences();
       this.yeaftConversationCovered = false;
       this._yeaftRetiredCatalogEpochsByAgent = {};
       this.conversations = [];

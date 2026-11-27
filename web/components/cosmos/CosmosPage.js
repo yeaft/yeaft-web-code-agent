@@ -13,7 +13,10 @@
 import {
   PLANETS,
   BOOK_DOMAINS,
+  DEFAULT_COSMOS_CONSTANTS,
   COSMOS_DRAWER_WIDTH,
+  normalizeCosmosConstants,
+  normalizePlanetBindings,
   loadCosmosConstants,
   saveCosmosConstants,
   loadPlanetBindings,
@@ -26,7 +29,12 @@ import {
   clampCosmosDrawerWidth,
   loadCosmosDrawerWidth,
   saveCosmosDrawerWidth,
+  readLocalCosmosPreferencesOwner,
+  writeLocalCosmosPreferencesOwner,
+  clearLocalCosmosPreferences,
+  readLegacyLocalCosmosConfig,
 } from '../../cosmos/constants.js';
+import { useUserPreferences } from '../../utils/user-preferences.js';
 import { createCosmosEngine } from '../../cosmos/gl-engine.js';
 import { createParticlePools, createCosmicWebGraph } from '../../cosmos/particle-hud.js';
 import {
@@ -669,11 +677,77 @@ export default {
       else delete bucket[key];
     };
 
+    const userPreferences = useUserPreferences();
+    const currentAuthStore = () => {
+      try { return globalThis.Pinia?.useAuthStore?.() || null; } catch { return null; }
+    };
+    const initialUserId = currentAuthStore()?.userId || null;
+    const storedPrefsOwner = readLocalCosmosPreferencesOwner();
+    if (initialUserId && storedPrefsOwner && storedPrefsOwner !== String(initialUserId)) {
+      clearLocalCosmosPreferences();
+    }
+
     const constants = Vue.reactive(loadCosmosConstants());
     const savedBindings = Vue.ref(loadPlanetBindings());
     const galaxyBooks = Vue.ref(loadGalaxyBooks());
     const canvasEpoch = Vue.ref(0);
     const rendererMode = Vue.ref('webgl2');
+
+    const SLIDER_CONSTANT_KEYS = new Set(['orbitSpeed', 'starDensity', 'skyBright', 'orbitLines']);
+    let pendingCloudConstants = null;
+    let cloudConstantsTimer = null;
+    let migratedCloudAuthKey = '';
+
+    function flushPendingCloudConstants() {
+      if (cloudConstantsTimer) {
+        clearTimeout(cloudConstantsTimer);
+        cloudConstantsTimer = null;
+      }
+      if (!pendingCloudConstants) return;
+      const patch = pendingCloudConstants;
+      pendingCloudConstants = null;
+      userPreferences.saveCosmosConfig?.({ constants: patch });
+    }
+
+    function persistCosmosConstantChange(changedKey = null, { immediate = false } = {}) {
+      const clean = saveCosmosConstants(constants);
+      if (changedKey && Object.hasOwn(clean, changedKey)) {
+        constants[changedKey] = clean[changedKey];
+      }
+      const uid = currentAuthStore()?.userId || null;
+      if (uid) writeLocalCosmosPreferencesOwner(uid);
+      const delta = changedKey && Object.hasOwn(clean, changedKey)
+        ? { [changedKey]: clean[changedKey] }
+        : clean;
+      if (immediate || (changedKey && !SLIDER_CONSTANT_KEYS.has(changedKey))) {
+        const merged = pendingCloudConstants ? { ...pendingCloudConstants, ...delta } : delta;
+        pendingCloudConstants = null;
+        if (cloudConstantsTimer) {
+          clearTimeout(cloudConstantsTimer);
+          cloudConstantsTimer = null;
+        }
+        userPreferences.saveCosmosConfig?.({ constants: merged });
+      } else {
+        pendingCloudConstants = { ...(pendingCloudConstants || {}), ...delta };
+        if (cloudConstantsTimer) clearTimeout(cloudConstantsTimer);
+        cloudConstantsTimer = setTimeout(flushPendingCloudConstants, 250);
+      }
+    }
+
+    function persistPlanetBindings(nextBindings) {
+      const clean = normalizePlanetBindings(nextBindings);
+      savePlanetBindings(clean);
+      const uid = currentAuthStore()?.userId || null;
+      if (uid) writeLocalCosmosPreferencesOwner(uid);
+      userPreferences.saveCosmosConfig?.({ planetBindings: clean });
+    }
+
+    function persistDrawerWidth(width) {
+      const saved = saveCosmosDrawerWidth(width);
+      const uid = currentAuthStore()?.userId || null;
+      if (uid) writeLocalCosmosPreferencesOwner(uid);
+      userPreferences.saveCosmosConfig?.({ drawerWidth: saved });
+    }
 
     const constantsOpen = Vue.ref(false);
     const signalPopoverOpen = Vue.ref(false);
@@ -1495,7 +1569,7 @@ export default {
       const result = moveOrSwapPlanetBinding(store.agents || [], savedBindings.value, agentId, targetPlanetId);
       if (!result.changed) return;
       savedBindings.value = result.bindings;
-      savePlanetBindings(result.bindings);
+      persistPlanetBindings(result.bindings);
       if (anim.planetFocus.planetId && result.fromPlanetId === anim.planetFocus.planetId) {
         focusPlanet(targetPlanetId, { defaultZoom: anim.planetFocus.targetZoom });
       }
@@ -1964,13 +2038,13 @@ export default {
         workbenchWidened.value = false;
         if (customClamped != null && customClamped >= wideDefault) {
           customDrawerWidth.value = null;
-          saveCosmosDrawerWidth(null);
+          persistDrawerWidth(null);
         }
         return;
       }
       if (customClamped != null && customClamped >= wideDefault) {
         customDrawerWidth.value = null;
-        saveCosmosDrawerWidth(null);
+        persistDrawerWidth(null);
         return;
       }
       workbenchWidened.value = true;
@@ -2014,7 +2088,7 @@ export default {
     function onDrawerResizeEnd() {
       drawerResizing.value = false;
       if (customDrawerWidth.value != null) {
-        saveCosmosDrawerWidth(customDrawerWidth.value);
+        persistDrawerWidth(customDrawerWidth.value);
       }
     }
 
@@ -2026,7 +2100,7 @@ export default {
       }
       workbenchWidened.value = false;
       customDrawerWidth.value = null;
-      saveCosmosDrawerWidth(null);
+      persistDrawerWidth(null);
     }
 
     function emitTelemetryBeam({ planetId }) {
@@ -2129,14 +2203,14 @@ export default {
     }
     function onToggleAutoEvents() {
       constants.eventsAutoEnabled = !constants.eventsAutoEnabled;
-      saveCosmosConstants(constants);
+      persistCosmosConstantChange('eventsAutoEnabled', { immediate: true });
       eventSim.autoEnabled = constants.eventsAutoEnabled;
       syncEventRefs();
       showToast($t(constants.eventsAutoEnabled ? 'cosmos.events.autoResumedToast' : 'cosmos.events.autoPausedToast'));
     }
     function onToggleAutoZoom() {
       constants.eventsAutoZoom = !constants.eventsAutoZoom;
-      saveCosmosConstants(constants);
+      persistCosmosConstantChange('eventsAutoZoom', { immediate: true });
       eventSim.autoZoom = constants.eventsAutoZoom;
       syncEventRefs();
       showToast($t(constants.eventsAutoZoom ? 'cosmos.events.autoZoomOnToast' : 'cosmos.events.autoZoomOffToast'));
@@ -2161,19 +2235,19 @@ export default {
     function onUpdateConstant({ key, value }) {
       if (!(key in constants)) return;
       constants[key] = value;
-      saveCosmosConstants(constants);
+      persistCosmosConstantChange(key);
       if (key === 'eventsAutoEnabled') {
-        eventSim.autoEnabled = Boolean(value);
-        if (!value && eventSim.active && !eventSim.active.observing) stopCosmicEvent(eventSim);
+        eventSim.autoEnabled = Boolean(constants.eventsAutoEnabled);
+        if (!constants.eventsAutoEnabled && eventSim.active && !eventSim.active.observing) stopCosmicEvent(eventSim);
         syncEventRefs();
       }
       if (key === 'eventsAutoZoom') {
-        eventSim.autoZoom = Boolean(value);
+        eventSim.autoZoom = Boolean(constants.eventsAutoZoom);
         syncEventRefs();
       }
-      if (key === 'showEventsCountdown' && !value && eventSim.active) { stopCosmicEvent(eventSim); syncEventRefs(); }
+      if (key === 'showEventsCountdown' && !constants.showEventsCountdown && eventSim.active) { stopCosmicEvent(eventSim); syncEventRefs(); }
       if (key === 'renderQuality') {
-        rebuildCosmosEngine(value);
+        rebuildCosmosEngine(constants.renderQuality);
       }
     }
     function onAssignPlanet({ agentId, planetId }) { if (agentId && planetId) performMoveOrSwap(agentId, planetId); }
@@ -2476,6 +2550,75 @@ export default {
       if (aid && sid) store.acknowledgeYeaftSessionSignals?.(sid, aid, { sessionRead: true });
     });
 
+    // Hydrate Cosmos configuration from Server user_preferences (cloud source of truth)
+    // and perform one-time migration of pre-cloud localStorage settings if cloud is empty.
+    Vue.watch(
+      [
+        () => userPreferences.ready.value,
+        () => userPreferences.preferences.value?.cosmosConfig,
+        () => currentAuthStore()?.userId || null,
+        () => currentAuthStore()?.authGeneration || 0,
+      ],
+      ([isReady, cloud, userId, authGen]) => {
+        if (userId) {
+          const prevOwner = readLocalCosmosPreferencesOwner();
+          if (prevOwner && prevOwner !== String(userId)) {
+            clearLocalCosmosPreferences();
+            Object.assign(constants, DEFAULT_COSMOS_CONSTANTS);
+            savedBindings.value = {};
+            customDrawerWidth.value = null;
+          }
+        }
+        if (!isReady) return;
+        const cfg = cloud && typeof cloud === 'object' ? cloud : {};
+        const hasCloudState = Object.hasOwn(cfg, 'constants')
+          || Object.hasOwn(cfg, 'planetBindings')
+          || Object.hasOwn(cfg, 'drawerWidth');
+
+        if (hasCloudState) {
+          if (cfg.constants && typeof cfg.constants === 'object') {
+            const prevQuality = constants.renderQuality;
+            const normalized = normalizeCosmosConstants({ ...DEFAULT_COSMOS_CONSTANTS, ...cfg.constants });
+            for (const [k, v] of Object.entries(normalized)) {
+              if (pendingCloudConstants && Object.hasOwn(pendingCloudConstants, k)) continue;
+              constants[k] = v;
+            }
+            saveCosmosConstants(constants);
+            eventSim.autoEnabled = constants.eventsAutoEnabled;
+            eventSim.autoZoom = constants.eventsAutoZoom;
+            if (!constants.eventsAutoEnabled && eventSim.active && !eventSim.active.observing) stopCosmicEvent(eventSim);
+            if (!constants.showEventsCountdown && eventSim.active) stopCosmicEvent(eventSim);
+            syncEventRefs();
+            if (engine && constants.renderQuality !== prevQuality) {
+              rebuildCosmosEngine(constants.renderQuality);
+            }
+          }
+          if (Object.hasOwn(cfg, 'planetBindings')) {
+            const cleanBindings = normalizePlanetBindings(cfg.planetBindings);
+            savedBindings.value = cleanBindings;
+            savePlanetBindings(cleanBindings);
+          }
+          if (Object.hasOwn(cfg, 'drawerWidth') && !drawerResizing.value) {
+            customDrawerWidth.value = cfg.drawerWidth;
+            saveCosmosDrawerWidth(cfg.drawerWidth);
+          }
+          if (userId) writeLocalCosmosPreferencesOwner(userId);
+          return;
+        }
+
+        const authKey = `${userId || ''}:${authGen}`;
+        if (userId && migratedCloudAuthKey !== authKey) {
+          migratedCloudAuthKey = authKey;
+          const legacy = readLegacyLocalCosmosConfig(undefined, userId);
+          writeLocalCosmosPreferencesOwner(userId);
+          if (legacy) {
+            userPreferences.saveCosmosConfig?.(legacy);
+          }
+        }
+      },
+      { immediate: true },
+    );
+
     Vue.watch([drawerOpen, isCompactViewport], () => {
       signalPopoverOpen.value = false;
     });
@@ -2491,6 +2634,7 @@ export default {
       });
       window.addEventListener('resize', onWindowResize);
       window.addEventListener('blur', onWindowBlur);
+      window.addEventListener('pagehide', flushPendingCloudConstants);
       window.addEventListener('pointermove', onGlobalPointerMove);
       window.addEventListener('pointerup', onGlobalPointerUp);
       window.addEventListener('pointercancel', onGlobalPointerCancel);
@@ -2504,6 +2648,7 @@ export default {
     });
 
     Vue.onBeforeUnmount(() => {
+      flushPendingCloudConstants();
       unmounted = true;
       activeTouchPointers.clear();
       cancelAnimationFrame(mountRafId);
@@ -2519,6 +2664,7 @@ export default {
       clearInterval(nowInterval);
       window.removeEventListener('resize', onWindowResize);
       window.removeEventListener('blur', onWindowBlur);
+      window.removeEventListener('pagehide', flushPendingCloudConstants);
       window.removeEventListener('pointermove', onGlobalPointerMove);
       window.removeEventListener('pointerup', onGlobalPointerUp);
       window.removeEventListener('pointercancel', onGlobalPointerCancel);

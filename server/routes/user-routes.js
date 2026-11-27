@@ -58,9 +58,21 @@ function isPlainObject(value) {
 }
 
 const preferenceFields = new Set([
-  'sidebarProjectsRatio', 'sidebarActionsCompact', 'sidebarCollapsedProjects', 'sidebarCollapsedSections',
+  'sidebarProjectsRatio', 'sidebarActionsCompact', 'sidebarCollapsedProjects', 'sidebarCollapsedSections', 'cosmosConfig',
 ]);
 const unsafeMapKeys = new Set(['__proto__', 'constructor', 'prototype']);
+const cosmosConfigFields = new Set(['constants', 'planetBindings', 'drawerWidth', 'uiMode']);
+const cosmosPlanetIds = new Set(['mercury', 'venus', 'earth', 'mars', 'jupiter', 'saturn', 'uranus', 'neptune']);
+const cosmosLivePreviewModes = new Set(['2', '3', 'collapsed']);
+const cosmosRenderQualities = new Set(['auto', 'high', 'lite']);
+const cosmosUiModes = new Set(['cosmos', 'classic']);
+const cosmosNumericBounds = {
+  orbitSpeed: [0, 2.5],
+  starDensity: [0.35, 2.0],
+  skyBright: [0.35, 1.8],
+  orbitLines: [0, 1.2],
+};
+const cosmosBooleanFields = new Set(['activeFlash', 'showEventsCountdown', 'eventsAutoEnabled', 'eventsAutoZoom']);
 
 function isCollapseMap(value, sections = false) {
   if (!isPlainObject(value)) return false;
@@ -69,6 +81,48 @@ function isCollapseMap(value, sections = false) {
     typeof collapsed === 'boolean' && !unsafeMapKeys.has(key)
     && (sections ? key === 'projects' || key === 'recents' : key.length > 0 && key.length <= 200)
   ));
+}
+
+function isValidCosmosConstantsPatch(value) {
+  if (!isPlainObject(value)) return false;
+  const entries = Object.entries(value);
+  if (entries.length === 0) return false;
+  return entries.every(([key, val]) => {
+    if (unsafeMapKeys.has(key)) return false;
+    if (Object.hasOwn(cosmosNumericBounds, key)) {
+      const [min, max] = cosmosNumericBounds[key];
+      return typeof val === 'number' && Number.isFinite(val) && val >= min && val <= max;
+    }
+    if (cosmosBooleanFields.has(key)) return typeof val === 'boolean';
+    if (key === 'livePreviewMode') return typeof val === 'string' && cosmosLivePreviewModes.has(val);
+    if (key === 'renderQuality') return typeof val === 'string' && cosmosRenderQualities.has(val);
+    return false;
+  });
+}
+
+function isValidCosmosPlanetBindings(value) {
+  if (!isPlainObject(value)) return false;
+  const entries = Object.entries(value);
+  if (entries.length > 128) return false;
+  return entries.every(([agentId, planetId]) => (
+    typeof agentId === 'string' && agentId.length > 0 && agentId.length <= 200
+    && !unsafeMapKeys.has(agentId)
+    && typeof planetId === 'string' && cosmosPlanetIds.has(planetId)
+  ));
+}
+
+function isValidCosmosConfigPatch(value) {
+  if (!isPlainObject(value)) return false;
+  const keys = Object.keys(value);
+  if (keys.length === 0 || keys.some(key => !cosmosConfigFields.has(key))) return false;
+  if (Object.hasOwn(value, 'constants') && !isValidCosmosConstantsPatch(value.constants)) return false;
+  if (Object.hasOwn(value, 'planetBindings') && !isValidCosmosPlanetBindings(value.planetBindings)) return false;
+  if (Object.hasOwn(value, 'drawerWidth') && value.drawerWidth !== null && !(
+    typeof value.drawerWidth === 'number' && Number.isInteger(value.drawerWidth)
+    && value.drawerWidth >= 340 && value.drawerWidth <= 1280
+  )) return false;
+  if (Object.hasOwn(value, 'uiMode') && (typeof value.uiMode !== 'string' || !cosmosUiModes.has(value.uiMode))) return false;
+  return true;
 }
 
 /**
@@ -134,12 +188,14 @@ export function registerUserRoutes(app, {
         ))
         || (Object.hasOwn(body, 'sidebarActionsCompact') && typeof body.sidebarActionsCompact !== 'boolean')
         || (Object.hasOwn(body, 'sidebarCollapsedProjects') && !isCollapseMap(body.sidebarCollapsedProjects))
-        || (Object.hasOwn(body, 'sidebarCollapsedSections') && !isCollapseMap(body.sidebarCollapsedSections, true))) {
+        || (Object.hasOwn(body, 'sidebarCollapsedSections') && !isCollapseMap(body.sidebarCollapsedSections, true))
+        || (Object.hasOwn(body, 'cosmosConfig') && !isValidCosmosConfigPatch(body.cosmosConfig))) {
         return res.status(400).json({
           error: 'Expected a nonempty patch with only sidebarProjectsRatio (finite number between 0.15 and 0.85), '
             + 'sidebarActionsCompact (boolean), sidebarCollapsedProjects (boolean map, up to 1000 nonempty project IDs '
-            + 'of at most 200 characters, excluding __proto__/constructor/prototype), and/or '
-            + 'sidebarCollapsedSections (boolean map with only projects/recents)',
+            + 'of at most 200 characters, excluding __proto__/constructor/prototype), '
+            + 'sidebarCollapsedSections (boolean map with only projects/recents), and/or '
+            + 'cosmosConfig (validated constants, planetBindings, drawerWidth, uiMode)',
         });
       }
 

@@ -724,7 +724,7 @@
   left: 50%;
   bottom: 18px;
   transform: translateX(-50%);
-  z-index: 54;
+  z-index: 30;
   display: inline-flex;
   align-items: center;
   gap: 9px;
@@ -740,7 +740,10 @@
 }
 
 .cosmos-page.is-drawer-open .cosmos-planet-focus-dock {
-  left: calc((100vw - var(--cosmos-drawer-w, 460px)) * 0.5);
+  left: calc((100vw - var(--c-panel-w, 460px)) * 0.5);
+  max-width: calc(100vw - var(--c-panel-w, 460px) - 20px);
+  overflow-x: auto;
+  scrollbar-width: none;
 }
 
 .cosmos-planet-focus-dock.is-corner-dock {

@@ -461,6 +461,18 @@ test.describe('Yeaft Cosmos UI', () => {
       const afterW = (await page.locator('.cosmos-drawer').boundingBox()).width;
       expect(afterW).toBeGreaterThan(drawerBeforeResize + 280);
     }).toPass({ timeout: 2000 });
+    // Verify wide drawer has NO excessive dead left whitespace: header, assistant messages, and composer align cleanly along one left rail
+    const [wideDrawerBox, wideMsgBox, wideComposerBox] = await Promise.all([
+      page.locator('.cosmos-drawer').boundingBox(),
+      page.locator('.cosmos-drawer .messages .assistant-turn').first().boundingBox(),
+      page.locator('.cosmos-drawer .input-wrapper.chat-composer').boundingBox(),
+    ]);
+    expect(wideDrawerBox).not.toBeNull();
+    expect(wideMsgBox).not.toBeNull();
+    expect(wideComposerBox).not.toBeNull();
+    expect(wideMsgBox.x - wideDrawerBox.x).toBeLessThanOrEqual(48);
+    expect(wideComposerBox.x - wideDrawerBox.x).toBeLessThanOrEqual(48);
+    expect(Math.abs(wideMsgBox.x - wideComposerBox.x)).toBeLessThanOrEqual(6);
     // Wide drawer automatically docks Session Status side-by-side so chat becomes interactive again
     await expect(statusHost).toHaveClass(/is-docked/);
     await expect(page.locator('.cosmos-drawer-chat')).not.toHaveAttribute('inert', '');
@@ -796,9 +808,46 @@ test.describe('Yeaft Cosmos UI', () => {
     await page.locator('.cosmos-event-stop-btn').click();
     await expect(page.locator('.cosmos-event-pill')).toHaveClass(/is-auto-off/);
 
-    // 5. Cosmic Constants popover exposes authentic Yeaft Settings modal
+    // 5. Cosmic Constants cloud persistence + authentic Yeaft Settings modal:
+    //    Change orbitSpeed + Agent planet binding -> verify a brand-new browser context (empty localStorage)
+    //    hydrates the exact same Cosmos settings & planet assignment from the Server DB!
     await page.locator('.cosmos-corner-actions .cosmos-corner-icon').first().click();
     await expect(page.locator('.cosmos-constants-popover')).toBeVisible();
+    const orbitRange = page.locator('.cosmos-constants-popover .cosmos-const-range').first();
+    await orbitRange.fill('0.4');
+    await orbitRange.dispatchEvent('input');
+    const firstBindingSelect = page.locator('.cosmos-constants-popover .cosmos-binding-row select').first();
+    const bindingPatchDone = page.waitForResponse((res) => res.url().includes('/api/user/preferences') && res.request().method() === 'PATCH' && res.status() === 200);
+    await firstBindingSelect.selectOption('mars');
+    await bindingPatchDone;
+    // Wait for debounced slider PATCH (if not already flushed by binding change)
+    await page.waitForTimeout(350);
+
+    // Fresh second browser context (clean device, empty localStorage) loads same cloud Cosmos config
+    const secondContext = await page.context().browser().newContext();
+    try {
+      const secondPage = await secondContext.newPage();
+      await secondPage.goto(serverUrl);
+      await expect(secondPage.locator('.cosmos-page')).toBeVisible({ timeout: 15000 });
+      await secondPage.waitForFunction((agentId) => {
+        const chat = window.Pinia?.useChatStore?.();
+        return Boolean(chat && (chat.agents || []).some((a) => a.id === agentId && a.online === true));
+      }, mockAgent.agentId, { timeout: 15000 });
+      await secondPage.locator('.cosmos-corner-actions .cosmos-corner-icon').first().click();
+      await expect(secondPage.locator('.cosmos-constants-popover')).toBeVisible();
+      await expect(secondPage.locator('.cosmos-constants-popover .cosmos-const-val').first()).toHaveText('0.4×', { timeout: 5000 });
+      await expect(secondPage.locator('.cosmos-planet-node[data-planet-id="mars"] .cosmos-planet-tag')).toContainText(/.+/, { timeout: 5000 });
+      await secondPage.close();
+    } finally {
+      await secondContext.close();
+    }
+
+    // Restore Earth binding & default orbit speed before continuing
+    await firstBindingSelect.selectOption('earth');
+    await orbitRange.fill('1');
+    await orbitRange.dispatchEvent('input');
+    await page.waitForTimeout(350);
+
     await page.locator('.cosmos-cfg-item').first().click();
     await expect(page.locator('.settings-dialog')).toBeVisible();
     await page.locator('.settings-close').click();
