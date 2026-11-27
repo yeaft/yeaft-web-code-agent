@@ -44,6 +44,7 @@ import {
   reconcileYeaftReplyPreviewsFromStatuses,
   clearYeaftSessionReplyPreview,
   clearYeaftAgentAskPreviews,
+  hasPendingOptimisticPreviewRoot,
   isModelReentryTask,
 } from './helpers/yeaft-reply-preview.js';
 import {
@@ -220,6 +221,7 @@ function isYeaftSessionProcessingState(state, sessionId, agentId = null) {
   const resolvedAgentId = agentId || resolveAgentIdForSession(state, sessionId);
   const processingKey = yeaftSessionIdentityKey(resolvedAgentId, sessionId);
   if (processingKey && state.yeaftProcessingSessions?.[processingKey]) return true;
+  if (resolvedAgentId && hasPendingOptimisticPreviewRoot(state, yeaftCatalogKey(resolvedAgentId, sessionId))) return true;
   const turnSnap = processingKey ? state.yeaftSessionTurnsBySession?.[processingKey] : null;
   if (isCurrentSessionTurnSnapshot(state, turnSnap)
       && turnSnap.turns?.some(turn => LIVE_SESSION_TURN_STATES.has(turn.state))) return true;
@@ -6837,6 +6839,12 @@ export const useChatStore = defineStore('chat', {
               }));
               if (endedSessionId && (rootHasText || rootHasLive || !hasRunningModelReentry)) {
                 this.markYeaftSessionUnread(endedSessionId, terminalAgentId || msg.agentId || null);
+                const unreadAgentId = terminalAgentId || msg.agentId || null;
+                if (rootHasText && rootKey && this.isYeaftSessionUnread(endedSessionId, unreadAgentId)) {
+                  this.recordYeaftSessionPreview(endedSessionId, unreadAgentId, {
+                    markUnreadReplyRoot: rootKey,
+                  });
+                }
               }
             } else {
               this.recordYeaftSessionPreview(terminalSessionId, terminalAgentId, {
@@ -7503,6 +7511,9 @@ export const useChatStore = defineStore('chat', {
       const ownerAgentId = resolveAgentIdForSession(this, sessionId, agentId);
       if (!ownerAgentId) return false;
       const catalogKey = yeaftCatalogKey(ownerAgentId, sessionId);
+      if (this.yeaftSessionReplyPreviewByKey?.[catalogKey]?.unreadReplyRootId) {
+        this.recordYeaftSessionPreview(sessionId, ownerAgentId, { clearUnreadReply: true });
+      }
       if (!this.yeaftUnreadSessionKeys?.[catalogKey]) return false;
       const { [catalogKey]: _read, ...remainingUnread } = this.yeaftUnreadSessionKeys;
       this.yeaftUnreadSessionKeys = remainingUnread;
@@ -9164,6 +9175,8 @@ export const useChatStore = defineStore('chat', {
       ));
       if (hasActiveTurn) return;
       const sessionKey = yeaftSessionIdentityKey(resolvedAgentId, sessionId);
+      if (!ignoreStatuses && resolvedAgentId
+        && hasPendingOptimisticPreviewRoot(this, yeaftCatalogKey(resolvedAgentId, sessionId))) return;
       const turnSnap = sessionKey ? this.yeaftSessionTurnsBySession?.[sessionKey] : null;
       if (!ignoreStatuses && isCurrentSessionTurnSnapshot(this, turnSnap)
         && turnSnap.turns?.some(turn => LIVE_SESSION_TURN_STATES.has(turn.state))) return;

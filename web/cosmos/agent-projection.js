@@ -13,6 +13,7 @@ import {
   stripMarkdownPreview,
   isUserBoundaryRow,
   isModelReentryTask,
+  hasPendingOptimisticPreviewRoot,
 } from '../stores/helpers/yeaft-reply-preview.js';
 import { LIVE_SESSION_TURN_STATES } from '../stores/helpers/yeaft-session-turns.js';
 import { YEAFT_RUNNING_VP_STATES } from '../stores/helpers/yeaft-runtime-state.js';
@@ -270,6 +271,11 @@ function selectActiveYeaftRoot(chatStore, agentId, sessionId, convId, cachedPrev
 /**
  * Select the most recent settled user-turn root from authoritative `session_turns`
  * or the root-indexed preview cache, preserving lifecycle order across reopened roots.
+ * Returns:
+ *   - `{ kind: 'cached', root }` when the winning settled root exists in the preview cache,
+ *   - `{ kind: 'uncached_snapshot', rootId, turnIds, endedAt }` when a newer uncached
+ *     settled turn in `session_turns` beat cached roots (prevents falling through to older cache),
+ *   - `null` when neither `session_turns` nor `roots` has a settled root.
  */
 function selectSettledYeaftRoot(chatStore, agentId, sessionId, convId, cachedPreview) {
   const rootsMap = cachedPreview?.roots || {};
@@ -301,16 +307,23 @@ function selectSettledYeaftRoot(chatStore, agentId, sessionId, convId, cachedPre
   }
   if (latestTurn?.userTurnId) {
     const matched = rootsMap[latestTurn.userTurnId];
-    if (matched && (matched.finalizedText || matched.finalizedEmpty)) return matched;
-    // If an uncached newer settled turn beat every cached root by `endedAt`, do not fall back to an older cached root.
-    if (Object.keys(rootsMap).length > 0) {
-      const latestCached = Object.values(rootsMap)
-        .filter((r) => r && (r.finalizedText || r.finalizedEmpty))
-        .sort((a, b) => (b.seq || 0) - (a.seq || 0))[0] || null;
-      if (latestCached && latestTurnOrder > (latestCached.finalizedAt || latestCached.startedAt || 0)) {
-        return null;
-      }
+    if (matched && (matched.finalizedText || matched.finalizedEmpty)) {
+      return { kind: 'cached', root: matched };
     }
+    // `latestTurn` won the authoritative `session_turns` ordering (same Agent clock)
+    // and has no confirmed cached preview: return its snapshot identity directly so
+    // the caller never falls through to an older cached root.
+    const turnIds = new Set(
+      (latestTurn.executions || [])
+        .filter((ex) => ex?.turnId && ex.state === 'completed')
+        .map((ex) => ex.turnId),
+    );
+    return {
+      kind: 'uncached_snapshot',
+      rootId: latestTurn.userTurnId,
+      turnIds,
+      endedAt: latestTurnOrder,
+    };
   }
 
   let latestCompleted = null;
@@ -320,7 +333,29 @@ function selectSettledYeaftRoot(chatStore, agentId, sessionId, convId, cachedPre
       latestCompleted = root;
     }
   }
-  return latestCompleted;
+  return latestCompleted ? { kind: 'cached', root: latestCompleted } : null;
+}
+
+function isSelectedRootCancelling(chatStore, { agentId, sessionId, convId, activeRootId, activeTurnIds }) {
+  if (!chatStore || !sessionId) return false;
+  const sessionKey = yeaftSessionIdentityKey(agentId, sessionId);
+  const turnSnap = sessionKey ? chatStore.yeaftSessionTurnsBySession?.[sessionKey] : null;
+  const turns = isCurrentRuntimeRow(chatStore, turnSnap, convId) ? (turnSnap?.turns || []) : [];
+  if (turns.some((turn) => (
+    turn?.state === 'cancelling'
+    && (!activeRootId || !turn.userTurnId || turn.userTurnId === activeRootId)
+  ))) {
+    return true;
+  }
+  if (activeTurnIds?.size > 0) {
+    const stoppingMap = chatStore.stoppingVpTurnIds || {};
+    for (const tid of activeTurnIds) {
+      if (stoppingMap[tid] || (agentId && stoppingMap[`${agentId}\u001f${tid}`])) {
+        return true;
+      }
+    }
+  }
+  return false;
 }
 
 function translatePhaseCode(phase, t, isEn) {
@@ -354,25 +389,8 @@ function resolveRunningStatusText(chatStore, {
   }
 
   // 0b. Explicit cancellation of the selected root takes highest precedence over progress/tools.
-  if (isYeaft) {
-    const sessionKey = yeaftSessionIdentityKey(agentId, sessionId);
-    const turnSnap = sessionKey ? chatStore?.yeaftSessionTurnsBySession?.[sessionKey] : null;
-    const turns = isCurrentRuntimeRow(chatStore, turnSnap, convId) ? (turnSnap?.turns || []) : [];
-    const selectedCancelling = turns.some((turn) => (
-      turn?.state === 'cancelling'
-      && (!activeRootId || !turn.userTurnId || turn.userTurnId === activeRootId)
-    ));
-    if (selectedCancelling) {
-      return translateSignal(t, isEn, 'cosmos.signals.stageStopping', null, 'Stopping…', '正在停止…');
-    }
-    if (activeTurnIds?.size > 0) {
-      const stoppingMap = chatStore?.stoppingVpTurnIds || {};
-      for (const tid of activeTurnIds) {
-        if (stoppingMap[tid] || (agentId && stoppingMap[`${agentId}\u001f${tid}`])) {
-          return translateSignal(t, isEn, 'cosmos.signals.stageStopping', null, 'Stopping…', '正在停止…');
-        }
-      }
-    }
+  if (isYeaft && isSelectedRootCancelling(chatStore, { agentId, sessionId, convId, activeRootId, activeTurnIds })) {
+    return translateSignal(t, isEn, 'cosmos.signals.stageStopping', null, 'Stopping…', '正在停止…');
   }
 
   // 1. Live executing non-inline tool name (highest precision, uniform across Yeaft and CLI)
@@ -660,6 +678,7 @@ function inspectLoadedMessages(messages, sessionId, {
       currentTurnAssistantSnippet: '',
       currentTurnAssistantAt: 0,
       currentTurnAssistantTurnId: '',
+      currentTurnAssistantAuthoritative: false,
       liveTurnAssistantSnippet: '',
       liveTurnAssistantAt: 0,
       liveTurnAssistantTurnId: '',
@@ -683,6 +702,7 @@ function inspectLoadedMessages(messages, sessionId, {
   let currentTurnAssistantSnippet = '';
   let currentTurnAssistantAt = 0;
   let currentTurnAssistantTurnId = '';
+  let currentTurnAssistantAuthoritative = false;
   let liveTurnAssistantSnippet = '';
   let liveTurnAssistantAt = 0;
   let liveTurnAssistantTurnId = '';
@@ -746,6 +766,10 @@ function inspectLoadedMessages(messages, sessionId, {
           currentTurnAssistantSnippet = cleaned;
           currentTurnAssistantAt = rowAt;
           currentTurnAssistantTurnId = rowTurnId;
+          currentTurnAssistantAuthoritative = Boolean(
+            row.isHistory === true
+            || (row.status === 'completed' && row.turnEndReason === 'end_turn'),
+          );
         }
         // While processing, only accept assistant rows that belong to the selected active root.
         // Never cross a newer user-message boundary or borrow an execution from another root.
@@ -784,6 +808,7 @@ function inspectLoadedMessages(messages, sessionId, {
     currentTurnAssistantSnippet,
     currentTurnAssistantAt,
     currentTurnAssistantTurnId,
+    currentTurnAssistantAuthoritative,
     liveTurnAssistantSnippet,
     liveTurnAssistantAt,
     liveTurnAssistantTurnId,
@@ -943,9 +968,11 @@ export function projectAgentsForCosmos({ chatStore, sessionsStore, nowMs = Date.
         : false;
       const cachedPreview = isYeaft ? (replyPreviewByKey[item.catalogKey] || null) : null;
       const hasRuntimeTruth = isYeaft && hasAuthoritativeYeaftRuntime(chatStore, agentId, item.id, convId);
+      const hasPendingSend = isYeaft && hasPendingOptimisticPreviewRoot(chatStore, item.catalogKey);
       const isVpProcessing = isYeaft
         ? Boolean(
           chatStore?.isYeaftSessionProcessing?.(item.id, agentId)
+          || hasPendingSend
           || (!hasRuntimeTruth && (detail?.running || detail?.runningVpCount > 0)),
         )
         : Boolean(chatStore?.processingConversations?.[item.id]);
@@ -953,23 +980,31 @@ export function projectAgentsForCosmos({ chatStore, sessionsStore, nowMs = Date.
       const activeRoot = isYeaft && isVpProcessing
         ? selectActiveYeaftRoot(chatStore, agentId, item.id, convId, cachedPreview)
         : { rootId: null, turnIds: new Set(), hasExplicitRoot: false, isPendingOptimistic: false };
-      const settledRoot = isYeaft && !isVpProcessing
+      const settledSelection = isYeaft && !isVpProcessing
         ? selectSettledYeaftRoot(chatStore, agentId, item.id, convId, cachedPreview)
         : null;
-      const selectedRootId = isVpProcessing ? activeRoot.rootId : (settledRoot?.rootId || null);
+      const settledRoot = settledSelection?.kind === 'cached' ? settledSelection.root : null;
+      const selectedRootId = isVpProcessing
+        ? activeRoot.rootId
+        : (settledRoot?.rootId || settledSelection?.rootId || null);
 
       const runningModelReentryTask = isYeaft
         ? findRunningModelReentryTask(chatStore, agentId, item.id, selectedRootId)
         : null;
 
-      // Track non-reply terminal executions (route_forward / cancelled / errored) so
-      // transcript fallback can never resurrect handoff/aborted prose as a finished answer.
+      // Track non-reply terminal executions (route_forward / cancelled / errored) and
+      // unverified snapshot-only settlements so transcript fallback never resurrects
+      // handoff/aborted/interrupted prose as a finished answer.
       const nonReplyTurnIds = new Set();
+      const snapshotSettledTurnIds = new Set();
       if (isYeaft && cachedPreview?.roots) {
         for (const root of Object.values(cachedPreview.roots)) {
           for (const ex of Object.values(root?.executions || {})) {
-            if (ex?.turnId && (ex.state === 'route_forward' || ex.state === 'cancelled' || ex.state === 'errored')) {
+            if (!ex?.turnId) continue;
+            if (ex.state === 'route_forward' || ex.state === 'cancelled' || ex.state === 'errored') {
               nonReplyTurnIds.add(ex.turnId);
+            } else if (ex.state === 'snapshot_settled') {
+              snapshotSettledTurnIds.add(ex.turnId);
             }
           }
         }
@@ -1035,11 +1070,32 @@ export function projectAgentsForCosmos({ chatStore, sessionsStore, nowMs = Date.
       }
 
       // Finished/unread reply preview (strictly for the newest settled root, never a pre-user older turn).
+      const msgTranscriptEligible = Boolean(
+        msgInfo.currentTurnAssistantSnippet
+        && (!msgInfo.currentTurnAssistantTurnId || !nonReplyTurnIds.has(msgInfo.currentTurnAssistantTurnId))
+        && (!msgInfo.currentTurnAssistantTurnId
+          || !snapshotSettledTurnIds.has(msgInfo.currentTurnAssistantTurnId)
+          || msgInfo.currentTurnAssistantAuthoritative),
+      );
       let replyPreview = '';
       let replyAt = 0;
       if (isVpProcessing) {
         replyPreview = liveReplyPreview;
         replyAt = liveReplyAt;
+      } else if (isYeaft && settledSelection?.kind === 'uncached_snapshot') {
+        // Newer uncached settled root beat cached roots: NEVER fall back to older `cachedPreview.text`.
+        // Scope transcript lookup strictly to this root's completed execution IDs.
+        const matchesSnapshotTurn = msgTranscriptEligible
+          && (settledSelection.turnIds.size > 0
+            ? Boolean(msgInfo.currentTurnAssistantTurnId && settledSelection.turnIds.has(msgInfo.currentTurnAssistantTurnId))
+            : !msgInfo.currentTurnAssistantTurnId);
+        if (matchesSnapshotTurn) {
+          replyPreview = msgInfo.currentTurnAssistantSnippet;
+          replyAt = msgInfo.currentTurnAssistantAt || settledSelection.endedAt;
+        } else {
+          replyPreview = '';
+          replyAt = settledSelection.endedAt;
+        }
       } else if (isYeaft && settledRoot) {
         if (settledRoot.finalizedEmpty) {
           replyPreview = '';
@@ -1061,8 +1117,7 @@ export function projectAgentsForCosmos({ chatStore, sessionsStore, nowMs = Date.
           if (rootText && !rootBelongsToPriorUserTurn) {
             replyPreview = rootText;
             replyAt = rootAt;
-          } else if (msgInfo.currentTurnAssistantSnippet
-            && (!msgInfo.currentTurnAssistantTurnId || !nonReplyTurnIds.has(msgInfo.currentTurnAssistantTurnId))
+          } else if (msgTranscriptEligible
             && (!msgInfo.currentTurnAssistantTurnId || rootExecTurnIds.size === 0 || rootExecTurnIds.has(msgInfo.currentTurnAssistantTurnId))) {
             replyPreview = msgInfo.currentTurnAssistantSnippet;
             replyAt = msgInfo.currentTurnAssistantAt;
@@ -1093,9 +1148,7 @@ export function projectAgentsForCosmos({ chatStore, sessionsStore, nowMs = Date.
             ),
           );
           const validCachedReply = cachedReplyText && !cachedBelongsToPriorTurn ? cachedReplyText : '';
-          const msgReply = (msgInfo.currentTurnAssistantTurnId && nonReplyTurnIds.has(msgInfo.currentTurnAssistantTurnId))
-            ? ''
-            : msgInfo.currentTurnAssistantSnippet;
+          const msgReply = msgTranscriptEligible ? msgInfo.currentTurnAssistantSnippet : '';
           const useCachedReply = Boolean(validCachedReply)
             && (!msgReply || cachedReplyAt >= msgInfo.currentTurnAssistantAt);
           replyPreview = useCachedReply ? validCachedReply : msgReply;
@@ -1103,12 +1156,17 @@ export function projectAgentsForCosmos({ chatStore, sessionsStore, nowMs = Date.
         }
       }
 
-      // Gate background model_reentry task liveness on session unread evidence for the
-      // selected root's finalized reply (independently of scheduled-task notices).
+      // Gate background model_reentry task liveness strictly on unread reply evidence
+      // for the selected root (never conflating scheduled-task notices that also set
+      // Classic `yeaftUnreadSessionKeys` with an unread VP reply).
+      const hasCachedRoots = Boolean(isYeaft && cachedPreview?.roots && Object.keys(cachedPreview.roots).length > 0);
       const hasUnreadFinalizedReply = Boolean(
         isSessionUnread
         && replyPreview
-        && (!settledRoot || !settledRoot.finalizedEmpty),
+        && (!settledRoot || !settledRoot.finalizedEmpty)
+        && (hasCachedRoots
+          ? Boolean(settledRoot && cachedPreview.unreadReplyRootId === settledRoot.rootId)
+          : !scheduledNotice),
       );
       const runningTaskOwnsWaitingState = Boolean(
         !isVpProcessing
@@ -1122,6 +1180,19 @@ export function projectAgentsForCosmos({ chatStore, sessionsStore, nowMs = Date.
         replyPreview = '';
         replyAt = 0;
       }
+
+      const isCancelling = Boolean(
+        isYeaft
+        && isVpProcessing
+        && !activeRoot.isPendingOptimistic
+        && isSelectedRootCancelling(chatStore, {
+          agentId,
+          sessionId: item.id,
+          convId,
+          activeRootId: selectedRootId,
+          activeTurnIds: activeRoot.turnIds,
+        }),
+      );
 
       const runningStatusText = isProcessing
         ? resolveRunningStatusText(chatStore, {
@@ -1150,7 +1221,9 @@ export function projectAgentsForCosmos({ chatStore, sessionsStore, nowMs = Date.
       const snippet = hasPendingAsk
         ? (askQuestion || waitingFallback)
         : (isProcessing
-          ? (liveReplyPreview || runningStatusText || runningFallback)
+          ? (isCancelling
+            ? (runningStatusText || runningFallback)
+            : (liveReplyPreview || runningStatusText || runningFallback))
           : (replyPreview
             || msgInfo.latestSnippet
             || (shortenPath(item.workDir || '') || item.title)));
@@ -1162,6 +1235,7 @@ export function projectAgentsForCosmos({ chatStore, sessionsStore, nowMs = Date.
       return {
         ...item,
         status,
+        isCancelling,
         unread: isUnread,
         updatedAt: updatedMs,
         updatedLabel: formatRelativeTime(updatedMs, nowMs, isEn),

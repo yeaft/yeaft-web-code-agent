@@ -112,7 +112,9 @@ export function buildCosmosSignalStream({
           || (notice ? scheduledStatusText(notice, t) : '')
           || completedFallback;
       } else {
-        preview = s.liveReplyPreview || s.runningStatusText || runningFallback;
+        preview = s.isCancelling
+          ? (s.runningStatusText || runningFallback)
+          : (s.liveReplyPreview || s.runningStatusText || runningFallback);
       }
 
       const activityAt = Math.max(
@@ -132,7 +134,7 @@ export function buildCosmosSignalStream({
         sessionTitle: s.title || s.id,
         projectPath: s.projectPath || '',
         preview,
-        hasLiveReply: kind === 'running' && Boolean(s.liveReplyPreview),
+        hasLiveReply: kind === 'running' && !s.isCancelling && Boolean(s.liveReplyPreview),
         replyAt: parseMs(s.replyAt),
         askRequestId: s.askRequestId || '',
         askTurnId: s.askTurnId || '',

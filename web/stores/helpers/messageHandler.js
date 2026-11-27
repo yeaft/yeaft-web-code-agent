@@ -110,7 +110,19 @@ function handleYeaftSessionSendError(store, msg) {
   const conversationId = msg.agentId && msg.sessionId
     ? store.yeaftConversationIdsByAgent?.[msg.agentId]
     : null;
-  if (!conversationId) return;
+  if (!conversationId) {
+    if (msg.agentId && msg.sessionId && msg.clientMessageId) {
+      const cancelled = store.recordYeaftSessionPreview?.(msg.sessionId, msg.agentId, {
+        cancelTurn: true,
+        rootId: msg.clientMessageId,
+        reason: 'errored',
+      });
+      if (cancelled) {
+        store.clearYeaftSessionProcessingIfIdle?.(msg.sessionId, { agentId: msg.agentId });
+      }
+    }
+    return;
+  }
   const rows = store.messagesMap[conversationId] || [];
   const optimisticIndex = rows.findIndex(row => row.type === 'user'
     && row.sessionId === msg.sessionId
@@ -123,6 +135,11 @@ function handleYeaftSessionSendError(store, msg) {
   if (optimistic.status === 'error') return;
   optimistic.status = 'error';
   optimistic.error = msg.message;
+  store.recordYeaftSessionPreview?.(msg.sessionId, msg.agentId, {
+    cancelTurn: true,
+    rootId: msg.clientMessageId,
+    reason: 'errored',
+  });
   // A rejection can arrive before any Agent status, in either send order.
   // Other optimistic identities remain in-flight until a durable echo replaces
   // them or their own rejection arrives; older persisted rows are not pending.

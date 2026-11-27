@@ -43,7 +43,7 @@ export function stripMarkdownPreview(raw, maxLen = MAX_PREVIEW_CHARS) {
  * or attachment-only user prompts still establish a turn boundary consistently.
  */
 export function isUserBoundaryRow(row) {
-  if (!row || row.type !== 'user') return false;
+  if (!row || row.type !== 'user' || row.status === 'error') return false;
   const raw = typeof row.content === 'string'
     ? row.content
     : (typeof row.text === 'string' ? row.text : '');
@@ -330,12 +330,27 @@ function writePreviewMap(store, map, catalogKey, nextEntry) {
   return true;
 }
 
+/**
+ * Return true when the Session still has an unresolved optimistic send (`__pending__`)
+ * waiting to be linked/supplemented, rejected, cancelled, or reconciled.
+ */
+export function hasPendingOptimisticPreviewRoot(store, catalogKey) {
+  if (!store || !catalogKey) return false;
+  const entry = store.yeaftSessionReplyPreviewByKey?.[catalogKey];
+  if (!entry?.roots) return false;
+  for (const root of Object.values(entry.roots)) {
+    if (root?.executions?.[PENDING_EXEC_KEY]?.state === 'running') return true;
+  }
+  return false;
+}
+
 function entriesStructurallyEqual(prev, next) {
   if (!prev) return false;
   if (prev.text !== next.text
     || (prev.turnId || null) !== (next.turnId || null)
     || (prev.rootId || null) !== (next.rootId || null)
     || (prev.latestRootId || null) !== (next.latestRootId || null)
+    || (prev.unreadReplyRootId || null) !== (next.unreadReplyRootId || null)
     || prev.kind !== next.kind
     || (prev.liveText || '') !== (next.liveText || '')
     || (prev.liveTurnId || null) !== (next.liveTurnId || null)
@@ -392,6 +407,8 @@ export function recordYeaftSessionReplyPreview(store, {
   finalizeTurn = false,
   cancelTurn = false,
   reason = null,
+  markUnreadReplyRoot = null,
+  clearUnreadReply = false,
   askQuestion,
   askRequestId = null,
   askTurnId = null,
@@ -408,6 +425,7 @@ export function recordYeaftSessionReplyPreview(store, {
   const normTurnId = normalizeId(turnId);
   const normRootId = normalizeId(rootId);
   const normAliasRootId = normalizeId(aliasRootId);
+  const normUnreadReplyRoot = normalizeId(markUnreadReplyRoot);
 
   if (beginTurn && onlyIfNoUpdateSince > 0 && prev && (prev.updatedAt || 0) >= onlyIfNoUpdateSince) {
     return false;
@@ -417,6 +435,7 @@ export function recordYeaftSessionReplyPreview(store, {
   const nextSeq = () => { seq += 1; return seq; };
   const roots = cloneRoots(prev?.roots);
 
+  let nextUnreadReplyRootId = prev?.unreadReplyRootId || null;
   let nextAskQuestion = prev?.askQuestion || '';
   let nextAskRequestId = prev?.askRequestId || null;
   let nextAskTurnId = prev?.askTurnId || null;
@@ -427,6 +446,15 @@ export function recordYeaftSessionReplyPreview(store, {
   let fallbackTurnId = prev?.turnId || null;
   let nextKind = prev?.kind || kind;
   let hasAction = false;
+
+  if (clearUnreadReply && nextUnreadReplyRootId) {
+    nextUnreadReplyRootId = null;
+    hasAction = true;
+  }
+  if (normUnreadReplyRoot && nextUnreadReplyRootId !== normUnreadReplyRoot) {
+    nextUnreadReplyRootId = normUnreadReplyRoot;
+    hasAction = true;
+  }
 
   // Migrate any legacy flat entry into a completed root before new root operations run.
   if (Object.keys(roots).length === 0 && prev?.text && (beginTurn || finalizeTurn || cancelTurn || live || fromResult || Array.isArray(syncTurns))) {
@@ -545,9 +573,10 @@ export function recordYeaftSessionReplyPreview(store, {
             hasAction = true;
           }
         } else if (!execLive && existingExec.state === 'running') {
-          // Snapshot-derived completion is provisional until `vp_turn_end` confirms
-          // whether the reason was `end_turn` vs `route_forward` / `aborted` / `errored`.
-          existingExec.state = exec.state === 'completed' ? 'completed' : 'cancelled';
+          // A `session_turns` snapshot alone cannot distinguish `end_turn` from
+          // `route_forward` or verify that pre-disconnect streamed text is complete.
+          // Park in `snapshot_settled` until `vp_turn_end` confirms the disposition.
+          existingExec.state = exec.state === 'completed' ? 'snapshot_settled' : 'cancelled';
           existingExec.explicitTerminal = false;
           existingExec.seq = nextSeq();
           hasAction = true;
@@ -567,7 +596,20 @@ export function recordYeaftSessionReplyPreview(store, {
 
   if (beginTurn) {
     let targetRootId = normRootId || findRootOwningTurn(roots, normTurnId);
-    if (!targetRootId && normTurnId) targetRootId = `turn:${normTurnId}`;
+    if (!targetRootId && normTurnId) {
+      // Legacy agents without `userTurnId`: claim the newest unlinked `__pending__` root
+      // created by the preceding user send/echo so it does not stay orphaned after turn end.
+      let claimablePending = null;
+      for (const root of Object.values(roots)) {
+        const execKeys = Object.keys(root?.executions || {});
+        if (execKeys.length === 1 && execKeys[0] === PENDING_EXEC_KEY && root.executions[PENDING_EXEC_KEY]?.state === 'running') {
+          if (!claimablePending || (root.seq || 0) >= (claimablePending.seq || 0)) {
+            claimablePending = root;
+          }
+        }
+      }
+      targetRootId = claimablePending ? claimablePending.rootId : `turn:${normTurnId}`;
+    }
     if (!targetRootId) {
       const currentLive = pickLatestLiveRoot(roots);
       if (preserveLiveIfInFlight && currentLive) {
@@ -654,9 +696,10 @@ export function recordYeaftSessionReplyPreview(store, {
       }
       const ex = root.executions[normTurnId];
       // An explicit non-success terminal event (`route_forward`, `aborted`, `errored`)
-      // MUST override both `running` and a provisional snapshot-derived `completed` state.
+      // MUST override `running`, `snapshot_settled`, or any provisional completion.
       const canOverride = !ex
         || ex.state === 'running'
+        || ex.state === 'snapshot_settled'
         || (ex.state === 'completed' && ex.explicitTerminal !== true);
       if (canOverride) {
         delete root.executions[PENDING_EXEC_KEY];
@@ -675,7 +718,7 @@ export function recordYeaftSessionReplyPreview(store, {
       const root = roots[normRootId];
       let touched = false;
       for (const ex of Object.values(root.executions || {})) {
-        if (ex && (ex.state === 'running' || (ex.state === 'completed' && ex.explicitTerminal !== true))) {
+        if (ex && (ex.state === 'running' || ex.state === 'snapshot_settled' || (ex.state === 'completed' && ex.explicitTerminal !== true))) {
           ex.state = terminalState;
           ex.explicitTerminal = true;
           ex.seq = nextSeq();
@@ -816,6 +859,7 @@ export function recordYeaftSessionReplyPreview(store, {
 
   // Standalone ask-clearing drops the entry when no reply or turn state remains.
   if (clearAsk && !beginTurn && !finalizeTurn && !cancelTurn && !linkRootAlias && !Array.isArray(syncTurns)
+      && !normUnreadReplyRoot && !clearUnreadReply
       && !cleanedText && !cleanedAsk
       && !derived.text && !derived.liveText && !derived.inFlight && !derived.finalizedEmptyTurnId
       && Object.keys(roots).length === 0) {
@@ -827,6 +871,7 @@ export function recordYeaftSessionReplyPreview(store, {
   const nextEntry = {
     seq,
     latestRootId: derived.latestRootId,
+    unreadReplyRootId: nextUnreadReplyRootId,
     roots,
     text: derived.text,
     turnId: derived.turnId,
