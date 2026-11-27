@@ -1094,6 +1094,9 @@ export const useCosmicWebStore = defineStore('cosmicWeb', {
         else if (effectiveUrl) body.url = effectiveUrl;
         if (this.aiBriefData?.tldr) {
           body.briefContext = this.aiBriefData.tldr;
+          if (this.aiBriefData.briefContextToken) {
+            body.briefContextToken = this.aiBriefData.briefContextToken;
+          }
           if (this.aiBriefData.briefContextVersion != null) {
             body.briefContextVersion = this.aiBriefData.briefContextVersion;
           }

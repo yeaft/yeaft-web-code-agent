@@ -21,6 +21,9 @@ export const COSMIC_WEB_FOLLOW_UP_CAPABILITY = 'cosmic_web_follow_up';
 export const COSMIC_WEB_RADAR_CAPABILITY = 'cosmic_web_radar';
 export const COSMIC_WEB_CANCEL_CAPABILITY = 'cosmic_web_cancel';
 
+const PRIVATE_EXCERPT_VERSION = 3;
+const PRIVATE_BRIEF_CONTEXT_VERSION = 3;
+
 const BUNDLED_SKILLS_DIR = fileURLToPath(new URL('../skills/', import.meta.url));
 const SKILL_PATH = 'cosmic-web/SKILL.md';
 const TIMEOUT_MS = 65_000;
@@ -231,6 +234,9 @@ const UNICODE_SYMBOL_RE = /\p{S}/u;
 const isWhatwgDot = code => code === 0x002e || code === 0x3002 || code === 0xff0e || code === 0xff61;
 // Percent-encoded WHATWG host dot separators normalized by Node URL parsing: %2e (.), %e3%80%82 (。), %ef%bc%8e (．), %ef%bd%a1 (｡).
 const PERCENT_WHATWG_DOT_RE = /%(?:2e|e3%80%82|ef%bc%8e|ef%bd%a1)/i;
+const ELLIPSIS_RE = /(?:\.\.|…)/u;
+const FOLLOWING_ELLIPSIS_RE = /^\s*(?:\[\s*(?:\.\.|…)\s*\]|\(\s*(?:\.\.|…)\s*\)|\.\.|…)/u;
+const TRAILING_CLOSERS_ONLY_RE = /^[\s"'>)\]}”’」』】》〉]*$/u;
 function percentWhatwgDotLenAt(str, idx) {
   if (str.charCodeAt(idx) !== 0x25) return 0;
   if (idx + 3 <= str.length && str.charCodeAt(idx + 1) === 0x32 && (str.charCodeAt(idx + 2) | 32) === 0x65) return 3;
@@ -317,7 +323,7 @@ function isValidBareWwwCandidate(rawCandidate, budget) {
   return Boolean(parsed && ((parsed.hostname.startsWith('www.') && parsed.hostname.length > 4) || parsed.username || parsed.password));
 }
 
-function matchUrlStartAt(str, offset, identBeforeUnderscores = false, budget = null) {
+function matchUrlStartAt(str, offset, identBeforeUnderscores = false, budget = null, failClosedTruncatedSchemeRelative = false) {
   const len = str.length;
   const prev = offset > 0 ? str.charCodeAt(offset - 1) : 0;
   const prevIsAlnum = (prev >= 48 && prev <= 57) || (prev >= 65 && prev <= 90) || (prev >= 97 && prev <= 122);
@@ -644,13 +650,26 @@ function matchUrlStartAt(str, offset, identBeforeUnderscores = false, budget = n
       // Fail closed on any truncated credential-bearing (including digit-only numeric passwords) or unclosed-IPv6
       // authority fragment at EOF, OR any unresolved authority exceeding lookahead or cut-tracking capacity.
       if (k === len && (seenAt || inBrackets || seenPortColon || postAtPortColon)) return { prefixLen: 2, minEnd: k };
+      if (failClosedTruncatedSchemeRelative) {
+        const tailAfterTrim = str.slice(trimmedEnd, k);
+        const tailAfterToken = str.slice(k, Math.min(len, k + 16));
+        const effectivelyEof = k === len || (len - k <= 16 && TRAILING_CLOSERS_ONLY_RE.test(str.slice(k)));
+        if (effectivelyEof || ELLIPSIS_RE.test(tailAfterTrim) || FOLLOWING_ELLIPSIS_RE.test(tailAfterToken)) {
+          return { prefixLen: 2, minEnd: k };
+        }
+      }
       if ((k >= maxScan && k < len && !isBareUrlStop(str[k])) || cutsOverflowed) return { prefixLen: 2, minEnd: k };
     }
   }
   return null;
 }
 
-function stripPrivateUrls(text, { maxOutputChars = Infinity, maxUrlChecks = 256, maxScanSteps = 128_000 } = {}) {
+function stripPrivateUrls(text, {
+  maxOutputChars = Infinity,
+  maxUrlChecks = 256,
+  maxScanSteps = 128_000,
+  failClosedTruncatedSchemeRelative = false,
+} = {}) {
   if (typeof text !== 'string' || !text) return text;
   const noLinks = stripBracketedLinks(stripBracketedLinks(text, true), false);
   const budget = { urlChecks: 0, scanSteps: 0, maxUrlChecks, maxScanSteps, exhausted: false };
@@ -662,12 +681,12 @@ function stripPrivateUrls(text, { maxOutputChars = Infinity, maxUrlChecks = 256,
   while (i < len) {
     if (out.length >= maxOutputChars) break;
     if (++budget.scanSteps > budget.maxScanSteps) { budget.exhausted = true; break; }
-    if (noLinks[i] === '<' && matchUrlStartAt(noLinks, i + 1, false, budget)) {
+    if (noLinks[i] === '<' && matchUrlStartAt(noLinks, i + 1, false, budget, failClosedTruncatedSchemeRelative)) {
       while (nextGt !== -1 && nextGt <= i) nextGt = noLinks.indexOf('>', nextGt + 1);
       if (nextGt !== -1) { i = nextGt + 1; identBeforeUnderscores = false; continue; }
     }
     if (budget.exhausted) break; // Fail closed: discard unprocessed remainder.
-    const match = matchUrlStartAt(noLinks, i, identBeforeUnderscores, budget);
+    const match = matchUrlStartAt(noLinks, i, identBeforeUnderscores, budget, failClosedTruncatedSchemeRelative);
     if (budget.exhausted) break; // Fail closed: discard unprocessed remainder.
     if (match) {
       let j = i + match.prefixLen;
@@ -906,11 +925,22 @@ function groundedComments(items, evidence) {
   return result;
 }
 
-function normalizeOutput(parsed, mode, language, news, evidence, schemaVersion = 2, { includeExcerptProvenance = false } = {}) {
+function normalizeOutput(parsed, mode, language, news, evidence, schemaVersion = 2, {
+  includeExcerptProvenance = false,
+  includeBriefContextProvenance = false,
+  isPrivate = false,
+} = {}) {
   const daily = mode === 'daily_briefing';
   const followUp = mode === 'follow_up';
   const legacyV1Story = schemaVersion === 1 && (mode === 'brief' || mode === 'synthesize');
-  const bullet = value => plainProseText(value, 500);
+  const privateProse = (value, max) => {
+    if (!isPrivate) return plainProseText(value, max);
+    if (typeof value !== 'string') throw invalidOutput();
+    const normalized = value.replace(/\r\n/g, '\n').trim();
+    if (!normalized) throw invalidOutput();
+    return plainProseText(stripPrivateUrls(normalized, { maxOutputChars: max, failClosedTruncatedSchemeRelative: true }), max);
+  };
+  const bullet = value => privateProse(value, 500);
   const question = value => plainProseText(value, daily ? 320 : 120);
   const { observedMediaUrls, observedPageUrls, searchPageUrls, deliveredSourceUrls, searchCount } = evidence;
   const evidenceCount = deliveredSourceUrls.size;
@@ -921,11 +951,13 @@ function normalizeOutput(parsed, mode, language, news, evidence, schemaVersion =
     const items = groundedItems(parsed.items, 15, item => {
       const url = normalizedUrl(item?.url);
       if (!searchPageUrls.has(url)) return;
-      // Redact URLs/credentials BEFORE enforcing the 1,000-char excerpt cap so boundary-straddling credentials cannot survive.
+      // Redact URLs/credentials BEFORE enforcing the 1,000-char excerpt cap and fail closed on ambiguous truncated // prefixes.
       const normalizedExcerpt = typeof item?.summaryExcerpt === 'string'
         ? item.summaryExcerpt.replace(/\r\n/g, '\n').trim()
         : '';
-      const scrubbedExcerpt = normalizedExcerpt ? stripPrivateUrls(normalizedExcerpt, { maxOutputChars: 1000 }) : '';
+      const scrubbedExcerpt = normalizedExcerpt
+        ? stripPrivateUrls(normalizedExcerpt, { maxOutputChars: 1000, failClosedTruncatedSchemeRelative: true })
+        : '';
       const fields = projectText({ ...item, summaryExcerpt: scrubbedExcerpt }, { title: 500, sourceName: 100, summaryExcerpt: 1000, publishedAt: 64 });
       if (!fields.title || !fields.sourceName) return;
       fields.summaryExcerpt ??= '';
@@ -935,7 +967,7 @@ function normalizeOutput(parsed, mode, language, news, evidence, schemaVersion =
       const mediaUrl = normalizedUrl(item.mediaUrl);
       return { ...fields, url, ...(observedMediaUrls.has(mediaUrl) ? { mediaUrl } : {}) };
     });
-    return { items, searchCount, ...(includeExcerptProvenance ? { excerptVersion: 2 } : {}) };
+    return { items, searchCount, ...(includeExcerptProvenance ? { excerptVersion: PRIVATE_EXCERPT_VERSION } : {}) };
   }
 
   onlyKeys(parsed, daily
@@ -977,9 +1009,9 @@ function normalizeOutput(parsed, mode, language, news, evidence, schemaVersion =
   } else if (legacyV1Story) {
     // Emit the exact 5-key v1 contract expected by older Servers (reverse mixed-version compatibility).
     const bullets = outputList(parsed.bullets, 3, 5, bullet);
-    const impact = plainProseText(parsed.impact, 1000);
+    const impact = privateProse(parsed.impact, 1000);
     const followUps = outputList(parsed.followUps, 2, 3, question);
-    result = { tldr: plainProseText(parsed.tldr, 400), bullets, impact, followUps };
+    result = { tldr: privateProse(parsed.tldr, 400), bullets, impact, followUps };
     if (Object.hasOwn(parsed, 'fullMarkdown') && typeof parsed.fullMarkdown !== 'string') throw invalidOutput();
     const markdown = boundedText(parsed.fullMarkdown, MAX_MARKDOWN_CHARS);
     if (markdown && !hasUnsafeMarkdown(markdown)) return { ...result, fullMarkdown: markdown };
@@ -988,24 +1020,28 @@ function normalizeOutput(parsed, mode, language, news, evidence, schemaVersion =
     return { ...result, fullMarkdown };
   } else {
     const bullets = outputList(parsed.bullets, 2, 6, bullet);
-    const impact = plainProseText(parsed.impact, 1000);
+    const impact = privateProse(parsed.impact, 1000);
     const zh = language !== 'English';
     const sections = parsed.sections === undefined
-      ? [{ heading: zh ? '核心细节与数据' : 'Key details', body: plainProseText(bullets.join('\n'), 2000) },
+      ? [{ heading: zh ? '核心细节与数据' : 'Key details', body: privateProse(bullets.join('\n'), 2000) },
         { heading: zh ? '影响与看点' : 'Impact', body: impact }]
       : outputList(parsed.sections, 1, 6, section => {
         onlyKeys(section, ['heading', 'body']);
-        return { heading: plainProseText(section.heading, 120), body: plainProseText(section.body, 2000) };
+        return { heading: plainProseText(section.heading, 120), body: privateProse(section.body, 2000) };
       });
-    result = { tldr: plainProseText(parsed.tldr, 400), sections, bullets, impact, ...rich(),
+    // Redact private TLDR BEFORE enforcing the 400-char cap so follow-up briefContext never receives clipped credentials.
+    result = { tldr: privateProse(parsed.tldr, 400), sections, bullets, impact, ...rich(),
       communityHighlights: groundedComments(parsed.communityHighlights, evidence), followUps: outputList(parsed.followUps, 2, 3, question) };
   }
+  const provenance = !daily && !legacyV1Story && includeBriefContextProvenance
+    ? { briefContextVersion: PRIVATE_BRIEF_CONTEXT_VERSION }
+    : {};
   if (Object.hasOwn(parsed, 'fullMarkdown') && typeof parsed.fullMarkdown !== 'string') throw invalidOutput();
   const markdown = boundedText(parsed.fullMarkdown, daily ? 12_000 : MAX_MARKDOWN_CHARS);
-  if (markdown && !hasUnsafeMarkdown(markdown)) return { ...result, fullMarkdown: markdown };
+  if (markdown && !hasUnsafeMarkdown(markdown)) return { ...result, fullMarkdown: markdown, ...provenance };
   const fullMarkdown = buildMarkdown(result, daily, language);
   if (hasUnsafeMarkdown(fullMarkdown)) throw invalidOutput();
-  return { ...result, fullMarkdown };
+  return { ...result, fullMarkdown, ...provenance };
 }
 
 // Resolve inside the actual HTTP connector so that the address checked is the
@@ -1284,13 +1320,33 @@ const WEB_FETCH = {
 
 const frame = (tag, value) => `<${tag}>\n${JSON.stringify(value).replace(/[<>]/g, char => char === '<' ? '\\u003c' : '\\u003e')}\n</${tag}>`;
 
-function searchImages(value) {
-  return [value?.image, value?.imageUrl, value?.image_url, value?.thumbnail, value?.thumbnailUrl,
-    value?.thumbnail_url, ...take(value?.images, 12), ...take(value?.media, 12)]
-    .map(item => mediaItem(typeof item === 'string' || item?.url ? item : item?.src)).filter(Boolean);
+function scrubRadarField(value, maxChars, { upstreamTruncated = false } = {}) {
+  if (typeof value !== 'string') return value;
+  let normalized = value.replace(/\r\n/g, '\n').trim();
+  if (!normalized) return '';
+  if (upstreamTruncated) normalized = dropTrailingToken(normalized).trimEnd();
+  if (!normalized) return '';
+  return stripPrivateUrls(normalized, {
+    maxOutputChars: maxChars,
+    failClosedTruncatedSchemeRelative: true,
+  }).trim();
 }
 
-function harvestResult(raw, name, input, evidence) {
+function searchImages(value, { redactForRadar = false, upstreamTruncated = false } = {}) {
+  return [value?.image, value?.imageUrl, value?.image_url, value?.thumbnail, value?.thumbnailUrl,
+    value?.thumbnail_url, ...take(value?.images, 12), ...take(value?.media, 12)]
+    .map(item => {
+      const raw = typeof item === 'string' || item?.url ? item : item?.src;
+      if (!redactForRadar || !isRecord(raw)) return mediaItem(raw);
+      return mediaItem({
+        ...raw,
+        ...(typeof raw.caption === 'string' ? { caption: scrubRadarField(raw.caption, 300, { upstreamTruncated }) } : {}),
+        ...(typeof raw.sourceName === 'string' ? { sourceName: scrubRadarField(raw.sourceName, 100, { upstreamTruncated }) } : {}),
+      });
+    }).filter(Boolean);
+}
+
+function harvestResult(raw, name, input, evidence, { redactForRadar = false } = {}) {
   const data = typeof raw === 'string' ? JSON.parse(raw) : raw;
   if (!isRecord(data) || data.error) return { error: 'No usable web result' };
   const observeMedia = items => {
@@ -1299,15 +1355,41 @@ function harvestResult(raw, name, input, evidence) {
   };
   if (name === 'WebSearch') {
     if (!Array.isArray(data.results)) return { error: 'Invalid search result' };
+    const dataTruncated = data.truncated === true;
     const results = take(data.results, input.limit).flatMap(item => {
       const url = normalizedUrl(item?.url);
       if (!url) return [];
       evidence.observedPageUrls.add(url);
       evidence.searchPageUrls.add(url);
-      return [{ ...projectEvidence(item, 1500), ...projectText(item, { snippet: 1500 }), url, media: observeMedia(searchImages(item)) }];
+      const itemTruncated = dataTruncated || item?.truncated === true || item?.snippetTruncated === true;
+      // For Topic Radar, redact URLs/credentials BEFORE the first 1,500/500/100-char field cap and fail closed on
+      // upstream-truncated ambiguous trailing tokens so the Radar model never sees and quotes clipped credential fragments.
+      const safeItem = redactForRadar && isRecord(item) ? {
+        ...item,
+        ...(typeof item.headline === 'string' ? { headline: scrubRadarField(item.headline, 500, { upstreamTruncated: itemTruncated }) } : {}),
+        ...(typeof item.title === 'string' ? { title: scrubRadarField(item.title, 500, { upstreamTruncated: itemTruncated }) } : {}),
+        ...(typeof item.sourceName === 'string' ? { sourceName: scrubRadarField(item.sourceName, 100, { upstreamTruncated: itemTruncated }) } : {}),
+        ...(typeof item.name === 'string' ? { name: scrubRadarField(item.name, 100, { upstreamTruncated: itemTruncated }) } : {}),
+        ...(typeof item.sourceId === 'string' ? { sourceId: scrubRadarField(item.sourceId, 100, { upstreamTruncated: itemTruncated }) } : {}),
+        ...(typeof item.excerpt === 'string' ? { excerpt: scrubRadarField(item.excerpt, 1500, { upstreamTruncated: itemTruncated }) } : {}),
+        ...(typeof item.summaryExcerpt === 'string' ? { summaryExcerpt: scrubRadarField(item.summaryExcerpt, 1500, { upstreamTruncated: itemTruncated }) } : {}),
+        ...(typeof item.summary === 'string' ? { summary: scrubRadarField(item.summary, 1500, { upstreamTruncated: itemTruncated }) } : {}),
+        ...(typeof item.snippet === 'string' ? { snippet: scrubRadarField(item.snippet, 1500, { upstreamTruncated: itemTruncated }) } : {}),
+      } : item;
+      return [{
+        ...projectEvidence(safeItem, 1500),
+        ...projectText(safeItem, { snippet: 1500 }),
+        url,
+        media: observeMedia(searchImages(item, { redactForRadar, upstreamTruncated: itemTruncated })),
+      }];
     });
-    const media = observeMedia(searchImages(data));
-    return { ...projectText(data, { provider: 80, answer: 1500 }), results, media };
+    const media = observeMedia(searchImages(data, { redactForRadar, upstreamTruncated: dataTruncated }));
+    const safeData = redactForRadar ? {
+      ...data,
+      ...(typeof data.provider === 'string' ? { provider: scrubRadarField(data.provider, 80, { upstreamTruncated: dataTruncated }) } : {}),
+      ...(typeof data.answer === 'string' ? { answer: scrubRadarField(data.answer, 1500, { upstreamTruncated: dataTruncated }) } : {}),
+    } : data;
+    return { ...projectText(safeData, { provider: 80, answer: 1500 }), results, media };
   }
   const url = publicWebUrl(data.url || input.url);
   if (!url) return { error: 'Invalid fetch result' };
@@ -1389,7 +1471,7 @@ async function researchBriefing({ mode, stream, finalCall, params, news, evidenc
         : (toolExecutors?.WebFetch ?? fetchPublicPage);
       const raw = await execute(args, ctx);
       ctx.signal.throwIfAborted();
-      return harvestResult(raw, name, args, evidence);
+      return harvestResult(raw, name, args, evidence, { redactForRadar: radar });
     } catch {
       ctx.signal.throwIfAborted();
       return { error: 'Web research tool failed' };
@@ -1579,9 +1661,15 @@ export async function runCosmicWebBriefing({ mode, perspective = 'balanced', lan
   if (typeof response?.text !== 'string' || response.text.length > MAX_RESPONSE_CHARS || response.toolCalls?.length
     || ['tool_use', 'content_filter', 'refusal', 'pause_turn', 'model_context_window_exceeded'].includes(response.stopReason)) throw invalidOutput();
   const parsed = parseDecisionJsonObject(response.text);
+  const isPrivate = payload?.isPrivateSource === true;
   const includeExcerptProvenance = payload?.excerptProvenance === true;
+  const includeBriefContextProvenance = isPrivate && payload?.briefContextProvenance === true && (mode === 'brief' || mode === 'synthesize');
   return {
-    result: normalizeOutput(parsed, mode, outputLanguage, news, evidence, effectiveSchema, { includeExcerptProvenance }),
+    result: normalizeOutput(parsed, mode, outputLanguage, news, evidence, effectiveSchema, {
+      includeExcerptProvenance,
+      includeBriefContextProvenance,
+      isPrivate,
+    }),
     meta: { model, skillSource: skill.source, durationMs: Math.round(performance.now() - started) },
   };
 }

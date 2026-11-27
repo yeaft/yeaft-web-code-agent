@@ -134,8 +134,9 @@ export function* scanMarkup(input, { xml = false, rawTags = new Set(), emitRawOp
   if (raw && meta) meta.truncated = true;
 }
 
-const textRawTags = new Set(['script', 'style']);
-const textBreakTags = new Set('p div section article main h1 h2 h3 h4 h5 h6 ul ol li pre blockquote table tr td th br hr header footer nav aside figure figcaption'.split(' '));
+const mediaRawTags = new Set(['script', 'style', 'iframe', 'noembed', 'noframes', 'xmp']);
+const textRawTags = new Set(['script', 'style', 'iframe', 'noembed', 'noframes', 'xmp', 'noscript', 'template', 'textarea', 'title']);
+const textBreakTags = new Set('p div section article main h1 h2 h3 h4 h5 h6 ul ol li dl dt dd pre blockquote table thead tbody tfoot tr td th caption br hr header footer nav aside figure figcaption address details summary dialog fieldset legend form menu option optgroup'.split(' '));
 export function cleanText(text, { dropTruncatedToken = false } = {}) {
   const meta = dropTruncatedToken ? { truncated: false } : null;
   const parts = [];
@@ -149,10 +150,10 @@ export function cleanText(text, { dropTruncatedToken = false } = {}) {
         if (ws >= 0) safeCut = { partsLen: parts.length, tailSlice: decoded.slice(0, ws + 1) };
       }
       parts.push(decoded);
-    } else {
+    } else if (textBreakTags.has(token.name)) {
+      // Only genuine block/break tags create word boundaries; inline tags like <wbr>/<span>/<code> never split URLs or tokens.
       parts.push(' ');
-      // Only genuine block/break tags create source token boundaries; inline tags like <wbr>/<span>/<code> do not.
-      if (dropTruncatedToken && textBreakTags.has(token.name)) {
+      if (dropTruncatedToken) {
         safeCut = { partsLen: parts.length, tailSlice: null };
       }
     }
@@ -200,7 +201,7 @@ export function normalizeMedia(candidates, base, limit = 3) {
 
 export function extractMarkupMedia(html, base, { openGraph = false, limit = 3 } = {}) {
   const metadata = [], images = [];
-  for (const token of scanMarkup(html, { rawTags: textRawTags })) {
+  for (const token of scanMarkup(html, { rawTags: mediaRawTags })) {
     if (token.type !== 'tag' || token.closing || !['img', 'meta'].includes(token.name)) continue;
     const a = parseAttributesLinear(token.attrsText);
     if (token.name === 'img' && images.length < 48 && !/\b(?:avatar|icon|logo|tracker|pixel)s?\b/i.test(`${a.class ?? ''} ${a.id ?? ''} ${a.alt ?? ''}`)) {

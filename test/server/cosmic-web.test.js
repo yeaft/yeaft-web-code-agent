@@ -1254,22 +1254,31 @@ describe('2.0 graph and AI contracts', () => {
     expect(budgetCluster.summaryExcerpt).not.toContain('HARMLESSBUDGETMARKER99');
     expect(budgetCluster.summaryExcerpt).not.toContain('BUDGETSECRET99');
     agents.set('v2-grace', { ownerId: 'grace', name: 'v2-grace', capabilities: ['cosmic_web_briefing', 'cosmic_web_follow_up'], encryptOutbound: false, ws: { readyState: 1, send: () => {} } });
-    // Uncached followUp with username-only userinfo straddling the 1,500-char boundary MUST scrub before clipping (no cached brief yet!).
+    // Unauthenticated client-supplied briefContext (even claiming current version) MUST be rejected on private sources,
+    // while server-owned briefContext straddling 1,500 chars MUST scrub before clipping.
     const boundaryBriefContext = `${'x'.repeat(1490)} //USERONLYCTXSECRET99@intranet:8080/api`;
     await rssSvc.followUp('grace', 'user', boundaryCluster.id, {
-      question: 'Uncached follow-up?', briefContext: boundaryBriefContext, briefContextVersion: PRIVATE_BRIEF_CONTEXT_VERSION, research: true,
+      question: 'Unauthenticated client echo?', briefContext: boundaryBriefContext, briefContextVersion: PRIVATE_BRIEF_CONTEXT_VERSION, research: true,
     });
-    const uncachedFuPayload = requestAi.mock.lastCall[0].payload;
-    expect(uncachedFuPayload.briefContext.length).toBeLessThanOrEqual(1500);
-    expect(JSON.stringify(uncachedFuPayload)).not.toContain('USERONLYCTXSECRET99');
-    expect(JSON.stringify(uncachedFuPayload)).not.toContain('CLIPPASS99');
+    expect(requestAi.mock.lastCall[0].payload.briefContext).toBeUndefined();
+    const boundaryDet = await rssSvc.cluster('grace', boundaryCluster.id);
+    const boundaryBriefKey = createHash('sha256').update(JSON.stringify([5, 'brief-context', PRIVATE_BRIEF_CONTEXT_VERSION, boundaryCluster.id, boundaryDet.items[0].id, 'v2-grace'])).digest('hex');
+    db.setAiCache('grace', boundaryBriefKey, boundaryBriefContext, NOW + HOUR);
+    await rssSvc.followUp('grace', 'user', boundaryCluster.id, {
+      question: 'Server-cached boundary follow-up?', research: true,
+    });
+    const cachedBoundaryFuPayload = requestAi.mock.lastCall[0].payload;
+    expect(cachedBoundaryFuPayload.briefContext.length).toBeLessThanOrEqual(1500);
+    expect(JSON.stringify(cachedBoundaryFuPayload)).not.toContain('USERONLYCTXSECRET99');
+    expect(JSON.stringify(cachedBoundaryFuPayload)).not.toContain('CLIPPASS99');
     await rssSvc.aiBrief('grace', 'user', boundaryCluster.id, { skipArticleFetch: true, research: true });
     expect(JSON.stringify(requestAi.mock.lastCall[0].payload)).not.toContain('CLIPPASS99');
     await rssSvc.followUp('grace', 'user', boundaryCluster.id, { question: 'Summary?', research: true });
     expect(JSON.stringify(requestAi.mock.lastCall[0].payload)).not.toContain('CLIPPASS99');
     // Round 19 Blocker #3: 39,000-backslash run after URL must redact linearly (< 150ms, never quadratic)
+    const bsPayload = `KeepBS https://files.example/a?token=BSSTRESS99${'\\'.repeat(39_000)}]`;
     db.setArticleCache('alice', privItemId, {
-      title: 'Backslash stress', markdown: `KeepBS https://files.example/a?token=BSSTRESS99${'\\'.repeat(39_000)}]`,
+      title: 'Backslash stress', markdown: bsPayload, aiMarkdown: bsPayload,
       extractorVersion: ARTICLE_EXTRACTOR_VERSION, truncated: false,
       quality: 'full', itemId: privItemId, clusterId: privNode.clusterId, summaryExcerpt: 'Stress',
     }, NOW + HOUR);
@@ -1343,9 +1352,12 @@ describe('2.0 graph and AI contracts', () => {
     expect(r3PctCluster.summaryExcerpt).toContain('visit www%2e');
     expect(r3PctCluster.summaryExcerpt).toContain('visit www%2e[1]');
     agents.set('v2-heidi', { ownerId: 'heidi', name: 'v2-heidi', capabilities: ['cosmic_web_briefing', 'cosmic_web_follow_up'], encryptOutbound: false, ws: { readyState: 1, send: () => {} } });
-    // Uncached followUp (before aiBrief populates cache) + Markdown-escaped article extraction -> aiBrief for Blocker #1 & #2
+    // Defense-in-depth scrubbing of server-owned followUp briefContext + Markdown-escaped article extraction -> aiBrief for Blocker #1 & #2
+    const r3OverflowDet = await r3Svc.cluster('heidi', r3OverflowCluster.id);
+    const r3OverflowBriefKey = createHash('sha256').update(JSON.stringify([5, 'brief-context', PRIVATE_BRIEF_CONTEXT_VERSION, r3OverflowCluster.id, r3OverflowDet.items[0].id, 'v2-heidi'])).digest('hex');
+    db.setAiCache('heidi', r3OverflowBriefKey, `${r3OverflowRaw} ${r3PctDotsRaw}`, NOW + HOUR);
     await r3Svc.followUp('heidi', 'user', r3OverflowCluster.id, {
-      question: 'Check overflow?', briefContext: `${r3OverflowRaw} ${r3PctDotsRaw}`, briefContextVersion: PRIVATE_BRIEF_CONTEXT_VERSION, research: true,
+      question: 'Check overflow?', research: true,
     });
     const r3OverflowFuJson = JSON.stringify(requestAi.mock.lastCall[0].payload);
     for (const secret of ['IPV6CUTOVF99', 'HOSTCUTOVF99', 'WWWCUTOVF99', 'pcthost1', 'pcthost2', 'pcthost3', 'pcthost4', 'pcthost5', 'pcthost6', 'pcthost7', 'pcthost8', 'pcthost9', 'pctwww1', 'pctwww2']) {
@@ -1879,9 +1891,318 @@ describe('2.0 graph and AI contracts', () => {
     const legacyRadarRes = await legacyRadarSvc.radarScan('kate', 'user', 'radar-r6');
     expect(legacyRadarRes.added).toBe(1);
     const legacyRadarCluster = legacyRadarSvc.feed('kate', { domainId: 'radar-r6' }).clusters.find(c => c.headline === 'Legacy Radar Uncertified Story');
-    expect(legacyRadarCluster.summaryExcerpt).toBe('Legacy radar display //LEGACYRADARUSER99');
+    expect(legacyRadarCluster.summaryExcerpt).toBe('Legacy radar display');
+    expect(legacyRadarCluster.summaryExcerpt).not.toContain('LEGACYRADARUSER99');
     await legacyRadarSvc.aiBrief('kate', 'user', legacyRadarCluster.id, { skipArticleFetch: true, research: true });
+    expect(r6Prompts.at(-1)).not.toContain('Legacy radar display');
     expect(r6Prompts.at(-1)).not.toContain('LEGACYRADARUSER99');
+
+    // Round 28 (PR #2032 Round 7) Blocker #1/#2/#3/#4 isolated end-to-end regressions:
+    // (1) Complete URL split by inline `<code>` BEFORE the 40k cutoff (and in short non-truncated articles, plus unclosed hidden `<noscript>`):
+    //     Clean Article display remains intact (40,000 chars / inline code preserved), while DOM-redacted `aiMarkdown` omits all credential markers
+    //     before reaching the real Agent model prompt; cached v2 (`extractorVersion: 2`) rows are rejected for private AI.
+    // (2) RSS `cleanText` no longer inserts synthetic spaces on inline tags (`<wbr>`/`<code>`) AND treats `<iframe>`/`<noscript>` as raw discarded elements:
+    //     complete `<wbr>`-split authorities and unclosed `<iframe>` at EOF leave ZERO credential fragments in SQLite or model prompts.
+    // (3) Private `followUp` rejects client-claimed `briefContextVersion` without a valid server-minted HMAC `briefContextToken`, rejects cross-item/cluster/user/tampered/expired tokens,
+    //     accepts genuine `briefContextToken` across Agent switch / cache eviction, scrubs >400-char TLDR BEFORE clipping in real Agent `brief`, and omits context from uncertified legacy Agents.
+    // (4) Topic Radar redacts `WebSearch` evidence BEFORE the 1,500-char snippet cap and fails closed on upstream-truncated ambiguous tokens before the Radar model sees or quotes them,
+    //     and Server rejects old `excerptVersion: 2` Radar outputs (persisting as `0` and omitting from subsequent private AI prompts).
+    const r7Inline40kHtml = `<article><p>https://cdn.example/${'a'.repeat(39_890)} SafeR7Inline40k <code>//R7INLINE40KUSER99</code>@intranet:8080/secret after ${'b'.repeat(90)}</p></article>`;
+    const r7ShortInlineHtml = `<article><p>Short non-truncated private memo with enough prose for full quality. See <code>//R7SHORTCODE99</code>@intranet:8080/api and <a href="https://intranet.internal/doc?tok=R7HREF99"><em>//R7LINKEM99</em>@intranet:8080</a> and www.<code>r7subsecret</code>.example/x end.</p></article>`;
+    const r7NoscriptEofHtml = `<article><p>Safe noscript lead <code>//R7NOSCRIPT99</code><wbr><noscript>@intranet:8080`;
+    const r7FeedRss = `<rss><channel>
+      <item><title>Alpha 40k Code Boundary</title><link>https://private.example/r7-inline-40k</link><description>Inline 40k desc</description></item>
+      <item><title>Beta Compact Private Memo</title><link>https://private.example/r7-short-inline</link><description>Short inline desc</description></item>
+      <item><title>Gamma Hidden Noscript Tail</title><link>https://private.example/r7-noscript-eof</link><description>Noscript eof desc</description></item>
+      <item><title>Delta Complete Wbr Split</title><link>https://private.example/r7-wbr-complete</link><description><![CDATA[Safe wbr complete //R7WBRFULL99<wbr>@intranet:8080/api and <code>//R7RSSCODE99</code>@intranet:8080/x tail]]></description></item>
+      <item><title>Epsilon Unclosed Iframe Feed</title><link>https://private.example/r7-iframe-eof</link><description><![CDATA[Safe iframe prose //R7IFRAMETRUNC<wbr>USER99<iframe src="https://x">@intranet:8080]]></description></item>
+    </channel></rss>`;
+    const r7Prompts = [];
+    const r7RadarSearchUrl = 'https://radar.example/r7-search-1500';
+    const r7RadarUpstreamUrl = 'https://radar.example/r7-search-upstream';
+    const r7AgentAi = vi.fn(async ({ mode, perspective, language, payload }) => {
+      if (mode === 'topic_radar') {
+        const WebSearch = vi.fn().mockResolvedValue({
+          provider: 'generic',
+          results: [
+            { url: r7RadarSearchUrl, title: 'R7 1500 Snippet Story', snippet: `${'s'.repeat(1474)} SafeR7Search //R7SEARCH1500USER99@intranet:8080/api` },
+            { url: r7RadarUpstreamUrl, title: 'R7 Upstream Trunc Story', snippet: 'SafeR7Upstream //R7UPSTREAM99... end //R7UPSTREAMEOF99' },
+          ],
+        });
+        const radarAdapter = {
+          captureStream: vi.fn()
+            .mockImplementationOnce(async function* () { yield { type: 'tool_call', id: 'r7tc1', name: 'WebSearch', input: { query: 'r7 radar', limit: 5 } }; })
+            .mockImplementationOnce(async function* () {}),
+          call: vi.fn().mockImplementation(async req => {
+            r7Prompts.push(JSON.stringify(req));
+            const toolMsg = req.messages.find(m => m.role === 'tool')?.content ?? '';
+            const parsedTool = JSON.parse(toolMsg.replace(/^<untrusted_web_result>\n|\n<\/untrusted_web_result>$/g, ''));
+            return {
+              text: JSON.stringify({
+                items: parsedTool.results.map(r => ({
+                  title: r.title, url: r.url, sourceName: 'R7Wire', summaryExcerpt: r.snippet.slice(-120),
+                })),
+                searchCount: 1,
+              }),
+            };
+          }),
+        };
+        const { result } = await runCosmicWebBriefing({
+          mode, perspective, language, payload,
+          config: { fastModel: 'test/fast', defaultModel: 'test/fast' },
+          adapter: radarAdapter, toolExecutors: { WebSearch },
+        });
+        return result;
+      }
+      const adapter = {
+        async call(req) {
+          r7Prompts.push(JSON.stringify(req));
+          if (mode === 'follow_up') {
+            return { text: JSON.stringify({ question: 'q', answer: 'ok', bullets: ['one'], followUps: ['q1'] }) };
+          }
+          // Return a >400-char TLDR with a credential split across the 400-char cap (Blocker #3)
+          return {
+            text: JSON.stringify({
+              tldr: `${'t'.repeat(374)} SafeR7Tldr //R7TLDR400CLIP99@intranet:8080/api`,
+              bullets: ['Safe bullet one', 'Safe bullet two'],
+              impact: 'Safe impact',
+              followUps: ['q1', 'q2'],
+            }),
+          };
+        },
+      };
+      const { result } = await runCosmicWebBriefing({
+        mode, perspective, language, payload,
+        config: { fastModel: 'test/fast', defaultModel: 'test/fast' },
+        adapter,
+      });
+      return result;
+    });
+    const r7FeedUrl = 'https://private.example/r7.xml';
+    let r7Clock = NOW + 240_000;
+    const r7Svc = makeService({
+      fetcher: async url => {
+        if (url === r7FeedUrl) return { status: 200, url, text: async () => r7FeedRss };
+        if (url.endsWith('/r7-inline-40k')) return { status: 200, url, text: async () => r7Inline40kHtml };
+        if (url.endsWith('/r7-short-inline')) return { status: 200, url, text: async () => r7ShortInlineHtml };
+        if (url.endsWith('/r7-noscript-eof')) return { status: 200, url, text: async () => r7NoscriptEofHtml };
+        return { status: 200, url, text: async () => '<article><p>ok</p></article>' };
+      },
+      requestAi: r7AgentAi,
+      now: () => r7Clock,
+    });
+    await r7Svc.savePreferences('leo', {
+      enabledDomainIds: [],
+      customDomains: [
+        { id: 'priv-r7', name: 'Priv R7', colorToken: 'cyan', enabled: true, keywords: [], rssUrls: [r7FeedUrl] },
+        { id: 'radar-r7', name: 'Radar R7', colorToken: 'gold', enabled: true, keywords: ['r7'], aiRadar: true, rssUrls: [] },
+      ],
+    });
+    await r7Svc.refresh('leo', { domainId: 'priv-r7', force: true });
+    agents.set('v3-leo-a', {
+      ownerId: 'leo', name: 'v3-leo-a',
+      capabilities: ['cosmic_web_briefing', 'cosmic_web_follow_up', 'cosmic_web_radar', 'cosmic_web_research'],
+      encryptOutbound: false, ws: { readyState: 1, send: () => {} },
+    });
+    agents.set('v3-leo-b', {
+      ownerId: 'leo', name: 'v3-leo-b',
+      capabilities: ['cosmic_web_briefing', 'cosmic_web_follow_up'],
+      encryptOutbound: false, ws: { readyState: 1, send: () => {} },
+    });
+    const leoFeed = r7Svc.feed('leo', { domainId: 'priv-r7' });
+    const r7Inline40kCluster = leoFeed.clusters.find(c => c.headline === 'Alpha 40k Code Boundary');
+    const r7ShortInlineCluster = leoFeed.clusters.find(c => c.headline === 'Beta Compact Private Memo');
+    const r7NoscriptCluster = leoFeed.clusters.find(c => c.headline === 'Gamma Hidden Noscript Tail');
+    const r7WbrCluster = leoFeed.clusters.find(c => c.headline === 'Delta Complete Wbr Split');
+    const r7IframeCluster = leoFeed.clusters.find(c => c.headline === 'Epsilon Unclosed Iframe Feed');
+
+    // (1a) Complete inline-code URL BEFORE 40k cutoff: Clean Article stays exact 40,000 chars intact, while real Agent prompt omits credential
+    const r7Inline40kArt = await r7Svc.article('leo', r7Inline40kCluster.id);
+    expect(r7Inline40kArt.markdown).toHaveLength(40_000);
+    expect(r7Inline40kArt.truncated).toBe(true);
+    expect(r7Inline40kArt.extractorVersion).toBe(ARTICLE_EXTRACTOR_VERSION);
+    expect(r7Inline40kArt.markdown).toContain('` //R7INLINE40KUSER99 `@intranet:8080/secret');
+    expect(r7Inline40kArt.aiMarkdown).toBeUndefined();
+    await r7Svc.aiBrief('leo', 'user', r7Inline40kCluster.id, { research: true });
+    expect(r7Prompts.at(-1)).toContain('SafeR7Inline40k');
+    expect(r7Prompts.at(-1)).not.toContain('R7INLINE40KUSER99');
+    expect(r7Prompts.at(-1)).not.toContain('cdn.example');
+
+    // (1b) Short non-truncated private article (`truncated: false`) with inline `<code>` / `<a><em>` / `www.<code>`:
+    //      Clean Article display preserves inline code & link, while private AI prompt uses DOM-redacted aiMarkdown
+    const r7ShortArt = await r7Svc.article('leo', r7ShortInlineCluster.id);
+    expect(r7ShortArt.truncated).toBe(false);
+    expect(r7ShortArt.markdown).toContain('` //R7SHORTCODE99 `@intranet:8080/api');
+    expect(r7ShortArt.markdown).toContain('R7HREF99');
+    await r7Svc.aiBrief('leo', 'user', r7ShortInlineCluster.id, { research: true });
+    expect(r7Prompts.at(-1)).toContain('Short non-truncated private memo');
+    for (const secret of ['R7SHORTCODE99', 'R7HREF99', 'R7LINKEM99', 'r7subsecret']) {
+      expect(r7Prompts.at(-1)).not.toContain(secret);
+    }
+
+    // (1c) Unclosed hidden `<noscript>` at EOF after `<code>//R7NOSCRIPT99</code><wbr>`: rewinds across `<wbr>` & `<code>`
+    await r7Svc.aiBrief('leo', 'user', r7NoscriptCluster.id, { research: true });
+    expect(r7Prompts.at(-1)).toContain('Safe noscript lead');
+    expect(r7Prompts.at(-1)).not.toContain('R7NOSCRIPT99');
+
+    // (1d) Pre-upgrade v2 article cache (`extractorVersion: 2`, no DOM-redacted `aiMarkdown`) is NOT trusted by private `aiBrief`
+    db.setArticleCache('leo', r7ShortArt.itemId, {
+      title: 'Old v2', markdown: 'Old v2 ` //OLDV2CODE99 `@intranet:8080', extractorVersion: 2, truncated: false,
+      quality: 'full', itemId: r7ShortArt.itemId, clusterId: r7ShortInlineCluster.id, summaryExcerpt: 'Old',
+    }, r7Clock + HOUR);
+    await r7Svc.aiBrief('leo', 'user', r7ShortInlineCluster.id, { skipArticleFetch: true, research: true, force: true });
+    expect(r7AgentAi.mock.lastCall[0].payload.articleMarkdown).toBeUndefined();
+    expect(r7Prompts.at(-1)).not.toContain('OLDV2CODE99');
+
+    // (2a) Complete RSS authority split by `<wbr>` and `<code>`: redacted cleanly before persisting as trusted v3
+    expect(r7WbrCluster.summaryExcerpt).toContain('Safe wbr complete');
+    expect(r7WbrCluster.summaryExcerpt).not.toContain('R7WBRFULL99');
+    expect(r7WbrCluster.summaryExcerpt).not.toContain('R7RSSCODE99');
+    await r7Svc.aiBrief('leo', 'user', r7WbrCluster.id, { skipArticleFetch: true, research: true });
+    expect(r7Prompts.at(-1)).toContain('Safe wbr complete');
+    expect(r7Prompts.at(-1)).not.toContain('R7WBRFULL99');
+    expect(r7Prompts.at(-1)).not.toContain('R7RSSCODE99');
+
+    // (2b) Unclosed `<iframe>` at EOF in RSS CDATA with `<wbr>`: triggers `meta.truncated` rewind across `<wbr>`
+    expect(r7IframeCluster.summaryExcerpt).toBe('Safe iframe prose');
+    expect(r7IframeCluster.summaryExcerpt).not.toContain('R7IFRAMETRUNC');
+    expect(r7IframeCluster.summaryExcerpt).not.toContain('USER99');
+    await r7Svc.aiBrief('leo', 'user', r7IframeCluster.id, { skipArticleFetch: true, research: true });
+    expect(r7Prompts.at(-1)).toContain('Safe iframe prose');
+    expect(r7Prompts.at(-1)).not.toContain('R7IFRAMETRUNC');
+
+    // (3a) Private followUp rejects version-only client echo (even claiming current PRIVATE_BRIEF_CONTEXT_VERSION)
+    await r7Svc.followUp('leo', 'user', r7WbrCluster.id, {
+      question: 'Version only?',
+      briefContext: 'Forged v3 client text //FORGEDV3ECHO99',
+      briefContextVersion: PRIVATE_BRIEF_CONTEXT_VERSION,
+      agentId: 'v3-leo-b',
+      research: true,
+    });
+    expect(r7AgentAi.mock.lastCall[0].payload.briefContext).toBeUndefined();
+    expect(r7Prompts.at(-1)).not.toContain('FORGEDV3ECHO99');
+
+    // (3b) Fresh v3 `aiBrief` scrubs >400-char TLDR BEFORE clipping, emits certified `briefContextVersion: 3` + HMAC `briefContextToken`,
+    //      and authenticated token works across Agent switch while rejecting tampered, cross-cluster, and expired tokens!
+    const r7CertBrief = await r7Svc.aiBrief('leo', 'user', r7WbrCluster.id, { skipArticleFetch: true, agentId: 'v3-leo-a', research: true, force: true });
+    expect(r7CertBrief.briefContextVersion).toBe(PRIVATE_BRIEF_CONTEXT_VERSION);
+    expect(typeof r7CertBrief.briefContextToken).toBe('string');
+    expect(r7CertBrief.tldr).toContain('SafeR7Tldr');
+    expect(r7CertBrief.tldr).not.toContain('R7TLDR400');
+    // Server-cached followUp on same Agent (`v3-leo-a`) receives scrubbed TLDR
+    await r7Svc.followUp('leo', 'user', r7WbrCluster.id, { question: 'Same agent cached?', agentId: 'v3-leo-a', research: true });
+    expect(r7AgentAi.mock.lastCall[0].payload.briefContext).toContain('SafeR7Tldr');
+    expect(r7Prompts.at(-1)).not.toContain('R7TLDR400');
+    // Different Agent (`v3-leo-b`, cache miss) with genuine source-bound `briefContextToken` -> ACCEPTED
+    await r7Svc.followUp('leo', 'user', r7WbrCluster.id, {
+      question: 'Different agent with valid token?',
+      briefContext: r7CertBrief.tldr,
+      briefContextToken: r7CertBrief.briefContextToken,
+      agentId: 'v3-leo-b',
+      research: true,
+    });
+    expect(r7AgentAi.mock.lastCall[0].payload.briefContext).toContain('SafeR7Tldr');
+    expect(r7Prompts.at(-1)).not.toContain('R7TLDR400');
+    // Tampered briefContext with original token -> REJECTED
+    await r7Svc.followUp('leo', 'user', r7WbrCluster.id, {
+      question: 'Tampered text?',
+      briefContext: `${r7CertBrief.tldr} //TAMPERED99`,
+      briefContextToken: r7CertBrief.briefContextToken,
+      agentId: 'v3-leo-b',
+      research: true,
+    });
+    expect(r7AgentAi.mock.lastCall[0].payload.briefContext).toBeUndefined();
+    expect(r7Prompts.at(-1)).not.toContain('TAMPERED99');
+    // Cross-cluster replay of valid token onto `r7IframeCluster` -> REJECTED
+    await r7Svc.followUp('leo', 'user', r7IframeCluster.id, {
+      question: 'Cross-cluster replay?',
+      briefContext: r7CertBrief.tldr,
+      briefContextToken: r7CertBrief.briefContextToken,
+      agentId: 'v3-leo-b',
+      research: true,
+    });
+    expect(r7AgentAi.mock.lastCall[0].payload.briefContext).toBeUndefined();
+    // Expired token -> REJECTED
+    r7Clock += 7 * HOUR;
+    await r7Svc.followUp('leo', 'user', r7WbrCluster.id, {
+      question: 'Expired token?',
+      briefContext: r7CertBrief.tldr,
+      briefContextToken: r7CertBrief.briefContextToken,
+      agentId: 'v3-leo-b',
+      research: true,
+    });
+    expect(r7AgentAi.mock.lastCall[0].payload.briefContext).toBeUndefined();
+    r7Clock -= 7 * HOUR;
+
+    // (3c) Legacy Agent returning private TLDR WITHOUT `briefContextVersion: 3` (pre-clipped fragment):
+    //      Server does NOT cache `briefKey` and does NOT mint `briefContextToken` -> subsequent followUp omits context!
+    const legacyTldrReqAi = vi.fn(async req => {
+      if (req.mode === 'brief') {
+        return {
+          tldr: `${'z'.repeat(380)} //LEGACYTLDR400CLIP99`,
+          sections: [{ heading: 'H', body: 'Body' }],
+          bullets: ['b1', 'b2'], impact: 'ok', media: [], communityHighlights: [], citations: [],
+          followUps: ['q1', 'q2'], researched: false, searchCount: 0, evidenceCount: 0, fullMarkdown: 'Safe md',
+        };
+      }
+      return r7AgentAi(req);
+    });
+    const legacyTldrSvc = makeService({ requestAi: legacyTldrReqAi, now: () => r7Clock + 10_000 });
+    const legacyBriefRes = await legacyTldrSvc.aiBrief('leo', 'user', r7IframeCluster.id, { skipArticleFetch: true, agentId: 'v3-leo-b', research: true, force: true });
+    expect(legacyBriefRes.briefContextToken).toBeUndefined();
+    expect(legacyBriefRes.briefContextVersion).toBeUndefined();
+    await legacyTldrSvc.followUp('leo', 'user', r7IframeCluster.id, {
+      question: 'Follow up after legacy agent brief?',
+      briefContext: legacyBriefRes.tldr,
+      agentId: 'v3-leo-b',
+      research: true,
+    });
+    expect(r7AgentAi.mock.lastCall[0].payload.briefContext).toBeUndefined();
+    expect(r7Prompts.at(-1)).not.toContain('LEGACYTLDR400CLIP99');
+
+    // (4a) Real Radar Agent (`topic_radar`) + `radarScan()` + subsequent `aiBrief()`:
+    //      WebSearch 1,500-char snippet boundary AND upstream-truncated ambiguous tokens are redacted BEFORE Radar model sees or quotes them!
+    const r7RadarRes = await r7Svc.radarScan('leo', 'user', 'radar-r7');
+    expect(r7RadarRes.added).toBe(2);
+    const r7Radar1500Cluster = r7Svc.feed('leo', { domainId: 'radar-r7' }).clusters.find(c => c.headline === 'R7 1500 Snippet Story');
+    const r7RadarUpCluster = r7Svc.feed('leo', { domainId: 'radar-r7' }).clusters.find(c => c.headline === 'R7 Upstream Trunc Story');
+    expect(r7Radar1500Cluster.summaryExcerpt).toContain('SafeR7Search');
+    expect(r7Radar1500Cluster.summaryExcerpt).not.toContain('R7SEARCH1500');
+    expect(r7RadarUpCluster.summaryExcerpt).toContain('SafeR7Upstream');
+    expect(r7RadarUpCluster.summaryExcerpt).not.toContain('R7UPSTREAM99');
+    expect(r7RadarUpCluster.summaryExcerpt).not.toContain('R7UPSTREAMEOF99');
+    await r7Svc.aiBrief('leo', 'user', r7Radar1500Cluster.id, { skipArticleFetch: true, agentId: 'v3-leo-a', research: true });
+    expect(r7Prompts.at(-1)).toContain('SafeR7Search');
+    expect(r7Prompts.at(-1)).not.toContain('R7SEARCH1500');
+    await r7Svc.aiBrief('leo', 'user', r7RadarUpCluster.id, { skipArticleFetch: true, agentId: 'v3-leo-a', research: true });
+    expect(r7Prompts.at(-1)).toContain('SafeR7Upstream');
+    expect(r7Prompts.at(-1)).not.toContain('R7UPSTREAM99');
+    expect(r7Prompts.at(-1)).not.toContain('R7UPSTREAMEOF99');
+
+    // (4b) Old `excerptVersion: 2` Radar Agent response (from pre-Round-7 Agent) is persisted as `0` and omitted from private AI prompts!
+    const oldV2RadarReqAi = vi.fn(async req => {
+      if (req.mode === 'topic_radar') {
+        return {
+          items: [{
+            title: 'Old V2 Radar Story',
+            url: 'https://radar.example/old-v2-radar',
+            sourceName: 'V2Radar',
+            summaryExcerpt: 'Old v2 radar //OLDV2RADAR1500CLIP99',
+          }],
+          searchCount: 1,
+          excerptVersion: 2,
+        };
+      }
+      return r7AgentAi(req);
+    });
+    const oldV2RadarSvc = makeService({ requestAi: oldV2RadarReqAi, now: () => r7Clock + 120_000 });
+    await oldV2RadarSvc.radarScan('leo', 'user', 'radar-r7');
+    const oldV2RadarCluster = oldV2RadarSvc.feed('leo', { domainId: 'radar-r7' }).clusters.find(c => c.headline === 'Old V2 Radar Story');
+    expect(oldV2RadarCluster.summaryExcerpt).toBe('Old v2 radar');
+    expect(oldV2RadarCluster.summaryExcerpt).not.toContain('OLDV2RADAR1500CLIP99');
+    await oldV2RadarSvc.aiBrief('leo', 'user', oldV2RadarCluster.id, { skipArticleFetch: true, agentId: 'v3-leo-a', research: true });
+    expect(r7Prompts.at(-1)).not.toContain('Old v2 radar');
+    expect(r7Prompts.at(-1)).not.toContain('OLDV2RADAR1500CLIP99');
 
     // Mixed public/private dailyBriefing carries per-story isPrivateSource: true on private stories (enabling Agent defense-in-depth) while keeping public stories clean.
     const mixedDailyReqAi = vi.fn(async () => dailyResult);

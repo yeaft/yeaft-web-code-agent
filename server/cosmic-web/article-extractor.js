@@ -1,9 +1,10 @@
 import { decodeEntities, parseAttributesLinear, resolveHttpUrl, scanMarkup } from './rss-parser.js';
+import { createRedactionBudget, redactPrivateTextMask } from './private-redactor.js';
 
-export const ARTICLE_EXTRACTOR_VERSION = 2;
+export const ARTICLE_EXTRACTOR_VERSION = 3;
 
-const discard = new Set('script style noscript svg nav header footer aside form iframe template button'.split(' '));
-const rawTags = new Set(['script', 'style', 'iframe']);
+const discard = new Set('script style noscript svg nav header footer aside form iframe template button noembed noframes xmp'.split(' '));
+const rawTags = new Set(['script', 'style', 'iframe', 'noembed', 'noframes', 'xmp']);
 const voidTags = new Set('area base br col embed hr img input link meta param source track wbr'.split(' '));
 const noise = /(?:^|[\s_-])(?:ad|ads|advert(?:isement|ising)?|sidebar|cookie(?:-banner)?|related-posts|social-share|newsletter|breadcrumbs)(?=$|[\s_-])/i;
 const container = new Set(['article', 'main', 'section', 'div', 'body', 'root']);
@@ -52,6 +53,110 @@ function sliceDomAtSourceOffset(node, limit) {
   }
   const res = visit(node);
   return { node: res.node, openStack };
+}
+
+/**
+ * Redact URLs/credentials across contiguous inline DOM text runs BEFORE Markdown syntax
+ * (like inline `<code>` backticks/spaces or `<a href>`) is synthesized. Non-mutating so Clean Article display stays intact.
+ */
+function redactDomPrivateUrls(rootNode) {
+  const budget = createRedactionBudget();
+  const runs = [];
+  let currentRun = [];
+  const flushRun = () => {
+    if (currentRun.length) {
+      runs.push({ kind: 'run', slots: currentRun });
+      currentRun = [];
+    }
+  };
+
+  function buildSkeleton(n) {
+    if (typeof n === 'string') {
+      const slot = { kind: 'leaf', text: n, value: n };
+      currentRun.push(slot);
+      return slot;
+    }
+    if (['head', 'title'].includes(n.tag)) return null;
+    if (n.tag === 'br') {
+      flushRun();
+      const slot = { kind: 'br', node: n, discarded: false };
+      runs.push(slot);
+      return slot;
+    }
+    if (blocks.has(n.tag) || n.tag === 'ul' || n.tag === 'ol') {
+      flushRun();
+      const kids = (n.tag === 'ul' || n.tag === 'ol') ? n.children.filter(c => c.tag === 'li') : n.children;
+      const childSlots = [];
+      for (const child of kids) {
+        const built = buildSkeleton(child);
+        if (built != null) childSlots.push(built);
+      }
+      flushRun();
+      return { kind: 'elem', node: n, hadChildren: kids.length > 0, children: childSlots };
+    }
+    const childSlots = [];
+    for (const child of n.children) {
+      const built = buildSkeleton(child);
+      if (built != null) childSlots.push(built);
+    }
+    return { kind: 'elem', node: n, hadChildren: n.children.length > 0, children: childSlots };
+  }
+
+  const skeleton = buildSkeleton(rootNode);
+  flushRun();
+
+  for (const entry of runs) {
+    if (entry.kind === 'br') {
+      if (budget.exhausted) entry.discarded = true;
+      continue;
+    }
+    if (budget.exhausted) {
+      for (const slot of entry.slots) slot.value = null;
+      continue;
+    }
+    const joined = entry.slots.map(slot => slot.text).join('');
+    if (!joined) continue;
+    const mask = redactPrivateTextMask(joined, budget);
+    let offset = 0;
+    for (const slot of entry.slots) {
+      const len = slot.text.length;
+      let allKept = true;
+      let anyKept = false;
+      for (let k = 0; k < len; k++) {
+        if (mask[offset + k]) anyKept = true;
+        else allKept = false;
+      }
+      if (allKept) {
+        slot.value = slot.text;
+      } else if (!anyKept) {
+        slot.value = null;
+      } else {
+        let rebuilt = '';
+        for (let k = 0; k < len; k++) {
+          if (mask[offset + k]) rebuilt += slot.text[k];
+        }
+        slot.value = rebuilt || null;
+      }
+      offset += len;
+    }
+  }
+
+  function materialize(slot) {
+    if (!slot) return null;
+    if (slot.kind === 'leaf') return slot.value;
+    if (slot.kind === 'br') return slot.discarded ? null : slot.node;
+    const { node: orig, hadChildren, children } = slot;
+    const outChildren = [];
+    for (const child of children) {
+      const mat = materialize(child);
+      if (mat != null) outChildren.push(mat);
+    }
+    if (hadChildren && outChildren.length === 0) return null;
+    const attrs = orig.tag === 'a' ? {} : orig.attrs;
+    return { ...orig, attrs, children: outChildren };
+  }
+
+  return materialize(skeleton);
 }
 
 /**
@@ -194,7 +299,7 @@ function markdown(node, url) {
 
 export function extractCleanArticle(html, sourceUrl, fallbackTitle = '') {
   const url = resolveHttpUrl(sourceUrl);
-  const base = { title: fallbackTitle, url, sourceUrl: url, markdown: '', extractorVersion: ARTICLE_EXTRACTOR_VERSION, truncated: false };
+  const base = { title: fallbackTitle, url, sourceUrl: url, markdown: '', aiMarkdown: '', extractorVersion: ARTICLE_EXTRACTOR_VERSION, truncated: false };
   if (url) {
     const { hostname, pathname } = new URL(url);
     if (['s.weibo.com', 'top.baidu.com', 'search.bilibili.com'].includes(hostname) ||
@@ -223,16 +328,20 @@ export function extractCleanArticle(html, sourceUrl, fallbackTitle = '') {
   const wall = /(?:sign in|log in|subscribe) to (?:read|continue|view)|登录后(?:查看|阅读|继续)|请先登录|verify you are human|access denied|captcha/i;
   const blockedTitle = wall.test(title) || (wall.test(text) && text.length < 500);
   const fullRendered = markdown(best, url).trim();
-  const bestWasTruncated = scanMeta.truncated && openStack.includes(best);
-  const truncated = !blockedTitle && (fullRendered.length > 40_000 || scanMeta.truncated);
+  const hiddenOpenAtEof = openStack.some(n => n.hidden);
+  const sourceTruncated = scanMeta.truncated || hiddenOpenAtEof;
+  const bestWasTruncated = sourceTruncated && openStack.includes(best);
+  const truncated = !blockedTitle && (fullRendered.length > 40_000 || sourceTruncated);
   const rendered = fullRendered.slice(0, 40_000);
-  // Derive a source-cutoff-safe AI projection BEFORE Markdown syntax is synthesized (keeping Clean Article display intact).
-  let aiMarkdown;
-  if (truncated) {
-    const trimmedBest = bestWasTruncated ? trimTrailingSourceToken(best, new Set(openStack)).node : best;
-    aiMarkdown = trimmedBest ? renderBoundedAiMarkdown(trimmedBest, url, 40_000) : '';
+  // Derive a source-DOM-redacted, cutoff-safe AI projection BEFORE Markdown syntax is synthesized
+  // (preventing inline <code> backticks/spaces or 40k caps from splitting URLs, while keeping Clean Article display intact).
+  let aiMarkdown = '';
+  if (!blockedTitle) {
+    const sourceSafeBest = bestWasTruncated ? trimTrailingSourceToken(best, new Set(openStack)).node : best;
+    const redactedBest = sourceSafeBest ? redactDomPrivateUrls(sourceSafeBest) : null;
+    aiMarkdown = redactedBest ? renderBoundedAiMarkdown(redactedBest, url, 40_000) : '';
   }
   return { ...base, title: (title || heading || fallbackTitle).slice(0, 500), markdown: blockedTitle ? '' : rendered,
-    truncated, ...(truncated ? { aiMarkdown } : {}),
+    truncated, aiMarkdown,
     quality: blockedTitle || !rendered ? 'blocked' : text.length < 140 || wall.test(text) ? 'partial' : 'full' };
 }

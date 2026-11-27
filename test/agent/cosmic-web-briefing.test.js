@@ -455,16 +455,113 @@ describe('Cosmic Web bounded research', () => {
     expect(legacyRes.excerptVersion).toBeUndefined();
     expect(legacyRes.items[0].summaryExcerpt).toContain('Safe radar');
     expect(legacyRes.items[0].summaryExcerpt).not.toContain('RADARAGENTCLIP99');
-    // With excerptProvenance: true (current Server): scrubs pre-clip and emits excerptVersion: 2
-    const { result: v2Res } = await run({
+    // With excerptProvenance: true (current Server): scrubs pre-clip and emits excerptVersion: 3
+    const { result: v3Res } = await run({
       mode: 'topic_radar',
       payload: { topic: 'Radar', excerptProvenance: true },
       adapter: makeRadarAdapter(),
       toolExecutors: { WebSearch },
     });
-    expect(v2Res.excerptVersion).toBe(2);
-    expect(v2Res.items[0].summaryExcerpt).toContain('Safe radar');
-    expect(v2Res.items[0].summaryExcerpt).not.toContain('RADARAGENTCLIP99');
+    expect(v3Res.excerptVersion).toBe(3);
+    expect(v3Res.items[0].summaryExcerpt).toContain('Safe radar');
+    expect(v3Res.items[0].summaryExcerpt).not.toContain('RADARAGENTCLIP99');
+  });
+
+  it('redacts Radar WebSearch evidence before the 1,500-char cap and fails closed on upstream-truncated ambiguous tokens', async () => {
+    const searchUrl = 'https://radar.example/search-1500';
+    const upstreamUrl = 'https://radar.example/search-upstream';
+    const explicitTruncUrl = 'https://radar.example/search-explicit-trunc';
+    const split1500Snippet = `${'s'.repeat(1474)} Safe1500 //SEARCH1500USER99@intranet:8080/api`;
+    const split1500Answer = `${'a'.repeat(1476)} Ans1500 //ANS1500USER99@intranet:8080/api`;
+    const upstreamTruncSnippet = 'Safe upstream //UPSTREAM1500ELLIPSIS99... mid //UPSTREAM1500SPACE99 ... (//UPSTREAM1500PAREN99…) tail //UPSTREAM1500EOF99';
+    const WebSearch = vi.fn().mockResolvedValue({
+      provider: 'generic',
+      answer: split1500Answer,
+      results: [
+        { url: searchUrl, title: 'Search 1500 Item', snippet: split1500Snippet },
+        { url: upstreamUrl, title: 'Upstream Trunc Item', snippet: upstreamTruncSnippet },
+        { url: explicitTruncUrl, title: 'Explicit Trunc Item', snippet: 'Safe explicit EXPLICITTRUNC99', truncated: true },
+      ],
+    });
+    const observedFinalPrompts = [];
+    const adapter = {
+      captureStream: vi.fn()
+        .mockImplementationOnce(async function* () { yield { type: 'tool_call', id: 'tc1', name: 'WebSearch', input: { query: 'radar 1500', limit: 5 } }; })
+        .mockImplementationOnce(async function* () {}),
+      call: vi.fn().mockImplementation(async req => {
+        const serialized = JSON.stringify(req.messages);
+        observedFinalPrompts.push(serialized);
+        // Simulate a Radar model that faithfully quotes the snippets it saw in <untrusted_web_result>
+        const toolMsg = req.messages.find(m => m.role === 'tool')?.content ?? '';
+        const parsedTool = JSON.parse(toolMsg.replace(/^<untrusted_web_result>\n|\n<\/untrusted_web_result>$/g, ''));
+        return {
+          text: JSON.stringify({
+            items: parsedTool.results.map(r => ({
+              title: r.title,
+              url: r.url,
+              sourceName: 'Wire',
+              summaryExcerpt: r.snippet.slice(-120),
+            })),
+            searchCount: 1,
+          }),
+        };
+      }),
+    };
+    const { result } = await run({
+      mode: 'topic_radar',
+      payload: { topic: 'Radar', excerptProvenance: true },
+      adapter,
+      toolExecutors: { WebSearch },
+    });
+    expect(result.excerptVersion).toBe(3);
+    const promptSentToRadarModel = observedFinalPrompts[0];
+    expect(promptSentToRadarModel).toContain('Safe1500');
+    expect(promptSentToRadarModel).toContain('Ans1500');
+    expect(promptSentToRadarModel).toContain('Safe upstream');
+    expect(promptSentToRadarModel).toContain('Safe explicit');
+    for (const secret of [
+      'SEARCH1500', 'ANS1500', 'UPSTREAM1500ELLIPSIS99',
+      'UPSTREAM1500SPACE99', 'UPSTREAM1500PAREN99', 'UPSTREAM1500EOF99', 'EXPLICITTRUNC99',
+    ]) {
+      expect(promptSentToRadarModel).not.toContain(secret);
+      expect(JSON.stringify(result.items)).not.toContain(secret);
+    }
+  });
+
+  it('redacts private brief TLDR before the 400-char cap and emits briefContextVersion only when requested on v2 schema', async () => {
+    const boundaryTldr = `${'t'.repeat(376)} SafeTldr //TLDRCLIP400USER99@intranet:8080/api`;
+    const makeBriefAdapter = () => stubAdapter({
+      ...story,
+      tldr: boundaryTldr,
+      bullets: ['Safe bullet one', 'Safe bullet two', 'Safe bullet three'],
+    });
+    // Without briefContextProvenance (legacy Server compat): scrubs pre-clip and omits briefContextVersion
+    const { result: legacyServerRes } = await run({
+      mode: 'brief',
+      payload: { isPrivateSource: true, headline: 'Priv TLDR' },
+      adapter: makeBriefAdapter(),
+    });
+    expect(legacyServerRes.briefContextVersion).toBeUndefined();
+    expect(legacyServerRes.tldr).toContain('SafeTldr');
+    expect(legacyServerRes.tldr).not.toContain('TLDRCLIP400');
+    // With schemaVersion: 1 (reverse mixed-version v1 Server): scrubs pre-clip and emits exact 5-key v1 contract
+    const { result: v1Res } = await run({
+      mode: 'brief',
+      schemaVersion: 1,
+      payload: { isPrivateSource: true, briefContextProvenance: true, headline: 'Priv TLDR v1' },
+      adapter: makeBriefAdapter(),
+    });
+    expect(Object.keys(v1Res).sort()).toEqual(['bullets', 'followUps', 'fullMarkdown', 'impact', 'tldr']);
+    expect(v1Res.tldr).not.toContain('TLDRCLIP400');
+    // With briefContextProvenance: true on v2 schema: scrubs pre-clip and emits briefContextVersion: 3
+    const { result: v3Res } = await run({
+      mode: 'brief',
+      payload: { isPrivateSource: true, briefContextProvenance: true, headline: 'Priv TLDR v3' },
+      adapter: makeBriefAdapter(),
+    });
+    expect(v3Res.briefContextVersion).toBe(3);
+    expect(v3Res.tldr).toContain('SafeTldr');
+    expect(v3Res.tldr).not.toContain('TLDRCLIP400');
   });
 
   it.each([['daily_briefing', {}, daily], ['brief', { research: false }, story], ['follow_up', { research: false }, { answer: 'Yes', question: 'ARM?' }]])

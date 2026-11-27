@@ -311,7 +311,8 @@ export function validateCosmicWebAiResult(result, mode) {
   if (only(result, ['tldr', 'bullets', 'impact', 'followUps', 'fullMarkdown'])) {
     return list(result.bullets, 3, 5, bullet) && list(result.followUps, 2, 3, question);
   }
-  return only(result, ['tldr', 'sections', 'bullets', 'impact', 'media', 'communityHighlights', 'citations', 'followUps', 'researched', 'searchCount', 'evidenceCount', 'fullMarkdown']) &&
+  return only(result, ['tldr', 'sections', 'bullets', 'impact', 'media', 'communityHighlights', 'citations', 'followUps', 'researched', 'searchCount', 'evidenceCount', 'fullMarkdown', 'briefContextVersion']) &&
+    optional(result.briefContextVersion, count) &&
     list(result.sections, 1, 6, section => only(section, ['heading', 'body']) && text(section.heading, 250) && text(section.body, 4000)) &&
     list(result.bullets, 2, 6, bullet) && list(result.communityHighlights, 0, 6, highlight) && answers(result);
 }
