@@ -1,6 +1,7 @@
 /**
  * Authentication store for managing login state
  */
+import { LEGACY_PRODUCT_SURFACES_ENABLED } from '../utils/legacy-product-surfaces.js';
 import { decodeKey } from '../utils/encryption.js';
 import {
   bindWorkCenterBrowserOwner,
@@ -149,7 +150,7 @@ export const useAuthStore = defineStore('auth', {
         if (this.skipAuth) {
           // In skip auth mode, one local browser owner is the complete auth boundary.
           this.userId = 'skip-auth';
-          bindWorkCenterBrowserOwner(this.userId);
+          if (LEGACY_PRODUCT_SURFACES_ENABLED) bindWorkCenterBrowserOwner(this.userId);
           bindYeaftHistoryOwner(this.userId);
           this.authGeneration += 1;
           this.isAuthenticated = true;
@@ -210,7 +211,7 @@ export const useAuthStore = defineStore('auth', {
         this.sessionKey = data.sessionKey ? decodeKey(data.sessionKey) : null;
         this.role = data.role || 'pro';
         this.userId = data.userId || null;
-        bindWorkCenterBrowserOwner(this.userId);
+        if (LEGACY_PRODUCT_SURFACES_ENABLED) bindWorkCenterBrowserOwner(this.userId);
         bindYeaftHistoryOwner(this.userId);
         this.authGeneration += 1;
         this.isAuthenticated = true;
@@ -308,7 +309,7 @@ export const useAuthStore = defineStore('auth', {
         this.sessionKey = data.sessionKey ? decodeKey(data.sessionKey) : null;
         this.role = data.role || 'pro';
         this.userId = data.userId || null;
-        bindWorkCenterBrowserOwner(this.userId);
+        if (LEGACY_PRODUCT_SURFACES_ENABLED) bindWorkCenterBrowserOwner(this.userId);
         bindYeaftHistoryOwner(this.userId);
         this.authGeneration += 1;
         this.isAuthenticated = true;
@@ -366,7 +367,7 @@ export const useAuthStore = defineStore('auth', {
         this.sessionKey = data.sessionKey ? decodeKey(data.sessionKey) : null;
         this.role = data.role || 'pro';
         this.userId = data.userId || null;
-        bindWorkCenterBrowserOwner(this.userId);
+        if (LEGACY_PRODUCT_SURFACES_ENABLED) bindWorkCenterBrowserOwner(this.userId);
         bindYeaftHistoryOwner(this.userId);
         this.authGeneration += 1;
         this.isAuthenticated = true;
@@ -424,7 +425,7 @@ export const useAuthStore = defineStore('auth', {
         this.sessionKey = data.sessionKey ? decodeKey(data.sessionKey) : null;
         this.role = data.role || 'pro';
         this.userId = data.userId || null;
-        bindWorkCenterBrowserOwner(this.userId);
+        if (LEGACY_PRODUCT_SURFACES_ENABLED) bindWorkCenterBrowserOwner(this.userId);
         bindYeaftHistoryOwner(this.userId);
         this.authGeneration += 1;
         this.isAuthenticated = true;
@@ -467,7 +468,7 @@ export const useAuthStore = defineStore('auth', {
         this.sessionKey = data.sessionKey ? decodeKey(data.sessionKey) : null;
         this.role = data.role || 'pro';
         this.userId = data.userId || null;
-        bindWorkCenterBrowserOwner(this.userId);
+        if (LEGACY_PRODUCT_SURFACES_ENABLED) bindWorkCenterBrowserOwner(this.userId);
         bindYeaftHistoryOwner(this.userId);
         this.authGeneration += 1;
         this.isAuthenticated = true;
@@ -634,7 +635,7 @@ export const useAuthStore = defineStore('auth', {
             this.sessionKey = data.sessionKey ? decodeKey(data.sessionKey) : null;
             this.role = data.role || 'pro';
             this.userId = data.userId || null;
-            bindWorkCenterBrowserOwner(this.userId);
+            if (LEGACY_PRODUCT_SURFACES_ENABLED) bindWorkCenterBrowserOwner(this.userId);
             bindYeaftHistoryOwner(this.userId);
             this.authGeneration += 1;
             this.isAuthenticated = true;
@@ -737,7 +738,7 @@ export const useAuthStore = defineStore('auth', {
       this.sessionKey = sessionKey ? decodeKey(sessionKey) : null;
       this.role = role || 'pro';
       this.userId = userId || null;
-      bindWorkCenterBrowserOwner(this.userId);
+      if (LEGACY_PRODUCT_SURFACES_ENABLED) bindWorkCenterBrowserOwner(this.userId);
       bindYeaftHistoryOwner(this.userId);
       this.authGeneration += 1;
       this.isAuthenticated = true;
@@ -823,7 +824,7 @@ export const useAuthStore = defineStore('auth', {
         if (profile?.role) this.role = profile.role;
         const previousUserId = this.userId;
         this.userId = profile?.userId || null;
-        bindWorkCenterBrowserOwner(this.userId);
+        if (LEGACY_PRODUCT_SURFACES_ENABLED) bindWorkCenterBrowserOwner(this.userId);
         if (previousUserId !== this.userId) {
           clearYeaftHistoryMemory();
           clearVpBrowserState();
@@ -960,7 +961,7 @@ export const useAuthStore = defineStore('auth', {
         if (freshToken && freshToken !== token) localStorage.setItem('authToken', freshToken);
         this.role = profile?.role || 'pro';
         this.userId = profile?.userId || null;
-        bindWorkCenterBrowserOwner(this.userId);
+        if (LEGACY_PRODUCT_SURFACES_ENABLED) bindWorkCenterBrowserOwner(this.userId);
         bindYeaftHistoryOwner(this.userId);
         this.authGeneration += 1;
         this.isAuthenticated = true;
@@ -1074,7 +1075,7 @@ export const useAuthStore = defineStore('auth', {
      * Reset state
      */
     reset() {
-      clearWorkCenterBrowserOwner();
+      if (LEGACY_PRODUCT_SURFACES_ENABLED) clearWorkCenterBrowserOwner();
       clearYeaftHistoryOwner();
       this.authGeneration += 1;
       this.stopSessionRefresh();

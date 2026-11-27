@@ -1,6 +1,7 @@
 import { defineConfig } from '@playwright/test';
 
 export default defineConfig({
+  // archive/ holds historical enabled-product scenarios, not runnable suites.
   testDir: './tests',
   timeout: 30000,
   expect: { timeout: 5000 },

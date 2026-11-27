@@ -1,3 +1,4 @@
+import { LEGACY_PRODUCT_SURFACES_ENABLED } from '../utils/legacy-product-surfaces.js';
 import { useAuthStore } from './auth.js';
 import {
   persistedYeaftUserMessageId, yeaftTurnDeletionFence, isYeaftTurnDeletionFenceCurrent,
@@ -1053,7 +1054,7 @@ export const useChatStore = defineStore('chat', {
     yeaftLastAutoRouteResult: null,
     _pendingAutoRouteRequests: null,
     workCenterOpen: false,
-    workCenterUiEnabled: localStorage.getItem('work-center-ui-enabled') !== 'false',
+    workCenterUiEnabled: LEGACY_PRODUCT_SURFACES_ENABLED && localStorage.getItem('work-center-ui-enabled') !== 'false',
     workCenterAgentId: null,
     workCenterItemsByAgent: {},
     workCenterActivityConnectionGeneration: -1,
@@ -1302,6 +1303,7 @@ export const useChatStore = defineStore('chat', {
   }),
 
   getters: {
+    legacyProductSurfacesEnabled: () => LEGACY_PRODUCT_SURFACES_ENABLED,
     pluginCenterAgents: state => pluginConfigHelpers.pluginCenterAgents(state),
     sidebarSessionCatalog(state) {
       if (!sidebarCatalogAuthIsCurrent(state, useAuthStore())) return [];
@@ -1805,7 +1807,7 @@ export const useChatStore = defineStore('chat', {
         && this.digitalPersonUiEnabledByAgent[agentId] === true;
     },
     setDigitalPersonUiEnabled(enabled, agentId = this.currentAgent) {
-      if (!agentId) return false;
+      if (!LEGACY_PRODUCT_SURFACES_ENABLED || !agentId) return false;
       this.digitalPersonUiEnabledByAgent = {
         ...this.digitalPersonUiEnabledByAgent, [agentId]: enabled === true,
       };
@@ -1814,6 +1816,7 @@ export const useChatStore = defineStore('chat', {
       return true;
     },
     enterDigitalPerson(agentId = null) {
+      if (!LEGACY_PRODUCT_SURFACES_ENABLED) return false;
       agentId = agentId || resolveDigitalPersonAgentId(this);
       if (!availableDigitalPersonAgents(this).some(agent => agent.id === agentId)) return false;
       this.leaveWorkCenter();
@@ -1825,6 +1828,7 @@ export const useChatStore = defineStore('chat', {
     },
     leaveDigitalPerson() { this.digitalPersonOpen = false; },
     enterWorkCenter(agentId = null) {
+      if (!LEGACY_PRODUCT_SURFACES_ENABLED) return false;
       if (!this.hydrateWorkCenterBrowserState()) return false;
       const compatibleAgents = this.agents.filter(agent => agent?.online
         && Array.isArray(agent.capabilities) && agent.capabilities.includes('work_center'));
@@ -1853,6 +1857,7 @@ export const useChatStore = defineStore('chat', {
         '', `${url.pathname}${url.search}${url.hash}`);
     },
     setWorkCenterUiEnabled(enabled) {
+      if (!LEGACY_PRODUCT_SURFACES_ENABLED) return;
       this.workCenterUiEnabled = enabled !== false;
       try {
         localStorage.setItem('work-center-ui-enabled', String(this.workCenterUiEnabled));
@@ -1975,7 +1980,7 @@ export const useChatStore = defineStore('chat', {
       });
     },
     enterWorkCenterFromSession(session, seedGoal = '') {
-      if (!session?.id) return;
+      if (!LEGACY_PRODUCT_SURFACES_ENABLED || !session?.id) return;
       const agentId = session.agentId || resolveAgentIdForSession(this, session.id);
       const requirement = String(seedGoal || session.title || session.name || '').trim();
       this.workCenterCreateDraft = {

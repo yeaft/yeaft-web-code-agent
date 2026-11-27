@@ -1,5 +1,6 @@
 // WebSocket connection, heartbeat, reconnect helpers
 
+import { LEGACY_PRODUCT_SURFACES_ENABLED } from '../../utils/legacy-product-surfaces.js';
 import { useAuthStore } from '../auth.js';
 import { encrypt, decrypt, isEncrypted } from '../../utils/encryption.js';
 import { clearSessionLoading } from './session.js';
@@ -377,7 +378,7 @@ export function connect(store) {
         plaintextOk: true,
         sessionCatalogProtocol: 1,
         workbenchRouteProtocol: 1,
-        workCenterWorkbenchProtocol: 1,
+        ...(LEGACY_PRODUCT_SURFACES_ENABLED ? { workCenterWorkbenchProtocol: 1 } : {}),
         browserRuntimeProtocol: 1,
         browserRuntimeSetupProtocol: 1,
       }));
