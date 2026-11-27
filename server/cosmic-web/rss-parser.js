@@ -63,7 +63,7 @@ export function parseAttributesLinear(value, { boundFeedUrls = false } = {}) {
 export { parseAttributesLinear as parseAttributes };
 
 /** Scan tags once, without retrying malformed tags or searching nested candidates for a terminator. */
-export function* scanMarkup(input, { xml = false, rawTags = new Set() } = {}) {
+export function* scanMarkup(input, { xml = false, rawTags = new Set(), emitRawOpen = false } = {}) {
   const str = boundedMarkup(input);
   let i = 0, tags = 0, raw = null;
   while (i < str.length) {
@@ -118,8 +118,8 @@ export function* scanMarkup(input, { xml = false, rawTags = new Set() } = {}) {
     if (directive) continue;
     const selfClosing = str[last] === '/';
     if (raw) { raw = null; continue; }
-    if (!closing && rawTags.has(name)) { raw = name; continue; }
-    yield { type: 'tag', name, closing, selfClosing, attrsText: str.slice(attrStart, xml && selfClosing ? last : i - 1), text: str.slice(start, i) };
+    if (!closing && rawTags.has(name)) { raw = name; if (!emitRawOpen) continue; }
+    yield { type: 'tag', name, closing, selfClosing, attrsText: str.slice(attrStart, xml && selfClosing ? last : i - 1), text: str.slice(start, i), end: i };
   }
 }
 
@@ -138,6 +138,49 @@ export function resolveHttpUrl(ref, base) {
     const { href } = url;
     return href.length <= MAX_URL_LENGTH && ['https:', 'http:'].includes(url.protocol) && !url.username && !url.password ? href : null;
   } catch { return null; }
+}
+
+/** Normalize image references without rewriting signed CDN query strings. The proxy verifies bytes. */
+export function normalizeMedia(candidates, base, limit = 3) {
+  const result = [], seen = new Set();
+  for (const candidate of candidates ?? []) {
+    const { url: raw, kind, alt, type, width, height, animated } = typeof candidate === 'string' ? { url: candidate } : candidate ?? {};
+    if (typeof raw !== 'string' || raw.length > MAX_URL_LENGTH) continue;
+    const url = resolveHttpUrl(decodeEntities(raw), base);
+    if (!url || (typeof type === 'string' && /(?:svg|icon)/i.test(type)) || seen.has(url) || (width != null && Number(width) > 0 && Number(width) <= 1) ||
+        (height != null && Number(height) > 0 && Number(height) <= 1)) continue;
+    const parsed = new URL(url);
+    if (/\.(?:svgz?|ico|mp4|webm|m3u8)(?:$|[!@~])/i.test(parsed.pathname) ||
+        /(?:^|[./_\-])(?:avatars?|favicons?|icons?|logos?|tracking|trackers?|pixels?|spacer)(?:[./_\-]|$)/i.test(parsed.hostname + parsed.pathname)) continue;
+    const gif = kind === 'gif' || type?.toLowerCase?.() === 'image/gif' || /\.gif(?:$|[!@~])/i.test(parsed.pathname) ||
+      /(?:format|fm)[=/,]gif(?:$|[&?/])/i.test(parsed.search) ||
+      (animated === true || (/webp/i.test(parsed.pathname + parsed.search) && /(?:anim(?:ated|ation)?=(?:1|true)|animated|animated-webp)/i.test(parsed.pathname + parsed.search)));
+    const caption = cleanText(alt).slice(0, 300);
+    result.push({ url, kind: gif ? 'gif' : 'image', ...(caption && { alt: caption }) });
+    seen.add(url);
+    if (result.length >= limit) break;
+  }
+  return result;
+}
+
+export function extractMarkupMedia(html, base, { openGraph = false, limit = 3 } = {}) {
+  const metadata = [], images = [];
+  for (const token of scanMarkup(html, { rawTags: textRawTags })) {
+    if (token.type !== 'tag' || token.closing || !['img', 'meta'].includes(token.name)) continue;
+    const a = parseAttributesLinear(token.attrsText);
+    if (token.name === 'img' && images.length < 48 && !/\b(?:avatar|icon|logo|tracker|pixel)s?\b/i.test(`${a.class ?? ''} ${a.id ?? ''} ${a.alt ?? ''}`)) {
+      images.push({ url: a['data-origin'] || a['data-src'] || a['data-original'] || a.src, alt: a.alt,
+        width: a.width ?? /\bwidth\s*:\s*(1)px/i.exec(a.style)?.[1], height: a.height ?? /\bheight\s*:\s*(1)px/i.exec(a.style)?.[1],
+        animated: /^(?:1|true)$/i.test(a['data-animated'] ?? '') });
+    } else if (openGraph && token.name === 'meta' && metadata.length < 24) {
+      const name = (a.property || a.name)?.toLowerCase();
+      if (['og:image', 'og:image:url', 'og:image:secure_url', 'twitter:image', 'twitter:image:src'].includes(name)) metadata.push({ url: a.content });
+      else if (metadata.length && ['og:image:width', 'og:image:height', 'og:image:alt', 'og:image:type', 'twitter:image:alt'].includes(name)) {
+        metadata.at(-1)[name.split(':').at(-1)] = a.content;
+      }
+    }
+  }
+  return normalizeMedia([...metadata, ...images], base, limit);
 }
 
 export function parseTimestamp(value) {
@@ -169,7 +212,7 @@ export function parseFeedXml(xmlText, baseUrl) {
       if (field?.depth === stack.length) {
         const text = field.urlLength > MAX_URL_LENGTH ? '' : field.parts.join('');
         if (field.name === 'link') entry.link ??= resolveHttpUrl(text, field.base);
-        else entry.fields[field.name] ??= text;
+        else if (!Object.hasOwn(entry.fields, field.name)) { entry.fields[field.name] = text; entry.fieldBases[field.name] = field.base; }
         field = null;
       } else if (field) appendField(token.text);
       if (entry?.depth === stack.length) {
@@ -177,7 +220,9 @@ export function parseFeedXml(xmlText, baseUrl) {
         const title = cleanText(f.title);
         const url = entry.link ?? resolveHttpUrl(f.guid, entry.base);
         if (url && title) items.push({ title, url, publishedAt: parseTimestamp(f.pubdate ?? f.published ?? f.updated ?? f['dc:date']),
-          summaryExcerpt: cleanText(f['content:encoded'] ?? f.description ?? f.summary ?? f.content).slice(0, 1000) });
+          summaryExcerpt: cleanText(f['content:encoded'] ?? f.description ?? f.summary ?? f.content).slice(0, 1000),
+          media: normalizeMedia([...entry.media, ...['content:encoded', 'description', 'summary', 'content']
+            .flatMap(name => extractMarkupMedia(f[name], entry.fieldBases[name] ?? entry.base))], entry.base) });
         entry = null;
       }
       stack.pop();
@@ -187,12 +232,21 @@ export function parseFeedXml(xmlText, baseUrl) {
     const parent = stack.at(-1)?.base ?? rootBase;
     const base = resolveHttpUrl(attrs['xml:base'], parent) ?? parent;
     const depth = stack.length + 1;
-    if (!entry && !selfClosing && ['item', 'entry'].includes(name)) entry = { depth, base, fields: Object.create(null) };
+    if (!entry && !selfClosing && ['item', 'entry'].includes(name)) entry = { depth, base, fields: Object.create(null), fieldBases: Object.create(null), media: [] };
     else if (entry && entry.depth + 1 === depth) {
       if (name === 'link' && attrs.href) {
         if (!attrs.rel || attrs.rel === 'alternate') entry.link ??= resolveHttpUrl(attrs.href, base);
       } else if (!selfClosing) field = { depth, name, base, parts: [], urlLength: name === 'link' || name === 'guid' ? 0 : null };
     } else if (field) appendField(token.text);
+    if (entry && entry.media.length < 24) {
+      const type = attrs.type?.toLowerCase();
+      const image = type?.startsWith('image/');
+      if (name === 'media:thumbnail' || (name === 'media:content' && (image || attrs.medium === 'image' || (!type && !attrs.medium))) ||
+          ((name === 'enclosure' || (name === 'link' && attrs.rel === 'enclosure')) && image)) {
+        entry.media.push({ url: resolveHttpUrl(attrs.url || attrs.href, base), type, alt: attrs.title,
+          width: attrs.width, height: attrs.height });
+      }
+    }
     if (!selfClosing) {
       if (depth > 128) throw new Error('Feed nesting exceeds limit');
       stack.push({ name, base });

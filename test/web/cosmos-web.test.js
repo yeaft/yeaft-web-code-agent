@@ -46,8 +46,12 @@ globalThis.Pinia = {
 import { zhCN as cosmosZh, en as cosmosEn } from '../../web/i18n/cosmos.js';
 import {
   COSMIC_WEB_COLOR_MAP,
+  WEB_ZOOM_LIMITS,
+  getWebLodTier,
   buildSemanticCosmicWebGraph,
   projectCosmicWeb,
+  computeWebLodLayout,
+  findWebNodeFocusTarget,
   triggerCosmicWebPulse,
 } from '../../web/cosmos/web-graph.js';
 import { drawCosmosHud } from '../../web/cosmos/particle-hud.js';
@@ -136,7 +140,7 @@ describe('Cosmic Web — i18n, CSS token discipline & 3D semantic graph', () => 
   });
 
   it('builds deterministic 3D semantic graphs, projects nodes, triggers pulses, and renders on HUD without error', () => {
-    expect(Object.keys(COSMIC_WEB_COLOR_MAP)).toEqual(['cyan', 'mint', 'gold', 'violet', 'rose', 'amber']);
+    expect(Object.keys(COSMIC_WEB_COLOR_MAP)).toEqual(['cyan', 'mint', 'gold', 'violet', 'rose', 'amber', 'coral', 'teal', 'indigo']);
 
     const ambient = buildSemanticCosmicWebGraph(null, null);
     expect(ambient.isAmbient).toBe(true);
@@ -228,7 +232,8 @@ describe('Cosmic Web — Pinia store & interactive overlay', () => {
     });
   }
 
-  it('bootstraps, opens reader (marking read + fetching clean article), generates AI brief, and resets cleanly', async () => {
+  it('bootstraps, opens reader (marking read + auto-triggering AI web-researched report without raw /article scraping), and resets cleanly', async () => {
+    let articleEndpointCalled = false;
     mockApi([
       {
         match: (u) => u.startsWith('/api/cosmic-web/bootstrap'),
@@ -261,7 +266,10 @@ describe('Cosmic Web — Pinia store & interactive overlay', () => {
       },
       {
         match: (u) => u.startsWith('/api/cosmic-web/clusters/c1/article'),
-        body: { title: '大模型架构新突破', markdown: '## 关键亮点\n\n性能翻倍。', quality: 'full', sourceUrl: 'https://example.com/ai-1' },
+        body: () => {
+          articleEndpointCalled = true;
+          return { title: '大模型架构新突破', markdown: '## 关键亮点\n\n性能翻倍。', quality: 'full', sourceUrl: 'https://example.com/ai-1' };
+        },
       },
       {
         match: (u, m) => u === '/api/cosmic-web/clusters/c1/state' && m === 'PATCH',
@@ -271,9 +279,12 @@ describe('Cosmic Web — Pinia store & interactive overlay', () => {
         match: (u, m) => u === '/api/cosmic-web/clusters/c1/ai-brief' && m === 'POST',
         body: {
           tldr: '新一代架构将推理成本减半。',
+          sections: [{ heading: '事件还原', body: '通过稀疏激活将推理延迟降低 50%。' }],
           bullets: ['要点一', '要点二', '要点三'],
           impact: '加速本地与端侧部署普及。',
           followUps: ['对 Yeaft 引擎路由有何借鉴？', '对比现有模型吞吐如何？'],
+          searchCount: 2,
+          researched: true,
           fullMarkdown: '新一代架构将推理成本减半。',
           agentName: 'Workstation',
         },
@@ -286,12 +297,11 @@ describe('Cosmic Web — Pinia store & interactive overlay', () => {
     expect(webStore.feedItems).toHaveLength(1);
     expect(webStore.stats.unreadCount).toBe(1);
 
-    await webStore.openClusterReader('c1', { tab: 'article', expanded: false });
+    await webStore.openClusterReader('c1', { expanded: false });
+    await flushPromises();
     expect(webStore.readerOpen).toBe(true);
-    expect(webStore.articleData?.quality).toBe('full');
+    expect(articleEndpointCalled).toBe(false);
     expect(webStore.feedItems[0].unread).toBe(false);
-
-    await webStore.generateAiBrief('c1', { mode: 'brief' });
     expect(webStore.aiBriefData?.tldr).toContain('推理成本减半');
     expect(webStore.aiBriefData?.followUps).toHaveLength(2);
 
@@ -504,7 +514,7 @@ describe('Cosmic Web — Pinia store & interactive overlay', () => {
 
     expect(submittedPrefs).toBeTruthy();
     expect(submittedPrefs.onboarded).toBe(true);
-    expect(submittedPrefs.enabledDomains).toEqual(['ai', 'tech', 'finance', 'product']);
+    expect(submittedPrefs.enabledDomains).toEqual(['ai', 'tech', 'finance', 'product', 'sports']);
     expect(submittedPrefs.enabledDomains).not.toContain('dev');
     wrapper.unmount();
   });
@@ -720,7 +730,7 @@ describe('Cosmic Web — Pinia store & interactive overlay', () => {
 
   it('Item #6: same-cluster source switch immediately clears completed AI brief and fences in-flight source A success/error', async () => {
     let resolveAiA;
-    let rejectAiB;
+    const rejectAiBs = [];
     const aiRequests = [];
 
     globalThis.fetch = vi.fn((url, opts = {}) => {
@@ -748,7 +758,7 @@ describe('Cosmic Web — Pinia store & interactive overlay', () => {
         }
         if (body.itemId === 'src-b') {
           return new Promise((_, reject) => {
-            rejectAiB = () => reject(new Error('Late Stale Error B'));
+            rejectAiBs.push(() => reject(new Error('Late Stale Error B')));
           });
         }
         if (body.itemId === 'src-c') {
@@ -759,14 +769,6 @@ describe('Cosmic Web — Pinia store & interactive overlay', () => {
             json: async () => ({ tldr: 'Fresh Brief C' }),
           });
         }
-      }
-      if (u.startsWith('/api/cosmic-web/clusters/c1/article')) {
-        return Promise.resolve({
-          ok: true,
-          status: 200,
-          headers: { get: () => 'application/json' },
-          json: async () => ({ markdown: `Body for ${u}`, quality: 'full' }),
-        });
       }
       return Promise.resolve({
         ok: true,
@@ -782,17 +784,16 @@ describe('Cosmic Web — Pinia store & interactive overlay', () => {
     webStore.prefs.onboarded = true;
 
     // (a) Completed AI brief for source A must clear immediately when switching to source B
-    await webStore.openClusterReader('c1', { tab: 'article', itemId: 'src-a' });
-    await webStore.generateAiBrief('c1', { itemId: 'src-a' });
+    await webStore.openClusterReader('c1', { itemId: 'src-a' });
+    await flushPromises();
     expect(webStore.aiBriefData?.tldr).toBe('Completed Brief A');
 
-    await webStore.selectArticleSource('c1', { itemId: 'src-b', url: 'https://b.test/1' });
+    const pSwitchB = webStore.selectArticleSource('c1', { itemId: 'src-b', url: 'https://b.test/1' });
     expect(webStore.aiBriefData).toBeNull();
     expect(webStore.aiBriefError).toBeNull();
     expect(webStore.activeArticleItemId).toBe('src-b');
 
     // (b) In-flight AI request for source A succeeding & source B failing after switching to source C must both be ignored
-    webStore.readerTab = 'ai';
     const pA = webStore.selectArticleSource('c1', { itemId: 'src-a', url: 'https://a.test/1' });
     const pB = webStore.selectArticleSource('c1', { itemId: 'src-b', url: 'https://b.test/1' });
     const pC = webStore.selectArticleSource('c1', { itemId: 'src-c', url: 'https://c.test/1' });
@@ -801,8 +802,8 @@ describe('Cosmic Web — Pinia store & interactive overlay', () => {
     expect(webStore.aiBriefError).toBeNull();
 
     resolveAiA();
-    rejectAiB();
-    await Promise.allSettled([pA, pB]);
+    for (const rejectB of rejectAiBs) rejectB();
+    await Promise.allSettled([pSwitchB, pA, pB]);
     await flushPromises();
 
     expect(webStore.activeArticleItemId).toBe('src-c');
@@ -1135,11 +1136,11 @@ describe('Cosmic Web — Pinia store & interactive overlay', () => {
     outsideBtn.remove();
   });
 
-  it('clears source-bound AI follow-up state in both inline and expanded readers on same-cluster source switch (#6)', async () => {
+  it('clears source-bound composer & follow-up thread state in both inline and expanded readers on same-cluster source switch (#6)', async () => {
     mockApi([
       {
-        match: (u) => u.startsWith('/api/cosmic-web/clusters/c-src/article'),
-        body: { title: 'Source B', markdown: 'Body B', quality: 'full', sourceUrl: 'https://b.example/story' },
+        match: (u, m) => u === '/api/cosmic-web/clusters/c-src/ai-brief' && m === 'POST',
+        body: { tldr: 'Updated Summary', sections: [{ heading: 'Overview', body: 'Updated body' }], followUps: ['New Q?'] },
       },
     ]);
     const webStore = useCosmicWebStore();
@@ -1161,6 +1162,7 @@ describe('Cosmic Web — Pinia store & interactive overlay', () => {
       ],
     };
     webStore.aiBriefData = { tldr: 'Summary A', bullets: ['b1'], impact: 'imp', followUps: ['Question from A?'] };
+    webStore.followUpThread = [{ id: 'fu-1', question: 'Old Q', answer: 'Old A', citations: [], media: [] }];
 
     const wrapper = mount(CosmosWebOverlay, {
       props: {
@@ -1174,31 +1176,32 @@ describe('Cosmic Web — Pinia store & interactive overlay', () => {
     });
     await flushPromises();
 
-    // Select follow-up from source A in inline reader & expanded reader
-    wrapper.vm.applyFollowUp('Question from A?');
-    expect(wrapper.vm.selectedAiFollowUp).toBe('Question from A?');
+    // Draft composer input on source A in inline reader
+    wrapper.vm.composerInput = 'Question from A?';
+    expect(wrapper.vm.composerInput).toBe('Question from A?');
 
     // Switch to source B within the same cluster
     await webStore.selectArticleSource('c-src', { itemId: 'item-b', url: 'https://b.example/story' });
     await flushPromises();
 
-    expect(wrapper.vm.selectedAiFollowUp).toBe('');
+    expect(wrapper.vm.composerInput).toBe('');
+    expect(webStore.followUpThread).toEqual([]);
     wrapper.vm.submitInlineDispatch('fly');
     const emitted = wrapper.emitted('dispatch-to-planet');
     expect(emitted).toBeTruthy();
     expect(emitted[0][0].aiFollowUp).toBeNull();
     expect(emitted[0][0].url).toBe('https://b.example/story');
 
-    // Now verify expanded reader modal also clears selectedAiFollowUp on source switch
+    // Now verify expanded reader modal also clears composerInput on source switch
     webStore.readerExpanded = true;
     await flushPromises();
     const modal = wrapper.findComponent({ name: 'CosmosWebReaderModal' });
-    modal.vm.applyFollowUp('Expanded question from B?');
-    expect(modal.vm.selectedAiFollowUp).toBe('Expanded question from B?');
+    modal.vm.composerInput = 'Expanded question from B?';
+    expect(modal.vm.composerInput).toBe('Expanded question from B?');
 
     await webStore.selectArticleSource('c-src', { itemId: 'item-a', url: 'https://a.example/story' });
     await flushPromises();
-    expect(modal.vm.selectedAiFollowUp).toBe('');
+    expect(modal.vm.composerInput).toBe('');
 
     wrapper.unmount();
   });
@@ -1349,6 +1352,234 @@ describe('Cosmic Web — Pinia store & interactive overlay', () => {
     expect(wrapper.vm.$refs.inlineExpandBtn).toBeTruthy();
     expect(document.activeElement).toBe(wrapper.vm.$refs.inlineExpandBtn);
     expect(document.activeElement).not.toBe(hudBtn);
+
+    wrapper.unmount();
+  });
+
+  it('Cosmic Web 2.0: renders AI magazine report (media/GIF lightbox, community hot comments, searchCount badge, whispering prompts, inline follow-up, and briefing-agent gating)', async () => {
+    const capturedFollowUp = [];
+    mockApi([
+      {
+        match: (u, m) => u === '/api/cosmic-web/clusters/c-nba/follow-up' && m === 'POST',
+        body: (_u, opts) => {
+          capturedFollowUp.push(JSON.parse(opts.body));
+          return {
+            question: '末节关键回合发生了什么？',
+            answer: '詹姆斯最后 12 秒突破分球助攻绝杀三分。',
+            bullets: ['最后 12 秒吸引双人包夹', '底角三分命中'],
+            media: [{ proxyUrl: '/api/cosmic-web/media-proxy?url=https%3A%2F%2Fimg.test%2Fdunk.gif', kind: 'gif', caption: '末节关键回合' }],
+            citations: [
+              { title: 'ESPN Box Score', url: 'https://espn.com/nba/game/1', sourceName: 'ESPN' },
+              { title: 'Bad Link', url: 'javascript:alert(1)' },
+            ],
+            searchCount: 2,
+            researched: true,
+          };
+        },
+      },
+    ]);
+
+    const webStore = useCosmicWebStore();
+    webStore.bootstrapped = true;
+    webStore.prefs.onboarded = true;
+    webStore.readerOpen = true;
+    webStore.readerClusterId = 'c-nba';
+    webStore.domains = [
+      { id: 'sports', labelZh: '体育与赛事', labelEn: 'Sports & NBA', colorToken: 'coral', unreadCount: 1, itemCount: 1, sources: [] },
+    ];
+    webStore.activeClusterDetail = {
+      id: 'c-nba',
+      domainId: 'sports',
+      colorToken: 'coral',
+      headline: '湖人逆转凯尔特人拿下焦点战',
+      primaryUrl: 'https://bbs.hupu.com/12345.html',
+      items: [{ id: 'i-nba', sourceName: '虎扑 NBA', title: '湖人逆转凯尔特人', url: 'https://bbs.hupu.com/12345.html' }],
+      media: [{ proxyUrl: '/api/cosmic-web/media-proxy?url=https%3A%2F%2Fimg.test%2Fplay.gif', kind: 'gif', caption: '绝杀回放', sourceName: 'ESPN' }],
+      communityComments: [{ platform: 'Hupu', author: '铁杆球迷', quote: '这球太硬了！', likes: 1280 }],
+    };
+    webStore.aiBriefData = {
+      tldr: '湖人末节 15-2 冲击波逆转凯尔特人。',
+      sections: [{ heading: '比赛复盘', body: '第四节防守强度拉满，外线连续命中。' }],
+      bullets: ['逆转分差 14 分', '关键抢断 2 次'],
+      impact: '湖人稳固西部前四席位。',
+      searchCount: 3,
+      researched: true,
+      citations: [{ title: 'ESPN 战报', url: 'https://espn.com/nba/recap/1', sourceName: 'ESPN' }],
+      followUps: ['末节关键回合发生了什么？'],
+    };
+
+    // Selected dispatch agent does NOT have cosmic_web_briefing capability -> follow-up must omit agentId (Auto)
+    const wrapper = mount(CosmosWebOverlay, {
+      props: {
+        visible: true,
+        agents: [
+          { id: 'chat-only', name: 'ChatOnly', online: true, capabilities: [] },
+          { id: 'brief-agent', name: 'Researcher', online: true, capabilities: ['cosmic_web_briefing'] },
+        ],
+        agentsLive: true,
+        agentToPlanet: { 'chat-only': 'mars', 'brief-agent': 'earth' },
+        isCompact: false,
+        webZoom: 3.4,
+        webLodTier: 3,
+      },
+      global: {
+        mocks: {
+          $t: (k, params) => String(cosmosZh[k] || k).replace(/\{(\w+)\}/g, (_, p) => params?.[p] ?? ''),
+        },
+      },
+    });
+    await flushPromises();
+
+    // Verified web-search badge shows real `searchCount`
+    expect(wrapper.find('.cw-verified-tag').text()).toContain('3');
+    // Pull quote, media GIF badge, authentic community comment, and whispering prompt all render
+    expect(wrapper.find('.cw-pull-quote').text()).toContain('15-2');
+    expect(wrapper.find('.cw-gif-badge').exists()).toBe(true);
+    expect(wrapper.find('.cw-comments-section').text()).toContain('这球太硬了');
+    expect(wrapper.find('.cw-zoom-readout').text()).toContain('3.4×');
+
+    // Clicking media opens lightbox
+    await wrapper.find('.cw-media-tile').trigger('click');
+    expect(webStore.lightboxMedia?.kind).toBe('gif');
+    expect(wrapper.find('.cw-lightbox').exists()).toBe(true);
+    webStore.closeLightbox();
+    await flushPromises();
+
+    // Clicking whispering prompt invokes inline AI follow-up with Auto routing (omitting non-capable agentId)
+    wrapper.vm.dispatchAgentId = 'chat-only';
+    await wrapper.find('.cw-whisper-btn').trigger('click');
+    await flushPromises();
+    expect(capturedFollowUp).toHaveLength(1);
+    expect('agentId' in capturedFollowUp[0]).toBe(false);
+    expect(webStore.followUpThread).toHaveLength(1);
+    // Unsafe javascript: citation is stripped
+    const citationHrefs = wrapper.findAll('.cw-followups-thread .cw-footnote-link').map((a) => a.attributes('href'));
+    expect(citationHrefs).toEqual(['https://espn.com/nba/game/1']);
+
+    // Zoom dock controls emit delta & reset
+    await wrapper.findAll('.cw-zoom-btn')[1].trigger('click');
+    expect(wrapper.emitted('web-zoom-delta')?.[0]?.[0]).toBeGreaterThan(0);
+    await wrapper.find('.cw-zoom-reset').trigger('click');
+    expect(wrapper.emitted('web-zoom-reset')).toBeTruthy();
+
+    wrapper.unmount();
+  });
+
+  it('Cosmic Web 2.0: 3-tier Semantic LOD unlocks more nodes on zoom and builds Tier-3 satellites', () => {
+    expect(getWebLodTier(1.0)).toBe(1);
+    expect(getWebLodTier(2.1)).toBe(2);
+    expect(getWebLodTier(3.4)).toBe(3);
+
+    const nodes = Array.from({ length: 40 }, (_, i) => ({
+      id: `cluster:c${i}`,
+      clusterId: `c${i}`,
+      domainId: i % 2 === 0 ? 'ai' : 'sports',
+      headline: `Story ${i} headline text`,
+      colorToken: i % 2 === 0 ? 'cyan' : 'coral',
+      heatScore: 100 - i,
+      itemCount: 3,
+      unread: true,
+      watchHit: i === 0,
+      sourceNames: ['虎扑 NBA', 'ESPN NBA'],
+      mediaPreview: i === 0 ? { proxyUrl: '/api/cosmic-web/media-proxy?url=https%3A%2F%2Fimg.test%2Fa.gif', kind: 'gif' } : null,
+      topCommentPreview: i === 0 ? { platform: 'Hupu', quote: '太强了', likes: 999 } : null,
+    }));
+    const payload = {
+      hubs: [
+        { id: 'hub:ai', domainId: 'ai', labelZh: 'AI', labelEn: 'AI', colorToken: 'cyan', count: 20 },
+        { id: 'hub:sports', domainId: 'sports', labelZh: '体育', labelEn: 'Sports', colorToken: 'coral', count: 20 },
+      ],
+      nodes,
+      edges: nodes.map((n) => ({ from: `hub:${n.domainId}`, to: n.id, kind: 'domain', weight: 0.8 })),
+    };
+
+    const graph = buildSemanticCosmicWebGraph(payload, null);
+    expect(WEB_ZOOM_LIMITS.max).toBeGreaterThanOrEqual(4.5);
+
+    const p1 = projectCosmicWeb(graph, 1280, 720, { realTime: 1, camRot: { x: 0, y: 0 }, parallax: { x: 0, y: 0 } }, { webZoom: 1.0 });
+    const lod1 = computeWebLodLayout(p1, { w: 1280, h: 720, webZoom: 1.0, drawerRightEdge: 800 });
+    expect(lod1.lodTier).toBe(1);
+    expect(lod1.satellites).toHaveLength(0);
+
+    const focus = findWebNodeFocusTarget(graph, { clusterId: 'c0' });
+    expect(focus?.targetZoom).toBeGreaterThanOrEqual(WEB_ZOOM_LIMITS.lod3);
+
+    const p3 = projectCosmicWeb(graph, 1280, 720, { realTime: 1, camRot: { x: 0, y: 0 }, parallax: { x: 0, y: 0 } }, {
+      webZoom: 3.4,
+      webPanX: focus.panX,
+      webPanY: focus.panY,
+    });
+    const lod3 = computeWebLodLayout(p3, {
+      w: 1280,
+      h: 720,
+      webZoom: 3.4,
+      drawerRightEdge: 800,
+      selectedClusterId: 'c0',
+    });
+    expect(lod3.lodTier).toBe(3);
+    expect(lod3.satellites.length).toBeGreaterThanOrEqual(2);
+    expect(lod3.satellites.some((s) => s.kind === 'media')).toBe(true);
+    expect(lod3.satellites.some((s) => s.kind === 'comment')).toBe(true);
+  });
+
+  it('Cosmic Web 2.0: Preferences Studio supports 9 color swatches, AI Topic Radar toggle without RSS, and radarScan trigger', async () => {
+    const radarCalls = [];
+    mockApi([
+      {
+        match: (u, m) => u === '/api/cosmic-web/domains/cust-f1/radar-scan' && m === 'POST',
+        body: (_u, opts) => {
+          radarCalls.push(JSON.parse(opts.body));
+          return {
+            added: 2,
+            domains: [{ id: 'cust-f1', name: 'F1 赛车', isCustom: true, aiRadar: true, itemCount: 2, unreadCount: 2 }],
+            graph: { hubs: [], nodes: [], edges: [] },
+            stats: { totalClusters: 2, unreadCount: 2 },
+          };
+        },
+      },
+      {
+        match: (u) => u.startsWith('/api/cosmic-web/feed'),
+        body: { clusters: [], total: 0, nextCursor: null },
+      },
+    ]);
+
+    const webStore = useCosmicWebStore();
+    webStore.bootstrapped = true;
+    webStore.prefs.onboarded = true;
+    webStore.prefs.customDomains = [
+      { id: 'cust-f1', name: 'F1 赛车', colorToken: 'coral', aiRadar: true, keywords: ['F1'], rssUrls: [] },
+    ];
+    webStore.prefsModalOpen = true;
+
+    const wrapper = mount(CosmosWebPrefsModal, {
+      props: {
+        agents: [{ id: 'a-cap', name: 'Capable', online: true, capabilities: ['cosmic_web_briefing'] }],
+        agentsLive: true,
+      },
+      global: { mocks: { $t: (k) => cosmosZh[k] || k } },
+    });
+    await flushPromises();
+
+    // Switch to Custom Constellations tab
+    wrapper.vm.activeTab = 'custom';
+    await flushPromises();
+
+    // All 9 color swatches rendered
+    expect(wrapper.findAll('.cw-swatch-btn')).toHaveLength(9);
+
+    // Can create a custom domain with name + aiRadar enabled and NO RSS / NO keywords
+    wrapper.vm.customForm.name = 'NBA 湖人';
+    wrapper.vm.customForm.aiRadar = true;
+    wrapper.vm.customForm.keywords = [];
+    wrapper.vm.customForm.rssUrls = [];
+    wrapper.vm.commitCustomDomain();
+    expect(wrapper.vm.customFormError).toBeNull();
+    expect(wrapper.vm.draft.customDomains.some((c) => c.name === 'NBA 湖人' && c.aiRadar === true)).toBe(true);
+
+    // Trigger AI Topic Radar scan on saved custom domain
+    await wrapper.vm.triggerRadarScan(webStore.prefs.customDomains[0]);
+    await flushPromises();
+    expect(radarCalls).toHaveLength(1);
 
     wrapper.unmount();
   });

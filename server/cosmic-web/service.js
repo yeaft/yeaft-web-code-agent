@@ -7,9 +7,13 @@ import { sendToWebClient } from '../ws-utils.js';
 import { BUILTIN_DOMAINS, BUILTIN_SOURCES } from './catalog.js';
 import { fetchSource } from './sources.js';
 import { safeFetch, validateExternalUrl } from './safe-fetch.js';
+import { setTimeout as delay } from 'node:timers/promises';
+import { cleanText, normalizeMedia, parseTimestamp } from './rss-parser.js';
+import { extractCommunityEnrichment, verifyStoredCommunityMedia } from './community-extractor.js';
+import { toProxyMediaUrl } from './media-proxy.js';
 import { extractCleanArticle } from './article-extractor.js';
-import { buildGraphProjection, CLUSTER_THRESHOLD, CLUSTER_WINDOW_MS, clusterSimilarity, computeHeatScore, extractTokens } from './clusterer.js';
-import { clearAllCosmicWebAiRequests, listCapableAgentsForUser, requestCosmicWebAi } from './ai-bridge.js';
+import { buildGraphProjection, canonicalizeUrl, CLUSTER_THRESHOLD, CLUSTER_WINDOW_MS, clusterSimilarity, computeHeatScore, extractTokens } from './clusterer.js';
+import { clearAllCosmicWebAiRequests, listCapableAgentsForUser, requestCosmicWebAi, validateCosmicWebAiResult } from './ai-bridge.js';
 
 const minute = 60_000;
 const refreshTtl = 5 * minute;
@@ -24,9 +28,15 @@ const object = value => value && Object.getPrototypeOf(value) === Object.prototy
 const trim = (value, max) => typeof value === 'string' ? value.trim().slice(0, max) : '';
 const defaults = () => ({ enabledDomainIds: [...defaultDomains], customDomains: [], watchKeywords: [], muteKeywords: [],
   disabledSources: [], preferredAgentId: '', defaultPerspective: 'balanced', onboarded: false, autoRefreshMinutes: 15 });
-const preferred = userId => ({ ...defaults(), ...db.loadUserPrefs(userId) });
+const preferred = userId => {
+  const prefs = { ...defaults(), ...db.loadUserPrefs(userId) };
+  return { ...prefs, customDomains: prefs.customDomains.map(d => ({ aiRadar: false, ...d })) };
+};
 const publicPrefs = ({ enabledDomainIds, ...prefs }) => ({ ...prefs, enabledDomains: enabledDomainIds });
-const sourceFromRow = row => ({ id: row.id, ownerUserId: row.owner_user_id, domainId: row.domain_id, name: row.name,
+const radarId = domainId => `radar-${domainId}`;
+const publicSourceId = row => row.kind === 'radar' ? radarId(row.domain_id) : row.id;
+const itemSourceId = row => row.source_kind === 'radar' ? radarId(row.domain_id) : row.source_id;
+const sourceFromRow = row => ({ id: publicSourceId(row), ownerUserId: row.owner_user_id, domainId: row.domain_id, name: row.name,
   url: row.url, kind: row.kind, lastAttemptAt: row.last_attempt_at });
 
 function matches(words, fields) { return words.some(word => fields.some(text => lower(text).includes(lower(word)))); }
@@ -34,8 +44,8 @@ function enabledIds(prefs) {
   return new Set([...prefs.enabledDomainIds, ...prefs.customDomains.filter(d => d.enabled).map(d => d.id)]);
 }
 function toItem(row) {
-  return { id: row.id, sourceId: row.source_id, domainId: row.domain_id, sourceName: row.source_name,
-    url: row.url, title: row.title, summaryExcerpt: row.summary_excerpt, publishedAt: row.published_at };
+  return { id: row.id, sourceId: itemSourceId(row), domainId: row.domain_id, sourceName: row.source_name,
+    url: row.url, title: row.title, summaryExcerpt: row.summary_excerpt, publishedAt: row.published_at, media: JSON.parse(row.media_json) };
 }
 
 export function ingestCosmicWebItems(source, items, now = Date.now()) {
@@ -81,7 +91,7 @@ function listClusters(userId, prefs, now, id) {
   for (const row of db.listVisibleItems(userId, [...grouped.keys()])) grouped.get(row.cluster_id).push(row);
   const enabled = enabledIds(prefs);
   return rows.flatMap(row => {
-    const articles = grouped.get(row.id).filter(item => !prefs.disabledSources.includes(item.source_id));
+    const articles = grouped.get(row.id).filter(item => !prefs.disabledSources.includes(itemSourceId(item)));
     if (!articles.length) return [];
     const items = articles.map(toItem);
     const keywords = JSON.parse(row.keywords_json);
@@ -114,6 +124,7 @@ export function createCosmicWebService({ fetcher = safeFetch, dnsLookup, now = D
   isUserActive = id => (CONFIG.skipAuth && id === 'dev-user') || userDb.isActive(id),
   requestAi = requestCosmicWebAi } = {}) {
   const inflight = new Map(), cooling = new Map(), articleInflight = new Map(), aiInflight = new Map();
+  const radarCooling = new Map(), radarActive = new Set(), enrichmentInflight = new Map();
   let controller = new AbortController(), timer, initialTimer, schedulerRun;
   let stopping = false;
   const ensureRunning = (signal = controller.signal) => {
@@ -142,7 +153,7 @@ export function createCosmicWebService({ fetcher = safeFetch, dnsLookup, now = D
   }
   function sourcesFor(userId, prefs, domain) {
     const enabled = enabledIds(prefs);
-    return [...db.listSources(), ...db.listSources(userId)].filter(s => enabled.has(s.domain_id) && (!domain || s.domain_id === domain) && !prefs.disabledSources.includes(s.id));
+    return [...db.listSources(), ...db.listSources(userId)].filter(s => enabled.has(s.domain_id) && (!domain || s.domain_id === domain) && !prefs.disabledSources.includes(publicSourceId(s)));
   }
   function sourcesVisibleToClient(userId, source) {
     const prefs = preferred(userId);
@@ -157,6 +168,7 @@ export function createCosmicWebService({ fetcher = safeFetch, dnsLookup, now = D
     }
   }
   function refreshSource(row, force) {
+    if (row.kind === 'radar') return Promise.resolve({ skipped: true });
     const s = sourceFromRow(row);
     if (inflight.has(s.id)) return inflight.get(s.id);
     if (!force && s.lastAttemptAt != null && now() - s.lastAttemptAt < refreshTtl) return Promise.resolve({ skipped: true });
@@ -186,11 +198,67 @@ export function createCosmicWebService({ fetcher = safeFetch, dnsLookup, now = D
     try { seed(); void refreshRows(sourcesFor(userId, prefs)).catch(err => { if (err.status !== 503) console.error('[CosmicWeb] Refresh failed:', err.message); }); }
     catch (err) { console.error('[CosmicWeb] Refresh failed:', err.message); }
   }
-  function cluster(userId, id) {
+  function visibleCluster(userId, id) {
     const value = listClusters(userId, preferred(userId), now(), id)[0];
     if (!value) throw error(404, 'Cluster not found');
     return value;
   }
+  const noEnrichment = () => ({ media: [], communityComments: [] });
+  const enrichmentSignature = c => hash(c.items.map(item => item.id));
+  function cachedEnrichment(c, signature = enrichmentSignature(c)) {
+    const cached = db.getEnrichmentCache(c.id, now());
+    return cached?.signature === signature ? cached.value : null;
+  }
+  function enrichment(c, signal) {
+    const signature = enrichmentSignature(c);
+    const cached = cachedEnrichment(c, signature);
+    if (cached) return Promise.resolve(cached);
+    const key = hash(c.id, signature);
+    if (enrichmentInflight.has(key)) return enrichmentInflight.get(key);
+    // Prevent a burst of cluster requests from monopolizing the outbound queue.
+    if (enrichmentInflight.size >= 6) return Promise.resolve(noEnrichment());
+    const task = extractCommunityEnrichment(c.items, { fetcher: (url, options) => limit(() => fetcher(url, options)), dnsLookup, signal })
+      .then(value => {
+        if (!signal.aborted) {
+          db.setEnrichmentCache(c.id, { signature, value }, now() + 120 * minute);
+        }
+        return value;
+      }).catch(() => noEnrichment()).finally(() => {
+        if (enrichmentInflight.get(key) === task) enrichmentInflight.delete(key);
+      });
+    enrichmentInflight.set(key, task);
+    return task;
+  }
+  async function cluster(userId, id) {
+    const { signal } = controller;
+    ensureRunning(signal);
+    ensureActive(userId);
+    const c = visibleCluster(userId, id);
+    const value = await enrichment(c, signal);
+    ensureRunning(signal);
+    ensureActive(userId);
+    const current = visibleCluster(userId, id);
+    return { ...current, ...(enrichmentSignature(c) === enrichmentSignature(current) ? value : noEnrichment()) };
+  }
+  async function quick(task, fallback) {
+    const timer = new AbortController();
+    try { return await Promise.race([task.catch(() => fallback), delay(350, fallback, { signal: timer.signal })]); }
+    finally { timer.abort(); }
+  }
+
+  async function briefingEnrichment(c, signal, skipArticleFetch = false) {
+    const cached = cachedEnrichment(c);
+    if (cached) return cached;
+    const fallback = noEnrichment();
+    if (!skipArticleFetch) {
+      const complete = await quick(enrichment(c, signal), null);
+      if (complete) return complete;
+    }
+    if (!c.items.some(item => item.media.length)) return fallback;
+    const verificationSignal = AbortSignal.any([signal, AbortSignal.timeout(150)]);
+    return { ...fallback, media: await verifyStoredCommunityMedia(c.items, { dnsLookup, signal: verificationSignal }) };
+  }
+
   function filtered(userId, query = {}, background = true) {
     query ??= {};
     const prefs = preferred(userId);
@@ -225,7 +293,7 @@ export function createCosmicWebService({ fetcher = safeFetch, dnsLookup, now = D
     ensureRunning(signal);
     ensureActive(userId);
     const selection = typeof options === 'string' ? { itemId: options } : options;
-    const item = selectItem(cluster(userId, id), selection);
+    const item = selectItem(visibleCluster(userId, id), selection);
     const { force } = selection;
     const toArticle = result => ({ ...result, sourceUrl: item.url, contentMd: result.markdown });
     const cached = db.getArticleCache(userId, item.id, now());
@@ -271,7 +339,7 @@ export function createCosmicWebService({ fetcher = safeFetch, dnsLookup, now = D
     ensureActive(userId);
     const { perspective, language, explicitAgentId, agent } = options;
     // Version the rendering contract too: old cached Markdown may contain autolinks.
-    const key = hash(3, mode, perspective, language, explicitAgentId, payload);
+    const key = hash(4, mode, perspective, language, explicitAgentId, payload);
     const cached = db.getAiCache(userId, key, now());
     if (cached && body.force !== true) return { ...cached, cached: true };
     if (!agent) throw error(503, 'No capable Agent is online');
@@ -281,7 +349,12 @@ export function createCosmicWebService({ fetcher = safeFetch, dnsLookup, now = D
     const task = Promise.resolve(requestAi({ userId, userRole, agentId, mode, perspective, language, payload, signal })).then(result => {
       ensureRunning(signal);
       ensureActive(userId);
+      if (!validateCosmicWebAiResult(result, mode)) throw error(502, 'Agent returned an invalid briefing');
       const enriched = { ...result, agentId, agentName: agent.name, perspective, generatedAt: now() };
+      if (mode === 'brief' || mode === 'synthesize' || mode === 'follow_up') {
+        enriched.media = (result.media?.length ? result.media : payload.media ?? []).map(m => ({ ...m, proxyUrl: toProxyMediaUrl(m.url) }));
+        if (mode !== 'follow_up') enriched.communityHighlights = result.communityHighlights?.length ? result.communityHighlights : payload.communityComments ?? [];
+      }
       db.setAiCache(userId, key, enriched, now() + 6 * 60 * minute);
       return { ...enriched, cached: false };
     }).finally(() => { if (aiInflight.get(scope) === task) aiInflight.delete(scope); });
@@ -300,12 +373,12 @@ export function createCosmicWebService({ fetcher = safeFetch, dnsLookup, now = D
     const prefs = { ...previous };
     const domainPatch = patch.enabledDomains ?? patch.enabledDomainIds;
     if (domainPatch !== undefined) {
-      if (!Array.isArray(domainPatch) || domainPatch.length > 6 || domainPatch.some(id => !domainIds.has(id))) fail('Invalid enabled domains');
+      if (!Array.isArray(domainPatch) || domainPatch.length > BUILTIN_DOMAINS.length || domainPatch.some(id => !domainIds.has(id))) fail('Invalid enabled domains');
       prefs.enabledDomainIds = [...new Set(domainPatch)];
     }
     const simple = {
       onboarded: value => typeof value === 'boolean',
-      disabledSources: value => Array.isArray(value) && value.length <= 43 && value.every(id => typeof id === 'string' && /^[\w-]{1,80}$/.test(id)),
+      disabledSources: value => Array.isArray(value) && value.length <= BUILTIN_SOURCES.length + 20 && value.every(id => typeof id === 'string' && /^[\w-]{1,80}$/.test(id)),
       preferredAgentId: value => typeof value === 'string' && value.length <= 128,
       defaultPerspective: value => ['balanced', 'engineering', 'product', 'investing'].includes(value),
       autoRefreshMinutes: value => Number.isInteger(value) && value >= 0 && value <= 120,
@@ -327,6 +400,7 @@ export function createCosmicWebService({ fetcher = safeFetch, dnsLookup, now = D
         const name = trim(d.name ?? d.nameZh ?? d.nameEn, 80);
         if (typeof id !== 'string' || !/^[a-zA-Z0-9_-]{1,64}$/.test(id) || domainIds.has(id) || ids.has(id) || !name) fail('Invalid or duplicate custom domain');
         if (d.enabled != null && typeof d.enabled !== 'boolean') fail('Invalid custom domain enabled state');
+        if (Object.hasOwn(d, 'aiRadar') && typeof d.aiRadar !== 'boolean') fail('Invalid custom domain aiRadar state');
         ids.add(id);
         const urls = d.rssUrls ?? [];
         if (!Array.isArray(urls) || (count += urls.length) > 20) fail('At most 20 custom RSS URLs are allowed');
@@ -339,7 +413,7 @@ export function createCosmicWebService({ fetcher = safeFetch, dnsLookup, now = D
           return url.href;
         });
         return { id, name, nameZh: trim(d.nameZh, 80) || name, nameEn: trim(d.nameEn, 80) || name,
-          colorToken: colors.has(d.colorToken) ? d.colorToken : 'cyan', icon: trim(d.icon, 8) || '✧', enabled: d.enabled !== false,
+          colorToken: colors.has(d.colorToken) ? d.colorToken : 'cyan', icon: trim(d.icon, 8) || '✧', enabled: d.enabled !== false, aiRadar: d.aiRadar === true,
           keywords: keywords(d.keywords ?? d.matchKeywords ?? [], 'custom domain keywords'), rssUrls: [...new Set(rssUrls)] };
       });
       await Promise.all([...toValidate].map(async url => {
@@ -357,6 +431,7 @@ export function createCosmicWebService({ fetcher = safeFetch, dnsLookup, now = D
       db.saveUserPrefs(userId, prefs, now());
       if (Object.hasOwn(patch, 'customDomains')) {
         db.deactivateSources(userId);
+        for (const d of prefs.customDomains.filter(d => d.enabled)) db.activateRadarSource(radarSource(userId, d));
         for (const d of prefs.customDomains.filter(d => d.enabled)) for (const url of d.rssUrls) {
           db.upsertSource({ id: `rss-${hash(userId, d.id, url)}`, ownerUserId: userId, url, domainId: d.id, name: d.name, kind: 'rss' });
         }
@@ -366,6 +441,13 @@ export function createCosmicWebService({ fetcher = safeFetch, dnsLookup, now = D
     const clusters = filtered(userId, {}, false);
     return { ...publicPrefs(prefs), ...metadata(userId, prefs, clusters), graph: graphProjection(prefs, clusters) };
   }
+
+  // cw_sources.id is globally unique, so keep storage keys owner-scoped while exposing radar-<domain> over the API.
+  function radarSource(userId, domain) {
+    return { id: `radar-${hash(userId, domain.id)}`, ownerUserId: userId, domainId: domain.id, name: domain.name,
+      url: '', kind: 'radar' };
+  }
+  const briefKey = (id, itemId, agentId) => hash(4, 'brief-context', id, itemId, agentId);
 
   function stats(userId, prefs, rows) {
     const states = db.listUserClusterStates(userId);
@@ -427,12 +509,12 @@ export function createCosmicWebService({ fetcher = safeFetch, dnsLookup, now = D
     initialTimer = timer = schedulerRun = undefined;
     controller.abort();
     for (const job of queue.splice(0)) job.reject(error(503, 'Cosmic Web is stopping'));
-    inflight.clear(); articleInflight.clear(); aiInflight.clear(); cooling.clear();
+    inflight.clear(); articleInflight.clear(); aiInflight.clear(); cooling.clear(); enrichmentInflight.clear(); radarCooling.clear(); radarActive.clear();
   }
 
   function enrichedDomains(userId, prefs, clusters) {
     const privateSources = db.listSources(userId);
-    const dbSources = new Map([...db.listSources(), ...privateSources].map(s => [s.id, s]));
+    const dbSources = new Map([...db.listSources(), ...privateSources].map(s => [publicSourceId(s), s]));
     const countsByDomain = new Map();
     for (const c of clusters) {
       const seen = new Set([c.domainId, ...c.relatedDomains]);
@@ -510,22 +592,87 @@ export function createCosmicWebService({ fetcher = safeFetch, dnsLookup, now = D
       const { signal } = controller;
       ensureRunning(signal);
       ensureActive(userId);
-      let options = briefingOptions(userId, userRole, body);
-      const c = cluster(userId, id);
+      const options = briefingOptions(userId, userRole, body);
+      const c = visibleCluster(userId, id);
       const mode = body.mode ?? 'brief';
       if (!['brief', 'synthesize'].includes(mode)) fail('Invalid briefing mode');
       const item = selectItem(c, body);
-      let content = db.getArticleCache(userId, item.id, now());
-      if (!content && body.skipArticleFetch !== true) {
-        try { content = await article(userId, id, { itemId: item.id }); }
-        catch { /* Article unavailable; still brief from the stored headline and excerpts. */ }
-        // Availability may have changed while the article was being fetched.
+      const cached = db.getArticleCache(userId, item.id, now());
+      const articleTask = cached || body.skipArticleFetch === true ? Promise.resolve(cached) : article(userId, id, { itemId: item.id });
+      const [content, context] = await Promise.all([quick(articleTask, cached), briefingEnrichment(c, signal, body.skipArticleFetch === true)]);
+      const result = await ai(userId, userRole, mode, body, { headline: item.title, sourceUrl: item.url, summaryExcerpt: item.summaryExcerpt,
+        research: body.research !== false, articleMarkdown: content?.markdown?.slice(0, 12_000), quality: content?.quality,
+        sources: c.items.slice(0, 12), ...context }, signal, options);
+      ensureRunning(signal);
+      ensureActive(userId);
+      db.setAiCache(userId, briefKey(id, item.id, result.agentId), result.tldr, now() + 6 * 60 * minute);
+      return result;
+    },
+    async followUp(userId, userRole, id, body = {}) {
+      const { signal } = controller;
+      ensureRunning(signal);
+      ensureActive(userId);
+      const options = briefingOptions(userId, userRole, body);
+      if (typeof body.question !== 'string' || !body.question.trim() || body.question.length > 500) fail('Question must be 1–500 characters');
+      const c = visibleCluster(userId, id);
+      const item = selectItem(c, body);
+      const context = await briefingEnrichment(c, signal);
+      const briefContext = options.agent && db.getAiCache(userId, briefKey(id, item.id, options.agent.id), now());
+      return ai(userId, userRole, 'follow_up', body, { ...storyContext(c), headline: item.title, sourceUrl: item.url,
+        question: body.question.trim(), research: body.research !== false, briefContext: briefContext ?? undefined,
+        sources: c.items.slice(0, 12), ...context }, signal, options);
+    },
+    async radarScan(userId, userRole, domainId, body = {}) {
+      const { signal } = controller;
+      ensureRunning(signal);
+      ensureActive(userId);
+      const prefs = preferred(userId);
+      const domain = prefs.customDomains.find(d => d.id === domainId);
+      if (!domain) throw error(404, 'Custom domain not found');
+      const options = briefingOptions(userId, userRole, body, prefs);
+      if (!options.agent) throw error(503, 'No capable Agent is online');
+      const time = now();
+      for (const [id, expires] of radarCooling) if (expires <= time) radarCooling.delete(id);
+      if (radarCooling.has(userId) || radarActive.has(userId)) throw error(429, 'Topic Radar is limited to once every 60 seconds');
+      radarCooling.set(userId, time + minute);
+      radarActive.add(userId);
+      try {
+        const result = await requestAi({ userId, userRole, agentId: options.agent.id, mode: 'topic_radar', perspective: options.perspective,
+          language: options.language, payload: { topic: domain.name, topicName: domain.name, keywords: domain.keywords, research: true }, signal });
+        if (!validateCosmicWebAiResult(result, 'topic_radar')) throw error(502, 'Agent returned an invalid radar result');
         ensureRunning(signal);
         ensureActive(userId);
-        options = briefingOptions(userId, userRole, body);
-      }
-      return ai(userId, userRole, mode, body, { headline: item.title, sourceUrl: item.url,
-        articleMarkdown: content?.markdown?.slice(0, 12_000), quality: content?.quality, sources: c.items.slice(0, 12) }, signal, options);
+        const seen = new Set();
+        const items = (await Promise.all(result.items.map(async row => {
+          const url = canonicalizeUrl(row.url), title = cleanText(row.title).slice(0, 500);
+          if (!url || !title || seen.has(url)) return null;
+          seen.add(url);
+          // DNS checks use the same global concurrency bound as source fetching.
+          try { await limit(() => validateExternalUrl(url, { dnsLookup, signal, timeoutMs: 5000 })); }
+          catch { return null; }
+          const media = normalizeMedia([row.mediaUrl]);
+          return { url, title, sourceName: cleanText(row.sourceName).slice(0, 150), summaryExcerpt: cleanText(row.summaryExcerpt).slice(0, 1000),
+            publishedAt: Math.min(now(), parseTimestamp(row.publishedAt) ?? now()), media };
+        }))).filter(Boolean);
+        ensureRunning(signal);
+        ensureActive(userId);
+        const current = preferred(userId);
+        const latest = current.customDomains.find(d => d.id === domainId);
+        if (!latest || latest.name !== domain.name || JSON.stringify(latest.keywords) !== JSON.stringify(domain.keywords)) {
+          throw error(409, 'Custom domain changed during scan');
+        }
+        const source = radarSource(userId, latest);
+        const scanTime = now();
+        const retained = items.filter(item => item.publishedAt >= scanTime - db.RETENTION_MS);
+        const added = retained.length ? ingestCosmicWebItems(source, retained, scanTime) : 0;
+        if (retained.length) {
+          db.recordSourceRefresh(source.id, userId, scanTime);
+          if (!latest.enabled) db.disableRadarSource(source.id, userId);
+        }
+        if (added) update(source, signal);
+        const clusters = filtered(userId, {}, false);
+        return { added, items: retained.map(item => ({ ...item, sourceId: radarId(domainId), domainId })), ...metadata(userId, current, clusters), graph: graphProjection(current, clusters) };
+      } finally { if (!signal.aborted) radarActive.delete(userId); }
     },
     async dailyBriefing(userId, userRole, body = {}) {
       const { signal } = controller;

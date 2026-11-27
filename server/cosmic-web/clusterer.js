@@ -1,4 +1,5 @@
 import { resolveHttpUrl } from './rss-parser.js';
+import { toProxyMediaUrl } from './media-proxy.js';
 
 export const CLUSTER_WINDOW_MS = 48 * 60 * 60 * 1000;
 export const CLUSTER_THRESHOLD = 0.42;
@@ -48,35 +49,47 @@ export function buildGraphProjection({ prefs = {}, clusters, domains, userStates
   const active = new Map([...domains, ...(prefs.customDomains ?? [])].filter(d => enabled.has(d.id) || custom.has(d.id)).map(d => [d.id, d]));
   const hubs = [...active.values()].map(d => ({ ...d, domainId: d.id, id: `hub:${d.id}` }));
   const buckets = new Map([...active.keys()].map(id => [id, []]));
-  for (const c of [...clusters].sort((a, b) => b.heatScore - a.heatScore || b.publishedAt - a.publishedAt || a.id.localeCompare(b.id))) {
+  const rank = (a, b) => Number(!!b.watchHit) - Number(!!a.watchHit) || b.heatScore - a.heatScore || b.publishedAt - a.publishedAt || a.id.localeCompare(b.id);
+  for (const c of [...clusters].sort(rank)) {
     const primary = [c.domainId, ...(c.relatedDomains ?? [])].find(id => active.has(id));
     if (primary) buckets.get(primary).push({ c, primary });
   }
   const selected = [];
-  for (let i = 0; selected.length < 72; i++) {
+  for (let i = 0; selected.length < 180; i++) {
     const before = selected.length;
     for (const bucket of buckets.values()) {
       if (bucket[i]) selected.push(bucket[i]);
-      if (selected.length === 72) break;
+      if (selected.length === 180) break;
     }
     if (before === selected.length) break;
   }
+  const tier = new Map([...selected].sort((a, b) => rank(a.c, b.c)).map(({ c }, i) => [c.id, i < 14 ? 1 : i < 80 ? 2 : 3]));
   const nodes = [], edges = [];
   function edge(node, domainId, kind) {
     edges.push({ id: `${node.id}->hub:${domainId}`, source: node.id, target: `hub:${domainId}`, kind });
   }
   for (const { c, primary } of selected) {
     const state = userStates instanceof Map ? userStates.get(c.id) : userStates[c.id];
+    const media = (c.items ?? []).flatMap(item => item.media ?? []).find(m => toProxyMediaUrl(m.url));
     const node = { id: `cluster:${c.id}`, clusterId: c.id, domainId: primary, headline: c.headline,
-      colorToken: active.get(primary).colorToken, heatScore: c.heatScore, itemCount: c.itemCount,
+      colorToken: active.get(primary).colorToken, heatScore: c.heatScore, itemCount: c.itemCount ?? c.items?.length ?? 0,
+      lodTier: tier.get(c.id), summaryExcerpt: String(c.summaryExcerpt ?? '').trim().slice(0, 180).trimEnd(),
+      mediaPreview: media ? { proxyUrl: toProxyMediaUrl(media.url), kind: media.kind === 'gif' ? 'gif' : 'image' } : null,
       unread: state?.unread ?? c.unread ?? true, bookmarked: state?.bookmarked ?? c.bookmarked ?? false,
       watchHit: c.watchHit ?? false, publishedAt: c.publishedAt, sourceNames: c.sourceNames ?? [] };
     nodes.push(node);
     edge(node, primary, 'domain');
     const related = new Set([c.domainId, ...(c.relatedDomains ?? [])]);
+    const linked = [];
     for (const other of selected) {
-      if (other.primary !== primary && clusterSimilarity(c.keywords ?? [], other.c.keywords ?? []) >= CLUSTER_THRESHOLD) related.add(other.primary);
+      if (other.c.id === c.id) continue;
+      const similarity = clusterSimilarity(c.keywords ?? [], other.c.keywords ?? []);
+      if (similarity >= CLUSTER_THRESHOLD) {
+        linked.push({ c: other.c, similarity });
+        if (other.primary !== primary) related.add(other.primary);
+      }
     }
+    node.relatedClusterIds = linked.sort((a, b) => b.similarity - a.similarity || rank(a.c, b.c)).slice(0, 4).map(entry => entry.c.id);
     for (const id of related) if (id !== primary && active.has(id)) edge(node, id, 'cross');
   }
   return { hubs, nodes, edges };

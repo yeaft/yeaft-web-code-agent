@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { agents } from '../context.js';
 import { CONFIG } from '../config.js';
 import { sendToAgent } from '../ws-utils.js';
+import { resolveHttpUrl } from './rss-parser.js';
 
 const pending = new Map();
 const rate = new Map();
@@ -41,7 +42,7 @@ export async function requestCosmicWebAi({ userId, userRole, agentId, mode, pers
   const requestId = randomUUID();
   const key = keyFor(agentId, requestId);
   return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => settle(key, fail(504, 'Agent briefing timed out')), 45_000);
+    const timer = setTimeout(() => settle(key, fail(504, 'Agent briefing timed out')), 75_000);
     timer.unref();
     const onAbort = () => settle(key, fail(503, 'Cosmic Web is stopping'));
     const entry = { userId, userRole, agentId, agent, mode, resolve, reject, timer, signal, onAbort };
@@ -70,16 +71,42 @@ function hasUnsafeMarkdown(markdown) {
   for (const [token] of markdown.matchAll(/\\[\\\[\]]|[\[\]]/g)) if (token.length === 1) return true;
   return false;
 }
-function validResult(result, mode) {
-  if (!object(result) || !text(result.fullMarkdown, 12_000) || hasUnsafeMarkdown(result.fullMarkdown)) return false;
+const optional = (value, test) => value === undefined || test(value);
+const count = value => Number.isSafeInteger(value) && value >= 0;
+const url = value => !!resolveHttpUrl(value);
+const media = value => only(value, ['url', 'kind', 'caption', 'sourceName']) && url(value.url) &&
+  ['image', 'gif'].includes(value.kind) && optional(value.caption, v => text(v, 500)) && optional(value.sourceName, v => text(v, 150));
+const citation = value => only(value, ['title', 'url', 'sourceName']) && url(value.url) &&
+  text(value.title, 500) && optional(value.sourceName, v => text(v, 150));
+const highlight = value => only(value, ['platform', 'author', 'quote', 'likes', 'sourceUrl']) &&
+  text(value.platform, 80) && text(value.author, 150) && text(value.quote, 1000) &&
+  optional(value.likes, count) && optional(value.sourceUrl, url);
+const radarItem = value => only(value, ['title', 'url', 'sourceName', 'summaryExcerpt', 'publishedAt', 'mediaUrl']) &&
+  text(value.title, 500) && url(value.url) && text(value.sourceName, 150) &&
+  typeof value.summaryExcerpt === 'string' && value.summaryExcerpt.length <= 1000 &&
+  optional(value.publishedAt, v => count(v) || (text(v, 64) && Number.isFinite(Date.parse(v)))) && optional(value.mediaUrl, url);
+const answers = result => list(result.media, 0, 6, media) && list(result.citations, 0, 8, citation) &&
+  list(result.followUps, 0, 3, question) && typeof result.researched === 'boolean' && count(result.searchCount);
+
+export function validateCosmicWebAiResult(result, mode) {
+  if (!object(result)) return false;
+  if (mode === 'topic_radar') return !!(only(result, ['items', 'searchCount']) && list(result.items, 0, 20, radarItem) && count(result.searchCount));
+  if (mode === 'follow_up') return !!(only(result, ['question', 'answer', 'bullets', 'media', 'citations', 'followUps', 'researched', 'searchCount']) &&
+    text(result.question, 500) && text(result.answer, 6000) && !hasUnsafeMarkdown(result.answer) && list(result.bullets, 0, 6, bullet) && answers(result));
+  if (!text(result.fullMarkdown, mode === 'daily_briefing' ? 12_000 : 16_000) || hasUnsafeMarkdown(result.fullMarkdown)) return false;
   if (mode === 'daily_briefing') {
     return only(result, ['headline', 'overview', 'sections', 'signalsToWatch', 'followUps', 'fullMarkdown']) &&
       text(result.headline, 250) && text(result.overview, 1500) &&
       list(result.sections, 0, 8, s => only(s, ['domain', 'bullets']) && text(s.domain, 150) && list(s.bullets, 1, 5, bullet)) &&
       list(result.signalsToWatch, 0, 8, bullet) && list(result.followUps, 0, 5, question);
   }
-  return only(result, ['tldr', 'bullets', 'impact', 'followUps', 'fullMarkdown']) &&
-    text(result.tldr, 500) && text(result.impact, 1000) && list(result.bullets, 3, 5, bullet) && list(result.followUps, 2, 3, question);
+  if (!['brief', 'synthesize'].includes(mode) || !text(result.tldr, 500) || !text(result.impact, 1000)) return false;
+  if (only(result, ['tldr', 'bullets', 'impact', 'followUps', 'fullMarkdown'])) {
+    return list(result.bullets, 3, 5, bullet) && list(result.followUps, 2, 3, question);
+  }
+  return only(result, ['tldr', 'sections', 'bullets', 'impact', 'media', 'communityHighlights', 'citations', 'followUps', 'researched', 'searchCount', 'fullMarkdown']) &&
+    list(result.sections, 1, 6, section => only(section, ['heading', 'body']) && text(section.heading, 250) && text(section.body, 4000)) &&
+    list(result.bullets, 2, 6, bullet) && list(result.communityHighlights, 0, 6, highlight) && answers(result);
 }
 
 export function handleCosmicWebAiResponse(agentId, msg) {
@@ -89,7 +116,7 @@ export function handleCosmicWebAiResponse(agentId, msg) {
   if (!entry || agents.get(agentId) !== entry.agent || !owns(entry.agent, entry.userId, entry.userRole) || !hasCapability(entry.agent)) return false;
   if (msg.ok === false || msg.error != null) return settle(key, fail(502, 'Agent could not generate a briefing'));
   const result = msg.result ?? msg.response;
-  if (msg.ok !== true || !validResult(result, entry.mode)) {
+  if (msg.ok !== true || !validateCosmicWebAiResult(result, entry.mode)) {
     return settle(key, fail(502, 'Agent returned an invalid briefing'));
   }
   return settle(key, null, result);

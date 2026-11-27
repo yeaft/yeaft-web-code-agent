@@ -10,6 +10,8 @@ import supertest from 'supertest';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as db from '../../server/db/cosmic-web-db.js';
 import { safeFetch, validateExternalUrl } from '../../server/cosmic-web/safe-fetch.js';
+import { createMediaProxy, toProxyMediaUrl } from '../../server/cosmic-web/media-proxy.js';
+import { extractCommunityEnrichment } from '../../server/cosmic-web/community-extractor.js';
 import { parseFeedXml, resolveHttpUrl } from '../../server/cosmic-web/rss-parser.js';
 import { extractCleanArticle } from '../../server/cosmic-web/article-extractor.js';
 import { BUILTIN_DOMAINS, BUILTIN_SOURCES } from '../../server/cosmic-web/catalog.js';
@@ -17,7 +19,7 @@ import { fetchSource } from '../../server/cosmic-web/sources.js';
 import { buildGraphProjection, canonicalizeUrl, clusterSimilarity, computeHeatScore, extractTokens } from '../../server/cosmic-web/clusterer.js';
 import { createCosmicWebService, ingestCosmicWebItems, startCosmicWebScheduler, stopCosmicWebScheduler } from '../../server/cosmic-web/service.js';
 import { clearAllCosmicWebAiRequests, clearCosmicWebAiRequestsForAgent, handleCosmicWebAiResponse,
-  listCapableAgentsForUser, requestCosmicWebAi } from '../../server/cosmic-web/ai-bridge.js';
+  listCapableAgentsForUser, requestCosmicWebAi, validateCosmicWebAiResult } from '../../server/cosmic-web/ai-bridge.js';
 import * as encryption from '../../server/encryption.js';
 import { agents, webClients } from '../../server/context.js';
 vi.mock('../../server/config.js', async importOriginal => {
@@ -134,11 +136,11 @@ describe('safe outbound fetch', () => {
 describe('feed parsing and source adapters', () => {
   it('parses RSS, Atom and RDF without interpreting XML directives', () => {
     expect(parseFeedXml(rss, 'https://example.com/feed')).toEqual([{ title: '中国 AI & Models', url: 'https://example.com/news?utm_source=rss&x=1',
-      publishedAt: NOW - 3 * HOUR, summaryExcerpt: '你好 & English 🚀' }]);
+      publishedAt: NOW - 3 * HOUR, summaryExcerpt: '你好 & English 🚀', media: [] }]);
     const atom = `<feed xmlns="http://www.w3.org/2005/Atom" xml:base="https://atom.example/">
       <entry><title>测试 &quot;English&quot;</title><link rel="self" href="internal"/><link rel="alternate" href="story"/>
       <updated>2026-11-27T20:00:00+08:00</updated><summary type="html">&lt;b&gt;概要&lt;/b&gt; &amp; news</summary></entry></feed>`;
-    expect(parseFeedXml(atom, 'https://example.com')[0]).toEqual({ title: '测试 "English"', url: 'https://atom.example/story', publishedAt: NOW, summaryExcerpt: '概要 & news' });
+    expect(parseFeedXml(atom, 'https://example.com')[0]).toEqual({ title: '测试 "English"', url: 'https://atom.example/story', publishedAt: NOW, summaryExcerpt: '概要 & news', media: [] });
     expect(parseFeedXml('<rdf:RDF><item><title>A</title><link>https://example.com/</link><dc:date>2026-11-27T12:00:00Z</dc:date></item></rdf:RDF>')[0].publishedAt).toBe(NOW);
     expect(parseFeedXml('<feed><entry><title>X</title><link href="javascript:alert(1)"/></entry></feed>')).toEqual([]);
   });
@@ -175,7 +177,7 @@ describe('feed parsing and source adapters', () => {
     expect(performance.now() - start).toBeLessThan(100);
   });
   it('normalizes fetched feed, signed CLS and embedded Baidu data', async () => {
-    expect(BUILTIN_SOURCES).toHaveLength(23);
+    expect(new Set(BUILTIN_SOURCES.map(s => s.id)).size).toBe(51);
     const fetcher = vi.fn(async url => {
       if (url.includes('cls.cn')) {
         const p = new URL(url).searchParams;
@@ -232,10 +234,10 @@ describe('clustering, isolation and retention', () => {
   });
   it('balances graph hubs and adds cross-edges for shared keywords', () => {
     const common = { headline: 'Story', itemCount: 1, publishedAt: NOW, keywords: ['common'] };
-    const clusters = [...Array.from({ length: 90 }, (_, i) => ({ ...common, id: `${i}`, domainId: 'ai', heatScore: i + 3 })),
+    const clusters = [...Array.from({ length: 190 }, (_, i) => ({ ...common, id: `${i}`, domainId: 'ai', heatScore: i + 3 })),
       { ...common, id: 'tech', domainId: 'tech', heatScore: 1 }, { ...common, id: 'hot', domainId: 'hot', heatScore: 100 }];
     const graph = buildGraphProjection({ prefs: { enabledDomainIds: ['ai', 'tech'] }, clusters, domains: BUILTIN_DOMAINS });
-    expect(graph.hubs.map(h => h.domainId)).toEqual(['ai', 'tech']); expect(graph.nodes).toHaveLength(72);
+    expect(graph.hubs.map(h => h.domainId)).toEqual(['ai', 'tech']); expect(graph.nodes).toHaveLength(180);
     expect(graph.nodes[1].id).toBe('cluster:tech'); expect(graph.edges).toContainEqual(expect.objectContaining({ kind: 'cross', target: 'hub:tech' }));
   });
   it('refreshes private RSS only for its owner, isolates same-story state and disallows cross-scope writes', async () => {
@@ -245,8 +247,8 @@ describe('clustering, isolation and retention', () => {
     await svc.savePreferences('bob', { enabledDomainIds: [], customDomains: [{ id: 'mine', name: 'Same id' }] });
     expect((await svc.refresh('alice')).added).toBe(1); expect((await svc.refresh('bob')).added).toBe(0);
     const id = svc.feed('alice').clusters[0].id;
-    const itemId = svc.cluster('alice', id).items[0].id;
-    expect(svc.feed('bob').total).toBe(0); expect(() => svc.cluster('bob', id)).toThrow('Cluster not found');
+    const itemId = db.listVisibleItems('alice', [id])[0].id;
+    expect(svc.feed('bob').total).toBe(0); await expect(svc.cluster('bob', id)).rejects.toThrow('Cluster not found');
     expect(() => svc.setClusterState('bob', id, { bookmarked: true })).toThrow('Cluster not found');
     await expect(svc.article('bob', id, itemId)).rejects.toThrow('Cluster not found');
     expect(svc.setClusterState('alice', id, { bookmarked: true, unread: false })).toEqual({ bookmarked: true, unread: false, muted: false });
@@ -276,7 +278,7 @@ describe('clustering, isolation and retention', () => {
     db.saveUserClusterState('alice', id, { bookmarked: true }, NOW);
     const itemId = db.listVisibleItems('alice', [id])[0].id;
     db.setArticleCache('alice', itemId, {}, NOW + 1); db.setAiCache('alice', 'old', {}, NOW + 1);
-    expect(db.pruneCosmicWebDb(NOW + db.RETENTION_MS + 1)).toEqual({ items: 2, clusters: 2, articles: 1, ai: 1 });
+    expect(db.pruneCosmicWebDb(NOW + db.RETENTION_MS + 1)).toEqual({ items: 2, clusters: 2, articles: 1, ai: 1, enrichment: 0 });
     expect(db.listVisibleItems('bob', [id])).toHaveLength(1);
     expect(db.listUserClusterStates('bob').has(id)).toBe(false);
     db.closeCosmicWebDb(); db.closeCosmicWebDb();
@@ -365,7 +367,7 @@ describe('AI bridge', () => {
     const disconnect = expect(ask()).rejects.toMatchObject({ status: 504 });
     await expect(ask()).rejects.toMatchObject({ status: 429 });
     await vi.advanceTimersByTimeAsync(30_000);
-    await vi.advanceTimersByTimeAsync(15_000); await timeout;
+    await vi.advanceTimersByTimeAsync(45_000); await timeout;
     // Both initial requests expired together. Use a fresh request for disconnect cleanup.
     await disconnect;
     const dropped = expect(ask()).rejects.toMatchObject({ status: 503 });
@@ -412,7 +414,7 @@ describe('REST and scheduler', () => {
     for (const [method, path] of paths) await request[method](base + path).expect(401);
     await authed('get', '/feed', 'unknown').expect(401);
     const boot = await authed('get', '/bootstrap').expect('Cache-Control', 'private, no-store').expect(200);
-    expect(boot.body.domains).toHaveLength(6); expect(boot.body.agents.map(a => a.id)).toEqual(['alice-agent']);
+    expect(boot.body.domains).toHaveLength(9); expect(boot.body.agents.map(a => a.id)).toEqual(['alice-agent']);
     expect((await authed('get', `/feed?q=${encodeURIComponent('中国')}`).expect(200)).body.clusters[0].id).toBe(id);
     expect((await authed('get', '/graph').expect(200)).body.nodes[0].clusterId).toBe(id);
     const saved = await authed('put', '/preferences').send({ userId: 'bob', watchKeywords: ['模型'] }).expect(200);
@@ -426,7 +428,7 @@ describe('REST and scheduler', () => {
     expect((await authed('get', `${cluster}/article`).expect(200)).body.quality).toBe('full');
     await authed('get', `${cluster}/article`).expect(200);
     await authed('get', `${cluster}/article?url=https%3A%2F%2Fother.example%2F`).expect(404);
-    expect(fetcher).toHaveBeenCalledTimes(1);
+    expect(fetcher).toHaveBeenCalledTimes(2);
     const brief = () => authed('post', `${cluster}/ai-brief`).send({ perspective: 'engineering' }).expect(200);
     expect((await brief()).body.cached).toBe(false); expect((await brief()).body.cached).toBe(true);
     expect(calls).toHaveLength(1); expect(calls[0].payload.articleMarkdown).toContain('Important');
@@ -437,38 +439,34 @@ describe('REST and scheduler', () => {
     expect(refreshed.body).toMatchObject({ domains: expect.any(Array), stats: expect.any(Object) });
     await authed('post', '/refresh').expect(429);
   });
-  it('awaits cold selected articles, isolates explicit Agent caches, and uses the available Auto Agent', async () => {
-    let finishFetch;
-    const fetcher = vi.fn(url => new Promise(resolve => { finishFetch = () => resolve(response(story, `${url}/redirected`)); }));
+  it('does not block on a cold article, uses cached Markdown and isolates explicit Agent caches', async () => {
+    const pending = [];
+    const fetcher = vi.fn(url => new Promise(resolve => pending.push(() => resolve(response(story, url)))));
     const requestAi = vi.fn(async () => storyResult);
     const svc = makeService({ fetcher, requestAi });
     agent('first', 'alice'); agent('second', 'alice');
     await svc.savePreferences('alice', { preferredAgentId: 'offline' });
-    const firstUrl = 'https://example.com/first', secondUrl = 'https://example.com/second';
-    ingestCosmicWebItems(source(), [item('Same story', secondUrl, NOW - 1), item('Same story', firstUrl)], NOW);
+    const url = 'https://example.com/selected';
+    ingestCosmicWebItems(source(), [item('Same story', url)], NOW);
     const { id } = svc.feed('alice').clusters[0];
-    const selected = svc.cluster('alice', id).items.find(i => i.url === secondUrl);
-    await expect(svc.aiBrief('alice', 'user', id, { url: `${secondUrl}/` })).rejects.toMatchObject({ status: 404 });
+    const selected = db.listVisibleItems('alice', [id])[0];
+    await expect(svc.aiBrief('alice', 'user', id, { url: `${url}/` })).rejects.toMatchObject({ status: 404 });
     await expect(svc.aiBrief('alice', 'user', id, { agentId: 'offline' })).rejects.toMatchObject({ status: 403 });
-    await svc.aiBrief('alice', 'user', id, { url: firstUrl, skipArticleFetch: true });
+    await svc.aiBrief('alice', 'user', id, { url, skipArticleFetch: true, research: false });
     expect(fetcher).not.toHaveBeenCalled();
-    expect(requestAi).toHaveBeenLastCalledWith(expect.objectContaining({ language: 'zh-CN', payload: expect.objectContaining({ sourceUrl: firstUrl, articleMarkdown: undefined }) }));
-    requestAi.mockClear();
-    const brief = svc.aiBrief('alice', 'user', id, { itemId: selected.id, language: 'en', agentId: '' });
-    await Promise.resolve();
-    expect(fetcher).toHaveBeenCalledWith(secondUrl, expect.any(Object));
-    expect(requestAi).not.toHaveBeenCalled();
-    finishFetch();
-    await expect(brief).resolves.toMatchObject({ agentId: 'first', cached: false });
-    expect(requestAi).toHaveBeenLastCalledWith(expect.objectContaining({ language: 'en', payload: expect.objectContaining({ sourceUrl: secondUrl, articleMarkdown: expect.stringContaining('Important') }) }));
-    const article = await svc.article('alice', id, { url: secondUrl });
-    expect(article).toMatchObject({ itemId: selected.id, sourceUrl: secondUrl, contentMd: article.markdown });
-    const explicit = agentId => svc.aiBrief('alice', 'user', id, { url: secondUrl, language: 'en', agentId });
+    expect(requestAi.mock.lastCall[0].payload).toMatchObject({ sourceUrl: url, articleMarkdown: undefined, research: false });
+    await expect(svc.aiBrief('alice', 'user', id, { itemId: selected.id, language: 'en' })).resolves.toMatchObject({ agentId: 'first', cached: false });
+    expect(requestAi.mock.lastCall[0].payload.articleMarkdown).toBeUndefined();
+    const article = svc.article('alice', id, { url });
+    expect(pending).toHaveLength(2);
+    pending.forEach(finish => finish());
+    await expect(article).resolves.toMatchObject({ itemId: selected.id, contentMd: expect.stringContaining('Important') });
+    const explicit = agentId => svc.aiBrief('alice', 'user', id, { url, language: 'en', agentId });
     await expect(explicit('first')).resolves.toMatchObject({ agentId: 'first', cached: false });
+    expect(requestAi.mock.lastCall[0].payload.articleMarkdown).toContain('Important');
     await expect(explicit('second')).resolves.toMatchObject({ agentId: 'second', cached: false });
     await expect(explicit('second')).resolves.toMatchObject({ agentId: 'second', cached: true });
-    expect(fetcher).toHaveBeenCalledTimes(1);
-    expect(requestAi).toHaveBeenCalledTimes(3);
+    expect(requestAi).toHaveBeenCalledTimes(4);
   });
   it('ranks nonempty daily domains before truncation, and falls back to top stories', async () => {
     const requestAi = vi.fn(async () => dailyResult);
@@ -530,7 +528,7 @@ describe('REST and scheduler', () => {
     ingestCosmicWebItems({ ...source(privateSource.id, domain.id, owner), url }, [item('Private article')], NOW);
     ingestCosmicWebItems(source(), [item('Public article')], NOW);
     const id = svc.feed(owner).clusters[0].id;
-    const itemId = svc.cluster(owner, id).items[0].id;
+    const itemId = db.listVisibleItems(owner, [id])[0].id;
     const publicId = db.listVisibleClusters(direct)[0].id;
     const publicItemId = db.listVisibleItems(direct, [publicId])[0].id;
     svc.setClusterState(owner, id, { bookmarked: true });
@@ -590,8 +588,8 @@ describe('REST and scheduler', () => {
     await svc.savePreferences('bob', { enabledDomainIds: ['ai'] });
     await svc.savePreferences('charlie', { enabledDomainIds: [] });
     const [a, b] = await Promise.all([svc.refresh('alice'), svc.refresh('bob')]);
-    expect(a).toMatchObject({ added: 3, failed: 1 }); expect(b).toMatchObject({ added: 2, failed: 1 });
-    expect(fetcher).toHaveBeenCalledTimes(4);
+    expect(a).toMatchObject({ added: 5, failed: 1 }); expect(b).toMatchObject({ added: 4, failed: 1 });
+    expect(fetcher).toHaveBeenCalledTimes(6);
     expect(messages.alice.some(m => m.domainId === 'private')).toBe(true);
     expect(messages.bob.every(m => m.domainId === 'ai')).toBe(true); expect(messages.charlie).toEqual([]);
   });
@@ -600,7 +598,7 @@ describe('REST and scheduler', () => {
     let allowSWR = false;
     const fetcher = vi.fn(async url => response(rss, url));
     const svc = makeService({ fetcher, now: () => time, autoRefresh: () => allowSWR });
-    await svc.savePreferences('alice', { enabledDomains: ['ai'], disabledSources: ['36kr-quick', 'hackernews'] });
+    await svc.savePreferences('alice', { enabledDomains: ['ai'], disabledSources: ['36kr-quick', 'hackernews', 'arxiv-ai', 'huggingface'] });
     await svc.refresh('alice');
     allowSWR = true;
     expect(svc.feed('alice').total).toBe(1);
@@ -650,5 +648,277 @@ describe('REST and scheduler', () => {
     expect(svc.startScheduler()).toBe(true);
     await vi.advanceTimersByTimeAsync(1);
     expect(signals.some(signal => !signal.aborted)).toBe(true);
+  });
+});
+
+const pngUrl = 'https://images.example/game.png';
+const gifUrl = 'https://images.example/replay.gif';
+const image = { url: pngUrl, kind: 'image' };
+const followResult = { question: 'Why?', answer: 'Because.', bullets: [], media: [image], citations: [], followUps: [], researched: false, searchCount: 0 };
+const radarItem = { title: 'Lunar rocket', url: 'https://news.example/story/?utm_source=radar', sourceName: 'Space Desk', summaryExcerpt: 'New coverage', mediaUrl: pngUrl };
+const richResult = { ...storyResult, sections: [{ heading: 'Context', body: 'New release.' }], media: [image],
+  communityHighlights: [{ platform: 'Hupu', author: 'fan', quote: 'Good defense', sourceUrl: 'https://bbs.hupu.com/123.html' }],
+  citations: [{ title: 'Original', url: 'https://news.example/story' }], researched: true, searchCount: 2 };
+
+const withMedia = '<rss><channel><item><title>News</title><link>/story</link>' +
+  '<media:content url="/video.mp4" type="video/mp4"/><media:thumbnail url="/pixel.png" width="1"/>' +
+  `<media:thumbnail url="${pngUrl}" title="The game"/><enclosure type="image/gif" url="${gifUrl}"/>` +
+  '<description><![CDATA[<img src="/game.webp?animated=1" alt="Game replay"><img src="/extra.png">]]></description></item></channel></rss>';
+const adapterResponse = (value, url) => response(typeof value === 'string' ? value : JSON.stringify(value), url);
+const next = pageProps => `<script type="application/json" id="__NEXT_DATA__">${JSON.stringify({ props: { pageProps } })}</script>`;
+
+describe('2.0 adapters and storage', () => {
+  it.each(['espn-nba', 'espn-top', 'nasa', 'nature', 'sciencedaily', 'physorg', 'gcores', 'yystv', 'arxiv-ai', 'huggingface', 'freebuf', 'lobsters', 'ifanr'])('normalizes the %s feed and caps images', async id => {
+    const source = BUILTIN_SOURCES.find(s => s.id === id);
+    const fetcher = vi.fn(async url => response(withMedia, url));
+    const [entry] = await fetchSource(id, { fetcher, now: NOW });
+    expect(fetcher.mock.lastCall[0]).toBe(source.url);
+    expect(entry.media).toEqual([{ ...image, alt: 'The game' }, { url: gifUrl, kind: 'gif' },
+      { url: new URL('/game.webp?animated=1', source.url).href, kind: 'gif', alt: 'Game replay' }]);
+  });
+  it.each([
+    ['hupu-nba', '<div class="t-info"><a href="/123.html"><span class="t-title">NBA trade news</span></a></div>', 'NBA trade news'],
+    ['hupu-nba', next({ threads: [{ tid: 123, title: 'Game recap', cover: gifUrl }] }), 'Game recap', gifUrl],
+    ['hupu', '<li class="bbs-sl-web-post-body"><a href="/123.html" class="p-title">Trending post</a></li>', 'Trending post'],
+    ['reddit-nba', { data: { children: [{ kind: 't3', data: { title: 'Replay', permalink: '/r/nba/comments/abc/replay/',
+      media_metadata: { one: { e: 'AnimatedImage', s: { u: 'https://images.example/replay.webp' } } } } }] } }, 'Replay', 'https://images.example/replay.webp'],
+    ['dongqiudi', { articles: [{ id: 1, title: 'Scoreline', thumb: pngUrl }] }, 'Scoreline', pngUrl],
+    ['douban', { items: [{ id: 1, title: 'Film', pic: { large: pngUrl } }] }, 'Film', pngUrl],
+    ['steam', '<tr class="player_count_row"><td>1,000</td><td><a class="gameLink" href="/app/1">Game</a></td></tr>', 'Game'],
+    ['bilibili', { data: { list: [{ title: 'Video', bvid: 'BV1234567890', pic: pngUrl }] } }, 'Video', pngUrl],
+    ['zhihu', { data: [{ target: { title_area: { text: 'Question' }, link: { url: 'https://www.zhihu.com/question/1' }, image_area: { url: pngUrl } } }] }, 'Question', pngUrl],
+    ['sspai', { data: [{ id: 1, title: 'Article', banner: pngUrl }] }, 'Article', pngUrl],
+    ['wallstreetcn-quick', { data: { items: [{ title: 'Markets', uri: 'https://wallstreetcn.com/livenews/1', image_uri: pngUrl }] } }, 'Markets', pngUrl],
+    ['nowcoder', { data: { result: [{ type: 0, id: 1, title: 'Engineering' }] } }, 'Engineering'],
+    ['gelonghui', '<a href="/news/123"><h2>Market news</h2></a>', 'Market news'],
+    ['fastbull', '<div class="content-list news-list" data-date="1795780800000"><a data-href="/cn/fastshort/1"><span class="title_name">Flash</span></a></div>', 'Flash'],
+    ['coolapk', '<a href="/feed/123" title="Gadget"><img src="https://images.example/game.png"></a>', 'Gadget', pngUrl],
+    ['zaobao', '<a href="/news/world/story20261127-10067775">World news</a>', 'World news'],
+    ['tencent', { data: { tabs: [{ articleList: [{ title: 'Headlines', link_info: { url: 'https://news.qq.com/story' }, cover: pngUrl }] }] } }, 'Headlines', pngUrl],
+    ['ifeng', '<script>var allData = {"hotNews1":[{"url":"https://news.ifeng.com/story","title":"Evening update"}]};</script>', 'Evening update'],
+    ['douyin', { data: { word_list: [{ sentence_id: '123', word: 'Trending' }] } }, 'Trending'],
+    ['tieba', { data: { bang_topic: { topic_list: [{ topic_name: 'Forum', topic_url: 'https://tieba.baidu.com/topic' }] } } }, 'Forum'],
+  ])('maps %s public response shape', async (id, fixture, title, media) => {
+    const [entry] = await fetchSource(id, { fetcher: async url => adapterResponse(fixture, url), now: NOW });
+    expect(entry.title).toBe(title);
+    expect(entry.media.map(m => m.url)).toEqual(media ? [media] : []);
+    if (media && ['hupu-nba', 'reddit-nba'].includes(id)) expect(entry.media[0].kind).toBe('gif');
+  });
+  it('adds media to an existing database and prunes expired enrichment without deleting live stories', async () => {
+    const path = join(dir, 'cosmic-web.db');
+    ingestCosmicWebItems(source(), [item('Legacy row')], NOW);
+    db.getCosmicWebDb().exec('ALTER TABLE cw_items DROP COLUMN media_json; DROP TABLE cw_enrichment_cache;');
+    db.closeCosmicWebDb(); db.openCosmicWebDb(path);
+    const legacy = db.listVisibleClusters('alice')[0].id;
+    expect(db.listVisibleItems('alice', [legacy])[0].media_json).toBe('[]');
+    const mediaItem = { ...item('Basketball highlights', 'https://news.example/sports'), media: [image] };
+    ingestCosmicWebItems(source('sports-fixture', 'sports'), [mediaItem], NOW);
+    const { id } = db.listVisibleClusters('alice').find(c => c.headline === mediaItem.title);
+    expect(JSON.parse(db.listVisibleItems('alice', [id])[0].media_json)).toEqual([image]);
+    const fetcher = vi.fn(async () => { throw Error('blocked'); });
+    const svc = makeService({ fetcher });
+    expect(await svc.cluster('alice', id)).toMatchObject({ items: [{ media: [image] }], media: [{ ...image, proxyUrl: toProxyMediaUrl(pngUrl) }] });
+    await svc.cluster('alice', id);
+    expect(fetcher).toHaveBeenCalledOnce();
+    expect(db.getEnrichmentCache(id, NOW)).not.toBeNull();
+    expect(db.pruneCosmicWebDb(NOW + 120 * 60_000)).toMatchObject({ enrichment: 1, clusters: 0 });
+    expect(db.getEnrichmentCache(id, NOW)).toBeNull();
+  });
+});
+
+describe('raster media proxy', () => {
+  const png = Buffer.from('89504e470d0a1a0a00000000', 'hex');
+  const fixtures = [['image/png', png], ['image/gif', Buffer.from('GIF89a00')], ['image/webp', Buffer.from('RIFF0000WEBP')],
+    ['image/jpeg', Buffer.from('ffd8ff', 'hex')], ['image/avif', Buffer.from('0000ftypavif')], ['image/avif', Buffer.from('0000ftypavis')]];
+  it.each(fixtures)('serves %s, strips referers, and reuses a fresh cache entry', async (mime, bytes) => {
+    let time = NOW;
+    const socket = transport((_url, opts) => {
+      expect(opts.headers.referer).toBeUndefined();
+      expect(opts.headers.accept).toBe('image/avif,image/webp,image/gif,image/png,image/jpeg,*/*;q=0.5');
+      return stream([bytes], { 'content-type': mime });
+    });
+    const fetcher = vi.fn((url, options) => safeFetch(url, { ...options, requestImpl: socket }));
+    const proxy = createMediaProxy({ fetcher, dnsLookup: dns, now: () => time });
+    const result = await proxy(pngUrl);
+    expect(result).toMatchObject({ body: bytes, headers: { 'Content-Type': mime, 'X-Content-Type-Options': 'nosniff',
+      'Content-Security-Policy': "default-src 'none'; sandbox", 'Cache-Control': 'private, max-age=3600' } });
+    expect(await proxy(`${pngUrl}#fragment`)).toBe(result);
+    expect(fetcher).toHaveBeenCalledExactlyOnceWith(pngUrl, expect.objectContaining({ timeoutMs: 8000, maxBytes: 6 * 1024 ** 2, maxDecompressedBytes: 6 * 1024 ** 2 }));
+    time += 30 * 60_000;
+    expect(await proxy(pngUrl)).not.toBe(result);
+    expect(socket).toHaveBeenCalledTimes(2);
+  });
+  it.each(['image/svg+xml', 'text/html', 'image/gif', 'image/png,image/gif'])('rejects disallowed or mismatched %s', async mime => {
+    const proxy = createMediaProxy({ fetcher: async () => ({ status: 200, headers: { 'content-type': mime }, bodyBuffer: png }) });
+    await expect(proxy(pngUrl)).rejects.toMatchObject({ status: 415 });
+  });
+  it('blocks private direct and redirected addresses and rejects non-HTTP URLs', async () => {
+    const socket = transport(() => stream([], { location: 'http://169.254.169.254/path' }, 302));
+    const proxy = createMediaProxy({ dnsLookup: dns, fetcher: (url, options) => safeFetch(url, { ...options, requestImpl: socket }) });
+    await expect(proxy('http://127.0.0.1/image')).rejects.toMatchObject({ status: 502 });
+    expect(socket).not.toHaveBeenCalled();
+    await expect(proxy(pngUrl)).rejects.toMatchObject({ status: 502 });
+    expect(socket).toHaveBeenCalledOnce();
+    await expect(proxy('data:image/png;base64,abcd')).rejects.toMatchObject({ status: 400 });
+    expect(toProxyMediaUrl('javascript:alert(1)')).toBeNull();
+  });
+  it.each([[49, png], [5, Buffer.concat([png, Buffer.alloc(6 * 1024 ** 2 - png.length)])]])('evicts LRU entries under the item and byte budgets (%i inputs)', async (n, bodyBuffer) => {
+    const fetcher = vi.fn(async () => ({ status: 200, headers: { 'content-type': 'image/png' }, bodyBuffer }));
+    const proxy = createMediaProxy({ fetcher });
+    const url = i => `${pngUrl}?i=${i}`;
+    for (let i = 0; i < n - 1; i++) await proxy(url(i));
+    await proxy(url(0));
+    await proxy(url(n - 1));
+    await proxy(url(0));
+    await proxy(url(1));
+    expect(fetcher).toHaveBeenCalledTimes(n + 1);
+  });
+  it('serves binary on the authenticated route, not JSON', async () => {
+    const app = express();
+    const fetcher = vi.fn(async () => ({ status: 200, headers: { 'content-type': 'image/png' }, bodyBuffer: png }));
+    registerCosmicWebRoutes(app, { proxyMedia: createMediaProxy({ fetcher }), requireSessionAuth(req, res, next) {
+      if (!req.get('x-test-user')) return res.sendStatus(401);
+      req.user = { username: 'alice' }; next();
+    } });
+    await supertest(app).get(toProxyMediaUrl(pngUrl)).expect(401);
+    expect(fetcher).not.toHaveBeenCalled();
+    const res = await supertest(app).get(toProxyMediaUrl(pngUrl)).set('x-test-user', 'alice').set('Referer', 'https://private.example/session')
+      .expect('Content-Type', 'image/png').expect('X-Content-Type-Options', 'nosniff').expect(200);
+    expect(res.body).toEqual(png);
+    expect(fetcher.mock.lastCall[1].headers.referer).toBeUndefined();
+  });
+});
+
+describe('deterministic community enrichment', () => {
+  it('recovers actual Reddit, HN, V2EX and Hupu replies with verified media candidates', async () => {
+    const urls = ['https://old.reddit.com/r/nba/comments/abc/game', 'https://news.ycombinator.com/item?id=1',
+      'https://v2ex.com/t/2', 'https://bbs.hupu.com/3.html'];
+    const fixture = new Map([
+      ['https://www.reddit.com/r/nba/comments/abc.json?limit=8&sort=top', [{}, { data: { children: [
+        { kind: 't1', data: { author: 'Fan', body: 'Strong defense', score: 10, permalink: '/r/nba/comments/abc/game/xyz/' } },
+        { kind: 't1', data: { author: '[deleted]', body: '[removed]', score: 900 } },
+      ] } }]],
+      ['https://hn.algolia.com/api/v1/items/1', { children: [{ id: 11, author: 'Tech', text: '<p>Data &amp; results</p>' }] }],
+      ['https://www.v2ex.com/api/replies/show.json?topic_id=2', [{ id: 22, member: { username: 'Dev' }, content: 'Useful tip', thanks: 3 }]],
+      [urls[0], `<meta property="og:image" content="${pngUrl}"><meta property="og:image:alt" content="The court">
+        <img class="avatar" src="/user.jpg"><img width="1" src="/t.jpg"><img src="http://127.0.0.1/private.png">
+        <meta name="twitter:image" content="https://images.example/second.png">`],
+      [urls[3], next({ detail: { thread: { content: `<img src="${gifUrl}">` }, lights: [
+        { author: { puname: '球迷' }, content: '<p>好球！</p>', allLightCount: 30 },
+        { isHidden: true, author: { puname: 'hidden' }, content: 'blocked', allLightCount: 100 },
+      ] } })],
+    ]);
+    const fetcher = vi.fn(async (url, opts) => {
+      expect(opts.timeoutMs).toBe(5000);
+      if (!fixture.has(url)) throw Error('not available');
+      return adapterResponse(fixture.get(url), url);
+    });
+    const got = await extractCommunityEnrichment(urls.map((url, i) => ({ url, sourceName: `Source ${i}`, media: i === 1 ? [{ url: 'https://images.example/feed.webp?animated=1', kind: 'gif' }] : [] })), { fetcher, dnsLookup: dns });
+    expect(got.communityComments).toMatchObject([
+      { platform: 'Hupu', author: '球迷', quote: '好球！', likes: 30, sourceUrl: urls[3] },
+      { platform: 'Reddit', author: 'Fan', quote: 'Strong defense', likes: 10, sourceUrl: 'https://www.reddit.com/r/nba/comments/abc/game/xyz/' },
+      { platform: 'V2EX', author: 'Dev', quote: 'Useful tip', likes: 3, sourceUrl: 'https://www.v2ex.com/t/2#r_22' },
+      { platform: 'Hacker News', author: 'Tech', quote: 'Data & results', likes: 0, sourceUrl: 'https://news.ycombinator.com/item?id=11' },
+    ]);
+    expect(got.media).toMatchObject([{ kind: 'gif' }, { url: pngUrl, caption: 'The court', proxyUrl: toProxyMediaUrl(pngUrl) },
+      { url: 'https://images.example/second.png' }, { url: gifUrl, kind: 'gif' }]);
+  });
+  it('handles HTML-only Hupu bright replies, Linux.do and public Bilibili comments', async () => {
+    const fetcher = async url => adapterResponse(url.includes('bbs.hupu.com') ? `<h2>这些回帖亮了</h2>
+      <div class="post-reply-list-container"><a class="post-reply-list-user-info-top-name">粉丝</a>
+      <div class="thread-content-detail"><p>精彩</p><img src="${gifUrl}"></div><span>亮了(<!-- -->12)</span></div>` :
+      url.includes('linux.do/t/42.json') ? { post_stream: { posts: [{ post_number: 1, username: 'op', cooked: 'Not a comment' },
+        { post_number: 2, username: 'member', cooked: '<p>Reply</p>', actions_summary: [{ id: 2, count: 4 }] }] } } :
+      url.includes('web-interface/view') ? { data: { pic: pngUrl, aid: 123 } } :
+      url.includes('/x/v2/reply') ? { data: { hots: [{ member: { uname: 'viewer' }, content: { message: 'Great' }, like: 2, rpid: 88 }] } } : '', url);
+    const result = await extractCommunityEnrichment(['https://bbs.hupu.com/3.html', 'https://linux.do/t/topic/42', 'https://www.bilibili.com/video/BV1234567890']
+      .map(url => ({ url })), { fetcher, dnsLookup: dns });
+    expect(result.communityComments.map(c => [c.platform, c.quote, c.likes])).toEqual([['Hupu', '精彩', 12], ['Linux.do', 'Reply', 4], ['Bilibili', 'Great', 2]]);
+    expect(result.media.map(m => m.url)).toEqual([gifUrl, pngUrl]);
+  });
+  it('returns empty lists for inaccessible pages and lookalike domains', async () => {
+    const fetcher = vi.fn(async () => { throw Error('timeout'); });
+    await expect(extractCommunityEnrichment([{ url: 'https://reddit.com.other.test/r/nba/comments/abc' }], { fetcher, dnsLookup: dns }))
+      .resolves.toEqual({ media: [], communityComments: [] });
+    expect(fetcher).toHaveBeenCalledOnce();
+  });
+});
+
+describe('2.0 graph and AI contracts', () => {
+  it('balances 180 nodes across nine domains and annotates media, LOD and projected links', () => {
+    const clusters = BUILTIN_DOMAINS.flatMap(d => Array.from({ length: 25 }, (_, i) => ({ id: `${d.id}-${i}`, domainId: d.id,
+      heatScore: 25 - i, watchHit: i === 24, publishedAt: NOW, keywords: ['shared'], itemCount: 1, sourceNames: ['News'],
+      summaryExcerpt: '  ' + 'X'.repeat(200), items: [{ media: [image] }] })));
+    const graph = buildGraphProjection({ prefs: { enabledDomains: BUILTIN_DOMAINS.map(d => d.id) }, clusters, domains: BUILTIN_DOMAINS });
+    expect([1, 2, 3].map(t => graph.nodes.filter(n => n.lodTier === t).length)).toEqual([14, 66, 100]);
+    expect(BUILTIN_DOMAINS.map(d => graph.nodes.filter(n => n.domainId === d.id).length)).toEqual(Array(9).fill(20));
+    expect(graph.nodes.filter(n => n.watchHit).every(n => n.lodTier === 1)).toBe(true);
+    const ids = new Set(graph.nodes.map(n => n.clusterId));
+    for (const n of graph.nodes) {
+      expect(n).toMatchObject({ summaryExcerpt: 'X'.repeat(180), mediaPreview: { proxyUrl: toProxyMediaUrl(pngUrl), kind: 'image' }, itemCount: 1, sourceNames: ['News'] });
+      expect(n.relatedClusterIds).toHaveLength(4);
+      expect(n.relatedClusterIds.every(id => id !== n.clusterId && ids.has(id))).toBe(true);
+    }
+  });
+  it.each([['brief', richResult], ['synthesize', storyResult], ['follow_up', followResult], ['topic_radar', { items: [radarItem], searchCount: 1 }]])
+    ('validates %s and resolves the correlated bridge request', async (mode, result) => {
+      const frames = agent('new', 'alice');
+      expect(validateCosmicWebAiResult(result, mode)).toBe(true);
+      const pending = requestCosmicWebAi({ userId: 'alice', userRole: 'user', agentId: 'new', mode });
+      handleCosmicWebAiResponse('new', { requestId: frames[0].requestId, ok: true, result });
+      await expect(pending).resolves.toEqual(result);
+    });
+  it.each([
+    ['brief', { ...richResult, media: [{ ...image, url: 'javascript:alert(1)' }] }],
+    ['brief', { ...richResult, communityHighlights: [{ ...richResult.communityHighlights[0], sourceUrl: 'data:text/html,x' }] }],
+    ['brief', { ...richResult, fullMarkdown: 'a'.repeat(16001) }],
+    ['brief', { ...richResult, sections: [] }],
+    ['follow_up', { ...followResult, citations: [{ title: 'bad', url: 'file:///tmp/secret' }] }],
+    ['topic_radar', { items: [{ ...radarItem, url: 'ftp://example.com' }], searchCount: 1 }],
+    ['topic_radar', { items: [{ ...radarItem, mediaUrl: 'data:image/png;base64,x' }], searchCount: 1 }],
+  ])('rejects invalid %s output', (mode, result) => expect(validateCosmicWebAiResult(result, mode)).toBe(false));
+  it('answers follow-ups with scoped cached briefing context, and ingests owner-private Radar results', async () => {
+    let clock = NOW;
+    const updates = [];
+    const requestAi = vi.fn(async req => req.mode === 'follow_up' ? followResult : req.mode === 'topic_radar' ?
+      { items: [radarItem, { ...radarItem, url: 'https://news.example/story#dup' }, { ...radarItem, url: 'http://127.0.0.1/story' }], searchCount: 2 } : storyResult);
+    const svc = makeService({ now: () => clock, requestAi, fetcher: async url => response('', url) });
+    agent('alice-agent', 'alice'); agent('bob-agent', 'bob');
+    for (const userId of ['alice', 'bob']) webClients.set(userId, { userId, authenticated: true, encryptOutbound: false,
+      ws: { readyState: 1, send: data => updates.push([userId, JSON.parse(data)]) } });
+    const custom = { id: 'space', name: 'Space', keywords: ['rocket'], colorToken: 'teal', aiRadar: true };
+    await svc.savePreferences('alice', { customDomains: [custom], enabledDomains: BUILTIN_DOMAINS.map(d => d.id) });
+    await svc.savePreferences('bob', { customDomains: [custom] });
+    ingestCosmicWebItems(source(), [{ ...item('Question context'), media: [image] }], NOW);
+    const id = svc.feed('alice').clusters[0].id;
+    const brief = await svc.aiBrief('alice', 'user', id, { research: false });
+    expect(brief.media).toMatchObject([{ ...image, proxyUrl: toProxyMediaUrl(pngUrl) }]);
+    await expect(svc.followUp('alice', 'user', id, { question: ' ' })).rejects.toMatchObject({ status: 400 });
+    await expect(svc.followUp('alice', 'user', id, { question: 'x'.repeat(501) })).rejects.toMatchObject({ status: 400 });
+    const app = express(); app.use(express.json());
+    registerCosmicWebRoutes(app, { cosmicWeb: svc, requireSessionAuth(req, res, next) {
+      if (!req.get('x-test-user')) return res.sendStatus(401);
+      req.user = { username: req.get('x-test-user') }; next();
+    } });
+    const request = supertest(app), api = '/api/cosmic-web';
+    await request.post(`${api}/clusters/${id}/follow-up`).expect(401);
+    await request.post(`${api}/domains/space/radar-scan`).expect(401);
+    const follow = await request.post(`${api}/clusters/${id}/follow-up`).set('x-test-user', 'alice').send({ question: ' Why? ' }).expect(200);
+    expect(follow.body).toMatchObject({ answer: 'Because.', media: [{ proxyUrl: toProxyMediaUrl(pngUrl) }] });
+    expect(requestAi.mock.lastCall[0]).toMatchObject({ mode: 'follow_up', payload: { briefContext: storyResult.tldr, question: 'Why?' } });
+    await expect(svc.radarScan('alice', 'user', 'ai')).rejects.toMatchObject({ status: 404 });
+    await request.post(`${api}/domains/space/radar-scan`).set('x-test-user', 'alice').set('Sec-Fetch-Site', 'cross-site').expect(403);
+    const radar = await request.post(`${api}/domains/space/radar-scan`).set('x-test-user', 'alice').send({}).expect(200);
+    expect(radar.body).toMatchObject({ added: 1, items: [{ url: 'https://news.example/story', sourceName: 'Space Desk' }],
+      graph: { nodes: expect.arrayContaining([expect.objectContaining({ domainId: 'space', sourceNames: ['Space Desk'] })]) } });
+    expect(radar.body.domains.find(d => d.id === 'space')).toMatchObject({ aiRadar: true, colorToken: 'teal', sources: [{ id: 'radar-space', kind: 'radar' }] });
+    expect(requestAi.mock.lastCall[0]).toMatchObject({ mode: 'topic_radar', payload: { topic: 'Space', keywords: ['rocket'] } });
+    expect(updates).toEqual([['alice', expect.objectContaining({ type: 'cosmic_web_updated', domainId: 'space' })]]);
+    expect(svc.feed('alice', { domainId: 'space' }).total).toBe(1);
+    expect(svc.feed('bob', { domainId: 'space' }).total).toBe(0);
+    await expect(svc.radarScan('alice', 'user', 'space')).rejects.toMatchObject({ status: 429 });
+    expect((await svc.radarScan('bob', 'user', 'space')).added).toBe(1);
+    clock += 60_000;
+    expect((await svc.radarScan('alice', 'user', 'space')).added).toBe(0);
   });
 });

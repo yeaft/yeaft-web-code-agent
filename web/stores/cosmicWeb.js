@@ -14,6 +14,35 @@ import { getLocale } from '../utils/i18n.js';
 const { defineStore } = Pinia;
 
 const FEED_PAGE_SIZE = 30;
+const DRAWER_WIDTH_STORAGE_KEY = 'yeaft-cosmos-web-drawer-width-v1';
+const DRAWER_WIDTH_DEFAULT = 480;
+const DRAWER_WIDTH_MIN = 360;
+const DRAWER_WIDTH_MAX = 960;
+
+function clampDrawerWidth(val) {
+  const n = Number(val);
+  if (!Number.isFinite(n)) return DRAWER_WIDTH_DEFAULT;
+  return Math.max(DRAWER_WIDTH_MIN, Math.min(DRAWER_WIDTH_MAX, Math.round(n)));
+}
+
+function loadPersistedDrawerWidth() {
+  try {
+    if (typeof localStorage === 'undefined') return DRAWER_WIDTH_DEFAULT;
+    const raw = localStorage.getItem(DRAWER_WIDTH_STORAGE_KEY);
+    if (!raw) return DRAWER_WIDTH_DEFAULT;
+    return clampDrawerWidth(raw);
+  } catch {
+    return DRAWER_WIDTH_DEFAULT;
+  }
+}
+
+function savePersistedDrawerWidth(val) {
+  try {
+    if (typeof localStorage === 'undefined') return;
+    localStorage.setItem(DRAWER_WIDTH_STORAGE_KEY, String(clampDrawerWidth(val)));
+  } catch { /* ignore storage errors */ }
+}
+
 let storeGeneration = 0;
 let pulseSeq = 0;
 let bandSessionSeq = 0;
@@ -26,7 +55,7 @@ const mutationControllers = new Set();
 function defaultPrefs() {
   return {
     onboarded: false,
-    enabledDomains: ['ai', 'tech', 'finance', 'product'],
+    enabledDomains: ['ai', 'tech', 'finance', 'product', 'sports'],
     disabledSources: [],
     customDomains: [],
     watchKeywords: [],
@@ -193,7 +222,7 @@ export const useCosmicWebStore = defineStore('cosmicWeb', {
 
     readerOpen: false,
     readerExpanded: false,
-    readerTab: 'article', // 'article' | 'ai'
+    readerTab: 'ai', // 'ai' (default Cosmic Web 2.0 deep report)
 
     articleLoading: false,
     articleData: null,
@@ -205,6 +234,13 @@ export const useCosmicWebStore = defineStore('cosmicWeb', {
     aiBriefData: null,
     aiBriefError: null,
 
+    followUpThread: [],
+    followUpLoading: false,
+    followUpError: null,
+
+    lightboxMedia: null,
+    radarScanningDomainId: null,
+
     dailyBriefingOpen: false,
     dailyBriefingLoading: false,
     dailyBriefingData: null,
@@ -212,6 +248,7 @@ export const useCosmicWebStore = defineStore('cosmicWeb', {
 
     prefsModalOpen: false,
     drawerCollapsed: false,
+    drawerWidth: loadPersistedDrawerWidth(),
 
     lastPulseEvent: null,
   }),
@@ -228,6 +265,7 @@ export const useCosmicWebStore = defineStore('cosmicWeb', {
           labelEn: c.name || c.labelEn || c.id,
           colorToken: c.colorToken || 'violet',
           isCustom: true,
+          aiRadar: Boolean(c.aiRadar),
           unreadCount: Number(state.domains?.find((d) => d.id === c.id)?.unreadCount || 0),
           itemCount: Number(state.domains?.find((d) => d.id === c.id)?.itemCount || 0),
           sources: Array.isArray(c.rssUrls) ? c.rssUrls : [],
@@ -266,6 +304,25 @@ export const useCosmicWebStore = defineStore('cosmicWeb', {
     emitPulse({ domainId = null, clusterId = null, count = 8 } = {}) {
       pulseSeq += 1;
       this.lastPulseEvent = { seq: pulseSeq, domainId, clusterId, count };
+    },
+
+    setDrawerWidth(width) {
+      const clamped = clampDrawerWidth(width);
+      this.drawerWidth = clamped;
+      savePersistedDrawerWidth(clamped);
+    },
+
+    resetDrawerWidth() {
+      this.setDrawerWidth(DRAWER_WIDTH_DEFAULT);
+    },
+
+    openLightbox(mediaItem) {
+      if (!mediaItem || (!mediaItem.proxyUrl && !mediaItem.url)) return;
+      this.lightboxMedia = mediaItem;
+    },
+
+    closeLightbox() {
+      this.lightboxMedia = null;
     },
 
     async bootstrap({ force = false } = {}) {
@@ -449,7 +506,7 @@ export const useCosmicWebStore = defineStore('cosmicWeb', {
       await this.fetchFeed({ reset: true });
     },
 
-    async openClusterReader(clusterId, { tab = 'article', expanded = false, itemId = null } = {}) {
+    async openClusterReader(clusterId, { expanded = false, itemId = null } = {}) {
       if (!clusterId) return;
 
       // Immediately abort/invalidate any in-flight reader requests from previous story
@@ -457,9 +514,11 @@ export const useCosmicWebStore = defineStore('cosmicWeb', {
       invalidateChannel('detail');
       invalidateChannel('article');
       invalidateChannel('aiBrief');
+      invalidateChannel('followUp');
       this.detailLoading = false;
       this.articleLoading = false;
       this.aiBriefLoading = false;
+      this.followUpLoading = false;
 
       const isNewCluster = this.readerClusterId !== clusterId || this.activeClusterDetail?.id !== clusterId;
       this.cursorClusterId = clusterId;
@@ -467,8 +526,9 @@ export const useCosmicWebStore = defineStore('cosmicWeb', {
       this.readerClusterId = clusterId;
       this.readerOpen = true;
       this.readerExpanded = Boolean(expanded);
-      this.readerTab = tab === 'ai' ? 'ai' : 'article';
+      this.readerTab = 'ai';
       this.drawerCollapsed = false;
+      this.lightboxMedia = null;
 
       // Reset transient reader state for new cluster
       if (isNewCluster) {
@@ -480,6 +540,8 @@ export const useCosmicWebStore = defineStore('cosmicWeb', {
         this.readerItemId = itemId || null;
         this.aiBriefData = null;
         this.aiBriefError = null;
+        this.followUpThread = [];
+        this.followUpError = null;
       } else if (itemId) {
         this.activeArticleItemId = itemId;
         this.readerItemId = itemId;
@@ -490,14 +552,26 @@ export const useCosmicWebStore = defineStore('cosmicWeb', {
       // Mark read optimistically
       this.markRead(clusterId, true);
 
-      // Load detail + article in parallel
-      const detailTask = this.loadClusterDetail(clusterId);
-      const articleTask = this.loadArticle(clusterId, { itemId: this.activeArticleItemId || undefined });
+      // Load detail first; if detail does not already carry a cached aiBrief, kick off
+      // web-researched AI deep report asynchronously so opening the reader never blocks
+      // behind a multi-second web search call (rapid cluster switching stays instant).
+      const capturedRev = this.sourceSelectionRev;
+      const capturedGen = storeGeneration;
+      await this.loadClusterDetail(clusterId);
 
-      if (this.readerTab === 'ai') {
-        this.generateAiBrief(clusterId, { itemId: this.activeArticleItemId || undefined });
+      if (
+        capturedGen === storeGeneration
+        && this.readerOpen
+        && this.readerClusterId === clusterId
+        && this.sourceSelectionRev === capturedRev
+        && !this.aiBriefData
+        && !this.aiBriefLoading
+      ) {
+        void this.generateAiBrief(clusterId, {
+          research: true,
+          itemId: this.activeArticleItemId || undefined,
+        });
       }
-      await Promise.allSettled([detailTask, articleTask]);
     },
 
     async selectArticleSource(clusterId, { itemId = null, url = null, perspective = null, agentId = null } = {}) {
@@ -509,25 +583,22 @@ export const useCosmicWebStore = defineStore('cosmicWeb', {
 
       invalidateChannel('article');
       invalidateChannel('aiBrief');
+      invalidateChannel('followUp');
       this.articleLoading = false;
       this.articleError = null;
       this.aiBriefData = null;
       this.aiBriefError = null;
       this.aiBriefLoading = false;
+      this.followUpThread = [];
+      this.followUpError = null;
+      this.followUpLoading = false;
 
-      const tasks = [
-        this.loadArticle(clusterId, { itemId: this.activeArticleItemId, url: this.activeArticleUrl }),
-      ];
-      if (this.readerTab === 'ai') {
-        tasks.push(
-          this.generateAiBrief(clusterId, {
-            itemId: this.activeArticleItemId || undefined,
-            perspective: perspective || undefined,
-            agentId: agentId || undefined,
-          }),
-        );
-      }
-      await Promise.allSettled(tasks);
+      return this.generateAiBrief(clusterId, {
+        research: true,
+        itemId: this.activeArticleItemId || undefined,
+        perspective: perspective || undefined,
+        agentId: agentId || undefined,
+      });
     },
 
     closeClusterReader() {
@@ -535,9 +606,13 @@ export const useCosmicWebStore = defineStore('cosmicWeb', {
       invalidateChannel('detail');
       invalidateChannel('article');
       invalidateChannel('aiBrief');
+      invalidateChannel('followUp');
       this.detailLoading = false;
       this.articleLoading = false;
       this.aiBriefLoading = false;
+      this.followUpLoading = false;
+      this.followUpError = null;
+      this.lightboxMedia = null;
       this.readerOpen = false;
       this.readerExpanded = false;
       this.readerClusterId = null;
@@ -615,7 +690,7 @@ export const useCosmicWebStore = defineStore('cosmicWeb', {
       }
     },
 
-    async generateAiBrief(clusterId, { mode = 'brief', agentId = null, perspective = null, force = false, itemId = null } = {}) {
+    async generateAiBrief(clusterId, { mode = 'brief', agentId = null, perspective = null, force = false, itemId = null, research = true } = {}) {
       if (!clusterId) return;
       const { controller, seq, gen } = nextChannelRequest('aiBrief');
       const capturedSourceRev = this.sourceSelectionRev;
@@ -634,6 +709,7 @@ export const useCosmicWebStore = defineStore('cosmicWeb', {
           perspective: perspective || this.prefs.defaultPerspective || 'balanced',
           language: currentUiLanguage(),
           force: Boolean(force),
+          research: Boolean(research),
         };
         if (effectiveItemId) body.itemId = effectiveItemId;
         const explicitAgentId = typeof agentId === 'string' && agentId.trim() ? agentId.trim() : null;
@@ -654,6 +730,94 @@ export const useCosmicWebStore = defineStore('cosmicWeb', {
       } finally {
         if (isCurrentSource()) {
           this.aiBriefLoading = false;
+        }
+      }
+    },
+
+    async askFollowUp(clusterId, question, { agentId = null, perspective = null } = {}) {
+      const q = String(question || '').trim();
+      if (!clusterId || !q) return null;
+      const { controller, seq, gen } = nextChannelRequest('followUp');
+      const capturedSourceRev = this.sourceSelectionRev;
+      const isCurrent = () => (
+        !isStaleRequest('followUp', seq, gen)
+        && this.readerOpen
+        && this.readerClusterId === clusterId
+        && this.sourceSelectionRev === capturedSourceRev
+      );
+      this.followUpLoading = true;
+      this.followUpError = null;
+      try {
+        const body = {
+          question: q,
+          perspective: perspective || this.prefs.defaultPerspective || 'balanced',
+          language: currentUiLanguage(),
+        };
+        const explicitAgentId = typeof agentId === 'string' && agentId.trim() ? agentId.trim() : null;
+        if (explicitAgentId) body.agentId = explicitAgentId;
+
+        const data = await apiJson(`/api/cosmic-web/clusters/${encodeURIComponent(clusterId)}/follow-up`, {
+          method: 'POST',
+          body: JSON.stringify(body),
+          signal: controller.signal,
+        });
+        if (!isCurrent()) return null;
+        const searchCount = Number(data.searchCount ?? data.webSearchCount ?? 0);
+        const entry = {
+          id: `fu-${Date.now().toString(36)}-${seq}`,
+          question: q,
+          answer: data.answer || data.markdown || data.text || '',
+          bullets: Array.isArray(data.bullets) ? data.bullets.filter(Boolean) : [],
+          citations: Array.isArray(data.citations) ? data.citations : [],
+          media: Array.isArray(data.media) ? data.media : [],
+          agentName: data.agentName || '',
+          searchCount,
+          webSearchCount: searchCount,
+          createdAt: Date.now(),
+        };
+        this.followUpThread = [...this.followUpThread, entry];
+        return entry;
+      } catch (err) {
+        if (isAbortError(err) || !isCurrent()) return null;
+        this.followUpError = err.message || 'Failed to answer follow-up';
+        return null;
+      } finally {
+        if (isCurrent()) {
+          this.followUpLoading = false;
+        }
+      }
+    },
+
+    async scanTopicRadar(domainId, { agentId = null } = {}) {
+      if (!domainId) return null;
+      const { controller, seq, gen } = nextChannelRequest('radarScan');
+      this.radarScanningDomainId = domainId;
+      try {
+        const body = { language: currentUiLanguage() };
+        const explicitAgentId = typeof agentId === 'string' && agentId.trim() ? agentId.trim() : null;
+        if (explicitAgentId) body.agentId = explicitAgentId;
+
+        const data = await apiJson(`/api/cosmic-web/domains/${encodeURIComponent(domainId)}/radar-scan`, {
+          method: 'POST',
+          body: JSON.stringify(body),
+          signal: controller.signal,
+        });
+        if (isStaleRequest('radarScan', seq, gen)) return null;
+        if (Array.isArray(data.domains)) this.domains = data.domains;
+        if (data.graph) this.graph = data.graph;
+        if (data.stats) this.stats = { ...this.stats, ...data.stats };
+        this.emitPulse({ domainId, count: 16 });
+        await Promise.all([
+          data.graph ? Promise.resolve() : this.fetchGraph(),
+          this.fetchFeed({ reset: true }),
+        ]);
+        return data;
+      } catch (err) {
+        if (isAbortError(err) || isStaleRequest('radarScan', seq, gen)) return null;
+        throw err;
+      } finally {
+        if (!isStaleRequest('radarScan', seq, gen) && this.radarScanningDomainId === domainId) {
+          this.radarScanningDomainId = null;
         }
       }
     },
@@ -957,6 +1121,10 @@ export const useCosmicWebStore = defineStore('cosmicWeb', {
       this.detailLoading = false;
       this.articleLoading = false;
       this.aiBriefLoading = false;
+      this.followUpLoading = false;
+      this.followUpError = null;
+      this.lightboxMedia = null;
+      this.radarScanningDomainId = null;
       this.dailyBriefingLoading = false;
       this.hoveredClusterId = null;
       this.readerOpen = false;

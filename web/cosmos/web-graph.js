@@ -43,8 +43,34 @@ export const COSMIC_WEB_COLOR_MAP = Object.freeze({
     rgb: Object.freeze([255, 190, 92]),
     cssVar: 'var(--c-amber)',
   }),
+  coral: Object.freeze({
+    rgba: 'rgba(255, 142, 102, 1)',
+    rgb: Object.freeze([255, 142, 102]),
+    cssVar: 'var(--c-coral, #ff8e66)',
+  }),
+  teal: Object.freeze({
+    rgba: 'rgba(76, 215, 208, 1)',
+    rgb: Object.freeze([76, 215, 208]),
+    cssVar: 'var(--c-teal, #4cd7d0)',
+  }),
+  indigo: Object.freeze({
+    rgba: 'rgba(142, 164, 255, 1)',
+    rgb: Object.freeze([142, 164, 255]),
+    cssVar: 'var(--c-indigo, #8ea4ff)',
+  }),
 });
 
+export const WEB_ZOOM_LIMITS = Object.freeze({ min: 1.0, max: 4.5, lod2: 1.55, lod3: 2.75 });
+
+export function getWebLodTier(zoom = 1) {
+  return zoom >= WEB_ZOOM_LIMITS.lod3 ? 3 : zoom >= WEB_ZOOM_LIMITS.lod2 ? 2 : 1;
+}
+
+const MAX_CLUSTERS = 180;
+const WEB_REST_TILT = 0.08;
+const WEB_PROJECTION_SPREAD_X = 0.52;
+const WEB_PROJECTION_SPREAD_Y = 0.66;
+const CLUSTER_SHELL_RADII = [0.22, 0.43, 0.65];
 const COLOR_KEYS = Object.keys(COSMIC_WEB_COLOR_MAP);
 const MAX_ACTIVE_PULSES = 140;
 
@@ -79,7 +105,7 @@ function makeRng(seed) {
 }
 
 function resolveColor(colorToken, fallbackIdx = 0) {
-  if (colorToken && COSMIC_WEB_COLOR_MAP[colorToken]) {
+  if (colorToken && Object.hasOwn(COSMIC_WEB_COLOR_MAP, colorToken)) {
     return { token: colorToken, ...COSMIC_WEB_COLOR_MAP[colorToken] };
   }
   const key = COLOR_KEYS[Math.abs(fallbackIdx) % COLOR_KEYS.length];
@@ -211,33 +237,34 @@ function placeHubDeterministically(hubId, index, total) {
   };
 }
 
-/**
- * Compute deterministic 3D satellite position in an orbital filament around its primary Hub.
- *
- * @param {string} clusterId
- * @param {{ x: number, y: number, z: number }} hubPos
- * @param {number} heatScore
- * @returns {{ x: number, y: number, z: number, phase: number }}
- */
-function placeClusterDeterministically(clusterId, hubPos, heatScore) {
-  const seed = hashString(`cluster:${clusterId}`);
-  const rnd = makeRng(seed);
-  const theta = rnd() * Math.PI * 2;
-  const phi = Math.acos(2 * rnd() - 1);
-  // Hotter stories orbit slightly closer and more prominently to their hub
-  const normHeat = clamp((Number(heatScore) || 20) / 100, 0, 1);
-  const dist = 0.15 + (1 - normHeat * 0.42) * 0.26 + rnd() * 0.14;
-
-  const dx = Math.sin(phi) * Math.cos(theta) * dist;
-  const dy = Math.cos(phi) * dist * 0.76;
-  const dz = Math.sin(phi) * Math.sin(theta) * dist * 0.88;
-
-  return {
-    x: clamp(hubPos.x + dx, -0.95, 0.95),
-    y: clamp(hubPos.y + dy, -0.66, 0.66),
-    z: clamp(hubPos.z + dz, -0.72, 0.72),
-    phase: rnd() * Math.PI * 2,
-  };
+/** Spread each hub's stories by choosing the freest of several seeded points on their tier shell. */
+function placeClusterDeterministically(clusterId, hubPos, heat, lodTier, neighbors) {
+  const rnd = makeRng(hashString(`cluster:${clusterId}`));
+  const phase = rnd() * Math.PI * 2;
+  let best;
+  let bestGap = -1;
+  for (let i = 0; i < 12; i++) {
+    const theta = rnd() * Math.PI * 2;
+    const y = 2 * rnd() - 1;
+    const ring = Math.sqrt(1 - y * y);
+    const dist = CLUSTER_SHELL_RADII[lodTier - 1] * (1.12 - heat * 0.002) + rnd() * 0.075;
+    const candidate = {
+      x: hubPos.x + ring * Math.cos(theta) * dist,
+      y: hubPos.y + y * dist * 0.80,
+      z: hubPos.z + ring * Math.sin(theta) * dist * 0.90,
+      phase,
+    };
+    let gap = Infinity;
+    for (const other of neighbors) {
+      const d2 = (candidate.x - other.x) ** 2 + (candidate.y - other.y) ** 2 + (candidate.z - other.z) ** 2;
+      gap = Math.min(gap, d2);
+    }
+    if (gap > bestGap) {
+      best = candidate;
+      bestGap = gap;
+    }
+  }
+  return best;
 }
 
 /**
@@ -320,25 +347,40 @@ export function buildSemanticCosmicWebGraph(graphData, prevGraph = null) {
   }
 
   // Place Cluster satellite nodes around their primary Hub
-  for (let i = 0; i < rawNodes.length; i++) {
+  const positionedByDomain = new Map();
+  const uniqueClusters = new Map();
+  for (let i = 0; i < rawNodes.length && uniqueClusters.size < MAX_CLUSTERS; i++) {
     const c = rawNodes[i];
+    if (!c) continue;
     const clusterId = String(c.clusterId || c.id || `cluster-${i}`);
+    if (uniqueClusters.has(clusterId)) continue;
+    const domainId = String(c.domainId || (Array.isArray(c.domainIds) ? c.domainIds[0] : '') || '') || null;
+    const heat = clamp(Number(c.heatScore ?? c.heat ?? 35) || 0, 0, 100);
+    const tier = Number(c.lodTier);
+    // Untiered payloads keep their original overview behavior.
+    const lodTier = tier === 2 || tier === 3 ? tier : 1;
+    const prev = prevById.get(`cluster:${clusterId}`);
+    const reuse = prev?.domainId === domainId && prev.lodTier === lodTier;
+    if (!positionedByDomain.has(domainId)) positionedByDomain.set(domainId, []);
+    if (reuse) positionedByDomain.get(domainId).push(prev);
+    uniqueClusters.set(clusterId, { c, clusterId, domainId, heat, lodTier, prev, reuse, index: i });
+  }
+  // Seeded placement is independent of payload order on a cold load.
+  const sortedClusters = [...uniqueClusters.values()].sort((a, b) => a.clusterId.localeCompare(b.clusterId));
+  for (const { c, clusterId, domainId, heat, lodTier, prev, reuse, index } of sortedClusters) {
     const nodeId = `cluster:${clusterId}`;
     if (nodeIndexById.has(nodeId)) continue;
 
-    const domainId = String(c.domainId || (Array.isArray(c.domainIds) ? c.domainIds[0] : '') || '');
     const hubIdx = hubIndexByDomainId.get(domainId);
     const hubNode = hubIdx !== undefined ? nodes[hubIdx] : null;
     const hubPos = hubNode
       ? { x: hubNode.x, y: hubNode.y, z: hubNode.z }
       : { x: 0, y: 0, z: 0 };
 
-    const col = resolveColor(c.colorToken || hubNode?.colorToken, i);
-    const prev = prevById.get(nodeId);
-    const heat = clamp(Number(c.heatScore ?? c.heat ?? 35), 0, 100);
-    const pos = prev
-      ? { x: prev.x, y: prev.y, z: prev.z, phase: prev.phase }
-      : placeClusterDeterministically(clusterId, hubPos, heat);
+    const col = resolveColor(c.colorToken || hubNode?.colorToken, index);
+    const positioned = positionedByDomain.get(domainId);
+    const pos = reuse ? prev : placeClusterDeterministically(clusterId, hubPos, heat, lodTier, positioned);
+    if (!reuse) positioned.push(pos);
 
     const node = {
       id: nodeId,
@@ -356,7 +398,12 @@ export function buildSemanticCosmicWebGraph(graphData, prevGraph = null) {
       watchHit: Boolean(c.watchHit),
       sourceNames: Array.isArray(c.sourceNames) ? c.sourceNames : [],
       publishedAt: c.publishedAt || null,
-      baseR: 0.62 + clamp(heat / 100, 0, 1) * 0.72 + (c.watchHit ? 0.18 : 0),
+      lodTier,
+      summaryExcerpt: String(c.summaryExcerpt ?? ''),
+      mediaPreview: c.mediaPreview?.proxyUrl ? c.mediaPreview : null,
+      topCommentPreview: c.topCommentPreview?.quote ? c.topCommentPreview : null,
+      relatedClusterIds: Array.isArray(c.relatedClusterIds) ? [...c.relatedClusterIds] : [],
+      baseR: (0.62 + heat * 0.0072) * (1 - (lodTier - 1) * 0.13) + (c.watchHit ? 0.18 : 0),
       isHub: false,
       x: pos.x,
       y: pos.y,
@@ -394,11 +441,21 @@ export function buildSemanticCosmicWebGraph(graphData, prevGraph = null) {
       b: hi,
       curve: (rnd() - 0.5) * (kind === 'cross' ? 0.22 : 0.14),
       weight: clamp(Number(weight) || 0.5, 0.15, 1.0),
-      kind: kind === 'cross' ? 'cross' : 'domain',
+      kind: kind === 'story' || kind === 'cross' ? kind : 'domain',
     });
     nodes[lo].neighbors.push({ edgeIdx, dir: 1 });
     nodes[hi].neighbors.push({ edgeIdx, dir: -1 });
   };
+
+  // Explicit story relations take precedence over generic filaments for the same pair.
+  for (let i = 0; i < nodes.length; i++) {
+    for (const id of nodes[i].relatedClusterIds || []) {
+      const target = String(id);
+      const related = nodeIndexById.get(`cluster:${target}`)
+        ?? (target.startsWith('cluster:') ? nodeIndexById.get(target) : undefined);
+      addEdge(i, related, 0.34, 'story');
+    }
+  }
 
   // 1) Server-provided semantic edges
   for (const e of rawEdges) {
@@ -544,6 +601,9 @@ export function buildSemanticCosmicWebGraph(graphData, prevGraph = null) {
  * @param {number} [opts.centerShiftX=0] - horizontal screen offset in px (e.g., negative when right drawer open)
  * @param {number} [opts.centerShiftY=0] - vertical screen offset in px
  * @param {number} [opts.scale=1] - projection scale multiplier
+ * @param {number} [opts.webZoom=1] - zoom about the shifted viewport center
+ * @param {number} [opts.webPanX=0] - translation in normalized zoomed spread units (positive moves stars right)
+ * @param {number} [opts.webPanY=0] - translation in normalized zoomed spread units (positive moves stars down)
  * @returns {Array<{ x: number, y: number, z: number, persp: number, visible: boolean, node: Object }>}
  */
 export function projectCosmicWeb(webGraph, w, h, anim, opts = {}) {
@@ -560,8 +620,15 @@ export function projectCosmicWeb(webGraph, w, h, anim, opts = {}) {
   const centerShiftY = Number(opts.centerShiftY || 0);
   const scale = Number(opts.scale || 1);
 
-  const rotY = Math.sin(realTime * 0.07) * 0.14 + camX * 0.35 + parX * 0.08;
-  const rotX = Math.cos(realTime * 0.055) * 0.08 + camY * 0.28 + parY * 0.06;
+  const webZoom = clamp(Number.isFinite(opts.webZoom) ? opts.webZoom : 1, 0.85, 5);
+  const panX = Number.isFinite(opts.webPanX) ? opts.webPanX : 0;
+  const panY = Number.isFinite(opts.webPanY) ? opts.webPanY : 0;
+  // Fade pointer/ambient rotation to the reference pose at close range so focus targets stay locked.
+  const restTilt = WEB_REST_TILT;
+  const drift = webZoom <= 1 ? 1 : clamp((2.15 - webZoom) / 1.15, 0, 1);
+  const rotY = (Math.sin(realTime * 0.07) * 0.14 + camX * 0.35 + parX * 0.08) * drift;
+  const animatedTilt = Math.cos(realTime * 0.055) * restTilt + camY * 0.28 + parY * 0.06;
+  const rotX = drift === 1 ? animatedTilt : restTilt + (animatedTilt - restTilt) * drift;
   const cY = Math.cos(rotY);
   const sY = Math.sin(rotY);
   const cX = Math.cos(rotX);
@@ -569,8 +636,8 @@ export function projectCosmicWeb(webGraph, w, h, anim, opts = {}) {
 
   const cx = w * 0.5 + centerShiftX;
   const cy = h * 0.5 + centerShiftY;
-  const spreadX = w * 0.52 * scale;
-  const spreadY = h * 0.66 * scale;
+  const spreadX = w * WEB_PROJECTION_SPREAD_X * scale;
+  const spreadY = h * WEB_PROJECTION_SPREAD_Y * scale;
 
   const nodes = webGraph.nodes;
   const out = new Array(nodes.length);
@@ -583,13 +650,182 @@ export function projectCosmicWeb(webGraph, w, h, anim, opts = {}) {
     const z2 = n.y * sX + z1 * cX;
     const denom = Math.max(0.22, 1.0 - z2 * 0.34);
     const persp = 1.0 / denom;
-    const sx = cx + x1 * spreadX * persp;
-    const sy = cy + y2 * spreadY * persp;
+    const sx = cx + (x1 * spreadX * persp + panX * spreadX) * webZoom;
+    const sy = cy + (y2 * spreadY * persp + panY * spreadY) * webZoom;
     const visible = z2 > -1.8 && sx >= -80 && sx <= w + 80 && sy >= -80 && sy <= h + 80;
     out[i] = { x: sx, y: sy, z: z2, persp, visible, node: n };
   }
 
   return out;
+}
+
+/** Camera target in normalized projection units; null when the requested node is absent. */
+export function findWebNodeFocusTarget(webGraph, { domainId, clusterId } = {}) {
+  const nodes = webGraph?.nodes;
+  const cluster = clusterId == null ? null : nodes?.find((n) => !n.isHub && n.clusterId === String(clusterId));
+  const node = cluster || (domainId == null ? null : nodes?.find((n) => n.isHub && n.domainId === String(domainId)));
+  if (!node) return null;
+  const targetZoom = node.isHub ? 2.15 : 3.35;
+  const [point] = projectCosmicWeb({ nodes: [node] }, 1, 1, null, { webZoom: targetZoom });
+  return {
+    panX: (0.5 - point.x) / (WEB_PROJECTION_SPREAD_X * targetZoom),
+    panY: (0.5 - point.y) / (WEB_PROJECTION_SPREAD_Y * targetZoom),
+    targetZoom,
+  };
+}
+
+const LABEL_SIZES = { hub: [155, 28], cluster: [168, 26] };
+const SATELLITE_SIZES = { source: [104, 26], excerpt: [154, 30], media: [104, 34], comment: [152, 36] };
+const LAYOUT_PADDING = 4;
+
+function oneLine(text, limit) {
+  const line = String(text ?? '').replace(/\s+/g, ' ').trim();
+  return line.length <= limit ? line : `${line.slice(0, limit - 1).trimEnd()}…`;
+}
+
+/**
+ * Pure screen-space layout. Label overrides (`labelX`, `labelY`, `labelMaxWidth`)
+ * do not move the underlying projected stars. Satellite IDs identify DOM slots;
+ * their keys change if the displayed content changes, never on movement alone.
+ */
+export function computeWebLodLayout(projected, {
+  w = 0, h = 0, webZoom = 1, drawerRightEdge = w, focusedDomainId = null,
+  selectedClusterId = null, hoveredClusterId = null, activeClusterDetail = null,
+} = {}) {
+  const lodTier = getWebLodTier(webZoom);
+  const visibleNodeIds = new Set();
+  const projectedById = new Map();
+  const satellites = [];
+  const result = { lodTier, visibleNodeIds, projectedById, focusNode: null, satellites };
+  const left = 56, right = Math.min(w, drawerRightEdge) - 24;
+  const top = 68, bottom = h - 72;
+  const centerX = (left + right) / 2, centerY = (top + bottom) / 2;
+  const distance = (p) => (p.x - centerX) ** 2 + (p.y - centerY) ** 2;
+  const candidates = [];
+  let selected, hovered;
+
+  for (const p of projected || []) {
+    if (!p?.node?.id) continue;
+    projectedById.set(p.node.id, p);
+    if (!Number.isFinite(p.x) || !Number.isFinite(p.y)) continue;
+    const n = p.node;
+    const isSelected = selectedClusterId != null && n.clusterId === String(selectedClusterId);
+    const isHovered = hoveredClusterId != null && n.clusterId === String(hoveredClusterId);
+    if (isSelected) selected = p;
+    if (isHovered) hovered = p;
+    if (!isSelected && !isHovered && !p.visible) continue;
+    const tier = n.lodTier || 1;
+    if (!isSelected && !isHovered && !n.isHub && !n.watchHit && tier > 1 && lodTier < 2) continue;
+    const priority = isSelected ? 0 : isHovered ? 1 : n.isHub ? 2 : n.watchHit ? 3 : 3 + tier;
+    candidates.push({ p, priority, focused: n.domainId === focusedDomainId && focusedDomainId != null, d2: distance(p) });
+  }
+  if (right - left <= LAYOUT_PADDING * 2 || bottom <= top) return result;
+  candidates.sort((a, b) => a.priority - b.priority
+    || (a.priority === 6 ? a.d2 - b.d2 : Number(b.focused) - Number(a.focused))
+    || (b.p.node.heatScore || 0) - (a.p.node.heatScore || 0)
+    || a.d2 - b.d2 || a.p.node.id.localeCompare(b.p.node.id));
+
+  const occupied = [];
+  const makeBox = (x, y, halfW, halfH) => ({ l: x - halfW, r: x + halfW, t: y - halfH, b: y + halfH });
+  const fits = (box) => box.l >= left && box.r <= right && box.t >= top && box.b <= bottom
+    && !occupied.some((b) => box.l < b.r && box.r > b.l && box.t < b.b && box.b > b.t);
+  const maxStars = [12, 34, 44][lodTier - 1];
+  let stars = 0;
+  let closest, closestD2 = Infinity;
+  for (const { p, priority, d2 } of candidates) {
+    const { node: n } = p;
+    const pinned = priority <= 1;
+    if (!n.isHub && stars >= maxStars) continue;
+    const [width, height] = LABEL_SIZES[n.isHub ? 'hub' : 'cluster'];
+    const labelMaxWidth = Math.min(width, right - left - LAYOUT_PADDING * 2);
+    const hw = labelMaxWidth / 2 + LAYOUT_PADDING;
+    const hh = height / 2 + LAYOUT_PADDING;
+    let x = p.x, y = p.y;
+    if (pinned) {
+      x = clamp(x, left + hw, right - hw);
+      y = clamp(y, top + hh, bottom - hh);
+    }
+    let box = makeBox(x, y, hw, hh);
+    if (pinned && !fits(box)) {
+      // Keep both active stories if possible, without allowing their pills to overlap.
+      const alternatives = occupied.flatMap((b) => [
+        [x, b.t - hh], [x, b.b + hh], [b.l - hw, y], [b.r + hw, y],
+      ]).sort((a, b) => Math.hypot(a[0] - x, a[1] - y) - Math.hypot(b[0] - x, b[1] - y));
+      const next = alternatives.find(([ax, ay]) => fits(makeBox(ax, ay, hw, hh)));
+      if (next) {
+        [x, y] = next;
+        box = makeBox(x, y, hw, hh);
+      }
+    }
+    if (!fits(box)) continue;
+    occupied.push(box);
+    visibleNodeIds.add(n.id);
+    projectedById.set(n.id, { ...p, labelX: x, labelY: y, labelMaxWidth });
+    if (!n.isHub) {
+      stars++;
+      if (n.clusterId != null && d2 < closestD2) {
+        closest = p;
+        closestD2 = d2;
+      }
+    }
+  }
+
+  const focus = selected || hovered || closest;
+  result.focusNode = focus || null;
+  if (!focus || (lodTier < 3 && !(selected && webZoom >= 2.35))) return result;
+  const { x: parentX, y: parentY, node } = focus;
+  if (parentX < left || parentX > right || parentY < top || parentY > bottom) return result;
+  const rawDetailId = activeClusterDetail?.clusterId ?? activeClusterDetail?.id;
+  const detail = rawDetailId != null
+    ? (String(rawDetailId) === node.clusterId ? activeClusterDetail : null)
+    : (selected === focus || hovered === focus ? activeClusterDetail : null);
+  const content = [];
+  const sourceNames = [...new Set((node.sourceNames || []).map((name) => oneLine(name, 24)).filter(Boolean))];
+  for (const [i, label] of sourceNames.slice(0, 2).entries()) content.push({ kind: 'source', slot: `source:${i}`, label });
+  const excerpt = oneLine(node.summaryExcerpt, 68);
+  if (excerpt) content.push({ kind: 'excerpt', label: excerpt });
+  const mediaPreview = detail?.media?.[0] || (node.mediaPreview?.proxyUrl ? node.mediaPreview : null);
+  if (mediaPreview) content.push({ kind: 'media', label: String(mediaPreview.kind || ''), mediaPreview });
+  const comment = detail?.communityComments?.[0] || node.topCommentPreview;
+  const quote = oneLine(comment?.quote ?? comment?.text, 64);
+  if (quote) {
+    const rawLikes = comment.likes;
+    const likes = typeof rawLikes === 'string' && rawLikes.trim()
+      ? rawLikes.trim().slice(0, 24)
+      : (Number.isFinite(Number(rawLikes)) && Number(rawLikes) > 0 ? Number(rawLikes) : '');
+    const topCommentPreview = { platform: String(comment.platform || ''), quote, likes };
+    content.push({ kind: 'comment', label: quote, topCommentPreview });
+  }
+
+  const radius = 112;
+  const towardCenter = Math.atan2(centerY - parentY, centerX - parentX);
+  for (const [i, item] of content.entries()) {
+    const [width, height] = SATELLITE_SIZES[item.kind];
+    const hw = width / 2 + LAYOUT_PADDING, hh = height / 2 + LAYOUT_PADDING;
+    let placement;
+    // Prefer a regular orbit; probe adjacent angles and a wider radius if a label is in the way.
+    for (const r of [radius, 128, 96]) {
+      for (let s = 0; s < 16; s++) {
+        const offset = s % 2 ? (s + 1) / 2 : -s / 2;
+        const angle = towardCenter + i * Math.PI * 2 / content.length + offset * Math.PI / 8;
+        const x = clamp(parentX + Math.cos(angle) * r, left + hw, right - hw);
+        const y = clamp(parentY + Math.sin(angle) * r, top + hh, bottom - hh);
+        const box = makeBox(x, y, hw, hh);
+        if (Math.hypot(x - parentX, y - parentY) < 70 || !fits(box)) continue;
+        placement = { x, y, box };
+        break;
+      }
+      if (placement) break;
+    }
+    if (!placement) continue;
+    const { x, y, box } = placement;
+    occupied.push(box);
+    const id = `${node.id}:${item.slot || item.kind}`;
+    const key = JSON.stringify([id, item.label, item.mediaPreview?.proxyUrl, item.topCommentPreview?.platform, item.topCommentPreview?.likes, node.colorToken]);
+    satellites.push({ ...item, id, key, x, y, parentX, parentY, radius,
+      clusterId: node.clusterId, colorToken: node.colorToken, width, height });
+  }
+  return result;
 }
 
 /**
