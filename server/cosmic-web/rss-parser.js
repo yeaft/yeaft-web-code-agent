@@ -119,7 +119,11 @@ export function* scanMarkup(input, { xml = false, rawTags = new Set(), emitRawOp
       if (!whitespace.test(c)) last = i;
       i++;
     }
-    if (str[i] !== '>') continue;
+    if (str[i] !== '>') {
+      // Discarded unterminated tag/attribute/directive at EOF truncates the trailing source span.
+      if (i >= str.length && meta) meta.truncated = true;
+      continue;
+    }
     i++;
     if (directive) continue;
     const selfClosing = str[last] === '/';
@@ -127,6 +131,7 @@ export function* scanMarkup(input, { xml = false, rawTags = new Set(), emitRawOp
     if (!closing && rawTags.has(name)) { raw = name; if (!emitRawOpen) continue; }
     yield { type: 'tag', name, closing, selfClosing, attrsText: str.slice(attrStart, xml && selfClosing ? last : i - 1), text: str.slice(start, i), end: i };
   }
+  if (raw && meta) meta.truncated = true;
 }
 
 const textRawTags = new Set(['script', 'style']);

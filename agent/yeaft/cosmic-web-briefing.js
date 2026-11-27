@@ -906,7 +906,7 @@ function groundedComments(items, evidence) {
   return result;
 }
 
-function normalizeOutput(parsed, mode, language, news, evidence, schemaVersion = 2) {
+function normalizeOutput(parsed, mode, language, news, evidence, schemaVersion = 2, { includeExcerptProvenance = false } = {}) {
   const daily = mode === 'daily_briefing';
   const followUp = mode === 'follow_up';
   const legacyV1Story = schemaVersion === 1 && (mode === 'brief' || mode === 'synthesize');
@@ -921,7 +921,12 @@ function normalizeOutput(parsed, mode, language, news, evidence, schemaVersion =
     const items = groundedItems(parsed.items, 15, item => {
       const url = normalizedUrl(item?.url);
       if (!searchPageUrls.has(url)) return;
-      const fields = projectText(item, { title: 500, sourceName: 100, summaryExcerpt: 1000, publishedAt: 64 });
+      // Redact URLs/credentials BEFORE enforcing the 1,000-char excerpt cap so boundary-straddling credentials cannot survive.
+      const normalizedExcerpt = typeof item?.summaryExcerpt === 'string'
+        ? item.summaryExcerpt.replace(/\r\n/g, '\n').trim()
+        : '';
+      const scrubbedExcerpt = normalizedExcerpt ? stripPrivateUrls(normalizedExcerpt, { maxOutputChars: 1000 }) : '';
+      const fields = projectText({ ...item, summaryExcerpt: scrubbedExcerpt }, { title: 500, sourceName: 100, summaryExcerpt: 1000, publishedAt: 64 });
       if (!fields.title || !fields.sourceName) return;
       fields.summaryExcerpt ??= '';
       if (!Number.isSafeInteger(fields.publishedAt) || fields.publishedAt < 0) {
@@ -930,7 +935,7 @@ function normalizeOutput(parsed, mode, language, news, evidence, schemaVersion =
       const mediaUrl = normalizedUrl(item.mediaUrl);
       return { ...fields, url, ...(observedMediaUrls.has(mediaUrl) ? { mediaUrl } : {}) };
     });
-    return { items, searchCount };
+    return { items, searchCount, ...(includeExcerptProvenance ? { excerptVersion: 2 } : {}) };
   }
 
   onlyKeys(parsed, daily
@@ -1574,8 +1579,9 @@ export async function runCosmicWebBriefing({ mode, perspective = 'balanced', lan
   if (typeof response?.text !== 'string' || response.text.length > MAX_RESPONSE_CHARS || response.toolCalls?.length
     || ['tool_use', 'content_filter', 'refusal', 'pause_turn', 'model_context_window_exceeded'].includes(response.stopReason)) throw invalidOutput();
   const parsed = parseDecisionJsonObject(response.text);
+  const includeExcerptProvenance = payload?.excerptProvenance === true;
   return {
-    result: normalizeOutput(parsed, mode, outputLanguage, news, evidence, effectiveSchema),
+    result: normalizeOutput(parsed, mode, outputLanguage, news, evidence, effectiveSchema, { includeExcerptProvenance }),
     meta: { model, skillSource: skill.source, durationMs: Math.round(performance.now() - started) },
   };
 }

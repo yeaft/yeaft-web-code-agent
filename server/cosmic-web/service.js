@@ -15,6 +15,8 @@ import { ARTICLE_EXTRACTOR_VERSION, extractCleanArticle } from './article-extrac
 import { buildGraphProjection, canonicalizeUrl, CLUSTER_THRESHOLD, CLUSTER_WINDOW_MS, clusterSimilarity, computeHeatScore, extractTokens } from './clusterer.js';
 import { clearAllCosmicWebAiRequests, listCapableAgentsForUser, requestCosmicWebAi, validateCosmicWebAiResult } from './ai-bridge.js';
 
+export const PRIVATE_BRIEF_CONTEXT_VERSION = 2;
+
 const minute = 60_000;
 const refreshTtl = 5 * minute;
 const defaultDomains = BUILTIN_DOMAINS.filter(d => d.defaultEnabled).map(d => d.id);
@@ -497,8 +499,8 @@ export function createCosmicWebService({ fetcher = safeFetch, dnsLookup, now = D
     ensureRunning(signal);
     ensureActive(userId);
     const { perspective, language, explicitAgentId, agent } = options;
-    // Version the rendering contract too: old cached Markdown may contain autolinks.
-    const key = hash(5, mode, perspective, language, explicitAgentId, payload);
+    // Version the rendering and private-provenance contracts: old cached private responses may contain pre-upgrade excerpts.
+    const key = hash(payload.isPrivateSource ? 6 : 5, mode, perspective, language, explicitAgentId, payload);
     const cached = db.getAiCache(userId, key, now());
     if (cached && body.force !== true) {
       const media = Array.isArray(cached.media) ? signMediaList(cached.media, userId) : cached.media;
@@ -1229,7 +1231,10 @@ export function createCosmicWebService({ fetcher = safeFetch, dnsLookup, now = D
     return { id: `radar-${hash(userId, domain.id)}`, ownerUserId: userId, domainId: domain.id, name: domain.name,
       url: '', kind: 'radar' };
   }
-  const briefKey = (id, itemId, agentId) => hash(4, 'brief-context', id, itemId, agentId);
+  const briefKey = (id, itemId, agentId, isPrivateSource = false) =>
+    isPrivateSource
+      ? hash(5, 'brief-context', PRIVATE_BRIEF_CONTEXT_VERSION, id, itemId, agentId)
+      : hash(4, 'brief-context', id, itemId, agentId);
 
   function stats(userId, prefs, rows) {
     const states = db.listUserClusterStates(userId);
@@ -1418,8 +1423,8 @@ export function createCosmicWebService({ fetcher = safeFetch, dnsLookup, now = D
       }, signal, options);
       ensureRunning(signal);
       ensureActive(userId);
-      db.setAiCache(userId, briefKey(id, item.id, result.agentId), result.tldr, now() + 6 * 60 * minute);
-      return result;
+      db.setAiCache(userId, briefKey(id, item.id, result.agentId, c.isPrivateSource), result.tldr, now() + 6 * 60 * minute);
+      return c.isPrivateSource ? { ...result, briefContextVersion: PRIVATE_BRIEF_CONTEXT_VERSION } : result;
     },
     async followUp(userId, userRole, id, body = {}, reqSignal) {
       const signal = combineSignals(reqSignal);
@@ -1430,8 +1435,11 @@ export function createCosmicWebService({ fetcher = safeFetch, dnsLookup, now = D
       const c = visibleCluster(userId, id);
       const item = selectItem(c, body);
       const context = c.isPrivateSource ? noEnrichment() : await briefingEnrichment(c, signal);
-      const cachedBriefContext = options.agent ? db.getAiCache(userId, briefKey(id, item.id, options.agent.id), now()) : undefined;
-      const rawBriefContext = cachedBriefContext || (typeof body.briefContext === 'string' ? body.briefContext.trim() : undefined);
+      const cachedBriefContext = options.agent ? db.getAiCache(userId, briefKey(id, item.id, options.agent.id, c.isPrivateSource), now()) : undefined;
+      const clientBriefContext = typeof body.briefContext === 'string' && (!c.isPrivateSource || body.briefContextVersion === PRIVATE_BRIEF_CONTEXT_VERSION)
+        ? body.briefContext.trim()
+        : undefined;
+      const rawBriefContext = cachedBriefContext || clientBriefContext;
       const allowResearch = !c.isPrivateSource && body.research === true && Boolean(options.agent?.supportsResearch);
       const safeExcerpt = c.isPrivateSource ? trustedPrivateExcerpt(item) : item.summaryExcerpt;
       // Scrub private briefContext BEFORE enforcing the 1,500-char limit so boundary-straddling username-only URLs cannot survive.
@@ -1462,8 +1470,9 @@ export function createCosmicWebService({ fetcher = safeFetch, dnsLookup, now = D
       radarActive.add(userId);
       try {
         const result = await requestAi({ userId, userRole, agentId: options.agent.id, mode: 'topic_radar', perspective: options.perspective,
-          language: options.language, payload: { topic: domain.name, topicName: domain.name, keywords: domain.keywords, research: true }, signal });
+          language: options.language, payload: { topic: domain.name, topicName: domain.name, keywords: domain.keywords, research: true, excerptProvenance: true }, signal });
         if (!validateCosmicWebAiResult(result, 'topic_radar')) throw error(502, 'Agent returned an invalid radar result');
+        const hasCertifiedRadarExcerpts = result.excerptVersion === db.PRIVATE_EXCERPT_VERSION;
         ensureRunning(signal);
         ensureActive(userId);
         const seen = new Set();
@@ -1475,8 +1484,11 @@ export function createCosmicWebService({ fetcher = safeFetch, dnsLookup, now = D
           try { await limit(() => validateExternalUrl(url, { dnsLookup, signal, timeoutMs: 5000 })); }
           catch { return null; }
           const media = normalizeMedia([row.mediaUrl]);
-          const safeRadarExcerpt = stripPrivateUrls(cleanText(row.summaryExcerpt, { dropTruncatedToken: true }), { maxOutputChars: 1000 })
-            .replace(/\s+/gu, ' ').trim().slice(0, 1000);
+          // Never run HTML entity-decoding cleanText() after Agent clipping; normalize whitespace and scrub defense-in-depth.
+          const safeRadarExcerpt = typeof row.summaryExcerpt === 'string'
+            ? stripPrivateUrls(row.summaryExcerpt.replace(/\s+/gu, ' ').trim(), { maxOutputChars: 1000 })
+              .replace(/\s+/gu, ' ').trim().slice(0, 1000)
+            : '';
           return { url, title, sourceName: cleanText(row.sourceName).slice(0, 150), summaryExcerpt: safeRadarExcerpt,
             publishedAt: Math.min(now(), parseTimestamp(row.publishedAt) ?? now()), media };
         }))).filter(Boolean);
@@ -1491,7 +1503,11 @@ export function createCosmicWebService({ fetcher = safeFetch, dnsLookup, now = D
         const scanTime = now();
         const retained = items.filter(item => item.publishedAt >= scanTime - db.RETENTION_MS);
         const added = retained.length
-          ? ingestCosmicWebItems(source, retained.map(item => ({ ...item, excerptVersion: db.PRIVATE_EXCERPT_VERSION })), scanTime)
+          ? ingestCosmicWebItems(
+            source,
+            retained.map(item => ({ ...item, excerptVersion: hasCertifiedRadarExcerpts ? db.PRIVATE_EXCERPT_VERSION : 0 })),
+            scanTime,
+          )
           : 0;
         if (retained.length) {
           db.recordSourceRefresh(source.id, userId, scanTime);

@@ -297,7 +297,7 @@ const answers = result => list(result.media, 0, 6, media) && list(result.citatio
 
 export function validateCosmicWebAiResult(result, mode) {
   if (!object(result)) return false;
-  if (mode === 'topic_radar') return !!(only(result, ['items', 'searchCount']) && list(result.items, 0, 20, radarItem) && count(result.searchCount));
+  if (mode === 'topic_radar') return !!(only(result, ['items', 'searchCount', 'excerptVersion']) && list(result.items, 0, 20, radarItem) && count(result.searchCount) && optional(result.excerptVersion, count));
   if (mode === 'follow_up') return !!(only(result, ['question', 'answer', 'bullets', 'media', 'citations', 'followUps', 'researched', 'searchCount', 'evidenceCount']) &&
     text(result.question, 500) && text(result.answer, 6000) && !hasUnsafeMarkdown(result.answer) && list(result.bullets, 0, 6, bullet) && answers(result));
   if (!text(result.fullMarkdown, mode === 'daily_briefing' ? 12_000 : 16_000) || hasUnsafeMarkdown(result.fullMarkdown)) return false;

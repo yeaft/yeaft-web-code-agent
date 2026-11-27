@@ -18,7 +18,7 @@ import { ARTICLE_EXTRACTOR_VERSION, extractCleanArticle } from '../../server/cos
 import { BUILTIN_DOMAINS, BUILTIN_SOURCES } from '../../server/cosmic-web/catalog.js';
 import { fetchSource } from '../../server/cosmic-web/sources.js';
 import { buildGraphProjection, canonicalizeUrl, clusterSimilarity, computeHeatScore, extractTokens } from '../../server/cosmic-web/clusterer.js';
-import { createCosmicWebService, ingestCosmicWebItems, startCosmicWebScheduler, stopCosmicWebScheduler } from '../../server/cosmic-web/service.js';
+import { createCosmicWebService, ingestCosmicWebItems, PRIVATE_BRIEF_CONTEXT_VERSION, startCosmicWebScheduler, stopCosmicWebScheduler } from '../../server/cosmic-web/service.js';
 import { clearAllCosmicWebAiRequests, clearCosmicWebAiRequestsForAgent, handleCosmicWebAiResponse,
   listCapableAgentsForUser, requestCosmicWebAi, validateCosmicWebAiResult } from '../../server/cosmic-web/ai-bridge.js';
 import * as encryption from '../../server/encryption.js';
@@ -1256,7 +1256,9 @@ describe('2.0 graph and AI contracts', () => {
     agents.set('v2-grace', { ownerId: 'grace', name: 'v2-grace', capabilities: ['cosmic_web_briefing', 'cosmic_web_follow_up'], encryptOutbound: false, ws: { readyState: 1, send: () => {} } });
     // Uncached followUp with username-only userinfo straddling the 1,500-char boundary MUST scrub before clipping (no cached brief yet!).
     const boundaryBriefContext = `${'x'.repeat(1490)} //USERONLYCTXSECRET99@intranet:8080/api`;
-    await rssSvc.followUp('grace', 'user', boundaryCluster.id, { question: 'Uncached follow-up?', briefContext: boundaryBriefContext, research: true });
+    await rssSvc.followUp('grace', 'user', boundaryCluster.id, {
+      question: 'Uncached follow-up?', briefContext: boundaryBriefContext, briefContextVersion: PRIVATE_BRIEF_CONTEXT_VERSION, research: true,
+    });
     const uncachedFuPayload = requestAi.mock.lastCall[0].payload;
     expect(uncachedFuPayload.briefContext.length).toBeLessThanOrEqual(1500);
     expect(JSON.stringify(uncachedFuPayload)).not.toContain('USERONLYCTXSECRET99');
@@ -1342,7 +1344,9 @@ describe('2.0 graph and AI contracts', () => {
     expect(r3PctCluster.summaryExcerpt).toContain('visit www%2e[1]');
     agents.set('v2-heidi', { ownerId: 'heidi', name: 'v2-heidi', capabilities: ['cosmic_web_briefing', 'cosmic_web_follow_up'], encryptOutbound: false, ws: { readyState: 1, send: () => {} } });
     // Uncached followUp (before aiBrief populates cache) + Markdown-escaped article extraction -> aiBrief for Blocker #1 & #2
-    await r3Svc.followUp('heidi', 'user', r3OverflowCluster.id, { question: 'Check overflow?', briefContext: `${r3OverflowRaw} ${r3PctDotsRaw}`, research: true });
+    await r3Svc.followUp('heidi', 'user', r3OverflowCluster.id, {
+      question: 'Check overflow?', briefContext: `${r3OverflowRaw} ${r3PctDotsRaw}`, briefContextVersion: PRIVATE_BRIEF_CONTEXT_VERSION, research: true,
+    });
     const r3OverflowFuJson = JSON.stringify(requestAi.mock.lastCall[0].payload);
     for (const secret of ['IPV6CUTOVF99', 'HOSTCUTOVF99', 'WWWCUTOVF99', 'pcthost1', 'pcthost2', 'pcthost3', 'pcthost4', 'pcthost5', 'pcthost6', 'pcthost7', 'pcthost8', 'pcthost9', 'pctwww1', 'pctwww2']) {
       expect(r3OverflowFuJson).not.toContain(secret);
@@ -1710,6 +1714,174 @@ describe('2.0 graph and AI contracts', () => {
     expect(r5Prompts.at(-1)).toContain('Refreshed clean excerpt');
     expect(r5Prompts.at(-1)).not.toContain('LEGACYCLIPUSER99');
     expect(r5Prompts.at(-1)).not.toContain('CLEANPASS99');
+
+    // Round 27 (PR #2032 Round 6) Blocker #1/#2/#3/#4 isolated end-to-end regressions:
+    // (1) 40,000-char AI cap cutting inside authority right after `<code>//USER</code>`: Clean Article display stays 40k intact,
+    //     while source-boundary DOM slicing removes BOTH `<code>//CODECLOSEUSER</code>` AND `@intranet` before reaching the real Agent model prompt.
+    // (2) scanMarkup unfinished quoted attribute & unclosed raw `<script>` at EOF in private RSS CDATA with `<wbr>` inside trailing token:
+    //     marks truncated so cleanText rewinds across `<wbr>`, storing clean excerpt_version=2 with ZERO fragments in DB or model prompt.
+    // (3) Private follow-ups reject pre-upgrade brief-context cache rows (`hash(4, 'brief-context', ...)`) AND unversioned client-echoed `body.briefContext`,
+    //     while accepting fresh v2 `aiBrief` cache + `briefContextVersion: 2`.
+    // (4) Topic Radar scrubs `summaryExcerpt` BEFORE clipping to 1,000 chars and certifies `excerptVersion: 2` when `excerptProvenance: true`;
+    //     legacy Radar responses lacking `excerptVersion: 2` are persisted as `excerpt_version = 0` and omitted from subsequent private AI prompts.
+    const r6CodeClose40kHtml = `<article><p>https://cdn.example/${'a'.repeat(39_940)} Safe40kClose <code>//CODECLOSEUSER99</code>@intranet:8080/secret</p></article>`;
+    const r6UnfinishedAttrRss = `<rss><channel>
+      <item><title>Code Close 40k Article</title><link>https://private.example/r6-code-close</link><description>Close summary</description></item>
+      <item><title>Unfinished Quoted Attr Feed</title><link>https://private.example/r6-attr-eof</link><description><![CDATA[Safe attr prose //ATTRTRUNC<wbr>USER99<span title="unclosed@intranet:8080]]></description></item>
+      <item><title>Unclosed Script Eof Feed</title><link>https://private.example/r6-script-eof</link><description><![CDATA[Safe script prose //SCRIPTTRUNC<wbr>USER99<script>var x = "@intranet:8080";]]></description></item>
+    </channel></rss>`;
+    const r6Prompts = [];
+    const r6AgentAi = vi.fn(async ({ mode, perspective, language, payload }) => {
+      if (mode === 'topic_radar') {
+        const searchUrl = 'https://radar.example/fresh-story';
+        const longRadarExcerpt = `${'r'.repeat(982)} Safe radar //RADARCLIPUSER99@intranet:8080/api`;
+        const WebSearch = vi.fn().mockResolvedValue({ results: [{ url: searchUrl, title: 'Fresh Radar Story', snippet: 'Radar snippet' }] });
+        const radarAdapter = {
+          captureStream: vi.fn()
+            .mockImplementationOnce(async function* () { yield { type: 'tool_call', id: 'tc1', name: 'WebSearch', input: { query: 'radar', limit: 5 } }; })
+            .mockImplementationOnce(async function* () {}),
+          call: vi.fn().mockResolvedValue({
+            text: JSON.stringify({
+              items: [{ title: 'Fresh Radar Story', url: searchUrl, sourceName: 'RadarWire', summaryExcerpt: longRadarExcerpt }],
+              searchCount: 1,
+            }),
+          }),
+        };
+        const { result } = await runCosmicWebBriefing({
+          mode, perspective, language, payload,
+          config: { fastModel: 'test/fast', defaultModel: 'test/fast' },
+          adapter: radarAdapter, toolExecutors: { WebSearch },
+        });
+        return result;
+      }
+      const adapter = {
+        async call(req) {
+          r6Prompts.push(JSON.stringify(req));
+          if (mode === 'follow_up') {
+            return { text: JSON.stringify({ question: 'q', answer: 'ok', bullets: ['one'], followUps: ['q1'] }) };
+          }
+          return { text: JSON.stringify({ tldr: 'Fresh v2 private TLDR', bullets: ['one', 'two'], impact: 'ok', followUps: ['q1', 'q2'] }) };
+        },
+      };
+      const { result } = await runCosmicWebBriefing({
+        mode, perspective, language, payload,
+        config: { fastModel: 'test/fast', defaultModel: 'test/fast' },
+        adapter,
+      });
+      return result;
+    });
+    const r6FeedUrl = 'https://private.example/r6.xml';
+    const r6Svc = makeService({
+      fetcher: async url => {
+        if (url === r6FeedUrl) return { status: 200, url, text: async () => r6UnfinishedAttrRss };
+        if (url.endsWith('/r6-code-close')) return { status: 200, url, text: async () => r6CodeClose40kHtml };
+        return { status: 200, url, text: async () => '<article><p>ok</p></article>' };
+      },
+      requestAi: r6AgentAi,
+      now: () => NOW + 60_000,
+    });
+    await r6Svc.savePreferences('kate', {
+      enabledDomainIds: [],
+      customDomains: [
+        { id: 'priv-r6', name: 'Priv R6', colorToken: 'cyan', enabled: true, keywords: [], rssUrls: [r6FeedUrl] },
+        { id: 'radar-r6', name: 'Radar R6', colorToken: 'gold', enabled: true, keywords: ['radar'], aiRadar: true, rssUrls: [] },
+      ],
+    });
+    await r6Svc.refresh('kate', { domainId: 'priv-r6', force: true });
+    agents.set('v2-kate', {
+      ownerId: 'kate', name: 'v2-kate',
+      capabilities: ['cosmic_web_briefing', 'cosmic_web_follow_up', 'cosmic_web_radar', 'cosmic_web_research'],
+      encryptOutbound: false, ws: { readyState: 1, send: () => {} },
+    });
+    const kateFeed = r6Svc.feed('kate', { domainId: 'priv-r6' });
+    const r6CodeCloseCluster = kateFeed.clusters.find(c => c.headline === 'Code Close 40k Article');
+    const r6AttrCluster = kateFeed.clusters.find(c => c.headline === 'Unfinished Quoted Attr Feed');
+    const r6ScriptCluster = kateFeed.clusters.find(c => c.headline === 'Unclosed Script Eof Feed');
+
+    // (1) 40,000-char cap cutting in authority after `<code>//CODECLOSEUSER99</code>`
+    const r6CodeCloseArt = await r6Svc.article('kate', r6CodeCloseCluster.id);
+    expect(r6CodeCloseArt.markdown).toHaveLength(40_000);
+    expect(r6CodeCloseArt.truncated).toBe(true);
+    expect(r6CodeCloseArt.markdown).toContain('` //CODECLOSEUSER99 `@');
+    await r6Svc.aiBrief('kate', 'user', r6CodeCloseCluster.id, { research: true });
+    expect(r6AgentAi.mock.lastCall[0].payload.articleMarkdown).toContain('Safe40kClose');
+    expect(JSON.stringify(r6AgentAi.mock.lastCall[0].payload)).not.toContain('CODECLOSEUSER99');
+    expect(r6Prompts.at(-1)).toContain('Safe40kClose');
+    expect(r6Prompts.at(-1)).not.toContain('CODECLOSEUSER99');
+
+    // (2) Private RSS unfinished quoted attribute & unclosed `<script>` at EOF with `<wbr>` inside trailing token
+    expect(r6AttrCluster.summaryExcerpt).toBe('Safe attr prose');
+    expect(r6AttrCluster.summaryExcerpt).not.toContain('ATTRTRUNC');
+    expect(r6AttrCluster.summaryExcerpt).not.toContain('USER99');
+    expect(r6ScriptCluster.summaryExcerpt).toBe('Safe script prose');
+    expect(r6ScriptCluster.summaryExcerpt).not.toContain('SCRIPTTRUNC');
+    expect(r6ScriptCluster.summaryExcerpt).not.toContain('USER99');
+    await r6Svc.aiBrief('kate', 'user', r6AttrCluster.id, { skipArticleFetch: true, research: true });
+    expect(r6Prompts.at(-1)).toContain('Safe attr prose');
+    expect(r6Prompts.at(-1)).not.toContain('ATTRTRUNC');
+    expect(r6Prompts.at(-1)).not.toContain('USER99');
+
+    // (3) Pre-upgrade brief-context cache row (`hash(4, 'brief-context', ...)`) AND unversioned client-echoed `body.briefContext`
+    //     are BOTH rejected on private follow-up; fresh v2 `aiBrief` returns `briefContextVersion: 2` and writes versioned cache key.
+    const legacyBriefKey = createHash('sha256').update(JSON.stringify([4, 'brief-context', r6ScriptCluster.id, r6CodeCloseArt.itemId, 'v2-kate'])).digest('hex');
+    const scriptDet = await r6Svc.cluster('kate', r6ScriptCluster.id);
+    const scriptItemId = scriptDet.items[0].id;
+    const legacyScriptBriefKey = createHash('sha256').update(JSON.stringify([4, 'brief-context', r6ScriptCluster.id, scriptItemId, 'v2-kate'])).digest('hex');
+    db.setAiCache('kate', legacyBriefKey, 'Pre-upgrade TLDR //LEGACYTLDRCACHE99', NOW + HOUR);
+    db.setAiCache('kate', legacyScriptBriefKey, 'Pre-upgrade TLDR //LEGACYTLDRCACHE99', NOW + HOUR);
+    // Unversioned client-echoed briefContext + legacy cached TLDR must BOTH be omitted
+    await r6Svc.followUp('kate', 'user', r6ScriptCluster.id, {
+      question: 'Follow up before v2 brief?',
+      briefContext: 'Unversioned client echo //LEGACYCLIENTECHO99',
+      research: true,
+    });
+    expect(r6AgentAi.mock.lastCall[0].payload.briefContext).toBeUndefined();
+    expect(r6Prompts.at(-1)).not.toContain('LEGACYTLDRCACHE99');
+    expect(r6Prompts.at(-1)).not.toContain('LEGACYCLIENTECHO99');
+    // Fresh v2 aiBrief returns briefContextVersion: 2 and stores under v2 key -> subsequent follow-up gets fresh v2 TLDR
+    const freshV2Brief = await r6Svc.aiBrief('kate', 'user', r6ScriptCluster.id, { skipArticleFetch: true, research: true });
+    expect(freshV2Brief.briefContextVersion).toBe(PRIVATE_BRIEF_CONTEXT_VERSION);
+    await r6Svc.followUp('kate', 'user', r6ScriptCluster.id, { question: 'Follow up after v2 brief?', research: true });
+    expect(r6AgentAi.mock.lastCall[0].payload.briefContext).toBe('Fresh v2 private TLDR');
+    expect(r6Prompts.at(-1)).toContain('Fresh v2 private TLDR');
+    expect(r6Prompts.at(-1)).not.toContain('LEGACYTLDRCACHE99');
+
+    // (4a) Real Radar Agent (`topic_radar`) scrubs BEFORE clipping to 1,000 chars and certifies `excerptVersion: 2`
+    const radarRes = await r6Svc.radarScan('kate', 'user', 'radar-r6');
+    expect(radarRes.added).toBe(1);
+    const radarCluster = r6Svc.feed('kate', { domainId: 'radar-r6' }).clusters.find(c => c.headline === 'Fresh Radar Story');
+    expect(radarCluster.summaryExcerpt).toContain('Safe radar');
+    expect(radarCluster.summaryExcerpt).not.toContain('RADARCLIPUSER99');
+    await r6Svc.aiBrief('kate', 'user', radarCluster.id, { skipArticleFetch: true, research: true });
+    expect(r6Prompts.at(-1)).toContain('Safe radar');
+    expect(r6Prompts.at(-1)).not.toContain('RADARCLIPUSER99');
+
+    // (4b) Legacy Radar Agent response WITHOUT `excerptVersion: 2` (pre-clipped username fragment) is persisted with `excerpt_version = 0`
+    //      so display keeps working while subsequent briefing Agent omits the uncertified Radar excerpt!
+    const legacyRadarReqAi = vi.fn(async req => {
+      if (req.mode === 'topic_radar') {
+        return {
+          items: [{
+            title: 'Legacy Radar Uncertified Story',
+            url: 'https://radar.example/legacy-radar-story',
+            sourceName: 'OldRadar',
+            summaryExcerpt: 'Legacy radar display //LEGACYRADARUSER99',
+          }],
+          searchCount: 1,
+        };
+      }
+      return r6AgentAi(req);
+    });
+    const legacyRadarSvc = makeService({
+      requestAi: legacyRadarReqAi,
+      now: () => NOW + 180_000,
+    });
+    const legacyRadarRes = await legacyRadarSvc.radarScan('kate', 'user', 'radar-r6');
+    expect(legacyRadarRes.added).toBe(1);
+    const legacyRadarCluster = legacyRadarSvc.feed('kate', { domainId: 'radar-r6' }).clusters.find(c => c.headline === 'Legacy Radar Uncertified Story');
+    expect(legacyRadarCluster.summaryExcerpt).toBe('Legacy radar display //LEGACYRADARUSER99');
+    await legacyRadarSvc.aiBrief('kate', 'user', legacyRadarCluster.id, { skipArticleFetch: true, research: true });
+    expect(r6Prompts.at(-1)).not.toContain('LEGACYRADARUSER99');
 
     // Mixed public/private dailyBriefing carries per-story isPrivateSource: true on private stories (enabling Agent defense-in-depth) while keeping public stories clean.
     const mixedDailyReqAi = vi.fn(async () => dailyResult);

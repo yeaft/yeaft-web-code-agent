@@ -437,6 +437,36 @@ describe('Cosmic Web bounded research', () => {
     expect(adapter.stream.mock.lastCall[0].tools).toEqual([]);
   });
 
+  it('redacts boundary-straddling URLs in topic_radar summaryExcerpt before clipping to 1,000 chars and emits excerptVersion when requested', async () => {
+    const searchUrl = 'https://radar.example/pre-clip';
+    const WebSearch = vi.fn().mockResolvedValue({ results: [{ url: searchUrl, title: 'Radar Item', snippet: 'ok' }] });
+    const longExcerpt = `${'a'.repeat(985)} Safe radar //RADARAGENTCLIP99@intranet:8080/secret`;
+    const makeRadarAdapter = () => researchedAdapter([[search('radar')], []], {
+      items: [{ title: 'Radar Item', url: searchUrl, sourceName: 'Wire', summaryExcerpt: longExcerpt }],
+      searchCount: 1,
+    });
+    // Without excerptProvenance (legacy Server compatibility): scrubs pre-clip and omits excerptVersion key
+    const { result: legacyRes } = await run({
+      mode: 'topic_radar',
+      payload: { topic: 'Radar' },
+      adapter: makeRadarAdapter(),
+      toolExecutors: { WebSearch },
+    });
+    expect(legacyRes.excerptVersion).toBeUndefined();
+    expect(legacyRes.items[0].summaryExcerpt).toContain('Safe radar');
+    expect(legacyRes.items[0].summaryExcerpt).not.toContain('RADARAGENTCLIP99');
+    // With excerptProvenance: true (current Server): scrubs pre-clip and emits excerptVersion: 2
+    const { result: v2Res } = await run({
+      mode: 'topic_radar',
+      payload: { topic: 'Radar', excerptProvenance: true },
+      adapter: makeRadarAdapter(),
+      toolExecutors: { WebSearch },
+    });
+    expect(v2Res.excerptVersion).toBe(2);
+    expect(v2Res.items[0].summaryExcerpt).toContain('Safe radar');
+    expect(v2Res.items[0].summaryExcerpt).not.toContain('RADARAGENTCLIP99');
+  });
+
   it.each([['daily_briefing', {}, daily], ['brief', { research: false }, story], ['follow_up', { research: false }, { answer: 'Yes', question: 'ARM?' }]])
     ('keeps %s tool-less when research is not enabled', async (mode, payload, output) => {
       const adapter = researchedAdapter([], output);

@@ -11,23 +11,71 @@ const blocks = new Set('p div section article main h1 h2 h3 h4 h5 h6 ul ol li pr
 const normalize = text => text.replace(/\s+/gu, ' ').trim();
 const escapeMd = text => text.replace(/[\\`*_{}\[\]<>#!|~]/g, '\\$&').replace(/^([0-9]+)\.(?= )/gm, '$1\\.').replace(/^[-+=](?= )/gm, '\\$&');
 
-function dropTrailingRenderedToken(str) {
-  let end = str.length;
-  while (end > 0 && !/\s/u.test(str[end - 1])) end--;
-  // If slicing at 40,000 chars landed inside an inline `<code>` whose opening backtick+space split a token (e.g. "//TRUNC` "),
-  // also unwind past that inline backtick opener and any non-whitespace prefix attached to it.
-  while (end > 0) {
-    let probe = end;
-    while (probe > 0 && str[probe - 1] === ' ') probe--;
-    if (probe > 0 && probe < end && str[probe - 1] === '`') {
-      while (probe > 0 && str[probe - 1] === '`') probe--;
-      while (probe > 0 && !/\s/u.test(str[probe - 1])) probe--;
-      end = probe;
-      continue;
+function countSourceChars(node) {
+  if (typeof node === 'string') return node.length;
+  if (['head', 'title'].includes(node.tag)) return 0;
+  const kids = (node.tag === 'ul' || node.tag === 'ol') ? node.children.filter(c => c.tag === 'li') : node.children;
+  let total = 0;
+  for (const child of kids) total += countSourceChars(child);
+  return total;
+}
+
+/**
+ * Slice a DOM subtree at exact source character offset `limit`, recording the ancestor `openStack`
+ * where the cut landed (identical semantics to scanMarkup stopping at `limit`). Non-mutating.
+ */
+function sliceDomAtSourceOffset(node, limit) {
+  let remaining = limit;
+  const openStack = [];
+  function visit(n) {
+    if (typeof n === 'string') {
+      if (n.length <= remaining) {
+        remaining -= n.length;
+        return { node: n, stopped: false };
+      }
+      const piece = remaining > 0 ? n.slice(0, remaining) : '';
+      remaining = 0;
+      return { node: piece || null, stopped: true };
     }
-    break;
+    if (['head', 'title'].includes(n.tag)) return { node: null, stopped: false };
+    const kids = (n.tag === 'ul' || n.tag === 'ol') ? n.children.filter(c => c.tag === 'li') : n.children;
+    const outChildren = [];
+    let stopped = false;
+    for (const child of kids) {
+      const res = visit(child);
+      if (res.node != null) outChildren.push(res.node);
+      if (res.stopped) { stopped = true; break; }
+    }
+    const clone = { ...n, children: outChildren };
+    if (stopped) openStack.push(clone);
+    return { node: clone, stopped };
   }
-  return end === str.length ? str : str.slice(0, end);
+  const res = visit(node);
+  return { node: res.node, openStack };
+}
+
+/**
+ * Render an AI-safe Markdown projection bounded to `maxChars` by cutting ONLY at genuine source DOM
+ * boundaries (via `sliceDomAtSourceOffset` + `trimTrailingSourceToken`), never at synthetic Markdown spaces.
+ */
+function renderBoundedAiMarkdown(node, url, maxChars = 40_000) {
+  const rendered = markdown(node, url).trim();
+  if (rendered.length <= maxChars) return rendered;
+  const totalSource = countSourceChars(node);
+  let lo = 0, hi = totalSource - 1, bestMd = '';
+  while (lo <= hi) {
+    const mid = (lo + hi) >>> 1;
+    const { node: sliced, openStack } = sliceDomAtSourceOffset(node, mid);
+    const trimmed = sliced ? trimTrailingSourceToken(sliced, new Set(openStack)).node : null;
+    const candidate = trimmed ? markdown(trimmed, url).trim() : '';
+    if (candidate.length <= maxChars) {
+      bestMd = candidate;
+      lo = mid + 1;
+    } else {
+      hi = mid - 1;
+    }
+  }
+  return bestMd;
 }
 
 /**
@@ -182,8 +230,7 @@ export function extractCleanArticle(html, sourceUrl, fallbackTitle = '') {
   let aiMarkdown;
   if (truncated) {
     const trimmedBest = bestWasTruncated ? trimTrailingSourceToken(best, new Set(openStack)).node : best;
-    const aiSource = trimmedBest ? markdown(trimmedBest, url).trim() : '';
-    aiMarkdown = aiSource.length > 40_000 ? dropTrailingRenderedToken(aiSource.slice(0, 40_000)) : aiSource;
+    aiMarkdown = trimmedBest ? renderBoundedAiMarkdown(trimmedBest, url, 40_000) : '';
   }
   return { ...base, title: (title || heading || fallbackTitle).slice(0, 500), markdown: blockedTitle ? '' : rendered,
     truncated, ...(truncated ? { aiMarkdown } : {}),

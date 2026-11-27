@@ -1092,7 +1092,12 @@ export const useCosmicWebStore = defineStore('cosmicWeb', {
         };
         if (effectiveItemId) body.itemId = effectiveItemId;
         else if (effectiveUrl) body.url = effectiveUrl;
-        if (this.aiBriefData?.tldr) body.briefContext = this.aiBriefData.tldr;
+        if (this.aiBriefData?.tldr) {
+          body.briefContext = this.aiBriefData.tldr;
+          if (this.aiBriefData.briefContextVersion != null) {
+            body.briefContextVersion = this.aiBriefData.briefContextVersion;
+          }
+        }
         const explicitAgentId = typeof agentId === 'string' && agentId.trim() ? agentId.trim() : null;
         if (explicitAgentId) body.agentId = explicitAgentId;
 

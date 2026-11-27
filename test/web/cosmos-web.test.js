@@ -1667,6 +1667,11 @@ describe('Cosmic Web — Pinia store & interactive overlay', () => {
 
     await webStore.askFollowUp('c-multi', 'Why?');
     expect(followUpBodies[0]).toMatchObject({ itemId: 'item-2', briefContext: 'Brief for item-2' });
+    expect(followUpBodies[0].briefContextVersion).toBeUndefined();
+    // Echo briefContextVersion when present on private v2 aiBriefData
+    webStore.aiBriefData = { ...webStore.aiBriefData, briefContextVersion: 2 };
+    await webStore.askFollowUp('c-multi', 'Versioned?');
+    expect(followUpBodies[1]).toMatchObject({ itemId: 'item-2', briefContext: 'Brief for item-2', briefContextVersion: 2 });
 
     // Mount overlay with expanded reader + lightbox media + v1-only Agent (no cosmic_web_follow_up)
     webStore.activeClusterDetail.media = [
