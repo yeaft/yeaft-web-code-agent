@@ -45,21 +45,21 @@ export async function sendToWebClient(client, msg) {
 // feat-ws-plaintext-negotiation: same shape as sendToWebClient — defaults
 // to plaintext when the agent advertised the `plaintext-ok` capability.
 // Falls back to ciphertext for old agents that haven't.
-export async function sendToAgent(agent, msg) {
-  if (!agent?.ws || agent.ws.readyState !== WebSocket.OPEN) return false;
+export async function sendToAgent(agent, msg, { shouldSend } = {}) {
+  const ws = agent?.ws;
+  if (ws?.readyState !== WebSocket.OPEN) return false;
 
-  if (CONFIG.skipAuth || agent.encryptOutbound === false) {
-    agent.ws.send(JSON.stringify(msg));
-    return true;
+  let frame = msg;
+  if (!CONFIG.skipAuth && agent.encryptOutbound !== false) {
+    if (!agent.sessionKey) {
+      console.error('Cannot send to agent: missing session key in production mode');
+      ws.close(1008, 'Encryption required');
+      return false;
+    }
+    frame = await encrypt(msg, agent.sessionKey);
   }
-
-  if (!agent.sessionKey) {
-    console.error('Cannot send to agent: missing session key in production mode');
-    agent.ws.close(1008, 'Encryption required');
-    return false;
-  }
-  const encrypted = await encrypt(msg, agent.sessionKey);
-  agent.ws.send(JSON.stringify(encrypted));
+  if (agent.ws !== ws || ws.readyState !== WebSocket.OPEN || (typeof shouldSend === 'function' && !shouldSend())) return false;
+  ws.send(JSON.stringify(frame));
   return true;
 }
 

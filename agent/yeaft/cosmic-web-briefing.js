@@ -155,16 +155,17 @@ function outputList(value, min, max, normalize) {
 }
 
 // Keep this rule in sync with server/cosmic-web/ai-bridge.js (Agent ships independently).
-function restrictedMarkdown(markdown) {
-  if (/[<>]|https?:\/\/|www\.|mailto:|@[a-z0-9-]+\./i.test(markdown)) return false;
-  // Unescaped brackets can form inline, reference, or image links.
-  for (const [token] of markdown.matchAll(/\\[\\\[\]]|[\[\]]/g)) if (token.length === 1) return false;
-  return true;
+function hasUnsafeMarkdown(markdown) {
+  if (/[<>]|(?<=[a-z][a-z0-9+.-]*):\/\/|www\.|\bmailto:|[a-z0-9._%+-]@[a-z0-9._-]+\.[a-z0-9_-]*[a-z0-9]/i.test(markdown)) return true;
+  // Reject unescaped brackets (including reference/image syntax). Consume
+  // escaped backslashes in pairs so they cannot hide an active bracket.
+  for (const [token] of markdown.matchAll(/\\[\\\[\]]|[\[\]]/g)) if (token.length === 1) return true;
+  return false;
 }
 
 function plainMarkdown(text) {
   // One plain-text field per line; don't turn model text into links, HTML, or Markdown directives.
-  return text.replace(/\s+/g, ' ').replace(/https?:\/\/|www\.|mailto:|@/gi, token =>
+  return text.replace(/\s+/g, ' ').replace(/(?<=[a-z][a-z0-9+.-]*):\/\/|www\.|\bmailto:|@/gi, token =>
     token.replace(/[.:@]/g, char => ({ '.': '．', ':': '：', '@': '＠' })[char])).replace(/[&<>]/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' })[char])
     .replace(/[\\`*_{}\[\]()#!|~+=.\-]/g, '\\$&');
 }
@@ -207,7 +208,10 @@ function normalizeOutput(parsed, mode, language) {
   const markdown = boundedText(parsed.fullMarkdown, MAX_MARKDOWN_CHARS);
   // Fall back to locally built Markdown if the optional rendering uses HTML,
   // autolinks, or link/image syntax. Structured fields remain plain text.
-  return { ...result, fullMarkdown: markdown && restrictedMarkdown(markdown) ? markdown : buildMarkdown(result, daily, language) };
+  if (markdown && !hasUnsafeMarkdown(markdown)) return { ...result, fullMarkdown: markdown };
+  const fullMarkdown = buildMarkdown(result, daily, language);
+  if (hasUnsafeMarkdown(fullMarkdown)) throw invalidOutput();
+  return { ...result, fullMarkdown };
 }
 
 async function callWithDeadline(adapter, params, signal) {

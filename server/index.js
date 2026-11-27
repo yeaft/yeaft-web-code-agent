@@ -234,15 +234,17 @@ if (configValidation.warnings) {
   console.warn('');
 }
 
-const accountDeletionTimer = setInterval(() => {
+function reconcileAccountDeletions() {
   try {
     userDb.reconcilePendingDeletions();
   } catch (error) {
     console.error('[AccountDeletion] Reconcile failed:', error.message);
   }
-}, ACCOUNT_DELETION_RECONCILE_INTERVAL);
+}
+
+const accountDeletionTimer = setInterval(reconcileAccountDeletions, ACCOUNT_DELETION_RECONCILE_INTERVAL);
 accountDeletionTimer.unref?.();
-userDb.reconcilePendingDeletions();
+reconcileAccountDeletions();
 
 async function startServers() {
   await new Promise((resolve, reject) => {

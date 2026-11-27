@@ -271,7 +271,7 @@ export function createCosmicWebService({ fetcher = safeFetch, dnsLookup, now = D
     ensureActive(userId);
     const { perspective, language, explicitAgentId, agent } = options;
     // Version the rendering contract too: old cached Markdown may contain autolinks.
-    const key = hash(2, mode, perspective, language, explicitAgentId, payload);
+    const key = hash(3, mode, perspective, language, explicitAgentId, payload);
     const cached = db.getAiCache(userId, key, now());
     if (cached && body.force !== true) return { ...cached, cached: true };
     if (!agent) throw error(503, 'No capable Agent is online');
@@ -551,6 +551,7 @@ export function createCosmicWebService({ fetcher = safeFetch, dnsLookup, now = D
       return ai(userId, userRole, 'daily_briefing', body, { date: new Date(time).toISOString().slice(0, 10), domains }, signal, options);
     },
     setClusterState(userId, id, patch) {
+      ensureRunning(controller.signal);
       ensureActive(userId);
       if (!object(patch)) fail('Invalid cluster state');
       const unread = patch.unread ?? (typeof patch.read === 'boolean' ? !patch.read : undefined);
@@ -562,6 +563,7 @@ export function createCosmicWebService({ fetcher = safeFetch, dnsLookup, now = D
       return state;
     },
     markAllRead(userId, query = {}) {
+      ensureRunning(controller.signal);
       ensureActive(userId);
       const rows = filtered(userId, query, false).filter(c => c.unread);
       db.cosmicWebTransaction(() => { for (const c of rows) db.saveUserClusterState(userId, c.id, { unread: false }, now()); });

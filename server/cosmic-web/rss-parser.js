@@ -15,6 +15,7 @@ export function decodeEntities(text) {
 const MAX_MARKUP_BYTES = 2 * 1024 * 1024;
 const MAX_TAGS = 30_000;
 const MAX_ATTRIBUTES = 128;
+const MAX_URL_LENGTH = 4096;
 const whitespace = /\s/u;
 const htmlNameStart = /[a-z]/i;
 const nameChar = /[a-z0-9_:.-]/i;
@@ -30,7 +31,7 @@ function boundedMarkup(value) {
 }
 
 /** Parse just the attribute tail, counting boolean and duplicate attributes toward the cap. */
-export function parseAttributesLinear(value) {
+export function parseAttributesLinear(value, { boundFeedUrls = false } = {}) {
   const str = boundedMarkup(value);
   const attrs = Object.create(null);
   let i = 0;
@@ -48,7 +49,9 @@ export function parseAttributesLinear(value) {
       const quote = str[i] === '"' || str[i] === "'" ? str[i++] : null;
       const start = i;
       while (i < str.length && (quote ? str[i] !== quote : !whitespace.test(str[i]) && str[i] !== '>')) i++;
-      value = decodeEntities(str.slice(start, i));
+      if (!boundFeedUrls || (name !== 'xml:base' && name !== 'href') || i - start <= MAX_URL_LENGTH) {
+        value = decodeEntities(str.slice(start, i));
+      }
       if (quote && i < str.length) i++;
     }
     if (!Object.hasOwn(attrs, name)) attrs[name] = value;
@@ -127,11 +130,13 @@ export function cleanText(text) {
   return decodeEntities(parts.join('')).replace(/\s+/gu, ' ').trim();
 }
 
-export function resolveHttpUrl(value, base) {
-  if (typeof value !== 'string' || !value.trim()) return null;
+export function resolveHttpUrl(ref, base) {
+  if (typeof ref !== 'string' || ref.length > MAX_URL_LENGTH || !ref.trim()) return null;
+  if (typeof base === 'string' && base.length > MAX_URL_LENGTH) base = undefined;
   try {
-    const url = new URL(value.trim(), base);
-    return ['https:', 'http:'].includes(url.protocol) && !url.username && !url.password ? url.href : null;
+    const url = new URL(ref.trim(), base);
+    const { href } = url;
+    return href.length <= MAX_URL_LENGTH && ['https:', 'http:'].includes(url.protocol) && !url.username && !url.password ? href : null;
   } catch { return null; }
 }
 
@@ -147,21 +152,26 @@ export function parseTimestamp(value) {
 export function parseFeedXml(xmlText, baseUrl) {
   const items = [];
   const stack = [];
+  const rootBase = resolveHttpUrl(baseUrl) ?? undefined;
   let entry, field;
+  function appendField(text, decode = false) {
+    if (field.urlLength != null && (field.urlLength += text.length) > MAX_URL_LENGTH) return;
+    field.parts.push(decode ? decodeEntities(text) : text);
+  }
   for (const token of scanMarkup(xmlText, { xml: true })) {
     if (token.type !== 'tag') {
-      if (field) field.parts.push(token.type === 'cdata' ? token.text : decodeEntities(token.text));
+      if (field) appendField(token.text, token.type !== 'cdata');
       continue;
     }
     const { closing, name, attrsText, selfClosing } = token;
     if (closing) {
       if (stack.at(-1)?.name !== name) continue;
       if (field?.depth === stack.length) {
-        const text = field.parts.join('');
+        const text = field.urlLength > MAX_URL_LENGTH ? '' : field.parts.join('');
         if (field.name === 'link') entry.link ??= resolveHttpUrl(text, field.base);
         else entry.fields[field.name] ??= text;
         field = null;
-      } else if (field) field.parts.push(token.text);
+      } else if (field) appendField(token.text);
       if (entry?.depth === stack.length) {
         const f = entry.fields;
         const title = cleanText(f.title);
@@ -173,16 +183,16 @@ export function parseFeedXml(xmlText, baseUrl) {
       stack.pop();
       continue;
     }
-    const attrs = parseAttributesLinear(attrsText);
-    const parent = stack.at(-1)?.base ?? baseUrl;
+    const attrs = parseAttributesLinear(attrsText, { boundFeedUrls: true });
+    const parent = stack.at(-1)?.base ?? rootBase;
     const base = resolveHttpUrl(attrs['xml:base'], parent) ?? parent;
     const depth = stack.length + 1;
     if (!entry && !selfClosing && ['item', 'entry'].includes(name)) entry = { depth, base, fields: Object.create(null) };
     else if (entry && entry.depth + 1 === depth) {
       if (name === 'link' && attrs.href) {
         if (!attrs.rel || attrs.rel === 'alternate') entry.link ??= resolveHttpUrl(attrs.href, base);
-      } else if (!selfClosing) field = { depth, name, base, parts: [] };
-    } else if (field) field.parts.push(token.text);
+      } else if (!selfClosing) field = { depth, name, base, parts: [], urlLength: name === 'link' || name === 'guid' ? 0 : null };
+    } else if (field) appendField(token.text);
     if (!selfClosing) {
       if (depth > 128) throw new Error('Feed nesting exceeds limit');
       stack.push({ name, base });

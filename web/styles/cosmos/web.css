@@ -1590,6 +1590,14 @@
     font-size: 15px;
     line-height: 1.35;
   }
+  .cw-badge,
+  .cw-domain-badge {
+    display: inline-block;
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    vertical-align: middle;
+  }
 }
 
 @media (max-width: 420px) {

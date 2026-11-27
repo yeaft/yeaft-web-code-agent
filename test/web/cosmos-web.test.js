@@ -664,8 +664,8 @@ describe('Cosmic Web — Pinia store & interactive overlay', () => {
     const readerWrapper = mount(CosmosWebReaderModal, {
       props: {
         agents: [
-          { id: 'a-online-cap', name: 'Capable', online: true },
-          { id: 'a-offline', name: 'Offline', online: false },
+          { id: 'a-online-cap', name: 'Capable', online: true, capabilities: ['cosmic_web_briefing'] },
+          { id: 'a-offline', name: 'Offline', online: false, capabilities: ['cosmic_web_briefing'] },
         ],
         agentToPlanet: {},
       },
@@ -716,5 +716,422 @@ describe('Cosmic Web — Pinia store & interactive overlay', () => {
     prefsWrapper.unmount();
     triggerBtn.remove();
     setLocale('zh-CN');
+  });
+
+  it('Item #6: same-cluster source switch immediately clears completed AI brief and fences in-flight source A success/error', async () => {
+    let resolveAiA;
+    let rejectAiB;
+    const aiRequests = [];
+
+    globalThis.fetch = vi.fn((url, opts = {}) => {
+      const u = String(url);
+      if (u === '/api/cosmic-web/clusters/c1/ai-brief' && opts.method === 'POST') {
+        const body = JSON.parse(opts.body);
+        aiRequests.push(body);
+        if (body.itemId === 'src-a' && aiRequests.length === 1) {
+          return Promise.resolve({
+            ok: true,
+            status: 200,
+            headers: { get: () => 'application/json' },
+            json: async () => ({ tldr: 'Completed Brief A' }),
+          });
+        }
+        if (body.itemId === 'src-a') {
+          return new Promise((resolve) => {
+            resolveAiA = () => resolve({
+              ok: true,
+              status: 200,
+              headers: { get: () => 'application/json' },
+              json: async () => ({ tldr: 'Late Stale Brief A' }),
+            });
+          });
+        }
+        if (body.itemId === 'src-b') {
+          return new Promise((_, reject) => {
+            rejectAiB = () => reject(new Error('Late Stale Error B'));
+          });
+        }
+        if (body.itemId === 'src-c') {
+          return Promise.resolve({
+            ok: true,
+            status: 200,
+            headers: { get: () => 'application/json' },
+            json: async () => ({ tldr: 'Fresh Brief C' }),
+          });
+        }
+      }
+      if (u.startsWith('/api/cosmic-web/clusters/c1/article')) {
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          headers: { get: () => 'application/json' },
+          json: async () => ({ markdown: `Body for ${u}`, quality: 'full' }),
+        });
+      }
+      return Promise.resolve({
+        ok: true,
+        status: 200,
+        headers: { get: () => 'application/json' },
+        json: async () => ({ id: 'c1', headline: 'Multi-source story', items: [] }),
+      });
+    });
+
+    const webStore = useCosmicWebStore();
+    webStore.bootstrapped = true;
+    webStore.feedLoaded = true;
+    webStore.prefs.onboarded = true;
+
+    // (a) Completed AI brief for source A must clear immediately when switching to source B
+    await webStore.openClusterReader('c1', { tab: 'article', itemId: 'src-a' });
+    await webStore.generateAiBrief('c1', { itemId: 'src-a' });
+    expect(webStore.aiBriefData?.tldr).toBe('Completed Brief A');
+
+    await webStore.selectArticleSource('c1', { itemId: 'src-b', url: 'https://b.test/1' });
+    expect(webStore.aiBriefData).toBeNull();
+    expect(webStore.aiBriefError).toBeNull();
+    expect(webStore.activeArticleItemId).toBe('src-b');
+
+    // (b) In-flight AI request for source A succeeding & source B failing after switching to source C must both be ignored
+    webStore.readerTab = 'ai';
+    const pA = webStore.selectArticleSource('c1', { itemId: 'src-a', url: 'https://a.test/1' });
+    const pB = webStore.selectArticleSource('c1', { itemId: 'src-b', url: 'https://b.test/1' });
+    const pC = webStore.selectArticleSource('c1', { itemId: 'src-c', url: 'https://c.test/1' });
+    await pC;
+    expect(webStore.aiBriefData?.tldr).toBe('Fresh Brief C');
+    expect(webStore.aiBriefError).toBeNull();
+
+    resolveAiA();
+    rejectAiB();
+    await Promise.allSettled([pA, pB]);
+    await flushPromises();
+
+    expect(webStore.activeArticleItemId).toBe('src-c');
+    expect(webStore.aiBriefData?.tldr).toBe('Fresh Brief C');
+    expect(webStore.aiBriefError).toBeNull();
+    expect(webStore.aiBriefLoading).toBe(false);
+  });
+
+  it('Item #7: derives briefing agents strictly from live online+capable agents, ignores stale snapshot, and resets selection to Auto on disconnect', async () => {
+    const webStore = useCosmicWebStore();
+    webStore.bootstrapped = true;
+    webStore.feedLoaded = true;
+    webStore.dailyBriefingOpen = true;
+    webStore.dailyBriefingData = { headline: 'Brief', overview: 'Ok' };
+    // Stale bootstrap snapshot claims ghost-agent is capable & online
+    webStore.capableAgents = [{ id: 'ghost-agent', name: 'Ghost Snapshot', online: true }];
+
+    const wrapper = mount(CosmosWebReaderModal, {
+      props: {
+        agents: [
+          { id: 'no-cap', name: 'Online No Cap', online: true, capabilities: [] },
+          { id: 'offline-cap', name: 'Offline Cap', online: false, capabilities: ['cosmic_web_briefing'] },
+        ],
+        agentToPlanet: {},
+      },
+      global: { mocks: { $t: (k) => cosmosEn[k] || k } },
+    });
+    await flushPromises();
+
+    // Disconnected snapshot agent MUST NEVER be offered
+    let opts = wrapper.findAll('.cw-daily-controls select')[1].findAll('option').map((o) => o.element.value);
+    expect(opts).toEqual(['']);
+
+    // Newly online capable agent appears immediately
+    await wrapper.setProps({
+      agents: [
+        { id: 'live-cap', name: 'Live Capable', online: true, capabilities: ['cosmic_web_briefing'] },
+      ],
+    });
+    await flushPromises();
+    opts = wrapper.findAll('.cw-daily-controls select')[1].findAll('option').map((o) => o.element.value);
+    expect(opts).toEqual(['', 'live-cap']);
+
+    // Explicitly select live-cap, then take it offline -> must automatically reset to Auto ('')
+    wrapper.vm.briefAgentId = 'live-cap';
+    await flushPromises();
+    expect(wrapper.vm.briefAgentId).toBe('live-cap');
+
+    await wrapper.setProps({
+      agents: [
+        { id: 'live-cap', name: 'Live Capable', online: false, capabilities: ['cosmic_web_briefing'] },
+      ],
+    });
+    await flushPromises();
+    expect(wrapper.vm.briefAgentId).toBe('');
+    wrapper.unmount();
+
+    // Prefs modal also ignores stale snapshot and labels saved offline preference as offline (never online+capable)
+    webStore.dailyBriefingOpen = false;
+    webStore.prefs.preferredAgentId = 'saved-offline';
+    const prefsWrapper = mount(CosmosWebPrefsModal, {
+      props: {
+        agents: [
+          { id: 'saved-offline', name: 'Saved Offline', online: false, capabilities: ['cosmic_web_briefing'] },
+        ],
+      },
+      global: { mocks: { $t: (k) => cosmosEn[k] || k } },
+    });
+    webStore.prefsModalOpen = true;
+    await flushPromises();
+    prefsWrapper.vm.activeTab = 'ai';
+    await flushPromises();
+    expect(prefsWrapper.text()).not.toContain('Ghost Snapshot');
+    expect(prefsWrapper.text()).toContain('Saved Offline');
+    expect(prefsWrapper.find('.cw-badge-mint').exists()).toBe(false);
+    prefsWrapper.unmount();
+  });
+
+  it('Item #9: markAllRead reconciles cleanly on success and never clobbers a newer filter query on mid-flight switch (success or failure)', async () => {
+    let resolveMarkAll;
+    let rejectMarkAll;
+    const feedCalls = [];
+
+    globalThis.fetch = vi.fn((url, opts = {}) => {
+      const u = String(url);
+      if (u === '/api/cosmic-web/mark-all-read' && opts.method === 'POST') {
+        if (!resolveMarkAll) {
+          return new Promise((resolve) => {
+            resolveMarkAll = () => resolve({
+              ok: true,
+              status: 200,
+              headers: { get: () => 'application/json' },
+              json: async () => ({ updated: 2, stats: { unreadCount: 0 } }),
+            });
+          });
+        }
+        return new Promise((_, reject) => {
+          rejectMarkAll = () => reject(new Error('server error'));
+        });
+      }
+      if (u.startsWith('/api/cosmic-web/feed')) {
+        feedCalls.push(u);
+        if (u.includes('domain=tech')) {
+          return Promise.resolve({
+            ok: true,
+            status: 200,
+            headers: { get: () => 'application/json' },
+            json: async () => ({
+              items: [{ id: 'tech-1', domainId: 'tech', headline: 'Tech story', unread: true }],
+              total: 1,
+              hasMore: false,
+            }),
+          });
+        }
+        if (u.includes('filter=unread')) {
+          return Promise.resolve({
+            ok: true,
+            status: 200,
+            headers: { get: () => 'application/json' },
+            json: async () => ({ items: [], total: 0, hasMore: false }),
+          });
+        }
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          headers: { get: () => 'application/json' },
+          json: async () => ({
+            items: [{ id: 'ai-1', domainId: 'ai', headline: 'AI story', unread: true }],
+            total: 1,
+            hasMore: false,
+          }),
+        });
+      }
+      return Promise.resolve({
+        ok: true,
+        status: 200,
+        headers: { get: () => 'application/json' },
+        json: async () => ({}),
+      });
+    });
+
+    const webStore = useCosmicWebStore();
+    webStore.bootstrapped = true;
+    webStore.feedLoaded = true;
+    webStore.activeDomain = 'unread';
+    webStore.feedItems = [{ id: 'u1', domainId: 'ai', headline: 'Unread 1', unread: true }];
+    webStore.feedTotal = 1;
+    webStore.feedHasMore = true;
+
+    // 1. Success while switching filter mid-flight -> reloads NEW active query (tech), keeping tech items intact
+    const p1 = webStore.markAllRead();
+    await webStore.selectDomain('tech');
+    expect(webStore.feedItems.map((i) => i.id)).toEqual(['tech-1']);
+    resolveMarkAll();
+    await p1;
+    expect(webStore.activeDomain).toBe('tech');
+    expect(webStore.feedItems.map((i) => i.id)).toEqual(['tech-1']);
+    expect(webStore.feedTotal).toBe(1);
+
+    // 2. Failure while switching filter mid-flight -> MUST NOT clobber newer query or refetch stale snapshot
+    const callsBeforeFail = feedCalls.length;
+    const p2 = webStore.markAllRead();
+    await webStore.selectDomain('ai');
+    expect(webStore.feedItems.map((i) => i.id)).toEqual(['ai-1']);
+    const callsAfterSwitch = feedCalls.length;
+    expect(callsAfterSwitch).toBe(callsBeforeFail + 1);
+
+    rejectMarkAll();
+    await p2;
+    expect(webStore.feedItems.map((i) => i.id)).toEqual(['ai-1']);
+    expect(feedCalls.length).toBe(callsAfterSwitch);
+  });
+
+  it('Item #10: recovers cleanly when leaving mid-initial-feed and re-entering with zero WS events, and coalesces concurrent enterWebBand calls', async () => {
+    let bootstrapCount = 0;
+    let feedCount = 0;
+    let feedSignal = null;
+
+    globalThis.fetch = vi.fn((url, opts = {}) => {
+      const u = String(url);
+      if (u.startsWith('/api/cosmic-web/bootstrap')) {
+        bootstrapCount += 1;
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          headers: { get: () => 'application/json' },
+          json: async () => ({
+            prefs: { onboarded: true, enabledDomains: ['ai'] },
+            domains: [{ id: 'ai', labelZh: 'AI', labelEn: 'AI' }],
+            graph: { hubs: [], nodes: [], edges: [] },
+            stats: { totalClusters: 1, unreadCount: 1 },
+          }),
+        });
+      }
+      if (u.startsWith('/api/cosmic-web/feed')) {
+        feedCount += 1;
+        if (feedCount === 1) {
+          feedSignal = opts.signal;
+          return new Promise((_, reject) => {
+            opts.signal?.addEventListener('abort', () => {
+              const err = new Error('Aborted');
+              err.name = 'AbortError';
+              reject(err);
+            });
+          });
+        }
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          headers: { get: () => 'application/json' },
+          json: async () => ({
+            items: [{ id: 'recovered-1', domainId: 'ai', headline: 'Recovered Story', unread: true }],
+            total: 1,
+            hasMore: false,
+          }),
+        });
+      }
+      return Promise.resolve({
+        ok: true,
+        status: 200,
+        headers: { get: () => 'application/json' },
+        json: async () => ({}),
+      });
+    });
+
+    const webStore = useCosmicWebStore();
+    // Concurrent enterWebBand calls coalesce to a single bootstrap
+    const pEnter1 = webStore.enterWebBand();
+    const pEnter2 = webStore.enterWebBand();
+    await flushPromises();
+    expect(bootstrapCount).toBe(1);
+    expect(feedCount).toBe(1);
+    expect(webStore.feedLoading).toBe(true);
+    expect(webStore.feedLoaded).toBe(false);
+
+    // Leave Web band mid-initial-feed -> aborts feed and marks staleOnReentry
+    webStore.leaveWebBand();
+    await Promise.allSettled([pEnter1, pEnter2]);
+    expect(feedSignal?.aborted).toBe(true);
+    expect(webStore.staleOnReentry).toBe(true);
+    expect(webStore.feedItems).toHaveLength(0);
+
+    // Re-enter with ZERO WS events -> reloads cleanly and stories appear
+    await webStore.enterWebBand();
+    expect(webStore.feedLoaded).toBe(true);
+    expect(webStore.feedItems.map((i) => i.id)).toEqual(['recovered-1']);
+  });
+
+  it('Item #12 & Minors #5/#12: focus containment, dock-to-drawer focus restoration, empty-catalog onboarding guard, and global Enter button guard', async () => {
+    const webStore = useCosmicWebStore();
+    webStore.bootstrapped = true;
+    webStore.feedLoaded = true;
+    webStore.prefs.onboarded = false;
+    webStore.domains = [];
+    webStore.feedItems = [
+      { id: 'c1', domainId: 'ai', headline: 'Story 1', unread: true },
+    ];
+
+    const outsideBtn = document.createElement('button');
+    outsideBtn.textContent = 'Outside';
+    document.body.appendChild(outsideBtn);
+
+    const wrapper = mount(CosmosWebOverlay, {
+      props: { visible: true, agents: [], agentToPlanet: {}, isCompact: false },
+      global: { mocks: { $t: (k) => cosmosEn[k] || k } },
+      attachTo: document.body,
+    });
+    await flushPromises();
+
+    // Minor #5: empty catalog disables onboarding primary CTA
+    const primaryCta = wrapper.find('.cw-onboarding-actions .cw-btn-primary');
+    expect(primaryCta.exists()).toBe(true);
+    expect(primaryCta.attributes('disabled')).toBeDefined();
+
+    // Switch to onboarded feed view for Enter guard & Expand/Dock focus tests
+    webStore.prefs.onboarded = true;
+    webStore.cursorClusterId = 'c1';
+    await flushPromises();
+
+    // Minor #12: global Enter on a focused card action button MUST NOT open article reader
+    const bookmarkBtn = wrapper.find('.cw-card-actions button');
+    expect(bookmarkBtn.exists()).toBe(true);
+    bookmarkBtn.element.focus();
+    const enterEv = new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true });
+    bookmarkBtn.element.dispatchEvent(enterEv);
+    await flushPromises();
+    expect(webStore.readerOpen).toBe(false);
+
+    // Item #12: Expand -> focus containment (focusin escape + Tab wrap) -> Dock restores focus to remounted Expand btn
+    webStore.readerOpen = true;
+    webStore.readerClusterId = 'c1';
+    webStore.readerExpanded = false;
+    await flushPromises();
+
+    const expandBtn = wrapper.findComponent(CosmosWebOverlay).vm.$refs.inlineExpandBtn;
+    expect(expandBtn).toBeTruthy();
+    expandBtn.focus();
+    await expandBtn.click();
+    await flushPromises();
+    expect(webStore.readerExpanded).toBe(true);
+
+    const modalShell = document.querySelector('.cw-reader-modal');
+    expect(modalShell).toBeTruthy();
+
+    // focusin escape outside modal is pulled back inside modalShell
+    outsideBtn.focus();
+    outsideBtn.dispatchEvent(new FocusEvent('focusin', { bubbles: true }));
+    await flushPromises();
+    expect(modalShell.contains(document.activeElement)).toBe(true);
+
+    // Tab wrap from last focusable loops back to first focusable inside modalShell
+    const focusables = Array.from(
+      modalShell.querySelectorAll('button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'),
+    ).filter((el) => !el.disabled && el.getAttribute('aria-hidden') !== 'true');
+    expect(focusables.length).toBeGreaterThan(1);
+    focusables[focusables.length - 1].focus();
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', bubbles: true, cancelable: true }));
+    await flushPromises();
+    expect(document.activeElement).toBe(focusables[0]);
+
+    // Dock to drawer -> original expandBtn was unmounted, so restore-focus focuses the remounted inlineExpandBtn
+    webStore.readerExpanded = false;
+    await flushPromises();
+    await flushPromises();
+    const remountedExpandBtn = wrapper.vm.$refs.inlineExpandBtn;
+    expect(remountedExpandBtn).toBeTruthy();
+    expect(document.activeElement).toBe(remountedExpandBtn);
+
+    wrapper.unmount();
+    outsideBtn.remove();
   });
 });

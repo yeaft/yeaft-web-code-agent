@@ -99,48 +99,92 @@ export default {
     builtInDomains() {
       return (this.webStore.domains || []).filter((d) => d && !d.isCustom);
     },
-    capableAgentSet() {
-      return new Set(
-        (this.webStore.capableAgents || [])
-          .filter((a) => (typeof a === 'string' ? Boolean(a) : Boolean(a?.id && a.online !== false)))
-          .map((a) => (typeof a === 'string' ? a : a.id)),
+    briefingCapableAgents() {
+      return (this.agents || []).filter(
+        (a) => Boolean(a && a.online && Array.isArray(a.capabilities) && a.capabilities.includes('cosmic_web_briefing')),
       );
     },
-    eligibleBriefingAgents() {
-      const fromProps = (this.agents || []).filter((a) => a && a.online !== false && this.capableAgentSet.has(a.id));
-      if (fromProps.length) return fromProps;
-      return (this.webStore.capableAgents || [])
-        .filter((a) => a && typeof a === 'object' && a.id && a.online !== false);
+    savedOfflinePreferredAgent() {
+      const id = this.draft.preferredAgentId;
+      if (!id) return null;
+      if (this.briefingCapableAgents.some((a) => a.id === id)) return null;
+      const matched = (this.agents || []).find((a) => a && a.id === id);
+      return {
+        id,
+        name: matched?.name || id,
+      };
     },
   },
   watch: {
-    isOpen(open) {
-      if (open) {
-        this._previousActiveElement = typeof document !== 'undefined' ? document.activeElement : null;
-        this.initDraftFromStore();
-        this.$nextTick(() => {
-          this.$refs.prefsShell?.focus?.();
-        });
-      } else {
-        const prevEl = this._previousActiveElement;
-        this._previousActiveElement = null;
-        if (prevEl && typeof prevEl.focus === 'function') {
+    isOpen: {
+      immediate: true,
+      handler(open, prev) {
+        if (open) {
+          this._previousActiveElement = typeof document !== 'undefined' ? document.activeElement : null;
+          this.initDraftFromStore();
+          this.attachFocusContainment();
           this.$nextTick(() => {
-            if (typeof document === 'undefined' || document.contains(prevEl)) {
-              prevEl.focus();
-            }
+            this.$refs.prefsShell?.focus?.();
           });
+        } else {
+          this.detachFocusContainment();
+          if (prev === true) {
+            const prevEl = this._previousActiveElement;
+            this._previousActiveElement = null;
+            if (prevEl && typeof prevEl.focus === 'function') {
+              this.$nextTick(() => {
+                if (prevEl.isConnected) {
+                  prevEl.focus();
+                }
+              });
+            }
+          }
         }
-      }
+      },
     },
   },
+  beforeUnmount() {
+    this.detachFocusContainment();
+  },
   methods: {
+    attachFocusContainment() {
+      if (typeof document === 'undefined' || this._focusTrapBound) return;
+      document.addEventListener('keydown', this.handleModalKeydown, true);
+      document.addEventListener('focusin', this.handleModalFocusIn, true);
+      this._focusTrapBound = true;
+    },
+    detachFocusContainment() {
+      if (typeof document === 'undefined' || !this._focusTrapBound) return;
+      document.removeEventListener('keydown', this.handleModalKeydown, true);
+      document.removeEventListener('focusin', this.handleModalFocusIn, true);
+      this._focusTrapBound = false;
+    },
+    getFocusableElements(root) {
+      if (!root) return [];
+      return Array.from(
+        root.querySelectorAll('button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'),
+      ).filter((el) => !el.disabled && el.getAttribute('aria-hidden') !== 'true');
+    },
+    handleModalKeydown(e) {
+      if (!this.isOpen) return;
+      if (e.key === 'Tab') {
+        this.handleTabTrap(e);
+      }
+    },
+    handleModalFocusIn(e) {
+      if (!this.isOpen) return;
+      const root = this.$refs.prefsShell;
+      if (!root) return;
+      if (e.target && !root.contains(e.target)) {
+        const focusables = this.getFocusableElements(root);
+        if (focusables.length) focusables[0].focus();
+        else root.focus();
+      }
+    },
     handleTabTrap(e) {
       const root = this.$refs.prefsShell;
       if (!root) return;
-      const focusables = Array.from(
-        root.querySelectorAll('button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'),
-      ).filter((el) => !el.disabled && el.getAttribute('aria-hidden') !== 'true');
+      const focusables = this.getFocusableElements(root);
       if (!focusables.length) {
         e.preventDefault();
         root.focus();
@@ -161,15 +205,13 @@ export default {
     },
     initDraftFromStore() {
       const p = this.webStore.prefs || {};
-      const prefAgent = p.preferredAgentId || '';
-      const validPrefAgent = this.eligibleBriefingAgents.some((a) => a.id === prefAgent) ? prefAgent : '';
       this.draft = {
         enabledDomains: Array.isArray(p.enabledDomains) ? [...p.enabledDomains] : [],
         disabledSources: Array.isArray(p.disabledSources) ? [...p.disabledSources] : [],
         customDomains: Array.isArray(p.customDomains) ? cloneJson(p.customDomains) : [],
         watchKeywords: Array.isArray(p.watchKeywords) ? [...p.watchKeywords] : [],
         muteKeywords: Array.isArray(p.muteKeywords) ? [...p.muteKeywords] : [],
-        preferredAgentId: validPrefAgent,
+        preferredAgentId: typeof p.preferredAgentId === 'string' ? p.preferredAgentId : '',
         defaultPerspective: p.defaultPerspective || 'balanced',
       };
       this.saveError = null;
@@ -370,7 +412,6 @@ export default {
       @wheel.stop
       @click.self="close"
       @keydown.esc.stop.prevent="close"
-      @keydown.tab="handleTabTrap"
     >
       <div ref="prefsShell" class="cw-modal-shell cw-prefs-modal" tabindex="-1">
         <!-- Fixed Header -->
@@ -671,7 +712,7 @@ export default {
                   <span class="cw-agent-radio-title">{{ $t('cosmos.web.prefs.agentAuto') }}</span>
                 </label>
                 <label
-                  v-for="ag in eligibleBriefingAgents"
+                  v-for="ag in briefingCapableAgents"
                   :key="ag.id"
                   class="cw-agent-radio-item"
                   :class="{ 'is-selected': draft.preferredAgentId === ag.id }"
@@ -685,6 +726,21 @@ export default {
                   <span class="cw-agent-radio-title">{{ ag.name || ag.id }}</span>
                   <span class="cw-badge cw-badge-mint">
                     {{ $t('cosmos.web.prefs.briefingCapable') }}
+                  </span>
+                </label>
+                <label
+                  v-if="savedOfflinePreferredAgent"
+                  class="cw-agent-radio-item is-selected"
+                >
+                  <input
+                    v-model="draft.preferredAgentId"
+                    type="radio"
+                    :value="savedOfflinePreferredAgent.id"
+                  />
+                  <span class="cw-status-dot"></span>
+                  <span class="cw-agent-radio-title">{{ savedOfflinePreferredAgent.name }}</span>
+                  <span class="cw-badge">
+                    {{ $t('cosmos.web.status.offline') }}
                   </span>
                 </label>
               </div>

@@ -1,6 +1,7 @@
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { runInNewContext } from 'node:vm';
 import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { parseSkill, SkillManager } from '../../agent/yeaft/skills.js';
@@ -11,6 +12,8 @@ import {
   loadCosmicWebSkillGuidance,
   runCosmicWebBriefing,
 } from '../../agent/yeaft/cosmic-web-briefing.js';
+
+const { marked } = runInNewContext(readFileSync(new URL('../../web/vendor/marked.min.js', import.meta.url), 'utf8') + ';globalThis');
 
 const bundled = fileURLToPath(new URL('../../agent/skills/', import.meta.url));
 const skillPath = 'cosmic-web/SKILL.md';
@@ -174,6 +177,19 @@ describe('runCosmicWebBriefing', () => {
     expect(fallback.result.fullMarkdown).not.toContain(unsafe);
     expect(fallback.result.fullMarkdown).toContain('&lt;img');
   });
+
+  it.each(['ftp://files.example.com/a', 'https://example.com', 'www.example.com', 'mailto:a@b.com', 'user@example.com'])
+    ('rebuilds Markdown containing %s as plain, non-linking GFM text', async autolink => {
+      const { result } = await run({ adapter: stubAdapter({ ...story, tldr: `Contact: ${autolink}`, fullMarkdown: autolink }) });
+      expect(result.fullMarkdown).toContain('Contact:');
+      expect(result.fullMarkdown).toContain('## Impact');
+      expect(result.fullMarkdown).not.toContain(autolink);
+      const links = [];
+      marked.walkTokens(marked.lexer(result.fullMarkdown, { gfm: true }), token => {
+        if (token.type === 'link') links.push(token);
+      });
+      expect(links).toHaveLength(0);
+    });
 
   it('fails closed for a provider error or invalid perspective', async () => {
     const adapter = { call: vi.fn().mockRejectedValue(new Error('secret upstream detail')) };

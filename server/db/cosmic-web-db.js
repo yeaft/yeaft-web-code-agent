@@ -5,10 +5,10 @@ import { fileURLToPath } from 'node:url';
 
 let db;
 export function resolveCosmicWebDbPath(env = process.env) {
-  const dir = env.SERVER_DATA_DIR || env.TEST_DB_DIR;
   if (env.COSMIC_WEB_DB_PATH) return env.COSMIC_WEB_DB_PATH;
-  if (!dir && env.TEST_DB_PATH) return env.TEST_DB_PATH === ':memory:' ? ':memory:' : `${env.TEST_DB_PATH}.cosmic-web.db`;
-  return join(dir || fileURLToPath(new URL('../../data/', import.meta.url)), 'cosmic-web.db');
+  if (env.SERVER_DATA_DIR) return join(env.SERVER_DATA_DIR, 'cosmic-web.db');
+  if (env.TEST_DB_PATH) return env.TEST_DB_PATH === ':memory:' ? ':memory:' : `${env.TEST_DB_PATH}.cosmic-web.db`;
+  return join(env.TEST_DB_DIR || fileURLToPath(new URL('../../data/', import.meta.url)), 'cosmic-web.db');
 }
 
 export function openCosmicWebDb(customPath = resolveCosmicWebDbPath()) {

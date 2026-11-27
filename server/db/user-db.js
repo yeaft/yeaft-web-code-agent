@@ -78,7 +78,13 @@ export const userDb = {
       return { deletionId, status: 'pending', operationId: null };
     })();
     // Commit deactivation first: if the companion DB is unavailable, reconciliation retries the purge.
-    if (pending) purgeUserCosmicWebData(userId);
+    if (pending) {
+      try {
+        purgeUserCosmicWebData(userId);
+      } catch (err) {
+        console.error('[AccountDeletion] Cosmic Web purge deferred:', err.message);
+      }
+    }
     return pending;
   },
 
@@ -86,7 +92,12 @@ export const userDb = {
     const pending = db.prepare("SELECT id FROM users WHERE deletion_state = 'pending'").all();
     let finalized = 0;
     for (const user of pending) {
-      if (this.deleteUser(user.id, { requirePending: true })) finalized++;
+      try {
+        // A failed companion purge rolls back this user's main DB transaction.
+        if (this.deleteUser(user.id, { requirePending: true })) finalized++;
+      } catch (err) {
+        console.error('[AccountDeletion] Finalization deferred:', err.message);
+      }
     }
     return finalized;
   },

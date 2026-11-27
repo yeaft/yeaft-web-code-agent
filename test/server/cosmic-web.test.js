@@ -1,7 +1,8 @@
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PassThrough, Readable } from 'node:stream';
+import { runInNewContext } from 'node:vm';
 import { EventEmitter } from 'node:events';
 import { brotliCompressSync, deflateSync, gzipSync } from 'node:zlib';
 import express from 'express';
@@ -9,7 +10,7 @@ import supertest from 'supertest';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as db from '../../server/db/cosmic-web-db.js';
 import { safeFetch, validateExternalUrl } from '../../server/cosmic-web/safe-fetch.js';
-import { parseFeedXml } from '../../server/cosmic-web/rss-parser.js';
+import { parseFeedXml, resolveHttpUrl } from '../../server/cosmic-web/rss-parser.js';
 import { extractCleanArticle } from '../../server/cosmic-web/article-extractor.js';
 import { BUILTIN_DOMAINS, BUILTIN_SOURCES } from '../../server/cosmic-web/catalog.js';
 import { fetchSource } from '../../server/cosmic-web/sources.js';
@@ -17,6 +18,7 @@ import { buildGraphProjection, canonicalizeUrl, clusterSimilarity, computeHeatSc
 import { createCosmicWebService, ingestCosmicWebItems, startCosmicWebScheduler, stopCosmicWebScheduler } from '../../server/cosmic-web/service.js';
 import { clearAllCosmicWebAiRequests, clearCosmicWebAiRequestsForAgent, handleCosmicWebAiResponse,
   listCapableAgentsForUser, requestCosmicWebAi } from '../../server/cosmic-web/ai-bridge.js';
+import * as encryption from '../../server/encryption.js';
 import { agents, webClients } from '../../server/context.js';
 vi.mock('../../server/config.js', async importOriginal => {
   const actual = await importOriginal();
@@ -36,6 +38,8 @@ vi.mock('../../server/database.js', () => ({
   userDb: { getByUsername: name => ['alice', 'bob'].includes(name) ? { id: name, role: 'user' } : undefined },
   sessionDb: {}, yeaftProjectDb: {}, yeaftSessionDb: {}, sessionUiMetadataDb: {},
 }));
+
+const { marked } = runInNewContext(readFileSync(new URL('../../web/vendor/marked.min.js', import.meta.url), 'utf8') + ';globalThis');
 
 const NOW = Date.parse('2026-11-27T12:00:00Z');
 const HOUR = 3_600_000;
@@ -138,6 +142,28 @@ describe('feed parsing and source adapters', () => {
     expect(parseFeedXml('<rdf:RDF><item><title>A</title><link>https://example.com/</link><dc:date>2026-11-27T12:00:00Z</dc:date></item></rdf:RDF>')[0].publishedAt).toBe(NOW);
     expect(parseFeedXml('<feed><entry><title>X</title><link href="javascript:alert(1)"/></entry></feed>')).toEqual([]);
   });
+  it('ignores a 50,000-character xml:base for a feed with 400 relative links', () => {
+    const prefix = 'https://oversized.example/';
+    const oversized = prefix.padEnd(49_999, 'x') + '/';
+    const links = Array.from({ length: 400 }, (_, i) => `<item><title>Story ${i}</title><link>story-${i}</link></item>`).join('');
+    const xml = `<rss xml:base="https://example.com/news/"><channel xml:base="${oversized}">${links}</channel></rss>`;
+    const start = performance.now();
+    const items = parseFeedXml(xml, 'https://origin.example/feed');
+    expect(performance.now() - start).toBeLessThan(100);
+    // The normal result cap still applies; all returned links inherit the short parent base.
+    expect(items.map(({ url }) => url)).toEqual(Array.from({ length: 200 }, (_, i) => `https://example.com/news/story-${i}`));
+  });
+  it('bounds raw references, raw xml:base and serialized URL length', () => {
+    const base = 'https://example.com/';
+    const overlongRef = ' '.repeat(4096) + 'story';
+    const encodedRef = 'é'.repeat(680);
+    const encodedBase = '&#120;'.repeat(700) + '/'; // short after entity decoding, too long on the wire
+    expect(resolveHttpUrl(overlongRef, base)).toBeNull();
+    expect(resolveHttpUrl(encodedRef, base)).toBeNull();
+    expect(resolveHttpUrl(base.padEnd(4096, 'x'))).toHaveLength(4096);
+    const xml = `<feed xml:base="${encodedBase}"><entry><title>Story</title><link href="${overlongRef}"/><link>${encodedRef}</link><link>story</link></entry></feed>`;
+    expect(parseFeedXml(xml, base)).toMatchObject([{ url: `${base}story` }]);
+  });
   it('bounds long unassigned attributes and repeated unterminated tag starts in both parsers', () => {
     const unassigned = 'a'.repeat(50_000);
     const unfinished = '<entry '.repeat(8_000) + '"unterminated';
@@ -237,9 +263,11 @@ describe('clustering, isolation and retention', () => {
     expect(db.resolveCosmicWebDbPath({ TEST_DB_PATH: `${dir}/other.db` })).toBe(`${dir}/other.db.cosmic-web.db`);
     expect(db.resolveCosmicWebDbPath({ TEST_DB_PATH: `${dir}/another.db` })).toBe(`${dir}/another.db.cosmic-web.db`);
     expect(db.resolveCosmicWebDbPath({ TEST_DB_PATH: ':memory:' })).toBe(':memory:');
-    expect(db.resolveCosmicWebDbPath({ TEST_DB_DIR: dir, TEST_DB_PATH: ':memory:' })).toBe(join(dir, 'cosmic-web.db'));
+    expect(db.resolveCosmicWebDbPath({ TEST_DB_DIR: dir, TEST_DB_PATH: ':memory:' })).toBe(':memory:');
+    expect(db.resolveCosmicWebDbPath({ TEST_DB_DIR: 'ignored', TEST_DB_PATH: join(dir, 'main.db') })).toBe(join(dir, 'main.db.cosmic-web.db'));
+    expect(db.resolveCosmicWebDbPath({ TEST_DB_DIR: dir })).toBe(join(dir, 'cosmic-web.db'));
     expect(db.resolveCosmicWebDbPath({ COSMIC_WEB_DB_PATH: 'custom.db', SERVER_DATA_DIR: dir })).toBe('custom.db');
-    expect(db.resolveCosmicWebDbPath({ SERVER_DATA_DIR: 'server-data', TEST_DB_DIR: 'test-data' })).toBe(join('server-data', 'cosmic-web.db'));
+    expect(db.resolveCosmicWebDbPath({ SERVER_DATA_DIR: 'server-data', TEST_DB_PATH: ':memory:', TEST_DB_DIR: 'test-data' })).toBe(join('server-data', 'cosmic-web.db'));
     expect(db.getCosmicWebDb().prepare('PRAGMA journal_mode').get().journal_mode).toBe('wal');
     expect(db.getCosmicWebDb().prepare('PRAGMA foreign_keys').get().foreign_keys).toBe(1);
     ingestCosmicWebItems(source(), [item('Bookmark'), item('Old item', 'https://example.com/stale')], NOW);
@@ -285,8 +313,10 @@ describe('AI bridge', () => {
     expect(handleCosmicWebAiResponse('allowed', { requestId: currentFrames[0].requestId, ok: true, result: storyResult })).toBe(true);
     await expect(live).resolves.toEqual(storyResult);
   });
-  it.each(['https://example.com', 'http://example.com', 'www.example.com', 'mailto:edit@example.com', '<edit@example.com>'])
-    ('rejects unsafe Markdown (%s) but accepts the Agent-generated fallback', async fullMarkdown => {
+  it.each(['ftp://files.example.com/a', 'ftps://files.example.com/a', 'x+v1.test://host/a', 'https://example.com',
+    'www.example.com', 'mailto:a@b.com', 'user@example.com', 'awww.example.com', 'user@host.1', '<a@b.com>',
+    '[news](/news)', '![image](/photo.png)', '[news][ref]\n\n[ref]: /news', '\\\\[news](/news)'])
+    ('rejects unsafe Markdown (%s) but accepts the link-free Agent fallback', async fullMarkdown => {
       const frames = agent('allowed', 'alice');
       const request = () => requestCosmicWebAi({ userId: 'alice', userRole: 'user', agentId: 'allowed', mode: 'daily_briefing' });
       const respond = result => handleCosmicWebAiResponse('allowed', { requestId: frames.at(-1).requestId, ok: true, result });
@@ -295,12 +325,40 @@ describe('AI bridge', () => {
       await rejected;
       const { result } = await runCosmicWebBriefing({ mode: 'daily_briefing', language: 'en', config: { decisionModel: 'test/decision' },
         adapter: { call: async () => ({ text: JSON.stringify({ ...dailyResult, fullMarkdown,
-          headline: 'News from HTTPS://example.com', sections: [{ domain: 'AI', bullets: ['[brackets](parens); www.example.com; mailto:edit@example.com'] }] }) }) } });
-      expect(result.fullMarkdown).not.toMatch(/https?:\/\/|www\.|mailto:/i);
+          headline: 'News from HTTPS://example.com', sections: [{ domain: 'AI', bullets: [fullMarkdown] }] }) }) } });
+      expect(result.fullMarkdown).not.toBe(fullMarkdown);
+      const activeTokens = [];
+      marked.walkTokens(marked.lexer(result.fullMarkdown, { gfm: true }), token => {
+        if (['link', 'image', 'html'].includes(token.type)) activeTokens.push(token);
+      });
+      expect(activeTokens).toHaveLength(0);
       const accepted = request();
       expect(respond(result)).toBe(true);
       await expect(accepted).resolves.toEqual(result);
     });
+  it.each(['abort', 'clear', 'replace', 'close'])('does not send after %s while encryption is pending', async action => {
+    let finishEncryption;
+    const encrypt = vi.spyOn(encryption, 'encrypt').mockImplementation(() => new Promise(resolve => { finishEncryption = resolve; }));
+    const frames = agent('allowed', 'alice');
+    const connection = agents.get('allowed');
+    connection.encryptOutbound = true;
+    connection.sessionKey = new Uint8Array(32);
+    const controller = new AbortController();
+    const pending = expect(requestCosmicWebAi({ userId: 'alice', userRole: 'user', agentId: 'allowed', mode: 'brief', signal: controller.signal }))
+      .rejects.toMatchObject({ status: 503 });
+    expect(encrypt).toHaveBeenCalledOnce();
+    expect(frames).toHaveLength(0);
+    let replacementFrames;
+    if (action === 'abort') controller.abort();
+    if (action === 'clear') clearCosmicWebAiRequestsForAgent('allowed', connection);
+    if (action === 'replace') replacementFrames = agent('allowed', 'alice');
+    if (action === 'close') connection.ws.readyState = 3;
+    finishEncryption({ n: 'nonce', c: 'ciphertext' });
+    await pending;
+    await new Promise(resolve => setImmediate(resolve));
+    expect(frames).toHaveLength(0);
+    if (replacementFrames) expect(replacementFrames).toHaveLength(0);
+  });
   it('limits concurrency and rate, times out and clears on disconnect', async () => {
     vi.useFakeTimers(); const requests = agent('allowed', 'alice');
     const timeout = expect(ask()).rejects.toMatchObject({ status: 504 });
@@ -488,7 +546,17 @@ describe('REST and scheduler', () => {
       .rejects.toMatchObject({ status: 403 });
     await vi.waitFor(() => { expect(finishRefresh).toBeTypeOf('function'); expect(finishDns).toBeTypeOf('function'); });
     db.getCosmicWebDb().exec(`CREATE TRIGGER fail_purge BEFORE DELETE ON cw_user_prefs BEGIN SELECT RAISE(ABORT, 'test purge failure'); END`);
-    expect(() => userDb.beginDeletion(owner)).toThrow('test purge failure');
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const pendingDeletion = userDb.beginDeletion(owner);
+    expect(pendingDeletion).toMatchObject({ status: 'pending' });
+    expect(log).toHaveBeenCalledWith('[AccountDeletion] Cosmic Web purge deferred:', 'test purge failure');
+    const unaffected = userDb.createFull('other-pending-deletion-fixture', 'unused').id;
+    userDb.beginDeletion(unaffected);
+    // The same reconciliation pass used at startup must skip the failed purge and finalize other accounts.
+    expect(userDb.reconcilePendingDeletions()).toBe(1);
+    expect(userDb.get(unaffected)).toBeUndefined();
+    expect(userDb.get(owner)).toMatchObject({ deletion_state: 'pending', deletion_id: pendingDeletion.deletionId, password_hash: null, agent_secret: null });
+    expect(log).toHaveBeenCalledWith('[AccountDeletion] Finalization deferred:', 'test purge failure');
     expect(userDb.isActive(owner)).toBe(false);
     expect(db.loadUserPrefs(owner)).not.toBeNull();
     finishRefresh(); finishDns();
@@ -543,6 +611,15 @@ describe('REST and scheduler', () => {
     expect(svc.feed('alice').total).toBe(1);
     await new Promise(resolve => setImmediate(resolve));
     expect(fetcher).toHaveBeenCalledTimes(2);
+  });
+  it('rejects both cluster state mutations with 503 after scheduler stop', () => {
+    const svc = makeService();
+    ingestCosmicWebItems(source(), [item('Unread article')], NOW);
+    const id = svc.feed('alice').clusters[0].id;
+    svc.stopScheduler();
+    expect(() => svc.setClusterState('alice', id, { bookmarked: true })).toThrow(expect.objectContaining({ status: 503 }));
+    expect(() => svc.markAllRead('alice')).toThrow(expect.objectContaining({ status: 503 }));
+    expect(db.listUserClusterStates('alice').size).toBe(0);
   });
   it('aborts pending bridge work without a reply or cache write on scheduler stop', async () => {
     const svc = makeService();

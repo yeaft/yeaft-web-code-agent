@@ -44,9 +44,12 @@ export async function requestCosmicWebAi({ userId, userRole, agentId, mode, pers
     const timer = setTimeout(() => settle(key, fail(504, 'Agent briefing timed out')), 45_000);
     timer.unref();
     const onAbort = () => settle(key, fail(503, 'Cosmic Web is stopping'));
-    pending.set(key, { userId, userRole, agentId, agent, mode, resolve, reject, timer, signal, onAbort });
+    const entry = { userId, userRole, agentId, agent, mode, resolve, reject, timer, signal, onAbort };
+    pending.set(key, entry);
     signal?.addEventListener('abort', onAbort, { once: true });
-    sendToAgent(agent, { type: 'cosmic_web_ai_request', requestId, mode, perspective, language, payload })
+    sendToAgent(agent, { type: 'cosmic_web_ai_request', requestId, mode, perspective, language, payload }, {
+      shouldSend: () => pending.get(key) === entry && agents.get(agentId) === agent && !signal?.aborted,
+    })
       .then(sent => { if (!sent) settle(key, fail(503, 'Agent disconnected')); }, () => settle(key, fail(503, 'Agent send failed')));
   });
 }
@@ -60,14 +63,15 @@ const bullet = value => text(value, 500);
 const question = value => text(value, 320);
 
 // Keep this rule in sync with agent/yeaft/cosmic-web-briefing.js.
-function restrictedMarkdown(markdown) {
-  if (/[<>]|https?:\/\/|www\.|mailto:|@[a-z0-9-]+\./i.test(markdown)) return false;
-  // Unescaped brackets can form inline, reference, or image links.
-  for (const [token] of markdown.matchAll(/\\[\\\[\]]|[\[\]]/g)) if (token.length === 1) return false;
-  return true;
+function hasUnsafeMarkdown(markdown) {
+  if (/[<>]|(?<=[a-z][a-z0-9+.-]*):\/\/|www\.|\bmailto:|[a-z0-9._%+-]@[a-z0-9._-]+\.[a-z0-9_-]*[a-z0-9]/i.test(markdown)) return true;
+  // Reject unescaped brackets (including reference/image syntax). Consume
+  // escaped backslashes in pairs so they cannot hide an active bracket.
+  for (const [token] of markdown.matchAll(/\\[\\\[\]]|[\[\]]/g)) if (token.length === 1) return true;
+  return false;
 }
 function validResult(result, mode) {
-  if (!object(result) || !text(result.fullMarkdown, 12_000) || !restrictedMarkdown(result.fullMarkdown)) return false;
+  if (!object(result) || !text(result.fullMarkdown, 12_000) || hasUnsafeMarkdown(result.fullMarkdown)) return false;
   if (mode === 'daily_briefing') {
     return only(result, ['headline', 'overview', 'sections', 'signalsToWatch', 'followUps', 'fullMarkdown']) &&
       text(result.headline, 250) && text(result.overview, 1500) &&

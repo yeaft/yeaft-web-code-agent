@@ -166,14 +166,9 @@ export default {
       immediate: true,
       handler(val, prev) {
         if (val) {
-          this.webStore?.enterWebBand?.();
           this.searchDraft = this.webStore?.searchQuery || '';
         } else if (prev === true) {
-          if (this.searchTimer) {
-            clearTimeout(this.searchTimer);
-            this.searchTimer = null;
-          }
-          this.webStore?.leaveWebBand?.();
+          this.clearSearchDebounce();
         }
       },
     },
@@ -206,12 +201,15 @@ export default {
     window.removeEventListener('keydown', this.handleGlobalKeydown);
     window.removeEventListener('online', this.handleOnlineChange);
     window.removeEventListener('offline', this.handleOnlineChange);
-    if (this.searchTimer) {
-      clearTimeout(this.searchTimer);
-      this.searchTimer = null;
-    }
+    this.clearSearchDebounce();
   },
   methods: {
+    clearSearchDebounce() {
+      if (this.searchTimer) {
+        clearTimeout(this.searchTimer);
+        this.searchTimer = null;
+      }
+    },
     handleOnlineChange() {
       this.isOffline = typeof navigator !== 'undefined' ? !navigator.onLine : false;
     },
@@ -232,8 +230,23 @@ export default {
     },
     clearSearch() {
       this.searchDraft = '';
-      if (this.searchTimer) clearTimeout(this.searchTimer);
+      this.clearSearchDebounce();
       this.webStore.setSearchQuery('');
+    },
+    handleReaderRestoreFocus({ mode } = {}) {
+      this.$nextTick(() => {
+        if (mode === 'daily' && this.$refs.dailyBriefingBtn?.isConnected) {
+          this.$refs.dailyBriefingBtn.focus();
+          return;
+        }
+        if (this.inlineReaderActive && this.$refs.inlineExpandBtn?.isConnected) {
+          this.$refs.inlineExpandBtn.focus();
+          return;
+        }
+        if (this.$refs.drawerShell?.isConnected) {
+          this.$refs.drawerShell.focus();
+        }
+      });
     },
     toggleDrawer() {
       this.webStore.drawerCollapsed = !this.webStore.drawerCollapsed;
@@ -262,7 +275,7 @@ export default {
       else this.onboardDomains.push(id);
     },
     async submitOnboarding(useDefaults = false) {
-      if (this.onboardSubmitting) return;
+      if (this.onboardSubmitting || !this.builtInDomains.length) return;
       this.onboardSubmitting = true;
       try {
         const keywords = useDefaults
@@ -272,12 +285,8 @@ export default {
         const defaultCatalogIds = this.builtInDomains.filter((d) => d.defaultEnabled).map((d) => d.id);
         const fallbackDefaults = defaultCatalogIds.length > 0
           ? defaultCatalogIds
-          : (this.builtInDomains.length > 0
-            ? this.builtInDomains.slice(0, 4).map((d) => d.id)
-            : ['ai', 'tech', 'finance', 'product']);
-        const filteredDraft = validIds.size > 0
-          ? this.onboardDomains.filter((id) => validIds.has(id))
-          : [...this.onboardDomains];
+          : this.builtInDomains.slice(0, 4).map((d) => d.id);
+        const filteredDraft = this.onboardDomains.filter((id) => validIds.has(id));
         const domains = useDefaults || filteredDraft.length === 0
           ? fallbackDefaults
           : filteredDraft;
@@ -459,6 +468,7 @@ export default {
           this.webStore.emitPulse({ clusterId: item.id, domainId: item.domainId, count: 6 });
         }
       } else if (key === 'Enter') {
+        if (e.target?.closest?.('button, a, input, select, textarea, [role="button"]')) return;
         const targetId = this.webStore.cursorClusterId || this.webStore.selectedClusterId || items[this.focusedFeedIdx]?.id;
         if (targetId && !this.webStore.readerOpen) {
           e.preventDefault();
@@ -597,6 +607,7 @@ export default {
           </div>
 
           <button
+            ref="dailyBriefingBtn"
             type="button"
             class="cw-hud-btn cw-hud-btn-accent"
             @click="openDailyBriefing"
@@ -680,13 +691,13 @@ export default {
           <button
             type="button"
             class="cw-btn cw-btn-primary"
-            :disabled="onboardSubmitting"
+            :disabled="onboardSubmitting || !builtInDomains.length"
             @click="submitOnboarding(false)"
           >{{ onboardSubmitting ? $t('cosmos.web.prefs.saving') : $t('cosmos.web.onboarding.igniteCta') }}</button>
           <button
             type="button"
             class="cw-btn cw-btn-subtle"
-            :disabled="onboardSubmitting"
+            :disabled="onboardSubmitting || !builtInDomains.length"
             @click="submitOnboarding(true)"
           >{{ $t('cosmos.web.onboarding.useDefaultsCta') }}</button>
         </div>
@@ -711,8 +722,10 @@ export default {
       <!-- Right Translucent Intelligence Drawer (Mobile Bottom Sheet) -->
       <aside
         v-if="!webStore.drawerCollapsed"
+        ref="drawerShell"
         class="cw-drawer"
         role="complementary"
+        tabindex="-1"
         :aria-label="$t('cosmos.web.drawer.label')"
         @pointerdown.stop
         @wheel.stop
@@ -728,6 +741,7 @@ export default {
 
             <div class="cw-drawer-header-right">
               <button
+                ref="inlineExpandBtn"
                 type="button"
                 class="cw-text-btn"
                 @click="webStore.readerExpanded = true"
@@ -790,7 +804,7 @@ export default {
                 type="button"
                 class="cw-source-pill"
                 :class="{ 'is-active': (webStore.activeArticleItemId && src.id) ? webStore.activeArticleItemId === src.id : (webStore.activeArticleUrl || sourceItems[0]?.url) === src.url }"
-                @click="activeCluster && webStore.loadArticle(activeCluster.id, { itemId: src.id || null, url: src.url || null })"
+                @click="activeCluster && webStore.selectArticleSource(activeCluster.id, { itemId: src.id || null, url: src.url || null })"
               >{{ src.sourceName || src.sourceId || $t('cosmos.web.reader.sourceN', { n: idx + 1 }) }}</button>
             </div>
 
@@ -1099,6 +1113,7 @@ export default {
         :agent-to-planet="agentToPlanet"
         @toast="$emit('toast', $event)"
         @dispatch-to-planet="$emit('dispatch-to-planet', $event)"
+        @restore-focus="handleReaderRestoreFocus"
       />
 
       <!-- Domain & Preferences Studio Modal -->

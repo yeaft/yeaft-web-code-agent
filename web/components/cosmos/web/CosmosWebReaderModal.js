@@ -44,7 +44,7 @@ export default {
       default: () => ({}),
     },
   },
-  emits: ['toast', 'dispatch-to-planet'],
+  emits: ['toast', 'dispatch-to-planet', 'restore-focus'],
   setup() {
     const webStore = useCosmicWebStore();
     return { webStore };
@@ -115,18 +115,10 @@ export default {
       if (Array.isArray(this.daily?.signalsToWatch) && this.daily.signalsToWatch.length) return this.daily.signalsToWatch;
       return [];
     },
-    capableAgentSet() {
-      return new Set(
-        (this.webStore.capableAgents || [])
-          .filter((a) => (typeof a === 'string' ? Boolean(a) : Boolean(a?.id && a.online !== false)))
-          .map((a) => (typeof a === 'string' ? a : a.id)),
+    briefingCapableAgents() {
+      return (this.agents || []).filter(
+        (a) => Boolean(a && a.online && Array.isArray(a.capabilities) && a.capabilities.includes('cosmic_web_briefing')),
       );
-    },
-    eligibleBriefingAgents() {
-      const fromProps = (this.agents || []).filter((a) => a && a.online !== false && this.capableAgentSet.has(a.id));
-      if (fromProps.length) return fromProps;
-      return (this.webStore.capableAgents || [])
-        .filter((a) => a && typeof a === 'object' && a.id && a.online !== false);
     },
     availableAgents() {
       const list = Array.isArray(this.agents) ? this.agents : [];
@@ -143,27 +135,48 @@ export default {
     },
   },
   watch: {
-    isOpen(open) {
-      if (open) {
-        this._previousActiveElement = typeof document !== 'undefined' ? document.activeElement : null;
-        this.briefPerspective = this.webStore.prefs?.defaultPerspective || 'balanced';
-        const prefAgent = this.webStore.prefs?.preferredAgentId || '';
-        this.briefAgentId = this.eligibleBriefingAgents.some((a) => a.id === prefAgent) ? prefAgent : '';
-        this.dispatchAgentId = this.effectiveDispatchAgentId;
-        this.$nextTick(() => {
-          this.$refs.modalShell?.focus?.();
-        });
-      } else {
-        const prevEl = this._previousActiveElement;
-        this._previousActiveElement = null;
-        if (prevEl && typeof prevEl.focus === 'function') {
-          this.$nextTick(() => {
-            if (typeof document === 'undefined' || document.contains(prevEl)) {
-              prevEl.focus();
-            }
-          });
-        }
+    briefingCapableAgents(list) {
+      if (this.briefAgentId && !list.some((a) => a.id === this.briefAgentId)) {
+        this.briefAgentId = '';
       }
+    },
+    isOpen: {
+      immediate: true,
+      handler(open, prev) {
+        if (open) {
+          this._previousActiveElement = typeof document !== 'undefined' ? document.activeElement : null;
+          this._lastOpenMode = this.isDailyMode ? 'daily' : 'article';
+          this.briefPerspective = this.webStore.prefs?.defaultPerspective || 'balanced';
+          const prefAgent = this.webStore.prefs?.preferredAgentId || '';
+          this.briefAgentId = this.briefingCapableAgents.some((a) => a.id === prefAgent) ? prefAgent : '';
+          this.dispatchAgentId = this.effectiveDispatchAgentId;
+          this.attachFocusContainment();
+          this.$nextTick(() => {
+            this.$refs.modalShell?.focus?.();
+          });
+        } else {
+          this.detachFocusContainment();
+          if (prev === true) {
+            const prevEl = this._previousActiveElement;
+            const closedMode = this._lastOpenMode || 'article';
+            this._previousActiveElement = null;
+            this.$nextTick(() => {
+              const canRestorePrev = Boolean(
+                prevEl
+                && prevEl !== document.body
+                && prevEl !== document.documentElement
+                && prevEl.isConnected
+                && typeof prevEl.focus === 'function',
+              );
+              if (canRestorePrev) {
+                prevEl.focus();
+              } else {
+                this.$emit('restore-focus', { mode: closedMode });
+              }
+            });
+          }
+        }
+      },
     },
     'webStore.readerClusterId'() {
       this.dispatchPrompt = '';
@@ -172,18 +185,53 @@ export default {
       this.copySuccess = false;
     },
   },
+  beforeUnmount() {
+    this.detachFocusContainment();
+  },
   methods: {
     domainLabel(domainId) {
       const d = (this.webStore.domains || []).find((x) => x.id === domainId);
       if (!d) return domainId || '';
       return getLocale() === 'en' ? (d.labelEn || d.labelZh || d.id) : (d.labelZh || d.labelEn || d.id);
     },
+    attachFocusContainment() {
+      if (typeof document === 'undefined' || this._focusTrapBound) return;
+      document.addEventListener('keydown', this.handleModalKeydown, true);
+      document.addEventListener('focusin', this.handleModalFocusIn, true);
+      this._focusTrapBound = true;
+    },
+    detachFocusContainment() {
+      if (typeof document === 'undefined' || !this._focusTrapBound) return;
+      document.removeEventListener('keydown', this.handleModalKeydown, true);
+      document.removeEventListener('focusin', this.handleModalFocusIn, true);
+      this._focusTrapBound = false;
+    },
+    getFocusableElements(root) {
+      if (!root) return [];
+      return Array.from(
+        root.querySelectorAll('button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'),
+      ).filter((el) => !el.disabled && el.getAttribute('aria-hidden') !== 'true');
+    },
+    handleModalKeydown(e) {
+      if (!this.isOpen) return;
+      if (e.key === 'Tab') {
+        this.handleTabTrap(e);
+      }
+    },
+    handleModalFocusIn(e) {
+      if (!this.isOpen) return;
+      const root = this.$refs.modalShell;
+      if (!root) return;
+      if (e.target && !root.contains(e.target)) {
+        const focusables = this.getFocusableElements(root);
+        if (focusables.length) focusables[0].focus();
+        else root.focus();
+      }
+    },
     handleTabTrap(e) {
       const root = this.$refs.modalShell;
       if (!root) return;
-      const focusables = Array.from(
-        root.querySelectorAll('button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'),
-      ).filter((el) => !el.disabled && el.getAttribute('aria-hidden') !== 'true');
+      const focusables = this.getFocusableElements(root);
       if (!focusables.length) {
         e.preventDefault();
         root.focus();
@@ -228,9 +276,11 @@ export default {
     },
     selectSource(src) {
       if (!this.cluster?.id || (!src?.id && !src?.url)) return;
-      this.webStore.loadArticle(this.cluster.id, {
+      this.webStore.selectArticleSource(this.cluster.id, {
         itemId: src.id || null,
         url: src.url || null,
+        perspective: this.briefPerspective,
+        agentId: this.briefAgentId || undefined,
       });
     },
     triggerAiSynthesis() {
@@ -353,7 +403,6 @@ export default {
       @wheel.stop
       @click.self="closeModal"
       @keydown.esc.stop.prevent="closeModal"
-      @keydown.tab="handleTabTrap"
     >
       <div ref="modalShell" class="cw-modal-shell cw-reader-modal" tabindex="-1">
         <!-- Fixed Header -->
@@ -436,7 +485,7 @@ export default {
                 <span>{{ $t('cosmos.web.prefs.agentLabel') }}</span>
                 <select v-model="briefAgentId" class="cw-select">
                   <option value="">{{ $t('cosmos.web.prefs.agentAuto') }}</option>
-                  <option v-for="ag in eligibleBriefingAgents" :key="ag.id" :value="ag.id">
+                  <option v-for="ag in briefingCapableAgents" :key="ag.id" :value="ag.id">
                     {{ ag.name || ag.id }}
                   </option>
                 </select>
@@ -619,7 +668,7 @@ export default {
                   <span>{{ $t('cosmos.web.prefs.agentLabel') }}</span>
                   <select v-model="briefAgentId" class="cw-select">
                     <option value="">{{ $t('cosmos.web.prefs.agentAuto') }}</option>
-                    <option v-for="ag in eligibleBriefingAgents" :key="ag.id" :value="ag.id">
+                    <option v-for="ag in briefingCapableAgents" :key="ag.id" :value="ag.id">
                       {{ ag.name || ag.id }}
                     </option>
                   </select>
