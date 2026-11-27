@@ -146,7 +146,7 @@ export function sniffSourceMimeType(bytes) {
   if (at('GIF87a') || at('GIF89a')) return 'image/gif';
   if (at('RIFF') && at('WEBP', 8)) return 'image/webp';
   if (at('%PDF-')) return 'application/pdf';
-  if (at('\x1a\x45\xdf\xa3')) return 'video/webm';
+  if (at('\x1a\x45\xdf\xa3') && bytes.subarray(4, 256).includes(Buffer.from('4282847765626d', 'hex'))) return 'video/webm';
 
   // QuickTime uses the same box layout, including ftyp with a "qt  " brand.
   if (bytes.length >= 8) {

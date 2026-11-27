@@ -919,7 +919,7 @@ export class CreationStore {
     return this.all('SELECT data FROM creation_assets WHERE creation_id=? ORDER BY rowid', safeId(id))
       .map(row => { const { fileId, file, ...asset } = data(row); return asset; });
   }
-  readMediaRange(id, mediaKind, mediaId, start = 0, end = undefined) {
+  readMediaRange(id, mediaKind, mediaId, start = 0, end = undefined, { expectedVersion = null } = {}) {
     this.#creation(id);
     safeId(mediaId);
     let record;
@@ -931,6 +931,10 @@ export class CreationStore {
       record = data(this.one('SELECT data FROM creation_sources WHERE creation_id=? AND id=?', id, mediaId)) ?? notFound('Source');
       path = this.#path(id, 'sources', mediaId, 'original');
     } else fail('INVALID_REQUEST', 'Invalid media kind');
+    const version = record.version ?? record.sha256 ?? record.updatedAt ?? record.createdAt;
+    if (expectedVersion != null && version !== expectedVersion) {
+      fail('CONFLICT', 'Creation media changed during transfer');
+    }
     const { fd, size } = this.#open(id, path);
     try {
       // Inclusive HTTP byte range. An omitted end requests a bounded first/next chunk.

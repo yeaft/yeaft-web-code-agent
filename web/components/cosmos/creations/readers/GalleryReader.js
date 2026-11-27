@@ -134,7 +134,7 @@ export default {
           this.saveError = '';
         }
         this.editing = true;
-        this.syncStoreDirty(true);
+        this.syncStoreDirty(this.dirty);
         return;
       }
       this.editing = false;

@@ -140,6 +140,14 @@ export default {
       if (!this.editing || !this.dirty) {
         this.draftText = newVal || '';
         this.dirty = false;
+        if (this.editing && this.contentLoaded) {
+          this.editBaseRevId = this.loadedRevId;
+        }
+      }
+    },
+    loadedRevId(newRev) {
+      if (this.editing && !this.dirty && this.contentLoaded) {
+        this.editBaseRevId = newRev;
       }
     },
     'node.id'(newId, oldId) {
@@ -195,7 +203,7 @@ export default {
       this.saveError = '';
       this.editing = true;
       this.dirty = false;
-      this.syncStoreDirty(true);
+      this.syncStoreDirty(false);
       this.$nextTick(() => {
         this.autoResizeTextarea();
         const ta = this.$refs.editorTextarea;
@@ -213,7 +221,7 @@ export default {
     },
     onEditorInput() {
       this.dirty = this.draftText !== (this.content || '');
-      this.syncStoreDirty(this.dirty || this.editing);
+      this.syncStoreDirty(this.dirty);
       this.autoResizeTextarea();
     },
     autoResizeTextarea() {

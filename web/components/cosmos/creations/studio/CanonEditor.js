@@ -70,8 +70,11 @@ export default {
     isTruncated() {
       return Boolean(this.item?.contentTruncated || this.item?.stateTruncated);
     },
+    isLockedForHydration() {
+      return Boolean(this.hydrating || this.hydrateFailed || this.isTruncated);
+    },
     saveDisabled() {
-      return Boolean(this.saving || this.hydrating || this.hydrateFailed || this.isTruncated || !this.dirty);
+      return Boolean(this.saving || this.isLockedForHydration || !this.dirty);
     },
   },
   watch: {
@@ -204,6 +207,7 @@ export default {
           <input
             v-model="title"
             class="creation-canon-title-input"
+            :disabled="isLockedForHydration"
             :placeholder="$t('creation.canon.titlePlaceholder')"
             @input="markDirty"
           />
@@ -214,6 +218,7 @@ export default {
             type="button"
             class="creation-glass-btn"
             :class="{ 'is-active': pinned }"
+            :disabled="isLockedForHydration"
             @click="pinned = !pinned; markDirty()"
           >
             📌 {{ pinned ? $t('creation.canon.pinned') : $t('creation.canon.unpinned') }}
@@ -222,6 +227,7 @@ export default {
             type="button"
             class="creation-glass-btn"
             :class="{ 'is-active': locked }"
+            :disabled="isLockedForHydration"
             @click="locked = !locked; markDirty()"
           >
             🔒 {{ locked ? $t('creation.canon.locked') : $t('creation.canon.unlocked') }}
@@ -256,7 +262,7 @@ export default {
         </button>
       </div>
 
-      <div class="creation-canon-editor-body">
+      <fieldset class="creation-canon-editor-body" :disabled="isLockedForHydration" style="border:0;margin:0;padding:0;min-width:0;">
         <!-- Entity Canon -->
         <template v-if="type === 'entity'">
           <div class="creation-canon-section">
@@ -265,6 +271,7 @@ export default {
               v-model="profile"
               class="creation-canon-textarea"
               rows="8"
+              :readonly="isLockedForHydration"
               :placeholder="$t('creation.canon.bodyPlaceholder')"
               @input="markDirty"
             ></textarea>
@@ -273,7 +280,7 @@ export default {
           <div class="creation-canon-section">
             <div class="creation-canon-section-head">
               <h3 class="creation-canon-section-title">{{ $t('creation.canon.addStateField') }}</h3>
-              <button type="button" class="creation-glass-btn" @click="addStateField">
+              <button type="button" class="creation-glass-btn" :disabled="isLockedForHydration" @click="addStateField">
                 + {{ $t('creation.canon.addStateField') }}
               </button>
             </div>
@@ -281,10 +288,10 @@ export default {
             <table class="creation-canon-table">
               <tbody>
                 <tr v-for="(pair, idx) in statePairs" :key="idx">
-                  <td><input v-model="pair.key" class="creation-inline-input" @input="markDirty" /></td>
-                  <td><input v-model="pair.value" class="creation-inline-input" @input="markDirty" /></td>
+                  <td><input v-model="pair.key" class="creation-inline-input" :readonly="isLockedForHydration" @input="markDirty" /></td>
+                  <td><input v-model="pair.value" class="creation-inline-input" :readonly="isLockedForHydration" @input="markDirty" /></td>
                   <td>
-                    <button type="button" class="creation-icon-mini is-danger" @click="removeStateField(idx)">×</button>
+                    <button type="button" class="creation-icon-mini is-danger" :disabled="isLockedForHydration" @click="removeStateField(idx)">×</button>
                   </td>
                 </tr>
               </tbody>
@@ -297,7 +304,7 @@ export default {
           <div class="creation-canon-section">
             <div class="creation-canon-section-head">
               <h3 class="creation-canon-section-title">{{ $t('creation.canon.ledger') }}</h3>
-              <button type="button" class="creation-glass-btn" @click="addLedgerRow">
+              <button type="button" class="creation-glass-btn" :disabled="isLockedForHydration" @click="addLedgerRow">
                 + {{ $t('creation.canon.addLedgerRow') }}
               </button>
             </div>
@@ -306,22 +313,23 @@ export default {
               <table class="creation-canon-table">
                 <tbody>
                   <tr v-for="(row, idx) in rows" :key="idx">
-                    <td><input v-model="row.name" class="creation-inline-input" @input="markDirty" /></td>
-                    <td><input v-model="row.detail" class="creation-inline-input" @input="markDirty" /></td>
-                    <td><input v-model="row.introduced" class="creation-inline-input" @input="markDirty" /></td>
-                    <td><input v-model="row.target" class="creation-inline-input" @input="markDirty" /></td>
+                    <td><input v-model="row.name" class="creation-inline-input" :readonly="isLockedForHydration" @input="markDirty" /></td>
+                    <td><input v-model="row.detail" class="creation-inline-input" :readonly="isLockedForHydration" @input="markDirty" /></td>
+                    <td><input v-model="row.introduced" class="creation-inline-input" :readonly="isLockedForHydration" @input="markDirty" /></td>
+                    <td><input v-model="row.target" class="creation-inline-input" :readonly="isLockedForHydration" @input="markDirty" /></td>
                     <td>
                       <button
                         type="button"
                         class="creation-status-pill"
                         :class="row.status === 'resolved' ? 'is-completed' : 'is-active'"
+                        :disabled="isLockedForHydration"
                         @click="toggleRowStatus(row)"
                       >
                         {{ row.status }}
                       </button>
                     </td>
                     <td>
-                      <button type="button" class="creation-icon-mini is-danger" @click="removeLedgerRow(idx)">×</button>
+                      <button type="button" class="creation-icon-mini is-danger" :disabled="isLockedForHydration" @click="removeLedgerRow(idx)">×</button>
                     </td>
                   </tr>
                 </tbody>
@@ -337,12 +345,13 @@ export default {
               v-model="body"
               class="creation-canon-textarea is-tall"
               rows="16"
+              :readonly="isLockedForHydration"
               :placeholder="$t('creation.canon.bodyPlaceholder')"
               @input="markDirty"
             ></textarea>
           </div>
         </template>
-      </div>
+      </fieldset>
     </section>
   `,
 };

@@ -141,7 +141,8 @@ describe('Creations durable store and operations', () => {
     ['000000096d6f6f7600', 'video/mp4'],
     ['000000096d64617400', 'video/mp4'],
     ['000000186674797069736f6d', null], // Truncated ftyp box.
-    ['1a45dfa3', 'video/webm'],
+    ['1a45dfa3', null], // Plain EBML / Matroska without WebM DocType.
+    ['1a45dfa34282847765626d', 'video/webm'],
     ['89504e470d0a1a0a', 'image/png'],
     ['ffd8ff', 'image/jpeg'],
     ['474946383961', 'image/gif'],
@@ -556,4 +557,24 @@ it('bounds PDF scanning on malformed input and ignores bytes beyond 2 MiB', () =
   const parsed = parseSource(input, { name: 'huge.pdf' });
   expect(performance.now() - start).toBeLessThan(500); // CI scheduling margin around the parser's 250ms budget.
   expect(parsed).toMatchObject({ kind: 'pdf', truncated: true, chunks: [] });
+});
+
+it('rejects plain Matroska EBML without WebM DocType as non-playable video and checks expectedVersion before range bounds', () => {
+  store.createCreation({ id: 'book' });
+  const mkv = Buffer.concat([Buffer.from('1a45dfa3', 'hex'), Buffer.from('matroska\0\0\0\0')]);
+  const webm = Buffer.concat([Buffer.from('1a45dfa3', 'hex'), Buffer.from('4282847765626d', 'hex'), Buffer.alloc(16)]);
+  const [mkvSrc, webmSrc] = store.addSources('book', {
+    files: [
+      { name: 'clip.mkv', mimeType: 'video/x-matroska', data: mkv.toString('base64') },
+      { name: 'clip.webm', mimeType: 'application/octet-stream', data: webm.toString('base64') },
+    ],
+  });
+  expect(mkvSrc.detectedMimeType).toBeNull();
+  expect(mkvSrc.playableVideo).toBe(false);
+  expect(webmSrc.detectedMimeType).toBe('video/webm');
+  expect(webmSrc.playableVideo).toBe(true);
+
+  const asset = store.saveAsset('book', { id: 'export-markdown', ext: 'md', bytes: Buffer.from('short') });
+  expect(() => store.readMediaRange('book', 'asset', asset.id, 9999, 10050, { expectedVersion: 'stale-version' }))
+    .toThrow(err('CONFLICT'));
 });

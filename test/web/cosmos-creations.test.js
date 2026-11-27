@@ -1423,4 +1423,97 @@ describe('Cosmos Creations — End-to-End Web Store <-> Server Relay <-> Agent S
 
     wrapper.unmount();
   });
+
+  it('R4-#3/#7/#9/#11: CanonEditor locks inputs while hydrating, BookReader keeps clean edits refreshable on reconnect, VideoReader respects playableVideo=false, and Signal popover mounts inside modal', async () => {
+    const [
+      { default: CanonEditor },
+      { default: BookReader },
+      { default: VideoReader },
+      { default: CreationInteriorModal },
+      { default: CosmosSignalStream },
+    ] = await Promise.all([
+      import('../../web/components/cosmos/creations/studio/CanonEditor.js'),
+      import('../../web/components/cosmos/creations/readers/BookReader.js'),
+      import('../../web/components/cosmos/creations/readers/VideoReader.js'),
+      import('../../web/components/cosmos/creations/CreationInteriorModal.js'),
+      import('../../web/components/cosmos/CosmosSignalStream.js'),
+    ]);
+    const $t = (k) => creationsZh[k] || k;
+
+    // R4-#3: CanonEditor locks form inputs while hydrating stateTruncated item
+    creationsStore.getCanon = vi.fn(() => new Promise(() => {}));
+    const canonWrap = mount(CanonEditor, {
+      props: {
+        item: { id: 'c1', type: 'entity', title: 'Hero', contentMd: 'Short', stateTruncated: true },
+        agentId: 'agent-a',
+        creationId: 'cre-1',
+      },
+      global: { mocks: { $t } },
+    });
+    expect(canonWrap.find('.creation-canon-title-input').attributes('disabled')).toBeDefined();
+    expect(canonWrap.find('fieldset.creation-canon-editor-body').attributes('disabled')).toBeDefined();
+    canonWrap.unmount();
+
+    // R4-#7: BookReader entering edit mode without typing does NOT mark node dirty, so reconnect refreshes clean draft
+    creationsStore.nodeContentsByKey['agent-a\u001fcre-1\u001fn1'] = {
+      content: 'Old prose', revisions: [], loading: false, loaded: true, loadedRevId: 'rev-1', dirty: false,
+    };
+    const bookWrap = mount(BookReader, {
+      props: {
+        node: { id: 'n1', title: 'Ch 1', modality: 'markdown_doc', currentRevId: 'rev-1' },
+        content: 'Old prose',
+        contentLoaded: true,
+        loadedRevId: 'rev-1',
+        agentId: 'agent-a',
+        creationId: 'cre-1',
+      },
+      global: { mocks: { $t } },
+    });
+    bookWrap.vm.enterEditMode();
+    expect(creationsStore.nodeContentsByKey['agent-a\u001fcre-1\u001fn1'].dirty).toBe(false);
+    await bookWrap.setProps({ content: 'Updated prose from peer', loadedRevId: 'rev-2' });
+    expect(bookWrap.vm.draftText).toBe('Updated prose from peer');
+    expect(bookWrap.vm.editBaseRevId).toBe('rev-2');
+    bookWrap.unmount();
+
+    // R4-#9: VideoReader excludes sources explicitly verified playableVideo: false even if named .mp4
+    const videoWrap = mount(VideoReader, {
+      props: {
+        node: { id: 'v1', title: 'Ep 1', modality: 'video_episode', currentRevId: 'rev-1' },
+        content: JSON.stringify({ scenes: [] }),
+        contentLoaded: true,
+        loadedRevId: 'rev-1',
+        agentId: 'agent-a',
+        creationId: 'cre-1',
+        sources: [
+          { id: 'fake-mp4', name: 'fake.mp4', mimeType: 'video/mp4', playableVideo: false },
+          { id: 'real-webm', name: 'real.bin', mimeType: 'application/octet-stream', detectedMimeType: 'video/webm', playableVideo: true },
+        ],
+      },
+      global: { mocks: { $t } },
+    });
+    expect(videoWrap.vm.videoSources.map((s) => s.id)).toEqual(['real-webm']);
+    videoWrap.unmount();
+
+    // R4-#11: Signal popover slot renders inside aria-modal="true" CreationInteriorModal & focuses on open
+    const res = await creationsStore.createCreation('agent-a', { title: 'Modal A11y', kind: 'book', autoPlan: false });
+    await creationsStore.openCreation('agent-a', res.creation.id, { mode: 'studio' });
+    const modalWrap = mount(CreationInteriorModal, {
+      attachTo: document.body,
+      props: { signalCount: 1, signalOpen: true, signalLabel: '1 signal' },
+      slots: {
+        'signal-popover': () => Vue.h(CosmosSignalStream, {
+          items: [{ signalKey: 's1', kind: 'unread', agentName: 'Alpha', sessionTitle: 'S1', preview: 'hi', dismissible: true }],
+          unreadCount: 1, badgeCount: 1, dismissibleCount: 1, popoverOpen: true, suppressFloating: true,
+        }),
+      },
+      global: { mocks: { $t } },
+    });
+    await flushPromises();
+    const modalEl = modalWrap.find('[aria-modal="true"]');
+    expect(modalEl.find('.cosmos-signal-popover').exists()).toBe(true);
+    modalWrap.vm.focusSignalTrigger();
+    expect(document.activeElement).toBe(modalWrap.find('.creation-signal-trigger').element);
+    modalWrap.unmount();
+  });
 });

@@ -157,7 +157,7 @@ async function streamCreationMedia(req, res) {
     for (let start = range.start; start <= range.end;) {
       const buffered = start <= first.end;
       const end = Math.min(range.end, buffered ? first.end : start + Math.min(range.end - start, CREATION_MEDIA_CHUNK_BYTES - 1));
-      const chunk = buffered ? first : await transfer.read(start, end);
+      const chunk = buffered ? first : await transfer.read(start, end, { expectedVersion });
       if ((chunk.version ?? null) !== expectedVersion || chunk.totalSize !== totalSize
           || chunk.mimeType !== mimeType || chunk.filename !== filename || chunk.end < end) {
         throw Object.assign(new Error('Creation media changed during transfer'), { status: 409 });

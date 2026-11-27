@@ -173,9 +173,11 @@ export default {
     <!-- 3. Popover / Sheet Mode (Drawer-Open Chain-Reader, Mobile Sheet, or Collapsed-Mode Popover) -->
     <section
       v-if="popoverOpen"
+      ref="popoverRef"
       class="cosmos-signal-popover"
       :class="{ 'is-drawer-docked': drawerOpen && !isCompact, 'is-mobile': isCompact }"
       role="dialog"
+      tabindex="-1"
       :aria-label="$t('cosmos.signals.title')"
       @pointerdown.stop
       @wheel.stop
@@ -349,6 +351,18 @@ export default {
       if (open) expanded.value = false;
     });
 
+    const popoverRef = Vue.ref(null);
+
+    Vue.watch(() => props.popoverOpen, (open) => {
+      if (!open) return;
+      Vue.nextTick(() => {
+        const root = popoverRef.value;
+        if (!root) return;
+        const focusable = root.querySelector('button:not([disabled]), [tabindex]:not([tabindex="-1"])');
+        (focusable || root).focus?.();
+      });
+    });
+
     function dismissMobileBanner() {
       dismissedBannerSignature.value = mobileBannerSignature.value;
     }
@@ -361,6 +375,7 @@ export default {
     }
 
     return {
+      popoverRef,
       expanded,
       srAnnouncement,
       previewLines,

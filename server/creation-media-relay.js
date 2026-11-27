@@ -40,7 +40,7 @@ export function closeCreationMediaReads(agentId, agent) {
   }
 }
 
-function requestChunk(agentId, agent, params, start, end, signal) {
+function requestChunk(agentId, agent, params, start, end, signal, { expectedVersion = null } = {}) {
   if (signal?.aborted) throw failure(499, 'Creation media request cancelled');
   const requestId = randomUUID();
   return new Promise((resolve, reject) => {
@@ -58,7 +58,15 @@ function requestChunk(agentId, agent, params, start, end, signal) {
     signal?.addEventListener('abort', abort, { once: true });
     const unavailable = () => fail(failure(503, 'Agent read unavailable'));
     try {
-      Promise.resolve(sendToAgent(agent, { type: 'creation_media_read', requestId, ...params, start, end }))
+      const frame = {
+        type: 'creation_media_read',
+        requestId,
+        ...params,
+        start,
+        end,
+        ...(expectedVersion != null ? { expectedVersion } : {}),
+      };
+      Promise.resolve(sendToAgent(agent, frame))
         .then(sent => { if (sent === false) unavailable(); }, unavailable);
     } catch {
       unavailable();
@@ -73,6 +81,7 @@ function decodeChunk(msg, params, start, end) {
   }
   const error = msg.errorCode ?? msg.error;
   if (typeof error === 'string' && ['not_found', 'enoent'].includes(error.toLowerCase())) throw failure(404, 'Creation media not found');
+  if (typeof error === 'string' && error.toLowerCase() === 'conflict') throw failure(409, 'Creation media changed during transfer');
   if (msg.ok === false || msg.error || msg.errorCode) throw failure(502, 'Creation media read failed');
   const { mimeType, filename, totalSize, data } = msg;
   const expectedEnd = Math.min(end, totalSize - 1);
@@ -124,7 +133,7 @@ export function openCreationMedia(user, { agentId, creationId, mediaKind, mediaI
   }
   return {
     close,
-    async read(start, end) {
+    async read(start, end, opts = {}) {
       if (closed) throw failure(499, 'Creation media request cancelled');
       if (reading) throw failure(503, 'Creation media read already in progress');
       if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end) || start < 0
@@ -132,7 +141,7 @@ export function openCreationMedia(user, { agentId, creationId, mediaKind, mediaI
       checkAccess();
       reading = true;
       try {
-        const msg = await requestChunk(agentId, agent, params, start, end, controller.signal);
+        const msg = await requestChunk(agentId, agent, params, start, end, controller.signal, opts);
         if (closed) throw failure(499, 'Creation media request cancelled');
         checkAccess();
         return decodeChunk(msg, params, start, end);

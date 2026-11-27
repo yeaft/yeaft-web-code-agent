@@ -36,9 +36,11 @@ export function createCreationRelay({
     if (!row) return false;
     clearTimeout(row.timer);
     pending.delete(id);
-    const remaining = counts.get(row.client) - 1;
-    if (remaining) counts.set(row.client, remaining);
-    else counts.delete(row.client);
+    if (row.client) {
+      const remaining = (counts.get(row.client) || 1) - 1;
+      if (remaining > 0) counts.set(row.client, remaining);
+      else counts.delete(row.client);
+    }
     if (row.uploadBytes) {
       inFlightBytes -= row.uploadBytes;
       const userBytes = bytesByUser.get(row.userKey) - row.uploadBytes;
@@ -116,7 +118,8 @@ export function createCreationRelay({
         inFlightBytes += uploadBytes;
       }
       const timer = setTimeout(() => {
-        if (forget(serverRequestId) && active(client) && (client.userId || ownerId) === userKey) {
+        const current = pending.get(serverRequestId);
+        if (forget(serverRequestId) && current?.client && active(current.client) && (current.client.userId || ownerId) === userKey) {
           void Promise.resolve().then(() => reject('timeout', 'Creation request timed out; refresh before retrying')).catch(() => {});
         }
       }, timeoutMs);
@@ -142,11 +145,11 @@ export function createCreationRelay({
       const row = pending.get(msg.requestId);
       if (!row || row.agentId !== agentId || row.agent !== agent || agentMap.get(agentId) !== agent) return true;
       forget(msg.requestId);
-      // Ingestion succeeded even if the browser is no longer authorized to see the reply.
+      // Ingestion succeeded even if the browser disconnected or is no longer authorized to see the reply.
       if (msg.ok === true) {
         for (const fileId of row.fileIds) uploads.delete(fileId);
       }
-      if (!active(row.client) || accessError(agentId, row.client.userId, row.client.role)) return true;
+      if (!row.client || !active(row.client) || accessError(agentId, row.client.userId, row.client.role)) return true;
       await reply(row.client, row.agentId, row.browserRequestId, row.op, msg.ok === true
         ? { ok: true, data: msg.data }
         : { ok: false,
@@ -157,14 +160,32 @@ export function createCreationRelay({
     },
     clearAgent(agentId, agent) {
       for (const [id, row] of pending) {
-        if (row.agentId !== agentId || row.agent !== agent || !forget(id) || !active(row.client)) continue;
+        if (row.agentId !== agentId || row.agent !== agent || !forget(id) || !row.client || !active(row.client)) continue;
         void Promise.resolve().then(() => reply(row.client, agentId, row.browserRequestId, row.op, {
           ok: false, errorCode: 'outcome_unknown', error: 'Agent disconnected; refresh before retrying',
         })).catch(() => {});
       }
     },
     clearClient(client) {
-      for (const [id, row] of pending) if (row.client === client) forget(id);
+      for (const [id, row] of pending) {
+        if (row.client !== client) continue;
+        if (row.fileIds?.length) {
+          // Detach browser delivery and release in-flight relay budget, while retaining the
+          // ingestion correlation until the Agent responds or times out so successful uploads
+          // still release staged intake quota immediately.
+          row.client = null;
+          counts.delete(client);
+          if (row.uploadBytes) {
+            inFlightBytes -= row.uploadBytes;
+            const userBytes = bytesByUser.get(row.userKey) - row.uploadBytes;
+            if (userBytes) bytesByUser.set(row.userKey, userBytes);
+            else bytesByUser.delete(row.userKey);
+            row.uploadBytes = 0;
+          }
+        } else {
+          forget(id);
+        }
+      }
     },
     close() { for (const id of pending.keys()) forget(id); },
   };

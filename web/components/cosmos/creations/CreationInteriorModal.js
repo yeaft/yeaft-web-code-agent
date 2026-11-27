@@ -274,6 +274,9 @@ export default {
   },
   methods: {
     isFolderNode,
+    focusSignalTrigger() {
+      this.$refs.signalTriggerBtn?.focus?.();
+    },
     readerComponentFor(node) {
       const mod = node?.modality || 'markdown_doc';
       if (mod === 'slide_deck') return 'DeckReader';
@@ -618,8 +621,9 @@ export default {
             </div>
           </div>
 
-          <!-- Signal Stream Trigger -->
+          <!-- Signal Stream Trigger & Modal-Scoped Popover Slot -->
           <button
+            ref="signalTriggerBtn"
             type="button"
             class="creation-glass-btn creation-signal-trigger"
             :class="{
@@ -638,6 +642,7 @@ export default {
             <span v-if="signalCount > 0" class="creation-signal-badge">{{ signalCount }}</span>
             <span v-else-if="signalRunningCount > 0" class="creation-signal-pulse" aria-hidden="true"></span>
           </button>
+          <slot name="signal-popover"></slot>
 
           <!-- Agent Ownership Badge -->
           <span v-if="creation.agentName || agentId" class="creation-agent-pill is-active" :title="agentId">

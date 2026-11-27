@@ -696,4 +696,63 @@ describe('Staged upload intake quota', () => {
       await new Promise(resolve => server.close(resolve));
     }
   });
+
+  it('releases staged upload quota even if the browser disconnects before the Agent replies ok', async () => {
+    const fileSize = MAX_CREATION_ATTACHMENT_BYTES;
+    CONFIG.maxPendingUploadBytesPerUser = 50 * 1024 * 1024;
+    CONFIG.maxPendingUploadBytes = 128 * 1024 * 1024;
+    const forward = vi.fn(async () => true);
+    relay = createCreationRelay({ forward });
+
+    const { body: { files: [{ fileId }] } } = await upload('alice', fileSize).expect(200);
+    const entry = state.pendingFiles.get(fileId);
+    const encode = vi.spyOn(entry.buffer, 'toString').mockReturnValue('encoded');
+    await relay.request(client, msg({ op: 'add_sources', payload: { attachments: [{ fileId }] } }));
+    encode.mockRestore();
+    const { requestId } = forward.mock.lastCall[1];
+
+    // Browser disconnects while Agent is still ingesting the upload.
+    relay.clearClient(client);
+    expect(state.pendingFiles.has(fileId)).toBe(true);
+
+    // Agent completes ingestion before timeout -> staged quota must be released despite browser disconnect.
+    await relay.response(agentId, agent, { type: 'creation_response', requestId, ok: true });
+    expect(state.pendingFiles.has(fileId)).toBe(false);
+    expect(state.pendingFiles.available('user-a', CONFIG.maxPendingUploadBytesPerUser, CONFIG.maxPendingUploadBytes))
+      .toBe(CONFIG.maxPendingUploadBytesPerUser);
+  });
+
+  it('returns 409 (not 502) when Agent rejects a range pull due to expectedVersion mismatch', async () => {
+    const mediaApp = express();
+    registerUploadRoutes(mediaApp, {
+      requireAuth: (req, _res, next) => { req.user = { username: 'alice', id: 'user-a', role: 'user' }; next(); },
+      requireSessionAuth: (req, _res, next) => { req.user = { username: 'alice', id: 'user-a', role: 'user' }; next(); },
+    });
+    const probeBytes = Buffer.alloc(4096, 'a');
+    let calls = 0;
+    agent.ws.send.mockImplementation((raw) => {
+      const frame = JSON.parse(raw);
+      if (frame.type !== 'creation_media_read') return;
+      calls++;
+      if (calls === 1) {
+        queueMicrotask(() => handleAgentCreation(agentId, agent, {
+          type: 'creation_media_chunk', requestId: frame.requestId, creationId: frame.creationId,
+          mediaKind: frame.mediaKind, mediaId: frame.mediaId, ok: true, mimeType: 'text/markdown',
+          filename: 'book.md', totalSize: 8 * 1024 * 1024, version: 'v1', start: 0, end: 4095,
+          data: probeBytes.toString('base64'),
+        }));
+      } else {
+        expect(frame.expectedVersion).toBe('v1');
+        queueMicrotask(() => handleAgentCreation(agentId, agent, {
+          type: 'creation_media_chunk', requestId: frame.requestId, creationId: frame.creationId,
+          mediaKind: frame.mediaKind, mediaId: frame.mediaId, ok: false, errorCode: 'conflict',
+          error: 'Creation media changed during transfer',
+        }));
+      }
+    });
+    const res = await request(mediaApp)
+      .get(`/api/yeaft/creations/${agentId}/book/media/asset/export-markdown`)
+      .set('Range', 'bytes=6000000-6000100');
+    expect(res.status).toBe(409);
+  });
 });

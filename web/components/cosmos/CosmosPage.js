@@ -389,7 +389,7 @@ export default {
         :drawer-open="drawerOpen"
         :is-compact="isCompactViewport"
         :preview-mode="constants.livePreviewMode"
-        :popover-open="signalPopoverOpen"
+        :popover-open="signalPopoverOpen && !creationsStore.activeCreation"
         :stream-hidden="signalStreamHidden"
         :suppressed="constantsOpen || isObservingEvent"
         :suppress-floating="currentBand === 'galaxy' || Boolean(creationsStore.activeCreation)"
@@ -471,14 +471,37 @@ export default {
       <!-- L3 Full-Screen Creation Interior (Read Mode & Co-Creation Studio) -->
       <CreationInteriorModal
         v-if="creationsStore.activeCreation"
+        ref="creationInteriorRef"
         :signal-count="signalStream.badgeCount"
         :signal-waiting-count="signalStream.waitingCount"
         :signal-running-count="signalStream.runningCount"
         :signal-open="signalPopoverOpen"
         :signal-label="signalTriggerLabel"
         @toggle-signal="onToggleSignalTrigger"
-        @close-signal="closeSignalPopover({ restoreFocus: false })"
-      />
+        @close-signal="closeSignalPopover({ restoreFocus: true })"
+      >
+        <template #signal-popover>
+          <CosmosSignalStream
+            :items="signalStream.items"
+            :waiting-count="signalStream.waitingCount"
+            :unread-count="signalStream.unreadCount"
+            :running-count="signalStream.runningCount"
+            :badge-count="signalStream.badgeCount"
+            :dismissible-count="signalStream.dismissibleCount"
+            :drawer-open="false"
+            :is-compact="isCompactViewport"
+            :preview-mode="constants.livePreviewMode"
+            :popover-open="signalPopoverOpen"
+            :stream-hidden="true"
+            :suppressed="false"
+            :suppress-floating="true"
+            @open-signal="onOpenSignal"
+            @dismiss-signal="onDismissSignal"
+            @mark-all-read="onMarkAllSignalsRead"
+            @close-popover="closeSignalPopover({ restoreFocus: true })"
+          />
+        </template>
+      </CreationInteriorModal>
 
       <!-- Black Hole Horizon Minimal Whisper Dock -->
       <div v-if="currentBand === 'horizon'" class="cosmos-corner-dock" @pointerdown.stop>
@@ -548,6 +571,7 @@ export default {
     const hoverCardRef = Vue.ref(null);
     const drawerRef = Vue.ref(null);
     const galaxyOverlayRef = Vue.ref(null);
+    const creationInteriorRef = Vue.ref(null);
     const signalTriggerRef = Vue.ref(null);
 
     const domRefs = {
@@ -1438,7 +1462,13 @@ export default {
       if (!signalPopoverOpen.value) return;
       signalPopoverOpen.value = false;
       if (restoreFocus) {
-        Vue.nextTick(() => signalTriggerRef.value?.focus?.());
+        Vue.nextTick(() => {
+          if (creationsStore.activeCreation) {
+            creationInteriorRef.value?.focusSignalTrigger?.();
+          } else {
+            signalTriggerRef.value?.focus?.();
+          }
+        });
       }
     }
 
@@ -2118,7 +2148,7 @@ export default {
     });
 
     return {
-      glCanvasRef, hudCanvasRef, hoverCardRef, drawerRef, galaxyOverlayRef, signalTriggerRef, domRefs, setMapRef, canvasEpoch, rendererMode,
+      glCanvasRef, hudCanvasRef, hoverCardRef, drawerRef, galaxyOverlayRef, creationInteriorRef, signalTriggerRef, domRefs, setMapRef, canvasEpoch, rendererMode,
       creationsStore, activeGalaxyStars,
       planets: PLANETS, bookDomains: BOOK_DOMAINS,
       portals: [

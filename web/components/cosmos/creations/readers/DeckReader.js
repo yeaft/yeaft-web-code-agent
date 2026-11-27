@@ -209,7 +209,7 @@ export default {
         this.saveError = '';
       }
       this.editing = true;
-      this.syncStoreDirty(true);
+      this.syncStoreDirty(this.dirty);
     },
     toggleEditing() {
       if (!this.editing) {

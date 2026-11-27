@@ -12,6 +12,8 @@ const PLAYABLE_VIDEO_EXT = /\.(mp4|webm|mov)$/i;
 function isPlayableVideoSource(src) {
   if (!src || !src.id) return false;
   if (src.playableVideo === true) return true;
+  if (src.playableVideo === false) return false;
+  // Legacy records without a verified playableVideo flag fall back to declared MIME / extension.
   const mime = String(src.detectedMimeType || src.mimeType || '').toLowerCase().trim();
   const name = String(src.name || src.filename || '').toLowerCase().trim();
   return PLAYABLE_VIDEO_MIMES.has(mime) || PLAYABLE_VIDEO_EXT.test(name);
@@ -213,7 +215,7 @@ export default {
           this.saveError = '';
         }
         this.editing = true;
-        this.syncStoreDirty(true);
+        this.syncStoreDirty(this.dirty);
         return;
       }
       this.editing = false;
