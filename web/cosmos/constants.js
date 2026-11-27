@@ -157,6 +157,9 @@ export const DEFAULT_GALAXY_BOOKS = Object.freeze([
 
 export const DEFAULT_COSMOS_CONSTANTS = Object.freeze({
   orbitSpeed: 1.0,
+  spinSpeed: 0.45,
+  planetScale: 1.0,
+  eventScale: 1.0,
   starDensity: 1.18,
   skyBright: 1.05,
   orbitLines: 0.60,
@@ -189,6 +192,9 @@ export function normalizeCosmosConstants(raw) {
   const renderQuality = ['auto', 'high', 'lite'].includes(src.renderQuality) ? src.renderQuality : DEFAULT_COSMOS_CONSTANTS.renderQuality;
   return {
     orbitSpeed: clampNum(src.orbitSpeed, 0, 2.5, DEFAULT_COSMOS_CONSTANTS.orbitSpeed),
+    spinSpeed: clampNum(src.spinSpeed, 0, 2.5, DEFAULT_COSMOS_CONSTANTS.spinSpeed),
+    planetScale: clampNum(src.planetScale, 0.65, 1.5, DEFAULT_COSMOS_CONSTANTS.planetScale),
+    eventScale: clampNum(src.eventScale, 0.5, 1.8, DEFAULT_COSMOS_CONSTANTS.eventScale),
     starDensity: clampNum(src.starDensity, 0.35, 2.0, DEFAULT_COSMOS_CONSTANTS.starDensity),
     skyBright: clampNum(src.skyBright, 0.35, 1.8, DEFAULT_COSMOS_CONSTANTS.skyBright),
     orbitLines: clampNum(src.orbitLines, 0, 1.2, DEFAULT_COSMOS_CONSTANTS.orbitLines),

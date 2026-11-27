@@ -149,6 +149,9 @@ export function stepCosmosFrame(now, ctx) {
   anim.orbitBrake += (targetBrake - anim.orbitBrake) * Math.min(1, dt * 6.0);
 
   anim.realTime += dt * motionMul;
+  const spinSpeed = typeof constants.spinSpeed === 'number' ? constants.spinSpeed : 0.45;
+  if (typeof anim.spinTime !== 'number') anim.spinTime = 0;
+  anim.spinTime += dt * spinSpeed * motionMul;
   anim.time += dt * constants.orbitSpeed * anim.orbitBrake * motionMul;
   anim.focusedPlanetId = ui.focusedPlanetId;
 
@@ -320,8 +323,14 @@ export function stepCosmosFrame(now, ctx) {
     };
   };
 
+  const bodyScaleMul = typeof constants.planetScale === 'number'
+    ? Math.max(0.65, Math.min(1.5, constants.planetScale))
+    : 1.0;
+  const effectiveSunRadius = sunRadius * bodyScaleMul;
+  const effectivePlanetScale = planetScale * bodyScaleMul;
+
   const sunPt = projectSolar(0, 0, 0, sunOffNow);
-  anim.solarSunScreen = { x: sunPt.x, y: sunPt.y, r: sunRadius };
+  anim.solarSunScreen = { x: sunPt.x, y: sunPt.y, r: effectiveSunRadius };
 
   const solarBodies = [];
   const agentsByPlanet = getAgentsByPlanet();
@@ -338,9 +347,9 @@ export function stepCosmosFrame(now, ctx) {
         texKey: 'sun',
         screenX: sPt.x,
         screenY: sPt.y,
-        radiusPx: sunRadius * (star.sizeRatio || 1.0) * (sPt.persp || 1.0),
+        radiusPx: effectiveSunRadius * (star.sizeRatio || 1.0) * (sPt.persp || 1.0),
         camZ: sPt.rz || 0,
-        spin: anim.time * 0.075 + (star.phase || 0),
+        spin: anim.spinTime * 0.14 + (star.phase || 0),
         tilt: 0.11,
         oblate: 1.0,
         lightDir: [0, 0, 1],
@@ -358,7 +367,7 @@ export function stepCosmosFrame(now, ctx) {
       const rz = pt.rz;
       const persp = pt.persp;
       const isFocusedPlanet = pf.planetId === p.id;
-      const rPx = Math.max(isCompact ? 5.5 : 4.5, p.size * planetScale * persp);
+      const rPx = Math.max(isCompact ? 5.5 : 4.5, p.size * effectivePlanetScale * persp);
 
       const lx = -rx;
       const ly = 0.24;
@@ -375,7 +384,7 @@ export function stepCosmosFrame(now, ctx) {
       anim.planetScreen[p.id] = { x: sx, y: sy, r: rPx, z: rz };
       solarBodies.push({
         bodyType: p.bodyType, texKey: p.texKey, screenX: sx, screenY: sy, radiusPx: rPx, camZ: rz,
-        spin: anim.realTime * p.spinRate + p.phase * 1.3 + (isFocusedPlanet ? pf.inspectYaw : 0),
+        spin: anim.spinTime * p.spinRate + p.phase * 1.3 + (isFocusedPlanet ? pf.inspectYaw : 0),
         tilt: p.tilt,
         pitch: isFocusedPlanet ? pf.inspectPitch : 0,
         closeup,
@@ -622,6 +631,9 @@ export function stepCosmosFrame(now, ctx) {
     toScreen(webPortalX, webPortalY),
   ];
   const eventVisibilityAlpha = (isHomeSystem && !voyage?.soaring && !isWarpingSystem) ? baseSolarAlpha : 0;
+  const eventScaleMul = typeof constants.eventScale === 'number'
+    ? Math.max(0.5, Math.min(1.8, constants.eventScale))
+    : 1.0;
   const eventDraws = (eventVisibilityAlpha > 0.01 && (eventSim.events?.length > 0 || eventSim.active))
     ? computeEventFrames(
       eventSim,
@@ -633,6 +645,7 @@ export function stepCosmosFrame(now, ctx) {
       anim.camRot,
       anim.parallax,
       baseSolarZoom,
+      eventScaleMul,
     )
     : [];
   anim.lastEventFrames = eventDraws;

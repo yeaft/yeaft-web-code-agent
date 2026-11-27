@@ -23,14 +23,20 @@ export const OVERLAP_EVENT_MIN_SEC = 18;
 export const OVERLAP_EVENT_MAX_SEC = 42;
 export const MAX_CONCURRENT_EVENTS = 3;
 
-export const EVENT_DISTANT_MIN_SCALE = 0.16;
-export const EVENT_DISTANT_MAX_SCALE = 0.44;
+export const EVENT_DISTANT_MIN_SCALE = 0.065;
+export const EVENT_DISTANT_MAX_SCALE = 0.20;
 export const EVENT_CAMERA_RETURN_EPS = 0.015;
 
-const DIST_NORM_MIN = 2.2;
-const DIST_NORM_MAX = 6.0;
-const DIST_SCALE_NUMERATOR = DIST_NORM_MIN * EVENT_DISTANT_MAX_SCALE; // 0.968 -> 0.44 at d=2.2, 0.161 at d=6.0
-const DIST_LY_PER_NORM = 520;
+const DIST_NORM_MIN = 3.2;
+const DIST_NORM_MAX = 9.8;
+const DIST_SCALE_NUMERATOR = DIST_NORM_MIN * EVENT_DISTANT_MAX_SCALE; // 0.64 -> 0.20 at d=3.2, 0.0653 at d=9.8
+const DIST_LY_PER_NORM = 460;
+
+function getUnitDepthBias(unit) {
+  if (unit === 'Mly') return 0.72; // farther deep-sky extragalactic band
+  if (unit === 'AU') return 0.20;  // nearer outer/inner Solar System band
+  return 0.45;                     // mid-far galactic band
+}
 
 export const COSMIC_EVENTS = Object.freeze([
   {
@@ -40,11 +46,11 @@ export const COSMIC_EVENTS = Object.freeze([
     swatch: '#78d2ff',
     glowRgb: [0.42, 0.80, 1.0],
     duration: 24,
-    defaultZoom: 1.55,
+    defaultZoom: 1.82,
     hasShock: true,
     hasLens: false,
-    intrinsicRadius: 0.45,
-    obsDist: 1.72,
+    intrinsicRadius: 0.46,
+    obsDist: 1.66,
     unit: 'ly',
     unitScale: 420,
     baseAngle: 0.18,
@@ -57,11 +63,11 @@ export const COSMIC_EVENTS = Object.freeze([
     swatch: '#ff8a4c',
     glowRgb: [1.0, 0.56, 0.24],
     duration: 22,
-    defaultZoom: 1.65,
+    defaultZoom: 1.88,
     hasShock: true,
     hasLens: false,
-    intrinsicRadius: 0.40,
-    obsDist: 1.62,
+    intrinsicRadius: 0.42,
+    obsDist: 1.58,
     unit: 'AU',
     unitScale: 1.9,
     baseAngle: -0.14,
@@ -74,11 +80,11 @@ export const COSMIC_EVENTS = Object.freeze([
     swatch: '#f6ba64',
     glowRgb: [1.0, 0.72, 0.36],
     duration: 25,
-    defaultZoom: 1.60,
+    defaultZoom: 1.86,
     hasShock: true,
     hasLens: true,
-    intrinsicRadius: 0.43,
-    obsDist: 1.64,
+    intrinsicRadius: 0.45,
+    obsDist: 1.60,
     unit: 'ly',
     unitScale: 780,
     baseAngle: -0.22,
@@ -91,11 +97,11 @@ export const COSMIC_EVENTS = Object.freeze([
     swatch: '#9cb8ff',
     glowRgb: [0.58, 0.84, 1.0],
     duration: 24,
-    defaultZoom: 1.55,
+    defaultZoom: 1.82,
     hasShock: true,
     hasLens: true,
-    intrinsicRadius: 0.43,
-    obsDist: 1.66,
+    intrinsicRadius: 0.44,
+    obsDist: 1.62,
     unit: 'Mly',
     unitScale: 21,
     baseAngle: 0.24,
@@ -108,11 +114,11 @@ export const COSMIC_EVENTS = Object.freeze([
     swatch: '#ffad48',
     glowRgb: [1.0, 0.62, 0.22],
     duration: 21,
-    defaultZoom: 1.50,
+    defaultZoom: 1.78,
     hasShock: false,
     hasLens: false,
-    intrinsicRadius: 0.40,
-    obsDist: 1.62,
+    intrinsicRadius: 0.42,
+    obsDist: 1.58,
     unit: 'ly',
     unitScale: 145,
     baseAngle: -0.58,
@@ -125,11 +131,11 @@ export const COSMIC_EVENTS = Object.freeze([
     swatch: '#c89bff',
     glowRgb: [0.74, 0.56, 1.0],
     duration: 23,
-    defaultZoom: 1.50,
+    defaultZoom: 1.76,
     hasShock: true,
     hasLens: false,
-    intrinsicRadius: 0.43,
-    obsDist: 1.66,
+    intrinsicRadius: 0.44,
+    obsDist: 1.62,
     unit: 'Mly',
     unitScale: 52,
     baseAngle: -0.52,
@@ -142,11 +148,11 @@ export const COSMIC_EVENTS = Object.freeze([
     swatch: '#ff9668',
     glowRgb: [1.0, 0.58, 0.30],
     duration: 24,
-    defaultZoom: 1.60,
+    defaultZoom: 1.84,
     hasShock: false,
     hasLens: true,
-    intrinsicRadius: 0.42,
-    obsDist: 1.60,
+    intrinsicRadius: 0.44,
+    obsDist: 1.56,
     unit: 'Mly',
     unitScale: 11.5,
     baseAngle: -0.18,
@@ -159,11 +165,11 @@ export const COSMIC_EVENTS = Object.freeze([
     swatch: '#7ceeff',
     glowRgb: [0.46, 0.88, 1.0],
     duration: 21,
-    defaultZoom: 1.50,
+    defaultZoom: 1.74,
     hasShock: false,
     hasLens: false,
-    intrinsicRadius: 0.37,
-    obsDist: 1.46,
+    intrinsicRadius: 0.39,
+    obsDist: 1.44,
     unit: 'AU',
     unitScale: 0.32,
     baseAngle: 0.08,
@@ -175,14 +181,14 @@ export const COSMIC_EVENTS = Object.freeze([
  * 8-sector peripheral deep-sky ring surrounding the Solar System (clockwise from North).
  */
 const DISTANT_SECTORS = Object.freeze([
-  { id: 'n',  x: 0.50, y: 0.16, jitterX: 0.08, jitterY: 0.025, yaw:  0.00, pitch: -0.26, azDeg:   0 },
-  { id: 'ne', x: 0.84, y: 0.20, jitterX: 0.05, jitterY: 0.04,  yaw: -0.40, pitch: -0.22, azDeg:  45 },
-  { id: 'e',  x: 0.89, y: 0.50, jitterX: 0.03, jitterY: 0.07,  yaw: -0.48, pitch:  0.02, azDeg:  90 },
-  { id: 'se', x: 0.71, y: 0.84, jitterX: 0.05, jitterY: 0.03,  yaw: -0.34, pitch:  0.24, azDeg: 135 },
-  { id: 's',  x: 0.50, y: 0.85, jitterX: 0.08, jitterY: 0.025, yaw:  0.00, pitch:  0.28, azDeg: 180 },
-  { id: 'sw', x: 0.29, y: 0.84, jitterX: 0.05, jitterY: 0.03,  yaw:  0.34, pitch:  0.24, azDeg: 225 },
-  { id: 'w',  x: 0.16, y: 0.67, jitterX: 0.03, jitterY: 0.05,  yaw:  0.46, pitch:  0.10, azDeg: 270 },
-  { id: 'nw', x: 0.29, y: 0.17, jitterX: 0.05, jitterY: 0.03,  yaw:  0.34, pitch: -0.22, azDeg: 315 },
+  { id: 'n',  x: 0.50, y: 0.13, jitterX: 0.08, jitterY: 0.02,  yaw:  0.00, pitch: -0.28, azDeg:   0 },
+  { id: 'ne', x: 0.87, y: 0.18, jitterX: 0.04, jitterY: 0.035, yaw: -0.42, pitch: -0.24, azDeg:  45 },
+  { id: 'e',  x: 0.91, y: 0.48, jitterX: 0.025, jitterY: 0.07, yaw: -0.50, pitch:  0.02, azDeg:  90 },
+  { id: 'se', x: 0.78, y: 0.86, jitterX: 0.045, jitterY: 0.025, yaw: -0.36, pitch:  0.26, azDeg: 135 },
+  { id: 's',  x: 0.50, y: 0.88, jitterX: 0.08, jitterY: 0.02,  yaw:  0.00, pitch:  0.29, azDeg: 180 },
+  { id: 'sw', x: 0.22, y: 0.86, jitterX: 0.045, jitterY: 0.025, yaw:  0.36, pitch:  0.26, azDeg: 225 },
+  { id: 'w',  x: 0.11, y: 0.62, jitterX: 0.025, jitterY: 0.06, yaw:  0.48, pitch:  0.08, azDeg: 270 },
+  { id: 'nw', x: 0.22, y: 0.16, jitterX: 0.045, jitterY: 0.03, yaw:  0.36, pitch: -0.24, azDeg: 315 },
 ]);
 
 let eventUidSeq = 1;
@@ -231,7 +237,7 @@ export function computeEventFlightDuration(distDepth, returning = false) {
  * Sample a random 3D deep-sky location around the outer skybox (never overlapping the
  * central Solar System or any excluded sectors). Enforces strict inverse-distance scaling.
  */
-export function pickRandomDistantLocation(excludeSectors = null, rng = Math.random) {
+export function pickRandomDistantLocation(excludeSectors = null, rng = Math.random, unit = null) {
   const excluded = new Set(
     Array.isArray(excludeSectors)
       ? excludeSectors.filter(Boolean)
@@ -246,10 +252,12 @@ export function pickRandomDistantLocation(excludeSectors = null, rng = Math.rand
   const x = clamp(sector.x + jx, 0.08, 0.92);
   const y = clamp(sector.y + jy, 0.11, 0.89);
 
-  // Slight mid-far bias so spontaneous events feel poised and unobtrusive.
+  // Mid-far depth distribution, biased by astronomical scale (AU nearer, ly mid, Mly farthest).
   const rawDepth = clamp(rng(), 0, 1);
-  const depth = Math.pow(rawDepth, 0.85);
-  // Physical normalized distance d in [2.2, 6.0]: apparent scale = 0.968 / d (strict 1/d law).
+  const depth = unit
+    ? clamp(getUnitDepthBias(unit) * 0.55 + Math.pow(rawDepth, 0.85) * 0.55, 0.04, 1.0)
+    : Math.pow(rawDepth, 0.85);
+  // Physical normalized distance d in [3.2, 9.8]: apparent scale = 0.64 / d (strict 1/d law).
   const distNorm = DIST_NORM_MIN + depth * (DIST_NORM_MAX - DIST_NORM_MIN);
   const distantScale = Number(clamp(DIST_SCALE_NUMERATOR / distNorm, EVENT_DISTANT_MIN_SCALE, EVENT_DISTANT_MAX_SCALE).toFixed(3));
   const distanceLy = Math.round(distNorm * DIST_LY_PER_NORM);
@@ -426,7 +434,7 @@ export function startCosmicEvent(
     if (dropIdx >= 0) sim.events.splice(dropIdx, 1);
   }
 
-  const location = pickRandomDistantLocation(getExcludedSectors(sim), rng);
+  const location = pickRandomDistantLocation(getExcludedSectors(sim), rng, def.unit);
   sim.lastPlayedIdx = idx;
   sim.lastSector = location.sector;
   const effectiveObserve = shouldFocus || (autoZoom === true);
@@ -437,7 +445,7 @@ export function startCosmicEvent(
     sim.lastLocation = location;
   }
 
-  const ambientDist = def.obsDist / Math.max(location.distantScale, 0.1);
+  const ambientDist = def.obsDist / Math.max(location.distantScale, 0.04);
   const distDepth = computeEventDistDepth(def, location);
   const flightDuration = computeEventFlightDuration(distDepth, false);
   if (effectiveObserve) sim.lastDistDepth = distDepth;
@@ -669,8 +677,8 @@ export function tickCosmicEvents(
 
   // 4. Update each event's effective optical distance (logarithmic inverse-distance approach)
   for (const ev of sim.events) {
-    const distantScale = typeof ev.location?.distantScale === 'number' ? ev.location.distantScale : 0.28;
-    const ambientDist = ev.def.obsDist / Math.max(distantScale, 0.1);
+    const distantScale = typeof ev.location?.distantScale === 'number' ? ev.location.distantScale : 0.12;
+    const ambientDist = ev.def.obsDist / Math.max(distantScale, 0.04);
     ev.ambientDist = ambientDist;
     if (ev.observing) {
       const focusedDist = ev.def.obsDist / Math.max(0.55, ev.zoom || sim.fovZoom || 1.0);
@@ -686,7 +694,18 @@ export function tickCosmicEvents(
 /**
  * Compute viewport coordinates and strict inverse-distance perspective scale for a specific event.
  */
-function computeSingleEventPosition(sim, ev, w, h, centerShiftX = 0, avoidPoints = null, camRot = null, parallax = null, solarZoom = 1.0) {
+function computeSingleEventPosition(
+  sim,
+  ev,
+  w,
+  h,
+  centerShiftX = 0,
+  avoidPoints = null,
+  camRot = null,
+  parallax = null,
+  solarZoom = 1.0,
+  eventScaleMul = 1.0,
+) {
   if (!ev) return null;
   const def = ev.def;
   const loc = ev.location || def.anchor;
@@ -700,9 +719,10 @@ function computeSingleEventPosition(sim, ev, w, h, centerShiftX = 0, avoidPoints
   const f = isFocused ? clamp(sim.focusProgress || 0, 0, 1) : 0;
   const globalObs = clamp(sim.focusProgress || 0, 0, 1);
 
-  const distantScale = typeof loc.distantScale === 'number' ? loc.distantScale : 0.30;
+  const distantScale = typeof loc.distantScale === 'number' ? loc.distantScale : 0.12;
   const focusedScale = Math.max(0.55, (isFocused ? sim.fovZoom : ev.zoom) || 1.0);
-  const ambientDist = (def.obsDist || 1.6) / Math.max(distantScale, 0.1);
+  const safeScaleMul = clamp(Number(eventScaleMul) || 1.0, 0.5, 1.8);
+  const ambientDist = (def.obsDist || 1.6) / Math.max(distantScale * safeScaleMul, 0.03);
   const focusedDist = (def.obsDist || 1.6) / focusedScale;
 
   // Distance-correlated scale coupling: local AU events scale with Solar System zoom
@@ -785,9 +805,9 @@ function computeSingleEventPosition(sim, ev, w, h, centerShiftX = 0, avoidPoints
 /**
  * Backward-compatible single-event screen position helper for `sim.active`.
  */
-export function getEventScreenPosition(sim, w, h, centerShiftX = 0, avoidPoints = null, camRot = null, parallax = null, solarZoom = 1.0) {
+export function getEventScreenPosition(sim, w, h, centerShiftX = 0, avoidPoints = null, camRot = null, parallax = null, solarZoom = 1.0, eventScaleMul = 1.0) {
   if (!sim?.active) return null;
-  return computeSingleEventPosition(sim, sim.active, w, h, centerShiftX, avoidPoints, camRot, parallax, solarZoom);
+  return computeSingleEventPosition(sim, sim.active, w, h, centerShiftX, avoidPoints, camRot, parallax, solarZoom, eventScaleMul);
 }
 
 /**
@@ -803,6 +823,7 @@ export function computeEventFrames(
   camRot = null,
   parallax = null,
   solarZoom = 1.0,
+  eventScaleMul = 1.0,
 ) {
   const list = Array.isArray(sim?.events) && sim.events.length > 0
     ? sim.events
@@ -812,23 +833,24 @@ export function computeEventFrames(
   const frames = [];
   for (const ev of list) {
     if (!ev) continue;
-    const pos = computeSingleEventPosition(sim, ev, w, h, centerShiftX, avoidPoints, camRot, parallax, solarZoom);
+    const pos = computeSingleEventPosition(sim, ev, w, h, centerShiftX, avoidPoints, camRot, parallax, solarZoom, eventScaleMul);
     if (!pos) continue;
     const def = ev.def;
     const p = clamp(ev.elapsed / ev.duration, 0, 1);
     const obs = pos.focusProgress;
-    const distCrisp = clamp(0.76 + (1.35 / Math.max(pos.effDist, 1.0)) * 0.24, 0.78, 1.0);
+    // Farther ambient events blend softly into the deep-sky field; observing lifts to full luminous fidelity.
+    const distCrisp = clamp(0.46 + (3.6 / Math.max(pos.effDist, 2.0)) * 0.34, 0.46, 0.80);
     const alpha = clamp(visibilityAlpha * (ev.exitFade ?? 1.0) * (obs + (1.0 - obs) * distCrisp), 0, 1);
 
-    let quadPad = 2.45;
-    if (def.id === 'gamma-burst') quadPad = 4.4;
-    else if (def.id === 'solar-flare') quadPad = 3.6;
-    else if (def.id === 'comet-breakup') quadPad = 2.85;
-    else if (def.id === 'blackhole-birth' || def.id === 'tidal-disruption') quadPad = 2.65;
+    let quadPad = 2.60;
+    if (def.id === 'gamma-burst') quadPad = 4.6;
+    else if (def.id === 'solar-flare') quadPad = 3.8;
+    else if (def.id === 'comet-breakup') quadPad = 3.0;
+    else if (def.id === 'blackhole-birth' || def.id === 'tidal-disruption') quadPad = 2.75;
 
-    const quadRadiusPx = Math.min(Math.max(w, h) * 1.15, Math.max(38, pos.eventRadiusPx * quadPad));
-    const sunRadiusPx = pos.eventRadiusPx * 0.34;
-    const layer = (def.layer === 'local' || obs > 0.55) ? 'local' : 'deep';
+    const quadRadiusPx = Math.min(Math.max(w, h) * 1.18, Math.max(44, pos.eventRadiusPx * quadPad));
+    const sunRadiusPx = pos.eventRadiusPx * (0.28 + 0.07 * obs);
+    const layer = (obs > 0.42 || (def.layer === 'local' && pos.effDist < 9.5)) ? 'local' : 'deep';
 
     frames.push({
       ...pos,
@@ -869,8 +891,9 @@ export function computeEventFrame(
   camRot = null,
   parallax = null,
   solarZoom = 1.0,
+  eventScaleMul = 1.0,
 ) {
-  const frames = computeEventFrames(sim, w, h, centerShiftX, avoidPoints, visibilityAlpha, camRot, parallax, solarZoom);
+  const frames = computeEventFrames(sim, w, h, centerShiftX, avoidPoints, visibilityAlpha, camRot, parallax, solarZoom, eventScaleMul);
   if (frames.length === 0) return null;
   return frames.find((f) => f.observing) || frames[frames.length - 1];
 }

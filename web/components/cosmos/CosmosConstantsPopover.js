@@ -11,7 +11,7 @@ export default {
     agentToPlanet: { type: Object, default: () => ({}) },
     rendererMode: { type: String, default: 'webgl2' },
   },
-  emits: ['update-constant', 'assign-planet', 'open-settings', 'open-agent-settings'],
+  emits: ['update-constant', 'reset-constants', 'assign-planet', 'open-settings', 'open-agent-settings'],
   template: `
     <section
       class="cosmos-constants-popover"
@@ -24,7 +24,12 @@ export default {
         <span class="cosmos-const-title">{{ $t('cosmos.constants.title') }}</span>
         <span class="cosmos-const-sym">
           <span class="cosmos-const-engine-badge">{{ rendererMode === '2d' ? $t('cosmos.constants.renderer2D') : $t('cosmos.constants.rendererWebGL') }}</span>
-          <span>Λ · G · c</span>
+          <button
+            type="button"
+            class="cosmos-const-reset-btn"
+            :title="$t('cosmos.constants.resetTitle')"
+            @click="$emit('reset-constants')"
+          >{{ $t('cosmos.constants.reset') }}</button>
         </span>
       </div>
 
@@ -41,6 +46,54 @@ export default {
           step="0.1"
           :value="constants.orbitSpeed"
           @input="$emit('update-constant', { key: 'orbitSpeed', value: Number($event.target.value) })"
+        />
+      </div>
+
+      <div class="cosmos-const-slider">
+        <div class="cosmos-const-slider-top">
+          <span>{{ $t('cosmos.constants.spinSpeed') }}</span>
+          <span class="cosmos-const-val">{{ Number(constants.spinSpeed ?? 0.45).toFixed(2) }}×</span>
+        </div>
+        <input
+          type="range"
+          class="cosmos-const-range"
+          min="0"
+          max="2.5"
+          step="0.05"
+          :value="constants.spinSpeed ?? 0.45"
+          @input="$emit('update-constant', { key: 'spinSpeed', value: Number($event.target.value) })"
+        />
+      </div>
+
+      <div class="cosmos-const-slider">
+        <div class="cosmos-const-slider-top">
+          <span>{{ $t('cosmos.constants.planetScale') }}</span>
+          <span class="cosmos-const-val">{{ Math.round(Number(constants.planetScale ?? 1.0) * 100) }}%</span>
+        </div>
+        <input
+          type="range"
+          class="cosmos-const-range"
+          min="0.65"
+          max="1.5"
+          step="0.05"
+          :value="constants.planetScale ?? 1.0"
+          @input="$emit('update-constant', { key: 'planetScale', value: Number($event.target.value) })"
+        />
+      </div>
+
+      <div class="cosmos-const-slider">
+        <div class="cosmos-const-slider-top">
+          <span>{{ $t('cosmos.constants.eventScale') }}</span>
+          <span class="cosmos-const-val">{{ Math.round(Number(constants.eventScale ?? 1.0) * 100) }}%</span>
+        </div>
+        <input
+          type="range"
+          class="cosmos-const-range"
+          min="0.5"
+          max="1.8"
+          step="0.05"
+          :value="constants.eventScale ?? 1.0"
+          @input="$emit('update-constant', { key: 'eventScale', value: Number($event.target.value) })"
         />
       </div>
 

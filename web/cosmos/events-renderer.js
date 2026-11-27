@@ -59,7 +59,8 @@ export function fillEventGpuParticles(buf, evDrawOrList, w, h, dpr, densityScale
 function fillSingleEventGpuParticles(buf, startCount, evDraw, w, h, dpr, densityScale = 1.0) {
   if (!buf || !evDraw || evDraw.alpha <= 0.004 || densityScale <= 0) return 0;
   const maxPts = Math.min(520, Math.floor(buf.length / 7));
-  const step = densityScale < 0.7 ? 2 : 1;
+  const obsBlend = Math.max(0, Math.min(1, evDraw.obsBlend || 0));
+  const step = (densityScale < 0.7 || obsBlend < 0.25) ? 2 : 1;
   let count = startCount;
 
   const p = evDraw.progress;
@@ -67,11 +68,11 @@ function fillSingleEventGpuParticles(buf, startCount, evDraw, w, h, dpr, density
   const x = evDraw.x;
   const y = evDraw.y;
   const S = evDraw.eventRadiusPx;
-  const alphaMaster = evDraw.alpha;
+  const alphaMaster = evDraw.alpha * (0.48 + 0.52 * obsBlend);
   const yawAngle = (evDraw.angle || 0) + (evDraw.viewYaw || 0) * 0.55;
   const rotC = Math.cos(yawAngle);
   const rotS = Math.sin(yawAngle);
-  const sizeScale = Math.max(0.42, Math.min(1.42, S / 215));
+  const sizeScale = Math.max(0.32, Math.min(1.48, S / 205));
 
   const birthEnv = smoothstep(0.0, 0.14, p);
   const decayEnv = smoothstep(1.0, 0.76, p);
