@@ -11,10 +11,72 @@ const blocks = new Set('p div section article main h1 h2 h3 h4 h5 h6 ul ol li pr
 const normalize = text => text.replace(/\s+/gu, ' ').trim();
 const escapeMd = text => text.replace(/[\\`*_{}\[\]<>#!|~]/g, '\\$&').replace(/^([0-9]+)\.(?= )/gm, '$1\\.').replace(/^[-+=](?= )/gm, '\\$&');
 
-function dropTrailingToken(str) {
+function dropTrailingRenderedToken(str) {
   let end = str.length;
   while (end > 0 && !/\s/u.test(str[end - 1])) end--;
+  // If slicing at 40,000 chars landed inside an inline `<code>` whose opening backtick+space split a token (e.g. "//TRUNC` "),
+  // also unwind past that inline backtick opener and any non-whitespace prefix attached to it.
+  while (end > 0) {
+    let probe = end;
+    while (probe > 0 && str[probe - 1] === ' ') probe--;
+    if (probe > 0 && probe < end && str[probe - 1] === '`') {
+      while (probe > 0 && str[probe - 1] === '`') probe--;
+      while (probe > 0 && !/\s/u.test(str[probe - 1])) probe--;
+      end = probe;
+      continue;
+    }
+    break;
+  }
   return end === str.length ? str : str.slice(0, end);
+}
+
+/**
+ * Walk backwards from the source cutoff inside `best` BEFORE Markdown syntax is synthesized
+ * (preventing inline `<code>` backtick+space, `<pre>` fences, `*`/`**`, or `](<url>)` from
+ * splitting or hiding an incomplete trailing source token). Non-mutating so Clean Article display stays intact.
+ */
+function trimTrailingSourceToken(node, cutoffSet, insidePreOrCode = false) {
+  if (typeof node === 'string') {
+    let end = node.length;
+    if (end === 0) return { node: null, done: false };
+    if (/\s/u.test(node[end - 1])) return { node, done: true };
+    while (end > 0 && !/\s/u.test(node[end - 1])) end--;
+    if (end > 0) return { node: node.slice(0, end), done: true };
+    return { node: null, done: false };
+  }
+  const { tag, children } = node;
+  if (['head', 'title'].includes(tag)) return { node: null, done: false };
+  const openAtCutoff = cutoffSet.has(node);
+  // A completely closed block element (<p>...</p>, <pre>...</pre>, <br>, etc.) cannot join with tokens after it.
+  if (!openAtCutoff && blocks.has(tag)) return { node, done: true };
+  const isCodeOrPre = insidePreOrCode || tag === 'pre' || tag === 'code';
+  // Closed inline elements (including <code>, <em>, <strong>, <a>, <span>) trim trailing whitespace or collapse
+  // whitespace-only content in markdown(), so trailing spaces inside them are not reliable token separators.
+  const trimsRightEdge = !openAtCutoff;
+  const effectiveChildren = (tag === 'ul' || tag === 'ol') ? children.filter(n => n.tag === 'li') : children;
+  const kept = effectiveChildren.slice();
+  let done = false;
+  for (let idx = kept.length - 1; idx >= 0; idx--) {
+    const child = kept[idx];
+    if (trimsRightEdge && typeof child === 'string') {
+      const trimmedRight = child.trimEnd();
+      if (!trimmedRight) { kept.splice(idx, 1); continue; }
+      let end = trimmedRight.length;
+      while (end > 0 && !/\s/u.test(trimmedRight[end - 1])) end--;
+      if (end > 0) { kept[idx] = trimmedRight.slice(0, end); done = true; break; }
+      kept.splice(idx, 1);
+      continue;
+    }
+    const res = trimTrailingSourceToken(child, cutoffSet, isCodeOrPre);
+    if (res.node == null) kept.splice(idx, 1);
+    else kept[idx] = res.node;
+    if (res.done) { done = true; break; }
+  }
+  // Drop href on an unclosed <a> at cutoff so an unclosed link never emits ](<url>) or leaks href.
+  const attrs = (openAtCutoff && tag === 'a') ? {} : node.attrs;
+  if (!kept.length) return { node: null, done: false };
+  if (!isCodeOrPre && !plain({ ...node, children: kept }).trim()) return { node: null, done: false };
+  return { node: { ...node, attrs, children: kept }, done };
 }
 
 function tree(html, scanMeta) {
@@ -46,53 +108,40 @@ function tree(html, scanMeta) {
   return { root, openStack: stack };
 }
 
-function plain(node, cutoffSet = null) {
-  return typeof node === 'string'
-    ? node
-    : node.children.map(child => plain(child, cutoffSet)).join('') + (blocks.has(node.tag) && !cutoffSet?.has(node) ? '\n' : '');
+function plain(node) {
+  return typeof node === 'string' ? node : node.children.map(plain).join('') + (blocks.has(node.tag) ? '\n' : '');
 }
 
-function markdown(node, url, cutoffSet = null) {
+function markdown(node, url) {
   if (typeof node === 'string') return escapeMd(node.replace(/\s+/gu, ' '));
   const { tag, children, attrs } = node;
-  const openAtCutoff = Boolean(cutoffSet?.has(node));
   if (['head', 'title'].includes(tag)) return '';
   if (tag === 'br') return '\n';
   if (tag === 'pre' || tag === 'code') {
-    const raw = plain(node, cutoffSet);
-    const code = openAtCutoff ? raw : raw.trimEnd();
-    if (openAtCutoff && !code) return '';
+    const code = plain(node).trimEnd();
     let width = tag === 'pre' ? 3 : 1;
     for (const [run] of code.matchAll(/`+/g)) width = Math.max(width, run.length + 1);
     const fence = '`'.repeat(width);
-    if (openAtCutoff) {
-      // Omit closing fence/backtick when source markup was cut inside <pre>/<code> so trailing token drops remove the cut source token.
-      return tag === 'pre' ? `\n\n${fence}\n${code}` : `${fence} ${code.replace(/\n/g, ' ')}`;
-    }
     return tag === 'pre' ? `\n\n${fence}\n${code}\n${fence}\n\n` : `${fence} ${code.replace(/\n/g, ' ')} ${fence}`;
   }
   if (tag === 'ul' || tag === 'ol') {
     const lines = children.filter(n => n.tag === 'li').map((n, i) => {
       const marker = tag === 'ul' ? '- ' : `${i + 1}. `;
-      const inner = markdown(n, url, cutoffSet);
-      const body = cutoffSet?.has(n) ? inner.trimStart() : inner.trim();
-      return marker + body.replace(/\n/g, `\n${' '.repeat(marker.length)}`);
+      return marker + markdown(n, url).trim().replace(/\n/g, `\n${' '.repeat(marker.length)}`);
     });
-    return openAtCutoff ? `\n\n${lines.join('\n')}` : `\n\n${lines.join('\n')}\n\n`;
+    return `\n\n${lines.join('\n')}\n\n`;
   }
-  const text = children.map(n => markdown(n, url, cutoffSet)).join('');
+  const text = children.map(n => markdown(n, url)).join('');
   if (!text.trim()) return '';
-  const body = openAtCutoff ? text.trimStart() : text.trim();
-  if (/^h[1-6]$/.test(tag)) return openAtCutoff ? `\n\n${'#'.repeat(Number(tag[1]))} ${body}` : `\n\n${'#'.repeat(Number(tag[1]))} ${body}\n\n`;
-  if (tag === 'blockquote') return openAtCutoff ? `\n\n${body.split('\n').map(line => `> ${line}`).join('\n')}` : `\n\n${body.split('\n').map(line => `> ${line}`).join('\n')}\n\n`;
-  if (tag === 'em' || tag === 'i') return openAtCutoff ? `*${body}` : `*${body}*`;
-  if (tag === 'strong' || tag === 'b') return openAtCutoff ? `**${body}` : `**${body}**`;
+  if (/^h[1-6]$/.test(tag)) return `\n\n${'#'.repeat(Number(tag[1]))} ${text.trim()}\n\n`;
+  if (tag === 'blockquote') return `\n\n${text.trim().split('\n').map(line => `> ${line}`).join('\n')}\n\n`;
+  if (tag === 'em' || tag === 'i') return `*${text.trim()}*`;
+  if (tag === 'strong' || tag === 'b') return `**${text.trim()}**`;
   if (tag === 'a') {
-    if (openAtCutoff) return text;
     const link = resolveHttpUrl(attrs.href, url);
-    return link ? `[${body}](<${link.replace(/[<>]/g, encodeURIComponent)}>)` : text;
+    return link ? `[${text.trim()}](<${link.replace(/[<>]/g, encodeURIComponent)}>)` : text;
   }
-  return blocks.has(tag) ? (openAtCutoff ? `\n\n${body}` : `\n\n${body}\n\n`) : text;
+  return blocks.has(tag) ? `\n\n${text.trim()}\n\n` : text;
 }
 
 export function extractCleanArticle(html, sourceUrl, fallbackTitle = '') {
@@ -129,11 +178,12 @@ export function extractCleanArticle(html, sourceUrl, fallbackTitle = '') {
   const bestWasTruncated = scanMeta.truncated && openStack.includes(best);
   const truncated = !blockedTitle && (fullRendered.length > 40_000 || scanMeta.truncated);
   const rendered = fullRendered.slice(0, 40_000);
-  // Derive a source-cutoff-safe AI projection before closing Markdown syntax is synthesized (keeping Clean Article display intact).
+  // Derive a source-cutoff-safe AI projection BEFORE Markdown syntax is synthesized (keeping Clean Article display intact).
   let aiMarkdown;
   if (truncated) {
-    const aiSource = bestWasTruncated ? markdown(best, url, new Set(openStack)).trimStart() : fullRendered;
-    aiMarkdown = (bestWasTruncated || aiSource.length > 40_000) ? dropTrailingToken(aiSource.slice(0, 40_000)) : rendered;
+    const trimmedBest = bestWasTruncated ? trimTrailingSourceToken(best, new Set(openStack)).node : best;
+    const aiSource = trimmedBest ? markdown(trimmedBest, url).trim() : '';
+    aiMarkdown = aiSource.length > 40_000 ? dropTrailingRenderedToken(aiSource.slice(0, 40_000)) : aiSource;
   }
   return { ...base, title: (title || heading || fallbackTitle).slice(0, 500), markdown: blockedTitle ? '' : rendered,
     truncated, ...(truncated ? { aiMarkdown } : {}),

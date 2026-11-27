@@ -106,7 +106,8 @@ function enabledIds(prefs) {
 }
 function toItem(row) {
   return { id: row.id, sourceId: itemSourceId(row), domainId: row.domain_id, sourceName: row.source_name,
-    url: row.url, title: row.title, summaryExcerpt: row.summary_excerpt, publishedAt: row.published_at, media: JSON.parse(row.media_json) };
+    url: row.url, title: row.title, summaryExcerpt: row.summary_excerpt, publishedAt: row.published_at,
+    media: JSON.parse(row.media_json), excerptVersion: row.excerpt_version ?? 0 };
 }
 
 export function ingestCosmicWebItems(source, items, now = Date.now()) {
@@ -119,9 +120,15 @@ export function ingestCosmicWebItems(source, items, now = Date.now()) {
       .map(c => ({ id: c.id, publishedAt: c.published_at, keywords: JSON.parse(c.keywords_json) }));
     let added = 0;
     for (const i of dated) {
-      if (db.findItemBySourceUrl(source.id, ownerUserId, i.url)) {
+      const excerptVersion = Number.isInteger(i.excerptVersion) ? i.excerptVersion : 0;
+      const existing = db.findItemBySourceUrl(source.id, ownerUserId, i.url);
+      if (existing) {
         if (Array.isArray(i.media) && i.media.length) {
           db.backfillItemMedia(source.id, ownerUserId, i.url, i.media);
+        }
+        // Upgrade legacy unversioned private RSS excerpts (item + cluster) once refreshed through the sanitized single-pass pipeline.
+        if (ownerUserId !== null && excerptVersion >= db.PRIVATE_EXCERPT_VERSION && (existing.excerpt_version ?? 0) < excerptVersion) {
+          db.upgradePrivateExcerpt(existing.id, existing.cluster_id, ownerUserId, i.summaryExcerpt ?? '', excerptVersion);
         }
         continue;
       }
@@ -138,12 +145,12 @@ export function ingestCosmicWebItems(source, items, now = Date.now()) {
         }
       }
       const id = best?.id ?? randomUUID();
-      const cluster = { id, ownerUserId, headline: i.title, summaryExcerpt: i.summaryExcerpt ?? '', keywords, publishedAt: i.publishedAt };
+      const cluster = { id, ownerUserId, headline: i.title, summaryExcerpt: i.summaryExcerpt ?? '', keywords, publishedAt: i.publishedAt, excerptVersion };
       db.upsertCluster(cluster);
       const candidate = best && recent.find(c => c.id === best.id);
       if (candidate) candidate.publishedAt = Math.max(candidate.publishedAt, i.publishedAt);
       else if (withinWindow) recent.push({ id, keywords, publishedAt: i.publishedAt });
-      added += db.insertItem({ ...i, summaryExcerpt: i.summaryExcerpt ?? '', id: randomUUID(), ownerUserId, clusterId: id,
+      added += db.insertItem({ ...i, summaryExcerpt: i.summaryExcerpt ?? '', excerptVersion, id: randomUUID(), ownerUserId, clusterId: id,
         domainId: source.domainId, sourceId: source.id });
     }
     return added;
@@ -178,6 +185,7 @@ function listClusters(userId, prefs, now, id) {
     const state = states.get(row.id) ?? { unread: true, bookmarked: false };
     const domain = [...BUILTIN_DOMAINS, ...prefs.customDomains].find(d => d.id === domainId);
     return [{ id: row.id, clusterId: row.id, headline: row.headline, summaryExcerpt: row.summary_excerpt,
+      excerptVersion: row.excerpt_version ?? 0,
       primaryUrl: items[0]?.url || '', isPrivateSource,
       keywords, publishedAt: row.published_at, domainId, domainIds: allDomains, relatedDomains: allDomains.filter(d => d !== domainId),
       colorToken: domain?.colorToken ?? 'cyan', itemCount: items.length, items, sourceNames, ...state,
@@ -264,7 +272,10 @@ export function createCosmicWebService({ fetcher = safeFetch, dnsLookup, now = D
         return { failed: true };
       }
       if (!canWrite()) return { skipped: true };
-      const added = ingestCosmicWebItems(s, items, now());
+      const ingested = s.ownerUserId != null
+        ? items.map(it => ({ ...it, excerptVersion: db.PRIVATE_EXCERPT_VERSION }))
+        : items;
+      const added = ingestCosmicWebItems(s, ingested, now());
       db.recordSourceRefresh(s.id, s.ownerUserId, now());
       if (added) update(s, signal);
       return { added };
@@ -356,7 +367,8 @@ export function createCosmicWebService({ fetcher = safeFetch, dnsLookup, now = D
     // Warm community enrichment asynchronously so opening a story never blocks on remote HTTP.
     if (!cached && !c.isPrivateSource) void enrichment(c, signal).catch(() => {});
     const media = cached?.media?.length ? signMediaList(cached.media, userId) : storedClusterMedia(c, userId);
-    return { ...c, media, communityComments: cached?.communityComments ?? [] };
+    const { excerptVersion: _clusterEv, items: clusterItems, ...displayCluster } = c;
+    return { ...displayCluster, items: clusterItems.map(({ excerptVersion: _itemEv, ...it }) => it), media, communityComments: cached?.communityComments ?? [] };
   }
   async function clusterCommunity(userId, id, reqSignal) {
     const signal = combineSignals(reqSignal);
@@ -410,7 +422,7 @@ export function createCosmicWebService({ fetcher = safeFetch, dnsLookup, now = D
           JSON.stringify(c.keywords), ...c.items.map(i => i.title)]));
     }).sort((a, b) => (query.sort === 'latest' ? 0 : b.heatScore - a.heatScore) || b.publishedAt - a.publishedAt || a.id.localeCompare(b.id));
   }
-  const summary = ({ items, ...rest }) => rest;
+  const summary = ({ items, excerptVersion: _ev, ...rest }) => rest;
 
   // Selection must be an exact match to a scoped, stored cluster item.
   function selectItem(cluster, { itemId, url }) {
@@ -1114,14 +1126,23 @@ export function createCosmicWebService({ fetcher = safeFetch, dnsLookup, now = D
     }
     return out;
   }
+  // Only trust private RSS excerpts produced by the versioned single-pass pre-clip sanitizer; unversioned legacy
+  // private excerpts stay visible in display endpoints but are omitted from AI payloads until refreshed/upgraded.
+  const trustedPrivateExcerpt = entry => entry?.excerptVersion === db.PRIVATE_EXCERPT_VERSION
+    ? stripPrivateUrls(entry.summaryExcerpt, { maxOutputChars: 1000 })
+    : '';
   function prioritizeSelectedSources(items, selected, isPrivateSource, max = 12) {
     const ordered = selected ? [selected, ...items.filter(it => it.id !== selected.id)] : items;
     const bounded = ordered.slice(0, max);
-    if (!isPrivateSource) return bounded;
-    return bounded.map(it => ({ ...it, media: [], summaryExcerpt: stripPrivateUrls(it.summaryExcerpt, { maxOutputChars: 1000 }) }));
+    if (!isPrivateSource) return bounded.map(({ excerptVersion: _ev, ...it }) => it);
+    return bounded.map(({ excerptVersion, ...it }) => ({
+      ...it,
+      media: [],
+      summaryExcerpt: trustedPrivateExcerpt({ excerptVersion, summaryExcerpt: it.summaryExcerpt }),
+    }));
   }
   const storyContext = c => ({ headline: c.headline,
-    summaryExcerpt: c.isPrivateSource ? stripPrivateUrls(c.summaryExcerpt, { maxOutputChars: 1000 }) : c.summaryExcerpt,
+    summaryExcerpt: c.isPrivateSource ? trustedPrivateExcerpt(c) : c.summaryExcerpt,
     publishedAt: c.publishedAt, sourceNames: c.sourceNames.slice(0, 4),
     ...(c.isPrivateSource ? { isPrivateSource: true } : {}) });
 
@@ -1387,7 +1408,7 @@ export function createCosmicWebService({ fetcher = safeFetch, dnsLookup, now = D
       const safeArticleMd = c.isPrivateSource
         ? (privateArticleMd ? stripPrivateUrls(privateArticleMd, { maxOutputChars: 12_000 }) : undefined)
         : privateArticleMd?.slice(0, 12_000);
-      const safeExcerpt = c.isPrivateSource ? stripPrivateUrls(item.summaryExcerpt, { maxOutputChars: 1000 }) : item.summaryExcerpt;
+      const safeExcerpt = c.isPrivateSource ? trustedPrivateExcerpt(item) : item.summaryExcerpt;
       const result = await ai(userId, userRole, mode, body, {
         headline: item.title, sourceUrl: item.url, summaryExcerpt: safeExcerpt,
         isPrivateSource: c.isPrivateSource,
@@ -1412,7 +1433,7 @@ export function createCosmicWebService({ fetcher = safeFetch, dnsLookup, now = D
       const cachedBriefContext = options.agent ? db.getAiCache(userId, briefKey(id, item.id, options.agent.id), now()) : undefined;
       const rawBriefContext = cachedBriefContext || (typeof body.briefContext === 'string' ? body.briefContext.trim() : undefined);
       const allowResearch = !c.isPrivateSource && body.research === true && Boolean(options.agent?.supportsResearch);
-      const safeExcerpt = c.isPrivateSource ? stripPrivateUrls(item.summaryExcerpt, { maxOutputChars: 1000 }) : item.summaryExcerpt;
+      const safeExcerpt = c.isPrivateSource ? trustedPrivateExcerpt(item) : item.summaryExcerpt;
       // Scrub private briefContext BEFORE enforcing the 1,500-char limit so boundary-straddling username-only URLs cannot survive.
       const safeBriefContext = rawBriefContext
         ? (c.isPrivateSource ? (stripPrivateUrls(rawBriefContext, { maxOutputChars: 1500 }).trim() || undefined) : rawBriefContext.slice(0, 1500))
@@ -1454,7 +1475,9 @@ export function createCosmicWebService({ fetcher = safeFetch, dnsLookup, now = D
           try { await limit(() => validateExternalUrl(url, { dnsLookup, signal, timeoutMs: 5000 })); }
           catch { return null; }
           const media = normalizeMedia([row.mediaUrl]);
-          return { url, title, sourceName: cleanText(row.sourceName).slice(0, 150), summaryExcerpt: cleanText(row.summaryExcerpt).slice(0, 1000),
+          const safeRadarExcerpt = stripPrivateUrls(cleanText(row.summaryExcerpt, { dropTruncatedToken: true }), { maxOutputChars: 1000 })
+            .replace(/\s+/gu, ' ').trim().slice(0, 1000);
+          return { url, title, sourceName: cleanText(row.sourceName).slice(0, 150), summaryExcerpt: safeRadarExcerpt,
             publishedAt: Math.min(now(), parseTimestamp(row.publishedAt) ?? now()), media };
         }))).filter(Boolean);
         ensureRunning(signal);
@@ -1467,7 +1490,9 @@ export function createCosmicWebService({ fetcher = safeFetch, dnsLookup, now = D
         const source = radarSource(userId, latest);
         const scanTime = now();
         const retained = items.filter(item => item.publishedAt >= scanTime - db.RETENTION_MS);
-        const added = retained.length ? ingestCosmicWebItems(source, retained, scanTime) : 0;
+        const added = retained.length
+          ? ingestCosmicWebItems(source, retained.map(item => ({ ...item, excerptVersion: db.PRIVATE_EXCERPT_VERSION })), scanTime)
+          : 0;
         if (retained.length) {
           db.recordSourceRefresh(source.id, userId, scanTime);
           if (!latest.enabled) db.disableRadarSource(source.id, userId);

@@ -708,10 +708,11 @@ describe('2.0 adapters and storage', () => {
   it('adds media to an existing database and prunes expired enrichment without deleting live stories', async () => {
     const path = join(dir, 'cosmic-web.db');
     ingestCosmicWebItems(source(), [item('Legacy row')], NOW);
-    db.getCosmicWebDb().exec('ALTER TABLE cw_items DROP COLUMN media_json; DROP TABLE cw_enrichment_cache;');
+    db.getCosmicWebDb().exec('ALTER TABLE cw_items DROP COLUMN media_json; ALTER TABLE cw_items DROP COLUMN excerpt_version; ALTER TABLE cw_clusters DROP COLUMN excerpt_version; DROP TABLE cw_enrichment_cache;');
     db.closeCosmicWebDb(); db.openCosmicWebDb(path);
-    const legacy = db.listVisibleClusters('alice')[0].id;
-    expect(db.listVisibleItems('alice', [legacy])[0].media_json).toBe('[]');
+    const legacy = db.listVisibleClusters('alice')[0];
+    expect(legacy.excerpt_version).toBe(0);
+    expect(db.listVisibleItems('alice', [legacy.id])[0]).toMatchObject({ media_json: '[]', excerpt_version: 0 });
     const mediaItem = { ...item('Basketball highlights', 'https://news.example/sports'), media: [image] };
     ingestCosmicWebItems(source('sports-fixture', 'sports'), [mediaItem], NOW);
     const { id } = db.listVisibleClusters('alice').find(c => c.headline === mediaItem.title);
@@ -1128,6 +1129,7 @@ describe('2.0 graph and AI contracts', () => {
       ...item('Private img note', 'https://private.example/img-note'),
       summaryExcerpt: `${unicodePad} Private brief note visit www. visit www.\u3002 visit www.[1] //foo:bar[1] //注释\u3002 with ${excerptSecretUrl}, ${unicodeSecretUrl}, ${wwwSecretUrl}, ${schemeRelSecretUrl}, ${ipv6RelSecretUrl}, ${singleHostRelSecretUrl}, ${userinfoRelSecretUrl}, **${boldUserinfoPortUrl}**, “${typoQuotePortUrl}”, 请看${cjkPeriodPortUrl}。以及【${cjkBracketPortUrl}】, 请看${userinfoUnicodeProseUrl}。下一句 请看${proseAtUrl}。通知@ops:值班 ${leadingPunctUserUrl} 请看${comma70UserUrl}。下一句 ${emojiPortUrl}📌下一句 [${bracketPortUrl}] [${bracketProsePortUrl}]下一句 {${bracePortUrl}} |${pipePortUrl}| [${wrappedIpv6PortUrl}] [${wrappedIpv6NoPortUrl}]下一句 _${underscoreRelUrl}_ _${underscoreHttpUrl}_ _${idnWwwUrl}_ ${ideoDotWwwUrl} ${snowmanWwwUrl} ${snowmanPortWwwUrl} ${bareSnowmanWwwUrl} (${bareSnowmanWwwUrl}) ${ideoSnowmanWwwUrl} ${rocketWwwUrl} ${bracketSnowmanWwwUrl} ${fwQuerySnowmanWwwUrl} ${snowmanRelUrl} ${snowmanRelQueryUrl} ${snowmanRelBracketUrl} ${snowmanHttpUrl} ${fwDotWwwUrl} ${footnotePortSnowmanUrl} next ${footnoteNoPortSnowmanUrl} next ${footnoteBareWwwSnowmanUrl} next ${footnoteIpv6Url} next ${footnoteIpv6PortUrl} next ${unmatchedBrkIpv6Url} next ${portProseUrl} ${portParenUrl} next ${portBraceUrl} next ${ideoRelHost1} ${ideoRelHost2} ${ideoRelHost3} ${ideoRelHost4} ${ideoRelHost5} next foo_www.keepme ${enDashHttpUrl}, ${enDashRelUrl}, and ${cjkQueryUrl} //user:9876543210`,
       media: [{ url: secretMediaUrl, kind: 'image' }],
+      excerptVersion: db.PRIVATE_EXCERPT_VERSION,
     };
     ingestCosmicWebItems(source('rss-priv-img', 'custom-sports', 'alice'), [privItemWithImg], NOW);
     const privBoot = svc.bootstrap('alice', 'user');
@@ -1557,6 +1559,157 @@ describe('2.0 graph and AI contracts', () => {
     });
     await pubLegacySvc.aiBrief('alice', 'user', pubId, { force: true });
     expect(pubLegacyReqAi.mock.lastCall[0].payload.articleMarkdown).toBe('Public legacy article body');
+
+    // Round 26 (PR #2032 Round 5) Blocker #1/#2/#3 isolated end-to-end regressions:
+    // (1) Inline `<code>` opening syntax splitting a source token across 2 MiB, 30,000-tag, and 40,000-char caps (Clean Article display unchanged),
+    // (2) Private RSS CDATA inline soft-break `<wbr>` / `<span>` inside the last token at the 30,000-tag cap and unterminated comment cutoff,
+    // (3) Legacy unversioned private RSS excerpts (<1,000 chars) persisted before excerpt_version: display stays intact, AI omits both item & cluster
+    //     excerpts before refresh (aiBrief / followUp / dailyBriefing), and refresh upgrades both item & cluster rows to clean sanitized v2 excerpts.
+    const r5SplitCodeByteHtml = `<script>${'x'.repeat(2_097_073)}</script><article><p>Safe inline split //SPLITCODE<code>USER99@intranet:8080</code></p></article>`;
+    const r5SplitCodeTagHtml = `<article><p>Safe tag split</p>${'<span></span>'.repeat(14_997)}<p>Keep //TAGSPLIT<code>USER99<span>@intranet:8080</span></code></p></article>`;
+    const r5SplitCode40kHtml = `<article><p>${'x'.repeat(39_965)} Safe40k //CAP40SPLIT<code>USER99@intranet:8080</code></p></article>`;
+    const r5WbrTagRssDesc = `<![CDATA[${'<span></span>'.repeat(14_999)}Safe wbr rss //WBRTRUNC<wbr>USER99<span>@intranet:8080</span>]]>`;
+    const r5WbrCommentRssDesc = `<![CDATA[Safe cmt rss //CMTWBRTRUNC<wbr>USER99<!-- unterminated]]>`;
+    const r5FeedUrl = 'https://private.example/r5.xml';
+    let r5FeedPhase = 'initial';
+    const r5RssInitial = `<rss><channel>
+      <item><title>Split Inline Code Article</title><link>https://private.example/r5-split-code</link><description>Split summary</description></item>
+      <item><title>Soft Break Tag Cap Feed</title><link>https://private.example/r5-wbr-tag</link><description>${r5WbrTagRssDesc}</description></item>
+      <item><title>Unterminated Comment Cutoff</title><link>https://private.example/r5-wbr-cmt</link><description>${r5WbrCommentRssDesc}</description></item>
+    </channel></rss>`;
+    const r5RssUpgraded = `<rss><channel>
+      <item><title>Legacy Persisted Private Memo</title><link>https://private.example/r5-legacy-excerpt</link><description>Refreshed clean excerpt //user:CLEANPASS99@intranet:8080 trailing</description></item>
+    </channel></rss>`;
+    const r5Prompts = [];
+    const r5AgentAi = vi.fn(async ({ mode, perspective, language, payload }) => {
+      const adapter = {
+        async call(req) {
+          r5Prompts.push(JSON.stringify(req));
+          if (mode === 'follow_up') {
+            return { text: JSON.stringify({ question: 'q', answer: 'ok', bullets: ['one'], followUps: ['q1'] }) };
+          }
+          if (mode === 'daily_briefing') {
+            return { text: JSON.stringify({ headline: 'ok', overview: 'ok', sections: [{ domain: 'priv-r5', bullets: ['ok'] }], signalsToWatch: ['s1'], followUps: ['q1', 'q2'] }) };
+          }
+          return { text: JSON.stringify({ tldr: 'ok', bullets: ['one', 'two'], impact: 'ok', followUps: ['q1', 'q2'] }) };
+        },
+      };
+      const { result } = await runCosmicWebBriefing({
+        mode, perspective, language, payload,
+        config: { fastModel: 'test/fast', defaultModel: 'test/fast' },
+        adapter,
+      });
+      return result;
+    });
+    const r5Svc = makeService({
+      fetcher: async url => {
+        if (url === r5FeedUrl) return { status: 200, url, text: async () => r5FeedPhase === 'initial' ? r5RssInitial : r5RssUpgraded };
+        if (url.endsWith('/r5-split-code')) return { status: 200, url, text: async () => r5SplitCodeByteHtml };
+        return { status: 200, url, text: async () => '<article><p>ok</p></article>' };
+      },
+      requestAi: r5AgentAi,
+    });
+    await r5Svc.savePreferences('judy', {
+      enabledDomainIds: [],
+      customDomains: [{ id: 'priv-r5', name: 'Priv R5', colorToken: 'cyan', enabled: true, keywords: [], rssUrls: [r5FeedUrl] }],
+    });
+    await r5Svc.refresh('judy', { domainId: 'priv-r5', force: true });
+    agents.set('v2-judy', { ownerId: 'judy', name: 'v2-judy', capabilities: ['cosmic_web_briefing', 'cosmic_web_follow_up'], encryptOutbound: false, ws: { readyState: 1, send: () => {} } });
+    const judyFeed = r5Svc.feed('judy', { domainId: 'priv-r5' });
+    const r5SplitCluster = judyFeed.clusters.find(c => c.headline === 'Split Inline Code Article');
+    const r5WbrTagCluster = judyFeed.clusters.find(c => c.headline === 'Soft Break Tag Cap Feed');
+    const r5WbrCmtCluster = judyFeed.clusters.find(c => c.headline === 'Unterminated Comment Cutoff');
+
+    // (1a) 2 MiB cap splitting `//SPLITCODE<code>USER99@intranet`: display keeps `` //SPLITCODE` USER ``, AI & model prompt drop BOTH `SPLITCODE` and `USER`
+    const r5SplitArt = await r5Svc.article('judy', r5SplitCluster.id);
+    expect(r5SplitArt.truncated).toBe(true);
+    expect(r5SplitArt.markdown).toContain('//SPLITCODE` USER');
+    await r5Svc.aiBrief('judy', 'user', r5SplitCluster.id, { research: true });
+    expect(r5AgentAi.mock.lastCall[0].payload.articleMarkdown).toContain('Safe inline split');
+    expect(JSON.stringify(r5AgentAi.mock.lastCall[0].payload)).not.toContain('SPLITCODE');
+    expect(JSON.stringify(r5AgentAi.mock.lastCall[0].payload)).not.toContain('USER');
+    expect(r5Prompts.at(-1)).toContain('Safe inline split');
+    expect(r5Prompts.at(-1)).not.toContain('SPLITCODE');
+    expect(r5Prompts.at(-1)).not.toContain('USER');
+
+    // (1b) 30,000-tag cap & 40,000-char cap splitting `<code>` inside source token
+    const r5TagExt = extractCleanArticle(r5SplitCodeTagHtml, 'https://private.example/r5-tag');
+    expect(r5TagExt.truncated).toBe(true);
+    expect(r5TagExt.markdown).toContain('//TAGSPLIT` USER99');
+    expect(r5TagExt.aiMarkdown).toContain('Keep');
+    expect(r5TagExt.aiMarkdown).not.toContain('TAGSPLIT');
+    expect(r5TagExt.aiMarkdown).not.toContain('USER99');
+    const r5Cap40Ext = extractCleanArticle(r5SplitCode40kHtml, 'https://private.example/r5-40k');
+    expect(r5Cap40Ext.truncated).toBe(true);
+    expect(r5Cap40Ext.markdown).toHaveLength(40_000);
+    expect(r5Cap40Ext.markdown).toContain('//CAP40SPLIT`');
+    expect(r5Cap40Ext.aiMarkdown).toContain('Safe40k');
+    expect(r5Cap40Ext.aiMarkdown).not.toContain('CAP40SPLIT');
+    expect(r5Cap40Ext.aiMarkdown).not.toContain('USER');
+
+    // (2) Private RSS CDATA `<wbr>` inside last token at 30,000-tag cap and unterminated comment cutoff -> neither fragment stored nor sent to model
+    expect(r5WbrTagCluster.summaryExcerpt).toContain('Safe wbr rss');
+    expect(r5WbrTagCluster.summaryExcerpt).not.toContain('WBRTRUNC');
+    expect(r5WbrTagCluster.summaryExcerpt).not.toContain('USER99');
+    expect(r5WbrCmtCluster.summaryExcerpt).toContain('Safe cmt rss');
+    expect(r5WbrCmtCluster.summaryExcerpt).not.toContain('CMTWBRTRUNC');
+    expect(r5WbrCmtCluster.summaryExcerpt).not.toContain('USER99');
+    await r5Svc.aiBrief('judy', 'user', r5WbrTagCluster.id, { skipArticleFetch: true, research: true });
+    expect(r5Prompts.at(-1)).toContain('Safe wbr rss');
+    expect(r5Prompts.at(-1)).not.toContain('WBRTRUNC');
+    expect(r5Prompts.at(-1)).not.toContain('USER99');
+
+    // (3) Legacy unversioned private RSS excerpt (<1,000 chars, persisted with excerpt_version = 0 as from old post-cap entity-decoding path):
+    //     display keeps showing it; AI (aiBrief / followUp / dailyBriefing) omits both item & cluster excerpts before refresh;
+    //     successful refresh upgrades BOTH item & cluster rows to clean sanitized v2 excerpts.
+    const r5PrivateSrc = db.listSources('judy').find(s => s.url === r5FeedUrl);
+    const legacyPostDecodeExcerpt = 'Legacy short prose //LEGACYCLIPUSER99';
+    ingestCosmicWebItems(
+      { id: r5PrivateSrc.id, ownerUserId: 'judy', domainId: r5PrivateSrc.domain_id, name: r5PrivateSrc.name, url: r5FeedUrl, kind: 'rss' },
+      [{ title: 'Legacy Persisted Private Memo', url: 'https://private.example/r5-legacy-excerpt', summaryExcerpt: legacyPostDecodeExcerpt, publishedAt: NOW, media: [] }],
+      NOW,
+    );
+    const legacyPrivBefore = r5Svc.feed('judy', { domainId: 'priv-r5' }).clusters.find(c => c.headline === 'Legacy Persisted Private Memo');
+    // Display behavior unchanged before refresh
+    expect(legacyPrivBefore.summaryExcerpt).toBe(legacyPostDecodeExcerpt);
+    expect((await r5Svc.cluster('judy', legacyPrivBefore.id)).summaryExcerpt).toBe(legacyPostDecodeExcerpt);
+    expect(legacyPrivBefore.excerptVersion).toBeUndefined();
+    // AI omits both item and cluster unversioned legacy private excerpts (aiBrief, followUp, dailyBriefing)
+    await r5Svc.aiBrief('judy', 'user', legacyPrivBefore.id, { skipArticleFetch: true, research: true });
+    expect(r5AgentAi.mock.lastCall[0].payload.summaryExcerpt).toBe('');
+    expect(JSON.stringify(r5AgentAi.mock.lastCall[0].payload)).not.toContain('LEGACYCLIPUSER99');
+    expect(r5Prompts.at(-1)).not.toContain('LEGACYCLIPUSER99');
+    await r5Svc.followUp('judy', 'user', legacyPrivBefore.id, { question: 'What happened?', research: true });
+    expect(r5AgentAi.mock.lastCall[0].payload.summaryExcerpt).toBe('');
+    expect(JSON.stringify(r5AgentAi.mock.lastCall[0].payload)).not.toContain('LEGACYCLIPUSER99');
+    expect(r5Prompts.at(-1)).not.toContain('LEGACYCLIPUSER99');
+    await r5Svc.dailyBriefing('judy', 'user', { force: true });
+    expect(JSON.stringify(r5AgentAi.mock.lastCall[0].payload)).not.toContain('LEGACYCLIPUSER99');
+    expect(r5Prompts.at(-1)).not.toContain('LEGACYCLIPUSER99');
+    // Refreshing the private RSS source upgrades BOTH cw_items and cw_clusters in place to sanitized v2 excerpts
+    r5FeedPhase = 'upgraded';
+    const r5SvcRefresh = makeService({
+      fetcher: async url => {
+        if (url === r5FeedUrl) return { status: 200, url, text: async () => r5RssUpgraded };
+        return { status: 200, url, text: async () => '<article><p>ok</p></article>' };
+      },
+      requestAi: r5AgentAi,
+      now: () => NOW + 25_000,
+    });
+    await r5SvcRefresh.refresh('judy', { domainId: 'priv-r5', force: true });
+    const legacyPrivAfter = r5SvcRefresh.feed('judy', { domainId: 'priv-r5' }).clusters.find(c => c.headline === 'Legacy Persisted Private Memo');
+    expect(legacyPrivAfter.summaryExcerpt).toContain('Refreshed clean excerpt');
+    expect(legacyPrivAfter.summaryExcerpt).not.toContain('LEGACYCLIPUSER99');
+    expect(legacyPrivAfter.summaryExcerpt).not.toContain('CLEANPASS99');
+    await r5SvcRefresh.aiBrief('judy', 'user', legacyPrivAfter.id, { skipArticleFetch: true, research: true, force: true });
+    expect(r5AgentAi.mock.lastCall[0].payload.summaryExcerpt).toContain('Refreshed clean excerpt');
+    expect(r5Prompts.at(-1)).toContain('Refreshed clean excerpt');
+    expect(r5Prompts.at(-1)).not.toContain('LEGACYCLIPUSER99');
+    expect(r5Prompts.at(-1)).not.toContain('CLEANPASS99');
+    await r5SvcRefresh.dailyBriefing('judy', 'user', { force: true });
+    expect(r5Prompts.at(-1)).toContain('Refreshed clean excerpt');
+    expect(r5Prompts.at(-1)).not.toContain('LEGACYCLIPUSER99');
+    expect(r5Prompts.at(-1)).not.toContain('CLEANPASS99');
 
     // Mixed public/private dailyBriefing carries per-story isPrivateSource: true on private stories (enabling Agent defense-in-depth) while keeping public stories clean.
     const mixedDailyReqAi = vi.fn(async () => dailyResult);

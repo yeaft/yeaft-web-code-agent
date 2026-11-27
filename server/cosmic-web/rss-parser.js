@@ -130,15 +130,34 @@ export function* scanMarkup(input, { xml = false, rawTags = new Set(), emitRawOp
 }
 
 const textRawTags = new Set(['script', 'style']);
-function dropTrailingToken(str) {
-  let end = str.length;
-  while (end > 0 && !/\s/u.test(str[end - 1])) end--;
-  return end === str.length ? str : str.slice(0, end);
-}
-export function cleanText(text, meta = null) {
+const textBreakTags = new Set('p div section article main h1 h2 h3 h4 h5 h6 ul ol li pre blockquote table tr td th br hr header footer nav aside figure figcaption'.split(' '));
+export function cleanText(text, { dropTruncatedToken = false } = {}) {
+  const meta = dropTruncatedToken ? { truncated: false } : null;
   const parts = [];
-  for (const token of scanMarkup(text, { rawTags: textRawTags, meta })) parts.push(token.type === 'text' ? token.text : ' ');
-  return decodeEntities(parts.join('')).replace(/\s+/gu, ' ').trim();
+  let safeCut = { partsLen: 0, tailSlice: null };
+  for (const token of scanMarkup(text, { rawTags: textRawTags, meta })) {
+    if (token.type === 'text') {
+      const decoded = decodeEntities(token.text);
+      if (dropTruncatedToken) {
+        let ws = decoded.length - 1;
+        while (ws >= 0 && !/\s/u.test(decoded[ws])) ws--;
+        if (ws >= 0) safeCut = { partsLen: parts.length, tailSlice: decoded.slice(0, ws + 1) };
+      }
+      parts.push(decoded);
+    } else {
+      parts.push(' ');
+      // Only genuine block/break tags create source token boundaries; inline tags like <wbr>/<span>/<code> do not.
+      if (dropTruncatedToken && textBreakTags.has(token.name)) {
+        safeCut = { partsLen: parts.length, tailSlice: null };
+      }
+    }
+  }
+  if (dropTruncatedToken && meta.truncated) {
+    const safeParts = parts.slice(0, safeCut.partsLen);
+    if (safeCut.tailSlice) safeParts.push(safeCut.tailSlice);
+    return safeParts.join('').replace(/\s+/gu, ' ').trim();
+  }
+  return parts.join('').replace(/\s+/gu, ' ').trim();
 }
 
 export function resolveHttpUrl(ref, base) {
@@ -228,13 +247,12 @@ export function parseFeedXml(xmlText, baseUrl, { sanitizeExcerpt } = {}) {
       } else if (field) appendField(token.text);
       if (entry?.depth === stack.length) {
         const f = entry.fields;
-        const title = cleanText(f.title);
+        const dropTruncatedToken = typeof sanitizeExcerpt === 'function';
+        const title = cleanText(f.title, { dropTruncatedToken });
         const url = entry.link ?? resolveHttpUrl(f.guid, entry.base);
         if (url && title) {
-          const excerptMeta = { truncated: false };
-          let rawExcerpt = cleanText(f['content:encoded'] ?? f.description ?? f.summary ?? f.content, excerptMeta);
-          if (typeof sanitizeExcerpt === 'function' && excerptMeta.truncated) rawExcerpt = dropTrailingToken(rawExcerpt);
-          const safeExcerpt = typeof sanitizeExcerpt === 'function' ? sanitizeExcerpt(rawExcerpt) : rawExcerpt;
+          const rawExcerpt = cleanText(f['content:encoded'] ?? f.description ?? f.summary ?? f.content, { dropTruncatedToken });
+          const safeExcerpt = dropTruncatedToken ? sanitizeExcerpt(rawExcerpt) : rawExcerpt;
           items.push({ title, url, publishedAt: parseTimestamp(f.pubdate ?? f.published ?? f.updated ?? f['dc:date']),
             summaryExcerpt: safeExcerpt.replace(/\s+/gu, ' ').trim().slice(0, 1000),
             media: normalizeMedia([...entry.media, ...['content:encoded', 'description', 'summary', 'content']
