@@ -4507,7 +4507,14 @@ describe('Cosmos Interstellar Signal Stream (Unified Top-Right Replies, Schedule
     const { stepCosmosFrame } = await import('../../web/cosmos/stage-loop.js');
     const storage = createMemoryStorage();
 
-    // 1. Normalization & persistence of new constants
+    // 1. Normalization, legacy backward-compat & persistence of new constants
+    storage.setItem('yeaft-cosmos-constants-v1', JSON.stringify({ orbitSpeed: 1.2 }));
+    const legacyLoaded = loadCosmosConstants(storage);
+    expect(legacyLoaded.orbitSpeed).toBe(1.2);
+    expect(legacyLoaded.spinSpeed).toBe(0.45);
+    expect(legacyLoaded.planetScale).toBe(1.0);
+    expect(legacyLoaded.eventScale).toBe(1.0);
+
     const saved = saveCosmosConstants({
       spinSpeed: 9.9,
       planetScale: 0.1,
@@ -4580,14 +4587,19 @@ describe('Cosmos Interstellar Signal Stream (Unified Top-Right Replies, Schedule
     };
 
     stepCosmosFrame(50, ctx);
+    const sunAt0 = lastFrame.solarBodies.find((b) => b.bodyType === 0);
     const earthAt0 = lastFrame.solarBodies.find((b) => b.bodyType === 3);
     const evRadiusAt1 = lastFrame.eventDraws[0].eventRadiusPx;
+    const evEffDistAt1 = lastFrame.eventDraws[0].effDist;
     const spin0 = earthAt0.spin;
+    const sunSpin0 = sunAt0.spin;
     const radAt1 = earthAt0.radiusPx;
+    const sunRadAt1 = sunAt0.radiusPx;
 
-    // With spinSpeed = 0, Earth does not spin at all
+    // With spinSpeed = 0, neither Earth nor Sun spins
     stepCosmosFrame(100, ctx);
     expect(lastFrame.solarBodies.find((b) => b.bodyType === 3).spin).toBeCloseTo(spin0, 6);
+    expect(lastFrame.solarBodies.find((b) => b.bodyType === 0).spin).toBeCloseTo(sunSpin0, 6);
 
     // Increase spinSpeed to 2.0, planetScale to 1.4, eventScale to 1.5
     constants.spinSpeed = 2.0;
@@ -4595,11 +4607,37 @@ describe('Cosmos Interstellar Signal Stream (Unified Top-Right Replies, Schedule
     constants.eventScale = 1.5;
     stepCosmosFrame(150, ctx);
     const earthAfter = lastFrame.solarBodies.find((b) => b.bodyType === 3);
+    const sunAfter = lastFrame.solarBodies.find((b) => b.bodyType === 0);
     expect(earthAfter.spin).toBeGreaterThan(spin0);
+    expect(sunAfter.spin).toBeGreaterThan(sunSpin0);
     expect(earthAfter.radiusPx / radAt1).toBeCloseTo(1.4, 1);
+    expect(sunAfter.radiusPx / sunRadAt1).toBeCloseTo(1.4, 2);
+    // eventScale scales visual ambient radius without distorting physical effDist
     expect(lastFrame.eventDraws[0].eventRadiusPx / evRadiusAt1).toBeCloseTo(1.5, 2);
+    expect(lastFrame.eventDraws[0].effDist).toBeCloseTo(evEffDistAt1, 5);
 
-    // 4. CosmosConstantsPopover renders new sliders + reset button and emits events
+    // Lowering spinSpeed from 2.0 -> 0.2 continues monotonically without phase jump (smooth accumulator)
+    const spinBeforeSlow = earthAfter.spin;
+    constants.spinSpeed = 0.2;
+    stepCosmosFrame(200, ctx);
+    const earthSlow = lastFrame.solarBodies.find((b) => b.bodyType === 3);
+    expect(earthSlow.spin).toBeGreaterThan(spinBeforeSlow);
+    expect(earthSlow.spin - spinBeforeSlow).toBeLessThan(earthAfter.spin - spin0);
+
+    // NaN spinSpeed is guarded and never poisons anim.spinTime
+    constants.spinSpeed = Number.NaN;
+    stepCosmosFrame(250, ctx);
+    expect(Number.isFinite(anim.spinTime)).toBe(true);
+
+    // Focused event (focusProgress = 1) is unaffected by ambient eventScale
+    eventSim.active.observing = true;
+    eventSim.flightT = 1;
+    eventSim.focusProgress = 1;
+    const focusedAt1 = computeEventFrame(eventSim, 1280, 720, 0, null, 1, null, null, 1.0, 1.0);
+    const focusedAt18 = computeEventFrame(eventSim, 1280, 720, 0, null, 1, null, null, 1.0, 1.8);
+    expect(focusedAt18.eventRadiusPx).toBeCloseTo(focusedAt1.eventRadiusPx, 4);
+
+    // 4. CosmosConstantsPopover renders accessible new sliders + reset button and emits events
     const wrapper = mount(CosmosConstantsPopover, {
       props: {
         constants: { ...DEFAULT_COSMOS_CONSTANTS },
@@ -4614,6 +4652,10 @@ describe('Cosmos Interstellar Signal Stream (Unified Top-Right Replies, Schedule
     expect(wrapper.text()).toContain('cosmos.constants.spinSpeed');
     expect(wrapper.text()).toContain('cosmos.constants.planetScale');
     expect(wrapper.text()).toContain('cosmos.constants.eventScale');
+    const spinInput = wrapper.find('input[aria-label="cosmos.constants.spinSpeed"]');
+    expect(spinInput.exists()).toBe(true);
+    await spinInput.setValue('1.25');
+    expect(wrapper.emitted('update-constant')?.[0]?.[0]).toEqual({ key: 'spinSpeed', value: 1.25 });
     await wrapper.find('.cosmos-const-reset-btn').trigger('click');
     expect(wrapper.emitted('reset-constants')).toHaveLength(1);
     wrapper.unmount();

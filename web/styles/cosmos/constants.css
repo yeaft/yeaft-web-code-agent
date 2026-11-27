@@ -61,24 +61,34 @@
 }
 
 .cosmos-const-reset-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 24px;
   font-family: var(--font-sans, inherit);
   font-size: 10px;
   letter-spacing: 0.02em;
-  padding: 2px 7px;
+  padding: 3px 9px;
   border-radius: 999px;
   background: rgba(255, 255, 255, 0.05);
   border: 1px solid rgba(186, 214, 255, 0.20);
   color: var(--c-muted);
   cursor: pointer;
-  transition: color 140ms ease, border-color 140ms ease, background 140ms ease;
+  transition: color 140ms ease, border-color 140ms ease, background 140ms ease, box-shadow 140ms ease;
 }
 
-.cosmos-const-reset-btn:hover,
-.cosmos-const-reset-btn:focus-visible {
+.cosmos-const-reset-btn:hover {
   color: var(--c-ink);
   border-color: rgba(124, 196, 255, 0.48);
   background: rgba(124, 196, 255, 0.14);
+}
+
+.cosmos-const-reset-btn:focus-visible {
+  color: var(--c-ink);
+  border-color: rgba(124, 196, 255, 0.72);
+  background: rgba(124, 196, 255, 0.16);
   outline: none;
+  box-shadow: 0 0 0 2px rgba(124, 196, 255, 0.45);
 }
 
 .cosmos-const-slider {

@@ -722,7 +722,9 @@ function computeSingleEventPosition(
   const distantScale = typeof loc.distantScale === 'number' ? loc.distantScale : 0.12;
   const focusedScale = Math.max(0.55, (isFocused ? sim.fovZoom : ev.zoom) || 1.0);
   const safeScaleMul = clamp(Number(eventScaleMul) || 1.0, 0.5, 1.8);
-  const ambientDist = (def.obsDist || 1.6) / Math.max(distantScale * safeScaleMul, 0.03);
+  // Keep physical optical distance (`ambientDist`/`effDist`) independent of visual `eventScaleMul`
+  // so distance readouts, parallax, opacity, and depth layering stay physically consistent.
+  const ambientDist = (def.obsDist || 1.6) / Math.max(distantScale, 0.04);
   const focusedDist = (def.obsDist || 1.6) / focusedScale;
 
   // Distance-correlated scale coupling: local AU events scale with Solar System zoom
@@ -731,7 +733,8 @@ function computeSingleEventPosition(
     : 1.0;
   const baseAmbientDist = ambientDist * (1.0 + (localScaleMul - 1.0) * (1.0 - f));
   const effDist = Math.exp(Math.log(Math.max(baseAmbientDist, 0.2)) * (1 - f) + Math.log(Math.max(focusedDist, 0.2)) * f);
-  const scale = (def.obsDist || 1.6) / effDist;
+  const visualScaleMul = Math.pow(safeScaleMul, 1 - f);
+  const scale = ((def.obsDist || 1.6) / effDist) * visualScaleMul;
 
   // Distance-correlated skybox parallax: nearer AU events shift more with Solar tilt; Mly events lock deep
   const pDepth = clamp(1.25 / Math.max(effDist, 0.9), 0.06, 0.55) * (1 - f);
@@ -782,7 +785,7 @@ function computeSingleEventPosition(
   const y = restY + (centerY - restY) * f;
 
   const minDim = Math.min(safeW, safeH);
-  const eventRadiusPx = ((def.intrinsicRadius || 0.42) / effDist) * minDim;
+  const eventRadiusPx = ((def.intrinsicRadius || 0.42) / effDist) * visualScaleMul * minDim;
 
   return {
     x,
@@ -850,7 +853,7 @@ export function computeEventFrames(
 
     const quadRadiusPx = Math.min(Math.max(w, h) * 1.18, Math.max(44, pos.eventRadiusPx * quadPad));
     const sunRadiusPx = pos.eventRadiusPx * (0.28 + 0.07 * obs);
-    const layer = (obs > 0.42 || (def.layer === 'local' && pos.effDist < 9.5)) ? 'local' : 'deep';
+    const layer = (obs > 0.42 || (def.layer === 'local' && pos.effDist < 12.5)) ? 'local' : 'deep';
 
     frames.push({
       ...pos,

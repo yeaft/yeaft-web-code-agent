@@ -60,8 +60,10 @@ function fillSingleEventGpuParticles(buf, startCount, evDraw, w, h, dpr, density
   if (!buf || !evDraw || evDraw.alpha <= 0.004 || densityScale <= 0) return 0;
   const maxPts = Math.min(520, Math.floor(buf.length / 7));
   const obsBlend = Math.max(0, Math.min(1, evDraw.obsBlend || 0));
-  const step = (densityScale < 0.7 || obsBlend < 0.25) ? 2 : 1;
+  const step = densityScale < 0.7 ? 2 : 1;
+  const oddFade = smoothstep(0.10, 0.45, obsBlend);
   let count = startCount;
+  let emitSeq = 0;
 
   const p = evDraw.progress;
   const evT = evDraw.elapsed;
@@ -82,7 +84,9 @@ function fillSingleEventGpuParticles(buf, startCount, evDraw, w, h, dpr, density
   // Exact inverse of EVENT_VERT (vLocal = (aCorner.x, -aCorner.y), Y-up) + GLSL column-major rot2(uAngle):
   // qr = (c*qx + s*qy, -s*qx + c*qy) => q = (c*lx - s*ly, s*lx + c*ly), screen = (x + qx, y - qy).
   const pushLocal = (lx, ly, sz, r, g, b, a) => {
-    if (count >= maxPts || a <= 0.01) return;
+    const seq = emitSeq++;
+    const effA = (seq & 1) === 1 ? a * oddFade : a;
+    if (count >= maxPts || effA <= 0.01) return;
     const qx = lx * rotC - ly * rotS;
     const qy = lx * rotS + ly * rotC;
     const sx = x + qx;
@@ -95,7 +99,7 @@ function fillSingleEventGpuParticles(buf, startCount, evDraw, w, h, dpr, density
     buf[off + 3] = r;
     buf[off + 4] = g;
     buf[off + 5] = b;
-    buf[off + 6] = Math.min(1.0, a);
+    buf[off + 6] = Math.min(1.0, effA);
     count++;
   };
 

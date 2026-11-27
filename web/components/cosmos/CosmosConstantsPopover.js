@@ -57,6 +57,7 @@ export default {
         <input
           type="range"
           class="cosmos-const-range"
+          :aria-label="$t('cosmos.constants.spinSpeed')"
           min="0"
           max="2.5"
           step="0.05"
@@ -73,6 +74,7 @@ export default {
         <input
           type="range"
           class="cosmos-const-range"
+          :aria-label="$t('cosmos.constants.planetScale')"
           min="0.65"
           max="1.5"
           step="0.05"
@@ -89,6 +91,7 @@ export default {
         <input
           type="range"
           class="cosmos-const-range"
+          :aria-label="$t('cosmos.constants.eventScale')"
           min="0.5"
           max="1.8"
           step="0.05"

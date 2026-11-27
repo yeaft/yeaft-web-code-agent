@@ -149,8 +149,10 @@ export function stepCosmosFrame(now, ctx) {
   anim.orbitBrake += (targetBrake - anim.orbitBrake) * Math.min(1, dt * 6.0);
 
   anim.realTime += dt * motionMul;
-  const spinSpeed = typeof constants.spinSpeed === 'number' ? constants.spinSpeed : 0.45;
-  if (typeof anim.spinTime !== 'number') anim.spinTime = 0;
+  const spinSpeed = Number.isFinite(constants.spinSpeed)
+    ? Math.max(0, Math.min(2.5, constants.spinSpeed))
+    : 0.45;
+  if (!Number.isFinite(anim.spinTime)) anim.spinTime = 0;
   anim.spinTime += dt * spinSpeed * motionMul;
   anim.time += dt * constants.orbitSpeed * anim.orbitBrake * motionMul;
   anim.focusedPlanetId = ui.focusedPlanetId;
@@ -323,7 +325,7 @@ export function stepCosmosFrame(now, ctx) {
     };
   };
 
-  const bodyScaleMul = typeof constants.planetScale === 'number'
+  const bodyScaleMul = Number.isFinite(constants.planetScale)
     ? Math.max(0.65, Math.min(1.5, constants.planetScale))
     : 1.0;
   const effectiveSunRadius = sunRadius * bodyScaleMul;
@@ -631,7 +633,7 @@ export function stepCosmosFrame(now, ctx) {
     toScreen(webPortalX, webPortalY),
   ];
   const eventVisibilityAlpha = (isHomeSystem && !voyage?.soaring && !isWarpingSystem) ? baseSolarAlpha : 0;
-  const eventScaleMul = typeof constants.eventScale === 'number'
+  const eventScaleMul = Number.isFinite(constants.eventScale)
     ? Math.max(0.5, Math.min(1.8, constants.eventScale))
     : 1.0;
   const eventDraws = (eventVisibilityAlpha > 0.01 && (eventSim.events?.length > 0 || eventSim.active))

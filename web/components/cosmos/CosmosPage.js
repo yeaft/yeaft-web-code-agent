@@ -1019,7 +1019,7 @@ export default {
     }
 
     const anim = {
-      time: 0, realTime: 0, lastTs: 0, lastEventUiSync: 0,
+      time: 0, realTime: 0, spinTime: 0, lastTs: 0, lastEventUiSync: 0,
       scaleLog: 13.0, targetScaleLog: 13.0, warpEnergy: 0,
       parallax: { x: 0, y: 0, tx: 0, ty: 0 },
       camRot: { x: 0, y: 0, tx: 0, ty: 0 },
