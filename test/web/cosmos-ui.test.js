@@ -4172,7 +4172,8 @@ describe('Cosmos Interstellar Signal Stream (Unified Top-Right Replies, Schedule
     expect(bgItem?.preview).toBe('Sub-agent "reviewer" running…');
     expect(bgItem?.preview).not.toContain('Old background');
 
-    // CLI Chat Turn 2 (user2 after assistant1 while processing) MUST NOT show Turn 1's assistant reply!
+    // CLI Chat Turn 2 (user2 after assistant1 while processing) MUST NOT show Turn 1's assistant reply,
+    // and CLI currentTool must apply the same inline-tool exclusion (AskUser/TodoWrite) as Yeaft!
     chatStore.messagesMap['cli-1'] = [
       { type: 'user', content: 'CLI Turn 1', timestamp: 1000 },
       { type: 'assistant', content: 'CLI Turn 1 stale answer', timestamp: 2000 },
@@ -4184,14 +4185,335 @@ describe('Cosmos Interstellar Signal Stream (Unified Top-Right Replies, Schedule
     expect(cliRunning?.kind).toBe('running');
     expect(cliRunning?.preview).toBe('Running Grep…');
     expect(cliRunning?.preview).not.toContain('CLI Turn 1 stale answer');
+    chatStore.executionStatusMap['cli-1'].currentTool = { name: 'AskUser' };
+    const cliInlineExcluded = projectSignals(3300).items.find((x) => x.sessionId === 'cli-1');
+    expect(cliInlineExcluded?.preview).toBe('Working…');
 
-    // sendYeaftSessionMessage marks processing & clears stale unread even before yeaftConversationIdsByAgent exists
+    // sendYeaftSessionMessage marks processing & starts a new preview root even when BOTH
+    // yeaftConversationIdsByAgent and yeaftConversationId are empty, WITHOUT consuming Classic unread state!
     chatStore.yeaftConversationIdsByAgent = {};
+    chatStore.yeaftConversationId = null;
     chatStore.yeaftUnreadSessionKeys = { 'yeaft:ag-1:s-1': true };
     expect(chatStore.sendYeaftSessionMessage({ groupId: 's-1', text: 'Send without conv id yet' })).toBe(true);
     expect(chatStore.isYeaftSessionProcessing('s-1', 'ag-1')).toBe(true);
-    expect(chatStore.isYeaftSessionUnread('s-1', 'ag-1')).toBe(false);
+    expect(chatStore.isYeaftSessionUnread('s-1', 'ag-1')).toBe(true);
     expect(chatStore.yeaftSessionReplyPreviewByKey['yeaft:ag-1:s-1']?.inFlight).toBe(true);
+
+    // 3. Dedicated turn-ownership, wire-order, fan-out, reconnect, receipt & UI badge regressions
+    chatStore.yeaftConversationIdsByAgent = { 'ag-1': 'yeaft_ag-1' };
+    chatStore.yeaftConversationId = 'yeaft_ag-1';
+    chatStore.messagesMap['yeaft_ag-1'] = [];
+    chatStore.yeaftSessionReplyPreviewByKey = {};
+    chatStore.yeaftUnreadSessionKeys = {};
+    chatStore.yeaftProcessingSessions = {};
+    chatStore.yeaftSessionTurnsBySession = {};
+    chatStore.activeVpTurns = {};
+    chatStore.vpStatuses = {};
+    chatStore.yeaftActiveTasksBySession = {};
+    chatStore.yeaftQueryProgressByTurn = {};
+    chatStore.yeaftLiveToolExecutions = {};
+    chatStore.chatHistoryConnectionGeneration = 1;
+
+    // 3a. Strict execution identity: untagged completed live row MUST NOT be borrowed by a later textless execution,
+    //     and punctuation-only user row (`***`) still establishes a user boundary identically in extraction & projection.
+    const untaggedTranscript = [
+      { type: 'user', sessionId: 's-1', content: 'Old prompt', timestamp: 1000 },
+      { type: 'assistant', sessionId: 's-1', content: 'Old untagged reply', timestamp: 1500, status: 'completed' },
+    ];
+    expect(extractLatestAssistantPreview(untaggedTranscript, 's-1', 'turn-scheduled-1').text).toBe('');
+    const punctUserTranscript = [
+      { type: 'assistant', sessionId: 's-1', content: 'Older untagged reply', timestamp: 1500 },
+      { type: 'user', sessionId: 's-1', content: '***', timestamp: 2000 },
+    ];
+    expect(extractLatestAssistantPreview(punctUserTranscript, 's-1', null).text).toBe('');
+
+    // 3b. Blocker 1: Late `result` for execution A arriving AFTER execution B completed MUST NOT overwrite B's reply,
+    //     and a late `route_forward` result MUST NOT write a reply at all.
+    chatStore.handleYeaftOutput({
+      agentId: 'ag-1', conversationId: 'yeaft_ag-1', sessionId: 's-1',
+      event: { type: 'vp_turn_start', sessionId: 's-1', vpId: 'vp-1', turnId: 't-A', userTurnId: 'ut-A', ts: 10000 },
+    });
+    chatStore.handleYeaftOutput({
+      agentId: 'ag-1', conversationId: 'yeaft_ag-1', sessionId: 's-1', vpId: 'vp-1', turnId: 't-A', userTurnId: 'ut-A',
+      data: { type: 'assistant', ts: 10100, message: { id: 'm-aA', content: [{ type: 'text', text: 'Answer from A.' }] } },
+    });
+    chatStore.handleYeaftOutput({
+      agentId: 'ag-1', conversationId: 'yeaft_ag-1', sessionId: 's-1',
+      event: { type: 'vp_turn_end', sessionId: 's-1', vpId: 'vp-1', turnId: 't-A', userTurnId: 'ut-A', reason: 'end_turn' },
+    });
+    chatStore.handleYeaftOutput({
+      agentId: 'ag-1', conversationId: 'yeaft_ag-1', sessionId: 's-1',
+      event: { type: 'vp_turn_start', sessionId: 's-1', vpId: 'vp-1', turnId: 't-B', userTurnId: 'ut-B', ts: 11000 },
+    });
+    chatStore.handleYeaftOutput({
+      agentId: 'ag-1', conversationId: 'yeaft_ag-1', sessionId: 's-1', vpId: 'vp-1', turnId: 't-B', userTurnId: 'ut-B',
+      data: { type: 'assistant', ts: 11100, message: { id: 'm-aB', content: [{ type: 'text', text: 'Newer answer from B.' }] } },
+    });
+    chatStore.handleYeaftOutput({
+      agentId: 'ag-1', conversationId: 'yeaft_ag-1', sessionId: 's-1',
+      event: { type: 'vp_turn_end', sessionId: 's-1', vpId: 'vp-1', turnId: 't-B', userTurnId: 'ut-B', reason: 'end_turn' },
+    });
+    // Now deliver A's late provider `result` AFTER B completed (with a newer timestamp!)
+    chatStore.handleYeaftOutput({
+      agentId: 'ag-1', conversationId: 'yeaft_ag-1', sessionId: 's-1', vpId: 'vp-1', turnId: 't-A', userTurnId: 'ut-A',
+      data: { type: 'result', ts: 12000, result_text: '' },
+    });
+    const afterLateA = projectSignals(12500).items.find((x) => x.sessionId === 's-1');
+    expect(afterLateA?.kind).toBe('unread');
+    expect(afterLateA?.preview).toBe('Newer answer from B.');
+    // And a `route_forward` result must NOT overwrite B either
+    chatStore.handleYeaftOutput({
+      agentId: 'ag-1', conversationId: 'yeaft_ag-1', sessionId: 's-1',
+      event: { type: 'vp_turn_start', sessionId: 's-1', vpId: 'vp-1', turnId: 't-RF', userTurnId: 'ut-RF', ts: 12600 },
+    });
+    chatStore.handleYeaftOutput({
+      agentId: 'ag-1', conversationId: 'yeaft_ag-1', sessionId: 's-1', vpId: 'vp-1', turnId: 't-RF', userTurnId: 'ut-RF',
+      data: { type: 'assistant', ts: 12650, message: { id: 'm-rf', content: [{ type: 'text', text: 'Forwarding to specialist...' }] } },
+    });
+    chatStore.handleYeaftOutput({
+      agentId: 'ag-1', conversationId: 'yeaft_ag-1', sessionId: 's-1',
+      event: { type: 'vp_turn_end', sessionId: 's-1', vpId: 'vp-1', turnId: 't-RF', userTurnId: 'ut-RF', reason: 'route_forward' },
+    });
+    chatStore.handleYeaftOutput({
+      agentId: 'ag-1', conversationId: 'yeaft_ag-1', sessionId: 's-1', vpId: 'vp-1', turnId: 't-RF', userTurnId: 'ut-RF',
+      data: { type: 'result', ts: 12700, result_text: '' },
+    });
+    const afterRouteForward = projectSignals(12800).items.find((x) => x.sessionId === 's-1');
+    expect(afterRouteForward?.kind).toBe('unread');
+    expect(afterRouteForward?.preview).toBe('Newer answer from B.');
+
+    // 3c. Blocker 2a: Parallel user turns — Turn A streaming while separate user Turn B starts silently:
+    //     Signal Stream MUST select Turn B and show Turn B's live status, NEVER bleeding A's streaming text!
+    chatStore.messagesMap['yeaft_ag-1'] = [
+      { id: 'u-pA', type: 'user', sessionId: 's-1', userTurnId: 'ut-pA', content: 'Parallel A', timestamp: 20000 },
+      { id: 'a-pA', type: 'assistant', sessionId: 's-1', turnId: 't-pA', userTurnId: 'ut-pA', content: 'Parallel A streaming output', isStreaming: true, status: 'pending', timestamp: 20100 },
+      { id: 'u-pB', type: 'user', sessionId: 's-1', userTurnId: 'ut-pB', content: 'Parallel B', timestamp: 20500 },
+    ];
+    chatStore.handleYeaftOutput({
+      agentId: 'ag-1', conversationId: 'yeaft_ag-1', sessionId: 's-1',
+      event: {
+        type: 'session_turns',
+        sessionId: 's-1',
+        turns: [
+          { userTurnId: 'ut-pA', userMessageId: 'u-pA', startedAt: 20000, state: 'running', executions: [{ vpId: 'vp-1', turnId: 't-pA', threadId: 'th-A', state: 'running' }] },
+          { userTurnId: 'ut-pB', userMessageId: 'u-pB', startedAt: 20500, state: 'running', executions: [{ vpId: 'vp-1', turnId: 't-pB', threadId: 'th-B', state: 'queued' }] },
+        ],
+      },
+    });
+    chatStore.handleYeaftOutput({
+      agentId: 'ag-1', conversationId: 'yeaft_ag-1', sessionId: 's-1', vpId: 'vp-1', turnId: 't-pA', userTurnId: 'ut-pA',
+      data: { type: 'assistant', ts: 20200, message: { id: 'a-pA', content: [{ type: 'text', text: 'Parallel A streaming output' }] } },
+    });
+    const parallelSilentB = projectSignals(20600).items.find((x) => x.sessionId === 's-1');
+    expect(parallelSilentB?.kind).toBe('running');
+    expect(parallelSilentB?.hasLiveReply).toBe(false);
+    expect(parallelSilentB?.preview).toBe('Queued…');
+    expect(parallelSilentB?.preview).not.toContain('Parallel A');
+
+    // 3d. Blocker 2b: Same-root VP fan-out — VP-1 finishes with text, then tool-only VP-2 finishes empty:
+    //     Root MUST retain VP-1's answer instead of erasing it to "Response ready"!
+    chatStore.messagesMap['yeaft_ag-1'] = [
+      { id: 'u-fan', type: 'user', sessionId: 's-1', userTurnId: 'ut-fan', content: 'Audit auth', timestamp: 30000 },
+    ];
+    chatStore.yeaftSessionTurnsBySession = {};
+    chatStore.activeVpTurns = {};
+    chatStore.vpStatuses = {};
+    chatStore.yeaftProcessingSessions = {};
+    chatStore.yeaftSessionReplyPreviewByKey = {};
+    chatStore.handleYeaftOutput({
+      agentId: 'ag-1', conversationId: 'yeaft_ag-1', sessionId: 's-1',
+      event: {
+        type: 'session_turns',
+        sessionId: 's-1',
+        turns: [{
+          userTurnId: 'ut-fan',
+          userMessageId: 'u-fan',
+          startedAt: 30000,
+          state: 'running',
+          executions: [
+            { vpId: 'vp-1', turnId: 't-fan-1', threadId: 'main', state: 'running' },
+            { vpId: 'vp-2', turnId: 't-fan-2', threadId: 'main', state: 'running' },
+          ],
+        }],
+      },
+    });
+    chatStore.handleYeaftOutput({
+      agentId: 'ag-1', conversationId: 'yeaft_ag-1', sessionId: 's-1',
+      event: { type: 'vp_turn_start', sessionId: 's-1', vpId: 'vp-1', turnId: 't-fan-1', userTurnId: 'ut-fan', ts: 30010 },
+    });
+    chatStore.handleYeaftOutput({
+      agentId: 'ag-1', conversationId: 'yeaft_ag-1', sessionId: 's-1',
+      event: { type: 'vp_turn_start', sessionId: 's-1', vpId: 'vp-2', turnId: 't-fan-2', userTurnId: 'ut-fan', ts: 30020 },
+    });
+    chatStore.handleYeaftOutput({
+      agentId: 'ag-1', conversationId: 'yeaft_ag-1', sessionId: 's-1', vpId: 'vp-1', turnId: 't-fan-1', userTurnId: 'ut-fan',
+      data: { type: 'assistant', ts: 30100, message: { id: 'm-fan-1', content: [{ type: 'text', text: 'VP-1 security audit passed.' }] } },
+    });
+    chatStore.handleYeaftOutput({
+      agentId: 'ag-1', conversationId: 'yeaft_ag-1', sessionId: 's-1',
+      event: { type: 'vp_turn_end', sessionId: 's-1', vpId: 'vp-1', turnId: 't-fan-1', userTurnId: 'ut-fan', reason: 'end_turn' },
+    });
+    // VP-2 finishes with zero text (tool-only)
+    chatStore.handleYeaftOutput({
+      agentId: 'ag-1', conversationId: 'yeaft_ag-1', sessionId: 's-1',
+      event: { type: 'vp_turn_end', sessionId: 's-1', vpId: 'vp-2', turnId: 't-fan-2', userTurnId: 'ut-fan', reason: 'end_turn' },
+    });
+    chatStore.handleYeaftOutput({
+      agentId: 'ag-1', conversationId: 'yeaft_ag-1', sessionId: 's-1',
+      event: {
+        type: 'session_turns',
+        sessionId: 's-1',
+        turns: [{
+          userTurnId: 'ut-fan',
+          userMessageId: 'u-fan',
+          startedAt: 30000,
+          endedAt: 30500,
+          state: 'completed',
+          executions: [
+            { vpId: 'vp-1', turnId: 't-fan-1', threadId: 'main', state: 'completed' },
+            { vpId: 'vp-2', turnId: 't-fan-2', threadId: 'main', state: 'completed' },
+          ],
+        }],
+      },
+    });
+    const afterFanOut = projectSignals(30600).items.find((x) => x.sessionId === 's-1');
+    expect(afterFanOut?.kind).toBe('unread');
+    expect(afterFanOut?.preview).toBe('VP-1 security audit passed.');
+
+    // 3e. Major 2: Reconnect with incremented connectionGeneration & empty idle `vp_status_snapshot`
+    //     reconciles stale background `yeaftSessionTurnsBySession` + `inFlight` previews AND overrides stale `detail.running=true`!
+    chatStore.handleYeaftOutput({
+      agentId: 'ag-1', conversationId: 'yeaft_ag-1', sessionId: 's-bg',
+      event: {
+        type: 'session_turns',
+        sessionId: 's-bg',
+        turns: [{ userTurnId: 'ut-old-bg', userMessageId: 'u-old-bg', startedAt: 40000, state: 'running', executions: [{ vpId: 'vp-1', turnId: 't-old-bg', threadId: 'main', state: 'running' }] }],
+      },
+    });
+    chatStore.handleYeaftOutput({
+      agentId: 'ag-1', conversationId: 'yeaft_ag-1', sessionId: 's-bg', vpId: 'vp-1', turnId: 't-old-bg', userTurnId: 'ut-old-bg',
+      data: { type: 'assistant', ts: 40100, message: { id: 'm-old-bg', content: [{ type: 'text', text: 'Pre-disconnect stream...' }] } },
+    });
+    // Simulate browser reconnect: generation increments, Agent sends unscoped empty idle `vp_status_snapshot`
+    chatStore.chatHistoryConnectionGeneration = 2;
+    chatStore.handleYeaftOutput({
+      agentId: 'ag-1', conversationId: 'yeaft_ag-1',
+      event: { type: 'vp_status_snapshot', statuses: [] },
+    });
+    expect(chatStore.isYeaftSessionProcessing('s-bg', 'ag-1')).toBe(false);
+    expect(chatStore.yeaftSessionReplyPreviewByKey['yeaft:ag-1:s-bg']?.inFlight).toBe(false);
+    const afterReconnectIdle = projectSignals(41000, [{ id: 's-bg', agentId: 'ag-1', running: true, runningVpCount: 1 }])
+      .items.find((x) => x.sessionId === 's-bg');
+    expect(afterReconnectIdle).toBeUndefined();
+
+    // 3f. Major 3 & Major 4: Expired / unmatched auto-route receipt MUST be side-effect-free (no unread clearing, no inFlight)
+    chatStore.yeaftUnreadSessionKeys = { 'yeaft:ag-1:s-1': true };
+    const { handleYeaftSessionRouted: handleRouted } = await import('../../web/stores/helpers/yeaft-auto-route.js');
+    expect(handleRouted(chatStore, {
+      ok: true,
+      agentId: 'ag-1',
+      requestId: 'expired-req-999',
+      sessionId: 's-1',
+      decision: 'matched',
+      delivery: 'queued',
+    })).toBe(false);
+    expect(chatStore.isYeaftSessionUnread('s-1', 'ag-1')).toBe(true);
+    expect(chatStore.isYeaftSessionProcessing('s-1', 'ag-1')).toBe(false);
+    expect(chatStore.yeaftSessionReplyPreviewByKey['yeaft:ag-1:s-1']?.inFlight).toBe(false);
+
+    // 3g. Major 5: Silent `model_reentry` handoff WITH pre-existing unread flag MUST still show running sub-agent,
+    //     while explicit `resultDelivery: 'status_only'` on `kind: 'sub_agent'` MUST NOT mark running!
+    chatStore.yeaftUnreadSessionKeys = { 'yeaft:ag-1:s-bg': true };
+    chatStore.yeaftSessionReplyPreviewByKey = {};
+    chatStore.handleYeaftOutput({
+      agentId: 'ag-1', conversationId: 'yeaft_ag-1', sessionId: 's-bg',
+      event: { type: 'vp_turn_start', sessionId: 's-bg', vpId: 'vp-1', turnId: 't-silent-sub', userTurnId: 'ut-silent-sub', ts: 50000 },
+    });
+    chatStore.handleYeaftOutput({
+      agentId: 'ag-1', conversationId: 'yeaft_ag-1', sessionId: 's-bg',
+      event: {
+        type: 'yeaft_task_event',
+        task: {
+          id: 'sub-reentry-1',
+          sessionId: 's-bg',
+          kind: 'sub_agent',
+          resultDelivery: 'model_reentry',
+          status: 'running',
+          title: 'deep-reviewer',
+          source: { userTurnId: 'ut-silent-sub' },
+        },
+      },
+    });
+    chatStore.handleYeaftOutput({
+      agentId: 'ag-1', conversationId: 'yeaft_ag-1', sessionId: 's-bg',
+      event: { type: 'vp_turn_end', sessionId: 's-bg', vpId: 'vp-1', turnId: 't-silent-sub', userTurnId: 'ut-silent-sub', reason: 'end_turn' },
+    });
+    const silentWithPreExistingUnread = projectSignals(50500).items.find((x) => x.sessionId === 's-bg');
+    expect(silentWithPreExistingUnread?.kind).toBe('running');
+    expect(silentWithPreExistingUnread?.preview).toBe('Sub-agent "deep-reviewer" running…');
+
+    // Explicit `status_only` on a `sub_agent` MUST NOT keep session running
+    chatStore.handleYeaftOutput({
+      agentId: 'ag-1', conversationId: 'yeaft_ag-1', sessionId: 's-bg',
+      event: {
+        type: 'yeaft_task_event',
+        task: {
+          id: 'sub-reentry-1',
+          sessionId: 's-bg',
+          kind: 'sub_agent',
+          resultDelivery: 'status_only',
+          status: 'running',
+          title: 'status-only-sub',
+          source: { userTurnId: 'ut-silent-sub' },
+        },
+      },
+    });
+    const statusOnlySub = projectSignals(50600).items.find((x) => x.sessionId === 's-bg');
+    expect(statusOnlySub?.kind).toBe('unread');
+
+    // 3h. Minor 1: After `tool_end`, `queryProgress.waitingStage === 'provider'` beats stale broker `state: 'tool'`
+    chatStore.yeaftActiveTasksBySession = {};
+    chatStore.handleYeaftOutput({
+      agentId: 'ag-1', conversationId: 'yeaft_ag-1', sessionId: 's-1',
+      event: { type: 'vp_turn_start', sessionId: 's-1', vpId: 'vp-1', turnId: 't-phase', userTurnId: 'ut-phase', ts: 60000 },
+    });
+    chatStore.handleYeaftOutput({
+      agentId: 'ag-1', conversationId: 'yeaft_ag-1', sessionId: 's-1',
+      event: { type: 'vp_status_changed', sessionId: 's-1', vpId: 'vp-1', turnId: 't-phase', state: 'tool', since: 60010 },
+    });
+    chatStore.yeaftQueryProgressByTurn = {
+      'qp-1': {
+        agentId: 'ag-1',
+        conversationId: 'yeaft_ag-1',
+        connectionGeneration: 2,
+        progress: { sessionId: 's-1', vpId: 'vp-1', turnId: 't-phase', waitingStage: 'provider', revision: 2 },
+      },
+    };
+    const afterToolEndProvider = projectSignals(60100).items.find((x) => x.sessionId === 's-1');
+    expect(afterToolEndProvider?.kind).toBe('running');
+    expect(afterToolEndProvider?.preview).toBe('Thinking…');
+
+    // 3i. Minor 2: Running card with failed scheduled task renders BOTH Running AND Failed chips in text
+    const runningFailedWrapper = mount(CosmosSignalStream, {
+      props: {
+        items: [{
+          ...afterToolEndProvider,
+          isError: true,
+          scheduledTask: { id: 'sched-err-1', taskName: 'Nightly', status: 'failed', error: 'Boom' },
+        }],
+        runningCount: 1,
+        unreadCount: 0,
+        waitingCount: 0,
+        badgeCount: 0,
+        drawerOpen: false,
+        isCompact: false,
+        previewMode: '2',
+      },
+      global: { config: { globalProperties: { $t: (k) => k } } },
+    });
+    expect(runningFailedWrapper.find('.cosmos-signal-chip.is-running').text()).toBe('cosmos.signals.runningBadge');
+    expect(runningFailedWrapper.find('.cosmos-signal-chip.is-error').text()).toContain('cosmos.signals.failedBadge');
+    runningFailedWrapper.unmount();
   });
 
   it('computes and renders sculpted 3D-occluded artificial satellites for running and waiting sessions', () => {

@@ -9,14 +9,19 @@
 import { shortenPath } from '../utils/path-display.js';
 import { buildProjectTree } from '../stores/helpers/project-tree.js';
 import { legacySidebarCatalogReady } from '../stores/helpers/sidebar-session-catalog.js';
-import { stripMarkdownPreview } from '../stores/helpers/yeaft-reply-preview.js';
+import {
+  stripMarkdownPreview,
+  isUserBoundaryRow,
+  isModelReentryTask,
+} from '../stores/helpers/yeaft-reply-preview.js';
 import { LIVE_SESSION_TURN_STATES } from '../stores/helpers/yeaft-session-turns.js';
 import { YEAFT_RUNNING_VP_STATES } from '../stores/helpers/yeaft-runtime-state.js';
 import { yeaftSessionIdentityKey } from '../stores/helpers/yeaft-session-identity.js';
 
 const TERMINAL_ASSISTANT_STATUSES = new Set(['completed', 'aborted', 'errored', 'cancelled']);
 const INLINE_TOOL_NAMES = new Set(['AskUser', 'AskUserQuestion', 'TodoWrite', 'RouteForward']);
-const RUNNING_STATE_PRIORITY = ['cancelling', 'retrying', 'tool', 'background_task', 'streaming', 'typing', 'thinking', 'provider', 'routing', 'queued', 'preparing'];
+const QUERY_PROGRESS_PRIORITY = ['retrying', 'tool', 'background_task', 'provider', 'preparing'];
+const BROKER_STATE_PRIORITY = ['cancelling', 'retrying', 'tool', 'streaming', 'typing', 'thinking', 'routing', 'queued'];
 
 function translateSignal(t, isEn, key, params, fallbackEn, fallbackZh) {
   if (typeof t === 'function') {
@@ -39,58 +44,227 @@ function matchesScopedRuntimeRow(row, agentId, sessionId) {
   return agentId ? (!row.agentId || row.agentId === agentId) : true;
 }
 
-function collectActiveYeaftTurnIds(chatStore, agentId, sessionId) {
-  const turnIds = new Set();
-  if (!chatStore || !sessionId) return turnIds;
-  for (const info of Object.values(chatStore.activeVpTurns || {})) {
-    if (info?.turnId && matchesScopedRuntimeRow(info, agentId, sessionId)) {
-      turnIds.add(info.turnId);
-    }
+function isCurrentRuntimeRow(chatStore, row, convId = null) {
+  if (!row) return false;
+  const currentGen = Number(chatStore?.chatHistoryConnectionGeneration || 0);
+  if (currentGen > 0 && row.connectionGeneration != null && row.connectionGeneration !== currentGen) {
+    return false;
   }
-  const sessionKey = yeaftSessionIdentityKey(agentId, sessionId);
-  const turns = sessionKey ? (chatStore.yeaftSessionTurnsBySession?.[sessionKey]?.turns || []) : [];
-  for (const turn of turns) {
-    if (!LIVE_SESSION_TURN_STATES.has(turn?.state)) continue;
-    for (const exec of (turn.executions || [])) {
-      if (exec?.turnId && LIVE_SESSION_TURN_STATES.has(exec.state)) {
-        turnIds.add(exec.turnId);
-      }
-    }
+  if (convId && row.conversationId && row.conversationId !== convId) {
+    return false;
   }
-  for (const status of Object.values(chatStore.vpStatuses || {})) {
-    if (!matchesScopedRuntimeRow(status, agentId, sessionId)) continue;
-    if (Array.isArray(status.threads)) {
-      for (const thread of status.threads) {
-        const st = thread?.state || thread?.status;
-        if (thread?.turnId && YEAFT_RUNNING_VP_STATES.has(st)) turnIds.add(thread.turnId);
-      }
-    } else if (status.turnId && YEAFT_RUNNING_VP_STATES.has(status.state)) {
-      turnIds.add(status.turnId);
-    }
-  }
-  return turnIds;
+  return true;
 }
 
-function hasAuthoritativeYeaftRuntime(chatStore, agentId, sessionId) {
+function isCurrentSnapshotReceipt(chatStore, receipt, convId = null) {
+  if (!receipt) return false;
+  const currentGen = Number(chatStore?.chatHistoryConnectionGeneration || 0);
+  if (currentGen > 0 && receipt.generation != null && receipt.generation !== currentGen) {
+    return false;
+  }
+  if (convId && receipt.conversationId && receipt.conversationId !== convId) {
+    return false;
+  }
+  return true;
+}
+
+function hasAuthoritativeYeaftRuntime(chatStore, agentId, sessionId, convId = null) {
   if (!chatStore || !sessionId) return false;
   const sessionKey = yeaftSessionIdentityKey(agentId, sessionId);
-  if (sessionKey && chatStore.yeaftSessionTurnsBySession?.[sessionKey]) return true;
+  if (agentId && isCurrentSnapshotReceipt(chatStore, chatStore.yeaftVpStatusSnapshotByAgent?.[agentId], convId)) {
+    return true;
+  }
+  if (sessionKey && isCurrentSnapshotReceipt(chatStore, chatStore.yeaftVpStatusSnapshotBySession?.[sessionKey], convId)) {
+    return true;
+  }
+  if (sessionKey && isCurrentRuntimeRow(chatStore, chatStore.yeaftSessionTurnsBySession?.[sessionKey], convId)) {
+    return true;
+  }
   for (const status of Object.values(chatStore.vpStatuses || {})) {
-    if (matchesScopedRuntimeRow(status, agentId, sessionId)) return true;
+    if (matchesScopedRuntimeRow(status, agentId, sessionId) && isCurrentRuntimeRow(chatStore, status, convId)) {
+      return true;
+    }
   }
   return false;
 }
 
-function findRunningModelReentryTask(chatStore, agentId, sessionId) {
+function findRunningModelReentryTask(chatStore, agentId, sessionId, scopedRootId = null) {
   if (!chatStore || !agentId || !sessionId) return null;
   const tasksById = chatStore.yeaftActiveTasksBySession?.[`${agentId}\u001f${sessionId}`];
   if (!tasksById || typeof tasksById !== 'object') return null;
+  let fallbackUnscoped = null;
   for (const task of Object.values(tasksById)) {
-    if (task?.status === 'running' && (task.resultDelivery === 'model_reentry' || task.kind === 'sub_agent')) {
-      return task;
+    if (!isModelReentryTask(task)) continue;
+    const taskRootId = task.source?.userTurnId || task.source?.causalRootId || null;
+    if (scopedRootId && taskRootId === scopedRootId) return task;
+    if (!taskRootId && !fallbackUnscoped) fallbackUnscoped = task;
+    if (!scopedRootId) return task;
+  }
+  return fallbackUnscoped;
+}
+
+/**
+ * Select the single authoritative active user-turn root and its active execution IDs
+ * for a running Yeaft Session, keeping parallel user turns isolated while allowing
+ * sibling VP fan-out executions within the same root to share ownership.
+ */
+function selectActiveYeaftRoot(chatStore, agentId, sessionId, convId, cachedPreview) {
+  const sessionKey = yeaftSessionIdentityKey(agentId, sessionId);
+  const turnSnap = sessionKey ? chatStore?.yeaftSessionTurnsBySession?.[sessionKey] : null;
+  const currentTurns = isCurrentRuntimeRow(chatStore, turnSnap, convId)
+    ? (Array.isArray(turnSnap?.turns) ? turnSnap.turns : [])
+    : [];
+
+  // 1. Prefer authoritative current-generation `session_turns`: pick the newest live user-turn root.
+  let chosenTurn = null;
+  let chosenTurnAt = -1;
+  for (const turn of currentTurns) {
+    if (!LIVE_SESSION_TURN_STATES.has(turn?.state)) continue;
+    const at = turn.activeSince || turn.startedAt || 0;
+    if (!chosenTurn || at >= chosenTurnAt) {
+      chosenTurn = turn;
+      chosenTurnAt = at;
     }
   }
-  return null;
+  if (chosenTurn) {
+    const turnIds = new Set();
+    for (const exec of (chosenTurn.executions || [])) {
+      if (exec?.turnId && LIVE_SESSION_TURN_STATES.has(exec.state)) {
+        turnIds.add(exec.turnId);
+      }
+    }
+    return {
+      rootId: chosenTurn.userTurnId || null,
+      turnIds,
+      hasExplicitRoot: true,
+    };
+  }
+
+  // 2. Fallback to current-generation `activeVpTurns` and `vpStatuses`, grouped by root.
+  const groups = new Map();
+  const addExec = (rootId, turnId, startedAt) => {
+    const key = rootId || (turnId ? `turn:${turnId}` : '__untagged__');
+    let group = groups.get(key);
+    if (!group) {
+      group = { rootId: rootId || (turnId ? `turn:${turnId}` : null), turnIds: new Set(), startedAt: startedAt || 0 };
+      groups.set(key, group);
+    }
+    if (turnId) group.turnIds.add(turnId);
+    if (startedAt > group.startedAt) group.startedAt = startedAt;
+  };
+  const rootsMap = cachedPreview?.roots || {};
+  const ownerRootForTurn = (turnId) => {
+    if (!turnId) return null;
+    for (const [rid, r] of Object.entries(rootsMap)) {
+      if (r?.executions && Object.prototype.hasOwnProperty.call(r.executions, turnId)) return rid;
+    }
+    return null;
+  };
+
+  for (const info of Object.values(chatStore?.activeVpTurns || {})) {
+    if (!info || !matchesScopedRuntimeRow(info, agentId, sessionId) || !isCurrentRuntimeRow(chatStore, info, convId)) continue;
+    const rid = info.userTurnId || ownerRootForTurn(info.turnId) || (info.turnId ? `turn:${info.turnId}` : null);
+    addExec(rid, info.turnId || null, info.startedAt || 0);
+  }
+  for (const status of Object.values(chatStore?.vpStatuses || {})) {
+    if (!matchesScopedRuntimeRow(status, agentId, sessionId) || !isCurrentRuntimeRow(chatStore, status, convId)) continue;
+    if (Array.isArray(status.threads)) {
+      for (const thread of status.threads) {
+        const st = thread?.state || thread?.status;
+        if (!YEAFT_RUNNING_VP_STATES.has(st)) continue;
+        const tid = thread?.turnId || null;
+        const rid = thread?.userTurnId || ownerRootForTurn(tid) || (tid ? `turn:${tid}` : null);
+        addExec(rid, tid, thread?.since || status.since || 0);
+      }
+    } else if (YEAFT_RUNNING_VP_STATES.has(status.state)) {
+      const tid = status.turnId || null;
+      const rid = ownerRootForTurn(tid) || (tid ? `turn:${tid}` : null);
+      addExec(rid, tid, status.since || 0);
+    }
+  }
+
+  if (groups.size > 0) {
+    let best = null;
+    for (const group of groups.values()) {
+      const cachedSeq = group.rootId && rootsMap[group.rootId] ? (rootsMap[group.rootId].seq || 0) : 0;
+      const bestSeq = best?.rootId && rootsMap[best.rootId] ? (rootsMap[best.rootId].seq || 0) : 0;
+      if (!best || cachedSeq > bestSeq || (cachedSeq === bestSeq && group.startedAt >= best.startedAt)) {
+        best = group;
+      }
+    }
+    return {
+      rootId: best.rootId,
+      turnIds: best.turnIds,
+      hasExplicitRoot: Boolean(best.rootId),
+    };
+  }
+
+  // 3. Optimistic send before broker/turn events arrive (e.g., pending clientMessageId root).
+  const latestCachedRoot = cachedPreview?.latestRootId ? rootsMap[cachedPreview.latestRootId] : null;
+  if (latestCachedRoot?.hasLiveExecution) {
+    const turnIds = new Set();
+    for (const ex of Object.values(latestCachedRoot.executions || {})) {
+      if (ex?.state === 'running' && ex.turnId) turnIds.add(ex.turnId);
+    }
+    return {
+      rootId: latestCachedRoot.rootId,
+      turnIds,
+      hasExplicitRoot: true,
+    };
+  }
+
+  return {
+    rootId: null,
+    turnIds: new Set(),
+    hasExplicitRoot: false,
+  };
+}
+
+/**
+ * Select the most recent settled user-turn root from authoritative `session_turns`
+ * or the root-indexed preview cache.
+ */
+function selectSettledYeaftRoot(chatStore, agentId, sessionId, convId, cachedPreview) {
+  const rootsMap = cachedPreview?.roots || {};
+  const sessionKey = yeaftSessionIdentityKey(agentId, sessionId);
+  const turnSnap = sessionKey ? chatStore?.yeaftSessionTurnsBySession?.[sessionKey] : null;
+  const currentTurns = isCurrentRuntimeRow(chatStore, turnSnap, convId)
+    ? (Array.isArray(turnSnap?.turns) ? turnSnap.turns : [])
+    : [];
+
+  let latestTurn = null;
+  let latestTurnAt = -1;
+  for (const turn of currentTurns) {
+    if (!turn?.userTurnId) continue;
+    const at = turn.activeSince || turn.startedAt || 0;
+    if (!latestTurn || at >= latestTurnAt) {
+      latestTurn = turn;
+      latestTurnAt = at;
+    }
+  }
+  if (latestTurn?.userTurnId && rootsMap[latestTurn.userTurnId]) {
+    return rootsMap[latestTurn.userTurnId];
+  }
+
+  let latestCompleted = null;
+  for (const root of Object.values(rootsMap)) {
+    if (!root || (!root.finalizedText && !root.finalizedEmpty)) continue;
+    if (!latestCompleted || (root.seq || 0) >= (latestCompleted.seq || 0)) {
+      latestCompleted = root;
+    }
+  }
+  return latestCompleted;
+}
+
+function translatePhaseCode(phase, t, isEn) {
+  if (phase === 'cancelling') return translateSignal(t, isEn, 'cosmos.signals.stageStopping', null, 'Stopping…', '正在停止…');
+  if (phase === 'retrying') return translateSignal(t, isEn, 'cosmos.signals.stageRetrying', null, 'Retrying…', '重试连接中…');
+  if (phase === 'tool') return translateSignal(t, isEn, 'cosmos.signals.stageTool', null, 'Running tools…', '正在执行工具…');
+  if (phase === 'background_task') return translateSignal(t, isEn, 'cosmos.signals.stageWaitingTask', null, 'Waiting for background task…', '等待后台任务…');
+  if (phase === 'streaming' || phase === 'typing') return translateSignal(t, isEn, 'cosmos.signals.stageStreaming', null, 'Responding…', '正在生成回复…');
+  if (phase === 'thinking' || phase === 'provider') return translateSignal(t, isEn, 'cosmos.signals.stageThinking', null, 'Thinking…', '正在思考…');
+  if (phase === 'routing' || phase === 'queued' || phase === 'preparing') return translateSignal(t, isEn, 'cosmos.signals.stageQueued', null, 'Queued…', '排队处理中…');
+  return '';
 }
 
 function resolveRunningStatusText(chatStore, {
@@ -98,13 +272,14 @@ function resolveRunningStatusText(chatStore, {
   sessionId,
   isYeaft,
   convId,
+  activeRootId,
   activeTurnIds,
   msgInfo,
   runningTask,
   isEn,
   t,
 }) {
-  // 1. Live executing tool name (highest precision)
+  // 1. Live executing non-inline tool name (highest precision, uniform across Yeaft and CLI)
   let runningToolName = '';
   if (isYeaft) {
     let newestToolTs = -1;
@@ -122,7 +297,10 @@ function resolveRunningStatusText(chatStore, {
       }
     }
   } else if (convId) {
-    runningToolName = chatStore?.executionStatusMap?.[convId]?.currentTool?.name || '';
+    const cliToolName = chatStore?.executionStatusMap?.[convId]?.currentTool?.name || '';
+    if (cliToolName && !INLINE_TOOL_NAMES.has(cliToolName)) {
+      runningToolName = cliToolName;
+    }
   }
   if (!runningToolName && msgInfo?.latestRunningToolName) {
     runningToolName = msgInfo.latestRunningToolName;
@@ -131,44 +309,51 @@ function resolveRunningStatusText(chatStore, {
     return translateSignal(t, isEn, 'cosmos.signals.stageToolNamed', { tool: runningToolName }, 'Running {tool}…', '正在调用 {tool}…');
   }
 
-  // 2. Live execution phase from queryProgress / vpStatuses / session_turns
+  // 2. Live execution phase: prefer fresh `queryProgress.waitingStage` over coarser broker state
+  //    (after `tool_end`, the broker remains in `tool` while queryProgress already reports `provider`).
   if (isYeaft) {
-    const observedStates = new Set();
+    const progressStages = new Set();
     for (const row of Object.values(chatStore?.yeaftQueryProgressByTurn || {})) {
       const progress = row?.progress;
       if (!progress || row.agentId !== agentId || progress.sessionId !== sessionId) continue;
+      if (!isCurrentRuntimeRow(chatStore, row, convId)) continue;
       if (activeTurnIds?.size > 0 && progress.turnId && !activeTurnIds.has(progress.turnId)) continue;
-      if (progress.waitingStage) observedStates.add(progress.waitingStage);
+      if (progress.waitingStage) progressStages.add(progress.waitingStage);
     }
+    const bestProgress = QUERY_PROGRESS_PRIORITY.find((candidate) => progressStages.has(candidate)) || '';
+    const progressCopy = translatePhaseCode(bestProgress, t, isEn);
+    if (progressCopy) return progressCopy;
+
+    const brokerStates = new Set();
     for (const status of Object.values(chatStore?.vpStatuses || {})) {
-      if (!matchesScopedRuntimeRow(status, agentId, sessionId)) continue;
+      if (!matchesScopedRuntimeRow(status, agentId, sessionId) || !isCurrentRuntimeRow(chatStore, status, convId)) continue;
       if (Array.isArray(status.threads)) {
         for (const thread of status.threads) {
           const st = thread?.state || thread?.status;
-          if (YEAFT_RUNNING_VP_STATES.has(st)) observedStates.add(st);
+          if (!YEAFT_RUNNING_VP_STATES.has(st)) continue;
+          if (activeTurnIds?.size > 0 && thread?.turnId && !activeTurnIds.has(thread.turnId)) continue;
+          brokerStates.add(st);
         }
       } else if (YEAFT_RUNNING_VP_STATES.has(status.state)) {
-        observedStates.add(status.state);
+        if (activeTurnIds?.size > 0 && status.turnId && !activeTurnIds.has(status.turnId)) continue;
+        brokerStates.add(status.state);
       }
     }
     const sessionKey = yeaftSessionIdentityKey(agentId, sessionId);
-    const turns = sessionKey ? (chatStore?.yeaftSessionTurnsBySession?.[sessionKey]?.turns || []) : [];
+    const turnSnap = sessionKey ? chatStore?.yeaftSessionTurnsBySession?.[sessionKey] : null;
+    const turns = isCurrentRuntimeRow(chatStore, turnSnap, convId) ? (turnSnap?.turns || []) : [];
     for (const turn of turns) {
       if (!LIVE_SESSION_TURN_STATES.has(turn?.state)) continue;
-      observedStates.add(turn.state);
+      if (activeRootId && turn.userTurnId && turn.userTurnId !== activeRootId) continue;
+      brokerStates.add(turn.state);
       for (const exec of (turn.executions || [])) {
-        if (LIVE_SESSION_TURN_STATES.has(exec?.state)) observedStates.add(exec.state);
+        if (LIVE_SESSION_TURN_STATES.has(exec?.state)) brokerStates.add(exec.state);
       }
     }
 
-    const best = RUNNING_STATE_PRIORITY.find((candidate) => observedStates.has(candidate)) || '';
-    if (best === 'cancelling') return translateSignal(t, isEn, 'cosmos.signals.stageStopping', null, 'Stopping…', '正在停止…');
-    if (best === 'retrying') return translateSignal(t, isEn, 'cosmos.signals.stageRetrying', null, 'Retrying…', '重试连接中…');
-    if (best === 'tool') return translateSignal(t, isEn, 'cosmos.signals.stageTool', null, 'Running tools…', '正在执行工具…');
-    if (best === 'background_task') return translateSignal(t, isEn, 'cosmos.signals.stageWaitingTask', null, 'Waiting for background task…', '等待后台任务…');
-    if (best === 'streaming' || best === 'typing') return translateSignal(t, isEn, 'cosmos.signals.stageStreaming', null, 'Responding…', '正在生成回复…');
-    if (best === 'thinking' || best === 'provider') return translateSignal(t, isEn, 'cosmos.signals.stageThinking', null, 'Thinking…', '正在思考…');
-    if (best === 'routing' || best === 'queued' || best === 'preparing') return translateSignal(t, isEn, 'cosmos.signals.stageQueued', null, 'Queued…', '排队处理中…');
+    const bestBroker = BROKER_STATE_PRIORITY.find((candidate) => brokerStates.has(candidate)) || '';
+    const brokerCopy = translatePhaseCode(bestBroker, t, isEn);
+    if (brokerCopy) return brokerCopy;
   }
 
   // 3. Running background sub-agent / model_reentry task
@@ -362,7 +547,11 @@ export function formatRelativeTime(ts, nowMs = Date.now(), isEn = false) {
   return isEn ? `${diffDay}d` : `${diffDay}天前`;
 }
 
-function inspectLoadedMessages(messages, sessionId, { activeTurnIds = null, isProcessing = false } = {}) {
+function inspectLoadedMessages(messages, sessionId, {
+  activeTurnIds = null,
+  hasExplicitActiveRoot = false,
+  isProcessing = false,
+} = {}) {
   if (!Array.isArray(messages) || messages.length === 0) {
     return {
       hasPendingAsk: false,
@@ -430,21 +619,18 @@ function inspectLoadedMessages(messages, sessionId, { activeTurnIds = null, isPr
     if (isProcessing && !latestRunningToolName && !seenUserMessage
       && row.type === 'tool-use' && !row.hasResult && !row.isHistory
       && row.toolName && !INLINE_TOOL_NAMES.has(row.toolName)) {
-      if (!hasActiveTurnFilter || !row.turnId || activeTurnIds.has(row.turnId)) {
+      if (hasActiveTurnFilter ? (row.turnId && activeTurnIds.has(row.turnId)) : !hasExplicitActiveRoot) {
         latestRunningToolName = row.toolName;
       }
     }
 
-    if (row.type === 'user') {
-      const text = row.content || row.text || '';
-      const cleaned = stripMarkdownPreview(text);
-      const hasAttachments = Array.isArray(row.attachments) && row.attachments.length > 0;
-      if (cleaned || hasAttachments) {
-        seenUserMessage = true;
-        if (!latestUserSnippet) {
-          latestUserSnippet = cleaned || '(attached files)';
-          latestUserAt = parseMs(row.timestamp || row.createdAt);
-        }
+    if (isUserBoundaryRow(row)) {
+      seenUserMessage = true;
+      if (!latestUserSnippet) {
+        const cleaned = stripMarkdownPreview(row.content || row.text || '');
+        const hasAttachments = Array.isArray(row.attachments) && row.attachments.length > 0;
+        latestUserSnippet = cleaned || (hasAttachments ? '(attached files)' : '…');
+        latestUserAt = parseMs(row.timestamp || row.createdAt);
       }
     }
 
@@ -465,13 +651,17 @@ function inspectLoadedMessages(messages, sessionId, { activeTurnIds = null, isPr
           currentTurnAssistantAt = rowAt;
           currentTurnAssistantTurnId = rowTurnId;
         }
-        // While processing, only accept assistant rows that actually belong to an active turn.
+        // While processing, only accept assistant rows that belong to the selected active root.
+        // Never cross a newer user-message boundary or borrow an execution from another root.
         if (isProcessing && !liveTurnAssistantSnippet) {
           const isTerminalOrHistory = row.isHistory === true || TERMINAL_ASSISTANT_STATUSES.has(row.status);
-          const belongsToActiveTurn = hasActiveTurnFilter
-            ? (rowTurnId ? activeTurnIds.has(rowTurnId) : (!seenUserMessage && !isTerminalOrHistory))
-            : (!seenUserMessage && !isTerminalOrHistory);
-          if (belongsToActiveTurn) {
+          let belongsToSelectedRoot = false;
+          if (hasActiveTurnFilter) {
+            belongsToSelectedRoot = Boolean(rowTurnId && activeTurnIds.has(rowTurnId));
+          } else if (!hasExplicitActiveRoot) {
+            belongsToSelectedRoot = !seenUserMessage && !isTerminalOrHistory;
+          }
+          if (belongsToSelectedRoot) {
             liveTurnAssistantSnippet = cleaned;
             liveTurnAssistantAt = rowAt;
             liveTurnAssistantTurnId = rowTurnId;
@@ -652,23 +842,34 @@ export function projectAgentsForCosmos({ chatStore, sessionsStore, nowMs = Date.
       const isUnread = isYeaft
         ? Boolean(chatStore?.isYeaftSessionUnread?.(item.id, agentId) || scheduledNotice)
         : false;
-      const hasRuntimeTruth = isYeaft && hasAuthoritativeYeaftRuntime(chatStore, agentId, item.id);
-      const runningModelReentryTask = isYeaft ? findRunningModelReentryTask(chatStore, agentId, item.id) : null;
+      const cachedPreview = isYeaft ? (replyPreviewByKey[item.catalogKey] || null) : null;
+      const hasRuntimeTruth = isYeaft && hasAuthoritativeYeaftRuntime(chatStore, agentId, item.id, convId);
       const isVpProcessing = isYeaft
         ? Boolean(
           chatStore?.isYeaftSessionProcessing?.(item.id, agentId)
           || (!hasRuntimeTruth && (detail?.running || detail?.runningVpCount > 0)),
         )
         : Boolean(chatStore?.processingConversations?.[item.id]);
-      const isProcessing = isVpProcessing || Boolean(runningModelReentryTask && !isUnread);
-      const activeTurnIds = isYeaft && isProcessing
-        ? collectActiveYeaftTurnIds(chatStore, agentId, item.id)
-        : new Set();
+
+      const activeRoot = isYeaft && isVpProcessing
+        ? selectActiveYeaftRoot(chatStore, agentId, item.id, convId, cachedPreview)
+        : { rootId: null, turnIds: new Set(), hasExplicitRoot: false };
+      const settledRoot = isYeaft && !isVpProcessing
+        ? selectSettledYeaftRoot(chatStore, agentId, item.id, convId, cachedPreview)
+        : null;
+      const selectedRootId = isVpProcessing ? activeRoot.rootId : (settledRoot?.rootId || null);
+
+      const runningModelReentryTask = isYeaft
+        ? findRunningModelReentryTask(chatStore, agentId, item.id, selectedRootId)
+        : null;
 
       const msgInfo = isYeaft
-        ? inspectLoadedMessages(loadedMsgs, item.id, { activeTurnIds, isProcessing })
-        : inspectLoadedMessages(messagesMap[item.id], null, { isProcessing });
-      const cachedPreview = isYeaft ? (replyPreviewByKey[item.catalogKey] || null) : null;
+        ? inspectLoadedMessages(loadedMsgs, item.id, {
+          activeTurnIds: activeRoot.turnIds,
+          hasExplicitActiveRoot: activeRoot.hasExplicitRoot,
+          isProcessing: isVpProcessing,
+        })
+        : inspectLoadedMessages(messagesMap[item.id], null, { isProcessing: isVpProcessing });
 
       const cachedAskExpiresAt = parseMs(cachedPreview?.askExpiresAt);
       const cachedAskValid = Boolean(cachedPreview?.askQuestion)
@@ -678,66 +879,130 @@ export function projectAgentsForCosmos({ chatStore, sessionsStore, nowMs = Date.
       const askRequestId = msgInfo.askRequestId || (cachedAskValid ? (cachedPreview.askRequestId || '') : '');
       const askTurnId = msgInfo.askTurnId || (cachedAskValid ? (cachedPreview.askTurnId || '') : '');
 
-      // Live preview strictly for the currently executing turn (never bleeds prior-turn responses).
+      // Live preview strictly for the selected active root (never bleeds prior or parallel user turns).
       let liveReplyPreview = '';
       let liveReplyAt = 0;
-      if (isProcessing) {
-        const cachedLiveText = isYeaft ? (cachedPreview?.liveText || '') : '';
-        const cachedLiveMatchesTurn = !cachedPreview?.liveTurnId
-          || activeTurnIds.size === 0
-          || activeTurnIds.has(cachedPreview.liveTurnId);
-        const validCachedLive = cachedLiveText && cachedLiveMatchesTurn ? cachedLiveText : '';
-        const cachedLiveAt = validCachedLive ? parseMs(cachedPreview?.liveAt || cachedPreview?.updatedAt) : 0;
-        const msgLiveStaleUntagged = Boolean(
-          isYeaft
-          && cachedPreview?.inFlight
-          && !validCachedLive
-          && !msgInfo.liveTurnAssistantTurnId
-          && !msgInfo.liveTurnAssistantStreaming,
-        );
-        const validMsgLive = msgLiveStaleUntagged ? '' : msgInfo.liveTurnAssistantSnippet;
+      if (isVpProcessing) {
+        let validCachedLive = '';
+        let cachedLiveAt = 0;
+        if (isYeaft && cachedPreview) {
+          const rootsMap = cachedPreview.roots || {};
+          const rootEntry = activeRoot.rootId ? rootsMap[activeRoot.rootId] : null;
+          if (rootEntry && rootEntry.hasLiveExecution) {
+            let bestExec = null;
+            for (const ex of Object.values(rootEntry.executions || {})) {
+              if (!ex || ex.state !== 'running' || !ex.text) continue;
+              if (activeRoot.turnIds.size > 0) {
+                if (!ex.turnId || !activeRoot.turnIds.has(ex.turnId)) continue;
+              } else if (ex.turnId) {
+                // Never treat an empty active-ID set as permission to reuse an unconfirmed turnId's live text.
+                continue;
+              }
+              if (!bestExec || (ex.seq || 0) >= (bestExec.seq || 0)) bestExec = ex;
+            }
+            if (bestExec) {
+              validCachedLive = bestExec.text;
+              cachedLiveAt = parseMs(bestExec.at || cachedPreview.updatedAt);
+            }
+          } else if (Object.keys(rootsMap).length === 0 && cachedPreview.liveText) {
+            // Backward-compatible legacy flat preview entry without `roots`.
+            const turnConfirmed = activeRoot.turnIds.size > 0
+              ? Boolean(cachedPreview.liveTurnId && activeRoot.turnIds.has(cachedPreview.liveTurnId))
+              : (!cachedPreview.liveTurnId && !activeRoot.hasExplicitRoot);
+            if (turnConfirmed) {
+              validCachedLive = cachedPreview.liveText;
+              cachedLiveAt = parseMs(cachedPreview.liveAt || cachedPreview.updatedAt);
+            }
+          }
+        }
+        const validMsgLive = msgInfo.liveTurnAssistantSnippet;
         const msgLiveAt = validMsgLive ? msgInfo.liveTurnAssistantAt : 0;
         const useCachedLive = Boolean(validCachedLive) && (!validMsgLive || cachedLiveAt >= msgLiveAt);
         liveReplyPreview = useCachedLive ? validCachedLive : validMsgLive;
         liveReplyAt = useCachedLive ? cachedLiveAt : msgLiveAt;
       }
 
-      // Finished/unread reply preview (strictly for the latest turn, never showing a pre-user older turn).
+      // Finished/unread reply preview (strictly for the newest settled root, never a pre-user older turn).
       let replyPreview = '';
       let replyAt = 0;
-      const emptyTurnBlocksMsg = Boolean(
-        isYeaft
-        && cachedPreview?.finalizedEmptyTurnId
-        && (
-          !msgInfo.currentTurnAssistantSnippet
-          || (msgInfo.currentTurnAssistantTurnId && msgInfo.currentTurnAssistantTurnId !== cachedPreview.finalizedEmptyTurnId)
-          || (!msgInfo.currentTurnAssistantTurnId && parseMs(cachedPreview?.at) >= msgInfo.currentTurnAssistantAt)
-        ),
-      );
-      if (isProcessing) {
+      if (isVpProcessing) {
         replyPreview = liveReplyPreview;
         replyAt = liveReplyAt;
-      } else if (emptyTurnBlocksMsg) {
-        replyPreview = '';
-        replyAt = parseMs(cachedPreview?.at);
+      } else if (isYeaft && settledRoot) {
+        if (settledRoot.finalizedEmpty) {
+          replyPreview = '';
+          replyAt = parseMs(settledRoot.finalizedAt || cachedPreview?.at);
+        } else {
+          const rootText = settledRoot.finalizedText || '';
+          const rootAt = parseMs(settledRoot.finalizedAt || cachedPreview?.at);
+          const rootExecTurnIds = new Set(
+            Object.values(settledRoot.executions || {})
+              .filter((ex) => ex?.state === 'completed' && ex.turnId)
+              .map((ex) => ex.turnId),
+          );
+          const rootBelongsToPriorUserTurn = Boolean(
+            msgInfo.seenUserMessage
+            && !msgInfo.currentTurnAssistantSnippet
+            && msgInfo.latestAssistantTurnId
+            && rootExecTurnIds.has(msgInfo.latestAssistantTurnId),
+          );
+          if (rootText && !rootBelongsToPriorUserTurn) {
+            replyPreview = rootText;
+            replyAt = rootAt;
+          } else if (msgInfo.currentTurnAssistantSnippet
+            && (!msgInfo.currentTurnAssistantTurnId || rootExecTurnIds.size === 0 || rootExecTurnIds.has(msgInfo.currentTurnAssistantTurnId))) {
+            replyPreview = msgInfo.currentTurnAssistantSnippet;
+            replyAt = msgInfo.currentTurnAssistantAt;
+          }
+        }
       } else {
-        const cachedReplyText = cachedPreview?.text || '';
-        const cachedReplyAt = parseMs(cachedPreview?.at);
-        const cachedBelongsToPriorTurn = Boolean(
-          msgInfo.seenUserMessage
-          && !msgInfo.currentTurnAssistantSnippet
+        const emptyTurnBlocksMsg = Boolean(
+          isYeaft
+          && cachedPreview?.finalizedEmptyTurnId
           && (
-            (cachedPreview?.turnId && msgInfo.latestAssistantTurnId && cachedPreview.turnId === msgInfo.latestAssistantTurnId)
-            || (cachedPreview?.inFlight && !cachedPreview?.liveText)
-            || (msgInfo.latestUserAt > 0 && cachedReplyAt > 0 && cachedReplyAt < msgInfo.latestUserAt)
+            !msgInfo.currentTurnAssistantSnippet
+            || (msgInfo.currentTurnAssistantTurnId && msgInfo.currentTurnAssistantTurnId !== cachedPreview.finalizedEmptyTurnId)
           ),
         );
-        const validCachedReply = cachedReplyText && !cachedBelongsToPriorTurn ? cachedReplyText : '';
-        const msgReply = msgInfo.currentTurnAssistantSnippet;
-        const useCachedReply = Boolean(validCachedReply)
-          && (!msgReply || cachedReplyAt >= msgInfo.currentTurnAssistantAt);
-        replyPreview = useCachedReply ? validCachedReply : msgReply;
-        replyAt = useCachedReply ? cachedReplyAt : msgInfo.currentTurnAssistantAt;
+        if (emptyTurnBlocksMsg) {
+          replyPreview = '';
+          replyAt = parseMs(cachedPreview?.at);
+        } else {
+          const cachedReplyText = cachedPreview?.text || '';
+          const cachedReplyAt = parseMs(cachedPreview?.at);
+          const cachedBelongsToPriorTurn = Boolean(
+            msgInfo.seenUserMessage
+            && !msgInfo.currentTurnAssistantSnippet
+            && (
+              (cachedPreview?.turnId && msgInfo.latestAssistantTurnId && cachedPreview.turnId === msgInfo.latestAssistantTurnId)
+              || (cachedPreview?.inFlight && !cachedPreview?.liveText)
+              || (msgInfo.latestUserAt > 0 && cachedReplyAt > 0 && cachedReplyAt < msgInfo.latestUserAt)
+            ),
+          );
+          const validCachedReply = cachedReplyText && !cachedBelongsToPriorTurn ? cachedReplyText : '';
+          const msgReply = msgInfo.currentTurnAssistantSnippet;
+          const useCachedReply = Boolean(validCachedReply)
+            && (!msgReply || cachedReplyAt >= msgInfo.currentTurnAssistantAt);
+          replyPreview = useCachedReply ? validCachedReply : msgReply;
+          replyAt = useCachedReply ? cachedReplyAt : msgInfo.currentTurnAssistantAt;
+        }
+      }
+
+      // Gate background model_reentry task liveness on task ownership + whether the selected
+      // root actually produced an unread reply (so a silent handoff stays running even if an
+      // unrelated older unread flag or scheduled notice exists on the Session).
+      const currentRootHasReply = Boolean(replyPreview);
+      const runningTaskOwnsWaitingState = Boolean(
+        !isVpProcessing
+        && runningModelReentryTask
+        && (!isUnread || !currentRootHasReply),
+      );
+      const isProcessing = isVpProcessing || runningTaskOwnsWaitingState;
+      if (runningTaskOwnsWaitingState) {
+        liveReplyPreview = '';
+        liveReplyAt = 0;
+        replyPreview = '';
+        replyAt = 0;
       }
 
       const runningStatusText = isProcessing
@@ -746,7 +1011,8 @@ export function projectAgentsForCosmos({ chatStore, sessionsStore, nowMs = Date.
           sessionId: item.id,
           isYeaft,
           convId: isYeaft ? convId : item.id,
-          activeTurnIds,
+          activeRootId: selectedRootId,
+          activeTurnIds: activeRoot.turnIds,
           msgInfo,
           runningTask: runningModelReentryTask,
           isEn,

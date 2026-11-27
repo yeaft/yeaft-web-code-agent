@@ -23,6 +23,8 @@ function clearSidebarSessionCatalog(store) {
   store.scheduledTaskReceiptProtocolSupported = false;
   store.yeaftUnreadSessionKeys = {};
   store.yeaftSessionReplyPreviewByKey = {};
+  store.yeaftVpStatusSnapshotByAgent = {};
+  store.yeaftVpStatusSnapshotBySession = {};
   store.cosmosDismissedSignalsByKey = {};
 }
 

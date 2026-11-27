@@ -2,6 +2,14 @@
  * Lightweight per-Session reply & AskUser preview cache for Yeaft Cosmos Signal Stream
  * and background Session telemetry.
  *
+ * Tracks preview ownership by user-turn root (`userTurnId` / fallback execution root)
+ * and per-execution slots (`turnId`) using monotonic lifecycle sequence numbers rather
+ * than cross-turn timestamp comparisons. This prevents:
+ *   - late `result` frames from overwriting newer completed replies,
+ *   - parallel user turns from bleeding across user-message boundaries,
+ *   - tool-only sibling VPs in the same fan-out root from erasing another VP's reply,
+ *   - reconnect / stale snapshots from retaining orphaned in-flight previews.
+ *
  * Scoped strictly by canonical catalog key (`yeaft:<agentId>:<sessionId>`), bounded
  * to prevent unbounded memory growth, deduplicated against unchanged streaming frames,
  * and cleared on turn deletion, session deletion, agent runtime reset, or logout.
@@ -9,6 +17,11 @@
 
 export const MAX_YEAFT_REPLY_PREVIEWS = 160;
 const MAX_PREVIEW_CHARS = 280;
+const MAX_ROOTS_PER_SESSION = 12;
+const PENDING_EXEC_KEY = '__pending__';
+const ANON_EXEC_KEY = '__anon__';
+
+const RUNNING_VP_STATES = new Set(['typing', 'thinking', 'retrying', 'streaming', 'tool']);
 
 export function stripMarkdownPreview(raw, maxLen = MAX_PREVIEW_CHARS) {
   if (!raw || typeof raw !== 'string') return '';
@@ -24,30 +37,54 @@ export function stripMarkdownPreview(raw, maxLen = MAX_PREVIEW_CHARS) {
     .slice(0, maxLen);
 }
 
+/**
+ * Shared predicate for a visible user-turn boundary row across extraction and projection.
+ * Checks raw trimmed text or attachments (before Markdown stripping) so punctuation-only
+ * or attachment-only user prompts still establish a turn boundary consistently.
+ */
+export function isUserBoundaryRow(row) {
+  if (!row || row.type !== 'user') return false;
+  const raw = typeof row.content === 'string'
+    ? row.content
+    : (typeof row.text === 'string' ? row.text : '');
+  return Boolean(raw.trim() || (Array.isArray(row.attachments) && row.attachments.length > 0));
+}
+
+/**
+ * Determine whether a running Session task will re-enter the model upon completion.
+ * Explicit `resultDelivery` is authoritative (never overridden by `kind`); `kind === 'sub_agent'`
+ * is used only as a fallback for legacy payloads that omit `resultDelivery`.
+ */
+export function isModelReentryTask(task) {
+  if (!task || task.status !== 'running') return false;
+  if (typeof task.resultDelivery === 'string' && task.resultDelivery) {
+    return task.resultDelivery === 'model_reentry';
+  }
+  return task.kind === 'sub_agent';
+}
+
 export function extractLatestAssistantPreview(messages, sessionId, turnId = null) {
   if (!Array.isArray(messages) || messages.length === 0) return { text: '', at: 0, turnId: null };
-  let seenUserMessage = false;
-  let untaggedAfterUser = null;
+  const targetTurnId = typeof turnId === 'string' && turnId ? turnId : null;
   for (let i = messages.length - 1; i >= 0; i--) {
     const row = messages[i];
     if (!row) continue;
     const rowSessionId = row.sessionId ?? row.groupId ?? '';
     if (sessionId && rowSessionId !== sessionId) continue;
 
-    if (row.type === 'user') {
-      const userText = typeof row.content === 'string'
-        ? row.content
-        : (typeof row.text === 'string' ? row.text : '');
-      const hasAttachments = Array.isArray(row.attachments) && row.attachments.length > 0;
-      if (userText.trim() || hasAttachments) {
-        seenUserMessage = true;
-        // Without a specific turnId, never cross a user-message boundary into a prior turn.
-        if (!turnId) break;
-      }
-      continue;
+    if (!targetTurnId && isUserBoundaryRow(row)) {
+      // Without an explicit execution ID, never cross a user-message boundary into a prior turn.
+      break;
     }
 
     if (row.type !== 'assistant') continue;
+    if (targetTurnId) {
+      // Strict execution identity: never fall back to an untagged or differently-owned row.
+      if (row.turnId !== targetTurnId) continue;
+    } else if (row.isHistory === true) {
+      continue;
+    }
+
     const raw = row.presentation?.summary || row.content || row.text || '';
     const cleaned = stripMarkdownPreview(raw);
     if (!cleaned) continue;
@@ -55,21 +92,283 @@ export function extractLatestAssistantPreview(messages, sessionId, turnId = null
     const at = typeof rawTs === 'number' && Number.isFinite(rawTs)
       ? rawTs
       : (typeof rawTs === 'string' && rawTs ? (Date.parse(rawTs) || 0) : 0);
-
-    if (turnId) {
-      if (row.turnId === turnId) return { text: cleaned, at, turnId };
-      // Never fall back to an assistant row owned by a different turnId.
-      // Only accept an untagged legacy assistant row if it appeared after the
-      // latest user message and is not a prior persisted history row.
-      if (!row.turnId && !seenUserMessage && !row.isHistory && !untaggedAfterUser) {
-        untaggedAfterUser = { text: cleaned, at, turnId: null };
-      }
-      continue;
-    }
-
     return { text: cleaned, at, turnId: row.turnId || null };
   }
-  return untaggedAfterUser || { text: '', at: 0, turnId: null };
+  return { text: '', at: 0, turnId: null };
+}
+
+function normalizeId(val) {
+  return typeof val === 'string' && val ? val : null;
+}
+
+function cloneRoots(roots) {
+  const out = {};
+  if (!roots || typeof roots !== 'object') return out;
+  for (const [key, root] of Object.entries(roots)) {
+    if (!root || typeof root !== 'object') continue;
+    const executions = {};
+    for (const [ek, ex] of Object.entries(root.executions || {})) {
+      if (ex && typeof ex === 'object') executions[ek] = { ...ex };
+    }
+    out[key] = { ...root, executions };
+  }
+  return out;
+}
+
+function summarizeRoot(root) {
+  const execs = Object.values(root.executions || {});
+  let hasLiveExecution = false;
+  let hasCompletedExecution = false;
+  let bestLive = null;
+  let bestCompleted = null;
+  for (const ex of execs) {
+    if (!ex) continue;
+    if (ex.state === 'running') {
+      hasLiveExecution = true;
+      if (ex.text && (!bestLive || (ex.seq || 0) >= (bestLive.seq || 0))) bestLive = ex;
+    } else if (ex.state === 'completed') {
+      hasCompletedExecution = true;
+      if (ex.text && (!bestCompleted || (ex.seq || 0) >= (bestCompleted.seq || 0))) bestCompleted = ex;
+    }
+  }
+  return {
+    ...root,
+    hasLiveExecution,
+    liveText: bestLive?.text || '',
+    liveAt: bestLive?.at || 0,
+    liveTurnId: bestLive?.turnId || null,
+    finalizedText: bestCompleted?.text || '',
+    finalizedAt: bestCompleted?.at || 0,
+    finalizedTurnId: bestCompleted?.turnId || null,
+    finalizedEmpty: !hasLiveExecution && hasCompletedExecution && !bestCompleted,
+  };
+}
+
+function pruneRoots(roots, keepRootId = null) {
+  const keys = Object.keys(roots);
+  if (keys.length <= MAX_ROOTS_PER_SESSION) return roots;
+  // Evict oldest non-live roots first; keep live roots and the target root.
+  keys.sort((a, b) => {
+    const ra = roots[a];
+    const rb = roots[b];
+    if (a === keepRootId) return 1;
+    if (b === keepRootId) return -1;
+    if (Boolean(ra?.hasLiveExecution) !== Boolean(rb?.hasLiveExecution)) {
+      return ra?.hasLiveExecution ? 1 : -1;
+    }
+    return (ra?.seq || 0) - (rb?.seq || 0);
+  });
+  const excess = keys.length - MAX_ROOTS_PER_SESSION;
+  for (let i = 0; i < excess; i++) {
+    if (keys[i] !== keepRootId) delete roots[keys[i]];
+  }
+  return roots;
+}
+
+function findRootOwningTurn(roots, turnId) {
+  if (!turnId) return null;
+  for (const [rid, root] of Object.entries(roots)) {
+    if (root?.executions && Object.prototype.hasOwnProperty.call(root.executions, turnId)) {
+      return rid;
+    }
+  }
+  return null;
+}
+
+function mergeRootInto(roots, sourceRootId, targetRootId) {
+  if (!sourceRootId || !targetRootId || sourceRootId === targetRootId) return false;
+  const src = roots[sourceRootId];
+  if (!src) return false;
+  const dst = roots[targetRootId];
+  if (!dst) {
+    roots[targetRootId] = summarizeRoot({ ...src, rootId: targetRootId });
+    delete roots[sourceRootId];
+    return true;
+  }
+  const mergedExecs = { ...(dst.executions || {}) };
+  for (const [ek, ex] of Object.entries(src.executions || {})) {
+    if (ek === PENDING_EXEC_KEY && Object.keys(mergedExecs).some((k) => k !== PENDING_EXEC_KEY)) continue;
+    const existing = mergedExecs[ek];
+    if (!existing || (ex.seq || 0) > (existing.seq || 0) || (!existing.text && ex.text)) {
+      mergedExecs[ek] = { ...ex };
+    }
+  }
+  if (Object.keys(mergedExecs).some((k) => k !== PENDING_EXEC_KEY)) {
+    delete mergedExecs[PENDING_EXEC_KEY];
+  }
+  roots[targetRootId] = summarizeRoot({
+    ...dst,
+    rootId: targetRootId,
+    seq: Math.max(dst.seq || 0, src.seq || 0),
+    startedAt: Math.min(dst.startedAt || Infinity, src.startedAt || Infinity),
+    executions: mergedExecs,
+  });
+  delete roots[sourceRootId];
+  return true;
+}
+
+function pickLatestRoot(roots) {
+  let latest = null;
+  for (const root of Object.values(roots)) {
+    if (!root) continue;
+    if (!latest || (root.seq || 0) >= (latest.seq || 0)) latest = root;
+  }
+  return latest;
+}
+
+function pickLatestLiveRoot(roots) {
+  let latest = null;
+  for (const root of Object.values(roots)) {
+    if (!root?.hasLiveExecution) continue;
+    if (!latest || (root.seq || 0) >= (latest.seq || 0)) latest = root;
+  }
+  return latest;
+}
+
+function pickLatestCompletedRoot(roots) {
+  let latest = null;
+  for (const root of Object.values(roots)) {
+    if (!root || (!root.finalizedText && !root.finalizedEmpty)) continue;
+    if (!latest || (root.seq || 0) >= (latest.seq || 0)) latest = root;
+  }
+  return latest;
+}
+
+/**
+ * Derive top-level summary fields from the root table so existing readers and tests
+ * observe consistent, root-scoped state.
+ */
+function deriveTopLevelFromRoots(roots, fallbackText, fallbackAt, fallbackTurnId, fallbackKind) {
+  const latestRoot = pickLatestRoot(roots);
+  const latestLive = pickLatestLiveRoot(roots);
+  const latestCompleted = pickLatestCompletedRoot(roots);
+
+  if (!latestRoot) {
+    return {
+      latestRootId: null,
+      text: fallbackText || '',
+      at: fallbackAt || 0,
+      turnId: fallbackTurnId || null,
+      rootId: null,
+      liveText: '',
+      liveAt: 0,
+      liveTurnId: null,
+      inFlight: false,
+      turnStartedAt: 0,
+      finalizedEmptyTurnId: null,
+      kind: fallbackKind || 'assistant',
+    };
+  }
+
+  let text = fallbackText || '';
+  let at = fallbackAt || 0;
+  let turnId = fallbackTurnId || null;
+  let rootId = latestRoot.rootId;
+  let finalizedEmptyTurnId = null;
+
+  if (latestRoot.hasLiveExecution) {
+    if (latestRoot.liveText) {
+      text = latestRoot.liveText;
+      at = latestRoot.liveAt;
+      turnId = latestRoot.liveTurnId;
+    } else if (latestRoot.finalizedText) {
+      text = latestRoot.finalizedText;
+      at = latestRoot.finalizedAt;
+      turnId = latestRoot.finalizedTurnId;
+    } else if (latestCompleted) {
+      text = latestCompleted.finalizedText;
+      at = latestCompleted.finalizedAt;
+      turnId = latestCompleted.finalizedTurnId;
+      rootId = latestCompleted.rootId;
+    }
+  } else if (latestRoot.finalizedText) {
+    text = latestRoot.finalizedText;
+    at = latestRoot.finalizedAt;
+    turnId = latestRoot.finalizedTurnId;
+  } else if (latestRoot.finalizedEmpty) {
+    text = '';
+    at = latestRoot.finalizedAt || latestRoot.startedAt || fallbackAt || 0;
+    turnId = latestRoot.finalizedTurnId;
+    finalizedEmptyTurnId = latestRoot.rootId;
+  } else if (latestCompleted) {
+    text = latestCompleted.finalizedText;
+    at = latestCompleted.finalizedAt;
+    turnId = latestCompleted.finalizedTurnId;
+    rootId = latestCompleted.rootId;
+    if (latestCompleted.finalizedEmpty) finalizedEmptyTurnId = latestCompleted.rootId;
+  }
+
+  return {
+    latestRootId: latestRoot.rootId,
+    text,
+    at,
+    turnId,
+    rootId,
+    liveText: latestLive?.liveText || '',
+    liveAt: latestLive?.liveAt || 0,
+    liveTurnId: latestLive?.liveTurnId || null,
+    inFlight: Boolean(latestLive),
+    turnStartedAt: latestLive?.startedAt || latestRoot.startedAt || 0,
+    finalizedEmptyTurnId,
+    kind: fallbackKind || 'assistant',
+  };
+}
+
+function writePreviewMap(store, map, catalogKey, nextEntry) {
+  const nextMap = { ...map, [catalogKey]: nextEntry };
+  const keys = Object.keys(nextMap);
+  if (keys.length > MAX_YEAFT_REPLY_PREVIEWS) {
+    keys.sort((a, b) => (nextMap[a]?.updatedAt || 0) - (nextMap[b]?.updatedAt || 0));
+    const excess = keys.length - MAX_YEAFT_REPLY_PREVIEWS;
+    for (let i = 0; i < excess; i++) {
+      if (keys[i] !== catalogKey) delete nextMap[keys[i]];
+    }
+  }
+  store.yeaftSessionReplyPreviewByKey = nextMap;
+  return true;
+}
+
+function entriesStructurallyEqual(prev, next) {
+  if (!prev) return false;
+  if (prev.text !== next.text
+    || (prev.turnId || null) !== (next.turnId || null)
+    || (prev.rootId || null) !== (next.rootId || null)
+    || (prev.latestRootId || null) !== (next.latestRootId || null)
+    || prev.kind !== next.kind
+    || (prev.liveText || '') !== (next.liveText || '')
+    || (prev.liveTurnId || null) !== (next.liveTurnId || null)
+    || Boolean(prev.inFlight) !== Boolean(next.inFlight)
+    || (prev.finalizedEmptyTurnId || null) !== (next.finalizedEmptyTurnId || null)
+    || (prev.askQuestion || '') !== (next.askQuestion || '')
+    || (prev.askRequestId || null) !== (next.askRequestId || null)
+    || (prev.askTurnId || null) !== (next.askTurnId || null)
+    || (prev.askExpiresAt || 0) !== (next.askExpiresAt || 0)) {
+    return false;
+  }
+  const prevRootKeys = Object.keys(prev.roots || {});
+  const nextRootKeys = Object.keys(next.roots || {});
+  if (prevRootKeys.length !== nextRootKeys.length) return false;
+  for (const rk of nextRootKeys) {
+    const pr = prev.roots?.[rk];
+    const nr = next.roots[rk];
+    if (!pr || pr.hasLiveExecution !== nr.hasLiveExecution
+      || pr.liveText !== nr.liveText
+      || (pr.liveTurnId || null) !== (nr.liveTurnId || null)
+      || pr.finalizedText !== nr.finalizedText
+      || (pr.finalizedTurnId || null) !== (nr.finalizedTurnId || null)
+      || pr.finalizedEmpty !== nr.finalizedEmpty) {
+      return false;
+    }
+    const pExecKeys = Object.keys(pr.executions || {});
+    const nExecKeys = Object.keys(nr.executions || {});
+    if (pExecKeys.length !== nExecKeys.length) return false;
+    for (const ek of nExecKeys) {
+      const pe = pr.executions?.[ek];
+      const ne = nr.executions[ek];
+      if (!pe || pe.state !== ne.state || pe.text !== ne.text) return false;
+    }
+  }
+  return true;
 }
 
 export function recordYeaftSessionReplyPreview(store, {
@@ -78,12 +377,19 @@ export function recordYeaftSessionReplyPreview(store, {
   at = Date.now(),
   kind = 'assistant',
   turnId = null,
+  rootId = null,
+  aliasRootId = null,
+  relation = null,
   live = false,
+  fromResult = false,
   beginTurn = false,
   preserveLiveIfInFlight = false,
   onlyIfNoUpdateSince = 0,
+  linkRootAlias = false,
+  syncTurns = null,
   finalizeTurn = false,
   cancelTurn = false,
+  reason = null,
   askQuestion,
   askRequestId = null,
   askTurnId = null,
@@ -97,29 +403,48 @@ export function recordYeaftSessionReplyPreview(store, {
   const cleanedAsk = typeof askQuestion === 'string' ? stripMarkdownPreview(askQuestion) : '';
   const now = Date.now();
   const ts = Number.isFinite(Number(at)) && Number(at) > 0 ? Number(at) : now;
-  const normalizedTurnId = typeof turnId === 'string' && turnId ? turnId : null;
+  const normTurnId = normalizeId(turnId);
+  const normRootId = normalizeId(rootId);
+  const normAliasRootId = normalizeId(aliasRootId);
 
   if (beginTurn && onlyIfNoUpdateSince > 0 && prev && (prev.updatedAt || 0) >= onlyIfNoUpdateSince) {
     return false;
   }
 
-  let nextText = prev?.text || '';
-  let nextAt = prev?.at || 0;
-  let nextTurnId = prev?.turnId || null;
-  let nextKind = prev?.kind || kind;
-  let nextLiveText = prev?.liveText || '';
-  let nextLiveAt = prev?.liveAt || 0;
-  let nextLiveTurnId = prev?.liveTurnId || null;
-  let nextInFlight = Boolean(prev?.inFlight);
-  let nextTurnStartedAt = prev?.turnStartedAt || 0;
-  let nextFinalizedEmptyTurnId = prev?.finalizedEmptyTurnId || null;
+  let seq = Number(prev?.seq || 0);
+  const nextSeq = () => { seq += 1; return seq; };
+  const roots = cloneRoots(prev?.roots);
+
   let nextAskQuestion = prev?.askQuestion || '';
   let nextAskRequestId = prev?.askRequestId || null;
   let nextAskTurnId = prev?.askTurnId || null;
   let nextAskExpiresAt = prev?.askExpiresAt || 0;
   let nextAskAt = prev?.askAt || 0;
-
+  let fallbackText = prev?.text || '';
+  let fallbackAt = prev?.at || 0;
+  let fallbackTurnId = prev?.turnId || null;
+  let nextKind = prev?.kind || kind;
   let hasAction = false;
+
+  // Migrate any legacy flat entry into a completed root before new root operations run.
+  if (Object.keys(roots).length === 0 && prev?.text && (beginTurn || finalizeTurn || cancelTurn || live || fromResult || Array.isArray(syncTurns))) {
+    const legacyId = prev.turnId ? `turn:${prev.turnId}` : '__legacy__';
+    const legacyExecKey = prev.turnId || ANON_EXEC_KEY;
+    roots[legacyId] = summarizeRoot({
+      rootId: legacyId,
+      seq: nextSeq(),
+      startedAt: prev.at || prev.updatedAt || 0,
+      executions: {
+        [legacyExecKey]: {
+          turnId: prev.turnId || null,
+          state: 'completed',
+          text: prev.text,
+          at: prev.at || 0,
+          seq,
+        },
+      },
+    });
+  }
 
   if (clearAsk) {
     const canClearAsk = Boolean(prev && (prev.askQuestion || prev.askRequestId || prev.askTurnId))
@@ -135,75 +460,309 @@ export function recordYeaftSessionReplyPreview(store, {
     }
   }
 
-  if (beginTurn) {
-    const sameLiveTurn = Boolean(normalizedTurnId && prev?.liveTurnId && prev.liveTurnId === normalizedTurnId);
-    const keepCurrentInFlight = preserveLiveIfInFlight && Boolean(prev?.inFlight) && !normalizedTurnId;
-    if (!keepCurrentInFlight && !(sameLiveTurn && prev?.inFlight)) {
-      nextInFlight = true;
-      nextLiveTurnId = normalizedTurnId || (sameLiveTurn ? prev.liveTurnId : null);
-      if (!sameLiveTurn) {
-        nextLiveText = '';
-        nextLiveAt = 0;
+  // Merge/re-alias an optimistic clientMessageId root onto its authoritative userTurnId.
+  if (linkRootAlias && normRootId && normAliasRootId && normAliasRootId !== normRootId) {
+    if (relation === 'supplement') {
+      if (roots[normAliasRootId]) {
+        delete roots[normAliasRootId];
+        hasAction = true;
       }
-      nextTurnStartedAt = Math.max(now, prev?.turnStartedAt || 0);
-      nextFinalizedEmptyTurnId = null;
+      if (!roots[normRootId]) {
+        roots[normRootId] = summarizeRoot({
+          rootId: normRootId,
+          seq: nextSeq(),
+          startedAt: now,
+          executions: {
+            [PENDING_EXEC_KEY]: { turnId: null, state: 'running', text: '', at: 0, seq },
+          },
+        });
+        hasAction = true;
+      }
+    } else if (mergeRootInto(roots, normAliasRootId, normRootId)) {
       hasAction = true;
+    }
+  }
+
+  // Bulk-sync authoritative `session_turns` snapshot roots and executions.
+  if (Array.isArray(syncTurns)) {
+    const LIVE_TURN_STATES = new Set(['routing', 'queued', 'running', 'cancelling', 'waiting', 'thinking', 'streaming', 'tool', 'retrying']);
+    for (const turn of syncTurns) {
+      const utId = normalizeId(turn?.userTurnId);
+      if (!utId) continue;
+      const msgId = normalizeId(turn?.userMessageId);
+      if (msgId && msgId !== utId && roots[msgId]) {
+        mergeRootInto(roots, msgId, utId);
+        hasAction = true;
+      }
+      const turnLive = LIVE_TURN_STATES.has(turn.state);
+      const execList = Array.isArray(turn.executions) ? turn.executions : [];
+      if (!turnLive && !roots[utId]) continue;
+
+      let root = roots[utId];
+      if (!root) {
+        root = { rootId: utId, seq: nextSeq(), startedAt: now, executions: {} };
+        roots[utId] = root;
+        hasAction = true;
+      } else if (turnLive && !root.hasLiveExecution) {
+        // Reopened root (e.g. model_reentry or supplement on a finished root) advances seq.
+        root.seq = nextSeq();
+        hasAction = true;
+      }
+
+      for (const exec of execList) {
+        const execTurnId = normalizeId(exec?.turnId);
+        if (!execTurnId) continue;
+        // Migrate any earlier `turn:<id>` bucket that arrived before `session_turns`.
+        const tempKey = `turn:${execTurnId}`;
+        if (tempKey !== utId && roots[tempKey]) {
+          mergeRootInto(roots, tempKey, utId);
+          root = roots[utId];
+          hasAction = true;
+        }
+        const execLive = LIVE_TURN_STATES.has(exec.state);
+        const existingExec = root.executions[execTurnId];
+        if (!existingExec) {
+          if (execLive) {
+            delete root.executions[PENDING_EXEC_KEY];
+            root.executions[execTurnId] = {
+              turnId: execTurnId,
+              state: 'running',
+              text: '',
+              at: 0,
+              seq: nextSeq(),
+            };
+            hasAction = true;
+          }
+        } else if (execLive && existingExec.state !== 'running') {
+          delete root.executions[PENDING_EXEC_KEY];
+          existingExec.state = 'running';
+          existingExec.seq = nextSeq();
+          hasAction = true;
+        } else if (!execLive && existingExec.state === 'running') {
+          existingExec.state = exec.state === 'completed' ? 'completed' : 'cancelled';
+          existingExec.seq = nextSeq();
+          hasAction = true;
+        }
+      }
+
+      if (turnLive && Object.keys(root.executions).length === 0) {
+        root.executions[PENDING_EXEC_KEY] = { turnId: null, state: 'running', text: '', at: 0, seq: nextSeq() };
+        hasAction = true;
+      } else if (!turnLive && root.executions[PENDING_EXEC_KEY]) {
+        delete root.executions[PENDING_EXEC_KEY];
+        hasAction = true;
+      }
+      roots[utId] = summarizeRoot(root);
+    }
+  }
+
+  if (beginTurn) {
+    let targetRootId = normRootId || findRootOwningTurn(roots, normTurnId);
+    if (!targetRootId && normTurnId) targetRootId = `turn:${normTurnId}`;
+    if (!targetRootId) {
+      const currentLive = pickLatestLiveRoot(roots);
+      if (preserveLiveIfInFlight && currentLive) {
+        targetRootId = null;
+      } else {
+        targetRootId = `pending:${nextSeq()}`;
+      }
+    }
+    if (targetRootId) {
+      if (normAliasRootId && normAliasRootId !== targetRootId && roots[normAliasRootId]) {
+        mergeRootInto(roots, normAliasRootId, targetRootId);
+      }
+      // If `turn:<id>` was previously created and we now have a real `userTurnId`, merge it in.
+      if (normTurnId && targetRootId !== `turn:${normTurnId}` && roots[`turn:${normTurnId}`]) {
+        mergeRootInto(roots, `turn:${normTurnId}`, targetRootId);
+      }
+      let root = roots[targetRootId];
+      if (!root) {
+        root = { rootId: targetRootId, seq: nextSeq(), startedAt: now, executions: {} };
+        roots[targetRootId] = root;
+        hasAction = true;
+      } else if (!root.hasLiveExecution) {
+        // Reopened root becomes the newest root.
+        root.seq = nextSeq();
+        hasAction = true;
+      }
+      if (normTurnId) {
+        delete root.executions[PENDING_EXEC_KEY];
+        const existing = root.executions[normTurnId];
+        if (!existing) {
+          root.executions[normTurnId] = { turnId: normTurnId, state: 'running', text: '', at: 0, seq: nextSeq() };
+          hasAction = true;
+        } else if (existing.state !== 'running') {
+          existing.state = 'running';
+          existing.seq = nextSeq();
+          hasAction = true;
+        }
+      } else if (Object.keys(root.executions).length === 0) {
+        root.executions[PENDING_EXEC_KEY] = { turnId: null, state: 'running', text: '', at: 0, seq: nextSeq() };
+        hasAction = true;
+      }
+      roots[targetRootId] = summarizeRoot(root);
     }
   } else if (finalizeTurn) {
-    const otherActiveTurn = Boolean(prev?.inFlight && prev.liveTurnId && normalizedTurnId && prev.liveTurnId !== normalizedTurnId);
-    const matchesLiveTurn = Boolean(
-      (normalizedTurnId && prev?.liveTurnId === normalizedTurnId)
-      || (!normalizedTurnId && prev?.inFlight)
-      || (!prev?.liveTurnId && prev?.inFlight),
-    );
-    const resolvedText = cleanedText || (matchesLiveTurn ? (prev?.liveText || '') : '');
-    if (!otherActiveTurn) {
-      nextInFlight = false;
-      nextLiveTurnId = null;
-      nextLiveText = '';
-      nextLiveAt = 0;
+    let targetRootId = normRootId || findRootOwningTurn(roots, normTurnId);
+    if (normTurnId && targetRootId && targetRootId !== `turn:${normTurnId}` && roots[`turn:${normTurnId}`]) {
+      mergeRootInto(roots, `turn:${normTurnId}`, targetRootId);
     }
-    if (resolvedText) {
-      nextText = resolvedText;
-      nextKind = kind;
-      nextAt = Math.max(ts, prev?.at || 0);
-      nextTurnId = normalizedTurnId || prev?.turnId || null;
-      nextFinalizedEmptyTurnId = null;
-    } else if (!otherActiveTurn) {
-      // Turn ended cleanly with zero assistant text — clear stale prior-turn text
-      // so the Signal Stream never displays an older turn's reply as this turn's response.
-      nextText = '';
-      nextAt = ts;
-      nextTurnId = normalizedTurnId;
-      nextFinalizedEmptyTurnId = normalizedTurnId || '__empty__';
+    if (!targetRootId) targetRootId = normTurnId ? `turn:${normTurnId}` : (pickLatestLiveRoot(roots)?.rootId || pickLatestRoot(roots)?.rootId || '__legacy__');
+    let root = roots[targetRootId];
+    if (!root) {
+      root = { rootId: targetRootId, seq: nextSeq(), startedAt: now, executions: {} };
+      roots[targetRootId] = root;
     }
+    const execKey = normTurnId || PENDING_EXEC_KEY;
+    const prevExec = root.executions[execKey] || null;
+    const resolvedText = cleanedText || prevExec?.text || '';
+    if (normTurnId) delete root.executions[PENDING_EXEC_KEY];
+    root.executions[execKey] = {
+      turnId: normTurnId,
+      state: 'completed',
+      text: resolvedText,
+      at: resolvedText ? Math.max(ts, prevExec?.at || 0) : ts,
+      seq: nextSeq(),
+    };
+    roots[targetRootId] = summarizeRoot(root);
+    nextKind = kind;
     hasAction = true;
   } else if (cancelTurn) {
-    const matchesActive = !normalizedTurnId || !prev?.liveTurnId || prev.liveTurnId === normalizedTurnId;
-    if (matchesActive && (prev?.inFlight || prev?.liveText || prev?.liveTurnId)) {
-      nextInFlight = false;
-      nextLiveTurnId = null;
-      nextLiveText = '';
-      nextLiveAt = 0;
-      hasAction = true;
+    const terminalState = reason === 'route_forward'
+      ? 'route_forward'
+      : (reason === 'errored' || reason === 'error' ? 'errored' : 'cancelled');
+    if (normTurnId) {
+      const ownerRootId = normRootId || findRootOwningTurn(roots, normTurnId);
+      if (ownerRootId && roots[ownerRootId]) {
+        const root = roots[ownerRootId];
+        const ex = root.executions[normTurnId];
+        if (ex && ex.state === 'running') {
+          ex.state = terminalState;
+          ex.seq = nextSeq();
+          roots[ownerRootId] = summarizeRoot(root);
+          hasAction = true;
+        }
+      }
+    } else if (normRootId && roots[normRootId]) {
+      const root = roots[normRootId];
+      let touched = false;
+      for (const ex of Object.values(root.executions || {})) {
+        if (ex && ex.state === 'running') {
+          ex.state = terminalState;
+          ex.seq = nextSeq();
+          touched = true;
+        }
+      }
+      if (touched) {
+        roots[normRootId] = summarizeRoot(root);
+        hasAction = true;
+      }
+    } else {
+      for (const [rid, root] of Object.entries(roots)) {
+        let touched = false;
+        for (const ex of Object.values(root.executions || {})) {
+          if (ex && ex.state === 'running') {
+            ex.state = terminalState;
+            ex.seq = nextSeq();
+            touched = true;
+          }
+        }
+        if (touched) {
+          roots[rid] = summarizeRoot(root);
+          hasAction = true;
+        }
+      }
     }
   } else if (cleanedText) {
-    const otherActiveTurn = Boolean(!live && prev?.inFlight && prev.liveTurnId && normalizedTurnId && prev.liveTurnId !== normalizedTurnId);
-    if (live) {
-      nextInFlight = true;
-      nextLiveText = cleanedText;
-      nextLiveAt = Math.max(ts, prev?.liveAt || 0);
-      nextLiveTurnId = normalizedTurnId || prev?.liveTurnId || null;
-    } else if (!otherActiveTurn && prev?.inFlight && (!normalizedTurnId || !prev.liveTurnId || prev.liveTurnId === normalizedTurnId)) {
-      nextLiveText = cleanedText;
-      nextLiveAt = Math.max(ts, prev?.liveAt || 0);
-    }
-    if (!otherActiveTurn) {
-      nextText = cleanedText;
+    if (fromResult) {
+      // A `result` frame may ONLY fill or refine its OWN execution — never overwrite
+      // a newer root or re-arm an already settled turn as running.
+      const existingOwner = normRootId || findRootOwningTurn(roots, normTurnId);
+      const latestCompleted = pickLatestCompletedRoot(roots);
+      const latestRoot = pickLatestRoot(roots);
+      if (existingOwner && roots[existingOwner]) {
+        const root = roots[existingOwner];
+        const execKey = normTurnId || ANON_EXEC_KEY;
+        const prevExec = root.executions[execKey] || null;
+        if (prevExec && prevExec.state !== 'running' && prevExec.state !== 'completed') {
+          // Do not fill aborted / errored / route_forward executions.
+        } else if (!prevExec || !prevExec.text || prevExec.state === 'running') {
+          if (normTurnId) delete root.executions[PENDING_EXEC_KEY];
+          root.executions[execKey] = {
+            turnId: normTurnId,
+            state: prevExec ? prevExec.state : 'completed',
+            text: cleanedText,
+            at: Math.max(ts, prevExec?.at || 0),
+            seq: nextSeq(),
+          };
+          roots[existingOwner] = summarizeRoot(root);
+          nextKind = kind;
+          hasAction = true;
+        }
+      } else if (!latestRoot && !latestCompleted) {
+        // Cold cache: result arrived first without prior vp_turn_start/vp_turn_end.
+        const targetId = normRootId || (normTurnId ? `turn:${normTurnId}` : '__legacy__');
+        const execKey = normTurnId || ANON_EXEC_KEY;
+        roots[targetId] = summarizeRoot({
+          rootId: targetId,
+          seq: nextSeq(),
+          startedAt: now,
+          executions: {
+            [execKey]: { turnId: normTurnId, state: 'completed', text: cleanedText, at: ts, seq },
+          },
+        });
+        nextKind = kind;
+        hasAction = true;
+      }
+    } else if (live) {
+      let targetRootId = normRootId || findRootOwningTurn(roots, normTurnId);
+      if (!targetRootId) targetRootId = normTurnId ? `turn:${normTurnId}` : (pickLatestLiveRoot(roots)?.rootId || `pending:${nextSeq()}`);
+      if (normTurnId && targetRootId !== `turn:${normTurnId}` && roots[`turn:${normTurnId}`]) {
+        mergeRootInto(roots, `turn:${normTurnId}`, targetRootId);
+      }
+      let root = roots[targetRootId];
+      if (!root) {
+        root = { rootId: targetRootId, seq: nextSeq(), startedAt: now, executions: {} };
+        roots[targetRootId] = root;
+      }
+      const execKey = normTurnId || PENDING_EXEC_KEY;
+      const prevExec = root.executions[execKey] || null;
+      if (normTurnId) delete root.executions[PENDING_EXEC_KEY];
+      // Do not re-arm an already settled execution if a late streaming delta arrives out of order.
+      const nextState = prevExec && prevExec.state !== 'running' ? prevExec.state : 'running';
+      root.executions[execKey] = {
+        turnId: normTurnId,
+        state: nextState,
+        text: cleanedText,
+        at: Math.max(ts, prevExec?.at || 0),
+        seq: prevExec?.text === cleanedText ? (prevExec.seq || nextSeq()) : nextSeq(),
+      };
+      roots[targetRootId] = summarizeRoot(root);
       nextKind = kind;
-      nextAt = Math.max(ts, prev?.at || 0);
-      if (normalizedTurnId) nextTurnId = normalizedTurnId;
-      nextFinalizedEmptyTurnId = null;
+      hasAction = true;
+    } else {
+      // Legacy/direct write (e.g. direct tests or manual seed without live/finalizeTurn).
+      if (Object.keys(roots).length > 0 || normTurnId || normRootId) {
+        const targetId = normRootId || findRootOwningTurn(roots, normTurnId) || (normTurnId ? `turn:${normTurnId}` : '__legacy__');
+        const execKey = normTurnId || ANON_EXEC_KEY;
+        const prevRoot = roots[targetId];
+        const prevExec = prevRoot?.executions?.[execKey] || null;
+        const rootSeq = prevRoot ? prevRoot.seq : nextSeq();
+        const root = prevRoot || { rootId: targetId, seq: rootSeq, startedAt: now, executions: {} };
+        root.executions[execKey] = {
+          turnId: normTurnId,
+          state: prevExec?.state === 'running' ? 'running' : 'completed',
+          text: cleanedText,
+          at: Math.max(ts, prevExec?.at || 0),
+          seq: prevExec?.text === cleanedText ? (prevExec.seq || nextSeq()) : nextSeq(),
+        };
+        roots[targetId] = summarizeRoot(root);
+      } else {
+        fallbackText = cleanedText;
+        fallbackAt = Math.max(ts, prev?.at || 0);
+        if (normTurnId) fallbackTurnId = normTurnId;
+      }
+      nextKind = kind;
       hasAction = true;
     }
   }
@@ -222,41 +781,35 @@ export function recordYeaftSessionReplyPreview(store, {
 
   if (!hasAction) return false;
 
+  const latestAfter = pickLatestRoot(roots);
+  pruneRoots(roots, latestAfter?.rootId || null);
+  const derived = deriveTopLevelFromRoots(roots, fallbackText, fallbackAt, fallbackTurnId, nextKind);
+
   // Standalone ask-clearing drops the entry when no reply or turn state remains.
-  if (clearAsk && !beginTurn && !finalizeTurn && !cancelTurn && !cleanedText && !cleanedAsk
-      && !nextText && !nextLiveText && !nextInFlight && !nextFinalizedEmptyTurnId) {
+  if (clearAsk && !beginTurn && !finalizeTurn && !cancelTurn && !linkRootAlias && !Array.isArray(syncTurns)
+      && !cleanedText && !cleanedAsk
+      && !derived.text && !derived.liveText && !derived.inFlight && !derived.finalizedEmptyTurnId
+      && Object.keys(roots).length === 0) {
     const { [catalogKey]: _drop, ...rest } = map;
     store.yeaftSessionReplyPreviewByKey = rest;
     return true;
   }
 
-  // Skip no-op map clones on streaming deltas once the 280-char preview has stabilized.
-  if (prev
-    && prev.text === nextText
-    && (prev.turnId || null) === nextTurnId
-    && prev.kind === nextKind
-    && (prev.liveText || '') === nextLiveText
-    && (prev.liveTurnId || null) === nextLiveTurnId
-    && Boolean(prev.inFlight) === nextInFlight
-    && (prev.finalizedEmptyTurnId || null) === nextFinalizedEmptyTurnId
-    && (prev.askQuestion || '') === nextAskQuestion
-    && (prev.askRequestId || null) === nextAskRequestId
-    && (prev.askTurnId || null) === nextAskTurnId
-    && (prev.askExpiresAt || 0) === nextAskExpiresAt) {
-    return false;
-  }
-
   const nextEntry = {
-    text: nextText,
-    turnId: nextTurnId,
-    kind: nextKind,
-    at: nextAt,
-    liveText: nextLiveText,
-    liveAt: nextLiveAt,
-    liveTurnId: nextLiveTurnId,
-    inFlight: nextInFlight,
-    turnStartedAt: nextTurnStartedAt,
-    finalizedEmptyTurnId: nextFinalizedEmptyTurnId,
+    seq,
+    latestRootId: derived.latestRootId,
+    roots,
+    text: derived.text,
+    turnId: derived.turnId,
+    rootId: derived.rootId,
+    kind: derived.kind,
+    at: derived.at,
+    liveText: derived.liveText,
+    liveAt: derived.liveAt,
+    liveTurnId: derived.liveTurnId,
+    inFlight: derived.inFlight,
+    turnStartedAt: derived.turnStartedAt,
+    finalizedEmptyTurnId: derived.finalizedEmptyTurnId,
     askQuestion: nextAskQuestion,
     askRequestId: nextAskRequestId,
     askTurnId: nextAskTurnId,
@@ -265,15 +818,118 @@ export function recordYeaftSessionReplyPreview(store, {
     updatedAt: now,
   };
 
-  const nextMap = { ...map, [catalogKey]: nextEntry };
-  const keys = Object.keys(nextMap);
-  if (keys.length > MAX_YEAFT_REPLY_PREVIEWS) {
-    keys.sort((a, b) => (nextMap[a]?.updatedAt || 0) - (nextMap[b]?.updatedAt || 0));
-    const excess = keys.length - MAX_YEAFT_REPLY_PREVIEWS;
-    for (let i = 0; i < excess; i++) {
-      if (keys[i] !== catalogKey) delete nextMap[keys[i]];
+  if (entriesStructurallyEqual(prev, nextEntry)) {
+    return false;
+  }
+
+  return writePreviewMap(store, map, catalogKey, nextEntry);
+}
+
+/**
+ * Reconcile cached in-flight reply previews against an authoritative `vp_status_snapshot`.
+ * Any running execution in the snapshot's scope not confirmed live by `statuses` is retired
+ * cleanly so reconnects into another Session never leave stale `inFlight` previews behind.
+ */
+export function reconcileYeaftReplyPreviewsFromStatuses(store, {
+  agentId = null,
+  sessionId = null,
+  statuses = [],
+} = {}) {
+  const map = store?.yeaftSessionReplyPreviewByKey;
+  if (!map || !agentId) return false;
+
+  const liveTurnsBySession = new Map();
+  const legacyRunningSessions = new Set();
+  for (const status of (Array.isArray(statuses) ? statuses : [])) {
+    if (!status) continue;
+    const sid = status.sessionId || status.groupId || sessionId || null;
+    if (!sid) continue;
+    if (Array.isArray(status.threads)) {
+      for (const thread of status.threads) {
+        const st = thread?.state || thread?.status;
+        if (!RUNNING_VP_STATES.has(st)) continue;
+        if (thread?.turnId) {
+          if (!liveTurnsBySession.has(sid)) liveTurnsBySession.set(sid, new Set());
+          liveTurnsBySession.get(sid).add(thread.turnId);
+        } else {
+          legacyRunningSessions.add(sid);
+        }
+      }
+    } else if (RUNNING_VP_STATES.has(status.state)) {
+      if (status.turnId) {
+        if (!liveTurnsBySession.has(sid)) liveTurnsBySession.set(sid, new Set());
+        liveTurnsBySession.get(sid).add(status.turnId);
+      } else {
+        legacyRunningSessions.add(sid);
+      }
     }
   }
+
+  let changed = false;
+  const nextMap = { ...map };
+  for (const [key, entry] of Object.entries(map)) {
+    if (!key.startsWith('yeaft:')) continue;
+    const sep = key.lastIndexOf(':');
+    if (sep <= 6) continue;
+    const entryAgentId = key.slice(6, sep);
+    const entrySessionId = key.slice(sep + 1);
+    if (entryAgentId !== agentId) continue;
+    if (sessionId != null && entrySessionId !== sessionId) continue;
+    if (!entry?.inFlight && !Object.values(entry?.roots || {}).some((r) => r?.hasLiveExecution)) continue;
+
+    const liveTurnIds = liveTurnsBySession.get(entrySessionId) || null;
+    const hasLegacyRunning = legacyRunningSessions.has(entrySessionId);
+    const hasAnyRunningInSession = Boolean((liveTurnIds && liveTurnIds.size > 0) || hasLegacyRunning);
+
+    const roots = cloneRoots(entry.roots);
+    let seq = Number(entry.seq || 0);
+    let entryMutated = false;
+    for (const [rid, root] of Object.entries(roots)) {
+      let rootTouched = false;
+      for (const ex of Object.values(root.executions || {})) {
+        if (!ex || ex.state !== 'running') continue;
+        const stillLive = ex.turnId
+          ? Boolean(hasLegacyRunning || liveTurnIds?.has(ex.turnId))
+          : hasAnyRunningInSession;
+        if (!stillLive) {
+          ex.state = 'cancelled';
+          seq += 1;
+          ex.seq = seq;
+          rootTouched = true;
+        }
+      }
+      if (rootTouched) {
+        roots[rid] = summarizeRoot(root);
+        entryMutated = true;
+      }
+    }
+    if (!entryMutated && entry.inFlight && !hasAnyRunningInSession) {
+      entryMutated = true;
+    }
+    if (!entryMutated) continue;
+
+    const derived = deriveTopLevelFromRoots(roots, entry.text, entry.at, entry.turnId, entry.kind);
+    nextMap[key] = {
+      ...entry,
+      seq,
+      latestRootId: derived.latestRootId,
+      roots,
+      text: derived.text,
+      turnId: derived.turnId,
+      rootId: derived.rootId,
+      at: derived.at,
+      liveText: derived.liveText,
+      liveAt: derived.liveAt,
+      liveTurnId: derived.liveTurnId,
+      inFlight: derived.inFlight,
+      turnStartedAt: derived.turnStartedAt,
+      finalizedEmptyTurnId: derived.finalizedEmptyTurnId,
+      updatedAt: Date.now(),
+    };
+    changed = true;
+  }
+
+  if (!changed) return false;
   store.yeaftSessionReplyPreviewByKey = nextMap;
   return true;
 }
@@ -295,8 +951,8 @@ export function clearYeaftSessionReplyPreview(store, catalogKey = null) {
 }
 
 /**
- * Clear pending AskUser previews for an Agent (or all Agents when agentId is falsy)
- * without discarding completed reply previews.
+ * Clear pending AskUser previews and ephemeral in-flight live state for an Agent
+ * (or all Agents when agentId is falsy) without discarding completed reply previews.
  */
 export function clearYeaftAgentAskPreviews(store, agentId = null) {
   const map = store?.yeaftSessionReplyPreviewByKey;
@@ -314,17 +970,48 @@ export function clearYeaftAgentAskPreviews(store, agentId = null) {
       || entry?.askTurnId
       || entry?.inFlight
       || entry?.liveText
-      || entry?.liveTurnId,
+      || entry?.liveTurnId
+      || Object.values(entry?.roots || {}).some((r) => r?.hasLiveExecution),
     );
     if (matchesAgent && hasEphemeralRuntime) {
       changed = true;
-      if (entry.text || entry.finalizedEmptyTurnId) {
+      const roots = cloneRoots(entry.roots);
+      let seq = Number(entry.seq || 0);
+      for (const [rid, root] of Object.entries(roots)) {
+        let rootTouched = false;
+        for (const ex of Object.values(root.executions || {})) {
+          if (ex && ex.state === 'running') {
+            ex.state = 'cancelled';
+            seq += 1;
+            ex.seq = seq;
+            rootTouched = true;
+          }
+        }
+        if (rootTouched) {
+          const summarized = summarizeRoot(root);
+          if (!summarized.hasLiveExecution && !summarized.finalizedText && !summarized.finalizedEmpty) {
+            delete roots[rid];
+          } else {
+            roots[rid] = summarized;
+          }
+        }
+      }
+      const derived = deriveTopLevelFromRoots(roots, entry.text, entry.at, entry.turnId, entry.kind);
+      if (derived.text || derived.finalizedEmptyTurnId || Object.keys(roots).length > 0) {
         nextMap[key] = {
           ...entry,
+          seq,
+          latestRootId: derived.latestRootId,
+          roots,
+          text: derived.text,
+          turnId: derived.turnId,
+          rootId: derived.rootId,
+          at: derived.at,
           liveText: '',
           liveAt: 0,
           liveTurnId: null,
           inFlight: false,
+          finalizedEmptyTurnId: derived.finalizedEmptyTurnId,
           askQuestion: '',
           askRequestId: null,
           askTurnId: null,

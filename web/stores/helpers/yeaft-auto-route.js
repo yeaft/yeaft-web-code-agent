@@ -235,21 +235,20 @@ export function handleYeaftSessionRouted(store, msg, sessionIdentityKeyFn) {
 
   store.yeaftLastAutoRouteResult = result;
 
-  if (result.ok && agentId && sessionId && !result.answeredAskUser) {
-    const sentAt = entry?.createdAt || 0;
-    const beganTurn = store.recordYeaftSessionPreview?.(sessionId, agentId, {
-      beginTurn: true,
-      at: sentAt || result.at,
-      onlyIfNoUpdateSince: sentAt,
-    });
-    if (beganTurn) {
-      store.markYeaftSessionRead?.(sessionId, agentId);
-    }
-  }
+  // Unmatched (expired / duplicate) receipts must be side-effect-free for
+  // preview, processing, and unread state.
+  if (!entry) return false;
 
   // New Agents send authoritative turn events before the receipt. Do not
-  // re-mark a turn as processing if it already completed before the receipt.
+  // re-mark a turn as processing or begin a stale optimistic preview if
+  // authoritative delivery metadata is present or post-send events already landed.
   if (result.ok && !result.delivery && agentId && sessionId && !result.answeredAskUser) {
+    store.recordYeaftSessionPreview?.(sessionId, agentId, {
+      beginTurn: true,
+      rootId: entry.clientMessageId || null,
+      at: entry.createdAt || result.at,
+      onlyIfNoUpdateSince: entry.createdAt || 0,
+    });
     const key = typeof sessionIdentityKeyFn === 'function'
       ? sessionIdentityKeyFn(agentId, sessionId)
       : `${agentId}\u001f${sessionId}`;
@@ -261,11 +260,8 @@ export function handleYeaftSessionRouted(store, msg, sessionIdentityKeyFn) {
     }
   }
 
-  if (entry) {
-    finalizePending(store, entry, result);
-    return true;
-  }
-  return false;
+  finalizePending(store, entry, result);
+  return true;
 }
 
 export function handleYeaftAutoRouteError(store, msg) {

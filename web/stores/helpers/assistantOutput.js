@@ -9,16 +9,23 @@ import { isQueryExecutionSettled } from './query-progress.js';
 import { markTurnResponseKinds } from '../../utils/turn-response.js';
 import { extractLatestAssistantPreview } from './yeaft-reply-preview.js';
 
-function syncLiveReplyPreview(store, conversationId, frameAgentId, sessionId, turnId, explicitText = '', ts = null, { live = true } = {}) {
+function syncLiveReplyPreview(store, conversationId, frameAgentId, sessionId, turnId, explicitText = '', ts = null, {
+  live = true,
+  fromResult = false,
+  rootId = null,
+} = {}) {
   if (!store?.recordYeaftSessionPreview || !frameAgentId || !sessionId) return;
   const scopedTurnId = turnId || null;
+  const scopedRootId = rootId || store._currentYeaftUserTurnId || null;
   if (explicitText) {
     store.recordYeaftSessionPreview(sessionId, frameAgentId, {
       text: explicitText,
       at: ts || Date.now(),
       kind: 'assistant',
       turnId: scopedTurnId,
+      rootId: scopedRootId,
       live,
+      fromResult,
     });
     return;
   }
@@ -29,7 +36,9 @@ function syncLiveReplyPreview(store, conversationId, frameAgentId, sessionId, tu
       at: latest.at || ts || Date.now(),
       kind: 'assistant',
       turnId: latest.turnId || scopedTurnId,
+      rootId: scopedRootId,
       live,
+      fromResult,
     });
   }
 }
@@ -375,13 +384,15 @@ export function handleAssistantOutputFrame(store, conversationId, data, frameAge
         });
         promoteOrInvalidateOutline(store, persistedUserRow, frameAgentId);
         if (!data.history && !data.isHistory && frameAgentId && sessionId) {
-          // A new live user message starts a new turn; clear stale prior-turn unread
-          // and reset in-flight live reply state so the previous turn's response is
-          // never displayed as this turn's AI reply while the model is still working.
-          store.markYeaftSessionRead?.(sessionId, frameAgentId);
+          // A new live user message opens (or appends to) its user-turn root in the
+          // Cosmos preview cache without consuming Classic unread state.
           store.recordYeaftSessionPreview?.(sessionId, frameAgentId, {
             beginTurn: true,
+            rootId: userTurnId || echoClientMsgId || persistedUserRow?.id || null,
+            aliasRootId: echoClientMsgId || null,
+            relation: turnRelation || null,
             at: data.ts || Date.now(),
+            preserveLiveIfInFlight: turnRelation === 'supplement',
           });
         }
       } else if (echoClientMsgId) {
@@ -435,6 +446,7 @@ export function handleAssistantOutputFrame(store, conversationId, data, frameAge
     // and covers missed or reordered metadata events. Keep the idle check
     // session-scoped so sibling VP turns in the same session remain running.
     let completedYeaftSessionId = store._currentYeaftSessionId || null;
+    let completedUserTurnId = store._currentYeaftUserTurnId || null;
     if (store._currentYeaftTurnId) {
       const activeTurn = Object.entries(store.activeVpTurns || {}).find(([, row]) => (
         (row?.turnId === store._currentYeaftTurnId
@@ -444,6 +456,7 @@ export function handleAssistantOutputFrame(store, conversationId, data, frameAge
       if (activeTurn) {
         const [, turn] = activeTurn;
         if (!completedYeaftSessionId && turn?.sessionId) completedYeaftSessionId = turn.sessionId;
+        if (!completedUserTurnId && turn?.userTurnId) completedUserTurnId = turn.userTurnId;
       }
     }
     if (completedYeaftSessionId && store._currentYeaftTurnId) {
@@ -499,9 +512,7 @@ export function handleAssistantOutputFrame(store, conversationId, data, frameAge
       }
     }
     store.finishStreamingForConversation(conversationId);
-    if (!data.history && !data.isHistory && completedYeaftSessionId && !data.stopped && !data.is_error) {
-      syncLiveReplyPreview(store, conversationId, frameAgentId || store._currentYeaftAgentId, completedYeaftSessionId, store._currentYeaftTurnId, '', data.ts || Date.now(), { live: false });
-    }
+    let resolvedResultReason = data.stopped ? 'aborted' : (data.is_error ? 'errored' : 'end_turn');
     if (completedYeaftSessionId && store._currentYeaftTurnId) {
       const settled = msgs.find(row => row.type === 'assistant' && row.turnId === store._currentYeaftTurnId
         && (row.sessionId ?? row.groupId) === completedYeaftSessionId
@@ -515,6 +526,7 @@ export function handleAssistantOutputFrame(store, conversationId, data, frameAge
           : status.state === 'error')
       ));
       const reason = data.stopped ? 'aborted' : data.is_error || brokerError ? 'errored' : settled?.turnEndReason || 'end_turn';
+      resolvedResultReason = reason;
       const event = { sessionId: completedYeaftSessionId, vpId: store._currentYeaftVpId,
         turnId: store._currentYeaftTurnId, reason };
       markTurnResponseKinds(msgs, event);
@@ -529,6 +541,23 @@ export function handleAssistantOutputFrame(store, conversationId, data, frameAge
         row.turnEndReason = reason;
         row.turnEndAt = Date.now();
         if (row.turnEndDetail?.code === 'runtime_reconciled') delete row.turnEndDetail;
+      }
+    }
+    if (!data.history && !data.isHistory && completedYeaftSessionId) {
+      const resultAgentId = frameAgentId || store._currentYeaftAgentId;
+      if (resolvedResultReason === 'end_turn') {
+        syncLiveReplyPreview(store, conversationId, resultAgentId, completedYeaftSessionId, store._currentYeaftTurnId, '', data.ts || Date.now(), {
+          live: false,
+          fromResult: true,
+          rootId: completedUserTurnId,
+        });
+      } else if (resultAgentId && store._currentYeaftTurnId) {
+        store.recordYeaftSessionPreview?.(completedYeaftSessionId, resultAgentId, {
+          cancelTurn: true,
+          turnId: store._currentYeaftTurnId,
+          rootId: completedUserTurnId,
+          reason: resolvedResultReason,
+        });
       }
     }
     const outlinePromoted = frameAgentId && store.promoteCompletedYeaftHistoryOutline?.(
