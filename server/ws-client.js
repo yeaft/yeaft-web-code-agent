@@ -17,7 +17,6 @@ import {
   BROWSER_RUNTIME_PROTOCOL,
   BROWSER_RUNTIME_SETUP_PROTOCOL,
   WORKBENCH_ROUTE_PROTOCOL,
-  WORK_CENTER_WORKBENCH_PROTOCOL,
 } from './client-protocol.js';
 import {
   clearWorkbenchCorrelationsForClient,
@@ -35,10 +34,9 @@ import { clearSessionTurnRetriesForClient } from './handlers/session-turn-retry.
 import { handleClientWorkbench } from './handlers/client-workbench.js';
 import { CLIENT_BROWSER_TYPES, handleClientBrowser } from './handlers/client-browser.js';
 import { handleClientMisc } from './handlers/client-misc.js';
-import { clearWorkCenterRequestsForClient, handleClientWorkCenter } from './handlers/client-work-center.js';
+import { rejectRetiredFeatureRequest } from './retired-features.js';
 import { clearSessionDiscoveryRequests, handleClientSessionDiscovery } from './handlers/session-discovery.js';
 import { clearCreationRequestsForClient, handleClientCreation } from './handlers/client-creation.js';
-import { clearPersonRequestsForClient, handleClientPerson } from './handlers/client-person.js';
 import { recordPerfTraceEvent } from './perf-trace.js';
 import { markWebHeartbeatPong } from './heartbeat-policy.js';
 
@@ -138,7 +136,6 @@ export function handleWebConnection(ws, url, req = {}) {
     encryptOutbound: true,
     // Explicit protocols have no omission-based downgrade for security fields.
     workbenchRouteProtocol: 0,
-    workCenterWorkbenchProtocol: 0,
     browserRuntimeProtocol: 0,
     browserRuntimeSetupProtocol: 0,
   });
@@ -168,7 +165,6 @@ export function handleWebConnection(ws, url, req = {}) {
     scheduledTaskReceiptProtocol: 1,
     scheduledTaskReceipts: scheduledTaskReceiptDb.getByUser(userId),
     workbenchRouteProtocol: WORKBENCH_ROUTE_PROTOCOL,
-    workCenterWorkbenchProtocol: WORK_CENTER_WORKBENCH_PROTOCOL,
     browserRuntimeProtocol: BROWSER_RUNTIME_PROTOCOL,
     browserRuntimeSetupProtocol: BROWSER_RUNTIME_SETUP_PROTOCOL,
     browserRuntimeEnabled: CONFIG.browserRuntime.enabled,
@@ -221,9 +217,7 @@ export function handleWebConnection(ws, url, req = {}) {
         }
       }
     }
-    clearWorkCenterRequestsForClient(client);
     clearSessionDiscoveryRequests(client);
-    clearPersonRequestsForClient(client);
     clearCreationRequestsForClient(client);
     clearAgentSettingsRequestsForClient(clientId);
     clearYeaftDebugRequestsForClient(clientId);
@@ -293,7 +287,6 @@ async function handleWebMessage(clientId, msg) {
       type: 'client_hello_ack',
       sessionDiscoverySupported: true,
       workbenchRouteProtocol: client.workbenchRouteProtocol,
-      workCenterWorkbenchProtocol: client.workCenterWorkbenchProtocol,
       browserRuntimeProtocol: client.browserRuntimeProtocol,
       browserRuntimeSetupProtocol: client.browserRuntimeSetupProtocol,
       browserRuntimeEnabled: CONFIG.browserRuntime.enabled,
@@ -322,11 +315,10 @@ async function handleWebMessage(clientId, msg) {
   };
 
   // Dispatch to handler sub-modules
+  if (await rejectRetiredFeatureRequest(client, msg, sendToWebClient)) return;
   if (await handleClientConversation(clientId, client, msg, checkAgentAccess)) return;
   if (await handleClientBrowser(client, msg, checkAgentAccess)) return;
   if (await handleClientWorkbench(clientId, client, msg, checkAgentAccess)) return;
-  if (await handleClientWorkCenter(client, msg, checkAgentAccess)) return;
-  if (await handleClientPerson(client, msg)) return;
   if (await handleClientCreation(client, msg)) return;
   if (await handleClientSessionDiscovery(client, msg)) return;
   if (await handleClientMisc(clientId, client, msg, checkAgentAccess)) return;

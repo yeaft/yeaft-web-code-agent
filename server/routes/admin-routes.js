@@ -1,4 +1,5 @@
 import { WebSocket } from 'ws';
+import { withoutRetiredCapabilities } from '../retired-features.js';
 import { agentInventoryDb, userDb, userStatsDb } from '../database.js';
 import { agents, webClients, userStatsDeltas } from '../context.js';
 
@@ -207,7 +208,7 @@ export function registerAdminRoutes(app, { requireAuth, requireAdmin }) {
         platform: agent.platform || null,
         ownerId: agent.ownerId || null,
         ownerUsername: agent.ownerUsername || null,
-        capabilities: agent.capabilities || [],
+        capabilities: withoutRetiredCapabilities(agent.capabilities || []),
         capabilityMetadataProvided: agent.capabilityMetadataProvided === true,
         conversationCount: agent.conversations?.size || 0,
         lastSeenAt: agent.lastSeenAt || null,
@@ -222,6 +223,7 @@ export function registerAdminRoutes(app, { requireAuth, requireAdmin }) {
         if (!live) {
           return {
             ...record,
+            capabilities: withoutRetiredCapabilities(record.capabilities || []),
             ownerUsername: record.ownerId ? (ownerUsernames.get(record.ownerId) || null) : null,
             online: false,
             status: 'offline',

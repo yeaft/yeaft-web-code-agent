@@ -1,4 +1,5 @@
 import { WebSocket } from 'ws';
+import { withoutRetiredCapabilities } from './retired-features.js';
 import { CONFIG } from './config.js';
 import { isClientSessionValid } from './auth/client-session.js';
 import { encrypt, decrypt, isEncrypted, encodeKey } from './encryption.js';
@@ -171,7 +172,7 @@ export async function broadcastAgentList() {
           online: agent.ws.readyState === WebSocket.OPEN,
           status: agent.status || 'ready',
           latency: agent.latency || null,
-          capabilities: agent.capabilities || ['terminal', 'file_editor', 'background_tasks'],
+          capabilities: withoutRetiredCapabilities(agent.capabilities || ['terminal', 'file_editor', 'background_tasks']),
           ...(agent.capabilityMetadataProvided === true ? { capabilityMetadataProvided: true } : {}),
           version: agent.version || null,
           upgradeAvailable: agent.upgradeAvailable || null,

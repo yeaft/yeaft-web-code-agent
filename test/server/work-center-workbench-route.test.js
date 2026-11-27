@@ -4,7 +4,7 @@ import {
   __testResetWorkItemWorkspaces,
   rememberWorkItemWorkspace,
 } from '../../server/work-center-workspace-cache.js';
-import { resolveWorkbenchRequest } from '../../server/workbench-route.js';
+import { currentWorkbenchWorkspaceGeneration, resolveWorkbenchRequest } from '../../server/workbench-route.js';
 
 const capabilities = [
   'workbench_session_routes',
@@ -22,13 +22,13 @@ beforeEach(() => {
   });
 });
 
-describe('Work Center Workbench route', () => {
-  it('does not let a second user reuse cached WorkItem ownership', () => {
+describe('Retired Work Center Workbench route', () => {
+  it('rejects legacy routes even for the original owner and terminal cleanup', () => {
     const route = { runtimeProvider: 'work-center', agentId: 'agent-1', workItemId: 'work-1' };
-    expect(resolveWorkbenchRequest(
-      { userId: 'user-2', role: 'pro', workbenchRouteProtocol: 1, workCenterWorkbenchProtocol: 1 },
-      { agentId: 'agent-1', workbenchRoute: route },
-      'agent-1',
-    )).toBeNull();
+    const client = { userId: 'user-1', role: 'pro', workbenchRouteProtocol: 1, workCenterWorkbenchProtocol: 1 };
+    const message = { agentId: 'agent-1', workbenchRoute: route };
+    expect(resolveWorkbenchRequest(client, message, 'agent-1')).toBeNull();
+    expect(resolveWorkbenchRequest(client, message, 'agent-1', { allowMissingSession: true })).toBeNull();
+    expect(currentWorkbenchWorkspaceGeneration({ ...client, route })).toBeNull();
   });
 });

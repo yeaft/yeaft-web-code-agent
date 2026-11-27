@@ -8,7 +8,7 @@
 
 [English](README.md) | [中文](README.zh-CN.md) | [文档站](https://yeaft.github.io/yeaft-web-code-agent/zh-CN/)
 
-Yeaft 是运行在自有机器上的代码 Agent 的 Web 控制面。同一个浏览器可以连接多台 Agent，打开 Claude Code 或 GitHub Copilot CLI 对话，也可以运行 Yeaft 原生多 provider 引擎，使用持久 Session、可切换场景、有界历史、Project 和 Work Center。
+Yeaft 是运行在自有机器上的代码 Agent 的 Web 控制面。同一个浏览器可以连接多台 Agent，打开 Claude Code 或 GitHub Copilot CLI 对话，也可以运行 Yeaft 原生多 provider 引擎，使用持久 Session、可切换场景、有界历史、和 Project。
 
 **在线体验：** [cc.yeaft.com](https://cc.yeaft.com)
 
@@ -16,11 +16,10 @@ Yeaft 是运行在自有机器上的代码 Agent 的 Web 控制面。同一个�
 
 ## 为什么使用 Yeaft
 
-- **让执行靠近代码。** Shell、文件、Git、provider、凭据、Session 数据和 Work Center 状态都留在已连接的 Agent 机器。Server 负责用户认证和 Browser ↔ Agent 中继。
+- **让执行靠近代码。** Shell、文件、Git、provider、凭据、以及 Session 数据都留在已连接的 Agent 机器。Server 负责用户认证和 Browser ↔ Agent 中继。
 - **每个任务选合适的 runtime。** Claude Code CLI、基于 ACP 的 GitHub Copilot CLI 与 Yeaft 原生引擎共用一套 Web UI，但文档不会假装它们行为完全相同。
 - **同一个 Session，同一份对话。** 场景决定本轮的工作准则，不切换身份、不分割历史；独立轮次可以并行执行。
 - **有意识地携带上下文。** 原生 Session 使用自身持久 turn 的有界窗口；Project instruction 独立注入，不自动注入兄弟 Session transcript。
-- **把长任务移出单次 chat turn。** Work Center 将目标持久化为 WorkItem，由 AI 规划经过校验的 Action graph，分配 VP、记录 Run 和工具证据，并能在浏览器断开或 Agent 重启后继续恢复。
 
 ## 产品模型
 
@@ -30,7 +29,6 @@ Yeaft 是运行在自有机器上的代码 Agent 的 Web 控制面。同一个�
 | **Session** | 原生 Yeaft 的持久对话单元，包含一个消息时间线、场景、工作目录、模型 override 和公告。 |
 | **VP（Virtual Person）** | 旧 Session 和已有任务流程的兼容角色；新建对话不需要选 VP。 |
 | **Project** | 浏览器中对原生 Session 的分组。Project instruction 作用于成员 Session，但不会合并或自动注入兄弟 Session transcript。 |
-| **Work Center** | Agent 级持久任务系统。WorkItem 包含合同和对话；规划出的 Action 通过有 fence 的 Run 执行，记录状态、证据、重试、人工输入和 review 结论。 |
 
 内部 wire type 和存储路径仍有 `group`、`unify_*`、`claude_output` 等历史名字用于兼容；它们不是当前产品术语。
 
@@ -40,7 +38,7 @@ Yeaft 是运行在自有机器上的代码 Agent 的 Web 控制面。同一个�
 | --- | --- | --- |
 | **Claude Code** | 每个 conversation 一个 Claude Code CLI 进程；支持 Claude Code 工具、skills、MCP、compact/clear、sub-agent event 和 resume | 本机必须安装并登录 Claude Code CLI |
 | **GitHub Copilot** | 每个 conversation 一个 `copilot --acp` 进程；使用 Copilot model catalog 和明确的工具权限确认 | 本机必须安装 Copilot CLI，并拥有可用的 GitHub Copilot 账号 |
-| **Yeaft Code Agent** | `yeaft-agent` 内的原生引擎；会话场景、33 个内置工具、多 provider 路由、有界 Session history、Project、sub-agent 和 Work Center 交接 | 不模拟 Claude Code 或 Copilot CLI 的所有命令和行为 |
+| **Yeaft Code Agent** | `yeaft-agent` 内的原生引擎；会话场景、内置工具、多 provider 路由、有界 Session history、Project和 sub-agent | 不模拟 Claude Code 或 Copilot CLI 的所有命令和行为 |
 
 Web UI 还提供终端、Git 状态与 diff、文件浏览/编辑、端口代理、CLI conversation 分屏、Claude Code conversation 的 Expert Panel、用量管理、light/dark theme，以及中英文切换。
 
@@ -70,37 +68,8 @@ Markdown 消息通过本地 KaTeX 渲染 LaTeX 公式：行内使用 `$E=mc^2$` 
 - 原生 adapter 支持 Anthropic Messages、OpenAI Responses 和 Google Gemini 原生 GenerateContent 三种协议（Gemini 不走 OpenAI 兼容接口）。
 - Google Gemini 快速配置：先在当前 shell 设置 `GEMINI_API_KEY`，再运行 `yeaft-agent llm use gemini --api-key-env GEMINI_API_KEY --model gemini-4-hydrogen --fast gemini-4-carbon`。密钥写入所选实例配置的 `apiKey`。界面选择 **Google Gemini（原生 API）**，测试连接只读取模型目录，不调用生成接口。
 - Provider 可以使用静态 API key，也可以使用 GitHub Copilot 动态凭据。支持 per-model protocol、context window、output limit 和 reasoning effort 元数据。
-- 当前原生 registry 提供 **33 个内置工具**，覆盖文件/patch、shell 与后台任务、Git worktree、搜索、Web、图片、notebook、计划、持久 WorkItem 创建，以及 sub-agent/VP 编排；Skills 和 MCP 可以继续扩展工具表。
+- 当前原生 registry 提供 **内置工具**，覆盖文件/patch、shell 与后台任务、Git worktree、搜索、Web、图片、notebook、计划，以及 sub-agent/VP 编排；Skills 和 MCP 可以继续扩展工具表。
 - Provider context 使用当前 Session 持久 turn 的有界临时窗口。Turn 后 compact 是独立的 history-window 优化，不会重新启用 Dream 或 H2-AMS memory。
-
-### 数字人（实验性）
-
-侧栏的**数字人**入口打开独立的 Message／输入页面，提供**想**、显式**遐想**、暂停／继续、取消和可分页查看的应用层 **Trace**。没有 Session 列表，不创建隐藏 Session 或 WorkItem。**执行中仍可连续发送消息和附件**：相关补充交给当前执行，不同问题可分别回应并显示关联消息；已收到、已交给执行和停止后保留的消息有不同状态。暂停时发送不会自动继续，取消也不会重放未处理消息。Trace 展示显式输入、输出和修订，不是 provider 的隐藏推理。回复增长时不追底，可自由阅读历史或长回复。详见[执行中收信与回答归属](docs/design/person-live-input.md)。
-
-**输出**提供对话旁的轻量只读预览：查看明确交付的 Markdown、图片、文本／代码和隔离静态 HTML，下载 PDF 阅读，也可预览网页链接并随时在外部打开。阅读器只有已打开的文件／网页标签，不混入思考、任务或记忆标签，交付历史按需浏览。面板可调宽、全屏和关闭，不删除结果或停止任务；窄屏采用全屏预览。文件通过 `Output.publish` 显式交付，按 owner 保存在 SQLite 快照中，源文件变更或重启后仍可查看。此处没有目录树、编辑器、Terminal 或 Git。详见[输出预览与交付边界](docs/person-outputs.md)。
-
-建议在**新建隔离 Agent 实例**中体验：SQLite 是唯一存储后端，无需另行部署数据库服务。`<yeaftDir>/person/person.db` 是 SQLite 认知权威，保存消息、概念、活动、状态和 Trace；独立的 `<yeaftDir>/person/recall.db` 是可重建检索索引，不是第二套记忆真源。Worker 由同一 Agent 管理生命周期，退出停止计算，但持久记忆保留。数据按认证 owner 与部署 namespace 隔离；场景是同一权威内的视图／范围，不是分别建库。使用 `yeaft-agent llm setup --config <path>` 配置实例 `<yeaftDir>/config.json` 中的原生 API 模型；凭据不要放进浏览器或聊天。
-
-SQLite 上的 Recall 结合中英文关键词 FTS5、本地向量余弦排序与 RRF。默认 embedding 模型是 **multilingual-e5-small**，通过 `@huggingface/transformers` 在 CPU 上运行固定版本 q8 ONNX，缓存于 `<yeaftDir>/person/models`。仅首次显式、非空 Recall 才可能下载模型；打开页面、普通启动和空 Recall 均不下载。`YEAFT_PERSON_EMBEDDING=off` 禁用 embedding；`YEAFT_PERSON_EMBEDDING_DOWNLOAD=0` 禁止下载，已有缓存模型仍可运行。Embedding 推理和查询留在本机；模型文件下载会连接 Hugging Face，认知 LLM 仍使用配置的 provider，可能发送到远端。模型／索引不可用时明确返回降级元数据，不伪称语义检索。向量检索是有界精确扫描，不是 ANN，也不承诺百万条规模性能；Trace 不做向量索引。 完整 FTS5／混合召回推荐 Node 24；缺少 FTS5 的早期受支持 Node 22 仍可保存权威数据及字面召回，明确返回 `FTS_UNAVAILABLE`，不启动 embedding。模型文件按大小和 SHA-256 校验后原子发布，下载中断可在下次显式 Recall 修复；强制退出可能留下被忽略的 `.partial` 文件。
-
-**存储仅属于当前实例。** 服务始终使用实例 `yeaftDir` 下的 SQLite，不再支持存储后端选择或外部数据库配置。旧外部数据库数据不会被迁移或删除；新建的本地 SQLite 不代表迁移完成。`person.db` 需要一致性备份，包含尚未 checkpoint 的 WAL 写入，不能只复制活动的主文件。已有服务的环境变更需要明确授权后重启，数字人功能不会自动重启它。
-
-功能仍**仅手动触发**：尚无空闲定时器、事件 Connector、VP 委派和 Rust 桌面身体。默认能力目录已接入 **14 项真实 Session 原生工具**，支持文件读写编辑、查找、目录、补丁、Git 只读检查、前台 Bash、网页搜索／读取、现有 Skill 库与 Notebook。复用原生 schema 和执行器，在 Agent 配置的工作目录执行；它们是宿主操作，**不是文件或 Shell 沙箱**。工具通过已有有界能力分层按需准备，不将所有完整 schema 常驻 prompt；不注册 Session TaskManager、后台 Bash 或 Session 专属编排。取消会等待本机执行收尾，但不撤销已完成的副作用。能力目录还包含四个认知方法与基础 `Capability.create`：可编写参数化 JSON→JSON JavaScript，在受限 QuickJS/WASM worker 中实际运行测试，通过后原子发布私有 `Script.*` 版本，重启后仍能发现并复用。测试失败不发布；生成脚本仍不获得文件、网络、Shell 或凭据权限。已发布版本独立于后续认知提交持久保留；自写测试通过不证明普遍正确。每次活动默认最多 16 次模型调用／120 秒；数字人可从最多八个已配置原生模型中选择后续模型。动态 effort 需 `YEAFT_THINKING_V1=1` 及模型支持的元数据。持久记忆与有界模型 context 各有归属。事务、检索及剩余工作见[设计及实现边界](docs/notes/2026-09-24-digital-person-design.md#本轮实现边界显式认知首版)。
-
-### Work Center
-
-![Work Center 中的持久 WorkItem、主对话与 Action graph](docs/images/zh-CN/work-center.png)
-
-Work Center 用来处理必须跨越一次交互 turn 的目标。当前实现包括：
-
-- 持久 WorkItem 合同：`goal`、acceptance criteria、工作目录、attachments 和 memory reuse policy；附件存储支持 Linux、macOS 和 Windows，并在 Agent 本地执行类型、大小、归属、路径、符号链接和内容完整性校验；
-- WorkItem 级 Coordinator conversation，用于查询状态、追加指导、修改合同和 replan；
-- AI 规划并校验 Action graph：依赖关系、唯一 final acceptance gate，以及配置允许范围内的并发 Action；
-- auto/pool/fixed VP 分配、model/effort policy、review 角色隔离、retry/waiting/failed 状态和明确的人工恢复输入；
-- shared、read-only、isolated-write、integrate workspace policy，有 fence 的 Run，以及可保留的工具证据；
-- Agent-local SQLite 持久化与重启恢复。WorkItem 会关联来源 Session，但不存放在 Session 内部。
-
-Work Center **不等于**任意无人值守部署。外部副作用仍受所选 Agent/VP 可用工具、仓库规则、凭据和交付指令约束。
 
 ## 快速开始
 
@@ -224,13 +193,12 @@ Agent（运行在代码所在机器的 Node.js）
         ├── 原生 Yeaft engine
         │   ├── Session + VP 编排
         │   ├── Anthropic / OpenAI Responses / Gemini adapter
-        │   ├── 33 个内置工具 + Skills + MCP
-        │   ├── bounded Session history + post-turn compact
-        │   └── Work Center（WorkItem → Action → Run）
+        │   ├── 内置工具 + Skills + MCP
+        │   └── bounded Session history + post-turn compact
         └── Workbench（terminal、Git、files、port proxy）
 ```
 
-Server 拥有认证、用户可见的 catalog metadata 和 relay state。Agent 拥有代码执行与 Agent-local Yeaft runtime data。Session 的 `workDir` 只选择 project context，不会变成 Session transcript、memory、tasks 或 Work Center records 的存储根。
+Server 拥有认证、用户可见的 catalog metadata 和 relay state。Agent 拥有代码执行与 Agent-local Yeaft runtime data。Session 的 `workDir` 只选择 project context，不会变成 Session transcript、memory 或 tasks 的存储根。
 
 ## 配置与部署
 
@@ -244,7 +212,6 @@ Server 拥有认证、用户可见的 catalog metadata 和 relay state。Agent �
 
 - [快速开始](docs/zh-CN/guide/getting-started.md)
 - [Yeaft Session 与 Project](docs/zh-CN/guide/user/yeaft-session.md)
-- [Work Center](docs/zh-CN/guide/user/work-center.md)
 - [Provider 与 model 配置](docs/zh-CN/guide/yeaft-config.md)
 - [架构](docs/zh-CN/guide/tech/architecture.md)
 - [安全](docs/zh-CN/guide/security.md)

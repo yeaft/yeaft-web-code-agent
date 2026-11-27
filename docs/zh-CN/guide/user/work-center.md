@@ -1,5 +1,7 @@
 # Work Center
 
+> **已停用。** 下文仅用于查阅旧版本；当前 Yeaft 不再提供 Work Center 入口或运行任务。已有数据保留。
+
 Work Center 是 Yeaft 的 Agent-level durable task system。当目标必须跨越一次交互 turn、需要角色隔离或审查、可能等待人工输入，或者需要在浏览器断开/Agent 重启后恢复时，应使用 Work Center。
 
 ![展示 WorkItem conversation 与 Actions 的 Work Center](/images/zh-CN/work-center.png)

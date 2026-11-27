@@ -323,7 +323,7 @@ export default {
                     </button>
                   </div>
                 </div>
-                <div class="sp-row sp-setting-row">
+                <div v-if="chatStore.legacyProductSurfacesEnabled" class="sp-row sp-setting-row">
                   <div class="sp-row-left sp-setting-copy">
                     <span id="general-work-center-label" class="sp-label">{{ $t('settings.general.workCenter') }}</span>
                   </div>

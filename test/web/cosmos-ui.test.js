@@ -85,7 +85,7 @@ import { sidebarSessionCatalogRows } from '../../web/stores/helpers/sidebar-sess
 import { clampFixedMenuCoordinates } from '../../web/utils/fixed-menu-position.js';
 import { bakeProceduralWebGLTextures } from '../../web/cosmos/gpu-texture-baker.js';
 import { createCosmosEngine } from '../../web/cosmos/gl-engine.js';
-import { computeSolarProjectionLayout } from '../../web/cosmos/stage-loop.js';
+import { computeSolarProjectionLayout, clampCamPan, CAM_PAN_MAX, stepCosmosFrame } from '../../web/cosmos/stage-loop.js';
 import {
   COSMOS_TEXTURE_MANIFEST,
   requestCosmosTextureGroup,
@@ -93,6 +93,10 @@ import {
   getLoadedCosmosImage,
   __resetCosmosTextureCacheForTests,
 } from '../../web/cosmos/texture-loader.js';
+import {
+  computeSessionSatellites,
+  drawSessionSatellites,
+} from '../../web/cosmos/session-satellites.js';
 
 function createMemoryStorage() {
   const map = new Map();
@@ -3482,20 +3486,20 @@ describe('Cosmos Interstellar Signal Stream (Unified Top-Right Replies, Schedule
   it('renders frameless Signal Stream cards with 3-card cap, drawer-docked popover, mobile micro-banner, and CosmosPage stage subtraction', async () => {
     const { default: CosmosSignalStream } = await import('../../web/components/cosmos/CosmosSignalStream.js');
     const items = [
-      { signalKey: 'a:1', kind: 'waiting', agentId: 'a', agentName: 'Earth-Mac', planetId: 'earth', sessionId: '1', sessionTitle: 'Deploy Gate', preview: 'Proceed with rollout?', timeLabel: 'now', dismissible: false, scheduledTask: null, isError: false },
-      { signalKey: 'b:2', kind: 'unread', agentId: 'b', agentName: 'Saturn-Srv', planetId: 'saturn', sessionId: '2', sessionTitle: 'Test Run', preview: 'All 379 tests passed cleanly.', timeLabel: '1m', dismissible: true, scheduledTask: null, isError: false },
-      { signalKey: 'b:3', kind: 'unread', agentId: 'b', agentName: 'Saturn-Srv', planetId: 'saturn', sessionId: '3', sessionTitle: 'Nightly Task', preview: 'Backup completed.', timeLabel: '2m', dismissible: true, scheduledTask: { id: 't1', status: 'completed' }, isError: false },
-      { signalKey: 'a:4', kind: 'running', agentId: 'a', agentName: 'Earth-Mac', planetId: 'earth', sessionId: '4', sessionTitle: 'Index Build', preview: 'Scanning workspace…', timeLabel: 'now', dismissible: false, scheduledTask: null, isError: false },
+      { signalKey: 'a:1', kind: 'waiting', agentId: 'a', agentName: 'Earth-Mac', planetId: 'earth', sessionId: '1', sessionTitle: 'Deploy Gate', preview: 'Proceed with rollout?', timeLabel: 'now', dismissible: true, stateSignature: 'waiting\u001fask-1', scheduledTask: null, isError: false },
+      { signalKey: 'b:2', kind: 'unread', agentId: 'b', agentName: 'Saturn-Srv', planetId: 'saturn', sessionId: '2', sessionTitle: 'Test Run', preview: 'All 379 tests passed cleanly.', timeLabel: '1m', dismissible: true, stateSignature: 'unread\u001f2000\u001f', scheduledTask: null, isError: false },
+      { signalKey: 'b:3', kind: 'unread', agentId: 'b', agentName: 'Saturn-Srv', planetId: 'saturn', sessionId: '3', sessionTitle: 'Nightly Task', preview: 'Backup completed.', timeLabel: '2m', dismissible: true, stateSignature: 'unread\u001f\u001ft1:completed', scheduledTask: { id: 't1', status: 'completed' }, isError: false },
+      { signalKey: 'a:4', kind: 'running', agentId: 'a', agentName: 'Earth-Mac', planetId: 'earth', sessionId: '4', sessionTitle: 'Index Build', preview: 'Scanning workspace…', timeLabel: 'now', dismissible: true, stateSignature: 'running\u001f', scheduledTask: null, isError: false },
     ];
 
     wrapper = mount(CosmosSignalStream, {
+      attachTo: document.body,
       props: {
         items,
         waitingCount: 1,
         unreadCount: 2,
         runningCount: 1,
         badgeCount: 3,
-        dismissibleCount: 2,
         drawerOpen: false,
         isCompact: false,
         previewMode: '2',
@@ -3504,17 +3508,48 @@ describe('Cosmos Interstellar Signal Stream (Unified Top-Right Replies, Schedule
       global: { config: { globalProperties: { $t: (k) => k } } },
     });
 
-    // 1. Desktop free stage caps at 3 cards, never nests buttons, emits dismiss & mark-all-read
+    // 1. Desktop free stage caps at 3 cards, never nests buttons, renders × dismiss on EVERY card (waiting/unread/running)
+    //    and shows the folded stacked-card peek bar (.cosmos-signal-deck-peek) with no expanded top header yet.
     expect(wrapper.findAll('.cosmos-signal-stream .cosmos-signal-card')).toHaveLength(3);
+    expect(wrapper.findAll('.cosmos-signal-stream .cosmos-signal-ack')).toHaveLength(3);
+    expect(wrapper.find('.cosmos-signal-deck-peek').exists()).toBe(true);
+    expect(wrapper.find('.cosmos-signal-deck-head').exists()).toBe(false);
+    expect(wrapper.find('.cosmos-signal-quiet-row').exists()).toBe(false);
     expect(wrapper.findAll('button button')).toHaveLength(0);
-    await wrapper.find('.cosmos-signal-ack').trigger('click');
-    expect(wrapper.emitted('dismiss-signal')?.[0]?.[0]?.signalKey).toBe('b:2');
 
-    // Expand shows all 4 cards
-    await wrapper.find('.cosmos-signal-foot-btn:not(.is-mark-all)').trigger('click');
+    // Keyboard dismiss (detail=0) on card #0 skips leaving/dismissed card #0 and focuses adjacent card #1
+    await wrapper.findAll('.cosmos-signal-ack')[0].trigger('click', { detail: 0 });
+    expect(wrapper.emitted('dismiss-signal')?.[0]?.[0]?.signalKey).toBe('a:1');
+    expect(document.activeElement).toBe(wrapper.findAll('.cosmos-signal-card .cosmos-signal-main')[1].element);
+    await wrapper.findAll('.cosmos-signal-ack')[1].trigger('click');
+    expect(wrapper.emitted('dismiss-signal')?.[1]?.[0]?.signalKey).toBe('b:2');
+
+    // Keyboard Expand moves focus to pinned top Collapse button; Collapse moves focus back to Expand peek button
+    await wrapper.find('.cosmos-signal-foot-btn.is-peek-expand').trigger('click', { detail: 0 });
+    expect(wrapper.find('.cosmos-signal-deck-head').exists()).toBe(true);
+    expect(wrapper.find('.cosmos-signal-deck-peek').exists()).toBe(false);
     expect(wrapper.findAll('.cosmos-signal-stream .cosmos-signal-card')).toHaveLength(4);
+    expect(wrapper.findAll('.cosmos-signal-stream .cosmos-signal-ack')).toHaveLength(4);
+    expect(document.activeElement).toBe(wrapper.find('.cosmos-signal-foot-btn.is-toggle').element);
+    await wrapper.findAll('.cosmos-signal-ack')[3].trigger('click');
+    expect(wrapper.emitted('dismiss-signal')?.[2]?.[0]?.signalKey).toBe('a:4');
     await wrapper.find('.cosmos-signal-foot-btn.is-mark-all').trigger('click');
     expect(wrapper.emitted('mark-all-read')).toHaveLength(1);
+    await wrapper.find('.cosmos-signal-foot-btn.is-toggle').trigger('click', { detail: 0 });
+    expect(wrapper.find('.cosmos-signal-deck-peek').exists()).toBe(true);
+    expect(document.activeElement).toBe(wrapper.find('.cosmos-signal-foot-btn.is-peek-expand').element);
+
+    // <=3 cards with >=2 unread shows quiet bare row only; <=1 unread shows zero deck chrome;
+    // keyboard-dismissing the final floating card emits restore-trigger-focus instead of stranding focus on body.
+    await wrapper.setProps({ items: items.slice(0, 3), unreadCount: 2, runningCount: 0 });
+    expect(wrapper.find('.cosmos-signal-deck-peek').exists()).toBe(false);
+    expect(wrapper.find('.cosmos-signal-deck-head').exists()).toBe(false);
+    expect(wrapper.find('.cosmos-signal-quiet-row').exists()).toBe(true);
+    await wrapper.setProps({ items: items.slice(0, 1), unreadCount: 0, waitingCount: 1, badgeCount: 1 });
+    expect(wrapper.find('.cosmos-signal-quiet-row').exists()).toBe(false);
+    await wrapper.find('.cosmos-signal-ack').trigger('click', { detail: 0 });
+    expect(wrapper.emitted('restore-trigger-focus')).toHaveLength(1);
+    await wrapper.setProps({ items, waitingCount: 1, unreadCount: 2, runningCount: 1, badgeCount: 3 });
 
     // 2. Drawer open hides free-floating stream and renders docked popover when opened
     await wrapper.setProps({ drawerOpen: true, popoverOpen: true });
@@ -3650,6 +3685,357 @@ describe('Cosmos Interstellar Signal Stream (Unified Top-Right Replies, Schedule
     wrapper.unmount();
     wrapper = null;
     expect(pageStore.yeaftConversationCovered).toBe(false);
+  });
+
+  it('dismisses any Signal Stream item (waiting/running/unread) until a genuine state change occurs', async () => {
+    const { buildCosmosSignalStream } = await import('../../web/cosmos/signal-stream.js');
+
+    const runtimeStores = new Map();
+    const miniDefineStore = (id, options) => () => {
+      if (runtimeStores.has(id)) return runtimeStores.get(id);
+      const instance = Vue.reactive({ ...(typeof options.state === 'function' ? options.state() : {}) });
+      for (const [name, getter] of Object.entries(options.getters || {})) {
+        Object.defineProperty(instance, name, {
+          enumerable: true,
+          get() { return getter.call(instance, instance); },
+        });
+      }
+      for (const [name, action] of Object.entries(options.actions || {})) {
+        instance[name] = action.bind(instance);
+      }
+      runtimeStores.set(id, instance);
+      return instance;
+    };
+    const stubSessionsStore = { sessionList: [], sessionById: () => null };
+    const stubAuthStore = { userId: 'u-1', authGeneration: 1, skipAuth: false, logout: () => {} };
+    globalThis.Pinia = {
+      defineStore: miniDefineStore,
+      useAuthStore: () => stubAuthStore,
+      useSessionsStore: () => stubSessionsStore,
+    };
+    window.Pinia = globalThis.Pinia;
+    vi.resetModules();
+    const { useAuthStore } = await import('../../web/stores/auth.js');
+    const { useChatStore } = await import('../../web/stores/chat.js');
+    globalThis.Pinia.useAuthStore = useAuthStore;
+    globalThis.Pinia.useChatStore = useChatStore;
+
+    const authStore = useAuthStore();
+    const chatStore = useChatStore();
+    chatStore.sidebarCatalogAuthGeneration = authStore.authGeneration;
+    chatStore.sidebarCatalogOwnerId = authStore.userId || null;
+    chatStore.sessionCatalogProtocolSupported = true;
+    chatStore.yeaftConversationCovered = true;
+    chatStore.currentView = 'yeaft';
+    chatStore.currentAgent = 'ag-1';
+    chatStore.agents = [{ id: 'ag-1', name: 'Earth-Mac', online: true }];
+    chatStore.yeaftSessionAgentById = { 's-run': 'ag-1', 's-wait': 'ag-1', 's-unread': 'ag-1' };
+    chatStore.applySessionCatalogSnapshot([
+      { catalogKey: 'yeaft:ag-1:s-run', runtimeProvider: 'yeaft', routeRef: { runtimeProvider: 'yeaft', agentId: 'ag-1', sessionId: 's-run' }, title: 'Shader Build', availability: 'online', metadataUpdatedAt: new Date(5000).toISOString() },
+      { catalogKey: 'yeaft:ag-1:s-wait', runtimeProvider: 'yeaft', routeRef: { runtimeProvider: 'yeaft', agentId: 'ag-1', sessionId: 's-wait' }, title: 'Deploy Gate', availability: 'online', metadataUpdatedAt: new Date(6000).toISOString() },
+      { catalogKey: 'yeaft:ag-1:s-unread', runtimeProvider: 'yeaft', routeRef: { runtimeProvider: 'yeaft', agentId: 'ag-1', sessionId: 's-unread' }, title: 'Daily Digest', availability: 'online', metadataUpdatedAt: new Date(7000).toISOString() },
+    ], []);
+
+    chatStore.yeaftProcessingSessions = { 'ag-1\u001fs-run': true };
+    chatStore.yeaftUnreadSessionKeys = { 'yeaft:ag-1:s-unread': true };
+    chatStore.recordYeaftSessionPreview('s-wait', 'ag-1', {
+      askQuestion: 'Continue?',
+      askRequestId: 'ask-1',
+      askTurnId: 't-wait-1',
+      at: 6000,
+    });
+    chatStore.recordYeaftSessionPreview('s-unread', 'ag-1', {
+      text: 'Summary ready.',
+      at: 7000,
+    });
+
+    const projectStream = (nowMs = 8000) => {
+      const projected = projectAgentsForCosmos({ chatStore, sessionsStore: { sessionList: [] }, nowMs, isEn: true });
+      return buildCosmosSignalStream({
+        projectedAgents: Object.values(projected),
+        agentToPlanet: { 'ag-1': 'earth' },
+        scheduledTaskNotifications: chatStore.scheduledTaskNotifications,
+        dismissedSignals: chatStore.cosmosDismissedSignalsByKey,
+        nowMs,
+        isEn: true,
+      });
+    };
+
+    const s0 = projectStream(8000);
+    expect(s0.items.map((x) => `${x.kind}:${x.sessionId}`)).toEqual(['waiting:s-wait', 'unread:s-unread', 'running:s-run']);
+    expect(s0.items.every((x) => x.dismissible === true)).toBe(true);
+
+    // 1. Dismiss running item -> stays hidden across streaming preview & clock updates
+    const runItem = s0.items.find((x) => x.sessionId === 's-run');
+    expect(chatStore.dismissCosmosSignal(runItem.signalKey, runItem.stateSignature)).toBe(true);
+    chatStore.recordYeaftSessionPreview('s-run', 'ag-1', { text: 'Compiling chunk 42/100…', at: 8500 });
+    const s1 = projectStream(65000);
+    expect(s1.items.some((x) => x.sessionId === 's-run')).toBe(false);
+    expect(chatStore.pruneCosmosDismissedSignals(s1.rawSignatures)).toBe(false);
+
+    // 2. Running -> waiting (AskUser arrives) immediately resurfaces s-run
+    chatStore.recordYeaftSessionPreview('s-run', 'ag-1', {
+      askQuestion: 'Overwrite shader cache?',
+      askRequestId: 'ask-run-1',
+      askTurnId: 't-run-1',
+      at: 66000,
+    });
+    const s2 = projectStream(66000);
+    const resurfacedWait = s2.items.find((x) => x.sessionId === 's-run');
+    expect(resurfacedWait?.kind).toBe('waiting');
+    expect(resurfacedWait?.preview).toBe('Overwrite shader cache?');
+
+    // 3. Dismiss waiting item (s-wait) -> stays hidden across clock ticks, resurfaces on new askRequestId even with identical text!
+    const waitItem = s2.items.find((x) => x.sessionId === 's-wait');
+    expect(chatStore.dismissCosmosSignal(waitItem.signalKey, waitItem.stateSignature)).toBe(true);
+    expect(projectStream(120000).items.some((x) => x.sessionId === 's-wait')).toBe(false);
+
+    chatStore.recordYeaftSessionPreview('s-wait', 'ag-1', {
+      askQuestion: 'Continue?',
+      askRequestId: 'ask-2',
+      askTurnId: 't-wait-2',
+      at: 121000,
+    });
+    const s3 = projectStream(121000);
+    expect(s3.items.find((x) => x.sessionId === 's-wait')?.kind).toBe('waiting');
+    expect(s3.items.find((x) => x.sessionId === 's-wait')?.askRequestId).toBe('ask-2');
+
+    // 4. Dismiss running s-run again -> finishes cleanly to idle -> starts a NEW run later -> resurfaces!
+    chatStore.recordYeaftSessionPreview('s-run', 'ag-1', { clearAsk: true, askRequestId: 'ask-run-1' });
+    const s4 = projectStream(122000);
+    const runAgain = s4.items.find((x) => x.sessionId === 's-run');
+    expect(runAgain?.kind).toBe('running');
+    chatStore.dismissCosmosSignal(runAgain.signalKey, runAgain.stateSignature);
+    expect(projectStream(123000).items.some((x) => x.sessionId === 's-run')).toBe(false);
+
+    // Session finishes cleanly (idle) without unread -> clearYeaftSessionProcessingIfIdle clears running dismissal
+    chatStore.clearYeaftSessionProcessingIfIdle('s-run', { agentId: 'ag-1' });
+    expect(chatStore.cosmosDismissedSignalsByKey['ag-1\u001fs-run']).toBeUndefined();
+    // Later starts a fresh turn -> reappears!
+    chatStore.yeaftProcessingSessions = { 'ag-1\u001fs-run': true };
+    expect(projectStream(125000).items.find((x) => x.sessionId === 's-run')?.kind).toBe('running');
+
+    // 5. Dismiss running s-run -> transitions to unread (markYeaftSessionUnread) -> immediately resurfaces!
+    const runThird = projectStream(125000).items.find((x) => x.sessionId === 's-run');
+    chatStore.dismissCosmosSignal(runThird.signalKey, runThird.stateSignature);
+    expect(projectStream(126000).items.some((x) => x.sessionId === 's-run')).toBe(false);
+    chatStore.yeaftProcessingSessions = {};
+    chatStore.markYeaftSessionUnread('s-run', 'ag-1');
+    chatStore.recordYeaftSessionPreview('s-run', 'ag-1', { text: 'Shaders compiled cleanly.', at: 127000 });
+    const s5 = projectStream(127000);
+    expect(s5.items.find((x) => x.sessionId === 's-run')?.kind).toBe('unread');
+    expect(s5.items.find((x) => x.sessionId === 's-run')?.preview).toBe('Shaders compiled cleanly.');
+
+    // 6. Multi-agent same-sessionId isolation, colon-containing agentId, Mark-all-read stability on dismissed
+    //    running/waiting scheduled-task items, vp_status_snapshot idle drop, uncached clearAsk, and CLI running->done->running
+    const { handleAssistantOutputFrame } = await import('../../web/stores/helpers/assistantOutput.js');
+    const { handleTurnCompleted } = await import('../../web/stores/helpers/handlers/conversationHandler.js');
+    chatStore.agents = [
+      { id: 'owner:ag-1', name: 'Earth-Mac', online: true },
+      { id: 'owner:ag-2', name: 'Saturn-Srv', online: true },
+    ];
+    chatStore.currentAgent = 'owner:ag-1';
+    chatStore.yeaftSessionAgentById = { 'shared-s': 'owner:ag-1' };
+    chatStore.applySessionCatalogSnapshot([
+      { catalogKey: 'yeaft:owner:ag-1:shared-s', runtimeProvider: 'yeaft', routeRef: { runtimeProvider: 'yeaft', agentId: 'owner:ag-1', sessionId: 'shared-s' }, title: 'Shared A', availability: 'online', metadataUpdatedAt: new Date(130000).toISOString() },
+      { catalogKey: 'yeaft:owner:ag-2:shared-s', runtimeProvider: 'yeaft', routeRef: { runtimeProvider: 'yeaft', agentId: 'owner:ag-2', sessionId: 'shared-s' }, title: 'Shared B', availability: 'online', metadataUpdatedAt: new Date(130000).toISOString() },
+      { catalogKey: 'claude:owner:ag-2:cli-conv-9', runtimeProvider: 'claude-code', routeRef: { runtimeProvider: 'claude-code', agentId: 'owner:ag-2', sessionId: 'cli-conv-9' }, title: 'CLI Worker', availability: 'online', metadataUpdatedAt: new Date(130000).toISOString() },
+    ], []);
+    chatStore.yeaftProcessingSessions = {
+      'owner:ag-1\u001fshared-s': true,
+      'owner:ag-2\u001fshared-s': true,
+    };
+    chatStore.processingConversations = { 'cli-conv-9': true };
+    chatStore.scheduledTaskNotifications = [{
+      id: JSON.stringify(['owner:ag-1', 'shared-s', 'run-sched-1']),
+      agentId: 'owner:ag-1',
+      sessionId: 'shared-s',
+      runId: 'run-sched-1',
+      taskName: 'Shared A',
+      status: 'completed',
+      error: '',
+      createdAt: 130000,
+    }];
+    const projectMulti = (nowMs = 131000) => {
+      const projected = projectAgentsForCosmos({ chatStore, sessionsStore: { sessionList: [] }, nowMs, isEn: true });
+      return buildCosmosSignalStream({
+        projectedAgents: Object.values(projected),
+        agentToPlanet: { 'owner:ag-1': 'earth', 'owner:ag-2': 'saturn' },
+        scheduledTaskNotifications: chatStore.scheduledTaskNotifications,
+        dismissedSignals: chatStore.cosmosDismissedSignalsByKey,
+        nowMs,
+        isEn: true,
+      });
+    };
+
+    const m0 = projectMulti(131000);
+    const sharedA = m0.items.find((x) => x.agentId === 'owner:ag-1' && x.sessionId === 'shared-s');
+    const sharedB = m0.items.find((x) => x.agentId === 'owner:ag-2' && x.sessionId === 'shared-s');
+    const cliItem = m0.items.find((x) => x.agentId === 'owner:ag-2' && x.sessionId === 'cli-conv-9');
+    expect(sharedA?.kind).toBe('running');
+    expect(sharedB?.kind).toBe('running');
+    expect(cliItem?.kind).toBe('running');
+
+    // Dismiss sharedA only -> sharedB on owner:ag-2 remains visible; Mark-all-read clearing scheduledTaskNotifications
+    // MUST NOT falsely resurface dismissed running sharedA!
+    chatStore.dismissCosmosSignal(sharedA.signalKey, sharedA.stateSignature);
+    chatStore.acknowledgeAllYeaftSessionSignals();
+    const m1 = projectMulti(132000);
+    expect(m1.items.some((x) => x.signalKey === sharedA.signalKey)).toBe(false);
+    expect(m1.items.some((x) => x.signalKey === sharedB.signalKey)).toBe(true);
+
+    // vp_status_snapshot dropping owner:ag-1\u001fshared-s to idle clears its running dismissal cleanly
+    chatStore.handleYeaftOutput({
+      agentId: 'owner:ag-1',
+      conversationId: 'yeaft_owner:ag-1',
+      event: { type: 'vp_status_snapshot', statuses: [{ vpId: 'vp-1', sessionId: 'shared-s', state: 'idle' }] },
+    });
+    expect(chatStore.cosmosDismissedSignalsByKey['owner:ag-1\u001fshared-s']).toBeUndefined();
+
+    // Uncached clearAsk still clears a stale waiting dismissal for that exact session
+    chatStore.dismissCosmosSignal('owner:ag-2\u001fshared-s', 'waiting\u001fask-from-history');
+    chatStore.recordYeaftSessionPreview('shared-s', 'owner:ag-2', { clearAsk: true, askRequestId: 'ask-from-history' });
+    expect(chatStore.cosmosDismissedSignalsByKey['owner:ag-2\u001fshared-s']).toBeUndefined();
+
+    // CLI session on non-current agent (owner:ag-2 while currentAgent='owner:ag-1'):
+    // dismiss -> result clears processing & dismissal via catalog lookup -> next run resurfaces!
+    chatStore.dismissCosmosSignal(cliItem.signalKey, cliItem.stateSignature);
+    expect(projectMulti(133000).items.some((x) => x.signalKey === cliItem.signalKey)).toBe(false);
+    handleAssistantOutputFrame(chatStore, 'cli-conv-9', { type: 'result' });
+    expect(chatStore.cosmosDismissedSignalsByKey[cliItem.signalKey]).toBeUndefined();
+    // And handleTurnCompleted also clears running dismissal cleanly
+    chatStore.processingConversations['cli-conv-9'] = true;
+    chatStore.dismissCosmosSignal(cliItem.signalKey, 'running\u001f');
+    handleTurnCompleted(chatStore, { conversationId: 'cli-conv-9' });
+    expect(chatStore.cosmosDismissedSignalsByKey[cliItem.signalKey]).toBeUndefined();
+
+    // Full history clear wipes dismissed map cleanly
+    chatStore.dismissCosmosSignal('owner:ag-1\u001fshared-s', 'waiting\u001fask-2');
+    expect(Object.keys(chatStore.cosmosDismissedSignalsByKey).length).toBeGreaterThan(0);
+    chatStore.clearYeaftHistoryMemory();
+    expect(Object.keys(chatStore.cosmosDismissedSignalsByKey)).toHaveLength(0);
+  });
+
+  it('computes and renders sculpted 3D-occluded artificial satellites for running and waiting sessions', () => {
+    const live = [
+      { id: 'sess-alpha', status: 'running' },
+      { id: 'sess-beta', status: 'waiting' },
+      { id: 'sess-gamma', status: 'running' },
+      { id: 'sess-delta', status: 'running' },
+      { id: 'sess-overflow', status: 'running' },
+    ];
+
+    // Caps at 4 satellites, assigns iconic Twin-Wing Comm-Relay (variant 0) to primary slot,
+    // gives Saturn extra ring clearance, and computes nadir + Sun vectors without NaNs
+    const earthSats = computeSessionSatellites({ x: 500, y: 400, r: 28 }, 'earth', live, 2.5, {
+      sunPt: { x: 200, y: 300 },
+      isCompact: false,
+    });
+    expect(earthSats).toHaveLength(4);
+    expect(earthSats[0].variant).toBe(0);
+    expect(earthSats[1].variant).toBe(1);
+    expect(earthSats[2].variant).toBe(2);
+    expect(earthSats[1].isWaiting).toBe(true);
+    expect(earthSats[0].isWaiting).toBe(false);
+    for (const sat of earthSats) {
+      expect(Number.isFinite(sat.x)).toBe(true);
+      expect(Number.isFinite(sat.y)).toBe(true);
+      expect(Number.isFinite(sat.heading)).toBe(true);
+      expect(sat.scale).toBeGreaterThanOrEqual(4.5);
+      expect(sat.scale).toBeLessThanOrEqual(16);
+      expect(Math.hypot(sat.sunLocalX, sat.sunLocalY)).toBeCloseTo(1, 3);
+      expect([1, -1]).toContain(sat.nadirSign);
+    }
+
+    // Coincident sunPt must still produce a valid unit Sun vector (no zero-length bus gradient)
+    const coincident = computeSessionSatellites({ x: 500, y: 400, r: 28 }, 'earth', [live[0]], 2.5, {
+      sunPt: { x: earthSats[0].x, y: earthSats[0].y },
+    });
+    expect(Math.hypot(coincident[0].sunLocalX, coincident[0].sunLocalY)).toBeCloseTo(1, 3);
+
+    const saturnSats = computeSessionSatellites({ x: 600, y: 400, r: 30 }, 'saturn', [live[0]], 1.0);
+    expect(saturnSats[0].orbitR).toBeGreaterThanOrEqual(30 * 1.85);
+    expect(computeSessionSatellites(null, 'earth', live, 0)).toEqual([]);
+
+    // Verify 2-pass planet-globe occlusion clip ('evenodd'), balanced save/restore, preserved lineCap,
+    // non-finite realTime resilience, outer+inner solar wing strokes, and offscreen viewport culling.
+    const makeTrackingCtx = () => {
+      const stateStack = [];
+      const clipCalls = [];
+      const drawCalls = [];
+      const radialArgs = [];
+      const ctx = {
+        globalAlpha: 1,
+        fillStyle: '',
+        strokeStyle: '',
+        lineWidth: 1,
+        lineCap: 'butt',
+        save() {
+          stateStack.push({ globalAlpha: ctx.globalAlpha, lineCap: ctx.lineCap });
+          drawCalls.push('save');
+        },
+        restore() {
+          const prev = stateStack.pop();
+          if (prev) {
+            ctx.globalAlpha = prev.globalAlpha;
+            ctx.lineCap = prev.lineCap;
+          }
+          drawCalls.push('restore');
+        },
+        translate: () => {},
+        rotate: () => {},
+        beginPath: () => drawCalls.push('beginPath'),
+        closePath: () => {},
+        moveTo: () => {},
+        lineTo: () => {},
+        quadraticCurveTo: () => {},
+        arc: () => {},
+        ellipse: () => {},
+        rect: () => {},
+        roundRect: () => {},
+        fillRect: () => drawCalls.push('fillRect'),
+        strokeRect: () => drawCalls.push('strokeRect'),
+        fill: () => drawCalls.push('fill'),
+        stroke: () => drawCalls.push('stroke'),
+        clip: (rule) => clipCalls.push(rule),
+        createLinearGradient: (x0, y0, x1, y1) => {
+          expect([x0, y0, x1, y1].every(Number.isFinite)).toBe(true);
+          return { addColorStop: () => {} };
+        },
+        createRadialGradient: (x0, y0, r0, x1, y1, r1) => {
+          expect([x0, y0, r0, x1, y1, r1].every(Number.isFinite)).toBe(true);
+          radialArgs.push([x0, y0, r0, x1, y1, r1]);
+          return { addColorStop: () => {} };
+        },
+      };
+      return { ctx, clipCalls, drawCalls, radialArgs };
+    };
+
+    const t1 = makeTrackingCtx();
+    const rendered = drawSessionSatellites(t1.ctx, 1280, 720, { x: 500, y: 400, r: 28 }, 'earth', live, 2.5, {
+      sunPt: { x: 200, y: 300 },
+      orbitOpacity: 0.6,
+      fadeMul: 1.0,
+    });
+    expect(rendered).toHaveLength(4);
+    expect(t1.clipCalls).toContain('evenodd');
+    expect(t1.drawCalls.filter((c) => c === 'save').length).toBe(t1.drawCalls.filter((c) => c === 'restore').length);
+    expect(t1.ctx.lineCap).toBe('butt');
+    expect(t1.ctx.globalAlpha).toBe(1);
+    expect(t1.drawCalls.filter((c) => c === 'fill').length).toBeGreaterThan(10);
+    expect(t1.drawCalls.filter((c) => c === 'stroke').length).toBeGreaterThan(15);
+
+    // Non-finite realTime must NOT produce NaN radial gradients or unbalance save/restore
+    const tNan = makeTrackingCtx();
+    drawSessionSatellites(tNan.ctx, 1280, 720, { x: 500, y: 400, r: 28 }, 'earth', live, Number.NaN, { fadeMul: 2.5 });
+    expect(tNan.drawCalls.filter((c) => c === 'save').length).toBe(tNan.drawCalls.filter((c) => c === 'restore').length);
+    expect(tNan.radialArgs.length).toBeGreaterThan(0);
+
+    // Offscreen planet is viewport-culled with zero canvas clip/draw calls
+    const tOff = makeTrackingCtx();
+    drawSessionSatellites(tOff.ctx, 1280, 720, { x: -500, y: 400, r: 28 }, 'earth', live, 1.0);
+    expect(tOff.drawCalls).toHaveLength(0);
+    expect(tOff.clipCalls).toHaveLength(0);
   });
 
   it('supports interstellar soaring, distance-correlated warp transitions, and 5 sightseeing star systems', async () => {
@@ -4000,5 +4386,493 @@ describe('Cosmos Interstellar Signal Stream (Unified Top-Right Replies, Schedule
       stepCosmosFrame(i * 50, ctx);
     }
     expect(anim.orbitBrake).toBeLessThan(0.2);
+  });
+
+  it('clamps normalized canvas pan radially, shifts solar projection layout proportionally to span, and pulls pan back to center near Black Hole Horizon', async () => {
+    // 1. Radial soft-boundary clamp
+    const inside = clampCamPan(0.3, -0.4);
+    expect(inside.x).toBeCloseTo(0.3, 6);
+    expect(inside.y).toBeCloseTo(-0.4, 6);
+
+    const outside = clampCamPan(3.0, 4.0);
+    expect(Math.hypot(outside.x, outside.y)).toBeCloseTo(CAM_PAN_MAX, 5);
+    expect(outside.x / outside.y).toBeCloseTo(0.75, 5);
+
+    const invalid = clampCamPan(Number.NaN, Number.POSITIVE_INFINITY);
+    expect(invalid).toEqual({ x: 0, y: 0 });
+
+    // 2. Projection layout applies normalized pan scaled by orbital span (desktop & portrait)
+    const baseDesktop = computeSolarProjectionLayout(1280, 720, { solarZoom: 1 });
+    const pannedDesktop = computeSolarProjectionLayout(1280, 720, { solarZoom: 1, camPanX: 0.25, camPanY: -0.2 });
+    expect(pannedDesktop.cx - baseDesktop.cx).toBeCloseTo(0.25 * baseDesktop.span, 4);
+    expect(pannedDesktop.cy - baseDesktop.cy).toBeCloseTo(-0.2 * baseDesktop.span, 4);
+
+    const basePortrait = computeSolarProjectionLayout(390, 844, { solarZoom: 1 });
+    const pannedPortrait = computeSolarProjectionLayout(390, 844, { solarZoom: 1, camPanX: -0.3, camPanY: 0.15 });
+    expect(pannedPortrait.cx - basePortrait.cx).toBeCloseTo(-0.3 * basePortrait.span, 4);
+    expect(pannedPortrait.cy - basePortrait.cy).toBeCloseTo(0.15 * basePortrait.span, 4);
+
+    // 3. stepCosmosFrame shifts Sun off-center with parallax linkage & auto-resets pan when diving toward Black Hole
+    let lastFrame = null;
+    let panAutoResetCount = 0;
+    const engine = {
+      isWebGL: false,
+      isMobile: false,
+      getSize: () => ({ width: 1280, height: 720, dpr: 1 }),
+      renderFrame: (f) => { lastFrame = f; },
+    };
+    const { createParticlePools } = await import('../../web/cosmos/particle-hud.js');
+    const { DEFAULT_COSMOS_CONSTANTS } = await import('../../web/cosmos/constants.js');
+    const anim = {
+      time: 0,
+      realTime: 0,
+      lastTs: 0,
+      scaleLog: 13.0,
+      targetScaleLog: 13.0,
+      warpEnergy: 0,
+      parallax: { x: 0, y: 0, tx: 0, ty: 0 },
+      camRot: { x: 0, y: 0, tx: 0, ty: 0 },
+      camPan: { x: 0.35, y: -0.22, tx: 0.35, ty: -0.22 },
+      lastSpan: 520,
+      centerShiftX: 0,
+      targetCenterShiftX: 0,
+      hoverPlanetId: null,
+      focusedPlanetId: null,
+      solarSunScreen: { x: 0, y: 0, r: 50 },
+      planetScreen: {},
+      planetFocus: {
+        planetId: null, lastPlanetId: null, blend: 0, zoom: 1.0, targetZoom: 1.0,
+        inspectYaw: 0, inspectPitch: 0, targetInspectYaw: 0, targetInspectPitch: 0,
+      },
+      lastEventUiSync: 0,
+      lastEventFrames: [],
+      meteors: [],
+      nextMeteorAt: 999,
+      orbitRipples: [],
+      telemetryBeams: [],
+      constants: { ...DEFAULT_COSMOS_CONSTANTS, orbitSpeed: 0, eventsAutoEnabled: false },
+    };
+    const ctx = {
+      engine,
+      anim,
+      eventSim: createCosmicEventState(),
+      voyage: createVoyageState(),
+      pools: createParticlePools(),
+      webGraph: null,
+      getWebGraph: () => null,
+      gpuParticles: new Float32Array(3100 * 7),
+      eventGpuParticles: new Float32Array(520 * 7),
+      constants: anim.constants,
+      domRefs: { planets: {}, hits: {}, tags: {}, portals: {}, books: {}, homeBeacon: { value: null }, eventBeacon: { value: null } },
+      getAgentsByPlanet: () => ({}),
+      getGalaxyBooks: () => [],
+      getUiState: () => ({
+        currentBand: 'solar',
+        focusedPlanetId: null,
+        hoverPlanetId: null,
+        dragActive: false,
+        dragOverPlanetId: null,
+        drawerOpen: false,
+        drawerWidth: 0,
+        workbenchWidened: false,
+        quickOpen: false,
+      }),
+      onBandChange: () => {},
+      onSyncEvents: () => {},
+      onSyncVoyage: () => {},
+      onPanAutoReset: () => { panAutoResetCount += 1; },
+      onUpdateHoverPos: () => {},
+      formatEventLabel: () => '',
+    };
+
+    stepCosmosFrame(50, ctx);
+    expect(anim.solarSunScreen.x).toBeGreaterThan(1280 * 0.5 + 150);
+    expect(anim.solarSunScreen.y).toBeLessThan(720 * 0.5 - 100);
+    // Background parallax receives subtle linked offset from canvas pan
+    expect(lastFrame.parallax.x).toBeGreaterThan(0.1);
+    expect(lastFrame.parallax.y).toBeLessThan(-0.05);
+
+    // Diving toward Black Hole Horizon (< 11.2) auto-resets pan back to center
+    anim.scaleLog = 10.9;
+    anim.targetScaleLog = 10.4;
+    stepCosmosFrame(100, ctx);
+    expect(anim.camPan.tx).toBe(0);
+    expect(anim.camPan.ty).toBe(0);
+    expect(panAutoResetCount).toBe(1);
+  });
+
+  it('syncs Cosmos constants, planet bindings, drawer width, and uiMode with cloud user_preferences while isolating accounts', async () => {
+    const {
+      COSMOS_CONSTANTS_KEY,
+      COSMOS_BINDINGS_KEY,
+      COSMOS_DRAWER_WIDTH_KEY,
+      normalizeCosmosConstantsPatch,
+      normalizeCosmosConfigPatch,
+      saveCosmosConstants,
+      savePlanetBindings,
+      saveCosmosDrawerWidth,
+      writeLocalCosmosPreferencesOwner,
+      clearLocalCosmosPreferences,
+      readLegacyLocalCosmosConfig,
+    } = await import('../../web/cosmos/constants.js');
+    const { createUserPreferencesState } = await import('../../web/utils/user-preferences.js');
+
+    // 0. Numeric normalizers reject null, empty strings, and booleans (no silent coercion to 0/1/340)
+    expect(normalizeCosmosConstantsPatch({ orbitSpeed: null, starDensity: '', skyBright: false, orbitLines: true })).toEqual({});
+    expect(normalizeCosmosConfigPatch({ drawerWidth: '' })).toEqual({});
+    expect(normalizeCosmosConfigPatch({ drawerWidth: false })).toEqual({});
+    expect(normalizeCosmosConfigPatch({ drawerWidth: null })).toEqual({ drawerWidth: null });
+
+    // 1. Legacy localStorage migration reads pre-cloud un-owned settings only; stamped records are cache-only;
+    //    clearLocalCosmosPreferences({ includeUiMode: true }) clears yeaft-ui-mode too.
+    const mem = createMemoryStorage();
+    saveCosmosConstants({ orbitSpeed: 0.4, skyBright: 1.4 }, mem);
+    savePlanetBindings({ 'ag-1': 'mars' }, mem);
+    saveCosmosDrawerWidth(680, mem);
+    mem.setItem('yeaft-ui-mode', 'classic');
+    expect(readLegacyLocalCosmosConfig(mem, 'user-a')).toEqual({
+      constants: expect.objectContaining({ orbitSpeed: 0.4, skyBright: 1.4 }),
+      planetBindings: { 'ag-1': 'mars' },
+      drawerWidth: 680,
+    });
+    writeLocalCosmosPreferencesOwner('user-a', mem);
+    expect(readLegacyLocalCosmosConfig(mem, 'user-a')).toBeNull();
+    expect(readLegacyLocalCosmosConfig(mem, 'user-b')).toBeNull();
+    clearLocalCosmosPreferences(mem, { includeUiMode: true });
+    expect(mem.getItem(COSMOS_CONSTANTS_KEY)).toBeNull();
+    expect(mem.getItem(COSMOS_BINDINGS_KEY)).toBeNull();
+    expect(mem.getItem(COSMOS_DRAWER_WIDTH_KEY)).toBeNull();
+    expect(mem.getItem('yeaft-ui-mode')).toBeNull();
+
+    // 2. createUserPreferencesState queues early saveCosmosConfig while initial GET is in flight,
+    //    handles failed initial GET followed by TWO rapid saveCosmosConfig() calls without hanging
+    //    or permanently shadowing showConfirmed(), supports keepalive:true, and resets cleanly on auth switch.
+    let resolveInitialGet;
+    const calls = [];
+    let serverCosmos = { constants: { orbitSpeed: 0.5 }, planetBindings: { 'ag-1': 'saturn' } };
+    const mockRequest = vi.fn((url, init = {}) => {
+      calls.push({ url, method: init.method || 'GET', keepalive: Boolean(init.keepalive), body: init.body ? JSON.parse(init.body) : null });
+      if ((init.method || 'GET') === 'GET') {
+        return new Promise((resolve) => {
+          resolveInitialGet = () => resolve({
+            ok: true,
+            json: async () => ({ sidebarActionsCompact: false, sidebarCollapsedProjects: {}, cosmosConfig: serverCosmos }),
+          });
+        });
+      }
+      const patch = JSON.parse(init.body).cosmosConfig || {};
+      serverCosmos = {
+        ...serverCosmos,
+        ...(patch.constants ? { constants: { ...(serverCosmos.constants || {}), ...patch.constants } } : {}),
+        ...(Object.hasOwn(patch, 'planetBindings') ? { planetBindings: { ...patch.planetBindings } } : {}),
+        ...(Object.hasOwn(patch, 'drawerWidth') ? { drawerWidth: patch.drawerWidth } : {}),
+        ...(Object.hasOwn(patch, 'uiMode') ? { uiMode: patch.uiMode } : {}),
+      };
+      return Promise.resolve({
+        ok: true,
+        json: async () => ({ sidebarActionsCompact: false, sidebarCollapsedProjects: {}, cosmosConfig: serverCosmos }),
+      });
+    });
+
+    const auth = Vue.reactive({ isAuthenticated: true, userId: 'user-a', token: 'tok-a', authGeneration: 1 });
+    const prefs = createUserPreferencesState(auth, { request: mockRequest });
+    expect(prefs.ready.value).toBe(false);
+
+    // Early edit before GET settles stays queued & optimistically visible
+    const queuedPromise = prefs.saveCosmosConfig({ planetBindings: { 'ag-1': 'jupiter' } });
+    expect(prefs.preferences.value.cosmosConfig.planetBindings).toEqual({ 'ag-1': 'jupiter' });
+    resolveInitialGet();
+    expect(await queuedPromise).toBe(true);
+    expect(prefs.ready.value).toBe(true);
+    expect(prefs.preferences.value.cosmosConfig.constants.orbitSpeed).toBe(0.5);
+    expect(prefs.preferences.value.cosmosConfig.planetBindings).toEqual({ 'ag-1': 'jupiter' });
+    expect(calls.filter((c) => c.method === 'PATCH')).toHaveLength(1);
+
+    // Subsequent edit with keepalive:true writes directly and forwards keepalive flag
+    expect(await prefs.saveCosmosConfig({ constants: { skyBright: 1.5 }, drawerWidth: 820 }, { keepalive: true })).toBe(true);
+    expect(calls.at(-1)?.keepalive).toBe(true);
+    expect(prefs.preferences.value.cosmosConfig.constants).toEqual({ orbitSpeed: 0.5, skyBright: 1.5 });
+    expect(prefs.preferences.value.cosmosConfig.drawerWidth).toBe(820);
+
+    // Regression: failed initial GET followed by TWO rapid saveCosmosConfig() calls MUST BOTH settle cleanly
+    let rejectGet;
+    const patchResolvers = [];
+    let recoverCosmos = {};
+    const flakyReq = vi.fn((_url, init = {}) => {
+      if ((init.method || 'GET') === 'GET') {
+        return new Promise((_res, rej) => { rejectGet = () => rej(new Error('offline')); });
+      }
+      const patch = JSON.parse(init.body).cosmosConfig || {};
+      return new Promise((resolve) => {
+        patchResolvers.push(() => {
+          recoverCosmos = {
+            ...recoverCosmos,
+            ...(patch.constants ? { constants: { ...(recoverCosmos.constants || {}), ...patch.constants } } : {}),
+            ...(Object.hasOwn(patch, 'planetBindings') ? { planetBindings: { ...patch.planetBindings } } : {}),
+          };
+          resolve({ ok: true, json: async () => ({ sidebarActionsCompact: false, sidebarCollapsedProjects: {}, cosmosConfig: recoverCosmos }) });
+        });
+      });
+    });
+    const auth2 = Vue.reactive({ isAuthenticated: true, userId: 'user-r', token: 'tok-r', authGeneration: 1 });
+    const flakyPrefs = createUserPreferencesState(auth2, { request: flakyReq });
+    rejectGet();
+    await flushPromises();
+    expect(flakyPrefs.error.value).toBe('load');
+    const r1 = flakyPrefs.saveCosmosConfig({ constants: { orbitSpeed: 0.2 } });
+    const r2 = flakyPrefs.saveCosmosConfig({ constants: { orbitSpeed: 1.8 } });
+    await flushPromises();
+    expect(patchResolvers).toHaveLength(1);
+    patchResolvers[0]();
+    await flushPromises();
+    expect(patchResolvers).toHaveLength(2);
+    patchResolvers[1]();
+    expect(await r1).toBe(true);
+    expect(await r2).toBe(true);
+    expect(flakyPrefs.ready.value).toBe(true);
+    expect(flakyPrefs.preferences.value.cosmosConfig.constants.orbitSpeed).toBe(1.8);
+    // Subsequent edit must NOT be shadowed by stale queuedCosmosPatch
+    const r3 = flakyPrefs.saveCosmosConfig({ constants: { orbitSpeed: 0.9 } });
+    await flushPromises();
+    patchResolvers[2]();
+    expect(await r3).toBe(true);
+    expect(flakyPrefs.preferences.value.cosmosConfig.constants.orbitSpeed).toBe(0.9);
+    flakyPrefs.dispose();
+
+    // Regression: queued saveCosmosConfig(P1) during in-flight initial GET followed by
+    // saveCosmosConfig(P2, { keepalive: true }) MUST merge P1 beneath P2 into one keepalive PATCH
+    // and settle BOTH Promises cleanly on both success AND failure paths (never shadowing showConfirmed).
+    for (const shouldSucceed of [true, false]) {
+      const sentBodies = [];
+      let resolveStaleGet;
+      const patchResolversKa = [];
+      const kaReq = vi.fn((_url, init = {}) => {
+        if ((init.method || 'GET') === 'GET') {
+          return new Promise((resolve) => {
+            resolveStaleGet = () => resolve({
+              ok: true,
+              json: async () => ({ sidebarActionsCompact: false, sidebarCollapsedProjects: {}, cosmosConfig: { constants: { orbitSpeed: 0.1 } } }),
+            });
+          });
+        }
+        const parsed = JSON.parse(init.body).cosmosConfig;
+        const callIdx = sentBodies.length;
+        sentBodies.push({ keepalive: Boolean(init.keepalive), cosmosConfig: parsed });
+        return new Promise((resolve) => {
+          patchResolversKa.push(() => resolve((callIdx === 0 ? shouldSucceed : true)
+            ? { ok: true, json: async () => ({ sidebarActionsCompact: false, sidebarCollapsedProjects: {}, cosmosConfig: parsed }) }
+            : { ok: false, json: async () => ({ error: 'boom' }) }));
+        });
+      });
+      const kaAuth = Vue.reactive({ isAuthenticated: true, userId: `user-ka-${shouldSucceed}`, token: 'tok', authGeneration: 1 });
+      const kaPrefs = createUserPreferencesState(kaAuth, { request: kaReq });
+      const p1 = kaPrefs.saveCosmosConfig({ constants: { orbitSpeed: 0.3 }, planetBindings: { 'ag-1': 'venus' } });
+      const p2 = kaPrefs.saveCosmosConfig({ constants: { orbitSpeed: 1.7, skyBright: 1.2 } }, { keepalive: true });
+      // Synchronous keepalive dispatch on idle queue includes BOTH P1 & P2 merged with P2 winning conflicts
+      expect(sentBodies).toHaveLength(1);
+      expect(sentBodies[0]).toEqual({
+        keepalive: true,
+        cosmosConfig: { constants: { orbitSpeed: 1.7, skyBright: 1.2 }, planetBindings: { 'ag-1': 'venus' } },
+      });
+      // While P2 is in flight, optimistic state MUST show P2 (1.7), NOT older P1 (0.3)
+      expect(kaPrefs.preferences.value.cosmosConfig.constants.orbitSpeed).toBe(1.7);
+      patchResolversKa[0]();
+      expect(await p1).toBe(shouldSucceed);
+      expect(await p2).toBe(shouldSucceed);
+      // After failure (while stale initial GET is STILL in flight), P1 must NOT shadow showConfirmed(),
+      // and a follow-up non-keepalive saveCosmosConfig(P3) MUST dispatch directly and resolve cleanly
+      // even when the stale initial GET settles afterward.
+      if (!shouldSucceed) {
+        expect(kaPrefs.preferences.value.cosmosConfig).toEqual({});
+        const p3 = kaPrefs.saveCosmosConfig({ constants: { orbitSpeed: 1.1 } });
+        await flushPromises();
+        expect(sentBodies).toHaveLength(2);
+        expect(sentBodies[1]).toEqual({ keepalive: false, cosmosConfig: { constants: { orbitSpeed: 1.1 } } });
+        resolveStaleGet();
+        await flushPromises();
+        patchResolversKa[1]();
+        expect(await p3).toBe(true);
+        expect(kaPrefs.ready.value).toBe(true);
+        expect(kaPrefs.preferences.value.cosmosConfig.constants.orbitSpeed).toBe(1.1);
+      } else {
+        expect(kaPrefs.preferences.value.cosmosConfig.constants.orbitSpeed).toBe(1.7);
+      }
+      kaPrefs.dispose();
+    }
+
+    // Auth switch resets state cleanly
+    auth.userId = 'user-b';
+    auth.authGeneration = 2;
+    expect(prefs.ready.value).toBe(false);
+    expect(prefs.preferences.value.cosmosConfig).toEqual({});
+    prefs.dispose();
+
+    // 3. Wide Cosmos Drawer CSS eliminates fixed 780px centering cap, uses drawer-width-relative gutter,
+    //    and fixes both Planet Focus Dock & Pan Reset Pill against --c-panel-w at z-index 30
+    const convCss = readFileSync(resolve(process.cwd(), 'web/styles/cosmos/conversation.css'), 'utf8');
+    const eventsCss = readFileSync(resolve(process.cwd(), 'web/styles/cosmos/events.css'), 'utf8');
+    expect(convCss).toContain('--session-content-width: 100%;');
+    expect(convCss).toContain('calc(var(--c-panel-w, 460px) * 0.024)');
+    expect(eventsCss).not.toContain('--cosmos-drawer-w');
+  });
+
+  it('controls planetary spin speed, body scale, distant event scale, and cosmic constants reset cleanly', async () => {
+    const { default: CosmosConstantsPopover } = await import('../../web/components/cosmos/CosmosConstantsPopover.js');
+    const { DEFAULT_COSMOS_CONSTANTS } = await import('../../web/cosmos/constants.js');
+    const { stepCosmosFrame } = await import('../../web/cosmos/stage-loop.js');
+    const storage = createMemoryStorage();
+
+    // 1. Normalization, legacy backward-compat & persistence of new constants
+    storage.setItem('yeaft-cosmos-constants-v1', JSON.stringify({ orbitSpeed: 1.2 }));
+    const legacyLoaded = loadCosmosConstants(storage);
+    expect(legacyLoaded.orbitSpeed).toBe(1.2);
+    expect(legacyLoaded.spinSpeed).toBe(0.45);
+    expect(legacyLoaded.planetScale).toBe(1.0);
+    expect(legacyLoaded.eventScale).toBe(1.0);
+
+    const saved = saveCosmosConstants({
+      spinSpeed: 9.9,
+      planetScale: 0.1,
+      eventScale: 5.0,
+    }, storage);
+    expect(saved.spinSpeed).toBe(2.5);
+    expect(saved.planetScale).toBe(0.65);
+    expect(saved.eventScale).toBe(1.8);
+    expect(DEFAULT_COSMOS_CONSTANTS.spinSpeed).toBe(0.45);
+    expect(DEFAULT_COSMOS_CONSTANTS.planetScale).toBe(1.0);
+    expect(DEFAULT_COSMOS_CONSTANTS.eventScale).toBe(1.0);
+    expect(loadCosmosConstants(storage)).toEqual(saved);
+
+    // 2. Distant cosmic events stay naturally poised (<= 0.20) & stratify AU nearer than Mly
+    const auLoc = pickRandomDistantLocation(null, () => 0.5, 'AU');
+    const lyLoc = pickRandomDistantLocation(null, () => 0.5, 'ly');
+    const mlyLoc = pickRandomDistantLocation(null, () => 0.5, 'Mly');
+    expect(auLoc.distantScale).toBeLessThanOrEqual(EVENT_DISTANT_MAX_SCALE);
+    expect(auLoc.distantScale).toBeGreaterThan(lyLoc.distantScale);
+    expect(lyLoc.distantScale).toBeGreaterThan(mlyLoc.distantScale);
+    expect(mlyLoc.distantScale).toBeGreaterThanOrEqual(EVENT_DISTANT_MIN_SCALE);
+
+    // 3. stepCosmosFrame respects spinSpeed (smooth accumulator), planetScale, and eventScale
+    let lastFrame = null;
+    const engine = {
+      isWebGL: true,
+      isMobile: false,
+      getSize: () => ({ width: 1280, height: 720, dpr: 1 }),
+      renderFrame: (frame) => { lastFrame = frame; },
+    };
+    const anim = {
+      lastTs: 0,
+      time: 0,
+      realTime: 0,
+      spinTime: 0,
+      lastEventUiSync: 0,
+      scaleLog: 13.0,
+      targetScaleLog: 13.0,
+      warpEnergy: 0,
+      orbitBrake: 1.0,
+      parallax: { x: 0, y: 0, tx: 0, ty: 0 },
+      camRot: { x: 0, y: 0, tx: 0, ty: 0 },
+      centerShiftX: 0,
+      targetCenterShiftX: 0,
+      planetScreen: {},
+      solarSunScreen: { x: 640, y: 360, r: 48 },
+      planetFocus: { planetId: null, blend: 0, zoom: 1, targetZoom: 1, inspectYaw: 0, inspectPitch: 0, targetInspectYaw: 0, targetInspectPitch: 0 },
+    };
+    const eventSim = createCosmicEventState({ autoEnabled: false, autoZoom: false, rng: () => 0.4 });
+    startCosmicEvent(eventSim, 'solar-flare', { observe: false, rng: () => 0.4 });
+    const constants = { ...DEFAULT_COSMOS_CONSTANTS, spinSpeed: 0.0, planetScale: 1.0, eventScale: 1.0, eventsAutoEnabled: false };
+    anim.constants = constants;
+    const ctx = {
+      engine,
+      anim,
+      eventSim,
+      voyage: null,
+      pools: { belt: [], dust: [], solarWind: [], gal: [], bh: [] },
+      gpuParticles: new Float32Array(256 * 7),
+      eventGpuParticles: new Float32Array(256 * 7),
+      constants,
+      domRefs: { planets: {}, hits: {}, tags: {}, portals: {}, books: {}, homeBeacon: { value: null } },
+      getAgentsByPlanet: () => ({}),
+      getGalaxyBooks: () => [],
+      getUiState: () => ({ currentBand: 'solar', drawerOpen: false, quickOpen: false, dragActive: false }),
+      onBandChange: () => {},
+      onSyncEvents: () => {},
+      onUpdateHoverPos: () => {},
+      formatEventLabel: () => '',
+    };
+
+    stepCosmosFrame(50, ctx);
+    const sunAt0 = lastFrame.solarBodies.find((b) => b.bodyType === 0);
+    const earthAt0 = lastFrame.solarBodies.find((b) => b.bodyType === 3);
+    const evRadiusAt1 = lastFrame.eventDraws[0].eventRadiusPx;
+    const evEffDistAt1 = lastFrame.eventDraws[0].effDist;
+    const spin0 = earthAt0.spin;
+    const sunSpin0 = sunAt0.spin;
+    const radAt1 = earthAt0.radiusPx;
+    const sunRadAt1 = sunAt0.radiusPx;
+
+    // With spinSpeed = 0, neither Earth nor Sun spins
+    stepCosmosFrame(100, ctx);
+    expect(lastFrame.solarBodies.find((b) => b.bodyType === 3).spin).toBeCloseTo(spin0, 6);
+    expect(lastFrame.solarBodies.find((b) => b.bodyType === 0).spin).toBeCloseTo(sunSpin0, 6);
+
+    // Increase spinSpeed to 2.0, planetScale to 1.4, eventScale to 1.5
+    constants.spinSpeed = 2.0;
+    constants.planetScale = 1.4;
+    constants.eventScale = 1.5;
+    stepCosmosFrame(150, ctx);
+    const earthAfter = lastFrame.solarBodies.find((b) => b.bodyType === 3);
+    const sunAfter = lastFrame.solarBodies.find((b) => b.bodyType === 0);
+    expect(earthAfter.spin).toBeGreaterThan(spin0);
+    expect(sunAfter.spin).toBeGreaterThan(sunSpin0);
+    expect(earthAfter.radiusPx / radAt1).toBeCloseTo(1.4, 1);
+    expect(sunAfter.radiusPx / sunRadAt1).toBeCloseTo(1.4, 2);
+    // eventScale scales visual ambient radius without distorting physical effDist
+    expect(lastFrame.eventDraws[0].eventRadiusPx / evRadiusAt1).toBeCloseTo(1.5, 2);
+    expect(lastFrame.eventDraws[0].effDist).toBeCloseTo(evEffDistAt1, 5);
+
+    // Lowering spinSpeed from 2.0 -> 0.2 continues monotonically without phase jump (smooth accumulator)
+    const spinBeforeSlow = earthAfter.spin;
+    constants.spinSpeed = 0.2;
+    stepCosmosFrame(200, ctx);
+    const earthSlow = lastFrame.solarBodies.find((b) => b.bodyType === 3);
+    expect(earthSlow.spin).toBeGreaterThan(spinBeforeSlow);
+    expect(earthSlow.spin - spinBeforeSlow).toBeLessThan(earthAfter.spin - spin0);
+
+    // NaN spinSpeed is guarded and never poisons anim.spinTime
+    constants.spinSpeed = Number.NaN;
+    stepCosmosFrame(250, ctx);
+    expect(Number.isFinite(anim.spinTime)).toBe(true);
+
+    // Focused event (focusProgress = 1) is unaffected by ambient eventScale
+    eventSim.active.observing = true;
+    eventSim.flightT = 1;
+    eventSim.focusProgress = 1;
+    const focusedAt1 = computeEventFrame(eventSim, 1280, 720, 0, null, 1, null, null, 1.0, 1.0);
+    const focusedAt18 = computeEventFrame(eventSim, 1280, 720, 0, null, 1, null, null, 1.0, 1.8);
+    expect(focusedAt18.eventRadiusPx).toBeCloseTo(focusedAt1.eventRadiusPx, 4);
+
+    // 4. CosmosConstantsPopover renders accessible new sliders + reset button and emits events
+    const wrapper = mount(CosmosConstantsPopover, {
+      props: {
+        constants: { ...DEFAULT_COSMOS_CONSTANTS },
+        agents: [],
+        agentToPlanet: {},
+        rendererMode: 'webgl2',
+      },
+      global: {
+        mocks: { $t: (k) => k },
+      },
+    });
+    expect(wrapper.text()).toContain('cosmos.constants.spinSpeed');
+    expect(wrapper.text()).toContain('cosmos.constants.planetScale');
+    expect(wrapper.text()).toContain('cosmos.constants.eventScale');
+    const spinInput = wrapper.find('input[aria-label="cosmos.constants.spinSpeed"]');
+    expect(spinInput.exists()).toBe(true);
+    await spinInput.setValue('1.25');
+    expect(wrapper.emitted('update-constant')?.[0]?.[0]).toEqual({ key: 'spinSpeed', value: 1.25 });
+    await wrapper.find('.cosmos-const-reset-btn').trigger('click');
+    expect(wrapper.emitted('reset-constants')).toHaveLength(1);
+    wrapper.unmount();
   });
 });

@@ -51,7 +51,8 @@
   --error-bg: rgba(255, 118, 128, 0.15);
   --status-busy: var(--p-accent);
   --tool-bg: rgba(255, 255, 255, 0.055);
-  --session-content-width: 780px;
+  --session-content-width: 100%;
+  --c-drawer-gutter: clamp(18px, calc(var(--c-panel-w, 460px) * 0.024), 30px);
 
   position: fixed;
   top: 0;
@@ -61,12 +62,13 @@
   z-index: 32;
   display: flex;
   flex-direction: column;
-  /* Feathered translucent glass smoothly dissolving into the living starfield */
+  /* Feathered translucent glass smoothly dissolving into the living starfield
+     while ensuring full glass backing right at the unified left text rail */
   background: linear-gradient(
     90deg,
     rgba(var(--p-tint-rgb), 0.0) 0%,
-    rgba(var(--p-tint-rgb), 0.12) 32px,
-    var(--p-bg-top) 96px,
+    rgba(var(--p-tint-rgb), 0.24) 10px,
+    var(--p-bg-top) 28px,
     var(--p-bg-bot) 100%
   );
   border-left: 0;
@@ -188,7 +190,7 @@
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  padding: 11px 12px 10px 16px;
+  padding: 11px 14px 10px var(--c-drawer-gutter);
   background: linear-gradient(
     180deg,
     rgba(2, 5, 14, 0.36) 0%,
@@ -816,7 +818,7 @@
   max-width: var(--session-content-width);
   width: 100%;
   margin: 0 auto;
-  padding: 0 18px !important;
+  padding: 0 var(--c-drawer-gutter) !important;
   gap: 16px;
 }
 
@@ -975,7 +977,7 @@
   z-index: 4;
   background: transparent !important;
   border-top: 0 !important;
-  padding: 4px 16px calc(12px + env(safe-area-inset-bottom, 0px)) !important;
+  padding: 4px var(--c-drawer-gutter) calc(12px + env(safe-area-inset-bottom, 0px)) !important;
   overflow: visible;
 }
 
@@ -1205,6 +1207,7 @@
 
 @media (max-width: 768px) {
   .cosmos-drawer {
+    --c-drawer-gutter: 14px;
     border-left: 0;
     background: linear-gradient(180deg, rgba(var(--p-tint-rgb), 0.62), rgba(3, 6, 14, 0.80));
   }
@@ -1212,7 +1215,7 @@
     display: none;
   }
   .cosmos-drawer .messages {
-    padding: 0 14px !important;
+    padding: 0 var(--c-drawer-gutter) !important;
   }
   .cosmos-drawer-agent {
     flex-shrink: 0;

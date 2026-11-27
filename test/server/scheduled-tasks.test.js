@@ -155,3 +155,31 @@ describe('Account-wide scheduled Task read receipts', () => {
   });
 
 });
+
+it('blocks new scheduled execution on an Agent with legacy Work Center but still allows a pause', async () => {
+  const { agent, client } = fixture();
+  agent.capabilities.push('work_center');
+  const base = { agentId: 'agent-a', sessionId: 'task-session', requestId: 'schedule-change' };
+  const create = { ...base, type: 'yeaft_create_session', payload: { name: 'Build', task } };
+  const update = { ...base, type: 'yeaft_scheduled_task', op: 'update', expectedRevision: task.revision };
+  for (const request of [
+    create,
+    { ...update, task: { enabled: true } },
+    { ...update, task: { trigger: task.trigger } },
+    { ...update, op: 'run' },
+  ]) {
+    await handleClientConversation('client-a', client, request, allow);
+    expect(client.sent.at(-1)?.event).toMatchObject({ requestId: base.requestId, ok: false, error: { code: 'legacy_work_center_active' } });
+  }
+  expect(forwardToAgent).not.toHaveBeenCalled();
+
+  const pause = { ...update, task: { enabled: false } };
+  await handleClientConversation('client-a', client, pause, allow);
+  expect(forwardToAgent).toHaveBeenCalledWith('agent-a', expect.objectContaining({ op: 'update', task: { enabled: false } }));
+  const manual = { ...update, task: { enabled: true, trigger: { type: 'manual' } } };
+  await handleClientConversation('client-a', client, manual, allow);
+  expect(forwardToAgent).toHaveBeenLastCalledWith('agent-a', expect.objectContaining({ op: 'update', task: manual.task }));
+  agent.capabilities = ['scheduled_tasks'];
+  await handleClientConversation('client-a', client, create, allow);
+  expect(forwardToAgent).toHaveBeenLastCalledWith('agent-a', expect.objectContaining({ type: 'yeaft_create_session', payload: expect.objectContaining({ task: expect.objectContaining({ enabled: true }) }) }));
+});

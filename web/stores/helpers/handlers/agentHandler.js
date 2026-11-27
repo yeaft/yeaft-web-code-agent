@@ -3,6 +3,7 @@
  * The most complex handler — includes auto-restore and reconnection logic.
  */
 
+import { LEGACY_PRODUCT_SURFACES_ENABLED } from '../../../utils/legacy-product-surfaces.js';
 import { isRecentlyClosed, stopProcessingWatchdog } from '../watchdog.js';
 import { clearSessionLoading, restorePanels } from '../session.js';
 import { maxDbMessageId } from '../messages.js';
@@ -136,7 +137,9 @@ export function handleAgentList(store, msg) {
   }
   // Sidebar catch-up waits for an authenticated inventory of this socket, not
   // merely onopen with an old online Agent record. Routine broadcasts dedupe.
-  store.workCenterActivityConnectionGeneration = Number(store.chatHistoryConnectionGeneration || 0);
+  if (LEGACY_PRODUCT_SURFACES_ENABLED) {
+    store.workCenterActivityConnectionGeneration = Number(store.chatHistoryConnectionGeneration || 0);
+  }
   store._hasHandledAgentList = true;
   if (hadAgentList) {
     for (const agent of nextAgents) {
@@ -190,7 +193,7 @@ export function handleAgentList(store, msg) {
       : null;
     const nextRec = nextAgents.find(a => a.id === trackedAgentId) || null;
     const needsReconnectCatchUp = store.currentView === 'yeaft'
-      || (store.workCenterOpen && store.workCenterAgentId === trackedAgentId);
+      || (LEGACY_PRODUCT_SURFACES_ENABLED && store.workCenterOpen && store.workCenterAgentId === trackedAgentId);
     if (needsReconnectCatchUp && detectYeaftAgentRestart(seen, nextRec)) {
       store._yeaftReconnectCatchUpPending = true;
     }
@@ -318,6 +321,7 @@ export function handleAgentList(store, msg) {
         // Clean up associated state
         delete store.messagesMap[conv.id];
         delete store.processingConversations[conv.id];
+        store.clearCliCosmosDismissedSignal?.(conv.id, conv.agentId || null);
         stopProcessingWatchdog(store, conv.id);
         delete store.executionStatusMap[conv.id];
         return false;
@@ -335,6 +339,7 @@ export function handleAgentList(store, msg) {
         store.processingConversations[serverConv.id] = true;
       } else if (store.processingConversations[serverConv.id]) {
         delete store.processingConversations[serverConv.id];
+        store.clearCliCosmosDismissedSignal?.(serverConv.id, serverConv.agentId || null);
         stopProcessingWatchdog(store, serverConv.id);
         const status = store.executionStatusMap[serverConv.id];
         if (status) status.currentTool = null;
@@ -389,7 +394,7 @@ export function handleAgentList(store, msg) {
       // Agent restart must reconcile the currently visible board from its
       // durable list. Keep this on the same online-restore edge as selection:
       // routine latency/status agent_list broadcasts must not reload the board.
-      if (shouldRestoreAgent && store.workCenterOpen
+      if (LEGACY_PRODUCT_SURFACES_ENABLED && shouldRestoreAgent && store.workCenterOpen
           && store.workCenterAgentId === store.currentAgent
           && typeof store.listWorkItems === 'function') {
         const filters = store._workCenterListFiltersByAgent?.[store.workCenterAgentId] || {};
@@ -619,6 +624,7 @@ export function handleAgentSelected(store, msg) {
       store.processingConversations[conv.id] = true;
     } else if (store.processingConversations[conv.id]) {
       delete store.processingConversations[conv.id];
+      store.clearCliCosmosDismissedSignal?.(conv.id, conv.agentId || msg.agentId || null);
       stopProcessingWatchdog(store, conv.id);
       const status = store.executionStatusMap[conv.id];
       if (status) status.currentTool = null;

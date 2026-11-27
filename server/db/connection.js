@@ -47,7 +47,9 @@ db.exec(`
     sidebar_collapsed_projects TEXT NOT NULL DEFAULT '{}'
       CHECK (json_valid(sidebar_collapsed_projects) AND json_type(sidebar_collapsed_projects) = 'object'),
     sidebar_collapsed_sections TEXT NOT NULL DEFAULT '{}'
-      CHECK (json_valid(sidebar_collapsed_sections) AND json_type(sidebar_collapsed_sections) = 'object')
+      CHECK (json_valid(sidebar_collapsed_sections) AND json_type(sidebar_collapsed_sections) = 'object'),
+    cosmos_config TEXT NOT NULL DEFAULT '{}'
+      CHECK (json_valid(cosmos_config) AND json_type(cosmos_config) = 'object')
   );
 
   -- Finalized deletion survives removal of the users row. This prevents a
@@ -349,6 +351,8 @@ const migrations = [
     CHECK (json_valid(sidebar_collapsed_projects) AND json_type(sidebar_collapsed_projects) = 'object')`,
   `ALTER TABLE user_preferences ADD COLUMN sidebar_collapsed_sections TEXT NOT NULL DEFAULT '{}'
     CHECK (json_valid(sidebar_collapsed_sections) AND json_type(sidebar_collapsed_sections) = 'object')`,
+  `ALTER TABLE user_preferences ADD COLUMN cosmos_config TEXT NOT NULL DEFAULT '{}'
+    CHECK (json_valid(cosmos_config) AND json_type(cosmos_config) = 'object')`,
   `ALTER TABLE sessions ADD COLUMN user_id TEXT REFERENCES users(id)`,
   `ALTER TABLE users ADD COLUMN totp_secret TEXT`,
   `ALTER TABLE users ADD COLUMN totp_enabled INTEGER DEFAULT 0`,
@@ -960,15 +964,15 @@ export const stmts = {
   `),
 
   getUserPreferences: db.prepare(`
-    SELECT sidebar_projects_ratio, sidebar_actions_compact, sidebar_collapsed_projects, sidebar_collapsed_sections
+    SELECT sidebar_projects_ratio, sidebar_actions_compact, sidebar_collapsed_projects, sidebar_collapsed_sections, cosmos_config
     FROM user_preferences WHERE user_id = ?
   `),
 
   upsertUserPreferences: db.prepare(`
     INSERT INTO user_preferences (
-      user_id, sidebar_projects_ratio, sidebar_actions_compact, sidebar_collapsed_projects, sidebar_collapsed_sections
+      user_id, sidebar_projects_ratio, sidebar_actions_compact, sidebar_collapsed_projects, sidebar_collapsed_sections, cosmos_config
     )
-    VALUES (?, COALESCE(?, 0.5), COALESCE(?, 0), ?, ?)
+    VALUES (?, COALESCE(?, 0.5), COALESCE(?, 0), ?, ?, COALESCE(?, '{}'))
     ON CONFLICT(user_id) DO UPDATE SET
       sidebar_projects_ratio = COALESCE(?, user_preferences.sidebar_projects_ratio),
       sidebar_actions_compact = COALESCE(?, user_preferences.sidebar_actions_compact),
@@ -977,8 +981,9 @@ export const stmts = {
       ),
       sidebar_collapsed_sections = json_patch(
         user_preferences.sidebar_collapsed_sections, excluded.sidebar_collapsed_sections
-      )
-    RETURNING sidebar_projects_ratio, sidebar_actions_compact, sidebar_collapsed_projects, sidebar_collapsed_sections
+      ),
+      cosmos_config = COALESCE(?, user_preferences.cosmos_config)
+    RETURNING sidebar_projects_ratio, sidebar_actions_compact, sidebar_collapsed_projects, sidebar_collapsed_sections, cosmos_config
   `),
 
   // Invitation 操作

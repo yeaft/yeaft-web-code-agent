@@ -9,7 +9,7 @@ Yeaft 包含 browser/server control plane 和一台或多台 Agent。Agent 运�
 - Yeaft Session 至少配置一个原生 LLM provider，或者为对应 conversation path 安装并登录 vendor CLI
 - 生产 Server 推荐使用 Docker
 
-以下安装命令适用于 POSIX shell，显式跳过 ONNX Runtime 的额外 CUDA 下载，仍保留 CPU 原生依赖与安装脚本。直接 npm 安装不会自动继承一键安装器策略；Windows 请用[安装指南中的 PowerShell 临时环境块](./deploy-agent.md#手动-npm-安装)，安装结束恢复原设置。完整数字人混合召回推荐 Node 24。
+以下安装命令适用于 POSIX shell，显式跳过 ONNX Runtime 的额外 CUDA 下载，仍保留 CPU 原生依赖与安装脚本。直接 npm 安装不会自动继承一键安装器策略；Windows 请用[安装指南中的 PowerShell 临时环境块](./deploy-agent.md#手动-npm-安装)，安装结束恢复原设置。
 
 ## 最快路径：Local mode
 
@@ -106,10 +106,6 @@ npm run docs:build
 
 开发任务可选择「软件」。之后可在附件旁切换场景，继续使用同一份历史；正在执行的轮次不受影响。
 
-## 体验 Work Center
-
-从侧栏打开 **Work Center**，或在 Yeaft Session composer 创建 WorkItem。提供具体 goal、acceptance criteria 和 working directory。Work Center 会在所选 Agent 持久化自己的 Coordinator conversation 与规划 Action graph。
-
 ## 可选 CLI runtime
 
 要创建 Claude Code 或 GitHub Copilot conversation，请在 Agent 机器安装并登录对应 CLI。Agent 检测支持的 runtime 并在创建 UI 中展示。原生 Yeaft Session 不依赖任何 vendor CLI。
@@ -118,7 +114,6 @@ npm run docs:build
 
 - [选择代码 Agent 路径](./user/choose-backend.md)
 - [Yeaft Session 与 Project](./user/yeaft-session.md)
-- [Work Center](./user/work-center.md)
 - [Agent 与原生 CLI 参考](./agent-cli.md)
 - [Provider/model 配置](./yeaft-config.md)
 - [部署 Server](./deploy-server.md)

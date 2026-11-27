@@ -15,10 +15,9 @@ Agent (Node.js on the code machine)
         ├── Native Yeaft engine
         │   ├── Session + 1..N VP orchestration
         │   ├── Anthropic / OpenAI Responses adapters
-        │   ├── 33 built-in tools + Skills + MCP
+        │   ├── built-in tools + Skills + MCP
         │   ├── bounded Session history; legacy memory retained but disabled
-        │   ├── Projects and shared instructions
-        │   └── Work Center (WorkItem → Action → Run)
+        │   └── Projects and shared instructions
         └── Workbench launcher (Terminal, Git, Files, Browser availability)
 ```
 
@@ -27,10 +26,10 @@ Agent (Node.js on the code machine)
 | Layer | Owns | Does not own |
 | --- | --- | --- |
 | **Browser** | Current UI state, unified catalog projection, locale/theme, drafts | Code execution or authoritative Agent runtime data |
-| **Server** | User/auth records, invitation/admin data, browser-facing conversation catalog metadata, WebSocket routing | Native Session transcripts, Agent memory, provider credentials, or Work Center execution |
-| **Agent** | CLI subprocesses, native provider calls, tools, Session history, memory, background tasks, Projects' Agent-side context, Work Center SQLite, workbench access | Server user accounts or cross-owner data |
+| **Server** | User/auth records, invitation/admin data, browser-facing conversation catalog metadata, WebSocket routing | Native Session transcripts, Agent memory, provider credentials, |
+| **Agent** | CLI subprocesses, native provider calls, tools, Session history, memory, background tasks, Projects' Agent-side context, workbench access | Server user accounts or cross-owner data |
 
-A Session `workDir` is an execution and project-asset context. Native Session data and Work Center state remain under the Agent's Yeaft data root.
+A Session `workDir` is an execution and project-asset context. Native Session data remain under the Agent's Yeaft data root.
 
 ## Runtime paths
 
@@ -75,20 +74,9 @@ Web yeaft_session_send
 
 `yeaft_session_send` is the current send channel. Historical aliases and `claude_output`-shaped rendering payloads remain for wire/storage compatibility; they are not current domain terminology.
 
-### Work Center
+### Retired features
 
-```text
-Browser WorkItem request
-  → Server relay
-  → Agent Work Center store/controller
-  → triage and validated Action graph
-  → watcher claims ready Actions
-  → runner reuses native Engine
-  → fenced Run result + evidence
-  → controller advances dependents/final gate
-```
-
-Work Center is Agent-level. A source Session is an origin/link, not its storage owner. The Coordinator conversation has no side-effect tools; Action Runs receive task-specific tools and workspace policies.
+Digital Person and Work Center code and local data are retained, but current Yeaft does not start them or expose them. A Server-only update removes the UI and relay; upgrade the Agent too to stop any legacy Work Center watcher still running there.
 
 ## Native engine query loop
 
@@ -116,7 +104,7 @@ agent/
     projects/               Agent-side Project context store
     llm/                    Anthropic/OpenAI Responses adapters and routing
     memory/                 retained, disabled H2-AMS implementation/data readers
-    tools/                  33 built-in tools
+    tools/                  built-in tools
     work-center/            WorkItem/Action/Run store, planner, watcher, runner
     sub-agent/              Child-agent execution and notifications
     tasks/                  Background shell task persistence
@@ -160,4 +148,3 @@ This is not transcript merging. User, VP, Session, Project-related Session, Work
 - [Native LLM layer](./yeaft-llm.md)
 - [WebSocket protocol](./wire-protocol.md)
 - [WebRTC Browser Runtime design](../../notes/2026-08-07-webrtc-browser-runtime-design.md)
-- [Work Center user contract](../user/work-center.md)

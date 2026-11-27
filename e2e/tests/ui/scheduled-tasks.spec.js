@@ -17,7 +17,7 @@ async function boot(page, serverUrl, agent) {
   });
   await page.goto(serverUrl);
   await expect.poll(() => page.evaluate(agentId => window.Pinia?.useChatStore?.().agents
-    .some(item => item.id === agentId && item.online && item.capabilities?.includes('work_center')), agent.agentId)).toBe(true);
+    .some(item => item.id === agentId && item.online && item.capabilities?.includes('scheduled_tasks')), agent.agentId)).toBe(true);
   await expect(page.locator('.sidebar-navigation')).toHaveAttribute('aria-busy', 'false');
 }
 

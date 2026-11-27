@@ -133,8 +133,8 @@ export default {
         :inert="store.digitalPersonOpen && digitalPersonModalOpen ? true : undefined" controls="session-sidebar" />
 
       <ScheduledTaskNotifications :store="store" />
-      <DigitalPersonPage v-if="store.digitalPersonOpen" @toggle-sidebar="store.toggleSessionSidebar()" @interaction-blocked="digitalPersonModalOpen = $event" />
-      <WorkCenterPage v-else-if="store.workCenterOpen" />
+      <DigitalPersonPage v-if="store.legacyProductSurfacesEnabled && store.digitalPersonOpen" @toggle-sidebar="store.toggleSessionSidebar()" @interaction-blocked="digitalPersonModalOpen = $event" />
+      <WorkCenterPage v-else-if="store.legacyProductSurfacesEnabled && store.workCenterOpen" />
       <PluginCenterPage v-else-if="store.pluginCenterOpen" @close="store.closePluginCenter()" @toggle-sidebar="toggleSidebar" />
 
       <!-- Center Conversation. The Session status pane is rendered as a

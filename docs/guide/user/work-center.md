@@ -1,5 +1,8 @@
 # Work Center
 
+> **Retired.** The guide below describes older versions. Current Yeaft does not open Work Center or run its tasks. Existing data is retained.
+
+
 Work Center is Yeaft's Agent-level durable task system. Use it when a goal must survive beyond one interactive turn, needs role separation or review, may wait for human input, or must recover after a browser disconnect or Agent restart.
 
 ![Work Center showing a WorkItem conversation and its Actions](/images/work-center.png)

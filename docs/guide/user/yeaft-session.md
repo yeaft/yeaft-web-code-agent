@@ -25,7 +25,7 @@ Legacy browser-local section state is not imported into user preferences. The in
 
 ## 搜索会话与分享
 
-- **搜索会话**：点数字人前面的放大镜，在快捷操作下方的搜索框输入关键词。支持搜索的在线 Agent 会一起查，结果直接列在原会话列表的位置；清空恢复目录树，按 Esc 收起。Agent 首次上线后在后台建索引，此后每天最多刷新一次，不调用模型。只索引过去 5 天有可见对话、且可见消息超过 3 条的原生 Yeaft Session；支持中英文关键词，结果可直接打开会话。新消息不必然立即可搜到，隐藏会话不在侧栏搜索结果中。5 天以前的历史不会因离开索引而删除。
+- **搜索会话**：点侧栏里的放大镜，在快捷操作下方的搜索框输入关键词。支持搜索的在线 Agent 会一起查，结果直接列在原会话列表的位置；清空恢复目录树，按 Esc 收起。Agent 首次上线后在后台建索引，此后每天最多刷新一次，不调用模型。只索引过去 5 天有可见对话、且可见消息超过 3 条的原生 Yeaft Session；支持中英文关键词，结果可直接打开会话。新消息不必然立即可搜到，隐藏会话不在侧栏搜索结果中。5 天以前的历史不会因离开索引而删除。
 - **跨会话历史**：可以说“查一下这台 Agent 上我其他会话里关于版本发布的讨论”。`HistorySearch` 默认仍只查当前 Session；跨会话查询按需读取同账号、同 Agent 的历史，不受 5 天限制，返回带来源的片段，受扫描和输出上限约束。不会自动把其他会话的内容放进新对话。
 - **内置 Share**：不占侧栏，也不用手动发布。每日索引从最近对话中保存用户明确写下的长期约定，例如“长期约定：客户通知优先写结论”，不会把助手提议或项目文件改动当作共识，也不会为此调用模型。想用时直接问“查一下关于客户通知的长期约定”或“找一下分享区的调研报告”。`HistorySearch` 按需查询本账号在这台 Agent 上的自动共识和已保存的分享成果，不自动加入每轮上下文。自动共识不会因来源会话超过 5 天而过期，但来源被删除或清空后不再返回。以前保存的 Share 条目保持原样，可在「设置 → 通用 → 已保存的分享」移除；项目文件仍留在自己的工作目录。
 
@@ -72,7 +72,7 @@ Sessions that chose Short video now show Content creation: the short-video pract
 
 删除后，历史、搜索、调试面板和新的模型请求不再读取该轮次，独立的 Loop 与工具调试记录也会清理。为避免旧版进程正在写入时丢失其他消息，在线删除不会重写会话的追加日志：历史和模型已无法访问这些记录，但原始字节可能仍在本机。管理员需要进一步清理时，先备份并停止这个数据目录的所有 Agent、CLI 和维护进程，再针对准确的 Session ID 运行 `node agent/yeaft/cli.js --prune-deleted-session-turns-offline <sessionId>`。这不是安全擦除备份或后来请求中已经复制的内容。
 
-此操作不可撤销，不回滚工具已经执行的操作或工作区文件，也不修改已分叉的 Session 或其他回复里的转述。删除入口要求 Agent 和 Server 都支持轮次删除，且 Web 已更新。不适用于定时任务 Session、数字人或 CLI 对话。
+此操作不可撤销，不回滚工具已经执行的操作或工作区文件，也不修改已分叉的 Session 或其他回复里的转述。删除入口要求 Agent 和 Server 都支持轮次删除，且 Web 已更新。不适用于定时任务 Session 或 CLI 对话。
 
 ## Fork the current Session
 
@@ -138,7 +138,7 @@ The native engine no longer provides `TodoWrite` or `StartPlan`. It does not req
 
 You can still ask a VP to “investigate and propose an approach without changing code,” using ordinary replies to discuss goals, constraints, risks, and validation. There is currently no dedicated Plan Mode switch; a conversational request is not a read-only filesystem sandbox.
 
-Existing Session checklists remain replayable, and Claude Code / Copilot CLI tool behavior is unchanged. Use [Work Center](./work-center.md) for durable cross-turn execution state and acceptance checks. Custom Project instructions, VP souls, and `planInstruction` data are not rewritten automatically; update any custom instructions that still require the retired tools.
+Existing Session checklists remain replayable, and Claude Code / Copilot CLI tool behavior is unchanged. Custom Project instructions, VP souls, and `planInstruction` data are not rewritten automatically; update any custom instructions that still require the retired tools.
 
 ## Handoffs and sub-agents
 
@@ -206,19 +206,12 @@ Dream/H2-AMS memory is retired from the active runtime:
 
 Legacy enable/manual Dream commands report that the feature is disabled. There is no Dream debug tab or settings control.
 
-## Move durable work to Work Center
-
-Use **Create WorkItem** from the Session composer when the goal needs role handoffs, waiting, retry, review, or execution beyond the current turn. The runtime stamps the source Session identity and creates an Agent-level WorkItem; Work Center then owns its contract, Coordinator conversation, Action graph, Runs, and recovery.
-
-See [Work Center](./work-center.md).
-
 ## Boundaries to remember
 
 - Yeaft has Sessions, not separate native chat/group modes.
 - A VP model setting is currently a `primary` or `fast` hint; the Session can override an exact provider/model and effort.
 - The native tool registry is shared by the engine and filtered by policy; tool availability is not a separate mode switch.
 - Projects organize and provide bounded context. They are not repositories, worktrees, or a second memory owner.
-- Work Center is Agent-level durable execution, not another Session.
 
 ## Related pages
 

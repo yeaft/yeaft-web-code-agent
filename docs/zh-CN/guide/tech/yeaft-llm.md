@@ -152,7 +152,7 @@ router 解析 `<provider-name>` 找到 provider 配置，用 `<model-id>` 调对
 
 ## Prompt 缓存默认策略
 
-原生 Yeaft 引擎的 Session、数字人与 Work Center 都不需要单独配置缓存开关。具体行为取决于实际请求协议：
+原生 Yeaft Session 不需要单独配置缓存开关。具体行为取决于实际请求协议：
 
 - **Anthropic Messages：** 官方和兼容网关只要有凭据作用域，就默认在工具、系统指令、最近符合条件的用户消息或工具结果上发送短时 `cache_control` 断点。Claude 的短时缓存写入与读取采用不同费率。
 - **OpenAI Responses：** 支持的模型本来就由服务端自动缓存。请求和凭据归属明确时，官方和兼容网关都会收到稳定且不含明文内容的 `prompt_cache_key` 路由提示；不改变 `store: false`，也不请求延长缓存保留时间。

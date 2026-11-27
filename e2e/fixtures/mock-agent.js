@@ -24,9 +24,6 @@ export class MockAgent {
       'session_fork_from_turn',
       'session_delete_turn',
       'session_turn_retry',
-      'work_center',
-      'work_center_message_v2',
-      'work_item_attachments',
       'browser_runtime_setup',
       'browser_runtime',
       'browser_webrtc',
@@ -212,8 +209,7 @@ export class MockAgent {
     this.send({
       type: 'agent_capabilities_updated',
       capabilities: [
-        'terminal', 'file_editor', 'workbench_session_routes', 'work_center',
-        'work_center_message_v2', 'work_item_attachments', 'browser_runtime_setup',
+        'terminal', 'file_editor', 'workbench_session_routes', 'browser_runtime_setup',
         'browser_runtime', 'browser_webrtc', 'browser_capture_tab', 'plaintext-ok',
       ],
     });

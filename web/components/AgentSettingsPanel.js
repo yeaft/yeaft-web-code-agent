@@ -101,58 +101,60 @@ export default {
                     <dd><strong :title="selectedAgent.workDir || ''">{{ selectedAgent.workDir || '—' }}</strong></dd>
                   </div>
                 </dl>
-                <div class="agent-settings-row agent-settings-work-center-row">
-                  <div>
-                    <strong ref="workCenterHeading" tabindex="-1">{{ $t('agentSettings.workCenter.title') }}</strong>
-                    <p v-if="workCenterDescription">{{ workCenterDescription }}</p>
-                    <p v-if="workCenterSettings?.overridden" class="agent-settings-setting-note">
-                      {{ $t('agentSettings.workCenter.environmentManaged') }}
-                    </p>
+                <template v-if="store.legacyProductSurfacesEnabled">
+                  <div class="agent-settings-row agent-settings-work-center-row">
+                    <div>
+                      <strong ref="workCenterHeading" tabindex="-1">{{ $t('agentSettings.workCenter.title') }}</strong>
+                      <p v-if="workCenterDescription">{{ workCenterDescription }}</p>
+                      <p v-if="workCenterSettings?.overridden" class="agent-settings-setting-note">
+                        {{ $t('agentSettings.workCenter.environmentManaged') }}
+                      </p>
+                    </div>
+                    <div class="agent-settings-setting-control">
+                      <span class="agent-settings-setting-status">{{ workCenterStatus }}</span>
+                      <template v-if="workCenterSupported">
+                        <label class="agent-settings-switch agent-settings-work-center-switch">
+                          <input
+                            type="checkbox"
+                            role="switch"
+                            :aria-label="$t('agentSettings.workCenter.title')"
+                            :aria-checked="workCenterDraftEnabled ? 'true' : 'false'"
+                            :checked="workCenterDraftEnabled"
+                            :disabled="!canToggleWorkCenter"
+                            @change="setWorkCenterEnabled($event.target.checked)"
+                          >
+                          <span aria-hidden="true"></span>
+                        </label>
+                      </template>
+                    </div>
                   </div>
-                  <div class="agent-settings-setting-control">
-                    <span class="agent-settings-setting-status">{{ workCenterStatus }}</span>
-                    <template v-if="workCenterSupported">
-                      <label class="agent-settings-switch agent-settings-work-center-switch">
-                        <input
-                          type="checkbox"
-                          role="switch"
-                          :aria-label="$t('agentSettings.workCenter.title')"
-                          :aria-checked="workCenterDraftEnabled ? 'true' : 'false'"
-                          :checked="workCenterDraftEnabled"
-                          :disabled="!canToggleWorkCenter"
-                          @change="setWorkCenterEnabled($event.target.checked)"
-                        >
+                  <div v-if="workCenterMessage" class="agent-settings-inline-feedback">
+                    <p class="agent-settings-inline-message" :class="{ error: workCenterError }" :role="workCenterError ? 'alert' : 'status'">
+                      {{ workCenterMessage }}
+                    </p>
+                    <button v-if="workCenterLoadFailed && workCenterSupported" class="btn-ghost" type="button" :disabled="workCenterLoading" @click="loadWorkCenterFeature">
+                      {{ $t('common.retry') }}
+                    </button>
+                  </div>
+                  <div class="agent-settings-row agent-settings-person-row">
+                    <div>
+                      <strong>{{ $t('agentSettings.digitalPerson.title') }}</strong>
+                      <p>{{ $t('agentSettings.digitalPerson.description') }}</p>
+                    </div>
+                    <div class="agent-settings-setting-control">
+                      <span class="agent-settings-setting-status">{{ $t(digitalPersonUiEnabled ? 'agentSettings.workCenter.enabled' : 'agentSettings.workCenter.disabled') }}</span>
+                      <label class="agent-settings-switch">
+                        <input type="checkbox" role="switch"
+                               :aria-label="$t('agentSettings.digitalPerson.title')"
+                               :aria-checked="digitalPersonUiEnabled ? 'true' : 'false'"
+                               :checked="digitalPersonUiEnabled"
+                               :disabled="!selectedAgent.capabilities?.includes('digital_person') && !digitalPersonUiEnabled"
+                               @change="store.setDigitalPersonUiEnabled($event.target.checked, selectedAgentId)">
                         <span aria-hidden="true"></span>
                       </label>
-                    </template>
+                    </div>
                   </div>
-                </div>
-                <div v-if="workCenterMessage" class="agent-settings-inline-feedback">
-                  <p class="agent-settings-inline-message" :class="{ error: workCenterError }" :role="workCenterError ? 'alert' : 'status'">
-                    {{ workCenterMessage }}
-                  </p>
-                  <button v-if="workCenterLoadFailed && workCenterSupported" class="btn-ghost" type="button" :disabled="workCenterLoading" @click="loadWorkCenterFeature">
-                    {{ $t('common.retry') }}
-                  </button>
-                </div>
-                <div class="agent-settings-row agent-settings-person-row">
-                  <div>
-                    <strong>{{ $t('agentSettings.digitalPerson.title') }}</strong>
-                    <p>{{ $t('agentSettings.digitalPerson.description') }}</p>
-                  </div>
-                  <div class="agent-settings-setting-control">
-                    <span class="agent-settings-setting-status">{{ $t(digitalPersonUiEnabled ? 'agentSettings.workCenter.enabled' : 'agentSettings.workCenter.disabled') }}</span>
-                    <label class="agent-settings-switch">
-                      <input type="checkbox" role="switch"
-                             :aria-label="$t('agentSettings.digitalPerson.title')"
-                             :aria-checked="digitalPersonUiEnabled ? 'true' : 'false'"
-                             :checked="digitalPersonUiEnabled"
-                             :disabled="!selectedAgent.capabilities?.includes('digital_person') && !digitalPersonUiEnabled"
-                             @change="store.setDigitalPersonUiEnabled($event.target.checked, selectedAgentId)">
-                      <span aria-hidden="true"></span>
-                    </label>
-                  </div>
-                </div>
+                </template>
                 <div class="agent-settings-maintenance">
                   <p>{{ $t('agentSettings.maintenance.description') }}</p>
                   <div class="agent-settings-actions">
@@ -252,6 +254,7 @@ export default {
     workCenterSettings() { return this.store.workCenterFeatureSettingsByAgent?.[this.selectedAgentId] || null; },
     workCenterEnabled() { return this.workCenterSettings?.enabled === true; },
     selectedWorkCenterAgentSignature() {
+      if (!this.store.legacyProductSurfacesEnabled) return '';
       const agent = this.selectedAgent;
       return agent ? `${agent.id}:${agent.online === true}:${agent.capabilities?.includes('work_center_feature_settings') === true}` : '';
     },
@@ -291,11 +294,12 @@ export default {
     this.previousFocus = document.activeElement;
     document.addEventListener('keydown', this.onDialogKeydown);
     this.$nextTick(() => {
-      const target = this.initialSection === 'work-center'
+      const focusWorkCenter = this.store.legacyProductSurfacesEnabled && this.initialSection === 'work-center';
+      const target = focusWorkCenter
         ? this.$refs.workCenterHeading
         : this.$refs.dialog?.querySelector('.settings-close');
       target?.focus?.({ preventScroll: true });
-      if (this.initialSection === 'work-center') target?.scrollIntoView?.({ block: 'center' });
+      if (focusWorkCenter) target?.scrollIntoView?.({ block: 'center' });
     });
   },
   beforeUnmount() {

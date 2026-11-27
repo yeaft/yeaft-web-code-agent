@@ -12,7 +12,7 @@ import { test } from '../../fixtures/test-server.js';
 // acknowledgements that must never complete another Agent's or view's operation.
 test.use({ serverEnv: { YEAFT_LOCAL_RUN: 'true' } });
 
-const capabilities = ['work_center', 'plaintext-ok', 'session_fork_from_turn', 'session_fork_while_running', 'session_merge'];
+const capabilities = ['plaintext-ok', 'session_fork_from_turn', 'session_fork_while_running', 'session_merge'];
 
 async function openSessionMenu(page) {
   await page.evaluate(() => { window.Pinia.useChatStore().sessionSidebarOpen = true; });
@@ -106,9 +106,9 @@ test('turn fork and divergent merge relay through Server, persist history and in
     await expect.poll(inventory).toContainEqual({ sessionId: source.id, projectId });
     await expect(page.locator('.assistant-turn').filter({ hasText: 'Prior completed answer' })).toBeVisible();
     const expectUnsupported = async (request, code) => {
-      mockAgent.send({ type: 'agent_capabilities_updated', capabilities: ['work_center', 'plaintext-ok'] });
+      mockAgent.send({ type: 'agent_capabilities_updated', capabilities: ['plaintext-ok'] });
       await expect.poll(() => page.evaluate(agentId => window.Pinia.useChatStore().agents
-        .find(agent => agent.id === agentId)?.capabilities, mockAgent.agentId)).toEqual(['work_center', 'plaintext-ok']);
+        .find(agent => agent.id === agentId)?.capabilities, mockAgent.agentId)).toEqual(['plaintext-ok']);
       // Bypass only the UI capability gate, not transport or response handling:
       // an outdated client must receive a real correlated Server rejection.
       const response = await page.evaluate(({ agentId, request }) => new Promise((resolve, reject) => {
@@ -136,7 +136,7 @@ test('turn fork and divergent merge relay through Server, persist history and in
     await page.evaluate(({ agentId, sessionId }) => {
       const chat = window.Pinia.useChatStore();
       chat.activeVpTurns.current = { turnId: 'current', sessionId, agentId };
-      chat.agents.find(agent => agent.id === agentId).capabilities = ['work_center', 'session_fork_from_turn'];
+      chat.agents.find(agent => agent.id === agentId).capabilities = ['session_fork_from_turn'];
     }, { agentId: mockAgent.agentId, sessionId: source.id });
     const fork = page.locator('.yeaft-session-actions .yeaft-fork-btn');
     const prior = page.locator('.assistant-turn').filter({ hasText: 'Prior completed answer' });

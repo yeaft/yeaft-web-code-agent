@@ -108,6 +108,11 @@ const COMMON_HEAD = `
     return 1.0 - smoothstep(lo, hi, x);
   }
 
+  /* GLSL ES 1.00 sec 8.2 safe square (avoids UB of pow(x, 2.0) when x < 0) */
+  float sq(float x) {
+    return x * x;
+  }
+
   vec2 sstepDown2(float hi, float lo, vec2 x) {
     return vec2(1.0) - smoothstep(lo, hi, x);
   }
@@ -247,86 +252,92 @@ const BODIES = {
       vec2 qr = rot2(uAngle + vYaw * 0.65) * q;
       float r = length(qr);
       float ang = atan(qr.y, qr.x);
-      float torTilt = clamp(0.46 + pitchSin * 0.42, 0.16, 0.92);
+      float torTilt = clamp(0.44 + pitchSin * 0.42, 0.16, 0.92);
+      float obsBoost = mix(0.76, 1.18, uObsBlend);
 
       float prePhase = smoothstep(0.0, 0.13, p) * (1.0 - smoothstep(0.20, 0.30, p));
-      float collapsePinch = 1.0 - 0.55 * smoothstep(0.14, 0.21, p);
+      float collapsePinch = 1.0 - 0.62 * smoothstep(0.13, 0.21, p);
       if (prePhase > 0.002) {
-        float pulse = 0.90 + 0.14 * sin(evT * 11.0) + 0.08 * sin(evT * 19.0);
-        float starCore = exp(-r * r * (44.0 / max(collapsePinch * collapsePinch, 0.12))) * pulse;
-        float starHalo = exp(-r * 6.8) * 0.38;
+        float pulse = 0.90 + 0.16 * sin(evT * 12.0) + 0.09 * sin(evT * 21.0);
+        float starCore = exp(-r * r * (42.0 / max(collapsePinch * collapsePinch, 0.10))) * pulse;
+        float starHalo = exp(-r * 6.2) * 0.44;
+        float infall = exp(-r * 3.4) * pow(max(ridged4(vec2(ang * 5.0 + evT * 0.6, r * 6.0 + evT * 2.4)), 0.0), 1.6) * smoothstep(0.06, 0.20, p);
         vec2 rRing = vec2(qr.x, qr.y / torTilt);
-        float eqRing = exp(-pow((length(rRing) - 0.46) / 0.038, 2.0)) * (0.65 + 0.35 * noise2(vec2(ang * 6.0 + vYaw * 2.0, uSeed)));
-        emit += vec3(0.66, 0.88, 1.00) * (starCore * 1.75 + starHalo) * prePhase;
-        emit += vec3(0.92, 0.72, 0.50) * eqRing * 0.42 * prePhase;
+        float eqRing = exp(-sq((length(rRing) - 0.46) / 0.036)) * (0.65 + 0.35 * noise2(vec2(ang * 7.0 + vYaw * 2.0, uSeed)));
+        emit += vec3(0.68, 0.90, 1.00) * (starCore * 1.95 + starHalo + infall * 0.55) * prePhase;
+        emit += vec3(0.96, 0.74, 0.48) * eqRing * 0.48 * prePhase;
       }
 
-      float flash = exp(-pow((p - 0.23) / 0.060, 2.0));
-      float afterCore = exp(-max(p - 0.23, 0.0) * 4.2) * smoothstep(0.18, 0.23, p);
+      float flash = exp(-sq((p - 0.23) / 0.056));
+      float afterCore = exp(-max(p - 0.23, 0.0) * 3.8) * smoothstep(0.18, 0.23, p);
       float expP = clamp((p - 0.19) / 0.81, 0.0, 1.0);
 
       if (expP > 0.004) {
-        float rShell = 0.14 + pow(expP, 0.62) * 1.36;
-        float nebEnv = smoothstep(0.0, 0.14, expP) * sstepDown(1.0, 0.72, p);
+        float rShell = 0.14 + pow(expP, 0.60) * 1.44;
+        float nebEnv = smoothstep(0.0, 0.13, expP) * sstepDown(1.0, 0.72, p);
 
         float asym = 1.0
-          + 0.16 * (fbm4(vec2(cos(ang) * 1.7 + uSeed, sin(ang) * 1.7 + 2.3)) - 0.5)
-          + 0.09 * sin(ang * 3.0 + uSeed * 6.28)
-          + 0.05 * cos(ang * 5.0 - uSeed * 4.1);
-        float rw = r / max(asym, 0.65);
+          + 0.18 * (fbm4(vec2(cos(ang) * 1.8 + uSeed, sin(ang) * 1.8 + 2.3)) - 0.5)
+          + 0.10 * sin(ang * 3.0 + uSeed * 6.28)
+          + 0.06 * cos(ang * 5.0 - uSeed * 4.1)
+          + 0.04 * sin(ang * 9.0 + uSeed * 9.1);
+        float rw = r / max(asym, 0.62);
 
         vec2 flowDir = normalize(qr + vec2(1e-5));
-        vec2 nebUv = (qr / max(rShell * 1.65, 0.18)) * 0.46 + 0.5 - flowDir * expP * 0.12 + vec2(uSeed * 0.17, uSeed * 0.23);
+        vec2 nebUv = (qr / max(rShell * 1.62, 0.18)) * 0.46 + 0.5 - flowDir * expP * 0.13 + vec2(uSeed * 0.17, uSeed * 0.23);
         vec3 veilTex = sampleNebulaSoft(nebUv);
 
-        vec2 turbCoord = qr * (2.8 / max(rShell, 0.24)) - flowDir * expP * 1.45 + vec2(uSeed * 3.7, -uSeed * 2.1);
-        float nWarp = fbm4(turbCoord * 0.9);
-        float filA = ridged4(turbCoord * 1.45 + vec2(nWarp * 1.25, -nWarp * 1.0));
-        float filB = fbm4(turbCoord * 2.2 - vec2(nWarp * 0.85, nWarp * 1.1));
-        float sharpFil = pow(clamp(filA, 0.0, 1.0), 1.65);
+        vec2 turbCoord = qr * (3.1 / max(rShell, 0.24)) - flowDir * expP * 1.55 + vec2(uSeed * 3.7, -uSeed * 2.1);
+        float nWarp = fbm4(turbCoord * 0.92);
+        float filA = ridged4(turbCoord * 1.55 + vec2(nWarp * 1.35, -nWarp * 1.08));
+        float filB = fbm4(turbCoord * 2.4 - vec2(nWarp * 0.90, nWarp * 1.15));
+        float sharpFil = pow(clamp(filA, 0.0, 1.0), 1.55);
+        float rtFingers = pow(max(0.5 + 0.5 * sin(ang * 18.0 + nWarp * 4.8 + uSeed * 6.28), 0.0), 3.0);
 
-        float outerBand = exp(-pow((rw - rShell * 0.97) / max(rShell * 0.14, 0.038), 2.0));
-        float outerWisps = outerBand * (0.18 + 1.55 * sharpFil * (0.42 + 0.95 * veilTex.r));
+        float outerBand = exp(-sq((rw - rShell * 0.96) / max(rShell * 0.135, 0.036)));
+        float outerWisps = outerBand * (0.20 + (1.68 * sharpFil + 0.42 * rtFingers) * (0.44 + 0.96 * veilTex.r));
 
-        float midBand = smoothstep(rShell * 0.22, rShell * 0.62, rw) * sstepDown(rShell * 1.15, rShell * 0.74, rw);
-        float innerWeb = midBand * (0.10 + 1.15 * sharpFil) * (0.28 + 1.35 * max(veilTex.b, veilTex.g));
+        float midBand = smoothstep(rShell * 0.20, rShell * 0.58, rw) * sstepDown(rShell * 1.16, rShell * 0.72, rw);
+        float innerWeb = midBand * (0.12 + 1.28 * sharpFil) * (0.30 + 1.40 * max(veilTex.b, veilTex.g));
 
-        float dustKnots = midBand * smoothstep(0.50, 0.82, filB) * (1.0 - sharpFil) * 0.30 * nebEnv;
-        solid = mix(solid, vec3(0.025, 0.018, 0.035), dustKnots);
+        float dustKnots = midBand * smoothstep(0.48, 0.80, filB) * (1.0 - sharpFil) * 0.34 * nebEnv * mix(0.45, 1.0, uObsBlend);
+        solid = mix(solid, vec3(0.022, 0.015, 0.032), dustKnots);
         solidA = max(solidA, dustKnots);
 
-        float cool = smoothstep(0.25, 0.92, expP);
-        vec3 colShock = mix(vec3(1.00, 0.56, 0.26), vec3(0.96, 0.24, 0.20), cool);
-        vec3 colO3 = mix(vec3(0.32, 0.82, 1.00), vec3(0.20, 0.60, 0.96), cool);
-        vec3 colViolet = vec3(0.62, 0.32, 0.88);
+        float cool = smoothstep(0.24, 0.92, expP);
+        vec3 colShock = mix(vec3(1.00, 0.62, 0.28), vec3(0.98, 0.22, 0.18), cool);
+        vec3 colO3 = mix(vec3(0.30, 0.86, 1.00), vec3(0.18, 0.62, 0.98), cool);
+        vec3 colViolet = vec3(0.68, 0.34, 0.94);
 
-        emit += colShock * outerWisps * (1.05 - cool * 0.32) * nebEnv;
-        emit += colO3 * innerWeb * (0.78 - cool * 0.22) * nebEnv;
-        emit += mix(colO3, colViolet, filB) * sstepDown(rShell * 1.04, rShell * 0.28, rw) * filB * (0.25 + 0.55 * veilTex.r) * 0.28 * nebEnv;
+        emit += colShock * outerWisps * (1.16 - cool * 0.28) * nebEnv * obsBoost;
+        emit += colO3 * innerWeb * (0.86 - cool * 0.20) * nebEnv * obsBoost;
+        emit += mix(colO3, colViolet, filB) * sstepDown(rShell * 1.06, rShell * 0.26, rw) * filB * (0.26 + 0.58 * veilTex.r) * 0.32 * nebEnv * obsBoost;
 
-        float leadEdge = exp(-pow((rw - rShell * 1.03) / max(rShell * 0.032, 0.012), 2.0)) * (0.22 + 1.05 * sharpFil);
-        emit += mix(vec3(0.76, 0.92, 1.0), vec3(1.0, 0.52, 0.28), 0.42 + 0.35 * cool) * leadEdge * 0.72 * nebEnv;
+        float leadEdge = exp(-sq((rw - rShell * 1.035) / max(rShell * 0.028, 0.011))) * (0.26 + 1.18 * sharpFil);
+        float secShock = exp(-sq((rw - rShell * 0.80) / max(rShell * 0.042, 0.016))) * sharpFil * 0.52;
+        emit += mix(vec3(0.80, 0.94, 1.0), vec3(1.0, 0.56, 0.28), 0.38 + 0.36 * cool) * (leadEdge * 0.84 + secShock * 0.45) * nebEnv * obsBoost;
 
-        float pwnEnv = smoothstep(0.22, 0.48, expP) * decayEnv;
-        if (pwnEnv > 0.002 && r < 0.62) {
+        float pwnEnv = smoothstep(0.20, 0.46, expP) * decayEnv;
+        if (pwnEnv > 0.002 && r < 0.68) {
           vec2 pTor = vec2(qr.x, qr.y / torTilt);
           float pr = length(pTor);
-          float torus = exp(-pow((pr - 0.14) / 0.038, 2.0)) * (0.62 + 0.38 * sin(ang * 4.0 - evT * 3.0 + vYaw));
-          float torus2 = exp(-pow((pr - 0.23) / 0.048, 2.0)) * 0.36;
-          vec2 jetP = rot2(-evT * 2.8) * qr;
-          float pBeam = exp(-abs(jetP.y) * 36.0) * exp(-abs(jetP.x) * (3.4 / max(0.45, pitchCos))) * (0.68 + 0.32 * sin(evT * 14.0));
-          emit += vec3(0.42, 0.90, 1.00) * (torus * 0.64 + torus2 * 0.34 + pBeam * 0.54) * pwnEnv;
-          emit += vec3(0.95, 0.98, 1.00) * exp(-r * r * 180.0) * 1.25 * pwnEnv;
+          float wispWave = 0.62 + 0.38 * sin(pr * 36.0 - evT * 5.2);
+          float torus = exp(-sq((pr - 0.14) / 0.036)) * (0.64 + 0.36 * sin(ang * 4.0 - evT * 3.4 + vYaw));
+          float torus2 = exp(-sq((pr - 0.24) / 0.046)) * 0.42 * wispWave;
+          vec2 jetP = rot2(-evT * 3.1) * qr;
+          float pBeam = exp(-abs(jetP.y) * 40.0) * exp(-abs(jetP.x) * (3.2 / max(0.45, pitchCos))) * (0.70 + 0.30 * sin(evT * 15.0));
+          emit += vec3(0.40, 0.92, 1.00) * (torus * 0.76 + torus2 * 0.42 + pBeam * 0.64) * pwnEnv * obsBoost;
+          emit += vec3(0.96, 0.99, 1.00) * exp(-r * r * 175.0) * 1.40 * pwnEnv;
         }
       }
 
-      float coreBright = flash * 2.1 + afterCore * 0.72;
+      float coreBright = flash * 2.35 + afterCore * 0.78;
       if (coreBright > 0.004) {
-        float coreDisk = exp(-r * r * mix(22.0, 6.8, flash)) * coreBright;
-        float coreHalo = exp(-r * mix(4.8, 2.4, flash)) * (0.42 * flash + 0.18 * afterCore);
-        emit += mix(vec3(0.52, 0.84, 1.0), vec3(1.0, 0.98, 0.95), smoothstep(0.0, 0.58, coreDisk)) * coreDisk;
-        emit += vec3(0.38, 0.72, 1.0) * coreHalo;
-        emit += opticalSpikes(qr, flash * 1.40 + afterCore * 0.36, 0.60 + flash * 0.88, 0.22, vec3(0.76, 0.92, 1.0));
+        float coreDisk = exp(-r * r * mix(22.0, 6.2, flash)) * coreBright;
+        float coreHalo = exp(-r * mix(4.6, 2.2, flash)) * (0.48 * flash + 0.20 * afterCore);
+        emit += mix(vec3(0.54, 0.86, 1.0), vec3(1.0, 0.98, 0.96), smoothstep(0.0, 0.54, coreDisk)) * coreDisk;
+        emit += vec3(0.38, 0.74, 1.0) * coreHalo;
+        emit += opticalSpikes(qr, (flash * 1.55 + afterCore * 0.42) * mix(0.75, 1.15, uObsBlend), 0.64 + flash * 0.95, 0.22, vec3(0.78, 0.93, 1.0));
       }
     `,
   },
@@ -390,19 +401,22 @@ const BODIES = {
           vec3 litP = rTex * (0.07 + pow(ndl, 0.85) * 1.16) + vec3(0.84, 0.44, 0.24) * pow(1.0 - pz, 3.6) * (0.06 + ndl * 0.34);
 
           float dHit = length(qr - hitPt * (rCurrPl / rPl));
-          float waveReach = sstepDown(bp * 1.42 + 0.04, bp * 1.42 - 0.14, dHit) * step(hitT - 0.01, p);
+          float shockR = bp * 1.46;
+          float waveReach = sstepDown(shockR + 0.04, shockR - 0.14, dHit) * step(hitT - 0.01, p);
+          float seismicRing = exp(-sq((dHit - shockR) / 0.036)) * smoothstep(0.0, 0.05, bp) * (1.0 - smoothstep(0.42, 0.82, bp));
           vec2 crackWarp = vec2(fbm4(puv * 6.4 + uSeed), fbm4(puv * 6.4 + vec2(4.7, 2.3))) - 0.5;
-          float vEdge = voronoiEdge(puv * 7.8 + crackWarp * 0.72 + vec2(uSeed * 2.0, 0.4));
-          float fissure = sstepDown(0.068 + bp * 0.11, 0.006, vEdge) * waveReach;
-          float craterMelt = exp(-dHit * dHit * 20.0) * smoothstep(0.0, 0.08, bp);
-          float lavaHeat = clamp(fissure * (0.90 + 0.45 * (1.0 - bp * 0.4)) + craterMelt * 1.15, 0.0, 1.35);
+          float vEdge = voronoiEdge(puv * 8.4 + crackWarp * 0.76 + vec2(uSeed * 2.0, 0.4));
+          float fissure = sstepDown(0.072 + bp * 0.115, 0.005, vEdge) * waveReach;
+          float fissureCore = sstepDown(0.024 + bp * 0.032, 0.002, vEdge) * waveReach;
+          float craterMelt = exp(-dHit * dHit * 18.0) * smoothstep(0.0, 0.08, bp);
+          float lavaHeat = clamp(fissure * (0.95 + 0.48 * (1.0 - bp * 0.38)) + craterMelt * 1.25 + seismicRing * 0.90, 0.0, 1.50);
 
           float sectorBreak = smoothstep(0.36, 0.82, bp + fbm4(puv * 5.0) * 0.34 - dHit * 0.50);
           float paa = sstepDown(1.02, 0.95, pr) * birthEnv * planetRemain * (1.0 - sectorBreak * 0.58);
 
-          solid = mix(solid, litP * (1.0 - lavaHeat * 0.45), paa);
+          solid = mix(solid, litP * (1.0 - min(lavaHeat, 1.0) * 0.48), paa);
           solidA = max(solidA, paa);
-          emit += blackbody(0.24 + 0.58 * clamp(lavaHeat, 0.0, 1.0)) * lavaHeat * 1.15 * paa;
+          emit += blackbody(0.26 + 0.62 * clamp(lavaHeat * 0.82 + fissureCore * 0.35, 0.0, 1.0)) * (lavaHeat * 1.22 + fissureCore * 0.58) * paa;
         }
       }
 
@@ -543,46 +557,49 @@ const BODIES = {
           solid = mix(solid, vec3(0.004, 0.006, 0.012), shadow);
           solidA = max(solidA, shadow);
 
-          float photonRing = exp(-pow((bqr - 1.035) / 0.040, 2.0)) * 1.88 * (0.94 + 0.06 * sin(t * 2.1));
-          float secRing = exp(-pow((bqr - 1.10) / 0.105, 2.0)) * 0.42;
-          float innerGlow = exp(-max(bqr - 1.0, 0.0) * 2.2) * smoothstep(0.95, 1.02, bqr) * 0.38;
+          float photonRing = exp(-sq((bqr - 1.032) / 0.036)) * 2.15 * (0.94 + 0.06 * sin(t * 2.1));
+          float secRing = exp(-sq((bqr - 1.11) / 0.095)) * 0.52;
+          float einsteinRing = exp(-sq((bqr - 1.48) / 0.042)) * 0.24 * smoothstep(0.10, 0.45, birthP);
+          float innerGlow = exp(-max(bqr - 1.0, 0.0) * 2.1) * smoothstep(0.95, 1.02, bqr) * 0.46;
 
           vec2 eq = vec2(bq.x, bq.y / diskTilt);
           float eqR = length(eq);
           float frontCross = sstepDown(0.06, -0.05, bq.y);
           float diskGrow = smoothstep(0.02, 0.36, birthP);
-          float diskBand = smoothstep(1.14, 1.50, eqR) * sstepDown(2.25 + 3.75 * diskGrow, 1.95, eqR)
+          float diskBand = smoothstep(1.12, 1.46, eqR) * sstepDown(2.35 + 3.95 * diskGrow, 1.92, eqR)
                          * mix(smoothstep(0.95, 1.04, bqr), 1.0, frontCross);
-          float archMask = smoothstep(0.99, 1.14, bqr) * sstepDown(2.65, 1.15, bqr)
+          float archMask = smoothstep(0.99, 1.13, bqr) * sstepDown(2.75, 1.14, bqr)
                          * smoothstep(0.04, 0.62, abs(bq.y) / max(bqr, 0.16)) * diskGrow;
 
-          float doppler = clamp(1.0 - 0.48 * (bq.x / max(bqr, 0.30)), 0.34, 1.76);
-          vec3 dCol = mix(vec3(0.76, 0.22, 0.05), vec3(1.00, 0.66, 0.28), smoothstep(0.34, 0.98, doppler));
-          dCol = mix(dCol, vec3(1.00, 0.94, 0.82), smoothstep(0.94, 1.38, doppler));
-          dCol = mix(dCol, vec3(0.84, 0.93, 1.00), smoothstep(1.36, 1.76, doppler) * 0.48);
+          float doppler = clamp(1.0 - 0.52 * (bq.x / max(bqr, 0.28)), 0.32, 1.84);
+          vec3 dCol = mix(vec3(0.74, 0.20, 0.04), vec3(1.00, 0.64, 0.26), smoothstep(0.32, 0.96, doppler));
+          dCol = mix(dCol, vec3(1.00, 0.95, 0.84), smoothstep(0.92, 1.40, doppler));
+          dCol = mix(dCol, vec3(0.82, 0.94, 1.00), smoothstep(1.38, 1.84, doppler) * 0.58);
 
-          float bhFlow = evT * 1.15;
+          float bhFlow = evT * 1.18;
           float dInt = 0.0;
           if (diskBand > 0.003) {
-            vec2 rotEq = rot2(bhFlow * (1.05 / pow(max(eqR, 0.85), 0.78)) + eqR * 2.75) * eq;
-            float n1 = fbm4(rotEq * 1.45);
-            float n2 = fbm4(rotEq * 3.1 + vec2(n1 * 1.8, -n1 * 1.4));
-            dInt = diskBand * (0.38 + 0.90 * n2) * (0.58 + 0.44 * sin(eqR * 12.0 + n1 * 5.6 - bhFlow * 0.7))
-                 * mix(1.48, 0.42, smoothstep(1.30, 5.2, eqR)) * doppler;
+            vec2 rotEq = rot2(bhFlow * (1.08 / pow(max(eqR, 0.85), 0.78)) + eqR * 2.95) * eq;
+            float n1 = fbm4(rotEq * 1.55);
+            float n2 = fbm4(rotEq * 3.3 + vec2(n1 * 1.8, -n1 * 1.4));
+            float shear = pow(max(ridged4(rotEq * 2.8 + vec2(n2, -n1)), 0.0), 1.35);
+            dInt = diskBand * (0.36 + 0.72 * n2 + 0.42 * shear) * (0.56 + 0.46 * sin(eqR * 13.0 + n1 * 5.8 - bhFlow * 0.75))
+                 * mix(1.56, 0.42, smoothstep(1.28, 5.4, eqR)) * doppler;
           }
           float aInt = 0.0;
           if (archMask > 0.003) {
-            vec2 rotArch = rot2(bhFlow * 0.72 + bqr * 3.5) * bq;
-            float an1 = fbm4(rotArch * 2.2);
-            float an2 = fbm4(rotArch * 4.5 + vec2(an1 * 1.5, -an1 * 1.1));
-            aInt = archMask * (0.40 + 0.80 * an2) * (0.64 + 0.36 * sin(bqr * 15.0 + an1 * 5.0 - bhFlow * 0.6)) * doppler * 0.90;
+            vec2 rotArch = rot2(bhFlow * 0.74 + bqr * 3.6) * bq;
+            float an1 = fbm4(rotArch * 2.3);
+            float an2 = fbm4(rotArch * 4.7 + vec2(an1 * 1.5, -an1 * 1.1));
+            aInt = archMask * (0.42 + 0.86 * an2) * (0.64 + 0.36 * sin(bqr * 15.0 + an1 * 5.0 - bhFlow * 0.6)) * doppler * 0.96;
           }
 
           vec3 frontEm = dCol * dInt * frontCross;
           vec3 extEm = dCol * (dInt * (1.0 - frontCross) + aInt)
-                     + mix(vec3(1.0, 0.66, 0.28), vec3(1.0, 0.95, 0.84), smoothstep(0.45, 1.45, doppler)) * (photonRing + secRing) * doppler
-                     + vec3(0.98, 0.56, 0.22) * (innerGlow + exp(-max(bqr - 1.0, 0.0) * 0.88) * 0.16 * doppler);
-          emit += (frontEm + extEm * smoothstep(0.94, 1.02, bqr)) * bhEnv * 1.05;
+                     + mix(vec3(1.0, 0.68, 0.28), vec3(1.0, 0.96, 0.88), smoothstep(0.45, 1.48, doppler)) * (photonRing + secRing) * doppler
+                     + vec3(0.84, 0.92, 1.0) * einsteinRing * (0.5 + 0.5 * uObsBlend)
+                     + vec3(0.98, 0.56, 0.22) * (innerGlow + exp(-max(bqr - 1.0, 0.0) * 0.86) * 0.18 * doppler);
+          emit += (frontEm + extEm * smoothstep(0.94, 1.02, bqr)) * bhEnv * mix(0.84, 1.12, uObsBlend);
         }
       }
     `,
@@ -606,24 +623,24 @@ const BODIES = {
         float eqR = length(eq);
         float eqA = atan(eq.y, eq.x);
 
-        float gwWave = sin(2.0 * (eqA - omega * 0.72) + eqR * (7.5 + ip * 10.0));
-        float gwMask = smoothstep(0.24, 0.52, eqR) * sstepDown(1.62, 0.45, eqR);
-        emit += vec3(0.46, 0.68, 1.0) * pow(max(gwWave, 0.0), 3.5) * gwMask * (0.09 + 0.16 * ip) * inEnv;
+        float gwWave = sin(2.0 * (eqA - omega * 0.72) + eqR * (8.0 + ip * 11.0));
+        float gwMask = smoothstep(0.22, 0.50, eqR) * sstepDown(1.68, 0.42, eqR);
+        emit += vec3(0.46, 0.72, 1.0) * pow(max(gwWave, 0.0), 3.2) * gwMask * (0.12 + 0.20 * ip) * inEnv;
 
         float sepSafe = max(sep, 0.025);
         float spiralArg = 2.0 * (eqA - omega) + (eqR - sepSafe) * (5.2 + ip * 4.5);
-        float armRidge = exp(-pow(sin(spiralArg * 0.5), 2.0) * (11.0 + eqR * 6.5));
+        float armRidge = exp(-sq(sin(spiralArg * 0.5)) * (10.5 + eqR * 6.0));
         float armTurb = fbm4(rot2(-omega * 0.35) * eq * 3.8 + uSeed * 3.0);
-        float armEnv = smoothstep(sepSafe * 0.78, sepSafe * 1.08, eqR) * sstepDown(sepSafe + 0.76, sepSafe + 0.08, eqR);
-        emit += mix(vec3(0.36, 0.84, 1.0), vec3(0.76, 0.54, 1.0), 0.5 + 0.5 * sin(eqA - omega))
-              * armRidge * (0.38 + 0.92 * armTurb) * armEnv * (0.45 + 0.85 * ip) * inEnv;
+        float armEnv = smoothstep(sepSafe * 0.72, sepSafe * 1.06, eqR) * sstepDown(sepSafe + 0.82, sepSafe + 0.08, eqR);
+        emit += mix(vec3(0.34, 0.88, 1.0), vec3(0.80, 0.54, 1.0), 0.5 + 0.5 * sin(eqA - omega))
+              * armRidge * (0.44 + 1.02 * armTurb) * armEnv * (0.52 + 0.92 * ip) * inEnv;
 
         for (int k = 0; k < 2; k++) {
           float a = omega + float(k) * PI;
-          vec2 nsPos = vec2(cos(a) * sep, sin(a) * sep * 0.56);
+          vec2 nsPos = vec2(cos(a) * sep, sin(a) * sep * orbTilt);
           float nd = length(qr - nsPos);
-          vec3 nsCol = (k == 0) ? vec3(0.42, 0.88, 1.0) : vec3(0.78, 0.56, 1.0);
-          emit += (vec3(1.0) * exp(-nd * nd * 175.0) * 2.0 + nsCol * exp(-nd * 8.5) * 0.68) * inEnv;
+          vec3 nsCol = (k == 0) ? vec3(0.40, 0.90, 1.0) : vec3(0.82, 0.56, 1.0);
+          emit += (vec3(1.0) * exp(-nd * nd * 170.0) * 2.25 + nsCol * exp(-nd * 8.0) * 0.76) * inEnv;
         }
       }
 
@@ -670,7 +687,7 @@ const BODIES = {
     `,
   },
 
-  /* 4. STELLAR SUPERFLARE — Boiling 3D Host Star + SDO 304A Coronal Loop Arcade + 3-Part CME */
+  /* 4. STELLAR SUPERFLARE — Seamless Boiling 3D Star + Sunspot Two-Ribbon Flare + 5-Arcade SDO Loops + Twisted CME */
   4: {
     extra: SPHERE_UV_HELPER,
     body: `
@@ -681,89 +698,116 @@ const BODIES = {
       float aOff = atan(qr.y, qr.x);
 
       float eruptEnv = birthEnv * decayEnv;
-      float flarePeak = exp(-pow((p - 0.32) / 0.13, 2.0));
-      float cmeP = clamp((p - 0.16) / 0.84, 0.0, 1.0);
+      float flarePeak = exp(-sq((p - 0.30) / 0.125));
+      float cmeP = clamp((p - 0.14) / 0.86, 0.0, 1.0);
+      float obsDetail = smoothstep(0.06, 0.65, uObsBlend);
 
-      /* Self-contained boiling 3D stellar photosphere & exterior flowing corona (never overwrites foreground Sun) */
+      /* Seamless volumetric corona + chromospheric glow (no hard ring gap around photosphere) */
       float ang = atan(qs.y, qs.x);
-      float streamer = 0.78 + 0.24 * noise2(vec2(ang * 5.0 + t * 0.12, rSun * 1.4 - t * 0.18))
-                     + 0.14 * noise2(vec2(ang * 11.0 - t * 0.09, rSun * 2.2 - t * 0.24));
-      float outerMask = smoothstep(0.90, 1.04, rSun);
-      float corona = (exp(-max(rSun - 0.97, 0.0) * 3.4) * 0.82
-                   + exp(-max(rSun - 0.94, 0.0) * 1.6) * 0.38 * streamer
-                   + pow(1.0 / max(rSun, 0.95), 2.8) * 0.20) * sstepDown(3.85, 1.02, rSun) * outerMask;
-      float prom = exp(-pow((rSun - 1.055) / 0.052, 2.0))
-                 * smoothstep(0.56, 0.88, noise2(vec2(ang * 7.5 + t * 0.08, t * 0.16))) * 0.72;
-      vec3 coronaCol = mix(vec3(0.98, 0.44, 0.12), vec3(1.00, 0.94, 0.80), exp(-max(rSun - 0.97, 0.0) * 2.8));
-      emit += (coronaCol * corona + vec3(1.0, 0.30, 0.08) * prom) * eruptEnv;
+      float streamer = 0.76 + 0.26 * noise2(vec2(ang * 5.0 + t * 0.12, rSun * 1.35 - t * 0.20))
+                     + 0.16 * noise2(vec2(ang * 11.0 - t * 0.09, rSun * 2.2 - t * 0.26));
+      float radialCorona = exp(-max(rSun - 0.90, 0.0) * 3.1) * 0.72
+                         + exp(-max(rSun - 0.85, 0.0) * 1.45) * 0.34 * streamer
+                         + pow(1.0 / max(rSun, 0.92), 2.9) * 0.16;
+      float coronaMask = smoothstep(0.84, 1.04, rSun) * sstepDown(4.2, 1.05, rSun);
+      float chromoRim = exp(-sq((rSun - 0.995) / 0.055)) * (0.48 + 0.52 * noise2(vec2(ang * 9.0 + t * 0.14, t * 0.22)));
+      vec3 coronaCol = mix(vec3(0.96, 0.36, 0.09), vec3(1.00, 0.88, 0.66), exp(-max(rSun - 0.92, 0.0) * 2.6));
+      emit += (coronaCol * radialCorona * coronaMask + vec3(1.00, 0.30, 0.06) * chromoRim * 0.55) * eruptEnv;
 
+      /* Far ambient mode: blend into a jewel-like distant flaring star with delicate spikes instead of a flat yellow disc */
+      if (obsDetail < 0.98) {
+        float ambStar = (exp(-rSun * rSun * 2.4) * 1.15 + exp(-rSun * 1.65) * 0.36) * (1.0 - obsDetail);
+        emit += mix(vec3(1.00, 0.66, 0.28), vec3(1.00, 0.95, 0.84), smoothstep(0.0, 0.8, ambStar)) * ambStar * eruptEnv;
+      }
+
+      /* Boiling 3D stellar photosphere + active sunspot umbra + Moreton surface shock ripple */
       if (rSun <= 1.04) {
         float z = sqrt(max(1.0 - min(rSun, 1.0) * min(rSun, 1.0), 0.0));
         vec3 n = vec3(qs.x, qs.y, z);
-        vec2 uv1 = sphereUv(n, evT * 0.06 + uSeed * 6.28, 0.11);
-        vec2 uv2 = sphereUv(n, -evT * 0.04 + 0.37, -0.07);
+        vec2 uv1 = sphereUv(n, evT * 0.05 + uSeed * 6.28, 0.11);
+        vec2 uv2 = sphereUv(n, -evT * 0.035 + 0.37, -0.07);
         vec2 warp = vec2(
-          noise2(uv1 * 18.0 + vec2(t * 0.12, -t * 0.08)) - 0.5,
-          noise2(uv1 * 18.0 + vec2(-t * 0.09, t * 0.11)) - 0.5
-        ) * 0.012;
+          noise2(uv1 * 18.0 + vec2(t * 0.11, -t * 0.08)) - 0.5,
+          noise2(uv1 * 18.0 + vec2(-t * 0.09, t * 0.10)) - 0.5
+        ) * 0.014;
         vec3 gran = mix(
           texture2D(uTexSun, fract(uv1 + warp)).rgb,
-          texture2D(uTexSun, fract(uv2 * 1.55 + vec2(t * 0.008, 0.0))).rgb,
-          0.36
+          texture2D(uTexSun, fract(uv2 * 1.65 + vec2(t * 0.008, 0.0))).rgb,
+          0.38
         );
-        vec3 photo = pow(max(gran, vec3(0.02)), vec3(0.88)) * vec3(1.24, 0.90, 0.52) * (0.22 + 0.78 * pow(z, 0.58))
-                   + vec3(0.38, 0.26, 0.14) * pow(z, 2.2)
-                   + vec3(1.0, 0.34, 0.06) * pow(1.0 - z, 2.4) * 0.78;
-        float aa = sstepDown(1.02, 0.94, rSun) * eruptEnv;
+        float limb = pow(z, 0.52);
+        vec3 photo = pow(max(gran, vec3(0.02)), vec3(0.92)) * mix(vec3(0.95, 0.26, 0.04), vec3(1.26, 0.92, 0.52), limb) * (0.34 + 0.82 * limb)
+                   + vec3(0.42, 0.30, 0.14) * pow(z, 2.4);
+
+        /* Active sunspot group near magnetic reconnection footpoint */
+        float dSpot1 = length(qr - vec2(0.80, 0.09));
+        float dSpot2 = length(qr - vec2(0.84, -0.10));
+        float spotMask = (exp(-dSpot1 * dSpot1 * 56.0) + exp(-dSpot2 * dSpot2 * 72.0)) * 0.72 * obsDetail;
+        photo *= (1.0 - spotMask);
+
+        /* Chromospheric Moreton shockwave sweeping across the stellar disc */
+        float moretonR = smoothstep(0.18, 0.62, p) * 1.85;
+        float dFoot = length(qr - vec2(0.88, 0.0));
+        float moreton = exp(-sq((dFoot - moretonR) / 0.075)) * smoothstep(0.18, 0.28, p) * (1.0 - smoothstep(0.50, 0.74, p)) * obsDetail;
+
+        float aa = sstepDown(1.02, 0.90, rSun) * eruptEnv * mix(0.45, 1.0, obsDetail);
         solid = mix(solid, clamp(acesTone(photo), 0.0, 1.0), aa);
         solidA = max(solidA, aa);
+        emit += vec3(1.00, 0.68, 0.34) * moreton * 0.95 * aa;
       }
 
-      /* Active magnetic reconnection plage on stellar limb */
-      float dRibbon = length(vec2((qr.x - 0.98) * 2.5, qr.y * 1.35));
-      float plage = exp(-dRibbon * dRibbon * 8.0) * (0.52 + 0.48 * fbm4(qr * 8.5 - vec2(evT * 0.9, 0.0)));
-      emit += mix(vec3(1.0, 0.38, 0.08), vec3(1.0, 0.92, 0.74), flarePeak) * plage * (0.55 + flarePeak * 1.15) * eruptEnv;
-      float dCusp = length(qr - vec2(1.16 + flarePeak * 0.16, 0.0));
-      emit += vec3(1.0, 0.34, 0.48) * exp(-dCusp * 5.8) * flarePeak * 0.72 * eruptEnv;
-      emit += opticalSpikes(qr - vec2(1.06, 0.0), flarePeak * 0.82 * eruptEnv, 0.92, 0.18, vec3(1.0, 0.86, 0.56));
+      /* Two-Ribbon Magnetic Reconnection Flare + EUV White-Hot X-Point Cusp */
+      float dRibbonA = length(vec2((qr.x - 0.94) * 3.0, (qr.y - 0.11) * 1.7));
+      float dRibbonB = length(vec2((qr.x - 0.94) * 3.0, (qr.y + 0.11) * 1.7));
+      float ribNoise = 0.54 + 0.46 * fbm4(qr * 9.0 - vec2(evT * 1.1, 0.0));
+      float plage = (exp(-dRibbonA * dRibbonA * 10.0) + exp(-dRibbonB * dRibbonB * 10.0)) * ribNoise;
+      emit += mix(vec3(1.0, 0.42, 0.08), vec3(1.0, 0.96, 0.86), flarePeak) * plage * (0.58 + flarePeak * 1.45) * eruptEnv;
 
-      /* 3-strand SDO 304A Coronal Magnetic Loop Arcade */
-      if (qr.x > 0.76 && rSun < 3.2) {
-        float loopRise = smoothstep(0.0, 0.22, p) * (1.0 - smoothstep(0.72, 0.98, p)) * eruptEnv;
-        for (int k = 0; k < 3; k++) {
+      float dCusp = length(qr - vec2(1.16 + flarePeak * 0.22, 0.0));
+      emit += vec3(1.0, 0.92, 0.82) * exp(-dCusp * dCusp * 18.0) * flarePeak * 1.35 * eruptEnv;
+      emit += vec3(1.0, 0.32, 0.56) * exp(-dCusp * 4.6) * flarePeak * 0.78 * eruptEnv;
+      emit += opticalSpikes(qr - vec2(1.06, 0.0), (0.18 + flarePeak * 1.05) * eruptEnv, 0.88 + flarePeak * 0.42, 0.18, vec3(1.0, 0.86, 0.58));
+
+      /* 5-Strand SDO 304A / 171A Interlaced Coronal Magnetic Loop Arcade */
+      if (qr.x > 0.70 && rSun < 3.6) {
+        float loopRise = smoothstep(0.0, 0.20, p) * (1.0 - smoothstep(0.72, 0.98, p)) * eruptEnv;
+        for (int k = 0; k < 5; k++) {
           float fk = float(k);
-          float archH = (0.36 + fk * 0.26) * (0.52 + 0.62 * sin(min(1.0, p * 1.40) * PI) + flarePeak * 0.22);
-          vec2 cLoop = vec2(0.92 + archH * 0.22, (fk - 1.0) * 0.08);
-          vec2 dl = vec2((qr.x - cLoop.x) / max(archH * 1.18, 0.1), (qr.y - cLoop.y) / max(archH * 0.76, 0.1));
+          float archH = (0.30 + fk * 0.22) * (0.48 + 0.66 * sin(min(1.0, p * 1.38) * PI) + flarePeak * 0.26);
+          vec2 cLoop = vec2(0.88 + archH * 0.24, (fk - 2.0) * 0.068);
+          vec2 dl = vec2((qr.x - cLoop.x) / max(archH * 1.24, 0.1), (qr.y - cLoop.y) / max(archH * 0.74, 0.1));
           float lr = length(dl);
-          float strand = exp(-pow((lr - 1.0) / 0.075, 2.0)) * smoothstep(0.86, 1.02, qr.x);
-          float plasmaFlow = pow(ridged4(vec2(atan(dl.y, dl.x) * 4.5 + evT * (1.6 - fk * 0.3), lr * 5.5 + fk * 2.1)), 1.35);
-          vec3 loopCol = mix(vec3(1.0, 0.28, 0.06), vec3(1.0, 0.78, 0.32), clamp(plasmaFlow * 0.85 + flarePeak * 0.35, 0.0, 1.0));
-          emit += loopCol * strand * (0.34 + 1.18 * plasmaFlow) * (0.86 - fk * 0.16) * loopRise;
+          float strand = exp(-sq((lr - 1.0) / (0.062 + fk * 0.006))) * smoothstep(0.80, 1.00, qr.x);
+          float plasmaFlow = pow(max(ridged4(vec2(atan(dl.y, dl.x) * 5.2 + evT * (1.9 - fk * 0.22), lr * 6.0 + fk * 2.3)), 0.0), 1.30);
+          vec3 hotInner = (k < 2) ? vec3(0.86, 0.94, 1.00) : vec3(1.00, 0.82, 0.38);
+          vec3 loopCol = mix(vec3(1.00, 0.26, 0.06), hotInner, clamp(plasmaFlow * 0.86 + flarePeak * 0.42, 0.0, 1.0));
+          emit += loopCol * strand * (0.34 + 1.32 * plasmaFlow) * (0.90 - fk * 0.11) * loopRise;
         }
       }
 
-      /* Billowing 3-Part Coronal Mass Ejection Flux Rope */
-      if (cmeP > 0.01 && qr.x > 0.84) {
-        float cmeEnv = smoothstep(0.0, 0.16, cmeP) * decayEnv;
-        float coneAng = 0.66 + cmeP * 0.20;
-        float angMask = sstepDown(coneAng, coneAng * 0.22, abs(aOff));
-        float frontR = 1.18 + pow(cmeP, 0.72) * 2.65;
-        float radialU = (rSun - 0.98) / max(frontR - 0.98, 0.15);
+      /* Billowing 3-Part Coronal Mass Ejection (Twisted Flux Rope + Bright Shock Front + Prominence Filaments) */
+      if (cmeP > 0.01 && qr.x > 0.82) {
+        float cmeEnv = smoothstep(0.0, 0.15, cmeP) * decayEnv;
+        float coneAng = 0.72 + cmeP * 0.24;
+        float angMask = sstepDown(coneAng, coneAng * 0.18, abs(aOff));
+        float frontR = 1.22 + pow(cmeP, 0.68) * 2.95;
+        float radialU = (rSun - 0.96) / max(frontR - 0.96, 0.15);
 
-        if (radialU > 0.0 && radialU < 1.32 && angMask > 0.002) {
-          vec2 cmeFlow = vec2(radialU * 2.8 - evT * 0.75, aOff * 4.0);
+        if (radialU > 0.0 && radialU < 1.36 && angMask > 0.002) {
+          float twist = sin(radialU * 7.5 - evT * 2.4 + aOff * 3.0) * 0.16;
+          vec2 cmeFlow = vec2(radialU * 3.0 - evT * 0.85, (aOff + twist) * 4.4);
           float n1 = fbm4(cmeFlow * 1.45 + uSeed * 3.0);
-          float n2 = pow(ridged4(cmeFlow * 2.6 + vec2(n1 * 1.2, -n1 * 0.9)), 1.45);
-          vec3 sunTex = texture2D(uTexSun, mirrorUv(vec2(radialU * 0.72 - cmeP * 0.42, aOff * 0.5 + 0.5))).rgb;
+          float n2 = pow(ridged4(cmeFlow * 2.7 + vec2(n1 * 1.25, -n1 * 0.95)), 1.35);
+          vec3 sunTex = texture2D(uTexSun, mirrorUv(vec2(radialU * 0.72 - cmeP * 0.44, aOff * 0.5 + 0.5))).rgb;
 
-          float rFrontWarped = radialU - (n1 - 0.5) * 0.15;
-          float leadShock = exp(-pow((rFrontWarped - 0.94) / 0.095, 2.0)) * (0.32 + 1.05 * n2);
-          float promCore = exp(-pow((rFrontWarped - 0.52) / 0.22, 2.0)) * (0.20 + 1.25 * n2 * sunTex.r);
-          float streamers = sstepDown(1.16, 0.08, radialU) * pow(0.5 + 0.5 * sin(aOff * 20.0 + n1 * 4.8), 2.5) * 0.34;
+          float rFrontWarped = radialU - (n1 - 0.5) * 0.14;
+          float leadShock = exp(-sq((rFrontWarped - 0.95) / 0.078)) * (0.38 + 1.25 * n2);
+          float fluxRope = exp(-sq((rFrontWarped - 0.58) / 0.19)) * (0.24 + 1.42 * n2 * (0.45 + 0.75 * sunTex.r));
+          float streamers = sstepDown(1.18, 0.06, radialU) * pow(max(0.5 + 0.5 * sin(aOff * 22.0 + n1 * 5.2), 0.0), 2.4) * 0.42;
 
-          float heat = clamp(0.74 - radialU * 0.44 - cmeP * 0.20 + n2 * 0.26, 0.14, 0.86);
-          emit += blackbody(heat) * (leadShock * 0.82 + promCore * 0.74 + streamers) * angMask * (1.0 - cmeP * 0.28) * cmeEnv;
+          float heat = clamp(0.80 - radialU * 0.42 - cmeP * 0.18 + n2 * 0.28, 0.16, 0.92);
+          vec3 cmeCol = mix(blackbody(heat), vec3(0.95, 0.96, 1.0), clamp(leadShock * 0.32 * flarePeak, 0.0, 0.45));
+          emit += cmeCol * (leadShock * 0.98 + fluxRope * 0.86 + streamers) * angMask * (1.0 - cmeP * 0.24) * cmeEnv * mix(0.75, 1.15, obsDetail);
         }
       }
     `,
@@ -795,28 +839,30 @@ const BODIES = {
         float nJet = fbm4(vec2(along * 2.8 - evT * 6.5 + dirSign * 3.7, qr.y * 8.0 + uSeed * 4.0));
         float knots = ridged4(vec2(along * 4.4 - evT * 8.2 + dirSign * 5.1, qr.y * 13.0 + nJet * 1.4));
 
-        float needle = exp(-pow(perp / coreW, 2.0)) * (1.35 + 0.50 * knots);
-        float sheath = exp(-pow(perp / sheathW, 2.0)) * (0.24 + 0.98 * knots);
-        float aura = exp(-pow(perp / (sheathW * 2.3), 2.0)) * (0.14 + 0.42 * nJet);
+        float needle = exp(-sq(perp / coreW)) * (1.55 + 0.62 * knots);
+        float sheath = exp(-sq(perp / sheathW)) * (0.28 + 1.08 * knots);
+        float aura = exp(-sq(perp / (sheathW * 2.4))) * (0.16 + 0.46 * nJet);
+        float internalShock = exp(-sq(perp / (coreW * 2.4))) * pow(max(0.0, sin(along * 7.0 - evT * 10.5)), 5.0) * 0.95;
 
-        float bowR = 0.22 + pow(jetP, 0.62) * 1.15;
+        float bowR = 0.24 + pow(jetP, 0.60) * 1.28;
         vec2 cocUv = (qr / max(bowR * 1.65, 0.2)) * 0.44 + 0.5 + vec2(uSeed * 0.2, 0.1);
         vec3 nebTex = sampleNebulaSoft(cocUv);
-        float hourglass = abs(perp - (0.08 + pow(along, 0.72) * 0.42));
-        float cocoonShell = exp(-pow(hourglass / 0.10, 2.0)) * sstepDown(bowR * 1.25, bowR * 0.15, along)
-                          * (0.30 + 1.12 * knots * (0.38 + 0.82 * nebTex.b));
+        float hourglass = abs(perp - (0.08 + pow(along, 0.72) * 0.45));
+        float cocoonShell = exp(-sq(hourglass / 0.105)) * sstepDown(bowR * 1.28, bowR * 0.14, along)
+                          * (0.34 + 1.22 * knots * (0.40 + 0.84 * nebTex.b));
+        float bowCap = exp(-sq((along - bowR * 0.96) / 0.085)) * exp(-sq(perp / (0.14 + bowR * 0.26))) * (0.45 + 0.85 * knots);
 
         vec2 eqT = vec2(qr.x / 0.20, qr.y);
-        float eqGlow = exp(-length(eqT) * 4.6) * (0.55 + 0.45 * nJet);
+        float eqGlow = exp(-length(eqT) * 4.4) * (0.58 + 0.42 * nJet);
 
-        vec3 colNeedle = vec3(0.96, 0.94, 1.00);
-        vec3 colSheath = mix(vec3(0.66, 0.38, 1.00), vec3(0.32, 0.80, 1.00), clamp(knots * 0.8, 0.0, 1.0));
-        vec3 colCocoon = mix(vec3(0.28, 0.74, 1.00), vec3(0.84, 0.42, 0.98), nJet);
+        vec3 colNeedle = vec3(0.97, 0.95, 1.00);
+        vec3 colSheath = mix(vec3(0.68, 0.36, 1.00), vec3(0.28, 0.84, 1.00), clamp(knots * 0.85, 0.0, 1.0));
+        vec3 colCocoon = mix(vec3(0.26, 0.78, 1.00), vec3(0.88, 0.40, 1.00), nJet);
 
-        emit += colNeedle * needle * lenMask * beamEnv * 1.32;
-        emit += colSheath * (sheath * 0.86 + aura * 0.32) * lenMask * beamEnv;
-        emit += colCocoon * cocoonShell * 0.82 * beamEnv;
-        emit += vec3(1.0, 0.74, 0.46) * eqGlow * 0.56 * beamEnv;
+        emit += colNeedle * (needle + internalShock) * lenMask * beamEnv * 1.38;
+        emit += colSheath * (sheath * 0.92 + aura * 0.36 + bowCap * 0.95) * lenMask * beamEnv;
+        emit += colCocoon * cocoonShell * 0.92 * beamEnv;
+        emit += vec3(1.0, 0.74, 0.44) * eqGlow * 0.62 * beamEnv;
 
         float flash = exp(-pow((p - 0.26) / 0.11, 2.0));
         emit += vec3(0.95, 0.92, 1.0) * exp(-r * r * 28.0) * (0.85 + flash * 1.45) * beamEnv;
@@ -899,12 +945,12 @@ const BODIES = {
         float ribWidth = mix(0.032, 0.078, bestU) * (0.76 + 0.34 * sin(bestU * PI));
         float sTurb = fbm4(qr * 5.2 - vec2(evT * 1.4, -evT * 0.9) + uSeed * 3.0);
         float sRidge = ridged4(qr * 7.6 + vec2(sTurb * 1.3, -sTurb));
-        float streamSpine = exp(-pow(minD / (ribWidth * 0.38), 2.0)) * (0.72 + 0.58 * sRidge);
-        float streamPlume = exp(-pow(minD / (ribWidth * 1.55), 2.0)) * (0.24 + 0.85 * sTurb);
+        float streamSpine = exp(-pow(minD / (ribWidth * 0.34), 2.0)) * (0.82 + 0.68 * sRidge);
+        float streamPlume = exp(-pow(minD / (ribWidth * 1.62), 2.0)) * (0.28 + 0.90 * sTurb);
         float taper = smoothstep(0.0, 0.14, bestU) * sstepDown(1.0, 0.88, bestU);
-        float streamHeat = clamp(0.24 + bestU * 0.52 + sRidge * 0.18, 0.14, 0.84);
+        float streamHeat = clamp(0.26 + bestU * 0.56 + sRidge * 0.20, 0.16, 0.90);
         float occStream = smoothstep(0.92, 1.05, bqr);
-        emit += blackbody(streamHeat) * (streamSpine * 0.92 + streamPlume * 0.48) * taper * streamEnv * occStream;
+        emit += blackbody(streamHeat) * (streamSpine * 1.08 + streamPlume * 0.54) * taper * streamEnv * occStream;
 
         if (escEnv > 0.002) {
           float eWidth = 0.042 + escU * 0.10;
@@ -967,14 +1013,14 @@ const BODIES = {
         float dustW = 0.060 + max(alongI, 0.0) * (0.23 + splitP * 0.12);
         float dNoise = fbm4(vec2(alongI * 3.2 - evT * 1.6, dustCurve * 7.5 + uSeed * 4.0));
         float dustMask = exp(-pow(dustCurve / dustW, 2.0)) * smoothstep(-0.08, 0.12, alongI) * sstepDown(2.15, 0.18, alongI);
-        vec3 dustCol = mix(vec3(1.00, 0.90, 0.72), vec3(0.90, 0.66, 0.40), clamp(alongI * 0.55, 0.0, 1.0));
-        emit += dustCol * dustMask * (0.28 + 0.72 * dNoise) * 0.52 * cometEnv;
+        vec3 dustCol = mix(vec3(1.00, 0.92, 0.74), vec3(0.92, 0.64, 0.36), clamp(alongI * 0.55, 0.0, 1.0));
+        emit += dustCol * dustMask * (0.32 + 0.78 * dNoise) * 0.62 * cometEnv;
 
-        float ionWave = sin(alongI * 7.5 - evT * 4.6) * 0.018 * alongI;
-        float ionW = 0.024 + max(alongI, 0.0) * 0.076;
-        float ionFil = ridged4(vec2(alongI * 4.2 - evT * 3.2, (perpI + ionWave) * 18.0 + uSeed * 2.0));
-        float ionMask = exp(-pow((perpI + ionWave) / ionW, 2.0)) * smoothstep(-0.05, 0.08, alongI) * sstepDown(2.25, 0.12, alongI);
-        emit += mix(vec3(0.28, 0.80, 1.00), vec3(0.62, 0.94, 1.00), ionFil) * ionMask * (0.32 + 0.88 * ionFil) * 0.72 * cometEnv;
+        float ionWave = sin(alongI * 7.8 - evT * 4.8) * 0.018 * alongI;
+        float ionW = 0.022 + max(alongI, 0.0) * 0.072;
+        float ionFil = ridged4(vec2(alongI * 4.6 - evT * 3.5, (perpI + ionWave) * 19.0 + uSeed * 2.0));
+        float ionMask = exp(-sq((perpI + ionWave) / ionW)) * smoothstep(-0.05, 0.08, alongI) * sstepDown(2.25, 0.12, alongI);
+        emit += mix(vec3(0.24, 0.80, 1.00), vec3(0.68, 0.96, 1.00), ionFil) * ionMask * (0.38 + 0.96 * ionFil) * 0.84 * cometEnv;
       }
 
       for (int k = 0; k < 7; k++) {

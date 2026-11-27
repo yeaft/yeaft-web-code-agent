@@ -3,6 +3,7 @@
  * Delegates to sub-handlers for complex message types.
  */
 
+import { LEGACY_PRODUCT_SURFACES_ENABLED } from '../../utils/legacy-product-surfaces.js';
 import { acceptSessionDiscoveryResponse } from './session-discovery.js';
 import { acceptPersonResponse } from './digital-person.js';
 import { acceptPluginConfigReply, acceptPluginSkillDetailReply } from './plugin-config.js';
@@ -333,6 +334,10 @@ function hydrateDebugLoopRequests(loops = []) {
 }
 
 export function handleMessage(store, msg) {
+  if (!LEGACY_PRODUCT_SURFACES_ENABLED && [
+    'work_center_event', 'work_center_response', 'work_center_feature_settings',
+    'work_center_feature_settings_updated', 'person_response',
+  ].includes(msg?.type)) return;
   const authStore = useAuthStore();
   // The socket identity gate excludes replaced sockets. Also reject a still-open
   // old-owner socket during the logout/re-authentication transition.
@@ -383,7 +388,7 @@ export function handleMessage(store, msg) {
     case 'client_hello_ack':
       store.sessionDiscoverySupported = msg.sessionDiscoverySupported === true;
       store.workbenchRouteProtocolSupported = msg.workbenchRouteProtocol === 1;
-      store.workCenterWorkbenchProtocolSupported = msg.workCenterWorkbenchProtocol === 1;
+      store.workCenterWorkbenchProtocolSupported = LEGACY_PRODUCT_SURFACES_ENABLED && msg.workCenterWorkbenchProtocol === 1;
       store.browserRuntimeProtocolSupported = msg.browserRuntimeProtocol === 1;
       store.browserRuntimeSetupProtocolSupported = msg.browserRuntimeSetupProtocol === 1;
       store.browserRuntimeServerEnabled = msg.browserRuntimeEnabled === true;
@@ -526,7 +531,7 @@ export function handleMessage(store, msg) {
 
     case 'agent_selected':
       if (!handleAgentSelected(store, msg)) break;
-      if (store.workCenterOpen && store.workCenterAgentId) {
+      if (LEGACY_PRODUCT_SURFACES_ENABLED && store.workCenterOpen && store.workCenterAgentId) {
         store.listWorkItems(store.workCenterAgentId).catch(() => {});
       }
       break;

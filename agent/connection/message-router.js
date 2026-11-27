@@ -26,7 +26,7 @@ import { sendToServer, flushMessageBuffer } from './buffer.js';
 import { sendAgentMetricsSnapshot } from '../metrics.js';
 import { handleRestartAgent, handleUpgradeAgent } from './upgrade.js';
 import { loadMcpServers, updateMcpConfig } from '../mcp.js';
-import { getLlmConfig, updateLlmConfig, getYeaftSettings, updateYeaftSettings, getPluginConfig, updatePluginConfig, getTelemetrySettings, updateTelemetrySettings, getWorkCenterFeatureSettings, updateWorkCenterFeatureSettings, getSearchSettings, updateSearchSettings, fetchTavilyUsage } from '../yeaft/config-api.js';
+import { getLlmConfig, updateLlmConfig, getYeaftSettings, updateYeaftSettings, getPluginConfig, updatePluginConfig, getTelemetrySettings, updateTelemetrySettings, getSearchSettings, updateSearchSettings, fetchTavilyUsage } from '../yeaft/config-api.js';
 import { loadConfig } from '../yeaft/config.js';
 import { discoverLlmModels } from '../llm-model-discovery.js';
 import { fetchModelsDev } from '../yeaft/llm/models-dev.js';
@@ -34,9 +34,7 @@ import { invalidateYeaftProjectContexts, startYeaftScheduledTasks, handleYeaftSc
 import { handleYeaftSessionRetry } from '../yeaft/web-bridge.js';
 import { startYeaftStatusRefresh, forceRefreshYeaftStatus } from '../yeaft/status-cache.js';
 import { handleSessionDiscovery, startSessionDiscovery } from '../yeaft/session-discovery/bridge.js';
-import { handleWorkCenterRequest } from '../yeaft/work-center/bridge.js';
 import { handleSessionAttachmentRead } from '../yeaft/session-attachment-read.js';
-import { handlePersonRequest } from '../yeaft/person/bridge.js';
 import { handleCreationRequest, handleCreationMediaRead } from '../yeaft/creations/bridge.js';
 import { handleCosmicWebAiRequest } from '../yeaft/cosmic-web-briefing.js';
 import { handleBrowserRuntimeMessage } from '../browser-runtime/messages.js';
@@ -101,82 +99,12 @@ export function applyRegisteredTransport(msg) {
   }
 }
 
-let workCenterFeatureTransition = Promise.resolve();
-
-export async function applyWorkCenterFeatureUpdate(msg, dependencies = {}) {
-  const run = async () => {
-    const update = dependencies.updateWorkCenterFeatureSettings || updateWorkCenterFeatureSettings;
-    const getSettings = dependencies.getWorkCenterFeatureSettings || getWorkCenterFeatureSettings;
-    const bridge = dependencies.bridge || await import('../yeaft/work-center/bridge.js');
-    const refreshCapabilities = dependencies.refreshAgentCapabilities || ctx.refreshAgentCapabilities;
-    const yeaftDir = dependencies.yeaftDir ?? ctx.CONFIG?.yeaftDir;
-    // Read inside the transition queue so the previous request is observable.
-    const previous = getSettings(yeaftDir);
-    const persisted = update(msg.settings || {}, yeaftDir);
-    if (persisted.error) {
-      return {
-        ...previous,
-        error: persisted.error,
-        persisted: false,
-        effective: dependencies.runtimeEnabled ?? ctx.CONFIG?.workCenterEnabled === true,
-      };
-    }
-
-    bridge.setWorkCenterFeatureEnabled(persisted.enabled);
-    try {
-      if (persisted.enabled) await bridge.bootWorkCenter();
-      else await bridge.shutdownWorkCenter();
-      if (ctx.CONFIG) ctx.CONFIG.workCenterEnabled = persisted.enabled;
-      ctx.workCenterStartupError = null;
-      await refreshCapabilities?.();
-      return {
-        ...persisted,
-        persisted: true,
-        effective: persisted.enabled,
-        sessionTools: persisted.enabled ? 'new_sessions_only' : 'disabled_immediately',
-      };
-    } catch (error) {
-      const rollback = previous.error ? previous : update({ enabled: previous.enabled === true }, yeaftDir);
-      const restored = !rollback.error;
-      let rollbackRuntimeError = null;
-      if (restored) {
-        bridge.setWorkCenterFeatureEnabled(previous.enabled === true);
-        try {
-          if (previous.enabled === true) await bridge.bootWorkCenter();
-          else await bridge.shutdownWorkCenter();
-        } catch (rollbackError) {
-          rollbackRuntimeError = rollbackError?.message || String(rollbackError);
-          bridge.setWorkCenterFeatureEnabled(false);
-        }
-        if (ctx.CONFIG) ctx.CONFIG.workCenterEnabled = previous.enabled === true && !rollbackRuntimeError;
-        try { await refreshCapabilities?.(); } catch { /* original transition error remains authoritative */ }
-      } else {
-        bridge.setWorkCenterFeatureEnabled(false);
-        try {
-          await bridge.shutdownWorkCenter();
-        } catch (shutdownError) {
-          rollbackRuntimeError = shutdownError?.message || String(shutdownError);
-        }
-        if (ctx.CONFIG) ctx.CONFIG.workCenterEnabled = false;
-        try { await refreshCapabilities?.(); } catch { /* original transition error remains authoritative */ }
-      }
-      const effective = restored && !rollbackRuntimeError ? previous.enabled === true : false;
-      return {
-        ...persisted,
-        enabled: restored ? previous.enabled === true : persisted.enabled,
-        error: `Failed to apply Work Center runtime transition: ${error?.message || error}${rollbackRuntimeError ? `; rollback runtime failed: ${rollbackRuntimeError}` : ''}`,
-        persisted: !restored,
-        effective,
-        rolledBack: restored && !rollbackRuntimeError,
-      };
-    }
-  };
-  const result = workCenterFeatureTransition.then(run, run);
-  workCenterFeatureTransition = result.catch(() => {});
-  return result;
-}
-
 export async function handleMessage(msg) {
+  // Old Servers can still send WorkItem-scoped Workbench commands. Allow
+  // terminal_close to release a previously owned PTY; it cannot start work.
+  if (msg.type !== 'terminal_close' && (msg.workbenchRoute?.runtimeProvider === 'work-center'
+    || (typeof msg.workbenchRouteKey === 'string' && msg.workbenchRouteKey.startsWith('work-center:'))
+    || (typeof msg.conversationId === 'string' && msg.conversationId.startsWith('_workbench:work-center:')))) return;
   if (await handleBrowserRuntimeMessage(msg)) return;
   switch (msg.type) {
     case 'registered':
@@ -605,24 +533,18 @@ export async function handleMessage(msg) {
     }
 
 
-    case 'get_work_center_feature_settings': {
-      const settings = getWorkCenterFeatureSettings(ctx.CONFIG?.yeaftDir);
-      sendToServer({
-        type: 'work_center_feature_settings', requestId: msg.requestId, clientId: msg.clientId, ...settings,
-        effective: ctx.CONFIG?.workCenterEnabled === true,
-        ...(ctx.workCenterStartupError ? { runtimeError: ctx.workCenterStartupError } : {}),
-      });
-      break;
-    }
-
+    case 'get_work_center_feature_settings':
     case 'update_work_center_feature_settings': {
-      let result;
-      try {
-        result = await applyWorkCenterFeatureUpdate(msg);
-      } catch (error) {
-        result = { error: `Failed to apply Work Center setting: ${error?.message || error}`, persisted: false, effective: ctx.CONFIG?.workCenterEnabled === true };
-      }
-      sendToServer({ type: 'work_center_feature_settings_updated', requestId: msg.requestId, clientId: msg.clientId, ...result });
+      const update = msg.type === 'update_work_center_feature_settings';
+      await sendToServer({
+        type: update ? 'work_center_feature_settings_updated' : 'work_center_feature_settings',
+        requestId: msg.requestId,
+        clientId: msg.clientId,
+        enabled: false,
+        effective: false,
+        unsupported: true,
+        ...(update && { persisted: false, error: 'Work Center is disabled' }),
+      });
       break;
     }
 
@@ -904,9 +826,22 @@ export async function handleMessage(msg) {
       await handleYeaftFetchDebugHistory(msg);
       break;
 
+    // Legacy Servers may still issue these requests. Reply without loading
+    // the retired stores, booting a runtime or writing Agent settings.
     case 'person_request':
-      await handlePersonRequest(msg);
+    case 'work_center_request': {
+      const person = msg.type === 'person_request';
+      await sendToServer({
+        type: person ? 'person_response' : 'work_center_response',
+        requestId: typeof msg.requestId === 'string' ? msg.requestId : null,
+        op: typeof msg.op === 'string' ? msg.op : '',
+        ok: false,
+        errorCode: 'feature_disabled',
+        error: person ? 'Digital Person is disabled' : 'Work Center is disabled',
+        ...(!person && { _requestUserId: msg._requestUserId || null }),
+      });
       break;
+    }
 
     case 'creation_request':
       await handleCreationRequest(msg);
@@ -930,21 +865,6 @@ export async function handleMessage(msg) {
     case 'session_discovery_request':
       if (!ctx.serverCapabilities?.has('session_discovery')) break;
       await handleSessionDiscovery(msg, ctx.CONFIG?.yeaftDir, sendToServer, { agentWorkDir: ctx.CONFIG?.workDir || '' });
-      break;
-
-    case 'work_center_request':
-      if (ctx.CONFIG?.workCenterEnabled === true) {
-        await handleWorkCenterRequest(msg);
-      } else {
-        await sendToServer({
-          type: 'work_center_response',
-          requestId: typeof msg.requestId === 'string' ? msg.requestId : null,
-          op: typeof msg.op === 'string' ? msg.op : '',
-          ok: false,
-          error: 'Work Center is disabled',
-          _requestUserId: msg._requestUserId || null,
-        });
-      }
       break;
 
     // Expert roles definition (for ExpertPanel detail view)

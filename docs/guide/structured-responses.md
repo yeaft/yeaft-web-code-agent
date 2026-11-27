@@ -1,10 +1,10 @@
 # Structured responses
 
-Native Yeaft Sessions and digital Persons can optionally use `PresentResponse` to present verified results as cards, metrics, comparison tables, bar/line charts, timelines, relationship diagrams, images, links, and maps. Simple replies stay plain text. This is not a separate model call to beautify every answer.
+Native Yeaft Sessions can optionally use `PresentResponse` to present verified results as cards, metrics, comparison tables, bar/line charts, timelines, relationship diagrams, images, links, and maps. Simple replies stay plain text. This is not a separate model call to beautify every answer.
 
 ## Shared content, separate ownership
 
-Both paths use one versioned content contract and one display component. Session transcript identity and Person episode storage keep their existing ownership and lifecycle. Existing plain-text messages are unchanged; no transcript migration is required.
+Structured responses use a versioned content contract and are owned by the Session that published them. Existing plain-text messages are unchanged; no transcript migration is required.
 
 The client controls layout and drawing. Model-generated HTML, CSS, JavaScript, and arbitrary SVG are not accepted. Charts need real data; rendering does not verify its truth. Maps without an `embed` option remain explicitly labelled **coordinate sketches**, not navigation maps, and fetch no map tiles. An optional approved third-party map loads directly in the reply; coordinates and details remain readable independently of the provider. Images are external HTTP(S) references that load automatically without a referrer, with manual retry on failure; links and images cannot contain URL credentials. The Agent and Server do not fetch those resources. Existing local artifact delivery remains separate; arbitrary local paths are not accepted by this tool.
 
@@ -25,9 +25,7 @@ A single `PresentResponse` call can combine multiple `blocks`. Separate renderin
 | `link` | Sources, reports and artifact references | Owning in-app browser by default |
 | `map` | Coordinate sketch or approved provider embed, with place list | 20 points; optional OpenStreetMap / Google share embed |
 
-Ordinary clicks open the owning Workbench browser in Sessions and Work Center. Persons reuse the same browser component in their own output sidebar, never a different Session route. Choose the adjacent `↗`, the browser's **Open in new tab** action, or a native modifier/middle click to open externally. An unavailable in-app browser shows a notice rather than silently opening a tab. Sites may refuse embedding; this does not weaken iframe isolation or introduce a remote proxy.
-
-In the compact Person reader, Tab / Shift+Tab can enter and leave embedded page controls. Escape inside a cross-origin page cannot reach the reader; use **Return to reader controls** or **Close reader** instead.
+Ordinary clicks open the owning Workbench browser in Sessions. Choose the adjacent `↗`, the browser's **Open in new tab** action, or a native modifier/middle click to open externally. An unavailable in-app browser shows a notice rather than silently opening a tab. Sites may refuse embedding; this does not weaken iframe isolation or introduce a remote proxy.
 
 ## Optional card images and map embeds
 
@@ -67,13 +65,13 @@ Provider frames use exactly `sandbox="allow-scripts allow-same-origin"`, `referr
 
 The tool validates the whole response before publishing. Invalid types, excessive size, inconsistent tables/charts, missing relationship endpoints, and unsafe URLs publish nothing. The model can correct the payload or answer in text.
 
-`phase: "progress"` communicates partial results. `phase: "final"` expresses delivery intent, **not task success or automatic turn termination**. Native Sessions retain their engine terminal boundary; Persons still commit through the cognitive proposal with `next:null`. Cancellation or failure preserves already-delivered content without treating the run as successful. After publishing a complete response, the model does not need to repeat the same answer in prose.
+`phase: "progress"` communicates partial results. `phase: "final"` expresses delivery intent, **not task success or automatic turn termination**. Native Sessions retain their engine terminal boundary. Cancellation or failure preserves already-delivered content without treating the run as successful. After publishing a complete response, the model does not need to repeat the same answer in prose.
 
 Native Sessions retain the published summary and metadata in durable history and the UI, without appending a host-generated assistant summary to the active tool loop. The model continues from normal tool results; later user turns can still read delivered summaries. This preserves Anthropic's original thinking/tool-use blocks followed by `user/tool_result`, instead of creating an unsupported assistant prefill. See [Anthropic's thinking and prefill restrictions](https://platform.claude.com/docs/en/build-with-claude/thinking#response-prefill-and-forced-tool-use).
 
 ## Example
 
-Native tool arguments and Person capability `args` use the same structure:
+Example native tool arguments:
 
 ```json
 {
@@ -97,12 +95,11 @@ Native tool arguments and Person capability `args` use the same structure:
 }
 ```
 
-`summary` must be independently understandable for copying, search, model history, and older clients. Each response is limited to 48 KiB and 12 blocks, with additional per-block item and dimension limits. The native tool schema and the full Person capability contract describe supported fields.
+`summary` must be independently understandable for copying, search, model history, and older clients. Each response is limited to 48 KiB and 12 blocks, with additional per-block item and dimension limits. The native tool schema describes supported fields.
 
 ## Compatibility
 
 - Native Sessions: optional built-in tool, live display, and persisted history replay.
-- Persons: capability discovery/preparation/call, with existing same-episode reply grouping.
 - Claude Code/Copilot CLI Chat: the display component is reusable, but registering a native tool does not add it to those CLI protocols.
 - Unknown versions fall back to a readable summary. Existing messages retain their normal rendering.
 

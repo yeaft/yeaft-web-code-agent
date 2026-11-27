@@ -15,10 +15,9 @@ Agent（运行在代码机器的 Node.js）
         ├── 原生 Yeaft engine
         │   ├── Session + 1..N VP 编排
         │   ├── Anthropic / OpenAI Responses adapter
-        │   ├── 33 个内置工具 + Skills + MCP
+        │   ├── 内置工具 + Skills + MCP
         │   ├── 有界 Session history；旧 memory 保留但禁用
-        │   ├── Project 与共享 instruction
-        │   └── Work Center（WorkItem → Action → Run）
+        │   └── Project 与共享 instruction
         └── Workbench 能力选择页（Terminal、Git、Files、Browser 可用性）
 ```
 
@@ -27,10 +26,10 @@ Agent（运行在代码机器的 Node.js）
 | 层 | 拥有 | 不拥有 |
 | --- | --- | --- |
 | **Browser** | 当前 UI state、统一 catalog projection、locale/theme、draft | 代码执行或权威 Agent runtime data |
-| **Server** | User/auth record、invitation/admin data、browser-facing conversation catalog metadata、WebSocket routing | 原生 Session transcript、Agent memory、provider credential 或 Work Center execution |
-| **Agent** | CLI subprocess、原生 provider call、tools、Session history、memory、background task、Project Agent-side context、Work Center SQLite、workbench access | Server user account 或 cross-owner data |
+| **Server** | User/auth record、invitation/admin data、browser-facing conversation catalog metadata、WebSocket routing | 原生 Session transcript、Agent memory、provider credential |
+| **Agent** | CLI subprocess、原生 provider call、tools、Session history、memory、background task、Project Agent-side context、workbench access | Server user account 或 cross-owner data |
 
-Session 的 `workDir` 是 execution 与 project asset context。原生 Session data 和 Work Center state 仍位于 Agent 的 Yeaft data root。
+Session 的 `workDir` 是 execution 与 project asset context。原生 Session data 仍位于 Agent 的 Yeaft data root。
 
 ## Runtime 路径
 
@@ -75,20 +74,9 @@ Web yeaft_session_send
 
 `yeaft_session_send` 是当前 send channel。历史 alias 与 `claude_output` shape 的 rendering payload 为 wire/storage 兼容保留，不是当前领域术语。
 
-### Work Center
+### 已停用的功能
 
-```text
-Browser WorkItem request
-  → Server relay
-  → Agent Work Center store/controller
-  → triage 与经过校验的 Action graph
-  → watcher claim ready Action
-  → runner 复用原生 Engine
-  → 有 fence 的 Run result + evidence
-  → controller 推进 dependency/final gate
-```
-
-Work Center 属于 Agent。Source Session 是 origin/link，不是 storage owner。Coordinator conversation 没有 side-effect tool；Action Run 获得 task-specific tools 与 workspace policy。
+数字人与 Work Center 的代码和本地数据保留，不在当前 Yeaft 中启动或提供入口。只升级 Server 会移除入口和中继，但不能停止旧 Agent 上已启用的 Work Center watcher；必须升级 Agent。
 
 ## 原生 engine query loop
 
@@ -116,7 +104,7 @@ agent/
     projects/               Agent-side Project context store
     llm/                    Anthropic/OpenAI Responses adapter 与 routing
     memory/                 保留但禁用的 H2-AMS 实现/数据 reader
-    tools/                  33 个内置工具
+    tools/                  内置工具
     work-center/            WorkItem/Action/Run store、planner、watcher、runner
     sub-agent/              Child-agent execution 与 notification
     tasks/                  Background shell task persistence
@@ -159,4 +147,3 @@ Server catalog 给 Browser 一个 Agent-aware 的原生/CLI conversation 视图�
 - [原生 LLM 层](./yeaft-llm.md)
 - [WebSocket 协议](./wire-protocol.md)
 - [WebRTC Browser Runtime 设计](../../../notes/2026-08-07-webrtc-browser-runtime-design.md)
-- [Work Center 用户合同](../user/work-center.md)

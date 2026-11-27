@@ -13,7 +13,10 @@
 import {
   PLANETS,
   BOOK_DOMAINS,
+  DEFAULT_COSMOS_CONSTANTS,
   COSMOS_DRAWER_WIDTH,
+  normalizeCosmosConstants,
+  normalizePlanetBindings,
   loadCosmosConstants,
   saveCosmosConstants,
   loadPlanetBindings,
@@ -26,7 +29,12 @@ import {
   clampCosmosDrawerWidth,
   loadCosmosDrawerWidth,
   saveCosmosDrawerWidth,
+  readLocalCosmosPreferencesOwner,
+  writeLocalCosmosPreferencesOwner,
+  clearLocalCosmosPreferences,
+  readLegacyLocalCosmosConfig,
 } from '../../cosmos/constants.js';
+import { useUserPreferences } from '../../utils/user-preferences.js';
 import { createCosmosEngine } from '../../cosmos/gl-engine.js';
 import { createParticlePools } from '../../cosmos/particle-hud.js';
 import { buildSemanticCosmicWebGraph, triggerCosmicWebPulse } from '../../cosmos/web-graph.js';
@@ -57,9 +65,9 @@ import {
   getActiveStarSystem,
   formatSystemDistance,
 } from '../../cosmos/star-systems.js';
-import { stepCosmosFrame } from '../../cosmos/stage-loop.js';
+import { stepCosmosFrame, clampCamPan } from '../../cosmos/stage-loop.js';
 import { projectAgentsForCosmos } from '../../cosmos/agent-projection.js';
-import { buildCosmosSignalStream } from '../../cosmos/signal-stream.js';
+import { buildCosmosSignalStream, computeSignalStateSignature } from '../../cosmos/signal-stream.js';
 import { getLocale } from '../../utils/i18n.js';
 import { setThemeColorSurface } from '../../utils/document-theme.js';
 
@@ -157,7 +165,7 @@ export default {
       :style="cosmosPageStyle"
       @wheel="onStageWheel"
     >
-      <canvas ref="glCanvasRef" :key="canvasEpoch" class="cosmos-gl-canvas" :class="{ 'is-orbiting': camOrbiting }" @pointerdown="onCanvasPointerDown" @dblclick="onCanvasDblClick"></canvas>
+      <canvas ref="glCanvasRef" :key="canvasEpoch" class="cosmos-gl-canvas" :class="{ 'is-orbiting': camOrbiting }" @pointerdown="onCanvasPointerDown" @dblclick="onCanvasDblClick" @contextmenu="onCanvasContextMenu"></canvas>
       <canvas ref="hudCanvasRef" class="cosmos-hud-canvas"></canvas>
 
       <!-- Spatial Interactive Layer (Zero-VDOM-diff direct transform updates via refs) -->
@@ -382,12 +390,14 @@ export default {
         :warping-to-id="voyageWarpingToId"
         :planet-focused="Boolean(focusedCameraPlanetId)"
         :drawer-open="drawerOpen"
+        :panned="canvasPanned"
         @toggle-soar="onToggleSoar"
         @select-system="onSelectStarSystem"
         @next-system="onNextStarSystem"
         @return-sol="onReturnToSol"
         @set-speed="onSetSoarSpeed"
         @toggle-autopilot="onToggleSoarAutoPilot"
+        @recenter="resetCanvasPan({ withView: true })"
       />
 
       <!-- Top-Center Cosmic Event Countdown, Stop Control & Telescope Watch Dock -->
@@ -462,6 +472,16 @@ export default {
         >{{ voyageSystemId === 'sol' ? $t('cosmos.planetFocus.returnSun') : $t('cosmos.voyage.returnCenter') }}</button>
       </div>
 
+      <!-- Minimal Floating Recenter Pill when Solar System canvas is panned off-center -->
+      <button
+        v-if="canvasPanned && currentBand === 'solar' && voyageSystemId === 'sol' && !focusedCameraPlanetId && !isObservingEvent && !voyageSoaring && !voyageWarpingToId && !quickAgent"
+        type="button"
+        class="cosmos-pan-reset-btn"
+        :title="$t('cosmos.scale.recenterTitle')"
+        @pointerdown.stop
+        @click.stop="resetCanvasPan({ withView: true })"
+      >{{ $t('cosmos.scale.recenter') }}</button>
+
       <!-- Cross-Scale Gravity Alert -->
       <button
         v-if="waitingAgent && (currentBand !== 'solar' || voyageSystemId !== 'sol' || voyageSoaring)"
@@ -526,7 +546,6 @@ export default {
         :unread-count="signalStream.unreadCount"
         :running-count="signalStream.runningCount"
         :badge-count="signalStream.badgeCount"
-        :dismissible-count="signalStream.dismissibleCount"
         :drawer-open="drawerOpen"
         :is-compact="isCompactViewport"
         :preview-mode="constants.livePreviewMode"
@@ -538,6 +557,7 @@ export default {
         @dismiss-signal="onDismissSignal"
         @mark-all-read="onMarkAllSignalsRead"
         @close-popover="closeSignalPopover({ restoreFocus: true })"
+        @restore-trigger-focus="focusSignalTrigger"
       />
 
       <!-- Cosmic Constants + Authentic Yeaft Settings Popover -->
@@ -548,6 +568,7 @@ export default {
         :agent-to-planet="assignments.agentToPlanet"
         :renderer-mode="rendererMode"
         @update-constant="onUpdateConstant"
+        @reset-constants="onResetConstants"
         @assign-planet="onAssignPlanet"
         @open-settings="openYeaftSettings"
         @open-agent-settings="openYeaftAgentSettings"
@@ -641,7 +662,6 @@ export default {
             :unread-count="signalStream.unreadCount"
             :running-count="signalStream.runningCount"
             :badge-count="signalStream.badgeCount"
-            :dismissible-count="signalStream.dismissibleCount"
             :drawer-open="false"
             :is-compact="isCompactViewport"
             :preview-mode="constants.livePreviewMode"
@@ -653,6 +673,7 @@ export default {
             @dismiss-signal="onDismissSignal"
             @mark-all-read="onMarkAllSignalsRead"
             @close-popover="closeSignalPopover({ restoreFocus: true })"
+            @restore-trigger-focus="focusSignalTrigger"
           />
         </template>
       </CreationInteriorModal>
@@ -749,11 +770,92 @@ export default {
       else delete bucket[key];
     };
 
+    const userPreferences = useUserPreferences();
+    const currentAuthStore = () => {
+      try { return globalThis.Pinia?.useAuthStore?.() || null; } catch { return null; }
+    };
+    const initialUserId = currentAuthStore()?.userId || null;
+    const storedPrefsOwner = readLocalCosmosPreferencesOwner();
+    if (initialUserId && storedPrefsOwner && storedPrefsOwner !== String(initialUserId)) {
+      clearLocalCosmosPreferences(undefined, { includeUiMode: true });
+    }
+    const bootLegacyCosmosConfig = !storedPrefsOwner ? readLegacyLocalCosmosConfig() : null;
+
     const constants = Vue.reactive(loadCosmosConstants());
     const savedBindings = Vue.ref(loadPlanetBindings());
     const galaxyBooks = Vue.ref(loadGalaxyBooks());
     const canvasEpoch = Vue.ref(0);
     const rendererMode = Vue.ref('webgl2');
+
+    const SLIDER_CONSTANT_KEYS = new Set(['orbitSpeed', 'spinSpeed', 'planetScale', 'eventScale', 'starDensity', 'skyBright', 'orbitLines']);
+    let pendingCloudConstants = null;
+    let cloudConstantsTimer = null;
+    let lastCloudUserId = initialUserId ? String(initialUserId) : '';
+    let lastCloudAuthKey = initialUserId ? `${initialUserId}:${currentAuthStore()?.authGeneration || 0}` : '';
+    let migratedCloudAuthKey = '';
+
+    function cancelPendingCloudConstants() {
+      if (cloudConstantsTimer) {
+        clearTimeout(cloudConstantsTimer);
+        cloudConstantsTimer = null;
+      }
+      pendingCloudConstants = null;
+    }
+
+    function flushPendingCloudConstants({ keepalive = false } = {}) {
+      if (cloudConstantsTimer) {
+        clearTimeout(cloudConstantsTimer);
+        cloudConstantsTimer = null;
+      }
+      if (!pendingCloudConstants) return;
+      const patch = pendingCloudConstants;
+      pendingCloudConstants = null;
+      userPreferences.saveCosmosConfig?.({ constants: patch }, { keepalive });
+    }
+
+    function onPageHide() {
+      flushPendingCloudConstants({ keepalive: true });
+    }
+
+    function persistCosmosConstantChange(changedKey = null, { immediate = false } = {}) {
+      const clean = saveCosmosConstants(constants);
+      if (changedKey && Object.hasOwn(clean, changedKey)) {
+        constants[changedKey] = clean[changedKey];
+      }
+      const uid = currentAuthStore()?.userId || null;
+      if (uid) writeLocalCosmosPreferencesOwner(uid);
+      const delta = changedKey && Object.hasOwn(clean, changedKey)
+        ? { [changedKey]: clean[changedKey] }
+        : clean;
+      if (immediate || (changedKey && !SLIDER_CONSTANT_KEYS.has(changedKey))) {
+        const merged = pendingCloudConstants ? { ...pendingCloudConstants, ...delta } : delta;
+        pendingCloudConstants = null;
+        if (cloudConstantsTimer) {
+          clearTimeout(cloudConstantsTimer);
+          cloudConstantsTimer = null;
+        }
+        userPreferences.saveCosmosConfig?.({ constants: merged });
+      } else {
+        pendingCloudConstants = { ...(pendingCloudConstants || {}), ...delta };
+        if (cloudConstantsTimer) clearTimeout(cloudConstantsTimer);
+        cloudConstantsTimer = setTimeout(flushPendingCloudConstants, 250);
+      }
+    }
+
+    function persistPlanetBindings(nextBindings) {
+      const clean = normalizePlanetBindings(nextBindings);
+      savePlanetBindings(clean);
+      const uid = currentAuthStore()?.userId || null;
+      if (uid) writeLocalCosmosPreferencesOwner(uid);
+      userPreferences.saveCosmosConfig?.({ planetBindings: clean });
+    }
+
+    function persistDrawerWidth(width) {
+      const saved = saveCosmosDrawerWidth(width);
+      const uid = currentAuthStore()?.userId || null;
+      if (uid) writeLocalCosmosPreferencesOwner(uid);
+      userPreferences.saveCosmosConfig?.({ drawerWidth: saved });
+    }
 
     const constantsOpen = Vue.ref(false);
     const signalPopoverOpen = Vue.ref(false);
@@ -869,15 +971,43 @@ export default {
       const sid = store.yeaftActiveSessionFilter || '';
       return sid ? `${drawerAgentId.value}\u001f${sid}` : '';
     });
+    const localDismissedSignals = Vue.ref({});
+    const activeDismissedSignals = Vue.computed(() => (
+      store.cosmosDismissedSignalsByKey && typeof store.dismissCosmosSignal === 'function'
+        ? store.cosmosDismissedSignalsByKey
+        : localDismissedSignals.value
+    ));
     const signalStream = Vue.computed(() => buildCosmosSignalStream({
       projectedAgents: projectedAgentList.value,
       agentToPlanet: assignments.value.agentToPlanet,
       scheduledTaskNotifications: store.scheduledTaskNotifications || [],
+      dismissedSignals: activeDismissedSignals.value,
       activeDrawerKey: activeDrawerSessionKey.value,
       nowMs: nowTick.value,
       isEn: getLocale() === 'en',
       t: $t,
     }));
+    Vue.watch(
+      () => signalStream.value.rawSignatures,
+      (rawSigs) => {
+        if (projectedAgentList.value.length === 0 && Object.keys(rawSigs || {}).length === 0) return;
+        if (typeof store.pruneCosmosDismissedSignals === 'function') {
+          store.pruneCosmosDismissedSignals(rawSigs);
+          return;
+        }
+        const prev = localDismissedSignals.value;
+        const entries = Object.entries(prev);
+        if (entries.length === 0) return;
+        let changed = false;
+        const next = {};
+        for (const [k, sig] of entries) {
+          if (rawSigs && rawSigs[k] === sig) next[k] = sig;
+          else changed = true;
+        }
+        if (changed) localDismissedSignals.value = next;
+      },
+      { flush: 'post', immediate: true },
+    );
     const signalTriggerLabel = Vue.computed(() => (
       signalStream.value.badgeCount > 0
         ? $t('cosmos.signals.triggerAria', { count: signalStream.value.badgeCount })
@@ -937,6 +1067,7 @@ export default {
     const focusedCameraPlanetId = Vue.ref(null);
     const planetFocusZoom = Vue.ref(1.0);
     const planetFocusRotated = Vue.ref(false);
+    const canvasPanned = Vue.ref(false);
 
     // Interstellar Soaring & Multi-System Sightseeing state
     const voyage = createVoyageState();
@@ -991,11 +1122,14 @@ export default {
       const next = toggleSoarMode(voyage, typeof forceState === 'boolean' ? forceState : null);
       if (next) {
         unfocusPlanet();
+        resetCanvasPan({ silent: true });
         hideHoverImmediate();
         emptyPlanetMenu.value = null;
         quickAgentId.value = null;
         if (drawerOpen.value) closeDrawer();
         showToast($t('cosmos.voyage.soarStartedToast'));
+      } else {
+        resetCanvasPan({ silent: true });
       }
       syncVoyageRefs();
     }
@@ -1010,6 +1144,7 @@ export default {
         anim.targetScaleLog = 13.0;
       }
       unfocusPlanet();
+      resetCanvasPan({ silent: true });
       hideHoverImmediate();
       emptyPlanetMenu.value = null;
       if (targetId !== 'sol') {
@@ -1064,10 +1199,12 @@ export default {
     }
 
     const anim = {
-      time: 0, realTime: 0, lastTs: 0, lastEventUiSync: 0,
+      time: 0, realTime: 0, spinTime: 0, lastTs: 0, lastEventUiSync: 0,
       scaleLog: 13.0, targetScaleLog: 13.0, warpEnergy: 0,
       parallax: { x: 0, y: 0, tx: 0, ty: 0 },
       camRot: { x: 0, y: 0, tx: 0, ty: 0 },
+      camPan: { x: 0, y: 0, tx: 0, ty: 0 },
+      lastSpan: 520,
       centerShiftX: 0, targetCenterShiftX: 0,
       mouseX: -999, mouseY: -999,
       hoverPlanetId: null, focusedPlanetId: null,
@@ -1090,8 +1227,20 @@ export default {
       drag: null, camDrag: null, constants,
     };
 
+    function resetCanvasPan({ withView = false, silent = false } = {}) {
+      anim.camPan.tx = 0;
+      anim.camPan.ty = 0;
+      canvasPanned.value = false;
+      if (withView) {
+        anim.camRot.tx = 0;
+        anim.camRot.ty = 0;
+      }
+      if (!silent) showToast($t('cosmos.scale.resetView'));
+    }
+
     function focusPlanet(planetId, { defaultZoom = 2.2 } = {}) {
       if (!planetId) return;
+      resetCanvasPan({ silent: true });
       if (eventSim.active?.observing) {
         unfocusCosmicEvent(eventSim);
         syncEventRefs();
@@ -1265,6 +1414,7 @@ export default {
 
     function jumpToScale(targetLog) {
       unfocusPlanet();
+      resetCanvasPan({ silent: true });
       const targetBand = scaleBand(Math.max(7.0, Math.min(24.0, targetLog)));
       if (voyage.soaring || voyage.warp || (targetBand === 'horizon' && voyage.systemId !== 'sol')) {
         voyage.soaring = false;
@@ -1325,8 +1475,14 @@ export default {
       cancelPlanetDrag();
     }
 
+    function onCanvasContextMenu(e) {
+      if (currentBand.value === 'solar' || anim.camDrag) {
+        e.preventDefault();
+      }
+    }
+
     function onCanvasPointerDown(e) {
-      if (e.pointerType !== 'touch' && e.button !== 0) return;
+      if (e.pointerType !== 'touch' && e.button !== 0 && e.button !== 2) return;
       emptyPlanetMenu.value = null;
       constantsOpen.value = false;
       signalPopoverOpen.value = false;
@@ -1338,16 +1494,24 @@ export default {
           return;
         }
       }
+      const isRightOrShiftOrbit = e.pointerType !== 'touch' && (e.button === 2 || (e.button === 0 && e.shiftKey));
       const mode = eventSim.active?.observing
         ? 'event'
         : (voyage.soaring
           ? 'soar'
-          : (anim.planetFocus.planetId ? 'planet' : 'solar'));
+          : (anim.planetFocus.planetId
+            ? 'planet'
+            : (currentBand.value === 'solar' && !isRightOrShiftOrbit ? 'solar-pan' : 'solar-orbit')));
       anim.camDrag = {
         pointerId: e.pointerId ?? null,
+        pointerType: e.pointerType || 'mouse',
+        button: e.button ?? 0,
         mode,
         startX: e.clientX,
         startY: e.clientY,
+        panX0: anim.camPan.tx,
+        panY0: anim.camPan.ty,
+        span0: anim.lastSpan || 520,
         yaw0: mode === 'event'
           ? (eventSim.active?.targetViewYaw || 0)
           : (mode === 'soar'
@@ -1615,8 +1779,7 @@ export default {
         showToast($t('cosmos.scale.resetView'));
         return;
       }
-      anim.camRot.tx = 0; anim.camRot.ty = 0;
-      showToast($t('cosmos.scale.resetView'));
+      resetCanvasPan({ withView: true, silent: false });
     }
 
     function onCanvasDblClick(e) {
@@ -1682,7 +1845,7 @@ export default {
       const result = moveOrSwapPlanetBinding(store.agents || [], savedBindings.value, agentId, targetPlanetId);
       if (!result.changed) return;
       savedBindings.value = result.bindings;
-      savePlanetBindings(result.bindings);
+      persistPlanetBindings(result.bindings);
       if (anim.planetFocus.planetId && result.fromPlanetId === anim.planetFocus.planetId) {
         focusPlanet(targetPlanetId, { defaultZoom: anim.planetFocus.targetZoom });
       }
@@ -1725,6 +1888,9 @@ export default {
               const minScale = voyage.systemId === 'sol' ? 7.0 : 11.2;
               anim.targetScaleLog = Math.max(minScale, Math.min(24.0, anim.targetScaleLog + step));
               anim.warpEnergy = Math.min(1.0, anim.warpEnergy + Math.min(0.45, Math.abs(step) * 0.65));
+              if (voyage.systemId === 'sol' && anim.targetScaleLog < 11.2 && canvasPanned.value) {
+                resetCanvasPan({ silent: true });
+              }
               hideHoverImmediate();
               if (scaleBand(anim.targetScaleLog) !== 'solar') {
                 quickAgentId.value = null;
@@ -1781,6 +1947,15 @@ export default {
           anim.planetFocus.targetInspectYaw = anim.camDrag.yaw0 + dx * 0.0075;
           anim.planetFocus.targetInspectPitch = Math.max(-1.05, Math.min(1.05, anim.camDrag.pitch0 + dy * 0.0055));
           planetFocusRotated.value = Math.abs(anim.planetFocus.targetInspectYaw) > 0.04 || Math.abs(anim.planetFocus.targetInspectPitch) > 0.04;
+        } else if (anim.camDrag.mode === 'solar-pan') {
+          const baseSpan = Math.max(160, anim.camDrag.span0 || anim.lastSpan || 480);
+          const nextPan = clampCamPan(
+            anim.camDrag.panX0 + dx / baseSpan,
+            anim.camDrag.panY0 + dy / baseSpan,
+          );
+          anim.camPan.tx = nextPan.x;
+          anim.camPan.ty = nextPan.y;
+          canvasPanned.value = Math.hypot(anim.camPan.tx, anim.camPan.ty) > 0.025;
         } else {
           anim.camRot.tx = Math.max(-0.85, Math.min(0.85, anim.camDrag.yaw0 + dx * 0.0024));
           anim.camRot.ty = Math.max(-0.42, Math.min(0.45, anim.camDrag.pitch0 + dy * 0.0022));
@@ -1851,15 +2026,17 @@ export default {
       }
       if (matchesDragPointer(anim.camDrag, e)) {
         const moved = anim.camDrag.moved;
+        const isPrimaryClick = anim.camDrag.pointerType === 'touch' || anim.camDrag.button === 0;
         const clickX = e.clientX;
         const clickY = e.clientY;
         cancelCamDrag();
-        if (!moved) {
+        if (!moved && isPrimaryClick) {
           // 1. Direct click on an unfolding ambient cosmic event on the shared canvas
           if (currentBand.value === 'solar' && !eventSim.active?.observing) {
             const hitEv = hitTestAmbientEvent(anim.lastEventFrames, clickX, clickY);
             if (hitEv) {
               unfocusPlanet();
+              resetCanvasPan({ silent: true });
               const act = focusCosmicEventByUid(eventSim, hitEv.uid);
               hideHoverImmediate();
               quickAgentId.value = null;
@@ -1935,6 +2112,9 @@ export default {
       const minScale = voyage.systemId === 'sol' ? 7.0 : 11.2;
       anim.targetScaleLog = Math.max(minScale, Math.min(24.0, anim.targetScaleLog + step));
       anim.warpEnergy = Math.min(1.0, anim.warpEnergy + Math.min(0.45, Math.abs(step) * 0.55));
+      if (voyage.systemId === 'sol' && anim.targetScaleLog < 11.2 && canvasPanned.value) {
+        resetCanvasPan({ silent: true });
+      }
       hideHoverImmediate();
       if (scaleBand(anim.targetScaleLog) !== 'solar') {
         quickAgentId.value = null;
@@ -1942,18 +2122,20 @@ export default {
       }
     }
 
+    function focusSignalTrigger() {
+      Vue.nextTick(() => {
+        if (creationsStore.activeCreation) {
+          creationInteriorRef.value?.focusSignalTrigger?.();
+        } else {
+          signalTriggerRef.value?.focus?.();
+        }
+      });
+    }
+
     function closeSignalPopover({ restoreFocus = false } = {}) {
       if (!signalPopoverOpen.value) return;
       signalPopoverOpen.value = false;
-      if (restoreFocus) {
-        Vue.nextTick(() => {
-          if (creationsStore.activeCreation) {
-            creationInteriorRef.value?.focusSignalTrigger?.();
-          } else {
-            signalTriggerRef.value?.focus?.();
-          }
-        });
-      }
+      if (restoreFocus) focusSignalTrigger();
     }
 
     function openSessionInDrawer(agentId, session) {
@@ -2032,7 +2214,7 @@ export default {
       const targetSession = item.session || { id: item.sessionId, runtimeProvider: 'yeaft' };
       if (!projectedAgentsMap.value[item.agentId] || !hasProjectedOrKnownSession(item.agentId, targetSession)) {
         closeSignalPopover({ restoreFocus: true });
-        onDismissSignal(item);
+        onDismissSignal(item, { forceAcknowledge: true });
         showToast($t(!projectedAgentsMap.value[item.agentId]
           ? 'cosmos.signals.agentUnavailable'
           : 'cosmos.signals.sessionUnavailable'));
@@ -2046,8 +2228,17 @@ export default {
       openSessionInDrawer(item.agentId, targetSession);
     }
 
-    function onDismissSignal(item) {
+    function onDismissSignal(item, { forceAcknowledge = false } = {}) {
       if (!item) return;
+      const sig = item.stateSignature || computeSignalStateSignature(item);
+      if (item.signalKey && sig) {
+        if (typeof store.dismissCosmosSignal === 'function') {
+          store.dismissCosmosSignal(item.signalKey, sig);
+        } else {
+          localDismissedSignals.value = { ...localDismissedSignals.value, [item.signalKey]: sig };
+        }
+      }
+      if (!forceAcknowledge && item.kind && item.kind !== 'unread') return;
       if (item.sessionId && item.agentId && typeof store.acknowledgeYeaftSessionSignals === 'function') {
         store.acknowledgeYeaftSessionSignals(item.sessionId, item.agentId, { sessionRead: false });
       } else {
@@ -2061,7 +2252,7 @@ export default {
         store.acknowledgeAllYeaftSessionSignals();
       } else {
         for (const item of signalStream.value.items) {
-          if (item.dismissible) onDismissSignal(item);
+          if (item.kind === 'unread') onDismissSignal(item);
         }
       }
       if (signalPopoverOpen.value && signalStream.value.waitingCount === 0 && signalStream.value.runningCount === 0) {
@@ -2123,13 +2314,13 @@ export default {
         workbenchWidened.value = false;
         if (customClamped != null && customClamped >= wideDefault) {
           customDrawerWidth.value = null;
-          saveCosmosDrawerWidth(null);
+          persistDrawerWidth(null);
         }
         return;
       }
       if (customClamped != null && customClamped >= wideDefault) {
         customDrawerWidth.value = null;
-        saveCosmosDrawerWidth(null);
+        persistDrawerWidth(null);
         return;
       }
       workbenchWidened.value = true;
@@ -2173,7 +2364,7 @@ export default {
     function onDrawerResizeEnd() {
       drawerResizing.value = false;
       if (customDrawerWidth.value != null) {
-        saveCosmosDrawerWidth(customDrawerWidth.value);
+        persistDrawerWidth(customDrawerWidth.value);
       }
     }
 
@@ -2185,7 +2376,7 @@ export default {
       }
       workbenchWidened.value = false;
       customDrawerWidth.value = null;
-      saveCosmosDrawerWidth(null);
+      persistDrawerWidth(null);
     }
 
     function emitTelemetryBeam({ planetId }) {
@@ -2268,6 +2459,7 @@ export default {
       }
       if (scaleBand(anim.targetScaleLog) !== 'solar') jumpToScale(13.0);
       unfocusPlanet();
+      resetCanvasPan({ silent: true });
       const act = uid ? focusCosmicEventByUid(eventSim, uid) : focusActiveCosmicEvent(eventSim);
       hideHoverImmediate();
       quickAgentId.value = null;
@@ -2287,14 +2479,14 @@ export default {
     }
     function onToggleAutoEvents() {
       constants.eventsAutoEnabled = !constants.eventsAutoEnabled;
-      saveCosmosConstants(constants);
+      persistCosmosConstantChange('eventsAutoEnabled', { immediate: true });
       eventSim.autoEnabled = constants.eventsAutoEnabled;
       syncEventRefs();
       showToast($t(constants.eventsAutoEnabled ? 'cosmos.events.autoResumedToast' : 'cosmos.events.autoPausedToast'));
     }
     function onToggleAutoZoom() {
       constants.eventsAutoZoom = !constants.eventsAutoZoom;
-      saveCosmosConstants(constants);
+      persistCosmosConstantChange('eventsAutoZoom', { immediate: true });
       eventSim.autoZoom = constants.eventsAutoZoom;
       syncEventRefs();
       showToast($t(constants.eventsAutoZoom ? 'cosmos.events.autoZoomOnToast' : 'cosmos.events.autoZoomOffToast'));
@@ -2319,20 +2511,32 @@ export default {
     function onUpdateConstant({ key, value }) {
       if (!(key in constants)) return;
       constants[key] = value;
-      saveCosmosConstants(constants);
+      persistCosmosConstantChange(key);
       if (key === 'eventsAutoEnabled') {
-        eventSim.autoEnabled = Boolean(value);
-        if (!value && eventSim.active && !eventSim.active.observing) stopCosmicEvent(eventSim);
+        eventSim.autoEnabled = Boolean(constants.eventsAutoEnabled);
+        if (!constants.eventsAutoEnabled && eventSim.active && !eventSim.active.observing) stopCosmicEvent(eventSim);
         syncEventRefs();
       }
       if (key === 'eventsAutoZoom') {
-        eventSim.autoZoom = Boolean(value);
+        eventSim.autoZoom = Boolean(constants.eventsAutoZoom);
         syncEventRefs();
       }
-      if (key === 'showEventsCountdown' && !value && eventSim.active) { stopCosmicEvent(eventSim); syncEventRefs(); }
+      if (key === 'showEventsCountdown' && !constants.showEventsCountdown && eventSim.active) { stopCosmicEvent(eventSim); syncEventRefs(); }
       if (key === 'renderQuality') {
-        rebuildCosmosEngine(value);
+        rebuildCosmosEngine(constants.renderQuality);
       }
+    }
+    function onResetConstants() {
+      const prevQuality = constants.renderQuality;
+      Object.assign(constants, DEFAULT_COSMOS_CONSTANTS);
+      persistCosmosConstantChange(null, { immediate: true });
+      eventSim.autoEnabled = Boolean(constants.eventsAutoEnabled);
+      eventSim.autoZoom = Boolean(constants.eventsAutoZoom);
+      if (prevQuality !== constants.renderQuality) {
+        rebuildCosmosEngine(constants.renderQuality);
+      }
+      syncEventRefs();
+      showToast($t('cosmos.constants.resetToast'));
     }
     function onAssignPlanet({ agentId, planetId }) { if (agentId && planetId) performMoveOrSwap(agentId, planetId); }
 
@@ -2458,6 +2662,7 @@ export default {
       if (drawerOpen.value) { closeDrawer(); return; }
       if (quickAgentId.value) { closeQuickComposer(); return; }
       if (anim.planetFocus.planetId) { unfocusPlanet(); return; }
+      if (canvasPanned.value && currentBand.value === 'solar') { resetCanvasPan({ withView: false }); return; }
       if (voyage.soaring) { onToggleSoar(false); return; }
       if (voyage.systemId !== 'sol') { onReturnToSol(); return; }
       if (currentBand.value !== 'solar') jumpToScale(13.0);
@@ -2585,6 +2790,7 @@ export default {
           onBandChange: (band) => { currentBand.value = band; },
           onSyncEvents: syncEventRefs,
           onSyncVoyage: syncVoyageRefs,
+          onPanAutoReset: () => { canvasPanned.value = false; },
           onUpdateHoverPos: updateHoverCardPosition,
           formatEventLabel: (ev) => {
             const name = $t(`cosmos.events.${ev.id}.name`);
@@ -2642,6 +2848,111 @@ export default {
       if (aid && sid) store.acknowledgeYeaftSessionSignals?.(sid, aid, { sessionRead: true });
     });
 
+    // Hydrate Cosmos configuration from Server user_preferences (cloud source of truth)
+    // and perform one-time per-section migration of pre-cloud localStorage settings if missing in cloud.
+    Vue.watch(
+      [
+        () => userPreferences.ready.value,
+        () => userPreferences.preferences.value?.cosmosConfig,
+        () => currentAuthStore()?.userId || null,
+        () => currentAuthStore()?.authGeneration || 0,
+      ],
+      ([isReady, cloud, userId, authGen]) => {
+        const authKey = userId ? `${userId}:${authGen}` : '';
+        const prevUserId = lastCloudUserId;
+        const authChanged = authKey !== lastCloudAuthKey;
+        if (authChanged) {
+          // Cancel any in-flight slider debounce timer belonging to the previous auth session
+          // so it can never write into the next user's cloud preferences.
+          cancelPendingCloudConstants();
+          lastCloudAuthKey = authKey;
+          lastCloudUserId = userId ? String(userId) : '';
+        }
+        if (userId) {
+          const prevOwner = readLocalCosmosPreferencesOwner();
+          const switchedUser = (prevOwner && prevOwner !== String(userId))
+            || (prevUserId && prevUserId !== String(userId));
+          if (switchedUser) {
+            const prevQuality = constants.renderQuality;
+            clearLocalCosmosPreferences(undefined, { includeUiMode: true });
+            Object.assign(constants, DEFAULT_COSMOS_CONSTANTS);
+            savedBindings.value = {};
+            customDrawerWidth.value = null;
+            eventSim.autoEnabled = constants.eventsAutoEnabled;
+            eventSim.autoZoom = constants.eventsAutoZoom;
+            syncEventRefs();
+            if (engine && constants.renderQuality !== prevQuality) {
+              rebuildCosmosEngine(constants.renderQuality);
+            }
+          }
+        }
+        if (!isReady) return;
+
+        const cfg = cloud && typeof cloud === 'object' ? cloud : {};
+        const firstReadyForAuth = Boolean(userId && migratedCloudAuthKey !== authKey);
+        const legacy = firstReadyForAuth && (!initialUserId || String(userId) === String(initialUserId))
+          ? (bootLegacyCosmosConfig || readLegacyLocalCosmosConfig(undefined, userId))
+          : null;
+        if (firstReadyForAuth) migratedCloudAuthKey = authKey;
+
+        const migrationPatch = {};
+        const prevQuality = constants.renderQuality;
+
+        // 1. Cosmic constants (per-section hydration, one-time pre-cloud legacy lift, or clean default reset)
+        if (Object.hasOwn(cfg, 'constants') && cfg.constants && typeof cfg.constants === 'object') {
+          const normalized = normalizeCosmosConstants({ ...DEFAULT_COSMOS_CONSTANTS, ...cfg.constants });
+          for (const [k, v] of Object.entries(normalized)) {
+            if (pendingCloudConstants && Object.hasOwn(pendingCloudConstants, k)) continue;
+            constants[k] = v;
+          }
+        } else if (firstReadyForAuth && legacy?.constants) {
+          migrationPatch.constants = legacy.constants;
+        } else {
+          for (const [k, v] of Object.entries(DEFAULT_COSMOS_CONSTANTS)) {
+            if (pendingCloudConstants && Object.hasOwn(pendingCloudConstants, k)) continue;
+            constants[k] = v;
+          }
+        }
+
+        // 2. Agent planet bindings
+        if (Object.hasOwn(cfg, 'planetBindings')) {
+          savedBindings.value = normalizePlanetBindings(cfg.planetBindings);
+        } else if (firstReadyForAuth && legacy?.planetBindings) {
+          migrationPatch.planetBindings = legacy.planetBindings;
+        } else {
+          savedBindings.value = {};
+        }
+
+        // 3. Custom drawer width
+        if (Object.hasOwn(cfg, 'drawerWidth')) {
+          if (!drawerResizing.value) customDrawerWidth.value = cfg.drawerWidth;
+        } else if (firstReadyForAuth && legacy && Object.hasOwn(legacy, 'drawerWidth')) {
+          migrationPatch.drawerWidth = legacy.drawerWidth;
+        } else if (!drawerResizing.value) {
+          customDrawerWidth.value = null;
+        }
+
+        saveCosmosConstants(constants);
+        savePlanetBindings(savedBindings.value);
+        saveCosmosDrawerWidth(customDrawerWidth.value);
+        if (userId) writeLocalCosmosPreferencesOwner(userId);
+
+        eventSim.autoEnabled = constants.eventsAutoEnabled;
+        eventSim.autoZoom = constants.eventsAutoZoom;
+        if (!constants.eventsAutoEnabled && eventSim.active && !eventSim.active.observing) stopCosmicEvent(eventSim);
+        if (!constants.showEventsCountdown && eventSim.active) stopCosmicEvent(eventSim);
+        syncEventRefs();
+        if (engine && constants.renderQuality !== prevQuality) {
+          rebuildCosmosEngine(constants.renderQuality);
+        }
+
+        if (Object.keys(migrationPatch).length > 0) {
+          userPreferences.saveCosmosConfig?.(migrationPatch);
+        }
+      },
+      { immediate: true },
+    );
+
     Vue.watch([drawerOpen, isCompactViewport], () => {
       signalPopoverOpen.value = false;
     });
@@ -2657,6 +2968,7 @@ export default {
       });
       window.addEventListener('resize', onWindowResize);
       window.addEventListener('blur', onWindowBlur);
+      window.addEventListener('pagehide', onPageHide);
       window.addEventListener('pointermove', onGlobalPointerMove);
       window.addEventListener('pointerup', onGlobalPointerUp);
       window.addEventListener('pointercancel', onGlobalPointerCancel);
@@ -2670,6 +2982,7 @@ export default {
     });
 
     Vue.onBeforeUnmount(() => {
+      flushPendingCloudConstants();
       unmounted = true;
       activeTouchPointers.clear();
       cancelAnimationFrame(mountRafId);
@@ -2685,6 +2998,7 @@ export default {
       clearInterval(nowInterval);
       window.removeEventListener('resize', onWindowResize);
       window.removeEventListener('blur', onWindowBlur);
+      window.removeEventListener('pagehide', onPageHide);
       window.removeEventListener('pointermove', onGlobalPointerMove);
       window.removeEventListener('pointerup', onGlobalPointerUp);
       window.removeEventListener('pointercancel', onGlobalPointerCancel);
@@ -2722,22 +3036,22 @@ export default {
       bookCreateOpen, bookDraftTitle, bookDraftDomain, toast,
       settingsModal, agentSettingsModal, sessionSettingsModal,
       eventActiveSnapshot, eventActiveList, eventNextIndex, eventCountdownSec, isObservingEvent,
-      focusedCameraPlanetId, focusedCameraBodyLabel, planetFocusZoom, planetFocusRotated,
+      focusedCameraPlanetId, focusedCameraBodyLabel, planetFocusZoom, planetFocusRotated, canvasPanned,
       starSystems: STAR_SYSTEMS, sightseeingBodies,
       voyageSystemId, voyageSoaring, voyageSoarSpeed, voyageAutoPilot, voyageWarpingToId,
       formatStarSystemDist, onToggleSoar, onSelectStarSystem, onNextStarSystem, onReturnToSol,
       onSetSoarSpeed, onToggleSoarAutoPilot, onClickSightseeingBody,
-      focusPlanet, unfocusPlanet, setPlanetZoom, resetPlanetInspect,
+      focusPlanet, unfocusPlanet, setPlanetZoom, resetPlanetInspect, resetCanvasPan,
       planetTagClass, planetPipClass,
-      onCanvasPointerDown, onCanvasDblClick, resetCamera, onPlanetPointerDown, onPlanetEnter, onPlanetLeave,
+      onCanvasPointerDown, onCanvasContextMenu, onCanvasDblClick, resetCamera, onPlanetPointerDown, onPlanetEnter, onPlanetLeave,
       onClickGalaxyStar, onDblClickGalaxyStar, openGalaxyCreation,
       onHoverCardEnter, onHoverCardLeave, onStageWheel, jumpToScale,
       openSessionInDrawer, openAgentConversationFromQuick, openCosmosSessionSearch, onDrawerSelectSession, toggleWorkbenchWiden, closeQuickComposer, closeDrawer,
-      onToggleConstants, onToggleSignalTrigger, closeSignalPopover, onOpenSignal, onDismissSignal, onMarkAllSignalsRead,
+      onToggleConstants, onToggleSignalTrigger, focusSignalTrigger, closeSignalPopover, onOpenSignal, onDismissSignal, onMarkAllSignalsRead,
       openQuickComposerFromDrawer, onDrawerResizeStart, onDrawerResize, onDrawerResizeEnd, onDrawerResizeReset,
       emitTelemetryBeam, onAutoRouted, jumpToWaitingAgent, assignFromMenu,
       onObserveEvent, onFocusDistantEvent, onReturnFromEvent, onStopEvent, onToggleAutoEvents, onToggleAutoZoom, onTogglePauseEvent, onReplayEvent, onNextRandomEvent, onSetEventZoom, onResetEventView, onScrubEvent,
-      onUpdateConstant, onAssignPlanet, openYeaftSettings, openYeaftAgentSettings, openAgentLlmConfig, openSessionSettings, closeSessionSettings, openVpLibraryFromSessionSettings,
+      onUpdateConstant, onResetConstants, onAssignPlanet, openYeaftSettings, openYeaftAgentSettings, openAgentLlmConfig, openSessionSettings, closeSessionSettings, openVpLibraryFromSessionSettings,
       abandonCosmos, submitNewBook, showToast, runToastAction,
     };
   },

@@ -40,7 +40,6 @@ import { TaskManager } from './tasks/manager.js';
 import { ensureDefaultSessionIfEmpty, migrateRegisteredWorkDirSessions, findExistingSessionYeaftDir } from './sessions/session-crud.js';
 import { seedDefaultVps } from './vp/seed-defaults.js';
 import { topUpDefaultVps } from './vp/seed-topup.js';
-import { isWorkCenterEnabled } from './work-center/feature.js';
 import { join } from 'path';
 import { existsSync as existsSyncSafe, readFileSync as readFileSyncSafe, mkdirSync as mkdirSyncSafe } from 'fs';
 
@@ -56,7 +55,6 @@ import { existsSync as existsSyncSafe, readFileSync as readFileSyncSafe, mkdirSy
  * @property {object[]} [extraTools] — Additional ToolDef objects to register
  * @property {object} [configOverrides] — Additional config overrides
  * @property {Promise<Array>} [managedCliReady] — optional entrypoint-owned CLI setup
- * @property {boolean} [workCenterEnabled] — override Work Center producer-tool registration
  */
 
 /**
@@ -125,7 +123,6 @@ export async function loadSession(options = {}) {
     configOverrides = {},
     serverMode = false,
     managedCliReady = null,
-    workCenterEnabled,
   } = options;
 
   // ─── 1. Determine config + store directories ─────────────
@@ -157,7 +154,6 @@ export async function loadSession(options = {}) {
 
   // ─── 2. Load config ───────────────────────────────────
   const config = loadConfig(overrides);
-  const effectiveWorkCenterEnabled = workCenterEnabled ?? isWorkCenterEnabled(process.env, config);
   if (serverMode) config.serverMode = true;
   // Dream is disabled at the runtime boundary. Ignore legacy caller/config
   // toggles so an old client cannot re-enable scheduling or loading.
@@ -348,7 +344,6 @@ export async function loadSession(options = {}) {
   // ─── 8. Build tool registry ────────────────────────────
   const taskManager = new TaskManager({ yeaftDir });
   const toolRegistry = createFullRegistry();
-  if (!effectiveWorkCenterEnabled) toolRegistry.unregister('CreateWorkItem');
 
   // Register any extra tools from caller
   for (const tool of extraTools) {

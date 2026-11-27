@@ -9,7 +9,7 @@ Yeaft has a browser/server control plane and one or more Agents. The Agent runs 
 - at least one native LLM provider for Yeaft Sessions, or an installed/authenticated vendor CLI for that conversation path
 - Docker for the recommended production server deployment
 
-The install commands below use a POSIX shell and explicitly skip extra ONNX Runtime CUDA downloads while keeping CPU native dependencies and lifecycle scripts. Direct npm installation does not inherit the one-line installer policy. On Windows, use the [temporary PowerShell environment block](./deploy-agent.md#manual-npm-installation), which restores the previous setting. Node 24 is recommended for full digital-person hybrid recall.
+The install commands below use a POSIX shell and explicitly skip extra ONNX Runtime CUDA downloads while keeping CPU native dependencies and lifecycle scripts. Direct npm installation does not inherit the one-line installer policy. On Windows, use the [temporary PowerShell environment block](./deploy-agent.md#manual-npm-installation), which restores the previous setting.
 
 ## Fastest path: local mode
 
@@ -90,10 +90,6 @@ npm run docs:build
 
 Use Software for a coding workflow, or switch scenes next to Attach at any time. The same conversation continues; active turns retain their original scene.
 
-## Try Work Center
-
-Open **Work Center** from the sidebar, or create a WorkItem from the Yeaft Session composer. Give it a concrete goal, acceptance criteria, and working directory. Work Center persists its own Coordinator conversation and planned Action graph on the selected Agent.
-
 ## Optional CLI runtimes
 
 To create Claude Code or GitHub Copilot conversations, install and authenticate the matching CLI on the Agent machine. The Agent detects supported runtimes and exposes them in the creation UI. Native Yeaft Sessions do not require either vendor CLI.
@@ -102,7 +98,6 @@ To create Claude Code or GitHub Copilot conversations, install and authenticate 
 
 - [Choose a code agent path](./user/choose-backend.md)
 - [Yeaft Sessions and Projects](./user/yeaft-session.md)
-- [Work Center](./user/work-center.md)
 - [Agent and native CLI reference](./agent-cli.md)
 - [Provider/model configuration](./yeaft-config.md)
 - [Deploy the server](./deploy-server.md)
