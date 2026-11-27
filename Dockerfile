@@ -57,6 +57,7 @@ COPY server/handlers ./server/handlers/
 COPY server/routes ./server/routes/
 COPY server/db ./server/db/
 COPY server/auth ./server/auth/
+COPY server/cosmic-web ./server/cosmic-web/
 
 # Copy built frontend from builder stage (only dist folder needed)
 COPY --from=builder /app/web/dist ./web/dist/

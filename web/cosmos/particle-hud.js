@@ -2,6 +2,7 @@
  * Yeaft Cosmos — GPU Living Particle Pools, 3D Cosmic Web Graph & 2D Vector Astronomical HUD
  */
 import { PLANETS, keplerPos, keplerOrbitPoint } from './constants.js';
+import { projectCosmicWeb } from './web-graph.js';
 
 /* Two realistic long-period comets on high-eccentricity Keplerian ellipses (Sun at focus) */
 const COMETS = [
@@ -868,72 +869,119 @@ export function drawCosmosHud(ctx, w, h, st, webGraph, galaxyBooks, agentsByPlan
     ctx.restore();
   }
 
-  if (webAlpha > 0.04 && webGraph) {
+  if (webAlpha > 0.04 && webGraph && Array.isArray(webGraph.nodes) && webGraph.nodes.length) {
     ctx.save();
     ctx.globalAlpha = webAlpha;
-    const rotY = Math.sin(st.realTime * 0.07) * 0.14 + st.camRot.x * 0.35 + st.parallax.x * 0.08;
-    const rotX = Math.cos(st.realTime * 0.055) * 0.08 + st.camRot.y * 0.28 + st.parallax.y * 0.06;
-    const cY = Math.cos(rotY), sY = Math.sin(rotY), cX = Math.cos(rotX), sX = Math.sin(rotX);
-    const proj = new Array(webGraph.nodes.length);
+    const webCenterShiftX = Number(layout?.webCenterShiftX || 0);
+    const hoveredClusterId = layout?.webHoveredClusterId || null;
+    const selectedClusterId = layout?.webSelectedClusterId || null;
+    const focusedDomainId = layout?.webFocusedDomainId || null;
+    const proj = projectCosmicWeb(webGraph, w, h, st, { centerShiftX: webCenterShiftX });
 
     for (let i = 0; i < webGraph.nodes.length; i++) {
       const n = webGraph.nodes[i];
-      const x1 = n.x * cY - n.z * sY, z1 = n.x * sY + n.z * cY;
-      const y2 = n.y * cX - z1 * sX, z2 = n.y * sX + z1 * cX;
-      const persp = 1.0 / (1.0 - z2 * 0.34);
-      const sx = w * 0.5 + x1 * w * 0.56 * persp, sy = h * 0.5 + y2 * h * 0.72 * persp;
-      proj[i] = { x: sx, y: sy, z: z2, persp };
-      const md = Math.hypot(sx - st.mouseX, sy - st.mouseY);
-      if (md < 180) n.excite = Math.min(1.0, n.excite + (1.0 - md / 180) * 0.08);
+      const p = proj[i];
+      if (!p) continue;
+      const md = Math.hypot(p.x - st.mouseX, p.y - st.mouseY);
+      if (md < 170) n.excite = Math.min(1.0, n.excite + (1.0 - md / 170) * 0.08);
+      if (hoveredClusterId && n.clusterId === hoveredClusterId) n.excite = Math.max(n.excite, 0.92);
+      if (selectedClusterId && n.clusterId === selectedClusterId) n.excite = Math.max(n.excite, 0.78);
       n.excite *= 0.965;
     }
+
     for (let i = 0; i < webGraph.edges.length; i++) {
       const e = webGraph.edges[i], pa = proj[e.a], pb = proj[e.b];
-      const mx = (pa.x + pb.x) * 0.5 - (pb.y - pa.y) * e.curve, my = (pa.y + pb.y) * 0.5 + (pb.x - pa.x) * e.curve;
-      const depthA = Math.max(0.18, Math.min(1.0, 0.58 + (pa.z + pb.z) * 0.35));
-      const exB = Math.max(webGraph.nodes[e.a].excite, webGraph.nodes[e.b].excite) * 0.42;
+      if (!pa || !pb) continue;
+      const na = webGraph.nodes[e.a], nb = webGraph.nodes[e.b];
+      const domainMatch = !focusedDomainId || na.domainId === focusedDomainId || nb.domainId === focusedDomainId;
+      const dim = domainMatch ? 1.0 : 0.28;
+      const mx = (pa.x + pb.x) * 0.5 - (pb.y - pa.y) * e.curve;
+      const my = (pa.y + pb.y) * 0.5 + (pb.x - pa.x) * e.curve;
+      const depthA = Math.max(0.18, Math.min(1.0, 0.58 + (pa.z + pb.z) * 0.35)) * dim;
+      const exB = Math.max(na.excite || 0, nb.excite || 0) * 0.45;
       ctx.beginPath(); ctx.moveTo(pa.x, pa.y); ctx.quadraticCurveTo(mx, my, pb.x, pb.y);
-      ctx.strokeStyle = `rgba(156, 198, 255, ${(0.085 + e.weight * 0.085 + exB) * depthA})`;
-      ctx.lineWidth = (0.65 + e.weight * 0.55 + exB * 1.1) * ((pa.persp + pb.persp) * 0.5); ctx.stroke();
+      const isCross = e.kind === 'cross';
+      ctx.strokeStyle = isCross
+        ? `rgba(196, 174, 255, ${(0.075 + e.weight * 0.09 + exB) * depthA})`
+        : `rgba(156, 198, 255, ${(0.09 + e.weight * 0.09 + exB) * depthA})`;
+      ctx.lineWidth = (0.65 + e.weight * 0.6 + exB * 1.15) * ((pa.persp + pb.persp) * 0.5);
+      ctx.stroke();
     }
-    for (let i = 0; i < webGraph.pulses.length; i++) {
+
+    for (let i = webGraph.pulses.length - 1; i >= 0; i--) {
       const pl = webGraph.pulses[i];
       pl.t += pl.speed * 0.016 * pl.dir;
       const e = webGraph.edges[pl.edgeIdx];
       if (!e) continue;
       if (pl.t >= 1.0 || pl.t <= 0.0) {
         const node = webGraph.nodes[pl.t >= 1.0 ? e.b : e.a];
-        node.excite = Math.min(1.0, node.excite + 0.72);
-        if (node.neighbors.length) {
+        if (node) node.excite = Math.min(1.0, (node.excite || 0) + (pl.burst ? 0.92 : 0.72));
+        if (pl.burst) {
+          pl.life -= 0.45;
+          if (pl.life <= 0.1) {
+            webGraph.pulses.splice(i, 1);
+            continue;
+          }
+        }
+        if (node?.neighbors?.length) {
           const next = node.neighbors[Math.floor(Math.random() * node.neighbors.length)];
           pl.edgeIdx = next.edgeIdx; pl.dir = next.dir; pl.t = next.dir > 0 ? 0.0 : 1.0;
         } else {
           pl.dir *= -1; pl.t = Math.max(0.01, Math.min(0.99, pl.t));
         }
       }
-      const ce = webGraph.edges[pl.edgeIdx], pa = proj[ce.a], pb = proj[ce.b];
+      const ce = webGraph.edges[pl.edgeIdx];
+      if (!ce) continue;
+      const pa = proj[ce.a], pb = proj[ce.b];
+      if (!pa || !pb) continue;
       const mx = (pa.x + pb.x) * 0.5 - (pb.y - pa.y) * ce.curve, my = (pa.y + pb.y) * 0.5 + (pb.x - pa.x) * ce.curve;
-      const evalQ = (t) => { const mt = 1 - t; return [mt * mt * pa.x + 2 * mt * t * mx + t * t * pb.x, mt * mt * pa.y + 2 * mt * t * my + t * t * pb.y]; };
-      const [hx, hy] = evalQ(pl.t), [tx, ty] = evalQ(Math.max(0, Math.min(1, pl.t - pl.dir * 0.16)));
-      const [r, g, b] = pl.col;
+      const evalQ = (tVal) => { const mt = 1 - tVal; return [mt * mt * pa.x + 2 * mt * tVal * mx + tVal * tVal * pb.x, mt * mt * pa.y + 2 * mt * tVal * my + tVal * tVal * pb.y]; };
+      const [hx, hy] = evalQ(pl.t), [tx, ty] = evalQ(Math.max(0, Math.min(1, pl.t - pl.dir * (pl.burst ? 0.24 : 0.16))));
+      const [r, g, b] = pl.col || [138, 212, 255];
       const grad = ctx.createLinearGradient(hx, hy, tx, ty);
-      grad.addColorStop(0, `rgba(${r}, ${g}, ${b}, ${0.88 * pl.life})`);
+      grad.addColorStop(0, `rgba(${r}, ${g}, ${b}, ${Math.min(1, (pl.burst ? 0.98 : 0.88) * pl.life)})`);
       grad.addColorStop(1, `rgba(${r}, ${g}, ${b}, 0)`);
-      ctx.beginPath(); ctx.moveTo(tx, ty); ctx.lineTo(hx, hy); ctx.strokeStyle = grad; ctx.lineWidth = 1.65; ctx.lineCap = 'round'; ctx.stroke();
-      const dotG = ctx.createRadialGradient(hx, hy, 0, hx, hy, 6.2);
-      dotG.addColorStop(0, `rgba(255, 255, 255, ${0.92 * pl.life})`);
+      ctx.beginPath(); ctx.moveTo(tx, ty); ctx.lineTo(hx, hy); ctx.strokeStyle = grad; ctx.lineWidth = pl.burst ? 2.4 : 1.65; ctx.lineCap = 'round'; ctx.stroke();
+      const headR = pl.burst ? 8.4 : 6.2;
+      const dotG = ctx.createRadialGradient(hx, hy, 0, hx, hy, headR);
+      dotG.addColorStop(0, `rgba(255, 255, 255, ${Math.min(1, 0.95 * pl.life)})`);
       dotG.addColorStop(1, `rgba(${r}, ${g}, ${b}, 0)`);
-      ctx.fillStyle = dotG; ctx.beginPath(); ctx.arc(hx, hy, 6.2, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = dotG; ctx.beginPath(); ctx.arc(hx, hy, headR, 0, Math.PI * 2); ctx.fill();
     }
+
     for (let i = 0; i < webGraph.nodes.length; i++) {
       const n = webGraph.nodes[i], p = proj[i];
-      const pulse = 0.78 + 0.22 * Math.sin(st.realTime * 1.4 + n.phase) + n.excite * 0.75;
-      const rad = (n.isHub ? 5.6 : 2.2) * n.baseR * p.persp * (1 + n.excite * 0.45);
-      const g = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, rad * 3.4);
-      g.addColorStop(0, `rgba(255, 255, 255, ${Math.min(1, 0.85 * pulse)})`);
-      g.addColorStop(0.28, n.color.replace(', 1)', `, ${Math.min(0.85, 0.48 * pulse)})`));
+      if (!p || !p.visible) continue;
+      const isHovered = Boolean(hoveredClusterId && n.clusterId === hoveredClusterId);
+      const isSelected = Boolean(selectedClusterId && n.clusterId === selectedClusterId);
+      const isFocusedHub = Boolean(focusedDomainId && n.isHub && n.domainId === focusedDomainId);
+      const domainMatch = !focusedDomainId || n.domainId === focusedDomainId;
+      const dim = (domainMatch || isHovered || isSelected) ? 1.0 : 0.34;
+      const pulse = (0.78 + 0.22 * Math.sin(st.realTime * 1.4 + n.phase) + (n.excite || 0) * 0.78) * dim;
+      const rad = (n.isHub ? 6.4 : 2.5) * (n.baseR || 1) * p.persp * (1 + (n.excite || 0) * 0.45);
+      const g = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, rad * 3.5);
+      g.addColorStop(0, `rgba(255, 255, 255, ${Math.min(1, 0.88 * pulse)})`);
+      g.addColorStop(0.28, (n.color || 'rgba(124, 196, 255, 1)').replace(', 1)', `, ${Math.min(0.88, 0.52 * pulse)})`));
       g.addColorStop(1, 'rgba(130, 180, 255, 0)');
-      ctx.fillStyle = g; ctx.beginPath(); ctx.arc(p.x, p.y, rad * 3.4, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = g; ctx.beginPath(); ctx.arc(p.x, p.y, rad * 3.5, 0, Math.PI * 2); ctx.fill();
+
+      // Golden watch-hit ring or focused/hovered spotlight ring
+      if (n.watchHit && !n.isHub) {
+        const wr = rad * 2.1 + Math.sin(st.realTime * 2.6 + n.phase) * 1.5;
+        ctx.strokeStyle = `rgba(244, 194, 122, ${(0.72 * dim).toFixed(3)})`;
+        ctx.lineWidth = 1.25;
+        ctx.beginPath(); ctx.arc(p.x, p.y, wr, 0, Math.PI * 2); ctx.stroke();
+      }
+      if (isHovered || isSelected || isFocusedHub) {
+        const hr = rad * (n.isHub ? 2.1 : 2.8) + Math.sin(st.realTime * 3.2) * 1.4;
+        ctx.strokeStyle = isSelected || isFocusedHub ? 'rgba(124, 196, 255, 0.86)' : 'rgba(242, 247, 255, 0.78)';
+        ctx.lineWidth = isSelected || isFocusedHub ? 1.6 : 1.2;
+        ctx.beginPath(); ctx.arc(p.x, p.y, hr, 0, Math.PI * 2); ctx.stroke();
+      } else if (n.unread && !n.isHub && !webGraph.isAmbient) {
+        ctx.strokeStyle = (n.color || 'rgba(124, 196, 255, 1)').replace(', 1)', `, ${(0.34 * dim).toFixed(3)})`);
+        ctx.lineWidth = 0.9;
+        ctx.beginPath(); ctx.arc(p.x, p.y, rad * 1.85, 0, Math.PI * 2); ctx.stroke();
+      }
     }
     ctx.restore();
   }

@@ -11,6 +11,8 @@ import { CONFIG, isEmailConfigured, validateProductionConfig } from './config.js
 import { agents, webClients, userFileTabs, userStatsDeltas } from './context.js';
 import { invitationDb, userDb, userStatsDb, closeDb } from './database.js';
 import { registerApiRoutes } from './api.js';
+import { startCosmicWebScheduler, stopCosmicWebScheduler } from './cosmic-web/service.js';
+import { closeCosmicWebDb } from './db/cosmic-web-db.js';
 import { registerInstallerRoutes } from './routes/installer-routes.js';
 import { registerProxyRoutes, handleProxyWebSocketUpgrade } from './proxy.js';
 import { handleAgentConnection } from './ws-agent.js';
@@ -261,6 +263,7 @@ async function startServers() {
     console.log(`Users configured: ${CONFIG.users.length}`);
     console.log(`Email verification: ${isEmailConfigured() ? 'ENABLED' : 'DISABLED'}`);
   }
+  startCosmicWebScheduler();
 }
 
 startServers().catch(err => {
@@ -274,6 +277,7 @@ startServers().catch(err => {
 async function gracefulShutdown(signal) {
   console.log(`\n[Shutdown] Received ${signal}, starting graceful shutdown...`);
   clearInterval(accountDeletionTimer);
+  stopCosmicWebScheduler();
 
   // 1. 通知所有 web client 服务即将更新
   const updateMsg = { type: 'server_updating' };
@@ -299,6 +303,7 @@ async function gracefulShutdown(signal) {
     console.log('[Shutdown] HTTP server closed');
     // Flush pending user stats before closing DB
     flushUserStats();
+    closeCosmicWebDb();
     closeDb();
     process.exit(0);
   });

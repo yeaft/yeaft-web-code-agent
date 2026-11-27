@@ -9,6 +9,7 @@ import { acceptPluginConfigReply, acceptPluginSkillDetailReply } from './plugin-
 import { applyScheduledTaskReceipts, bindScheduledTaskNotificationOwner, reconcileScheduledTaskNotifications } from './scheduled-tasks.js';
 import { useAuthStore } from '../auth.js';
 import { useCreationsStore } from '../creations.js';
+import { useCosmicWebStore } from '../cosmicWeb.js';
 import { decodeKey } from '../../utils/encryption.js';
 import { t } from '../../utils/i18n.js';
 import { stopProcessingWatchdog, startLegacyWatchdog } from './watchdog.js';
@@ -1656,6 +1657,10 @@ export function handleMessage(store, msg) {
 
     case 'creation_event':
       useCreationsStore().handleCreationEvent(msg);
+      break;
+
+    case 'cosmic_web_updated':
+      useCosmicWebStore().handleExternalUpdate(msg);
       break;
 
   }

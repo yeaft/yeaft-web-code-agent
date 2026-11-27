@@ -38,6 +38,7 @@ import { handleWorkCenterRequest } from '../yeaft/work-center/bridge.js';
 import { handleSessionAttachmentRead } from '../yeaft/session-attachment-read.js';
 import { handlePersonRequest } from '../yeaft/person/bridge.js';
 import { handleCreationRequest, handleCreationMediaRead } from '../yeaft/creations/bridge.js';
+import { handleCosmicWebAiRequest } from '../yeaft/cosmic-web-briefing.js';
 import { handleBrowserRuntimeMessage } from '../browser-runtime/messages.js';
 
 export async function applyLlmConfigUpdate(msg, dependencies = {}) {
@@ -913,6 +914,13 @@ export async function handleMessage(msg) {
 
     case 'creation_media_read':
       await handleCreationMediaRead(msg);
+      break;
+
+    case 'cosmic_web_ai_request':
+      void handleCosmicWebAiRequest(msg, {
+        yeaftDir: ctx.CONFIG?.yeaftDir,
+        sendToServer,
+      });
       break;
 
     case 'session_discovery_request':

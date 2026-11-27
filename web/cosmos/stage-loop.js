@@ -14,6 +14,7 @@ import {
   projectSoarBeacons,
 } from './star-systems.js';
 import { fillGpuParticles, drawCosmosHud } from './particle-hud.js';
+import { projectCosmicWeb } from './web-graph.js';
 import {
   tickCosmicEvents,
   computeEventFrames,
@@ -611,6 +612,38 @@ export function stepCosmosFrame(now, ctx) {
   };
 
   const activeWebGraph = webFullAlpha > 0.04 ? (webGraph || getWebGraph?.() || null) : null;
+  const webCenterShiftX = (webFullAlpha > 0.04 && ui.webDrawerOpen && !ui.isCompact && !ui.webModalOpen)
+    ? -Math.min(220, w * 0.16)
+    : 0;
+
+  // Update interactive 3D Cosmic Web DOM star & hub markers via shared projection (zero VDOM churn)
+  if (domRefs.webNodes) {
+    const hideWebNodes = webFullAlpha < 0.18 || Boolean(ui.webModalOpen) || !activeWebGraph || activeWebGraph.isAmbient;
+    const projectedWeb = hideWebNodes
+      ? []
+      : projectCosmicWeb(activeWebGraph, w, h, anim, { centerShiftX: webCenterShiftX });
+    const projectedById = Object.create(null);
+    for (let i = 0; i < projectedWeb.length; i++) {
+      const entry = projectedWeb[i];
+      if (entry?.node?.id) projectedById[entry.node.id] = entry;
+    }
+    for (const key of Object.keys(domRefs.webNodes)) {
+      const el = domRefs.webNodes[key];
+      if (!el) continue;
+      const entry = projectedById[key];
+      if (!entry || !entry.visible || hideWebNodes) {
+        el.style.display = 'none';
+      } else {
+        const domainMatch = !ui.webFocusedDomainId || entry.node.domainId === ui.webFocusedDomainId;
+        const opacity = webFullAlpha * (entry.node.isHub ? 0.96 : 0.9) * (domainMatch ? 1 : 0.42);
+        el.style.display = 'inline-flex';
+        el.style.opacity = String(opacity.toFixed(3));
+        el.style.transform = `translate(${entry.x.toFixed(1)}px, ${entry.y.toFixed(1)}px) translate(-50%, -50%)`;
+        el.style.zIndex = String(entry.node.isHub ? 6 : 4);
+      }
+    }
+  }
+
   const solarProj = {
     project: projectSolar,
     sunPt,
@@ -668,6 +701,10 @@ export function stepCosmosFrame(now, ctx) {
         soarBlend: reducedMotion ? 0 : soarBlend,
         soarPhase: voyage?.flightPhase || 0,
         voyageWarp,
+        webCenterShiftX,
+        webHoveredClusterId: ui.webHoveredClusterId || null,
+        webSelectedClusterId: ui.webSelectedClusterId || null,
+        webFocusedDomainId: ui.webFocusedDomainId || null,
       }, (ec, ew, eh) => {
         if (eventDraws.length === 0) return;
         const renderedSet = renderInfo.renderedEventUids;
