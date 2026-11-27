@@ -1547,10 +1547,62 @@ describe('Cosmos Creations — End-to-End Web Store <-> Server Relay <-> Agent S
       revisions: [{ id: 'rev-remote' }],
     });
     await pendingRefresh;
-    // Dirty draft and original loadedRevId must be preserved rather than overwritten by delayed refresh!
+    // Dirty draft and original loadedRevId must be preserved AND stay loaded/editable!
     expect(creationsStore.nodeContentsByKey[key].dirty).toBe(true);
+    expect(creationsStore.nodeContentsByKey[key].loaded).toBe(true);
     expect(creationsStore.nodeContentsByKey[key].content).toContain('V1');
     expect(creationsStore.nodeContentsByKey[key].loadedRevId).toBe('rev-local');
+
+    // R6-#7a: Opening Revision History (loadNode) on an already-dirty Deck with newer remote rev keeps Deck editable
+    const { default: DeckReader } = await import('../../web/components/cosmos/creations/readers/DeckReader.js');
+    const deckWrap = mount(DeckReader, {
+      props: {
+        node: { id: 'n-delayed', title: 'Ch', modality: 'slide_deck', currentRevId: 'rev-remote' },
+        content: '{"slides":[{"slideId":"s1","layout":"title","title":"V1"}]}',
+        contentLoaded: creationsStore.nodeContentsByKey[key].loaded,
+        loadedRevId: creationsStore.nodeContentsByKey[key].loadedRevId,
+        agentId: 'agent-a',
+        creationId: res.creation.id,
+      },
+      global: { mocks: { $t } },
+    });
+    deckWrap.vm.startEditing();
+    deckWrap.vm.markDirty();
+    await flushPromises();
+    expect(deckWrap.find('input.creation-slide-input.is-title').exists()).toBe(true);
+    // Calling loadNode while dirty keeps loaded: true (never drops to false)
+    const revHistLoad = creationsStore.loadNode('agent-a', res.creation.id, 'n-delayed');
+    expect(creationsStore.nodeContentsByKey[key].loaded).toBe(true);
+    resolveDelayedNode({
+      node: { id: 'n-delayed', title: 'Ch', type: 'unit', modality: 'slide_deck', currentRevId: 'rev-remote', content: '{"slides":[{"slideId":"s1","layout":"title","title":"V2-remote"}]}' },
+      content: '{"slides":[{"slideId":"s1","layout":"title","title":"V2-remote"}]}',
+      revisions: [{ id: 'rev-remote' }, { id: 'rev-local' }],
+    });
+    await revHistLoad;
+    expect(creationsStore.nodeContentsByKey[key].loaded).toBe(true);
+    expect(deckWrap.find('input.creation-slide-input.is-title').exists()).toBe(true);
+    deckWrap.unmount();
+
+    // R6-#7b: VideoReader source selector & reorder/delete controls are disabled and no-op while !contentLoaded && !dirty
+    const staleVideoWrap = mount(VideoReader, {
+      props: {
+        node: { id: 'v2', title: 'Ep 2', modality: 'video_episode', currentRevId: 'rev-2' },
+        content: JSON.stringify({ videoSourceId: '', scenes: [{ sceneId: 's1', title: 'S1', durationSec: 5 }, { sceneId: 's2', title: 'S2', durationSec: 5 }] }),
+        contentLoaded: false,
+        loadedRevId: null,
+        agentId: 'agent-a',
+        creationId: res.creation.id,
+        sources: [{ id: 'vid-1', name: 'clip.mp4', mimeType: 'video/mp4', playableVideo: true }],
+      },
+      global: { mocks: { $t } },
+    });
+    expect(staleVideoWrap.find('select.creation-compact-select').attributes('disabled')).toBeDefined();
+    staleVideoWrap.vm.onSelectVideoSource({ target: { value: 'vid-1' } });
+    staleVideoWrap.vm.deleteScene(0);
+    expect(staleVideoWrap.vm.episode.videoSourceId).toBe('');
+    expect(staleVideoWrap.vm.scenes).toHaveLength(2);
+    staleVideoWrap.unmount();
+
     creationsStore.request = origRequest;
   });
 });

@@ -223,8 +223,11 @@ export default {
         this.syncStoreDirty(false);
       }
     },
+    canMutate() {
+      return Boolean(this.contentLoaded || this.dirty);
+    },
     markDirty() {
-      if (!this.contentLoaded && !this.editing) return;
+      if (!this.canMutate()) return;
       if (!this.dirty) {
         this.editBaseRevId = this.loadedRevId;
       }
@@ -245,6 +248,7 @@ export default {
       this.currentTime = Number(e.target?.currentTime) || 0;
     },
     onSelectVideoSource(e) {
+      if (!this.canMutate()) return;
       const nextSourceId = String(e.target?.value || '');
       this.markDirty();
       this.episode = {
@@ -298,7 +302,7 @@ export default {
       this.seekTo(Number(e.target?.value) || 0);
     },
     addScene() {
-      if (!this.contentLoaded) return;
+      if (!this.canMutate()) return;
       this.markDirty();
       this.episode.scenes.push(normalizeScene({
         title: `${this.$t('creation.video.scenes')} ${this.scenes.length + 1}`,
@@ -310,6 +314,7 @@ export default {
       this.editing = true;
     },
     moveScene(idx, delta) {
+      if (!this.canMutate()) return;
       const target = idx + delta;
       if (target < 0 || target >= this.scenes.length) return;
       this.markDirty();
@@ -317,6 +322,7 @@ export default {
       this.episode.scenes.splice(target, 0, item);
     },
     deleteScene(idx) {
+      if (!this.canMutate()) return;
       this.markDirty();
       this.episode.scenes.splice(idx, 1);
     },
@@ -380,6 +386,7 @@ export default {
           <select
             v-if="videoSources.length > 0"
             class="creation-compact-select"
+            :disabled="!canMutate()"
             :value="episode.videoSourceId || ''"
             :aria-label="$t('creation.video.linkSource')"
             @change="onSelectVideoSource"
@@ -390,7 +397,7 @@ export default {
             </option>
           </select>
 
-          <button type="button" class="creation-glass-btn" :disabled="!contentLoaded" @click="addScene">
+          <button type="button" class="creation-glass-btn" :disabled="!canMutate()" @click="addScene">
             + {{ $t('creation.video.addScene') }}
           </button>
           <button
@@ -510,7 +517,7 @@ export default {
               <div class="creation-scene-id-group">
                 <span class="creation-scene-timecode">{{ formatTime(entry.start) }}</span>
                 <input
-                  v-if="editing && contentLoaded"
+                  v-if="editing && canMutate()"
                   v-model="entry.scene.title"
                   class="creation-inline-input"
                   @click.stop
@@ -519,7 +526,7 @@ export default {
                 <strong v-else class="creation-scene-title">{{ entry.scene.title }}</strong>
               </div>
               <div class="creation-scene-controls" @click.stop>
-                <label v-if="editing && contentLoaded" class="creation-scene-dur-wrap">
+                <label v-if="editing && canMutate()" class="creation-scene-dur-wrap">
                   <input
                     v-model.number="entry.scene.durationSec"
                     type="number"
@@ -536,13 +543,13 @@ export default {
                 <button type="button" class="creation-glass-btn" @click="requestAiRewriteScene(entry.scene, entry.idx)">
                   ✦ {{ $t('creation.video.aiRewriteScene') }}
                 </button>
-                <button type="button" class="creation-icon-mini" :disabled="entry.idx === 0" @click="moveScene(entry.idx, -1)">↑</button>
-                <button type="button" class="creation-icon-mini" :disabled="entry.idx === scenes.length - 1" @click="moveScene(entry.idx, 1)">↓</button>
-                <button type="button" class="creation-icon-mini is-danger" @click="deleteScene(entry.idx)">×</button>
+                <button type="button" class="creation-icon-mini" :disabled="!canMutate() || entry.idx === 0" @click="moveScene(entry.idx, -1)">↑</button>
+                <button type="button" class="creation-icon-mini" :disabled="!canMutate() || entry.idx === scenes.length - 1" @click="moveScene(entry.idx, 1)">↓</button>
+                <button type="button" class="creation-icon-mini is-danger" :disabled="!canMutate()" @click="deleteScene(entry.idx)">×</button>
               </div>
             </div>
 
-            <div v-if="editing && contentLoaded" class="creation-scene-edit-fields" @click.stop>
+            <div v-if="editing && canMutate()" class="creation-scene-edit-fields" @click.stop>
               <label class="creation-field-label">
                 <span>{{ $t('creation.video.transcript') }}</span>
                 <textarea

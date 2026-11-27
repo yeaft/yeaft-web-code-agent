@@ -171,8 +171,11 @@ export default {
         this.stepLightbox(-1);
       }
     },
+    canMutate() {
+      return Boolean(this.contentLoaded || this.dirty);
+    },
     markDirty() {
-      if (!this.contentLoaded && !this.editing) return;
+      if (!this.canMutate()) return;
       if (!this.dirty) {
         this.editBaseRevId = this.loadedRevId;
       }
@@ -180,7 +183,7 @@ export default {
       this.syncStoreDirty(true);
     },
     addEmptyFrame() {
-      if (!this.contentLoaded) return;
+      if (!this.canMutate()) return;
       this.markDirty();
       this.gallery.frames.push(normalizeFrame({
         title: `#${this.frames.length + 1}`,
@@ -192,7 +195,7 @@ export default {
     async onUploadImage(e) {
       const files = Array.from(e.target?.files || []);
       if (e.target) e.target.value = '';
-      if (!files.length) return;
+      if (!files.length || !this.canMutate()) return;
       this.uploading = true;
       try {
         const res = await this.creationsStore.uploadSources(this.agentId, this.creationId, files, []);
@@ -213,6 +216,7 @@ export default {
       }
     },
     moveFrame(idx, delta) {
+      if (!this.canMutate()) return;
       const target = idx + delta;
       if (target < 0 || target >= this.frames.length) return;
       this.markDirty();
@@ -220,6 +224,7 @@ export default {
       this.gallery.frames.splice(target, 0, item);
     },
     deleteFrame(idx) {
+      if (!this.canMutate()) return;
       this.markDirty();
       this.gallery.frames.splice(idx, 1);
       if (this.lightboxIndex === idx) this.closeLightbox();
@@ -279,12 +284,12 @@ export default {
         </div>
 
         <div class="creation-reader-actions">
-          <label class="creation-glass-btn creation-upload-label">
-            <input type="file" accept="image/*" multiple hidden :disabled="uploading" @change="onUploadImage" />
+          <label class="creation-glass-btn creation-upload-label" :class="{ 'is-disabled': uploading || !canMutate() }">
+            <input type="file" accept="image/*" multiple hidden :disabled="uploading || !canMutate()" @change="onUploadImage" />
             <span>+ {{ $t('creation.gallery.uploadImage') }}</span>
           </label>
 
-          <button type="button" class="creation-glass-btn" :disabled="!contentLoaded" @click="addEmptyFrame">
+          <button type="button" class="creation-glass-btn" :disabled="!canMutate()" @click="addEmptyFrame">
             + {{ $t('creation.gallery.addFrame') }}
           </button>
 
@@ -354,7 +359,7 @@ export default {
             </div>
 
             <div class="creation-gallery-card-body">
-              <template v-if="editing && contentLoaded">
+              <template v-if="editing && canMutate()">
                 <input
                   v-model="frame.title"
                   class="creation-inline-input"
@@ -379,9 +384,9 @@ export default {
                   ✦ {{ $t('creation.gallery.aiRedrawFrame') }}
                 </button>
                 <div class="creation-gallery-reorder">
-                  <button type="button" class="creation-icon-mini" :disabled="idx === 0" @click="moveFrame(idx, -1)">↑</button>
-                  <button type="button" class="creation-icon-mini" :disabled="idx === frames.length - 1" @click="moveFrame(idx, 1)">↓</button>
-                  <button type="button" class="creation-icon-mini is-danger" @click="deleteFrame(idx)">×</button>
+                  <button type="button" class="creation-icon-mini" :disabled="!canMutate() || idx === 0" @click="moveFrame(idx, -1)">↑</button>
+                  <button type="button" class="creation-icon-mini" :disabled="!canMutate() || idx === frames.length - 1" @click="moveFrame(idx, 1)">↓</button>
+                  <button type="button" class="creation-icon-mini is-danger" :disabled="!canMutate()" @click="deleteFrame(idx)">×</button>
                 </div>
               </div>
             </div>

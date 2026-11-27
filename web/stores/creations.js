@@ -710,7 +710,7 @@ export const useCreationsStore = defineStore('creations', {
       const currentNode = this.detailsByKey[dKey]?.nodes?.find((n) => n && n.id === nodeId) || null;
       const currentNodeRevId = currentNode?.currentRevId ?? null;
       const isLoadedForCurrentRev = Boolean(
-        prev.loaded && (currentNodeRevId == null || prev.loadedRevId === currentNodeRevId),
+        prev.loaded && (prev.dirty || currentNodeRevId == null || prev.loadedRevId === currentNodeRevId),
       );
       this.nodeContentsByKey[nKey] = {
         ...prev,
@@ -729,11 +729,13 @@ export const useCreationsStore = defineStore('creations', {
         const live = this.nodeContentsByKey[nKey];
 
         if (live?.dirty === true) {
-          // User started editing while this refresh was in flight: preserve the dirty draft & base rev.
+          // User has a dirty draft (e.g. opened Revision History or edited mid-refresh):
+          // preserve the dirty draft, keep it editable (loaded: true), and keep its original save base.
           this.nodeContentsByKey[nKey] = {
             ...live,
             revisions,
             loading: false,
+            loaded: true,
           };
         } else {
           this.nodeContentsByKey[nKey] = {
