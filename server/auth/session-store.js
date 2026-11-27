@@ -15,12 +15,39 @@ export const activeSessions = new Map();
 
 // Store revoked tokens
 export const revokedTokens = new Set();
+export const revokedSessions = new Map(); // sid -> expiry in milliseconds
+
+const MAX_REVOKED_SESSIONS = 100_000;
+let revokedThrough = -Infinity; // JWT iat in seconds, including that second
+
+function pruneRevokedSessions(now) {
+  for (const [sid, expiresAt] of revokedSessions) {
+    if (expiresAt <= now) revokedSessions.delete(sid);
+  }
+}
+
+export function recordSessionRevocation(sid, expiresAt, now) {
+  if (revokedSessions.size >= MAX_REVOKED_SESSIONS) pruneRevokedSessions(now);
+  if (!revokedSessions.has(sid) && revokedSessions.size >= MAX_REVOKED_SESSIONS) {
+    // Fail closed under saturation: never evict a live revocation and thereby
+    // restore a logged-out session. New logins in later seconds still work.
+    revokedThrough = Math.max(revokedThrough, Math.floor(now / 1000));
+    revokedSessions.clear();
+    return;
+  }
+  revokedSessions.set(sid, Math.max(revokedSessions.get(sid) ?? 0, expiresAt));
+}
+
+export function isSessionRevoked(sid, issuedAt, now = Date.now()) {
+  return issuedAt <= revokedThrough || (revokedSessions.get(sid) ?? 0) > now;
+}
 
 /**
  * Clean up expired pending verifications
  */
 function cleanupPendingVerifications() {
   const now = Date.now();
+  pruneRevokedSessions(now);
   for (const [token, data] of pendingVerifications.entries()) {
     if (data.expiresAt < now) {
       pendingVerifications.delete(token);

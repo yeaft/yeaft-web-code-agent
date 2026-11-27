@@ -2,6 +2,7 @@ import { randomUUID } from 'crypto';
 import { WebSocket } from 'ws';
 import { CONFIG } from './config.js';
 import { generateSkipAuthSession } from './auth.js';
+import { isClientSessionValid } from './auth/client-session.js';
 import { authenticateRequest } from './auth/request-auth.js';
 import { encodeKey } from './encryption.js';
 import { scheduledTaskReceiptDb, userDb } from './database.js';
@@ -36,6 +37,7 @@ import { CLIENT_BROWSER_TYPES, handleClientBrowser } from './handlers/client-bro
 import { handleClientMisc } from './handlers/client-misc.js';
 import { clearWorkCenterRequestsForClient, handleClientWorkCenter } from './handlers/client-work-center.js';
 import { clearSessionDiscoveryRequests, handleClientSessionDiscovery } from './handlers/session-discovery.js';
+import { clearCreationRequestsForClient, handleClientCreation } from './handlers/client-creation.js';
 import { clearPersonRequestsForClient, handleClientPerson } from './handlers/client-person.js';
 import { recordPerfTraceEvent } from './perf-trace.js';
 import { markWebHeartbeatPong } from './heartbeat-policy.js';
@@ -56,6 +58,10 @@ export function handleWebConnection(ws, url, req = {}) {
 
   let authenticated = false;
   let sessionKey = null;
+  let authToken = null;
+  let authExpiresAt;
+  let authSessionId;
+  let authIssuedAt;
   let username = null;
   let userId = null;
   let role = null;
@@ -71,8 +77,12 @@ export function handleWebConnection(ws, url, req = {}) {
     const result = authenticateRequest({
       cookieHeader: req.headers?.cookie,
       queryToken: url.searchParams.get('token'),
-    });
+    }, { fullSession: true });
     authenticated = !!result;
+    authToken = result?.token ?? null;
+    authSessionId = result?.sid;
+    authIssuedAt = result?.iat;
+    if (Number.isFinite(result?.exp)) authExpiresAt = result.exp * 1000;
     sessionKey = result?.sessionKey || null;
     username = result?.username || null;
     role = result?.role === 'admin' ? 'admin' : (result ? 'pro' : null);
@@ -110,6 +120,10 @@ export function handleWebConnection(ws, url, req = {}) {
     connectionGeneration: connectionId,
     ws,
     authenticated,
+    authToken,
+    authExpiresAt,
+    authSessionId,
+    authIssuedAt,
     username,
     userId,
     role,
@@ -163,6 +177,7 @@ export function handleWebConnection(ws, url, req = {}) {
 
   ws.on('message', async (data) => {
     const client = webClients.get(clientId);
+    if (!requireValidClientSession(client)) return;
     const msg = await parseMessage(data, client?.sessionKey);
     if (!msg) return;
     if (msg.perfTraceId) {
@@ -209,6 +224,7 @@ export function handleWebConnection(ws, url, req = {}) {
     clearWorkCenterRequestsForClient(client);
     clearSessionDiscoveryRequests(client);
     clearPersonRequestsForClient(client);
+    clearCreationRequestsForClient(client);
     clearAgentSettingsRequestsForClient(clientId);
     clearYeaftDebugRequestsForClient(clientId);
     clearSessionTurnDeletesForClient(clientId);
@@ -250,14 +266,18 @@ const WORKBENCH_TYPES = new Set([
   'proxy_update_ports', 'update_file_tabs', 'restore_file_tabs'
 ]);
 
-async function handleWebMessage(clientId, msg) {
-  const client = webClients.get(clientId);
-  if (!client || !client.authenticated) return;
-  if (!CONFIG.skipAuth && !userDb.isActive(client.userId)) {
+function requireValidClientSession(client) {
+  if (isClientSessionValid(client)) return true;
+  if (client?.authenticated) {
     client.authenticated = false;
     client.ws.close(1008, 'Account disabled');
-    return;
   }
+  return false;
+}
+
+async function handleWebMessage(clientId, msg) {
+  const client = webClients.get(clientId);
+  if (!requireValidClientSession(client)) return;
 
   // feat-ws-plaintext-negotiation: early capability frame from new web
   // clients. Tells the server "you may stop encrypting outbound to me".
@@ -307,6 +327,7 @@ async function handleWebMessage(clientId, msg) {
   if (await handleClientWorkbench(clientId, client, msg, checkAgentAccess)) return;
   if (await handleClientWorkCenter(client, msg, checkAgentAccess)) return;
   if (await handleClientPerson(client, msg)) return;
+  if (await handleClientCreation(client, msg)) return;
   if (await handleClientSessionDiscovery(client, msg)) return;
   if (await handleClientMisc(clientId, client, msg, checkAgentAccess)) return;
 }

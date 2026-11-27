@@ -527,7 +527,7 @@
   position: fixed;
   top: calc(54px + env(safe-area-inset-top, 0px));
   right: calc(16px + env(safe-area-inset-right, 0px));
-  z-index: 38;
+  z-index: 65;
   width: min(332px, calc(100vw - 28px));
   max-height: calc(100vh - 82px - env(safe-area-inset-top, 0px));
   display: flex;

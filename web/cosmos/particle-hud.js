@@ -662,16 +662,208 @@ export function drawCosmosHud(ctx, w, h, st, webGraph, galaxyBooks, agentsByPlan
 
   if (galAlpha > 0.06) {
     ctx.save();
-    ctx.globalAlpha = galAlpha * 0.85;
+    ctx.globalAlpha = galAlpha * 0.92;
     const gcx = w * 0.5 + st.parallax.x * 12, gcy = h * 0.5 + st.parallax.y * 8;
     const gRad = Math.min(w, h) * 0.52, gTilt = 0.54 + st.camRot.y * 0.16, spin = -st.realTime * 0.016 - st.time * 0.012;
-    (galaxyBooks || []).forEach((b) => {
-      const ang = b.theta + spin, bx = gcx + Math.cos(ang) * b.r * gRad, by = gcy + Math.sin(ang) * b.r * gRad * gTilt;
-      const pts = [];
-      for (let k = 0; k < 4; k++) pts.push([bx + Math.cos(ang + k * 1.48) * (10 + k * 5), by + Math.sin(ang + k * 1.48) * (10 + k * 5) * 0.7]);
-      ctx.beginPath(); pts.forEach((pt, idx) => (idx === 0 ? ctx.moveTo(pt[0], pt[1]) : ctx.lineTo(pt[0], pt[1])));
-      ctx.strokeStyle = 'rgba(196, 224, 255, 0.34)'; ctx.lineWidth = 0.85; ctx.stroke();
-      pts.forEach((pt) => { ctx.fillStyle = b.color; ctx.beginPath(); ctx.arc(pt[0], pt[1], 2.0, 0, Math.PI * 2); ctx.fill(); });
+    const t = st.realTime;
+
+    (galaxyBooks || []).forEach((b, idx) => {
+      if (!b) return;
+      const rVal = typeof b.celestial?.r === 'number' ? b.celestial.r : (typeof b.r === 'number' ? b.r : 0.45);
+      const thetaVal = typeof b.celestial?.theta === 'number' ? b.celestial.theta : (typeof b.theta === 'number' ? b.theta : idx * 1.1);
+      const ang = thetaVal + spin;
+      const bx = gcx + Math.cos(ang) * rVal * gRad;
+      const by = gcy + Math.sin(ang) * rVal * gRad * gTilt;
+
+      const kind = b.kind || 'book';
+      const status = b.status || 'active';
+      const unitCount = Math.max(0, Number(b.unitCount ?? b.readableUnitCount ?? 0));
+      const sourceCount = Math.min(4, Math.max(0, Number(b.sourceCount ?? 0)));
+      const sizeBoost = Math.min(4.8, Math.sqrt(unitCount) * 0.85);
+      const twinkle = 0.88 + 0.12 * Math.sin(t * 2.1 + thetaVal * 3.0);
+
+      if (kind === 'deck') {
+        // Ice-cyan ringed star: luminous core + tilted concentric ellipses
+        const coreR = (3.8 + sizeBoost * 0.55) * twinkle;
+        const glow = ctx.createRadialGradient(bx, by, 0, bx, by, coreR * 4.2);
+        glow.addColorStop(0, 'rgba(235, 252, 255, 0.96)');
+        glow.addColorStop(0.32, 'rgba(110, 211, 236, 0.52)');
+        glow.addColorStop(1, 'rgba(110, 211, 236, 0)');
+        ctx.fillStyle = glow;
+        ctx.beginPath();
+        ctx.arc(bx, by, coreR * 4.2, 0, Math.PI * 2);
+        ctx.fill();
+
+        ctx.save();
+        ctx.translate(bx, by);
+        ctx.rotate(-0.42 + Math.sin(t * 0.25 + thetaVal) * 0.08);
+        ctx.strokeStyle = 'rgba(148, 230, 250, 0.68)';
+        ctx.lineWidth = 1.15;
+        ctx.beginPath();
+        ctx.ellipse(0, 0, coreR * 2.6, coreR * 0.88, 0, 0, Math.PI * 2);
+        ctx.stroke();
+
+        ctx.strokeStyle = 'rgba(196, 244, 255, 0.36)';
+        ctx.lineWidth = 0.8;
+        ctx.beginPath();
+        ctx.ellipse(0, 0, coreR * 3.55, coreR * 1.2, 0, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.restore();
+
+        ctx.fillStyle = '#e8fbff';
+        ctx.beginPath();
+        ctx.arc(bx, by, coreR * 0.72, 0, Math.PI * 2);
+        ctx.fill();
+      } else if (kind === 'gallery') {
+        // Aurora violet/rose luminous nebula cluster (multi-lobe nebula + 3-4 sparkling nuclei)
+        const baseR = 9.5 + sizeBoost * 1.2;
+        const lobes = [
+          { dx: -baseR * 0.42, dy: -baseR * 0.22, r: baseR * 1.45, c0: 'rgba(218, 134, 245, 0.44)', c1: 'rgba(218, 134, 245, 0)' },
+          { dx: baseR * 0.45, dy: baseR * 0.20, r: baseR * 1.35, c0: 'rgba(244, 138, 188, 0.38)', c1: 'rgba(244, 138, 188, 0)' },
+          { dx: 0, dy: 0, r: baseR * 1.2, c0: 'rgba(255, 224, 248, 0.46)', c1: 'rgba(190, 128, 255, 0)' },
+        ];
+        for (const l of lobes) {
+          const g = ctx.createRadialGradient(bx + l.dx, by + l.dy, 0, bx + l.dx, by + l.dy, l.r);
+          g.addColorStop(0, l.c0);
+          g.addColorStop(1, l.c1);
+          ctx.fillStyle = g;
+          ctx.beginPath();
+          ctx.arc(bx + l.dx, by + l.dy, l.r, 0, Math.PI * 2);
+          ctx.fill();
+        }
+        const nuclei = [
+          [0, 0, 2.2],
+          [-baseR * 0.48, -baseR * 0.28, 1.5],
+          [baseR * 0.52, baseR * 0.18, 1.45],
+          [baseR * 0.14, -baseR * 0.46, 1.25],
+        ];
+        nuclei.forEach(([nx, ny, nr], k) => {
+          const spark = 0.72 + 0.28 * Math.sin(t * 2.8 + thetaVal + k * 1.7);
+          ctx.fillStyle = `rgba(255, 244, 255, ${spark})`;
+          ctx.beginPath();
+          ctx.arc(bx + nx, by + ny, nr, 0, Math.PI * 2);
+          ctx.fill();
+        });
+      } else if (kind === 'video') {
+        // Electric blue/cyan pulsar: core + slow rotating twin light beams + expanding pulse ring
+        const coreR = (3.8 + sizeBoost * 0.5) * twinkle;
+        const beamAng = t * 0.55 + thetaVal;
+        const beamLen = 17 + sizeBoost * 2.1;
+
+        ctx.save();
+        ctx.translate(bx, by);
+        ctx.rotate(beamAng);
+        const beamGrad = ctx.createLinearGradient(-beamLen, 0, beamLen, 0);
+        beamGrad.addColorStop(0, 'rgba(92, 174, 255, 0)');
+        beamGrad.addColorStop(0.35, 'rgba(130, 208, 255, 0.45)');
+        beamGrad.addColorStop(0.5, 'rgba(235, 250, 255, 0.92)');
+        beamGrad.addColorStop(0.65, 'rgba(130, 208, 255, 0.45)');
+        beamGrad.addColorStop(1, 'rgba(92, 174, 255, 0)');
+        ctx.fillStyle = beamGrad;
+        ctx.beginPath();
+        ctx.moveTo(0, -1.5);
+        ctx.lineTo(beamLen, -3.4);
+        ctx.lineTo(beamLen, 3.4);
+        ctx.lineTo(0, 1.5);
+        ctx.lineTo(-beamLen, 3.4);
+        ctx.lineTo(-beamLen, -3.4);
+        ctx.closePath();
+        ctx.fill();
+        ctx.restore();
+
+        // Expanding subtle pulse ring
+        const pulsePhase = (t * 0.42 + thetaVal * 0.37) % 1;
+        const pulseR = coreR * 1.4 + pulsePhase * (15 + sizeBoost);
+        ctx.strokeStyle = `rgba(116, 198, 255, ${(1 - pulsePhase) * 0.42})`;
+        ctx.lineWidth = 1.0;
+        ctx.beginPath();
+        ctx.arc(bx, by, pulseR, 0, Math.PI * 2);
+        ctx.stroke();
+
+        const glow = ctx.createRadialGradient(bx, by, 0, bx, by, coreR * 3.8);
+        glow.addColorStop(0, 'rgba(240, 250, 255, 0.98)');
+        glow.addColorStop(0.35, 'rgba(96, 170, 255, 0.62)');
+        glow.addColorStop(1, 'rgba(96, 170, 255, 0)');
+        ctx.fillStyle = glow;
+        ctx.beginPath();
+        ctx.arc(bx, by, coreR * 3.8, 0, Math.PI * 2);
+        ctx.fill();
+      } else {
+        // Book (default): warm amber/gold main-sequence star + 4-point subtle diffraction spikes
+        const coreR = (4.0 + sizeBoost * 0.6) * twinkle;
+        const glow = ctx.createRadialGradient(bx, by, 0, bx, by, coreR * 4.4);
+        glow.addColorStop(0, 'rgba(255, 250, 232, 0.98)');
+        glow.addColorStop(0.30, 'rgba(246, 192, 98, 0.62)');
+        glow.addColorStop(0.68, 'rgba(226, 148, 48, 0.18)');
+        glow.addColorStop(1, 'rgba(226, 148, 48, 0)');
+        ctx.fillStyle = glow;
+        ctx.beginPath();
+        ctx.arc(bx, by, coreR * 4.4, 0, Math.PI * 2);
+        ctx.fill();
+
+        const spikeLen = coreR * 3.4;
+        ctx.strokeStyle = 'rgba(255, 232, 180, 0.56)';
+        ctx.lineWidth = 0.95;
+        ctx.beginPath();
+        ctx.moveTo(bx - spikeLen, by);
+        ctx.lineTo(bx + spikeLen, by);
+        ctx.moveTo(bx, by - spikeLen);
+        ctx.lineTo(bx, by + spikeLen);
+        ctx.stroke();
+
+        ctx.fillStyle = b.color || '#ffe9b8';
+        ctx.beginPath();
+        ctx.arc(bx, by, coreR * 0.72, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
+      // Status overlays: generating, needs_attention, seed
+      if (b.activeRunStatus === 'running' || status === 'generating') {
+        const ringR = 14 + sizeBoost * 0.8;
+        const collapseR = ringR + (1 - ((t * 0.6 + idx * 0.23) % 1)) * 7;
+        ctx.strokeStyle = 'rgba(255, 196, 102, 0.34)';
+        ctx.lineWidth = 1.0;
+        ctx.beginPath();
+        ctx.arc(bx, by, collapseR, 0, Math.PI * 2);
+        ctx.stroke();
+
+        const progress = Math.max(0.08, Math.min(1, Number(b.activeRunProgress ?? 0.35)));
+        const startA = -Math.PI * 0.5 + t * 0.45;
+        ctx.strokeStyle = 'rgba(255, 206, 118, 0.90)';
+        ctx.lineWidth = 1.8;
+        ctx.beginPath();
+        ctx.arc(bx, by, ringR, startA, startA + Math.PI * 2 * progress);
+        ctx.stroke();
+      } else if (status === 'needs_attention') {
+        const pulse = 0.35 + 0.35 * Math.sin(t * 1.9 + idx);
+        const attnR = 13.5 + sizeBoost * 0.7;
+        ctx.strokeStyle = `rgba(255, 126, 136, ${pulse})`;
+        ctx.lineWidth = 1.45;
+        ctx.beginPath();
+        ctx.arc(bx, by, attnR, 0, Math.PI * 2);
+        ctx.stroke();
+      } else if (status === 'seed') {
+        ctx.save();
+        ctx.setLineDash([3, 3]);
+        ctx.strokeStyle = 'rgba(196, 224, 255, 0.42)';
+        ctx.lineWidth = 0.9;
+        ctx.beginPath();
+        ctx.arc(bx, by, 11.5, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.restore();
+      }
+
+      // Orbiting tiny satellite dots proportional to sourceCount (up to 4)
+      for (let sIdx = 0; sIdx < sourceCount; sIdx++) {
+        const satOrbit = 11.5 + sizeBoost * 0.7 + sIdx * 2.4;
+        const satAng = t * (0.45 + sIdx * 0.14) + thetaVal + sIdx * ((Math.PI * 2) / Math.max(sourceCount, 1));
+        const sx = bx + Math.cos(satAng) * satOrbit;
+        const sy = by + Math.sin(satAng) * satOrbit * 0.68;
+        ctx.fillStyle = 'rgba(216, 236, 255, 0.82)';
+        ctx.beginPath();
+        ctx.arc(sx, sy, 1.45, 0, Math.PI * 2);
+        ctx.fill();
+      }
     });
     ctx.restore();
   }

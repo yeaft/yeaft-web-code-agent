@@ -1,5 +1,6 @@
 import { WebSocket } from 'ws';
 import { CONFIG } from './config.js';
+import { isClientSessionValid } from './auth/client-session.js';
 import { encrypt, decrypt, isEncrypted, encodeKey } from './encryption.js';
 import { sessionDb, yeaftProjectDb, yeaftSessionDb, sessionUiMetadataDb } from './database.js';
 import { projectSessionCatalog } from './session-catalog.js';
@@ -12,7 +13,7 @@ import { agents, webClients, directoryCache, DIR_CACHE_TTL, DIR_CACHE_MAX_SIZE, 
 // haven't sent client_hello — back-compat. skipAuth still forces
 // plaintext for local dev visibility.
 export async function sendToWebClient(client, msg) {
-  if (client.ws.readyState !== WebSocket.OPEN) return;
+  if (client.ws.readyState !== WebSocket.OPEN || (client.authToken && !isClientSessionValid(client))) return;
 
   // Plaintext path: dev mode OR new client that announced plaintext-ok.
   if (CONFIG.skipAuth || client.encryptOutbound === false) {
@@ -30,6 +31,7 @@ export async function sendToWebClient(client, msg) {
   }
   try {
     const encrypted = await encrypt(msg, client.sessionKey);
+    if (client.ws.readyState !== WebSocket.OPEN || (client.authToken && !isClientSessionValid(client))) return;
     const payload = JSON.stringify(encrypted);
     trackMessageBytesSent(client.userId, payload.length, msg.type);
     if (msg.type === 'file_content') console.log(`[sendToWebClient] file_content encrypted, payload size=${payload.length}, compressed=${encrypted.z}`);
@@ -329,10 +331,10 @@ export function resolveAgentAccessError(agentId, userId, role = null) {
  * access the Agent. Unlike conversation forwarding, this also supports
  * ownerless global Agents, which are visible only to admins.
  */
-export async function forwardAgentEvent(agentId, msg) {
+export async function forwardAgentEvent(agentId, msg, matchesRecipient = () => true) {
   for (const [, client] of webClients) {
-    if (!client.authenticated) continue;
-    if (!verifyAgentOwnership(agentId, client.userId, client.role)) continue;
+    if (!isClientSessionValid(client)) continue;
+    if (!verifyAgentOwnership(agentId, client.userId, client.role) || !matchesRecipient(client)) continue;
     await sendToWebClient(client, msg);
   }
 }

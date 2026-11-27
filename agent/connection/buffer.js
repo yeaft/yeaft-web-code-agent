@@ -9,7 +9,7 @@ export const BUFFERABLE_TYPES = new Set([
   'session_id_update', 'compact_status', 'slash_commands_update',
   'background_task_started', 'background_task_output',
   'subagent_started', 'subagent_message', 'subagent_completed',
-  'work_center_event'
+  'work_center_event',
 ]);
 
 function messageBytes(msg) {
@@ -67,6 +67,10 @@ const CONNECTION_SCOPED_TYPES = new Set([
   'file_content_chunk', 'video_chunk', 'yeaft_session_attachment_chunk', 'upgrade_agent_ack',
 ]);
 
+// Creation relays carry identity-scoped state, not replayable Session output.
+const isSocketScoped = msg => CONNECTION_SCOPED_TYPES.has(msg.type) || isHistoryChunkError(msg)
+  || ['creation_event', 'creation_response', 'creation_media_chunk'].includes(msg.type);
+
 const FILE_CHUNK_SEND_TIMEOUT_MS = 10_000;
 
 function sendTransferChunk(socket, data) {
@@ -110,17 +114,19 @@ function sendTransferChunk(socket, data) {
   });
 }
 
-async function sendNow(msg, queuedSocket) {
+async function sendNow(msg, queuedSocket, isCurrent) {
+  if (isCurrent && !isCurrent()) return 'dropped';
   const socket = ctx.ws;
   if (!socket || socket.readyState !== WebSocket.OPEN) return bufferMessage(msg, 'Disconnected');
   // File transfers are request/connection scoped, unlike replayable chat output.
-  if ((CONNECTION_SCOPED_TYPES.has(msg.type) || isHistoryChunkError(msg)) && queuedSocket !== socket) return 'dropped';
+  if (isSocketScoped(msg) && queuedSocket !== socket) return 'dropped';
   if (!canSendHistoryChunk(msg)) return 'dropped';
   const payload = ctx.serverEncryptionRequired && ctx.sessionKey
     ? await encrypt(msg, ctx.sessionKey) : msg;
   if (socket !== ctx.ws || socket.readyState !== WebSocket.OPEN) {
     return bufferMessage(msg, 'Connection changed');
   }
+  if (isCurrent && !isCurrent()) return 'dropped';
   const data = JSON.stringify(payload);
   if (CONNECTION_SCOPED_TYPES.has(msg.type)) return sendTransferChunk(socket, data);
   socket.send(data);
@@ -137,7 +143,7 @@ function scheduleOutboundDrain() {
         ctx.outboundSendQueueBytes = Math.max(0, Number(ctx.outboundSendQueueBytes || 0) - Number(item?.bytes || 0));
         const msg = item?.msg ?? item;
         try {
-          const outcome = await sendNow(msg, item?.socket);
+          const outcome = await sendNow(msg, item?.socket, item?.isCurrent);
           item?.resolve?.(outcome);
         } catch (e) {
           console.error(`[WS] Error sending message ${msg?.type}:`, e.message);
@@ -153,7 +159,7 @@ function scheduleOutboundDrain() {
   });
 }
 
-export async function sendToServer(msg) {
+export async function sendToServer(msg, { isCurrent } = {}) {
   if (!canSendHistoryChunk(msg)) return 'dropped';
   if (!ctx.ws || ctx.ws.readyState !== WebSocket.OPEN) return bufferMessage(msg, 'Disconnected');
   const bytes = messageBytes(msg);
@@ -173,8 +179,8 @@ export async function sendToServer(msg) {
     return 'dropped';
   }
   const promise = new Promise((resolve, reject) => {
-    const connectionScoped = CONNECTION_SCOPED_TYPES.has(msg.type) || isHistoryChunkError(msg);
-    ctx.outboundSendQueue.push({ msg, bytes, resolve, reject, socket: connectionScoped ? ctx.ws : null });
+    const connectionScoped = isSocketScoped(msg);
+    ctx.outboundSendQueue.push({ msg, bytes, resolve, reject, isCurrent, socket: connectionScoped ? ctx.ws : null });
     ctx.outboundSendQueueBytes = Number(ctx.outboundSendQueueBytes || 0) + bytes;
   });
   scheduleOutboundDrain();

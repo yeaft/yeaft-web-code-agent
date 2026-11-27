@@ -68,9 +68,12 @@ import CosmosConstantsPopover from './CosmosConstantsPopover.js';
 import CosmosEventsOverlay from './CosmosEventsOverlay.js';
 import CosmosVoyageOverlay from './CosmosVoyageOverlay.js';
 import CosmosSignalStream from './CosmosSignalStream.js';
+import CosmosGalaxyOverlay from './creations/CosmosGalaxyOverlay.js';
+import CreationInteriorModal from './creations/CreationInteriorModal.js';
 import SettingsPanel from '../SettingsPanel.js';
 import AgentSettingsPanel from '../AgentSettingsPanel.js';
 import SessionSettingsModal from '../SessionSettingsModal.js';
+import { useCreationsStore } from '../../stores/creations.js';
 
 export default {
   name: 'CosmosPage',
@@ -81,6 +84,8 @@ export default {
     CosmosEventsOverlay,
     CosmosVoyageOverlay,
     CosmosSignalStream,
+    CosmosGalaxyOverlay,
+    CreationInteriorModal,
     SettingsPanel,
     AgentSettingsPanel,
     SessionSettingsModal,
@@ -100,7 +105,7 @@ export default {
       :style="cosmosPageStyle"
       @wheel="onStageWheel"
     >
-      <canvas ref="glCanvasRef" :key="canvasEpoch" class="cosmos-gl-canvas" :class="{ 'is-orbiting': camOrbiting }" @pointerdown="onCanvasPointerDown" @dblclick="resetCamera"></canvas>
+      <canvas ref="glCanvasRef" :key="canvasEpoch" class="cosmos-gl-canvas" :class="{ 'is-orbiting': camOrbiting }" @pointerdown="onCanvasPointerDown" @dblclick="onCanvasDblClick"></canvas>
       <canvas ref="hudCanvasRef" class="cosmos-hud-canvas"></canvas>
 
       <!-- Spatial Interactive Layer (Zero-VDOM-diff direct transform updates via refs) -->
@@ -209,17 +214,19 @@ export default {
           @click.stop="jumpToScale(13.0)"
         >{{ $t('cosmos.scale.homeSolar') }}</button>
 
-        <!-- Galaxy Book Clusters -->
+        <!-- Galaxy Creation Stars (Per-Agent luminous bodies on spiral arms) -->
         <button
-          v-for="b in galaxyBooks"
+          v-for="b in activeGalaxyStars"
           :key="b.id"
           :ref="(el) => setMapRef(domRefs.books, b.id, el)"
           type="button"
           class="cosmos-book-dot"
+          :class="['is-' + (b.kind || 'book'), 'is-' + (b.status || 'active')]"
           style="display:none"
-          @click.stop="showToast($t('cosmos.galaxy.bookPending', { title: b.title }))"
+          @click.stop="onClickGalaxyStar(b)"
+          @dblclick.stop="onDblClickGalaxyStar(b)"
         >
-          <span class="cosmos-status-pip" :style="{ background: b.color, boxShadow: '0 0 7px ' + b.color }"></span>
+          <span class="cosmos-status-pip creation-star-pip" :class="'is-' + (b.kind || 'book')"></span>
           <span>{{ b.title }}</span>
         </button>
       </div>
@@ -447,9 +454,10 @@ export default {
         :drawer-open="drawerOpen"
         :is-compact="isCompactViewport"
         :preview-mode="constants.livePreviewMode"
-        :popover-open="signalPopoverOpen"
+        :popover-open="signalPopoverOpen && !creationsStore.activeCreation"
         :stream-hidden="signalStreamHidden"
         :suppressed="constantsOpen || isObservingEvent"
+        :suppress-floating="currentBand === 'galaxy' || Boolean(creationsStore.activeCreation)"
         @open-signal="onOpenSignal"
         @dismiss-signal="onDismissSignal"
         @mark-all-read="onMarkAllSignalsRead"
@@ -516,29 +524,49 @@ export default {
         @message-sent="emitTelemetryBeam"
       />
 
-      <!-- Galaxy Scale Minimal Book Creator -->
-      <div v-if="currentBand === 'galaxy'" class="cosmos-corner-dock" @pointerdown.stop>
-        <div v-if="bookCreateOpen" class="cosmos-book-popover">
-          <div class="cosmos-book-head">
-            <span>{{ $t('cosmos.galaxy.createBookTitle') }}</span>
-            <button type="button" class="cosmos-icon-btn" @click="bookCreateOpen = false">
-              <svg viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"/></svg>
-            </button>
-          </div>
-          <form class="cosmos-book-form" @submit.prevent="submitNewBook">
-            <input v-model="bookDraftTitle" type="text" class="cosmos-book-input" :placeholder="$t('cosmos.galaxy.bookPlaceholder')" />
-            <div class="cosmos-book-foot">
-              <select v-model="bookDraftDomain" class="cosmos-book-select">
-                <option v-for="d in bookDomains" :key="d.id" :value="d.id">{{ d.id }}</option>
-              </select>
-              <button type="submit" class="cosmos-drawer-cta">{{ $t('cosmos.galaxy.createBook') }}</button>
-            </div>
-          </form>
-        </div>
-        <button type="button" class="cosmos-whisper-btn" @click="bookCreateOpen = !bookCreateOpen">
-          + {{ $t('cosmos.galaxy.createBook') }}
-        </button>
-      </div>
+      <!-- Galaxy Scale Per-Agent Creation Studio Overlay (L1 HUD, Star Catalog, L2 Inspector, Omni-Ignite Dock) -->
+      <CosmosGalaxyOverlay
+        ref="galaxyOverlayRef"
+        :agents="projectedAgentList"
+        :visible="currentBand === 'galaxy'"
+        @open-creation="openGalaxyCreation"
+        @toast="showToast"
+      />
+
+      <!-- L3 Full-Screen Creation Interior (Read Mode & Co-Creation Studio) -->
+      <CreationInteriorModal
+        v-if="creationsStore.activeCreation"
+        ref="creationInteriorRef"
+        :signal-count="signalStream.badgeCount"
+        :signal-waiting-count="signalStream.waitingCount"
+        :signal-running-count="signalStream.runningCount"
+        :signal-open="signalPopoverOpen"
+        :signal-label="signalTriggerLabel"
+        @toggle-signal="onToggleSignalTrigger"
+        @close-signal="closeSignalPopover({ restoreFocus: true })"
+      >
+        <template #signal-popover>
+          <CosmosSignalStream
+            :items="signalStream.items"
+            :waiting-count="signalStream.waitingCount"
+            :unread-count="signalStream.unreadCount"
+            :running-count="signalStream.runningCount"
+            :badge-count="signalStream.badgeCount"
+            :dismissible-count="signalStream.dismissibleCount"
+            :drawer-open="false"
+            :is-compact="isCompactViewport"
+            :preview-mode="constants.livePreviewMode"
+            :popover-open="signalPopoverOpen"
+            :stream-hidden="true"
+            :suppressed="false"
+            :suppress-floating="true"
+            @open-signal="onOpenSignal"
+            @dismiss-signal="onDismissSignal"
+            @mark-all-read="onMarkAllSignalsRead"
+            @close-popover="closeSignalPopover({ restoreFocus: true })"
+          />
+        </template>
+      </CreationInteriorModal>
 
       <!-- Black Hole Horizon Minimal Whisper Dock -->
       <div v-if="currentBand === 'horizon'" class="cosmos-corner-dock" @pointerdown.stop>
@@ -599,6 +627,7 @@ export default {
   setup() {
     const store = Pinia.useChatStore();
     const sessionsStore = Pinia.useSessionsStore ? Pinia.useSessionsStore() : null;
+    const creationsStore = useCreationsStore();
     const { proxy } = Vue.getCurrentInstance();
     const $t = (k, p) => (proxy?.$t ? proxy.$t(k, p) : k);
 
@@ -606,6 +635,8 @@ export default {
     const hudCanvasRef = Vue.ref(null);
     const hoverCardRef = Vue.ref(null);
     const drawerRef = Vue.ref(null);
+    const galaxyOverlayRef = Vue.ref(null);
+    const creationInteriorRef = Vue.ref(null);
     const signalTriggerRef = Vue.ref(null);
     const voyageOverlayRef = Vue.ref(null);
 
@@ -760,9 +791,18 @@ export default {
         ? $t('cosmos.signals.triggerAria', { count: signalStream.value.badgeCount })
         : $t('cosmos.signals.triggerIdleAria')
     ));
+    const signalFloatingSuppressed = Vue.computed(() => (
+      currentBand.value === 'galaxy' || Boolean(creationsStore.activeCreation)
+    ));
     const signalTriggerExpanded = Vue.computed(() => {
       if (signalPopoverOpen.value) return true;
-      if (drawerOpen.value || isCompactViewport.value || constants.livePreviewMode === 'collapsed' || signalStream.value.totalCount === 0) {
+      if (
+        drawerOpen.value
+        || isCompactViewport.value
+        || signalFloatingSuppressed.value
+        || constants.livePreviewMode === 'collapsed'
+        || signalStream.value.totalCount === 0
+      ) {
         return false;
       }
       return !signalStreamHidden.value && !constantsOpen.value && !isObservingEvent.value;
@@ -1150,7 +1190,15 @@ export default {
         quickAgentId.value = null;
         if (drawerOpen.value) closeDrawer();
       }
-      if (scaleBand(anim.targetScaleLog) !== 'galaxy') bookCreateOpen.value = false;
+      if (scaleBand(anim.targetScaleLog) !== 'galaxy') {
+        bookCreateOpen.value = false;
+        creationsStore.invalidatePendingOpen?.();
+        creationsStore.inspectorTarget = null;
+        if (creationsStore.igniteDraft) {
+          creationsStore.igniteDraft.open = false;
+        }
+        creationsStore.closeCreation();
+      }
     }
 
     const activeTouchPointers = new Map();
@@ -1222,6 +1270,73 @@ export default {
       };
       camOrbiting.value = true;
     }
+    const activeGalaxyStars = Vue.computed(() => {
+      const list = creationsStore.currentAgentCreations || [];
+      return list.map((c, idx) => {
+        const celestial = c.celestial || c.placement || {};
+        const arm = Number.isFinite(celestial.arm) ? celestial.arm : (idx % 4);
+        const r = Number.isFinite(celestial.r) ? celestial.r : Math.min(0.76, 0.30 + (idx % 5) * 0.105);
+        const theta = Number.isFinite(celestial.theta) ? celestial.theta : ((arm * Math.PI) / 2 + 0.68 + idx * 0.43);
+        return { ...c, arm, r, theta };
+      });
+    });
+
+    function ensureGalaxyAgentSelected() {
+      const list = projectedAgentList.value;
+      if (!list.length) return;
+      const existing = creationsStore.selectedAgentId;
+      if (existing && list.some((a) => a.id === existing)) {
+        const current = list.find((a) => a.id === existing);
+        if (current?.online && current.capabilities?.includes('creations')) {
+          const bucket = creationsStore.byAgent[existing];
+          if (!bucket?.loaded && !bucket?.loading) {
+            creationsStore.listCreations(existing).catch(() => {});
+          }
+        }
+        return;
+      }
+      const preferred = list.find((a) => a.id === store.currentAgent && a.online && a.capabilities?.includes('creations'))
+        || list.find((a) => a.online && a.capabilities?.includes('creations'))
+        || list.find((a) => a.online)
+        || list[0];
+      if (preferred?.id) {
+        creationsStore.selectGalaxyAgent(preferred.id).catch(() => {});
+      }
+    }
+
+    Vue.watch([currentBand, projectedAgentList], ([band], prev) => {
+      if (band === 'galaxy') {
+        ensureGalaxyAgentSelected();
+      } else if (prev && prev[0] === 'galaxy') {
+        creationsStore.invalidatePendingOpen?.();
+        creationsStore.inspectorTarget = null;
+        if (creationsStore.igniteDraft) {
+          creationsStore.igniteDraft.open = false;
+        }
+        creationsStore.closeCreation();
+      }
+    }, { immediate: true });
+
+    function onClickGalaxyStar(star) {
+      if (!star?.id || !creationsStore.selectedAgentId) return;
+      creationsStore.inspectorTarget = { agentId: creationsStore.selectedAgentId, creationId: star.id };
+    }
+
+    function onDblClickGalaxyStar(star) {
+      if (!star?.id || !creationsStore.selectedAgentId) return;
+      openGalaxyCreation({ agentId: creationsStore.selectedAgentId, creationId: star.id });
+    }
+
+    async function openGalaxyCreation({ agentId, creationId, mode } = {}) {
+      const targetAgentId = agentId || creationsStore.selectedAgentId;
+      if (!targetAgentId || !creationId) return;
+      try {
+        await creationsStore.openCreation(targetAgentId, creationId, { mode });
+      } catch (err) {
+        showToast(err?.message || $t('creation.galaxy.offlineReadonly'));
+      }
+    }
+
     function resetCamera() {
       if (eventSim.active?.observing) {
         onResetEventView();
@@ -1242,6 +1357,32 @@ export default {
       }
       anim.camRot.tx = 0; anim.camRot.ty = 0;
       showToast($t('cosmos.scale.resetView'));
+    }
+
+    function onCanvasDblClick(e) {
+      if (
+        currentBand.value === 'galaxy'
+        && creationsStore.viewMode === 'galaxy'
+        && !creationsStore.activeCreation
+        && creationsStore.selectedAgentId
+      ) {
+        const w = window.innerWidth || 1280;
+        const h = window.innerHeight || 720;
+        const gRad = Math.min(w, h) * 0.52;
+        const gTilt = 0.54 + anim.camRot.y * 0.16;
+        const gSpin = -anim.realTime * 0.016 - anim.time * 0.012;
+        const dx = (e.clientX - (w * 0.5 + anim.parallax.x * 12)) / Math.max(1, gRad);
+        const dy = (e.clientY - (h * 0.5 + anim.parallax.y * 8)) / Math.max(1, gRad * gTilt);
+        const r = Math.max(0.18, Math.min(0.84, Math.hypot(dx, dy)));
+        const theta = Math.atan2(dy, dx) - gSpin;
+        const arm = ((Math.round(((theta % (Math.PI * 2)) + Math.PI * 2) / (Math.PI / 2)) % 4) + 4) % 4;
+        if (creationsStore.igniteDraft) {
+          creationsStore.igniteDraft.open = true;
+          creationsStore.igniteDraft.celestial = { arm, r, theta };
+        }
+        return;
+      }
+      resetCamera();
     }
 
     function onPlanetPointerDown(planetId, ev) {
@@ -1501,8 +1642,8 @@ export default {
     }
 
     function onStageWheel(e) {
-      if (settingsModal.open || agentSettingsModal.open || sessionSettingsModal.open) return;
-      if (e.target.closest('.cosmos-drawer, .cosmos-quick-composer, .cosmos-constants-popover, .cosmos-hover-card, .cosmos-event-almanac, .cosmos-book-popover, .cosmos-signal-stream, .cosmos-signal-popover, .cosmos-signal-mobile-banner, .cosmos-voyage-atlas, .cosmos-voyage-dock')) return;
+      if (settingsModal.open || agentSettingsModal.open || sessionSettingsModal.open || creationsStore.activeCreation) return;
+      if (e.target.closest('.cosmos-drawer, .cosmos-quick-composer, .cosmos-constants-popover, .cosmos-hover-card, .cosmos-event-almanac, .cosmos-book-popover, .cosmos-signal-stream, .cosmos-signal-popover, .cosmos-signal-mobile-banner, .cosmos-voyage-atlas, .cosmos-voyage-dock, .creation-galaxy-hud, .creation-catalog-panel, .creation-inspector-card, .creation-ignite-dock, .creation-interior-modal')) return;
       e.preventDefault();
       if (eventSim.active?.observing) {
         const delta = -Math.sign(e.deltaY) * Math.min(Math.abs(e.deltaY), 100) * 0.0032;
@@ -1545,7 +1686,13 @@ export default {
       if (!signalPopoverOpen.value) return;
       signalPopoverOpen.value = false;
       if (restoreFocus) {
-        Vue.nextTick(() => signalTriggerRef.value?.focus?.());
+        Vue.nextTick(() => {
+          if (creationsStore.activeCreation) {
+            creationInteriorRef.value?.focusSignalTrigger?.();
+          } else {
+            signalTriggerRef.value?.focus?.();
+          }
+        });
       }
     }
 
@@ -1599,6 +1746,7 @@ export default {
       }
       const usePopover = drawerOpen.value
         || isCompactViewport.value
+        || signalFloatingSuppressed.value
         || constants.livePreviewMode === 'collapsed'
         || signalStream.value.totalCount === 0;
       if (usePopover) {
@@ -1629,6 +1777,11 @@ export default {
           ? 'cosmos.signals.agentUnavailable'
           : 'cosmos.signals.sessionUnavailable'));
         return;
+      }
+      creationsStore.invalidatePendingOpen?.();
+      creationsStore.inspectorTarget = null;
+      if (creationsStore.igniteDraft) {
+        creationsStore.igniteDraft.open = false;
       }
       openSessionInDrawer(item.agentId, targetSession);
     }
@@ -1954,6 +2107,12 @@ export default {
     }
     function abandonCosmos() {
       constantsOpen.value = false;
+      creationsStore.invalidatePendingOpen?.();
+      creationsStore.inspectorTarget = null;
+      if (creationsStore.igniteDraft) {
+        creationsStore.igniteDraft.open = false;
+      }
+      creationsStore.closeCreation();
       collapseOpenWorkbench();
       store.setUiMode('classic');
     }
@@ -1978,9 +2137,14 @@ export default {
 
     function onKeyDown(e) {
       if (e.defaultPrevented) return;
+      if (creationsStore.activeCreation) return;
       if ((e.metaKey || e.ctrlKey) && !e.altKey && String(e.key || '').toLowerCase() === 'k') {
         if (settingsModal.open || agentSettingsModal.open || sessionSettingsModal.open) return;
         e.preventDefault();
+        if (currentBand.value === 'galaxy') {
+          galaxyOverlayRef.value?.focusSearch?.();
+          return;
+        }
         openCosmosSessionSearch();
         return;
       }
@@ -2016,6 +2180,8 @@ export default {
       if (voyageOverlayRef.value?.isAtlasOpen?.()) { voyageOverlayRef.value.closeAtlas({ restoreFocus: true }); return; }
       if (signalPopoverOpen.value) { closeSignalPopover({ restoreFocus: true }); return; }
       if (constantsOpen.value) { constantsOpen.value = false; return; }
+      if (currentBand.value === 'galaxy' && creationsStore.inspectorTarget) { creationsStore.inspectorTarget = null; return; }
+      if (currentBand.value === 'galaxy' && creationsStore.igniteDraft?.open) { creationsStore.igniteDraft.open = false; return; }
       if (bookCreateOpen.value) { bookCreateOpen.value = false; return; }
       if (eventSim.active?.observing) { onReturnFromEvent(); return; }
       if (drawerOpen.value && drawerRef.value?.isHistoryOpen?.()) { drawerRef.value.closeSessionSwitcher?.(); return; }
@@ -2036,7 +2202,7 @@ export default {
     function onDocClick(e) {
       if (emptyPlanetMenu.value && !e.target.closest('.cosmos-context-menu')) emptyPlanetMenu.value = null;
       if (constantsOpen.value && !e.target.closest('.cosmos-constants-popover, .cosmos-corner-actions')) constantsOpen.value = false;
-      if (signalPopoverOpen.value && !e.target.closest('.cosmos-signal-popover, .cosmos-corner-actions')) signalPopoverOpen.value = false;
+      if (signalPopoverOpen.value && !e.target.closest('.cosmos-signal-popover, .cosmos-corner-actions, .creation-signal-trigger')) signalPopoverOpen.value = false;
     }
 
     function planetTagClass(id) {
@@ -2132,9 +2298,11 @@ export default {
         stepCosmosFrame(now, {
           engine, anim, eventSim, voyage, pools, getWebGraph, gpuParticles, eventGpuParticles, constants, domRefs,
           getAgentsByPlanet: () => agentsByPlanet.value,
-          getGalaxyBooks: () => galaxyBooks.value,
+          getGalaxyBooks: () => activeGalaxyStars.value,
           getUiState: () => ({
             currentBand: currentBand.value,
+            viewMode: creationsStore.viewMode,
+            interiorOpen: Boolean(creationsStore.activeCreation),
             drawerOpen: drawerOpen.value,
             drawerWidth: effectiveDrawerWidth.value,
             quickOpen: Boolean(quickAgentId.value),
@@ -2259,7 +2427,8 @@ export default {
     });
 
     return {
-      glCanvasRef, hudCanvasRef, hoverCardRef, drawerRef, signalTriggerRef, voyageOverlayRef, domRefs, setMapRef, canvasEpoch, rendererMode,
+      glCanvasRef, hudCanvasRef, hoverCardRef, drawerRef, galaxyOverlayRef, creationInteriorRef, signalTriggerRef, voyageOverlayRef, domRefs, setMapRef, canvasEpoch, rendererMode,
+      creationsStore, activeGalaxyStars,
       planets: PLANETS, bookDomains: BOOK_DOMAINS,
       portals: [
         { id: 'to-galaxy', labelKey: 'cosmos.scale.galaxy', scale: '10²¹', target: 21.0, ring: 64 },
@@ -2288,7 +2457,8 @@ export default {
       onSetSoarSpeed, onToggleSoarAutoPilot, onClickSightseeingBody,
       focusPlanet, unfocusPlanet, setPlanetZoom, resetPlanetInspect,
       planetTagClass, planetPipClass,
-      onCanvasPointerDown, resetCamera, onPlanetPointerDown, onPlanetEnter, onPlanetLeave,
+      onCanvasPointerDown, onCanvasDblClick, resetCamera, onPlanetPointerDown, onPlanetEnter, onPlanetLeave,
+      onClickGalaxyStar, onDblClickGalaxyStar, openGalaxyCreation,
       onHoverCardEnter, onHoverCardLeave, onStageWheel, jumpToScale,
       openSessionInDrawer, openAgentConversationFromQuick, openCosmosSessionSearch, onDrawerSelectSession, toggleWorkbenchWiden, closeQuickComposer, closeDrawer,
       onToggleConstants, onToggleSignalTrigger, closeSignalPopover, onOpenSignal, onDismissSignal, onMarkAllSignalsRead,

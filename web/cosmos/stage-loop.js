@@ -523,18 +523,25 @@ export function stepCosmosFrame(now, ctx) {
   const gRad = Math.min(w, h) * 0.52;
   const gTilt = 0.54 + anim.camRot.y * 0.16;
   const gSpin = -anim.realTime * 0.016 - anim.time * 0.012;
-  for (const b of galaxyBooks) {
+  const hideGalaxyDomStars = ui.viewMode === 'catalog'
+    || ui.creationViewMode === 'catalog'
+    || Boolean(ui.interiorOpen || ui.creationInteriorOpen);
+  for (let i = 0; i < galaxyBooks.length; i++) {
+    const b = galaxyBooks[i];
+    if (!b) continue;
     const el = domRefs.books[b.id];
     if (!el) continue;
-    if (galFullAlpha < 0.15) {
+    if (galFullAlpha < 0.15 || hideGalaxyDomStars) {
       el.style.display = 'none';
       continue;
     }
-    const ang = b.theta + gSpin;
+    const rVal = typeof b.celestial?.r === 'number' ? b.celestial.r : (typeof b.r === 'number' ? b.r : 0.45);
+    const thetaVal = typeof b.celestial?.theta === 'number' ? b.celestial.theta : (typeof b.theta === 'number' ? b.theta : i * 1.1);
+    const ang = thetaVal + gSpin;
     el.style.display = 'inline-flex';
     el.style.opacity = String(galFullAlpha * 0.92);
-    el.style.left = `${w * 0.5 + anim.parallax.x * 12 + Math.cos(ang) * b.r * gRad}px`;
-    el.style.top = `${h * 0.5 + anim.parallax.y * 8 + Math.sin(ang) * b.r * gRad * gTilt - 18}px`;
+    el.style.left = `${w * 0.5 + anim.parallax.x * 12 + Math.cos(ang) * rVal * gRad}px`;
+    el.style.top = `${h * 0.5 + anim.parallax.y * 8 + Math.sin(ang) * rVal * gRad * gTilt - 18}px`;
   }
 
   // Update floating in-flight Star System Beacons (Zero-VDOM-churn direct DOM positioning)
