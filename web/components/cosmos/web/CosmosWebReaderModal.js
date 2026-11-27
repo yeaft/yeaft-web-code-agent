@@ -279,6 +279,7 @@ export default {
     },
     collapseToDrawer() {
       this._dockRequested = true;
+      this.webStore.drawerCollapsed = false;
       this.webStore.readerExpanded = false;
     },
     switchTab(tab) {

@@ -1302,11 +1302,12 @@ describe('Cosmic Web — Pinia store & interactive overlay', () => {
     expect(resolveMark).toBeTypeOf('function');
   });
 
-  it('restores focus to the drawer when Docking after expanding via keyboard from a persistent HUD button (#12)', async () => {
+  it('reopens collapsed drawer and restores focus into it when Docking after keyboard expansion from a persistent HUD button (#12)', async () => {
     const webStore = useCosmicWebStore();
     webStore.bootstrapped = true;
     webStore.prefs.onboarded = true;
     webStore.readerOpen = true;
+    webStore.drawerCollapsed = true;
     webStore.readerClusterId = 'c1';
     webStore.activeClusterDetail = { id: 'c1', domainId: 'ai', headline: 'Story 1', items: [] };
     webStore.articleData = { title: 'Story 1', markdown: 'Body', quality: 'full' };
@@ -1324,7 +1325,8 @@ describe('Cosmic Web — Pinia store & interactive overlay', () => {
     });
     await flushPromises();
 
-    // Focus a persistent HUD button (dailyBriefingBtn stays mounted in DOM)
+    // Drawer starts collapsed and unmounted; focus a persistent HUD button
+    expect(wrapper.vm.$refs.inlineExpandBtn).toBeFalsy();
     const hudBtn = wrapper.vm.$refs.dailyBriefingBtn;
     expect(hudBtn).toBeTruthy();
     hudBtn.focus();
@@ -1334,14 +1336,17 @@ describe('Cosmic Web — Pinia store & interactive overlay', () => {
     window.dispatchEvent(new KeyboardEvent('keydown', { key: 'e', bubbles: true, cancelable: true }));
     await flushPromises();
     expect(webStore.readerExpanded).toBe(true);
+    expect(webStore.drawerCollapsed).toBe(true);
 
-    // Activate Dock button inside modal -> focus MUST move to drawer (inlineExpandBtn), NOT back to hudBtn
+    // Activate Dock button inside modal -> MUST reopen drawer and focus remounted inlineExpandBtn, NOT hudBtn
     const modal = wrapper.findComponent({ name: 'CosmosWebReaderModal' });
     modal.vm.collapseToDrawer();
     await flushPromises();
     await flushPromises();
 
     expect(webStore.readerExpanded).toBe(false);
+    expect(webStore.drawerCollapsed).toBe(false);
+    expect(wrapper.vm.$refs.inlineExpandBtn).toBeTruthy();
     expect(document.activeElement).toBe(wrapper.vm.$refs.inlineExpandBtn);
     expect(document.activeElement).not.toBe(hudBtn);
 
