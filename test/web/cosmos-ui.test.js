@@ -2658,10 +2658,9 @@ describe('Cosmos Drawer Waiting Suppression, Horizontal Drag Resize & Session St
     expect(msgList.props('sessionActivity')[0].userTurnId).toBe('ut-1');
     expect(msgList.props('liveExecutionKeys').size).toBe(1);
 
-    // 3. Calm live Session Status strip renders while status pane is closed; clicking it opens overlay Session Status
-    const statusStrip = wrapper.find('.cosmos-status-strip');
-    expect(statusStrip.exists()).toBe(true);
-    await statusStrip.trigger('click');
+    // 3. No live Session Status strip renders above the composer; clicking the header toggle opens overlay Session Status
+    expect(wrapper.find('.cosmos-status-strip').exists()).toBe(false);
+    await statusToggle.trigger('click');
     await flushPromises();
     expect(wrapper.find('.cosmos-status-strip').exists()).toBe(false);
     expect(wrapper.find('.cosmos-status-host').classes()).toContain('is-overlay');
@@ -2691,13 +2690,14 @@ describe('Cosmos Drawer Waiting Suppression, Horizontal Drag Resize & Session St
     expect(wrapper.find('.cosmos-status-host').classes()).toContain('is-docked');
     expect(wrapper.find('.cosmos-drawer-chat').attributes('inert')).toBeUndefined();
 
-    // 5. Mutual exclusivity: opening Workbench closes Session Status and hides live status strip
+    // 5. Mutual exclusivity: opening Workbench closes Session Status, and closing Workbench never shows a composer status strip
     drawerStore.workbenchExpanded = true;
     await flushPromises();
     expect(wrapper.vm.sessionStatusOpen).toBe(false);
     expect(wrapper.find('.cosmos-status-strip').exists()).toBe(false);
     drawerStore.workbenchExpanded = false;
     await flushPromises();
+    expect(wrapper.find('.cosmos-status-strip').exists()).toBe(false);
 
     // 5b. Multi-VP sessions (roster.length > 1) still expose live tool details in Session Status,
     //     openSessionStatus closes inline outline search, and openSearch closes overlay Session Status.
@@ -2726,7 +2726,7 @@ describe('Cosmos Drawer Waiting Suppression, Horizontal Drag Resize & Session St
     wrapper.vm.closeSearch();
     await flushPromises();
 
-    // 5c. Non-live error rows do not drive liveStatusStartedAt
+    // 5c. Non-live error rows mark the header status button without rendering any composer status strip
     drawerStore.yeaftSessionTurnsBySession['ag-1\u001fsess-1'].turns = [];
     drawerStore.activeVpTurns = {};
     drawerStore.vpStatuses = {
@@ -2743,6 +2743,8 @@ describe('Cosmos Drawer Waiting Suppression, Horizontal Drag Resize & Session St
     await flushPromises();
     expect(wrapper.vm.hasSessionActivityError).toBe(true);
     expect(wrapper.vm.sessionActivity[0]?.status).toBe('error');
+    expect(statusToggle.classes()).toContain('has-error');
+    expect(wrapper.find('.cosmos-status-strip').exists()).toBe(false);
 
     // 6. Horizontal resize handle:
     //    - Plain 0px click must NOT emit resize-start / resize-end
@@ -2767,9 +2769,13 @@ describe('Cosmos Drawer Waiting Suppression, Horizontal Drag Resize & Session St
     expect(wrapper.emitted('resize-start')).toHaveLength(1);
     expect(wrapper.emitted('resize')?.at(-1)?.[0]).toBe(900);
     expect(document.body.style.cursor).toBe('col-resize');
+    expect(document.body.style.userSelect).toBe('none');
+    expect(document.body.style.getPropertyValue('-webkit-user-select')).toBe('none');
     window.dispatchEvent(new PointerEvent('pointercancel', { pointerId: 8 }));
     await flushPromises();
     expect(document.body.style.cursor).toBe('');
+    expect(document.body.style.userSelect).toBe('');
+    expect(document.body.style.getPropertyValue('-webkit-user-select')).toBe('');
     expect(wrapper.emitted('resize-end')).toHaveLength(1);
 
     // Window blur during active drag also cleans up cursor/userSelect
@@ -2777,9 +2783,12 @@ describe('Cosmos Drawer Waiting Suppression, Horizontal Drag Resize & Session St
     window.dispatchEvent(new PointerEvent('pointermove', { pointerId: 9, clientX: 560 }));
     await flushPromises();
     expect(document.body.style.cursor).toBe('col-resize');
+    expect(document.body.style.userSelect).toBe('none');
     window.dispatchEvent(new Event('blur'));
     await flushPromises();
     expect(document.body.style.cursor).toBe('');
+    expect(document.body.style.userSelect).toBe('');
+    expect(document.body.style.getPropertyValue('-webkit-user-select')).toBe('');
 
     await handle.trigger('keydown', { key: 'ArrowLeft' });
     expect(wrapper.emitted('resize')?.at(-1)?.[0]).toBe(864);
@@ -2959,6 +2968,23 @@ describe('Cosmos Drawer Waiting Suppression, Horizontal Drag Resize & Session St
       await flushPromises();
       expect(closeStatusSpy).toHaveBeenCalledTimes(1);
       expect(wrapper.vm.drawerOpen).toBe(true);
+
+      // Text selection guard: .cosmos-page root must NOT set static user-select:none;
+      // stage orbiting applies transient .is-orbiting class and window blur clears it cleanly.
+      const baseCss = readFileSync(resolve(process.cwd(), 'web/styles/cosmos/base.css'), 'utf8');
+      const rootRuleMatch = baseCss.match(/\.cosmos-page\s*\{([^}]*)\}/);
+      expect(rootRuleMatch).toBeTruthy();
+      expect(rootRuleMatch[1]).not.toMatch(/user-select\s*:\s*none/i);
+      expect(baseCss).toMatch(/\.cosmos-page\.is-orbiting[\s\S]*?user-select\s*:\s*none/i);
+      expect(baseCss).not.toMatch(/\.cosmos-corner-dock[^{]*\{[^}]*user-select\s*:\s*none/i);
+      expect(baseCss).toMatch(/\.cosmos-book-input\s*\{[^}]*-webkit-user-select\s*:\s*text/i);
+      const glCanvas = wrapper.find('.cosmos-gl-canvas');
+      await glCanvas.trigger('pointerdown', { pointerType: 'mouse', button: 0, pointerId: 31, clientX: 200, clientY: 200 });
+      await flushPromises();
+      expect(wrapper.find('.cosmos-page').classes()).toContain('is-orbiting');
+      window.dispatchEvent(new Event('blur'));
+      await flushPromises();
+      expect(wrapper.find('.cosmos-page').classes()).not.toContain('is-orbiting');
     } finally {
       Object.defineProperty(window, 'innerWidth', { value: prevInnerWidth, configurable: true });
     }

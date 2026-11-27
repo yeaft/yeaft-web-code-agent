@@ -72,6 +72,7 @@ export default {
         'is-drawer-resizing': drawerResizing,
         'is-workbench-widened': workbenchWidened,
         'is-workbench-maximized': drawerOpen && workbenchMaximized,
+        'is-orbiting': camOrbiting,
         'is-drag-mode': dragActive,
         'is-observing-event': isObservingEvent,
       }"
@@ -980,6 +981,12 @@ export default {
       }
     }
 
+    function onWindowBlur() {
+      activeTouchPointers.clear();
+      pinchPrevDist = 0;
+      cancelActiveDrags();
+    }
+
     function onGlobalPointerCancel(e) {
       if (e && e.pointerType === 'touch') {
         activeTouchPointers.delete(e.pointerId);
@@ -1530,6 +1537,7 @@ export default {
         if (!unmounted) mountEngine();
       });
       window.addEventListener('resize', onWindowResize);
+      window.addEventListener('blur', onWindowBlur);
       window.addEventListener('pointermove', onGlobalPointerMove);
       window.addEventListener('pointerup', onGlobalPointerUp);
       window.addEventListener('pointercancel', onGlobalPointerCancel);
@@ -1554,6 +1562,7 @@ export default {
       }
       clearInterval(nowInterval);
       window.removeEventListener('resize', onWindowResize);
+      window.removeEventListener('blur', onWindowBlur);
       window.removeEventListener('pointermove', onGlobalPointerMove);
       window.removeEventListener('pointerup', onGlobalPointerUp);
       window.removeEventListener('pointercancel', onGlobalPointerCancel);

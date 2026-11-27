@@ -256,12 +256,14 @@ test.describe('Yeaft Cosmos UI', () => {
     await expect(page.locator('.cosmos-drawer-head button[aria-label*="New session"], .cosmos-drawer-head button[aria-label*="新建会话"]')).toHaveCount(0);
     await expect(page.locator('.cosmos-drawer .typing-indicator')).toHaveCount(0);
 
-    // Verify calm live Session Status strip opens authentic Session Status overlay,
+    // Verify NO live Session Status strip renders above the drawer composer (even while running);
+    // clicking the header Session Status toggle opens authentic Session Status overlay,
     // dragging the left optical resize handle widens the drawer & docks Session Status side-by-side,
     // 1st Escape dismisses Session Status (restoring toggle focus) without closing drawer, and dblclick resets width.
-    const statusStrip = page.locator('.cosmos-drawer .cosmos-status-strip');
-    await expect(statusStrip).toBeVisible();
-    await statusStrip.click();
+    await expect(page.locator('.cosmos-drawer .cosmos-status-strip')).toHaveCount(0);
+    const statusToggle = page.locator('.cosmos-drawer .cosmos-session-status-btn');
+    await expect(statusToggle).toBeVisible();
+    await statusToggle.click();
     const statusHost = page.locator('.cosmos-drawer .cosmos-status-host');
     await expect(statusHost).toBeVisible();
     await expect(statusHost).toHaveClass(/is-overlay/);
@@ -303,11 +305,76 @@ test.describe('Yeaft Cosmos UI', () => {
     const userMsgBg = await page.locator('.cosmos-drawer .message.user').first().evaluate((el) => {
       const outer = getComputedStyle(el);
       const inner = el.querySelector('.message-user-block') ? getComputedStyle(el.querySelector('.message-user-block')) : null;
-      return { outerBg: outer.backgroundColor, outerBorder: outer.borderTopWidth, innerBg: inner?.backgroundColor || '' };
+      return { outerBg: outer.backgroundColor, outerBorder: outer.borderTopWidth, innerBg: inner?.backgroundColor || '', userSelect: outer.userSelect };
     });
     expect(userMsgBg.outerBg).toBe('rgba(0, 0, 0, 0)');
     expect(userMsgBg.outerBorder).toBe('0px');
     expect(userMsgBg.innerBg).not.toBe('rgba(0, 0, 0, 0)');
+    expect(userMsgBg.userSelect).not.toBe('none');
+
+    // Verify conversation text is truly mouse-selectable & copyable (and dragging past left edge does NOT close drawer)
+    const assistantMsg = page.locator('.cosmos-drawer').getByText('Procedural textures').first();
+    await expect(assistantMsg).toBeVisible();
+    const assistantUserSelect = await assistantMsg.evaluate((el) => getComputedStyle(el).userSelect);
+    expect(assistantUserSelect).not.toBe('none');
+    const textRangeBox = await assistantMsg.evaluate((el) => {
+      const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+      let node;
+      while ((node = walker.nextNode())) {
+        if ((node.nodeValue || '').includes('Procedural textures')) {
+          const r = document.createRange();
+          r.selectNodeContents(node);
+          const rect = r.getBoundingClientRect();
+          return { left: rect.left, right: rect.right, top: rect.top, height: rect.height };
+        }
+      }
+      return null;
+    });
+    expect(textRangeBox).not.toBeNull();
+    const drawerEdgeBox = await page.locator('.cosmos-drawer').boundingBox();
+    const selY = textRangeBox.top + Math.min(textRangeBox.height / 2, 10);
+    await page.mouse.move(textRangeBox.right - 4, selY);
+    await page.mouse.down();
+    await page.mouse.move(Math.max(4, drawerEdgeBox.x - 24), selY, { steps: 6 });
+    await page.mouse.up();
+    const selectedText = await page.evaluate(() => window.getSelection()?.toString() || '');
+    expect(selectedText.length).toBeGreaterThan(8);
+    expect(selectedText).toContain('Procedural');
+    await expect(page.locator('.cosmos-drawer')).toBeVisible();
+    const copiedOnEvent = await page.evaluate(() => {
+      let copied = '';
+      const onCopy = (ev) => {
+        copied = window.getSelection()?.toString() || '';
+        ev.clipboardData?.setData('text/plain', copied);
+      };
+      document.addEventListener('copy', onCopy, { once: true });
+      document.execCommand('copy');
+      return copied;
+    });
+    expect(copiedOnEvent).toContain('Procedural');
+    await page.evaluate(() => window.getSelection()?.removeAllRanges?.());
+
+    // Dragging the 3D stage outside the drawer applies transient .is-orbiting user-select guard and clears on release
+    const emptyCanvasPt = await page.evaluate((maxX) => {
+      const candidatesX = [Math.max(120, maxX - 80), Math.max(120, maxX - 180), Math.max(120, maxX - 280), 220];
+      const candidatesY = [140, 220, 560, 620, 320];
+      for (const y of candidatesY) {
+        for (const x of candidatesX) {
+          if (x >= maxX - 24) continue;
+          const el = document.elementFromPoint(x, y);
+          if (el && el.classList?.contains('cosmos-gl-canvas')) return { x, y };
+        }
+      }
+      return null;
+    }, drawerEdgeBox.x);
+    expect(emptyCanvasPt).not.toBeNull();
+    await page.mouse.move(emptyCanvasPt.x, emptyCanvasPt.y);
+    await page.mouse.down();
+    await expect(page.locator('.cosmos-page')).toHaveClass(/is-orbiting/);
+    await page.mouse.move(Math.max(24, emptyCanvasPt.x - 40), emptyCanvasPt.y + 15, { steps: 3 });
+    await page.mouse.up();
+    await expect(page.locator('.cosmos-page')).not.toHaveClass(/is-orbiting/);
+    await expect(page.locator('.cosmos-drawer')).toBeVisible();
 
     // Verify Drawer unified tuning popover opens strictly ABOVE the Drawer Composer within Drawer bounds
     // (including top containment below header & localized Drawer scene chips), and 1st Escape dismisses ONLY the popover.

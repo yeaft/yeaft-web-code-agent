@@ -7,7 +7,7 @@
  * - Zero create-session icon in header, zero waiting animations in transcript
  * - Authentic Yeaft MessageList (toolsInStatus=true, hideWaitingAnimation=true),
  *   VpTimelinePane (Session Status — overlay when compact, side-by-side when dragged wide),
- *   calm single-line live status strip when collapsed, ChatInput + CosmosComposerTuning,
+ *   ChatInput + CosmosComposerTuning,
  *   YeaftConversationOutline and WorkbenchPanel.
  */
 import MessageList from '../MessageList.js';
@@ -34,7 +34,6 @@ import {
 import { sessionActivityRows } from '../../stores/helpers/session-activity.js';
 import { liveSessionToolsByExecution } from '../../stores/helpers/session-tool-details.js';
 import { LIVE_SESSION_TURN_STATES } from '../../stores/helpers/yeaft-session-turns.js';
-import { formatElapsed } from '../../stores/helpers/turn-timing.js';
 import { revealOutlineResult } from '../../utils/message-search-navigation.js';
 import { alertDialog } from '../../utils/dialog.js';
 import {
@@ -401,25 +400,6 @@ export default {
               @edit-message-as-new="editMessageAsNew"
             />
 
-            <!-- Calm Single-Line Live Session Status Bar (Zero Waiting Animation) -->
-            <button
-              v-if="showLiveStatusStrip"
-              type="button"
-              class="cosmos-status-strip"
-              :class="{ 'is-error': hasSessionActivityError }"
-              :aria-label="$t('yeaft.sessionStatus.show')"
-              @click="openSessionStatus"
-            >
-              <span class="cosmos-status-strip-main">
-                <span class="cosmos-status-strip-pip" :class="{ 'is-error': hasSessionActivityError }" aria-hidden="true"></span>
-                <span class="cosmos-status-strip-label">{{ liveStatusStripSummary }}</span>
-              </span>
-              <span class="cosmos-status-strip-cta">
-                <span>{{ $t('cosmos.panel.statusInspect') }}</span>
-                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg>
-              </span>
-            </button>
-
             <ChatInput
               ref="chatInputRef"
               class="cosmos-drawer-input cosmos-composer-surface"
@@ -534,8 +514,6 @@ export default {
     const sessionStatusOpen = Vue.ref(false);
     const sessionStatusToggleRef = Vue.ref(null);
     const sessionStatusPaneRef = Vue.ref(null);
-    const statusStripNow = Vue.ref(Date.now());
-    let statusStripTimer = null;
 
     const searchOpen = Vue.ref(false);
     const searchActiveMessageId = Vue.ref('');
@@ -708,56 +686,6 @@ export default {
       || sessionActivity.value.some((row) => LIVE_SESSION_TURN_STATES.has(row?.status))
       || sessionStatusTasks.value.length > 0
     ));
-
-    const showLiveStatusStrip = Vue.computed(() => Boolean(
-      isYeaftView.value
-      && activeGroup.value
-      && !sessionStatusOpen.value
-      && !workbenchOpen.value
-      && (hasLiveSessionActivity.value || hasSessionActivityError.value),
-    ));
-
-    const liveStatusStartedAt = Vue.computed(() => {
-      let earliest = 0;
-      for (const row of sessionActivity.value) {
-        if (!LIVE_SESSION_TURN_STATES.has(row?.status)) continue;
-        const ts = Number(row?.startedAt || 0);
-        if (ts > 0 && (earliest === 0 || ts < earliest)) earliest = ts;
-      }
-      return earliest;
-    });
-
-    const liveStatusStripSummary = Vue.computed(() => {
-      const parts = [];
-      const primary = sessionActivity.value[0] || null;
-      if (hasSessionActivityError.value && !hasLiveSessionActivity.value) {
-        parts.push($t('cosmos.panel.statusError'));
-      } else if (primary?.status === 'queued') {
-        parts.push($t('cosmos.panel.statusQueued'));
-      } else if (primary || isProcessing.value) {
-        parts.push($t('cosmos.panel.statusActive'));
-      }
-
-      let toolCount = 0;
-      for (const row of sessionActivity.value) {
-        for (const obs of (row?.observations || [])) {
-          if (Number.isSafeInteger(obs?.toolExecutions) && obs.toolExecutions > 0) {
-            toolCount += obs.toolExecutions;
-          }
-        }
-      }
-      if (toolCount > 0) {
-        parts.push($t('cosmos.panel.statusTools', { count: toolCount }));
-      }
-      if (liveStatusStartedAt.value > 0) {
-        const elapsed = formatElapsed(Math.max(0, statusStripNow.value - liveStatusStartedAt.value));
-        if (elapsed) parts.push(elapsed);
-      }
-      if (sessionStatusTasks.value.length > 0) {
-        parts.push($t('cosmos.panel.statusTasks', { count: sessionStatusTasks.value.length }));
-      }
-      return parts.join(' · ') || $t('cosmos.panel.statusActive');
-    });
 
     const historyOutlineState = Vue.computed(() => (
       store.getYeaftHistoryOutlineState?.() || { results: [], loading: false, hasMore: false, error: null }
@@ -1234,6 +1162,7 @@ export default {
         releaseFocus,
         prevCursor: document.body.style.cursor,
         prevUserSelect: document.body.style.userSelect,
+        prevWebkitUserSelect: document.body.style.getPropertyValue('-webkit-user-select'),
       };
       try { handle?.setPointerCapture?.(ev.pointerId); } catch { /* fallback to window listeners */ }
       window.addEventListener('pointermove', moveDrawerResize);
@@ -1252,6 +1181,7 @@ export default {
         isDraggingResize.value = true;
         document.body.style.cursor = 'col-resize';
         document.body.style.userSelect = 'none';
+        document.body.style.setProperty('-webkit-user-select', 'none');
         emit('resize-start', activeResizeDrag.startWidth);
       }
       emit('resize', activeResizeDrag.startWidth + delta);
@@ -1269,6 +1199,11 @@ export default {
       if (drag.moved) {
         document.body.style.cursor = drag.prevCursor;
         document.body.style.userSelect = drag.prevUserSelect;
+        if (drag.prevWebkitUserSelect) {
+          document.body.style.setProperty('-webkit-user-select', drag.prevWebkitUserSelect);
+        } else {
+          document.body.style.removeProperty('-webkit-user-select');
+        }
       }
       const handle = resizeHandleRef.value;
       try {
@@ -1473,23 +1408,6 @@ export default {
       },
     );
 
-    function syncStatusStripTimer() {
-      const needsTick = showLiveStatusStrip.value && liveStatusStartedAt.value > 0;
-      if (needsTick) {
-        statusStripNow.value = Date.now();
-        if (!statusStripTimer) {
-          statusStripTimer = setInterval(() => {
-            statusStripNow.value = Date.now();
-          }, 1000);
-        }
-      } else if (statusStripTimer) {
-        clearInterval(statusStripTimer);
-        statusStripTimer = null;
-      }
-    }
-
-    Vue.watch([showLiveStatusStrip, liveStatusStartedAt], syncStatusStripTimer, { immediate: true });
-
     function onTuningOpen() {
       if (historyOpen.value) closeHistoryDrawer();
       if (searchOpen.value) closeSearch();
@@ -1599,10 +1517,6 @@ export default {
     Vue.onBeforeUnmount(() => {
       window.removeEventListener('blur', onWindowBlurResize);
       endDrawerResize();
-      if (statusStripTimer) {
-        clearInterval(statusStripTimer);
-        statusStripTimer = null;
-      }
       clearSearchTimers();
       cancelSessionDiscoverySearch();
     });
@@ -1662,8 +1576,6 @@ export default {
       sessionStatusIdentity,
       hasSessionActivityError,
       hasLiveSessionActivity,
-      showLiveStatusStrip,
-      liveStatusStripSummary,
       chatCoveredByOverlay,
       searchOpen,
       searchActiveMessageId,

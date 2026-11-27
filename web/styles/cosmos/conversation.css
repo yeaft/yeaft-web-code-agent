@@ -97,6 +97,11 @@
   z-index: 1;
 }
 
+.cosmos-drawer ::selection {
+  background: rgba(var(--p-accent-rgb), 0.34);
+  color: #ffffff;
+}
+
 /* ── Interactive Left-Edge Optical Filament Drag Resize Handle ── */
 .cosmos-drawer > .cosmos-drawer-resize-handle {
   position: absolute;
@@ -962,104 +967,6 @@
 .cosmos-drawer .turn-tools,
 .cosmos-drawer .tool-summary-bar {
   display: none !important;
-}
-
-/* ── Calm Single-Line Live Session Status Bar (Zero Waiting Animation) ── */
-.cosmos-status-strip {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  width: calc(100% - 32px);
-  max-width: calc(var(--session-content-width) - 4px);
-  margin: 2px auto 6px;
-  padding: 5px 11px;
-  border: 1px solid rgba(var(--p-accent-rgb), 0.09);
-  border-radius: 999px;
-  background: linear-gradient(
-    90deg,
-    rgba(var(--p-accent-rgb), 0.065) 0%,
-    rgba(var(--p-tint-rgb), 0.24) 100%
-  );
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
-  color: var(--p-muted);
-  font: inherit;
-  font-size: 11px;
-  line-height: 1.35;
-  cursor: pointer;
-  flex-shrink: 0;
-  transition: border-color 150ms ease, background 150ms ease, color 150ms ease;
-}
-
-.cosmos-status-strip:hover {
-  border-color: rgba(var(--p-accent-rgb), 0.30);
-  background: rgba(var(--p-accent-rgb), 0.13);
-  color: var(--p-ink);
-}
-
-.cosmos-status-strip:focus-visible {
-  outline: 1.5px solid rgba(var(--p-accent-rgb), 0.78);
-  outline-offset: 2px;
-}
-
-.cosmos-status-strip.is-error {
-  border-color: rgba(255, 126, 136, 0.32);
-  background: rgba(255, 118, 128, 0.10);
-  color: #ffc8ce;
-}
-
-.cosmos-status-strip-main {
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
-  min-width: 0;
-  flex: 1;
-}
-
-.cosmos-status-strip-pip {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  flex-shrink: 0;
-  background: var(--p-accent);
-  box-shadow: 0 0 8px rgba(var(--p-accent-rgb), 0.80);
-}
-
-.cosmos-status-strip-pip.is-error {
-  background: #ff7e88;
-  box-shadow: 0 0 8px rgba(255, 126, 136, 0.80);
-}
-
-.cosmos-status-strip-label {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-variant-numeric: tabular-nums;
-}
-
-.cosmos-status-strip-cta {
-  display: inline-flex;
-  align-items: center;
-  gap: 2px;
-  flex-shrink: 0;
-  color: var(--p-accent);
-  opacity: 0.88;
-}
-
-.cosmos-status-strip.is-error .cosmos-status-strip-cta {
-  color: #ffb8c0;
-}
-
-.cosmos-status-strip-cta svg {
-  width: 12px;
-  height: 12px;
-  fill: none;
-  stroke: currentColor;
-  stroke-width: 1.8;
-  stroke-linecap: round;
-  stroke-linejoin: round;
 }
 
 /* ── Deep Visual Integration of Native ChatInput inside Cosmos Drawer ── */
