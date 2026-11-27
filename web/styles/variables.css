@@ -471,6 +471,88 @@ select option:checked {
   --creation-status-generating: #d98a1e;
   --creation-status-attention: #c74650;
   --creation-status-ready: #3a8f58;
+
+  /* Cosmic Web 2.0 — Solar-System Feathered Translucent Drawer & Magazine Tokens */
+  --cw-drawer-bg: linear-gradient(
+    90deg,
+    rgba(5, 11, 24, 0.0) 0%,
+    rgba(5, 11, 24, 0.24) 10px,
+    rgba(5, 12, 26, 0.48) 28px,
+    rgba(3, 8, 19, 0.68) 100%
+  );
+  --cw-drawer-nebula:
+    radial-gradient(ellipse 380px 210px at 92% 0%, rgba(110, 196, 255, 0.14), transparent 72%),
+    radial-gradient(ellipse 300px 180px at 10% 96%, rgba(86, 224, 194, 0.07), transparent 74%);
+  --cw-drawer-shadow: -16px 0 56px rgba(0, 0, 0, 0.24);
+  --cw-filament-idle: linear-gradient(
+    180deg,
+    transparent 0%,
+    rgba(110, 196, 255, 0.24) 36%,
+    rgba(110, 196, 255, 0.12) 68%,
+    transparent 100%
+  );
+  --cw-filament-hover: linear-gradient(
+    180deg,
+    transparent 0%,
+    rgba(110, 196, 255, 0.86) 18%,
+    rgba(110, 196, 255, 0.86) 82%,
+    transparent 100%
+  );
+  --cw-filament-pill: rgba(110, 196, 255, 0.76);
+  --cw-filament-glow: 0 0 14px rgba(110, 196, 255, 0.52);
+  --cw-head-mist: linear-gradient(
+    180deg,
+    rgba(2, 5, 14, 0.38) 0%,
+    rgba(2, 5, 14, 0.10) 76%,
+    transparent 100%
+  );
+  --cw-hairline: linear-gradient(
+    90deg,
+    transparent 0%,
+    rgba(110, 196, 255, 0.16) 24%,
+    rgba(110, 196, 255, 0.10) 76%,
+    transparent 100%
+  );
+  --cw-hairline-subtle: linear-gradient(
+    90deg,
+    transparent 0%,
+    rgba(186, 214, 255, 0.10) 18%,
+    rgba(186, 214, 255, 0.08) 82%,
+    transparent 100%
+  );
+  --cw-hud-bg: rgba(6, 12, 26, 0.58);
+  --cw-hud-border: rgba(148, 206, 255, 0.15);
+  --cw-composer-lens-bg: rgba(7, 15, 32, 0.56);
+  --cw-composer-lens-bg-focus: rgba(8, 18, 38, 0.76);
+  --cw-composer-lens-border: rgba(130, 200, 255, 0.16);
+  --cw-composer-lens-border-focus: rgba(110, 196, 255, 0.44);
+  --cw-composer-popover-bg: rgba(6, 13, 28, 0.94);
+  --cw-send-orb-bg: #6ec4ff;
+  --cw-send-orb-ink: #03101d;
+  --cw-send-orb-shadow: 0 0 18px rgba(110, 196, 255, 0.38), inset 0 1px 1px rgba(255, 255, 255, 0.44);
+  --cw-send-orb-shadow-hover: 0 0 24px rgba(110, 196, 255, 0.56), inset 0 1px 1px rgba(255, 255, 255, 0.58);
+  --cw-send-orb-disabled-bg: rgba(255, 255, 255, 0.085);
+  --cw-send-orb-disabled-ink: rgba(226, 238, 255, 0.34);
+  --cw-quote-bar: rgba(110, 196, 255, 0.62);
+  --cw-quote-bg: linear-gradient(90deg, rgba(110, 196, 255, 0.08) 0%, rgba(110, 196, 255, 0.015) 100%);
+  --cw-comment-bg: rgba(255, 255, 255, 0.032);
+  --cw-comment-border: rgba(186, 214, 255, 0.10);
+  --cw-comment-badge-bg: rgba(110, 196, 255, 0.12);
+  --cw-shimmer-base: rgba(186, 214, 255, 0.06);
+  --cw-shimmer-shine: rgba(186, 214, 255, 0.14);
+  --cw-gif-badge-bg: rgba(4, 9, 20, 0.78);
+  --cw-tone-coral: #ff7a6b;
+  --cw-tone-teal: #3cd6c0;
+  --cw-tone-indigo: #8896ff;
+  --cw-orb-mercury: #b8c0cc;
+  --cw-orb-venus: #f0c47a;
+  --cw-orb-earth: #68c8ff;
+  --cw-orb-mars: #e87a5e;
+  --cw-orb-jupiter: #e0a872;
+  --cw-orb-saturn: #f0c678;
+  --cw-orb-uranus: #7de2e8;
+  --cw-orb-neptune: #6b96ff;
+  --cw-orb-default: #6ec4ff;
 }
 
 /* Dark Theme - warm, eye-friendly tones */
@@ -802,6 +884,88 @@ select option:checked {
   --creation-status-generating: #ffbe5c;
   --creation-status-attention: #ff7e88;
   --creation-status-ready: #6be4b8;
+
+  /* Cosmic Web 2.0 — Solar-System Feathered Translucent Drawer & Magazine Tokens (Dark) */
+  --cw-drawer-bg: linear-gradient(
+    90deg,
+    rgba(5, 11, 24, 0.0) 0%,
+    rgba(5, 11, 24, 0.24) 10px,
+    rgba(5, 12, 26, 0.48) 28px,
+    rgba(3, 8, 19, 0.68) 100%
+  );
+  --cw-drawer-nebula:
+    radial-gradient(ellipse 380px 210px at 92% 0%, rgba(110, 196, 255, 0.14), transparent 72%),
+    radial-gradient(ellipse 300px 180px at 10% 96%, rgba(86, 224, 194, 0.07), transparent 74%);
+  --cw-drawer-shadow: -16px 0 56px rgba(0, 0, 0, 0.28);
+  --cw-filament-idle: linear-gradient(
+    180deg,
+    transparent 0%,
+    rgba(110, 196, 255, 0.24) 36%,
+    rgba(110, 196, 255, 0.12) 68%,
+    transparent 100%
+  );
+  --cw-filament-hover: linear-gradient(
+    180deg,
+    transparent 0%,
+    rgba(110, 196, 255, 0.86) 18%,
+    rgba(110, 196, 255, 0.86) 82%,
+    transparent 100%
+  );
+  --cw-filament-pill: rgba(110, 196, 255, 0.76);
+  --cw-filament-glow: 0 0 14px rgba(110, 196, 255, 0.52);
+  --cw-head-mist: linear-gradient(
+    180deg,
+    rgba(2, 5, 14, 0.40) 0%,
+    rgba(2, 5, 14, 0.10) 76%,
+    transparent 100%
+  );
+  --cw-hairline: linear-gradient(
+    90deg,
+    transparent 0%,
+    rgba(110, 196, 255, 0.16) 24%,
+    rgba(110, 196, 255, 0.10) 76%,
+    transparent 100%
+  );
+  --cw-hairline-subtle: linear-gradient(
+    90deg,
+    transparent 0%,
+    rgba(186, 214, 255, 0.10) 18%,
+    rgba(186, 214, 255, 0.08) 82%,
+    transparent 100%
+  );
+  --cw-hud-bg: rgba(5, 11, 24, 0.62);
+  --cw-hud-border: rgba(148, 206, 255, 0.16);
+  --cw-composer-lens-bg: rgba(7, 15, 32, 0.58);
+  --cw-composer-lens-bg-focus: rgba(8, 18, 38, 0.78);
+  --cw-composer-lens-border: rgba(130, 200, 255, 0.16);
+  --cw-composer-lens-border-focus: rgba(110, 196, 255, 0.44);
+  --cw-composer-popover-bg: rgba(6, 13, 28, 0.96);
+  --cw-send-orb-bg: #6ec4ff;
+  --cw-send-orb-ink: #03101d;
+  --cw-send-orb-shadow: 0 0 18px rgba(110, 196, 255, 0.38), inset 0 1px 1px rgba(255, 255, 255, 0.44);
+  --cw-send-orb-shadow-hover: 0 0 24px rgba(110, 196, 255, 0.56), inset 0 1px 1px rgba(255, 255, 255, 0.58);
+  --cw-send-orb-disabled-bg: rgba(255, 255, 255, 0.085);
+  --cw-send-orb-disabled-ink: rgba(226, 238, 255, 0.34);
+  --cw-quote-bar: rgba(110, 196, 255, 0.62);
+  --cw-quote-bg: linear-gradient(90deg, rgba(110, 196, 255, 0.08) 0%, rgba(110, 196, 255, 0.015) 100%);
+  --cw-comment-bg: rgba(255, 255, 255, 0.032);
+  --cw-comment-border: rgba(186, 214, 255, 0.10);
+  --cw-comment-badge-bg: rgba(110, 196, 255, 0.12);
+  --cw-shimmer-base: rgba(186, 214, 255, 0.06);
+  --cw-shimmer-shine: rgba(186, 214, 255, 0.14);
+  --cw-gif-badge-bg: rgba(4, 9, 20, 0.80);
+  --cw-tone-coral: #ff7a6b;
+  --cw-tone-teal: #3cd6c0;
+  --cw-tone-indigo: #8896ff;
+  --cw-orb-mercury: #b8c0cc;
+  --cw-orb-venus: #f0c47a;
+  --cw-orb-earth: #68c8ff;
+  --cw-orb-mars: #e87a5e;
+  --cw-orb-jupiter: #e0a872;
+  --cw-orb-saturn: #f0c678;
+  --cw-orb-uranus: #7de2e8;
+  --cw-orb-neptune: #6b96ff;
+  --cw-orb-default: #6ec4ff;
 }
 
 .terminal-output {

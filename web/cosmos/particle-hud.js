@@ -2,7 +2,7 @@
  * Yeaft Cosmos — GPU Living Particle Pools, 3D Cosmic Web Graph & 2D Vector Astronomical HUD
  */
 import { PLANETS, keplerPos, keplerOrbitPoint } from './constants.js';
-import { projectCosmicWeb } from './web-graph.js';
+import { getWebLodTier, projectCosmicWeb, WEB_ZOOM_LIMITS } from './web-graph.js';
 import { drawSessionSatellites } from './session-satellites.js';
 
 /* Two realistic long-period comets on high-eccentricity Keplerian ellipses (Sun at focus) */
@@ -291,7 +291,7 @@ export function fillGpuParticles(gpuBuf, pools, st, params) {
   return count;
 }
 
-export function drawCosmosHud(ctx, w, h, st, webGraph, galaxyBooks, agentsByPlanet, layout, drawEventFn) {
+export function drawCosmosHud(ctx, w, h, st = {}, webGraph, galaxyBooks = [], agentsByPlanet = {}, layout = {}, drawEventFn) {
   const {
     cx, cy, span, tilt, solarAlpha, galAlpha, webAlpha, solarProj,
     planetFocusId, planetZoom = 1.0,
@@ -865,42 +865,63 @@ export function drawCosmosHud(ctx, w, h, st, webGraph, galaxyBooks, agentsByPlan
     const hoveredClusterId = layout?.webHoveredClusterId || null;
     const selectedClusterId = layout?.webSelectedClusterId || null;
     const focusedDomainId = layout?.webFocusedDomainId || null;
-    const proj = projectCosmicWeb(webGraph, w, h, st, { centerShiftX: webCenterShiftX });
+    const webZoom = Number.isFinite(layout.webZoom) ? layout.webZoom : 1;
+    const lodTier = layout.webLodTier ?? getWebLodTier(webZoom);
+    const proj = layout.webProjected ?? projectCosmicWeb(webGraph, w, h, st, {
+      centerShiftX: webCenterShiftX, webZoom, webPanX: layout.webPanX, webPanY: layout.webPanY,
+    });
+    const edges = webGraph.edges || [];
+    const pulses = webGraph.pulses || [];
+    const reveal = (tier) => {
+      if (tier < 2 || webZoom < WEB_ZOOM_LIMITS.lod2) return tier === 3 ? 0.42 : tier === 2 ? 0.68 : 1;
+      const t = Math.min(1, (webZoom - WEB_ZOOM_LIMITS.lod2) / (WEB_ZOOM_LIMITS.lod3 - WEB_ZOOM_LIMITS.lod2));
+      const start = tier === 3 ? 0.42 : 0.68;
+      return start + (1 - start) * t * t * (3 - 2 * t);
+    };
+    const time = st.realTime || 0;
 
     for (let i = 0; i < webGraph.nodes.length; i++) {
       const n = webGraph.nodes[i];
       const p = proj[i];
       if (!p) continue;
       const md = Math.hypot(p.x - st.mouseX, p.y - st.mouseY);
+      n.excite ||= 0;
       if (md < 170) n.excite = Math.min(1.0, n.excite + (1.0 - md / 170) * 0.08);
       if (hoveredClusterId && n.clusterId === hoveredClusterId) n.excite = Math.max(n.excite, 0.92);
       if (selectedClusterId && n.clusterId === selectedClusterId) n.excite = Math.max(n.excite, 0.78);
       n.excite *= 0.965;
     }
 
-    for (let i = 0; i < webGraph.edges.length; i++) {
-      const e = webGraph.edges[i], pa = proj[e.a], pb = proj[e.b];
+    const onScreen = (a, b, mx, my) => !(Math.max(a.x, b.x, mx) < -16 || Math.min(a.x, b.x, mx) > w + 16
+      || Math.max(a.y, b.y, my) < -16 || Math.min(a.y, b.y, my) > h + 16);
+    for (const e of edges) {
+      if (e.kind === 'story' && lodTier < 2) continue;
+      const pa = proj[e.a], pb = proj[e.b];
       if (!pa || !pb) continue;
       const na = webGraph.nodes[e.a], nb = webGraph.nodes[e.b];
       const domainMatch = !focusedDomainId || na.domainId === focusedDomainId || nb.domainId === focusedDomainId;
       const dim = domainMatch ? 1.0 : 0.28;
       const mx = (pa.x + pb.x) * 0.5 - (pb.y - pa.y) * e.curve;
       const my = (pa.y + pb.y) * 0.5 + (pb.x - pa.x) * e.curve;
-      const depthA = Math.max(0.18, Math.min(1.0, 0.58 + (pa.z + pb.z) * 0.35)) * dim;
+      if (!onScreen(pa, pb, mx, my)) continue;
+      const depthA = Math.max(0.18, Math.min(1.0, 0.58 + (pa.z + pb.z) * 0.35)) * dim
+        * reveal(Math.max(na.lodTier || 1, nb.lodTier || 1));
       const exB = Math.max(na.excite || 0, nb.excite || 0) * 0.45;
       ctx.beginPath(); ctx.moveTo(pa.x, pa.y); ctx.quadraticCurveTo(mx, my, pb.x, pb.y);
       const isCross = e.kind === 'cross';
-      ctx.strokeStyle = isCross
-        ? `rgba(196, 174, 255, ${(0.075 + e.weight * 0.09 + exB) * depthA})`
-        : `rgba(156, 198, 255, ${(0.09 + e.weight * 0.09 + exB) * depthA})`;
-      ctx.lineWidth = (0.65 + e.weight * 0.6 + exB * 1.15) * ((pa.persp + pb.persp) * 0.5);
+      ctx.strokeStyle = e.kind === 'story'
+        ? `rgba(142, 164, 255, ${(0.09 + e.weight * 0.06 + exB * 0.25) * depthA})`
+        : isCross
+          ? `rgba(196, 174, 255, ${(0.075 + e.weight * 0.09 + exB) * depthA})`
+          : `rgba(156, 198, 255, ${(0.09 + e.weight * 0.09 + exB) * depthA})`;
+      ctx.lineWidth = e.kind === 'story' ? 0.75 : (0.65 + e.weight * 0.6 + exB * 1.15) * ((pa.persp + pb.persp) * 0.5);
       ctx.stroke();
     }
 
-    for (let i = webGraph.pulses.length - 1; i >= 0; i--) {
-      const pl = webGraph.pulses[i];
+    for (let i = pulses.length - 1; i >= 0; i--) {
+      const pl = pulses[i];
       pl.t += pl.speed * 0.016 * pl.dir;
-      const e = webGraph.edges[pl.edgeIdx];
+      const e = edges[pl.edgeIdx];
       if (!e) continue;
       if (pl.t >= 1.0 || pl.t <= 0.0) {
         const node = webGraph.nodes[pl.t >= 1.0 ? e.b : e.a];
@@ -908,7 +929,7 @@ export function drawCosmosHud(ctx, w, h, st, webGraph, galaxyBooks, agentsByPlan
         if (pl.burst) {
           pl.life -= 0.45;
           if (pl.life <= 0.1) {
-            webGraph.pulses.splice(i, 1);
+            pulses.splice(i, 1);
             continue;
           }
         }
@@ -919,23 +940,44 @@ export function drawCosmosHud(ctx, w, h, st, webGraph, galaxyBooks, agentsByPlan
           pl.dir *= -1; pl.t = Math.max(0.01, Math.min(0.99, pl.t));
         }
       }
-      const ce = webGraph.edges[pl.edgeIdx];
-      if (!ce) continue;
+      const ce = edges[pl.edgeIdx];
+      if (!ce || (ce.kind === 'story' && lodTier < 2)) continue;
       const pa = proj[ce.a], pb = proj[ce.b];
       if (!pa || !pb) continue;
       const mx = (pa.x + pb.x) * 0.5 - (pb.y - pa.y) * ce.curve, my = (pa.y + pb.y) * 0.5 + (pb.x - pa.x) * ce.curve;
+      if (!onScreen(pa, pb, mx, my)) continue;
+      const pulseVisibility = reveal(Math.max(pa.node.lodTier || 1, pb.node.lodTier || 1)) * (ce.kind === 'story' ? 0.5 : 1);
       const evalQ = (tVal) => { const mt = 1 - tVal; return [mt * mt * pa.x + 2 * mt * tVal * mx + tVal * tVal * pb.x, mt * mt * pa.y + 2 * mt * tVal * my + tVal * tVal * pb.y]; };
       const [hx, hy] = evalQ(pl.t), [tx, ty] = evalQ(Math.max(0, Math.min(1, pl.t - pl.dir * (pl.burst ? 0.24 : 0.16))));
       const [r, g, b] = pl.col || [138, 212, 255];
       const grad = ctx.createLinearGradient(hx, hy, tx, ty);
-      grad.addColorStop(0, `rgba(${r}, ${g}, ${b}, ${Math.min(1, (pl.burst ? 0.98 : 0.88) * pl.life)})`);
+      grad.addColorStop(0, `rgba(${r}, ${g}, ${b}, ${Math.min(1, (pl.burst ? 0.98 : 0.88) * pl.life * pulseVisibility)})`);
       grad.addColorStop(1, `rgba(${r}, ${g}, ${b}, 0)`);
       ctx.beginPath(); ctx.moveTo(tx, ty); ctx.lineTo(hx, hy); ctx.strokeStyle = grad; ctx.lineWidth = pl.burst ? 2.4 : 1.65; ctx.lineCap = 'round'; ctx.stroke();
       const headR = pl.burst ? 8.4 : 6.2;
       const dotG = ctx.createRadialGradient(hx, hy, 0, hx, hy, headR);
-      dotG.addColorStop(0, `rgba(255, 255, 255, ${Math.min(1, 0.95 * pl.life)})`);
+      dotG.addColorStop(0, `rgba(255, 255, 255, ${Math.min(1, 0.95 * pl.life * pulseVisibility)})`);
       dotG.addColorStop(1, `rgba(${r}, ${g}, ${b}, 0)`);
       ctx.fillStyle = dotG; ctx.beginPath(); ctx.arc(hx, hy, headR, 0, Math.PI * 2); ctx.fill();
+    }
+
+    const satellites = layout.webSatellites;
+    if (satellites?.length) {
+      const { parentX, parentY, radius = 112 } = satellites[0];
+      ctx.save();
+      ctx.strokeStyle = 'rgba(142, 164, 255, 0.32)';
+      ctx.lineWidth = 0.8;
+      ctx.setLineDash?.([2, 6]);
+      ctx.beginPath(); ctx.arc(parentX, parentY, radius, 0, Math.PI * 2); ctx.stroke();
+      ctx.setLineDash?.([]);
+      ctx.strokeStyle = 'rgba(124, 196, 255, 0.38)';
+      for (const { x, y } of satellites) {
+        const dx = x - parentX, dy = y - parentY;
+        ctx.beginPath(); ctx.moveTo(parentX, parentY);
+        ctx.quadraticCurveTo(parentX + dx * 0.5 - dy * 0.14, parentY + dy * 0.5 + dx * 0.14, x, y);
+        ctx.stroke();
+      }
+      ctx.restore();
     }
 
     for (let i = 0; i < webGraph.nodes.length; i++) {
@@ -946,8 +988,10 @@ export function drawCosmosHud(ctx, w, h, st, webGraph, galaxyBooks, agentsByPlan
       const isFocusedHub = Boolean(focusedDomainId && n.isHub && n.domainId === focusedDomainId);
       const domainMatch = !focusedDomainId || n.domainId === focusedDomainId;
       const dim = (domainMatch || isHovered || isSelected) ? 1.0 : 0.34;
-      const pulse = (0.78 + 0.22 * Math.sin(st.realTime * 1.4 + n.phase) + (n.excite || 0) * 0.78) * dim;
-      const rad = (n.isHub ? 6.4 : 2.5) * (n.baseR || 1) * p.persp * (1 + (n.excite || 0) * 0.45);
+      const visibility = isHovered || isSelected || n.watchHit ? 1 : reveal(n.lodTier || 1);
+      const pulse = (0.78 + 0.22 * Math.sin(time * 1.4 + (n.phase || 0)) + n.excite * 0.78) * dim * visibility;
+      const rad = (n.isHub ? 6.4 : 2.5) * (n.baseR || 1) * p.persp * (1 + n.excite * 0.45)
+        * (0.78 + visibility * 0.22) * (1 + Math.min(4, Math.max(0, webZoom - 1)) * 0.08);
       const g = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, rad * 3.5);
       g.addColorStop(0, `rgba(255, 255, 255, ${Math.min(1, 0.88 * pulse)})`);
       g.addColorStop(0.28, (n.color || 'rgba(124, 196, 255, 1)').replace(', 1)', `, ${Math.min(0.88, 0.52 * pulse)})`));
@@ -956,18 +1000,18 @@ export function drawCosmosHud(ctx, w, h, st, webGraph, galaxyBooks, agentsByPlan
 
       // Golden watch-hit ring or focused/hovered spotlight ring
       if (n.watchHit && !n.isHub) {
-        const wr = rad * 2.1 + Math.sin(st.realTime * 2.6 + n.phase) * 1.5;
+        const wr = rad * 2.1 + Math.sin(time * 2.6 + (n.phase || 0)) * 1.5;
         ctx.strokeStyle = `rgba(244, 194, 122, ${(0.72 * dim).toFixed(3)})`;
         ctx.lineWidth = 1.25;
-        ctx.beginPath(); ctx.arc(p.x, p.y, wr, 0, Math.PI * 2); ctx.stroke();
+        ctx.beginPath(); ctx.arc(p.x, p.y, Math.max(0.1, wr), 0, Math.PI * 2); ctx.stroke();
       }
       if (isHovered || isSelected || isFocusedHub) {
-        const hr = rad * (n.isHub ? 2.1 : 2.8) + Math.sin(st.realTime * 3.2) * 1.4;
+        const hr = rad * (n.isHub ? 2.1 : 2.8) + Math.sin(time * 3.2) * 1.4;
         ctx.strokeStyle = isSelected || isFocusedHub ? 'rgba(124, 196, 255, 0.86)' : 'rgba(242, 247, 255, 0.78)';
         ctx.lineWidth = isSelected || isFocusedHub ? 1.6 : 1.2;
-        ctx.beginPath(); ctx.arc(p.x, p.y, hr, 0, Math.PI * 2); ctx.stroke();
+        ctx.beginPath(); ctx.arc(p.x, p.y, Math.max(0.1, hr), 0, Math.PI * 2); ctx.stroke();
       } else if (n.unread && !n.isHub && !webGraph.isAmbient) {
-        ctx.strokeStyle = (n.color || 'rgba(124, 196, 255, 1)').replace(', 1)', `, ${(0.34 * dim).toFixed(3)})`);
+        ctx.strokeStyle = (n.color || 'rgba(124, 196, 255, 1)').replace(', 1)', `, ${(0.34 * dim * visibility).toFixed(3)})`);
         ctx.lineWidth = 0.9;
         ctx.beginPath(); ctx.arc(p.x, p.y, rad * 1.85, 0, Math.PI * 2); ctx.stroke();
       }

@@ -37,7 +37,13 @@ import {
 import { useUserPreferences } from '../../utils/user-preferences.js';
 import { createCosmosEngine } from '../../cosmos/gl-engine.js';
 import { createParticlePools } from '../../cosmos/particle-hud.js';
-import { buildSemanticCosmicWebGraph, triggerCosmicWebPulse } from '../../cosmos/web-graph.js';
+import {
+  buildSemanticCosmicWebGraph,
+  triggerCosmicWebPulse,
+  WEB_ZOOM_LIMITS,
+  getWebLodTier,
+  findWebNodeFocusTarget,
+} from '../../cosmos/web-graph.js';
 import {
   COSMIC_EVENTS,
   createCosmicEventState,
@@ -290,7 +296,7 @@ export default {
           <span>{{ b.title }}</span>
         </button>
 
-        <!-- Cosmic Web Interactive 3D Hubs & Hot Story Stars -->
+        <!-- Cosmic Web Interactive 3D Hubs, LOD Story Stars & Event Micro-Detail Satellites -->
         <button
           v-for="wn in activeWebDomNodes"
           :key="wn.id"
@@ -308,10 +314,45 @@ export default {
           @pointerenter="onEnterWebNode(wn)"
           @pointerleave="onLeaveWebNode(wn)"
           @click.stop="onClickWebNode(wn)"
+          @dblclick.stop="onDblClickWebNode(wn)"
         >
           <span class="cosmos-web-node-dot" :class="'is-' + (wn.colorToken || 'cyan')" aria-hidden="true"></span>
           <span class="cosmos-web-node-text">{{ webNodeDisplayLabel(wn) }}</span>
           <span v-if="wn.isHub && wn.count > 0" class="cosmos-web-node-count">{{ wn.count }}</span>
+          <span v-else-if="!wn.isHub && wn.itemCount > 1" class="cosmos-web-node-count">{{ wn.itemCount }}</span>
+        </button>
+
+        <button
+          v-for="sat in activeWebSatellites"
+          :key="sat.id"
+          :ref="(el) => setMapRef(domRefs.webSatellites, sat.id, el)"
+          type="button"
+          class="cosmos-web-sat-card"
+          :class="['is-' + (sat.kind || 'source'), 'is-tone-' + (sat.colorToken || 'cyan')]"
+          :style="{ maxWidth: (sat.width || 148) + 'px', maxHeight: (sat.height || 36) + 'px', display: 'none' }"
+          @pointerdown.stop
+          @click.stop="onClickWebSatellite(sat)"
+        >
+          <img
+            v-if="sat.kind === 'media' && sat.mediaPreview?.proxyUrl && !failedSatMediaUrls[sat.mediaPreview.proxyUrl]"
+            :key="sat.mediaPreview.proxyUrl"
+            :src="sat.mediaPreview.proxyUrl"
+            alt=""
+            class="cosmos-web-sat-thumb"
+            loading="lazy"
+            @error="onSatMediaError(sat.mediaPreview.proxyUrl)"
+          />
+          <span v-if="sat.kind === 'media'" class="cosmos-web-sat-badge">
+            {{ sat.mediaPreview?.kind === 'gif' ? 'GIF' : $t('cosmos.web.mediaBadge') }}
+          </span>
+          <span v-else-if="sat.kind === 'comment'" class="cosmos-web-sat-comment">
+            <span class="cosmos-web-sat-meta">
+              <span v-if="sat.topCommentPreview?.platform" class="cosmos-web-sat-platform">{{ sat.topCommentPreview.platform }}</span>
+              <span v-if="sat.topCommentPreview?.likes" class="cosmos-web-sat-likes">{{ sat.topCommentPreview.likes }}</span>
+            </span>
+            <span class="cosmos-web-sat-text">{{ sat.label }}</span>
+          </span>
+          <span v-else class="cosmos-web-sat-text">{{ sat.label }}</span>
         </button>
       </div>
 
@@ -638,9 +679,20 @@ export default {
         :agents-live="agentsLiveForCosmos"
         :agent-to-planet="assignments.agentToPlanet"
         :is-compact="isCompactViewport"
+        :drawer-width="webDrawerWidth"
+        :min-drawer-width="360"
+        :max-drawer-width="webDrawerMaxWidth"
+        :viewport-width="viewportWidth"
+        :web-zoom="webCameraZoomRef"
+        :web-lod-tier="webLodTierRef"
         @toast="showToast"
         @dispatch-to-planet="onDispatchCosmicWebToPlanet"
         @escape-solar="jumpToScale(13.0)"
+        @drawer-resize="onWebDrawerResize"
+        @drawer-resize-end="onWebDrawerResizeEnd"
+        @drawer-resize-reset="onWebDrawerResizeReset"
+        @web-zoom-delta="onWebZoomDelta"
+        @web-zoom-reset="onWebZoomReset"
       />
 
       <!-- L3 Full-Screen Creation Interior (Read Mode & Co-Creation Studio) -->
@@ -762,6 +814,7 @@ export default {
       portals: {},
       books: {},
       webNodes: {},
+      webSatellites: {},
       homeBeacon: { value: null },
       eventBeacon: { value: null },
     };
@@ -1221,6 +1274,14 @@ export default {
         targetInspectYaw: 0,
         targetInspectPitch: 0,
       },
+      webCamera: {
+        zoom: 1.0,
+        targetZoom: 1.0,
+        panX: 0,
+        panY: 0,
+        targetPanX: 0,
+        targetPanY: 0,
+      },
       lastEventFrames: [],
       meteors: [], nextMeteorAt: 4.5,
       orbitRipples: [], telemetryBeams: [],
@@ -1476,7 +1537,7 @@ export default {
     }
 
     function onCanvasContextMenu(e) {
-      if (currentBand.value === 'solar' || anim.camDrag) {
+      if (currentBand.value === 'solar' || currentBand.value === 'web' || anim.camDrag) {
         e.preventDefault();
       }
     }
@@ -1501,7 +1562,9 @@ export default {
           ? 'soar'
           : (anim.planetFocus.planetId
             ? 'planet'
-            : (currentBand.value === 'solar' && !isRightOrShiftOrbit ? 'solar-pan' : 'solar-orbit')));
+            : (currentBand.value === 'web' && !isRightOrShiftOrbit
+              ? 'web-pan'
+              : (currentBand.value === 'solar' && !isRightOrShiftOrbit ? 'solar-pan' : 'solar-orbit'))));
       anim.camDrag = {
         pointerId: e.pointerId ?? null,
         pointerType: e.pointerType || 'mouse',
@@ -1511,6 +1574,8 @@ export default {
         startY: e.clientY,
         panX0: anim.camPan.tx,
         panY0: anim.camPan.ty,
+        webPanX0: anim.webCamera.targetPanX,
+        webPanY0: anim.webCamera.targetPanY,
         span0: anim.lastSpan || 520,
         yaw0: mode === 'event'
           ? (eventSim.active?.targetViewYaw || 0)
@@ -1569,10 +1634,77 @@ export default {
     const isWebModalBlocking = Vue.computed(() => Boolean(
       cosmicWebStore.readerExpanded
       || cosmicWebStore.dailyBriefingOpen
-      || cosmicWebStore.prefsModalOpen,
+      || cosmicWebStore.prefsModalOpen
+      || cosmicWebStore.lightboxMedia,
     ));
 
-    // Surface Hub labels + Top Hot Story Stars as interactive 3D DOM buttons (kept bounded for crispness)
+    const webCameraZoomRef = Vue.ref(1.0);
+    const webLodTierRef = Vue.ref(1);
+    const activeWebSatellites = Vue.ref([]);
+    const failedSatMediaUrls = Vue.ref({});
+    function onSatMediaError(url) {
+      if (!url || failedSatMediaUrls.value[url]) return;
+      failedSatMediaUrls.value = { ...failedSatMediaUrls.value, [url]: true };
+    }
+    const webDrawerMaxWidth = Vue.computed(() => (
+      Math.max(360, Math.min(960, Math.floor(viewportWidth.value - 240)))
+    ));
+    const webDrawerWidth = Vue.computed(() => {
+      if (viewportWidth.value <= 768) return viewportWidth.value;
+      const raw = Number(cosmicWebStore.drawerWidth) || 480;
+      return Math.max(360, Math.min(webDrawerMaxWidth.value, Math.round(raw)));
+    });
+
+    // CosmosWebOverlay is the single persistence owner for drawerWidth (live resize uses persist:false, drag end persists once).
+    function onWebDrawerResize() {}
+    function onWebDrawerResizeEnd() {}
+    function onWebDrawerResizeReset() {}
+
+    function clampWebPan(px, py) {
+      const lim = 1.25;
+      return {
+        x: Math.max(-lim, Math.min(lim, Number.isFinite(px) ? px : 0)),
+        y: Math.max(-lim, Math.min(lim, Number.isFinite(py) ? py : 0)),
+      };
+    }
+
+    function setWebZoom(nextZoom, { panX, panY } = {}) {
+      const clamped = Math.max(WEB_ZOOM_LIMITS.min, Math.min(WEB_ZOOM_LIMITS.max, Number(nextZoom) || 1.0));
+      anim.webCamera.targetZoom = clamped;
+      webCameraZoomRef.value = clamped;
+      webLodTierRef.value = getWebLodTier(clamped);
+      if (Number.isFinite(panX) && Number.isFinite(panY)) {
+        const nextPan = clampWebPan(panX, panY);
+        anim.webCamera.targetPanX = nextPan.x;
+        anim.webCamera.targetPanY = nextPan.y;
+      } else if (clamped <= WEB_ZOOM_LIMITS.min + 0.02) {
+        anim.webCamera.targetPanX = 0;
+        anim.webCamera.targetPanY = 0;
+      }
+    }
+
+    function onWebZoomDelta(delta) {
+      const d = Number(delta) || 0;
+      setWebZoom(anim.webCamera.targetZoom + d);
+    }
+
+    function onWebZoomReset({ silent = false } = {}) {
+      setWebZoom(1.0, { panX: 0, panY: 0 });
+      anim.camRot.tx = 0;
+      anim.camRot.ty = 0;
+      if (!silent) showToast($t('cosmos.scale.resetView'));
+    }
+
+    function focusWebNodeCamera({ domainId = null, clusterId = null } = {}) {
+      const graph = getWebGraph();
+      const target = findWebNodeFocusTarget(graph, { domainId, clusterId });
+      if (!target) return false;
+      setWebZoom(target.targetZoom, { panX: target.panX, panY: target.panY });
+      return true;
+    }
+
+    // Surface all Domain Hubs + up to 180 Cluster Stars to the zero-VDOM spatial layer;
+    // `stage-loop.js` + `computeWebLodLayout` strictly cull, apply 3-tier LOD & prevent label collisions.
     const activeWebDomNodes = Vue.computed(() => {
       const g = cosmicWebStore.graph;
       if (!g || (!Array.isArray(g.hubs) && !Array.isArray(g.nodes))) return [];
@@ -1583,21 +1715,23 @@ export default {
         labelZh: h.labelZh || h.nameZh || h.domainId,
         labelEn: h.labelEn || h.nameEn || h.domainId,
         colorToken: h.colorToken || 'cyan',
-        count: Number(h.count || 0),
+        count: Number(h.itemCount ?? h.count ?? 0),
         watchHit: false,
       }));
       const rawNodes = Array.isArray(g.nodes) ? g.nodes.slice() : [];
       rawNodes.sort((a, b) => (Number(Boolean(b.watchHit)) - Number(Boolean(a.watchHit))) || (Number(b.heatScore || 0) - Number(a.heatScore || 0)));
-      const topStars = rawNodes.slice(0, 10).map((n) => ({
+      const stars = rawNodes.slice(0, 180).map((n) => ({
         id: n.id || `cluster:${n.clusterId}`,
         isHub: false,
         domainId: n.domainId,
         clusterId: n.clusterId,
         headline: n.headline || '',
         colorToken: n.colorToken || 'cyan',
+        itemCount: Number(n.itemCount || 1),
+        lodTier: Number(n.lodTier || 1),
         watchHit: Boolean(n.watchHit),
       }));
-      return [...hubs, ...topStars];
+      return [...hubs, ...stars];
     });
 
     function webNodeDisplayLabel(wn) {
@@ -1628,10 +1762,41 @@ export default {
     function onClickWebNode(wn) {
       if (!wn) return;
       if (wn.isHub && wn.domainId) {
-        const next = cosmicWebStore.activeDomain === wn.domainId ? 'all' : wn.domainId;
+        const clearing = cosmicWebStore.activeDomain === wn.domainId;
+        const next = clearing ? 'all' : wn.domainId;
         cosmicWebStore.selectDomain(next);
+        if (clearing) {
+          onWebZoomReset({ silent: true });
+        } else {
+          focusWebNodeCamera({ domainId: wn.domainId });
+        }
       } else if (wn.clusterId) {
-        cosmicWebStore.openClusterReader(wn.clusterId, { tab: 'article', expanded: false });
+        cosmicWebStore.openClusterReader(wn.clusterId, { expanded: false });
+        if (anim.webCamera.targetZoom >= WEB_ZOOM_LIMITS.lod2) {
+          focusWebNodeCamera({ clusterId: wn.clusterId });
+        }
+      }
+    }
+
+    function onDblClickWebNode(wn) {
+      if (!wn) return;
+      if (wn.isHub && wn.domainId) {
+        cosmicWebStore.selectDomain(wn.domainId);
+        focusWebNodeCamera({ domainId: wn.domainId });
+      } else if (wn.clusterId) {
+        focusWebNodeCamera({ clusterId: wn.clusterId });
+        cosmicWebStore.openClusterReader(wn.clusterId, { expanded: false });
+      }
+    }
+
+    function onClickWebSatellite(sat) {
+      if (!sat) return;
+      if (sat.kind === 'media' && sat.mediaPreview?.proxyUrl) {
+        cosmicWebStore.openLightbox?.(sat.mediaPreview);
+        return;
+      }
+      if (sat.clusterId) {
+        cosmicWebStore.openClusterReader(sat.clusterId, { expanded: false });
       }
     }
 
@@ -1725,6 +1890,16 @@ export default {
         cosmicWebStore?.enterWebBand?.()?.catch?.(() => {});
       } else if (prev === 'web') {
         cosmicWebStore?.leaveWebBand?.();
+        anim.webCamera.zoom = 1.0;
+        anim.webCamera.targetZoom = 1.0;
+        anim.webCamera.panX = 0;
+        anim.webCamera.panY = 0;
+        anim.webCamera.targetPanX = 0;
+        anim.webCamera.targetPanY = 0;
+        anim.lastWebLodSignature = null;
+        webCameraZoomRef.value = 1.0;
+        webLodTierRef.value = 1;
+        activeWebSatellites.value = [];
       }
     }, { immediate: true });
 
@@ -1777,6 +1952,10 @@ export default {
       if (anim.planetFocus.planetId) {
         resetPlanetInspect();
         showToast($t('cosmos.scale.resetView'));
+        return;
+      }
+      if (currentBand.value === 'web') {
+        onWebZoomReset({ silent: false });
         return;
       }
       resetCanvasPan({ withView: true, silent: false });
@@ -1882,6 +2061,9 @@ export default {
             } else if (anim.planetFocus.planetId) {
               const ratio = dist / Math.max(pinchPrevDist, 1);
               setPlanetZoom(anim.planetFocus.targetZoom * Math.pow(ratio, 1.35));
+            } else if (currentBand.value === 'web') {
+              const ratio = dist / Math.max(pinchPrevDist, 1);
+              setWebZoom(anim.webCamera.targetZoom * Math.pow(ratio, 1.35));
             } else {
               const ratio = pinchPrevDist / dist;
               const step = Math.max(-1.2, Math.min(1.2, Math.log(ratio) * 4.4));
@@ -1947,6 +2129,16 @@ export default {
           anim.planetFocus.targetInspectYaw = anim.camDrag.yaw0 + dx * 0.0075;
           anim.planetFocus.targetInspectPitch = Math.max(-1.05, Math.min(1.05, anim.camDrag.pitch0 + dy * 0.0055));
           planetFocusRotated.value = Math.abs(anim.planetFocus.targetInspectYaw) > 0.04 || Math.abs(anim.planetFocus.targetInspectPitch) > 0.04;
+        } else if (anim.camDrag.mode === 'web-pan') {
+          const vw = Math.max(320, window.innerWidth || 1280);
+          const vh = Math.max(240, window.innerHeight || 720);
+          const zoom = Math.max(0.85, anim.webCamera.zoom || 1);
+          const nextPan = clampWebPan(
+            (anim.camDrag.webPanX0 || 0) + dx / (vw * 0.52 * zoom),
+            (anim.camDrag.webPanY0 || 0) + dy / (vh * 0.66 * zoom),
+          );
+          anim.webCamera.targetPanX = nextPan.x;
+          anim.webCamera.targetPanY = nextPan.y;
         } else if (anim.camDrag.mode === 'solar-pan') {
           const baseSpan = Math.max(160, anim.camDrag.span0 || anim.lastSpan || 480);
           const nextPan = clampCamPan(
@@ -2080,7 +2272,7 @@ export default {
 
     function onStageWheel(e) {
       if (settingsModal.open || agentSettingsModal.open || sessionSettingsModal.open || creationsStore.activeCreation || isWebModalBlocking.value) return;
-      if (e.target.closest('.cosmos-drawer, .cosmos-quick-composer, .cosmos-constants-popover, .cosmos-hover-card, .cosmos-event-almanac, .cosmos-book-popover, .cosmos-signal-stream, .cosmos-signal-popover, .cosmos-signal-mobile-banner, .cosmos-voyage-atlas, .cosmos-voyage-dock, .creation-galaxy-hud, .creation-catalog-panel, .creation-inspector-card, .creation-ignite-dock, .creation-interior-modal, .cw-hud-bar, .cw-drawer, .cw-onboarding-card, .cw-modal-backdrop, .cw-hover-preview')) return;
+      if (e.target.closest('.cosmos-drawer, .cosmos-quick-composer, .cosmos-constants-popover, .cosmos-hover-card, .cosmos-event-almanac, .cosmos-book-popover, .cosmos-signal-stream, .cosmos-signal-popover, .cosmos-signal-mobile-banner, .cosmos-voyage-atlas, .cosmos-voyage-dock, .creation-galaxy-hud, .creation-catalog-panel, .creation-inspector-card, .creation-ignite-dock, .creation-interior-modal, .cw-hud-bar, .cw-drawer, .cw-onboarding-card, .cw-modal-backdrop, .cw-hover-preview, .cw-zoom-dock, .cw-lightbox-backdrop, .cosmos-web-sat-card')) return;
       e.preventDefault();
       if (eventSim.active?.observing) {
         const delta = -Math.sign(e.deltaY) * Math.min(Math.abs(e.deltaY), 100) * 0.0032;
@@ -2105,6 +2297,31 @@ export default {
         const factor = Math.exp(-clampedDelta * 0.0024);
         setPlanetZoom(anim.planetFocus.targetZoom * factor);
         hideHoverImmediate();
+        return;
+      }
+      // Inside Cosmic Web (10^24), scroll wheel smoothly drives 3-tier Semantic LOD zoom (1.0x - 4.5x)
+      if (currentBand.value === 'web' && anim.scaleLog >= 22.8) {
+        const clampedDelta = Math.max(-140, Math.min(140, e.deltaY));
+        const factor = Math.exp(-clampedDelta * 0.0024);
+        const prevZoom = anim.webCamera.targetZoom;
+        const nextZoom = Math.max(WEB_ZOOM_LIMITS.min, Math.min(WEB_ZOOM_LIMITS.max, prevZoom * factor));
+        if (nextZoom > prevZoom + 0.001) {
+          const vw = Math.max(320, window.innerWidth || 1280);
+          const vh = Math.max(240, window.innerHeight || 720);
+          const docked = !cosmicWebStore.drawerCollapsed && !isCompactViewport.value && !isWebModalBlocking.value;
+          const shiftX = docked ? -Math.min(webDrawerWidth.value * 0.46, vw * 0.36) : 0;
+          const cx = vw * 0.5 + shiftX;
+          const cy = vh * 0.5;
+          const relX = (e.clientX - cx) / (vw * 0.52);
+          const relY = (e.clientY - cy) / (vh * 0.66);
+          const zoomGain = (1 / prevZoom) - (1 / nextZoom);
+          setWebZoom(nextZoom, {
+            panX: anim.webCamera.targetPanX - relX * zoomGain,
+            panY: anim.webCamera.targetPanY - relY * zoomGain,
+          });
+        } else {
+          setWebZoom(nextZoom);
+        }
         return;
       }
       const step = Math.sign(e.deltaY) * Math.min(Math.abs(e.deltaY), 120) * 0.0115;
@@ -2782,10 +2999,30 @@ export default {
             hoverPlanetId: hoverPlanetId.value,
             isCompact: isCompactViewport.value,
             webDrawerOpen: currentBand.value === 'web' && !cosmicWebStore.drawerCollapsed,
+            webDrawerWidth: webDrawerWidth.value,
+            webDrawerRightEdge: isCompactViewport.value
+              ? viewportWidth.value
+              : Math.max(0, viewportWidth.value - webDrawerWidth.value),
             webModalOpen: isWebModalBlocking.value,
             webHoveredClusterId: cosmicWebStore.hoveredClusterId,
             webSelectedClusterId: cosmicWebStore.cursorClusterId || cosmicWebStore.readerClusterId || cosmicWebStore.selectedClusterId,
             webFocusedDomainId: cosmicWebStore.focusedDomainId,
+            webActiveClusterDetail: (() => {
+              const det = cosmicWebStore.activeClusterDetail;
+              const brief = cosmicWebStore.aiBriefData;
+              if (!det) return null;
+              if (!brief || cosmicWebStore.readerClusterId !== det.id) return det;
+              const mergedMedia = Array.isArray(brief.media) && brief.media.length ? brief.media : det.media;
+              const mergedComments = Array.isArray(brief.communityHighlights) && brief.communityHighlights.length
+                ? brief.communityHighlights
+                : det.communityComments;
+              if (mergedMedia === det.media && mergedComments === det.communityComments) return det;
+              return { ...det, media: mergedMedia, communityComments: mergedComments };
+            })(),
+            onWebLodFrame: ({ lodTier, satellites }) => {
+              if (webLodTierRef.value !== lodTier) webLodTierRef.value = lodTier;
+              activeWebSatellites.value = satellites;
+            },
           }),
           onBandChange: (band) => { currentBand.value = band; },
           onSyncEvents: syncEventRefs,
@@ -3013,8 +3250,10 @@ export default {
 
     return {
       glCanvasRef, hudCanvasRef, hoverCardRef, drawerRef, galaxyOverlayRef, webOverlayRef, creationInteriorRef, signalTriggerRef, voyageOverlayRef, domRefs, setMapRef, canvasEpoch, rendererMode,
-      creationsStore, activeGalaxyStars, cosmicWebStore, agentsLiveForCosmos, isWebModalBlocking, activeWebDomNodes,
-      webNodeDisplayLabel, onEnterWebNode, onLeaveWebNode, onClickWebNode, onDispatchCosmicWebToPlanet,
+      creationsStore, activeGalaxyStars, cosmicWebStore, agentsLiveForCosmos, isWebModalBlocking, activeWebDomNodes, activeWebSatellites, failedSatMediaUrls, onSatMediaError,
+      webCameraZoomRef, webLodTierRef, webDrawerWidth, webDrawerMaxWidth,
+      onWebDrawerResize, onWebDrawerResizeEnd, onWebDrawerResizeReset, onWebZoomDelta, onWebZoomReset,
+      webNodeDisplayLabel, onEnterWebNode, onLeaveWebNode, onClickWebNode, onDblClickWebNode, onClickWebSatellite, onDispatchCosmicWebToPlanet,
       planets: PLANETS, bookDomains: BOOK_DOMAINS,
       portals: [
         { id: 'to-galaxy', labelKey: 'cosmos.scale.galaxy', scale: '10²¹', target: 21.0, ring: 64 },

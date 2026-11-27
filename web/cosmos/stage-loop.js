@@ -14,7 +14,7 @@ import {
   projectSoarBeacons,
 } from './star-systems.js';
 import { fillGpuParticles, drawCosmosHud } from './particle-hud.js';
-import { projectCosmicWeb } from './web-graph.js';
+import { computeWebLodLayout, projectCosmicWeb, WEB_ZOOM_LIMITS } from './web-graph.js';
 import {
   tickCosmicEvents,
   computeEventFrames,
@@ -157,6 +157,22 @@ export function stepCosmosFrame(now, ctx) {
   anim.spinTime += dt * spinSpeed * motionMul;
   anim.time += dt * constants.orbitSpeed * anim.orbitBrake * motionMul;
   anim.focusedPlanetId = ui.focusedPlanetId;
+
+  // Web pan targets use normalized, zoom-scaled screen axes (positive right/down).
+  const webCamera = anim.webCamera || (anim.webCamera = {
+    zoom: 1, targetZoom: 1, panX: 0, targetPanX: 0, panY: 0, targetPanY: 0,
+  });
+  const webCameraMix = reducedMotion ? 1 : 1 - Math.exp(-dt * 9);
+  const approachWebTarget = (current, target, fallback) => {
+    const goal = Number.isFinite(target) ? target : fallback;
+    if (!Number.isFinite(current) || Math.abs(goal - current) < 0.0001) return goal;
+    return current + (goal - current) * webCameraMix;
+  };
+  const clampWebZoom = (zoom) => Math.max(WEB_ZOOM_LIMITS.min, Math.min(WEB_ZOOM_LIMITS.max, zoom));
+  const targetWebZoom = Number.isFinite(webCamera.targetZoom) ? clampWebZoom(webCamera.targetZoom) : WEB_ZOOM_LIMITS.min;
+  webCamera.zoom = approachWebTarget(clampWebZoom(webCamera.zoom), targetWebZoom, WEB_ZOOM_LIMITS.min);
+  webCamera.panX = approachWebTarget(webCamera.panX, webCamera.targetPanX, 0);
+  webCamera.panY = approachWebTarget(webCamera.panY, webCamera.targetPanY, 0);
 
   // Smooth Planet Focus lock & 0.8x-24x zoom interpolation
   const goalPfBlend = pf.planetId ? 1.0 : 0.0;
@@ -670,35 +686,69 @@ export function stepCosmosFrame(now, ctx) {
   };
 
   const activeWebGraph = webFullAlpha > 0.04 ? (webGraph || getWebGraph?.() || null) : null;
-  const webCenterShiftX = (webFullAlpha > 0.04 && ui.webDrawerOpen && !ui.isCompact && !ui.webModalOpen)
-    ? -Math.min(220, w * 0.16)
-    : 0;
+  const webDrawerDocked = ui.webDrawerOpen && !ui.isCompact && !ui.webModalOpen;
+  const webDrawerWidth = Number.isFinite(ui.webDrawerWidth) && ui.webDrawerWidth > 0
+    ? ui.webDrawerWidth : Math.max(360, Math.min(468, w * 0.31));
+  const webCenterShiftX = webDrawerDocked ? -Math.min(webDrawerWidth * 0.46, w * 0.36) : 0;
+  // By default, account for the drawer's 16px right inset. The page may supply the measured left edge.
+  const drawerRightEdge = webDrawerDocked
+    ? (Number.isFinite(ui.webDrawerRightEdge) ? ui.webDrawerRightEdge : w - webDrawerWidth - 16)
+    : w;
+  const webProjectionOpts = { centerShiftX: webCenterShiftX,
+    webZoom: webCamera.zoom, webPanX: webCamera.panX, webPanY: webCamera.panY };
+  const webProjected = activeWebGraph ? projectCosmicWeb(activeWebGraph, w, h, anim, webProjectionOpts) : [];
+  const hideWebNodes = band !== 'web' || webFullAlpha < 0.18 || ui.webModalOpen || !activeWebGraph || activeWebGraph.isAmbient;
+  const webLod = computeWebLodLayout(hideWebNodes ? [] : webProjected, {
+    w, h, webZoom: webCamera.zoom, drawerRightEdge,
+    focusedDomainId: ui.webFocusedDomainId,
+    selectedClusterId: ui.webSelectedClusterId,
+    hoveredClusterId: ui.webHoveredClusterId,
+    activeClusterDetail: ui.webActiveClusterDetail ?? ui.activeClusterDetail,
+  });
 
-  // Update interactive 3D Cosmic Web DOM star & hub markers via shared projection (zero VDOM churn)
+  // Direct DOM updates: no reactive per-frame coordinates or visibility state.
   if (domRefs.webNodes) {
-    const hideWebNodes = ui.currentBand !== 'web' || webFullAlpha < 0.18 || Boolean(ui.webModalOpen) || !activeWebGraph || activeWebGraph.isAmbient;
-    const projectedWeb = hideWebNodes
-      ? []
-      : projectCosmicWeb(activeWebGraph, w, h, anim, { centerShiftX: webCenterShiftX });
-    const projectedById = Object.create(null);
-    for (let i = 0; i < projectedWeb.length; i++) {
-      const entry = projectedWeb[i];
-      if (entry?.node?.id) projectedById[entry.node.id] = entry;
-    }
-    for (const key of Object.keys(domRefs.webNodes)) {
+    for (const key in domRefs.webNodes) {
       const el = domRefs.webNodes[key];
       if (!el) continue;
-      const entry = projectedById[key];
-      if (!entry || !entry.visible || hideWebNodes) {
+      if (!webLod.visibleNodeIds.has(key)) {
         el.style.display = 'none';
-      } else {
-        const domainMatch = !ui.webFocusedDomainId || entry.node.domainId === ui.webFocusedDomainId;
-        const opacity = webFullAlpha * (entry.node.isHub ? 0.96 : 0.9) * (domainMatch ? 1 : 0.42);
-        el.style.display = 'inline-flex';
-        el.style.opacity = String(opacity.toFixed(3));
-        el.style.transform = `translate(${entry.x.toFixed(1)}px, ${entry.y.toFixed(1)}px) translate(-50%, -50%)`;
-        el.style.zIndex = String(entry.node.isHub ? 6 : 4);
+        continue;
       }
+      const { node, labelX, labelY, labelMaxWidth } = webLod.projectedById.get(key);
+      const active = node.clusterId != null
+        && (node.clusterId === ui.webSelectedClusterId || node.clusterId === ui.webHoveredClusterId);
+      const domainMatch = active || !ui.webFocusedDomainId || node.domainId === ui.webFocusedDomainId;
+      const opacity = webFullAlpha * (node.isHub ? 0.96 : 0.9) * (domainMatch ? 1 : 0.42);
+      el.style.display = 'inline-flex';
+      el.style.opacity = String(opacity.toFixed(3));
+      el.style.boxSizing = 'border-box';
+      el.style.maxWidth = `${labelMaxWidth}px`;
+      el.style.transform = `translate(${labelX.toFixed(1)}px, ${labelY.toFixed(1)}px) translate(-50%, -50%)`;
+      el.style.zIndex = active ? '12' : node.isHub ? '6' : '4';
+    }
+  }
+  if (domRefs.webSatellites) {
+    for (const id in domRefs.webSatellites) {
+      const el = domRefs.webSatellites[id];
+      if (!el) continue;
+      const sat = webLod.satellites.find((s) => s.id === id);
+      if (!sat) {
+        el.style.display = 'none';
+        continue;
+      }
+      el.style.display = 'inline-flex';
+      el.style.opacity = String(webFullAlpha);
+      el.style.transform = `translate(${sat.x}px, ${sat.y}px) translate(-50%, -50%)`;
+    }
+  }
+  if (ui.onWebLodFrame) {
+    const { lodTier, satellites } = webLod;
+    const focusClusterId = webLod.focusNode?.node.clusterId ?? null;
+    const signature = JSON.stringify([lodTier, focusClusterId, satellites.map((s) => s.key)]);
+    if (signature !== anim.lastWebLodSignature) {
+      anim.lastWebLodSignature = signature;
+      ui.onWebLodFrame({ lodTier, zoom: webCamera.zoom, focusClusterId, satellites });
     }
   }
 
@@ -765,6 +815,12 @@ export function stepCosmosFrame(now, ctx) {
         soarPhase: voyage?.flightPhase || 0,
         voyageWarp,
         webCenterShiftX,
+        webZoom: webCamera.zoom,
+        webPanX: webCamera.panX,
+        webPanY: webCamera.panY,
+        webProjected,
+        webLodTier: webLod.lodTier,
+        webSatellites: webLod.satellites,
         webHoveredClusterId: ui.webHoveredClusterId || null,
         webSelectedClusterId: ui.webSelectedClusterId || null,
         webFocusedDomainId: ui.webFocusedDomainId || null,

@@ -11,7 +11,7 @@
 import { useCosmicWebStore } from '../../../stores/cosmicWeb.js';
 import { getLocale, t } from '../../../utils/i18n.js';
 
-const COLOR_SWATCHES = ['cyan', 'mint', 'gold', 'violet', 'rose', 'amber'];
+const COLOR_SWATCHES = ['cyan', 'mint', 'gold', 'violet', 'coral', 'rose', 'teal', 'indigo', 'amber'];
 
 const PERSPECTIVE_OPTIONS = [
   { id: 'balanced', labelKey: 'cosmos.web.prefs.perspectiveBalanced' },
@@ -80,6 +80,7 @@ export default {
       customForm: {
         name: '',
         colorToken: 'violet',
+        aiRadar: true,
         keywordInput: '',
         keywords: [],
         rssInput: '',
@@ -108,6 +109,16 @@ export default {
       return (this.agents || []).filter(
         (a) => Boolean(a && a.online && Array.isArray(a.capabilities) && a.capabilities.includes('cosmic_web_briefing')),
       );
+    },
+    radarCapableAgents() {
+      if (!this.agentsLive) return [];
+      return (this.agents || []).filter(
+        (a) => Boolean(a && a.online && Array.isArray(a.capabilities) && a.capabilities.includes('cosmic_web_radar')),
+      );
+    },
+    canScanRadar() {
+      if (!this.agentsLive) return true;
+      return this.radarCapableAgents.length > 0;
     },
     savedOfflinePreferredAgent() {
       const savedId = typeof this.webStore.prefs?.preferredAgentId === 'string'
@@ -284,6 +295,7 @@ export default {
       this.customForm = {
         name: '',
         colorToken: 'violet',
+        aiRadar: true,
         keywordInput: '',
         keywords: [],
         rssInput: '',
@@ -296,12 +308,37 @@ export default {
       this.customForm = {
         name: cd.name || '',
         colorToken: cd.colorToken || 'violet',
+        aiRadar: cd.aiRadar !== false,
         keywordInput: '',
         keywords: Array.isArray(cd.keywords) ? [...cd.keywords] : [],
         rssInput: '',
         rssUrls: Array.isArray(cd.rssUrls) ? [...cd.rssUrls] : [],
       };
       this.customFormError = null;
+    },
+    isSavedRadarDomain(id) {
+      return (this.webStore.prefs?.customDomains || []).some((c) => c && c.id === id && c.aiRadar === true);
+    },
+    async triggerRadarScan(cd) {
+      if (!cd?.id || !cd.aiRadar || this.webStore.radarScanningDomainId) return;
+      if (!this.canScanRadar) {
+        this.$emit('toast', t('cosmos.web.prefs.radarUpgradeHint'));
+        return;
+      }
+      const eligibleAgentId = this.draft.preferredAgentId
+        && this.radarCapableAgents.some((a) => a.id === this.draft.preferredAgentId)
+        ? this.draft.preferredAgentId
+        : undefined;
+      try {
+        const result = await this.webStore.scanTopicRadar(cd.id, {
+          agentId: eligibleAgentId,
+        });
+        if (result) {
+          this.$emit('toast', t('cosmos.web.prefs.radarScannedToast', { name: cd.name || cd.id }));
+        }
+      } catch (err) {
+        this.$emit('toast', err?.message || t('cosmos.web.prefs.radarScanFailed'));
+      }
     },
     deleteCustomDomain(id) {
       this.draft.customDomains = this.draft.customDomains.filter((c) => c.id !== id);
@@ -349,7 +386,7 @@ export default {
         }
         this.addCustomRss();
       }
-      if (this.customForm.keywords.length === 0 && this.customForm.rssUrls.length === 0) {
+      if (!this.customForm.aiRadar && this.customForm.keywords.length === 0 && this.customForm.rssUrls.length === 0) {
         this.customFormError = t('cosmos.web.prefs.customSourceOrKeywordRequired');
         return;
       }
@@ -359,6 +396,7 @@ export default {
         id,
         name,
         colorToken: this.customForm.colorToken || 'violet',
+        aiRadar: Boolean(this.customForm.aiRadar),
         keywords: [...this.customForm.keywords],
         rssUrls: [...this.customForm.rssUrls],
       };
@@ -537,7 +575,16 @@ export default {
                 <div class="cw-custom-card-head">
                   <span class="cw-dot" :class="'cw-dot-' + (cd.colorToken || 'violet')"></span>
                   <strong class="cw-custom-name">{{ cd.name }}</strong>
+                  <span v-if="cd.aiRadar" class="cw-badge cw-badge-accent">{{ $t('cosmos.web.prefs.aiRadarBadge') }}</span>
                   <div class="cw-custom-actions">
+                    <button
+                      v-if="cd.aiRadar && isSavedRadarDomain(cd.id)"
+                      type="button"
+                      class="cw-btn cw-btn-subtle cw-btn-xs"
+                      :disabled="Boolean(webStore.radarScanningDomainId) || !canScanRadar"
+                      :title="canScanRadar ? $t('cosmos.web.prefs.radarScanNow') : $t('cosmos.web.prefs.radarUpgradeHint')"
+                      @click="triggerRadarScan(cd)"
+                    >{{ webStore.radarScanningDomainId === cd.id ? $t('cosmos.web.prefs.radarScanning') : $t('cosmos.web.prefs.radarScanNow') }}</button>
                     <button type="button" class="cw-text-btn" @click="editCustomDomain(cd)">
                       {{ $t('cosmos.web.action.edit') }}
                     </button>
@@ -550,6 +597,9 @@ export default {
                   <span v-for="kw in (cd.keywords || [])" :key="kw" class="cw-chip">{{ kw }}</span>
                   <span v-for="url in (cd.rssUrls || [])" :key="url" class="cw-chip cw-chip-url">{{ url }}</span>
                 </div>
+                <p v-if="cd.aiRadar && isSavedRadarDomain(cd.id) && agentsLive && !canScanRadar" class="cw-inline-hint">
+                  {{ $t('cosmos.web.prefs.radarUpgradeHint') }}
+                </p>
               </div>
             </div>
 
@@ -584,6 +634,18 @@ export default {
                     @click="customForm.colorToken = sw"
                   ></button>
                 </div>
+              </div>
+
+              <div class="cw-field-group">
+                <label class="cw-toggle-label cw-radar-toggle">
+                  <input
+                    v-model="customForm.aiRadar"
+                    type="checkbox"
+                    class="cw-checkbox"
+                  />
+                  <span class="cw-field-label">{{ $t('cosmos.web.prefs.aiRadarLabel') }}</span>
+                </label>
+                <p class="cw-prefs-hint">{{ $t('cosmos.web.prefs.aiRadarHint') }}</p>
               </div>
 
               <div class="cw-field-group">

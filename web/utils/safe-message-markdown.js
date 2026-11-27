@@ -1,6 +1,8 @@
 const escape = text => String(text ?? '').replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char]);
 let parser;
 let constructor;
+let proseParser;
+let proseConstructor;
 
 /** Read-only message Markdown, independent of Session file/tool actions.
  * Raw HTML is text; images never initiate network requests; only explicit
@@ -25,5 +27,27 @@ export function renderSafeMessageMarkdown(text) {
     } });
   }
   try { return parser.parse(String(text ?? '')); }
+  catch { return escape(text).replace(/\n/g, '<br>'); }
+}
+
+/**
+ * Non-linkifying Markdown renderer for Cosmic Web editorial prose.
+ * Never renders clickable <a> links or images from model prose (including GFM autolinks);
+ * clickable links must come strictly from validated structured citations/footnotes.
+ */
+export function renderCosmicWebProse(text) {
+  const Marked = globalThis.marked?.Marked;
+  if (!Marked) return escape(text).replace(/\n/g, '<br>');
+  if (proseConstructor !== Marked) {
+    proseConstructor = Marked;
+    proseParser = new Marked({ breaks: true, gfm: true, renderer: {
+      html(token) { return escape(token.text); },
+      image(token) { return escape(token.text); },
+      link(token) {
+        return this.parser.parseInline(token.tokens);
+      },
+    } });
+  }
+  try { return proseParser.parse(String(text ?? '')); }
   catch { return escape(text).replace(/\n/g, '<br>'); }
 }

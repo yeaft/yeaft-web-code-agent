@@ -93,7 +93,7 @@ async function readBounded(response, limit) {
 
 export async function safeFetch(value, {
   signal, dnsLookup, requestImpl, timeoutMs = 10_000, maxBytes = 2 * 1024 ** 2,
-  maxDecompressedBytes = 4 * 1024 ** 2, headers = {}, method = 'GET', body,
+  maxDecompressedBytes = 4 * 1024 ** 2, headers = {}, method = 'GET', body, checkHeaders,
 } = {}) {
   const active = deadline(signal, timeoutMs);
   let targetUrl = value;
@@ -118,6 +118,14 @@ export async function safeFetch(value, {
         body = undefined;
       }
       continue;
+    }
+    if (typeof checkHeaders === 'function') {
+      try {
+        checkHeaders(status, response.headers);
+      } catch (err) {
+        response.destroy();
+        throw err;
+      }
     }
     let bodyBuffer = await abortable(active, () => readBounded(response, maxBytes)).finally(() => response.destroy());
     const encoding = String(response.headers['content-encoding'] ?? 'identity').trim().toLowerCase();
