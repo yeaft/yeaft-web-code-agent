@@ -1938,6 +1938,88 @@ describe('Cosmic Web — Pinia store & interactive overlay', () => {
     expect(webStore.followUpThread).toHaveLength(1);
     expect(webStore.followUpThread[0].question).toBe('What about Q4 margins?');
     expect(webStore.followUpThread[0].answer).toBe('Pinned answer for item-b');
+
+    // Round 10 Blocker #2 (same-cluster reopen with retained default pin that changes on refresh):
+    // Reader is currently open on c-first-open with retained default 'item-b' & brief.
+    // Reopen triggers a slow detail refresh that promotes 'item-c' to default!
+    // While refresh is pending, user clicks 'engineering' perspective (2nd button) AND submits a follow-up via modal controls.
+    // Both MUST defer until repin + stale invalidation complete, then execute cleanly for 'item-c' with 'engineering' & ZERO stale item-b briefContext!
+    let resolveReopenDetail;
+    const reopenBriefBodies = [];
+    const reopenFollowUpBodies = [];
+    const midFetch = globalThis.fetch;
+    globalThis.fetch = vi.fn((url, opts) => {
+      const u = String(url);
+      const jsonRes = (body) => ({
+        ok: true,
+        status: 200,
+        headers: { get: (k) => (k.toLowerCase() === 'content-type' ? 'application/json' : null) },
+        json: async () => body,
+      });
+      if (u === '/api/cosmic-web/clusters/c-first-open') {
+        return new Promise((resolve) => {
+          resolveReopenDetail = () => resolve(jsonRes({
+            id: 'c-first-open',
+            domainId: 'ai',
+            headline: 'First Open Cluster Updated',
+            summaryExcerpt: 'Summary C',
+            items: [
+              { id: 'item-c', sourceName: 'Source C', title: 'SC', summaryExcerpt: 'Excerpt C', url: 'https://sc.example/c' },
+              { id: 'item-b', sourceName: 'Source B', title: 'SB', summaryExcerpt: 'Excerpt B', url: 'https://sb.example/b' },
+            ],
+          }));
+        });
+      }
+      if (u === '/api/cosmic-web/clusters/c-first-open/ai-brief') {
+        const b = JSON.parse(opts.body);
+        reopenBriefBodies.push(b);
+        return Promise.resolve(jsonRes({
+          tldr: `Pinned ${b.perspective} brief for ${b.itemId}`,
+          sections: [{ heading: 'Body', body: 'Details' }],
+          bullets: ['b1', 'b2'],
+          impact: 'imp',
+          searchCount: 0,
+          evidenceCount: 0,
+          researched: false,
+          followUps: ['More?'],
+        }));
+      }
+      if (u === '/api/cosmic-web/clusters/c-first-open/follow-up') {
+        const b = JSON.parse(opts.body);
+        reopenFollowUpBodies.push(b);
+        return Promise.resolve(jsonRes({
+          question: b.question, answer: `Reopen pinned answer for ${b.itemId}`, citations: [], media: [], searchCount: 0, evidenceCount: 0, researched: false,
+        }));
+      }
+      return midFetch(url, opts);
+    });
+    const reopenDriftPromise = webStore.openClusterReader('c-first-open', { expanded: true });
+    await flushPromises();
+    // Click 'engineering' perspective pill (index 1) AND submit a follow-up while same-cluster reopen detail is pending
+    const reopenPerspBtns = wrapper.findAll('.cw-reader-modal .cw-persp-btn');
+    await reopenPerspBtns[1].trigger('click');
+    const reopenInput = wrapper.find('.cw-reader-modal .cw-composer-input');
+    await reopenInput.setValue('What changed in breaking update?');
+    await reopenInput.trigger('keydown.enter');
+    await flushPromises();
+    // Neither should have fired against stale 'item-b' before reconcile completes!
+    expect(reopenBriefBodies).toHaveLength(0);
+    expect(reopenFollowUpBodies).toHaveLength(0);
+    // Detail resolves promoting 'item-c' -> stale 'item-b' brief/thread cleared, deferred 'engineering' brief & follow-up run for 'item-c'!
+    resolveReopenDetail();
+    await reopenDriftPromise;
+    await flushPromises();
+    expect(webStore.resolvedSourceItemId).toBe('item-c');
+    expect(reopenBriefBodies).toHaveLength(1);
+    expect(reopenBriefBodies[0]).toMatchObject({ itemId: 'item-c', perspective: 'engineering', agentId: 'v2-agent' });
+    expect(webStore.aiBriefData?.tldr).toBe('Pinned engineering brief for item-c');
+    expect(reopenFollowUpBodies).toHaveLength(1);
+    expect(reopenFollowUpBodies[0]).toMatchObject({ itemId: 'item-c', question: 'What changed in breaking update?', perspective: 'engineering', agentId: 'v2-agent' });
+    expect(String(reopenFollowUpBodies[0].briefContext || '')).not.toContain('item-b');
+    expect(webStore.followUpThread).toHaveLength(1);
+    expect(webStore.followUpThread[0].question).toBe('What changed in breaking update?');
+    expect(webStore.followUpThread[0].answer).toBe('Reopen pinned answer for item-c');
+
     // Restore original v1-only prop & fetch before remaining assertions
     globalThis.fetch = prevFetchFirst;
     await wrapper.setProps({

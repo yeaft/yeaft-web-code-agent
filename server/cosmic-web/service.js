@@ -637,20 +637,31 @@ export function createCosmicWebService({ fetcher = safeFetch, dnsLookup, now = D
       }
     }
 
-    // 3. Scheme-relative //host.tld/... URL (requires a dot in the authority host so prose '// comment' is untouched)
-    if (offset + 4 < len && c0 === 47 && str.charCodeAt(offset + 1) === 47 && prev !== 58 && prev !== 47) {
-      const h0 = str.charCodeAt(offset + 2);
-      if ((h0 >= 65 && h0 <= 90) || (h0 >= 97 && h0 <= 122) || (h0 >= 48 && h0 <= 57)) {
+    // 3. Scheme-relative //authority/... URL (supports IPv6, single-label hosts, userinfo & ports via WHATWG URL.canParse,
+    // while preserving prose comments like '// comment' or '//TODO').
+    if (offset + 3 < len && c0 === 47 && str.charCodeAt(offset + 1) === 47 && prev !== 58 && prev !== 47) {
+      const next = str[offset + 2];
+      if (next && !/[\s/<>"]/.test(next)) {
         let k = offset + 2;
-        let hasDot = false;
-        const maxHostEnd = Math.min(len, offset + 258);
-        while (k < maxHostEnd) {
-          const ch = str.charCodeAt(k);
-          if (ch === 46) { hasDot = true; k++; continue; }
-          if ((ch >= 65 && ch <= 90) || (ch >= 97 && ch <= 122) || (ch >= 48 && ch <= 57) || ch === 45 || ch === 58) { k++; continue; }
+        const maxScan = Math.min(len, offset + 512);
+        let openParens = 0, closeParens = 0, openBrackets = 0, closeBrackets = 0;
+        while (k < maxScan && !/[\s<>"]/.test(str[k])) {
+          const ch = str[k];
+          if (ch === '(') openParens++;
+          else if (ch === ')') closeParens++;
+          else if (ch === '[') openBrackets++;
+          else if (ch === ']') closeBrackets++;
+          k++;
+        }
+        while (k > offset + 2) {
+          const last = str[k - 1];
+          if (last === ')' && closeParens > openParens) { closeParens--; k--; continue; }
+          if (last === ']' && closeBrackets > openBrackets) { closeBrackets--; k--; continue; }
+          if (last === '\'' || last === '`' || last === '.' || last === ',' || last === ';' || last === '!' || last === '?') { k--; continue; }
           break;
         }
-        if (hasDot && k > offset + 4) return 2;
+        const candidate = str.slice(offset, k);
+        if (candidate.length > 2 && /[/?#:@.[]/.test(candidate.slice(2)) && URL.canParse(`https:${candidate}`)) return 2;
       }
     }
     return 0;

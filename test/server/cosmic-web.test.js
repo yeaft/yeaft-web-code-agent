@@ -1072,9 +1072,12 @@ describe('2.0 graph and AI contracts', () => {
     const unicodeSecretUrl = 'https://files.example/u0130.pdf?token=UNICODE_DRIFT_SECRET';
     const wwwSecretUrl = 'www.private.example/sheet(1).pdf?token=WWW_SECRET';
     const schemeRelSecretUrl = '//cdn.private.example/att(1).png?token=SCHEME_REL_SECRET';
+    const ipv6RelSecretUrl = '(//[2001:db8::1]/vault/a.pdf?token=IPV6_REL_SECRET)';
+    const singleHostRelSecretUrl = '//intranet/files/doc.pdf?token=SINGLE_HOST_SECRET';
+    const userinfoRelSecretUrl = '//user:pass@intranet:8080/doc?token=USERINFO_REL_SECRET';
     const privItemWithImg = {
       ...item('Private img note', 'https://private.example/img-note'),
-      summaryExcerpt: `${unicodePad} Private brief note with ${excerptSecretUrl}, ${unicodeSecretUrl}, ${wwwSecretUrl}, and ${schemeRelSecretUrl} inside.`,
+      summaryExcerpt: `${unicodePad} Private brief note with ${excerptSecretUrl}, ${unicodeSecretUrl}, ${wwwSecretUrl}, ${schemeRelSecretUrl}, ${ipv6RelSecretUrl}, ${singleHostRelSecretUrl}, and ${userinfoRelSecretUrl} inside.`,
       media: [{ url: secretMediaUrl, kind: 'image' }],
     };
     ingestCosmicWebItems(source('rss-priv-img', 'custom-sports', 'alice'), [privItemWithImg], NOW);
@@ -1086,13 +1089,13 @@ describe('2.0 graph and AI contracts', () => {
     const privDet = await svc.cluster('alice', privNode.clusterId);
     expect(privDet.media).toEqual([]);
     expect(JSON.stringify(privDet)).not.toContain(secretMediaUrl);
-    // Round 6/7/8/9 Blocker #1: test REAL extractCleanArticle -> aiBrief path with angle-delimited (<...>) unmatched ')', bare apostrophe, U+0130-preceded, bare www., and scheme-relative //host URLs
+    // Round 6/7/8/9/10 Blocker #1: test REAL extractCleanArticle -> aiBrief path with angle-delimited (<...>) unmatched ')', bare apostrophe, U+0130-preceded, bare www., and IPv6/single-label/userinfo scheme-relative //authority URLs
     const privItemId = privDet.items[0].id;
     const angleParenUrl = 'https://files.example/report)v2.pdf?token=ANGLE_PAREN_SECRET';
     const parenSecretUrl = 'https://files.example/chart(v2).png?token=PRIVATE_SENTINEL';
     const aposSecretUrl = "https://files.example/team's-deck.pdf?token=APOS_SECRET";
     const extractedPrivate = extractCleanArticle(
-      `<article><h1>Private Memo</h1><p>${unicodePad} Quarterly notes // keep prose comment, <a href="${angleParenUrl}">Attachment</a>, bare ${parenSecretUrl}, (${parenSecretUrl}), ${aposSecretUrl}, ${unicodeSecretUrl}, ${wwwSecretUrl}, and ${schemeRelSecretUrl}.</p></article>`,
+      `<article><h1>Private Memo</h1><p>${unicodePad} Quarterly notes // keep prose comment, <a href="${angleParenUrl}">Attachment</a>, bare ${parenSecretUrl}, (${parenSecretUrl}), ${aposSecretUrl}, ${unicodeSecretUrl}, ${wwwSecretUrl}, ${schemeRelSecretUrl}, ${ipv6RelSecretUrl}, ${singleHostRelSecretUrl}, and ${userinfoRelSecretUrl}.</p></article>`,
       'https://private.example/img-note',
       'Private img note',
     );
@@ -1111,10 +1114,13 @@ describe('2.0 graph and AI contracts', () => {
     expect(privBriefJson).not.toContain('UNICODE_DRIFT_SECRET');
     expect(privBriefJson).not.toContain('WWW_SECRET');
     expect(privBriefJson).not.toContain('SCHEME_REL_SECRET');
+    expect(privBriefJson).not.toContain('IPV6_REL_SECRET');
+    expect(privBriefJson).not.toContain('SINGLE_HOST_SECRET');
+    expect(privBriefJson).not.toContain('USERINFO_REL_SECRET');
     expect(privBriefJson).not.toContain('EXCERPT_SECRET');
     expect(requestAi.mock.lastCall[0].payload.articleMarkdown).toContain('Attachment');
     expect(requestAi.mock.lastCall[0].payload.articleMarkdown).toContain('// keep prose comment');
-    // Round 6/7/8/9: followUp redacts apostrophe-bearing, U+0130-preceded, bare www., and scheme-relative //host sentinels in summaryExcerpt
+    // Round 6/7/8/9/10: followUp redacts apostrophe-bearing, U+0130-preceded, bare www., and IPv6/single-label/userinfo scheme-relative sentinels in summaryExcerpt
     await svc.followUp('alice', 'user', privNode.clusterId, { question: 'Any updates?', research: true });
     const privFuJson = JSON.stringify(requestAi.mock.lastCall[0].payload);
     expect(privFuJson).not.toContain(secretMediaUrl);
@@ -1122,6 +1128,9 @@ describe('2.0 graph and AI contracts', () => {
     expect(privFuJson).not.toContain('UNICODE_DRIFT_SECRET');
     expect(privFuJson).not.toContain('WWW_SECRET');
     expect(privFuJson).not.toContain('SCHEME_REL_SECRET');
+    expect(privFuJson).not.toContain('IPV6_REL_SECRET');
+    expect(privFuJson).not.toContain('SINGLE_HOST_SECRET');
+    expect(privFuJson).not.toContain('USERINFO_REL_SECRET');
 
     // CW2-05 & Round 3 Blocker #1: legacy v1 Agent (no cosmic_web_cancel) retains remote slot accounting after caller abort,
     // defers subsequent requests, AND hands off freed slots when awakened waiters hit the rate boundary (never hanging).

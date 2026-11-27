@@ -46,9 +46,13 @@ function savePersistedDrawerWidth(val) {
 let storeGeneration = 0;
 let pulseSeq = 0;
 let bandSessionSeq = 0;
+let readerSessionToken = 0;
+let deferredBriefSeq = 0;
+let deferredFollowUpSeq = 0;
+let deferredArticleSeq = 0;
 let bootstrapInflight = null;
 let feedRetryInflight = null;
-let activeDetailInflight = null;
+let activeReaderReconcile = null;
 let autoBriefTimer = null;
 const channelControllers = new Map();
 const channelSeq = new Map();
@@ -563,6 +567,7 @@ export const useCosmicWebStore = defineStore('cosmicWeb', {
         ? null
         : (this.resolvedSourceItemId || this.aiBriefSourceItemId || this.activeArticleItemId || this.activeClusterDetail?.items?.[0]?.id || null);
       if (isNewCluster || isSourceChange) {
+        readerSessionToken += 1;
         if (isNewCluster) this.activeClusterDetail = null;
         this.articleData = null;
         this.articleError = null;
@@ -585,72 +590,101 @@ export const useCosmicWebStore = defineStore('cosmicWeb', {
       // Mark read optimistically
       this.markRead(clusterId, true);
 
-      // Load instant DB detail first; kick off non-blocking community enrichment and
-      // (debounced when navigating rapidly) AI report without blocking openClusterReader.
+      // Reconcile fresh detail + repin + stale invalidation as a single barrier (activeReaderReconcile)
+      // so implicit-source UI actions (perspective switches, follow-ups, clean article) during EITHER first-open
+      // OR same-cluster reopen defer cleanly until repin & stale invalidation complete.
       let capturedRev = this.sourceSelectionRev;
       const capturedGen = storeGeneration;
-      await this.loadClusterDetail(clusterId);
+      const reconcileEntry = {
+        clusterId,
+        gen: capturedGen,
+        session: readerSessionToken,
+        promise: null,
+        hasDeferredBrief: false,
+        hasDeferredFollowUp: false,
+        hasDeferredArticle: false,
+      };
+      const reconcileTask = (async () => {
+        await this.loadClusterDetail(clusterId);
 
-      if (
-        capturedGen !== storeGeneration
-        || !this.readerOpen
-        || this.readerClusterId !== clusterId
-        || this.sourceSelectionRev !== capturedRev
-      ) {
-        return;
+        if (
+          capturedGen !== storeGeneration
+          || !this.readerOpen
+          || this.readerClusterId !== clusterId
+          || this.sourceSelectionRev !== capturedRev
+        ) {
+          return { ok: false };
+        }
+
+        const detail = this.activeClusterDetail;
+        // Always re-resolve URL-only selections against fresh detail items so stale IDs from prior cache cannot linger.
+        if (isUrlOnlySelection && this.activeArticleUrl && Array.isArray(detail?.items)) {
+          const matched = detail.items.find((it) => it && it.url === this.activeArticleUrl);
+          const freshId = matched?.id || null;
+          if (freshId !== this.activeArticleItemId) {
+            this.activeArticleItemId = freshId;
+            this.readerItemId = freshId;
+          }
+        }
+        // Pin the concrete resolved item ID separate from user selection intent (default vs explicit item vs URL).
+        // Whenever the resolved pin changes — OR any unpinned request ran while detail was still loading —
+        // invalidate stale channels and clear stale data before deferred explicit actions wake up.
+        const freshEffectiveSourceId = this.activeArticleItemId || (!isUrlOnlySelection ? (detail?.items?.[0]?.id || null) : null);
+        this.resolvedSourceItemId = freshEffectiveSourceId;
+        const pinChanged = Boolean(prevEffectiveSourceId && freshEffectiveSourceId !== prevEffectiveSourceId);
+        const hadUnpinnedWork = Boolean(this.unpinnedSourceWork && freshEffectiveSourceId);
+        const retainedArticleDrift = Boolean(
+          this.articleData?.itemId
+          && freshEffectiveSourceId
+          && this.articleData.itemId !== freshEffectiveSourceId,
+        );
+        let restartCleanArticle = false;
+        if (pinChanged || hadUnpinnedWork || retainedArticleDrift) {
+          this.unpinnedSourceWork = false;
+          this.sourceSelectionRev += 1;
+          capturedRev = this.sourceSelectionRev;
+          invalidateChannel('article');
+          invalidateChannel('aiBrief');
+          invalidateChannel('followUp');
+          this.articleData = null;
+          this.articleError = null;
+          if (!reconcileEntry.hasDeferredArticle) this.articleLoading = false;
+          this.aiBriefData = null;
+          this.aiBriefSourceItemId = null;
+          this.aiBriefError = null;
+          if (!reconcileEntry.hasDeferredBrief) this.aiBriefLoading = false;
+          this.followUpThread = [];
+          this.followUpError = null;
+          if (!reconcileEntry.hasDeferredFollowUp) this.followUpLoading = false;
+          if (this.cleanArticleOpen && !reconcileEntry.hasDeferredArticle) {
+            restartCleanArticle = true;
+          }
+        }
+        return { ok: true, detail, capturedRev, restartCleanArticle };
+      })().finally(() => {
+        if (activeReaderReconcile === reconcileEntry) {
+          activeReaderReconcile = null;
+        }
+      });
+      reconcileEntry.promise = reconcileTask;
+      activeReaderReconcile = reconcileEntry;
+
+      const reconciled = await reconcileTask;
+      if (!reconciled?.ok) return;
+      const { detail } = reconciled;
+      capturedRev = reconciled.capturedRev;
+      if (reconciled.restartCleanArticle && this.cleanArticleOpen && !reconcileEntry.hasDeferredArticle) {
+        void this.loadArticle(clusterId, {
+          itemId: this.activeArticleItemId || this.resolvedSourceItemId || undefined,
+          url: this.activeArticleUrl || undefined,
+        });
       }
 
-      const detail = this.activeClusterDetail;
-      // Always re-resolve URL-only selections against fresh detail items so stale IDs from prior cache cannot linger.
-      if (isUrlOnlySelection && this.activeArticleUrl && Array.isArray(detail?.items)) {
-        const matched = detail.items.find((it) => it && it.url === this.activeArticleUrl);
-        const freshId = matched?.id || null;
-        if (freshId !== this.activeArticleItemId) {
-          this.activeArticleItemId = freshId;
-          this.readerItemId = freshId;
-        }
-      }
-      // Pin the concrete resolved item ID separate from user selection intent (default vs explicit item vs URL).
-      // Whenever the resolved pin changes — OR any unpinned request ran while detail was still loading —
-      // invalidate all source-scoped channels and restart any open Clean Article panel for the authoritative pin.
-      const freshEffectiveSourceId = this.activeArticleItemId || (!isUrlOnlySelection ? (detail?.items?.[0]?.id || null) : null);
-      this.resolvedSourceItemId = freshEffectiveSourceId;
-      const pinChanged = Boolean(prevEffectiveSourceId && freshEffectiveSourceId !== prevEffectiveSourceId);
-      const hadUnpinnedWork = Boolean(this.unpinnedSourceWork && freshEffectiveSourceId);
-      const retainedArticleDrift = Boolean(
-        this.articleData?.itemId
-        && freshEffectiveSourceId
-        && this.articleData.itemId !== freshEffectiveSourceId,
-      );
-      if (pinChanged || hadUnpinnedWork || retainedArticleDrift) {
-        this.unpinnedSourceWork = false;
-        this.sourceSelectionRev += 1;
-        capturedRev = this.sourceSelectionRev;
-        invalidateChannel('article');
-        invalidateChannel('aiBrief');
-        invalidateChannel('followUp');
-        this.articleData = null;
-        this.articleError = null;
-        this.articleLoading = false;
-        this.aiBriefData = null;
-        this.aiBriefSourceItemId = null;
-        this.aiBriefError = null;
-        this.aiBriefLoading = false;
-        this.followUpThread = [];
-        this.followUpError = null;
-        this.followUpLoading = false;
-        if (this.cleanArticleOpen) {
-          void this.loadArticle(clusterId, {
-            itemId: this.activeArticleItemId || this.resolvedSourceItemId || undefined,
-            url: this.activeArticleUrl || undefined,
-          });
-        }
-      }
       if (!detail?.isPrivateSource && !(Array.isArray(detail?.communityComments) && detail.communityComments.length)) {
         void this.loadClusterCommunity(clusterId, capturedRev);
       }
 
-      if (!this.aiBriefData && !this.aiBriefLoading) {
+      if (!this.aiBriefData && !this.aiBriefLoading && !reconcileEntry.hasDeferredBrief) {
         const allowResearch = !detail?.isPrivateSource;
         const triggerBrief = () => {
           autoBriefTimer = null;
@@ -661,6 +695,7 @@ export const useCosmicWebStore = defineStore('cosmicWeb', {
             || this.sourceSelectionRev !== capturedRev
             || this.aiBriefData
             || this.aiBriefLoading
+            || reconcileEntry.hasDeferredBrief
           ) return;
           void this.generateAiBrief(clusterId, {
             research: allowResearch,
@@ -710,7 +745,7 @@ export const useCosmicWebStore = defineStore('cosmicWeb', {
       this.cleanArticleOpen = true;
       if (!this.articleData || force) {
         await this.loadArticle(clusterId, {
-          itemId: this.activeArticleItemId || this.resolvedSourceItemId || undefined,
+          itemId: this.activeArticleItemId || undefined,
           url: this.activeArticleUrl || undefined,
           force,
         });
@@ -720,6 +755,7 @@ export const useCosmicWebStore = defineStore('cosmicWeb', {
     async selectArticleSource(clusterId, { itemId = null, url = null, perspective = null, agentId = null } = {}) {
       if (!clusterId) return;
       clearAutoBriefTimer();
+      readerSessionToken += 1;
       this.sourceSelectionRev += 1;
       const nextUrl = url || null;
       const matched = !itemId && nextUrl && Array.isArray(this.activeClusterDetail?.items)
@@ -765,6 +801,7 @@ export const useCosmicWebStore = defineStore('cosmicWeb', {
 
     closeClusterReader() {
       clearAutoBriefTimer();
+      readerSessionToken += 1;
       this.sourceSelectionRev += 1;
       invalidateChannel('detail');
       invalidateChannel('community');
@@ -788,7 +825,7 @@ export const useCosmicWebStore = defineStore('cosmicWeb', {
       this.resolvedSourceItemId = null;
       this.unpinnedSourceWork = false;
       this.aiBriefSourceItemId = null;
-      activeDetailInflight = null;
+      activeReaderReconcile = null;
     },
 
     async loadClusterDetail(clusterId) {
@@ -796,50 +833,42 @@ export const useCosmicWebStore = defineStore('cosmicWeb', {
       const { controller, seq, gen } = nextChannelRequest('detail');
       const capturedSourceRev = this.sourceSelectionRev;
       this.detailLoading = true;
-      const task = (async () => {
-        try {
-          const data = await apiJson(`/api/cosmic-web/clusters/${encodeURIComponent(clusterId)}`, {
-            signal: controller.signal,
-          });
-          if (isStaleRequest('detail', seq, gen) || !this.readerOpen || this.readerClusterId !== clusterId) return;
-          const clusterObj = data.cluster || data;
-          this.activeClusterDetail = clusterObj;
-          // Establish the authoritative source pin BEFORE resolving activeDetailInflight so deferred
-          // user actions (perspective switches, follow-ups, clean article) wake up with the exact pin.
-          if (this.sourceSelectionRev === capturedSourceRev) {
-            if (this.readerSelectionMode === 'url' && this.activeArticleUrl && Array.isArray(clusterObj?.items)) {
-              const matched = clusterObj.items.find((it) => it && it.url === this.activeArticleUrl);
-              const freshId = matched?.id || null;
-              this.activeArticleItemId = freshId;
-              this.readerItemId = freshId;
-              this.resolvedSourceItemId = freshId;
-            } else if (this.readerSelectionMode === 'item') {
-              this.resolvedSourceItemId = this.activeArticleItemId || null;
-            } else {
-              this.resolvedSourceItemId = clusterObj?.items?.[0]?.id || null;
-            }
-          }
-          if (data.aiBrief && !this.aiBriefData && !this.aiBriefLoading && this.sourceSelectionRev === capturedSourceRev) {
-            this.aiBriefData = data.aiBrief;
-            this.aiBriefSourceItemId = clusterObj?.items?.[0]?.id || null;
-          }
-        } catch (err) {
-          if (isAbortError(err) || isStaleRequest('detail', seq, gen)) return;
-        } finally {
-          if (!isStaleRequest('detail', seq, gen)) {
-            this.detailLoading = false;
-          }
-          if (activeDetailInflight && activeDetailInflight.promise === task) {
-            activeDetailInflight = null;
-          }
+      try {
+        const data = await apiJson(`/api/cosmic-web/clusters/${encodeURIComponent(clusterId)}`, {
+          signal: controller.signal,
+        });
+        if (isStaleRequest('detail', seq, gen) || !this.readerOpen || this.readerClusterId !== clusterId) return;
+        const clusterObj = data.cluster || data;
+        this.activeClusterDetail = clusterObj;
+        if (data.aiBrief && !this.aiBriefData && !this.aiBriefLoading && this.sourceSelectionRev === capturedSourceRev) {
+          this.aiBriefData = data.aiBrief;
+          this.aiBriefSourceItemId = clusterObj?.items?.[0]?.id || null;
         }
-      })();
-      activeDetailInflight = { clusterId, promise: task, gen };
-      return task;
+      } catch (err) {
+        if (isAbortError(err) || isStaleRequest('detail', seq, gen)) return;
+      } finally {
+        if (!isStaleRequest('detail', seq, gen)) {
+          this.detailLoading = false;
+        }
+      }
     },
 
     async loadArticle(clusterId, { force = false, url = null, itemId = null } = {}) {
       if (!clusterId) return;
+      // Defer implicit-source Clean Article requests during first-open OR same-cluster reopen until repin & stale invalidation finish.
+      if (!itemId && activeReaderReconcile && activeReaderReconcile.clusterId === clusterId && activeReaderReconcile.gen === storeGeneration) {
+        const myGen = storeGeneration;
+        const mySession = readerSessionToken;
+        const mySeq = ++deferredArticleSeq;
+        activeReaderReconcile.hasDeferredArticle = true;
+        this.articleLoading = true;
+        this.articleError = null;
+        await activeReaderReconcile.promise;
+        if (myGen !== storeGeneration || mySession !== readerSessionToken || mySeq !== deferredArticleSeq
+          || !this.readerOpen || this.readerClusterId !== clusterId) {
+          return;
+        }
+      }
       const { controller, seq, gen } = nextChannelRequest('article');
       const capturedSourceRev = this.sourceSelectionRev;
       const isCurrentSource = () => (
@@ -851,12 +880,6 @@ export const useCosmicWebStore = defineStore('cosmicWeb', {
       this.articleLoading = true;
       this.articleError = null;
       try {
-        // Defer until in-flight first-open detail establishes the authoritative source pin.
-        if (!itemId && !this.activeArticleItemId && !this.resolvedSourceItemId
-          && activeDetailInflight && activeDetailInflight.clusterId === clusterId && activeDetailInflight.gen === gen) {
-          await activeDetailInflight.promise;
-          if (!isCurrentSource()) return;
-        }
         // Pin to the same resolved item ID as brief/follow-up without mutating explicit selection intent.
         const effectiveItemId = itemId || this.activeArticleItemId || this.resolvedSourceItemId || null;
         const effectiveUrl = effectiveItemId ? null : (url || this.activeArticleUrl || null);
@@ -892,6 +915,21 @@ export const useCosmicWebStore = defineStore('cosmicWeb', {
 
     async generateAiBrief(clusterId, { mode = 'brief', agentId = null, perspective = null, force = false, itemId = null, url = null, research = true } = {}) {
       if (!clusterId) return;
+      // Defer implicit-source brief generation (e.g. perspective/Agent switch during first-open OR same-cluster reopen)
+      // until repin & stale invalidation finish, preserving the user's exact perspective and Agent selection.
+      if (!itemId && activeReaderReconcile && activeReaderReconcile.clusterId === clusterId && activeReaderReconcile.gen === storeGeneration) {
+        const myGen = storeGeneration;
+        const mySession = readerSessionToken;
+        const mySeq = ++deferredBriefSeq;
+        activeReaderReconcile.hasDeferredBrief = true;
+        this.aiBriefLoading = true;
+        this.aiBriefError = null;
+        await activeReaderReconcile.promise;
+        if (myGen !== storeGeneration || mySession !== readerSessionToken || mySeq !== deferredBriefSeq
+          || !this.readerOpen || this.readerClusterId !== clusterId) {
+          return;
+        }
+      }
       const { controller, seq, gen } = nextChannelRequest('aiBrief');
       const capturedSourceRev = this.sourceSelectionRev;
       const isCurrentSource = () => (
@@ -903,13 +941,6 @@ export const useCosmicWebStore = defineStore('cosmicWeb', {
       this.aiBriefLoading = true;
       this.aiBriefError = null;
       try {
-        // Defer explicit brief generation (e.g. user switches perspective or Agent during slow first-open detail load)
-        // until detail pins the source item ID, preserving the user's exact perspective and Agent choice!
-        if (!itemId && !this.activeArticleItemId && !this.resolvedSourceItemId
-          && activeDetailInflight && activeDetailInflight.clusterId === clusterId && activeDetailInflight.gen === gen) {
-          await activeDetailInflight.promise;
-          if (!isCurrentSource()) return;
-        }
         const effectiveUrl = url || this.activeArticleUrl || undefined;
         const matchedByUrl = !itemId && !this.activeArticleItemId && !this.readerItemId && !this.resolvedSourceItemId && effectiveUrl
           && Array.isArray(this.activeClusterDetail?.items)
@@ -955,6 +986,21 @@ export const useCosmicWebStore = defineStore('cosmicWeb', {
     async askFollowUp(clusterId, question, { agentId = null, perspective = null, itemId = null, url = null } = {}) {
       const q = String(question || '').trim();
       if (!clusterId || !q) return null;
+      // Defer implicit-source follow-ups during first-open OR same-cluster reopen until repin & stale invalidation finish
+      // so submitted user questions never vanish and never carry stale briefContext from a replaced source!
+      if (!itemId && activeReaderReconcile && activeReaderReconcile.clusterId === clusterId && activeReaderReconcile.gen === storeGeneration) {
+        const myGen = storeGeneration;
+        const mySession = readerSessionToken;
+        const mySeq = ++deferredFollowUpSeq;
+        activeReaderReconcile.hasDeferredFollowUp = true;
+        this.followUpLoading = true;
+        this.followUpError = null;
+        await activeReaderReconcile.promise;
+        if (myGen !== storeGeneration || mySession !== readerSessionToken || mySeq !== deferredFollowUpSeq
+          || !this.readerOpen || this.readerClusterId !== clusterId) {
+          return null;
+        }
+      }
       const { controller, seq, gen } = nextChannelRequest('followUp');
       const capturedSourceRev = this.sourceSelectionRev;
       const isCurrent = () => (
@@ -966,12 +1012,6 @@ export const useCosmicWebStore = defineStore('cosmicWeb', {
       this.followUpLoading = true;
       this.followUpError = null;
       try {
-        // Defer submitted follow-ups until first-open detail establishes the source pin so user questions never vanish!
-        if (!itemId && !this.activeArticleItemId && !this.resolvedSourceItemId
-          && activeDetailInflight && activeDetailInflight.clusterId === clusterId && activeDetailInflight.gen === gen) {
-          await activeDetailInflight.promise;
-          if (!isCurrent()) return null;
-        }
         const effectiveUrl = url || this.activeArticleUrl || undefined;
         const matchedByUrl = !itemId && !this.activeArticleItemId && !this.readerItemId && !this.resolvedSourceItemId && effectiveUrl
           && Array.isArray(this.activeClusterDetail?.items)
@@ -1351,9 +1391,10 @@ export const useCosmicWebStore = defineStore('cosmicWeb', {
       bandSessionSeq += 1;
       this.sourceSelectionRev += 1;
       this.activeInWebBand = false;
+      readerSessionToken += 1;
       bootstrapInflight = null;
       feedRetryInflight = null;
-      activeDetailInflight = null;
+      activeReaderReconcile = null;
       abortAllChannels();
       this.loading = false;
       this.refreshing = false;
@@ -1385,9 +1426,10 @@ export const useCosmicWebStore = defineStore('cosmicWeb', {
       clearAutoBriefTimer();
       storeGeneration += 1;
       bandSessionSeq += 1;
+      readerSessionToken += 1;
       bootstrapInflight = null;
       feedRetryInflight = null;
-      activeDetailInflight = null;
+      activeReaderReconcile = null;
       abortAllChannels();
       channelSeq.clear();
       this.$reset();

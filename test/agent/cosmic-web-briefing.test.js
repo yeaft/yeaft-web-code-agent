@@ -607,8 +607,8 @@ describe('Cosmic Web bounded research', () => {
       payload: {
         isPrivateSource: true,
         headline: 'Private memo',
-        summaryExcerpt: `${unicodePad} Summary with https://private.example/secret-exc.png, www.private.example/s.pdf?token=WWW_EXC_SECRET, //cdn.private.example/e.png?token=REL_EXC_SECRET, https://files.example/o'brien(v2).png?token=PRIVATE_SENTINEL and https://files.example/u0130.pdf?token=UNICODE_DRIFT_SECRET inside.`,
-        articleMarkdown: `${unicodePad} Body // prose comment with [![Chart](https://private.example/secret-fig.png)](https://private.example/secret-fig.png), [Attachment](<https://files.example/report)v2.pdf?token=ANGLE_PAREN_SECRET>), [doc](https://private.example/secret-md.png), https://files.example/team's-plan.pdf?token=APOS_SECRET, (https://files.example/doc(final).png?token=PRIVATE_SENTINEL_2), www.private.example/doc(v1).pdf?token=WWW_MD_SECRET, //cdn.private.example/fig.png?token=REL_MD_SECRET, and https://files.example/tail.pdf?token=UNICODE_TAIL_SECRET`,
+        summaryExcerpt: `${unicodePad} Summary with https://private.example/secret-exc.png, www.private.example/s.pdf?token=WWW_EXC_SECRET, //cdn.private.example/e.png?token=REL_EXC_SECRET, //[2001:db8::1]/x?token=IPV6_EXC_SECRET, //intranet/doc?token=HOST_EXC_SECRET, //u:p@intranet:8080/a?token=USERINFO_EXC_SECRET, https://files.example/o'brien(v2).png?token=PRIVATE_SENTINEL and https://files.example/u0130.pdf?token=UNICODE_DRIFT_SECRET inside.`,
+        articleMarkdown: `${unicodePad} Body // prose comment with [![Chart](https://private.example/secret-fig.png)](https://private.example/secret-fig.png), [Attachment](<https://files.example/report)v2.pdf?token=ANGLE_PAREN_SECRET>), [doc](https://private.example/secret-md.png), https://files.example/team's-plan.pdf?token=APOS_SECRET, (https://files.example/doc(final).png?token=PRIVATE_SENTINEL_2), www.private.example/doc(v1).pdf?token=WWW_MD_SECRET, //cdn.private.example/fig.png?token=REL_MD_SECRET, (//[2001:db8::1]/f?token=IPV6_MD_SECRET), //intranet/p?token=HOST_MD_SECRET, //user:pw@intranet/q?token=USERINFO_MD_SECRET, and https://files.example/tail.pdf?token=UNICODE_TAIL_SECRET`,
         media: [{ url: 'https://private.example/secret-top.png', kind: 'image' }],
         sources: [{ title: 'Memo', url: 'https://private.example/memo', summaryExcerpt: 'Source https://private.example/secret-src-exc.png', media: [{ url: 'https://private.example/secret-source.png', kind: 'image' }] }],
       },
@@ -629,6 +629,12 @@ describe('Cosmic Web bounded research', () => {
     expect(sentPrompt).not.toContain('REL_EXC_SECRET');
     expect(sentPrompt).not.toContain('WWW_MD_SECRET');
     expect(sentPrompt).not.toContain('REL_MD_SECRET');
+    expect(sentPrompt).not.toContain('IPV6_EXC_SECRET');
+    expect(sentPrompt).not.toContain('HOST_EXC_SECRET');
+    expect(sentPrompt).not.toContain('USERINFO_EXC_SECRET');
+    expect(sentPrompt).not.toContain('IPV6_MD_SECRET');
+    expect(sentPrompt).not.toContain('HOST_MD_SECRET');
+    expect(sentPrompt).not.toContain('USERINFO_MD_SECRET');
     expect(sentPrompt).toContain('// prose comment');
   });
 });
