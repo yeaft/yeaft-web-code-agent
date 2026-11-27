@@ -622,10 +622,13 @@ export default {
       return null;
     });
     const waitingAgent = Vue.computed(() => projectedAgentList.value.find((a) => a.status === 'waiting') || null);
+    const isDrawerConversationCovered = Vue.computed(() => (
+      !(drawerOpen.value && currentBand.value === 'solar')
+      || Boolean(store.workbenchExpanded)
+      || Boolean(settingsModal.open || agentSettingsModal.open || sessionSettingsModal.open)
+    ));
     const activeDrawerSessionKey = Vue.computed(() => {
-      if (!drawerOpen.value
-        || currentBand.value !== 'solar'
-        || store.workbenchExpanded
+      if (isDrawerConversationCovered.value
         || !drawerAgentId.value
         || store.currentView !== 'yeaft'
         || store.currentAgent !== drawerAgentId.value) return '';
@@ -1173,15 +1176,29 @@ export default {
       }
     }
 
+    function hasProjectedOrKnownSession(agentId, session) {
+      const ag = agentId ? projectedAgentsMap.value[agentId] : null;
+      if (!ag) return false;
+      if (!session?.id) return false;
+      if (session.descriptor) return true;
+      if (ag.sessions?.some((s) => s.id === session.id)) return true;
+      if (typeof store.hasKnownYeaftSession === 'function' && store.hasKnownYeaftSession(session.id, agentId)) return true;
+      if (sessionsStore?.sessionById?.(session.id, agentId)) return true;
+      return false;
+    }
+
     function onOpenSignal(item) {
       if (!item?.agentId) return;
-      if (!projectedAgentsMap.value[item.agentId]) {
-        signalPopoverOpen.value = false;
+      const targetSession = item.session || { id: item.sessionId, runtimeProvider: 'yeaft' };
+      if (!projectedAgentsMap.value[item.agentId] || !hasProjectedOrKnownSession(item.agentId, targetSession)) {
+        closeSignalPopover({ restoreFocus: true });
         onDismissSignal(item);
-        showToast($t('cosmos.signals.agentUnavailable'));
+        showToast($t(!projectedAgentsMap.value[item.agentId]
+          ? 'cosmos.signals.agentUnavailable'
+          : 'cosmos.signals.sessionUnavailable'));
         return;
       }
-      openSessionInDrawer(item.agentId, item.session || { id: item.sessionId, runtimeProvider: 'yeaft' });
+      openSessionInDrawer(item.agentId, targetSession);
     }
 
     function onDismissSignal(item) {
@@ -1203,7 +1220,7 @@ export default {
         }
       }
       if (signalPopoverOpen.value && signalStream.value.waitingCount === 0 && signalStream.value.runningCount === 0) {
-        signalPopoverOpen.value = false;
+        closeSignalPopover({ restoreFocus: true });
       }
     }
 
@@ -1677,9 +1694,7 @@ export default {
     }
 
     Vue.watch(
-      () => !(drawerOpen.value && currentBand.value === 'solar')
-        || Boolean(store.workbenchExpanded)
-        || Boolean(settingsModal.open || agentSettingsModal.open || sessionSettingsModal.open),
+      isDrawerConversationCovered,
       (covered) => {
         store.yeaftConversationCovered = covered;
       },

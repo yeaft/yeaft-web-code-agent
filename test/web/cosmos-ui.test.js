@@ -3020,6 +3020,7 @@ describe('Cosmos Interstellar Signal Stream (Unified Top-Right Replies, Schedule
     const {
       recordYeaftSessionReplyPreview,
       clearYeaftSessionReplyPreview,
+      clearYeaftAgentAskPreviews,
       extractLatestAssistantPreview,
     } = await import('../../web/stores/helpers/yeaft-reply-preview.js');
     const { buildCosmosSignalStream } = await import('../../web/cosmos/signal-stream.js');
@@ -3076,6 +3077,14 @@ describe('Cosmos Interstellar Signal Stream (Unified Top-Right Replies, Schedule
     })).toBe(true);
     expect(previewStore.yeaftSessionReplyPreviewByKey['yeaft:ag-1:s1'].askQuestion).toBe('');
     expect(previewStore.yeaftSessionReplyPreviewByKey['yeaft:ag-1:s1'].text).toBe('Status All 3 clusters healthy (v1.0.799).');
+
+    // clearYeaftAgentAskPreviews parses colon-containing Agent IDs strictly via lastIndexOf(':')
+    recordYeaftSessionReplyPreview(previewStore, { catalogKey: 'yeaft:owner:s1', askQuestion: 'Owner ask?', askRequestId: 'a1' });
+    recordYeaftSessionReplyPreview(previewStore, { catalogKey: 'yeaft:owner:ag-1:s1', askQuestion: 'Scoped ask?', askRequestId: 'a2' });
+    expect(clearYeaftAgentAskPreviews(previewStore, 'owner')).toBe(true);
+    expect(previewStore.yeaftSessionReplyPreviewByKey['yeaft:owner:s1']).toBeUndefined();
+    expect(previewStore.yeaftSessionReplyPreviewByKey['yeaft:owner:ag-1:s1']?.askQuestion).toBe('Scoped ask?');
+
     clearYeaftSessionReplyPreview(previewStore, 'yeaft:ag-1:s1');
     expect(previewStore.yeaftSessionReplyPreviewByKey['yeaft:ag-1:s1']).toBeUndefined();
 
@@ -3330,10 +3339,13 @@ describe('Cosmos Interstellar Signal Stream (Unified Top-Right Replies, Schedule
     expect(wrapper.find('.cosmos-signal-popover.is-drawer-docked').exists()).toBe(true);
     expect(wrapper.findAll('.cosmos-signal-popover .cosmos-signal-card')).toHaveLength(4);
 
-    // 3. Mobile compact renders single arrival micro-banner instead of floating stack and supports banner close
+    // 3. Mobile compact renders single arrival micro-banner instead of floating stack (without duplicate aria-live)
     await wrapper.setProps({ drawerOpen: false, isCompact: true, popoverOpen: false });
     expect(wrapper.find('.cosmos-signal-stream').exists()).toBe(false);
-    expect(wrapper.find('.cosmos-signal-mobile-banner').exists()).toBe(true);
+    const mobileBanner = wrapper.find('.cosmos-signal-mobile-banner');
+    expect(mobileBanner.exists()).toBe(true);
+    expect(mobileBanner.attributes('aria-live')).toBeUndefined();
+    expect(mobileBanner.attributes('role')).toBeUndefined();
     await wrapper.find('.cosmos-signal-banner-close').trigger('click');
     expect(wrapper.find('.cosmos-signal-mobile-banner').exists()).toBe(false);
     wrapper.unmount();
@@ -3413,7 +3425,8 @@ describe('Cosmos Interstellar Signal Stream (Unified Top-Right Replies, Schedule
     expect(pageStore.yeaftConversationCovered).toBe(false);
     expect(ackSpy).toHaveBeenCalledWith('sess-1', 'ag-1', { sessionRead: true });
 
-    // Opening an orphan signal for an unknown/offline Agent must NOT open a ghost drawer
+    // Opening an orphan signal for an unknown/offline Agent OR a deleted/uncataloged session on an online Agent
+    // must NOT open a ghost drawer and must acknowledge with sessionRead:false (exact run receipt only)
     wrapper.vm.closeDrawer();
     await flushPromises();
     ackSpy.mockClear();
@@ -3422,13 +3435,24 @@ describe('Cosmos Interstellar Signal Stream (Unified Top-Right Replies, Schedule
     expect(wrapper.vm.drawerOpen).toBe(false);
     expect(ackSpy).toHaveBeenCalledWith('s-ghost', 'ghost-agent', { sessionRead: false });
 
-    // Re-open drawer, test modal cover sync, signal trigger popover toggle & Escape focus restore
+    ackSpy.mockClear();
+    wrapper.vm.onOpenSignal({ agentId: 'ag-1', sessionId: 'sess-deleted-online', scheduledTask: { id: 't-del' } });
+    await flushPromises();
+    expect(wrapper.vm.drawerOpen).toBe(false);
+    expect(ackSpy).toHaveBeenCalledWith('sess-deleted-online', 'ag-1', { sessionRead: false });
+
+    // Re-open drawer, test modal cover sync: closing settingsModal over an open drawer re-arms activeDrawerSessionKey
+    // and acknowledges signals (sessionRead:true) on the revealed session!
     wrapper.vm.openSessionInDrawer('ag-1', { id: 'sess-1', runtimeProvider: 'yeaft' });
     await flushPromises();
+    ackSpy.mockClear();
     wrapper.vm.openYeaftSettings({ tab: 'general' });
+    await flushPromises();
     expect(pageStore.yeaftConversationCovered).toBe(true);
     wrapper.vm.settingsModal.open = false;
+    await flushPromises();
     expect(pageStore.yeaftConversationCovered).toBe(false);
+    expect(ackSpy).toHaveBeenCalledWith('sess-1', 'ag-1', { sessionRead: true });
 
     // Clicking signal trigger while drawer is open opens popover; 1st Escape closes ONLY popover
     await wrapper.find('.cosmos-signal-trigger').trigger('click');

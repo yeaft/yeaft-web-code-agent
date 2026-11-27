@@ -7188,6 +7188,16 @@ export const useChatStore = defineStore('chat', {
       return true;
     },
 
+    hasKnownYeaftSession(sessionId, agentId = null) {
+      if (!sessionId) return false;
+      const ownerAgentId = resolveAgentIdForSession(this, sessionId, agentId);
+      if (!ownerAgentId) return false;
+      const catalogKey = yeaftCatalogKey(ownerAgentId, sessionId);
+      return (this.sidebarSessionCatalog || []).some(row => row?.catalogKey === catalogKey)
+        || (this.sessionCatalog || []).some(row => row?.catalogKey === catalogKey)
+        || Boolean(getSessionsStore()?.sessionById?.(sessionId, ownerAgentId));
+    },
+
     /**
      * Acknowledge unread/scheduled-task signals for a Yeaft Session.
      * - `sessionRead: false` (card dismiss / Mark-all-read): clears local unread and uploads
@@ -7202,21 +7212,9 @@ export const useChatStore = defineStore('chat', {
       if (!ownerAgentId) return false;
       const readUnread = this.markYeaftSessionRead(sessionId, ownerAgentId);
       let readTasks = false;
-      if (sessionRead) {
-        const catalogKey = yeaftCatalogKey(ownerAgentId, sessionId);
-        const hasCatalogRow = (this.sidebarSessionCatalog || []).some(row => row?.catalogKey === catalogKey)
-          || (this.sessionCatalog || []).some(row => row?.catalogKey === catalogKey)
-          || Boolean(getSessionsStore()?.sessionById?.(sessionId, ownerAgentId));
-        if (hasCatalogRow) {
-          const lastRun = getSessionsStore()?.sessionById?.(sessionId, ownerAgentId)?.task?.lastRun || null;
-          readTasks = scheduledTaskHelpers.markScheduledTaskSessionRead(this, sessionId, ownerAgentId, lastRun);
-        } else {
-          const matching = (this.scheduledTaskNotifications || [])
-            .filter(item => item?.agentId === ownerAgentId && item?.sessionId === sessionId);
-          for (const item of matching) {
-            if (scheduledTaskHelpers.dismissScheduledTaskNotification(this, item.id)) readTasks = true;
-          }
-        }
+      if (sessionRead && this.hasKnownYeaftSession(sessionId, ownerAgentId)) {
+        const lastRun = getSessionsStore()?.sessionById?.(sessionId, ownerAgentId)?.task?.lastRun || null;
+        readTasks = scheduledTaskHelpers.markScheduledTaskSessionRead(this, sessionId, ownerAgentId, lastRun);
       } else {
         const matching = (this.scheduledTaskNotifications || [])
           .filter(item => item?.agentId === ownerAgentId && item?.sessionId === sessionId);
@@ -7325,7 +7323,8 @@ export const useChatStore = defineStore('chat', {
       if (opts.remember !== false && next) {
         gs?.rememberSessionSelection?.(next, opts.agentId || null, gs.activeSessionKey);
       }
-      if (scheduledTaskHelpers.isScheduledTaskSessionVisible(this, next, targetAgentId)) {
+      if (scheduledTaskHelpers.isScheduledTaskSessionVisible(this, next, targetAgentId)
+          && this.hasKnownYeaftSession(next, targetAgentId)) {
         scheduledTaskHelpers.markScheduledTaskSessionRead(this, next, targetAgentId,
           getSessionsStore()?.sessionById?.(next, targetAgentId)?.task?.lastRun);
       }

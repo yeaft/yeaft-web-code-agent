@@ -138,8 +138,6 @@ export default {
       class="cosmos-signal-mobile-banner"
       :class="['is-' + mobileBannerItem.kind, { 'is-error': mobileBannerItem.isError }]"
       :data-planet-theme="mobileBannerItem.planetId"
-      role="status"
-      aria-live="polite"
       @pointerdown.stop
       @wheel.stop
     >

@@ -156,11 +156,14 @@ export function clearYeaftSessionReplyPreview(store, catalogKey = null) {
 export function clearYeaftAgentAskPreviews(store, agentId = null) {
   const map = store?.yeaftSessionReplyPreviewByKey;
   if (!map) return false;
-  const prefix = agentId ? `yeaft:${agentId}:` : 'yeaft:';
   let changed = false;
   const nextMap = {};
   for (const [key, entry] of Object.entries(map)) {
-    if (key.startsWith(prefix) && (entry?.askQuestion || entry?.askRequestId || entry?.askTurnId)) {
+    const sep = key.lastIndexOf(':');
+    const matchesAgent = !agentId
+      ? key.startsWith('yeaft:')
+      : (key.startsWith('yeaft:') && sep > 6 && key.slice(6, sep) === agentId);
+    if (matchesAgent && (entry?.askQuestion || entry?.askRequestId || entry?.askTurnId)) {
       changed = true;
       if (entry.text) {
         nextMap[key] = {
