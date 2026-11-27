@@ -1967,9 +1967,89 @@ describe('Cosmos Creations — End-to-End Web Store <-> Server Relay <-> Agent S
       expect(update).not.toHaveBeenCalled();
     } else {
       expect(update).toHaveBeenCalledExactlyOnceWith(agentId, creation.id, { sessionId: 'orphan', expectedSessionId: creation.sessionId });
-      expect(send).toHaveBeenCalledWith(expect.objectContaining({ type: 'yeaft_delete_session', agentId, sessionId: 'orphan' }));
+      // Never unconditionally hard-delete a broadcast Session that another tab may already be using.
+      expect(send).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'yeaft_delete_session' }));
       expect(sessions.sessionById('winner', agentId)).not.toBeNull();
+      expect(sessions.sessionById('orphan', agentId)).not.toBeNull();
     }
+  });
+
+  it('R12-F1: clears a stale deletion receipt on live authoritative Agent list after reconnect, but not on Server shadow replay', async () => {
+    const { sessions } = await registerBrowserStores();
+    const agentId = 'agent-a';
+    const sessionId = 'restored-session';
+    const creation = serviceA.store.createCreation({ title: 'Restored Atlas', initializeFolder: true, sessionId });
+    chatStore.agents = [{ id: agentId, online: true }];
+    chatStore.connectionState = 'connected';
+    // Browser saw an archive/delete receipt before disconnecting.
+    sessions.applyCrudResult({ ok: true, op: 'archive', sessionId }, agentId);
+    expect(sessions.isConfirmedDeletedSession(agentId, sessionId)).toBe(true);
+    // Reconnect shadow hydrate replay must NOT clear the deletion receipt.
+    sessions.beginInventoryCommit();
+    sessions.applySnapshot([{ id: sessionId, workDir: creation.rootDir }], agentId, { authoritative: false });
+    expect(sessions.isConfirmedDeletedSession(agentId, sessionId)).toBe(true);
+    // Live authoritative Agent list containing the restored Session clears the stale receipt.
+    chatStore.handleMessage({
+      type: 'yeaft_output',
+      agentId,
+      event: { type: 'session_list_updated', sessions: [{ id: sessionId, workDir: creation.rootDir }] },
+    });
+    expect(sessions.isConfirmedDeletedSession(agentId, sessionId)).toBe(false);
+    const send = interceptSocket(chatStore, () => undefined);
+    const resolved = await creationsStore.resolveCreationSession(agentId, creation);
+    expect(resolved).toMatchObject({ creation: { id: creation.id }, sessionId });
+    expect(send).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'yeaft_create_session' }));
+  });
+
+  it('R12-F2: keeps Classic open alive when session_list_updated arrives after replacement create while link write is pending', async () => {
+    const { sessions } = await registerBrowserStores();
+    const agentId = 'agent-a';
+    const creation = serviceA.store.createCreation({ title: 'Atlas', initializeFolder: true, sessionId: 'missing-session' });
+    chatStore.agents = [{ id: agentId, online: true }];
+    chatStore.connectionState = 'connected';
+    chatStore.currentAgent = agentId;
+    chatStore.currentView = 'yeaft';
+    chatStore.uiMode = 'classic';
+    chatStore.yeaftActiveSessionFilter = null;
+    const replacement = { id: 'replacement-2', workDir: creation.rootDir };
+    let created = false;
+    const linkHeld = deferred();
+    const linkStarted = deferred();
+    interceptSocket(chatStore, request => {
+      if (request.type === 'yeaft_list_sessions') {
+        return sessionAck(chatStore, request, 'list', { sessions: [{ id: 'other-session' }, ...(created ? [replacement] : [])] });
+      }
+      if (request.type === 'yeaft_create_session') {
+        created = true;
+        sessionAck(chatStore, request, 'create', { session: replacement });
+        // Real Agent broadcasts a full live session_list_updated right after create ACK.
+        chatStore.handleMessage({
+          type: 'yeaft_output',
+          agentId,
+          event: { type: 'session_list_updated', sessions: [{ id: 'other-session' }, replacement] },
+        });
+        return true;
+      }
+      if (request.type === 'creation_request' && request.op === 'update_creation') {
+        linkStarted.resolve(request);
+        void linkHeld.promise.then(async () => {
+          const data = await serviceA.request({ op: request.op, payload: request.payload });
+          creationsStore.handleCreationResponse({ ...request, type: 'creation_response', ok: true, data });
+        });
+        return true;
+      }
+    });
+    const openPromise = creationsStore.openCreationWorkspace({ agentId, creationId: creation.id });
+    await linkStarted.promise;
+    // Inventory broadcast must not have auto-selected another Session or canceled the open.
+    expect(sessions.activeSessionKey).toBeNull();
+    expect(chatStore.yeaftActiveSessionFilter).toBeNull();
+    linkHeld.resolve();
+    const opened = await openPromise;
+    expect(opened).toMatchObject({ creation: { id: creation.id }, sessionId: 'replacement-2' });
+    expect(chatStore.yeaftActiveSessionFilter).toBe('replacement-2');
+    expect(chatStore.workbenchExpanded).toBe(true);
+    expect(sessions.suppressAutoSelectDepth).toBe(0);
   });
 
   it.each(['leave Galaxy and return', 'close the drawer'])('fences a pending Galaxy Creation open when users %s', async action => {

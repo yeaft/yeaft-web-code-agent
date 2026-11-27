@@ -1273,9 +1273,8 @@ export const useCreationsStore = defineStore('creations', {
           const winner = await getLatestCreation();
           if (gen !== storeGeneration) return null;
           const winnerId = linkedSessionId(winner);
-          if (winner?.id && winnerId !== sessionId) {
-            void chatStore.sessionCrudRequest('delete', { sessionId }, { agentId: targetId }).catch(() => {});
-          }
+          // Do NOT hard-delete the candidate Session: it was already broadcast to
+          // other tabs and may contain user messages or links to another Creation.
           if (!winnerId) throw err;
           return useLink(winner, winnerId);
         }
@@ -1361,10 +1360,21 @@ export const useCreationsStore = defineStore('creations', {
         }
         if (!creation?.id) throw new Error('Creation not found');
 
-        const resolved = hasAcknowledgedRoute
-          ? { creation: { ...creation, sessionId: acknowledgedSessionId, rootDir: acknowledgedRootDir },
-              sessionId: acknowledgedSessionId, rootDir: acknowledgedRootDir }
-          : await this.resolveCreationSession(targetId, creation, { createIfMissing: true });
+        let resolved;
+        if (hasAcknowledgedRoute) {
+          resolved = {
+            creation: { ...creation, sessionId: acknowledgedSessionId, rootDir: acknowledgedRootDir },
+            sessionId: acknowledgedSessionId,
+            rootDir: acknowledgedRootDir,
+          };
+        } else {
+          sessionsStore?.beginSuppressAutoSelect?.();
+          try {
+            resolved = await this.resolveCreationSession(targetId, creation, { createIfMissing: true });
+          } finally {
+            sessionsStore?.endSuppressAutoSelect?.();
+          }
+        }
         if (!isOpenStillCurrent()) return null;
         if (!resolved?.sessionId) throw new Error('Failed to resolve Creation session');
         const { creation: latest, sessionId, rootDir } = resolved;

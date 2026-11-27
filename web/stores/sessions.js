@@ -299,6 +299,7 @@ export const useSessionsStore = defineStore('sessions', {
     lastSnapshotAt: 0,
     authoritativeSnapshotAgents: {},
     confirmedDeletedSessionKeys: {},
+    suppressAutoSelectDepth: 0,
     /**
      * Most recent CRUD result for the UI to surface as toast/modal error.
      * Shape: { op, ok, error?:{code,sessionId,message}, at }
@@ -392,7 +393,8 @@ export const useSessionsStore = defineStore('sessions', {
      * for back-compat.
      */
     applySnapshot(sessions, agentId = null, options = {}) {
-      const { authoritative, deferActivation, suppressAutoSelect } = options;
+      const { authoritative, deferActivation } = options;
+      const suppressAutoSelect = Boolean(options?.suppressAutoSelect || this.suppressAutoSelectDepth > 0);
       const arr = Array.isArray(sessions) ? sessions : [];
       if (!agentId) {
         // Legacy path — single-agent stores only. Once this inventory has
@@ -512,8 +514,12 @@ export const useSessionsStore = defineStore('sessions', {
           }
         }
         this.sessionOrder = nextOrder;
-        if (authoritative === true && Array.isArray(sessions)) this.authoritativeSnapshotAgents[agentId] = true;
-        else delete this.authoritativeSnapshotAgents[agentId];
+        if (authoritative === true && Array.isArray(sessions)) {
+          this.authoritativeSnapshotAgents[agentId] = true;
+          for (const key of incomingKeys) delete this.confirmedDeletedSessionKeys[key];
+        } else {
+          delete this.authoritativeSnapshotAgents[agentId];
+        }
       }
       this.lastSnapshotAt = Date.now();
       const chat = _getChatStoreSafe();
@@ -658,7 +664,8 @@ export const useSessionsStore = defineStore('sessions', {
     applySnapshotUpsert(session, agentId = null) {
       if (!session || !session.id) return '';
       const effectiveAgentId = agentId || session.agentId || null;
-      if (effectiveAgentId) enterAgentScopedInventory(this);
+      const suppressAutoSelect = this.suppressAutoSelectDepth > 0;
+      if (effectiveAgentId) enterAgentScopedInventory(this, suppressAutoSelect);
       else if (this.inventoryIdentityMode !== 'legacy-bare') return '';
       const key = findSessionKey(this, session.id, effectiveAgentId) || storeKeyFor(effectiveAgentId, session.id);
       delete this.confirmedDeletedSessionKeys[key];
@@ -669,12 +676,22 @@ export const useSessionsStore = defineStore('sessions', {
         ...this._normalize(session, effectiveAgentId, isPinnedRow(prev)),
       };
       if (!existed) this.sessionOrder.push(key);
-      if (key === this._explicitPendingSessionKey || key === this._preferredExactSessionIdentity) {
-        reconcileInventorySelection(this);
-      } else {
-        reconcileRetiredBareActiveSession(this);
+      if (!suppressAutoSelect) {
+        if (key === this._explicitPendingSessionKey || key === this._preferredExactSessionIdentity) {
+          reconcileInventorySelection(this);
+        } else {
+          reconcileRetiredBareActiveSession(this);
+        }
       }
       return key;
+    },
+
+    beginSuppressAutoSelect() {
+      this.suppressAutoSelectDepth += 1;
+    },
+
+    endSuppressAutoSelect() {
+      this.suppressAutoSelectDepth = Math.max(0, this.suppressAutoSelectDepth - 1);
     },
 
     setActive(sessionId, agentId = null) {
