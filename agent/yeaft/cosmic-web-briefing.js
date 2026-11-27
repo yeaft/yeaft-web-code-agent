@@ -274,14 +274,15 @@ function matchUrlStartAt(str, offset) {
   }
 
   // 3. Scheme-relative //authority/... URL (supports IPv6 including Markdown-escaped \[...\], single-label hosts,
-  // userinfo, explicit ports, and Unicode punctuation inside paths OR immediately following in localized prose).
+  // userinfo with Unicode punctuation, explicit ports, and adjacent localized prose without whitespace).
   if (offset + 3 < len && c0 === 47 && str.charCodeAt(offset + 1) === 47 && prev !== 58 && prev !== 47) {
     const next = str[offset + 2];
     if (next && next !== '/' && !isBareUrlStop(next) && !isNonAsciiPunct(next)) {
       let k = offset + 2;
       const maxScan = Math.min(len, offset + 512);
       let openParens = 0, closeParens = 0, openBrackets = 0, closeBrackets = 0;
-      let firstNonAsciiPunctIdx = -1;
+      let inPath = false;
+      let authorityBoundaryIdx = -1;
       while (k < maxScan && !isBareUrlStop(str[k])) {
         if (str[k] === '\\' && k + 1 < maxScan && !isBareUrlStop(str[k + 1])) {
           const esc = str[k + 1];
@@ -291,7 +292,16 @@ function matchUrlStartAt(str, offset) {
           continue;
         }
         const ch = str[k];
-        if (firstNonAsciiPunctIdx === -1 && isNonAsciiPunct(ch)) firstNonAsciiPunctIdx = k;
+        if (!inPath) {
+          if (ch === '@') {
+            // Userinfo ended; host:port begins after '@', so ignore any earlier punctuation inside userinfo.
+            authorityBoundaryIdx = -1;
+          } else if (ch === '/' || ch === '?' || ch === '#') {
+            inPath = true;
+          } else if (authorityBoundaryIdx === -1 && (isNonAsciiPunct(ch) || ch === ',' || ch === ';' || ch === '!' || ch === ')' || ch === '\'' || ch === '`' || ch === '*' || ch === '_' || ch === '~')) {
+            authorityBoundaryIdx = k;
+          }
+        }
         if (ch === '(') openParens++;
         else if (ch === ')') closeParens++;
         else if (ch === '[') openBrackets++;
@@ -300,10 +310,10 @@ function matchUrlStartAt(str, offset) {
       }
       const trimmedEnd = trimTrailingUrlPunct(str, offset + 2, k, openParens, closeParens, openBrackets, closeBrackets);
       if (isValidSchemeRelativeCandidate(str.slice(offset, trimmedEnd))) return 2;
-      // Fallback for localized prose without whitespace after sentence punctuation (e.g. '//user:pass@host:8080。下一句'):
-      // validate the prefix before the first non-ASCII prose delimiter.
-      if (firstNonAsciiPunctIdx > offset + 2) {
-        const prefixEnd = trimTrailingUrlPunct(str, offset + 2, firstNonAsciiPunctIdx, openParens, closeParens, openBrackets, closeBrackets);
+      // Authority-aware fallback for localized prose/punctuation immediately following host:port without whitespace
+      // (e.g. '//user:demo–pass@intranet:8080。下一句' or '//user:demo–pass@host:8080**。下一句').
+      if (authorityBoundaryIdx > offset + 2) {
+        const prefixEnd = trimTrailingUrlPunct(str, offset + 2, authorityBoundaryIdx, openParens, closeParens, openBrackets, closeBrackets);
         if (isValidSchemeRelativeCandidate(str.slice(offset, prefixEnd))) return 2;
       }
     }
