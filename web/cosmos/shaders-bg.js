@@ -33,6 +33,8 @@ export const BG_FRAG = `
   uniform float uSkyBright;
   uniform float uStarDensity;
   uniform float uQuality;
+  uniform vec3 uSkyTint;
+  uniform vec3 uSoarVec;
 
   uniform vec2 uBhPos;
   uniform float uBhRadius;
@@ -200,8 +202,8 @@ export const BG_FRAG = `
     float scaleDelta = uScaleLog - 13.0;
     float fovDiv = max(uFovZoom, 0.55);
     vec3 ray = normalize(vec3((lensedP / fovDiv) * 1.16, 0.92));
-    float voyageYaw = uCamRot.x * 0.55 + uParallax.x * 0.075 + uRealTime * 0.0042 + uTime * 0.004;
-    float voyagePitch = uCamRot.y * 0.42 + uParallax.y * 0.055 + sin(uRealTime * 0.05) * 0.012;
+    float voyageYaw = uCamRot.x * 0.55 + uParallax.x * 0.075 + uRealTime * 0.0042 + uTime * 0.004 + uSoarVec.x * 0.65;
+    float voyagePitch = uCamRot.y * 0.42 + uParallax.y * 0.055 + sin(uRealTime * 0.05) * 0.012 + uSoarVec.y * 0.48;
     vec3 skyDir = rotate3D(ray, voyageYaw, voyagePitch, -0.44);
 
     vec2 skyUv = vec2(fract(atan(skyDir.x, skyDir.z) / TAU + 0.52), clamp(0.5 - asin(clamp(skyDir.y, -1.0, 1.0)) / PI, 0.003, 0.997));
@@ -217,8 +219,9 @@ export const BG_FRAG = `
     float skyPresence = 1.0 - smoothstep(19.5, 23.8, uScaleLog) * 0.52;
     float horizonSkyBoost = 1.0 + smoothstep(11.0, 7.2, uScaleLog) * 0.42;
     float totalEin = einsteinBoost + evEinsteinBoost;
-    vec3 col = vec3(0.005, 0.009, 0.020)
-             + (eso + neb + deepField) * skyPresence * horizonSkyBoost * (1.0 + totalEin);
+    vec3 tintCol = length(uSkyTint) > 0.01 ? uSkyTint : vec3(1.0);
+    vec3 col = vec3(0.005, 0.009, 0.020) * tintCol
+             + (eso + neb * 1.18 + deepField) * tintCol * skyPresence * horizonSkyBoost * (1.0 + totalEin);
 
     /* Subtle Interstellar Dust Illumination from Luminous Cosmic Events */
     if (uEventAmbient.a > 0.001) {
@@ -232,8 +235,8 @@ export const BG_FRAG = `
     /* 3. Multi-Octave 3D Depth Starfield */
     float threshA = clamp(0.982 - 0.014 * uStarDensity, 0.942, 0.995);
     float threshB = clamp(0.968 - 0.020 * uStarDensity, 0.922, 0.992);
-    float zPhase = scaleDelta * 0.48 + uRealTime * 0.0018;
-    vec2 starDrift = vec2(uRealTime * 0.0024, uRealTime * 0.00085) + uParallax * 0.032 + uCamRot * 0.12;
+    float zPhase = scaleDelta * 0.48 + uRealTime * 0.0018 + uSoarVec.z * 0.22;
+    vec2 starDrift = vec2(uRealTime * 0.0024, uRealTime * 0.00085) + uParallax * 0.032 + uCamRot * 0.12 + uSoarVec.xy * 0.14;
     float warpAmt = uWarp * clamp(pRad * 1.4, 0.0, 1.35);
     vec3 stars = vec3(0.0);
 

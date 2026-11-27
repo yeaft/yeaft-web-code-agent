@@ -1041,4 +1041,84 @@ test.describe('Yeaft Cosmos UI', () => {
     expect(failedAssets).toEqual([]);
     expect(errors).toEqual([]);
   });
+
+  test('supports interstellar soaring free-flight, star atlas warp to Alpha Centauri & Sgr A*, exoplanet zoom, and return to Sol', async ({ page, serverUrl }) => {
+    const errors = [];
+    page.on('pageerror', (err) => errors.push(err.message));
+    page.on('console', (msg) => {
+      if (msg.type() === 'error') errors.push(msg.text());
+    });
+
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await page.goto(serverUrl);
+    await expect(page.locator('.cosmos-page')).toBeVisible({ timeout: 15000 });
+
+    // 1. Top-left Voyage Bar is visible in Solar System
+    const voyageBar = page.locator('.cosmos-voyage-bar');
+    await expect(voyageBar).toBeVisible();
+    await expect(voyageBar.locator('.cosmos-voyage-sys-btn')).toContainText(/太阳系|Solar System/);
+
+    // 2. Enter Interstellar Soar Mode -> flight dock appears, speed adjusts, floating star beacons project
+    await voyageBar.locator('.cosmos-voyage-soar-btn').click();
+    await expect(voyageBar).toHaveClass(/is-soaring/);
+    const flightDock = page.locator('.cosmos-voyage-dock');
+    await expect(flightDock).toBeVisible();
+    const initialSpeed = await flightDock.locator('.cosmos-voyage-speed-val').textContent();
+    await flightDock.locator('.cosmos-ewd-mini').nth(1).click();
+    await expect(flightDock.locator('.cosmos-voyage-speed-val')).not.toHaveText(initialSpeed || '');
+
+    // Poll until soarBlend > 0.32 and floating star beacons project into the 3D skybox
+    await expect.poll(async () => page.locator('.cosmos-soar-beacon').evaluateAll(
+      (els) => els.filter((el) => el.style.display !== 'none').length,
+    ), { timeout: 4000 }).toBeGreaterThan(0);
+
+    // 3. Open Star Atlas, verify Escape closes Star Atlas first (without exiting soar)
+    await voyageBar.locator('.cosmos-voyage-sys-btn').click();
+    const atlas = page.locator('.cosmos-voyage-atlas');
+    await expect(atlas).toBeVisible();
+    await page.keyboard.press('Escape');
+    await expect(atlas).toHaveCount(0);
+    await expect(voyageBar).toHaveClass(/is-soaring/);
+
+    // Re-open Star Atlas and warp to Alpha Centauri (Binary Star System)
+    await voyageBar.locator('.cosmos-voyage-sys-btn').click();
+    await expect(atlas).toBeVisible();
+    await expect(atlas.locator('.cosmos-voyage-atlas-item')).toHaveCount(5);
+    await atlas.locator('.cosmos-voyage-atlas-item').nth(1).click();
+
+    // Wait for warp completion into Alpha Centauri
+    await expect(voyageBar.locator('.cosmos-voyage-sys-btn')).toContainText(/半人马座|Alpha Centauri/, { timeout: 6000 });
+    await expect(voyageBar).not.toHaveClass(/is-warping/, { timeout: 6000 });
+    await expect(page.locator('.cosmos-sightseeing-tag').first()).toBeVisible({ timeout: 5000 });
+
+    // 4. Click an exoplanet tag in Alpha Centauri -> centers & opens Planet Focus Inspection Dock
+    await page.locator('.cosmos-sightseeing-tag').first().click();
+    await expect(page.locator('.cosmos-planet-focus-dock')).toBeVisible();
+    await page.locator('.cosmos-pf-return').click();
+    await expect(page.locator('.cosmos-planet-focus-dock')).toHaveCount(0);
+
+    // 5. Warp to Sagittarius A* (Galactic Core SMBH + S-stars) and then return home to Sol
+    await voyageBar.locator('.cosmos-voyage-sys-btn').click();
+    await page.locator('.cosmos-voyage-atlas-item').nth(4).click();
+    await expect(voyageBar.locator('.cosmos-voyage-sys-btn')).toContainText(/Sgr A\*|人马座/, { timeout: 7000 });
+    await expect(voyageBar).not.toHaveClass(/is-warping/, { timeout: 7000 });
+
+    await page.locator('.cosmos-voyage-home-btn').click();
+    await expect(voyageBar.locator('.cosmos-voyage-sys-btn')).toContainText(/太阳系|Solar System/, { timeout: 7000 });
+    await expect(voyageBar).not.toHaveClass(/is-warping/, { timeout: 7000 });
+
+    // 6. Verify 390x844 mobile portrait layout: Voyage Bar never overlaps Events pill or Corner Actions
+    await page.setViewportSize({ width: 390, height: 844 });
+    const vBox = await voyageBar.boundingBox();
+    const evBox = await page.locator('.cosmos-event-wrap').boundingBox();
+    const cornerBox = await page.locator('.cosmos-corner-actions').boundingBox();
+    expect(vBox).not.toBeNull();
+    expect(cornerBox).not.toBeNull();
+    expect(vBox.x + vBox.width).toBeLessThanOrEqual(cornerBox.x + 2);
+    if (evBox) {
+      expect(evBox.y).toBeGreaterThanOrEqual(vBox.y + vBox.height - 1);
+    }
+
+    expect(errors).toEqual([]);
+  });
 });
