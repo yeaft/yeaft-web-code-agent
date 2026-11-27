@@ -22,7 +22,6 @@ export default {
     unreadCount: { type: Number, default: 0 },
     runningCount: { type: Number, default: 0 },
     badgeCount: { type: Number, default: 0 },
-    dismissibleCount: { type: Number, default: 0 },
     drawerOpen: { type: Boolean, default: false },
     isCompact: { type: Boolean, default: false },
     /** '2' | '3' | 'collapsed' */
@@ -34,7 +33,7 @@ export default {
     /** Suppress overlapping when Cosmic Constants popover or telescope observation is active. */
     suppressed: { type: Boolean, default: false },
   },
-  emits: ['open-signal', 'dismiss-signal', 'mark-all-read', 'close-popover'],
+  emits: ['open-signal', 'dismiss-signal', 'mark-all-read', 'close-popover', 'restore-trigger-focus'],
   template: `
     <!-- Quiet screen-reader announcement strictly on newly arrived waiting/unread signals -->
     <div class="cosmos-sr-only" role="status" aria-live="polite" aria-atomic="true">{{ srAnnouncement }}</div>
@@ -66,7 +65,7 @@ export default {
             type="button"
             class="cosmos-signal-foot-btn is-toggle"
             aria-expanded="true"
-            @click="expanded = false"
+            @click="toggleExpanded(false, $event)"
           >
             <span>{{ $t('cosmos.signals.collapse') }}</span>
             <svg class="cosmos-signal-chev is-open" viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
@@ -141,7 +140,7 @@ export default {
           type="button"
           class="cosmos-signal-foot-btn is-peek-expand"
           aria-expanded="false"
-          @click="expanded = true"
+          @click="toggleExpanded(true, $event)"
         >
           <span>{{ $t('cosmos.signals.more', { count: hiddenCount }) }}</span>
           <svg class="cosmos-signal-chev" viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
@@ -372,6 +371,20 @@ export default {
       if (open) expanded.value = false;
     });
 
+    function toggleExpanded(nextExpanded, e) {
+      const container = e?.currentTarget?.closest?.('.cosmos-signal-stream') || null;
+      const keyboardTriggered = e?.detail === 0;
+      expanded.value = nextExpanded;
+      if (keyboardTriggered && container) {
+        Vue.nextTick(() => {
+          const target = nextExpanded
+            ? container.querySelector('.cosmos-signal-foot-btn.is-toggle')
+            : container.querySelector('.cosmos-signal-foot-btn.is-peek-expand');
+          target?.focus?.();
+        });
+      }
+    }
+
     function dismissTitle(item) {
       return item?.kind === 'unread'
         ? $t('cosmos.signals.dismissUnread')
@@ -380,13 +393,31 @@ export default {
 
     function onDismissClick(e, item) {
       const container = e?.currentTarget?.closest?.('.cosmos-signal-popover, .cosmos-signal-stream') || null;
+      const isPopover = Boolean(container?.classList?.contains('cosmos-signal-popover'));
+      const cardEl = e?.currentTarget?.closest?.('.cosmos-signal-card') || null;
+      const beforeCards = container
+        ? Array.from(container.querySelectorAll('.cosmos-signal-card:not(.cosmos-sig-leave-active)'))
+        : [];
+      const prevIdx = cardEl ? beforeCards.indexOf(cardEl) : -1;
+      const dismissedKey = item?.signalKey || '';
       const keyboardTriggered = e?.detail === 0;
       emit('dismiss-signal', item);
-      if (keyboardTriggered && container) {
+      if (keyboardTriggered) {
         Vue.nextTick(() => {
-          const nextFocus = container.querySelector('.cosmos-signal-card .cosmos-signal-main')
-            || container.querySelector('.cosmos-signal-pop-close');
-          nextFocus?.focus?.();
+          const remaining = container && container.isConnected
+            ? Array.from(container.querySelectorAll('.cosmos-signal-card:not(.cosmos-sig-leave-active)'))
+              .filter((el) => el.getAttribute('data-signal-key') !== dismissedKey)
+            : [];
+          if (remaining.length > 0) {
+            const targetIdx = Math.min(Math.max(0, prevIdx), remaining.length - 1);
+            remaining[targetIdx]?.querySelector('.cosmos-signal-main')?.focus?.();
+            return;
+          }
+          if (isPopover && container && container.isConnected) {
+            container.querySelector('.cosmos-signal-pop-close')?.focus?.();
+            return;
+          }
+          emit('restore-trigger-focus');
         });
       }
     }
@@ -411,6 +442,7 @@ export default {
       hiddenCount,
       mobileBannerItem,
       showMobileBanner,
+      toggleExpanded,
       dismissTitle,
       onDismissClick,
       dismissMobileBanner,

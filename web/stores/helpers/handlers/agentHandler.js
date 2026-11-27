@@ -311,6 +311,7 @@ export function handleAgentList(store, msg) {
         // Clean up associated state
         delete store.messagesMap[conv.id];
         delete store.processingConversations[conv.id];
+        store.clearCliCosmosDismissedSignal?.(conv.id, conv.agentId || null);
         stopProcessingWatchdog(store, conv.id);
         delete store.executionStatusMap[conv.id];
         return false;
@@ -328,6 +329,7 @@ export function handleAgentList(store, msg) {
         store.processingConversations[serverConv.id] = true;
       } else if (store.processingConversations[serverConv.id]) {
         delete store.processingConversations[serverConv.id];
+        store.clearCliCosmosDismissedSignal?.(serverConv.id, serverConv.agentId || null);
         stopProcessingWatchdog(store, serverConv.id);
         const status = store.executionStatusMap[serverConv.id];
         if (status) status.currentTool = null;
@@ -612,6 +614,7 @@ export function handleAgentSelected(store, msg) {
       store.processingConversations[conv.id] = true;
     } else if (store.processingConversations[conv.id]) {
       delete store.processingConversations[conv.id];
+      store.clearCliCosmosDismissedSignal?.(conv.id, conv.agentId || msg.agentId || null);
       stopProcessingWatchdog(store, conv.id);
       const status = store.executionStatusMap[conv.id];
       if (status) status.currentTool = null;

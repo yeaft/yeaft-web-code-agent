@@ -82,9 +82,9 @@ export function computeSessionSatellites(pos, planetId, liveSessions, realTime, 
 
     const sdx = (sunPt && Number.isFinite(sunPt.x) ? sunPt.x : 0) - pt.x;
     const sdy = (sunPt && Number.isFinite(sunPt.y) ? sunPt.y : 0) - pt.y;
-    const sLen = Math.hypot(sdx, sdy) || 1;
-    const sunWx = sdx / sLen;
-    const sunWy = sdy / sLen;
+    const sLen = Math.hypot(sdx, sdy);
+    const sunWx = sLen >= 1e-6 ? sdx / sLen : 1;
+    const sunWy = sLen >= 1e-6 ? sdy / sLen : 0;
     const sunLocalX = cosH * sunWx + sinH * sunWy;
     const sunLocalY = -sinH * sunWx + cosH * sunWy;
 
@@ -197,6 +197,11 @@ function drawSolarWing(ctx, xCenter, yStart, yEnd, width, skewX, sunGlint, S) {
   ctx.fillStyle = grad;
   ctx.fill();
 
+  // Hairline anodized titanium panel edge (stroked before cell grid replaces the outer path)
+  ctx.strokeStyle = `rgba(202, 216, 236, ${(0.44 + sheen * 0.28).toFixed(3)})`;
+  ctx.lineWidth = Math.max(0.42, S * 0.042);
+  ctx.stroke();
+
   // Whisper-fine solar cell divisions (visible cleanly at medium/closeup zoom)
   if (Math.abs(yEnd - yStart) >= 5.6) {
     const cells = S >= 10.5 ? 4 : 3;
@@ -214,11 +219,6 @@ function drawSolarWing(ctx, xCenter, yStart, yEnd, width, skewX, sunGlint, S) {
     ctx.lineWidth = 0.42;
     ctx.stroke();
   }
-
-  // Hairline anodized titanium panel edge (brighter on sunward edge)
-  ctx.strokeStyle = `rgba(202, 216, 236, ${(0.44 + sheen * 0.28).toFixed(3)})`;
-  ctx.lineWidth = Math.max(0.42, S * 0.042);
-  ctx.stroke();
 }
 
 /**
@@ -453,14 +453,24 @@ function drawSpacecraftBody(ctx, sat, realTime, alphaMul) {
  *   2. Near-side pass (`z >= 0`): rendered crisply in front of the planet
  */
 export function drawSessionSatellites(ctx, w, h, pos, planetId, liveSessions, realTime, opts = {}) {
-  const fadeMul = Number.isFinite(opts.fadeMul) ? opts.fadeMul : 1.0;
+  if (!ctx || !Number.isFinite(w) || !Number.isFinite(h) || w <= 0 || h <= 0) return [];
+  const rawFade = Number.isFinite(opts.fadeMul) ? opts.fadeMul : 1.0;
+  const fadeMul = Math.max(0, Math.min(1, rawFade));
   if (fadeMul <= 0.02) return [];
 
-  const sats = computeSessionSatellites(pos, planetId, liveSessions, realTime, opts);
+  const safeTime = Number.isFinite(realTime) ? realTime : 0;
+  const sats = computeSessionSatellites(pos, planetId, liveSessions, safeTime, opts);
   if (sats.length === 0) return [];
+
+  // Viewport-cull offscreen planets (e.g. during Planet Focus closeup) before allocating clip/gradients
+  const maxReach = sats[sats.length - 1].orbitR + 36;
+  if (pos.x + maxReach < 0 || pos.x - maxReach > w || pos.y + maxReach < 0 || pos.y - maxReach > h) {
+    return sats;
+  }
 
   const orbitAlphaMul = fadeMul * Math.max(0.32, Math.min(1.1, Number.isFinite(opts.orbitOpacity) ? opts.orbitOpacity + 0.30 : 0.85));
 
+  ctx.save();
   // 1. Far-side pass (occluded cleanly behind parent planet globe)
   ctx.save();
   ctx.beginPath();
@@ -475,7 +485,7 @@ export function drawSessionSatellites(ctx, w, h, pos, planetId, liveSessions, re
     drawOrbitalWake(ctx, pos, sat, false, fadeMul);
   }
   for (const sat of farSats) {
-    drawSpacecraftBody(ctx, sat, realTime, fadeMul * 0.82);
+    drawSpacecraftBody(ctx, sat, safeTime, fadeMul * 0.82);
   }
   ctx.restore();
 
@@ -486,8 +496,9 @@ export function drawSessionSatellites(ctx, w, h, pos, planetId, liveSessions, re
     drawOrbitalWake(ctx, pos, sat, true, fadeMul);
   }
   for (const sat of nearSats) {
-    drawSpacecraftBody(ctx, sat, realTime, fadeMul);
+    drawSpacecraftBody(ctx, sat, safeTime, fadeMul);
   }
+  ctx.restore();
 
   return sats;
 }

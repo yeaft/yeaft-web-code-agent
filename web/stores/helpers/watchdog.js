@@ -105,6 +105,10 @@ export function stopProcessingWatchdog(store, conversationId) {
   if (store._yeaftWatchdogPauseReasons) {
     delete store._yeaftWatchdogPauseReasons[conversationId];
   }
+  // If this stop coincides with clearing CLI processing state, also clear any stale Cosmos running dismissal
+  if (!store.processingConversations?.[conversationId]) {
+    store.clearCliCosmosDismissedSignal?.(conversationId);
+  }
 }
 
 /** Pause stale-state cleanup while the backend owns a declared long phase. */
@@ -152,6 +156,7 @@ export function startLegacyWatchdog(store, conversationId) {
       store._processingWatchdogs[conversationId] = setTimeout(() => {
         if (store.processingConversations[conversationId]) {
           delete store.processingConversations[conversationId];
+          store.clearCliCosmosDismissedSignal?.(conversationId);
           const status = store.executionStatusMap[conversationId];
           if (status) status.currentTool = null;
           store.finishStreamingForConversation(conversationId);
@@ -186,6 +191,7 @@ export function startYeaftWatchdog(store, conversationId) {
     if (store.processingConversations[conversationId]) {
       console.warn(`[Yeaft Watchdog] Force-clearing stale processing state for ${conversationId} after 150s`);
       delete store.processingConversations[conversationId];
+      store.clearCliCosmosDismissedSignal?.(conversationId);
       const status = store.executionStatusMap[conversationId];
       if (status) status.currentTool = null;
       store.finishStreamingForConversation(conversationId);

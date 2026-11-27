@@ -3469,20 +3469,20 @@ describe('Cosmos Interstellar Signal Stream (Unified Top-Right Replies, Schedule
   it('renders frameless Signal Stream cards with 3-card cap, drawer-docked popover, mobile micro-banner, and CosmosPage stage subtraction', async () => {
     const { default: CosmosSignalStream } = await import('../../web/components/cosmos/CosmosSignalStream.js');
     const items = [
-      { signalKey: 'a:1', kind: 'waiting', agentId: 'a', agentName: 'Earth-Mac', planetId: 'earth', sessionId: '1', sessionTitle: 'Deploy Gate', preview: 'Proceed with rollout?', timeLabel: 'now', dismissible: true, stateSignature: 'waiting\u001fask-1\u001f', scheduledTask: null, isError: false },
+      { signalKey: 'a:1', kind: 'waiting', agentId: 'a', agentName: 'Earth-Mac', planetId: 'earth', sessionId: '1', sessionTitle: 'Deploy Gate', preview: 'Proceed with rollout?', timeLabel: 'now', dismissible: true, stateSignature: 'waiting\u001fask-1', scheduledTask: null, isError: false },
       { signalKey: 'b:2', kind: 'unread', agentId: 'b', agentName: 'Saturn-Srv', planetId: 'saturn', sessionId: '2', sessionTitle: 'Test Run', preview: 'All 379 tests passed cleanly.', timeLabel: '1m', dismissible: true, stateSignature: 'unread\u001f2000\u001f', scheduledTask: null, isError: false },
       { signalKey: 'b:3', kind: 'unread', agentId: 'b', agentName: 'Saturn-Srv', planetId: 'saturn', sessionId: '3', sessionTitle: 'Nightly Task', preview: 'Backup completed.', timeLabel: '2m', dismissible: true, stateSignature: 'unread\u001f\u001ft1:completed', scheduledTask: { id: 't1', status: 'completed' }, isError: false },
       { signalKey: 'a:4', kind: 'running', agentId: 'a', agentName: 'Earth-Mac', planetId: 'earth', sessionId: '4', sessionTitle: 'Index Build', preview: 'Scanning workspace…', timeLabel: 'now', dismissible: true, stateSignature: 'running\u001f', scheduledTask: null, isError: false },
     ];
 
     wrapper = mount(CosmosSignalStream, {
+      attachTo: document.body,
       props: {
         items,
         waitingCount: 1,
         unreadCount: 2,
         runningCount: 1,
         badgeCount: 3,
-        dismissibleCount: 2,
         drawerOpen: false,
         isCompact: false,
         previewMode: '2',
@@ -3492,22 +3492,47 @@ describe('Cosmos Interstellar Signal Stream (Unified Top-Right Replies, Schedule
     });
 
     // 1. Desktop free stage caps at 3 cards, never nests buttons, renders × dismiss on EVERY card (waiting/unread/running)
+    //    and shows the folded stacked-card peek bar (.cosmos-signal-deck-peek) with no expanded top header yet.
     expect(wrapper.findAll('.cosmos-signal-stream .cosmos-signal-card')).toHaveLength(3);
     expect(wrapper.findAll('.cosmos-signal-stream .cosmos-signal-ack')).toHaveLength(3);
+    expect(wrapper.find('.cosmos-signal-deck-peek').exists()).toBe(true);
+    expect(wrapper.find('.cosmos-signal-deck-head').exists()).toBe(false);
+    expect(wrapper.find('.cosmos-signal-quiet-row').exists()).toBe(false);
     expect(wrapper.findAll('button button')).toHaveLength(0);
-    await wrapper.findAll('.cosmos-signal-ack')[0].trigger('click');
+
+    // Keyboard dismiss (detail=0) on card #0 skips leaving/dismissed card #0 and focuses adjacent card #1
+    await wrapper.findAll('.cosmos-signal-ack')[0].trigger('click', { detail: 0 });
     expect(wrapper.emitted('dismiss-signal')?.[0]?.[0]?.signalKey).toBe('a:1');
+    expect(document.activeElement).toBe(wrapper.findAll('.cosmos-signal-card .cosmos-signal-main')[1].element);
     await wrapper.findAll('.cosmos-signal-ack')[1].trigger('click');
     expect(wrapper.emitted('dismiss-signal')?.[1]?.[0]?.signalKey).toBe('b:2');
 
-    // Expand shows all 4 cards including dismissible running card
-    await wrapper.find('.cosmos-signal-foot-btn:not(.is-mark-all)').trigger('click');
+    // Keyboard Expand moves focus to pinned top Collapse button; Collapse moves focus back to Expand peek button
+    await wrapper.find('.cosmos-signal-foot-btn.is-peek-expand').trigger('click', { detail: 0 });
+    expect(wrapper.find('.cosmos-signal-deck-head').exists()).toBe(true);
+    expect(wrapper.find('.cosmos-signal-deck-peek').exists()).toBe(false);
     expect(wrapper.findAll('.cosmos-signal-stream .cosmos-signal-card')).toHaveLength(4);
     expect(wrapper.findAll('.cosmos-signal-stream .cosmos-signal-ack')).toHaveLength(4);
+    expect(document.activeElement).toBe(wrapper.find('.cosmos-signal-foot-btn.is-toggle').element);
     await wrapper.findAll('.cosmos-signal-ack')[3].trigger('click');
     expect(wrapper.emitted('dismiss-signal')?.[2]?.[0]?.signalKey).toBe('a:4');
     await wrapper.find('.cosmos-signal-foot-btn.is-mark-all').trigger('click');
     expect(wrapper.emitted('mark-all-read')).toHaveLength(1);
+    await wrapper.find('.cosmos-signal-foot-btn.is-toggle').trigger('click', { detail: 0 });
+    expect(wrapper.find('.cosmos-signal-deck-peek').exists()).toBe(true);
+    expect(document.activeElement).toBe(wrapper.find('.cosmos-signal-foot-btn.is-peek-expand').element);
+
+    // <=3 cards with >=2 unread shows quiet bare row only; <=1 unread shows zero deck chrome;
+    // keyboard-dismissing the final floating card emits restore-trigger-focus instead of stranding focus on body.
+    await wrapper.setProps({ items: items.slice(0, 3), unreadCount: 2, runningCount: 0 });
+    expect(wrapper.find('.cosmos-signal-deck-peek').exists()).toBe(false);
+    expect(wrapper.find('.cosmos-signal-deck-head').exists()).toBe(false);
+    expect(wrapper.find('.cosmos-signal-quiet-row').exists()).toBe(true);
+    await wrapper.setProps({ items: items.slice(0, 1), unreadCount: 0, waitingCount: 1, badgeCount: 1 });
+    expect(wrapper.find('.cosmos-signal-quiet-row').exists()).toBe(false);
+    await wrapper.find('.cosmos-signal-ack').trigger('click', { detail: 0 });
+    expect(wrapper.emitted('restore-trigger-focus')).toHaveLength(1);
+    await wrapper.setProps({ items, waitingCount: 1, unreadCount: 2, runningCount: 1, badgeCount: 3 });
 
     // 2. Drawer open hides free-floating stream and renders docked popover when opened
     await wrapper.setProps({ drawerOpen: true, popoverOpen: true });
@@ -3784,8 +3809,91 @@ describe('Cosmos Interstellar Signal Stream (Unified Top-Right Replies, Schedule
     expect(s5.items.find((x) => x.sessionId === 's-run')?.kind).toBe('unread');
     expect(s5.items.find((x) => x.sessionId === 's-run')?.preview).toBe('Shaders compiled cleanly.');
 
-    // 6. Full history clear wipes dismissed map cleanly
-    chatStore.dismissCosmosSignal('ag-1\u001fs-wait', 'waiting\u001fask-2\u001f');
+    // 6. Multi-agent same-sessionId isolation, colon-containing agentId, Mark-all-read stability on dismissed
+    //    running/waiting scheduled-task items, vp_status_snapshot idle drop, uncached clearAsk, and CLI running->done->running
+    const { handleAssistantOutputFrame } = await import('../../web/stores/helpers/assistantOutput.js');
+    const { handleTurnCompleted } = await import('../../web/stores/helpers/handlers/conversationHandler.js');
+    chatStore.agents = [
+      { id: 'owner:ag-1', name: 'Earth-Mac', online: true },
+      { id: 'owner:ag-2', name: 'Saturn-Srv', online: true },
+    ];
+    chatStore.currentAgent = 'owner:ag-1';
+    chatStore.yeaftSessionAgentById = { 'shared-s': 'owner:ag-1' };
+    chatStore.applySessionCatalogSnapshot([
+      { catalogKey: 'yeaft:owner:ag-1:shared-s', runtimeProvider: 'yeaft', routeRef: { runtimeProvider: 'yeaft', agentId: 'owner:ag-1', sessionId: 'shared-s' }, title: 'Shared A', availability: 'online', metadataUpdatedAt: new Date(130000).toISOString() },
+      { catalogKey: 'yeaft:owner:ag-2:shared-s', runtimeProvider: 'yeaft', routeRef: { runtimeProvider: 'yeaft', agentId: 'owner:ag-2', sessionId: 'shared-s' }, title: 'Shared B', availability: 'online', metadataUpdatedAt: new Date(130000).toISOString() },
+      { catalogKey: 'claude:owner:ag-2:cli-conv-9', runtimeProvider: 'claude-code', routeRef: { runtimeProvider: 'claude-code', agentId: 'owner:ag-2', sessionId: 'cli-conv-9' }, title: 'CLI Worker', availability: 'online', metadataUpdatedAt: new Date(130000).toISOString() },
+    ], []);
+    chatStore.yeaftProcessingSessions = {
+      'owner:ag-1\u001fshared-s': true,
+      'owner:ag-2\u001fshared-s': true,
+    };
+    chatStore.processingConversations = { 'cli-conv-9': true };
+    chatStore.scheduledTaskNotifications = [{
+      id: JSON.stringify(['owner:ag-1', 'shared-s', 'run-sched-1']),
+      agentId: 'owner:ag-1',
+      sessionId: 'shared-s',
+      runId: 'run-sched-1',
+      taskName: 'Shared A',
+      status: 'completed',
+      error: '',
+      createdAt: 130000,
+    }];
+    const projectMulti = (nowMs = 131000) => {
+      const projected = projectAgentsForCosmos({ chatStore, sessionsStore: { sessionList: [] }, nowMs, isEn: true });
+      return buildCosmosSignalStream({
+        projectedAgents: Object.values(projected),
+        agentToPlanet: { 'owner:ag-1': 'earth', 'owner:ag-2': 'saturn' },
+        scheduledTaskNotifications: chatStore.scheduledTaskNotifications,
+        dismissedSignals: chatStore.cosmosDismissedSignalsByKey,
+        nowMs,
+        isEn: true,
+      });
+    };
+
+    const m0 = projectMulti(131000);
+    const sharedA = m0.items.find((x) => x.agentId === 'owner:ag-1' && x.sessionId === 'shared-s');
+    const sharedB = m0.items.find((x) => x.agentId === 'owner:ag-2' && x.sessionId === 'shared-s');
+    const cliItem = m0.items.find((x) => x.agentId === 'owner:ag-2' && x.sessionId === 'cli-conv-9');
+    expect(sharedA?.kind).toBe('running');
+    expect(sharedB?.kind).toBe('running');
+    expect(cliItem?.kind).toBe('running');
+
+    // Dismiss sharedA only -> sharedB on owner:ag-2 remains visible; Mark-all-read clearing scheduledTaskNotifications
+    // MUST NOT falsely resurface dismissed running sharedA!
+    chatStore.dismissCosmosSignal(sharedA.signalKey, sharedA.stateSignature);
+    chatStore.acknowledgeAllYeaftSessionSignals();
+    const m1 = projectMulti(132000);
+    expect(m1.items.some((x) => x.signalKey === sharedA.signalKey)).toBe(false);
+    expect(m1.items.some((x) => x.signalKey === sharedB.signalKey)).toBe(true);
+
+    // vp_status_snapshot dropping owner:ag-1\u001fshared-s to idle clears its running dismissal cleanly
+    chatStore.handleYeaftOutput({
+      agentId: 'owner:ag-1',
+      conversationId: 'yeaft_owner:ag-1',
+      event: { type: 'vp_status_snapshot', statuses: [{ vpId: 'vp-1', sessionId: 'shared-s', state: 'idle' }] },
+    });
+    expect(chatStore.cosmosDismissedSignalsByKey['owner:ag-1\u001fshared-s']).toBeUndefined();
+
+    // Uncached clearAsk still clears a stale waiting dismissal for that exact session
+    chatStore.dismissCosmosSignal('owner:ag-2\u001fshared-s', 'waiting\u001fask-from-history');
+    chatStore.recordYeaftSessionPreview('shared-s', 'owner:ag-2', { clearAsk: true, askRequestId: 'ask-from-history' });
+    expect(chatStore.cosmosDismissedSignalsByKey['owner:ag-2\u001fshared-s']).toBeUndefined();
+
+    // CLI session on non-current agent (owner:ag-2 while currentAgent='owner:ag-1'):
+    // dismiss -> result clears processing & dismissal via catalog lookup -> next run resurfaces!
+    chatStore.dismissCosmosSignal(cliItem.signalKey, cliItem.stateSignature);
+    expect(projectMulti(133000).items.some((x) => x.signalKey === cliItem.signalKey)).toBe(false);
+    handleAssistantOutputFrame(chatStore, 'cli-conv-9', { type: 'result' });
+    expect(chatStore.cosmosDismissedSignalsByKey[cliItem.signalKey]).toBeUndefined();
+    // And handleTurnCompleted also clears running dismissal cleanly
+    chatStore.processingConversations['cli-conv-9'] = true;
+    chatStore.dismissCosmosSignal(cliItem.signalKey, 'running\u001f');
+    handleTurnCompleted(chatStore, { conversationId: 'cli-conv-9' });
+    expect(chatStore.cosmosDismissedSignalsByKey[cliItem.signalKey]).toBeUndefined();
+
+    // Full history clear wipes dismissed map cleanly
+    chatStore.dismissCosmosSignal('owner:ag-1\u001fshared-s', 'waiting\u001fask-2');
     expect(Object.keys(chatStore.cosmosDismissedSignalsByKey).length).toBeGreaterThan(0);
     chatStore.clearYeaftHistoryMemory();
     expect(Object.keys(chatStore.cosmosDismissedSignalsByKey)).toHaveLength(0);
@@ -3822,49 +3930,94 @@ describe('Cosmos Interstellar Signal Stream (Unified Top-Right Replies, Schedule
       expect([1, -1]).toContain(sat.nadirSign);
     }
 
+    // Coincident sunPt must still produce a valid unit Sun vector (no zero-length bus gradient)
+    const coincident = computeSessionSatellites({ x: 500, y: 400, r: 28 }, 'earth', [live[0]], 2.5, {
+      sunPt: { x: earthSats[0].x, y: earthSats[0].y },
+    });
+    expect(Math.hypot(coincident[0].sunLocalX, coincident[0].sunLocalY)).toBeCloseTo(1, 3);
+
     const saturnSats = computeSessionSatellites({ x: 600, y: 400, r: 30 }, 'saturn', [live[0]], 1.0);
     expect(saturnSats[0].orbitR).toBeGreaterThanOrEqual(30 * 1.85);
     expect(computeSessionSatellites(null, 'earth', live, 0)).toEqual([]);
 
-    // Verify 2-pass planet-globe occlusion clip ('evenodd') & zero errors across all 3 craft variants
-    const clipCalls = [];
-    const drawCalls = [];
-    const stubCtx = {
-      globalAlpha: 1,
-      fillStyle: '',
-      strokeStyle: '',
-      lineWidth: 1,
-      lineCap: 'butt',
-      save: () => drawCalls.push('save'),
-      restore: () => drawCalls.push('restore'),
-      translate: () => {},
-      rotate: () => {},
-      beginPath: () => {},
-      closePath: () => {},
-      moveTo: () => {},
-      lineTo: () => {},
-      quadraticCurveTo: () => {},
-      arc: () => {},
-      ellipse: () => {},
-      rect: () => {},
-      roundRect: () => {},
-      fillRect: () => drawCalls.push('fillRect'),
-      strokeRect: () => drawCalls.push('strokeRect'),
-      fill: () => drawCalls.push('fill'),
-      stroke: () => drawCalls.push('stroke'),
-      clip: (rule) => clipCalls.push(rule),
-      createLinearGradient: () => ({ addColorStop: () => {} }),
-      createRadialGradient: () => ({ addColorStop: () => {} }),
+    // Verify 2-pass planet-globe occlusion clip ('evenodd'), balanced save/restore, preserved lineCap,
+    // non-finite realTime resilience, outer+inner solar wing strokes, and offscreen viewport culling.
+    const makeTrackingCtx = () => {
+      const stateStack = [];
+      const clipCalls = [];
+      const drawCalls = [];
+      const radialArgs = [];
+      const ctx = {
+        globalAlpha: 1,
+        fillStyle: '',
+        strokeStyle: '',
+        lineWidth: 1,
+        lineCap: 'butt',
+        save() {
+          stateStack.push({ globalAlpha: ctx.globalAlpha, lineCap: ctx.lineCap });
+          drawCalls.push('save');
+        },
+        restore() {
+          const prev = stateStack.pop();
+          if (prev) {
+            ctx.globalAlpha = prev.globalAlpha;
+            ctx.lineCap = prev.lineCap;
+          }
+          drawCalls.push('restore');
+        },
+        translate: () => {},
+        rotate: () => {},
+        beginPath: () => drawCalls.push('beginPath'),
+        closePath: () => {},
+        moveTo: () => {},
+        lineTo: () => {},
+        quadraticCurveTo: () => {},
+        arc: () => {},
+        ellipse: () => {},
+        rect: () => {},
+        roundRect: () => {},
+        fillRect: () => drawCalls.push('fillRect'),
+        strokeRect: () => drawCalls.push('strokeRect'),
+        fill: () => drawCalls.push('fill'),
+        stroke: () => drawCalls.push('stroke'),
+        clip: (rule) => clipCalls.push(rule),
+        createLinearGradient: (x0, y0, x1, y1) => {
+          expect([x0, y0, x1, y1].every(Number.isFinite)).toBe(true);
+          return { addColorStop: () => {} };
+        },
+        createRadialGradient: (x0, y0, r0, x1, y1, r1) => {
+          expect([x0, y0, r0, x1, y1, r1].every(Number.isFinite)).toBe(true);
+          radialArgs.push([x0, y0, r0, x1, y1, r1]);
+          return { addColorStop: () => {} };
+        },
+      };
+      return { ctx, clipCalls, drawCalls, radialArgs };
     };
 
-    const rendered = drawSessionSatellites(stubCtx, 1280, 720, { x: 500, y: 400, r: 28 }, 'earth', live, 2.5, {
+    const t1 = makeTrackingCtx();
+    const rendered = drawSessionSatellites(t1.ctx, 1280, 720, { x: 500, y: 400, r: 28 }, 'earth', live, 2.5, {
       sunPt: { x: 200, y: 300 },
       orbitOpacity: 0.6,
       fadeMul: 1.0,
     });
     expect(rendered).toHaveLength(4);
-    expect(clipCalls).toContain('evenodd');
-    expect(drawCalls.filter((c) => c === 'fill').length).toBeGreaterThan(10);
-    expect(drawCalls.filter((c) => c === 'stroke').length).toBeGreaterThan(15);
+    expect(t1.clipCalls).toContain('evenodd');
+    expect(t1.drawCalls.filter((c) => c === 'save').length).toBe(t1.drawCalls.filter((c) => c === 'restore').length);
+    expect(t1.ctx.lineCap).toBe('butt');
+    expect(t1.ctx.globalAlpha).toBe(1);
+    expect(t1.drawCalls.filter((c) => c === 'fill').length).toBeGreaterThan(10);
+    expect(t1.drawCalls.filter((c) => c === 'stroke').length).toBeGreaterThan(15);
+
+    // Non-finite realTime must NOT produce NaN radial gradients or unbalance save/restore
+    const tNan = makeTrackingCtx();
+    drawSessionSatellites(tNan.ctx, 1280, 720, { x: 500, y: 400, r: 28 }, 'earth', live, Number.NaN, { fadeMul: 2.5 });
+    expect(tNan.drawCalls.filter((c) => c === 'save').length).toBe(tNan.drawCalls.filter((c) => c === 'restore').length);
+    expect(tNan.radialArgs.length).toBeGreaterThan(0);
+
+    // Offscreen planet is viewport-culled with zero canvas clip/draw calls
+    const tOff = makeTrackingCtx();
+    drawSessionSatellites(tOff.ctx, 1280, 720, { x: -500, y: 400, r: 28 }, 'earth', live, 1.0);
+    expect(tOff.drawCalls).toHaveLength(0);
+    expect(tOff.clipCalls).toHaveLength(0);
   });
 });

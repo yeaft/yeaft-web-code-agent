@@ -406,8 +406,7 @@ export function handleAssistantOutputFrame(store, conversationId, data, frameAge
     if (!store._currentYeaftSessionId) {
       delete store.processingConversations[conversationId];
       stopProcessingWatchdog(store, conversationId);
-      const cliAgentId = frameAgentId || resultConv?.agentId || store.currentAgent || null;
-      if (cliAgentId) store.clearCosmosDismissedSignal?.(conversationId, cliAgentId, { kinds: ['running'] });
+      store.clearCliCosmosDismissedSignal?.(conversationId, frameAgentId || resultConv?.agentId || null);
     }
 
     // A terminal result also resolves the connecting state: either the backend

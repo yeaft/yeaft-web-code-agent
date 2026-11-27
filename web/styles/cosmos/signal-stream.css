@@ -151,6 +151,7 @@
   position: relative;
   display: flex;
   align-items: stretch;
+  flex-shrink: 0;
   border-radius: 13px;
   background:
     radial-gradient(ellipse 80% 70% at 0% 0%, rgba(var(--p-accent-rgb, 110, 196, 255), 0.11), transparent 68%),
@@ -229,6 +230,14 @@
 .cosmos-signal-card.is-running .cosmos-signal-main {
   padding: 7px 11px 7px 13px;
   gap: 2px;
+}
+
+.cosmos-signal-card.is-running:has(.cosmos-signal-ack) .cosmos-signal-main {
+  padding-right: 34px;
+}
+
+.cosmos-signal-card.is-running:has(.cosmos-signal-ack) .cosmos-signal-head {
+  padding-right: 0;
 }
 
 .cosmos-signal-main {
@@ -425,8 +434,9 @@
 }
 
 .cosmos-signal-card.is-running .cosmos-signal-ack {
-  top: 5px;
+  top: 50%;
   right: 6px;
+  transform: translateY(-50%);
 }
 
 .cosmos-signal-card.is-waiting .cosmos-signal-ack {
@@ -473,8 +483,8 @@
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  height: 30px;
-  padding: 0 10px 0 12px;
+  min-height: 30px;
+  padding: 3px 10px 3px 12px;
   border-radius: 11px;
   background: linear-gradient(155deg, rgba(6, 13, 28, 0.72) 0%, rgba(4, 9, 20, 0.78) 100%);
   border: 1px solid rgba(186, 214, 255, 0.14);
@@ -488,13 +498,22 @@
   display: inline-flex;
   align-items: center;
   gap: 6px;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
   font-size: 11px;
   font-weight: 500;
   color: rgba(214, 230, 252, 0.80);
   letter-spacing: 0.02em;
 }
 
+.cosmos-signal-deck-label > span:first-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .cosmos-signal-deck-num {
+  flex-shrink: 0;
   font-family: var(--font-mono, monospace);
   font-size: 10.5px;
   color: rgba(154, 188, 228, 0.74);
@@ -505,6 +524,7 @@
   display: inline-flex;
   align-items: center;
   gap: 6px;
+  flex-shrink: 0;
 }
 
 .cosmos-signal-deck-div {
@@ -521,8 +541,8 @@
   align-items: center;
   gap: 6px;
   margin: -2px 8px 0;
-  height: 28px;
-  padding: 0 10px 0 12px;
+  min-height: 28px;
+  padding: 2px 10px 2px 12px;
   border-radius: 10px;
   background: linear-gradient(180deg, rgba(6, 13, 28, 0.56) 0%, rgba(4, 9, 20, 0.68) 100%);
   border: 1px solid rgba(186, 214, 255, 0.12);
@@ -549,7 +569,7 @@
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  height: 24px;
+  min-height: 24px;
   padding: 0 4px;
   border-radius: 6px;
   background: transparent;
@@ -557,6 +577,8 @@
   color: rgba(196, 218, 246, 0.78);
   font-size: 11px;
   font-weight: 450;
+  white-space: nowrap;
+  flex-shrink: 0;
   cursor: pointer;
   pointer-events: auto;
   transition: color 140ms ease, background 140ms ease;
@@ -569,8 +591,9 @@
 
 .cosmos-signal-foot-btn.is-peek-expand {
   flex: 1;
+  min-width: 0;
   justify-content: flex-start;
-  height: 100%;
+  min-height: 24px;
   padding: 0;
   color: rgba(206, 226, 252, 0.84);
 }
@@ -591,8 +614,8 @@
 }
 
 .cosmos-signal-foot-btn.is-bare {
-  height: 20px;
-  padding: 0 4px;
+  min-height: 24px;
+  padding: 0 5px;
   color: rgba(186, 212, 244, 0.66);
   text-shadow: 0 1px 6px rgba(0, 0, 0, 0.85);
 }
@@ -840,6 +863,12 @@
   }
   .cosmos-signal-card:has(.cosmos-signal-ack) .cosmos-signal-head {
     padding-right: 26px;
+  }
+  .cosmos-signal-card.is-running:has(.cosmos-signal-ack) .cosmos-signal-main {
+    padding-right: 36px;
+  }
+  .cosmos-signal-card.is-running:has(.cosmos-signal-ack) .cosmos-signal-head {
+    padding-right: 0;
   }
 }
 

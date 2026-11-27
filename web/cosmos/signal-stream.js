@@ -38,16 +38,16 @@ function scheduledStatusText(notice, t) {
  */
 export function computeSignalStateSignature(item) {
   if (!item || !item.kind) return '';
+  if (item.kind === 'waiting') {
+    const askToken = item.askRequestId || item.askTurnId || item.preview || '';
+    return `waiting\u001f${askToken}`;
+  }
+  if (item.kind === 'running') {
+    return 'running\u001f';
+  }
   const schedToken = item.scheduledTask
     ? `${item.scheduledTask.id || ''}:${item.scheduledTask.status || ''}`
     : '';
-  if (item.kind === 'waiting') {
-    const askToken = item.askRequestId || item.askTurnId || item.preview || '';
-    return `waiting\u001f${askToken}\u001f${schedToken}`;
-  }
-  if (item.kind === 'running') {
-    return `running\u001f${schedToken}`;
-  }
   const replyToken = item.replyAt ? String(item.replyAt) : (item.preview || '');
   return `unread\u001f${replyToken}\u001f${schedToken}`;
 }

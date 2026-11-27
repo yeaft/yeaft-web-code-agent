@@ -378,7 +378,6 @@ export default {
         :unread-count="signalStream.unreadCount"
         :running-count="signalStream.runningCount"
         :badge-count="signalStream.badgeCount"
-        :dismissible-count="signalStream.dismissibleCount"
         :drawer-open="drawerOpen"
         :is-compact="isCompactViewport"
         :preview-mode="constants.livePreviewMode"
@@ -389,6 +388,7 @@ export default {
         @dismiss-signal="onDismissSignal"
         @mark-all-read="onMarkAllSignalsRead"
         @close-popover="closeSignalPopover({ restoreFocus: true })"
+        @restore-trigger-focus="focusSignalTrigger"
       />
 
       <!-- Cosmic Constants + Authentic Yeaft Settings Popover -->
@@ -696,6 +696,7 @@ export default {
     Vue.watch(
       () => signalStream.value.rawSignatures,
       (rawSigs) => {
+        if (projectedAgentList.value.length === 0 && Object.keys(rawSigs || {}).length === 0) return;
         if (typeof store.pruneCosmosDismissedSignals === 'function') {
           store.pruneCosmosDismissedSignals(rawSigs);
           return;
@@ -711,7 +712,7 @@ export default {
         }
         if (changed) localDismissedSignals.value = next;
       },
-      { flush: 'post' },
+      { flush: 'post', immediate: true },
     );
     const signalTriggerLabel = Vue.computed(() => (
       signalStream.value.badgeCount > 0
@@ -1344,12 +1345,14 @@ export default {
       }
     }
 
+    function focusSignalTrigger() {
+      Vue.nextTick(() => signalTriggerRef.value?.focus?.());
+    }
+
     function closeSignalPopover({ restoreFocus = false } = {}) {
       if (!signalPopoverOpen.value) return;
       signalPopoverOpen.value = false;
-      if (restoreFocus) {
-        Vue.nextTick(() => signalTriggerRef.value?.focus?.());
-      }
+      if (restoreFocus) focusSignalTrigger();
     }
 
     function openSessionInDrawer(agentId, session) {
@@ -2044,7 +2047,7 @@ export default {
       onCanvasPointerDown, resetCamera, onPlanetPointerDown, onPlanetEnter, onPlanetLeave,
       onHoverCardEnter, onHoverCardLeave, onStageWheel, jumpToScale,
       openSessionInDrawer, openAgentConversationFromQuick, openCosmosSessionSearch, onDrawerSelectSession, toggleWorkbenchWiden, closeDrawer,
-      onToggleConstants, onToggleSignalTrigger, closeSignalPopover, onOpenSignal, onDismissSignal, onMarkAllSignalsRead,
+      onToggleConstants, onToggleSignalTrigger, focusSignalTrigger, closeSignalPopover, onOpenSignal, onDismissSignal, onMarkAllSignalsRead,
       openQuickComposerFromDrawer, onDrawerResizeStart, onDrawerResize, onDrawerResizeEnd, onDrawerResizeReset,
       emitTelemetryBeam, onAutoRouted, jumpToWaitingAgent, assignFromMenu,
       onObserveEvent, onFocusDistantEvent, onReturnFromEvent, onStopEvent, onToggleAutoEvents, onToggleAutoZoom, onTogglePauseEvent, onReplayEvent, onNextRandomEvent, onSetEventZoom, onResetEventView, onScrubEvent,
