@@ -11,7 +11,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { cleanText, normalizeMedia, parseTimestamp } from './rss-parser.js';
 import { extractCommunityEnrichment, verifyStoredCommunityMedia } from './community-extractor.js';
 import { toProxyMediaUrl } from './media-proxy.js';
-import { extractCleanArticle } from './article-extractor.js';
+import { ARTICLE_EXTRACTOR_VERSION, extractCleanArticle } from './article-extractor.js';
 import { buildGraphProjection, canonicalizeUrl, CLUSTER_THRESHOLD, CLUSTER_WINDOW_MS, clusterSimilarity, computeHeatScore, extractTokens } from './clusterer.js';
 import { clearAllCosmicWebAiRequests, listCapableAgentsForUser, requestCosmicWebAi, validateCosmicWebAiResult } from './ai-bridge.js';
 
@@ -420,16 +420,15 @@ export function createCosmicWebService({ fetcher = safeFetch, dnsLookup, now = D
     return item;
   }
 
-  async function article(userId, id, options = {}) {
+  async function articleRecord(userId, id, options = {}) {
     const { signal } = controller;
     ensureRunning(signal);
     ensureActive(userId);
     const selection = typeof options === 'string' ? { itemId: options } : options;
     const item = selectItem(visibleCluster(userId, id), selection);
-    const { force } = selection;
-    const toArticle = result => ({ ...result, sourceUrl: item.url, contentMd: result.markdown });
+    const { force, preserveCacheOnBlocked } = selection;
     const cached = db.getArticleCache(userId, item.id, now());
-    if (cached && force !== true && force !== '1') return toArticle(cached);
+    if (cached && force !== true && force !== '1') return { item, result: cached };
     let task = articleInflight.get(item.id);
     if (!task) {
       task = limit(async () => {
@@ -449,8 +448,16 @@ export function createCosmicWebService({ fetcher = safeFetch, dnsLookup, now = D
     const result = await task;
     ensureRunning(signal);
     ensureActive(userId);
-    db.setArticleCache(userId, item.id, result, now() + (result.quality === 'blocked' ? minute : 24 * 60 * minute));
-    return toArticle(result);
+    // Keep a working legacy display cache row intact if a background provenance upgrade hits a transient origin failure.
+    if (!preserveCacheOnBlocked || result.quality !== 'blocked' || !cached || cached.quality === 'blocked') {
+      db.setArticleCache(userId, item.id, result, now() + (result.quality === 'blocked' ? minute : 24 * 60 * minute));
+    }
+    return { item, result };
+  }
+  async function article(userId, id, options = {}) {
+    const { item, result } = await articleRecord(userId, id, options);
+    const { aiMarkdown: _omitAiMarkdown, ...display } = result;
+    return { ...display, sourceUrl: item.url, contentMd: result.markdown };
   }
 
   function briefingOptions(userId, userRole, body, prefs = preferred(userId), mode = 'brief') {
@@ -1352,28 +1359,40 @@ export function createCosmicWebService({ fetcher = safeFetch, dnsLookup, now = D
       const options = briefingOptions(userId, userRole, body, preferred(userId), mode);
       const c = visibleCluster(userId, id);
       const item = selectItem(c, body);
+      const hasTrustedPrivateArticle = rec => rec?.extractorVersion === ARTICLE_EXTRACTOR_VERSION && typeof rec?.truncated === 'boolean';
       const cached = db.getArticleCache(userId, item.id, now());
-      const articleTask = cached || body.skipArticleFetch === true ? Promise.resolve(cached) : article(userId, id, { itemId: item.id });
+      const hasTrustedCached = Boolean(cached && (!c.isPrivateSource || hasTrustedPrivateArticle(cached)));
+      const articleTask = hasTrustedCached
+        ? Promise.resolve(cached)
+        : (body.skipArticleFetch === true
+          ? Promise.resolve(null)
+          : articleRecord(userId, id, { itemId: item.id, force: Boolean(cached), preserveCacheOnBlocked: Boolean(cached) }).then(entry => entry.result));
       const [content, context] = await Promise.all([
-        quick(articleTask, cached),
+        quick(articleTask, hasTrustedCached ? cached : null),
         c.isPrivateSource ? Promise.resolve(noEnrichment()) : briefingEnrichment(c, signal, body.skipArticleFetch === true),
       ]);
       // Never enable outbound web research for owner-private feeds or legacy v1 Agents.
       const allowResearch = !c.isPrivateSource && body.research === true && Boolean(options.agent?.supportsResearch);
-      // When Clean Article extraction truncated markup/Markdown (e.g. 40,000-char cap), omit the incomplete trailing
-      // token from the private AI projection so a username-only //USER fragment split before @host cannot survive.
-      const privateArticleMd = c.isPrivateSource && content?.markdown
-        ? ((content.truncated === true || content.markdown.length >= 40_000) ? dropTrailingToken(content.markdown) : content.markdown)
+      // For private sources, only accept versioned extractor rows with explicit truncation provenance; truncated rows use
+      // the source-cutoff-safe aiMarkdown computed before closing Markdown syntax is synthesized, while unversioned legacy
+      // rows are re-extracted above or omitted here (never falling back to unversioned private Markdown).
+      const trustedPrivateContent = hasTrustedPrivateArticle(content);
+      const privateArticleMd = c.isPrivateSource
+        ? (trustedPrivateContent
+          ? (content.truncated
+            ? (typeof content.aiMarkdown === 'string' ? content.aiMarkdown : undefined)
+            : content.markdown)
+          : undefined)
         : content?.markdown;
-      const safeArticleMd = c.isPrivateSource && privateArticleMd
-        ? stripPrivateUrls(privateArticleMd, { maxOutputChars: 12_000 })
+      const safeArticleMd = c.isPrivateSource
+        ? (privateArticleMd ? stripPrivateUrls(privateArticleMd, { maxOutputChars: 12_000 }) : undefined)
         : privateArticleMd?.slice(0, 12_000);
       const safeExcerpt = c.isPrivateSource ? stripPrivateUrls(item.summaryExcerpt, { maxOutputChars: 1000 }) : item.summaryExcerpt;
       const result = await ai(userId, userRole, mode, body, {
         headline: item.title, sourceUrl: item.url, summaryExcerpt: safeExcerpt,
         isPrivateSource: c.isPrivateSource,
         research: allowResearch,
-        articleMarkdown: safeArticleMd, quality: content?.quality,
+        articleMarkdown: safeArticleMd, quality: (!c.isPrivateSource || trustedPrivateContent) ? content?.quality : undefined,
         sources: prioritizeSelectedSources(c.items, item, c.isPrivateSource, 12), ...context,
       }, signal, options);
       ensureRunning(signal);

@@ -14,7 +14,7 @@ import { safeFetch, validateExternalUrl } from '../../server/cosmic-web/safe-fet
 import { createMediaProxy, toProxyMediaUrl } from '../../server/cosmic-web/media-proxy.js';
 import { extractCommunityEnrichment } from '../../server/cosmic-web/community-extractor.js';
 import { parseFeedXml, resolveHttpUrl } from '../../server/cosmic-web/rss-parser.js';
-import { extractCleanArticle } from '../../server/cosmic-web/article-extractor.js';
+import { ARTICLE_EXTRACTOR_VERSION, extractCleanArticle } from '../../server/cosmic-web/article-extractor.js';
 import { BUILTIN_DOMAINS, BUILTIN_SOURCES } from '../../server/cosmic-web/catalog.js';
 import { fetchSource } from '../../server/cosmic-web/sources.js';
 import { buildGraphProjection, canonicalizeUrl, clusterSimilarity, computeHeatScore, extractTokens } from '../../server/cosmic-web/clusterer.js';
@@ -1265,12 +1265,14 @@ describe('2.0 graph and AI contracts', () => {
     expect(JSON.stringify(requestAi.mock.lastCall[0].payload)).not.toContain('CLIPPASS99');
     // Round 19 Blocker #3: 39,000-backslash run after URL must redact linearly (< 150ms, never quadratic)
     db.setArticleCache('alice', privItemId, {
-      title: 'Backslash stress', markdown: `https://files.example/a?token=BSSTRESS99${'\\'.repeat(39_000)}]`,
+      title: 'Backslash stress', markdown: `KeepBS https://files.example/a?token=BSSTRESS99${'\\'.repeat(39_000)}]`,
+      extractorVersion: ARTICLE_EXTRACTOR_VERSION, truncated: false,
       quality: 'full', itemId: privItemId, clusterId: privNode.clusterId, summaryExcerpt: 'Stress',
     }, NOW + HOUR);
     const tBs0 = performance.now();
     await svc.aiBrief('alice', 'user', privNode.clusterId, { research: true, force: true });
     expect(performance.now() - tBs0).toBeLessThan(150);
+    expect(requestAi.mock.lastCall[0].payload.articleMarkdown).toContain('KeepBS');
     expect(JSON.stringify(requestAi.mock.lastCall[0].payload)).not.toContain('BSSTRESS99');
     // Round 6–23: followUp redacts all alphanumeric sentinels directly in summaryExcerpt (including footnotes after symbol/IPv6/port authorities, WHATWG dot scheme-relative hosts, truncated numeric password at EOF & WHATWG bare www)
     await svc.followUp('alice', 'user', privNode.clusterId, { question: 'Any updates?', research: true });
@@ -1358,30 +1360,22 @@ describe('2.0 graph and AI contracts', () => {
     const cleanTrunc = await r3Svc.article('heidi', r3TruncCluster.id);
     expect(cleanTrunc.markdown).toHaveLength(40_000);
     expect(cleanTrunc.truncated).toBe(true);
+    expect(cleanTrunc.extractorVersion).toBe(ARTICLE_EXTRACTOR_VERSION);
+    expect(cleanTrunc.aiMarkdown).toBeUndefined();
     expect(cleanTrunc.markdown).toContain('//TRUNCUSER');
     await r3Svc.aiBrief('heidi', 'user', r3TruncCluster.id, { research: true });
     const r3TruncBriefPayload = requestAi.mock.lastCall[0].payload;
     expect(r3TruncBriefPayload.articleMarkdown).toContain('Keep safe prose');
     expect(JSON.stringify(r3TruncBriefPayload)).not.toContain('TRUNCUSER');
     expect(JSON.stringify(r3TruncBriefPayload)).not.toContain('cdn.example');
-    // Legacy cached 40,000-char entry (without truncated flag) ALSO omits the truncated trailing token on private aiBrief
-    const r3TruncItemId = cleanTrunc.itemId;
-    const legacy40kMd = `https://cdn.example/${'a'.repeat(39_950)} Legacy safe //LEGACYTRUNCUSER`;
-    expect(legacy40kMd).toHaveLength(40_000);
-    db.setArticleCache('heidi', r3TruncItemId, {
-      title: 'Legacy 40k cache',
-      markdown: legacy40kMd,
-      quality: 'full', itemId: r3TruncItemId, clusterId: r3TruncCluster.id, summaryExcerpt: 'Legacy',
-    }, NOW + HOUR);
-    await r3Svc.aiBrief('heidi', 'user', r3TruncCluster.id, { research: true, force: true });
-    expect(requestAi.mock.lastCall[0].payload.articleMarkdown).toContain('Legacy safe');
-    expect(JSON.stringify(requestAi.mock.lastCall[0].payload)).not.toContain('LEGACYTRUNCUSER');
     // >2 MiB HTML markup cap yields <40k markdown with truncated: true -> aiBrief still drops the truncated trailing token
+    const r3TruncItemId = cleanTrunc.itemId;
     const bigHtmlExtracted = extractCleanArticle(
       `<script>${'x'.repeat(2_097_112)}</script><p>Safe //BIGHTMLTRUNC99@intranet:8080</p>`,
       'https://private.example/r3-big',
     );
     expect(bigHtmlExtracted.truncated).toBe(true);
+    expect(bigHtmlExtracted.extractorVersion).toBe(ARTICLE_EXTRACTOR_VERSION);
     expect(bigHtmlExtracted.markdown).toContain('//BIGHTMLTRUNC');
     expect(bigHtmlExtracted.markdown.length).toBeLessThan(40_000);
     db.setArticleCache('heidi', r3TruncItemId, {
@@ -1390,6 +1384,179 @@ describe('2.0 graph and AI contracts', () => {
     await r3Svc.aiBrief('heidi', 'user', r3TruncCluster.id, { research: true, force: true });
     expect(requestAi.mock.lastCall[0].payload.articleMarkdown).toContain('Safe');
     expect(JSON.stringify(requestAi.mock.lastCall[0].payload)).not.toContain('BIGHTMLTRUNC');
+
+    // Round 25 (PR #2032 Round 4) Blocker #1 & #2 isolated end-to-end regressions:
+    // (1) 2 MiB scan cap & MAX_TAGS cap cutting inside <pre> / <code> / nested wrappers (where markdown() appends closing fences/backticks):
+    //     Clean Article display keeps full closing fences intact, while aiBrief -> real Agent runCosmicWebBriefing model prompt NEVER receives the cut username fragment.
+    // (2) Unversioned legacy article_cache rows (both short <40k byte-capped rows and 40k rows) without extractorVersion/truncated provenance:
+    //     Clean Article display reads them intact, while private aiBrief re-extracts (upgrading cache when live) or omits them (when skipArticleFetch or offline, without clobbering legacy display cache).
+    const r4PreHtml = `<script>${'x'.repeat(2_097_070)}</script><article><p>Safe pre intro.</p><pre>const preVal = //PRETRUNCUSER99@intranet:8080</pre></article>`;
+    const r4CodeHtml = `<script>${'x'.repeat(2_097_062)}</script><article><p>Safe inline code <code>const codeVal = //CODETRUNCUSER99@intranet:8080</code></p></article>`;
+    const r4NestedHtml = `<script>${'x'.repeat(2_097_048)}</script><article><p>Safe nested <a href="https://intranet.local/doc"><code>//LINKCODETRUNC99@intranet:8080</code></a></p></article>`;
+    const r4BqPreHtml = `<script>${'x'.repeat(2_097_062)}</script><article><blockquote><p>Safe quote.</p><pre>const q = //BQPRETRUNC99@intranet:8080</pre></blockquote></article>`;
+    const r4TagCapHtml = `<article><p>Safe tag cap.</p>${'<span></span>'.repeat(14_998)}<pre>const t = //TAGCAPTRUNC99<span>@intranet:8080</span></pre></article>`;
+    const r4RssTagCapDesc = `<![CDATA[${'<span></span>'.repeat(15_000)}Safe rss tags //RSSTAGCAP99<span>@intranet:8080</span>]]>`;
+    const r4Rss = `<rss><channel>
+      <item><title>Preformatted Fenced Document</title><link>https://private.example/r4-pre</link><description>Pre summary</description></item>
+      <item><title>Inline Backtick Snippet</title><link>https://private.example/r4-code</link><description>Code summary</description></item>
+      <item><title>Legacy Cached Briefing</title><link>https://private.example/r4-legacy</link><description>Legacy summary</description></item>
+      <item><title>Dense Tag Description</title><link>https://private.example/r4-rsstag</link><description>${r4RssTagCapDesc}</description></item>
+    </channel></rss>`;
+    let r4LegacyFetchMode = 'live';
+    let r4LegacyFetchCount = 0;
+    const r4CapturedPrompts = [];
+    const r4AgentAi = vi.fn(async ({ mode, perspective, language, payload }) => {
+      const adapter = {
+        async call(req) {
+          r4CapturedPrompts.push(JSON.stringify(req));
+          return { text: JSON.stringify({ tldr: 'ok', bullets: ['one', 'two'], impact: 'ok', followUps: ['q1', 'q2'] }) };
+        },
+      };
+      const { result } = await runCosmicWebBriefing({
+        mode, perspective, language, payload,
+        config: { fastModel: 'test/fast', defaultModel: 'test/fast' },
+        adapter,
+      });
+      return result;
+    });
+    const r4Svc = makeService({
+      fetcher: async url => {
+        if (url.endsWith('.xml')) return { status: 200, url, text: async () => r4Rss };
+        if (url.endsWith('/r4-pre')) return { status: 200, url, text: async () => r4PreHtml };
+        if (url.endsWith('/r4-code')) return { status: 200, url, text: async () => r4CodeHtml };
+        if (url.endsWith('/r4-legacy')) {
+          r4LegacyFetchCount++;
+          if (r4LegacyFetchMode === 'offline') return { status: 503, url, text: async () => 'unavailable' };
+          return { status: 200, url, text: async () => r4PreHtml };
+        }
+        return { status: 200, url, text: async () => '<article><p>ok</p></article>' };
+      },
+      requestAi: r4AgentAi,
+    });
+    await r4Svc.savePreferences('ivan', {
+      enabledDomainIds: [],
+      customDomains: [{ id: 'priv-r4', name: 'Priv R4', colorToken: 'cyan', enabled: true, keywords: [], rssUrls: ['https://private.example/r4.xml'] }],
+    });
+    await r4Svc.refresh('ivan', { domainId: 'priv-r4', force: true });
+    const ivanFeed = r4Svc.feed('ivan', { domainId: 'priv-r4' });
+    expect(ivanFeed.clusters).toHaveLength(4);
+    const r4PreCluster = ivanFeed.clusters.find(c => c.headline === 'Preformatted Fenced Document');
+    const r4CodeCluster = ivanFeed.clusters.find(c => c.headline === 'Inline Backtick Snippet');
+    const r4LegacyCluster = ivanFeed.clusters.find(c => c.headline === 'Legacy Cached Briefing');
+    const r4RssTagCluster = ivanFeed.clusters.find(c => c.headline === 'Dense Tag Description');
+    // Private RSS CDATA >30,000-tag cap drops truncated trailing token before scrubbing
+    expect(r4RssTagCluster.summaryExcerpt).toContain('Safe rss tags');
+    expect(r4RssTagCluster.summaryExcerpt).not.toContain('RSSTAGCAP99');
+    agents.set('v2-ivan', { ownerId: 'ivan', name: 'v2-ivan', capabilities: ['cosmic_web_briefing', 'cosmic_web_follow_up'], encryptOutbound: false, ws: { readyState: 1, send: () => {} } });
+
+    // (1a) <pre> cut by 2 MiB scan cap: Clean Article display keeps closing fence + raw text, while aiBrief -> Agent prompt drops //PRETRUNCUSER
+    const r4PreArt = await r4Svc.article('ivan', r4PreCluster.id);
+    expect(r4PreArt.truncated).toBe(true);
+    expect(r4PreArt.extractorVersion).toBe(ARTICLE_EXTRACTOR_VERSION);
+    expect(r4PreArt.aiMarkdown).toBeUndefined();
+    expect(r4PreArt.markdown).toContain('```\nconst preVal = //PRETRUNCUSER');
+    expect(r4PreArt.markdown.endsWith('\n```')).toBe(true);
+    await r4Svc.aiBrief('ivan', 'user', r4PreCluster.id, { research: true });
+    expect(r4AgentAi.mock.lastCall[0].payload.articleMarkdown).toContain('Safe pre intro.');
+    expect(r4AgentAi.mock.lastCall[0].payload.articleMarkdown).toContain('const preVal =');
+    expect(JSON.stringify(r4AgentAi.mock.lastCall[0].payload)).not.toContain('PRETRUNCUSER');
+    expect(r4CapturedPrompts.at(-1)).toContain('Safe pre intro.');
+    expect(r4CapturedPrompts.at(-1)).not.toContain('PRETRUNCUSER');
+
+    // (1b) <code> cut by 2 MiB scan cap: Clean Article display keeps closing backtick + raw text, while aiBrief -> Agent prompt drops //CODETRUNCUSER
+    const r4CodeArt = await r4Svc.article('ivan', r4CodeCluster.id);
+    expect(r4CodeArt.truncated).toBe(true);
+    expect(r4CodeArt.markdown).toContain('` const codeVal = //CODETRUNCUSER');
+    expect(r4CodeArt.markdown.endsWith(' `')).toBe(true);
+    await r4Svc.aiBrief('ivan', 'user', r4CodeCluster.id, { research: true });
+    expect(r4AgentAi.mock.lastCall[0].payload.articleMarkdown).toContain('Safe inline code');
+    expect(r4AgentAi.mock.lastCall[0].payload.articleMarkdown).toContain('const codeVal =');
+    expect(JSON.stringify(r4AgentAi.mock.lastCall[0].payload)).not.toContain('CODETRUNCUSER');
+    expect(r4CapturedPrompts.at(-1)).toContain('Safe inline code');
+    expect(r4CapturedPrompts.at(-1)).not.toContain('CODETRUNCUSER');
+
+    // (1c) Nested <a><code>, <blockquote><pre>, and MAX_TAGS (30,000) cap inside <pre>
+    for (const [html, safeText, secretFrag] of [
+      [r4NestedHtml, 'Safe nested', 'LINKCODETRUNC'],
+      [r4BqPreHtml, 'Safe quote.', 'BQPRETRUNC'],
+      [r4TagCapHtml, 'Safe tag cap.', 'TAGCAPTRUNC'],
+    ]) {
+      const ext = extractCleanArticle(html, 'https://private.example/r4-nested');
+      expect(ext.truncated).toBe(true);
+      expect(ext.extractorVersion).toBe(ARTICLE_EXTRACTOR_VERSION);
+      expect(ext.markdown).toContain(secretFrag);
+      expect(ext.aiMarkdown).toContain(safeText);
+      expect(ext.aiMarkdown).not.toContain(secretFrag);
+      expect(ext.aiMarkdown).not.toContain('intranet.local');
+    }
+
+    // (2a) Unversioned SHORT (<40k) legacy cache row (no extractorVersion, no truncated flag):
+    // Clean Article display reads it intact; skipArticleFetch omits it from AI; offline origin omits it without clobbering legacy display cache; live origin re-extracts & upgrades safely.
+    const r4LegacyClusterDetail = await r4Svc.cluster('ivan', r4LegacyCluster.id);
+    const r4LegacyItemId = r4LegacyClusterDetail.items[0].id;
+    const shortLegacyMd = 'Safe legacy short\n\n```\nconst u = //LEGACYSHORTUSER\n```';
+    db.setArticleCache('ivan', r4LegacyItemId, {
+      title: 'Legacy short byte-capped cache',
+      markdown: shortLegacyMd,
+      quality: 'full', itemId: r4LegacyItemId, clusterId: r4LegacyCluster.id, summaryExcerpt: 'Legacy short',
+    }, NOW + HOUR);
+    // Clean Article display still serves legacy cache row intact without refetching
+    const legacyDisplayBefore = await r4Svc.article('ivan', r4LegacyCluster.id);
+    expect(legacyDisplayBefore.markdown).toBe(shortLegacyMd);
+    expect(r4LegacyFetchCount).toBe(0);
+    // Private aiBrief with skipArticleFetch omits unversioned legacy private Markdown completely
+    await r4Svc.aiBrief('ivan', 'user', r4LegacyCluster.id, { skipArticleFetch: true, research: true, force: true });
+    expect(r4LegacyFetchCount).toBe(0);
+    expect(r4AgentAi.mock.lastCall[0].payload.articleMarkdown).toBeUndefined();
+    expect(JSON.stringify(r4AgentAi.mock.lastCall[0].payload)).not.toContain('LEGACYSHORTUSER');
+    expect(r4CapturedPrompts.at(-1)).not.toContain('LEGACYSHORTUSER');
+    // Private aiBrief when origin is offline attempts re-extract, omits unversioned legacy Markdown on failure, AND preserves legacy display cache
+    r4LegacyFetchMode = 'offline';
+    await r4Svc.aiBrief('ivan', 'user', r4LegacyCluster.id, { research: true, force: true });
+    expect(r4LegacyFetchCount).toBe(1);
+    expect(r4AgentAi.mock.lastCall[0].payload.articleMarkdown).toBeUndefined();
+    expect(JSON.stringify(r4AgentAi.mock.lastCall[0].payload)).not.toContain('LEGACYSHORTUSER');
+    expect(r4CapturedPrompts.at(-1)).not.toContain('LEGACYSHORTUSER');
+    const legacyDisplayAfterOffline = await r4Svc.article('ivan', r4LegacyCluster.id);
+    expect(legacyDisplayAfterOffline.markdown).toBe(shortLegacyMd);
+    expect(r4LegacyFetchCount).toBe(1);
+    // Private aiBrief when origin is live re-extracts with v2 provenance, upgrades cache, keeps safe prose, and leaks NEITHER legacy NOR fresh truncated username fragment
+    r4LegacyFetchMode = 'live';
+    await r4Svc.aiBrief('ivan', 'user', r4LegacyCluster.id, { research: true, force: true });
+    expect(r4LegacyFetchCount).toBe(2);
+    expect(r4AgentAi.mock.lastCall[0].payload.articleMarkdown).toContain('Safe pre intro.');
+    expect(JSON.stringify(r4AgentAi.mock.lastCall[0].payload)).not.toContain('LEGACYSHORTUSER');
+    expect(JSON.stringify(r4AgentAi.mock.lastCall[0].payload)).not.toContain('PRETRUNCUSER');
+    expect(r4CapturedPrompts.at(-1)).toContain('Safe pre intro.');
+    expect(r4CapturedPrompts.at(-1)).not.toContain('LEGACYSHORTUSER');
+    expect(r4CapturedPrompts.at(-1)).not.toContain('PRETRUNCUSER');
+    // Legacy 40,000-char cache row without extractorVersion is also omitted under skipArticleFetch (and display reads remain intact)
+    const legacy40kMd = `https://cdn.example/${'a'.repeat(39_950)} Legacy safe //LEGACYTRUNCUSER`;
+    expect(legacy40kMd).toHaveLength(40_000);
+    db.setArticleCache('ivan', r4LegacyItemId, {
+      title: 'Legacy 40k cache',
+      markdown: legacy40kMd,
+      quality: 'full', itemId: r4LegacyItemId, clusterId: r4LegacyCluster.id, summaryExcerpt: 'Legacy 40k',
+    }, NOW + HOUR);
+    expect((await r4Svc.article('ivan', r4LegacyCluster.id)).markdown).toBe(legacy40kMd);
+    await r4Svc.aiBrief('ivan', 'user', r4LegacyCluster.id, { skipArticleFetch: true, research: true, force: true });
+    expect(r4AgentAi.mock.lastCall[0].payload.articleMarkdown).toBeUndefined();
+    expect(JSON.stringify(r4AgentAi.mock.lastCall[0].payload)).not.toContain('LEGACYTRUNCUSER');
+    expect(r4CapturedPrompts.at(-1)).not.toContain('LEGACYTRUNCUSER');
+    // Public source legacy unversioned cache row is still reused directly by aiBrief without forcing an article refetch
+    const pubDetailForLegacy = await svc.cluster('alice', pubId);
+    const pubLegacyItemId = pubDetailForLegacy.items[0].id;
+    db.setArticleCache('alice', pubLegacyItemId, {
+      title: 'Public legacy cache', markdown: 'Public legacy article body',
+      quality: 'full', itemId: pubLegacyItemId, clusterId: pubId, summaryExcerpt: 'Public legacy',
+    }, NOW + HOUR);
+    const pubLegacyReqAi = vi.fn(async () => storyResult);
+    const pubLegacySvc = makeService({
+      fetcher: async () => ({ status: 200, url: 'https://public.example/ai', text: async () => '<article><p>refetched-public-body</p></article>' }),
+      requestAi: pubLegacyReqAi,
+    });
+    await pubLegacySvc.aiBrief('alice', 'user', pubId, { force: true });
+    expect(pubLegacyReqAi.mock.lastCall[0].payload.articleMarkdown).toBe('Public legacy article body');
 
     // Mixed public/private dailyBriefing carries per-story isPrivateSource: true on private stories (enabling Agent defense-in-depth) while keeping public stories clean.
     const mixedDailyReqAi = vi.fn(async () => dailyResult);

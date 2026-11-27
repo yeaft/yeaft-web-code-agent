@@ -130,9 +130,14 @@ export function* scanMarkup(input, { xml = false, rawTags = new Set(), emitRawOp
 }
 
 const textRawTags = new Set(['script', 'style']);
-export function cleanText(text) {
+function dropTrailingToken(str) {
+  let end = str.length;
+  while (end > 0 && !/\s/u.test(str[end - 1])) end--;
+  return end === str.length ? str : str.slice(0, end);
+}
+export function cleanText(text, meta = null) {
   const parts = [];
-  for (const token of scanMarkup(text, { rawTags: textRawTags })) parts.push(token.type === 'text' ? token.text : ' ');
+  for (const token of scanMarkup(text, { rawTags: textRawTags, meta })) parts.push(token.type === 'text' ? token.text : ' ');
   return decodeEntities(parts.join('')).replace(/\s+/gu, ' ').trim();
 }
 
@@ -226,7 +231,9 @@ export function parseFeedXml(xmlText, baseUrl, { sanitizeExcerpt } = {}) {
         const title = cleanText(f.title);
         const url = entry.link ?? resolveHttpUrl(f.guid, entry.base);
         if (url && title) {
-          const rawExcerpt = cleanText(f['content:encoded'] ?? f.description ?? f.summary ?? f.content);
+          const excerptMeta = { truncated: false };
+          let rawExcerpt = cleanText(f['content:encoded'] ?? f.description ?? f.summary ?? f.content, excerptMeta);
+          if (typeof sanitizeExcerpt === 'function' && excerptMeta.truncated) rawExcerpt = dropTrailingToken(rawExcerpt);
           const safeExcerpt = typeof sanitizeExcerpt === 'function' ? sanitizeExcerpt(rawExcerpt) : rawExcerpt;
           items.push({ title, url, publishedAt: parseTimestamp(f.pubdate ?? f.published ?? f.updated ?? f['dc:date']),
             summaryExcerpt: safeExcerpt.replace(/\s+/gu, ' ').trim().slice(0, 1000),
