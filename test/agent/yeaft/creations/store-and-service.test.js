@@ -69,6 +69,15 @@ describe('Creation folder workspaces', () => {
     }
   });
 
+  it('conditionally relinks a Creation only if the expected Session still matches', () => {
+    const { id } = store.createCreation({ title: 'Book' });
+    expect(store.updateCreation(id, { sessionId: 'original', expectedSessionId: null }).sessionId).toBe('original');
+    expect(store.updateCreation(id, { sessionId: 'winner', expectedSessionId: 'original' }).sessionId).toBe('winner');
+    expect(() => store.updateCreation(id, { sessionId: 'loser', expectedSessionId: 'original' })).toThrow(err('CONFLICT'));
+    expect(store.getCreation(id)).toMatchObject({ sessionId: 'winner' });
+    expect(store.getCreation(id)).not.toHaveProperty('expectedSessionId');
+  });
+
   it('records, refreshes on relink, and clears the identity of a directly bound folder', () => {
     const id = 'direct-binding';
     const first = join(realpathSync(dir), 'first');

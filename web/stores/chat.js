@@ -6464,7 +6464,9 @@ export const useChatStore = defineStore('chat', {
           // sidebar. Older agents/servers omit the field — the store
           // falls back to the legacy whole-replacement path.
           if (gs) {
-            gs.applySnapshot(rows, msg.agentId || null);
+            gs.applySnapshot(rows, msg.agentId || null, {
+              authoritative: event.type !== 'yeaft_session_hydrate' && Array.isArray(event.sessions),
+            });
             scheduledTaskHelpers.reconcileScheduledTaskNotifications(this, rows, msg.agentId);
             this._hasHandledYeaftSessionHydrate = true;
             this.yeaftSessionHydrateError = null;
@@ -6491,6 +6493,7 @@ export const useChatStore = defineStore('chat', {
           if (gs) gs.applyRosterChange(event, msg.agentId || null);
           break;
         }
+        case 'yeaft_session_crud_result':
         case 'group_crud_result':
         case 'session_crud_result': {
           const gs = window.Pinia?.useSessionsStore?.() || (window.__useSessionsStore && window.__useSessionsStore());
@@ -6533,7 +6536,11 @@ export const useChatStore = defineStore('chat', {
             pending.resolve({ ok: false, op: pending.op, error: { code: 'stale_request' } });
             break;
           }
+          if (pending && (event.op === 'list' || pending.op === 'list') && (
+            event.op !== pending.op || (msg.agentId && pending.agentId && msg.agentId !== pending.agentId)
+          )) break;
           const isListResult = event.ok && event.op === 'list';
+          const suppressAutoSelect = pending?.suppressAutoSelect === true;
           if ((isBranchResult || isListResult) && Array.isArray(event.projects)) {
             if (event.projectsAuthoritative === true) {
               this.applySessionCatalogSnapshot(this.sessionCatalog, event.projects, null, { authoritative: false });
@@ -6545,11 +6552,16 @@ export const useChatStore = defineStore('chat', {
               && event.ok && event.op === 'list' && Array.isArray(event.sessions)) {
             // A successful direct Agent list is useful even if the Server's
             // replay later fails. Apply it below and also keep it at commit.
-            handlerHelpers.bufferYeaftSessionInventorySlice(this, { agentId: msg.agentId, sessions: event.sessions }, { live: true });
+            handlerHelpers.bufferYeaftSessionInventorySlice(this, { agentId: msg.agentId, sessions: event.sessions }, {
+              live: true, suppressAutoSelect,
+            });
           }
           handlerHelpers.bufferYeaftSessionCrudDelta(this, event, msg.agentId || null);
           // The initiating create/restore/branch UI owns navigation.
-          if (gs) gs.applyCrudResult(event, msg.agentId || null);
+          if (gs) gs.applyCrudResult(event, msg.agentId || null, {
+            authoritative: isListResult === true,
+            suppressAutoSelect,
+          });
           if (event.ok && event.op === 'delete' && event.sessionId && msg.agentId) {
             this.clearYeaftHistoryMemory({
               agentId: msg.agentId,
@@ -7132,6 +7144,7 @@ export const useChatStore = defineStore('chat', {
     // Legacy callers may still pass `groupId`; the agent web-bridge accepts
     // both fields, so we pass the payload through as-is.
     sessionCrudRequest(op, data, opts = {}) {
+      const { suppressAutoSelect = false } = opts;
       if (!this._sessionCrudPending || typeof this._sessionCrudPending.get !== 'function') {
         this._sessionCrudPending = new Map();
       }
@@ -7197,6 +7210,7 @@ export const useChatStore = defineStore('chat', {
         }, timeoutMs);
         this._sessionCrudPending.set(requestId, {
           op,
+          suppressAutoSelect,
           authGeneration: Number(useAuthStore().authGeneration || 0),
           sessionId: data?.sessionId || null,
           otherSessionId: data?.otherSessionId || null,

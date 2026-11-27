@@ -1810,7 +1810,7 @@ describe('Cosmos Creations — End-to-End Web Store <-> Server Relay <-> Agent S
     expect(requests.mock.calls.map(([, action]) => action)).not.toContain('update_creation');
   });
 
-  it.each(['Agent list', 'local Agent snapshot', 'Agent deletion receipt'])('R10-F1: Galaxy replaces a confirmed-deleted Session (%s)', async source => {
+  it.each(['Agent list', 'local Agent snapshot', 'Agent deletion receipt', 'R11-F1: Agent deletion receipt and stale catalog'])('Galaxy replaces a confirmed-deleted Session (%s)', async source => {
     const { sessions } = await registerBrowserStores();
     const { default: CosmosPage } = await import('../../web/components/cosmos/CosmosPage.js');
     const agentId = 'agent-a';
@@ -1821,10 +1821,19 @@ describe('Cosmos Creations — End-to-End Web Store <-> Server Relay <-> Agent S
     const creation = serviceA.store.createCreation({ title: 'Recover Atlas', initializeFolder: true, sessionId: deletedId });
     await creationsStore.selectGalaxyAgent(agentId);
     sessions.applySnapshotUpsert({ id: deletedId, workDir: creation.rootDir }, 'agent-b');
-    if (source === 'local Agent snapshot') sessions.applySnapshot([], agentId);
-    if (source === 'Agent deletion receipt') sessions.applyCrudResult({ ok: true, op: 'delete', sessionId: deletedId }, agentId);
+    if (source === 'local Agent snapshot') sessions.applySnapshot([], agentId, { authoritative: true });
+    const hasDeletionReceipt = source.includes('Agent deletion receipt');
+    if (hasDeletionReceipt) sessions.applyCrudResult({ ok: true, op: 'delete', sessionId: deletedId }, agentId);
+    if (source.includes('stale catalog')) {
+      chatStore.applySessionCatalogSnapshot([{
+        catalogKey: `yeaft:${agentId}:${deletedId}`, runtimeProvider: 'yeaft',
+        routeRef: { runtimeProvider: 'yeaft', agentId, sessionId: deletedId },
+      }]);
+      expect(chatStore.hasKnownYeaftSession(deletedId, agentId)).toBe(true);
+    }
     let replacement;
-    const send = interceptSocket(chatStore, request => {
+    const crud = vi.spyOn(chatStore, 'sessionCrudRequest');
+    interceptSocket(chatStore, request => {
       if (request.type === 'yeaft_list_sessions') return sessionAck(chatStore, request, 'list', replacement || source === 'Agent list'
         ? { sessions: replacement ? [replacement] : [] } : { ok: false, error: { code: 'timeout' } });
       if (request.type === 'yeaft_create_session') {
@@ -1846,14 +1855,121 @@ describe('Cosmos Creations — End-to-End Web Store <-> Server Relay <-> Agent S
     expect(resolve).toHaveBeenCalledExactlyOnceWith(agentId, expect.objectContaining({
       id: creation.id, sessionId: deletedId, rootDir: creation.rootDir,
     }), { createIfMissing: true });
-    expect(send).toHaveBeenCalledWith(expect.objectContaining({ type: 'yeaft_list_sessions', agentId }));
+    const probe = ['list', {}, { agentId, suppressAutoSelect: true }];
+    if (hasDeletionReceipt) expect(crud).not.toHaveBeenCalledWith(...probe);
+    else expect(crud).toHaveBeenCalledWith(...probe);
     expect(createSession).toHaveBeenCalledExactlyOnceWith({ agentId, displayName: creation.title, workDir: creation.rootDir });
-    expect(update).toHaveBeenCalledExactlyOnceWith(agentId, creation.id, { sessionId: replacementId });
+    expect(update).toHaveBeenCalledExactlyOnceWith(agentId, creation.id, { sessionId: replacementId, expectedSessionId: deletedId });
     expect(serviceA.store.getCreation(creation.id).sessionId).toBe(replacementId);
     expect(wrapper.vm.drawerOpen).toBe(true);
     expect(chatStore.yeaftActiveSessionFilter).toBe(replacementId);
     expect(creationsStore.pendingWorkbenchTarget).toMatchObject({ agentId, creationId: creation.id,
       sessionId: replacementId, rootDir: creation.rootDir });
+  });
+
+  it('R11-F2: an empty Server replay and a real list timeout do not invalidate the recorded Session', async () => {
+    const { sessions } = await registerBrowserStores();
+    const agentId = 'agent-a';
+    const creation = serviceA.store.createCreation({ title: 'Atlas', initializeFolder: true, sessionId: 'recorded-session' });
+    chatStore.connectionState = 'connected';
+    chatStore.yeaftSessionInventoryCompleteSupported = true;
+    chatStore.yeaftSessionHydrateRequestId = 'shadow-replay';
+    chatStore.handleMessage({ type: 'yeaft_session_hydrate', agentId, requestId: 'shadow-replay', sessions: [] });
+    chatStore.handleMessage({ type: 'yeaft_session_hydrate_complete', requestId: 'shadow-replay', ok: true });
+    expect(sessions.hasLoadedSnapshot).toBe(true);
+    expect(sessions.sessionById(creation.sessionId, agentId)).toBeNull();
+    const createSession = vi.spyOn(chatStore, 'createYeaftSession').mockRejectedValue(new Error('Unexpected duplicate Session'));
+    vi.useFakeTimers();
+    try {
+      const resolution = creationsStore.resolveCreationSession(agentId, creation);
+      expect(chatStore.sendWsMessage).toHaveBeenCalledWith(expect.objectContaining({ type: 'yeaft_list_sessions', agentId }));
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(await resolution).toMatchObject({ sessionId: creation.sessionId });
+      expect(createSession).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('R11-F3: a Classic open with no selection survives its own live list response', async () => {
+    const { sessions } = await registerBrowserStores();
+    const agentId = 'agent-a';
+    const creation = serviceA.store.createCreation({ title: 'Atlas', initializeFolder: true, sessionId: 'target-session' });
+    chatStore.agents = [{ id: agentId, online: true }];
+    chatStore.connectionState = 'connected';
+    chatStore.currentAgent = agentId;
+    chatStore.currentView = 'yeaft';
+    chatStore.uiMode = 'classic';
+    chatStore.yeaftActiveSessionFilter = null;
+    expect(sessions.activeSessionKey).toBeNull();
+    const crud = vi.spyOn(chatStore, 'sessionCrudRequest');
+    const replacement = { id: 'replacement', workDir: creation.rootDir };
+    let created = false;
+    const send = interceptSocket(chatStore, request => {
+      if (request.type === 'yeaft_list_sessions') {
+        return sessionAck(chatStore, request, 'list', { sessions: [{ id: 'other-session' }, ...(created ? [replacement] : [])] });
+      }
+      if (request.type === 'yeaft_create_session') {
+        expect(sessions.sessionById('other-session', agentId)).not.toBeNull();
+        expect(sessions.activeSessionKey).toBeNull();
+        expect(chatStore.yeaftActiveSessionFilter).toBeNull();
+        created = true;
+        return sessionAck(chatStore, request, 'create', { session: replacement });
+      }
+    });
+    const opened = await creationsStore.openCreationWorkspace({ agentId, creationId: creation.id });
+    expect(crud).toHaveBeenCalledWith('list', {}, { agentId, suppressAutoSelect: true });
+    expect(send).toHaveBeenCalledWith(expect.objectContaining({ type: 'yeaft_create_session', agentId }));
+    expect(opened).toMatchObject({ creation: { id: creation.id }, sessionId: 'replacement' });
+    expect(chatStore.yeaftActiveSessionFilter).toBe('replacement');
+    expect(chatStore.workbenchExpanded).toBe(true);
+    expect(creationsStore.pendingWorkbenchTarget).toMatchObject({ agentId, creationId: creation.id, sessionId: 'replacement' });
+  });
+
+  it.each(['list probe', 'Session creation'])('R11-F4: adopts a competing relink during %s without overwriting it', async phase => {
+    const { sessions } = await registerBrowserStores();
+    const agentId = 'agent-a';
+    const creation = serviceA.store.createCreation({ title: 'Atlas', initializeFolder: true, sessionId: 'deleted-link' });
+    chatStore.connectionState = 'connected';
+    const list = deferred();
+    const create = deferred();
+    const send = interceptSocket(chatStore, request => {
+      if (request.type === 'yeaft_list_sessions') {
+        list.resolve(request);
+        return true;
+      }
+      if (request.type === 'yeaft_create_session') {
+        create.resolve(request);
+        return true;
+      }
+      if (request.type === 'yeaft_delete_session') return sessionAck(chatStore, request, 'delete', { sessionId: request.sessionId });
+    });
+    const update = vi.spyOn(creationsStore, 'updateCreation');
+    const resolution = creationsStore.resolveCreationSession(agentId, creation);
+    const listRequest = await list.promise;
+    const relink = () => serviceA.request({ op: 'update_creation', payload: {
+      creationId: creation.id, patch: { sessionId: 'winner', expectedSessionId: creation.sessionId },
+    } });
+    if (phase === 'list probe') {
+      await relink(); // Real service publishes creation_upserted to the local summary cache.
+      sessionAck(chatStore, listRequest, 'list', { sessions: [{ id: 'winner' }] });
+    } else {
+      sessionAck(chatStore, listRequest, 'list', { sessions: [] });
+      const createRequest = await create.promise;
+      await relink();
+      sessions.applySnapshotUpsert({ id: 'winner' }, agentId);
+      sessionAck(chatStore, createRequest, 'create', { session: { id: 'orphan' } });
+    }
+    expect(await resolution).toMatchObject({ creation: { id: creation.id, sessionId: 'winner' }, sessionId: 'winner' });
+    expect(serviceA.store.getCreation(creation.id).sessionId).toBe('winner');
+    if (phase === 'list probe') {
+      expect(send).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'yeaft_create_session' }));
+      expect(update).not.toHaveBeenCalled();
+    } else {
+      expect(update).toHaveBeenCalledExactlyOnceWith(agentId, creation.id, { sessionId: 'orphan', expectedSessionId: creation.sessionId });
+      expect(send).toHaveBeenCalledWith(expect.objectContaining({ type: 'yeaft_delete_session', agentId, sessionId: 'orphan' }));
+      expect(sessions.sessionById('winner', agentId)).not.toBeNull();
+    }
   });
 
   it.each(['leave Galaxy and return', 'close the drawer'])('fences a pending Galaxy Creation open when users %s', async action => {

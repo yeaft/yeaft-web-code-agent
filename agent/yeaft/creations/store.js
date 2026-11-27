@@ -668,6 +668,10 @@ export class CreationStore {
   updateCreation(id, patch) {
     return this.transaction(() => {
       const record = data(this.#creation(id));
+      if (own(patch, 'expectedSessionId')) {
+        const expected = optionalLinkId(patch.expectedSessionId, 'expectedSessionId');
+        if ((record.sessionId ?? null) !== expected) fail('CONFLICT', 'Creation session link changed concurrently');
+      }
       const previousRoot = record.rootDir ?? null;
       this.#creationFields(record, patch);
       if (own(patch, 'rootDir')) {

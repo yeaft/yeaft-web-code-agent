@@ -104,7 +104,7 @@ function findSessionKey(state, sessionId, agentId = null) {
   return keys[0] || '';
 }
 
-function enterAgentScopedInventory(state) {
+function enterAgentScopedInventory(state, suppressAutoSelect = false) {
   if (state.inventoryIdentityMode === 'legacy-bare') {
     const activeRow = state.activeSessionKey ? state.sessions[state.activeSessionKey] : null;
     const bareActiveRow = activeRow && !activeRow.agentId
@@ -114,7 +114,7 @@ function enterAgentScopedInventory(state) {
       ? bareActiveRow.id || null
       : null;
     state.sessionOrder = state.sessionOrder.filter(key => state.sessions[key]?.agentId);
-    if (state._retiredBareActiveSessionId) {
+    if (state._retiredBareActiveSessionId && !suppressAutoSelect) {
       state.activeSessionId = null;
       state.activeSessionKey = null;
     }
@@ -297,6 +297,8 @@ export const useSessionsStore = defineStore('sessions', {
     _preferredExactSessionIdentity: null,
     _explicitPendingSessionKey: null,
     lastSnapshotAt: 0,
+    authoritativeSnapshotAgents: {},
+    confirmedDeletedSessionKeys: {},
     /**
      * Most recent CRUD result for the UI to surface as toast/modal error.
      * Shape: { op, ok, error?:{code,sessionId,message}, at }
@@ -352,6 +354,9 @@ export const useSessionsStore = defineStore('sessions', {
       const key = findSessionKey(state, id, agentId);
       return key ? (state.sessions[key] || null) : null;
     },
+    isConfirmedDeletedSession: (state) => (agentId, sessionId) => (
+      !!agentId && !!sessionId && state.confirmedDeletedSessionKeys[storeKeyFor(agentId, sessionId)] === true
+    ),
     activeSession(state) {
       return state.activeSessionKey ? (state.sessions[state.activeSessionKey] || null) : null;
     },
@@ -386,7 +391,8 @@ export const useSessionsStore = defineStore('sessions', {
      * to stamp it), falls back to the legacy whole-store replacement
      * for back-compat.
      */
-    applySnapshot(sessions, agentId = null, { deferActivation = false } = {}) {
+    applySnapshot(sessions, agentId = null, options = {}) {
+      const { authoritative, deferActivation, suppressAutoSelect } = options;
       const arr = Array.isArray(sessions) ? sessions : [];
       if (!agentId) {
         // Legacy path — single-agent stores only. Once this inventory has
@@ -412,7 +418,7 @@ export const useSessionsStore = defineStore('sessions', {
       } else {
         // Per-agent replacement: drop only rows owned by this agent,
         // then merge in the new ones, preserving snapshot order.
-        enterAgentScopedInventory(this);
+        enterAgentScopedInventory(this, suppressAutoSelect);
         const nextMap = { ...this.sessions };
         const incomingKeys = new Set();
         for (const s of arr) {
@@ -506,6 +512,8 @@ export const useSessionsStore = defineStore('sessions', {
           }
         }
         this.sessionOrder = nextOrder;
+        if (authoritative === true && Array.isArray(sessions)) this.authoritativeSnapshotAgents[agentId] = true;
+        else delete this.authoritativeSnapshotAgents[agentId];
       }
       this.lastSnapshotAt = Date.now();
       const chat = _getChatStoreSafe();
@@ -550,7 +558,7 @@ export const useSessionsStore = defineStore('sessions', {
         };
         chat.applyServerPinSnapshot(agentId, pinnedInSnapshot, isOwnedByAgent);
       }
-      if (!deferActivation) reconcileInventorySelection(this);
+      if (!deferActivation && !suppressAutoSelect) reconcileInventorySelection(this);
     },
 
     /** Apply a `group_roster_changed` delta (in-place merge). */
@@ -586,7 +594,7 @@ export const useSessionsStore = defineStore('sessions', {
     },
 
     /** Record a `group_crud_result` for UI feedback. */
-    applyCrudResult(result, agentId = null) {
+    applyCrudResult(result, agentId = null, snapshotOptions = {}) {
       if (!result) return;
       this.lastCrudResult = { ...result, at: Date.now() };
       if (result.requestId && this.pending[result.requestId]) {
@@ -595,7 +603,7 @@ export const useSessionsStore = defineStore('sessions', {
       const session = result.session || result.group || null;
       const mutationAgentId = agentId || result.agentId || session?.agentId || null;
       if (result.ok && result.op === 'list' && Array.isArray(result.sessions)) {
-        this.applySnapshot(result.sessions, mutationAgentId);
+        this.applySnapshot(result.sessions, mutationAgentId, snapshotOptions);
       }
       if (result.ok && (result.op === 'create' || result.op === 'copy' || result.op === 'merge' || result.op === 'restore') && session && session.id) {
         this.applySnapshotUpsert(session, mutationAgentId);
@@ -617,6 +625,7 @@ export const useSessionsStore = defineStore('sessions', {
       if (result.ok && (result.op === 'archive' || result.op === 'delete') && opSessionId
           && (mutationAgentId || allowOwnerlessMutation)) {
         const key = opKey || storeKeyFor(mutationAgentId, opSessionId);
+        if (mutationAgentId) this.confirmedDeletedSessionKeys[storeKeyFor(mutationAgentId, opSessionId)] = true;
         const wasActive = this.activeSessionKey === key || this._explicitPendingSessionKey === key;
         if (this._explicitPendingSessionKey === key) this._explicitPendingSessionKey = null;
         const wasPreferred = this._preferredExactSessionIdentity === key;
@@ -652,6 +661,7 @@ export const useSessionsStore = defineStore('sessions', {
       if (effectiveAgentId) enterAgentScopedInventory(this);
       else if (this.inventoryIdentityMode !== 'legacy-bare') return '';
       const key = findSessionKey(this, session.id, effectiveAgentId) || storeKeyFor(effectiveAgentId, session.id);
+      delete this.confirmedDeletedSessionKeys[key];
       const existed = !!this.sessions[key];
       const prev = this.sessions[key] || {};
       this.sessions[key] = {
@@ -751,7 +761,7 @@ export const useSessionsStore = defineStore('sessions', {
       this.lastCrudResult = null;
     },
 
-    resetInventory() {
+    resetInventory({ preserveDeletionReceipts = false } = {}) {
       this.sessions = {};
       this.sessionOrder = [];
       this.activeSessionId = null;
@@ -761,6 +771,8 @@ export const useSessionsStore = defineStore('sessions', {
       this._preferredExactSessionIdentity = null;
       this._explicitPendingSessionKey = null;
       this.lastSnapshotAt = 0;
+      this.authoritativeSnapshotAgents = {};
+      if (!preserveDeletionReceipts) this.confirmedDeletedSessionKeys = {};
     },
 
     rememberSessionSelection(sessionId, agentId, activeKey) {
@@ -782,7 +794,8 @@ export const useSessionsStore = defineStore('sessions', {
 
     beginInventoryCommit(preferredSessionId = null, preferredAgentId = null) {
       const openingKey = this._explicitPendingSessionKey;
-      this.resetInventory();
+      // Replaying the Server's shadow inventory cannot invalidate an Agent deletion receipt.
+      this.resetInventory({ preserveDeletionReceipts: true });
       this._explicitPendingSessionKey = openingKey;
       if (!openingKey && preferredSessionId) {
         if (preferredAgentId) this._preferredExactSessionIdentity = storeKeyFor(preferredAgentId, preferredSessionId);

@@ -18,7 +18,6 @@ const USER_PREFIX_RE = /^user_\d+_[a-zA-Z0-9]+:/;
 const pendingRequests = new Map();
 const inFlightBindFolder = new Map();
 const inFlightResolveSession = new Map();
-const sessionInventoryEvidence = new WeakMap();
 const inFlightWorkspaceCreates = new Map();
 const pendingOpenActivations = new Map();
 let requestSeq = 0;
@@ -180,33 +179,6 @@ function getSessionsStoreSafe() {
   return null;
 }
 
-function trackSessionInventory(sessionsStore) {
-  if (!sessionsStore || sessionInventoryEvidence.has(sessionsStore)) return;
-  const snapshots = new Set();
-  const removed = new Set();
-  sessionInventoryEvidence.set(sessionsStore, { snapshots, removed });
-  // The Session store's hasLoadedSnapshot flag is global, not Agent-scoped.
-  sessionsStore.$onAction?.(({ name, args, after }) => {
-    const [payload, agentId] = args;
-    if (name === 'resetInventory') {
-      after(() => {
-        snapshots.clear();
-        removed.clear();
-      });
-    } else if (name === 'applySnapshot' && agentId && Array.isArray(payload)) {
-      after(() => snapshots.add(agentId));
-    } else if (name === 'applySnapshotUpsert' && payload?.id) {
-      after(() => removed.delete(yeaftSessionIdentityKey(agentId || payload.agentId, payload.id)));
-    } else if (name === 'applyCrudResult' && payload?.ok === true) {
-      const owner = agentId || payload.agentId;
-      const id = payload.sessionId || payload.groupId;
-      if (owner && id && ['delete', 'archive'].includes(payload.op)) {
-        after(() => removed.add(yeaftSessionIdentityKey(owner, id)));
-      }
-    }
-  }, true);
-}
-
 export function creationDetailKey(agentId, creationId) {
   return `${agentId}${KEY_SEP}${creationId}`;
 }
@@ -344,7 +316,7 @@ function deleteKeysWithPrefix(mapObj, prefix) {
   }
 }
 
-const useCreationsPiniaStore = defineStore('creations', {
+export const useCreationsStore = defineStore('creations', {
   state: () => ({
     selectedAgentId: '',
     byAgent: {},
@@ -1205,73 +1177,111 @@ const useCreationsPiniaStore = defineStore('creations', {
 
         const chatStore = getChatStoreSafe();
         const sessionsStore = getSessionsStoreSafe();
-        let sessionId = String(latest.sessionId || '').trim() || null;
-        const hasKnownSession = () => sessionsStore?.sessionById?.(sessionId, targetId)
-          || chatStore?.hasKnownYeaftSession?.(sessionId, targetId);
+        const linkedSessionId = record => String(record?.sessionId || '').trim() || null;
+        let expectedSessionId = linkedSessionId(latest);
+        const isDeleted = id => sessionsStore?.isConfirmedDeletedSession?.(targetId, id);
+        const hasLiveSession = id => !isDeleted(id) && sessionsStore?.sessionById?.(id, targetId);
+        const creationId = latest.id;
+        const getLatestCreation = async () => {
+          const res = await this.request(targetId, 'get_creation', { creationId });
+          const record = res?.creation || (res?.id ? res : null);
+          if (gen === storeGeneration && record?.id) this._upsertSummary(targetId, record);
+          return record;
+        };
+        const useLink = (record, id) => ({ creation: record, sessionId: id, rootDir: record.rootDir || rootDir });
 
-        if (sessionId) {
-          if (hasKnownSession()) return { creation: latest, sessionId, rootDir };
-          let list;
-          if (chatStore?.connectionState === 'connected'
+        let list;
+        const listHasSession = id => list?.ok === true && Array.isArray(list.sessions)
+          && list.sessions.some(row => row?.id === id);
+        if (expectedSessionId) {
+          if (hasLiveSession(expectedSessionId)) return useLink(latest, expectedSessionId);
+          if (!isDeleted(expectedSessionId) && chatStore?.connectionState === 'connected'
               && chatStore.agents?.find(agent => agent?.id === targetId)?.online !== false
               && typeof chatStore.sessionCrudRequest === 'function') {
             try {
-              list = await chatStore.sessionCrudRequest('list', {}, { agentId: targetId });
+              list = await chatStore.sessionCrudRequest('list', {}, { agentId: targetId, suppressAutoSelect: true });
             } catch {
               // A failed refresh isn't evidence that the linked Session is gone.
             }
             if (gen !== storeGeneration) return null;
           }
-          const evidence = sessionInventoryEvidence.get(sessionsStore);
-          const confirmedAbsent = list?.ok === true && Array.isArray(list.sessions)
-            ? !list.sessions.some(row => row?.id === sessionId)
-            : !hasKnownSession() && (evidence?.snapshots.has(targetId)
-              || evidence?.removed.has(yeaftSessionIdentityKey(targetId, sessionId)));
-          if (!confirmedAbsent) return { creation: latest, sessionId, rootDir };
-          sessionId = null;
         }
 
-        if (!sessionId) {
-          if (!createIfMissing) {
-            return { creation: latest, sessionId: null, rootDir };
-          }
-          if (typeof chatStore?.createYeaftSession !== 'function') {
-            throw new Error('Session creation unavailable');
-          }
-          const sessionRes = await chatStore.createYeaftSession({
-            displayName: latest.title || 'Creation',
-            workDir: rootDir || undefined,
-            agentId: targetId,
-          });
-          if (gen !== storeGeneration) return null;
-          sessionId = extractSessionId(sessionRes);
-          if (!sessionRes || sessionRes.ok === false || !sessionId) {
-            throw new Error(ackErrorMessage(sessionRes, 'Failed to create Session'));
-          }
+        // The Agent may have broadcast a relink while the list was in flight.
+        const cached = this.byAgent[targetId]?.list?.find(row => row?.id === creationId)
+          || this.detailsByKey[creationDetailKey(targetId, creationId)]?.creation;
+        const cachedId = linkedSessionId(cached);
+        if (cachedId && cachedId !== expectedSessionId && !isDeleted(cachedId)
+            && (hasLiveSession(cachedId) || listHasSession(cachedId))) {
+          return useLink({ ...latest, ...cached }, cachedId);
+        }
+        if (expectedSessionId && !isDeleted(expectedSessionId)) {
+          const confirmedAbsent = list?.ok === true && Array.isArray(list.sessions)
+            ? !listHasSession(expectedSessionId)
+            : !hasLiveSession(expectedSessionId) && sessionsStore?.authoritativeSnapshotAgents?.[targetId] === true;
+          // Catalog and Server replay misses are not proof of deletion.
+          if (!confirmedAbsent) return useLink(latest, expectedSessionId);
+        }
+        if (!createIfMissing) return useLink(latest, null);
 
-          let projectPatch = {};
-          if (latest.projectId && typeof chatStore?.mutateProject === 'function') {
-            try {
-              const moveRes = await chatStore.mutateProject('move_session', {
-                sessionId,
-                projectId: latest.projectId,
-              }, targetId);
-              if (!moveRes || moveRes.ok === false) {
-                projectPatch = { projectId: null };
-              }
-            } catch {
+        // No live cached winner. Re-read before creating to catch an unbroadcast relink.
+        const current = await getLatestCreation();
+        if (gen !== storeGeneration) return null;
+        if (!current?.id) throw new Error('Creation not found');
+        const currentId = linkedSessionId(current);
+        latest = { ...latest, ...current };
+        rootDir = current.rootDir || rootDir;
+        // The earlier inventory may predate this newer link. Don't replace it on that evidence.
+        if (currentId && currentId !== expectedSessionId && !isDeleted(currentId)) return useLink(latest, currentId);
+        expectedSessionId = currentId;
+
+        let sessionId;
+        if (typeof chatStore?.createYeaftSession !== 'function') {
+          throw new Error('Session creation unavailable');
+        }
+        const sessionRes = await chatStore.createYeaftSession({
+          displayName: latest.title || 'Creation',
+          workDir: rootDir || undefined,
+          agentId: targetId,
+        });
+        if (gen !== storeGeneration) return null;
+        sessionId = extractSessionId(sessionRes);
+        if (!sessionRes || sessionRes.ok === false || !sessionId) {
+          throw new Error(ackErrorMessage(sessionRes, 'Failed to create Session'));
+        }
+
+        let projectPatch = {};
+        if (latest.projectId && typeof chatStore?.mutateProject === 'function') {
+          try {
+            const moveRes = await chatStore.mutateProject('move_session', {
+              sessionId,
+              projectId: latest.projectId,
+            }, targetId);
+            if (!moveRes || moveRes.ok === false) {
               projectPatch = { projectId: null };
             }
+          } catch {
+            projectPatch = { projectId: null };
           }
+        }
+        if (gen !== storeGeneration) return null;
+        try {
+          latest = await this.updateCreation(targetId, creationId, { sessionId, expectedSessionId, ...projectPatch });
+        } catch (err) {
+          if (String(err?.errorCode || err?.code).toUpperCase() !== 'CONFLICT') throw err;
           if (gen !== storeGeneration) return null;
-          latest = await this.updateCreation(targetId, latest.id, {
-            sessionId,
-            ...projectPatch,
-          });
+          const winner = await getLatestCreation();
           if (gen !== storeGeneration) return null;
-          if (!latest?.id) {
-            throw new Error('Failed to save Creation session link');
+          const winnerId = linkedSessionId(winner);
+          if (winner?.id && winnerId !== sessionId) {
+            void chatStore.sessionCrudRequest('delete', { sessionId }, { agentId: targetId }).catch(() => {});
           }
+          if (!winnerId) throw err;
+          return useLink(winner, winnerId);
+        }
+        if (gen !== storeGeneration) return null;
+        if (!latest?.id) {
+          throw new Error('Failed to save Creation session link');
         }
 
         return { creation: latest, sessionId, rootDir };
@@ -2756,9 +2766,3 @@ const useCreationsPiniaStore = defineStore('creations', {
     },
   },
 });
-
-// Observe inventory from the first use of the Creation store, before any open.
-export const useCreationsStore = Object.assign((...args) => {
-  trackSessionInventory(getSessionsStoreSafe());
-  return useCreationsPiniaStore(...args);
-}, { $id: useCreationsPiniaStore.$id });
