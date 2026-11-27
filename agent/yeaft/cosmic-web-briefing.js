@@ -212,21 +212,37 @@ function stripBracketedLinks(text, imagesOnly) {
   return out;
 }
 
+function matchHttpSchemeAt(str, offset) {
+  if (offset + 7 > str.length) return 0;
+  const c0 = str.charCodeAt(offset) | 32;
+  const c1 = str.charCodeAt(offset + 1) | 32;
+  const c2 = str.charCodeAt(offset + 2) | 32;
+  const c3 = str.charCodeAt(offset + 3) | 32;
+  if (c0 !== 104 || c1 !== 116 || c2 !== 116 || c3 !== 112) return 0;
+  const c4 = str.charCodeAt(offset + 4);
+  if (c4 === 58 && str.charCodeAt(offset + 5) === 47 && str.charCodeAt(offset + 6) === 47) return 7;
+  if ((c4 | 32) === 115 && offset + 8 <= str.length
+    && str.charCodeAt(offset + 5) === 58 && str.charCodeAt(offset + 6) === 47 && str.charCodeAt(offset + 7) === 47) {
+    return 8;
+  }
+  return 0;
+}
+
 function stripPrivateUrls(text) {
   if (typeof text !== 'string' || !text) return text;
   const noLinks = stripBracketedLinks(stripBracketedLinks(text, true), false);
   let out = '';
   let i = 0;
   const len = noLinks.length;
-  const lower = noLinks.toLowerCase();
   let nextGt = noLinks.indexOf('>');
   while (i < len) {
-    if (noLinks[i] === '<' && (lower.startsWith('http://', i + 1) || lower.startsWith('https://', i + 1))) {
+    if (noLinks[i] === '<' && matchHttpSchemeAt(noLinks, i + 1) > 0) {
       while (nextGt !== -1 && nextGt <= i) nextGt = noLinks.indexOf('>', nextGt + 1);
       if (nextGt !== -1) { i = nextGt + 1; continue; }
     }
-    if (lower.startsWith('http://', i) || lower.startsWith('https://', i)) {
-      let j = i + (lower.startsWith('https://', i) ? 8 : 7);
+    const schemeLen = matchHttpSchemeAt(noLinks, i);
+    if (schemeLen > 0) {
+      let j = i + schemeLen;
       let openParens = 0, closeParens = 0, openBrackets = 0, closeBrackets = 0;
       // Consume all legal RFC 3986 URI characters (including apostrophe ') until whitespace, angle bracket, or double quote.
       while (j < len && !/[\s<>"]/.test(noLinks[j])) {

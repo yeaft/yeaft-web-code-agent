@@ -1842,6 +1842,80 @@ describe('Cosmic Web — Pinia store & interactive overlay', () => {
     expect(webStore.articleData?.markdown).toBe('Fresh Source 1 article.');
     globalThis.fetch = prevFetch;
 
+    // Round 8 Blocker #2 (gated first-open): user triggers unpinned generateAiBrief AND askFollowUp while first-open detail is still pending;
+    // when detail resolves and pins Source B ('item-b'), all unpinned Source A results/in-flight work MUST be invalidated and regenerated for 'item-b'!
+    const prevFetchFirst = globalThis.fetch;
+    let resolveFirstDetail;
+    let resolveUnpinnedFollowUp;
+    const firstOpenBriefBodies = [];
+    globalThis.fetch = vi.fn((url, opts) => {
+      const u = String(url);
+      const jsonRes = (body) => ({
+        ok: true,
+        status: 200,
+        headers: { get: (k) => (k.toLowerCase() === 'content-type' ? 'application/json' : null) },
+        json: async () => body,
+      });
+      if (u === '/api/cosmic-web/clusters/c-first-open') {
+        return new Promise((resolve) => {
+          resolveFirstDetail = () => resolve(jsonRes({
+            id: 'c-first-open',
+            domainId: 'ai',
+            headline: 'First Open Cluster',
+            summaryExcerpt: 'Summary B',
+            items: [
+              { id: 'item-b', sourceName: 'Source B', title: 'SB', summaryExcerpt: 'Excerpt B', url: 'https://sb.example/b' },
+              { id: 'item-a', sourceName: 'Source A', title: 'SA', summaryExcerpt: 'Excerpt A', url: 'https://sa.example/a' },
+            ],
+          }));
+        });
+      }
+      if (u === '/api/cosmic-web/clusters/c-first-open/community') {
+        return Promise.resolve(jsonRes({ media: [], communityComments: [] }));
+      }
+      if (u === '/api/cosmic-web/clusters/c-first-open/ai-brief') {
+        const b = JSON.parse(opts.body);
+        firstOpenBriefBodies.push(b);
+        return Promise.resolve(jsonRes({
+          tldr: b.itemId ? `Pinned brief for ${b.itemId}` : 'Unpinned brief for old default Source A',
+          sections: [{ heading: 'Body', body: 'Details' }],
+          bullets: ['b1', 'b2'],
+          impact: 'imp',
+          searchCount: 0,
+          evidenceCount: 0,
+          researched: false,
+          followUps: ['More?'],
+        }));
+      }
+      if (u === '/api/cosmic-web/clusters/c-first-open/follow-up') {
+        return new Promise((resolve) => {
+          resolveUnpinnedFollowUp = () => resolve(jsonRes({
+            question: 'Early Q?', answer: 'Unpinned Source A answer', citations: [], media: [], searchCount: 0, evidenceCount: 0, researched: false,
+          }));
+        });
+      }
+      return prevFetchFirst(url, opts);
+    });
+    const firstOpenPromise = webStore.openClusterReader('c-first-open', { expanded: true });
+    // Before detail resolves (resolvedSourceItemId is still null), user fires unpinned brief (which settles early!) AND unpinned follow-up (still pending!)
+    await webStore.generateAiBrief('c-first-open', { force: true });
+    expect(webStore.aiBriefData?.tldr).toBe('Unpinned brief for old default Source A');
+    expect(webStore.aiBriefSourceItemId).toBeNull();
+    const pendingUnpinnedFu = webStore.askFollowUp('c-first-open', 'Early Q?');
+    // Now first-open detail resolves and pins 'item-b' -> MUST clear unpinned brief, cancel/fence pending unpinned follow-up, and regenerate pinned brief for 'item-b'!
+    resolveFirstDetail();
+    await firstOpenPromise;
+    await flushPromises();
+    resolveUnpinnedFollowUp();
+    await pendingUnpinnedFu;
+    await flushPromises();
+    expect(webStore.resolvedSourceItemId).toBe('item-b');
+    expect(webStore.aiBriefSourceItemId).toBe('item-b');
+    expect(webStore.aiBriefData?.tldr).toBe('Pinned brief for item-b');
+    expect(webStore.followUpThread).toEqual([]);
+    expect(firstOpenBriefBodies.at(-1).itemId).toBe('item-b');
+    globalThis.fetch = prevFetchFirst;
+
     // Restore original items before remaining assertions
     detailItems = [
       { id: 'item-1', sourceName: 'Source 1', title: 'S1', summaryExcerpt: 'Excerpt 1', url: 'https://s1.example/a' },

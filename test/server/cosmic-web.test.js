@@ -1065,12 +1065,14 @@ describe('2.0 graph and AI contracts', () => {
     const pubNode = marked.graph.nodes.find(n => n.clusterId === pubId);
     expect(pubNode?.mediaPreview?.proxyUrl).toContain('&sig=');
 
-    // CW2-01 & Round 3/4/5/6/7 Blocker: private RSS feed media, linked/angle-delimited/parenthesized/apostrophe URLs in articleMarkdown AND summaryExcerpt are fully redacted while Clean Article stays intact
+    // CW2-01 & Round 3/4/5/6/7/8 Blocker: private RSS feed media, linked/angle-delimited/parenthesized/apostrophe AND U+0130-preceded URLs in articleMarkdown AND summaryExcerpt are fully redacted while Clean Article stays intact
     const secretMediaUrl = 'https://private.example/secret-token-img.png';
+    const unicodePad = '\u0130'.repeat(120);
     const excerptSecretUrl = "https://files.example/o'brien-summary(v1).png?token=EXCERPT_SECRET";
+    const unicodeSecretUrl = 'https://files.example/u0130.pdf?token=UNICODE_DRIFT_SECRET';
     const privItemWithImg = {
       ...item('Private img note', 'https://private.example/img-note'),
-      summaryExcerpt: `Private brief note with ${excerptSecretUrl} inside.`,
+      summaryExcerpt: `${unicodePad} Private brief note with ${excerptSecretUrl} and ${unicodeSecretUrl} inside.`,
       media: [{ url: secretMediaUrl, kind: 'image' }],
     };
     ingestCosmicWebItems(source('rss-priv-img', 'custom-sports', 'alice'), [privItemWithImg], NOW);
@@ -1082,13 +1084,13 @@ describe('2.0 graph and AI contracts', () => {
     const privDet = await svc.cluster('alice', privNode.clusterId);
     expect(privDet.media).toEqual([]);
     expect(JSON.stringify(privDet)).not.toContain(secretMediaUrl);
-    // Round 6 & 7 Blocker #1: test REAL extractCleanArticle -> aiBrief path with angle-delimited (<...>) unmatched ')' AND bare apostrophe URL
+    // Round 6/7/8 Blocker #1: test REAL extractCleanArticle -> aiBrief path with angle-delimited (<...>) unmatched ')', bare apostrophe URL, AND U+0130-preceded URL
     const privItemId = privDet.items[0].id;
     const angleParenUrl = 'https://files.example/report)v2.pdf?token=ANGLE_PAREN_SECRET';
     const parenSecretUrl = 'https://files.example/chart(v2).png?token=PRIVATE_SENTINEL';
     const aposSecretUrl = "https://files.example/team's-deck.pdf?token=APOS_SECRET";
     const extractedPrivate = extractCleanArticle(
-      `<article><h1>Private Memo</h1><p>Quarterly notes with <a href="${angleParenUrl}">Attachment</a>, bare ${parenSecretUrl}, (${parenSecretUrl}), and ${aposSecretUrl}.</p></article>`,
+      `<article><h1>Private Memo</h1><p>${unicodePad} Quarterly notes with <a href="${angleParenUrl}">Attachment</a>, bare ${parenSecretUrl}, (${parenSecretUrl}), ${aposSecretUrl}, and ${unicodeSecretUrl}.</p></article>`,
       'https://private.example/img-note',
       'Private img note',
     );
@@ -1104,13 +1106,15 @@ describe('2.0 graph and AI contracts', () => {
     expect(privBriefJson).not.toContain('PRIVATE_SENTINEL');
     expect(privBriefJson).not.toContain('ANGLE_PAREN_SECRET');
     expect(privBriefJson).not.toContain('APOS_SECRET');
+    expect(privBriefJson).not.toContain('UNICODE_DRIFT_SECRET');
     expect(privBriefJson).not.toContain('EXCERPT_SECRET');
     expect(requestAi.mock.lastCall[0].payload.articleMarkdown).toContain('Attachment');
-    // Round 6 & 7: followUp redacts the apostrophe-bearing sentinel placed directly in the selected item's summaryExcerpt
+    // Round 6/7/8: followUp redacts apostrophe-bearing AND U+0130-preceded sentinels placed directly in the selected item's summaryExcerpt
     await svc.followUp('alice', 'user', privNode.clusterId, { question: 'Any updates?', research: true });
     const privFuJson = JSON.stringify(requestAi.mock.lastCall[0].payload);
     expect(privFuJson).not.toContain(secretMediaUrl);
     expect(privFuJson).not.toContain('EXCERPT_SECRET');
+    expect(privFuJson).not.toContain('UNICODE_DRIFT_SECRET');
 
     // CW2-05 & Round 3 Blocker #1: legacy v1 Agent (no cosmic_web_cancel) retains remote slot accounting after caller abort,
     // defers subsequent requests, AND hands off freed slots when awakened waiters hit the rate boundary (never hanging).

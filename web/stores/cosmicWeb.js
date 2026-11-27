@@ -239,6 +239,7 @@ export const useCosmicWebStore = defineStore('cosmicWeb', {
     activeArticleUrl: null,
     activeArticleItemId: null,
     resolvedSourceItemId: null,
+    unpinnedSourceWork: false,
 
     aiBriefLoading: false,
     aiBriefData: null,
@@ -568,6 +569,7 @@ export const useCosmicWebStore = defineStore('cosmicWeb', {
         this.activeArticleItemId = nextItemId;
         this.readerItemId = nextItemId;
         this.resolvedSourceItemId = nextItemId || null;
+        this.unpinnedSourceWork = false;
         this.aiBriefData = null;
         this.aiBriefSourceItemId = null;
         this.aiBriefError = null;
@@ -606,17 +608,19 @@ export const useCosmicWebStore = defineStore('cosmicWeb', {
         }
       }
       // Pin the concrete resolved item ID separate from user selection intent (default vs explicit item vs URL).
-      // Whenever the resolved pin changes (even while requests are still in-flight with no settled data yet),
-      // invalidate all source-scoped channels and restart any open Clean Article panel for the new pin.
+      // Whenever the resolved pin changes — OR any unpinned request ran while detail was still loading —
+      // invalidate all source-scoped channels and restart any open Clean Article panel for the authoritative pin.
       const freshEffectiveSourceId = this.activeArticleItemId || (!isUrlOnlySelection ? (detail?.items?.[0]?.id || null) : null);
       this.resolvedSourceItemId = freshEffectiveSourceId;
       const pinChanged = Boolean(prevEffectiveSourceId && freshEffectiveSourceId !== prevEffectiveSourceId);
+      const hadUnpinnedWork = Boolean(this.unpinnedSourceWork && freshEffectiveSourceId);
       const retainedArticleDrift = Boolean(
         this.articleData?.itemId
         && freshEffectiveSourceId
         && this.articleData.itemId !== freshEffectiveSourceId,
       );
-      if (pinChanged || retainedArticleDrift) {
+      if (pinChanged || hadUnpinnedWork || retainedArticleDrift) {
+        this.unpinnedSourceWork = false;
         this.sourceSelectionRev += 1;
         capturedRev = this.sourceSelectionRev;
         invalidateChannel('article');
@@ -723,6 +727,7 @@ export const useCosmicWebStore = defineStore('cosmicWeb', {
       this.activeArticleItemId = resolvedItemId;
       this.activeArticleUrl = nextUrl;
       this.resolvedSourceItemId = resolvedItemId || (!nextUrl ? (this.activeClusterDetail?.items?.[0]?.id || null) : null);
+      this.unpinnedSourceWork = false;
 
       invalidateChannel('article');
       invalidateChannel('aiBrief');
@@ -776,6 +781,7 @@ export const useCosmicWebStore = defineStore('cosmicWeb', {
       this.activeArticleItemId = null;
       this.activeArticleUrl = null;
       this.resolvedSourceItemId = null;
+      this.unpinnedSourceWork = false;
       this.aiBriefSourceItemId = null;
     },
 
@@ -789,9 +795,11 @@ export const useCosmicWebStore = defineStore('cosmicWeb', {
           signal: controller.signal,
         });
         if (isStaleRequest('detail', seq, gen) || !this.readerOpen || this.readerClusterId !== clusterId) return;
-        this.activeClusterDetail = data.cluster || data;
+        const clusterObj = data.cluster || data;
+        this.activeClusterDetail = clusterObj;
         if (data.aiBrief && !this.aiBriefData && this.sourceSelectionRev === capturedSourceRev) {
           this.aiBriefData = data.aiBrief;
+          this.aiBriefSourceItemId = clusterObj?.items?.[0]?.id || null;
         }
       } catch (err) {
         if (isAbortError(err) || isStaleRequest('detail', seq, gen)) return;
@@ -815,6 +823,7 @@ export const useCosmicWebStore = defineStore('cosmicWeb', {
       // Pin to the same resolved item ID as brief/follow-up without mutating explicit selection intent.
       const effectiveItemId = itemId || this.activeArticleItemId || this.resolvedSourceItemId || null;
       const effectiveUrl = effectiveItemId ? null : (url || this.activeArticleUrl || null);
+      if (!effectiveItemId) this.unpinnedSourceWork = true;
       this.articleLoading = true;
       this.articleError = null;
 
@@ -863,6 +872,7 @@ export const useCosmicWebStore = defineStore('cosmicWeb', {
         ? this.activeClusterDetail.items.find((it) => it && it.url === effectiveUrl)
         : null;
       const effectiveItemId = itemId || this.activeArticleItemId || this.readerItemId || this.resolvedSourceItemId || matchedByUrl?.id || undefined;
+      if (!effectiveItemId) this.unpinnedSourceWork = true;
       this.aiBriefLoading = true;
       this.aiBriefError = null;
       try {
@@ -887,7 +897,7 @@ export const useCosmicWebStore = defineStore('cosmicWeb', {
           return;
         }
         this.aiBriefData = data.brief || data;
-        this.aiBriefSourceItemId = effectiveItemId || this.resolvedSourceItemId || this.activeClusterDetail?.items?.[0]?.id || null;
+        this.aiBriefSourceItemId = effectiveItemId || null;
         if (!this.resolvedSourceItemId && this.aiBriefSourceItemId) {
           this.resolvedSourceItemId = this.aiBriefSourceItemId;
         }
@@ -918,6 +928,7 @@ export const useCosmicWebStore = defineStore('cosmicWeb', {
         ? this.activeClusterDetail.items.find((it) => it && it.url === effectiveUrl)
         : null;
       const effectiveItemId = itemId || this.activeArticleItemId || this.readerItemId || this.resolvedSourceItemId || matchedByUrl?.id || undefined;
+      if (!effectiveItemId) this.unpinnedSourceWork = true;
       this.followUpLoading = true;
       this.followUpError = null;
       try {

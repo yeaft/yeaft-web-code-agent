@@ -601,13 +601,14 @@ describe('Cosmic Web bounded research', () => {
 
     // Round 3 & 4 Blocker #2 (defense-in-depth): private source payload strips media AND linked/bare URLs from articleMarkdown/excerpts before reaching the model
     const privateAdapter = stubAdapter(story);
+    const unicodePad = '\u0130'.repeat(120);
     await run({
       adapter: privateAdapter,
       payload: {
         isPrivateSource: true,
         headline: 'Private memo',
-        summaryExcerpt: "Summary with https://private.example/secret-exc.png and https://files.example/o'brien(v2).png?token=PRIVATE_SENTINEL inside.",
-        articleMarkdown: "Body with [![Chart](https://private.example/secret-fig.png)](https://private.example/secret-fig.png), [Attachment](<https://files.example/report)v2.pdf?token=ANGLE_PAREN_SECRET>), [doc](https://private.example/secret-md.png), https://files.example/team's-plan.pdf?token=APOS_SECRET, and (https://files.example/doc(final).png?token=PRIVATE_SENTINEL_2).",
+        summaryExcerpt: `${unicodePad} Summary with https://private.example/secret-exc.png and https://files.example/o'brien(v2).png?token=PRIVATE_SENTINEL and https://files.example/u0130.pdf?token=UNICODE_DRIFT_SECRET inside.`,
+        articleMarkdown: `${unicodePad} Body with [![Chart](https://private.example/secret-fig.png)](https://private.example/secret-fig.png), [Attachment](<https://files.example/report)v2.pdf?token=ANGLE_PAREN_SECRET>), [doc](https://private.example/secret-md.png), https://files.example/team's-plan.pdf?token=APOS_SECRET, (https://files.example/doc(final).png?token=PRIVATE_SENTINEL_2), and https://files.example/tail.pdf?token=UNICODE_TAIL_SECRET`,
         media: [{ url: 'https://private.example/secret-top.png', kind: 'image' }],
         sources: [{ title: 'Memo', url: 'https://private.example/memo', summaryExcerpt: 'Source https://private.example/secret-src-exc.png', media: [{ url: 'https://private.example/secret-source.png', kind: 'image' }] }],
       },
@@ -622,6 +623,8 @@ describe('Cosmic Web bounded research', () => {
     expect(sentPrompt).not.toContain('PRIVATE_SENTINEL');
     expect(sentPrompt).not.toContain('ANGLE_PAREN_SECRET');
     expect(sentPrompt).not.toContain('APOS_SECRET');
+    expect(sentPrompt).not.toContain('UNICODE_DRIFT_SECRET');
+    expect(sentPrompt).not.toContain('UNICODE_TAIL_SECRET');
   });
 });
 
