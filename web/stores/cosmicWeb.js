@@ -543,19 +543,17 @@ export const useCosmicWebStore = defineStore('cosmicWeb', {
         || nextUrl !== (this.activeArticleUrl || null)
       );
 
-      // Immediately abort/invalidate any in-flight reader requests from previous story or source
+      // Immediately cancel any pending auto-brief timer and replace detail/community fetches.
+      // Only abort source-scoped channels (article, aiBrief, followUp) and bump sourceSelectionRev
+      // when actually switching story/source (or later inside reconcileTask if fresh detail confirms pin drift),
+      // so reselecting the SAME open story preserves an in-flight follow-up POST or brief for the same pin!
       clearAutoBriefTimer();
-      this.sourceSelectionRev += 1;
       invalidateChannel('detail');
       invalidateChannel('community');
-      invalidateChannel('article');
-      invalidateChannel('aiBrief');
-      invalidateChannel('followUp');
 
       const capturedGen = storeGeneration;
-      // Compute inherited deferred UI state BEFORE updating loading flags so same-session reopens
-      // preserve followUpLoading/aiBriefLoading/articleLoading and keep the composer disabled until deferred work finishes.
-      const prevSameSessionReconcile = (!isNewCluster && !isSourceChange)
+      const isSameSessionReopen = !isNewCluster && !isSourceChange;
+      const prevSameSessionReconcile = isSameSessionReopen
         && activeReaderReconcile
         && activeReaderReconcile.clusterId === clusterId
         && activeReaderReconcile.gen === capturedGen
@@ -564,9 +562,15 @@ export const useCosmicWebStore = defineStore('cosmicWeb', {
         : null;
 
       this.detailLoading = false;
-      this.articleLoading = Boolean(prevSameSessionReconcile?.hasDeferredArticle);
-      this.aiBriefLoading = Boolean(prevSameSessionReconcile?.hasDeferredBrief);
-      this.followUpLoading = Boolean(prevSameSessionReconcile?.hasDeferredFollowUp);
+      if (!isSameSessionReopen) {
+        this.sourceSelectionRev += 1;
+        invalidateChannel('article');
+        invalidateChannel('aiBrief');
+        invalidateChannel('followUp');
+        this.articleLoading = false;
+        this.aiBriefLoading = false;
+        this.followUpLoading = false;
+      }
 
       this.cursorClusterId = clusterId;
       this.selectedClusterId = clusterId;
@@ -578,10 +582,10 @@ export const useCosmicWebStore = defineStore('cosmicWeb', {
       this.lightboxMedia = null;
 
       // Unified selection transition: reset transient state on new cluster OR any source change (including reset to default or URL-only)
-      const prevEffectiveSourceId = (isNewCluster || isSourceChange)
+      const prevEffectiveSourceId = !isSameSessionReopen
         ? null
         : (this.resolvedSourceItemId || this.aiBriefSourceItemId || this.activeArticleItemId || this.activeClusterDetail?.items?.[0]?.id || null);
-      if (isNewCluster || isSourceChange) {
+      if (!isSameSessionReopen) {
         readerSessionToken += 1;
         if (isNewCluster || (this.activeClusterDetail && this.activeClusterDetail.id !== clusterId)) {
           this.activeClusterDetail = null;
@@ -624,7 +628,8 @@ export const useCosmicWebStore = defineStore('cosmicWeb', {
         await this.loadClusterDetail(clusterId);
 
         if (
-          capturedGen !== storeGeneration
+          activeReaderReconcile !== reconcileEntry
+          || capturedGen !== storeGeneration
           || !this.readerOpen
           || this.readerClusterId !== clusterId
           || this.sourceSelectionRev !== capturedRev

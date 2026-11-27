@@ -2071,6 +2071,69 @@ describe('Cosmic Web — Pinia store & interactive overlay', () => {
     expect(webStore.followUpThread[0].question).toBe('What changed in breaking update?');
     expect(webStore.followUpThread[0].answer).toBe('Reopen pinned answer for item-c');
 
+    // Round 13 Blocker #2: Reselecting the SAME story AFTER an accepted follow-up POST has already started
+    // MUST preserve the in-flight follow-up POST & followUpLoading when fresh detail confirms the SAME source pin ('item-c')!
+    let resolveInflightFollowUp;
+    let inflightFollowUpAborted = false;
+    const postFetch = globalThis.fetch;
+    globalThis.fetch = vi.fn((url, opts) => {
+      const u = String(url);
+      const jsonRes = (body) => ({
+        ok: true,
+        status: 200,
+        headers: { get: (k) => (k.toLowerCase() === 'content-type' ? 'application/json' : null) },
+        json: async () => body,
+      });
+      if (u === '/api/cosmic-web/clusters/c-first-open') {
+        return Promise.resolve(jsonRes({
+          id: 'c-first-open',
+          domainId: 'ai',
+          headline: 'First Open Cluster Updated',
+          summaryExcerpt: 'Summary C',
+          items: [
+            { id: 'item-c', sourceName: 'Source C', title: 'SC', summaryExcerpt: 'Excerpt C', url: 'https://sc.example/c' },
+            { id: 'item-b', sourceName: 'Source B', title: 'SB', summaryExcerpt: 'Excerpt B', url: 'https://sb.example/b' },
+          ],
+        }));
+      }
+      if (u === '/api/cosmic-web/clusters/c-first-open/follow-up') {
+        return new Promise((resolve, reject) => {
+          opts?.signal?.addEventListener('abort', () => {
+            inflightFollowUpAborted = true;
+            const err = new Error('Aborted');
+            err.name = 'AbortError';
+            reject(err);
+          }, { once: true });
+          resolveInflightFollowUp = () => resolve(jsonRes({
+            question: 'In-flight question during reselect?',
+            answer: 'Survived same-story reselect for item-c',
+            citations: [], media: [], searchCount: 0, evidenceCount: 0, researched: false,
+          }));
+        });
+      }
+      return postFetch(url, opts);
+    });
+    // 1. User submits follow-up via modal controls -> POST starts and stays in-flight (composer draft cleared)
+    await reopenInput.setValue('In-flight question during reselect?');
+    await reopenInput.trigger('keydown.enter');
+    await flushPromises();
+    expect(webStore.followUpLoading).toBe(true);
+    expect(resolveInflightFollowUp).toBeTypeOf('function');
+    // 2. User reselects the SAME story while follow-up POST is pending; detail returns the SAME pin ('item-c')
+    await webStore.openClusterReader('c-first-open', { expanded: true });
+    await flushPromises();
+    expect(inflightFollowUpAborted).toBe(false);
+    expect(webStore.followUpLoading).toBe(true);
+    expect(wrapper.find('.cw-reader-modal .cw-composer-icon-btn').attributes('disabled')).toBeDefined();
+    // 3. In-flight follow-up POST resolves -> lands cleanly in followUpThread!
+    resolveInflightFollowUp();
+    await flushPromises();
+    expect(webStore.followUpLoading).toBe(false);
+    expect(webStore.followUpThread.at(-1)).toMatchObject({
+      question: 'In-flight question during reselect?',
+      answer: 'Survived same-story reselect for item-c',
+    });
+
     // Restore original v1-only prop & fetch before remaining assertions
     globalThis.fetch = prevFetchFirst;
     await wrapper.setProps({

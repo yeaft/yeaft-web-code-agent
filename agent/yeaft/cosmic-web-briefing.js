@@ -212,6 +212,10 @@ function stripBracketedLinks(text, imagesOnly) {
   return out;
 }
 
+const UNICODE_PUNCT_RE = /[\p{P}\p{S}]/u;
+const isNonAsciiPunct = ch => Boolean(ch && ch.charCodeAt(0) > 127 && UNICODE_PUNCT_RE.test(ch));
+const isBareUrlStop = ch => !ch || /[\s<>"]/.test(ch) || isNonAsciiPunct(ch);
+
 function matchUrlStartAt(str, offset) {
   const len = str.length;
   const prev = offset > 0 ? str.charCodeAt(offset - 1) : 0;
@@ -248,15 +252,16 @@ function matchUrlStartAt(str, offset) {
   }
 
   // 3. Scheme-relative //authority/... URL (supports IPv6 including Markdown-escaped \[...\], single-label hosts,
-  // userinfo & ports via WHATWG URL.canParse on a Markdown-normalized candidate, while preserving '// comment' / '//TODO').
+  // userinfo & ports via WHATWG URL.canParse on a Markdown-normalized candidate, stopping at localized Unicode punctuation
+  // and whitespace while preserving '// comment' / '//TODO').
   if (offset + 3 < len && c0 === 47 && str.charCodeAt(offset + 1) === 47 && prev !== 58 && prev !== 47) {
     const next = str[offset + 2];
-    if (next && !/[\s/<>"]/.test(next)) {
+    if (next && next !== '/' && !isBareUrlStop(next)) {
       let k = offset + 2;
       const maxScan = Math.min(len, offset + 512);
       let openParens = 0, closeParens = 0, openBrackets = 0, closeBrackets = 0;
-      while (k < maxScan && !/[\s<>"]/.test(str[k])) {
-        if (str[k] === '\\' && k + 1 < maxScan && !/[\s<>"]/.test(str[k + 1])) {
+      while (k < maxScan && !isBareUrlStop(str[k])) {
+        if (str[k] === '\\' && k + 1 < maxScan && !isBareUrlStop(str[k + 1])) {
           const esc = str[k + 1];
           if (esc === '[') openBrackets++;
           else if (esc === ']') closeBrackets++;
@@ -276,7 +281,10 @@ function matchUrlStartAt(str, offset) {
         if (last === ')' && !escaped && closeParens > openParens) { closeParens--; k--; continue; }
         if (last === ']' && !escaped && closeBrackets > openBrackets) { closeBrackets--; k--; continue; }
         if (!escaped && (last === '\'' || last === '`' || last === '*' || last === '_' || last === '~'
-          || last === '.' || last === ',' || last === ';' || last === '!' || last === '?')) { k--; continue; }
+          || last === '.' || last === ',' || last === ';' || last === ':' || last === '!' || last === '?' || isNonAsciiPunct(last))) {
+          k--;
+          continue;
+        }
         break;
       }
       const rawCandidate = str.slice(offset, k);
@@ -303,8 +311,15 @@ function stripPrivateUrls(text) {
     if (prefixLen > 0) {
       let j = i + prefixLen;
       let openParens = 0, closeParens = 0, openBrackets = 0, closeBrackets = 0;
-      // Consume all legal RFC 3986 URI characters (including apostrophe ') until whitespace, angle bracket, or double quote.
-      while (j < len && !/[\s<>"]/.test(noLinks[j])) {
+      // Consume all legal RFC 3986 URI characters (including apostrophe ') until whitespace, angle bracket, double quote, or localized Unicode punctuation.
+      while (j < len && !isBareUrlStop(noLinks[j])) {
+        if (noLinks[j] === '\\' && j + 1 < len && !isBareUrlStop(noLinks[j + 1])) {
+          const esc = noLinks[j + 1];
+          if (esc === '[') openBrackets++;
+          else if (esc === ']') closeBrackets++;
+          j += 2;
+          continue;
+        }
         const ch = noLinks[j];
         if (ch === '(') openParens++;
         else if (ch === ')') closeParens++;
@@ -319,7 +334,10 @@ function stripPrivateUrls(text) {
         if (last === ')' && !escaped && closeParens > openParens) { closeParens--; j--; continue; }
         if (last === ']' && !escaped && closeBrackets > openBrackets) { closeBrackets--; j--; continue; }
         if (!escaped && (last === '\'' || last === '`' || last === '*' || last === '_' || last === '~'
-          || last === '.' || last === ',' || last === ';' || last === '!' || last === '?')) { j--; continue; }
+          || last === '.' || last === ',' || last === ';' || last === ':' || last === '!' || last === '?' || isNonAsciiPunct(last))) {
+          j--;
+          continue;
+        }
         break;
       }
       i = j;
