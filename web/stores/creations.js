@@ -14,7 +14,6 @@ const KEY_SEP = '\u001f';
 const pendingRequests = new Map();
 let requestSeq = 0;
 let storeGeneration = 0;
-let openActivationSeq = 0;
 
 export function creationDetailKey(agentId, creationId) {
   return `${agentId}${KEY_SEP}${creationId}`;
@@ -104,6 +103,7 @@ export const useCreationsStore = defineStore('creations', {
     viewMode: 'galaxy',
     kindFilter: 'all',
     searchQuery: '',
+    openActivationSeq: 0,
     igniteDraft: defaultIgniteDraft(),
   }),
 
@@ -324,8 +324,12 @@ export const useCreationsStore = defineStore('creations', {
       }
     },
 
+    invalidatePendingOpen() {
+      this.openActivationSeq += 1;
+    },
+
     async selectGalaxyAgent(agentId, { force = false } = {}) {
-      openActivationSeq += 1;
+      this.openActivationSeq += 1;
       const nextId = String(agentId || '').trim();
       this.selectedAgentId = nextId;
 
@@ -418,7 +422,7 @@ export const useCreationsStore = defineStore('creations', {
       if (!targetId || !creationId) throw new Error('Missing agentId or creationId');
 
       const gen = storeGeneration;
-      const seq = ++openActivationSeq;
+      const seq = ++this.openActivationSeq;
 
       const res = await this.request(targetId, 'get_creation', { creationId });
       if (gen !== storeGeneration) return null;
@@ -450,7 +454,7 @@ export const useCreationsStore = defineStore('creations', {
         bucket.list = upsertById(bucket.list, creation);
       }
 
-      if (seq !== openActivationSeq) {
+      if (seq !== this.openActivationSeq) {
         return this.detailsByKey[dKey];
       }
 
@@ -488,7 +492,7 @@ export const useCreationsStore = defineStore('creations', {
     },
 
     closeCreation() {
-      openActivationSeq += 1;
+      this.openActivationSeq += 1;
       this.activeCreation = null;
     },
 
@@ -628,6 +632,18 @@ export const useCreationsStore = defineStore('creations', {
       return res;
     },
 
+    async getCanon(agentId, creationId, canonId) {
+      const gen = storeGeneration;
+      const res = await this.request(agentId, 'get_canon', { creationId, canonId });
+      if (gen !== storeGeneration) return null;
+      const item = res?.canon || res?.item || (res?.id ? res : null);
+      if (item && item.id) {
+        const detail = ensureDetailBucket(this, agentId, creationId);
+        detail.canon = upsertById(detail.canon, { ...item, contentTruncated: false });
+      }
+      return item || res;
+    },
+
     async upsertCanon(agentId, creationId, item) {
       const res = await this.request(agentId, 'upsert_canon', { creationId, item });
       const saved = res?.canon || res?.item || (res?.id ? res : item);
@@ -672,8 +688,20 @@ export const useCreationsStore = defineStore('creations', {
         revisions: [],
         loading: false,
         dirty: false,
+        loaded: false,
+        loadedRevId: null,
       };
-      this.nodeContentsByKey[nKey] = { ...prev, loading: true };
+      const dKey = creationDetailKey(agentId, creationId);
+      const currentNode = this.detailsByKey[dKey]?.nodes?.find((n) => n && n.id === nodeId) || null;
+      const currentNodeRevId = currentNode?.currentRevId ?? null;
+      const isLoadedForCurrentRev = Boolean(
+        prev.loaded && (currentNodeRevId == null || prev.loadedRevId === currentNodeRevId),
+      );
+      this.nodeContentsByKey[nKey] = {
+        ...prev,
+        loading: true,
+        loaded: isLoadedForCurrentRev,
+      };
 
       try {
         const res = await this.request(agentId, 'get_node', { creationId, nodeId });
@@ -682,12 +710,15 @@ export const useCreationsStore = defineStore('creations', {
           ? res.content
           : (res?.node?.content !== undefined ? res.node.content : '');
         const revisions = Array.isArray(res?.revisions) ? res.revisions : prev.revisions;
+        const loadedRevId = res?.node?.currentRevId ?? prev.loadedRevId ?? null;
 
         this.nodeContentsByKey[nKey] = {
           content,
           revisions,
           loading: false,
           dirty: false,
+          loaded: true,
+          loadedRevId,
         };
 
         if (res?.node && res.node.id) {
@@ -721,11 +752,14 @@ export const useCreationsStore = defineStore('creations', {
         revisions: [],
         loading: false,
         dirty: false,
+        loaded: false,
+        loadedRevId: null,
       };
       const nextContent = res?.content !== undefined
         ? res.content
         : (patch.content !== undefined ? patch.content : prev.content);
       const nextRevisions = Array.isArray(res?.revisions) ? res.revisions : prev.revisions;
+      const loadedRevId = res?.node?.currentRevId ?? prev.loadedRevId ?? null;
 
       this.nodeContentsByKey[nKey] = {
         ...prev,
@@ -733,6 +767,8 @@ export const useCreationsStore = defineStore('creations', {
         revisions: nextRevisions,
         loading: false,
         dirty: false,
+        loaded: true,
+        loadedRevId,
       };
 
       if (res?.node && res.node.id) {
@@ -798,6 +834,8 @@ export const useCreationsStore = defineStore('creations', {
         revisions: [],
         loading: false,
         dirty: false,
+        loaded: false,
+        loadedRevId: null,
       };
       this.nodeContentsByKey[nKey] = {
         ...prev,
@@ -805,6 +843,8 @@ export const useCreationsStore = defineStore('creations', {
         revisions: Array.isArray(res?.revisions) ? res.revisions : prev.revisions,
         loading: false,
         dirty: false,
+        loaded: true,
+        loadedRevId: res?.node?.currentRevId ?? prev.loadedRevId ?? null,
       };
       if (res?.node && res.node.id) {
         const detail = ensureDetailBucket(this, agentId, creationId);
@@ -825,6 +865,18 @@ export const useCreationsStore = defineStore('creations', {
       }
       this._syncCreationSummaryFromDetail(agentId, creationId);
       return proposals;
+    },
+
+    async getProposal(agentId, creationId, proposalId) {
+      const gen = storeGeneration;
+      const res = await this.request(agentId, 'get_proposal', { creationId, proposalId });
+      if (gen !== storeGeneration) return null;
+      const proposal = res?.proposal || (res?.id ? res : null);
+      if (proposal && proposal.id) {
+        const detail = ensureDetailBucket(this, agentId, creationId);
+        detail.proposals = upsertById(detail.proposals, proposal);
+      }
+      return proposal || res;
     },
 
     async resolveProposal(agentId, creationId, proposalId, decision, editedPayload) {
@@ -851,14 +903,26 @@ export const useCreationsStore = defineStore('creations', {
         detail.nodes = upsertById(detail.nodes, res.node);
         if (res.node.content !== undefined) {
           const nKey = creationNodeKey(agentId, creationId, res.node.id);
-          const prev = this.nodeContentsByKey[nKey] || { content: '', revisions: [], loading: false, dirty: false };
-          this.nodeContentsByKey[nKey] = { ...prev, content: res.node.content, dirty: false };
+          const prev = this.nodeContentsByKey[nKey] || { content: '', revisions: [], loading: false, dirty: false, loaded: false, loadedRevId: null };
+          this.nodeContentsByKey[nKey] = {
+            ...prev,
+            content: res.node.content,
+            dirty: false,
+            loaded: true,
+            loadedRevId: res.node.currentRevId ?? prev.loadedRevId ?? null,
+          };
         }
       }
       if (res?.nodeId && res?.content !== undefined) {
         const nKey = creationNodeKey(agentId, creationId, res.nodeId);
-        const prev = this.nodeContentsByKey[nKey] || { content: '', revisions: [], loading: false, dirty: false };
-        this.nodeContentsByKey[nKey] = { ...prev, content: res.content, dirty: false };
+        const prev = this.nodeContentsByKey[nKey] || { content: '', revisions: [], loading: false, dirty: false, loaded: false, loadedRevId: null };
+        this.nodeContentsByKey[nKey] = {
+          ...prev,
+          content: res.content,
+          dirty: false,
+          loaded: true,
+          loadedRevId: res?.node?.currentRevId ?? prev.loadedRevId ?? null,
+        };
       }
       if (res?.canon && res.canon.id) {
         detail.canon = upsertById(detail.canon, res.canon);
@@ -906,10 +970,51 @@ export const useCreationsStore = defineStore('creations', {
         messages,
         contextPreview,
         streamingMessage: reconciledStream,
+        hasMore: Boolean(res?.hasMore),
+        nextBeforeId: res?.nextBeforeId ?? null,
+        loadingMore: false,
       };
 
       detail.threads = upsertById(detail.threads, thread);
       return this.threadMessagesByKey[tKey];
+    },
+
+    async loadMoreThreadMessages(agentId, creationId, threadId) {
+      const gen = storeGeneration;
+      const tKey = creationThreadKey(agentId, creationId, threadId);
+      const bucket = this.threadMessagesByKey[tKey];
+      if (!bucket || !bucket.hasMore || !bucket.nextBeforeId || bucket.loadingMore) {
+        return bucket || null;
+      }
+      this.threadMessagesByKey[tKey] = { ...bucket, loadingMore: true };
+      try {
+        const res = await this.request(agentId, 'get_thread', {
+          creationId,
+          threadId,
+          scopeType: bucket.thread?.scopeType || 'global',
+          scopeId: bucket.thread?.scopeId || null,
+          beforeId: bucket.nextBeforeId,
+        });
+        if (gen !== storeGeneration) return null;
+        const older = Array.isArray(res?.messages) ? res.messages : [];
+        const current = this.threadMessagesByKey[tKey] || bucket;
+        const existing = Array.isArray(current.messages) ? current.messages : [];
+        const existingIds = new Set(existing.map((m) => m && m.id).filter(Boolean));
+        const uniqueOlder = older.filter((m) => m && (!m.id || !existingIds.has(m.id)));
+        this.threadMessagesByKey[tKey] = {
+          ...current,
+          messages: [...uniqueOlder, ...existing],
+          hasMore: Boolean(res?.hasMore),
+          nextBeforeId: res?.nextBeforeId ?? null,
+          loadingMore: false,
+        };
+        return this.threadMessagesByKey[tKey];
+      } catch (err) {
+        if (gen === storeGeneration && this.threadMessagesByKey[tKey]) {
+          this.threadMessagesByKey[tKey] = { ...this.threadMessagesByKey[tKey], loadingMore: false };
+        }
+        throw err;
+      }
     },
 
     async sendMessage(agentId, creationId, payload = {}) {
@@ -1116,6 +1221,8 @@ export const useCreationsStore = defineStore('creations', {
             revisions: [],
             loading: false,
             dirty: false,
+            loaded: false,
+            loadedRevId: null,
           };
           this.nodeContentsByKey[nKey] = {
             ...prev,
@@ -1123,6 +1230,8 @@ export const useCreationsStore = defineStore('creations', {
             revisions: Array.isArray(payload.revisions) ? payload.revisions : prev.revisions,
             loading: false,
             dirty: false,
+            loaded: true,
+            loadedRevId: payload.node?.currentRevId ?? payload.revId ?? prev.loadedRevId ?? null,
           };
           if (payload.node && payload.node.id) {
             const dKey = creationDetailKey(agentId, creationId);
@@ -1346,9 +1455,72 @@ export const useCreationsStore = defineStore('creations', {
       }
     },
 
+    async reconcileAfterReconnect(agentId = null) {
+      const gen = storeGeneration;
+      const filterAgentId = agentId ? String(agentId).trim() : null;
+      const tasks = [];
+
+      if (this.selectedAgentId && (!filterAgentId || this.selectedAgentId === filterAgentId)) {
+        tasks.push(this.listCreations(this.selectedAgentId).catch(() => {}));
+      }
+
+      const active = this.activeCreation;
+      if (active && active.agentId && active.creationId && (!filterAgentId || active.agentId === filterAgentId)) {
+        const { agentId: aId, creationId: cId } = active;
+        tasks.push((async () => {
+          try {
+            const res = await this.request(aId, 'get_creation', { creationId: cId });
+            if (gen !== storeGeneration) return;
+            const dKey = creationDetailKey(aId, cId);
+            const creation = res?.creation || res || {};
+            const nodes = Array.isArray(res?.nodes) ? res.nodes : [];
+            const canon = Array.isArray(res?.canon) ? res.canon : [];
+            const sources = Array.isArray(res?.sources) ? res.sources : [];
+            const assets = Array.isArray(res?.assets) ? res.assets : [];
+            const threads = Array.isArray(res?.threads) ? res.threads : [];
+            const proposals = Array.isArray(res?.proposals) ? res.proposals : [];
+            const runs = Array.isArray(res?.runs) ? res.runs : [];
+            this.detailsByKey[dKey] = {
+              creation,
+              nodes,
+              canon,
+              sources,
+              assets,
+              threads,
+              proposals,
+              runs,
+              loadedAt: Date.now(),
+            };
+            if (creation?.id) {
+              const bucket = this._ensureAgentBucket(aId);
+              bucket.list = upsertById(bucket.list, creation);
+            }
+
+            const prefix = `${dKey}${KEY_SEP}`;
+            const cachedThreads = Object.entries(this.threadMessagesByKey)
+              .filter(([key]) => key.startsWith(prefix))
+              .map(([, tb]) => tb?.thread)
+              .filter(Boolean);
+            await Promise.all(
+              cachedThreads.map((thr) => this.loadThread(
+                aId,
+                cId,
+                thr.scopeType || 'global',
+                thr.scopeId || null,
+              ).catch(() => {})),
+            );
+          } catch {
+            // non-fatal during reconnect reconciliation
+          }
+        })());
+      }
+
+      await Promise.all(tasks);
+    },
+
     clearAll() {
       storeGeneration += 1;
-      openActivationSeq += 1;
+      this.openActivationSeq += 1;
       for (const [, pending] of pendingRequests) {
         clearTimeout(pending.timer);
         pending.reject(new Error('Creations store cleared'));

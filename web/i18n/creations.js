@@ -142,6 +142,8 @@ export const zhCN = {
   'creation.video.storyboardMode': '分镜预览',
   'creation.video.sourceVideoMode': '成片播放',
   'creation.video.linkSource': '关联视频素材',
+  'creation.video.playbackError': '当前浏览器无法直接播放此视频格式',
+  'creation.video.downloadFallback': '下载视频文件',
 
   // Studio Left Rail & Views
   'creation.studio.tabArtifacts': '章节',
@@ -207,9 +209,12 @@ export const zhCN = {
   'creation.proposal.removed': '删除',
   'creation.proposal.conflictWarn': '正文在建议生成后已有改动，请确认差异后再采纳。',
   'creation.proposal.noProposals': '当前没有待处理的修订建议。',
+  'creation.proposal.loadFullDiff': '加载完整对比',
+  'creation.proposal.loadingDiff': '正在加载完整对比…',
 
   // Director Chat
   'creation.director.title': '创作导演',
+  'creation.director.loadOlder': '加载更早消息',
   'creation.director.scopeGlobal': '全书视角',
   'creation.director.scopeNode': '当前单元',
   'creation.director.followSelection': '跟随选中',
@@ -369,6 +374,8 @@ export const en = {
   'creation.video.storyboardMode': 'Storyboard',
   'creation.video.sourceVideoMode': 'Video',
   'creation.video.linkSource': 'Link video source',
+  'creation.video.playbackError': 'This video format cannot be played directly in this browser',
+  'creation.video.downloadFallback': 'Download video',
 
   // Studio Left Rail & Views
   'creation.studio.tabArtifacts': 'Units',
@@ -434,9 +441,12 @@ export const en = {
   'creation.proposal.removed': 'Removed',
   'creation.proposal.conflictWarn': 'Content changed after this proposal was generated. Review carefully before accepting.',
   'creation.proposal.noProposals': 'No pending proposals.',
+  'creation.proposal.loadFullDiff': 'Load full diff',
+  'creation.proposal.loadingDiff': 'Loading full diff…',
 
   // Director Chat
   'creation.director.title': 'Director',
+  'creation.director.loadOlder': 'Load older messages',
   'creation.director.scopeGlobal': 'Global',
   'creation.director.scopeNode': 'Current unit',
   'creation.director.followSelection': 'Follow selection',

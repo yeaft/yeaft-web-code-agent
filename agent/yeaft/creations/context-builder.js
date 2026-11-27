@@ -1,4 +1,4 @@
-import { LIMITS } from './constants.js';
+import { LIMITS, fail } from './constants.js';
 
 const clip = (value, size) => {
   const text = typeof value === 'string' ? value : JSON.stringify(value ?? '');
@@ -47,12 +47,19 @@ export function buildCreationContext({ store, creationId, threadId, scopeType, s
     }
   }
   // Explicit attachments take precedence over recall/exclusion chips for this turn.
-  const attached = [...new Set(attachedSourceIds)].slice(0, 4);
-  const sources = attached.flatMap(sourceId => {
+  const attached = [...new Set(attachedSourceIds)];
+  const sources = attached.slice(0, 4).flatMap(sourceId => {
     const { name, chunks, summary } = store.getSource(creationId, sourceId);
     return (chunks.length ? chunks.slice(0, 2) : [{ index: null, text: summary }])
       .map(({ index, text }) => ({ sourceId, name, index, text: text.slice(0, 3000) }));
   });
+  if (attached.length > 4) {
+    const metadata = new Map(store.listSources(creationId).map(source => [source.id, source]));
+    for (const sourceId of attached.slice(4)) {
+      const { name, summary } = metadata.get(sourceId) ?? fail('NOT_FOUND', 'Attached source not found');
+      sources.push({ sourceId, name, summary, note: 'Call creation_read_source for full content' });
+    }
+  }
   sources.push(...store.searchSources(creationId, query, { limit: 5, excludedContextIds: [...excludedContextIds, ...attached] })
     .map(({ sourceId, name, index, text }) => ({ sourceId, name, index, text: clip(text, 1250) })));
   const history = thread ? store.listMessages(creationId, thread.id, { limit: LIMITS.threadHistory + 1 })
@@ -72,5 +79,5 @@ export function buildCreationContext({ store, creationId, threadId, scopeType, s
   ];
   return { systemInstructions: instructions, promptContext: sections.map(([heading, entry]) => `## ${heading}\n${JSON.stringify(entry)}`).join('\n\n'),
     contextMeta: { pinnedCanon: pinned.map(canonChip), recalledCanon: recalled.map(canonChip), continuityNodes,
-      sources: sources.map(({ sourceId, name, index }) => ({ id: sourceId, sourceId, name, index })) } };
+      sources: sources.map(({ text, ...source }) => ({ id: source.sourceId, ...source })) } };
 }

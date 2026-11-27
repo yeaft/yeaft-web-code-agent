@@ -70,7 +70,7 @@ export default {
   },
   computed: {
     sortedNodes() {
-      return [...(this.nodes || [])].sort((a, b) => (a.sortOrder ?? a.order ?? 0) - (b.sortOrder ?? b.order ?? 0));
+      return [...(this.nodes || [])].sort((a, b) => (a.sortOrder ?? a.position ?? 0) - (b.sortOrder ?? b.position ?? 0));
     },
     rootNodes() {
       const idSet = new Set(this.sortedNodes.map((n) => n.id));

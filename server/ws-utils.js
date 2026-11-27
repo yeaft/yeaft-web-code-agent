@@ -331,10 +331,10 @@ export function resolveAgentAccessError(agentId, userId, role = null) {
  * access the Agent. Unlike conversation forwarding, this also supports
  * ownerless global Agents, which are visible only to admins.
  */
-export async function forwardAgentEvent(agentId, msg) {
+export async function forwardAgentEvent(agentId, msg, matchesRecipient = () => true) {
   for (const [, client] of webClients) {
     if (!isClientSessionValid(client)) continue;
-    if (!verifyAgentOwnership(agentId, client.userId, client.role)) continue;
+    if (!verifyAgentOwnership(agentId, client.userId, client.role) || !matchesRecipient(client)) continue;
     await sendToWebClient(client, msg);
   }
 }

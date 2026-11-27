@@ -123,8 +123,12 @@ export class CreationRunner {
     userText = boundedText(userText, LIMITS.promptBytes, 'message');
     if (anchor !== null) boundedText(JSON.stringify(anchor), 8192, 'anchor');
     boundedList(excludedContextIds, 256, 'excluded context').forEach(id => boundedText(id, 128, 'context ID', { required: true }));
-    boundedList(attachedSourceIds, LIMITS.sources, 'attached sources').forEach(safeId);
+    boundedList(attachedSourceIds, LIMITS.sources, 'attached sources');
     const result = this.store.transaction(() => {
+      if (attachedSourceIds.length) {
+        const existing = new Set(this.store.listSources(creationId).map(source => source.id));
+        if (attachedSourceIds.some(id => !existing.has(id))) fail('NOT_FOUND', 'Attached source not found');
+      }
       const thread = this.store.getThread(creationId, { threadId, scopeType, scopeId });
       const sources = this.store.addSources(creationId, { files, textSources });
       const sourceIds = [...new Set([...sources.map(source => source.id), ...attachedSourceIds])];

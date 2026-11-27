@@ -1,20 +1,13 @@
 import { createHash, randomUUID } from 'node:crypto';
-import multer from 'multer';
 import { CONFIG } from '../config.js';
-import { userDb } from '../database.js';
 import { pendingFiles, previewFiles } from '../context.js';
 import { PREVIEW_FILE_TTL_MS, prunePreviewFiles } from '../preview-files.js';
 import { detectImageMime, yeaftAssetStore } from '../yeaft-asset-store.js';
 import { CREATION_MEDIA_CHUNK_BYTES, openCreationMedia } from '../creation-media-relay.js';
-import { CREATION_MEDIA_SNIFF_BYTES, matchesCreationMediaType } from '../creation-media-type.js';
+import { CREATION_MEDIA_SNIFF_BYTES, verifiedCreationMediaType } from '../creation-media-type.js';
 import { readSessionAttachment } from '../session-attachment-relay.js';
 import { openWorkbenchVideo, readWorkbenchPreview, WORKBENCH_VIDEO_CHUNK_BYTES } from '../workbench-preview.js';
-
-// 文件上传配置 (存储在内存中)
-const upload = multer({
-  storage: multer.memoryStorage(),
-  limits: { fileSize: CONFIG.maxFileSize }
-});
+import { readPendingUploads } from './upload-intake.js';
 
 export function parseByteRange(header, size) {
   if (!header) return null;
@@ -141,13 +134,13 @@ async function streamCreationMedia(req, res) {
     }
     const range = requested ?? { start: 0, end: totalSize - 1 };
     const length = range.end - range.start + 1;
-    const isSvg = mimeType === 'image/svg+xml';
-    const inline = req.query.download !== '1' && (!isSvg || mediaKind === 'asset')
-      && matchesCreationMediaType(first.buffer, mimeType);
+    const verifiedMimeType = verifiedCreationMediaType(first.buffer, mimeType, totalSize);
+    const isSvg = verifiedMimeType === 'image/svg+xml';
+    const inline = req.query.download !== '1' && (!isSvg || mediaKind === 'asset') && verifiedMimeType;
     const basename = filename.split(/[/\\]/).pop()?.replace(/[\x00-\x1f\x7f]/g, '') || 'media';
     const encoded = encodeURIComponent(basename.toWellFormed()).replace(/['()*]/g, c => '%' + c.charCodeAt(0).toString(16));
     res.status(requested ? 206 : 200);
-    res.setHeader('Content-Type', inline ? mimeType : 'application/octet-stream');
+    res.setHeader('Content-Type', inline ? verifiedMimeType : 'application/octet-stream');
     res.setHeader('Content-Disposition', `${inline ? 'inline' : 'attachment'}; filename*=UTF-8''${encoded}`);
     res.setHeader('Content-Length', String(length));
     if (requested) res.setHeader('Content-Range', `bytes ${range.start}-${range.end}/${totalSize}`);
@@ -207,15 +200,8 @@ export function fallbackUploadName(file, index) {
   return `${prefix}-${Date.now()}-${index + 1}${extensionForMimeType(file?.mimetype)}`;
 }
 
-// 定期清理超过 10 分钟的文件
-setInterval(() => {
-  const now = Date.now();
-  for (const [fileId, file] of pendingFiles) {
-    if (now - file.uploadedAt > CONFIG.fileCleanupInterval) {
-      pendingFiles.delete(fileId);
-    }
-  }
-}, 60 * 1000);
+// Expired staged files return their quota through the same path as consumers.
+setInterval(() => pendingFiles.prune(Date.now(), CONFIG.fileCleanupInterval), 60_000).unref();
 
 // Cleanup expired preview files every 60s.
 setInterval(() => prunePreviewFiles(), Math.min(60 * 1000, PREVIEW_FILE_TTL_MS));
@@ -228,21 +214,22 @@ export function registerUploadRoutes(app, { requireAuth, requireSessionAuth = re
     .head(requireSessionAuth, streamCreationMedia)
     .get(requireSessionAuth, streamCreationMedia);
 
-  app.post('/api/upload', requireSessionAuth, upload.array('files', 10), (req, res) => {
+  app.post('/api/upload', requireSessionAuth, readPendingUploads, (req, res) => {
     if (!req.files || req.files.length === 0) {
       return res.status(400).json({ error: 'No files uploaded' });
     }
 
-    const user = userDb.getOrCreate(req.user.username);
-    const userId = user?.id;
+    const userId = req.uploadUserId;
 
     const uploaded = req.files.map((file, index) => {
       const fileId = randomUUID();
       const name = fallbackUploadName(file, index);
+      const { buffer } = file.body;
+      file.release(); // Transfer the reservation into the staged store synchronously.
       pendingFiles.set(fileId, {
         name,
         mimeType: file.mimetype,
-        buffer: file.buffer,
+        buffer,
         uploadedAt: Date.now(),
         userId
       });

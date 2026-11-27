@@ -8,9 +8,9 @@ import { resolveAgentAccessError, sendToAgent, sendToWebClient } from '../ws-uti
 
 const OPS = new Set([
   'list_creations', 'create_creation', 'get_creation', 'update_creation', 'delete_creation',
-  'add_sources', 'get_source', 'delete_source', 'upsert_canon', 'delete_canon',
+  'add_sources', 'get_source', 'delete_source', 'upsert_canon', 'get_canon', 'delete_canon',
   'create_node', 'get_node', 'update_node', 'reorder_nodes', 'delete_node', 'restore_revision',
-  'list_proposals', 'resolve_proposal', 'get_thread', 'send_message', 'start_batch_run', 'control_run', 'export_creation',
+  'list_proposals', 'get_proposal', 'resolve_proposal', 'get_thread', 'send_message', 'start_batch_run', 'control_run', 'export_creation',
 ]);
 const UPLOAD_OPS = new Set(['create_creation', 'add_sources', 'send_message']);
 const MAX_PENDING_PER_CLIENT = 32;
@@ -100,8 +100,10 @@ export function createCreationRelay({
       }
 
       const serverRequestId = randomUUID();
-      const ownerId = client.username || 'local-development';
-      const userKey = client.userId || ownerId;
+      // The Agent echoes this namespace key in events; use the same durable
+      // identity as the browser ACL and the HTTP media relay.
+      const ownerId = client.userId || client.username || 'local-development';
+      const userKey = ownerId;
       const userBytes = bytesByUser.get(userKey) || 0;
       if (userBytes + uploadBytes > MAX_CREATION_IN_FLIGHT_BYTES_PER_USER
           || inFlightBytes + uploadBytes > MAX_CREATION_IN_FLIGHT_BYTES) {

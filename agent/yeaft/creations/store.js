@@ -11,6 +11,8 @@ import { parseSource, searchTerms } from './source-parser.js';
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS creations (id TEXT PRIMARY KEY, updated_at TEXT NOT NULL, data TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS creation_import_keys (
+  import_key TEXT PRIMARY KEY, creation_id TEXT NOT NULL UNIQUE REFERENCES creations ON DELETE CASCADE);
 CREATE TABLE IF NOT EXISTS creation_sources (
   creation_id TEXT NOT NULL REFERENCES creations ON DELETE CASCADE, id TEXT NOT NULL, data TEXT NOT NULL,
   PRIMARY KEY (creation_id, id));
@@ -66,7 +68,7 @@ const clipBytes = (value, max) => {
   // Skip an incomplete UTF-8 character at the boundary.
   return new TextDecoder().decode(bytes.subarray(0, max), { stream: true });
 };
-const nodeFields = node => ({ ...node, batchEligible: node.type === 'unit' && node.status !== 'final' && !node.userEdited });
+const nodeFields = node => ({ ...node, sortOrder: node.position, isFolder: node.type === 'folder', batchEligible: node.type === 'unit' && node.status !== 'final' && !node.userEdited });
 
 export function compactProposal({ proposedContent, patch, anchor, summary, ...proposal }) {
   const content = proposedContent ?? patch?.contentMd ?? '';
@@ -271,6 +273,13 @@ export class CreationStore {
   getCreation(id) { return this.#summary(this.#creation(id)); }
   createCreation(input) {
     return this.transaction(() => {
+      const { importKey } = input;
+      if (importKey !== undefined) {
+        if (typeof importKey !== 'string' || importKey.length > 128 || !importKey.trim() || importKey.includes('\0')
+          || !importKey.isWellFormed()) fail('INVALID_REQUEST', 'Invalid import key');
+        const existing = this.one('SELECT creation_id FROM creation_import_keys WHERE import_key=?', importKey);
+        if (existing) return { ...this.getCreation(existing.creation_id), deduplicated: true };
+      }
       const id = idFor(input.id);
       const kind = pick(input.kind ?? 'book', CREATION_KINDS, 'creation kind');
       const modality = input.modality ?? MODALITY_BY_KIND[kind];
@@ -284,6 +293,7 @@ export class CreationStore {
         mission: '', description: '', status: 'draft', readingNodeId: null, readingOffset: 0,
         placement: defaultCelestialPlacement(kind, index) }, input);
       this.run('INSERT INTO creations VALUES (?,?,?)', id, createdAt, json(record));
+      if (importKey !== undefined) this.run('INSERT INTO creation_import_keys VALUES (?,?)', importKey, id);
       return this.getCreation(id);
     });
   }
@@ -580,7 +590,7 @@ export class CreationStore {
       return nodeIds.map((nodeId, position) => {
         const node = { ...byId.get(nodeId), position, updatedAt: now() };
         this.#nodeWrite(node);
-        return node;
+        return nodeFields(node);
       });
     });
   }
@@ -646,6 +656,9 @@ export class CreationStore {
         summary: text(input.summary ?? '', LIMITS.promptBytes, 'proposal summary'), diffStats: diffStats(encoded, proposed.encoded) });
     });
   }
+  getProposal(id, proposalId) {
+    return data(this.one('SELECT data FROM creation_proposals WHERE creation_id=? AND id=?', safeId(id), safeId(proposalId))) ?? notFound('Proposal');
+  }
   listProposals(id, { status, nodeId, includeContent = true, limit = LIMITS.proposalCount, offset = 0 } = {}) {
     this.#creation(id);
     const filters = ['creation_id=?'];
@@ -663,7 +676,9 @@ export class CreationStore {
     const statement = this.db.prepare(`SELECT data FROM creation_proposals WHERE ${filters.join(' AND ')} ORDER BY rowid DESC LIMIT ? OFFSET ?`);
     const proposals = [];
     let bytes = 2; // Array brackets; count commas as entries are appended.
-    for (const row of statement.iterate(...params, limit, offset)) {
+    let hasMore = false;
+    for (const row of statement.iterate(...params, limit + 1, offset)) {
+      if (proposals.length === limit) { hasMore = true; break; }
       const proposal = data(row);
       let item = includeContent ? proposal : compactProposal(proposal);
       let size = jsonBytes(item);
@@ -672,11 +687,11 @@ export class CreationStore {
         size = jsonBytes(item);
       }
       const entryBytes = size + Number(proposals.length > 0);
-      if (bytes + entryBytes > PAGE_BYTES) break;
+      if (bytes + entryBytes > PAGE_BYTES) { hasMore = true; break; }
       bytes += entryBytes;
       proposals.push(item);
     }
-    return proposals;
+    return { proposals, hasMore, nextOffset: hasMore ? offset + proposals.length : null };
   }
   #settleProposal(proposal, status, reason = null, outcome = {}) {
     Object.assign(proposal, { status, reason, resolvedAt: now(), ...outcome });
@@ -687,7 +702,7 @@ export class CreationStore {
   resolveProposal(id, proposalId, { action, force = false }) {
     pick(action, ['accept', 'reject'], 'proposal action');
     return this.transaction(() => {
-      const proposal = data(this.one('SELECT data FROM creation_proposals WHERE creation_id=? AND id=?', safeId(id), safeId(proposalId))) ?? notFound('Proposal');
+      const proposal = this.getProposal(id, proposalId);
       if (proposal.status !== 'pending') {
         if (proposal.status === (action === 'accept' ? 'accepted' : 'rejected')) return { proposal, unchanged: true };
         fail('CONFLICT', 'Proposal already resolved');
@@ -851,25 +866,43 @@ export class CreationStore {
   saveAsset(id, input, { exportFile = false } = {}) {
     return this.transaction(() => {
       this.#creation(id);
-      if (this.one('SELECT COUNT(*) AS count FROM creation_assets WHERE creation_id=?', id).count >= LIMITS.assets) fail('LIMIT_EXCEEDED', 'Too many assets');
       const ext = String(input.ext ?? input.extension ?? '').toLowerCase();
       if (!own(ASSET_TYPES, ext)) fail('INVALID_REQUEST', 'Unsupported asset type');
       const isExportType = ext === 'md' || ext === 'json';
+      if (exportFile && !isExportType) fail('INVALID_REQUEST', 'Invalid export type');
+      // Reserve one slot per export format, independent of the regular asset quota.
+      if (!exportFile && this.one("SELECT COUNT(*) AS count FROM creation_assets WHERE creation_id=? AND id NOT IN ('export-markdown','export-json')", id).count >= LIMITS.assets) {
+        fail('LIMIT_EXCEEDED', 'Too many assets');
+      }
       const bytes = Buffer.isBuffer(input.bytes) ? input.bytes : typeof input.content === 'string' && ['html', 'svg', 'md', 'json'].includes(ext)
         ? Buffer.from(boundedText(input.content, LIMITS.assetBytes, 'asset content'))
         : decodeBase64(input.base64 ?? input.dataBase64, LIMITS.assetBytes);
       if ((bytes.length > LIMITS.assetBytes && !(exportFile && isExportType && Buffer.isBuffer(input.bytes))) || !validAsset(ext, bytes)) fail('INVALID_REQUEST', 'Invalid asset bytes or size');
-      const assetId = randomUUID();
+      const assetId = exportFile ? `export-${ext === 'md' ? 'markdown' : ext}` : randomUUID();
       const asset = { id: assetId, creationId: id, ext, ...(exportFile ? { name: `${id}.${ext}` } : {}), mimeType: ASSET_TYPES[ext], byteLength: bytes.length,
         // Active formats must be served as downloads or inside a sandbox by the relay/UI.
         disposition: (isExportType || ['html', 'svg'].includes(ext)) ? 'attachment' : 'inline', createdAt: now() };
-      this.#write(this.#path(id, 'assets', `${assetId}.${ext}`), bytes);
-      this.run('INSERT INTO creation_assets VALUES (?,?,?)', id, assetId, json(asset));
+      if (exportFile) {
+        // Stage a new file before switching the stable asset ID to it. A failed
+        // transaction leaves the old export readable rather than replacing its bytes.
+        const previous = data(this.one('SELECT data FROM creation_assets WHERE creation_id=? AND id=?', id, assetId));
+        const fileId = randomUUID();
+        this.#write(this.#path(id, 'assets', `${fileId}.${ext}`), bytes);
+        this.run(`INSERT INTO creation_assets VALUES (?,?,?) ON CONFLICT(creation_id,id) DO UPDATE SET data=excluded.data`,
+          id, assetId, json({ ...asset, fileId }));
+        if (previous) this.tx.afterCommit.push(() => this.#remove(this.#path(id, 'assets', `${safeId(previous.fileId ?? assetId)}.${ext}`)));
+      } else {
+        this.#write(this.#path(id, 'assets', `${assetId}.${ext}`), bytes);
+        this.run('INSERT INTO creation_assets VALUES (?,?,?)', id, assetId, json(asset));
+      }
       this.#touch(id);
       return asset;
     });
   }
-  listAssets(id) { return this.all('SELECT data FROM creation_assets WHERE creation_id=? ORDER BY rowid', safeId(id)).map(data); }
+  listAssets(id) {
+    return this.all('SELECT data FROM creation_assets WHERE creation_id=? ORDER BY rowid', safeId(id))
+      .map(row => { const { fileId, ...asset } = data(row); return asset; });
+  }
   readMediaRange(id, mediaKind, mediaId, start = 0, end = undefined) {
     this.#creation(id);
     safeId(mediaId);
@@ -878,7 +911,7 @@ export class CreationStore {
     if (mediaKind === 'asset' || mediaKind === 'assets') {
       record = data(this.one('SELECT data FROM creation_assets WHERE creation_id=? AND id=?', id, mediaId)) ?? notFound('Asset');
       if (!own(ASSET_TYPES, record.ext)) fail('INVALID_PATH', 'Invalid stored asset type');
-      path = this.#path(id, 'assets', `${mediaId}.${record.ext}`);
+      path = this.#path(id, 'assets', `${safeId(record.fileId ?? mediaId)}.${record.ext}`);
     } else if (mediaKind === 'source' || mediaKind === 'sources') {
       record = data(this.one('SELECT data FROM creation_sources WHERE creation_id=? AND id=?', id, mediaId)) ?? notFound('Source');
       path = this.#path(id, 'sources', mediaId, 'original');

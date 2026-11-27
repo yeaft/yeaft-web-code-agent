@@ -8,6 +8,34 @@ import { t } from '../../../utils/i18n.js';
 import { COSMOS_BOOKS_KEY } from '../../../cosmos/constants.js';
 
 const LEGACY_BOOKS_DISMISSED_KEY = 'yeaft-cosmos-legacy-books-dismissed-v1';
+const LEGACY_BOOKS_IMPORTED_KEY = 'yeaft-cosmos-legacy-books-imported-v1';
+
+function legacyBookmarkImportKey(b) {
+  return `legacy-book:${String(b?.id || b?.title || '').slice(0, 96)}`;
+}
+
+function readImportedLegacyKeys() {
+  try {
+    if (typeof localStorage === 'undefined') return new Set();
+    const raw = localStorage.getItem(LEGACY_BOOKS_IMPORTED_KEY);
+    if (!raw) return new Set();
+    const parsed = JSON.parse(raw);
+    return new Set(Array.isArray(parsed) ? parsed.filter((x) => typeof x === 'string') : []);
+  } catch {
+    return new Set();
+  }
+}
+
+function persistImportedLegacyKey(importKey) {
+  try {
+    if (typeof localStorage === 'undefined' || !importKey) return;
+    const set = readImportedLegacyKeys();
+    set.add(importKey);
+    localStorage.setItem(LEGACY_BOOKS_IMPORTED_KEY, JSON.stringify([...set]));
+  } catch {
+    // ignore storage errors
+  }
+}
 
 function readLegacyGalaxyBookmarks() {
   try {
@@ -17,7 +45,10 @@ function readLegacyGalaxyBookmarks() {
     if (!raw) return [];
     const parsed = JSON.parse(raw);
     if (!Array.isArray(parsed)) return [];
-    return parsed.filter((b) => b && typeof b.title === 'string' && b.title.trim());
+    const imported = readImportedLegacyKeys();
+    return parsed.filter((b) => (
+      b && typeof b.title === 'string' && b.title.trim() && !imported.has(legacyBookmarkImportKey(b))
+    ));
   } catch {
     return [];
   }
@@ -591,10 +622,16 @@ export default {
       importingLegacy.value = true;
       let imported = 0;
       try {
+        const importedKeys = readImportedLegacyKeys();
         const toImport = legacyBookmarks.value.slice();
         for (const bm of toImport) {
           const title = String(bm.title || '').trim();
           if (!title) continue;
+          const importKey = legacyBookmarkImportKey(bm);
+          if (importedKeys.has(importKey)) {
+            legacyBookmarks.value = legacyBookmarks.value.filter((item) => legacyBookmarkImportKey(item) !== importKey);
+            continue;
+          }
           const celestial = (Number.isFinite(bm.arm) || Number.isFinite(bm.r) || Number.isFinite(bm.theta))
             ? {
                 ...(Number.isFinite(bm.arm) ? { arm: bm.arm } : {}),
@@ -606,11 +643,17 @@ export default {
             title,
             kind: 'book',
             autoPlan: false,
+            importKey,
             ...(celestial ? { celestial } : {}),
           });
+          importedKeys.add(importKey);
+          persistImportedLegacyKey(importKey);
+          legacyBookmarks.value = legacyBookmarks.value.filter((item) => legacyBookmarkImportKey(item) !== importKey);
           imported += 1;
         }
-        dismissLegacyBookmarks();
+        if (legacyBookmarks.value.length === 0) {
+          dismissLegacyBookmarks();
+        }
         emit('toast', t('creation.galaxy.legacyImported', { count: imported }));
       } catch (err) {
         emit('toast', err?.message || 'Import failed');
@@ -684,45 +727,57 @@ export default {
 
     async function submitIgnite() {
       if (!canSubmitIgnite.value) return;
-      const draft = creationsStore.igniteDraft;
-      const agentId = creationsStore.selectedAgentId;
-      draft.submitting = true;
-      draft.error = null;
+      const submitAgentId = creationsStore.selectedAgentId;
+      const startSeq = creationsStore.openActivationSeq;
+      const liveDraft = creationsStore.igniteDraft;
+      const titleText = liveDraft.title.trim();
+      const promptText = liveDraft.prompt.trim();
+      const kindVal = liveDraft.kind || 'book';
+      const filesToSend = liveDraft.pendingFiles.slice();
+      const celestialVal = liveDraft.celestial || undefined;
+
+      liveDraft.submitting = true;
+      liveDraft.error = null;
 
       try {
-        const promptText = draft.prompt.trim();
         const fallbackTitle = promptText
           ? promptText.split(/\r?\n/)[0].trim().slice(0, 48)
-          : (draft.pendingFiles[0]?.name ? draft.pendingFiles[0].name.replace(/\.[^.]+$/, '').slice(0, 48) : '');
-        const res = await creationsStore.createCreation(agentId, {
-          title: draft.title.trim() || fallbackTitle || undefined,
-          kind: draft.kind || 'book',
+          : (filesToSend[0]?.name ? filesToSend[0].name.replace(/\.[^.]+$/, '').slice(0, 48) : '');
+        const res = await creationsStore.createCreation(submitAgentId, {
+          title: titleText || fallbackTitle || undefined,
+          kind: kindVal,
           prompt: promptText || undefined,
-          rawFiles: draft.pendingFiles.slice(),
-          celestial: draft.celestial || undefined,
+          rawFiles: filesToSend,
+          celestial: celestialVal,
         });
         const created = res?.creation || res;
         if (res?.initialTurnError) {
           emit('toast', res.initialTurnError);
         }
-        draft.title = '';
-        draft.prompt = '';
-        draft.pendingFiles = [];
-        draft.celestial = null;
-        draft.open = false;
-        draft.error = null;
+        creationsStore.igniteDraft.title = '';
+        creationsStore.igniteDraft.prompt = '';
+        creationsStore.igniteDraft.pendingFiles = [];
+        creationsStore.igniteDraft.celestial = null;
+        creationsStore.igniteDraft.open = false;
+        creationsStore.igniteDraft.error = null;
 
-        if (created && created.id) {
+        if (
+          created
+          && created.id
+          && props.visible
+          && creationsStore.selectedAgentId === submitAgentId
+          && creationsStore.openActivationSeq === startSeq
+        ) {
           emit('open-creation', {
-            agentId,
+            agentId: submitAgentId,
             creationId: created.id,
             mode: 'studio',
           });
         }
       } catch (err) {
-        draft.error = err?.message || 'Failed to ignite creation';
+        creationsStore.igniteDraft.error = err?.message || 'Failed to ignite creation';
       } finally {
-        draft.submitting = false;
+        creationsStore.igniteDraft.submitting = false;
       }
     }
 

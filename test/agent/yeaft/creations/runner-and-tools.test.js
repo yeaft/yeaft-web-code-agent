@@ -216,6 +216,38 @@ it('includes explicit attachments before lexical hits, even with no matching fil
   expect(events.findLast(e => e.type === 'creation_upserted').creation.sourceCount).toBe(3);
 });
 
+it('includes every explicit attachment and rejects missing or foreign source IDs before starting a turn', async () => {
+  let prompt;
+  const { store } = setup(() => ({ async *query(params) { prompt = params.prompt; yield terminal; } }));
+  const creationId = 'book';
+  store.createCreation({ id: creationId });
+  store.createCreation({ id: 'other' });
+  const [foreign] = store.addSources('other', { textSources: ['foreign'] });
+  const attached = store.addSources(creationId, { textSources: Array.from({ length: 6 }, (_, i) => ({
+    name: `attached-${i}.txt`, text: `Excerpt ${i} ` + 'x'.repeat(850),
+  })) });
+  const attachedSourceIds = attached.map(source => source.id);
+  const params = { creationId, text: 'Review these attachments', attachedSourceIds };
+  for (const id of ['missing', foreign.id]) {
+    expect(() => req('send_message', { ...params, attachedSourceIds: [...attachedSourceIds, id] }))
+      .toThrow(expect.objectContaining({ code: 'NOT_FOUND' }));
+  }
+  expect(store.listRuns(creationId)).toEqual([]);
+  const turn = req('send_message', { ...params, excludedContextIds: attachedSourceIds });
+  await service.runner.waitForRun(turn.run.id);
+  expect(turn.contextMeta.sources.map(source => source.sourceId)).toEqual(attachedSourceIds);
+  for (const { id } of attached) expect(prompt).toContain(id);
+  for (const [i, { id, name, summary }] of attached.entries()) {
+    if (i < 4) expect(prompt).toContain(`Excerpt ${i} ${'x'.repeat(850)}`);
+    else {
+      const reference = { sourceId: id, name, summary, note: 'Call creation_read_source for full content' };
+      expect(turn.contextMeta.sources[i]).toMatchObject(reference);
+      expect(prompt).toContain(JSON.stringify(reference));
+      expect(prompt).not.toContain(`Excerpt ${i} ${'x'.repeat(850)}`);
+    }
+  }
+});
+
 it('atomically persists partial cancelled turns and emits exactly one matching terminal message', async () => {
   let arrived;
   const streamed = new Promise(resolve => { arrived = resolve; });

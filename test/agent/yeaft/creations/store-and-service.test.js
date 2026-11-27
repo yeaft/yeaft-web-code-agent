@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createHash } from 'node:crypto';
-import { mkdtempSync, readFileSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { deflateSync } from 'node:zlib';
@@ -174,7 +174,7 @@ describe('Creations durable store and operations', () => {
       expect(response).toMatchObject({ ok: true, data: { sources: [{ url: expect.stringContaining('/agent%3A1/relay/media/source/') }] } });
       await bridge.mediaRead({ type: 'creation_media_read', ownerId: 'owner', requestId: 'media', creationId: 'relay', mediaKind: 'source', mediaId: response.data.sources[0].id, start: 0, end: 0 });
       expect(sent.at(-1)).toMatchObject({ type: 'creation_media_chunk', requestId: 'media', ok: true, totalSize: 0, end: -1, data: '' });
-      expect(sent.some(msg => msg.type === 'creation_event')).toBe(true);
+      expect(sent.filter(msg => msg.type === 'creation_event')).toMatchObject([{ ownerId: 'owner' }]);
       expect(loaded).toBe(1);
     } finally { await bridge.close(); }
   });
@@ -187,9 +187,8 @@ it('binds runtime storage to all three authenticated identity fields and fences 
     sent.push(msg);
     if (delivery) eventGuards.push(delivery.isCurrent);
   }, createService: options => {
-    expect(runtimes.at(-1)?.closed ?? true).toBe(true);
     const runtime = createCreationService(options);
-    const record = { closed: false, emit: options.emitEvent };
+    const record = { ownerId: options.namespaceBinding.ownerId, closed: false, emit: options.emitEvent };
     runtimes.push(record);
     return { ...runtime, async close() { await runtime.close(); record.closed = true; } };
   } });
@@ -205,22 +204,34 @@ it('binds runtime storage to all three authenticated identity fields and fences 
     const oldEvent = eventGuards.at(-1);
     expect(oldEvent()).toBe(true);
     const media = { type: 'creation_media_read', requestId: 'chunk', creationId: 'same', mediaKind: 'source', mediaId: first.data.sources[0].id };
-    for (const ownerId of [undefined, 'other']) {
-      await bridge.mediaRead({ ...media, ownerId });
-      expect(sent.at(-1)).toMatchObject({ ok: false, errorCode: 'invalid_request' });
-    }
+    await bridge.mediaRead(media);
+    expect(sent.at(-1)).toMatchObject({ ok: false, errorCode: 'invalid_request' });
     expect(runtimes).toHaveLength(1);
+    await bridge.mediaRead({ ...media, ownerId: 'other' });
+    expect(sent.at(-1)).toMatchObject({ ok: false, errorCode: 'not_found' });
     expect((await request('other', 'list_creations')).data.creations).toEqual([]);
-    expect(oldEvent()).toBe(false);
+    expect(oldEvent()).toBe(true);
     expect((await create('other')).ok).toBe(true);
-    const count = sent.length;
+    await bridge.mediaRead({ ...media, ownerId: 'owner' });
+    expect(sent.at(-1)).toMatchObject({ ok: true, data: b64('scoped') });
     runtimes[0].emit({ type: 'creation_upserted' });
+    expect(sent.at(-1)).toMatchObject({ type: 'creation_event', ownerId: 'owner' });
+    expect(sent.filter(msg => msg.type === 'creation_event').some(msg => msg.ownerId === 'other')).toBe(true);
+
+    for (const ownerId of ['third', 'fourth', 'fifth']) await request(ownerId, 'list_creations');
+    expect(runtimes.filter(r => r.closed).map(r => r.ownerId)).toEqual(['other']);
+    expect(oldEvent()).toBe(true);
+    const count = sent.length;
+    runtimes[1].emit({ type: 'creation_upserted' });
     expect(sent).toHaveLength(count);
     context.CONFIG.serverUrl = 'wss://two.example';
+    expect(oldEvent()).toBe(false);
     expect((await request('other', 'list_creations')).data.creations).toEqual([]);
+    expect(runtimes.slice(0, 5).every(r => r.closed)).toBe(true);
     await create('other');
     context.agentId = 'agent:2';
     expect((await request('other', 'list_creations')).data.creations).toEqual([]);
+    expect(runtimes[5].closed).toBe(true);
     await bridge.mediaRead({ ...media, ownerId: 'owner' });
     expect(sent.at(-1).ok).toBe(false);
     context.CONFIG.serverUrl = 'wss://one.example';
@@ -233,10 +244,11 @@ it('binds runtime storage to all three authenticated identity fields and fences 
     const key = createHash('sha256').update(Object.values(binding).join('\0')).digest('hex').slice(0, 24);
     const marker = join(dir, 'creations', `ns-${key}`, '.namespace.json');
     expect(JSON.parse(readFileSync(marker, 'utf8'))).toEqual(binding);
-    await request('other', 'list_creations');
+    for (const ownerId of ['other', 'third', 'fourth', 'fifth']) await request(ownerId, 'list_creations');
     writeFileSync(marker, JSON.stringify({ ...binding, ownerId: 'other' }));
     expect(await request('owner', 'list_creations')).toMatchObject({ ok: false, errorCode: 'invalid_path' });
   } finally { await bridge.close(); }
+  expect(runtimes.every(r => r.closed)).toBe(true);
 });
 
 it('compacts large snapshot proposals and returns byte-budgeted, node-filtered full pages', () => {
@@ -244,7 +256,7 @@ it('compacts large snapshot proposals and returns byte-budgeted, node-filtered f
   store.createNode('book', { id: 'chapter' });
   store.createNode('book', { id: 'other' });
   const prose = 'é'.repeat(200 * 1024);
-  for (let i = 0; i < 15; i++) store.proposeUnitEdit('book', 'chapter', { proposedContent: prose });
+  const proposals = Array.from({ length: 15 }, () => store.proposeUnitEdit('book', 'chapter', { proposedContent: prose }));
   store.proposeUnitEdit('book', 'other', { proposedContent: 'Other chapter' });
   store.proposeCanonPatch('book', { title: 'Canon title', contentMd: 'Canon body' });
   const detail = req('get_creation', { creationId: 'book' });
@@ -261,11 +273,20 @@ it('compacts large snapshot proposals and returns byte-budgeted, node-filtered f
     expect(item.proposedContent).toBe(prose);
     expect(item.contentTruncated).toBeUndefined();
   }
-  expect(req('list_proposals', { ...params, includeContent: true }).proposals).toEqual(full);
+  const page = req('list_proposals', params);
+  expect(page).toEqual({ proposals: full, hasMore: true, nextOffset: 3 });
+  expect(req('list_proposals', { ...params, offset: page.nextOffset, limit: 1 })).toEqual({
+    proposals: [proposals[11]], hasMore: true, nextOffset: 4,
+  });
+  expect(req('list_proposals', { ...params, offset: 14, limit: 1 })).toEqual({
+    proposals: [proposals[0]], hasMore: false, nextOffset: null,
+  });
   const escaped = store.proposeUnitEdit('book', 'chapter', { proposedContent: '\x00'.repeat(400 * 1024) });
   const [oversized] = req('get_node', params).pendingProposals;
   expect(oversized).toMatchObject({ id: escaped.id, contentTruncated: true });
   expect(oversized.proposedContent).toBeUndefined();
+  expect(req('get_proposal', { creationId: 'book', proposalId: escaped.id }).proposal).toEqual(escaped);
+  expect(() => req('get_proposal', { creationId: 'missing', proposalId: escaped.id })).toThrow(err('NOT_FOUND'));
 });
 
 it('pages large folder thread histories newest-first without exceeding the byte budget', () => {
@@ -296,12 +317,108 @@ it('serves large Markdown and JSON exports as downloadable ranged assets', () =>
   for (const [format, ext, mimeType] of [['markdown', 'md', 'text/markdown'], ['json', 'json', 'application/json']]) {
     const result = req('export_creation', { creationId: 'book', format });
     expect(result).toMatchObject({ format, filename: `book.${ext}`, mimeType, streamed: true, downloadUrl: `/mock/book/asset/${result.assetId}` });
+    expect(result.assetId).toBe(`export-${format}`);
     expect(result.byteLength).toBeGreaterThan(8 * 1024 * 1024);
     expect(result.content).toBeUndefined();
     expect(store.readMediaRange('book', 'asset', result.assetId, result.byteLength - 2)).toMatchObject({
       totalSize: result.byteLength, end: result.byteLength - 1, mimeType, filename: result.filename, disposition: 'attachment',
     });
   }
+});
+
+it('replaces a streamed export without accumulating assets or files', () => {
+  store.createCreation({ id: 'book' });
+  const outlineMd = 'x'.repeat(32 * 1024);
+  for (let i = 0; i < 100; i++) store.createNode('book', { id: `node${i}`, outlineMd });
+  const exportAgain = format => req('export_creation', { creationId: 'book', format });
+  const first = exportAgain('markdown');
+  const regular = store.saveAsset('book', { ext: 'md', content: 'Separate asset' });
+  store.updateNode('book', 'node0', { title: 'New title' });
+  expect(() => store.transaction(() => {
+    exportAgain('markdown');
+    throw new Error('roll back export');
+  })).toThrow('roll back export');
+  expect(store.readMediaRange('book', 'asset', first.assetId, 0, 100).bytes.toString()).not.toContain('New title');
+  for (let i = 0; i < 3; i++) expect(exportAgain('md').assetId).toBe(first.assetId);
+  expect(store.listAssets('book').map(asset => asset.id)).toEqual([first.assetId, regular.id]);
+  expect(readdirSync(join(dir, 'creations', 'book', 'assets'))).toHaveLength(2);
+  expect(store.readMediaRange('book', 'asset', first.assetId, 0, 100).bytes.toString()).toContain('New title');
+});
+
+it('reads persisted namespace media after restart without a prior Creation RPC', async () => {
+  const context = { CONFIG: { yeaftDir: dir, serverUrl: 'wss://one.example' }, agentId: 'agent:1' };
+  const sent = [];
+  const open = () => createCreationBridge({ context, send: msg => sent.push(msg) });
+  const ownerId = 'owner';
+  const writer = open();
+  let mediaId;
+  try {
+    await writer.request({ type: 'creation_request', requestId: 'create', ownerId,
+      op: 'create_creation', payload: { id: 'book', textSources: ['persisted'] } });
+    mediaId = sent.at(-1).data.sources[0].id;
+  } finally { await writer.close(); }
+  const reader = open();
+  try {
+    await reader.mediaRead({ type: 'creation_media_read', ownerId, requestId: 'read', creationId: 'book', mediaKind: 'source', mediaId });
+    expect(sent.at(-1)).toMatchObject({ type: 'creation_media_chunk', requestId: 'read', ok: true, data: b64('persisted') });
+  } finally { await reader.close(); }
+});
+
+it('bounds large creation snapshots without losing the full node or Canon bodies', () => {
+  const creationId = 'book';
+  store.createCreation({ id: creationId });
+  const body = 'x'.repeat(32 * 1024);
+  store.transaction(() => {
+    for (let i = 0; i < 250; i++) store.createNode(creationId, { id: `node${i}`, outlineMd: body });
+    for (let i = 0; i < 500; i++) store.upsertCanon(creationId, { id: `canon${i}`, contentMd: body });
+  });
+  const detail = req('get_creation', { creationId });
+  expect(detail.nodes).toHaveLength(250);
+  expect(detail.canon).toHaveLength(500);
+  expect(Buffer.byteLength(JSON.stringify(detail))).toBeLessThan(5 * 1024 * 1024);
+  expect(detail.nodes[0]).toMatchObject({ outlineMd: body.slice(0, 512), outlineTruncated: true });
+  expect(detail.canon[0]).toMatchObject({ contentMd: body.slice(0, 512), contentTruncated: true });
+  expect(req('get_node', { creationId, nodeId: 'node0' }).node.outlineMd).toBe(body);
+  expect(req('get_canon', { creationId, canonId: 'canon0' }).canon.contentMd).toBe(body);
+  expect(() => req('get_canon', { creationId, canonId: 'missing' })).toThrow(err('NOT_FOUND'));
+});
+
+it('returns canonical node fields after mutations, including emitted node events', async () => {
+  await service.close();
+  const events = [];
+  service = createCreationService({ yeaftDir: dir, emitEvent: event => events.push(event) });
+  store = service.store;
+  req('create_creation', { id: 'book' });
+  const assertNode = (node, isFolder) => expect(node).toMatchObject({ sortOrder: node.position, isFolder });
+  assertNode(store.createNode('book', { id: 'folder', type: 'folder' }), true);
+  assertNode(store.updateNode('book', 'folder', { title: 'Revised' }), true);
+  assertNode(req('create_node', { creationId: 'book', id: 'unit' }).node, false);
+  assertNode(req('update_node', { creationId: 'book', nodeId: 'unit', content: 'Prose' }).node, false);
+  const nodeEvents = events.filter(event => ['node_upserted', 'node_content_updated'].includes(event.type));
+  expect(nodeEvents.map(event => event.type)).toEqual(['node_upserted', 'node_content_updated']);
+  for (const { node } of nodeEvents) assertNode(node, false);
+  const [unit, folder] = store.reorderNodes('book', null, ['unit', 'folder']);
+  assertNode(unit, false);
+  assertNode(folder, true);
+  expect(store.getNode('book', 'folder').sortOrder).toBe(1);
+  expect(store.listNodes('book').map(node => node.sortOrder)).toEqual([0, 1]);
+});
+
+it('deduplicates imports across restarts without replaying sources, starter nodes, or planning', async () => {
+  const importKey = 'upload:original';
+  expect(() => req('create_creation', { importKey, starterNode: { parentId: 'missing' } })).toThrow(err('NOT_FOUND'));
+  const first = req('create_creation', { importKey, starterNode: true, textSources: ['note'] });
+  await service.close();
+  const events = [];
+  service = createCreationService({ yeaftDir: dir, emitEvent: event => events.push(event) });
+  const retry = req('create_creation', { importKey, id: 'new-id', prompt: 'Do not plan again', textSources: ['duplicate'] });
+  expect(retry).toEqual({ ...req('get_creation', { creationId: first.creation.id }), deduplicated: true });
+  expect(retry.sources.map(source => source.id)).toEqual(first.sources.map(source => source.id));
+  expect(retry.nodes).toHaveLength(1);
+  expect(retry.runs).toEqual([]);
+  expect(events).toEqual([]);
+  expect(req('list_creations').creations).toHaveLength(1);
+  expect(() => req('create_creation', { importKey: 'x'.repeat(129) })).toThrow(err('INVALID_REQUEST'));
 });
 
 it('keeps only the latest 50 revision metadata entries on reads and mutations', () => {

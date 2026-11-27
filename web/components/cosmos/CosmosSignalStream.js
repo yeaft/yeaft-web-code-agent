@@ -33,6 +33,8 @@ export default {
     streamHidden: { type: Boolean, default: false },
     /** Suppress overlapping when Cosmic Constants popover or telescope observation is active. */
     suppressed: { type: Boolean, default: false },
+    /** Suppress floating cards & mobile banner (e.g. in Galaxy band or Creation interior) while keeping popover accessible. */
+    suppressFloating: { type: Boolean, default: false },
   },
   emits: ['open-signal', 'dismiss-signal', 'mark-all-read', 'close-popover'],
   template: `
@@ -284,6 +286,7 @@ export default {
       !props.drawerOpen
       && !props.isCompact
       && !props.suppressed
+      && !props.suppressFloating
       && !props.popoverOpen
       && !defaultCollapsed.value
       && !props.streamHidden
@@ -316,6 +319,7 @@ export default {
       && !props.drawerOpen
       && !props.popoverOpen
       && !props.suppressed
+      && !props.suppressFloating
       && !defaultCollapsed.value
       && Boolean(mobileBannerItem.value)
       && mobileBannerSignature.value !== dismissedBannerSignature.value

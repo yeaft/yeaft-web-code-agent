@@ -1,35 +1,41 @@
 import { EventEmitter } from 'node:events';
+import { request as httpRequest } from 'node:http';
 import jwt from 'jsonwebtoken';
 import express from 'express';
 import request from 'supertest';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const state = vi.hoisted(() => ({
-  agents: new Map(), webClients: new Map(), pendingFiles: new Map(), previewFiles: new Map(),
+  agents: new Map(), webClients: new Map(), previewFiles: new Map(),
   users: new Map(), trackMessageBytesSent: () => {},
 }));
-vi.mock('../../server/context.js', () => state);
+vi.mock('../../server/context.js', async () => {
+  const { PendingFileStore } = await import('../../server/pending-files.js');
+  return Object.assign(state, { pendingFiles: new PendingFileStore() });
+});
 vi.mock('../../server/config.js', () => ({
-  CONFIG: { skipAuth: false, jwtSecret: 'creation-relay-test-secret', jwtExpiresIn: '5m', browserRuntime: {}, fileCleanupInterval: 600_000 },
+  CONFIG: { skipAuth: false, jwtSecret: 'creation-relay-test-secret', jwtExpiresIn: '5m', jwtRenewThresholdMs: 120_000, maxFileSize: 2 * 1024 * 1024, browserRuntime: {}, fileCleanupInterval: 600_000 },
   getUserByUsername: username => state.users.get(username),
 }));
-vi.mock('../../server/auth.js', () => ({}));
+vi.mock('../../server/auth.js', async () => ({ logout: (await import('../../server/auth/token.js')).logout }));
 vi.mock('../../server/database.js', () => ({ userDb: {
   isActive: id => [...state.users.values()].some(user => user.id === id && user.deletion_state === 'active'),
   getByUsername: username => state.users.get(username),
+  getOrCreate: username => state.users.get(username),
   updateLogin: () => {},
 }, scheduledTaskReceiptDb: { getByUser: () => [] } }));
 vi.mock('../../server/yeaft-asset-store.js', () => ({ yeaftAssetStore: {} }));
 vi.mock('../../server/workbench-preview.js', () => ({}));
 
 import { CONFIG } from '../../server/config.js';
-import { activeSessions, revokedTokens } from '../../server/auth/session-store.js';
-import { issueSessionToken, logout } from '../../server/auth/token.js';
+import { activeSessions, revokedSessions, revokedTokens } from '../../server/auth/session-store.js';
+import { issueSessionToken, logout, maybeRenewToken, verifyToken } from '../../server/auth/token.js';
 import { handleWebConnection } from '../../server/ws-client.js';
 import { createCreationRelay } from '../../server/handlers/client-creation.js';
 import { handleAgentCreation } from '../../server/handlers/agent-creation.js';
 import { validateCreationAttachments, MAX_CREATION_ATTACHMENT_BYTES } from '../../server/creation-attachment-policy.js';
 import { closeCreationMediaReads, CREATION_MEDIA_CHUNK_BYTES, readCreationMediaChunk } from '../../server/creation-media-relay.js';
+import { registerAuthRoutes } from '../../server/routes/auth-routes.js';
 import { registerUploadRoutes } from '../../server/routes/upload-routes.js';
 
 const agentId = 'user-a:agent-a';
@@ -40,6 +46,7 @@ const msg = (extra = {}) => ({ type: 'creation_request', requestId: 'browser-1',
 const socket = () => Object.assign(new EventEmitter(), { readyState: 1, send: vi.fn(), close: vi.fn() });
 const browser = userId => ({ authenticated: true, userId, username: userId === 'user-a' ? 'alice' : 'bob', role: 'pro', encryptOutbound: false, ws: socket() });
 const app = express();
+registerAuthRoutes(app, { requireAuth: (_req, res) => res.sendStatus(500), checkRateLimit: () => true });
 registerUploadRoutes(app, {
   requireAuth: (_req, res) => res.sendStatus(500),
   requireSessionAuth: (req, res, next) => {
@@ -58,7 +65,7 @@ beforeEach(() => {
   state.users.clear();
   state.users.set('alice', { id: 'user-a', deletion_state: 'active' });
   state.users.set('bob', { id: 'user-b', deletion_state: 'active' });
-  agent = { ownerId: 'user-a', capabilities: ['creations'], encryptOutbound: false, ws: socket() };
+  agent = { ownerId: 'user-a', conversations: new Map(), capabilities: ['creations'], encryptOutbound: false, ws: socket() };
   state.agents.set(agentId, agent);
   client = browser('user-a');
   peer = browser('user-a');
@@ -71,7 +78,11 @@ afterEach(() => {
   closeCreationMediaReads(agentId, agent);
   activeSessions.clear();
   revokedTokens.clear();
+  revokedSessions.clear();
+  delete CONFIG.maxPendingUploadBytesPerUser;
+  delete CONFIG.maxPendingUploadBytes;
   vi.useRealTimers();
+  vi.restoreAllMocks();
 });
 const frame = connection => JSON.parse(connection.ws.send.mock.lastCall[0]);
 
@@ -107,7 +118,6 @@ describe('Creation WebSocket relay', () => {
 
   it('retains the full session token and rejects incoming frames after logout', async () => {
     vi.useFakeTimers();
-    agent.conversations = new Map();
     const token = issueSessionToken('alice');
     const ws = socket();
     handleWebConnection(ws, new URL('https://example.test/ws'), { headers: { cookie: `yeaft_session=${token}` } });
@@ -130,16 +140,74 @@ describe('Creation WebSocket relay', () => {
     } else if (kind === 'response') {
       await relay.response(agentId, agent, { type: 'creation_response', requestId: frame(agent).requestId, ok: true });
     } else {
-      await handleAgentCreation(agentId, agent, { type: 'creation_event', event: { type: 'creation_updated' } });
+      await handleAgentCreation(agentId, agent, { type: 'creation_event', ownerId: 'user-a', event: { type: 'creation_updated' } });
       expect(frame(peer).type).toBe('creation_event');
     }
     expect(client.ws.close).toHaveBeenCalledWith(1008, 'Session no longer valid');
     expect(client.ws.send).not.toHaveBeenCalled();
   });
 
+  it.each(['request', 'response', 'event'])('revokes an original socket on Creation %s after renewed-cookie logout', async kind => {
+    const clock = vi.spyOn(Date, 'now');
+    const now = Date.now();
+    const token = issueSessionToken('alice');
+    clock.mockReturnValue(now + 240_000);
+    const ws = socket();
+    handleWebConnection(ws, new URL('https://example.test/ws'), { headers: { cookie: `yeaft_session=${token}` } });
+    const connected = [...state.webClients.values()].find(c => c.ws === ws);
+    expect(connected.authToken).toBe(token);
+    connected.encryptOutbound = false;
+    ws.send.mockClear();
+    if (kind === 'response') await relay.request(connected, msg());
+    const requestId = kind === 'response' ? frame(agent).requestId : null;
+    // A token about to expire is renewed without invalidating concurrent uses.
+    const renewed = maybeRenewToken(token, verifyToken(token).exp, 'alice');
+    expect(renewed).not.toBe(token);
+    expect(jwt.decode(renewed).sid).toBe(jwt.decode(token).sid);
+    expect(verifyToken(token).valid).toBe(true);
+    const { body } = await request(app).post('/api/auth/logout').set('Cookie', `yeaft_session=${renewed}`).expect(200);
+    expect(body).toEqual({ success: true });
+    expect(verifyToken(token).valid).toBe(false);
+    expect(verifyToken(renewed).valid).toBe(false);
+    if (kind === 'request') {
+      await ws.listeners('message')[0](Buffer.from(JSON.stringify(msg())));
+      expect(agent.ws.send).not.toHaveBeenCalled();
+    } else if (kind === 'response') {
+      await relay.response(agentId, agent, { type: 'creation_response', requestId, ok: true });
+    } else {
+      await handleAgentCreation(agentId, agent, { type: 'creation_event', ownerId: 'user-a', event: { type: 'creation_updated' } });
+      expect(frame(peer).type).toBe('creation_event');
+    }
+    expect(ws.close).toHaveBeenCalledWith(1008, 'Session no longer valid');
+    expect(ws.send).not.toHaveBeenCalled();
+    clock.mockRestore();
+  });
+
+  it.each(['get_canon', 'get_proposal'])('allows %s', async op => {
+    await relay.request(client, msg({ op }));
+    expect(frame(agent)).toMatchObject({ type: 'creation_request', op });
+  });
+
+  it('delivers global Agent events only to their stamped owner and drops unowned events', async () => {
+    agent.ownerId = null;
+    const adminA = { ...browser('admin-a'), role: 'admin' };
+    const adminB = { ...browser('admin-b'), role: 'admin' };
+    for (const admin of [adminA, adminB]) {
+      state.users.set(admin.userId, { id: admin.userId, deletion_state: 'active' });
+      state.webClients.set(admin.userId, admin);
+    }
+    const event = { type: 'creation_updated' };
+    for (const ownerId of [undefined, '', 'admin-a']) {
+      await handleAgentCreation(agentId, agent, { type: 'creation_event', ownerId, event });
+    }
+    expect(adminA.ws.send).toHaveBeenCalledTimes(1);
+    expect(frame(adminA)).toEqual({ type: 'creation_event', agentId, event });
+    expect(adminB.ws.send).not.toHaveBeenCalled();
+  });
+
   it('authorizes the owner, replaces the correlation ID and does not trust browser identity', async () => {
     await relay.request(client, msg({ ownerId: 'spoofed', payload: { creationId: 'creation-a' } }));
-    expect(frame(agent)).toEqual({ type: 'creation_request', requestId: expect.stringMatching(/^[0-9a-f-]{36}$/), op: 'get_creation', ownerId: 'alice', payload: { creationId: 'creation-a' } });
+    expect(frame(agent)).toEqual({ type: 'creation_request', requestId: expect.stringMatching(/^[0-9a-f-]{36}$/), op: 'get_creation', ownerId: 'user-a', payload: { creationId: 'creation-a' } });
     expect(frame(agent).requestId).not.toBe('browser-1');
   });
 
@@ -212,7 +280,7 @@ describe('Creation WebSocket relay', () => {
 
   it('broadcasts events with the server-derived ID only to authorized browsers', async () => {
     const event = { type: 'creation_updated', creationId: 'c1' };
-    await handleAgentCreation(agentId, agent, { type: 'creation_event', agentId: 'spoofed', event, ownerId: 'user-b' });
+    await handleAgentCreation(agentId, agent, { type: 'creation_event', agentId: 'spoofed', event, ownerId: 'user-a' });
     for (const receiver of [client, peer]) expect(frame(receiver)).toEqual({ type: 'creation_event', agentId, event });
     expect(other.ws.send).not.toHaveBeenCalled();
   });
@@ -243,7 +311,8 @@ describe('Creation upload attachment policy', () => {
 
   it.each(['response', 'timeout', 'browser disconnect', 'Agent disconnect', 'transport error', 'offline'])('releases the shared per-user upload budget after %s', async exit => {
     vi.useFakeTimers();
-    entry.buffer = Buffer.alloc(MAX_CREATION_ATTACHMENT_BYTES);
+    entry = { ...entry, buffer: Buffer.alloc(MAX_CREATION_ATTACHMENT_BYTES) };
+    state.pendingFiles.set(ref.fileId, entry);
     const encode = vi.spyOn(entry.buffer, 'toString').mockReturnValue('encoded');
     const large = msg({ op: 'add_sources', payload: { attachments: [ref, { fileId: 'upload-two' }] } });
     state.pendingFiles.set('upload-two', entry);
@@ -317,9 +386,11 @@ describe('Creation upload attachment policy', () => {
   it('rejects too many attachments, oversized files, and oversized totals before forwarding', () => {
     const limited = { ok: false, files: [], errorCode: 'attachment_limit' };
     expect(validateCreationAttachments(client, { attachments: Array(11).fill(ref) })).toMatchObject(limited);
-    entry.buffer = Buffer.alloc(MAX_CREATION_ATTACHMENT_BYTES + 1);
+    entry = { ...entry, buffer: Buffer.alloc(MAX_CREATION_ATTACHMENT_BYTES + 1) };
+    state.pendingFiles.set(ref.fileId, entry);
     expect(validateCreationAttachments(client, payload)).toMatchObject(limited);
-    entry.buffer = entry.buffer.subarray(1);
+    entry = { ...entry, buffer: entry.buffer.subarray(1) };
+    state.pendingFiles.set(ref.fileId, entry);
     state.pendingFiles.set('upload-two', entry).set('upload-three', { ...entry, buffer: Buffer.alloc(1) });
     expect(validateCreationAttachments(client, { attachments: [ref, { fileId: 'upload-two' }, { fileId: 'upload-three' }] })).toMatchObject(limited);
   });
@@ -384,6 +455,25 @@ describe('Creation media HTTP streaming', () => {
     await get().set('Range', 'bytes=9-').expect(206).expect('Content-Type', 'image/png').expect('Content-Disposition', /^inline;/);
   });
 
+  it.each([
+    ['application/octet-stream', '000000146674797069736f6d0000020069736f6d', 'video/mp4'],
+    ['video/quicktime', '0000001466747970717420200000000071742020', 'video/mp4'],
+    ['application/octet-stream', '000000106d6461740000000000000000', 'video/mp4'],
+    ['application/octet-stream', '1a45dfa3874282847765626d', 'video/webm'],
+  ])('serves verified video declared as %s inline', async (declared, hex, verified) => {
+    const data = Buffer.from(hex, 'hex');
+    const { body } = await request(app).post('/api/upload').set('test-user', 'alice')
+      .attach('files', data, { filename: 'video.bin', contentType: declared }).expect(200);
+    const entry = state.pendingFiles.get(body.files[0].fileId);
+    serveMedia(entry.buffer, entry.mimeType, entry.name);
+    await get().set('Range', 'bytes=-3').expect(206).expect('Content-Type', verified).expect('Content-Disposition', /^inline;/);
+  });
+
+  it.each(['application/octet-stream', 'video/quicktime', 'video/mp4'])('downloads spoofed HTML declared as %s', async declared => {
+    serveMedia(Buffer.from('<html><script>ftypqt</script></html>'), declared);
+    await get().expect(200).expect('Content-Type', 'application/octet-stream').expect('Content-Disposition', /^attachment;/);
+  });
+
   it('handles zero-byte files', async () => {
     serveMedia(Buffer.alloc(0));
     await get().expect(200).expect('Content-Length', '0');
@@ -423,7 +513,7 @@ describe('Creation media chunk correlation and limits', () => {
 
   it('ignores spoofed socket and agent ID, and validates canonical base64', async () => {
     const pending = read();
-    expect(frame(agent)).toMatchObject({ type: 'creation_media_read', ownerId: 'alice' });
+    expect(frame(agent)).toMatchObject({ type: 'creation_media_read', ownerId: 'user-a' });
     const response = reply('YQ==');
     await handleAgentCreation(agentId, { ...agent }, response);
     await handleAgentCreation('other-id', agent, response);
@@ -458,5 +548,65 @@ describe('Creation media chunk correlation and limits', () => {
     await Promise.all(pending);
     serveMedia(Buffer.from('ok'));
     await expect(read()).resolves.toMatchObject({ totalSize: 2 });
+  });
+});
+
+
+describe('Staged upload intake quota', () => {
+  const upload = (user, ...sizes) => {
+    const req = request(app).post('/api/upload').set('test-user', user);
+    for (const size of sizes) req.attach('files', Buffer.alloc(size), 'data.bin');
+    return req;
+  };
+
+  beforeEach(() => {
+    CONFIG.maxPendingUploadBytesPerUser = 64;
+    CONFIG.maxPendingUploadBytes = 100;
+  });
+
+  it('enforces per-user and global quotas, then releases on consumption and expiry', async () => {
+    const { body } = await upload('alice', 64).expect(200);
+    await upload('alice', 1).expect(413);
+    await upload('bob', 37).expect(413);
+    await upload('bob', 36).expect(200);
+    expect(state.pendingFiles.size).toBe(2);
+    state.pendingFiles.delete(body.files[0].fileId);
+    await upload('alice', 64).expect(200);
+    state.pendingFiles.prune(Date.now() + CONFIG.fileCleanupInterval, CONFIG.fileCleanupInterval);
+    expect(state.pendingFiles.size).toBe(0);
+    await upload('bob', 64).expect(200);
+  });
+
+  it('releases all prior parts when a later file exceeds the budget', async () => {
+    await upload('alice', 32, 33).expect(413);
+    expect(state.pendingFiles.size).toBe(0);
+    await upload('alice', 64).expect(200);
+  });
+
+  it.each(['content-length', 'streaming'])('returns 413 before the %s request finishes', async mode => {
+    const server = app.listen(0);
+    try {
+      await new Promise((resolve, reject) => {
+        const headers = { 'test-user': 'alice', 'content-type': 'multipart/form-data; boundary=test' };
+        if (mode === 'content-length') headers['content-length'] = '100000';
+        const req = httpRequest({ port: server.address().port, path: '/api/upload', method: 'POST', headers }, res => {
+          res.resume();
+          res.on('end', () => {
+            req.destroy();
+            if (res.statusCode === 413) resolve();
+            else reject(new Error(`Expected 413, received ${res.statusCode}`));
+          });
+        });
+        req.on('error', reject);
+        req.setTimeout(1000, () => req.destroy(new Error('No 413 while request body was open')));
+        if (mode === 'streaming') {
+          req.write('--test\r\nContent-Disposition: form-data; name="files"; filename="data.bin"\r\n\r\n');
+          req.write(Buffer.alloc(128));
+        } else req.flushHeaders();
+      });
+      await upload('alice', 64).expect(200);
+    } finally {
+      await new Promise(resolve => server.close(resolve));
+    }
   });
 });

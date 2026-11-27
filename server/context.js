@@ -1,4 +1,5 @@
 import { WebSocket } from 'ws';
+import { PendingFileStore } from './pending-files.js';
 
 // 存储所有连接的 agents
 // agentId -> { ws, name, workDir, conversations: Map<convId, {workDir, claudeSessionId}>, sessionKey, isAlive, capabilities }
@@ -9,7 +10,7 @@ export const agents = new Map();
 export const webClients = new Map();
 
 // 临时文件存储: fileId -> { name, mimeType, buffer, uploadedAt, userId }
-export const pendingFiles = new Map();
+export const pendingFiles = new PendingFileStore();
 
 // Port proxy
 export const pendingProxyRequests = new Map(); // requestId → { res, timeout, streaming }

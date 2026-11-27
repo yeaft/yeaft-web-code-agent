@@ -48,6 +48,8 @@ export default {
   props: {
     node: { type: Object, required: true },
     content: { type: String, default: '' },
+    contentLoaded: { type: Boolean, default: true },
+    loadedRevId: { type: String, default: null },
     nodes: { type: Array, default: () => [] },
     mode: { type: String, default: 'read' },
     agentId: { type: String, default: '' },
@@ -91,7 +93,7 @@ export default {
     bookUnits() {
       return (this.nodes || [])
         .filter((n) => n && !isFolderNode(n))
-        .sort((a, b) => (a.sortOrder ?? a.order ?? 0) - (b.sortOrder ?? b.order ?? 0));
+        .sort((a, b) => (a.sortOrder ?? a.position ?? a.order ?? 0) - (b.sortOrder ?? b.position ?? b.order ?? 0));
     },
     currentUnitIndex() {
       return this.bookUnits.findIndex((n) => n.id === this.node?.id);
@@ -173,9 +175,10 @@ export default {
       return 'creation.book.themePaper';
     },
     enterEditMode() {
+      if (!this.contentLoaded) return;
       this.hideSelectionBar();
       this.draftText = this.content || '';
-      this.editBaseRevId = this.node?.currentRevId ?? null;
+      this.editBaseRevId = this.loadedRevId ?? this.node?.currentRevId ?? null;
       this.conflictError = '';
       this.saveError = '';
       this.editing = true;
@@ -207,8 +210,9 @@ export default {
     async saveEdit(exitAfter = false) {
       this.conflictError = '';
       this.saveError = '';
+      const targetNodeId = this.node.id;
       const payload = {
-        nodeId: this.node.id,
+        nodeId: targetNodeId,
         content: this.draftText,
         baseRevId: this.editBaseRevId,
       };
@@ -219,10 +223,14 @@ export default {
             this.conflictError = this.$t('creation.interior.conflictDesc');
             return false;
           }
-          this.editBaseRevId = res?.node?.currentRevId ?? this.node?.currentRevId ?? this.editBaseRevId;
-          this.dirty = false;
-          if (exitAfter) {
-            this.editing = false;
+          const savedRevId = res?.node?.currentRevId ?? this.loadedRevId ?? this.editBaseRevId;
+          this._lastSavedRevId = savedRevId;
+          if (this.node?.id === targetNodeId) {
+            this.editBaseRevId = savedRevId;
+            this.dirty = false;
+            if (exitAfter) {
+              this.editing = false;
+            }
           }
           return true;
         } catch (err) {
@@ -235,18 +243,27 @@ export default {
         }
       }
       this.$emit('save-content', payload);
+      this._lastSavedRevId = this.editBaseRevId;
       this.dirty = false;
       if (exitAfter) {
         this.editing = false;
       }
       return true;
     },
-    async onFinalize() {
+    async finalizeChapter() {
+      if (!this.contentLoaded) return;
+      const targetNodeId = this.node.id;
+      let baseRevId = this.loadedRevId ?? this.node?.currentRevId ?? null;
       if (this.editing && this.dirty) {
+        this._lastSavedRevId = null;
         const ok = await this.saveEdit(false);
         if (!ok) return;
+        baseRevId = this._lastSavedRevId ?? baseRevId;
       }
-      this.$emit('finalize-node', { nodeId: this.node.id });
+      this.$emit('finalize-node', { nodeId: targetNodeId, baseRevId });
+    },
+    async onFinalize() {
+      return this.finalizeChapter();
     },
     onProseMouseUp() {
       if (this.editing) return;
@@ -404,7 +421,7 @@ export default {
 
           <!-- Inline Light Edit / Save Controls -->
           <template v-if="!editing">
-            <button type="button" class="creation-glass-btn" @click="enterEditMode">
+            <button type="button" class="creation-glass-btn" :disabled="!contentLoaded" @click="enterEditMode">
               ✎ {{ $t('creation.book.inlineEdit') }}
             </button>
             <button
@@ -431,7 +448,7 @@ export default {
             v-if="node.status !== 'final'"
             type="button"
             class="creation-glass-btn"
-            :disabled="saving"
+            :disabled="saving || !contentLoaded"
             @click="onFinalize"
           >
             ✓ {{ $t('creation.status.final') }}
@@ -462,7 +479,7 @@ export default {
           :style="{ top: selectionBar.top + 'px', left: selectionBar.left + 'px' }"
           @mousedown.prevent
         >
-          <button type="button" class="creation-glass-btn" @click="enterEditMode">
+          <button type="button" class="creation-glass-btn" :disabled="!contentLoaded" @click="enterEditMode">
             ✎ {{ $t('creation.book.selectionEdit') }}
           </button>
           <button type="button" class="creation-glass-btn is-primary" @click="triggerSelectionAiEdit">
@@ -491,7 +508,7 @@ export default {
             <div v-else class="creation-book-empty">
               <p>{{ $t('creation.book.emptyChapter') }}</p>
               <div class="creation-book-empty-actions">
-                <button type="button" class="creation-glass-btn" @click="enterEditMode">
+                <button type="button" class="creation-glass-btn" :disabled="!contentLoaded" @click="enterEditMode">
                   ✎ {{ $t('creation.book.inlineEdit') }}
                 </button>
                 <button

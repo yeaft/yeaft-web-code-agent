@@ -116,7 +116,7 @@ export function openCreationMedia(user, { agentId, creationId, mediaKind, mediaI
     else transfersByUser.delete(userKey);
   }
   signal?.addEventListener('abort', close, { once: true });
-  const params = { creationId, mediaKind, mediaId, ownerId: user?.username || 'local-development' };
+  const params = { creationId, mediaKind, mediaId, ownerId: userKey };
   function checkAccess() {
     const current = authorize(user, agentId);
     if (current.agent !== agent || current.userKey !== userKey) throw failure(503, 'Agent or account changed; retry the media read');

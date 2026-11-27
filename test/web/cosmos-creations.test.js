@@ -675,4 +675,342 @@ describe('Cosmos Creations — End-to-End Web Store <-> Server Relay <-> Agent S
     expect(css).toContain('.creation-read-stage');
     expect(css).not.toMatch(/#[0-9a-fA-F]{3,8}\b|rgba?\(/);
   });
+
+  it('B03: GalleryReader caption edit preserves legacy svgMarkup as inert data without injecting v-html', async () => {
+    const { default: GalleryReader } = await import('../../web/components/cosmos/creations/readers/GalleryReader.js');
+    const $t = (k) => creationsZh[k] || k;
+    const savedPayloads = [];
+    const legacySvg = '<svg viewBox="0 0 100 100"><circle cx="50" cy="50" r="40" /></svg>';
+    const wrapper = mount(GalleryReader, {
+      props: {
+        node: { id: 'n-gal-preserve', title: 'Legacy Art', modality: 'image_gallery', currentRevId: 'rev-1' },
+        agentId: 'agent-a',
+        creationId: 'cre-1',
+        contentLoaded: true,
+        loadedRevId: 'rev-1',
+        content: JSON.stringify({
+          frames: [
+            {
+              frameId: 'f-legacy',
+              title: 'Star Map',
+              caption: 'Old caption',
+              svgMarkup: legacySvg,
+            },
+          ],
+        }),
+        onSaveContent: vi.fn(async (payload) => {
+          savedPayloads.push(payload);
+          return { node: { id: 'n-gal-preserve', currentRevId: 'rev-2' } };
+        }),
+      },
+      global: { mocks: { $t } },
+    });
+    await flushPromises();
+
+    // No inline <svg> injected into DOM
+    expect(wrapper.find('svg').exists()).toBe(false);
+
+    // Enter edit mode, edit caption, save
+    wrapper.vm.toggleEditing();
+    await flushPromises();
+    wrapper.vm.frames[0].caption = 'Updated caption';
+    wrapper.vm.markDirty();
+    const ok = await wrapper.vm.saveGallery();
+    expect(ok).toBe(true);
+    expect(savedPayloads.length).toBe(1);
+
+    const parsed = JSON.parse(savedPayloads[0].content);
+    expect(parsed.frames[0].caption).toBe('Updated caption');
+    expect(parsed.frames[0].svgMarkup).toBe(legacySvg);
+    expect(wrapper.find('svg').exists()).toBe(false);
+    wrapper.unmount();
+  });
+
+  it('B04: BookReader blocks edit before contentLoaded, captures loadedRevId, and finalizeChapter targets captured nodeId mid-save', async () => {
+    const { default: BookReader } = await import('../../web/components/cosmos/creations/readers/BookReader.js');
+    const $t = (k) => creationsZh[k] || k;
+
+    let resolveSave;
+    const onSaveContent = vi.fn(() => new Promise((r) => { resolveSave = r; }));
+
+    const wrapper = mount(BookReader, {
+      props: {
+        node: { id: 'ch-1', title: 'Chapter 1', status: 'draft', currentRevId: 'rev-stale-node' },
+        content: 'Loaded chapter body',
+        contentLoaded: false,
+        loadedRevId: null,
+        agentId: 'agent-a',
+        creationId: 'cre-1',
+        onSaveContent,
+      },
+      global: { mocks: { $t } },
+    });
+
+    // Cannot enter edit mode before contentLoaded
+    wrapper.vm.enterEditMode();
+    expect(wrapper.vm.editing).toBe(false);
+
+    // Once contentLoaded with loadedRevId='rev-loaded-1', edit mode captures loadedRevId
+    await wrapper.setProps({ contentLoaded: true, loadedRevId: 'rev-loaded-1' });
+    wrapper.vm.enterEditMode();
+    expect(wrapper.vm.editing).toBe(true);
+    expect(wrapper.vm.editBaseRevId).toBe('rev-loaded-1');
+
+    // Edit text and trigger finalizeChapter, then switch node prop mid-save!
+    wrapper.vm.draftText = 'Edited chapter 1 text';
+    wrapper.vm.dirty = true;
+    const finalizePromise = wrapper.vm.finalizeChapter();
+
+    // Switch node prop to ch-2 while saveEdit is still in flight
+    await wrapper.setProps({
+      node: { id: 'ch-2', title: 'Chapter 2', status: 'draft', currentRevId: 'rev-ch2' },
+      loadedRevId: 'rev-ch2',
+    });
+
+    resolveSave({ node: { id: 'ch-1', currentRevId: 'rev-saved-2' } });
+    await finalizePromise;
+    await flushPromises();
+
+    // Must finalize ch-1 with rev-saved-2 — NEVER ch-2!
+    const emitted = wrapper.emitted('finalize-node');
+    expect(emitted).toBeTruthy();
+    expect(emitted[0][0]).toEqual({ nodeId: 'ch-1', baseRevId: 'rev-saved-2' });
+    wrapper.unmount();
+  });
+
+  it('B05: ProposalDiffBar fetches full proposal via getProposal before enabling diff/Accept on compact proposals', async () => {
+    const { default: ProposalDiffBar } = await import('../../web/components/cosmos/creations/studio/ProposalDiffBar.js');
+    const $t = (k) => creationsZh[k] || k;
+
+    let resolveGetProposal;
+    const getProposalSpy = vi.fn(() => new Promise((r) => { resolveGetProposal = r; }));
+    const origGetProposal = creationsStore.getProposal;
+    creationsStore.getProposal = getProposalSpy;
+
+    const compactProposal = {
+      id: 'prop-compact-1',
+      nodeId: 'n-1',
+      status: 'pending',
+      summary: 'Tighten opening paragraph',
+      // proposedContent intentionally omitted (compact snapshot from get_creation)
+    };
+
+    const wrapper = mount(ProposalDiffBar, {
+      props: {
+        node: { id: 'n-1', title: 'Ch 1', currentRevId: 'rev-1' },
+        currentContent: 'Old opening line.',
+        proposals: [compactProposal],
+        agentId: 'agent-a',
+        creationId: 'cre-1',
+      },
+      global: { mocks: { $t } },
+    });
+    await flushPromises();
+
+    // Automatically triggered getProposal
+    expect(getProposalSpy).toHaveBeenCalledWith('agent-a', 'cre-1', 'prop-compact-1');
+
+    // Diff and Accept buttons are disabled while full proposal is loading, and no bogus -1 diff is shown
+    const buttons = wrapper.findAll('button');
+    const acceptBtn = buttons.find((b) => b.text().includes(creationsZh['creation.proposal.accept']));
+    const diffBtn = buttons.find((b) => b.text().includes('Diff'));
+    expect(acceptBtn.attributes('disabled')).toBeDefined();
+    expect(diffBtn.attributes('disabled')).toBeDefined();
+    expect(wrapper.find('.creation-diff-del').exists()).toBe(false);
+
+    // Resolve full proposal
+    resolveGetProposal({
+      ...compactProposal,
+      proposedContent: 'Sharper opening line.\nSecond line.',
+    });
+    await flushPromises();
+
+    expect(acceptBtn.attributes('disabled')).toBeUndefined();
+    expect(diffBtn.attributes('disabled')).toBeUndefined();
+    expect(wrapper.find('.creation-diff-add').text()).toContain('+2');
+    expect(wrapper.find('.creation-diff-del').text()).toContain('-1');
+
+    creationsStore.getProposal = origGetProposal;
+    wrapper.unmount();
+  });
+
+  it('B09: Live node insert (position) -> reorder with interleaved folders produces exact sibling order', async () => {
+    const [{ default: OutlineBoard }, { default: StudioTreeRail }] = await Promise.all([
+      import('../../web/components/cosmos/creations/studio/OutlineBoard.js'),
+      import('../../web/components/cosmos/creations/studio/StudioTreeRail.js'),
+    ]);
+    const $t = (k) => creationsZh[k] || k;
+
+    // Nodes coming from live insert only have `position` (no `sortOrder`)
+    const nodes = [
+      { id: 'u2', type: 'unit', title: 'Unit 2', parentId: null, position: 2 },
+      { id: 'f1', type: 'folder', isFolder: true, title: 'Folder A', parentId: null, position: 1 },
+      { id: 'u1', type: 'unit', title: 'Unit 1', parentId: null, position: 0 },
+    ];
+
+    const reorderSpy = vi.fn().mockResolvedValue({ nodes });
+    const origReorder = creationsStore.reorderNodes;
+    creationsStore.reorderNodes = reorderSpy;
+
+    const treeWrapper = mount(StudioTreeRail, {
+      props: { nodes, canon: [], sources: [] },
+      global: { mocks: { $t } },
+    });
+    expect(treeWrapper.vm.sortedNodes.map((n) => n.id)).toEqual(['u1', 'f1', 'u2']);
+
+    const boardWrapper = mount(OutlineBoard, {
+      props: { folder: null, nodes, agentId: 'agent-a', creationId: 'cre-1' },
+      global: { mocks: { $t } },
+    });
+    expect(boardWrapper.vm.allSiblings.map((n) => n.id)).toEqual(['u1', 'f1', 'u2']);
+    expect(boardWrapper.vm.childUnits.map((n) => n.id)).toEqual(['u1', 'u2']);
+
+    // Move Unit 2 up (swap with Unit 1 while preserving Folder A at index 1)
+    await boardWrapper.vm.moveUnit(1, -1);
+    expect(reorderSpy).toHaveBeenCalledWith('agent-a', 'cre-1', null, ['u2', 'f1', 'u1']);
+
+    creationsStore.reorderNodes = origReorder;
+    treeWrapper.unmount();
+    boardWrapper.unmount();
+  });
+
+  it('B13: Legacy bookmark import uses deterministic importKey and does not duplicate on retry after lost ACK', async () => {
+    const { default: CosmosGalaxyOverlay } = await import('../../web/components/cosmos/creations/CosmosGalaxyOverlay.js');
+    const { COSMOS_BOOKS_KEY } = await import('../../web/cosmos/constants.js');
+    const $t = (k) => creationsZh[k] || k;
+
+    localStorage.removeItem('yeaft-cosmos-legacy-books-dismissed-v1');
+    localStorage.removeItem('yeaft-cosmos-legacy-books-imported-v1');
+    localStorage.setItem(COSMOS_BOOKS_KEY, JSON.stringify([
+      { id: 'bm-1', title: 'Star Atlas', arm: 0, r: 0.4, theta: 1.0 },
+      { id: 'bm-2', title: 'Nebula Guide', arm: 1, r: 0.5, theta: 2.0 },
+    ]));
+
+    await creationsStore.selectGalaxyAgent('agent-a', { force: true });
+
+    const seenCalls = [];
+    let failSecondOnce = true;
+    const origCreate = creationsStore.createCreation;
+    creationsStore.createCreation = vi.fn(async (agentId, payload) => {
+      seenCalls.push(payload);
+      if (payload.importKey === 'legacy-book:bm-2' && failSecondOnce) {
+        failSecondOnce = false;
+        throw new Error('Lost ACK');
+      }
+      return origCreate.call(creationsStore, agentId, payload);
+    });
+
+    const wrapper = mount(CosmosGalaxyOverlay, {
+      props: {
+        visible: true,
+        agents: [{ id: 'agent-a', name: 'Alpha', online: true, capabilities: ['creations'] }],
+      },
+      global: { mocks: { $t } },
+    });
+    await flushPromises();
+
+    // First import attempt: bm-1 succeeds and is persisted, bm-2 fails (lost ACK)
+    await wrapper.vm.importLegacyBookmarks();
+    await flushPromises();
+    expect(seenCalls.map((c) => c.importKey)).toEqual(['legacy-book:bm-1', 'legacy-book:bm-2']);
+    expect(JSON.parse(localStorage.getItem('yeaft-cosmos-legacy-books-imported-v1'))).toEqual(['legacy-book:bm-1']);
+    expect(wrapper.vm.legacyBookmarks.map((b) => b.id)).toEqual(['bm-2']);
+
+    // Retry: skips bm-1, retries ONLY bm-2 with exact same deterministic importKey
+    await wrapper.vm.importLegacyBookmarks();
+    await flushPromises();
+    expect(seenCalls.map((c) => c.importKey)).toEqual(['legacy-book:bm-1', 'legacy-book:bm-2', 'legacy-book:bm-2']);
+    expect(JSON.parse(localStorage.getItem('yeaft-cosmos-legacy-books-imported-v1'))).toEqual(['legacy-book:bm-1', 'legacy-book:bm-2']);
+    expect(wrapper.vm.legacyBookmarks.length).toBe(0);
+
+    creationsStore.createCreation = origCreate;
+    localStorage.removeItem(COSMOS_BOOKS_KEY);
+    localStorage.removeItem('yeaft-cosmos-legacy-books-dismissed-v1');
+    localStorage.removeItem('yeaft-cosmos-legacy-books-imported-v1');
+    wrapper.unmount();
+  });
+
+  it('Signal Stream suppresses floating overlays in Galaxy while keeping popover accessible', async () => {
+    const { default: CosmosSignalStream } = await import('../../web/components/cosmos/CosmosSignalStream.js');
+    const $t = (k) => k;
+    const items = [
+      {
+        signalKey: 'sig-1',
+        kind: 'unread',
+        agentId: 'agent-a',
+        agentName: 'Alpha',
+        sessionId: 's-1',
+        sessionTitle: 'Build logs',
+        preview: 'All tests passed',
+        planetId: 'earth',
+        activityAt: 1000,
+        dismissible: true,
+      },
+    ];
+
+    // Desktop in Solar -> floating cards visible
+    const wrapper = mount(CosmosSignalStream, {
+      props: {
+        items,
+        unreadCount: 1,
+        badgeCount: 1,
+        dismissibleCount: 1,
+        isCompact: false,
+        suppressFloating: false,
+        popoverOpen: false,
+      },
+      global: { mocks: { $t } },
+    });
+    expect(wrapper.find('.cosmos-signal-stream').exists()).toBe(true);
+
+    // Desktop in Galaxy (suppressFloating=true) -> floating cards suppressed
+    await wrapper.setProps({ suppressFloating: true });
+    expect(wrapper.find('.cosmos-signal-stream').exists()).toBe(false);
+
+    // 320px Mobile in Galaxy (isCompact=true, suppressFloating=true) -> mobile banner suppressed
+    await wrapper.setProps({ isCompact: true, suppressFloating: true });
+    expect(wrapper.find('.cosmos-signal-mobile-banner').exists()).toBe(false);
+
+    // Opening the popover via top-right trigger still works cleanly
+    await wrapper.setProps({ popoverOpen: true });
+    expect(wrapper.find('.cosmos-signal-popover').exists()).toBe(true);
+    wrapper.unmount();
+  });
+
+  it('B11: VideoReader filters playable sources and renders download fallback on playback error', async () => {
+    const { default: VideoReader } = await import('../../web/components/cosmos/creations/readers/VideoReader.js');
+    const $t = (k) => creationsZh[k] || k;
+
+    const wrapper = mount(VideoReader, {
+      props: {
+        node: { id: 'v-1', title: 'Episode 1', modality: 'video_episode', currentRevId: 'rev-1' },
+        content: JSON.stringify({ videoSourceId: 'src-mp4', scenes: [] }),
+        contentLoaded: true,
+        loadedRevId: 'rev-1',
+        agentId: 'agent-a',
+        creationId: 'cre-1',
+        sources: [
+          { id: 'src-mp4', name: 'clip.mp4', mimeType: 'video/mp4' },
+          { id: 'src-webm', name: 'clip.webm', mimeType: 'video/webm' },
+          { id: 'src-mkv', name: 'raw.mkv', mimeType: 'video/x-matroska' },
+        ],
+      },
+      global: { mocks: { $t } },
+    });
+    await flushPromises();
+
+    // Only playable sources (.mp4, .webm, .mov) appear in selectable list
+    expect(wrapper.vm.videoSources.map((s) => s.id)).toEqual(['src-mp4', 'src-webm']);
+    expect(wrapper.find('video.creation-video-el').exists()).toBe(true);
+
+    // Triggering video error renders fallback download link
+    await wrapper.find('video.creation-video-el').trigger('error');
+    await flushPromises();
+    const fallback = wrapper.find('.creation-video-fallback');
+    expect(fallback.exists()).toBe(true);
+    const dlLink = fallback.find('a[download]');
+    expect(dlLink.exists()).toBe(true);
+    expect(dlLink.attributes('href')).toBe('/api/yeaft/creations/agent-a/cre-1/media/source/src-mp4');
+    wrapper.unmount();
+  });
 });

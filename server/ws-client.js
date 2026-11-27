@@ -60,6 +60,8 @@ export function handleWebConnection(ws, url, req = {}) {
   let sessionKey = null;
   let authToken = null;
   let authExpiresAt;
+  let authSessionId;
+  let authIssuedAt;
   let username = null;
   let userId = null;
   let role = null;
@@ -78,6 +80,8 @@ export function handleWebConnection(ws, url, req = {}) {
     }, { fullSession: true });
     authenticated = !!result;
     authToken = result?.token ?? null;
+    authSessionId = result?.sid;
+    authIssuedAt = result?.iat;
     if (Number.isFinite(result?.exp)) authExpiresAt = result.exp * 1000;
     sessionKey = result?.sessionKey || null;
     username = result?.username || null;
@@ -118,6 +122,8 @@ export function handleWebConnection(ws, url, req = {}) {
     authenticated,
     authToken,
     authExpiresAt,
+    authSessionId,
+    authIssuedAt,
     username,
     userId,
     role,

@@ -85,6 +85,8 @@ export default {
   props: {
     node: { type: Object, required: true },
     content: { type: String, default: '' },
+    contentLoaded: { type: Boolean, default: true },
+    loadedRevId: { type: String, default: null },
     mode: { type: String, default: 'read' },
     agentId: { type: String, default: '' },
     creationId: { type: String, default: '' },
@@ -99,7 +101,7 @@ export default {
       activeIndex: 0,
       editing: false,
       dirty: false,
-      editBaseRevId: this.node?.currentRevId ?? null,
+      editBaseRevId: this.loadedRevId ?? this.node?.currentRevId ?? null,
       conflictError: '',
       saveError: '',
       notesOpen: true,
@@ -140,7 +142,7 @@ export default {
     content(newVal) {
       if (!this.dirty) {
         this.deck = parseDeckContent(newVal, this.node?.title);
-        this.editBaseRevId = this.node?.currentRevId ?? null;
+        this.editBaseRevId = this.loadedRevId ?? this.node?.currentRevId ?? null;
         if (this.activeIndex >= this.deck.slides.length) {
           this.activeIndex = Math.max(0, this.deck.slides.length - 1);
         }
@@ -151,7 +153,7 @@ export default {
       this.activeIndex = 0;
       this.dirty = false;
       this.editing = false;
-      this.editBaseRevId = this.node?.currentRevId ?? null;
+      this.editBaseRevId = this.loadedRevId ?? this.node?.currentRevId ?? null;
       this.conflictError = '';
       this.saveError = '';
     },
@@ -192,21 +194,31 @@ export default {
         document.exitFullscreen?.().catch(() => {});
       }
     },
-    toggleEditing() {
+    startEditing() {
+      if (!this.contentLoaded) return;
       if (!this.editing && !this.dirty) {
-        this.editBaseRevId = this.node?.currentRevId ?? null;
+        this.editBaseRevId = this.loadedRevId ?? this.node?.currentRevId ?? null;
         this.conflictError = '';
         this.saveError = '';
       }
-      this.editing = !this.editing;
+      this.editing = true;
+    },
+    toggleEditing() {
+      if (!this.editing) {
+        this.startEditing();
+        return;
+      }
+      this.editing = false;
     },
     markDirty() {
+      if (!this.contentLoaded) return;
       if (!this.dirty) {
-        this.editBaseRevId = this.node?.currentRevId ?? null;
+        this.editBaseRevId = this.loadedRevId ?? this.node?.currentRevId ?? null;
       }
       this.dirty = true;
     },
     addSlide() {
+      if (!this.contentLoaded) return;
       this.markDirty();
       const next = normalizeSlide({
         layout: 'bullets',
@@ -310,6 +322,7 @@ export default {
             type="button"
             class="creation-glass-btn"
             :class="{ 'is-active': editing }"
+            :disabled="!editing && !contentLoaded"
             @click="toggleEditing"
           >
             ✎ {{ editing ? $t('creation.book.doneEdit') : $t('creation.book.inlineEdit') }}
@@ -375,7 +388,7 @@ export default {
             </div>
           </div>
 
-          <button type="button" class="creation-glass-btn" @click="addSlide">
+          <button type="button" class="creation-glass-btn" :disabled="!contentLoaded" @click="addSlide">
             + {{ $t('creation.deck.addSlide') }}
           </button>
         </aside>
@@ -393,7 +406,7 @@ export default {
                     :placeholder="$t('creation.deck.titlePlaceholder')"
                     @input="markDirty"
                   />
-                  <h1 v-else class="creation-slide-title" @click="editing = true">{{ activeSlide.title }}</h1>
+                  <h1 v-else class="creation-slide-title" @click="startEditing">{{ activeSlide.title }}</h1>
 
                   <input
                     v-if="editing"
@@ -402,7 +415,7 @@ export default {
                     :placeholder="$t('creation.deck.bulletPlaceholder')"
                     @input="markDirty"
                   />
-                  <p v-else-if="activeSlide.subtitle" class="creation-slide-subtitle" @click="editing = true">{{ activeSlide.subtitle }}</p>
+                  <p v-else-if="activeSlide.subtitle" class="creation-slide-subtitle" @click="startEditing">{{ activeSlide.subtitle }}</p>
                 </div>
               </template>
 
@@ -415,7 +428,7 @@ export default {
                     :placeholder="$t('creation.deck.bulletPlaceholder')"
                     @input="markDirty"
                   ></textarea>
-                  <blockquote v-else class="creation-slide-quote" @click="editing = true">
+                  <blockquote v-else class="creation-slide-quote" @click="startEditing">
                     {{ activeSlide.body || activeSlide.title }}
                   </blockquote>
                   <input
@@ -424,23 +437,23 @@ export default {
                     class="creation-slide-input is-subtitle"
                     @input="markDirty"
                   />
-                  <cite v-else-if="activeSlide.subtitle" class="creation-slide-cite" @click="editing = true">— {{ activeSlide.subtitle }}</cite>
+                  <cite v-else-if="activeSlide.subtitle" class="creation-slide-cite" @click="startEditing">— {{ activeSlide.subtitle }}</cite>
                 </div>
               </template>
 
               <template v-else-if="activeSlide.layout === 'two_column'">
                 <input v-if="editing" v-model="activeSlide.title" class="creation-slide-input is-heading" @input="markDirty" />
-                <h2 v-else class="creation-slide-heading" @click="editing = true">{{ activeSlide.title }}</h2>
+                <h2 v-else class="creation-slide-heading" @click="startEditing">{{ activeSlide.title }}</h2>
                 <div class="creation-slide-two-col">
                   <div class="creation-slide-col">
                     <textarea v-if="editing" v-model="bulletsText" class="creation-slide-textarea" :placeholder="$t('creation.deck.bulletPlaceholder')"></textarea>
-                    <ul v-else class="creation-slide-bullets" @click="editing = true">
+                    <ul v-else class="creation-slide-bullets" @click="startEditing">
                       <li v-for="(b, bi) in activeSlide.bullets" :key="bi">{{ b }}</li>
                     </ul>
                   </div>
                   <div class="creation-slide-col">
                     <textarea v-if="editing" v-model="activeSlide.body" class="creation-slide-textarea" @input="markDirty"></textarea>
-                    <div v-else class="creation-slide-body" @click="editing = true">
+                    <div v-else class="creation-slide-body" @click="startEditing">
                       <img v-if="activeSlideImageUrl" :src="activeSlideImageUrl" :alt="activeSlide.title" class="creation-slide-img" />
                       <p v-if="activeSlide.body">{{ activeSlide.body }}</p>
                     </div>
@@ -450,7 +463,7 @@ export default {
 
               <template v-else-if="activeSlide.layout === 'image_focus'">
                 <input v-if="editing" v-model="activeSlide.title" class="creation-slide-input is-heading" @input="markDirty" />
-                <h2 v-else class="creation-slide-heading" @click="editing = true">{{ activeSlide.title }}</h2>
+                <h2 v-else class="creation-slide-heading" @click="startEditing">{{ activeSlide.title }}</h2>
                 <div class="creation-slide-image-stage">
                   <img v-if="activeSlideImageUrl" :src="activeSlideImageUrl" :alt="activeSlide.title" class="creation-slide-img-hero" />
                   <div v-else class="creation-slide-img-placeholder">
@@ -463,12 +476,12 @@ export default {
 
               <template v-else>
                 <input v-if="editing" v-model="activeSlide.title" class="creation-slide-input is-heading" @input="markDirty" />
-                <h2 v-else class="creation-slide-heading" @click="editing = true">{{ activeSlide.title }}</h2>
+                <h2 v-else class="creation-slide-heading" @click="startEditing">{{ activeSlide.title }}</h2>
                 <textarea v-if="editing" v-model="bulletsText" class="creation-slide-textarea" :placeholder="$t('creation.deck.bulletPlaceholder')"></textarea>
-                <ul v-else-if="activeSlide.bullets.length" class="creation-slide-bullets" @click="editing = true">
+                <ul v-else-if="activeSlide.bullets.length" class="creation-slide-bullets" @click="startEditing">
                   <li v-for="(b, bi) in activeSlide.bullets" :key="bi">{{ b }}</li>
                 </ul>
-                <p v-else class="creation-slide-body" @click="editing = true">{{ activeSlide.body }}</p>
+                <p v-else class="creation-slide-body" @click="startEditing">{{ activeSlide.body }}</p>
               </template>
             </div>
 

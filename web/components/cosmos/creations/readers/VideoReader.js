@@ -6,6 +6,16 @@
  */
 import { useCreationsStore } from '../../../../stores/creations.js';
 
+const PLAYABLE_VIDEO_MIMES = new Set(['video/mp4', 'video/webm', 'video/quicktime']);
+const PLAYABLE_VIDEO_EXT = /\.(mp4|webm|mov)$/i;
+
+function isPlayableVideoSource(src) {
+  if (!src || !src.id) return false;
+  const mime = String(src.mimeType || '').toLowerCase().trim();
+  const name = String(src.name || src.filename || '').toLowerCase().trim();
+  return PLAYABLE_VIDEO_MIMES.has(mime) || PLAYABLE_VIDEO_EXT.test(name);
+}
+
 function makeSceneId() {
   return `scene_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`;
 }
@@ -74,6 +84,8 @@ export default {
   props: {
     node: { type: Object, required: true },
     content: { type: String, default: '' },
+    contentLoaded: { type: Boolean, default: true },
+    loadedRevId: { type: String, default: null },
     mode: { type: String, default: 'read' },
     agentId: { type: String, default: '' },
     creationId: { type: String, default: '' },
@@ -88,9 +100,10 @@ export default {
       currentTime: 0,
       nativeDuration: 0,
       playing: false,
+      playbackError: false,
       editing: false,
       dirty: false,
-      editBaseRevId: this.node?.currentRevId ?? null,
+      editBaseRevId: this.loadedRevId ?? this.node?.currentRevId ?? null,
       conflictError: '',
       saveError: '',
       _playTimer: null,
@@ -101,12 +114,13 @@ export default {
       return this.episode.scenes || [];
     },
     videoSources() {
-      return (this.sources || []).filter((s) => {
-        if (!s || !s.id) return false;
-        const mime = String(s.mimeType || '').toLowerCase();
-        const name = String(s.name || s.filename || '').toLowerCase();
-        return mime.startsWith('video/') || /\.(mp4|webm|mov|mkv|m4v)$/.test(name);
-      });
+      return (this.sources || []).filter((s) => isPlayableVideoSource(s));
+    },
+    selectedVideoSourceUnsupported() {
+      if (!this.episode.videoSourceId) return false;
+      const src = (this.sources || []).find((s) => s && s.id === this.episode.videoSourceId);
+      if (!src) return false;
+      return !isPlayableVideoSource(src);
     },
     videoUrl() {
       if (this.episode.videoAssetId) {
@@ -164,17 +178,21 @@ export default {
     content(newVal) {
       if (!this.dirty) {
         this.episode = parseVideoContent(newVal, this.node?.title);
-        this.editBaseRevId = this.node?.currentRevId ?? null;
+        this.editBaseRevId = this.loadedRevId ?? this.node?.currentRevId ?? null;
       }
+    },
+    videoUrl() {
+      this.playbackError = false;
     },
     'node.id'() {
       this.stopStoryboardPlayback();
       this.episode = parseVideoContent(this.content, this.node?.title);
       this.currentTime = 0;
       this.nativeDuration = 0;
+      this.playbackError = false;
       this.dirty = false;
       this.editing = false;
-      this.editBaseRevId = this.node?.currentRevId ?? null;
+      this.editBaseRevId = this.loadedRevId ?? this.node?.currentRevId ?? null;
       this.conflictError = '';
       this.saveError = '';
     },
@@ -185,24 +203,32 @@ export default {
   methods: {
     formatTime,
     toggleEditing() {
-      if (!this.editing && !this.dirty) {
-        this.editBaseRevId = this.node?.currentRevId ?? null;
-        this.conflictError = '';
-        this.saveError = '';
+      if (!this.editing) {
+        if (!this.contentLoaded) return;
+        if (!this.dirty) {
+          this.editBaseRevId = this.loadedRevId ?? this.node?.currentRevId ?? null;
+          this.conflictError = '';
+          this.saveError = '';
+        }
       }
       this.editing = !this.editing;
     },
     markDirty() {
+      if (!this.contentLoaded) return;
       if (!this.dirty) {
-        this.editBaseRevId = this.node?.currentRevId ?? null;
+        this.editBaseRevId = this.loadedRevId ?? this.node?.currentRevId ?? null;
       }
       this.dirty = true;
     },
     onVideoLoadedMetadata(e) {
+      this.playbackError = false;
       const dur = Number(e.target?.duration);
       if (Number.isFinite(dur) && dur > 0) {
         this.nativeDuration = dur;
       }
+    },
+    onVideoError() {
+      this.playbackError = true;
     },
     onVideoTimeUpdate(e) {
       this.currentTime = Number(e.target?.currentTime) || 0;
@@ -261,6 +287,7 @@ export default {
       this.seekTo(Number(e.target?.value) || 0);
     },
     addScene() {
+      if (!this.contentLoaded) return;
       this.markDirty();
       this.episode.scenes.push(normalizeScene({
         title: `${this.$t('creation.video.scenes')} ${this.scenes.length + 1}`,
@@ -350,13 +377,14 @@ export default {
             </option>
           </select>
 
-          <button type="button" class="creation-glass-btn" @click="addScene">
+          <button type="button" class="creation-glass-btn" :disabled="!contentLoaded" @click="addScene">
             + {{ $t('creation.video.addScene') }}
           </button>
           <button
             type="button"
             class="creation-glass-btn"
             :class="{ 'is-active': editing }"
+            :disabled="!editing && !contentLoaded"
             @click="toggleEditing"
           >
             ✎ {{ editing ? $t('creation.book.doneEdit') : $t('creation.book.inlineEdit') }}
@@ -387,6 +415,7 @@ export default {
         <section class="creation-video-stage">
           <div v-if="videoUrl" class="creation-video-native-wrap">
             <video
+              v-if="!playbackError && !selectedVideoSourceUnsupported"
               ref="videoEl"
               class="creation-video-el"
               controls
@@ -394,7 +423,14 @@ export default {
               :src="videoUrl"
               @loadedmetadata="onVideoLoadedMetadata"
               @timeupdate="onVideoTimeUpdate"
+              @error="onVideoError"
             ></video>
+            <div v-else class="creation-video-fallback" role="alert">
+              <p>{{ $t('creation.video.playbackError') }}</p>
+              <a :href="videoUrl" download class="creation-glass-btn is-primary">
+                ↓ {{ $t('creation.video.downloadFallback') }}
+              </a>
+            </div>
           </div>
 
           <div v-else class="creation-storyboard-player">

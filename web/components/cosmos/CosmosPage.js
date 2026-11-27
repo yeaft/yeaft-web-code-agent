@@ -392,6 +392,7 @@ export default {
         :popover-open="signalPopoverOpen"
         :stream-hidden="signalStreamHidden"
         :suppressed="constantsOpen || isObservingEvent"
+        :suppress-floating="currentBand === 'galaxy' || Boolean(creationsStore.activeCreation)"
         @open-signal="onOpenSignal"
         @dismiss-signal="onDismissSignal"
         @mark-all-read="onMarkAllSignalsRead"
@@ -688,9 +689,18 @@ export default {
         ? $t('cosmos.signals.triggerAria', { count: signalStream.value.badgeCount })
         : $t('cosmos.signals.triggerIdleAria')
     ));
+    const signalFloatingSuppressed = Vue.computed(() => (
+      currentBand.value === 'galaxy' || Boolean(creationsStore.activeCreation)
+    ));
     const signalTriggerExpanded = Vue.computed(() => {
       if (signalPopoverOpen.value) return true;
-      if (drawerOpen.value || isCompactViewport.value || constants.livePreviewMode === 'collapsed' || signalStream.value.totalCount === 0) {
+      if (
+        drawerOpen.value
+        || isCompactViewport.value
+        || signalFloatingSuppressed.value
+        || constants.livePreviewMode === 'collapsed'
+        || signalStream.value.totalCount === 0
+      ) {
         return false;
       }
       return !signalStreamHidden.value && !constantsOpen.value && !isObservingEvent.value;
@@ -959,9 +969,10 @@ export default {
       }
       if (scaleBand(anim.targetScaleLog) !== 'galaxy') {
         bookCreateOpen.value = false;
+        creationsStore.invalidatePendingOpen?.();
         creationsStore.inspectorTarget = null;
-        if (creationsStore.igniteDraft?.open) {
-          creationsStore.igniteDraft = { ...creationsStore.igniteDraft, open: false };
+        if (creationsStore.igniteDraft) {
+          creationsStore.igniteDraft.open = false;
         }
         creationsStore.closeCreation();
       }
@@ -1068,9 +1079,10 @@ export default {
       if (band === 'galaxy') {
         ensureGalaxyAgentSelected();
       } else if (prev && prev[0] === 'galaxy') {
+        creationsStore.invalidatePendingOpen?.();
         creationsStore.inspectorTarget = null;
-        if (creationsStore.igniteDraft?.open) {
-          creationsStore.igniteDraft = { ...creationsStore.igniteDraft, open: false };
+        if (creationsStore.igniteDraft) {
+          creationsStore.igniteDraft.open = false;
         }
         creationsStore.closeCreation();
       }
@@ -1127,11 +1139,10 @@ export default {
         const r = Math.max(0.18, Math.min(0.84, Math.hypot(dx, dy)));
         const theta = Math.atan2(dy, dx) - gSpin;
         const arm = ((Math.round(((theta % (Math.PI * 2)) + Math.PI * 2) / (Math.PI / 2)) % 4) + 4) % 4;
-        creationsStore.igniteDraft = {
-          ...creationsStore.igniteDraft,
-          open: true,
-          celestial: { arm, r, theta },
-        };
+        if (creationsStore.igniteDraft) {
+          creationsStore.igniteDraft.open = true;
+          creationsStore.igniteDraft.celestial = { arm, r, theta };
+        }
         return;
       }
       resetCamera();
@@ -1466,6 +1477,7 @@ export default {
       }
       const usePopover = drawerOpen.value
         || isCompactViewport.value
+        || signalFloatingSuppressed.value
         || constants.livePreviewMode === 'collapsed'
         || signalStream.value.totalCount === 0;
       if (usePopover) {
@@ -1496,6 +1508,11 @@ export default {
           ? 'cosmos.signals.agentUnavailable'
           : 'cosmos.signals.sessionUnavailable'));
         return;
+      }
+      creationsStore.invalidatePendingOpen?.();
+      creationsStore.inspectorTarget = null;
+      if (creationsStore.igniteDraft) {
+        creationsStore.igniteDraft.open = false;
       }
       openSessionInDrawer(item.agentId, targetSession);
     }
@@ -1799,9 +1816,10 @@ export default {
     }
     function abandonCosmos() {
       constantsOpen.value = false;
+      creationsStore.invalidatePendingOpen?.();
       creationsStore.inspectorTarget = null;
-      if (creationsStore.igniteDraft?.open) {
-        creationsStore.igniteDraft = { ...creationsStore.igniteDraft, open: false };
+      if (creationsStore.igniteDraft) {
+        creationsStore.igniteDraft.open = false;
       }
       creationsStore.closeCreation();
       collapseOpenWorkbench();
@@ -1848,7 +1866,7 @@ export default {
       if (signalPopoverOpen.value) { closeSignalPopover({ restoreFocus: true }); return; }
       if (constantsOpen.value) { constantsOpen.value = false; return; }
       if (currentBand.value === 'galaxy' && creationsStore.inspectorTarget) { creationsStore.inspectorTarget = null; return; }
-      if (currentBand.value === 'galaxy' && creationsStore.igniteDraft?.open) { creationsStore.igniteDraft = { ...creationsStore.igniteDraft, open: false }; return; }
+      if (currentBand.value === 'galaxy' && creationsStore.igniteDraft?.open) { creationsStore.igniteDraft.open = false; return; }
       if (bookCreateOpen.value) { bookCreateOpen.value = false; return; }
       if (eventSim.active?.observing) { onReturnFromEvent(); return; }
       if (drawerOpen.value && drawerRef.value?.isHistoryOpen?.()) { drawerRef.value.closeSessionSwitcher?.(); return; }

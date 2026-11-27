@@ -83,7 +83,7 @@ export default {
     unitNodes() {
       return this.nodes
         .filter((n) => n && !isFolderNode(n))
-        .sort((a, b) => (a.sortOrder ?? a.order ?? 0) - (b.sortOrder ?? b.order ?? 0));
+        .sort((a, b) => (a.sortOrder ?? a.position ?? a.order ?? 0) - (b.sortOrder ?? b.position ?? b.order ?? 0));
     },
     canon() {
       return Array.isArray(this.detail?.canon) ? this.detail.canon : [];
@@ -117,6 +117,12 @@ export default {
     },
     activeNodeContentObj() {
       return this.creationsStore.activeNodeContent || null;
+    },
+    activeNodeContentLoaded() {
+      return Boolean(this.activeNodeContentObj?.loaded);
+    },
+    activeNodeLoadedRevId() {
+      return this.activeNodeContentObj?.loadedRevId ?? null;
     },
     activeNodeContent() {
       const raw = this.activeNodeContentObj?.content;
@@ -385,10 +391,14 @@ export default {
         this.saving = false;
       }
     },
-    async handleFinalizeNode({ nodeId }) {
+    async handleFinalizeNode({ nodeId, baseRevId } = {}) {
+      if (!nodeId) return;
       this.saving = true;
       try {
-        await this.creationsStore.updateNode(this.agentId, this.creationId, nodeId, { status: 'final' });
+        await this.creationsStore.updateNode(this.agentId, this.creationId, nodeId, {
+          status: 'final',
+          ...(baseRevId !== undefined ? { baseRevId } : {}),
+        });
       } finally {
         this.saving = false;
       }
@@ -579,6 +589,8 @@ export default {
               :is="readerComponentFor(effectiveReadUnit)"
               :node="effectiveReadUnit"
               :content="activeNodeContent"
+              :content-loaded="activeNodeContentLoaded"
+              :loaded-rev-id="activeNodeLoadedRevId"
               :nodes="nodes"
               :sources="sources"
               mode="read"
@@ -666,6 +678,8 @@ export default {
                 :is="readerComponentFor(activeNode)"
                 :node="activeNode"
                 :content="activeNodeContent"
+                :content-loaded="activeNodeContentLoaded"
+                :loaded-rev-id="activeNodeLoadedRevId"
                 :nodes="nodes"
                 :sources="sources"
                 mode="studio"

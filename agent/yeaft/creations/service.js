@@ -22,17 +22,35 @@ export function createCreationService({ yeaftDir, storageRoot, namespaceKey, nam
   function detail(id) {
     const creation = store.getCreation(id);
     const thread = store.getThread(id);
-    const runs = store.listRuns(id).map(run => ({
+    let runs = store.listRuns(id).map(run => ({
       ...run,
       totalUnits: run.progress?.total ?? 0,
       completedUnits: run.progress?.completed ?? 0,
     }));
-    return { creation, nodes: flatNodes(id), canon: store.listCanon(id),
+    if (responseBytes(runs) > 256 * 1024) {
+      // Preserve every run's status and progress without embedding batch plans.
+      runs = runs.map(({ instruction, nodeIds, completedNodeIds, ...run }) => ({
+        ...run, ...(nodeIds ? { planTruncated: true } : {}),
+      }));
+    }
+    let { proposals } = store.listProposals(id, { status: 'pending', includeContent: false, limit: 50 });
+    if (responseBytes(proposals) > 512 * 1024) {
+      proposals = proposals.map(proposal => previewText(previewText(proposal, 'summary', 'summaryTruncated', 512), 'preview', 'previewTruncated', 512));
+    }
+    return { creation, nodes: outlineNodes(id), canon: snapshotCanon(store.listCanon(id)),
       sources: store.listSources(id).map(source => media(source, 'source')),
       assets: store.listAssets(id).map(asset => media(asset, 'asset')), runs,
-      thread, threads: store.listThreads(id), proposals: store.listProposals(id, { status: 'pending', includeContent: false, limit: 50 }) };
+      thread, threads: store.listThreads(id), proposals };
   }
-  const flatNodes = id => store.listNodes(id).map(node => ({ ...node, sortOrder: node.position, isFolder: node.type === 'folder' }));
+  const outlineNodes = id => {
+    const nodes = store.listNodes(id).map(node => previewText(node, 'outlineMd', 'outlineTruncated'));
+    if (responseBytes(nodes) <= 1024 * 1024) return nodes;
+    // Long summaries, many references, or heavily escaped text can also bloat a snapshot.
+    return nodes.map(({ canonRefs, ...node }) => ({
+      ...previewText(previewText(previewText(node, 'outlineMd', 'outlineTruncated', 128), 'summaryMd', 'summaryTruncated', 64), 'title', 'titleTruncated', 64),
+      canonRefs: canonRefs.slice(0, 4), ...(canonRefs.length > 4 ? { canonRefsTruncated: true } : {}),
+    }));
+  };
   const nodeResult = (id, node) => {
     if (node.conflict) return node;
     const { content, ...metadata } = node;
@@ -47,16 +65,19 @@ export function createCreationService({ yeaftDir, storageRoot, namespaceKey, nam
   const ops = {
     list_creations: () => ({ creations: store.listCreations() }),
     create_creation: (_, input) => {
-      const prompt = boundedText(input.prompt ?? '', LIMITS.promptBytes, 'creation prompt');
+      const prompt = input.prompt ?? '';
       const result = store.transaction(() => {
         const creation = store.createCreation({ ...input, mission: input.mission ?? prompt });
         const id = creation.id;
+        if (creation.deduplicated) return { ...detail(id), deduplicated: true };
+        boundedText(prompt, LIMITS.promptBytes, 'creation prompt');
         const sources = store.addSources(id, input).map(source => media(source, 'source'));
         const thread = store.getThread(id);
         const starter = input.starterNode;
         if (starter != null && starter !== false) store.createNode(id, starter === true ? {} : object(starter, 'starter node'));
-        return { creation: store.getCreation(id), nodes: flatNodes(id), sources, thread, threads: [thread] };
+        return { creation: store.getCreation(id), nodes: outlineNodes(id), sources, thread, threads: [thread] };
       });
+      if (result.deduplicated) return result;
       const { id } = result.creation;
       emit('creation_upserted', id, { creation: result.creation });
       if (prompt.trim() && input.autoPlan !== false) {
@@ -94,6 +115,7 @@ export function createCreationService({ yeaftDir, storageRoot, namespaceKey, nam
       summaryChanged(id);
       return result;
     },
+    get_canon: (id, p) => ({ canon: store.getCanon(id, p.canonId) ?? fail('NOT_FOUND', 'Canon item not found') }),
     upsert_canon: (id, p) => {
       const canon = store.upsertCanon(id, p.canon == null && p.item == null ? p : object(p.canon ?? p.item, 'canon item'));
       emit('canon_upserted', id, { canon });
@@ -113,7 +135,7 @@ export function createCreationService({ yeaftDir, storageRoot, namespaceKey, nam
     },
     get_node: (id, p) => {
       const node = store.getNode(id, p.nodeId);
-      const pendingProposals = store.listProposals(id, { status: 'pending', nodeId: node.id, includeContent: true, limit: 50 });
+      const { proposals: pendingProposals } = store.listProposals(id, { status: 'pending', nodeId: node.id, includeContent: true, limit: 50 });
       const result = { ...nodeResult(id, node), pendingProposals };
       if (p.revId != null) {
         const revision = store.getRevision(id, p.nodeId, p.revId);
@@ -134,7 +156,7 @@ export function createCreationService({ yeaftDir, storageRoot, namespaceKey, nam
     },
     reorder_nodes: (id, p) => {
       store.reorderNodes(id, p.parentId, p.nodeIds ?? p.orderedNodeIds ?? p.orderedIds);
-      const nodes = flatNodes(id);
+      const nodes = outlineNodes(id);
       emit('structure_updated', id, { nodes });
       summaryChanged(id);
       return { nodes };
@@ -151,7 +173,8 @@ export function createCreationService({ yeaftDir, storageRoot, namespaceKey, nam
       if (!node.conflict) summaryChanged(id);
       return nodeResult(id, node);
     },
-    list_proposals: (id, p) => ({ proposals: store.listProposals(id, { limit: 10, ...p }) }),
+    get_proposal: (id, p) => ({ proposal: store.getProposal(id, p.proposalId) }),
+    list_proposals: (id, p) => store.listProposals(id, { limit: 10, ...p }),
     resolve_proposal: (id, p) => {
       const result = store.resolveProposal(id, p.proposalId, { ...p, action: p.action ?? p.decision });
       if (!result.conflict && !result.unchanged) {
@@ -182,7 +205,8 @@ export function createCreationService({ yeaftDir, storageRoot, namespaceKey, nam
       if (!['markdown', 'md', 'json'].includes(format)) fail('INVALID_REQUEST', 'Invalid export format');
       const creation = store.getCreation(id);
       const sources = store.listSources(id).map(source => media(source, 'source'));
-      const assets = store.listAssets(id).map(asset => media(asset, 'asset'));
+      const assets = store.listAssets(id).filter(asset => asset.id !== 'export-markdown' && asset.id !== 'export-json')
+        .map(asset => media(asset, 'asset'));
       const canon = store.listCanon(id);
       const nodes = store.getStructure(id, { includeContent: true });
       const ext = format === 'json' ? 'json' : 'md';
@@ -218,8 +242,24 @@ export function createCreationService({ yeaftDir, storageRoot, namespaceKey, nam
 
 // Leave room for the WebSocket envelope and optional transport encryption.
 const MAX_RESPONSE_BYTES = 5 * 1024 * 1024;
+const responseBytes = value => Buffer.byteLength(JSON.stringify(value));
+function previewText(record, key, flag, limit = 512) {
+  const value = record[key];
+  return typeof value === 'string' && value.length > limit
+    ? { ...record, [key]: value.slice(0, limit).toWellFormed(), [flag]: true }
+    : record;
+}
+function snapshotCanon(items) {
+  if (responseBytes(items) <= 256 * 1024) return items;
+  const previews = items.map(item => previewText(item, 'contentMd', 'contentTruncated'));
+  if (responseBytes(previews) <= 1024 * 1024) return previews;
+  return previews.map(({ state, ...item }) => ({
+    ...previewText(previewText(item, 'contentMd', 'contentTruncated', 128), 'title', 'titleTruncated', 64),
+    ...(state === undefined ? {} : { stateTruncated: true }),
+  }));
+}
 function boundedResponse(value) {
-  if (Buffer.byteLength(JSON.stringify(value)) > MAX_RESPONSE_BYTES) {
+  if (responseBytes(value) > MAX_RESPONSE_BYTES) {
     fail('LIMIT_EXCEEDED', 'Creation response exceeds the relay limit; list smaller pages or read units individually');
   }
   return value;

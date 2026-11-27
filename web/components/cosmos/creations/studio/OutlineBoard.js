@@ -47,7 +47,7 @@ export default {
       const folderId = this.folder?.id || null;
       return (this.nodes || [])
         .filter((n) => n && (folderId ? n.parentId === folderId : !n.parentId))
-        .sort((a, b) => (a.sortOrder ?? a.order ?? 0) - (b.sortOrder ?? b.order ?? 0));
+        .sort((a, b) => (a.sortOrder ?? a.position ?? 0) - (b.sortOrder ?? b.position ?? 0));
     },
     childUnits() {
       return this.allSiblings.filter((n) => !isFolderNode(n));

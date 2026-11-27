@@ -54,7 +54,9 @@ export default {
       pinned: false,
       locked: false,
       saving: false,
+      loadingFull: false,
       dirty: false,
+      _canonFetchSeq: 0,
     };
   },
   computed: {
@@ -70,19 +72,47 @@ export default {
       immediate: true,
       handler(val) {
         if (!val) return;
-        this.title = val.title || '';
-        this.type = val.type || 'world';
-        this.body = val.contentMd || val.bodyMd || val.body || val.content || '';
-        this.profile = val.profile || val.contentMd || val.bodyMd || val.body || '';
-        this.statePairs = cloneEntityState(val.state);
-        this.rows = cloneLedgerRows(val.rows || val.state?.rows);
-        this.pinned = Boolean(val.pinned);
-        this.locked = Boolean(val.lockedByUser ?? val.locked);
-        this.dirty = false;
+        this.applyItem(val);
+        if (val.contentTruncated && val.id) {
+          this.fetchFullCanon(val.id);
+        } else {
+          this.loadingFull = false;
+        }
       },
     },
   },
   methods: {
+    applyItem(val) {
+      this.title = val.title || '';
+      this.type = val.type || 'world';
+      this.body = val.contentMd || val.bodyMd || val.body || val.content || '';
+      this.profile = val.profile || val.contentMd || val.bodyMd || val.body || '';
+      this.statePairs = cloneEntityState(val.state);
+      this.rows = cloneLedgerRows(val.rows || val.state?.rows);
+      this.pinned = Boolean(val.pinned);
+      this.locked = Boolean(val.lockedByUser ?? val.locked);
+      this.dirty = false;
+    },
+    async fetchFullCanon(canonId) {
+      const aId = this.resolvedAgentId;
+      const cId = this.resolvedCreationId;
+      if (!aId || !cId || typeof this.creationsStore.getCanon !== 'function') return;
+      const seq = ++this._canonFetchSeq;
+      this.loadingFull = true;
+      try {
+        const full = await this.creationsStore.getCanon(aId, cId, canonId);
+        if (seq !== this._canonFetchSeq || this.item?.id !== canonId) return;
+        if (full && typeof full === 'object') {
+          this.applyItem(full);
+        }
+      } catch {
+        // Keep truncated preview if fetch fails.
+      } finally {
+        if (seq === this._canonFetchSeq) {
+          this.loadingFull = false;
+        }
+      }
+    },
     markDirty() {
       this.dirty = true;
     },
@@ -180,7 +210,7 @@ export default {
           <button
             type="button"
             class="creation-glass-btn is-primary"
-            :disabled="saving || !dirty"
+            :disabled="saving || loadingFull || !dirty"
             @click="saveCanon"
           >
             {{ saving ? $t('creation.interior.saving') : $t('creation.interior.save') }}

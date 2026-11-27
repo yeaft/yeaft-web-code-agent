@@ -94,6 +94,12 @@ export default {
     messages() {
       return Array.isArray(this.threadBucket?.messages) ? this.threadBucket.messages : [];
     },
+    hasMoreMessages() {
+      return Boolean(this.threadBucket?.hasMore);
+    },
+    loadingMoreMessages() {
+      return Boolean(this.threadBucket?.loadingMore);
+    },
     streamingMessage() {
       return this.threadBucket?.streamingMessage || null;
     },
@@ -246,8 +252,22 @@ export default {
       next.splice(idx, 1);
       this.pendingFiles = next;
     },
+    async loadOlderMessages() {
+      const threadId = this.threadBucket?.thread?.id || this.activeThreadId;
+      if (!threadId || !this.hasMoreMessages || this.loadingMoreMessages) return;
+      try {
+        await this.creationsStore.loadMoreThreadMessages(
+          this.resolvedAgentId,
+          this.resolvedCreationId,
+          threadId,
+        );
+      } catch {
+        // non-fatal
+      }
+    },
     async sendMessage() {
-      const text = this.inputText.trim();
+      const submittedText = this.inputText;
+      const text = submittedText.trim();
       const filesToSend = this.pendingFiles.slice();
       if ((!text && filesToSend.length === 0) || this.isStreaming || this.loadingThread) return;
       this.sendError = '';
@@ -268,7 +288,9 @@ export default {
           excludedContextIds: [...this.excludedIds],
           ...(filesToSend.length > 0 ? { rawFiles: filesToSend } : {}),
         });
-        this.inputText = '';
+        if (this.inputText === submittedText) {
+          this.inputText = '';
+        }
         this.pendingFiles = [];
         if (scopeKey === this.currentScopeKey && (res?.threadId || res?.thread?.id)) {
           this.activeThreadId = res.threadId || res.thread.id;
@@ -413,6 +435,17 @@ export default {
 
       <!-- Message Stream -->
       <div ref="streamEl" class="creation-chat-messages">
+        <div v-if="hasMoreMessages" class="creation-chat-load-more">
+          <button
+            type="button"
+            class="creation-glass-btn"
+            :disabled="loadingMoreMessages"
+            @click="loadOlderMessages"
+          >
+            {{ loadingMoreMessages ? $t('common.loading') : $t('creation.director.loadOlder') }}
+          </button>
+        </div>
+
         <div v-if="messages.length === 0 && !streamingMessage" class="creation-director-empty">
           <p>{{ $t('creation.director.emptyChat') }}</p>
         </div>
@@ -500,6 +533,7 @@ export default {
             v-model="inputText"
             class="creation-composer-textarea"
             rows="2"
+            :disabled="sending || loadingThread"
             :placeholder="anchorMode ? $t('creation.book.anchorPlaceholder') : $t('creation.director.inputPlaceholder')"
             @keydown="onComposerKeyDown"
           ></textarea>

@@ -11,7 +11,7 @@ function makeFrameId() {
 }
 
 function normalizeFrame(raw, idx) {
-  return {
+  const normalized = {
     frameId: raw?.frameId || raw?.id || makeFrameId(),
     title: typeof raw?.title === 'string' ? raw.title : `Frame ${idx + 1}`,
     caption: typeof raw?.caption === 'string' ? raw.caption : '',
@@ -20,6 +20,10 @@ function normalizeFrame(raw, idx) {
     prompt: typeof raw?.prompt === 'string' ? raw.prompt : '',
     tags: Array.isArray(raw?.tags) ? raw.tags.map((t) => String(t)) : [],
   };
+  if (typeof raw?.svgMarkup === 'string' && raw.svgMarkup.length > 0) {
+    normalized.svgMarkup = raw.svgMarkup;
+  }
+  return normalized;
 }
 
 function parseGalleryContent(content) {
@@ -48,6 +52,8 @@ export default {
   props: {
     node: { type: Object, required: true },
     content: { type: String, default: '' },
+    contentLoaded: { type: Boolean, default: true },
+    loadedRevId: { type: String, default: null },
     mode: { type: String, default: 'read' },
     agentId: { type: String, default: '' },
     creationId: { type: String, default: '' },
@@ -60,7 +66,7 @@ export default {
       gallery: parseGalleryContent(this.content),
       editing: false,
       dirty: false,
-      editBaseRevId: this.node?.currentRevId ?? null,
+      editBaseRevId: this.loadedRevId ?? this.node?.currentRevId ?? null,
       conflictError: '',
       saveError: '',
       lightboxIndex: -1,
@@ -81,14 +87,14 @@ export default {
     content(newVal) {
       if (!this.dirty) {
         this.gallery = parseGalleryContent(newVal);
-        this.editBaseRevId = this.node?.currentRevId ?? null;
+        this.editBaseRevId = this.loadedRevId ?? this.node?.currentRevId ?? null;
       }
     },
     'node.id'() {
       this.gallery = parseGalleryContent(this.content);
       this.dirty = false;
       this.editing = false;
-      this.editBaseRevId = this.node?.currentRevId ?? null;
+      this.editBaseRevId = this.loadedRevId ?? this.node?.currentRevId ?? null;
       this.conflictError = '';
       this.saveError = '';
       this.lightboxIndex = -1;
@@ -113,10 +119,13 @@ export default {
       return '';
     },
     toggleEditing() {
-      if (!this.editing && !this.dirty) {
-        this.editBaseRevId = this.node?.currentRevId ?? null;
-        this.conflictError = '';
-        this.saveError = '';
+      if (!this.editing) {
+        if (!this.contentLoaded) return;
+        if (!this.dirty) {
+          this.editBaseRevId = this.loadedRevId ?? this.node?.currentRevId ?? null;
+          this.conflictError = '';
+          this.saveError = '';
+        }
       }
       this.editing = !this.editing;
     },
@@ -150,12 +159,14 @@ export default {
       }
     },
     markDirty() {
+      if (!this.contentLoaded) return;
       if (!this.dirty) {
-        this.editBaseRevId = this.node?.currentRevId ?? null;
+        this.editBaseRevId = this.loadedRevId ?? this.node?.currentRevId ?? null;
       }
       this.dirty = true;
     },
     addEmptyFrame() {
+      if (!this.contentLoaded) return;
       this.markDirty();
       this.gallery.frames.push(normalizeFrame({
         title: `#${this.frames.length + 1}`,
@@ -257,7 +268,7 @@ export default {
             <span>+ {{ $t('creation.gallery.uploadImage') }}</span>
           </label>
 
-          <button type="button" class="creation-glass-btn" @click="addEmptyFrame">
+          <button type="button" class="creation-glass-btn" :disabled="!contentLoaded" @click="addEmptyFrame">
             + {{ $t('creation.gallery.addFrame') }}
           </button>
 
@@ -265,6 +276,7 @@ export default {
             type="button"
             class="creation-glass-btn"
             :class="{ 'is-active': editing }"
+            :disabled="!editing && !contentLoaded"
             @click="toggleEditing"
           >
             ✎ {{ editing ? $t('creation.book.doneEdit') : $t('creation.book.inlineEdit') }}

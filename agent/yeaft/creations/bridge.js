@@ -3,6 +3,7 @@ import ctx from '../../context.js';
 import { sendToServer } from '../../connection/buffer.js';
 import { safeId, fail } from './constants.js';
 
+const MAX_NAMESPACES = 4;
 const PUBLIC_ERRORS = new Set(['INVALID_REQUEST', 'INVALID_STATE', 'LIMIT_EXCEEDED', 'INVALID_PATH', 'INVALID_RANGE',
   'BUSY', 'NOT_FOUND', 'CONFLICT', 'REVIEW_REQUIRED', 'LOCKED', 'UNSUPPORTED', 'STALE']);
 function safeError(error) {
@@ -14,7 +15,8 @@ function safeError(error) {
 // or a different Agent. Requests and media pulls never use Session routing.
 export function createCreationBridge({ context = ctx, send = sendToServer,
   createService = async options => (await import('./service.js')).createCreationService(options) } = {}) {
-  let active;
+  const scopes = new Map();
+  let cacheIdentity;
   let closed = false;
   let pending = Promise.resolve();
   function serialize(fn) {
@@ -29,46 +31,59 @@ export function createCreationBridge({ context = ctx, send = sendToServer,
     const yeaftDir = context.CONFIG?.yeaftDir;
     return { yeaftDir, serverUrl, agentId, ownerId };
   }
-  function identity(ownerId) {
-    const current = readIdentity(ownerId);
-    if (!Object.values(current).every(value => typeof value === 'string' && value && !value.includes('\0'))) {
+  const sameAgent = (a, b) => a.yeaftDir === b.yeaftDir && a.serverUrl === b.serverUrl && a.agentId === b.agentId;
+  async function retireAll() {
+    const retired = [...scopes.values()];
+    scopes.clear(); // Fence events before shutdown settles outstanding turns.
+    cacheIdentity = undefined;
+    await Promise.allSettled(retired.map(async scope => scope.runtime.close()));
+  }
+  async function serviceForOwner(current, socket) {
+    const { yeaftDir, serverUrl, agentId, ownerId } = current;
+    const stillCurrent = () => !closed && socket === context.ws && sameAgent(current, readIdentity(ownerId));
+    if (cacheIdentity && !sameAgent(cacheIdentity, readIdentity(ownerId))) await retireAll();
+    if (!stillCurrent()) fail('INVALID_STATE', 'Agent storage identity changed');
+    if (![yeaftDir, serverUrl, agentId].every(value => typeof value === 'string' && value && !value.includes('\0'))) {
       fail('INVALID_STATE', 'Agent storage identity is unavailable');
     }
-    return current;
-  }
-  const matches = (scope, { yeaftDir, serverUrl, agentId, ownerId }) => scope?.yeaftDir === yeaftDir
-    && scope.binding.serverUrl === serverUrl && scope.binding.agentId === agentId && scope.binding.ownerId === ownerId;
-  async function retire() {
-    const scope = active;
-    active = undefined; // Fence events before shutdown settles any outstanding turns.
-    await scope?.runtime.close();
-  }
-  async function service(current, socket, { media = false } = {}) {
-    const { yeaftDir, ...binding } = current;
-    const { serverUrl, agentId, ownerId } = binding;
-    const stillCurrent = () => !closed && socket === context.ws && matches({ yeaftDir, binding }, readIdentity(ownerId));
-    if (!stillCurrent()) fail('INVALID_STATE', 'Agent storage identity changed');
-    if (matches(active, current)) {
-      active.socket = socket;
-      return active.runtime;
+    // All cached owners share the same Agent identity. Refresh a hit's LRU position.
+    const cached = scopes.get(ownerId);
+    if (cached) {
+      cached.socket = socket;
+      scopes.delete(ownerId);
+      scopes.set(ownerId, cached);
+      return cached.runtime;
     }
-    if (media) fail('INVALID_REQUEST', 'Creations media request does not match authenticated ownership');
-    await retire();
-    if (!stillCurrent()) fail('INVALID_STATE', 'Agent storage identity changed');
+    if (scopes.size >= MAX_NAMESPACES) {
+      const [oldestOwner, oldest] = scopes.entries().next().value;
+      scopes.delete(oldestOwner);
+      await oldest.runtime.close();
+      if (!stillCurrent()) {
+        if (!sameAgent(current, readIdentity(ownerId))) await retireAll();
+        fail('INVALID_STATE', 'Agent storage identity changed');
+      }
+    }
+    const binding = { serverUrl, agentId, ownerId };
     const namespaceKey = createHash('sha256').update(`${serverUrl}\0${agentId}\0${ownerId}`).digest('hex').slice(0, 24);
-    const scope = { yeaftDir, binding, socket };
+    const scope = { socket };
     scope.runtime = await createService({ yeaftDir, namespaceKey, namespaceBinding: binding,
       emitEvent: event => {
         const eventSocket = scope.socket;
-        const isCurrent = () => !closed && active === scope && context.ws === eventSocket && matches(scope, readIdentity(ownerId));
-        if (isCurrent()) return send({ type: 'creation_event', event }, { isCurrent });
+        const isCurrent = () => !closed && scopes.get(ownerId) === scope && context.ws === eventSocket
+          && sameAgent(current, readIdentity(ownerId));
+        if (isCurrent()) return send({ type: 'creation_event', ownerId, event }, { isCurrent });
       },
       mediaUrlFor: (creationId, mediaKind, mediaId) =>
         `/api/yeaft/creations/${encodeURIComponent(agentId)}/${safeId(creationId)}/media/${mediaKind}/${safeId(mediaId)}`,
     });
-    active = scope;
+    cacheIdentity = current;
+    scopes.set(ownerId, scope);
     if (!stillCurrent()) {
-      await retire();
+      if (!sameAgent(current, readIdentity(ownerId))) await retireAll();
+      else {
+        scopes.delete(ownerId);
+        await scope.runtime.close();
+      }
       fail('INVALID_STATE', 'Agent storage identity changed');
     }
     return scope.runtime;
@@ -85,9 +100,9 @@ export function createCreationBridge({ context = ctx, send = sendToServer,
         if (!response.requestId || !validOwner(msg.ownerId)) {
           fail('INVALID_REQUEST', 'Creations request requires authenticated ownership');
         }
-        const current = identity(msg.ownerId);
+        const current = readIdentity(msg.ownerId);
         response.data = await serialize(async () => {
-          const runtime = await service(current, socket);
+          const runtime = await serviceForOwner(current, socket);
           if (closed) fail('INVALID_STATE', 'Creations is closed');
           return runtime.request({ op: response.op, payload: msg.payload ?? {} });
         });
@@ -103,9 +118,9 @@ export function createCreationBridge({ context = ctx, send = sendToServer,
       let response;
       try {
         if (!requestId || !validOwner(msg.ownerId)) fail('INVALID_REQUEST', 'Creations media request requires authenticated ownership');
-        const current = identity(msg.ownerId);
+        const current = readIdentity(msg.ownerId);
         response = await serialize(async () => {
-          const runtime = await service(current, socket, { media: true });
+          const runtime = await serviceForOwner(current, socket);
           if (closed) fail('INVALID_STATE', 'Creations is closed');
           return runtime.handleMediaRead(msg);
         });
@@ -115,7 +130,7 @@ export function createCreationBridge({ context = ctx, send = sendToServer,
     },
     async close() {
       closed = true;
-      try { await serialize(retire); } catch { /* shutdown is best effort */ }
+      await serialize(retireAll);
     },
   };
 }

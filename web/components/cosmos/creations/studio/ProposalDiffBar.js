@@ -86,6 +86,12 @@ function computeLineDiff(oldText, newText) {
   return { ops, added, removed };
 }
 
+function hasProposalContent(p) {
+  if (!p || typeof p !== 'object') return false;
+  if (p.contentTruncated === true) return false;
+  return p.proposedContent !== undefined || p.content !== undefined || p.payload?.content !== undefined;
+}
+
 export default {
   name: 'ProposalDiffBar',
   setup() {
@@ -103,6 +109,8 @@ export default {
   data() {
     return {
       expandedIds: {},
+      loadingIds: {},
+      fetchedMap: {},
       busyId: null,
     };
   },
@@ -114,21 +122,64 @@ export default {
       return this.creationId || this.creationsStore.activeCreation?.creationId || '';
     },
     enrichedProposals() {
-      return (this.proposals || []).map((p) => {
-        const nextText = p.proposedContent ?? p.content ?? p.payload?.content ?? '';
-        const diff = computeLineDiff(this.currentContent, nextText);
+      return (this.proposals || []).map((raw) => {
+        const p = this.fetchedMap[raw.id] ? { ...raw, ...this.fetchedMap[raw.id] } : raw;
+        const contentReady = hasProposalContent(p);
+        const nextText = contentReady ? (p.proposedContent ?? p.content ?? p.payload?.content ?? '') : null;
+        const diff = contentReady ? computeLineDiff(this.currentContent, nextText) : null;
+        const loading = Boolean(this.loadingIds[p.id]);
         const hasConflict = Boolean(
           p.baseRevId && this.node?.currentRevId && p.baseRevId !== this.node.currentRevId
         );
-        return { proposal: p, diff, hasConflict };
+        return { proposal: p, diff, contentReady, loading, hasConflict };
       });
+    },
+  },
+  watch: {
+    proposals: {
+      immediate: true,
+      handler() {
+        this.fetchMissingProposals();
+      },
     },
   },
   methods: {
     isExpanded(id) {
       return Boolean(this.expandedIds[id]);
     },
-    toggleExpand(id) {
+    async ensureProposalLoaded(proposal) {
+      if (!proposal || !proposal.id) return;
+      if (hasProposalContent(proposal) || this.loadingIds[proposal.id]) return;
+      const aId = this.resolvedAgentId;
+      const cId = this.resolvedCreationId;
+      if (!aId || !cId || typeof this.creationsStore.getProposal !== 'function') return;
+      this.loadingIds = { ...this.loadingIds, [proposal.id]: true };
+      try {
+        const full = await this.creationsStore.getProposal(aId, cId, proposal.id);
+        if (full && typeof full === 'object') {
+          this.fetchedMap = { ...this.fetchedMap, [proposal.id]: full };
+        }
+      } catch {
+        // Fallback button remains available for manual retry.
+      } finally {
+        const next = { ...this.loadingIds };
+        delete next[proposal.id];
+        this.loadingIds = next;
+      }
+    },
+    fetchMissingProposals() {
+      for (const entry of this.enrichedProposals) {
+        if (!entry.contentReady && !entry.loading) {
+          this.ensureProposalLoaded(entry.proposal);
+        }
+      }
+    },
+    toggleExpand(entry) {
+      const id = entry.proposal.id;
+      if (!entry.contentReady) {
+        this.ensureProposalLoaded(entry.proposal);
+        return;
+      }
       this.expandedIds = { ...this.expandedIds, [id]: !this.expandedIds[id] };
     },
     async resolve(proposalId, decision) {
@@ -159,22 +210,37 @@ export default {
             <span class="creation-proposal-summary">
               {{ entry.proposal.summary || entry.proposal.title || '' }}
             </span>
-            <span class="creation-diff-add">+{{ entry.diff.added }} {{ $t('creation.proposal.added') }}</span>
-            <span class="creation-diff-del">-{{ entry.diff.removed }} {{ $t('creation.proposal.removed') }}</span>
+            <template v-if="entry.contentReady && entry.diff">
+              <span class="creation-diff-add">+{{ entry.diff.added }} {{ $t('creation.proposal.added') }}</span>
+              <span class="creation-diff-del">-{{ entry.diff.removed }} {{ $t('creation.proposal.removed') }}</span>
+            </template>
+            <span v-else-if="entry.loading" class="creation-proposal-loading">
+              {{ $t('creation.proposal.loadingDiff') }}
+            </span>
           </div>
 
           <div class="creation-proposal-actions">
             <button
+              v-if="!entry.contentReady"
               type="button"
               class="creation-glass-btn"
-              @click="toggleExpand(entry.proposal.id)"
+              :disabled="entry.loading"
+              @click="ensureProposalLoaded(entry.proposal)"
+            >
+              {{ entry.loading ? $t('creation.proposal.loadingDiff') : $t('creation.proposal.loadFullDiff') }}
+            </button>
+            <button
+              type="button"
+              class="creation-glass-btn"
+              :disabled="!entry.contentReady || entry.loading"
+              @click="toggleExpand(entry)"
             >
               {{ isExpanded(entry.proposal.id) ? '▴' : '▾' }} Diff
             </button>
             <button
               type="button"
               class="creation-glass-btn is-primary"
-              :disabled="busyId === entry.proposal.id"
+              :disabled="!entry.contentReady || entry.loading || busyId === entry.proposal.id"
               @click="resolve(entry.proposal.id, 'accept')"
             >
               ✓ {{ $t('creation.proposal.accept') }}
@@ -201,7 +267,7 @@ export default {
           ⚠ {{ $t('creation.proposal.conflictWarn') }}
         </div>
 
-        <div v-if="isExpanded(entry.proposal.id)" class="creation-proposal-diff">
+        <div v-if="entry.contentReady && entry.diff && isExpanded(entry.proposal.id)" class="creation-proposal-diff">
           <div
             v-for="(line, li) in entry.diff.ops"
             :key="li"
