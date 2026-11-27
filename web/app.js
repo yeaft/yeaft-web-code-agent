@@ -6,6 +6,12 @@ import { useBrowserStore } from './stores/browser.js';
 import { useCreationsStore } from './stores/creations.js';
 import { createI18n } from './utils/i18n.js';
 import { installAuthFetch } from './utils/auth-fetch.js';
+import { useUserPreferences } from './utils/user-preferences.js';
+import {
+  clearLocalCosmosPreferences,
+  readLocalCosmosPreferencesOwner,
+  writeLocalCosmosPreferencesOwner,
+} from './cosmos/constants.js';
 import zhCN from './i18n/zh-CN.js';
 import en from './i18n/en.js';
 import LoginPage from './components/LoginPage.js';
@@ -48,6 +54,32 @@ const App = {
   setup() {
     const chatStore = useChatStore();
     const authStore = useAuthStore();
+    const userPreferences = useUserPreferences();
+
+    Vue.watch(
+      [
+        () => authStore.userId,
+        () => userPreferences.ready.value,
+        () => userPreferences.preferences.value?.cosmosConfig?.uiMode,
+      ],
+      ([userId, isReady, cloudMode]) => {
+        if (userId) {
+          const prevOwner = readLocalCosmosPreferencesOwner();
+          if (prevOwner && prevOwner !== String(userId)) {
+            clearLocalCosmosPreferences(undefined, { includeUiMode: true });
+            chatStore.setUiMode('cosmos', { persistCloud: false, writeLocal: false });
+          }
+        }
+        if (!isReady) return;
+        if (cloudMode === 'cosmos' || cloudMode === 'classic') {
+          if (chatStore.uiMode !== cloudMode) {
+            chatStore.setUiMode(cloudMode, { persistCloud: false });
+          }
+          if (userId) writeLocalCosmosPreferencesOwner(userId);
+        }
+      },
+      { immediate: true },
+    );
 
     Vue.watch([
       () => JSON.stringify(chatStore.activeSessionRoute),

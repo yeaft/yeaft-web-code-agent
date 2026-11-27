@@ -6,6 +6,7 @@ export const COSMOS_CONSTANTS_KEY = 'yeaft-cosmos-constants-v1';
 export const COSMOS_BINDINGS_KEY = 'yeaft-cosmos-planet-bindings-v1';
 export const COSMOS_BOOKS_KEY = 'yeaft-cosmos-galaxy-books-v1';
 export const COSMOS_DRAWER_WIDTH_KEY = 'yeaft-cosmos-drawer-width-v1';
+export const COSMOS_PREFS_OWNER_KEY = 'yeaft-cosmos-prefs-owner-v1';
 
 export const COSMOS_DRAWER_WIDTH = Object.freeze({
   min: 340,
@@ -229,17 +230,186 @@ export function saveCosmosConstants(constants, storage) {
   return clean;
 }
 
+const UNSAFE_MAP_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
+const MAX_PLANET_BINDINGS = 128;
+const UI_MODE_STORAGE_KEY = 'yeaft-ui-mode';
+
+function toFiniteNumber(val) {
+  if (typeof val === 'number') return Number.isFinite(val) ? val : NaN;
+  if (typeof val === 'string' && val.trim() !== '') {
+    const n = Number(val);
+    return Number.isFinite(n) ? n : NaN;
+  }
+  return NaN;
+}
+
+export function normalizeCosmosConstantsPatch(raw) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {};
+  const out = {};
+  if (Object.hasOwn(raw, 'orbitSpeed')) {
+    const n = toFiniteNumber(raw.orbitSpeed);
+    if (Number.isFinite(n)) out.orbitSpeed = Math.max(0, Math.min(2.5, n));
+  }
+  if (Object.hasOwn(raw, 'spinSpeed')) {
+    const n = toFiniteNumber(raw.spinSpeed);
+    if (Number.isFinite(n)) out.spinSpeed = Math.max(0, Math.min(2.5, n));
+  }
+  if (Object.hasOwn(raw, 'planetScale')) {
+    const n = toFiniteNumber(raw.planetScale);
+    if (Number.isFinite(n)) out.planetScale = Math.max(0.65, Math.min(1.5, n));
+  }
+  if (Object.hasOwn(raw, 'eventScale')) {
+    const n = toFiniteNumber(raw.eventScale);
+    if (Number.isFinite(n)) out.eventScale = Math.max(0.5, Math.min(1.8, n));
+  }
+  if (Object.hasOwn(raw, 'starDensity')) {
+    const n = toFiniteNumber(raw.starDensity);
+    if (Number.isFinite(n)) out.starDensity = Math.max(0.35, Math.min(2.0, n));
+  }
+  if (Object.hasOwn(raw, 'skyBright')) {
+    const n = toFiniteNumber(raw.skyBright);
+    if (Number.isFinite(n)) out.skyBright = Math.max(0.35, Math.min(1.8, n));
+  }
+  if (Object.hasOwn(raw, 'orbitLines')) {
+    const n = toFiniteNumber(raw.orbitLines);
+    if (Number.isFinite(n)) out.orbitLines = Math.max(0, Math.min(1.2, n));
+  }
+  if (Object.hasOwn(raw, 'activeFlash') && typeof raw.activeFlash === 'boolean') {
+    out.activeFlash = raw.activeFlash;
+  }
+  if (Object.hasOwn(raw, 'livePreviewMode')) {
+    const m = raw.livePreviewMode === 'hover' ? 'collapsed' : raw.livePreviewMode;
+    if (['2', '3', 'collapsed'].includes(m)) out.livePreviewMode = m;
+  }
+  if (Object.hasOwn(raw, 'showEventsCountdown') && typeof raw.showEventsCountdown === 'boolean') {
+    out.showEventsCountdown = raw.showEventsCountdown;
+  }
+  if (Object.hasOwn(raw, 'eventsAutoEnabled') && typeof raw.eventsAutoEnabled === 'boolean') {
+    out.eventsAutoEnabled = raw.eventsAutoEnabled;
+  }
+  if (Object.hasOwn(raw, 'eventsAutoZoom') && typeof raw.eventsAutoZoom === 'boolean') {
+    out.eventsAutoZoom = raw.eventsAutoZoom;
+  }
+  if (Object.hasOwn(raw, 'renderQuality') && ['auto', 'high', 'lite'].includes(raw.renderQuality)) {
+    out.renderQuality = raw.renderQuality;
+  }
+  return out;
+}
+
+export function normalizePlanetBindings(raw) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {};
+  const out = {};
+  let count = 0;
+  for (const [agentId, planetId] of Object.entries(raw)) {
+    if (count >= MAX_PLANET_BINDINGS) break;
+    if (typeof agentId !== 'string' || !agentId || agentId.length > 200 || UNSAFE_MAP_KEYS.has(agentId)) continue;
+    if (typeof planetId === 'string' && PLANET_MAP[planetId]) {
+      out[agentId] = planetId;
+      count += 1;
+    }
+  }
+  return out;
+}
+
+export function normalizeCosmosConfigPatch(raw) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {};
+  const out = {};
+  if (Object.hasOwn(raw, 'constants')) {
+    const cleanConstants = normalizeCosmosConstantsPatch(raw.constants);
+    if (Object.keys(cleanConstants).length > 0) out.constants = cleanConstants;
+  }
+  if (Object.hasOwn(raw, 'planetBindings') && raw.planetBindings && typeof raw.planetBindings === 'object' && !Array.isArray(raw.planetBindings)) {
+    out.planetBindings = normalizePlanetBindings(raw.planetBindings);
+  }
+  if (Object.hasOwn(raw, 'drawerWidth')) {
+    if (raw.drawerWidth === null) {
+      out.drawerWidth = null;
+    } else {
+      const n = toFiniteNumber(raw.drawerWidth);
+      if (Number.isFinite(n)) {
+        out.drawerWidth = Math.round(Math.max(COSMOS_DRAWER_WIDTH.min, Math.min(COSMOS_DRAWER_WIDTH.max, n)));
+      }
+    }
+  }
+  if (Object.hasOwn(raw, 'uiMode') && (raw.uiMode === 'cosmos' || raw.uiMode === 'classic')) {
+    out.uiMode = raw.uiMode;
+  }
+  return out;
+}
+
+export function readLocalCosmosPreferencesOwner(storage) {
+  const store = getStorage(storage);
+  if (!store) return null;
+  try {
+    return store.getItem(COSMOS_PREFS_OWNER_KEY) || null;
+  } catch {
+    return null;
+  }
+}
+
+export function writeLocalCosmosPreferencesOwner(ownerId, storage) {
+  const store = getStorage(storage);
+  if (!store) return;
+  try {
+    if (ownerId) store.setItem(COSMOS_PREFS_OWNER_KEY, String(ownerId));
+    else store.removeItem(COSMOS_PREFS_OWNER_KEY);
+  } catch { /* ignore */ }
+}
+
+export function clearLocalCosmosPreferences(storage, { includeUiMode = false } = {}) {
+  const store = getStorage(storage);
+  if (!store) return;
+  const keys = [COSMOS_CONSTANTS_KEY, COSMOS_BINDINGS_KEY, COSMOS_DRAWER_WIDTH_KEY, COSMOS_PREFS_OWNER_KEY];
+  if (includeUiMode) keys.push(UI_MODE_STORAGE_KEY);
+  for (const key of keys) {
+    try { store.removeItem(key); } catch { /* ignore */ }
+  }
+}
+
+/**
+ * Read pre-existing browser-local Cosmos settings for one-time cloud migration when the
+ * user's Server preference record has no cosmosConfig yet. Only migrates un-owned pre-cloud
+ * localStorage records (once an owner stamp is written, Server cloud state is authoritative
+ * and never overwritten by local cache).
+ */
+export function readLegacyLocalCosmosConfig(storage, currentUserId = null) {
+  const store = getStorage(storage);
+  if (!store) return null;
+  const owner = readLocalCosmosPreferencesOwner(store);
+  if (owner) return null;
+  void currentUserId;
+
+  const patch = {};
+  try {
+    const rawConst = store.getItem(COSMOS_CONSTANTS_KEY);
+    if (rawConst) {
+      const parsed = JSON.parse(rawConst);
+      const clean = normalizeCosmosConstantsPatch(parsed);
+      if (Object.keys(clean).length > 0) patch.constants = clean;
+    }
+  } catch { /* ignore */ }
+  try {
+    const rawBindings = store.getItem(COSMOS_BINDINGS_KEY);
+    if (rawBindings) {
+      const parsed = JSON.parse(rawBindings);
+      const clean = normalizePlanetBindings(parsed);
+      if (Object.keys(clean).length > 0) patch.planetBindings = clean;
+    }
+  } catch { /* ignore */ }
+  try {
+    const width = loadCosmosDrawerWidth(store);
+    if (width != null) patch.drawerWidth = width;
+  } catch { /* ignore */ }
+
+  return Object.keys(patch).length > 0 ? patch : null;
+}
+
 export function loadPlanetBindings(storage) {
   const store = getStorage(storage);
   if (!store) return {};
   try {
     const parsed = JSON.parse(store.getItem(COSMOS_BINDINGS_KEY) || '{}');
-    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
-    const out = {};
-    for (const [agentId, planetId] of Object.entries(parsed)) {
-      if (agentId && PLANET_MAP[planetId]) out[agentId] = planetId;
-    }
-    return out;
+    return normalizePlanetBindings(parsed);
   } catch {
     return {};
   }
@@ -249,7 +419,7 @@ export function savePlanetBindings(bindings, storage) {
   const store = getStorage(storage);
   if (!store || !bindings || typeof bindings !== 'object') return;
   try {
-    store.setItem(COSMOS_BINDINGS_KEY, JSON.stringify(bindings));
+    store.setItem(COSMOS_BINDINGS_KEY, JSON.stringify(normalizePlanetBindings(bindings)));
   } catch { /* ignore */ }
 }
 
