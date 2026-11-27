@@ -176,13 +176,28 @@ const appHash = contentHash(join(distDir, 'app.bundle.js'));
 const cssHash = contentHash(join(distDir, 'style.bundle.css'));
 const vendorHash = contentHash(join(distDir, 'vendor.bundle.js'));
 const katexCssHash = contentHash(join(katexDistDir, 'katex.min.css'));
+// Production serves static files with a 1-year cache, so brand icons and the
+// web app manifest are referenced with content hashes. The manifest is copied
+// into dist with hashed icon URLs; Step 6 mirrors the icon files themselves.
+const brandIcon = (file) => `assets/brand/${file}?v=${contentHash(join(__dirname, 'assets', 'brand', file))}`;
+const webManifest = JSON.parse(readFileSync(join(__dirname, 'manifest.webmanifest'), 'utf8'));
+webManifest.icons = webManifest.icons.map(icon => ({ ...icon, src: `${icon.src}?v=${contentHash(join(__dirname, icon.src))}` }));
+writeFileSync(join(distDir, 'manifest.webmanifest'), `${JSON.stringify(webManifest, null, 2)}\n`);
+const manifestHash = contentHash(join(distDir, 'manifest.webmanifest'));
 const indexHtml = `<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
   <title>Yeaft</title>
-  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='8' fill='%232c2c2c'/><path d='M16 22V13M16 13L10 8M16 13L22 8' stroke='white' stroke-width='2.6' stroke-linecap='round' stroke-linejoin='round' fill='none'/><circle cx='10' cy='8' r='2.4' fill='white'/><circle cx='22' cy='8' r='2.4' fill='white'/><circle cx='16' cy='22' r='2.4' fill='white'/></svg>">
+  <link rel="icon" href="${brandIcon('favicon-32.png')}" sizes="32x32" type="image/png">
+  <link rel="icon" href="${brandIcon('favicon.svg')}" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="${brandIcon('apple-touch-icon.png')}">
+  <link rel="manifest" href="manifest.webmanifest?v=${manifestHash}">
+  <meta name="application-name" content="Yeaft">
+  <meta name="apple-mobile-web-app-title" content="Yeaft">
+  <meta name="theme-color" content="#fafaf8" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#1a1a1a" media="(prefers-color-scheme: dark)">
   <link rel="stylesheet" href="vendor/katex/katex.min.css?v=${katexCssHash}">
   <link rel="stylesheet" href="style.bundle.css?v=${cssHash}">
   <script src="vendor.bundle.js?v=${vendorHash}"></script>

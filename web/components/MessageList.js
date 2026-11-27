@@ -73,13 +73,7 @@ export default {
       <div v-if="!store.activeConversationId" class="welcome-screen">
         <div class="welcome-content">
           <div class="welcome-logo">
-            <svg viewBox="0 0 48 48" width="64" height="64" aria-hidden="true">
-              <rect width="48" height="48" rx="12" fill="var(--accent)"/>
-              <path d="M24 34V19M24 19L15 11M24 19L33 11" stroke="var(--accent-fg)" stroke-width="4" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
-              <circle cx="15" cy="11" r="3.5" fill="var(--accent-fg)"/>
-              <circle cx="33" cy="11" r="3.5" fill="var(--accent-fg)"/>
-              <circle cx="24" cy="34" r="3.5" fill="var(--accent-fg)"/>
-            </svg>
+            <img src="assets/brand/icon.svg" alt="" width="64" height="64" draggable="false">
           </div>
           <h1 class="welcome-title">{{ onlineAgents.length ? 'Yeaft' : $t('welcome.setupTitle') }}</h1>
           <p class="welcome-subtitle">{{ $t(onlineAgents.length ? 'welcome.subtitle' : 'welcome.setupDesc') }}</p>

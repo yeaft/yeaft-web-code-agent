@@ -49,6 +49,7 @@ import { stepCosmosFrame } from '../../cosmos/stage-loop.js';
 import { projectAgentsForCosmos } from '../../cosmos/agent-projection.js';
 import { buildCosmosSignalStream } from '../../cosmos/signal-stream.js';
 import { getLocale } from '../../utils/i18n.js';
+import { setThemeColorSurface } from '../../utils/document-theme.js';
 
 import CosmosQuickComposer from './CosmosQuickComposer.js';
 import CosmosConversationDrawer from './CosmosConversationDrawer.js';
@@ -1946,6 +1947,9 @@ export default {
       document.addEventListener('click', onDocClick);
       nowInterval = setInterval(() => { nowTick.value = Date.now(); }, 15000);
       syncEventRefs();
+      // The deep-space surface owns the browser / installed-app title bar color.
+      const pageEl = glCanvasRef.value?.closest?.('.cosmos-page');
+      if (pageEl && typeof window.getComputedStyle === 'function') setThemeColorSurface(window.getComputedStyle(pageEl).getPropertyValue('--c-bg'));
     });
 
     Vue.onBeforeUnmount(() => {
@@ -1970,6 +1974,7 @@ export default {
       window.removeEventListener('keydown', onKeyDown);
       document.removeEventListener('click', onDocClick);
       store.yeaftConversationCovered = false;
+      setThemeColorSurface(null);
       engine?.destroy?.();
       engine = null;
     });

@@ -1833,9 +1833,11 @@
   margin-bottom: 16px;
 }
 
-.welcome-logo svg {
-  width: 56px;
-  height: 56px;
+.welcome-logo img {
+  display: block;
+  width: 60px;
+  height: 60px;
+  user-select: none;
 }
 
 .welcome-title {
@@ -2057,9 +2059,9 @@
     width: 100%;
   }
 
-  .welcome-logo svg {
-    width: 48px;
-    height: 48px;
+  .welcome-logo img {
+    width: 52px;
+    height: 52px;
   }
 
   .welcome-title {
