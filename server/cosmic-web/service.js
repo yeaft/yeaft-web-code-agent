@@ -665,7 +665,8 @@ export function createCosmicWebService({ fetcher = safeFetch, dnsLookup, now = D
           const escaped = k >= offset + 4 && str[k - 2] === '\\';
           if (last === ')' && !escaped && closeParens > openParens) { closeParens--; k--; continue; }
           if (last === ']' && !escaped && closeBrackets > openBrackets) { closeBrackets--; k--; continue; }
-          if (!escaped && (last === '\'' || last === '`' || last === '.' || last === ',' || last === ';' || last === '!' || last === '?')) { k--; continue; }
+          if (!escaped && (last === '\'' || last === '`' || last === '*' || last === '_' || last === '~'
+            || last === '.' || last === ',' || last === ';' || last === '!' || last === '?')) { k--; continue; }
           break;
         }
         const rawCandidate = str.slice(offset, k);
@@ -700,13 +701,14 @@ export function createCosmicWebService({ fetcher = safeFetch, dnsLookup, now = D
           else if (ch === ']') closeBrackets++;
           j++;
         }
-        // Trim only trailing unescaped sentence/wrapper punctuation outside balanced URL parens/brackets.
+        // Trim only trailing unescaped sentence/wrapper/Markdown emphasis punctuation outside balanced URL parens/brackets.
         while (j > i) {
           const last = noLinks[j - 1];
           const escaped = j >= i + 2 && noLinks[j - 2] === '\\';
           if (last === ')' && !escaped && closeParens > openParens) { closeParens--; j--; continue; }
           if (last === ']' && !escaped && closeBrackets > openBrackets) { closeBrackets--; j--; continue; }
-          if (!escaped && (last === '\'' || last === '`' || last === '.' || last === ',' || last === ';' || last === '!' || last === '?')) { j--; continue; }
+          if (!escaped && (last === '\'' || last === '`' || last === '*' || last === '_' || last === '~'
+            || last === '.' || last === ',' || last === ';' || last === '!' || last === '?')) { j--; continue; }
           break;
         }
         i = j;

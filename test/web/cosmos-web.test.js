@@ -1842,13 +1842,15 @@ describe('Cosmic Web — Pinia store & interactive overlay', () => {
     expect(webStore.articleData?.markdown).toBe('Fresh Source 1 article.');
     globalThis.fetch = prevFetch;
 
-    // Round 8 & 9 Blocker #2 (gated first-open with REAL reader UI controls):
-    // While first-open detail for c-first-open is pending (reader renders from feed summary),
-    // user clicks a non-default perspective pill ('investing') AND submits a follow-up via the reader modal composer.
-    // Both explicit actions MUST defer until detail establishes the 'item-b' pin — NEVER fire unpinned,
-    // NEVER drop the submitted question, and NEVER overwrite the user's chosen perspective/Agent with defaults!
+    // Round 8, 9 & 12 Blocker #2/#3 (gated first-open + same-story reopen BEFORE first detail response):
+    // While first-open detail for c-first-open is pending (activeClusterDetail === null),
+    // user clicks 'investing' perspective AND submits a follow-up via modal controls,
+    // THEN reselects the SAME story (c-first-open) BEFORE first detail arrives!
+    // Same-story reopen before first detail MUST stay in the same session, keep followUpLoading=true (composer disabled),
+    // reject any 2nd submission while deferred, and execute the original 'investing' brief & follow-up ONCE when detail #2 resolves!
     const prevFetchFirst = globalThis.fetch;
-    let resolveFirstDetail;
+    let resolveFirstDetail2;
+    let firstDetailCallCount = 0;
     const firstOpenBriefBodies = [];
     const firstOpenFollowUpBodies = [];
     webStore.feedItems = [
@@ -1870,8 +1872,18 @@ describe('Cosmic Web — Pinia store & interactive overlay', () => {
         json: async () => body,
       });
       if (u === '/api/cosmic-web/clusters/c-first-open') {
+        firstDetailCallCount += 1;
+        if (firstDetailCallCount === 1) {
+          return new Promise((_resolve, reject) => {
+            opts?.signal?.addEventListener('abort', () => {
+              const err = new Error('Aborted');
+              err.name = 'AbortError';
+              reject(err);
+            }, { once: true });
+          });
+        }
         return new Promise((resolve) => {
-          resolveFirstDetail = () => resolve(jsonRes({
+          resolveFirstDetail2 = () => resolve(jsonRes({
             id: 'c-first-open',
             domainId: 'ai',
             headline: 'First Open Cluster',
@@ -1909,9 +1921,10 @@ describe('Cosmic Web — Pinia store & interactive overlay', () => {
       }
       return prevFetchFirst(url, opts);
     });
-    const firstOpenPromise = webStore.openClusterReader('c-first-open', { expanded: true });
+    const firstOpenPromise1 = webStore.openClusterReader('c-first-open', { expanded: true });
     await flushPromises();
-    // User interacts with real reader modal controls BEFORE detail finishes loading:
+    expect(webStore.activeClusterDetail).toBeNull();
+    // User interacts with real reader modal controls BEFORE first detail finishes loading:
     // 1. Click non-default perspective pill ('investing', 4th button in perspective pills)
     const modalPerspBtns = wrapper.findAll('.cw-reader-modal .cw-persp-btn');
     expect(modalPerspBtns.length).toBeGreaterThanOrEqual(4);
@@ -1919,15 +1932,29 @@ describe('Cosmic Web — Pinia store & interactive overlay', () => {
     // 2. Type and submit a follow-up question in the modal composer
     const modalInput = wrapper.find('.cw-reader-modal .cw-composer-input');
     await modalInput.setValue('What about Q4 margins?');
-    const modalAskBtn = wrapper.find('.cw-reader-modal .cw-composer-btn[data-action="followup"], .cw-reader-modal .cw-composer-input');
-    await modalAskBtn.trigger('keydown.enter');
+    await modalInput.trigger('keydown.enter');
     await flushPromises();
-    // Neither brief nor follow-up should have fired unpinned before detail resolves!
+    expect(webStore.followUpLoading).toBe(true);
+    // 3. Round 12 Blocker #2/#3: Reopen the SAME story BEFORE first detail response arrives (activeClusterDetail is STILL null)!
+    const firstOpenPromise2 = webStore.openClusterReader('c-first-open', { expanded: true });
+    await firstOpenPromise1;
+    await flushPromises();
+    expect(firstDetailCallCount).toBe(2);
+    // Loading state & composer disabled guard MUST stay preserved across the same-story reopen!
+    expect(webStore.followUpLoading).toBe(true);
+    expect(webStore.aiBriefLoading).toBe(true);
+    const modalAskIconBtn = wrapper.find('.cw-reader-modal .cw-composer-icon-btn');
+    expect(modalAskIconBtn.attributes('disabled')).toBeDefined();
+    // Attempting to submit a second question while first is still deferred MUST be ignored (never drops the 1st)!
+    await modalInput.setValue('Accidental second question');
+    await modalInput.trigger('keydown.enter');
+    await flushPromises();
+    // Neither brief nor follow-up should have fired unpinned before detail #2 resolves!
     expect(firstOpenBriefBodies).toHaveLength(0);
     expect(firstOpenFollowUpBodies).toHaveLength(0);
-    // Now first-open detail resolves and pins 'item-b' -> BOTH deferred user actions execute with 'item-b' + 'investing' + 'v2-agent'!
-    resolveFirstDetail();
-    await firstOpenPromise;
+    // Now detail #2 resolves and pins 'item-b' -> original deferred 'investing' brief & Q4 margins follow-up run ONCE!
+    resolveFirstDetail2();
+    await firstOpenPromise2;
     await flushPromises();
     expect(webStore.resolvedSourceItemId).toBe('item-b');
     expect(firstOpenBriefBodies).toHaveLength(1);
@@ -2019,8 +2046,14 @@ describe('Cosmic Web — Pinia store & interactive overlay', () => {
     const reopenDriftPromise2 = webStore.openClusterReader('c-first-open', { expanded: true });
     await reopenDriftPromise1;
     await flushPromises();
-    // CRITICAL: Neither brief nor follow-up may fire prematurely against stale 'item-b' when Reopen #1 aborts!
+    // CRITICAL: Neither brief nor follow-up may fire prematurely against stale 'item-b' when Reopen #1 aborts,
+    // AND followUpLoading MUST remain true so the composer stays disabled until the original question runs!
     expect(reopenDetailCallCount).toBe(2);
+    expect(webStore.followUpLoading).toBe(true);
+    expect(wrapper.find('.cw-reader-modal .cw-composer-icon-btn').attributes('disabled')).toBeDefined();
+    await reopenInput.setValue('Should be rejected while first deferred question is pending');
+    await reopenInput.trigger('keydown.enter');
+    await flushPromises();
     expect(reopenBriefBodies).toHaveLength(0);
     expect(reopenFollowUpBodies).toHaveLength(0);
     // Now Reopen #2 resolves promoting 'item-c' -> stale 'item-b' brief/thread cleared, deferred 'engineering' brief & follow-up run ONCE for 'item-c'!

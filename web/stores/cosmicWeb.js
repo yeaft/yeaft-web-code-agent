@@ -527,20 +527,9 @@ export const useCosmicWebStore = defineStore('cosmicWeb', {
     async openClusterReader(clusterId, { expanded = false, itemId = null, url = null, debounceMs = 0 } = {}) {
       if (!clusterId) return;
 
-      // Immediately abort/invalidate any in-flight reader requests from previous story or source
-      clearAutoBriefTimer();
-      this.sourceSelectionRev += 1;
-      invalidateChannel('detail');
-      invalidateChannel('community');
-      invalidateChannel('article');
-      invalidateChannel('aiBrief');
-      invalidateChannel('followUp');
-      this.detailLoading = false;
-      this.articleLoading = false;
-      this.aiBriefLoading = false;
-      this.followUpLoading = false;
-
-      const isNewCluster = this.readerClusterId !== clusterId || this.activeClusterDetail?.id !== clusterId;
+      // Determine session identity strictly from open story + source selection (NOT whether activeClusterDetail has loaded yet)
+      // so reopening the same story before its first detail response stays in the same session and keeps deferred actions attached.
+      const isNewCluster = !this.readerOpen || this.readerClusterId !== clusterId;
       const nextUrl = url || null;
       const isUrlOnlySelection = !itemId && Boolean(nextUrl);
       const matchedExisting = !isNewCluster && isUrlOnlySelection
@@ -553,6 +542,32 @@ export const useCosmicWebStore = defineStore('cosmicWeb', {
         nextItemId !== (this.activeArticleItemId || null)
         || nextUrl !== (this.activeArticleUrl || null)
       );
+
+      // Immediately abort/invalidate any in-flight reader requests from previous story or source
+      clearAutoBriefTimer();
+      this.sourceSelectionRev += 1;
+      invalidateChannel('detail');
+      invalidateChannel('community');
+      invalidateChannel('article');
+      invalidateChannel('aiBrief');
+      invalidateChannel('followUp');
+
+      const capturedGen = storeGeneration;
+      // Compute inherited deferred UI state BEFORE updating loading flags so same-session reopens
+      // preserve followUpLoading/aiBriefLoading/articleLoading and keep the composer disabled until deferred work finishes.
+      const prevSameSessionReconcile = (!isNewCluster && !isSourceChange)
+        && activeReaderReconcile
+        && activeReaderReconcile.clusterId === clusterId
+        && activeReaderReconcile.gen === capturedGen
+        && activeReaderReconcile.session === readerSessionToken
+        ? activeReaderReconcile
+        : null;
+
+      this.detailLoading = false;
+      this.articleLoading = Boolean(prevSameSessionReconcile?.hasDeferredArticle);
+      this.aiBriefLoading = Boolean(prevSameSessionReconcile?.hasDeferredBrief);
+      this.followUpLoading = Boolean(prevSameSessionReconcile?.hasDeferredFollowUp);
+
       this.cursorClusterId = clusterId;
       this.selectedClusterId = clusterId;
       this.readerClusterId = clusterId;
@@ -568,7 +583,9 @@ export const useCosmicWebStore = defineStore('cosmicWeb', {
         : (this.resolvedSourceItemId || this.aiBriefSourceItemId || this.activeArticleItemId || this.activeClusterDetail?.items?.[0]?.id || null);
       if (isNewCluster || isSourceChange) {
         readerSessionToken += 1;
-        if (isNewCluster) this.activeClusterDetail = null;
+        if (isNewCluster || (this.activeClusterDetail && this.activeClusterDetail.id !== clusterId)) {
+          this.activeClusterDetail = null;
+        }
         this.articleData = null;
         this.articleError = null;
         this.cleanArticleOpen = false;
@@ -594,15 +611,6 @@ export const useCosmicWebStore = defineStore('cosmicWeb', {
       // so implicit-source UI actions (perspective switches, follow-ups, clean article) during EITHER first-open
       // OR same-cluster reopen defer cleanly until repin & stale invalidation complete.
       let capturedRev = this.sourceSelectionRev;
-      const capturedGen = storeGeneration;
-      // If a same-session reopen supersedes an in-flight reconciliation, carry forward attached deferred UI flags
-      // so the superseding reconciliation continues suppressing default auto-briefs and preserves loading state.
-      const prevSameSessionReconcile = activeReaderReconcile
-        && activeReaderReconcile.clusterId === clusterId
-        && activeReaderReconcile.gen === capturedGen
-        && activeReaderReconcile.session === readerSessionToken
-        ? activeReaderReconcile
-        : null;
       const reconcileEntry = {
         clusterId,
         gen: capturedGen,
@@ -1011,6 +1019,10 @@ export const useCosmicWebStore = defineStore('cosmicWeb', {
       // Defer implicit-source follow-ups across first-open, reopen, and superseded reopens until the latest reconciliation finishes
       // so submitted user questions never vanish and never carry stale briefContext from a replaced source!
       if (!itemId && activeReaderReconcile && activeReaderReconcile.clusterId === clusterId && activeReaderReconcile.gen === storeGeneration) {
+        // Never overwrite an already-accepted deferred follow-up in the same session.
+        if (activeReaderReconcile.session === readerSessionToken && activeReaderReconcile.hasDeferredFollowUp) {
+          return null;
+        }
         const myGen = storeGeneration;
         const mySession = readerSessionToken;
         const mySeq = ++deferredFollowUpSeq;
