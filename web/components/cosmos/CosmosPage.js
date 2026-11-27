@@ -1856,26 +1856,24 @@ export default {
         let recordedRootDir = String(creation?.rootDir || '').trim();
         let resolvedSessionId = String(sessionId || '').trim();
         let resolvedRootDir = String(rootDir || '').trim();
-        // A complete recorded link can be opened even if Session inventory is still catching up.
-        const recordedSessionId = String(creation?.sessionId || '').trim();
-        if (recordedSessionId && recordedRootDir) {
-          resolvedSessionId ||= recordedSessionId;
-          resolvedRootDir ||= recordedRootDir;
-        }
-
-        if ((!resolvedSessionId || !resolvedRootDir) && typeof creationsStore.resolveCreationSession === 'function') {
+        // Only Ignite supplies both explicit route inputs. A recorded link
+        // from Galaxy inventory still needs the shared resolver's check.
+        const hasVerifiedRoute = resolvedSessionId && resolvedRootDir && (
+          sessionsStore?.sessionById?.(resolvedSessionId, targetAgentId)
+          || store.hasKnownYeaftSession?.(resolvedSessionId, targetAgentId)
+        );
+        if (!hasVerifiedRoute) {
           const resolved = await creationsStore.resolveCreationSession(
             targetAgentId,
             creation || { id: creationId },
             { createIfMissing: true },
           );
           if (isStaleOpen()) return;
-          if (!resolvedSessionId && resolved?.sessionId) resolvedSessionId = String(resolved.sessionId).trim();
-          if (!resolvedRootDir && resolved?.rootDir) resolvedRootDir = String(resolved.rootDir).trim();
-          recordedRootDir = String(resolved?.creation?.rootDir || '').trim() || recordedRootDir;
+          if (!resolved?.sessionId) throw new Error('Failed to resolve Creation session');
+          resolvedSessionId = String(resolved.sessionId).trim();
+          recordedRootDir = String(resolved.creation?.rootDir || '').trim() || recordedRootDir;
+          resolvedRootDir = String(resolved.rootDir || recordedRootDir).trim();
         }
-        if (!resolvedSessionId && creation?.sessionId) resolvedSessionId = String(creation.sessionId).trim();
-        if (!resolvedRootDir) resolvedRootDir = recordedRootDir;
         if (isStaleOpen()) return;
 
         await openCreationInDrawer({

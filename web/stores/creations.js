@@ -18,6 +18,7 @@ const USER_PREFIX_RE = /^user_\d+_[a-zA-Z0-9]+:/;
 const pendingRequests = new Map();
 const inFlightBindFolder = new Map();
 const inFlightResolveSession = new Map();
+const sessionInventoryEvidence = new WeakMap();
 const inFlightWorkspaceCreates = new Map();
 const pendingOpenActivations = new Map();
 let requestSeq = 0;
@@ -179,6 +180,33 @@ function getSessionsStoreSafe() {
   return null;
 }
 
+function trackSessionInventory(sessionsStore) {
+  if (!sessionsStore || sessionInventoryEvidence.has(sessionsStore)) return;
+  const snapshots = new Set();
+  const removed = new Set();
+  sessionInventoryEvidence.set(sessionsStore, { snapshots, removed });
+  // The Session store's hasLoadedSnapshot flag is global, not Agent-scoped.
+  sessionsStore.$onAction?.(({ name, args, after }) => {
+    const [payload, agentId] = args;
+    if (name === 'resetInventory') {
+      after(() => {
+        snapshots.clear();
+        removed.clear();
+      });
+    } else if (name === 'applySnapshot' && agentId && Array.isArray(payload)) {
+      after(() => snapshots.add(agentId));
+    } else if (name === 'applySnapshotUpsert' && payload?.id) {
+      after(() => removed.delete(yeaftSessionIdentityKey(agentId || payload.agentId, payload.id)));
+    } else if (name === 'applyCrudResult' && payload?.ok === true) {
+      const owner = agentId || payload.agentId;
+      const id = payload.sessionId || payload.groupId;
+      if (owner && id && ['delete', 'archive'].includes(payload.op)) {
+        after(() => removed.add(yeaftSessionIdentityKey(owner, id)));
+      }
+    }
+  }, true);
+}
+
 export function creationDetailKey(agentId, creationId) {
   return `${agentId}${KEY_SEP}${creationId}`;
 }
@@ -316,7 +344,7 @@ function deleteKeysWithPrefix(mapObj, prefix) {
   }
 }
 
-export const useCreationsStore = defineStore('creations', {
+const useCreationsPiniaStore = defineStore('creations', {
   state: () => ({
     selectedAgentId: '',
     byAgent: {},
@@ -1177,15 +1205,33 @@ export const useCreationsStore = defineStore('creations', {
 
         const chatStore = getChatStoreSafe();
         const sessionsStore = getSessionsStoreSafe();
-        let sessionId = latest.sessionId || null;
-        const hasKnownSession = Boolean(
-          sessionId && (
-            sessionsStore?.sessionById?.(sessionId, targetId)
-            || chatStore?.hasKnownYeaftSession?.(sessionId, targetId)
-          ),
-        );
+        let sessionId = String(latest.sessionId || '').trim() || null;
+        const hasKnownSession = () => sessionsStore?.sessionById?.(sessionId, targetId)
+          || chatStore?.hasKnownYeaftSession?.(sessionId, targetId);
 
-        if (!hasKnownSession) {
+        if (sessionId) {
+          if (hasKnownSession()) return { creation: latest, sessionId, rootDir };
+          let list;
+          if (chatStore?.connectionState === 'connected'
+              && chatStore.agents?.find(agent => agent?.id === targetId)?.online !== false
+              && typeof chatStore.sessionCrudRequest === 'function') {
+            try {
+              list = await chatStore.sessionCrudRequest('list', {}, { agentId: targetId });
+            } catch {
+              // A failed refresh isn't evidence that the linked Session is gone.
+            }
+            if (gen !== storeGeneration) return null;
+          }
+          const evidence = sessionInventoryEvidence.get(sessionsStore);
+          const confirmedAbsent = list?.ok === true && Array.isArray(list.sessions)
+            ? !list.sessions.some(row => row?.id === sessionId)
+            : !hasKnownSession() && (evidence?.snapshots.has(targetId)
+              || evidence?.removed.has(yeaftSessionIdentityKey(targetId, sessionId)));
+          if (!confirmedAbsent) return { creation: latest, sessionId, rootDir };
+          sessionId = null;
+        }
+
+        if (!sessionId) {
           if (!createIfMissing) {
             return { creation: latest, sessionId: null, rootDir };
           }
@@ -2710,3 +2756,9 @@ export const useCreationsStore = defineStore('creations', {
     },
   },
 });
+
+// Observe inventory from the first use of the Creation store, before any open.
+export const useCreationsStore = Object.assign((...args) => {
+  trackSessionInventory(getSessionsStoreSafe());
+  return useCreationsPiniaStore(...args);
+}, { $id: useCreationsPiniaStore.$id });

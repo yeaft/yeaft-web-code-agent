@@ -1043,11 +1043,13 @@ describe('Creation folder workspaces', () => {
     expect(store.listCreations()).toHaveLength(1);
   });
 
-  it.each(['createCreation', 'findByFolder', 'different folder', 'generated workspace', 'clear root', 'update root'])(
+  it.each(['createCreation', 'findByFolder', 'different folder', 'different folder after replacement',
+    'generated workspace', 'clear root', 'update root'])(
     'retains a keyed bind after the untouched journal retires and handles %s', retry => {
       const id = 'retry-bind';
       const rootDir = join(realpathSync(dir), 'original');
       mkdirSync(rootDir);
+      const { dev, ino } = statSync(rootDir, { bigint: true });
       const payload = { id, importKey: 'bind-folder:retry', initializeFolder: true, rootDir,
         textSources: [{ name: 'Notes.txt', text: 'Original source' }] };
       const result = runExternalWorker(`
@@ -1071,6 +1073,26 @@ describe('Creation folder workspaces', () => {
       expect(record()).toMatchObject({ rootDir: null, pendingBindTarget: rootDir });
       const sources = store.listSources(id);
       expect(sources).toHaveLength(1);
+
+      if (retry === 'different folder after replacement') {
+        const original = join(dirname(rootDir), 'moved-original');
+        renameSync(rootDir, original);
+        mkdirSync(rootDir);
+        expect(statSync(rootDir, { bigint: true }).ino).not.toBe(ino);
+        const verifyRejected = attempt => {
+          expect(attempt).toThrow(expect.objectContaining({ code: expect.stringMatching(/^(CONFLICT|INVALID_PATH)$/) }));
+          expect(readdirSync(rootDir)).toEqual([]);
+          expect(readdirSync(original)).toEqual([]);
+          expect(record().rootDir).toBeNull();
+          expect(journal()).toEqual([]);
+        };
+        verifyRejected(() => store.createCreation(payload));
+        const { creation } = store.findByFolder(rootDir);
+        expect(creation).toMatchObject({ id, rootDir: null });
+        verifyRejected(() => store.ensureWorkspace(creation.id, { rootDir }));
+      }
+      expect(record().pendingBindIdentity).toEqual({ dev: String(dev), ino: String(ino) });
+      expect(store.getCreation(id)).not.toHaveProperty('pendingBindIdentity');
 
       let target = rootDir;
       if (retry === 'createCreation') {
@@ -1097,6 +1119,8 @@ describe('Creation folder workspaces', () => {
         expect(readFileSync(join(target, 'sources', 'Notes.txt'), 'utf8')).toBe('Original source');
       }
       expect(record()).not.toHaveProperty('pendingBindTarget');
+      expect(record()).not.toHaveProperty('pendingBindIdentity');
+      if (target !== rootDir) expect(readdirSync(rootDir)).toEqual([]);
       expect(store.findByFolder(rootDir).creation?.id ?? null).toBe(target === rootDir ? id : null);
       expect(store.listCreations()).toEqual([expect.objectContaining({ id, rootDir: target, sourceCount: 1 })]);
       expect(store.listSources(id)).toEqual(sources);

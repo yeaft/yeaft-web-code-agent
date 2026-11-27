@@ -520,7 +520,7 @@ export class CreationStore {
       (SELECT COUNT(*) FROM creation_proposals WHERE creation_id=? AND status='pending') AS pendingProposalCount`, row.id, row.id);
     const active = data(this.one(`SELECT data FROM creation_runs WHERE creation_id=? AND status IN ('running','paused')
       ORDER BY status='running' DESC,rowid DESC LIMIT 1`, row.id));
-    const { ownsWorkspace, workspaceIdentity, boundRootIdentity, pendingBindTarget, ...rec } = data(row);
+    const { ownsWorkspace, workspaceIdentity, boundRootIdentity, pendingBindTarget, pendingBindIdentity, ...rec } = data(row);
     return { ...rec, sessionId: rec.sessionId ?? null, projectId: rec.projectId ?? null, rootDir: rec.rootDir ?? null,
       summary: rec.description || rec.mission || '', celestial: rec.placement, updatedAt: row.updated_at, ...counts, ...totals, hasReadableContent: counts.readableUnitCount > 0,
       activeRunStatus: active?.status ?? null, activeRunProgress: active?.progress?.total > 0 ? active.progress.completed / active.progress.total : null };
@@ -579,8 +579,6 @@ export class CreationStore {
         if (nested) fail('INVALID_STATE', 'External materialization cannot run inside another transaction');
         record.rootDir = null;
         delete record.boundRootIdentity;
-        // Retry intent survives retirement of an untouched mutation journal.
-        if (importKey?.startsWith('bind-folder:')) record.pendingBindTarget = externalRoot;
       } else if (input.initializeFolder === true) {
         this.#initializeWorkspace(record);
       }
@@ -594,8 +592,15 @@ export class CreationStore {
       if (externalRoot) {
         // Preparation can add nodes, canon and assets. Validate the full plan
         // without touching the external folder, then checkpoint it with the inputs.
+        const pending = data(this.#creation(id));
         const { planned, published, rootIdentity } = this.#planAndPreflightExternalFolder(
-          id, externalRoot, data(this.#creation(id)), {}, {}, externalRootIdentity);
+          id, externalRoot, pending, {}, {}, externalRootIdentity);
+        if (importKey?.startsWith('bind-folder:')) {
+          // Keep the verified target and identity even if the untouched journal is retired.
+          pending.pendingBindTarget = externalRoot;
+          pending.pendingBindIdentity = { dev: rootIdentity.dev, ino: rootIdentity.ino };
+          this.run('UPDATE creations SET data=? WHERE id=?', json(pending), id);
+        }
         newlyCreatedJournalToken = { target_dir: externalRoot, temp_files_json: '[]',
           planned_outputs_json: this.#journalPlanJson(planned, rootIdentity), published_outputs_json: json(published), updated_at: Date.now() };
         this.run('INSERT INTO creation_materialization_journal VALUES (?,?,?,?,?,?)', id, ...Object.values(newlyCreatedJournalToken));
@@ -668,7 +673,6 @@ export class CreationStore {
       if (own(patch, 'rootDir')) {
         const journal = this.one('SELECT temp_files_json FROM creation_materialization_journal WHERE creation_id=?', id);
         if ((record.rootDir ?? null) !== previousRoot || (record.rootDir == null && (journal || record.pendingBindTarget))) {
-          delete record.pendingBindTarget;
           this.run('DELETE FROM creation_materialization_journal WHERE creation_id=?', id);
           this.run("DELETE FROM creation_import_keys WHERE creation_id=? AND import_key LIKE 'bind-folder:%'", id);
           if (journal) {
@@ -676,6 +680,8 @@ export class CreationStore {
             this.tx.afterCommit.push(() => this.#cleanupJournalTemps(this.#stagingDir(id), temps));
           }
         }
+        delete record.pendingBindTarget;
+        delete record.pendingBindIdentity;
       }
       this.run('UPDATE creations SET updated_at=?,data=? WHERE id=?', now(), json(record), id);
       return this.getCreation(id);
@@ -935,6 +941,7 @@ export class CreationStore {
     }
     record.rootDir = rootDir;
     delete record.pendingBindTarget;
+    delete record.pendingBindIdentity;
   }
   #unsafeSourceName(name) { return name.split(/[\\/]/).includes('..'); }
   #copyWorkspaceSource(root, source, bytes, { legacy = false, write,
@@ -1163,7 +1170,7 @@ export class CreationStore {
   }
 
   #planAndPreflightExternalFolder(id, root, record, planned = {}, published = {}, rootIdentity) {
-    rootIdentity ??= this.#withExternalDirectory(root, root, {}, (_fd, _check, _path, stat) => rootIdentityOf(stat));
+    rootIdentity = this.#withExternalDirectory(root, root, { rootIdentity }, (_fd, _check, _path, stat) => rootIdentityOf(stat));
     const claimed = new Set();
     for (const { relPath } of Object.values(planned)) {
       const folded = relPath.toLowerCase();
@@ -1363,14 +1370,18 @@ export class CreationStore {
         checkpoint = previous;
         this.#linkableRootFolder(root);
         if (previous && previous.target_dir !== root) fail('CONFLICT', 'Resume materialization in the original target folder');
+        const pendingIdentity = record.pendingBindTarget === root ? record.pendingBindIdentity : undefined;
         if (previous) {
           // Pre-identity journals cannot prove the path still names the original folder.
           if (typeof dev !== 'string' || typeof ino !== 'string') fail('CONFLICT', 'Materialization journal has no verified root identity');
           rootIdentity = { dev, ino };
+          if (pendingIdentity && !matchesRootIdentity(rootIdentity, pendingIdentity)) {
+            fail('CONFLICT', 'Materialization journal does not match the pending folder identity');
+          }
           this.#withExternalDirectory(root, root, { rootIdentity }, () => {});
           this.#reconcileWorkspacePublications(root, stagingDir, planned, published, temps, rootIdentity);
         } else {
-          ({ rootIdentity } = this.#planAndPreflightExternalFolder(id, root, record, planned, published));
+          ({ rootIdentity } = this.#planAndPreflightExternalFolder(id, root, record, planned, published, pendingIdentity));
           createdJournalInThisCall = true;
         }
         save(); // Commit the initial plan or inferred publications before touching the filesystem.
@@ -1459,6 +1470,7 @@ export class CreationStore {
         current.rootDir = root;
         current.boundRootIdentity = rootIdentity;
         delete current.pendingBindTarget;
+        delete current.pendingBindIdentity;
         delete current.ownsWorkspace;
         delete current.workspaceIdentity;
         this.run('UPDATE creations SET updated_at=?,data=? WHERE id=?', now(), json(current), id);

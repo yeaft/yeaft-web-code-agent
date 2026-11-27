@@ -30,8 +30,23 @@ function instantiateStore(id) {
       configurable: true,
     });
   }
+  const actionListeners = new Set();
+  store.$onAction = listener => {
+    actionListeners.add(listener);
+    return () => actionListeners.delete(listener);
+  };
   for (const [k, fn] of Object.entries(def.actions || {})) {
-    store[k] = fn.bind(store);
+    store[k] = (...args) => {
+      const callbacks = [];
+      for (const listener of actionListeners) listener({ name: k, args, after: cb => callbacks.push(cb) });
+      const complete = result => {
+        for (const cb of callbacks) cb(result);
+        return result;
+      };
+      const result = fn.apply(store, args);
+      if (!callbacks.length) return result;
+      return result instanceof Promise ? result.then(complete) : complete(result);
+    };
   }
   storeInstances.set(id, store);
   return store;
@@ -514,6 +529,7 @@ describe('Cosmos Creations — End-to-End Web Store <-> Server Relay <-> Agent S
         handleYeaftUpdateSession(request);
         return true;
       }
+      if (request.type === 'yeaft_list_sessions') return sessionAck(chatStore, request, 'list', { sessions: [{ id: 'session-shared' }] });
       if (request.type === 'yeaft_create_session') return sessionAck(chatStore, request, 'create', { session: { id: 'session-replacement' } });
     });
     let creation, rootDir;
@@ -546,6 +562,7 @@ describe('Cosmos Creations — End-to-End Web Store <-> Server Relay <-> Agent S
       Object.assign(ctx, previous);
     }
 
+    chatStore.connectionState = 'connected';
     const stale = await creationsStore.updateCreation('agent-a', creation.id, { sessionId: 'unknown-session' });
     expect(await creationsStore.resolveCreationSession('agent-a', stale, { createIfMissing: false })).toMatchObject({ sessionId: null, rootDir });
     expect(chatStore.createYeaftSession).not.toHaveBeenCalled();
@@ -1769,6 +1786,11 @@ describe('Cosmos Creations — End-to-End Web Store <-> Server Relay <-> Agent S
 
     // Also cover Galaxy's read precedence independently of cache reconciliation.
     detail.creation = stale;
+    chatStore.connectionState = 'connected';
+    const send = interceptSocket(chatStore, request => {
+      if (request.type === 'yeaft_list_sessions') return sessionAck(chatStore, request, 'list', { ok: false, error: { code: 'timeout' } });
+    });
+    const resolve = vi.spyOn(creationsStore, 'resolveCreationSession');
     const createSession = vi.spyOn(chatStore, 'createYeaftSession').mockRejectedValue(new Error('Unexpected Session creation'));
     vi.spyOn(globalThis, 'requestAnimationFrame').mockReturnValue(1);
     const wrapper = render(CosmosPage, { stubs: {
@@ -1782,15 +1804,64 @@ describe('Cosmos Creations — End-to-End Web Store <-> Server Relay <-> Agent S
     expect(chatStore.yeaftActiveSessionFilter).toBe(linked.sessionId);
     expect(creationsStore.pendingWorkbenchTarget).toMatchObject({ agentId, creationId: creation.id,
       sessionId: linked.sessionId, rootDir: linked.rootDir });
+    expect(resolve).toHaveBeenCalledExactlyOnceWith(agentId, expect.objectContaining(linked), { createIfMissing: true });
+    expect(send).toHaveBeenCalledWith(expect.objectContaining({ type: 'yeaft_list_sessions', agentId }));
     expect(createSession).not.toHaveBeenCalled();
     expect(requests.mock.calls.map(([, action]) => action)).not.toContain('update_creation');
   });
 
+  it.each(['Agent list', 'local Agent snapshot', 'Agent deletion receipt'])('R10-F1: Galaxy replaces a confirmed-deleted Session (%s)', async source => {
+    const { sessions } = await registerBrowserStores();
+    const { default: CosmosPage } = await import('../../web/components/cosmos/CosmosPage.js');
+    const agentId = 'agent-a';
+    const deletedId = 'deleted-session';
+    const replacementId = 'live-replacement';
+    chatStore.agents = [{ id: agentId, name: 'Alpha', online: true, capabilities: ['creations'] }];
+    chatStore.connectionState = 'connected';
+    const creation = serviceA.store.createCreation({ title: 'Recover Atlas', initializeFolder: true, sessionId: deletedId });
+    await creationsStore.selectGalaxyAgent(agentId);
+    sessions.applySnapshotUpsert({ id: deletedId, workDir: creation.rootDir }, 'agent-b');
+    if (source === 'local Agent snapshot') sessions.applySnapshot([], agentId);
+    if (source === 'Agent deletion receipt') sessions.applyCrudResult({ ok: true, op: 'delete', sessionId: deletedId }, agentId);
+    let replacement;
+    const send = interceptSocket(chatStore, request => {
+      if (request.type === 'yeaft_list_sessions') return sessionAck(chatStore, request, 'list', replacement || source === 'Agent list'
+        ? { sessions: replacement ? [replacement] : [] } : { ok: false, error: { code: 'timeout' } });
+      if (request.type === 'yeaft_create_session') {
+        replacement = { id: replacementId, workDir: creation.rootDir };
+        return sessionAck(chatStore, request, 'create', { session: replacement });
+      }
+    });
+    const resolve = vi.spyOn(creationsStore, 'resolveCreationSession');
+    const createSession = vi.spyOn(chatStore, 'createYeaftSession');
+    const update = vi.spyOn(creationsStore, 'updateCreation');
+    vi.spyOn(globalThis, 'requestAnimationFrame').mockReturnValue(1);
+    const wrapper = render(CosmosPage, { stubs: {
+      CosmosQuickComposer: true, CosmosConversationDrawer: true, CosmosGalaxyOverlay: true,
+      SettingsPanel: true, AgentSettingsPanel: true, SessionSettingsModal: true,
+    } });
+    wrapper.vm.currentBand = 'galaxy';
+    await Vue.nextTick();
+    await wrapper.vm.openGalaxyCreation({ agentId, creationId: creation.id });
+    expect(resolve).toHaveBeenCalledExactlyOnceWith(agentId, expect.objectContaining({
+      id: creation.id, sessionId: deletedId, rootDir: creation.rootDir,
+    }), { createIfMissing: true });
+    expect(send).toHaveBeenCalledWith(expect.objectContaining({ type: 'yeaft_list_sessions', agentId }));
+    expect(createSession).toHaveBeenCalledExactlyOnceWith({ agentId, displayName: creation.title, workDir: creation.rootDir });
+    expect(update).toHaveBeenCalledExactlyOnceWith(agentId, creation.id, { sessionId: replacementId });
+    expect(serviceA.store.getCreation(creation.id).sessionId).toBe(replacementId);
+    expect(wrapper.vm.drawerOpen).toBe(true);
+    expect(chatStore.yeaftActiveSessionFilter).toBe(replacementId);
+    expect(creationsStore.pendingWorkbenchTarget).toMatchObject({ agentId, creationId: creation.id,
+      sessionId: replacementId, rootDir: creation.rootDir });
+  });
+
   it.each(['leave Galaxy and return', 'close the drawer'])('fences a pending Galaxy Creation open when users %s', async action => {
-    await registerBrowserStores();
+    const { sessions } = await registerBrowserStores();
     const { default: CosmosPage } = await import('../../web/components/cosmos/CosmosPage.js');
     chatStore.agents = [{ id: 'agent-a', name: 'Alpha', online: true, capabilities: ['creations'] }];
-    const ready = serviceA.store.createCreation({ title: 'Open now', initializeFolder: true });
+    const ready = serviceA.store.createCreation({ title: 'Open now', initializeFolder: true, sessionId: 'ready-session' });
+    sessions.applySnapshotUpsert({ id: ready.sessionId, workDir: ready.rootDir }, 'agent-a');
     const slow = serviceA.store.createCreation({ title: 'Open slowly', initializeFolder: true });
     await creationsStore.selectGalaxyAgent('agent-a');
     const requested = deferred();
