@@ -607,8 +607,8 @@ describe('Cosmic Web bounded research', () => {
       payload: {
         isPrivateSource: true,
         headline: 'Private memo',
-        summaryExcerpt: `${unicodePad} Summary with https://private.example/secret-exc.png and https://files.example/o'brien(v2).png?token=PRIVATE_SENTINEL and https://files.example/u0130.pdf?token=UNICODE_DRIFT_SECRET inside.`,
-        articleMarkdown: `${unicodePad} Body with [![Chart](https://private.example/secret-fig.png)](https://private.example/secret-fig.png), [Attachment](<https://files.example/report)v2.pdf?token=ANGLE_PAREN_SECRET>), [doc](https://private.example/secret-md.png), https://files.example/team's-plan.pdf?token=APOS_SECRET, (https://files.example/doc(final).png?token=PRIVATE_SENTINEL_2), and https://files.example/tail.pdf?token=UNICODE_TAIL_SECRET`,
+        summaryExcerpt: `${unicodePad} Summary with https://private.example/secret-exc.png, www.private.example/s.pdf?token=WWW_EXC_SECRET, //cdn.private.example/e.png?token=REL_EXC_SECRET, https://files.example/o'brien(v2).png?token=PRIVATE_SENTINEL and https://files.example/u0130.pdf?token=UNICODE_DRIFT_SECRET inside.`,
+        articleMarkdown: `${unicodePad} Body // prose comment with [![Chart](https://private.example/secret-fig.png)](https://private.example/secret-fig.png), [Attachment](<https://files.example/report)v2.pdf?token=ANGLE_PAREN_SECRET>), [doc](https://private.example/secret-md.png), https://files.example/team's-plan.pdf?token=APOS_SECRET, (https://files.example/doc(final).png?token=PRIVATE_SENTINEL_2), www.private.example/doc(v1).pdf?token=WWW_MD_SECRET, //cdn.private.example/fig.png?token=REL_MD_SECRET, and https://files.example/tail.pdf?token=UNICODE_TAIL_SECRET`,
         media: [{ url: 'https://private.example/secret-top.png', kind: 'image' }],
         sources: [{ title: 'Memo', url: 'https://private.example/memo', summaryExcerpt: 'Source https://private.example/secret-src-exc.png', media: [{ url: 'https://private.example/secret-source.png', kind: 'image' }] }],
       },
@@ -625,6 +625,11 @@ describe('Cosmic Web bounded research', () => {
     expect(sentPrompt).not.toContain('APOS_SECRET');
     expect(sentPrompt).not.toContain('UNICODE_DRIFT_SECRET');
     expect(sentPrompt).not.toContain('UNICODE_TAIL_SECRET');
+    expect(sentPrompt).not.toContain('WWW_EXC_SECRET');
+    expect(sentPrompt).not.toContain('REL_EXC_SECRET');
+    expect(sentPrompt).not.toContain('WWW_MD_SECRET');
+    expect(sentPrompt).not.toContain('REL_MD_SECRET');
+    expect(sentPrompt).toContain('// prose comment');
   });
 });
 

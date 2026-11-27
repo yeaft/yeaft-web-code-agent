@@ -212,18 +212,56 @@ function stripBracketedLinks(text, imagesOnly) {
   return out;
 }
 
-function matchHttpSchemeAt(str, offset) {
-  if (offset + 7 > str.length) return 0;
-  const c0 = str.charCodeAt(offset) | 32;
-  const c1 = str.charCodeAt(offset + 1) | 32;
-  const c2 = str.charCodeAt(offset + 2) | 32;
-  const c3 = str.charCodeAt(offset + 3) | 32;
-  if (c0 !== 104 || c1 !== 116 || c2 !== 116 || c3 !== 112) return 0;
-  const c4 = str.charCodeAt(offset + 4);
-  if (c4 === 58 && str.charCodeAt(offset + 5) === 47 && str.charCodeAt(offset + 6) === 47) return 7;
-  if ((c4 | 32) === 115 && offset + 8 <= str.length
-    && str.charCodeAt(offset + 5) === 58 && str.charCodeAt(offset + 6) === 47 && str.charCodeAt(offset + 7) === 47) {
-    return 8;
+function matchUrlStartAt(str, offset) {
+  const len = str.length;
+  const prev = offset > 0 ? str.charCodeAt(offset - 1) : 0;
+  const prevIsWord = (prev >= 48 && prev <= 57) || (prev >= 65 && prev <= 90) || (prev >= 97 && prev <= 122) || prev === 95;
+  if (prevIsWord) return 0;
+
+  const c0 = str.charCodeAt(offset);
+  if ((c0 >= 65 && c0 <= 90) || (c0 >= 97 && c0 <= 122)) {
+    // 1. Any RFC 3986 scheme:// (http://, https://, ftp://, s3://, etc.) at exact original-string offset.
+    let k = offset + 1;
+    const maxSchemeEnd = Math.min(len - 3, offset + 24);
+    while (k < maxSchemeEnd) {
+      const ch = str.charCodeAt(k);
+      if ((ch >= 65 && ch <= 90) || (ch >= 97 && ch <= 122) || (ch >= 48 && ch <= 57) || ch === 43 || ch === 45 || ch === 46) {
+        k++;
+        continue;
+      }
+      break;
+    }
+    if (k + 2 < len && str.charCodeAt(k) === 58 && str.charCodeAt(k + 1) === 47 && str.charCodeAt(k + 2) === 47) {
+      return (k + 3) - offset;
+    }
+    // 2. Bare www.<host>.<tld> URL
+    if (offset + 5 < len
+      && (c0 | 32) === 119
+      && (str.charCodeAt(offset + 1) | 32) === 119
+      && (str.charCodeAt(offset + 2) | 32) === 119
+      && str.charCodeAt(offset + 3) === 46) {
+      const next = str.charCodeAt(offset + 4);
+      if ((next >= 65 && next <= 90) || (next >= 97 && next <= 122) || (next >= 48 && next <= 57)) {
+        return 4;
+      }
+    }
+  }
+
+  // 3. Scheme-relative //host.tld/... URL (requires a dot in the authority host so prose '// comment' is untouched)
+  if (offset + 4 < len && c0 === 47 && str.charCodeAt(offset + 1) === 47 && prev !== 58 && prev !== 47) {
+    const h0 = str.charCodeAt(offset + 2);
+    if ((h0 >= 65 && h0 <= 90) || (h0 >= 97 && h0 <= 122) || (h0 >= 48 && h0 <= 57)) {
+      let k = offset + 2;
+      let hasDot = false;
+      const maxHostEnd = Math.min(len, offset + 258);
+      while (k < maxHostEnd) {
+        const ch = str.charCodeAt(k);
+        if (ch === 46) { hasDot = true; k++; continue; }
+        if ((ch >= 65 && ch <= 90) || (ch >= 97 && ch <= 122) || (ch >= 48 && ch <= 57) || ch === 45 || ch === 58) { k++; continue; }
+        break;
+      }
+      if (hasDot && k > offset + 4) return 2;
+    }
   }
   return 0;
 }
@@ -236,13 +274,13 @@ function stripPrivateUrls(text) {
   const len = noLinks.length;
   let nextGt = noLinks.indexOf('>');
   while (i < len) {
-    if (noLinks[i] === '<' && matchHttpSchemeAt(noLinks, i + 1) > 0) {
+    if (noLinks[i] === '<' && matchUrlStartAt(noLinks, i + 1) > 0) {
       while (nextGt !== -1 && nextGt <= i) nextGt = noLinks.indexOf('>', nextGt + 1);
       if (nextGt !== -1) { i = nextGt + 1; continue; }
     }
-    const schemeLen = matchHttpSchemeAt(noLinks, i);
-    if (schemeLen > 0) {
-      let j = i + schemeLen;
+    const prefixLen = matchUrlStartAt(noLinks, i);
+    if (prefixLen > 0) {
+      let j = i + prefixLen;
       let openParens = 0, closeParens = 0, openBrackets = 0, closeBrackets = 0;
       // Consume all legal RFC 3986 URI characters (including apostrophe ') until whitespace, angle bracket, or double quote.
       while (j < len && !/[\s<>"]/.test(noLinks[j])) {

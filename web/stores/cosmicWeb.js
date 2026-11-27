@@ -48,6 +48,7 @@ let pulseSeq = 0;
 let bandSessionSeq = 0;
 let bootstrapInflight = null;
 let feedRetryInflight = null;
+let activeDetailInflight = null;
 let autoBriefTimer = null;
 const channelControllers = new Map();
 const channelSeq = new Map();
@@ -236,6 +237,7 @@ export const useCosmicWebStore = defineStore('cosmicWeb', {
     articleData: null,
     articleError: null,
     cleanArticleOpen: false,
+    readerSelectionMode: 'default',
     activeArticleUrl: null,
     activeArticleItemId: null,
     resolvedSourceItemId: null,
@@ -565,6 +567,7 @@ export const useCosmicWebStore = defineStore('cosmicWeb', {
         this.articleData = null;
         this.articleError = null;
         this.cleanArticleOpen = false;
+        this.readerSelectionMode = itemId ? 'item' : (nextUrl ? 'url' : 'default');
         this.activeArticleUrl = nextUrl;
         this.activeArticleItemId = nextItemId;
         this.readerItemId = nextItemId;
@@ -723,6 +726,7 @@ export const useCosmicWebStore = defineStore('cosmicWeb', {
         ? this.activeClusterDetail.items.find((it) => it && it.url === nextUrl)
         : null;
       const resolvedItemId = itemId || matched?.id || null;
+      this.readerSelectionMode = itemId ? 'item' : (nextUrl ? 'url' : 'default');
       this.readerItemId = resolvedItemId;
       this.activeArticleItemId = resolvedItemId;
       this.activeArticleUrl = nextUrl;
@@ -778,11 +782,13 @@ export const useCosmicWebStore = defineStore('cosmicWeb', {
       this.readerExpanded = false;
       this.readerClusterId = null;
       this.readerItemId = null;
+      this.readerSelectionMode = 'default';
       this.activeArticleItemId = null;
       this.activeArticleUrl = null;
       this.resolvedSourceItemId = null;
       this.unpinnedSourceWork = false;
       this.aiBriefSourceItemId = null;
+      activeDetailInflight = null;
     },
 
     async loadClusterDetail(clusterId) {
@@ -790,24 +796,46 @@ export const useCosmicWebStore = defineStore('cosmicWeb', {
       const { controller, seq, gen } = nextChannelRequest('detail');
       const capturedSourceRev = this.sourceSelectionRev;
       this.detailLoading = true;
-      try {
-        const data = await apiJson(`/api/cosmic-web/clusters/${encodeURIComponent(clusterId)}`, {
-          signal: controller.signal,
-        });
-        if (isStaleRequest('detail', seq, gen) || !this.readerOpen || this.readerClusterId !== clusterId) return;
-        const clusterObj = data.cluster || data;
-        this.activeClusterDetail = clusterObj;
-        if (data.aiBrief && !this.aiBriefData && this.sourceSelectionRev === capturedSourceRev) {
-          this.aiBriefData = data.aiBrief;
-          this.aiBriefSourceItemId = clusterObj?.items?.[0]?.id || null;
+      const task = (async () => {
+        try {
+          const data = await apiJson(`/api/cosmic-web/clusters/${encodeURIComponent(clusterId)}`, {
+            signal: controller.signal,
+          });
+          if (isStaleRequest('detail', seq, gen) || !this.readerOpen || this.readerClusterId !== clusterId) return;
+          const clusterObj = data.cluster || data;
+          this.activeClusterDetail = clusterObj;
+          // Establish the authoritative source pin BEFORE resolving activeDetailInflight so deferred
+          // user actions (perspective switches, follow-ups, clean article) wake up with the exact pin.
+          if (this.sourceSelectionRev === capturedSourceRev) {
+            if (this.readerSelectionMode === 'url' && this.activeArticleUrl && Array.isArray(clusterObj?.items)) {
+              const matched = clusterObj.items.find((it) => it && it.url === this.activeArticleUrl);
+              const freshId = matched?.id || null;
+              this.activeArticleItemId = freshId;
+              this.readerItemId = freshId;
+              this.resolvedSourceItemId = freshId;
+            } else if (this.readerSelectionMode === 'item') {
+              this.resolvedSourceItemId = this.activeArticleItemId || null;
+            } else {
+              this.resolvedSourceItemId = clusterObj?.items?.[0]?.id || null;
+            }
+          }
+          if (data.aiBrief && !this.aiBriefData && !this.aiBriefLoading && this.sourceSelectionRev === capturedSourceRev) {
+            this.aiBriefData = data.aiBrief;
+            this.aiBriefSourceItemId = clusterObj?.items?.[0]?.id || null;
+          }
+        } catch (err) {
+          if (isAbortError(err) || isStaleRequest('detail', seq, gen)) return;
+        } finally {
+          if (!isStaleRequest('detail', seq, gen)) {
+            this.detailLoading = false;
+          }
+          if (activeDetailInflight && activeDetailInflight.promise === task) {
+            activeDetailInflight = null;
+          }
         }
-      } catch (err) {
-        if (isAbortError(err) || isStaleRequest('detail', seq, gen)) return;
-      } finally {
-        if (!isStaleRequest('detail', seq, gen)) {
-          this.detailLoading = false;
-        }
-      }
+      })();
+      activeDetailInflight = { clusterId, promise: task, gen };
+      return task;
     },
 
     async loadArticle(clusterId, { force = false, url = null, itemId = null } = {}) {
@@ -820,20 +848,26 @@ export const useCosmicWebStore = defineStore('cosmicWeb', {
         && this.readerClusterId === clusterId
         && this.sourceSelectionRev === capturedSourceRev
       );
-      // Pin to the same resolved item ID as brief/follow-up without mutating explicit selection intent.
-      const effectiveItemId = itemId || this.activeArticleItemId || this.resolvedSourceItemId || null;
-      const effectiveUrl = effectiveItemId ? null : (url || this.activeArticleUrl || null);
-      if (!effectiveItemId) this.unpinnedSourceWork = true;
       this.articleLoading = true;
       this.articleError = null;
-
-      const params = new URLSearchParams();
-      if (force) params.set('force', '1');
-      if (effectiveItemId) params.set('itemId', effectiveItemId);
-      else if (effectiveUrl) params.set('url', effectiveUrl);
-      const qs = params.toString();
-
       try {
+        // Defer until in-flight first-open detail establishes the authoritative source pin.
+        if (!itemId && !this.activeArticleItemId && !this.resolvedSourceItemId
+          && activeDetailInflight && activeDetailInflight.clusterId === clusterId && activeDetailInflight.gen === gen) {
+          await activeDetailInflight.promise;
+          if (!isCurrentSource()) return;
+        }
+        // Pin to the same resolved item ID as brief/follow-up without mutating explicit selection intent.
+        const effectiveItemId = itemId || this.activeArticleItemId || this.resolvedSourceItemId || null;
+        const effectiveUrl = effectiveItemId ? null : (url || this.activeArticleUrl || null);
+        if (!effectiveItemId) this.unpinnedSourceWork = true;
+
+        const params = new URLSearchParams();
+        if (force) params.set('force', '1');
+        if (effectiveItemId) params.set('itemId', effectiveItemId);
+        else if (effectiveUrl) params.set('url', effectiveUrl);
+        const qs = params.toString();
+
         const data = await apiJson(
           `/api/cosmic-web/clusters/${encodeURIComponent(clusterId)}/article${qs ? `?${qs}` : ''}`,
           { signal: controller.signal },
@@ -866,22 +900,29 @@ export const useCosmicWebStore = defineStore('cosmicWeb', {
         && this.readerClusterId === clusterId
         && this.sourceSelectionRev === capturedSourceRev
       );
-      const effectiveUrl = url || this.activeArticleUrl || undefined;
-      const matchedByUrl = !itemId && !this.activeArticleItemId && !this.readerItemId && !this.resolvedSourceItemId && effectiveUrl
-        && Array.isArray(this.activeClusterDetail?.items)
-        ? this.activeClusterDetail.items.find((it) => it && it.url === effectiveUrl)
-        : null;
-      const effectiveItemId = itemId || this.activeArticleItemId || this.readerItemId || this.resolvedSourceItemId || matchedByUrl?.id || undefined;
-      if (!effectiveItemId) this.unpinnedSourceWork = true;
       this.aiBriefLoading = true;
       this.aiBriefError = null;
       try {
+        // Defer explicit brief generation (e.g. user switches perspective or Agent during slow first-open detail load)
+        // until detail pins the source item ID, preserving the user's exact perspective and Agent choice!
+        if (!itemId && !this.activeArticleItemId && !this.resolvedSourceItemId
+          && activeDetailInflight && activeDetailInflight.clusterId === clusterId && activeDetailInflight.gen === gen) {
+          await activeDetailInflight.promise;
+          if (!isCurrentSource()) return;
+        }
+        const effectiveUrl = url || this.activeArticleUrl || undefined;
+        const matchedByUrl = !itemId && !this.activeArticleItemId && !this.readerItemId && !this.resolvedSourceItemId && effectiveUrl
+          && Array.isArray(this.activeClusterDetail?.items)
+          ? this.activeClusterDetail.items.find((it) => it && it.url === effectiveUrl)
+          : null;
+        const effectiveItemId = itemId || this.activeArticleItemId || this.readerItemId || this.resolvedSourceItemId || matchedByUrl?.id || undefined;
+        if (!effectiveItemId) this.unpinnedSourceWork = true;
         const body = {
           mode,
           perspective: perspective || this.prefs.defaultPerspective || 'balanced',
           language: currentUiLanguage(),
           force: Boolean(force),
-          research: Boolean(research),
+          research: Boolean(research) && !this.activeClusterDetail?.isPrivateSource,
         };
         if (effectiveItemId) body.itemId = effectiveItemId;
         else if (effectiveUrl) body.url = effectiveUrl;
@@ -922,16 +963,22 @@ export const useCosmicWebStore = defineStore('cosmicWeb', {
         && this.readerClusterId === clusterId
         && this.sourceSelectionRev === capturedSourceRev
       );
-      const effectiveUrl = url || this.activeArticleUrl || undefined;
-      const matchedByUrl = !itemId && !this.activeArticleItemId && !this.readerItemId && !this.resolvedSourceItemId && effectiveUrl
-        && Array.isArray(this.activeClusterDetail?.items)
-        ? this.activeClusterDetail.items.find((it) => it && it.url === effectiveUrl)
-        : null;
-      const effectiveItemId = itemId || this.activeArticleItemId || this.readerItemId || this.resolvedSourceItemId || matchedByUrl?.id || undefined;
-      if (!effectiveItemId) this.unpinnedSourceWork = true;
       this.followUpLoading = true;
       this.followUpError = null;
       try {
+        // Defer submitted follow-ups until first-open detail establishes the source pin so user questions never vanish!
+        if (!itemId && !this.activeArticleItemId && !this.resolvedSourceItemId
+          && activeDetailInflight && activeDetailInflight.clusterId === clusterId && activeDetailInflight.gen === gen) {
+          await activeDetailInflight.promise;
+          if (!isCurrent()) return null;
+        }
+        const effectiveUrl = url || this.activeArticleUrl || undefined;
+        const matchedByUrl = !itemId && !this.activeArticleItemId && !this.readerItemId && !this.resolvedSourceItemId && effectiveUrl
+          && Array.isArray(this.activeClusterDetail?.items)
+          ? this.activeClusterDetail.items.find((it) => it && it.url === effectiveUrl)
+          : null;
+        const effectiveItemId = itemId || this.activeArticleItemId || this.readerItemId || this.resolvedSourceItemId || matchedByUrl?.id || undefined;
+        if (!effectiveItemId) this.unpinnedSourceWork = true;
         const body = {
           question: q,
           perspective: perspective || this.prefs.defaultPerspective || 'balanced',
@@ -1306,6 +1353,7 @@ export const useCosmicWebStore = defineStore('cosmicWeb', {
       this.activeInWebBand = false;
       bootstrapInflight = null;
       feedRetryInflight = null;
+      activeDetailInflight = null;
       abortAllChannels();
       this.loading = false;
       this.refreshing = false;
@@ -1339,6 +1387,7 @@ export const useCosmicWebStore = defineStore('cosmicWeb', {
       bandSessionSeq += 1;
       bootstrapInflight = null;
       feedRetryInflight = null;
+      activeDetailInflight = null;
       abortAllChannels();
       channelSeq.clear();
       this.$reset();

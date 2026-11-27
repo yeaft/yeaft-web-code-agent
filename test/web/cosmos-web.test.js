@@ -1842,12 +1842,25 @@ describe('Cosmic Web — Pinia store & interactive overlay', () => {
     expect(webStore.articleData?.markdown).toBe('Fresh Source 1 article.');
     globalThis.fetch = prevFetch;
 
-    // Round 8 Blocker #2 (gated first-open): user triggers unpinned generateAiBrief AND askFollowUp while first-open detail is still pending;
-    // when detail resolves and pins Source B ('item-b'), all unpinned Source A results/in-flight work MUST be invalidated and regenerated for 'item-b'!
+    // Round 8 & 9 Blocker #2 (gated first-open with REAL reader UI controls):
+    // While first-open detail for c-first-open is pending (reader renders from feed summary),
+    // user clicks a non-default perspective pill ('investing') AND submits a follow-up via the reader modal composer.
+    // Both explicit actions MUST defer until detail establishes the 'item-b' pin — NEVER fire unpinned,
+    // NEVER drop the submitted question, and NEVER overwrite the user's chosen perspective/Agent with defaults!
     const prevFetchFirst = globalThis.fetch;
     let resolveFirstDetail;
-    let resolveUnpinnedFollowUp;
     const firstOpenBriefBodies = [];
+    const firstOpenFollowUpBodies = [];
+    webStore.feedItems = [
+      { id: 'c-first-open', domainId: 'ai', headline: 'First Open Feed Summary', summaryExcerpt: 'Feed summary while detail loads' },
+    ];
+    await wrapper.setProps({
+      agents: [
+        { id: 'v2-agent', name: 'Saturn V2', online: true, capabilities: ['cosmic_web_briefing', 'cosmic_web_research', 'cosmic_web_follow_up', 'cosmic_web_radar', 'cosmic_web_cancel'] },
+      ],
+      agentToPlanet: { 'v2-agent': 'saturn' },
+    });
+    await flushPromises();
     globalThis.fetch = vi.fn((url, opts) => {
       const u = String(url);
       const jsonRes = (body) => ({
@@ -1877,7 +1890,7 @@ describe('Cosmic Web — Pinia store & interactive overlay', () => {
         const b = JSON.parse(opts.body);
         firstOpenBriefBodies.push(b);
         return Promise.resolve(jsonRes({
-          tldr: b.itemId ? `Pinned brief for ${b.itemId}` : 'Unpinned brief for old default Source A',
+          tldr: `Pinned ${b.perspective} brief for ${b.itemId || 'UNPINNED'}`,
           sections: [{ heading: 'Body', body: 'Details' }],
           bullets: ['b1', 'b2'],
           impact: 'imp',
@@ -1888,33 +1901,52 @@ describe('Cosmic Web — Pinia store & interactive overlay', () => {
         }));
       }
       if (u === '/api/cosmic-web/clusters/c-first-open/follow-up') {
-        return new Promise((resolve) => {
-          resolveUnpinnedFollowUp = () => resolve(jsonRes({
-            question: 'Early Q?', answer: 'Unpinned Source A answer', citations: [], media: [], searchCount: 0, evidenceCount: 0, researched: false,
-          }));
-        });
+        const b = JSON.parse(opts.body);
+        firstOpenFollowUpBodies.push(b);
+        return Promise.resolve(jsonRes({
+          question: b.question, answer: `Pinned answer for ${b.itemId || 'UNPINNED'}`, citations: [], media: [], searchCount: 0, evidenceCount: 0, researched: false,
+        }));
       }
       return prevFetchFirst(url, opts);
     });
     const firstOpenPromise = webStore.openClusterReader('c-first-open', { expanded: true });
-    // Before detail resolves (resolvedSourceItemId is still null), user fires unpinned brief (which settles early!) AND unpinned follow-up (still pending!)
-    await webStore.generateAiBrief('c-first-open', { force: true });
-    expect(webStore.aiBriefData?.tldr).toBe('Unpinned brief for old default Source A');
-    expect(webStore.aiBriefSourceItemId).toBeNull();
-    const pendingUnpinnedFu = webStore.askFollowUp('c-first-open', 'Early Q?');
-    // Now first-open detail resolves and pins 'item-b' -> MUST clear unpinned brief, cancel/fence pending unpinned follow-up, and regenerate pinned brief for 'item-b'!
+    await flushPromises();
+    // User interacts with real reader modal controls BEFORE detail finishes loading:
+    // 1. Click non-default perspective pill ('investing', 4th button in perspective pills)
+    const modalPerspBtns = wrapper.findAll('.cw-reader-modal .cw-persp-btn');
+    expect(modalPerspBtns.length).toBeGreaterThanOrEqual(4);
+    await modalPerspBtns[3].trigger('click');
+    // 2. Type and submit a follow-up question in the modal composer
+    const modalInput = wrapper.find('.cw-reader-modal .cw-composer-input');
+    await modalInput.setValue('What about Q4 margins?');
+    const modalAskBtn = wrapper.find('.cw-reader-modal .cw-composer-btn[data-action="followup"], .cw-reader-modal .cw-composer-input');
+    await modalAskBtn.trigger('keydown.enter');
+    await flushPromises();
+    // Neither brief nor follow-up should have fired unpinned before detail resolves!
+    expect(firstOpenBriefBodies).toHaveLength(0);
+    expect(firstOpenFollowUpBodies).toHaveLength(0);
+    // Now first-open detail resolves and pins 'item-b' -> BOTH deferred user actions execute with 'item-b' + 'investing' + 'v2-agent'!
     resolveFirstDetail();
     await firstOpenPromise;
     await flushPromises();
-    resolveUnpinnedFollowUp();
-    await pendingUnpinnedFu;
-    await flushPromises();
     expect(webStore.resolvedSourceItemId).toBe('item-b');
-    expect(webStore.aiBriefSourceItemId).toBe('item-b');
-    expect(webStore.aiBriefData?.tldr).toBe('Pinned brief for item-b');
-    expect(webStore.followUpThread).toEqual([]);
-    expect(firstOpenBriefBodies.at(-1).itemId).toBe('item-b');
+    expect(firstOpenBriefBodies).toHaveLength(1);
+    expect(firstOpenBriefBodies[0]).toMatchObject({ itemId: 'item-b', perspective: 'investing', agentId: 'v2-agent' });
+    expect(webStore.aiBriefData?.tldr).toBe('Pinned investing brief for item-b');
+    expect(firstOpenFollowUpBodies).toHaveLength(1);
+    expect(firstOpenFollowUpBodies[0]).toMatchObject({ itemId: 'item-b', question: 'What about Q4 margins?', perspective: 'investing', agentId: 'v2-agent' });
+    expect(webStore.followUpThread).toHaveLength(1);
+    expect(webStore.followUpThread[0].question).toBe('What about Q4 margins?');
+    expect(webStore.followUpThread[0].answer).toBe('Pinned answer for item-b');
+    // Restore original v1-only prop & fetch before remaining assertions
     globalThis.fetch = prevFetchFirst;
+    await wrapper.setProps({
+      agents: [
+        { id: 'v1-only', name: 'Legacy Earth', online: true, capabilities: ['cosmic_web_briefing'] },
+      ],
+      agentToPlanet: { 'v1-only': 'earth' },
+    });
+    await flushPromises();
 
     // Restore original items before remaining assertions
     detailItems = [
