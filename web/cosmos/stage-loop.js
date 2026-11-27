@@ -112,8 +112,11 @@ export function stepCosmosFrame(now, ctx) {
     targetInspectPitch: 0,
   });
 
-  const braking = Boolean(ui.hoverPlanetId || ui.dragActive || ui.drawerOpen || pf.planetId);
-  const targetBrake = pf.planetId ? 0.14 : (braking ? 0.08 : 1.0);
+  // Only brake orbital motion while dragging an agent onto a planet or hovering a moving
+  // planet in unfocused Solar System view. Focusing a planet or opening a conversation drawer
+  // keeps all celestial bodies orbiting at normal speed while the camera tracks the focused planet.
+  const braking = Boolean(ui.dragActive || (!pf.planetId && ui.hoverPlanetId));
+  const targetBrake = braking ? 0.08 : 1.0;
   if (typeof anim.orbitBrake !== 'number') anim.orbitBrake = 1.0;
   anim.orbitBrake += (targetBrake - anim.orbitBrake) * Math.min(1, dt * 6.0);
 
@@ -218,7 +221,7 @@ export function stepCosmosFrame(now, ctx) {
       const wp = keplerPos(focusP, anim.time);
       const rx = wp.x * yawCos - wp.z * yawSin;
       const rz = wp.x * yawSin + wp.z * yawCos;
-      const persp = 1.0 / (1.0 - rz * 0.26);
+      const persp = 1.0 / (1.0 - Math.max(-0.85, Math.min(0.85, rz * 0.26)));
       focusShiftX = -rx * span * persp * pf.blend;
       focusShiftY = -(rz * span * tilt + wp.y * span) * persp * pf.blend;
     }
