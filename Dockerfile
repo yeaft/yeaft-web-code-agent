@@ -15,7 +15,7 @@ WORKDIR /app/web
 RUN npm install
 
 # Copy web source files
-COPY web/*.js web/*.css web/*.html ./
+COPY web/*.js web/*.css web/*.html web/*.webmanifest ./
 COPY web/assets ./assets/
 COPY web/components ./components/
 COPY web/cosmos ./cosmos/

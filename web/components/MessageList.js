@@ -56,6 +56,9 @@ import { resolveLongResponseOrigin } from '../utils/response-origin-navigation.j
 // and the first chunk where no avatar is shown; user-tested as
 // acceptable in v0.1.757.
 
+// Production builds inject a content-hashed URL (web/build.js); dev serves web/ as-is.
+const WELCOME_LOGO_URL = typeof BRAND_ICON_URL === 'undefined' ? 'assets/brand/icon.svg' : BRAND_ICON_URL;
+
 export default {
   name: 'MessageList',
   components: { AgentInstaller, MessageItem, AssistantTurn, VpTurnBlock, VpSpeakerHeader, ReflectionCard, SubAgentCard, UserTurnBlock, VirtualTranscript, MessageBlock, ConcurrentUserTurns, SessionLaneWait },
@@ -73,13 +76,7 @@ export default {
       <div v-if="!store.activeConversationId" class="welcome-screen">
         <div class="welcome-content">
           <div class="welcome-logo">
-            <svg viewBox="0 0 48 48" width="64" height="64" aria-hidden="true">
-              <rect width="48" height="48" rx="12" fill="var(--accent)"/>
-              <path d="M24 34V19M24 19L15 11M24 19L33 11" stroke="var(--accent-fg)" stroke-width="4" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
-              <circle cx="15" cy="11" r="3.5" fill="var(--accent-fg)"/>
-              <circle cx="33" cy="11" r="3.5" fill="var(--accent-fg)"/>
-              <circle cx="24" cy="34" r="3.5" fill="var(--accent-fg)"/>
-            </svg>
+            <img :src="welcomeLogoUrl" alt="" width="64" height="64" draggable="false">
           </div>
           <h1 class="welcome-title">{{ onlineAgents.length ? 'Yeaft' : $t('welcome.setupTitle') }}</h1>
           <p class="welcome-subtitle">{{ $t(onlineAgents.length ? 'welcome.subtitle' : 'welcome.setupDesc') }}</p>
@@ -1970,6 +1967,7 @@ export default {
     return {
       store,
       containerRef,
+      welcomeLogoUrl: WELCOME_LOGO_URL,
       virtualTranscriptRef,
       flashMsgId,
       jumpToOrigin,

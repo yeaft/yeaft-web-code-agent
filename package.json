@@ -27,6 +27,7 @@
     "release:guard": "npm run check:server-agent-syntax && npm run check:agent-package-bin && npm run smoke:server-startup",
     "test:browser-runtime": "node scripts/test-browser-runtime-probe.mjs",
     "avatars": "node scripts/generate-avatars.mjs",
+    "brand-icons": "node scripts/generate-brand-icons.mjs",
     "start:server": "npm run start --workspace=server",
     "start:server:prod": "cross-env SERVE_DIST=true npm run start --workspace=server",
     "start:agent": "npm run start --workspace=agent",

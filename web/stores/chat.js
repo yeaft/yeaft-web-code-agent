@@ -18,6 +18,7 @@ import {
 } from './helpers/work-center-browser-state.js';
 import { findCatalogModel, normalizeModelEffort } from '../utils/modelRefs.js';
 import { setLocale, getLocale } from '../utils/i18n.js';
+import { applyDocumentTheme } from '../utils/document-theme.js';
 import { agentSupportsYeaftPlugins } from '../utils/yeaft-plugin-capability.js';
 import { agentSupportsYeaftManagedSkills } from '../utils/yeaft-managed-skill-capability.js';
 
@@ -9265,8 +9266,7 @@ export const useChatStore = defineStore('chat', {
       // User made an explicit choice — stop following the system from now on.
       this.themeFollowSystem = false;
       localStorage.setItem('theme', this.theme);
-      document.documentElement.setAttribute('data-theme', this.theme);
-      document.documentElement.classList.toggle('light', this.theme === 'light');
+      applyDocumentTheme(this.theme);
     },
 
     setWaitingAnimation(choice) {
@@ -9275,16 +9275,14 @@ export const useChatStore = defineStore('chat', {
     },
 
     initTheme() {
-      document.documentElement.setAttribute('data-theme', this.theme);
-      document.documentElement.classList.toggle('light', this.theme === 'light');
+      applyDocumentTheme(this.theme);
       // If the user has never explicitly picked a theme, follow the OS.
       if (this.themeFollowSystem && typeof window !== 'undefined' && window.matchMedia) {
         const mql = window.matchMedia('(prefers-color-scheme: dark)');
         const apply = (e) => {
           if (!this.themeFollowSystem) return;
           this.theme = e.matches ? 'dark' : 'light';
-          document.documentElement.setAttribute('data-theme', this.theme);
-          document.documentElement.classList.toggle('light', this.theme === 'light');
+          applyDocumentTheme(this.theme);
         };
         if (mql.addEventListener) mql.addEventListener('change', apply);
         else if (mql.addListener) mql.addListener(apply);
