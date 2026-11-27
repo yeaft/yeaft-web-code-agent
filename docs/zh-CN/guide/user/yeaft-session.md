@@ -112,7 +112,7 @@ Fork 和合并后的 Session 使用可重建的文本及工具历史继续对话
 
 你仍可要求 VP“先调查并给出方案，不要修改代码”，通过普通回复讨论目标、约束、风险和验证方法。当前没有单独的 Plan Mode 开关；这类对话要求不等于文件系统只读沙箱。
 
-旧 Session 中的 checklist 仍可回放；Claude Code / Copilot CLI 自身的工具行为不受影响。需要跨 turn 的持久任务状态与验收时，使用 [Work Center](./work-center.md)。用户自定义的 Project 指令、VP soul 和 `planInstruction` 数据不会被自动改写；如果自定义指令仍强制要求调用旧工具，应自行更新。
+旧 Session 中的 checklist 仍可回放；Claude Code / Copilot CLI 自身的工具行为不受影响。用户自定义的 Project 指令、VP soul 和 `planInstruction` 数据不会被自动改写；如果自定义指令仍强制要求调用旧工具，应自行更新。
 
 ## Handoff 与 sub-agent
 
@@ -191,19 +191,12 @@ VP 调用 `AskUser` 时会出现交互卡片。切换 Session 后返回，只要
 
 Dream/H2-AMS 已从当前 runtime 退役。原生 turn 只使用当前 Session transcript 的有界 history window；旧 memory 文件和 index 留在磁盘，但不会读取、迁移、同步、召回或注入。历史真实消息与常规 debug 记录保留，turn 后 compact 作为独立 history-window 能力继续存在。旧 enable/manual Dream 命令只返回 disabled，UI 不再提供 Dream debug tab 或设置控件。
 
-## 将持久工作移到 Work Center
-
-当目标需要角色接力、等待、重试、审查或跨越当前 turn 的执行时，在 Session composer 使用 **Create WorkItem**。Runtime 会写入来源 Session identity，并创建 Agent-level WorkItem；之后由 Work Center 拥有其合同、Coordinator conversation、Action graph、Runs 和 recovery。
-
-参见 [Work Center](./work-center.md)。
-
 ## 需要记住的边界
 
 - Yeaft 只有 Session，不存在原生 chat/group 两种 mode。
 - VP 的 model 设置当前是 `primary` 或 `fast` hint；Session 可以 override 精确 provider/model 与 effort。
 - 原生工具 registry 由 engine 共享并按 policy 过滤；工具可用性不是另一种 mode switch。
 - Project 负责组织和有边界的 context，不是 repository、worktree 或第二个 memory owner。
-- Work Center 是 Agent-level durable execution，不是另一个 Session。
 
 ## 相关页面
 

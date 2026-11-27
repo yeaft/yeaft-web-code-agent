@@ -1,5 +1,4 @@
 export const WORKBENCH_ROUTE_PROTOCOL = 1;
-export const WORK_CENTER_WORKBENCH_PROTOCOL = 1;
 export const BROWSER_RUNTIME_PROTOCOL = 1;
 export const BROWSER_RUNTIME_SETUP_PROTOCOL = 1;
 
@@ -12,9 +11,6 @@ export function applyClientHello(client, message) {
   if (message.plaintextOk === true) client.encryptOutbound = false;
   if (message.workbenchRouteProtocol === WORKBENCH_ROUTE_PROTOCOL) {
     client.workbenchRouteProtocol = WORKBENCH_ROUTE_PROTOCOL;
-  }
-  if (message.workCenterWorkbenchProtocol === WORK_CENTER_WORKBENCH_PROTOCOL) {
-    client.workCenterWorkbenchProtocol = WORK_CENTER_WORKBENCH_PROTOCOL;
   }
   if (message.browserRuntimeProtocol === BROWSER_RUNTIME_PROTOCOL) {
     client.browserRuntimeProtocol = BROWSER_RUNTIME_PROTOCOL;

@@ -1,4 +1,5 @@
 import { randomUUID } from 'crypto';
+import { withoutRetiredCapabilities } from '../retired-features.js';
 import { CONFIG } from '../config.js';
 import {
   sessionDb,
@@ -528,7 +529,7 @@ export async function handleClientConversation(clientId, client, msg, checkAgent
             agentId: msg.agentId,
             agentName: agent.name,
             workDir: agent.workDir,
-            capabilities: agent.capabilities || ['terminal', 'file_editor', 'background_tasks'],
+            capabilities: withoutRetiredCapabilities(agent.capabilities || ['terminal', 'file_editor', 'background_tasks']),
             ...(agent.capabilityMetadataProvided === true ? { capabilityMetadataProvided: true } : {}),
             version: agent.version || null,
             conversations: filteredConvs,

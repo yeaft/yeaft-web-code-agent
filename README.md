@@ -8,7 +8,7 @@
 
 [English](README.md) | [中文](README.zh-CN.md) | [Documentation](https://yeaft.github.io/yeaft-web-code-agent/)
 
-Yeaft is a web control plane for code agents running on your own machines. One browser can connect to multiple Agents, open Claude Code or GitHub Copilot CLI conversations, and run Yeaft's native multi-provider engine with durable Sessions, selectable scenes, scoped history, Projects, and Work Center.
+Yeaft is a web control plane for code agents running on your own machines. One browser can connect to multiple Agents, open Claude Code or GitHub Copilot CLI conversations, and run Yeaft's native multi-provider engine with durable Sessions, selectable scenes, scoped history, and Projects.
 
 **Try the hosted service:** [cc.yeaft.com](https://cc.yeaft.com)
 
@@ -16,11 +16,10 @@ Yeaft is a web control plane for code agents running on your own machines. One b
 
 ## Why Yeaft
 
-- **Keep execution near the code.** Shell commands, files, Git operations, providers, credentials, Session data, and Work Center state stay on the connected Agent machine. The server authenticates users and relays browser-to-Agent traffic.
+- **Keep execution near the code.** Shell commands, files, Git operations, providers, credentials, and Session data stay on the connected Agent machine. The server authenticates users and relays browser-to-Agent traffic.
 - **Use the right runtime for each task.** Claude Code CLI, GitHub Copilot CLI over ACP, and the native Yeaft engine share one Web UI without pretending they have identical behavior.
 - **One Session, one conversation.** Choose the working scene without changing the assistant or splitting the history. Independent turns can run in parallel.
 - **Carry context deliberately.** Native Sessions use a bounded window of their own persisted turns; Project instructions remain separate and sibling transcripts are not injected automatically.
-- **Move long work out of a chat turn.** Work Center persists a goal as a WorkItem, lets an AI planner create a validated Action graph, assigns Actions to VPs, records Runs and tool evidence, and can continue after a browser disconnect or Agent restart.
 
 ## Product model
 
@@ -30,7 +29,6 @@ Yeaft is a web control plane for code agents running on your own machines. One b
 | **Session** | A durable native Yeaft conversation with one timeline, a scene, a working directory, model override, and announcement. |
 | **VP (Virtual Person)** | Compatibility role for old Sessions and existing task flows. New chat does not require choosing a VP. |
 | **Project** | A browser-visible grouping of native Sessions. It carries a shared Project instruction without merging or automatically injecting sibling Session transcripts. |
-| **Work Center** | An Agent-level durable task system. A WorkItem has a contract and conversation; planned Actions are executed as fenced Runs with status, evidence, retries, human input, and review outcomes. |
 
 Some internal wire types and storage paths retain historical names such as `group`, `unify_*`, or `claude_output` for compatibility. They are not current product terminology.
 
@@ -40,7 +38,7 @@ Some internal wire types and storage paths retain historical names such as `grou
 | --- | --- | --- |
 | **Claude Code** | One Claude Code CLI process per conversation; Claude Code tools, skills, MCP, compact/clear, sub-agent events, and resume behavior | Requires a locally installed and authenticated Claude Code CLI |
 | **GitHub Copilot** | One `copilot --acp` process per conversation; Copilot model catalog and explicit tool-permission prompts | Requires the Copilot CLI and an eligible GitHub Copilot account |
-| **Yeaft Code Agent** | Native engine inside `yeaft-agent`; Session scenes, 33 built-in tools, provider routing, bounded Session history, Projects, sub-agents, and Work Center handoff | Does not emulate every Claude Code or Copilot CLI command |
+| **Yeaft Code Agent** | Native engine inside `yeaft-agent`; Session scenes, built-in tools, provider routing, bounded Session history, Projects, and sub-agents | Does not emulate every Claude Code or Copilot CLI command |
 
 The Web UI also includes a terminal, Git status/diff, file browser/editor, port proxy, split-screen CLI conversations, an Expert Panel for Claude Code conversations, usage administration, light/dark themes, and English/Chinese localization.
 
@@ -70,37 +68,8 @@ Markdown messages render LaTeX formulas locally with KaTeX: use `$E=mc^2$` or `\
 - Native adapters support Anthropic Messages, OpenAI Responses, and Google Gemini native GenerateContent (not the OpenAI-compatible endpoint).
 - Google Gemini quick setup: `yeaft-agent llm use gemini --api-key-env GEMINI_API_KEY --model gemini-4-hydrogen --fast gemini-4-carbon`. Set the key in your shell first; it is saved as `apiKey` in the selected instance config. In LLM Settings, select **Google Gemini (native API)**; the connection test lists models without a generation request.
 - A configured provider can use a static API key or a dynamic GitHub Copilot credential provider. Per-model protocol, context window, output limit, and reasoning-effort metadata are supported.
-- The current native registry exposes **33 built-in tools** for files/patches, shell and background jobs, Git worktrees, search, Web access, images, notebooks, planning, persistent work creation, and sub-agent/VP orchestration. Skills and MCP can extend that registry.
+- The current native registry exposes **built-in tools** for files/patches, shell and background jobs, Git worktrees, search, Web access, images, notebooks, planning, and sub-agent/VP orchestration. Skills and MCP can extend that registry.
 - Provider context uses a bounded, disposable window of the current Session’s persisted turns. Post-turn compact remains a separate history-window optimization; it does not reactivate Dream or H2-AMS memory.
-
-### Digital Person (experimental)
-
-The sidebar **Digital Person** entry opens an independent message/input page with **Think**, explicit **Dream**, pause/resume, cancellation, and paginated application-level **Trace**. It has no Session list and creates neither a hidden Session nor a WorkItem. **Keep sending messages and attachments during execution**: related additions enter the current execution; separate questions can receive separate replies linked to their messages. Delivery states distinguish queued inputs, inputs handed to execution, and unconsumed messages retained after stopping. Sending while paused does not resume execution, and cancelling does not replay pending messages. Trace shows explicit inputs, outputs and revisions, not a provider's hidden reasoning. Growing replies do not chase the bottom; scroll freely through history or long replies. See [live input and reply attribution](docs/design/person-live-input.md).
-
-**Outputs** opens a lightweight, read-only preview beside the conversation: view delivered Markdown, images, text/code and isolated static HTML, download PDFs, or preview a web link with an always-available external-open action. The reader shows only opened file/web tabs, never thought/task/memory tabs; delivery history is available on demand. Resize the panel, expand it to full screen, or close it without deleting results or stopping tasks; narrow screens use a full-screen preview. Files are explicitly delivered through `Output.publish`, snapshotted in owner-scoped SQLite, and remain available after source changes or restart. There is no directory tree, editor, Terminal or Git in this view. See [output preview and delivery boundaries](docs/person-outputs.md).
-
-Try it on a **new, isolated Agent instance**: SQLite is the only storage backend and needs no separate database service. SQLite at `<yeaftDir>/person/person.db` owns messages, concepts, episodes, state and Trace; `<yeaftDir>/person/recall.db` is a separate, rebuildable search index, not another memory authority. Agent-managed workers share the Agent lifecycle; exiting stops computation, not persistent memory. Data is isolated by authenticated owner and deployment namespace. Scenes are views/scopes within that authority, not separate databases. Configure a native API model in the instance's `<yeaftDir>/config.json` with `yeaft-agent llm setup --config <path>`; keep credentials out of the browser and chat.
-
-Recall on SQLite combines Chinese/English keyword FTS5 with local vector cosine ranking and RRF. The default embedding model is **multilingual-e5-small**, pinned q8 ONNX via `@huggingface/transformers` on CPU, cached in `<yeaftDir>/person/models`. Only the first explicit, nonempty Recall may download model files; opening the page, ordinary startup and empty Recall do not. Use `YEAFT_PERSON_EMBEDDING=off` to disable embeddings, or `YEAFT_PERSON_EMBEDDING_DOWNLOAD=0` to prohibit downloads (an already cached model can still run). Embedding inference and search stay local; model-file downloads contact Hugging Face, and the cognitive LLM still uses the configured provider, which may be remote. Missing model/index support reports fallback metadata, not fake semantic results. Vector search is bounded exact scanning, not ANN or a million-record performance promise; Trace is not vector-indexed. Node 24 is recommended for full FTS5/hybrid recall. Early supported Node 22 builds without FTS5 keep SQLite authority and literal recall, report `FTS_UNAVAILABLE`, and do not start embeddings. Model artifacts are size/SHA-256 verified and atomically published; interrupted downloads are retried on a later explicit Recall. Ignored `.partial` files may remain after a forced process exit.
-
-**Storage is instance-local only.** The service always uses SQLite under the instance's `yeaftDir`; storage-backend selection and external database configuration are no longer supported. Existing external database data is neither migrated nor deleted; a new local SQLite database is not a migration result. Back up `person.db` consistently, including uncheckpointed WAL writes rather than copying only the active main file. Environment changes on an existing service require an explicitly authorized restart; this feature does not restart it automatically.
-
-The feature remains **manual only**: no idle timer, event Connector, VP delegation or Rust desktop body yet. Its default capability catalog includes **14 real Session-native tools** for file reading/writing/editing, search, directories, patches, Git inspection, foreground Bash, Web search/fetch, the existing Skill library and notebooks. They reuse native schemas and executors on the Agent's configured work directory; they are host operations, **not a filesystem or shell sandbox**. Tools are discovered/prepared within the existing bounded capability layers rather than inserting every full schema into every prompt. No Session TaskManager, background Bash or Session-specific orchestration is registered. Cancellation joins local execution but does not undo completed effects. The directory also has four cognitive methods plus a foundational `Capability.create`: it writes parameterized JSON-to-JSON JavaScript, runs supplied tests in limited QuickJS/WASM workers, and atomically publishes passing private `Script.*` versions for discovery and reuse after restart. Failed tests do not publish; generated scripts still get no host files, network, Shell or credentials. A published version remains durable independently of the later cognitive commit; passing self-authored tests is not proof of general correctness. Each activity allows at most 16 model calls / 120 seconds by default; the Person may choose subsequent models from up to eight configured native models. Dynamic effort requires `YEAFT_THINKING_V1=1` and supported model metadata. Persistent memory and bounded model context remain distinct. See the [design and implementation boundary](docs/notes/2026-09-24-digital-person-design.md#本轮实现边界显式认知首版) for transaction, retrieval and remaining-work details.
-
-### Work Center
-
-![Work Center showing a persistent WorkItem, its conversation, and Action graph](docs/images/work-center.png)
-
-Work Center is for goals that must survive beyond one interactive turn. Its current implementation provides:
-
-- a durable WorkItem contract (`goal`, acceptance criteria, working directory, attachments, and memory-reuse policy); attachment storage supports Linux, macOS, and Windows with Agent-local type, size, ownership, path, symlink, and content-integrity checks;
-- a WorkItem-level Coordinator conversation for status questions, guidance, contract changes, and replanning;
-- AI-planned Action graphs with validated dependencies, one final acceptance gate, and up to the configured concurrent Action limit;
-- automatic/pool/fixed VP assignment, model and effort policies, review separation, retry/waiting/failed states, and explicit human recovery input;
-- shared, read-only, isolated-write, and integrate workspace policies, with fenced Runs and retained tool evidence;
-- Agent-local SQLite persistence and restart recovery. WorkItems are linked to their source Session but are not stored inside that Session.
-
-Work Center does **not** mean arbitrary unattended deployment. Side effects still depend on the tools, repository policy, credentials, and delivery instructions available to the selected Agent and VP.
 
 ## Quick start
 
@@ -224,13 +193,12 @@ Agent (Node.js on the code machine)
         ├── Native Yeaft engine
         │   ├── Session + VP orchestration
         │   ├── Anthropic / OpenAI Responses / Gemini adapters
-        │   ├── 33 built-in tools + Skills + MCP
-        │   ├── bounded Session history + post-turn compact
-        │   └── Work Center (WorkItem → Action → Run)
+        │   ├── built-in tools + Skills + MCP
+        │   └── bounded Session history + post-turn compact
         └── Workbench (terminal, Git, files, port proxy)
 ```
 
-The server owns authentication, user-visible catalog metadata, and relay state. The Agent owns code execution and Agent-local Yeaft runtime data. A Session `workDir` selects project context; it does not become the storage root for Session transcripts, memory, tasks, or Work Center records.
+The server owns authentication, user-visible catalog metadata, and relay state. The Agent owns code execution and Agent-local Yeaft runtime data. A Session `workDir` selects project context; it does not become the storage root for Session transcripts, memory, or task data.
 
 ## Configuration and deployment
 
@@ -244,7 +212,6 @@ Detailed guides:
 
 - [Getting started](docs/guide/getting-started.md)
 - [Yeaft Sessions and Projects](docs/guide/user/yeaft-session.md)
-- [Work Center](docs/guide/user/work-center.md)
 - [Provider and model configuration](docs/guide/yeaft-config.md)
 - [Architecture](docs/guide/tech/architecture.md)
 - [Security](docs/guide/security.md)

@@ -19,7 +19,6 @@ import { normaliseBrowserRuntimeSection, validateBrowserRuntimeUpdate } from '..
 import { normalizePluginConfig } from './plugins.js';
 import { mutateAgentConfig, readAgentConfigForWrite } from './config-store.js';
 import { collectAmbiguousModelRefs, isGitHubCopilotProvider, normalizeKnownProviderForRuntime, serializeKnownProviderForPersistence } from './llm/known-providers.js';
-import { getWorkCenterFeatureState } from './work-center/feature.js';
 import { normalizeSubAgentSceneModels, validateSubAgentSceneModels } from './sub-agent/scene-models.js';
 import { publicSubAgentEffortSettings, validateSubAgentPersonaEfforts } from './sub-agent/persona-efforts.js';
 
@@ -476,35 +475,6 @@ export function updateTelemetrySettings(update, dir) {
       existing.telemetry = merged;
       return merged;
     });
-  } catch (error) {
-    return { error: `Failed to read config.json or persist update: ${error?.message || error}` };
-  }
-}
-
-export function getWorkCenterFeatureSettings(dir, env = process.env) {
-  const root = dir || process.env.YEAFT_DIR || DEFAULT_YEAFT_DIR;
-  const configPath = join(root, 'config.json');
-  try {
-    const json = existsSync(configPath) ? JSON.parse(readFileSync(configPath, 'utf8')) : {};
-    return getWorkCenterFeatureState(json, env);
-  } catch (error) {
-    return { error: `Failed to read config.json: ${error.message}` };
-  }
-}
-
-export function updateWorkCenterFeatureSettings(update, dir, env = process.env) {
-  if (!update || typeof update !== 'object' || Array.isArray(update) || typeof update.enabled !== 'boolean'
-    || Object.keys(update).some(key => key !== 'enabled')) return { error: 'enabled must be a boolean' };
-  const current = getWorkCenterFeatureSettings(dir, env);
-  if (current.error) return current;
-  if (current.overridden) return { ...current, error: 'Work Center is controlled by YEAFT_WORK_CENTER_ENABLED' };
-  const root = dir || process.env.YEAFT_DIR || DEFAULT_YEAFT_DIR;
-  try {
-    mutateAgentConfig(root, existing => {
-      existing.workCenter = { ...(existing.workCenter && typeof existing.workCenter === 'object' ? existing.workCenter : {}), enabled: update.enabled };
-      return existing.workCenter;
-    });
-    return { enabled: update.enabled, source: 'config', overridden: false };
   } catch (error) {
     return { error: `Failed to read config.json or persist update: ${error?.message || error}` };
   }
