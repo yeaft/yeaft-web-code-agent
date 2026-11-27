@@ -1775,6 +1775,73 @@ describe('Cosmic Web — Pinia store & interactive overlay', () => {
     expect(webStore.aiBriefSourceItemId).toBe('item-0-new');
     expect(webStore.aiBriefData?.tldr).toBe('Brief for item-0-new');
     expect(webStore.followUpThread).toEqual([]);
+    // Round 7 Blocker #2: same-cluster reopen while an in-flight Clean Article request for Source A is still pending
+    // (with NO settled brief/article/follow-up yet) must STILL invalidate Source A's pending response when fresh detail repins to Source B
+    // and restart Clean Article for Source B!
+    webStore.aiBriefData = null;
+    webStore.articleData = null;
+    webStore.followUpThread = [];
+    webStore.cleanArticleOpen = true;
+    webStore.resolvedSourceItemId = 'item-0-new';
+    const prevFetch = globalThis.fetch;
+    let resolveDetailGate;
+    let resolveStaleArticle;
+    const articleUrlsSeen = [];
+    globalThis.fetch = vi.fn((url, opts) => {
+      const u = String(url);
+      const jsonRes = (body) => ({
+        ok: true,
+        status: 200,
+        headers: { get: (k) => (k.toLowerCase() === 'content-type' ? 'application/json' : null) },
+        json: async () => body,
+      });
+      if (u === '/api/cosmic-web/clusters/c-multi') {
+        return new Promise((resolve) => {
+          resolveDetailGate = () => resolve(jsonRes({
+            id: 'c-multi',
+            domainId: 'ai',
+            headline: 'Multi-source AI event',
+            summaryExcerpt: 'Stored fallback excerpt',
+            items: [
+              { id: 'item-1', sourceName: 'Source 1', title: 'S1', summaryExcerpt: 'Excerpt 1', url: 'https://s1.example/a' },
+              { id: 'item-2', sourceName: 'Source 2', title: 'S2', summaryExcerpt: 'Excerpt 2', url: 'https://s2.example/b' },
+            ],
+          }));
+        });
+      }
+      if (u.startsWith('/api/cosmic-web/clusters/c-multi/article')) {
+        articleUrlsSeen.push(u);
+        if (u.includes('itemId=item-0-new')) {
+          return new Promise((resolve) => {
+            resolveStaleArticle = () => resolve(jsonRes({
+              title: 'Stale 0', markdown: 'Stale Source 0 article.', quality: 'full', itemId: 'item-0-new',
+            }));
+          });
+        }
+        return Promise.resolve(jsonRes({
+          title: 'Fresh 1', markdown: 'Fresh Source 1 article.', quality: 'full', itemId: 'item-1',
+        }));
+      }
+      return prevFetch(url, opts);
+    });
+    const reopenPromise = webStore.openClusterReader('c-multi', { expanded: true });
+    // User kicks off Clean Article against retained pin item-0-new WHILE detail refresh is still in-flight
+    const pendingStaleArt = webStore.loadArticle('c-multi', { itemId: 'item-0-new' });
+    // Detail refresh completes and repins default source from item-0-new -> item-1!
+    resolveDetailGate();
+    await reopenPromise;
+    await flushPromises();
+    // Now stale item-0-new Clean Article finishes late -> MUST be ignored; panel MUST show Fresh Source 1 article!
+    resolveStaleArticle();
+    await pendingStaleArt;
+    await flushPromises();
+    expect(articleUrlsSeen.some((u) => u.includes('itemId=item-0-new'))).toBe(true);
+    expect(articleUrlsSeen.some((u) => u.includes('itemId=item-1'))).toBe(true);
+    expect(webStore.resolvedSourceItemId).toBe('item-1');
+    expect(webStore.articleData?.itemId).toBe('item-1');
+    expect(webStore.articleData?.markdown).toBe('Fresh Source 1 article.');
+    globalThis.fetch = prevFetch;
+
     // Restore original items before remaining assertions
     detailItems = [
       { id: 'item-1', sourceName: 'Source 1', title: 'S1', summaryExcerpt: 'Excerpt 1', url: 'https://s1.example/a' },

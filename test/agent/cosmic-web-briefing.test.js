@@ -606,8 +606,8 @@ describe('Cosmic Web bounded research', () => {
       payload: {
         isPrivateSource: true,
         headline: 'Private memo',
-        summaryExcerpt: 'Summary with https://private.example/secret-exc.png and https://files.example/chart(v2).png?token=PRIVATE_SENTINEL inside.',
-        articleMarkdown: 'Body with [![Chart](https://private.example/secret-fig.png)](https://private.example/secret-fig.png), [Attachment](<https://files.example/report)v2.pdf?token=ANGLE_PAREN_SECRET>), [doc](https://private.example/secret-md.png), and (https://files.example/doc(final).png?token=PRIVATE_SENTINEL_2).',
+        summaryExcerpt: "Summary with https://private.example/secret-exc.png and https://files.example/o'brien(v2).png?token=PRIVATE_SENTINEL inside.",
+        articleMarkdown: "Body with [![Chart](https://private.example/secret-fig.png)](https://private.example/secret-fig.png), [Attachment](<https://files.example/report)v2.pdf?token=ANGLE_PAREN_SECRET>), [doc](https://private.example/secret-md.png), https://files.example/team's-plan.pdf?token=APOS_SECRET, and (https://files.example/doc(final).png?token=PRIVATE_SENTINEL_2).",
         media: [{ url: 'https://private.example/secret-top.png', kind: 'image' }],
         sources: [{ title: 'Memo', url: 'https://private.example/memo', summaryExcerpt: 'Source https://private.example/secret-src-exc.png', media: [{ url: 'https://private.example/secret-source.png', kind: 'image' }] }],
       },
@@ -621,6 +621,7 @@ describe('Cosmic Web bounded research', () => {
     expect(sentPrompt).not.toContain('secret-src-exc.png');
     expect(sentPrompt).not.toContain('PRIVATE_SENTINEL');
     expect(sentPrompt).not.toContain('ANGLE_PAREN_SECRET');
+    expect(sentPrompt).not.toContain('APOS_SECRET');
   });
 });
 

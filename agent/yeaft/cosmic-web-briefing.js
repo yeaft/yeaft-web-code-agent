@@ -228,7 +228,8 @@ function stripPrivateUrls(text) {
     if (lower.startsWith('http://', i) || lower.startsWith('https://', i)) {
       let j = i + (lower.startsWith('https://', i) ? 8 : 7);
       let openParens = 0, closeParens = 0, openBrackets = 0, closeBrackets = 0;
-      while (j < len && !/[\s<>"']/.test(noLinks[j])) {
+      // Consume all legal RFC 3986 URI characters (including apostrophe ') until whitespace, angle bracket, or double quote.
+      while (j < len && !/[\s<>"]/.test(noLinks[j])) {
         const ch = noLinks[j];
         if (ch === '(') openParens++;
         else if (ch === ')') closeParens++;
@@ -241,7 +242,7 @@ function stripPrivateUrls(text) {
         const last = noLinks[j - 1];
         if (last === ')' && closeParens > openParens) { closeParens--; j--; continue; }
         if (last === ']' && closeBrackets > openBrackets) { closeBrackets--; j--; continue; }
-        if (last === '.' || last === ',' || last === ';' || last === '!' || last === '?') { j--; continue; }
+        if (last === '\'' || last === '`' || last === '.' || last === ',' || last === ';' || last === '!' || last === '?') { j--; continue; }
         break;
       }
       i = j;

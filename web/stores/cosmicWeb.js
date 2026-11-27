@@ -606,21 +606,17 @@ export const useCosmicWebStore = defineStore('cosmicWeb', {
         }
       }
       // Pin the concrete resolved item ID separate from user selection intent (default vs explicit item vs URL).
-      // If fresh detail promoted a different effective source, invalidate all retained source-derived state.
+      // Whenever the resolved pin changes (even while requests are still in-flight with no settled data yet),
+      // invalidate all source-scoped channels and restart any open Clean Article panel for the new pin.
       const freshEffectiveSourceId = this.activeArticleItemId || (!isUrlOnlySelection ? (detail?.items?.[0]?.id || null) : null);
       this.resolvedSourceItemId = freshEffectiveSourceId;
-      const retainedBriefDrift = Boolean(
-        (this.aiBriefData || this.followUpThread.length)
-        && prevEffectiveSourceId
-        && freshEffectiveSourceId
-        && freshEffectiveSourceId !== prevEffectiveSourceId,
-      );
+      const pinChanged = Boolean(prevEffectiveSourceId && freshEffectiveSourceId !== prevEffectiveSourceId);
       const retainedArticleDrift = Boolean(
         this.articleData?.itemId
         && freshEffectiveSourceId
         && this.articleData.itemId !== freshEffectiveSourceId,
       );
-      if (retainedBriefDrift || retainedArticleDrift) {
+      if (pinChanged || retainedArticleDrift) {
         this.sourceSelectionRev += 1;
         capturedRev = this.sourceSelectionRev;
         invalidateChannel('article');
