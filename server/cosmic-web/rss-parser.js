@@ -223,7 +223,7 @@ export function parseFeedXml(xmlText, baseUrl, { sanitizeExcerpt } = {}) {
           const rawExcerpt = cleanText(f['content:encoded'] ?? f.description ?? f.summary ?? f.content);
           const safeExcerpt = typeof sanitizeExcerpt === 'function' ? sanitizeExcerpt(rawExcerpt) : rawExcerpt;
           items.push({ title, url, publishedAt: parseTimestamp(f.pubdate ?? f.published ?? f.updated ?? f['dc:date']),
-            summaryExcerpt: safeExcerpt.slice(0, 1000),
+            summaryExcerpt: safeExcerpt.replace(/\s+/gu, ' ').trim().slice(0, 1000),
             media: normalizeMedia([...entry.media, ...['content:encoded', 'description', 'summary', 'content']
               .flatMap(name => extractMarkupMedia(f[name], entry.fieldBases[name] ?? entry.base))], entry.base) });
         }

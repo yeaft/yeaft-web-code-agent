@@ -599,7 +599,7 @@ describe('Cosmic Web bounded research', () => {
     expect(replies[0].ok).toBe(true);
     expect(Object.keys(replies[0].result).sort()).toEqual(['bullets', 'followUps', 'fullMarkdown', 'impact', 'tldr']);
 
-    // Round 3–22 Blocker (defense-in-depth): private source payload strips media AND linked/bare URLs (including standalone symbol hosts, >2048-char lookahead userinfo, and boundary-straddling briefContext) before reaching the model
+    // Round 3–23 Blocker (defense-in-depth): private source payload strips media AND linked/bare URLs (including footnotes after symbol/IPv6/port authorities, WHATWG dot scheme-relative hosts, standalone symbol hosts, >2048-char lookahead userinfo, and boundary-straddling briefContext) before reaching the model
     const privateAdapter = stubAdapter(story);
     const unicodePad = '\u0130'.repeat(120);
     await run({
@@ -607,8 +607,8 @@ describe('Cosmic Web bounded research', () => {
       payload: {
         isPrivateSource: true,
         headline: 'Private memo',
-        summaryExcerpt: `${unicodePad} Summary visit www. visit www.\u3002 foo_www.keepme with https://private.example/secret-exc.png, www.private.example/s.pdf?token=WWWEXCSECRET99, //cdn.private.example/e.png?token=RELEXCSECRET99, //[2001:db8::1]/x?token=IPV6EXCSECRET99, //intranet/doc?token=HOSTEXCSECRET99, //u:p@intranet:8080/a?token=USERINFOEXCSECRET99, **//user:BOLDPORTEXC99@intranet:8080**, “//user:TYPOQUOTEEXC99@intranet:8080”, 请看//user:CJKPERIODEXC99@intranet:8080。 请看//user:USERINFODASHEXC99\u2013key@intranet:8080。下一句 请看//user:PROSEATEXC99@intranet:8080。通知@ops:值班 //\u2013user:LEADPUNCTEXC99@intranet:8080 请看//user:${'a,'.repeat(70)}COMMA70EXC99@intranet:8080。下一句 //user:PINEMOJIEXC99@intranet:8080📌下一句 [//user:BRACKETEXC99@intranet:8080] [//user:BRACKETPROSEEXC99@intranet:8080]下一句 {//user:BRACEEXC99@intranet:8080} |//user:PIPEEXC99@intranet:8080| [//user:IPV6WRAPEXC99@[2001:db8::1]:8443] [//user:IPV6NOPORTEXC99@[2001:db8::1]]下一句 _//user:UNDEREXC99@intranet:8080_ _www.例子.中国/a?token=IDNWWWEXC99_ www\u3002例子\u3002中国/a?token=IDEODOTEXC99 www.\u2603.example/a?token=SNOWMANEXC99 www.\u2603.example:8080\u3002下一句 www.\u2603 (www.\u2603) www\u3002\u2603 www.\ud83d\ude80 [www.\u2603]下一句 www.\u2603\uff1f下一句 //user:SNOWHOSTEXC99@\u2603 //user:SNOWHOSTQEXC99@\u2603\uff1f下一句 [//user:SNOWHOSTBEXC99@\u2603]下一句 https://user:SNOWHTTPEXC99@\u2603 www\uff0efiles\uff0eexample/doc?token=FWDOTEXC99 https://files.example/report\u2013draft.pdf?token=ENDASHEXCSECRET99, https://files.example/o'brien(v2).png?token=PRIVATESENTINEL99, https://files.example/u0130.pdf?token=UNICODEDRIFTSECRET99 //user:9876543210`,
-        articleMarkdown: `${unicodePad} Body visit www. visit www.\u3002 // prose comment and //\u2013note: kept and foo_www.keepme with [![Chart](https://private.example/secret-fig.png)](https://private.example/secret-fig.png), [Attachment](<https://files.example/report)v2.pdf?token=ANGLEPARENSECRET99>), [doc](https://private.example/secret-md.png), https://files.example/team's-plan.pdf?token=APOSSECRET99, (https://files.example/doc(final).png?token=PRIVATESENTINEL299), www.private.example/doc(v1).pdf?token=WWWMDSECRET99, //cdn.private.example/fig.png?token=RELMDSECRET99, (//\\[2001:db8::1\\]/f?token=IPV6MDSECRET99), //intranet/p?token=HOSTMDSECRET99, //user:pw@intranet/q?token=USERINFOMDSECRET99, **//user:BOLDPORTMD99@intranet:8080**, *//user:EMPORTMD99@intranet:8443*, “//user:TYPOQUOTEMD99@intranet:8080”, 请看//user:CJKPERIODMD99@intranet:8080。以及【//user:CJKBRACKETMD99@intranet:8443】, 请看//user:USERINFODASHMD99\u2013key@intranet:8080。下一句 请看//user:PROSEATMD99@intranet:8080。通知@ops:值班 //\u2013user:LEADPUNCTMD99@intranet:8080 请看//user:${'a,'.repeat(70)}COMMA70MD99@intranet:8080。下一句 //user:PINEMOJIMD99@intranet:8080📌下一句 \\[//user:BRACKETMD99@intranet:8080\\] \\[//user:BRACKETPROSEMD99@intranet:8080\\]下一句 \\{//user:BRACEMD99@intranet:8080\\} \\|//user:PIPEMD99@intranet:8080\\| \\[//user:IPV6WRAPMD99@\\[2001:db8::1\\]:8443\\] \\[//user:IPV6NOPORTMD99@\\[2001:db8::1\\]\\]下一句 \\_//user:UNDERMD99@intranet:8080\\_ _https://files.example/u?t=UNDERHTTPMD99_ \\_www.例子.中国/a?token=IDNWWWMD99\\_ www\u3002例子\u3002中国/a?token=IDEODOTMD99 www.\u2603.example/a?token=SNOWMANMD99 www.\u2603.example:8080\u3002下一句 www.\u2603 (www.\u2603) www\u3002\u2603 www.\ud83d\ude80 \\[www.\u2603\\]下一句 www.\u2603\uff1f下一句 //user:SNOWHOSTMD99@\u2603 //user:SNOWHOSTQMD99@\u2603\uff1f下一句 \\[//user:SNOWHOSTBMD99@\u2603\\]下一句 https://user:SNOWHTTPMD99@\u2603 www\uff0efiles\uff0eexample/doc?token=FWDOTMD99 //user:${'a'.repeat(2100)}AGENTOVERLONGPASS99@intranet:8080/secret //${'u'.repeat(2100)}AGENTOVERLONGUSER99@intranet:8080/secret https://files.example/report\u2013draft.pdf?token=ENDASHMDSECRET99, //intranet/report\u2013draft.pdf?token=RELENDASHMDSECRET99, https://files.example/doc?title=总结，草案&token=CJKQUERYMDSECRET99, https://files.example/tail.pdf?token=UNICODETAILSECRET99 //user:1234567890`,
+        summaryExcerpt: `${unicodePad} Summary visit www. visit www.\u3002 visit www.[1] //foo:bar[1] //注释\u3002 foo_www.keepme with https://private.example/secret-exc.png, www.private.example/s.pdf?token=WWWEXCSECRET99, //cdn.private.example/e.png?token=RELEXCSECRET99, //[2001:db8::1]/x?token=IPV6EXCSECRET99, //intranet/doc?token=HOSTEXCSECRET99, //u:p@intranet:8080/a?token=USERINFOEXCSECRET99, **//user:BOLDPORTEXC99@intranet:8080**, “//user:TYPOQUOTEEXC99@intranet:8080”, 请看//user:CJKPERIODEXC99@intranet:8080。 请看//user:USERINFODASHEXC99\u2013key@intranet:8080。下一句 请看//user:PROSEATEXC99@intranet:8080。通知@ops:值班 //\u2013user:LEADPUNCTEXC99@intranet:8080 请看//user:${'a,'.repeat(70)}COMMA70EXC99@intranet:8080。下一句 //user:PINEMOJIEXC99@intranet:8080📌下一句 [//user:BRACKETEXC99@intranet:8080] [//user:BRACKETPROSEEXC99@intranet:8080]下一句 {//user:BRACEEXC99@intranet:8080} |//user:PIPEEXC99@intranet:8080| [//user:IPV6WRAPEXC99@[2001:db8::1]:8443] [//user:IPV6NOPORTEXC99@[2001:db8::1]]下一句 _//user:UNDEREXC99@intranet:8080_ _www.例子.中国/a?token=IDNWWWEXC99_ www\u3002例子\u3002中国/a?token=IDEODOTEXC99 www.\u2603.example/a?token=SNOWMANEXC99 www.\u2603.example:8080\u3002下一句 www.\u2603 (www.\u2603) www\u3002\u2603 www.\ud83d\ude80 [www.\u2603]下一句 www.\u2603\uff1f下一句 //user:SNOWHOSTEXC99@\u2603 //user:SNOWHOSTQEXC99@\u2603\uff1f下一句 [//user:SNOWHOSTBEXC99@\u2603]下一句 https://user:SNOWHTTPEXC99@\u2603 www\uff0efiles\uff0eexample/doc?token=FWDOTEXC99 //user:AGENTREVIEWEXC99@\u2603:8080[1] next //user:AGENTREVIEWNOPORTEXC99@\u2603[1] next www.\u2603[1] next //user:AGENTIPV6FOOTEXC99@[2001:db8::1][1] next //user:AGENTIPV6PORTFOOTEXC99@[2001:db8::1]:8080[1] next //]user:AGENTUNMATCHEDEXC99@[2001:db8::1][1] next //user:AGENTPORTPROSEEXC99@intranet:8080下一句 //user:AGENTPORTPARENEXC99@\u2603:8080(note) next //user:AGENTPORTBRACEEXC99@\u2603:8080{1} next //agentidn1\u3002example //agentidn2\uff0eexample //agentidn3\uff61example //agentidn4\u3002example\uff1f下一句 //agentidn5\u3002example[1] next https://files.example/report\u2013draft.pdf?token=ENDASHEXCSECRET99, https://files.example/o'brien(v2).png?token=PRIVATESENTINEL99, https://files.example/u0130.pdf?token=UNICODEDRIFTSECRET99 //user:9876543210`,
+        articleMarkdown: `${unicodePad} Body visit www. visit www.\u3002 visit www.\\[1\\] // prose comment and //\u2013note: kept and //foo:bar\\[1\\] and //注释\u3002 and foo_www.keepme with [![Chart](https://private.example/secret-fig.png)](https://private.example/secret-fig.png), [Attachment](<https://files.example/report)v2.pdf?token=ANGLEPARENSECRET99>), [doc](https://private.example/secret-md.png), https://files.example/team's-plan.pdf?token=APOSSECRET99, (https://files.example/doc(final).png?token=PRIVATESENTINEL299), www.private.example/doc(v1).pdf?token=WWWMDSECRET99, //cdn.private.example/fig.png?token=RELMDSECRET99, (//\\[2001:db8::1\\]/f?token=IPV6MDSECRET99), //intranet/p?token=HOSTMDSECRET99, //user:pw@intranet/q?token=USERINFOMDSECRET99, **//user:BOLDPORTMD99@intranet:8080**, *//user:EMPORTMD99@intranet:8443*, “//user:TYPOQUOTEMD99@intranet:8080”, 请看//user:CJKPERIODMD99@intranet:8080。以及【//user:CJKBRACKETMD99@intranet:8443】, 请看//user:USERINFODASHMD99\u2013key@intranet:8080。下一句 请看//user:PROSEATMD99@intranet:8080。通知@ops:值班 //\u2013user:LEADPUNCTMD99@intranet:8080 请看//user:${'a,'.repeat(70)}COMMA70MD99@intranet:8080。下一句 //user:PINEMOJIMD99@intranet:8080📌下一句 \\[//user:BRACKETMD99@intranet:8080\\] \\[//user:BRACKETPROSEMD99@intranet:8080\\]下一句 \\{//user:BRACEMD99@intranet:8080\\} \\|//user:PIPEMD99@intranet:8080\\| \\[//user:IPV6WRAPMD99@\\[2001:db8::1\\]:8443\\] \\[//user:IPV6NOPORTMD99@\\[2001:db8::1\\]\\]下一句 \\_//user:UNDERMD99@intranet:8080\\_ _https://files.example/u?t=UNDERHTTPMD99_ \\_www.例子.中国/a?token=IDNWWWMD99\\_ www\u3002例子\u3002中国/a?token=IDEODOTMD99 www.\u2603.example/a?token=SNOWMANMD99 www.\u2603.example:8080\u3002下一句 www.\u2603 (www.\u2603) www\u3002\u2603 www.\ud83d\ude80 \\[www.\u2603\\]下一句 www.\u2603\uff1f下一句 //user:SNOWHOSTMD99@\u2603 //user:SNOWHOSTQMD99@\u2603\uff1f下一句 \\[//user:SNOWHOSTBMD99@\u2603\\]下一句 https://user:SNOWHTTPMD99@\u2603 www\uff0efiles\uff0eexample/doc?token=FWDOTMD99 //user:AGENTREVIEWMD99@\u2603:8080\\[1\\] next //user:AGENTREVIEWNOPORTMD99@\u2603\\[1\\] next www.\u2603\\[1\\] next //user:AGENTIPV6FOOTMD99@\\[2001:db8::1\\]\\[1\\] next //user:AGENTIPV6PORTFOOTMD99@\\[2001:db8::1\\]:8080\\[1\\] next //\\]user:AGENTUNMATCHEDMD99@\\[2001:db8::1\\]\\[1\\] next //user:AGENTPORTPROSEMD99@intranet:8080下一句 //user:AGENTPORTPARENMD99@\u2603:8080(note) next //user:AGENTPORTBRACEMD99@\u2603:8080\\{1\\} next //agentidn6\u3002example\\[1\\] next //user:${'a'.repeat(2100)}AGENTOVERLONGPASS99@intranet:8080/secret //${'u'.repeat(2100)}AGENTOVERLONGUSER99@intranet:8080/secret https://files.example/report\u2013draft.pdf?token=ENDASHMDSECRET99, //intranet/report\u2013draft.pdf?token=RELENDASHMDSECRET99, https://files.example/doc?title=总结，草案&token=CJKQUERYMDSECRET99, https://files.example/tail.pdf?token=UNICODETAILSECRET99 //user:1234567890`,
         briefContext: `${'x'.repeat(2990)} //AGENTUSERONLYCTX99@intranet:8080/api`,
         media: [{ url: 'https://private.example/secret-top.png', kind: 'image' }],
         sources: [{ title: 'Memo', url: 'https://private.example/memo', summaryExcerpt: `${'x'.repeat(982)} //user:1122334455@intranet:8080`, media: [{ url: 'https://private.example/secret-source.png', kind: 'image' }] }],
@@ -630,15 +630,53 @@ describe('Cosmic Web bounded research', () => {
       'IDEODOTMD99', 'SNOWMANMD99', 'FWDOTMD99', '9876543210', '1234567890', '1122334455',
       'SNOWHOSTEXC99', 'SNOWHOSTQEXC99', 'SNOWHOSTBEXC99', 'SNOWHTTPEXC99',
       'SNOWHOSTMD99', 'SNOWHOSTQMD99', 'SNOWHOSTBMD99', 'SNOWHTTPMD99', '\u2603', '\ud83d\ude80',
+      'AGENTREVIEWEXC99', 'AGENTREVIEWNOPORTEXC99', 'AGENTIPV6FOOTEXC99', 'AGENTIPV6PORTFOOTEXC99',
+      'AGENTUNMATCHEDEXC99', 'AGENTPORTPROSEEXC99', 'AGENTPORTPARENEXC99', 'AGENTPORTBRACEEXC99',
+      'AGENTREVIEWMD99', 'AGENTREVIEWNOPORTMD99', 'AGENTIPV6FOOTMD99', 'AGENTIPV6PORTFOOTMD99',
+      'AGENTUNMATCHEDMD99', 'AGENTPORTPROSEMD99', 'AGENTPORTPARENMD99', 'AGENTPORTBRACEMD99',
+      'agentidn1', 'agentidn2', 'agentidn3', 'agentidn4', 'agentidn5', 'agentidn6',
       'AGENTOVERLONGPASS99', 'AGENTOVERLONGUSER99', 'AGENTUSERONLYCTX99',
       'ENDASHEXCSECRET99', 'ENDASHMDSECRET99', 'RELENDASHMDSECRET99', 'CJKQUERYMDSECRET99']) {
       expect(sentPrompt).not.toContain(secret);
     }
     expect(sentPrompt).toContain('// prose comment');
     expect(sentPrompt).toContain('//\u2013note: kept');
+    expect(sentPrompt).toContain('//foo:bar[1]');
+    expect(sentPrompt).toContain('//注释\u3002');
     expect(sentPrompt).toContain('foo_www.keepme');
     expect(sentPrompt).toContain('visit www.');
     expect(sentPrompt).toContain('visit www.\u3002');
+    expect(sentPrompt).toContain('visit www.[1]');
+
+    // Mixed public/private daily_briefing: scrubs private stories BEFORE the 500-char cap, blocks outbound research, and keeps public story URLs intact.
+    const mixedDailyAdapter = stubAdapter(daily);
+    const mixedWebSearch = vi.fn();
+    await run({
+      mode: 'daily_briefing',
+      adapter: mixedDailyAdapter,
+      toolExecutors: { WebSearch: mixedWebSearch },
+      payload: {
+        date: '2026-11-27',
+        research: true,
+        domains: [
+          {
+            id: 'ai',
+            nameEn: 'AI',
+            stories: [{ headline: 'Public story', summaryExcerpt: 'See https://public.example/keep?ref=1 for benchmarks.', sourceNames: ['Public'] }],
+          },
+          {
+            id: 'custom-priv',
+            nameEn: 'Private',
+            stories: [{ headline: 'Private story', isPrivateSource: true, summaryExcerpt: `${'x'.repeat(490)} //DAILYPRIVSECRET99@intranet:8080/api //privateidn7\u3002example`, sourceNames: ['Internal'] }],
+          },
+        ],
+      },
+    });
+    expect(mixedWebSearch).not.toHaveBeenCalled();
+    const mixedDailyPrompt = JSON.stringify(mixedDailyAdapter.call.mock.lastCall[0].messages);
+    expect(mixedDailyPrompt).toContain('https://public.example/keep?ref=1');
+    expect(mixedDailyPrompt).not.toContain('DAILYPRIVSECRET99');
+    expect(mixedDailyPrompt).not.toContain('privateidn7');
 
     // Round 19–22 Blocker #2/#3 & Nit: Agent scrubber handles 11,900-backslash run, ~1.8 MiB dense-invalid-authority DoS payload,
     // AND proves URL-check budget exhaustion discards a nearby harmless tail marker while output stays well below the 1,000-char limit (< 150ms).
