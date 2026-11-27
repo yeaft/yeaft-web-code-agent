@@ -3880,4 +3880,125 @@ describe('Cosmos Interstellar Signal Stream (Unified Top-Right Replies, Schedule
     wrapper.unmount();
     wrapper = null;
   });
+
+  it('keeps all celestial bodies orbiting at full speed while tracking a focused planet at stage center', async () => {
+    const { stepCosmosFrame } = await import('../../web/cosmos/stage-loop.js');
+    const { createParticlePools } = await import('../../web/cosmos/particle-hud.js');
+    const { createCosmicEventState } = await import('../../web/cosmos/events-controller.js');
+    const { DEFAULT_COSMOS_CONSTANTS } = await import('../../web/cosmos/constants.js');
+
+    let lastFrame = null;
+    const engine = {
+      isWebGL: false,
+      isMobile: false,
+      getSize: () => ({ width: 1280, height: 720, dpr: 1 }),
+      renderFrame: (frame) => { lastFrame = frame; },
+    };
+    const anim = {
+      lastTs: 0,
+      time: 10.0,
+      realTime: 10.0,
+      orbitBrake: 1.0,
+      scaleLog: 13.0,
+      targetScaleLog: 13.0,
+      warpEnergy: 0,
+      parallax: { x: 0, y: 0, tx: 0, ty: 0 },
+      camRot: { x: 0, y: 0, tx: 0, ty: 0 },
+      centerShiftX: 0,
+      targetCenterShiftX: 0,
+      hoverPlanetId: null,
+      focusedPlanetId: 'earth',
+      solarSunScreen: { x: 0, y: 0, r: 50 },
+      planetScreen: {},
+      planetFocus: {
+        planetId: 'earth',
+        lastPlanetId: 'earth',
+        blend: 1.0,
+        zoom: 2.2,
+        targetZoom: 2.2,
+        inspectYaw: 0,
+        inspectPitch: 0,
+        targetInspectYaw: 0,
+        targetInspectPitch: 0,
+      },
+      lastEventUiSync: 0,
+      lastEventFrames: [],
+      meteors: [],
+      nextMeteorAt: 999,
+      orbitRipples: [],
+      telemetryBeams: [],
+      constants: { ...DEFAULT_COSMOS_CONSTANTS, orbitSpeed: 1.0, eventsAutoEnabled: false },
+    };
+    const eventSim = createCosmicEventState();
+    const pools = createParticlePools();
+    const uiState = {
+      currentBand: 'solar',
+      focusedPlanetId: 'earth',
+      hoverPlanetId: 'earth',
+      dragActive: false,
+      dragOverPlanetId: null,
+      drawerOpen: true,
+      drawerWidth: 0,
+      workbenchWidened: false,
+      quickOpen: false,
+    };
+    const ctx = {
+      engine,
+      anim,
+      eventSim,
+      pools,
+      webGraph: null,
+      getWebGraph: () => null,
+      gpuParticles: new Float32Array(3100 * 7),
+      eventGpuParticles: new Float32Array(520 * 7),
+      constants: anim.constants,
+      domRefs: { planets: {}, hits: {}, tags: {}, portals: {}, books: {}, homeBeacon: { value: null }, eventBeacon: { value: null } },
+      getAgentsByPlanet: () => ({}),
+      getGalaxyBooks: () => [],
+      getUiState: () => uiState,
+      onBandChange: () => {},
+      onSyncEvents: () => {},
+      onUpdateHoverPos: () => {},
+      formatEventLabel: () => '',
+    };
+
+    stepCosmosFrame(50, ctx);
+    const startTime = anim.time;
+    const startSun = { ...anim.solarSunScreen };
+    const startMercury = { ...anim.planetScreen.mercury };
+    const startEarth = { ...anim.planetScreen.earth };
+
+    // Advance 20 frames (1.0s simulated) with focused planet + drawer open + pointer still over Earth
+    for (let i = 2; i <= 21; i += 1) {
+      stepCosmosFrame(i * 50, ctx);
+    }
+
+    expect(anim.orbitBrake).toBeCloseTo(1.0, 5);
+    expect(anim.time - startTime).toBeCloseTo(1.0, 2);
+    // Earth stays locked at the live stage center (shifted left for the open drawer)
+    // while the Sun and other planets keep orbiting around it at full speed.
+    const expectedStageCx = 1280 * 0.50 + anim.centerShiftX;
+    const expectedStageCy = 720 * 0.51;
+    expect(Math.hypot(anim.planetScreen.earth.x - expectedStageCx, anim.planetScreen.earth.y - expectedStageCy)).toBeLessThan(0.5);
+    const sunDeltaRelativeToEarth = Math.hypot(
+      (anim.solarSunScreen.x - anim.planetScreen.earth.x) - (startSun.x - startEarth.x),
+      (anim.solarSunScreen.y - anim.planetScreen.earth.y) - (startSun.y - startEarth.y),
+    );
+    const mercuryDeltaRelativeToEarth = Math.hypot(
+      (anim.planetScreen.mercury.x - anim.planetScreen.earth.x) - (startMercury.x - startEarth.x),
+      (anim.planetScreen.mercury.y - anim.planetScreen.earth.y) - (startMercury.y - startEarth.y),
+    );
+    expect(sunDeltaRelativeToEarth).toBeGreaterThan(20);
+    expect(mercuryDeltaRelativeToEarth).toBeGreaterThan(40);
+    expect(lastFrame?.solarBodies?.length).toBeGreaterThan(8);
+
+    // Unfocused hover still smoothly brakes orbit to aid clicking a moving planet
+    anim.planetFocus.planetId = null;
+    uiState.drawerOpen = false;
+    uiState.hoverPlanetId = 'mercury';
+    for (let i = 22; i <= 40; i += 1) {
+      stepCosmosFrame(i * 50, ctx);
+    }
+    expect(anim.orbitBrake).toBeLessThan(0.2);
+  });
 });
