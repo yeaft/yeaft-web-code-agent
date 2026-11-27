@@ -15,6 +15,11 @@ function contentHash(filePath) {
 const distDir = join(__dirname, 'dist');
 const vendorDir = join(__dirname, 'vendor');
 
+// Brand icons (web/assets/brand) are served with a 1-year cache in production,
+// so every reference carries a content hash: index.html links, the manifest's
+// icons and the welcome-screen logo (injected into the app bundle below).
+const brandIcon = (file) => `assets/brand/${file}?v=${contentHash(join(__dirname, 'assets', 'brand', file))}`;
+
 // Clean and create dist directory
 if (existsSync(distDir)) {
   rmSync(distDir, { recursive: true });
@@ -127,6 +132,7 @@ esbuild.buildSync({
   define: {
     'process.env.NODE_ENV': '"production"',
     SPREADSHEET_WORKER_URL: JSON.stringify('./spreadsheet-worker.js'),
+    BRAND_ICON_URL: JSON.stringify(brandIcon('icon.svg')),
   },
   legalComments: 'none',
   drop: ['console', 'debugger'], // Remove console.log in production
@@ -176,10 +182,8 @@ const appHash = contentHash(join(distDir, 'app.bundle.js'));
 const cssHash = contentHash(join(distDir, 'style.bundle.css'));
 const vendorHash = contentHash(join(distDir, 'vendor.bundle.js'));
 const katexCssHash = contentHash(join(katexDistDir, 'katex.min.css'));
-// Production serves static files with a 1-year cache, so brand icons and the
-// web app manifest are referenced with content hashes. The manifest is copied
-// into dist with hashed icon URLs; Step 6 mirrors the icon files themselves.
-const brandIcon = (file) => `assets/brand/${file}?v=${contentHash(join(__dirname, 'assets', 'brand', file))}`;
+// Production serves static files with a 1-year cache, so the web app manifest
+// and its icons are referenced with content hashes; Step 6 mirrors the files.
 const webManifest = JSON.parse(readFileSync(join(__dirname, 'manifest.webmanifest'), 'utf8'));
 webManifest.icons = webManifest.icons.map(icon => ({ ...icon, src: `${icon.src}?v=${contentHash(join(__dirname, icon.src))}` }));
 writeFileSync(join(distDir, 'manifest.webmanifest'), `${JSON.stringify(webManifest, null, 2)}\n`);

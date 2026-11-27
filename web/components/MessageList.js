@@ -56,6 +56,9 @@ import { resolveLongResponseOrigin } from '../utils/response-origin-navigation.j
 // and the first chunk where no avatar is shown; user-tested as
 // acceptable in v0.1.757.
 
+// Production builds inject a content-hashed URL (web/build.js); dev serves web/ as-is.
+const WELCOME_LOGO_URL = typeof BRAND_ICON_URL === 'undefined' ? 'assets/brand/icon.svg' : BRAND_ICON_URL;
+
 export default {
   name: 'MessageList',
   components: { AgentInstaller, MessageItem, AssistantTurn, VpTurnBlock, VpSpeakerHeader, ReflectionCard, SubAgentCard, UserTurnBlock, VirtualTranscript, MessageBlock, ConcurrentUserTurns, SessionLaneWait },
@@ -73,7 +76,7 @@ export default {
       <div v-if="!store.activeConversationId" class="welcome-screen">
         <div class="welcome-content">
           <div class="welcome-logo">
-            <img src="assets/brand/icon.svg" alt="" width="64" height="64" draggable="false">
+            <img :src="welcomeLogoUrl" alt="" width="64" height="64" draggable="false">
           </div>
           <h1 class="welcome-title">{{ onlineAgents.length ? 'Yeaft' : $t('welcome.setupTitle') }}</h1>
           <p class="welcome-subtitle">{{ $t(onlineAgents.length ? 'welcome.subtitle' : 'welcome.setupDesc') }}</p>
@@ -1964,6 +1967,7 @@ export default {
     return {
       store,
       containerRef,
+      welcomeLogoUrl: WELCOME_LOGO_URL,
       virtualTranscriptRef,
       flashMsgId,
       jumpToOrigin,

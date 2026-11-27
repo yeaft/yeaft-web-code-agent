@@ -84,6 +84,11 @@ describe('brand app icons', () => {
       `<meta name="theme-color" content="${tokens.dark}" media="(prefers-color-scheme: dark)">`,
     ]);
     expect(read('web', 'build.js')).toContain("writeFileSync(join(distDir, 'manifest.webmanifest')");
+    // The welcome-screen logo is cache-busted through a build-time define.
+    expect(read('web', 'build.js')).toContain("BRAND_ICON_URL: JSON.stringify(brandIcon('icon.svg'))");
+    const messageList = read('web', 'components', 'MessageList.js');
+    expect(messageList).toContain("typeof BRAND_ICON_URL === 'undefined' ? 'assets/brand/icon.svg' : BRAND_ICON_URL");
+    expect(messageList).toContain('<img :src="welcomeLogoUrl"');
     expect(read('Dockerfile')).toMatch(/COPY web\/\*\.js web\/\*\.css web\/\*\.html web\/\*\.webmanifest \.\//);
   });
 
