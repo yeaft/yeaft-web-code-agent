@@ -167,6 +167,16 @@ export function insertItem(item) {
     .run(item.id, item.ownerUserId ?? null, item.clusterId, item.sourceId, item.domainId, item.url, item.title,
       item.summaryExcerpt, item.publishedAt, Number(!!item.hasHotMetric), JSON.stringify((item.media ?? []).slice(0, 3)), item.sourceName || null).changes;
 }
+export function backfillItemMedia(sourceId, ownerUserId, url, media) {
+  if (!Array.isArray(media) || !media.length) return 0;
+  return sql("UPDATE cw_items SET media_json=? WHERE source_id=? AND owner_user_id IS ? AND url=? AND media_json='[]'")
+    .run(JSON.stringify(media.slice(0, 3)), sourceId, ownerUserId ?? null, url).changes;
+}
+export function migrateCustomDomainId(userId, oldId, newId) {
+  if (!userId || !oldId || !newId || oldId === newId) return;
+  sql('UPDATE cw_sources SET domain_id=? WHERE owner_user_id=? AND domain_id=?').run(newId, userId, oldId);
+  sql('UPDATE cw_items SET domain_id=? WHERE owner_user_id=? AND domain_id=?').run(newId, userId, oldId);
+}
 export function listVisibleClusters(userId, clusterId) {
   return clusterId === undefined ? sql(`SELECT * FROM cw_clusters WHERE ${visible}`).all(userId) :
     sql(`SELECT * FROM cw_clusters WHERE id=? AND ${visible}`).all(clusterId, userId);

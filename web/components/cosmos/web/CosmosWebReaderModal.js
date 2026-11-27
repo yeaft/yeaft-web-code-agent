@@ -6,7 +6,7 @@
  * Uses Pinia `useCosmicWebStore`, `renderSafeMessageMarkdown`, and `$t('cosmos.web.*')`.
  */
 import { useCosmicWebStore } from '../../../stores/cosmicWeb.js';
-import { renderSafeMessageMarkdown } from '../../../utils/safe-message-markdown.js';
+import { renderCosmicWebProse } from '../../../utils/safe-message-markdown.js';
 import { getLocale, t } from '../../../utils/i18n.js';
 
 const PERSPECTIVE_OPTIONS = [
@@ -148,9 +148,31 @@ export default {
         || '';
       return isSafeHttpUrl(candidate) ? candidate : '';
     },
-    activeBriefSearchCount() {
-      const n = Number(this.aiBrief?.searchCount ?? this.aiBrief?.webSearchCount ?? 0);
+    activeBriefEvidenceCount() {
+      if (!this.aiBrief?.researched) return 0;
+      const raw = this.aiBrief?.evidenceCount != null
+        ? this.aiBrief.evidenceCount
+        : (this.aiBrief?.searchCount ?? this.aiBrief?.webSearchCount ?? 0);
+      const n = Number(raw);
       return Number.isFinite(n) && n > 0 ? n : 0;
+    },
+    activeSelectedItem() {
+      const items = Array.isArray(this.cluster?.items) ? this.cluster.items : [];
+      if (!items.length) return null;
+      if (this.webStore.activeArticleItemId) {
+        const hit = items.find((it) => it && it.id === this.webStore.activeArticleItemId);
+        if (hit) return hit;
+      }
+      return items[0];
+    },
+    fallbackExcerpt() {
+      return String(
+        this.activeSelectedItem?.summaryExcerpt
+        || this.activeSelectedItem?.summary
+        || this.cluster?.summaryExcerpt
+        || this.cluster?.excerpt
+        || '',
+      ).trim();
     },
     safeReportCitations() {
       const list = this.aiBrief?.citations;
@@ -188,13 +210,13 @@ export default {
         .filter((s) => s && (s.heading || s.title || s.body || s.content || (Array.isArray(s.bullets) && s.bullets.length)))
         .map((s) => ({
           heading: s.heading || s.title || '',
-          html: (s.body || s.content) ? renderSafeMessageMarkdown(String(s.body || s.content)) : '',
+          html: (s.body || s.content) ? renderCosmicWebProse(String(s.body || s.content)) : '',
           bullets: Array.isArray(s.bullets) ? s.bullets.filter(Boolean) : [],
         }));
     },
     renderedAiMarkdownHtml() {
       const md = this.aiBrief?.fullMarkdown || this.aiBrief?.markdown || this.aiBrief?.rawMarkdown || '';
-      return md ? renderSafeMessageMarkdown(md) : '';
+      return md ? renderCosmicWebProse(md) : '';
     },
     dailySignals() {
       return Array.isArray(this.daily?.signalsToWatch) && this.daily.signalsToWatch.length
@@ -206,6 +228,16 @@ export default {
       return (this.agents || []).filter(
         (a) => Boolean(a && a.online && Array.isArray(a.capabilities) && a.capabilities.includes('cosmic_web_briefing')),
       );
+    },
+    followUpCapableAgents() {
+      if (!this.agentsLive) return [];
+      return (this.agents || []).filter(
+        (a) => Boolean(a && a.online && Array.isArray(a.capabilities) && a.capabilities.includes('cosmic_web_follow_up')),
+      );
+    },
+    canUseInlineFollowUp() {
+      if (!this.agentsLive) return true;
+      return this.followUpCapableAgents.length > 0;
     },
     availableAgents() {
       const list = Array.isArray(this.agents) ? this.agents : [];
@@ -224,6 +256,13 @@ export default {
     effectiveBriefingAgentId() {
       const cand = this.briefAgentId || this.effectiveDispatchAgentId;
       if (cand && this.briefingCapableAgents.some((a) => a.id === cand)) {
+        return cand;
+      }
+      return undefined;
+    },
+    effectiveFollowUpAgentId() {
+      const cand = this.briefAgentId || this.effectiveDispatchAgentId;
+      if (cand && this.followUpCapableAgents.some((a) => a.id === cand)) {
         return cand;
       }
       return undefined;
@@ -331,7 +370,20 @@ export default {
       this.failedMediaUrls = { ...this.failedMediaUrls, [url]: true };
     },
     renderFollowUpHtml(text) {
-      return text ? renderSafeMessageMarkdown(String(text)) : '';
+      return text ? renderCosmicWebProse(String(text)) : '';
+    },
+    selectStorySource(src) {
+      if (!this.cluster?.id || !src?.id) return;
+      this.webStore.selectArticleSource(this.cluster.id, {
+        itemId: src.id,
+        url: src.url || null,
+        perspective: this.briefPerspective,
+        agentId: this.effectiveBriefingAgentId,
+      });
+    },
+    onBackdropEsc() {
+      if (this.webStore.lightboxMedia) return;
+      this.closeModal();
     },
     attachFocusContainment() {
       if (typeof document === 'undefined' || this._focusTrapBound) return;
@@ -419,7 +471,7 @@ export default {
         mode: 'brief',
         perspective: this.briefPerspective,
         agentId: this.effectiveBriefingAgentId,
-        research: true,
+        research: !this.cluster?.isPrivateSource,
         force: true,
       });
     },
@@ -442,9 +494,13 @@ export default {
         return;
       }
       if (!this.cluster?.id || this.webStore.followUpLoading) return;
+      if (!this.canUseInlineFollowUp) {
+        this.$emit('toast', t('cosmos.web.report.upgradeAgentHint'));
+        return;
+      }
       if (!explicitQuestion) this.composerInput = '';
       await this.webStore.askFollowUp(this.cluster.id, q, {
-        agentId: this.effectiveBriefingAgentId,
+        agentId: this.effectiveFollowUpAgentId,
         perspective: this.briefPerspective,
       });
       this.$nextTick(() => {
@@ -562,13 +618,14 @@ export default {
     <div
       v-if="isOpen"
       class="cw-modal-backdrop"
+      :inert="Boolean(webStore.lightboxMedia)"
       role="dialog"
       aria-modal="true"
       :aria-label="isDailyMode ? (daily?.headline || $t('cosmos.web.daily.title')) : (cluster?.headline || $t('cosmos.web.report.badge'))"
       @pointerdown.stop
       @wheel.stop
       @click.self="closeModal"
-      @keydown.esc.stop.prevent="closeModal"
+      @keydown.esc.stop.prevent="onBackdropEsc"
     >
       <div ref="modalShell" class="cw-modal-shell cw-reader-modal" tabindex="-1">
         <!-- Fixed Weightless Header -->
@@ -739,38 +796,48 @@ export default {
               <span v-if="cluster?.heatScore !== undefined" class="cw-report-time">
                 {{ $t('cosmos.web.feed.heatLabel', { score: Math.round(cluster.heatScore) }) }}
               </span>
-              <span v-if="activeBriefSearchCount > 0" class="cw-verified-tag">
-                ✦ {{ $t('cosmos.web.report.webVerified', { count: activeBriefSearchCount }) }}
+              <span v-if="cluster?.isPrivateSource" class="cw-verified-tag">
+                {{ $t('cosmos.web.report.privateLocalBadge') }}
+              </span>
+              <span v-else-if="activeBriefEvidenceCount > 0" class="cw-verified-tag">
+                ✦ {{ $t('cosmos.web.report.webVerified', { count: activeBriefEvidenceCount }) }}
               </span>
             </div>
 
-            <!-- Subtle Source Footnotes -->
+            <!-- Source Switcher & Subtle External Footnotes -->
             <div v-if="sourceFootnotes.length" class="cw-source-footnotes">
               <span class="cw-footnote-label">{{ $t('cosmos.web.report.sourcesLabel') }}</span>
               <template v-for="(src, idx) in sourceFootnotes" :key="src.id">
+                <button
+                  v-if="sourceFootnotes.length > 1"
+                  type="button"
+                  class="cw-footnote-switch"
+                  :class="{ 'is-active': (webStore.activeArticleItemId || sourceFootnotes[0]?.id) === src.id }"
+                  @click="selectStorySource(src)"
+                >{{ src.name }}</button>
+                <span v-else-if="!src.url" class="cw-footnote-text">{{ src.name }}</span>
                 <a
                   v-if="src.url"
                   :href="src.url"
                   target="_blank"
                   rel="noopener noreferrer"
                   class="cw-footnote-link"
-                >{{ src.name }} ↗</a>
-                <span v-else class="cw-footnote-text">{{ src.name }}</span>
+                  :aria-label="src.name"
+                >{{ sourceFootnotes.length > 1 ? '↗' : (src.name + ' ↗') }}</a>
                 <span v-if="idx < sourceFootnotes.length - 1" class="cw-footnote-dot" aria-hidden="true">·</span>
               </template>
             </div>
 
             <!-- Perspective Switcher + Regenerate -->
             <div class="cw-perspective-bar">
-              <div class="cw-perspective-pills" role="tablist">
+              <div class="cw-perspective-pills" role="group" :aria-label="$t('cosmos.web.prefs.perspectiveLabel')">
                 <button
                   v-for="opt in PERSPECTIVE_OPTIONS"
                   :key="opt.id"
                   type="button"
-                  role="tab"
                   class="cw-persp-btn"
                   :class="{ 'is-active': briefPerspective === opt.id }"
-                  :aria-selected="briefPerspective === opt.id"
+                  :aria-pressed="briefPerspective === opt.id"
                   @click="switchPerspective(opt.id)"
                 >{{ $t(opt.shortKey) }}</button>
               </div>
@@ -793,12 +860,17 @@ export default {
               <div class="cw-shimmer-line is-short"></div>
             </div>
 
-            <!-- Error -->
-            <div v-else-if="webStore.aiBriefError" class="cw-state-box cw-state-error">
-              <p>{{ webStore.aiBriefError }}</p>
-              <button type="button" class="cw-btn cw-btn-primary" @click="regenerateAiBrief">
-                {{ $t('cosmos.web.action.retry') }}
-              </button>
+            <!-- Graceful Non-AI Digest + Error / Retry -->
+            <div v-else-if="webStore.aiBriefError" class="cw-magazine-flow">
+              <blockquote v-if="fallbackExcerpt" class="cw-pull-quote">
+                <p>{{ fallbackExcerpt }}</p>
+              </blockquote>
+              <div class="cw-state-box cw-state-error">
+                <p>{{ agentsLive && !briefingCapableAgents.length ? $t('cosmos.web.report.offlineHint') : webStore.aiBriefError }}</p>
+                <button type="button" class="cw-btn cw-btn-primary" @click="regenerateAiBrief">
+                  {{ $t('cosmos.web.action.retry') }}
+                </button>
+              </div>
             </div>
 
             <!-- Magazine Editorial Flow -->
@@ -999,7 +1071,7 @@ export default {
                 <span v-if="selectedAgentObj && !selectedAgentObj.online" class="cw-agent-offline-dot" :title="$t('cosmos.web.status.offline')"></span>
               </button>
 
-              <div v-if="agentPickerOpen" class="cw-agent-popover" role="listbox" :aria-label="$t('cosmos.web.report.agentPickerTitle')">
+              <div v-if="agentPickerOpen" class="cw-agent-popover" role="menu" :aria-label="$t('cosmos.web.report.agentPickerTitle')">
                 <div v-if="!availableAgents.length" class="cw-agent-popover-empty">
                   {{ $t('cosmos.web.dispatch.noAgent') }}
                 </div>
@@ -1007,10 +1079,10 @@ export default {
                   v-for="ag in availableAgents"
                   :key="ag.id"
                   type="button"
-                  role="option"
+                  role="menuitemradio"
                   class="cw-agent-option"
                   :class="{ 'is-selected': ag.id === effectiveDispatchAgentId }"
-                  :aria-selected="ag.id === effectiveDispatchAgentId"
+                  :aria-checked="ag.id === effectiveDispatchAgentId"
                   @click="selectAgent(ag.id)"
                 >
                   <span class="cw-planet-orb" :class="agentPlanetClass(ag.id)"></span>
@@ -1035,9 +1107,9 @@ export default {
                 v-if="!isDailyMode"
                 type="button"
                 class="cw-composer-icon-btn"
-                :disabled="!composerInput.trim() || webStore.followUpLoading"
-                :title="$t('cosmos.web.report.askAiHint')"
-                :aria-label="$t('cosmos.web.report.askAiHint')"
+                :disabled="!composerInput.trim() || webStore.followUpLoading || !canUseInlineFollowUp"
+                :title="canUseInlineFollowUp ? $t('cosmos.web.report.askAiHint') : $t('cosmos.web.report.upgradeAgentHint')"
+                :aria-label="canUseInlineFollowUp ? $t('cosmos.web.report.askAiHint') : $t('cosmos.web.report.upgradeAgentHint')"
                 @click="submitModalFollowUp()"
               >✦</button>
               <button

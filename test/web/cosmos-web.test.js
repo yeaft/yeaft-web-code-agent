@@ -1414,7 +1414,7 @@ describe('Cosmic Web — Pinia store & interactive overlay', () => {
         visible: true,
         agents: [
           { id: 'chat-only', name: 'ChatOnly', online: true, capabilities: [] },
-          { id: 'brief-agent', name: 'Researcher', online: true, capabilities: ['cosmic_web_briefing'] },
+          { id: 'brief-agent', name: 'Researcher', online: true, capabilities: ['cosmic_web_briefing', 'cosmic_web_research', 'cosmic_web_follow_up', 'cosmic_web_radar'] },
         ],
         agentsLive: true,
         agentToPlanet: { 'chat-only': 'mars', 'brief-agent': 'earth' },
@@ -1553,7 +1553,7 @@ describe('Cosmic Web — Pinia store & interactive overlay', () => {
 
     const wrapper = mount(CosmosWebPrefsModal, {
       props: {
-        agents: [{ id: 'a-cap', name: 'Capable', online: true, capabilities: ['cosmic_web_briefing'] }],
+        agents: [{ id: 'a-cap', name: 'Capable', online: true, capabilities: ['cosmic_web_briefing', 'cosmic_web_radar'] }],
         agentsLive: true,
       },
       global: { mocks: { $t: (k) => cosmosZh[k] || k } },
@@ -1576,10 +1576,121 @@ describe('Cosmic Web — Pinia store & interactive overlay', () => {
     expect(wrapper.vm.customFormError).toBeNull();
     expect(wrapper.vm.draft.customDomains.some((c) => c.name === 'NBA 湖人' && c.aiRadar === true)).toBe(true);
 
-    // Trigger AI Topic Radar scan on saved custom domain
+    // Trigger AI Topic Radar scan on saved custom domain with aiRadar: true
     await wrapper.vm.triggerRadarScan(webStore.prefs.customDomains[0]);
     await flushPromises();
     expect(radarCalls).toHaveLength(1);
+
+    wrapper.unmount();
+  });
+
+  it('Review Blockers #4, #6, #7, #8, #10: non-linkifying prose, evidenceCount badge gating, same-cluster reopen source switch + follow-up itemId, v1 Agent gating, and Lightbox focus/Escape trap', async () => {
+    const followUpBodies = [];
+    mockApi([
+      {
+        match: (u, m) => u === '/api/cosmic-web/clusters/c-multi' && m === 'GET',
+        body: {
+          id: 'c-multi',
+          domainId: 'ai',
+          headline: 'Multi-source AI event',
+          summaryExcerpt: 'Stored fallback excerpt for offline reading.',
+          items: [
+            { id: 'item-1', sourceName: 'Source 1', title: 'S1', summaryExcerpt: 'Excerpt 1', url: 'https://s1.example/a' },
+            { id: 'item-2', sourceName: 'Source 2', title: 'S2', summaryExcerpt: 'Excerpt 2', url: 'https://s2.example/b' },
+          ],
+        },
+      },
+      {
+        match: (u, m) => u === '/api/cosmic-web/clusters/c-multi/community' && m === 'GET',
+        body: { media: [], communityComments: [] },
+      },
+      {
+        match: (u, m) => u === '/api/cosmic-web/clusters/c-multi/ai-brief' && m === 'POST',
+        body: (_u, opts) => {
+          const b = JSON.parse(opts.body);
+          return {
+            tldr: `Brief for ${b.itemId || 'default'}`,
+            sections: [{ heading: 'Body', body: 'Check https://unobserved.evil/phish and [link](https://unobserved.evil/2) now.' }],
+            bullets: ['b1', 'b2'],
+            impact: 'imp',
+            searchCount: 3,
+            evidenceCount: 0,
+            researched: false,
+            followUps: ['Why?'],
+          };
+        },
+      },
+      {
+        match: (u, m) => u === '/api/cosmic-web/clusters/c-multi/follow-up' && m === 'POST',
+        body: (_u, opts) => {
+          followUpBodies.push(JSON.parse(opts.body));
+          return { question: 'Why?', answer: 'Because.', citations: [], media: [], searchCount: 0, evidenceCount: 0, researched: false };
+        },
+      },
+    ]);
+
+    const webStore = useCosmicWebStore();
+    webStore.bootstrapped = true;
+    webStore.prefs.onboarded = true;
+
+    // Blocker #6: reopening same cluster with a different itemId clears previous source state & sends itemId on follow-up
+    await webStore.openClusterReader('c-multi', { itemId: 'item-1' });
+    await flushPromises();
+    expect(webStore.aiBriefData?.tldr).toBe('Brief for item-1');
+    webStore.followUpThread = [{ id: 'old', question: 'Q', answer: 'A', citations: [], media: [] }];
+
+    await webStore.openClusterReader('c-multi', { itemId: 'item-2' });
+    await flushPromises();
+    expect(webStore.aiBriefData?.tldr).toBe('Brief for item-2');
+    expect(webStore.followUpThread).toEqual([]);
+
+    await webStore.askFollowUp('c-multi', 'Why?');
+    expect(followUpBodies[0]).toMatchObject({ itemId: 'item-2', briefContext: 'Brief for item-2' });
+
+    // Mount overlay with expanded reader + lightbox media + v1-only Agent (no cosmic_web_follow_up)
+    webStore.activeClusterDetail.media = [
+      { proxyUrl: '/api/cosmic-web/media-proxy?url=https%3A%2F%2Fimg.test%2F1.png&exp=9999999999&sig=ok', kind: 'image', caption: 'Chart' },
+    ];
+    webStore.readerExpanded = true;
+
+    const wrapper = mount(CosmosWebOverlay, {
+      props: {
+        visible: true,
+        agents: [{ id: 'v1-only', name: 'LegacyAgent', online: true, capabilities: ['cosmic_web_briefing'] }],
+        agentsLive: true,
+        agentToPlanet: { 'v1-only': 'earth' },
+        isCompact: false,
+      },
+      global: {
+        mocks: {
+          $t: (k, params) => String(cosmosZh[k] || k).replace(/\{(\w+)\}/g, (_, p) => params?.[p] ?? ''),
+        },
+      },
+      attachTo: document.body,
+    });
+    await flushPromises();
+
+    // Blocker #4: Prose NEVER contains clickable <a> tags for unobserved URLs, and failed searches (researched=false, evidenceCount=0) do NOT render verified badge
+    expect(wrapper.find('.cw-reader-modal .cw-verified-tag').exists()).toBe(false);
+    expect(wrapper.findAll('.cw-reader-modal .cw-markdown-prose a')).toHaveLength(0);
+
+    // Blocker #8: inline AI follow-up button is disabled on v1-only Agent without cosmic_web_follow_up
+    const modal = wrapper.findComponent({ name: 'CosmosWebReaderModal' });
+    expect(modal.vm.canUseInlineFollowUp).toBe(false);
+
+    // Blocker #10: Opening Lightbox from Expanded Reader moves focus into Lightbox, Escape closes ONLY Lightbox (keeping Expanded Reader open), and restores focus
+    const mediaBtn = wrapper.find('.cw-reader-modal .cw-media-tile');
+    mediaBtn.element.focus();
+    await mediaBtn.trigger('click');
+    await flushPromises();
+    expect(webStore.lightboxMedia).toBeTruthy();
+    expect(document.activeElement).toBe(wrapper.vm.$refs.lightboxCloseBtn);
+
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
+    await flushPromises();
+    expect(webStore.lightboxMedia).toBeNull();
+    expect(webStore.readerExpanded).toBe(true); // Expanded reader stayed open!
+    expect(document.activeElement).toBe(mediaBtn.element);
 
     wrapper.unmount();
   });

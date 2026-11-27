@@ -110,6 +110,16 @@ export default {
         (a) => Boolean(a && a.online && Array.isArray(a.capabilities) && a.capabilities.includes('cosmic_web_briefing')),
       );
     },
+    radarCapableAgents() {
+      if (!this.agentsLive) return [];
+      return (this.agents || []).filter(
+        (a) => Boolean(a && a.online && Array.isArray(a.capabilities) && a.capabilities.includes('cosmic_web_radar')),
+      );
+    },
+    canScanRadar() {
+      if (!this.agentsLive) return true;
+      return this.radarCapableAgents.length > 0;
+    },
     savedOfflinePreferredAgent() {
       const savedId = typeof this.webStore.prefs?.preferredAgentId === 'string'
         ? this.webStore.prefs.preferredAgentId
@@ -306,20 +316,26 @@ export default {
       };
       this.customFormError = null;
     },
-    isSavedCustomDomain(id) {
-      return (this.webStore.prefs?.customDomains || []).some((c) => c && c.id === id);
+    isSavedRadarDomain(id) {
+      return (this.webStore.prefs?.customDomains || []).some((c) => c && c.id === id && c.aiRadar === true);
     },
     async triggerRadarScan(cd) {
-      if (!cd?.id || this.webStore.radarScanningDomainId) return;
+      if (!cd?.id || !cd.aiRadar || this.webStore.radarScanningDomainId) return;
+      if (!this.canScanRadar) {
+        this.$emit('toast', t('cosmos.web.prefs.radarUpgradeHint'));
+        return;
+      }
       const eligibleAgentId = this.draft.preferredAgentId
-        && this.briefingCapableAgents.some((a) => a.id === this.draft.preferredAgentId)
+        && this.radarCapableAgents.some((a) => a.id === this.draft.preferredAgentId)
         ? this.draft.preferredAgentId
         : undefined;
       try {
-        await this.webStore.scanTopicRadar(cd.id, {
+        const result = await this.webStore.scanTopicRadar(cd.id, {
           agentId: eligibleAgentId,
         });
-        this.$emit('toast', t('cosmos.web.prefs.radarScannedToast', { name: cd.name || cd.id }));
+        if (result) {
+          this.$emit('toast', t('cosmos.web.prefs.radarScannedToast', { name: cd.name || cd.id }));
+        }
       } catch (err) {
         this.$emit('toast', err?.message || t('cosmos.web.prefs.radarScanFailed'));
       }
@@ -562,10 +578,11 @@ export default {
                   <span v-if="cd.aiRadar" class="cw-badge cw-badge-accent">{{ $t('cosmos.web.prefs.aiRadarBadge') }}</span>
                   <div class="cw-custom-actions">
                     <button
-                      v-if="isSavedCustomDomain(cd.id)"
+                      v-if="cd.aiRadar && isSavedRadarDomain(cd.id)"
                       type="button"
                       class="cw-btn cw-btn-subtle cw-btn-xs"
-                      :disabled="Boolean(webStore.radarScanningDomainId)"
+                      :disabled="Boolean(webStore.radarScanningDomainId) || !canScanRadar"
+                      :title="canScanRadar ? $t('cosmos.web.prefs.radarScanNow') : $t('cosmos.web.prefs.radarUpgradeHint')"
                       @click="triggerRadarScan(cd)"
                     >{{ webStore.radarScanningDomainId === cd.id ? $t('cosmos.web.prefs.radarScanning') : $t('cosmos.web.prefs.radarScanNow') }}</button>
                     <button type="button" class="cw-text-btn" @click="editCustomDomain(cd)">

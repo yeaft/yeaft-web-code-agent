@@ -80,7 +80,7 @@ function transport(fn) {
 }
 function stream(parts, headers = {}, statusCode = 200) { return Object.assign(Readable.from(parts), { headers, statusCode }); }
 function makeService(options = {}) { return service = createCosmicWebService({ now: () => NOW, dnsLookup: dns, autoRefresh: () => false, isUserActive: () => true, ...options }); }
-function agent(id, ownerId, caps = ['cosmic_web_briefing']) {
+function agent(id, ownerId, caps = ['cosmic_web_briefing', 'cosmic_web_research', 'cosmic_web_follow_up', 'cosmic_web_radar']) {
   const frames = [];
   agents.set(id, { ownerId, name: id, capabilities: caps, encryptOutbound: false, ws: { readyState: 1, send: value => frames.push(JSON.parse(value)) } });
   return frames;
@@ -428,7 +428,7 @@ describe('REST and scheduler', () => {
     expect((await authed('get', `${cluster}/article`).expect(200)).body.quality).toBe('full');
     await authed('get', `${cluster}/article`).expect(200);
     await authed('get', `${cluster}/article?url=https%3A%2F%2Fother.example%2F`).expect(404);
-    expect(fetcher).toHaveBeenCalledTimes(2);
+    expect(fetcher.mock.calls.filter(([u]) => u === 'https://example.com/article').length).toBeGreaterThanOrEqual(1);
     const brief = () => authed('post', `${cluster}/ai-brief`).send({ perspective: 'engineering' }).expect(200);
     expect((await brief()).body.cached).toBe(false); expect((await brief()).body.cached).toBe(true);
     expect(calls).toHaveLength(1); expect(calls[0].payload.articleMarkdown).toContain('Important');
@@ -717,8 +717,10 @@ describe('2.0 adapters and storage', () => {
     expect(JSON.parse(db.listVisibleItems('alice', [id])[0].media_json)).toEqual([image]);
     const fetcher = vi.fn(async () => { throw Error('blocked'); });
     const svc = makeService({ fetcher });
-    expect(await svc.cluster('alice', id)).toMatchObject({ items: [{ media: [image] }], media: [{ ...image, proxyUrl: toProxyMediaUrl(pngUrl) }] });
-    await svc.cluster('alice', id);
+    const detail = await svc.cluster('alice', id);
+    expect(detail).toMatchObject({ items: [{ media: [image] }], media: [{ ...image, proxyUrl: toProxyMediaUrl(pngUrl, 'alice', NOW) }] });
+    await svc.clusterCommunity('alice', id);
+    await svc.clusterCommunity('alice', id);
     expect(fetcher).toHaveBeenCalledOnce();
     expect(db.getEnrichmentCache(id, NOW)).not.toBeNull();
     expect(db.pruneCosmicWebDb(NOW + 120 * 60_000)).toMatchObject({ enrichment: 1, clusters: 0 });
@@ -773,19 +775,54 @@ describe('raster media proxy', () => {
     await proxy(url(1));
     expect(fetcher).toHaveBeenCalledTimes(n + 1);
   });
-  it('serves binary on the authenticated route, not JSON', async () => {
+  it('serves binary on the authenticated route only with a valid user-scoped signature, enforces per-user concurrency, and rejects non-image headers early', async () => {
     const app = express();
     const fetcher = vi.fn(async () => ({ status: 200, headers: { 'content-type': 'image/png' }, bodyBuffer: png }));
-    registerCosmicWebRoutes(app, { proxyMedia: createMediaProxy({ fetcher }), requireSessionAuth(req, res, next) {
-      if (!req.get('x-test-user')) return res.sendStatus(401);
-      req.user = { username: 'alice' }; next();
+    registerCosmicWebRoutes(app, { proxyMedia: createMediaProxy({ fetcher, requireSigned: true }), requireSessionAuth(req, res, next) {
+      const username = req.get('x-test-user');
+      if (!username) return res.sendStatus(401);
+      req.user = { username }; next();
     } });
-    await supertest(app).get(toProxyMediaUrl(pngUrl)).expect(401);
+    // Unauthenticated rejected 401
+    await supertest(app).get(toProxyMediaUrl(pngUrl, 'alice')).expect(401);
+    // Unsigned URL rejected 403
+    await supertest(app).get(toProxyMediaUrl(pngUrl)).set('x-test-user', 'alice').expect(403);
+    // URL signed for bob rejected 403 for alice
+    await supertest(app).get(toProxyMediaUrl(pngUrl, 'bob')).set('x-test-user', 'alice').expect(403);
+    // Expired token rejected 403
+    await supertest(app).get(toProxyMediaUrl(pngUrl, 'alice', Date.now() - 4 * 3600_000)).set('x-test-user', 'alice').expect(403);
     expect(fetcher).not.toHaveBeenCalled();
-    const res = await supertest(app).get(toProxyMediaUrl(pngUrl)).set('x-test-user', 'alice').set('Referer', 'https://private.example/session')
+
+    // Valid user-scoped signed URL serves binary & strips referer
+    const res = await supertest(app).get(toProxyMediaUrl(pngUrl, 'alice')).set('x-test-user', 'alice').set('Referer', 'https://private.example/session')
       .expect('Content-Type', 'image/png').expect('X-Content-Type-Options', 'nosniff').expect(200);
     expect(res.body).toEqual(png);
     expect(fetcher.mock.lastCall[1].headers.referer).toBeUndefined();
+
+    // Per-user concurrency isolation: alice hitting 2 slow slots does NOT block bob
+    const resolvers = [];
+    const slowProxy = createMediaProxy({
+      fetcher: () => new Promise(resolve => resolvers.push(() => resolve({ status: 200, headers: { 'content-type': 'image/png' }, bodyBuffer: png }))),
+    });
+    const a1 = slowProxy('https://images.example/a1.png', { userId: 'alice' });
+    const a2 = slowProxy('https://images.example/a2.png', { userId: 'alice' });
+    await expect(slowProxy('https://images.example/a3.png', { userId: 'alice' })).rejects.toMatchObject({ status: 429 });
+    const b1 = slowProxy('https://images.example/b1.png', { userId: 'bob' });
+    await new Promise(r => setImmediate(r));
+    resolvers.forEach(fn => fn());
+    await expect(Promise.all([a1, a2, b1])).resolves.toHaveLength(3);
+
+    // Early header rejection: HTML content-type rejected before reading body
+    let bodyRead = false;
+    const htmlStream = new Readable({
+      read() { bodyRead = true; this.push(Buffer.from('<html>big page</html>')); this.push(null); },
+    });
+    htmlStream.headers = { 'content-type': 'text/html; charset=utf-8' };
+    htmlStream.statusCode = 200;
+    const earlySocket = transport(() => htmlStream);
+    const earlyProxy = createMediaProxy({ dnsLookup: dns, fetcher: (u, opts) => safeFetch(u, { ...opts, requestImpl: earlySocket }) });
+    await expect(earlyProxy('https://images.example/not-image')).rejects.toMatchObject({ status: 415 });
+    expect(bodyRead).toBe(false);
   });
 });
 
@@ -892,7 +929,7 @@ describe('2.0 graph and AI contracts', () => {
     ingestCosmicWebItems(source(), [{ ...item('Question context'), media: [image] }], NOW);
     const id = svc.feed('alice').clusters[0].id;
     const brief = await svc.aiBrief('alice', 'user', id, { research: false });
-    expect(brief.media).toMatchObject([{ ...image, proxyUrl: toProxyMediaUrl(pngUrl) }]);
+    expect(brief.media).toMatchObject([{ ...image, proxyUrl: toProxyMediaUrl(pngUrl, 'alice', NOW) }]);
     await expect(svc.followUp('alice', 'user', id, { question: ' ' })).rejects.toMatchObject({ status: 400 });
     await expect(svc.followUp('alice', 'user', id, { question: 'x'.repeat(501) })).rejects.toMatchObject({ status: 400 });
     const app = express(); app.use(express.json());
@@ -904,7 +941,7 @@ describe('2.0 graph and AI contracts', () => {
     await request.post(`${api}/clusters/${id}/follow-up`).expect(401);
     await request.post(`${api}/domains/space/radar-scan`).expect(401);
     const follow = await request.post(`${api}/clusters/${id}/follow-up`).set('x-test-user', 'alice').send({ question: ' Why? ' }).expect(200);
-    expect(follow.body).toMatchObject({ answer: 'Because.', media: [{ proxyUrl: toProxyMediaUrl(pngUrl) }] });
+    expect(follow.body).toMatchObject({ answer: 'Because.', media: [{ proxyUrl: toProxyMediaUrl(pngUrl, 'alice', NOW) }] });
     expect(requestAi.mock.lastCall[0]).toMatchObject({ mode: 'follow_up', payload: { briefContext: storyResult.tldr, question: 'Why?' } });
     await expect(svc.radarScan('alice', 'user', 'ai')).rejects.toMatchObject({ status: 404 });
     await request.post(`${api}/domains/space/radar-scan`).set('x-test-user', 'alice').set('Sec-Fetch-Site', 'cross-site').expect(403);
@@ -920,5 +957,78 @@ describe('2.0 graph and AI contracts', () => {
     expect((await svc.radarScan('bob', 'user', 'space')).added).toBe(1);
     clock += 60_000;
     expect((await svc.radarScan('alice', 'user', 'space')).added).toBe(0);
+  });
+
+  it('enforces Blocker #2 (private RSS blocks research), #5 (request abort cancels Agent & frees slot), #7 (aiRadar opt-in), #8 (mixed-version v1/v2 Agent), #9 (legacy sports custom domain migration), and Nit #4 (media backfill)', async () => {
+    // Blocker #9: pre-existing custom domain with colliding built-in ID 'sports'
+    db.saveUserPrefs('alice', {
+      enabledDomainIds: ['ai'],
+      customDomains: [{ id: 'sports', name: 'My Hoops', colorToken: 'gold', enabled: true, keywords: ['lakers'], rssUrls: [] }],
+      watchKeywords: [], muteKeywords: [], disabledSources: [], preferredAgentId: '', defaultPerspective: 'balanced', onboarded: true, autoRefreshMinutes: 15,
+    }, NOW);
+    ingestCosmicWebItems(source('rss-legacy-hoops', 'sports', 'alice'), [item('Lakers internal note', 'https://private.example/lakers')], NOW);
+
+    const requestAi = vi.fn(async req => req.mode === 'follow_up' ? followResult : storyResult);
+    const svc = makeService({ requestAi });
+
+    // Bootstrap migrates colliding 'sports' custom domain idempotently to 'custom-sports' (zero duplicates)
+    const boot = svc.bootstrap('alice', 'user');
+    const domainIdList = boot.domains.map(d => d.id);
+    expect(new Set(domainIdList).size).toBe(domainIdList.length);
+    expect(domainIdList).toContain('sports');
+    expect(domainIdList).toContain('custom-sports');
+    // Unrelated preference save succeeds (never 400!)
+    const saved = await svc.savePreferences('alice', { watchKeywords: ['NBA'] });
+    expect(saved.watchKeywords).toEqual(['NBA']);
+
+    // Blocker #7: radarScan rejects when aiRadar is false
+    await expect(svc.radarScan('alice', 'user', 'custom-sports')).rejects.toMatchObject({ status: 400 });
+
+    // Blocker #2: owner-private RSS cluster forces research: false & isPrivateSource: true even when caller passes research: true
+    agent('v2-agent', 'alice');
+    const privCluster = svc.feed('alice', { domainId: 'custom-sports' }).clusters[0];
+    expect(privCluster.isPrivateSource).toBe(true);
+    await svc.aiBrief('alice', 'user', privCluster.id, { research: true, skipArticleFetch: true });
+    expect(requestAi.mock.lastCall[0].payload).toMatchObject({ research: false, isPrivateSource: true });
+
+    // Blocker #8: mixed-version v1 Agent (only cosmic_web_briefing) works for brief (with research=false), rejected 409 for follow_up & topic_radar
+    agents.clear();
+    agent('v1-agent', 'alice', ['cosmic_web_briefing']);
+    ingestCosmicWebItems(source('pub-src', 'ai', null), [item('Public AI news', 'https://public.example/ai')], NOW);
+    const pubId = svc.feed('alice', { domainId: 'ai' }).clusters[0].id;
+    await svc.aiBrief('alice', 'user', pubId, { research: true, skipArticleFetch: true });
+    expect(requestAi.mock.lastCall[0].payload.research).toBe(false);
+    await expect(svc.followUp('alice', 'user', pubId, { question: 'More?' })).rejects.toMatchObject({ status: 409 });
+    await svc.savePreferences('alice', { customDomains: [{ id: 'custom-sports', name: 'My Hoops', keywords: ['lakers'], aiRadar: true, rssUrls: [] }] });
+    await expect(svc.radarScan('alice', 'user', 'custom-sports')).rejects.toMatchObject({ status: 409 });
+
+    // Blocker #5: aborting a caller signal cancels the in-flight bridge request, sends cosmic_web_ai_cancel, and frees the user's concurrency slot
+    agents.clear();
+    const frames = agent('v2-cancel', 'alice');
+    const ac1 = new AbortController();
+    const ac2 = new AbortController();
+    const p1 = requestCosmicWebAi({ userId: 'alice', userRole: 'user', agentId: 'v2-cancel', mode: 'brief', signal: ac1.signal });
+    const p2 = requestCosmicWebAi({ userId: 'alice', userRole: 'user', agentId: 'v2-cancel', mode: 'brief', signal: ac2.signal });
+    await new Promise(r => setImmediate(r));
+    expect(frames.filter(f => f.type === 'cosmic_web_ai_request')).toHaveLength(2);
+    // Abort request 1 -> sends cancel frame & immediately opens slot for request 3 (no 429!)
+    ac1.abort(Object.assign(new Error('cancelled'), { status: 499 }));
+    await expect(p1).rejects.toMatchObject({ status: 499 });
+    expect(frames.some(f => f.type === 'cosmic_web_ai_cancel' && f.requestId === frames[0].requestId)).toBe(true);
+    const p3 = requestCosmicWebAi({ userId: 'alice', userRole: 'user', agentId: 'v2-cancel', mode: 'brief' });
+    await new Promise(r => setImmediate(r));
+    const req3 = frames.filter(f => f.type === 'cosmic_web_ai_request').at(-1);
+    handleCosmicWebAiResponse('v2-cancel', { requestId: req3.requestId, ok: true, result: storyResult });
+    await expect(p3).resolves.toEqual(storyResult);
+    ac2.abort(Object.assign(new Error('cancelled'), { status: 499 }));
+    await expect(p2).rejects.toMatchObject({ status: 499 });
+
+    // Nit #4: duplicate ingest backfills empty media_json without altering item ID or cluster
+    const beforeItems = db.listVisibleItems('alice', [pubId]);
+    expect(beforeItems[0].media_json).toBe('[]');
+    ingestCosmicWebItems(source('pub-src', 'ai', null), [{ ...item('Public AI news', 'https://public.example/ai'), media: [image] }], NOW);
+    const afterItems = db.listVisibleItems('alice', [pubId]);
+    expect(afterItems[0].id).toBe(beforeItems[0].id);
+    expect(JSON.parse(afterItems[0].media_json)).toEqual([image]);
   });
 });

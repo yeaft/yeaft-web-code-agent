@@ -16,6 +16,9 @@ import webSearch from './tools/web-search.js';
 import { createWebResearchState, withWebDeadline } from './web-research.js';
 
 export const COSMIC_WEB_BRIEFING_CAPABILITY = 'cosmic_web_briefing';
+export const COSMIC_WEB_RESEARCH_CAPABILITY = 'cosmic_web_research';
+export const COSMIC_WEB_FOLLOW_UP_CAPABILITY = 'cosmic_web_follow_up';
+export const COSMIC_WEB_RADAR_CAPABILITY = 'cosmic_web_radar';
 
 const BUNDLED_SKILLS_DIR = fileURLToPath(new URL('../skills/', import.meta.url));
 const SKILL_PATH = 'cosmic-web/SKILL.md';
@@ -26,6 +29,8 @@ const MAX_MARKDOWN_CHARS = 16_000;
 const MAX_WEB_TEXT = 16_000;
 const MAX_URL = 2000;
 const MAX_PAGE_BYTES = 512 * 1024;
+const MAX_HTML_SCAN_CHARS = 150_000;
+const MAX_TOTAL_EVIDENCE_CHARS = 24_000;
 const MAX_RESPONSE_CHARS = 64_000;
 const MODES = new Set(['brief', 'synthesize', 'daily_briefing', 'follow_up', 'topic_radar']);
 const LENSES = Object.freeze({
@@ -250,7 +255,7 @@ function evidenceState(news) {
   const observedPageUrls = new Set([news.sourceUrl, ...news.sources.map(source => source?.url),
     ...observedComments.map(comment => comment.sourceUrl)].map(url => normalizedUrl(url)).filter(Boolean));
   for (const source of news.sources) for (const item of source?.media || []) observedMediaUrls.add(item.url);
-  return { observedComments, observedMediaUrls, observedPageUrls, searchPageUrls: new Set(), communityThreads: new Map(), searchCount: 0, researched: false };
+  return { observedComments, observedMediaUrls, observedPageUrls, searchPageUrls: new Set(), searchCount: 0, evidenceCount: 0, researched: false };
 }
 
 function groundedItems(items, max, normalize) {
@@ -268,32 +273,30 @@ function groundedItems(items, max, normalize) {
 
 const commentText = text => text.replace(/\s+/g, ' ').trim();
 
+// Defang markdown link syntax and bare URLs in prose so unobserved links
+// can never become clickable GFM autolinks; clickable links live only in validated citations.
+function plainProseText(value, max) {
+  const raw = outputText(value, max);
+  const cleaned = raw
+    .replace(/!\[([^\]]*)\]\([^)]*\)/g, '$1')
+    .replace(/\[([^\]]+)\]\([^)]*\)/g, '$1')
+    .replace(/(?<=[a-z][a-z0-9+.-]*):\/\/|www\.|\bmailto:/gi, token =>
+      token.replace(/[.:]/g, char => ({ '.': '．', ':': '：' })[char]))
+    .replace(/\s{2,}/g, ' ')
+    .trim();
+  if (!cleaned) throw invalidOutput();
+  return boundedText(cleaned, max);
+}
+
+// Accept community quotes ONLY from structured records that atomically bind
+// platform, author, quote, likes, and sourceUrl together (no raw HTML proximity heuristic).
 function groundedComments(items, evidence) {
   const result = [];
   for (const item of take(items, 128)) {
     const comment = commentItem(item);
     if (!comment) continue;
-    const supplied = evidence.observedComments.find(prior => prior.platform.toLowerCase() === comment.platform.toLowerCase()
+    const grounded = evidence.observedComments.find(prior => prior.platform.toLowerCase() === comment.platform.toLowerCase()
       && prior.author === comment.author && commentText(prior.quote) === commentText(comment.quote));
-    // A known page URL alone does not establish that somebody said this.
-    let grounded = supplied;
-    if (!grounded) {
-      for (const [sourceUrl, thread] of evidence.communityThreads) {
-        if (comment.sourceUrl && comment.sourceUrl !== sourceUrl) continue;
-        if (thread.platform.toLowerCase() !== comment.platform.toLowerCase()) continue;
-        const quote = commentText(comment.quote);
-        // Check the author next to the quote, not just somewhere on the page.
-        let index = thread.text.indexOf(quote);
-        while (index >= 0) {
-          if (thread.text.slice(Math.max(0, index - 200), index).includes(comment.author)) {
-            grounded = { platform: thread.platform, author: comment.author, quote: comment.quote, sourceUrl };
-            break;
-          }
-          index = thread.text.indexOf(quote, index + quote.length);
-        }
-        if (grounded) break;
-      }
-    }
     if (!grounded || result.some(prior => prior.platform === grounded.platform && prior.author === grounded.author && prior.quote === grounded.quote)) continue;
     const { sourceUrl, ...quote } = grounded;
     result.push({ ...quote, ...(evidence.observedPageUrls.has(sourceUrl) ? { sourceUrl } : {}) });
@@ -305,9 +308,9 @@ function groundedComments(items, evidence) {
 function normalizeOutput(parsed, mode, language, news, evidence) {
   const daily = mode === 'daily_briefing';
   const followUp = mode === 'follow_up';
-  const bullet = value => outputText(value, 500);
-  const question = value => outputText(value, daily ? 320 : 120);
-  const { observedMediaUrls, observedPageUrls, searchPageUrls, researched, searchCount } = evidence;
+  const bullet = value => plainProseText(value, 500);
+  const question = value => plainProseText(value, daily ? 320 : 120);
+  const { observedMediaUrls, observedPageUrls, searchPageUrls, researched, searchCount, evidenceCount } = evidence;
   if (mode === 'topic_radar') {
     onlyKeys(parsed, ['items', 'searchCount']);
     if (!Array.isArray(parsed.items)) throw invalidOutput();
@@ -328,8 +331,8 @@ function normalizeOutput(parsed, mode, language, news, evidence) {
 
   onlyKeys(parsed, daily
     ? ['headline', 'overview', 'sections', 'signalsToWatch', 'followUps', 'fullMarkdown']
-    : followUp ? ['question', 'answer', 'bullets', 'media', 'citations', 'followUps', 'researched', 'searchCount']
-      : ['tldr', 'sections', 'bullets', 'impact', 'media', 'communityHighlights', 'citations', 'followUps', 'researched', 'searchCount', 'fullMarkdown']);
+    : followUp ? ['question', 'answer', 'bullets', 'media', 'citations', 'followUps', 'researched', 'searchCount', 'evidenceCount']
+      : ['tldr', 'sections', 'bullets', 'impact', 'media', 'communityHighlights', 'citations', 'followUps', 'researched', 'searchCount', 'evidenceCount', 'fullMarkdown']);
   const rich = () => ({
     media: groundedItems(parsed.media ?? news.media, Array.isArray(parsed.media) ? (followUp ? 4 : 6) : 4, item => {
       const media = mediaItem(item);
@@ -340,11 +343,11 @@ function normalizeOutput(parsed, mode, language, news, evidence) {
       const citation = projectText(item, { title: 300, sourceName: 100 });
       if (citation.title && observedPageUrls.has(url)) return { ...citation, url };
     }),
-    researched, searchCount,
+    researched, searchCount, evidenceCount,
   });
   if (followUp) return {
     question: outputText(news.question || parsed.question, 500),
-    answer: outputText(parsed.answer, 3000),
+    answer: plainProseText(parsed.answer, 3000),
     bullets: outputList(parsed.bullets ?? [], 0, 5, bullet),
     followUps: outputList(parsed.followUps ?? [], 0, 3, question),
     ...rich(),
@@ -353,27 +356,27 @@ function normalizeOutput(parsed, mode, language, news, evidence) {
   let result;
   if (daily) {
     result = {
-      headline: outputText(parsed.headline, 250),
-      overview: outputText(parsed.overview, 1500),
+      headline: plainProseText(parsed.headline, 250),
+      overview: plainProseText(parsed.overview, 1500),
       sections: outputList(parsed.sections, 0, 8, section => {
         onlyKeys(section, ['domain', 'bullets']);
-        return { domain: outputText(section.domain, 150), bullets: outputList(section.bullets, 1, 5, bullet) };
+        return { domain: plainProseText(section.domain, 150), bullets: outputList(section.bullets, 1, 5, bullet) };
       }),
       signalsToWatch: outputList(parsed.signalsToWatch, 0, 8, bullet),
       followUps: outputList(parsed.followUps, 0, 5, question),
     };
   } else {
     const bullets = outputList(parsed.bullets, 2, 6, bullet);
-    const impact = outputText(parsed.impact, 1000);
+    const impact = plainProseText(parsed.impact, 1000);
     const zh = language !== 'English';
     const sections = parsed.sections === undefined
-      ? [{ heading: zh ? '核心细节与数据' : 'Key details', body: outputText(bullets.join('\n'), 2000) },
+      ? [{ heading: zh ? '核心细节与数据' : 'Key details', body: plainProseText(bullets.join('\n'), 2000) },
         { heading: zh ? '影响与看点' : 'Impact', body: impact }]
       : outputList(parsed.sections, 1, 6, section => {
         onlyKeys(section, ['heading', 'body']);
-        return { heading: outputText(section.heading, 120), body: outputText(section.body, 2000) };
+        return { heading: plainProseText(section.heading, 120), body: plainProseText(section.body, 2000) };
       });
-    result = { tldr: outputText(parsed.tldr, 400), sections, bullets, impact, ...rich(),
+    result = { tldr: plainProseText(parsed.tldr, 400), sections, bullets, impact, ...rich(),
       communityHighlights: groundedComments(parsed.communityHighlights, evidence), followUps: outputList(parsed.followUps, 2, 3, question) };
   }
   if (Object.hasOwn(parsed, 'fullMarkdown') && typeof parsed.fullMarkdown !== 'string') throw invalidOutput();
@@ -429,43 +432,165 @@ function decodeHtml(text) {
   });
 }
 
-function readableHtml(html) {
-  return decodeHtml(html.replace(/<\/?[a-z][^<>]*>/gi, ' ')).replace(/\s+/g, ' ').trim();
+// Strict linear single-pass HTML scanner: bounded input, zero regex backtracking
+// or repeated tail rescans on malformed/unclosed tags.
+function parseTagAttrs(tagText) {
+  const attrs = {};
+  let i = 0;
+  const len = tagText.length;
+  // Skip tag name
+  while (i < len && !/\s/.test(tagText[i])) i++;
+  while (i < len) {
+    while (i < len && /[\s/]/.test(tagText[i])) i++;
+    if (i >= len) break;
+    const keyStart = i;
+    while (i < len && !/[\s=/>]/.test(tagText[i])) i++;
+    const key = tagText.slice(keyStart, i).toLowerCase();
+    while (i < len && /\s/.test(tagText[i])) i++;
+    if (i < len && tagText[i] === '=') {
+      i++;
+      while (i < len && /\s/.test(tagText[i])) i++;
+      if (i < len && (tagText[i] === '"' || tagText[i] === "'")) {
+        const quote = tagText[i++];
+        const valStart = i;
+        const close = tagText.indexOf(quote, i);
+        const valEnd = close === -1 ? len : close;
+        if (key) attrs[key] = decodeHtml(tagText.slice(valStart, valEnd));
+        i = close === -1 ? len : close + 1;
+      } else {
+        const valStart = i;
+        while (i < len && !/[\s>]/.test(tagText[i])) i++;
+        if (key) attrs[key] = decodeHtml(tagText.slice(valStart, i));
+      }
+    } else if (key) {
+      attrs[key] = '';
+    }
+  }
+  return attrs;
 }
 
-function htmlEvidence(html, url, maxLength) {
-  const page = html.replace(/<!--[\s\S]*?(?:-->|$)|<(script|style|template|svg)\b[^>]*>[\s\S]*?(?:<\/\1\s*>|$)/gi, '');
-  const body = page.match(/<body\b[^>]*>([\s\S]*)/i)?.[1] ?? page;
-  const content = body.replace(/<(nav|header|footer|aside)\b[^>]*>[\s\S]*?<\/\1\s*>/gi, '');
-  // Meta and image attributes are text only; never evaluate or load them.
-  const tags = (markup, name) => markup.matchAll(new RegExp(`<${name}\\b(?:[^<>"']|"[^"]*"|'[^']*')*>`, 'gi'));
-  const attrs = tag => Object.fromEntries(Array.from(tag.matchAll(/([^\s=<>"']+)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'=<>`]+))/g),
-    ([, key, double, single, bare]) => [key.toLowerCase(), decodeHtml(double ?? single ?? bare)]));
-  function* images() {
-    for (const [tag] of tags(page, 'meta')) {
-      const meta = attrs(tag);
-      if (/^(?:og:image(?::url|:secure_url)?|twitter:image(?::src)?)$/i.test(meta.property || meta.name || '')) yield { src: meta.content };
+const RAW_SKIP_TAGS = new Set(['script', 'style', 'template', 'svg', 'noscript']);
+const CHROME_SKIP_TAGS = new Set(['nav', 'header', 'footer', 'aside']);
+
+export function htmlEvidence(html, url, maxLength = MAX_WEB_TEXT) {
+  const src = typeof html === 'string' ? html.slice(0, MAX_HTML_SCAN_CHARS) : '';
+  const lowerSrc = src.toLowerCase();
+  const len = src.length;
+  const textParts = [];
+  let textChars = 0;
+  const textCap = Math.min(maxLength * 2, MAX_WEB_TEXT * 2);
+  let titleText = '';
+  let inTitle = false;
+  let inBody = false;
+  let sawBody = false;
+  const chromeDepth = { nav: 0, header: 0, footer: 0, aside: 0 };
+  const inChrome = () => chromeDepth.nav > 0 || chromeDepth.header > 0 || chromeDepth.footer > 0 || chromeDepth.aside > 0;
+  const rawImages = [];
+  let i = 0;
+
+  while (i < len) {
+    const lt = src.indexOf('<', i);
+    const textEnd = lt === -1 ? len : lt;
+    if (textEnd > i) {
+      const chunk = src.slice(i, textEnd);
+      if (inTitle && titleText.length < 1000) {
+        titleText += chunk;
+      } else if (!inChrome() && textChars < textCap) {
+        textParts.push(chunk);
+        textChars += chunk.length;
+      }
     }
-    for (const [tag] of tags(content, 'img')) {
-      const img = attrs(tag);
+    if (lt === -1) break;
+
+    // HTML comment: <!-- ... -->
+    if (src.startsWith('<!--', lt)) {
+      const endComment = src.indexOf('-->', lt + 4);
+      if (endComment === -1) break; // Unclosed comment consumes remainder linearly
+      i = endComment + 3;
+      continue;
+    }
+
+    // Find end of tag linearly, respecting quoted attribute values
+    let j = lt + 1;
+    let quote = '';
+    while (j < len) {
+      const ch = src[j];
+      if (quote) {
+        if (ch === quote) quote = '';
+      } else if (ch === '"' || ch === "'") {
+        quote = ch;
+      } else if (ch === '>') {
+        break;
+      }
+      j++;
+    }
+    if (j >= len) break; // Unclosed tag consumes remainder linearly
+
+    const inside = src.slice(lt + 1, j).trim();
+    i = j + 1;
+    if (!inside || inside[0] === '!' || inside[0] === '?') continue;
+
+    const closing = inside[0] === '/';
+    const nameMatch = (closing ? inside.slice(1) : inside).match(/^([a-z][a-z0-9:-]*)/i);
+    if (!nameMatch) continue;
+    const tagName = nameMatch[1].toLowerCase();
+
+    if (!closing && RAW_SKIP_TAGS.has(tagName)) {
+      const closeNeedle = `</${tagName}`;
+      const closeIdx = lowerSrc.indexOf(closeNeedle, i);
+      if (closeIdx === -1) break; // Unclosed script/style/svg terminates linearly
+      const closeGt = src.indexOf('>', closeIdx + closeNeedle.length);
+      if (closeGt === -1) break;
+      i = closeGt + 1;
+      continue;
+    }
+
+    if (tagName === 'body' && !closing) {
+      if (!sawBody) {
+        sawBody = true;
+        inBody = true;
+        textParts.length = 0;
+        textChars = 0;
+      }
+      continue;
+    }
+    if (tagName === 'title') {
+      inTitle = !closing;
+      continue;
+    }
+    if (CHROME_SKIP_TAGS.has(tagName)) {
+      if (closing) chromeDepth[tagName] = Math.max(0, chromeDepth[tagName] - 1);
+      else chromeDepth[tagName] += 1;
+      continue;
+    }
+
+    if (!closing && tagName === 'meta' && rawImages.length < 40) {
+      const meta = parseTagAttrs(inside);
+      if (/^(?:og:image(?::url|:secure_url)?|twitter:image(?::src)?)$/i.test(meta.property || meta.name || '')) {
+        rawImages.push({ src: meta.content });
+      }
+    } else if (!closing && tagName === 'img' && !inChrome() && rawImages.length < 60) {
+      const img = parseTagAttrs(inside);
       if ((img.width && parseInt(img.width, 10) <= 2) || (img.height && parseInt(img.height, 10) <= 2)) continue;
-      yield { ...img, src: img['data-src'] || img['data-original'] || img.src };
+      rawImages.push({ ...img, src: img['data-src'] || img['data-original'] || img.src });
     }
   }
+
   const media = [];
   const seen = new Set();
-  for (const img of images()) {
-    const src = publicWebUrl(img.src, url);
-    if (!src || seen.has(src) || /\.svgz?$/i.test(new URL(src).pathname)
+  for (const img of rawImages) {
+    const mediaSrc = publicWebUrl(img.src, url);
+    if (!mediaSrc || seen.has(mediaSrc) || /\.svgz?$/i.test(new URL(mediaSrc).pathname)
       || /(?:^|[\W_])(?:avatar|logo|icon|favicon|pixel|tracker|tracking|spacer|sprite)s?(?:$|[\W_0-9])/i.test(
-        `${src} ${img.alt || ''} ${img.class || ''} ${img.id || ''}`)) continue;
+        `${mediaSrc} ${img.alt || ''} ${img.class || ''} ${img.id || ''}`)) continue;
     const alt = boundedText(img.alt, 300);
-    media.push({ ...mediaItem(src), ...(alt ? { alt } : {}) });
-    seen.add(src);
+    media.push({ ...mediaItem(mediaSrc), ...(alt ? { alt } : {}) });
+    seen.add(mediaSrc);
     if (media.length === 12) break;
   }
-  const title = boundedText(readableHtml(page.match(/<title\b[^>]*>([^<]*)/i)?.[1] ?? ''), 500);
-  return { url, ...(title ? { title } : {}), text: boundedText(readableHtml(content), maxLength), media };
+  const title = boundedText(decodeHtml(titleText).replace(/\s+/g, ' ').trim(), 500);
+  const text = boundedText(decodeHtml(textParts.join(' ')).replace(/\s+/g, ' ').trim(), maxLength);
+  return { url, ...(title ? { title } : {}), text, media };
 }
 
 async function boundedBody(response, signal) {
@@ -542,17 +667,6 @@ function searchImages(value) {
     .map(item => mediaItem(typeof item === 'string' || item?.url ? item : item?.src)).filter(Boolean);
 }
 
-function communityPlatform(url) {
-  const { hostname: host, pathname: path, searchParams } = new URL(url);
-  const site = (...domains) => domains.some(domain => host === domain || host.endsWith(`.${domain}`));
-  if (site('reddit.com') && /\/comments\//.test(path)) return 'Reddit';
-  if (host === 'news.ycombinator.com' && path === '/item' && searchParams.has('id')) return 'Hacker News';
-  if (site('hupu.com') && /\/\d+\.html$/.test(path)) return 'Hupu';
-  if (site('zhihu.com') && /^\/question\//.test(path)) return '知乎';
-  if (site('bilibili.com') && /^\/video\//.test(path)) return 'Bilibili';
-  if (site('linux.do') && /^\/t\//.test(path)) return 'Linux.do';
-}
-
 function harvestResult(raw, name, input, evidence) {
   const data = typeof raw === 'string' ? JSON.parse(raw) : raw;
   if (!isRecord(data) || data.error) return { error: 'No usable web result' };
@@ -570,7 +684,10 @@ function harvestResult(raw, name, input, evidence) {
       return [{ ...projectEvidence(item, 1500), ...projectText(item, { snippet: 1500 }), url, media: observeMedia(searchImages(item)) }];
     });
     const media = observeMedia(searchImages(data));
-    evidence.researched ||= Boolean(results.length || media.length);
+    if (results.length || media.length) {
+      evidence.evidenceCount++;
+      evidence.researched = true;
+    }
     return { ...projectText(data, { provider: 80, answer: 1500 }), results, media };
   }
   const url = publicWebUrl(data.url || input.url);
@@ -584,9 +701,10 @@ function harvestResult(raw, name, input, evidence) {
   }));
   evidence.observedPageUrls.add(url);
   evidence.observedPageUrls.add(input.url);
-  evidence.researched ||= Boolean(text || media.length);
-  const platform = communityPlatform(url);
-  if (platform && text) evidence.communityThreads.set(url, { platform, text: commentText(text) });
+  if (text || media.length) {
+    evidence.evidenceCount++;
+    evidence.researched = true;
+  }
   return { url, ...(title ? { title } : {}), text, media };
 }
 
@@ -663,11 +781,28 @@ async function researchBriefing({ mode, stream, finalCall, params, news, evidenc
     }
   }
 
+  let totalEvidenceChars = 0;
+  function boundedFrame(result) {
+    const remaining = Math.max(0, MAX_TOTAL_EVIDENCE_CHARS - totalEvidenceChars);
+    if (remaining <= 64) {
+      return frame('untrusted_web_result', { truncated: true, note: 'Evidence budget reached' });
+    }
+    let content = frame('untrusted_web_result', result);
+    if (content.length > remaining) {
+      const compact = isRecord(result) && typeof result.text === 'string'
+        ? { ...result, text: result.text.slice(0, Math.max(0, remaining - 512)) }
+        : { truncated: true };
+      content = frame('untrusted_web_result', compact).slice(0, remaining);
+    }
+    totalEvidenceChars += content.length;
+    return content;
+  }
+
   async function addResults(calls, text, providerState) {
     const results = await Promise.all(calls.map(executeTool));
     messages.push({ role: 'assistant', content: text, toolCalls: calls, ...(providerState ? { providerState } : {}) });
     for (const [i, result] of results.entries()) {
-      const content = frame('untrusted_web_result', result);
+      const content = boundedFrame(result);
       messages.push({ role: 'tool', toolCallId: calls[i].id, content, isError: Boolean(result.error) });
       webResults.push(content);
     }
@@ -685,12 +820,12 @@ async function researchBriefing({ mode, stream, finalCall, params, news, evidenc
       const query = [news.topic || news.topicName || news.query || news.headline, ...(news.keywords || [])].filter(Boolean).join(' ');
       if (query) {
         const result = await executeTool({ name: 'WebSearch', input: { query } });
-        const content = frame('untrusted_web_result', result);
+        const content = boundedFrame(result);
         messages.push({ role: 'user', content });
         webResults.push(content);
       }
     }
-    if (!toolCalls.length || total >= budget || (!limits.WebSearch && !limits.WebFetch)) break;
+    if (!toolCalls.length || total >= budget || totalEvidenceChars >= MAX_TOTAL_EVIDENCE_CHARS || (!limits.WebSearch && !limits.WebFetch)) break;
   }
   ctx.signal.throwIfAborted();
   const finalInstruction = 'Research has ended. Return exactly the JSON object for this mode now, with no extra fields or commentary.'
@@ -742,7 +877,10 @@ export async function runCosmicWebBriefing({ mode, perspective = 'balanced', lan
   const stream = typeof streamMethod === 'function' ? streamMethod.bind(requestAdapter) : undefined;
   const call = typeof requestAdapter?.call === 'function' ? requestAdapter.call.bind(requestAdapter) : undefined;
   if (!stream && !call) throw new BriefingError('Cosmic Web briefing provider unavailable');
-  const research = Boolean(stream) && (mode === 'topic_radar' || (mode === 'daily_briefing' ? payload?.research === true : payload?.research !== false));
+  // Research is opt-in (payload.research === true) and strictly blocked for owner-private feeds.
+  const research = Boolean(stream)
+    && payload?.isPrivateSource !== true
+    && (mode === 'topic_radar' || payload?.research === true);
   const skill = loadCosmicWebSkillGuidance({ yeaftDir: yeaftDir || config?.dir, bundledSkillsDir });
   const outputLanguage = languageFor(language || config?.language);
   const system = buildSystemPrompt({ mode, perspective, language: outputLanguage, guidance: skill.text, research });
@@ -772,10 +910,19 @@ export async function runCosmicWebBriefing({ mode, perspective = 'balanced', lan
   };
 }
 
-const activeBriefings = new Set();
+const activeBriefings = new Map();
+
+export function cancelCosmicWebBriefing(requestId) {
+  if (typeof requestId !== 'string' || !requestId) return false;
+  const controller = activeBriefings.get(requestId);
+  if (!controller) return false;
+  activeBriefings.delete(requestId);
+  controller.abort();
+  return true;
+}
 
 export function abortActiveCosmicWebBriefings() {
-  for (const controller of activeBriefings) controller.abort();
+  for (const controller of activeBriefings.values()) controller.abort();
   activeBriefings.clear();
 }
 
@@ -784,10 +931,11 @@ export async function handleCosmicWebAiRequest(msg, { yeaftDir, sendToServer, lo
   const reply = { type: 'cosmic_web_ai_response', requestId: msg?.requestId, ok: false, error: null, result: null, meta: null };
   const controller = new AbortController();
   const { signal } = controller;
+  const key = typeof msg?.requestId === 'string' && msg.requestId ? msg.requestId : randomUUID();
   if (activeBriefings.size >= 2) {
     reply.error = 'Too many active Cosmic Web briefing requests';
   } else {
-    activeBriefings.add(controller);
+    activeBriefings.set(key, controller);
     try {
       const { mode, perspective = 'balanced', language, payload } = msg ?? {};
       validateOptions(mode, perspective);
@@ -800,7 +948,7 @@ export async function handleCosmicWebAiRequest(msg, { yeaftDir, sendToServer, lo
     } catch (error) {
       reply.error = error instanceof BriefingError ? error.message : 'Cosmic Web briefing unavailable';
     } finally {
-      activeBriefings.delete(controller);
+      if (activeBriefings.get(key) === controller) activeBriefings.delete(key);
     }
   }
   if (signal.aborted) return;

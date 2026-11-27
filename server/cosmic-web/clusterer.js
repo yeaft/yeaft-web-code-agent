@@ -43,7 +43,7 @@ export function computeHeatScore({ itemCount, publishedAt, now = Date.now(), has
   return Number(((12 + 18 * Math.log2(Math.max(1, itemCount)) + (hasHotMetric ? 5 : 0)) * 2 ** (-hours / 24)).toFixed(4));
 }
 
-export function buildGraphProjection({ prefs = {}, clusters, domains, userStates = {} }) {
+export function buildGraphProjection({ prefs = {}, clusters, domains, userStates = {}, userId = null, now = Date.now() }) {
   const enabled = new Set(prefs.enabledDomainIds ?? prefs.enabledDomains ?? domains.filter(d => d.defaultEnabled).map(d => d.id));
   const custom = new Set((prefs.customDomains ?? []).filter(d => d.enabled !== false).map(d => d.id));
   const active = new Map([...domains, ...(prefs.customDomains ?? [])].filter(d => enabled.has(d.id) || custom.has(d.id)).map(d => [d.id, d]));
@@ -70,11 +70,11 @@ export function buildGraphProjection({ prefs = {}, clusters, domains, userStates
   }
   for (const { c, primary } of selected) {
     const state = userStates instanceof Map ? userStates.get(c.id) : userStates[c.id];
-    const media = (c.items ?? []).flatMap(item => item.media ?? []).find(m => toProxyMediaUrl(m.url));
+    const media = (c.items ?? []).flatMap(item => item.media ?? []).find(m => toProxyMediaUrl(m.url, userId, now));
     const node = { id: `cluster:${c.id}`, clusterId: c.id, domainId: primary, headline: c.headline,
       colorToken: active.get(primary).colorToken, heatScore: c.heatScore, itemCount: c.itemCount ?? c.items?.length ?? 0,
       lodTier: tier.get(c.id), summaryExcerpt: String(c.summaryExcerpt ?? '').trim().slice(0, 180).trimEnd(),
-      mediaPreview: media ? { proxyUrl: toProxyMediaUrl(media.url), kind: media.kind === 'gif' ? 'gif' : 'image' } : null,
+      mediaPreview: media ? { proxyUrl: toProxyMediaUrl(media.url, userId, now), kind: media.kind === 'gif' ? 'gif' : 'image' } : null,
       unread: state?.unread ?? c.unread ?? true, bookmarked: state?.bookmarked ?? c.bookmarked ?? false,
       watchHit: c.watchHit ?? false, publishedAt: c.publishedAt, sourceNames: c.sourceNames ?? [] };
     nodes.push(node);

@@ -146,6 +146,61 @@ async function searchWeb(query, limit, ctx) {
 
 // ─── Backend implementations ────────────────────────────────────────
 
+const MAX_SEARCH_RESPONSE_BYTES = 512 * 1024;
+
+async function readBoundedText(res, signal, maxBytes = MAX_SEARCH_RESPONSE_BYTES) {
+  const len = Number(res.headers?.get?.('content-length'));
+  if (Number.isFinite(len) && len > maxBytes) {
+    void res.body?.cancel?.().catch(() => {});
+    throw new Error('Search response exceeded byte limit');
+  }
+  if (res.body && typeof res.body.getReader === 'function') {
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let total = 0;
+    let out = '';
+    try {
+      while (true) {
+        signal?.throwIfAborted?.();
+        const { done, value } = await reader.read();
+        if (done) break;
+        const remaining = maxBytes - total;
+        if (remaining <= 0) {
+          throw new Error('Search response exceeded byte limit');
+        }
+        if (value.byteLength > remaining) {
+          out += decoder.decode(value.subarray(0, remaining), { stream: false });
+          throw new Error('Search response exceeded byte limit');
+        }
+        total += value.byteLength;
+        out += decoder.decode(value, { stream: true });
+      }
+      return out + decoder.decode();
+    } finally {
+      void reader.cancel().catch(() => {});
+      reader.releaseLock();
+    }
+  }
+  // Fallback for test stubs returning mock Response without ReadableStream body.
+  const text = typeof res.text === 'function' ? await res.text() : JSON.stringify(await res.json());
+  if (Buffer.byteLength(text, 'utf8') > maxBytes) {
+    throw new Error('Search response exceeded byte limit');
+  }
+  return text;
+}
+
+async function readBoundedJson(res, signal, maxBytes = MAX_SEARCH_RESPONSE_BYTES) {
+  if (!res.body && typeof res.text !== 'function' && typeof res.json === 'function') {
+    const data = await res.json();
+    if (Buffer.byteLength(JSON.stringify(data ?? null), 'utf8') > maxBytes) {
+      throw new Error('Search response exceeded byte limit');
+    }
+    return data;
+  }
+  const text = await readBoundedText(res, signal, maxBytes);
+  return JSON.parse(text);
+}
+
 async function tryTavily(query, limit, apiKey, signal) {
   const res = await fetch('https://api.tavily.com/search', {
     method: 'POST', signal,
@@ -153,7 +208,7 @@ async function tryTavily(query, limit, apiKey, signal) {
     body: JSON.stringify({ api_key: apiKey, query, max_results: Math.min(limit, 10), include_answer: true, search_depth: 'basic' }),
   });
   if (!res.ok) return webHttpFailure(res.status);
-  const data = await res.json();
+  const data = await readBoundedJson(res, signal);
   if (!Array.isArray(data?.results) || data.error) return invalidSearchResponse();
   return {
     provider: 'tavily', query, answer: data.answer || null,
@@ -167,7 +222,7 @@ async function tryGenericApi(query, limit, urlStr, signal) {
   url.searchParams.set('limit', String(limit));
   const res = await fetch(url.toString(), { signal, headers: { 'User-Agent': 'Yeaft/1.0', Accept: 'application/json' } });
   if (!res.ok) return webHttpFailure(res.status);
-  const data = await res.json();
+  const data = await readBoundedJson(res, signal);
   if (!Array.isArray(data?.results) || data.error) return invalidSearchResponse();
   return { ...data, provider: 'generic', query, results: data.results.slice(0, limit) };
 }
@@ -188,7 +243,7 @@ async function tryHtmlScrape(query, limit, provider, signal) {
     },
   });
   if (!res.ok) return webHttpFailure(res.status);
-  const html = await res.text();
+  const html = await readBoundedText(res, signal);
   const blocked = /anomaly\.js|anomaly-modal|challenge-form|verify (?:that )?you(?:'re| are) (?:a )?human|unusual traffic|<title[^>]*>[^<]*(?:captcha|access denied)/i.test(html);
   const results = ddg ? parseDdgHtml(html, limit) : parseBingHtml(html, limit);
   const noMatches = ddg ? /class=["'][^"']*\bno-results\b|No results found for/i.test(html)

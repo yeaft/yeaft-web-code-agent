@@ -973,6 +973,28 @@
   color: var(--cw-accent);
   text-decoration: underline;
 }
+.cw-footnote-switch {
+  appearance: none;
+  background: transparent;
+  border: 0;
+  padding: 1px 4px;
+  border-radius: 5px;
+  color: var(--cw-muted);
+  font-size: inherit;
+  font-family: inherit;
+  cursor: pointer;
+  transition: color 140ms ease, background 140ms ease;
+}
+.cw-footnote-switch:hover,
+.cw-footnote-switch:focus-visible {
+  color: var(--cw-ink);
+  background: var(--cw-surface-hover);
+  outline: none;
+}
+.cw-footnote-switch.is-active {
+  color: var(--cw-accent);
+  font-weight: 600;
+}
 .cw-footnote-text {
   color: var(--cw-muted);
 }

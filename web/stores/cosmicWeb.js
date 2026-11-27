@@ -48,9 +48,17 @@ let pulseSeq = 0;
 let bandSessionSeq = 0;
 let bootstrapInflight = null;
 let feedRetryInflight = null;
+let autoBriefTimer = null;
 const channelControllers = new Map();
 const channelSeq = new Map();
 const mutationControllers = new Set();
+
+function clearAutoBriefTimer() {
+  if (autoBriefTimer !== null) {
+    clearTimeout(autoBriefTimer);
+    autoBriefTimer = null;
+  }
+}
 
 function defaultPrefs() {
   return {
@@ -306,10 +314,10 @@ export const useCosmicWebStore = defineStore('cosmicWeb', {
       this.lastPulseEvent = { seq: pulseSeq, domainId, clusterId, count };
     },
 
-    setDrawerWidth(width) {
+    setDrawerWidth(width, { persist = true } = {}) {
       const clamped = clampDrawerWidth(width);
       this.drawerWidth = clamped;
-      savePersistedDrawerWidth(clamped);
+      if (persist) savePersistedDrawerWidth(clamped);
     },
 
     resetDrawerWidth() {
@@ -506,12 +514,14 @@ export const useCosmicWebStore = defineStore('cosmicWeb', {
       await this.fetchFeed({ reset: true });
     },
 
-    async openClusterReader(clusterId, { expanded = false, itemId = null } = {}) {
+    async openClusterReader(clusterId, { expanded = false, itemId = null, url = null, debounceMs = 0 } = {}) {
       if (!clusterId) return;
 
-      // Immediately abort/invalidate any in-flight reader requests from previous story
+      // Immediately abort/invalidate any in-flight reader requests from previous story or source
+      clearAutoBriefTimer();
       this.sourceSelectionRev += 1;
       invalidateChannel('detail');
+      invalidateChannel('community');
       invalidateChannel('article');
       invalidateChannel('aiBrief');
       invalidateChannel('followUp');
@@ -521,6 +531,8 @@ export const useCosmicWebStore = defineStore('cosmicWeb', {
       this.followUpLoading = false;
 
       const isNewCluster = this.readerClusterId !== clusterId || this.activeClusterDetail?.id !== clusterId;
+      const nextItemId = itemId || null;
+      const isSourceChange = !isNewCluster && nextItemId && nextItemId !== this.activeArticleItemId;
       this.cursorClusterId = clusterId;
       this.selectedClusterId = clusterId;
       this.readerClusterId = clusterId;
@@ -530,21 +542,18 @@ export const useCosmicWebStore = defineStore('cosmicWeb', {
       this.drawerCollapsed = false;
       this.lightboxMedia = null;
 
-      // Reset transient reader state for new cluster
-      if (isNewCluster) {
-        this.activeClusterDetail = null;
+      // Unified selection transition: reset transient state on new cluster OR same-cluster source change
+      if (isNewCluster || isSourceChange) {
+        if (isNewCluster) this.activeClusterDetail = null;
         this.articleData = null;
         this.articleError = null;
-        this.activeArticleUrl = null;
-        this.activeArticleItemId = itemId || null;
-        this.readerItemId = itemId || null;
+        this.activeArticleUrl = url || null;
+        this.activeArticleItemId = nextItemId;
+        this.readerItemId = nextItemId;
         this.aiBriefData = null;
         this.aiBriefError = null;
         this.followUpThread = [];
         this.followUpError = null;
-      } else if (itemId) {
-        this.activeArticleItemId = itemId;
-        this.readerItemId = itemId;
       }
 
       this.emitPulse({ clusterId, count: 10 });
@@ -552,30 +561,79 @@ export const useCosmicWebStore = defineStore('cosmicWeb', {
       // Mark read optimistically
       this.markRead(clusterId, true);
 
-      // Load detail first; if detail does not already carry a cached aiBrief, kick off
-      // web-researched AI deep report asynchronously so opening the reader never blocks
-      // behind a multi-second web search call (rapid cluster switching stays instant).
+      // Load instant DB detail first; kick off non-blocking community enrichment and
+      // (debounced when navigating rapidly) AI report without blocking openClusterReader.
       const capturedRev = this.sourceSelectionRev;
       const capturedGen = storeGeneration;
       await this.loadClusterDetail(clusterId);
 
       if (
-        capturedGen === storeGeneration
-        && this.readerOpen
-        && this.readerClusterId === clusterId
-        && this.sourceSelectionRev === capturedRev
-        && !this.aiBriefData
-        && !this.aiBriefLoading
+        capturedGen !== storeGeneration
+        || !this.readerOpen
+        || this.readerClusterId !== clusterId
+        || this.sourceSelectionRev !== capturedRev
       ) {
-        void this.generateAiBrief(clusterId, {
-          research: true,
-          itemId: this.activeArticleItemId || undefined,
+        return;
+      }
+
+      const detail = this.activeClusterDetail;
+      if (!detail?.isPrivateSource && !(Array.isArray(detail?.communityComments) && detail.communityComments.length)) {
+        void this.loadClusterCommunity(clusterId, capturedRev);
+      }
+
+      if (!this.aiBriefData && !this.aiBriefLoading) {
+        const allowResearch = !detail?.isPrivateSource;
+        const triggerBrief = () => {
+          autoBriefTimer = null;
+          if (
+            capturedGen !== storeGeneration
+            || !this.readerOpen
+            || this.readerClusterId !== clusterId
+            || this.sourceSelectionRev !== capturedRev
+            || this.aiBriefData
+            || this.aiBriefLoading
+          ) return;
+          void this.generateAiBrief(clusterId, {
+            research: allowResearch,
+            itemId: this.activeArticleItemId || undefined,
+          });
+        };
+        if (debounceMs > 0) {
+          autoBriefTimer = setTimeout(triggerBrief, debounceMs);
+        } else {
+          triggerBrief();
+        }
+      }
+    },
+
+    async loadClusterCommunity(clusterId, capturedSourceRev = this.sourceSelectionRev) {
+      if (!clusterId) return;
+      const { controller, seq, gen } = nextChannelRequest('community');
+      try {
+        const data = await apiJson(`/api/cosmic-web/clusters/${encodeURIComponent(clusterId)}/community`, {
+          signal: controller.signal,
         });
+        if (
+          isStaleRequest('community', seq, gen)
+          || !this.readerOpen
+          || this.readerClusterId !== clusterId
+          || this.sourceSelectionRev !== capturedSourceRev
+          || !this.activeClusterDetail
+          || this.activeClusterDetail.id !== clusterId
+        ) return;
+        this.activeClusterDetail = {
+          ...this.activeClusterDetail,
+          ...(Array.isArray(data.media) && data.media.length ? { media: data.media } : {}),
+          ...(Array.isArray(data.communityComments) ? { communityComments: data.communityComments } : {}),
+        };
+      } catch {
+        // Community enrichment is non-critical; never surface blocking errors.
       }
     },
 
     async selectArticleSource(clusterId, { itemId = null, url = null, perspective = null, agentId = null } = {}) {
       if (!clusterId) return;
+      clearAutoBriefTimer();
       this.sourceSelectionRev += 1;
       this.readerItemId = itemId || null;
       this.activeArticleItemId = itemId || null;
@@ -594,7 +652,7 @@ export const useCosmicWebStore = defineStore('cosmicWeb', {
       this.followUpLoading = false;
 
       return this.generateAiBrief(clusterId, {
-        research: true,
+        research: !this.activeClusterDetail?.isPrivateSource,
         itemId: this.activeArticleItemId || undefined,
         perspective: perspective || undefined,
         agentId: agentId || undefined,
@@ -602,8 +660,10 @@ export const useCosmicWebStore = defineStore('cosmicWeb', {
     },
 
     closeClusterReader() {
+      clearAutoBriefTimer();
       this.sourceSelectionRev += 1;
       invalidateChannel('detail');
+      invalidateChannel('community');
       invalidateChannel('article');
       invalidateChannel('aiBrief');
       invalidateChannel('followUp');
@@ -752,7 +812,10 @@ export const useCosmicWebStore = defineStore('cosmicWeb', {
           question: q,
           perspective: perspective || this.prefs.defaultPerspective || 'balanced',
           language: currentUiLanguage(),
+          research: !this.activeClusterDetail?.isPrivateSource,
         };
+        if (this.activeArticleItemId) body.itemId = this.activeArticleItemId;
+        if (this.aiBriefData?.tldr) body.briefContext = this.aiBriefData.tldr;
         const explicitAgentId = typeof agentId === 'string' && agentId.trim() ? agentId.trim() : null;
         if (explicitAgentId) body.agentId = explicitAgentId;
 
@@ -763,6 +826,7 @@ export const useCosmicWebStore = defineStore('cosmicWeb', {
         });
         if (!isCurrent()) return null;
         const searchCount = Number(data.searchCount ?? data.webSearchCount ?? 0);
+        const evidenceCount = data.evidenceCount != null ? Number(data.evidenceCount) : (data.researched ? searchCount : 0);
         const entry = {
           id: `fu-${Date.now().toString(36)}-${seq}`,
           question: q,
@@ -772,6 +836,7 @@ export const useCosmicWebStore = defineStore('cosmicWeb', {
           media: Array.isArray(data.media) ? data.media : [],
           agentName: data.agentName || '',
           searchCount,
+          evidenceCount,
           webSearchCount: searchCount,
           createdAt: Date.now(),
         };
@@ -811,6 +876,7 @@ export const useCosmicWebStore = defineStore('cosmicWeb', {
           data.graph ? Promise.resolve() : this.fetchGraph(),
           this.fetchFeed({ reset: true }),
         ]);
+        if (isStaleRequest('radarScan', seq, gen)) return null;
         return data;
       } catch (err) {
         if (isAbortError(err) || isStaleRequest('radarScan', seq, gen)) return null;
@@ -1106,6 +1172,7 @@ export const useCosmicWebStore = defineStore('cosmicWeb', {
     },
 
     leaveWebBand() {
+      clearAutoBriefTimer();
       if (this.loading || this.feedLoading || this.refreshing || !this.feedLoaded) {
         this.staleOnReentry = true;
       }
@@ -1141,6 +1208,7 @@ export const useCosmicWebStore = defineStore('cosmicWeb', {
     },
 
     reset() {
+      clearAutoBriefTimer();
       storeGeneration += 1;
       bandSessionSeq += 1;
       bootstrapInflight = null;

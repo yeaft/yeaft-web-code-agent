@@ -8,7 +8,9 @@ import { parseSkill, SkillManager } from '../../agent/yeaft/skills.js';
 import {
   COSMIC_WEB_BRIEFING_CAPABILITY,
   abortActiveCosmicWebBriefings,
+  cancelCosmicWebBriefing,
   handleCosmicWebAiRequest,
+  htmlEvidence,
   loadCosmicWebSkillGuidance,
   runCosmicWebBriefing,
 } from '../../agent/yeaft/cosmic-web-briefing.js';
@@ -128,7 +130,7 @@ describe('runCosmicWebBriefing', () => {
     expect(framedNews(adapter)).toEqual(payload);
     expect(result).toEqual({ ...providerResult, ...(mode === 'daily_briefing' ? {} : { tldr: story.tldr.trim(),
       sections: [{ heading: 'Key details', body: story.bullets.join('\n') }, { heading: 'Impact', body: story.impact }],
-      media: [], citations: [], communityHighlights: [], researched: false, searchCount: 0 }), fullMarkdown: expect.any(String) });
+      media: [], citations: [], communityHighlights: [], researched: false, searchCount: 0, evidenceCount: 0 }), fullMarkdown: expect.any(String) });
     expect(result.fullMarkdown).toContain(mode === 'daily_briefing' ? 'Signals to watch' : 'Impact');
     expect(meta).toEqual({ model: 'test/decision', skillSource: 'bundled', durationMs: expect.any(Number) });
   });
@@ -318,7 +320,7 @@ describe('Cosmic Web bounded research', () => {
     const adapter = researchedAdapter([[search('s')], [fetchPage('f', url)], []], {
       ...story, media: [{ url: image, kind: 'gif' }], citations: [{ url, title: 'Release' }], searchCount: 99, researched: false,
     });
-    const { result } = await run({ adapter, toolExecutors: { WebSearch, WebFetch } });
+    const { result } = await run({ adapter, payload: { research: true }, toolExecutors: { WebSearch, WebFetch } });
     for (const [round] of adapter.captureStream.mock.calls) expect(round.tools.map(t => t.name)).toEqual(['WebSearch', 'WebFetch']);
     expect(WebSearch).toHaveBeenCalledExactlyOnceWith({ query: 'ARM support s', limit: 5 }, expect.objectContaining({ config, signal: expect.any(AbortSignal) }));
     expect(WebFetch).toHaveBeenCalledExactlyOnceWith({ url, max_length: 16_000 }, WebSearch.mock.calls[0][1]);
@@ -329,13 +331,13 @@ describe('Cosmic Web bounded research', () => {
     expect(final.tools).toEqual([]);
     expect(final.messages.at(-1).content).toContain('exactly the JSON object');
     expect(parseTool(final.messages.find(row => row.toolCallId === 'f')).media).toEqual([{ url: image, kind: 'gif' }]);
-    expect(result).toMatchObject({ researched: true, searchCount: 1, media: [{ url: image }], citations: [{ url }] });
+    expect(result).toMatchObject({ researched: true, searchCount: 1, evidenceCount: 2, media: [{ url: image }], citations: [{ url }] });
   });
 
   it('returns errors for disallowed calls without executing even injected executors', async () => {
     const Bash = vi.fn(), FileRead = vi.fn(), WebSearch = vi.fn().mockResolvedValue({ results: [] });
     const adapter = researchedAdapter([[tool('x', 'Bash', {}), tool('y', 'FileRead', {}), search('s')], []]);
-    await run({ adapter, toolExecutors: { Bash, FileRead, WebSearch } });
+    await run({ adapter, payload: { research: true }, toolExecutors: { Bash, FileRead, WebSearch } });
     expect(Bash).not.toHaveBeenCalled();
     expect(FileRead).not.toHaveBeenCalled();
     expect(WebSearch).toHaveBeenCalledTimes(1);
@@ -353,7 +355,7 @@ describe('Cosmic Web bounded research', () => {
     const WebSearch = vi.fn().mockResolvedValue({ results: [] });
     const WebFetch = vi.fn().mockResolvedValue({ url: 'https://example.com/release', text: 'Evidence' });
     const adapter = researchedAdapter(rounds, mode === 'follow_up' ? { answer: 'Supported.' } : story);
-    const { result } = await run({ mode, adapter, payload: { question: 'Is it supported?' }, toolExecutors: { WebSearch, WebFetch } });
+    const { result } = await run({ mode, adapter, payload: { question: 'Is it supported?', research: true }, toolExecutors: { WebSearch, WebFetch } });
     expect(adapter.captureStream).toHaveBeenCalledTimes(roundCount);
     expect(WebSearch).toHaveBeenCalledTimes(searchCount);
     expect(WebFetch).toHaveBeenCalledTimes(fetchCount);
@@ -380,13 +382,21 @@ describe('Cosmic Web bounded research', () => {
     expect(fallback.result.communityHighlights).toEqual([]);
   });
 
-  it('grounds a fetched community quote but not an attributed fabrication or unverified vote count', async () => {
+  it('rejects raw-HTML proximity community quotes (structured communityComments only) and strips unobserved prose URLs', async () => {
     const url = 'https://news.ycombinator.com/item?id=123';
     const quote = { platform: 'Hacker News', author: 'armdev', quote: 'Build ran on my board.', likes: 42, sourceUrl: url };
     const WebFetch = vi.fn().mockResolvedValue({ url, text: 'Thread. Comment from armdev: Build ran on my board.' });
-    const adapter = researchedAdapter([[fetchPage('f', url)], []], { ...story, communityHighlights: [quote, { ...quote, quote: 'Fake.' }] });
-    const { result } = await run({ adapter, toolExecutors: { WebFetch } });
-    expect(result.communityHighlights).toEqual([{ platform: quote.platform, author: quote.author, quote: quote.quote, sourceUrl: url }]);
+    const adapter = researchedAdapter([[fetchPage('f', url)], []], {
+      ...story,
+      sections: [{ heading: 'Details', body: 'See https://evil.example/phish and [click](https://evil.example/2) for info.' }],
+      communityHighlights: [quote],
+    });
+    const { result } = await run({ adapter, payload: { research: true }, toolExecutors: { WebFetch } });
+    // Raw HTML text proximity must NOT be accepted as verified structured attribution
+    expect(result.communityHighlights).toEqual([]);
+    // Unobserved URLs and markdown links are stripped from section prose
+    expect(result.sections[0].body).not.toContain('https://evil.example');
+    expect(result.sections[0].body).toContain('click');
   });
 
   it('returns the exact follow-up contract and preserves the original question', async () => {
@@ -395,7 +405,7 @@ describe('Cosmic Web bounded research', () => {
       citations: [{ url, title: 'Release' }], researched: true, searchCount: 100 });
     const { result } = await run({ mode: 'follow_up', payload: { question: 'Which boards passed CI?', sourceUrl: url }, adapter });
     expect(result).toEqual({ question: 'Which boards passed CI?', answer: 'x'.repeat(3000), bullets: [], media: [],
-      citations: [{ url, title: 'Release' }], followUps: ['x'.repeat(120)], researched: false, searchCount: 0 });
+      citations: [{ url, title: 'Release' }], followUps: ['x'.repeat(120)], researched: false, searchCount: 0, evidenceCount: 0 });
   });
 
   it('topic radar searches regardless of opt-out, caps at three, and accepts only search-observed item URLs', async () => {
@@ -455,7 +465,7 @@ describe('Cosmic Web bounded research', () => {
     const WebSearch = vi.fn(() => new Promise(resolve => { finish = resolve; }));
     const adapter = researchedAdapter([[search('s')]]);
     const controller = new AbortController();
-    const pending = expect(run({ adapter, signal: controller.signal, toolExecutors: { WebSearch } })).rejects.toThrow('cancelled');
+    const pending = expect(run({ adapter, payload: { research: true }, signal: controller.signal, toolExecutors: { WebSearch } })).rejects.toThrow('cancelled');
     await vi.waitFor(() => expect(WebSearch).toHaveBeenCalledTimes(1));
     controller.abort();
     await pending;
@@ -472,7 +482,7 @@ describe('Cosmic Web bounded research', () => {
       'http://[::ffff:127.0.0.1]/', 'http://service.local/', 'http://service.internal/', 'https://user:secret@example.com/', 'file:///tmp/secret'];
     const adapter = researchedAdapter([urls.map((url, i) => fetchPage(`f${i}`, url)), []]);
     const WebFetch = vi.fn();
-    await run({ adapter, toolExecutors: { WebFetch } });
+    await run({ adapter, payload: { research: true }, toolExecutors: { WebFetch } });
     expect(WebFetch).not.toHaveBeenCalled();
     expect(adapter.call.mock.lastCall[0].messages.filter(row => row.isError)).toHaveLength(urls.length);
   });
@@ -487,7 +497,7 @@ describe('Cosmic Web bounded research', () => {
       .mockResolvedValueOnce(new Response(null, { status: 302, headers: { location: 'http://10.0.0.2/release' } }));
     vi.stubGlobal('fetch', net);
     const adapter = researchedAdapter([[fetchPage('page', url)], [fetchPage('redirect', `${url}/redirect`)], []]);
-    await run({ adapter });
+    await run({ adapter, payload: { research: true } });
     expect(net).toHaveBeenCalledTimes(2);
     expect(net.mock.calls[0][1]).toMatchObject({ redirect: 'manual', signal: expect.any(AbortSignal), dispatcher: expect.any(Object) });
     const [page, redirect] = adapter.call.mock.lastCall[0].messages.filter(row => row.role === 'tool').map(parseTool);
@@ -500,6 +510,56 @@ describe('Cosmic Web bounded research', () => {
     expect(page.text).toHaveLength(16_000);
     expect(redirect.error).toBeTruthy();
   });
+
+  it('blocks outbound research for owner-private or unclassified payloads (Blocker #2)', async () => {
+    const WebSearch = vi.fn();
+    const adapter = researchedAdapter([[search('leaked-secret')], []]);
+    await run({ adapter, payload: { isPrivateSource: true, research: true, headline: 'Internal memo' }, toolExecutors: { WebSearch } });
+    expect(WebSearch).not.toHaveBeenCalled();
+    expect(adapter.captureStream).not.toHaveBeenCalled();
+
+    // Unclassified payload without research: true also stays tool-less
+    await run({ adapter, payload: { headline: 'Unclassified' }, toolExecutors: { WebSearch } });
+    expect(WebSearch).not.toHaveBeenCalled();
+  });
+
+  it('scans malformed HTML linearly and rejects oversized search responses (Blocker #3)', async () => {
+    const pathological = '<script '.repeat(30_000) + '<img src="https://cdn.example.com/ok.jpg" ' + '<style>'.repeat(20_000);
+    const t0 = performance.now();
+    const ev = htmlEvidence(pathological, 'https://example.com/p', 4000);
+    expect(performance.now() - t0).toBeLessThan(200);
+    expect(ev.url).toBe('https://example.com/p');
+
+    // Oversized search response (>512KB) fails safely without buffering megabytes
+    const bigPayload = JSON.stringify({ results: [{ url: 'https://example.com/1', title: 'Big', snippet: 'a'.repeat(700_000) }] });
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(bigPayload, { headers: { 'content-type': 'application/json' } })));
+    const searchConfig = { ...config, search: { searchApiUrl: 'https://search.example.com/api', disableHtmlFallback: true } };
+    const adapter = researchedAdapter([[search('s', 'huge')], []]);
+    const { result } = await run({ config: searchConfig, adapter, payload: { research: true } });
+    expect(result.searchCount).toBe(1);
+    expect(result.evidenceCount).toBe(0);
+    expect(result.researched).toBe(false);
+  });
+
+  it('cancels an individual in-flight request via cancelCosmicWebBriefing and frees its slot (Blocker #5)', async () => {
+    const replies = [];
+    const started = [];
+    const adapter = {
+      call: vi.fn(({ signal }) => new Promise((_res, rej) => {
+        started.push(signal);
+        signal.addEventListener('abort', () => rej(new Error('aborted')), { once: true });
+      })),
+    };
+    const p1 = handleCosmicWebAiRequest(
+      { requestId: 'req-cancel-1', mode: 'brief', payload: { headline: 'A' } },
+      { sendToServer: r => replies.push(r), loadConfigFn: async () => config, createAdapterFn: async () => adapter },
+    );
+    await vi.waitFor(() => expect(started).toHaveLength(1));
+    expect(cancelCosmicWebBriefing('req-cancel-1')).toBe(true);
+    await p1;
+    expect(started[0].aborted).toBe(true);
+    expect(replies).toEqual([]);
+  });
 });
 
 it('runs the real WebSearch executor with a ledger isolated to each briefing', async () => {
@@ -509,8 +569,8 @@ it('runs the real WebSearch executor with a ledger isolated to each briefing', a
   const searchConfig = { ...config, search: { searchApiUrl: 'https://search.example.com/api', disableHtmlFallback: true } };
   for (let i = 0; i < 2; i++) {
     const adapter = researchedAdapter([[search('a', 'ARM news')], [search('b', 'ARM news')], []]);
-    const { result } = await run({ config: searchConfig, adapter });
-    expect(result).toMatchObject({ researched: true, searchCount: 2 });
+    const { result } = await run({ config: searchConfig, adapter, payload: { research: true } });
+    expect(result).toMatchObject({ researched: true, searchCount: 2, evidenceCount: 2 });
     expect(network).toHaveBeenCalledTimes(i + 1);
     const [endpoint, options] = network.mock.lastCall;
     expect(new URL(endpoint).searchParams.get('q')).toBe('ARM news');

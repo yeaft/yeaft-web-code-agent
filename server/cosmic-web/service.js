@@ -19,6 +19,7 @@ const minute = 60_000;
 const refreshTtl = 5 * minute;
 const defaultDomains = BUILTIN_DOMAINS.filter(d => d.defaultEnabled).map(d => d.id);
 const domainIds = new Set(BUILTIN_DOMAINS.map(d => d.id));
+const builtinSourceIds = new Set(BUILTIN_SOURCES.map(s => s.id));
 const colors = new Set(BUILTIN_DOMAINS.map(d => d.colorToken));
 const error = (status, message) => Object.assign(new Error(message), { status });
 const fail = message => { throw error(400, message); };
@@ -29,8 +30,32 @@ const trim = (value, max) => typeof value === 'string' ? value.trim().slice(0, m
 const defaults = () => ({ enabledDomainIds: [...defaultDomains], customDomains: [], watchKeywords: [], muteKeywords: [],
   disabledSources: [], preferredAgentId: '', defaultPerspective: 'balanced', onboarded: false, autoRefreshMinutes: 15 });
 const preferred = userId => {
-  const prefs = { ...defaults(), ...db.loadUserPrefs(userId) };
-  return { ...prefs, customDomains: prefs.customDomains.map(d => ({ aiRadar: false, ...d })) };
+  const stored = db.loadUserPrefs(userId);
+  const prefs = { ...defaults(), ...stored };
+  const normalizedCustom = prefs.customDomains.map(d => ({ aiRadar: false, ...d }));
+  const colliding = normalizedCustom.filter(d => domainIds.has(d.id));
+  if (!colliding.length) {
+    return { ...prefs, customDomains: normalizedCustom };
+  }
+  // Idempotent migration: remap any legacy custom domain ID that now collides with a built-in domain.
+  const usedIds = new Set([...domainIds, ...normalizedCustom.filter(d => !domainIds.has(d.id)).map(d => d.id)]);
+  const remaps = [];
+  const migratedCustom = normalizedCustom.map(d => {
+    if (!domainIds.has(d.id)) return d;
+    let candidate = `custom-${d.id}`;
+    for (let n = 2; usedIds.has(candidate); n++) candidate = `custom-${d.id}-${n}`;
+    usedIds.add(candidate);
+    remaps.push([d.id, candidate]);
+    return { ...d, id: candidate };
+  });
+  const migratedPrefs = { ...prefs, customDomains: migratedCustom };
+  if (stored && remaps.length) {
+    db.cosmicWebTransaction(() => {
+      for (const [oldId, newId] of remaps) db.migrateCustomDomainId(userId, oldId, newId);
+      db.saveUserPrefs(userId, migratedPrefs, Date.now());
+    });
+  }
+  return migratedPrefs;
 };
 const publicPrefs = ({ enabledDomainIds, ...prefs }) => ({ ...prefs, enabledDomains: enabledDomainIds });
 const radarId = domainId => `radar-${domainId}`;
@@ -58,7 +83,12 @@ export function ingestCosmicWebItems(source, items, now = Date.now()) {
       .map(c => ({ id: c.id, publishedAt: c.published_at, keywords: JSON.parse(c.keywords_json) }));
     let added = 0;
     for (const i of dated) {
-      if (db.findItemBySourceUrl(source.id, ownerUserId, i.url)) continue;
+      if (db.findItemBySourceUrl(source.id, ownerUserId, i.url)) {
+        if (Array.isArray(i.media) && i.media.length) {
+          db.backfillItemMedia(source.id, ownerUserId, i.url, i.media);
+        }
+        continue;
+      }
       const keywords = extractTokens(i.title);
       const withinWindow = i.publishedAt >= now - CLUSTER_WINDOW_MS;
       const prior = withinWindow && db.findRecentClusterByUrl(ownerUserId, i.url, now - CLUSTER_WINDOW_MS, now);
@@ -103,8 +133,9 @@ function listClusters(userId, prefs, now, id) {
     const sourceNames = [...new Set(items.map(i => i.sourceName))];
     const state = states.get(row.id) ?? { unread: true, bookmarked: false };
     const domain = [...BUILTIN_DOMAINS, ...prefs.customDomains].find(d => d.id === domainId);
+    const isPrivateSource = articles.some(a => a.owner_user_id !== null);
     return [{ id: row.id, clusterId: row.id, headline: row.headline, summaryExcerpt: row.summary_excerpt,
-      primaryUrl: items[0]?.url || '',
+      primaryUrl: items[0]?.url || '', isPrivateSource,
       keywords, publishedAt: row.published_at, domainId, domainIds: allDomains, relatedDomains: allDomains.filter(d => d !== domainId),
       colorToken: domain?.colorToken ?? 'cyan', itemCount: items.length, items, sourceNames, ...state,
       isRead: !state.unread, isBookmarked: Boolean(state.bookmarked),
@@ -229,16 +260,66 @@ export function createCosmicWebService({ fetcher = safeFetch, dnsLookup, now = D
     enrichmentInflight.set(key, task);
     return task;
   }
+  function signMediaList(list, userId) {
+    if (!Array.isArray(list) || !list.length) return [];
+    const ts = now();
+    return list
+      .map(m => {
+        const rawUrl = typeof m === 'string' ? m : m?.url;
+        const proxyUrl = toProxyMediaUrl(rawUrl, userId, ts);
+        if (!proxyUrl) return null;
+        return typeof m === 'string'
+          ? { url: rawUrl, kind: /\.gif$/i.test(rawUrl) ? 'gif' : 'image', proxyUrl }
+          : { ...m, proxyUrl };
+      })
+      .filter(Boolean);
+  }
+  function combineSignals(reqSignal) {
+    if (!reqSignal) return controller.signal;
+    return AbortSignal.any([controller.signal, reqSignal]);
+  }
+  function storedClusterMedia(c, userId) {
+    const raw = [];
+    const seen = new Set();
+    for (const item of c.items ?? []) {
+      for (const m of item.media ?? []) {
+        const u = typeof m === 'string' ? m : m?.url;
+        if (!u || seen.has(u)) continue;
+        seen.add(u);
+        raw.push({
+          url: u,
+          kind: m?.kind === 'gif' || /\.gif$/i.test(u) ? 'gif' : 'image',
+          ...(m?.caption ? { caption: m.caption } : {}),
+          sourceName: m?.sourceName || item.sourceName,
+        });
+      }
+    }
+    return signMediaList(raw.slice(0, 8), userId);
+  }
   async function cluster(userId, id) {
     const { signal } = controller;
     ensureRunning(signal);
     ensureActive(userId);
     const c = visibleCluster(userId, id);
+    const cached = cachedEnrichment(c);
+    // Warm community enrichment asynchronously so opening a story never blocks on remote HTTP.
+    if (!cached && !c.isPrivateSource) void enrichment(c, signal).catch(() => {});
+    const media = cached?.media?.length ? signMediaList(cached.media, userId) : storedClusterMedia(c, userId);
+    return { ...c, media, communityComments: cached?.communityComments ?? [] };
+  }
+  async function clusterCommunity(userId, id, reqSignal) {
+    const signal = combineSignals(reqSignal);
+    ensureRunning(signal);
+    ensureActive(userId);
+    const c = visibleCluster(userId, id);
+    if (c.isPrivateSource) return { media: storedClusterMedia(c, userId), communityComments: [] };
     const value = await enrichment(c, signal);
     ensureRunning(signal);
     ensureActive(userId);
     const current = visibleCluster(userId, id);
-    return { ...current, ...(enrichmentSignature(c) === enrichmentSignature(current) ? value : noEnrichment()) };
+    const valid = enrichmentSignature(c) === enrichmentSignature(current) ? value : noEnrichment();
+    const media = valid.media?.length ? signMediaList(valid.media, userId) : storedClusterMedia(current, userId);
+    return { media, communityComments: valid.communityComments ?? [] };
   }
   async function quick(task, fallback) {
     const timer = new AbortController();
@@ -321,16 +402,24 @@ export function createCosmicWebService({ fetcher = safeFetch, dnsLookup, now = D
     return toArticle(result);
   }
 
-  function briefingOptions(userId, userRole, body, prefs = preferred(userId)) {
+  function briefingOptions(userId, userRole, body, prefs = preferred(userId), mode = 'brief') {
     if (!object(body)) fail('Invalid briefing options');
     const perspective = body.perspective ?? prefs.defaultPerspective;
     if (!['balanced', 'engineering', 'product', 'investing'].includes(perspective)) fail('Invalid briefing perspective');
     const language = body.language === 'en' ? 'en' : 'zh-CN';
-    const available = listCapableAgentsForUser(userId, userRole);
+    const available = listCapableAgentsForUser(userId, userRole, mode);
     const explicitAgentId = body.agentId === '' ? null : body.agentId ?? null;
     const agent = explicitAgentId === null ? available.find(a => a.id === prefs.preferredAgentId) ?? available[0] :
       available.find(a => a.id === explicitAgentId);
-    if (explicitAgentId !== null && !agent) throw error(403, 'Agent is not available to this user');
+    if (explicitAgentId !== null && !agent) {
+      const legacy = mode !== 'brief' ? listCapableAgentsForUser(userId, userRole, 'brief').find(a => a.id === explicitAgentId) : null;
+      if (legacy) throw error(409, 'Selected Agent requires an update to support this Cosmic Web feature');
+      throw error(403, 'Agent is not available to this user');
+    }
+    if (!agent && (mode === 'follow_up' || mode === 'topic_radar')) {
+      const legacyAny = listCapableAgentsForUser(userId, userRole, 'brief');
+      if (legacyAny.length) throw error(409, 'Online Agents require an update to support this Cosmic Web feature');
+    }
     return { perspective, language, explicitAgentId, agent };
   }
 
@@ -339,27 +428,69 @@ export function createCosmicWebService({ fetcher = safeFetch, dnsLookup, now = D
     ensureActive(userId);
     const { perspective, language, explicitAgentId, agent } = options;
     // Version the rendering contract too: old cached Markdown may contain autolinks.
-    const key = hash(4, mode, perspective, language, explicitAgentId, payload);
+    const key = hash(5, mode, perspective, language, explicitAgentId, payload);
     const cached = db.getAiCache(userId, key, now());
-    if (cached && body.force !== true) return { ...cached, cached: true };
+    if (cached && body.force !== true) {
+      const media = Array.isArray(cached.media) ? signMediaList(cached.media, userId) : cached.media;
+      return { ...cached, ...(media ? { media } : {}), cached: true };
+    }
     if (!agent) throw error(503, 'No capable Agent is online');
     const agentId = agent.id;
     const scope = hash(userId, key, agentId);
-    if (aiInflight.has(scope)) return aiInflight.get(scope);
-    const task = Promise.resolve(requestAi({ userId, userRole, agentId, mode, perspective, language, payload, signal })).then(result => {
-      ensureRunning(signal);
-      ensureActive(userId);
-      if (!validateCosmicWebAiResult(result, mode)) throw error(502, 'Agent returned an invalid briefing');
-      const enriched = { ...result, agentId, agentName: agent.name, perspective, generatedAt: now() };
-      if (mode === 'brief' || mode === 'synthesize' || mode === 'follow_up') {
-        enriched.media = (result.media?.length ? result.media : payload.media ?? []).map(m => ({ ...m, proxyUrl: toProxyMediaUrl(m.url) }));
-        if (mode !== 'follow_up') enriched.communityHighlights = result.communityHighlights?.length ? result.communityHighlights : payload.communityComments ?? [];
+    let shared = aiInflight.get(scope);
+    if (!shared) {
+      const taskController = new AbortController();
+      const onShutdown = () => taskController.abort();
+      controller.signal.addEventListener('abort', onShutdown, { once: true });
+      const waiters = new Set();
+      const promise = Promise.resolve(requestAi({ userId, userRole, agentId, mode, perspective, language, payload, signal: taskController.signal })).then(result => {
+        ensureRunning(taskController.signal);
+        ensureActive(userId);
+        if (!validateCosmicWebAiResult(result, mode)) throw error(502, 'Agent returned an invalid briefing');
+        const enriched = { ...result, agentId, agentName: agent.name, perspective, generatedAt: now() };
+        if (mode === 'brief' || mode === 'synthesize' || mode === 'follow_up') {
+          const rawMedia = result.media?.length ? result.media : payload.media ?? [];
+          enriched.media = signMediaList(rawMedia, userId);
+          if (mode !== 'follow_up') enriched.communityHighlights = result.communityHighlights?.length ? result.communityHighlights : payload.communityComments ?? [];
+        }
+        db.setAiCache(userId, key, enriched, now() + 6 * 60 * minute);
+        return { ...enriched, cached: false };
+      }).finally(() => {
+        controller.signal.removeEventListener('abort', onShutdown);
+        if (aiInflight.get(scope) === shared) aiInflight.delete(scope);
+      });
+      shared = { promise, taskController, waiters };
+      aiInflight.set(scope, shared);
+    }
+    // Refcount active callers so a shared task cancels only when the final caller leaves.
+    return new Promise((resolve, reject) => {
+      const token = {};
+      const onCallerAbort = () => {
+        shared.waiters.delete(token);
+        const isShutdown = stopping || controller.signal.aborted;
+        const abortErr = isShutdown ? error(503, 'Cosmic Web is stopping') : error(499, 'Cosmic Web request cancelled');
+        if (shared.waiters.size === 0) shared.taskController.abort(abortErr);
+        reject(abortErr);
+      };
+      if (signal.aborted) {
+        onCallerAbort();
+        return;
       }
-      db.setAiCache(userId, key, enriched, now() + 6 * 60 * minute);
-      return { ...enriched, cached: false };
-    }).finally(() => { if (aiInflight.get(scope) === task) aiInflight.delete(scope); });
-    aiInflight.set(scope, task);
-    return task;
+      shared.waiters.add(token);
+      signal.addEventListener('abort', onCallerAbort, { once: true });
+      shared.promise.then(
+        val => {
+          signal.removeEventListener('abort', onCallerAbort);
+          shared.waiters.delete(token);
+          if (!signal.aborted) resolve(val);
+        },
+        err => {
+          signal.removeEventListener('abort', onCallerAbort);
+          shared.waiters.delete(token);
+          if (!signal.aborted) reject(err);
+        },
+      );
+    });
   }
   const storyContext = c => ({ headline: c.headline, summaryExcerpt: c.summaryExcerpt,
     publishedAt: c.publishedAt, sourceNames: c.sourceNames.slice(0, 4) });
@@ -439,7 +570,7 @@ export function createCosmicWebService({ fetcher = safeFetch, dnsLookup, now = D
     });
     swr(userId, prefs);
     const clusters = filtered(userId, {}, false);
-    return { ...publicPrefs(prefs), ...metadata(userId, prefs, clusters), graph: graphProjection(prefs, clusters) };
+    return { ...publicPrefs(prefs), ...metadata(userId, prefs, clusters), graph: graphProjection(prefs, clusters, userId) };
   }
 
   // cw_sources.id is globally unique, so keep storage keys owner-scoped while exposing radar-<domain> over the API.
@@ -554,18 +685,18 @@ export function createCosmicWebService({ fetcher = safeFetch, dnsLookup, now = D
   function metadata(userId, prefs, clusters = filtered(userId, {}, false)) {
     return { domains: enrichedDomains(userId, prefs, clusters), stats: stats(userId, prefs, clusters) };
   }
-  function graphProjection(prefs, clusters) {
-    return buildGraphProjection({ prefs, clusters, domains: BUILTIN_DOMAINS });
+  function graphProjection(prefs, clusters, userId = null) {
+    return buildGraphProjection({ prefs, clusters, domains: BUILTIN_DOMAINS, userId, now: now() });
   }
 
   return {
     bootstrap(userId, userRole) {
       const preferences = preferred(userId);
       swr(userId, preferences);
-      const capableAgents = listCapableAgentsForUser(userId, userRole).map(a => ({ ...a, online: true, supportsBriefing: true }));
+      const capableAgents = listCapableAgentsForUser(userId, userRole, 'brief').map(a => ({ ...a, online: true }));
       const prefsPub = publicPrefs(preferences);
       const clusters = filtered(userId, {}, false);
-      const graph = graphProjection(preferences, clusters);
+      const graph = graphProjection(preferences, clusters, userId);
       return {
         ...metadata(userId, preferences, clusters),
         sources: [...BUILTIN_SOURCES, ...db.listSources(userId).map(sourceFromRow)],
@@ -585,51 +716,66 @@ export function createCosmicWebService({ fetcher = safeFetch, dnsLookup, now = D
     },
     graph(userId, query) {
       const prefs = preferred(userId);
-      return { ...graphProjection(prefs, filtered(userId, query)), ...metadata(userId, prefs) };
+      return { ...graphProjection(prefs, filtered(userId, query), userId), ...metadata(userId, prefs) };
     },
-    cluster, article,
-    async aiBrief(userId, userRole, id, body = {}) {
-      const { signal } = controller;
+    cluster, clusterCommunity, article,
+    async aiBrief(userId, userRole, id, body = {}, reqSignal) {
+      const signal = combineSignals(reqSignal);
       ensureRunning(signal);
       ensureActive(userId);
-      const options = briefingOptions(userId, userRole, body);
-      const c = visibleCluster(userId, id);
       const mode = body.mode ?? 'brief';
       if (!['brief', 'synthesize'].includes(mode)) fail('Invalid briefing mode');
+      const options = briefingOptions(userId, userRole, body, preferred(userId), mode);
+      const c = visibleCluster(userId, id);
       const item = selectItem(c, body);
       const cached = db.getArticleCache(userId, item.id, now());
       const articleTask = cached || body.skipArticleFetch === true ? Promise.resolve(cached) : article(userId, id, { itemId: item.id });
-      const [content, context] = await Promise.all([quick(articleTask, cached), briefingEnrichment(c, signal, body.skipArticleFetch === true)]);
-      const result = await ai(userId, userRole, mode, body, { headline: item.title, sourceUrl: item.url, summaryExcerpt: item.summaryExcerpt,
-        research: body.research !== false, articleMarkdown: content?.markdown?.slice(0, 12_000), quality: content?.quality,
-        sources: c.items.slice(0, 12), ...context }, signal, options);
+      const [content, context] = await Promise.all([
+        quick(articleTask, cached),
+        c.isPrivateSource ? Promise.resolve(noEnrichment()) : briefingEnrichment(c, signal, body.skipArticleFetch === true),
+      ]);
+      // Never enable outbound web research for owner-private feeds or legacy v1 Agents.
+      const allowResearch = !c.isPrivateSource && body.research === true && Boolean(options.agent?.supportsResearch);
+      const result = await ai(userId, userRole, mode, body, {
+        headline: item.title, sourceUrl: item.url, summaryExcerpt: item.summaryExcerpt,
+        isPrivateSource: c.isPrivateSource,
+        research: allowResearch,
+        articleMarkdown: content?.markdown?.slice(0, 12_000), quality: content?.quality,
+        sources: c.items.slice(0, 12), ...context,
+      }, signal, options);
       ensureRunning(signal);
       ensureActive(userId);
       db.setAiCache(userId, briefKey(id, item.id, result.agentId), result.tldr, now() + 6 * 60 * minute);
       return result;
     },
-    async followUp(userId, userRole, id, body = {}) {
-      const { signal } = controller;
+    async followUp(userId, userRole, id, body = {}, reqSignal) {
+      const signal = combineSignals(reqSignal);
       ensureRunning(signal);
       ensureActive(userId);
-      const options = briefingOptions(userId, userRole, body);
+      const options = briefingOptions(userId, userRole, body, preferred(userId), 'follow_up');
       if (typeof body.question !== 'string' || !body.question.trim() || body.question.length > 500) fail('Question must be 1–500 characters');
       const c = visibleCluster(userId, id);
       const item = selectItem(c, body);
-      const context = await briefingEnrichment(c, signal);
-      const briefContext = options.agent && db.getAiCache(userId, briefKey(id, item.id, options.agent.id), now());
-      return ai(userId, userRole, 'follow_up', body, { ...storyContext(c), headline: item.title, sourceUrl: item.url,
-        question: body.question.trim(), research: body.research !== false, briefContext: briefContext ?? undefined,
-        sources: c.items.slice(0, 12), ...context }, signal, options);
+      const context = c.isPrivateSource ? noEnrichment() : await briefingEnrichment(c, signal);
+      const briefContext = (options.agent && db.getAiCache(userId, briefKey(id, item.id, options.agent.id), now()))
+        || (typeof body.briefContext === 'string' ? body.briefContext.trim().slice(0, 1500) : undefined);
+      const allowResearch = !c.isPrivateSource && body.research === true && Boolean(options.agent?.supportsResearch);
+      return ai(userId, userRole, 'follow_up', body, {
+        ...storyContext(c), headline: item.title, sourceUrl: item.url,
+        isPrivateSource: c.isPrivateSource,
+        question: body.question.trim(), research: allowResearch, briefContext: briefContext ?? undefined,
+        sources: c.items.slice(0, 12), ...context,
+      }, signal, options);
     },
-    async radarScan(userId, userRole, domainId, body = {}) {
-      const { signal } = controller;
+    async radarScan(userId, userRole, domainId, body = {}, reqSignal) {
+      const signal = combineSignals(reqSignal);
       ensureRunning(signal);
       ensureActive(userId);
       const prefs = preferred(userId);
       const domain = prefs.customDomains.find(d => d.id === domainId);
       if (!domain) throw error(404, 'Custom domain not found');
-      const options = briefingOptions(userId, userRole, body, prefs);
+      if (!domain.aiRadar) throw error(400, 'AI Topic Radar is not enabled for this constellation');
+      const options = briefingOptions(userId, userRole, body, prefs, 'topic_radar');
       if (!options.agent) throw error(503, 'No capable Agent is online');
       const time = now();
       for (const [id, expires] of radarCooling) if (expires <= time) radarCooling.delete(id);
@@ -658,7 +804,7 @@ export function createCosmicWebService({ fetcher = safeFetch, dnsLookup, now = D
         ensureActive(userId);
         const current = preferred(userId);
         const latest = current.customDomains.find(d => d.id === domainId);
-        if (!latest || latest.name !== domain.name || JSON.stringify(latest.keywords) !== JSON.stringify(domain.keywords)) {
+        if (!latest || !latest.aiRadar || latest.name !== domain.name || JSON.stringify(latest.keywords) !== JSON.stringify(domain.keywords)) {
           throw error(409, 'Custom domain changed during scan');
         }
         const source = radarSource(userId, latest);
@@ -671,15 +817,15 @@ export function createCosmicWebService({ fetcher = safeFetch, dnsLookup, now = D
         }
         if (added) update(source, signal);
         const clusters = filtered(userId, {}, false);
-        return { added, items: retained.map(item => ({ ...item, sourceId: radarId(domainId), domainId })), ...metadata(userId, current, clusters), graph: graphProjection(current, clusters) };
-      } finally { if (!signal.aborted) radarActive.delete(userId); }
+        return { added, items: retained.map(item => ({ ...item, sourceId: radarId(domainId), domainId })), ...metadata(userId, current, clusters), graph: graphProjection(current, clusters, userId) };
+      } finally { radarActive.delete(userId); }
     },
-    async dailyBriefing(userId, userRole, body = {}) {
-      const { signal } = controller;
+    async dailyBriefing(userId, userRole, body = {}, reqSignal) {
+      const signal = combineSignals(reqSignal);
       ensureRunning(signal);
       ensureActive(userId);
       const prefs = preferred(userId);
-      const options = briefingOptions(userId, userRole, body, prefs);
+      const options = briefingOptions(userId, userRole, body, prefs, 'daily_briefing');
       const time = now();
       const recent = c => c.publishedAt >= time - 24 * 60 * minute;
       const clusters = filtered(userId, {}, false).filter(recent);

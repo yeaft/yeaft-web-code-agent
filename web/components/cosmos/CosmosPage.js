@@ -334,15 +334,16 @@ export default {
           @click.stop="onClickWebSatellite(sat)"
         >
           <img
-            v-if="sat.kind === 'media' && sat.mediaPreview?.proxyUrl"
+            v-if="sat.kind === 'media' && sat.mediaPreview?.proxyUrl && !failedSatMediaUrls[sat.mediaPreview.proxyUrl]"
+            :key="sat.mediaPreview.proxyUrl"
             :src="sat.mediaPreview.proxyUrl"
             alt=""
             class="cosmos-web-sat-thumb"
             loading="lazy"
-            @error="(e) => { e.target.style.display = 'none'; }"
+            @error="onSatMediaError(sat.mediaPreview.proxyUrl)"
           />
           <span v-if="sat.kind === 'media'" class="cosmos-web-sat-badge">
-            {{ sat.mediaPreview?.kind === 'gif' ? 'GIF' : 'MEDIA' }}
+            {{ sat.mediaPreview?.kind === 'gif' ? 'GIF' : $t('cosmos.web.mediaBadge') }}
           </span>
           <span v-else-if="sat.kind === 'comment'" class="cosmos-web-sat-comment">
             <span class="cosmos-web-sat-meta">
@@ -1640,6 +1641,11 @@ export default {
     const webCameraZoomRef = Vue.ref(1.0);
     const webLodTierRef = Vue.ref(1);
     const activeWebSatellites = Vue.ref([]);
+    const failedSatMediaUrls = Vue.ref({});
+    function onSatMediaError(url) {
+      if (!url || failedSatMediaUrls.value[url]) return;
+      failedSatMediaUrls.value = { ...failedSatMediaUrls.value, [url]: true };
+    }
     const webDrawerMaxWidth = Vue.computed(() => (
       Math.max(360, Math.min(960, Math.floor(viewportWidth.value - 240)))
     ));
@@ -1651,11 +1657,12 @@ export default {
 
     function onWebDrawerResize(nextWidth) {
       const clamped = Math.max(360, Math.min(webDrawerMaxWidth.value, Math.round(Number(nextWidth) || 480)));
-      cosmicWebStore.setDrawerWidth?.(clamped);
+      cosmicWebStore.setDrawerWidth?.(clamped, { persist: false });
     }
 
     function onWebDrawerResizeEnd(finalWidth) {
-      onWebDrawerResize(finalWidth);
+      const clamped = Math.max(360, Math.min(webDrawerMaxWidth.value, Math.round(Number(finalWidth) || 480)));
+      cosmicWebStore.setDrawerWidth?.(clamped, { persist: true });
     }
 
     function onWebDrawerResizeReset() {
@@ -3252,7 +3259,7 @@ export default {
 
     return {
       glCanvasRef, hudCanvasRef, hoverCardRef, drawerRef, galaxyOverlayRef, webOverlayRef, creationInteriorRef, signalTriggerRef, voyageOverlayRef, domRefs, setMapRef, canvasEpoch, rendererMode,
-      creationsStore, activeGalaxyStars, cosmicWebStore, agentsLiveForCosmos, isWebModalBlocking, activeWebDomNodes, activeWebSatellites,
+      creationsStore, activeGalaxyStars, cosmicWebStore, agentsLiveForCosmos, isWebModalBlocking, activeWebDomNodes, activeWebSatellites, failedSatMediaUrls, onSatMediaError,
       webCameraZoomRef, webLodTierRef, webDrawerWidth, webDrawerMaxWidth,
       onWebDrawerResize, onWebDrawerResizeEnd, onWebDrawerResizeReset, onWebZoomDelta, onWebZoomReset,
       webNodeDisplayLabel, onEnterWebNode, onLeaveWebNode, onClickWebNode, onDblClickWebNode, onClickWebSatellite, onDispatchCosmicWebToPlanet,

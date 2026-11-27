@@ -9,12 +9,31 @@ const rate = new Map();
 const rateWindow = 600_000;
 const keyFor = (agentId, requestId) => JSON.stringify([agentId, requestId]);
 const fail = (status, message) => Object.assign(new Error(message), { status });
-const hasCapability = agent => Array.isArray(agent?.capabilities) && agent.capabilities.includes('cosmic_web_briefing');
+
+export function requiredCapabilityForMode(mode = 'brief') {
+  if (mode === 'follow_up') return 'cosmic_web_follow_up';
+  if (mode === 'topic_radar') return 'cosmic_web_radar';
+  return 'cosmic_web_briefing';
+}
+
+const hasCapability = (agent, cap = 'cosmic_web_briefing') =>
+  Array.isArray(agent?.capabilities) && agent.capabilities.includes(cap);
 const owns = (agent, userId, userRole) => CONFIG.skipAuth || (agent.ownerId ? agent.ownerId === userId : userRole === 'admin');
 
-export function listCapableAgentsForUser(userId, userRole) {
-  return [...agents].filter(([, agent]) => agent.ws?.readyState === 1 && hasCapability(agent) && owns(agent, userId, userRole))
-    .map(([id, agent]) => ({ id, agentId: id, name: agent.name ?? id }));
+export function listCapableAgentsForUser(userId, userRole, mode = 'brief') {
+  const required = requiredCapabilityForMode(mode);
+  return [...agents]
+    .filter(([, agent]) => agent.ws?.readyState === 1 && hasCapability(agent, required) && owns(agent, userId, userRole))
+    .map(([id, agent]) => ({
+      id,
+      agentId: id,
+      name: agent.name ?? id,
+      capabilities: Array.isArray(agent.capabilities) ? [...agent.capabilities] : [],
+      supportsBriefing: hasCapability(agent, 'cosmic_web_briefing'),
+      supportsResearch: hasCapability(agent, 'cosmic_web_research'),
+      supportsFollowUp: hasCapability(agent, 'cosmic_web_follow_up'),
+      supportsRadar: hasCapability(agent, 'cosmic_web_radar'),
+    }));
 }
 
 function settle(key, error, value) {
@@ -28,10 +47,17 @@ function settle(key, error, value) {
 }
 
 export async function requestCosmicWebAi({ userId, userRole, agentId, mode, perspective, language, payload, signal }) {
-  if (signal?.aborted) throw fail(503, 'Cosmic Web is stopping');
+  if (signal?.aborted) {
+    throw signal.reason?.status === 499 ? fail(499, 'Cosmic Web request cancelled') : fail(503, 'Cosmic Web is stopping');
+  }
   const agent = agents.get(agentId);
   if (!userId || !agent || !owns(agent, userId, userRole)) throw fail(403, 'Agent is not available to this user');
-  if (!hasCapability(agent)) throw fail(409, 'Agent does not support Cosmic Web briefing');
+  const requiredCap = requiredCapabilityForMode(mode);
+  if (!hasCapability(agent, requiredCap)) {
+    throw fail(409, requiredCap === 'cosmic_web_briefing'
+      ? 'Agent does not support Cosmic Web briefing'
+      : 'Selected Agent requires an update to support this Cosmic Web feature');
+  }
   if (agent.ws?.readyState !== 1) throw fail(503, 'Agent is offline');
   if ([...pending.values()].filter(entry => entry.userId === userId).length >= 2) throw fail(429, 'Too many active briefing requests');
   const now = Date.now();
@@ -42,16 +68,32 @@ export async function requestCosmicWebAi({ userId, userRole, agentId, mode, pers
   const requestId = randomUUID();
   const key = keyFor(agentId, requestId);
   return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => settle(key, fail(504, 'Agent briefing timed out')), 75_000);
+    const entry = { userId, userRole, agentId, agent, mode, resolve, reject, timer: null, signal, onAbort: null, sent: false };
+    const timer = setTimeout(() => {
+      const wasSent = entry.sent;
+      if (settle(key, fail(504, 'Agent briefing timed out')) && wasSent) {
+        void sendToAgent(agent, { type: 'cosmic_web_ai_cancel', requestId }).catch(() => {});
+      }
+    }, 75_000);
     timer.unref();
-    const onAbort = () => settle(key, fail(503, 'Cosmic Web is stopping'));
-    const entry = { userId, userRole, agentId, agent, mode, resolve, reject, timer, signal, onAbort };
+    const onAbort = () => {
+      const wasSent = entry.sent;
+      const err = signal?.reason?.status === 499 ? fail(499, 'Cosmic Web request cancelled') : fail(503, 'Cosmic Web is stopping');
+      if (settle(key, err) && wasSent) {
+        void sendToAgent(agent, { type: 'cosmic_web_ai_cancel', requestId }).catch(() => {});
+      }
+    };
+    entry.timer = timer;
+    entry.onAbort = onAbort;
     pending.set(key, entry);
     signal?.addEventListener('abort', onAbort, { once: true });
     sendToAgent(agent, { type: 'cosmic_web_ai_request', requestId, mode, perspective, language, payload }, {
       shouldSend: () => pending.get(key) === entry && agents.get(agentId) === agent && !signal?.aborted,
     })
-      .then(sent => { if (!sent) settle(key, fail(503, 'Agent disconnected')); }, () => settle(key, fail(503, 'Agent send failed')));
+      .then(sent => {
+        if (!sent) settle(key, fail(503, 'Agent disconnected'));
+        else entry.sent = true;
+      }, () => settle(key, fail(503, 'Agent send failed')));
   });
 }
 
@@ -86,12 +128,13 @@ const radarItem = value => only(value, ['title', 'url', 'sourceName', 'summaryEx
   typeof value.summaryExcerpt === 'string' && value.summaryExcerpt.length <= 1000 &&
   optional(value.publishedAt, v => count(v) || (text(v, 64) && Number.isFinite(Date.parse(v)))) && optional(value.mediaUrl, url);
 const answers = result => list(result.media, 0, 6, media) && list(result.citations, 0, 8, citation) &&
-  list(result.followUps, 0, 3, question) && typeof result.researched === 'boolean' && count(result.searchCount);
+  list(result.followUps, 0, 3, question) && typeof result.researched === 'boolean' && count(result.searchCount) &&
+  optional(result.evidenceCount, count);
 
 export function validateCosmicWebAiResult(result, mode) {
   if (!object(result)) return false;
   if (mode === 'topic_radar') return !!(only(result, ['items', 'searchCount']) && list(result.items, 0, 20, radarItem) && count(result.searchCount));
-  if (mode === 'follow_up') return !!(only(result, ['question', 'answer', 'bullets', 'media', 'citations', 'followUps', 'researched', 'searchCount']) &&
+  if (mode === 'follow_up') return !!(only(result, ['question', 'answer', 'bullets', 'media', 'citations', 'followUps', 'researched', 'searchCount', 'evidenceCount']) &&
     text(result.question, 500) && text(result.answer, 6000) && !hasUnsafeMarkdown(result.answer) && list(result.bullets, 0, 6, bullet) && answers(result));
   if (!text(result.fullMarkdown, mode === 'daily_briefing' ? 12_000 : 16_000) || hasUnsafeMarkdown(result.fullMarkdown)) return false;
   if (mode === 'daily_briefing') {
@@ -104,7 +147,7 @@ export function validateCosmicWebAiResult(result, mode) {
   if (only(result, ['tldr', 'bullets', 'impact', 'followUps', 'fullMarkdown'])) {
     return list(result.bullets, 3, 5, bullet) && list(result.followUps, 2, 3, question);
   }
-  return only(result, ['tldr', 'sections', 'bullets', 'impact', 'media', 'communityHighlights', 'citations', 'followUps', 'researched', 'searchCount', 'fullMarkdown']) &&
+  return only(result, ['tldr', 'sections', 'bullets', 'impact', 'media', 'communityHighlights', 'citations', 'followUps', 'researched', 'searchCount', 'evidenceCount', 'fullMarkdown']) &&
     list(result.sections, 1, 6, section => only(section, ['heading', 'body']) && text(section.heading, 250) && text(section.body, 4000)) &&
     list(result.bullets, 2, 6, bullet) && list(result.communityHighlights, 0, 6, highlight) && answers(result);
 }
@@ -113,7 +156,7 @@ export function handleCosmicWebAiResponse(agentId, msg) {
   if (!object(msg) || (msg.type != null && msg.type !== 'cosmic_web_ai_response') || !text(msg.requestId, 64)) return false;
   const key = keyFor(agentId, msg.requestId);
   const entry = pending.get(key);
-  if (!entry || agents.get(agentId) !== entry.agent || !owns(entry.agent, entry.userId, entry.userRole) || !hasCapability(entry.agent)) return false;
+  if (!entry || agents.get(agentId) !== entry.agent || !owns(entry.agent, entry.userId, entry.userRole) || !hasCapability(entry.agent, requiredCapabilityForMode(entry.mode))) return false;
   if (msg.ok === false || msg.error != null) return settle(key, fail(502, 'Agent could not generate a briefing'));
   const result = msg.result ?? msg.response;
   if (msg.ok !== true || !validateCosmicWebAiResult(result, entry.mode)) {
