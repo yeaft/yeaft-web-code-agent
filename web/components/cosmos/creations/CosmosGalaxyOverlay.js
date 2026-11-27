@@ -9,7 +9,7 @@ import { useSessionsStore } from '../../../stores/sessions.js';
 import { t } from '../../../utils/i18n.js';
 import { COSMOS_BOOKS_KEY } from '../../../cosmos/constants.js';
 
-const { useCreationsStore } = creationsStoreModule;
+const { creationSessionsForAgent, newCreationAttemptKey, useCreationsStore } = creationsStoreModule;
 
 function formatAgentDisplayName(ag) {
   if (typeof creationsStoreModule.formatAgentDisplayName === 'function') {
@@ -664,14 +664,9 @@ export default {
     const igniteNewProjectName = Vue.ref('');
     const igniteSessionMode = Vue.ref('new');
     const igniteExistingSessionId = Vue.ref('');
-    const igniteResumeState = Vue.ref({ agentId: '', projectId: '', creationId: '' });
+    const igniteResumeState = Vue.ref(null);
     let dragDepth = 0;
-    let igniteReqEpoch = 0;
-    let isUnmounted = false;
-
-    function resetIgniteResumeState() {
-      igniteResumeState.value = { agentId: '', projectId: '', creationId: '' };
-    }
+    let activeIgniteAttemptId = null;
 
     const selectedAgent = Vue.computed(() => {
       const id = creationsStore.selectedAgentId;
@@ -689,16 +684,9 @@ export default {
       return found?.name || '';
     }
 
-    const agentSessions = Vue.computed(() => {
-      const aid = creationsStore.selectedAgentId;
-      if (!aid) return [];
-      const fromStore = Array.isArray(sessionsStore?.sessionList)
-        ? sessionsStore.sessionList.filter((s) => s && s.id && (s.agentId || aid) === aid)
-        : [];
-      if (fromStore.length) return fromStore;
-      const ag = selectedAgent.value;
-      return Array.isArray(ag?.sessions) ? ag.sessions.filter((s) => s && s.id) : [];
-    });
+    const agentSessions = Vue.computed(() => (
+      creationSessionsForAgent(sessionsStore, creationsStore.selectedAgentId)
+    ));
 
     Vue.watch(
       () => [creationsStore.selectedAgentId, agentSessions.value.map((s) => s.id).join(',')],
@@ -773,6 +761,8 @@ export default {
     const canSubmitIgnite = Vue.computed(() => {
       const d = creationsStore.igniteDraft;
       if (!canMutateSelectedAgent.value || d.submitting) return false;
+      if (igniteProjectSelection.value === '__new__' && !igniteNewProjectName.value.trim()) return false;
+      if (igniteSessionMode.value === 'existing' && !agentSessions.value.some(s => s.id === igniteExistingSessionId.value)) return false;
       return Boolean(d.title.trim() || d.prompt.trim() || d.pendingFiles.length);
     });
 
@@ -931,46 +921,44 @@ export default {
       creationsStore.igniteDraft.pendingFiles = next;
     }
 
-    Vue.watch(
-      () => creationsStore.selectedAgentId,
-      (next, prev) => {
-        if (prev && next !== prev) {
-          igniteReqEpoch += 1;
-          if (creationsStore.igniteDraft) {
-            creationsStore.igniteDraft.submitting = false;
-            creationsStore.igniteDraft.error = null;
-          }
-          resetIgniteResumeState();
-        }
-      },
-    );
+    function releaseIgniteAttempt() {
+      if (activeIgniteAttemptId === null) return;
+      creationsStore.finishIgniteAttempt(activeIgniteAttemptId);
+      activeIgniteAttemptId = null;
+    }
 
-    Vue.watch(
-      () => [
-        props.visible,
-        creationsStore.igniteDraft?.open ?? false,
-        creationsStore.igniteDraft?.title ?? '',
-        igniteProjectSelection.value,
-        igniteNewProjectName.value,
-      ],
-      ([vis, isOpen, title, projectSel, newProjName], prev) => {
-        if (!prev) return;
-        const closed = (prev[0] && !vis) || (prev[1] && !isOpen);
-        const draftChanged = prev[2] !== title || prev[3] !== projectSel || prev[4] !== newProjName;
-        if (closed || draftChanged) {
-          resetIgniteResumeState();
-        }
-      },
-    );
+    Vue.watch(() => creationsStore.selectedAgentId, () => {
+      releaseIgniteAttempt();
+      igniteResumeState.value = null;
+      if (creationsStore.igniteDraft) creationsStore.igniteDraft.error = null;
+    }, { flush: 'sync' });
+
+    Vue.watch([() => props.visible, () => creationsStore.igniteDraft?.open], ([visible, open], [wasVisible, wasOpen]) => {
+      if ((wasVisible && !visible) || (wasOpen && !open)) {
+        releaseIgniteAttempt();
+        igniteResumeState.value = null;
+      }
+    });
+
+    Vue.watch([igniteProjectSelection, () => igniteNewProjectName.value.trim()], ([selection, name]) => {
+      const state = igniteResumeState.value;
+      if (!state || (state.projectSelectionSnapshot === selection && state.newProjectNameSnapshot === name)) return;
+      Object.assign(state, { projectId: '', projectSelectionSnapshot: selection, newProjectNameSnapshot: name });
+    }, { flush: 'sync' });
+
+    Vue.watch([igniteSessionMode, igniteExistingSessionId], () => {
+      if (igniteResumeState.value) igniteResumeState.value.sessionId = '';
+    }, { flush: 'sync' });
 
     async function submitIgnite() {
       if (!canSubmitIgnite.value) return;
-      const epoch = ++igniteReqEpoch;
       const submitAgentId = creationsStore.selectedAgentId;
       const startSeq = creationsStore.openActivationSeq;
+      const myAttemptId = creationsStore.beginIgniteAttempt();
+      activeIgniteAttemptId = myAttemptId;
       const isStillCurrent = () => (
-        !isUnmounted
-        && epoch === igniteReqEpoch
+        activeIgniteAttemptId === myAttemptId
+        && creationsStore.igniteDraft.attemptId === myAttemptId
         && creationsStore.selectedAgentId === submitAgentId
       );
       const liveDraft = creationsStore.igniteDraft;
@@ -993,13 +981,18 @@ export default {
       const existingSessionIdVal = sessionModeVal === 'existing'
         ? (igniteExistingSessionId.value || undefined)
         : undefined;
+      if (!igniteResumeState.value) {
+        igniteResumeState.value = {
+          agentId: submitAgentId,
+          attemptKey: newCreationAttemptKey(),
+          projectId: '',
+          projectSelectionSnapshot: igniteProjectSelection.value,
+          newProjectNameSnapshot: igniteNewProjectName.value.trim(),
+          creationId: '',
+          sessionId: '',
+        };
+      }
       const resumeState = igniteResumeState.value;
-      const canResume = Boolean(resumeState && resumeState.agentId === submitAgentId);
-      const resumeProjectIdVal = canResume && resumeState.projectId ? resumeState.projectId : undefined;
-      const resumeCreationIdVal = canResume && resumeState.creationId ? resumeState.creationId : undefined;
-
-      liveDraft.submitting = true;
-      liveDraft.error = null;
 
       try {
         const fallbackTitle = promptText
@@ -1018,8 +1011,10 @@ export default {
               prompt: promptText || undefined,
               rawFiles: filesToSend,
               celestial: celestialVal,
-              ...(resumeProjectIdVal ? { resumeProjectId: resumeProjectIdVal } : {}),
-              ...(resumeCreationIdVal ? { resumeCreationId: resumeCreationIdVal } : {}),
+              attemptKey: resumeState.attemptKey,
+              ...(resumeState.projectId ? { resumeProjectId: resumeState.projectId } : {}),
+              ...(resumeState.creationId ? { resumeCreationId: resumeState.creationId } : {}),
+              ...(resumeState.sessionId ? { resumeSessionId: resumeState.sessionId } : {}),
             })
           : await creationsStore.createCreation(submitAgentId, {
               title: resolvedTitle,
@@ -1027,12 +1022,13 @@ export default {
               prompt: promptText || undefined,
               rawFiles: filesToSend,
               celestial: celestialVal,
+              importKey: resumeState.attemptKey,
             });
         if (!isStillCurrent()) return;
         const created = res?.creation || res;
         const currentDraft = creationsStore.igniteDraft;
         currentDraft.pendingFiles = currentDraft.pendingFiles.filter((f) => !submittedFileSet.has(f));
-        resetIgniteResumeState();
+        igniteResumeState.value = null;
 
         if (res?.initialTurnError) {
           emit('toast', res.initialTurnError);
@@ -1080,20 +1076,13 @@ export default {
         }
       } catch (err) {
         if (!isStillCurrent()) return;
-        const nextProjectId = err?.partialProjectId || (canResume ? resumeState.projectId : '') || '';
-        const nextCreationId = err?.partialCreation?.id || (canResume ? resumeState.creationId : '') || '';
-        if (nextProjectId || nextCreationId) {
-          igniteResumeState.value = {
-            agentId: submitAgentId,
-            projectId: nextProjectId,
-            creationId: nextCreationId,
-          };
-        }
+        resumeState.projectId = err?.partialProjectId || resumeState.projectId;
+        resumeState.creationId = err?.partialCreation?.id || err?.partialCreationId || resumeState.creationId;
+        resumeState.sessionId = err?.partialSessionId || resumeState.sessionId;
         creationsStore.igniteDraft.error = err?.message || 'Failed to ignite creation';
       } finally {
-        if (isStillCurrent()) {
-          creationsStore.igniteDraft.submitting = false;
-        }
+        creationsStore.finishIgniteAttempt(myAttemptId);
+        if (activeIgniteAttemptId === myAttemptId) activeIgniteAttemptId = null;
       }
     }
 
@@ -1162,8 +1151,7 @@ export default {
     });
 
     Vue.onBeforeUnmount(() => {
-      isUnmounted = true;
-      igniteReqEpoch += 1;
+      releaseIgniteAttempt();
       window.removeEventListener('dragenter', onWindowDragEnter);
       window.removeEventListener('dragover', onWindowDragOver);
       window.removeEventListener('dragleave', onWindowDragLeave);

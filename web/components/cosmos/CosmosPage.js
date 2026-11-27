@@ -2421,7 +2421,7 @@ export default {
     }
 
     function onReturnToGalaxy() {
-      invalidateGalaxyCreationOpen();
+      // Closing the drawer invalidates navigation, not the store-owned document drafts.
       closeDrawer({ returnToSun: false });
       if (currentBand.value !== 'galaxy') {
         jumpToScale(21.0);

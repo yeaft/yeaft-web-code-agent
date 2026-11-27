@@ -8,7 +8,7 @@
  */
 import { useChatStore } from '../../stores/chat.js';
 import { useSessionsStore } from '../../stores/sessions.js';
-import { useCreationsStore } from '../../stores/creations.js';
+import { creationSessionsForAgent, newCreationAttemptKey, useCreationsStore } from '../../stores/creations.js';
 import NavigationIcon from '../NavigationIcon.js';
 
 export const CREATION_KINDS = Object.freeze([
@@ -82,8 +82,8 @@ export default {
 
           <form class="creation-create-form" @submit.prevent="handleSubmit">
             <div class="creation-create-body">
-              <div v-if="errorMessage" class="creation-create-error" role="alert">
-                {{ errorMessage }}
+              <div v-if="errorMessage || projectNameError" class="creation-create-error" role="alert">
+                {{ errorMessage || projectNameError }}
               </div>
 
               <!-- Title -->
@@ -347,6 +347,15 @@ export default {
                 {{ tr('common.cancel', 'Cancel') }}
               </button>
               <button
+                v-if="unassignedResult"
+                type="button"
+                class="btn-secondary"
+                :disabled="submitting"
+                @click="continueWithoutProject"
+              >
+                {{ tr('common.open', 'Open') }} — {{ tr('creation.create.noProject', 'No Project') }}
+              </button>
+              <button
                 type="submit"
                 class="btn-primary"
                 :disabled="!canSubmit"
@@ -381,9 +390,11 @@ export default {
     const errorMessage = Vue.ref('');
     const dragOver = Vue.ref(false);
     const folderExpanded = Vue.ref(Boolean(props.initialRootDir));
-    const resumeState = Vue.ref({ agentId: '', projectId: '', creationId: '' });
+    const resumeState = Vue.ref(null);
+    const unassignedResult = Vue.ref(null);
     const resetResumeState = () => {
-      resumeState.value = { agentId: '', projectId: '', creationId: '' };
+      resumeState.value = null;
+      unassignedResult.value = null;
     };
 
     const form = Vue.reactive({
@@ -448,23 +459,18 @@ export default {
         .map(p => ({ id: p.id, name: p.name || p.title || p.id }));
     });
 
-    const existingSessionOptions = Vue.computed(() => {
-      const targetAgent = form.agentId;
-      if (!targetAgent) return [];
-      let rows = [];
-      if (typeof sessionsStore.sessionsForAgent === 'function') {
-        rows = sessionsStore.sessionsForAgent(targetAgent) || [];
-      } else {
-        const all = Array.isArray(sessionsStore.sessionList) ? sessionsStore.sessionList : [];
-        rows = all.filter(s => s && (!s.agentId || s.agentId === targetAgent));
-      }
-      return rows
-        .filter(s => s && s.id)
-        .map(s => ({
-          id: s.id,
-          label: s.name || s.title || s.id,
-        }));
-    });
+    const existingSessionOptions = Vue.computed(() => (
+      creationSessionsForAgent(sessionsStore, form.agentId)
+        .map(s => ({ id: s.id, label: s.name || s.title || s.id }))
+    ));
+
+    const projectSelection = Vue.computed(() => form.creatingProject ? '__new__' : form.projectId);
+    const newProjectName = Vue.computed(() => form.creatingProject ? form.newProjectName.trim() : '');
+    const projectNameError = Vue.computed(() => (
+      form.creatingProject && !newProjectName.value
+        ? tr('creation.create.newProjectPlaceholder', 'Enter a name for the new Project.')
+        : ''
+    ));
 
     const selectedAgentEligible = Vue.computed(() => (
       agentOptions.value.some(a => a.id === form.agentId && a.eligible)
@@ -474,8 +480,8 @@ export default {
       if (submitting.value) return false;
       if (!form.title.trim()) return false;
       if (!form.agentId || !selectedAgentEligible.value) return false;
-      if (form.creatingProject && !form.newProjectName.trim()) return false;
-      if (form.sessionMode === 'existing' && !form.existingSessionId) return false;
+      if (projectNameError.value) return false;
+      if (form.sessionMode === 'existing' && !existingSessionOptions.value.some(s => s.id === form.existingSessionId)) return false;
       return true;
     });
 
@@ -506,28 +512,28 @@ export default {
       }
     }, { immediate: true });
 
-    Vue.watch(
-      () => [
-        form.agentId,
-        form.title,
-        form.rootDir,
-        form.creatingProject,
-        form.projectId,
-        form.newProjectName,
-      ],
-      () => {
-        resetResumeState();
-      },
-    );
+    Vue.watch([projectSelection, newProjectName], ([selection, name]) => {
+      const state = resumeState.value;
+      if (!state || (state.projectSelectionSnapshot === selection && state.newProjectNameSnapshot === name)) return;
+      Object.assign(state, { projectId: '', projectSelectionSnapshot: selection, newProjectNameSnapshot: name });
+    }, { flush: 'sync' });
+
+    Vue.watch([() => form.sessionMode, () => form.existingSessionId], () => {
+      if (resumeState.value) resumeState.value.sessionId = '';
+      unassignedResult.value = null;
+    }, { flush: 'sync' });
 
     Vue.watch(() => form.agentId, () => {
+      submitting.value = false;
+      resetResumeState();
+      errorMessage.value = '';
       if (form.sessionMode === 'existing') {
         const opts = existingSessionOptions.value;
         if (!opts.some(s => s.id === form.existingSessionId)) {
           form.existingSessionId = opts[0]?.id || '';
         }
       }
-    });
+    }, { flush: 'sync' });
 
     Vue.watch(() => form.sessionMode, (mode) => {
       if (mode === 'existing' && !form.existingSessionId) {
@@ -578,6 +584,7 @@ export default {
 
     const requestClose = () => {
       if (submitting.value) return;
+      resetResumeState();
       emit('close');
     };
 
@@ -598,54 +605,82 @@ export default {
     });
 
     Vue.onUnmounted(() => {
+      resetResumeState();
       document.removeEventListener('keydown', handleKeydown);
     });
 
+    const completeCreation = result => {
+      submitting.value = false;
+      resetResumeState();
+      const creation = result?.creation || result || null;
+      emit('created', {
+        agentId: result?.agentId || form.agentId,
+        creation,
+        sessionId: result?.sessionId || creation?.sessionId || (form.sessionMode === 'existing' ? form.existingSessionId : ''),
+        projectId: result?.projectId ?? creation?.projectId ?? null,
+        rootDir: result?.rootDir || creation?.rootDir || form.rootDir.trim(),
+        prompt: form.prompt.trim(),
+      });
+      emit('close');
+    };
+
+    const continueWithoutProject = () => {
+      if (!submitting.value && unassignedResult.value) completeCreation(unassignedResult.value);
+    };
+
     const handleSubmit = async () => {
       if (!canSubmit.value) return;
+      if (!resumeState.value) {
+        resumeState.value = {
+          agentId: form.agentId,
+          attemptKey: newCreationAttemptKey(),
+          projectId: '',
+          projectSelectionSnapshot: projectSelection.value,
+          newProjectNameSnapshot: newProjectName.value,
+          creationId: '',
+          sessionId: '',
+        };
+      }
+      const state = resumeState.value;
       submitting.value = true;
       errorMessage.value = '';
       try {
-        const canResume = resumeState.value.agentId === form.agentId;
         const result = await creationsStore.createWorkspaceCreation({
-          agentId: form.agentId,
+          agentId: state.agentId,
           title: form.title.trim(),
           kind: form.kind,
           projectId: form.creatingProject ? '' : form.projectId,
-          newProjectName: form.creatingProject ? form.newProjectName.trim() : '',
+          newProjectName: newProjectName.value,
           sessionMode: form.sessionMode,
           existingSessionId: form.sessionMode === 'existing' ? form.existingSessionId : '',
           rootDir: form.rootDir.trim(),
           prompt: form.prompt.trim(),
           rawFiles: form.files.slice(),
           celestial: props.celestial || null,
-          resumeProjectId: (canResume && resumeState.value.projectId) || undefined,
-          resumeCreationId: (canResume && resumeState.value.creationId) || undefined,
+          attemptKey: state.attemptKey,
+          resumeProjectId: state.projectId || undefined,
+          resumeCreationId: state.creationId || undefined,
+          resumeSessionId: state.sessionId || undefined,
         });
-        resetResumeState();
-        const creation = result?.creation || result || null;
-        emit('created', {
-          agentId: result?.agentId || form.agentId,
-          creation,
-          sessionId: result?.sessionId || creation?.sessionId || (form.sessionMode === 'existing' ? form.existingSessionId : ''),
-          projectId: result?.projectId || creation?.projectId || form.projectId,
-          rootDir: result?.rootDir || creation?.rootDir || form.rootDir.trim(),
-          prompt: form.prompt.trim(),
-        });
-        emit('close');
-      } catch (err) {
-        const partialProjectId = err?.partialProjectId || '';
-        const partialCreationId = err?.partialCreation?.id || err?.partialCreationId || '';
-        if (partialProjectId || partialCreationId) {
-          resumeState.value = {
-            agentId: form.agentId,
-            projectId: partialProjectId || (resumeState.value.agentId === form.agentId ? resumeState.value.projectId : ''),
-            creationId: partialCreationId || (resumeState.value.agentId === form.agentId ? resumeState.value.creationId : ''),
-          };
+        if (resumeState.value !== state) return;
+        const warning = result?.projectAssignError || result?.projectWarning;
+        if (warning) {
+          state.projectId = result.requestedProjectId || result.partialProjectId || result.projectId || state.projectId || form.projectId;
+          state.creationId = result.creation?.id || state.creationId;
+          state.sessionId = result.sessionId || result.creation?.sessionId || state.sessionId;
+          unassignedResult.value = result;
+          errorMessage.value = warning.message || warning;
+          return;
         }
+        completeCreation(result);
+      } catch (err) {
+        if (resumeState.value !== state) return;
+        state.projectId = err?.partialProjectId || state.projectId;
+        state.creationId = err?.partialCreation?.id || err?.partialCreationId || state.creationId;
+        state.sessionId = err?.partialSessionId || state.sessionId;
         errorMessage.value = err?.message || tr('creation.create.failed', 'Failed to create Creation');
       } finally {
-        submitting.value = false;
+        if (resumeState.value === state) submitting.value = false;
       }
     };
 
@@ -658,6 +693,9 @@ export default {
       form,
       submitting,
       errorMessage,
+      projectNameError,
+      unassignedResult,
+      continueWithoutProject,
       dragOver,
       folderExpanded,
       agentOptions,

@@ -9,7 +9,8 @@ import SvgPreview from './files/SvgPreview.js';
 import CsvPreview from './files/CsvPreview.js';
 import FilePreviewFallback from './files/FilePreviewFallback.js';
 import SpreadsheetPreview from './files/SpreadsheetPreview.js';
-import FileCanvasView, { isCanvasSupportedFile } from './workbench/FileCanvasView.js';
+import FileCanvasView, { isBinaryDocument, isCanvasSupportedFile } from './workbench/FileCanvasView.js';
+import { isSafeSameOriginPreviewUrl } from './cosmos/creations/sanitize.js';
 import { createQuickOpen } from './files/quickOpen.js';
 import { createFolderPicker } from './files/folderPicker.js';
 import { createFileTabs } from './files/fileTabs.js';
@@ -322,7 +323,7 @@ export default {
           <span class="mobile-file-name">
             <span v-if="activeFile?.isDirty">● </span>{{ activeFile?.name }}
           </span>
-          <button class="file-action-btn" :class="{ active: activeFile?.isDirty }" @click="saveFile" :disabled="!activeFile?.isDirty || fileSaving">
+          <button v-if="!activeBinaryDocument" class="file-action-btn" :class="{ active: activeFile?.isDirty }" @click="saveFile" :disabled="!activeFile?.isDirty || fileSaving">
             <svg viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M17 3H5c-1.11 0-2 .89-2 2v14c0 1.1.89 2 2 2h14c1.1 0 2-.9 2-2V7l-4-4zm-5 16c-1.66 0-3-1.34-3-3s1.34-3 3-3 3 1.34 3 3-1.34 3-3 3zm3-10H5V5h10v4z"/></svg>
           </button>
         </div>
@@ -337,7 +338,7 @@ export default {
             <span v-if="activeFile.isDirty" class="file-content-dirty" :title="$t('files.unsaved')">●</span>
           </nav>
           <div class="file-content-actions">
-            <template v-if="isActiveTextPreview">
+            <template v-if="isActiveTextPreview && !activeBinaryDocument">
               <button type="button" class="file-action-btn file-action-text" :class="{ active: textPreviewMode && !activeCanvasMode }" :aria-pressed="textPreviewMode && !activeCanvasMode" @click="onSwitchToTextPreview">{{ $t('files.preview') }}</button>
               <button type="button" class="file-action-btn file-action-text" :class="{ active: !textPreviewMode && !activeCanvasMode }" :aria-pressed="!textPreviewMode && !activeCanvasMode" @click="onSwitchToTextEdit">{{ $t('files.edit') }}</button>
             </template>
@@ -355,12 +356,12 @@ export default {
               <button type="button" class="zoom-btn" @click="zoomIn" :title="$t('git.zoomIn')">+</button>
             </template>
             <button
-              v-if="activeFile.fileType !== 'text' || activeFile.loadError"
+              v-if="activeBinaryDocument || activeFile.fileType !== 'text' || activeFile.loadError"
               type="button"
               class="file-action-btn file-action-text"
               @click="downloadActiveFile"
             >{{ $t('files.download') }}</button>
-            <button type="button" class="file-action-btn" :class="{ active: activeFile.isDirty }" @click="saveFile" :disabled="!activeFile.isDirty || fileSaving" :title="$t('common.save') + ' (Ctrl+S)'">
+            <button v-if="!activeBinaryDocument" type="button" class="file-action-btn" :class="{ active: activeFile.isDirty }" @click="saveFile" :disabled="!activeFile.isDirty || fileSaving" :title="$t('common.save') + ' (Ctrl+S)'">
               <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M17 3H5c-1.11 0-2 .89-2 2v14c0 1.1.89 2 2 2h14c1.1 0 2-.9 2-2V7l-4-4zm-5 16c-1.66 0-3-1.34-3-3s1.34-3 3-3 3 1.34 3 3-1.34 3-3 3zm3-10H5V5h10v4z"/></svg>
             </button>
           </div>
@@ -372,7 +373,8 @@ export default {
         <FilePreviewFallback v-else-if="activeFile?.loadError" :file="activeFile" :error="activeFile.loadError" @download="downloadActiveFile" />
         <template v-else-if="activeFile">
           <FileCanvasView
-            v-if="activeCanvasMode"
+            v-if="activeCanvasMode || activeBinaryDocument"
+            :is-binary="activeBinaryDocument"
             :key="activeFile.path"
             :file="activeFile"
             :route-key="routeKey"
@@ -782,15 +784,16 @@ export default {
     const zoomOut = () => setFontSize(fontSize.value - 1);
     // --- Per-file Canvas mode ---
     const canvasModeByPath = Vue.reactive({});
-    const activeCanvasSupported = Vue.computed(() => !!isCanvasSupportedFile(tabsRef.value?.activeFile.value));
+    const activeBinaryDocument = Vue.computed(() => isBinaryDocument(tabsRef.value?.activeFile.value));
+    const activeCanvasSupported = Vue.computed(() => !activeBinaryDocument.value && !!isCanvasSupportedFile(tabsRef.value?.activeFile.value));
     const activeCanvasMode = Vue.computed(() => {
       const file = tabsRef.value?.activeFile.value;
-      return !!(file && isCanvasSupportedFile(file) && canvasModeByPath[file.path]);
+      return !!(file && activeCanvasSupported.value && canvasModeByPath[file.path]);
     });
 
     const isTextZoomAvailable = Vue.computed(() => {
       const file = tabs?.activeFile.value;
-      if (activeCanvasMode.value) return false;
+      if (activeCanvasMode.value || activeBinaryDocument.value) return false;
       return !!file && (!file.fileType || file.fileType === 'text')
         && !((preview?.isActiveHtml.value || preview?.isActiveSvg.value) && preview.textPreviewMode.value);
     });
@@ -854,8 +857,8 @@ export default {
       editorContainer, fontSize,
       clearFindMarkers: find.clearFindMarkers,
       openFindBar: find.openFindBar,
-      saveFile: () => tabs.saveFile(),
-      canCreateEditor: file => !canvasModeByPath[file.path] && (!isPreviewableTextFile(file.name) || !preview.textPreviewMode.value)
+      saveFile: () => saveFile(),
+      canCreateEditor: file => !isBinaryDocument(file) && !canvasModeByPath[file.path] && (!isPreviewableTextFile(file.name) || !preview.textPreviewMode.value)
     });
 
     // 3. File preview
@@ -949,6 +952,19 @@ export default {
       workspaceGeneration: props.workspaceGeneration,
     });
 
+    // Normalize document reads before the legacy handler can coerce absent
+    // content to an editable empty string. Keep its request/route correlation.
+    const handleWorkbenchMessage = event => {
+      const msg = event.detail;
+      if (msg?.type === 'file_content' && !msg.error && !msg.binary
+        && isCanvasSupportedFile(msg.requestedFilePath || msg.filePath) === 'doc'
+        && (msg.isBinary === true || typeof msg.content !== 'string')) {
+        ws.handleWorkbenchMessage({ detail: { ...msg, binary: true } });
+        return;
+      }
+      ws.handleWorkbenchMessage(event);
+    };
+
     // --- Wrapped operation callbacks (pass t at init time) ---
     const deleteSingleFile = (entry) => ops.deleteSingleFile(entry, t);
     const deleteSelected = () => ops.deleteSelected(t);
@@ -956,12 +972,16 @@ export default {
     const onDrop = (event, entry) => ops.onDrop(event, entry, ops.handleExternalFileDrop);
     const onTreeDrop = (event) => ops.onTreeDrop(event, tree.treeRootPath.value, ops.handleExternalFileDrop);
     const goToLineConfirm = () => qo.goToLineConfirm(tabs.activeFile);
+    const saveFile = () => {
+      if (!activeBinaryDocument.value) tabs.saveFile();
+    };
     const downloadActiveFile = () => {
       const file = tabs.activeFile.value;
       if (!file) return;
       if (file.blobUrl) {
-        const url = new URL(file.blobUrl, location.href);
-        url.searchParams.set('download', '1');
+        if (!isSafeSameOriginPreviewUrl(file.blobUrl)) return;
+        const url = new URL(file.blobUrl, location.origin);
+        if (url.protocol !== 'blob:') url.searchParams.set('download', '1');
         const link = document.createElement('a');
         link.href = url.href;
         link.download = file.name;
@@ -975,7 +995,7 @@ export default {
 
     const toggleCanvasMode = () => {
       const file = tabs.activeFile.value;
-      if (!file || !isCanvasSupportedFile(file)) return;
+      if (!file || !activeCanvasSupported.value) return;
       const isText = !file.fileType || file.fileType === 'text';
       if (canvasModeByPath[file.path]) {
         canvasModeByPath[file.path] = false;
@@ -1021,7 +1041,7 @@ export default {
 
     const onCanvasContentUpdate = (nextContent) => {
       const file = tabs.activeFile.value;
-      if (!file) return;
+      if (!file || isBinaryDocument(file)) return;
       const prevContent = file.content;
       updateFileText(file, nextContent);
       if (file.content !== prevContent) {
@@ -1292,7 +1312,7 @@ export default {
 
     // --- Lifecycle ---
     Vue.onMounted(() => {
-      window.addEventListener('workbench-message', ws.handleWorkbenchMessage);
+      window.addEventListener('workbench-message', handleWorkbenchMessage);
       window.addEventListener('workbench-open-file-in-active-view', ws.handleOpenFile);
       window.addEventListener('workbench-select-file-item', handleSelectFileItem);
       window.addEventListener('workbench-close-file-item', handleCloseFileItem);
@@ -1330,7 +1350,7 @@ export default {
       disposed = true;
       tree.cancelReveal();
       tabs.saveTabsState(store.currentConversation);
-      window.removeEventListener('workbench-message', ws.handleWorkbenchMessage);
+      window.removeEventListener('workbench-message', handleWorkbenchMessage);
       window.removeEventListener('workbench-open-file-in-active-view', ws.handleOpenFile);
       window.removeEventListener('workbench-select-file-item', handleSelectFileItem);
       window.removeEventListener('workbench-close-file-item', handleCloseFileItem);
@@ -1369,7 +1389,7 @@ export default {
       isActiveMarkdown: preview.isActiveMarkdown, textPreviewMode: preview.textPreviewMode,
       mdRenderedHtml: preview.mdRenderedHtml, switchToTextEdit: preview.switchToTextEdit,
       switchToTextPreview: preview.switchToTextPreview,
-      activeCanvasSupported, activeCanvasMode, toggleCanvasMode,
+      activeBinaryDocument, activeCanvasSupported, activeCanvasMode, toggleCanvasMode,
       onSwitchToTextPreview, onSwitchToTextEdit, onCanvasContentUpdate,
       onCanvasMediaLoad, onCanvasMediaError,
       resolveCanvasRelativeMediaUrl, onCanvasRelativeLink,
@@ -1423,7 +1443,7 @@ export default {
       onTreeDragOver: ops.onTreeDragOver, onTreeDragLeave: ops.onTreeDragLeave, onTreeDrop,
       loadRootDirectory: tree.loadRootDirectory, onTreeItemClick: tree.onTreeItemClick,
       openFileInTab: tabs.openFileInTab,
-      switchToTab: tabs.switchToTab, closeFileTab: tabs.closeFileTab, saveFile: tabs.saveFile,
+      switchToTab: tabs.switchToTab, closeFileTab: tabs.closeFileTab, saveFile,
       openFolderPicker: fp.openFolderPicker, folderPickerNavigateUp: fp.folderPickerNavigateUp,
       folderPickerSelectItem: fp.folderPickerSelectItem, folderPickerEnter: fp.folderPickerEnter,
       confirmFolderPicker: fp.confirmFolderPicker,

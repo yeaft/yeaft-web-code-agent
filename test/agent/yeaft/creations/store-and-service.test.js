@@ -1,13 +1,14 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createHash } from 'node:crypto';
 import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { open } from 'node:fs/promises';
+import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { deflateSync } from 'node:zlib';
 import ctx from '../../../../agent/context.js';
 import { resolveCreationWorkspaceRoot } from '../../../../agent/yeaft/creations/bridge.js';
 import { resolveWorkItemPath } from '../../../../agent/workbench/work-item-path.js';
-import { handleCreateFile, handleListDirectory, handleReadFile, handleUploadToDir, handleVideoChunk, handleVideoMetadata, handleWriteFile }
+import { handleCopyFiles, handleCreateFile, handleDeleteFiles, handleListDirectory, handleMoveFiles, handleReadFile, handleUploadToDir, handleVideoChunk, handleVideoMetadata, handleWriteFile }
   from '../../../../agent/workbench/file-ops.js';
 import { BUFFERABLE_TYPES } from '../../../../agent/connection/buffer.js';
 import { createCreationBridge, createCreationService, createCreationStore, parseSource } from '../../../../agent/yeaft/creations/index.js';
@@ -35,8 +36,10 @@ describe('Creation folder workspaces', () => {
     expect(store.createCreation({ id })).toMatchObject(defaults);
     store.run("UPDATE creations SET data=json_remove(data,'$.sessionId','$.projectId','$.rootDir') WHERE id=?", id);
     expect(store.getCreation(id)).toMatchObject(defaults);
-    const links = { sessionId: ' session:1 ', projectId: ' project-2 ', rootDir: `  ${realpathSync(dir)}  ` };
-    const canonical = { sessionId: 'session:1', projectId: 'project-2', rootDir: realpathSync(dir) };
+    const folder = join(realpathSync(dir), 'external');
+    mkdirSync(folder);
+    const links = { sessionId: ' session:1 ', projectId: ' project-2 ', rootDir: `  ${folder}  ` };
+    const canonical = { sessionId: 'session:1', projectId: 'project-2', rootDir: folder };
     expect(store.updateCreation(id, links)).toMatchObject(canonical);
     expect(store.updateCreation(id, { title: 'Renamed' })).toMatchObject(canonical);
     expect(store.createCreation({ ...links, id: 'linked' })).toMatchObject(canonical);
@@ -53,7 +56,7 @@ describe('Creation folder workspaces', () => {
       id: creationId, title: 'Sky', prompt: 'Draft the story', initializeFolder: true,
       files: [{ name: 'notes/scene.txt', data: b64('Scene one') }, { name: 'notes\\scene.txt', data: b64('Scene two') }],
     });
-    const root = realpathSync(join(store.root, 'workspaces', creationId));
+    const root = realpathSync(join(store.root, '_workspaces', creationId));
     expect(creation.rootDir).toBe(root);
     expect(initialTurn).toBeUndefined();
     expect(store.listRuns(creationId)).toEqual([]);
@@ -72,31 +75,89 @@ describe('Creation folder workspaces', () => {
     })).toThrow('abort deletion');
     req('delete_creation', { creationId });
     expect(readFileSync(join(root, 'sources', 'notes_scene.txt'), 'utf8')).toBe('Scene one');
-    expect(existsSync(join(store.root, creationId))).toBe(false);
+    expect(existsSync(join(store.root, creationId, 'sources'))).toBe(true);
     expect(store.listCreations()).toEqual([]);
   });
 
-  it('preserves user files and never removes a supplied folder, even at the dedicated workspace pathname', () => {
-    const rootDir = join(store.root, 'workspaces', 'provided');
-    mkdirSync(join(rootDir, 'sources'), { recursive: true });
-    writeFileSync(join(rootDir, 'README.md'), 'User readme');
-    writeFileSync(join(rootDir, 'sources', 'Notes.txt'), 'User notes');
-    const { creation } = req('create_creation', { id: 'provided', initializeFolder: true, rootDir, textSources: ['Upload'] });
-    expect(creation.rootDir).toBe(realpathSync(rootDir));
-    expect(readFileSync(join(rootDir, 'README.md'), 'utf8')).toBe('User readme');
-    expect(readFileSync(join(rootDir, 'sources', 'Notes.txt'), 'utf8')).toBe('User notes');
-    expect(readFileSync(join(rootDir, 'sources', 'Notes-2.txt'), 'utf8')).toBe('Upload');
-    req('delete_creation', { creationId: 'provided' });
-    expect(existsSync(join(rootDir, 'README.md'))).toBe(true);
-    req('create_creation', { id: 'provided', initializeFolder: true });
-    req('delete_creation', { creationId: 'provided' });
-    expect(existsSync(join(rootDir, 'README.md'))).toBe(true);
+  it('preserves user files in supplied folders and protects historically linked legacy workspaces', () => {
     const external = join(dir, 'external');
-    mkdirSync(external);
-    writeFileSync(join(external, 'keep.txt'), 'external data');
-    req('create_creation', { id: 'external', initializeFolder: true, rootDir: external });
-    req('delete_creation', { creationId: 'external' });
-    expect(readFileSync(join(external, 'keep.txt'), 'utf8')).toBe('external data');
+    mkdirSync(join(external, 'sources'), { recursive: true });
+    writeFileSync(join(external, 'README.md'), 'User readme');
+    writeFileSync(join(external, 'sources', 'Notes.txt'), 'User notes');
+    const { creation } = req('create_creation', { id: 'provided', initializeFolder: true, rootDir: external, textSources: ['Upload'] });
+    expect(creation.rootDir).toBe(realpathSync(external));
+    expect(readFileSync(join(external, 'README.md'), 'utf8')).toBe('User readme');
+    expect(readFileSync(join(external, 'sources', 'Notes.txt'), 'utf8')).toBe('User notes');
+    expect(readFileSync(join(external, 'sources', 'Notes-2.txt'), 'utf8')).toBe('Upload');
+    req('delete_creation', { creationId: 'provided' });
+    expect(existsSync(join(external, 'README.md'))).toBe(true);
+
+    const legacy = join(store.root, 'workspaces', 'legacy');
+    mkdirSync(legacy, { recursive: true });
+    writeFileSync(join(legacy, 'keep.txt'), 'legacy data');
+    store.createCreation({ id: 'legacy' });
+    store.run("UPDATE creations SET data=json_set(data,'$.rootDir',?) WHERE id='legacy'", legacy);
+    expect(store.resolveWorkspaceRoot('legacy')).toBe(legacy);
+    store.deleteCreation('legacy');
+    expect(readFileSync(join(legacy, 'keep.txt'), 'utf8')).toBe('legacy data');
+  });
+
+  it('rejects private storage roots and their ancestors with real sibling namespaces', () => {
+    const namespace = ownerId => ({ yeaftDir: dir,
+      namespaceKey: createHash('sha256').update(`server\0agent\0${ownerId}`).digest('hex').slice(0, 24),
+      namespaceBinding: { ownerId, serverUrl: 'server', agentId: 'agent' } });
+    const first = createCreationStore(namespace('first'));
+    const second = createCreationStore(namespace('second'));
+    try {
+      first.createCreation({ id: 'book' });
+      const sibling = second.createCreation({ id: 'book', initializeFolder: true }).rootDir;
+      for (const rootDir of [second.root, sibling, first.creationsRoot, realpathSync(dir), dirname(realpathSync(dir))]) {
+        expect(() => first.createCreation({ id: 'other', rootDir })).toThrow(err('INVALID_PATH'));
+        expect(() => first.updateCreation('book', { rootDir })).toThrow(err('INVALID_PATH'));
+        expect(() => first.ensureWorkspace('book', { rootDir })).toThrow(err('INVALID_PATH'));
+        first.run("UPDATE creations SET data=json_set(data,'$.rootDir',?) WHERE id='book'", rootDir);
+        expect(() => first.resolveWorkspaceRoot('book')).toThrow(err('INVALID_PATH'));
+        first.run("UPDATE creations SET data=json_remove(data,'$.rootDir') WHERE id='book'");
+      }
+      first.run("UPDATE creations SET data=json_set(data,'$.rootDir',?) WHERE id='book'", sibling);
+      first.deleteCreation('book');
+      expect(readFileSync(join(sibling, 'README.md'), 'utf8')).toContain('Untitled creation');
+    } finally { first.close(); second.close(); }
+  });
+
+  it('uses the reserved workspace container even when workspaces is a Creation ID', () => {
+    const workspaces = store.createCreation({ id: 'workspaces', initializeFolder: true });
+    expect(workspaces.rootDir).toBe(join(store.root, '_workspaces', 'workspaces'));
+    store.addSources('workspaces', { textSources: ['ID cache remains readable'] });
+    store.createCreation({ id: 'another' });
+    expect(store.ensureWorkspace('another').rootDir).toBe(join(store.root, '_workspaces', 'another'));
+    expect(store.listSources('workspaces')).toHaveLength(1);
+  });
+
+  it.each(['external', 'generated'])('reconciles a partially published %s workspace without suffixing matching files', async location => {
+    const id = 'interrupted';
+    store.createCreation({ id });
+    store.createNode(id, { title: 'Doc', content: '# Draft' });
+    store.createNode(id, { title: 'Other', content: 'Missing output' });
+    const image = store.saveAsset(id, { ext: 'svg', content: '<svg></svg>' });
+    const rootDir = location === 'external' ? join(dir, 'outside') : join(store.root, '_workspaces', id);
+    mkdirSync(join(rootDir, 'docs'), { recursive: true });
+    mkdirSync(join(rootDir, 'images'));
+    writeFileSync(join(rootDir, 'docs', 'Doc.md'), 'User draft');
+    writeFileSync(join(rootDir, 'docs', 'Doc-2.md'), '# Draft');
+    writeFileSync(join(rootDir, 'images', `${image.id}.svg`), '<svg></svg>');
+    const stale = join(dirname(rootDir), `.staging-${id}.stale`);
+    if (location === 'generated') mkdirSync(stale);
+    await service.close();
+    service = createCreationService({ yeaftDir: dir });
+    store = service.store;
+    expect(store.getCreation(id).rootDir).toBeNull();
+    expect(store.ensureWorkspace(id, location === 'external' ? { rootDir } : {})).toMatchObject({ rootDir, materialized: true });
+    expect(readdirSync(join(rootDir, 'docs')).sort()).toEqual(['Doc-2.md', 'Doc.md', 'Other.md']);
+    expect(readdirSync(join(rootDir, 'images'))).toEqual([`${image.id}.svg`]);
+    expect(readFileSync(join(rootDir, 'docs', 'Doc.md'), 'utf8')).toBe('User draft');
+    expect(existsSync(stale)).toBe(false);
+    expect(store.ensureWorkspace(id)).toMatchObject({ rootDir, materialized: false });
   });
 
   it('rejects new cache-tree links on create, update and workspace setup', () => {
@@ -145,7 +206,7 @@ describe('Creation folder workspaces', () => {
       store.deleteCreation('cache-owner');
       expect(readFileSync(join(rootDir, 'keep.txt'), 'utf8')).toBe('workspace data without a marker');
       expect(readFileSync(join(cache, 'assets', 'marked', 'README.md'), 'utf8')).toBe('unregistered workspace marker');
-      expect(existsSync(join(cache, 'exports'))).toBe(false);
+      expect(readFileSync(join(cache, 'exports', 'discard.txt'), 'utf8')).toBe('internal cache');
       expect(store.listCreations()).toEqual([]);
     },
   );
@@ -161,7 +222,7 @@ describe('Creation folder workspaces', () => {
     writeFileSync(join(replacementDir, 'keep.txt'), 'replacement data');
     if (replacement === 'symlink') symlinkSync(target, rootDir, 'dir');
     if (replacement === 'ancestor symlink') {
-      const parent = join(store.root, 'workspaces');
+      const parent = dirname(rootDir);
       rmSync(parent, { recursive: true });
       symlinkSync(target, parent, 'dir');
     }
@@ -208,7 +269,7 @@ describe('Creation folder workspaces', () => {
       { name: 'valid.txt', data: b64('first') }, { name: 'sub/../unsafe.txt', data: b64('second') },
     ] };
     expect(() => req('create_creation', payload)).toThrow(err('INVALID_REQUEST'));
-    expect(existsSync(join(store.root, 'workspaces', id))).toBe(false);
+    expect(existsSync(join(store.root, '_workspaces', id))).toBe(false);
     expect(store.listCreations()).toEqual([]);
     const rootDir = join(dir, 'external');
     mkdirSync(rootDir);
@@ -323,7 +384,7 @@ describe('Creation folder workspaces', () => {
     rmSync(rootDir, { recursive: true });
     expect(() => req('find_by_folder', { rootDir: alias })).toThrow(err('INVALID_REQUEST'));
     expect(req('find_by_folder', { rootDir })).toEqual({ creation });
-    const workspace = join(realpathSync(store.root), 'workspaces', id);
+    const workspace = join(realpathSync(store.root), '_workspaces', id);
     expect(req('ensure_workspace', { creationId: id })).toMatchObject({ rootDir: workspace, materialized: true });
     expect(req('find_by_folder', { rootDir: workspace }).creation.id).toBe(id);
   });
@@ -1023,6 +1084,99 @@ describe('Creation-scoped Workbench files', () => {
     expect(readdirSync(join(root, 'docs'))).toEqual(['note.txt']);
     expect(readFileSync(join(outside, 'note.txt'), 'utf8')).toBe('outside');
     expect(readdirSync(outside)).toEqual(['note.txt']);
+  });
+
+  it('revalidates persisted private roots in both the live and read-only bridge', async () => {
+    const namespaceKey = createHash('sha256').update(`wss://workbench.example\0workbench-agent\0${owner}`).digest('hex').slice(0, 24);
+    const writer = createCreationStore({ yeaftDir: dir, namespaceKey,
+      namespaceBinding: { ownerId: owner, serverUrl: 'wss://workbench.example', agentId: 'workbench-agent' } });
+    try {
+      const sibling = join(writer.creationsRoot, 'ns-sibling');
+      const sameNamespaceWrongId = join(writer.root, '_workspaces', 'another');
+      mkdirSync(sibling);
+      mkdirSync(sameNamespaceWrongId, { recursive: true });
+      const invalid = [sibling, writer.creationsRoot, realpathSync(dir), dirname(realpathSync(dir)), sameNamespaceWrongId];
+      for (const rootDir of invalid) {
+        writer.run("UPDATE creations SET data=json_set(data,'$.rootDir',?) WHERE id=?", rootDir, creationId);
+        expect(await resolveCreationWorkspaceRoot(owner, creationId)).toBeNull();
+      }
+      await bridge.close();
+      bridge = createCreationBridge();
+      for (const rootDir of invalid) {
+        writer.run("UPDATE creations SET data=json_set(data,'$.rootDir',?) WHERE id=?", rootDir, creationId);
+        expect(await resolveCreationWorkspaceRoot(owner, creationId)).toBeNull();
+      }
+      const legacy = join(writer.root, 'workspaces', creationId);
+      mkdirSync(legacy, { recursive: true });
+      writer.run("UPDATE creations SET data=json_set(data,'$.rootDir',?) WHERE id=?", legacy, creationId);
+      expect(await resolveCreationWorkspaceRoot(owner, creationId)).toBe(legacy);
+    } finally { writer.close(); }
+  });
+
+  it('rejects destructive operations on the bound root and symlinks but allows strict children', async () => {
+    for (const path of ['.', root]) {
+      await expect(resolveWorkItemPath(msg, path, outside, { strictDescendant: true })).rejects.toMatchObject(err('FILE_OUTSIDE_WORKSPACE'));
+      expect(await invoke(handleDeleteFiles, { paths: [path] })).toMatchObject({ success: false, deletedCount: 0 });
+      expect(await invoke(handleMoveFiles, { paths: [path], destination: 'move-here' })).toMatchObject({ success: false, movedCount: 0 });
+      expect(await invoke(handleCopyFiles, { paths: [path], destination: '.' })).toMatchObject({ success: false, copiedCount: 0 });
+    }
+    expect(readdirSync(root)).not.toContain('move-here');
+    expect(readFileSync(join(root, 'docs', 'note.txt'), 'utf8')).toBe('inside');
+    symlinkSync(outside, join(root, 'docs', 'nested-link'), 'dir');
+    for (const path of ['linked.txt', 'external/note.txt', 'docs']) {
+      expect(await invoke(handleDeleteFiles, { paths: [path] })).toMatchObject({ success: false });
+      expect(await invoke(handleMoveFiles, { paths: [path], destination: 'moved' })).toMatchObject({ success: false });
+      expect(await invoke(handleCopyFiles, { paths: [path], destination: 'copied' })).toMatchObject({ success: false });
+    }
+    expect(await invoke(handleCopyFiles, { paths: ['docs/note.txt'], destination: 'copied' })).toMatchObject({ success: true });
+    expect(await invoke(handleMoveFiles, { paths: ['copied/note.txt'], destination: 'moved' })).toMatchObject({ success: true });
+    expect(readFileSync(join(root, 'moved', 'note.txt'), 'utf8')).toBe('inside');
+    expect(await invoke(handleDeleteFiles, { paths: ['docs/note.txt'] })).toMatchObject({ success: true, deletedCount: 1 });
+    expect(existsSync(join(root, 'docs', 'note.txt'))).toBe(false);
+    expect(statSync(root).isDirectory()).toBe(true);
+  });
+
+  it('keeps read metadata and bytes on the same descriptor if the pathname changes', async () => {
+    const path = join(root, 'docs', 'note.txt');
+    const handle = await open(path, 'r');
+    const prototype = Object.getPrototypeOf(handle);
+    await handle.close();
+    const read = prototype.read;
+    let replaced = false;
+    const spy = vi.spyOn(prototype, 'read').mockImplementation(async function (...args) {
+      if (!replaced && realpathSync(`/proc/self/fd/${this.fd}`) === path) {
+        replaced = true;
+        renameSync(path, join(root, 'docs', 'original.txt'));
+        writeFileSync(path, 'replacement');
+      }
+      return read.apply(this, args);
+    });
+    try {
+      expect(await invoke(handleReadFile, { filePath: path })).toMatchObject({ content: 'inside' });
+      expect(replaced).toBe(true);
+      expect(readFileSync(path, 'utf8')).toBe('replacement');
+    } finally { spy.mockRestore(); }
+  });
+
+  it('closes pinned descriptors on success and rejection, and rejects leaf links and non-regular files', async () => {
+    const procFds = '/proc/self/fd';
+    const openWorkspaceFds = () => readdirSync(procFds).flatMap(fd => {
+      try { return realpathSync(join(procFds, fd)).startsWith(root) ? [fd] : []; } catch { return []; }
+    });
+    symlinkSync(join(root, 'clip.mp4'), join(root, 'linked.mp4'));
+    mkdirSync(join(root, 'directory.mp4'));
+    for (const filePath of ['linked.mp4', 'directory.mp4']) {
+      expect(await invoke(handleVideoMetadata, { filePath })).toMatchObject({ errorCode: 'FILE_OUTSIDE_WORKSPACE' });
+      expect(await invoke(handleVideoChunk, { filePath })).toMatchObject({ errorCode: 'FILE_OUTSIDE_WORKSPACE' });
+      expect(await invoke(handleWriteFile, { filePath, content: 'overwrite' })).toMatchObject({ success: false });
+      expect(await invoke(handleReadFile, { filePath })).toMatchObject({ errorCode: 'FILE_OUTSIDE_WORKSPACE' });
+    }
+    expect(await invoke(handleCreateFile, { filePath: 'linked.txt' })).toMatchObject({ success: false });
+    expect(await invoke(handleWriteFile, { filePath: 'docs/note.txt', content: 'new' })).toMatchObject({ success: true });
+    expect(await invoke(handleReadFile, { filePath: 'docs/note.txt' })).toMatchObject({ content: 'new' });
+    expect(await invoke(handleVideoMetadata, { filePath: 'clip.mp4' })).toMatchObject({ size: 5 });
+    expect(await invoke(handleVideoChunk, { filePath: 'clip.mp4', start: 10, end: 11 })).toMatchObject({ errorCode: 'VIDEO_RANGE_INVALID' });
+    expect(openWorkspaceFds()).toEqual([]);
   });
 
   it('fails closed for missing or unowned creations and absent authenticated ownership', async () => {

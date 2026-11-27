@@ -60,6 +60,13 @@ async function denyWorkbenchRoute(client, msg) {
 
 const AGENT_DIRECTORY_PICKER_CONVERSATION = '_workdir_picker';
 
+const CREATION_WORKBENCH_TYPES = new Set([
+  'list_directory', 'read_file', 'write_file', 'create_file',
+  'delete_files', 'move_files', 'copy_files', 'upload_to_dir',
+]);
+// Match the ID format used by the Agent's Creation store.
+const CREATION_ID = /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,95}$/;
+
 const RESPONSE_TYPES = Object.freeze({
   terminal_create: ['terminal_created', 'terminal_error'],
   read_file: ['file_content'],
@@ -113,8 +120,8 @@ const FILE_OPERATIONS = Object.freeze({
 });
 
 function workbenchFailureResponse({ agentId, msg, resolved, error }) {
+  if (!Object.hasOwn(TIMEOUT_RESPONSE_TYPES, msg.type)) return null;
   const type = TIMEOUT_RESPONSE_TYPES[msg.type];
-  if (!type) return null;
   const response = {
     type,
     agentId,
@@ -192,8 +199,10 @@ function canonicalWorkbenchMessage(msg, resolved, { canonicalWorkDir = false } =
     _requestUserId: _ignoredUserId,
     _requestClientId: _ignoredClientId,
     _workbenchRequestId: _ignoredRequestId,
+    creationId,
     ...clientFields
   } = msg || {};
+  if (creationId) clientFields.creationId = creationId;
   if (resolved.legacy) return {
     ...clientFields,
     ...(resolved.conversationId ? { conversationId: resolved.conversationId } : {}),
@@ -232,9 +241,7 @@ function correlateWorkbenchRequest({ agentId, clientId, client, msg, resolved, c
     role: client.role,
     requestType: msg.type,
     responseImagePreview: msg.type === 'read_file' && msg.responseImagePreview === true,
-    creationId: typeof msg.creationId === 'string' && msg.creationId.trim() && msg.creationId.length <= 256 && !msg.creationId.includes('\0')
-      ? msg.creationId.trim()
-      : null,
+    creationId: canonical.creationId ?? null,
     expectedResponseTypes,
     publicRequestId: typeof msg.requestId === 'string' ? msg.requestId : null,
     terminalId: msg.terminalId || null,
@@ -260,10 +267,8 @@ function correlateWorkbenchRequest({ agentId, clientId, client, msg, resolved, c
   return {
     ...canonical,
     _workbenchRequestId: requestId,
-    ...(!supportsRequestCorrelation ? {
-      _requestUserId: client.userId,
-      _requestClientId: clientId,
-    } : {}),
+    ...(canonical.creationId || !supportsRequestCorrelation ? { _requestUserId: client.userId } : {}),
+    ...(!supportsRequestCorrelation ? { _requestClientId: clientId } : {}),
   };
 }
 
@@ -286,6 +291,18 @@ async function forwardCorrelatedWorkbenchRequest({ agentId, clientId, client, ms
 }
 
 export async function handleClientWorkbench(clientId, client, msg, checkAgentAccess) {
+  if (msg.creationId != null && msg.creationId !== '') {
+    const rawId = msg.creationId;
+    const creationId = typeof rawId === 'string' && rawId.length <= 256 ? rawId.trim() : '';
+    // Video metadata is a dedicated preview handshake, not a general file op.
+    // Its branch below requires video streaming and opaque correlation support.
+    if (!CREATION_ID.test(creationId) || !client.authenticated || !client.userId
+        || (!CREATION_WORKBENCH_TYPES.has(msg.type) && msg.type !== 'video_metadata')) {
+      await denyWorkbenchRoute(client, msg);
+      return true;
+    }
+    msg = { ...msg, creationId };
+  }
   switch (msg.type) {
     // Terminal messages (forward to agent)
     case 'terminal_create':
@@ -361,7 +378,8 @@ export async function handleClientWorkbench(clientId, client, msg, checkAgentAcc
       }
       const fileConvId = resolved.conversationId || msg.conversationId || client.currentConversation || '_explorer';
       if (msg.type === 'video_metadata'
-          && (!agents.get(fileAgentId)?.capabilities?.includes?.('workbench_video_stream')
+          && ((msg.creationId && resolved.legacy)
+            || !agents.get(fileAgentId)?.capabilities?.includes?.('workbench_video_stream')
             || !agentSupportsWorkbenchRequestCorrelation(agents.get(fileAgentId)))) {
         await sendToWebClient(client, workbenchFailureResponse({
           agentId: fileAgentId,
@@ -436,6 +454,10 @@ export async function handleClientWorkbench(clientId, client, msg, checkAgentAcc
         && typeof msg.requestId === 'string'
         && msg.requestId.length > 0;
       if (isAgentDirectoryPicker) {
+        if (msg.creationId) {
+          await denyWorkbenchRoute(client, msg);
+          return true;
+        }
         const agent = agents.get(dirAgentId);
         const defaultWorkDir = typeof agent?.workDir === 'string' ? agent.workDir : '';
         const correlationKey = `agent-directory-picker:${dirAgentId}`;
@@ -481,9 +503,8 @@ export async function handleClientWorkbench(clientId, client, msg, checkAgentAcc
         conversationId: resolved.conversationId || msg.conversationId || client.currentConversation || '_explorer',
       });
 
-      // Route-scoped requests bypass the legacy Agent/path cache. Relative
-      // paths can mean different directories in sibling Sessions.
-      const cached = resolved.legacy ? getCachedDir(dirAgentId, canonical.dirPath) : null;
+      // Session and Creation requests bypass the unscoped Agent/path cache.
+      const cached = resolved.legacy && !canonical.creationId ? getCachedDir(dirAgentId, canonical.dirPath) : null;
       if (cached) {
         await sendToWebClient(client, {
           type: 'directory_listing',

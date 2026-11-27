@@ -192,21 +192,13 @@ export function getCanvasContextRefs(routeKey) {
   return ensureList(routeKey);
 }
 
-/**
- * Neutralize `@`-mentions in reference-derived text so the production mention
- * parser (`agent/yeaft/sessions/pre-flow.js` MENTION_RE: `/(^|\s)@([A-Za-z0-9_][A-Za-z0-9_-]*)/g`)
- * never extracts unintended VP mentions from file names, paths, timestamps, or
- * quoted snippets. User-authored text appended after the prefix is untouched.
- *
- * @param {string} text
- * @returns {string}
- */
+/** Strip mention semantics from the entire reference block, independent of punctuation. */
 function neutralizeMentions(text) {
-  return String(text ?? '').replace(/(^|[\s(`"'\[{])@([A-Za-z0-9_\-\u4e00-\u9fff])/g, '$1@\u200B$2');
+  return text.replace(/@(?=[\p{L}\p{N}_.-])/gu, '@\u200B');
 }
 
 function sanitizeHeaderField(text) {
-  return neutralizeMentions(String(text ?? '').replace(/[\r\n]+/g, ' ').trim());
+  return String(text ?? '').replace(/[\r\n]+/g, ' ').trim();
 }
 
 /**
@@ -236,7 +228,7 @@ export function formatCanvasContextPrefix(refs) {
       if (ref.snippet) {
         const lines = String(ref.snippet)
           .split(/\r?\n/)
-          .map(line => `> ${neutralizeMentions(line)}`);
+          .map(line => `> ${line}`);
         blocks.push([header, ...lines].join('\n'));
       } else {
         blocks.push(header);
@@ -254,12 +246,13 @@ export function formatCanvasContextPrefix(refs) {
     if (ref.snippet) {
       const lines = String(ref.snippet)
         .split(/\r?\n/)
-        .map(line => `> ${neutralizeMentions(line)}`);
+        .map(line => `> ${line}`);
       blocks.push([header, ...lines].join('\n'));
     } else {
       blocks.push(header);
     }
   }
 
-  return blocks.join('\n\n');
+  // The composer appends the user's message separately; never rewrite that text.
+  return neutralizeMentions(blocks.join('\n\n'));
 }

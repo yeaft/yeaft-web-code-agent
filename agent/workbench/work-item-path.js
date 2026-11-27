@@ -1,5 +1,6 @@
-import { lstat, realpath } from 'node:fs/promises';
-import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { constants } from 'node:fs';
+import { lstat, mkdir, open, readdir, realpath, rename, rmdir, unlink } from 'node:fs/promises';
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { resolveCreationWorkspaceRoot } from '../yeaft/creations/bridge.js';
 
 function outsideWorkspace(message) {
@@ -11,7 +12,9 @@ function assertWithin(root, candidate, message = 'File is outside the WorkItem w
   if (path === '..' || path.startsWith(`..${sep}`) || isAbsolute(path)) throw outsideWorkspace(message);
 }
 
-async function resolveCreationPath(msg, filePath, lookupRoot) {
+export const hasCreationScope = msg => msg.creationId !== undefined;
+
+async function lookupCreationRoot(msg, lookupRoot = resolveCreationWorkspaceRoot) {
   const unavailable = 'Creation workspace is unavailable.';
   const creationId = typeof msg.creationId === 'string' && msg.creationId.trim();
   if (!creationId || typeof msg._requestUserId !== 'string' || !msg._requestUserId.trim()) {
@@ -30,7 +33,19 @@ async function resolveCreationPath(msg, filePath, lookupRoot) {
     throw outsideWorkspace(unavailable);
   }
 
-  const candidate = resolve(canonicalRoot, filePath);
+  return canonicalRoot;
+}
+
+function creationTarget(root, filePath, strictDescendant) {
+  const candidate = resolve(root, filePath);
+  assertWithin(root, candidate, 'File is outside the Creation workspace.');
+  if (strictDescendant && candidate === root) throw outsideWorkspace('Operation cannot target the Creation workspace root.');
+  return candidate;
+}
+
+async function resolveCreationPath(msg, filePath, { resolveCreationWorkspaceRoot: lookupRoot, strictDescendant }) {
+  const canonicalRoot = await lookupCreationRoot(msg, lookupRoot);
+  const candidate = creationTarget(canonicalRoot, filePath, strictDescendant);
   const outside = 'File is outside the Creation workspace.';
   assertWithin(canonicalRoot, candidate, outside);
   let ancestor = canonicalRoot;
@@ -53,11 +68,11 @@ async function resolveCreationPath(msg, filePath, lookupRoot) {
 /**
  * Confine Creation and WorkItem file operations to the Agent-resolved root.
  * Creations disallow all symlinks; new destinations validate the nearest
- * existing ancestor. This is not a concurrent filesystem sandbox.
+ * existing ancestor. Use withCreationFiles for descriptor-backed I/O.
  */
 export async function resolveWorkItemPath(msg, filePath, workDir, deps = {}) {
-  if (msg.creationId !== undefined) {
-    return resolveCreationPath(msg, filePath, deps.resolveCreationWorkspaceRoot || resolveCreationWorkspaceRoot);
+  if (hasCreationScope(msg)) {
+    return resolveCreationPath(msg, filePath, deps);
   }
   const candidate = resolve(workDir, filePath);
   if (msg.workbenchRoute?.runtimeProvider !== 'work-center') return candidate;
@@ -80,4 +95,192 @@ export async function resolveWorkItemPath(msg, filePath, workDir, deps = {}) {
     assertWithin(root, await realpath(ancestor));
     return candidate;
   }
+}
+
+const inodeOptions = { bigint: true };
+const sameInode = (a, b) => a && b && a.dev === b.dev && a.ino === b.ino;
+const changed = () => outsideWorkspace('Creation workspace path changed or contains a symbolic link.');
+
+async function noLinkStat(path) {
+  const info = await lstat(path, inodeOptions).catch(error => {
+    if (error.code !== 'ENOENT') throw error;
+    return null;
+  });
+  if (info?.isSymbolicLink()) throw changed();
+  return info;
+}
+
+// Node has no openat/renameat API. Linux procfs provides paths relative to
+// *held* directory descriptors (not mutable, unchecked ancestor paths).
+// Fail closed where this primitive or O_NOFOLLOW is unavailable.
+function fdPath(handle) { return `/proc/self/fd/${handle.fd}`; }
+function dirFlags() { return constants.O_RDONLY | constants.O_NOFOLLOW | (constants.O_DIRECTORY ?? 0); }
+
+async function verifyNamed(path, handle, expected) {
+  const info = await handle.stat(inodeOptions);
+  if ((expected && !sameInode(expected, info)) || await realpath(fdPath(handle)) !== path
+    || !sameInode(info, await noLinkStat(path))) throw changed();
+  return info;
+}
+
+async function withDirectory(path, anchor, expected, action) {
+  if (!expected?.isDirectory()) throw outsideWorkspace('Expected a Creation workspace directory.');
+  const handle = await open(anchor, dirFlags());
+  try {
+    await verifyNamed(path, handle, expected);
+    return await action(handle);
+  } finally { await handle.close(); }
+}
+
+class CreationFiles {
+  constructor(root, handle) {
+    this.root = root;
+    this.handle = handle;
+  }
+
+  target(filePath, { strictDescendant = false } = {}) {
+    return creationTarget(this.root, filePath, strictDescendant);
+  }
+
+  async directory(path, action, { create = false } = {}) {
+    const parts = relative(this.root, this.target(path)).split(sep).filter(Boolean);
+    const walk = async (index, canonical, handle) => {
+      await verifyNamed(canonical, handle);
+      if (index === parts.length) return action(handle);
+      const anchor = join(fdPath(handle), parts[index]);
+      const next = join(canonical, parts[index]);
+      let info = await noLinkStat(anchor);
+      if (!info && create) {
+        await verifyNamed(canonical, handle);
+        await mkdir(anchor).catch(error => { if (error.code !== 'EEXIST') throw error; });
+        info = await noLinkStat(anchor);
+      }
+      return withDirectory(next, anchor, info, child => walk(index + 1, next, child));
+    };
+    return walk(0, this.root, this.handle);
+  }
+
+  async leaf(path, action, options) {
+    this.target(path, { strictDescendant: true });
+    const parent = dirname(path);
+    return this.directory(parent, async handle => {
+      const anchor = join(fdPath(handle), basename(path));
+      const info = await noLinkStat(anchor);
+      const verifyParent = async () => {
+        await verifyNamed(this.root, this.handle);
+        await verifyNamed(parent, handle);
+      };
+      await verifyParent();
+      return action(anchor, info, verifyParent);
+    }, options);
+  }
+
+  async file(path, action, { write = false, exclusive = false, createParents = false } = {}) {
+    return this.leaf(path, async (anchor, existing, verifyParent) => {
+      if ((existing && !existing.isFile()) || (!existing && !write)) {
+        throw outsideWorkspace('Expected a regular file in the Creation workspace.');
+      }
+      if (existing && exclusive) throw Object.assign(new Error('File already exists.'), { code: 'EEXIST' });
+      const flags = (write ? constants.O_WRONLY : constants.O_RDONLY) | constants.O_NOFOLLOW
+        | (constants.O_NONBLOCK ?? 0) | (existing ? 0 : constants.O_CREAT | constants.O_EXCL);
+      const handle = await open(anchor, flags);
+      try {
+        const info = await verifyNamed(path, handle, existing);
+        if (info.isSymbolicLink() || !info.isFile()) throw outsideWorkspace('Expected a regular Creation workspace file.');
+        await verifyParent();
+        return await action(handle);
+      } finally { await handle.close(); }
+    }, { create: createParents });
+  }
+
+  async list(path, action) {
+    return this.directory(path, async handle => {
+      await verifyNamed(this.root, this.handle);
+      return action(fdPath(handle));
+    });
+  }
+
+  // Check trees before changing them, then use only pinned parents for each
+  // actual operation. Do not hand a recursive path to rm or cp.
+  async checkTree(path) {
+    return this.leaf(path, async (anchor, info) => {
+      if (info?.isDirectory()) {
+        await withDirectory(path, anchor, info, async handle => {
+          for (const name of await readdir(fdPath(handle))) await this.checkTree(join(path, name));
+        });
+      } else if (!info?.isFile()) throw outsideWorkspace('Expected a regular file or directory.');
+    });
+  }
+
+  async remove(path) {
+    return this.leaf(path, async (anchor, info, verifyParent) => {
+      if (info?.isDirectory()) {
+        await withDirectory(path, anchor, info, async handle => {
+          for (const name of await readdir(fdPath(handle))) await this.remove(join(path, name));
+        });
+      } else if (!info?.isFile()) throw outsideWorkspace('Expected a regular file or directory.');
+      await verifyParent();
+      if (!sameInode(info, await noLinkStat(anchor))) throw changed();
+      await (info.isDirectory() ? rmdir(anchor) : unlink(anchor));
+    });
+  }
+
+  async move(source, target) {
+    await this.checkTree(source);
+    return this.leaf(source, (src, info, verifySource) => this.leaf(target, async (dest, existing, verifyTarget) => {
+      if (existing) throw new Error('Target already exists: ' + basename(target));
+      await verifySource();
+      await verifyTarget();
+      if (!sameInode(info, await noLinkStat(src)) || await noLinkStat(dest)) throw changed();
+      // rename never dereferences a leaf, even if it is replaced here.
+      await rename(src, dest);
+    }));
+  }
+
+  async copy(source, target) {
+    const nested = relative(source, target);
+    if (!nested || (nested !== '..' && !nested.startsWith(`..${sep}`) && !isAbsolute(nested))) {
+      throw outsideWorkspace('Cannot copy a directory into itself.');
+    }
+    await this.checkTree(source);
+    await this.copyTree(source, target);
+  }
+
+  async copyTree(source, target) {
+    return this.leaf(source, async (anchor, info) => {
+      if (info?.isDirectory()) {
+        await withDirectory(source, anchor, info, async handle => {
+          await this.directory(target, () => {}, { create: true });
+          for (const name of await readdir(fdPath(handle))) await this.copyTree(join(source, name), join(target, name));
+        });
+      } else {
+        await this.file(source, input => this.file(target, async output => {
+          // Equivalent to copyFile without reopening either pathname.
+          if (sameInode(await input.stat(inodeOptions), await output.stat(inodeOptions))) {
+            throw new Error('Source and destination refer to the same file.');
+          }
+          const chunk = Buffer.alloc(1024 * 1024);
+          await output.truncate(0);
+          for (;;) {
+            const { bytesRead } = await input.read(chunk, 0, chunk.length, null);
+            if (!bytesRead) break;
+            for (let offset = 0; offset < bytesRead;) {
+              const { bytesWritten } = await output.write(chunk, offset, bytesRead - offset, null);
+              if (!bytesWritten) throw new Error('Could not finish copying the file.');
+              offset += bytesWritten;
+            }
+          }
+        }, { write: true }));
+      }
+    });
+  }
+}
+
+/** Run a scoped file operation, holding the canonical workspace root open. */
+export async function withCreationFiles(msg, action) {
+  if (!constants.O_NOFOLLOW || process.platform !== 'linux') {
+    throw outsideWorkspace('Safe Creation workspace file access is not supported on this platform.');
+  }
+  const root = await lookupCreationRoot(msg);
+  return withDirectory(root, root, await noLinkStat(root), handle => action(new CreationFiles(root, handle)));
 }

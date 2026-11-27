@@ -1,5 +1,4 @@
 import { createHash } from 'node:crypto';
-import { isAbsolute } from 'node:path';
 import ctx from '../../context.js';
 import { sendToServer } from '../../connection/buffer.js';
 import { safeId, fail } from './constants.js';
@@ -110,17 +109,13 @@ export function createCreationBridge({ context = ctx, send = sendToServer,
           assertCurrent(current, socket);
           if (context.creationBridge !== bridge) return null;
           const cached = cacheIdentity && sameAgent(cacheIdentity, current) && scopes.get(ownerId);
-          const rootFor = store => {
-            const root = store.getCreation(creationId).rootDir;
-            return typeof root === 'string' && !root.includes('\0') && isAbsolute(root) ? root : null;
-          };
-          if (cached) return rootFor(cached.runtime.store);
+          if (cached) return cached.runtime.store.resolveWorkspaceRoot(creationId);
           // File operations after restart must not create namespaces or recover runs.
           const { createCreationStore } = await import('./store.js');
           assertCurrent(current, socket);
           if (context.creationBridge !== bridge) return null;
           const store = createCreationStore({ ...storageOptions(current), readOnly: true });
-          try { return rootFor(store); }
+          try { return store.resolveWorkspaceRoot(creationId); }
           finally { store.close(); }
         });
       } catch { return null; }

@@ -58,7 +58,7 @@ function decodeSource(fileId, token, prefix = 'wb1.') {
     cipher.setAuthTag(bytes.subarray(12, 28));
     const source = JSON.parse(Buffer.concat([cipher.update(bytes.subarray(28)), cipher.final()]).toString());
     if (source.fileId !== fileId || source.route?.agentId !== source.agentId) throw new Error();
-    return source;
+    return { ...source, creationId: source.creationId ?? null };
   } catch {
     throw failure(403, 'Forbidden');
   }
@@ -84,6 +84,16 @@ function authorize(source) {
   return { client, resolved };
 }
 
+// The authenticated token also binds the initial bytes cached by the Agent
+// response handler. Include the full source identity in refill coalescing so
+// different capabilities can never share a pending read just by file ID.
+function previewRefillKey(source, resolved, token) {
+  return JSON.stringify([
+    source.fileId, source.agentId, resolved.routeKey, source.workspaceGeneration,
+    source.filePath, source.userId, source.creationId, token,
+  ]);
+}
+
 async function refill(source, token, { client, resolved }) {
   let requestId;
   const clientId = `preview:${randomUUID()}`;
@@ -95,6 +105,7 @@ async function refill(source, token, { client, resolved }) {
         allowLegacyCorrelation: !agentSupportsWorkbenchRequestCorrelation(agents.get(source.agentId)),
         route: source.route, routeKey: resolved.routeKey, conversationId: resolved.conversationId,
         workspaceGeneration: source.workspaceGeneration, role: client.role,
+        creationId: source.creationId,
         requestType: 'read_file', expectedResponseTypes: ['file_content'],
         onTimeout: (_pending, reason) => reject(failure(reason === 'timeout' ? 504 : 503, 'Preview read timed out or disconnected')),
         onResponse: msg => {
@@ -122,7 +133,9 @@ async function refill(source, token, { client, resolved }) {
       }, () => reject(failure(503, 'Agent read failed')));
     });
     authorize(source); // Ownership/workspace may have changed while the Agent was reading.
-    cachePreviewFile(source.fileId, file); // Cache pressure must not invalidate a stable URL.
+    // Creation reads always need a fresh Agent authorization; retaining the
+    // bytes after serving them would not help subsequent requests.
+    if (!source.creationId) cachePreviewFile(source.fileId, file);
     return file;
   } finally {
     if (requestId) deleteWorkbenchRequest({ agentId: source.agentId, requestId });
@@ -150,7 +163,8 @@ async function requestVideoChunk(source, start, end, signal) {
         agentId: source.agentId, clientId, publicRequestId, userId: source.userId,
         allowLegacyCorrelation: false, route: source.route, routeKey: resolved.routeKey,
         conversationId: resolved.conversationId, workspaceGeneration: source.workspaceGeneration,
-        role: client.role, requestType: 'video_chunk', expectedResponseTypes: ['video_chunk'],
+        role: client.role, creationId: source.creationId,
+        requestType: 'video_chunk', expectedResponseTypes: ['video_chunk'],
         onTimeout: (_pending, reason) => reject(failure(reason === 'timeout' ? 504 : 503, 'Video read timed out or disconnected')),
         onResponse: msg => {
           if (msg.error) return reject(failure(msg.errorCode === 'ENOENT' ? 404 : msg.errorCode === 'VIDEO_FILE_CHANGED' ? 409 : 502, msg.error));
@@ -210,10 +224,15 @@ export async function readWorkbenchPreview(fileId, token) {
   const access = authorize(source);
   prunePreviewFiles();
   const cached = previewFiles.get(fileId);
-  if (cached?.token === token) return cached;
-  if (inflight.has(fileId)) return inflight.get(fileId);
+  if (cached?.token === token) {
+    if (!source.creationId) return cached;
+    // Never serve old Creation bytes before the Agent has verified the link.
+    previewFiles.delete(fileId);
+  }
+  const refillKey = previewRefillKey(source, access.resolved, token);
+  if (inflight.has(refillKey)) return inflight.get(refillKey);
   if (inflight.size >= MAX_REFILLS) throw failure(503, 'Preview read capacity exceeded; retry shortly');
-  const promise = refill(source, token, access).finally(() => inflight.delete(fileId));
-  inflight.set(fileId, promise);
+  const promise = refill(source, token, access).finally(() => inflight.delete(refillKey));
+  inflight.set(refillKey, promise);
   return promise;
 }

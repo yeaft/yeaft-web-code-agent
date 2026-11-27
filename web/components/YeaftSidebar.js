@@ -113,7 +113,7 @@ export default {
         :is-yeaft-session-processing="chatStore?.isYeaftSessionProcessing"
         :agents="chatStore?.agents"
         :work-center-open="chatStore?.workCenterOpen"
-        @select="chatStore?.openCatalogSession"
+        @select="onSelectCatalogSession"
         @create="onUnifiedCreate"
         @create-task="onUnifiedCreateTask"
         @create-in-project="onUnifiedCreateInProject"
@@ -310,6 +310,7 @@ export default {
     }
   },
   beforeUnmount() {
+    this.creationsStore?.cancelPendingWorkspaceOpen?.();
     if (typeof window !== 'undefined') {
       window.removeEventListener('agent-upgrade-ack', this._agentUpgradeAckHandler);
       window.removeEventListener('agent-upgrade-batch-complete', this._agentUpgradeBatchHandler);
@@ -515,6 +516,7 @@ export default {
       this.$emit('toggle-sidebar');
     },
     openCreationCreate() {
+      this.creationsStore?.cancelPendingWorkspaceOpen?.();
       this.creationCreateOpen = true;
     },
     closeCreationCreate() {
@@ -535,6 +537,7 @@ export default {
       if (!item?.agentId || !item?.creation?.id) return;
       const cStore = this.creationsStore;
       if (!cStore || typeof cStore.openCreationInClassic !== 'function') return;
+      cStore.cancelPendingWorkspaceOpen?.();
       try {
         await cStore.openCreationInClassic({
           agentId: item.agentId,
@@ -553,6 +556,7 @@ export default {
       if (!agentId || !creation?.id) return;
       const cStore = this.creationsStore;
       if (!cStore || typeof cStore.openCreationInClassic !== 'function') return;
+      cStore.cancelPendingWorkspaceOpen?.();
       try {
         await cStore.openCreationInClassic({
           agentId,
@@ -644,6 +648,7 @@ export default {
       this.sessionCreateTaskMode = true;
     },
     onOpenSessionCreate() {
+      this.creationsStore?.cancelPendingWorkspaceOpen?.();
       this.sessionCreateTaskMode = false;
       this.sessionCreateProject = null;
       this.sessionCreateOpen = true;
@@ -651,6 +656,7 @@ export default {
     onUnifiedCreate() { this.onOpenSessionCreate(); },
     onUnifiedCreateInProject({ project, taskMode = false } = {}) {
       if (!project?.id) return;
+      this.creationsStore?.cancelPendingWorkspaceOpen?.();
       this.sessionCreateTaskMode = taskMode === true;
       this.sessionCreateProject = project;
       this.sessionCreateOpen = true;
@@ -687,6 +693,7 @@ export default {
       }
     },
     async onSessionCreated(session) {
+      this.creationsStore?.cancelPendingWorkspaceOpen?.();
       const project = this.sessionCreateProject;
       this.closeSessionCreate();
       if (!project || !session?.id) return;
@@ -701,8 +708,13 @@ export default {
         await alertDialog(this.$t('sidebar.projects.assignFailed', { name: project.name, message }));
       }
     },
+    onSelectCatalogSession(row) {
+      this.creationsStore?.cancelPendingWorkspaceOpen?.();
+      return this.chatStore?.openCatalogSession(row);
+    },
     onSelectGroup(g) {
       if (!g || !g.id) return;
+      this.creationsStore?.cancelPendingWorkspaceOpen?.();
       const activeStore = this.chatStore || this.store;
       if (activeStore && typeof activeStore.leaveWorkCenter === 'function') activeStore.leaveWorkCenter();
       // Cross-agent routing: when selecting a session owned by an agent

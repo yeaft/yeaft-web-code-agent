@@ -486,6 +486,10 @@
   color: var(--error);
 }
 
+.creation-wb-target-error span {
+  overflow-wrap: anywhere;
+}
+
 .creation-wb-banner-close {
   border: none;
   background: transparent;

@@ -1,4 +1,4 @@
-import { sanitizeCreationHtml } from '../cosmos/creations/sanitize.js';
+import { canonicalizeCreationUrl, isSafeCreationUrl, isSafeSameOriginPreviewUrl, sanitizeCreationHtml } from '../cosmos/creations/sanitize.js';
 import { openImagePreview } from '../../utils/imagePreview.js';
 import { addCanvasContextRef, formatTimestampLabel } from '../../utils/canvas-context.js';
 import SvgPreview from '../files/SvgPreview.js';
@@ -36,6 +36,11 @@ export function isCanvasSupportedFile(fileOrName) {
   return null;
 }
 
+export function isBinaryDocument(file) {
+  return isCanvasSupportedFile(file) === 'doc'
+    && (file.isBinary === true || file.fileType === 'binary' || typeof file.content !== 'string');
+}
+
 function basenameOf(filePath) {
   const raw = String(filePath || '').trim();
   if (!raw) return '';
@@ -53,27 +58,19 @@ function basenameOf(filePath) {
  * @returns {string|null}
  */
 export function resolveWorkspaceRelativePath(baseFilePath, rawHref) {
-  if (!rawHref || typeof rawHref !== 'string') return null;
-  const trimmed = rawHref.trim();
-  if (!trimmed || trimmed.includes('\u0000')) return null;
+  const ref = canonicalizeCreationUrl(rawHref);
+  const cleanRef = ref.split(/[?#]/)[0];
+  const isRelative = value => value && !value.startsWith('/')
+    && !/^[a-z][a-z0-9+.-]*:/i.test(value.replace(/\s+/g, ''));
+  if (!isRelative(cleanRef)) return null;
 
-  const compact = trimmed.replace(/[\u0000-\u001f\u007f\s]+/g, '');
-  if (!compact || compact.startsWith('#') || compact.startsWith('//')) return null;
-  if (/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(compact)) return null;
-
-  const cleanRef = trimmed.split(/[?#]/)[0];
-  if (!cleanRef) return null;
-
-  let decoded = cleanRef;
+  let posixRel;
   try {
-    decoded = decodeURIComponent(cleanRef);
+    posixRel = canonicalizeCreationUrl(decodeURIComponent(cleanRef));
   } catch {
     return null;
   }
-  if (!decoded || decoded.includes('\u0000')) return null;
-
-  const posixRel = decoded.replace(/\\/g, '/');
-  if (posixRel.startsWith('/')) return null;
+  if (!isRelative(posixRel)) return null;
 
   const baseStr = typeof baseFilePath === 'string' ? baseFilePath.trim().replace(/\\/g, '/') : '';
   const hasLeadingSlash = baseStr.startsWith('/');
@@ -100,23 +97,12 @@ export function resolveWorkspaceRelativePath(baseFilePath, rawHref) {
   return (hasLeadingSlash ? '/' : '') + resolvedParts.join('/');
 }
 
-function isSafeResolvedMediaUrl(url, resolvedPath) {
-  if (!url || typeof url !== 'string') return false;
-  const trimmed = url.trim();
-  if (!trimmed) return false;
-  if (getExtension(resolvedPath) === '.svg') return false;
-  if (trimmed.startsWith('blob:')) return true;
-  if (trimmed.startsWith('/api/preview/') || trimmed.startsWith('/api/yeaft/creations/')) {
-    return !trimmed.startsWith('//');
-  }
+function isSafeMarkdownTarget(rawUrl, options) {
+  if (!isSafeCreationUrl(rawUrl, options)) return false;
+  // The workspace resolver decodes paths. Reject targets that would become
+  // network paths or acquire an unsafe scheme during that same decode.
   try {
-    const origin = typeof window !== 'undefined' ? window.location?.origin : '';
-    if (!origin || origin === 'null') return false;
-    const parsed = new URL(trimmed, origin);
-    return (
-      parsed.origin === origin
-      && (parsed.pathname.startsWith('/api/preview/') || parsed.pathname.startsWith('/api/yeaft/creations/'))
-    );
+    return isSafeCreationUrl(decodeURIComponent(rawUrl.split(/[?#]/)[0] || rawUrl), options);
   } catch {
     return false;
   }
@@ -129,10 +115,14 @@ function rewriteRelativeMarkdownNodes(cleanHtml, baseFilePath, resolveMediaUrl) 
 
   for (const img of Array.from(doc.body.querySelectorAll('img'))) {
     const rawSrc = img.getAttribute('src') || '';
+    if (!isSafeMarkdownTarget(rawSrc)) {
+      img.removeAttribute('src');
+      continue;
+    }
     const resolved = resolveWorkspaceRelativePath(baseFilePath, rawSrc);
     if (!resolved) continue;
     const previewUrl = typeof resolveMediaUrl === 'function' ? (resolveMediaUrl(resolved) || '') : '';
-    if (isSafeResolvedMediaUrl(previewUrl, resolved)) {
+    if (getExtension(resolved) !== '.svg' && isSafeSameOriginPreviewUrl(previewUrl)) {
       img.setAttribute('src', previewUrl);
       img.setAttribute('data-workspace-src', resolved);
       img.setAttribute('loading', 'lazy');
@@ -150,6 +140,10 @@ function rewriteRelativeMarkdownNodes(cleanHtml, baseFilePath, resolveMediaUrl) 
 
   for (const link of Array.from(doc.body.querySelectorAll('a'))) {
     const rawHref = link.getAttribute('href') || '';
+    if (!isSafeMarkdownTarget(rawHref, { allowMailto: true })) {
+      link.removeAttribute('href');
+      continue;
+    }
     const resolved = resolveWorkspaceRelativePath(baseFilePath, rawHref);
     if (!resolved) continue;
     link.setAttribute('data-workspace-href', resolved);
@@ -282,6 +276,7 @@ export default {
     file: { type: Object, required: true },
     routeKey: { type: String, default: '' },
     saving: { type: Boolean, default: false },
+    isBinary: { type: Boolean, default: false },
     showHeader: { type: Boolean, default: true },
     showOpenInFiles: { type: Boolean, default: false },
     showPromoteFolder: { type: Boolean, default: false },
@@ -298,6 +293,18 @@ export default {
       </div>
       <div v-else-if="file.loadError" class="canvas-state canvas-state-error" role="alert">
         <span>{{ file.loadError }}</span>
+      </div>
+
+      <div v-else-if="binaryDocument" class="canvas-state" role="status">
+        <div class="canvas-binary-notice">
+          {{ $t('files.binaryFile') }}
+          <button v-if="file.blobUrl" type="button" class="btn-secondary" @click="$emit('download')">
+            {{ $t('files.download') }}
+          </button>
+          <button v-else-if="showOpenInFiles" type="button" class="btn-secondary" @click="$emit('open-in-files')">
+            {{ $t('creation.canvas.openInFiles') }}
+          </button>
+        </div>
       </div>
 
       <!-- ===================== DOCUMENT CANVAS ===================== -->
@@ -704,6 +711,7 @@ export default {
     const t = Vue.inject('t', key => key);
 
     const canvasKind = Vue.computed(() => isCanvasSupportedFile(props.file));
+    const binaryDocument = Vue.computed(() => canvasKind.value === 'doc' && (props.isBinary || isBinaryDocument(props.file)));
     const isMarkdown = Vue.computed(() => MARKDOWN_EXTS.has(getExtension(props.file)));
     const isSvgText = Vue.computed(() => (
       getExtension(props.file) === '.svg'
@@ -728,8 +736,8 @@ export default {
     const sanitizedDocHtml = Vue.computed(() => {
       // Reactive dependency so Markdown re-renders when parent finishes loading workspace previews
       void props.mediaUrlVersion;
-      const content = props.file?.content || '';
-      if (!content) return '';
+      const content = props.file?.content;
+      if (binaryDocument.value || typeof content !== 'string' || !content) return '';
       if (isMarkdown.value) {
         let rawHtml = '';
         try {
@@ -783,6 +791,7 @@ export default {
     };
 
     const setDocMode = (mode) => {
+      if (binaryDocument.value) return;
       docMode.value = mode;
       hideSelectionBar();
       editorSelection.text = '';
@@ -878,10 +887,11 @@ export default {
     };
 
     const onEditorInput = (event) => {
-      emit('update:content', event.target.value);
+      if (!binaryDocument.value) emit('update:content', event.target.value);
     };
 
     const onEditorKeydown = (event) => {
+      if (binaryDocument.value) return;
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 's') {
         event.preventDefault();
         emit('save');
@@ -1126,6 +1136,7 @@ export default {
     return {
       PLAYBACK_RATES,
       canvasKind,
+      binaryDocument,
       isMarkdown,
       isSvgText,
       // Document
