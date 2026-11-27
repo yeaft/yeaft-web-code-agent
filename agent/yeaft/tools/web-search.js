@@ -243,11 +243,28 @@ async function tryHtmlScrape(query, limit, provider, signal) {
     },
   });
   if (!res.ok) return webHttpFailure(res.status);
-  const html = await readBoundedText(res, signal);
-  const blocked = /anomaly\.js|anomaly-modal|challenge-form|verify (?:that )?you(?:'re| are) (?:a )?human|unusual traffic|<title[^>]*>[^<]*(?:captcha|access denied)/i.test(html);
+  const html = (await readBoundedText(res, signal, 256 * 1024)).slice(0, 256 * 1024);
+  const lower = html.toLowerCase();
+  const titleStart = lower.indexOf('<title');
+  let titleSlice = '';
+  if (titleStart !== -1) {
+    const gt = html.indexOf('>', titleStart);
+    const end = gt === -1 ? -1 : lower.indexOf('</title', gt + 1);
+    if (gt !== -1) titleSlice = lower.slice(gt + 1, end === -1 ? Math.min(html.length, gt + 200) : Math.min(end, gt + 200));
+  }
+  const blocked = lower.includes('anomaly.js')
+    || lower.includes('anomaly-modal')
+    || lower.includes('challenge-form')
+    || lower.includes('unusual traffic')
+    || lower.includes('verify you are human')
+    || lower.includes("verify that you're a human")
+    || lower.includes('verify that you are a human')
+    || titleSlice.includes('captcha')
+    || titleSlice.includes('access denied');
   const results = ddg ? parseDdgHtml(html, limit) : parseBingHtml(html, limit);
-  const noMatches = ddg ? /class=["'][^"']*\bno-results\b|No results found for/i.test(html)
-    : /class=["'][^"']*\bb_no\b|There are no results for|No results found for/i.test(html);
+  const noMatches = ddg
+    ? (lower.includes('no-results') || lower.includes('no results found for'))
+    : (lower.includes('b_no') || lower.includes('there are no results for') || lower.includes('no results found for'));
   if (!blocked && (results.length || noMatches)) return { provider, query, results };
   return {
     error: blocked ? 'HTML search returned a bot challenge' : 'HTML search markup was not recognized; zero matches are not confirmed',
@@ -256,22 +273,67 @@ async function tryHtmlScrape(query, limit, provider, signal) {
   };
 }
 
-/**
- * Parse DDG lite HTML. Each result is wrapped in
- *   <a class="result__a" href="…">title</a>
- *   <a class="result__snippet">snippet</a>
- * Hash classes are not used here, so plain regex is fine.
- */
+/** Linear O(N) attribute extraction for a single opening tag slice (no backtracking). */
+function extractAttrValue(tagSlice, attrName) {
+  const lower = tagSlice.toLowerCase();
+  const needle = `${attrName.toLowerCase()}=`;
+  let idx = 0;
+  while (idx < lower.length) {
+    const found = lower.indexOf(needle, idx);
+    if (found === -1) return '';
+    if (found > 0 && !/[\s<]/.test(lower[found - 1])) {
+      idx = found + needle.length;
+      continue;
+    }
+    let valStart = found + needle.length;
+    if (valStart >= tagSlice.length) return '';
+    const q = tagSlice[valStart];
+    if (q === '"' || q === "'") {
+      valStart++;
+      const end = tagSlice.indexOf(q, valStart);
+      return end === -1 ? '' : tagSlice.slice(valStart, end);
+    }
+    let end = valStart;
+    while (end < tagSlice.length && !/[\s>]/.test(tagSlice[end])) end++;
+    return tagSlice.slice(valStart, end);
+  }
+  return '';
+}
+
+/** Linear O(N) scan of DDG lite HTML (<a class="result__a"> and <a class="result__snippet">). */
 function parseDdgHtml(html, limit) {
   const results = [];
-  const linkRe = /<a[^>]+class="result__a"[^>]+href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/g;
-  const snippetRe = /<a[^>]+class="result__snippet"[^>]*>([\s\S]*?)<\/a>/g;
-  const links = [...html.matchAll(linkRe)];
-  const snippets = [...html.matchAll(snippetRe)];
+  const lower = html.toLowerCase();
+  const links = [];
+  const snippets = [];
+  let pos = 0;
+  while (pos < html.length && (links.length < limit * 2 || snippets.length < limit * 2)) {
+    const lt = lower.indexOf('<a', pos);
+    if (lt === -1) break;
+    const nextChar = lower[lt + 2];
+    if (nextChar && !/[\s>]/.test(nextChar)) {
+      pos = lt + 2;
+      continue;
+    }
+    const gt = html.indexOf('>', lt + 2);
+    if (gt === -1) break;
+    const openTag = html.slice(lt, gt + 1);
+    const close = lower.indexOf('</a>', gt + 1);
+    if (close === -1) break;
+    const inner = html.slice(gt + 1, close);
+    const cls = extractAttrValue(openTag, 'class');
+    if (cls === 'result__a' || /\bresult__a\b/.test(cls)) {
+      const href = extractAttrValue(openTag, 'href');
+      if (href) links.push([href, inner]);
+    } else if (cls === 'result__snippet' || /\bresult__snippet\b/.test(cls)) {
+      snippets.push(inner);
+    }
+    pos = close + 4;
+  }
   for (let i = 0; i < links.length && results.length < limit; i++) {
-    const url = decodeDdgUrl(links[i][1]);
-    const title = stripTags(links[i][2]).trim();
-    const snippet = snippets[i] ? stripTags(snippets[i][1]).trim() : '';
+    const url = decodeDdgUrl(links[i][0]);
+    const title = stripTags(links[i][1]).trim();
+    const snippet = snippets[i] ? stripTags(snippets[i]).trim() : '';
     if (url && title) results.push({ title, url, snippet });
   }
   return results;
@@ -291,32 +353,64 @@ function decodeDdgUrl(href) {
   }
 }
 
-/**
- * Parse Bing search HTML. Result blocks: <li class="b_algo"> with
- * <h2><a href="…">title</a></h2> and <p>snippet</p>. The class names
- * have been stable for years; if Bing rotates them this will fail
- * gracefully (no results extracted) and we'll surface the error upstream.
- */
+/** Linear O(N) scan of Bing <li class="...b_algo..."> result blocks (no backtracking). */
 function parseBingHtml(html, limit) {
   const results = [];
-  const blockRe = /<li[^>]+class="[^"]*\bb_algo\b[^"]*"[^>]*>([\s\S]*?)<\/li>/g;
-  for (const m of html.matchAll(blockRe)) {
-    if (results.length >= limit) break;
-    const block = m[1];
-    const linkM = block.match(/<h2[^>]*>\s*<a[^>]+href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/);
-    if (!linkM) continue;
-    const url = linkM[1];
-    const title = stripTags(linkM[2]).trim();
-    const pM = block.match(/<p[^>]*>([\s\S]*?)<\/p>/);
-    const snippet = pM ? stripTags(pM[1]).trim() : '';
+  const lower = html.toLowerCase();
+  let pos = 0;
+  while (pos < html.length && results.length < limit) {
+    const li = lower.indexOf('<li', pos);
+    if (li === -1) break;
+    const nextChar = lower[li + 3];
+    if (nextChar && !/[\s>]/.test(nextChar)) {
+      pos = li + 3;
+      continue;
+    }
+    const gt = html.indexOf('>', li + 3);
+    if (gt === -1) break;
+    const openTag = html.slice(li, gt + 1);
+    const cls = extractAttrValue(openTag, 'class');
+    if (!/\bb_algo\b/.test(cls)) {
+      pos = gt + 1;
+      continue;
+    }
+    const closeLi = lower.indexOf('</li>', gt + 1);
+    const blockEnd = closeLi === -1 ? Math.min(html.length, gt + 8192) : Math.min(closeLi, gt + 16384);
+    const block = html.slice(gt + 1, blockEnd);
+    const blockLower = lower.slice(gt + 1, blockEnd);
+    pos = closeLi === -1 ? blockEnd : closeLi + 5;
+
+    const h2 = blockLower.indexOf('<h2');
+    if (h2 === -1) continue;
+    const aStart = blockLower.indexOf('<a', h2);
+    if (aStart === -1) continue;
+    const aGt = block.indexOf('>', aStart);
+    const aClose = aGt === -1 ? -1 : blockLower.indexOf('</a>', aGt + 1);
+    if (aGt === -1 || aClose === -1) continue;
+    const url = extractAttrValue(block.slice(aStart, aGt + 1), 'href');
+    const title = stripTags(block.slice(aGt + 1, aClose)).trim();
+    let snippet = '';
+    const pStart = blockLower.indexOf('<p', aClose);
+    if (pStart !== -1) {
+      const pGt = block.indexOf('>', pStart);
+      const pClose = pGt === -1 ? -1 : blockLower.indexOf('</p>', pGt + 1);
+      if (pGt !== -1 && pClose !== -1) snippet = stripTags(block.slice(pGt + 1, pClose)).trim();
+    }
     if (url && title) results.push({ title, url, snippet });
   }
   return results;
 }
 
 function stripTags(s) {
-  return s
-    .replace(/<[^>]+>/g, '')
+  let out = '';
+  let inTag = false;
+  for (let i = 0; i < s.length; i++) {
+    const ch = s[i];
+    if (ch === '<') inTag = true;
+    else if (ch === '>') inTag = false;
+    else if (!inTag) out += ch;
+  }
+  return out
     .replace(/&amp;/g, '&')
     .replace(/&lt;/g, '<')
     .replace(/&gt;/g, '>')

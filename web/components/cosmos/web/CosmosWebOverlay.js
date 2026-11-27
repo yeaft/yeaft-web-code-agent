@@ -237,12 +237,14 @@ export default {
       return isSafeHttpUrl(candidate) ? candidate : '';
     },
     activeBriefEvidenceCount() {
-      if (!this.activeAiBrief?.researched) return 0;
-      const raw = this.activeAiBrief?.evidenceCount != null
-        ? this.activeAiBrief.evidenceCount
-        : (this.activeAiBrief?.searchCount ?? this.activeAiBrief?.webSearchCount ?? 0);
-      const n = Number(raw);
+      if (this.activeAiBrief?.researched !== true) return 0;
+      if (this.activeAiBrief?.evidenceCount == null) return 0;
+      const n = Number(this.activeAiBrief.evidenceCount);
       return Number.isFinite(n) && n > 0 ? n : 0;
+    },
+    renderedCleanArticleHtml() {
+      const md = this.webStore.articleData?.markdown || this.webStore.articleData?.contentMd || '';
+      return md ? renderCosmicWebProse(md) : '';
     },
     activeSelectedItem() {
       const items = Array.isArray(this.activeCluster?.items) ? this.activeCluster.items : [];
@@ -428,11 +430,13 @@ export default {
       if (media && !prev) {
         this._lightboxOpener = typeof document !== 'undefined' ? document.activeElement : null;
         window.addEventListener('keydown', this.onLightboxKeydown, true);
+        document.addEventListener('focusin', this.onLightboxFocusIn, true);
         this.$nextTick(() => {
           this.$refs.lightboxCloseBtn?.focus?.();
         });
       } else if (!media && prev) {
         window.removeEventListener('keydown', this.onLightboxKeydown, true);
+        document.removeEventListener('focusin', this.onLightboxFocusIn, true);
         const opener = this._lightboxOpener;
         this._lightboxOpener = null;
         this.$nextTick(() => {
@@ -457,6 +461,7 @@ export default {
   beforeUnmount() {
     window.removeEventListener('keydown', this.handleGlobalKeydown);
     window.removeEventListener('keydown', this.onLightboxKeydown, true);
+    document.removeEventListener('focusin', this.onLightboxFocusIn, true);
     window.removeEventListener('online', this.handleOnlineChange);
     window.removeEventListener('offline', this.handleOnlineChange);
     window.removeEventListener('blur', this.endDrawerResize);
@@ -505,6 +510,13 @@ export default {
     },
     renderFollowUpHtml(text) {
       return text ? renderCosmicWebProse(String(text)) : '';
+    },
+    onLightboxFocusIn(e) {
+      if (!this.webStore.lightboxMedia) return;
+      const dialog = this.$refs.lightboxDialog;
+      if (dialog && e.target && !dialog.contains(e.target)) {
+        this.$refs.lightboxCloseBtn?.focus?.();
+      }
     },
     onLightboxKeydown(e) {
       if (!this.webStore.lightboxMedia) return;
@@ -975,6 +987,7 @@ export default {
       <!-- Top Floating Atmospheric HUD Bar (Positioned cleanly in left/center starfield) -->
       <header
         class="cw-hud-bar"
+        :inert="Boolean(webStore.lightboxMedia)"
         @pointerdown.stop
         @wheel.stop
       >
@@ -1183,6 +1196,7 @@ export default {
       <!-- 3D Semantic Zoom & LOD Micro-Control Dock (Bottom-Left) -->
       <div
         class="cw-zoom-dock"
+        :inert="Boolean(webStore.lightboxMedia)"
         role="group"
         :aria-label="$t('cosmos.web.zoom.dockLabel')"
         @pointerdown.stop
@@ -1313,7 +1327,25 @@ export default {
                 >{{ sourceFootnotes.length > 1 ? '↗' : (src.name + ' ↗') }}</a>
                 <span v-if="idx < sourceFootnotes.length - 1" class="cw-footnote-dot" aria-hidden="true">·</span>
               </template>
+              <button
+                v-if="activeCluster?.id"
+                type="button"
+                class="cw-footnote-switch cw-clean-article-toggle"
+                :aria-expanded="webStore.cleanArticleOpen"
+                @click="webStore.toggleCleanArticle(activeCluster.id)"
+              >{{ webStore.cleanArticleOpen ? $t('cosmos.web.report.hideCleanArticle') : $t('cosmos.web.report.readCleanArticle') }}</button>
             </div>
+
+            <!-- Optional On-Demand Clean Extracted Article (Independent of AI / Offline Safe) -->
+            <section v-if="webStore.cleanArticleOpen" class="cw-clean-article-panel">
+              <div v-if="webStore.articleLoading" class="cw-shimmer-label" role="status" aria-live="polite">
+                <span class="cw-spinner cw-spinner-sm" aria-hidden="true"></span>
+                <span>{{ $t('cosmos.web.report.cleanArticleLoading') }}</span>
+              </div>
+              <p v-else-if="webStore.articleError" class="cw-inline-error">{{ webStore.articleError }}</p>
+              <div v-else-if="renderedCleanArticleHtml" class="cw-markdown-prose" v-html="renderedCleanArticleHtml"></div>
+              <p v-else-if="fallbackExcerpt" class="cw-markdown-prose">{{ fallbackExcerpt }}</p>
+            </section>
 
             <!-- Subtle Perspective Switcher + Regenerate -->
             <div class="cw-perspective-bar">
@@ -1336,6 +1368,14 @@ export default {
               >↻ {{ $t('cosmos.web.ai.regenerate') }}</button>
             </div>
 
+            <!-- Immediate 0ms Stored Excerpt (Shown while AI is loading or unavailable) -->
+            <blockquote
+              v-if="fallbackExcerpt && (webStore.aiBriefLoading || webStore.aiBriefError || !activeAiBrief)"
+              class="cw-pull-quote cw-immediate-excerpt"
+            >
+              <p>{{ fallbackExcerpt }}</p>
+            </blockquote>
+
             <!-- Atmospheric Researching Shimmer -->
             <div v-if="webStore.aiBriefLoading" class="cw-shimmer-block" role="status" aria-live="polite">
               <p class="cw-shimmer-label">
@@ -1349,14 +1389,19 @@ export default {
 
             <!-- Graceful Non-AI Digest + Error / Retry -->
             <div v-else-if="webStore.aiBriefError" class="cw-magazine-flow">
-              <blockquote v-if="fallbackExcerpt" class="cw-pull-quote">
-                <p>{{ fallbackExcerpt }}</p>
-              </blockquote>
               <div class="cw-state-box cw-state-error">
                 <p>{{ agentsLive && !briefingCapableAgents.length ? $t('cosmos.web.report.offlineHint') : webStore.aiBriefError }}</p>
-                <button type="button" class="cw-btn cw-btn-primary" @click="regenerateReport">
-                  {{ $t('cosmos.web.action.retry') }}
-                </button>
+                <div class="cw-state-actions">
+                  <button type="button" class="cw-btn cw-btn-primary" @click="regenerateReport">
+                    {{ $t('cosmos.web.action.retry') }}
+                  </button>
+                  <button
+                    v-if="activeCluster?.id && !webStore.cleanArticleOpen"
+                    type="button"
+                    class="cw-btn cw-btn-subtle"
+                    @click="webStore.toggleCleanArticle(activeCluster.id)"
+                  >{{ $t('cosmos.web.report.readCleanArticle') }}</button>
+                </div>
               </div>
             </div>
 
@@ -1521,12 +1566,14 @@ export default {
             <!-- 6. Whispering Editorial Follow-Up Prompts (NO Pill Bubbles!) -->
             <section v-if="activeAiBrief && Array.isArray(activeAiBrief.followUps) && activeAiBrief.followUps.length" class="cw-whisper-section">
               <h4 class="cw-whisper-heading">{{ $t('cosmos.web.report.followUpTitle') }}</h4>
+              <p v-if="agentsLive && !canUseInlineFollowUp" class="cw-inline-hint">{{ $t('cosmos.web.report.upgradeAgentHint') }}</p>
               <ul class="cw-whisper-prompts">
                 <li v-for="(q, idx) in activeAiBrief.followUps" :key="idx" class="cw-whisper-item">
                   <button
                     type="button"
                     class="cw-whisper-btn"
-                    :disabled="webStore.followUpLoading"
+                    :disabled="webStore.followUpLoading || !canUseInlineFollowUp"
+                    :title="canUseInlineFollowUp ? $t('cosmos.web.report.askAiHint') : $t('cosmos.web.report.upgradeAgentHint')"
                     @click="submitInlineFollowUp(q)"
                   >
                     <span class="cw-whisper-arrow" aria-hidden="true">→</span>
@@ -1547,7 +1594,7 @@ export default {
           <!-- 7. Sleek Single-Surface Atmospheric Bottom Composer -->
           <div class="cw-drawer-footer">
             <div class="cw-composer-bar">
-              <!-- Compact Planet Agent Selector Trigger + Upward Popover -->
+              <!-- Compact Planet Agent Selector Trigger + Upward Disclosure Popover -->
               <div ref="agentPickerWrap" class="cw-agent-picker-wrap">
                 <button
                   type="button"
@@ -1563,7 +1610,7 @@ export default {
                   <span v-if="selectedAgentObj && !selectedAgentObj.online" class="cw-agent-offline-dot" :title="$t('cosmos.web.status.offline')"></span>
                 </button>
 
-                <div v-if="agentPickerOpen" class="cw-agent-popover" role="menu" :aria-label="$t('cosmos.web.report.agentPickerTitle')">
+                <div v-if="agentPickerOpen" class="cw-agent-popover" role="region" :aria-label="$t('cosmos.web.report.agentPickerTitle')">
                   <div v-if="!availableAgents.length" class="cw-agent-popover-empty">
                     {{ $t('cosmos.web.dispatch.noAgent') }}
                   </div>
@@ -1571,10 +1618,9 @@ export default {
                     v-for="ag in availableAgents"
                     :key="ag.id"
                     type="button"
-                    role="menuitemradio"
                     class="cw-agent-option"
                     :class="{ 'is-selected': ag.id === effectiveDispatchAgentId }"
-                    :aria-checked="ag.id === effectiveDispatchAgentId"
+                    :aria-pressed="ag.id === effectiveDispatchAgentId"
                     @click="selectAgent(ag.id)"
                   >
                     <span class="cw-planet-orb" :class="agentPlanetClass(ag.id)"></span>

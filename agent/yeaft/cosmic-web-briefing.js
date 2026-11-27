@@ -19,6 +19,7 @@ export const COSMIC_WEB_BRIEFING_CAPABILITY = 'cosmic_web_briefing';
 export const COSMIC_WEB_RESEARCH_CAPABILITY = 'cosmic_web_research';
 export const COSMIC_WEB_FOLLOW_UP_CAPABILITY = 'cosmic_web_follow_up';
 export const COSMIC_WEB_RADAR_CAPABILITY = 'cosmic_web_radar';
+export const COSMIC_WEB_CANCEL_CAPABILITY = 'cosmic_web_cancel';
 
 const BUNDLED_SKILLS_DIR = fileURLToPath(new URL('../skills/', import.meta.url));
 const SKILL_PATH = 'cosmic-web/SKILL.md';
@@ -176,14 +177,16 @@ function languageFor(language) {
 }
 
 const DAILY_SCHEMA = 'headline (nonempty string), overview (nonempty string), sections (0–8 objects {"domain": nonempty string, "bullets": array of 1–5 nonempty strings}), signalsToWatch (array of 0–8 nonempty strings), followUps (array of 0–5 nonempty strings)';
+const V1_STORY_SCHEMA = 'tldr (one sentence, ≤400 chars), bullets (3–5 strings ≤500 chars), impact (nonempty, ≤1000 chars), followUps (2–3 strings)';
 const MEDIA_SCHEMA = '{url, kind ("image" or "gif"), caption?, sourceName?}';
 const CITATION_SCHEMA = '{title, url, sourceName?}';
 const STORY_SCHEMA = `tldr (one sentence, ≤400 chars), sections (1–6 {heading ≤120 chars, body ≤2000 chars}), bullets (2–6 strings ≤500 chars), impact (nonempty, ≤1000 chars), media (0–6 ${MEDIA_SCHEMA}), communityHighlights (0–6 {platform, author, quote ≤400 chars, likes?, sourceUrl?}), citations (0–8 ${CITATION_SCHEMA}), followUps (2–3 strings), researched (boolean), searchCount (integer)`;
 const FOLLOW_UP_SCHEMA = `question (echo supplied question), answer (nonempty, ≤3000 chars), bullets (0–5 strings ≤500 chars), media (0–4 ${MEDIA_SCHEMA}), citations (0–6 ${CITATION_SCHEMA}), followUps (0–3 strings), researched (boolean), searchCount (integer)`;
 const RADAR_SCHEMA = 'items (0–15 {title, url, sourceName, summaryExcerpt, publishedAt?, mediaUrl?}), searchCount (integer)';
 
-function buildSystemPrompt({ mode, perspective, language, guidance, research }) {
-  const schema = { daily_briefing: DAILY_SCHEMA, brief: STORY_SCHEMA, synthesize: STORY_SCHEMA, follow_up: FOLLOW_UP_SCHEMA, topic_radar: RADAR_SCHEMA }[mode];
+function buildSystemPrompt({ mode, perspective, language, guidance, research, schemaVersion = 2 }) {
+  const storySchema = schemaVersion === 1 ? V1_STORY_SCHEMA : STORY_SCHEMA;
+  const schema = { daily_briefing: DAILY_SCHEMA, brief: storySchema, synthesize: storySchema, follow_up: FOLLOW_UP_SCHEMA, topic_radar: RADAR_SCHEMA }[mode];
   const markdown = ['brief', 'synthesize', 'daily_briefing'].includes(mode)
     ? ', fullMarkdown (optional Markdown using headings, paragraphs, emphasis and lists only; no HTML, links, images, bare URLs or email autolinks)' : '';
   return composeDecisionSystemPrompt(`You are the Cosmic Web news editor.
@@ -255,7 +258,7 @@ function evidenceState(news) {
   const observedPageUrls = new Set([news.sourceUrl, ...news.sources.map(source => source?.url),
     ...observedComments.map(comment => comment.sourceUrl)].map(url => normalizedUrl(url)).filter(Boolean));
   for (const source of news.sources) for (const item of source?.media || []) observedMediaUrls.add(item.url);
-  return { observedComments, observedMediaUrls, observedPageUrls, searchPageUrls: new Set(), searchCount: 0, evidenceCount: 0, researched: false };
+  return { observedComments, observedMediaUrls, observedPageUrls, searchPageUrls: new Set(), deliveredSourceUrls: new Set(), searchCount: 0, evidenceCount: 0, researched: false };
 }
 
 function groundedItems(items, max, normalize) {
@@ -305,12 +308,15 @@ function groundedComments(items, evidence) {
   return result;
 }
 
-function normalizeOutput(parsed, mode, language, news, evidence) {
+function normalizeOutput(parsed, mode, language, news, evidence, schemaVersion = 2) {
   const daily = mode === 'daily_briefing';
   const followUp = mode === 'follow_up';
+  const legacyV1Story = schemaVersion === 1 && (mode === 'brief' || mode === 'synthesize');
   const bullet = value => plainProseText(value, 500);
   const question = value => plainProseText(value, daily ? 320 : 120);
-  const { observedMediaUrls, observedPageUrls, searchPageUrls, researched, searchCount, evidenceCount } = evidence;
+  const { observedMediaUrls, observedPageUrls, searchPageUrls, deliveredSourceUrls, searchCount } = evidence;
+  const evidenceCount = deliveredSourceUrls.size;
+  const researched = evidenceCount > 0;
   if (mode === 'topic_radar') {
     onlyKeys(parsed, ['items', 'searchCount']);
     if (!Array.isArray(parsed.items)) throw invalidOutput();
@@ -365,6 +371,18 @@ function normalizeOutput(parsed, mode, language, news, evidence) {
       signalsToWatch: outputList(parsed.signalsToWatch, 0, 8, bullet),
       followUps: outputList(parsed.followUps, 0, 5, question),
     };
+  } else if (legacyV1Story) {
+    // Emit the exact 5-key v1 contract expected by older Servers (reverse mixed-version compatibility).
+    const bullets = outputList(parsed.bullets, 3, 5, bullet);
+    const impact = plainProseText(parsed.impact, 1000);
+    const followUps = outputList(parsed.followUps, 2, 3, question);
+    result = { tldr: plainProseText(parsed.tldr, 400), bullets, impact, followUps };
+    if (Object.hasOwn(parsed, 'fullMarkdown') && typeof parsed.fullMarkdown !== 'string') throw invalidOutput();
+    const markdown = boundedText(parsed.fullMarkdown, MAX_MARKDOWN_CHARS);
+    if (markdown && !hasUnsafeMarkdown(markdown)) return { ...result, fullMarkdown: markdown };
+    const fullMarkdown = buildMarkdown({ ...result, sections: [] }, false, language);
+    if (hasUnsafeMarkdown(fullMarkdown)) throw invalidOutput();
+    return { ...result, fullMarkdown };
   } else {
     const bullets = outputList(parsed.bullets, 2, 6, bullet);
     const impact = plainProseText(parsed.impact, 1000);
@@ -432,16 +450,17 @@ function decodeHtml(text) {
   });
 }
 
-// Strict linear single-pass HTML scanner: bounded input, zero regex backtracking
-// or repeated tail rescans on malformed/unclosed tags.
+// Strict linear single-pass HTML scanner: bounded input, guaranteed monotonic
+// forward progress on every branch (immune to quoted '>' or malformed tags).
 function parseTagAttrs(tagText) {
   const attrs = {};
   let i = 0;
   const len = tagText.length;
   // Skip tag name
-  while (i < len && !/\s/.test(tagText[i])) i++;
+  while (i < len && !/[\s/>]/.test(tagText[i])) i++;
   while (i < len) {
-    while (i < len && /[\s/]/.test(tagText[i])) i++;
+    const prev = i;
+    while (i < len && /[\s/>]/.test(tagText[i])) i++;
     if (i >= len) break;
     const keyStart = i;
     while (i < len && !/[\s=/>]/.test(tagText[i])) i++;
@@ -465,6 +484,7 @@ function parseTagAttrs(tagText) {
     } else if (key) {
       attrs[key] = '';
     }
+    if (i <= prev) i = prev + 1;
   }
   return attrs;
 }
@@ -684,10 +704,6 @@ function harvestResult(raw, name, input, evidence) {
       return [{ ...projectEvidence(item, 1500), ...projectText(item, { snippet: 1500 }), url, media: observeMedia(searchImages(item)) }];
     });
     const media = observeMedia(searchImages(data));
-    if (results.length || media.length) {
-      evidence.evidenceCount++;
-      evidence.researched = true;
-    }
     return { ...projectText(data, { provider: 80, answer: 1500 }), results, media };
   }
   const url = publicWebUrl(data.url || input.url);
@@ -701,10 +717,6 @@ function harvestResult(raw, name, input, evidence) {
   }));
   evidence.observedPageUrls.add(url);
   evidence.observedPageUrls.add(input.url);
-  if (text || media.length) {
-    evidence.evidenceCount++;
-    evidence.researched = true;
-  }
   return { url, ...(title ? { title } : {}), text, media };
 }
 
@@ -782,29 +794,84 @@ async function researchBriefing({ mode, stream, finalCall, params, news, evidenc
   }
 
   let totalEvidenceChars = 0;
+  const TRUNCATED_NOTICE = frame('untrusted_web_result', { truncated: true, note: 'Evidence budget reached' });
+
+  function recordDeliveredSources(deliveredObj) {
+    if (!isRecord(deliveredObj) || deliveredObj.error || deliveredObj.truncated) return;
+    if (Array.isArray(deliveredObj.results)) {
+      for (const item of deliveredObj.results) {
+        const u = normalizedUrl(item?.url);
+        if (u) evidence.deliveredSourceUrls.add(u);
+      }
+    }
+    if (typeof deliveredObj.url === 'string' && (deliveredObj.text || (Array.isArray(deliveredObj.media) && deliveredObj.media.length))) {
+      const u = normalizedUrl(deliveredObj.url);
+      if (u) evidence.deliveredSourceUrls.add(u);
+    }
+    evidence.evidenceCount = evidence.deliveredSourceUrls.size;
+    evidence.researched = evidence.evidenceCount > 0;
+  }
+
+  // Compact structured data BEFORE serializing so every delivered frame has valid
+  // JSON, complete opening/closing delimiters, and stays strictly within MAX_TOTAL_EVIDENCE_CHARS.
   function boundedFrame(result) {
-    const remaining = Math.max(0, MAX_TOTAL_EVIDENCE_CHARS - totalEvidenceChars);
-    if (remaining <= 64) {
-      return frame('untrusted_web_result', { truncated: true, note: 'Evidence budget reached' });
+    const sepCost = webResults.length > 0 ? 2 : 0;
+    const remaining = MAX_TOTAL_EVIDENCE_CHARS - totalEvidenceChars - sepCost;
+    if (remaining < TRUNCATED_NOTICE.length) {
+      return { content: TRUNCATED_NOTICE, withinBudget: false };
     }
-    let content = frame('untrusted_web_result', result);
-    if (content.length > remaining) {
-      const compact = isRecord(result) && typeof result.text === 'string'
-        ? { ...result, text: result.text.slice(0, Math.max(0, remaining - 512)) }
-        : { truncated: true };
-      content = frame('untrusted_web_result', compact).slice(0, remaining);
+    const full = frame('untrusted_web_result', result);
+    if (full.length <= remaining) {
+      totalEvidenceChars += full.length + sepCost;
+      recordDeliveredSources(result);
+      return { content: full, withinBudget: true };
     }
-    totalEvidenceChars += content.length;
-    return content;
+    // Try structured compaction (trim text or slice results) before falling back to notice.
+    if (isRecord(result) && !result.error) {
+      if (typeof result.text === 'string') {
+        const shell = frame('untrusted_web_result', { ...result, text: '' });
+        const textBudget = remaining - shell.length;
+        if (textBudget > 0) {
+          let sliceLen = Math.min(result.text.length, textBudget);
+          while (sliceLen > 0) {
+            const candidateObj = { ...result, text: result.text.slice(0, sliceLen) };
+            const candidateFrame = frame('untrusted_web_result', candidateObj);
+            if (candidateFrame.length <= remaining) {
+              totalEvidenceChars += candidateFrame.length + sepCost;
+              recordDeliveredSources(candidateObj);
+              return { content: candidateFrame, withinBudget: true };
+            }
+            sliceLen = Math.floor(sliceLen * 0.6);
+          }
+        }
+      } else if (Array.isArray(result.results) && result.results.length) {
+        const kept = [];
+        for (const item of result.results) {
+          const nextObj = { ...result, results: [...kept, item] };
+          const nextFrame = frame('untrusted_web_result', nextObj);
+          if (nextFrame.length > remaining) break;
+          kept.push(item);
+        }
+        if (kept.length) {
+          const candidateObj = { ...result, results: kept };
+          const candidateFrame = frame('untrusted_web_result', candidateObj);
+          totalEvidenceChars += candidateFrame.length + sepCost;
+          recordDeliveredSources(candidateObj);
+          return { content: candidateFrame, withinBudget: true };
+        }
+      }
+    }
+    totalEvidenceChars += TRUNCATED_NOTICE.length + sepCost;
+    return { content: TRUNCATED_NOTICE, withinBudget: true };
   }
 
   async function addResults(calls, text, providerState) {
     const results = await Promise.all(calls.map(executeTool));
     messages.push({ role: 'assistant', content: text, toolCalls: calls, ...(providerState ? { providerState } : {}) });
     for (const [i, result] of results.entries()) {
-      const content = boundedFrame(result);
+      const { content, withinBudget } = boundedFrame(result);
       messages.push({ role: 'tool', toolCallId: calls[i].id, content, isError: Boolean(result.error) });
-      webResults.push(content);
+      if (withinBudget) webResults.push(content);
     }
   }
 
@@ -820,12 +887,12 @@ async function researchBriefing({ mode, stream, finalCall, params, news, evidenc
       const query = [news.topic || news.topicName || news.query || news.headline, ...(news.keywords || [])].filter(Boolean).join(' ');
       if (query) {
         const result = await executeTool({ name: 'WebSearch', input: { query } });
-        const content = boundedFrame(result);
+        const { content, withinBudget } = boundedFrame(result);
         messages.push({ role: 'user', content });
-        webResults.push(content);
+        if (withinBudget) webResults.push(content);
       }
     }
-    if (!toolCalls.length || total >= budget || totalEvidenceChars >= MAX_TOTAL_EVIDENCE_CHARS || (!limits.WebSearch && !limits.WebFetch)) break;
+    if (!toolCalls.length || total >= budget || (MAX_TOTAL_EVIDENCE_CHARS - totalEvidenceChars) < TRUNCATED_NOTICE.length || (!limits.WebSearch && !limits.WebFetch)) break;
   }
   ctx.signal.throwIfAborted();
   const finalInstruction = 'Research has ended. Return exactly the JSON object for this mode now, with no extra fields or commentary.'
@@ -867,7 +934,7 @@ async function callWithDeadline(work, signal) {
 }
 
 /** Run an isolated editorial query, without a Session or the general tool registry. */
-export async function runCosmicWebBriefing({ mode, perspective = 'balanced', language, payload, config, adapter, yeaftDir, bundledSkillsDir, signal, toolExecutors } = {}) {
+export async function runCosmicWebBriefing({ mode, perspective = 'balanced', language, payload, config, adapter, yeaftDir, bundledSkillsDir, signal, toolExecutors, schemaVersion = 2 } = {}) {
   const started = performance.now();
   validateOptions(mode, perspective);
   const model = resolveDecisionModel(config);
@@ -877,13 +944,15 @@ export async function runCosmicWebBriefing({ mode, perspective = 'balanced', lan
   const stream = typeof streamMethod === 'function' ? streamMethod.bind(requestAdapter) : undefined;
   const call = typeof requestAdapter?.call === 'function' ? requestAdapter.call.bind(requestAdapter) : undefined;
   if (!stream && !call) throw new BriefingError('Cosmic Web briefing provider unavailable');
-  // Research is opt-in (payload.research === true) and strictly blocked for owner-private feeds.
-  const research = Boolean(stream)
+  const effectiveSchema = schemaVersion === 1 && (mode === 'brief' || mode === 'synthesize') ? 1 : 2;
+  // Research is opt-in (payload.research === true) and strictly blocked for owner-private feeds and v1 servers.
+  const research = effectiveSchema === 2
+    && Boolean(stream)
     && payload?.isPrivateSource !== true
     && (mode === 'topic_radar' || payload?.research === true);
   const skill = loadCosmicWebSkillGuidance({ yeaftDir: yeaftDir || config?.dir, bundledSkillsDir });
   const outputLanguage = languageFor(language || config?.language);
-  const system = buildSystemPrompt({ mode, perspective, language: outputLanguage, guidance: skill.text, research });
+  const system = buildSystemPrompt({ mode, perspective, language: outputLanguage, guidance: skill.text, research, schemaVersion: effectiveSchema });
   const news = buildNewsData(payload);
   const evidence = evidenceState(news);
   const messages = [{ role: 'user', content: frame('untrusted_news_data', news) }];
@@ -905,7 +974,7 @@ export async function runCosmicWebBriefing({ mode, perspective = 'balanced', lan
     || ['tool_use', 'content_filter', 'refusal', 'pause_turn', 'model_context_window_exceeded'].includes(response.stopReason)) throw invalidOutput();
   const parsed = parseDecisionJsonObject(response.text);
   return {
-    result: normalizeOutput(parsed, mode, outputLanguage, news, evidence),
+    result: normalizeOutput(parsed, mode, outputLanguage, news, evidence, effectiveSchema),
     meta: { model, skillSource: skill.source, durationMs: Math.round(performance.now() - started) },
   };
 }
@@ -937,13 +1006,14 @@ export async function handleCosmicWebAiRequest(msg, { yeaftDir, sendToServer, lo
   } else {
     activeBriefings.set(key, controller);
     try {
-      const { mode, perspective = 'balanced', language, payload } = msg ?? {};
+      const { mode, perspective = 'balanced', language, payload, schemaVersion } = msg ?? {};
       validateOptions(mode, perspective);
       const config = await loadConfigFn({ dir: yeaftDir });
       if (signal.aborted) return;
       const adapter = await createAdapterFn(config);
       if (signal.aborted) return;
-      const { result, meta } = await runCosmicWebBriefing({ mode, perspective, language, payload, config, adapter, yeaftDir, signal });
+      const negotiatedSchema = schemaVersion === 2 ? 2 : 1;
+      const { result, meta } = await runCosmicWebBriefing({ mode, perspective, language, payload, config, adapter, yeaftDir, signal, schemaVersion: negotiatedSchema });
       Object.assign(reply, { ok: true, result, meta });
     } catch (error) {
       reply.error = error instanceof BriefingError ? error.message : 'Cosmic Web briefing unavailable';

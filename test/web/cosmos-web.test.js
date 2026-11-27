@@ -1403,6 +1403,7 @@ describe('Cosmic Web — Pinia store & interactive overlay', () => {
       bullets: ['逆转分差 14 分', '关键抢断 2 次'],
       impact: '湖人稳固西部前四席位。',
       searchCount: 3,
+      evidenceCount: 3,
       researched: true,
       citations: [{ title: 'ESPN 战报', url: 'https://espn.com/nba/recap/1', sourceName: 'ESPN' }],
       followUps: ['末节关键回合发生了什么？'],
@@ -1601,6 +1602,10 @@ describe('Cosmic Web — Pinia store & interactive overlay', () => {
         },
       },
       {
+        match: (u, m) => u.startsWith('/api/cosmic-web/clusters/c-multi/article') && m === 'GET',
+        body: { title: 'Source 2 Clean', markdown: 'Clean extracted article paragraph without AI.', quality: 'full', itemId: 'item-2' },
+      },
+      {
         match: (u, m) => u === '/api/cosmic-web/clusters/c-multi/community' && m === 'GET',
         body: { media: [], communityComments: [] },
       },
@@ -1674,11 +1679,35 @@ describe('Cosmic Web — Pinia store & interactive overlay', () => {
     expect(wrapper.find('.cw-reader-modal .cw-verified-tag').exists()).toBe(false);
     expect(wrapper.findAll('.cw-reader-modal .cw-markdown-prose a')).toHaveLength(0);
 
-    // Blocker #8: inline AI follow-up button is disabled on v1-only Agent without cosmic_web_follow_up
+    // Blocker #8 & Nit 1: inline AI follow-up & whispering prompt buttons are disabled on v1-only Agent with visible upgrade hint
     const modal = wrapper.findComponent({ name: 'CosmosWebReaderModal' });
     expect(modal.vm.canUseInlineFollowUp).toBe(false);
+    expect(wrapper.find('.cw-reader-modal .cw-whisper-btn').attributes('disabled')).toBeDefined();
+    expect(wrapper.find('.cw-reader-modal .cw-inline-hint').exists()).toBe(true);
 
-    // Blocker #10: Opening Lightbox from Expanded Reader moves focus into Lightbox, Escape closes ONLY Lightbox (keeping Expanded Reader open), and restores focus
+    // CW2-06: on-demand Clean Article toggle works independently of AI
+    await wrapper.find('.cw-reader-modal .cw-clean-article-toggle').trigger('click');
+    await flushPromises();
+    expect(wrapper.find('.cw-reader-modal .cw-clean-article-panel').text()).toContain('Clean extracted article paragraph without AI.');
+
+    // CW2-06: resetting same cluster back to default itemId: null clears previous item-2 state
+    await webStore.openClusterReader('c-multi', { expanded: true });
+    await flushPromises();
+    expect(webStore.activeArticleItemId).toBeNull();
+    expect(webStore.aiBriefData?.tldr).toBe('Brief for default');
+
+    // CW2-06: stored excerpt displays immediately even while AI brief is loading
+    webStore.aiBriefLoading = true;
+    await flushPromises();
+    expect(wrapper.find('.cw-reader-modal .cw-immediate-excerpt').text()).toContain('Excerpt 1');
+    webStore.aiBriefLoading = false;
+    await flushPromises();
+
+    // Blocker #10 & Nit 2: Opening Lightbox from Expanded Reader moves focus into Lightbox, blocks external focusin, Escape closes ONLY Lightbox (keeping Expanded Reader open), and restores focus
+    webStore.activeClusterDetail.media = [
+      { proxyUrl: '/api/cosmic-web/media-proxy?url=https%3A%2F%2Fimg.test%2F1.png&exp=9999999999&sig=ok', kind: 'image', caption: 'Chart' },
+    ];
+    await flushPromises();
     const mediaBtn = wrapper.find('.cw-reader-modal .cw-media-tile');
     mediaBtn.element.focus();
     await mediaBtn.trigger('click');

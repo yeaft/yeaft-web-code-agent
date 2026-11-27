@@ -235,6 +235,7 @@ export const useCosmicWebStore = defineStore('cosmicWeb', {
     articleLoading: false,
     articleData: null,
     articleError: null,
+    cleanArticleOpen: false,
     activeArticleUrl: null,
     activeArticleItemId: null,
 
@@ -532,7 +533,11 @@ export const useCosmicWebStore = defineStore('cosmicWeb', {
 
       const isNewCluster = this.readerClusterId !== clusterId || this.activeClusterDetail?.id !== clusterId;
       const nextItemId = itemId || null;
-      const isSourceChange = !isNewCluster && nextItemId && nextItemId !== this.activeArticleItemId;
+      const nextUrl = url || null;
+      const isSourceChange = !isNewCluster && (
+        nextItemId !== (this.activeArticleItemId || null)
+        || nextUrl !== (this.activeArticleUrl || null)
+      );
       this.cursorClusterId = clusterId;
       this.selectedClusterId = clusterId;
       this.readerClusterId = clusterId;
@@ -542,12 +547,13 @@ export const useCosmicWebStore = defineStore('cosmicWeb', {
       this.drawerCollapsed = false;
       this.lightboxMedia = null;
 
-      // Unified selection transition: reset transient state on new cluster OR same-cluster source change
+      // Unified selection transition: reset transient state on new cluster OR any source change (including reset to default or URL-only)
       if (isNewCluster || isSourceChange) {
         if (isNewCluster) this.activeClusterDetail = null;
         this.articleData = null;
         this.articleError = null;
-        this.activeArticleUrl = url || null;
+        this.cleanArticleOpen = false;
+        this.activeArticleUrl = nextUrl;
         this.activeArticleItemId = nextItemId;
         this.readerItemId = nextItemId;
         this.aiBriefData = null;
@@ -631,6 +637,22 @@ export const useCosmicWebStore = defineStore('cosmicWeb', {
       }
     },
 
+    async toggleCleanArticle(clusterId, { force = false } = {}) {
+      if (!clusterId) return;
+      if (this.cleanArticleOpen && !force) {
+        this.cleanArticleOpen = false;
+        return;
+      }
+      this.cleanArticleOpen = true;
+      if (!this.articleData || force) {
+        await this.loadArticle(clusterId, {
+          itemId: this.activeArticleItemId || undefined,
+          url: this.activeArticleUrl || undefined,
+          force,
+        });
+      }
+    },
+
     async selectArticleSource(clusterId, { itemId = null, url = null, perspective = null, agentId = null } = {}) {
       if (!clusterId) return;
       clearAutoBriefTimer();
@@ -642,6 +664,7 @@ export const useCosmicWebStore = defineStore('cosmicWeb', {
       invalidateChannel('article');
       invalidateChannel('aiBrief');
       invalidateChannel('followUp');
+      this.articleData = null;
       this.articleLoading = false;
       this.articleError = null;
       this.aiBriefData = null;
@@ -650,6 +673,13 @@ export const useCosmicWebStore = defineStore('cosmicWeb', {
       this.followUpThread = [];
       this.followUpError = null;
       this.followUpLoading = false;
+
+      if (this.cleanArticleOpen) {
+        void this.loadArticle(clusterId, {
+          itemId: this.activeArticleItemId || undefined,
+          url: this.activeArticleUrl || undefined,
+        });
+      }
 
       return this.generateAiBrief(clusterId, {
         research: !this.activeClusterDetail?.isPrivateSource,
@@ -669,6 +699,7 @@ export const useCosmicWebStore = defineStore('cosmicWeb', {
       invalidateChannel('followUp');
       this.detailLoading = false;
       this.articleLoading = false;
+      this.cleanArticleOpen = false;
       this.aiBriefLoading = false;
       this.followUpLoading = false;
       this.followUpError = null;
@@ -1187,6 +1218,7 @@ export const useCosmicWebStore = defineStore('cosmicWeb', {
       this.feedLoading = false;
       this.detailLoading = false;
       this.articleLoading = false;
+      this.cleanArticleOpen = false;
       this.aiBriefLoading = false;
       this.followUpLoading = false;
       this.followUpError = null;

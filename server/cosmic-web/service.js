@@ -48,14 +48,34 @@ const preferred = userId => {
     remaps.push([d.id, candidate]);
     return { ...d, id: candidate };
   });
-  const migratedPrefs = { ...prefs, customDomains: migratedCustom };
+  const remappedDisabled = new Set(Array.isArray(prefs.disabledSources) ? prefs.disabledSources : []);
   if (stored && remaps.length) {
     db.cosmicWebTransaction(() => {
-      for (const [oldId, newId] of remaps) db.migrateCustomDomainId(userId, oldId, newId);
-      db.saveUserPrefs(userId, migratedPrefs, Date.now());
+      for (const [oldId, newId] of remaps) {
+        const existingSources = db.listSourcesForUserDomain(userId, oldId);
+        for (const row of existingSources) {
+          const newSourceId = row.kind === 'radar'
+            ? `radar-${hash(userId, newId)}`
+            : `rss-${hash(userId, newId, row.url)}`;
+          db.remapUserSource({ userId, oldSourceId: row.id, newSourceId, newDomainId: newId });
+          if (remappedDisabled.has(row.id)) {
+            remappedDisabled.delete(row.id);
+            remappedDisabled.add(newSourceId);
+          }
+        }
+        if (remappedDisabled.has(radarId(oldId))) {
+          remappedDisabled.delete(radarId(oldId));
+          remappedDisabled.add(radarId(newId));
+        }
+        // Catch any remaining items/sources referencing oldId directly
+        db.migrateCustomDomainId(userId, oldId, newId);
+      }
+      const persistedPrefs = { ...prefs, customDomains: migratedCustom, disabledSources: [...remappedDisabled] };
+      db.saveUserPrefs(userId, persistedPrefs, Date.now());
     });
+    return { ...prefs, customDomains: migratedCustom, disabledSources: [...remappedDisabled] };
   }
-  return migratedPrefs;
+  return { ...prefs, customDomains: migratedCustom, disabledSources: [...remappedDisabled] };
 };
 const publicPrefs = ({ enabledDomainIds, ...prefs }) => ({ ...prefs, enabledDomains: enabledDomainIds });
 const radarId = domainId => `radar-${domainId}`;
@@ -279,6 +299,8 @@ export function createCosmicWebService({ fetcher = safeFetch, dnsLookup, now = D
     return AbortSignal.any([controller.signal, reqSignal]);
   }
   function storedClusterMedia(c, userId) {
+    // Never proxy untrusted media URLs from user-configured private RSS feeds.
+    if (c.isPrivateSource) return [];
     const raw = [];
     const seen = new Set();
     for (const item of c.items ?? []) {
@@ -449,7 +471,7 @@ export function createCosmicWebService({ fetcher = safeFetch, dnsLookup, now = D
         if (!validateCosmicWebAiResult(result, mode)) throw error(502, 'Agent returned an invalid briefing');
         const enriched = { ...result, agentId, agentName: agent.name, perspective, generatedAt: now() };
         if (mode === 'brief' || mode === 'synthesize' || mode === 'follow_up') {
-          const rawMedia = result.media?.length ? result.media : payload.media ?? [];
+          const rawMedia = payload.isPrivateSource ? [] : (result.media?.length ? result.media : payload.media ?? []);
           enriched.media = signMediaList(rawMedia, userId);
           if (mode !== 'follow_up') enriched.communityHighlights = result.communityHighlights?.length ? result.communityHighlights : payload.communityComments ?? [];
         }
@@ -685,7 +707,8 @@ export function createCosmicWebService({ fetcher = safeFetch, dnsLookup, now = D
   function metadata(userId, prefs, clusters = filtered(userId, {}, false)) {
     return { domains: enrichedDomains(userId, prefs, clusters), stats: stats(userId, prefs, clusters) };
   }
-  function graphProjection(prefs, clusters, userId = null) {
+  function graphProjection(prefs, clusters, userId) {
+    if (!userId) throw new Error('Expected userId for Cosmic Web graph projection');
     return buildGraphProjection({ prefs, clusters, domains: BUILTIN_DOMAINS, userId, now: now() });
   }
 
@@ -862,7 +885,7 @@ export function createCosmicWebService({ fetcher = safeFetch, dnsLookup, now = D
       db.cosmicWebTransaction(() => { for (const c of rows) db.saveUserClusterState(userId, c.id, { unread: false }, now()); });
       const prefs = preferred(userId);
       const clusters = filtered(userId, {}, false);
-      return { updated: rows.length, ...metadata(userId, prefs, clusters), graph: graphProjection(prefs, clusters) };
+      return { updated: rows.length, ...metadata(userId, prefs, clusters), graph: graphProjection(prefs, clusters, userId) };
     },
     getPreferences: userId => publicPrefs(preferred(userId)), savePreferences, refresh, startScheduler, stopScheduler,
   };

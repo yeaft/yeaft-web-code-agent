@@ -149,12 +149,14 @@ export default {
       return isSafeHttpUrl(candidate) ? candidate : '';
     },
     activeBriefEvidenceCount() {
-      if (!this.aiBrief?.researched) return 0;
-      const raw = this.aiBrief?.evidenceCount != null
-        ? this.aiBrief.evidenceCount
-        : (this.aiBrief?.searchCount ?? this.aiBrief?.webSearchCount ?? 0);
-      const n = Number(raw);
+      if (this.aiBrief?.researched !== true) return 0;
+      if (this.aiBrief?.evidenceCount == null) return 0;
+      const n = Number(this.aiBrief.evidenceCount);
       return Number.isFinite(n) && n > 0 ? n : 0;
+    },
+    renderedCleanArticleHtml() {
+      const md = this.webStore.articleData?.markdown || this.webStore.articleData?.contentMd || '';
+      return md ? renderCosmicWebProse(md) : '';
     },
     activeSelectedItem() {
       const items = Array.isArray(this.cluster?.items) ? this.cluster.items : [];
@@ -826,7 +828,25 @@ export default {
                 >{{ sourceFootnotes.length > 1 ? '↗' : (src.name + ' ↗') }}</a>
                 <span v-if="idx < sourceFootnotes.length - 1" class="cw-footnote-dot" aria-hidden="true">·</span>
               </template>
+              <button
+                v-if="cluster?.id"
+                type="button"
+                class="cw-footnote-switch cw-clean-article-toggle"
+                :aria-expanded="webStore.cleanArticleOpen"
+                @click="webStore.toggleCleanArticle(cluster.id)"
+              >{{ webStore.cleanArticleOpen ? $t('cosmos.web.report.hideCleanArticle') : $t('cosmos.web.report.readCleanArticle') }}</button>
             </div>
+
+            <!-- Optional On-Demand Clean Extracted Article (Independent of AI / Offline Safe) -->
+            <section v-if="webStore.cleanArticleOpen" class="cw-clean-article-panel">
+              <div v-if="webStore.articleLoading" class="cw-shimmer-label" role="status" aria-live="polite">
+                <span class="cw-spinner cw-spinner-sm" aria-hidden="true"></span>
+                <span>{{ $t('cosmos.web.report.cleanArticleLoading') }}</span>
+              </div>
+              <p v-else-if="webStore.articleError" class="cw-inline-error">{{ webStore.articleError }}</p>
+              <div v-else-if="renderedCleanArticleHtml" class="cw-markdown-prose" v-html="renderedCleanArticleHtml"></div>
+              <p v-else-if="fallbackExcerpt" class="cw-markdown-prose">{{ fallbackExcerpt }}</p>
+            </section>
 
             <!-- Perspective Switcher + Regenerate -->
             <div class="cw-perspective-bar">
@@ -849,6 +869,14 @@ export default {
               >↻ {{ $t('cosmos.web.ai.regenerate') }}</button>
             </div>
 
+            <!-- Immediate 0ms Stored Excerpt (Shown while AI is loading or unavailable) -->
+            <blockquote
+              v-if="fallbackExcerpt && (webStore.aiBriefLoading || webStore.aiBriefError || !aiBrief)"
+              class="cw-pull-quote cw-immediate-excerpt"
+            >
+              <p>{{ fallbackExcerpt }}</p>
+            </blockquote>
+
             <!-- Loading Shimmer -->
             <div v-if="webStore.aiBriefLoading" class="cw-shimmer-block" role="status" aria-live="polite">
               <p class="cw-shimmer-label">
@@ -862,14 +890,19 @@ export default {
 
             <!-- Graceful Non-AI Digest + Error / Retry -->
             <div v-else-if="webStore.aiBriefError" class="cw-magazine-flow">
-              <blockquote v-if="fallbackExcerpt" class="cw-pull-quote">
-                <p>{{ fallbackExcerpt }}</p>
-              </blockquote>
               <div class="cw-state-box cw-state-error">
                 <p>{{ agentsLive && !briefingCapableAgents.length ? $t('cosmos.web.report.offlineHint') : webStore.aiBriefError }}</p>
-                <button type="button" class="cw-btn cw-btn-primary" @click="regenerateAiBrief">
-                  {{ $t('cosmos.web.action.retry') }}
-                </button>
+                <div class="cw-state-actions">
+                  <button type="button" class="cw-btn cw-btn-primary" @click="regenerateAiBrief">
+                    {{ $t('cosmos.web.action.retry') }}
+                  </button>
+                  <button
+                    v-if="cluster?.id && !webStore.cleanArticleOpen"
+                    type="button"
+                    class="cw-btn cw-btn-subtle"
+                    @click="webStore.toggleCleanArticle(cluster.id)"
+                  >{{ $t('cosmos.web.report.readCleanArticle') }}</button>
+                </div>
               </div>
             </div>
 
@@ -1029,12 +1062,14 @@ export default {
             <!-- Whispering Editorial Follow-Up Prompts -->
             <section v-if="aiBrief && Array.isArray(aiBrief.followUps) && aiBrief.followUps.length" class="cw-whisper-section">
               <h4 class="cw-whisper-heading">{{ $t('cosmos.web.report.followUpTitle') }}</h4>
+              <p v-if="agentsLive && !canUseInlineFollowUp" class="cw-inline-hint">{{ $t('cosmos.web.report.upgradeAgentHint') }}</p>
               <ul class="cw-whisper-prompts">
                 <li v-for="(q, idx) in aiBrief.followUps" :key="idx" class="cw-whisper-item">
                   <button
                     type="button"
                     class="cw-whisper-btn"
-                    :disabled="webStore.followUpLoading"
+                    :disabled="webStore.followUpLoading || !canUseInlineFollowUp"
+                    :title="canUseInlineFollowUp ? $t('cosmos.web.report.askAiHint') : $t('cosmos.web.report.upgradeAgentHint')"
                     @click="submitModalFollowUp(q)"
                   >
                     <span class="cw-whisper-arrow" aria-hidden="true">→</span>
@@ -1071,7 +1106,7 @@ export default {
                 <span v-if="selectedAgentObj && !selectedAgentObj.online" class="cw-agent-offline-dot" :title="$t('cosmos.web.status.offline')"></span>
               </button>
 
-              <div v-if="agentPickerOpen" class="cw-agent-popover" role="menu" :aria-label="$t('cosmos.web.report.agentPickerTitle')">
+              <div v-if="agentPickerOpen" class="cw-agent-popover" role="region" :aria-label="$t('cosmos.web.report.agentPickerTitle')">
                 <div v-if="!availableAgents.length" class="cw-agent-popover-empty">
                   {{ $t('cosmos.web.dispatch.noAgent') }}
                 </div>
@@ -1079,10 +1114,9 @@ export default {
                   v-for="ag in availableAgents"
                   :key="ag.id"
                   type="button"
-                  role="menuitemradio"
                   class="cw-agent-option"
                   :class="{ 'is-selected': ag.id === effectiveDispatchAgentId }"
-                  :aria-checked="ag.id === effectiveDispatchAgentId"
+                  :aria-pressed="ag.id === effectiveDispatchAgentId"
                   @click="selectAgent(ag.id)"
                 >
                   <span class="cw-planet-orb" :class="agentPlanetClass(ag.id)"></span>

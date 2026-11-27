@@ -331,7 +331,8 @@ describe('Cosmic Web bounded research', () => {
     expect(final.tools).toEqual([]);
     expect(final.messages.at(-1).content).toContain('exactly the JSON object');
     expect(parseTool(final.messages.find(row => row.toolCallId === 'f')).media).toEqual([{ url: image, kind: 'gif' }]);
-    expect(result).toMatchObject({ researched: true, searchCount: 1, evidenceCount: 2, media: [{ url: image }], citations: [{ url }] });
+    // Both search and fetch observed the SAME single URL -> unique delivered source count is 1
+    expect(result).toMatchObject({ researched: true, searchCount: 1, evidenceCount: 1, media: [{ url: image }], citations: [{ url }] });
   });
 
   it('returns errors for disallowed calls without executing even injected executors', async () => {
@@ -560,6 +561,44 @@ describe('Cosmic Web bounded research', () => {
     expect(started[0].aborted).toBe(true);
     expect(replies).toEqual([]);
   });
+  it('scans malformed HTML with quoted > attributes linearly, bounds frames cleanly without mid-JSON slicing, and emits exact v1 schema for older servers (CW2-03, CW2-04, CW2-07)', async () => {
+    // CW2-03: quoted '>' inside an img attribute must NEVER hang parseTagAttrs
+    const quotedGt = '<img alt="a>b" data-x=">>>" src="https://cdn.example.com/ok.png"><img >>> ="" = ===>';
+    const t0 = performance.now();
+    const ev = htmlEvidence(quotedGt, 'https://example.com/p', 4000);
+    expect(performance.now() - t0).toBeLessThan(100);
+    expect(ev.media).toEqual([{ url: 'https://cdn.example.com/ok.png', kind: 'image', alt: 'a>b' }]);
+
+    // CW2-04: aggregate evidence frames stay <= 24,000 chars with valid JSON & complete closing tags, and unique source URLs are counted only when delivered
+    const WebFetch = vi.fn()
+      .mockResolvedValueOnce({ url: 'https://example.com/a', text: 'A'.repeat(15_000) })
+      .mockResolvedValueOnce({ url: 'https://example.com/b', text: 'B'.repeat(15_000) })
+      .mockResolvedValueOnce({ url: 'https://example.com/c', text: 'C'.repeat(15_000) });
+    const adapter = researchedAdapter(
+      [[fetchPage('f1', 'https://example.com/a'), fetchPage('f2', 'https://example.com/b')], [fetchPage('f3', 'https://example.com/c')], []],
+      story,
+    );
+    const { result } = await run({ adapter, payload: { research: true }, toolExecutors: { WebFetch } });
+    const toolMsgs = adapter.call.mock.lastCall[0].messages.filter(m => m.role === 'tool');
+    for (const msg of toolMsgs) {
+      expect(msg.content.startsWith('<untrusted_web_result>\n')).toBe(true);
+      expect(msg.content.endsWith('\n</untrusted_web_result>')).toBe(true);
+      expect(() => JSON.parse(msg.content.split('\n')[1])).not.toThrow();
+    }
+    const deliveredTotal = toolMsgs.filter(m => !m.content.includes('"truncated":true')).reduce((sum, m) => sum + m.content.length, 0);
+    expect(deliveredTotal).toBeLessThanOrEqual(24_000);
+    expect(result.evidenceCount).toBe(2);
+
+    // CW2-07: v2 Agent answering an older v1 Server (no schemaVersion) emits ONLY the exact 5 v1 keys
+    const replies = [];
+    await handleCosmicWebAiRequest(
+      { requestId: 'v1-server-req', mode: 'brief', payload: { headline: 'Legacy server brief' } },
+      { sendToServer: r => replies.push(r), loadConfigFn: async () => config, createAdapterFn: async () => stubAdapter(story) },
+    );
+    expect(replies).toHaveLength(1);
+    expect(replies[0].ok).toBe(true);
+    expect(Object.keys(replies[0].result).sort()).toEqual(['bullets', 'followUps', 'fullMarkdown', 'impact', 'tldr']);
+  });
 });
 
 it('runs the real WebSearch executor with a ledger isolated to each briefing', async () => {
@@ -570,7 +609,7 @@ it('runs the real WebSearch executor with a ledger isolated to each briefing', a
   for (let i = 0; i < 2; i++) {
     const adapter = researchedAdapter([[search('a', 'ARM news')], [search('b', 'ARM news')], []]);
     const { result } = await run({ config: searchConfig, adapter, payload: { research: true } });
-    expect(result).toMatchObject({ researched: true, searchCount: 2, evidenceCount: 2 });
+    expect(result).toMatchObject({ researched: true, searchCount: 2, evidenceCount: 1 });
     expect(network).toHaveBeenCalledTimes(i + 1);
     const [endpoint, options] = network.mock.lastCall;
     expect(new URL(endpoint).searchParams.get('q')).toBe('ARM news');

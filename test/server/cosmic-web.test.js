@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -80,7 +81,7 @@ function transport(fn) {
 }
 function stream(parts, headers = {}, statusCode = 200) { return Object.assign(Readable.from(parts), { headers, statusCode }); }
 function makeService(options = {}) { return service = createCosmicWebService({ now: () => NOW, dnsLookup: dns, autoRefresh: () => false, isUserActive: () => true, ...options }); }
-function agent(id, ownerId, caps = ['cosmic_web_briefing', 'cosmic_web_research', 'cosmic_web_follow_up', 'cosmic_web_radar']) {
+function agent(id, ownerId, caps = ['cosmic_web_briefing', 'cosmic_web_research', 'cosmic_web_follow_up', 'cosmic_web_radar', 'cosmic_web_cancel']) {
   const frames = [];
   agents.set(id, { ownerId, name: id, capabilities: caps, encryptOutbound: false, ws: { readyState: 1, send: value => frames.push(JSON.parse(value)) } });
   return frames;
@@ -799,30 +800,58 @@ describe('raster media proxy', () => {
     expect(res.body).toEqual(png);
     expect(fetcher.mock.lastCall[1].headers.referer).toBeUndefined();
 
-    // Per-user concurrency isolation: alice hitting 2 slow slots does NOT block bob
+    // CW2-02: 6 simultaneous valid gallery images queue cleanly and ALL resolve (no spurious 429),
+    // while exceeding the per-user queue cap (3 active + 8 queued = 11) rejects 429 without blocking bob.
     const resolvers = [];
     const slowProxy = createMediaProxy({
       fetcher: () => new Promise(resolve => resolvers.push(() => resolve({ status: 200, headers: { 'content-type': 'image/png' }, bodyBuffer: png }))),
     });
-    const a1 = slowProxy('https://images.example/a1.png', { userId: 'alice' });
-    const a2 = slowProxy('https://images.example/a2.png', { userId: 'alice' });
-    await expect(slowProxy('https://images.example/a3.png', { userId: 'alice' })).rejects.toMatchObject({ status: 429 });
-    const b1 = slowProxy('https://images.example/b1.png', { userId: 'bob' });
+    const gallery = Array.from({ length: 6 }, (_, i) => slowProxy(`https://images.example/g${i}.png`, { userId: 'alice' }));
     await new Promise(r => setImmediate(r));
-    resolvers.forEach(fn => fn());
-    await expect(Promise.all([a1, a2, b1])).resolves.toHaveLength(3);
+    expect(resolvers).toHaveLength(3); // 3 active, 3 queued
+    // Fill remaining 5 queue slots (total 11 for alice), then 12th rejects 429 while bob still passes
+    const extra = Array.from({ length: 5 }, (_, i) => slowProxy(`https://images.example/e${i}.png`, { userId: 'alice' }));
+    await expect(slowProxy('https://images.example/overflow.png', { userId: 'alice' })).rejects.toMatchObject({ status: 429 });
+    const b1 = slowProxy('https://images.example/b1.png', { userId: 'bob' });
+    // Drain all queued waves
+    while (resolvers.length) {
+      const batch = resolvers.splice(0);
+      batch.forEach(fn => fn());
+      await new Promise(r => setImmediate(r));
+    }
+    await expect(Promise.all([...gallery, ...extra, b1])).resolves.toHaveLength(12);
 
-    // Early header rejection: HTML content-type rejected before reading body
-    let bodyRead = false;
-    const htmlStream = new Readable({
-      read() { bodyRead = true; this.push(Buffer.from('<html>big page</html>')); this.push(null); },
+    // CW2-02: aborting caller 1 on a shared in-flight URL must NOT fail caller 2
+    let finishShared;
+    const sharedProxy = createMediaProxy({
+      fetcher: (_u, opts) => new Promise((resolve, reject) => {
+        opts.signal?.addEventListener('abort', () => reject(new Error('aborted')), { once: true });
+        finishShared = () => resolve({ status: 200, headers: { 'content-type': 'image/png' }, bodyBuffer: png });
+      }),
     });
-    htmlStream.headers = { 'content-type': 'text/html; charset=utf-8' };
-    htmlStream.statusCode = 200;
-    const earlySocket = transport(() => htmlStream);
-    const earlyProxy = createMediaProxy({ dnsLookup: dns, fetcher: (u, opts) => safeFetch(u, { ...opts, requestImpl: earlySocket }) });
-    await expect(earlyProxy('https://images.example/not-image')).rejects.toMatchObject({ status: 415 });
-    expect(bodyRead).toBe(false);
+    const ac1 = new AbortController();
+    const ac2 = new AbortController();
+    const w1 = sharedProxy('https://images.example/shared.png', { userId: 'alice', signal: ac1.signal });
+    const w2 = sharedProxy('https://images.example/shared.png', { userId: 'bob', signal: ac2.signal });
+    await new Promise(r => setImmediate(r));
+    ac1.abort();
+    await expect(w1).rejects.toMatchObject({ status: 499 });
+    finishShared();
+    await expect(w2).resolves.toMatchObject({ body: png });
+
+    // CW2-01: Early header rejection rejects BOTH unsupported AND missing Content-Type before reading body
+    for (const badHeaders of [{ 'content-type': 'text/html; charset=utf-8' }, {}]) {
+      let bodyRead = false;
+      const badStream = new Readable({
+        read() { bodyRead = true; this.push(Buffer.from('<html>big page</html>')); this.push(null); },
+      });
+      badStream.headers = badHeaders;
+      badStream.statusCode = 200;
+      const earlySocket = transport(() => badStream);
+      const earlyProxy = createMediaProxy({ dnsLookup: dns, fetcher: (u, opts) => safeFetch(u, { ...opts, requestImpl: earlySocket }) });
+      await expect(earlyProxy('https://images.example/not-image')).rejects.toMatchObject({ status: 415 });
+      expect(bodyRead).toBe(false);
+    }
   });
 });
 
@@ -1030,5 +1059,66 @@ describe('2.0 graph and AI contracts', () => {
     const afterItems = db.listVisibleItems('alice', [pubId]);
     expect(afterItems[0].id).toBe(beforeItems[0].id);
     expect(JSON.parse(afterItems[0].media_json)).toEqual([image]);
+
+    // CW2-02: markAllRead returns signed graph media URLs bound to userId
+    const marked = svc.markAllRead('alice', {});
+    const pubNode = marked.graph.nodes.find(n => n.clusterId === pubId);
+    expect(pubNode?.mediaPreview?.proxyUrl).toContain('&sig=');
+
+    // CW2-01: private RSS feed media is NEVER signed or exposed in graph/cluster
+    const privItemWithImg = { ...item('Private img note', 'https://private.example/img-note'), media: [image] };
+    ingestCosmicWebItems(source('rss-priv-img', 'custom-sports', 'alice'), [privItemWithImg], NOW);
+    const privBoot = svc.bootstrap('alice', 'user');
+    const privNode = privBoot.graph.nodes.find(n => n.headline === 'Private img note');
+    expect(privNode?.mediaPreview).toBeNull();
+    const privDet = await svc.cluster('alice', privNode.clusterId);
+    expect(privDet.media).toEqual([]);
+
+    // CW2-05: legacy v1 Agent (no cosmic_web_cancel) retains remote slot accounting after caller abort
+    // and defers the 3rd request until a legacy reply frees a slot instead of sending 3 concurrent frames
+    agents.clear();
+    const v1Frames = agent('legacy-v1', 'alice', ['cosmic_web_briefing']);
+    const lac1 = new AbortController();
+    const lac2 = new AbortController();
+    const lp1 = requestCosmicWebAi({ userId: 'alice', userRole: 'user', agentId: 'legacy-v1', mode: 'brief', signal: lac1.signal });
+    const lp2 = requestCosmicWebAi({ userId: 'alice', userRole: 'user', agentId: 'legacy-v1', mode: 'brief', signal: lac2.signal });
+    await new Promise(r => setImmediate(r));
+    expect(v1Frames).toHaveLength(2);
+    lac1.abort(Object.assign(new Error('cancelled'), { status: 499 }));
+    await expect(lp1).rejects.toMatchObject({ status: 499 });
+    expect(v1Frames.some(f => f.type === 'cosmic_web_ai_cancel')).toBe(false);
+    // Start 3rd request while both legacy slots are still occupied -> must NOT send 3rd frame yet
+    const lp3 = requestCosmicWebAi({ userId: 'alice', userRole: 'user', agentId: 'legacy-v1', mode: 'brief' });
+    await new Promise(r => setImmediate(r));
+    expect(v1Frames).toHaveLength(2);
+    // Legacy Agent finishes abandoned request 1 -> silently discarded & wakes deferred request 3!
+    handleCosmicWebAiResponse('legacy-v1', { requestId: v1Frames[0].requestId, ok: true, result: storyResult });
+    await new Promise(r => setImmediate(r));
+    expect(v1Frames).toHaveLength(3);
+    handleCosmicWebAiResponse('legacy-v1', { requestId: v1Frames[2].requestId, ok: true, result: storyResult });
+    await expect(lp3).resolves.toEqual(storyResult);
+    handleCosmicWebAiResponse('legacy-v1', { requestId: v1Frames[1].requestId, ok: true, result: storyResult });
+    await expect(lp2).resolves.toEqual(storyResult);
+
+    // CW2-08: legacy colliding custom domain migration preserves RSS source IDs, disabledSources, and avoids duplicate re-ingest
+    const feedUrl = 'https://feeds.example.com/hoops.xml';
+    const legacySrcId = `rss-${createHash('sha256').update(JSON.stringify(['bob', 'sports', feedUrl])).digest('hex')}`;
+    db.saveUserPrefs('bob', {
+      enabledDomainIds: ['ai'],
+      customDomains: [{ id: 'sports', name: 'Bob Hoops', colorToken: 'gold', enabled: true, keywords: [], rssUrls: [feedUrl] }],
+      watchKeywords: [], muteKeywords: [], disabledSources: [legacySrcId], preferredAgentId: '', defaultPerspective: 'balanced', onboarded: true, autoRefreshMinutes: 15,
+    }, NOW);
+    ingestCosmicWebItems({ id: legacySrcId, ownerUserId: 'bob', domainId: 'sports', name: 'Bob Hoops', url: feedUrl, kind: 'rss' }, [item('Hidden hoops story', 'https://hoops.example/1')], NOW);
+    const bobBoot = svc.bootstrap('bob', 'user');
+    const migratedCustom = bobBoot.preferences.customDomains[0];
+    expect(migratedCustom.id).toBe('custom-sports');
+    const expectedNewSrcId = `rss-${createHash('sha256').update(JSON.stringify(['bob', 'custom-sports', feedUrl])).digest('hex')}`;
+    expect(bobBoot.preferences.disabledSources).toContain(expectedNewSrcId);
+    // Full preferences save keeps the migrated source disabled & hidden
+    await svc.savePreferences('bob', { ...bobBoot.preferences });
+    expect(svc.feed('bob', { domainId: 'custom-sports' }).total).toBe(0);
+    // Re-ingesting the same feed URL under migrated source ID produces 0 duplicates
+    const reAdded = ingestCosmicWebItems({ id: expectedNewSrcId, ownerUserId: 'bob', domainId: 'custom-sports', name: 'Bob Hoops', url: feedUrl, kind: 'rss' }, [item('Hidden hoops story', 'https://hoops.example/1')], NOW);
+    expect(reAdded).toBe(0);
   });
 });

@@ -1655,19 +1655,10 @@ export default {
       return Math.max(360, Math.min(webDrawerMaxWidth.value, Math.round(raw)));
     });
 
-    function onWebDrawerResize(nextWidth) {
-      const clamped = Math.max(360, Math.min(webDrawerMaxWidth.value, Math.round(Number(nextWidth) || 480)));
-      cosmicWebStore.setDrawerWidth?.(clamped, { persist: false });
-    }
-
-    function onWebDrawerResizeEnd(finalWidth) {
-      const clamped = Math.max(360, Math.min(webDrawerMaxWidth.value, Math.round(Number(finalWidth) || 480)));
-      cosmicWebStore.setDrawerWidth?.(clamped, { persist: true });
-    }
-
-    function onWebDrawerResizeReset() {
-      cosmicWebStore.resetDrawerWidth?.();
-    }
+    // CosmosWebOverlay is the single persistence owner for drawerWidth (live resize uses persist:false, drag end persists once).
+    function onWebDrawerResize() {}
+    function onWebDrawerResizeEnd() {}
+    function onWebDrawerResizeReset() {}
 
     function clampWebPan(px, py) {
       const lim = 1.25;

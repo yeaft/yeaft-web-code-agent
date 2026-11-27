@@ -70,7 +70,10 @@ export function buildGraphProjection({ prefs = {}, clusters, domains, userStates
   }
   for (const { c, primary } of selected) {
     const state = userStates instanceof Map ? userStates.get(c.id) : userStates[c.id];
-    const media = (c.items ?? []).flatMap(item => item.media ?? []).find(m => toProxyMediaUrl(m.url, userId, now));
+    // Never sign or proxy untrusted media URLs originating from user-configured private RSS feeds.
+    const media = c.isPrivateSource
+      ? null
+      : (c.items ?? []).flatMap(item => item.media ?? []).find(m => toProxyMediaUrl(m.url, userId, now));
     const node = { id: `cluster:${c.id}`, clusterId: c.id, domainId: primary, headline: c.headline,
       colorToken: active.get(primary).colorToken, heatScore: c.heatScore, itemCount: c.itemCount ?? c.items?.length ?? 0,
       lodTier: tier.get(c.id), summaryExcerpt: String(c.summaryExcerpt ?? '').trim().slice(0, 180).trimEnd(),

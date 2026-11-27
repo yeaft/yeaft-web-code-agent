@@ -597,6 +597,9 @@ export default {
                   <span v-for="kw in (cd.keywords || [])" :key="kw" class="cw-chip">{{ kw }}</span>
                   <span v-for="url in (cd.rssUrls || [])" :key="url" class="cw-chip cw-chip-url">{{ url }}</span>
                 </div>
+                <p v-if="cd.aiRadar && isSavedRadarDomain(cd.id) && agentsLive && !canScanRadar" class="cw-inline-hint">
+                  {{ $t('cosmos.web.prefs.radarUpgradeHint') }}
+                </p>
               </div>
             </div>
 

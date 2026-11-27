@@ -6,6 +6,7 @@ import { resolveHttpUrl } from './rss-parser.js';
 
 const pending = new Map();
 const rate = new Map();
+const legacySlotWaiters = new Map(); // Map<agentId, Set<() => void>>
 const rateWindow = 600_000;
 const keyFor = (agentId, requestId) => JSON.stringify([agentId, requestId]);
 const fail = (status, message) => Object.assign(new Error(message), { status });
@@ -20,6 +21,40 @@ const hasCapability = (agent, cap = 'cosmic_web_briefing') =>
   Array.isArray(agent?.capabilities) && agent.capabilities.includes(cap);
 const owns = (agent, userId, userRole) => CONFIG.skipAuth || (agent.ownerId ? agent.ownerId === userId : userRole === 'admin');
 
+function notifyLegacySlotWaiters(agentId) {
+  const set = legacySlotWaiters.get(agentId);
+  if (!set || !set.size) return;
+  const next = set.values().next().value;
+  set.delete(next);
+  if (!set.size) legacySlotWaiters.delete(agentId);
+  next();
+}
+
+function waitForLegacySlot(agentId, signal) {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(signal.reason?.status === 499 ? fail(499, 'Cosmic Web request cancelled') : fail(503, 'Cosmic Web is stopping'));
+      return;
+    }
+    let set = legacySlotWaiters.get(agentId);
+    if (!set) {
+      set = new Set();
+      legacySlotWaiters.set(agentId, set);
+    }
+    const wake = () => {
+      signal?.removeEventListener('abort', onAbort);
+      resolve();
+    };
+    const onAbort = () => {
+      set.delete(wake);
+      if (!set.size) legacySlotWaiters.delete(agentId);
+      reject(signal.reason?.status === 499 ? fail(499, 'Cosmic Web request cancelled') : fail(503, 'Cosmic Web is stopping'));
+    };
+    set.add(wake);
+    signal?.addEventListener('abort', onAbort, { once: true });
+  });
+}
+
 export function listCapableAgentsForUser(userId, userRole, mode = 'brief') {
   const required = requiredCapabilityForMode(mode);
   return [...agents]
@@ -33,6 +68,7 @@ export function listCapableAgentsForUser(userId, userRole, mode = 'brief') {
       supportsResearch: hasCapability(agent, 'cosmic_web_research'),
       supportsFollowUp: hasCapability(agent, 'cosmic_web_follow_up'),
       supportsRadar: hasCapability(agent, 'cosmic_web_radar'),
+      supportsCancel: hasCapability(agent, 'cosmic_web_cancel'),
     }));
 }
 
@@ -42,6 +78,8 @@ function settle(key, error, value) {
   pending.delete(key);
   clearTimeout(entry.timer);
   entry.signal?.removeEventListener('abort', entry.onAbort);
+  notifyLegacySlotWaiters(entry.agentId);
+  if (entry.abandoned) return true;
   if (error) entry.reject(error); else entry.resolve(value);
   return true;
 }
@@ -59,7 +97,24 @@ export async function requestCosmicWebAi({ userId, userRole, agentId, mode, pers
       : 'Selected Agent requires an update to support this Cosmic Web feature');
   }
   if (agent.ws?.readyState !== 1) throw fail(503, 'Agent is offline');
-  if ([...pending.values()].filter(entry => entry.userId === userId).length >= 2) throw fail(429, 'Too many active briefing requests');
+
+  const supportsCancel = hasCapability(agent, 'cosmic_web_cancel');
+  // Live user concurrency cap (non-abandoned requests) stays strictly <= 2.
+  const liveForUser = [...pending.values()].filter(entry => entry.userId === userId && !entry.abandoned).length;
+  if (liveForUser >= 2) throw fail(429, 'Too many active briefing requests');
+
+  // For legacy v1 Agents that ignore cancel frames, wait cleanly if remote slots are
+  // occupied by abandoned requests rather than blasting into full Agent slots (which would 502).
+  while (!supportsCancel && [...pending.values()].filter(entry => entry.agent === agent).length >= 2) {
+    const hasAbandoned = [...pending.values()].some(entry => entry.agent === agent && entry.abandoned);
+    if (!hasAbandoned) throw fail(429, 'Too many active briefing requests');
+    await waitForLegacySlot(agentId, signal);
+    if (agents.get(agentId) !== agent || agent.ws?.readyState !== 1) throw fail(503, 'Agent is offline');
+    if ([...pending.values()].filter(entry => entry.userId === userId && !entry.abandoned).length >= 2) {
+      throw fail(429, 'Too many active briefing requests');
+    }
+  }
+
   const now = Date.now();
   for (const [id, times] of rate) if (times.at(-1) <= now - rateWindow) rate.delete(id);
   const times = (rate.get(userId) ?? []).filter(t => t > now - rateWindow);
@@ -68,18 +123,27 @@ export async function requestCosmicWebAi({ userId, userRole, agentId, mode, pers
   const requestId = randomUUID();
   const key = keyFor(agentId, requestId);
   return new Promise((resolve, reject) => {
-    const entry = { userId, userRole, agentId, agent, mode, resolve, reject, timer: null, signal, onAbort: null, sent: false };
+    const entry = { userId, userRole, agentId, agent, mode, resolve, reject, timer: null, signal, onAbort: null, sent: false, abandoned: false };
     const timer = setTimeout(() => {
       const wasSent = entry.sent;
-      if (settle(key, fail(504, 'Agent briefing timed out')) && wasSent) {
+      if (settle(key, fail(504, 'Agent briefing timed out')) && wasSent && supportsCancel) {
         void sendToAgent(agent, { type: 'cosmic_web_ai_cancel', requestId }).catch(() => {});
       }
     }, 75_000);
     timer.unref();
     const onAbort = () => {
-      const wasSent = entry.sent;
       const err = signal?.reason?.status === 499 ? fail(499, 'Cosmic Web request cancelled') : fail(503, 'Cosmic Web is stopping');
-      if (settle(key, err) && wasSent) {
+      const isShutdown = err.status === 503;
+      if (!supportsCancel && entry.sent && !isShutdown) {
+        // Legacy v1 Agent ignores cancel frames: reject caller now, but keep accounting for
+        // the occupied remote slot until the legacy Agent replies, times out, or disconnects.
+        entry.abandoned = true;
+        entry.signal?.removeEventListener('abort', onAbort);
+        reject(err);
+        return;
+      }
+      const wasSent = entry.sent;
+      if (settle(key, err) && wasSent && supportsCancel) {
         void sendToAgent(agent, { type: 'cosmic_web_ai_cancel', requestId }).catch(() => {});
       }
     };
@@ -87,8 +151,8 @@ export async function requestCosmicWebAi({ userId, userRole, agentId, mode, pers
     entry.onAbort = onAbort;
     pending.set(key, entry);
     signal?.addEventListener('abort', onAbort, { once: true });
-    sendToAgent(agent, { type: 'cosmic_web_ai_request', requestId, mode, perspective, language, payload }, {
-      shouldSend: () => pending.get(key) === entry && agents.get(agentId) === agent && !signal?.aborted,
+    sendToAgent(agent, { type: 'cosmic_web_ai_request', schemaVersion: 2, requestId, mode, perspective, language, payload }, {
+      shouldSend: () => pending.get(key) === entry && !entry.abandoned && agents.get(agentId) === agent && !signal?.aborted,
     })
       .then(sent => {
         if (!sent) settle(key, fail(503, 'Agent disconnected'));
@@ -169,8 +233,17 @@ export function clearCosmicWebAiRequestsForAgent(agentId, targetAgent = null) {
   for (const [key, entry] of pending) {
     if (entry.agentId === agentId && (targetAgent == null || entry.agent === targetAgent)) settle(key, fail(503, 'Agent disconnected'));
   }
+  const waiters = legacySlotWaiters.get(agentId);
+  if (waiters) {
+    legacySlotWaiters.delete(agentId);
+    for (const wake of waiters) wake();
+  }
 }
 export function clearAllCosmicWebAiRequests() {
   for (const key of pending.keys()) settle(key, fail(503, 'Cosmic Web is stopping'));
+  for (const waiters of legacySlotWaiters.values()) {
+    for (const wake of waiters) wake();
+  }
+  legacySlotWaiters.clear();
   rate.clear();
 }

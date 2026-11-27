@@ -172,6 +172,26 @@ export function backfillItemMedia(sourceId, ownerUserId, url, media) {
   return sql("UPDATE cw_items SET media_json=? WHERE source_id=? AND owner_user_id IS ? AND url=? AND media_json='[]'")
     .run(JSON.stringify(media.slice(0, 3)), sourceId, ownerUserId ?? null, url).changes;
 }
+export function listSourcesForUserDomain(userId, domainId) {
+  if (!userId || !domainId) return [];
+  return sql('SELECT * FROM cw_sources WHERE owner_user_id=? AND domain_id=? ORDER BY id').all(userId, domainId);
+}
+export function remapUserSource({ userId, oldSourceId, newSourceId, newDomainId }) {
+  if (!userId || !oldSourceId || !newSourceId || !newDomainId) return;
+  if (oldSourceId === newSourceId) {
+    sql('UPDATE cw_sources SET domain_id=? WHERE owner_user_id=? AND id=?').run(newDomainId, userId, oldSourceId);
+    sql('UPDATE cw_items SET domain_id=? WHERE owner_user_id=? AND source_id=?').run(newDomainId, userId, oldSourceId);
+    return;
+  }
+  const row = sql('SELECT * FROM cw_sources WHERE id=? AND owner_user_id=?').get(oldSourceId, userId);
+  if (!row) return;
+  sql(`INSERT INTO cw_sources(id, owner_user_id, domain_id, name, url, kind, enabled, last_attempt_at, last_success_at, last_error)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(id) DO UPDATE SET domain_id=excluded.domain_id, name=excluded.name`)
+    .run(newSourceId, userId, newDomainId, row.name, row.url, row.kind, row.enabled, row.last_attempt_at, row.last_success_at, row.last_error);
+  sql('UPDATE cw_items SET source_id=?, domain_id=? WHERE owner_user_id=? AND source_id=?').run(newSourceId, newDomainId, userId, oldSourceId);
+  sql('DELETE FROM cw_sources WHERE id=? AND owner_user_id=?').run(oldSourceId, userId);
+}
 export function migrateCustomDomainId(userId, oldId, newId) {
   if (!userId || !oldId || !newId || oldId === newId) return;
   sql('UPDATE cw_sources SET domain_id=? WHERE owner_user_id=? AND domain_id=?').run(newId, userId, oldId);

@@ -9,7 +9,9 @@ const maxCacheBytes = 24 * 1024 ** 2;
 const ttl = 30 * 60_000;
 const tokenTtlSec = 2 * 3600;
 const maxGlobalInflight = 8;
-const maxUserInflight = 2;
+const maxUserInflight = 3;
+const maxGlobalQueued = 24;
+const maxUserQueued = 8;
 const maxUserRatePerMin = 60;
 const failure = (status, message) => Object.assign(new Error(message), { status });
 const allow = new Set(['image/jpeg', 'image/png', 'image/gif', 'image/webp', 'image/avif']);
@@ -77,47 +79,78 @@ function sniff(bytes) {
 
 /** Fetch buffered bytes under strict limits; callers must not forward inbound headers. */
 export function createMediaProxy({ fetcher = safeFetch, dnsLookup, now = Date.now, requireSigned = false } = {}) {
-  const cache = new Map(), inflight = new Map();
+  const cache = new Map();
+  // Map<key, { promise, taskController, waiters: Set<object> }>
+  const inflight = new Map();
   const userInflight = new Map();
+  const userQueued = new Map();
   const userRate = new Map();
+  const waitQueue = [];
   let size = 0;
   const drop = key => { size -= cache.get(key).value.body.length; cache.delete(key); };
-  return async function proxyMedia(rawUrl, options = {}) {
-    const { userId = null, exp = null, sig = null, signal } = options || {};
-    const mustVerify = options?.requireSigned ?? requireSigned;
-    const key = canonicalMediaUrl(rawUrl);
-    if (!key) throw failure(400, 'Expected an HTTP(S) image URL');
-    if (mustVerify && !verifyMediaProxySignature({ rawUrl: key, userId, exp, sig, now: now() })) {
-      throw failure(403, 'Invalid or expired media reference');
-    }
-    const currentNow = now();
-    for (const [url, entry] of cache) if (entry.expires <= currentNow) drop(url);
-    const hit = cache.get(key);
-    if (hit) { cache.delete(key); cache.set(key, hit); return hit.value; }
-    if (inflight.has(key)) return inflight.get(key);
 
-    const ownerKey = userId || '__anon__';
-    // Per-user rate limit on uncached outbound fetches
-    const windowStart = currentNow - 60_000;
-    for (const [uid, times] of userRate) {
-      if (!times.length || times.at(-1) <= windowStart) userRate.delete(uid);
-    }
-    const recent = (userRate.get(ownerKey) ?? []).filter(t => t > windowStart);
-    if (recent.length >= maxUserRatePerMin) throw failure(429, 'Media request rate limit reached');
+  function attachWaiter(entry, signal) {
+    return new Promise((resolve, reject) => {
+      const waiter = {};
+      const onAbort = () => {
+        entry.waiters.delete(waiter);
+        if (entry.waiters.size === 0) {
+          entry.taskController.abort();
+        }
+        reject(failure(499, 'Image request cancelled'));
+      };
+      if (signal?.aborted) {
+        onAbort();
+        return;
+      }
+      entry.waiters.add(waiter);
+      signal?.addEventListener('abort', onAbort, { once: true });
+      entry.promise.then(
+        val => {
+          signal?.removeEventListener('abort', onAbort);
+          entry.waiters.delete(waiter);
+          if (!signal?.aborted) resolve(val);
+        },
+        err => {
+          signal?.removeEventListener('abort', onAbort);
+          entry.waiters.delete(waiter);
+          if (!signal?.aborted) reject(err);
+        },
+      );
+    });
+  }
 
+  function pumpQueue() {
+    for (let i = 0; i < waitQueue.length; ) {
+      if (inflight.size >= maxGlobalInflight) break;
+      const item = waitQueue[i];
+      if ((userInflight.get(item.ownerKey) ?? 0) >= maxUserInflight) {
+        i++;
+        continue;
+      }
+      waitQueue.splice(i, 1);
+      item.signal?.removeEventListener('abort', item.onAbort);
+      const qCur = (userQueued.get(item.ownerKey) ?? 1) - 1;
+      if (qCur <= 0) userQueued.delete(item.ownerKey);
+      else userQueued.set(item.ownerKey, qCur);
+      item.start();
+    }
+  }
+
+  function startFetch(key, ownerKey) {
+    const existing = inflight.get(key);
+    if (existing) return existing;
+    const taskController = new AbortController();
     const activeForUser = userInflight.get(ownerKey) ?? 0;
-    if (activeForUser >= maxUserInflight) throw failure(429, 'Too many active image requests for this user');
-    if (inflight.size >= maxGlobalInflight) throw failure(429, 'Too many active image requests');
-
-    userRate.set(ownerKey, [...recent, currentNow]);
     userInflight.set(ownerKey, activeForUser + 1);
-    const task = Promise.resolve().then(async () => {
+
+    const promise = Promise.resolve().then(async () => {
       let response;
       try {
         response = await fetcher(key, {
           dnsLookup,
           headers,
-          signal,
+          signal: taskController.signal,
           timeoutMs: 8000,
           maxBytes,
           maxDecompressedBytes: maxBytes,
@@ -128,7 +161,8 @@ export function createMediaProxy({ fetcher = safeFetch, dnsLookup, now = Date.no
               throw failure(415, 'Unsupported image format');
             }
             const rawMime = String(respHeaders?.['content-type'] ?? '').split(';')[0].trim().toLowerCase();
-            if (rawMime && !allow.has(rawMime)) {
+            // Reject BOTH missing and unsupported MIME types before reading body.
+            if (!allow.has(rawMime)) {
               throw failure(415, 'Unsupported image format');
             }
           },
@@ -153,9 +187,84 @@ export function createMediaProxy({ fetcher = safeFetch, dnsLookup, now = Date.no
       const cur = (userInflight.get(ownerKey) ?? 1) - 1;
       if (cur <= 0) userInflight.delete(ownerKey);
       else userInflight.set(ownerKey, cur);
+      pumpQueue();
     });
-    inflight.set(key, task);
-    return task;
+
+    const entry = { promise, taskController, waiters: new Set() };
+    inflight.set(key, entry);
+    return entry;
+  }
+
+  return async function proxyMedia(rawUrl, options = {}) {
+    const { userId = null, exp = null, sig = null, signal } = options || {};
+    const mustVerify = options?.requireSigned ?? requireSigned;
+    const key = canonicalMediaUrl(rawUrl);
+    if (!key) throw failure(400, 'Expected an HTTP(S) image URL');
+    if (mustVerify && !verifyMediaProxySignature({ rawUrl: key, userId, exp, sig, now: now() })) {
+      throw failure(403, 'Invalid or expired media reference');
+    }
+    const currentNow = now();
+    for (const [url, entry] of cache) if (entry.expires <= currentNow) drop(url);
+    const hit = cache.get(key);
+    if (hit) { cache.delete(key); cache.set(key, hit); return hit.value; }
+
+    // Coalesce with an existing in-flight fetch using independent waiter refcounting.
+    if (inflight.has(key)) return attachWaiter(inflight.get(key), signal);
+
+    const ownerKey = userId || '__anon__';
+    // Per-user rate limit on uncached outbound fetches
+    const windowStart = currentNow - 60_000;
+    for (const [uid, times] of userRate) {
+      if (!times.length || times.at(-1) <= windowStart) userRate.delete(uid);
+    }
+    const recent = (userRate.get(ownerKey) ?? []).filter(t => t > windowStart);
+    if (recent.length >= maxUserRatePerMin) throw failure(429, 'Media request rate limit reached');
+
+    const activeForUser = userInflight.get(ownerKey) ?? 0;
+    const queuedForUser = userQueued.get(ownerKey) ?? 0;
+    if (activeForUser < maxUserInflight && inflight.size < maxGlobalInflight) {
+      userRate.set(ownerKey, [...recent, currentNow]);
+      const entry = startFetch(key, ownerKey);
+      return attachWaiter(entry, signal);
+    }
+
+    // Queue bounded gallery bursts smoothly instead of immediately rejecting valid loads with 429.
+    if (queuedForUser >= maxUserQueued || waitQueue.length >= maxGlobalQueued) {
+      throw failure(429, 'Too many active image requests');
+    }
+    userRate.set(ownerKey, [...recent, currentNow]);
+    userQueued.set(ownerKey, queuedForUser + 1);
+
+    return new Promise((resolve, reject) => {
+      const qItem = {
+        ownerKey,
+        signal,
+        onAbort: null,
+        start() {
+          const cachedNow = cache.get(key);
+          if (cachedNow && cachedNow.expires > now()) {
+            resolve(cachedNow.value);
+            return;
+          }
+          const entry = startFetch(key, ownerKey);
+          attachWaiter(entry, signal).then(resolve, reject);
+        },
+      };
+      qItem.onAbort = () => {
+        const idx = waitQueue.indexOf(qItem);
+        if (idx !== -1) waitQueue.splice(idx, 1);
+        const qCur = (userQueued.get(ownerKey) ?? 1) - 1;
+        if (qCur <= 0) userQueued.delete(ownerKey);
+        else userQueued.set(ownerKey, qCur);
+        reject(failure(499, 'Image request cancelled'));
+      };
+      if (signal?.aborted) {
+        qItem.onAbort();
+        return;
+      }
+      signal?.addEventListener('abort', qItem.onAbort, { once: true });
+      waitQueue.push(qItem);
+    });
   };
 }
 
