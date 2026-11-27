@@ -173,11 +173,130 @@ test.describe('Yeaft Cosmos UI', () => {
         { id: 'm2', type: 'tool-use', sessionId: 'sess-earth-1', toolName: 'FileEdit', toolInput: { file_path: 'web/cosmos/shaders-bodies.js' }, timestamp: now - 35000 },
         { id: 'm3', type: 'assistant', sessionId: 'sess-earth-1', content: 'Procedural textures and ray-traced lighting are live with zero external image downloads.', timestamp: now - 15000 },
       ];
+      // Seed an unread finished reply on Saturn + a scheduled task completion notice to exercise Signal Stream
+      chat.yeaftUnreadSessionKeys = {
+        'yeaft:z-agent-cloud:sess-saturn-1': true,
+      };
+      chat.yeaftSessionReplyPreviewByKey = {
+        'yeaft:z-agent-cloud:sess-saturn-1': {
+          text: 'Release guard passed across all 508 modules. Tag v1.0.799 is live with zero regressions.',
+          at: now - 8000,
+          kind: 'assistant',
+          askQuestion: '',
+          updatedAt: now - 8000,
+        },
+      };
+      chat.scheduledTaskNotifications = [{
+        id: JSON.stringify(['z-agent-cloud', 'sess-saturn-nightly', 'run-88']),
+        agentId: 'z-agent-cloud',
+        sessionId: 'sess-saturn-nightly',
+        runId: 'run-88',
+        taskName: 'Nightly Telemetry Check',
+        status: 'completed',
+        error: '',
+        createdAt: now - 12000,
+      }];
     }, mockAgent.agentId);
 
     // Wait for planet nodes to bind and render
     const earthTag = page.locator('.cosmos-planet-node[data-planet-id="earth"] .cosmos-planet-tag');
     await expect(earthTag).toContainText('MacBook-Pro', { timeout: 5000 });
+
+    // 0. Stage subtraction & Top-Right Interstellar Signal Stream:
+    //    - Zero per-planet .cosmos-live-card elements cluttering the Solar System
+    //    - Top-right stream shows unread Saturn reply (2~3 lines), scheduled task notice, and 1-line running Earth card at bottom
+    //    - Dismissing one card via ✓ removes it without opening drawer
+    //    - Finishing Earth's running turn evolves it in-place into an unread reply card instead of disappearing
+    await expect(page.locator('.cosmos-live-card')).toHaveCount(0);
+    const signalStreamEl = page.locator('.cosmos-signal-stream');
+    await expect(signalStreamEl).toBeVisible();
+    const signalCards = signalStreamEl.locator('.cosmos-signal-card');
+    await expect(signalCards).toHaveCount(3);
+    await expect(signalCards.nth(0)).toHaveAttribute('data-planet-theme', 'saturn');
+    await expect(signalCards.nth(0)).toHaveClass(/is-unread/);
+    await expect(signalCards.nth(0)).toContainText('Release guard passed across all 508 modules');
+    await expect(signalCards.nth(1)).toHaveClass(/is-scheduled/);
+    await expect(signalCards.nth(2)).toHaveClass(/is-running/);
+    await expect(page.locator('.cosmos-signal-trigger .cosmos-signal-trigger-count')).toHaveText('2');
+
+    // Dismiss the scheduled task card via ✓ without opening drawer
+    await signalCards.nth(1).hover();
+    await signalCards.nth(1).locator('.cosmos-signal-ack').click();
+    await expect(page.locator('.cosmos-drawer')).toHaveCount(0);
+    await expect(signalCards).toHaveCount(2);
+    await expect(page.locator('.cosmos-signal-trigger .cosmos-signal-trigger-count')).toHaveText('1');
+
+    // Clicking the Saturn unread card opens Saturn's drawer, marks it read, and docks remaining signals into left-edge trigger
+    await signalCards.nth(0).click();
+    await expect(page.locator('.cosmos-drawer')).toBeVisible();
+    await expect(page.locator('.cosmos-drawer')).toHaveAttribute('data-planet-theme', 'saturn');
+    await expect(signalStreamEl).toHaveCount(0);
+    // Open the drawer-docked Signal Stream popover via the top-right trigger and close it with 1st Escape (drawer stays open)
+    await page.locator('.cosmos-signal-trigger').click();
+    const dockedPopover = page.locator('.cosmos-signal-popover.is-drawer-docked');
+    await expect(dockedPopover).toBeVisible();
+    await expect(dockedPopover.locator('.cosmos-signal-card')).toHaveCount(1);
+    await page.keyboard.press('Escape');
+    await expect(dockedPopover).toHaveCount(0);
+    await expect(page.locator('.cosmos-drawer')).toBeVisible();
+    // Close drawer back to Saturn focus, then return to full Solar System view so Earth is centered back in-viewport
+    await page.keyboard.press('Escape');
+    await expect(page.locator('.cosmos-drawer')).toHaveCount(0);
+    if (await page.locator('.cosmos-pf-return').isVisible()) {
+      await page.locator('.cosmos-pf-return').click();
+      await expect(page.locator('.cosmos-planet-focus-dock')).toHaveCount(0);
+    }
+    await expect(signalStreamEl).toBeVisible();
+    await expect(signalCards).toHaveCount(1);
+    await expect(signalCards.nth(0)).toHaveClass(/is-running/);
+    // Simulate Earth's background turn completing while drawer is closed (real handleYeaftOutput vp_turn_end):
+    // verifies it does NOT vanish, instead evolves in-place into an unread 2~3 line reply card.
+    const earthSignalKeyBefore = await signalCards.nth(0).getAttribute('data-signal-key');
+    await page.evaluate((agentId) => {
+      const chat = window.Pinia.useChatStore();
+      chat.handleYeaftOutput({
+        agentId,
+        conversationId: `yeaft_${agentId}`,
+        sessionId: 'sess-earth-1',
+        event: { type: 'vp_turn_end', turnId: 'turn-earth-1', sessionId: 'sess-earth-1', vpId: 'vp-1', reason: 'end_turn' },
+      });
+      chat.yeaftSessionTurnsBySession[`${agentId}\u001fsess-earth-1`].turns = [];
+      chat.yeaftProcessingSessions = {};
+    }, mockAgent.agentId);
+    await expect(signalCards).toHaveCount(1);
+    await expect(signalCards.nth(0)).toHaveAttribute('data-signal-key', earthSignalKeyBefore);
+    await expect(signalCards.nth(0)).toHaveClass(/is-unread/);
+    await expect(signalCards.nth(0)).toContainText('Procedural textures and ray-traced lighting');
+    await expect(page.locator('.cosmos-signal-trigger .cosmos-signal-trigger-count')).toHaveText('1');
+    // Re-arm running state for subsequent Drawer Session Status & auto-route checks
+    await page.evaluate((agentId) => {
+      const chat = window.Pinia.useChatStore();
+      const now = Date.now();
+      const convId = `yeaft_${agentId}`;
+      chat.yeaftProcessingSessions = { [`${agentId}\u001fsess-earth-1`]: true };
+      chat.yeaftSessionTurnsBySession[`${agentId}\u001fsess-earth-1`] = {
+        connectionGeneration: chat.chatHistoryConnectionGeneration || 1,
+        conversationId: convId,
+        turns: [{
+          userTurnId: 'ut-earth-1',
+          userMessageId: 'm1',
+          state: 'running',
+          startedAt: now - 12000,
+          executions: [{ vpId: 'vp-1', turnId: 'turn-earth-1', threadId: 'th-1', state: 'running' }],
+        }],
+      };
+      chat.activeVpTurns[`${agentId}\u001fturn-earth-1`] = {
+        agentId,
+        sessionId: 'sess-earth-1',
+        vpId: 'vp-1',
+        turnId: 'turn-earth-1',
+        threadId: 'th-1',
+        userTurnId: 'ut-earth-1',
+        conversationId: convId,
+        connectionGeneration: chat.chatHistoryConnectionGeneration || 1,
+        startedAt: now - 12000,
+      };
+    }, mockAgent.agentId);
 
     // Helper: planets gently orbit in real time, so click/hover at current screen center
     async function clickOrbiting(locator) {
@@ -192,6 +311,10 @@ test.describe('Yeaft Cosmos UI', () => {
     }
 
     // 1. Clicking a planet opens Quick Auto-Route Composer (NOT right drawer)
+    await expect(async () => {
+      const b = await earthTag.boundingBox();
+      expect(Boolean(b && b.x > 10 && b.x + b.width < 1270 && b.y > 10 && b.y + b.height < 710)).toBe(true);
+    }).toPass({ timeout: 3000 });
     await clickOrbiting(earthTag);
     await expect(page.locator('.cosmos-quick-composer')).toBeVisible();
     await expect(page.locator('.cosmos-drawer')).toHaveCount(0);
@@ -550,9 +673,11 @@ test.describe('Yeaft Cosmos UI', () => {
     await page.locator('.cosmos-drawer-head-left .cosmos-icon-btn').first().click();
     await expect(page.locator('.cosmos-history-drawer')).toHaveCount(0);
 
-    // Close drawer via Escape
+    // Close drawer via Escape, then return from planet focus to Sun center via Escape
     await page.keyboard.press('Escape');
     await expect(page.locator('.cosmos-drawer')).toHaveCount(0);
+    await page.keyboard.press('Escape');
+    await expect(page.locator('.cosmos-planet-focus-dock')).toHaveCount(0);
 
     // 3. Hover planet -> click specific session -> opens right planetary drawer
     // Note: after closing the drawer, camera centerShiftX smoothly lerps back,
@@ -567,17 +692,18 @@ test.describe('Yeaft Cosmos UI', () => {
     await expect(page.locator('.cosmos-drawer')).toBeVisible();
     await expect(page.locator('.cosmos-drawer')).toHaveAttribute('data-planet-theme', 'saturn');
     await page.keyboard.press('Escape');
+    await page.keyboard.press('Escape');
 
-    // 3b. Verify the 3 deep-sky portals (Galaxy, Cosmic Web, Event Horizon) have ZERO overlaid text labels
+    // 3b. Verify the 2 deep-sky portals (Galaxy, Cosmic Web) have ZERO overlaid text labels (Event Horizon is Sun-zoom only)
     const portals = page.locator('.cosmos-sky-anomaly');
-    await expect(portals).toHaveCount(3);
+    await expect(portals).toHaveCount(2);
     await expect(page.locator('.cosmos-sky-anomaly-label')).toHaveCount(0);
     for (const pText of await portals.allTextContents()) {
       expect(pText.trim()).toBe('');
     }
 
-    // 4. Cosmic Event: open almanac (auto-zoom defaults to OFF for serene distant unfolding), verify toggle,
-    // trigger distant event with spatial beacon -> click beacon to zoom in -> verify timeline & telemetry -> stop
+    // 4. Cosmic Events: open almanac (auto-zoom defaults to OFF for serene distant unfolding), verify toggle,
+    // trigger TWO concurrent distant events with ZERO reticle circles -> verify +1 badge -> observe -> stop
     await page.locator('.cosmos-event-main').click();
     await expect(page.locator('.cosmos-event-almanac')).toBeVisible();
     const autoZoomSwitch = page.locator('.cosmos-almanac-pref .cosmos-switch');
@@ -588,12 +714,18 @@ test.describe('Yeaft Cosmos UI', () => {
     await expect(autoZoomSwitch).toHaveAttribute('aria-checked', 'false');
     await page.locator('.cosmos-almanac-row').first().click();
 
-    // Auto-zoom is off: no full-screen observation dock yet, distant reticle beacon appears instead
+    // Auto-zoom is off: no observation dock yet, ZERO distracting circular reticle beacons
     await expect(page.locator('.cosmos-watch-dock')).toHaveCount(0);
-    await expect(page.locator('.cosmos-event-beacon')).toBeVisible({ timeout: 5000 });
+    await expect(page.locator('.cosmos-event-beacon')).toHaveCount(0);
 
-    // Click distant beacon -> telescope slews in & opens observation dock with bearing & scrubbable timeline
-    await page.locator('.cosmos-event-beacon').click();
+    // Trigger a 2nd concurrent event from Almanac -> +1 concurrent badge appears on pill
+    await page.locator('.cosmos-event-main').click();
+    await expect(page.locator('.cosmos-event-almanac')).toBeVisible();
+    await page.locator('.cosmos-almanac-row').nth(2).click();
+    await expect(page.locator('.cosmos-event-multi')).toContainText('+1');
+
+    // Click top Watch button -> smoothly approaches on shared canvas & opens observation dock with bearing & timeline
+    await page.locator('.cosmos-event-watch-btn').click();
     await expect(page.locator('.cosmos-watch-dock')).toBeVisible({ timeout: 5000 });
     await expect(page.locator('.cosmos-ewd-bearing')).toBeVisible();
     await expect(page.locator('.cosmos-ewd-timeline')).toBeVisible();
@@ -601,7 +733,7 @@ test.describe('Yeaft Cosmos UI', () => {
     // Stop immediately via watch dock stop button
     await page.locator('.cosmos-watch-dock .cosmos-ewd-btn.is-stop').click();
     await expect(page.locator('.cosmos-watch-dock')).toHaveCount(0);
-    await expect(page.locator('.cosmos-event-beacon')).toHaveCount(0);
+    await expect(page.locator('.cosmos-event-multi')).toHaveCount(0);
 
     // Silence automatic random cosmic events via stop button
     await page.locator('.cosmos-event-stop-btn').click();
@@ -703,6 +835,17 @@ test.describe('Yeaft Cosmos UI', () => {
         config: { model: 'copilot/model-08', modelEffort: 'high' },
         roster: [{ id: 'vp-1' }],
       }, agentId);
+      chat.yeaftUnreadSessionKeys = {
+        [`yeaft:${agentId}:sess-mobile-1`]: true,
+      };
+      chat.yeaftSessionReplyPreviewByKey = {
+        [`yeaft:${agentId}:sess-mobile-1`]: {
+          text: 'Mobile build artifacts verified cleanly on portrait viewport.',
+          at: Date.now(),
+          kind: 'assistant',
+          updatedAt: Date.now(),
+        },
+      };
       // Record & acknowledge scoped Drawer session update_config writes for this seeded session
       window.__drawerConfigUpdates = [];
       const origCrud = chat.sessionCrudRequest?.bind(chat);
@@ -724,6 +867,19 @@ test.describe('Yeaft Cosmos UI', () => {
     const saturnNode = page.locator('.cosmos-planet-node[data-planet-id="saturn"]');
     await expect(earthNode.locator('.cosmos-planet-tag')).toContainText('MacBook-Pro', { timeout: 5000 });
     await expect(saturnNode.locator('.cosmos-planet-tag')).toContainText('Cloud-Linux', { timeout: 5000 });
+
+    // Mobile portrait: zero per-planet micro-lists, no desktop floating card stack, compact signal capsule + banner + mobile sheet
+    await expect(page.locator('.cosmos-live-card')).toHaveCount(0);
+    await expect(page.locator('.cosmos-signal-stream')).toHaveCount(0);
+    await expect(page.locator('.cosmos-signal-mobile-banner')).toBeVisible();
+    await expect(page.locator('.cosmos-signal-trigger .cosmos-signal-trigger-count')).toHaveText('1');
+    await page.locator('.cosmos-signal-banner-close').click();
+    await expect(page.locator('.cosmos-signal-mobile-banner')).toHaveCount(0);
+    await page.locator('.cosmos-signal-trigger').click();
+    await expect(page.locator('.cosmos-signal-popover.is-mobile')).toBeVisible();
+    await expect(page.locator('.cosmos-signal-popover.is-mobile .cosmos-signal-card')).toContainText('Mobile build artifacts verified');
+    await page.keyboard.press('Escape');
+    await expect(page.locator('.cosmos-signal-popover')).toHaveCount(0);
 
     // Verify both inner (Earth) and outer (Saturn) planets stay within the 390px phone viewport
     const saturnBox = await saturnNode.locator('.cosmos-planet-tag').boundingBox();

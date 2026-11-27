@@ -18,6 +18,7 @@ import {
 } from './helpers/work-center-browser-state.js';
 import { findCatalogModel, normalizeModelEffort } from '../utils/modelRefs.js';
 import { setLocale, getLocale } from '../utils/i18n.js';
+import { applyDocumentTheme } from '../utils/document-theme.js';
 import { agentSupportsYeaftPlugins } from '../utils/yeaft-plugin-capability.js';
 import { agentSupportsYeaftManagedSkills } from '../utils/yeaft-managed-skill-capability.js';
 
@@ -34,6 +35,12 @@ import * as watchdogHelpers from './helpers/watchdog.js';
 import { conversationRepositoryFor } from './helpers/conversation-repository.js';
 import * as yeaftViewHelpers from './helpers/yeaft-view.js';
 import * as yeaftAutoRouteHelpers from './helpers/yeaft-auto-route.js';
+import {
+  extractLatestAssistantPreview,
+  recordYeaftSessionReplyPreview,
+  clearYeaftSessionReplyPreview,
+  clearYeaftAgentAskPreviews,
+} from './helpers/yeaft-reply-preview.js';
 import {
   clearYeaftConversationPromotion,
   migrateYeaftConversationState,
@@ -233,6 +240,7 @@ function clearYeaftAgentRuntimeState(state, agentId) {
   clearSessionTurns(state, agentId);
   clearYeaftRetryableTurnsForScope(state, agentId);
   clearLiveSessionTools(state, { agentId });
+  clearYeaftAgentAskPreviews(state, agentId);
   if (!agentId) {
     state.activeVpTurns = {};
     state.yeaftQueryProgressByTurn = {};
@@ -754,6 +762,10 @@ export const useChatStore = defineStore('chat', {
     // source Session unread until the user opens it. Key by catalog identity so
     // equal sessionIds owned by different Agents never clear each other.
     yeaftUnreadSessionKeys: {},
+    // Bounded per-Session latest reply & AskUser plain-text cache (keyed by yeaftCatalogKey)
+    // so Cosmos Signal Stream can display 2~3 lines of real AI output even after background
+    // message retention pruning.
+    yeaftSessionReplyPreviewByKey: {},
     scheduledTaskNotifications: [],
     scheduledTaskNotificationOwnerId: null,
     scheduledTaskReceiptProtocolSupported: false,
@@ -4124,6 +4136,7 @@ export const useChatStore = defineStore('chat', {
       })).size;
       this.clearYeaftHistoryMemory({ agentId, sessionId, preserveLiveRows: true,
         preserveSessionOwner: true, preserveTranscript: true });
+      this.clearYeaftSessionPreview(sessionId, agentId);
       this.yeaftTurnDeleteHistoryBySession = {
         ...this.yeaftTurnDeleteHistoryBySession,
         [key]: { agentId, sessionId, epoch: crypto.randomUUID(), lastDeletedTurnId: turnId || previous?.lastDeletedTurnId,
@@ -4157,6 +4170,11 @@ export const useChatStore = defineStore('chat', {
           settleYeaftTurnDeletion(this, pending, { ok: false, errorCode: 'stale' });
         }
         this.yeaftTurnDeleteHistoryBySession = {};
+        this.yeaftUnreadSessionKeys = {};
+        this.clearYeaftSessionPreview();
+      } else if (targetAgentId && targetSessionId && !preserveLiveRows) {
+        this.clearYeaftSessionPreview(targetSessionId, targetAgentId);
+        this.markYeaftSessionRead(targetSessionId, targetAgentId);
       }
       const sessionKey = targetAgentId && targetSessionId
         ? yeaftHistoryIdentityKey(targetAgentId, targetSessionId)
@@ -5214,8 +5232,10 @@ export const useChatStore = defineStore('chat', {
     markVisibleScheduledTaskSessionRead() {
       const route = this.activeSessionRoute;
       if (!scheduledTaskHelpers.isScheduledTaskSessionVisible(this, route?.sessionId, route?.agentId)) return false;
-      return scheduledTaskHelpers.markScheduledTaskSessionRead(this, route.sessionId, route.agentId,
+      const readUnread = this.markYeaftSessionRead(route.sessionId, route.agentId);
+      const readTasks = scheduledTaskHelpers.markScheduledTaskSessionRead(this, route.sessionId, route.agentId,
         getSessionsStore()?.sessionById?.(route.sessionId, route.agentId)?.task?.lastRun);
+      return readTasks || readUnread;
     },
     handleYeaftOutput(msg) {
       if (!msg) return;
@@ -5524,11 +5544,35 @@ export const useChatStore = defineStore('chat', {
           const conversationId = resolveYeaftEnvelopeConversationId(this, msg.agentId || null, msg.conversationId);
           if (!conversationId || !event.requestId) break;
           const identity = askUserEventIdentity(msg, event, conversationId);
+          const firstQuestion = Array.isArray(event.questions) && event.questions[0]?.question
+            ? event.questions[0].question
+            : (event.question || '');
+          const syncAskPreview = (row) => {
+            if (!identity.sessionId) return;
+            const settled = Boolean(event.answered || event.expired || row?.askAnswered || row?.askExpired);
+            if (settled) {
+              this.recordYeaftSessionPreview(identity.sessionId, identity.agentId, {
+                clearAsk: true,
+                askRequestId: event.requestId,
+              });
+            } else if (firstQuestion) {
+              this.recordYeaftSessionPreview(identity.sessionId, identity.agentId, {
+                askQuestion: firstQuestion,
+                askRequestId: event.requestId,
+                askTurnId: identity.turnId || null,
+                askExpiresAt: event.expiresAt || 0,
+                at: event.createdAt || Date.now(),
+              });
+            }
+          };
           const linkPrompt = () => {
             const messages = this.messagesMap[conversationId] || [];
             const existingRow = findAskUserRow(messages, identity, conversationId);
             if (existingRow) {
-              if (existingRow.askAnswered || existingRow.askExpired) return true;
+              if (existingRow.askAnswered || existingRow.askExpired) {
+                syncAskPreview(existingRow);
+                return true;
+              }
               existingRow.toolName = 'AskUserQuestion';
               if (event.toolCallId && !existingRow.toolId) existingRow.toolId = event.toolCallId;
               existingRow.agentId = identity.agentId || existingRow.agentId || null;
@@ -5548,6 +5592,7 @@ export const useChatStore = defineStore('chat', {
               existingRow.isHistory = false;
               const terminal = takeAskUserTerminal(this, identity);
               if (terminal) applyAskUserTerminal(existingRow, terminal);
+              syncAskPreview(existingRow);
               this.messagesMap = { ...this.messagesMap, [conversationId]: messages.slice() };
               return true;
             }
@@ -5575,11 +5620,22 @@ export const useChatStore = defineStore('chat', {
             };
             const terminal = takeAskUserTerminal(this, identity);
             if (terminal) applyAskUserTerminal(promptRow, terminal);
+            syncAskPreview(promptRow);
             messages.push(promptRow);
             this.messagesMap = { ...this.messagesMap, [conversationId]: messages.slice() };
             return true;
           };
           if (!linkPrompt()) {
+            // If no matching tool-use row is resident yet (e.g. background session), only
+            // record the live question when no buffered terminal event has already settled it.
+            const bufferedKey = askUserTerminalKey(identity);
+            const buffered = this._yeaftAskTerminalEvents?.[bufferedKey]?.event || null;
+            const alreadySettled = Boolean(
+              event.answered
+              || event.expired
+              || (buffered && !(buffered.type === 'ask_user_answer_rejected' && buffered.reason === 'agent_unavailable')),
+            );
+            syncAskPreview(alreadySettled ? { askExpired: true } : null);
             let retries = 0;
             const retryInterval = setInterval(() => {
               retries += 1;
@@ -5596,6 +5652,12 @@ export const useChatStore = defineStore('chat', {
           if (!conversationId || !event.requestId) break;
           const messages = this.messagesMap[conversationId] || [];
           const identity = askUserEventIdentity(msg, event, conversationId);
+          if (identity.sessionId && !(event.type === 'ask_user_answer_rejected' && event.reason === 'agent_unavailable')) {
+            this.recordYeaftSessionPreview(identity.sessionId, identity.agentId, {
+              clearAsk: true,
+              askRequestId: event.requestId,
+            });
+          }
           const askMsg = findAskUserRow(messages, identity, conversationId);
           if (!askMsg) {
             rememberAskUserTerminal(this, identity, event);
@@ -6589,11 +6651,30 @@ export const useChatStore = defineStore('chat', {
               mutated = true;
             }
             if (mutated) this.messagesMap = { ...this.messagesMap, [conv]: rows.slice() };
+            if (terminalSessionId) {
+              this.recordYeaftSessionPreview(terminalSessionId, terminalAgentId, {
+                clearAsk: true,
+                askTurnId: event.turnId || null,
+              });
+              const replyPreview = extractLatestAssistantPreview(rows, terminalSessionId, event.turnId || null);
+              if (replyPreview.text) {
+                this.recordYeaftSessionPreview(terminalSessionId, terminalAgentId, {
+                  text: replyPreview.text,
+                  at: replyPreview.at || stampedAt,
+                  kind: 'assistant',
+                });
+              }
+            }
             // The provider `result` normally arrives first, but metadata is the
             // guaranteed terminal boundary for every VP. Re-prune idempotently
             // here so dropped/reordered data frames cannot leave live rows
             // resident forever.
             this.pruneConversationMessageRetention(conv, terminalSessionId, terminalAgentId);
+          } else if (terminalSessionId) {
+            this.recordYeaftSessionPreview(terminalSessionId, terminalAgentId, {
+              clearAsk: true,
+              askTurnId: event.turnId || null,
+            });
           }
           break;
         }
@@ -6637,6 +6718,14 @@ export const useChatStore = defineStore('chat', {
           }
           this.activeVpTurns = activeRest;
           this.stoppingVpTurnIds = stoppingRest;
+          if (removedSessionId) {
+            for (const abortedTurnId of explicitTurnIds) {
+              this.recordYeaftSessionPreview(removedSessionId, msg.agentId || null, {
+                clearAsk: true,
+                askTurnId: abortedTurnId,
+              });
+            }
+          }
           this.clearYeaftSessionProcessingIfIdle(removedSessionId || null, { agentId: msg.agentId || null });
           break;
         }
@@ -6644,6 +6733,7 @@ export const useChatStore = defineStore('chat', {
           if (Array.isArray(event.aborted)) retireQueryProgress(this, msg.agentId, envelopeConversationId, event.aborted);
           const sessionId = event.sessionId || msg.sessionId || null;
           if (sessionId) {
+            this.recordYeaftSessionPreview(sessionId, msg.agentId || null, { clearAsk: true });
             this.activeVpTurns = Object.fromEntries(
               Object.entries(this.activeVpTurns || {}).filter(([, info]) => (
                 !matchesYeaftRuntimeIdentity(info, sessionId, msg.agentId || null)
@@ -7050,12 +7140,34 @@ export const useChatStore = defineStore('chat', {
     // on disk after a refresh/re-entry; switching back to that group must
     // still ask the agent for authoritative history unless this group has
     // already completed a history load in the current UI lifecycle.
+    recordYeaftSessionPreview(sessionId, agentId = null, patch = {}) {
+      if (!sessionId) return false;
+      const ownerAgentId = resolveAgentIdForSession(this, sessionId, agentId);
+      if (!ownerAgentId) return false;
+      return recordYeaftSessionReplyPreview(this, {
+        catalogKey: yeaftCatalogKey(ownerAgentId, sessionId),
+        ...patch,
+      });
+    },
+
+    clearYeaftSessionPreview(sessionId = null, agentId = null) {
+      if (!sessionId) return clearYeaftSessionReplyPreview(this, null);
+      const ownerAgentId = resolveAgentIdForSession(this, sessionId, agentId);
+      if (!ownerAgentId) return false;
+      return clearYeaftSessionReplyPreview(this, yeaftCatalogKey(ownerAgentId, sessionId));
+    },
+
     markYeaftSessionUnread(sessionId, agentId = null) {
       if (!sessionId) return false;
       const ownerAgentId = resolveAgentIdForSession(this, sessionId, agentId);
       if (!ownerAgentId) return false;
       const catalogKey = yeaftCatalogKey(ownerAgentId, sessionId);
       const visible = this.currentView === 'yeaft'
+        && !this.yeaftConversationCovered
+        && !this.workCenterOpen
+        && !this.pluginCenterOpen
+        && !this.digitalPersonOpen
+        && !(this.workbenchExpanded && this.workbenchMaximized)
         && this.yeaftActiveSessionFilter === sessionId
         && resolveAgentIdForSession(this, sessionId) === ownerAgentId;
       if (visible || this.yeaftUnreadSessionKeys?.[catalogKey]) return false;
@@ -7075,6 +7187,88 @@ export const useChatStore = defineStore('chat', {
       const { [catalogKey]: _read, ...remainingUnread } = this.yeaftUnreadSessionKeys;
       this.yeaftUnreadSessionKeys = remainingUnread;
       return true;
+    },
+
+    hasKnownYeaftSession(sessionId, agentId = null) {
+      if (!sessionId) return false;
+      const ownerAgentId = resolveAgentIdForSession(this, sessionId, agentId);
+      if (!ownerAgentId) return false;
+      const catalogKey = yeaftCatalogKey(ownerAgentId, sessionId);
+      return (this.sidebarSessionCatalog || []).some(row => row?.catalogKey === catalogKey)
+        || (this.sessionCatalog || []).some(row => row?.catalogKey === catalogKey)
+        || Boolean(getSessionsStore()?.sessionById?.(sessionId, ownerAgentId));
+    },
+
+    /**
+     * Acknowledge unread/scheduled-task signals for a Yeaft Session.
+     * - `sessionRead: false` (card dismiss / Mark-all-read): clears local unread and uploads
+     *   exact-run scheduled-task receipts only, never sending `sessionRead: true` (which the
+     *   Server rejects with `session_access_denied` for deleted or non-Yeaft sessions).
+     * - `sessionRead: true` (foreground visit to a catalog-backed Yeaft Session): also sends
+     *   the foreground `sessionRead` expansion when the Session is known to be a Yeaft Session.
+     */
+    acknowledgeYeaftSessionSignals(sessionId, agentId = null, { sessionRead = false } = {}) {
+      if (!sessionId) return false;
+      const ownerAgentId = resolveAgentIdForSession(this, sessionId, agentId);
+      if (!ownerAgentId) return false;
+      const readUnread = this.markYeaftSessionRead(sessionId, ownerAgentId);
+      let readTasks = false;
+      if (sessionRead && this.hasKnownYeaftSession(sessionId, ownerAgentId)) {
+        const lastRun = getSessionsStore()?.sessionById?.(sessionId, ownerAgentId)?.task?.lastRun || null;
+        readTasks = scheduledTaskHelpers.markScheduledTaskSessionRead(this, sessionId, ownerAgentId, lastRun);
+      } else {
+        const matching = (this.scheduledTaskNotifications || [])
+          .filter(item => item?.agentId === ownerAgentId && item?.sessionId === sessionId);
+        for (const item of matching) {
+          if (scheduledTaskHelpers.dismissScheduledTaskNotification(this, item.id)) readTasks = true;
+        }
+      }
+      return readUnread || readTasks;
+    },
+
+    acknowledgeAllYeaftSessionSignals() {
+      const pairs = new Map();
+      const catalogByKey = new Map();
+      for (const row of [...(this.sidebarSessionCatalog || []), ...(this.sessionCatalog || [])]) {
+        const ref = row?.routeRef;
+        if (row?.catalogKey && ref?.runtimeProvider === 'yeaft' && ref.agentId && ref.sessionId) {
+          catalogByKey.set(row.catalogKey, { agentId: ref.agentId, sessionId: ref.sessionId });
+        }
+      }
+      for (const catalogKey of Object.keys(this.yeaftUnreadSessionKeys || {})) {
+        const matched = catalogByKey.get(catalogKey);
+        if (matched) {
+          pairs.set(`${matched.agentId}\u001f${matched.sessionId}`, matched);
+          continue;
+        }
+        if (!catalogKey.startsWith('yeaft:')) continue;
+        const rest = catalogKey.slice('yeaft:'.length);
+        const idx = rest.lastIndexOf(':');
+        if (idx <= 0 || idx >= rest.length - 1) continue;
+        const agentId = rest.slice(0, idx);
+        const sessionId = rest.slice(idx + 1);
+        pairs.set(`${agentId}\u001f${sessionId}`, { agentId, sessionId });
+      }
+      const leftoverTaskIds = [];
+      for (const item of (this.scheduledTaskNotifications || [])) {
+        if (item?.agentId && item?.sessionId) {
+          pairs.set(`${item.agentId}\u001f${item.sessionId}`, { agentId: item.agentId, sessionId: item.sessionId });
+        } else if (item?.id) {
+          leftoverTaskIds.push(item.id);
+        }
+      }
+      let changed = false;
+      for (const { agentId, sessionId } of pairs.values()) {
+        if (this.acknowledgeYeaftSessionSignals(sessionId, agentId, { sessionRead: false })) changed = true;
+      }
+      for (const id of leftoverTaskIds) {
+        if (this.dismissScheduledTaskNotification(id)) changed = true;
+      }
+      if (this.yeaftUnreadSessionKeys && Object.keys(this.yeaftUnreadSessionKeys).length > 0) {
+        this.yeaftUnreadSessionKeys = {};
+        changed = true;
+      }
+      return changed;
     },
 
     setActiveSessionFilter(groupId, opts = {}) {
@@ -7130,7 +7324,8 @@ export const useChatStore = defineStore('chat', {
       if (opts.remember !== false && next) {
         gs?.rememberSessionSelection?.(next, opts.agentId || null, gs.activeSessionKey);
       }
-      if (scheduledTaskHelpers.isScheduledTaskSessionVisible(this, next, targetAgentId)) {
+      if (scheduledTaskHelpers.isScheduledTaskSessionVisible(this, next, targetAgentId)
+          && this.hasKnownYeaftSession(next, targetAgentId)) {
         scheduledTaskHelpers.markScheduledTaskSessionRead(this, next, targetAgentId,
           getSessionsStore()?.sessionById?.(next, targetAgentId)?.task?.lastRun);
       }
@@ -9071,8 +9266,7 @@ export const useChatStore = defineStore('chat', {
       // User made an explicit choice — stop following the system from now on.
       this.themeFollowSystem = false;
       localStorage.setItem('theme', this.theme);
-      document.documentElement.setAttribute('data-theme', this.theme);
-      document.documentElement.classList.toggle('light', this.theme === 'light');
+      applyDocumentTheme(this.theme);
     },
 
     setWaitingAnimation(choice) {
@@ -9081,16 +9275,14 @@ export const useChatStore = defineStore('chat', {
     },
 
     initTheme() {
-      document.documentElement.setAttribute('data-theme', this.theme);
-      document.documentElement.classList.toggle('light', this.theme === 'light');
+      applyDocumentTheme(this.theme);
       // If the user has never explicitly picked a theme, follow the OS.
       if (this.themeFollowSystem && typeof window !== 'undefined' && window.matchMedia) {
         const mql = window.matchMedia('(prefers-color-scheme: dark)');
         const apply = (e) => {
           if (!this.themeFollowSystem) return;
           this.theme = e.matches ? 'dark' : 'light';
-          document.documentElement.setAttribute('data-theme', this.theme);
-          document.documentElement.classList.toggle('light', this.theme === 'light');
+          applyDocumentTheme(this.theme);
         };
         if (mql.addEventListener) mql.addEventListener('change', apply);
         else if (mql.addListener) mql.addListener(apply);
@@ -9488,6 +9680,9 @@ export const useChatStore = defineStore('chat', {
       this.currentAgent = null;
       this.currentAgentInfo = null;
       this.yeaftStatusByAgent = {};
+      this.yeaftUnreadSessionKeys = {};
+      this.yeaftSessionReplyPreviewByKey = {};
+      this.yeaftConversationCovered = false;
       this._yeaftRetiredCatalogEpochsByAgent = {};
       this.conversations = [];
       this.activeConversations = [];

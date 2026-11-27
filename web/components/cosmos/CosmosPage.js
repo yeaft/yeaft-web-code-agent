@@ -4,8 +4,8 @@
  * Scales: Cosmic Web (10^24) · Galaxy Library (10^21) · Solar System (10^13) · Event Horizon (10^7)
  * Interactions:
  * - Click planet -> Quick Auto-Route Composer (`yeaft_auto_route_send`) with direct "Open Chat" button
- * - Hover planet -> Session preview card -> Click session -> Right Planetary Conversation Drawer
- * - Click active session in orbit micro-list -> Right Planetary Conversation Drawer
+ * - Hover planet -> Lightweight session preview card -> Click session -> Right Planetary Conversation Drawer
+ * - Top-right Interstellar Signal Stream -> Unified waiting/unread replies, scheduled task notices & running feed
  * - Drag planet onto another planet -> Move or swap Agent orbits (persisted)
  * - Scroll wheel / deep-sky portals / left ruler -> Smooth multi-scale zoom transition
  * - Top-right micro-icons -> Cosmic Constants (+ authentic Yeaft Settings) & Abandon Cosmos (-> classic UI)
@@ -34,21 +34,28 @@ import {
   createCosmicEventState,
   startCosmicEvent,
   focusActiveCosmicEvent,
+  focusCosmicEventByUid,
   unfocusCosmicEvent,
   stopCosmicEvent,
   setCosmicEventZoom,
+  setCosmicEventViewAngles,
+  resetCosmicEventView,
   scrubCosmicEvent,
+  hitTestAmbientEvent,
   pickRandomEventIndex,
   formatEventPhysicalDistance,
 } from '../../cosmos/events-controller.js';
 import { stepCosmosFrame } from '../../cosmos/stage-loop.js';
 import { projectAgentsForCosmos } from '../../cosmos/agent-projection.js';
+import { buildCosmosSignalStream } from '../../cosmos/signal-stream.js';
 import { getLocale } from '../../utils/i18n.js';
+import { setThemeColorSurface } from '../../utils/document-theme.js';
 
 import CosmosQuickComposer from './CosmosQuickComposer.js';
 import CosmosConversationDrawer from './CosmosConversationDrawer.js';
 import CosmosConstantsPopover from './CosmosConstantsPopover.js';
 import CosmosEventsOverlay from './CosmosEventsOverlay.js';
+import CosmosSignalStream from './CosmosSignalStream.js';
 import CosmosGalaxyOverlay from './creations/CosmosGalaxyOverlay.js';
 import CreationInteriorModal from './creations/CreationInteriorModal.js';
 import SettingsPanel from '../SettingsPanel.js';
@@ -63,6 +70,7 @@ export default {
     CosmosConversationDrawer,
     CosmosConstantsPopover,
     CosmosEventsOverlay,
+    CosmosSignalStream,
     CosmosGalaxyOverlay,
     CreationInteriorModal,
     SettingsPanel,
@@ -123,63 +131,19 @@ export default {
               <span class="cosmos-status-pip" :class="planetPipClass(agentsByPlanet[p.id])"></span>
               <span>{{ agentsByPlanet[p.id].name }}</span>
               <span
-                v-if="agentsByPlanet[p.id].liveSessions.length > 0"
+                v-if="agentsByPlanet[p.id].attentionCount > 0 || agentsByPlanet[p.id].liveSessions.length > 0"
                 class="cosmos-planet-count"
-                :class="{ 'is-waiting': agentsByPlanet[p.id].status === 'waiting' }"
-              >{{ agentsByPlanet[p.id].liveSessions.length }}</span>
+                :class="{
+                  'is-waiting': agentsByPlanet[p.id].status === 'waiting',
+                  'is-unread': agentsByPlanet[p.id].status !== 'waiting' && agentsByPlanet[p.id].hasUnread,
+                }"
+              >{{ agentsByPlanet[p.id].attentionCount > 0 ? agentsByPlanet[p.id].attentionCount : agentsByPlanet[p.id].liveSessions.length }}</span>
             </template>
             <template v-else>
               {{ $t('cosmos.planets.' + p.id + '.name') }}
             </template>
           </button>
-
-          <!-- Compact 2~3 line active session micro-list directly below active planets -->
-          <div
-            v-if="agentsByPlanet[p.id] && agentsByPlanet[p.id].liveSessions.length > 0 && constants.livePreviewMode !== 'hover'"
-            :ref="(el) => setMapRef(domRefs.liveCards, p.id, el)"
-            class="cosmos-live-card"
-            :class="{ 'is-waiting': agentsByPlanet[p.id].status === 'waiting' }"
-            @pointerdown.stop
-          >
-            <button
-              v-for="s in agentsByPlanet[p.id].liveSessions.slice(0, 2)"
-              :key="s.catalogKey"
-              type="button"
-              class="cosmos-live-row"
-              @click.stop="openSessionInDrawer(agentsByPlanet[p.id].id, s)"
-            >
-              <div class="cosmos-live-top">
-                <span class="cosmos-status-pip" :class="[s.status, constants.activeFlash && s.status === 'running' ? 'is-flashing' : '']"></span>
-                <span class="cosmos-live-title">{{ s.title }}</span>
-                <span class="cosmos-live-time">{{ s.updatedLabel }}</span>
-              </div>
-              <div
-                class="cosmos-live-snippet"
-                :class="[constants.livePreviewMode === '3' ? 'lines-3' : 'lines-2', { 'is-waiting': s.status === 'waiting' }]"
-              >{{ s.summary }}</div>
-            </button>
-          </div>
         </div>
-
-        <!-- Distant Cosmic Event Spatial Reticle Beacon (visible when distant event plays without auto-zoom) -->
-        <button
-          v-if="eventActiveSnapshot && !eventActiveSnapshot.observing"
-          :ref="(el) => { domRefs.eventBeacon.value = el; }"
-          type="button"
-          class="cosmos-event-beacon"
-          :style="{ '--event-swatch': eventActiveSnapshot.def.swatch }"
-          :aria-label="eventBeaconAriaLabel"
-          style="display:none"
-          @pointerdown.stop
-          @click.stop="onFocusDistantEvent"
-        >
-          <span class="cosmos-event-beacon-reticle" aria-hidden="true"></span>
-          <span class="cosmos-event-beacon-tag">
-            <span class="cosmos-event-beacon-dot" aria-hidden="true"></span>
-            <span class="cosmos-event-beacon-title">{{ $t('cosmos.events.' + eventActiveSnapshot.def.id + '.name') }}</span>
-            <span v-if="eventBeaconCoords" class="cosmos-event-beacon-coords">{{ eventBeaconCoords }}</span>
-          </span>
-        </button>
 
         <!-- Deep-Sky Astronomical Portals (pure visual portals, zero text overlay) -->
         <button
@@ -224,7 +188,7 @@ export default {
 
       <!-- Hover Session Preview Card (Click specific session -> Opens Right Conversation Drawer) -->
       <div
-        v-if="hoverCardAgent && !dragActive && currentBand === 'solar' && !isObservingEvent"
+        v-if="hoverCardAgent && !dragActive && currentBand === 'solar' && !isObservingEvent && !isCompactViewport"
         ref="hoverCardRef"
         class="cosmos-hover-card"
         :style="hoverCardStyle"
@@ -250,7 +214,7 @@ export default {
             class="cosmos-hover-row"
             @click.stop="openSessionInDrawer(hoverCardAgent.id, s)"
           >
-            <span class="cosmos-status-pip" :class="s.status"></span>
+            <span class="cosmos-status-pip" :class="[s.status, { 'is-unread': s.unread && s.status === 'done' }]"></span>
             <div class="cosmos-hover-main">
               <div class="cosmos-hover-top">
                 <span class="cosmos-hover-title">{{ s.title }}</span>
@@ -291,6 +255,7 @@ export default {
         :auto-enabled="constants.eventsAutoEnabled"
         :auto-zoom="constants.eventsAutoZoom"
         :active-event="eventActiveSnapshot"
+        :active-events="eventActiveList"
         :next-event-index="eventNextIndex"
         :countdown-sec="eventCountdownSec"
         @observe="onObserveEvent"
@@ -302,8 +267,59 @@ export default {
         @replay="onReplayEvent"
         @next-random="onNextRandomEvent"
         @set-zoom="onSetEventZoom"
+        @reset-view="onResetEventView"
         @scrub="onScrubEvent"
       />
+
+      <!-- Planet Focus Inspection Dock (0.8x-24x terrain zoom + 3D orbit + Return to Sun) -->
+      <div
+        v-if="focusedCameraPlanetId && currentBand === 'solar' && !isObservingEvent"
+        class="cosmos-planet-focus-dock"
+        :class="{ 'is-corner-dock': Boolean(quickAgent && !drawerOpen) }"
+        @pointerdown.stop
+        @wheel.stop
+      >
+        <span class="cosmos-pf-name">{{ $t('cosmos.planets.' + focusedCameraPlanetId + '.name') }}</span>
+        <div class="cosmos-pf-zoom">
+          <button
+            type="button"
+            class="cosmos-ewd-mini"
+            :title="$t('cosmos.planetFocus.zoomOut')"
+            :aria-label="$t('cosmos.planetFocus.zoomOut')"
+            @click="setPlanetZoom(planetFocusZoom / 1.35)"
+          >−</button>
+          <input
+            type="range"
+            class="cosmos-ewd-range cosmos-pf-range"
+            min="0.8"
+            max="24"
+            step="0.1"
+            :aria-label="$t('cosmos.planetFocus.zoomRange')"
+            :value="planetFocusZoom"
+            @input="setPlanetZoom(Number($event.target.value))"
+          />
+          <button
+            type="button"
+            class="cosmos-ewd-mini"
+            :title="$t('cosmos.planetFocus.zoomIn')"
+            :aria-label="$t('cosmos.planetFocus.zoomIn')"
+            @click="setPlanetZoom(planetFocusZoom * 1.35)"
+          >+</button>
+          <span class="cosmos-ewd-val">{{ planetFocusZoom.toFixed(1) }}×</span>
+        </div>
+        <button
+          v-if="planetFocusRotated"
+          type="button"
+          class="cosmos-ewd-btn"
+          @click="resetPlanetInspect"
+        >{{ $t('cosmos.planetFocus.resetAngle') }}</button>
+        <button
+          type="button"
+          class="cosmos-ewd-btn cosmos-pf-return"
+          :title="$t('cosmos.planetFocus.returnSunTitle')"
+          @click="unfocusPlanet"
+        >{{ $t('cosmos.planetFocus.returnSun') }}</button>
+      </div>
 
       <!-- Cross-Scale Gravity Alert -->
       <button
@@ -316,15 +332,37 @@ export default {
         <span>{{ $t('cosmos.agent.gravityAlert', { name: waitingAgent.name }) }}</span>
       </button>
 
-      <!-- Top-Right Two Immersive Micro-Icons: Cosmic Constants (Λ) + Abandon Cosmos -->
+      <!-- Top-Right Immersive Controls: Signal Stream Capsule + Cosmic Constants (Λ) + Abandon Cosmos -->
       <div class="cosmos-corner-actions" @pointerdown.stop>
+        <button
+          ref="signalTriggerRef"
+          type="button"
+          class="cosmos-signal-trigger"
+          :class="{
+            'is-icon-only': signalStream.badgeCount === 0 && signalStream.runningCount === 0,
+            'has-waiting': signalStream.waitingCount > 0,
+            'has-unread': signalStream.waitingCount === 0 && signalStream.unreadCount > 0,
+            'has-running-only': signalStream.badgeCount === 0 && signalStream.runningCount > 0,
+          }"
+          :aria-expanded="signalTriggerExpanded ? 'true' : 'false'"
+          :title="signalTriggerLabel"
+          :aria-label="signalTriggerLabel"
+          @click.stop="onToggleSignalTrigger"
+        >
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M12 3l1.9 5.6L19.5 10.5l-5.6 1.9L12 18l-1.9-5.6-5.6-1.9 5.6-1.9Z"/>
+          </svg>
+          <span v-if="signalStream.badgeCount > 0" class="cosmos-signal-trigger-count">{{ signalStream.badgeCount }}</span>
+          <span v-else-if="signalStream.runningCount > 0" class="cosmos-signal-trigger-pulse" aria-hidden="true"></span>
+        </button>
+
         <button
           type="button"
           class="cosmos-corner-icon"
           :aria-expanded="constantsOpen ? 'true' : 'false'"
           :title="$t('cosmos.constants.title')"
           :aria-label="$t('cosmos.constants.title')"
-          @click.stop="constantsOpen = !constantsOpen"
+          @click.stop="onToggleConstants"
         >
           <svg viewBox="0 0 24 24"><path d="M5 19 12 5l7 14M8.5 14h7"/></svg>
         </button>
@@ -339,6 +377,26 @@ export default {
           <svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M9 4v16"/></svg>
         </button>
       </div>
+
+      <!-- Unified Interstellar Signal Stream (Top-Right Floating Replies + Drawer-Docked Popover + Mobile Sheet) -->
+      <CosmosSignalStream
+        :items="signalStream.items"
+        :waiting-count="signalStream.waitingCount"
+        :unread-count="signalStream.unreadCount"
+        :running-count="signalStream.runningCount"
+        :badge-count="signalStream.badgeCount"
+        :dismissible-count="signalStream.dismissibleCount"
+        :drawer-open="drawerOpen"
+        :is-compact="isCompactViewport"
+        :preview-mode="constants.livePreviewMode"
+        :popover-open="signalPopoverOpen"
+        :stream-hidden="signalStreamHidden"
+        :suppressed="constantsOpen || isObservingEvent"
+        @open-signal="onOpenSignal"
+        @dismiss-signal="onDismissSignal"
+        @mark-all-read="onMarkAllSignalsRead"
+        @close-popover="closeSignalPopover({ restoreFocus: true })"
+      />
 
       <!-- Cosmic Constants + Authentic Yeaft Settings Popover -->
       <CosmosConstantsPopover
@@ -480,12 +538,12 @@ export default {
     const hoverCardRef = Vue.ref(null);
     const drawerRef = Vue.ref(null);
     const galaxyOverlayRef = Vue.ref(null);
+    const signalTriggerRef = Vue.ref(null);
 
     const domRefs = {
       planets: {},
       hits: {},
       tags: {},
-      liveCards: {},
       portals: {},
       books: {},
       homeBeacon: { value: null },
@@ -503,12 +561,15 @@ export default {
     const rendererMode = Vue.ref('webgl2');
 
     const constantsOpen = Vue.ref(false);
+    const signalPopoverOpen = Vue.ref(false);
+    const signalStreamHidden = Vue.ref(false);
     const quickAgentId = Vue.ref(null);
     const drawerOpen = Vue.ref(false);
     const drawerAgentId = Vue.ref(null);
     const workbenchWidened = Vue.ref(false);
     const workbenchMaximized = Vue.computed(() => Boolean(store.workbenchExpanded && store.workbenchMaximized));
     const viewportWidth = Vue.ref(typeof window !== 'undefined' ? (window.innerWidth || 1280) : 1280);
+    const isCompactViewport = Vue.computed(() => viewportWidth.value <= 768);
     const customDrawerWidth = Vue.ref(loadCosmosDrawerWidth());
     const drawerResizing = Vue.ref(false);
     const drawerMinWidth = COSMOS_DRAWER_WIDTH.min;
@@ -595,11 +656,54 @@ export default {
       return null;
     });
     const waitingAgent = Vue.computed(() => projectedAgentList.value.find((a) => a.status === 'waiting') || null);
+    const isDrawerConversationCovered = Vue.computed(() => (
+      !(drawerOpen.value && currentBand.value === 'solar')
+      || Boolean(store.workbenchExpanded)
+      || Boolean(settingsModal.open || agentSettingsModal.open || sessionSettingsModal.open)
+    ));
+    const activeDrawerSessionKey = Vue.computed(() => {
+      if (isDrawerConversationCovered.value
+        || !drawerAgentId.value
+        || store.currentView !== 'yeaft'
+        || store.currentAgent !== drawerAgentId.value) return '';
+      const route = store.activeSessionRoute;
+      if (route) {
+        if (route.runtimeProvider !== 'yeaft' || route.agentId !== drawerAgentId.value || !route.sessionId) return '';
+        return `${drawerAgentId.value}\u001f${route.sessionId}`;
+      }
+      const sid = store.yeaftActiveSessionFilter || '';
+      return sid ? `${drawerAgentId.value}\u001f${sid}` : '';
+    });
+    const signalStream = Vue.computed(() => buildCosmosSignalStream({
+      projectedAgents: projectedAgentList.value,
+      agentToPlanet: assignments.value.agentToPlanet,
+      scheduledTaskNotifications: store.scheduledTaskNotifications || [],
+      activeDrawerKey: activeDrawerSessionKey.value,
+      nowMs: nowTick.value,
+      isEn: getLocale() === 'en',
+      t: $t,
+    }));
+    const signalTriggerLabel = Vue.computed(() => (
+      signalStream.value.badgeCount > 0
+        ? $t('cosmos.signals.triggerAria', { count: signalStream.value.badgeCount })
+        : $t('cosmos.signals.triggerIdleAria')
+    ));
+    const signalTriggerExpanded = Vue.computed(() => {
+      if (signalPopoverOpen.value) return true;
+      if (drawerOpen.value || isCompactViewport.value || constants.livePreviewMode === 'collapsed' || signalStream.value.totalCount === 0) {
+        return false;
+      }
+      return !signalStreamHidden.value && !constantsOpen.value && !isObservingEvent.value;
+    });
     const hoverCardAgent = Vue.computed(() => (hoverPlanetId.value ? agentsByPlanet.value[hoverPlanetId.value] || null : null));
     const hoverPreviewSessions = Vue.computed(() => {
       const ag = hoverCardAgent.value;
       if (!ag) return [];
-      return ag.liveSessions.length > 0 ? ag.liveSessions.slice(0, 4) : ag.sessions.slice(0, 3);
+      const prioritized = ag.sessions.slice().sort((a, b) => {
+        const score = (s) => (s.status === 'waiting' ? 0 : (s.unread ? 1 : (s.status === 'running' ? 2 : 3)));
+        return score(a) - score(b) || (b.updatedAt || 0) - (a.updatedAt || 0);
+      });
+      return prioritized.slice(0, 4);
     });
     const dragIsSwap = Vue.computed(() => Boolean(dragOverPlanetId.value && agentsByPlanet.value[dragOverPlanetId.value]));
     const dragGhostText = Vue.computed(() => {
@@ -621,28 +725,22 @@ export default {
       autoZoom: constants.eventsAutoZoom,
     });
     const eventActiveSnapshot = Vue.ref(null);
+    const eventActiveList = Vue.ref([]);
     const eventNextIndex = Vue.ref(eventSim.nextIdx);
     const eventCountdownSec = Vue.ref(eventSim.countdown);
     const isObservingEvent = Vue.computed(() => Boolean(eventActiveSnapshot.value?.observing));
-    const eventBeaconCoords = Vue.computed(() => {
-      const act = eventActiveSnapshot.value;
-      const loc = act?.location;
-      if (!act || !loc) return '';
-      const dir = $t(`cosmos.events.dir.${loc.sector}`);
-      const dist = formatEventPhysicalDistance(act.def, act.effDist || act.ambientDist, getLocale() === 'en');
-      return `${dir} · ${dist}`;
-    });
-    const eventBeaconAriaLabel = Vue.computed(() => {
-      const act = eventActiveSnapshot.value;
-      if (!act) return '';
-      const name = $t(`cosmos.events.${act.def.id}.name`);
-      return eventBeaconCoords.value ? `${name} · ${eventBeaconCoords.value}` : name;
-    });
+
+    const focusedCameraPlanetId = Vue.ref(null);
+    const planetFocusZoom = Vue.ref(1.0);
+    const planetFocusRotated = Vue.ref(false);
 
     function syncEventRefs() {
       eventActiveSnapshot.value = eventSim.active
         ? { ...eventSim.active, location: eventSim.active.location ? { ...eventSim.active.location } : null }
         : null;
+      eventActiveList.value = Array.isArray(eventSim.events)
+        ? eventSim.events.map((e) => ({ ...e, location: e.location ? { ...e.location } : null }))
+        : (eventActiveSnapshot.value ? [eventActiveSnapshot.value] : []);
       eventNextIndex.value = eventSim.nextIdx;
       eventCountdownSec.value = eventSim.countdown;
     }
@@ -657,10 +755,74 @@ export default {
       hoverPlanetId: null, focusedPlanetId: null,
       solarSunScreen: { x: 0, y: 0, r: 50 },
       planetScreen: {},
+      planetFocus: {
+        planetId: null,
+        lastPlanetId: null,
+        blend: 0,
+        zoom: 1.0,
+        targetZoom: 1.0,
+        inspectYaw: 0,
+        inspectPitch: 0,
+        targetInspectYaw: 0,
+        targetInspectPitch: 0,
+      },
+      lastEventFrames: [],
       meteors: [], nextMeteorAt: 4.5,
       orbitRipples: [], telemetryBeams: [],
       drag: null, camDrag: null, constants,
     };
+
+    function focusPlanet(planetId, { defaultZoom = 2.2 } = {}) {
+      if (!planetId) return;
+      if (eventSim.active?.observing) {
+        unfocusCosmicEvent(eventSim);
+        syncEventRefs();
+      }
+      if (scaleBand(anim.targetScaleLog) !== 'solar') {
+        anim.targetScaleLog = 13.0;
+        anim.warpEnergy = Math.min(1, anim.warpEnergy + 0.45);
+      }
+      const pf = anim.planetFocus;
+      const switching = pf.planetId !== planetId;
+      pf.planetId = planetId;
+      pf.lastPlanetId = planetId;
+      if (switching) {
+        pf.targetZoom = Math.max(0.8, Math.min(24.0, defaultZoom));
+        pf.targetInspectYaw = 0;
+        pf.targetInspectPitch = 0;
+      }
+      focusedCameraPlanetId.value = planetId;
+      planetFocusZoom.value = pf.targetZoom;
+      planetFocusRotated.value = Math.abs(pf.targetInspectYaw) > 0.04 || Math.abs(pf.targetInspectPitch) > 0.04;
+    }
+
+    function unfocusPlanet() {
+      const pf = anim.planetFocus;
+      if (!pf.planetId) return;
+      pf.planetId = null;
+      pf.targetZoom = 1.0;
+      pf.targetInspectYaw = 0;
+      pf.targetInspectPitch = 0;
+      focusedCameraPlanetId.value = null;
+      planetFocusZoom.value = 1.0;
+      planetFocusRotated.value = false;
+    }
+
+    function setPlanetZoom(val) {
+      const pf = anim.planetFocus;
+      if (!pf.planetId) return;
+      const clamped = Math.max(0.8, Math.min(24.0, Number(val) || 1.0));
+      pf.targetZoom = clamped;
+      planetFocusZoom.value = clamped;
+    }
+
+    function resetPlanetInspect() {
+      const pf = anim.planetFocus;
+      if (!pf.planetId) return;
+      pf.targetInspectYaw = 0;
+      pf.targetInspectPitch = 0;
+      planetFocusRotated.value = false;
+    }
 
     const pools = createParticlePools();
     let webGraph = null;
@@ -784,6 +946,7 @@ export default {
     }
 
     function jumpToScale(targetLog) {
+      unfocusPlanet();
       const prev = anim.targetScaleLog;
       anim.targetScaleLog = Math.max(7.0, Math.min(24.0, targetLog));
       if (Math.abs(anim.targetScaleLog - prev) > 0.6) anim.warpEnergy = Math.min(1.0, anim.warpEnergy + 0.85);
@@ -840,6 +1003,7 @@ export default {
       if (e.pointerType !== 'touch' && e.button !== 0) return;
       emptyPlanetMenu.value = null;
       constantsOpen.value = false;
+      signalPopoverOpen.value = false;
       if (e.pointerType === 'touch') {
         activeTouchPointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
         if (activeTouchPointers.size >= 2) {
@@ -848,9 +1012,21 @@ export default {
           return;
         }
       }
+      const mode = eventSim.active?.observing
+        ? 'event'
+        : (anim.planetFocus.planetId ? 'planet' : 'solar');
       anim.camDrag = {
         pointerId: e.pointerId ?? null,
-        startX: e.clientX, startY: e.clientY, yaw0: anim.camRot.tx, pitch0: anim.camRot.ty, moved: false,
+        mode,
+        startX: e.clientX,
+        startY: e.clientY,
+        yaw0: mode === 'event'
+          ? (eventSim.active?.targetViewYaw || 0)
+          : (mode === 'planet' ? anim.planetFocus.targetInspectYaw : anim.camRot.tx),
+        pitch0: mode === 'event'
+          ? (eventSim.active?.targetViewPitch || 0)
+          : (mode === 'planet' ? anim.planetFocus.targetInspectPitch : anim.camRot.ty),
+        moved: false,
       };
       camOrbiting.value = true;
     }
@@ -921,6 +1097,15 @@ export default {
     }
 
     function resetCamera() {
+      if (eventSim.active?.observing) {
+        onResetEventView();
+        return;
+      }
+      if (anim.planetFocus.planetId) {
+        resetPlanetInspect();
+        showToast($t('cosmos.scale.resetView'));
+        return;
+      }
       anim.camRot.tx = 0; anim.camRot.ty = 0;
       showToast($t('cosmos.scale.resetView'));
     }
@@ -964,8 +1149,10 @@ export default {
       }
       emptyPlanetMenu.value = null;
       constantsOpen.value = false;
+      signalPopoverOpen.value = false;
       const agent = agentsByPlanet.value[planetId];
       if (!agent) {
+        focusPlanet(planetId);
         if (projectedAgentList.value.length === 0) { openYeaftSettings({ tab: 'security' }); return; }
         emptyPlanetMenu.value = {
           planetId,
@@ -987,6 +1174,9 @@ export default {
       if (!result.changed) return;
       savedBindings.value = result.bindings;
       savePlanetBindings(result.bindings);
+      if (anim.planetFocus.planetId && result.fromPlanetId === anim.planetFocus.planetId) {
+        focusPlanet(targetPlanetId, { defaultZoom: anim.planetFocus.targetZoom });
+      }
       const moving = projectedAgentsMap.value[agentId];
       const targetName = $t(`cosmos.planets.${targetPlanetId}.name`);
       const targetTheme = $t(`cosmos.planets.${targetPlanetId}.theme`);
@@ -1011,8 +1201,12 @@ export default {
           if (pinchPrevDist > 12 && dist > 12) {
             if (eventSim.active?.observing) {
               const zoomDelta = (dist - pinchPrevDist) * 0.008;
-              setCosmicEventZoom(eventSim, eventSim.active.targetZoom + zoomDelta);
+              const res = setCosmicEventZoom(eventSim, eventSim.active.targetZoom + zoomDelta, { allowExit: true });
               syncEventRefs();
+              if (res?.exited) showToast($t('cosmos.events.returnedToast'));
+            } else if (anim.planetFocus.planetId) {
+              const ratio = dist / Math.max(pinchPrevDist, 1);
+              setPlanetZoom(anim.planetFocus.targetZoom * Math.pow(ratio, 1.35));
             } else {
               const ratio = pinchPrevDist / dist;
               const step = Math.max(-1.2, Math.min(1.2, Math.log(ratio) * 4.4));
@@ -1057,10 +1251,29 @@ export default {
         return;
       }
       if (matchesDragPointer(anim.camDrag, e)) {
-        const dx = e.clientX - anim.camDrag.startX, dy = e.clientY - anim.camDrag.startY;
+        const dx = e.clientX - anim.camDrag.startX;
+        const dy = e.clientY - anim.camDrag.startY;
         if (Math.hypot(dx, dy) > 4) anim.camDrag.moved = true;
-        anim.camRot.tx = Math.max(-0.85, Math.min(0.85, anim.camDrag.yaw0 + dx * 0.0024));
-        anim.camRot.ty = Math.max(-0.42, Math.min(0.45, anim.camDrag.pitch0 + dy * 0.0022));
+        if (anim.camDrag.mode === 'event') {
+          setCosmicEventViewAngles(eventSim, anim.camDrag.yaw0 + dx * 0.006, anim.camDrag.pitch0 + dy * 0.005);
+          syncEventRefs();
+        } else if (anim.camDrag.mode === 'planet') {
+          anim.planetFocus.targetInspectYaw = anim.camDrag.yaw0 + dx * 0.0075;
+          anim.planetFocus.targetInspectPitch = Math.max(-1.05, Math.min(1.05, anim.camDrag.pitch0 + dy * 0.0055));
+          planetFocusRotated.value = Math.abs(anim.planetFocus.targetInspectYaw) > 0.04 || Math.abs(anim.planetFocus.targetInspectPitch) > 0.04;
+        } else {
+          anim.camRot.tx = Math.max(-0.85, Math.min(0.85, anim.camDrag.yaw0 + dx * 0.0024));
+          anim.camRot.ty = Math.max(-0.42, Math.min(0.45, anim.camDrag.pitch0 + dy * 0.0022));
+        }
+      } else if (!anim.drag && currentBand.value === 'solar' && !eventSim.active?.observing) {
+        const hitEv = hitTestAmbientEvent(anim.lastEventFrames, e.clientX, e.clientY);
+        eventSim.hoveredUid = hitEv ? hitEv.uid : null;
+        if (glCanvasRef.value) {
+          glCanvasRef.value.style.cursor = hitEv ? 'pointer' : '';
+        }
+      } else if (eventSim.hoveredUid || glCanvasRef.value?.style.cursor) {
+        eventSim.hoveredUid = null;
+        if (glCanvasRef.value) glCanvasRef.value.style.cursor = '';
       }
 
       if (hoverPlanetId.value && !anim.hoverPlanetId && !hoverCardPinned.value) {
@@ -1108,8 +1321,9 @@ export default {
         if (drag.active) {
           if (drag.overPlanetId) performMoveOrSwap(drag.agentId, drag.overPlanetId);
         } else {
-          // Single click on planet -> Quick Auto-Route Composer
+          // Single click on planet -> Center camera on planet + open Quick Auto-Route Composer
           hideHoverImmediate();
+          focusPlanet(drag.fromPlanetId);
           if (drawerOpen.value) closeDrawer();
           quickAgentId.value = drag.agentId;
         }
@@ -1117,8 +1331,51 @@ export default {
       }
       if (matchesDragPointer(anim.camDrag, e)) {
         const moved = anim.camDrag.moved;
+        const clickX = e.clientX;
+        const clickY = e.clientY;
         cancelCamDrag();
         if (!moved) {
+          // 1. Direct click on an unfolding ambient cosmic event on the shared canvas
+          if (currentBand.value === 'solar' && !eventSim.active?.observing) {
+            const hitEv = hitTestAmbientEvent(anim.lastEventFrames, clickX, clickY);
+            if (hitEv) {
+              unfocusPlanet();
+              const act = focusCosmicEventByUid(eventSim, hitEv.uid);
+              hideHoverImmediate();
+              quickAgentId.value = null;
+              if (drawerOpen.value) closeDrawer();
+              syncEventRefs();
+              if (act) showToast(formatEventLocationToast(act));
+              return;
+            }
+          }
+          // 2. Direct click on the Sun returns from planet focus to Sun center
+          if (anim.planetFocus.planetId && anim.solarSunScreen?.r > 0) {
+            const dSun = Math.hypot(clickX - anim.solarSunScreen.x, clickY - anim.solarSunScreen.y);
+            if (dSun <= Math.max(36, anim.solarSunScreen.r * 1.18)) {
+              unfocusPlanet();
+              return;
+            }
+          }
+          // 3. Direct click on a zoomed planet body (when hit element is hidden on deep close-up)
+          if (currentBand.value === 'solar' && !eventSim.active?.observing) {
+            for (const p of PLANETS) {
+              const pos = anim.planetScreen[p.id];
+              if (!pos || pos.r < 6) continue;
+              const hitR = pos.r * (p.bodyType === 6 ? 1.55 : 1.05);
+              if (Math.hypot(clickX - pos.x, clickY - pos.y) <= hitR) {
+                if (anim.planetFocus.planetId !== p.id) {
+                  focusPlanet(p.id);
+                  const ag = agentsByPlanet.value[p.id];
+                  if (ag) {
+                    if (drawerOpen.value) closeDrawer();
+                    quickAgentId.value = ag.id;
+                  }
+                }
+                return;
+              }
+            }
+          }
           if (quickAgentId.value) quickAgentId.value = null;
           if (drawerOpen.value) closeDrawer();
         }
@@ -1127,12 +1384,24 @@ export default {
 
     function onStageWheel(e) {
       if (settingsModal.open || agentSettingsModal.open || sessionSettingsModal.open || creationsStore.activeCreation) return;
-      if (e.target.closest('.cosmos-drawer, .cosmos-quick-composer, .cosmos-constants-popover, .cosmos-hover-card, .cosmos-event-almanac, .cosmos-book-popover, .creation-galaxy-hud, .creation-catalog-panel, .creation-inspector-card, .creation-ignite-dock, .creation-interior-modal')) return;
+      if (e.target.closest('.cosmos-drawer, .cosmos-quick-composer, .cosmos-constants-popover, .cosmos-hover-card, .cosmos-event-almanac, .cosmos-book-popover, .cosmos-signal-stream, .cosmos-signal-popover, .cosmos-signal-mobile-banner, .creation-galaxy-hud, .creation-catalog-panel, .creation-inspector-card, .creation-ignite-dock, .creation-interior-modal')) return;
       e.preventDefault();
       if (eventSim.active?.observing) {
-        const delta = -Math.sign(e.deltaY) * Math.min(Math.abs(e.deltaY), 100) * 0.0028;
-        setCosmicEventZoom(eventSim, eventSim.active.targetZoom + delta);
+        const delta = -Math.sign(e.deltaY) * Math.min(Math.abs(e.deltaY), 100) * 0.0032;
+        const res = setCosmicEventZoom(eventSim, eventSim.active.targetZoom + delta, { allowExit: true });
         syncEventRefs();
+        if (res?.exited) showToast($t('cosmos.events.returnedToast'));
+        return;
+      }
+      if (Date.now() < (eventSim.exitCooldownUntil || 0)) {
+        return;
+      }
+      // When focused on a planet, wheel ONLY zooms that planet (0.8x-24x) — NEVER enters Black Hole Horizon!
+      if (anim.planetFocus.planetId) {
+        const clampedDelta = Math.max(-140, Math.min(140, e.deltaY));
+        const factor = Math.exp(-clampedDelta * 0.0024);
+        setPlanetZoom(anim.planetFocus.targetZoom * factor);
+        hideHoverImmediate();
         return;
       }
       const step = Math.sign(e.deltaY) * Math.min(Math.abs(e.deltaY), 120) * 0.0115;
@@ -1145,12 +1414,26 @@ export default {
       }
     }
 
+    function closeSignalPopover({ restoreFocus = false } = {}) {
+      if (!signalPopoverOpen.value) return;
+      signalPopoverOpen.value = false;
+      if (restoreFocus) {
+        Vue.nextTick(() => signalTriggerRef.value?.focus?.());
+      }
+    }
+
     function openSessionInDrawer(agentId, session) {
       hideHoverImmediate();
+      signalPopoverOpen.value = false;
+      if (!agentId || !projectedAgentsMap.value[agentId]) return false;
+      if (currentBand.value !== 'solar') jumpToScale(13.0);
       if (eventSim.active?.observing) {
         unfocusCosmicEvent(eventSim);
         syncEventRefs();
       }
+      if (store.workbenchExpanded) collapseOpenWorkbench();
+      const targetPlanetId = assignments.value.agentToPlanet[agentId];
+      if (targetPlanetId) focusPlanet(targetPlanetId, { defaultZoom: 1.9 });
       quickAgentId.value = null;
       drawerAgentId.value = agentId;
       drawerOpen.value = true;
@@ -1162,6 +1445,81 @@ export default {
         store.reloadYeaftMessages?.();
       } else if (agentId) {
         store.enterYeaft?.(agentId);
+      }
+      const isNativeYeaft = !session?.runtimeProvider || session.runtimeProvider === 'yeaft';
+      if (isNativeYeaft && session?.id && agentId) {
+        store.acknowledgeYeaftSessionSignals?.(session.id, agentId, { sessionRead: true });
+      }
+      return true;
+    }
+
+    function onToggleConstants() {
+      constantsOpen.value = !constantsOpen.value;
+      if (constantsOpen.value) signalPopoverOpen.value = false;
+    }
+
+    function onToggleSignalTrigger() {
+      constantsOpen.value = false;
+      if (signalPopoverOpen.value) {
+        signalPopoverOpen.value = false;
+        return;
+      }
+      const usePopover = drawerOpen.value
+        || isCompactViewport.value
+        || constants.livePreviewMode === 'collapsed'
+        || signalStream.value.totalCount === 0;
+      if (usePopover) {
+        signalPopoverOpen.value = true;
+      } else {
+        signalStreamHidden.value = !signalStreamHidden.value;
+      }
+    }
+
+    function hasProjectedOrKnownSession(agentId, session) {
+      const ag = agentId ? projectedAgentsMap.value[agentId] : null;
+      if (!ag) return false;
+      if (!session?.id) return false;
+      if (session.descriptor) return true;
+      if (ag.sessions?.some((s) => s.id === session.id)) return true;
+      if (typeof store.hasKnownYeaftSession === 'function' && store.hasKnownYeaftSession(session.id, agentId)) return true;
+      if (sessionsStore?.sessionById?.(session.id, agentId)) return true;
+      return false;
+    }
+
+    function onOpenSignal(item) {
+      if (!item?.agentId) return;
+      const targetSession = item.session || { id: item.sessionId, runtimeProvider: 'yeaft' };
+      if (!projectedAgentsMap.value[item.agentId] || !hasProjectedOrKnownSession(item.agentId, targetSession)) {
+        closeSignalPopover({ restoreFocus: true });
+        onDismissSignal(item);
+        showToast($t(!projectedAgentsMap.value[item.agentId]
+          ? 'cosmos.signals.agentUnavailable'
+          : 'cosmos.signals.sessionUnavailable'));
+        return;
+      }
+      openSessionInDrawer(item.agentId, targetSession);
+    }
+
+    function onDismissSignal(item) {
+      if (!item) return;
+      if (item.sessionId && item.agentId && typeof store.acknowledgeYeaftSessionSignals === 'function') {
+        store.acknowledgeYeaftSessionSignals(item.sessionId, item.agentId, { sessionRead: false });
+      } else {
+        if (item.sessionId && item.agentId) store.markYeaftSessionRead?.(item.sessionId, item.agentId);
+        if (item.scheduledTask?.id) store.dismissScheduledTaskNotification?.(item.scheduledTask.id);
+      }
+    }
+
+    function onMarkAllSignalsRead() {
+      if (typeof store.acknowledgeAllYeaftSessionSignals === 'function') {
+        store.acknowledgeAllYeaftSessionSignals();
+      } else {
+        for (const item of signalStream.value.items) {
+          if (item.dismissible) onDismissSignal(item);
+        }
+      }
+      if (signalPopoverOpen.value && signalStream.value.waitingCount === 0 && signalStream.value.runningCount === 0) {
+        closeSignalPopover({ restoreFocus: true });
       }
     }
 
@@ -1319,8 +1677,9 @@ export default {
       const eventId = typeof payload === 'string' ? payload : (payload?.eventId || null);
       const forceObserve = Boolean(payload && typeof payload === 'object' && payload.forceObserve);
       if (scaleBand(anim.targetScaleLog) !== 'solar') jumpToScale(13.0);
-      const isAlreadySame = Boolean(eventSim.active && (!eventId || eventSim.active.def.id === eventId));
-      const shouldZoomIn = forceObserve || isAlreadySame || Boolean(constants.eventsAutoZoom);
+      const existingLive = (eventSim.events || []).find((e) => !eventId || e.def.id === eventId) || null;
+      const shouldZoomIn = forceObserve || Boolean(existingLive) || Boolean(constants.eventsAutoZoom);
+      if (shouldZoomIn) unfocusPlanet();
       const act = startCosmicEvent(eventSim, eventId, { observe: shouldZoomIn });
       hideHoverImmediate();
       if (act.observing) {
@@ -1333,14 +1692,15 @@ export default {
       } else {
         showToast(formatEventLocationToast(act), {
           actionLabel: $t('cosmos.events.watch'),
-          onAction: () => onFocusDistantEvent(),
+          onAction: () => onFocusDistantEvent(act.uid),
         });
       }
     }
-    function onFocusDistantEvent() {
-      if (!eventSim.active) return;
+    function onFocusDistantEvent(uid = null) {
+      if (!eventSim.active && (!eventSim.events || eventSim.events.length === 0)) return;
       if (scaleBand(anim.targetScaleLog) !== 'solar') jumpToScale(13.0);
-      const act = focusActiveCosmicEvent(eventSim);
+      unfocusPlanet();
+      const act = uid ? focusCosmicEventByUid(eventSim, uid) : focusActiveCosmicEvent(eventSim);
       hideHoverImmediate();
       quickAgentId.value = null;
       if (drawerOpen.value) closeDrawer();
@@ -1381,6 +1741,11 @@ export default {
       if (act) showToast(formatEventLocationToast(act));
     }
     function onSetEventZoom(z) { setCosmicEventZoom(eventSim, z); syncEventRefs(); }
+    function onResetEventView() {
+      resetCosmicEventView(eventSim);
+      syncEventRefs();
+      showToast($t('cosmos.scale.resetView'));
+    }
     function onScrubEvent(frac) { scrubCosmicEvent(eventSim, frac); syncEventRefs(); }
 
     function onUpdateConstant({ key, value }) {
@@ -1480,6 +1845,7 @@ export default {
       if (settingsModal.open) { settingsModal.open = false; return; }
       if (agentSettingsModal.open) { agentSettingsModal.open = false; return; }
       if (emptyPlanetMenu.value) { emptyPlanetMenu.value = null; return; }
+      if (signalPopoverOpen.value) { closeSignalPopover({ restoreFocus: true }); return; }
       if (constantsOpen.value) { constantsOpen.value = false; return; }
       if (currentBand.value === 'galaxy' && creationsStore.inspectorTarget) { creationsStore.inspectorTarget = null; return; }
       if (currentBand.value === 'galaxy' && creationsStore.igniteDraft?.open) { creationsStore.igniteDraft = { ...creationsStore.igniteDraft, open: false }; return; }
@@ -1494,21 +1860,31 @@ export default {
       }
       if (drawerOpen.value) { closeDrawer(); return; }
       if (quickAgentId.value) { quickAgentId.value = null; return; }
+      if (anim.planetFocus.planetId) { unfocusPlanet(); return; }
       if (currentBand.value !== 'solar') jumpToScale(13.0);
     }
 
     function onDocClick(e) {
       if (emptyPlanetMenu.value && !e.target.closest('.cosmos-context-menu')) emptyPlanetMenu.value = null;
       if (constantsOpen.value && !e.target.closest('.cosmos-constants-popover, .cosmos-corner-actions')) constantsOpen.value = false;
+      if (signalPopoverOpen.value && !e.target.closest('.cosmos-signal-popover, .cosmos-corner-actions')) signalPopoverOpen.value = false;
     }
 
     function planetTagClass(id) {
       const ag = agentsByPlanet.value[id];
-      if (!ag || !constants.activeFlash || ag.liveSessions.length === 0) return {};
-      return { 'is-flashing-waiting': ag.status === 'waiting', 'is-flashing-running': ag.status !== 'waiting' };
+      if (!ag) return {};
+      if (constants.activeFlash && ag.liveSessions.length > 0) {
+        return { 'is-flashing-waiting': ag.status === 'waiting', 'is-flashing-running': ag.status !== 'waiting' };
+      }
+      if (ag.hasUnread) return { 'is-has-unread': true };
+      return {};
     }
     function planetPipClass(ag) {
-      return [ag.status, constants.activeFlash && ag.status === 'running' ? 'is-flashing' : ''];
+      return [
+        ag.status,
+        constants.activeFlash && ag.status === 'running' ? 'is-flashing' : '',
+        ag.status === 'idle' && ag.hasUnread ? 'is-unread' : '',
+      ];
     }
 
     let softTimer = 0;
@@ -1604,6 +1980,11 @@ export default {
           onBandChange: (band) => { currentBand.value = band; },
           onSyncEvents: syncEventRefs,
           onUpdateHoverPos: updateHoverCardPosition,
+          formatEventLabel: (ev) => {
+            const name = $t(`cosmos.events.${ev.id}.name`);
+            const dist = formatEventPhysicalDistance(ev.def, ev.ambientDist || ev.effDist, getLocale() === 'en');
+            return $t('cosmos.events.hoverObserve', { name, dist });
+          },
         });
 
         lastFrameCostMs = performance.now() - t0;
@@ -1638,6 +2019,27 @@ export default {
       viewportWidth.value = window.innerWidth || 1280;
     }
 
+    Vue.watch(
+      isDrawerConversationCovered,
+      (covered) => {
+        store.yeaftConversationCovered = covered;
+      },
+      { immediate: true, flush: 'sync' },
+    );
+
+    Vue.watch(activeDrawerSessionKey, (key) => {
+      if (!key) return;
+      const sepIdx = key.indexOf('\u001f');
+      if (sepIdx <= 0) return;
+      const aid = key.slice(0, sepIdx);
+      const sid = key.slice(sepIdx + 1);
+      if (aid && sid) store.acknowledgeYeaftSessionSignals?.(sid, aid, { sessionRead: true });
+    });
+
+    Vue.watch([drawerOpen, isCompactViewport], () => {
+      signalPopoverOpen.value = false;
+    });
+
     Vue.onMounted(() => {
       unmounted = false;
       viewportWidth.value = window.innerWidth || 1280;
@@ -1656,6 +2058,9 @@ export default {
       document.addEventListener('click', onDocClick);
       nowInterval = setInterval(() => { nowTick.value = Date.now(); }, 15000);
       syncEventRefs();
+      // The deep-space surface owns the browser / installed-app title bar color.
+      const pageEl = glCanvasRef.value?.closest?.('.cosmos-page');
+      if (pageEl && typeof window.getComputedStyle === 'function') setThemeColorSurface(window.getComputedStyle(pageEl).getPropertyValue('--c-bg'));
     });
 
     Vue.onBeforeUnmount(() => {
@@ -1679,18 +2084,19 @@ export default {
       window.removeEventListener('pointercancel', onGlobalPointerCancel);
       window.removeEventListener('keydown', onKeyDown);
       document.removeEventListener('click', onDocClick);
+      store.yeaftConversationCovered = false;
+      setThemeColorSurface(null);
       engine?.destroy?.();
       engine = null;
     });
 
     return {
-      glCanvasRef, hudCanvasRef, hoverCardRef, drawerRef, galaxyOverlayRef, domRefs, setMapRef, canvasEpoch, rendererMode,
+      glCanvasRef, hudCanvasRef, hoverCardRef, drawerRef, galaxyOverlayRef, signalTriggerRef, domRefs, setMapRef, canvasEpoch, rendererMode,
       creationsStore, activeGalaxyStars,
       planets: PLANETS, bookDomains: BOOK_DOMAINS,
       portals: [
         { id: 'to-galaxy', labelKey: 'cosmos.scale.galaxy', scale: '10²¹', target: 21.0, ring: 64 },
         { id: 'to-web', labelKey: 'cosmos.scale.web', scale: '10²⁴', target: 24.0, ring: 58 },
-        { id: 'to-horizon', labelKey: 'cosmos.scale.horizon', scale: '10⁷', target: 7.0, ring: 56 },
       ],
       scaleTicks: [
         { band: 'web', exp: '10²⁴', labelKey: 'cosmos.scale.web', target: 24.0 },
@@ -1698,24 +2104,27 @@ export default {
         { band: 'solar', exp: '10¹³', labelKey: 'cosmos.scale.solar', target: 13.0 },
         { band: 'horizon', exp: '10⁷', labelKey: 'cosmos.scale.horizon', target: 7.0 },
       ],
-      constants, constantsOpen, galaxyBooks,
+      constants, constantsOpen, signalPopoverOpen, signalStreamHidden, galaxyBooks,
       quickAgentId, quickAgent, drawerOpen, drawerAgent, workbenchWidened, workbenchMaximized,
-      viewportWidth, drawerResizing, drawerMinWidth, drawerMaxWidth, effectiveDrawerWidth, cosmosPageStyle,
+      viewportWidth, isCompactViewport, drawerResizing, drawerMinWidth, drawerMaxWidth, effectiveDrawerWidth, cosmosPageStyle,
       hoverPlanetId, hoverCardAgent, hoverPreviewSessions, hoverCardStyle, emptyPlanetMenu,
       camOrbiting, currentBand, projectedAgentList, assignments, agentsByPlanet, focusedPlanetId, waitingAgent,
+      signalStream, signalTriggerLabel, signalTriggerExpanded,
       dragActive, dragFromPlanetId, dragOverPlanetId, dragX, dragY, dragIsSwap, dragGhostText,
       bookCreateOpen, bookDraftTitle, bookDraftDomain, toast,
       settingsModal, agentSettingsModal, sessionSettingsModal,
-      eventActiveSnapshot, eventNextIndex, eventCountdownSec, isObservingEvent,
-      eventBeaconCoords, eventBeaconAriaLabel,
+      eventActiveSnapshot, eventActiveList, eventNextIndex, eventCountdownSec, isObservingEvent,
+      focusedCameraPlanetId, planetFocusZoom, planetFocusRotated,
+      focusPlanet, unfocusPlanet, setPlanetZoom, resetPlanetInspect,
       planetTagClass, planetPipClass,
       onCanvasPointerDown, onCanvasDblClick, resetCamera, onPlanetPointerDown, onPlanetEnter, onPlanetLeave,
       onClickGalaxyStar, onDblClickGalaxyStar, openGalaxyCreation,
       onHoverCardEnter, onHoverCardLeave, onStageWheel, jumpToScale,
       openSessionInDrawer, openAgentConversationFromQuick, openCosmosSessionSearch, onDrawerSelectSession, toggleWorkbenchWiden, closeDrawer,
+      onToggleConstants, onToggleSignalTrigger, closeSignalPopover, onOpenSignal, onDismissSignal, onMarkAllSignalsRead,
       openQuickComposerFromDrawer, onDrawerResizeStart, onDrawerResize, onDrawerResizeEnd, onDrawerResizeReset,
       emitTelemetryBeam, onAutoRouted, jumpToWaitingAgent, assignFromMenu,
-      onObserveEvent, onFocusDistantEvent, onReturnFromEvent, onStopEvent, onToggleAutoEvents, onToggleAutoZoom, onTogglePauseEvent, onReplayEvent, onNextRandomEvent, onSetEventZoom, onScrubEvent,
+      onObserveEvent, onFocusDistantEvent, onReturnFromEvent, onStopEvent, onToggleAutoEvents, onToggleAutoZoom, onTogglePauseEvent, onReplayEvent, onNextRandomEvent, onSetEventZoom, onResetEventView, onScrubEvent,
       onUpdateConstant, onAssignPlanet, openYeaftSettings, openYeaftAgentSettings, openAgentLlmConfig, openSessionSettings, closeSessionSettings, openVpLibraryFromSessionSettings,
       abandonCosmos, submitNewBook, showToast, runToastAction,
     };

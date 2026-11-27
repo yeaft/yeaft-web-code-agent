@@ -9,6 +9,7 @@
 import { shortenPath } from '../utils/path-display.js';
 import { buildProjectTree } from '../stores/helpers/project-tree.js';
 import { legacySidebarCatalogReady } from '../stores/helpers/sidebar-session-catalog.js';
+import { stripMarkdownPreview } from '../stores/helpers/yeaft-reply-preview.js';
 
 function buildSessionProjectLookup(projects) {
   const rows = Array.isArray(projects) ? projects : [];
@@ -166,20 +167,6 @@ export function filterCosmosSessions(allAgents, query, { planetLabelByAgentId = 
   return scored.map(({ agent, session }) => ({ agent, session, snippet: '' }));
 }
 
-function stripMarkdownPreview(raw) {
-  if (!raw || typeof raw !== 'string') return '';
-  return raw
-    .replace(/```[\s\S]*?```/g, ' [code] ')
-    .replace(/`([^`]+)`/g, '$1')
-    .replace(/!\[[^\]]*\]\([^)]*\)/g, '')
-    .replace(/\[([^\]]+)\]\([^)]*\)/g, '$1')
-    .replace(/^#{1,6}\s+/gm, '')
-    .replace(/[*_~>]+/g, '')
-    .replace(/\s+/g, ' ')
-    .trim()
-    .slice(0, 180);
-}
-
 function parseMs(val) {
   if (typeof val === 'number' && Number.isFinite(val)) return val;
   if (typeof val === 'string' && val) {
@@ -205,42 +192,76 @@ export function formatRelativeTime(ts, nowMs = Date.now(), isEn = false) {
 
 function inspectLoadedMessages(messages, sessionId) {
   if (!Array.isArray(messages) || messages.length === 0) {
-    return { hasPendingAsk: false, askQuestion: '', latestSnippet: '', latestAt: 0 };
+    return {
+      hasPendingAsk: false,
+      askQuestion: '',
+      askAt: 0,
+      latestAssistantSnippet: '',
+      latestAssistantAt: 0,
+      latestUserSnippet: '',
+      latestUserAt: 0,
+      latestSnippet: '',
+      latestAt: 0,
+    };
   }
   let hasPendingAsk = false;
   let askQuestion = '';
-  let latestSnippet = '';
-  let latestAt = 0;
+  let askAt = 0;
+  let latestAssistantSnippet = '';
+  let latestAssistantAt = 0;
+  let latestUserSnippet = '';
+  let latestUserAt = 0;
 
   for (let i = messages.length - 1; i >= 0; i--) {
     const row = messages[i];
     if (!row) continue;
-    if (sessionId && row.sessionId && row.sessionId !== sessionId) continue;
+    const rowSessionId = row.sessionId ?? row.groupId ?? '';
+    if (sessionId && rowSessionId !== sessionId) continue;
 
     if (!hasPendingAsk && row.type === 'tool-use'
       && (row.toolName === 'AskUser' || row.toolName === 'AskUserQuestion')
       && !row.askAnswered && !row.askExpired) {
       hasPendingAsk = true;
-      const qs = row.toolInput?.questions;
+      const qs = row.toolInput?.questions || row.askQuestions;
       const firstQ = Array.isArray(qs) && qs[0]?.question ? qs[0].question : (row.toolInput?.question || '');
       askQuestion = stripMarkdownPreview(firstQ);
+      askAt = parseMs(row.askCreatedAt || row.timestamp || row.createdAt);
     }
 
-    if (!latestSnippet) {
-      if (row.type === 'assistant' || row.type === 'user') {
-        const text = row.presentation?.summary || row.content || row.text || '';
-        const cleaned = stripMarkdownPreview(text);
-        if (cleaned) {
-          latestSnippet = cleaned;
-          latestAt = parseMs(row.timestamp || row.createdAt);
-        }
+    if (!latestAssistantSnippet && row.type === 'assistant') {
+      const text = row.presentation?.summary || row.content || row.text || '';
+      const cleaned = stripMarkdownPreview(text);
+      if (cleaned) {
+        latestAssistantSnippet = cleaned;
+        latestAssistantAt = parseMs(row.turnEndAt || row.timestamp || row.createdAt);
       }
     }
 
-    if (hasPendingAsk && latestSnippet) break;
+    if (!latestUserSnippet && row.type === 'user') {
+      const text = row.content || row.text || '';
+      const cleaned = stripMarkdownPreview(text);
+      if (cleaned) {
+        latestUserSnippet = cleaned;
+        latestUserAt = parseMs(row.timestamp || row.createdAt);
+      }
+    }
+
+    if (hasPendingAsk && latestAssistantSnippet && latestUserSnippet) break;
   }
 
-  return { hasPendingAsk, askQuestion, latestSnippet, latestAt };
+  const latestSnippet = latestAssistantSnippet || latestUserSnippet;
+  const latestAt = Math.max(latestAssistantAt, latestUserAt, askAt);
+  return {
+    hasPendingAsk,
+    askQuestion,
+    askAt,
+    latestAssistantSnippet,
+    latestAssistantAt,
+    latestUserSnippet,
+    latestUserAt,
+    latestSnippet,
+    latestAt,
+  };
 }
 
 /**
@@ -280,6 +301,16 @@ export function projectAgentsForCosmos({ chatStore, sessionsStore, nowMs = Date.
     : Object.values(sessionsStore?.sessions || {});
   const convIdByAgent = chatStore?.yeaftConversationIdsByAgent || {};
   const messagesMap = chatStore?.messagesMap || {};
+  const replyPreviewByKey = chatStore?.yeaftSessionReplyPreviewByKey || {};
+  const scheduledTaskNoticesBySession = new Map();
+  for (const notice of (Array.isArray(chatStore?.scheduledTaskNotifications) ? chatStore.scheduledTaskNotifications : [])) {
+    if (!notice?.agentId || !notice?.sessionId) continue;
+    const sk = `${notice.agentId}\u001f${notice.sessionId}`;
+    const prev = scheduledTaskNoticesBySession.get(sk);
+    if (!prev || parseMs(notice.createdAt) >= parseMs(prev.createdAt)) {
+      scheduledTaskNoticesBySession.set(sk, notice);
+    }
+  }
 
   const runningFallback = t ? t('cosmos.panel.runningFallback') : 'Working…';
   const waitingFallback = t ? t('cosmos.panel.waitingFallback') : 'Waiting for input';
@@ -370,17 +401,45 @@ export function projectAgentsForCosmos({ chatStore, sessionsStore, nowMs = Date.
       const isProcessing = isYeaft
         ? Boolean(chatStore?.isYeaftSessionProcessing?.(item.id, agentId) || detail?.running || detail?.runningVpCount > 0)
         : Boolean(chatStore?.processingConversations?.[item.id]);
-      const isUnread = isYeaft ? Boolean(chatStore?.isYeaftSessionUnread?.(item.id, agentId)) : false;
+      const scheduledNotice = isYeaft
+        ? (scheduledTaskNoticesBySession.get(`${agentId}\u001f${item.id}`) || null)
+        : null;
+      const isUnread = isYeaft
+        ? Boolean(chatStore?.isYeaftSessionUnread?.(item.id, agentId) || scheduledNotice)
+        : false;
 
       const msgInfo = isYeaft
         ? inspectLoadedMessages(loadedMsgs, item.id)
         : inspectLoadedMessages(messagesMap[item.id], null);
+      const cachedPreview = isYeaft ? (replyPreviewByKey[item.catalogKey] || null) : null;
 
-      const status = msgInfo.hasPendingAsk ? 'waiting' : (isProcessing ? 'running' : 'done');
-      const updatedMs = Math.max(item.updatedAt, msgInfo.latestAt);
-      const snippet = msgInfo.hasPendingAsk
-        ? (msgInfo.askQuestion || waitingFallback)
-        : (msgInfo.latestSnippet || (isProcessing ? runningFallback : (shortenPath(item.workDir || '') || item.title)));
+      const cachedAskExpiresAt = parseMs(cachedPreview?.askExpiresAt);
+      const cachedAskValid = Boolean(cachedPreview?.askQuestion)
+        && !(cachedAskExpiresAt > 0 && nowMs >= cachedAskExpiresAt);
+      const hasPendingAsk = msgInfo.hasPendingAsk || cachedAskValid;
+      const askQuestion = msgInfo.askQuestion || (cachedAskValid ? cachedPreview.askQuestion : '');
+
+      const cachedReplyText = cachedPreview?.text || '';
+      const cachedReplyAt = parseMs(cachedPreview?.at);
+      const useCachedReply = Boolean(cachedReplyText)
+        && (!msgInfo.latestAssistantSnippet || cachedReplyAt >= msgInfo.latestAssistantAt);
+      const replyPreview = useCachedReply ? cachedReplyText : msgInfo.latestAssistantSnippet;
+      const replyAt = useCachedReply ? cachedReplyAt : msgInfo.latestAssistantAt;
+
+      const status = hasPendingAsk ? 'waiting' : (isProcessing ? 'running' : 'done');
+      const updatedMs = Math.max(
+        item.updatedAt,
+        msgInfo.latestAt,
+        replyAt,
+        parseMs(cachedPreview?.askAt),
+        parseMs(scheduledNotice?.createdAt),
+      );
+      const snippet = hasPendingAsk
+        ? (askQuestion || waitingFallback)
+        : (replyPreview
+          || (isProcessing ? (msgInfo.latestUserSnippet || runningFallback) : '')
+          || msgInfo.latestSnippet
+          || (shortenPath(item.workDir || '') || item.title));
 
       const projectEntry = isYeaft
         ? projectBySessionKey.get(`${agentId}\u001f${item.id}`) || null
@@ -393,6 +452,10 @@ export function projectAgentsForCosmos({ chatStore, sessionsStore, nowMs = Date.
         updatedAt: updatedMs,
         updatedLabel: formatRelativeTime(updatedMs, nowMs, isEn),
         summary: snippet,
+        replyPreview,
+        replyAt,
+        askQuestion,
+        scheduledNotice,
         sceneId: detail?.sceneId || null,
         projectId: projectEntry?.project?.id || null,
         projectName: projectEntry?.project?.name || '',
@@ -409,6 +472,8 @@ export function projectAgentsForCosmos({ chatStore, sessionsStore, nowMs = Date.
     });
 
     const liveSessions = sessions.filter((s) => s.status === 'waiting' || s.status === 'running');
+    const unreadSessions = sessions.filter((s) => s.unread && s.status !== 'waiting');
+    const attentionCount = sessions.filter((s) => s.status === 'waiting' || s.unread).length;
     const hasWaiting = liveSessions.some((s) => s.status === 'waiting');
     const hasRunning = liveSessions.some((s) => s.status === 'running');
     const status = !online ? 'offline' : (hasWaiting ? 'waiting' : (hasRunning ? 'running' : 'idle'));
@@ -424,6 +489,10 @@ export function projectAgentsForCosmos({ chatStore, sessionsStore, nowMs = Date.
       supportsAutoRoute: Array.isArray(agent.capabilities) && agent.capabilities.includes('session_auto_route'),
       sessions,
       liveSessions,
+      unreadSessions,
+      unreadCount: unreadSessions.length,
+      attentionCount,
+      hasUnread: unreadSessions.length > 0,
       raw: agent,
     };
   }

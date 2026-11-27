@@ -97,7 +97,8 @@ export const CORE_TEST_FILES = Object.freeze([
   "test/web/stores/websocket-auth-token-race.test.js",
   "test/web/waiting-hoops.test.js",
   "test/web/cosmos-ui.test.js",
-  "test/web/cosmos-creations.test.js"
+  "test/web/cosmos-creations.test.js",
+  "test/web/brand-icons.test.js"
 ]);
 
 export const E2E_TEST_FILES = Object.freeze([

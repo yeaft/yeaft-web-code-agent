@@ -113,7 +113,7 @@ export default {
         >
           <option value="2">{{ $t('cosmos.constants.livePreview2') }}</option>
           <option value="3">{{ $t('cosmos.constants.livePreview3') }}</option>
-          <option value="hover">{{ $t('cosmos.constants.livePreviewHover') }}</option>
+          <option value="collapsed">{{ $t('cosmos.constants.livePreviewCollapsed') }}</option>
         </select>
       </div>
 

@@ -1,7 +1,35 @@
 /**
  * Yeaft Cosmos — GPU Living Particle Pools, 3D Cosmic Web Graph & 2D Vector Astronomical HUD
  */
-import { PLANETS } from './constants.js';
+import { PLANETS, keplerPos, keplerOrbitPoint } from './constants.js';
+
+/* Two realistic long-period comets on high-eccentricity Keplerian ellipses (Sun at focus) */
+const COMETS = [
+  { orbitR: 0.92, ecc: 0.72, argPeri: 0.42, incl: 0.22, speed: 0.056, phase: 0.78, scale: 1.0, dustRgb: [252, 236, 210], ionRgb: [108, 194, 255] },
+  { orbitR: 1.18, ecc: 0.76, argPeri: 3.45, incl: -0.18, speed: -0.038, phase: 3.85, scale: 0.78, dustRgb: [246, 228, 198], ionRgb: [122, 206, 255] },
+];
+
+function evalCometState(cm, tVal, project, sunPt) {
+  const wp = keplerPos(cm, tVal);
+  const pt = project(wp.x, wp.z, wp.y);
+  const wpPrev = keplerPos(cm, tVal - 0.045);
+  const prevPt = project(wpPrev.x, wpPrev.z, wpPrev.y);
+  const velDx = prevPt.x - pt.x;
+  const velDy = prevPt.y - pt.y;
+  const velLen = Math.max(Math.hypot(velDx, velDy), 0.001);
+  const backX = velDx / velLen;
+  const backY = velDy / velLen;
+
+  const dxSun = pt.x - sunPt.x;
+  const dySun = pt.y - sunPt.y;
+  const dSun = Math.max(Math.hypot(dxSun, dySun), 1);
+  const antiX = dxSun / dSun;
+  const antiY = dySun / dSun;
+  const worldDist = Math.max(0.18, Math.hypot(wp.x, wp.z, wp.y));
+  const closeness = Math.max(0.22, Math.min(1.0, 0.52 / Math.pow(worldDist, 0.78)));
+  const persp = Math.min(1.75, pt.persp || 1.0);
+  return { pt, antiX, antiY, backX, backY, closeness, persp, cm };
+}
 
 function makeRng(seed) {
   let s = seed >>> 0;
@@ -262,83 +290,249 @@ export function fillGpuParticles(gpuBuf, pools, st, params) {
 }
 
 export function drawCosmosHud(ctx, w, h, st, webGraph, galaxyBooks, agentsByPlanet, layout, drawEventFn) {
-  const { cx, cy, span, tilt, solarAlpha, galAlpha, webAlpha } = layout;
+  const { cx, cy, span, tilt, solarAlpha, galAlpha, webAlpha, solarProj, planetFocusId, planetZoom = 1.0 } = layout;
 
   if (solarAlpha > 0.015) {
     ctx.save();
     ctx.globalAlpha = solarAlpha;
-    const yawCos = Math.cos(st.camRot.x * 0.38), yawSin = Math.sin(st.camRot.x * 0.38);
+    const yawCos = Math.cos(st.camRot.x * 0.38);
+    const yawSin = Math.sin(st.camRot.x * 0.38);
+    const project = solarProj?.project || ((ux, uz, uy = 0) => {
+      const rx = ux * yawCos - uz * yawSin;
+      const rz = ux * yawSin + uz * yawCos;
+      const persp = 1.0 / (1.0 - rz * 0.26);
+      return {
+        x: cx + rx * span * persp,
+        y: cy + (rz * span * tilt + uy * span) * persp,
+        persp,
+      };
+    });
+    const sunPt = solarProj?.sunPt || { x: cx, y: cy };
     const orbitOpacity = st.constants.orbitLines;
+    const closeupFade = planetFocusId ? Math.max(0, 1.0 - Math.max(0, (planetZoom - 2.6) / 2.2)) : 1.0;
+
+    // Clip orbit & trail strokes behind planet globes so orbits never cut across zoomed spheres
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(0, 0, w, h);
+    for (const p of PLANETS) {
+      const pos = st.planetScreen[p.id];
+      if (!pos || pos.r <= 2) continue;
+      ctx.moveTo(pos.x + pos.r * 0.99, pos.y);
+      ctx.arc(pos.x, pos.y, pos.r * 0.99, 0, Math.PI * 2, true);
+    }
+    ctx.clip('evenodd');
 
     if (orbitOpacity > 0.02) {
       PLANETS.forEach((p) => {
         const agent = agentsByPlanet[p.id];
-        const isFocus = st.hoverPlanetId === p.id || st.focusedPlanetId === p.id;
+        const isFocus = st.hoverPlanetId === p.id || st.focusedPlanetId === p.id || planetFocusId === p.id;
         ctx.beginPath();
-        for (let i = 0; i <= 112; i++) {
-          const a = (i / 112) * Math.PI * 2;
-          const ux = Math.cos(a) * p.orbitR, uz = Math.sin(a) * p.orbitR;
-          const rx = ux * yawCos - uz * yawSin, rz = ux * yawSin + uz * yawCos;
-          const persp = 1.0 / (1.0 - rz * 0.26);
-          const x = cx + rx * span * persp, y = cy + rz * span * tilt * persp;
-          if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+        for (let i = 0; i <= 120; i++) {
+          const E = (i / 120) * Math.PI * 2;
+          const wp = keplerOrbitPoint(p, E);
+          const pt = project(wp.x, wp.z, wp.y);
+          if (i === 0) ctx.moveTo(pt.x, pt.y); else ctx.lineTo(pt.x, pt.y);
         }
         ctx.strokeStyle = isFocus
-          ? (agent && agent.status === 'waiting' ? `rgba(255, 190, 92, ${0.40 * orbitOpacity})` : `rgba(136, 206, 255, ${0.36 * orbitOpacity})`)
+          ? (agent && agent.status === 'waiting' ? `rgba(255, 190, 92, ${0.38 * orbitOpacity})` : `rgba(136, 206, 255, ${0.34 * orbitOpacity})`)
           : (agent ? `rgba(176, 208, 255, ${0.14 * orbitOpacity})` : `rgba(156, 184, 228, ${0.068 * orbitOpacity})`);
         ctx.lineWidth = isFocus ? 1.15 : 0.85;
         ctx.stroke();
       });
     }
 
-    // Orbit motion trails
-    PLANETS.forEach((p) => {
-      const ang0 = p.phase + st.time * p.speed;
-      const agent = agentsByPlanet[p.id];
-      const arcLen = agent ? 0.36 : 0.22;
-      ctx.beginPath();
-      for (let i = 0; i <= 22; i++) {
-        const a = ang0 - (i / 22) * arcLen;
-        const ux = Math.cos(a) * p.orbitR, uz = Math.sin(a) * p.orbitR;
-        const rx = ux * yawCos - uz * yawSin, rz = ux * yawSin + uz * yawCos;
-        const persp = 1.0 / (1.0 - rz * 0.26);
-        const x = cx + rx * span * persp, y = cy + rz * span * tilt * persp;
-        if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
-      }
-      const pos = st.planetScreen[p.id];
-      if (pos) {
-        const ex = Math.cos(ang0 - arcLen) * p.orbitR, ez = Math.sin(ang0 - arcLen) * p.orbitR;
-        const erx = ex * yawCos - ez * yawSin, erz = ex * yawSin + ez * yawCos;
-        const ep = 1.0 / (1.0 - erz * 0.26);
-        const grad = ctx.createLinearGradient(pos.x, pos.y, cx + erx * span * ep, cy + erz * span * tilt * ep);
-        const tint = agent && agent.status === 'waiting' ? '255, 190, 92' : '152, 208, 255';
-        grad.addColorStop(0, `rgba(${tint}, ${agent ? 0.34 : 0.14})`);
-        grad.addColorStop(1, `rgba(${tint}, 0)`);
-        ctx.strokeStyle = grad; ctx.lineWidth = agent ? 1.4 : 0.9; ctx.stroke();
-      }
-    });
-
-    // Long-Period Comet
-    {
-      const cAng = st.realTime * 0.085 + 1.1;
-      const ux = Math.cos(cAng) * 0.78 - 0.32, uz = Math.sin(cAng) * 0.42 + 0.06;
-      const rx = ux * yawCos - uz * yawSin, rz = ux * yawSin + uz * yawCos;
-      const persp = 1.0 / (1.0 - rz * 0.26);
-      const cometX = cx + rx * span * persp, cometY = cy + (rz * span * tilt - Math.sin(cAng) * 0.08 * span) * persp;
-      const dxSun = cometX - cx, dySun = cometY - cy, dSun = Math.max(Math.hypot(dxSun, dySun), 1);
-      const closeness = Math.max(0.25, Math.min(1.0, (span * 0.7) / dSun));
-      const tailLen = (48 + closeness * 76) * persp;
-      const tx = cometX + (dxSun / dSun) * tailLen, ty = cometY + (dySun / dSun) * tailLen;
-      const ionGrad = ctx.createLinearGradient(cometX, cometY, tx, ty);
-      ionGrad.addColorStop(0, `rgba(176, 232, 255, ${0.58 * closeness})`);
-      ionGrad.addColorStop(1, 'rgba(116, 196, 255, 0)');
-      ctx.beginPath(); ctx.moveTo(cometX, cometY); ctx.lineTo(tx, ty);
-      ctx.strokeStyle = ionGrad; ctx.lineWidth = 2.1 * persp; ctx.lineCap = 'round'; ctx.stroke();
-      const coma = ctx.createRadialGradient(cometX, cometY, 0, cometX, cometY, 6.5 * persp);
-      coma.addColorStop(0, 'rgba(240, 252, 255, 0.95)');
-      coma.addColorStop(1, 'rgba(144, 218, 255, 0)');
-      ctx.fillStyle = coma; ctx.beginPath(); ctx.arc(cometX, cometY, 6.5 * persp, 0, Math.PI * 2); ctx.fill();
+    // Keplerian Orbit motion trails
+    if (orbitOpacity > 0.02) {
+      PLANETS.forEach((p) => {
+        const agent = agentsByPlanet[p.id];
+        const dtArc = (agent ? 0.36 : 0.22) / Math.max(p.speed, 0.01);
+        ctx.beginPath();
+        let endPt = null;
+        for (let i = 0; i <= 22; i++) {
+          const wp = keplerPos(p, st.time - (i / 22) * dtArc);
+          const pt = project(wp.x, wp.z, wp.y);
+          if (i === 0) ctx.moveTo(pt.x, pt.y); else ctx.lineTo(pt.x, pt.y);
+          if (i === 22) endPt = pt;
+        }
+        const pos = st.planetScreen[p.id];
+        if (pos && endPt) {
+          const grad = ctx.createLinearGradient(pos.x, pos.y, endPt.x, endPt.y);
+          const tint = agent && agent.status === 'waiting' ? '255, 190, 92' : '152, 208, 255';
+          grad.addColorStop(0, `rgba(${tint}, ${(agent ? 0.32 : 0.13) * Math.min(1.2, orbitOpacity)})`);
+          grad.addColorStop(1, `rgba(${tint}, 0)`);
+          ctx.strokeStyle = grad;
+          ctx.lineWidth = agent ? 1.35 : 0.85;
+          ctx.stroke();
+        }
+      });
     }
+
+    // Solar Apex Galactic Motion & 3D Keplerian Helical Planet Trails (when zoomed out)
+    const galTravel = solarProj?.galTravel || 0;
+    if (galTravel > 0.02 && orbitOpacity > 0.02 && solarProj?.sunGalacticOffset) {
+      const gt = galTravel;
+      const trOp = Math.min(1.35, orbitOpacity);
+      const trailDur = 26.0;
+      const fwdDur = 8.5;
+      const stepsBack = 42;
+      ctx.beginPath();
+      for (let i = 0; i <= stepsBack; i++) {
+        const tHist = st.time - (i / stepsBack) * trailDur;
+        const gOff = solarProj.sunGalacticOffset(tHist, gt);
+        const pt = project(0, 0, 0, gOff);
+        if (i === 0) ctx.moveTo(pt.x, pt.y); else ctx.lineTo(pt.x, pt.y);
+      }
+      const tailEndPt = project(0, 0, 0, solarProj.sunGalacticOffset(st.time - trailDur, gt));
+      const sunTrailGrad = ctx.createLinearGradient(sunPt.x, sunPt.y, tailEndPt.x, tailEndPt.y);
+      sunTrailGrad.addColorStop(0, `rgba(255, 214, 142, ${0.26 * gt * trOp})`);
+      sunTrailGrad.addColorStop(0.48, `rgba(255, 188, 108, ${0.11 * gt * trOp})`);
+      sunTrailGrad.addColorStop(1, 'rgba(255, 164, 82, 0)');
+      ctx.strokeStyle = sunTrailGrad;
+      ctx.lineWidth = 1.25;
+      ctx.stroke();
+
+      ctx.beginPath();
+      for (let i = 0; i <= 14; i++) {
+        const tFwd = st.time + (i / 14) * fwdDur;
+        const gOff = solarProj.sunGalacticOffset(tFwd, gt);
+        const pt = project(0, 0, 0, gOff);
+        if (i === 0) ctx.moveTo(pt.x, pt.y); else ctx.lineTo(pt.x, pt.y);
+      }
+      ctx.setLineDash([3, 7]);
+      ctx.strokeStyle = `rgba(255, 224, 168, ${0.14 * gt * trOp})`;
+      ctx.lineWidth = 0.85;
+      ctx.stroke();
+      ctx.setLineDash([]);
+
+      const helixSteps = 56;
+      PLANETS.forEach((p) => {
+        const agent = agentsByPlanet[p.id];
+        ctx.beginPath();
+        let endPt = null;
+        for (let i = 0; i <= helixSteps; i++) {
+          const tHist = st.time - (i / helixSteps) * trailDur;
+          const gOff = solarProj.sunGalacticOffset(tHist, gt);
+          const wp = keplerPos(p, tHist);
+          const pt = project(wp.x, wp.z, wp.y, gOff);
+          if (i === 0) ctx.moveTo(pt.x, pt.y); else ctx.lineTo(pt.x, pt.y);
+          if (i === helixSteps) endPt = pt;
+        }
+        const pos = st.planetScreen[p.id];
+        if (pos && endPt) {
+          const hg = ctx.createLinearGradient(pos.x, pos.y, endPt.x, endPt.y);
+          const colRgb = agent ? '142, 208, 255' : '184, 202, 234';
+          hg.addColorStop(0, `rgba(${colRgb}, ${(agent ? 0.16 : 0.085) * gt * trOp})`);
+          hg.addColorStop(0.55, `rgba(${colRgb}, ${(agent ? 0.068 : 0.036) * gt * trOp})`);
+          hg.addColorStop(1, `rgba(${colRgb}, 0)`);
+          ctx.strokeStyle = hg;
+          ctx.lineWidth = agent ? 0.95 : 0.65;
+          ctx.stroke();
+        }
+      });
+    }
+
+    ctx.restore(); // end sphere-clip
+
+    // Photorealistic Volumetric Dual-Tail Comets (Additive Soft Gaussian Dust Fan + Feathered CO+ Ion Plume + Parabolic Coma)
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    for (let ci = 0; ci < COMETS.length; ci++) {
+      const cs = evalCometState(COMETS[ci], st.realTime, project, sunPt);
+      const cmx = cs.pt.x;
+      const cmy = cs.pt.y;
+      if (cmx < -220 || cmx > w + 220 || cmy < -220 || cmy > h + 220) continue;
+      const cl = cs.closeness;
+      const sc = cs.persp * cs.cm.scale;
+      const ionLen = (58 + cl * 110) * sc;
+      const dustLen = (48 + cl * 88) * sc;
+
+      const dDirX = cs.antiX * 0.72 + cs.backX * 0.28;
+      const dDirY = cs.antiY * 0.72 + cs.backY * 0.28;
+      const dLenN = Math.max(Math.hypot(dDirX, dDirY), 0.001);
+      const dnx = dDirX / dLenN;
+      const dny = dDirY / dLenN;
+      const dpx = -dny;
+      const dpy = dnx;
+      const curveSign = (cs.antiX * cs.backY - cs.antiY * cs.backX) >= 0 ? 1 : -1;
+      const [dr, dg, db] = cs.cm.dustRgb;
+
+      const dustSteps = 26;
+      for (let sIdx = 0; sIdx < dustSteps; sIdx++) {
+        const u = (sIdx + 0.35) / dustSteps;
+        const along = Math.pow(u, 1.15) * dustLen;
+        const bend = (u * u * 15.5 + u * 2.0) * sc * curveSign;
+        const px = cmx + dnx * along + dpx * bend;
+        const py = cmy + dny * along + dpy * bend;
+        const puffR = (2.8 + Math.pow(u, 0.88) * 16.5) * sc;
+        const falloff = Math.pow(1.0 - u, 1.55) * (0.105 * cl);
+        if (falloff < 0.002) continue;
+        const g = ctx.createRadialGradient(px, py, 0, px, py, puffR);
+        g.addColorStop(0, `rgba(${dr}, ${dg}, ${db}, ${falloff})`);
+        g.addColorStop(0.42, `rgba(${dr}, ${Math.max(0, dg - 10)}, ${Math.max(0, db - 22)}, ${falloff * 0.42})`);
+        g.addColorStop(1, `rgba(${dr}, ${Math.max(0, dg - 18)}, ${Math.max(0, db - 34)}, 0)`);
+        ctx.fillStyle = g;
+        ctx.beginPath();
+        ctx.arc(px, py, puffR, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
+      const ipx = -cs.antiY;
+      const ipy = cs.antiX;
+      const [ir, ig, ib] = cs.cm.ionRgb;
+      const ionAngle = Math.atan2(cs.antiY, cs.antiX);
+      const ionSteps = 22;
+      for (let sIdx = 0; sIdx < ionSteps; sIdx++) {
+        const u = (sIdx + 0.25) / ionSteps;
+        const along = Math.pow(u, 1.08) * ionLen;
+        const sway = Math.sin(u * 6.5 - st.realTime * 1.9 + ci * 2.1) * (0.9 + u * 2.8) * sc;
+        const px = cmx + cs.antiX * along + ipx * sway;
+        const py = cmy + cs.antiY * along + ipy * sway;
+        const knot = 0.84 + 0.34 * Math.pow(0.5 + 0.5 * Math.sin(u * 14.0 - st.realTime * 3.1 + ci), 3.0);
+        const rx = (5.5 + u * 11.5) * sc;
+        const ry = (1.6 + u * 4.4) * sc;
+        const fa = Math.pow(1.0 - u, 1.45) * 0.095 * cl * knot;
+        if (fa < 0.002) continue;
+        ctx.save();
+        ctx.translate(px, py);
+        ctx.rotate(ionAngle);
+        ctx.scale(1, ry / Math.max(rx, 0.5));
+        const igrad = ctx.createRadialGradient(0, 0, 0, 0, 0, rx);
+        igrad.addColorStop(0, `rgba(178, 232, 255, ${fa})`);
+        igrad.addColorStop(0.45, `rgba(${ir}, ${ig}, ${ib}, ${fa * 0.45})`);
+        igrad.addColorStop(1, `rgba(${ir}, ${ig}, ${ib}, 0)`);
+        ctx.fillStyle = igrad;
+        ctx.beginPath();
+        ctx.arc(0, 0, rx, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.restore();
+      }
+
+      const outerR = (10.5 + cl * 7.5) * sc;
+      const outerComa = ctx.createRadialGradient(
+        cmx - cs.antiX * 0.8 * sc, cmy - cs.antiY * 0.8 * sc, 0,
+        cmx + cs.antiX * 2.2 * sc, cmy + cs.antiY * 2.2 * sc, outerR,
+      );
+      outerComa.addColorStop(0, `rgba(248, 253, 255, ${0.58 * cl})`);
+      outerComa.addColorStop(0.22, `rgba(168, 236, 238, ${0.26 * cl})`);
+      outerComa.addColorStop(0.55, `rgba(126, 202, 236, ${0.075 * cl})`);
+      outerComa.addColorStop(1, 'rgba(96, 174, 224, 0)');
+      ctx.fillStyle = outerComa;
+      ctx.beginPath();
+      ctx.arc(cmx, cmy, outerR, 0, Math.PI * 2);
+      ctx.fill();
+
+      const coreR = Math.max(1.3, 2.5 * sc);
+      const coreGrad = ctx.createRadialGradient(cmx, cmy, 0, cmx, cmy, coreR);
+      coreGrad.addColorStop(0, 'rgba(255, 255, 255, 0.96)');
+      coreGrad.addColorStop(0.45, 'rgba(232, 248, 255, 0.56)');
+      coreGrad.addColorStop(1, 'rgba(176, 228, 255, 0)');
+      ctx.fillStyle = coreGrad;
+      ctx.beginPath();
+      ctx.arc(cmx, cmy, coreR, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.restore();
 
     // Occasional Deep-Space Meteors
     if (st.realTime >= st.nextMeteorAt) {
@@ -358,31 +552,23 @@ export function drawCosmosHud(ctx, w, h, st, webGraph, galaxyBooks, agentsByPlan
       ctx.strokeStyle = mg; ctx.lineWidth = 1.25; ctx.stroke();
     }
 
-    // Earth's Moon
-    const earthPos = st.planetScreen.earth;
-    if (earthPos) {
-      const mAng = st.realTime * 0.46;
-      ctx.fillStyle = 'rgba(226, 234, 248, 0.82)';
-      ctx.beginPath();
-      ctx.arc(earthPos.x + Math.cos(mAng) * (earthPos.r * 1.72), earthPos.y + Math.sin(mAng) * (earthPos.r * 0.62), Math.max(1.8, earthPos.r * 0.085), 0, Math.PI * 2);
-      ctx.fill();
-    }
-
-    // Active Session Flashing Halos & Orbiting Satellites
+    // Active Session Flashing Halos & Orbiting Satellites (converged on deep close-up)
     Object.entries(agentsByPlanet).forEach(([planetId, agent]) => {
       const pos = st.planetScreen[planetId];
       if (!pos || !agent) return;
+      if (planetFocusId === planetId && closeupFade < 0.05) return;
       const liveSessions = agent.liveSessions || [];
 
       if (st.constants.activeFlash && liveSessions.length > 0) {
         const isWait = agent.status === 'waiting';
         const rgb = isWait ? '255, 190, 92' : '116, 202, 255';
         const rings = isWait ? 2 : 1;
+        const fadeMul = planetFocusId === planetId ? closeupFade : 1.0;
         for (let k = 0; k < rings; k++) {
           const ph = (st.realTime * (isWait ? 0.42 : 0.34) + k * 0.5) % 1.0;
           ctx.beginPath();
           ctx.arc(pos.x, pos.y, pos.r * (1.22 + ph * (isWait ? 1.22 : 0.88)), 0, Math.PI * 2);
-          ctx.strokeStyle = `rgba(${rgb}, ${(1.0 - ph) * (isWait ? 0.52 : 0.36)})`;
+          ctx.strokeStyle = `rgba(${rgb}, ${(1.0 - ph) * (isWait ? 0.52 : 0.36) * fadeMul})`;
           ctx.lineWidth = isWait ? 1.35 : 1.1;
           ctx.stroke();
         }
