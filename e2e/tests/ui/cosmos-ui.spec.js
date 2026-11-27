@@ -239,9 +239,13 @@ test.describe('Yeaft Cosmos UI', () => {
     await page.keyboard.press('Escape');
     await expect(dockedPopover).toHaveCount(0);
     await expect(page.locator('.cosmos-drawer')).toBeVisible();
-    // Close drawer back to Solar System and verify remaining running Earth card returns smoothly to top-right
+    // Close drawer back to Saturn focus, then return to full Solar System view so Earth is centered back in-viewport
     await page.keyboard.press('Escape');
     await expect(page.locator('.cosmos-drawer')).toHaveCount(0);
+    if (await page.locator('.cosmos-pf-return').isVisible()) {
+      await page.locator('.cosmos-pf-return').click();
+      await expect(page.locator('.cosmos-planet-focus-dock')).toHaveCount(0);
+    }
     await expect(signalStreamEl).toBeVisible();
     await expect(signalCards).toHaveCount(1);
     await expect(signalCards.nth(0)).toHaveClass(/is-running/);
@@ -307,6 +311,10 @@ test.describe('Yeaft Cosmos UI', () => {
     }
 
     // 1. Clicking a planet opens Quick Auto-Route Composer (NOT right drawer)
+    await expect(async () => {
+      const b = await earthTag.boundingBox();
+      expect(Boolean(b && b.x > 10 && b.x + b.width < 1270 && b.y > 10 && b.y + b.height < 710)).toBe(true);
+    }).toPass({ timeout: 3000 });
     await clickOrbiting(earthTag);
     await expect(page.locator('.cosmos-quick-composer')).toBeVisible();
     await expect(page.locator('.cosmos-drawer')).toHaveCount(0);
