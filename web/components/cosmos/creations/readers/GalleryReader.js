@@ -196,9 +196,21 @@ export default {
       const files = Array.from(e.target?.files || []);
       if (e.target) e.target.value = '';
       if (!files.length || !this.canMutate()) return;
+      const targetAgentId = this.agentId;
+      const targetCreationId = this.creationId;
+      const targetNodeId = this.node?.id || '';
+      if (!targetNodeId) return;
       this.uploading = true;
       try {
-        const res = await this.creationsStore.uploadSources(this.agentId, this.creationId, files, []);
+        const res = await this.creationsStore.uploadSources(targetAgentId, targetCreationId, files, []);
+        if (
+          this.agentId !== targetAgentId
+          || this.creationId !== targetCreationId
+          || this.node?.id !== targetNodeId
+          || !this.canMutate()
+        ) {
+          return;
+        }
         const added = Array.isArray(res?.sources) ? res.sources : (res?.source ? [res.source] : []);
         for (const src of added) {
           if (src && src.id) {
@@ -210,7 +222,7 @@ export default {
             }, this.frames.length));
           }
         }
-        if (this.dirty) await this.saveGallery();
+        if (this.dirty && this.node?.id === targetNodeId) await this.saveGallery();
       } finally {
         this.uploading = false;
       }

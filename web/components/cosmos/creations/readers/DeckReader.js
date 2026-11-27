@@ -328,9 +328,10 @@ export default {
 
         <div class="creation-reader-actions">
           <select
-            v-if="activeSlide && editing"
+            v-if="activeSlide && editing && canMutate()"
             v-model="activeSlide.layout"
             class="creation-compact-select"
+            :disabled="!canMutate()"
             @change="markDirty"
           >
             <option v-for="l in layouts" :key="l" :value="l">{{ l }}</option>

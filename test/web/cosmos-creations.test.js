@@ -1603,6 +1603,61 @@ describe('Cosmos Creations — End-to-End Web Store <-> Server Relay <-> Agent S
     expect(staleVideoWrap.vm.scenes).toHaveLength(2);
     staleVideoWrap.unmount();
 
+    // R7-#1: Clean Deck already in edit mode hides/disables layout selector while refreshing stale revision
+    const cleanDeckWrap = mount(DeckReader, {
+      props: {
+        node: { id: 'd-clean', title: 'Deck', modality: 'slide_deck', currentRevId: 'rev-1' },
+        content: '{"slides":[{"slideId":"s1","layout":"title","title":"Slide 1"}]}',
+        contentLoaded: true,
+        loadedRevId: 'rev-1',
+        agentId: 'agent-a',
+        creationId: res.creation.id,
+      },
+      global: { mocks: { $t } },
+    });
+    cleanDeckWrap.vm.startEditing();
+    await flushPromises();
+    expect(cleanDeckWrap.find('select.creation-compact-select').exists()).toBe(true);
+    await cleanDeckWrap.setProps({ contentLoaded: false });
+    expect(cleanDeckWrap.find('select.creation-compact-select').exists()).toBe(false);
+    cleanDeckWrap.unmount();
+
+    // R7-#2: Deferred Gallery upload followed by switching to Gallery B must NOT append or autosave into Gallery B
+    const { default: GalleryReader } = await import('../../web/components/cosmos/creations/readers/GalleryReader.js');
+    let resolveUpload;
+    const origUploadSources = creationsStore.uploadSources.bind(creationsStore);
+    creationsStore.uploadSources = vi.fn(() => new Promise((r) => { resolveUpload = r; }));
+    const onSaveGallery = vi.fn(async () => ({ ok: true }));
+    const galleryWrap = mount(GalleryReader, {
+      props: {
+        node: { id: 'gal-A', title: 'Gallery A', modality: 'image_gallery', currentRevId: 'rev-a' },
+        content: JSON.stringify({ frames: [{ frameId: 'fa', title: 'A1', caption: '' }] }),
+        contentLoaded: true,
+        loadedRevId: 'rev-a',
+        agentId: 'agent-a',
+        creationId: res.creation.id,
+        onSaveContent: onSaveGallery,
+      },
+      global: { mocks: { $t } },
+    });
+    const uploadPromise = galleryWrap.vm.onUploadImage({
+      target: { files: [{ name: 'hero.png' }], value: 'hero.png' },
+    });
+    // Switch to Gallery B and let B hydrate BEFORE Gallery A's upload resolves
+    await galleryWrap.setProps({
+      node: { id: 'gal-B', title: 'Gallery B', modality: 'image_gallery', currentRevId: 'rev-b' },
+      content: JSON.stringify({ frames: [{ frameId: 'fb', title: 'B1', caption: '' }] }),
+      contentLoaded: true,
+      loadedRevId: 'rev-b',
+    });
+    resolveUpload({ sources: [{ id: 'src-new', name: 'hero.png' }] });
+    await uploadPromise;
+    await flushPromises();
+    expect(galleryWrap.vm.frames.map((f) => f.title)).toEqual(['B1']);
+    expect(onSaveGallery).not.toHaveBeenCalled();
+    galleryWrap.unmount();
+    creationsStore.uploadSources = origUploadSources;
+
     creationsStore.request = origRequest;
   });
 });
