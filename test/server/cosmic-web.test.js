@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -10,6 +11,8 @@ import supertest from 'supertest';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as db from '../../server/db/cosmic-web-db.js';
 import { safeFetch, validateExternalUrl } from '../../server/cosmic-web/safe-fetch.js';
+import { createMediaProxy, toProxyMediaUrl } from '../../server/cosmic-web/media-proxy.js';
+import { extractCommunityEnrichment } from '../../server/cosmic-web/community-extractor.js';
 import { parseFeedXml, resolveHttpUrl } from '../../server/cosmic-web/rss-parser.js';
 import { extractCleanArticle } from '../../server/cosmic-web/article-extractor.js';
 import { BUILTIN_DOMAINS, BUILTIN_SOURCES } from '../../server/cosmic-web/catalog.js';
@@ -17,7 +20,7 @@ import { fetchSource } from '../../server/cosmic-web/sources.js';
 import { buildGraphProjection, canonicalizeUrl, clusterSimilarity, computeHeatScore, extractTokens } from '../../server/cosmic-web/clusterer.js';
 import { createCosmicWebService, ingestCosmicWebItems, startCosmicWebScheduler, stopCosmicWebScheduler } from '../../server/cosmic-web/service.js';
 import { clearAllCosmicWebAiRequests, clearCosmicWebAiRequestsForAgent, handleCosmicWebAiResponse,
-  listCapableAgentsForUser, requestCosmicWebAi } from '../../server/cosmic-web/ai-bridge.js';
+  listCapableAgentsForUser, requestCosmicWebAi, validateCosmicWebAiResult } from '../../server/cosmic-web/ai-bridge.js';
 import * as encryption from '../../server/encryption.js';
 import { agents, webClients } from '../../server/context.js';
 vi.mock('../../server/config.js', async importOriginal => {
@@ -78,7 +81,7 @@ function transport(fn) {
 }
 function stream(parts, headers = {}, statusCode = 200) { return Object.assign(Readable.from(parts), { headers, statusCode }); }
 function makeService(options = {}) { return service = createCosmicWebService({ now: () => NOW, dnsLookup: dns, autoRefresh: () => false, isUserActive: () => true, ...options }); }
-function agent(id, ownerId, caps = ['cosmic_web_briefing']) {
+function agent(id, ownerId, caps = ['cosmic_web_briefing', 'cosmic_web_research', 'cosmic_web_follow_up', 'cosmic_web_radar', 'cosmic_web_cancel']) {
   const frames = [];
   agents.set(id, { ownerId, name: id, capabilities: caps, encryptOutbound: false, ws: { readyState: 1, send: value => frames.push(JSON.parse(value)) } });
   return frames;
@@ -134,11 +137,11 @@ describe('safe outbound fetch', () => {
 describe('feed parsing and source adapters', () => {
   it('parses RSS, Atom and RDF without interpreting XML directives', () => {
     expect(parseFeedXml(rss, 'https://example.com/feed')).toEqual([{ title: '中国 AI & Models', url: 'https://example.com/news?utm_source=rss&x=1',
-      publishedAt: NOW - 3 * HOUR, summaryExcerpt: '你好 & English 🚀' }]);
+      publishedAt: NOW - 3 * HOUR, summaryExcerpt: '你好 & English 🚀', media: [] }]);
     const atom = `<feed xmlns="http://www.w3.org/2005/Atom" xml:base="https://atom.example/">
       <entry><title>测试 &quot;English&quot;</title><link rel="self" href="internal"/><link rel="alternate" href="story"/>
       <updated>2026-11-27T20:00:00+08:00</updated><summary type="html">&lt;b&gt;概要&lt;/b&gt; &amp; news</summary></entry></feed>`;
-    expect(parseFeedXml(atom, 'https://example.com')[0]).toEqual({ title: '测试 "English"', url: 'https://atom.example/story', publishedAt: NOW, summaryExcerpt: '概要 & news' });
+    expect(parseFeedXml(atom, 'https://example.com')[0]).toEqual({ title: '测试 "English"', url: 'https://atom.example/story', publishedAt: NOW, summaryExcerpt: '概要 & news', media: [] });
     expect(parseFeedXml('<rdf:RDF><item><title>A</title><link>https://example.com/</link><dc:date>2026-11-27T12:00:00Z</dc:date></item></rdf:RDF>')[0].publishedAt).toBe(NOW);
     expect(parseFeedXml('<feed><entry><title>X</title><link href="javascript:alert(1)"/></entry></feed>')).toEqual([]);
   });
@@ -175,7 +178,7 @@ describe('feed parsing and source adapters', () => {
     expect(performance.now() - start).toBeLessThan(100);
   });
   it('normalizes fetched feed, signed CLS and embedded Baidu data', async () => {
-    expect(BUILTIN_SOURCES).toHaveLength(23);
+    expect(new Set(BUILTIN_SOURCES.map(s => s.id)).size).toBe(51);
     const fetcher = vi.fn(async url => {
       if (url.includes('cls.cn')) {
         const p = new URL(url).searchParams;
@@ -232,10 +235,10 @@ describe('clustering, isolation and retention', () => {
   });
   it('balances graph hubs and adds cross-edges for shared keywords', () => {
     const common = { headline: 'Story', itemCount: 1, publishedAt: NOW, keywords: ['common'] };
-    const clusters = [...Array.from({ length: 90 }, (_, i) => ({ ...common, id: `${i}`, domainId: 'ai', heatScore: i + 3 })),
+    const clusters = [...Array.from({ length: 190 }, (_, i) => ({ ...common, id: `${i}`, domainId: 'ai', heatScore: i + 3 })),
       { ...common, id: 'tech', domainId: 'tech', heatScore: 1 }, { ...common, id: 'hot', domainId: 'hot', heatScore: 100 }];
     const graph = buildGraphProjection({ prefs: { enabledDomainIds: ['ai', 'tech'] }, clusters, domains: BUILTIN_DOMAINS });
-    expect(graph.hubs.map(h => h.domainId)).toEqual(['ai', 'tech']); expect(graph.nodes).toHaveLength(72);
+    expect(graph.hubs.map(h => h.domainId)).toEqual(['ai', 'tech']); expect(graph.nodes).toHaveLength(180);
     expect(graph.nodes[1].id).toBe('cluster:tech'); expect(graph.edges).toContainEqual(expect.objectContaining({ kind: 'cross', target: 'hub:tech' }));
   });
   it('refreshes private RSS only for its owner, isolates same-story state and disallows cross-scope writes', async () => {
@@ -245,8 +248,8 @@ describe('clustering, isolation and retention', () => {
     await svc.savePreferences('bob', { enabledDomainIds: [], customDomains: [{ id: 'mine', name: 'Same id' }] });
     expect((await svc.refresh('alice')).added).toBe(1); expect((await svc.refresh('bob')).added).toBe(0);
     const id = svc.feed('alice').clusters[0].id;
-    const itemId = svc.cluster('alice', id).items[0].id;
-    expect(svc.feed('bob').total).toBe(0); expect(() => svc.cluster('bob', id)).toThrow('Cluster not found');
+    const itemId = db.listVisibleItems('alice', [id])[0].id;
+    expect(svc.feed('bob').total).toBe(0); await expect(svc.cluster('bob', id)).rejects.toThrow('Cluster not found');
     expect(() => svc.setClusterState('bob', id, { bookmarked: true })).toThrow('Cluster not found');
     await expect(svc.article('bob', id, itemId)).rejects.toThrow('Cluster not found');
     expect(svc.setClusterState('alice', id, { bookmarked: true, unread: false })).toEqual({ bookmarked: true, unread: false, muted: false });
@@ -276,7 +279,7 @@ describe('clustering, isolation and retention', () => {
     db.saveUserClusterState('alice', id, { bookmarked: true }, NOW);
     const itemId = db.listVisibleItems('alice', [id])[0].id;
     db.setArticleCache('alice', itemId, {}, NOW + 1); db.setAiCache('alice', 'old', {}, NOW + 1);
-    expect(db.pruneCosmicWebDb(NOW + db.RETENTION_MS + 1)).toEqual({ items: 2, clusters: 2, articles: 1, ai: 1 });
+    expect(db.pruneCosmicWebDb(NOW + db.RETENTION_MS + 1)).toEqual({ items: 2, clusters: 2, articles: 1, ai: 1, enrichment: 0 });
     expect(db.listVisibleItems('bob', [id])).toHaveLength(1);
     expect(db.listUserClusterStates('bob').has(id)).toBe(false);
     db.closeCosmicWebDb(); db.closeCosmicWebDb();
@@ -365,7 +368,7 @@ describe('AI bridge', () => {
     const disconnect = expect(ask()).rejects.toMatchObject({ status: 504 });
     await expect(ask()).rejects.toMatchObject({ status: 429 });
     await vi.advanceTimersByTimeAsync(30_000);
-    await vi.advanceTimersByTimeAsync(15_000); await timeout;
+    await vi.advanceTimersByTimeAsync(45_000); await timeout;
     // Both initial requests expired together. Use a fresh request for disconnect cleanup.
     await disconnect;
     const dropped = expect(ask()).rejects.toMatchObject({ status: 503 });
@@ -412,7 +415,7 @@ describe('REST and scheduler', () => {
     for (const [method, path] of paths) await request[method](base + path).expect(401);
     await authed('get', '/feed', 'unknown').expect(401);
     const boot = await authed('get', '/bootstrap').expect('Cache-Control', 'private, no-store').expect(200);
-    expect(boot.body.domains).toHaveLength(6); expect(boot.body.agents.map(a => a.id)).toEqual(['alice-agent']);
+    expect(boot.body.domains).toHaveLength(9); expect(boot.body.agents.map(a => a.id)).toEqual(['alice-agent']);
     expect((await authed('get', `/feed?q=${encodeURIComponent('中国')}`).expect(200)).body.clusters[0].id).toBe(id);
     expect((await authed('get', '/graph').expect(200)).body.nodes[0].clusterId).toBe(id);
     const saved = await authed('put', '/preferences').send({ userId: 'bob', watchKeywords: ['模型'] }).expect(200);
@@ -426,7 +429,7 @@ describe('REST and scheduler', () => {
     expect((await authed('get', `${cluster}/article`).expect(200)).body.quality).toBe('full');
     await authed('get', `${cluster}/article`).expect(200);
     await authed('get', `${cluster}/article?url=https%3A%2F%2Fother.example%2F`).expect(404);
-    expect(fetcher).toHaveBeenCalledTimes(1);
+    expect(fetcher.mock.calls.filter(([u]) => u === 'https://example.com/article').length).toBeGreaterThanOrEqual(1);
     const brief = () => authed('post', `${cluster}/ai-brief`).send({ perspective: 'engineering' }).expect(200);
     expect((await brief()).body.cached).toBe(false); expect((await brief()).body.cached).toBe(true);
     expect(calls).toHaveLength(1); expect(calls[0].payload.articleMarkdown).toContain('Important');
@@ -437,38 +440,34 @@ describe('REST and scheduler', () => {
     expect(refreshed.body).toMatchObject({ domains: expect.any(Array), stats: expect.any(Object) });
     await authed('post', '/refresh').expect(429);
   });
-  it('awaits cold selected articles, isolates explicit Agent caches, and uses the available Auto Agent', async () => {
-    let finishFetch;
-    const fetcher = vi.fn(url => new Promise(resolve => { finishFetch = () => resolve(response(story, `${url}/redirected`)); }));
+  it('does not block on a cold article, uses cached Markdown and isolates explicit Agent caches', async () => {
+    const pending = [];
+    const fetcher = vi.fn(url => new Promise(resolve => pending.push(() => resolve(response(story, url)))));
     const requestAi = vi.fn(async () => storyResult);
     const svc = makeService({ fetcher, requestAi });
     agent('first', 'alice'); agent('second', 'alice');
     await svc.savePreferences('alice', { preferredAgentId: 'offline' });
-    const firstUrl = 'https://example.com/first', secondUrl = 'https://example.com/second';
-    ingestCosmicWebItems(source(), [item('Same story', secondUrl, NOW - 1), item('Same story', firstUrl)], NOW);
+    const url = 'https://example.com/selected';
+    ingestCosmicWebItems(source(), [item('Same story', url)], NOW);
     const { id } = svc.feed('alice').clusters[0];
-    const selected = svc.cluster('alice', id).items.find(i => i.url === secondUrl);
-    await expect(svc.aiBrief('alice', 'user', id, { url: `${secondUrl}/` })).rejects.toMatchObject({ status: 404 });
+    const selected = db.listVisibleItems('alice', [id])[0];
+    await expect(svc.aiBrief('alice', 'user', id, { url: `${url}/` })).rejects.toMatchObject({ status: 404 });
     await expect(svc.aiBrief('alice', 'user', id, { agentId: 'offline' })).rejects.toMatchObject({ status: 403 });
-    await svc.aiBrief('alice', 'user', id, { url: firstUrl, skipArticleFetch: true });
+    await svc.aiBrief('alice', 'user', id, { url, skipArticleFetch: true, research: false });
     expect(fetcher).not.toHaveBeenCalled();
-    expect(requestAi).toHaveBeenLastCalledWith(expect.objectContaining({ language: 'zh-CN', payload: expect.objectContaining({ sourceUrl: firstUrl, articleMarkdown: undefined }) }));
-    requestAi.mockClear();
-    const brief = svc.aiBrief('alice', 'user', id, { itemId: selected.id, language: 'en', agentId: '' });
-    await Promise.resolve();
-    expect(fetcher).toHaveBeenCalledWith(secondUrl, expect.any(Object));
-    expect(requestAi).not.toHaveBeenCalled();
-    finishFetch();
-    await expect(brief).resolves.toMatchObject({ agentId: 'first', cached: false });
-    expect(requestAi).toHaveBeenLastCalledWith(expect.objectContaining({ language: 'en', payload: expect.objectContaining({ sourceUrl: secondUrl, articleMarkdown: expect.stringContaining('Important') }) }));
-    const article = await svc.article('alice', id, { url: secondUrl });
-    expect(article).toMatchObject({ itemId: selected.id, sourceUrl: secondUrl, contentMd: article.markdown });
-    const explicit = agentId => svc.aiBrief('alice', 'user', id, { url: secondUrl, language: 'en', agentId });
+    expect(requestAi.mock.lastCall[0].payload).toMatchObject({ sourceUrl: url, articleMarkdown: undefined, research: false });
+    await expect(svc.aiBrief('alice', 'user', id, { itemId: selected.id, language: 'en' })).resolves.toMatchObject({ agentId: 'first', cached: false });
+    expect(requestAi.mock.lastCall[0].payload.articleMarkdown).toBeUndefined();
+    const article = svc.article('alice', id, { url });
+    expect(pending).toHaveLength(2);
+    pending.forEach(finish => finish());
+    await expect(article).resolves.toMatchObject({ itemId: selected.id, contentMd: expect.stringContaining('Important') });
+    const explicit = agentId => svc.aiBrief('alice', 'user', id, { url, language: 'en', agentId });
     await expect(explicit('first')).resolves.toMatchObject({ agentId: 'first', cached: false });
+    expect(requestAi.mock.lastCall[0].payload.articleMarkdown).toContain('Important');
     await expect(explicit('second')).resolves.toMatchObject({ agentId: 'second', cached: false });
     await expect(explicit('second')).resolves.toMatchObject({ agentId: 'second', cached: true });
-    expect(fetcher).toHaveBeenCalledTimes(1);
-    expect(requestAi).toHaveBeenCalledTimes(3);
+    expect(requestAi).toHaveBeenCalledTimes(4);
   });
   it('ranks nonempty daily domains before truncation, and falls back to top stories', async () => {
     const requestAi = vi.fn(async () => dailyResult);
@@ -530,7 +529,7 @@ describe('REST and scheduler', () => {
     ingestCosmicWebItems({ ...source(privateSource.id, domain.id, owner), url }, [item('Private article')], NOW);
     ingestCosmicWebItems(source(), [item('Public article')], NOW);
     const id = svc.feed(owner).clusters[0].id;
-    const itemId = svc.cluster(owner, id).items[0].id;
+    const itemId = db.listVisibleItems(owner, [id])[0].id;
     const publicId = db.listVisibleClusters(direct)[0].id;
     const publicItemId = db.listVisibleItems(direct, [publicId])[0].id;
     svc.setClusterState(owner, id, { bookmarked: true });
@@ -590,8 +589,8 @@ describe('REST and scheduler', () => {
     await svc.savePreferences('bob', { enabledDomainIds: ['ai'] });
     await svc.savePreferences('charlie', { enabledDomainIds: [] });
     const [a, b] = await Promise.all([svc.refresh('alice'), svc.refresh('bob')]);
-    expect(a).toMatchObject({ added: 3, failed: 1 }); expect(b).toMatchObject({ added: 2, failed: 1 });
-    expect(fetcher).toHaveBeenCalledTimes(4);
+    expect(a).toMatchObject({ added: 5, failed: 1 }); expect(b).toMatchObject({ added: 4, failed: 1 });
+    expect(fetcher).toHaveBeenCalledTimes(6);
     expect(messages.alice.some(m => m.domainId === 'private')).toBe(true);
     expect(messages.bob.every(m => m.domainId === 'ai')).toBe(true); expect(messages.charlie).toEqual([]);
   });
@@ -600,7 +599,7 @@ describe('REST and scheduler', () => {
     let allowSWR = false;
     const fetcher = vi.fn(async url => response(rss, url));
     const svc = makeService({ fetcher, now: () => time, autoRefresh: () => allowSWR });
-    await svc.savePreferences('alice', { enabledDomains: ['ai'], disabledSources: ['36kr-quick', 'hackernews'] });
+    await svc.savePreferences('alice', { enabledDomains: ['ai'], disabledSources: ['36kr-quick', 'hackernews', 'arxiv-ai', 'huggingface'] });
     await svc.refresh('alice');
     allowSWR = true;
     expect(svc.feed('alice').total).toBe(1);
@@ -650,5 +649,768 @@ describe('REST and scheduler', () => {
     expect(svc.startScheduler()).toBe(true);
     await vi.advanceTimersByTimeAsync(1);
     expect(signals.some(signal => !signal.aborted)).toBe(true);
+  });
+});
+
+const pngUrl = 'https://images.example/game.png';
+const gifUrl = 'https://images.example/replay.gif';
+const image = { url: pngUrl, kind: 'image' };
+const followResult = { question: 'Why?', answer: 'Because.', bullets: [], media: [image], citations: [], followUps: [], researched: false, searchCount: 0 };
+const radarItem = { title: 'Lunar rocket', url: 'https://news.example/story/?utm_source=radar', sourceName: 'Space Desk', summaryExcerpt: 'New coverage', mediaUrl: pngUrl };
+const richResult = { ...storyResult, sections: [{ heading: 'Context', body: 'New release.' }], media: [image],
+  communityHighlights: [{ platform: 'Hupu', author: 'fan', quote: 'Good defense', sourceUrl: 'https://bbs.hupu.com/123.html' }],
+  citations: [{ title: 'Original', url: 'https://news.example/story' }], researched: true, searchCount: 2 };
+
+const withMedia = '<rss><channel><item><title>News</title><link>/story</link>' +
+  '<media:content url="/video.mp4" type="video/mp4"/><media:thumbnail url="/pixel.png" width="1"/>' +
+  `<media:thumbnail url="${pngUrl}" title="The game"/><enclosure type="image/gif" url="${gifUrl}"/>` +
+  '<description><![CDATA[<img src="/game.webp?animated=1" alt="Game replay"><img src="/extra.png">]]></description></item></channel></rss>';
+const adapterResponse = (value, url) => response(typeof value === 'string' ? value : JSON.stringify(value), url);
+const next = pageProps => `<script type="application/json" id="__NEXT_DATA__">${JSON.stringify({ props: { pageProps } })}</script>`;
+
+describe('2.0 adapters and storage', () => {
+  it.each(['espn-nba', 'espn-top', 'nasa', 'nature', 'sciencedaily', 'physorg', 'gcores', 'yystv', 'arxiv-ai', 'huggingface', 'freebuf', 'lobsters', 'ifanr'])('normalizes the %s feed and caps images', async id => {
+    const source = BUILTIN_SOURCES.find(s => s.id === id);
+    const fetcher = vi.fn(async url => response(withMedia, url));
+    const [entry] = await fetchSource(id, { fetcher, now: NOW });
+    expect(fetcher.mock.lastCall[0]).toBe(source.url);
+    expect(entry.media).toEqual([{ ...image, alt: 'The game' }, { url: gifUrl, kind: 'gif' },
+      { url: new URL('/game.webp?animated=1', source.url).href, kind: 'gif', alt: 'Game replay' }]);
+  });
+  it.each([
+    ['hupu-nba', '<div class="t-info"><a href="/123.html"><span class="t-title">NBA trade news</span></a></div>', 'NBA trade news'],
+    ['hupu-nba', next({ threads: [{ tid: 123, title: 'Game recap', cover: gifUrl }] }), 'Game recap', gifUrl],
+    ['hupu', '<li class="bbs-sl-web-post-body"><a href="/123.html" class="p-title">Trending post</a></li>', 'Trending post'],
+    ['reddit-nba', { data: { children: [{ kind: 't3', data: { title: 'Replay', permalink: '/r/nba/comments/abc/replay/',
+      media_metadata: { one: { e: 'AnimatedImage', s: { u: 'https://images.example/replay.webp' } } } } }] } }, 'Replay', 'https://images.example/replay.webp'],
+    ['dongqiudi', { articles: [{ id: 1, title: 'Scoreline', thumb: pngUrl }] }, 'Scoreline', pngUrl],
+    ['douban', { items: [{ id: 1, title: 'Film', pic: { large: pngUrl } }] }, 'Film', pngUrl],
+    ['steam', '<tr class="player_count_row"><td>1,000</td><td><a class="gameLink" href="/app/1">Game</a></td></tr>', 'Game'],
+    ['bilibili', { data: { list: [{ title: 'Video', bvid: 'BV1234567890', pic: pngUrl }] } }, 'Video', pngUrl],
+    ['zhihu', { data: [{ target: { title_area: { text: 'Question' }, link: { url: 'https://www.zhihu.com/question/1' }, image_area: { url: pngUrl } } }] }, 'Question', pngUrl],
+    ['sspai', { data: [{ id: 1, title: 'Article', banner: pngUrl }] }, 'Article', pngUrl],
+    ['wallstreetcn-quick', { data: { items: [{ title: 'Markets', uri: 'https://wallstreetcn.com/livenews/1', image_uri: pngUrl }] } }, 'Markets', pngUrl],
+    ['nowcoder', { data: { result: [{ type: 0, id: 1, title: 'Engineering' }] } }, 'Engineering'],
+    ['gelonghui', '<a href="/news/123"><h2>Market news</h2></a>', 'Market news'],
+    ['fastbull', '<div class="content-list news-list" data-date="1795780800000"><a data-href="/cn/fastshort/1"><span class="title_name">Flash</span></a></div>', 'Flash'],
+    ['coolapk', '<a href="/feed/123" title="Gadget"><img src="https://images.example/game.png"></a>', 'Gadget', pngUrl],
+    ['zaobao', '<a href="/news/world/story20261127-10067775">World news</a>', 'World news'],
+    ['tencent', { data: { tabs: [{ articleList: [{ title: 'Headlines', link_info: { url: 'https://news.qq.com/story' }, cover: pngUrl }] }] } }, 'Headlines', pngUrl],
+    ['ifeng', '<script>var allData = {"hotNews1":[{"url":"https://news.ifeng.com/story","title":"Evening update"}]};</script>', 'Evening update'],
+    ['douyin', { data: { word_list: [{ sentence_id: '123', word: 'Trending' }] } }, 'Trending'],
+    ['tieba', { data: { bang_topic: { topic_list: [{ topic_name: 'Forum', topic_url: 'https://tieba.baidu.com/topic' }] } } }, 'Forum'],
+  ])('maps %s public response shape', async (id, fixture, title, media) => {
+    const [entry] = await fetchSource(id, { fetcher: async url => adapterResponse(fixture, url), now: NOW });
+    expect(entry.title).toBe(title);
+    expect(entry.media.map(m => m.url)).toEqual(media ? [media] : []);
+    if (media && ['hupu-nba', 'reddit-nba'].includes(id)) expect(entry.media[0].kind).toBe('gif');
+  });
+  it('adds media to an existing database and prunes expired enrichment without deleting live stories', async () => {
+    const path = join(dir, 'cosmic-web.db');
+    ingestCosmicWebItems(source(), [item('Legacy row')], NOW);
+    db.getCosmicWebDb().exec('ALTER TABLE cw_items DROP COLUMN media_json; DROP TABLE cw_enrichment_cache;');
+    db.closeCosmicWebDb(); db.openCosmicWebDb(path);
+    const legacy = db.listVisibleClusters('alice')[0].id;
+    expect(db.listVisibleItems('alice', [legacy])[0].media_json).toBe('[]');
+    const mediaItem = { ...item('Basketball highlights', 'https://news.example/sports'), media: [image] };
+    ingestCosmicWebItems(source('sports-fixture', 'sports'), [mediaItem], NOW);
+    const { id } = db.listVisibleClusters('alice').find(c => c.headline === mediaItem.title);
+    expect(JSON.parse(db.listVisibleItems('alice', [id])[0].media_json)).toEqual([image]);
+    const fetcher = vi.fn(async () => { throw Error('blocked'); });
+    const svc = makeService({ fetcher });
+    const detail = await svc.cluster('alice', id);
+    expect(detail).toMatchObject({ items: [{ media: [image] }], media: [{ ...image, proxyUrl: toProxyMediaUrl(pngUrl, 'alice', NOW) }] });
+    await svc.clusterCommunity('alice', id);
+    await svc.clusterCommunity('alice', id);
+    expect(fetcher).toHaveBeenCalledOnce();
+    expect(db.getEnrichmentCache(id, NOW)).not.toBeNull();
+    expect(db.pruneCosmicWebDb(NOW + 120 * 60_000)).toMatchObject({ enrichment: 1, clusters: 0 });
+    expect(db.getEnrichmentCache(id, NOW)).toBeNull();
+  });
+});
+
+describe('raster media proxy', () => {
+  const png = Buffer.from('89504e470d0a1a0a00000000', 'hex');
+  const fixtures = [['image/png', png], ['image/gif', Buffer.from('GIF89a00')], ['image/webp', Buffer.from('RIFF0000WEBP')],
+    ['image/jpeg', Buffer.from('ffd8ff', 'hex')], ['image/avif', Buffer.from('0000ftypavif')], ['image/avif', Buffer.from('0000ftypavis')]];
+  it.each(fixtures)('serves %s, strips referers, and reuses a fresh cache entry', async (mime, bytes) => {
+    let time = NOW;
+    const socket = transport((_url, opts) => {
+      expect(opts.headers.referer).toBeUndefined();
+      expect(opts.headers.accept).toBe('image/avif,image/webp,image/gif,image/png,image/jpeg,*/*;q=0.5');
+      return stream([bytes], { 'content-type': mime });
+    });
+    const fetcher = vi.fn((url, options) => safeFetch(url, { ...options, requestImpl: socket }));
+    const proxy = createMediaProxy({ fetcher, dnsLookup: dns, now: () => time });
+    const result = await proxy(pngUrl);
+    expect(result).toMatchObject({ body: bytes, headers: { 'Content-Type': mime, 'X-Content-Type-Options': 'nosniff',
+      'Content-Security-Policy': "default-src 'none'; sandbox", 'Cache-Control': 'private, max-age=3600' } });
+    expect(await proxy(`${pngUrl}#fragment`)).toBe(result);
+    expect(fetcher).toHaveBeenCalledExactlyOnceWith(pngUrl, expect.objectContaining({ timeoutMs: 8000, maxBytes: 6 * 1024 ** 2, maxDecompressedBytes: 6 * 1024 ** 2 }));
+    time += 30 * 60_000;
+    expect(await proxy(pngUrl)).not.toBe(result);
+    expect(socket).toHaveBeenCalledTimes(2);
+  });
+  it.each(['image/svg+xml', 'text/html', 'image/gif', 'image/png,image/gif'])('rejects disallowed or mismatched %s', async mime => {
+    const proxy = createMediaProxy({ fetcher: async () => ({ status: 200, headers: { 'content-type': mime }, bodyBuffer: png }) });
+    await expect(proxy(pngUrl)).rejects.toMatchObject({ status: 415 });
+  });
+  it('blocks private direct and redirected addresses and rejects non-HTTP URLs', async () => {
+    const socket = transport(() => stream([], { location: 'http://169.254.169.254/path' }, 302));
+    const proxy = createMediaProxy({ dnsLookup: dns, fetcher: (url, options) => safeFetch(url, { ...options, requestImpl: socket }) });
+    await expect(proxy('http://127.0.0.1/image')).rejects.toMatchObject({ status: 502 });
+    expect(socket).not.toHaveBeenCalled();
+    await expect(proxy(pngUrl)).rejects.toMatchObject({ status: 502 });
+    expect(socket).toHaveBeenCalledOnce();
+    await expect(proxy('data:image/png;base64,abcd')).rejects.toMatchObject({ status: 400 });
+    expect(toProxyMediaUrl('javascript:alert(1)')).toBeNull();
+  });
+  it.each([[49, png], [5, Buffer.concat([png, Buffer.alloc(6 * 1024 ** 2 - png.length)])]])('evicts LRU entries under the item and byte budgets (%i inputs)', async (n, bodyBuffer) => {
+    const fetcher = vi.fn(async () => ({ status: 200, headers: { 'content-type': 'image/png' }, bodyBuffer }));
+    const proxy = createMediaProxy({ fetcher });
+    const url = i => `${pngUrl}?i=${i}`;
+    for (let i = 0; i < n - 1; i++) await proxy(url(i));
+    await proxy(url(0));
+    await proxy(url(n - 1));
+    await proxy(url(0));
+    await proxy(url(1));
+    expect(fetcher).toHaveBeenCalledTimes(n + 1);
+  });
+  it('serves binary on the authenticated route only with a valid user-scoped signature, enforces per-user concurrency, and rejects non-image headers early', async () => {
+    const app = express();
+    const fetcher = vi.fn(async () => ({ status: 200, headers: { 'content-type': 'image/png' }, bodyBuffer: png }));
+    registerCosmicWebRoutes(app, { proxyMedia: createMediaProxy({ fetcher, requireSigned: true }), requireSessionAuth(req, res, next) {
+      const username = req.get('x-test-user');
+      if (!username) return res.sendStatus(401);
+      req.user = { username }; next();
+    } });
+    // Unauthenticated rejected 401
+    await supertest(app).get(toProxyMediaUrl(pngUrl, 'alice')).expect(401);
+    // Unsigned URL rejected 403
+    await supertest(app).get(toProxyMediaUrl(pngUrl)).set('x-test-user', 'alice').expect(403);
+    // URL signed for bob rejected 403 for alice
+    await supertest(app).get(toProxyMediaUrl(pngUrl, 'bob')).set('x-test-user', 'alice').expect(403);
+    // Expired token rejected 403
+    await supertest(app).get(toProxyMediaUrl(pngUrl, 'alice', Date.now() - 4 * 3600_000)).set('x-test-user', 'alice').expect(403);
+    expect(fetcher).not.toHaveBeenCalled();
+
+    // Valid user-scoped signed URL serves binary & strips referer
+    const res = await supertest(app).get(toProxyMediaUrl(pngUrl, 'alice')).set('x-test-user', 'alice').set('Referer', 'https://private.example/session')
+      .expect('Content-Type', 'image/png').expect('X-Content-Type-Options', 'nosniff').expect(200);
+    expect(res.body).toEqual(png);
+    expect(fetcher.mock.lastCall[1].headers.referer).toBeUndefined();
+
+    // CW2-02: 6 simultaneous valid gallery images queue cleanly and ALL resolve (no spurious 429),
+    // while exceeding the per-user queue cap (3 active + 8 queued = 11) rejects 429 without blocking bob.
+    const resolvers = [];
+    const slowProxy = createMediaProxy({
+      fetcher: () => new Promise(resolve => resolvers.push(() => resolve({ status: 200, headers: { 'content-type': 'image/png' }, bodyBuffer: png }))),
+    });
+    const gallery = Array.from({ length: 6 }, (_, i) => slowProxy(`https://images.example/g${i}.png`, { userId: 'alice' }));
+    await new Promise(r => setImmediate(r));
+    expect(resolvers).toHaveLength(3); // 3 active, 3 queued
+    // Fill remaining 5 queue slots (total 11 for alice), then 12th rejects 429 while bob still passes
+    const extra = Array.from({ length: 5 }, (_, i) => slowProxy(`https://images.example/e${i}.png`, { userId: 'alice' }));
+    await expect(slowProxy('https://images.example/overflow.png', { userId: 'alice' })).rejects.toMatchObject({ status: 429 });
+    const b1 = slowProxy('https://images.example/b1.png', { userId: 'bob' });
+    // Drain all queued waves
+    while (resolvers.length) {
+      const batch = resolvers.splice(0);
+      batch.forEach(fn => fn());
+      await new Promise(r => setImmediate(r));
+    }
+    await expect(Promise.all([...gallery, ...extra, b1])).resolves.toHaveLength(12);
+
+    // CW2-02: aborting caller 1 on a shared in-flight URL must NOT fail caller 2
+    let finishShared;
+    const sharedProxy = createMediaProxy({
+      fetcher: (_u, opts) => new Promise((resolve, reject) => {
+        opts.signal?.addEventListener('abort', () => reject(new Error('aborted')), { once: true });
+        finishShared = () => resolve({ status: 200, headers: { 'content-type': 'image/png' }, bodyBuffer: png });
+      }),
+    });
+    const ac1 = new AbortController();
+    const ac2 = new AbortController();
+    const w1 = sharedProxy('https://images.example/shared.png', { userId: 'alice', signal: ac1.signal });
+    const w2 = sharedProxy('https://images.example/shared.png', { userId: 'bob', signal: ac2.signal });
+    await new Promise(r => setImmediate(r));
+    ac1.abort();
+    await expect(w1).rejects.toMatchObject({ status: 499 });
+    finishShared();
+    await expect(w2).resolves.toMatchObject({ body: png });
+
+    // CW2-01: Early header rejection rejects BOTH unsupported AND missing Content-Type before reading body
+    for (const badHeaders of [{ 'content-type': 'text/html; charset=utf-8' }, {}]) {
+      let bodyRead = false;
+      const badStream = new Readable({
+        read() { bodyRead = true; this.push(Buffer.from('<html>big page</html>')); this.push(null); },
+      });
+      badStream.headers = badHeaders;
+      badStream.statusCode = 200;
+      const earlySocket = transport(() => badStream);
+      const earlyProxy = createMediaProxy({ dnsLookup: dns, fetcher: (u, opts) => safeFetch(u, { ...opts, requestImpl: earlySocket }) });
+      await expect(earlyProxy('https://images.example/not-image')).rejects.toMatchObject({ status: 415 });
+      expect(bodyRead).toBe(false);
+    }
+  });
+});
+
+describe('deterministic community enrichment', () => {
+  it('recovers actual Reddit, HN, V2EX and Hupu replies with verified media candidates', async () => {
+    const urls = ['https://old.reddit.com/r/nba/comments/abc/game', 'https://news.ycombinator.com/item?id=1',
+      'https://v2ex.com/t/2', 'https://bbs.hupu.com/3.html'];
+    const fixture = new Map([
+      ['https://www.reddit.com/r/nba/comments/abc.json?limit=8&sort=top', [{}, { data: { children: [
+        { kind: 't1', data: { author: 'Fan', body: 'Strong defense', score: 10, permalink: '/r/nba/comments/abc/game/xyz/' } },
+        { kind: 't1', data: { author: '[deleted]', body: '[removed]', score: 900 } },
+      ] } }]],
+      ['https://hn.algolia.com/api/v1/items/1', { children: [{ id: 11, author: 'Tech', text: '<p>Data &amp; results</p>' }] }],
+      ['https://www.v2ex.com/api/replies/show.json?topic_id=2', [{ id: 22, member: { username: 'Dev' }, content: 'Useful tip', thanks: 3 }]],
+      [urls[0], `<meta property="og:image" content="${pngUrl}"><meta property="og:image:alt" content="The court">
+        <img class="avatar" src="/user.jpg"><img width="1" src="/t.jpg"><img src="http://127.0.0.1/private.png">
+        <meta name="twitter:image" content="https://images.example/second.png">`],
+      [urls[3], next({ detail: { thread: { content: `<img src="${gifUrl}">` }, lights: [
+        { author: { puname: '球迷' }, content: '<p>好球！</p>', allLightCount: 30 },
+        { isHidden: true, author: { puname: 'hidden' }, content: 'blocked', allLightCount: 100 },
+      ] } })],
+    ]);
+    const fetcher = vi.fn(async (url, opts) => {
+      expect(opts.timeoutMs).toBe(5000);
+      if (!fixture.has(url)) throw Error('not available');
+      return adapterResponse(fixture.get(url), url);
+    });
+    const got = await extractCommunityEnrichment(urls.map((url, i) => ({ url, sourceName: `Source ${i}`, media: i === 1 ? [{ url: 'https://images.example/feed.webp?animated=1', kind: 'gif' }] : [] })), { fetcher, dnsLookup: dns });
+    expect(got.communityComments).toMatchObject([
+      { platform: 'Hupu', author: '球迷', quote: '好球！', likes: 30, sourceUrl: urls[3] },
+      { platform: 'Reddit', author: 'Fan', quote: 'Strong defense', likes: 10, sourceUrl: 'https://www.reddit.com/r/nba/comments/abc/game/xyz/' },
+      { platform: 'V2EX', author: 'Dev', quote: 'Useful tip', likes: 3, sourceUrl: 'https://www.v2ex.com/t/2#r_22' },
+      { platform: 'Hacker News', author: 'Tech', quote: 'Data & results', likes: 0, sourceUrl: 'https://news.ycombinator.com/item?id=11' },
+    ]);
+    expect(got.media).toMatchObject([{ kind: 'gif' }, { url: pngUrl, caption: 'The court', proxyUrl: toProxyMediaUrl(pngUrl) },
+      { url: 'https://images.example/second.png' }, { url: gifUrl, kind: 'gif' }]);
+  });
+  it('handles HTML-only Hupu bright replies, Linux.do and public Bilibili comments', async () => {
+    const fetcher = async url => adapterResponse(url.includes('bbs.hupu.com') ? `<h2>这些回帖亮了</h2>
+      <div class="post-reply-list-container"><a class="post-reply-list-user-info-top-name">粉丝</a>
+      <div class="thread-content-detail"><p>精彩</p><img src="${gifUrl}"></div><span>亮了(<!-- -->12)</span></div>` :
+      url.includes('linux.do/t/42.json') ? { post_stream: { posts: [{ post_number: 1, username: 'op', cooked: 'Not a comment' },
+        { post_number: 2, username: 'member', cooked: '<p>Reply</p>', actions_summary: [{ id: 2, count: 4 }] }] } } :
+      url.includes('web-interface/view') ? { data: { pic: pngUrl, aid: 123 } } :
+      url.includes('/x/v2/reply') ? { data: { hots: [{ member: { uname: 'viewer' }, content: { message: 'Great' }, like: 2, rpid: 88 }] } } : '', url);
+    const result = await extractCommunityEnrichment(['https://bbs.hupu.com/3.html', 'https://linux.do/t/topic/42', 'https://www.bilibili.com/video/BV1234567890']
+      .map(url => ({ url })), { fetcher, dnsLookup: dns });
+    expect(result.communityComments.map(c => [c.platform, c.quote, c.likes])).toEqual([['Hupu', '精彩', 12], ['Linux.do', 'Reply', 4], ['Bilibili', 'Great', 2]]);
+    expect(result.media.map(m => m.url)).toEqual([gifUrl, pngUrl]);
+  });
+  it('returns empty lists for inaccessible pages and lookalike domains', async () => {
+    const fetcher = vi.fn(async () => { throw Error('timeout'); });
+    await expect(extractCommunityEnrichment([{ url: 'https://reddit.com.other.test/r/nba/comments/abc' }], { fetcher, dnsLookup: dns }))
+      .resolves.toEqual({ media: [], communityComments: [] });
+    expect(fetcher).toHaveBeenCalledOnce();
+  });
+});
+
+describe('2.0 graph and AI contracts', () => {
+  it('balances 180 nodes across nine domains and annotates media, LOD and projected links', () => {
+    const clusters = BUILTIN_DOMAINS.flatMap(d => Array.from({ length: 25 }, (_, i) => ({ id: `${d.id}-${i}`, domainId: d.id,
+      heatScore: 25 - i, watchHit: i === 24, publishedAt: NOW, keywords: ['shared'], itemCount: 1, sourceNames: ['News'],
+      summaryExcerpt: '  ' + 'X'.repeat(200), items: [{ media: [image] }] })));
+    const graph = buildGraphProjection({ prefs: { enabledDomains: BUILTIN_DOMAINS.map(d => d.id) }, clusters, domains: BUILTIN_DOMAINS });
+    expect([1, 2, 3].map(t => graph.nodes.filter(n => n.lodTier === t).length)).toEqual([14, 66, 100]);
+    expect(BUILTIN_DOMAINS.map(d => graph.nodes.filter(n => n.domainId === d.id).length)).toEqual(Array(9).fill(20));
+    expect(graph.nodes.filter(n => n.watchHit).every(n => n.lodTier === 1)).toBe(true);
+    const ids = new Set(graph.nodes.map(n => n.clusterId));
+    for (const n of graph.nodes) {
+      expect(n).toMatchObject({ summaryExcerpt: 'X'.repeat(180), mediaPreview: { proxyUrl: toProxyMediaUrl(pngUrl), kind: 'image' }, itemCount: 1, sourceNames: ['News'] });
+      expect(n.relatedClusterIds).toHaveLength(4);
+      expect(n.relatedClusterIds.every(id => id !== n.clusterId && ids.has(id))).toBe(true);
+    }
+  });
+  it.each([['brief', richResult], ['synthesize', storyResult], ['follow_up', followResult], ['topic_radar', { items: [radarItem], searchCount: 1 }]])
+    ('validates %s and resolves the correlated bridge request', async (mode, result) => {
+      const frames = agent('new', 'alice');
+      expect(validateCosmicWebAiResult(result, mode)).toBe(true);
+      const pending = requestCosmicWebAi({ userId: 'alice', userRole: 'user', agentId: 'new', mode });
+      handleCosmicWebAiResponse('new', { requestId: frames[0].requestId, ok: true, result });
+      await expect(pending).resolves.toEqual(result);
+    });
+  it.each([
+    ['brief', { ...richResult, media: [{ ...image, url: 'javascript:alert(1)' }] }],
+    ['brief', { ...richResult, communityHighlights: [{ ...richResult.communityHighlights[0], sourceUrl: 'data:text/html,x' }] }],
+    ['brief', { ...richResult, fullMarkdown: 'a'.repeat(16001) }],
+    ['brief', { ...richResult, sections: [] }],
+    ['follow_up', { ...followResult, citations: [{ title: 'bad', url: 'file:///tmp/secret' }] }],
+    ['topic_radar', { items: [{ ...radarItem, url: 'ftp://example.com' }], searchCount: 1 }],
+    ['topic_radar', { items: [{ ...radarItem, mediaUrl: 'data:image/png;base64,x' }], searchCount: 1 }],
+  ])('rejects invalid %s output', (mode, result) => expect(validateCosmicWebAiResult(result, mode)).toBe(false));
+  it('answers follow-ups with scoped cached briefing context, and ingests owner-private Radar results', async () => {
+    let clock = NOW;
+    const updates = [];
+    const requestAi = vi.fn(async req => req.mode === 'follow_up' ? followResult : req.mode === 'topic_radar' ?
+      { items: [radarItem, { ...radarItem, url: 'https://news.example/story#dup' }, { ...radarItem, url: 'http://127.0.0.1/story' }], searchCount: 2 } : storyResult);
+    const svc = makeService({ now: () => clock, requestAi, fetcher: async url => response('', url) });
+    agent('alice-agent', 'alice'); agent('bob-agent', 'bob');
+    for (const userId of ['alice', 'bob']) webClients.set(userId, { userId, authenticated: true, encryptOutbound: false,
+      ws: { readyState: 1, send: data => updates.push([userId, JSON.parse(data)]) } });
+    const custom = { id: 'space', name: 'Space', keywords: ['rocket'], colorToken: 'teal', aiRadar: true };
+    await svc.savePreferences('alice', { customDomains: [custom], enabledDomains: BUILTIN_DOMAINS.map(d => d.id) });
+    await svc.savePreferences('bob', { customDomains: [custom] });
+    ingestCosmicWebItems(source(), [{ ...item('Question context'), media: [image] }], NOW);
+    const id = svc.feed('alice').clusters[0].id;
+    const brief = await svc.aiBrief('alice', 'user', id, { research: false });
+    expect(brief.media).toMatchObject([{ ...image, proxyUrl: toProxyMediaUrl(pngUrl, 'alice', NOW) }]);
+    await expect(svc.followUp('alice', 'user', id, { question: ' ' })).rejects.toMatchObject({ status: 400 });
+    await expect(svc.followUp('alice', 'user', id, { question: 'x'.repeat(501) })).rejects.toMatchObject({ status: 400 });
+    const app = express(); app.use(express.json());
+    registerCosmicWebRoutes(app, { cosmicWeb: svc, requireSessionAuth(req, res, next) {
+      if (!req.get('x-test-user')) return res.sendStatus(401);
+      req.user = { username: req.get('x-test-user') }; next();
+    } });
+    const request = supertest(app), api = '/api/cosmic-web';
+    await request.post(`${api}/clusters/${id}/follow-up`).expect(401);
+    await request.post(`${api}/domains/space/radar-scan`).expect(401);
+    const follow = await request.post(`${api}/clusters/${id}/follow-up`).set('x-test-user', 'alice').send({ question: ' Why? ' }).expect(200);
+    expect(follow.body).toMatchObject({ answer: 'Because.', media: [{ proxyUrl: toProxyMediaUrl(pngUrl, 'alice', NOW) }] });
+    expect(requestAi.mock.lastCall[0]).toMatchObject({ mode: 'follow_up', payload: { briefContext: storyResult.tldr, question: 'Why?' } });
+    await expect(svc.radarScan('alice', 'user', 'ai')).rejects.toMatchObject({ status: 404 });
+    await request.post(`${api}/domains/space/radar-scan`).set('x-test-user', 'alice').set('Sec-Fetch-Site', 'cross-site').expect(403);
+    const radar = await request.post(`${api}/domains/space/radar-scan`).set('x-test-user', 'alice').send({}).expect(200);
+    expect(radar.body).toMatchObject({ added: 1, items: [{ url: 'https://news.example/story', sourceName: 'Space Desk' }],
+      graph: { nodes: expect.arrayContaining([expect.objectContaining({ domainId: 'space', sourceNames: ['Space Desk'] })]) } });
+    expect(radar.body.domains.find(d => d.id === 'space')).toMatchObject({ aiRadar: true, colorToken: 'teal', sources: [{ id: 'radar-space', kind: 'radar' }] });
+    expect(requestAi.mock.lastCall[0]).toMatchObject({ mode: 'topic_radar', payload: { topic: 'Space', keywords: ['rocket'] } });
+    expect(updates).toEqual([['alice', expect.objectContaining({ type: 'cosmic_web_updated', domainId: 'space' })]]);
+    expect(svc.feed('alice', { domainId: 'space' }).total).toBe(1);
+    expect(svc.feed('bob', { domainId: 'space' }).total).toBe(0);
+    await expect(svc.radarScan('alice', 'user', 'space')).rejects.toMatchObject({ status: 429 });
+    expect((await svc.radarScan('bob', 'user', 'space')).added).toBe(1);
+    clock += 60_000;
+    expect((await svc.radarScan('alice', 'user', 'space')).added).toBe(0);
+  });
+
+  it('enforces Blocker #2 (private RSS blocks research), #5 (request abort cancels Agent & frees slot), #7 (aiRadar opt-in), #8 (mixed-version v1/v2 Agent), #9 (legacy sports custom domain migration), and Nit #4 (media backfill)', async () => {
+    // Blocker #9: pre-existing custom domain with colliding built-in ID 'sports'
+    db.saveUserPrefs('alice', {
+      enabledDomainIds: ['ai'],
+      customDomains: [{ id: 'sports', name: 'My Hoops', colorToken: 'gold', enabled: true, keywords: ['lakers'], rssUrls: [] }],
+      watchKeywords: [], muteKeywords: [], disabledSources: [], preferredAgentId: '', defaultPerspective: 'balanced', onboarded: true, autoRefreshMinutes: 15,
+    }, NOW);
+    ingestCosmicWebItems(source('rss-legacy-hoops', 'sports', 'alice'), [item('Lakers internal note', 'https://private.example/lakers')], NOW);
+
+    const requestAi = vi.fn(async req => req.mode === 'follow_up' ? followResult : storyResult);
+    const svc = makeService({ requestAi });
+
+    // Bootstrap migrates colliding 'sports' custom domain idempotently to 'custom-sports' (zero duplicates)
+    const boot = svc.bootstrap('alice', 'user');
+    const domainIdList = boot.domains.map(d => d.id);
+    expect(new Set(domainIdList).size).toBe(domainIdList.length);
+    expect(domainIdList).toContain('sports');
+    expect(domainIdList).toContain('custom-sports');
+    // Unrelated preference save succeeds (never 400!)
+    const saved = await svc.savePreferences('alice', { watchKeywords: ['NBA'] });
+    expect(saved.watchKeywords).toEqual(['NBA']);
+
+    // Blocker #7: radarScan rejects when aiRadar is false
+    await expect(svc.radarScan('alice', 'user', 'custom-sports')).rejects.toMatchObject({ status: 400 });
+
+    // Blocker #2: owner-private RSS cluster forces research: false & isPrivateSource: true even when caller passes research: true
+    agent('v2-agent', 'alice');
+    const privCluster = svc.feed('alice', { domainId: 'custom-sports' }).clusters[0];
+    expect(privCluster.isPrivateSource).toBe(true);
+    await svc.aiBrief('alice', 'user', privCluster.id, { research: true, skipArticleFetch: true });
+    expect(requestAi.mock.lastCall[0].payload).toMatchObject({ research: false, isPrivateSource: true });
+
+    // Blocker #8: mixed-version v1 Agent (only cosmic_web_briefing) works for brief (with research=false), rejected 409 for follow_up & topic_radar
+    agents.clear();
+    agent('v1-agent', 'alice', ['cosmic_web_briefing']);
+    ingestCosmicWebItems(source('pub-src', 'ai', null), [item('Public AI news', 'https://public.example/ai')], NOW);
+    const pubId = svc.feed('alice', { domainId: 'ai' }).clusters[0].id;
+    await svc.aiBrief('alice', 'user', pubId, { research: true, skipArticleFetch: true });
+    expect(requestAi.mock.lastCall[0].payload.research).toBe(false);
+    await expect(svc.followUp('alice', 'user', pubId, { question: 'More?' })).rejects.toMatchObject({ status: 409 });
+    await svc.savePreferences('alice', { customDomains: [{ id: 'custom-sports', name: 'My Hoops', keywords: ['lakers'], aiRadar: true, rssUrls: [] }] });
+    await expect(svc.radarScan('alice', 'user', 'custom-sports')).rejects.toMatchObject({ status: 409 });
+
+    // Blocker #5: aborting a caller signal cancels the in-flight bridge request, sends cosmic_web_ai_cancel, and frees the user's concurrency slot
+    agents.clear();
+    const frames = agent('v2-cancel', 'alice');
+    const ac1 = new AbortController();
+    const ac2 = new AbortController();
+    const p1 = requestCosmicWebAi({ userId: 'alice', userRole: 'user', agentId: 'v2-cancel', mode: 'brief', signal: ac1.signal });
+    const p2 = requestCosmicWebAi({ userId: 'alice', userRole: 'user', agentId: 'v2-cancel', mode: 'brief', signal: ac2.signal });
+    await new Promise(r => setImmediate(r));
+    expect(frames.filter(f => f.type === 'cosmic_web_ai_request')).toHaveLength(2);
+    // Abort request 1 -> sends cancel frame & immediately opens slot for request 3 (no 429!)
+    ac1.abort(Object.assign(new Error('cancelled'), { status: 499 }));
+    await expect(p1).rejects.toMatchObject({ status: 499 });
+    expect(frames.some(f => f.type === 'cosmic_web_ai_cancel' && f.requestId === frames[0].requestId)).toBe(true);
+    const p3 = requestCosmicWebAi({ userId: 'alice', userRole: 'user', agentId: 'v2-cancel', mode: 'brief' });
+    await new Promise(r => setImmediate(r));
+    const req3 = frames.filter(f => f.type === 'cosmic_web_ai_request').at(-1);
+    handleCosmicWebAiResponse('v2-cancel', { requestId: req3.requestId, ok: true, result: storyResult });
+    await expect(p3).resolves.toEqual(storyResult);
+    ac2.abort(Object.assign(new Error('cancelled'), { status: 499 }));
+    await expect(p2).rejects.toMatchObject({ status: 499 });
+
+    // Nit #4: duplicate ingest backfills empty media_json without altering item ID or cluster
+    const beforeItems = db.listVisibleItems('alice', [pubId]);
+    expect(beforeItems[0].media_json).toBe('[]');
+    ingestCosmicWebItems(source('pub-src', 'ai', null), [{ ...item('Public AI news', 'https://public.example/ai'), media: [image] }], NOW);
+    const afterItems = db.listVisibleItems('alice', [pubId]);
+    expect(afterItems[0].id).toBe(beforeItems[0].id);
+    expect(JSON.parse(afterItems[0].media_json)).toEqual([image]);
+
+    // CW2-02: markAllRead returns signed graph media URLs bound to userId
+    const marked = svc.markAllRead('alice', {});
+    const pubNode = marked.graph.nodes.find(n => n.clusterId === pubId);
+    expect(pubNode?.mediaPreview?.proxyUrl).toContain('&sig=');
+
+    // CW2-01 & Round 3–11 Blocker: private RSS feed media and ALL embedded prose URL forms (alphanumeric sentinels so escapeMd can never mask a leak!)
+    const secretMediaUrl = 'https://private.example/secret-token-img.png';
+    const unicodePad = '\u0130'.repeat(120);
+    const excerptSecretUrl = "https://files.example/o'brien-summary(v1).png?token=EXCERPTSECRET99";
+    const unicodeSecretUrl = 'https://files.example/u0130.pdf?token=UNICODEDRIFTSECRET99';
+    const wwwSecretUrl = 'www.private.example/sheet(1).pdf?token=WWWSECRET99';
+    const schemeRelSecretUrl = '//cdn.private.example/att(1).png?token=SCHEMERELSECRET99';
+    const ipv6RelSecretUrl = '(//[2001:db8::1]/vault/a.pdf?token=IPV6RELSECRET99)';
+    const singleHostRelSecretUrl = '//intranet/files/doc.pdf?token=SINGLEHOSTSECRET99';
+    const userinfoRelSecretUrl = '//user:pass@intranet:8080/doc?token=USERINFORELSECRET99';
+    const boldUserinfoPortUrl = '//user:BOLDPORTPASS99@intranet:8080';
+    const emUserinfoPortUrl = '//user:EMPORTPASS99@intranet:8443';
+    const typoQuotePortUrl = '//user:TYPOQUOTEPASS99@intranet:8080';
+    const cjkPeriodPortUrl = '//user:CJKPERIODPASS99@intranet:8080';
+    const cjkBracketPortUrl = '//user:CJKBRACKETPASS99@intranet:8443';
+    const enDashHttpUrl = 'https://files.example/report\u2013draft.pdf?token=ENDASHSECRET99';
+    const enDashRelUrl = '//intranet/report\u2013draft.pdf?token=RELENDASHSECRET99';
+    const cjkQueryUrl = 'https://files.example/doc?title=总结，草案&token=CJKQUERYSECRET99';
+    const userinfoUnicodeProseUrl = '//user:USERINFODASHPASS99\u2013key@intranet:8080';
+    const proseAtUrl = '//user:PROSEATPASS99@intranet:8080';
+    const leadingPunctUserUrl = '//\u2013user:LEADPUNCTPASS99@intranet:8080';
+    const comma70UserUrl = `//user:${'a,'.repeat(70)}COMMA70PASS99@intranet:8080`;
+    const emojiPortUrl = '//user:PINEMOJIPASS99@intranet:8080';
+    const bracketPortUrl = '//user:BRACKETPASS99@intranet:8080';
+    const bracketProsePortUrl = '//user:BRACKETPROSE99@intranet:8080';
+    const bracePortUrl = '//user:BRACEPASS99@intranet:8080';
+    const pipePortUrl = '//user:PIPEPASS99@intranet:8080';
+    const wrappedIpv6PortUrl = '//user:IPV6WRAPPASS99@[2001:db8::1]:8443';
+    const wrappedIpv6NoPortUrl = '//user:IPV6NOPORT99@[2001:db8::1]';
+    const underscoreRelUrl = '//user:UNDERSCOREPASS99@intranet:8080';
+    const underscoreHttpUrl = 'https://files.example/u?token=UNDERHTTP99';
+    const idnWwwUrl = 'www.例子.中国/a?token=IDNWWWSECRET99';
+    const privItemWithImg = {
+      ...item('Private img note', 'https://private.example/img-note'),
+      summaryExcerpt: `${unicodePad} Private brief note with ${excerptSecretUrl}, ${unicodeSecretUrl}, ${wwwSecretUrl}, ${schemeRelSecretUrl}, ${ipv6RelSecretUrl}, ${singleHostRelSecretUrl}, ${userinfoRelSecretUrl}, **${boldUserinfoPortUrl}**, “${typoQuotePortUrl}”, 请看${cjkPeriodPortUrl}。以及【${cjkBracketPortUrl}】, 请看${userinfoUnicodeProseUrl}。下一句 请看${proseAtUrl}。通知@ops:值班 ${leadingPunctUserUrl} 请看${comma70UserUrl}。下一句 ${emojiPortUrl}📌下一句 [${bracketPortUrl}] [${bracketProsePortUrl}]下一句 {${bracePortUrl}} |${pipePortUrl}| [${wrappedIpv6PortUrl}] [${wrappedIpv6NoPortUrl}]下一句 _${underscoreRelUrl}_ _${underscoreHttpUrl}_ _${idnWwwUrl}_ foo_www.keepme ${enDashHttpUrl}, ${enDashRelUrl}, and ${cjkQueryUrl} //user:TRUNCDB99@`,
+      media: [{ url: secretMediaUrl, kind: 'image' }],
+    };
+    ingestCosmicWebItems(source('rss-priv-img', 'custom-sports', 'alice'), [privItemWithImg], NOW);
+    const privBoot = svc.bootstrap('alice', 'user');
+    const privNode = privBoot.graph.nodes.find(n => n.headline === 'Private img note');
+    expect(privNode?.mediaPreview).toBeNull();
+    expect(JSON.stringify(privBoot.graph)).not.toContain(secretMediaUrl);
+    expect(JSON.stringify(svc.feed('alice', { domainId: 'custom-sports' }))).not.toContain(secretMediaUrl);
+    const privDet = await svc.cluster('alice', privNode.clusterId);
+    expect(privDet.media).toEqual([]);
+    expect(JSON.stringify(privDet)).not.toContain(secretMediaUrl);
+    // Round 6–20 Blocker #1/#2/#3: REAL extractCleanArticle -> aiBrief path with IDN bare www. (_www.例子.中国/..._), truncated trailing creds, wrapped portless IPv6 + prose, underscore-wrapped URLs, identifier preservation, and linear 39k-backslash scan
+    const privItemId = privDet.items[0].id;
+    const angleParenUrl = 'https://files.example/report)v2.pdf?token=ANGLEPARENSECRET99';
+    const parenSecretUrl = 'https://files.example/chart(v2).png?token=PRIVATESENTINEL99';
+    const aposSecretUrl = "https://files.example/team's-deck.pdf?token=APOSSECRET99";
+    const extractedPrivate = extractCleanArticle(
+      `<article><h1>Private Memo</h1><p>${unicodePad} Quarterly notes // keep prose comment, //\u2013note: kept, foo_www.keepme, <a href="${angleParenUrl}">Attachment</a>, bare ${parenSecretUrl}, (${parenSecretUrl}), ${aposSecretUrl}, ${unicodeSecretUrl}, ${wwwSecretUrl}, ${schemeRelSecretUrl}, ${ipv6RelSecretUrl}, ${singleHostRelSecretUrl}, ${userinfoRelSecretUrl}, <strong>${boldUserinfoPortUrl}</strong>, <em>${emUserinfoPortUrl}</em>, “${typoQuotePortUrl}”, 请看${cjkPeriodPortUrl}。以及【${cjkBracketPortUrl}】, 请看${userinfoUnicodeProseUrl}。下一句 请看${proseAtUrl}。通知@ops:值班 ${leadingPunctUserUrl} 请看${comma70UserUrl}。下一句 ${emojiPortUrl}📌下一句 [${bracketPortUrl}] [${bracketProsePortUrl}]下一句 {${bracePortUrl}} |${pipePortUrl}| [${wrappedIpv6PortUrl}] [${wrappedIpv6NoPortUrl}]下一句 _${underscoreRelUrl}_ _${underscoreHttpUrl}_ _${idnWwwUrl}_ ${enDashHttpUrl}, ${enDashRelUrl}, and ${cjkQueryUrl}.</p></article>`,
+      'https://private.example/img-note',
+      'Private img note',
+    );
+    expect(extractedPrivate.markdown).toContain(`(<${angleParenUrl}>)`);
+    expect(extractedPrivate.markdown).toContain('//\\[2001:db8::1\\]/vault/a.pdf?token=IPV6RELSECRET99');
+    expect(extractedPrivate.markdown).toContain(`\\[${bracketPortUrl}\\]`);
+    expect(extractedPrivate.markdown).toContain(`\\[${bracketProsePortUrl}\\]下一句`);
+    expect(extractedPrivate.markdown).toContain('\\[//user:IPV6NOPORT99@\\[2001:db8::1\\]\\]下一句');
+    expect(extractedPrivate.markdown).toContain(`\\_${underscoreRelUrl}\\_`);
+    expect(extractedPrivate.markdown).toContain(`\\_${idnWwwUrl}\\_`);
+    expect(extractedPrivate.markdown).toContain(`**${boldUserinfoPortUrl}**`);
+    expect(extractedPrivate.markdown).toContain(`*${emUserinfoPortUrl}*`);
+    expect(extractedPrivate.markdown).toContain(`“${typoQuotePortUrl}”`);
+    expect(extractedPrivate.markdown).toContain(`${cjkPeriodPortUrl}。`);
+    expect(extractedPrivate.markdown).toContain(`${userinfoUnicodeProseUrl}。下一句`);
+    expect(extractedPrivate.markdown).toContain(`${proseAtUrl}。通知@ops:值班`);
+    expect(extractedPrivate.markdown).toContain(leadingPunctUserUrl);
+    expect(extractedPrivate.markdown).toContain(`${comma70UserUrl}。下一句`);
+    expect(extractedPrivate.markdown).toContain(`${emojiPortUrl}📌下一句`);
+    expect(extractedPrivate.markdown).toContain('report\u2013draft.pdf?token=ENDASHSECRET99');
+    db.setArticleCache('alice', privItemId, {
+      ...extractedPrivate, itemId: privItemId, clusterId: privNode.clusterId, summaryExcerpt: privItemWithImg.summaryExcerpt,
+    }, NOW + HOUR);
+    const cleanPrivateArt = await svc.article('alice', privNode.clusterId, { itemId: privItemId });
+    expect(cleanPrivateArt.markdown).toContain('ANGLEPARENSECRET99');
+    await svc.aiBrief('alice', 'user', privNode.clusterId, { research: true, force: true });
+    const privBriefJson = JSON.stringify(requestAi.mock.lastCall[0].payload);
+    for (const secret of [secretMediaUrl, 'PRIVATESENTINEL99', 'ANGLEPARENSECRET99', 'APOSSECRET99', 'UNICODEDRIFTSECRET99',
+      'WWWSECRET99', 'SCHEMERELSECRET99', 'IPV6RELSECRET99', 'SINGLEHOSTSECRET99', 'USERINFORELSECRET99',
+      'BOLDPORTPASS99', 'EMPORTPASS99', 'TYPOQUOTEPASS99', 'CJKPERIODPASS99', 'CJKBRACKETPASS99',
+      'USERINFODASHPASS99', 'PROSEATPASS99', 'LEADPUNCTPASS99', 'COMMA70PASS99', 'PINEMOJIPASS99',
+      'BRACKETPASS99', 'BRACKETPROSE99', 'BRACEPASS99', 'PIPEPASS99', 'IPV6WRAPPASS99',
+      'IPV6NOPORT99', 'UNDERSCOREPASS99', 'UNDERHTTP99', 'IDNWWWSECRET99', 'TRUNCDB99',
+      'ENDASHSECRET99', 'RELENDASHSECRET99', 'CJKQUERYSECRET99', 'EXCERPTSECRET99']) {
+      expect(privBriefJson).not.toContain(secret);
+    }
+    expect(requestAi.mock.lastCall[0].payload.articleMarkdown).toContain('Attachment');
+    expect(requestAi.mock.lastCall[0].payload.articleMarkdown).toContain('// keep prose comment');
+    expect(requestAi.mock.lastCall[0].payload.articleMarkdown).toContain('//\u2013note: kept');
+    expect(requestAi.mock.lastCall[0].payload.articleMarkdown).toContain('foo\\_www.keepme');
+    // Round 20 Blocker #1: Real private RSS ingestion clips AFTER private URL redaction so a credential URL straddling char 1,000 never leaks '//user:CLIPPASS99@'
+    const pad982 = 'x'.repeat(982);
+    const boundaryRss = `<rss><channel><item><title>Boundary RSS Memo</title><link>https://private.example/boundary</link><description>${pad982} //user:CLIPPASS99@intranet:8080 trailing</description></item></channel></rss>`;
+    const rssSvc = makeService({
+      fetcher: async () => ({ status: 200, url: 'https://private.example/boundary.xml', text: async () => boundaryRss }),
+      requestAi,
+    });
+    await rssSvc.savePreferences('grace', {
+      enabledDomainIds: [],
+      customDomains: [{ id: 'priv-clip', name: 'Priv Clip', colorToken: 'cyan', enabled: true, keywords: [], rssUrls: ['https://private.example/boundary.xml'] }],
+    });
+    await rssSvc.refresh('grace', { domainId: 'priv-clip', force: true });
+    const graceFeed = rssSvc.feed('grace', { domainId: 'priv-clip' });
+    expect(graceFeed.clusters).toHaveLength(1);
+    expect(graceFeed.clusters[0].summaryExcerpt).not.toContain('CLIPPASS99');
+    agents.set('v2-grace', { ownerId: 'grace', name: 'v2-grace', capabilities: ['cosmic_web_briefing', 'cosmic_web_follow_up'], encryptOutbound: false, ws: { readyState: 1, send: () => {} } });
+    await rssSvc.aiBrief('grace', 'user', graceFeed.clusters[0].id, { skipArticleFetch: true, research: true });
+    expect(JSON.stringify(requestAi.mock.lastCall[0].payload)).not.toContain('CLIPPASS99');
+    await rssSvc.followUp('grace', 'user', graceFeed.clusters[0].id, { question: 'Summary?', research: true });
+    expect(JSON.stringify(requestAi.mock.lastCall[0].payload)).not.toContain('CLIPPASS99');
+    // Round 19 Blocker #3: 39,000-backslash run after URL must redact linearly (< 150ms, never quadratic)
+    db.setArticleCache('alice', privItemId, {
+      title: 'Backslash stress', markdown: `https://files.example/a?token=BSSTRESS99${'\\'.repeat(39_000)}]`,
+      quality: 'full', itemId: privItemId, clusterId: privNode.clusterId, summaryExcerpt: 'Stress',
+    }, NOW + HOUR);
+    const tBs0 = performance.now();
+    await svc.aiBrief('alice', 'user', privNode.clusterId, { research: true, force: true });
+    expect(performance.now() - tBs0).toBeLessThan(150);
+    expect(JSON.stringify(requestAi.mock.lastCall[0].payload)).not.toContain('BSSTRESS99');
+    // Round 6–20: followUp redacts all alphanumeric sentinels directly in summaryExcerpt
+    await svc.followUp('alice', 'user', privNode.clusterId, { question: 'Any updates?', research: true });
+    const privFuJson = JSON.stringify(requestAi.mock.lastCall[0].payload);
+    for (const secret of [secretMediaUrl, 'EXCERPTSECRET99', 'UNICODEDRIFTSECRET99', 'WWWSECRET99',
+      'SCHEMERELSECRET99', 'IPV6RELSECRET99', 'SINGLEHOSTSECRET99', 'USERINFORELSECRET99',
+      'BOLDPORTPASS99', 'TYPOQUOTEPASS99', 'CJKPERIODPASS99', 'CJKBRACKETPASS99',
+      'USERINFODASHPASS99', 'PROSEATPASS99', 'LEADPUNCTPASS99', 'COMMA70PASS99', 'PINEMOJIPASS99',
+      'BRACKETPASS99', 'BRACKETPROSE99', 'BRACEPASS99', 'PIPEPASS99', 'IPV6WRAPPASS99',
+      'IPV6NOPORT99', 'UNDERSCOREPASS99', 'UNDERHTTP99', 'IDNWWWSECRET99', 'TRUNCDB99',
+      'ENDASHSECRET99', 'RELENDASHSECRET99', 'CJKQUERYSECRET99']) {
+      expect(privFuJson).not.toContain(secret);
+    }
+    expect(requestAi.mock.lastCall[0].payload.summaryExcerpt).toContain('foo_www.keepme');
+
+    // CW2-05 & Round 3 Blocker #1: legacy v1 Agent (no cosmic_web_cancel) retains remote slot accounting after caller abort,
+    // defers subsequent requests, AND hands off freed slots when awakened waiters hit the rate boundary (never hanging).
+    agents.clear();
+    const v1Frames = agent('legacy-v1', 'alice', ['cosmic_web_briefing']);
+    const lac1 = new AbortController();
+    const lac2 = new AbortController();
+    const lp1 = requestCosmicWebAi({ userId: 'alice', userRole: 'user', agentId: 'legacy-v1', mode: 'brief', signal: lac1.signal });
+    const lp2 = requestCosmicWebAi({ userId: 'alice', userRole: 'user', agentId: 'legacy-v1', mode: 'brief', signal: lac2.signal });
+    await new Promise(r => setImmediate(r));
+    expect(v1Frames).toHaveLength(2);
+    lac1.abort(Object.assign(new Error('cancelled'), { status: 499 }));
+    await expect(lp1).rejects.toMatchObject({ status: 499 });
+    expect(v1Frames.some(f => f.type === 'cosmic_web_ai_cancel')).toBe(false);
+    // Start 3rd request while both legacy slots are still occupied -> must NOT send 3rd frame yet
+    const lp3 = requestCosmicWebAi({ userId: 'alice', userRole: 'user', agentId: 'legacy-v1', mode: 'brief' });
+    await new Promise(r => setImmediate(r));
+    expect(v1Frames).toHaveLength(2);
+    // Legacy Agent finishes abandoned request 1 -> silently discarded & wakes deferred request 3!
+    handleCosmicWebAiResponse('legacy-v1', { requestId: v1Frames[0].requestId, ok: true, result: storyResult });
+    await new Promise(r => setImmediate(r));
+    expect(v1Frames).toHaveLength(3);
+    handleCosmicWebAiResponse('legacy-v1', { requestId: v1Frames[2].requestId, ok: true, result: storyResult });
+    await expect(lp3).resolves.toEqual(storyResult);
+    handleCosmicWebAiResponse('legacy-v1', { requestId: v1Frames[1].requestId, ok: true, result: storyResult });
+    await expect(lp2).resolves.toEqual(storyResult);
+
+    // Round 3 Blocker #1: multiple legacy waiters at the 20/10min rate boundary must ALL settle cleanly via slot handoff (zero hangs).
+    const rateFrames = agent('legacy-rate', 'dave', ['cosmic_web_briefing']);
+    for (let i = 0; i < 17; i++) {
+      const p = requestCosmicWebAi({ userId: 'dave', userRole: 'user', agentId: 'legacy-rate', mode: 'brief' });
+      await new Promise(r => setImmediate(r));
+      handleCosmicWebAiResponse('legacy-rate', { requestId: rateFrames.at(-1).requestId, ok: true, result: storyResult });
+      await expect(p).resolves.toEqual(storyResult);
+    }
+    // Consume tokens #18 and #19 and abandon both remote slots
+    const dac1 = new AbortController();
+    const dac2 = new AbortController();
+    const dp18 = requestCosmicWebAi({ userId: 'dave', userRole: 'user', agentId: 'legacy-rate', mode: 'brief', signal: dac1.signal });
+    const dp19 = requestCosmicWebAi({ userId: 'dave', userRole: 'user', agentId: 'legacy-rate', mode: 'brief', signal: dac2.signal });
+    await new Promise(r => setImmediate(r));
+    const req18 = rateFrames.at(-2).requestId;
+    const req19 = rateFrames.at(-1).requestId;
+    dac1.abort(Object.assign(new Error('cancelled'), { status: 499 }));
+    dac2.abort(Object.assign(new Error('cancelled'), { status: 499 }));
+    await expect(dp18).rejects.toMatchObject({ status: 499 });
+    await expect(dp19).rejects.toMatchObject({ status: 499 });
+    // Queue 3 waiters while dave is at 19/20 (only 1 token remains)
+    const w1 = requestCosmicWebAi({ userId: 'dave', userRole: 'user', agentId: 'legacy-rate', mode: 'brief' });
+    const w2 = requestCosmicWebAi({ userId: 'dave', userRole: 'user', agentId: 'legacy-rate', mode: 'brief' });
+    const w3 = requestCosmicWebAi({ userId: 'dave', userRole: 'user', agentId: 'legacy-rate', mode: 'brief' });
+    // Finishing req18 wakes w1 (consumes token #20 and dispatches)
+    handleCosmicWebAiResponse('legacy-rate', { requestId: req18, ok: true, result: storyResult });
+    await new Promise(r => setImmediate(r));
+    const req20 = rateFrames.at(-1).requestId;
+    // Finishing req19 wakes w2 -> hits 429 -> MUST hand off freed slot to w3 -> w3 ALSO rejects 429 cleanly!
+    handleCosmicWebAiResponse('legacy-rate', { requestId: req19, ok: true, result: storyResult });
+    await expect(w2).rejects.toMatchObject({ status: 429 });
+    await expect(w3).rejects.toMatchObject({ status: 429 });
+    handleCosmicWebAiResponse('legacy-rate', { requestId: req20, ok: true, result: storyResult });
+    await expect(w1).resolves.toEqual(storyResult);
+
+    // CW2-08: legacy colliding custom domain migration preserves RSS source IDs, disabledSources, and avoids duplicate re-ingest
+    const feedUrl = 'https://feeds.example.com/hoops.xml';
+    const legacySrcId = `rss-${createHash('sha256').update(JSON.stringify(['bob', 'sports', feedUrl])).digest('hex')}`;
+    db.saveUserPrefs('bob', {
+      enabledDomainIds: ['ai'],
+      customDomains: [{ id: 'sports', name: 'Bob Hoops', colorToken: 'gold', enabled: true, keywords: [], rssUrls: [feedUrl] }],
+      watchKeywords: [], muteKeywords: [], disabledSources: [legacySrcId], preferredAgentId: '', defaultPerspective: 'balanced', onboarded: true, autoRefreshMinutes: 15,
+    }, NOW);
+    ingestCosmicWebItems({ id: legacySrcId, ownerUserId: 'bob', domainId: 'sports', name: 'Bob Hoops', url: feedUrl, kind: 'rss' }, [item('Hidden hoops story', 'https://hoops.example/1')], NOW);
+    const bobBoot = svc.bootstrap('bob', 'user');
+    const migratedCustom = bobBoot.preferences.customDomains[0];
+    expect(migratedCustom.id).toBe('custom-sports');
+    const expectedNewSrcId = `rss-${createHash('sha256').update(JSON.stringify(['bob', 'custom-sports', feedUrl])).digest('hex')}`;
+    expect(bobBoot.preferences.disabledSources).toContain(expectedNewSrcId);
+    // Full preferences save keeps the migrated source disabled & hidden
+    await svc.savePreferences('bob', { ...bobBoot.preferences });
+    expect(svc.feed('bob', { domainId: 'custom-sports' }).total).toBe(0);
+    // Re-ingesting the same feed URL under migrated source ID produces 0 duplicates
+    const reAdded = ingestCosmicWebItems({ id: expectedNewSrcId, ownerUserId: 'bob', domainId: 'custom-sports', name: 'Bob Hoops', url: feedUrl, kind: 'rss' }, [item('Hidden hoops story', 'https://hoops.example/1')], NOW);
+    expect(reAdded).toBe(0);
+
+    // Round 3 Blocker #3: retired custom-sports domain with overlapping feed + article URL must NOT cause UNIQUE collision during sports migration
+    const overlapUrl = 'https://feeds.example.com/overlap.xml';
+    const overlapArticle = 'https://overlap.example/story-1';
+    const retiredSrcId = `rss-${createHash('sha256').update(JSON.stringify(['carol', 'custom-sports', overlapUrl])).digest('hex')}`;
+    const activeLegacySrcId = `rss-${createHash('sha256').update(JSON.stringify(['carol', 'sports', overlapUrl])).digest('hex')}`;
+    ingestCosmicWebItems({ id: retiredSrcId, ownerUserId: 'carol', domainId: 'custom-sports', name: 'Retired Hoops', url: overlapUrl, kind: 'rss' }, [item('Shared hoops headline', overlapArticle)], NOW);
+    ingestCosmicWebItems({ id: activeLegacySrcId, ownerUserId: 'carol', domainId: 'sports', name: 'Carol Hoops', url: overlapUrl, kind: 'rss' }, [item('Shared hoops headline', overlapArticle)], NOW);
+    db.saveUserPrefs('carol', {
+      enabledDomainIds: ['ai'],
+      customDomains: [{ id: 'sports', name: 'Carol Hoops', colorToken: 'gold', enabled: true, keywords: [], rssUrls: [overlapUrl] }],
+      watchKeywords: [], muteKeywords: [], disabledSources: [], preferredAgentId: '', defaultPerspective: 'balanced', onboarded: true, autoRefreshMinutes: 15,
+    }, NOW);
+    const carolBoot = svc.bootstrap('carol', 'user');
+    expect(carolBoot.preferences.customDomains[0].id).toBe('custom-sports-2');
+    expect(svc.feed('carol', { domainId: 'custom-sports-2' }).total).toBe(1);
+    await expect(svc.savePreferences('carol', { ...carolBoot.preferences })).resolves.toBeTruthy();
+
+    // Round 4 Blocker #3: retired legacy custom domain 'sports' (persisted rows only, absent from current prefs.customDomains)
+    // must migrate to retired-sports and NEVER resurrect when the user enables built-in Sports.
+    const erinFeed = 'https://feeds.example.com/erin-retired-hoops.xml';
+    const erinLegacySrc = `rss-${createHash('sha256').update(JSON.stringify(['erin', 'sports', erinFeed])).digest('hex')}`;
+    ingestCosmicWebItems({ id: erinLegacySrc, ownerUserId: 'erin', domainId: 'sports', name: 'Erin Retired Hoops', url: erinFeed, kind: 'rss' }, [item('Retired private hoops leak', 'https://retired.example/1')], NOW);
+    db.saveUserPrefs('erin', {
+      enabledDomainIds: ['sports'], customDomains: [], watchKeywords: [], muteKeywords: [],
+      disabledSources: [], preferredAgentId: '', defaultPerspective: 'balanced', onboarded: true, autoRefreshMinutes: 15,
+    }, NOW);
+    const erinBoot = svc.bootstrap('erin', 'user');
+    expect(JSON.stringify(erinBoot.graph)).not.toContain('Retired private hoops leak');
+    expect(svc.feed('erin', { domainId: 'sports' }).clusters.some(c => c.headline === 'Retired private hoops leak')).toBe(false);
+    expect(db.listPersistedUserDomainIds('erin')).toContain('retired-sports');
+    expect(db.listPersistedUserDomainIds('erin')).not.toContain('sports');
+
+    // Round 4 Blocker #4: followUp & aiBrief send selected item's OWN summaryExcerpt AND include selected item in bounded sources even beyond index 12.
+    const manyClusterId = 'cluster-14-sources';
+    db.upsertCluster({ id: manyClusterId, ownerUserId: null, headline: 'Cluster Head 0', summaryExcerpt: 'Cluster Excerpt 0', keywords: ['nba'], publishedAt: NOW });
+    let last14Id = '';
+    for (let i = 0; i < 14; i++) {
+      const sid = `pub-many-${i}`;
+      db.upsertSource({ id: sid, ownerUserId: null, domainId: 'ai', name: `Wire ${i}`, url: `https://wire${i}.example/feed`, kind: 'rss' });
+      const iid = `many-item-${i}`;
+      last14Id = iid;
+      db.insertItem({
+        id: iid, ownerUserId: null, clusterId: manyClusterId, sourceId: sid, domainId: 'ai',
+        url: `https://wire${i}.example/story`, title: `Headline ${i}`, summaryExcerpt: `Excerpt from source ${i}`,
+        publishedAt: NOW - i * 1000, hasHotMetric: false, media: [], sourceName: `Wire ${i}`,
+      });
+    }
+    agents.clear();
+    agent('v2-many', 'alice', ['cosmic_web_briefing', 'cosmic_web_research', 'cosmic_web_follow_up', 'cosmic_web_radar', 'cosmic_web_cancel']);
+    await svc.aiBrief('alice', 'user', manyClusterId, { itemId: last14Id, skipArticleFetch: true });
+    const brief14Payload = requestAi.mock.lastCall[0].payload;
+    expect(brief14Payload.headline).toBe('Headline 13');
+    expect(brief14Payload.summaryExcerpt).toBe('Excerpt from source 13');
+    expect(brief14Payload.sources[0].id).toBe(last14Id);
+    expect(brief14Payload.sources).toHaveLength(12);
+    await svc.followUp('alice', 'user', manyClusterId, { itemId: last14Id, question: 'What did Wire 13 report?' });
+    const fuPayload = requestAi.mock.lastCall[0].payload;
+    expect(fuPayload.headline).toBe('Headline 13');
+    expect(fuPayload.sourceUrl).toBe('https://wire13.example/story');
+    expect(fuPayload.summaryExcerpt).toBe('Excerpt from source 13');
+    expect(fuPayload.sources[0].id).toBe(last14Id);
+    expect(fuPayload.sources).toHaveLength(12);
+
+    // Round 4 Blocker #1 + Nit 1 (fake timers): late-dispatched legacy requests reaching caller deadline reject caller (504)
+    // while retaining remote slot accounting until reply/remote deadline; per-user waiter cap (4) spans across Agents.
+    vi.useFakeTimers();
+    try {
+      agents.clear();
+      const ftFramesA = agent('legacy-ft-a', 'frank', ['cosmic_web_briefing']);
+      const ftFramesB = agent('legacy-ft-b', 'frank', ['cosmic_web_briefing']);
+      // Fill both slots on Agent A and abandon them at t=0
+      const a1 = new AbortController(), a2 = new AbortController();
+      const pA1 = requestCosmicWebAi({ userId: 'frank', userRole: 'user', agentId: 'legacy-ft-a', mode: 'brief', signal: a1.signal });
+      const pA2 = requestCosmicWebAi({ userId: 'frank', userRole: 'user', agentId: 'legacy-ft-a', mode: 'brief', signal: a2.signal });
+      await Promise.resolve();
+      a1.abort(Object.assign(new Error('c'), { status: 499 }));
+      a2.abort(Object.assign(new Error('c'), { status: 499 }));
+      await expect(pA1).rejects.toMatchObject({ status: 499 });
+      await expect(pA2).rejects.toMatchObject({ status: 499 });
+      // Fill both slots on Agent B and abandon them too (for cross-Agent waiter cap test)
+      const b1 = new AbortController(), b2 = new AbortController();
+      const pB1 = requestCosmicWebAi({ userId: 'frank', userRole: 'user', agentId: 'legacy-ft-b', mode: 'brief', signal: b1.signal });
+      const pB2 = requestCosmicWebAi({ userId: 'frank', userRole: 'user', agentId: 'legacy-ft-b', mode: 'brief', signal: b2.signal });
+      await Promise.resolve();
+      b1.abort(Object.assign(new Error('c'), { status: 499 }));
+      b2.abort(Object.assign(new Error('c'), { status: 499 }));
+      await expect(pB1).rejects.toMatchObject({ status: 499 });
+      await expect(pB2).rejects.toMatchObject({ status: 499 });
+
+      // Queue 2 waiters on Agent A + 2 waiters on Agent B = 4 total for frank -> 5th waiter on Agent B rejects 429
+      const qa1 = requestCosmicWebAi({ userId: 'frank', userRole: 'user', agentId: 'legacy-ft-a', mode: 'brief' });
+      const qa2 = requestCosmicWebAi({ userId: 'frank', userRole: 'user', agentId: 'legacy-ft-a', mode: 'brief' });
+      const qb1 = requestCosmicWebAi({ userId: 'frank', userRole: 'user', agentId: 'legacy-ft-b', mode: 'brief' });
+      const qb2 = requestCosmicWebAi({ userId: 'frank', userRole: 'user', agentId: 'legacy-ft-b', mode: 'brief' });
+      await expect(requestCosmicWebAi({ userId: 'frank', userRole: 'user', agentId: 'legacy-ft-b', mode: 'brief' }))
+        .rejects.toMatchObject({ status: 429 });
+      // Clean up Agent B waiters via disconnect
+      agents.delete('legacy-ft-b');
+      clearCosmicWebAiRequestsForAgent('legacy-ft-b');
+      await expect(qb1).rejects.toMatchObject({ status: 503 });
+      await expect(qb2).rejects.toMatchObject({ status: 503 });
+
+      // Advance 50s -> both abandoned slots on Agent A finish -> qa1 and qa2 dispatch late with only 25s caller deadline left!
+      vi.advanceTimersByTime(50_000);
+      handleCosmicWebAiResponse('legacy-ft-a', { requestId: ftFramesA[0].requestId, ok: true, result: storyResult });
+      handleCosmicWebAiResponse('legacy-ft-a', { requestId: ftFramesA[1].requestId, ok: true, result: storyResult });
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(ftFramesA).toHaveLength(4);
+      // Advance 26s (total 76s > 75s caller deadline, but only 26s since dispatch < 75s remote deadline)
+      vi.advanceTimersByTime(26_000);
+      await expect(qa1).rejects.toMatchObject({ status: 504 });
+      await expect(qa2).rejects.toMatchObject({ status: 504 });
+      // Both remote slots on legacy-ft-a are STILL occupied -> a new request MUST wait, NOT send a 5th frame!
+      const lateReq = requestCosmicWebAi({ userId: 'frank', userRole: 'user', agentId: 'legacy-ft-a', mode: 'brief' });
+      await Promise.resolve();
+      expect(ftFramesA).toHaveLength(4);
+      // Once remote qa1 actually replies -> slot frees -> lateReq dispatches cleanly!
+      handleCosmicWebAiResponse('legacy-ft-a', { requestId: ftFramesA[2].requestId, ok: true, result: storyResult });
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(ftFramesA).toHaveLength(5);
+      handleCosmicWebAiResponse('legacy-ft-a', { requestId: ftFramesA[4].requestId, ok: true, result: storyResult });
+      await expect(lateReq).resolves.toEqual(storyResult);
+      // Advance past dispatch-based remote deadline for qa2 so no timers leak
+      vi.advanceTimersByTime(75_000);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

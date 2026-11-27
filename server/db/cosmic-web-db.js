@@ -43,7 +43,7 @@ export function openCosmicWebDb(customPath = resolveCosmicWebDbPath()) {
         scope TEXT GENERATED ALWAYS AS (coalesce(owner_user_id, '')) STORED,
         cluster_id TEXT NOT NULL, source_id TEXT NOT NULL, domain_id TEXT NOT NULL,
         url TEXT NOT NULL, title TEXT NOT NULL, summary_excerpt TEXT NOT NULL,
-        published_at INTEGER NOT NULL, has_hot_metric INTEGER NOT NULL,
+        published_at INTEGER NOT NULL, has_hot_metric INTEGER NOT NULL, media_json TEXT NOT NULL DEFAULT '[]', source_name_override TEXT,
         UNIQUE(source_id, url),
         FOREIGN KEY(cluster_id, scope) REFERENCES cw_clusters(id, scope) ON DELETE CASCADE,
         FOREIGN KEY(source_id, scope) REFERENCES cw_sources(id, scope) ON DELETE CASCADE
@@ -63,11 +63,22 @@ export function openCosmicWebDb(customPath = resolveCosmicWebDbPath()) {
         item_id TEXT PRIMARY KEY REFERENCES cw_items(id) ON DELETE CASCADE,
         value_json TEXT NOT NULL, expires_at INTEGER NOT NULL
       );
+      CREATE TABLE IF NOT EXISTS cw_enrichment_cache (
+        cluster_id TEXT PRIMARY KEY REFERENCES cw_clusters(id) ON DELETE CASCADE,
+        value_json TEXT NOT NULL, expires_at INTEGER NOT NULL
+      );
       CREATE TABLE IF NOT EXISTS cw_ai_cache (
         user_id TEXT NOT NULL, cache_key TEXT NOT NULL, value_json TEXT NOT NULL, expires_at INTEGER NOT NULL,
         PRIMARY KEY(user_id, cache_key)
       );
     `);
+    conn.exec('BEGIN IMMEDIATE');
+    const itemColumns = new Set(conn.prepare('PRAGMA table_info(cw_items)').all().map(column => column.name));
+    if (!itemColumns.has('media_json')) {
+      conn.exec("ALTER TABLE cw_items ADD COLUMN media_json TEXT NOT NULL DEFAULT '[]'");
+    }
+    if (!itemColumns.has('source_name_override')) conn.exec('ALTER TABLE cw_items ADD COLUMN source_name_override TEXT');
+    conn.exec('COMMIT');
   } catch (err) { conn.close(); throw err; }
   db = conn;
   dbPath = customPath;
@@ -120,6 +131,13 @@ export function deactivateSources(userId) {
   if (!userId) throw new Error('Expected source owner');
   sql('UPDATE cw_sources SET enabled=0 WHERE owner_user_id=?').run(userId);
 }
+export function activateRadarSource(source) {
+  sql("UPDATE cw_sources SET enabled=1, name=? WHERE id=? AND owner_user_id=? AND kind='radar'")
+    .run(source.name, source.id, source.ownerUserId);
+}
+export function disableRadarSource(id, userId) {
+  sql("UPDATE cw_sources SET enabled=0 WHERE id=? AND owner_user_id=? AND kind='radar'").run(id, userId);
+}
 export function recordSourceRefresh(id, ownerUserId, now, error = null) {
   sql(`UPDATE cw_sources SET last_attempt_at=?, last_success_at=CASE WHEN ? IS NULL THEN ? ELSE last_success_at END,
     last_error=? WHERE id=? AND owner_user_id IS ? AND enabled=1`).run(now, error, now, error, id, ownerUserId);
@@ -144,10 +162,52 @@ export function upsertCluster(cluster) {
     .run(cluster.id, cluster.ownerUserId ?? null, cluster.headline, cluster.summaryExcerpt, JSON.stringify(cluster.keywords), cluster.publishedAt);
 }
 export function insertItem(item) {
-  return sql(`INSERT INTO cw_items(id, owner_user_id, cluster_id, source_id, domain_id, url, title, summary_excerpt, published_at, has_hot_metric)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(source_id, url) DO NOTHING`)
+  return sql(`INSERT INTO cw_items(id, owner_user_id, cluster_id, source_id, domain_id, url, title, summary_excerpt, published_at, has_hot_metric, media_json, source_name_override)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(source_id, url) DO NOTHING`)
     .run(item.id, item.ownerUserId ?? null, item.clusterId, item.sourceId, item.domainId, item.url, item.title,
-      item.summaryExcerpt, item.publishedAt, Number(!!item.hasHotMetric)).changes;
+      item.summaryExcerpt, item.publishedAt, Number(!!item.hasHotMetric), JSON.stringify((item.media ?? []).slice(0, 3)), item.sourceName || null).changes;
+}
+export function backfillItemMedia(sourceId, ownerUserId, url, media) {
+  if (!Array.isArray(media) || !media.length) return 0;
+  return sql("UPDATE cw_items SET media_json=? WHERE source_id=? AND owner_user_id IS ? AND url=? AND media_json='[]'")
+    .run(JSON.stringify(media.slice(0, 3)), sourceId, ownerUserId ?? null, url).changes;
+}
+export function listSourcesForUserDomain(userId, domainId) {
+  if (!userId || !domainId) return [];
+  return sql('SELECT * FROM cw_sources WHERE owner_user_id=? AND domain_id=? ORDER BY id').all(userId, domainId);
+}
+export function listPersistedUserDomainIds(userId) {
+  if (!userId) return [];
+  return sql(`SELECT domain_id FROM cw_sources WHERE owner_user_id=?
+    UNION SELECT domain_id FROM cw_items WHERE owner_user_id=?`)
+    .all(userId, userId)
+    .map(row => row.domain_id)
+    .filter(Boolean);
+}
+export function remapUserSource({ userId, oldSourceId, newSourceId, newDomainId }) {
+  if (!userId || !oldSourceId || !newSourceId || !newDomainId) return;
+  if (oldSourceId === newSourceId) {
+    sql('UPDATE cw_sources SET domain_id=? WHERE owner_user_id=? AND id=?').run(newDomainId, userId, oldSourceId);
+    sql('UPDATE cw_items SET domain_id=? WHERE owner_user_id=? AND source_id=?').run(newDomainId, userId, oldSourceId);
+    return;
+  }
+  const row = sql('SELECT * FROM cw_sources WHERE id=? AND owner_user_id=?').get(oldSourceId, userId);
+  if (!row) return;
+  sql(`INSERT INTO cw_sources(id, owner_user_id, domain_id, name, url, kind, enabled, last_attempt_at, last_success_at, last_error)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(id) DO UPDATE SET domain_id=excluded.domain_id, name=excluded.name`)
+    .run(newSourceId, userId, newDomainId, row.name, row.url, row.kind, row.enabled, row.last_attempt_at, row.last_success_at, row.last_error);
+  // Defensive dedupe: drop overlapping (source_id, url) rows on old source before repointing so UNIQUE never throws.
+  sql(`DELETE FROM cw_items WHERE owner_user_id=? AND source_id=?
+    AND url IN (SELECT url FROM cw_items WHERE owner_user_id=? AND source_id=?)`)
+    .run(userId, oldSourceId, userId, newSourceId);
+  sql('UPDATE cw_items SET source_id=?, domain_id=? WHERE owner_user_id=? AND source_id=?').run(newSourceId, newDomainId, userId, oldSourceId);
+  sql('DELETE FROM cw_sources WHERE id=? AND owner_user_id=?').run(oldSourceId, userId);
+}
+export function migrateCustomDomainId(userId, oldId, newId) {
+  if (!userId || !oldId || !newId || oldId === newId) return;
+  sql('UPDATE cw_sources SET domain_id=? WHERE owner_user_id=? AND domain_id=?').run(newId, userId, oldId);
+  sql('UPDATE cw_items SET domain_id=? WHERE owner_user_id=? AND domain_id=?').run(newId, userId, oldId);
 }
 export function listVisibleClusters(userId, clusterId) {
   return clusterId === undefined ? sql(`SELECT * FROM cw_clusters WHERE ${visible}`).all(userId) :
@@ -155,7 +215,7 @@ export function listVisibleClusters(userId, clusterId) {
 }
 export function listVisibleItems(userId, clusterIds) {
   if (!clusterIds.length) return [];
-  return sql(`SELECT i.*, s.name AS source_name FROM cw_items i JOIN cw_sources s ON s.id=i.source_id
+  return sql(`SELECT i.*, coalesce(i.source_name_override, s.name) AS source_name, s.kind AS source_kind FROM cw_items i JOIN cw_sources s ON s.id=i.source_id
     WHERE (i.owner_user_id IS NULL OR i.owner_user_id=?) AND i.cluster_id IN (SELECT value FROM json_each(?))
     ORDER BY i.published_at DESC, i.id`).all(userId, JSON.stringify(clusterIds));
 }
@@ -200,6 +260,16 @@ export function setAiCache(userId, key, value, expiresAt) {
     value_json=excluded.value_json, expires_at=excluded.expires_at`).run(userId, key, JSON.stringify(value), expiresAt);
 }
 
+// Call after resolving the visible cluster. Private cluster IDs never share cache entries.
+export function getEnrichmentCache(clusterId, now = Date.now()) {
+  return parse(sql('SELECT value_json FROM cw_enrichment_cache WHERE cluster_id=? AND expires_at>?').get(clusterId, now));
+}
+export function setEnrichmentCache(clusterId, value, expiresAt = Date.now() + 2 * 60 * 60_000) {
+  sql(`INSERT INTO cw_enrichment_cache SELECT id, ?, ? FROM cw_clusters WHERE id=?
+    ON CONFLICT(cluster_id) DO UPDATE SET value_json=excluded.value_json, expires_at=excluded.expires_at`)
+    .run(JSON.stringify(value), expiresAt, clusterId);
+}
+
 export const RETENTION_MS = 14 * 24 * 60 * 60 * 1000;
 export function pruneCosmicWebDb(now = Date.now()) {
   return cosmicWebTransaction(() => {
@@ -210,8 +280,9 @@ export function pruneCosmicWebDb(now = Date.now()) {
       (SELECT 1 FROM cw_items i WHERE i.cluster_id=cw_clusters.id) AND NOT EXISTS
       (SELECT 1 FROM cw_user_cluster_state b WHERE b.cluster_id=cw_clusters.id AND b.bookmarked=1)`).run(cutoff).changes;
     const articles = sql('DELETE FROM cw_article_cache WHERE expires_at<=?').run(now).changes;
+    const enrichment = sql('DELETE FROM cw_enrichment_cache WHERE expires_at<=?').run(now).changes;
     const ai = sql('DELETE FROM cw_ai_cache WHERE expires_at<=?').run(now).changes;
     sql('DELETE FROM cw_sources WHERE enabled=0 AND NOT EXISTS (SELECT 1 FROM cw_items i WHERE i.source_id=cw_sources.id)').run();
-    return { items, clusters, articles, ai };
+    return { items, clusters, articles, ai, enrichment };
   });
 }
