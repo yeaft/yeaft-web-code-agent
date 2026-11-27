@@ -103,7 +103,7 @@ describe('request authentication', () => {
     // PATCH constants + planetBindings + drawerWidth + uiMode
     const p1 = callRoute(patchRoutes, '/api/user/preferences', {
       cosmosConfig: {
-        constants: { orbitSpeed: 0.4, skyBright: 1.35, activeFlash: false, livePreviewMode: '3', renderQuality: 'lite' },
+        constants: { orbitSpeed: 0.4, spinSpeed: 1.2, planetScale: 1.15, eventScale: 0.85, skyBright: 1.35, activeFlash: false, livePreviewMode: '3', renderQuality: 'lite' },
         planetBindings: { 'ag-1': 'saturn', 'ag-2': 'mars' },
         drawerWidth: 740,
         uiMode: 'cosmos',
@@ -111,7 +111,7 @@ describe('request authentication', () => {
     });
     expect(p1.statusCode).toBe(200);
     expect(p1.body.cosmosConfig).toEqual({
-      constants: { orbitSpeed: 0.4, skyBright: 1.35, activeFlash: false, livePreviewMode: '3', renderQuality: 'lite' },
+      constants: { orbitSpeed: 0.4, spinSpeed: 1.2, planetScale: 1.15, eventScale: 0.85, skyBright: 1.35, activeFlash: false, livePreviewMode: '3', renderQuality: 'lite' },
       planetBindings: { 'ag-1': 'saturn', 'ag-2': 'mars' },
       drawerWidth: 740,
       uiMode: 'cosmos',
@@ -127,7 +127,7 @@ describe('request authentication', () => {
     });
     expect(p2.statusCode).toBe(200);
     expect(p2.body.cosmosConfig).toEqual({
-      constants: { orbitSpeed: 0.4, skyBright: 1.35, activeFlash: false, livePreviewMode: '3', renderQuality: 'lite', starDensity: 1.6 },
+      constants: { orbitSpeed: 0.4, spinSpeed: 1.2, planetScale: 1.15, eventScale: 0.85, skyBright: 1.35, activeFlash: false, livePreviewMode: '3', renderQuality: 'lite', starDensity: 1.6 },
       planetBindings: { 'ag-1': 'jupiter' },
       drawerWidth: null,
       uiMode: 'cosmos',

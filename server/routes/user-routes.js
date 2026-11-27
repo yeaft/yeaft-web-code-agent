@@ -68,6 +68,9 @@ const cosmosRenderQualities = new Set(['auto', 'high', 'lite']);
 const cosmosUiModes = new Set(['cosmos', 'classic']);
 const cosmosNumericBounds = {
   orbitSpeed: [0, 2.5],
+  spinSpeed: [0, 2.5],
+  planetScale: [0.65, 1.5],
+  eventScale: [0.5, 1.8],
   starDensity: [0.35, 2.0],
   skyBright: [0.35, 1.8],
   orbitLines: [0, 1.2],
