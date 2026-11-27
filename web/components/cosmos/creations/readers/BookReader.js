@@ -77,6 +77,8 @@ export default {
       editing: false,
       draftText: this.content || '',
       dirty: false,
+      pendingSaveCount: 0,
+      saveSessionSeq: 0,
       editBaseRevId: null,
       conflictError: '',
       saveError: '',
@@ -137,7 +139,7 @@ export default {
   },
   watch: {
     content(newVal) {
-      if (!this.editing || !this.dirty) {
+      if (!this.editing || (!this.dirty && this.pendingSaveCount === 0)) {
         this.draftText = newVal || '';
         this.dirty = false;
         if (this.editing && this.contentLoaded) {
@@ -146,7 +148,7 @@ export default {
       }
     },
     loadedRevId(newRev) {
-      if (this.editing && !this.dirty && this.contentLoaded) {
+      if (this.editing && !this.dirty && this.pendingSaveCount === 0 && this.contentLoaded) {
         this.editBaseRevId = newRev;
       }
     },
@@ -155,6 +157,8 @@ export default {
       this.editing = false;
       this.draftText = this.content || '';
       this.dirty = false;
+      this.pendingSaveCount = 0;
+      this.saveSessionSeq += 1;
       this.editBaseRevId = null;
       this.conflictError = '';
       this.saveError = '';
@@ -220,7 +224,7 @@ export default {
       this.syncStoreDirty(false);
     },
     onEditorInput() {
-      this.dirty = this.draftText !== (this.content || '');
+      this.dirty = this.pendingSaveCount > 0 || this.draftText !== (this.content || '');
       this.syncStoreDirty(this.dirty);
       this.autoResizeTextarea();
     },
@@ -236,6 +240,7 @@ export default {
       const targetAgentId = this.agentId;
       const targetCreationId = this.creationId;
       const targetNodeId = this.node.id;
+      const startSessionSeq = this.saveSessionSeq;
       const submittedText = this.draftText;
       const payload = {
         nodeId: targetNodeId,
@@ -246,8 +251,12 @@ export default {
         this.agentId === targetAgentId
         && this.creationId === targetCreationId
         && this.node?.id === targetNodeId
+        && this.saveSessionSeq === startSessionSeq
       );
       if (this.onSaveContent) {
+        this.pendingSaveCount += 1;
+        let savedOk = false;
+        let savedRevId = null;
         try {
           const res = await this.onSaveContent(payload);
           if (res?.conflict === true) {
@@ -256,26 +265,39 @@ export default {
             }
             return false;
           }
-          const savedRevId = res?.node?.currentRevId ?? (sameTarget() ? this.loadedRevId : null) ?? payload.baseRevId;
+          savedRevId = res?.node?.currentRevId ?? (sameTarget() ? this.loadedRevId : null) ?? payload.baseRevId;
           this._lastSavedRevId = savedRevId;
-          if (!sameTarget()) return true;
-          this.editBaseRevId = savedRevId;
-          if (this.draftText === submittedText) {
-            this.dirty = false;
-            this.syncStoreDirty(false, targetNodeId);
-            if (exitAfter) {
-              this.editing = false;
-            }
-          }
+          savedOk = true;
           return true;
         } catch (err) {
-          if (!sameTarget()) return false;
-          if (err?.errorCode === 'revision_conflict') {
-            this.conflictError = this.$t('creation.interior.conflictDesc');
-          } else {
-            this.saveError = err?.message || 'Save failed';
+          if (sameTarget()) {
+            if (err?.errorCode === 'revision_conflict') {
+              this.conflictError = this.$t('creation.interior.conflictDesc');
+            } else {
+              this.saveError = err?.message || 'Save failed';
+            }
           }
           return false;
+        } finally {
+          if (sameTarget()) {
+            this.pendingSaveCount = Math.max(0, this.pendingSaveCount - 1);
+            if (savedOk) {
+              this.editBaseRevId = savedRevId;
+              if (this.draftText === submittedText) {
+                this.dirty = false;
+                this.syncStoreDirty(false, targetNodeId);
+                if (exitAfter) {
+                  this.editing = false;
+                }
+              } else {
+                this.dirty = true;
+                this.syncStoreDirty(true, targetNodeId);
+              }
+            } else if (this.pendingSaveCount === 0) {
+              this.dirty = this.draftText !== (this.content || '');
+              this.syncStoreDirty(this.dirty, targetNodeId);
+            }
+          }
         }
       }
       this.$emit('save-content', payload);

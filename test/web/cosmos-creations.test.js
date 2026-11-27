@@ -1699,6 +1699,44 @@ describe('Cosmos Creations — End-to-End Web Store <-> Server Relay <-> Agent S
     expect(galleryRaceWrap.find('button.is-primary').exists()).toBe(true);
     galleryRaceWrap.unmount();
 
+    // R9: BookReader preserves an undo back to pre-save content A made while saving B (even when content prop updates to B before save promise resolves!)
+    let resolveBookSave;
+    const bookUndoWrap = mount(BookReader, {
+      props: {
+        node: { id: 'book-undo', title: 'Chapter Undo', modality: 'markdown_doc', currentRevId: 'rev-1' },
+        content: 'Version A',
+        contentLoaded: true,
+        loadedRevId: 'rev-1',
+        agentId: 'agent-a',
+        creationId: res.creation.id,
+        onSaveContent: vi.fn(() => new Promise((r) => { resolveBookSave = r; })),
+      },
+      global: { mocks: { $t } },
+    });
+    bookUndoWrap.vm.enterEditMode();
+    await flushPromises();
+    // Edit A -> B and click Done (saveEdit(true))
+    bookUndoWrap.vm.draftText = 'Version B';
+    bookUndoWrap.vm.onEditorInput();
+    const pendingBookSave = bookUndoWrap.vm.saveEdit(true);
+    // Undo back to 'Version A' BEFORE the save resolves
+    bookUndoWrap.vm.draftText = 'Version A';
+    bookUndoWrap.vm.onEditorInput();
+    expect(bookUndoWrap.vm.dirty).toBe(true);
+    // Store publishes 'Version B' as the new content prop BEFORE the save promise resolves
+    await bookUndoWrap.setProps({ content: 'Version B', loadedRevId: 'rev-2' });
+    expect(bookUndoWrap.vm.draftText).toBe('Version A');
+    // Now resolve the save promise
+    resolveBookSave({ node: { id: 'book-undo', currentRevId: 'rev-2' } });
+    await pendingBookSave;
+    await flushPromises();
+    // Undone draft 'Version A' must remain preserved, editor stays open & dirty against new base 'rev-2'!
+    expect(bookUndoWrap.vm.draftText).toBe('Version A');
+    expect(bookUndoWrap.vm.editing).toBe(true);
+    expect(bookUndoWrap.vm.dirty).toBe(true);
+    expect(bookUndoWrap.vm.editBaseRevId).toBe('rev-2');
+    bookUndoWrap.unmount();
+
     creationsStore.uploadSources = origUploadSources;
     creationsStore.request = origRequest;
   });
