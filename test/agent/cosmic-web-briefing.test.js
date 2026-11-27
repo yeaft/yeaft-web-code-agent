@@ -598,10 +598,25 @@ describe('Cosmic Web bounded research', () => {
     expect(replies).toHaveLength(1);
     expect(replies[0].ok).toBe(true);
     expect(Object.keys(replies[0].result).sort()).toEqual(['bullets', 'followUps', 'fullMarkdown', 'impact', 'tldr']);
+
+    // Round 3 Blocker #2 (defense-in-depth): private source payload strips media from top-level and sources before reaching the model
+    const privateAdapter = stubAdapter(story);
+    await run({
+      adapter: privateAdapter,
+      payload: {
+        isPrivateSource: true,
+        headline: 'Private memo',
+        media: [{ url: 'https://private.example/secret-top.png', kind: 'image' }],
+        sources: [{ title: 'Memo', url: 'https://private.example/memo', media: [{ url: 'https://private.example/secret-source.png', kind: 'image' }] }],
+      },
+    });
+    const sentPrompt = JSON.stringify(privateAdapter.call.mock.lastCall[0].messages);
+    expect(sentPrompt).not.toContain('secret-top.png');
+    expect(sentPrompt).not.toContain('secret-source.png');
   });
 });
 
-it('runs the real WebSearch executor with a ledger isolated to each briefing', async () => {
+it('runs the real WebSearch executor with a ledger isolated to each briefing and linear Bing fallback scanning', async () => {
   const url = 'https://news.example.com/release';
   const network = vi.fn().mockImplementation(async () => Response.json({ results: [{ url, title: 'Release', snippet: 'ARM builds' }] }));
   vi.stubGlobal('fetch', network);
@@ -615,4 +630,22 @@ it('runs the real WebSearch executor with a ledger isolated to each briefing', a
     expect(new URL(endpoint).searchParams.get('q')).toBe('ARM news');
     expect(options.signal).toBeInstanceOf(AbortSignal);
   }
+
+  // Round 3 Nit 1: malformed Bing HTML with thousands of unclosed <li class="b_algo"> tags parses linearly without rescanning suffix
+  const malformedBing = '<li class="b_algo"><h2><a href="https://bing.example.com/ok">Valid Bing Hit</a></h2><p>Snippet</p>'
+    + '<li class="b_algo"><span>unclosed'.repeat(7000);
+  const bingNet = vi.fn().mockImplementation(async (endpoint) => {
+    if (String(endpoint).includes('duckduckgo')) return new Response('unavailable', { status: 503 });
+    return new Response(malformedBing, { status: 200, headers: { 'content-type': 'text/html' } });
+  });
+  vi.stubGlobal('fetch', bingNet);
+  const bingAdapter = researchedAdapter([[search('b1', 'malformed bing check')], []]);
+  const t0 = performance.now();
+  const { result: bingRes } = await run({
+    config: { ...config, search: { disableHtmlFallback: false } },
+    adapter: bingAdapter,
+    payload: { research: true },
+  });
+  expect(performance.now() - t0).toBeLessThan(500);
+  expect(bingRes).toMatchObject({ researched: true, searchCount: 1, evidenceCount: 1 });
 });

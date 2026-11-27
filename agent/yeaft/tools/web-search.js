@@ -353,11 +353,12 @@ function decodeDdgUrl(href) {
   }
 }
 
-/** Linear O(N) scan of Bing <li class="...b_algo..."> result blocks (no backtracking). */
+/** Strictly linear O(N) scan of Bing <li class="...b_algo..."> result blocks (no backtracking or suffix rescans). */
 function parseBingHtml(html, limit) {
   const results = [];
   const lower = html.toLowerCase();
   let pos = 0;
+  let nextCloseLi = lower.indexOf('</li>');
   while (pos < html.length && results.length < limit) {
     const li = lower.indexOf('<li', pos);
     if (li === -1) break;
@@ -374,11 +375,13 @@ function parseBingHtml(html, limit) {
       pos = gt + 1;
       continue;
     }
-    const closeLi = lower.indexOf('</li>', gt + 1);
-    const blockEnd = closeLi === -1 ? Math.min(html.length, gt + 8192) : Math.min(closeLi, gt + 16384);
+    while (nextCloseLi !== -1 && nextCloseLi < gt + 1) {
+      nextCloseLi = lower.indexOf('</li>', nextCloseLi + 5);
+    }
+    const blockEnd = nextCloseLi === -1 ? Math.min(html.length, gt + 8192) : Math.min(nextCloseLi, gt + 16384);
     const block = html.slice(gt + 1, blockEnd);
     const blockLower = lower.slice(gt + 1, blockEnd);
-    pos = closeLi === -1 ? blockEnd : closeLi + 5;
+    pos = nextCloseLi === -1 ? blockEnd : Math.max(blockEnd, nextCloseLi + 5);
 
     const h2 = blockLower.indexOf('<h2');
     if (h2 === -1) continue;

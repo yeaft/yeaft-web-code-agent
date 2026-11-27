@@ -148,16 +148,17 @@ function commentItem(item) {
 
 function buildNewsData(payload) {
   const input = isRecord(payload) ? payload : {};
+  const isPrivate = input.isPrivateSource === true;
   return {
     ...projectText(input, { headline: 500, articleMarkdown: 12_000, url: MAX_URL, sourceUrl: MAX_URL, quality: 40, date: 32,
       question: 500, topic: 300, topicName: 300, query: 300, tldr: 400, context: 3000, briefContext: 3000, summaryExcerpt: 1000 }),
     ...(input.keywords ? { keywords: (Array.isArray(input.keywords) ? take(input.keywords, 12) : [input.keywords])
       .map(keyword => boundedText(keyword, 120)).filter(Boolean) } : {}),
-    ...(Array.isArray(input.media) ? { media: take(input.media, 12).map(mediaItem).filter(Boolean) } : {}),
+    ...(!isPrivate && Array.isArray(input.media) ? { media: take(input.media, 12).map(mediaItem).filter(Boolean) } : {}),
     ...(Array.isArray(input.communityComments) ? { communityComments: take(input.communityComments, 24).map(commentItem).filter(Boolean) } : {}),
     sources: take(input.sources, 12).map(source => {
       const evidence = projectEvidence(source, 1000);
-      return Array.isArray(source?.media) && isRecord(evidence)
+      return !isPrivate && Array.isArray(source?.media) && isRecord(evidence)
         ? { ...evidence, media: take(source.media, 8).map(mediaItem).filter(Boolean) } : evidence;
     }),
     domains: take(input.domains, 8).map(domain => ({

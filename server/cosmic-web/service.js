@@ -38,7 +38,13 @@ const preferred = userId => {
     return { ...prefs, customDomains: normalizedCustom };
   }
   // Idempotent migration: remap any legacy custom domain ID that now collides with a built-in domain.
-  const usedIds = new Set([...domainIds, ...normalizedCustom.filter(d => !domainIds.has(d.id)).map(d => d.id)]);
+  // Reserve both active custom IDs AND any retired domain IDs still referenced in cw_sources/cw_items.
+  const persistedIds = db.listPersistedUserDomainIds(userId);
+  const usedIds = new Set([
+    ...domainIds,
+    ...persistedIds,
+    ...normalizedCustom.filter(d => !domainIds.has(d.id)).map(d => d.id),
+  ]);
   const remaps = [];
   const migratedCustom = normalizedCustom.map(d => {
     if (!domainIds.has(d.id)) return d;
@@ -143,7 +149,11 @@ function listClusters(userId, prefs, now, id) {
   return rows.flatMap(row => {
     const articles = grouped.get(row.id).filter(item => !prefs.disabledSources.includes(itemSourceId(item)));
     if (!articles.length) return [];
-    const items = articles.map(toItem);
+    const isPrivateSource = articles.some(a => a.owner_user_id !== null);
+    // Strip untrusted private RSS media URLs from item projections and downstream Agent payloads.
+    const items = articles.map(articleRow => (isPrivateSource || articleRow.owner_user_id !== null)
+      ? { ...toItem(articleRow), media: [] }
+      : toItem(articleRow));
     const keywords = JSON.parse(row.keywords_json);
     const fields = [row.headline, row.summary_excerpt, ...items.map(i => i.title), ...keywords];
     const actual = [...new Set(items.map(i => i.domainId))];
@@ -153,7 +163,6 @@ function listClusters(userId, prefs, now, id) {
     const sourceNames = [...new Set(items.map(i => i.sourceName))];
     const state = states.get(row.id) ?? { unread: true, bookmarked: false };
     const domain = [...BUILTIN_DOMAINS, ...prefs.customDomains].find(d => d.id === domainId);
-    const isPrivateSource = articles.some(a => a.owner_user_id !== null);
     return [{ id: row.id, clusterId: row.id, headline: row.headline, summaryExcerpt: row.summary_excerpt,
       primaryUrl: items[0]?.url || '', isPrivateSource,
       keywords, publishedAt: row.published_at, domainId, domainIds: allDomains, relatedDomains: allDomains.filter(d => d !== domainId),

@@ -165,6 +165,10 @@ export default {
         const hit = items.find((it) => it && it.id === this.webStore.activeArticleItemId);
         if (hit) return hit;
       }
+      if (this.webStore.activeArticleUrl) {
+        const byUrl = items.find((it) => it && it.url === this.webStore.activeArticleUrl);
+        if (byUrl) return byUrl;
+      }
       return items[0];
     },
     fallbackExcerpt() {
@@ -814,7 +818,7 @@ export default {
                   v-if="sourceFootnotes.length > 1"
                   type="button"
                   class="cw-footnote-switch"
-                  :class="{ 'is-active': (webStore.activeArticleItemId || sourceFootnotes[0]?.id) === src.id }"
+                  :class="{ 'is-active': (activeSelectedItem?.id || sourceFootnotes[0]?.id) === src.id }"
                   @click="selectStorySource(src)"
                 >{{ src.name }}</button>
                 <span v-else-if="!src.url" class="cw-footnote-text">{{ src.name }}</span>

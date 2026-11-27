@@ -1696,7 +1696,32 @@ describe('Cosmic Web — Pinia store & interactive overlay', () => {
     expect(webStore.activeArticleItemId).toBeNull();
     expect(webStore.aiBriefData?.tldr).toBe('Brief for default');
 
+    // Round 3 Blocker #4: URL-only selection of source 2 aligns excerpt, active chip, Clean Article, AI brief, AND follow-up
+    const priorFollowUps = followUpBodies.length;
+    await webStore.openClusterReader('c-multi', { url: 'https://s2.example/b', expanded: true });
+    await flushPromises();
+    expect(webStore.activeArticleItemId).toBe('item-2');
+    expect(webStore.aiBriefData?.tldr).toBe('Brief for item-2');
+    webStore.aiBriefLoading = true;
+    await flushPromises();
+    expect(wrapper.find('.cw-reader-modal .cw-immediate-excerpt').text()).toContain('Excerpt 2');
+    webStore.aiBriefLoading = false;
+    await flushPromises();
+    await wrapper.find('.cw-reader-modal .cw-clean-article-toggle').trigger('click');
+    await flushPromises();
+    expect(wrapper.find('.cw-reader-modal .cw-clean-article-panel').text()).toContain('Clean extracted article paragraph without AI.');
+    await webStore.askFollowUp('c-multi', 'Source 2 detail?');
+    expect(followUpBodies.length).toBe(priorFollowUps + 1);
+    expect(followUpBodies.at(-1).itemId).toBe('item-2');
+
+    // Round 3 Nit 2: COSMIC_WEB_COLOR_MAP uses pure CSS theme tokens without inline hex fallbacks
+    for (const token of Object.values(COSMIC_WEB_COLOR_MAP)) {
+      expect(token.cssVar).toMatch(/^var\(--[a-z0-9-]+\)$/i);
+    }
+
     // CW2-06: stored excerpt displays immediately even while AI brief is loading
+    await webStore.openClusterReader('c-multi', { expanded: true });
+    await flushPromises();
     webStore.aiBriefLoading = true;
     await flushPromises();
     expect(wrapper.find('.cw-reader-modal .cw-immediate-excerpt').text()).toContain('Excerpt 1');

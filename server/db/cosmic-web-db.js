@@ -176,6 +176,14 @@ export function listSourcesForUserDomain(userId, domainId) {
   if (!userId || !domainId) return [];
   return sql('SELECT * FROM cw_sources WHERE owner_user_id=? AND domain_id=? ORDER BY id').all(userId, domainId);
 }
+export function listPersistedUserDomainIds(userId) {
+  if (!userId) return [];
+  return sql(`SELECT domain_id FROM cw_sources WHERE owner_user_id=?
+    UNION SELECT domain_id FROM cw_items WHERE owner_user_id=?`)
+    .all(userId, userId)
+    .map(row => row.domain_id)
+    .filter(Boolean);
+}
 export function remapUserSource({ userId, oldSourceId, newSourceId, newDomainId }) {
   if (!userId || !oldSourceId || !newSourceId || !newDomainId) return;
   if (oldSourceId === newSourceId) {
@@ -189,6 +197,10 @@ export function remapUserSource({ userId, oldSourceId, newSourceId, newDomainId 
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(id) DO UPDATE SET domain_id=excluded.domain_id, name=excluded.name`)
     .run(newSourceId, userId, newDomainId, row.name, row.url, row.kind, row.enabled, row.last_attempt_at, row.last_success_at, row.last_error);
+  // Defensive dedupe: drop overlapping (source_id, url) rows on old source before repointing so UNIQUE never throws.
+  sql(`DELETE FROM cw_items WHERE owner_user_id=? AND source_id=?
+    AND url IN (SELECT url FROM cw_items WHERE owner_user_id=? AND source_id=?)`)
+    .run(userId, oldSourceId, userId, newSourceId);
   sql('UPDATE cw_items SET source_id=?, domain_id=? WHERE owner_user_id=? AND source_id=?').run(newSourceId, newDomainId, userId, oldSourceId);
   sql('DELETE FROM cw_sources WHERE id=? AND owner_user_id=?').run(oldSourceId, userId);
 }

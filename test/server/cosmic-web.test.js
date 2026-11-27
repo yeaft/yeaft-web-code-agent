@@ -1065,17 +1065,25 @@ describe('2.0 graph and AI contracts', () => {
     const pubNode = marked.graph.nodes.find(n => n.clusterId === pubId);
     expect(pubNode?.mediaPreview?.proxyUrl).toContain('&sig=');
 
-    // CW2-01: private RSS feed media is NEVER signed or exposed in graph/cluster
-    const privItemWithImg = { ...item('Private img note', 'https://private.example/img-note'), media: [image] };
+    // CW2-01 & Round 3 Blocker #2: private RSS feed media is NEVER signed, exposed in graph/cluster/feed items, OR sent to AI brief/followUp payloads
+    const secretMediaUrl = 'https://private.example/secret-token-img.png';
+    const privItemWithImg = { ...item('Private img note', 'https://private.example/img-note'), media: [{ url: secretMediaUrl, kind: 'image' }] };
     ingestCosmicWebItems(source('rss-priv-img', 'custom-sports', 'alice'), [privItemWithImg], NOW);
     const privBoot = svc.bootstrap('alice', 'user');
     const privNode = privBoot.graph.nodes.find(n => n.headline === 'Private img note');
     expect(privNode?.mediaPreview).toBeNull();
+    expect(JSON.stringify(privBoot.graph)).not.toContain(secretMediaUrl);
+    expect(JSON.stringify(svc.feed('alice', { domainId: 'custom-sports' }))).not.toContain(secretMediaUrl);
     const privDet = await svc.cluster('alice', privNode.clusterId);
     expect(privDet.media).toEqual([]);
+    expect(JSON.stringify(privDet)).not.toContain(secretMediaUrl);
+    await svc.aiBrief('alice', 'user', privNode.clusterId, { research: true });
+    expect(JSON.stringify(requestAi.mock.lastCall[0].payload)).not.toContain(secretMediaUrl);
+    await svc.followUp('alice', 'user', privNode.clusterId, { question: 'Any updates?', research: true });
+    expect(JSON.stringify(requestAi.mock.lastCall[0].payload)).not.toContain(secretMediaUrl);
 
-    // CW2-05: legacy v1 Agent (no cosmic_web_cancel) retains remote slot accounting after caller abort
-    // and defers the 3rd request until a legacy reply frees a slot instead of sending 3 concurrent frames
+    // CW2-05 & Round 3 Blocker #1: legacy v1 Agent (no cosmic_web_cancel) retains remote slot accounting after caller abort,
+    // defers subsequent requests, AND hands off freed slots when awakened waiters hit the rate boundary (never hanging).
     agents.clear();
     const v1Frames = agent('legacy-v1', 'alice', ['cosmic_web_briefing']);
     const lac1 = new AbortController();
@@ -1100,6 +1108,41 @@ describe('2.0 graph and AI contracts', () => {
     handleCosmicWebAiResponse('legacy-v1', { requestId: v1Frames[1].requestId, ok: true, result: storyResult });
     await expect(lp2).resolves.toEqual(storyResult);
 
+    // Round 3 Blocker #1: multiple legacy waiters at the 20/10min rate boundary must ALL settle cleanly via slot handoff (zero hangs).
+    const rateFrames = agent('legacy-rate', 'dave', ['cosmic_web_briefing']);
+    for (let i = 0; i < 17; i++) {
+      const p = requestCosmicWebAi({ userId: 'dave', userRole: 'user', agentId: 'legacy-rate', mode: 'brief' });
+      await new Promise(r => setImmediate(r));
+      handleCosmicWebAiResponse('legacy-rate', { requestId: rateFrames.at(-1).requestId, ok: true, result: storyResult });
+      await expect(p).resolves.toEqual(storyResult);
+    }
+    // Consume tokens #18 and #19 and abandon both remote slots
+    const dac1 = new AbortController();
+    const dac2 = new AbortController();
+    const dp18 = requestCosmicWebAi({ userId: 'dave', userRole: 'user', agentId: 'legacy-rate', mode: 'brief', signal: dac1.signal });
+    const dp19 = requestCosmicWebAi({ userId: 'dave', userRole: 'user', agentId: 'legacy-rate', mode: 'brief', signal: dac2.signal });
+    await new Promise(r => setImmediate(r));
+    const req18 = rateFrames.at(-2).requestId;
+    const req19 = rateFrames.at(-1).requestId;
+    dac1.abort(Object.assign(new Error('cancelled'), { status: 499 }));
+    dac2.abort(Object.assign(new Error('cancelled'), { status: 499 }));
+    await expect(dp18).rejects.toMatchObject({ status: 499 });
+    await expect(dp19).rejects.toMatchObject({ status: 499 });
+    // Queue 3 waiters while dave is at 19/20 (only 1 token remains)
+    const w1 = requestCosmicWebAi({ userId: 'dave', userRole: 'user', agentId: 'legacy-rate', mode: 'brief' });
+    const w2 = requestCosmicWebAi({ userId: 'dave', userRole: 'user', agentId: 'legacy-rate', mode: 'brief' });
+    const w3 = requestCosmicWebAi({ userId: 'dave', userRole: 'user', agentId: 'legacy-rate', mode: 'brief' });
+    // Finishing req18 wakes w1 (consumes token #20 and dispatches)
+    handleCosmicWebAiResponse('legacy-rate', { requestId: req18, ok: true, result: storyResult });
+    await new Promise(r => setImmediate(r));
+    const req20 = rateFrames.at(-1).requestId;
+    // Finishing req19 wakes w2 -> hits 429 -> MUST hand off freed slot to w3 -> w3 ALSO rejects 429 cleanly!
+    handleCosmicWebAiResponse('legacy-rate', { requestId: req19, ok: true, result: storyResult });
+    await expect(w2).rejects.toMatchObject({ status: 429 });
+    await expect(w3).rejects.toMatchObject({ status: 429 });
+    handleCosmicWebAiResponse('legacy-rate', { requestId: req20, ok: true, result: storyResult });
+    await expect(w1).resolves.toEqual(storyResult);
+
     // CW2-08: legacy colliding custom domain migration preserves RSS source IDs, disabledSources, and avoids duplicate re-ingest
     const feedUrl = 'https://feeds.example.com/hoops.xml';
     const legacySrcId = `rss-${createHash('sha256').update(JSON.stringify(['bob', 'sports', feedUrl])).digest('hex')}`;
@@ -1120,5 +1163,22 @@ describe('2.0 graph and AI contracts', () => {
     // Re-ingesting the same feed URL under migrated source ID produces 0 duplicates
     const reAdded = ingestCosmicWebItems({ id: expectedNewSrcId, ownerUserId: 'bob', domainId: 'custom-sports', name: 'Bob Hoops', url: feedUrl, kind: 'rss' }, [item('Hidden hoops story', 'https://hoops.example/1')], NOW);
     expect(reAdded).toBe(0);
+
+    // Round 3 Blocker #3: retired custom-sports domain with overlapping feed + article URL must NOT cause UNIQUE collision during sports migration
+    const overlapUrl = 'https://feeds.example.com/overlap.xml';
+    const overlapArticle = 'https://overlap.example/story-1';
+    const retiredSrcId = `rss-${createHash('sha256').update(JSON.stringify(['carol', 'custom-sports', overlapUrl])).digest('hex')}`;
+    const activeLegacySrcId = `rss-${createHash('sha256').update(JSON.stringify(['carol', 'sports', overlapUrl])).digest('hex')}`;
+    ingestCosmicWebItems({ id: retiredSrcId, ownerUserId: 'carol', domainId: 'custom-sports', name: 'Retired Hoops', url: overlapUrl, kind: 'rss' }, [item('Shared hoops headline', overlapArticle)], NOW);
+    ingestCosmicWebItems({ id: activeLegacySrcId, ownerUserId: 'carol', domainId: 'sports', name: 'Carol Hoops', url: overlapUrl, kind: 'rss' }, [item('Shared hoops headline', overlapArticle)], NOW);
+    db.saveUserPrefs('carol', {
+      enabledDomainIds: ['ai'],
+      customDomains: [{ id: 'sports', name: 'Carol Hoops', colorToken: 'gold', enabled: true, keywords: [], rssUrls: [overlapUrl] }],
+      watchKeywords: [], muteKeywords: [], disabledSources: [], preferredAgentId: '', defaultPerspective: 'balanced', onboarded: true, autoRefreshMinutes: 15,
+    }, NOW);
+    const carolBoot = svc.bootstrap('carol', 'user');
+    expect(carolBoot.preferences.customDomains[0].id).toBe('custom-sports-2');
+    expect(svc.feed('carol', { domainId: 'custom-sports-2' }).total).toBe(1);
+    await expect(svc.savePreferences('carol', { ...carolBoot.preferences })).resolves.toBeTruthy();
   });
 });

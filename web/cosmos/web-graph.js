@@ -46,17 +46,17 @@ export const COSMIC_WEB_COLOR_MAP = Object.freeze({
   coral: Object.freeze({
     rgba: 'rgba(255, 142, 102, 1)',
     rgb: Object.freeze([255, 142, 102]),
-    cssVar: 'var(--c-coral, #ff8e66)',
+    cssVar: 'var(--cw-tone-coral)',
   }),
   teal: Object.freeze({
     rgba: 'rgba(76, 215, 208, 1)',
     rgb: Object.freeze([76, 215, 208]),
-    cssVar: 'var(--c-teal, #4cd7d0)',
+    cssVar: 'var(--cw-tone-teal)',
   }),
   indigo: Object.freeze({
     rgba: 'rgba(142, 164, 255, 1)',
     rgb: Object.freeze([142, 164, 255]),
-    cssVar: 'var(--c-indigo, #8ea4ff)',
+    cssVar: 'var(--cw-tone-indigo)',
   }),
 });
 
