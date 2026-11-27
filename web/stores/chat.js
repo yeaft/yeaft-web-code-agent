@@ -3921,6 +3921,18 @@ export const useChatStore = defineStore('chat', {
         },
       });
       const activeYeaftConvId = resolveYeaftConversationIdForSession(this, groupId);
+      if (groupId) {
+        const processingKey = yeaftSessionIdentityKey(targetAgentId, groupId);
+        this.yeaftProcessingSessions = {
+          ...this.yeaftProcessingSessions,
+          ...(processingKey ? { [processingKey]: true } : {}),
+        };
+        this.markYeaftSessionRead(groupId, targetAgentId);
+        this.recordYeaftSessionPreview(groupId, targetAgentId, {
+          beginTurn: true,
+          at: sentAt,
+        });
+      }
       if (activeYeaftConvId) {
         const localMsg = {
           id: clientMessageId,
@@ -3961,13 +3973,6 @@ export const useChatStore = defineStore('chat', {
           row: localMsg,
         });
         this.processingConversations[activeYeaftConvId] = true;
-        if (groupId) {
-          const processingKey = yeaftSessionIdentityKey(targetAgentId, groupId);
-          this.yeaftProcessingSessions = {
-            ...this.yeaftProcessingSessions,
-            ...(processingKey ? { [processingKey]: true } : {}),
-          };
-        }
         this._turnCompletedConvs?.delete(activeYeaftConvId);
         if (this._closedAt?.[activeYeaftConvId]) {
           delete this._closedAt[activeYeaftConvId];
@@ -5595,9 +5600,26 @@ export const useChatStore = defineStore('chat', {
             reconcileYeaftRetryableTurns(this, msg, { scopedSessionId: sessionId });
           }
           const key = yeaftSessionIdentityKey(msg.agentId, sessionId);
-          if (this.yeaftSessionTurnsBySession[key].turns.some(turn => LIVE_SESSION_TURN_STATES.has(turn.state))) {
+          const liveTurns = this.yeaftSessionTurnsBySession[key].turns.filter(turn => LIVE_SESSION_TURN_STATES.has(turn.state));
+          if (liveTurns.length > 0) {
             this.yeaftProcessingSessions = { ...this.yeaftProcessingSessions, [key]: true };
             if (eventConversationId) this.processingConversations[eventConversationId] = true;
+            let latestLiveTurnId = null;
+            let latestLiveTurnAt = 0;
+            for (const turn of liveTurns) {
+              const turnAt = turn.activeSince || turn.startedAt || 0;
+              const liveExec = (turn.executions || []).findLast(ex => LIVE_SESSION_TURN_STATES.has(ex.state) && ex.turnId);
+              if (turnAt >= latestLiveTurnAt) {
+                latestLiveTurnAt = turnAt;
+                latestLiveTurnId = liveExec?.turnId || latestLiveTurnId;
+              }
+            }
+            this.recordYeaftSessionPreview(sessionId, msg.agentId || null, {
+              beginTurn: true,
+              turnId: latestLiveTurnId,
+              at: latestLiveTurnAt || Date.now(),
+              preserveLiveIfInFlight: true,
+            });
           } else this.clearYeaftSessionProcessingIfIdle(sessionId, { agentId: msg.agentId });
           break;
         }
@@ -6648,18 +6670,20 @@ export const useChatStore = defineStore('chat', {
               ...this.yeaftProcessingSessions,
               ...(processingKey ? { [processingKey]: true } : { [event.sessionId]: true }),
             };
+            this.recordYeaftSessionPreview(event.sessionId, msg.agentId || null, {
+              beginTurn: true,
+              turnId: event.turnId,
+              at: event.ts || Date.now(),
+            });
           }
           break;
         }
         case 'vp_turn_end': {
           if (!event.turnId) break;
           const turnKey = yeaftTurnStateKey(this, msg.agentId || null, event.turnId);
-          const endedSessionId = event.sessionId || this.activeVpTurns?.[turnKey]?.sessionId || null;
-          if (event.reason === 'end_turn' && endedSessionId) {
-            this.markYeaftSessionUnread(endedSessionId, msg.agentId || null);
-          }
           const removed = this.activeVpTurns?.[turnKey];
-          const terminalSessionId = event.sessionId || removed?.sessionId || null;
+          const endedSessionId = event.sessionId || removed?.sessionId || null;
+          const terminalSessionId = endedSessionId;
           const terminalAgentId = msg.agentId || removed?.agentId || null;
           const terminalVpId = event.vpId || removed?.vpId || null;
           if (event.reason !== 'errored' && event.reason !== 'error') {
@@ -6689,8 +6713,9 @@ export const useChatStore = defineStore('chat', {
           const nextStatus = reasonToStatus[event.reason] || 'completed';
           const stampedAt = Date.now();
           const conv = resolveYeaftEnvelopeConversationId(this, msg.agentId || null, msg.conversationId);
-          if (conv && Array.isArray(this.messagesMap[conv])) {
-            const rows = this.messagesMap[conv];
+          const hasConvRows = Boolean(conv && Array.isArray(this.messagesMap[conv]));
+          let rows = hasConvRows ? this.messagesMap[conv] : null;
+          if (hasConvRows) {
             let mutated = markTurnResponseKinds(rows, event);
             // Stamp EVERY pending assistant row owned by this turn — not
             // just the last. A turn that produced multiple assistant
@@ -6723,31 +6748,58 @@ export const useChatStore = defineStore('chat', {
               if (Number.isFinite(event.durationMs)) m.turnDurationMs = event.durationMs;
               mutated = true;
             }
-            if (mutated) this.messagesMap = { ...this.messagesMap, [conv]: rows.slice() };
-            if (terminalSessionId) {
+            if (mutated) {
+              rows = rows.slice();
+              this.messagesMap = { ...this.messagesMap, [conv]: rows };
+            }
+          }
+          if (terminalSessionId) {
+            if (event.reason === 'end_turn') {
+              const replyPreview = rows
+                ? extractLatestAssistantPreview(rows, terminalSessionId, event.turnId || null)
+                : { text: '', at: 0, turnId: null };
               this.recordYeaftSessionPreview(terminalSessionId, terminalAgentId, {
                 clearAsk: true,
                 askTurnId: event.turnId || null,
+                finalizeTurn: true,
+                turnId: event.turnId || null,
+                text: replyPreview.text,
+                at: replyPreview.at || stampedAt,
+                kind: 'assistant',
               });
-              const replyPreview = extractLatestAssistantPreview(rows, terminalSessionId, event.turnId || null);
-              if (replyPreview.text) {
-                this.recordYeaftSessionPreview(terminalSessionId, terminalAgentId, {
-                  text: replyPreview.text,
-                  at: replyPreview.at || stampedAt,
-                  kind: 'assistant',
-                });
+              const resolvedAgentId = resolveAgentIdForSession(this, terminalSessionId, terminalAgentId);
+              const finalizedEntry = resolvedAgentId
+                ? this.yeaftSessionReplyPreviewByKey?.[yeaftCatalogKey(resolvedAgentId, terminalSessionId)]
+                : null;
+              const hasTurnText = Boolean(
+                replyPreview.text
+                || (finalizedEntry?.text && (!event.turnId || !finalizedEntry.turnId || finalizedEntry.turnId === event.turnId)),
+              );
+              const activeTasks = resolvedAgentId
+                ? this.yeaftActiveTasksBySession?.[yeaftHistoryIdentityKey(resolvedAgentId, terminalSessionId)]
+                : null;
+              const hasRunningModelReentry = Boolean(activeTasks && Object.values(activeTasks).some(task => (
+                task?.status === 'running'
+                && (task.resultDelivery === 'model_reentry' || task.kind === 'sub_agent')
+              )));
+              if (endedSessionId && (hasTurnText || !hasRunningModelReentry)) {
+                this.markYeaftSessionUnread(endedSessionId, terminalAgentId || msg.agentId || null);
               }
+            } else {
+              this.recordYeaftSessionPreview(terminalSessionId, terminalAgentId, {
+                clearAsk: true,
+                askTurnId: event.turnId || null,
+                cancelTurn: true,
+                turnId: event.turnId || null,
+              });
             }
+          }
+          if (hasConvRows) {
             // The provider `result` normally arrives first, but metadata is the
             // guaranteed terminal boundary for every VP. Re-prune idempotently
             // here so dropped/reordered data frames cannot leave live rows
             // resident forever.
             this.pruneConversationMessageRetention(conv, terminalSessionId, terminalAgentId);
-          } else if (terminalSessionId) {
-            this.recordYeaftSessionPreview(terminalSessionId, terminalAgentId, {
-              clearAsk: true,
-              askTurnId: event.turnId || null,
-            });
           }
           break;
         }
@@ -6792,10 +6844,19 @@ export const useChatStore = defineStore('chat', {
           this.activeVpTurns = activeRest;
           this.stoppingVpTurnIds = stoppingRest;
           if (removedSessionId) {
-            for (const abortedTurnId of explicitTurnIds) {
+            if (explicitTurnIds.length > 0) {
+              for (const abortedTurnId of explicitTurnIds) {
+                this.recordYeaftSessionPreview(removedSessionId, msg.agentId || null, {
+                  clearAsk: true,
+                  askTurnId: abortedTurnId,
+                  cancelTurn: true,
+                  turnId: abortedTurnId,
+                });
+              }
+            } else {
               this.recordYeaftSessionPreview(removedSessionId, msg.agentId || null, {
                 clearAsk: true,
-                askTurnId: abortedTurnId,
+                cancelTurn: true,
               });
             }
           }
@@ -6806,7 +6867,7 @@ export const useChatStore = defineStore('chat', {
           if (Array.isArray(event.aborted)) retireQueryProgress(this, msg.agentId, envelopeConversationId, event.aborted);
           const sessionId = event.sessionId || msg.sessionId || null;
           if (sessionId) {
-            this.recordYeaftSessionPreview(sessionId, msg.agentId || null, { clearAsk: true });
+            this.recordYeaftSessionPreview(sessionId, msg.agentId || null, { clearAsk: true, cancelTurn: true });
             this.activeVpTurns = Object.fromEntries(
               Object.entries(this.activeVpTurns || {}).filter(([, info]) => (
                 !matchesYeaftRuntimeIdentity(info, sessionId, msg.agentId || null)
@@ -6918,6 +6979,13 @@ export const useChatStore = defineStore('chat', {
               ...this.yeaftProcessingSessions,
               ...(processingKey ? { [processingKey]: true } : { [sessionId]: true }),
             };
+            if (event.turnId) {
+              this.recordYeaftSessionPreview(sessionId, agentId, {
+                beginTurn: true,
+                turnId: event.turnId,
+                at: event.since || Date.now(),
+              });
+            }
           } else if (sessionId) {
             this.clearYeaftSessionProcessingIfIdle(sessionId, { agentId });
           }
@@ -9058,6 +9126,7 @@ export const useChatStore = defineStore('chat', {
       // Task controls keep the runtime projection until an authoritative ack/end.
       // Optimistic cleanup would release their stop latch while abort is in flight.
       if (waitForAck) return true;
+      this.recordYeaftSessionPreview(sessionId, targetAgentId, { clearAsk: true, cancelTurn: true });
       clearSessionTurns(this, targetAgentId, sessionId);
       this.activeVpTurns = Object.fromEntries(
         Object.entries(this.activeVpTurns || {}).filter(([, info]) => (

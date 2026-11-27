@@ -9,22 +9,27 @@ import { isQueryExecutionSettled } from './query-progress.js';
 import { markTurnResponseKinds } from '../../utils/turn-response.js';
 import { extractLatestAssistantPreview } from './yeaft-reply-preview.js';
 
-function syncLiveReplyPreview(store, conversationId, frameAgentId, sessionId, turnId, explicitText = '', ts = null) {
+function syncLiveReplyPreview(store, conversationId, frameAgentId, sessionId, turnId, explicitText = '', ts = null, { live = true } = {}) {
   if (!store?.recordYeaftSessionPreview || !frameAgentId || !sessionId) return;
+  const scopedTurnId = turnId || null;
   if (explicitText) {
     store.recordYeaftSessionPreview(sessionId, frameAgentId, {
       text: explicitText,
       at: ts || Date.now(),
       kind: 'assistant',
+      turnId: scopedTurnId,
+      live,
     });
     return;
   }
-  const latest = extractLatestAssistantPreview(store.messagesMap?.[conversationId], sessionId, turnId || null);
+  const latest = extractLatestAssistantPreview(store.messagesMap?.[conversationId], sessionId, scopedTurnId);
   if (latest.text) {
     store.recordYeaftSessionPreview(sessionId, frameAgentId, {
       text: latest.text,
       at: latest.at || ts || Date.now(),
       kind: 'assistant',
+      turnId: latest.turnId || scopedTurnId,
+      live,
     });
   }
 }
@@ -369,6 +374,16 @@ export function handleAssistantOutputFrame(store, conversationId, data, frameAge
           // timestamp instead of using arrival time.
         });
         promoteOrInvalidateOutline(store, persistedUserRow, frameAgentId);
+        if (!data.history && !data.isHistory && frameAgentId && sessionId) {
+          // A new live user message starts a new turn; clear stale prior-turn unread
+          // and reset in-flight live reply state so the previous turn's response is
+          // never displayed as this turn's AI reply while the model is still working.
+          store.markYeaftSessionRead?.(sessionId, frameAgentId);
+          store.recordYeaftSessionPreview?.(sessionId, frameAgentId, {
+            beginTurn: true,
+            at: data.ts || Date.now(),
+          });
+        }
       } else if (echoClientMsgId) {
         // Common live-send path (NOT a rare race): the dedup gate above
         // already collapsed the echo's row onto the optimistic row by
@@ -484,8 +499,8 @@ export function handleAssistantOutputFrame(store, conversationId, data, frameAge
       }
     }
     store.finishStreamingForConversation(conversationId);
-    if (!data.history && !data.isHistory && completedYeaftSessionId) {
-      syncLiveReplyPreview(store, conversationId, frameAgentId || store._currentYeaftAgentId, completedYeaftSessionId, store._currentYeaftTurnId, '', data.ts || Date.now());
+    if (!data.history && !data.isHistory && completedYeaftSessionId && !data.stopped && !data.is_error) {
+      syncLiveReplyPreview(store, conversationId, frameAgentId || store._currentYeaftAgentId, completedYeaftSessionId, store._currentYeaftTurnId, '', data.ts || Date.now(), { live: false });
     }
     if (completedYeaftSessionId && store._currentYeaftTurnId) {
       const settled = msgs.find(row => row.type === 'assistant' && row.turnId === store._currentYeaftTurnId

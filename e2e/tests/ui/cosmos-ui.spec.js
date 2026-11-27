@@ -282,6 +282,67 @@ test.describe('Yeaft Cosmos UI', () => {
     await expect(signalCards.nth(0)).toContainText('Procedural textures and ray-traced lighting');
     await expect(page.locator('.cosmos-signal-trigger .cosmos-signal-trigger-count')).toHaveText('1');
 
+    // Starting Turn 2 while Turn 1's reply exists MUST flip back to Running with a crisp Running chip
+    // and live stage text — NEVER showing Turn 1's response as Turn 2's AI reply!
+    await page.evaluate((agentId) => {
+      const chat = window.Pinia.useChatStore();
+      const convId = `yeaft_${agentId}`;
+      const now = Date.now();
+      chat.handleYeaftOutput({
+        agentId,
+        conversationId: convId,
+        sessionId: 'sess-earth-1',
+        data: { type: 'user', ts: now, message: { id: 'm4', content: 'Now profile WebGL shaders' } },
+      });
+      chat.handleYeaftOutput({
+        agentId,
+        conversationId: convId,
+        sessionId: 'sess-earth-1',
+        event: { type: 'vp_turn_start', sessionId: 'sess-earth-1', vpId: 'vp-1', turnId: 'turn-earth-2', ts: now + 10 },
+      });
+      chat.handleYeaftOutput({
+        agentId,
+        conversationId: convId,
+        sessionId: 'sess-earth-1',
+        event: { type: 'vp_status_changed', sessionId: 'sess-earth-1', vpId: 'vp-1', turnId: 'turn-earth-2', state: 'thinking', since: now + 10 },
+      });
+    }, mockAgent.agentId);
+    await expect(signalCards).toHaveCount(1);
+    await expect(signalCards.nth(0)).toHaveClass(/is-running/);
+    await expect(signalCards.nth(0).locator('.cosmos-signal-chip.is-running')).toBeVisible();
+    await expect(signalCards.nth(0)).not.toContainText('Procedural textures and ray-traced lighting');
+    await expect(signalCards.nth(0)).toContainText(/Thinking…|正在思考…/);
+
+    // Complete Turn 2 with a real Turn 2 response -> evolves smoothly to unread with Turn 2's answer
+    await page.evaluate((agentId) => {
+      const chat = window.Pinia.useChatStore();
+      const convId = `yeaft_${agentId}`;
+      const now = Date.now();
+      chat.handleYeaftOutput({
+        agentId,
+        conversationId: convId,
+        sessionId: 'sess-earth-1',
+        vpId: 'vp-1',
+        turnId: 'turn-earth-2',
+        data: { type: 'assistant', ts: now + 50, message: { id: 'm5', content: [{ type: 'text', text: 'WebGL shader frame time reduced to 2.1ms.' }] } },
+      });
+      chat.handleYeaftOutput({
+        agentId,
+        conversationId: convId,
+        sessionId: 'sess-earth-1',
+        event: { type: 'vp_turn_end', turnId: 'turn-earth-2', sessionId: 'sess-earth-1', vpId: 'vp-1', reason: 'end_turn' },
+      });
+      chat.handleYeaftOutput({
+        agentId,
+        conversationId: convId,
+        event: { type: 'vp_status_changed', sessionId: 'sess-earth-1', vpId: 'vp-1', state: 'idle' },
+      });
+    }, mockAgent.agentId);
+    await expect(signalCards).toHaveCount(1);
+    await expect(signalCards.nth(0)).toHaveClass(/is-unread/);
+    await expect(signalCards.nth(0)).toContainText('WebGL shader frame time reduced to 2.1ms.');
+    await expect(signalCards.nth(0)).not.toContainText('Procedural textures and ray-traced lighting');
+
     // Dismissing a waiting (AskUser) card hides it until a new AskUser / state change arrives
     await page.evaluate((agentId) => {
       const chat = window.Pinia.useChatStore();
@@ -315,6 +376,7 @@ test.describe('Yeaft Cosmos UI', () => {
       const chat = window.Pinia.useChatStore();
       const now = Date.now();
       const convId = `yeaft_${agentId}`;
+      chat.messagesMap[convId] = (chat.messagesMap[convId] || []).filter((row) => row.id !== 'm4' && row.id !== 'm5');
       chat.yeaftProcessingSessions = { [`${agentId}\u001fsess-earth-1`]: true };
       chat.yeaftSessionTurnsBySession[`${agentId}\u001fsess-earth-1`] = {
         connectionGeneration: chat.chatHistoryConnectionGeneration || 1,

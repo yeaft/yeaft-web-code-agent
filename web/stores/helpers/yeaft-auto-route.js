@@ -235,6 +235,18 @@ export function handleYeaftSessionRouted(store, msg, sessionIdentityKeyFn) {
 
   store.yeaftLastAutoRouteResult = result;
 
+  if (result.ok && agentId && sessionId && !result.answeredAskUser) {
+    const sentAt = entry?.createdAt || 0;
+    const beganTurn = store.recordYeaftSessionPreview?.(sessionId, agentId, {
+      beginTurn: true,
+      at: sentAt || result.at,
+      onlyIfNoUpdateSince: sentAt,
+    });
+    if (beganTurn) {
+      store.markYeaftSessionRead?.(sessionId, agentId);
+    }
+  }
+
   // New Agents send authoritative turn events before the receipt. Do not
   // re-mark a turn as processing if it already completed before the receipt.
   if (result.ok && !result.delivery && agentId && sessionId && !result.answeredAskUser) {

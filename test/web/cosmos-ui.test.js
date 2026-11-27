@@ -3916,6 +3916,284 @@ describe('Cosmos Interstellar Signal Stream (Unified Top-Right Replies, Schedule
     expect(Object.keys(chatStore.cosmosDismissedSignalsByKey)).toHaveLength(0);
   });
 
+  it('never leaks previous-turn AI responses into in-progress or empty-turn Signal Stream items', async () => {
+    const {
+      extractLatestAssistantPreview,
+    } = await import('../../web/stores/helpers/yeaft-reply-preview.js');
+    const { buildCosmosSignalStream } = await import('../../web/cosmos/signal-stream.js');
+    const { default: CosmosSignalStream } = await import('../../web/components/cosmos/CosmosSignalStream.js');
+
+    // 1. extractLatestAssistantPreview MUST NOT fall back across turnId or across a newer user message
+    const multiTurnRows = [
+      { type: 'user', sessionId: 's1', content: 'Turn 1 question', timestamp: 1000 },
+      { type: 'assistant', sessionId: 's1', turnId: 't1', content: 'Turn 1 old answer', timestamp: 2000, status: 'completed' },
+      { type: 'user', sessionId: 's1', content: 'Turn 2 question', timestamp: 5000 },
+      { type: 'tool-use', sessionId: 's1', turnId: 't2', toolName: 'Bash', hasResult: false, timestamp: 5200 },
+    ];
+    expect(extractLatestAssistantPreview(multiTurnRows, 's1', 't2').text).toBe('');
+    expect(extractLatestAssistantPreview(multiTurnRows, 's1', null).text).toBe('');
+    expect(extractLatestAssistantPreview(multiTurnRows, 's1', 't1').text).toBe('Turn 1 old answer');
+    // Even without user2 in messagesMap yet, mismatched turnId 't1' MUST NOT satisfy 't2'
+    expect(extractLatestAssistantPreview(multiTurnRows.slice(0, 2), 's1', 't2').text).toBe('');
+
+    // 2. Real chatStore full multi-turn lifecycle: Turn 1 unread -> Turn 2 running (no response yet) ->
+    //    live streaming -> Turn 2 unread -> Turn 3 empty -> silent model_reentry sub-agent -> CLI chat Turn 2
+    const runtimeStores = new Map();
+    const miniDefineStore = (id, options) => () => {
+      if (runtimeStores.has(id)) return runtimeStores.get(id);
+      const instance = Vue.reactive({ ...(typeof options.state === 'function' ? options.state() : {}) });
+      for (const [name, getter] of Object.entries(options.getters || {})) {
+        Object.defineProperty(instance, name, {
+          enumerable: true,
+          get() { return getter.call(instance, instance); },
+        });
+      }
+      for (const [name, action] of Object.entries(options.actions || {})) {
+        instance[name] = action.bind(instance);
+      }
+      runtimeStores.set(id, instance);
+      return instance;
+    };
+    const stubSessionsStore = { sessionList: [], sessionById: () => null };
+    const stubAuthStore = { userId: 'u-resp', authGeneration: 1, skipAuth: false, logout: () => {} };
+    globalThis.Pinia = {
+      defineStore: miniDefineStore,
+      useAuthStore: () => stubAuthStore,
+      useSessionsStore: () => stubSessionsStore,
+    };
+    window.Pinia = globalThis.Pinia;
+    vi.resetModules();
+    const { useAuthStore } = await import('../../web/stores/auth.js');
+    const { useChatStore } = await import('../../web/stores/chat.js');
+    globalThis.Pinia.useAuthStore = useAuthStore;
+    globalThis.Pinia.useChatStore = useChatStore;
+
+    const authStore = useAuthStore();
+    const chatStore = useChatStore();
+    chatStore.sidebarCatalogAuthGeneration = authStore.authGeneration;
+    chatStore.sidebarCatalogOwnerId = authStore.userId || null;
+    chatStore.sessionCatalogProtocolSupported = true;
+    chatStore.currentView = 'yeaft';
+    chatStore.currentAgent = 'ag-1';
+    chatStore.yeaftConversationCovered = true;
+    chatStore.agents = [{ id: 'ag-1', name: 'Earth-Mac', online: true }];
+    chatStore.yeaftConversationIdsByAgent = { 'ag-1': 'yeaft_ag-1' };
+    chatStore.yeaftSessionAgentById = { 's-1': 'ag-1', 's-bg': 'ag-1' };
+    chatStore.messagesMap = { 'yeaft_ag-1': [], 'cli-1': [] };
+    chatStore.sendWsMessage = vi.fn(() => true);
+    chatStore.applySessionCatalogSnapshot([
+      { catalogKey: 'yeaft:ag-1:s-1', runtimeProvider: 'yeaft', routeRef: { runtimeProvider: 'yeaft', agentId: 'ag-1', sessionId: 's-1' }, title: 'Signal Audit', availability: 'online', metadataUpdatedAt: new Date(1000).toISOString() },
+      { catalogKey: 'yeaft:ag-1:s-bg', runtimeProvider: 'yeaft', routeRef: { runtimeProvider: 'yeaft', agentId: 'ag-1', sessionId: 's-bg' }, title: 'Background Task', availability: 'online', metadataUpdatedAt: new Date(1000).toISOString() },
+      { catalogKey: 'chat:cli-1', runtimeProvider: 'claude-code', routeRef: { runtimeProvider: 'claude-code', agentId: 'ag-1', sessionId: 'cli-1' }, title: 'CLI Session', availability: 'online', metadataUpdatedAt: new Date(1000).toISOString() },
+    ], []);
+
+    const projectSignals = (nowMs, sessionsList = []) => {
+      const projected = projectAgentsForCosmos({
+        chatStore,
+        sessionsStore: { sessionList: sessionsList },
+        nowMs,
+        isEn: true,
+      });
+      return buildCosmosSignalStream({
+        projectedAgents: Object.values(projected),
+        agentToPlanet: { 'ag-1': 'earth' },
+        nowMs,
+        isEn: true,
+      });
+    };
+
+    // Turn 1 completes cleanly -> unread shows Turn 1's response
+    chatStore.handleYeaftOutput({
+      agentId: 'ag-1',
+      conversationId: 'yeaft_ag-1',
+      sessionId: 's-1',
+      event: { type: 'vp_turn_start', sessionId: 's-1', vpId: 'vp-1', turnId: 't1', ts: 2000 },
+    });
+    chatStore.handleYeaftOutput({
+      agentId: 'ag-1',
+      conversationId: 'yeaft_ag-1',
+      sessionId: 's-1',
+      vpId: 'vp-1',
+      turnId: 't1',
+      data: { type: 'assistant', ts: 2500, message: { id: 'm-a1', content: [{ type: 'text', text: 'Turn 1 finished response.' }] } },
+    });
+    chatStore.handleYeaftOutput({
+      agentId: 'ag-1',
+      conversationId: 'yeaft_ag-1',
+      sessionId: 's-1',
+      event: { type: 'vp_turn_end', sessionId: 's-1', vpId: 'vp-1', turnId: 't1', reason: 'end_turn' },
+    });
+    const afterT1 = projectSignals(3000).items.find((x) => x.sessionId === 's-1');
+    expect(afterT1?.kind).toBe('unread');
+    expect(afterT1?.preview).toBe('Turn 1 finished response.');
+
+    // Stale detail.running=true in sessionsStore MUST NOT keep s-1 stuck in running once vpStatuses settled idle
+    chatStore.handleYeaftOutput({
+      agentId: 'ag-1',
+      conversationId: 'yeaft_ag-1',
+      event: { type: 'vp_status_changed', sessionId: 's-1', vpId: 'vp-1', state: 'idle' },
+    });
+    const afterIdleWithStaleSnapshot = projectSignals(3100, [{ id: 's-1', agentId: 'ag-1', running: true, runningVpCount: 1 }])
+      .items.find((x) => x.sessionId === 's-1');
+    expect(afterIdleWithStaleSnapshot?.kind).toBe('unread');
+    expect(afterIdleWithStaleSnapshot?.preview).toBe('Turn 1 finished response.');
+
+    // Turn 2 begins: live user message + vp_turn_start('t2') + thinking -> MUST be running with live status, NEVER Turn 1's response!
+    chatStore.handleYeaftOutput({
+      agentId: 'ag-1',
+      conversationId: 'yeaft_ag-1',
+      sessionId: 's-1',
+      data: { type: 'user', ts: 4000, message: { id: 'm-u2', content: 'Now check deployment logs' } },
+    });
+    chatStore.handleYeaftOutput({
+      agentId: 'ag-1',
+      conversationId: 'yeaft_ag-1',
+      sessionId: 's-1',
+      event: { type: 'vp_turn_start', sessionId: 's-1', vpId: 'vp-1', turnId: 't2', ts: 4100 },
+    });
+    chatStore.handleYeaftOutput({
+      agentId: 'ag-1',
+      conversationId: 'yeaft_ag-1',
+      sessionId: 's-1',
+      event: { type: 'vp_status_changed', sessionId: 's-1', vpId: 'vp-1', turnId: 't2', state: 'thinking', since: 4100 },
+    });
+    const t2Thinking = projectSignals(4200).items.find((x) => x.sessionId === 's-1');
+    expect(t2Thinking?.kind).toBe('running');
+    expect(t2Thinking?.hasLiveReply).toBe(false);
+    expect(t2Thinking?.preview).toBe('Thinking…');
+    expect(t2Thinking?.preview).not.toContain('Turn 1');
+
+    // Turn 2 invokes a tool (Bash) before writing text -> shows tool name, STILL never Turn 1's response!
+    chatStore.handleYeaftOutput({
+      agentId: 'ag-1',
+      conversationId: 'yeaft_ag-1',
+      sessionId: 's-1',
+      vpId: 'vp-1',
+      turnId: 't2',
+      data: { type: 'assistant', ts: 4300, message: { content: [{ type: 'tool_use', id: 'tool-1', name: 'Bash', input: { command: 'ls' } }] } },
+    });
+    const t2Tool = projectSignals(4400).items.find((x) => x.sessionId === 's-1');
+    expect(t2Tool?.kind).toBe('running');
+    expect(t2Tool?.preview).toBe('Running Bash…');
+    expect(t2Tool?.preview).not.toContain('Turn 1');
+
+    // Turn 2 starts streaming actual Turn 2 text -> stays running, shows Turn 2 live text + Running chip
+    chatStore.handleYeaftOutput({
+      agentId: 'ag-1',
+      conversationId: 'yeaft_ag-1',
+      sessionId: 's-1',
+      vpId: 'vp-1',
+      turnId: 't2',
+      data: { type: 'assistant', ts: 4600, message: { id: 'm-a2', content: [{ type: 'text', text: 'Turn 2 live stream answer.' }] } },
+    });
+    const t2Streaming = projectSignals(4700).items.find((x) => x.sessionId === 's-1');
+    expect(t2Streaming?.kind).toBe('running');
+    expect(t2Streaming?.hasLiveReply).toBe(true);
+    expect(t2Streaming?.preview).toBe('Turn 2 live stream answer.');
+
+    // CosmosSignalStream renders the Running chip on running cards (both floating and popover)
+    vi.stubGlobal('Vue', Vue);
+    const sigWrapper = mount(CosmosSignalStream, {
+      props: {
+        items: [t2Streaming],
+        runningCount: 1,
+        unreadCount: 0,
+        waitingCount: 0,
+        badgeCount: 0,
+        drawerOpen: false,
+        isCompact: false,
+        previewMode: '2',
+      },
+      global: { config: { globalProperties: { $t: (k) => k } } },
+    });
+    expect(sigWrapper.find('.cosmos-signal-card.is-running .cosmos-signal-chip.is-running').text()).toBe('cosmos.signals.runningBadge');
+    sigWrapper.unmount();
+
+    // Turn 2 completes -> unread shows Turn 2 final response
+    chatStore.handleYeaftOutput({
+      agentId: 'ag-1',
+      conversationId: 'yeaft_ag-1',
+      sessionId: 's-1',
+      event: { type: 'vp_turn_end', sessionId: 's-1', vpId: 'vp-1', turnId: 't2', reason: 'end_turn' },
+    });
+    chatStore.handleYeaftOutput({
+      agentId: 'ag-1',
+      conversationId: 'yeaft_ag-1',
+      event: { type: 'vp_status_changed', sessionId: 's-1', vpId: 'vp-1', state: 'idle' },
+    });
+    const afterT2 = projectSignals(5000).items.find((x) => x.sessionId === 's-1');
+    expect(afterT2?.kind).toBe('unread');
+    expect(afterT2?.preview).toBe('Turn 2 live stream answer.');
+
+    // Turn 3 ends cleanly with ZERO assistant text -> MUST NOT resurrect Turn 2's reply!
+    chatStore.handleYeaftOutput({
+      agentId: 'ag-1',
+      conversationId: 'yeaft_ag-1',
+      sessionId: 's-1',
+      event: { type: 'vp_turn_start', sessionId: 's-1', vpId: 'vp-1', turnId: 't3', ts: 6000 },
+    });
+    chatStore.handleYeaftOutput({
+      agentId: 'ag-1',
+      conversationId: 'yeaft_ag-1',
+      sessionId: 's-1',
+      event: { type: 'vp_turn_end', sessionId: 's-1', vpId: 'vp-1', turnId: 't3', reason: 'end_turn' },
+    });
+    const afterEmptyT3 = projectSignals(6500).items.find((x) => x.sessionId === 's-1');
+    expect(afterEmptyT3?.kind).toBe('unread');
+    expect(afterEmptyT3?.preview).toBe('Response ready');
+    expect(afterEmptyT3?.preview).not.toContain('Turn 2');
+
+    // Background session with prior cached reply + silent sub-agent handoff (no text in this turn):
+    // MUST stay running showing sub-agent status, NOT unread showing prior reply!
+    chatStore.recordYeaftSessionPreview('s-bg', 'ag-1', { text: 'Old background turn reply.', turnId: 'bg-t0', at: 7000 });
+    chatStore.handleYeaftOutput({
+      agentId: 'ag-1',
+      conversationId: 'yeaft_ag-1',
+      sessionId: 's-bg',
+      event: { type: 'vp_turn_start', sessionId: 's-bg', vpId: 'vp-1', turnId: 'bg-t1', ts: 7500 },
+    });
+    chatStore.handleYeaftOutput({
+      agentId: 'ag-1',
+      conversationId: 'yeaft_ag-1',
+      sessionId: 's-bg',
+      event: {
+        type: 'yeaft_task_event',
+        task: { id: 'sub-1', sessionId: 's-bg', kind: 'sub_agent', resultDelivery: 'model_reentry', status: 'running', title: 'reviewer' },
+      },
+    });
+    chatStore.handleYeaftOutput({
+      agentId: 'ag-1',
+      conversationId: 'yeaft_ag-1',
+      sessionId: 's-bg',
+      event: { type: 'vp_turn_end', sessionId: 's-bg', vpId: 'vp-1', turnId: 'bg-t1', reason: 'end_turn' },
+    });
+    const bgItem = projectSignals(8000).items.find((x) => x.sessionId === 's-bg');
+    expect(bgItem?.kind).toBe('running');
+    expect(bgItem?.preview).toBe('Sub-agent "reviewer" running…');
+    expect(bgItem?.preview).not.toContain('Old background');
+
+    // CLI Chat Turn 2 (user2 after assistant1 while processing) MUST NOT show Turn 1's assistant reply!
+    chatStore.messagesMap['cli-1'] = [
+      { type: 'user', content: 'CLI Turn 1', timestamp: 1000 },
+      { type: 'assistant', content: 'CLI Turn 1 stale answer', timestamp: 2000 },
+      { type: 'user', content: 'CLI Turn 2', timestamp: 3000 },
+    ];
+    chatStore.processingConversations = { 'cli-1': true };
+    chatStore.executionStatusMap = { 'cli-1': { currentTool: { name: 'Grep' }, toolHistory: [], lastActivity: 3100 } };
+    const cliRunning = projectSignals(3200).items.find((x) => x.sessionId === 'cli-1');
+    expect(cliRunning?.kind).toBe('running');
+    expect(cliRunning?.preview).toBe('Running Grep…');
+    expect(cliRunning?.preview).not.toContain('CLI Turn 1 stale answer');
+
+    // sendYeaftSessionMessage marks processing & clears stale unread even before yeaftConversationIdsByAgent exists
+    chatStore.yeaftConversationIdsByAgent = {};
+    chatStore.yeaftUnreadSessionKeys = { 'yeaft:ag-1:s-1': true };
+    expect(chatStore.sendYeaftSessionMessage({ groupId: 's-1', text: 'Send without conv id yet' })).toBe(true);
+    expect(chatStore.isYeaftSessionProcessing('s-1', 'ag-1')).toBe(true);
+    expect(chatStore.isYeaftSessionUnread('s-1', 'ag-1')).toBe(false);
+    expect(chatStore.yeaftSessionReplyPreviewByKey['yeaft:ag-1:s-1']?.inFlight).toBe(true);
+  });
+
   it('computes and renders sculpted 3D-occluded artificial satellites for running and waiting sessions', () => {
     const live = [
       { id: 'sess-alpha', status: 'running' },

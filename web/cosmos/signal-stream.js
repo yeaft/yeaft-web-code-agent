@@ -106,14 +106,13 @@ export function buildCosmosSignalStream({
 
       let preview = '';
       if (kind === 'waiting') {
-        preview = s.askQuestion || s.summary || waitingFallback;
+        preview = s.askQuestion || waitingFallback;
       } else if (kind === 'unread') {
         preview = s.replyPreview
           || (notice ? scheduledStatusText(notice, t) : '')
-          || s.summary
           || completedFallback;
       } else {
-        preview = s.replyPreview || s.summary || runningFallback;
+        preview = s.liveReplyPreview || s.runningStatusText || runningFallback;
       }
 
       const activityAt = Math.max(
@@ -133,6 +132,7 @@ export function buildCosmosSignalStream({
         sessionTitle: s.title || s.id,
         projectPath: s.projectPath || '',
         preview,
+        hasLiveReply: kind === 'running' && Boolean(s.liveReplyPreview),
         replyAt: parseMs(s.replyAt),
         askRequestId: s.askRequestId || '',
         askTurnId: s.askTurnId || '',
