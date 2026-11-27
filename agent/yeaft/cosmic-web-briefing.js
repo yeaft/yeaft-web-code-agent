@@ -213,6 +213,7 @@ function stripBracketedLinks(text, imagesOnly) {
 }
 
 const UNICODE_PUNCT_RE = /[\p{P}\p{S}]/u;
+const UNICODE_ALNUM_RE = /[\p{L}\p{N}]/u;
 function codePointAtInfo(str, idx) {
   const cp = str.codePointAt(idx);
   const width = cp > 0xffff ? 2 : 1;
@@ -288,14 +289,14 @@ function matchUrlStartAt(str, offset, identBeforeUnderscores = false) {
     if (k + 2 < len && str.charCodeAt(k) === 58 && str.charCodeAt(k + 1) === 47 && str.charCodeAt(k + 2) === 47) {
       return (k + 3) - offset;
     }
-    // 2. Bare www.<host>.<tld> URL
-    if (offset + 5 < len
+    // 2. Bare www.<host> URL (supports internationalized Unicode host labels such as www.例子.中国/...)
+    if (offset + 5 <= len
       && (c0 | 32) === 119
       && (str.charCodeAt(offset + 1) | 32) === 119
       && (str.charCodeAt(offset + 2) | 32) === 119
       && str.charCodeAt(offset + 3) === 46) {
-      const next = str.charCodeAt(offset + 4);
-      if ((next >= 65 && next <= 90) || (next >= 97 && next <= 122) || (next >= 48 && next <= 57)) {
+      const { ch: nextCh } = codePointAtInfo(str, offset + 4);
+      if (UNICODE_ALNUM_RE.test(nextCh)) {
         return 4;
       }
     }
@@ -394,6 +395,9 @@ function matchUrlStartAt(str, offset, identBeforeUnderscores = false) {
         const prefixEnd = trimTrailingUrlPunct(str, offset + 2, c.cut, c.openParens, c.closeParens, c.openBrackets, c.closeBrackets);
         if (isValidSchemeRelativeCandidate(str.slice(offset, prefixEnd))) return 2;
       }
+      // Discard truncated credential-bearing or unclosed-IPv6 authority fragments at the end of a clipped field
+      // (e.g. a 1,000-char RSS excerpt ending in '//user:PRIVATE99@', '//user:PRIVATE99', or '//[2001:db8').
+      if (k === len && (seenAt || inBrackets || (seenPortColon && hasNonPortAfterColon))) return 2;
     }
   }
   return 0;

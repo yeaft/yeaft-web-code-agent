@@ -192,7 +192,7 @@ export function parseTimestamp(value) {
 }
 
 /** Tokenize rather than splitting entries at strings that may be inside CDATA. No DTD resolution. */
-export function parseFeedXml(xmlText, baseUrl) {
+export function parseFeedXml(xmlText, baseUrl, { sanitizeExcerpt } = {}) {
   const items = [];
   const stack = [];
   const rootBase = resolveHttpUrl(baseUrl) ?? undefined;
@@ -219,10 +219,14 @@ export function parseFeedXml(xmlText, baseUrl) {
         const f = entry.fields;
         const title = cleanText(f.title);
         const url = entry.link ?? resolveHttpUrl(f.guid, entry.base);
-        if (url && title) items.push({ title, url, publishedAt: parseTimestamp(f.pubdate ?? f.published ?? f.updated ?? f['dc:date']),
-          summaryExcerpt: cleanText(f['content:encoded'] ?? f.description ?? f.summary ?? f.content).slice(0, 1000),
-          media: normalizeMedia([...entry.media, ...['content:encoded', 'description', 'summary', 'content']
-            .flatMap(name => extractMarkupMedia(f[name], entry.fieldBases[name] ?? entry.base))], entry.base) });
+        if (url && title) {
+          const rawExcerpt = cleanText(f['content:encoded'] ?? f.description ?? f.summary ?? f.content);
+          const safeExcerpt = typeof sanitizeExcerpt === 'function' ? sanitizeExcerpt(rawExcerpt) : rawExcerpt;
+          items.push({ title, url, publishedAt: parseTimestamp(f.pubdate ?? f.published ?? f.updated ?? f['dc:date']),
+            summaryExcerpt: safeExcerpt.slice(0, 1000),
+            media: normalizeMedia([...entry.media, ...['content:encoded', 'description', 'summary', 'content']
+              .flatMap(name => extractMarkupMedia(f[name], entry.fieldBases[name] ?? entry.base))], entry.base) });
+        }
         entry = null;
       }
       stack.pop();
