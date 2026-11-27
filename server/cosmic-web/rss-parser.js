@@ -21,9 +21,15 @@ const htmlNameStart = /[a-z]/i;
 const nameChar = /[a-z0-9_:.-]/i;
 const attributeEnd = /[\s=<>/"']/u;
 
-function boundedMarkup(value) {
-  const input = String(value ?? '').slice(0, MAX_MARKUP_BYTES);
-  if (Buffer.byteLength(input) <= MAX_MARKUP_BYTES) return input;
+function boundedMarkup(value, meta) {
+  const str = String(value ?? '');
+  const sliced = str.length > MAX_MARKUP_BYTES;
+  const input = sliced ? str.slice(0, MAX_MARKUP_BYTES) : str;
+  if (Buffer.byteLength(input) <= MAX_MARKUP_BYTES) {
+    if (sliced && meta) meta.truncated = true;
+    return input;
+  }
+  if (meta) meta.truncated = true;
   const bytes = Buffer.from(input);
   let end = MAX_MARKUP_BYTES;
   while ((bytes[end] & 0xc0) === 0x80) end--;
@@ -63,8 +69,8 @@ export function parseAttributesLinear(value, { boundFeedUrls = false } = {}) {
 export { parseAttributesLinear as parseAttributes };
 
 /** Scan tags once, without retrying malformed tags or searching nested candidates for a terminator. */
-export function* scanMarkup(input, { xml = false, rawTags = new Set(), emitRawOpen = false } = {}) {
-  const str = boundedMarkup(input);
+export function* scanMarkup(input, { xml = false, rawTags = new Set(), emitRawOpen = false, meta = null } = {}) {
+  const str = boundedMarkup(input, meta);
   let i = 0, tags = 0, raw = null;
   while (i < str.length) {
     const start = i;
@@ -77,13 +83,13 @@ export function* scanMarkup(input, { xml = false, rawTags = new Set(), emitRawOp
     i++;
     if (raw && (str[i] !== '/' || str.slice(i + 1, i + 1 + raw.length).toLowerCase() !== raw ||
       !(str[i + 1 + raw.length] === '>' || whitespace.test(str[i + 1 + raw.length] ?? '')))) continue;
-    if (++tags > MAX_TAGS) return;
+    if (++tags > MAX_TAGS) { if (meta) meta.truncated = true; return; }
     const delimited = str.startsWith('!--', i) ? ['-->', 3] :
       xml && str.startsWith('![CDATA[', i) ? [']]>', 8] : xml && str[i] === '?' ? ['?>', 1] : null;
     if (delimited) {
       const [end, offset] = delimited;
       const stop = str.indexOf(end, i + offset);
-      if (stop === -1) return;
+      if (stop === -1) { if (meta) meta.truncated = true; return; }
       if (end === ']]>') yield { type: 'cdata', text: str.slice(i + offset, stop) };
       i = stop + end.length;
       continue;

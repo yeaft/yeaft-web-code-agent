@@ -9,10 +9,10 @@ const blocks = new Set('p div section article main h1 h2 h3 h4 h5 h6 ul ol li pr
 const normalize = text => text.replace(/\s+/gu, ' ').trim();
 const escapeMd = text => text.replace(/[\\`*_{}\[\]<>#!|~]/g, '\\$&').replace(/^([0-9]+)\.(?= )/gm, '$1\\.').replace(/^[-+=](?= )/gm, '\\$&');
 
-function tree(html) {
+function tree(html, scanMeta) {
   const root = { tag: 'root', attrs: {}, children: [] };
   const stack = [root];
-  for (const token of scanMarkup(html, { rawTags })) {
+  for (const token of scanMarkup(html, { rawTags, meta: scanMeta })) {
     if (token.type !== 'tag') {
       if (!stack.at(-1).hidden) stack.at(-1).children.push(decodeEntities(token.text));
       continue;
@@ -85,7 +85,8 @@ export function extractCleanArticle(html, sourceUrl, fallbackTitle = '') {
     }
   }
   if (!html) return { ...base, quality: 'blocked' };
-  const root = tree(html);
+  const scanMeta = { truncated: false };
+  const root = tree(html, scanMeta);
   let best = root, bestScore = -1, title = '', heading = '';
   function measure(node) {
     if (typeof node === 'string') return [normalize(node).length, 0];
@@ -103,7 +104,10 @@ export function extractCleanArticle(html, sourceUrl, fallbackTitle = '') {
   const text = normalize(plain(best));
   const wall = /(?:sign in|log in|subscribe) to (?:read|continue|view)|登录后(?:查看|阅读|继续)|请先登录|verify you are human|access denied|captcha/i;
   const blockedTitle = wall.test(title) || (wall.test(text) && text.length < 500);
-  const rendered = markdown(best, url).trim().slice(0, 40_000);
+  const fullRendered = markdown(best, url).trim();
+  const truncated = !blockedTitle && (fullRendered.length > 40_000 || scanMeta.truncated);
+  const rendered = fullRendered.slice(0, 40_000);
   return { ...base, title: (title || heading || fallbackTitle).slice(0, 500), markdown: blockedTitle ? '' : rendered,
+    ...(truncated ? { truncated: true } : {}),
     quality: blockedTitle || !rendered ? 'blocked' : text.length < 140 || wall.test(text) ? 'partial' : 'full' };
 }

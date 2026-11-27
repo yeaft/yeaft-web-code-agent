@@ -1296,6 +1296,101 @@ describe('2.0 graph and AI contracts', () => {
     expect(requestAi.mock.lastCall[0].payload.summaryExcerpt).toContain('//foo:bar[1]');
     expect(requestAi.mock.lastCall[0].payload.summaryExcerpt).toContain('//注释\u3002');
 
+    // Round 24 (PR #2032 Round 3) Blocker #1/#2/#3 isolated regressions:
+    // (1) post-@ 64-cut saturation before IPv6 close & non-IPv6 host+footnote (raw & Markdown-escaped),
+    // (2) percent-encoded WHATWG dot separators in portless/pathless // and bare-www hosts (with footnotes & prose guards),
+    // (3) Clean Article 40,000-char cap (fresh & legacy cache) + >2 MiB HTML cap truncating username-only //USER before @host
+    //     while keeping the Clean Article display/cache contract intact.
+    const r3OverflowRaw = `//u@:bad,${'a,'.repeat(66)}IPV6CUTOVF99@[2001:db8::1][1] next //u@:bad,${'a,'.repeat(66)}HOSTCUTOVF99@\u2603[1] next www.:bad,${'a,'.repeat(66)}WWWCUTOVF99@[2001:db8::1][1] next`;
+    const r3PctDotsRaw = 'Keep //50%增长 visit www%2e visit www%2e[1] //pcthost1%2eexample //pcthost2%2Eexample //pcthost3%e3%80%82example //pcthost4%ef%bc%8eexample //pcthost5%ef%bd%a1example //pcthost6%2eexample[1] next //pcthost7%e3%80%82example[1] next //pcthost8%ef%bc%8eexample\uff1f下一句 //pcthost9%ef%bd%a1example(note) next www%2epctwww1.example www%e3%80%82pctwww2[1] next';
+    const r3ArticleHtml = `<article><p>https://cdn.example/${'a'.repeat(39_950)} Keep safe prose //TRUNCUSERONLY99@intranet:8080/secret</p></article>`;
+    const r3Rss = `<rss><channel>
+      <item><title>R3 Cut Overflow Memo</title><link>https://private.example/r3-overflow</link><description>${r3OverflowRaw}</description></item>
+      <item><title>R3 Percent Dot Memo</title><link>https://private.example/r3-pctdot</link><description>${r3PctDotsRaw}</description></item>
+      <item><title>R3 Extractor Truncation Memo</title><link>https://private.example/r3-trunc</link><description>Short summary</description></item>
+    </channel></rss>`;
+    const r3Svc = makeService({
+      fetcher: async url => {
+        if (url.endsWith('.xml')) return { status: 200, url, text: async () => r3Rss };
+        if (url.endsWith('/r3-trunc')) return { status: 200, url, text: async () => r3ArticleHtml };
+        return { status: 200, url, text: async () => `<article><p>${r3OverflowRaw} ${r3PctDotsRaw}</p></article>` };
+      },
+      requestAi,
+    });
+    await r3Svc.savePreferences('heidi', {
+      enabledDomainIds: [],
+      customDomains: [{ id: 'priv-r3', name: 'Priv R3', colorToken: 'cyan', enabled: true, keywords: [], rssUrls: ['https://private.example/r3.xml'] }],
+    });
+    await r3Svc.refresh('heidi', { domainId: 'priv-r3', force: true });
+    const heidiFeed = r3Svc.feed('heidi', { domainId: 'priv-r3' });
+    expect(heidiFeed.clusters).toHaveLength(3);
+    const r3OverflowCluster = heidiFeed.clusters.find(c => c.headline === 'R3 Cut Overflow Memo');
+    const r3PctCluster = heidiFeed.clusters.find(c => c.headline === 'R3 Percent Dot Memo');
+    const r3TruncCluster = heidiFeed.clusters.find(c => c.headline === 'R3 Extractor Truncation Memo');
+    for (const secret of ['IPV6CUTOVF99', 'HOSTCUTOVF99', 'WWWCUTOVF99']) {
+      expect(r3OverflowCluster.summaryExcerpt).not.toContain(secret);
+    }
+    for (const secret of ['pcthost1', 'pcthost2', 'pcthost3', 'pcthost4', 'pcthost5', 'pcthost6', 'pcthost7', 'pcthost8', 'pcthost9', 'pctwww1', 'pctwww2']) {
+      expect(r3PctCluster.summaryExcerpt).not.toContain(secret);
+    }
+    expect(r3PctCluster.summaryExcerpt).toContain('//50%增长');
+    expect(r3PctCluster.summaryExcerpt).toContain('visit www%2e');
+    expect(r3PctCluster.summaryExcerpt).toContain('visit www%2e[1]');
+    agents.set('v2-heidi', { ownerId: 'heidi', name: 'v2-heidi', capabilities: ['cosmic_web_briefing', 'cosmic_web_follow_up'], encryptOutbound: false, ws: { readyState: 1, send: () => {} } });
+    // Uncached followUp (before aiBrief populates cache) + Markdown-escaped article extraction -> aiBrief for Blocker #1 & #2
+    await r3Svc.followUp('heidi', 'user', r3OverflowCluster.id, { question: 'Check overflow?', briefContext: `${r3OverflowRaw} ${r3PctDotsRaw}`, research: true });
+    const r3OverflowFuJson = JSON.stringify(requestAi.mock.lastCall[0].payload);
+    for (const secret of ['IPV6CUTOVF99', 'HOSTCUTOVF99', 'WWWCUTOVF99', 'pcthost1', 'pcthost2', 'pcthost3', 'pcthost4', 'pcthost5', 'pcthost6', 'pcthost7', 'pcthost8', 'pcthost9', 'pctwww1', 'pctwww2']) {
+      expect(r3OverflowFuJson).not.toContain(secret);
+    }
+    expect(requestAi.mock.lastCall[0].payload.briefContext).toContain('//50%增长');
+    expect(requestAi.mock.lastCall[0].payload.briefContext).toContain('visit www%2e');
+    expect(requestAi.mock.lastCall[0].payload.briefContext).toContain('visit www%2e[1]');
+    await r3Svc.aiBrief('heidi', 'user', r3OverflowCluster.id, { research: true });
+    const r3OverflowBriefJson = JSON.stringify(requestAi.mock.lastCall[0].payload);
+    for (const secret of ['IPV6CUTOVF99', 'HOSTCUTOVF99', 'WWWCUTOVF99', 'pcthost1', 'pcthost2', 'pcthost3', 'pcthost4', 'pcthost5', 'pcthost6', 'pcthost7', 'pcthost8', 'pcthost9', 'pctwww1', 'pctwww2']) {
+      expect(r3OverflowBriefJson).not.toContain(secret);
+    }
+    expect(requestAi.mock.lastCall[0].payload.articleMarkdown).toContain('//50%增长');
+    expect(requestAi.mock.lastCall[0].payload.articleMarkdown).toContain('visit www%2e');
+    expect(requestAi.mock.lastCall[0].payload.articleMarkdown).toContain('visit www%2e\\[1\\]');
+    // Blocker #3: Clean Article preserves exact 40,000-char display/cache contract while aiBrief omits the truncated username-only //TRUNCUSER fragment
+    const cleanTrunc = await r3Svc.article('heidi', r3TruncCluster.id);
+    expect(cleanTrunc.markdown).toHaveLength(40_000);
+    expect(cleanTrunc.truncated).toBe(true);
+    expect(cleanTrunc.markdown).toContain('//TRUNCUSER');
+    await r3Svc.aiBrief('heidi', 'user', r3TruncCluster.id, { research: true });
+    const r3TruncBriefPayload = requestAi.mock.lastCall[0].payload;
+    expect(r3TruncBriefPayload.articleMarkdown).toContain('Keep safe prose');
+    expect(JSON.stringify(r3TruncBriefPayload)).not.toContain('TRUNCUSER');
+    expect(JSON.stringify(r3TruncBriefPayload)).not.toContain('cdn.example');
+    // Legacy cached 40,000-char entry (without truncated flag) ALSO omits the truncated trailing token on private aiBrief
+    const r3TruncItemId = cleanTrunc.itemId;
+    const legacy40kMd = `https://cdn.example/${'a'.repeat(39_950)} Legacy safe //LEGACYTRUNCUSER`;
+    expect(legacy40kMd).toHaveLength(40_000);
+    db.setArticleCache('heidi', r3TruncItemId, {
+      title: 'Legacy 40k cache',
+      markdown: legacy40kMd,
+      quality: 'full', itemId: r3TruncItemId, clusterId: r3TruncCluster.id, summaryExcerpt: 'Legacy',
+    }, NOW + HOUR);
+    await r3Svc.aiBrief('heidi', 'user', r3TruncCluster.id, { research: true, force: true });
+    expect(requestAi.mock.lastCall[0].payload.articleMarkdown).toContain('Legacy safe');
+    expect(JSON.stringify(requestAi.mock.lastCall[0].payload)).not.toContain('LEGACYTRUNCUSER');
+    // >2 MiB HTML markup cap yields <40k markdown with truncated: true -> aiBrief still drops the truncated trailing token
+    const bigHtmlExtracted = extractCleanArticle(
+      `<script>${'x'.repeat(2_097_112)}</script><p>Safe //BIGHTMLTRUNC99@intranet:8080</p>`,
+      'https://private.example/r3-big',
+    );
+    expect(bigHtmlExtracted.truncated).toBe(true);
+    expect(bigHtmlExtracted.markdown).toContain('//BIGHTMLTRUNC');
+    expect(bigHtmlExtracted.markdown.length).toBeLessThan(40_000);
+    db.setArticleCache('heidi', r3TruncItemId, {
+      ...bigHtmlExtracted, itemId: r3TruncItemId, clusterId: r3TruncCluster.id, summaryExcerpt: 'Big',
+    }, NOW + HOUR);
+    await r3Svc.aiBrief('heidi', 'user', r3TruncCluster.id, { research: true, force: true });
+    expect(requestAi.mock.lastCall[0].payload.articleMarkdown).toContain('Safe');
+    expect(JSON.stringify(requestAi.mock.lastCall[0].payload)).not.toContain('BIGHTMLTRUNC');
+
     // Mixed public/private dailyBriefing carries per-story isPrivateSource: true on private stories (enabling Agent defense-in-depth) while keeping public stories clean.
     const mixedDailyReqAi = vi.fn(async () => dailyResult);
     const mixedDailySvc = makeService({ requestAi: mixedDailyReqAi });

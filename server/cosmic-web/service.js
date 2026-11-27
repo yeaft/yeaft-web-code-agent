@@ -624,6 +624,21 @@ export function createCosmicWebService({ fetcher = safeFetch, dnsLookup, now = D
   const UNICODE_PUNCT_RE = /\p{P}/u;
   const UNICODE_SYMBOL_RE = /\p{S}/u;
   const isWhatwgDot = code => code === 0x002e || code === 0x3002 || code === 0xff0e || code === 0xff61;
+  // Percent-encoded WHATWG host dot separators normalized by Node URL parsing: %2e (.), %e3%80%82 (。), %ef%bc%8e (．), %ef%bd%a1 (｡).
+  const PERCENT_WHATWG_DOT_RE = /%(?:2e|e3%80%82|ef%bc%8e|ef%bd%a1)/i;
+  function percentWhatwgDotLenAt(str, idx) {
+    if (str.charCodeAt(idx) !== 0x25) return 0;
+    if (idx + 3 <= str.length && str.charCodeAt(idx + 1) === 0x32 && (str.charCodeAt(idx + 2) | 32) === 0x65) return 3;
+    if (idx + 9 <= str.length && str.charCodeAt(idx + 3) === 0x25 && str.charCodeAt(idx + 6) === 0x25) {
+      const seq = str.slice(idx, idx + 9).toLowerCase();
+      if (seq === '%e3%80%82' || seq === '%ef%bc%8e' || seq === '%ef%bd%a1') return 9;
+    }
+    return 0;
+  }
+  function whatwgDotLenAt(str, idx) {
+    if (idx >= str.length) return 0;
+    return isWhatwgDot(str.charCodeAt(idx)) ? 1 : percentWhatwgDotLenAt(str, idx);
+  }
   function codePointAtInfo(str, idx) {
     const cp = str.codePointAt(idx);
     const width = cp > 0xffff ? 2 : 1;
@@ -674,7 +689,9 @@ export function createCosmicWebService({ fetcher = safeFetch, dnsLookup, now = D
   }
   function isValidSchemeRelativeCandidate(rawCandidate, budget) {
     const normalized = rawCandidate.replace(/\\([\\`*_{}\[\]<>#!|~.\-+=])/g, '$1');
-    if (normalized.length <= 2 || !/[/?#:@.[\u3002\uff0e\uff61]/.test(normalized.slice(2))) return false;
+    if (normalized.length <= 2) return false;
+    const rest = normalized.slice(2);
+    if (!/[/?#:@.[\u3002\uff0e\uff61]/.test(rest) && !PERCENT_WHATWG_DOT_RE.test(rest)) return false;
     if (budget) {
       if (budget.urlChecks >= budget.maxUrlChecks) { budget.exhausted = true; return false; }
       budget.urlChecks++;
@@ -713,28 +730,34 @@ export function createCosmicWebService({ fetcher = safeFetch, dnsLookup, now = D
       if (k + 2 < len && str.charCodeAt(k) === 58 && str.charCodeAt(k + 1) === 47 && str.charCodeAt(k + 2) === 47) {
         return { prefixLen: (k + 3) - offset, minEnd: k + 3 };
       }
-      // 2. Bare www.<host> URL using WHATWG dot separators (., 。, ．, ｡) and WHATWG URL host normalization
-      // (covers www.☃, www。例子。中国/..., www.☃[1], www.☃.example:8080。下一句, bracketed/punctuated adjacent prose, and fail-closed lookahead cap).
-      if (offset + 5 <= len
+      // 2. Bare www.<host> URL using WHATWG dot separators (literal or percent-encoded ., 。, ．, ｡) and WHATWG URL host normalization
+      // (covers www.☃, www。例子。中国/..., www%2eexample, www.☃[1], www.☃.example:8080。下一句, bracketed/punctuated adjacent prose, reserved structural cuts, and fail-closed limits).
+      const wwwDotLen = offset + 3 < len ? whatwgDotLenAt(str, offset + 3) : 0;
+      if (wwwDotLen > 0 && offset + 3 + wwwDotLen < len
         && (c0 | 32) === 119
         && (str.charCodeAt(offset + 1) | 32) === 119
-        && (str.charCodeAt(offset + 2) | 32) === 119
-        && isWhatwgDot(str.charCodeAt(offset + 3))) {
-        let k = offset + 4;
+        && (str.charCodeAt(offset + 2) | 32) === 119) {
+        const wwwPrefixLen = 3 + wwwDotLen;
+        let k = offset + wwwPrefixLen;
         const maxScan = Math.min(len, offset + 2048);
         let openParens = 0, closeParens = 0, openBrackets = 0, closeBrackets = 0;
         let inPath = false;
         let inBrackets = false;
         let atHostStart = -1;
         let seenPortColon = false;
-        let portEndCut = null;
+        let portEndCut = false;
         let prevWasCut = false;
+        let cutsOverflowed = false;
+        const structuralCuts = [];
         const authorityCuts = [];
-        const pushAuthCut = (cut, balanced = false) => {
-          if (authorityCuts.length < 64 && (authorityCuts.length === 0 || authorityCuts[authorityCuts.length - 1].cut !== cut)) {
-            authorityCuts.push(balanced
+        const pushAuthCut = (bucket, cap, cut, balanced = false) => {
+          if (bucket.length > 0 && bucket[bucket.length - 1].cut === cut) return;
+          if (bucket.length < cap) {
+            bucket.push(balanced
               ? { cut, openParens: 0, closeParens: 0, openBrackets: 0, closeBrackets: 0 }
               : { cut, openParens, closeParens, openBrackets, closeBrackets });
+          } else {
+            cutsOverflowed = true;
           }
         };
         while (k < maxScan && !isBareUrlStop(str[k])) {
@@ -749,12 +772,12 @@ export function createCosmicWebService({ fetcher = safeFetch, dnsLookup, now = D
               || esc === '!' || esc === '*' || esc === '_' || esc === '~' || esc === '`' || esc === '^'
             );
             if (!inPath && seenPortColon && !inBrackets && !portEndCut && esc !== '#') {
-              portEndCut = { cut: k, openParens, closeParens, openBrackets, closeBrackets };
-              pushAuthCut(k);
+              portEndCut = true;
+              pushAuthCut(structuralCuts, 16, k);
             }
-            if (!inPath && isEscWrapDelim && !prevWasCut) pushAuthCut(k);
+            if (!inPath && isEscWrapDelim && !prevWasCut) pushAuthCut(authorityCuts, 64, k);
             if (esc === '[') { openBrackets++; if (isIpv6Open) inBrackets = true; }
-            else if (esc === ']') { closeBrackets++; if (isIpv6Close) { inBrackets = false; pushAuthCut(k + 2, true); } }
+            else if (esc === ']') { closeBrackets++; if (isIpv6Close) { inBrackets = false; pushAuthCut(structuralCuts, 16, k + 2, true); } }
             else if (esc === '(') openParens++;
             else if (esc === ')') closeParens++;
             else if (esc === '#') { inPath = true; inBrackets = false; }
@@ -774,21 +797,27 @@ export function createCosmicWebService({ fetcher = safeFetch, dnsLookup, now = D
               atHostStart = k + 1;
               inBrackets = false;
               seenPortColon = false;
-              portEndCut = null;
+              portEndCut = false;
               prevWasCut = false;
             } else if (width === 1 && ch === ':') {
               if (!inBrackets) {
                 if (!seenPortColon) seenPortColon = true;
                 else if (!portEndCut) {
-                  portEndCut = { cut: k, openParens, closeParens, openBrackets, closeBrackets };
-                  pushAuthCut(k);
+                  portEndCut = true;
+                  pushAuthCut(structuralCuts, 16, k);
                 }
               }
               prevWasCut = false;
             } else {
               if (seenPortColon && !inBrackets && !portEndCut && !(width === 1 && cp >= 48 && cp <= 57)) {
-                portEndCut = { cut: k, openParens, closeParens, openBrackets, closeBrackets };
-                pushAuthCut(k);
+                portEndCut = true;
+                pushAuthCut(structuralCuts, 16, k);
+              }
+              const pctDotLen = (!inBrackets && width === 1 && ch === '%') ? percentWhatwgDotLenAt(str, k) : 0;
+              if (pctDotLen > 0) {
+                prevWasCut = false;
+                k += pctDotLen;
+                continue;
               }
               const isAuthDelim = !isIpv6Open && !isIpv6Close && (isNonAsciiPunct(cp, ch) || (width === 1 && (
                 ch === ',' || ch === ';' || ch === '!' || ch === '(' || ch === ')' || ch === '[' || ch === '{' || ch === '}'
@@ -797,7 +826,7 @@ export function createCosmicWebService({ fetcher = safeFetch, dnsLookup, now = D
                 || ch === '\'' || ch === '`' || ch === '*' || ch === '_' || ch === '~'
               )));
               if (isAuthDelim) {
-                if (!prevWasCut) pushAuthCut(k);
+                if (!prevWasCut) pushAuthCut(authorityCuts, 64, k);
                 prevWasCut = true;
               } else {
                 prevWasCut = false;
@@ -808,32 +837,35 @@ export function createCosmicWebService({ fetcher = safeFetch, dnsLookup, now = D
             if (ch === '(') openParens++;
             else if (ch === ')') closeParens++;
             else if (ch === '[') { openBrackets++; if (isIpv6Open) inBrackets = true; }
-            else if (ch === ']') { closeBrackets++; if (isIpv6Close) { inBrackets = false; pushAuthCut(k + 1, true); } }
+            else if (ch === ']') { closeBrackets++; if (isIpv6Close) { inBrackets = false; pushAuthCut(structuralCuts, 16, k + 1, true); } }
           }
           k += width;
         }
-        const trimmedEnd = trimTrailingUrlPunct(str, offset + 4, k, openParens, closeParens, openBrackets, closeBrackets);
-        if (isValidBareWwwCandidate(str.slice(offset, trimmedEnd), budget)) return { prefixLen: 4, minEnd: trimmedEnd };
+        const trimmedEnd = trimTrailingUrlPunct(str, offset + wwwPrefixLen, k, openParens, closeParens, openBrackets, closeBrackets);
+        if (isValidBareWwwCandidate(str.slice(offset, trimmedEnd), budget)) return { prefixLen: wwwPrefixLen, minEnd: trimmedEnd };
         if (budget?.exhausted) return null;
-        if (portEndCut && portEndCut.cut > offset + 4) {
-          const portPrefixEnd = trimTrailingUrlPunct(str, offset + 4, portEndCut.cut, portEndCut.openParens, portEndCut.closeParens, portEndCut.openBrackets, portEndCut.closeBrackets);
-          if (isValidBareWwwCandidate(str.slice(offset, portPrefixEnd), budget)) return { prefixLen: 4, minEnd: portPrefixEnd };
+        for (let s = structuralCuts.length - 1; s >= 0; s--) {
+          const c = structuralCuts[s];
+          if (c.cut <= offset + wwwPrefixLen) continue;
+          const prefixEnd = trimTrailingUrlPunct(str, offset + wwwPrefixLen, c.cut, c.openParens, c.closeParens, c.openBrackets, c.closeBrackets);
+          if (isValidBareWwwCandidate(str.slice(offset, prefixEnd), budget)) return { prefixLen: wwwPrefixLen, minEnd: prefixEnd };
           if (budget?.exhausted) return null;
         }
         for (const c of authorityCuts) {
-          const prefixEnd = trimTrailingUrlPunct(str, offset + 4, c.cut, c.openParens, c.closeParens, c.openBrackets, c.closeBrackets);
-          if (isValidBareWwwCandidate(str.slice(offset, prefixEnd), budget)) return { prefixLen: 4, minEnd: prefixEnd };
+          const prefixEnd = trimTrailingUrlPunct(str, offset + wwwPrefixLen, c.cut, c.openParens, c.closeParens, c.openBrackets, c.closeBrackets);
+          if (isValidBareWwwCandidate(str.slice(offset, prefixEnd), budget)) return { prefixLen: wwwPrefixLen, minEnd: prefixEnd };
           if (budget?.exhausted) return null;
         }
-        // Fail closed on an unresolved bare-www authority that exceeds the lookahead window before terminating.
-        if (k >= maxScan && k < len && !isBareUrlStop(str[k])) return { prefixLen: 4, minEnd: k };
+        // Fail closed if an unresolved bare-www authority exceeds lookahead or cut-tracking capacity before terminating.
+        if ((k >= maxScan && k < len && !isBareUrlStop(str[k])) || cutsOverflowed) return { prefixLen: wwwPrefixLen, minEnd: k };
       }
     }
 
     // 3. Scheme-relative //authority/... URL: allows leading '_' emphasis wrappers (_//user:pass@host:8080_),
-    // recognizes WHATWG dot separators and authority/port/IPv6/footnote boundaries, scans by full Unicode code point
+    // recognizes literal & percent-encoded WHATWG dot separators and authority/port/IPv6/footnote boundaries,
+    // reserves structural IPv6/port cuts independently of heuristic punctuation cuts, scans by full Unicode code point
     // within a shared global CPU/validation budget, snapshots per-cut bracket/paren counts,
-    // and fails closed on truncated credential/authority fragments at EOF OR unresolved authorities hitting the lookahead limit.
+    // and fails closed on truncated EOF fragments, lookahead caps, or cut-bucket overflow.
     if (!prevIsAlnum && offset + 3 < len && c0 === 47 && str.charCodeAt(offset + 1) === 47 && prev !== 58 && prev !== 47) {
       const next = str[offset + 2];
       if (next && next !== '/' && !isBareUrlStop(next)) {
@@ -848,16 +880,21 @@ export function createCosmicWebService({ fetcher = safeFetch, dnsLookup, now = D
         let seenPortColon = false;
         let hasNonPortAfterColon = false;
         let postAtPortColon = false;
-        let postAtPortCut = null;
+        let postAtPortCut = false;
+        let cutsOverflowed = false;
         // 0 = none, 1 = punctuation/wrapper delim, 2 = Unicode symbol (\p{S}) that may be either host char (☃) or adjacent prose marker (📌).
         let prevDelimKind = 0;
+        const structuralCuts = [];
         const preAtCuts = [];
         const postAtCuts = [];
-        const pushCut = (bucket, cut, balanced = false) => {
-          if (bucket.length < 64 && (bucket.length === 0 || bucket[bucket.length - 1].cut !== cut)) {
+        const pushCut = (bucket, cap, cut, balanced = false) => {
+          if (bucket.length > 0 && bucket[bucket.length - 1].cut === cut) return;
+          if (bucket.length < cap) {
             bucket.push(balanced
               ? { cut, openParens: 0, closeParens: 0, openBrackets: 0, closeBrackets: 0 }
               : { cut, openParens, closeParens, openBrackets, closeBrackets });
+          } else {
+            cutsOverflowed = true;
           }
         };
         while (k < maxScan && !isBareUrlStop(str[k])) {
@@ -868,10 +905,10 @@ export function createCosmicWebService({ fetcher = safeFetch, dnsLookup, now = D
             const isIpv6Close = !seenPath && esc === ']' && inBrackets;
             if (!seenPath && !inBrackets) {
               if (seenAt && postAtPortColon && !postAtPortCut && esc !== '#') {
-                postAtPortCut = { cut: k, openParens, closeParens, openBrackets, closeBrackets };
-                pushCut(postAtCuts, k);
+                postAtPortCut = true;
+                pushCut(structuralCuts, 16, k);
               } else if (!seenAt && seenPortColon && !hasNonPortAfterColon && esc !== '#') {
-                pushCut(preAtCuts, k);
+                pushCut(structuralCuts, 16, k);
                 hasNonPortAfterColon = true;
               }
             }
@@ -882,7 +919,7 @@ export function createCosmicWebService({ fetcher = safeFetch, dnsLookup, now = D
             );
             if (isEscWrapDelim) {
               const couldBeComplete = seenUrlSignal && (seenAt || seenPath || !hasNonPortAfterColon);
-              if (prevDelimKind !== 1 && couldBeComplete) pushCut(seenAt ? postAtCuts : preAtCuts, k);
+              if (prevDelimKind !== 1 && couldBeComplete) pushCut(seenAt ? postAtCuts : preAtCuts, 64, k);
               if (esc === '[') openBrackets++;
               else if (esc === ']') { closeBrackets++; inBrackets = false; }
               else if (esc === '(') openParens++;
@@ -891,7 +928,7 @@ export function createCosmicWebService({ fetcher = safeFetch, dnsLookup, now = D
               prevDelimKind = 1;
             } else {
               if (isIpv6Open) { openBrackets++; inBrackets = true; seenUrlSignal = true; }
-              else if (isIpv6Close) { closeBrackets++; inBrackets = false; pushCut(seenAt ? postAtCuts : preAtCuts, k + 2, true); }
+              else if (isIpv6Close) { closeBrackets++; inBrackets = false; pushCut(structuralCuts, 16, k + 2, true); }
               else if (esc === '[') openBrackets++;
               else if (esc === ']') closeBrackets++;
               else if (esc === '(') openParens++;
@@ -909,13 +946,21 @@ export function createCosmicWebService({ fetcher = safeFetch, dnsLookup, now = D
           if (!seenPath && !inBrackets) {
             if (seenAt && postAtPortColon && !postAtPortCut
               && !(width === 1 && ((cp >= 48 && cp <= 57) || ch === '/' || ch === '?' || ch === '#'))) {
-              postAtPortCut = { cut: k, openParens, closeParens, openBrackets, closeBrackets };
-              pushCut(postAtCuts, k);
+              postAtPortCut = true;
+              pushCut(structuralCuts, 16, k);
             } else if (!seenAt && seenPortColon && !hasNonPortAfterColon
               && !(width === 1 && ((cp >= 48 && cp <= 57) || ch === '/' || ch === '?' || ch === '#' || ch === '@'))) {
-              pushCut(preAtCuts, k);
+              pushCut(structuralCuts, 16, k);
               hasNonPortAfterColon = true;
             }
+          }
+          const pctDotLen = (!seenPath && !inBrackets && width === 1 && ch === '%') ? percentWhatwgDotLenAt(str, k) : 0;
+          if (pctDotLen > 0) {
+            seenUrlSignal = true;
+            if (!seenAt && seenPortColon) hasNonPortAfterColon = true;
+            prevDelimKind = 0;
+            k += pctDotLen;
+            continue;
           }
           const isPunctDelim = !isIpv6Open && !isIpv6Close && (isNonAsciiPunct(cp, ch) || (width === 1 && (
             ch === ',' || ch === ';' || ch === '!' || ch === ')' || ch === '}' || ch === '|'
@@ -926,7 +971,7 @@ export function createCosmicWebService({ fetcher = safeFetch, dnsLookup, now = D
           const isSymbolDelim = !isIpv6Open && !isIpv6Close && !isPunctDelim && isNonAsciiSymbol(cp, ch);
           if (isPunctDelim) {
             const couldBeComplete = seenUrlSignal && (seenAt || seenPath || !hasNonPortAfterColon);
-            if (prevDelimKind !== 1 && couldBeComplete) pushCut(seenAt ? postAtCuts : preAtCuts, k);
+            if (prevDelimKind !== 1 && couldBeComplete) pushCut(seenAt ? postAtCuts : preAtCuts, 64, k);
             if (isWhatwgDot(cp)) seenUrlSignal = true;
             if (width === 1) {
               if (ch === '(') openParens++;
@@ -938,16 +983,16 @@ export function createCosmicWebService({ fetcher = safeFetch, dnsLookup, now = D
             prevDelimKind = 1;
           } else if (isSymbolDelim) {
             const couldBeComplete = seenUrlSignal && (seenAt || seenPath || !hasNonPortAfterColon);
-            if (prevDelimKind === 0 && couldBeComplete) pushCut(seenAt ? postAtCuts : preAtCuts, k);
+            if (prevDelimKind === 0 && couldBeComplete) pushCut(seenAt ? postAtCuts : preAtCuts, 64, k);
             if (!seenAt && !seenPath && seenPortColon) hasNonPortAfterColon = true;
             prevDelimKind = 2;
           } else {
             prevDelimKind = 0;
             if (width === 1) {
-              if (ch === '@') { seenAt = true; seenUrlSignal = true; atHostStart = k + 1; inBrackets = false; postAtPortColon = false; postAtPortCut = null; }
+              if (ch === '@') { seenAt = true; seenUrlSignal = true; atHostStart = k + 1; inBrackets = false; postAtPortColon = false; postAtPortCut = false; }
               else if (ch === '/' || ch === '?' || ch === '#') { seenPath = true; seenUrlSignal = true; inBrackets = false; }
               else if (isIpv6Open) { openBrackets++; inBrackets = true; seenUrlSignal = true; }
-              else if (isIpv6Close) { closeBrackets++; inBrackets = false; pushCut(seenAt ? postAtCuts : preAtCuts, k + 1, true); }
+              else if (isIpv6Close) { closeBrackets++; inBrackets = false; pushCut(structuralCuts, 16, k + 1, true); }
               else if (ch === '[') openBrackets++;
               else if (ch === ']') closeBrackets++;
               else if (ch === '(') openParens++;
@@ -971,8 +1016,9 @@ export function createCosmicWebService({ fetcher = safeFetch, dnsLookup, now = D
         const trimmedEnd = trimTrailingUrlPunct(str, offset + 2, k, openParens, closeParens, openBrackets, closeBrackets);
         if (isValidSchemeRelativeCandidate(str.slice(offset, trimmedEnd), budget)) return { prefixLen: 2, minEnd: trimmedEnd };
         if (budget?.exhausted) return null;
-        if (postAtPortCut) {
-          const prefixEnd = trimTrailingUrlPunct(str, offset + 2, postAtPortCut.cut, postAtPortCut.openParens, postAtPortCut.closeParens, postAtPortCut.openBrackets, postAtPortCut.closeBrackets);
+        for (let s = structuralCuts.length - 1; s >= 0; s--) {
+          const c = structuralCuts[s];
+          const prefixEnd = trimTrailingUrlPunct(str, offset + 2, c.cut, c.openParens, c.closeParens, c.openBrackets, c.closeBrackets);
           if (isValidSchemeRelativeCandidate(str.slice(offset, prefixEnd), budget)) return { prefixLen: 2, minEnd: prefixEnd };
           if (budget?.exhausted) return null;
         }
@@ -987,9 +1033,9 @@ export function createCosmicWebService({ fetcher = safeFetch, dnsLookup, now = D
           if (budget?.exhausted) return null;
         }
         // Fail closed on any truncated credential-bearing (including digit-only numeric passwords) or unclosed-IPv6
-        // authority fragment at EOF, OR any unresolved authority that reaches the lookahead limit before terminating.
+        // authority fragment at EOF, OR any unresolved authority exceeding lookahead or cut-tracking capacity.
         if (k === len && (seenAt || inBrackets || seenPortColon || postAtPortColon)) return { prefixLen: 2, minEnd: k };
-        if (k >= maxScan && k < len && !isBareUrlStop(str[k])) return { prefixLen: 2, minEnd: k };
+        if ((k >= maxScan && k < len && !isBareUrlStop(str[k])) || cutsOverflowed) return { prefixLen: 2, minEnd: k };
       }
     }
     return null;
@@ -1314,9 +1360,14 @@ export function createCosmicWebService({ fetcher = safeFetch, dnsLookup, now = D
       ]);
       // Never enable outbound web research for owner-private feeds or legacy v1 Agents.
       const allowResearch = !c.isPrivateSource && body.research === true && Boolean(options.agent?.supportsResearch);
-      const safeArticleMd = c.isPrivateSource && content?.markdown
-        ? stripPrivateUrls(content.markdown, { maxOutputChars: 12_000 })
-        : content?.markdown?.slice(0, 12_000);
+      // When Clean Article extraction truncated markup/Markdown (e.g. 40,000-char cap), omit the incomplete trailing
+      // token from the private AI projection so a username-only //USER fragment split before @host cannot survive.
+      const privateArticleMd = c.isPrivateSource && content?.markdown
+        ? ((content.truncated === true || content.markdown.length >= 40_000) ? dropTrailingToken(content.markdown) : content.markdown)
+        : content?.markdown;
+      const safeArticleMd = c.isPrivateSource && privateArticleMd
+        ? stripPrivateUrls(privateArticleMd, { maxOutputChars: 12_000 })
+        : privateArticleMd?.slice(0, 12_000);
       const safeExcerpt = c.isPrivateSource ? stripPrivateUrls(item.summaryExcerpt, { maxOutputChars: 1000 }) : item.summaryExcerpt;
       const result = await ai(userId, userRole, mode, body, {
         headline: item.title, sourceUrl: item.url, summaryExcerpt: safeExcerpt,

@@ -648,9 +648,9 @@ describe('Cosmic Web bounded research', () => {
     expect(sentPrompt).toContain('visit www.\u3002');
     expect(sentPrompt).toContain('visit www.[1]');
 
-    // Mixed public/private daily_briefing: scrubs private stories BEFORE the 500-char cap, blocks outbound research, and keeps public story URLs intact.
-    const mixedDailyAdapter = stubAdapter(daily);
-    const mixedWebSearch = vi.fn();
+    // Mixed public/private daily_briefing: scrubs private stories BEFORE the 500-char cap, blocks outbound research even with a streaming-capable adapter, and keeps public story URLs intact.
+    const mixedDailyAdapter = researchedAdapter([[search('daily')], []], daily);
+    const mixedWebSearch = vi.fn().mockResolvedValue({ results: [] });
     await run({
       mode: 'daily_briefing',
       adapter: mixedDailyAdapter,
@@ -667,16 +667,44 @@ describe('Cosmic Web bounded research', () => {
           {
             id: 'custom-priv',
             nameEn: 'Private',
-            stories: [{ headline: 'Private story', isPrivateSource: true, summaryExcerpt: `${'x'.repeat(490)} //DAILYPRIVSECRET99@intranet:8080/api //privateidn7\u3002example`, sourceNames: ['Internal'] }],
+            stories: [{ headline: 'Private story', isPrivateSource: true, summaryExcerpt: `${'x'.repeat(490)} //DAILYPRIVSECRET99@intranet:8080/api //privateidn7\u3002example //dailypct%2eexample`, sourceNames: ['Internal'] }],
           },
         ],
       },
     });
+    expect(mixedDailyAdapter.captureStream).not.toHaveBeenCalled();
     expect(mixedWebSearch).not.toHaveBeenCalled();
+    expect(mixedDailyAdapter.call).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ tools: [] }));
     const mixedDailyPrompt = JSON.stringify(mixedDailyAdapter.call.mock.lastCall[0].messages);
     expect(mixedDailyPrompt).toContain('https://public.example/keep?ref=1');
     expect(mixedDailyPrompt).not.toContain('DAILYPRIVSECRET99');
     expect(mixedDailyPrompt).not.toContain('privateidn7');
+    expect(mixedDailyPrompt).not.toContain('dailypct');
+
+    // Round 24 (PR #2032 Round 3) Blocker #1 & #2 isolated Agent regressions:
+    // post-@ 64-cut saturation before IPv6 close & host+footnote (raw & Markdown-escaped) + percent-encoded WHATWG dot separators (with prose guards).
+    const r3AgentAdapter = stubAdapter(story);
+    await run({
+      adapter: r3AgentAdapter,
+      payload: {
+        isPrivateSource: true,
+        headline: 'R3 isolated overflow and percent-dot',
+        summaryExcerpt: `Keep //50%增长 visit www%2e visit www%2e[1] //u@:bad,${'a,'.repeat(66)}AGIPV6OVFRAW99@[2001:db8::1][1] next //u@:bad,${'a,'.repeat(66)}AGHOSTOVFRAW99@\u2603[1] next www.:bad,${'a,'.repeat(66)}AGWWWOVFRAW99@[2001:db8::1][1] next //agpct1%2eexample //agpct2%2Eexample //agpct3%e3%80%82example //agpct4%ef%bc%8eexample //agpct5%ef%bd%a1example //agpct6%2eexample[1] next //agpct7%e3%80%82example[1] next //agpct8%ef%bc%8eexample\uff1f下一句 //agpct9%ef%bd%a1example(note) next www%2eagpctwww1.example www%e3%80%82agpctwww2[1] next`,
+        articleMarkdown: `Keep //50%增长 visit www%2e visit www%2e\\[1\\] //u@:bad,${'a,'.repeat(66)}AGIPV6OVFMD99@\\[2001:db8::1\\]\\[1\\] next //u@:bad,${'a,'.repeat(66)}AGHOSTOVFMD99@\u2603\\[1\\] next www.:bad,${'a,'.repeat(66)}AGWWWOVFMD99@\\[2001:db8::1\\]\\[1\\] next //agpctmd1%2eexample\\[1\\] next //agpctmd2%e3%80%82example\\[1\\] next //agpctmd3%ef%bc%8eexample\uff1f下一句 //agpctmd4%ef%bd%a1example(note) next`,
+      },
+    });
+    const r3AgentPrompt = JSON.stringify(r3AgentAdapter.call.mock.lastCall[0].messages);
+    for (const secret of [
+      'AGIPV6OVFRAW99', 'AGHOSTOVFRAW99', 'AGWWWOVFRAW99',
+      'AGIPV6OVFMD99', 'AGHOSTOVFMD99', 'AGWWWOVFMD99',
+      'agpct1', 'agpct2', 'agpct3', 'agpct4', 'agpct5', 'agpct6', 'agpct7', 'agpct8', 'agpct9',
+      'agpctwww1', 'agpctwww2', 'agpctmd1', 'agpctmd2', 'agpctmd3', 'agpctmd4',
+    ]) {
+      expect(r3AgentPrompt).not.toContain(secret);
+    }
+    expect(r3AgentPrompt).toContain('//50%增长');
+    expect(r3AgentPrompt).toContain('visit www%2e');
+    expect(r3AgentPrompt).toContain('visit www%2e[1]');
 
     // Round 19–22 Blocker #2/#3 & Nit: Agent scrubber handles 11,900-backslash run, ~1.8 MiB dense-invalid-authority DoS payload,
     // AND proves URL-check budget exhaustion discards a nearby harmless tail marker while output stays well below the 1,000-char limit (< 150ms).
