@@ -3,6 +3,16 @@ const RETIRED_CAPABILITIES = new Set([
   'work_center_message_v2', 'work_center_workbench', 'work_item_attachments',
 ]);
 
+export const LEGACY_WORK_CENTER_UPGRADE = 'Upgrade this Agent to stop its legacy Work Center before starting new Session execution.';
+
+export function hasLegacyWorkCenterRuntime(agent) {
+  return Array.isArray(agent?.capabilities) && agent.capabilities.includes('work_center');
+}
+
+export function isRetiredBrowserSource(sourceRef) {
+  return typeof sourceRef?.kind === 'string' && sourceRef.kind.trim() === 'work-item';
+}
+
 export function withoutRetiredCapabilities(capabilities) {
   return capabilities.filter(capability => !RETIRED_CAPABILITIES.has(capability));
 }

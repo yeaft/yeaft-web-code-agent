@@ -1,3 +1,4 @@
+import { hasLegacyWorkCenterRuntime, LEGACY_WORK_CENTER_UPGRADE } from '../retired-features.js';
 import { agents } from '../context.js';
 import { yeaftProjectDb, yeaftSessionDb } from '../database.js';
 import { forwardToAgent, resolveAgentAccessError, sendToWebClient } from '../ws-utils.js';
@@ -85,6 +86,9 @@ export async function handleClientScheduledTasks(clientId, client, msg) {
   }
   if (!isCreate && !yeaftSessionDb.getForAgent(client.userId, agentId, sessionId)) {
     return reject('session_access_denied', 'Session not found or access denied');
+  }
+  if (!isCreate && msg.op === 'run' && hasLegacyWorkCenterRuntime(agent)) {
+    return reject('legacy_work_center_active', LEGACY_WORK_CENTER_UPGRADE);
   }
   const outbound = {
     type: isCreate ? 'yeaft_create_session' : 'yeaft_scheduled_task',

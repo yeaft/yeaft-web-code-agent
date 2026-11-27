@@ -99,6 +99,11 @@ export function applyRegisteredTransport(msg) {
 }
 
 export async function handleMessage(msg) {
+  // Old Servers can still send WorkItem-scoped Workbench commands. Allow
+  // terminal_close to release a previously owned PTY; it cannot start work.
+  if (msg.type !== 'terminal_close' && (msg.workbenchRoute?.runtimeProvider === 'work-center'
+    || (typeof msg.workbenchRouteKey === 'string' && msg.workbenchRouteKey.startsWith('work-center:'))
+    || (typeof msg.conversationId === 'string' && msg.conversationId.startsWith('_workbench:work-center:')))) return;
   if (await handleBrowserRuntimeMessage(msg)) return;
   switch (msg.type) {
     case 'registered':

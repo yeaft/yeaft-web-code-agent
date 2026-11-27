@@ -88,6 +88,9 @@ export async function handleBrowserRuntimeMessage(msg, dependencies = {}) {
         });
         break;
       case 'browser_session_create':
+        if (typeof msg.sourceRef?.kind === 'string' && msg.sourceRef.kind.trim() === 'work-item') {
+          throw new BrowserRuntimeError('feature_disabled', 'Work Center is disabled');
+        }
         await runtime.createSession(msg);
         break;
       case 'browser_session_get':
