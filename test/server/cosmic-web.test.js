@@ -1077,19 +1077,24 @@ describe('2.0 graph and AI contracts', () => {
     const privDet = await svc.cluster('alice', privNode.clusterId);
     expect(privDet.media).toEqual([]);
     expect(JSON.stringify(privDet)).not.toContain(secretMediaUrl);
-    // Round 4 Blocker #2: linked/bare private media URLs inside cached articleMarkdown must be stripped from AI payloads while Clean Article stays intact
+    // Round 4 & 5 Blocker #2/#1: linked AND parenthesized bare private URLs inside cached articleMarkdown must be fully redacted while Clean Article stays intact
     const privItemId = privDet.items[0].id;
-    const linkedPrivateMd = `Quarterly notes with [![Chart](${secretMediaUrl})](${secretMediaUrl}) and [Figure](${secretMediaUrl}) and ${secretMediaUrl}.`;
+    const parenSecretUrl = 'https://files.example/chart(v2).png?token=PRIVATE_SENTINEL';
+    const linkedPrivateMd = `Quarterly notes with [![Chart](${secretMediaUrl})](${secretMediaUrl}), [Figure](${secretMediaUrl}), ${parenSecretUrl}, and (${parenSecretUrl}).`;
     db.setArticleCache('alice', privItemId, {
       title: 'Private img note', markdown: linkedPrivateMd, quality: 'full', itemId: privItemId, clusterId: privNode.clusterId, summaryExcerpt: 'Note',
     }, NOW + HOUR);
     const cleanPrivateArt = await svc.article('alice', privNode.clusterId, { itemId: privItemId });
     expect(cleanPrivateArt.markdown).toContain(secretMediaUrl);
     await svc.aiBrief('alice', 'user', privNode.clusterId, { research: true, force: true });
-    expect(JSON.stringify(requestAi.mock.lastCall[0].payload)).not.toContain(secretMediaUrl);
+    const privBriefJson = JSON.stringify(requestAi.mock.lastCall[0].payload);
+    expect(privBriefJson).not.toContain(secretMediaUrl);
+    expect(privBriefJson).not.toContain('PRIVATE_SENTINEL');
     expect(requestAi.mock.lastCall[0].payload.articleMarkdown).toContain('Quarterly notes');
     await svc.followUp('alice', 'user', privNode.clusterId, { question: 'Any updates?', research: true });
-    expect(JSON.stringify(requestAi.mock.lastCall[0].payload)).not.toContain(secretMediaUrl);
+    const privFuJson = JSON.stringify(requestAi.mock.lastCall[0].payload);
+    expect(privFuJson).not.toContain(secretMediaUrl);
+    expect(privFuJson).not.toContain('PRIVATE_SENTINEL');
 
     // CW2-05 & Round 3 Blocker #1: legacy v1 Agent (no cosmic_web_cancel) retains remote slot accounting after caller abort,
     // defers subsequent requests, AND hands off freed slots when awakened waiters hit the rate boundary (never hanging).
@@ -1222,12 +1227,18 @@ describe('2.0 graph and AI contracts', () => {
     }
     agents.clear();
     agent('v2-many', 'alice', ['cosmic_web_briefing', 'cosmic_web_research', 'cosmic_web_follow_up', 'cosmic_web_radar', 'cosmic_web_cancel']);
+    await svc.aiBrief('alice', 'user', manyClusterId, { itemId: last14Id, skipArticleFetch: true });
+    const brief14Payload = requestAi.mock.lastCall[0].payload;
+    expect(brief14Payload.headline).toBe('Headline 13');
+    expect(brief14Payload.summaryExcerpt).toBe('Excerpt from source 13');
+    expect(brief14Payload.sources[0].id).toBe(last14Id);
+    expect(brief14Payload.sources).toHaveLength(12);
     await svc.followUp('alice', 'user', manyClusterId, { itemId: last14Id, question: 'What did Wire 13 report?' });
     const fuPayload = requestAi.mock.lastCall[0].payload;
     expect(fuPayload.headline).toBe('Headline 13');
     expect(fuPayload.sourceUrl).toBe('https://wire13.example/story');
     expect(fuPayload.summaryExcerpt).toBe('Excerpt from source 13');
-    expect(fuPayload.sources.some(s => s.id === last14Id)).toBe(true);
+    expect(fuPayload.sources[0].id).toBe(last14Id);
     expect(fuPayload.sources).toHaveLength(12);
 
     // Round 4 Blocker #1 + Nit 1 (fake timers): late-dispatched legacy requests reaching caller deadline reject caller (504)

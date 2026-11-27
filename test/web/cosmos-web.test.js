@@ -1587,28 +1587,38 @@ describe('Cosmic Web — Pinia store & interactive overlay', () => {
 
   it('Review Blockers #4, #6, #7, #8, #10: non-linkifying prose, evidenceCount badge gating, same-cluster reopen source switch + follow-up itemId, v1 Agent gating, and Lightbox focus/Escape trap', async () => {
     const followUpBodies = [];
+    let detailItems = [
+      { id: 'item-1', sourceName: 'Source 1', title: 'S1', summaryExcerpt: 'Excerpt 1', url: 'https://s1.example/a' },
+      { id: 'item-2', sourceName: 'Source 2', title: 'S2', summaryExcerpt: 'Excerpt 2', url: 'https://s2.example/b' },
+    ];
     mockApi([
       {
         match: (u, m) => u === '/api/cosmic-web/clusters/c-multi' && m === 'GET',
-        body: {
+        body: () => ({
           id: 'c-multi',
           domainId: 'ai',
           headline: 'Multi-source AI event',
           summaryExcerpt: 'Stored fallback excerpt for offline reading.',
-          items: [
-            { id: 'item-1', sourceName: 'Source 1', title: 'S1', summaryExcerpt: 'Excerpt 1', url: 'https://s1.example/a' },
-            { id: 'item-2', sourceName: 'Source 2', title: 'S2', summaryExcerpt: 'Excerpt 2', url: 'https://s2.example/b' },
-          ],
-        },
+          items: detailItems,
+        }),
       },
       {
         match: (u, m) => u.startsWith('/api/cosmic-web/clusters/c-multi/article') && m === 'GET',
         body: (u) => {
           const qs = new URL(u, 'http://local').searchParams;
-          const isSecond = qs.get('itemId') === 'item-2' || qs.get('url') === 'https://s2.example/b';
-          return isSecond
-            ? { title: 'Source 2 Clean', markdown: 'Clean extracted article paragraph without AI.', quality: 'full', itemId: 'item-2' }
-            : { title: 'Source 1 Clean', markdown: 'Clean article for Source 1.', quality: 'full', itemId: 'item-1' };
+          const reqId = qs.get('itemId');
+          const reqUrl = qs.get('url');
+          // Mirror exact server precedence: itemId takes precedence over url when supplied.
+          const selected = reqId
+            ? detailItems.find((it) => it.id === reqId)
+            : (reqUrl ? detailItems.find((it) => it.url === reqUrl) : detailItems[0]);
+          if (selected?.id === 'item-2') {
+            return { title: 'Source 2 Clean', markdown: 'Clean extracted article paragraph without AI.', quality: 'full', itemId: 'item-2' };
+          }
+          if (selected?.id === 'item-2-new') {
+            return { title: 'Source 2 Refreshed', markdown: 'Refreshed Source 2 clean paragraph.', quality: 'full', itemId: 'item-2-new' };
+          }
+          return { title: 'Source 1 Clean', markdown: 'Clean article for Source 1.', quality: 'full', itemId: selected?.id || 'item-1' };
         },
       },
       {
@@ -1720,6 +1730,37 @@ describe('Cosmic Web — Pinia store & interactive overlay', () => {
     await webStore.askFollowUp('c-multi', 'Source 2 detail?');
     expect(followUpBodies.length).toBe(priorFollowUps + 1);
     expect(followUpBodies.at(-1).itemId).toBe('item-2');
+
+    // Round 5 Blocker #2: reopening with URL-only when fresh detail replaces item-2 -> item-2-new invalidates retained brief, clean article & follow-up and regenerates!
+    detailItems = [
+      { id: 'item-1', sourceName: 'Source 1', title: 'S1', summaryExcerpt: 'Excerpt 1', url: 'https://s1.example/a' },
+      { id: 'item-2-new', sourceName: 'Source 2 New', title: 'S2 New', summaryExcerpt: 'Excerpt 2 New', url: 'https://s2.example/b' },
+    ];
+    await webStore.openClusterReader('c-multi', { url: 'https://s2.example/b', expanded: true });
+    await flushPromises();
+    expect(webStore.activeArticleItemId).toBe('item-2-new');
+    expect(webStore.aiBriefData?.tldr).toBe('Brief for item-2-new');
+    expect(webStore.followUpThread).toEqual([]);
+    expect(wrapper.find('.cw-reader-modal .cw-clean-article-panel').text()).toContain('Refreshed Source 2 clean paragraph.');
+
+    // Round 5 Blocker #2 (default-source path): reopening default source when fresh detail promotes a new first item invalidates retained state & regenerates!
+    await webStore.openClusterReader('c-multi', { expanded: true });
+    await flushPromises();
+    expect(webStore.aiBriefSourceItemId).toBe('item-1');
+    webStore.followUpThread = [{ id: 'stale-def', question: 'Q', answer: 'A', citations: [], media: [] }];
+    detailItems = [
+      { id: 'item-0-new', sourceName: 'Source 0 Breaking', title: 'S0', summaryExcerpt: 'Excerpt 0 Breaking', url: 'https://s0.example/breaking' },
+      { id: 'item-1', sourceName: 'Source 1', title: 'S1', summaryExcerpt: 'Excerpt 1', url: 'https://s1.example/a' },
+    ];
+    await webStore.openClusterReader('c-multi', { expanded: true });
+    await flushPromises();
+    expect(webStore.aiBriefSourceItemId).toBe('item-0-new');
+    expect(webStore.followUpThread).toEqual([]);
+    // Restore original items before remaining assertions
+    detailItems = [
+      { id: 'item-1', sourceName: 'Source 1', title: 'S1', summaryExcerpt: 'Excerpt 1', url: 'https://s1.example/a' },
+      { id: 'item-2', sourceName: 'Source 2', title: 'S2', summaryExcerpt: 'Excerpt 2', url: 'https://s2.example/b' },
+    ];
 
     // Round 3 Nit 2: COSMIC_WEB_COLOR_MAP uses pure CSS theme tokens without inline hex fallbacks
     for (const token of Object.values(COSMIC_WEB_COLOR_MAP)) {

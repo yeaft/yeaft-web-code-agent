@@ -241,6 +241,7 @@ export const useCosmicWebStore = defineStore('cosmicWeb', {
 
     aiBriefLoading: false,
     aiBriefData: null,
+    aiBriefSourceItemId: null,
     aiBriefError: null,
 
     followUpThread: [],
@@ -554,6 +555,9 @@ export const useCosmicWebStore = defineStore('cosmicWeb', {
       this.lightboxMedia = null;
 
       // Unified selection transition: reset transient state on new cluster OR any source change (including reset to default or URL-only)
+      const prevEffectiveSourceId = (isNewCluster || isSourceChange)
+        ? null
+        : (this.aiBriefSourceItemId || this.activeArticleItemId || this.activeClusterDetail?.items?.[0]?.id || null);
       if (isNewCluster || isSourceChange) {
         if (isNewCluster) this.activeClusterDetail = null;
         this.articleData = null;
@@ -563,6 +567,7 @@ export const useCosmicWebStore = defineStore('cosmicWeb', {
         this.activeArticleItemId = nextItemId;
         this.readerItemId = nextItemId;
         this.aiBriefData = null;
+        this.aiBriefSourceItemId = null;
         this.aiBriefError = null;
         this.followUpThread = [];
         this.followUpError = null;
@@ -575,7 +580,7 @@ export const useCosmicWebStore = defineStore('cosmicWeb', {
 
       // Load instant DB detail first; kick off non-blocking community enrichment and
       // (debounced when navigating rapidly) AI report without blocking openClusterReader.
-      const capturedRev = this.sourceSelectionRev;
+      let capturedRev = this.sourceSelectionRev;
       const capturedGen = storeGeneration;
       await this.loadClusterDetail(clusterId);
 
@@ -596,6 +601,43 @@ export const useCosmicWebStore = defineStore('cosmicWeb', {
         if (freshId !== this.activeArticleItemId) {
           this.activeArticleItemId = freshId;
           this.readerItemId = freshId;
+        }
+      }
+      // If fresh detail promoted a different effective source (for URL-only or default selection),
+      // invalidate retained source-derived data so brief, clean article, and follow-up regenerate cleanly.
+      const freshEffectiveSourceId = this.activeArticleItemId || detail?.items?.[0]?.id || null;
+      const retainedBriefDrift = Boolean(
+        (this.aiBriefData || this.followUpThread.length)
+        && prevEffectiveSourceId
+        && freshEffectiveSourceId
+        && freshEffectiveSourceId !== prevEffectiveSourceId,
+      );
+      const retainedArticleDrift = Boolean(
+        this.articleData?.itemId
+        && freshEffectiveSourceId
+        && this.articleData.itemId !== freshEffectiveSourceId,
+      );
+      if (retainedBriefDrift || retainedArticleDrift) {
+        this.sourceSelectionRev += 1;
+        capturedRev = this.sourceSelectionRev;
+        invalidateChannel('article');
+        invalidateChannel('aiBrief');
+        invalidateChannel('followUp');
+        this.articleData = null;
+        this.articleError = null;
+        this.articleLoading = false;
+        this.aiBriefData = null;
+        this.aiBriefSourceItemId = null;
+        this.aiBriefError = null;
+        this.aiBriefLoading = false;
+        this.followUpThread = [];
+        this.followUpError = null;
+        this.followUpLoading = false;
+        if (this.cleanArticleOpen) {
+          void this.loadArticle(clusterId, {
+            itemId: this.activeArticleItemId || undefined,
+            url: this.activeArticleUrl || undefined,
+          });
         }
       }
       if (!detail?.isPrivateSource && !(Array.isArray(detail?.communityComments) && detail.communityComments.length)) {
@@ -689,6 +731,7 @@ export const useCosmicWebStore = defineStore('cosmicWeb', {
       this.articleLoading = false;
       this.articleError = null;
       this.aiBriefData = null;
+      this.aiBriefSourceItemId = null;
       this.aiBriefError = null;
       this.aiBriefLoading = false;
       this.followUpThread = [];
@@ -843,6 +886,7 @@ export const useCosmicWebStore = defineStore('cosmicWeb', {
           return;
         }
         this.aiBriefData = data.brief || data;
+        this.aiBriefSourceItemId = effectiveItemId || this.activeClusterDetail?.items?.[0]?.id || null;
       } catch (err) {
         if (isAbortError(err) || !isCurrentSource()) return;
         this.aiBriefError = err.message || 'Failed to generate AI brief';

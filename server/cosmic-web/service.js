@@ -585,7 +585,23 @@ export function createCosmicWebService({ fetcher = safeFetch, dnsLookup, now = D
       }
       if (lowerText.startsWith('http://', i) || lowerText.startsWith('https://', i)) {
         let j = i + (lowerText.startsWith('https://', i) ? 8 : 7);
-        while (j < len && !/[\s<>"')\]]/.test(noLinks[j])) j++;
+        let openParens = 0, closeParens = 0, openBrackets = 0, closeBrackets = 0;
+        while (j < len && !/[\s<>"']/.test(noLinks[j])) {
+          const ch = noLinks[j];
+          if (ch === '(') openParens++;
+          else if (ch === ')') closeParens++;
+          else if (ch === '[') openBrackets++;
+          else if (ch === ']') closeBrackets++;
+          j++;
+        }
+        // Trim only trailing sentence/wrapper punctuation outside balanced URL parens/brackets.
+        while (j > i) {
+          const last = noLinks[j - 1];
+          if (last === ')' && closeParens > openParens) { closeParens--; j--; continue; }
+          if (last === ']' && closeBrackets > openBrackets) { closeBrackets--; j--; continue; }
+          if (last === '.' || last === ',' || last === ';' || last === '!' || last === '?') { j--; continue; }
+          break;
+        }
         i = j;
         continue;
       }
