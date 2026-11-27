@@ -745,6 +745,7 @@
   }
   .cosmos-page.is-drawer-open .cosmos-event-wrap,
   .cosmos-page.is-drawer-open .cosmos-watch-dock,
+  .cosmos-page.is-drawer-open .cosmos-planet-focus-dock,
   .cosmos-page.is-drawer-open .cosmos-event-beacon {
     opacity: 0;
     pointer-events: none;
@@ -756,4 +757,94 @@
   .cosmos-event-beacon-coords {
     display: none;
   }
+  .cosmos-planet-focus-dock {
+    max-width: calc(100vw - 20px);
+    padding: 6px 10px;
+    gap: 6px;
+  }
+  .cosmos-planet-focus-dock.is-corner-dock {
+    opacity: 0;
+    pointer-events: none;
+  }
+  .cosmos-pf-range {
+    width: 68px;
+  }
+}
+
+/* Concurrent cosmic events count badge on top pill */
+.cosmos-event-multi {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 16px;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: rgba(124, 196, 255, 0.20);
+  border: 1px solid rgba(124, 196, 255, 0.36);
+  color: #bce4ff;
+  font-family: var(--font-mono, monospace);
+  font-size: 9.5px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+}
+
+/* Minimal Planet Focus Inspection Dock (0.8x-24x zoom + Return to Sun) */
+.cosmos-planet-focus-dock {
+  position: fixed;
+  left: 50%;
+  bottom: 18px;
+  transform: translateX(-50%);
+  z-index: 54;
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  padding: 6px 12px;
+  border-radius: 999px;
+  background: rgba(7, 13, 28, 0.72);
+  border: 1px solid rgba(154, 196, 255, 0.20);
+  backdrop-filter: blur(18px) saturate(140%);
+  -webkit-backdrop-filter: blur(18px) saturate(140%);
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.42);
+  color: var(--c-ink);
+  transition: left 240ms var(--c-ease), transform 240ms var(--c-ease), opacity 180ms ease;
+}
+
+.cosmos-page.is-drawer-open .cosmos-planet-focus-dock {
+  left: calc((100vw - var(--cosmos-drawer-w, 460px)) * 0.5);
+}
+
+.cosmos-planet-focus-dock.is-corner-dock {
+  left: 20px;
+  transform: none;
+}
+
+.cosmos-pf-name {
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--c-ink);
+  white-space: nowrap;
+}
+
+.cosmos-pf-zoom {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 0 6px;
+  border-left: 1px solid rgba(154, 196, 255, 0.16);
+  border-right: 1px solid rgba(154, 196, 255, 0.16);
+}
+
+.cosmos-pf-range {
+  width: 92px;
+}
+
+.cosmos-pf-return {
+  color: #ffd79a;
+  border-color: rgba(255, 200, 118, 0.28);
+}
+
+.cosmos-pf-return:hover {
+  background: rgba(255, 196, 112, 0.16);
+  border-color: rgba(255, 204, 128, 0.46);
 }

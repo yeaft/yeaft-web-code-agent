@@ -365,6 +365,9 @@ export function createCosmosEngine(glCanvas, hudCanvas, opts = {}) {
       uQuadRadiusPx: gl.getUniformLocation(bodyProg, 'uQuadRadiusPx'),
       uBodyType: gl.getUniformLocation(bodyProg, 'uBodyType'),
       uRadiusRatio: gl.getUniformLocation(bodyProg, 'uRadiusRatio'),
+      uRadiusPx: gl.getUniformLocation(bodyProg, 'uRadiusPx'),
+      uCloseup: gl.getUniformLocation(bodyProg, 'uCloseup'),
+      uPitch: gl.getUniformLocation(bodyProg, 'uPitch'),
       uTime: gl.getUniformLocation(bodyProg, 'uTime'),
       uRealTime: gl.getUniformLocation(bodyProg, 'uRealTime'),
       uSpin: gl.getUniformLocation(bodyProg, 'uSpin'),
@@ -374,6 +377,7 @@ export function createCosmosEngine(glCanvas, hudCanvas, opts = {}) {
       uAtmoColor: gl.getUniformLocation(bodyProg, 'uAtmoColor'),
       uAlpha: gl.getUniformLocation(bodyProg, 'uAlpha'),
       uHighlight: gl.getUniformLocation(bodyProg, 'uHighlight'),
+      uMoonStyle: gl.getUniformLocation(bodyProg, 'uMoonStyle'),
       uTexMain: gl.getUniformLocation(bodyProg, 'uTexMain'),
       uTexNight: gl.getUniformLocation(bodyProg, 'uTexNight'),
       uTexClouds: gl.getUniformLocation(bodyProg, 'uTexClouds'),
@@ -426,6 +430,7 @@ export function createCosmosEngine(glCanvas, hudCanvas, opts = {}) {
       uAngle: gl.getUniformLocation(prog, 'uAngle'),
       uSeed: gl.getUniformLocation(prog, 'uSeed'),
       uSunRadiusPx: gl.getUniformLocation(prog, 'uSunRadiusPx'),
+      uViewAngles: gl.getUniformLocation(prog, 'uViewAngles'),
       uTexNebula: gl.getUniformLocation(prog, 'uTexNebula'),
       uTexSun: gl.getUniformLocation(prog, 'uTexSun'),
       uTexRock: gl.getUniformLocation(prog, 'uTexRock'),
@@ -728,6 +733,7 @@ export function createCosmosEngine(glCanvas, hudCanvas, opts = {}) {
     gl.uniform1f(loc.uAngle, ev.angle);
     gl.uniform1f(loc.uSeed, ev.seed);
     gl.uniform1f(loc.uSunRadiusPx, (ev.sunRadiusPx || ev.eventRadiusPx * 0.24) * glDpr);
+    if (loc.uViewAngles) gl.uniform2f(loc.uViewAngles, ev.viewYaw || 0, ev.viewPitch || 0);
 
     bindTexUnit(0, textures.nebula);
     bindTexUnit(1, textures.sun);
@@ -771,7 +777,7 @@ export function createCosmosEngine(glCanvas, hudCanvas, opts = {}) {
       eventLens, eventAmbient,
       skyBright, starDensity, bhParams, galParams, webParams,
       particleData, particleCount,
-      eventDraw, eventParticleData, eventParticleCount,
+      eventDraw, eventDraws, eventParticleData, eventParticleCount,
       solarBodies, solarAlpha, hudDraw,
     } = frameState;
 
@@ -832,11 +838,26 @@ export function createCosmosEngine(glCanvas, hudCanvas, opts = {}) {
     gl.drawArrays(gl.TRIANGLES, 0, 6);
 
     // Deep-space cosmic events render BEHIND Solar System planets for authentic 3D occlusion.
+    const allEvents = Array.isArray(eventDraws) ? eventDraws : (eventDraw ? [eventDraw] : []);
+    const deepEvents = [];
+    const localEvents = [];
+    for (let i = 0; i < allEvents.length; i++) {
+      const ev = allEvents[i];
+      if (!ev || ev.alpha <= 0.002) continue;
+      if (ev.layer === 'local') localEvents.push(ev);
+      else deepEvents.push(ev);
+    }
+
     let eventRenderedInGL = false;
-    const isDeepEvent = Boolean(eventDraw && eventDraw.layer !== 'local');
-    if (eventDraw && isDeepEvent) {
-      eventRenderedInGL = drawCosmicEvent(eventDraw, realTime);
-      if (eventRenderedInGL) drawParticles(eventParticleData, eventParticleCount);
+    let renderedDeepCount = 0;
+    for (let i = 0; i < deepEvents.length; i++) {
+      if (drawCosmicEvent(deepEvents[i], realTime)) {
+        eventRenderedInGL = true;
+        renderedDeepCount += 1;
+      }
+    }
+    if (renderedDeepCount > 0 && localEvents.length === 0) {
+      drawParticles(eventParticleData, eventParticleCount);
     }
 
     drawParticles(particleData, particleCount);
@@ -863,28 +884,39 @@ export function createCosmosEngine(glCanvas, hudCanvas, opts = {}) {
       const sorted = solarBodies.slice().sort((a, b) => a.camZ - b.camZ);
       for (let i = 0; i < sorted.length; i++) {
         const b = sorted[i];
-        const pad = b.bodyType === 0 ? 3.85 : (b.bodyType === 6 ? 2.65 : (b.bodyType === 7 ? 2.02 : 1.36));
+        const pad = b.bodyType === 0 ? 3.85 : (b.bodyType === 6 ? 2.65 : (b.bodyType === 7 ? 2.02 : (b.bodyType === 9 ? 1.28 : 1.36)));
+        const rPxGl = b.radiusPx * glDpr;
         gl.uniform2f(bodyLoc.uCenterPx, b.screenX * glDpr, b.screenY * glDpr);
-        gl.uniform1f(bodyLoc.uQuadRadiusPx, b.radiusPx * glDpr * pad);
+        gl.uniform1f(bodyLoc.uQuadRadiusPx, rPxGl * pad);
         gl.uniform1i(bodyLoc.uBodyType, b.bodyType);
         gl.uniform1f(bodyLoc.uRadiusRatio, 1.0 / pad);
+        if (bodyLoc.uRadiusPx) gl.uniform1f(bodyLoc.uRadiusPx, rPxGl);
+        if (bodyLoc.uCloseup) gl.uniform1f(bodyLoc.uCloseup, b.closeup || 0.0);
+        if (bodyLoc.uPitch) gl.uniform1f(bodyLoc.uPitch, b.pitch || 0.0);
         gl.uniform1f(bodyLoc.uSpin, b.spin);
         gl.uniform1f(bodyLoc.uTilt, b.tilt);
         gl.uniform1f(bodyLoc.uOblate, b.oblate);
         gl.uniform3f(bodyLoc.uLightDir, b.lightDir[0], b.lightDir[1], b.lightDir[2]);
         gl.uniform3f(bodyLoc.uAtmoColor, b.atmo[0], b.atmo[1], b.atmo[2]);
-        gl.uniform1f(bodyLoc.uAlpha, solarAlpha);
+        gl.uniform1f(bodyLoc.uAlpha, solarAlpha * (b.alphaMul != null ? b.alphaMul : 1.0));
         gl.uniform1f(bodyLoc.uHighlight, b.highlight || 0.0);
+        if (bodyLoc.uMoonStyle) gl.uniform1f(bodyLoc.uMoonStyle, b.moonStyle || 0.0);
 
         bindTexUnit(0, textures[b.texKey] || textures.earth_day);
         gl.drawArrays(gl.TRIANGLES, 0, 6);
       }
     }
 
-    // Close-up focused events (when Solar System has smoothly receded) render cleanly in front.
-    if (eventDraw && !isDeepEvent) {
-      eventRenderedInGL = drawCosmicEvent(eventDraw, realTime);
-      if (eventRenderedInGL) drawParticles(eventParticleData, eventParticleCount);
+    // Local / focused cosmic events render cleanly in front of Solar System bodies.
+    let renderedLocalCount = 0;
+    for (let i = 0; i < localEvents.length; i++) {
+      if (drawCosmicEvent(localEvents[i], realTime)) {
+        eventRenderedInGL = true;
+        renderedLocalCount += 1;
+      }
+    }
+    if (renderedLocalCount > 0) {
+      drawParticles(eventParticleData, eventParticleCount);
     }
 
     ctx2d.clearRect(0, 0, width, height);

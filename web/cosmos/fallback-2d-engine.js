@@ -428,6 +428,7 @@ export function createFallback2DEngine(glCanvas, hudCanvas, opts = {}) {
         solarBodies = [],
         solarAlpha = 1,
         eventDraw = null,
+        eventDraws = null,
         activeEvent = null,
       } = frameState || {};
 
@@ -585,29 +586,63 @@ export function createFallback2DEngine(glCanvas, hudCanvas, opts = {}) {
       }
 
       // 6b. Distant Deep-Sky Cosmic Events (drawn BEHIND foreground Solar planets for 3D depth)
-      let eventRenderedIn2D = false;
-      const isDeepEvent = Boolean(eventDraw && eventDraw.layer !== 'local');
-      if (eventDraw && activeEvent && isDeepEvent) {
-        drawCosmicEventCanvas(drawCtx, width, height, activeEvent, eventDraw, eventDraw.alpha);
-        eventRenderedIn2D = true;
+      const allEvents = Array.isArray(eventDraws)
+        ? eventDraws
+        : (eventDraw ? [eventDraw] : []);
+      const deepEvents = [];
+      const localEvents = [];
+      for (const ev of allEvents) {
+        if (!ev || ev.alpha <= 0.002) continue;
+        if (ev.layer === 'local') localEvents.push(ev);
+        else deepEvents.push(ev);
       }
 
-      // 7. Solar Bodies (depth-sorted Sun + 8 Planets with real NASA textures & rings)
+      let eventRenderedIn2D = false;
+      for (const ev of deepEvents) {
+        const inst = ev.instance || activeEvent;
+        if (inst) {
+          drawCosmicEventCanvas(drawCtx, width, height, inst, ev, ev.alpha);
+          eventRenderedIn2D = true;
+        }
+      }
+
+      // 7. Solar Bodies (depth-sorted Sun + 8 Planets + 3D Moons)
       if (solarAlpha > 0.01 && solarBodies.length) {
         drawCtx.save();
         drawCtx.globalAlpha = solarAlpha;
         const sorted = solarBodies.slice().sort((a, b) => a.camZ - b.camZ);
         for (const b of sorted) {
           if (b.bodyType === 0) drawSun2D(drawCtx, b, realTime);
-          else drawPlanet2D(drawCtx, b, realTime);
+          else if (b.bodyType === 9) {
+            drawCtx.save();
+            const r = Math.max(1.6, b.radiusPx);
+            const g = drawCtx.createRadialGradient(
+              b.screenX + (b.lightDir?.[0] || -0.5) * r * 0.35,
+              b.screenY - (b.lightDir?.[1] || 0.25) * r * 0.35,
+              r * 0.1,
+              b.screenX, b.screenY, r,
+            );
+            const col = b.moonStyle === 1 ? '#e8c458' : (b.moonStyle === 2 ? '#d6e4f2' : (b.moonStyle === 3 ? '#e4a652' : '#bcc2cc'));
+            g.addColorStop(0, col);
+            g.addColorStop(0.75, col);
+            g.addColorStop(1, 'rgba(18,22,30,0.92)');
+            drawCtx.fillStyle = g;
+            drawCtx.beginPath();
+            drawCtx.arc(b.screenX, b.screenY, r, 0, Math.PI * 2);
+            drawCtx.fill();
+            drawCtx.restore();
+          } else drawPlanet2D(drawCtx, b, realTime);
         }
         drawCtx.restore();
       }
 
-      // 7b. Focused Telescope Close-Up Event (drawn cleanly in front after planets recede)
-      if (eventDraw && activeEvent && !isDeepEvent) {
-        drawCosmicEventCanvas(drawCtx, width, height, activeEvent, eventDraw, eventDraw.alpha);
-        eventRenderedIn2D = true;
+      // 7b. Local / Focused Cosmic Events (drawn cleanly in front of planets)
+      for (const ev of localEvents) {
+        const inst = ev.instance || activeEvent;
+        if (inst) {
+          drawCosmicEventCanvas(drawCtx, width, height, inst, ev, ev.alpha);
+          eventRenderedIn2D = true;
+        }
       }
 
       if (ctx2d) {
