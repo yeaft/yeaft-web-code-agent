@@ -249,8 +249,9 @@ export default {
     activeSelectedItem() {
       const items = Array.isArray(this.activeCluster?.items) ? this.activeCluster.items : [];
       if (!items.length) return null;
-      if (this.webStore.activeArticleItemId) {
-        const hit = items.find((it) => it && it.id === this.webStore.activeArticleItemId);
+      const pinnedId = this.webStore.activeArticleItemId || this.webStore.resolvedSourceItemId;
+      if (pinnedId) {
+        const hit = items.find((it) => it && it.id === pinnedId);
         if (hit) return hit;
       }
       if (this.webStore.activeArticleUrl) {

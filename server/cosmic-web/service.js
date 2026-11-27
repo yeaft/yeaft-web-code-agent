@@ -549,16 +549,48 @@ export function createCosmicWebService({ fetcher = safeFetch, dnsLookup, now = D
         const labelStart = imagesOnly ? i + 2 : i + 1;
         while (nextClose !== -1 && nextClose < labelStart) nextClose = text.indexOf(']', nextClose + 1);
         if (nextClose !== -1 && nextClose - labelStart <= 512 && text[nextClose + 1] === '(') {
-          let depth = 1;
           let j = nextClose + 2;
           const limit = Math.min(len, nextClose + 2 + 2048);
-          while (j < limit && depth > 0) {
-            if (text[j] === '\\' && j + 1 < limit) { j += 2; continue; }
-            if (text[j] === '(') depth++;
-            else if (text[j] === ')') depth--;
+          while (j < limit && (text[j] === ' ' || text[j] === '\t')) j++;
+          let matchedClose = false;
+          if (j < limit && text[j] === '<') {
+            // Angle-delimited destination (<...>) emitted by extractCleanArticle: scan as a single unit ignoring ')' inside <...>.
             j++;
+            while (j < limit && text[j] !== '>' && text[j] !== '\n') {
+              if (text[j] === '\\' && j + 1 < limit) { j += 2; continue; }
+              j++;
+            }
+            if (j < limit && text[j] === '>') {
+              j++;
+              while (j < limit && text[j] !== ')' && text[j] !== '\n') {
+                if (text[j] === '\\' && j + 1 < limit) { j += 2; continue; }
+                if (text[j] === '"' || text[j] === "'") {
+                  const q = text[j++];
+                  while (j < limit && text[j] !== q && text[j] !== '\n') {
+                    if (text[j] === '\\' && j + 1 < limit) { j += 2; continue; }
+                    j++;
+                  }
+                  if (j < limit && text[j] === q) j++;
+                  continue;
+                }
+                j++;
+              }
+              if (j < limit && text[j] === ')') {
+                j++;
+                matchedClose = true;
+              }
+            }
+          } else {
+            let depth = 1;
+            while (j < limit && depth > 0) {
+              if (text[j] === '\\' && j + 1 < limit) { j += 2; continue; }
+              if (text[j] === '(') depth++;
+              else if (text[j] === ')') depth--;
+              j++;
+            }
+            matchedClose = depth === 0;
           }
-          if (depth === 0) {
+          if (matchedClose) {
             out += text.slice(labelStart, nextClose);
             i = j;
             continue;

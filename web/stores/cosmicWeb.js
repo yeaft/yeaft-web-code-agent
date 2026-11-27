@@ -238,6 +238,7 @@ export const useCosmicWebStore = defineStore('cosmicWeb', {
     cleanArticleOpen: false,
     activeArticleUrl: null,
     activeArticleItemId: null,
+    resolvedSourceItemId: null,
 
     aiBriefLoading: false,
     aiBriefData: null,
@@ -557,7 +558,7 @@ export const useCosmicWebStore = defineStore('cosmicWeb', {
       // Unified selection transition: reset transient state on new cluster OR any source change (including reset to default or URL-only)
       const prevEffectiveSourceId = (isNewCluster || isSourceChange)
         ? null
-        : (this.aiBriefSourceItemId || this.activeArticleItemId || this.activeClusterDetail?.items?.[0]?.id || null);
+        : (this.resolvedSourceItemId || this.aiBriefSourceItemId || this.activeArticleItemId || this.activeClusterDetail?.items?.[0]?.id || null);
       if (isNewCluster || isSourceChange) {
         if (isNewCluster) this.activeClusterDetail = null;
         this.articleData = null;
@@ -566,6 +567,7 @@ export const useCosmicWebStore = defineStore('cosmicWeb', {
         this.activeArticleUrl = nextUrl;
         this.activeArticleItemId = nextItemId;
         this.readerItemId = nextItemId;
+        this.resolvedSourceItemId = nextItemId || null;
         this.aiBriefData = null;
         this.aiBriefSourceItemId = null;
         this.aiBriefError = null;
@@ -603,9 +605,10 @@ export const useCosmicWebStore = defineStore('cosmicWeb', {
           this.readerItemId = freshId;
         }
       }
-      // If fresh detail promoted a different effective source (for URL-only or default selection),
-      // invalidate retained source-derived data so brief, clean article, and follow-up regenerate cleanly.
-      const freshEffectiveSourceId = this.activeArticleItemId || detail?.items?.[0]?.id || null;
+      // Pin the concrete resolved item ID separate from user selection intent (default vs explicit item vs URL).
+      // If fresh detail promoted a different effective source, invalidate all retained source-derived state.
+      const freshEffectiveSourceId = this.activeArticleItemId || (!isUrlOnlySelection ? (detail?.items?.[0]?.id || null) : null);
+      this.resolvedSourceItemId = freshEffectiveSourceId;
       const retainedBriefDrift = Boolean(
         (this.aiBriefData || this.followUpThread.length)
         && prevEffectiveSourceId
@@ -635,7 +638,7 @@ export const useCosmicWebStore = defineStore('cosmicWeb', {
         this.followUpLoading = false;
         if (this.cleanArticleOpen) {
           void this.loadArticle(clusterId, {
-            itemId: this.activeArticleItemId || undefined,
+            itemId: this.activeArticleItemId || this.resolvedSourceItemId || undefined,
             url: this.activeArticleUrl || undefined,
           });
         }
@@ -658,7 +661,7 @@ export const useCosmicWebStore = defineStore('cosmicWeb', {
           ) return;
           void this.generateAiBrief(clusterId, {
             research: allowResearch,
-            itemId: this.activeArticleItemId || undefined,
+            itemId: this.activeArticleItemId || this.resolvedSourceItemId || undefined,
             url: this.activeArticleUrl || undefined,
           });
         };
@@ -704,7 +707,7 @@ export const useCosmicWebStore = defineStore('cosmicWeb', {
       this.cleanArticleOpen = true;
       if (!this.articleData || force) {
         await this.loadArticle(clusterId, {
-          itemId: this.activeArticleItemId || undefined,
+          itemId: this.activeArticleItemId || this.resolvedSourceItemId || undefined,
           url: this.activeArticleUrl || undefined,
           force,
         });
@@ -723,6 +726,7 @@ export const useCosmicWebStore = defineStore('cosmicWeb', {
       this.readerItemId = resolvedItemId;
       this.activeArticleItemId = resolvedItemId;
       this.activeArticleUrl = nextUrl;
+      this.resolvedSourceItemId = resolvedItemId || (!nextUrl ? (this.activeClusterDetail?.items?.[0]?.id || null) : null);
 
       invalidateChannel('article');
       invalidateChannel('aiBrief');
@@ -740,14 +744,14 @@ export const useCosmicWebStore = defineStore('cosmicWeb', {
 
       if (this.cleanArticleOpen) {
         void this.loadArticle(clusterId, {
-          itemId: this.activeArticleItemId || undefined,
+          itemId: this.activeArticleItemId || this.resolvedSourceItemId || undefined,
           url: this.activeArticleUrl || undefined,
         });
       }
 
       return this.generateAiBrief(clusterId, {
         research: !this.activeClusterDetail?.isPrivateSource,
-        itemId: this.activeArticleItemId || undefined,
+        itemId: this.activeArticleItemId || this.resolvedSourceItemId || undefined,
         url: this.activeArticleUrl || undefined,
         perspective: perspective || undefined,
         agentId: agentId || undefined,
@@ -774,6 +778,9 @@ export const useCosmicWebStore = defineStore('cosmicWeb', {
       this.readerClusterId = null;
       this.readerItemId = null;
       this.activeArticleItemId = null;
+      this.activeArticleUrl = null;
+      this.resolvedSourceItemId = null;
+      this.aiBriefSourceItemId = null;
     },
 
     async loadClusterDetail(clusterId) {
@@ -809,17 +816,16 @@ export const useCosmicWebStore = defineStore('cosmicWeb', {
         && this.readerClusterId === clusterId
         && this.sourceSelectionRev === capturedSourceRev
       );
-      const targetItemId = itemId || null;
+      // Pin to the same resolved item ID as brief/follow-up without mutating explicit selection intent.
+      const effectiveItemId = itemId || this.activeArticleItemId || this.resolvedSourceItemId || null;
+      const effectiveUrl = effectiveItemId ? null : (url || this.activeArticleUrl || null);
       this.articleLoading = true;
       this.articleError = null;
-      this.activeArticleUrl = url || null;
-      this.activeArticleItemId = targetItemId;
-      this.readerItemId = targetItemId;
 
       const params = new URLSearchParams();
       if (force) params.set('force', '1');
-      if (targetItemId) params.set('itemId', targetItemId);
-      if (url) params.set('url', url);
+      if (effectiveItemId) params.set('itemId', effectiveItemId);
+      else if (effectiveUrl) params.set('url', effectiveUrl);
       const qs = params.toString();
 
       try {
@@ -832,9 +838,8 @@ export const useCosmicWebStore = defineStore('cosmicWeb', {
         }
         const article = data.article || data;
         this.articleData = article;
-        if (article?.itemId && !this.activeArticleItemId) {
-          this.activeArticleItemId = article.itemId;
-          this.readerItemId = article.itemId;
+        if (article?.itemId && !this.resolvedSourceItemId) {
+          this.resolvedSourceItemId = article.itemId;
         }
       } catch (err) {
         if (isAbortError(err) || !isCurrentSource()) return;
@@ -857,11 +862,11 @@ export const useCosmicWebStore = defineStore('cosmicWeb', {
         && this.sourceSelectionRev === capturedSourceRev
       );
       const effectiveUrl = url || this.activeArticleUrl || undefined;
-      const matchedByUrl = !itemId && !this.activeArticleItemId && !this.readerItemId && effectiveUrl
+      const matchedByUrl = !itemId && !this.activeArticleItemId && !this.readerItemId && !this.resolvedSourceItemId && effectiveUrl
         && Array.isArray(this.activeClusterDetail?.items)
         ? this.activeClusterDetail.items.find((it) => it && it.url === effectiveUrl)
         : null;
-      const effectiveItemId = itemId || this.activeArticleItemId || this.readerItemId || matchedByUrl?.id || undefined;
+      const effectiveItemId = itemId || this.activeArticleItemId || this.readerItemId || this.resolvedSourceItemId || matchedByUrl?.id || undefined;
       this.aiBriefLoading = true;
       this.aiBriefError = null;
       try {
@@ -886,7 +891,10 @@ export const useCosmicWebStore = defineStore('cosmicWeb', {
           return;
         }
         this.aiBriefData = data.brief || data;
-        this.aiBriefSourceItemId = effectiveItemId || this.activeClusterDetail?.items?.[0]?.id || null;
+        this.aiBriefSourceItemId = effectiveItemId || this.resolvedSourceItemId || this.activeClusterDetail?.items?.[0]?.id || null;
+        if (!this.resolvedSourceItemId && this.aiBriefSourceItemId) {
+          this.resolvedSourceItemId = this.aiBriefSourceItemId;
+        }
       } catch (err) {
         if (isAbortError(err) || !isCurrentSource()) return;
         this.aiBriefError = err.message || 'Failed to generate AI brief';
@@ -909,11 +917,11 @@ export const useCosmicWebStore = defineStore('cosmicWeb', {
         && this.sourceSelectionRev === capturedSourceRev
       );
       const effectiveUrl = url || this.activeArticleUrl || undefined;
-      const matchedByUrl = !itemId && !this.activeArticleItemId && !this.readerItemId && effectiveUrl
+      const matchedByUrl = !itemId && !this.activeArticleItemId && !this.readerItemId && !this.resolvedSourceItemId && effectiveUrl
         && Array.isArray(this.activeClusterDetail?.items)
         ? this.activeClusterDetail.items.find((it) => it && it.url === effectiveUrl)
         : null;
-      const effectiveItemId = itemId || this.activeArticleItemId || this.readerItemId || matchedByUrl?.id || undefined;
+      const effectiveItemId = itemId || this.activeArticleItemId || this.readerItemId || this.resolvedSourceItemId || matchedByUrl?.id || undefined;
       this.followUpLoading = true;
       this.followUpError = null;
       try {

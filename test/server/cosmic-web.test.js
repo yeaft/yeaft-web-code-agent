@@ -1065,9 +1065,14 @@ describe('2.0 graph and AI contracts', () => {
     const pubNode = marked.graph.nodes.find(n => n.clusterId === pubId);
     expect(pubNode?.mediaPreview?.proxyUrl).toContain('&sig=');
 
-    // CW2-01 & Round 3 Blocker #2: private RSS feed media is NEVER signed, exposed in graph/cluster/feed items, OR sent to AI brief/followUp payloads
+    // CW2-01 & Round 3/4/5/6 Blocker: private RSS feed media, linked/angle-delimited/parenthesized URLs in articleMarkdown AND summaryExcerpt are fully redacted while Clean Article stays intact
     const secretMediaUrl = 'https://private.example/secret-token-img.png';
-    const privItemWithImg = { ...item('Private img note', 'https://private.example/img-note'), media: [{ url: secretMediaUrl, kind: 'image' }] };
+    const excerptSecretUrl = 'https://files.example/summary(v1).png?token=EXCERPT_SECRET';
+    const privItemWithImg = {
+      ...item('Private img note', 'https://private.example/img-note'),
+      summaryExcerpt: `Private brief note with ${excerptSecretUrl} inside.`,
+      media: [{ url: secretMediaUrl, kind: 'image' }],
+    };
     ingestCosmicWebItems(source('rss-priv-img', 'custom-sports', 'alice'), [privItemWithImg], NOW);
     const privBoot = svc.bootstrap('alice', 'user');
     const privNode = privBoot.graph.nodes.find(n => n.headline === 'Private img note');
@@ -1077,24 +1082,33 @@ describe('2.0 graph and AI contracts', () => {
     const privDet = await svc.cluster('alice', privNode.clusterId);
     expect(privDet.media).toEqual([]);
     expect(JSON.stringify(privDet)).not.toContain(secretMediaUrl);
-    // Round 4 & 5 Blocker #2/#1: linked AND parenthesized bare private URLs inside cached articleMarkdown must be fully redacted while Clean Article stays intact
+    // Round 6 Blocker #1: test REAL extractCleanArticle -> aiBrief path with angle-delimited (<...>) link containing unmatched ')'
     const privItemId = privDet.items[0].id;
+    const angleParenUrl = 'https://files.example/report)v2.pdf?token=ANGLE_PAREN_SECRET';
     const parenSecretUrl = 'https://files.example/chart(v2).png?token=PRIVATE_SENTINEL';
-    const linkedPrivateMd = `Quarterly notes with [![Chart](${secretMediaUrl})](${secretMediaUrl}), [Figure](${secretMediaUrl}), ${parenSecretUrl}, and (${parenSecretUrl}).`;
+    const extractedPrivate = extractCleanArticle(
+      `<article><h1>Private Memo</h1><p>Quarterly notes with <a href="${angleParenUrl}">Attachment</a> and bare ${parenSecretUrl} and (${parenSecretUrl}).</p></article>`,
+      'https://private.example/img-note',
+      'Private img note',
+    );
+    expect(extractedPrivate.markdown).toContain(`(<${angleParenUrl}>)`);
     db.setArticleCache('alice', privItemId, {
-      title: 'Private img note', markdown: linkedPrivateMd, quality: 'full', itemId: privItemId, clusterId: privNode.clusterId, summaryExcerpt: 'Note',
+      ...extractedPrivate, itemId: privItemId, clusterId: privNode.clusterId, summaryExcerpt: privItemWithImg.summaryExcerpt,
     }, NOW + HOUR);
     const cleanPrivateArt = await svc.article('alice', privNode.clusterId, { itemId: privItemId });
-    expect(cleanPrivateArt.markdown).toContain(secretMediaUrl);
+    expect(cleanPrivateArt.markdown).toContain('ANGLE_PAREN_SECRET');
     await svc.aiBrief('alice', 'user', privNode.clusterId, { research: true, force: true });
     const privBriefJson = JSON.stringify(requestAi.mock.lastCall[0].payload);
     expect(privBriefJson).not.toContain(secretMediaUrl);
     expect(privBriefJson).not.toContain('PRIVATE_SENTINEL');
-    expect(requestAi.mock.lastCall[0].payload.articleMarkdown).toContain('Quarterly notes');
+    expect(privBriefJson).not.toContain('ANGLE_PAREN_SECRET');
+    expect(privBriefJson).not.toContain('EXCERPT_SECRET');
+    expect(requestAi.mock.lastCall[0].payload.articleMarkdown).toContain('Attachment');
+    // Round 6 Nit 1: followUp redacts the sentinel placed directly in the selected item's summaryExcerpt
     await svc.followUp('alice', 'user', privNode.clusterId, { question: 'Any updates?', research: true });
     const privFuJson = JSON.stringify(requestAi.mock.lastCall[0].payload);
     expect(privFuJson).not.toContain(secretMediaUrl);
-    expect(privFuJson).not.toContain('PRIVATE_SENTINEL');
+    expect(privFuJson).not.toContain('EXCERPT_SECRET');
 
     // CW2-05 & Round 3 Blocker #1: legacy v1 Agent (no cosmic_web_cancel) retains remote slot accounting after caller abort,
     // defers subsequent requests, AND hands off freed slots when awakened waiters hit the rate boundary (never hanging).

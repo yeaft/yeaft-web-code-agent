@@ -1706,11 +1706,13 @@ describe('Cosmic Web — Pinia store & interactive overlay', () => {
     await flushPromises();
     expect(wrapper.find('.cw-reader-modal .cw-clean-article-panel').text()).toContain('Clean extracted article paragraph without AI.');
 
-    // CW2-06: resetting same cluster back to default itemId: null clears previous item-2 state
+    // CW2-06 & Round 6 Blocker #2: resetting same cluster back to default keeps default intent (activeArticleItemId=null)
+    // while pinning resolvedSourceItemId='item-1' across brief, Clean Article, and follow-up even if server promotes a newer default mid-session
     await webStore.openClusterReader('c-multi', { expanded: true });
     await flushPromises();
     expect(webStore.activeArticleItemId).toBeNull();
-    expect(webStore.aiBriefData?.tldr).toBe('Brief for default');
+    expect(webStore.resolvedSourceItemId).toBe('item-1');
+    expect(webStore.aiBriefData?.tldr).toBe('Brief for item-1');
 
     // Round 3 Blocker #4 & Round 4 Nit 2: URL-only selection of source 2 aligns excerpt, active chip, Clean Article query, AI brief, AND follow-up
     const priorFollowUps = followUpBodies.length;
@@ -1743,18 +1745,35 @@ describe('Cosmic Web — Pinia store & interactive overlay', () => {
     expect(webStore.followUpThread).toEqual([]);
     expect(wrapper.find('.cw-reader-modal .cw-clean-article-panel').text()).toContain('Refreshed Source 2 clean paragraph.');
 
-    // Round 5 Blocker #2 (default-source path): reopening default source when fresh detail promotes a new first item invalidates retained state & regenerates!
+    // Round 5 & 6 Blocker #2 (default-source pinning & reopen drift):
+    // 1. Open default -> pinned to item-1 (activeArticleItemId stays null).
+    // 2. Server promotes item-0-new while reader stays open -> Clean Article & Follow-up STILL stay pinned to item-1 (no cross-source mismatch or activeArticleItemId mutation)!
+    // 3. Reopening default fetches fresh detail -> detects drift item-1 -> item-0-new, invalidates all three, and regenerates for item-0-new!
     await webStore.openClusterReader('c-multi', { expanded: true });
     await flushPromises();
-    expect(webStore.aiBriefSourceItemId).toBe('item-1');
-    webStore.followUpThread = [{ id: 'stale-def', question: 'Q', answer: 'A', citations: [], media: [] }];
+    expect(webStore.activeArticleItemId).toBeNull();
+    expect(webStore.resolvedSourceItemId).toBe('item-1');
+    expect(webStore.aiBriefData?.tldr).toBe('Brief for item-1');
+    // Server promotes item-0-new while reader stays open
     detailItems = [
       { id: 'item-0-new', sourceName: 'Source 0 Breaking', title: 'S0', summaryExcerpt: 'Excerpt 0 Breaking', url: 'https://s0.example/breaking' },
       { id: 'item-1', sourceName: 'Source 1', title: 'S1', summaryExcerpt: 'Excerpt 1', url: 'https://s1.example/a' },
     ];
+    await wrapper.find('.cw-reader-modal .cw-clean-article-toggle').trigger('click');
+    await flushPromises();
+    expect(webStore.articleData?.itemId).toBe('item-1');
+    expect(webStore.activeArticleItemId).toBeNull();
+    const beforePinnedFu = followUpBodies.length;
+    await webStore.askFollowUp('c-multi', 'Pinned default follow-up?');
+    expect(followUpBodies.length).toBe(beforePinnedFu + 1);
+    expect(followUpBodies.at(-1).itemId).toBe('item-1');
+    // Now reopen default -> fresh detail promotes item-0-new -> invalidates brief, clean article & follow-up!
     await webStore.openClusterReader('c-multi', { expanded: true });
     await flushPromises();
+    expect(webStore.activeArticleItemId).toBeNull();
+    expect(webStore.resolvedSourceItemId).toBe('item-0-new');
     expect(webStore.aiBriefSourceItemId).toBe('item-0-new');
+    expect(webStore.aiBriefData?.tldr).toBe('Brief for item-0-new');
     expect(webStore.followUpThread).toEqual([]);
     // Restore original items before remaining assertions
     detailItems = [
