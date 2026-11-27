@@ -20,7 +20,7 @@ test.describe('Yeaft Cosmos UI', () => {
     await expect(page.locator('.cosmos-page')).toBeVisible({ timeout: 15000 });
     await expect(page.locator('.cosmos-gl-canvas')).toBeVisible();
 
-    mockAgent.send({ type: 'agent_capabilities_updated', capabilities: ['session_auto_route', 'work_center', 'session_scenes', 'plaintext-ok'] });
+    mockAgent.send({ type: 'agent_capabilities_updated', capabilities: ['session_auto_route', 'session_scenes', 'plaintext-ok'] });
     // Wait for real WebSocket + mockAgent handshake before seeding multi-planet test fixture
     await page.waitForFunction((agentId) => {
       const chat = window.Pinia?.useChatStore?.();
@@ -37,7 +37,7 @@ test.describe('Yeaft Cosmos UI', () => {
           online: true,
           status: 'ready',
           workDir: '/Users/dev/yeaft',
-          capabilities: ['session_auto_route', 'work_center', 'session_scenes', 'session_scene_frontend', 'workbench_session_routes', 'terminal', 'file_editor'],
+          capabilities: ['session_auto_route', 'session_scenes', 'session_scene_frontend', 'workbench_session_routes', 'terminal', 'file_editor'],
         },
         {
           id: 'z-agent-cloud',
@@ -45,7 +45,7 @@ test.describe('Yeaft Cosmos UI', () => {
           online: true,
           status: 'ready',
           workDir: '/srv/yeaft-prod',
-          capabilities: ['session_auto_route', 'work_center', 'workbench_session_routes', 'terminal', 'file_editor'],
+          capabilities: ['session_auto_route', 'workbench_session_routes', 'terminal', 'file_editor'],
         },
       ];
       chat.workbenchRouteProtocolSupported = true;

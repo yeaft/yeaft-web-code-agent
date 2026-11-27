@@ -48,7 +48,7 @@ export default {
         </button>
         <SidebarDigitalPerson :collapsed="true" />
         <SidebarWorkCenter
-          v-if="chatStore && chatStore.workCenterUiEnabled"
+          v-if="chatStore?.legacyProductSurfacesEnabled && chatStore.workCenterUiEnabled"
           :agents="chatStore?.agents"
           :active-agent-id="chatStore.workCenterAgentId"
           :collapsed="true"
@@ -81,7 +81,7 @@ export default {
           />
           <div class="sidebar-header-actions">
             <SidebarWorkCenter
-              v-if="chatStore && chatStore.workCenterUiEnabled"
+              v-if="chatStore?.legacyProductSurfacesEnabled && chatStore.workCenterUiEnabled"
               :agents="chatStore?.agents"
               :active-agent-id="chatStore.workCenterAgentId"
               @open="onOpenWorkCenter"

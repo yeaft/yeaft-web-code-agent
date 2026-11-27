@@ -13,9 +13,7 @@ import { handleAgentConversation } from './handlers/agent-conversation.js';
 import { handleAgentOutput } from './handlers/agent-output.js';
 import { handleAgentSessionTurnDelete } from './handlers/session-turn-delete.js';
 import { handleAgentSessionDiscovery } from './handlers/session-discovery.js';
-import { handleAgentWorkCenter } from './handlers/agent-work-center.js';
 import { handleAgentCreation } from './handlers/agent-creation.js';
-import { handleAgentPerson } from './handlers/client-person.js';
 import { handleAgentFileTerminal } from './handlers/agent-file-terminal.js';
 import { handleAgentSync } from './handlers/agent-sync.js';
 import { recordPerfTraceEvent } from './perf-trace.js';
@@ -326,8 +324,6 @@ function handleAgentDisconnect(agentId, agentName, ws) {
       restart: 'restart_agent_ack', dream: 'dream_enabled_changed', upgrade: 'upgrade_agent_ack',
       'plugins:load': 'yeaft_plugins', 'plugins:update': 'yeaft_plugins_updated',
       'telemetry:load': 'telemetry_settings', 'telemetry:update': 'telemetry_settings_updated',
-      'work-center-feature:load': 'work_center_feature_settings',
-      'work-center-feature:update': 'work_center_feature_settings_updated',
     };
     void sendToWebClient(client, {
       type: responseTypes[pending.operation] || 'agent_request_error',
@@ -490,8 +486,6 @@ async function handleAgentMessage(agentId, msg, ws) {
   // Dispatch to handler sub-modules
   if (await handleAgentConversation(agentId, agent, msg)) return;
   if (await handleAgentBrowser(agentId, agent, msg)) return;
-  if (await handleAgentWorkCenter(agentId, msg)) return;
-  if (await handleAgentPerson(agentId, msg)) return;
   if (await handleAgentOutput(agentId, agent, msg)) return;
   if (await handleAgentFileTerminal(agentId, agent, msg)) return;
   if (await handleAgentSync(agentId, agent, msg)) return;

@@ -6,7 +6,7 @@ Yeaft 在同一个浏览器中提供三条执行路径。一台已连接 Agent �
 | --- | --- | --- |
 | **Claude Code** | 精确的 Claude Code 工具、skills、MCP、compact/clear 命令、sub-agent event 和 resume 行为 | 每个 conversation 一个本机已安装并登录的 Claude Code CLI 进程 |
 | **GitHub Copilot** | Copilot entitlement、ACP 工具权限确认和 Copilot model catalog | 每个 conversation 一个本机已安装并登录的 `copilot --acp` 进程 |
-| **Yeaft Code Agent** | 原生 provider routing、1..N 个 VP、33 个内置工具、scoped memory、Project、sub-agent 和 Work Center | `yeaft-agent` 内的原生 engine；不模拟所有 vendor CLI command |
+| **Yeaft Code Agent** | 原生 provider routing、1..N 个 VP、内置工具、scoped memory、Project和 sub-agent | `yeaft-agent` 内的原生 engine；不模拟所有 vendor CLI command |
 
 ## Claude Code
 
@@ -56,11 +56,9 @@ Yeaft 在同一个浏览器中提供三条执行路径。一台已连接 Agent �
 - 已有 Copilot subscription，需要 ACP permission flow → **GitHub Copilot**。
 - 一个带记忆、provider-neutral 的代码 Agent → **只有 1 个 VP 的 Yeaft Session**。
 - 并行 developer/reviewer/research 角色 → **多个 VP 的 Yeaft Session**。
-- 需要 Action planning、等待、重试或恢复的持久目标 → **Work Center**，通常可以从 Yeaft Session 创建。
 
 ## 相关页面
 
 - [Claude Code conversation](./chat-mode.md)
 - [GitHub Copilot conversation](./copilot-mode.md)
 - [Yeaft Session 与 Project](./yeaft-session.md)
-- [Work Center](./work-center.md)

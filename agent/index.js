@@ -26,8 +26,6 @@ import {
 import { loadConfig as loadYeaftConfig } from './yeaft/config.js';
 import { initYeaftDir } from './yeaft/init.js';
 import { SESSION_SCENE_CAPABILITIES } from './yeaft/sessions/scene-ids.js';
-import { isWorkCenterEnabled, startWorkCenterFeature } from './yeaft/work-center/feature.js';
-import { supportsWorkItemAttachments } from './yeaft/work-center/attachment-platform.js';
 import { updateBrowserRuntimeSettings } from './yeaft/config-api.js';
 import { bootBrowserRuntime, shutdownBrowserRuntime } from './browser-runtime/index.js';
 import {
@@ -141,7 +139,6 @@ const CONFIG = {
   workDir: WORK_DIR,
   yeaftDir: YEAFT_DIR,
   telemetry: loadYeaftConfig({ dir: YEAFT_DIR }).telemetry,
-  workCenterEnabled: isWorkCenterEnabled(process.env, loadYeaftConfig({ dir: YEAFT_DIR })),
   reconnectInterval: fileConfig.reconnectInterval,
   agentSecret,
   // 显式禁用的工具（非 MCP 相关）
@@ -179,14 +176,10 @@ async function detectCapabilities() {
   // agent build can speak plaintext WS frames. New servers see this and
   // flip `agent.encryptOutbound = false`, stopping outbound encryption
   // to this peer. Old servers ignore the unknown capability token.
-  const capabilities = ['scheduled_tasks', 'scheduled_task_month_days', 'background_tasks', 'file_editor', 'ping_session', 'plaintext-ok', 'workbench_session_routes', 'workbench_request_correlation', 'workbench_terminal_cleanup_fence', 'workbench_file_content_chunks', 'workbench_video_stream', 'session_history_search', 'session_discovery', 'session_shared_knowledge', 'session_auto_route', 'session_history_outline', 'session_history_window_prefetch', 'session_fork_from_turn', 'session_fork_while_running', 'session_merge', 'session_delete_turn', 'session_turn_retry', 'session_scenes', 'file_reference_resolution', 'response_image_preview', 'yeaft_plugins', 'yeaft_managed_skills', 'settings_request_correlation', 'work_center_feature_settings'];
-  capabilities.push('digital_person', 'creations', 'session_attachment_refs', getAgentUpgradeCapability());
+  const capabilities = ['scheduled_tasks', 'scheduled_task_month_days', 'background_tasks', 'file_editor', 'ping_session', 'plaintext-ok', 'workbench_session_routes', 'workbench_request_correlation', 'workbench_terminal_cleanup_fence', 'workbench_file_content_chunks', 'workbench_video_stream', 'session_history_search', 'session_discovery', 'session_shared_knowledge', 'session_auto_route', 'session_history_outline', 'session_history_window_prefetch', 'session_fork_from_turn', 'session_fork_while_running', 'session_merge', 'session_delete_turn', 'session_turn_retry', 'session_scenes', 'file_reference_resolution', 'response_image_preview', 'yeaft_plugins', 'yeaft_managed_skills', 'settings_request_correlation'];
+  capabilities.push('creations', 'session_attachment_refs', getAgentUpgradeCapability());
   // Scenes added after 'session_scenes' shipped are advertised one by one.
   capabilities.push(...Object.values(SESSION_SCENE_CAPABILITIES));
-  if (ctx.CONFIG?.workCenterEnabled === true) {
-    capabilities.push('work_center', 'work_center_message_v2', 'work_center_workbench');
-    if (supportsWorkItemAttachments()) capabilities.push('work_item_attachments');
-  }
   const pty = await loadNodePty();
   if (pty) capabilities.push('terminal');
   if (ctx.browserRuntime) {
@@ -401,14 +394,6 @@ function cleanup() {
     }
     ctx.conversations.clear();
     try {
-      const { shutdownWorkCenter } = await import('./yeaft/work-center/bridge.js');
-      await shutdownWorkCenter();
-    } catch {}
-    try {
-      const { shutdownPerson } = await import('./yeaft/person/bridge.js');
-      await shutdownPerson();
-    } catch {}
-    try {
       const { shutdownCreations } = await import('./yeaft/creations/bridge.js');
       await shutdownCreations();
     } catch {}
@@ -497,21 +482,6 @@ process.on('SIGTERM', async () => {
   } catch (err) {
     console.warn(`[Agent] models.dev prime failed (will use config/defaults): ${err?.message || err}`);
   }
-  if (ctx.CONFIG?.workCenterEnabled === true) {
-    const bridge = await import('./yeaft/work-center/bridge.js');
-    const startup = await startWorkCenterFeature(true, bridge.bootWorkCenter);
-    ctx.CONFIG.workCenterEnabled = startup.effective;
-    ctx.workCenterStartupError = startup.runtimeError;
-    if (startup.effective) {
-      console.log('[Agent] Work Center watcher started');
-    } else {
-      bridge.setWorkCenterFeatureEnabled(false);
-      console.warn(`[Agent] Work Center failed to start: ${startup.runtimeError}`);
-    }
-  } else {
-    console.log('[Agent] Work Center disabled; watcher not started');
-  }
-  // Runtime capabilities must reflect the effective startup state.
   ctx.agentCapabilities = await detectCapabilities();
   connect();
   const { startDailySharedKnowledge } = await import('./yeaft/shared-knowledge/scheduler.js');

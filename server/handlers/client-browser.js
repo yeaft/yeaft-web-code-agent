@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { isRetiredBrowserSource } from '../retired-features.js';
 import { CONFIG } from '../config.js';
 import { agents } from '../context.js';
 import { sendToAgent, sendToWebClient } from '../ws-utils.js';
@@ -84,7 +85,6 @@ function canonicalCreate(msg) {
       kind: clean(msg.sourceRef.kind, 32),
       sessionId: clean(msg.sourceRef.sessionId),
       conversationId: clean(msg.sourceRef.conversationId),
-      workItemId: clean(msg.sourceRef.workItemId),
     } : null,
     options: {
       initialUrl,
@@ -158,6 +158,7 @@ export async function handleClientBrowser(client, msg, checkAgentAccess) {
   }
 
   if (msg.type === 'browser_session_create') {
+    if (isRetiredBrowserSource(msg.sourceRef)) return fail(client, msg, 'feature_disabled', 'Work Center is disabled');
     const canonical = canonicalCreate(msg);
     if (!canonical) return fail(client, msg, 'browser_url_invalid');
     const registration = registerBrowserCreateRequest({

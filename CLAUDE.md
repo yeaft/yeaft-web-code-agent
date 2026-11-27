@@ -18,7 +18,6 @@ Yeaft 是运行在自有机器上的代码 Agent 的 Web 控制面。用户在�
 | VP（Virtual Person） | 旧 Session 与已有任务流程的兼容角色。普通场景会话不绑定 VP。 |
 | Session | 原生引擎的持久对话、历史和场景归属单元。每轮在接受时固定场景，独立轮次可并行；未选场景的旧 Session 保留原路由。 |
 | Project | 用户级 Session 归属与共享 instruction；成员 Session 的 transcript 不会自动互相注入。 |
-| Work Center | 跨越单次对话 turn 的持久任务系统。WorkItem 表示目标与验收条件，Action 表示工作单元，Run 表示一次执行尝试；它不是另一种 Session。 |
 
 ### 兼容术语
 
@@ -127,9 +126,9 @@ Skills 有 bundled、user、project tiers；`skills.js` 定义 precedence。MCP 
 
 工具超时不代表外部副作用已停止。`managed-cli.js` 可复用或安装用户级辅助 CLI，同时保留 Node fallback，不要求系统包管理器或 `sudo`。
 
-## Work Center
+## Work Center（已停用）
 
-Work Center 是 Agent instance 级的持久目标执行系统，代码位于 `agent/yeaft/work-center/`。WorkItem 保存目标、验收条件、workspace、对话与附件；Action / Run 保存实际工作及其结果证据。
+Work Center 过去是 Agent instance 级的持久目标执行系统；与数字人一起从产品入口和运行时停用，已有数据保留。历史实现位于 `agent/yeaft/work-center/`。WorkItem 保存目标、验收条件、workspace、对话与附件；Action / Run 保存实际工作及其结果证据。
 
 当前代码包含 Coordinator 驱动的动态协调（`coordinator.js`、`dynamic-coordination.js`）与旧 workflow 的兼容路径。动态路径根据已有事实创建当前必要的 Action，不预建 stages、依赖或后继；`sourceActionIds` 表达结果来源。旧 `workflow_snapshot` 等存储名称不代表新产品必须沿用 Action graph 模型。
 
@@ -143,7 +142,7 @@ Work Center 是 Agent instance 级的持久目标执行系统，代码位于 `ag
 
 前端采用 Vue 3 + Pinia。`chat.js` 管连接、conversation 投影和工作台状态，`sessions.js` 管 Agent-scoped Session inventory，`vp.js` 管角色库，`auth.js` 管身份。CLI Chat 与 Yeaft Session 复用 `MessageList` / `AssistantTurn` / `ToolLine`，但历史协议和 conversation identity 不同。
 
-主要 wire：CLI Chat 为 `send_message` → `claude_output`；原生 Session 为 `yeaft_session_send` → `yeaft_output`。原生发送 payload 使用 `sessionId`，既有 store 签名 `sendYeaftSessionMessage({ groupId, ... })` 是局部 legacy alias。Work Center 经 Server owner check 中继到 Agent service。
+主要 wire：CLI Chat 为 `send_message` → `claude_output`；原生 Session 为 `yeaft_session_send` → `yeaft_output`。原生发送 payload 使用 `sessionId`，既有 store 签名 `sendYeaftSessionMessage({ groupId, ... })` 是局部 legacy alias。旧 Work Center 和数字人请求会返回已停用。
 
 开发页面使用本地 vendor 和浏览器模块；生产由 `web/build.js` / esbuild 生成 `web/dist`，无 CDN 运行时依赖。
 

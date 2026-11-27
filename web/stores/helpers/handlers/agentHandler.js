@@ -3,6 +3,7 @@
  * The most complex handler — includes auto-restore and reconnection logic.
  */
 
+import { LEGACY_PRODUCT_SURFACES_ENABLED } from '../../../utils/legacy-product-surfaces.js';
 import { isRecentlyClosed, stopProcessingWatchdog } from '../watchdog.js';
 import { clearSessionLoading, restorePanels } from '../session.js';
 import { maxDbMessageId } from '../messages.js';
@@ -136,7 +137,9 @@ export function handleAgentList(store, msg) {
   }
   // Sidebar catch-up waits for an authenticated inventory of this socket, not
   // merely onopen with an old online Agent record. Routine broadcasts dedupe.
-  store.workCenterActivityConnectionGeneration = Number(store.chatHistoryConnectionGeneration || 0);
+  if (LEGACY_PRODUCT_SURFACES_ENABLED) {
+    store.workCenterActivityConnectionGeneration = Number(store.chatHistoryConnectionGeneration || 0);
+  }
   store._hasHandledAgentList = true;
   if (hadAgentList) {
     for (const agent of nextAgents) {
@@ -190,7 +193,7 @@ export function handleAgentList(store, msg) {
       : null;
     const nextRec = nextAgents.find(a => a.id === trackedAgentId) || null;
     const needsReconnectCatchUp = store.currentView === 'yeaft'
-      || (store.workCenterOpen && store.workCenterAgentId === trackedAgentId);
+      || (LEGACY_PRODUCT_SURFACES_ENABLED && store.workCenterOpen && store.workCenterAgentId === trackedAgentId);
     if (needsReconnectCatchUp && detectYeaftAgentRestart(seen, nextRec)) {
       store._yeaftReconnectCatchUpPending = true;
     }
@@ -389,7 +392,7 @@ export function handleAgentList(store, msg) {
       // Agent restart must reconcile the currently visible board from its
       // durable list. Keep this on the same online-restore edge as selection:
       // routine latency/status agent_list broadcasts must not reload the board.
-      if (shouldRestoreAgent && store.workCenterOpen
+      if (LEGACY_PRODUCT_SURFACES_ENABLED && shouldRestoreAgent && store.workCenterOpen
           && store.workCenterAgentId === store.currentAgent
           && typeof store.listWorkItems === 'function') {
         const filters = store._workCenterListFiltersByAgent?.[store.workCenterAgentId] || {};

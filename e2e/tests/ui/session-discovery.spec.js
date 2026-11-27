@@ -25,7 +25,7 @@ async function openSidebar(page, serverUrl, handle, { mobile = false, locale = '
       } else if (msg.type === 'agent_list') {
         msg.agents = [
           { id: 'alpha', name: 'Alpha', online: true, capabilities: ['session_discovery'] },
-          { id: 'beta', name: 'Beta', online: true, capabilities: ['session_discovery', 'digital_person'] },
+          { id: 'beta', name: 'Beta', online: true, capabilities: ['session_discovery'] },
           { id: 'legacy', name: 'Legacy', online: true, capabilities: [] },
           { id: 'offline', name: 'Offline', online: false, capabilities: ['session_discovery'] },
         ];
@@ -58,7 +58,6 @@ async function openSidebar(page, serverUrl, handle, { mobile = false, locale = '
     const chat = window.Pinia.useChatStore();
     chat.currentView = mobile ? 'yeaft' : 'chat';
     chat.currentAgent = 'beta';
-    chat.digitalPersonUiEnabledByAgent = { beta: true };
     chat.sidebarCollapsed = false;
     if (mobile) chat.sessionSidebarOpen = true;
   }, mobile);
@@ -89,7 +88,7 @@ function mockSearch() {
   };
 }
 
-test('sidebar search before Digital Person searches as you type, with scoped results and no dialog', async ({ page, serverUrl }) => {
+test('sidebar Session search updates as you type, with scoped results and no dialog', async ({ page, serverUrl }) => {
   const search = mockSearch();
   const socket = await openSidebar(page, serverUrl, search.handle, { holdDiscoveryAck: true });
   const sidebar = page.locator('.sidebar-navigation:visible');
@@ -100,8 +99,8 @@ test('sidebar search before Digital Person searches as you type, with scoped res
   socket.enableDiscovery();
   await expect(trigger).toBeVisible();
   const order = await sidebar.locator('.sidebar-primary-actions > button').evaluateAll(buttons => buttons.map(button => button.className));
-  expect(order.findIndex(classes => classes.includes('sidebar-search-trigger')) + 1)
-    .toBe(order.findIndex(classes => classes.includes('sidebar-person-trigger')));
+  expect(order.findIndex(classes => classes.includes('sidebar-search-trigger'))).toBe(order.length - 1);
+  await expect(sidebar.locator('.sidebar-person-trigger')).toHaveCount(0);
   await trigger.press('Enter');
   const query = sidebar.getByRole('searchbox');
   await expect(query).toBeFocused();

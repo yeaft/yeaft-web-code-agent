@@ -6,7 +6,7 @@ Yeaft exposes three execution paths in one browser. A connected Agent may run al
 | --- | --- | --- |
 | **Claude Code** | Exact Claude Code tools, skills, MCP, compact/clear commands, sub-agent events, and resume behavior | One locally installed and authenticated Claude Code CLI process per conversation |
 | **GitHub Copilot** | Copilot entitlement, ACP tool-permission prompts, and Copilot's model catalog | One locally installed and authenticated `copilot --acp` process per conversation |
-| **Yeaft Code Agent** | Native provider routing, 1..N VPs, 33 built-in tools, scoped memory, Projects, sub-agents, and Work Center | Native engine inside `yeaft-agent`; it does not emulate every vendor CLI command |
+| **Yeaft Code Agent** | Native provider routing, 1..N VPs, built-in tools, scoped memory, Projects, and sub-agents | Native engine inside `yeaft-agent`; it does not emulate every vendor CLI command |
 
 ## Claude Code
 
@@ -56,11 +56,9 @@ The unified folder tree is present from the first paint. While the catalog is pe
 - Existing Copilot subscription and ACP permission flow → **GitHub Copilot**.
 - One provider-neutral coding assistant with memory → **Yeaft Session with one VP**.
 - Parallel developer/reviewer/research roles → **Yeaft Session with several VPs**.
-- Persistent goal with Action planning, waiting, retry, or recovery → **Work Center**, often created from a Yeaft Session.
 
 ## Related pages
 
 - [Claude Code conversation](./chat-mode.md)
 - [GitHub Copilot conversation](./copilot-mode.md)
 - [Yeaft Sessions and Projects](./yeaft-session.md)
-- [Work Center](./work-center.md)

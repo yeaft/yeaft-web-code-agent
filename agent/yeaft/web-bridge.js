@@ -6374,7 +6374,6 @@ export async function ensureSessionLoaded(opts = {}) {
       skipSkills: true,
       serverMode: true,
       managedCliReady: ctx.managedCliReady,
-      workCenterEnabled: ctx.CONFIG?.workCenterEnabled === true,
     });
     claimRuntimeOwnership(session);
 
@@ -9179,7 +9178,6 @@ export async function resetYeaftSession() {
       skipSkills: true,
       serverMode: true,
       managedCliReady: ctx.managedCliReady,
-      workCenterEnabled: ctx.CONFIG?.workCenterEnabled === true,
     });
     claimRuntimeOwnership(session);
     installYeaftRuntimeBridge(session);

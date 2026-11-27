@@ -60,7 +60,6 @@ import listAgents from './list-agents.js';
 import routeForward from './route-forward.js';
 
 // --- P1 Durable work ---
-import createWorkItem from './create-work-item.js';
 
 // H2.f.4: user-facing thread tools (spawnThread/switchThread/listThreads/...)
 // were deleted. PR #797 reintroduces runtime-owned VP thread routing below the
@@ -128,9 +127,6 @@ export const allTools = [
 
   // P1 Routing (task-334d)
   routeForward,
-
-  // P1 Durable work
-  createWorkItem,
 
   // P2 Auxiliary
   jsRepl,

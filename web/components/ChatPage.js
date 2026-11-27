@@ -57,7 +57,7 @@ export default {
             <NavigationIcon name="add" :size="18" />
           </button>
           <SidebarWorkCenter
-            v-if="store.workCenterUiEnabled"
+            v-if="store.legacyProductSurfacesEnabled && store.workCenterUiEnabled"
             :agents="store.agents"
             :active-agent-id="store.workCenterAgentId"
             :collapsed="true"
@@ -89,7 +89,7 @@ export default {
             />
             <div class="sidebar-header-actions">
               <SidebarWorkCenter
-                v-if="store && store.workCenterUiEnabled"
+                v-if="store.legacyProductSurfacesEnabled && store.workCenterUiEnabled"
                 :agents="store.agents"
                 :active-agent-id="store.workCenterAgentId"
                 @open="store.enterWorkCenter"
@@ -158,8 +158,8 @@ export default {
         :inert="store.digitalPersonOpen && digitalPersonModalOpen ? true : undefined" controls="session-sidebar" />
 
       <ScheduledTaskNotifications :store="store" />
-      <DigitalPersonPage v-if="store.digitalPersonOpen" @toggle-sidebar="store.toggleSessionSidebar()" @interaction-blocked="digitalPersonModalOpen = $event" />
-      <WorkCenterPage v-else-if="store.workCenterOpen" />
+      <DigitalPersonPage v-if="store.legacyProductSurfacesEnabled && store.digitalPersonOpen" @toggle-sidebar="store.toggleSessionSidebar()" @interaction-blocked="digitalPersonModalOpen = $event" />
+      <WorkCenterPage v-else-if="store.legacyProductSurfacesEnabled && store.workCenterOpen" />
       <PluginCenterPage v-else-if="store.pluginCenterOpen" @close="store.closePluginCenter()" @toggle-sidebar="store.toggleSessionSidebar()" />
 
       <!-- Single-panel Main Chat Area -->

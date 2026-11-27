@@ -1,4 +1,5 @@
 import { randomUUID } from 'crypto';
+import { hasLegacyWorkCenterRuntime, LEGACY_WORK_CENTER_UPGRADE, withoutRetiredCapabilities } from '../retired-features.js';
 import { CONFIG } from '../config.js';
 import {
   sessionDb,
@@ -110,7 +111,9 @@ async function sendYeaftSessionSendError(client, msg, agentId, code = 'agent_una
         ? 'Agent access denied; Session message was not sent.'
         : code === 'session_auto_route_unsupported'
           ? 'The selected Agent must be upgraded to support automatic Session routing.'
-          : 'No agent available; Session message was not sent. Please retry.',
+          : code === 'legacy_work_center_active'
+            ? LEGACY_WORK_CENTER_UPGRADE
+            : 'No agent available; Session message was not sent. Please retry.',
   });
 }
 
@@ -528,7 +531,7 @@ export async function handleClientConversation(clientId, client, msg, checkAgent
             agentId: msg.agentId,
             agentName: agent.name,
             workDir: agent.workDir,
-            capabilities: agent.capabilities || ['terminal', 'file_editor', 'background_tasks'],
+            capabilities: withoutRetiredCapabilities(agent.capabilities || ['terminal', 'file_editor', 'background_tasks']),
             ...(agent.capabilityMetadataProvided === true ? { capabilityMetadataProvided: true } : {}),
             version: agent.version || null,
             conversations: filteredConvs,
@@ -1909,6 +1912,10 @@ export async function handleClientConversation(clientId, client, msg, checkAgent
             await sendVpSnapshotError(client, msg, 'The selected Agent is offline.');
             return true;
           }
+        }
+        if (isSessionSend && hasLegacyWorkCenterRuntime(relayAgent)) {
+          await sendYeaftSessionSendError(client, msg, relayAgentId, 'legacy_work_center_active');
+          return true;
         }
         if (isAutoRouteSend && !relayAgent?.capabilities?.includes('session_auto_route')) {
           await sendYeaftSessionSendError(client, msg, relayAgentId, 'session_auto_route_unsupported');

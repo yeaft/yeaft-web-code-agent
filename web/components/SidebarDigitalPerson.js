@@ -1,3 +1,4 @@
+import { LEGACY_PRODUCT_SURFACES_ENABLED } from '../utils/legacy-product-surfaces.js';
 import { availableDigitalPersonAgents } from '../utils/digital-person-agent.js';
 
 export default {
@@ -12,7 +13,7 @@ export default {
         ? Pinia.useChatStore() : null;
     },
     enabled() {
-      return availableDigitalPersonAgents(this.store).length > 0;
+      return LEGACY_PRODUCT_SURFACES_ENABLED && availableDigitalPersonAgents(this.store).length > 0;
     },
   },
   methods: { open() { this.store?.enterDigitalPerson(); } },

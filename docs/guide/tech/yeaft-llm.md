@@ -100,7 +100,7 @@ export class LLMAdapter {
 
 ### 工具 schema 按协议转换
 
-Session、数字人、Work Center 和 MCP 共用工具定义，不按模型或厂商复制定义。适配器负责出站格式：
+Session 和 MCP 共用工具定义，不按模型或厂商复制定义。适配器负责出站格式：
 
 | 协议 | 工具参数在请求中的位置 | Yeaft 的处理 |
 | --- | --- | --- |
@@ -165,7 +165,7 @@ This lets the same provider (like GitHub Copilot) run two protocols without spli
 
 ## Prompt caching defaults
 
-No settings switch is required for the native Yeaft engine, including Sessions, Digital Humans, and Work Center. The effective API protocol determines how caching works:
+No settings switch is required for native Yeaft Sessions. The effective API protocol determines how caching works:
 
 - **Anthropic Messages:** Send standard short-lived `cache_control` breakpoints for the tools, system instructions, and latest eligible user/tool result, including on compatible gateways with a known credential scope. Claude's short-lived cache writes are billed separately from cache reads.
 - **OpenAI Responses:** Supported models already use provider-side caching. When request and credential ownership are known, send an opaque, stable `prompt_cache_key` on official and compatible routes. This is a routing hint and does not change `store: false` or request extended retention.

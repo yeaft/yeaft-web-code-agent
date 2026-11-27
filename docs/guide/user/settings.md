@@ -17,7 +17,7 @@ Open via the **⚙ gear** at the bottom of the sidebar. Settings live in a **fix
 
 Create up to five presets under **Agent settings → Quick send**. Each preset stores its name, model, effort and maximum output tokens in that Agent instance's `config.json`. Blank effort uses the runtime default. Blank maximum output tokens uses the selected model's resolved output limit, not the Session's previous model budget; enter a positive integer to use a smaller budget. The request is always capped to the actual model's output limit, including fallback retries. Each Agent has its own model catalog and presets.
 
-When enabled, native Yeaft Session Composers add a small mode selector beside the ordinary send button. Open it to send the current draft, attachments and quote with one preset, or use that preset's shortcut directly. Session defaults and ordinary Enter sending are unchanged. CLI Chat and Work Center do not show this selector.
+When enabled, native Yeaft Session Composers add a small mode selector beside the ordinary send button. Open it to send the current draft, attachments and quote with one preset, or use that preset's shortcut directly. Session defaults and ordinary Enter sending are unchanged. CLI Chat does not show this selector.
 
 Defaults: terminal `Alt/Option+T`, files `Alt/Option+O`, Git workbench `Alt/Option+G`, new Session `Alt/Option+N`, close an open workbench `Alt/Option+W`, and quick-send slots `Alt/Option+1…5`. Known browser/application conflicts such as `Ctrl+T` and `Ctrl+F` are rejected; operating systems and extensions may reserve additional combinations. Global actions stay available while the message Composer is focused, and avoid editors, terminals, dialogs and other text fields. Quick-send bindings only operate in the Composer and ignore IME composition and key repeat.
 
@@ -25,7 +25,7 @@ Defaults: terminal `Alt/Option+T`, files `Alt/Option+O`, Git workbench `Alt/Opti
 
 The Session list is a single folder tree without a separate Projects / Recents split, so it scrolls as one list. On desktop, drag the sidebar's right edge to set its width (220–480px). With the edge focused, arrow keys adjust it by 16px and Shift + arrow keys by 64px; Home or a double-click restores the default 260px. When the window narrows, the sidebar gives way so the content keeps at least 480px, and returns to your width when there is room again.
 
-The width is saved in this browser and shared by Chat, Sessions and Work Center. Folder expand/collapse state and the compact shortcut row are user preferences on the Server instead, restored on other devices at sign-in or page load and refreshed when an open page regains focus. Phones use the overlay drawer, which has no width handle.
+The width is saved in this browser and shared by Chat and Sessions. Folder expand/collapse state and the compact shortcut row are user preferences on the Server instead, restored on other devices at sign-in or page load and refreshed when an open page regains focus. Phones use the overlay drawer, which has no width handle.
 
 ## Account
 
@@ -78,7 +78,6 @@ Expose Agent-machine local services through your browser (e.g. `localhost:3000` 
 - **Toggle** — enable / disable each rule
 - **🌐 Open in browser** — new tab to the proxy URL
 - **📋 Copy URL**
-
 
 ## LLM settings (Yeaft mode)
 

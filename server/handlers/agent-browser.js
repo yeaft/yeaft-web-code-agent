@@ -1,3 +1,4 @@
+import { isRetiredBrowserSource } from '../retired-features.js';
 import { sendToAgent, sendToWebClient } from '../ws-utils.js';
 import {
   browserClientForPeer,
@@ -120,7 +121,7 @@ function publicSessionMessage(agentId, msg) {
       type: msg.type,
       agentId,
       requestId: clean(msg.requestId) || null,
-      sessions: (Array.isArray(msg.sessions) ? msg.sessions : []).slice(0, 64).map(sessionSnapshot),
+      sessions: (Array.isArray(msg.sessions) ? msg.sessions : []).filter(snapshot => !isRetiredBrowserSource(snapshot?.sourceRef)).slice(0, 64).map(sessionSnapshot),
     };
   }
   return {
@@ -221,7 +222,7 @@ export async function handleAgentBrowser(agentId, agent, msg) {
     });
     if (!request) return true;
     for (const snapshot of Array.isArray(msg.sessions) ? msg.sessions : []) {
-      if (!snapshot?.browserSessionId) continue;
+      if (!snapshot?.browserSessionId || isRetiredBrowserSource(snapshot.sourceRef)) continue;
       installBrowserRoute({ agentId, ownerUserId: request.ownerUserId, msg: snapshot });
     }
     const client = browserClientForPeer({

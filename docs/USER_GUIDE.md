@@ -12,7 +12,7 @@ This stable URL is a compact index of the current product documentation.
 
 ## Sidebar shortcuts
 
-**New chat / New task / New folder / Plugins**, followed by **Search Sessions** and **Digital Person** when supported show icons and labels on separate rows by default. When the Session list needs scrolling, hover over the shortcuts to reveal an upward collapse arrow at the far right. Click it to switch to a row of small icons and make more room for Sessions. A downward expand arrow stays at the far right of the compact row; layouts never switch automatically. This preference is stored on the Server per signed-in user and shared across desktops. Reloading, signing in again, or returning focus to a window loads the latest choice. Failed saves are disclosed and restore the previous settings.
+**New chat / New task / New folder / Plugins**, followed by **Search Sessions**, show icons and labels on separate rows by default. When the Session list needs scrolling, hover over the shortcuts to reveal an upward collapse arrow at the far right. Click it to switch to a row of small icons and make more room for Sessions. A downward expand arrow stays at the far right of the compact row; layouts never switch automatically. This preference is stored on the Server per signed-in user and shared across desktops. Reloading, signing in again, or returning focus to a window loads the latest choice. Failed saves are disclosed and restore the previous settings.
 
 Click **Search Sessions** to open an input under the shortcuts. Typing lists matching Sessions from supported online Agents in place of the folder tree. Clear the query or press Escape to return to the tree.
 
@@ -23,7 +23,6 @@ Drag a Session onto a folder to move it in, or into the space below the last row
 ## Native Yeaft
 
 - [Sessions and Projects](./guide/user/yeaft-session.md)
-- [Work Center](./guide/user/work-center.md)
 - [Provider and model configuration](./guide/yeaft-config.md)
 - [Settings](./guide/user/settings.md)
 

@@ -1,3 +1,4 @@
+import { hasLegacyWorkCenterRuntime, LEGACY_WORK_CENTER_UPGRADE } from '../retired-features.js';
 import { agents } from '../context.js';
 import { yeaftProjectDb, yeaftSessionDb } from '../database.js';
 import { forwardToAgent, resolveAgentAccessError, sendToWebClient } from '../ws-utils.js';
@@ -86,6 +87,10 @@ export async function handleClientScheduledTasks(clientId, client, msg) {
   if (!isCreate && !yeaftSessionDb.getForAgent(client.userId, agentId, sessionId)) {
     return reject('session_access_denied', 'Session not found or access denied');
   }
+  const legacyWorkCenter = hasLegacyWorkCenterRuntime(agent);
+  if (!isCreate && msg.op === 'run' && legacyWorkCenter) {
+    return reject('legacy_work_center_active', LEGACY_WORK_CENTER_UPGRADE);
+  }
   const outbound = {
     type: isCreate ? 'yeaft_create_session' : 'yeaft_scheduled_task',
     requestId, _requestClientId: clientId,
@@ -114,6 +119,13 @@ export async function handleClientScheduledTasks(clientId, client, msg) {
     }
   } catch (error) {
     return reject('invalid_task', error.message);
+  }
+  // The legacy scheduler executes locally, bypassing the Server's send guard.
+  // Only accept changes that guarantee no automatic execution when merged
+  // with the Agent's current task (explicit pause or manual-only trigger).
+  const task = isCreate ? outbound.payload.task : outbound.task;
+  if (legacyWorkCenter && task && task.enabled !== false && task.trigger?.type !== 'manual') {
+    return reject('legacy_work_center_active', LEGACY_WORK_CENTER_UPGRADE);
   }
   // Override private routing instead of accepting any browser-provided identity.
   // A socket may disappear between the access check and the write.

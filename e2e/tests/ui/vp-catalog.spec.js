@@ -114,7 +114,7 @@ const test = base.extend({
       });
       await useMockAgent(agent, async () => {
         agent.send({ type: 'agent_capabilities_updated', capabilities: [
-          'plaintext-ok', 'work_center', 'workbench_session_routes', 'scheduled_tasks', 'session_scenes',
+          'plaintext-ok', 'workbench_session_routes', 'scheduled_tasks', 'session_scenes',
           ...Object.values(SESSION_SCENE_CAPABILITIES),
         ] });
         await use(agent);
@@ -536,7 +536,7 @@ test('ordinary Session scenes persist through a live switch and reload without e
   await expectScene('Primary education');
   expect(fixture.session()).toMatchObject({ config: { sceneId: 'primary-education' } });
   mockAgent.send({ type: 'agent_capabilities_updated', capabilities: [
-    'plaintext-ok', 'work_center', 'workbench_session_routes', 'scheduled_tasks', 'session_scenes',
+    'plaintext-ok', 'workbench_session_routes', 'scheduled_tasks', 'session_scenes',
   ] });
   await scene.click();
   await expect(sceneMenu.locator('.yeaft-model-option-label')).toHaveText([

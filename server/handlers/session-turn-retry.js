@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { hasLegacyWorkCenterRuntime, LEGACY_WORK_CENTER_UPGRADE } from '../retired-features.js';
 import { CONFIG } from '../config.js';
 import { agents, webClients } from '../context.js';
 import { userDb, yeaftProjectDb, yeaftSessionDb } from '../database.js';
@@ -68,6 +69,8 @@ export async function handleClientSessionTurnRetry(clientId, client, msg) {
     await reject('Only the Agent and Session owner can retry a turn.');
   } else if (accessError) {
     await reject('The selected Agent is offline.');
+  } else if (hasLegacyWorkCenterRuntime(agent)) {
+    await reject(LEGACY_WORK_CENTER_UPGRADE);
   } else if (!Array.isArray(agent.capabilities) || !agent.capabilities.includes('session_turn_retry')) {
     await reject('The selected Agent does not support Session turn retry.');
   } else {
