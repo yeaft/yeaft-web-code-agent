@@ -624,12 +624,17 @@ export function createCosmicWebService({ fetcher = safeFetch, dnsLookup, now = D
     let j = end;
     while (j > start) {
       const { cp, width, ch: last } = prevCodePointInfo(str, j);
-      const escaped = j - width >= start + 1 && str[j - width - 1] === '\\';
-      if (width === 1 && last === ')' && !escaped && closeParens > openParens) { closeParens--; j--; continue; }
-      if (width === 1 && last === ']' && !escaped && closeBrackets > openBrackets) { closeBrackets--; j--; continue; }
-      if (!escaped && (last === '\'' || last === '`' || last === '*' || last === '_' || last === '~'
-        || last === '.' || last === ',' || last === ';' || last === ':' || last === '!' || last === '?' || isNonAsciiPunct(cp, last))) {
-        j -= width;
+      // Count consecutive preceding backslashes to distinguish escaped Markdown wrappers (\], \}, \|, \!) from literal \\.
+      let bs = 0;
+      for (let b = j - width - 1; b >= start && str[b] === '\\'; b--) bs++;
+      const escaped = (bs & 1) === 1;
+      const step = escaped ? width + 1 : width;
+      if (width === 1 && last === ')' && closeParens > openParens) { closeParens--; j -= step; continue; }
+      if (width === 1 && last === ']' && closeBrackets > openBrackets) { closeBrackets--; j -= step; continue; }
+      if (last === '\'' || last === '`' || last === '*' || last === '_' || last === '~'
+        || last === '}' || last === '|' || last === '>' || last === '\\'
+        || last === '.' || last === ',' || last === ';' || last === ':' || last === '!' || last === '?' || isNonAsciiPunct(cp, last)) {
+        j -= step;
         continue;
       }
       break;
@@ -696,15 +701,32 @@ export function createCosmicWebService({ fetcher = safeFetch, dnsLookup, now = D
         while (k < maxScan && !isBareUrlStop(str[k])) {
           if (str[k] === '\\' && k + 1 < maxScan && !isBareUrlStop(str[k + 1])) {
             const esc = str[k + 1];
-            if (esc === '[') { openBrackets++; inBrackets = true; seenUrlSignal = true; }
-            else if (esc === ']') { closeBrackets++; inBrackets = false; }
-            else if (esc === '/' || esc === '?' || esc === '#' || esc === ':' || esc === '@' || esc === '.') seenUrlSignal = true;
-            prevWasDelim = false;
+            const isEscWrapDelim = (esc === ']' && closeBrackets >= openBrackets)
+              || esc === '}' || esc === '|' || esc === '!' || esc === '*' || esc === '_' || esc === '~' || esc === '`';
+            if (isEscWrapDelim) {
+              const couldBeComplete = seenUrlSignal && (seenAt || seenPath || !hasNonPortAfterColon);
+              if (!prevWasDelim && couldBeComplete) {
+                const bucket = seenAt ? postAtCuts : preAtCuts;
+                if (bucket.length < 64) bucket.push(k);
+              }
+              if (esc === ']') { closeBrackets++; inBrackets = false; }
+              if (!seenAt && !seenPath && seenPortColon) hasNonPortAfterColon = true;
+              prevWasDelim = true;
+            } else {
+              if (esc === '[') { openBrackets++; inBrackets = true; seenUrlSignal = true; }
+              else if (esc === ']') { closeBrackets++; inBrackets = false; }
+              else if (esc === '/' || esc === '?' || esc === '#' || esc === ':' || esc === '@' || esc === '.') seenUrlSignal = true;
+              prevWasDelim = false;
+            }
             k += 2;
             continue;
           }
           const { cp, width, ch } = codePointAtInfo(str, k);
-          const isDelim = isNonAsciiPunct(cp, ch) || (width === 1 && (ch === ',' || ch === ';' || ch === '!' || ch === ')' || ch === '\'' || ch === '`' || ch === '*' || ch === '_' || ch === '~'));
+          const isDelim = isNonAsciiPunct(cp, ch) || (width === 1 && (
+            ch === ',' || ch === ';' || ch === '!' || ch === ')' || ch === '}' || ch === '|'
+            || (ch === ']' && closeBrackets >= openBrackets)
+            || ch === '\'' || ch === '`' || ch === '*' || ch === '_' || ch === '~'
+          ));
           if (isDelim) {
             // Separate pre-'@' and post-'@' cut budgets so userinfo punctuation can never exhaust host/port cut slots,
             // and later prose '@' mentions can never erase an earlier validated cut.
@@ -713,6 +735,8 @@ export function createCosmicWebService({ fetcher = safeFetch, dnsLookup, now = D
               const bucket = seenAt ? postAtCuts : preAtCuts;
               if (bucket.length < 64) bucket.push(k);
             }
+            if (width === 1 && ch === ')') closeParens++;
+            else if (width === 1 && ch === ']') { closeBrackets++; inBrackets = false; }
             if (!seenAt && !seenPath && seenPortColon) hasNonPortAfterColon = true;
             prevWasDelim = true;
           } else {

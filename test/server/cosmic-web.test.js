@@ -1088,9 +1088,14 @@ describe('2.0 graph and AI contracts', () => {
     const leadingPunctUserUrl = '//\u2013user:LEADPUNCTPASS99@intranet:8080';
     const comma70UserUrl = `//user:${'a,'.repeat(70)}COMMA70PASS99@intranet:8080`;
     const emojiPortUrl = '//user:PINEMOJIPASS99@intranet:8080';
+    const bracketPortUrl = '//user:BRACKETPASS99@intranet:8080';
+    const bracketProsePortUrl = '//user:BRACKETPROSE99@intranet:8080';
+    const bracePortUrl = '//user:BRACEPASS99@intranet:8080';
+    const pipePortUrl = '//user:PIPEPASS99@intranet:8080';
+    const wrappedIpv6PortUrl = '//user:IPV6WRAPPASS99@[2001:db8::1]:8443';
     const privItemWithImg = {
       ...item('Private img note', 'https://private.example/img-note'),
-      summaryExcerpt: `${unicodePad} Private brief note with ${excerptSecretUrl}, ${unicodeSecretUrl}, ${wwwSecretUrl}, ${schemeRelSecretUrl}, ${ipv6RelSecretUrl}, ${singleHostRelSecretUrl}, ${userinfoRelSecretUrl}, **${boldUserinfoPortUrl}**, “${typoQuotePortUrl}”, 请看${cjkPeriodPortUrl}。以及【${cjkBracketPortUrl}】, 请看${userinfoUnicodeProseUrl}。下一句 请看${proseAtUrl}。通知@ops:值班 ${leadingPunctUserUrl} 请看${comma70UserUrl}。下一句 ${emojiPortUrl}📌下一句 ${enDashHttpUrl}, ${enDashRelUrl}, and ${cjkQueryUrl} inside.`,
+      summaryExcerpt: `${unicodePad} Private brief note with ${excerptSecretUrl}, ${unicodeSecretUrl}, ${wwwSecretUrl}, ${schemeRelSecretUrl}, ${ipv6RelSecretUrl}, ${singleHostRelSecretUrl}, ${userinfoRelSecretUrl}, **${boldUserinfoPortUrl}**, “${typoQuotePortUrl}”, 请看${cjkPeriodPortUrl}。以及【${cjkBracketPortUrl}】, 请看${userinfoUnicodeProseUrl}。下一句 请看${proseAtUrl}。通知@ops:值班 ${leadingPunctUserUrl} 请看${comma70UserUrl}。下一句 ${emojiPortUrl}📌下一句 [${bracketPortUrl}] [${bracketProsePortUrl}]下一句 {${bracePortUrl}} |${pipePortUrl}| [${wrappedIpv6PortUrl}] ${enDashHttpUrl}, ${enDashRelUrl}, and ${cjkQueryUrl} inside.`,
       media: [{ url: secretMediaUrl, kind: 'image' }],
     };
     ingestCosmicWebItems(source('rss-priv-img', 'custom-sports', 'alice'), [privItemWithImg], NOW);
@@ -1102,18 +1107,20 @@ describe('2.0 graph and AI contracts', () => {
     const privDet = await svc.cluster('alice', privNode.clusterId);
     expect(privDet.media).toEqual([]);
     expect(JSON.stringify(privDet)).not.toContain(secretMediaUrl);
-    // Round 6–17 Blocker #1: REAL extractCleanArticle -> aiBrief path with 70-comma userinfo, supplementary-plane symbol 📌 adjacent to port, leading-punct userinfo, adjacent prose '@' mentions, Unicode inside userinfo/paths/queries, and localized wrappers while preserving ordinary '//' prose
+    // Round 6–18 Blocker #1: REAL extractCleanArticle -> aiBrief path with escaped brackets/braces/pipes around ports (incl. wrapped IPv6), 70-comma userinfo, supplementary-plane symbol 📌, leading-punct userinfo, adjacent prose '@' mentions, Unicode inside userinfo/paths/queries, and localized wrappers
     const privItemId = privDet.items[0].id;
     const angleParenUrl = 'https://files.example/report)v2.pdf?token=ANGLEPARENSECRET99';
     const parenSecretUrl = 'https://files.example/chart(v2).png?token=PRIVATESENTINEL99';
     const aposSecretUrl = "https://files.example/team's-deck.pdf?token=APOSSECRET99";
     const extractedPrivate = extractCleanArticle(
-      `<article><h1>Private Memo</h1><p>${unicodePad} Quarterly notes // keep prose comment, //\u2013note: kept, <a href="${angleParenUrl}">Attachment</a>, bare ${parenSecretUrl}, (${parenSecretUrl}), ${aposSecretUrl}, ${unicodeSecretUrl}, ${wwwSecretUrl}, ${schemeRelSecretUrl}, ${ipv6RelSecretUrl}, ${singleHostRelSecretUrl}, ${userinfoRelSecretUrl}, <strong>${boldUserinfoPortUrl}</strong>, <em>${emUserinfoPortUrl}</em>, “${typoQuotePortUrl}”, 请看${cjkPeriodPortUrl}。以及【${cjkBracketPortUrl}】, 请看${userinfoUnicodeProseUrl}。下一句 请看${proseAtUrl}。通知@ops:值班 ${leadingPunctUserUrl} 请看${comma70UserUrl}。下一句 ${emojiPortUrl}📌下一句 ${enDashHttpUrl}, ${enDashRelUrl}, and ${cjkQueryUrl}.</p></article>`,
+      `<article><h1>Private Memo</h1><p>${unicodePad} Quarterly notes // keep prose comment, //\u2013note: kept, <a href="${angleParenUrl}">Attachment</a>, bare ${parenSecretUrl}, (${parenSecretUrl}), ${aposSecretUrl}, ${unicodeSecretUrl}, ${wwwSecretUrl}, ${schemeRelSecretUrl}, ${ipv6RelSecretUrl}, ${singleHostRelSecretUrl}, ${userinfoRelSecretUrl}, <strong>${boldUserinfoPortUrl}</strong>, <em>${emUserinfoPortUrl}</em>, “${typoQuotePortUrl}”, 请看${cjkPeriodPortUrl}。以及【${cjkBracketPortUrl}】, 请看${userinfoUnicodeProseUrl}。下一句 请看${proseAtUrl}。通知@ops:值班 ${leadingPunctUserUrl} 请看${comma70UserUrl}。下一句 ${emojiPortUrl}📌下一句 [${bracketPortUrl}] [${bracketProsePortUrl}]下一句 {${bracePortUrl}} |${pipePortUrl}| [${wrappedIpv6PortUrl}] ${enDashHttpUrl}, ${enDashRelUrl}, and ${cjkQueryUrl}.</p></article>`,
       'https://private.example/img-note',
       'Private img note',
     );
     expect(extractedPrivate.markdown).toContain(`(<${angleParenUrl}>)`);
     expect(extractedPrivate.markdown).toContain('//\\[2001:db8::1\\]/vault/a.pdf?token=IPV6RELSECRET99');
+    expect(extractedPrivate.markdown).toContain(`\\[${bracketPortUrl}\\]`);
+    expect(extractedPrivate.markdown).toContain(`\\[${bracketProsePortUrl}\\]下一句`);
     expect(extractedPrivate.markdown).toContain(`**${boldUserinfoPortUrl}**`);
     expect(extractedPrivate.markdown).toContain(`*${emUserinfoPortUrl}*`);
     expect(extractedPrivate.markdown).toContain(`“${typoQuotePortUrl}”`);
@@ -1135,19 +1142,21 @@ describe('2.0 graph and AI contracts', () => {
       'WWWSECRET99', 'SCHEMERELSECRET99', 'IPV6RELSECRET99', 'SINGLEHOSTSECRET99', 'USERINFORELSECRET99',
       'BOLDPORTPASS99', 'EMPORTPASS99', 'TYPOQUOTEPASS99', 'CJKPERIODPASS99', 'CJKBRACKETPASS99',
       'USERINFODASHPASS99', 'PROSEATPASS99', 'LEADPUNCTPASS99', 'COMMA70PASS99', 'PINEMOJIPASS99',
+      'BRACKETPASS99', 'BRACKETPROSE99', 'BRACEPASS99', 'PIPEPASS99', 'IPV6WRAPPASS99',
       'ENDASHSECRET99', 'RELENDASHSECRET99', 'CJKQUERYSECRET99', 'EXCERPTSECRET99']) {
       expect(privBriefJson).not.toContain(secret);
     }
     expect(requestAi.mock.lastCall[0].payload.articleMarkdown).toContain('Attachment');
     expect(requestAi.mock.lastCall[0].payload.articleMarkdown).toContain('// keep prose comment');
     expect(requestAi.mock.lastCall[0].payload.articleMarkdown).toContain('//\u2013note: kept');
-    // Round 6–17: followUp redacts all alphanumeric sentinels directly in summaryExcerpt
+    // Round 6–18: followUp redacts all alphanumeric sentinels directly in summaryExcerpt
     await svc.followUp('alice', 'user', privNode.clusterId, { question: 'Any updates?', research: true });
     const privFuJson = JSON.stringify(requestAi.mock.lastCall[0].payload);
     for (const secret of [secretMediaUrl, 'EXCERPTSECRET99', 'UNICODEDRIFTSECRET99', 'WWWSECRET99',
       'SCHEMERELSECRET99', 'IPV6RELSECRET99', 'SINGLEHOSTSECRET99', 'USERINFORELSECRET99',
       'BOLDPORTPASS99', 'TYPOQUOTEPASS99', 'CJKPERIODPASS99', 'CJKBRACKETPASS99',
       'USERINFODASHPASS99', 'PROSEATPASS99', 'LEADPUNCTPASS99', 'COMMA70PASS99', 'PINEMOJIPASS99',
+      'BRACKETPASS99', 'BRACKETPROSE99', 'BRACEPASS99', 'PIPEPASS99', 'IPV6WRAPPASS99',
       'ENDASHSECRET99', 'RELENDASHSECRET99', 'CJKQUERYSECRET99']) {
       expect(privFuJson).not.toContain(secret);
     }
