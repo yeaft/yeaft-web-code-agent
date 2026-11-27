@@ -809,19 +809,28 @@ test.describe('Yeaft Cosmos UI', () => {
     await expect(page.locator('.cosmos-event-pill')).toHaveClass(/is-auto-off/);
 
     // 5. Cosmic Constants cloud persistence + authentic Yeaft Settings modal:
-    //    Change orbitSpeed + Agent planet binding -> verify a brand-new browser context (empty localStorage)
-    //    hydrates the exact same Cosmos settings & planet assignment from the Server DB!
+    //    Change orbitSpeed + Agent planet binding -> wait deterministically for BOTH PATCH responses ->
+    //    verify a brand-new browser context (empty localStorage) hydrates the exact same Cosmos settings
+    //    & planet assignment straight from the Server DB!
+    const waitPrefPatch = (predicate) => page.waitForResponse((res) => {
+      if (!res.url().includes('/api/user/preferences') || res.request().method() !== 'PATCH' || res.status() !== 200) return false;
+      try {
+        const body = JSON.parse(res.request().postData() || '{}');
+        return Boolean(predicate(body));
+      } catch {
+        return false;
+      }
+    });
     await page.locator('.cosmos-corner-actions .cosmos-corner-icon').first().click();
     await expect(page.locator('.cosmos-constants-popover')).toBeVisible();
     const orbitRange = page.locator('.cosmos-constants-popover .cosmos-const-range').first();
+    const orbitSetPatch = waitPrefPatch((b) => b?.cosmosConfig?.constants?.orbitSpeed === 0.4);
     await orbitRange.fill('0.4');
     await orbitRange.dispatchEvent('input');
     const firstBindingSelect = page.locator('.cosmos-constants-popover .cosmos-binding-row select').first();
-    const bindingPatchDone = page.waitForResponse((res) => res.url().includes('/api/user/preferences') && res.request().method() === 'PATCH' && res.status() === 200);
+    const bindingSetPatch = waitPrefPatch((b) => Object.values(b?.cosmosConfig?.planetBindings || {}).includes('mars'));
     await firstBindingSelect.selectOption('mars');
-    await bindingPatchDone;
-    // Wait for debounced slider PATCH (if not already flushed by binding change)
-    await page.waitForTimeout(350);
+    await Promise.all([orbitSetPatch, bindingSetPatch]);
 
     // Fresh second browser context (clean device, empty localStorage) loads same cloud Cosmos config
     const secondContext = await page.context().browser().newContext();
@@ -842,11 +851,13 @@ test.describe('Yeaft Cosmos UI', () => {
       await secondContext.close();
     }
 
-    // Restore Earth binding & default orbit speed before continuing
+    // Deterministically restore cloud defaults so subsequent tests sharing the worker DB start clean
+    const bindingRestorePatch = waitPrefPatch((b) => Object.values(b?.cosmosConfig?.planetBindings || {}).includes('earth'));
     await firstBindingSelect.selectOption('earth');
+    const orbitRestorePatch = waitPrefPatch((b) => b?.cosmosConfig?.constants?.orbitSpeed === 1);
     await orbitRange.fill('1');
     await orbitRange.dispatchEvent('input');
-    await page.waitForTimeout(350);
+    await Promise.all([bindingRestorePatch, orbitRestorePatch]);
 
     await page.locator('.cosmos-cfg-item').first().click();
     await expect(page.locator('.settings-dialog')).toBeVisible();
@@ -862,7 +873,9 @@ test.describe('Yeaft Cosmos UI', () => {
     await page.locator('.cosmos-scale-tick').nth(2).click();
 
     // 7. Abandon Cosmos -> classic Yeaft UI unchanged, persists on reload, and ✦ re-enters Cosmos
+    const classicPatch = waitPrefPatch((b) => b?.cosmosConfig?.uiMode === 'classic');
     await page.locator('.cosmos-corner-icon.is-abandon').click();
+    await classicPatch;
     await expect(page.locator('.cosmos-page')).toHaveCount(0);
     await expect(page.locator('.yeaft-page, .chat-page').first()).toBeVisible({ timeout: 8000 });
 
@@ -870,8 +883,26 @@ test.describe('Yeaft Cosmos UI', () => {
     await expect(page.locator('.yeaft-page, .chat-page').first()).toBeVisible({ timeout: 10000 });
     await expect(page.locator('.cosmos-page')).toHaveCount(0);
 
+    const cosmosPatch = waitPrefPatch((b) => b?.cosmosConfig?.uiMode === 'cosmos');
     await page.locator('.sidebar-cosmos-btn').click();
+    await cosmosPatch;
     await expect(page.locator('.cosmos-page')).toBeVisible({ timeout: 8000 });
+    // Reset cloud preferences to clean defaults for subsequent tests on the shared worker TestServer
+    await page.evaluate(async () => {
+      await fetch('/api/user/preferences', {
+        method: 'PATCH',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          cosmosConfig: {
+            constants: { orbitSpeed: 1, eventsAutoEnabled: true, renderQuality: 'auto' },
+            planetBindings: {},
+            drawerWidth: null,
+            uiMode: 'cosmos',
+          },
+        }),
+      });
+    });
 
     expect(failedAssets).toEqual([]);
     expect(errors).toEqual([]);
@@ -1129,6 +1160,9 @@ test.describe('Yeaft Cosmos UI', () => {
     await expect(page.locator('.cosmos-const-engine-badge')).toContainText(/WebGL/i, { timeout: 5000 });
     await rendererSelect.selectOption('lite');
     await expect(page.locator('.cosmos-const-engine-badge')).toContainText(/2D/i, { timeout: 5000 });
+    const resetRenderPatch = page.waitForResponse((res) => res.url().includes('/api/user/preferences') && res.request().method() === 'PATCH' && res.status() === 200);
+    await rendererSelect.selectOption('auto');
+    await resetRenderPatch;
 
     expect(failedAssets).toEqual([]);
     expect(errors).toEqual([]);

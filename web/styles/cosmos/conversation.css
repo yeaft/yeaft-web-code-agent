@@ -52,7 +52,7 @@
   --status-busy: var(--p-accent);
   --tool-bg: rgba(255, 255, 255, 0.055);
   --session-content-width: 100%;
-  --c-drawer-gutter: clamp(18px, 2.4%, 30px);
+  --c-drawer-gutter: clamp(18px, calc(var(--c-panel-w, 460px) * 0.024), 30px);
 
   position: fixed;
   top: 0;
@@ -63,12 +63,12 @@
   display: flex;
   flex-direction: column;
   /* Feathered translucent glass smoothly dissolving into the living starfield
-     while ensuring crisp backing right up to the unified left text rail */
+     while ensuring full glass backing right at the unified left text rail */
   background: linear-gradient(
     90deg,
     rgba(var(--p-tint-rgb), 0.0) 0%,
-    rgba(var(--p-tint-rgb), 0.16) 14px,
-    var(--p-bg-top) 48px,
+    rgba(var(--p-tint-rgb), 0.24) 10px,
+    var(--p-bg-top) 28px,
     var(--p-bg-bot) 100%
   );
   border-left: 0;

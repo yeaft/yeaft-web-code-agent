@@ -109,12 +109,14 @@ export function createUserPreferencesState(auth, { request = (...args) => fetch(
   };
   let controller = null;
   let loading = null;
+  let initialLoadInFlight = false;
   let queue = Promise.resolve();
   let pendingWrites = 0;
 
-  const options = signal => ({
+  const options = (signal, { keepalive = false } = {}) => ({
     signal,
     credentials: 'same-origin',
+    ...(keepalive ? { keepalive: true } : {}),
     headers: {
       'Content-Type': 'application/json',
       ...(auth?.token ? { Authorization: `Bearer ${auth.token}` } : {}),
@@ -124,13 +126,28 @@ export function createUserPreferencesState(auth, { request = (...args) => fetch(
   // Signed in, but the saved state has neither arrived nor failed yet: the
   // sidebar shows its loading row rather than folders in the default state.
   const pending = scope.run(() => Vue.computed(() => authenticated() && !ready.value && !error.value));
+  function drainQueuedCosmos(allowBeforeReady = false) {
+    if (!queuedCosmosPatch) return null;
+    const flushPatch = queuedCosmosPatch;
+    const waiters = queuedCosmosWaiters;
+    queuedCosmosPatch = null;
+    queuedCosmosWaiters = [];
+    const writePromise = savePatch({ cosmosConfig: flushPatch }, { allowBeforeReady });
+    writePromise.then((ok) => {
+      for (const resolve of waiters) resolve(ok);
+    });
+    return writePromise;
+  }
+
   async function refresh() {
     if (!authenticated() || pendingWrites) return;
     if (loading) return loading;
     const expectedGeneration = generation;
     const expectedRevision = revision;
+    if (!ready.value) initialLoadInFlight = true;
     const work = (async () => {
       const { signal, done } = timedSignal(controller?.signal, LOAD_TIMEOUT_MS);
+      let flushPromise = null;
       try {
         const response = await request('/api/user/preferences', { ...options(signal), cache: 'no-store' });
         if (!response.ok) throw new Error('load');
@@ -140,52 +157,46 @@ export function createUserPreferencesState(auth, { request = (...args) => fetch(
         failedFields.clear();
         ready.value = true;
         error.value = null;
+        initialLoadInFlight = false;
         if (queuedCosmosPatch) {
-          const flushPatch = queuedCosmosPatch;
-          const waiters = queuedCosmosWaiters;
-          queuedCosmosPatch = null;
-          queuedCosmosWaiters = [];
-          showConfirmed();
-          const ok = await savePatch({ cosmosConfig: flushPatch });
-          for (const resolve of waiters) resolve(ok);
+          flushPromise = drainQueuedCosmos(false);
         } else {
           showConfirmed();
         }
       } catch {
+        if (generation === expectedGeneration) initialLoadInFlight = false;
         if (generation === expectedGeneration && revision === expectedRevision) {
           error.value = 'load';
           if (queuedCosmosPatch) {
-            const flushPatch = queuedCosmosPatch;
-            const waiters = queuedCosmosWaiters;
-            queuedCosmosPatch = null;
-            queuedCosmosWaiters = [];
-            showConfirmed();
-            const ok = await savePatch({ cosmosConfig: flushPatch }, { allowBeforeReady: true });
-            for (const resolve of waiters) resolve(ok);
+            flushPromise = drainQueuedCosmos(true);
           }
         }
       } finally {
         done();
+        if (generation === expectedGeneration) initialLoadInFlight = false;
       }
+      if (flushPromise) await flushPromise;
     })();
     loading = work;
     try { await work; } finally { if (loading === work) loading = null; }
   }
 
-  function savePatch(patch, { allowBeforeReady = false } = {}) {
+  function savePatch(patch, { allowBeforeReady = false, keepalive = false } = {}) {
     if (!authenticated() || (!ready.value && !allowBeforeReady)) return Promise.resolve(false);
     const expectedGeneration = generation;
     const expectedRevision = ++revision;
+    const wasIdle = pendingWrites === 0;
     pendingPatches.set(expectedRevision, patch);
     showConfirmed();
     error.value = null;
     pendingWrites++;
-    const work = queue.then(async () => {
+
+    const executeRequest = async () => {
       if (generation !== expectedGeneration) return false;
-      const { signal, done } = timedSignal(controller?.signal, SAVE_TIMEOUT_MS);
+      const { signal, done } = timedSignal(keepalive ? null : controller?.signal, SAVE_TIMEOUT_MS);
       try {
         const response = await request('/api/user/preferences', {
-          ...options(signal), method: 'PATCH', body: JSON.stringify(patch),
+          ...options(signal, { keepalive }), method: 'PATCH', body: JSON.stringify(patch),
         });
         if (!response.ok) throw new Error('save');
         const result = await response.json();
@@ -207,9 +218,16 @@ export function createUserPreferencesState(auth, { request = (...args) => fetch(
           pendingWrites--;
           pendingPatches.delete(expectedRevision);
           showConfirmed();
+          if (ready.value && queuedCosmosPatch) drainQueuedCosmos(false);
         }
       }
-    });
+    };
+
+    // During pagehide with an idle queue, kick off the keepalive fetch synchronously
+    // before the event loop unwinds so the browser does not abort a microtask-deferred write.
+    const work = keepalive && wasIdle
+      ? executeRequest()
+      : queue.then(executeRequest);
     queue = work;
     return work;
   }
@@ -224,16 +242,19 @@ export function createUserPreferencesState(auth, { request = (...args) => fetch(
     return savePatch({ sidebarCollapsedProjects: { [projectId]: collapsed } });
   }
 
-  function saveCosmosConfig(cosmosPatch) {
+  function saveCosmosConfig(cosmosPatch, { keepalive = false } = {}) {
     const clean = normalizeCosmosConfigPatch(cosmosPatch);
     if (Object.keys(clean).length === 0 || !authenticated()) return Promise.resolve(false);
-    if (ready.value) return savePatch({ cosmosConfig: clean });
-    if (error.value === 'load') return savePatch({ cosmosConfig: clean }, { allowBeforeReady: true });
+    // Only queue while the initial GET is actively in flight with no writes started yet.
+    // Once initial GET has settled (succeeded or failed), or a write is already serialized
+    // on `queue`, or this is a pagehide keepalive flush, dispatch directly onto savePatch.
+    if (ready.value || !initialLoadInFlight || pendingWrites > 0 || keepalive) {
+      return savePatch({ cosmosConfig: clean }, { allowBeforeReady: true, keepalive });
+    }
     queuedCosmosPatch = mergeCosmosConfig(queuedCosmosPatch, clean);
     showConfirmed();
     return new Promise((resolve) => {
       queuedCosmosWaiters.push(resolve);
-      if (!loading) void refresh();
     });
   }
 
@@ -245,6 +266,7 @@ export function createUserPreferencesState(auth, { request = (...args) => fetch(
       controller?.abort();
       controller = new AbortController();
       loading = null;
+      initialLoadInFlight = false;
       queue = Promise.resolve();
       pendingWrites = 0;
       pendingPatches.clear();

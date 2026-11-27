@@ -684,8 +684,9 @@ export default {
     const initialUserId = currentAuthStore()?.userId || null;
     const storedPrefsOwner = readLocalCosmosPreferencesOwner();
     if (initialUserId && storedPrefsOwner && storedPrefsOwner !== String(initialUserId)) {
-      clearLocalCosmosPreferences();
+      clearLocalCosmosPreferences(undefined, { includeUiMode: true });
     }
+    const bootLegacyCosmosConfig = !storedPrefsOwner ? readLegacyLocalCosmosConfig() : null;
 
     const constants = Vue.reactive(loadCosmosConstants());
     const savedBindings = Vue.ref(loadPlanetBindings());
@@ -696,9 +697,18 @@ export default {
     const SLIDER_CONSTANT_KEYS = new Set(['orbitSpeed', 'starDensity', 'skyBright', 'orbitLines']);
     let pendingCloudConstants = null;
     let cloudConstantsTimer = null;
+    let lastCloudAuthKey = initialUserId ? `${initialUserId}:${currentAuthStore()?.authGeneration || 0}` : '';
     let migratedCloudAuthKey = '';
 
-    function flushPendingCloudConstants() {
+    function cancelPendingCloudConstants() {
+      if (cloudConstantsTimer) {
+        clearTimeout(cloudConstantsTimer);
+        cloudConstantsTimer = null;
+      }
+      pendingCloudConstants = null;
+    }
+
+    function flushPendingCloudConstants({ keepalive = false } = {}) {
       if (cloudConstantsTimer) {
         clearTimeout(cloudConstantsTimer);
         cloudConstantsTimer = null;
@@ -706,7 +716,11 @@ export default {
       if (!pendingCloudConstants) return;
       const patch = pendingCloudConstants;
       pendingCloudConstants = null;
-      userPreferences.saveCosmosConfig?.({ constants: patch });
+      userPreferences.saveCosmosConfig?.({ constants: patch }, { keepalive });
+    }
+
+    function onPageHide() {
+      flushPendingCloudConstants({ keepalive: true });
     }
 
     function persistCosmosConstantChange(changedKey = null, { immediate = false } = {}) {
@@ -2551,7 +2565,7 @@ export default {
     });
 
     // Hydrate Cosmos configuration from Server user_preferences (cloud source of truth)
-    // and perform one-time migration of pre-cloud localStorage settings if cloud is empty.
+    // and perform one-time per-section migration of pre-cloud localStorage settings if missing in cloud.
     Vue.watch(
       [
         () => userPreferences.ready.value,
@@ -2560,60 +2574,92 @@ export default {
         () => currentAuthStore()?.authGeneration || 0,
       ],
       ([isReady, cloud, userId, authGen]) => {
+        const authKey = userId ? `${userId}:${authGen}` : '';
+        const authChanged = authKey !== lastCloudAuthKey;
+        if (authChanged) {
+          // Cancel any in-flight slider debounce timer belonging to the previous auth session
+          // so it can never write into the next user's cloud preferences.
+          cancelPendingCloudConstants();
+          lastCloudAuthKey = authKey;
+        }
         if (userId) {
           const prevOwner = readLocalCosmosPreferencesOwner();
           if (prevOwner && prevOwner !== String(userId)) {
-            clearLocalCosmosPreferences();
+            const prevQuality = constants.renderQuality;
+            clearLocalCosmosPreferences(undefined, { includeUiMode: true });
             Object.assign(constants, DEFAULT_COSMOS_CONSTANTS);
             savedBindings.value = {};
             customDrawerWidth.value = null;
-          }
-        }
-        if (!isReady) return;
-        const cfg = cloud && typeof cloud === 'object' ? cloud : {};
-        const hasCloudState = Object.hasOwn(cfg, 'constants')
-          || Object.hasOwn(cfg, 'planetBindings')
-          || Object.hasOwn(cfg, 'drawerWidth');
-
-        if (hasCloudState) {
-          if (cfg.constants && typeof cfg.constants === 'object') {
-            const prevQuality = constants.renderQuality;
-            const normalized = normalizeCosmosConstants({ ...DEFAULT_COSMOS_CONSTANTS, ...cfg.constants });
-            for (const [k, v] of Object.entries(normalized)) {
-              if (pendingCloudConstants && Object.hasOwn(pendingCloudConstants, k)) continue;
-              constants[k] = v;
-            }
-            saveCosmosConstants(constants);
             eventSim.autoEnabled = constants.eventsAutoEnabled;
             eventSim.autoZoom = constants.eventsAutoZoom;
-            if (!constants.eventsAutoEnabled && eventSim.active && !eventSim.active.observing) stopCosmicEvent(eventSim);
-            if (!constants.showEventsCountdown && eventSim.active) stopCosmicEvent(eventSim);
             syncEventRefs();
             if (engine && constants.renderQuality !== prevQuality) {
               rebuildCosmosEngine(constants.renderQuality);
             }
           }
-          if (Object.hasOwn(cfg, 'planetBindings')) {
-            const cleanBindings = normalizePlanetBindings(cfg.planetBindings);
-            savedBindings.value = cleanBindings;
-            savePlanetBindings(cleanBindings);
+        }
+        if (!isReady) return;
+
+        const cfg = cloud && typeof cloud === 'object' ? cloud : {};
+        const firstReadyForAuth = Boolean(userId && migratedCloudAuthKey !== authKey);
+        const legacy = firstReadyForAuth && (!initialUserId || String(userId) === String(initialUserId))
+          ? (bootLegacyCosmosConfig || readLegacyLocalCosmosConfig(undefined, userId))
+          : null;
+        if (firstReadyForAuth) migratedCloudAuthKey = authKey;
+
+        const migrationPatch = {};
+        const prevQuality = constants.renderQuality;
+
+        // 1. Cosmic constants (per-section hydration, one-time pre-cloud legacy lift, or clean default reset)
+        if (Object.hasOwn(cfg, 'constants') && cfg.constants && typeof cfg.constants === 'object') {
+          const normalized = normalizeCosmosConstants({ ...DEFAULT_COSMOS_CONSTANTS, ...cfg.constants });
+          for (const [k, v] of Object.entries(normalized)) {
+            if (pendingCloudConstants && Object.hasOwn(pendingCloudConstants, k)) continue;
+            constants[k] = v;
           }
-          if (Object.hasOwn(cfg, 'drawerWidth') && !drawerResizing.value) {
-            customDrawerWidth.value = cfg.drawerWidth;
-            saveCosmosDrawerWidth(cfg.drawerWidth);
+        } else if (firstReadyForAuth && legacy?.constants) {
+          migrationPatch.constants = legacy.constants;
+        } else {
+          for (const [k, v] of Object.entries(DEFAULT_COSMOS_CONSTANTS)) {
+            if (pendingCloudConstants && Object.hasOwn(pendingCloudConstants, k)) continue;
+            constants[k] = v;
           }
-          if (userId) writeLocalCosmosPreferencesOwner(userId);
-          return;
         }
 
-        const authKey = `${userId || ''}:${authGen}`;
-        if (userId && migratedCloudAuthKey !== authKey) {
-          migratedCloudAuthKey = authKey;
-          const legacy = readLegacyLocalCosmosConfig(undefined, userId);
-          writeLocalCosmosPreferencesOwner(userId);
-          if (legacy) {
-            userPreferences.saveCosmosConfig?.(legacy);
-          }
+        // 2. Agent planet bindings
+        if (Object.hasOwn(cfg, 'planetBindings')) {
+          savedBindings.value = normalizePlanetBindings(cfg.planetBindings);
+        } else if (firstReadyForAuth && legacy?.planetBindings) {
+          migrationPatch.planetBindings = legacy.planetBindings;
+        } else {
+          savedBindings.value = {};
+        }
+
+        // 3. Custom drawer width
+        if (Object.hasOwn(cfg, 'drawerWidth')) {
+          if (!drawerResizing.value) customDrawerWidth.value = cfg.drawerWidth;
+        } else if (firstReadyForAuth && legacy && Object.hasOwn(legacy, 'drawerWidth')) {
+          migrationPatch.drawerWidth = legacy.drawerWidth;
+        } else if (!drawerResizing.value) {
+          customDrawerWidth.value = null;
+        }
+
+        saveCosmosConstants(constants);
+        savePlanetBindings(savedBindings.value);
+        saveCosmosDrawerWidth(customDrawerWidth.value);
+        if (userId) writeLocalCosmosPreferencesOwner(userId);
+
+        eventSim.autoEnabled = constants.eventsAutoEnabled;
+        eventSim.autoZoom = constants.eventsAutoZoom;
+        if (!constants.eventsAutoEnabled && eventSim.active && !eventSim.active.observing) stopCosmicEvent(eventSim);
+        if (!constants.showEventsCountdown && eventSim.active) stopCosmicEvent(eventSim);
+        syncEventRefs();
+        if (engine && constants.renderQuality !== prevQuality) {
+          rebuildCosmosEngine(constants.renderQuality);
+        }
+
+        if (Object.keys(migrationPatch).length > 0) {
+          userPreferences.saveCosmosConfig?.(migrationPatch);
         }
       },
       { immediate: true },
@@ -2634,7 +2680,7 @@ export default {
       });
       window.addEventListener('resize', onWindowResize);
       window.addEventListener('blur', onWindowBlur);
-      window.addEventListener('pagehide', flushPendingCloudConstants);
+      window.addEventListener('pagehide', onPageHide);
       window.addEventListener('pointermove', onGlobalPointerMove);
       window.addEventListener('pointerup', onGlobalPointerUp);
       window.addEventListener('pointercancel', onGlobalPointerCancel);
@@ -2664,7 +2710,7 @@ export default {
       clearInterval(nowInterval);
       window.removeEventListener('resize', onWindowResize);
       window.removeEventListener('blur', onWindowBlur);
-      window.removeEventListener('pagehide', flushPendingCloudConstants);
+      window.removeEventListener('pagehide', onPageHide);
       window.removeEventListener('pointermove', onGlobalPointerMove);
       window.removeEventListener('pointerup', onGlobalPointerUp);
       window.removeEventListener('pointercancel', onGlobalPointerCancel);

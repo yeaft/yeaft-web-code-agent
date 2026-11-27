@@ -4506,6 +4506,8 @@ describe('Cosmos Interstellar Signal Stream (Unified Top-Right Replies, Schedule
       COSMOS_CONSTANTS_KEY,
       COSMOS_BINDINGS_KEY,
       COSMOS_DRAWER_WIDTH_KEY,
+      normalizeCosmosConstantsPatch,
+      normalizeCosmosConfigPatch,
       saveCosmosConstants,
       savePlanetBindings,
       saveCosmosDrawerWidth,
@@ -4515,30 +4517,41 @@ describe('Cosmos Interstellar Signal Stream (Unified Top-Right Replies, Schedule
     } = await import('../../web/cosmos/constants.js');
     const { createUserPreferencesState } = await import('../../web/utils/user-preferences.js');
 
-    // 1. Legacy localStorage migration reads pre-cloud settings only when owner matches or is unset
+    // 0. Numeric normalizers reject null, empty strings, and booleans (no silent coercion to 0/1/340)
+    expect(normalizeCosmosConstantsPatch({ orbitSpeed: null, starDensity: '', skyBright: false, orbitLines: true })).toEqual({});
+    expect(normalizeCosmosConfigPatch({ drawerWidth: '' })).toEqual({});
+    expect(normalizeCosmosConfigPatch({ drawerWidth: false })).toEqual({});
+    expect(normalizeCosmosConfigPatch({ drawerWidth: null })).toEqual({ drawerWidth: null });
+
+    // 1. Legacy localStorage migration reads pre-cloud un-owned settings only; stamped records are cache-only;
+    //    clearLocalCosmosPreferences({ includeUiMode: true }) clears yeaft-ui-mode too.
     const mem = createMemoryStorage();
     saveCosmosConstants({ orbitSpeed: 0.4, skyBright: 1.4 }, mem);
     savePlanetBindings({ 'ag-1': 'mars' }, mem);
     saveCosmosDrawerWidth(680, mem);
+    mem.setItem('yeaft-ui-mode', 'classic');
     expect(readLegacyLocalCosmosConfig(mem, 'user-a')).toEqual({
       constants: expect.objectContaining({ orbitSpeed: 0.4, skyBright: 1.4 }),
       planetBindings: { 'ag-1': 'mars' },
       drawerWidth: 680,
     });
     writeLocalCosmosPreferencesOwner('user-a', mem);
+    expect(readLegacyLocalCosmosConfig(mem, 'user-a')).toBeNull();
     expect(readLegacyLocalCosmosConfig(mem, 'user-b')).toBeNull();
-    clearLocalCosmosPreferences(mem);
+    clearLocalCosmosPreferences(mem, { includeUiMode: true });
     expect(mem.getItem(COSMOS_CONSTANTS_KEY)).toBeNull();
     expect(mem.getItem(COSMOS_BINDINGS_KEY)).toBeNull();
     expect(mem.getItem(COSMOS_DRAWER_WIDTH_KEY)).toBeNull();
+    expect(mem.getItem('yeaft-ui-mode')).toBeNull();
 
     // 2. createUserPreferencesState queues early saveCosmosConfig while initial GET is in flight,
-    //    flushes cleanly over server response, and resets cleanly on authGeneration change.
+    //    handles failed initial GET followed by TWO rapid saveCosmosConfig() calls without hanging
+    //    or permanently shadowing showConfirmed(), supports keepalive:true, and resets cleanly on auth switch.
     let resolveInitialGet;
     const calls = [];
     let serverCosmos = { constants: { orbitSpeed: 0.5 }, planetBindings: { 'ag-1': 'saturn' } };
     const mockRequest = vi.fn((url, init = {}) => {
-      calls.push({ url, method: init.method || 'GET', body: init.body ? JSON.parse(init.body) : null });
+      calls.push({ url, method: init.method || 'GET', keepalive: Boolean(init.keepalive), body: init.body ? JSON.parse(init.body) : null });
       if ((init.method || 'GET') === 'GET') {
         return new Promise((resolve) => {
           resolveInitialGet = () => resolve({
@@ -4575,10 +4588,56 @@ describe('Cosmos Interstellar Signal Stream (Unified Top-Right Replies, Schedule
     expect(prefs.preferences.value.cosmosConfig.planetBindings).toEqual({ 'ag-1': 'jupiter' });
     expect(calls.filter((c) => c.method === 'PATCH')).toHaveLength(1);
 
-    // Subsequent edit writes directly
-    expect(await prefs.saveCosmosConfig({ constants: { skyBright: 1.5 }, drawerWidth: 820 })).toBe(true);
+    // Subsequent edit with keepalive:true writes directly and forwards keepalive flag
+    expect(await prefs.saveCosmosConfig({ constants: { skyBright: 1.5 }, drawerWidth: 820 }, { keepalive: true })).toBe(true);
+    expect(calls.at(-1)?.keepalive).toBe(true);
     expect(prefs.preferences.value.cosmosConfig.constants).toEqual({ orbitSpeed: 0.5, skyBright: 1.5 });
     expect(prefs.preferences.value.cosmosConfig.drawerWidth).toBe(820);
+
+    // Regression: failed initial GET followed by TWO rapid saveCosmosConfig() calls MUST BOTH settle cleanly
+    let rejectGet;
+    const patchResolvers = [];
+    let recoverCosmos = {};
+    const flakyReq = vi.fn((_url, init = {}) => {
+      if ((init.method || 'GET') === 'GET') {
+        return new Promise((_res, rej) => { rejectGet = () => rej(new Error('offline')); });
+      }
+      const patch = JSON.parse(init.body).cosmosConfig || {};
+      return new Promise((resolve) => {
+        patchResolvers.push(() => {
+          recoverCosmos = {
+            ...recoverCosmos,
+            ...(patch.constants ? { constants: { ...(recoverCosmos.constants || {}), ...patch.constants } } : {}),
+            ...(Object.hasOwn(patch, 'planetBindings') ? { planetBindings: { ...patch.planetBindings } } : {}),
+          };
+          resolve({ ok: true, json: async () => ({ sidebarActionsCompact: false, sidebarCollapsedProjects: {}, cosmosConfig: recoverCosmos }) });
+        });
+      });
+    });
+    const auth2 = Vue.reactive({ isAuthenticated: true, userId: 'user-r', token: 'tok-r', authGeneration: 1 });
+    const flakyPrefs = createUserPreferencesState(auth2, { request: flakyReq });
+    rejectGet();
+    await flushPromises();
+    expect(flakyPrefs.error.value).toBe('load');
+    const r1 = flakyPrefs.saveCosmosConfig({ constants: { orbitSpeed: 0.2 } });
+    const r2 = flakyPrefs.saveCosmosConfig({ constants: { orbitSpeed: 1.8 } });
+    await flushPromises();
+    expect(patchResolvers).toHaveLength(1);
+    patchResolvers[0]();
+    await flushPromises();
+    expect(patchResolvers).toHaveLength(2);
+    patchResolvers[1]();
+    expect(await r1).toBe(true);
+    expect(await r2).toBe(true);
+    expect(flakyPrefs.ready.value).toBe(true);
+    expect(flakyPrefs.preferences.value.cosmosConfig.constants.orbitSpeed).toBe(1.8);
+    // Subsequent edit must NOT be shadowed by stale queuedCosmosPatch
+    const r3 = flakyPrefs.saveCosmosConfig({ constants: { orbitSpeed: 0.9 } });
+    await flushPromises();
+    patchResolvers[2]();
+    expect(await r3).toBe(true);
+    expect(flakyPrefs.preferences.value.cosmosConfig.constants.orbitSpeed).toBe(0.9);
+    flakyPrefs.dispose();
 
     // Auth switch resets state cleanly
     auth.userId = 'user-b';
@@ -4587,9 +4646,12 @@ describe('Cosmos Interstellar Signal Stream (Unified Top-Right Replies, Schedule
     expect(prefs.preferences.value.cosmosConfig).toEqual({});
     prefs.dispose();
 
-    // 3. Wide Cosmos Drawer CSS eliminates fixed 780px centering cap & shares unified responsive gutter
+    // 3. Wide Cosmos Drawer CSS eliminates fixed 780px centering cap, uses drawer-width-relative gutter,
+    //    and fixes both Planet Focus Dock & Pan Reset Pill against --c-panel-w at z-index 30
     const convCss = readFileSync(resolve(process.cwd(), 'web/styles/cosmos/conversation.css'), 'utf8');
+    const eventsCss = readFileSync(resolve(process.cwd(), 'web/styles/cosmos/events.css'), 'utf8');
     expect(convCss).toContain('--session-content-width: 100%;');
-    expect(convCss).toContain('--c-drawer-gutter:');
+    expect(convCss).toContain('calc(var(--c-panel-w, 460px) * 0.024)');
+    expect(eventsCss).not.toContain('--cosmos-drawer-w');
   });
 });

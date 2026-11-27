@@ -139,7 +139,14 @@ describe('request authentication', () => {
     expect(pSidebar.body.cosmosConfig.constants.orbitSpeed).toBe(0.4);
     expect(pSidebar.body.cosmosConfig.planetBindings).toEqual({ 'ag-1': 'jupiter' });
 
-    // Strict validation rejects invalid bounds, unknown planets, unsafe keys, non-integer widths, empty patches
+    // Empty planetBindings {} is explicitly valid (clears all custom bindings)
+    const pClearBindings = callRoute(patchRoutes, '/api/user/preferences', {
+      cosmosConfig: { planetBindings: {} },
+    });
+    expect(pClearBindings.statusCode).toBe(200);
+    expect(pClearBindings.body.cosmosConfig.planetBindings).toEqual({});
+
+    // Strict validation rejects invalid bounds, unknown planets, unsafe prototype keys, non-integer widths, empty patches
     const invalidPayloads = [
       { cosmosConfig: {} },
       { cosmosConfig: { constants: {} } },
@@ -147,7 +154,14 @@ describe('request authentication', () => {
       { cosmosConfig: { constants: { renderQuality: 'ultra-hd' } } },
       { cosmosConfig: { planetBindings: { 'ag-1': 'pluto' } } },
       { cosmosConfig: { planetBindings: Object.fromEntries(Array.from({ length: 129 }, (_, i) => [`a${i}`, 'earth'])) } },
+      JSON.parse('{"cosmosConfig":{"planetBindings":{"__proto__":"earth"}}}'),
+      JSON.parse('{"cosmosConfig":{"planetBindings":{"constructor":"earth"}}}'),
+      JSON.parse('{"cosmosConfig":{"planetBindings":{"prototype":"earth"}}}'),
+      JSON.parse('{"cosmosConfig":{"constants":{"__proto__":1}}}'),
+      JSON.parse('{"cosmosConfig":{"constants":{"constructor":1}}}'),
+      JSON.parse('{"cosmosConfig":{"__proto__":{}}}'),
       { cosmosConfig: { drawerWidth: 100 } },
+      { cosmosConfig: { drawerWidth: 1281 } },
       { cosmosConfig: { drawerWidth: 500.5 } },
       { cosmosConfig: { uiMode: 'arcade' } },
       { cosmosConfig: { unknownField: true } },

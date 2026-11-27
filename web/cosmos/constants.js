@@ -226,24 +226,34 @@ export function saveCosmosConstants(constants, storage) {
 
 const UNSAFE_MAP_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
 const MAX_PLANET_BINDINGS = 128;
+const UI_MODE_STORAGE_KEY = 'yeaft-ui-mode';
+
+function toFiniteNumber(val) {
+  if (typeof val === 'number') return Number.isFinite(val) ? val : NaN;
+  if (typeof val === 'string' && val.trim() !== '') {
+    const n = Number(val);
+    return Number.isFinite(n) ? n : NaN;
+  }
+  return NaN;
+}
 
 export function normalizeCosmosConstantsPatch(raw) {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {};
   const out = {};
   if (Object.hasOwn(raw, 'orbitSpeed')) {
-    const n = Number(raw.orbitSpeed);
+    const n = toFiniteNumber(raw.orbitSpeed);
     if (Number.isFinite(n)) out.orbitSpeed = Math.max(0, Math.min(2.5, n));
   }
   if (Object.hasOwn(raw, 'starDensity')) {
-    const n = Number(raw.starDensity);
+    const n = toFiniteNumber(raw.starDensity);
     if (Number.isFinite(n)) out.starDensity = Math.max(0.35, Math.min(2.0, n));
   }
   if (Object.hasOwn(raw, 'skyBright')) {
-    const n = Number(raw.skyBright);
+    const n = toFiniteNumber(raw.skyBright);
     if (Number.isFinite(n)) out.skyBright = Math.max(0.35, Math.min(1.8, n));
   }
   if (Object.hasOwn(raw, 'orbitLines')) {
-    const n = Number(raw.orbitLines);
+    const n = toFiniteNumber(raw.orbitLines);
     if (Number.isFinite(n)) out.orbitLines = Math.max(0, Math.min(1.2, n));
   }
   if (Object.hasOwn(raw, 'activeFlash') && typeof raw.activeFlash === 'boolean') {
@@ -297,7 +307,7 @@ export function normalizeCosmosConfigPatch(raw) {
     if (raw.drawerWidth === null) {
       out.drawerWidth = null;
     } else {
-      const n = Number(raw.drawerWidth);
+      const n = toFiniteNumber(raw.drawerWidth);
       if (Number.isFinite(n)) {
         out.drawerWidth = Math.round(Math.max(COSMOS_DRAWER_WIDTH.min, Math.min(COSMOS_DRAWER_WIDTH.max, n)));
       }
@@ -328,24 +338,28 @@ export function writeLocalCosmosPreferencesOwner(ownerId, storage) {
   } catch { /* ignore */ }
 }
 
-export function clearLocalCosmosPreferences(storage) {
+export function clearLocalCosmosPreferences(storage, { includeUiMode = false } = {}) {
   const store = getStorage(storage);
   if (!store) return;
-  for (const key of [COSMOS_CONSTANTS_KEY, COSMOS_BINDINGS_KEY, COSMOS_DRAWER_WIDTH_KEY, COSMOS_PREFS_OWNER_KEY]) {
+  const keys = [COSMOS_CONSTANTS_KEY, COSMOS_BINDINGS_KEY, COSMOS_DRAWER_WIDTH_KEY, COSMOS_PREFS_OWNER_KEY];
+  if (includeUiMode) keys.push(UI_MODE_STORAGE_KEY);
+  for (const key of keys) {
     try { store.removeItem(key); } catch { /* ignore */ }
   }
 }
 
 /**
  * Read pre-existing browser-local Cosmos settings for one-time cloud migration when the
- * user's Server preference record has no cosmosConfig yet. Refuses to migrate settings
- * stamped to a different user account.
+ * user's Server preference record has no cosmosConfig yet. Only migrates un-owned pre-cloud
+ * localStorage records (once an owner stamp is written, Server cloud state is authoritative
+ * and never overwritten by local cache).
  */
 export function readLegacyLocalCosmosConfig(storage, currentUserId = null) {
   const store = getStorage(storage);
   if (!store) return null;
   const owner = readLocalCosmosPreferencesOwner(store);
-  if (owner && currentUserId && owner !== String(currentUserId)) return null;
+  if (owner) return null;
+  void currentUserId;
 
   const patch = {};
   try {

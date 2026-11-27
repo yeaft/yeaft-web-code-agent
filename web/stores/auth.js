@@ -7,6 +7,7 @@ import {
   bindWorkCenterBrowserOwner,
   clearWorkCenterBrowserOwner,
 } from './helpers/work-center-browser-state.js';
+import { clearLocalCosmosPreferences } from '../cosmos/constants.js';
 const { defineStore } = Pinia;
 
 function clearYeaftHistoryMemory() {
@@ -1075,8 +1076,22 @@ export const useAuthStore = defineStore('auth', {
      * Reset state
      */
     reset() {
+      const hadSession = Boolean(this.isAuthenticated || this.userId);
       if (LEGACY_PRODUCT_SURFACES_ENABLED) clearWorkCenterBrowserOwner();
       clearYeaftHistoryOwner();
+      if (hadSession) {
+        clearLocalCosmosPreferences(undefined, { includeUiMode: true });
+        try {
+          const chatStore = globalThis.Pinia?.useChatStore?.();
+          if (chatStore && typeof chatStore.setUiMode === 'function') {
+            chatStore.setUiMode('cosmos', { persistCloud: false, writeLocal: false });
+          } else if (chatStore) {
+            chatStore.uiMode = 'cosmos';
+          }
+        } catch {
+          // Chat store may not be installed yet.
+        }
+      }
       this.authGeneration += 1;
       this.stopSessionRefresh();
       this.isAuthenticated = false;

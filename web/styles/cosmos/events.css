@@ -746,6 +746,15 @@
   scrollbar-width: none;
 }
 
+.cosmos-planet-focus-dock::-webkit-scrollbar {
+  display: none;
+}
+
+.cosmos-page.is-drawer-resizing .cosmos-planet-focus-dock,
+.cosmos-page.is-drawer-resizing .cosmos-pan-reset-btn {
+  transition: none;
+}
+
 .cosmos-planet-focus-dock.is-corner-dock {
   left: 20px;
   transform: none;
@@ -786,7 +795,7 @@
   left: 50%;
   bottom: calc(20px + env(safe-area-inset-bottom, 0px));
   transform: translateX(-50%);
-  z-index: 53;
+  z-index: 30;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -819,7 +828,8 @@
 }
 
 .cosmos-page.is-drawer-open .cosmos-pan-reset-btn {
-  left: calc((100vw - var(--cosmos-drawer-w, 460px)) * 0.5);
+  left: calc((100vw - var(--c-panel-w, 460px)) * 0.5);
+  max-width: calc(100vw - var(--c-panel-w, 460px) - 20px);
 }
 
 @media (max-width: 768px) {

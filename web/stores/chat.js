@@ -1926,8 +1926,9 @@ export const useChatStore = defineStore('chat', {
       } catch (_) { /* keep the in-memory preference when storage is unavailable */ }
       if (!this.workCenterUiEnabled) this.leaveWorkCenter();
     },
-    setUiMode(mode, { persistCloud = true } = {}) {
-      this.uiMode = yeaftAutoRouteHelpers.writeUiMode(mode);
+    setUiMode(mode, { persistCloud = true, writeLocal = true } = {}) {
+      const next = mode === 'classic' ? 'classic' : 'cosmos';
+      this.uiMode = writeLocal ? yeaftAutoRouteHelpers.writeUiMode(next) : next;
       if (persistCloud) {
         try { useUserPreferences().saveCosmosConfig?.({ uiMode: this.uiMode }); } catch (_) { /* ignore in isolated test hosts */ }
       }
@@ -9836,7 +9837,8 @@ export const useChatStore = defineStore('chat', {
       this.yeaftUnreadSessionKeys = {};
       this.yeaftSessionReplyPreviewByKey = {};
       this.cosmosDismissedSignalsByKey = {};
-      clearLocalCosmosPreferences();
+      clearLocalCosmosPreferences(undefined, { includeUiMode: true });
+      this.uiMode = 'cosmos';
       this.yeaftConversationCovered = false;
       this._yeaftRetiredCatalogEpochsByAgent = {};
       this.conversations = [];
