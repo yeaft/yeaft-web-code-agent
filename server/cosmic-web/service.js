@@ -624,20 +624,28 @@ export function createCosmicWebService({ fetcher = safeFetch, dnsLookup, now = D
     let j = end;
     while (j > start) {
       const { cp, width, ch: last } = prevCodePointInfo(str, j);
-      // Count consecutive preceding backslashes to distinguish escaped Markdown wrappers (\], \}, \|, \!) from literal \\.
-      let bs = 0;
-      for (let b = j - width - 1; b >= start && str[b] === '\\'; b--) bs++;
-      const escaped = (bs & 1) === 1;
-      const step = escaped ? width + 1 : width;
-      if (width === 1 && last === ')' && closeParens > openParens) { closeParens--; j -= step; continue; }
-      if (width === 1 && last === ']' && closeBrackets > openBrackets) { closeBrackets--; j -= step; continue; }
-      if (last === '\'' || last === '`' || last === '*' || last === '_' || last === '~'
-        || last === '}' || last === '|' || last === '>' || last === '\\'
-        || last === '.' || last === ',' || last === ';' || last === ':' || last === '!' || last === '?' || isNonAsciiPunct(cp, last)) {
-        j -= step;
+      // Consume contiguous trailing backslash runs in a single linear pass (prevents O(N^2) rescanning).
+      if (width === 1 && last === '\\') {
+        while (j > start && str[j - 1] === '\\') j--;
         continue;
       }
-      break;
+      const isCloseParen = width === 1 && last === ')';
+      const isCloseBracket = width === 1 && last === ']';
+      const isTrimmable = (isCloseParen && closeParens > openParens)
+        || (isCloseBracket && closeBrackets > openBrackets)
+        || (!isCloseParen && !isCloseBracket && (
+          last === '\'' || last === '`' || last === '*' || last === '_' || last === '~'
+          || last === '}' || last === '|' || last === '>'
+          || last === '.' || last === ',' || last === ';' || last === ':' || last === '!' || last === '?' || isNonAsciiPunct(cp, last)
+        ));
+      if (!isTrimmable) break;
+      // Count preceding backslash run once; if >1 backslashes remain, the next iteration consumes them in O(1) amortized.
+      let bs = 0;
+      for (let b = j - width - 1; b >= start && str[b] === '\\'; b--) bs++;
+      const step = (bs & 1) === 1 ? width + 1 : width;
+      if (isCloseParen) closeParens--;
+      else if (isCloseBracket) closeBrackets--;
+      j -= step;
     }
     return j;
   }
@@ -645,14 +653,14 @@ export function createCosmicWebService({ fetcher = safeFetch, dnsLookup, now = D
     const normalized = rawCandidate.replace(/\\([\\`*_{}\[\]<>#!|~.\-+=])/g, '$1');
     return normalized.length > 2 && /[/?#:@.[]/.test(normalized.slice(2)) && URL.canParse(`https:${normalized}`);
   }
-  function matchUrlStartAt(str, offset) {
+  function matchUrlStartAt(str, offset, identBeforeUnderscores = false) {
     const len = str.length;
     const prev = offset > 0 ? str.charCodeAt(offset - 1) : 0;
-    const prevIsWord = (prev >= 48 && prev <= 57) || (prev >= 65 && prev <= 90) || (prev >= 97 && prev <= 122) || prev === 95;
-    if (prevIsWord) return 0;
+    const prevIsAlnum = (prev >= 48 && prev <= 57) || (prev >= 65 && prev <= 90) || (prev >= 97 && prev <= 122);
+    const prevIsIdent = prevIsAlnum || (prev === 95 && identBeforeUnderscores);
 
     const c0 = str.charCodeAt(offset);
-    if ((c0 >= 65 && c0 <= 90) || (c0 >= 97 && c0 <= 122)) {
+    if (!prevIsIdent && ((c0 >= 65 && c0 <= 90) || (c0 >= 97 && c0 <= 122))) {
       // 1. Any RFC 3986 scheme:// (http://, https://, ftp://, s3://, etc.) at exact original-string offset.
       let k = offset + 1;
       const maxSchemeEnd = Math.min(len - 3, offset + 24);
@@ -680,10 +688,10 @@ export function createCosmicWebService({ fetcher = safeFetch, dnsLookup, now = D
       }
     }
 
-    // 3. Scheme-relative //authority/... URL: scan by full Unicode code point (so supplementary-plane symbols like 📌
-    // are recognized with exact UTF-16 slice offsets) and reserve cut-point budget for complete authority candidates
-    // (skipping pre-'@' userinfo noise that cannot form a valid host[:port]).
-    if (offset + 3 < len && c0 === 47 && str.charCodeAt(offset + 1) === 47 && prev !== 58 && prev !== 47) {
+    // 3. Scheme-relative //authority/... URL: allows leading '_' emphasis wrappers (_//user:pass@host:8080_),
+    // scans by full Unicode code point, snapshots per-cut bracket/paren counts so later brackets never break IPv6 cuts,
+    // and separates pre/post-'@' cut budgets.
+    if (!prevIsAlnum && offset + 3 < len && c0 === 47 && str.charCodeAt(offset + 1) === 47 && prev !== 58 && prev !== 47) {
       const next = str[offset + 2];
       if (next && next !== '/' && !isBareUrlStop(next)) {
         let k = offset + 2;
@@ -707,7 +715,7 @@ export function createCosmicWebService({ fetcher = safeFetch, dnsLookup, now = D
               const couldBeComplete = seenUrlSignal && (seenAt || seenPath || !hasNonPortAfterColon);
               if (!prevWasDelim && couldBeComplete) {
                 const bucket = seenAt ? postAtCuts : preAtCuts;
-                if (bucket.length < 64) bucket.push(k);
+                if (bucket.length < 64) bucket.push({ cut: k, openParens, closeParens, openBrackets, closeBrackets });
               }
               if (esc === ']') { closeBrackets++; inBrackets = false; }
               if (!seenAt && !seenPath && seenPortColon) hasNonPortAfterColon = true;
@@ -728,12 +736,11 @@ export function createCosmicWebService({ fetcher = safeFetch, dnsLookup, now = D
             || ch === '\'' || ch === '`' || ch === '*' || ch === '_' || ch === '~'
           ));
           if (isDelim) {
-            // Separate pre-'@' and post-'@' cut budgets so userinfo punctuation can never exhaust host/port cut slots,
-            // and later prose '@' mentions can never erase an earlier validated cut.
+            // Separate pre-'@' and post-'@' cut budgets and snapshot prefix bracket/paren state at each cut.
             const couldBeComplete = seenUrlSignal && (seenAt || seenPath || !hasNonPortAfterColon);
             if (!prevWasDelim && couldBeComplete) {
               const bucket = seenAt ? postAtCuts : preAtCuts;
-              if (bucket.length < 64) bucket.push(k);
+              if (bucket.length < 64) bucket.push({ cut: k, openParens, closeParens, openBrackets, closeBrackets });
             }
             if (width === 1 && ch === ')') closeParens++;
             else if (width === 1 && ch === ']') { closeBrackets++; inBrackets = false; }
@@ -766,12 +773,12 @@ export function createCosmicWebService({ fetcher = safeFetch, dnsLookup, now = D
         }
         const trimmedEnd = trimTrailingUrlPunct(str, offset + 2, k, openParens, closeParens, openBrackets, closeBrackets);
         if (isValidSchemeRelativeCandidate(str.slice(offset, trimmedEnd))) return 2;
-        for (const cut of postAtCuts) {
-          const prefixEnd = trimTrailingUrlPunct(str, offset + 2, cut, openParens, closeParens, openBrackets, closeBrackets);
+        for (const c of postAtCuts) {
+          const prefixEnd = trimTrailingUrlPunct(str, offset + 2, c.cut, c.openParens, c.closeParens, c.openBrackets, c.closeBrackets);
           if (isValidSchemeRelativeCandidate(str.slice(offset, prefixEnd))) return 2;
         }
-        for (const cut of preAtCuts) {
-          const prefixEnd = trimTrailingUrlPunct(str, offset + 2, cut, openParens, closeParens, openBrackets, closeBrackets);
+        for (const c of preAtCuts) {
+          const prefixEnd = trimTrailingUrlPunct(str, offset + 2, c.cut, c.openParens, c.closeParens, c.openBrackets, c.closeBrackets);
           if (isValidSchemeRelativeCandidate(str.slice(offset, prefixEnd))) return 2;
         }
       }
@@ -785,12 +792,13 @@ export function createCosmicWebService({ fetcher = safeFetch, dnsLookup, now = D
     let i = 0;
     const len = noLinks.length;
     let nextGt = noLinks.indexOf('>');
+    let identBeforeUnderscores = false;
     while (i < len) {
-      if (noLinks[i] === '<' && matchUrlStartAt(noLinks, i + 1) > 0) {
+      if (noLinks[i] === '<' && matchUrlStartAt(noLinks, i + 1, false) > 0) {
         while (nextGt !== -1 && nextGt <= i) nextGt = noLinks.indexOf('>', nextGt + 1);
-        if (nextGt !== -1) { i = nextGt + 1; continue; }
+        if (nextGt !== -1) { i = nextGt + 1; identBeforeUnderscores = false; continue; }
       }
-      const prefixLen = matchUrlStartAt(noLinks, i);
+      const prefixLen = matchUrlStartAt(noLinks, i, identBeforeUnderscores);
       if (prefixLen > 0) {
         let j = i + prefixLen;
         let openParens = 0, closeParens = 0, openBrackets = 0, closeBrackets = 0;
@@ -814,7 +822,14 @@ export function createCosmicWebService({ fetcher = safeFetch, dnsLookup, now = D
         }
         j = trimTrailingUrlPunct(noLinks, i, j, openParens, closeParens, openBrackets, closeBrackets);
         i = j;
+        identBeforeUnderscores = false;
         continue;
+      }
+      const code = noLinks.charCodeAt(i);
+      if ((code >= 48 && code <= 57) || (code >= 65 && code <= 90) || (code >= 97 && code <= 122)) {
+        identBeforeUnderscores = true;
+      } else if (code !== 95 && code !== 92) {
+        identBeforeUnderscores = false;
       }
       out += noLinks[i];
       i++;

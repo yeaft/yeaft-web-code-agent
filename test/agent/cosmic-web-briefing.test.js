@@ -607,8 +607,8 @@ describe('Cosmic Web bounded research', () => {
       payload: {
         isPrivateSource: true,
         headline: 'Private memo',
-        summaryExcerpt: `${unicodePad} Summary with https://private.example/secret-exc.png, www.private.example/s.pdf?token=WWWEXCSECRET99, //cdn.private.example/e.png?token=RELEXCSECRET99, //[2001:db8::1]/x?token=IPV6EXCSECRET99, //intranet/doc?token=HOSTEXCSECRET99, //u:p@intranet:8080/a?token=USERINFOEXCSECRET99, **//user:BOLDPORTEXC99@intranet:8080**, “//user:TYPOQUOTEEXC99@intranet:8080”, 请看//user:CJKPERIODEXC99@intranet:8080。 请看//user:USERINFODASHEXC99\u2013key@intranet:8080。下一句 请看//user:PROSEATEXC99@intranet:8080。通知@ops:值班 //\u2013user:LEADPUNCTEXC99@intranet:8080 请看//user:${'a,'.repeat(70)}COMMA70EXC99@intranet:8080。下一句 //user:PINEMOJIEXC99@intranet:8080📌下一句 [//user:BRACKETEXC99@intranet:8080] [//user:BRACKETPROSEEXC99@intranet:8080]下一句 {//user:BRACEEXC99@intranet:8080} |//user:PIPEEXC99@intranet:8080| [//user:IPV6WRAPEXC99@[2001:db8::1]:8443] https://files.example/report\u2013draft.pdf?token=ENDASHEXCSECRET99, https://files.example/o'brien(v2).png?token=PRIVATESENTINEL99 and https://files.example/u0130.pdf?token=UNICODEDRIFTSECRET99 inside.`,
-        articleMarkdown: `${unicodePad} Body // prose comment and //\u2013note: kept with [![Chart](https://private.example/secret-fig.png)](https://private.example/secret-fig.png), [Attachment](<https://files.example/report)v2.pdf?token=ANGLEPARENSECRET99>), [doc](https://private.example/secret-md.png), https://files.example/team's-plan.pdf?token=APOSSECRET99, (https://files.example/doc(final).png?token=PRIVATESENTINEL299), www.private.example/doc(v1).pdf?token=WWWMDSECRET99, //cdn.private.example/fig.png?token=RELMDSECRET99, (//\\[2001:db8::1\\]/f?token=IPV6MDSECRET99), //intranet/p?token=HOSTMDSECRET99, //user:pw@intranet/q?token=USERINFOMDSECRET99, **//user:BOLDPORTMD99@intranet:8080**, *//user:EMPORTMD99@intranet:8443*, “//user:TYPOQUOTEMD99@intranet:8080”, 请看//user:CJKPERIODMD99@intranet:8080。以及【//user:CJKBRACKETMD99@intranet:8443】, 请看//user:USERINFODASHMD99\u2013key@intranet:8080。下一句 请看//user:PROSEATMD99@intranet:8080。通知@ops:值班 //\u2013user:LEADPUNCTMD99@intranet:8080 请看//user:${'a,'.repeat(70)}COMMA70MD99@intranet:8080。下一句 //user:PINEMOJIMD99@intranet:8080📌下一句 \\[//user:BRACKETMD99@intranet:8080\\] \\[//user:BRACKETPROSEMD99@intranet:8080\\]下一句 \\{//user:BRACEMD99@intranet:8080\\} \\|//user:PIPEMD99@intranet:8080\\| \\[//user:IPV6WRAPMD99@\\[2001:db8::1\\]:8443\\] https://files.example/report\u2013draft.pdf?token=ENDASHMDSECRET99, //intranet/report\u2013draft.pdf?token=RELENDASHMDSECRET99, https://files.example/doc?title=总结，草案&token=CJKQUERYMDSECRET99, and https://files.example/tail.pdf?token=UNICODETAILSECRET99`,
+        summaryExcerpt: `${unicodePad} Summary foo_www.keepme with https://private.example/secret-exc.png, www.private.example/s.pdf?token=WWWEXCSECRET99, //cdn.private.example/e.png?token=RELEXCSECRET99, //[2001:db8::1]/x?token=IPV6EXCSECRET99, //intranet/doc?token=HOSTEXCSECRET99, //u:p@intranet:8080/a?token=USERINFOEXCSECRET99, **//user:BOLDPORTEXC99@intranet:8080**, “//user:TYPOQUOTEEXC99@intranet:8080”, 请看//user:CJKPERIODEXC99@intranet:8080。 请看//user:USERINFODASHEXC99\u2013key@intranet:8080。下一句 请看//user:PROSEATEXC99@intranet:8080。通知@ops:值班 //\u2013user:LEADPUNCTEXC99@intranet:8080 请看//user:${'a,'.repeat(70)}COMMA70EXC99@intranet:8080。下一句 //user:PINEMOJIEXC99@intranet:8080📌下一句 [//user:BRACKETEXC99@intranet:8080] [//user:BRACKETPROSEEXC99@intranet:8080]下一句 {//user:BRACEEXC99@intranet:8080} |//user:PIPEEXC99@intranet:8080| [//user:IPV6WRAPEXC99@[2001:db8::1]:8443] [//user:IPV6NOPORTEXC99@[2001:db8::1]]下一句 _//user:UNDEREXC99@intranet:8080_ https://files.example/report\u2013draft.pdf?token=ENDASHEXCSECRET99, https://files.example/o'brien(v2).png?token=PRIVATESENTINEL99 and https://files.example/u0130.pdf?token=UNICODEDRIFTSECRET99 inside.`,
+        articleMarkdown: `${unicodePad} Body // prose comment and //\u2013note: kept and foo_www.keepme with [![Chart](https://private.example/secret-fig.png)](https://private.example/secret-fig.png), [Attachment](<https://files.example/report)v2.pdf?token=ANGLEPARENSECRET99>), [doc](https://private.example/secret-md.png), https://files.example/team's-plan.pdf?token=APOSSECRET99, (https://files.example/doc(final).png?token=PRIVATESENTINEL299), www.private.example/doc(v1).pdf?token=WWWMDSECRET99, //cdn.private.example/fig.png?token=RELMDSECRET99, (//\\[2001:db8::1\\]/f?token=IPV6MDSECRET99), //intranet/p?token=HOSTMDSECRET99, //user:pw@intranet/q?token=USERINFOMDSECRET99, **//user:BOLDPORTMD99@intranet:8080**, *//user:EMPORTMD99@intranet:8443*, “//user:TYPOQUOTEMD99@intranet:8080”, 请看//user:CJKPERIODMD99@intranet:8080。以及【//user:CJKBRACKETMD99@intranet:8443】, 请看//user:USERINFODASHMD99\u2013key@intranet:8080。下一句 请看//user:PROSEATMD99@intranet:8080。通知@ops:值班 //\u2013user:LEADPUNCTMD99@intranet:8080 请看//user:${'a,'.repeat(70)}COMMA70MD99@intranet:8080。下一句 //user:PINEMOJIMD99@intranet:8080📌下一句 \\[//user:BRACKETMD99@intranet:8080\\] \\[//user:BRACKETPROSEMD99@intranet:8080\\]下一句 \\{//user:BRACEMD99@intranet:8080\\} \\|//user:PIPEMD99@intranet:8080\\| \\[//user:IPV6WRAPMD99@\\[2001:db8::1\\]:8443\\] \\[//user:IPV6NOPORTMD99@\\[2001:db8::1\\]\\]下一句 \\_//user:UNDERMD99@intranet:8080\\_ _https://files.example/u?t=UNDERHTTPMD99_ https://files.example/report\u2013draft.pdf?token=ENDASHMDSECRET99, //intranet/report\u2013draft.pdf?token=RELENDASHMDSECRET99, https://files.example/doc?title=总结，草案&token=CJKQUERYMDSECRET99, and https://files.example/tail.pdf?token=UNICODETAILSECRET99`,
         media: [{ url: 'https://private.example/secret-top.png', kind: 'image' }],
         sources: [{ title: 'Memo', url: 'https://private.example/memo', summaryExcerpt: 'Source https://private.example/secret-src-exc.png', media: [{ url: 'https://private.example/secret-source.png', kind: 'image' }] }],
       },
@@ -624,11 +624,27 @@ describe('Cosmic Web bounded research', () => {
       'COMMA70EXC99', 'COMMA70MD99', 'PINEMOJIEXC99', 'PINEMOJIMD99',
       'BRACKETEXC99', 'BRACKETPROSEEXC99', 'BRACEEXC99', 'PIPEEXC99', 'IPV6WRAPEXC99',
       'BRACKETMD99', 'BRACKETPROSEMD99', 'BRACEMD99', 'PIPEMD99', 'IPV6WRAPMD99',
+      'IPV6NOPORTEXC99', 'UNDEREXC99', 'IPV6NOPORTMD99', 'UNDERMD99', 'UNDERHTTPMD99',
       'ENDASHEXCSECRET99', 'ENDASHMDSECRET99', 'RELENDASHMDSECRET99', 'CJKQUERYMDSECRET99']) {
       expect(sentPrompt).not.toContain(secret);
     }
     expect(sentPrompt).toContain('// prose comment');
     expect(sentPrompt).toContain('//\u2013note: kept');
+    expect(sentPrompt).toContain('foo_www.keepme');
+
+    // Round 19 Blocker #3: Agent scrubber handles 11,900-backslash run linearly (< 100ms)
+    const bsAdapter = stubAdapter(story);
+    const tAgentBs = performance.now();
+    await run({
+      adapter: bsAdapter,
+      payload: {
+        isPrivateSource: true,
+        headline: 'Backslash stress',
+        articleMarkdown: `https://files.example/a?token=AGENTBS99${'\\'.repeat(11_900)}]`,
+      },
+    });
+    expect(performance.now() - tAgentBs).toBeLessThan(100);
+    expect(JSON.stringify(bsAdapter.call.mock.lastCall[0].messages)).not.toContain('AGENTBS99');
   });
 });
 
