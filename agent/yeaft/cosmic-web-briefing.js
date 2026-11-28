@@ -21,8 +21,8 @@ export const COSMIC_WEB_FOLLOW_UP_CAPABILITY = 'cosmic_web_follow_up';
 export const COSMIC_WEB_RADAR_CAPABILITY = 'cosmic_web_radar';
 export const COSMIC_WEB_CANCEL_CAPABILITY = 'cosmic_web_cancel';
 
-const PRIVATE_EXCERPT_VERSION = 6;
-const PRIVATE_BRIEF_CONTEXT_VERSION = 6;
+const PRIVATE_EXCERPT_VERSION = 7;
+const PRIVATE_BRIEF_CONTEXT_VERSION = 7;
 
 const BUNDLED_SKILLS_DIR = fileURLToPath(new URL('../skills/', import.meta.url));
 const SKILL_PATH = 'cosmic-web/SKILL.md';
@@ -237,8 +237,8 @@ const PERCENT_WHATWG_DOT_RE = /%(?:2e|e3%80%82|ef%bc%8e|ef%bd%a1)/i;
 const ELLIPSIS_RE = /(?:\\?\.\\?\.|…|⋯)/u;
 const AMBIGUOUS_OPENER_MAP = { '[': ']', '(': ')', '{': '}', '【': '】', '（': '）' };
 const ATTACHED_OPEN_TAIL_RE = /(?:\\?([\[(\{【（]))((?:\\?\.|…|⋯)*)$/u;
-const IS_TRAIL_CLOSER_RE = /^[\s"'>)\]}”’」』】》〉`*_~]$/u;
-const TRAIL_WRAPPER_TRIM_RE = /["'>)\]}”’」』】》〉`*_~]+$/u;
+const IS_TRAIL_CLOSER_RE = /^[\s"'>`*_~\p{Pe}\p{Pf}]$/u;
+const TRAIL_WRAPPER_TRIM_RE = /["'>`*_~\p{Pe}\p{Pf}]+$/u;
 
 function findAmbiguousTruncationEnd(str, offset, tokenEnd, budget) {
   const len = str.length;

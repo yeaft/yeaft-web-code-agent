@@ -114,8 +114,8 @@ const PERCENT_WHATWG_DOT_RE = /%(?:2e|e3%80%82|ef%bc%8e|ef%bd%a1)/i;
 const ELLIPSIS_RE = /(?:\\?\.\\?\.|…|⋯)/u;
 const AMBIGUOUS_OPENER_MAP = { '[': ']', '(': ')', '{': '}', '【': '】', '（': '）' };
 const ATTACHED_OPEN_TAIL_RE = /(?:\\?([\[(\{【（]))((?:\\?\.|…|⋯)*)$/u;
-const IS_TRAIL_CLOSER_RE = /^[\s"'>)\]}”’」』】》〉`*_~]$/u;
-const TRAIL_WRAPPER_TRIM_RE = /["'>)\]}”’」』】》〉`*_~]+$/u;
+const IS_TRAIL_CLOSER_RE = /^[\s"'>`*_~\p{Pe}\p{Pf}]$/u;
+const TRAIL_WRAPPER_TRIM_RE = /["'>`*_~\p{Pe}\p{Pf}]+$/u;
 
 /**
  * Budgeted linear check for ambiguous truncation/abbreviation markers on an unresolved `//` token:

@@ -69,8 +69,8 @@ export function parseAttributesLinear(value, { boundFeedUrls = false } = {}) {
 export { parseAttributesLinear as parseAttributes };
 
 const foreignTags = new Set(['svg', 'math']);
-const htmlIntegrationTags = new Set(['foreignobject', 'desc']);
-const isEndTagBoundary = ch => ch === '>' || ch === '/' || whitespace.test(ch ?? '');
+const htmlWhitespace = /[ \t\n\f\r]/;
+const isHtmlEndTagBoundary = ch => ch === '>' || ch === '/' || htmlWhitespace.test(ch ?? '');
 
 function scanHtmlTagTail(str, startIdx) {
   let i = startIdx;
@@ -89,26 +89,26 @@ function scanHtmlTagTail(str, startIdx) {
       break;
     }
     if (attrState === 4) {
-      if (whitespace.test(c)) attrState = 0;
+      if (htmlWhitespace.test(c)) attrState = 0;
       i++;
       continue;
     }
     if (attrState === 3) {
-      if (whitespace.test(c)) { i++; continue; }
+      if (htmlWhitespace.test(c)) { i++; continue; }
       if (c === '"' || c === "'") { quote = c; attrState = 5; i++; continue; }
       attrState = 4;
       i++;
       continue;
     }
     if (attrState === 1) {
-      if (whitespace.test(c)) attrState = 2;
+      if (htmlWhitespace.test(c)) attrState = 2;
       else if (c === '=') attrState = 3;
       else if (c === '/') attrState = 7;
       i++;
       continue;
     }
     if (attrState === 2) {
-      if (whitespace.test(c)) { i++; continue; }
+      if (htmlWhitespace.test(c)) { i++; continue; }
       if (c === '=') { attrState = 3; i++; continue; }
       if (c === '/') { attrState = 7; i++; continue; }
       attrState = 1;
@@ -116,13 +116,13 @@ function scanHtmlTagTail(str, startIdx) {
       continue;
     }
     if (attrState === 7) {
-      if (whitespace.test(c)) { attrState = 0; i++; continue; }
+      if (htmlWhitespace.test(c)) { attrState = 0; i++; continue; }
       if (c === '/') { i++; continue; }
       attrState = 1;
       i++;
       continue;
     }
-    if (whitespace.test(c)) { attrState = 0; i++; continue; }
+    if (htmlWhitespace.test(c)) { attrState = 0; i++; continue; }
     if (c === '/') { attrState = 7; i++; continue; }
     attrState = 1;
     i++;
@@ -130,13 +130,25 @@ function scanHtmlTagTail(str, startIdx) {
   return { end: i, selfClosing };
 }
 
-/** HTML5 script data / escaped / double-escaped scanner (§13.2.5.4 & §13.2.5.15–31). Returns index after closing `>`, or -1 at EOF. */
+/** O(N) HTML5 script data / escaped / double-escaped scanner (§13.2.5.4 & §13.2.5.15–31). Retains cursors to prevent quadratic rescans. */
 function scanHtmlScriptEnd(str, startIdx) {
   let pos = startIdx;
   let state = 0; // 0 = data, 1 = escaped (<!--), 2 = double-escaped (<script inside <!--)
+  let nextLt = -2;
+  let nextDd = -2;
+  const findLt = from => {
+    if (nextLt === -1) return -1;
+    if (nextLt < from) nextLt = str.indexOf('<', from);
+    return nextLt;
+  };
+  const findDd = from => {
+    if (nextDd === -1) return -1;
+    if (nextDd < from) nextDd = str.indexOf('--', from);
+    return nextDd;
+  };
   while (pos < str.length) {
     if (state === 0) {
-      const lt = str.indexOf('<', pos);
+      const lt = findLt(pos);
       if (lt === -1) return -1;
       if (str.startsWith('<!--', lt)) {
         let dashEnd = lt + 4;
@@ -144,15 +156,15 @@ function scanHtmlScriptEnd(str, startIdx) {
         if (str[dashEnd] === '>') { pos = dashEnd + 1; continue; }
         state = 1; pos = dashEnd; continue;
       }
-      if (str[lt + 1] === '/' && str.slice(lt + 2, lt + 8).toLowerCase() === 'script' && isEndTagBoundary(str[lt + 8])) {
+      if (str[lt + 1] === '/' && str.slice(lt + 2, lt + 8).toLowerCase() === 'script' && isHtmlEndTagBoundary(str[lt + 8])) {
         const { end } = scanHtmlTagTail(str, lt + 8);
         return end < str.length && str[end] === '>' ? end + 1 : -1;
       }
       pos = lt + 1;
       continue;
     }
-    const lt = str.indexOf('<', pos);
-    const dd = str.indexOf('--', pos);
+    const lt = findLt(pos);
+    const dd = findDd(pos);
     if (lt === -1 && dd === -1) return -1;
     if (dd !== -1 && (lt === -1 || dd < lt)) {
       let endRun = dd + 2;
@@ -162,14 +174,14 @@ function scanHtmlScriptEnd(str, startIdx) {
       continue;
     }
     if (state === 1) {
-      if (str.slice(lt + 1, lt + 7).toLowerCase() === 'script' && isEndTagBoundary(str[lt + 7])) {
+      if (str.slice(lt + 1, lt + 7).toLowerCase() === 'script' && isHtmlEndTagBoundary(str[lt + 7])) {
         state = 2; pos = lt + 7; continue;
       }
-      if (str[lt + 1] === '/' && str.slice(lt + 2, lt + 8).toLowerCase() === 'script' && isEndTagBoundary(str[lt + 8])) {
+      if (str[lt + 1] === '/' && str.slice(lt + 2, lt + 8).toLowerCase() === 'script' && isHtmlEndTagBoundary(str[lt + 8])) {
         const { end } = scanHtmlTagTail(str, lt + 8);
         return end < str.length && str[end] === '>' ? end + 1 : -1;
       }
-    } else if (str[lt + 1] === '/' && str.slice(lt + 2, lt + 8).toLowerCase() === 'script' && isEndTagBoundary(str[lt + 8])) {
+    } else if (str[lt + 1] === '/' && str.slice(lt + 2, lt + 8).toLowerCase() === 'script' && isHtmlEndTagBoundary(str[lt + 8])) {
       state = 1; pos = lt + 8; continue;
     }
     pos = lt + 1;
@@ -201,19 +213,11 @@ export function* scanMarkup(input, { xml = false, rawTags = new Set(), rcdataTag
   const skipStack = [];
   const foreignStack = [];
   const updateForeignStack = (name, closing, selfClosing, floor = 0) => {
-    if (foreignTags.has(name)) {
-      if (!closing && !selfClosing) foreignStack.push({ tag: name, foreign: true });
-      else if (closing) {
-        const at = foreignStack.findLastIndex(e => e.tag === name);
-        if (at >= floor) foreignStack.length = at;
-      }
-    } else if (htmlIntegrationTags.has(name)) {
-      if (!closing && !selfClosing && foreignStack.at(-1)?.foreign) {
-        foreignStack.push({ tag: name, foreign: false });
-      } else if (closing) {
-        const at = foreignStack.findLastIndex(e => e.tag === name);
-        if (at >= floor) foreignStack.length = at;
-      }
+    if (!foreignTags.has(name)) return;
+    if (!closing && !selfClosing) foreignStack.push(name);
+    else if (closing) {
+      const at = foreignStack.lastIndexOf(name);
+      if (at >= floor) foreignStack.length = at;
     }
   };
   while (i < str.length) {
@@ -234,9 +238,10 @@ export function* scanMarkup(input, { xml = false, rawTags = new Set(), rcdataTag
     i++;
     const activeRaw = raw || rcdata;
     if (activeRaw) {
+      const boundaryChar = str[i + 1 + activeRaw.length];
       const matchesClose = str[i] === '/'
         && str.slice(i + 1, i + 1 + activeRaw.length).toLowerCase() === activeRaw
-        && isEndTagBoundary(str[i + 1 + activeRaw.length]);
+        && (xml ? (boundaryChar === '>' || whitespace.test(boundaryChar ?? '')) : isHtmlEndTagBoundary(boundaryChar));
       if (!matchesClose) {
         if (rcdata && skipStack.length === 0) yield { type: 'text', text: '<' };
         continue;
@@ -252,7 +257,7 @@ export function* scanMarkup(input, { xml = false, rawTags = new Set(), rcdataTag
         i = afterComment;
         continue;
       }
-      const allowCdata = xml || Boolean(foreignStack.at(-1)?.foreign);
+      const allowCdata = xml || foreignStack.length > 0;
       const delimited = allowCdata && str.startsWith('![CDATA[', i) ? [']]>', 8] : xml && str[i] === '?' ? ['?>', 1] : null;
       if (delimited) {
         const [end, offset] = delimited;
@@ -266,7 +271,7 @@ export function* scanMarkup(input, { xml = false, rawTags = new Set(), rcdataTag
       if (!xml) {
         if (str[i] === '/' && str[i + 1] === '>') { i += 2; continue; }
         const isBogusComment = str[i] === '?'
-          || (str[i] === '!' && !/^!doctype(?=$|[\s>])/i.test(str.slice(i, i + 9)))
+          || (str[i] === '!' && !/^!doctype(?=$|[ \t\n\f\r>])/i.test(str.slice(i, i + 9)))
           || (str[i] === '/' && i + 1 < str.length && !htmlNameStart.test(str[i + 1]));
         if (isBogusComment) {
           const gt = str.indexOf('>', i);
@@ -332,7 +337,7 @@ export function* scanMarkup(input, { xml = false, rawTags = new Set(), rcdataTag
         return;
       }
       if (!closing && (rawTags.has(name) || rcdataTags.has(name) || name === 'title')) { raw = name; continue; }
-      if (!xml && (foreignTags.has(name) || htmlIntegrationTags.has(name))) {
+      if (!xml && foreignTags.has(name)) {
         updateForeignStack(name, closing, selfClosing, skipStack.at(-1).foreignDepth);
         continue;
       }
@@ -345,7 +350,7 @@ export function* scanMarkup(input, { xml = false, rawTags = new Set(), rcdataTag
       }
       continue;
     }
-    if (!xml && (foreignTags.has(name) || htmlIntegrationTags.has(name))) {
+    if (!xml && foreignTags.has(name)) {
       updateForeignStack(name, closing, selfClosing, 0);
     }
     if (!closing && rawTags.has(name)) { raw = name; if (!emitRawOpen) continue; }

@@ -2915,6 +2915,33 @@ describe('2.0 graph and AI contracts', () => {
     });
     expect(r10AgentAi.mock.lastCall[0].payload.briefContext).toBeUndefined();
 
+    // Round 32 (PR #2032 Round 11): P1 linear O(N) escaped-script scaling (~1 MiB < 250ms), `<code>`/`<pre>` plainVisible
+    // metadata exclusion, SVG `<desc>`/`<foreignObject>` CDATA, HTML ASCII whitespace (NBSP), and Unicode closing quotes (`»`).
+    const tEsc0 = performance.now();
+    const escScaled = extractCleanArticle(`<article><p>Safe scaled</p><script><!--${'<'.repeat(1_000_000)}`, 'https://private.example/scale');
+    expect(performance.now() - tEsc0).toBeLessThan(250);
+    expect(escScaled.aiMarkdown).toContain('Safe scaled');
+    const codeTitleArt = extractCleanArticle('<article><code>Safe prose //R11CODETITLE99<title> metadata words', 'https://private.example/ct');
+    expect(codeTitleArt.truncated).toBe(true);
+    expect(codeTitleArt.aiMarkdown).not.toContain('R11CODETITLE99');
+    expect(codeTitleArt.aiMarkdown).not.toContain('metadata');
+    const preTitleArt = extractCleanArticle('<article><pre>Safe prose //R11PRETITLE99<title> metadata words', 'https://private.example/pt');
+    expect(preTitleArt.truncated).toBe(true);
+    expect(preTitleArt.aiMarkdown).not.toContain('R11PRETITLE99');
+    const r11DescMedia = extractMarkupMedia(
+      '<template><svg><desc><![CDATA[ > </template> ]]></desc></svg><img src="https://secret.example/desc.png"></template><template><script>var s="</script\u00a0></template><img src=\'https://secret.example/nbsp.png\'>";</script></template><img src="https://public.example/r11-ok.png">',
+      'https://public.example/',
+    );
+    expect(r11DescMedia.map(m => m.url)).toEqual(['https://public.example/r11-ok.png']);
+    const r11RssParsed = parseFeedXml(
+      `<rss><channel><item><title>R11 Desc &amp; Nbsp</title><link>https://private.example/r11</link><description>Safe r11 //R11DESC99&lt;wbr&gt;&lt;template&gt;&lt;svg&gt;&lt;desc&gt;&lt;![CDATA[ &gt; &lt;/template&gt; ]]&gt;&lt;/desc&gt;&lt;/svg&gt;discarded &lt;/template&gt;@intranet:8080/a and //R11NBSP99&lt;wbr&gt;&lt;template&gt;&lt;script&gt;var s="&lt;/script\u00a0&gt;&lt;/template&gt;discarded";&lt;/script&gt;&lt;/template&gt;@intranet:8080/b end.</description></item></channel></rss>`,
+      'https://private.example/feed.xml',
+      { sanitizeExcerpt: raw => raw },
+    );
+    expect(r11RssParsed[0].summaryExcerpt).not.toContain('discarded');
+    expect(r11RssParsed[0].summaryExcerpt).toContain('//R11DESC99@intranet:8080/a');
+    expect(r11RssParsed[0].summaryExcerpt).toContain('//R11NBSP99@intranet:8080/b');
+
     // Mixed public/private dailyBriefing carries per-story isPrivateSource: true on private stories (enabling Agent defense-in-depth) while keeping public stories clean.
     const mixedDailyReqAi = vi.fn(async () => dailyResult);
     const mixedDailySvc = makeService({ requestAi: mixedDailyReqAi });

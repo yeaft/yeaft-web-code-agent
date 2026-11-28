@@ -1,7 +1,7 @@
 import { decodeEntities, parseAttributesLinear, resolveHttpUrl, scanMarkup } from './rss-parser.js';
 import { createRedactionBudget, redactPrivateTextMask } from './private-redactor.js';
 
-export const ARTICLE_EXTRACTOR_VERSION = 6;
+export const ARTICLE_EXTRACTOR_VERSION = 7;
 
 const discard = new Set('script style noscript svg nav header footer aside form iframe template button noembed noframes xmp textarea'.split(' '));
 const rawTags = new Set(['script', 'style', 'iframe', 'noembed', 'noframes', 'xmp', 'textarea']);
@@ -86,7 +86,7 @@ function renderPrivatePieces(node, cutoffSet) {
   const openAtCutoff = cutoffSet.has(node);
 
   if (tag === 'pre') {
-    const code = plain(node).trimEnd();
+    const code = plainVisible(node).trimEnd();
     const fence = fenceFor(code, 3);
     const pieces = [{ kind: 'sep', text: '\n\n' }, { kind: 'syn', md: fence }, { kind: 'sep', text: '\n' }];
     if (code) pieces.push({ kind: 'pre', text: code });
@@ -94,7 +94,7 @@ function renderPrivatePieces(node, cutoffSet) {
     return pieces;
   }
   if (tag === 'code') {
-    const code = plain(node).trimEnd().replace(/\n/g, ' ');
+    const code = plainVisible(node).trimEnd().replace(/\n/g, ' ');
     if (!code.trim()) return [];
     return [{ kind: 'code', text: code }];
   }
@@ -366,6 +366,12 @@ function tree(html, scanMeta) {
 
 function plain(node) {
   return typeof node === 'string' ? node : node.children.map(plain).join('') + (blocks.has(node.tag) ? '\n' : '');
+}
+
+function plainVisible(node) {
+  if (typeof node === 'string') return node;
+  if (node.tag === 'head' || node.tag === 'title') return '';
+  return node.children.map(plainVisible).join('') + (blocks.has(node.tag) ? '\n' : '');
 }
 
 function markdown(node, url) {
