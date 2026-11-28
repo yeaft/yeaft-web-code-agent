@@ -13,7 +13,7 @@ import * as db from '../../server/db/cosmic-web-db.js';
 import { safeFetch, validateExternalUrl } from '../../server/cosmic-web/safe-fetch.js';
 import { createMediaProxy, toProxyMediaUrl } from '../../server/cosmic-web/media-proxy.js';
 import { extractCommunityEnrichment } from '../../server/cosmic-web/community-extractor.js';
-import { parseFeedXml, resolveHttpUrl } from '../../server/cosmic-web/rss-parser.js';
+import { extractMarkupMedia, parseFeedXml, resolveHttpUrl } from '../../server/cosmic-web/rss-parser.js';
 import { ARTICLE_EXTRACTOR_VERSION, extractCleanArticle } from '../../server/cosmic-web/article-extractor.js';
 import { BUILTIN_DOMAINS, BUILTIN_SOURCES } from '../../server/cosmic-web/catalog.js';
 import { fetchSource } from '../../server/cosmic-web/sources.js';
@@ -2418,6 +2418,262 @@ describe('2.0 graph and AI contracts', () => {
     });
     expect(r8AgentAi.mock.lastCall[0].payload.briefContext).toBeUndefined();
     expect(r8Prompts.at(-1)).not.toContain('OLDV3TLDR99');
+
+    // Round 30 (PR #2032 Round 9) Blocker #1/#2/#3 isolated end-to-end regressions:
+    // (1) Nested blocks inside `<em>`/`<strong>` (`<em><p>//R9ARTFIXTURE</p></em><code>@intranet:8080/a</code>` and unfinished `<script>` truncation)
+    //     derive redaction & cutoff boundaries from surviving rendered whitespace, preserving separators when inner blocks empty after redaction; v4 caches rejected.
+    // (2) Foreign-content `<svg><![CDATA[ > </template> ]]></svg>` inside `<template>` in XML-escaped RSS description AND `<textarea>` inside `<template>` for media extraction
+    //     never prematurely exit `skipStack`; pre-fix v4 RSS/Radar excerpts are omitted until upgraded to v5.
+    // (3) Spaced balanced ellipses (`//R9BRIEFFIX[. . .] next fact.`) and >16-space padded abbreviation markers (`//R9RADAR17[                 ...] next fact.`)
+    //     are caught within shared scan budget (failing closed on budget exhaustion); HMAC binds exact server-scrubbed `tldr` returned to client; v4 provenance rejected.
+    const r9NestedEmHtml = '<article>Safe r9 em <em><p>//R9ARTFIXTURE99</p></em><code>@intranet:8080/a</code> and <strong><div><p>//R9STRFIX99</p></div></strong><code>@intranet:8080/b</code> and <em><p>KeepParaA</p><p>https://only.secret.internal/x</p><p>KeepParaB</p></em> end.</article>';
+    const r9EmScriptTruncHtml = '<article>Safe r9 trunc <em><p>//R9EMTRUNC99</p></em><script>unclosed';
+    const r9FeedRss = `<rss><channel>
+      <item><title>Iota Nested Em Block Article</title><link>https://private.example/r9-nested-em</link><description>Nested em desc</description></item>
+      <item><title>Kappa Em Script Trunc Article</title><link>https://private.example/r9-em-trunc</link><description>Em trunc desc</description></item>
+      <item><title>Lambda Svg Cdata Template Feed</title><link>https://private.example/r9-svg-cdata</link><description>Safe r9 svg //R9SVGFIX99&lt;wbr&gt;&lt;template&gt;&lt;svg&gt;&lt;![CDATA[ &gt; &lt;/template&gt; ]]&gt;&lt;/svg&gt;discarded &lt;/template&gt;@intranet:8080/api end.</description></item>
+    </channel></rss>`;
+    // Also verify `extractMarkupMedia` shares RCDATA `<textarea>` & SVG CDATA handling inside `<template>`
+    const r9MediaCheck = extractMarkupMedia(
+      '<template><textarea></template><img src="https://secret.example/textarea-leak.png"></textarea></template><template><svg><![CDATA[ > </template> ]]></svg><img src="https://secret.example/svg-leak.png"></template><img src="https://public.example/r9-ok.png">',
+      'https://public.example/',
+    );
+    expect(r9MediaCheck.map(m => m.url)).toEqual(['https://public.example/r9-ok.png']);
+
+    const r9Prompts = [];
+    const r9RadarUrl = 'https://radar.example/r9-spaced';
+    const r9AgentAi = vi.fn(async ({ mode, perspective, language, payload }) => {
+      if (mode === 'topic_radar') {
+        const WebSearch = vi.fn().mockResolvedValue({
+          provider: 'generic',
+          results: [{
+            url: r9RadarUrl,
+            title: 'R9 Spaced Ellipsis Story',
+            snippet: `SafeR9Radar //R9RADAR17[${' '.repeat(17)}...] //R9RADARSP[. . .] //50%增长 next fact.`,
+          }],
+        });
+        const radarAdapter = {
+          captureStream: vi.fn()
+            .mockImplementationOnce(async function* () { yield { type: 'tool_call', id: 'r9tc1', name: 'WebSearch', input: { query: 'r9 spaced', limit: 5 } }; })
+            .mockImplementationOnce(async function* () {}),
+          call: vi.fn().mockImplementation(async req => {
+            r9Prompts.push(JSON.stringify(req));
+            const toolMsg = req.messages.find(m => m.role === 'tool')?.content ?? '';
+            const parsedTool = JSON.parse(toolMsg.replace(/^<untrusted_web_result>\n|\n<\/untrusted_web_result>$/g, ''));
+            return {
+              text: JSON.stringify({
+                items: parsedTool.results.map(r => ({
+                  title: r.title, url: r.url, sourceName: 'R9Wire', summaryExcerpt: r.snippet,
+                })),
+                searchCount: 1,
+              }),
+            };
+          }),
+        };
+        const { result } = await runCosmicWebBriefing({
+          mode, perspective, language, payload,
+          config: { fastModel: 'test/fast', defaultModel: 'test/fast' },
+          adapter: radarAdapter, toolExecutors: { WebSearch },
+        });
+        return result;
+      }
+      const adapter = {
+        async call(req) {
+          r9Prompts.push(JSON.stringify(req));
+          if (mode === 'follow_up') {
+            return { text: JSON.stringify({ question: 'q', answer: 'ok', bullets: ['one'], followUps: ['q1'] }) };
+          }
+          return {
+            text: JSON.stringify({
+              tldr: `SafeR9Tldr //R9BRIEFFIX[. . .] //R9BRIEFPAD[${' '.repeat(17)}...] //50%增长 next fact.`,
+              bullets: ['Safe bullet one', 'Safe bullet two'],
+              impact: 'Safe impact',
+              followUps: ['q1', 'q2'],
+            }),
+          };
+        },
+      };
+      const { result } = await runCosmicWebBriefing({
+        mode, perspective, language, payload,
+        config: { fastModel: 'test/fast', defaultModel: 'test/fast' },
+        adapter,
+      });
+      return result;
+    });
+    const r9FeedUrl = 'https://private.example/r9.xml';
+    const r9Clock = NOW + 600_000;
+    const r9Svc = makeService({
+      fetcher: async url => {
+        if (url === r9FeedUrl) return { status: 200, url, text: async () => r9FeedRss };
+        if (url.endsWith('/r9-nested-em')) return { status: 200, url, text: async () => r9NestedEmHtml };
+        if (url.endsWith('/r9-em-trunc')) return { status: 200, url, text: async () => r9EmScriptTruncHtml };
+        return { status: 200, url, text: async () => '<article><p>ok</p></article>' };
+      },
+      requestAi: r9AgentAi,
+      now: () => r9Clock,
+    });
+    await r9Svc.savePreferences('nina', {
+      enabledDomainIds: [],
+      customDomains: [
+        { id: 'priv-r9', name: 'Priv R9', colorToken: 'cyan', enabled: true, keywords: [], rssUrls: [r9FeedUrl] },
+        { id: 'radar-r9', name: 'Radar R9', colorToken: 'gold', enabled: true, keywords: ['r9'], aiRadar: true, rssUrls: [] },
+      ],
+    });
+    await r9Svc.refresh('nina', { domainId: 'priv-r9', force: true });
+    agents.set('v5-nina-a', {
+      ownerId: 'nina', name: 'v5-nina-a',
+      capabilities: ['cosmic_web_briefing', 'cosmic_web_follow_up', 'cosmic_web_radar', 'cosmic_web_research'],
+      encryptOutbound: false, ws: { readyState: 1, send: () => {} },
+    });
+    agents.set('v5-nina-b', {
+      ownerId: 'nina', name: 'v5-nina-b',
+      capabilities: ['cosmic_web_briefing', 'cosmic_web_follow_up'],
+      encryptOutbound: false, ws: { readyState: 1, send: () => {} },
+    });
+    const ninaFeed = r9Svc.feed('nina', { domainId: 'priv-r9' });
+    const r9EmCluster = ninaFeed.clusters.find(c => c.headline === 'Iota Nested Em Block Article');
+    const r9EmTruncCluster = ninaFeed.clusters.find(c => c.headline === 'Kappa Em Script Trunc Article');
+    const r9SvgCluster = ninaFeed.clusters.find(c => c.headline === 'Lambda Svg Cdata Template Feed');
+
+    // (1a) `<em><p>//R9ARTFIXTURE99</p></em><code>@intranet:8080/a</code>` & nested redacted block separator preservation
+    const r9DisplayArt = await r9Svc.article('nina', r9EmCluster.id);
+    expect(r9DisplayArt.extractorVersion).toBe(ARTICLE_EXTRACTOR_VERSION);
+    await r9Svc.aiBrief('nina', 'user', r9EmCluster.id, { agentId: 'v5-nina-a', research: true });
+    const r9EmPrompt = r9Prompts.at(-1);
+    expect(r9EmPrompt).toContain('Safe r9 em');
+    expect(r9EmPrompt).toContain('KeepParaA');
+    expect(r9EmPrompt).toContain('KeepParaB');
+    expect(r9EmPrompt).not.toContain('KeepParaAKeepParaB');
+    expect(r9EmPrompt).not.toContain('R9ARTFIXTURE99');
+    expect(r9EmPrompt).not.toContain('R9STRFIX99');
+    expect(r9EmPrompt).not.toContain('only.secret.internal');
+    // (1b) `<em><p>//R9EMTRUNC99</p></em><script>unclosed` rewinds trailing marker
+    await r9Svc.aiBrief('nina', 'user', r9EmTruncCluster.id, { agentId: 'v5-nina-a', research: true });
+    expect(r9Prompts.at(-1)).toContain('Safe r9 trunc');
+    expect(r9Prompts.at(-1)).not.toContain('R9EMTRUNC99');
+    // (1c) Pre-fix v4 (`extractorVersion: 4`) cached article row is rejected by private `aiBrief`
+    db.setArticleCache('nina', r9DisplayArt.itemId, {
+      title: 'Old v4', markdown: 'Old v4 *//OLDV4EM99* ` @intranet:8080 `', aiMarkdown: 'Old v4 *//OLDV4EM99* ` @intranet:8080 `',
+      extractorVersion: 4, truncated: false, quality: 'full', itemId: r9DisplayArt.itemId, clusterId: r9EmCluster.id, summaryExcerpt: 'Old',
+    }, r9Clock + HOUR);
+    await r9Svc.aiBrief('nina', 'user', r9EmCluster.id, { skipArticleFetch: true, agentId: 'v5-nina-a', research: true, force: true });
+    expect(r9AgentAi.mock.lastCall[0].payload.articleMarkdown).toBeUndefined();
+    expect(r9Prompts.at(-1)).not.toContain('OLDV4EM99');
+
+    // (2) XML-escaped SVG CDATA inside `<template>` never prematurely exits `skipStack`
+    expect(r9SvgCluster.summaryExcerpt).toContain('Safe r9 svg');
+    expect(r9SvgCluster.summaryExcerpt).toContain('end.');
+    expect(r9SvgCluster.summaryExcerpt).not.toContain('R9SVGFIX99');
+    expect(r9SvgCluster.summaryExcerpt).not.toContain('discarded');
+    await r9Svc.aiBrief('nina', 'user', r9SvgCluster.id, { skipArticleFetch: true, agentId: 'v5-nina-a', research: true });
+    expect(r9Prompts.at(-1)).toContain('Safe r9 svg');
+    expect(r9Prompts.at(-1)).not.toContain('R9SVGFIX99');
+    expect(r9Prompts.at(-1)).not.toContain('discarded');
+
+    // (3a) Spaced balanced ellipses (`[. . .]`, `[17 spaces...]`) in private TLDR -> cross-Agent HMAC followUp, preserving `//50%增长`
+    const r9Brief = await r9Svc.aiBrief('nina', 'user', r9SvgCluster.id, { skipArticleFetch: true, agentId: 'v5-nina-a', research: true, force: true });
+    expect(r9Brief.briefContextVersion).toBe(PRIVATE_BRIEF_CONTEXT_VERSION);
+    expect(typeof r9Brief.briefContextToken).toBe('string');
+    expect(r9Brief.tldr).toContain('SafeR9Tldr');
+    expect(r9Brief.tldr).toContain('//50%增长');
+    expect(r9Brief.tldr).not.toContain('R9BRIEFFIX');
+    expect(r9Brief.tldr).not.toContain('R9BRIEFPAD');
+    await r9Svc.followUp('nina', 'user', r9SvgCluster.id, {
+      question: 'Follow up with v5 token?',
+      briefContext: r9Brief.tldr,
+      briefContextToken: r9Brief.briefContextToken,
+      agentId: 'v5-nina-b',
+      research: true,
+    });
+    expect(r9Prompts.at(-1)).toContain('SafeR9Tldr');
+    expect(r9Prompts.at(-1)).toContain('//50%增长');
+    expect(r9Prompts.at(-1)).not.toContain('R9BRIEFFIX');
+    expect(r9Prompts.at(-1)).not.toContain('R9BRIEFPAD');
+
+    // (3b) Real Radar WebSearch with 17-space padded bracketed ellipsis & spaced dots -> stripped before Radar model & v5 DB
+    const r9RadarRes = await r9Svc.radarScan('nina', 'user', 'radar-r9');
+    expect(r9RadarRes.added).toBe(1);
+    const r9RadarCluster = r9Svc.feed('nina', { domainId: 'radar-r9' }).clusters.find(c => c.headline === 'R9 Spaced Ellipsis Story');
+    expect(r9RadarCluster.summaryExcerpt).toContain('SafeR9Radar');
+    expect(r9RadarCluster.summaryExcerpt).toContain('//50%增长');
+    expect(r9RadarCluster.summaryExcerpt).not.toContain('R9RADAR17');
+    expect(r9RadarCluster.summaryExcerpt).not.toContain('R9RADARSP');
+    await r9Svc.aiBrief('nina', 'user', r9RadarCluster.id, { skipArticleFetch: true, agentId: 'v5-nina-a', research: true });
+    expect(r9Prompts.at(-1)).toContain('SafeR9Radar');
+    expect(r9Prompts.at(-1)).not.toContain('R9RADAR17');
+    expect(r9Prompts.at(-1)).not.toContain('R9RADARSP');
+
+    // (3c) Server binds HMAC strictly to exact server-scrubbed `tldr` returned to client (rejecting raw un-scrubbed TLDR)
+    const serverScrubReqAi = vi.fn(async req => {
+      if (req.mode === 'brief') {
+        return {
+          tldr: 'ServerScrubOk //SERVERCAUGHT99[. . .] tail',
+          sections: [{ heading: 'H', body: 'Body' }],
+          bullets: ['b1', 'b2'], impact: 'ok', media: [], communityHighlights: [], citations: [],
+          followUps: ['q1', 'q2'], researched: false, searchCount: 0, evidenceCount: 0, fullMarkdown: 'Safe md',
+          briefContextVersion: PRIVATE_BRIEF_CONTEXT_VERSION,
+        };
+      }
+      return r9AgentAi(req);
+    });
+    const serverScrubSvc = makeService({ requestAi: serverScrubReqAi, now: () => r9Clock + 60_000 });
+    const serverScrubBrief = await serverScrubSvc.aiBrief('nina', 'user', r9EmTruncCluster.id, { skipArticleFetch: true, agentId: 'v5-nina-a', research: true, force: true });
+    expect(serverScrubBrief.tldr).not.toContain('SERVERCAUGHT99');
+    expect(serverScrubBrief.tldr).toContain('ServerScrubOk');
+    // Replaying raw un-scrubbed text with the minted token MUST fail HMAC verification
+    await serverScrubSvc.followUp('nina', 'user', r9EmTruncCluster.id, {
+      question: 'Raw text with scrubbed token?',
+      briefContext: 'ServerScrubOk //SERVERCAUGHT99[. . .] tail',
+      briefContextToken: serverScrubBrief.briefContextToken,
+      agentId: 'v5-nina-b',
+      research: true,
+    });
+    expect(r9AgentAi.mock.lastCall[0].payload.briefContext).toBeUndefined();
+    // Replaying the exact returned scrubbed `tldr` with its token MUST succeed
+    await serverScrubSvc.followUp('nina', 'user', r9EmTruncCluster.id, {
+      question: 'Scrubbed text with scrubbed token?',
+      briefContext: serverScrubBrief.tldr,
+      briefContextToken: serverScrubBrief.briefContextToken,
+      agentId: 'v5-nina-b',
+      research: true,
+    });
+    expect(r9AgentAi.mock.lastCall[0].payload.briefContext).toBe(serverScrubBrief.tldr);
+
+    // (3d) Old v4 (`excerptVersion: 4`, `briefContextVersion: 4`) provenance is rejected/omitted!
+    const oldV4ReqAi = vi.fn(async req => {
+      if (req.mode === 'topic_radar') {
+        return {
+          items: [{ title: 'Old V4 Radar Story', url: 'https://radar.example/old-v4-radar', sourceName: 'V4Radar', summaryExcerpt: 'Old v4 radar display' }],
+          searchCount: 1,
+          excerptVersion: 4,
+        };
+      }
+      if (req.mode === 'brief') {
+        return {
+          tldr: 'Old v4 uncertified TLDR //OLDV4TLDR99[. . .] next',
+          sections: [{ heading: 'H', body: 'Body' }],
+          bullets: ['b1', 'b2'], impact: 'ok', media: [], communityHighlights: [], citations: [],
+          followUps: ['q1', 'q2'], researched: false, searchCount: 0, evidenceCount: 0, fullMarkdown: 'Safe md',
+          briefContextVersion: 4,
+        };
+      }
+      return r9AgentAi(req);
+    });
+    const oldV4Svc = makeService({ requestAi: oldV4ReqAi, now: () => r9Clock + 180_000 });
+    await oldV4Svc.radarScan('nina', 'user', 'radar-r9');
+    const oldV4RadarCluster = oldV4Svc.feed('nina', { domainId: 'radar-r9' }).clusters.find(c => c.headline === 'Old V4 Radar Story');
+    await oldV4Svc.aiBrief('nina', 'user', oldV4RadarCluster.id, { skipArticleFetch: true, agentId: 'v5-nina-a', research: true });
+    expect(oldV4ReqAi.mock.lastCall[0].payload.summaryExcerpt).toBe('');
+    const oldV4BriefRes = await oldV4Svc.aiBrief('nina', 'user', r9EmTruncCluster.id, { skipArticleFetch: true, agentId: 'v5-nina-b', research: true, force: true });
+    expect(oldV4BriefRes.briefContextToken).toBeUndefined();
+    expect(oldV4BriefRes.briefContextVersion).toBeUndefined();
+    await oldV4Svc.followUp('nina', 'user', r9EmTruncCluster.id, {
+      question: 'Follow up after old v4 brief?',
+      briefContext: oldV4BriefRes.tldr,
+      agentId: 'v5-nina-b',
+      research: true,
+    });
+    expect(r9AgentAi.mock.lastCall[0].payload.briefContext).toBeUndefined();
 
     // Mixed public/private dailyBriefing carries per-story isPrivateSource: true on private stories (enabling Agent defense-in-depth) while keeping public stories clean.
     const mixedDailyReqAi = vi.fn(async () => dailyResult);

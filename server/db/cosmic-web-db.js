@@ -4,7 +4,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 let db;
-export const PRIVATE_EXCERPT_VERSION = 4;
+export const PRIVATE_EXCERPT_VERSION = 5;
 export function resolveCosmicWebDbPath(env = process.env) {
   if (env.COSMIC_WEB_DB_PATH) return env.COSMIC_WEB_DB_PATH;
   if (env.SERVER_DATA_DIR) return join(env.SERVER_DATA_DIR, 'cosmic-web.db');

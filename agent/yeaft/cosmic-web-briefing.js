@@ -21,8 +21,8 @@ export const COSMIC_WEB_FOLLOW_UP_CAPABILITY = 'cosmic_web_follow_up';
 export const COSMIC_WEB_RADAR_CAPABILITY = 'cosmic_web_radar';
 export const COSMIC_WEB_CANCEL_CAPABILITY = 'cosmic_web_cancel';
 
-const PRIVATE_EXCERPT_VERSION = 4;
-const PRIVATE_BRIEF_CONTEXT_VERSION = 4;
+const PRIVATE_EXCERPT_VERSION = 5;
+const PRIVATE_BRIEF_CONTEXT_VERSION = 5;
 
 const BUNDLED_SKILLS_DIR = fileURLToPath(new URL('../skills/', import.meta.url));
 const SKILL_PATH = 'cosmic-web/SKILL.md';
@@ -235,8 +235,127 @@ const isWhatwgDot = code => code === 0x002e || code === 0x3002 || code === 0xff0
 // Percent-encoded WHATWG host dot separators normalized by Node URL parsing: %2e (.), %e3%80%82 (。), %ef%bc%8e (．), %ef%bd%a1 (｡).
 const PERCENT_WHATWG_DOT_RE = /%(?:2e|e3%80%82|ef%bc%8e|ef%bd%a1)/i;
 const ELLIPSIS_RE = /(?:\\?\.\\?\.|…|⋯)/u;
-const FOLLOWING_ELLIPSIS_RE = /^\s*(?:\\?[\[(\{【（]\s*(?:(?:\\?\.){2,}|…|⋯)\s*\\?[\])\}】）]|(?:\\?\.){2,}|…|⋯)/u;
-const TRAILING_CLOSERS_ONLY_RE = /^[\s"'>)\]}”’」』】》〉]*$/u;
+const AMBIGUOUS_OPENER_MAP = { '[': ']', '(': ')', '{': '}', '【': '】', '（': '）' };
+const ATTACHED_OPEN_TAIL_RE = /(?:\\?([\[(\{【（]))((?:\\?\.|…|⋯)*)$/u;
+const IS_TRAIL_CLOSER_RE = /^[\s"'>)\]}”’」』】》〉]$/u;
+
+function findAmbiguousTruncationEnd(str, offset, tokenEnd, budget) {
+  const len = str.length;
+  const tokenBody = str.slice(offset + 2, tokenEnd);
+  const bumpStep = () => {
+    if (budget && ++budget.scanSteps > budget.maxScanSteps) {
+      budget.exhausted = true;
+      return true;
+    }
+    return false;
+  };
+
+  // 1. Attached opener split by whitespace inside a balanced abbreviation marker (e.g. //M[. . .], //M[   ...], //M(… )).
+  const openTail = ATTACHED_OPEN_TAIL_RE.exec(tokenBody);
+  if (openTail) {
+    const closeCh = AMBIGUOUS_OPENER_MAP[openTail[1]];
+    let dots = 0;
+    for (const ch of openTail[2]) {
+      if (ch === '.') dots++;
+      else if (ch === '…' || ch === '⋯') dots += 2;
+    }
+    let p = tokenEnd;
+    while (p < len) {
+      if (bumpStep()) return -1;
+      const ch = str[p];
+      if (ch === '\\' && p + 1 < len) {
+        const next = str[p + 1];
+        if (next === '.') { dots++; p += 2; continue; }
+        if (next === closeCh) {
+          if (dots >= 2) return p + 2;
+          break;
+        }
+        break;
+      }
+      if (/\s/u.test(ch)) { p++; continue; }
+      if (ch === '.') { dots++; p++; continue; }
+      if (ch === '…' || ch === '⋯') { dots += 2; p++; continue; }
+      if (ch === closeCh) {
+        if (dots >= 2) return p + 1;
+        break;
+      }
+      break;
+    }
+    if (p >= len) return len;
+  }
+
+  // 2. Attached compact ellipsis/abbreviation inside the scanned token (e.g. //M..., //M…, //M[...], //M[…], //M(…)).
+  if (ELLIPSIS_RE.test(tokenBody)) return tokenEnd;
+
+  // 3. Whitespace-separated lookahead within shared budget (no fixed short character window).
+  let p = tokenEnd;
+  while (p < len && /\s/u.test(str[p])) {
+    if (bumpStep()) return -1;
+    p++;
+  }
+  if (p >= len) return tokenEnd;
+
+  // 3a. Effective EOF (only whitespace and closing quotes/brackets remain).
+  let q = p;
+  while (q < len && IS_TRAIL_CLOSER_RE.test(str[q])) {
+    if (bumpStep()) return -1;
+    q++;
+  }
+  if (q >= len) return tokenEnd;
+
+  // 3b. Bare ellipsis or spaced dots after whitespace (... / … / . . . / attached '.' + ' .').
+  if (str[p] === '…' || str[p] === '⋯') return tokenEnd;
+  if (str[p] === '.' || (str[p] === '\\' && str[p + 1] === '.')) {
+    let dots = tokenBody.endsWith('.') ? 1 : 0;
+    let r = p;
+    while (r < len) {
+      if (bumpStep()) return -1;
+      const ch = str[r];
+      if (ch === '\\' && str[r + 1] === '.') { dots++; r += 2; continue; }
+      if (ch === '.') { dots++; r++; continue; }
+      if (ch === '…' || ch === '⋯') { dots += 2; r++; continue; }
+      if (/\s/u.test(ch)) { r++; continue; }
+      break;
+    }
+    if (dots >= 2) return tokenEnd;
+  }
+
+  // 3c. Whitespace-separated balanced abbreviation wrapper ([...], [. . .], [   ...], ( … ), { … }, 【…】, （…）).
+  let openCh = str[p];
+  let r = p + 1;
+  if (openCh === '\\' && p + 1 < len && Object.hasOwn(AMBIGUOUS_OPENER_MAP, str[p + 1])) {
+    openCh = str[p + 1];
+    r = p + 2;
+  }
+  if (Object.hasOwn(AMBIGUOUS_OPENER_MAP, openCh)) {
+    const closeCh = AMBIGUOUS_OPENER_MAP[openCh];
+    let dots = 0;
+    while (r < len) {
+      if (bumpStep()) return -1;
+      const ch = str[r];
+      if (ch === '\\' && r + 1 < len) {
+        const next = str[r + 1];
+        if (next === '.') { dots++; r += 2; continue; }
+        if (next === closeCh) {
+          if (dots >= 2) return tokenEnd;
+          break;
+        }
+        break;
+      }
+      if (/\s/u.test(ch)) { r++; continue; }
+      if (ch === '.') { dots++; r++; continue; }
+      if (ch === '…' || ch === '⋯') { dots += 2; r++; continue; }
+      if (ch === closeCh) {
+        if (dots >= 2) return tokenEnd;
+        break;
+      }
+      break;
+    }
+    if (r >= len && dots > 0) return tokenEnd;
+  }
+
+  return -1;
+}
 function percentWhatwgDotLenAt(str, idx) {
   if (str.charCodeAt(idx) !== 0x25) return 0;
   if (idx + 3 <= str.length && str.charCodeAt(idx + 1) === 0x32 && (str.charCodeAt(idx + 2) | 32) === 0x65) return 3;
@@ -651,12 +770,9 @@ function matchUrlStartAt(str, offset, identBeforeUnderscores = false, budget = n
       // authority fragment at EOF, OR any unresolved authority exceeding lookahead or cut-tracking capacity.
       if (k === len && (seenAt || inBrackets || seenPortColon || postAtPortColon)) return { prefixLen: 2, minEnd: k };
       if (failClosedTruncatedSchemeRelative) {
-        const tokenBody = str.slice(offset + 2, k);
-        const tailAfterToken = str.slice(k, Math.min(len, k + 16));
-        const effectivelyEof = k === len || (len - k <= 16 && TRAILING_CLOSERS_ONLY_RE.test(str.slice(k)));
-        if (effectivelyEof || ELLIPSIS_RE.test(tokenBody) || FOLLOWING_ELLIPSIS_RE.test(tailAfterToken)) {
-          return { prefixLen: 2, minEnd: k };
-        }
+        const truncEnd = findAmbiguousTruncationEnd(str, offset, k, budget);
+        if (budget?.exhausted) return null;
+        if (truncEnd !== -1) return { prefixLen: 2, minEnd: truncEnd };
       }
       if ((k >= maxScan && k < len && !isBareUrlStop(str[k])) || cutsOverflowed) return { prefixLen: 2, minEnd: k };
     }

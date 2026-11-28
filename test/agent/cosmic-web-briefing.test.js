@@ -455,16 +455,16 @@ describe('Cosmic Web bounded research', () => {
     expect(legacyRes.excerptVersion).toBeUndefined();
     expect(legacyRes.items[0].summaryExcerpt).toContain('Safe radar');
     expect(legacyRes.items[0].summaryExcerpt).not.toContain('RADARAGENTCLIP99');
-    // With excerptProvenance: true (current Server): scrubs pre-clip and emits excerptVersion: 4
-    const { result: v4Res } = await run({
+    // With excerptProvenance: true (current Server): scrubs pre-clip and emits excerptVersion: 5
+    const { result: v5Res } = await run({
       mode: 'topic_radar',
       payload: { topic: 'Radar', excerptProvenance: true },
       adapter: makeRadarAdapter(),
       toolExecutors: { WebSearch },
     });
-    expect(v4Res.excerptVersion).toBe(4);
-    expect(v4Res.items[0].summaryExcerpt).toContain('Safe radar');
-    expect(v4Res.items[0].summaryExcerpt).not.toContain('RADARAGENTCLIP99');
+    expect(v5Res.excerptVersion).toBe(5);
+    expect(v5Res.items[0].summaryExcerpt).toContain('Safe radar');
+    expect(v5Res.items[0].summaryExcerpt).not.toContain('RADARAGENTCLIP99');
   });
 
   it('redacts Radar WebSearch evidence before the 1,500-char cap and fails closed on upstream-truncated ambiguous tokens', async () => {
@@ -473,7 +473,7 @@ describe('Cosmic Web bounded research', () => {
     const explicitTruncUrl = 'https://radar.example/search-explicit-trunc';
     const split1500Snippet = `${'s'.repeat(1474)} Safe1500 //SEARCH1500USER99@intranet:8080/api`;
     const split1500Answer = `${'a'.repeat(1476)} Ans1500 //ANS1500USER99@intranet:8080/api`;
-    const upstreamTruncSnippet = 'Safe upstream //UPSTREAM1500ELLIPSIS99... mid //UPSTREAM1500SPACE99 ... //UPSTREAM1500ATTBRK99[...] //UPSTREAM1500ATTUNI99[…] //UPSTREAM1500ATTPAR99(…) next (//UPSTREAM1500PAREN99…) tail //UPSTREAM1500EOF99';
+    const upstreamTruncSnippet = `Safe upstream //UPSTREAM1500ELLIPSIS99... mid //UPSTREAM1500SPACE99 ... //UPSTREAM1500ATTBRK99[...] //UPSTREAM1500ATTUNI99[…] //UPSTREAM1500ATTPAR99(…) //UPSTREAM1500SPDOT99[. . .] //UPSTREAM1500PAD1799[${' '.repeat(17)}...] next (//UPSTREAM1500PAREN99…) tail //UPSTREAM1500EOF99`;
     const WebSearch = vi.fn().mockResolvedValue({
       provider: 'generic',
       answer: split1500Answer,
@@ -513,7 +513,7 @@ describe('Cosmic Web bounded research', () => {
       adapter,
       toolExecutors: { WebSearch },
     });
-    expect(result.excerptVersion).toBe(4);
+    expect(result.excerptVersion).toBe(5);
     const promptSentToRadarModel = observedFinalPrompts[0];
     expect(promptSentToRadarModel).toContain('Safe1500');
     expect(promptSentToRadarModel).toContain('Ans1500');
@@ -522,6 +522,7 @@ describe('Cosmic Web bounded research', () => {
     for (const secret of [
       'SEARCH1500', 'ANS1500', 'UPSTREAM1500ELLIPSIS99',
       'UPSTREAM1500SPACE99', 'UPSTREAM1500ATTBRK99', 'UPSTREAM1500ATTUNI99', 'UPSTREAM1500ATTPAR99',
+      'UPSTREAM1500SPDOT99', 'UPSTREAM1500PAD1799',
       'UPSTREAM1500PAREN99', 'UPSTREAM1500EOF99', 'EXPLICITTRUNC99',
     ]) {
       expect(promptSentToRadarModel).not.toContain(secret);
@@ -530,7 +531,7 @@ describe('Cosmic Web bounded research', () => {
   });
 
   it('redacts private brief TLDR before the 400-char cap and emits briefContextVersion only when requested on v2 schema', async () => {
-    const boundaryTldr = `${'t'.repeat(340)} SafeTldr //TLDRATTPAR99(…) //TLDRATTBRK99[…] next //TLDRCLIP400USER99@intranet:8080/api`;
+    const boundaryTldr = `${'t'.repeat(300)} SafeTldr //TLDRATTPAR99(…) //TLDRATTBRK99[…] //TLDRSPDOT99[. . .] //TLDRPAD1799[${' '.repeat(17)}...] next //TLDRCLIP400USER99@intranet:8080/api`;
     const makeBriefAdapter = () => stubAdapter({
       ...story,
       tldr: boundaryTldr,
@@ -544,9 +545,9 @@ describe('Cosmic Web bounded research', () => {
     });
     expect(legacyServerRes.briefContextVersion).toBeUndefined();
     expect(legacyServerRes.tldr).toContain('SafeTldr');
-    expect(legacyServerRes.tldr).not.toContain('TLDRCLIP400');
-    expect(legacyServerRes.tldr).not.toContain('TLDRATTPAR99');
-    expect(legacyServerRes.tldr).not.toContain('TLDRATTBRK99');
+    for (const secret of ['TLDRCLIP400', 'TLDRATTPAR99', 'TLDRATTBRK99', 'TLDRSPDOT99', 'TLDRPAD1799']) {
+      expect(legacyServerRes.tldr).not.toContain(secret);
+    }
     // With schemaVersion: 1 (reverse mixed-version v1 Server): scrubs pre-clip and emits exact 5-key v1 contract
     const { result: v1Res } = await run({
       mode: 'brief',
@@ -555,19 +556,20 @@ describe('Cosmic Web bounded research', () => {
       adapter: makeBriefAdapter(),
     });
     expect(Object.keys(v1Res).sort()).toEqual(['bullets', 'followUps', 'fullMarkdown', 'impact', 'tldr']);
-    expect(v1Res.tldr).not.toContain('TLDRCLIP400');
-    expect(v1Res.tldr).not.toContain('TLDRATTPAR99');
-    // With briefContextProvenance: true on v2 schema: scrubs pre-clip and emits briefContextVersion: 4
-    const { result: v4BriefRes } = await run({
+    for (const secret of ['TLDRCLIP400', 'TLDRATTPAR99', 'TLDRSPDOT99', 'TLDRPAD1799']) {
+      expect(v1Res.tldr).not.toContain(secret);
+    }
+    // With briefContextProvenance: true on v2 schema: scrubs pre-clip and emits briefContextVersion: 5
+    const { result: v5BriefRes } = await run({
       mode: 'brief',
-      payload: { isPrivateSource: true, briefContextProvenance: true, headline: 'Priv TLDR v4' },
+      payload: { isPrivateSource: true, briefContextProvenance: true, headline: 'Priv TLDR v5' },
       adapter: makeBriefAdapter(),
     });
-    expect(v4BriefRes.briefContextVersion).toBe(4);
-    expect(v4BriefRes.tldr).toContain('SafeTldr');
-    expect(v4BriefRes.tldr).not.toContain('TLDRCLIP400');
-    expect(v4BriefRes.tldr).not.toContain('TLDRATTPAR99');
-    expect(v4BriefRes.tldr).not.toContain('TLDRATTBRK99');
+    expect(v5BriefRes.briefContextVersion).toBe(5);
+    expect(v5BriefRes.tldr).toContain('SafeTldr');
+    for (const secret of ['TLDRCLIP400', 'TLDRATTPAR99', 'TLDRATTBRK99', 'TLDRSPDOT99', 'TLDRPAD1799']) {
+      expect(v5BriefRes.tldr).not.toContain(secret);
+    }
   });
 
   it.each([['daily_briefing', {}, daily], ['brief', { research: false }, story], ['follow_up', { research: false }, { answer: 'Yes', question: 'ARM?' }]])

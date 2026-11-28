@@ -68,11 +68,14 @@ export function parseAttributesLinear(value, { boundFeedUrls = false } = {}) {
 // The source adapters also consume the attribute-only parser.
 export { parseAttributesLinear as parseAttributes };
 
+const foreignTags = new Set(['svg', 'math']);
+
 /** Scan tags once, without retrying malformed tags or searching nested candidates for a terminator. */
 export function* scanMarkup(input, { xml = false, rawTags = new Set(), skipTags = new Set(), emitRawOpen = false, meta = null } = {}) {
   const str = boundedMarkup(input, meta);
   let i = 0, tags = 0, raw = null;
   const skipStack = [];
+  const foreignStack = [];
   while (i < str.length) {
     const start = i;
     if (str[i] !== '<') {
@@ -85,8 +88,9 @@ export function* scanMarkup(input, { xml = false, rawTags = new Set(), skipTags 
     if (raw && (str[i] !== '/' || str.slice(i + 1, i + 1 + raw.length).toLowerCase() !== raw ||
       !(str[i + 1 + raw.length] === '>' || whitespace.test(str[i + 1 + raw.length] ?? '')))) continue;
     if (++tags > MAX_TAGS) { if (meta) meta.truncated = true; return; }
+    const allowCdata = xml || foreignStack.length > 0;
     const delimited = str.startsWith('!--', i) ? ['-->', 3] :
-      xml && str.startsWith('![CDATA[', i) ? [']]>', 8] : xml && str[i] === '?' ? ['?>', 1] : null;
+      allowCdata && str.startsWith('![CDATA[', i) ? [']]>', 8] : xml && str[i] === '?' ? ['?>', 1] : null;
     if (delimited) {
       const [end, offset] = delimited;
       const stop = str.indexOf(end, i + offset);
@@ -94,6 +98,19 @@ export function* scanMarkup(input, { xml = false, rawTags = new Set(), skipTags 
       if (end === ']]>' && skipStack.length === 0) yield { type: 'cdata', text: str.slice(i + offset, stop) };
       i = stop + end.length;
       continue;
+    }
+    // HTML5 bogus comments (`<?...>`, non-DOCTYPE `<!...>`, `</` followed by non-alpha) consume literally up to `>`,
+    // preventing apparent closing tags inside bogus comments from prematurely exiting `skipStack`.
+    if (!xml) {
+      const isBogusComment = str[i] === '?'
+        || (str[i] === '!' && !/^!doctype(?=$|[\s>])/i.test(str.slice(i, i + 9)))
+        || (str[i] === '/' && i + 1 < str.length && str[i + 1] !== '>' && !htmlNameStart.test(str[i + 1]));
+      if (isBogusComment) {
+        const gt = str.indexOf('>', i);
+        if (gt === -1) { if (meta) meta.truncated = true; return; }
+        i = gt + 1;
+        continue;
+      }
     }
     const directive = str[i] === '!';
     const closing = str[i] === '/';
@@ -130,32 +147,53 @@ export function* scanMarkup(input, { xml = false, rawTags = new Set(), skipTags 
     const selfClosing = str[last] === '/';
     if (raw) { raw = null; continue; }
     if (skipStack.length > 0) {
-      if (!closing && rawTags.has(name)) { raw = name; continue; }
+      if (!closing && name === 'plaintext') {
+        if (meta) meta.truncated = true;
+        return;
+      }
+      if (!closing && (rawTags.has(name) || name === 'title')) { raw = name; continue; }
+      if (!xml && foreignTags.has(name)) {
+        const floor = skipStack.at(-1).foreignDepth;
+        if (!closing && !selfClosing) foreignStack.push(name);
+        else if (closing) {
+          const at = foreignStack.lastIndexOf(name);
+          if (at >= floor) foreignStack.length = at;
+        }
+        continue;
+      }
       if (skipTags.has(name)) {
-        if (closing) { if (skipStack.at(-1) === name) skipStack.pop(); }
-        else skipStack.push(name);
+        if (closing) {
+          if (skipStack.at(-1).name === name) foreignStack.length = skipStack.pop().foreignDepth;
+        } else {
+          skipStack.push({ name, foreignDepth: foreignStack.length });
+        }
       }
       continue;
     }
+    if (!xml && foreignTags.has(name)) {
+      if (!closing && !selfClosing) foreignStack.push(name);
+      else if (closing) {
+        const at = foreignStack.lastIndexOf(name);
+        if (at !== -1) foreignStack.length = at;
+      }
+    }
     if (!closing && rawTags.has(name)) { raw = name; if (!emitRawOpen) continue; }
-    if (!closing && skipTags.has(name)) { skipStack.push(name); continue; }
+    if (!closing && skipTags.has(name)) { skipStack.push({ name, foreignDepth: foreignStack.length }); continue; }
     yield { type: 'tag', name, closing, selfClosing, attrsText: str.slice(attrStart, xml && selfClosing ? last : i - 1), text: str.slice(start, i), end: i };
   }
   if ((raw || skipStack.length > 0) && meta) meta.truncated = true;
 }
 
-const mediaRawTags = new Set(['script', 'style', 'iframe', 'noembed', 'noframes', 'xmp']);
-const mediaSkipTags = new Set(['template']);
-const textRawTags = new Set(['script', 'style', 'iframe', 'noembed', 'noframes', 'xmp', 'textarea', 'title']);
-const textSkipTags = new Set(['template', 'noscript']);
+const htmlRawTags = new Set(['script', 'style', 'iframe', 'noembed', 'noframes', 'xmp', 'textarea', 'title']);
+const htmlSkipTags = new Set(['template', 'noscript']);
 const textBreakTags = new Set('p div section article main h1 h2 h3 h4 h5 h6 ul ol li dl dt dd pre blockquote table thead tbody tfoot tr td th caption br hr header footer nav aside figure figcaption address details summary dialog fieldset legend form menu option optgroup'.split(' '));
 export function cleanText(text, { dropTruncatedToken = false } = {}) {
   const meta = dropTruncatedToken ? { truncated: false } : null;
   const parts = [];
   let safeCut = { partsLen: 0, tailSlice: null };
-  for (const token of scanMarkup(text, { rawTags: textRawTags, skipTags: textSkipTags, meta })) {
-    if (token.type === 'text') {
-      const decoded = decodeEntities(token.text);
+  for (const token of scanMarkup(text, { rawTags: htmlRawTags, skipTags: htmlSkipTags, meta })) {
+    if (token.type === 'text' || token.type === 'cdata') {
+      const decoded = token.type === 'cdata' ? token.text : decodeEntities(token.text);
       if (dropTruncatedToken) {
         let ws = decoded.length - 1;
         while (ws >= 0 && !/\s/u.test(decoded[ws])) ws--;
@@ -213,7 +251,7 @@ export function normalizeMedia(candidates, base, limit = 3) {
 
 export function extractMarkupMedia(html, base, { openGraph = false, limit = 3 } = {}) {
   const metadata = [], images = [];
-  for (const token of scanMarkup(html, { rawTags: mediaRawTags, skipTags: mediaSkipTags })) {
+  for (const token of scanMarkup(html, { rawTags: htmlRawTags, skipTags: htmlSkipTags })) {
     if (token.type !== 'tag' || token.closing || !['img', 'meta'].includes(token.name)) continue;
     const a = parseAttributesLinear(token.attrsText);
     if (token.name === 'img' && images.length < 48 && !/\b(?:avatar|icon|logo|tracker|pixel)s?\b/i.test(`${a.class ?? ''} ${a.id ?? ''} ${a.alt ?? ''}`)) {

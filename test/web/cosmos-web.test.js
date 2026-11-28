@@ -1670,13 +1670,13 @@ describe('Cosmic Web — Pinia store & interactive overlay', () => {
     expect(followUpBodies[0].briefContextToken).toBeUndefined();
     expect(followUpBodies[0].briefContextVersion).toBeUndefined();
     // Echo authenticated briefContextToken & briefContextVersion when present on private aiBriefData
-    webStore.aiBriefData = { ...webStore.aiBriefData, briefContextVersion: 4, briefContextToken: '4.9999999999.signedtok' };
+    webStore.aiBriefData = { ...webStore.aiBriefData, briefContextVersion: 5, briefContextToken: '5.9999999999.signedtok' };
     await webStore.askFollowUp('c-multi', 'Authenticated?');
     expect(followUpBodies[1]).toMatchObject({
       itemId: 'item-2',
       briefContext: 'Brief for item-2',
-      briefContextVersion: 4,
-      briefContextToken: '4.9999999999.signedtok',
+      briefContextVersion: 5,
+      briefContextToken: '5.9999999999.signedtok',
     });
 
     // Mount overlay with expanded reader + lightbox media + v1-only Agent (no cosmic_web_follow_up)
