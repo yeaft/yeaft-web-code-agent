@@ -105,7 +105,11 @@ export default {
                   class="cosmos-signal-chip is-waiting"
                 >{{ $t('cosmos.signals.waitingBadge') }}</span>
                 <span
-                  v-else-if="item.scheduledTask"
+                  v-else-if="item.kind === 'running'"
+                  class="cosmos-signal-chip is-running"
+                >{{ $t('cosmos.signals.runningBadge') }}</span>
+                <span
+                  v-if="item.scheduledTask && (item.kind === 'unread' || item.isError)"
                   class="cosmos-signal-chip"
                   :class="item.isError ? 'is-error' : 'is-scheduled'"
                   :title="scheduledTooltip(item)"
@@ -272,7 +276,11 @@ export default {
                   class="cosmos-signal-chip is-waiting"
                 >{{ $t('cosmos.signals.waitingBadge') }}</span>
                 <span
-                  v-else-if="item.scheduledTask"
+                  v-else-if="item.kind === 'running'"
+                  class="cosmos-signal-chip is-running"
+                >{{ $t('cosmos.signals.runningBadge') }}</span>
+                <span
+                  v-if="item.scheduledTask && (item.kind === 'unread' || item.isError)"
                   class="cosmos-signal-chip"
                   :class="item.isError ? 'is-error' : 'is-scheduled'"
                   :title="scheduledTooltip(item)"

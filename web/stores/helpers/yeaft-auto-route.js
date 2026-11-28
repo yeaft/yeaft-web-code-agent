@@ -233,27 +233,38 @@ export function handleYeaftSessionRouted(store, msg, sessionIdentityKeyFn) {
     at: Date.now(),
   };
 
+  // Unmatched (expired / duplicate) receipts must be completely side-effect-free.
+  if (!entry) return false;
+
   store.yeaftLastAutoRouteResult = result;
 
   // New Agents send authoritative turn events before the receipt. Do not
-  // re-mark a turn as processing if it already completed before the receipt.
+  // re-mark a turn as processing or begin a stale optimistic preview if
+  // authoritative delivery metadata is present or post-send events already landed.
   if (result.ok && !result.delivery && agentId && sessionId && !result.answeredAskUser) {
-    const key = typeof sessionIdentityKeyFn === 'function'
-      ? sessionIdentityKeyFn(agentId, sessionId)
-      : `${agentId}\u001f${sessionId}`;
-    if (key) {
-      store.yeaftProcessingSessions = {
-        ...(store.yeaftProcessingSessions || {}),
-        [key]: true,
-      };
+    const previewAccepted = typeof store.recordYeaftSessionPreview === 'function'
+      ? store.recordYeaftSessionPreview(sessionId, agentId, {
+        beginTurn: true,
+        rootId: entry.clientMessageId || null,
+        at: entry.createdAt || result.at,
+        onlyIfNoUpdateSince: entry.createdAt || 0,
+      })
+      : true;
+    if (previewAccepted !== false) {
+      const key = typeof sessionIdentityKeyFn === 'function'
+        ? sessionIdentityKeyFn(agentId, sessionId)
+        : `${agentId}\u001f${sessionId}`;
+      if (key) {
+        store.yeaftProcessingSessions = {
+          ...(store.yeaftProcessingSessions || {}),
+          [key]: true,
+        };
+      }
     }
   }
 
-  if (entry) {
-    finalizePending(store, entry, result);
-    return true;
-  }
-  return false;
+  finalizePending(store, entry, result);
+  return true;
 }
 
 export function handleYeaftAutoRouteError(store, msg) {

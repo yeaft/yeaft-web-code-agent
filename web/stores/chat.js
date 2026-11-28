@@ -41,8 +41,11 @@ import * as yeaftAutoRouteHelpers from './helpers/yeaft-auto-route.js';
 import {
   extractLatestAssistantPreview,
   recordYeaftSessionReplyPreview,
+  reconcileYeaftReplyPreviewsFromStatuses,
   clearYeaftSessionReplyPreview,
   clearYeaftAgentAskPreviews,
+  hasPendingOptimisticPreviewRoot,
+  isModelReentryTask,
 } from './helpers/yeaft-reply-preview.js';
 import {
   clearYeaftConversationPromotion,
@@ -185,12 +188,43 @@ function matchesYeaftRuntimeIdentity(row, sessionId, agentId) {
   return agentId ? row.agentId === agentId : !row.agentId;
 }
 
+function isCurrentSessionTurnSnapshot(state, snapshot) {
+  if (!snapshot) return false;
+  const currentGen = Number(state?.chatHistoryConnectionGeneration || 0);
+  if (currentGen > 0 && snapshot.connectionGeneration != null && snapshot.connectionGeneration !== currentGen) {
+    return false;
+  }
+  return true;
+}
+
+function lookupYeaftRootIdForTurn(state, agentId, sessionId, turnId) {
+  if (!state || !sessionId || !turnId) return null;
+  const key = yeaftSessionIdentityKey(agentId, sessionId);
+  const snapshot = key ? state.yeaftSessionTurnsBySession?.[key] : null;
+  if (snapshot && isCurrentSessionTurnSnapshot(state, snapshot)) {
+    for (const turn of (snapshot.turns || [])) {
+      if ((turn.executions || []).some(exec => exec?.turnId === turnId)) {
+        return turn.userTurnId || null;
+      }
+    }
+  }
+  const turnKey = yeaftTurnStateKey(state, agentId, turnId);
+  const active = state.activeVpTurns?.[turnKey];
+  if (active && matchesYeaftRuntimeIdentity(active, sessionId, agentId) && active.userTurnId) {
+    return active.userTurnId;
+  }
+  return null;
+}
+
 function isYeaftSessionProcessingState(state, sessionId, agentId = null) {
   if (!sessionId) return false;
   const resolvedAgentId = agentId || resolveAgentIdForSession(state, sessionId);
   const processingKey = yeaftSessionIdentityKey(resolvedAgentId, sessionId);
   if (processingKey && state.yeaftProcessingSessions?.[processingKey]) return true;
-  if (state.yeaftSessionTurnsBySession?.[processingKey]?.turns?.some(turn => LIVE_SESSION_TURN_STATES.has(turn.state))) return true;
+  if (resolvedAgentId && hasPendingOptimisticPreviewRoot(state, yeaftCatalogKey(resolvedAgentId, sessionId))) return true;
+  const turnSnap = processingKey ? state.yeaftSessionTurnsBySession?.[processingKey] : null;
+  if (isCurrentSessionTurnSnapshot(state, turnSnap)
+      && turnSnap.turns?.some(turn => LIVE_SESSION_TURN_STATES.has(turn.state))) return true;
   if (state.yeaftProcessingSessions?.[sessionId]
       && hasUniqueLegacyYeaftSessionOwner(state, sessionId, resolvedAgentId)) return true;
   for (const info of Object.values(state.activeVpTurns || {})) {
@@ -306,6 +340,8 @@ function clearYeaftAgentRuntimeState(state, agentId) {
     state._yeaftEndedQueryExecutions = {};
     state.stoppingVpTurnIds = {};
     state.vpStatuses = {};
+    state.yeaftVpStatusSnapshotByAgent = {};
+    state.yeaftVpStatusSnapshotBySession = {};
     state.yeaftProcessingSessions = {};
     return;
   }
@@ -321,7 +357,13 @@ function clearYeaftAgentRuntimeState(state, agentId) {
   state.vpStatuses = Object.fromEntries(
     Object.entries(state.vpStatuses || {}).filter(([, row]) => row?.agentId && row.agentId !== agentId)
   );
+  const nextAgentSnaps = { ...(state.yeaftVpStatusSnapshotByAgent || {}) };
+  delete nextAgentSnaps[agentId];
+  state.yeaftVpStatusSnapshotByAgent = nextAgentSnaps;
   const prefix = yeaftAgentSessionIdentityPrefix(agentId);
+  state.yeaftVpStatusSnapshotBySession = Object.fromEntries(
+    Object.entries(state.yeaftVpStatusSnapshotBySession || {}).filter(([key]) => !key.startsWith(prefix))
+  );
   state.yeaftProcessingSessions = Object.fromEntries(
     Object.entries(state.yeaftProcessingSessions || {}).filter(([key]) => !key.startsWith(prefix))
   );
@@ -825,6 +867,10 @@ export const useChatStore = defineStore('chat', {
     // so Cosmos Signal Stream can display 2~3 lines of real AI output even after background
     // message retention pruning.
     yeaftSessionReplyPreviewByKey: {},
+    // Authoritative `vp_status_snapshot` receipts per Agent (unscoped) and per Session (scoped),
+    // including empty/idle snapshots so stale sessionsStore `running` flags cannot override them.
+    yeaftVpStatusSnapshotByAgent: {},
+    yeaftVpStatusSnapshotBySession: {},
     // Per-client map of Cosmos Signal Stream items explicitly dismissed by the user
     // (`${agentId}\u001f${sessionId}` -> stateSignature). Hidden until a genuine state
     // change occurs (status change, new AskUser prompt, new completion/reply, or new run).
@@ -3921,6 +3967,18 @@ export const useChatStore = defineStore('chat', {
         },
       });
       const activeYeaftConvId = resolveYeaftConversationIdForSession(this, groupId);
+      if (groupId) {
+        const processingKey = yeaftSessionIdentityKey(targetAgentId, groupId);
+        this.yeaftProcessingSessions = {
+          ...this.yeaftProcessingSessions,
+          ...(processingKey ? { [processingKey]: true } : {}),
+        };
+        this.recordYeaftSessionPreview(groupId, targetAgentId, {
+          beginTurn: true,
+          rootId: clientMessageId,
+          at: sentAt,
+        });
+      }
       if (activeYeaftConvId) {
         const localMsg = {
           id: clientMessageId,
@@ -3961,13 +4019,6 @@ export const useChatStore = defineStore('chat', {
           row: localMsg,
         });
         this.processingConversations[activeYeaftConvId] = true;
-        if (groupId) {
-          const processingKey = yeaftSessionIdentityKey(targetAgentId, groupId);
-          this.yeaftProcessingSessions = {
-            ...this.yeaftProcessingSessions,
-            ...(processingKey ? { [processingKey]: true } : {}),
-          };
-        }
         this._turnCompletedConvs?.delete(activeYeaftConvId);
         if (this._closedAt?.[activeYeaftConvId]) {
           delete this._closedAt[activeYeaftConvId];
@@ -5595,7 +5646,12 @@ export const useChatStore = defineStore('chat', {
             reconcileYeaftRetryableTurns(this, msg, { scopedSessionId: sessionId });
           }
           const key = yeaftSessionIdentityKey(msg.agentId, sessionId);
-          if (this.yeaftSessionTurnsBySession[key].turns.some(turn => LIVE_SESSION_TURN_STATES.has(turn.state))) {
+          const sessionTurns = this.yeaftSessionTurnsBySession[key].turns;
+          const liveTurns = sessionTurns.filter(turn => LIVE_SESSION_TURN_STATES.has(turn.state));
+          this.recordYeaftSessionPreview(sessionId, msg.agentId || null, {
+            syncTurns: sessionTurns,
+          });
+          if (liveTurns.length > 0) {
             this.yeaftProcessingSessions = { ...this.yeaftProcessingSessions, [key]: true };
             if (eventConversationId) this.processingConversations[eventConversationId] = true;
           } else this.clearYeaftSessionProcessingIfIdle(sessionId, { agentId: msg.agentId });
@@ -5606,7 +5662,17 @@ export const useChatStore = defineStore('chat', {
           break;
         }
         case 'user_message_routed':
-          applyUserMessageRoute(this, msg);
+          if (applyUserMessageRoute(this, msg)) {
+            const routedSessionId = event.sessionId || msg.sessionId || null;
+            if (routedSessionId && event.userTurnId && event.messageId) {
+              this.recordYeaftSessionPreview(routedSessionId, msg.agentId || null, {
+                linkRootAlias: true,
+                rootId: event.userTurnId,
+                aliasRootId: event.messageId,
+                relation: event.relation || 'new',
+              });
+            }
+          }
           break;
         case 'project_mutation_result':
           if (event.projectsAuthoritative === true) this.finishProjectMutation(event);
@@ -6666,20 +6732,27 @@ export const useChatStore = defineStore('chat', {
               ...this.yeaftProcessingSessions,
               ...(processingKey ? { [processingKey]: true } : { [event.sessionId]: true }),
             };
+            const startedRootId = event.userTurnId || msg.userTurnId
+              || lookupYeaftRootIdForTurn(this, msg.agentId || null, event.sessionId, event.turnId);
+            this.recordYeaftSessionPreview(event.sessionId, msg.agentId || null, {
+              beginTurn: true,
+              turnId: event.turnId,
+              rootId: startedRootId,
+              at: event.ts || Date.now(),
+            });
           }
           break;
         }
         case 'vp_turn_end': {
           if (!event.turnId) break;
           const turnKey = yeaftTurnStateKey(this, msg.agentId || null, event.turnId);
-          const endedSessionId = event.sessionId || this.activeVpTurns?.[turnKey]?.sessionId || null;
-          if (event.reason === 'end_turn' && endedSessionId) {
-            this.markYeaftSessionUnread(endedSessionId, msg.agentId || null);
-          }
           const removed = this.activeVpTurns?.[turnKey];
-          const terminalSessionId = event.sessionId || removed?.sessionId || null;
+          const endedSessionId = event.sessionId || removed?.sessionId || null;
+          const terminalSessionId = endedSessionId;
           const terminalAgentId = msg.agentId || removed?.agentId || null;
           const terminalVpId = event.vpId || removed?.vpId || null;
+          const terminalRootId = event.userTurnId || msg.userTurnId || removed?.userTurnId
+            || lookupYeaftRootIdForTurn(this, terminalAgentId, terminalSessionId, event.turnId);
           if (event.reason !== 'errored' && event.reason !== 'error') {
             clearYeaftRetryableTurn(this, {
               agentId: terminalAgentId,
@@ -6707,8 +6780,9 @@ export const useChatStore = defineStore('chat', {
           const nextStatus = reasonToStatus[event.reason] || 'completed';
           const stampedAt = Date.now();
           const conv = resolveYeaftEnvelopeConversationId(this, msg.agentId || null, msg.conversationId);
-          if (conv && Array.isArray(this.messagesMap[conv])) {
-            const rows = this.messagesMap[conv];
+          const hasConvRows = Boolean(conv && Array.isArray(this.messagesMap[conv]));
+          let rows = hasConvRows ? this.messagesMap[conv] : null;
+          if (hasConvRows) {
             let mutated = markTurnResponseKinds(rows, event);
             // Stamp EVERY pending assistant row owned by this turn — not
             // just the last. A turn that produced multiple assistant
@@ -6741,31 +6815,72 @@ export const useChatStore = defineStore('chat', {
               if (Number.isFinite(event.durationMs)) m.turnDurationMs = event.durationMs;
               mutated = true;
             }
-            if (mutated) this.messagesMap = { ...this.messagesMap, [conv]: rows.slice() };
-            if (terminalSessionId) {
+            if (mutated) {
+              rows = rows.slice();
+              this.messagesMap = { ...this.messagesMap, [conv]: rows };
+            }
+          }
+          if (terminalSessionId) {
+            if (event.reason === 'end_turn') {
+              const replyPreview = rows
+                ? extractLatestAssistantPreview(rows, terminalSessionId, event.turnId || null)
+                : { text: '', at: 0, turnId: null };
               this.recordYeaftSessionPreview(terminalSessionId, terminalAgentId, {
                 clearAsk: true,
                 askTurnId: event.turnId || null,
+                finalizeTurn: true,
+                turnId: event.turnId || null,
+                rootId: terminalRootId,
+                text: replyPreview.text,
+                at: replyPreview.at || stampedAt,
+                kind: 'assistant',
               });
-              const replyPreview = extractLatestAssistantPreview(rows, terminalSessionId, event.turnId || null);
-              if (replyPreview.text) {
-                this.recordYeaftSessionPreview(terminalSessionId, terminalAgentId, {
-                  text: replyPreview.text,
-                  at: replyPreview.at || stampedAt,
-                  kind: 'assistant',
-                });
+              const resolvedAgentId = resolveAgentIdForSession(this, terminalSessionId, terminalAgentId);
+              const finalizedEntry = resolvedAgentId
+                ? this.yeaftSessionReplyPreviewByKey?.[yeaftCatalogKey(resolvedAgentId, terminalSessionId)]
+                : null;
+              const rootKey = terminalRootId || (event.turnId ? `turn:${event.turnId}` : null);
+              const rootEntry = rootKey ? finalizedEntry?.roots?.[rootKey] : null;
+              const rootHasText = Boolean(
+                replyPreview.text
+                || rootEntry?.finalizedText
+                || (!rootEntry && finalizedEntry?.text && (!event.turnId || !finalizedEntry.turnId || finalizedEntry.turnId === event.turnId)),
+              );
+              const rootHasLive = Boolean(rootEntry?.hasLiveExecution);
+              const activeTasks = resolvedAgentId
+                ? this.yeaftActiveTasksBySession?.[yeaftHistoryIdentityKey(resolvedAgentId, terminalSessionId)]
+                : null;
+              const hasRunningModelReentry = Boolean(activeTasks && Object.values(activeTasks).some(task => {
+                if (!isModelReentryTask(task)) return false;
+                const taskRootId = task.source?.userTurnId || task.source?.causalRootId || null;
+                return !taskRootId || !terminalRootId || taskRootId === terminalRootId;
+              }));
+              if (endedSessionId && (rootHasText || rootHasLive || !hasRunningModelReentry)) {
+                this.markYeaftSessionUnread(endedSessionId, terminalAgentId || msg.agentId || null);
+                const unreadAgentId = terminalAgentId || msg.agentId || null;
+                if (rootHasText && rootKey && this.isYeaftSessionUnread(endedSessionId, unreadAgentId)) {
+                  this.recordYeaftSessionPreview(endedSessionId, unreadAgentId, {
+                    markUnreadReplyRoot: rootKey,
+                  });
+                }
               }
+            } else {
+              this.recordYeaftSessionPreview(terminalSessionId, terminalAgentId, {
+                clearAsk: true,
+                askTurnId: event.turnId || null,
+                cancelTurn: true,
+                turnId: event.turnId || null,
+                rootId: terminalRootId,
+                reason: event.reason || null,
+              });
             }
+          }
+          if (hasConvRows) {
             // The provider `result` normally arrives first, but metadata is the
             // guaranteed terminal boundary for every VP. Re-prune idempotently
             // here so dropped/reordered data frames cannot leave live rows
             // resident forever.
             this.pruneConversationMessageRetention(conv, terminalSessionId, terminalAgentId);
-          } else if (terminalSessionId) {
-            this.recordYeaftSessionPreview(terminalSessionId, terminalAgentId, {
-              clearAsk: true,
-              askTurnId: event.turnId || null,
-            });
           }
           break;
         }
@@ -6810,10 +6925,19 @@ export const useChatStore = defineStore('chat', {
           this.activeVpTurns = activeRest;
           this.stoppingVpTurnIds = stoppingRest;
           if (removedSessionId) {
-            for (const abortedTurnId of explicitTurnIds) {
+            if (explicitTurnIds.length > 0) {
+              for (const abortedTurnId of explicitTurnIds) {
+                this.recordYeaftSessionPreview(removedSessionId, msg.agentId || null, {
+                  clearAsk: true,
+                  askTurnId: abortedTurnId,
+                  cancelTurn: true,
+                  turnId: abortedTurnId,
+                });
+              }
+            } else {
               this.recordYeaftSessionPreview(removedSessionId, msg.agentId || null, {
                 clearAsk: true,
-                askTurnId: abortedTurnId,
+                cancelTurn: true,
               });
             }
           }
@@ -6824,7 +6948,7 @@ export const useChatStore = defineStore('chat', {
           if (Array.isArray(event.aborted)) retireQueryProgress(this, msg.agentId, envelopeConversationId, event.aborted);
           const sessionId = event.sessionId || msg.sessionId || null;
           if (sessionId) {
-            this.recordYeaftSessionPreview(sessionId, msg.agentId || null, { clearAsk: true });
+            this.recordYeaftSessionPreview(sessionId, msg.agentId || null, { clearAsk: true, cancelTurn: true });
             this.activeVpTurns = Object.fromEntries(
               Object.entries(this.activeVpTurns || {}).filter(([, info]) => (
                 !matchesYeaftRuntimeIdentity(info, sessionId, msg.agentId || null)
@@ -6936,6 +7060,16 @@ export const useChatStore = defineStore('chat', {
               ...this.yeaftProcessingSessions,
               ...(processingKey ? { [processingKey]: true } : { [sessionId]: true }),
             };
+            if (event.turnId) {
+              const statusRootId = event.userTurnId || msg.userTurnId
+                || lookupYeaftRootIdForTurn(this, agentId, sessionId, event.turnId);
+              this.recordYeaftSessionPreview(sessionId, agentId, {
+                beginTurn: true,
+                turnId: event.turnId,
+                rootId: statusRootId,
+                at: event.since || Date.now(),
+              });
+            }
           } else if (sessionId) {
             this.clearYeaftSessionProcessingIfIdle(sessionId, { agentId });
           }
@@ -7037,6 +7171,49 @@ export const useChatStore = defineStore('chat', {
               clearCosmosDismissedSignalsForScope(this, { agentId: msg.agentId, sessionId: key, kinds: ['running'] });
             }
           }
+          const snapshotGen = Number(this.chatHistoryConnectionGeneration || 0);
+          if (msg.agentId) {
+            if (eventSessionId == null) {
+              this.yeaftVpStatusSnapshotByAgent = {
+                ...(this.yeaftVpStatusSnapshotByAgent || {}),
+                [msg.agentId]: { generation: snapshotGen, conversationId: envelopeConversationId || null },
+              };
+            } else {
+              const snapSessionKey = yeaftSessionIdentityKey(msg.agentId, eventSessionId);
+              if (snapSessionKey) {
+                this.yeaftVpStatusSnapshotBySession = {
+                  ...(this.yeaftVpStatusSnapshotBySession || {}),
+                  [snapSessionKey]: { generation: snapshotGen, conversationId: envelopeConversationId || null },
+                };
+              }
+            }
+            // Drop retired previous-generation `session_turns` entries within this
+            // snapshot's scope so background sessions that finished during disconnect
+            // cannot stay stuck in running.
+            const prevTurns = this.yeaftSessionTurnsBySession || {};
+            let turnsChanged = false;
+            const nextTurns = {};
+            const agentPrefix = yeaftAgentSessionIdentityPrefix(msg.agentId);
+            const targetKey = eventSessionId == null ? null : yeaftSessionIdentityKey(msg.agentId, eventSessionId);
+            for (const [tk, row] of Object.entries(prevTurns)) {
+              const inScope = targetKey ? tk === targetKey : tk.startsWith(agentPrefix);
+              const isStaleRow = inScope && (
+                (snapshotGen > 0 && row?.connectionGeneration != null && row.connectionGeneration !== snapshotGen)
+                || (envelopeConversationId && row?.conversationId && row.conversationId !== envelopeConversationId)
+              );
+              if (isStaleRow) {
+                turnsChanged = true;
+                continue;
+              }
+              nextTurns[tk] = row;
+            }
+            if (turnsChanged) this.yeaftSessionTurnsBySession = nextTurns;
+          }
+          reconcileYeaftReplyPreviewsFromStatuses(this, {
+            agentId: msg.agentId || null,
+            sessionId: eventSessionId == null ? null : eventSessionId,
+            statuses,
+          });
           retireSettledQueryProgress(this, msg.agentId, msg.conversationId, statuses);
           reconcileQueryProgressSnapshot(this, msg, statuses);
           if (Array.isArray(event.retryableTurns)) {
@@ -7355,6 +7532,9 @@ export const useChatStore = defineStore('chat', {
       const ownerAgentId = resolveAgentIdForSession(this, sessionId, agentId);
       if (!ownerAgentId) return false;
       const catalogKey = yeaftCatalogKey(ownerAgentId, sessionId);
+      if (this.yeaftSessionReplyPreviewByKey?.[catalogKey]?.unreadReplyRootId) {
+        this.recordYeaftSessionPreview(sessionId, ownerAgentId, { clearUnreadReply: true });
+      }
       if (!this.yeaftUnreadSessionKeys?.[catalogKey]) return false;
       const { [catalogKey]: _read, ...remainingUnread } = this.yeaftUnreadSessionKeys;
       this.yeaftUnreadSessionKeys = remainingUnread;
@@ -9019,8 +9199,11 @@ export const useChatStore = defineStore('chat', {
       ));
       if (hasActiveTurn) return;
       const sessionKey = yeaftSessionIdentityKey(resolvedAgentId, sessionId);
-      if (!ignoreStatuses && this.yeaftSessionTurnsBySession?.[sessionKey]?.turns
-        ?.some(turn => LIVE_SESSION_TURN_STATES.has(turn.state))) return;
+      if (!ignoreStatuses && resolvedAgentId
+        && hasPendingOptimisticPreviewRoot(this, yeaftCatalogKey(resolvedAgentId, sessionId))) return;
+      const turnSnap = sessionKey ? this.yeaftSessionTurnsBySession?.[sessionKey] : null;
+      if (!ignoreStatuses && isCurrentSessionTurnSnapshot(this, turnSnap)
+        && turnSnap.turns?.some(turn => LIVE_SESSION_TURN_STATES.has(turn.state))) return;
       if (!ignoreStatuses) {
         const hasRunningStatus = Object.values(this.vpStatuses || {}).some((status) => (
           matchesYeaftRuntimeIdentity(status, sessionId, resolvedAgentId)
@@ -9082,6 +9265,7 @@ export const useChatStore = defineStore('chat', {
       // Task controls keep the runtime projection until an authoritative ack/end.
       // Optimistic cleanup would release their stop latch while abort is in flight.
       if (waitForAck) return true;
+      this.recordYeaftSessionPreview(sessionId, targetAgentId, { clearAsk: true, cancelTurn: true });
       clearSessionTurns(this, targetAgentId, sessionId);
       this.activeVpTurns = Object.fromEntries(
         Object.entries(this.activeVpTurns || {}).filter(([, info]) => (
@@ -9860,6 +10044,8 @@ export const useChatStore = defineStore('chat', {
       this.yeaftStatusByAgent = {};
       this.yeaftUnreadSessionKeys = {};
       this.yeaftSessionReplyPreviewByKey = {};
+      this.yeaftVpStatusSnapshotByAgent = {};
+      this.yeaftVpStatusSnapshotBySession = {};
       this.cosmosDismissedSignalsByKey = {};
       clearLocalCosmosPreferences(undefined, { includeUiMode: true });
       this.uiMode = 'cosmos';
