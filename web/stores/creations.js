@@ -10,6 +10,7 @@ import { useAuthStore } from './auth.js';
 import { yeaftSessionIdentityKey } from './helpers/yeaft-session-identity.js';
 import { hasBufferedLiveYeaftSession } from './helpers/messageHandler.js';
 import { workbenchRouteKey, workbenchWorkspaceGeneration } from '../utils/workbench-route.js';
+import { defaultKindForCategory } from '../utils/creation-categories.js';
 import * as canvasContext from '../utils/canvas-context.js';
 
 const { defineStore } = Pinia;
@@ -21,10 +22,29 @@ const inFlightBindFolder = new Map();
 const inFlightResolveSession = new Map();
 const inFlightWorkspaceCreates = new Map();
 const pendingOpenActivations = new Map();
+const aiJobTimers = new Map();
+const INLINE_EDIT_CLIENT_TIMEOUT_MS = 95_000;
+const REVIEW_CLIENT_TIMEOUT_MS = 105_000;
 let requestSeq = 0;
 let pendingWorkbenchSeq = 0;
 let igniteAttemptSeq = 0;
 let storeGeneration = 0;
+
+function clearAiJobTimer(jobId) {
+  if (!jobId) return;
+  const timer = aiJobTimers.get(jobId);
+  if (timer) {
+    clearTimeout(timer);
+    aiJobTimers.delete(jobId);
+  }
+}
+
+function clearAllAiJobTimers() {
+  for (const timer of aiJobTimers.values()) {
+    clearTimeout(timer);
+  }
+  aiJobTimers.clear();
+}
 
 function ackErrorMessage(res, fallback) {
   if (!res) return fallback;
@@ -39,10 +59,11 @@ function ackErrorMessage(res, fallback) {
   return fallback;
 }
 
-function isAmbiguousRpcResult(res) {
+export function isAmbiguousRpcResult(res) {
+  const code = res?.error?.code || res?.errorCode || res?.code;
   return !res || res.ambiguous === true
-    || ['timeout', 'disconnected', 'connection_closed', 'offline'].includes(res.error?.code)
-    || /timed?\s*out|disconnect|connection\s+closed|offline/i.test(String(res.error?.message || res.error || ''));
+    || ['timeout', 'disconnected', 'connection_closed', 'offline', 'outcome_unknown'].includes(code)
+    || /timed?\s*out|disconnect|connection\s+closed|offline|delivery\s+could\s+not\s+be\s+confirmed/i.test(String(res.error?.message || res.message || res.error || ''));
 }
 
 function extractSessionId(res) {
@@ -192,6 +213,15 @@ export function creationThreadKey(agentId, creationId, threadId) {
   return `${agentId}${KEY_SEP}${creationId}${KEY_SEP}${threadId}`;
 }
 
+export function creationDocReviewKey(agentId, creationId, relPath) {
+  return `${agentId}${KEY_SEP}${creationId}${KEY_SEP}${relPath}`;
+}
+
+function countOpenReviewAnnotations(review) {
+  const annotations = Array.isArray(review?.annotations) ? review.annotations : [];
+  return annotations.filter((a) => a && (!a.status || a.status === 'open')).length;
+}
+
 function emptyAgentBucket() {
   return { list: [], loaded: false, loading: false, error: null };
 }
@@ -324,6 +354,12 @@ export const useCreationsStore = defineStore('creations', {
     detailsByKey: {},
     nodeContentsByKey: {},
     threadMessagesByKey: {},
+    docStatesByKey: {},
+    docReviewsByKey: {},
+    refreshingReviewKeys: {},
+    reviewRefreshErrorKeys: {},
+    inlineEditJobs: {},
+    reviewJobs: {},
     activeCreation: null,
     inspectorTarget: null,
     viewMode: 'galaxy',
@@ -815,7 +851,8 @@ export const useCreationsStore = defineStore('creations', {
 
     async createCreationWithWorkspace(options = {}) {
       const targetId = String(options.agentId || this.selectedAgentId || '').trim();
-      const { attemptKey, title, kind = 'book', rawFiles } = options;
+      const { attemptKey, title, category = '', rawFiles } = options;
+      const kind = options.kind || (category ? defaultKindForCategory(category) : 'book');
       const trimmedTitle = String(title || '').trim();
       const flightKey = typeof attemptKey === 'string' && attemptKey.trim() ? `${targetId}::${attemptKey}` : null;
       const gen = storeGeneration;
@@ -826,6 +863,7 @@ export const useCreationsStore = defineStore('creations', {
         const patch = {
           ...(trimmedTitle && trimmedTitle !== baseRes.creation.title ? { title: trimmedTitle } : {}),
           ...(kind !== baseRes.creation.kind ? { kind } : {}),
+          ...(category && category !== baseRes.creation.category ? { category } : {}),
         };
         const updated = Object.keys(patch).length
           ? await this.updateCreation(targetId, baseRes.creation.id, patch) : null;
@@ -842,7 +880,7 @@ export const useCreationsStore = defineStore('creations', {
       // Reserve the attempt before issuing any RPC; remounts reuse this promise.
       entry.promise = Promise.resolve().then(() => {
         if (gen !== storeGeneration) throw new Error('Creations store cleared');
-        return this._createWorkspace(targetId, { ...options, rawFiles: filesAtStart });
+        return this._createWorkspace(targetId, { ...options, kind, category, rawFiles: filesAtStart });
       }).then(result => {
         entry.submittedFiles = result._submittedSnapshot.files;
         return result;
@@ -856,6 +894,7 @@ export const useCreationsStore = defineStore('creations', {
     async _createWorkspace(targetId, {
       title,
       kind = 'book',
+      category = '',
       projectId = null,
       newProjectName = '',
       sessionMode = 'new',
@@ -870,6 +909,7 @@ export const useCreationsStore = defineStore('creations', {
       attemptKey = null,
       baselineProjectIds,
       baselineSessionIds,
+      createAttempted = false,
       projectAttempted = false,
       sessionAttempted = false,
     }) {
@@ -885,6 +925,11 @@ export const useCreationsStore = defineStore('creations', {
       let created = null;
       let createRes = null;
       let uploadedFilesThisCall = [];
+      let unconfirmedFiles = [];
+      let workspaceCreateOutcome = trimmedResumeId
+        ? 'committed'
+        : (createAttempted ? 'ambiguous' : 'not_sent');
+      let didAttemptCreate = workspaceCreateOutcome === 'ambiguous' || workspaceCreateOutcome === 'committed';
       let didAttemptProject = projectAttempted;
       let didAttemptSession = sessionAttempted;
       const projectRows = () => chatStore?.yeaftProjects || chatStore?.sessionProjects || [];
@@ -910,6 +955,8 @@ export const useCreationsStore = defineStore('creations', {
           projectId: targetProjectId || resume.projectId,
           creationId: created?.id || trimmedResumeId || resume.creationId,
           sessionId: targetSessionId || resume.sessionId,
+          workspaceCreateOutcome,
+          createAttempted: workspaceCreateOutcome === 'ambiguous' || workspaceCreateOutcome === 'committed',
           projectAttempted: didAttemptProject,
           sessionAttempted: didAttemptSession,
           baselineProjectIds: capturedBaselineProjects,
@@ -971,23 +1018,44 @@ export const useCreationsStore = defineStore('creations', {
           }
         } else {
           const filesToSubmit = Array.isArray(rawFiles) ? rawFiles.slice() : [];
-          createRes = await this.createCreation(targetId, {
-            ...(trimmedTitle ? { title: trimmedTitle } : {}),
-            kind,
-            mission: prompt || '',
-            prompt: prompt || '',
-            ...(trimmedRootDir ? { rootDir: trimmedRootDir } : {}),
-            initializeFolder: true,
-            autoPlan: false,
-            ...(attemptKey ? { importKey: attemptKey } : {}),
-            ...(celestial ? { celestial } : {}),
-            ...(filesToSubmit.length ? { rawFiles: filesToSubmit } : {}),
-          });
+          let uploadedAttachments = [];
+          if (filesToSubmit.length > 0) {
+            uploadedAttachments = await this.uploadRawFiles(filesToSubmit);
+            ensureSameStore();
+          }
+          workspaceCreateOutcome = 'ambiguous';
+          didAttemptCreate = true;
+          checkpointResume();
+          try {
+            createRes = await this.createCreation(targetId, {
+              ...(trimmedTitle ? { title: trimmedTitle } : {}),
+              kind,
+              ...(category ? { category } : {}),
+              mission: prompt || '',
+              prompt: prompt || '',
+              ...(trimmedRootDir ? { rootDir: trimmedRootDir } : {}),
+              initializeFolder: true,
+              autoPlan: false,
+              ...(attemptKey ? { importKey: attemptKey } : {}),
+              ...(celestial ? { celestial } : {}),
+              ...(uploadedAttachments.length ? { attachments: uploadedAttachments } : {}),
+            });
+          } catch (createErr) {
+            if (!isAmbiguousRpcResult(createErr)) {
+              workspaceCreateOutcome = 'rejected_definite';
+              didAttemptCreate = false;
+            }
+            throw createErr;
+          }
           created = createRes?.creation || (createRes?.id ? createRes : null);
           ensureSameStore();
           if (!created?.id) {
+            workspaceCreateOutcome = 'rejected_definite';
+            didAttemptCreate = false;
             throw new Error('Failed to create Creation');
           }
+          workspaceCreateOutcome = 'committed';
+          didAttemptCreate = true;
           if (created.deduplicated || createRes?.deduplicated) {
             // importKey deduplication happens before attachment ingestion. Only
             // consume files that the Agent confirms were already attached.
@@ -1012,6 +1080,12 @@ export const useCreationsStore = defineStore('creations', {
                 uploadedFilesThisCall.push(file);
               }
               ensureSameStore();
+            }
+            if (filesToSubmit.length > 0) {
+              unconfirmedFiles = filesToSubmit
+                .filter(file => !uploadedFilesThisCall.includes(file))
+                .map(file => file?.name)
+                .filter(Boolean);
             }
           } else {
             uploadedFilesThisCall = filesToSubmit;
@@ -1118,6 +1192,7 @@ export const useCreationsStore = defineStore('creations', {
           projectId: appliedProjectId,
           ...(isResumedOrDeduplicated && trimmedTitle && trimmedTitle !== created.title ? { title: trimmedTitle } : {}),
           ...(isResumedOrDeduplicated && kind && kind !== created.kind ? { kind } : {}),
+          ...(isResumedOrDeduplicated && category && category !== created.category ? { category } : {}),
         });
         ensureSameStore();
         if (!updated?.id) {
@@ -1130,10 +1205,11 @@ export const useCreationsStore = defineStore('creations', {
           sessionId: targetSessionId,
           projectId: appliedProjectId,
           ...(projectWarning ? { projectWarning, requestedProjectId: targetProjectId } : {}),
+          ...(unconfirmedFiles.length ? { unconfirmedFiles } : {}),
           rootDir: updated?.rootDir || created.rootDir || trimmedRootDir || '',
           prompt,
           _submittedSnapshot: {
-            files: uploadedFilesThisCall, title: trimmedTitle, prompt: String(prompt || ''), kind, celestial: celestial || null,
+            files: uploadedFilesThisCall, title: trimmedTitle, prompt: String(prompt || ''), kind, category: category || '', celestial: celestial || null,
           },
         };
       } catch (err) {
@@ -1141,6 +1217,8 @@ export const useCreationsStore = defineStore('creations', {
         wrapped.partialProjectId = targetProjectId || null;
         wrapped.partialCreation = created || (trimmedResumeId ? { id: trimmedResumeId } : null);
         wrapped.partialSessionId = targetSessionId;
+        wrapped.workspaceCreateOutcome = workspaceCreateOutcome;
+        wrapped.createAttempted = workspaceCreateOutcome === 'ambiguous' || workspaceCreateOutcome === 'committed';
         wrapped.projectAttempted = didAttemptProject;
         wrapped.sessionAttempted = didAttemptSession;
         wrapped.baselineProjectIds = capturedBaselineProjects;
@@ -1540,6 +1618,7 @@ export const useCreationsStore = defineStore('creations', {
 
       const reqPayload = {
         ...rest,
+        ...(!rest.kind && rest.category ? { kind: defaultKindForCategory(rest.category) } : {}),
         ...(attachments.length ? { attachments } : {}),
       };
 
@@ -1728,9 +1807,13 @@ export const useCreationsStore = defineStore('creations', {
       }
       const dKey = creationDetailKey(agentId, creationId);
       delete this.detailsByKey[dKey];
+      delete this.docStatesByKey[dKey];
       const prefix = `${dKey}${KEY_SEP}`;
       deleteKeysWithPrefix(this.nodeContentsByKey, prefix);
       deleteKeysWithPrefix(this.threadMessagesByKey, prefix);
+      deleteKeysWithPrefix(this.docReviewsByKey, prefix);
+      deleteKeysWithPrefix(this.refreshingReviewKeys, prefix);
+      deleteKeysWithPrefix(this.reviewRefreshErrorKeys, prefix);
 
       if (this.activeCreation?.agentId === agentId && this.activeCreation?.creationId === creationId) {
         this.activeCreation = null;
@@ -2278,6 +2361,325 @@ export const useCreationsStore = defineStore('creations', {
       return this.request(agentId, 'export_creation', { creationId, format });
     },
 
+    _scheduleAiJobTimer(kind, jobId, generation, timeoutMs) {
+      if (!jobId) return;
+      clearAiJobTimer(jobId);
+      const timer = setTimeout(() => {
+        aiJobTimers.delete(jobId);
+        if (generation !== storeGeneration) return;
+        const bucket = kind === 'inline_edit' ? this.inlineEditJobs : this.reviewJobs;
+        const job = bucket[jobId];
+        if (!job || job.generation !== generation || job.status !== 'running') return;
+        bucket[jobId] = {
+          ...job,
+          status: 'failed',
+          errorCode: 'client_timeout',
+          error: 'client_timeout',
+        };
+      }, timeoutMs);
+      aiJobTimers.set(jobId, timer);
+    },
+
+    async startInlineEdit(agentId, payload = {}) {
+      const targetId = String(agentId || this.selectedAgentId || '').trim();
+      const startGen = storeGeneration;
+      const data = await this.request(targetId, 'inline_edit', payload);
+      const jobId = data?.jobId;
+      if (storeGeneration !== startGen) {
+        if (jobId && targetId) {
+          this.request(targetId, 'cancel_ai_job', { jobId }).catch(() => {});
+        }
+        return data;
+      }
+      if (jobId) {
+        const existing = this.inlineEditJobs[jobId];
+        const sameGenExisting = existing && existing.generation === startGen ? existing : null;
+        const status = sameGenExisting && sameGenExisting.status !== 'running'
+          ? sameGenExisting.status
+          : (data.status || 'running');
+        this.inlineEditJobs[jobId] = {
+          jobId,
+          agentId: targetId,
+          generation: startGen,
+          creationId: payload?.creationId || sameGenExisting?.creationId || '',
+          filePath: data?.filePath || payload?.filePath || sameGenExisting?.filePath || '',
+          status,
+          originalText: sameGenExisting?.originalText || payload?.selectedText || '',
+          revisedText: sameGenExisting?.revisedText || '',
+          diffHunks: Array.isArray(sameGenExisting?.diffHunks) ? sameGenExisting.diffHunks : [],
+          error: sameGenExisting?.error ?? null,
+        };
+        if (status === 'running') {
+          this._scheduleAiJobTimer('inline_edit', jobId, startGen, INLINE_EDIT_CLIENT_TIMEOUT_MS);
+        } else {
+          clearAiJobTimer(jobId);
+        }
+      }
+      return data;
+    },
+
+    async startDocumentReview(agentId, payload = {}) {
+      const targetId = String(agentId || this.selectedAgentId || '').trim();
+      const startGen = storeGeneration;
+      const data = await this.request(targetId, 'review_document', payload);
+      const jobId = data?.jobId;
+      if (storeGeneration !== startGen) {
+        if (jobId && targetId) {
+          this.request(targetId, 'cancel_ai_job', { jobId }).catch(() => {});
+        }
+        return data;
+      }
+      if (jobId) {
+        const existing = this.reviewJobs[jobId];
+        const sameGenExisting = existing && existing.generation === startGen ? existing : null;
+        const status = sameGenExisting && sameGenExisting.status !== 'running'
+          ? sameGenExisting.status
+          : (data.status || 'running');
+        this.reviewJobs[jobId] = {
+          jobId,
+          agentId: targetId,
+          generation: startGen,
+          creationId: payload?.creationId || sameGenExisting?.creationId || '',
+          filePath: data?.filePath || payload?.filePath || sameGenExisting?.filePath || '',
+          scope: data?.scope || payload?.scope || sameGenExisting?.scope || 'document',
+          category: data?.category || payload?.category || sameGenExisting?.category || '',
+          status,
+          lenses: Array.isArray(data?.lenses) ? data.lenses : (Array.isArray(sameGenExisting?.lenses) ? sameGenExisting.lenses : []),
+          lensResults: Array.isArray(sameGenExisting?.lensResults) ? sameGenExisting.lensResults : [],
+          annotations: Array.isArray(sameGenExisting?.annotations) ? sameGenExisting.annotations : [],
+          overallSummary: sameGenExisting?.overallSummary || '',
+          contentHash: sameGenExisting?.contentHash || '',
+          truncated: Boolean(data?.truncated ?? sameGenExisting?.truncated),
+          truncatedEndLine: data?.truncatedEndLine ?? sameGenExisting?.truncatedEndLine ?? null,
+          reviewedLines: data?.reviewedLines && typeof data.reviewedLines === 'object'
+            ? { start: data.reviewedLines.start, end: data.reviewedLines.end }
+            : (sameGenExisting?.reviewedLines ? { start: sameGenExisting.reviewedLines.start, end: sameGenExisting.reviewedLines.end } : null),
+          errorCode: sameGenExisting?.errorCode ?? null,
+          error: sameGenExisting?.error ?? null,
+        };
+        if (status === 'running') {
+          this._scheduleAiJobTimer('review', jobId, startGen, REVIEW_CLIENT_TIMEOUT_MS);
+        } else {
+          clearAiJobTimer(jobId);
+        }
+      }
+      return data;
+    },
+
+    async cancelAiJob(agentId, jobId) {
+      if (!jobId) return null;
+      clearAiJobTimer(jobId);
+      if (this.inlineEditJobs[jobId]?.status === 'running') {
+        this.inlineEditJobs[jobId] = { ...this.inlineEditJobs[jobId], status: 'cancelled' };
+      }
+      if (this.reviewJobs[jobId]?.status === 'running') {
+        this.reviewJobs[jobId] = { ...this.reviewJobs[jobId], status: 'cancelled' };
+      }
+      const targetId = String(agentId || this.selectedAgentId || '').trim();
+      if (!targetId) return null;
+      return this.request(targetId, 'cancel_ai_job', { jobId });
+    },
+
+    clearAiJob(jobId) {
+      if (!jobId) return;
+      clearAiJobTimer(jobId);
+      delete this.inlineEditJobs[jobId];
+      delete this.reviewJobs[jobId];
+    },
+
+    failStaleAiJobs(agentId = null, reason = 'connection_interrupted', errorCode = null) {
+      const filterAgentId = agentId ? String(agentId).trim() : null;
+      const resolvedCode = errorCode || (reason === 'connection_interrupted' || reason === 'client_timeout' ? reason : null);
+      for (const [jobId, job] of Object.entries(this.inlineEditJobs)) {
+        if (!job || job.status !== 'running') continue;
+        if (filterAgentId && job.agentId !== filterAgentId) continue;
+        clearAiJobTimer(jobId);
+        this.inlineEditJobs[jobId] = {
+          ...job,
+          status: 'failed',
+          ...(resolvedCode ? { errorCode: resolvedCode } : {}),
+          error: reason,
+        };
+      }
+      for (const [jobId, job] of Object.entries(this.reviewJobs)) {
+        if (!job || job.status !== 'running') continue;
+        if (filterAgentId && job.agentId !== filterAgentId) continue;
+        clearAiJobTimer(jobId);
+        this.reviewJobs[jobId] = {
+          ...job,
+          status: 'failed',
+          ...(resolvedCode ? { errorCode: resolvedCode } : {}),
+          error: reason,
+        };
+      }
+    },
+
+    settleDisconnectedAiJobs(agentId = null) {
+      this.failStaleAiJobs(agentId, 'connection_interrupted', 'connection_interrupted');
+    },
+
+    async loadDocStates(agentId, creationId) {
+      const targetId = String(agentId || this.selectedAgentId || '').trim();
+      if (!targetId || !creationId) return {};
+      const gen = storeGeneration;
+      const data = await this.request(targetId, 'get_doc_states', { creationId });
+      if (gen !== storeGeneration) return {};
+      const states = data?.states && typeof data.states === 'object' ? { ...data.states } : {};
+      this.docStatesByKey[creationDetailKey(targetId, creationId)] = states;
+      return states;
+    },
+
+    getDocState(agentId, creationId, filePath) {
+      if (!agentId || !creationId || !filePath) return null;
+      const bucket = this.docStatesByKey[creationDetailKey(agentId, creationId)];
+      if (!bucket || !Object.hasOwn(bucket, filePath)) return null;
+      return bucket[filePath] || null;
+    },
+
+    async setDocState(agentId, creationId, filePath, status) {
+      const targetId = String(agentId || this.selectedAgentId || '').trim();
+      if (!targetId || !creationId || !filePath) throw new Error('Missing agentId, creationId, or filePath');
+      const gen = storeGeneration;
+      const data = await this.request(targetId, 'set_doc_state', { creationId, filePath, status });
+      if (gen !== storeGeneration) return data;
+      const canonicalPath = (typeof data?.filePath === 'string' && data.filePath) ? data.filePath : filePath;
+      const dKey = creationDetailKey(targetId, creationId);
+      const prevBucket = this.docStatesByKey[dKey] || {};
+      const prevEntry = prevBucket[canonicalPath] || {};
+      const nextEntry = data?.docState && typeof data.docState === 'object'
+        ? { ...prevEntry, ...data.docState }
+        : { ...prevEntry, status, updatedAt: data?.updatedAt || Date.now() };
+      this.docStatesByKey[dKey] = { ...prevBucket, [canonicalPath]: nextEntry };
+      return data;
+    },
+
+    _retireDisconnectedReviewJobs(agentId, creationId, filePath) {
+      if (!agentId || !creationId || !filePath) return;
+      for (const [jobId, job] of Object.entries(this.reviewJobs)) {
+        if (!job) continue;
+        if (
+          job.scope === 'document'
+          && job.errorCode === 'connection_interrupted'
+          && job.agentId === agentId
+          && job.creationId === creationId
+          && job.filePath === filePath
+        ) {
+          clearAiJobTimer(jobId);
+          delete this.reviewJobs[jobId];
+        }
+      }
+    },
+
+    async loadDocReview(agentId, creationId, filePath) {
+      const targetId = String(agentId || this.selectedAgentId || '').trim();
+      if (!targetId || !creationId || !filePath) return null;
+      const gen = storeGeneration;
+      const submittedKey = creationDocReviewKey(targetId, creationId, filePath);
+      let data;
+      try {
+        data = await this.request(targetId, 'get_doc_review', { creationId, filePath });
+      } catch (err) {
+        if (
+          gen === storeGeneration
+          && (this.docReviewsByKey[submittedKey]
+            || this.refreshingReviewKeys[submittedKey]
+            || this.reviewRefreshErrorKeys[submittedKey])
+        ) {
+          this.reviewRefreshErrorKeys[submittedKey] = true;
+        }
+        throw err;
+      }
+      if (gen !== storeGeneration) return data;
+      const canonicalPath = (typeof data?.filePath === 'string' && data.filePath) ? data.filePath : filePath;
+      const rKey = creationDocReviewKey(targetId, creationId, canonicalPath);
+      if (data?.review) {
+        this.docReviewsByKey[rKey] = data.review;
+      } else {
+        delete this.docReviewsByKey[rKey];
+      }
+      delete this.reviewRefreshErrorKeys[submittedKey];
+      delete this.reviewRefreshErrorKeys[rKey];
+      this._retireDisconnectedReviewJobs(targetId, creationId, filePath);
+      if (canonicalPath !== filePath) {
+        this._retireDisconnectedReviewJobs(targetId, creationId, canonicalPath);
+      }
+      if (data?.docState && typeof data.docState === 'object') {
+        const dKey = creationDetailKey(targetId, creationId);
+        const prevBucket = this.docStatesByKey[dKey] || {};
+        this.docStatesByKey[dKey] = {
+          ...prevBucket,
+          [canonicalPath]: { ...(prevBucket[canonicalPath] || {}), ...data.docState },
+        };
+      }
+      return data;
+    },
+
+    getDocReview(agentId, creationId, filePath) {
+      if (!agentId || !creationId || !filePath) return null;
+      return this.docReviewsByKey[creationDocReviewKey(agentId, creationId, filePath)] || null;
+    },
+
+    isDocReviewRefreshing(agentId, creationId, filePath) {
+      if (!agentId || !creationId || !filePath) return false;
+      return Boolean(this.refreshingReviewKeys[creationDocReviewKey(agentId, creationId, filePath)]);
+    },
+
+    isDocReviewStale(agentId, creationId, filePath) {
+      if (!agentId || !creationId || !filePath) return false;
+      return Boolean(this.reviewRefreshErrorKeys[creationDocReviewKey(agentId, creationId, filePath)]);
+    },
+
+    async resolveReviewAnnotation(agentId, creationId, filePath, annotationId, status) {
+      const targetId = String(agentId || this.selectedAgentId || '').trim();
+      if (!targetId || !creationId || !filePath || !annotationId) {
+        throw new Error('Missing agentId, creationId, filePath, or annotationId');
+      }
+      const gen = storeGeneration;
+      let data;
+      try {
+        data = await this.request(targetId, 'update_review_annotation', {
+          creationId,
+          filePath,
+          annotationId,
+          status,
+        });
+      } catch (err) {
+        if (gen === storeGeneration && isAmbiguousRpcResult(err)) {
+          this.reviewRefreshErrorKeys[creationDocReviewKey(targetId, creationId, filePath)] = true;
+        }
+        throw err;
+      }
+      if (gen !== storeGeneration) return data;
+      const canonicalPath = (typeof data?.filePath === 'string' && data.filePath) ? data.filePath : filePath;
+      const rKey = creationDocReviewKey(targetId, creationId, canonicalPath);
+      let nextReview = data?.review || null;
+      if (!nextReview && this.docReviewsByKey[rKey]) {
+        const prev = this.docReviewsByKey[rKey];
+        const nextAnns = Array.isArray(prev.annotations)
+          ? prev.annotations.map((ann) => (ann && ann.id === annotationId ? { ...ann, status } : ann))
+          : [];
+        nextReview = { ...prev, annotations: nextAnns };
+      }
+      if (nextReview) {
+        this.docReviewsByKey[rKey] = nextReview;
+      }
+      const dKey = creationDetailKey(targetId, creationId);
+      const prevBucket = this.docStatesByKey[dKey] || {};
+      const prevEntry = prevBucket[canonicalPath] || {};
+      const openReviewCount = typeof data?.docState?.openReviewCount === 'number'
+        ? data.docState.openReviewCount
+        : (nextReview ? countOpenReviewAnnotations(nextReview) : (prevEntry.openReviewCount || 0));
+      this.docStatesByKey[dKey] = {
+        ...prevBucket,
+        [canonicalPath]: {
+          ...prevEntry,
+          ...(data?.docState && typeof data.docState === 'object' ? data.docState : {}),
+          openReviewCount,
+        },
+      };
+      return data;
+    },
+
     mediaUrl(agentId, creationId, mediaKind, mediaId) {
       if (!agentId || !creationId || !mediaKind || !mediaId) return '';
       return `/api/yeaft/creations/${encodeURIComponent(agentId)}/${encodeURIComponent(creationId)}/media/${encodeURIComponent(mediaKind)}/${encodeURIComponent(mediaId)}`;
@@ -2652,6 +3054,223 @@ export const useCreationsStore = defineStore('creations', {
           break;
         }
 
+        case 'inline_edit_delta': {
+          const jobId = payload.jobId || msg.jobId;
+          if (!jobId) return;
+          const prev = this.inlineEditJobs[jobId];
+          if (!prev || prev.agentId !== agentId || prev.generation !== storeGeneration || prev.status !== 'running') {
+            return;
+          }
+          const delta = typeof payload.delta === 'string' ? payload.delta : '';
+          this.inlineEditJobs[jobId] = {
+            ...prev,
+            revisedText: `${prev.revisedText || ''}${delta}`,
+          };
+          break;
+        }
+
+        case 'inline_edit_complete': {
+          const jobId = payload.jobId || msg.jobId;
+          if (!jobId) return;
+          const prev = this.inlineEditJobs[jobId];
+          if (!prev || prev.agentId !== agentId || prev.generation !== storeGeneration || prev.status !== 'running') {
+            return;
+          }
+          clearAiJobTimer(jobId);
+          this.inlineEditJobs[jobId] = {
+            ...prev,
+            status: payload.status || (payload.error ? 'failed' : 'completed'),
+            originalText: payload.originalText !== undefined ? payload.originalText : prev.originalText,
+            revisedText: payload.revisedText !== undefined ? payload.revisedText : prev.revisedText,
+            diffHunks: Array.isArray(payload.diffHunks) ? payload.diffHunks : prev.diffHunks,
+            error: payload.error ?? null,
+          };
+          break;
+        }
+
+        case 'review_lens_complete': {
+          const jobId = payload.jobId || msg.jobId;
+          if (!jobId) return;
+          const prev = this.reviewJobs[jobId];
+          if (!prev || prev.agentId !== agentId || prev.generation !== storeGeneration || prev.status !== 'running') {
+            return;
+          }
+          const lensId = payload.lensId || payload.lensResult?.lensId;
+          const lensResult = payload.lensResult || (lensId ? {
+            lensId,
+            status: payload.status || (payload.error ? 'failed' : 'completed'),
+            summary: payload.summary || '',
+            error: payload.error ?? null,
+            annotationCount: Array.isArray(payload.annotations) ? payload.annotations.length : 0,
+          } : null);
+          const nextLensResults = prev.lensResults.slice();
+          if (lensResult && lensResult.lensId) {
+            const idx = nextLensResults.findIndex((r) => r && r.lensId === lensResult.lensId);
+            if (idx >= 0) nextLensResults[idx] = { ...nextLensResults[idx], ...lensResult };
+            else nextLensResults.push(lensResult);
+          }
+          const incomingAnns = Array.isArray(payload.annotations) ? payload.annotations : [];
+          let nextAnns = prev.annotations.slice();
+          if (lensId && incomingAnns.length > 0) {
+            nextAnns = nextAnns.filter((a) => a && a.lensId !== lensId);
+            nextAnns.push(...incomingAnns);
+          } else if (incomingAnns.length > 0) {
+            for (const ann of incomingAnns) {
+              nextAnns = upsertById(nextAnns, ann);
+            }
+          }
+          this.reviewJobs[jobId] = {
+            ...prev,
+            lensResults: nextLensResults,
+            annotations: nextAnns,
+          };
+          break;
+        }
+
+        case 'review_complete': {
+          const jobId = payload.jobId || msg.jobId;
+          if (!jobId) return;
+          const prev = this.reviewJobs[jobId];
+          if (!prev || prev.agentId !== agentId || prev.generation !== storeGeneration || prev.status !== 'running') {
+            return;
+          }
+          clearAiJobTimer(jobId);
+          const nextStatus = payload.status || (payload.error ? 'failed' : 'completed');
+          const rawReviewedLines = payload.reviewedLines && typeof payload.reviewedLines === 'object'
+            ? payload.reviewedLines
+            : (payload.review?.reviewedLines && typeof payload.review.reviewedLines === 'object'
+              ? payload.review.reviewedLines
+              : prev.reviewedLines);
+          const reviewedLines = rawReviewedLines && typeof rawReviewedLines === 'object'
+            ? { start: rawReviewedLines.start, end: rawReviewedLines.end }
+            : null;
+          const truncated = payload.truncated !== undefined
+            ? Boolean(payload.truncated)
+            : Boolean(payload.review?.truncated ?? prev.truncated);
+          const truncatedEndLine = payload.truncatedEndLine !== undefined
+            ? payload.truncatedEndLine
+            : (prev.truncatedEndLine ?? reviewedLines?.end ?? null);
+          const superseded = Boolean(payload.superseded);
+          const nextJob = {
+            ...prev,
+            creationId: creationId || prev.creationId,
+            filePath: payload.filePath || prev.filePath,
+            scope: payload.scope || prev.scope,
+            category: payload.category || prev.category,
+            status: nextStatus,
+            superseded,
+            overallSummary: payload.overallSummary !== undefined ? payload.overallSummary : prev.overallSummary,
+            lensResults: Array.isArray(payload.lensResults) ? payload.lensResults : prev.lensResults,
+            annotations: Array.isArray(payload.annotations) ? payload.annotations : prev.annotations,
+            contentHash: payload.contentHash !== undefined ? payload.contentHash : prev.contentHash,
+            truncated,
+            truncatedEndLine,
+            reviewedLines,
+            errorCode: payload.errorCode ?? null,
+            error: payload.error ?? null,
+          };
+          this.reviewJobs[jobId] = nextJob;
+
+          if (
+            !superseded
+            && nextJob.creationId
+            && nextJob.filePath
+            && nextJob.scope === 'document'
+            && (nextStatus === 'completed' || nextStatus === 'partial')
+          ) {
+            const rKey = creationDocReviewKey(agentId, nextJob.creationId, nextJob.filePath);
+            const reviewRecord = payload.review
+              ? {
+                  ...payload.review,
+                  truncated: nextJob.truncated,
+                  truncatedEndLine: nextJob.truncatedEndLine,
+                  reviewedLines: nextJob.reviewedLines,
+                  superseded: nextJob.superseded,
+                }
+              : {
+                  jobId,
+                  creationId: nextJob.creationId,
+                  filePath: nextJob.filePath,
+                  scope: nextJob.scope,
+                  category: nextJob.category,
+                  status: nextStatus,
+                  overallSummary: nextJob.overallSummary,
+                  lensResults: nextJob.lensResults,
+                  annotations: nextJob.annotations,
+                  contentHash: nextJob.contentHash,
+                  truncated: nextJob.truncated,
+                  truncatedEndLine: nextJob.truncatedEndLine,
+                  reviewedLines: nextJob.reviewedLines,
+                  superseded: nextJob.superseded,
+                  updatedAt: payload.updatedAt || Date.now(),
+                };
+            this.docReviewsByKey[rKey] = reviewRecord;
+            const dKey = creationDetailKey(agentId, nextJob.creationId);
+            const prevBucket = this.docStatesByKey[dKey] || {};
+            this.docStatesByKey[dKey] = {
+              ...prevBucket,
+              [nextJob.filePath]: {
+                ...(prevBucket[nextJob.filePath] || {}),
+                openReviewCount: countOpenReviewAnnotations(reviewRecord),
+              },
+            };
+          }
+          break;
+        }
+
+        case 'doc_state_updated': {
+          const relPath = payload.filePath;
+          if (!creationId || !relPath) return;
+          const dKey = creationDetailKey(agentId, creationId);
+          const prevBucket = this.docStatesByKey[dKey] || {};
+          const prevEntry = prevBucket[relPath] || {};
+          const patch = payload.docState && typeof payload.docState === 'object'
+            ? payload.docState
+            : {
+                ...(payload.status !== undefined ? { status: payload.status } : {}),
+                ...(payload.updatedAt !== undefined ? { updatedAt: payload.updatedAt } : {}),
+                ...(payload.openReviewCount !== undefined ? { openReviewCount: payload.openReviewCount } : {}),
+              };
+          this.docStatesByKey[dKey] = {
+            ...prevBucket,
+            [relPath]: { ...prevEntry, ...patch },
+          };
+          break;
+        }
+
+        case 'doc_review_updated': {
+          const relPath = payload.filePath;
+          if (!creationId || !relPath) return;
+          const rKey = creationDocReviewKey(agentId, creationId, relPath);
+          delete this.reviewRefreshErrorKeys[rKey];
+          let nextReview = payload.review || null;
+          if (!nextReview && payload.annotationId && this.docReviewsByKey[rKey]) {
+            const prev = this.docReviewsByKey[rKey];
+            const nextAnns = Array.isArray(prev.annotations)
+              ? prev.annotations.map((ann) => (
+                  ann && ann.id === payload.annotationId
+                    ? { ...ann, status: payload.status || ann.status }
+                    : ann
+                ))
+              : [];
+            nextReview = { ...prev, annotations: nextAnns };
+          }
+          if (nextReview) {
+            this.docReviewsByKey[rKey] = nextReview;
+          }
+          const dKey = creationDetailKey(agentId, creationId);
+          const prevBucket = this.docStatesByKey[dKey] || {};
+          const prevEntry = prevBucket[relPath] || {};
+          const openReviewCount = typeof payload.openReviewCount === 'number'
+            ? payload.openReviewCount
+            : (nextReview ? countOpenReviewAnnotations(nextReview) : (prevEntry.openReviewCount || 0));
+          this.docStatesByKey[dKey] = {
+            ...prevBucket,
+            [relPath]: { ...prevEntry, openReviewCount },
+          };
+          break;
+        }
+
         default:
           break;
       }
@@ -2660,13 +3279,94 @@ export const useCreationsStore = defineStore('creations', {
     async reconcileAfterReconnect(agentId = null) {
       const gen = storeGeneration;
       const filterAgentId = agentId ? String(agentId).trim() : null;
+
+      // Collect cached and in-flight document review keys BEFORE settling
+      // disconnected running reviewJobs so open review panels sync latest state.
+      const docReviewReloadTargets = new Map();
+      for (const key of Object.keys(this.docReviewsByKey)) {
+        const firstSep = key.indexOf(KEY_SEP);
+        if (firstSep <= 0) continue;
+        const secondSep = key.indexOf(KEY_SEP, firstSep + KEY_SEP.length);
+        if (secondSep <= firstSep + KEY_SEP.length) continue;
+        const aId = key.slice(0, firstSep);
+        const cId = key.slice(firstSep + KEY_SEP.length, secondSep);
+        const filePath = key.slice(secondSep + KEY_SEP.length);
+        if (!aId || !cId || !filePath) continue;
+        if (filterAgentId && aId !== filterAgentId) continue;
+        docReviewReloadTargets.set(key, { agentId: aId, creationId: cId, filePath });
+      }
+      for (const job of Object.values(this.reviewJobs)) {
+        if (!job || job.status !== 'running' || job.scope !== 'document') continue;
+        const aId = job.agentId;
+        const cId = job.creationId;
+        const filePath = job.filePath;
+        if (!aId || !cId || !filePath) continue;
+        if (filterAgentId && aId !== filterAgentId) continue;
+        const rKey = creationDocReviewKey(aId, cId, filePath);
+        docReviewReloadTargets.set(rKey, { agentId: aId, creationId: cId, filePath });
+      }
+      for (const key of Object.keys(this.reviewRefreshErrorKeys)) {
+        const firstSep = key.indexOf(KEY_SEP);
+        if (firstSep <= 0) continue;
+        const secondSep = key.indexOf(KEY_SEP, firstSep + KEY_SEP.length);
+        if (secondSep <= firstSep + KEY_SEP.length) continue;
+        const aId = key.slice(0, firstSep);
+        const cId = key.slice(firstSep + KEY_SEP.length, secondSep);
+        const filePath = key.slice(secondSep + KEY_SEP.length);
+        if (!aId || !cId || !filePath) continue;
+        if (filterAgentId && aId !== filterAgentId) continue;
+        docReviewReloadTargets.set(key, { agentId: aId, creationId: cId, filePath });
+      }
+
+      for (const rKey of docReviewReloadTargets.keys()) {
+        this.refreshingReviewKeys[rKey] = true;
+      }
+      this.settleDisconnectedAiJobs(filterAgentId);
       const tasks = [];
 
       if (this.selectedAgentId && (!filterAgentId || this.selectedAgentId === filterAgentId)) {
         tasks.push(this.listCreations(this.selectedAgentId).catch(() => {}));
       }
 
+      const docStateReloadTargets = new Map();
+      for (const key of Object.keys(this.docStatesByKey)) {
+        const sepIdx = key.indexOf(KEY_SEP);
+        if (sepIdx <= 0) continue;
+        const aId = key.slice(0, sepIdx);
+        const cId = key.slice(sepIdx + KEY_SEP.length);
+        if (!aId || !cId) continue;
+        if (filterAgentId && aId !== filterAgentId) continue;
+        docStateReloadTargets.set(key, { agentId: aId, creationId: cId });
+      }
       const active = this.activeCreation;
+      if (active && active.agentId && active.creationId && (!filterAgentId || active.agentId === filterAgentId)) {
+        const activeDKey = creationDetailKey(active.agentId, active.creationId);
+        docStateReloadTargets.set(activeDKey, { agentId: active.agentId, creationId: active.creationId });
+      }
+      for (const { agentId: aId, creationId: cId } of docStateReloadTargets.values()) {
+        tasks.push(this.loadDocStates(aId, cId).catch(() => {}));
+      }
+
+      for (const [rKey, { agentId: aId, creationId: cId, filePath }] of docReviewReloadTargets.entries()) {
+        tasks.push((async () => {
+          try {
+            await this.loadDocReview(aId, cId, filePath);
+            if (gen === storeGeneration) {
+              delete this.reviewRefreshErrorKeys[rKey];
+              this._retireDisconnectedReviewJobs(aId, cId, filePath);
+            }
+          } catch {
+            if (gen === storeGeneration) {
+              this.reviewRefreshErrorKeys[rKey] = true;
+            }
+          } finally {
+            if (gen === storeGeneration) {
+              delete this.refreshingReviewKeys[rKey];
+            }
+          }
+        })());
+      }
+
       if (active && active.agentId && active.creationId && (!filterAgentId || active.agentId === filterAgentId)) {
         const { agentId: aId, creationId: cId } = active;
         tasks.push((async () => {
@@ -2742,6 +3442,7 @@ export const useCreationsStore = defineStore('creations', {
 
     clearAll() {
       storeGeneration += 1;
+      clearAllAiJobTimers();
       this.invalidatePendingOpen();
       for (const [, pending] of pendingRequests) {
         clearTimeout(pending.timer);
@@ -2765,6 +3466,12 @@ export const useCreationsStore = defineStore('creations', {
       this.detailsByKey = {};
       this.nodeContentsByKey = {};
       this.threadMessagesByKey = {};
+      this.docStatesByKey = {};
+      this.docReviewsByKey = {};
+      this.refreshingReviewKeys = {};
+      this.reviewRefreshErrorKeys = {};
+      this.inlineEditJobs = {};
+      this.reviewJobs = {};
       this.activeCreation = null;
       this.inspectorTarget = null;
       this.pendingWorkbenchTarget = null;

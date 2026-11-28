@@ -1,4 +1,5 @@
-import { compactProposal, createCreationStore } from './store.js';
+import { bindingRevOf, compactProposal, createCreationStore, normalizeDocFilePath } from './store.js';
+import { createCreationAiAssistant } from './ai-assistant.js';
 import { createCreationRunner } from './runner.js';
 import { readMediaChunk } from './media.js';
 import { boundedText, fail, LIMITS } from './constants.js';
@@ -9,13 +10,14 @@ const object = (value, name) => {
 };
 
 export function createCreationService({ yeaftDir, storageRoot, namespaceKey, namespaceBinding,
-  store = createCreationStore({ yeaftDir, storageRoot, namespaceKey, namespaceBinding }), emitEvent = () => {}, mediaUrlFor, engineFactory, bootId } = {}) {
+  store = createCreationStore({ yeaftDir, storageRoot, namespaceKey, namespaceBinding }), emitEvent = () => {}, mediaUrlFor, engineFactory, adapterFactory, bootId } = {}) {
   const publish = event => {
     try { Promise.resolve(emitEvent(event)).catch(() => {}); } catch { /* transport never rolls back writes */ }
   };
   let runner;
   try { runner = createCreationRunner({ store, yeaftDir, emitEvent: publish, mediaUrlFor, engineFactory, bootId }); }
   catch (error) { store.close(); throw error; }
+  const aiAssistant = createCreationAiAssistant({ yeaftDir, store, emitEvent: publish, adapterFactory });
   let closing = null;
   const emit = (type, creationId, fields) => publish({ type, creationId, ...fields });
   const summaryChanged = id => emit('creation_upserted', id, { creation: store.getCreation(id) });
@@ -73,7 +75,7 @@ export function createCreationService({ yeaftDir, storageRoot, namespaceKey, nam
         thread = store.getThread(id);
         const starter = input.starterNode;
         if (starter != null && starter !== false) store.createNode(id, starter === true ? {} : object(starter, 'starter node'));
-      } });
+      }, onWorkspaceMaterialized: id => aiAssistant.cancelCreationJobs(id) });
       const { id } = creation;
       if (creation.deduplicated) return { ...detail(id), deduplicated: true };
       const sources = store.listSources(id).map(source => media(source, 'source'));
@@ -93,13 +95,19 @@ export function createCreationService({ yeaftDir, storageRoot, namespaceKey, nam
     },
     get_creation: id => detail(id),
     ensure_workspace: (id, { rootDir }) => {
+      const previousBinding = bindingRevOf(store.getCreation(id));
       const result = store.ensureWorkspace(id, { rootDir });
+      if (bindingRevOf(result.creation) !== previousBinding) aiAssistant.cancelCreationJobs(id);
       if (result.materialized) emit('creation_upserted', id, { creation: result.creation });
       return result;
     },
     find_by_folder: (_, { rootDir }) => store.findByFolder(rootDir),
     update_creation: (id, p) => {
-      const creation = store.updateCreation(id, p.patch == null ? p : object(p.patch, 'creation patch'));
+      const patch = p.patch == null ? p : object(p.patch, 'creation patch');
+      const checksRoot = Object.hasOwn(patch, 'rootDir');
+      const previousBinding = checksRoot ? bindingRevOf(store.getCreation(id)) : undefined;
+      const creation = store.updateCreation(id, patch);
+      if (checksRoot && bindingRevOf(creation) !== previousBinding) aiAssistant.cancelCreationJobs(id);
       emit('creation_upserted', id, { creation });
       return { creation };
     },
@@ -108,8 +116,26 @@ export function createCreationService({ yeaftDir, storageRoot, namespaceKey, nam
         fail('INVALID_REQUEST', 'purgeWorkspace must be a boolean');
       }
       const result = store.deleteCreation(id, { purgeWorkspace: p.purgeWorkspace === true });
+      aiAssistant.cancelCreationJobs(id);
       emit('creation_deleted', id, result);
       return result;
+    },
+    inline_edit: (id, p, meta) => aiAssistant.startInlineEdit({ ...p, creationId: id }, meta),
+    review_document: (id, p, meta) => aiAssistant.startReview({ ...p, creationId: id }, meta),
+    cancel_ai_job: (_, p, meta) => aiAssistant.cancelJob(p.jobId, meta),
+    cancel_client_ai_jobs: (_, p, meta) => aiAssistant.cancelClientJobs(meta?.targetClientId || p.targetClientId, meta),
+    get_doc_states: id => ({ states: store.listDocStates(id) }),
+    set_doc_state: (id, p) => {
+      const state = store.setDocState(id, p.filePath, p.status);
+      emit('doc_state_updated', id, state);
+      return state;
+    },
+    get_doc_review: (id, p) => ({ review: store.getDocReview(id, p.filePath) }),
+    update_review_annotation: (id, p) => {
+      const filePath = normalizeDocFilePath(p.filePath);
+      const review = store.updateDocReviewAnnotation(id, filePath, p.annotationId, p.status);
+      emit('doc_review_updated', id, { filePath, review });
+      return { review };
     },
     add_sources: (id, p) => {
       const sources = store.addSources(id, p).map(source => media(source, 'source'));
@@ -233,19 +259,24 @@ export function createCreationService({ yeaftDir, storageRoot, namespaceKey, nam
   };
 
   return {
-    store, runner,
-    hasActiveWork: () => runner.hasActiveWork(),
-    request({ op, payload = {} }) {
+    store, runner, aiAssistant,
+    hasActiveWork: () => runner.hasActiveWork() || aiAssistant.hasActiveWork(),
+    request({ op, payload = {}, meta = {} }) {
       if (closing) fail('INVALID_STATE', 'Creations is closed');
       if (typeof op !== 'string' || !Object.hasOwn(ops, op)) fail('UNSUPPORTED', 'Unknown Creations operation');
       object(payload, 'Creations payload');
-      return boundedResponse(ops[op](payload.creationId ?? (op === 'create_creation' ? undefined : payload.id), payload));
+      return boundedResponse(ops[op](payload.creationId ?? (op === 'create_creation' ? undefined : payload.id), payload, meta));
     },
     handleMediaRead(msg) {
       if (closing) fail('INVALID_STATE', 'Creations is closed');
       return readMediaChunk(store, msg);
     },
-    close() { return closing ??= runner.close().finally(() => store.close()); },
+    close() {
+      return closing ??= Promise.allSettled([runner.close(), aiAssistant.close()]).then(results => {
+        const rejected = results.find(result => result.status === 'rejected');
+        if (rejected) throw rejected.reason;
+      }).finally(() => store.close());
+    },
   };
 }
 

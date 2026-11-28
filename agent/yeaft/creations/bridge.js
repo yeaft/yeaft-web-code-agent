@@ -1,10 +1,13 @@
 import { createHash } from 'node:crypto';
 import ctx from '../../context.js';
 import { sendToServer } from '../../connection/buffer.js';
-import { safeId, fail } from './constants.js';
+import { safeId, fail, PRIVATE_AI_EVENT_TYPES } from './constants.js';
 import { readMediaChunk } from './media.js';
 
 const MAX_NAMESPACES = 4;
+const MAX_CANCELLED_CLIENTS = 1024;
+const CANCELLED_CLIENT_TTL_MS = 5 * 60_000;
+const validTargetClientId = value => typeof value === 'string' && /^[A-Za-z0-9_-]{1,128}$/.test(value);
 const PUBLIC_ERRORS = new Set(['INVALID_REQUEST', 'INVALID_STATE', 'LIMIT_EXCEEDED', 'INVALID_PATH', 'INVALID_RANGE',
   'BUSY', 'NOT_FOUND', 'CONFLICT', 'REVIEW_REQUIRED', 'LOCKED', 'UNSUPPORTED', 'STALE']);
 function safeError(error) {
@@ -17,6 +20,24 @@ function safeError(error) {
 export function createCreationBridge({ context = ctx, send = sendToServer,
   createService = async options => (await import('./service.js')).createCreationService(options) } = {}) {
   const scopes = new Map();
+  const cancelledClientsBySocket = new WeakMap();
+  const clientKey = (ownerId, targetClientId) => `${ownerId}\0${targetClientId}`;
+  function recordClientCancellation(socket, ownerId, targetClientId) {
+    if (!socket) return;
+    let cancelled = cancelledClientsBySocket.get(socket);
+    if (!cancelled) cancelledClientsBySocket.set(socket, cancelled = new Map());
+    const now = Date.now();
+    for (const [key, expiresAt] of cancelled) {
+      if (expiresAt > now) break;
+      cancelled.delete(key);
+    }
+    const key = clientKey(ownerId, targetClientId);
+    cancelled.delete(key);
+    if (cancelled.size >= MAX_CANCELLED_CLIENTS) cancelled.delete(cancelled.keys().next().value);
+    cancelled.set(key, now + CANCELLED_CLIENT_TTL_MS);
+  }
+  const isClientCancelled = (socket, ownerId, targetClientId) => targetClientId !== undefined
+    && cancelledClientsBySocket.get(socket)?.get(clientKey(ownerId, targetClientId)) > Date.now();
   let cacheIdentity;
   let closed = false;
   let pending = Promise.resolve();
@@ -37,7 +58,7 @@ export function createCreationBridge({ context = ctx, send = sendToServer,
     const retired = [...scopes.values()];
     scopes.clear(); // Fence events before shutdown settles outstanding turns.
     cacheIdentity = undefined;
-    await Promise.allSettled(retired.map(async scope => scope.runtime.close()));
+    await Promise.allSettled(retired.map(retireScope));
   }
   const isCurrent = (current, socket) => !closed && socket === context.ws && sameAgent(current, readIdentity(current.ownerId));
   function assertCurrent(current, socket) {
@@ -50,19 +71,44 @@ export function createCreationBridge({ context = ctx, send = sendToServer,
     const namespaceKey = createHash('sha256').update(`${serverUrl}\0${agentId}\0${ownerId}`).digest('hex').slice(0, 24);
     return { yeaftDir, namespaceKey, namespaceBinding: { serverUrl, agentId, ownerId } };
   }
-  function touchScope(ownerId, scope, socket) {
-    scope.socket = socket;
+  function detachSocketListener(scope) {
+    if (!scope.onSocketClose) return;
+    scope.socket.off('close', scope.onSocketClose);
+    scope.onSocketClose = undefined;
+  }
+  async function retireScope(scope) {
+    detachSocketListener(scope);
+    await scope.runtime.close();
+  }
+  function touchScope(ownerId, scope, nextSocket) {
+    if (scope.socket !== nextSocket) {
+      const previousSocket = scope.socket;
+      detachSocketListener(scope);
+      scope.socket = nextSocket;
+      scope.socketClosed = false;
+      if (previousSocket) scope.runtime.aiAssistant?.cancelSocketJobs?.(previousSocket);
+      if (typeof nextSocket?.once === 'function' && typeof nextSocket?.off === 'function') {
+        scope.onSocketClose = () => {
+          scope.onSocketClose = undefined;
+          scope.socketClosed = true;
+          scope.runtime.aiAssistant?.cancelSocketJobs?.(nextSocket);
+        };
+        nextSocket.once('close', scope.onSocketClose);
+      }
+    }
     scopes.delete(ownerId);
     scopes.set(ownerId, scope);
-    return scope.runtime;
+    return scope;
   }
+  const isScopeSocketActive = (ownerId, scope, current, socket) => scopes.get(ownerId) === scope
+    && scope.socket === socket && !scope.socketClosed && (socket?.readyState ?? 1) === 1 && isCurrent(current, socket);
   async function pruneIdle(maxSize, protectedOwner) {
     while (scopes.size > maxSize) {
       const oldestIdle = [...scopes].find(([ownerId, scope]) => ownerId !== protectedOwner && !scope.runtime.hasActiveWork());
       if (!oldestIdle) break; // Active namespaces may temporarily exceed the limit.
       const [ownerId, scope] = oldestIdle;
       scopes.delete(ownerId);
-      await scope.runtime.close();
+      await retireScope(scope);
     }
   }
   async function serviceForOwner(current, socket) {
@@ -73,12 +119,17 @@ export function createCreationBridge({ context = ctx, send = sendToServer,
     await pruneIdle(cached ? MAX_NAMESPACES : MAX_NAMESPACES - 1, ownerId);
     assertCurrent(current, socket);
     if (cached) return touchScope(ownerId, cached, socket);
-    const scope = { socket };
+    const scope = {};
     scope.runtime = await createService({ ...storageOptions(current),
       emitEvent: event => {
         const eventSocket = scope.socket;
-        const isCurrentEvent = () => scopes.get(ownerId) === scope && isCurrent(current, eventSocket);
-        if (isCurrentEvent()) return send({ type: 'creation_event', ownerId, event }, { isCurrent: isCurrentEvent });
+        const isCurrentEvent = () => isScopeSocketActive(ownerId, scope, current, eventSocket);
+        if (isCurrentEvent()) {
+          const { _targetClientId: targetClientId, ...body } = event;
+          const privateEvent = PRIVATE_AI_EVENT_TYPES.has(body.type);
+          if (privateEvent && !validTargetClientId(targetClientId)) return;
+          return send({ type: 'creation_event', ownerId, ...(privateEvent ? { targetClientId } : {}), event: body }, { isCurrent: isCurrentEvent });
+        }
       },
       mediaUrlFor: (creationId, mediaKind, mediaId) =>
         `/api/yeaft/creations/${encodeURIComponent(agentId)}/${safeId(creationId)}/media/${mediaKind}/${safeId(mediaId)}`,
@@ -89,16 +140,19 @@ export function createCreationBridge({ context = ctx, send = sendToServer,
       if (!sameAgent(current, readIdentity(ownerId))) await retireAll();
       else {
         scopes.delete(ownerId);
-        await scope.runtime.close();
+        await retireScope(scope);
       }
       fail('INVALID_STATE', 'Agent storage identity changed');
     }
-    return scope.runtime;
+    return touchScope(ownerId, scope, socket);
   }
   function correlation(msg) {
     return typeof msg.requestId === 'string' && msg.requestId.length > 0 && msg.requestId.length <= 128 ? msg.requestId : null;
   }
   const bridge = {
+    cancelSocketJobs(socket) {
+      for (const { runtime } of scopes.values()) runtime.aiAssistant?.cancelSocketJobs?.(socket);
+    },
     async resolveWorkspaceBinding(ownerId, creationId) {
       if (!validOwner(ownerId)) return null;
       try {
@@ -126,20 +180,49 @@ export function createCreationBridge({ context = ctx, send = sendToServer,
     async request(msg) {
       if (msg?.type !== 'creation_request') return false;
       const response = { type: 'creation_response', requestId: correlation(msg), op: typeof msg.op === 'string' ? msg.op : '' };
-      const socket = context.ws;
+      const originSocket = context.ws;
       try {
         if (!response.requestId || !validOwner(msg.ownerId)) {
           fail('INVALID_REQUEST', 'Creations request requires authenticated ownership');
         }
-        const current = readIdentity(msg.ownerId);
+        const { ownerId, targetClientId } = msg;
+        if ((targetClientId !== undefined || response.op === 'cancel_client_ai_jobs') && !validTargetClientId(targetClientId)) {
+          fail('INVALID_REQUEST', 'Invalid target client identifier');
+        }
+        const { op } = response;
+        const current = readIdentity(ownerId);
+        let earlyCancelled = 0;
+        if (op === 'cancel_client_ai_jobs') {
+          recordClientCancellation(originSocket, ownerId, targetClientId);
+          // Synchronously abort matching jobs in any already-cached runtime so
+          // an active review cannot commit while the serialized queue is busy.
+          const cached = !closed && cacheIdentity && sameAgent(cacheIdentity, current) && scopes.get(ownerId);
+          if (cached) earlyCancelled = cached.runtime.aiAssistant?.cancelClientJobs?.(targetClientId)?.cancelledCount || 0;
+        }
+        const checkClient = () => {
+          if ((op === 'inline_edit' || op === 'review_document') && isClientCancelled(originSocket, ownerId, targetClientId)) {
+            fail('STALE', 'Client connection was cancelled');
+          }
+        };
+        checkClient();
         response.data = await serialize(async () => {
-          const runtime = await serviceForOwner(current, socket);
+          if (op === 'cancel_client_ai_jobs') {
+            assertCurrent(current, originSocket);
+            const scope = cacheIdentity && sameAgent(cacheIdentity, current) && scopes.get(ownerId);
+            const queued = scope ? scope.runtime.request({ op, payload: msg.payload ?? {}, meta: { targetClientId, originSocket } })
+              : { cancelledCount: 0 };
+            return { cancelledCount: earlyCancelled + (queued?.cancelledCount || 0) };
+          }
+          checkClient();
+          const scope = await serviceForOwner(current, originSocket);
           if (closed) fail('INVALID_STATE', 'Creations is closed');
-          return runtime.request({ op: response.op, payload: msg.payload ?? {} });
+          checkClient(); // Cancellation may arrive while the namespace is opening.
+          return scope.runtime.request({ op, payload: msg.payload ?? {},
+            meta: { targetClientId, originSocket, isOriginActive: () => isScopeSocketActive(ownerId, scope, current, originSocket) } });
         });
         response.ok = true;
       } catch (error) { Object.assign(response, { ok: false, ...safeError(error) }); }
-      if (context.ws === socket) await send(response);
+      if (context.ws === originSocket) await send(response);
       return true;
     },
     async mediaRead(msg) {
@@ -154,7 +237,7 @@ export function createCreationBridge({ context = ctx, send = sendToServer,
           assertCurrent(current, socket);
           const { ownerId } = current;
           const cached = cacheIdentity && sameAgent(cacheIdentity, current) && scopes.get(ownerId);
-          if (cached) return touchScope(ownerId, cached, socket).handleMediaRead(msg);
+          if (cached) return touchScope(ownerId, cached, socket).runtime.handleMediaRead(msg);
           // Media pulls must not recover runs, create namespaces, or evict cached runtimes.
           const { createCreationStore } = await import('./store.js');
           assertCurrent(current, socket);
@@ -188,4 +271,5 @@ export async function resolveCreationWorkspaceRoot(ownerId, creationId, options)
 const bridge = createCreationBridge();
 export const handleCreationRequest = msg => bridge.request(msg);
 export const handleCreationMediaRead = msg => bridge.mediaRead(msg);
+export const cancelCreationsForSocket = socket => ctx.creationBridge?.cancelSocketJobs?.(socket);
 export const shutdownCreations = () => bridge.close();

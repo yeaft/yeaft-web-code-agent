@@ -702,6 +702,558 @@
   color: var(--text-primary);
 }
 
+/* --- Slim Canvas Toolbar Additions (Status Pill, Popovers, Media Nav, Undo Toast) --- */
+.canvas-status-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  height: 26px;
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--border-color);
+  background: var(--bg-elevated);
+  color: var(--text-secondary);
+  font-family: inherit;
+  font-size: var(--font-size-2xs);
+  font-weight: 600;
+  line-height: 1;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background var(--duration-fast) var(--ease-out),
+              border-color var(--duration-fast) var(--ease-out),
+              color var(--duration-fast) var(--ease-out);
+}
+
+.canvas-status-pill:hover {
+  background: var(--sidebar-hover);
+  color: var(--text-primary);
+}
+
+.canvas-status-pill.is-draft {
+  background: var(--bg-sidebar);
+  border-color: var(--border-color);
+  color: var(--text-secondary);
+}
+
+.canvas-status-pill.is-review {
+  background: var(--warn-bg);
+  border-color: color-mix(in srgb, var(--creation-status-generating) 40%, transparent);
+  color: var(--warn-text);
+}
+
+.canvas-status-pill.is-final {
+  background: var(--tag-low-bg);
+  border-color: color-mix(in srgb, var(--creation-status-ready) 40%, transparent);
+  color: var(--creation-diff-add-text);
+}
+
+.canvas-status-pill:focus-visible,
+.canvas-review-trigger:focus-visible,
+.canvas-inline-preset-btn:focus-visible,
+.canvas-review-lens-chip:focus-visible {
+  outline: 2px solid var(--focus-ring-color, var(--accent-blue));
+  outline-offset: 1px;
+}
+
+.canvas-review-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-height: 28px;
+  padding: 0 var(--space-2);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  background: var(--bg-elevated);
+  color: var(--text-primary);
+  font-family: inherit;
+  font-size: var(--font-size-xs);
+  font-weight: 500;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background var(--duration-fast) var(--ease-out),
+              border-color var(--duration-fast) var(--ease-out),
+              color var(--duration-fast) var(--ease-out);
+}
+
+.canvas-review-trigger:hover:not(:disabled) {
+  background: var(--sidebar-hover);
+  border-color: var(--text-muted);
+}
+
+.canvas-review-trigger.active {
+  background: var(--accent-soft);
+  border-color: var(--accent-blue);
+  color: var(--accent-blue);
+}
+
+.canvas-popover-wrap {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+
+.canvas-typography-popover,
+.canvas-more-menu {
+  position: absolute;
+  top: calc(100% + var(--space-1));
+  right: 0;
+  z-index: 45;
+  min-width: 196px;
+  padding: var(--space-2);
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-color);
+  background: var(--bg-elevated);
+  color: var(--text-primary);
+  box-shadow: var(--shadow-md);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1-5);
+}
+
+.canvas-more-menu {
+  min-width: 176px;
+  padding: var(--space-1);
+  gap: 2px;
+}
+
+.canvas-media-nav-inline {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1-5);
+  min-width: 0;
+}
+
+.canvas-undo-toast {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  padding: var(--space-1-5) var(--space-3);
+  border-bottom: 1px solid var(--border-light);
+  background: var(--bg-elevated);
+  color: var(--text-primary);
+  font-size: var(--font-size-xs);
+  flex-shrink: 0;
+}
+
+/* --- Inline Quick Edit Popover (CanvasInlineEditPopover) --- */
+.canvas-inline-popover {
+  position: absolute;
+  z-index: 35;
+  width: min(420px, calc(100% - 16px));
+  max-width: min(420px, calc(100% - 16px));
+  padding: var(--space-2-5);
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--border-color);
+  background: var(--bg-elevated);
+  color: var(--text-primary);
+  box-shadow: var(--shadow-lg);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.canvas-inline-presets {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+.canvas-inline-preset-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  height: 26px;
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--border-color);
+  background: var(--bg-input);
+  color: var(--text-secondary);
+  font-family: inherit;
+  font-size: var(--font-size-xs);
+  font-weight: 500;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background var(--duration-fast) var(--ease-out),
+              border-color var(--duration-fast) var(--ease-out),
+              color var(--duration-fast) var(--ease-out);
+}
+
+.canvas-inline-preset-btn:hover:not(:disabled) {
+  background: var(--sidebar-hover);
+  border-color: var(--text-muted);
+  color: var(--text-primary);
+}
+
+.canvas-inline-preset-btn.active {
+  background: var(--accent-soft);
+  border-color: var(--accent-blue);
+  color: var(--accent-blue);
+}
+
+.canvas-inline-preset-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.canvas-inline-review-menu {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: var(--space-1-5);
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-light);
+  background: var(--bg-sidebar);
+}
+
+.canvas-inline-input-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1-5);
+}
+
+.canvas-inline-input {
+  flex: 1;
+  min-width: 0;
+  height: var(--control-height-md);
+  padding: 0 var(--space-2-5);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  background: var(--bg-input);
+  color: var(--text-primary);
+  font-family: var(--font-sans);
+  font-size: var(--font-size-xs);
+}
+
+.canvas-inline-input:focus {
+  outline: none;
+  border-color: var(--accent-blue);
+  box-shadow: 0 0 0 2px var(--focus-ring);
+}
+
+.canvas-inline-diff-box {
+  max-height: 220px;
+  overflow-y: auto;
+  padding: var(--space-2-5);
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-light);
+  background: var(--bg-main);
+  color: var(--text-primary);
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-relaxed);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.canvas-diff-del {
+  background: var(--creation-diff-del-bg);
+  color: var(--creation-diff-del-text);
+  text-decoration: line-through;
+  border-radius: var(--radius-xs);
+  padding: 0 2px;
+}
+
+.canvas-diff-add {
+  background: var(--creation-diff-add-bg);
+  color: var(--creation-diff-add-text);
+  border-radius: var(--radius-xs);
+  padding: 0 2px;
+}
+
+.canvas-inline-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: var(--space-1-5);
+}
+
+.canvas-inline-status {
+  font-size: var(--font-size-2xs);
+  color: var(--text-muted);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+.canvas-inline-status > span {
+  min-width: 0;
+  flex: 1 1 140px;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.canvas-inline-status > button {
+  flex-shrink: 0;
+}
+
+.canvas-inline-status.is-error {
+  color: var(--error);
+}
+
+/* --- Multi-Perspective Review Panel (CanvasReviewPanel) --- */
+.canvas-review-panel {
+  width: 340px;
+  min-width: 280px;
+  max-width: 44%;
+  flex-shrink: 0;
+  border-left: 1px solid var(--border-light);
+  background: var(--bg-workbench);
+  color: var(--text-primary);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.canvas-review-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  padding: var(--space-2-5) var(--space-3);
+  border-bottom: 1px solid var(--border-light);
+  background: var(--bg-sidebar);
+  flex-shrink: 0;
+}
+
+.canvas-review-body {
+  flex: 1;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-2-5, var(--space-2));
+}
+
+.canvas-review-conflict-banner,
+.canvas-review-truncated-banner,
+.canvas-review-superseded-banner,
+.canvas-inline-warning {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-1-5);
+  padding: var(--space-1-5) var(--space-2);
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-color);
+  background: var(--warn-bg);
+  color: var(--warn-text);
+  font-size: var(--font-size-xs);
+  line-height: var(--line-height-normal);
+}
+
+.canvas-review-conflict-banner {
+  border-color: var(--error);
+  background: var(--error-bg);
+  color: var(--error);
+}
+
+.canvas-review-lenses {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1-5);
+  padding: var(--space-2-5) var(--space-3);
+  border-bottom: 1px solid var(--border-light);
+  flex-shrink: 0;
+}
+
+.canvas-review-lens-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  height: 26px;
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--border-color);
+  background: var(--bg-elevated);
+  color: var(--text-secondary);
+  font-family: inherit;
+  font-size: var(--font-size-2xs);
+  font-weight: 500;
+  cursor: pointer;
+  transition: background var(--duration-fast) var(--ease-out),
+              border-color var(--duration-fast) var(--ease-out),
+              color var(--duration-fast) var(--ease-out);
+}
+
+.canvas-review-lens-chip:hover {
+  background: var(--sidebar-hover);
+  color: var(--text-primary);
+}
+
+.canvas-review-lens-chip.active {
+  background: var(--accent-soft);
+  border-color: var(--accent-blue);
+  color: var(--accent-blue);
+}
+
+.canvas-review-custom-input {
+  width: 100%;
+  min-height: 52px;
+  padding: var(--space-2);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  background: var(--bg-input);
+  color: var(--text-primary);
+  font-family: var(--font-sans);
+  font-size: var(--font-size-xs);
+  line-height: var(--line-height-normal);
+  resize: vertical;
+}
+
+.canvas-review-custom-input:focus {
+  outline: none;
+  border-color: var(--accent-blue);
+  box-shadow: 0 0 0 2px var(--focus-ring);
+}
+
+.canvas-review-progress-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--border-light);
+  flex-shrink: 0;
+}
+
+.canvas-review-filters {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--border-light);
+  flex-shrink: 0;
+}
+
+.canvas-review-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2-5);
+}
+
+.canvas-review-summary {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.canvas-review-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 0;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  padding: var(--space-3);
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-light);
+  background: var(--bg-elevated);
+  box-shadow: var(--shadow-sm);
+}
+
+.canvas-review-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  row-gap: var(--space-1);
+}
+
+.canvas-review-card-title {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  flex: 1 1 120px;
+}
+
+.canvas-review-severity {
+  display: inline-flex;
+  align-items: center;
+  height: 20px;
+  padding: 0 var(--space-1-5);
+  border-radius: var(--radius-pill);
+  font-size: var(--font-size-2xs);
+  font-weight: 600;
+  line-height: 1;
+}
+
+.canvas-review-severity.is-blocker {
+  background: var(--error-bg);
+  color: var(--creation-status-attention);
+}
+
+.canvas-review-severity.is-suggestion {
+  background: var(--warn-bg);
+  color: var(--warn-text);
+}
+
+.canvas-review-severity.is-praise {
+  background: var(--tag-low-bg);
+  color: var(--creation-diff-add-text);
+}
+
+.canvas-review-quote {
+  margin: 0;
+  min-width: 0;
+  padding: var(--space-1-5) var(--space-2-5);
+  border-left: 2px solid var(--border-color);
+  background: var(--bg-sidebar);
+  border-radius: 0 var(--radius-xs) var(--radius-xs) 0;
+  color: var(--text-secondary);
+  font-size: var(--font-size-xs);
+  line-height: var(--line-height-normal);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.canvas-review-comment {
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.canvas-review-suggestion {
+  min-width: 0;
+  padding: var(--space-1-5) var(--space-2-5);
+  border-radius: var(--radius-sm);
+  background: var(--creation-diff-add-bg);
+  color: var(--creation-diff-add-text);
+  font-size: var(--font-size-xs);
+  line-height: var(--line-height-normal);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.canvas-review-card-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: var(--space-1-5);
+}
+
+.canvas-review-bulk-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: var(--space-1-5);
+  padding: var(--space-2) var(--space-3);
+  border-top: 1px solid var(--border-light);
+  background: var(--bg-sidebar);
+  flex-shrink: 0;
+}
+
 /* --- Cosmos Glass Theme Coherence --- */
 .cosmos-workbench-host .file-canvas-view {
   background: transparent;
@@ -723,9 +1275,17 @@
   background: var(--bg-main);
 }
 
-.cosmos-workbench-host .canvas-selection-bar {
+.cosmos-workbench-host .canvas-selection-bar,
+.cosmos-workbench-host .canvas-inline-popover,
+.cosmos-workbench-host .canvas-typography-popover,
+.cosmos-workbench-host .canvas-more-menu {
   background: var(--bg-elevated);
   border-color: var(--border-color);
+}
+
+.cosmos-workbench-host .canvas-review-panel {
+  background: var(--bg-workbench);
+  border-left-color: var(--border-color);
 }
 
 .cosmos-drawer .canvas-context-bar {
@@ -766,6 +1326,16 @@
   .canvas-video-stage {
     padding: var(--space-3);
   }
+
+  .canvas-review-panel {
+    width: 100%;
+    min-width: 0;
+    max-width: 100%;
+    max-height: 55%;
+    min-height: 180px;
+    border-left: none;
+    border-top: 1px solid var(--border-light);
+  }
 }
 
 /* --- Responsive (down to 320px) --- */
@@ -803,6 +1373,21 @@
   .canvas-chip-snippet {
     max-width: 110px;
   }
+
+  .canvas-review-panel {
+    width: 100%;
+    min-width: 0;
+    max-width: 100%;
+    max-height: 55%;
+    min-height: 180px;
+    border-left: none;
+    border-top: 1px solid var(--border-light);
+  }
+
+  .canvas-inline-popover {
+    width: calc(100% - 16px);
+    max-width: calc(100% - 16px);
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -811,7 +1396,11 @@
   .canvas-toc-item,
   .canvas-rel-media-link,
   .canvas-image-el,
-  .canvas-image-svg-wrap {
+  .canvas-image-svg-wrap,
+  .canvas-status-pill,
+  .canvas-review-trigger,
+  .canvas-inline-preset-btn,
+  .canvas-review-lens-chip {
     transition: none;
   }
 }

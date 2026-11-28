@@ -11,7 +11,18 @@ const OPS = new Set([
   'add_sources', 'get_source', 'delete_source', 'upsert_canon', 'get_canon', 'delete_canon',
   'create_node', 'get_node', 'update_node', 'reorder_nodes', 'delete_node', 'restore_revision',
   'list_proposals', 'get_proposal', 'resolve_proposal', 'get_thread', 'send_message', 'start_batch_run', 'control_run', 'export_creation',
+  'inline_edit', 'review_document', 'cancel_ai_job', 'get_doc_states', 'set_doc_state', 'get_doc_review', 'update_review_annotation',
 ]);
+const clientRelayIds = new WeakMap();
+export function getClientRelayId(client) {
+  let id = clientRelayIds.get(client);
+  if (!id) clientRelayIds.set(client, id = randomUUID());
+  return id;
+}
+
+export const hasClientRelayId = (client, id) => typeof id === 'string' && id.length > 0 && clientRelayIds.get(client) === id;
+
+const AI_START_OPS = new Set(['inline_edit', 'review_document']);
 const UPLOAD_OPS = new Set(['create_creation', 'add_sources', 'send_message']);
 const MAX_PENDING_PER_CLIENT = 32;
 const MAX_PENDING = 1024;
@@ -20,7 +31,7 @@ const MAX_AGENT_BUFFERED_BYTES = 16 * 1024 * 1024;
 /** Keep browser correlations private and bind each request to the exact Agent connection. */
 export function createCreationRelay({
   agentMap = agents, send = (client, message) => sendToWebClient(client, message),
-  forward = (agent, message) => sendToAgent(agent, message),
+  forward = (agent, message, options) => sendToAgent(agent, message, options),
   accessError = (...args) => resolveAgentAccessError(...args),
   isActive = id => userDb.isActive(id), skipAuth = () => CONFIG.skipAuth,
   timeoutMs = 45_000, uploads = pendingFiles, uploadTtlMs = CONFIG.fileCleanupInterval ?? 600_000, now = Date.now,
@@ -28,8 +39,44 @@ export function createCreationRelay({
   const pending = new Map();
   const counts = new Map();
   const bytesByUser = new Map();
+  const aiClientAgents = new Map();
+  const closedClients = new WeakSet();
+  let aiSessionCheck;
   let inFlightBytes = 0;
-  const active = client => isClientSessionValid(client, { skipAuth: skipAuth(), isActive });
+  const active = client => !closedClients.has(client) && isClientSessionValid(client, { skipAuth: skipAuth(), isActive });
+  function stopAiSessionCheckIfIdle() {
+    if (aiClientAgents.size) return;
+    clearInterval(aiSessionCheck);
+    aiSessionCheck = undefined;
+  }
+  function revokeClientCreationJobs(client) {
+    const bindings = aiClientAgents.get(client);
+    if (!bindings) return;
+    aiClientAgents.delete(client);
+    stopAiSessionCheckIfIdle();
+    for (const [agentId, { agent, ownerId, targetClientId }] of bindings) {
+      const shouldSend = () => agentMap.get(agentId) === agent;
+      if (!shouldSend()) continue;
+      try {
+        Promise.resolve(forward(agent, { type: 'creation_request', requestId: randomUUID(), op: 'cancel_client_ai_jobs',
+          payload: { targetClientId }, ownerId, targetClientId }, { shouldSend })).catch(() => {});
+      } catch { /* cancellation is best effort */ }
+    }
+  }
+  function trackAiClient(client, agentId, binding) {
+    let bindings = aiClientAgents.get(client);
+    if (!bindings) aiClientAgents.set(client, bindings = new Map());
+    bindings.set(agentId, binding);
+    // HTTP logout can revoke an idle socket without another Creation frame.
+    if (!aiSessionCheck) {
+      aiSessionCheck = setInterval(() => {
+        for (const trackedClient of aiClientAgents.keys()) {
+          if (!active(trackedClient)) revokeClientCreationJobs(trackedClient);
+        }
+      }, 1000);
+      aiSessionCheck.unref?.();
+    }
+  }
   const reply = (client, agentId, requestId, op, value) => send(client, { type: 'creation_response', agentId, requestId, op, ...value });
   function forget(id) {
     const row = pending.get(id);
@@ -58,6 +105,7 @@ export function createCreationRelay({
       const op = typeof msg.op === 'string' ? msg.op : '';
       const reject = (errorCode, error) => reply(client, agentId, browserRequestId, op, { ok: false, error, errorCode });
       if (!active(client)) {
+        revokeClientCreationJobs(client);
         if (client?.authenticated) await reject('forbidden', 'Authentication required');
         return true;
       }
@@ -126,18 +174,30 @@ export function createCreationRelay({
       timer.unref?.();
       pending.set(serverRequestId, { client, agent, agentId, browserRequestId, op, timer, userKey, uploadBytes, fileIds });
       counts.set(client, (counts.get(client) || 0) + 1);
+      const targetClientId = getClientRelayId(client);
+      const shouldSend = () => active(client) && !accessError(agentId, client.userId, client.role) && agentMap.get(agentId) === agent;
       let sent;
       try {
         if (entries.length) payload.files = entries.map(({ name, mimeType, buffer }) => ({
           name, mimeType, data: buffer.toString('base64'), size: buffer.length,
         }));
-        sent = await forward(agent, { type: 'creation_request', requestId: serverRequestId, op, payload, ownerId });
+        if (AI_START_OPS.has(op)) trackAiClient(client, agentId, { agent, ownerId, targetClientId });
+        sent = await forward(agent, { type: 'creation_request', requestId: serverRequestId, op, payload, ownerId, targetClientId }, { shouldSend });
       } catch {
         // A thrown transport error does not prove a mutation was never delivered.
-        if (forget(serverRequestId) && active(client)) await reject('outcome_unknown', 'Agent delivery could not be confirmed; refresh before retrying');
+        const wasPending = forget(serverRequestId);
+        if (!active(client)) revokeClientCreationJobs(client);
+        else if (wasPending) await reject('outcome_unknown', 'Agent delivery could not be confirmed; refresh before retrying');
         return true;
       }
-      if (sent === false && forget(serverRequestId) && active(client)) await reject('offline', 'Agent is offline; refresh before retrying');
+      if (sent === false) {
+        const wasPending = forget(serverRequestId);
+        if (!active(client)) revokeClientCreationJobs(client);
+        else if (wasPending) {
+          if (accessError(agentId, client.userId, client.role) === 'Agent access denied') await reject('forbidden', 'Agent access denied');
+          else await reject('offline', 'Agent is offline; refresh before retrying');
+        }
+      }
       return true;
     },
     async response(agentId, agent, msg) {
@@ -149,7 +209,12 @@ export function createCreationRelay({
       if (msg.ok === true) {
         for (const fileId of row.fileIds) uploads.delete(fileId);
       }
-      if (!row.client || !active(row.client) || accessError(agentId, row.client.userId, row.client.role)) return true;
+      if (!row.client) return true;
+      if (!active(row.client)) {
+        revokeClientCreationJobs(row.client);
+        return true;
+      }
+      if (accessError(agentId, row.client.userId, row.client.role)) return true;
       await reply(row.client, row.agentId, row.browserRequestId, row.op, msg.ok === true
         ? { ok: true, data: msg.data }
         : { ok: false,
@@ -158,7 +223,14 @@ export function createCreationRelay({
         });
       return true;
     },
+    revokeClientCreationJobs,
     clearAgent(agentId, agent) {
+      for (const [client, bindings] of aiClientAgents) {
+        if (bindings.get(agentId)?.agent !== agent) continue;
+        bindings.delete(agentId);
+        if (!bindings.size) aiClientAgents.delete(client);
+      }
+      stopAiSessionCheckIfIdle();
       for (const [id, row] of pending) {
         if (row.agentId !== agentId || row.agent !== agent || !forget(id) || !row.client || !active(row.client)) continue;
         void Promise.resolve().then(() => reply(row.client, agentId, row.browserRequestId, row.op, {
@@ -167,6 +239,8 @@ export function createCreationRelay({
       }
     },
     clearClient(client) {
+      closedClients.add(client);
+      revokeClientCreationJobs(client);
       for (const [id, row] of pending) {
         if (row.client !== client) continue;
         if (row.fileIds?.length) {
@@ -187,12 +261,17 @@ export function createCreationRelay({
         }
       }
     },
-    close() { for (const id of pending.keys()) forget(id); },
+    close() {
+      for (const id of pending.keys()) forget(id);
+      aiClientAgents.clear();
+      stopAiSessionCheckIfIdle();
+    },
   };
 }
 
 const relay = createCreationRelay();
 export const handleClientCreation = (client, msg) => relay.request(client, msg);
 export const deliverCreationResponse = (agentId, agent, msg) => relay.response(agentId, agent, msg);
+export const revokeClientCreationJobs = client => relay.revokeClientCreationJobs(client);
 export const clearCreationRequestsForClient = client => relay.clearClient(client);
 export const clearCreationRequestsForAgent = (agentId, agent) => relay.clearAgent(agentId, agent);

@@ -5,12 +5,25 @@ import { DatabaseSync } from 'node:sqlite';
 import { writeAtomic } from '../storage/atomic.js';
 import {
   CREATION_KINDS, MODALITIES, MODALITY_BY_KIND, CREATION_STATUSES, CANON_TYPES, NODE_STATUSES, PROPOSAL_STATUSES, RUN_STATUSES,
+  DEFAULT_KIND_BY_CATEGORY, DOC_WORKFLOW_STATUSES, inferCategoryFromKind, normalizeCategory,
   LIMITS, boundedText, decodeBase64, defaultCelestialPlacement, fail, safeId,
 } from './constants.js';
 import { parseSource, searchTerms, sniffSourceMimeType } from './source-parser.js';
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS creations (id TEXT PRIMARY KEY, updated_at TEXT NOT NULL, data TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS creation_doc_states (
+  creation_id TEXT NOT NULL REFERENCES creations ON DELETE CASCADE,
+  file_path TEXT NOT NULL, status TEXT NOT NULL, updated_at TEXT NOT NULL,
+  PRIMARY KEY (creation_id, file_path));
+CREATE TABLE IF NOT EXISTS creation_doc_reviews (
+  creation_id TEXT NOT NULL REFERENCES creations ON DELETE CASCADE,
+  file_path TEXT NOT NULL, updated_at TEXT NOT NULL, data TEXT NOT NULL,
+  PRIMARY KEY (creation_id, file_path));
+CREATE TABLE IF NOT EXISTS creation_doc_review_attempts (
+  creation_id TEXT NOT NULL REFERENCES creations ON DELETE CASCADE,
+  file_path TEXT NOT NULL, attempt_token TEXT NOT NULL, expires_at INTEGER NOT NULL, updated_at TEXT NOT NULL,
+  PRIMARY KEY (creation_id, file_path));
 -- External and ambiguous folder history is retained independently of the Creation.
 -- A freshly generated workspace has a recorded directory identity instead.
 CREATE TABLE IF NOT EXISTS protected_workspaces (root_dir TEXT PRIMARY KEY NOT NULL);
@@ -87,6 +100,7 @@ CREATE TABLE IF NOT EXISTS creation_runs (
 CREATE UNIQUE INDEX IF NOT EXISTS creation_run_running ON creation_runs(creation_id) WHERE status='running';
 `;
 const now = () => new Date().toISOString();
+export const bindingRevOf = rec => rec.workspaceBindingRevision ?? rec.incarnation ?? rec.createdAt;
 const json = value => JSON.stringify(value);
 const PAGE_BYTES = 1.5 * 1024 * 1024;
 const jsonBytes = value => Buffer.byteLength(json(value));
@@ -112,6 +126,15 @@ const own = (obj, key) => Object.hasOwn(obj, key);
 export function boundedList(value, max, name) {
   if (!Array.isArray(value) || value.length > max) fail('INVALID_REQUEST', `Invalid ${name}`);
   return value;
+}
+
+export function normalizeDocFilePath(filePath) {
+  boundedText(filePath, 1024, 'document file path', { required: true });
+  if (!filePath.isWellFormed() || /\p{Cc}/u.test(filePath) || filePath.includes('\\') || /^[a-z]:/i.test(filePath)
+    || filePath.split('/').some(segment => !segment || segment === '.' || segment === '..')) {
+    fail('INVALID_REQUEST', 'Invalid document file path');
+  }
+  return filePath;
 }
 
 function contains(root, path) {
@@ -357,6 +380,10 @@ export class CreationStore {
       if (!readOnly) {
         this.db.exec('PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL;');
         this.transaction(() => {
+          if (this.all('PRAGMA table_info(creation_doc_review_attempts)').some(column => column.name === 'attempt_id')) {
+            // Pre-release schema: attempt counters are transient, not durable reviews.
+            this.db.exec('DROP TABLE creation_doc_review_attempts');
+          }
           this.db.exec(SCHEMA);
           if (!this.all('PRAGMA table_info(creations)').some(column => column.name === 'cache_dir')) {
             this.db.exec('ALTER TABLE creations ADD COLUMN cache_dir TEXT');
@@ -521,7 +548,7 @@ export class CreationStore {
     const active = data(this.one(`SELECT data FROM creation_runs WHERE creation_id=? AND status IN ('running','paused')
       ORDER BY status='running' DESC,rowid DESC LIMIT 1`, row.id));
     const { ownsWorkspace, workspaceIdentity, boundRootIdentity, pendingBindTarget, pendingBindIdentity, ...rec } = data(row);
-    return { ...rec, sessionId: rec.sessionId ?? null, projectId: rec.projectId ?? null, rootDir: rec.rootDir ?? null,
+    return { ...rec, category: rec.category ?? inferCategoryFromKind(rec.kind), sessionId: rec.sessionId ?? null, projectId: rec.projectId ?? null, rootDir: rec.rootDir ?? null,
       summary: rec.description || rec.mission || '', celestial: rec.placement, updatedAt: row.updated_at, ...counts, ...totals, hasReadableContent: counts.readableUnitCount > 0,
       activeRunStatus: active?.status ?? null, activeRunProgress: active?.progress?.total > 0 ? active.progress.completed / active.progress.total : null };
   }
@@ -529,7 +556,7 @@ export class CreationStore {
   getCreation(id) { return this.#summary(this.#creation(id)); }
   // Prepare related records in the same transaction as the Creation and its inputs.
   // External publication runs only after that transaction commits.
-  createCreation(input, { prepare } = {}) {
+  createCreation(input, { prepare, onWorkspaceMaterialized } = {}) {
     const nested = Boolean(this.tx);
     let newlyCreatedJournalToken;
     let retryBindTarget;
@@ -561,7 +588,8 @@ export class CreationStore {
         fail('INVALID_REQUEST', 'Invalid initializeFolder');
       }
       const id = idFor(input.id);
-      const kind = pick(input.kind ?? 'book', CREATION_KINDS, 'creation kind');
+      const category = normalizeCategory(input.category, input.kind);
+      const kind = pick(input.kind ?? DEFAULT_KIND_BY_CATEGORY[category], CREATION_KINDS, 'creation kind');
       const modality = input.modality ?? MODALITY_BY_KIND[kind];
       if (modality !== MODALITY_BY_KIND[kind]) fail('INVALID_REQUEST', 'Modality does not match creation kind');
       const cache = this.#cachePath(id);
@@ -570,7 +598,8 @@ export class CreationStore {
       }
       const index = this.one('SELECT COUNT(*) AS count FROM creations').count;
       const createdAt = now();
-      const record = this.#creationFields({ id, kind, modality, createdAt, title: 'Untitled creation',
+      const record = this.#creationFields({ id, kind, category, modality, createdAt, incarnation: randomUUID(),
+        workspaceBindingRevision: randomUUID(), title: 'Untitled creation',
         mission: '', description: '', status: 'draft', readingNodeId: null, readingOffset: 0,
         sessionId: null, projectId: null, rootDir: null, placement: defaultCelestialPlacement(kind, index) }, input);
       const externalRoot = input.initializeFolder === true && record.rootDir;
@@ -614,7 +643,8 @@ export class CreationStore {
         if (input.initializeFolder === true && input.rootDir != null && folderPath(input.rootDir) !== target) {
           fail('CONFLICT', 'Resume materialization in the original target folder');
         }
-        const { creation } = this.ensureWorkspace(result.id, { rootDir: target, newlyCreatedJournalToken });
+        const { creation, materialized } = this.ensureWorkspace(result.id, { rootDir: target, newlyCreatedJournalToken });
+        if (result.deduplicated && (materialized || (creation.rootDir ?? null) !== (result.rootDir ?? null))) onWorkspaceMaterialized?.(result.id);
         return result.deduplicated ? { ...creation, deduplicated: true } : creation;
       }
     }
@@ -646,6 +676,9 @@ export class CreationStore {
       record.kind = nextKind;
       record.modality = MODALITY_BY_KIND[nextKind];
     }
+    if (own(input, 'category') && input.category !== undefined) {
+      record.category = normalizeCategory(input.category, record.kind);
+    }
     for (const key of ['mission', 'description']) if (own(input, key)) record[key] = text(input[key], LIMITS.promptBytes, key);
     if (own(input, 'summary') && !own(input, 'description')) record.description = text(input.summary, LIMITS.promptBytes, 'description');
     if (own(input, 'status')) record.status = pick(input.status, CREATION_STATUSES, 'creation status');
@@ -675,6 +708,12 @@ export class CreationStore {
       const previousRoot = record.rootDir ?? null;
       this.#creationFields(record, patch);
       if (own(patch, 'rootDir')) {
+        if ((record.rootDir ?? null) !== previousRoot) {
+          record.workspaceBindingRevision = randomUUID();
+          this.run('DELETE FROM creation_doc_states WHERE creation_id=?', id);
+          this.run('DELETE FROM creation_doc_reviews WHERE creation_id=?', id);
+          this.run('DELETE FROM creation_doc_review_attempts WHERE creation_id=?', id);
+        }
         const journal = this.one('SELECT temp_files_json FROM creation_materialization_journal WHERE creation_id=?', id);
         if ((record.rootDir ?? null) !== previousRoot || (record.rootDir == null && (journal || record.pendingBindTarget))) {
           this.run('DELETE FROM creation_materialization_journal WHERE creation_id=?', id);
@@ -691,6 +730,142 @@ export class CreationStore {
       return this.getCreation(id);
     });
   }
+  listDocStates(creationId) {
+    this.#creation(creationId);
+    const rows = this.all(`SELECT file_path, status, updated_at,
+      (SELECT COUNT(*) FROM json_each(review_data, '$.annotations') a
+        WHERE a.type='object' AND a.value ->> 'status' = 'open') AS open_count
+      FROM (
+        SELECT s.file_path, s.status, s.updated_at, r.data AS review_data
+        FROM creation_doc_states s LEFT JOIN creation_doc_reviews r USING (creation_id, file_path)
+        WHERE s.creation_id=?
+        UNION ALL
+        SELECT r.file_path, 'draft', r.updated_at, r.data
+        FROM creation_doc_reviews r LEFT JOIN creation_doc_states s USING (creation_id, file_path)
+        WHERE r.creation_id=? AND s.file_path IS NULL
+      ) ORDER BY file_path`, creationId, creationId);
+    return Object.fromEntries(rows.map(row => [row.file_path, {
+      status: row.status, updatedAt: row.updated_at, openReviewCount: row.open_count,
+    }]));
+  }
+
+  getDocState(creationId, filePath) {
+    const row = this.one('SELECT file_path, status, updated_at FROM creation_doc_states WHERE creation_id=? AND file_path=?',
+      safeId(creationId), normalizeDocFilePath(filePath));
+    return row ? { filePath: row.file_path, status: row.status, updatedAt: row.updated_at } : null;
+  }
+
+  #checkDocPathQuota(creationId, filePath) {
+    if (this.getDocState(creationId, filePath)
+      || this.one('SELECT 1 FROM creation_doc_reviews WHERE creation_id=? AND file_path=?', creationId, filePath)) return;
+    const { count } = this.one(`SELECT COUNT(*) AS count FROM (
+      SELECT file_path FROM creation_doc_states WHERE creation_id=?
+      UNION SELECT file_path FROM creation_doc_reviews WHERE creation_id=?
+    )`, creationId, creationId);
+    if (count >= LIMITS.docStates) fail('LIMIT_EXCEEDED', 'Document workflow state limit reached');
+  }
+
+  setDocState(creationId, filePath, status) {
+    filePath = normalizeDocFilePath(filePath);
+    pick(status, DOC_WORKFLOW_STATUSES, 'document workflow status');
+    return this.transaction(() => {
+      this.#creation(creationId);
+      this.#checkDocPathQuota(creationId, filePath);
+      const updatedAt = now();
+      this.run(`INSERT INTO creation_doc_states (creation_id,file_path,status,updated_at) VALUES (?,?,?,?)
+        ON CONFLICT(creation_id,file_path) DO UPDATE SET status=excluded.status,updated_at=excluded.updated_at`,
+      creationId, filePath, status, updatedAt);
+      return { filePath, status, updatedAt };
+    });
+  }
+
+  getDocReview(creationId, filePath) {
+    this.#creation(creationId);
+    return data(this.one('SELECT data FROM creation_doc_reviews WHERE creation_id=? AND file_path=?', creationId, normalizeDocFilePath(filePath)));
+  }
+
+  #checkDocReviewCreation(creationId, expectedIncarnation, expectedRootDir, expectedWorkspaceBindingRevision) {
+    const rec = data(this.#creation(creationId));
+    if (expectedIncarnation !== undefined && (rec.incarnation ?? rec.createdAt) !== expectedIncarnation) {
+      fail('STALE', 'Creation changed before review completed');
+    }
+    if (expectedRootDir !== undefined && (rec.rootDir ?? null) !== expectedRootDir) {
+      fail('STALE', 'Creation workspace changed before review completed');
+    }
+    if (expectedWorkspaceBindingRevision !== undefined && bindingRevOf(rec) !== expectedWorkspaceBindingRevision) {
+      fail('STALE', 'Creation workspace binding changed before review completed');
+    }
+  }
+
+  beginDocReviewAttempt(creationId, filePath, {
+    expectedIncarnation, expectedRootDir, expectedWorkspaceBindingRevision, ttlMs = 15 * 60_000,
+  } = {}) {
+    filePath = normalizeDocFilePath(filePath);
+    return this.transaction(() => {
+      this.#checkDocReviewCreation(creationId, expectedIncarnation, expectedRootDir, expectedWorkspaceBindingRevision);
+      const startedAt = Date.now();
+      this.run('DELETE FROM creation_doc_review_attempts WHERE creation_id=? AND expires_at <= ?', creationId, startedAt);
+      const pending = this.one(`SELECT COUNT(*) AS count FROM creation_doc_review_attempts
+        WHERE creation_id=? AND file_path<>?`, creationId, filePath);
+      if (pending.count >= LIMITS.docStates) fail('LIMIT_EXCEEDED', 'Pending document review limit reached');
+      const attemptToken = randomUUID();
+      this.run(`INSERT INTO creation_doc_review_attempts
+        (creation_id,file_path,attempt_token,expires_at,updated_at) VALUES (?,?,?,?,?)
+        ON CONFLICT(creation_id,file_path) DO UPDATE SET attempt_token=excluded.attempt_token,
+          expires_at=excluded.expires_at,updated_at=excluded.updated_at`, creationId, filePath, attemptToken, startedAt + ttlMs, now());
+      return { attemptToken };
+    });
+  }
+
+  clearDocReviewAttempt(creationId, filePath, attemptToken) {
+    this.run('DELETE FROM creation_doc_review_attempts WHERE creation_id=? AND file_path=? AND attempt_token=?',
+      safeId(creationId), normalizeDocFilePath(filePath), attemptToken);
+  }
+
+  saveDocReview(creationId, filePath, review, {
+    expectedIncarnation, expectedRootDir, expectedWorkspaceBindingRevision, attemptToken,
+  } = {}) {
+    filePath = normalizeDocFilePath(filePath);
+    return this.transaction(() => {
+      this.#checkDocReviewCreation(creationId, expectedIncarnation, expectedRootDir, expectedWorkspaceBindingRevision);
+      if (attemptToken != null) {
+        const row = this.one(
+          'SELECT attempt_token FROM creation_doc_review_attempts WHERE creation_id=? AND file_path=? AND expires_at > ?',
+          creationId, filePath, Date.now(),
+        );
+        if (row?.attempt_token !== attemptToken) fail('STALE', 'Document review was superseded by a newer review');
+      }
+      this.#checkDocPathQuota(creationId, filePath);
+      let encoded;
+      try { encoded = json(review); } catch { fail('INVALID_REQUEST', 'Invalid document review'); }
+      if (!encoded?.startsWith('{')) fail('INVALID_REQUEST', 'Invalid document review');
+      if (Buffer.byteLength(encoded) > 512 * 1024) fail('LIMIT_EXCEEDED', 'Document review is too large');
+      this.run(`INSERT INTO creation_doc_reviews (creation_id,file_path,updated_at,data) VALUES (?,?,?,?)
+        ON CONFLICT(creation_id,file_path) DO UPDATE SET updated_at=excluded.updated_at,data=excluded.data`,
+      creationId, filePath, now(), encoded);
+      if (attemptToken != null) this.clearDocReviewAttempt(creationId, filePath, attemptToken);
+      return JSON.parse(encoded);
+    });
+  }
+
+  updateDocReviewAnnotation(creationId, filePath, annotationId, status) {
+    pick(status, ['open', 'accepted', 'dismissed'], 'review annotation status');
+    boundedText(annotationId, 256, 'review annotation identifier', { required: true });
+    return this.transaction(() => {
+      const review = this.getDocReview(creationId, filePath);
+      if (!review) notFound('Document review');
+      const annotation = Array.isArray(review.annotations) && review.annotations.find(item => item?.id === annotationId);
+      if (!annotation) notFound('Review annotation');
+      annotation.status = status;
+      // Some consumers display the per-lens list as well as the sorted list.
+      if (Array.isArray(review.lensResults)) for (const lens of review.lensResults) {
+        const copy = Array.isArray(lens?.annotations) && lens.annotations.find(item => item?.id === annotationId);
+        if (copy) copy.status = status;
+      }
+      return this.saveDocReview(creationId, filePath, review);
+    });
+  }
+
   deleteCreation(id, { purgeWorkspace = false } = {}) {
     return this.transaction(() => {
       const row = this.#creation(id);
@@ -1471,7 +1646,14 @@ export class CreationStore {
         if (Object.values(published).some(isIncompletePublication)) {
           fail('CONFLICT', 'Incomplete external materialization output remains unresolved');
         }
+        const rootChanged = (current.rootDir ?? null) !== root;
         current.rootDir = root;
+        current.workspaceBindingRevision = randomUUID();
+        if (rootChanged) {
+          this.run('DELETE FROM creation_doc_states WHERE creation_id=?', id);
+          this.run('DELETE FROM creation_doc_reviews WHERE creation_id=?', id);
+          this.run('DELETE FROM creation_doc_review_attempts WHERE creation_id=?', id);
+        }
         current.boundRootIdentity = rootIdentity;
         delete current.pendingBindTarget;
         delete current.pendingBindIdentity;
@@ -1518,7 +1700,14 @@ export class CreationStore {
       if (this.one('SELECT creation_id FROM creation_materialization_journal WHERE creation_id=?', id)) {
         fail('CONFLICT', 'Resume materialization in the original target folder');
       }
+      const previousRoot = current.rootDir ?? null;
       this.#initializeWorkspace(current, { materialize: true });
+      current.workspaceBindingRevision = randomUUID();
+      if ((current.rootDir ?? null) !== previousRoot) {
+        this.run('DELETE FROM creation_doc_states WHERE creation_id=?', id);
+        this.run('DELETE FROM creation_doc_reviews WHERE creation_id=?', id);
+        this.run('DELETE FROM creation_doc_review_attempts WHERE creation_id=?', id);
+      }
       this.run('UPDATE creations SET updated_at=?,data=? WHERE id=?', now(), json(current), id);
       return { creation: this.getCreation(id), rootDir: current.rootDir, materialized: true };
     });

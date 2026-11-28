@@ -377,6 +377,7 @@ export default {
             :is-binary="activeBinaryDocument"
             :key="activeFile.path"
             :file="activeFile"
+            :agent-id="agentId"
             :route-key="routeKey"
             :saving="fileSaving"
             :show-header="true"

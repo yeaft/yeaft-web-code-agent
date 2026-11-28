@@ -6,6 +6,7 @@ import { handleMessage } from './message-router.js';
 import { cleanupTerminalsForDisconnect } from '../terminal.js';
 import { invalidateYeaftProjectContexts } from '../yeaft/web-bridge.js';
 import { abortActiveCosmicWebBriefings } from '../yeaft/cosmic-web-briefing.js';
+import { cancelCreationsForSocket } from '../yeaft/creations/bridge.js';
 
 export function resetConnectionTransport() {
   invalidateYeaftProjectContexts();
@@ -54,6 +55,7 @@ export function connect(WebSocketImpl = WebSocket) {
     }
   });
   if (previousSocket && previousSocket !== socket) {
+    cancelCreationsForSocket(previousSocket);
     const closedTerminals = cleanupTerminalsForDisconnect();
     if (closedTerminals > 0) {
       console.log(`[PTY] Closed ${closedTerminals} terminal(s) before Agent transport replacement`);

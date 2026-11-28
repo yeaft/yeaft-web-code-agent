@@ -8,10 +8,11 @@ export const CREATION_STATUSES = Object.freeze(['seed', 'draft', 'active', 'need
 export const NODE_STATUSES = Object.freeze(['outline', 'draft', 'final']);
 export const RUN_STATUSES = Object.freeze(['running', 'paused', 'completed', 'failed', 'cancelled']);
 export const PROPOSAL_STATUSES = Object.freeze(['pending', 'accepted', 'rejected']);
+export const PRIVATE_AI_EVENT_TYPES = new Set(['inline_edit_delta', 'inline_edit_complete', 'review_lens_complete', 'review_complete']);
 export const LIMITS = Object.freeze({
   sourceBytes: 25 * 1024 * 1024, sourceBatchBytes: 50 * 1024 * 1024, sources: 64,
   parsedChars: 120_000, chunkChars: 2000, assetBytes: 8 * 1024 * 1024, assets: 256,
-  nodeBytes: 512 * 1024, nodes: 500, treeDepth: 12, canon: 500, proposalCount: 1000,
+  nodeBytes: 512 * 1024, nodes: 500, treeDepth: 12, canon: 500, docStates: 500, proposalCount: 1000,
   mediaRangeBytes: 1024 * 1024, promptBytes: 32 * 1024, responseChars: 256 * 1024,
   batchNodes: 100, threadHistory: 12, turnTimeoutMs: 10 * 60 * 1000,
 });
@@ -51,3 +52,5 @@ export function decodeBase64(value, max) {
   if (bytes.length > max) fail('LIMIT_EXCEEDED', 'Payload is too large');
   return bytes;
 }
+
+export { CREATION_CATEGORIES, DEFAULT_KIND_BY_CATEGORY, DOC_WORKFLOW_STATUSES, inferCategoryFromKind, normalizeCategory } from './categories.js';

@@ -37,7 +37,7 @@ import { CONFIG } from '../../server/config.js';
 import { activeSessions, revokedSessions, revokedTokens } from '../../server/auth/session-store.js';
 import { issueSessionToken, logout, maybeRenewToken, verifyToken } from '../../server/auth/token.js';
 import { handleWebConnection } from '../../server/ws-client.js';
-import { createCreationRelay } from '../../server/handlers/client-creation.js';
+import { createCreationRelay, getClientRelayId } from '../../server/handlers/client-creation.js';
 import { createWorkbenchPreview, openWorkbenchVideo, readWorkbenchPreview } from '../../server/workbench-preview.js';
 import { handleClientWorkbench } from '../../server/handlers/client-workbench.js';
 import { __testResetWorkbenchCorrelations, peekWorkbenchRequest } from '../../server/workbench-correlation.js';
@@ -485,8 +485,8 @@ describe('Creation WebSocket relay', () => {
   });
 
   it('authorizes the owner, replaces the correlation ID and does not trust browser identity', async () => {
-    await relay.request(client, msg({ ownerId: 'spoofed', payload: { creationId: 'creation-a' } }));
-    expect(frame(agent)).toEqual({ type: 'creation_request', requestId: expect.stringMatching(/^[0-9a-f-]{36}$/), op: 'get_creation', ownerId: 'user-a', payload: { creationId: 'creation-a' } });
+    await relay.request(client, msg({ ownerId: 'spoofed', targetClientId: getClientRelayId(peer), payload: { creationId: 'creation-a' } }));
+    expect(frame(agent)).toEqual({ type: 'creation_request', requestId: expect.stringMatching(/^[0-9a-f-]{36}$/), op: 'get_creation', ownerId: 'user-a', targetClientId: getClientRelayId(client), payload: { creationId: 'creation-a' } });
     expect(frame(agent).requestId).not.toBe('browser-1');
   });
 
@@ -568,6 +568,120 @@ describe('Creation WebSocket relay', () => {
     await vi.advanceTimersByTimeAsync(45_000);
     expect(client.ws.send).toHaveBeenCalledTimes(1);
     expect(frame(client)).toMatchObject({ errorCode: code });
+  });
+
+  it.each(['session', 'acl', 'agent'])('rechecks %s immediately before the transport sends', async revoked => {
+    let resume;
+    const delivered = vi.fn();
+    relay = createCreationRelay({ forward: async (target, payload, { shouldSend }) => {
+      await new Promise(resolve => { resume = resolve; });
+      if (!shouldSend()) return false;
+      delivered(target, payload);
+      return true;
+    } });
+    const pending = relay.request(client, msg());
+    expect(resume).toBeTypeOf('function');
+    if (revoked === 'session') state.users.get('alice').deletion_state = 'disabled';
+    if (revoked === 'acl') agent.ownerId = 'user-b';
+    if (revoked === 'agent') state.agents.set(agentId, { ...agent });
+    resume();
+    await pending;
+    expect(delivered).not.toHaveBeenCalled();
+    if (revoked === 'session') expect(client.ws.send).not.toHaveBeenCalled();
+    else expect(frame(client)).toMatchObject({ ok: false, errorCode: revoked === 'acl' ? 'forbidden' : 'offline' });
+  });
+
+  it('cancels AI jobs before the start ACK on disconnect and rejects browser cancellation requests', async () => {
+    await relay.request(client, msg({ op: 'cancel_client_ai_jobs' }));
+    expect(frame(client)).toMatchObject({ errorCode: 'invalid_request' });
+    expect(agent.ws.send).not.toHaveBeenCalled();
+    const starting = relay.request(client, msg({ op: 'review_document' }));
+    const startFrame = frame(agent);
+    relay.clearClient(client);
+    await starting;
+    expect(frame(agent, 1)).toMatchObject({ type: 'creation_request', requestId: expect.any(String),
+      op: 'cancel_client_ai_jobs', ownerId: 'user-a', targetClientId: startFrame.targetClientId,
+      payload: { targetClientId: startFrame.targetClientId } });
+    await relay.response(agentId, agent, { type: 'creation_response', requestId: startFrame.requestId, ok: true });
+    relay.clearClient(client);
+    expect(agent.ws.send).toHaveBeenCalledTimes(2);
+    expect(client.ws.send).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(['request', 'response', 'idle'])('cancels AI jobs when logout is detected on %s', async via => {
+    vi.useFakeTimers();
+    const token = issueSessionToken('alice');
+    Object.assign(client, { authToken: token, authExpiresAt: verifyToken(token).exp * 1000 });
+    await relay.request(client, msg({ op: 'inline_edit' }));
+    const startFrame = frame(agent);
+    logout(token);
+    if (via === 'request') await relay.request(client, msg());
+    if (via === 'response') await relay.response(agentId, agent, { type: 'creation_response', requestId: startFrame.requestId, ok: true });
+    if (via === 'idle') await vi.advanceTimersByTimeAsync(1000);
+    expect(frame(agent, 1)).toMatchObject({ op: 'cancel_client_ai_jobs', targetClientId: startFrame.targetClientId });
+    expect(client.ws.send).not.toHaveBeenCalled();
+  });
+
+  it('does not send stale cancellations when the Agent connection was cleared', async () => {
+    await relay.request(client, msg({ op: 'inline_edit' }));
+    relay.clearAgent(agentId, agent);
+    relay.clearClient(client);
+    expect(agent.ws.send).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(['inline_edit', 'review_document', 'cancel_ai_job', 'get_doc_states', 'set_doc_state', 'get_doc_review', 'update_review_annotation'])('relays %s with a server-controlled client ID and existing ACL', async op => {
+    await relay.request(other, msg({ op }));
+    expect(frame(other)).toMatchObject({ op, errorCode: 'forbidden' });
+    expect(agent.ws.send).not.toHaveBeenCalled();
+    await relay.request(client, msg({ op, targetClientId: 'forged' }));
+    expect(frame(agent)).toMatchObject({ op, ownerId: 'user-a', targetClientId: getClientRelayId(client) });
+    expect(getClientRelayId(client)).not.toBe(getClientRelayId(peer));
+  });
+
+  it('delivers targeted events to one socket only, including in skip-auth mode, without leaking routing metadata', async () => {
+    const event = { type: 'inline_edit_delta', delta: 'private' };
+    const envelope = { type: 'creation_event', ownerId: 'user-a', targetClientId: getClientRelayId(client), event };
+    await handleAgentCreation(agentId, agent, { ...envelope, ownerId: 'mismatched' });
+    expect(client.ws.send).not.toHaveBeenCalled();
+    await handleAgentCreation(agentId, agent, envelope);
+    expect(frame(client)).toEqual({ type: 'creation_event', agentId, event });
+    const prior = CONFIG.skipAuth;
+    try {
+      CONFIG.skipAuth = true;
+      await handleAgentCreation(agentId, agent, envelope);
+    } finally { CONFIG.skipAuth = prior; }
+    expect(client.ws.send).toHaveBeenCalledTimes(2);
+    expect(peer.ws.send).not.toHaveBeenCalled();
+    expect(other.ws.send).not.toHaveBeenCalled();
+  });
+
+  it.each(['inline_edit_delta', 'inline_edit_complete', 'review_lens_complete', 'review_complete'])('fails closed for malformed or unbound %s targets', async type => {
+    const event = { type };
+    const envelope = { type: 'creation_event', ownerId: 'user-a', event };
+    const disconnected = browser('user-a');
+    const targetIds = [undefined, null, '', 7, {}, 'unknown', ` ${getClientRelayId(client)}`,
+      `${getClientRelayId(client)}\n`, 'x'.repeat(129), 'invalid.token', getClientRelayId(disconnected)];
+    const prior = CONFIG.skipAuth;
+    try {
+      for (const skipAuth of [false, true]) {
+        CONFIG.skipAuth = skipAuth;
+        for (const targetClientId of targetIds) {
+          expect(await handleAgentCreation(agentId, agent, { ...envelope, targetClientId })).toBe(true);
+        }
+      }
+    } finally { CONFIG.skipAuth = prior; }
+    for (const receiver of [client, peer, other]) expect(receiver.ws.send).not.toHaveBeenCalled();
+  });
+
+  it.each(['doc_review_updated', 'doc_state_updated'])('broadcasts durable %s to the owner, but not with a malformed target', async type => {
+    const event = { type };
+    const envelope = { type: 'creation_event', ownerId: 'user-a', event };
+    for (const targetClientId of ['', 123, 'unknown']) await handleAgentCreation(agentId, agent, { ...envelope, targetClientId });
+    expect(client.ws.send).not.toHaveBeenCalled();
+    expect(peer.ws.send).not.toHaveBeenCalled();
+    await handleAgentCreation(agentId, agent, envelope);
+    for (const receiver of [client, peer]) expect(frame(receiver)).toEqual({ type: 'creation_event', agentId, event });
+    expect(other.ws.send).not.toHaveBeenCalled();
   });
 
   it('broadcasts events with the server-derived ID only to authorized browsers', async () => {

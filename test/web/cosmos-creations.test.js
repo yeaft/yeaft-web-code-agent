@@ -68,6 +68,9 @@ vi.mock('../../agent/yeaft/image-preview.js', () => ({ makeImagePreview: vi.fn()
 
 import { parseMentions } from '../../agent/yeaft/sessions/pre-flow.js';
 import { createCreationService } from '../../agent/yeaft/creations/service.js';
+import { handleAgentCreation } from '../../server/handlers/agent-creation.js';
+import { agents as relayAgents, webClients } from '../../server/context.js';
+import { userDb } from '../../server/database.js';
 import { createCreationRelay } from '../../server/handlers/client-creation.js';
 
 enableAutoUnmount(afterEach);
@@ -122,6 +125,7 @@ describe('Cosmos Creations — i18n, styles & celestial HUD', () => {
     const components = [
       'cosmos/creations/CosmosGalaxyOverlay.js', 'workbench/CreationTab.js',
       'workbench/CreationCreateModal.js', 'workbench/FileCanvasView.js',
+      'workbench/CanvasInlineEditPopover.js', 'workbench/CanvasReviewPanel.js',
     ];
     const missing = [];
     for (const component of components) {
@@ -140,9 +144,26 @@ describe('Cosmos Creations — i18n, styles & celestial HUD', () => {
     expect(cosmosCss).toMatch(/\.creation-legacy-banner\s*\{/);
     expect(cosmosCss).toMatch(/\.creation-galaxy-overlay\s+\.creation-kind-pill\s*\{/);
     expect(cosmosCss).not.toMatch(/(^|\n)\s*\.creation-kind-pill\b/);
-    expect(wbCss).toMatch(/\.creation-create-modal\s+\.creation-kind-pill\s*\{/);
+    expect(wbCss).toMatch(/\.creation-create-category-card\s*\{/);
     expect(readFileSync('web/styles/canvas.css', 'utf8')).toMatch(/@container canvas-pane\b/);
     expect(wbCss).toMatch(/@container creation-wb\b/);
+  });
+
+  it('F11/F12/M7: anchors scoped menus and keeps the review body scrollable', () => {
+    const workbench = readFileSync('web/styles/creation-workbench.css', 'utf8');
+    expect(workbench).toMatch(/\.ctx-menu\.creation-wb-add-menu\s*\{[^}]*\bposition:\s*absolute\s*;/);
+    expect(workbench).toMatch(/\.ctx-menu\.creation-wb-more-menu\s*\{[^}]*\bposition:\s*absolute\s*;/);
+    expect(readFileSync('web/styles/canvas.css', 'utf8')).toMatch(/\.canvas-review-body\s*\{[^}]*\boverflow-y:\s*auto\s*;/);
+  });
+
+  it.each([1, 150])('M7/M8: reconstructs both sides of an inline diff with mixed separators (%i lines)', async count => {
+    const { computeInlineDiff } = await import('../../web/utils/creation-categories.js');
+    // Exercise both the token diff and the large-input line fallback.
+    const original = 'old\rword\u2028one\u2029end\r\n'.repeat(count) + 'tail\r';
+    const revised = 'new\u2029text\rpara\u2028end\n'.repeat(count) + 'tail\u2029';
+    const diff = computeInlineDiff(original, revised);
+    expect(diff.filter(hunk => hunk.type !== 'add').map(hunk => hunk.text).join('')).toBe(original);
+    expect(diff.filter(hunk => hunk.type !== 'del').map(hunk => hunk.text).join('')).toBe(revised);
   });
 
   it('uses theme tokens in Galaxy, Workbench, and Canvas sources', () => {
@@ -217,6 +238,9 @@ describe('Cosmos Creations — End-to-End Web Store <-> Server Relay <-> Agent S
   let uploads;
   let creationsStore;
   let chatStore;
+  let webClient;
+  let agentA;
+  let adapterFactory;
 
   beforeEach(async () => {
     tempDirA = mkdtempSync(join(tmpdir(), 'yeaft-creations-web-a-'));
@@ -231,7 +255,9 @@ describe('Cosmos Creations — End-to-End Web Store <-> Server Relay <-> Agent S
     chatStore = useChatStore();
     creationsStore = useCreationsStore();
 
-    const webClient = { authenticated: true, userId: 'alice', role: 'user' };
+    webClient = { authenticated: true, userId: 'alice', role: 'user' };
+    agentA = { id: 'agent-a', ownerId: 'alice', capabilities: ['creations'] };
+    adapterFactory = vi.fn();
     const agentMap = new Map();
     const services = new Map();
 
@@ -252,7 +278,7 @@ describe('Cosmos Creations — End-to-End Web Store <-> Server Relay <-> Agent S
       forward: async (agent, msg) => {
         const svc = services.get(agent.id);
         try {
-          const data = await svc.request({ op: msg.op, payload: msg.payload });
+          const data = await svc.request({ op: msg.op, payload: msg.payload, meta: { targetClientId: msg.targetClientId } });
           await relay.response(agent.id, agent, {
             type: 'creation_response',
             requestId: msg.requestId,
@@ -295,9 +321,13 @@ describe('Cosmos Creations — End-to-End Web Store <-> Server Relay <-> Agent S
 
     serviceA = createCreationService({
       yeaftDir: tempDirA,
+      adapterFactory,
       engineFactory: mockEngineFactory,
-      emitEvent: (event) => {
-        creationsStore.handleCreationEvent({ type: 'creation_event', agentId: 'agent-a', event });
+      emitEvent: ({ _targetClientId, ...event }) => {
+        if (_targetClientId) return handleAgentCreation(agentA.id, agentA, {
+          type: 'creation_event', ownerId: agentA.ownerId, targetClientId: _targetClientId, event,
+        });
+        creationsStore.handleCreationEvent({ type: 'creation_event', agentId: agentA.id, event });
       },
     });
     serviceB = createCreationService({
@@ -308,7 +338,7 @@ describe('Cosmos Creations — End-to-End Web Store <-> Server Relay <-> Agent S
       },
     });
 
-    agentMap.set('agent-a', { id: 'agent-a', capabilities: ['creations'] });
+    agentMap.set(agentA.id, agentA);
     agentMap.set('agent-b', { id: 'agent-b', capabilities: ['creations'] });
     services.set('agent-a', serviceA);
     services.set('agent-b', serviceB);
@@ -330,6 +360,102 @@ describe('Cosmos Creations — End-to-End Web Store <-> Server Relay <-> Agent S
     rmSync(tempDirA, { recursive: true, force: true });
     rmSync(tempDirB, { recursive: true, force: true });
     if (externalDir) rmSync(externalDir, { recursive: true, force: true });
+  });
+
+  it('round-trips isolated inline edits and concurrent partial reviews, then reloads workflow and annotation state', async () => {
+    const received = [];
+    const siblingSend = vi.fn();
+    const socket = send => ({ readyState: 1, send });
+    Object.assign(webClient, { encryptOutbound: false, ws: socket(raw => {
+      const msg = JSON.parse(raw);
+      received.push(msg);
+      creationsStore.handleCreationEvent(msg);
+    }) });
+    const sibling = { ...webClient, ws: socket(siblingSend) };
+    vi.spyOn(userDb, 'isActive').mockImplementation(id => id === webClient.userId);
+    relayAgents.set(agentA.id, agentA);
+    webClients.set(webClient.ws, webClient);
+    webClients.set(sibling.ws, sibling);
+
+    const filePath = 'docs/chapter.md';
+    const content = 'An old line.\nA second line.';
+    const finishEdit = deferred();
+    const reviewResults = [deferred(), deferred()];
+    const call = vi.fn().mockImplementationOnce(() => reviewResults[0].promise)
+      .mockImplementationOnce(() => reviewResults[1].promise);
+    adapterFactory.mockResolvedValueOnce({ model: 'fixture', adapter: {
+      async *captureStream() {
+        yield { type: 'text_delta', text: 'A new ' };
+        await finishEdit.promise;
+        yield { type: 'text_delta', text: 'line.' };
+      },
+    } }).mockResolvedValueOnce({ model: 'fixture', adapter: { call } });
+    try {
+      // Prove the sibling is an eligible recipient, not merely absent from the relay.
+      await handleAgentCreation(agentA.id, agentA, { type: 'creation_event', ownerId: agentA.ownerId,
+        event: { type: 'creation_upserted', creation: { id: 'public-probe', title: 'Shared Creation' } },
+      });
+      expect(siblingSend).toHaveBeenCalledTimes(1);
+      siblingSend.mockClear();
+      const { creation } = await creationsStore.createCreation(agentA.id, { title: 'Atlas', category: 'book' });
+      const target = { creationId: creation.id, filePath };
+      expect(await creationsStore.loadDocStates(agentA.id, creation.id)).toEqual({});
+      await creationsStore.setDocState(agentA.id, creation.id, filePath, 'review');
+      expect(await creationsStore.loadDocStates(agentA.id, creation.id)).toEqual({
+        [filePath]: { status: 'review', updatedAt: expect.any(String), openReviewCount: 0 },
+      });
+
+      const { jobId: edit } = await creationsStore.startInlineEdit(agentA.id, {
+        ...target, fullContent: content, selectedText: 'An old line.', lineStart: 1, preset: 'polish',
+      });
+      await vi.waitFor(() => expect(creationsStore.inlineEditJobs[edit]).toMatchObject({ status: 'running', revisedText: 'A new ' }));
+      finishEdit.resolve();
+      await vi.waitFor(() => expect(creationsStore.inlineEditJobs[edit]).toMatchObject({
+        status: 'completed', originalText: 'An old line.', revisedText: 'A new line.', diffHunks: expect.any(Array),
+      }));
+      expect(received.filter(msg => msg.event.jobId === edit).map(msg => msg.event.type)).toEqual([
+        'inline_edit_delta', 'inline_edit_delta', 'inline_edit_complete',
+      ]);
+
+      const lensIds = ['logic_continuity', 'prose_craft'];
+      const { jobId: review } = await creationsStore.startDocumentReview(agentA.id, { ...target, content, lensIds });
+      // Neither reviewer can finish until both have independently reached the adapter.
+      await vi.waitFor(() => expect(call).toHaveBeenCalledTimes(2));
+      reviewResults[1].resolve({ text: 'invalid review JSON' });
+      await vi.waitFor(() => expect(creationsStore.reviewJobs[review]).toMatchObject({
+        status: 'running', lensResults: [expect.objectContaining({ lensId: lensIds[1], status: 'failed' })],
+      }));
+      reviewResults[0].resolve({ text: JSON.stringify({ summary: 'Continuity needs work', annotations: [
+        { severity: 'blocker', title: 'Clarify the timeline', quote: 'An old line.', lineStart: 1, suggestedReplacement: 'A new line.' },
+      ] }) });
+      await vi.waitFor(() => expect(creationsStore.reviewJobs[review]).toMatchObject({
+        status: 'partial', lensResults: [
+          expect.objectContaining({ lensId: lensIds[0], status: 'completed' }),
+          expect.objectContaining({ lensId: lensIds[1], status: 'failed' }),
+        ],
+      }));
+      expect(received.filter(msg => msg.event.jobId === review).map(msg => msg.event.type)).toEqual([
+        'review_lens_complete', 'review_lens_complete', 'review_complete',
+      ]);
+      expect(siblingSend).not.toHaveBeenCalled();
+      const persisted = await creationsStore.loadDocReview(agentA.id, creation.id, filePath);
+      expect(persisted.review).toMatchObject({ jobId: review, status: 'partial', annotations: [
+        expect.objectContaining({ status: 'open', severity: 'blocker', title: 'Clarify the timeline', suggestedReplacement: 'A new line.' }),
+      ] });
+      const [annotation] = persisted.review.annotations;
+      expect((await creationsStore.loadDocStates(agentA.id, creation.id))[filePath]).toMatchObject({ status: 'review', openReviewCount: 1 });
+      await creationsStore.resolveReviewAnnotation(agentA.id, creation.id, filePath, annotation.id, 'accepted');
+      expect((await creationsStore.loadDocReview(agentA.id, creation.id, filePath)).review.annotations)
+        .toEqual([{ ...annotation, status: 'accepted' }]);
+      await creationsStore.setDocState(agentA.id, creation.id, filePath, 'final');
+      expect((await creationsStore.loadDocStates(agentA.id, creation.id))[filePath]).toMatchObject({ status: 'final', openReviewCount: 0 });
+    } finally {
+      finishEdit.resolve();
+      for (const result of reviewResults) result.resolve({ text: '{"annotations":[]}' });
+      webClients.delete(sibling.ws);
+      webClients.delete(webClient.ws);
+      relayAgents.delete(agentA.id);
+    }
   });
 
   it('enforces strict per-Agent isolation and round-trips full Creation lifecycle', async () => {
@@ -817,17 +943,17 @@ describe('Cosmos Creations — End-to-End Web Store <-> Server Relay <-> Agent S
 
     expect(serviceA.store.getCreation(partial.id)).toMatchObject({ title: 'Initial title', kind: 'book' });
     await title.setValue('Edited title');
-    await modal.get('.creation-kind-pill:has(.is-deck)').trigger('click');
+    await button(modal, t('creation.category.deck'), '.creation-create-category-title').trigger('click');
     modal.get('button[type="submit"]').element.click();
     await flushPromises();
     expect(submit).toHaveBeenLastCalledWith(expect.objectContaining({
-      title: 'Edited title', kind: 'deck', resumeProjectId: 'saved-project', resumeSessionId: 'saved-session', resumeCreationId: partial.id,
+      title: 'Edited title', kind: 'deck', category: 'deck', resumeProjectId: 'saved-project', resumeSessionId: 'saved-session', resumeCreationId: partial.id,
     }));
     expect(modal.emitted('created')).toEqual([[expect.objectContaining({ sessionId: 'saved-session', projectId: 'saved-project' })]]);
     expect(serviceA.store.listCreations()).toEqual([expect.objectContaining({
       id: partial.id, sessionId: 'saved-session', projectId: 'saved-project',
     })]);
-    expect(serviceA.store.getCreation(partial.id)).toMatchObject({ title: 'Edited title', kind: 'deck' });
+    expect(serviceA.store.getCreation(partial.id)).toMatchObject({ title: 'Edited title', kind: 'deck', category: 'deck' });
     const messages = send.mock.calls.map(([request]) => request);
     expect(messages.filter(request => request.type === 'yeaft_create_session')).toHaveLength(1);
     expect(messages.filter(request => request.type === 'yeaft_project_mutation' && request.op === 'create')).toHaveLength(1);
@@ -1125,7 +1251,7 @@ describe('Cosmos Creations — End-to-End Web Store <-> Server Relay <-> Agent S
     }
   });
 
-  it('R3-F5: patches the importKey-deduplicated Creation with edits made after its lost ACK', async () => {
+  it('F10/R3-F5: locks workspace inputs after a lost create ACK and retries revised metadata', async () => {
     await registerBrowserStores();
     const { default: CreationCreateModal } = await import('../../web/components/workbench/CreationCreateModal.js');
     chatStore.currentAgent = route.agentId;
@@ -1140,7 +1266,15 @@ describe('Cosmos Creations — End-to-End Web Store <-> Server Relay <-> Agent S
       return true;
     });
     const workspace = vi.spyOn(creationsStore, 'createWorkspaceCreation');
-    const modal = render(CreationCreateModal, { stubs: { Teleport: true }, attachTo: document.body });
+    const rootDir = join(tempDirA, 'lost-ack-workspace');
+    mkdirSync(rootDir);
+    const modal = render(CreationCreateModal, {
+      props: { initialRootDir: rootDir }, stubs: { Teleport: true }, attachTo: document.body,
+    });
+    const folder = () => modal.get('#creation-create-folder');
+    const dropzone = () => modal.get('.creation-dropzone');
+    expect(folder().element.disabled).toBe(false);
+    expect(dropzone().attributes('aria-disabled')).toBe('false');
     await modal.get('#creation-create-title').setValue('Original atlas');
     vi.useFakeTimers();
     try {
@@ -1150,17 +1284,24 @@ describe('Cosmos Creations — End-to-End Web Store <-> Server Relay <-> Agent S
       await vi.advanceTimersByTimeAsync(45_000);
       expect(modal.get('[role="alert"]').text()).toContain('timed out');
       expect(modal.emitted('created')).toBeUndefined();
+      expect(folder().element.disabled).toBe(true);
+      expect(folder().element.value).toBe(rootDir);
+      expect(dropzone().attributes('aria-disabled')).toBe('true');
+      expect(dropzone().attributes('tabindex')).toBe('-1');
+      expect(dropzone().get('input[type="file"]').element.disabled).toBe(true);
+      expect(modal.text()).toContain(t('creation.create.workspacePendingHint'));
+      expect(modal.text()).not.toContain(t('creation.create.workspaceCommittedHint'));
       await modal.get('#creation-create-title').setValue('Revised slides');
-      await modal.get('.creation-kind-pill:has(.is-deck)').trigger('click');
+      await button(modal, t('creation.category.deck'), '.creation-create-category-title').trigger('click');
       modal.get('button[type="submit"]').element.click();
       await flushPromises();
-      expect(workspace).toHaveBeenLastCalledWith(expect.objectContaining({ resumeCreationId: undefined, title: 'Revised slides', kind: 'deck' }));
+      expect(workspace).toHaveBeenLastCalledWith(expect.objectContaining({ resumeCreationId: undefined, createAttempted: true, rootDir, title: 'Revised slides', kind: 'deck', category: 'deck' }));
       const creates = send.mock.calls.map(([msg]) => msg).filter(msg => msg.op === 'create_creation');
       expect(creates).toHaveLength(2);
       expect(creates[0].payload.importKey).toBeTruthy();
       expect(creates[1].payload.importKey).toBe(creates[0].payload.importKey);
       expect(modal.emitted('created')).toEqual([[expect.objectContaining({ creation: expect.objectContaining({ id }) })]]);
-      expect(serviceA.store.getCreation(id)).toMatchObject({ title: 'Revised slides', kind: 'deck', sessionId: 'linked-session' });
+      expect(serviceA.store.getCreation(id)).toMatchObject({ title: 'Revised slides', kind: 'deck', category: 'deck', sessionId: 'linked-session' });
       expect(serviceA.store.listCreations()).toHaveLength(1);
     } finally {
       vi.useRealTimers();
@@ -2771,6 +2912,7 @@ describe('Cosmos Creations — End-to-End Web Store <-> Server Relay <-> Agent S
 });
 
 const t = key => en[key] || key;
+const interpolateTranslation = (key, params = {}) => t(key).replace(/\{(\w+)\}/g, (match, name) => params[name] ?? match);
 const route = { runtimeProvider: 'yeaft', agentId: 'agent-a', sessionId: 'session-a' };
 const rootDir = '/workspace/atlas';
 const routeKey = 'yeaft:agent-a:session-a';
@@ -2801,8 +2943,9 @@ function projectAck(chat, request, fields) {
 
 function deferred() {
   let resolve;
-  const promise = new Promise(res => { resolve = res; });
-  return { promise, resolve };
+  let reject;
+  const promise = new Promise((res, rej) => { resolve = res; reject = rej; });
+  return { promise, resolve, reject };
 }
 
 function fireWindowEvent(type, detail) {
@@ -2823,6 +2966,23 @@ function button(wrapper, label, selector = 'button') {
   const match = wrapper.findAll(selector).find(item => item.text() === label);
   expect(match, `Missing ${selector} with text ${label}`).toBeDefined();
   return match;
+}
+
+async function openOverflowAction(wrapper, label) {
+  await wrapper.get(`[aria-label="${t('creation.workbench.moreActions')}"]`).trigger('click');
+  await button(wrapper.get('.creation-wb-more-menu'), label, '[role="menuitem"]').trigger('click');
+}
+
+async function openCanvasOverflowAction(wrapper, label) {
+  await wrapper.get(`[aria-label="${t('creation.canvas.moreActions')}"]`).trigger('click');
+  const menu = wrapper.get('.canvas-more-menu');
+  const item = menu.findAll('[role="menuitem"]').find(entry => {
+    const text = entry.element.cloneNode(true);
+    text.querySelectorAll('[aria-hidden="true"]').forEach(icon => icon.remove());
+    return text.textContent.trim() === label;
+  });
+  expect(item, `Missing Canvas menu action: ${label}`).toBeDefined();
+  await item.trigger('click');
 }
 
 async function registerBrowserStores() {
@@ -2887,6 +3047,964 @@ describe('File Canvas and route-scoped composer references', () => {
     context.clearCanvasContextRefs(otherRoute);
     vi.unstubAllGlobals();
   });
+
+  const originalContent = 'First line\nOld passage\nLast line';
+  const contentHash = content => createHash('sha256').update(content).digest('hex');
+  const hasMarkFinal = wrapper => wrapper.findAll('.canvas-review-bulk-bar button')
+    .some(item => item.text().includes(t('creation.docStatus.markFinal')));
+
+  async function canvasAiFixture(reply, content = originalContent, props = {}) {
+    const { chat } = await registerBrowserStores();
+    const { useCreationsStore } = await import('../../web/stores/creations.js');
+    const store = useCreationsStore();
+    const sessionSend = vi.spyOn(chat, 'sendYeaftSessionMessage');
+    const wire = vi.spyOn(chat, 'sendWsMessage').mockImplementation(request => {
+      if (request.type !== 'creation_request') return true;
+      queueMicrotask(() => store.handleCreationResponse({
+        ...request, type: 'creation_response', ok: true, data: reply(request),
+      }));
+      return true;
+    });
+    const file = Vue.reactive({ name: 'chapter.md', path: 'docs/chapter.md', content });
+    const wrapper = render(FileCanvasView, { translate: interpolateTranslation, props: {
+      routeKey, file, agentId: route.agentId, creationId: 'atlas',
+      'onUpdate:content': content => { file.content = content; }, ...props,
+    } });
+    const event = (type, fields) => store.handleCreationEvent({
+      agentId: route.agentId, event: { type, creationId: 'atlas', filePath: file.path, ...fields },
+    });
+    async function selectPassage() {
+      if (!wrapper.find('textarea').exists()) await button(wrapper, t('creation.canvas.edit')).trigger('click');
+      const editor = wrapper.get('textarea');
+      const start = file.content.indexOf('Old passage');
+      editor.element.setSelectionRange(start, start + 'Old passage'.length);
+      await editor.trigger('select');
+      return editor;
+    }
+    return { store, wire, sessionSend, file, wrapper, event, selectPassage };
+  }
+
+  it('keeps headingless documents uncluttered and exposes typography, references and workflow controls', async () => {
+    const file = { name: 'notes.md', path: '/atlas/notes.md', content: 'Three plain words' };
+    const wrapper = render(FileCanvasView, { translate: interpolateTranslation, props: { file, routeKey, showOpenInFiles: true } });
+    const toolbar = wrapper.get('.canvas-toolbar');
+    expect(toolbar.find(`[title="${t('creation.canvas.toc')}"]`).exists()).toBe(false);
+    expect(toolbar.find('.canvas-status-pill').exists()).toBe(false);
+    expect(toolbar.find('.canvas-word-count, .canvas-zoom-readout, .canvas-ref-btn').exists()).toBe(false);
+    const aa = button(toolbar, 'Aa');
+    await aa.trigger('click');
+    const typography = toolbar.get('.canvas-typography-popover');
+    expect(typography.get('.canvas-word-count').text()).toBe('3 words');
+    expect(typography.get('.canvas-zoom-readout').text()).toBe('16px');
+    await typography.get(`[title="${t('git.zoomIn')}"]`).trigger('click');
+    expect(typography.get('.canvas-zoom-readout').text()).toBe('17px');
+    expect(toolbar.findAll('button').map(item => item.text())).not.toContain(t('creation.canvas.openInFiles'));
+    await openCanvasOverflowAction(wrapper, t('creation.canvas.referenceFile'));
+    expect(context.getCanvasContextRefs(routeKey)).toMatchObject([{ kind: 'doc', filePath: file.path }]);
+    await openCanvasOverflowAction(wrapper, t('creation.canvas.openInFiles'));
+    expect(wrapper.emitted('open-in-files')).toEqual([[]]);
+    await wrapper.setProps({ creationId: 'atlas' });
+    const status = toolbar.get('.canvas-status-pill');
+    expect(status.classes()).toContain('is-draft');
+    await status.trigger('click');
+    await button(toolbar, t('creation.docStatus.review'), '[role="menuitem"]').trigger('click');
+    expect(wrapper.emitted('update:doc-status')).toEqual([['review']]);
+    await wrapper.setProps({ docStatus: 'review' });
+    expect(status.classes()).toContain('is-review');
+  });
+
+  it('streams a category-aware quick edit, applies and undoes the diff, and cancels without sending a Session message', async () => {
+    let nextJob = 0;
+    const { store, wire, sessionSend, file, wrapper, event, selectPassage } = await canvasAiFixture(({ op }) => (
+      op === 'inline_edit' ? { jobId: `edit-${++nextJob}`, status: 'running' } : { cancelled: true }
+    ));
+    const start = vi.spyOn(store, 'startInlineEdit');
+    const original = file.content;
+    const editor = await selectPassage();
+    const popover = () => wrapper.get('.canvas-inline-popover');
+    const presets = () => popover().findAll('.canvas-inline-presets > button:not(.canvas-ref-btn)').map(item => item.text());
+    expect(presets()).toEqual(['polish', 'vivid', 'pace'].map(preset => t(`creation.inlineEdit.${preset}`)));
+    await button(popover(), t('creation.inlineEdit.vivid')).trigger('click');
+    await flushPromises();
+    expect(start).toHaveBeenLastCalledWith(route.agentId, expect.objectContaining({
+      category: 'book', preset: 'vivid', filePath: file.path, selectedText: 'Old passage', fullContent: original, lineStart: 2, lineEnd: 2,
+    }));
+    event('inline_edit_delta', { jobId: 'edit-1', delta: 'New ' });
+    await Vue.nextTick();
+    expect(popover().get('.canvas-inline-diff-box').element.textContent).toBe('New ');
+    event('inline_edit_delta', { jobId: 'edit-1', delta: 'passage' });
+    await Vue.nextTick();
+    expect(popover().get('.canvas-inline-diff-box').text()).toBe('New passage');
+    event('inline_edit_complete', { jobId: 'edit-1', status: 'completed', originalText: 'Old passage', revisedText: 'New passage' });
+    await Vue.nextTick();
+    expect(popover().get('.canvas-diff-del').text()).toBe('Old');
+    expect(popover().get('.canvas-diff-add').text()).toBe('New');
+    expect(file.content).toBe(original);
+    await button(popover(), `✓ ${t('creation.inlineEdit.replace')}`).trigger('click');
+    expect(editor.element.value).toBe('First line\nNew passage\nLast line');
+    await button(wrapper.get('.canvas-undo-toast'), t('creation.canvas.undoReplace')).trigger('click');
+    expect(editor.element.value).toBe(original);
+    expect(wrapper.find('.canvas-undo-toast').exists()).toBe(false);
+
+    await wrapper.setProps({ category: 'office_doc' });
+    await selectPassage();
+    expect(presets()).toEqual(['concise', 'formal', 'bullets'].map(preset => t(`creation.inlineEdit.${preset}`)));
+    const submitCustom = async () => {
+      const input = popover().get('input');
+      await input.setValue('  Use plainer words  ');
+      await input.trigger('keydown.enter');
+      await flushPromises();
+      expect(start).toHaveBeenLastCalledWith(route.agentId, expect.objectContaining({
+        category: 'office_doc', instruction: 'Use plainer words', preset: undefined,
+      }));
+    };
+    await submitCustom();
+    await button(popover(), t('creation.inlineEdit.cancel')).trigger('click');
+    await flushPromises();
+    expect(store.inlineEditJobs['edit-2']).toBeUndefined();
+    await submitCustom();
+    // Collapsing the selection closes the popover while the third job is still running.
+    editor.element.setSelectionRange(0, 0);
+    await editor.trigger('select');
+    await flushPromises();
+    expect(wrapper.find('.canvas-inline-popover').exists()).toBe(false);
+    expect(store.inlineEditJobs['edit-3']).toBeUndefined();
+    expect(wire.mock.calls.map(([request]) => [request.type, request.op, request.payload.jobId])).toEqual([
+      ['creation_request', 'inline_edit', undefined],
+      ['creation_request', 'inline_edit', undefined],
+      ['creation_request', 'cancel_ai_job', 'edit-2'],
+      ['creation_request', 'inline_edit', undefined],
+      ['creation_request', 'cancel_ai_job', 'edit-3'],
+    ]);
+    expect(sessionSend).not.toHaveBeenCalled();
+    expect(context.getCanvasContextRefs(routeKey)).toEqual([]);
+    expect(file.content).toBe(original);
+  });
+
+  it('reviews with category lenses and a custom prompt, then resolves and references annotations', async () => {
+    const lensIds = ['executive_decision', 'consistency_clarity', 'risk_execution'];
+    const lensLabel = id => t(`creation.review.lens.${id}`);
+    const lenses = [...lensIds, 'custom'];
+    const annotations = [
+      { id: 'blocker', lensId: lensIds[0], severity: 'blocker', title: 'State the decision', lineStart: 2, lineEnd: 2,
+        quote: 'Old passage', suggestedReplacement: 'Approve the plan' },
+      { id: 'dismiss', lensId: lensIds[0], severity: 'suggestion', title: 'Add background', lineStart: 1 },
+      { id: 'send-1', lensId: lensIds[1], severity: 'suggestion', title: 'Define terms', lineStart: 3, comment: 'Explain the acronym' },
+      { id: 'send-2', lensId: 'custom', severity: 'praise', title: 'Good summary', lineStart: 1, comment: 'Keep the opening' },
+    ].map(ann => ({ ...ann, status: 'open' }));
+    const { store, wire, file, wrapper, event } = await canvasAiFixture(({ op, payload }) => {
+      if (op === 'review_document') return { jobId: 'review', status: 'running', lenses };
+      if (op === 'update_review_annotation') {
+        const review = store.getDocReview(route.agentId, 'atlas', file.path);
+        return { review: { ...review, annotations: review.annotations
+          .map(ann => ann.id === payload.annotationId ? { ...ann, status: payload.status } : ann) } };
+      }
+      return {};
+    });
+    await wrapper.setProps({ category: 'office_doc', docStatus: 'review' });
+    await button(wrapper, t('creation.canvas.edit')).trigger('click');
+    await wrapper.get('.canvas-review-trigger').trigger('click');
+    await flushPromises();
+    const panel = wrapper.get('.canvas-review-panel');
+    expect(panel.findAll('.canvas-review-lens-grid button.active').map(chip => chip.text())).toEqual(lensIds.map(lensLabel));
+    await panel.get('.canvas-review-custom-input').setValue('Check the executive summary');
+    await button(panel, t('creation.review.start')).trigger('click');
+    await flushPromises();
+    expect(wire).toHaveBeenLastCalledWith(expect.objectContaining({ op: 'review_document', payload: expect.objectContaining({
+      scope: 'document', category: 'office_doc', content: file.content, lensIds, customPrompt: 'Check the executive summary',
+    }) }));
+
+    const progress = () => panel.findAll('.canvas-review-progress-chips .canvas-review-lens-chip');
+    expect(progress().map(chip => chip.text())).toEqual([...lensIds.map(lensLabel), t('creation.review.customLens')].map(label => `${label} …`));
+    const lensResults = lenses.map(lensId => ({ lensId, status: lensId === lensIds[2] ? 'failed' : 'completed' }));
+    for (const index of [0, 2]) event('review_lens_complete', { jobId: 'review', lensResult: lensResults[index] });
+    await Vue.nextTick();
+    expect(store.reviewJobs.review.lensResults).toEqual([lensResults[0], lensResults[2]]);
+    expect(progress()[0].classes()).toContain('active');
+    expect(progress()[1].text()).toContain('…');
+    expect(progress()[2].classes()).toContain('is-failed');
+    event('review_complete', { jobId: 'review', status: 'partial', lensResults, annotations, overallSummary: 'Improve clarity',
+      contentHash: contentHash(file.content) });
+    await Vue.nextTick();
+    expect(progress()).toHaveLength(0);
+    expect(panel.get('[role="status"]').text()).toContain(t('creation.review.partialWarning'));
+    expect(panel.get('.canvas-review-summary').text()).toContain('Improve clarity');
+
+    const cards = () => panel.findAll('.canvas-review-card');
+    const titles = () => cards().map(card => card.get('.canvas-review-card-title').text());
+    const card = title => cards().find(item => item.get('.canvas-review-card-title').text() === title);
+    const markFinal = () => panel.findAll('.canvas-review-bulk-bar button').find(item => item.text().includes(t('creation.docStatus.markFinal')));
+    expect(titles()).toEqual(annotations.map(ann => ann.title));
+    expect(markFinal()).toBeUndefined();
+    await button(panel, `${t('creation.review.severitySuggestion')} (2)`).trigger('click');
+    expect(titles()).toEqual(['Add background', 'Define terms']);
+    await button(panel, lensLabel(lensIds[1])).trigger('click');
+    expect(titles()).toEqual(['Define terms']);
+    await button(panel, t('creation.review.filterAll')).trigger('click');
+    await button(panel, `${t('creation.review.filterAll')} (4)`).trigger('click');
+    expect(titles()).toEqual(annotations.map(ann => ann.title));
+
+    const blocker = card('State the decision');
+    await button(blocker, t('creation.review.lineRef').replace('{line}', '2')).trigger('click');
+    const editor = wrapper.get('textarea.canvas-doc-editor').element;
+    expect(editor.value.slice(editor.selectionStart, editor.selectionEnd)).toBe('Old passage');
+    await blocker.get('input').setValue(true);
+    await button(blocker, t('creation.review.acceptFix')).trigger('click');
+    await flushPromises();
+    expect(editor.value).toBe('First line\nApprove the plan\nLast line');
+    expect(blocker.classes()).toContain('is-accepted');
+    file.isDirty = true;
+    await Vue.nextTick();
+    expect(markFinal()).toBeUndefined();
+    expect(panel.get('.canvas-review-bulk-bar').text()).toContain(t('creation.review.saveBeforeFinal'));
+    await wrapper.get('.canvas-save-btn').trigger('click');
+    expect(wrapper.emitted('save')).toEqual([[]]);
+    file.isDirty = false;
+    await Vue.nextTick();
+    expect(markFinal()).toBeDefined();
+    const dismiss = card('Add background');
+    await dismiss.get('input').setValue(true);
+    await button(dismiss, t('creation.review.dismiss')).trigger('click');
+    await flushPromises();
+    expect(dismiss.classes()).toContain('is-dismissed');
+    expect(wire.mock.calls.map(([request]) => request).filter(request => request.op === 'update_review_annotation').map(request => request.payload)).toEqual([
+      { creationId: 'atlas', filePath: file.path, annotationId: 'blocker', status: 'accepted' },
+      { creationId: 'atlas', filePath: file.path, annotationId: 'dismiss', status: 'dismissed' },
+    ]);
+    expect(store.getDocReview(route.agentId, 'atlas', file.path).annotations.map(ann => ann.status)).toEqual(['accepted', 'dismissed', 'open', 'open']);
+    await card('Define terms').get('input').setValue(true);
+    await card('Good summary').get('input').setValue(true);
+    await button(panel, `✦ ${interpolateTranslation('creation.review.sendToSession', { count: 2 })}`).trigger('click');
+    expect(context.getCanvasContextRefs(routeKey)).toMatchObject([{ kind: 'doc', filePath: file.path,
+      snippet: '1. [L3] Define terms: Explain the acronym\n2. [L1] Good summary: Keep the opening' }]);
+    expect(panel.findAll('input:checked')).toHaveLength(0);
+    await markFinal().trigger('click');
+    expect(wrapper.emitted('update:doc-status')).toEqual([['final']]);
+  });
+
+  it('offers Mark as Final when a completed review has no annotations', async () => {
+    const { wrapper, file } = await canvasAiFixture(({ op }) => (
+      op === 'get_doc_review' ? { review: { jobId: 'clean-review', scope: 'document', status: 'completed', annotations: [], contentHash: contentHash(originalContent) } } : {}
+    ));
+    await wrapper.get('.canvas-review-trigger').trigger('click');
+    await flushPromises();
+    const panel = wrapper.get('.canvas-review-panel');
+    expect(panel.findAll('.canvas-review-card')).toHaveLength(0);
+    expect(panel.get('.canvas-review-list').text()).toContain(t('creation.review.noIssues'));
+    const status = wrapper.get('.canvas-status-pill');
+    for (const flag of ['isDirty', 'diskChangedOnDisk', 'diskChangedToBinary', 'probingDisk']) {
+      file[flag] = true;
+      await Vue.nextTick();
+      expect(hasMarkFinal(wrapper)).toBe(false);
+      expect(panel.get('.canvas-review-bulk-bar').text()).toContain(t('creation.review.saveBeforeFinal'));
+      await status.trigger('click');
+      const final = button(wrapper, t('creation.docStatus.final'), '[role="menuitem"]');
+      expect(final.element.disabled, flag).toBe(true);
+      expect(final.attributes('title')).toBe(t('creation.review.saveBeforeFinal'));
+      await final.trigger('click');
+      expect(wrapper.emitted('update:doc-status')).toBeUndefined();
+      await status.trigger('click');
+      file[flag] = false;
+    }
+    await status.trigger('click');
+    expect(button(wrapper, t('creation.docStatus.final'), '[role="menuitem"]').element.disabled).toBe(false);
+    await button(panel, `✓ ${t('creation.docStatus.markFinal')}`).trigger('click');
+    expect(wrapper.emitted('update:doc-status')).toEqual([['final']]);
+  });
+
+  it('starts paragraph quick-review immediately for the selected text and lens', async () => {
+    const { wire, wrapper, file, selectPassage } = await canvasAiFixture(({ op }) => (
+      op === 'review_document' ? { jobId: 'paragraph', status: 'running', lenses: ['prose_craft'], scope: 'selection' } : {}
+    ));
+    await selectPassage();
+    const popover = wrapper.get('.canvas-inline-popover');
+    await button(popover, `${t('creation.inlineEdit.quickReview')} ▾`).trigger('click');
+    await button(popover, t('creation.review.lens.prose_craft'), '[role="menuitem"]').trigger('click');
+    await flushPromises();
+    expect(wrapper.find('.canvas-inline-popover').exists()).toBe(false);
+    const panel = wrapper.get('.canvas-review-panel');
+    expect(panel.get('.canvas-review-header-title .canvas-badge').text()).toBe(t('creation.review.scopeSelection'));
+    expect(panel.get('[role="status"]').text()).toContain(t('creation.review.running'));
+    expect(wire.mock.calls.map(([request]) => request).filter(request => request.op === 'review_document')).toEqual([
+      expect.objectContaining({ payload: expect.objectContaining({ scope: 'selection', selectedText: 'Old passage',
+        lineStart: 2, lineEnd: 2, filePath: file.path, lensIds: ['prose_craft'] }) }),
+    ]);
+  });
+
+  it('F1/B4, F2: replaces only the selected duplicate in CRLF text and expires Undo after typing', async () => {
+    const { normalizedOffsetToRawOffset } = await import('../../web/components/workbench/FileCanvasView.js');
+    const original = 'a\r\nb\r\nb\r\n';
+    expect([4, 5, 6].map(offset => normalizedOffsetToRawOffset(original, offset))).toEqual([6, 7, 9]);
+    const { wrapper, file, event } = await canvasAiFixture(({ op }) => (
+      op === 'inline_edit' ? { jobId: 'duplicate', status: 'running' } : {}
+    ), original);
+    await button(wrapper, t('creation.canvas.edit')).trigger('click');
+    const editor = wrapper.get('textarea');
+    // Happy DOM does not normalize textarea newlines as a browser does.
+    editor.element.value = editor.element.value.replace(/\r\n/g, '\n');
+    expect(editor.element.value.slice(4, 5)).toBe('b');
+    editor.element.setSelectionRange(4, 5);
+    await editor.trigger('select');
+    const popover = wrapper.get('.canvas-inline-popover');
+    await button(popover, t('creation.inlineEdit.polish')).trigger('click');
+    await flushPromises();
+    event('inline_edit_complete', { jobId: 'duplicate', originalText: 'b', revisedText: 'replacement' });
+    await Vue.nextTick();
+    await button(popover, `✓ ${t('creation.inlineEdit.replace')}`).trigger('click');
+    expect(file.content).toBe('a\r\nb\r\nreplacement\r\n');
+    expect(wrapper.find('.canvas-undo-toast').exists()).toBe(true);
+    await editor.setValue('typed elsewhere\nb\nreplacement\n');
+    expect(file.content).toBe('typed elsewhere\nb\nreplacement\n');
+    expect(wrapper.find('.canvas-undo-toast').exists()).toBe(false);
+  });
+
+  const blocker = { id: 'blocker', lensId: 'prose_craft', severity: 'blocker', title: 'State the decision',
+    lineStart: 2, lineEnd: 2, quote: 'Old passage', suggestedReplacement: 'New passage', status: 'open' };
+
+  it.each(['stale accept', 'undo accept', 'failed dismiss'])('F1/B4, F2, F6: preserves content and annotation state on %s', async action => {
+    const review = { jobId: 'document-review', scope: 'document', status: 'completed', annotations: [blocker] };
+    const { wrapper, store, file } = await canvasAiFixture(({ op, payload }) => {
+      if (op === 'get_doc_review') return { review };
+      if (op === 'update_review_annotation') return { review: { ...review, annotations: [{ ...blocker, status: payload.status }] } };
+      return {};
+    });
+    const resolveAnnotation = vi.spyOn(store, 'resolveReviewAnnotation');
+    if (action === 'failed dismiss') resolveAnnotation.mockRejectedValueOnce(new Error('Could not save dismissal'));
+    await wrapper.get('.canvas-review-trigger').trigger('click');
+    await flushPromises();
+    const panel = wrapper.get('.canvas-review-panel');
+    const card = panel.get('.canvas-review-card');
+    const status = () => store.getDocReview(route.agentId, 'atlas', file.path).annotations[0].status;
+    const original = file.content;
+    if (action === 'stale accept') {
+      file.content = original.replace(blocker.quote, 'Typed something else');
+      await Vue.nextTick();
+      const unchanged = file.content;
+      expect(wrapper.vm.applyReviewAnnotation(blocker)).toMatchObject({ applied: false });
+      await button(card, t('creation.review.acceptFix')).trigger('click');
+      expect(panel.get('.canvas-review-conflict-banner[role="alert"]').text()).toContain(t('creation.canvas.applyConflict'));
+      expect(file.content).toBe(unchanged);
+      expect(resolveAnnotation).not.toHaveBeenCalled();
+    } else if (action === 'undo accept') {
+      await button(card, t('creation.review.acceptFix')).trigger('click');
+      await flushPromises();
+      expect(file.content).toBe(original.replace(blocker.quote, blocker.suggestedReplacement));
+      expect(status()).toBe('accepted');
+      await button(wrapper.get('.canvas-undo-toast'), t('creation.canvas.undoReplace')).trigger('click');
+      await flushPromises();
+      expect(resolveAnnotation).toHaveBeenLastCalledWith(route.agentId, 'atlas', file.path, blocker.id, 'open');
+    } else {
+      await button(card, t('creation.review.dismiss')).trigger('click');
+      await flushPromises();
+      expect(resolveAnnotation).toHaveBeenCalledExactlyOnceWith(route.agentId, 'atlas', file.path, blocker.id, 'dismissed');
+      expect(panel.get('[role="alert"]').text()).toContain('Could not save dismissal');
+    }
+    expect(status()).toBe('open');
+    expect(card.classes()).toContain('is-open');
+    if (action !== 'stale accept') expect(file.content).toBe(original);
+  });
+
+  it('F3: cancels a late review ACK on the original Agent after switching documents', async () => {
+    const { store, wire, wrapper, file } = await canvasAiFixture(() => ({}));
+    const ack = deferred();
+    let requestA;
+    const send = wire.getMockImplementation();
+    wire.mockImplementation(request => {
+      if (request.op !== 'review_document') return send(request);
+      requestA = request;
+      void ack.promise.then(() => store.handleCreationResponse({ ...request, type: 'creation_response', ok: true,
+        data: { jobId: 'late-review', status: 'running' } }));
+      return true;
+    });
+    await wrapper.get('.canvas-review-trigger').trigger('click');
+    await flushPromises();
+    await button(wrapper, t('creation.review.start')).trigger('click');
+    expect(requestA).toMatchObject({ agentId: route.agentId, payload: { filePath: file.path } });
+    const next = { name: 'next.md', path: '/atlas/next.md', content: 'Different document' };
+    await wrapper.setProps({ agentId: 'agent-b', file: next });
+    if (!wrapper.find('.canvas-review-panel').exists()) await wrapper.get('.canvas-review-trigger').trigger('click');
+    ack.resolve();
+    await flushPromises();
+    expect(wire.mock.calls.map(([request]) => request).filter(request => request.op === 'cancel_ai_job')).toEqual([
+      expect.objectContaining({ agentId: route.agentId, payload: { jobId: 'late-review' } }),
+    ]);
+    expect(store.reviewJobs['late-review']).toBeUndefined();
+    expect(store.getDocReview('agent-b', 'atlas', next.path)).toBeNull();
+    expect(wrapper.get('.canvas-review-panel').findAll('.canvas-review-card')).toHaveLength(0);
+    expect(wrapper.get('.canvas-review-panel').text()).not.toContain(t('creation.review.running'));
+  });
+
+  it('F3: a late cancel receipt cannot reopen the configurator after a new review completes', async () => {
+    let jobs = 0;
+    const { wrapper, store, wire, event } = await canvasAiFixture(({ op }) => (
+      op === 'review_document' ? { jobId: `cancel-race-${++jobs}`, status: 'running' } : {}
+    ), originalContent, { creationId: '', persistedDocPath: '' });
+    const cancelAck = deferred();
+    const send = wire.getMockImplementation();
+    wire.mockImplementation(request => {
+      if (request.op !== 'cancel_ai_job') return send(request);
+      void cancelAck.promise.then(() => store.handleCreationResponse({
+        ...request, type: 'creation_response', ok: true, data: {},
+      }));
+      return true;
+    });
+    await wrapper.get('.canvas-review-trigger').trigger('click');
+    await button(wrapper, t('creation.review.start')).trigger('click');
+    await flushPromises();
+    await button(wrapper, t('creation.review.cancel')).trigger('click');
+    await button(wrapper, t('creation.review.start')).trigger('click');
+    await flushPromises();
+    event('review_complete', { creationId: '', jobId: 'cancel-race-2', overallSummary: 'New results' });
+    await Vue.nextTick();
+    cancelAck.resolve();
+    await flushPromises();
+    expect(wrapper.find('.canvas-review-lens-grid').exists()).toBe(false);
+    expect(wrapper.get('.canvas-review-summary').text()).toContain('New results');
+  });
+
+  it.each(['clearAll', 'clearAiJob', 'reconnect'])('F4/B6: fences AI events after %s', async transition => {
+    const { store, event, file } = await canvasAiFixture(({ op }) => ({ jobId: op, status: 'running' }));
+    const payload = { creationId: 'atlas', filePath: file.path };
+    await store.startInlineEdit(route.agentId, { ...payload, selectedText: 'Old passage' });
+    await store.startDocumentReview(route.agentId, { ...payload, scope: 'document' });
+    expect(store.inlineEditJobs.inline_edit.status).toBe('running');
+    expect(store.reviewJobs.review_document.status).toBe('running');
+
+    if (transition === 'clearAll') store.clearAll();
+    else if (transition === 'clearAiJob') {
+      store.clearAiJob('inline_edit');
+      store.clearAiJob('review_document');
+    } else {
+      await store.reconcileAfterReconnect(route.agentId);
+      expect(store.inlineEditJobs.inline_edit.status).toBe('failed');
+      expect(store.reviewJobs.review_document).toBeUndefined();
+    }
+    const inline = store.inlineEditJobs.inline_edit;
+    event('inline_edit_delta', { jobId: 'inline_edit', delta: 'Late text' });
+    event('inline_edit_complete', { jobId: 'inline_edit', status: 'completed', revisedText: 'Late rewrite' });
+    event('review_complete', { jobId: 'review_document', status: 'completed', annotations: [blocker] });
+    if (transition === 'reconnect') {
+      expect(store.inlineEditJobs.inline_edit).toBe(inline);
+      expect(store.reviewJobs.review_document).toBeUndefined();
+      expect(inline.revisedText).toBe('');
+    } else {
+      expect(store.inlineEditJobs).toEqual({});
+      expect(store.reviewJobs).toEqual({});
+    }
+    expect(store.getDocReview(route.agentId, 'atlas', file.path)).toBeNull();
+    expect(store.getDocState(route.agentId, 'atlas', file.path)).toBeNull();
+  });
+
+  it.each(['open blocker', 'edited content'])('F5: a clean selection review does not finalize a document with %s', async reason => {
+    const documentReview = { jobId: 'document-review', scope: 'document', status: 'completed',
+      annotations: reason === 'open blocker' ? [blocker] : [], contentHash: contentHash(originalContent) };
+    const { wrapper, file, store, event, selectPassage } = await canvasAiFixture(({ op }) => {
+      if (op === 'get_doc_review') return { review: documentReview };
+      if (op === 'review_document') return { jobId: 'selection-review', status: 'running', scope: 'selection' };
+      return {};
+    });
+    await wrapper.get('.canvas-review-trigger').trigger('click');
+    await flushPromises();
+    const panel = wrapper.get('.canvas-review-panel');
+    expect(hasMarkFinal(panel)).toBe(reason === 'edited content');
+    if (reason === 'edited content') file.content += '\nUnreviewed edit';
+    await selectPassage();
+    const popover = wrapper.get('.canvas-inline-popover');
+    await button(popover, `${t('creation.inlineEdit.quickReview')} ▾`).trigger('click');
+    await button(popover, t('creation.review.lens.prose_craft'), '[role="menuitem"]').trigger('click');
+    await flushPromises();
+    event('review_complete', { jobId: 'selection-review', scope: 'selection', status: 'completed', annotations: [] });
+    await Vue.nextTick();
+    expect(panel.get('.canvas-review-list').text()).toContain(t('creation.review.noIssues'));
+    expect(hasMarkFinal(panel)).toBe(false);
+    expect(wrapper.emitted('update:doc-status')).toBeUndefined();
+    expect(store.getDocReview(route.agentId, 'atlas', file.path)).toEqual(documentReview);
+  });
+
+  it('F8: retains the rewritten candidate across a no-op refine and a failed refine retry', async () => {
+    let jobs = 0;
+    const { wrapper, file, event, wire, selectPassage } = await canvasAiFixture(({ op }) => (
+      op === 'inline_edit' ? { jobId: `refine-${++jobs}`, status: 'running' } : {}
+    ));
+    const originalText = 'Old passage';
+    const candidate = 'New passage';
+    const complete = async (jobId, originalText) => {
+      event('inline_edit_complete', { jobId, originalText, revisedText: candidate });
+      await Vue.nextTick();
+    };
+    await selectPassage();
+    const popover = wrapper.get('.canvas-inline-popover');
+    const replace = () => button(popover, `✓ ${t('creation.inlineEdit.replace')}`);
+    const refine = async instruction => {
+      await button(popover, `↻ ${t('creation.inlineEdit.refine')}`).trigger('click');
+      const input = popover.get('input');
+      await input.setValue(instruction);
+      await input.trigger('keydown.enter');
+      await flushPromises();
+    };
+    await button(popover, t('creation.inlineEdit.polish')).trigger('click');
+    await flushPromises();
+    await complete('refine-1', originalText);
+    await refine('Keep this wording');
+    await complete('refine-2', candidate);
+    expect(replace().element.disabled).toBe(false);
+    expect(popover.get('.canvas-diff-del').text()).toBe('Old');
+    expect(popover.get('.canvas-diff-add').text()).toBe('New');
+    await refine('Make it more direct');
+    event('inline_edit_complete', { jobId: 'refine-3', status: 'failed', error: 'Reviewer unavailable' });
+    await Vue.nextTick();
+    await button(popover, 'Retry').trigger('click');
+    await flushPromises();
+    const edits = wire.mock.calls.map(([request]) => request).filter(request => request.op === 'inline_edit');
+    expect(edits.map(({ payload }) => payload.selectedText)).toEqual([originalText, candidate, candidate, candidate]);
+    expect(edits[3].payload.instruction).toBe('Make it more direct');
+    await complete('refine-4', candidate);
+    await replace().trigger('click');
+    expect(file.content).toBe('First line\nNew passage\nLast line');
+  });
+
+  it('F9: stages only complete annotations that fit and keeps overflow checked', async () => {
+    const annotations = Array.from({ length: 7 }, (_, index) => {
+      const id = `note-${index + 1}`;
+      return { id, title: id, severity: 'suggestion', status: 'open', lineStart: index + 1,
+        comment: `${'Detail '.repeat(60)}end of ${id}` };
+    });
+    const { wrapper, file } = await canvasAiFixture(({ op }) => (
+      op === 'get_doc_review' ? { review: { scope: 'document', status: 'completed', annotations } } : {}
+    ));
+    await wrapper.get('.canvas-review-trigger').trigger('click');
+    await flushPromises();
+    const panel = wrapper.get('.canvas-review-panel');
+    const cards = panel.findAll('.canvas-review-card');
+    expect(cards).toHaveLength(7);
+    for (const card of cards) await card.get('input').setValue(true);
+    await button(panel, `✦ ${interpolateTranslation('creation.review.sendToSession', { count: 7 })}`).trigger('click');
+    expect(context.getCanvasContextRefs(routeKey).map(({ filePath, snippet }) => [filePath, snippet])).toEqual(
+      annotations.slice(0, 6).map(({ title, lineStart, comment }) => [file.path, `${lineStart}. [L${lineStart}] ${title}: ${comment}`]),
+    );
+    expect(cards.filter(card => card.get('input').element.checked).map(card => card.get('.canvas-review-card-title').text()))
+      .toEqual(['note-7']);
+    expect(panel.get('[role="alert"]').text()).toContain(interpolateTranslation('creation.review.addPartialWarning', { count: 1 }));
+  });
+
+  it('R3-1: bounds repetitive lookup and never matches outside the reviewed window', async () => {
+    const { applyTextReplacement } = await import('../../web/components/workbench/FileCanvasView.js');
+    const repetitive = 'a'.repeat(256 * 1024);
+    const start = performance.now();
+    const result = applyTextReplacement(repetitive, { originalText: 'aa', revisedText: 'b' });
+    expect(performance.now() - start).toBeLessThan(100);
+    expect(result).toEqual({ applied: false, content: repetitive, reason: 'ambiguous' });
+
+    const content = 'First line\nSecond line\nThird line';
+    const anchor = { originalText: 'First line\nSecond line', revisedText: 'Replacement', lineStart: 1 };
+    expect(applyTextReplacement(content, { ...anchor, lineEnd: 1 })).toEqual({ applied: false, content, reason: 'stale' });
+    expect(applyTextReplacement(content, { ...anchor, lineEnd: 2 })).toEqual({ applied: true, content: 'Replacement\nThird line' });
+    const restricted = 'prior\nReviewed\nother';
+    for (const originalText of ['prior\nReviewed', 'prior\nReviewed\nother', 'prior', 'other']) {
+      expect(applyTextReplacement(restricted, { originalText, revisedText: 'replacement', lineStart: 2 }))
+        .toEqual({ applied: false, reason: 'stale', content: restricted });
+    }
+    expect(applyTextReplacement(restricted, { originalText: 'prior', revisedText: 'replacement' }))
+      .toEqual({ applied: true, content: 'replacement\nReviewed\nother' });
+
+  });
+
+  it.each(['[link](https://example.test\n"A B")', '<a title="A B">label</a>'])('R3-2: rejects hidden source matches in %s', async markup => {
+    const content = `${markup}\n\n**A** B`;
+    const { wrapper, file, wire } = await canvasAiFixture(() => ({}), content);
+    const paragraph = wrapper.get('.canvas-doc-content p:last-child');
+    const anchorNode = paragraph.get('strong').element.firstChild;
+    const focusNode = paragraph.element.lastChild;
+    expect(paragraph.text()).toBe('A B');
+    const selection = vi.spyOn(window, 'getSelection').mockReturnValue({
+      isCollapsed: false, anchorNode, focusNode, toString: () => 'A B',
+      getRangeAt: () => ({ getBoundingClientRect: () => ({ top: 0, left: 0, width: 20 }) }),
+    });
+    try {
+      await wrapper.get('.canvas-doc-page').trigger('mouseup');
+      const popover = wrapper.get('.canvas-inline-popover');
+      expect(popover.text()).toContain(t('creation.canvas.ambiguousSelection'));
+      expect(button(popover, t('creation.inlineEdit.polish')).element.disabled).toBe(true);
+      const quickReview = button(popover, `${t('creation.inlineEdit.quickReview')} ▾`);
+      expect(quickReview.element.disabled).toBe(true);
+      await quickReview.trigger('click');
+      expect(popover.find('[role="menu"]').exists()).toBe(false);
+      const inlinePopover = wrapper.findComponent({ name: 'CanvasInlineEditPopover' });
+      expect(inlinePopover.props()).toMatchObject({ rawStart: null, rawEnd: null, lineStart: undefined, lineEnd: undefined });
+      expect(popover.get('.canvas-ref-btn').element.disabled).toBe(false);
+      expect(file.content).toBe(content);
+      expect(wire).not.toHaveBeenCalled();
+    } finally {
+      selection.mockRestore();
+    }
+  });
+
+  it('R3-2: checks repeated unclosed link candidates without rescanning suffixes', async () => {
+    const { isInsideHiddenMarkdownSyntax } = await import('../../web/components/workbench/FileCanvasView.js');
+    const content = `${']('.repeat(65536)}A B`;
+    const start = performance.now();
+    expect(isInsideHiddenMarkdownSyntax(content, content.length - 3, content.length)).toBe(false);
+    expect(performance.now() - start).toBeLessThan(100);
+    const escaped = '[label](https://example.test/a\\)b\n"A B (title)")';
+    expect(isInsideHiddenMarkdownSyntax(escaped, escaped.indexOf('A B'), escaped.indexOf('A B') + 3)).toBe(true);
+    const blankLine = '[label](url\n\n"A B")';
+    expect(isInsideHiddenMarkdownSyntax(blankLine, blankLine.indexOf('A B'), blankLine.indexOf('A B') + 3)).toBe(false);
+  });
+
+  it.each(['save', 'navigate', 'unmount'])('R3-3: failed durable Accept never publishes provisional text during %s', async action => {
+    const review = { jobId: 'durable', scope: 'document', status: 'completed', annotations: [blocker],
+      contentHash: contentHash(originalContent) };
+    const saved = vi.fn();
+    const { wrapper, store, file } = await canvasAiFixture(({ op }) => op === 'get_doc_review' ? { review } : {},
+      originalContent, { onSave: () => saved(file.content) });
+    const response = deferred();
+    const resolve = vi.spyOn(store, 'resolveReviewAnnotation').mockReturnValueOnce(response.promise);
+    file.isDirty = true;
+    await wrapper.get('.canvas-review-trigger').trigger('click');
+    await flushPromises();
+    const card = wrapper.get('.canvas-review-card');
+    const accept = button(card, t('creation.review.acceptFix'));
+    await accept.trigger('click');
+    expect(accept.element.disabled).toBe(true);
+    expect(resolve).toHaveBeenCalledTimes(1);
+    expect(file.content).toBe(originalContent);
+    expect(wrapper.emitted('update:content')).toBeUndefined();
+    if (action === 'save') {
+      await wrapper.get('.canvas-save-btn').trigger('click');
+      expect(saved).toHaveBeenCalledExactlyOnceWith(originalContent);
+    } else if (action === 'navigate') {
+      await wrapper.setProps({ file: { ...file, path: 'docs/other.md' } });
+    } else {
+      wrapper.unmount();
+    }
+    response.reject(new Error('Could not save acceptance'));
+    await flushPromises();
+    expect(file.content).toBe(originalContent);
+    expect(wrapper.emitted('update:content')).toBeUndefined();
+    if (action === 'save') {
+      expect(wrapper.find('.canvas-undo-toast').exists()).toBe(false);
+      expect(card.classes()).toContain('is-open');
+      expect(wrapper.get('.canvas-review-panel [role="alert"] span').text()).toBe('Could not save acceptance');
+    }
+  });
+
+  it('R3-3: reopens a committed acceptance without overwriting text typed while it was pending', async () => {
+    const review = { jobId: 'durable', scope: 'document', status: 'completed', annotations: [blocker] };
+    const { wrapper, store, file } = await canvasAiFixture(({ op }) => op === 'get_doc_review' ? { review } : {});
+    const response = deferred();
+    const resolve = vi.spyOn(store, 'resolveReviewAnnotation').mockReturnValueOnce(response.promise);
+    await wrapper.get('.canvas-review-trigger').trigger('click');
+    await flushPromises();
+    await button(wrapper, t('creation.review.acceptFix')).trigger('click');
+    file.content += '\nTyped during the request';
+    await Vue.nextTick();
+    response.resolve();
+    await flushPromises();
+    expect(file.content).toBe(`${originalContent}\nTyped during the request`);
+    expect(resolve.mock.calls).toEqual(['accepted', 'open'].map(status => [route.agentId, 'atlas', file.path, blocker.id, status]));
+    expect(wrapper.get('.canvas-review-conflict-banner').exists()).toBe(true);
+  });
+
+  it.each(['different doc with identical content', 'new typing', 'open failure'])('R3-4: durable Undo preserves the buffer on %s', async scenario => {
+    const review = { jobId: 'durable', scope: 'document', status: 'completed', annotations: [blocker] };
+    const { wrapper, store, file } = await canvasAiFixture(({ op }) => op === 'get_doc_review' ? { review } : {});
+    const resolve = vi.spyOn(store, 'resolveReviewAnnotation');
+    await wrapper.get('.canvas-review-trigger').trigger('click');
+    await flushPromises();
+    await button(wrapper, t('creation.review.acceptFix')).trigger('click');
+    await flushPromises();
+    const post = originalContent.replace(blocker.quote, blocker.suggestedReplacement);
+    expect(file.content).toBe(post);
+    const response = deferred();
+    resolve.mockReturnValueOnce(response.promise);
+    const undo = button(wrapper, t('creation.canvas.undoReplace'));
+    await undo.trigger('click');
+    expect(undo.element.disabled).toBe(true);
+    await wrapper.vm.undoLastReplacement();
+    expect(resolve.mock.calls.map(args => args[4])).toEqual(['accepted', 'open']);
+    const newFile = { ...file, path: 'docs/other.md' };
+    if (scenario === 'different doc with identical content') {
+      await wrapper.setProps({ file: newFile });
+      expect(wrapper.find('.canvas-undo-toast').exists()).toBe(false);
+    } else if (scenario === 'new typing') {
+      file.content += '\nMore text';
+      await Vue.nextTick();
+    }
+    if (scenario === 'open failure') response.reject(new Error('Unable to reopen'));
+    else response.resolve();
+    await flushPromises();
+    expect(wrapper.emitted('update:content')).toEqual([[post]]);
+    if (scenario === 'open failure') {
+      expect(file.content).toBe(post);
+      expect(wrapper.get('.canvas-undo-toast[role="alert"]').text()).toContain(t('creation.review.reopenFailed'));
+      expect(resolve).toHaveBeenCalledTimes(2);
+    } else {
+      expect(resolve.mock.calls.slice(1)).toEqual(['open', 'accepted'].map(status => [route.agentId, 'atlas', file.path, blocker.id, status]));
+      expect(newFile.content).toBe(post);
+      expect(file.content).toBe(scenario === 'new typing' ? `${post}\nMore text` : post);
+    }
+  });
+
+  async function startSelectionReview(selectPassage, wrapper) {
+    await selectPassage();
+    const popover = wrapper.get('.canvas-inline-popover');
+    await button(popover, `${t('creation.inlineEdit.quickReview')} ▾`).trigger('click');
+    await button(popover, t('creation.review.lens.prose_craft'), '[role="menuitem"]').trigger('click');
+    await flushPromises();
+  }
+
+  it('F2/F6: accepting and undoing a selection fix stays local and cannot authorize changed content', async () => {
+    const review = { jobId: 'durable', scope: 'document', status: 'completed', annotations: [],
+      contentHash: contentHash(originalContent) };
+    const { wrapper, store, wire, file, event, selectPassage } = await canvasAiFixture(({ op }) => {
+      if (op === 'get_doc_review') return { review };
+      if (op === 'review_document') return { jobId: 'selection', status: 'running' };
+      return {};
+    });
+    const resolve = vi.spyOn(store, 'resolveReviewAnnotation');
+    await wrapper.get('.canvas-review-trigger').trigger('click');
+    await flushPromises();
+    expect(hasMarkFinal(wrapper)).toBe(true);
+    await startSelectionReview(selectPassage, wrapper);
+    event('review_complete', { jobId: 'selection', scope: 'selection', annotations: [blocker] });
+    await Vue.nextTick();
+    const card = wrapper.get('.canvas-review-card');
+    await button(card, t('creation.review.acceptFix')).trigger('click');
+    expect(file.content).toBe(originalContent.replace(blocker.quote, blocker.suggestedReplacement));
+    expect(card.classes()).toContain('is-accepted');
+    expect(hasMarkFinal(wrapper)).toBe(false);
+    await button(wrapper.get('.canvas-undo-toast'), t('creation.canvas.undoReplace')).trigger('click');
+    expect(file.content).toBe(originalContent);
+    expect(card.classes()).toContain('is-open');
+    expect(hasMarkFinal(wrapper)).toBe(true);
+    expect(resolve).not.toHaveBeenCalled();
+    expect(wire.mock.calls.some(([request]) => request.op === 'update_review_annotation')).toBe(false);
+    expect(store.getDocReview(route.agentId, 'atlas', file.path)).toEqual(review);
+  });
+
+  it('R3-2: a selection review cannot replace text outside the verified offsets on the same line', async () => {
+    const { wrapper, event, file, selectPassage } = await canvasAiFixture(({ op }) => (
+      op === 'review_document' ? { jobId: 'selection', scope: 'selection', status: 'running' } : {}
+    ), 'First line\nOld passage and untouched text\nLast line');
+    await startSelectionReview(selectPassage, wrapper);
+    expect(wrapper.vm.quickReviewRequest).toMatchObject({ rawStart: 11, rawEnd: 22, lineStart: 2, lineEnd: 2 });
+    event('review_complete', { jobId: 'selection', scope: 'selection', annotations: [{ ...blocker, quote: 'untouched text' }] });
+    await Vue.nextTick();
+    await button(wrapper, t('creation.review.acceptFix')).trigger('click');
+    expect(wrapper.get('.canvas-review-conflict-banner').exists()).toBe(true);
+    expect(file.content).toContain('Old passage and untouched text');
+  });
+
+  it('F5: retires a superseded run and shows the latest durable review', async () => {
+    const { wrapper, store, event } = await canvasAiFixture(({ op }) => (
+      op === 'review_document' ? { jobId: 'older', status: 'running' } : {}
+    ));
+    await wrapper.get('.canvas-review-trigger').trigger('click');
+    await flushPromises();
+    await button(wrapper, t('creation.review.start')).trigger('click');
+    await flushPromises();
+    const latest = { jobId: 'newer', scope: 'document', status: 'completed', annotations: [],
+      overallSummary: 'Newer review', contentHash: contentHash(originalContent) };
+    event('doc_review_updated', { review: latest });
+    event('review_complete', { jobId: 'older', superseded: true, overallSummary: 'Stale review', annotations: [blocker] });
+    await Vue.nextTick();
+    expect(wrapper.get('.canvas-review-superseded-banner').text()).toBe(t('creation.review.supersededNotice'));
+    expect(wrapper.get('.canvas-review-summary').text()).toContain('Newer review');
+    expect(wrapper.find('.canvas-review-card').exists()).toBe(false);
+    expect(store.reviewJobs.older).toBeUndefined();
+    expect(hasMarkFinal(wrapper)).toBe(true);
+  });
+
+  it('F6: mounting against a cached review authorizes only the matching UTF-8 revision', async () => {
+    const revisionA = `${originalContent}\r\n${'Résumé 🌱 '.repeat(15)}`;
+    const revisionB = `${revisionA}\nUnreviewed copy`;
+    const review = { jobId: 'durable', scope: 'document', status: 'completed', annotations: [], contentHash: contentHash(revisionA) };
+    const { wrapper, file } = await canvasAiFixture(({ op }) => op === 'get_doc_review' ? { review } : {}, revisionB);
+    await wrapper.get('.canvas-review-trigger').trigger('click');
+    await flushPromises();
+    expect(wrapper.get('.canvas-review-list').text()).toContain(t('creation.review.noIssues'));
+    expect(hasMarkFinal(wrapper)).toBe(false);
+    file.content = revisionA;
+    await Vue.nextTick();
+    expect(hasMarkFinal(wrapper)).toBe(true);
+  });
+
+  it('F6: a durable fix cannot authorize unrelated edits already in the document', async () => {
+    const review = { jobId: 'durable', scope: 'document', status: 'completed', annotations: [blocker],
+      contentHash: contentHash(originalContent) };
+    const { wrapper, file } = await canvasAiFixture(({ op }) => op === 'get_doc_review' ? { review } : {},
+      `${originalContent}\nUnreviewed edits`);
+    await wrapper.get('.canvas-review-trigger').trigger('click');
+    await flushPromises();
+    const card = wrapper.get('.canvas-review-card');
+    await button(card, t('creation.review.acceptFix')).trigger('click');
+    await flushPromises();
+    expect(card.classes()).toContain('is-accepted');
+    expect(file.content).toContain(blocker.suggestedReplacement);
+    expect(hasMarkFinal(wrapper)).toBe(false);
+  });
+
+  it('F6: reconnect refreshes cached and running durable review targets before allowing Final', async () => {
+    const initial = { jobId: 'cached', scope: 'document', status: 'completed', annotations: [], contentHash: contentHash(originalContent) };
+    const runningPath = 'docs/appendix.md';
+    const { wrapper, store, wire, file } = await canvasAiFixture(({ op, payload }) => {
+      if (op === 'get_doc_review') return { review: initial };
+      if (op === 'review_document') return { jobId: payload.filePath === runningPath ? 'running-appendix' : 'running-chapter', status: 'running' };
+      return {};
+    });
+    await wrapper.get('.canvas-review-trigger').trigger('click');
+    await flushPromises();
+    expect(hasMarkFinal(wrapper)).toBe(true);
+    await button(wrapper, t('creation.review.reRun')).trigger('click');
+    await button(wrapper, t('creation.review.start')).trigger('click');
+    await flushPromises();
+    expect(store.reviewJobs['running-chapter'].status).toBe('running');
+    await store.startDocumentReview(route.agentId, { creationId: 'atlas', filePath: runningPath, scope: 'document', content: originalContent });
+    expect(store.getDocReview(route.agentId, 'atlas', runningPath)).toBeNull();
+    const pending = new Map();
+    const send = wire.getMockImplementation();
+    wire.mockImplementation(request => {
+      if (request.op !== 'get_doc_review') return send(request);
+      pending.set(request.payload.filePath, request);
+      return true;
+    });
+    const reconnect = store.reconcileAfterReconnect(route.agentId);
+    await Vue.nextTick();
+    expect([...pending.keys()].sort()).toEqual([runningPath, file.path].sort());
+    expect(store.isDocReviewRefreshing(route.agentId, 'atlas', file.path)).toBe(true);
+    expect(wrapper.get('.canvas-review-panel').text()).toContain(t('creation.review.refreshing'));
+    expect(hasMarkFinal(wrapper)).toBe(false);
+    const refreshed = { ...initial, jobId: 'new-durable', annotations: [blocker] };
+    for (const [filePath, request] of pending) {
+      store.handleCreationResponse({ ...request, type: 'creation_response', ok: true,
+        data: { filePath, review: filePath === file.path ? refreshed : { ...initial, jobId: 'running-appendix' } } });
+    }
+    await reconnect;
+    await Vue.nextTick();
+    expect(store.isDocReviewRefreshing(route.agentId, 'atlas', file.path)).toBe(false);
+    expect(wrapper.get('.canvas-review-panel').text()).not.toContain(t('creation.review.refreshing'));
+    expect(wrapper.get('.canvas-review-card-title').text()).toBe(blocker.title);
+    expect(hasMarkFinal(wrapper)).toBe(false);
+    expect(store.getDocReview(route.agentId, 'atlas', runningPath)?.jobId).toBe('running-appendix');
+    expect(store.reviewJobs['running-chapter']).toBeUndefined();
+  });
+
+  it('R3-5: failed reconnect refresh locks persisted actions until Retry sync succeeds', async () => {
+    const suggestion = { ...blocker, severity: 'suggestion' };
+    const review = { jobId: 'cached', scope: 'document', status: 'completed', annotations: [suggestion],
+      contentHash: contentHash(originalContent) };
+    const { wrapper, store } = await canvasAiFixture(({ op }) => op === 'get_doc_review' ? { review } : {});
+    await wrapper.get('.canvas-review-trigger').trigger('click');
+    await flushPromises();
+    expect(hasMarkFinal(wrapper)).toBe(true);
+    const { request } = store;
+    let fail = true;
+    vi.spyOn(store, 'request').mockImplementation((agentId, op, payload) => {
+      if (fail && op === 'get_doc_review') {
+        fail = false;
+        return Promise.reject(new Error('Reload failed'));
+      }
+      return request(agentId, op, payload);
+    });
+    await store.reconcileAfterReconnect(route.agentId);
+    await Vue.nextTick();
+    const docStale = () => store.isDocReviewStale(route.agentId, 'atlas', 'docs/chapter.md');
+    expect(docStale()).toBe(true);
+    const banner = wrapper.get('.canvas-review-conflict-banner');
+    expect(banner.text()).toContain(t('creation.review.refreshFailed'));
+    expect(button(wrapper, t('creation.review.acceptFix')).element.disabled).toBe(true);
+    expect(button(wrapper, t('creation.review.dismiss')).element.disabled).toBe(true);
+    expect(hasMarkFinal(wrapper)).toBe(false);
+    await button(banner, t('creation.review.retryRefresh')).trigger('click');
+    await flushPromises();
+    expect(docStale()).toBe(false);
+    expect(wrapper.find('.canvas-review-conflict-banner').exists()).toBe(false);
+    expect(button(wrapper, t('creation.review.acceptFix')).element.disabled).toBe(false);
+    expect(hasMarkFinal(wrapper)).toBe(true);
+  });
+
+  it.each([true, false])('F9: stages a long note losslessly or not at all (enough slots: %s)', async fits => {
+    const comment = `${'🚀'.repeat(600)}${' '.repeat(130)}\n${'👨‍👩‍👧‍👦'.repeat(40)}END  \n  `;
+    const annotations = [{ id: 'long', title: 'Long note', comment, lineStart: 1, status: 'open' }];
+    const { wrapper } = await canvasAiFixture(({ op }) => op === 'get_doc_review'
+      ? { review: { jobId: 'durable', scope: 'document', status: 'completed', annotations } } : {});
+    if (!fits) {
+      for (let i = 0; i < 5; i += 1) {
+        context.addCanvasContextRef(routeKey, { kind: 'doc', filePath: `docs/existing-${i}.md`, snippet: `Reference ${i}` });
+      }
+    }
+    const before = [...context.getCanvasContextRefs(routeKey)];
+    await wrapper.get('.canvas-review-trigger').trigger('click');
+    await flushPromises();
+    const panel = wrapper.get('.canvas-review-panel');
+    const checkbox = panel.get('.canvas-review-card input');
+    await checkbox.setValue(true);
+    await button(panel, `✦ ${interpolateTranslation('creation.review.sendToSession', { count: 1 })}`).trigger('click');
+    const after = context.getCanvasContextRefs(routeKey);
+    if (fits) {
+      expect(after).toHaveLength(2);
+      expect(after.every(ref => Array.from(ref.snippet).length <= 760 && ref.snippet.isWellFormed())).toBe(true);
+      expect(after.map(ref => ref.snippet.replace(/^\[Part \d+\/2\] /, '')).join('')).toBe(`1. [L1] Long note: ${comment}`);
+      expect(checkbox.element.checked).toBe(false);
+    } else {
+      expect(before).toHaveLength(5);
+      expect(after).toEqual(before);
+      expect(checkbox.element.checked).toBe(true);
+      expect(panel.get('[role="alert"]').text()).toContain(interpolateTranslation('creation.review.addPartialWarning', { count: 1 }));
+    }
+  });
+
+  it('R3-9: hides Refine for an empty rewrite but keeps Replace and Discard enabled', async () => {
+    const { wrapper, file, event, selectPassage } = await canvasAiFixture(({ op }) => (
+      op === 'inline_edit' ? { jobId: 'delete', status: 'running' } : {}
+    ));
+    await selectPassage();
+    const popover = wrapper.get('.canvas-inline-popover');
+    await button(popover, t('creation.inlineEdit.polish')).trigger('click');
+    await flushPromises();
+    event('inline_edit_complete', { jobId: 'delete', revisedText: '' });
+    await Vue.nextTick();
+    expect(popover.get('.canvas-diff-del').text()).toBe('Old passage');
+    expect(popover.find('.canvas-diff-add').exists()).toBe(false);
+    expect(popover.findAll('button').some(item => item.text().includes(t('creation.inlineEdit.refine')))).toBe(false);
+    const replace = button(popover, `✓ ${t('creation.inlineEdit.replace')}`);
+    expect(replace.element.disabled).toBe(false);
+    expect(button(popover, `✕ ${t('creation.inlineEdit.discard')}`).element.disabled).toBe(false);
+    await replace.trigger('click');
+    expect(file.content).toBe('First line\n\nLast line');
+  });
+
+  it('M4: displays the standalone reviewed line range from the completion event', async () => {
+    const { wrapper, event, wire } = await canvasAiFixture(({ op }) => (
+      op === 'review_document' ? { jobId: 'standalone', status: 'running' } : {}
+    ), originalContent, { creationId: '', persistedDocPath: '' });
+    await wrapper.get('.canvas-review-trigger').trigger('click');
+    await button(wrapper, t('creation.review.start')).trigger('click');
+    await flushPromises();
+    event('review_complete', { jobId: 'standalone', creationId: '', truncated: true, reviewedLines: { start: 1, end: 42 } });
+    await Vue.nextTick();
+    expect(wrapper.get('.canvas-review-truncated-banner').text()).toBe(interpolateTranslation('creation.review.truncatedWarning', { end: 42 }));
+    expect(wire.mock.calls.map(([request]) => request.op)).not.toContain('get_doc_review');
+  });
+
+  it.each([['client_timeout', 'timeout'], ['connection_interrupted', 'reconnected']])(
+    'M4: localizes %s in review and inline edit', async (code, key) => {
+      const { wrapper, store, selectPassage } = await canvasAiFixture(({ op }) => ({ jobId: op, status: 'running' }),
+        originalContent, { creationId: '', persistedDocPath: '' });
+      await wrapper.get('.canvas-review-trigger').trigger('click');
+      await button(wrapper, t('creation.review.start')).trigger('click');
+      await flushPromises();
+      await selectPassage();
+      await button(wrapper.get('.canvas-inline-popover'), t('creation.inlineEdit.polish')).trigger('click');
+      await flushPromises();
+      store.failStaleAiJobs(route.agentId, code);
+      await Vue.nextTick();
+      for (const selector of ['.canvas-review-panel', '.canvas-inline-popover']) {
+        expect(wrapper.get(`${selector} [role="alert"]`).text()).toContain(t(`creation.ai.${key}`));
+        expect(wrapper.get(selector).text()).not.toContain(code);
+      }
+    },
+  );
 
   it('deduplicates references, dispatches the canonical reference, and evicts only the oldest item on the same route', () => {
     const { addCanvasContextRef, getCanvasContextRefs, removeCanvasContextRef, clearCanvasContextRefs } = context;
@@ -3078,11 +4196,32 @@ describe('File Canvas and route-scoped composer references', () => {
     const wrapper = render(FileCanvasView, { props: { routeKey, file } });
     const image = wrapper.get('.canvas-image-stage img');
     expect(image.attributes('src')).toBe(file.blobUrl);
-    await wrapper.get(`button[title="${t('git.zoomIn')}"]`).trigger('click');
-    expect(wrapper.get('.canvas-zoom-readout').text()).toBe('125%');
-    expect(image.element.style.transform).toBe('scale(1.25)');
-    await wrapper.get(`button[title="${t('git.zoomOut')}"]`).trigger('click');
-    expect(wrapper.get('.canvas-zoom-readout').text()).toBe('100%');
+    const viewport = wrapper.get('.canvas-image-viewport');
+    const readout = () => wrapper.find('.canvas-zoom-readout');
+    expect(viewport.classes()).toContain('is-fit');
+    expect(readout().exists()).toBe(false);
+    await viewport.trigger('dblclick');
+    expect(readout().text()).toBe('100%');
+    expect(viewport.classes()).not.toContain('is-fit');
+    await viewport.trigger('dblclick');
+    expect(viewport.classes()).toContain('is-fit');
+    expect(readout().exists()).toBe(false);
+
+    const stage = wrapper.get('.canvas-image-stage');
+    await stage.trigger('wheel', { deltaY: -100 });
+    expect(readout().exists()).toBe(false);
+    await stage.trigger('wheel', { ctrlKey: true, deltaY: -100 });
+    expect(readout().text()).toBe('115%');
+    expect(image.element.style.transform).toBe('scale(1.15)');
+    await stage.trigger('wheel', { ctrlKey: true, deltaY: 100 });
+    expect(readout().text()).toBe('100%');
+    await stage.trigger('wheel', { ctrlKey: true, deltaY: -100 });
+    await openCanvasOverflowAction(wrapper, t('creation.canvas.actualSize'));
+    expect(readout().text()).toBe('100%');
+    expect(image.element.style.transform).toBe('scale(1)');
+    await openCanvasOverflowAction(wrapper, t('creation.canvas.fit'));
+    expect(viewport.classes()).toContain('is-fit');
+    expect(readout().exists()).toBe(false);
     await wrapper.get('.canvas-ref-btn').trigger('click');
     expect(context.getCanvasContextRefs(routeKey)).toMatchObject([{ kind: 'image', filePath: file.path }]);
 
@@ -3093,13 +4232,12 @@ describe('File Canvas and route-scoped composer references', () => {
     expect(wrapper.find('.canvas-image-stage svg, .canvas-image-stage script, .canvas-image-stage [onload]').exists()).toBe(false);
   });
 
-  it('sets video playback speed and adds, seeks, references and deletes timestamp markers', async () => {
+  it('uses native video controls and adds, seeks, references and deletes timestamp markers', async () => {
     const file = { name: 'trailer.webm', path: '/atlas/trailer.webm', blobUrl: 'blob:trailer' };
     const wrapper = render(FileCanvasView, { props: { routeKey, file } });
     const video = wrapper.get('video[controls]');
     expect(video.attributes('src')).toBe(file.blobUrl);
-    await wrapper.get('.canvas-rate-select').setValue('1.5');
-    expect(video.element.playbackRate).toBe(1.5);
+    expect(wrapper.find('.canvas-rate-select').exists()).toBe(false);
     video.element.currentTime = 65.8;
     await video.trigger('timeupdate');
     expect(wrapper.get('.canvas-ref-btn').text()).toContain('@ 01:05');
@@ -3294,6 +4432,99 @@ describe('Folder Creation and Files in Workbench', () => {
   });
 
   afterEach(() => vi.unstubAllGlobals());
+
+  it('consolidates title switching, create actions and category switching in the Workbench topbar', async () => {
+    creations.byAgent[route.agentId].list = [{ id: 'atlas', title: 'Atlas', category: 'book', rootDir, sessionId: route.sessionId }];
+    const send = mockWorkbenchFiles(chat, { [rootDir]: [] }, {}, request => {
+      if (request.type !== 'creation_request') return;
+      queueMicrotask(() => creations.handleCreationResponse({ ...request, type: 'creation_response', ok: true,
+        data: request.op === 'update_creation' ? { creation: { ...creations.byAgent[route.agentId].list[0], ...request.payload } } : {} }));
+      return true;
+    });
+    const wrapper = render(CreationTab, { props: routeProps });
+    await flushPromises();
+    expect(wrapper.findAll('.creation-wb-topbar')).toHaveLength(1);
+    const topbar = () => wrapper.get('.creation-wb-topbar');
+    expect(topbar().get('.creation-wb-title-trigger').text()).toBe('Atlas');
+    expect(topbar().findAll('[role="tab"]').map(tab => tab.text())).toEqual([
+      t('creation.workbench.docs'), t('creation.workbench.images'), t('creation.workbench.videos'),
+    ]);
+    expect(topbar().findAll('.creation-wb-tab-count')).toHaveLength(0);
+    expect(wrapper.get('.creation-wb-doc-tree-head').findAll('button').map(item => item.attributes('aria-label')))
+      .toEqual([t('files.hideTree')]);
+    await topbar().get('.creation-wb-title-trigger').trigger('click');
+    expect(wrapper.get('.creation-wb-onboarding .creation-wb-back-btn').exists()).toBe(true);
+    await wrapper.get('.creation-wb-back-btn').trigger('click');
+    await topbar().get(`[aria-label="${t('creation.workbench.addMenu')}"]`).trigger('click');
+    const add = topbar().get('.creation-wb-add-menu');
+    expect(add.findAll('[role="menuitem"]').map(item => item.text())).toEqual([
+      t('creation.workbench.newDoc'), t('creation.workbench.newFolder'), t('creation.workbench.uploadMedia'),
+    ]);
+    await button(add, t('creation.workbench.newDoc'), '[role="menuitem"]').trigger('click');
+    expect(wrapper.get('.creation-wb-mini-input').isVisible()).toBe(true);
+    await wrapper.get('.creation-wb-mini-input').trigger('keydown.esc');
+    const more = () => topbar().get(`[aria-label="${t('creation.workbench.moreActions')}"]`);
+    await more().trigger('click');
+    const categories = () => topbar().get('.creation-wb-more-menu [role="radiogroup"]');
+    expect(categories().findAll('[role="radio"]')).toHaveLength(6);
+    expect(categories().get('[aria-checked="true"]').text()).toBe(t('creation.category.book'));
+    await button(categories(), t('creation.category.office_doc'), '[role="radio"]').trigger('click');
+    await flushPromises();
+    expect(send).toHaveBeenCalledWith(expect.objectContaining({ op: 'update_creation', payload: expect.objectContaining({
+      creationId: 'atlas', category: 'office_doc',
+    }) }));
+    await more().trigger('click');
+    expect(categories().get('[aria-checked="true"]').text()).toBe(t('creation.category.office_doc'));
+  });
+
+  it('renders only the Canvas toolbar on both image and video detail', async () => {
+    creations.byAgent[route.agentId].list = [{ id: 'atlas', rootDir, sessionId: route.sessionId }];
+    mockWorkbenchFiles(chat, { [rootDir]: [{ name: 'cover.svg', type: 'file' }, { name: 'trailer.mp4', type: 'file' }] },
+      { [`${rootDir}/cover.svg`]: '<svg xmlns="http://www.w3.org/2000/svg"/>' }, request => {
+        if (request.type === 'video_metadata') return { type: 'video_metadata', videoStream: true, previewUrl: '/api/preview/trailer.mp4' };
+      });
+    const wrapper = render(CreationTab, { props: routeProps });
+    await flushPromises();
+    for (const [tab, kind] of [['images', 'image'], ['videos', 'video']]) {
+      const tabButton = button(wrapper, t(`creation.workbench.${tab}`), '[role="tab"] > span:first-child');
+      expect(tabButton.element.parentElement.querySelector('.creation-wb-tab-count').textContent).toBe('1');
+      await tabButton.trigger('click');
+      await wrapper.get(`.creation-wb-${kind}-card`).trigger('click');
+      await flushPromises();
+      const detail = wrapper.get(`.creation-wb-media-detail:has(.canvas-kind-${kind})`);
+      expect(detail.element.closest('[role="tabpanel"]').style.display).not.toBe('none');
+      expect(detail.findAll('.creation-wb-media-bar')).toHaveLength(0);
+      expect(detail.findAll('.canvas-toolbar')).toHaveLength(1);
+      expect(detail.get(`.canvas-${kind}-stage`).exists()).toBe(true);
+    }
+  });
+
+  it.each(['eligible', 'offline', 'prefilled folder'])('shows six category cards and the expected settings disclosure (%s)', async mode => {
+    const { default: CreationCreateModal } = await import('../../web/components/workbench/CreationCreateModal.js');
+    chat.agents = mode === 'offline' ? [] : [{ ...chat.agents[0], name: 'Atlas Agent' }];
+    const props = mode === 'prefilled folder' ? { initialRootDir: rootDir } : {};
+    const modal = render(CreationCreateModal, { props, stubs: { Teleport: true }, attachTo: document.body });
+    await flushPromises();
+    const expected = ['article', 'book', 'office_doc', 'deck', 'sheet', 'media'].map(id => t(`creation.category.${id}`));
+    expect(modal.findAll('.creation-create-category-card .creation-create-category-title').map(item => item.text())).toEqual(expected);
+    expect(modal.get('.creation-create-category-card[aria-checked="true"]').text()).toContain(t('creation.category.book'));
+    const settings = modal.get('.creation-create-settings-bar');
+    const toggle = settings.get('.creation-create-settings-toggle');
+    const panel = settings.get('.creation-create-settings-panel');
+    expect(settings.get('.creation-create-settings-summary').text()).toContain(t('creation.create.newSessionShort'));
+    expect(toggle.attributes('aria-expanded')).toBe(String(mode !== 'eligible'));
+    expect(panel.isVisible()).toBe(mode !== 'eligible');
+    if (mode === 'eligible') {
+      toggle.element.click();
+      await Vue.nextTick();
+      expect(modal.get('.creation-create-settings-toggle').attributes('aria-expanded')).toBe('true');
+      expect(modal.get('.creation-create-settings-panel').isVisible()).toBe(true);
+    } else if (mode === 'prefilled folder') {
+      expect(panel.get('#creation-create-folder').element.value).toBe(rootDir);
+    } else {
+      expect(panel.get('.creation-create-hint.is-warning').text()).toMatch(/agent/i);
+    }
+  });
 
   it('opens Markdown in Files, switches between Preview, Canvas and Edit, and promotes a folder', async () => {
     const { default: FilesTab } = await import('../../web/components/FilesTab.js');
@@ -3584,7 +4815,7 @@ describe('Folder Creation and Files in Workbench', () => {
     expect(requests()).toHaveLength(1);
     expect(video().attributes('src')).toBe(new URL('/api/preview/intro-1000', location.origin).href);
     const rescan = async () => {
-      await wrapper.get(`[aria-label="${t('creation.workbench.refresh')}"]`).trigger('click');
+      await openOverflowAction(wrapper, t('creation.workbench.refresh'));
       await flushPromises();
     };
     await rescan();
@@ -3755,7 +4986,7 @@ describe('Folder Creation and Files in Workbench', () => {
     await flushPromises();
     expect(tab.vm.activeCreation.id).toBe('literal');
     expect(tab.vm.activeRootDir).toBe(workspace);
-    expect(send.mock.calls.map(([msg]) => msg)).toEqual([
+    expect(send.mock.calls.map(([msg]) => msg).filter(msg => ['list_directory', 'read_file'].includes(msg.type))).toEqual([
       expect.objectContaining({ type: 'list_directory', dirPath: workspace, workDir: workspace }),
       expect.objectContaining({ type: 'read_file', filePath: path, workDir: workspace }),
     ]);
@@ -4043,7 +5274,7 @@ describe('Folder Creation and Files in Workbench', () => {
     await select('README.md');
     expect(reads()).toEqual([second, first]);
     failSubdir = true;
-    await wrapper.get(`[aria-label="${t('creation.workbench.refresh')}"]`).trigger('click');
+    await openOverflowAction(wrapper, t('creation.workbench.refresh'));
     await flushPromises();
     expect(wrapper.vm.activeDocFile).toMatchObject({ path: second, content: '# Readme draft', isDirty: true });
     await select('docs/First.md');
@@ -4159,7 +5390,7 @@ describe('Folder Creation and Files in Workbench', () => {
     await canvas.get('textarea').setValue('# New draft');
     const { baseMtimeMs, baseSize } = canvas.props('file');
     disk = { content: '# Text changed on disk', mtimeMs: 300, size: 22 };
-    await reopened.get(`[aria-label="${t('creation.workbench.refresh')}"]`).trigger('click');
+    await openOverflowAction(reopened, t('creation.workbench.refresh'));
     await flushPromises();
     expect(reads()).toHaveLength(3);
     expect(canvas.props('file')).toMatchObject({ diskChangedOnDisk: true, baseMtimeMs, baseSize,
@@ -4254,7 +5485,7 @@ describe('Folder Creation and Files in Workbench', () => {
     await expectBinaryDraftConflict(canvas, 'Second draft');
 
     secondDisk = { error: 'Permission denied', content: '' };
-    await reopened.get(`[aria-label="${t('creation.workbench.refresh')}"]`).trigger('click');
+    await openOverflowAction(reopened, t('creation.workbench.refresh'));
     await flushPromises();
     expect(reads()).toEqual([first, second, first, second, second]);
     expect(canvas.props('file')).toMatchObject({ diskChangedToBinary: true, isDirty: true, content: 'Second draft' });
@@ -4601,11 +5832,11 @@ describe('Folder Creation and Files in Workbench', () => {
     const selection = () => wrapper.getComponent(FileCanvasView).props('file');
     expect(selection()).toMatchObject({ path: `${rootDir}/${initial}`, fileType: kind });
     files.unshift({ name: added, type: 'file' });
-    await wrapper.get(`[aria-label="${t('creation.workbench.refresh')}"]`).trigger('click');
+    await openOverflowAction(wrapper, t('creation.workbench.refresh'));
     await flushPromises();
     const filesAfterScan = kind === 'image' ? wrapper.vm.imageFiles : wrapper.vm.videoFiles;
     expect(filesAfterScan.map(item => item.path)).toEqual([`${rootDir}/${added}`, `${rootDir}/${initial}`]);
-    expect(wrapper.get('.creation-wb-media-counter').text()).toBe('2 / 2');
+    expect(wrapper.get('.creation-wb-media-detail .canvas-media-nav-inline .canvas-zoom-readout').text()).toBe('2 / 2');
     expect(selection()).toMatchObject({ path: `${rootDir}/${initial}`, fileType: kind });
   });
 
@@ -4639,6 +5870,49 @@ describe('Folder Creation and Files in Workbench', () => {
     expect(canvas.get('h1').text()).toBe('Literal backslash');
     expect(send.mock.calls.map(([msg]) => msg).filter(msg => msg.type === 'read_file').map(msg => msg.filePath))
       .toEqual([readme, literal]);
+  });
+
+  it('F7: never aliases a literal POSIX backslash file to a nested file’s persisted workflow', async () => {
+    const { isPersistableDocPath } = await import('../../web/components/workbench/CreationTab.js');
+    const literal = 'chapter\\draft.md';
+    const nested = 'chapter/draft.md';
+    expect(isPersistableDocPath(literal)).toBe(false);
+    expect(isPersistableDocPath(nested)).toBe(true);
+    creations.byAgent[route.agentId].list = [{ id: 'atlas', rootDir, sessionId: route.sessionId }];
+    const review = { jobId: 'nested-review', scope: 'document', status: 'completed',
+      annotations: [{ id: 'nested-note', title: 'Nested file only', severity: 'blocker', status: 'open' }] };
+    for (const event of [
+      { type: 'doc_state_updated', status: 'review' }, { type: 'doc_review_updated', review },
+    ]) creations.handleCreationEvent({ agentId: route.agentId, event: { creationId: 'atlas', filePath: nested, ...event } });
+    const loadReview = vi.spyOn(creations, 'loadDocReview').mockResolvedValue(review);
+    mockWorkbenchFiles(chat, {
+      [rootDir]: [{ name: literal, type: 'file' }, { name: 'chapter', type: 'directory' }],
+      [`${rootDir}/chapter`]: [{ name: 'draft.md', type: 'file' }],
+    }, { [`${rootDir}/${literal}`]: 'Literal backslash', [`${rootDir}/${nested}`]: 'Nested file' });
+    const tab = render(CreationTab, { props: routeProps });
+    await flushPromises();
+    const canvas = tab.getComponent(FileCanvasView);
+    const open = async relPath => {
+      const entry = tab.vm.docFiles.find(file => file.relPath === relPath);
+      expect(entry).toBeDefined();
+      tab.vm.onDocTreeClick(entry);
+      await flushPromises();
+      expect(canvas.props('file').path).toBe(`${rootDir}/${relPath}`);
+    };
+    await open(nested);
+    expect(canvas.props('docStatus')).toBe('review');
+    await canvas.get('.canvas-review-trigger').trigger('click');
+    await flushPromises();
+    expect(canvas.get('.canvas-review-card-title').text()).toBe('Nested file only');
+    expect(loadReview).toHaveBeenLastCalledWith(route.agentId, 'atlas', nested);
+    loadReview.mockClear();
+    await open(literal);
+    expect(canvas.props('docStatus')).toBe('draft');
+    expect(canvas.props('persistedDocPath')).toBe('');
+    if (!canvas.find('.canvas-review-panel').exists()) await canvas.get('.canvas-review-trigger').trigger('click');
+    await flushPromises();
+    expect(canvas.get('.canvas-review-panel').findAll('.canvas-review-card')).toHaveLength(0);
+    expect(loadReview).not.toHaveBeenCalled();
   });
 
   it('onboards an unbound folder, scans its nested files into modality tabs, saves a document and opens Files', async () => {
@@ -4725,7 +5999,7 @@ describe('Folder Creation and Files in Workbench', () => {
     window.addEventListener('workbench-open-capability', openFiles);
     window.addEventListener('workbench-files-open-dir', openDir);
     try {
-      await wrapper.get(`.creation-wb-header-actions button[title="${t('creation.workbench.openInFiles')}"]`).trigger('click');
+      await openOverflowAction(wrapper, t('creation.workbench.openInFiles'));
       expect(openFiles.mock.calls[0][0].detail).toEqual({ routeKey, capabilityId: 'files' });
       expect(openDir.mock.calls[0][0].detail).toEqual({ routeKey, agentId: route.agentId, dirPath: rootDir, workspaceGeneration: routeProps.workspaceGeneration });
     } finally {
@@ -4807,6 +6081,77 @@ describe('Creation launchers in Classic and Cosmos', () => {
       ...selection, agentId: alpha.id, title: 'New Atlas', kind: 'book',
     }));
     expect(wrapper.emitted('created')[0][0]).toMatchObject({ agentId: alpha.id, creation: atlas });
+  });
+
+  it.each(['upload failure', 'invalid-folder rejection', 'Project-phase timeout'])(
+    'R3-8: unlocks workspace inputs after %s', async scenario => {
+      const wrapper = render(CreationCreateModal, { props: { initialRootDir: rootDir }, stubs: { Teleport: true } });
+      await wrapper.get('#creation-create-title').setValue('Retryable atlas');
+      const folder = wrapper.get('#creation-create-folder');
+      const dropzone = wrapper.get('.creation-dropzone');
+      const fileInput = dropzone.get('input[type="file"]');
+      const rpc = vi.spyOn(creations, 'request').mockRejectedValue(new Error('Invalid folder'));
+      if (scenario === 'upload failure') {
+        vi.spyOn(creations, 'uploadRawFiles').mockRejectedValue(new Error('Upload failed'));
+        Object.defineProperty(fileInput.element, 'files', { configurable: true, value: [new File(['draft'], 'draft.md')] });
+        await fileInput.trigger('change');
+      } else if (scenario === 'Project-phase timeout') {
+        vi.spyOn(chat, 'mutateProject').mockResolvedValue({ ok: false, error: 'Project timed out' });
+        await wrapper.get('.creation-create-inline-toggle').trigger('click');
+        await wrapper.get('input#creation-create-project').setValue('New Project');
+      }
+      await wrapper.get('form').trigger('submit');
+      await flushPromises();
+      expect(wrapper.get('[role="alert"]').text()).toContain({
+        'upload failure': 'Upload failed', 'invalid-folder rejection': 'Invalid folder', 'Project-phase timeout': 'Project timed out',
+      }[scenario]);
+      expect(rpc.mock.calls.filter(([, op]) => op === 'create_creation')).toHaveLength(scenario === 'invalid-folder rejection' ? 1 : 0);
+      expect(folder.element.disabled).toBe(false);
+      await folder.setValue(`${rootDir}/changed`);
+      expect(folder.element.value).toBe(`${rootDir}/changed`);
+      expect(dropzone.attributes('aria-disabled')).toBe('false');
+      expect(fileInput.element.disabled).toBe(false);
+      expect(wrapper.text()).not.toContain(t('creation.create.workspacePendingHint'));
+      expect(wrapper.text()).not.toContain(t('creation.create.workspaceCommittedHint'));
+    },
+  );
+
+  it('F10: locks the committed folder and uploads on retry but accepts revised linkage and metadata', async () => {
+    const create = vi.spyOn(creations, 'createWorkspaceCreation')
+      .mockRejectedValueOnce(Object.assign(new Error('Session creation failed'), { partialCreation: atlas }))
+      .mockResolvedValueOnce({ agentId: alpha.id, creation: atlas, sessionId: linkedSession.id });
+    const wrapper = render(CreationCreateModal, { props: { initialRootDir: rootDir }, stubs: { Teleport: true } });
+    await wrapper.get('#creation-create-title').setValue('New Atlas');
+    expect(wrapper.get('#creation-create-folder').element.disabled).toBe(false);
+    expect(wrapper.get('.creation-dropzone').attributes('aria-disabled')).toBe('false');
+    await wrapper.get('form').trigger('submit');
+    await flushPromises();
+
+    expect(create).toHaveBeenCalledTimes(1);
+    expect(wrapper.text()).toContain('Session creation failed');
+    expect(wrapper.get('#creation-create-folder').element.disabled).toBe(true);
+    const dropzone = wrapper.get('.creation-dropzone');
+    expect(dropzone.attributes('aria-disabled')).toBe('true');
+    expect(dropzone.attributes('tabindex')).toBe('-1');
+    expect(dropzone.get('input[type="file"]').element.disabled).toBe(true);
+    expect(wrapper.text()).toContain(t('creation.create.workspaceCommittedHint'));
+    const title = wrapper.get('#creation-create-title');
+    const category = wrapper.findAll('.creation-create-category-card').find(card => card.text().includes(t('creation.category.deck')));
+    const projectSelect = wrapper.get('select#creation-create-project');
+    const existingMode = wrapper.findAll('.creation-session-mode-toggle [role="radio"]')[1];
+    expect([title, category, projectSelect, existingMode].map(control => control.element.disabled)).toEqual([false, false, false, false]);
+    await title.setValue('Revised Atlas');
+    await category.trigger('click');
+    await projectSelect.setValue(project.id);
+    await existingMode.trigger('click');
+    const session = wrapper.get('.creation-existing-session-wrap select');
+    expect(session.element.disabled).toBe(false);
+    await session.setValue(linkedSession.id);
+    await wrapper.get('form').trigger('submit');
+    await flushPromises();
+    expect(create).toHaveBeenCalledTimes(2);
+    expect(create).toHaveBeenLastCalledWith(expect.objectContaining({ resumeCreationId: atlas.id, rootDir,
+      title: 'Revised Atlas', category: 'deck', projectId: project.id, sessionMode: 'existing', existingSessionId: linkedSession.id }));
   });
 
   it.each(['a newer open', 'explicit cancellation'])('ignores a late workspace resolution after %s, including its prompt', async supersededBy => {
