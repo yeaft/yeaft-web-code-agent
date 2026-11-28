@@ -249,16 +249,20 @@ export async function fetchSource(sourceOrId, { fetcher = safeFetch, dnsLookup, 
     if (!adapter) throw new Error('Unknown Cosmic Web adapter');
     rows = await adapter({ url, now, load, text: async (u, h) => (await load(u, h)).text(), json: async (u, h) => (await load(u, h)).json() });
   }
+  const isRss = source.kind === 'rss';
   const seen = new Set();
   return rows.flatMap(k => {
     if (!k) return [];
-    const title = cleanText(k.title).slice(0, 500);
+    // RSS/Atom rows from parseFeedXml are already normalized, media-extracted, and excerpt-sanitized before clipping;
+    // never re-run cleanText() on them (would double-decode entities after the 1,000-char cap).
+    const title = (isRss ? String(k.title ?? '') : cleanText(k.title)).slice(0, 500);
     const canonical = canonicalizeUrl(resolveHttpUrl(k.url, base));
     if (!title || !canonical || canonical.length > 4096 || seen.has(canonical)) return [];
     seen.add(canonical);
-    const cleanedExcerpt = cleanText(k.summaryExcerpt);
-    const boundedExcerpt = (typeof sanitizeExcerpt === 'function' ? sanitizeExcerpt(cleanedExcerpt) : cleanedExcerpt).slice(0, 1000);
-    return [record(title, canonical, Math.min((source.kind === 'rss' || ['36kr-quick', 'ithome'].includes(source.id) ? k.publishedAt : parseTimestamp(k.publishedAt)) ?? now, now), boundedExcerpt, !!k.hasHotMetric,
-      normalizeMedia([...(k.media ?? []), ...extractMarkupMedia(k.summaryExcerpt, canonical)], base))];
+    const cleanedExcerpt = isRss ? String(k.summaryExcerpt ?? '') : cleanText(k.summaryExcerpt);
+    const boundedExcerpt = (!isRss && typeof sanitizeExcerpt === 'function' ? sanitizeExcerpt(cleanedExcerpt) : cleanedExcerpt)
+      .replace(/\s+/gu, ' ').trim().slice(0, 1000);
+    return [record(title, canonical, Math.min((isRss || ['36kr-quick', 'ithome'].includes(source.id) ? k.publishedAt : parseTimestamp(k.publishedAt)) ?? now, now), boundedExcerpt, !!k.hasHotMetric,
+      isRss ? (k.media ?? []) : normalizeMedia([...(k.media ?? []), ...extractMarkupMedia(k.summaryExcerpt, canonical)], base))];
   }).sort((a, b) => b.publishedAt - a.publishedAt).slice(0, 60);
 }

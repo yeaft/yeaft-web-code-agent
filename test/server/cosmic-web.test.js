@@ -13,12 +13,12 @@ import * as db from '../../server/db/cosmic-web-db.js';
 import { safeFetch, validateExternalUrl } from '../../server/cosmic-web/safe-fetch.js';
 import { createMediaProxy, toProxyMediaUrl } from '../../server/cosmic-web/media-proxy.js';
 import { extractCommunityEnrichment } from '../../server/cosmic-web/community-extractor.js';
-import { parseFeedXml, resolveHttpUrl } from '../../server/cosmic-web/rss-parser.js';
-import { extractCleanArticle } from '../../server/cosmic-web/article-extractor.js';
+import { extractMarkupMedia, parseFeedXml, resolveHttpUrl } from '../../server/cosmic-web/rss-parser.js';
+import { ARTICLE_EXTRACTOR_VERSION, extractCleanArticle } from '../../server/cosmic-web/article-extractor.js';
 import { BUILTIN_DOMAINS, BUILTIN_SOURCES } from '../../server/cosmic-web/catalog.js';
 import { fetchSource } from '../../server/cosmic-web/sources.js';
 import { buildGraphProjection, canonicalizeUrl, clusterSimilarity, computeHeatScore, extractTokens } from '../../server/cosmic-web/clusterer.js';
-import { createCosmicWebService, ingestCosmicWebItems, startCosmicWebScheduler, stopCosmicWebScheduler } from '../../server/cosmic-web/service.js';
+import { createCosmicWebService, ingestCosmicWebItems, PRIVATE_BRIEF_CONTEXT_VERSION, startCosmicWebScheduler, stopCosmicWebScheduler } from '../../server/cosmic-web/service.js';
 import { clearAllCosmicWebAiRequests, clearCosmicWebAiRequestsForAgent, handleCosmicWebAiResponse,
   listCapableAgentsForUser, requestCosmicWebAi, validateCosmicWebAiResult } from '../../server/cosmic-web/ai-bridge.js';
 import * as encryption from '../../server/encryption.js';
@@ -708,10 +708,11 @@ describe('2.0 adapters and storage', () => {
   it('adds media to an existing database and prunes expired enrichment without deleting live stories', async () => {
     const path = join(dir, 'cosmic-web.db');
     ingestCosmicWebItems(source(), [item('Legacy row')], NOW);
-    db.getCosmicWebDb().exec('ALTER TABLE cw_items DROP COLUMN media_json; DROP TABLE cw_enrichment_cache;');
+    db.getCosmicWebDb().exec('ALTER TABLE cw_items DROP COLUMN media_json; ALTER TABLE cw_items DROP COLUMN excerpt_version; ALTER TABLE cw_clusters DROP COLUMN excerpt_version; DROP TABLE cw_enrichment_cache;');
     db.closeCosmicWebDb(); db.openCosmicWebDb(path);
-    const legacy = db.listVisibleClusters('alice')[0].id;
-    expect(db.listVisibleItems('alice', [legacy])[0].media_json).toBe('[]');
+    const legacy = db.listVisibleClusters('alice')[0];
+    expect(legacy.excerpt_version).toBe(0);
+    expect(db.listVisibleItems('alice', [legacy.id])[0]).toMatchObject({ media_json: '[]', excerpt_version: 0 });
     const mediaItem = { ...item('Basketball highlights', 'https://news.example/sports'), media: [image] };
     ingestCosmicWebItems(source('sports-fixture', 'sports'), [mediaItem], NOW);
     const { id } = db.listVisibleClusters('alice').find(c => c.headline === mediaItem.title);
@@ -1097,10 +1098,38 @@ describe('2.0 graph and AI contracts', () => {
     const underscoreRelUrl = '//user:UNDERSCOREPASS99@intranet:8080';
     const underscoreHttpUrl = 'https://files.example/u?token=UNDERHTTP99';
     const idnWwwUrl = 'www.例子.中国/a?token=IDNWWWSECRET99';
+    const ideoDotWwwUrl = 'www\u3002例子\u3002中国/a?token=IDEODOTSECRET99';
+    const snowmanWwwUrl = 'www.\u2603.example/a?token=SNOWMANSECRET99';
+    const snowmanPortWwwUrl = 'www.\u2603.example:8080\u3002下一句';
+    const bareSnowmanWwwUrl = 'www.\u2603';
+    const ideoSnowmanWwwUrl = 'www\u3002\u2603';
+    const rocketWwwUrl = 'www.\ud83d\ude80';
+    const bracketSnowmanWwwUrl = '[www.\u2603]下一句';
+    const fwQuerySnowmanWwwUrl = 'www.\u2603\uff1f下一句';
+    const snowmanRelUrl = '//user:SNOWHOST99@\u2603';
+    const snowmanRelQueryUrl = '//user:SNOWHOSTQ99@\u2603\uff1f下一句';
+    const snowmanRelBracketUrl = '[//user:SNOWHOSTB99@\u2603]下一句';
+    const snowmanHttpUrl = 'https://user:SNOWHTTP99@\u2603';
+    const fwDotWwwUrl = 'www\uff0efiles\uff0eexample/doc?token=FWDOTSECRET99';
+    const footnotePortSnowmanUrl = '//user:REVIEWPASS99@\u2603:8080[1]';
+    const footnoteNoPortSnowmanUrl = '//user:REVIEWNOPORT99@\u2603[1]';
+    const footnoteBareWwwSnowmanUrl = 'www.\u2603[1]';
+    const footnoteIpv6Url = '//user:IPV6FOOTNOTE99@[2001:db8::1][1]';
+    const footnoteIpv6PortUrl = '//user:IPV6PORTFOOT99@[2001:db8::1]:8080[1]';
+    const unmatchedBrkIpv6Url = '//]user:UNMATCHEDBRK99@[2001:db8::1][1]';
+    const portProseUrl = '//user:PORTPROSE99@intranet:8080下一句';
+    const portParenUrl = '//user:PORTPAREN99@\u2603:8080(note)';
+    const portBraceUrl = '//user:PORTBRACE99@\u2603:8080{1}';
+    const ideoRelHost1 = '//privateidn1\u3002example';
+    const ideoRelHost2 = '//privateidn2\uff0eexample';
+    const ideoRelHost3 = '//privateidn3\uff61example';
+    const ideoRelHost4 = '//privateidn4\u3002example\uff1f下一句';
+    const ideoRelHost5 = '//privateidn5\u3002example[1]';
     const privItemWithImg = {
       ...item('Private img note', 'https://private.example/img-note'),
-      summaryExcerpt: `${unicodePad} Private brief note with ${excerptSecretUrl}, ${unicodeSecretUrl}, ${wwwSecretUrl}, ${schemeRelSecretUrl}, ${ipv6RelSecretUrl}, ${singleHostRelSecretUrl}, ${userinfoRelSecretUrl}, **${boldUserinfoPortUrl}**, “${typoQuotePortUrl}”, 请看${cjkPeriodPortUrl}。以及【${cjkBracketPortUrl}】, 请看${userinfoUnicodeProseUrl}。下一句 请看${proseAtUrl}。通知@ops:值班 ${leadingPunctUserUrl} 请看${comma70UserUrl}。下一句 ${emojiPortUrl}📌下一句 [${bracketPortUrl}] [${bracketProsePortUrl}]下一句 {${bracePortUrl}} |${pipePortUrl}| [${wrappedIpv6PortUrl}] [${wrappedIpv6NoPortUrl}]下一句 _${underscoreRelUrl}_ _${underscoreHttpUrl}_ _${idnWwwUrl}_ foo_www.keepme ${enDashHttpUrl}, ${enDashRelUrl}, and ${cjkQueryUrl} //user:TRUNCDB99@`,
+      summaryExcerpt: `${unicodePad} Private brief note visit www. visit www.\u3002 visit www.[1] //foo:bar[1] //注释\u3002 with ${excerptSecretUrl}, ${unicodeSecretUrl}, ${wwwSecretUrl}, ${schemeRelSecretUrl}, ${ipv6RelSecretUrl}, ${singleHostRelSecretUrl}, ${userinfoRelSecretUrl}, **${boldUserinfoPortUrl}**, “${typoQuotePortUrl}”, 请看${cjkPeriodPortUrl}。以及【${cjkBracketPortUrl}】, 请看${userinfoUnicodeProseUrl}。下一句 请看${proseAtUrl}。通知@ops:值班 ${leadingPunctUserUrl} 请看${comma70UserUrl}。下一句 ${emojiPortUrl}📌下一句 [${bracketPortUrl}] [${bracketProsePortUrl}]下一句 {${bracePortUrl}} |${pipePortUrl}| [${wrappedIpv6PortUrl}] [${wrappedIpv6NoPortUrl}]下一句 _${underscoreRelUrl}_ _${underscoreHttpUrl}_ _${idnWwwUrl}_ ${ideoDotWwwUrl} ${snowmanWwwUrl} ${snowmanPortWwwUrl} ${bareSnowmanWwwUrl} (${bareSnowmanWwwUrl}) ${ideoSnowmanWwwUrl} ${rocketWwwUrl} ${bracketSnowmanWwwUrl} ${fwQuerySnowmanWwwUrl} ${snowmanRelUrl} ${snowmanRelQueryUrl} ${snowmanRelBracketUrl} ${snowmanHttpUrl} ${fwDotWwwUrl} ${footnotePortSnowmanUrl} next ${footnoteNoPortSnowmanUrl} next ${footnoteBareWwwSnowmanUrl} next ${footnoteIpv6Url} next ${footnoteIpv6PortUrl} next ${unmatchedBrkIpv6Url} next ${portProseUrl} ${portParenUrl} next ${portBraceUrl} next ${ideoRelHost1} ${ideoRelHost2} ${ideoRelHost3} ${ideoRelHost4} ${ideoRelHost5} next foo_www.keepme ${enDashHttpUrl}, ${enDashRelUrl}, and ${cjkQueryUrl} //user:9876543210`,
       media: [{ url: secretMediaUrl, kind: 'image' }],
+      excerptVersion: db.PRIVATE_EXCERPT_VERSION,
     };
     ingestCosmicWebItems(source('rss-priv-img', 'custom-sports', 'alice'), [privItemWithImg], NOW);
     const privBoot = svc.bootstrap('alice', 'user');
@@ -1111,23 +1140,32 @@ describe('2.0 graph and AI contracts', () => {
     const privDet = await svc.cluster('alice', privNode.clusterId);
     expect(privDet.media).toEqual([]);
     expect(JSON.stringify(privDet)).not.toContain(secretMediaUrl);
-    // Round 6–20 Blocker #1/#2/#3: REAL extractCleanArticle -> aiBrief path with IDN bare www. (_www.例子.中国/..._), truncated trailing creds, wrapped portless IPv6 + prose, underscore-wrapped URLs, identifier preservation, and linear 39k-backslash scan
+    // Round 6–22 Blocker #1/#2/#3: REAL extractCleanArticle -> aiBrief path with WHATWG bare www (ideographic dots, standalone symbol hosts, port+prose), >2048-char lookahead userinfo, truncated numeric password at EOF, wrapped portless IPv6, underscore-wrapped URLs, identifier preservation, and linear/bounded stress checks
     const privItemId = privDet.items[0].id;
     const angleParenUrl = 'https://files.example/report)v2.pdf?token=ANGLEPARENSECRET99';
     const parenSecretUrl = 'https://files.example/chart(v2).png?token=PRIVATESENTINEL99';
     const aposSecretUrl = "https://files.example/team's-deck.pdf?token=APOSSECRET99";
+    const overlongPassUrl = `//user:${'a'.repeat(2100)}OVERLONGPASS99@intranet:8080/secret`;
+    const overlongUserUrl = `//${'u'.repeat(2100)}OVERLONGUSER99@intranet:8080/secret`;
     const extractedPrivate = extractCleanArticle(
-      `<article><h1>Private Memo</h1><p>${unicodePad} Quarterly notes // keep prose comment, //\u2013note: kept, foo_www.keepme, <a href="${angleParenUrl}">Attachment</a>, bare ${parenSecretUrl}, (${parenSecretUrl}), ${aposSecretUrl}, ${unicodeSecretUrl}, ${wwwSecretUrl}, ${schemeRelSecretUrl}, ${ipv6RelSecretUrl}, ${singleHostRelSecretUrl}, ${userinfoRelSecretUrl}, <strong>${boldUserinfoPortUrl}</strong>, <em>${emUserinfoPortUrl}</em>, “${typoQuotePortUrl}”, 请看${cjkPeriodPortUrl}。以及【${cjkBracketPortUrl}】, 请看${userinfoUnicodeProseUrl}。下一句 请看${proseAtUrl}。通知@ops:值班 ${leadingPunctUserUrl} 请看${comma70UserUrl}。下一句 ${emojiPortUrl}📌下一句 [${bracketPortUrl}] [${bracketProsePortUrl}]下一句 {${bracePortUrl}} |${pipePortUrl}| [${wrappedIpv6PortUrl}] [${wrappedIpv6NoPortUrl}]下一句 _${underscoreRelUrl}_ _${underscoreHttpUrl}_ _${idnWwwUrl}_ ${enDashHttpUrl}, ${enDashRelUrl}, and ${cjkQueryUrl}.</p></article>`,
+      `<article><h1>Private Memo</h1><p>${unicodePad} Quarterly notes visit www. visit www.\u3002 visit www.[1] // keep prose comment, //\u2013note: kept, //foo:bar[1], //注释\u3002, foo_www.keepme, <a href="${angleParenUrl}">Attachment</a>, bare ${parenSecretUrl}, (${parenSecretUrl}), ${aposSecretUrl}, ${unicodeSecretUrl}, ${wwwSecretUrl}, ${schemeRelSecretUrl}, ${ipv6RelSecretUrl}, ${singleHostRelSecretUrl}, ${userinfoRelSecretUrl}, <strong>${boldUserinfoPortUrl}</strong>, <em>${emUserinfoPortUrl}</em>, “${typoQuotePortUrl}”, 请看${cjkPeriodPortUrl}。以及【${cjkBracketPortUrl}】, 请看${userinfoUnicodeProseUrl}。下一句 请看${proseAtUrl}。通知@ops:值班 ${leadingPunctUserUrl} 请看${comma70UserUrl}。下一句 ${emojiPortUrl}📌下一句 [${bracketPortUrl}] [${bracketProsePortUrl}]下一句 {${bracePortUrl}} |${pipePortUrl}| [${wrappedIpv6PortUrl}] [${wrappedIpv6NoPortUrl}]下一句 _${underscoreRelUrl}_ _${underscoreHttpUrl}_ _${idnWwwUrl}_ ${ideoDotWwwUrl} ${snowmanWwwUrl} ${snowmanPortWwwUrl} ${bareSnowmanWwwUrl} (${bareSnowmanWwwUrl}) ${ideoSnowmanWwwUrl} ${rocketWwwUrl} ${bracketSnowmanWwwUrl} ${fwQuerySnowmanWwwUrl} ${snowmanRelUrl} ${snowmanRelQueryUrl} ${snowmanRelBracketUrl} ${snowmanHttpUrl} ${fwDotWwwUrl} ${footnotePortSnowmanUrl} next ${footnoteNoPortSnowmanUrl} next ${footnoteBareWwwSnowmanUrl} next ${footnoteIpv6Url} next ${footnoteIpv6PortUrl} next ${unmatchedBrkIpv6Url} next ${portProseUrl} ${portParenUrl} next ${portBraceUrl} next ${ideoRelHost1} ${ideoRelHost2} ${ideoRelHost3} ${ideoRelHost4} ${ideoRelHost5} next ${overlongPassUrl} ${overlongUserUrl} ${enDashHttpUrl}, ${enDashRelUrl}, and ${cjkQueryUrl}.</p></article>`,
       'https://private.example/img-note',
       'Private img note',
     );
     expect(extractedPrivate.markdown).toContain(`(<${angleParenUrl}>)`);
     expect(extractedPrivate.markdown).toContain('//\\[2001:db8::1\\]/vault/a.pdf?token=IPV6RELSECRET99');
+    expect(extractedPrivate.markdown).toContain('//user:REVIEWPASS99@\u2603:8080\\[1\\] next');
+    expect(extractedPrivate.markdown).toContain('www.\u2603\\[1\\] next');
+    expect(extractedPrivate.markdown).toContain('//user:IPV6FOOTNOTE99@\\[2001:db8::1\\]\\[1\\] next');
     expect(extractedPrivate.markdown).toContain(`\\[${bracketPortUrl}\\]`);
     expect(extractedPrivate.markdown).toContain(`\\[${bracketProsePortUrl}\\]下一句`);
     expect(extractedPrivate.markdown).toContain('\\[//user:IPV6NOPORT99@\\[2001:db8::1\\]\\]下一句');
     expect(extractedPrivate.markdown).toContain(`\\_${underscoreRelUrl}\\_`);
     expect(extractedPrivate.markdown).toContain(`\\_${idnWwwUrl}\\_`);
+    expect(extractedPrivate.markdown).toContain(ideoDotWwwUrl);
+    expect(extractedPrivate.markdown).toContain(snowmanWwwUrl);
+    expect(extractedPrivate.markdown).toContain(bareSnowmanWwwUrl);
+    expect(extractedPrivate.markdown).toContain(overlongPassUrl);
     expect(extractedPrivate.markdown).toContain(`**${boldUserinfoPortUrl}**`);
     expect(extractedPrivate.markdown).toContain(`*${emUserinfoPortUrl}*`);
     expect(extractedPrivate.markdown).toContain(`“${typoQuotePortUrl}”`);
@@ -1150,17 +1188,40 @@ describe('2.0 graph and AI contracts', () => {
       'BOLDPORTPASS99', 'EMPORTPASS99', 'TYPOQUOTEPASS99', 'CJKPERIODPASS99', 'CJKBRACKETPASS99',
       'USERINFODASHPASS99', 'PROSEATPASS99', 'LEADPUNCTPASS99', 'COMMA70PASS99', 'PINEMOJIPASS99',
       'BRACKETPASS99', 'BRACKETPROSE99', 'BRACEPASS99', 'PIPEPASS99', 'IPV6WRAPPASS99',
-      'IPV6NOPORT99', 'UNDERSCOREPASS99', 'UNDERHTTP99', 'IDNWWWSECRET99', 'TRUNCDB99',
+      'IPV6NOPORT99', 'UNDERSCOREPASS99', 'UNDERHTTP99', 'IDNWWWSECRET99', 'IDEODOTSECRET99',
+      'SNOWMANSECRET99', 'SNOWHOST99', 'SNOWHOSTQ99', 'SNOWHOSTB99', 'SNOWHTTP99', '\u2603', '\ud83d\ude80',
+      'REVIEWPASS99', 'REVIEWNOPORT99', 'IPV6FOOTNOTE99', 'IPV6PORTFOOT99', 'UNMATCHEDBRK99',
+      'PORTPROSE99', 'PORTPAREN99', 'PORTBRACE99',
+      'privateidn1', 'privateidn2', 'privateidn3', 'privateidn4', 'privateidn5',
+      'OVERLONGPASS99', 'OVERLONGUSER99', 'FWDOTSECRET99', '9876543210',
       'ENDASHSECRET99', 'RELENDASHSECRET99', 'CJKQUERYSECRET99', 'EXCERPTSECRET99']) {
       expect(privBriefJson).not.toContain(secret);
     }
     expect(requestAi.mock.lastCall[0].payload.articleMarkdown).toContain('Attachment');
+    expect(requestAi.mock.lastCall[0].payload.articleMarkdown).toContain('visit www.');
+    expect(requestAi.mock.lastCall[0].payload.articleMarkdown).toContain('visit www.\u3002');
+    expect(requestAi.mock.lastCall[0].payload.articleMarkdown).toContain('visit www.\\[1\\]');
     expect(requestAi.mock.lastCall[0].payload.articleMarkdown).toContain('// keep prose comment');
     expect(requestAi.mock.lastCall[0].payload.articleMarkdown).toContain('//\u2013note: kept');
+    expect(requestAi.mock.lastCall[0].payload.articleMarkdown).toContain('//foo:bar\\[1\\]');
+    expect(requestAi.mock.lastCall[0].payload.articleMarkdown).toContain('//注释\u3002');
     expect(requestAi.mock.lastCall[0].payload.articleMarkdown).toContain('foo\\_www.keepme');
-    // Round 20 Blocker #1: Real private RSS ingestion clips AFTER private URL redaction so a credential URL straddling char 1,000 never leaks '//user:CLIPPASS99@'
+    // Round 20–23 Blocker #1/#2/#3 & Nit: Real private RSS ingestion normalizes entities ONCE (never double-decoding after the 1,000-char clip),
+    // redacts BEFORE 1,000-char clip, bounds CPU fail-closed on a ~1.8 MiB adversarial dense-invalid-authority payload,
+    // proves URL-check budget exhaustion discards a nearby harmless tail marker while output stays well under 1,000 chars,
+    // and uncached followUp scrubs request briefContext BEFORE enforcing the 1,500-char limit (even for username-only userinfo).
     const pad982 = 'x'.repeat(982);
-    const boundaryRss = `<rss><channel><item><title>Boundary RSS Memo</title><link>https://private.example/boundary</link><description>${pad982} //user:CLIPPASS99@intranet:8080 trailing</description></item></channel></rss>`;
+    const pad973 = 'x'.repeat(973);
+    const dosPayload = `${'//a.b:bad,c,d,e,f,g,h '.repeat(80_000)} //user:DOSTAIL99@intranet:8080`;
+    const budgetExhaustPayload = `${'//intranet/p '.repeat(270)} HARMLESSBUDGETMARKER99 //user:BUDGETSECRET99@intranet:8080`;
+    const boundaryRss = `<rss><channel>
+      <item><title>Boundary RSS Memo</title><link>https://private.example/boundary</link><description>${pad982} //user:CLIPPASS99@intranet:8080 trailing</description></item>
+      <item><title>Adversarial Dense RSS</title><link>https://private.example/dos</link><description>${dosPayload}</description></item>
+      <item><title>Budget Exhaustion RSS</title><link>https://private.example/budget</link><description>${budgetExhaustPayload}</description></item>
+      <item><title>Double Escaped Cdata Payload</title><link>https://private.example/double-entity</link><description><![CDATA[${pad973} &amp;#47;&amp;#47;CDATAENTITY99@intranet:8080/api]]></description></item>
+      <item><title>Plain Xml Encoded Slashes</title><link>https://private.example/xml-entity</link><description>${pad973} &amp;#47;&amp;#47;XMLENTITYSECRET99@intranet:8080/api</description></item>
+      <item><title>Single Numeric Reference Feed</title><link>https://private.example/cdata-entity</link><description><![CDATA[${pad973} &#47;&#47;SINGLECDATASECRET99@intranet:8080/api]]></description></item>
+    </channel></rss>`;
     const rssSvc = makeService({
       fetcher: async () => ({ status: 200, url: 'https://private.example/boundary.xml', text: async () => boundaryRss }),
       requestAi,
@@ -1169,25 +1230,64 @@ describe('2.0 graph and AI contracts', () => {
       enabledDomainIds: [],
       customDomains: [{ id: 'priv-clip', name: 'Priv Clip', colorToken: 'cyan', enabled: true, keywords: [], rssUrls: ['https://private.example/boundary.xml'] }],
     });
+    const tDos0 = performance.now();
     await rssSvc.refresh('grace', { domainId: 'priv-clip', force: true });
+    expect(performance.now() - tDos0).toBeLessThan(250);
     const graceFeed = rssSvc.feed('grace', { domainId: 'priv-clip' });
-    expect(graceFeed.clusters).toHaveLength(1);
-    expect(graceFeed.clusters[0].summaryExcerpt).not.toContain('CLIPPASS99');
+    expect(graceFeed.clusters).toHaveLength(6);
+    const boundaryCluster = graceFeed.clusters.find(c => c.headline === 'Boundary RSS Memo');
+    const dosCluster = graceFeed.clusters.find(c => c.headline === 'Adversarial Dense RSS');
+    const budgetCluster = graceFeed.clusters.find(c => c.headline === 'Budget Exhaustion RSS');
+    const doubleEntityCluster = graceFeed.clusters.find(c => c.headline === 'Double Escaped Cdata Payload');
+    const xmlEntityCluster = graceFeed.clusters.find(c => c.headline === 'Plain Xml Encoded Slashes');
+    const singleCdataCluster = graceFeed.clusters.find(c => c.headline === 'Single Numeric Reference Feed');
+    expect(boundaryCluster.summaryExcerpt).not.toContain('CLIPPASS99');
+    expect(dosCluster.summaryExcerpt).not.toContain('DOSTAIL99');
+    // No second cleanText() pass on RSS rows: double-encoded &amp;#47; inside CDATA stays literal &#47; (never decoded into // after clipping),
+    // while genuine XML-escaped and single-encoded CDATA entities decode to // BEFORE scrubbing and clipping.
+    expect(doubleEntityCluster.summaryExcerpt).not.toContain('//CDATAENTITY99');
+    expect(doubleEntityCluster.summaryExcerpt).toContain('&#47;&#47;');
+    expect(xmlEntityCluster.summaryExcerpt).not.toContain('XMLENTITYSECRET99');
+    expect(singleCdataCluster.summaryExcerpt).not.toContain('SINGLECDATASECRET99');
+    // Output after 256 redactions is only ~256 spaces (<< 1,000), proving URL-check budget exhaustion (not maxOutputChars) discarded the tail.
+    expect(budgetCluster.summaryExcerpt.length).toBeLessThan(400);
+    expect(budgetCluster.summaryExcerpt).not.toContain('HARMLESSBUDGETMARKER99');
+    expect(budgetCluster.summaryExcerpt).not.toContain('BUDGETSECRET99');
     agents.set('v2-grace', { ownerId: 'grace', name: 'v2-grace', capabilities: ['cosmic_web_briefing', 'cosmic_web_follow_up'], encryptOutbound: false, ws: { readyState: 1, send: () => {} } });
-    await rssSvc.aiBrief('grace', 'user', graceFeed.clusters[0].id, { skipArticleFetch: true, research: true });
+    // Unauthenticated client-supplied briefContext (even claiming current version) MUST be rejected on private sources,
+    // while server-owned briefContext straddling 1,500 chars MUST scrub before clipping.
+    const boundaryBriefContext = `${'x'.repeat(1490)} //USERONLYCTXSECRET99@intranet:8080/api`;
+    await rssSvc.followUp('grace', 'user', boundaryCluster.id, {
+      question: 'Unauthenticated client echo?', briefContext: boundaryBriefContext, briefContextVersion: PRIVATE_BRIEF_CONTEXT_VERSION, research: true,
+    });
+    expect(requestAi.mock.lastCall[0].payload.briefContext).toBeUndefined();
+    const boundaryDet = await rssSvc.cluster('grace', boundaryCluster.id);
+    const boundaryBriefKey = createHash('sha256').update(JSON.stringify([5, 'brief-context', PRIVATE_BRIEF_CONTEXT_VERSION, boundaryCluster.id, boundaryDet.items[0].id, 'v2-grace'])).digest('hex');
+    db.setAiCache('grace', boundaryBriefKey, boundaryBriefContext, NOW + HOUR);
+    await rssSvc.followUp('grace', 'user', boundaryCluster.id, {
+      question: 'Server-cached boundary follow-up?', research: true,
+    });
+    const cachedBoundaryFuPayload = requestAi.mock.lastCall[0].payload;
+    expect(cachedBoundaryFuPayload.briefContext.length).toBeLessThanOrEqual(1500);
+    expect(JSON.stringify(cachedBoundaryFuPayload)).not.toContain('USERONLYCTXSECRET99');
+    expect(JSON.stringify(cachedBoundaryFuPayload)).not.toContain('CLIPPASS99');
+    await rssSvc.aiBrief('grace', 'user', boundaryCluster.id, { skipArticleFetch: true, research: true });
     expect(JSON.stringify(requestAi.mock.lastCall[0].payload)).not.toContain('CLIPPASS99');
-    await rssSvc.followUp('grace', 'user', graceFeed.clusters[0].id, { question: 'Summary?', research: true });
+    await rssSvc.followUp('grace', 'user', boundaryCluster.id, { question: 'Summary?', research: true });
     expect(JSON.stringify(requestAi.mock.lastCall[0].payload)).not.toContain('CLIPPASS99');
     // Round 19 Blocker #3: 39,000-backslash run after URL must redact linearly (< 150ms, never quadratic)
+    const bsPayload = `KeepBS https://files.example/a?token=BSSTRESS99${'\\'.repeat(39_000)}]`;
     db.setArticleCache('alice', privItemId, {
-      title: 'Backslash stress', markdown: `https://files.example/a?token=BSSTRESS99${'\\'.repeat(39_000)}]`,
+      title: 'Backslash stress', markdown: bsPayload, aiMarkdown: bsPayload,
+      extractorVersion: ARTICLE_EXTRACTOR_VERSION, truncated: false,
       quality: 'full', itemId: privItemId, clusterId: privNode.clusterId, summaryExcerpt: 'Stress',
     }, NOW + HOUR);
     const tBs0 = performance.now();
     await svc.aiBrief('alice', 'user', privNode.clusterId, { research: true, force: true });
     expect(performance.now() - tBs0).toBeLessThan(150);
+    expect(requestAi.mock.lastCall[0].payload.articleMarkdown).toContain('KeepBS');
     expect(JSON.stringify(requestAi.mock.lastCall[0].payload)).not.toContain('BSSTRESS99');
-    // Round 6–20: followUp redacts all alphanumeric sentinels directly in summaryExcerpt
+    // Round 6–23: followUp redacts all alphanumeric sentinels directly in summaryExcerpt (including footnotes after symbol/IPv6/port authorities, WHATWG dot scheme-relative hosts, truncated numeric password at EOF & WHATWG bare www)
     await svc.followUp('alice', 'user', privNode.clusterId, { question: 'Any updates?', research: true });
     const privFuJson = JSON.stringify(requestAi.mock.lastCall[0].payload);
     for (const secret of [secretMediaUrl, 'EXCERPTSECRET99', 'UNICODEDRIFTSECRET99', 'WWWSECRET99',
@@ -1195,11 +1295,1698 @@ describe('2.0 graph and AI contracts', () => {
       'BOLDPORTPASS99', 'TYPOQUOTEPASS99', 'CJKPERIODPASS99', 'CJKBRACKETPASS99',
       'USERINFODASHPASS99', 'PROSEATPASS99', 'LEADPUNCTPASS99', 'COMMA70PASS99', 'PINEMOJIPASS99',
       'BRACKETPASS99', 'BRACKETPROSE99', 'BRACEPASS99', 'PIPEPASS99', 'IPV6WRAPPASS99',
-      'IPV6NOPORT99', 'UNDERSCOREPASS99', 'UNDERHTTP99', 'IDNWWWSECRET99', 'TRUNCDB99',
+      'IPV6NOPORT99', 'UNDERSCOREPASS99', 'UNDERHTTP99', 'IDNWWWSECRET99', 'IDEODOTSECRET99',
+      'SNOWMANSECRET99', 'SNOWHOST99', 'SNOWHOSTQ99', 'SNOWHOSTB99', 'SNOWHTTP99', '\u2603', '\ud83d\ude80',
+      'REVIEWPASS99', 'REVIEWNOPORT99', 'IPV6FOOTNOTE99', 'IPV6PORTFOOT99', 'UNMATCHEDBRK99',
+      'PORTPROSE99', 'PORTPAREN99', 'PORTBRACE99',
+      'privateidn1', 'privateidn2', 'privateidn3', 'privateidn4', 'privateidn5',
+      'FWDOTSECRET99', '9876543210',
       'ENDASHSECRET99', 'RELENDASHSECRET99', 'CJKQUERYSECRET99']) {
       expect(privFuJson).not.toContain(secret);
     }
     expect(requestAi.mock.lastCall[0].payload.summaryExcerpt).toContain('foo_www.keepme');
+    expect(requestAi.mock.lastCall[0].payload.summaryExcerpt).toContain('visit www.');
+    expect(requestAi.mock.lastCall[0].payload.summaryExcerpt).toContain('visit www.\u3002');
+    expect(requestAi.mock.lastCall[0].payload.summaryExcerpt).toContain('visit www.[1]');
+    expect(requestAi.mock.lastCall[0].payload.summaryExcerpt).toContain('//foo:bar[1]');
+    expect(requestAi.mock.lastCall[0].payload.summaryExcerpt).toContain('//注释\u3002');
+
+    // Round 24 (PR #2032 Round 3) Blocker #1/#2/#3 isolated regressions:
+    // (1) post-@ 64-cut saturation before IPv6 close & non-IPv6 host+footnote (raw & Markdown-escaped),
+    // (2) percent-encoded WHATWG dot separators in portless/pathless // and bare-www hosts (with footnotes & prose guards),
+    // (3) Clean Article 40,000-char cap (fresh & legacy cache) + >2 MiB HTML cap truncating username-only //USER before @host
+    //     while keeping the Clean Article display/cache contract intact.
+    const r3OverflowRaw = `//u@:bad,${'a,'.repeat(66)}IPV6CUTOVF99@[2001:db8::1][1] next //u@:bad,${'a,'.repeat(66)}HOSTCUTOVF99@\u2603[1] next www.:bad,${'a,'.repeat(66)}WWWCUTOVF99@[2001:db8::1][1] next`;
+    const r3PctDotsRaw = 'Keep //50%增长 visit www%2e visit www%2e[1] //pcthost1%2eexample //pcthost2%2Eexample //pcthost3%e3%80%82example //pcthost4%ef%bc%8eexample //pcthost5%ef%bd%a1example //pcthost6%2eexample[1] next //pcthost7%e3%80%82example[1] next //pcthost8%ef%bc%8eexample\uff1f下一句 //pcthost9%ef%bd%a1example(note) next www%2epctwww1.example www%e3%80%82pctwww2[1] next';
+    const r3ArticleHtml = `<article><p>https://cdn.example/${'a'.repeat(39_950)} Keep safe prose //TRUNCUSERONLY99@intranet:8080/secret</p></article>`;
+    const r3Rss = `<rss><channel>
+      <item><title>R3 Cut Overflow Memo</title><link>https://private.example/r3-overflow</link><description>${r3OverflowRaw}</description></item>
+      <item><title>R3 Percent Dot Memo</title><link>https://private.example/r3-pctdot</link><description>${r3PctDotsRaw}</description></item>
+      <item><title>R3 Extractor Truncation Memo</title><link>https://private.example/r3-trunc</link><description>Short summary</description></item>
+    </channel></rss>`;
+    const r3Svc = makeService({
+      fetcher: async url => {
+        if (url.endsWith('.xml')) return { status: 200, url, text: async () => r3Rss };
+        if (url.endsWith('/r3-trunc')) return { status: 200, url, text: async () => r3ArticleHtml };
+        return { status: 200, url, text: async () => `<article><p>${r3OverflowRaw} ${r3PctDotsRaw}</p></article>` };
+      },
+      requestAi,
+    });
+    await r3Svc.savePreferences('heidi', {
+      enabledDomainIds: [],
+      customDomains: [{ id: 'priv-r3', name: 'Priv R3', colorToken: 'cyan', enabled: true, keywords: [], rssUrls: ['https://private.example/r3.xml'] }],
+    });
+    await r3Svc.refresh('heidi', { domainId: 'priv-r3', force: true });
+    const heidiFeed = r3Svc.feed('heidi', { domainId: 'priv-r3' });
+    expect(heidiFeed.clusters).toHaveLength(3);
+    const r3OverflowCluster = heidiFeed.clusters.find(c => c.headline === 'R3 Cut Overflow Memo');
+    const r3PctCluster = heidiFeed.clusters.find(c => c.headline === 'R3 Percent Dot Memo');
+    const r3TruncCluster = heidiFeed.clusters.find(c => c.headline === 'R3 Extractor Truncation Memo');
+    for (const secret of ['IPV6CUTOVF99', 'HOSTCUTOVF99', 'WWWCUTOVF99']) {
+      expect(r3OverflowCluster.summaryExcerpt).not.toContain(secret);
+    }
+    for (const secret of ['pcthost1', 'pcthost2', 'pcthost3', 'pcthost4', 'pcthost5', 'pcthost6', 'pcthost7', 'pcthost8', 'pcthost9', 'pctwww1', 'pctwww2']) {
+      expect(r3PctCluster.summaryExcerpt).not.toContain(secret);
+    }
+    expect(r3PctCluster.summaryExcerpt).toContain('//50%增长');
+    expect(r3PctCluster.summaryExcerpt).toContain('visit www%2e');
+    expect(r3PctCluster.summaryExcerpt).toContain('visit www%2e[1]');
+    agents.set('v2-heidi', { ownerId: 'heidi', name: 'v2-heidi', capabilities: ['cosmic_web_briefing', 'cosmic_web_follow_up'], encryptOutbound: false, ws: { readyState: 1, send: () => {} } });
+    // Defense-in-depth scrubbing of server-owned followUp briefContext + Markdown-escaped article extraction -> aiBrief for Blocker #1 & #2
+    const r3OverflowDet = await r3Svc.cluster('heidi', r3OverflowCluster.id);
+    const r3OverflowBriefKey = createHash('sha256').update(JSON.stringify([5, 'brief-context', PRIVATE_BRIEF_CONTEXT_VERSION, r3OverflowCluster.id, r3OverflowDet.items[0].id, 'v2-heidi'])).digest('hex');
+    db.setAiCache('heidi', r3OverflowBriefKey, `${r3OverflowRaw} ${r3PctDotsRaw}`, NOW + HOUR);
+    await r3Svc.followUp('heidi', 'user', r3OverflowCluster.id, {
+      question: 'Check overflow?', research: true,
+    });
+    const r3OverflowFuJson = JSON.stringify(requestAi.mock.lastCall[0].payload);
+    for (const secret of ['IPV6CUTOVF99', 'HOSTCUTOVF99', 'WWWCUTOVF99', 'pcthost1', 'pcthost2', 'pcthost3', 'pcthost4', 'pcthost5', 'pcthost6', 'pcthost7', 'pcthost8', 'pcthost9', 'pctwww1', 'pctwww2']) {
+      expect(r3OverflowFuJson).not.toContain(secret);
+    }
+    expect(requestAi.mock.lastCall[0].payload.briefContext).toContain('//50%增长');
+    expect(requestAi.mock.lastCall[0].payload.briefContext).toContain('visit www%2e');
+    expect(requestAi.mock.lastCall[0].payload.briefContext).toContain('visit www%2e[1]');
+    await r3Svc.aiBrief('heidi', 'user', r3OverflowCluster.id, { research: true });
+    const r3OverflowBriefJson = JSON.stringify(requestAi.mock.lastCall[0].payload);
+    for (const secret of ['IPV6CUTOVF99', 'HOSTCUTOVF99', 'WWWCUTOVF99', 'pcthost1', 'pcthost2', 'pcthost3', 'pcthost4', 'pcthost5', 'pcthost6', 'pcthost7', 'pcthost8', 'pcthost9', 'pctwww1', 'pctwww2']) {
+      expect(r3OverflowBriefJson).not.toContain(secret);
+    }
+    expect(requestAi.mock.lastCall[0].payload.articleMarkdown).toContain('//50%增长');
+    expect(requestAi.mock.lastCall[0].payload.articleMarkdown).toContain('visit www%2e');
+    expect(requestAi.mock.lastCall[0].payload.articleMarkdown).toContain('visit www%2e\\[1\\]');
+    // Blocker #3: Clean Article preserves exact 40,000-char display/cache contract while aiBrief omits the truncated username-only //TRUNCUSER fragment
+    const cleanTrunc = await r3Svc.article('heidi', r3TruncCluster.id);
+    expect(cleanTrunc.markdown).toHaveLength(40_000);
+    expect(cleanTrunc.truncated).toBe(true);
+    expect(cleanTrunc.extractorVersion).toBe(ARTICLE_EXTRACTOR_VERSION);
+    expect(cleanTrunc.aiMarkdown).toBeUndefined();
+    expect(cleanTrunc.markdown).toContain('//TRUNCUSER');
+    await r3Svc.aiBrief('heidi', 'user', r3TruncCluster.id, { research: true });
+    const r3TruncBriefPayload = requestAi.mock.lastCall[0].payload;
+    expect(r3TruncBriefPayload.articleMarkdown).toContain('Keep safe prose');
+    expect(JSON.stringify(r3TruncBriefPayload)).not.toContain('TRUNCUSER');
+    expect(JSON.stringify(r3TruncBriefPayload)).not.toContain('cdn.example');
+    // >2 MiB HTML markup cap yields <40k markdown with truncated: true -> aiBrief still drops the truncated trailing token
+    const r3TruncItemId = cleanTrunc.itemId;
+    const bigHtmlExtracted = extractCleanArticle(
+      `<script>${'x'.repeat(2_097_112)}</script><p>Safe //BIGHTMLTRUNC99@intranet:8080</p>`,
+      'https://private.example/r3-big',
+    );
+    expect(bigHtmlExtracted.truncated).toBe(true);
+    expect(bigHtmlExtracted.extractorVersion).toBe(ARTICLE_EXTRACTOR_VERSION);
+    expect(bigHtmlExtracted.markdown).toContain('//BIGHTMLTRUNC');
+    expect(bigHtmlExtracted.markdown.length).toBeLessThan(40_000);
+    db.setArticleCache('heidi', r3TruncItemId, {
+      ...bigHtmlExtracted, itemId: r3TruncItemId, clusterId: r3TruncCluster.id, summaryExcerpt: 'Big',
+    }, NOW + HOUR);
+    await r3Svc.aiBrief('heidi', 'user', r3TruncCluster.id, { research: true, force: true });
+    expect(requestAi.mock.lastCall[0].payload.articleMarkdown).toContain('Safe');
+    expect(JSON.stringify(requestAi.mock.lastCall[0].payload)).not.toContain('BIGHTMLTRUNC');
+
+    // Round 25 (PR #2032 Round 4) Blocker #1 & #2 isolated end-to-end regressions:
+    // (1) 2 MiB scan cap & MAX_TAGS cap cutting inside <pre> / <code> / nested wrappers (where markdown() appends closing fences/backticks):
+    //     Clean Article display keeps full closing fences intact, while aiBrief -> real Agent runCosmicWebBriefing model prompt NEVER receives the cut username fragment.
+    // (2) Unversioned legacy article_cache rows (both short <40k byte-capped rows and 40k rows) without extractorVersion/truncated provenance:
+    //     Clean Article display reads them intact, while private aiBrief re-extracts (upgrading cache when live) or omits them (when skipArticleFetch or offline, without clobbering legacy display cache).
+    const r4PreHtml = `<script>${'x'.repeat(2_097_070)}</script><article><p>Safe pre intro.</p><pre>const preVal = //PRETRUNCUSER99@intranet:8080</pre></article>`;
+    const r4CodeHtml = `<script>${'x'.repeat(2_097_062)}</script><article><p>Safe inline code <code>const codeVal = //CODETRUNCUSER99@intranet:8080</code></p></article>`;
+    const r4NestedHtml = `<script>${'x'.repeat(2_097_048)}</script><article><p>Safe nested <a href="https://intranet.local/doc"><code>//LINKCODETRUNC99@intranet:8080</code></a></p></article>`;
+    const r4BqPreHtml = `<script>${'x'.repeat(2_097_062)}</script><article><blockquote><p>Safe quote.</p><pre>const q = //BQPRETRUNC99@intranet:8080</pre></blockquote></article>`;
+    const r4TagCapHtml = `<article><p>Safe tag cap.</p>${'<span></span>'.repeat(14_998)}<pre>const t = //TAGCAPTRUNC99<span>@intranet:8080</span></pre></article>`;
+    const r4RssTagCapDesc = `<![CDATA[${'<span></span>'.repeat(15_000)}Safe rss tags //RSSTAGCAP99<span>@intranet:8080</span>]]>`;
+    const r4Rss = `<rss><channel>
+      <item><title>Preformatted Fenced Document</title><link>https://private.example/r4-pre</link><description>Pre summary</description></item>
+      <item><title>Inline Backtick Snippet</title><link>https://private.example/r4-code</link><description>Code summary</description></item>
+      <item><title>Legacy Cached Briefing</title><link>https://private.example/r4-legacy</link><description>Legacy summary</description></item>
+      <item><title>Dense Tag Description</title><link>https://private.example/r4-rsstag</link><description>${r4RssTagCapDesc}</description></item>
+    </channel></rss>`;
+    let r4LegacyFetchMode = 'live';
+    let r4LegacyFetchCount = 0;
+    const r4CapturedPrompts = [];
+    const r4AgentAi = vi.fn(async ({ mode, perspective, language, payload }) => {
+      const adapter = {
+        async call(req) {
+          r4CapturedPrompts.push(JSON.stringify(req));
+          return { text: JSON.stringify({ tldr: 'ok', bullets: ['one', 'two'], impact: 'ok', followUps: ['q1', 'q2'] }) };
+        },
+      };
+      const { result } = await runCosmicWebBriefing({
+        mode, perspective, language, payload,
+        config: { fastModel: 'test/fast', defaultModel: 'test/fast' },
+        adapter,
+      });
+      return result;
+    });
+    const r4Svc = makeService({
+      fetcher: async url => {
+        if (url.endsWith('.xml')) return { status: 200, url, text: async () => r4Rss };
+        if (url.endsWith('/r4-pre')) return { status: 200, url, text: async () => r4PreHtml };
+        if (url.endsWith('/r4-code')) return { status: 200, url, text: async () => r4CodeHtml };
+        if (url.endsWith('/r4-legacy')) {
+          r4LegacyFetchCount++;
+          if (r4LegacyFetchMode === 'offline') return { status: 503, url, text: async () => 'unavailable' };
+          return { status: 200, url, text: async () => r4PreHtml };
+        }
+        return { status: 200, url, text: async () => '<article><p>ok</p></article>' };
+      },
+      requestAi: r4AgentAi,
+    });
+    await r4Svc.savePreferences('ivan', {
+      enabledDomainIds: [],
+      customDomains: [{ id: 'priv-r4', name: 'Priv R4', colorToken: 'cyan', enabled: true, keywords: [], rssUrls: ['https://private.example/r4.xml'] }],
+    });
+    await r4Svc.refresh('ivan', { domainId: 'priv-r4', force: true });
+    const ivanFeed = r4Svc.feed('ivan', { domainId: 'priv-r4' });
+    expect(ivanFeed.clusters).toHaveLength(4);
+    const r4PreCluster = ivanFeed.clusters.find(c => c.headline === 'Preformatted Fenced Document');
+    const r4CodeCluster = ivanFeed.clusters.find(c => c.headline === 'Inline Backtick Snippet');
+    const r4LegacyCluster = ivanFeed.clusters.find(c => c.headline === 'Legacy Cached Briefing');
+    const r4RssTagCluster = ivanFeed.clusters.find(c => c.headline === 'Dense Tag Description');
+    // Private RSS CDATA >30,000-tag cap drops truncated trailing token before scrubbing
+    expect(r4RssTagCluster.summaryExcerpt).toContain('Safe rss tags');
+    expect(r4RssTagCluster.summaryExcerpt).not.toContain('RSSTAGCAP99');
+    agents.set('v2-ivan', { ownerId: 'ivan', name: 'v2-ivan', capabilities: ['cosmic_web_briefing', 'cosmic_web_follow_up'], encryptOutbound: false, ws: { readyState: 1, send: () => {} } });
+
+    // (1a) <pre> cut by 2 MiB scan cap: Clean Article display keeps closing fence + raw text, while aiBrief -> Agent prompt drops //PRETRUNCUSER
+    const r4PreArt = await r4Svc.article('ivan', r4PreCluster.id);
+    expect(r4PreArt.truncated).toBe(true);
+    expect(r4PreArt.extractorVersion).toBe(ARTICLE_EXTRACTOR_VERSION);
+    expect(r4PreArt.aiMarkdown).toBeUndefined();
+    expect(r4PreArt.markdown).toContain('```\nconst preVal = //PRETRUNCUSER');
+    expect(r4PreArt.markdown.endsWith('\n```')).toBe(true);
+    await r4Svc.aiBrief('ivan', 'user', r4PreCluster.id, { research: true });
+    expect(r4AgentAi.mock.lastCall[0].payload.articleMarkdown).toContain('Safe pre intro.');
+    expect(r4AgentAi.mock.lastCall[0].payload.articleMarkdown).toContain('const preVal =');
+    expect(JSON.stringify(r4AgentAi.mock.lastCall[0].payload)).not.toContain('PRETRUNCUSER');
+    expect(r4CapturedPrompts.at(-1)).toContain('Safe pre intro.');
+    expect(r4CapturedPrompts.at(-1)).not.toContain('PRETRUNCUSER');
+
+    // (1b) <code> cut by 2 MiB scan cap: Clean Article display keeps closing backtick + raw text, while aiBrief -> Agent prompt drops //CODETRUNCUSER
+    const r4CodeArt = await r4Svc.article('ivan', r4CodeCluster.id);
+    expect(r4CodeArt.truncated).toBe(true);
+    expect(r4CodeArt.markdown).toContain('` const codeVal = //CODETRUNCUSER');
+    expect(r4CodeArt.markdown.endsWith(' `')).toBe(true);
+    await r4Svc.aiBrief('ivan', 'user', r4CodeCluster.id, { research: true });
+    expect(r4AgentAi.mock.lastCall[0].payload.articleMarkdown).toContain('Safe inline code');
+    expect(r4AgentAi.mock.lastCall[0].payload.articleMarkdown).toContain('const codeVal =');
+    expect(JSON.stringify(r4AgentAi.mock.lastCall[0].payload)).not.toContain('CODETRUNCUSER');
+    expect(r4CapturedPrompts.at(-1)).toContain('Safe inline code');
+    expect(r4CapturedPrompts.at(-1)).not.toContain('CODETRUNCUSER');
+
+    // (1c) Nested <a><code>, <blockquote><pre>, and MAX_TAGS (30,000) cap inside <pre>
+    for (const [html, safeText, secretFrag] of [
+      [r4NestedHtml, 'Safe nested', 'LINKCODETRUNC'],
+      [r4BqPreHtml, 'Safe quote.', 'BQPRETRUNC'],
+      [r4TagCapHtml, 'Safe tag cap.', 'TAGCAPTRUNC'],
+    ]) {
+      const ext = extractCleanArticle(html, 'https://private.example/r4-nested');
+      expect(ext.truncated).toBe(true);
+      expect(ext.extractorVersion).toBe(ARTICLE_EXTRACTOR_VERSION);
+      expect(ext.markdown).toContain(secretFrag);
+      expect(ext.aiMarkdown).toContain(safeText);
+      expect(ext.aiMarkdown).not.toContain(secretFrag);
+      expect(ext.aiMarkdown).not.toContain('intranet.local');
+    }
+
+    // (2a) Unversioned SHORT (<40k) legacy cache row (no extractorVersion, no truncated flag):
+    // Clean Article display reads it intact; skipArticleFetch omits it from AI; offline origin omits it without clobbering legacy display cache; live origin re-extracts & upgrades safely.
+    const r4LegacyClusterDetail = await r4Svc.cluster('ivan', r4LegacyCluster.id);
+    const r4LegacyItemId = r4LegacyClusterDetail.items[0].id;
+    const shortLegacyMd = 'Safe legacy short\n\n```\nconst u = //LEGACYSHORTUSER\n```';
+    db.setArticleCache('ivan', r4LegacyItemId, {
+      title: 'Legacy short byte-capped cache',
+      markdown: shortLegacyMd,
+      quality: 'full', itemId: r4LegacyItemId, clusterId: r4LegacyCluster.id, summaryExcerpt: 'Legacy short',
+    }, NOW + HOUR);
+    // Clean Article display still serves legacy cache row intact without refetching
+    const legacyDisplayBefore = await r4Svc.article('ivan', r4LegacyCluster.id);
+    expect(legacyDisplayBefore.markdown).toBe(shortLegacyMd);
+    expect(r4LegacyFetchCount).toBe(0);
+    // Private aiBrief with skipArticleFetch omits unversioned legacy private Markdown completely
+    await r4Svc.aiBrief('ivan', 'user', r4LegacyCluster.id, { skipArticleFetch: true, research: true, force: true });
+    expect(r4LegacyFetchCount).toBe(0);
+    expect(r4AgentAi.mock.lastCall[0].payload.articleMarkdown).toBeUndefined();
+    expect(JSON.stringify(r4AgentAi.mock.lastCall[0].payload)).not.toContain('LEGACYSHORTUSER');
+    expect(r4CapturedPrompts.at(-1)).not.toContain('LEGACYSHORTUSER');
+    // Private aiBrief when origin is offline attempts re-extract, omits unversioned legacy Markdown on failure, AND preserves legacy display cache
+    r4LegacyFetchMode = 'offline';
+    await r4Svc.aiBrief('ivan', 'user', r4LegacyCluster.id, { research: true, force: true });
+    expect(r4LegacyFetchCount).toBe(1);
+    expect(r4AgentAi.mock.lastCall[0].payload.articleMarkdown).toBeUndefined();
+    expect(JSON.stringify(r4AgentAi.mock.lastCall[0].payload)).not.toContain('LEGACYSHORTUSER');
+    expect(r4CapturedPrompts.at(-1)).not.toContain('LEGACYSHORTUSER');
+    const legacyDisplayAfterOffline = await r4Svc.article('ivan', r4LegacyCluster.id);
+    expect(legacyDisplayAfterOffline.markdown).toBe(shortLegacyMd);
+    expect(r4LegacyFetchCount).toBe(1);
+    // Private aiBrief when origin is live re-extracts with v2 provenance, upgrades cache, keeps safe prose, and leaks NEITHER legacy NOR fresh truncated username fragment
+    r4LegacyFetchMode = 'live';
+    await r4Svc.aiBrief('ivan', 'user', r4LegacyCluster.id, { research: true, force: true });
+    expect(r4LegacyFetchCount).toBe(2);
+    expect(r4AgentAi.mock.lastCall[0].payload.articleMarkdown).toContain('Safe pre intro.');
+    expect(JSON.stringify(r4AgentAi.mock.lastCall[0].payload)).not.toContain('LEGACYSHORTUSER');
+    expect(JSON.stringify(r4AgentAi.mock.lastCall[0].payload)).not.toContain('PRETRUNCUSER');
+    expect(r4CapturedPrompts.at(-1)).toContain('Safe pre intro.');
+    expect(r4CapturedPrompts.at(-1)).not.toContain('LEGACYSHORTUSER');
+    expect(r4CapturedPrompts.at(-1)).not.toContain('PRETRUNCUSER');
+    // Legacy 40,000-char cache row without extractorVersion is also omitted under skipArticleFetch (and display reads remain intact)
+    const legacy40kMd = `https://cdn.example/${'a'.repeat(39_950)} Legacy safe //LEGACYTRUNCUSER`;
+    expect(legacy40kMd).toHaveLength(40_000);
+    db.setArticleCache('ivan', r4LegacyItemId, {
+      title: 'Legacy 40k cache',
+      markdown: legacy40kMd,
+      quality: 'full', itemId: r4LegacyItemId, clusterId: r4LegacyCluster.id, summaryExcerpt: 'Legacy 40k',
+    }, NOW + HOUR);
+    expect((await r4Svc.article('ivan', r4LegacyCluster.id)).markdown).toBe(legacy40kMd);
+    await r4Svc.aiBrief('ivan', 'user', r4LegacyCluster.id, { skipArticleFetch: true, research: true, force: true });
+    expect(r4AgentAi.mock.lastCall[0].payload.articleMarkdown).toBeUndefined();
+    expect(JSON.stringify(r4AgentAi.mock.lastCall[0].payload)).not.toContain('LEGACYTRUNCUSER');
+    expect(r4CapturedPrompts.at(-1)).not.toContain('LEGACYTRUNCUSER');
+    // Public source legacy unversioned cache row is still reused directly by aiBrief without forcing an article refetch
+    const pubDetailForLegacy = await svc.cluster('alice', pubId);
+    const pubLegacyItemId = pubDetailForLegacy.items[0].id;
+    db.setArticleCache('alice', pubLegacyItemId, {
+      title: 'Public legacy cache', markdown: 'Public legacy article body',
+      quality: 'full', itemId: pubLegacyItemId, clusterId: pubId, summaryExcerpt: 'Public legacy',
+    }, NOW + HOUR);
+    const pubLegacyReqAi = vi.fn(async () => storyResult);
+    const pubLegacySvc = makeService({
+      fetcher: async () => ({ status: 200, url: 'https://public.example/ai', text: async () => '<article><p>refetched-public-body</p></article>' }),
+      requestAi: pubLegacyReqAi,
+    });
+    await pubLegacySvc.aiBrief('alice', 'user', pubId, { force: true });
+    expect(pubLegacyReqAi.mock.lastCall[0].payload.articleMarkdown).toBe('Public legacy article body');
+
+    // Round 26 (PR #2032 Round 5) Blocker #1/#2/#3 isolated end-to-end regressions:
+    // (1) Inline `<code>` opening syntax splitting a source token across 2 MiB, 30,000-tag, and 40,000-char caps (Clean Article display unchanged),
+    // (2) Private RSS CDATA inline soft-break `<wbr>` / `<span>` inside the last token at the 30,000-tag cap and unterminated comment cutoff,
+    // (3) Legacy unversioned private RSS excerpts (<1,000 chars) persisted before excerpt_version: display stays intact, AI omits both item & cluster
+    //     excerpts before refresh (aiBrief / followUp / dailyBriefing), and refresh upgrades both item & cluster rows to clean sanitized v2 excerpts.
+    const r5SplitCodeByteHtml = `<script>${'x'.repeat(2_097_073)}</script><article><p>Safe inline split //SPLITCODE<code>USER99@intranet:8080</code></p></article>`;
+    const r5SplitCodeTagHtml = `<article><p>Safe tag split</p>${'<span></span>'.repeat(14_997)}<p>Keep //TAGSPLIT<code>USER99<span>@intranet:8080</span></code></p></article>`;
+    const r5SplitCode40kHtml = `<article><p>${'x'.repeat(39_965)} Safe40k //CAP40SPLIT<code>USER99@intranet:8080</code></p></article>`;
+    const r5WbrTagRssDesc = `<![CDATA[${'<span></span>'.repeat(14_999)}Safe wbr rss //WBRTRUNC<wbr>USER99<span>@intranet:8080</span>]]>`;
+    const r5WbrCommentRssDesc = `<![CDATA[Safe cmt rss //CMTWBRTRUNC<wbr>USER99<!-- unterminated]]>`;
+    const r5FeedUrl = 'https://private.example/r5.xml';
+    let r5FeedPhase = 'initial';
+    const r5RssInitial = `<rss><channel>
+      <item><title>Split Inline Code Article</title><link>https://private.example/r5-split-code</link><description>Split summary</description></item>
+      <item><title>Soft Break Tag Cap Feed</title><link>https://private.example/r5-wbr-tag</link><description>${r5WbrTagRssDesc}</description></item>
+      <item><title>Unterminated Comment Cutoff</title><link>https://private.example/r5-wbr-cmt</link><description>${r5WbrCommentRssDesc}</description></item>
+    </channel></rss>`;
+    const r5RssUpgraded = `<rss><channel>
+      <item><title>Legacy Persisted Private Memo</title><link>https://private.example/r5-legacy-excerpt</link><description>Refreshed clean excerpt //user:CLEANPASS99@intranet:8080 trailing</description></item>
+    </channel></rss>`;
+    const r5Prompts = [];
+    const r5AgentAi = vi.fn(async ({ mode, perspective, language, payload }) => {
+      const adapter = {
+        async call(req) {
+          r5Prompts.push(JSON.stringify(req));
+          if (mode === 'follow_up') {
+            return { text: JSON.stringify({ question: 'q', answer: 'ok', bullets: ['one'], followUps: ['q1'] }) };
+          }
+          if (mode === 'daily_briefing') {
+            return { text: JSON.stringify({ headline: 'ok', overview: 'ok', sections: [{ domain: 'priv-r5', bullets: ['ok'] }], signalsToWatch: ['s1'], followUps: ['q1', 'q2'] }) };
+          }
+          return { text: JSON.stringify({ tldr: 'ok', bullets: ['one', 'two'], impact: 'ok', followUps: ['q1', 'q2'] }) };
+        },
+      };
+      const { result } = await runCosmicWebBriefing({
+        mode, perspective, language, payload,
+        config: { fastModel: 'test/fast', defaultModel: 'test/fast' },
+        adapter,
+      });
+      return result;
+    });
+    const r5Svc = makeService({
+      fetcher: async url => {
+        if (url === r5FeedUrl) return { status: 200, url, text: async () => r5FeedPhase === 'initial' ? r5RssInitial : r5RssUpgraded };
+        if (url.endsWith('/r5-split-code')) return { status: 200, url, text: async () => r5SplitCodeByteHtml };
+        return { status: 200, url, text: async () => '<article><p>ok</p></article>' };
+      },
+      requestAi: r5AgentAi,
+    });
+    await r5Svc.savePreferences('judy', {
+      enabledDomainIds: [],
+      customDomains: [{ id: 'priv-r5', name: 'Priv R5', colorToken: 'cyan', enabled: true, keywords: [], rssUrls: [r5FeedUrl] }],
+    });
+    await r5Svc.refresh('judy', { domainId: 'priv-r5', force: true });
+    agents.set('v2-judy', { ownerId: 'judy', name: 'v2-judy', capabilities: ['cosmic_web_briefing', 'cosmic_web_follow_up'], encryptOutbound: false, ws: { readyState: 1, send: () => {} } });
+    const judyFeed = r5Svc.feed('judy', { domainId: 'priv-r5' });
+    const r5SplitCluster = judyFeed.clusters.find(c => c.headline === 'Split Inline Code Article');
+    const r5WbrTagCluster = judyFeed.clusters.find(c => c.headline === 'Soft Break Tag Cap Feed');
+    const r5WbrCmtCluster = judyFeed.clusters.find(c => c.headline === 'Unterminated Comment Cutoff');
+
+    // (1a) 2 MiB cap splitting `//SPLITCODE<code>USER99@intranet`: display keeps `` //SPLITCODE` USER ``, AI & model prompt drop BOTH `SPLITCODE` and `USER`
+    const r5SplitArt = await r5Svc.article('judy', r5SplitCluster.id);
+    expect(r5SplitArt.truncated).toBe(true);
+    expect(r5SplitArt.markdown).toContain('//SPLITCODE` USER');
+    await r5Svc.aiBrief('judy', 'user', r5SplitCluster.id, { research: true });
+    expect(r5AgentAi.mock.lastCall[0].payload.articleMarkdown).toContain('Safe inline split');
+    expect(JSON.stringify(r5AgentAi.mock.lastCall[0].payload)).not.toContain('SPLITCODE');
+    expect(JSON.stringify(r5AgentAi.mock.lastCall[0].payload)).not.toContain('USER');
+    expect(r5Prompts.at(-1)).toContain('Safe inline split');
+    expect(r5Prompts.at(-1)).not.toContain('SPLITCODE');
+    expect(r5Prompts.at(-1)).not.toContain('USER');
+
+    // (1b) 30,000-tag cap & 40,000-char cap splitting `<code>` inside source token
+    const r5TagExt = extractCleanArticle(r5SplitCodeTagHtml, 'https://private.example/r5-tag');
+    expect(r5TagExt.truncated).toBe(true);
+    expect(r5TagExt.markdown).toContain('//TAGSPLIT` USER99');
+    expect(r5TagExt.aiMarkdown).toContain('Keep');
+    expect(r5TagExt.aiMarkdown).not.toContain('TAGSPLIT');
+    expect(r5TagExt.aiMarkdown).not.toContain('USER99');
+    const r5Cap40Ext = extractCleanArticle(r5SplitCode40kHtml, 'https://private.example/r5-40k');
+    expect(r5Cap40Ext.truncated).toBe(true);
+    expect(r5Cap40Ext.markdown).toHaveLength(40_000);
+    expect(r5Cap40Ext.markdown).toContain('//CAP40SPLIT`');
+    expect(r5Cap40Ext.aiMarkdown).toContain('Safe40k');
+    expect(r5Cap40Ext.aiMarkdown).not.toContain('CAP40SPLIT');
+    expect(r5Cap40Ext.aiMarkdown).not.toContain('USER');
+
+    // (2) Private RSS CDATA `<wbr>` inside last token at 30,000-tag cap and unterminated comment cutoff -> neither fragment stored nor sent to model
+    expect(r5WbrTagCluster.summaryExcerpt).toContain('Safe wbr rss');
+    expect(r5WbrTagCluster.summaryExcerpt).not.toContain('WBRTRUNC');
+    expect(r5WbrTagCluster.summaryExcerpt).not.toContain('USER99');
+    expect(r5WbrCmtCluster.summaryExcerpt).toContain('Safe cmt rss');
+    expect(r5WbrCmtCluster.summaryExcerpt).not.toContain('CMTWBRTRUNC');
+    expect(r5WbrCmtCluster.summaryExcerpt).not.toContain('USER99');
+    await r5Svc.aiBrief('judy', 'user', r5WbrTagCluster.id, { skipArticleFetch: true, research: true });
+    expect(r5Prompts.at(-1)).toContain('Safe wbr rss');
+    expect(r5Prompts.at(-1)).not.toContain('WBRTRUNC');
+    expect(r5Prompts.at(-1)).not.toContain('USER99');
+
+    // (3) Legacy unversioned private RSS excerpt (<1,000 chars, persisted with excerpt_version = 0 as from old post-cap entity-decoding path):
+    //     display keeps showing it; AI (aiBrief / followUp / dailyBriefing) omits both item & cluster excerpts before refresh;
+    //     successful refresh upgrades BOTH item & cluster rows to clean sanitized v2 excerpts.
+    const r5PrivateSrc = db.listSources('judy').find(s => s.url === r5FeedUrl);
+    const legacyPostDecodeExcerpt = 'Legacy short prose //LEGACYCLIPUSER99';
+    ingestCosmicWebItems(
+      { id: r5PrivateSrc.id, ownerUserId: 'judy', domainId: r5PrivateSrc.domain_id, name: r5PrivateSrc.name, url: r5FeedUrl, kind: 'rss' },
+      [{ title: 'Legacy Persisted Private Memo', url: 'https://private.example/r5-legacy-excerpt', summaryExcerpt: legacyPostDecodeExcerpt, publishedAt: NOW, media: [] }],
+      NOW,
+    );
+    const legacyPrivBefore = r5Svc.feed('judy', { domainId: 'priv-r5' }).clusters.find(c => c.headline === 'Legacy Persisted Private Memo');
+    // Display behavior unchanged before refresh
+    expect(legacyPrivBefore.summaryExcerpt).toBe(legacyPostDecodeExcerpt);
+    expect((await r5Svc.cluster('judy', legacyPrivBefore.id)).summaryExcerpt).toBe(legacyPostDecodeExcerpt);
+    expect(legacyPrivBefore.excerptVersion).toBeUndefined();
+    // AI omits both item and cluster unversioned legacy private excerpts (aiBrief, followUp, dailyBriefing)
+    await r5Svc.aiBrief('judy', 'user', legacyPrivBefore.id, { skipArticleFetch: true, research: true });
+    expect(r5AgentAi.mock.lastCall[0].payload.summaryExcerpt).toBe('');
+    expect(JSON.stringify(r5AgentAi.mock.lastCall[0].payload)).not.toContain('LEGACYCLIPUSER99');
+    expect(r5Prompts.at(-1)).not.toContain('LEGACYCLIPUSER99');
+    await r5Svc.followUp('judy', 'user', legacyPrivBefore.id, { question: 'What happened?', research: true });
+    expect(r5AgentAi.mock.lastCall[0].payload.summaryExcerpt).toBe('');
+    expect(JSON.stringify(r5AgentAi.mock.lastCall[0].payload)).not.toContain('LEGACYCLIPUSER99');
+    expect(r5Prompts.at(-1)).not.toContain('LEGACYCLIPUSER99');
+    await r5Svc.dailyBriefing('judy', 'user', { force: true });
+    expect(JSON.stringify(r5AgentAi.mock.lastCall[0].payload)).not.toContain('LEGACYCLIPUSER99');
+    expect(r5Prompts.at(-1)).not.toContain('LEGACYCLIPUSER99');
+    // Refreshing the private RSS source upgrades BOTH cw_items and cw_clusters in place to sanitized v2 excerpts
+    r5FeedPhase = 'upgraded';
+    const r5SvcRefresh = makeService({
+      fetcher: async url => {
+        if (url === r5FeedUrl) return { status: 200, url, text: async () => r5RssUpgraded };
+        return { status: 200, url, text: async () => '<article><p>ok</p></article>' };
+      },
+      requestAi: r5AgentAi,
+      now: () => NOW + 25_000,
+    });
+    await r5SvcRefresh.refresh('judy', { domainId: 'priv-r5', force: true });
+    const legacyPrivAfter = r5SvcRefresh.feed('judy', { domainId: 'priv-r5' }).clusters.find(c => c.headline === 'Legacy Persisted Private Memo');
+    expect(legacyPrivAfter.summaryExcerpt).toContain('Refreshed clean excerpt');
+    expect(legacyPrivAfter.summaryExcerpt).not.toContain('LEGACYCLIPUSER99');
+    expect(legacyPrivAfter.summaryExcerpt).not.toContain('CLEANPASS99');
+    await r5SvcRefresh.aiBrief('judy', 'user', legacyPrivAfter.id, { skipArticleFetch: true, research: true, force: true });
+    expect(r5AgentAi.mock.lastCall[0].payload.summaryExcerpt).toContain('Refreshed clean excerpt');
+    expect(r5Prompts.at(-1)).toContain('Refreshed clean excerpt');
+    expect(r5Prompts.at(-1)).not.toContain('LEGACYCLIPUSER99');
+    expect(r5Prompts.at(-1)).not.toContain('CLEANPASS99');
+    await r5SvcRefresh.dailyBriefing('judy', 'user', { force: true });
+    expect(r5Prompts.at(-1)).toContain('Refreshed clean excerpt');
+    expect(r5Prompts.at(-1)).not.toContain('LEGACYCLIPUSER99');
+    expect(r5Prompts.at(-1)).not.toContain('CLEANPASS99');
+
+    // Round 27 (PR #2032 Round 6) Blocker #1/#2/#3/#4 isolated end-to-end regressions:
+    // (1) 40,000-char AI cap cutting inside authority right after `<code>//USER</code>`: Clean Article display stays 40k intact,
+    //     while source-boundary DOM slicing removes BOTH `<code>//CODECLOSEUSER</code>` AND `@intranet` before reaching the real Agent model prompt.
+    // (2) scanMarkup unfinished quoted attribute & unclosed raw `<script>` at EOF in private RSS CDATA with `<wbr>` inside trailing token:
+    //     marks truncated so cleanText rewinds across `<wbr>`, storing clean excerpt_version=2 with ZERO fragments in DB or model prompt.
+    // (3) Private follow-ups reject pre-upgrade brief-context cache rows (`hash(4, 'brief-context', ...)`) AND unversioned client-echoed `body.briefContext`,
+    //     while accepting fresh v2 `aiBrief` cache + `briefContextVersion: 2`.
+    // (4) Topic Radar scrubs `summaryExcerpt` BEFORE clipping to 1,000 chars and certifies `excerptVersion: 2` when `excerptProvenance: true`;
+    //     legacy Radar responses lacking `excerptVersion: 2` are persisted as `excerpt_version = 0` and omitted from subsequent private AI prompts.
+    const r6CodeClose40kHtml = `<article><p>https://cdn.example/${'a'.repeat(39_940)} Safe40kClose <code>//CODECLOSEUSER99</code>@intranet:8080/secret</p></article>`;
+    const r6UnfinishedAttrRss = `<rss><channel>
+      <item><title>Code Close 40k Article</title><link>https://private.example/r6-code-close</link><description>Close summary</description></item>
+      <item><title>Unfinished Quoted Attr Feed</title><link>https://private.example/r6-attr-eof</link><description><![CDATA[Safe attr prose //ATTRTRUNC<wbr>USER99<span title="unclosed@intranet:8080]]></description></item>
+      <item><title>Unclosed Script Eof Feed</title><link>https://private.example/r6-script-eof</link><description><![CDATA[Safe script prose //SCRIPTTRUNC<wbr>USER99<script>var x = "@intranet:8080";]]></description></item>
+    </channel></rss>`;
+    const r6Prompts = [];
+    const r6AgentAi = vi.fn(async ({ mode, perspective, language, payload }) => {
+      if (mode === 'topic_radar') {
+        const searchUrl = 'https://radar.example/fresh-story';
+        const longRadarExcerpt = `${'r'.repeat(982)} Safe radar //RADARCLIPUSER99@intranet:8080/api`;
+        const WebSearch = vi.fn().mockResolvedValue({ results: [{ url: searchUrl, title: 'Fresh Radar Story', snippet: 'Radar snippet' }] });
+        const radarAdapter = {
+          captureStream: vi.fn()
+            .mockImplementationOnce(async function* () { yield { type: 'tool_call', id: 'tc1', name: 'WebSearch', input: { query: 'radar', limit: 5 } }; })
+            .mockImplementationOnce(async function* () {}),
+          call: vi.fn().mockResolvedValue({
+            text: JSON.stringify({
+              items: [{ title: 'Fresh Radar Story', url: searchUrl, sourceName: 'RadarWire', summaryExcerpt: longRadarExcerpt }],
+              searchCount: 1,
+            }),
+          }),
+        };
+        const { result } = await runCosmicWebBriefing({
+          mode, perspective, language, payload,
+          config: { fastModel: 'test/fast', defaultModel: 'test/fast' },
+          adapter: radarAdapter, toolExecutors: { WebSearch },
+        });
+        return result;
+      }
+      const adapter = {
+        async call(req) {
+          r6Prompts.push(JSON.stringify(req));
+          if (mode === 'follow_up') {
+            return { text: JSON.stringify({ question: 'q', answer: 'ok', bullets: ['one'], followUps: ['q1'] }) };
+          }
+          return { text: JSON.stringify({ tldr: 'Fresh v2 private TLDR', bullets: ['one', 'two'], impact: 'ok', followUps: ['q1', 'q2'] }) };
+        },
+      };
+      const { result } = await runCosmicWebBriefing({
+        mode, perspective, language, payload,
+        config: { fastModel: 'test/fast', defaultModel: 'test/fast' },
+        adapter,
+      });
+      return result;
+    });
+    const r6FeedUrl = 'https://private.example/r6.xml';
+    const r6Svc = makeService({
+      fetcher: async url => {
+        if (url === r6FeedUrl) return { status: 200, url, text: async () => r6UnfinishedAttrRss };
+        if (url.endsWith('/r6-code-close')) return { status: 200, url, text: async () => r6CodeClose40kHtml };
+        return { status: 200, url, text: async () => '<article><p>ok</p></article>' };
+      },
+      requestAi: r6AgentAi,
+      now: () => NOW + 60_000,
+    });
+    await r6Svc.savePreferences('kate', {
+      enabledDomainIds: [],
+      customDomains: [
+        { id: 'priv-r6', name: 'Priv R6', colorToken: 'cyan', enabled: true, keywords: [], rssUrls: [r6FeedUrl] },
+        { id: 'radar-r6', name: 'Radar R6', colorToken: 'gold', enabled: true, keywords: ['radar'], aiRadar: true, rssUrls: [] },
+      ],
+    });
+    await r6Svc.refresh('kate', { domainId: 'priv-r6', force: true });
+    agents.set('v2-kate', {
+      ownerId: 'kate', name: 'v2-kate',
+      capabilities: ['cosmic_web_briefing', 'cosmic_web_follow_up', 'cosmic_web_radar', 'cosmic_web_research'],
+      encryptOutbound: false, ws: { readyState: 1, send: () => {} },
+    });
+    const kateFeed = r6Svc.feed('kate', { domainId: 'priv-r6' });
+    const r6CodeCloseCluster = kateFeed.clusters.find(c => c.headline === 'Code Close 40k Article');
+    const r6AttrCluster = kateFeed.clusters.find(c => c.headline === 'Unfinished Quoted Attr Feed');
+    const r6ScriptCluster = kateFeed.clusters.find(c => c.headline === 'Unclosed Script Eof Feed');
+
+    // (1) 40,000-char cap cutting in authority after `<code>//CODECLOSEUSER99</code>`
+    const r6CodeCloseArt = await r6Svc.article('kate', r6CodeCloseCluster.id);
+    expect(r6CodeCloseArt.markdown).toHaveLength(40_000);
+    expect(r6CodeCloseArt.truncated).toBe(true);
+    expect(r6CodeCloseArt.markdown).toContain('` //CODECLOSEUSER99 `@');
+    await r6Svc.aiBrief('kate', 'user', r6CodeCloseCluster.id, { research: true });
+    expect(r6AgentAi.mock.lastCall[0].payload.articleMarkdown).toContain('Safe40kClose');
+    expect(JSON.stringify(r6AgentAi.mock.lastCall[0].payload)).not.toContain('CODECLOSEUSER99');
+    expect(r6Prompts.at(-1)).toContain('Safe40kClose');
+    expect(r6Prompts.at(-1)).not.toContain('CODECLOSEUSER99');
+
+    // (2) Private RSS unfinished quoted attribute & unclosed `<script>` at EOF with `<wbr>` inside trailing token
+    expect(r6AttrCluster.summaryExcerpt).toBe('Safe attr prose');
+    expect(r6AttrCluster.summaryExcerpt).not.toContain('ATTRTRUNC');
+    expect(r6AttrCluster.summaryExcerpt).not.toContain('USER99');
+    expect(r6ScriptCluster.summaryExcerpt).toBe('Safe script prose');
+    expect(r6ScriptCluster.summaryExcerpt).not.toContain('SCRIPTTRUNC');
+    expect(r6ScriptCluster.summaryExcerpt).not.toContain('USER99');
+    await r6Svc.aiBrief('kate', 'user', r6AttrCluster.id, { skipArticleFetch: true, research: true });
+    expect(r6Prompts.at(-1)).toContain('Safe attr prose');
+    expect(r6Prompts.at(-1)).not.toContain('ATTRTRUNC');
+    expect(r6Prompts.at(-1)).not.toContain('USER99');
+
+    // (3) Pre-upgrade brief-context cache row (`hash(4, 'brief-context', ...)`) AND unversioned client-echoed `body.briefContext`
+    //     are BOTH rejected on private follow-up; fresh v2 `aiBrief` returns `briefContextVersion: 2` and writes versioned cache key.
+    const legacyBriefKey = createHash('sha256').update(JSON.stringify([4, 'brief-context', r6ScriptCluster.id, r6CodeCloseArt.itemId, 'v2-kate'])).digest('hex');
+    const scriptDet = await r6Svc.cluster('kate', r6ScriptCluster.id);
+    const scriptItemId = scriptDet.items[0].id;
+    const legacyScriptBriefKey = createHash('sha256').update(JSON.stringify([4, 'brief-context', r6ScriptCluster.id, scriptItemId, 'v2-kate'])).digest('hex');
+    db.setAiCache('kate', legacyBriefKey, 'Pre-upgrade TLDR //LEGACYTLDRCACHE99', NOW + HOUR);
+    db.setAiCache('kate', legacyScriptBriefKey, 'Pre-upgrade TLDR //LEGACYTLDRCACHE99', NOW + HOUR);
+    // Unversioned client-echoed briefContext + legacy cached TLDR must BOTH be omitted
+    await r6Svc.followUp('kate', 'user', r6ScriptCluster.id, {
+      question: 'Follow up before v2 brief?',
+      briefContext: 'Unversioned client echo //LEGACYCLIENTECHO99',
+      research: true,
+    });
+    expect(r6AgentAi.mock.lastCall[0].payload.briefContext).toBeUndefined();
+    expect(r6Prompts.at(-1)).not.toContain('LEGACYTLDRCACHE99');
+    expect(r6Prompts.at(-1)).not.toContain('LEGACYCLIENTECHO99');
+    // Fresh v2 aiBrief returns briefContextVersion: 2 and stores under v2 key -> subsequent follow-up gets fresh v2 TLDR
+    const freshV2Brief = await r6Svc.aiBrief('kate', 'user', r6ScriptCluster.id, { skipArticleFetch: true, research: true });
+    expect(freshV2Brief.briefContextVersion).toBe(PRIVATE_BRIEF_CONTEXT_VERSION);
+    await r6Svc.followUp('kate', 'user', r6ScriptCluster.id, { question: 'Follow up after v2 brief?', research: true });
+    expect(r6AgentAi.mock.lastCall[0].payload.briefContext).toBe('Fresh v2 private TLDR');
+    expect(r6Prompts.at(-1)).toContain('Fresh v2 private TLDR');
+    expect(r6Prompts.at(-1)).not.toContain('LEGACYTLDRCACHE99');
+
+    // (4a) Real Radar Agent (`topic_radar`) scrubs BEFORE clipping to 1,000 chars and certifies `excerptVersion: 2`
+    const radarRes = await r6Svc.radarScan('kate', 'user', 'radar-r6');
+    expect(radarRes.added).toBe(1);
+    const radarCluster = r6Svc.feed('kate', { domainId: 'radar-r6' }).clusters.find(c => c.headline === 'Fresh Radar Story');
+    expect(radarCluster.summaryExcerpt).toContain('Safe radar');
+    expect(radarCluster.summaryExcerpt).not.toContain('RADARCLIPUSER99');
+    await r6Svc.aiBrief('kate', 'user', radarCluster.id, { skipArticleFetch: true, research: true });
+    expect(r6Prompts.at(-1)).toContain('Safe radar');
+    expect(r6Prompts.at(-1)).not.toContain('RADARCLIPUSER99');
+
+    // (4b) Legacy Radar Agent response WITHOUT `excerptVersion: 2` (pre-clipped username fragment) is persisted with `excerpt_version = 0`
+    //      so display keeps working while subsequent briefing Agent omits the uncertified Radar excerpt!
+    const legacyRadarReqAi = vi.fn(async req => {
+      if (req.mode === 'topic_radar') {
+        return {
+          items: [{
+            title: 'Legacy Radar Uncertified Story',
+            url: 'https://radar.example/legacy-radar-story',
+            sourceName: 'OldRadar',
+            summaryExcerpt: 'Legacy radar display //LEGACYRADARUSER99',
+          }],
+          searchCount: 1,
+        };
+      }
+      return r6AgentAi(req);
+    });
+    const legacyRadarSvc = makeService({
+      requestAi: legacyRadarReqAi,
+      now: () => NOW + 180_000,
+    });
+    const legacyRadarRes = await legacyRadarSvc.radarScan('kate', 'user', 'radar-r6');
+    expect(legacyRadarRes.added).toBe(1);
+    const legacyRadarCluster = legacyRadarSvc.feed('kate', { domainId: 'radar-r6' }).clusters.find(c => c.headline === 'Legacy Radar Uncertified Story');
+    expect(legacyRadarCluster.summaryExcerpt).toBe('Legacy radar display');
+    expect(legacyRadarCluster.summaryExcerpt).not.toContain('LEGACYRADARUSER99');
+    await legacyRadarSvc.aiBrief('kate', 'user', legacyRadarCluster.id, { skipArticleFetch: true, research: true });
+    expect(r6Prompts.at(-1)).not.toContain('Legacy radar display');
+    expect(r6Prompts.at(-1)).not.toContain('LEGACYRADARUSER99');
+
+    // Round 28 (PR #2032 Round 7) Blocker #1/#2/#3/#4 isolated end-to-end regressions:
+    // (1) Complete URL split by inline `<code>` BEFORE the 40k cutoff (and in short non-truncated articles, plus unclosed hidden `<noscript>`):
+    //     Clean Article display remains intact (40,000 chars / inline code preserved), while DOM-redacted `aiMarkdown` omits all credential markers
+    //     before reaching the real Agent model prompt; cached v2 (`extractorVersion: 2`) rows are rejected for private AI.
+    // (2) RSS `cleanText` no longer inserts synthetic spaces on inline tags (`<wbr>`/`<code>`) AND treats `<iframe>`/`<noscript>` as raw discarded elements:
+    //     complete `<wbr>`-split authorities and unclosed `<iframe>` at EOF leave ZERO credential fragments in SQLite or model prompts.
+    // (3) Private `followUp` rejects client-claimed `briefContextVersion` without a valid server-minted HMAC `briefContextToken`, rejects cross-item/cluster/user/tampered/expired tokens,
+    //     accepts genuine `briefContextToken` across Agent switch / cache eviction, scrubs >400-char TLDR BEFORE clipping in real Agent `brief`, and omits context from uncertified legacy Agents.
+    // (4) Topic Radar redacts `WebSearch` evidence BEFORE the 1,500-char snippet cap and fails closed on upstream-truncated ambiguous tokens before the Radar model sees or quotes them,
+    //     and Server rejects old `excerptVersion: 2` Radar outputs (persisting as `0` and omitting from subsequent private AI prompts).
+    const r7Inline40kHtml = `<article><p>https://cdn.example/${'a'.repeat(39_890)} SafeR7Inline40k <code>//R7INLINE40KUSER99</code>@intranet:8080/secret after ${'b'.repeat(90)}</p></article>`;
+    const r7ShortInlineHtml = `<article><p>Short non-truncated private memo with enough prose for full quality. See <code>//R7SHORTCODE99</code>@intranet:8080/api and <a href="https://intranet.internal/doc?tok=R7HREF99"><em>//R7LINKEM99</em>@intranet:8080</a> and www.<code>r7subsecret</code>.example/x end.</p></article>`;
+    const r7NoscriptEofHtml = `<article><p>Safe noscript lead <code>//R7NOSCRIPT99</code><wbr><noscript>@intranet:8080`;
+    const r7FeedRss = `<rss><channel>
+      <item><title>Alpha 40k Code Boundary</title><link>https://private.example/r7-inline-40k</link><description>Inline 40k desc</description></item>
+      <item><title>Beta Compact Private Memo</title><link>https://private.example/r7-short-inline</link><description>Short inline desc</description></item>
+      <item><title>Gamma Hidden Noscript Tail</title><link>https://private.example/r7-noscript-eof</link><description>Noscript eof desc</description></item>
+      <item><title>Delta Complete Wbr Split</title><link>https://private.example/r7-wbr-complete</link><description><![CDATA[Safe wbr complete //R7WBRFULL99<wbr>@intranet:8080/api and <code>//R7RSSCODE99</code>@intranet:8080/x tail]]></description></item>
+      <item><title>Epsilon Unclosed Iframe Feed</title><link>https://private.example/r7-iframe-eof</link><description><![CDATA[Safe iframe prose //R7IFRAMETRUNC<wbr>USER99<iframe src="https://x">@intranet:8080]]></description></item>
+    </channel></rss>`;
+    const r7Prompts = [];
+    const r7RadarSearchUrl = 'https://radar.example/r7-search-1500';
+    const r7RadarUpstreamUrl = 'https://radar.example/r7-search-upstream';
+    const r7AgentAi = vi.fn(async ({ mode, perspective, language, payload }) => {
+      if (mode === 'topic_radar') {
+        const WebSearch = vi.fn().mockResolvedValue({
+          provider: 'generic',
+          results: [
+            { url: r7RadarSearchUrl, title: 'R7 1500 Snippet Story', snippet: `${'s'.repeat(1474)} SafeR7Search //R7SEARCH1500USER99@intranet:8080/api` },
+            { url: r7RadarUpstreamUrl, title: 'R7 Upstream Trunc Story', snippet: 'SafeR7Upstream //R7UPSTREAM99... end //R7UPSTREAMEOF99' },
+          ],
+        });
+        const radarAdapter = {
+          captureStream: vi.fn()
+            .mockImplementationOnce(async function* () { yield { type: 'tool_call', id: 'r7tc1', name: 'WebSearch', input: { query: 'r7 radar', limit: 5 } }; })
+            .mockImplementationOnce(async function* () {}),
+          call: vi.fn().mockImplementation(async req => {
+            r7Prompts.push(JSON.stringify(req));
+            const toolMsg = req.messages.find(m => m.role === 'tool')?.content ?? '';
+            const parsedTool = JSON.parse(toolMsg.replace(/^<untrusted_web_result>\n|\n<\/untrusted_web_result>$/g, ''));
+            return {
+              text: JSON.stringify({
+                items: parsedTool.results.map(r => ({
+                  title: r.title, url: r.url, sourceName: 'R7Wire', summaryExcerpt: r.snippet.slice(-120),
+                })),
+                searchCount: 1,
+              }),
+            };
+          }),
+        };
+        const { result } = await runCosmicWebBriefing({
+          mode, perspective, language, payload,
+          config: { fastModel: 'test/fast', defaultModel: 'test/fast' },
+          adapter: radarAdapter, toolExecutors: { WebSearch },
+        });
+        return result;
+      }
+      const adapter = {
+        async call(req) {
+          r7Prompts.push(JSON.stringify(req));
+          if (mode === 'follow_up') {
+            return { text: JSON.stringify({ question: 'q', answer: 'ok', bullets: ['one'], followUps: ['q1'] }) };
+          }
+          // Return a >400-char TLDR with a credential split across the 400-char cap (Blocker #3)
+          return {
+            text: JSON.stringify({
+              tldr: `${'t'.repeat(374)} SafeR7Tldr //R7TLDR400CLIP99@intranet:8080/api`,
+              bullets: ['Safe bullet one', 'Safe bullet two'],
+              impact: 'Safe impact',
+              followUps: ['q1', 'q2'],
+            }),
+          };
+        },
+      };
+      const { result } = await runCosmicWebBriefing({
+        mode, perspective, language, payload,
+        config: { fastModel: 'test/fast', defaultModel: 'test/fast' },
+        adapter,
+      });
+      return result;
+    });
+    const r7FeedUrl = 'https://private.example/r7.xml';
+    let r7Clock = NOW + 240_000;
+    const r7Svc = makeService({
+      fetcher: async url => {
+        if (url === r7FeedUrl) return { status: 200, url, text: async () => r7FeedRss };
+        if (url.endsWith('/r7-inline-40k')) return { status: 200, url, text: async () => r7Inline40kHtml };
+        if (url.endsWith('/r7-short-inline')) return { status: 200, url, text: async () => r7ShortInlineHtml };
+        if (url.endsWith('/r7-noscript-eof')) return { status: 200, url, text: async () => r7NoscriptEofHtml };
+        return { status: 200, url, text: async () => '<article><p>ok</p></article>' };
+      },
+      requestAi: r7AgentAi,
+      now: () => r7Clock,
+    });
+    await r7Svc.savePreferences('leo', {
+      enabledDomainIds: [],
+      customDomains: [
+        { id: 'priv-r7', name: 'Priv R7', colorToken: 'cyan', enabled: true, keywords: [], rssUrls: [r7FeedUrl] },
+        { id: 'radar-r7', name: 'Radar R7', colorToken: 'gold', enabled: true, keywords: ['r7'], aiRadar: true, rssUrls: [] },
+      ],
+    });
+    await r7Svc.refresh('leo', { domainId: 'priv-r7', force: true });
+    agents.set('v3-leo-a', {
+      ownerId: 'leo', name: 'v3-leo-a',
+      capabilities: ['cosmic_web_briefing', 'cosmic_web_follow_up', 'cosmic_web_radar', 'cosmic_web_research'],
+      encryptOutbound: false, ws: { readyState: 1, send: () => {} },
+    });
+    agents.set('v3-leo-b', {
+      ownerId: 'leo', name: 'v3-leo-b',
+      capabilities: ['cosmic_web_briefing', 'cosmic_web_follow_up'],
+      encryptOutbound: false, ws: { readyState: 1, send: () => {} },
+    });
+    const leoFeed = r7Svc.feed('leo', { domainId: 'priv-r7' });
+    const r7Inline40kCluster = leoFeed.clusters.find(c => c.headline === 'Alpha 40k Code Boundary');
+    const r7ShortInlineCluster = leoFeed.clusters.find(c => c.headline === 'Beta Compact Private Memo');
+    const r7NoscriptCluster = leoFeed.clusters.find(c => c.headline === 'Gamma Hidden Noscript Tail');
+    const r7WbrCluster = leoFeed.clusters.find(c => c.headline === 'Delta Complete Wbr Split');
+    const r7IframeCluster = leoFeed.clusters.find(c => c.headline === 'Epsilon Unclosed Iframe Feed');
+
+    // (1a) Complete inline-code URL BEFORE 40k cutoff: Clean Article stays exact 40,000 chars intact, while real Agent prompt omits credential
+    const r7Inline40kArt = await r7Svc.article('leo', r7Inline40kCluster.id);
+    expect(r7Inline40kArt.markdown).toHaveLength(40_000);
+    expect(r7Inline40kArt.truncated).toBe(true);
+    expect(r7Inline40kArt.extractorVersion).toBe(ARTICLE_EXTRACTOR_VERSION);
+    expect(r7Inline40kArt.markdown).toContain('` //R7INLINE40KUSER99 `@intranet:8080/secret');
+    expect(r7Inline40kArt.aiMarkdown).toBeUndefined();
+    await r7Svc.aiBrief('leo', 'user', r7Inline40kCluster.id, { research: true });
+    expect(r7Prompts.at(-1)).toContain('SafeR7Inline40k');
+    expect(r7Prompts.at(-1)).not.toContain('R7INLINE40KUSER99');
+    expect(r7Prompts.at(-1)).not.toContain('cdn.example');
+
+    // (1b) Short non-truncated private article (`truncated: false`) with inline `<code>` / `<a><em>` / `www.<code>`:
+    //      Clean Article display preserves inline code & link, while private AI prompt uses DOM-redacted aiMarkdown
+    const r7ShortArt = await r7Svc.article('leo', r7ShortInlineCluster.id);
+    expect(r7ShortArt.truncated).toBe(false);
+    expect(r7ShortArt.markdown).toContain('` //R7SHORTCODE99 `@intranet:8080/api');
+    expect(r7ShortArt.markdown).toContain('R7HREF99');
+    await r7Svc.aiBrief('leo', 'user', r7ShortInlineCluster.id, { research: true });
+    expect(r7Prompts.at(-1)).toContain('Short non-truncated private memo');
+    for (const secret of ['R7SHORTCODE99', 'R7HREF99', 'R7LINKEM99', 'r7subsecret']) {
+      expect(r7Prompts.at(-1)).not.toContain(secret);
+    }
+
+    // (1c) Unclosed hidden `<noscript>` at EOF after `<code>//R7NOSCRIPT99</code><wbr>`: rewinds across `<wbr>` & `<code>`
+    await r7Svc.aiBrief('leo', 'user', r7NoscriptCluster.id, { research: true });
+    expect(r7Prompts.at(-1)).toContain('Safe noscript lead');
+    expect(r7Prompts.at(-1)).not.toContain('R7NOSCRIPT99');
+
+    // (1d) Pre-upgrade v2 article cache (`extractorVersion: 2`, no DOM-redacted `aiMarkdown`) is NOT trusted by private `aiBrief`
+    db.setArticleCache('leo', r7ShortArt.itemId, {
+      title: 'Old v2', markdown: 'Old v2 ` //OLDV2CODE99 `@intranet:8080', extractorVersion: 2, truncated: false,
+      quality: 'full', itemId: r7ShortArt.itemId, clusterId: r7ShortInlineCluster.id, summaryExcerpt: 'Old',
+    }, r7Clock + HOUR);
+    await r7Svc.aiBrief('leo', 'user', r7ShortInlineCluster.id, { skipArticleFetch: true, research: true, force: true });
+    expect(r7AgentAi.mock.lastCall[0].payload.articleMarkdown).toBeUndefined();
+    expect(r7Prompts.at(-1)).not.toContain('OLDV2CODE99');
+
+    // (2a) Complete RSS authority split by `<wbr>` and `<code>`: redacted cleanly before persisting as trusted v3
+    expect(r7WbrCluster.summaryExcerpt).toContain('Safe wbr complete');
+    expect(r7WbrCluster.summaryExcerpt).not.toContain('R7WBRFULL99');
+    expect(r7WbrCluster.summaryExcerpt).not.toContain('R7RSSCODE99');
+    await r7Svc.aiBrief('leo', 'user', r7WbrCluster.id, { skipArticleFetch: true, research: true });
+    expect(r7Prompts.at(-1)).toContain('Safe wbr complete');
+    expect(r7Prompts.at(-1)).not.toContain('R7WBRFULL99');
+    expect(r7Prompts.at(-1)).not.toContain('R7RSSCODE99');
+
+    // (2b) Unclosed `<iframe>` at EOF in RSS CDATA with `<wbr>`: triggers `meta.truncated` rewind across `<wbr>`
+    expect(r7IframeCluster.summaryExcerpt).toBe('Safe iframe prose');
+    expect(r7IframeCluster.summaryExcerpt).not.toContain('R7IFRAMETRUNC');
+    expect(r7IframeCluster.summaryExcerpt).not.toContain('USER99');
+    await r7Svc.aiBrief('leo', 'user', r7IframeCluster.id, { skipArticleFetch: true, research: true });
+    expect(r7Prompts.at(-1)).toContain('Safe iframe prose');
+    expect(r7Prompts.at(-1)).not.toContain('R7IFRAMETRUNC');
+
+    // (3a) Private followUp rejects version-only client echo (even claiming current PRIVATE_BRIEF_CONTEXT_VERSION)
+    await r7Svc.followUp('leo', 'user', r7WbrCluster.id, {
+      question: 'Version only?',
+      briefContext: 'Forged v3 client text //FORGEDV3ECHO99',
+      briefContextVersion: PRIVATE_BRIEF_CONTEXT_VERSION,
+      agentId: 'v3-leo-b',
+      research: true,
+    });
+    expect(r7AgentAi.mock.lastCall[0].payload.briefContext).toBeUndefined();
+    expect(r7Prompts.at(-1)).not.toContain('FORGEDV3ECHO99');
+
+    // (3b) Fresh v3 `aiBrief` scrubs >400-char TLDR BEFORE clipping, emits certified `briefContextVersion: 3` + HMAC `briefContextToken`,
+    //      and authenticated token works across Agent switch while rejecting tampered, cross-cluster, and expired tokens!
+    const r7CertBrief = await r7Svc.aiBrief('leo', 'user', r7WbrCluster.id, { skipArticleFetch: true, agentId: 'v3-leo-a', research: true, force: true });
+    expect(r7CertBrief.briefContextVersion).toBe(PRIVATE_BRIEF_CONTEXT_VERSION);
+    expect(typeof r7CertBrief.briefContextToken).toBe('string');
+    expect(r7CertBrief.tldr).toContain('SafeR7Tldr');
+    expect(r7CertBrief.tldr).not.toContain('R7TLDR400');
+    // Server-cached followUp on same Agent (`v3-leo-a`) receives scrubbed TLDR
+    await r7Svc.followUp('leo', 'user', r7WbrCluster.id, { question: 'Same agent cached?', agentId: 'v3-leo-a', research: true });
+    expect(r7AgentAi.mock.lastCall[0].payload.briefContext).toContain('SafeR7Tldr');
+    expect(r7Prompts.at(-1)).not.toContain('R7TLDR400');
+    // Different Agent (`v3-leo-b`, cache miss) with genuine source-bound `briefContextToken` -> ACCEPTED
+    await r7Svc.followUp('leo', 'user', r7WbrCluster.id, {
+      question: 'Different agent with valid token?',
+      briefContext: r7CertBrief.tldr,
+      briefContextToken: r7CertBrief.briefContextToken,
+      agentId: 'v3-leo-b',
+      research: true,
+    });
+    expect(r7AgentAi.mock.lastCall[0].payload.briefContext).toContain('SafeR7Tldr');
+    expect(r7Prompts.at(-1)).not.toContain('R7TLDR400');
+    // Tampered briefContext with original token -> REJECTED
+    await r7Svc.followUp('leo', 'user', r7WbrCluster.id, {
+      question: 'Tampered text?',
+      briefContext: `${r7CertBrief.tldr} //TAMPERED99`,
+      briefContextToken: r7CertBrief.briefContextToken,
+      agentId: 'v3-leo-b',
+      research: true,
+    });
+    expect(r7AgentAi.mock.lastCall[0].payload.briefContext).toBeUndefined();
+    expect(r7Prompts.at(-1)).not.toContain('TAMPERED99');
+    // Cross-cluster replay of valid token onto `r7IframeCluster` -> REJECTED
+    await r7Svc.followUp('leo', 'user', r7IframeCluster.id, {
+      question: 'Cross-cluster replay?',
+      briefContext: r7CertBrief.tldr,
+      briefContextToken: r7CertBrief.briefContextToken,
+      agentId: 'v3-leo-b',
+      research: true,
+    });
+    expect(r7AgentAi.mock.lastCall[0].payload.briefContext).toBeUndefined();
+    // Expired token -> REJECTED
+    r7Clock += 7 * HOUR;
+    await r7Svc.followUp('leo', 'user', r7WbrCluster.id, {
+      question: 'Expired token?',
+      briefContext: r7CertBrief.tldr,
+      briefContextToken: r7CertBrief.briefContextToken,
+      agentId: 'v3-leo-b',
+      research: true,
+    });
+    expect(r7AgentAi.mock.lastCall[0].payload.briefContext).toBeUndefined();
+    r7Clock -= 7 * HOUR;
+
+    // (3c) Legacy Agent returning private TLDR WITHOUT `briefContextVersion: 3` (pre-clipped fragment):
+    //      Server does NOT cache `briefKey` and does NOT mint `briefContextToken` -> subsequent followUp omits context!
+    const legacyTldrReqAi = vi.fn(async req => {
+      if (req.mode === 'brief') {
+        return {
+          tldr: `${'z'.repeat(380)} //LEGACYTLDR400CLIP99`,
+          sections: [{ heading: 'H', body: 'Body' }],
+          bullets: ['b1', 'b2'], impact: 'ok', media: [], communityHighlights: [], citations: [],
+          followUps: ['q1', 'q2'], researched: false, searchCount: 0, evidenceCount: 0, fullMarkdown: 'Safe md',
+        };
+      }
+      return r7AgentAi(req);
+    });
+    const legacyTldrSvc = makeService({ requestAi: legacyTldrReqAi, now: () => r7Clock + 10_000 });
+    const legacyBriefRes = await legacyTldrSvc.aiBrief('leo', 'user', r7IframeCluster.id, { skipArticleFetch: true, agentId: 'v3-leo-b', research: true, force: true });
+    expect(legacyBriefRes.briefContextToken).toBeUndefined();
+    expect(legacyBriefRes.briefContextVersion).toBeUndefined();
+    await legacyTldrSvc.followUp('leo', 'user', r7IframeCluster.id, {
+      question: 'Follow up after legacy agent brief?',
+      briefContext: legacyBriefRes.tldr,
+      agentId: 'v3-leo-b',
+      research: true,
+    });
+    expect(r7AgentAi.mock.lastCall[0].payload.briefContext).toBeUndefined();
+    expect(r7Prompts.at(-1)).not.toContain('LEGACYTLDR400CLIP99');
+
+    // (4a) Real Radar Agent (`topic_radar`) + `radarScan()` + subsequent `aiBrief()`:
+    //      WebSearch 1,500-char snippet boundary AND upstream-truncated ambiguous tokens are redacted BEFORE Radar model sees or quotes them!
+    const r7RadarRes = await r7Svc.radarScan('leo', 'user', 'radar-r7');
+    expect(r7RadarRes.added).toBe(2);
+    const r7Radar1500Cluster = r7Svc.feed('leo', { domainId: 'radar-r7' }).clusters.find(c => c.headline === 'R7 1500 Snippet Story');
+    const r7RadarUpCluster = r7Svc.feed('leo', { domainId: 'radar-r7' }).clusters.find(c => c.headline === 'R7 Upstream Trunc Story');
+    expect(r7Radar1500Cluster.summaryExcerpt).toContain('SafeR7Search');
+    expect(r7Radar1500Cluster.summaryExcerpt).not.toContain('R7SEARCH1500');
+    expect(r7RadarUpCluster.summaryExcerpt).toContain('SafeR7Upstream');
+    expect(r7RadarUpCluster.summaryExcerpt).not.toContain('R7UPSTREAM99');
+    expect(r7RadarUpCluster.summaryExcerpt).not.toContain('R7UPSTREAMEOF99');
+    await r7Svc.aiBrief('leo', 'user', r7Radar1500Cluster.id, { skipArticleFetch: true, agentId: 'v3-leo-a', research: true });
+    expect(r7Prompts.at(-1)).toContain('SafeR7Search');
+    expect(r7Prompts.at(-1)).not.toContain('R7SEARCH1500');
+    await r7Svc.aiBrief('leo', 'user', r7RadarUpCluster.id, { skipArticleFetch: true, agentId: 'v3-leo-a', research: true });
+    expect(r7Prompts.at(-1)).toContain('SafeR7Upstream');
+    expect(r7Prompts.at(-1)).not.toContain('R7UPSTREAM99');
+    expect(r7Prompts.at(-1)).not.toContain('R7UPSTREAMEOF99');
+
+    // (4b) Old `excerptVersion: 2` Radar Agent response (from pre-Round-7 Agent) is persisted as `0` and omitted from private AI prompts!
+    const oldV2RadarReqAi = vi.fn(async req => {
+      if (req.mode === 'topic_radar') {
+        return {
+          items: [{
+            title: 'Old V2 Radar Story',
+            url: 'https://radar.example/old-v2-radar',
+            sourceName: 'V2Radar',
+            summaryExcerpt: 'Old v2 radar //OLDV2RADAR1500CLIP99',
+          }],
+          searchCount: 1,
+          excerptVersion: 2,
+        };
+      }
+      return r7AgentAi(req);
+    });
+    const oldV2RadarSvc = makeService({ requestAi: oldV2RadarReqAi, now: () => r7Clock + 120_000 });
+    await oldV2RadarSvc.radarScan('leo', 'user', 'radar-r7');
+    const oldV2RadarCluster = oldV2RadarSvc.feed('leo', { domainId: 'radar-r7' }).clusters.find(c => c.headline === 'Old V2 Radar Story');
+    expect(oldV2RadarCluster.summaryExcerpt).toBe('Old v2 radar');
+    expect(oldV2RadarCluster.summaryExcerpt).not.toContain('OLDV2RADAR1500CLIP99');
+    await oldV2RadarSvc.aiBrief('leo', 'user', oldV2RadarCluster.id, { skipArticleFetch: true, agentId: 'v3-leo-a', research: true });
+    expect(r7Prompts.at(-1)).not.toContain('Old v2 radar');
+    expect(r7Prompts.at(-1)).not.toContain('OLDV2RADAR1500CLIP99');
+
+    // Round 29 (PR #2032 Round 8) Blocker #1/#2/#3 isolated end-to-end regressions:
+    // (1) Empty/whitespace/`<br>`-only blocks (`<p></p>`, `<p>  </p>`, `<div><br></div>`, `<span> </span>`, `<em> </em>`),
+    //     nested block in `<code>`, and edge-trimmed spaces in `<code>`/`<em>` no longer split DOM redaction runs;
+    //     Clean Article display remains intact while real Agent model prompt receives ZERO credential markers; v3 caches are rejected.
+    // (2) Nesting-aware discarded container skipping (`<template><template></template>discarded </template>`, `<noscript>`, `<template><script>...</script></template>`, unclosed nested `<template>`):
+    //     persists clean v4 excerpt with ZERO markers or discarded text and invalidates pre-fix v3 DB excerpts.
+    // (3) Attached balanced abbreviation markers (`//TLDRMARKER(…) next fact.`, `//RADARMARKER[…] next fact.`, `//RADARMARKER[...] next fact.`)
+    //     in private TLDR -> cross-Agent HMAC followUp AND real Radar WebSearch -> SQLite -> subsequent private aiBrief; rejects old v3 provenance.
+    const r8EmptyBlocksHtml = '<article>Safe r8 article <code>//R8ARTICLEMARKER99</code><p></p>@intranet:8080/api and <code>//R8WSP99</code><p>   </p>@intranet:8080/x and <code>//R8DIVBR99</code><div><br></div>@intranet:8080/y and <code><p>//R8CODEP99</p></code>@intranet:8080/z and <code>//R8CODESP99 </code>@intranet:8080/w and <em>//R8EMTRAIL99 </em><code>@intranet:8080/q</code> end.</article>';
+    const r8FeedRss = `<rss><channel>
+      <item><title>Zeta Empty Block Article</title><link>https://private.example/r8-empty-blocks</link><description>Empty block desc</description></item>
+      <item><title>Eta Nested Template Feed</title><link>https://private.example/r8-nested-template</link><description><![CDATA[Safe RSS //R8RSSMARKER99<wbr><template><template></template>discarded </template>@intranet:8080/api and //R8TSMARKER99<wbr><template><script>var s = "</template>";</script>discarded </template>@intranet:8080/b after.]]></description></item>
+      <item><title>Theta Unclosed Nested Template</title><link>https://private.example/r8-unclosed-template</link><description><![CDATA[Safe unclosed //R8UNCLOSEDTPL99<wbr><template><template></template>@intranet:8080]]></description></item>
+    </channel></rss>`;
+    const r8Prompts = [];
+    const r8RadarUrl = 'https://radar.example/r8-abbr';
+    const r8AgentAi = vi.fn(async ({ mode, perspective, language, payload }) => {
+      if (mode === 'topic_radar') {
+        const WebSearch = vi.fn().mockResolvedValue({
+          provider: 'generic',
+          results: [{ url: r8RadarUrl, title: 'R8 Abbr Radar Story', snippet: 'SafeR8Radar //R8RADARMARKER99[…] //R8RADARBRK99[...] //R8RADARPAR99(…) next fact.' }],
+        });
+        const radarAdapter = {
+          captureStream: vi.fn()
+            .mockImplementationOnce(async function* () { yield { type: 'tool_call', id: 'r8tc1', name: 'WebSearch', input: { query: 'r8 abbr', limit: 5 } }; })
+            .mockImplementationOnce(async function* () {}),
+          call: vi.fn().mockImplementation(async req => {
+            r8Prompts.push(JSON.stringify(req));
+            const toolMsg = req.messages.find(m => m.role === 'tool')?.content ?? '';
+            const parsedTool = JSON.parse(toolMsg.replace(/^<untrusted_web_result>\n|\n<\/untrusted_web_result>$/g, ''));
+            return {
+              text: JSON.stringify({
+                items: parsedTool.results.map(r => ({
+                  title: r.title, url: r.url, sourceName: 'R8Wire', summaryExcerpt: r.snippet,
+                })),
+                searchCount: 1,
+              }),
+            };
+          }),
+        };
+        const { result } = await runCosmicWebBriefing({
+          mode, perspective, language, payload,
+          config: { fastModel: 'test/fast', defaultModel: 'test/fast' },
+          adapter: radarAdapter, toolExecutors: { WebSearch },
+        });
+        return result;
+      }
+      const adapter = {
+        async call(req) {
+          r8Prompts.push(JSON.stringify(req));
+          if (mode === 'follow_up') {
+            return { text: JSON.stringify({ question: 'q', answer: 'ok', bullets: ['one'], followUps: ['q1'] }) };
+          }
+          return {
+            text: JSON.stringify({
+              tldr: 'SafeR8Tldr //R8TLDRPAR99(…) //R8TLDRBRK99[…] //R8TLDRDOT99[...] next fact.',
+              bullets: ['Safe bullet one', 'Safe bullet two'],
+              impact: 'Safe impact',
+              followUps: ['q1', 'q2'],
+            }),
+          };
+        },
+      };
+      const { result } = await runCosmicWebBriefing({
+        mode, perspective, language, payload,
+        config: { fastModel: 'test/fast', defaultModel: 'test/fast' },
+        adapter,
+      });
+      return result;
+    });
+    const r8FeedUrl = 'https://private.example/r8.xml';
+    const r8Clock = NOW + 400_000;
+    const r8Svc = makeService({
+      fetcher: async url => {
+        if (url === r8FeedUrl) return { status: 200, url, text: async () => r8FeedRss };
+        if (url.endsWith('/r8-empty-blocks')) return { status: 200, url, text: async () => r8EmptyBlocksHtml };
+        return { status: 200, url, text: async () => '<article><p>ok</p></article>' };
+      },
+      requestAi: r8AgentAi,
+      now: () => r8Clock,
+    });
+    await r8Svc.savePreferences('maya', {
+      enabledDomainIds: [],
+      customDomains: [
+        { id: 'priv-r8', name: 'Priv R8', colorToken: 'cyan', enabled: true, keywords: [], rssUrls: [r8FeedUrl] },
+        { id: 'radar-r8', name: 'Radar R8', colorToken: 'gold', enabled: true, keywords: ['r8'], aiRadar: true, rssUrls: [] },
+      ],
+    });
+    await r8Svc.refresh('maya', { domainId: 'priv-r8', force: true });
+    agents.set('v4-maya-a', {
+      ownerId: 'maya', name: 'v4-maya-a',
+      capabilities: ['cosmic_web_briefing', 'cosmic_web_follow_up', 'cosmic_web_radar', 'cosmic_web_research'],
+      encryptOutbound: false, ws: { readyState: 1, send: () => {} },
+    });
+    agents.set('v4-maya-b', {
+      ownerId: 'maya', name: 'v4-maya-b',
+      capabilities: ['cosmic_web_briefing', 'cosmic_web_follow_up'],
+      encryptOutbound: false, ws: { readyState: 1, send: () => {} },
+    });
+    const mayaFeed = r8Svc.feed('maya', { domainId: 'priv-r8' });
+    const r8ArticleCluster = mayaFeed.clusters.find(c => c.headline === 'Zeta Empty Block Article');
+    const r8TplCluster = mayaFeed.clusters.find(c => c.headline === 'Eta Nested Template Feed');
+    const r8UnclosedTplCluster = mayaFeed.clusters.find(c => c.headline === 'Theta Unclosed Nested Template');
+
+    // (1a) Non-truncated article with empty `<p></p>` / `<p>  </p>` / `<div><br></div>` / `<code><p>...</p></code>` / trailing spaces:
+    //      Clean Article display keeps original Markdown while real Agent model prompt receives ZERO credential markers
+    const r8DisplayArt = await r8Svc.article('maya', r8ArticleCluster.id);
+    expect(r8DisplayArt.extractorVersion).toBe(ARTICLE_EXTRACTOR_VERSION);
+    expect(r8DisplayArt.markdown).toContain('` //R8ARTICLEMARKER99 `@intranet:8080/api');
+    await r8Svc.aiBrief('maya', 'user', r8ArticleCluster.id, { agentId: 'v4-maya-a', research: true });
+    expect(r8Prompts.at(-1)).toContain('Safe r8 article');
+    for (const secret of ['R8ARTICLEMARKER99', 'R8WSP99', 'R8DIVBR99', 'R8CODEP99', 'R8CODESP99', 'R8EMTRAIL99']) {
+      expect(r8Prompts.at(-1)).not.toContain(secret);
+    }
+    // (1b) Pre-fix v3 (`extractorVersion: 3`) cached article row is NOT trusted by private `aiBrief`
+    db.setArticleCache('maya', r8DisplayArt.itemId, {
+      title: 'Old v3', markdown: 'Old v3 ` //OLDV3EMPTY99 `@intranet:8080', aiMarkdown: 'Old v3 ` //OLDV3EMPTY99 `@intranet:8080',
+      extractorVersion: 3, truncated: false, quality: 'full', itemId: r8DisplayArt.itemId, clusterId: r8ArticleCluster.id, summaryExcerpt: 'Old',
+    }, r8Clock + HOUR);
+    await r8Svc.aiBrief('maya', 'user', r8ArticleCluster.id, { skipArticleFetch: true, agentId: 'v4-maya-a', research: true, force: true });
+    expect(r8AgentAi.mock.lastCall[0].payload.articleMarkdown).toBeUndefined();
+    expect(r8Prompts.at(-1)).not.toContain('OLDV3EMPTY99');
+
+    // (2a) Nested `<template><template></template>discarded </template>` and `<template><script>...</script></template>`:
+    //      persisted clean as v4 with ZERO markers or discarded text, and clean in model prompt
+    expect(r8TplCluster.summaryExcerpt).toContain('Safe RSS');
+    expect(r8TplCluster.summaryExcerpt).toContain('after.');
+    expect(r8TplCluster.summaryExcerpt).not.toContain('R8RSSMARKER99');
+    expect(r8TplCluster.summaryExcerpt).not.toContain('R8TSMARKER99');
+    expect(r8TplCluster.summaryExcerpt).not.toContain('discarded');
+    expect(r8UnclosedTplCluster.summaryExcerpt).toBe('Safe unclosed');
+    expect(r8UnclosedTplCluster.summaryExcerpt).not.toContain('R8UNCLOSEDTPL99');
+    await r8Svc.aiBrief('maya', 'user', r8TplCluster.id, { skipArticleFetch: true, agentId: 'v4-maya-a', research: true });
+    expect(r8Prompts.at(-1)).toContain('Safe RSS');
+    expect(r8Prompts.at(-1)).not.toContain('R8RSSMARKER99');
+    expect(r8Prompts.at(-1)).not.toContain('R8TSMARKER99');
+    expect(r8Prompts.at(-1)).not.toContain('discarded');
+
+    // (3a) Private TLDR with attached balanced abbreviation markers (`(…)`, `[…]`, `[...]`) followed by prose:
+    //      scrubbed BEFORE HMAC certification and absent in cross-Agent authenticated follow-up model prompt
+    const r8Brief = await r8Svc.aiBrief('maya', 'user', r8TplCluster.id, { skipArticleFetch: true, agentId: 'v4-maya-a', research: true, force: true });
+    expect(r8Brief.briefContextVersion).toBe(PRIVATE_BRIEF_CONTEXT_VERSION);
+    expect(typeof r8Brief.briefContextToken).toBe('string');
+    expect(r8Brief.tldr).toContain('SafeR8Tldr');
+    expect(r8Brief.tldr).toContain('next fact.');
+    for (const secret of ['R8TLDRPAR99', 'R8TLDRBRK99', 'R8TLDRDOT99']) {
+      expect(r8Brief.tldr).not.toContain(secret);
+    }
+    await r8Svc.followUp('maya', 'user', r8TplCluster.id, {
+      question: 'Cross agent follow-up?',
+      briefContext: r8Brief.tldr,
+      briefContextToken: r8Brief.briefContextToken,
+      agentId: 'v4-maya-b',
+      research: true,
+    });
+    expect(r8Prompts.at(-1)).toContain('SafeR8Tldr');
+    expect(r8Prompts.at(-1)).toContain('next fact.');
+    for (const secret of ['R8TLDRPAR99', 'R8TLDRBRK99', 'R8TLDRDOT99']) {
+      expect(r8Prompts.at(-1)).not.toContain(secret);
+    }
+
+    // (3b) Real generic WebSearch Radar result with attached balanced abbreviation markers (`[…]`, `[...]`, `(…)`):
+    //      stripped BEFORE Radar model sees it, absent from v4 DB excerpt and subsequent private briefing model prompt
+    const r8RadarRes = await r8Svc.radarScan('maya', 'user', 'radar-r8');
+    expect(r8RadarRes.added).toBe(1);
+    const r8RadarCluster = r8Svc.feed('maya', { domainId: 'radar-r8' }).clusters.find(c => c.headline === 'R8 Abbr Radar Story');
+    expect(r8RadarCluster.summaryExcerpt).toContain('SafeR8Radar');
+    expect(r8RadarCluster.summaryExcerpt).toContain('next fact.');
+    for (const secret of ['R8RADARMARKER99', 'R8RADARBRK99', 'R8RADARPAR99']) {
+      expect(r8RadarCluster.summaryExcerpt).not.toContain(secret);
+    }
+    await r8Svc.aiBrief('maya', 'user', r8RadarCluster.id, { skipArticleFetch: true, agentId: 'v4-maya-a', research: true });
+    expect(r8Prompts.at(-1)).toContain('SafeR8Radar');
+    for (const secret of ['R8RADARMARKER99', 'R8RADARBRK99', 'R8RADARPAR99']) {
+      expect(r8Prompts.at(-1)).not.toContain(secret);
+    }
+
+    // (3c) Old v3 (`excerptVersion: 3`) Radar output and old v3 (`briefContextVersion: 3`) private brief output are rejected/omitted!
+    const oldV3ReqAi = vi.fn(async req => {
+      if (req.mode === 'topic_radar') {
+        return {
+          items: [{ title: 'Old V3 Radar Story', url: 'https://radar.example/old-v3-radar', sourceName: 'V3Radar', summaryExcerpt: 'Old v3 radar display' }],
+          searchCount: 1,
+          excerptVersion: 3,
+        };
+      }
+      if (req.mode === 'brief') {
+        return {
+          tldr: 'Old v3 uncertified TLDR //OLDV3TLDR99(…) next',
+          sections: [{ heading: 'H', body: 'Body' }],
+          bullets: ['b1', 'b2'], impact: 'ok', media: [], communityHighlights: [], citations: [],
+          followUps: ['q1', 'q2'], researched: false, searchCount: 0, evidenceCount: 0, fullMarkdown: 'Safe md',
+          briefContextVersion: 3,
+        };
+      }
+      return r8AgentAi(req);
+    });
+    const oldV3Svc = makeService({ requestAi: oldV3ReqAi, now: () => r8Clock + 120_000 });
+    await oldV3Svc.radarScan('maya', 'user', 'radar-r8');
+    const oldV3RadarCluster = oldV3Svc.feed('maya', { domainId: 'radar-r8' }).clusters.find(c => c.headline === 'Old V3 Radar Story');
+    expect(oldV3RadarCluster.summaryExcerpt).toBe('Old v3 radar display');
+    await oldV3Svc.aiBrief('maya', 'user', oldV3RadarCluster.id, { skipArticleFetch: true, agentId: 'v4-maya-a', research: true });
+    expect(oldV3ReqAi.mock.lastCall[0].payload.summaryExcerpt).toBe('');
+    const oldV3BriefRes = await oldV3Svc.aiBrief('maya', 'user', r8UnclosedTplCluster.id, { skipArticleFetch: true, agentId: 'v4-maya-b', research: true, force: true });
+    expect(oldV3BriefRes.briefContextToken).toBeUndefined();
+    expect(oldV3BriefRes.briefContextVersion).toBeUndefined();
+    await oldV3Svc.followUp('maya', 'user', r8UnclosedTplCluster.id, {
+      question: 'Follow up after old v3 brief?',
+      briefContext: oldV3BriefRes.tldr,
+      agentId: 'v4-maya-b',
+      research: true,
+    });
+    expect(r8AgentAi.mock.lastCall[0].payload.briefContext).toBeUndefined();
+    expect(r8Prompts.at(-1)).not.toContain('OLDV3TLDR99');
+
+    // Round 30 (PR #2032 Round 9) Blocker #1/#2/#3 isolated end-to-end regressions:
+    // (1) Nested blocks inside `<em>`/`<strong>` (`<em><p>//R9ARTFIXTURE</p></em><code>@intranet:8080/a</code>` and unfinished `<script>` truncation)
+    //     derive redaction & cutoff boundaries from surviving rendered whitespace, preserving separators when inner blocks empty after redaction; v4 caches rejected.
+    // (2) Foreign-content `<svg><![CDATA[ > </template> ]]></svg>` inside `<template>` in XML-escaped RSS description AND `<textarea>` inside `<template>` for media extraction
+    //     never prematurely exit `skipStack`; pre-fix v4 RSS/Radar excerpts are omitted until upgraded to v5.
+    // (3) Spaced balanced ellipses (`//R9BRIEFFIX[. . .] next fact.`) and >16-space padded abbreviation markers (`//R9RADAR17[                 ...] next fact.`)
+    //     are caught within shared scan budget (failing closed on budget exhaustion); HMAC binds exact server-scrubbed `tldr` returned to client; v4 provenance rejected.
+    const r9NestedEmHtml = '<article>Safe r9 em <em><p>//R9ARTFIXTURE99</p></em><code>@intranet:8080/a</code> and <strong><div><p>//R9STRFIX99</p></div></strong><code>@intranet:8080/b</code> and <em><p>KeepParaA</p><p>https://only.secret.internal/x</p><p>KeepParaB</p></em> end.</article>';
+    const r9EmScriptTruncHtml = '<article>Safe r9 trunc <em><p>//R9EMTRUNC99</p></em><script>unclosed';
+    const r9FeedRss = `<rss><channel>
+      <item><title>Iota Nested Em Block Article</title><link>https://private.example/r9-nested-em</link><description>Nested em desc</description></item>
+      <item><title>Kappa Em Script Trunc Article</title><link>https://private.example/r9-em-trunc</link><description>Em trunc desc</description></item>
+      <item><title>Lambda Svg Cdata Template Feed</title><link>https://private.example/r9-svg-cdata</link><description>Safe r9 svg //R9SVGFIX99&lt;wbr&gt;&lt;template&gt;&lt;svg&gt;&lt;![CDATA[ &gt; &lt;/template&gt; ]]&gt;&lt;/svg&gt;discarded &lt;/template&gt;@intranet:8080/api end.</description></item>
+    </channel></rss>`;
+    // Also verify `extractMarkupMedia` shares RCDATA `<textarea>` & SVG CDATA handling inside `<template>`
+    const r9MediaCheck = extractMarkupMedia(
+      '<template><textarea></template><img src="https://secret.example/textarea-leak.png"></textarea></template><template><svg><![CDATA[ > </template> ]]></svg><img src="https://secret.example/svg-leak.png"></template><img src="https://public.example/r9-ok.png">',
+      'https://public.example/',
+    );
+    expect(r9MediaCheck.map(m => m.url)).toEqual(['https://public.example/r9-ok.png']);
+
+    const r9Prompts = [];
+    const r9RadarUrl = 'https://radar.example/r9-spaced';
+    const r9AgentAi = vi.fn(async ({ mode, perspective, language, payload }) => {
+      if (mode === 'topic_radar') {
+        const WebSearch = vi.fn().mockResolvedValue({
+          provider: 'generic',
+          results: [{
+            url: r9RadarUrl,
+            title: 'R9 Spaced Ellipsis Story',
+            snippet: `SafeR9Radar //R9RADAR17[${' '.repeat(17)}...] //R9RADARSP[. . .] //50%增长 next fact.`,
+          }],
+        });
+        const radarAdapter = {
+          captureStream: vi.fn()
+            .mockImplementationOnce(async function* () { yield { type: 'tool_call', id: 'r9tc1', name: 'WebSearch', input: { query: 'r9 spaced', limit: 5 } }; })
+            .mockImplementationOnce(async function* () {}),
+          call: vi.fn().mockImplementation(async req => {
+            r9Prompts.push(JSON.stringify(req));
+            const toolMsg = req.messages.find(m => m.role === 'tool')?.content ?? '';
+            const parsedTool = JSON.parse(toolMsg.replace(/^<untrusted_web_result>\n|\n<\/untrusted_web_result>$/g, ''));
+            return {
+              text: JSON.stringify({
+                items: parsedTool.results.map(r => ({
+                  title: r.title, url: r.url, sourceName: 'R9Wire', summaryExcerpt: r.snippet,
+                })),
+                searchCount: 1,
+              }),
+            };
+          }),
+        };
+        const { result } = await runCosmicWebBriefing({
+          mode, perspective, language, payload,
+          config: { fastModel: 'test/fast', defaultModel: 'test/fast' },
+          adapter: radarAdapter, toolExecutors: { WebSearch },
+        });
+        return result;
+      }
+      const adapter = {
+        async call(req) {
+          r9Prompts.push(JSON.stringify(req));
+          if (mode === 'follow_up') {
+            return { text: JSON.stringify({ question: 'q', answer: 'ok', bullets: ['one'], followUps: ['q1'] }) };
+          }
+          return {
+            text: JSON.stringify({
+              tldr: `SafeR9Tldr //R9BRIEFFIX[. . .] //R9BRIEFPAD[${' '.repeat(17)}...] //50%增长 next fact.`,
+              bullets: ['Safe bullet one', 'Safe bullet two'],
+              impact: 'Safe impact',
+              followUps: ['q1', 'q2'],
+            }),
+          };
+        },
+      };
+      const { result } = await runCosmicWebBriefing({
+        mode, perspective, language, payload,
+        config: { fastModel: 'test/fast', defaultModel: 'test/fast' },
+        adapter,
+      });
+      return result;
+    });
+    const r9FeedUrl = 'https://private.example/r9.xml';
+    const r9Clock = NOW + 600_000;
+    const r9Svc = makeService({
+      fetcher: async url => {
+        if (url === r9FeedUrl) return { status: 200, url, text: async () => r9FeedRss };
+        if (url.endsWith('/r9-nested-em')) return { status: 200, url, text: async () => r9NestedEmHtml };
+        if (url.endsWith('/r9-em-trunc')) return { status: 200, url, text: async () => r9EmScriptTruncHtml };
+        return { status: 200, url, text: async () => '<article><p>ok</p></article>' };
+      },
+      requestAi: r9AgentAi,
+      now: () => r9Clock,
+    });
+    await r9Svc.savePreferences('nina', {
+      enabledDomainIds: [],
+      customDomains: [
+        { id: 'priv-r9', name: 'Priv R9', colorToken: 'cyan', enabled: true, keywords: [], rssUrls: [r9FeedUrl] },
+        { id: 'radar-r9', name: 'Radar R9', colorToken: 'gold', enabled: true, keywords: ['r9'], aiRadar: true, rssUrls: [] },
+      ],
+    });
+    await r9Svc.refresh('nina', { domainId: 'priv-r9', force: true });
+    agents.set('v5-nina-a', {
+      ownerId: 'nina', name: 'v5-nina-a',
+      capabilities: ['cosmic_web_briefing', 'cosmic_web_follow_up', 'cosmic_web_radar', 'cosmic_web_research'],
+      encryptOutbound: false, ws: { readyState: 1, send: () => {} },
+    });
+    agents.set('v5-nina-b', {
+      ownerId: 'nina', name: 'v5-nina-b',
+      capabilities: ['cosmic_web_briefing', 'cosmic_web_follow_up'],
+      encryptOutbound: false, ws: { readyState: 1, send: () => {} },
+    });
+    const ninaFeed = r9Svc.feed('nina', { domainId: 'priv-r9' });
+    const r9EmCluster = ninaFeed.clusters.find(c => c.headline === 'Iota Nested Em Block Article');
+    const r9EmTruncCluster = ninaFeed.clusters.find(c => c.headline === 'Kappa Em Script Trunc Article');
+    const r9SvgCluster = ninaFeed.clusters.find(c => c.headline === 'Lambda Svg Cdata Template Feed');
+
+    // (1a) `<em><p>//R9ARTFIXTURE99</p></em><code>@intranet:8080/a</code>` & nested redacted block separator preservation
+    const r9DisplayArt = await r9Svc.article('nina', r9EmCluster.id);
+    expect(r9DisplayArt.extractorVersion).toBe(ARTICLE_EXTRACTOR_VERSION);
+    await r9Svc.aiBrief('nina', 'user', r9EmCluster.id, { agentId: 'v5-nina-a', research: true });
+    const r9EmPrompt = r9Prompts.at(-1);
+    expect(r9EmPrompt).toContain('Safe r9 em');
+    expect(r9EmPrompt).toContain('KeepParaA');
+    expect(r9EmPrompt).toContain('KeepParaB');
+    expect(r9EmPrompt).not.toContain('KeepParaAKeepParaB');
+    expect(r9EmPrompt).not.toContain('R9ARTFIXTURE99');
+    expect(r9EmPrompt).not.toContain('R9STRFIX99');
+    expect(r9EmPrompt).not.toContain('only.secret.internal');
+    // (1b) `<em><p>//R9EMTRUNC99</p></em><script>unclosed` rewinds trailing marker
+    await r9Svc.aiBrief('nina', 'user', r9EmTruncCluster.id, { agentId: 'v5-nina-a', research: true });
+    expect(r9Prompts.at(-1)).toContain('Safe r9 trunc');
+    expect(r9Prompts.at(-1)).not.toContain('R9EMTRUNC99');
+    // (1c) Pre-fix v4 (`extractorVersion: 4`) cached article row is rejected by private `aiBrief`
+    db.setArticleCache('nina', r9DisplayArt.itemId, {
+      title: 'Old v4', markdown: 'Old v4 *//OLDV4EM99* ` @intranet:8080 `', aiMarkdown: 'Old v4 *//OLDV4EM99* ` @intranet:8080 `',
+      extractorVersion: 4, truncated: false, quality: 'full', itemId: r9DisplayArt.itemId, clusterId: r9EmCluster.id, summaryExcerpt: 'Old',
+    }, r9Clock + HOUR);
+    await r9Svc.aiBrief('nina', 'user', r9EmCluster.id, { skipArticleFetch: true, agentId: 'v5-nina-a', research: true, force: true });
+    expect(r9AgentAi.mock.lastCall[0].payload.articleMarkdown).toBeUndefined();
+    expect(r9Prompts.at(-1)).not.toContain('OLDV4EM99');
+
+    // (2) XML-escaped SVG CDATA inside `<template>` never prematurely exits `skipStack`
+    expect(r9SvgCluster.summaryExcerpt).toContain('Safe r9 svg');
+    expect(r9SvgCluster.summaryExcerpt).toContain('end.');
+    expect(r9SvgCluster.summaryExcerpt).not.toContain('R9SVGFIX99');
+    expect(r9SvgCluster.summaryExcerpt).not.toContain('discarded');
+    await r9Svc.aiBrief('nina', 'user', r9SvgCluster.id, { skipArticleFetch: true, agentId: 'v5-nina-a', research: true });
+    expect(r9Prompts.at(-1)).toContain('Safe r9 svg');
+    expect(r9Prompts.at(-1)).not.toContain('R9SVGFIX99');
+    expect(r9Prompts.at(-1)).not.toContain('discarded');
+
+    // (3a) Spaced balanced ellipses (`[. . .]`, `[17 spaces...]`) in private TLDR -> cross-Agent HMAC followUp, preserving `//50%增长`
+    const r9Brief = await r9Svc.aiBrief('nina', 'user', r9SvgCluster.id, { skipArticleFetch: true, agentId: 'v5-nina-a', research: true, force: true });
+    expect(r9Brief.briefContextVersion).toBe(PRIVATE_BRIEF_CONTEXT_VERSION);
+    expect(typeof r9Brief.briefContextToken).toBe('string');
+    expect(r9Brief.tldr).toContain('SafeR9Tldr');
+    expect(r9Brief.tldr).toContain('//50%增长');
+    expect(r9Brief.tldr).not.toContain('R9BRIEFFIX');
+    expect(r9Brief.tldr).not.toContain('R9BRIEFPAD');
+    await r9Svc.followUp('nina', 'user', r9SvgCluster.id, {
+      question: 'Follow up with v5 token?',
+      briefContext: r9Brief.tldr,
+      briefContextToken: r9Brief.briefContextToken,
+      agentId: 'v5-nina-b',
+      research: true,
+    });
+    expect(r9Prompts.at(-1)).toContain('SafeR9Tldr');
+    expect(r9Prompts.at(-1)).toContain('//50%增长');
+    expect(r9Prompts.at(-1)).not.toContain('R9BRIEFFIX');
+    expect(r9Prompts.at(-1)).not.toContain('R9BRIEFPAD');
+
+    // (3b) Real Radar WebSearch with 17-space padded bracketed ellipsis & spaced dots -> stripped before Radar model & v5 DB
+    const r9RadarRes = await r9Svc.radarScan('nina', 'user', 'radar-r9');
+    expect(r9RadarRes.added).toBe(1);
+    const r9RadarCluster = r9Svc.feed('nina', { domainId: 'radar-r9' }).clusters.find(c => c.headline === 'R9 Spaced Ellipsis Story');
+    expect(r9RadarCluster.summaryExcerpt).toContain('SafeR9Radar');
+    expect(r9RadarCluster.summaryExcerpt).toContain('//50%增长');
+    expect(r9RadarCluster.summaryExcerpt).not.toContain('R9RADAR17');
+    expect(r9RadarCluster.summaryExcerpt).not.toContain('R9RADARSP');
+    await r9Svc.aiBrief('nina', 'user', r9RadarCluster.id, { skipArticleFetch: true, agentId: 'v5-nina-a', research: true });
+    expect(r9Prompts.at(-1)).toContain('SafeR9Radar');
+    expect(r9Prompts.at(-1)).not.toContain('R9RADAR17');
+    expect(r9Prompts.at(-1)).not.toContain('R9RADARSP');
+
+    // (3c) Server binds HMAC strictly to exact server-scrubbed `tldr` returned to client (rejecting raw un-scrubbed TLDR)
+    const serverScrubReqAi = vi.fn(async req => {
+      if (req.mode === 'brief') {
+        return {
+          tldr: 'ServerScrubOk //SERVERCAUGHT99[. . .] tail',
+          sections: [{ heading: 'H', body: 'Body' }],
+          bullets: ['b1', 'b2'], impact: 'ok', media: [], communityHighlights: [], citations: [],
+          followUps: ['q1', 'q2'], researched: false, searchCount: 0, evidenceCount: 0, fullMarkdown: 'Safe md',
+          briefContextVersion: PRIVATE_BRIEF_CONTEXT_VERSION,
+        };
+      }
+      return r9AgentAi(req);
+    });
+    const serverScrubSvc = makeService({ requestAi: serverScrubReqAi, now: () => r9Clock + 60_000 });
+    const serverScrubBrief = await serverScrubSvc.aiBrief('nina', 'user', r9EmTruncCluster.id, { skipArticleFetch: true, agentId: 'v5-nina-a', research: true, force: true });
+    expect(serverScrubBrief.tldr).not.toContain('SERVERCAUGHT99');
+    expect(serverScrubBrief.tldr).toContain('ServerScrubOk');
+    // Replaying raw un-scrubbed text with the minted token MUST fail HMAC verification
+    await serverScrubSvc.followUp('nina', 'user', r9EmTruncCluster.id, {
+      question: 'Raw text with scrubbed token?',
+      briefContext: 'ServerScrubOk //SERVERCAUGHT99[. . .] tail',
+      briefContextToken: serverScrubBrief.briefContextToken,
+      agentId: 'v5-nina-b',
+      research: true,
+    });
+    expect(r9AgentAi.mock.lastCall[0].payload.briefContext).toBeUndefined();
+    // Replaying the exact returned scrubbed `tldr` with its token MUST succeed
+    await serverScrubSvc.followUp('nina', 'user', r9EmTruncCluster.id, {
+      question: 'Scrubbed text with scrubbed token?',
+      briefContext: serverScrubBrief.tldr,
+      briefContextToken: serverScrubBrief.briefContextToken,
+      agentId: 'v5-nina-b',
+      research: true,
+    });
+    expect(r9AgentAi.mock.lastCall[0].payload.briefContext).toBe(serverScrubBrief.tldr);
+
+    // (3d) Old v4 (`excerptVersion: 4`, `briefContextVersion: 4`) provenance is rejected/omitted!
+    const oldV4ReqAi = vi.fn(async req => {
+      if (req.mode === 'topic_radar') {
+        return {
+          items: [{ title: 'Old V4 Radar Story', url: 'https://radar.example/old-v4-radar', sourceName: 'V4Radar', summaryExcerpt: 'Old v4 radar display' }],
+          searchCount: 1,
+          excerptVersion: 4,
+        };
+      }
+      if (req.mode === 'brief') {
+        return {
+          tldr: 'Old v4 uncertified TLDR //OLDV4TLDR99[. . .] next',
+          sections: [{ heading: 'H', body: 'Body' }],
+          bullets: ['b1', 'b2'], impact: 'ok', media: [], communityHighlights: [], citations: [],
+          followUps: ['q1', 'q2'], researched: false, searchCount: 0, evidenceCount: 0, fullMarkdown: 'Safe md',
+          briefContextVersion: 4,
+        };
+      }
+      return r9AgentAi(req);
+    });
+    const oldV4Svc = makeService({ requestAi: oldV4ReqAi, now: () => r9Clock + 180_000 });
+    await oldV4Svc.radarScan('nina', 'user', 'radar-r9');
+    const oldV4RadarCluster = oldV4Svc.feed('nina', { domainId: 'radar-r9' }).clusters.find(c => c.headline === 'Old V4 Radar Story');
+    await oldV4Svc.aiBrief('nina', 'user', oldV4RadarCluster.id, { skipArticleFetch: true, agentId: 'v5-nina-a', research: true });
+    expect(oldV4ReqAi.mock.lastCall[0].payload.summaryExcerpt).toBe('');
+    const oldV4BriefRes = await oldV4Svc.aiBrief('nina', 'user', r9EmTruncCluster.id, { skipArticleFetch: true, agentId: 'v5-nina-b', research: true, force: true });
+    expect(oldV4BriefRes.briefContextToken).toBeUndefined();
+    expect(oldV4BriefRes.briefContextVersion).toBeUndefined();
+    await oldV4Svc.followUp('nina', 'user', r9EmTruncCluster.id, {
+      question: 'Follow up after old v4 brief?',
+      briefContext: oldV4BriefRes.tldr,
+      agentId: 'v5-nina-b',
+      research: true,
+    });
+    expect(r9AgentAi.mock.lastCall[0].payload.briefContext).toBeUndefined();
+
+    // Round 31 (PR #2032 Round 10) Blocker #1/#2/#3 isolated end-to-end regressions:
+    // (1) Unclosed `<title>` RCDATA (and `<head>`) in article extraction reports `truncated: true` and rewinds trailing credential fragments,
+    //     while normal `<head><title>...</title></head>` preserves display metadata; pre-fix v5 caches are rejected.
+    // (2) HTML5 unquoted attribute ending in `/` (`<svg data-x=x/>`) and HTML5 double-escaped script state (`<script><!--<script></script></template>...</script>`)
+    //     never prematurely exit `<template>` in EITHER text OR media extraction; pre-fix v5 excerpts are omitted.
+    // (3) Quote-wrapped spaced dots (`Safe context "//R10LONGREVIEW99" . . . next fact.`) and 1-char EOF (`Safe context //M`) are stripped
+    //     in BOTH private TLDR -> cross-Agent HMAC followUp AND real Radar WebSearch -> SQLite -> private aiBrief; v5 provenance rejected.
+    const r10TitleTruncHtml = '<article><p>Safe r10 title prose //R10TITLEMARKER99<title>unclosed';
+    const r10HeadTruncHtml = '<article><p>Safe r10 head prose //R10HEADMARKER99<head>unclosed';
+    const r10UnquotedTpl = '<template><svg data-x=x/><![CDATA[ > </template> ]]></svg>discarded <img src="https://secret.example/r10-unq.png"></template>';
+    const r10DoubleEscTpl = '<template><script><!--<script></script></template>discarded <img src="https://secret.example/r10-ds.png"> --></script></template>';
+    const r10FeedRss = `<rss><channel>
+      <item><title>Mu Unclosed Title Rcdata</title><link>https://private.example/r10-title-trunc</link><description>Title trunc desc</description></item>
+      <item><title>Nu Unclosed Head Trunc</title><link>https://private.example/r10-head-trunc</link><description>Head trunc desc</description></item>
+      <item><title>Xi Unquoted Slash Svg Template</title><link>https://private.example/r10-unq-slash</link><description>Safe r10 unq //R10UNQ99&lt;wbr&gt;&lt;template&gt;&lt;svg data-x=x/&gt;&lt;![CDATA[ &gt; &lt;/template&gt; ]]&gt;&lt;/svg&gt;discarded &lt;img src="https://secret.example/r10-unq.png"&gt;&lt;/template&gt;@intranet:8080/a end.</description></item>
+      <item><title>Omicron Double Escaped Script Template</title><link>https://private.example/r10-double-esc</link><description><![CDATA[Safe r10 ds //R10DS99<wbr>${r10DoubleEscTpl}@intranet:8080/b end.]]></description></item>
+    </channel></rss>`;
+    // Paired media check: neither unquoted-slash SVG CDATA nor double-escaped script inside `<template>` leaks media
+    const r10MediaCheck = extractMarkupMedia(
+      `${r10UnquotedTpl}${r10DoubleEscTpl}<img src="https://public.example/r10-ok.png">`,
+      'https://public.example/',
+    );
+    expect(r10MediaCheck.map(m => m.url)).toEqual(['https://public.example/r10-ok.png']);
+
+    const r10Prompts = [];
+    const r10RadarUrl = 'https://radar.example/r10-quoted';
+    let r10BriefVariant = 'quoted';
+    const r10AgentAi = vi.fn(async ({ mode, perspective, language, payload }) => {
+      if (mode === 'topic_radar') {
+        const WebSearch = vi.fn().mockResolvedValue({
+          provider: 'generic',
+          results: [{
+            url: r10RadarUrl,
+            title: 'R10 Quoted & 1-Char Radar',
+            snippet: 'SafeR10Radar "//R10RADARQUOTED99" . . . "//50%增长" next fact //M',
+          }],
+        });
+        const radarAdapter = {
+          captureStream: vi.fn()
+            .mockImplementationOnce(async function* () { yield { type: 'tool_call', id: 'r10tc1', name: 'WebSearch', input: { query: 'r10', limit: 5 } }; })
+            .mockImplementationOnce(async function* () {}),
+          call: vi.fn().mockImplementation(async req => {
+            r10Prompts.push(JSON.stringify(req));
+            const toolMsg = req.messages.find(m => m.role === 'tool')?.content ?? '';
+            const parsedTool = JSON.parse(toolMsg.replace(/^<untrusted_web_result>\n|\n<\/untrusted_web_result>$/g, ''));
+            return {
+              text: JSON.stringify({
+                items: parsedTool.results.map(r => ({
+                  title: r.title, url: r.url, sourceName: 'R10Wire', summaryExcerpt: r.snippet,
+                })),
+                searchCount: 1,
+              }),
+            };
+          }),
+        };
+        const { result } = await runCosmicWebBriefing({
+          mode, perspective, language, payload,
+          config: { fastModel: 'test/fast', defaultModel: 'test/fast' },
+          adapter: radarAdapter, toolExecutors: { WebSearch },
+        });
+        return result;
+      }
+      const adapter = {
+        async call(req) {
+          r10Prompts.push(JSON.stringify(req));
+          if (mode === 'follow_up') {
+            return { text: JSON.stringify({ question: 'q', answer: 'ok', bullets: ['one'], followUps: ['q1'] }) };
+          }
+          const tldr = r10BriefVariant === 'onechar'
+            ? 'SafeR10OneChar //M'
+            : 'SafeR10Context "//R10LONGREVIEW99" . . . "//50%增长" next fact.';
+          return {
+            text: JSON.stringify({
+              tldr,
+              bullets: ['Safe bullet one', 'Safe bullet two'],
+              impact: 'Safe impact',
+              followUps: ['q1', 'q2'],
+            }),
+          };
+        },
+      };
+      const { result } = await runCosmicWebBriefing({
+        mode, perspective, language, payload,
+        config: { fastModel: 'test/fast', defaultModel: 'test/fast' },
+        adapter,
+      });
+      return result;
+    });
+    const r10FeedUrl = 'https://private.example/r10.xml';
+    const r10Clock = NOW + 800_000;
+    const r10Svc = makeService({
+      fetcher: async url => {
+        if (url === r10FeedUrl) return { status: 200, url, text: async () => r10FeedRss };
+        if (url.endsWith('/r10-title-trunc')) return { status: 200, url, text: async () => r10TitleTruncHtml };
+        if (url.endsWith('/r10-head-trunc')) return { status: 200, url, text: async () => r10HeadTruncHtml };
+        return { status: 200, url, text: async () => '<article><p>ok</p></article>' };
+      },
+      requestAi: r10AgentAi,
+      now: () => r10Clock,
+    });
+    await r10Svc.savePreferences('omar', {
+      enabledDomainIds: [],
+      customDomains: [
+        { id: 'priv-r10', name: 'Priv R10', colorToken: 'cyan', enabled: true, keywords: [], rssUrls: [r10FeedUrl] },
+        { id: 'radar-r10', name: 'Radar R10', colorToken: 'gold', enabled: true, keywords: ['r10'], aiRadar: true, rssUrls: [] },
+      ],
+    });
+    await r10Svc.refresh('omar', { domainId: 'priv-r10', force: true });
+    agents.set('v6-omar-a', {
+      ownerId: 'omar', name: 'v6-omar-a',
+      capabilities: ['cosmic_web_briefing', 'cosmic_web_follow_up', 'cosmic_web_radar', 'cosmic_web_research'],
+      encryptOutbound: false, ws: { readyState: 1, send: () => {} },
+    });
+    agents.set('v6-omar-b', {
+      ownerId: 'omar', name: 'v6-omar-b',
+      capabilities: ['cosmic_web_briefing', 'cosmic_web_follow_up'],
+      encryptOutbound: false, ws: { readyState: 1, send: () => {} },
+    });
+    const omarFeed = r10Svc.feed('omar', { domainId: 'priv-r10' });
+    const r10TitleCluster = omarFeed.clusters.find(c => c.headline === 'Mu Unclosed Title Rcdata');
+    const r10HeadCluster = omarFeed.clusters.find(c => c.headline === 'Nu Unclosed Head Trunc');
+    const r10UnqCluster = omarFeed.clusters.find(c => c.headline === 'Xi Unquoted Slash Svg Template');
+    const r10DsCluster = omarFeed.clusters.find(c => c.headline === 'Omicron Double Escaped Script Template');
+
+    // (1a) Unclosed `<title>` RCDATA & `<head>`: `truncated: true`, rewound in `aiMarkdown` and absent from model prompt
+    const r10TitleArt = await r10Svc.article('omar', r10TitleCluster.id);
+    expect(r10TitleArt.truncated).toBe(true);
+    expect(r10TitleArt.extractorVersion).toBe(ARTICLE_EXTRACTOR_VERSION);
+    await r10Svc.aiBrief('omar', 'user', r10TitleCluster.id, { agentId: 'v6-omar-a', research: true });
+    expect(r10Prompts.at(-1)).toContain('Safe r10 title prose');
+    expect(r10Prompts.at(-1)).not.toContain('R10TITLEMARKER99');
+    await r10Svc.aiBrief('omar', 'user', r10HeadCluster.id, { agentId: 'v6-omar-a', research: true });
+    expect(r10Prompts.at(-1)).toContain('Safe r10 head prose');
+    expect(r10Prompts.at(-1)).not.toContain('R10HEADMARKER99');
+    // (1b) Pre-fix v5 (`extractorVersion: 5`) cached article row is rejected by private `aiBrief`
+    db.setArticleCache('omar', r10TitleArt.itemId, {
+      title: 'Old v5', markdown: 'Old v5 //OLDV5TITLE99', aiMarkdown: 'Old v5 //OLDV5TITLE99',
+      extractorVersion: 5, truncated: false, quality: 'full', itemId: r10TitleArt.itemId, clusterId: r10TitleCluster.id, summaryExcerpt: 'Old',
+    }, r10Clock + HOUR);
+    await r10Svc.aiBrief('omar', 'user', r10TitleCluster.id, { skipArticleFetch: true, agentId: 'v6-omar-a', research: true, force: true });
+    expect(r10AgentAi.mock.lastCall[0].payload.articleMarkdown).toBeUndefined();
+    expect(r10Prompts.at(-1)).not.toContain('OLDV5TITLE99');
+
+    // (2) Unquoted-slash `<svg data-x=x/>` CDATA and double-escaped `<script>` inside `<template>`:
+    //     ZERO template text or credential fragments persisted or forwarded to model prompt
+    expect(r10UnqCluster.summaryExcerpt).toContain('Safe r10 unq');
+    expect(r10UnqCluster.summaryExcerpt).not.toContain('R10UNQ99');
+    expect(r10UnqCluster.summaryExcerpt).not.toContain('discarded');
+    expect(r10DsCluster.summaryExcerpt).toContain('Safe r10 ds');
+    expect(r10DsCluster.summaryExcerpt).not.toContain('R10DS99');
+    expect(r10DsCluster.summaryExcerpt).not.toContain('discarded');
+    await r10Svc.aiBrief('omar', 'user', r10UnqCluster.id, { skipArticleFetch: true, agentId: 'v6-omar-a', research: true });
+    expect(r10Prompts.at(-1)).toContain('Safe r10 unq');
+    expect(r10Prompts.at(-1)).not.toContain('R10UNQ99');
+    expect(r10Prompts.at(-1)).not.toContain('discarded');
+    await r10Svc.aiBrief('omar', 'user', r10DsCluster.id, { skipArticleFetch: true, agentId: 'v6-omar-a', research: true });
+    expect(r10Prompts.at(-1)).toContain('Safe r10 ds');
+    expect(r10Prompts.at(-1)).not.toContain('R10DS99');
+    expect(r10Prompts.at(-1)).not.toContain('discarded');
+
+    // (3a) Quote-wrapped spaced dots (`"//R10LONGREVIEW99" . . .`) AND 1-char literal EOF (`//M`) in private TLDR -> cross-Agent HMAC followUp
+    r10BriefVariant = 'quoted';
+    const r10QuotedBrief = await r10Svc.aiBrief('omar', 'user', r10UnqCluster.id, { skipArticleFetch: true, agentId: 'v6-omar-a', research: true, force: true });
+    expect(r10QuotedBrief.briefContextVersion).toBe(PRIVATE_BRIEF_CONTEXT_VERSION);
+    expect(r10QuotedBrief.tldr).toContain('SafeR10Context');
+    expect(r10QuotedBrief.tldr).toContain('//50%增长');
+    expect(r10QuotedBrief.tldr).not.toContain('R10LONGREVIEW99');
+    await r10Svc.followUp('omar', 'user', r10UnqCluster.id, {
+      question: 'Quoted spaced follow-up?',
+      briefContext: r10QuotedBrief.tldr,
+      briefContextToken: r10QuotedBrief.briefContextToken,
+      agentId: 'v6-omar-b',
+      research: true,
+    });
+    expect(r10Prompts.at(-1)).toContain('SafeR10Context');
+    expect(r10Prompts.at(-1)).toContain('//50%增长');
+    expect(r10Prompts.at(-1)).not.toContain('R10LONGREVIEW99');
+
+    r10BriefVariant = 'onechar';
+    const r10OneCharBrief = await r10Svc.aiBrief('omar', 'user', r10DsCluster.id, { skipArticleFetch: true, agentId: 'v6-omar-a', research: true, force: true });
+    expect(r10OneCharBrief.tldr).toBe('SafeR10OneChar');
+    await r10Svc.followUp('omar', 'user', r10DsCluster.id, {
+      question: 'One char follow-up?',
+      briefContext: r10OneCharBrief.tldr,
+      briefContextToken: r10OneCharBrief.briefContextToken,
+      agentId: 'v6-omar-b',
+      research: true,
+    });
+    expect(r10Prompts.at(-1)).toContain('SafeR10OneChar');
+    expect(r10Prompts.at(-1)).not.toContain('//M');
+
+    // (3b) Real Radar WebSearch with quote-wrapped spaced dots & 1-char EOF -> scrubbed before Radar model & v6 DB
+    const r10RadarRes = await r10Svc.radarScan('omar', 'user', 'radar-r10');
+    expect(r10RadarRes.added).toBe(1);
+    const r10RadarCluster = r10Svc.feed('omar', { domainId: 'radar-r10' }).clusters.find(c => c.headline === 'R10 Quoted & 1-Char Radar');
+    expect(r10RadarCluster.summaryExcerpt).toContain('SafeR10Radar');
+    expect(r10RadarCluster.summaryExcerpt).toContain('//50%增长');
+    expect(r10RadarCluster.summaryExcerpt).not.toContain('R10RADARQUOTED99');
+    expect(r10RadarCluster.summaryExcerpt).not.toContain('//M');
+    await r10Svc.aiBrief('omar', 'user', r10RadarCluster.id, { skipArticleFetch: true, agentId: 'v6-omar-a', research: true });
+    expect(r10Prompts.at(-1)).toContain('SafeR10Radar');
+    expect(r10Prompts.at(-1)).not.toContain('R10RADARQUOTED99');
+    expect(r10Prompts.at(-1)).not.toContain('//M');
+
+    // (3c) Pre-fix v5 (`excerptVersion: 5`, `briefContextVersion: 5`) provenance is rejected/omitted!
+    const oldV5ReqAi = vi.fn(async req => {
+      if (req.mode === 'topic_radar') {
+        return {
+          items: [{ title: 'Old V5 Radar Story', url: 'https://radar.example/old-v5-radar', sourceName: 'V5Radar', summaryExcerpt: 'Old v5 radar display' }],
+          searchCount: 1,
+          excerptVersion: 5,
+        };
+      }
+      if (req.mode === 'brief') {
+        return {
+          tldr: 'Old v5 uncertified TLDR "//OLDV5TLDR99" . . . next',
+          sections: [{ heading: 'H', body: 'Body' }],
+          bullets: ['b1', 'b2'], impact: 'ok', media: [], communityHighlights: [], citations: [],
+          followUps: ['q1', 'q2'], researched: false, searchCount: 0, evidenceCount: 0, fullMarkdown: 'Safe md',
+          briefContextVersion: 5,
+        };
+      }
+      return r10AgentAi(req);
+    });
+    const oldV5Svc = makeService({ requestAi: oldV5ReqAi, now: () => r10Clock + 180_000 });
+    await oldV5Svc.radarScan('omar', 'user', 'radar-r10');
+    const oldV5RadarCluster = oldV5Svc.feed('omar', { domainId: 'radar-r10' }).clusters.find(c => c.headline === 'Old V5 Radar Story');
+    await oldV5Svc.aiBrief('omar', 'user', oldV5RadarCluster.id, { skipArticleFetch: true, agentId: 'v6-omar-a', research: true });
+    expect(oldV5ReqAi.mock.lastCall[0].payload.summaryExcerpt).toBe('');
+    const oldV5BriefRes = await oldV5Svc.aiBrief('omar', 'user', r10HeadCluster.id, { skipArticleFetch: true, agentId: 'v6-omar-b', research: true, force: true });
+    expect(oldV5BriefRes.briefContextToken).toBeUndefined();
+    expect(oldV5BriefRes.briefContextVersion).toBeUndefined();
+    await oldV5Svc.followUp('omar', 'user', r10HeadCluster.id, {
+      question: 'Follow up after old v5 brief?',
+      briefContext: oldV5BriefRes.tldr,
+      agentId: 'v6-omar-b',
+      research: true,
+    });
+    expect(r10AgentAi.mock.lastCall[0].payload.briefContext).toBeUndefined();
+
+    // Round 32 (PR #2032 Round 11): P1 linear O(N) escaped-script scaling (~1 MiB < 250ms), `<code>`/`<pre>` plainVisible
+    // metadata exclusion, SVG `<desc>`/`<foreignObject>` CDATA, HTML ASCII whitespace (NBSP), and Unicode closing quotes (`»`).
+    const tEsc0 = performance.now();
+    const escScaled = extractCleanArticle(`<article><p>Safe scaled</p><script><!--${'<'.repeat(1_000_000)}`, 'https://private.example/scale');
+    expect(performance.now() - tEsc0).toBeLessThan(250);
+    expect(escScaled.aiMarkdown).toContain('Safe scaled');
+    const codeTitleArt = extractCleanArticle('<article><code>Safe prose //R11CODETITLE99<title> metadata words', 'https://private.example/ct');
+    expect(codeTitleArt.truncated).toBe(true);
+    expect(codeTitleArt.aiMarkdown).not.toContain('R11CODETITLE99');
+    expect(codeTitleArt.aiMarkdown).not.toContain('metadata');
+    const preTitleArt = extractCleanArticle('<article><pre>Safe prose //R11PRETITLE99<title> metadata words', 'https://private.example/pt');
+    expect(preTitleArt.truncated).toBe(true);
+    expect(preTitleArt.aiMarkdown).not.toContain('R11PRETITLE99');
+    const r11DescMedia = extractMarkupMedia(
+      '<template><svg><desc><![CDATA[ > </template> ]]></desc></svg><img src="https://secret.example/desc.png"></template><template><script>var s="</script\u00a0></template><img src=\'https://secret.example/nbsp.png\'>";</script></template><img src="https://public.example/r11-ok.png">',
+      'https://public.example/',
+    );
+    expect(r11DescMedia.map(m => m.url)).toEqual(['https://public.example/r11-ok.png']);
+    const r11RssParsed = parseFeedXml(
+      `<rss><channel><item><title>R11 Desc &amp; Nbsp</title><link>https://private.example/r11</link><description>Safe r11 //R11DESC99&lt;wbr&gt;&lt;template&gt;&lt;svg&gt;&lt;desc&gt;&lt;![CDATA[ &gt; &lt;/template&gt; ]]&gt;&lt;/desc&gt;&lt;/svg&gt;discarded &lt;/template&gt;@intranet:8080/a and //R11NBSP99&lt;wbr&gt;&lt;template&gt;&lt;script&gt;var s="&lt;/script\u00a0&gt;&lt;/template&gt;discarded";&lt;/script&gt;&lt;/template&gt;@intranet:8080/b end.</description></item></channel></rss>`,
+      'https://private.example/feed.xml',
+      { sanitizeExcerpt: raw => raw },
+    );
+    expect(r11RssParsed[0].summaryExcerpt).not.toContain('discarded');
+    expect(r11RssParsed[0].summaryExcerpt).toContain('//R11DESC99@intranet:8080/a');
+    expect(r11RssParsed[0].summaryExcerpt).toContain('//R11NBSP99@intranet:8080/b');
+
+    // Round 33 (PR #2032 Round 12): O(1) per-namespace foreign end-tag tracking & O(N) nested-blockquote private projection scaling
+    const svgCloseBomb = `${'<svg>'.repeat(12_000)}${'</math>'.repeat(12_000)}Safe tail`;
+    const rssBomb = `<rss><channel>
+      <item><title>Bomb 1</title><link>https://private.example/b1</link><description><![CDATA[${svgCloseBomb}]]></description></item>
+      <item><title>Bomb 2</title><link>https://private.example/b2</link><description><![CDATA[${svgCloseBomb}]]></description></item>
+      <item><title>Bomb 3</title><link>https://private.example/b3</link><description><![CDATA[${svgCloseBomb}]]></description></item>
+    </channel></rss>`;
+    const tForeign0 = performance.now();
+    const bombItems = parseFeedXml(rssBomb, 'https://private.example/feed.xml', { sanitizeExcerpt: raw => raw });
+    expect(performance.now() - tForeign0).toBeLessThan(600);
+    expect(bombItems).toHaveLength(3);
+    expect(bombItems[0].summaryExcerpt).toBe('Safe tail');
+    const deepBqHtml = `<article>${'<blockquote>'.repeat(120)}${'<p>Quoted line text</p>'.repeat(11_000)}${'</blockquote>'.repeat(120)}</article>`;
+    const tDeepBq0 = performance.now();
+    const deepBqArt = extractCleanArticle(deepBqHtml, 'https://private.example/bq');
+    expect(performance.now() - tDeepBq0).toBeLessThan(600);
+    expect(deepBqArt.markdown).toHaveLength(40_000);
+    expect(deepBqArt.truncated).toBe(true);
+    expect(deepBqArt.aiMarkdown.length).toBeLessThanOrEqual(40_000);
+    expect(deepBqArt.aiMarkdown).toContain('> >');
+    // Multiline <pre> inside 120-deep blockquote expands prefixes incrementally within budget + both nesting directions preserve prefix order
+    const preBqHtml = `<article>${'<blockquote>'.repeat(120)}<pre>${'line\n'.repeat(50_000)}</pre>${'</blockquote>'.repeat(120)}</article>`;
+    const tPreBq0 = performance.now();
+    const preBqArt = extractCleanArticle(preBqHtml, 'https://private.example/prebq');
+    expect(performance.now() - tPreBq0).toBeLessThan(400);
+    expect(preBqArt.markdown).toHaveLength(40_000);
+    expect(preBqArt.aiMarkdown.length).toBeLessThanOrEqual(40_000);
+    expect(extractCleanArticle('<article><ul><li><blockquote><p>L1</p><p>L2</p></blockquote></li></ul></article>', 'https://example.com').markdown)
+      .toContain('- > L1\n  > ');
+    expect(extractCleanArticle('<article><blockquote><ul><li>Item 1<br>cont</li></ul></blockquote></article>', 'https://example.com').markdown)
+      .toContain('> - Item 1\n>   cont');
+
+    // Mixed public/private dailyBriefing carries per-story isPrivateSource: true on private stories (enabling Agent defense-in-depth) while keeping public stories clean.
+    const mixedDailyReqAi = vi.fn(async () => dailyResult);
+    const mixedDailySvc = makeService({ requestAi: mixedDailyReqAi });
+    await mixedDailySvc.dailyBriefing('alice', 'user', { force: true });
+    const dailyDomains = mixedDailyReqAi.mock.lastCall[0].payload.domains;
+    const privDailyDomain = dailyDomains.find(d => d.id === 'custom-sports');
+    const pubDailyDomain = dailyDomains.find(d => d.id === 'ai');
+    const privDailyStory = privDailyDomain?.stories.find(s => s.headline === 'Private img note');
+    const pubDailyStory = pubDailyDomain?.stories.find(s => s.headline === 'Public AI news');
+    expect(privDailyStory?.isPrivateSource).toBe(true);
+    expect(privDailyStory?.summaryExcerpt).not.toContain('REVIEWPASS99');
+    expect(privDailyStory?.summaryExcerpt).not.toContain('privateidn1');
+    expect(pubDailyStory?.isPrivateSource).toBeUndefined();
 
     // CW2-05 & Round 3 Blocker #1: legacy v1 Agent (no cosmic_web_cancel) retains remote slot accounting after caller abort,
     // defers subsequent requests, AND hands off freed slots when awakened waiters hit the rate boundary (never hanging).

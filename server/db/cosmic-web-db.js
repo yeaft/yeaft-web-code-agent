@@ -4,6 +4,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 let db;
+export const PRIVATE_EXCERPT_VERSION = 7;
 export function resolveCosmicWebDbPath(env = process.env) {
   if (env.COSMIC_WEB_DB_PATH) return env.COSMIC_WEB_DB_PATH;
   if (env.SERVER_DATA_DIR) return join(env.SERVER_DATA_DIR, 'cosmic-web.db');
@@ -35,7 +36,7 @@ export function openCosmicWebDb(customPath = resolveCosmicWebDbPath()) {
         id TEXT PRIMARY KEY, owner_user_id TEXT CHECK(owner_user_id <> ''),
         scope TEXT GENERATED ALWAYS AS (coalesce(owner_user_id, '')) STORED,
         headline TEXT NOT NULL, summary_excerpt TEXT NOT NULL, keywords_json TEXT NOT NULL,
-        published_at INTEGER NOT NULL, UNIQUE(id, scope)
+        published_at INTEGER NOT NULL, excerpt_version INTEGER NOT NULL DEFAULT 0, UNIQUE(id, scope)
       );
       CREATE INDEX IF NOT EXISTS cw_clusters_recent ON cw_clusters(owner_user_id, published_at);
       CREATE TABLE IF NOT EXISTS cw_items (
@@ -44,6 +45,7 @@ export function openCosmicWebDb(customPath = resolveCosmicWebDbPath()) {
         cluster_id TEXT NOT NULL, source_id TEXT NOT NULL, domain_id TEXT NOT NULL,
         url TEXT NOT NULL, title TEXT NOT NULL, summary_excerpt TEXT NOT NULL,
         published_at INTEGER NOT NULL, has_hot_metric INTEGER NOT NULL, media_json TEXT NOT NULL DEFAULT '[]', source_name_override TEXT,
+        excerpt_version INTEGER NOT NULL DEFAULT 0,
         UNIQUE(source_id, url),
         FOREIGN KEY(cluster_id, scope) REFERENCES cw_clusters(id, scope) ON DELETE CASCADE,
         FOREIGN KEY(source_id, scope) REFERENCES cw_sources(id, scope) ON DELETE CASCADE
@@ -73,11 +75,18 @@ export function openCosmicWebDb(customPath = resolveCosmicWebDbPath()) {
       );
     `);
     conn.exec('BEGIN IMMEDIATE');
+    const clusterColumns = new Set(conn.prepare('PRAGMA table_info(cw_clusters)').all().map(column => column.name));
+    if (!clusterColumns.has('excerpt_version')) {
+      conn.exec('ALTER TABLE cw_clusters ADD COLUMN excerpt_version INTEGER NOT NULL DEFAULT 0');
+    }
     const itemColumns = new Set(conn.prepare('PRAGMA table_info(cw_items)').all().map(column => column.name));
     if (!itemColumns.has('media_json')) {
       conn.exec("ALTER TABLE cw_items ADD COLUMN media_json TEXT NOT NULL DEFAULT '[]'");
     }
     if (!itemColumns.has('source_name_override')) conn.exec('ALTER TABLE cw_items ADD COLUMN source_name_override TEXT');
+    if (!itemColumns.has('excerpt_version')) {
+      conn.exec('ALTER TABLE cw_items ADD COLUMN excerpt_version INTEGER NOT NULL DEFAULT 0');
+    }
     conn.exec('COMMIT');
   } catch (err) { conn.close(); throw err; }
   db = conn;
@@ -155,17 +164,32 @@ export function findRecentClusterByUrl(ownerUserId, url, since, until) {
     .get(ownerUserId, url, since, until);
 }
 export function upsertCluster(cluster) {
-  sql(`INSERT INTO cw_clusters(id, owner_user_id, headline, summary_excerpt, keywords_json, published_at) VALUES (?, ?, ?, ?, ?, ?)
+  const excerptVersion = Number.isInteger(cluster.excerptVersion) ? cluster.excerptVersion : 0;
+  sql(`INSERT INTO cw_clusters(id, owner_user_id, headline, summary_excerpt, keywords_json, published_at, excerpt_version) VALUES (?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(id) DO UPDATE SET published_at=max(cw_clusters.published_at, excluded.published_at),
-      summary_excerpt=CASE WHEN cw_clusters.summary_excerpt='' THEN excluded.summary_excerpt ELSE cw_clusters.summary_excerpt END
+      summary_excerpt=CASE
+        WHEN excluded.excerpt_version > cw_clusters.excerpt_version THEN excluded.summary_excerpt
+        WHEN excluded.excerpt_version = cw_clusters.excerpt_version AND cw_clusters.summary_excerpt='' THEN excluded.summary_excerpt
+        ELSE cw_clusters.summary_excerpt
+      END,
+      excerpt_version=max(cw_clusters.excerpt_version, excluded.excerpt_version)
     WHERE cw_clusters.scope=excluded.scope`)
-    .run(cluster.id, cluster.ownerUserId ?? null, cluster.headline, cluster.summaryExcerpt, JSON.stringify(cluster.keywords), cluster.publishedAt);
+    .run(cluster.id, cluster.ownerUserId ?? null, cluster.headline, cluster.summaryExcerpt, JSON.stringify(cluster.keywords), cluster.publishedAt, excerptVersion);
 }
 export function insertItem(item) {
-  return sql(`INSERT INTO cw_items(id, owner_user_id, cluster_id, source_id, domain_id, url, title, summary_excerpt, published_at, has_hot_metric, media_json, source_name_override)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(source_id, url) DO NOTHING`)
+  const excerptVersion = Number.isInteger(item.excerptVersion) ? item.excerptVersion : 0;
+  return sql(`INSERT INTO cw_items(id, owner_user_id, cluster_id, source_id, domain_id, url, title, summary_excerpt, published_at, has_hot_metric, media_json, source_name_override, excerpt_version)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(source_id, url) DO NOTHING`)
     .run(item.id, item.ownerUserId ?? null, item.clusterId, item.sourceId, item.domainId, item.url, item.title,
-      item.summaryExcerpt, item.publishedAt, Number(!!item.hasHotMetric), JSON.stringify((item.media ?? []).slice(0, 3)), item.sourceName || null).changes;
+      item.summaryExcerpt, item.publishedAt, Number(!!item.hasHotMetric), JSON.stringify((item.media ?? []).slice(0, 3)), item.sourceName || null, excerptVersion).changes;
+}
+export function upgradePrivateExcerpt(itemId, clusterId, ownerUserId, summaryExcerpt, excerptVersion) {
+  if (!ownerUserId || !itemId || !clusterId || !Number.isInteger(excerptVersion)) return 0;
+  const changes = sql('UPDATE cw_items SET summary_excerpt=?, excerpt_version=? WHERE id=? AND owner_user_id=? AND excerpt_version<?')
+    .run(summaryExcerpt, excerptVersion, itemId, ownerUserId, excerptVersion).changes;
+  sql('UPDATE cw_clusters SET summary_excerpt=?, excerpt_version=? WHERE id=? AND owner_user_id=? AND excerpt_version<?')
+    .run(summaryExcerpt, excerptVersion, clusterId, ownerUserId, excerptVersion);
+  return changes;
 }
 export function backfillItemMedia(sourceId, ownerUserId, url, media) {
   if (!Array.isArray(media) || !media.length) return 0;

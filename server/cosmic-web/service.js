@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from 'node:crypto';
+import { createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { CONFIG } from '../config.js';
 import { userDb } from '../db/user-db.js';
 import * as db from '../db/cosmic-web-db.js';
@@ -9,11 +9,41 @@ import { fetchSource } from './sources.js';
 import { safeFetch, validateExternalUrl } from './safe-fetch.js';
 import { setTimeout as delay } from 'node:timers/promises';
 import { cleanText, normalizeMedia, parseTimestamp } from './rss-parser.js';
+import { stripPrivateUrls } from './private-redactor.js';
 import { extractCommunityEnrichment, verifyStoredCommunityMedia } from './community-extractor.js';
 import { toProxyMediaUrl } from './media-proxy.js';
-import { extractCleanArticle } from './article-extractor.js';
+import { ARTICLE_EXTRACTOR_VERSION, extractCleanArticle } from './article-extractor.js';
 import { buildGraphProjection, canonicalizeUrl, CLUSTER_THRESHOLD, CLUSTER_WINDOW_MS, clusterSimilarity, computeHeatScore, extractTokens } from './clusterer.js';
 import { clearAllCosmicWebAiRequests, listCapableAgentsForUser, requestCosmicWebAi, validateCosmicWebAiResult } from './ai-bridge.js';
+
+export const PRIVATE_BRIEF_CONTEXT_VERSION = 7;
+
+const briefContextFallbackSecret = randomBytes(32).toString('hex');
+function briefContextSigningKey() {
+  return `cw-brief-ctx-v${PRIVATE_BRIEF_CONTEXT_VERSION}:${CONFIG?.jwtSecret || briefContextFallbackSecret}`;
+}
+function computeBriefContextSignature(userId, clusterId, itemId, exp, briefContext) {
+  return createHmac('sha256', briefContextSigningKey())
+    .update(JSON.stringify([PRIVATE_BRIEF_CONTEXT_VERSION, userId, clusterId, itemId, exp, briefContext]))
+    .digest('base64url');
+}
+function mintBriefContextToken({ userId, clusterId, itemId, briefContext, now = Date.now(), ttlMs = 6 * 60 * 60_000 }) {
+  const exp = Math.floor((now + ttlMs) / 1000);
+  const sig = computeBriefContextSignature(userId, clusterId, itemId, exp, briefContext);
+  return `${PRIVATE_BRIEF_CONTEXT_VERSION}.${exp}.${sig}`;
+}
+function verifyBriefContextToken({ token, userId, clusterId, itemId, briefContext, now = Date.now() }) {
+  if (typeof token !== 'string' || !token || token.length > 256) return false;
+  const parts = token.split('.');
+  if (parts.length !== 3) return false;
+  const ver = Number.parseInt(parts[0], 10);
+  const exp = Number.parseInt(parts[1], 10);
+  const sig = parts[2];
+  if (ver !== PRIVATE_BRIEF_CONTEXT_VERSION || !Number.isSafeInteger(exp) || exp < Math.floor(now / 1000) || !sig) return false;
+  const expected = Buffer.from(computeBriefContextSignature(userId, clusterId, itemId, exp, briefContext));
+  const actual = Buffer.from(sig);
+  return expected.length === actual.length && timingSafeEqual(expected, actual);
+}
 
 const minute = 60_000;
 const refreshTtl = 5 * minute;
@@ -106,7 +136,8 @@ function enabledIds(prefs) {
 }
 function toItem(row) {
   return { id: row.id, sourceId: itemSourceId(row), domainId: row.domain_id, sourceName: row.source_name,
-    url: row.url, title: row.title, summaryExcerpt: row.summary_excerpt, publishedAt: row.published_at, media: JSON.parse(row.media_json) };
+    url: row.url, title: row.title, summaryExcerpt: row.summary_excerpt, publishedAt: row.published_at,
+    media: JSON.parse(row.media_json), excerptVersion: row.excerpt_version ?? 0 };
 }
 
 export function ingestCosmicWebItems(source, items, now = Date.now()) {
@@ -119,9 +150,15 @@ export function ingestCosmicWebItems(source, items, now = Date.now()) {
       .map(c => ({ id: c.id, publishedAt: c.published_at, keywords: JSON.parse(c.keywords_json) }));
     let added = 0;
     for (const i of dated) {
-      if (db.findItemBySourceUrl(source.id, ownerUserId, i.url)) {
+      const excerptVersion = Number.isInteger(i.excerptVersion) ? i.excerptVersion : 0;
+      const existing = db.findItemBySourceUrl(source.id, ownerUserId, i.url);
+      if (existing) {
         if (Array.isArray(i.media) && i.media.length) {
           db.backfillItemMedia(source.id, ownerUserId, i.url, i.media);
+        }
+        // Upgrade legacy unversioned private RSS excerpts (item + cluster) once refreshed through the sanitized single-pass pipeline.
+        if (ownerUserId !== null && excerptVersion >= db.PRIVATE_EXCERPT_VERSION && (existing.excerpt_version ?? 0) < excerptVersion) {
+          db.upgradePrivateExcerpt(existing.id, existing.cluster_id, ownerUserId, i.summaryExcerpt ?? '', excerptVersion);
         }
         continue;
       }
@@ -138,12 +175,12 @@ export function ingestCosmicWebItems(source, items, now = Date.now()) {
         }
       }
       const id = best?.id ?? randomUUID();
-      const cluster = { id, ownerUserId, headline: i.title, summaryExcerpt: i.summaryExcerpt ?? '', keywords, publishedAt: i.publishedAt };
+      const cluster = { id, ownerUserId, headline: i.title, summaryExcerpt: i.summaryExcerpt ?? '', keywords, publishedAt: i.publishedAt, excerptVersion };
       db.upsertCluster(cluster);
       const candidate = best && recent.find(c => c.id === best.id);
       if (candidate) candidate.publishedAt = Math.max(candidate.publishedAt, i.publishedAt);
       else if (withinWindow) recent.push({ id, keywords, publishedAt: i.publishedAt });
-      added += db.insertItem({ ...i, summaryExcerpt: i.summaryExcerpt ?? '', id: randomUUID(), ownerUserId, clusterId: id,
+      added += db.insertItem({ ...i, summaryExcerpt: i.summaryExcerpt ?? '', excerptVersion, id: randomUUID(), ownerUserId, clusterId: id,
         domainId: source.domainId, sourceId: source.id });
     }
     return added;
@@ -178,6 +215,7 @@ function listClusters(userId, prefs, now, id) {
     const state = states.get(row.id) ?? { unread: true, bookmarked: false };
     const domain = [...BUILTIN_DOMAINS, ...prefs.customDomains].find(d => d.id === domainId);
     return [{ id: row.id, clusterId: row.id, headline: row.headline, summaryExcerpt: row.summary_excerpt,
+      excerptVersion: row.excerpt_version ?? 0,
       primaryUrl: items[0]?.url || '', isPrivateSource,
       keywords, publishedAt: row.published_at, domainId, domainIds: allDomains, relatedDomains: allDomains.filter(d => d !== domainId),
       colorToken: domain?.colorToken ?? 'cyan', itemCount: items.length, items, sourceNames, ...state,
@@ -254,8 +292,8 @@ export function createCosmicWebService({ fetcher = safeFetch, dnsLookup, now = D
       try {
         items = await fetchSource(s, {
           fetcher, dnsLookup, signal, now: now(),
-          // Redact URLs in owner-private RSS excerpts BEFORE clipping to 1,000 chars so boundary-straddling credentials never leak.
-          sanitizeExcerpt: s.ownerUserId != null ? stripPrivateUrls : undefined,
+          // Redact URLs in owner-private RSS excerpts BEFORE clipping to 1,000 chars with a bounded CPU budget (fail-closed).
+          sanitizeExcerpt: s.ownerUserId != null ? (raw => stripPrivateUrls(raw, { maxOutputChars: 1000 })) : undefined,
         });
       }
       catch {
@@ -264,7 +302,10 @@ export function createCosmicWebService({ fetcher = safeFetch, dnsLookup, now = D
         return { failed: true };
       }
       if (!canWrite()) return { skipped: true };
-      const added = ingestCosmicWebItems(s, items, now());
+      const ingested = s.ownerUserId != null
+        ? items.map(it => ({ ...it, excerptVersion: db.PRIVATE_EXCERPT_VERSION }))
+        : items;
+      const added = ingestCosmicWebItems(s, ingested, now());
       db.recordSourceRefresh(s.id, s.ownerUserId, now());
       if (added) update(s, signal);
       return { added };
@@ -356,7 +397,8 @@ export function createCosmicWebService({ fetcher = safeFetch, dnsLookup, now = D
     // Warm community enrichment asynchronously so opening a story never blocks on remote HTTP.
     if (!cached && !c.isPrivateSource) void enrichment(c, signal).catch(() => {});
     const media = cached?.media?.length ? signMediaList(cached.media, userId) : storedClusterMedia(c, userId);
-    return { ...c, media, communityComments: cached?.communityComments ?? [] };
+    const { excerptVersion: _clusterEv, items: clusterItems, ...displayCluster } = c;
+    return { ...displayCluster, items: clusterItems.map(({ excerptVersion: _itemEv, ...it }) => it), media, communityComments: cached?.communityComments ?? [] };
   }
   async function clusterCommunity(userId, id, reqSignal) {
     const signal = combineSignals(reqSignal);
@@ -410,7 +452,7 @@ export function createCosmicWebService({ fetcher = safeFetch, dnsLookup, now = D
           JSON.stringify(c.keywords), ...c.items.map(i => i.title)]));
     }).sort((a, b) => (query.sort === 'latest' ? 0 : b.heatScore - a.heatScore) || b.publishedAt - a.publishedAt || a.id.localeCompare(b.id));
   }
-  const summary = ({ items, ...rest }) => rest;
+  const summary = ({ items, excerptVersion: _ev, ...rest }) => rest;
 
   // Selection must be an exact match to a scoped, stored cluster item.
   function selectItem(cluster, { itemId, url }) {
@@ -420,16 +462,15 @@ export function createCosmicWebService({ fetcher = safeFetch, dnsLookup, now = D
     return item;
   }
 
-  async function article(userId, id, options = {}) {
+  async function articleRecord(userId, id, options = {}) {
     const { signal } = controller;
     ensureRunning(signal);
     ensureActive(userId);
     const selection = typeof options === 'string' ? { itemId: options } : options;
     const item = selectItem(visibleCluster(userId, id), selection);
-    const { force } = selection;
-    const toArticle = result => ({ ...result, sourceUrl: item.url, contentMd: result.markdown });
+    const { force, preserveCacheOnBlocked } = selection;
     const cached = db.getArticleCache(userId, item.id, now());
-    if (cached && force !== true && force !== '1') return toArticle(cached);
+    if (cached && force !== true && force !== '1') return { item, result: cached };
     let task = articleInflight.get(item.id);
     if (!task) {
       task = limit(async () => {
@@ -449,8 +490,16 @@ export function createCosmicWebService({ fetcher = safeFetch, dnsLookup, now = D
     const result = await task;
     ensureRunning(signal);
     ensureActive(userId);
-    db.setArticleCache(userId, item.id, result, now() + (result.quality === 'blocked' ? minute : 24 * 60 * minute));
-    return toArticle(result);
+    // Keep a working legacy display cache row intact if a background provenance upgrade hits a transient origin failure.
+    if (!preserveCacheOnBlocked || result.quality !== 'blocked' || !cached || cached.quality === 'blocked') {
+      db.setArticleCache(userId, item.id, result, now() + (result.quality === 'blocked' ? minute : 24 * 60 * minute));
+    }
+    return { item, result };
+  }
+  async function article(userId, id, options = {}) {
+    const { item, result } = await articleRecord(userId, id, options);
+    const { aiMarkdown: _omitAiMarkdown, ...display } = result;
+    return { ...display, sourceUrl: item.url, contentMd: result.markdown };
   }
 
   function briefingOptions(userId, userRole, body, prefs = preferred(userId), mode = 'brief') {
@@ -478,8 +527,8 @@ export function createCosmicWebService({ fetcher = safeFetch, dnsLookup, now = D
     ensureRunning(signal);
     ensureActive(userId);
     const { perspective, language, explicitAgentId, agent } = options;
-    // Version the rendering contract too: old cached Markdown may contain autolinks.
-    const key = hash(5, mode, perspective, language, explicitAgentId, payload);
+    // Version the rendering and private-provenance contracts: old cached private responses may contain pre-upgrade excerpts or unredacted TLDRs.
+    const key = hash(payload.isPrivateSource ? 11 : 5, mode, perspective, language, explicitAgentId, payload);
     const cached = db.getAiCache(userId, key, now());
     if (cached && body.force !== true) {
       const media = Array.isArray(cached.media) ? signMediaList(cached.media, userId) : cached.media;
@@ -543,318 +592,25 @@ export function createCosmicWebService({ fetcher = safeFetch, dnsLookup, now = D
       );
     });
   }
-  /** Linear-time Markdown link/image/URL stripper for private briefings (keeps Clean Article cache intact). */
-  function stripBracketedLinks(text, imagesOnly) {
-    let out = '';
-    let i = 0;
-    const len = text.length;
-    let nextClose = text.indexOf(']');
-    while (i < len) {
-      const matchOpen = imagesOnly ? (text[i] === '!' && text[i + 1] === '[') : (text[i] === '[');
-      if (matchOpen && nextClose !== -1) {
-        const labelStart = imagesOnly ? i + 2 : i + 1;
-        while (nextClose !== -1 && nextClose < labelStart) nextClose = text.indexOf(']', nextClose + 1);
-        if (nextClose !== -1 && nextClose - labelStart <= 512 && text[nextClose + 1] === '(') {
-          let j = nextClose + 2;
-          const limit = Math.min(len, nextClose + 2 + 2048);
-          while (j < limit && (text[j] === ' ' || text[j] === '\t')) j++;
-          let matchedClose = false;
-          if (j < limit && text[j] === '<') {
-            // Angle-delimited destination (<...>) emitted by extractCleanArticle: scan as a single unit ignoring ')' inside <...>.
-            j++;
-            while (j < limit && text[j] !== '>' && text[j] !== '\n') {
-              if (text[j] === '\\' && j + 1 < limit) { j += 2; continue; }
-              j++;
-            }
-            if (j < limit && text[j] === '>') {
-              j++;
-              while (j < limit && text[j] !== ')' && text[j] !== '\n') {
-                if (text[j] === '\\' && j + 1 < limit) { j += 2; continue; }
-                if (text[j] === '"' || text[j] === "'") {
-                  const q = text[j++];
-                  while (j < limit && text[j] !== q && text[j] !== '\n') {
-                    if (text[j] === '\\' && j + 1 < limit) { j += 2; continue; }
-                    j++;
-                  }
-                  if (j < limit && text[j] === q) j++;
-                  continue;
-                }
-                j++;
-              }
-              if (j < limit && text[j] === ')') {
-                j++;
-                matchedClose = true;
-              }
-            }
-          } else {
-            let depth = 1;
-            while (j < limit && depth > 0) {
-              if (text[j] === '\\' && j + 1 < limit) { j += 2; continue; }
-              if (text[j] === '(') depth++;
-              else if (text[j] === ')') depth--;
-              j++;
-            }
-            matchedClose = depth === 0;
-          }
-          if (matchedClose) {
-            out += text.slice(labelStart, nextClose);
-            i = j;
-            continue;
-          }
-        }
-      }
-      out += text[i];
-      i++;
-    }
-    return out;
-  }
-  const UNICODE_PUNCT_RE = /[\p{P}\p{S}]/u;
-  const UNICODE_ALNUM_RE = /[\p{L}\p{N}]/u;
-  function codePointAtInfo(str, idx) {
-    const cp = str.codePointAt(idx);
-    const width = cp > 0xffff ? 2 : 1;
-    return { cp, width, ch: width === 2 ? str.slice(idx, idx + 2) : str[idx] };
-  }
-  function prevCodePointInfo(str, endIdx) {
-    if (endIdx >= 2) {
-      const lo = str.charCodeAt(endIdx - 1);
-      const hi = str.charCodeAt(endIdx - 2);
-      if (lo >= 0xdc00 && lo <= 0xdfff && hi >= 0xd800 && hi <= 0xdbff) {
-        return { cp: str.codePointAt(endIdx - 2), width: 2, ch: str.slice(endIdx - 2, endIdx) };
-      }
-    }
-    return { cp: str.charCodeAt(endIdx - 1), width: 1, ch: str[endIdx - 1] };
-  }
-  const isNonAsciiPunct = (cp, ch) => cp > 127 && UNICODE_PUNCT_RE.test(ch);
-  const isBareUrlStop = ch => !ch || /[\s<>"]/.test(ch);
-  function trimTrailingUrlPunct(str, start, end, openParens, closeParens, openBrackets, closeBrackets) {
-    let j = end;
-    while (j > start) {
-      const { cp, width, ch: last } = prevCodePointInfo(str, j);
-      // Consume contiguous trailing backslash runs in a single linear pass (prevents O(N^2) rescanning).
-      if (width === 1 && last === '\\') {
-        while (j > start && str[j - 1] === '\\') j--;
-        continue;
-      }
-      const isCloseParen = width === 1 && last === ')';
-      const isCloseBracket = width === 1 && last === ']';
-      const isTrimmable = (isCloseParen && closeParens > openParens)
-        || (isCloseBracket && closeBrackets > openBrackets)
-        || (!isCloseParen && !isCloseBracket && (
-          last === '\'' || last === '`' || last === '*' || last === '_' || last === '~'
-          || last === '}' || last === '|' || last === '>'
-          || last === '.' || last === ',' || last === ';' || last === ':' || last === '!' || last === '?' || isNonAsciiPunct(cp, last)
-        ));
-      if (!isTrimmable) break;
-      // Count preceding backslash run once; if >1 backslashes remain, the next iteration consumes them in O(1) amortized.
-      let bs = 0;
-      for (let b = j - width - 1; b >= start && str[b] === '\\'; b--) bs++;
-      const step = (bs & 1) === 1 ? width + 1 : width;
-      if (isCloseParen) closeParens--;
-      else if (isCloseBracket) closeBrackets--;
-      j -= step;
-    }
-    return j;
-  }
-  function isValidSchemeRelativeCandidate(rawCandidate) {
-    const normalized = rawCandidate.replace(/\\([\\`*_{}\[\]<>#!|~.\-+=])/g, '$1');
-    return normalized.length > 2 && /[/?#:@.[]/.test(normalized.slice(2)) && URL.canParse(`https:${normalized}`);
-  }
-  function matchUrlStartAt(str, offset, identBeforeUnderscores = false) {
-    const len = str.length;
-    const prev = offset > 0 ? str.charCodeAt(offset - 1) : 0;
-    const prevIsAlnum = (prev >= 48 && prev <= 57) || (prev >= 65 && prev <= 90) || (prev >= 97 && prev <= 122);
-    const prevIsIdent = prevIsAlnum || (prev === 95 && identBeforeUnderscores);
-
-    const c0 = str.charCodeAt(offset);
-    if (!prevIsIdent && ((c0 >= 65 && c0 <= 90) || (c0 >= 97 && c0 <= 122))) {
-      // 1. Any RFC 3986 scheme:// (http://, https://, ftp://, s3://, etc.) at exact original-string offset.
-      let k = offset + 1;
-      const maxSchemeEnd = Math.min(len - 3, offset + 24);
-      while (k < maxSchemeEnd) {
-        const ch = str.charCodeAt(k);
-        if ((ch >= 65 && ch <= 90) || (ch >= 97 && ch <= 122) || (ch >= 48 && ch <= 57) || ch === 43 || ch === 45 || ch === 46) {
-          k++;
-          continue;
-        }
-        break;
-      }
-      if (k + 2 < len && str.charCodeAt(k) === 58 && str.charCodeAt(k + 1) === 47 && str.charCodeAt(k + 2) === 47) {
-        return (k + 3) - offset;
-      }
-      // 2. Bare www.<host> URL (supports internationalized Unicode host labels such as www.例子.中国/...)
-      if (offset + 5 <= len
-        && (c0 | 32) === 119
-        && (str.charCodeAt(offset + 1) | 32) === 119
-        && (str.charCodeAt(offset + 2) | 32) === 119
-        && str.charCodeAt(offset + 3) === 46) {
-        const { ch: nextCh } = codePointAtInfo(str, offset + 4);
-        if (UNICODE_ALNUM_RE.test(nextCh)) {
-          return 4;
-        }
-      }
-    }
-
-    // 3. Scheme-relative //authority/... URL: allows leading '_' emphasis wrappers (_//user:pass@host:8080_),
-    // scans by full Unicode code point, snapshots per-cut bracket/paren counts so later brackets never break IPv6 cuts,
-    // and separates pre/post-'@' cut budgets.
-    if (!prevIsAlnum && offset + 3 < len && c0 === 47 && str.charCodeAt(offset + 1) === 47 && prev !== 58 && prev !== 47) {
-      const next = str[offset + 2];
-      if (next && next !== '/' && !isBareUrlStop(next)) {
-        let k = offset + 2;
-        const maxScan = Math.min(len, offset + 2048);
-        let openParens = 0, closeParens = 0, openBrackets = 0, closeBrackets = 0;
-        let seenUrlSignal = false;
-        let seenAt = false;
-        let seenPath = false;
-        let inBrackets = false;
-        let seenPortColon = false;
-        let hasNonPortAfterColon = false;
-        let prevWasDelim = false;
-        const preAtCuts = [];
-        const postAtCuts = [];
-        while (k < maxScan && !isBareUrlStop(str[k])) {
-          if (str[k] === '\\' && k + 1 < maxScan && !isBareUrlStop(str[k + 1])) {
-            const esc = str[k + 1];
-            const isEscWrapDelim = (esc === ']' && closeBrackets >= openBrackets)
-              || esc === '}' || esc === '|' || esc === '!' || esc === '*' || esc === '_' || esc === '~' || esc === '`';
-            if (isEscWrapDelim) {
-              const couldBeComplete = seenUrlSignal && (seenAt || seenPath || !hasNonPortAfterColon);
-              if (!prevWasDelim && couldBeComplete) {
-                const bucket = seenAt ? postAtCuts : preAtCuts;
-                if (bucket.length < 64) bucket.push({ cut: k, openParens, closeParens, openBrackets, closeBrackets });
-              }
-              if (esc === ']') { closeBrackets++; inBrackets = false; }
-              if (!seenAt && !seenPath && seenPortColon) hasNonPortAfterColon = true;
-              prevWasDelim = true;
-            } else {
-              if (esc === '[') { openBrackets++; inBrackets = true; seenUrlSignal = true; }
-              else if (esc === ']') { closeBrackets++; inBrackets = false; }
-              else if (esc === '/' || esc === '?' || esc === '#' || esc === ':' || esc === '@' || esc === '.') seenUrlSignal = true;
-              prevWasDelim = false;
-            }
-            k += 2;
-            continue;
-          }
-          const { cp, width, ch } = codePointAtInfo(str, k);
-          const isDelim = isNonAsciiPunct(cp, ch) || (width === 1 && (
-            ch === ',' || ch === ';' || ch === '!' || ch === ')' || ch === '}' || ch === '|'
-            || (ch === ']' && closeBrackets >= openBrackets)
-            || ch === '\'' || ch === '`' || ch === '*' || ch === '_' || ch === '~'
-          ));
-          if (isDelim) {
-            // Separate pre-'@' and post-'@' cut budgets and snapshot prefix bracket/paren state at each cut.
-            const couldBeComplete = seenUrlSignal && (seenAt || seenPath || !hasNonPortAfterColon);
-            if (!prevWasDelim && couldBeComplete) {
-              const bucket = seenAt ? postAtCuts : preAtCuts;
-              if (bucket.length < 64) bucket.push({ cut: k, openParens, closeParens, openBrackets, closeBrackets });
-            }
-            if (width === 1 && ch === ')') closeParens++;
-            else if (width === 1 && ch === ']') { closeBrackets++; inBrackets = false; }
-            if (!seenAt && !seenPath && seenPortColon) hasNonPortAfterColon = true;
-            prevWasDelim = true;
-          } else {
-            prevWasDelim = false;
-            if (width === 1) {
-              if (ch === '@') { seenAt = true; seenUrlSignal = true; }
-              else if (ch === '/' || ch === '?' || ch === '#') { seenPath = true; seenUrlSignal = true; }
-              else if (ch === '[') { openBrackets++; inBrackets = true; seenUrlSignal = true; }
-              else if (ch === ']') { closeBrackets++; inBrackets = false; }
-              else if (ch === '(') openParens++;
-              else if (ch === ')') closeParens++;
-              else if (ch === '.') seenUrlSignal = true;
-              else if (ch === ':') {
-                seenUrlSignal = true;
-                if (!inBrackets && !seenAt && !seenPath) {
-                  if (seenPortColon) hasNonPortAfterColon = true;
-                  else seenPortColon = true;
-                }
-              } else if (!seenAt && !seenPath && seenPortColon && !(cp >= 48 && cp <= 57)) {
-                hasNonPortAfterColon = true;
-              }
-            } else if (!seenAt && !seenPath && seenPortColon) {
-              hasNonPortAfterColon = true;
-            }
-          }
-          k += width;
-        }
-        const trimmedEnd = trimTrailingUrlPunct(str, offset + 2, k, openParens, closeParens, openBrackets, closeBrackets);
-        if (isValidSchemeRelativeCandidate(str.slice(offset, trimmedEnd))) return 2;
-        for (const c of postAtCuts) {
-          const prefixEnd = trimTrailingUrlPunct(str, offset + 2, c.cut, c.openParens, c.closeParens, c.openBrackets, c.closeBrackets);
-          if (isValidSchemeRelativeCandidate(str.slice(offset, prefixEnd))) return 2;
-        }
-        for (const c of preAtCuts) {
-          const prefixEnd = trimTrailingUrlPunct(str, offset + 2, c.cut, c.openParens, c.closeParens, c.openBrackets, c.closeBrackets);
-          if (isValidSchemeRelativeCandidate(str.slice(offset, prefixEnd))) return 2;
-        }
-        // Discard truncated credential-bearing or unclosed-IPv6 authority fragments at the end of a clipped field
-        // (e.g. a 1,000-char RSS excerpt ending in '//user:PRIVATE99@', '//user:PRIVATE99', or '//[2001:db8').
-        if (k === len && (seenAt || inBrackets || (seenPortColon && hasNonPortAfterColon))) return 2;
-      }
-    }
-    return 0;
-  }
-  function stripPrivateUrls(text) {
-    if (typeof text !== 'string' || !text) return text;
-    const noLinks = stripBracketedLinks(stripBracketedLinks(text, true), false);
-    let out = '';
-    let i = 0;
-    const len = noLinks.length;
-    let nextGt = noLinks.indexOf('>');
-    let identBeforeUnderscores = false;
-    while (i < len) {
-      if (noLinks[i] === '<' && matchUrlStartAt(noLinks, i + 1, false) > 0) {
-        while (nextGt !== -1 && nextGt <= i) nextGt = noLinks.indexOf('>', nextGt + 1);
-        if (nextGt !== -1) { i = nextGt + 1; identBeforeUnderscores = false; continue; }
-      }
-      const prefixLen = matchUrlStartAt(noLinks, i, identBeforeUnderscores);
-      if (prefixLen > 0) {
-        let j = i + prefixLen;
-        let openParens = 0, closeParens = 0, openBrackets = 0, closeBrackets = 0;
-        // Consume the entire non-whitespace/non-angle/non-quote token by full code point, trimming trailing delimiters only from the end.
-        while (j < len && !isBareUrlStop(noLinks[j])) {
-          if (noLinks[j] === '\\' && j + 1 < len && !isBareUrlStop(noLinks[j + 1])) {
-            const esc = noLinks[j + 1];
-            if (esc === '[') openBrackets++;
-            else if (esc === ']') closeBrackets++;
-            j += 2;
-            continue;
-          }
-          const { width, ch } = codePointAtInfo(noLinks, j);
-          if (width === 1) {
-            if (ch === '(') openParens++;
-            else if (ch === ')') closeParens++;
-            else if (ch === '[') openBrackets++;
-            else if (ch === ']') closeBrackets++;
-          }
-          j += width;
-        }
-        j = trimTrailingUrlPunct(noLinks, i, j, openParens, closeParens, openBrackets, closeBrackets);
-        i = j;
-        identBeforeUnderscores = false;
-        continue;
-      }
-      const code = noLinks.charCodeAt(i);
-      if ((code >= 48 && code <= 57) || (code >= 65 && code <= 90) || (code >= 97 && code <= 122)) {
-        identBeforeUnderscores = true;
-      } else if (code !== 95 && code !== 92) {
-        identBeforeUnderscores = false;
-      }
-      out += noLinks[i];
-      i++;
-    }
-    return out;
-  }
+  // Only trust private RSS excerpts produced by the versioned single-pass pre-clip sanitizer; unversioned legacy
+  // private excerpts stay visible in display endpoints but are omitted from AI payloads until refreshed/upgraded.
+  const trustedPrivateExcerpt = entry => entry?.excerptVersion === db.PRIVATE_EXCERPT_VERSION
+    ? stripPrivateUrls(entry.summaryExcerpt, { maxOutputChars: 1000 })
+    : '';
   function prioritizeSelectedSources(items, selected, isPrivateSource, max = 12) {
     const ordered = selected ? [selected, ...items.filter(it => it.id !== selected.id)] : items;
     const bounded = ordered.slice(0, max);
-    if (!isPrivateSource) return bounded;
-    return bounded.map(it => ({ ...it, media: [], summaryExcerpt: stripPrivateUrls(it.summaryExcerpt) }));
+    if (!isPrivateSource) return bounded.map(({ excerptVersion: _ev, ...it }) => it);
+    return bounded.map(({ excerptVersion, ...it }) => ({
+      ...it,
+      media: [],
+      summaryExcerpt: trustedPrivateExcerpt({ excerptVersion, summaryExcerpt: it.summaryExcerpt }),
+    }));
   }
   const storyContext = c => ({ headline: c.headline,
-    summaryExcerpt: c.isPrivateSource ? stripPrivateUrls(c.summaryExcerpt) : c.summaryExcerpt,
-    publishedAt: c.publishedAt, sourceNames: c.sourceNames.slice(0, 4) });
+    summaryExcerpt: c.isPrivateSource ? trustedPrivateExcerpt(c) : c.summaryExcerpt,
+    publishedAt: c.publishedAt, sourceNames: c.sourceNames.slice(0, 4),
+    ...(c.isPrivateSource ? { isPrivateSource: true } : {}) });
 
   async function savePreferences(userId, patch) {
     const { signal } = controller;
@@ -939,7 +695,10 @@ export function createCosmicWebService({ fetcher = safeFetch, dnsLookup, now = D
     return { id: `radar-${hash(userId, domain.id)}`, ownerUserId: userId, domainId: domain.id, name: domain.name,
       url: '', kind: 'radar' };
   }
-  const briefKey = (id, itemId, agentId) => hash(4, 'brief-context', id, itemId, agentId);
+  const briefKey = (id, itemId, agentId, isPrivateSource = false) =>
+    isPrivateSource
+      ? hash(5, 'brief-context', PRIVATE_BRIEF_CONTEXT_VERSION, id, itemId, agentId)
+      : hash(4, 'brief-context', id, itemId, agentId);
 
   function stats(userId, prefs, rows) {
     const states = db.listUserClusterStates(userId);
@@ -1090,28 +849,69 @@ export function createCosmicWebService({ fetcher = safeFetch, dnsLookup, now = D
       const options = briefingOptions(userId, userRole, body, preferred(userId), mode);
       const c = visibleCluster(userId, id);
       const item = selectItem(c, body);
+      const hasTrustedPrivateArticle = rec => rec?.extractorVersion === ARTICLE_EXTRACTOR_VERSION
+        && typeof rec?.truncated === 'boolean'
+        && typeof rec?.aiMarkdown === 'string';
       const cached = db.getArticleCache(userId, item.id, now());
-      const articleTask = cached || body.skipArticleFetch === true ? Promise.resolve(cached) : article(userId, id, { itemId: item.id });
+      const hasTrustedCached = Boolean(cached && (!c.isPrivateSource || hasTrustedPrivateArticle(cached)));
+      const articleTask = hasTrustedCached
+        ? Promise.resolve(cached)
+        : (body.skipArticleFetch === true
+          ? Promise.resolve(null)
+          : articleRecord(userId, id, { itemId: item.id, force: Boolean(cached), preserveCacheOnBlocked: Boolean(cached) }).then(entry => entry.result));
       const [content, context] = await Promise.all([
-        quick(articleTask, cached),
+        quick(articleTask, hasTrustedCached ? cached : null),
         c.isPrivateSource ? Promise.resolve(noEnrichment()) : briefingEnrichment(c, signal, body.skipArticleFetch === true),
       ]);
       // Never enable outbound web research for owner-private feeds or legacy v1 Agents.
       const allowResearch = !c.isPrivateSource && body.research === true && Boolean(options.agent?.supportsResearch);
-      const safeArticleMd = c.isPrivateSource && content?.markdown
-        ? stripPrivateUrls(content.markdown).slice(0, 12_000)
-        : content?.markdown?.slice(0, 12_000);
-      const safeExcerpt = c.isPrivateSource ? stripPrivateUrls(item.summaryExcerpt) : item.summaryExcerpt;
+      // For private sources, ALWAYS use the versioned source-DOM-redacted `aiMarkdown` (computed BEFORE Markdown syntax
+      // such as inline `<code>` spaces or 40k caps are synthesized); unversioned/older cached rows are re-extracted or omitted.
+      const trustedPrivateContent = hasTrustedPrivateArticle(content);
+      const privateArticleMd = c.isPrivateSource
+        ? (trustedPrivateContent ? content.aiMarkdown : undefined)
+        : content?.markdown;
+      const safeArticleMd = c.isPrivateSource
+        ? (privateArticleMd ? stripPrivateUrls(privateArticleMd, { maxOutputChars: 12_000 }) : undefined)
+        : privateArticleMd?.slice(0, 12_000);
+      const safeExcerpt = c.isPrivateSource ? trustedPrivateExcerpt(item) : item.summaryExcerpt;
       const result = await ai(userId, userRole, mode, body, {
         headline: item.title, sourceUrl: item.url, summaryExcerpt: safeExcerpt,
         isPrivateSource: c.isPrivateSource,
+        ...(c.isPrivateSource ? { briefContextProvenance: true } : {}),
         research: allowResearch,
-        articleMarkdown: safeArticleMd, quality: content?.quality,
+        articleMarkdown: safeArticleMd, quality: (!c.isPrivateSource || trustedPrivateContent) ? content?.quality : undefined,
         sources: prioritizeSelectedSources(c.items, item, c.isPrivateSource, 12), ...context,
       }, signal, options);
       ensureRunning(signal);
       ensureActive(userId);
-      db.setAiCache(userId, briefKey(id, item.id, result.agentId), result.tldr, now() + 6 * 60 * minute);
+      const hasCertifiedBriefContext = !c.isPrivateSource || result.briefContextVersion === PRIVATE_BRIEF_CONTEXT_VERSION;
+      if (hasCertifiedBriefContext) {
+        const storedBriefContext = c.isPrivateSource
+          ? stripPrivateUrls(result.tldr, { maxOutputChars: 1500, failClosedTruncatedSchemeRelative: true }).trim()
+          : result.tldr;
+        if (storedBriefContext) {
+          db.setAiCache(userId, briefKey(id, item.id, result.agentId, c.isPrivateSource), storedBriefContext, now() + 6 * 60 * minute);
+        }
+        if (c.isPrivateSource && storedBriefContext) {
+          return {
+            ...result,
+            tldr: storedBriefContext,
+            briefContextVersion: PRIVATE_BRIEF_CONTEXT_VERSION,
+            briefContextToken: mintBriefContextToken({
+              userId,
+              clusterId: id,
+              itemId: item.id,
+              briefContext: storedBriefContext,
+              now: now(),
+            }),
+          };
+        }
+      }
+      if (c.isPrivateSource) {
+        const { briefContextVersion: _omitUnverifiedVersion, ...uncertified } = result;
+        return uncertified;
+      }
       return result;
     },
     async followUp(userId, userRole, id, body = {}, reqSignal) {
@@ -1123,14 +923,31 @@ export function createCosmicWebService({ fetcher = safeFetch, dnsLookup, now = D
       const c = visibleCluster(userId, id);
       const item = selectItem(c, body);
       const context = c.isPrivateSource ? noEnrichment() : await briefingEnrichment(c, signal);
-      const briefContext = (options.agent && db.getAiCache(userId, briefKey(id, item.id, options.agent.id), now()))
-        || (typeof body.briefContext === 'string' ? body.briefContext.trim().slice(0, 1500) : undefined);
+      const cachedBriefContext = options.agent ? db.getAiCache(userId, briefKey(id, item.id, options.agent.id, c.isPrivateSource), now()) : undefined;
+      const rawClientBriefContext = typeof body.briefContext === 'string' ? body.briefContext.trim() : '';
+      // For private sources, never trust a plain client-supplied briefContext or version number; require server-owned cache
+      // OR a valid server-minted HMAC token bound to (userId, clusterId, itemId, briefContext).
+      const clientBriefContext = rawClientBriefContext && (!c.isPrivateSource || verifyBriefContextToken({
+        token: body.briefContextToken,
+        userId,
+        clusterId: id,
+        itemId: item.id,
+        briefContext: rawClientBriefContext,
+        now: now(),
+      }))
+        ? rawClientBriefContext
+        : undefined;
+      const rawBriefContext = cachedBriefContext || clientBriefContext;
       const allowResearch = !c.isPrivateSource && body.research === true && Boolean(options.agent?.supportsResearch);
-      const safeExcerpt = c.isPrivateSource ? stripPrivateUrls(item.summaryExcerpt) : item.summaryExcerpt;
+      const safeExcerpt = c.isPrivateSource ? trustedPrivateExcerpt(item) : item.summaryExcerpt;
+      // Scrub private briefContext BEFORE enforcing the 1,500-char limit so boundary-straddling username-only URLs cannot survive.
+      const safeBriefContext = rawBriefContext
+        ? (c.isPrivateSource ? (stripPrivateUrls(rawBriefContext, { maxOutputChars: 1500, failClosedTruncatedSchemeRelative: true }).trim() || undefined) : rawBriefContext.slice(0, 1500))
+        : undefined;
       return ai(userId, userRole, 'follow_up', body, {
         ...storyContext(c), headline: item.title, sourceUrl: item.url, summaryExcerpt: safeExcerpt,
         isPrivateSource: c.isPrivateSource,
-        question: body.question.trim(), research: allowResearch, briefContext: briefContext ?? undefined,
+        question: body.question.trim(), research: allowResearch, briefContext: safeBriefContext ?? undefined,
         sources: prioritizeSelectedSources(c.items, item, c.isPrivateSource, 12), ...context,
       }, signal, options);
     },
@@ -1151,8 +968,9 @@ export function createCosmicWebService({ fetcher = safeFetch, dnsLookup, now = D
       radarActive.add(userId);
       try {
         const result = await requestAi({ userId, userRole, agentId: options.agent.id, mode: 'topic_radar', perspective: options.perspective,
-          language: options.language, payload: { topic: domain.name, topicName: domain.name, keywords: domain.keywords, research: true }, signal });
+          language: options.language, payload: { topic: domain.name, topicName: domain.name, keywords: domain.keywords, research: true, excerptProvenance: true }, signal });
         if (!validateCosmicWebAiResult(result, 'topic_radar')) throw error(502, 'Agent returned an invalid radar result');
+        const hasCertifiedRadarExcerpts = result.excerptVersion === db.PRIVATE_EXCERPT_VERSION;
         ensureRunning(signal);
         ensureActive(userId);
         const seen = new Set();
@@ -1164,7 +982,12 @@ export function createCosmicWebService({ fetcher = safeFetch, dnsLookup, now = D
           try { await limit(() => validateExternalUrl(url, { dnsLookup, signal, timeoutMs: 5000 })); }
           catch { return null; }
           const media = normalizeMedia([row.mediaUrl]);
-          return { url, title, sourceName: cleanText(row.sourceName).slice(0, 150), summaryExcerpt: cleanText(row.summaryExcerpt).slice(0, 1000),
+          // Never run HTML entity-decoding cleanText() after Agent clipping; normalize whitespace and scrub defense-in-depth.
+          const safeRadarExcerpt = typeof row.summaryExcerpt === 'string'
+            ? stripPrivateUrls(row.summaryExcerpt.replace(/\s+/gu, ' ').trim(), { maxOutputChars: 1000, failClosedTruncatedSchemeRelative: true })
+              .replace(/\s+/gu, ' ').trim().slice(0, 1000)
+            : '';
+          return { url, title, sourceName: cleanText(row.sourceName).slice(0, 150), summaryExcerpt: safeRadarExcerpt,
             publishedAt: Math.min(now(), parseTimestamp(row.publishedAt) ?? now()), media };
         }))).filter(Boolean);
         ensureRunning(signal);
@@ -1177,7 +1000,13 @@ export function createCosmicWebService({ fetcher = safeFetch, dnsLookup, now = D
         const source = radarSource(userId, latest);
         const scanTime = now();
         const retained = items.filter(item => item.publishedAt >= scanTime - db.RETENTION_MS);
-        const added = retained.length ? ingestCosmicWebItems(source, retained, scanTime) : 0;
+        const added = retained.length
+          ? ingestCosmicWebItems(
+            source,
+            retained.map(item => ({ ...item, excerptVersion: hasCertifiedRadarExcerpts ? db.PRIVATE_EXCERPT_VERSION : 0 })),
+            scanTime,
+          )
+          : 0;
         if (retained.length) {
           db.recordSourceRefresh(source.id, userId, scanTime);
           if (!latest.enabled) db.disableRadarSource(source.id, userId);

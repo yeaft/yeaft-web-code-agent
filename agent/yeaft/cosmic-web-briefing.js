@@ -21,6 +21,9 @@ export const COSMIC_WEB_FOLLOW_UP_CAPABILITY = 'cosmic_web_follow_up';
 export const COSMIC_WEB_RADAR_CAPABILITY = 'cosmic_web_radar';
 export const COSMIC_WEB_CANCEL_CAPABILITY = 'cosmic_web_cancel';
 
+const PRIVATE_EXCERPT_VERSION = 7;
+const PRIVATE_BRIEF_CONTEXT_VERSION = 7;
+
 const BUNDLED_SKILLS_DIR = fileURLToPath(new URL('../skills/', import.meta.url));
 const SKILL_PATH = 'cosmic-web/SKILL.md';
 const TIMEOUT_MS = 65_000;
@@ -146,13 +149,22 @@ function commentItem(item) {
   return { ...comment, ...(sourceUrl ? { sourceUrl } : {}) };
 }
 
-/** Linear-time Markdown link/image/URL stripper for private briefings (defense-in-depth). */
-function stripBracketedLinks(text, imagesOnly) {
+/** Bounded linear-time Markdown link/image/URL stripper for private briefings (defense-in-depth). */
+function dropTrailingToken(str) {
+  let end = str.length;
+  while (end > 0 && !/\s/.test(str[end - 1])) end--;
+  return end === str.length ? str : str.slice(0, end);
+}
+
+function stripBracketedLinks(text, imagesOnly, maxSteps = 200_000) {
+  if (imagesOnly ? !text.includes('![') : !text.includes('](')) return text;
   let out = '';
   let i = 0;
+  let steps = 0;
   const len = text.length;
   let nextClose = text.indexOf(']');
   while (i < len) {
+    if (++steps > maxSteps) return dropTrailingToken(out); // Fail closed: discard unprocessed tail & partial token on budget exhaustion.
     const matchOpen = imagesOnly ? (text[i] === '!' && text[i + 1] === '[') : (text[i] === '[');
     if (matchOpen && nextClose !== -1) {
       const labelStart = imagesOnly ? i + 2 : i + 1;
@@ -160,22 +172,25 @@ function stripBracketedLinks(text, imagesOnly) {
       if (nextClose !== -1 && nextClose - labelStart <= 512 && text[nextClose + 1] === '(') {
         let j = nextClose + 2;
         const limit = Math.min(len, nextClose + 2 + 2048);
-        while (j < limit && (text[j] === ' ' || text[j] === '\t')) j++;
+        while (j < limit && (text[j] === ' ' || text[j] === '\t')) { j++; steps++; }
         let matchedClose = false;
         if (j < limit && text[j] === '<') {
           // Angle-delimited destination (<...>) emitted by extractCleanArticle: scan as a single unit ignoring ')' inside <...>.
           j++;
           while (j < limit && text[j] !== '>' && text[j] !== '\n') {
+            if (++steps > maxSteps) return dropTrailingToken(out);
             if (text[j] === '\\' && j + 1 < limit) { j += 2; continue; }
             j++;
           }
           if (j < limit && text[j] === '>') {
             j++;
             while (j < limit && text[j] !== ')' && text[j] !== '\n') {
+              if (++steps > maxSteps) return dropTrailingToken(out);
               if (text[j] === '\\' && j + 1 < limit) { j += 2; continue; }
               if (text[j] === '"' || text[j] === "'") {
                 const q = text[j++];
                 while (j < limit && text[j] !== q && text[j] !== '\n') {
+                  if (++steps > maxSteps) return dropTrailingToken(out);
                   if (text[j] === '\\' && j + 1 < limit) { j += 2; continue; }
                   j++;
                 }
@@ -192,6 +207,7 @@ function stripBracketedLinks(text, imagesOnly) {
         } else {
           let depth = 1;
           while (j < limit && depth > 0) {
+            if (++steps > maxSteps) return dropTrailingToken(out);
             if (text[j] === '\\' && j + 1 < limit) { j += 2; continue; }
             if (text[j] === '(') depth++;
             else if (text[j] === ')') depth--;
@@ -212,8 +228,151 @@ function stripBracketedLinks(text, imagesOnly) {
   return out;
 }
 
-const UNICODE_PUNCT_RE = /[\p{P}\p{S}]/u;
-const UNICODE_ALNUM_RE = /[\p{L}\p{N}]/u;
+// Separate Unicode punctuation (\p{P}, sentence/wrapper boundaries) from Unicode symbols (\p{S}, valid WHATWG host chars like ☃ or 🚀).
+const UNICODE_PUNCT_RE = /\p{P}/u;
+const UNICODE_SYMBOL_RE = /\p{S}/u;
+const isWhatwgDot = code => code === 0x002e || code === 0x3002 || code === 0xff0e || code === 0xff61;
+// Percent-encoded WHATWG host dot separators normalized by Node URL parsing: %2e (.), %e3%80%82 (。), %ef%bc%8e (．), %ef%bd%a1 (｡).
+const PERCENT_WHATWG_DOT_RE = /%(?:2e|e3%80%82|ef%bc%8e|ef%bd%a1)/i;
+const ELLIPSIS_RE = /(?:\\?\.\\?\.|…|⋯)/u;
+const AMBIGUOUS_OPENER_MAP = { '[': ']', '(': ')', '{': '}', '【': '】', '（': '）' };
+const ATTACHED_OPEN_TAIL_RE = /(?:\\?([\[(\{【（]))((?:\\?\.|…|⋯)*)$/u;
+const IS_TRAIL_CLOSER_RE = /^[\s"'>`*_~\p{Pe}\p{Pf}]$/u;
+const TRAIL_WRAPPER_TRIM_RE = /["'>`*_~\p{Pe}\p{Pf}]+$/u;
+
+function findAmbiguousTruncationEnd(str, offset, tokenEnd, budget) {
+  const len = str.length;
+  const tokenBody = str.slice(offset + 2, tokenEnd);
+  const bumpStep = () => {
+    if (budget && ++budget.scanSteps > budget.maxScanSteps) {
+      budget.exhausted = true;
+      return true;
+    }
+    return false;
+  };
+
+  // 1. Attached opener split by whitespace inside a balanced abbreviation marker (e.g. //M[. . .], //M[   ...], //M(… )).
+  const openTail = ATTACHED_OPEN_TAIL_RE.exec(tokenBody);
+  if (openTail) {
+    const closeCh = AMBIGUOUS_OPENER_MAP[openTail[1]];
+    let dots = 0;
+    for (const ch of openTail[2]) {
+      if (ch === '.') dots++;
+      else if (ch === '…' || ch === '⋯') dots += 2;
+    }
+    let p = tokenEnd;
+    while (p < len) {
+      if (bumpStep()) return -1;
+      const ch = str[p];
+      if (ch === '\\' && p + 1 < len) {
+        const next = str[p + 1];
+        if (next === '.') { dots++; p += 2; continue; }
+        if (next === closeCh) {
+          if (dots >= 2) return p + 2;
+          break;
+        }
+        break;
+      }
+      if (/\s/u.test(ch)) { p++; continue; }
+      if (ch === '.') { dots++; p++; continue; }
+      if (ch === '…' || ch === '⋯') { dots += 2; p++; continue; }
+      if (ch === closeCh) {
+        if (dots >= 2) return p + 1;
+        break;
+      }
+      break;
+    }
+    if (p >= len) return len;
+  }
+
+  // 2. Attached compact ellipsis/abbreviation inside the scanned token (e.g. //M..., //M…, //M[...], //M[…], //M(…)).
+  if (ELLIPSIS_RE.test(tokenBody)) return tokenEnd;
+
+  // 3. Wrapper- and whitespace-aware lookahead within shared budget (no fixed short character window):
+  //    skip closing quotes/brackets/emphasis wrappers (e.g. `"//MARKER" . . .`, `'//MARKER' ...`, `“//MARKER” [...]`)
+  //    before testing effective EOF, bare/spaced ellipses, or balanced abbreviation brackets.
+  let p = tokenEnd;
+  while (p < len) {
+    if (bumpStep()) return -1;
+    if (str[p] === '\\' && p + 1 < len && IS_TRAIL_CLOSER_RE.test(str[p + 1])) {
+      p += 2;
+      continue;
+    }
+    if (IS_TRAIL_CLOSER_RE.test(str[p])) {
+      p++;
+      continue;
+    }
+    break;
+  }
+  if (p >= len) return tokenEnd;
+
+  // 3a. Bare ellipsis or spaced dots after whitespace/closing wrappers (... / … / . . . / attached '.' + ' .').
+  if (str[p] === '…' || str[p] === '⋯') return tokenEnd;
+  if (str[p] === '.' || (str[p] === '\\' && str[p + 1] === '.')) {
+    const coreBody = tokenBody.replace(TRAIL_WRAPPER_TRIM_RE, '');
+    let dots = coreBody.endsWith('.') ? 1 : 0;
+    let r = p;
+    while (r < len) {
+      if (bumpStep()) return -1;
+      const ch = str[r];
+      if (ch === '\\' && str[r + 1] === '.') { dots++; r += 2; continue; }
+      if (ch === '.') { dots++; r++; continue; }
+      if (ch === '…' || ch === '⋯') { dots += 2; r++; continue; }
+      if (/\s/u.test(ch)) { r++; continue; }
+      break;
+    }
+    if (dots >= 2) return tokenEnd;
+  }
+
+  // 3b. Whitespace/wrapper-separated balanced abbreviation wrapper ([...], [. . .], [   ...], ( … ), { … }, 【…】, （…）).
+  let openCh = str[p];
+  let r = p + 1;
+  if (openCh === '\\' && p + 1 < len && Object.hasOwn(AMBIGUOUS_OPENER_MAP, str[p + 1])) {
+    openCh = str[p + 1];
+    r = p + 2;
+  }
+  if (Object.hasOwn(AMBIGUOUS_OPENER_MAP, openCh)) {
+    const closeCh = AMBIGUOUS_OPENER_MAP[openCh];
+    let dots = 0;
+    while (r < len) {
+      if (bumpStep()) return -1;
+      const ch = str[r];
+      if (ch === '\\' && r + 1 < len) {
+        const next = str[r + 1];
+        if (next === '.') { dots++; r += 2; continue; }
+        if (next === closeCh) {
+          if (dots >= 2) return tokenEnd;
+          break;
+        }
+        break;
+      }
+      if (/\s/u.test(ch)) { r++; continue; }
+      if (ch === '.') { dots++; r++; continue; }
+      if (ch === '…' || ch === '⋯') { dots += 2; r++; continue; }
+      if (ch === closeCh) {
+        if (dots >= 2) return tokenEnd;
+        break;
+      }
+      break;
+    }
+    if (r >= len && dots > 0) return tokenEnd;
+  }
+
+  return -1;
+}
+function percentWhatwgDotLenAt(str, idx) {
+  if (str.charCodeAt(idx) !== 0x25) return 0;
+  if (idx + 3 <= str.length && str.charCodeAt(idx + 1) === 0x32 && (str.charCodeAt(idx + 2) | 32) === 0x65) return 3;
+  if (idx + 9 <= str.length && str.charCodeAt(idx + 3) === 0x25 && str.charCodeAt(idx + 6) === 0x25) {
+    const seq = str.slice(idx, idx + 9).toLowerCase();
+    if (seq === '%e3%80%82' || seq === '%ef%bc%8e' || seq === '%ef%bd%a1') return 9;
+  }
+  return 0;
+}
+function whatwgDotLenAt(str, idx) {
+  if (idx >= str.length) return 0;
+  return isWhatwgDot(str.charCodeAt(idx)) ? 1 : percentWhatwgDotLenAt(str, idx);
+}
 function codePointAtInfo(str, idx) {
   const cp = str.codePointAt(idx);
   const width = cp > 0xffff ? 2 : 1;
@@ -230,6 +389,7 @@ function prevCodePointInfo(str, endIdx) {
   return { cp: str.charCodeAt(endIdx - 1), width: 1, ch: str[endIdx - 1] };
 }
 const isNonAsciiPunct = (cp, ch) => cp > 127 && UNICODE_PUNCT_RE.test(ch);
+const isNonAsciiSymbol = (cp, ch) => cp > 127 && UNICODE_SYMBOL_RE.test(ch);
 const isBareUrlStop = ch => !ch || /[\s<>"]/.test(ch);
 
 function trimTrailingUrlPunct(str, start, end, openParens, closeParens, openBrackets, closeBrackets) {
@@ -243,6 +403,7 @@ function trimTrailingUrlPunct(str, start, end, openParens, closeParens, openBrac
     }
     const isCloseParen = width === 1 && last === ')';
     const isCloseBracket = width === 1 && last === ']';
+    // Trim only prose/Markdown punctuation and unmatched wrappers — never strip Unicode symbols (\p{S}) that can end valid hostnames (e.g. www.☃).
     const isTrimmable = (isCloseParen && closeParens > openParens)
       || (isCloseBracket && closeBrackets > openBrackets)
       || (!isCloseParen && !isCloseBracket && (
@@ -262,12 +423,30 @@ function trimTrailingUrlPunct(str, start, end, openParens, closeParens, openBrac
   return j;
 }
 
-function isValidSchemeRelativeCandidate(rawCandidate) {
+function isValidSchemeRelativeCandidate(rawCandidate, budget) {
   const normalized = rawCandidate.replace(/\\([\\`*_{}\[\]<>#!|~.\-+=])/g, '$1');
-  return normalized.length > 2 && /[/?#:@.[]/.test(normalized.slice(2)) && URL.canParse(`https:${normalized}`);
+  if (normalized.length <= 2) return false;
+  const rest = normalized.slice(2);
+  if (!/[/?#:@.[\u3002\uff0e\uff61]/.test(rest) && !PERCENT_WHATWG_DOT_RE.test(rest)) return false;
+  if (budget) {
+    if (budget.urlChecks >= budget.maxUrlChecks) { budget.exhausted = true; return false; }
+    budget.urlChecks++;
+  }
+  return URL.canParse(`https:${normalized}`);
 }
 
-function matchUrlStartAt(str, offset, identBeforeUnderscores = false) {
+function isValidBareWwwCandidate(rawCandidate, budget) {
+  const normalized = rawCandidate.replace(/\\([\\`*_{}\[\]<>#!|~.\-+=])/g, '$1');
+  if (normalized.length <= 4) return false;
+  if (budget) {
+    if (budget.urlChecks >= budget.maxUrlChecks) { budget.exhausted = true; return false; }
+    budget.urlChecks++;
+  }
+  const parsed = URL.parse(`https://${normalized}`);
+  return Boolean(parsed && ((parsed.hostname.startsWith('www.') && parsed.hostname.length > 4) || parsed.username || parsed.password));
+}
+
+function matchUrlStartAt(str, offset, identBeforeUnderscores = false, budget = null, failClosedTruncatedSchemeRelative = false) {
   const len = str.length;
   const prev = offset > 0 ? str.charCodeAt(offset - 1) : 0;
   const prevIsAlnum = (prev >= 48 && prev <= 57) || (prev >= 65 && prev <= 90) || (prev >= 97 && prev <= 122);
@@ -287,25 +466,145 @@ function matchUrlStartAt(str, offset, identBeforeUnderscores = false) {
       break;
     }
     if (k + 2 < len && str.charCodeAt(k) === 58 && str.charCodeAt(k + 1) === 47 && str.charCodeAt(k + 2) === 47) {
-      return (k + 3) - offset;
+      return { prefixLen: (k + 3) - offset, minEnd: k + 3 };
     }
-    // 2. Bare www.<host> URL (supports internationalized Unicode host labels such as www.例子.中国/...)
-    if (offset + 5 <= len
+    // 2. Bare www.<host> URL using WHATWG dot separators (literal or percent-encoded ., 。, ．, ｡) and WHATWG URL host normalization
+    // (covers www.☃, www。例子。中国/..., www%2eexample, www.☃[1], www.☃.example:8080。下一句, bracketed/punctuated adjacent prose, reserved structural cuts, and fail-closed limits).
+    const wwwDotLen = offset + 3 < len ? whatwgDotLenAt(str, offset + 3) : 0;
+    if (wwwDotLen > 0 && offset + 3 + wwwDotLen < len
       && (c0 | 32) === 119
       && (str.charCodeAt(offset + 1) | 32) === 119
-      && (str.charCodeAt(offset + 2) | 32) === 119
-      && str.charCodeAt(offset + 3) === 46) {
-      const { ch: nextCh } = codePointAtInfo(str, offset + 4);
-      if (UNICODE_ALNUM_RE.test(nextCh)) {
-        return 4;
+      && (str.charCodeAt(offset + 2) | 32) === 119) {
+      const wwwPrefixLen = 3 + wwwDotLen;
+      let k = offset + wwwPrefixLen;
+      const maxScan = Math.min(len, offset + 2048);
+      let openParens = 0, closeParens = 0, openBrackets = 0, closeBrackets = 0;
+      let inPath = false;
+      let inBrackets = false;
+      let atHostStart = -1;
+      let seenPortColon = false;
+      let portEndCut = false;
+      let prevWasCut = false;
+      let cutsOverflowed = false;
+      const structuralCuts = [];
+      const authorityCuts = [];
+      const pushAuthCut = (bucket, cap, cut, balanced = false) => {
+        if (bucket.length > 0 && bucket[bucket.length - 1].cut === cut) return;
+        if (bucket.length < cap) {
+          bucket.push(balanced
+            ? { cut, openParens: 0, closeParens: 0, openBrackets: 0, closeBrackets: 0 }
+            : { cut, openParens, closeParens, openBrackets, closeBrackets });
+        } else {
+          cutsOverflowed = true;
+        }
+      };
+      while (k < maxScan && !isBareUrlStop(str[k])) {
+        if (budget && ++budget.scanSteps > budget.maxScanSteps) { budget.exhausted = true; return null; }
+        if (str[k] === '\\' && k + 1 < maxScan && !isBareUrlStop(str[k + 1])) {
+          const esc = str[k + 1];
+          const isIpv6Open = !inPath && esc === '[' && k === atHostStart;
+          const isIpv6Close = !inPath && esc === ']' && inBrackets;
+          const isEscWrapDelim = !isIpv6Open && !isIpv6Close && (
+            (esc === ']' && closeBrackets >= openBrackets)
+            || esc === '[' || esc === '(' || esc === '{' || esc === '}' || esc === '|'
+            || esc === '!' || esc === '*' || esc === '_' || esc === '~' || esc === '`' || esc === '^'
+          );
+          if (!inPath && seenPortColon && !inBrackets && !portEndCut && esc !== '#') {
+            portEndCut = true;
+            pushAuthCut(structuralCuts, 16, k);
+          }
+          if (!inPath && isEscWrapDelim && !prevWasCut) pushAuthCut(authorityCuts, 64, k);
+          if (esc === '[') { openBrackets++; if (isIpv6Open) inBrackets = true; }
+          else if (esc === ']') { closeBrackets++; if (isIpv6Close) { inBrackets = false; pushAuthCut(structuralCuts, 16, k + 2, true); } }
+          else if (esc === '(') openParens++;
+          else if (esc === ')') closeParens++;
+          else if (esc === '#') { inPath = true; inBrackets = false; }
+          prevWasCut = isEscWrapDelim;
+          k += 2;
+          continue;
+        }
+        const { cp, width, ch } = codePointAtInfo(str, k);
+        const isIpv6Open = !inPath && width === 1 && ch === '[' && k === atHostStart;
+        const isIpv6Close = !inPath && width === 1 && ch === ']' && inBrackets;
+        if (!inPath) {
+          if (width === 1 && (ch === '/' || ch === '?' || ch === '#')) {
+            inPath = true;
+            inBrackets = false;
+            prevWasCut = false;
+          } else if (width === 1 && ch === '@') {
+            atHostStart = k + 1;
+            inBrackets = false;
+            seenPortColon = false;
+            portEndCut = false;
+            prevWasCut = false;
+          } else if (width === 1 && ch === ':') {
+            if (!inBrackets) {
+              if (!seenPortColon) seenPortColon = true;
+              else if (!portEndCut) {
+                portEndCut = true;
+                pushAuthCut(structuralCuts, 16, k);
+              }
+            }
+            prevWasCut = false;
+          } else {
+            if (seenPortColon && !inBrackets && !portEndCut && !(width === 1 && cp >= 48 && cp <= 57)) {
+              portEndCut = true;
+              pushAuthCut(structuralCuts, 16, k);
+            }
+            const pctDotLen = (!inBrackets && width === 1 && ch === '%') ? percentWhatwgDotLenAt(str, k) : 0;
+            if (pctDotLen > 0) {
+              prevWasCut = false;
+              k += pctDotLen;
+              continue;
+            }
+            const isAuthDelim = !isIpv6Open && !isIpv6Close && (isNonAsciiPunct(cp, ch) || (width === 1 && (
+              ch === ',' || ch === ';' || ch === '!' || ch === '(' || ch === ')' || ch === '[' || ch === '{' || ch === '}'
+              || ch === '|' || ch === '^' || ch === '%'
+              || (ch === ']' && closeBrackets >= openBrackets)
+              || ch === '\'' || ch === '`' || ch === '*' || ch === '_' || ch === '~'
+            )));
+            if (isAuthDelim) {
+              if (!prevWasCut) pushAuthCut(authorityCuts, 64, k);
+              prevWasCut = true;
+            } else {
+              prevWasCut = false;
+            }
+          }
+        }
+        if (width === 1) {
+          if (ch === '(') openParens++;
+          else if (ch === ')') closeParens++;
+          else if (ch === '[') { openBrackets++; if (isIpv6Open) inBrackets = true; }
+          else if (ch === ']') { closeBrackets++; if (isIpv6Close) { inBrackets = false; pushAuthCut(structuralCuts, 16, k + 1, true); } }
+        }
+        k += width;
       }
+      const trimmedEnd = trimTrailingUrlPunct(str, offset + wwwPrefixLen, k, openParens, closeParens, openBrackets, closeBrackets);
+      if (isValidBareWwwCandidate(str.slice(offset, trimmedEnd), budget)) return { prefixLen: wwwPrefixLen, minEnd: trimmedEnd };
+      if (budget?.exhausted) return null;
+      for (let s = structuralCuts.length - 1; s >= 0; s--) {
+        const c = structuralCuts[s];
+        if (c.cut <= offset + wwwPrefixLen) continue;
+        const prefixEnd = trimTrailingUrlPunct(str, offset + wwwPrefixLen, c.cut, c.openParens, c.closeParens, c.openBrackets, c.closeBrackets);
+        if (isValidBareWwwCandidate(str.slice(offset, prefixEnd), budget)) return { prefixLen: wwwPrefixLen, minEnd: prefixEnd };
+        if (budget?.exhausted) return null;
+      }
+      for (const c of authorityCuts) {
+        const prefixEnd = trimTrailingUrlPunct(str, offset + wwwPrefixLen, c.cut, c.openParens, c.closeParens, c.openBrackets, c.closeBrackets);
+        if (isValidBareWwwCandidate(str.slice(offset, prefixEnd), budget)) return { prefixLen: wwwPrefixLen, minEnd: prefixEnd };
+        if (budget?.exhausted) return null;
+      }
+      // Fail closed if an unresolved bare-www authority exceeds lookahead or cut-tracking capacity before terminating.
+      if ((k >= maxScan && k < len && !isBareUrlStop(str[k])) || cutsOverflowed) return { prefixLen: wwwPrefixLen, minEnd: k };
     }
   }
 
   // 3. Scheme-relative //authority/... URL: allows leading '_' emphasis wrappers (_//user:pass@host:8080_),
-  // scans by full Unicode code point, snapshots per-cut bracket/paren counts so later brackets never break IPv6 cuts,
-  // and separates pre/post-'@' cut budgets.
-  if (!prevIsAlnum && offset + 3 < len && c0 === 47 && str.charCodeAt(offset + 1) === 47 && prev !== 58 && prev !== 47) {
+  // recognizes literal & percent-encoded WHATWG dot separators and authority/port/IPv6/footnote boundaries,
+  // reserves structural IPv6/port cuts independently of heuristic punctuation cuts, scans by full Unicode code point
+  // within a shared global CPU/validation budget, snapshots per-cut bracket/paren counts,
+  // and fails closed on truncated EOF fragments, lookahead caps, or cut-bucket overflow.
+  if (!prevIsAlnum && offset + 2 < len && c0 === 47 && str.charCodeAt(offset + 1) === 47 && prev !== 58 && prev !== 47) {
     const next = str[offset + 2];
     if (next && next !== '/' && !isBareUrlStop(next)) {
       let k = offset + 2;
@@ -313,119 +612,214 @@ function matchUrlStartAt(str, offset, identBeforeUnderscores = false) {
       let openParens = 0, closeParens = 0, openBrackets = 0, closeBrackets = 0;
       let seenUrlSignal = false;
       let seenAt = false;
+      let atHostStart = offset + 2;
       let seenPath = false;
       let inBrackets = false;
       let seenPortColon = false;
       let hasNonPortAfterColon = false;
-      let prevWasDelim = false;
+      let postAtPortColon = false;
+      let postAtPortCut = false;
+      let cutsOverflowed = false;
+      // 0 = none, 1 = punctuation/wrapper delim, 2 = Unicode symbol (\p{S}) that may be either host char (☃) or adjacent prose marker (📌).
+      let prevDelimKind = 0;
+      const structuralCuts = [];
       const preAtCuts = [];
       const postAtCuts = [];
+      const pushCut = (bucket, cap, cut, balanced = false) => {
+        if (bucket.length > 0 && bucket[bucket.length - 1].cut === cut) return;
+        if (bucket.length < cap) {
+          bucket.push(balanced
+            ? { cut, openParens: 0, closeParens: 0, openBrackets: 0, closeBrackets: 0 }
+            : { cut, openParens, closeParens, openBrackets, closeBrackets });
+        } else {
+          cutsOverflowed = true;
+        }
+      };
       while (k < maxScan && !isBareUrlStop(str[k])) {
+        if (budget && ++budget.scanSteps > budget.maxScanSteps) { budget.exhausted = true; return null; }
         if (str[k] === '\\' && k + 1 < maxScan && !isBareUrlStop(str[k + 1])) {
           const esc = str[k + 1];
-          const isEscWrapDelim = (esc === ']' && closeBrackets >= openBrackets)
-            || esc === '}' || esc === '|' || esc === '!' || esc === '*' || esc === '_' || esc === '~' || esc === '`';
+          const isIpv6Open = !seenPath && esc === '[' && k === atHostStart;
+          const isIpv6Close = !seenPath && esc === ']' && inBrackets;
+          if (!seenPath && !inBrackets) {
+            if (seenAt && postAtPortColon && !postAtPortCut && esc !== '#') {
+              postAtPortCut = true;
+              pushCut(structuralCuts, 16, k);
+            } else if (!seenAt && seenPortColon && !hasNonPortAfterColon && esc !== '#') {
+              pushCut(structuralCuts, 16, k);
+              hasNonPortAfterColon = true;
+            }
+          }
+          const isEscWrapDelim = !isIpv6Open && !isIpv6Close && (
+            (esc === ']' && closeBrackets >= openBrackets)
+            || (!seenPath && (esc === '[' || esc === '(' || esc === '{' || esc === '^'))
+            || esc === '}' || esc === '|' || esc === '!' || esc === '*' || esc === '_' || esc === '~' || esc === '`'
+          );
           if (isEscWrapDelim) {
             const couldBeComplete = seenUrlSignal && (seenAt || seenPath || !hasNonPortAfterColon);
-            if (!prevWasDelim && couldBeComplete) {
-              const bucket = seenAt ? postAtCuts : preAtCuts;
-              if (bucket.length < 64) bucket.push({ cut: k, openParens, closeParens, openBrackets, closeBrackets });
-            }
-            if (esc === ']') { closeBrackets++; inBrackets = false; }
-            if (!seenAt && !seenPath && seenPortColon) hasNonPortAfterColon = true;
-            prevWasDelim = true;
-          } else {
-            if (esc === '[') { openBrackets++; inBrackets = true; seenUrlSignal = true; }
+            if (prevDelimKind !== 1 && couldBeComplete) pushCut(seenAt ? postAtCuts : preAtCuts, 64, k);
+            if (esc === '[') openBrackets++;
             else if (esc === ']') { closeBrackets++; inBrackets = false; }
-            else if (esc === '/' || esc === '?' || esc === '#' || esc === ':' || esc === '@' || esc === '.') seenUrlSignal = true;
-            prevWasDelim = false;
+            else if (esc === '(') openParens++;
+            else if (esc === ')') closeParens++;
+            if (!seenAt && !seenPath && seenPortColon) hasNonPortAfterColon = true;
+            prevDelimKind = 1;
+          } else {
+            if (isIpv6Open) { openBrackets++; inBrackets = true; seenUrlSignal = true; }
+            else if (isIpv6Close) { closeBrackets++; inBrackets = false; pushCut(structuralCuts, 16, k + 2, true); }
+            else if (esc === '[') openBrackets++;
+            else if (esc === ']') closeBrackets++;
+            else if (esc === '(') openParens++;
+            else if (esc === ')') closeParens++;
+            else if (esc === '#') { seenPath = true; seenUrlSignal = true; inBrackets = false; }
+            else if (esc === '.') seenUrlSignal = true;
+            prevDelimKind = 0;
           }
           k += 2;
           continue;
         }
         const { cp, width, ch } = codePointAtInfo(str, k);
-        const isDelim = isNonAsciiPunct(cp, ch) || (width === 1 && (
+        const isIpv6Open = !seenPath && width === 1 && ch === '[' && k === atHostStart;
+        const isIpv6Close = !seenPath && width === 1 && ch === ']' && inBrackets;
+        if (!seenPath && !inBrackets) {
+          if (seenAt && postAtPortColon && !postAtPortCut
+            && !(width === 1 && ((cp >= 48 && cp <= 57) || ch === '/' || ch === '?' || ch === '#'))) {
+            postAtPortCut = true;
+            pushCut(structuralCuts, 16, k);
+          } else if (!seenAt && seenPortColon && !hasNonPortAfterColon
+            && !(width === 1 && ((cp >= 48 && cp <= 57) || ch === '/' || ch === '?' || ch === '#' || ch === '@'))) {
+            pushCut(structuralCuts, 16, k);
+            hasNonPortAfterColon = true;
+          }
+        }
+        const pctDotLen = (!seenPath && !inBrackets && width === 1 && ch === '%') ? percentWhatwgDotLenAt(str, k) : 0;
+        if (pctDotLen > 0) {
+          seenUrlSignal = true;
+          if (!seenAt && seenPortColon) hasNonPortAfterColon = true;
+          prevDelimKind = 0;
+          k += pctDotLen;
+          continue;
+        }
+        const isPunctDelim = !isIpv6Open && !isIpv6Close && (isNonAsciiPunct(cp, ch) || (width === 1 && (
           ch === ',' || ch === ';' || ch === '!' || ch === ')' || ch === '}' || ch === '|'
           || (ch === ']' && closeBrackets >= openBrackets)
+          || (!seenPath && (ch === '[' || ch === '(' || ch === '{' || ch === '^' || ch === '%'))
           || ch === '\'' || ch === '`' || ch === '*' || ch === '_' || ch === '~'
-        ));
-        if (isDelim) {
-          // Separate pre-'@' and post-'@' cut budgets and snapshot prefix bracket/paren state at each cut.
+        )));
+        const isSymbolDelim = !isIpv6Open && !isIpv6Close && !isPunctDelim && isNonAsciiSymbol(cp, ch);
+        if (isPunctDelim) {
           const couldBeComplete = seenUrlSignal && (seenAt || seenPath || !hasNonPortAfterColon);
-          if (!prevWasDelim && couldBeComplete) {
-            const bucket = seenAt ? postAtCuts : preAtCuts;
-            if (bucket.length < 64) bucket.push({ cut: k, openParens, closeParens, openBrackets, closeBrackets });
-          }
-          if (width === 1 && ch === ')') closeParens++;
-          else if (width === 1 && ch === ']') { closeBrackets++; inBrackets = false; }
-          if (!seenAt && !seenPath && seenPortColon) hasNonPortAfterColon = true;
-          prevWasDelim = true;
-        } else {
-          prevWasDelim = false;
+          if (prevDelimKind !== 1 && couldBeComplete) pushCut(seenAt ? postAtCuts : preAtCuts, 64, k);
+          if (isWhatwgDot(cp)) seenUrlSignal = true;
           if (width === 1) {
-            if (ch === '@') { seenAt = true; seenUrlSignal = true; }
-            else if (ch === '/' || ch === '?' || ch === '#') { seenPath = true; seenUrlSignal = true; }
-            else if (ch === '[') { openBrackets++; inBrackets = true; seenUrlSignal = true; }
+            if (ch === '(') openParens++;
+            else if (ch === ')') closeParens++;
+            else if (ch === '[') openBrackets++;
             else if (ch === ']') { closeBrackets++; inBrackets = false; }
+          }
+          if (!seenAt && !seenPath && seenPortColon) hasNonPortAfterColon = true;
+          prevDelimKind = 1;
+        } else if (isSymbolDelim) {
+          const couldBeComplete = seenUrlSignal && (seenAt || seenPath || !hasNonPortAfterColon);
+          if (prevDelimKind === 0 && couldBeComplete) pushCut(seenAt ? postAtCuts : preAtCuts, 64, k);
+          if (!seenAt && !seenPath && seenPortColon) hasNonPortAfterColon = true;
+          prevDelimKind = 2;
+        } else {
+          prevDelimKind = 0;
+          if (width === 1) {
+            if (ch === '@') { seenAt = true; seenUrlSignal = true; atHostStart = k + 1; inBrackets = false; postAtPortColon = false; postAtPortCut = false; }
+            else if (ch === '/' || ch === '?' || ch === '#') { seenPath = true; seenUrlSignal = true; inBrackets = false; }
+            else if (isIpv6Open) { openBrackets++; inBrackets = true; seenUrlSignal = true; }
+            else if (isIpv6Close) { closeBrackets++; inBrackets = false; pushCut(structuralCuts, 16, k + 1, true); }
+            else if (ch === '[') openBrackets++;
+            else if (ch === ']') closeBrackets++;
             else if (ch === '(') openParens++;
             else if (ch === ')') closeParens++;
             else if (ch === '.') seenUrlSignal = true;
             else if (ch === ':') {
               seenUrlSignal = true;
-              if (!inBrackets && !seenAt && !seenPath) {
-                if (seenPortColon) hasNonPortAfterColon = true;
-                else seenPortColon = true;
+              if (!inBrackets && !seenPath) {
+                if (seenAt) {
+                  if (!postAtPortColon) postAtPortColon = true;
+                } else {
+                  if (seenPortColon) hasNonPortAfterColon = true;
+                  else seenPortColon = true;
+                }
               }
-            } else if (!seenAt && !seenPath && seenPortColon && !(cp >= 48 && cp <= 57)) {
-              hasNonPortAfterColon = true;
             }
-          } else if (!seenAt && !seenPath && seenPortColon) {
-            hasNonPortAfterColon = true;
           }
         }
         k += width;
       }
       const trimmedEnd = trimTrailingUrlPunct(str, offset + 2, k, openParens, closeParens, openBrackets, closeBrackets);
-      if (isValidSchemeRelativeCandidate(str.slice(offset, trimmedEnd))) return 2;
+      if (isValidSchemeRelativeCandidate(str.slice(offset, trimmedEnd), budget)) return { prefixLen: 2, minEnd: trimmedEnd };
+      if (budget?.exhausted) return null;
+      for (let s = structuralCuts.length - 1; s >= 0; s--) {
+        const c = structuralCuts[s];
+        const prefixEnd = trimTrailingUrlPunct(str, offset + 2, c.cut, c.openParens, c.closeParens, c.openBrackets, c.closeBrackets);
+        if (isValidSchemeRelativeCandidate(str.slice(offset, prefixEnd), budget)) return { prefixLen: 2, minEnd: prefixEnd };
+        if (budget?.exhausted) return null;
+      }
       for (const c of postAtCuts) {
         const prefixEnd = trimTrailingUrlPunct(str, offset + 2, c.cut, c.openParens, c.closeParens, c.openBrackets, c.closeBrackets);
-        if (isValidSchemeRelativeCandidate(str.slice(offset, prefixEnd))) return 2;
+        if (isValidSchemeRelativeCandidate(str.slice(offset, prefixEnd), budget)) return { prefixLen: 2, minEnd: prefixEnd };
+        if (budget?.exhausted) return null;
       }
       for (const c of preAtCuts) {
         const prefixEnd = trimTrailingUrlPunct(str, offset + 2, c.cut, c.openParens, c.closeParens, c.openBrackets, c.closeBrackets);
-        if (isValidSchemeRelativeCandidate(str.slice(offset, prefixEnd))) return 2;
+        if (isValidSchemeRelativeCandidate(str.slice(offset, prefixEnd), budget)) return { prefixLen: 2, minEnd: prefixEnd };
+        if (budget?.exhausted) return null;
       }
-      // Discard truncated credential-bearing or unclosed-IPv6 authority fragments at the end of a clipped field
-      // (e.g. a 1,000-char RSS excerpt ending in '//user:PRIVATE99@', '//user:PRIVATE99', or '//[2001:db8').
-      if (k === len && (seenAt || inBrackets || (seenPortColon && hasNonPortAfterColon))) return 2;
+      // Fail closed on any truncated credential-bearing (including digit-only numeric passwords) or unclosed-IPv6
+      // authority fragment at EOF, OR any unresolved authority exceeding lookahead or cut-tracking capacity.
+      if (k === len && (seenAt || inBrackets || seenPortColon || postAtPortColon)) return { prefixLen: 2, minEnd: k };
+      if (failClosedTruncatedSchemeRelative) {
+        const truncEnd = findAmbiguousTruncationEnd(str, offset, k, budget);
+        if (budget?.exhausted) return null;
+        if (truncEnd !== -1) return { prefixLen: 2, minEnd: truncEnd };
+      }
+      if ((k >= maxScan && k < len && !isBareUrlStop(str[k])) || cutsOverflowed) return { prefixLen: 2, minEnd: k };
     }
   }
-  return 0;
+  return null;
 }
 
-function stripPrivateUrls(text) {
+function stripPrivateUrls(text, {
+  maxOutputChars = Infinity,
+  maxUrlChecks = 256,
+  maxScanSteps = 128_000,
+  failClosedTruncatedSchemeRelative = false,
+} = {}) {
   if (typeof text !== 'string' || !text) return text;
   const noLinks = stripBracketedLinks(stripBracketedLinks(text, true), false);
+  const budget = { urlChecks: 0, scanSteps: 0, maxUrlChecks, maxScanSteps, exhausted: false };
   let out = '';
   let i = 0;
   const len = noLinks.length;
   let nextGt = noLinks.indexOf('>');
   let identBeforeUnderscores = false;
   while (i < len) {
-    if (noLinks[i] === '<' && matchUrlStartAt(noLinks, i + 1, false) > 0) {
+    if (out.length >= maxOutputChars) break;
+    if (++budget.scanSteps > budget.maxScanSteps) { budget.exhausted = true; break; }
+    if (noLinks[i] === '<' && matchUrlStartAt(noLinks, i + 1, false, budget, failClosedTruncatedSchemeRelative)) {
       while (nextGt !== -1 && nextGt <= i) nextGt = noLinks.indexOf('>', nextGt + 1);
       if (nextGt !== -1) { i = nextGt + 1; identBeforeUnderscores = false; continue; }
     }
-    const prefixLen = matchUrlStartAt(noLinks, i, identBeforeUnderscores);
-    if (prefixLen > 0) {
-      let j = i + prefixLen;
+    if (budget.exhausted) break; // Fail closed: discard unprocessed remainder.
+    const match = matchUrlStartAt(noLinks, i, identBeforeUnderscores, budget, failClosedTruncatedSchemeRelative);
+    if (budget.exhausted) break; // Fail closed: discard unprocessed remainder.
+    if (match) {
+      let j = i + match.prefixLen;
       let openParens = 0, closeParens = 0, openBrackets = 0, closeBrackets = 0;
-      // Consume the entire non-whitespace/non-angle/non-quote token by full code point, trimming trailing delimiters only from the end.
+      // Consume the entire non-whitespace/non-angle/non-quote token by full code point, never trimming inside the validated span.
       while (j < len && !isBareUrlStop(noLinks[j])) {
+        if (++budget.scanSteps > budget.maxScanSteps) { budget.exhausted = true; break; }
         if (noLinks[j] === '\\' && j + 1 < len && !isBareUrlStop(noLinks[j + 1])) {
           const esc = noLinks[j + 1];
           if (esc === '[') openBrackets++;
           else if (esc === ']') closeBrackets++;
+          else if (esc === '(') openParens++;
+          else if (esc === ')') closeParens++;
           j += 2;
           continue;
         }
@@ -438,19 +832,27 @@ function stripPrivateUrls(text) {
         }
         j += width;
       }
-      j = trimTrailingUrlPunct(noLinks, i, j, openParens, closeParens, openBrackets, closeBrackets);
+      if (budget.exhausted) break; // Fail closed: discard partially scanned URL and remainder.
+      j = Math.max(match.minEnd, trimTrailingUrlPunct(noLinks, i, j, openParens, closeParens, openBrackets, closeBrackets));
       i = j;
       identBeforeUnderscores = false;
       continue;
     }
-    const code = noLinks.charCodeAt(i);
-    if ((code >= 48 && code <= 57) || (code >= 65 && code <= 90) || (code >= 97 && code <= 122)) {
-      identBeforeUnderscores = true;
-    } else if (code !== 95 && code !== 92) {
+    const { width } = codePointAtInfo(noLinks, i);
+    if (out.length + width > maxOutputChars) break;
+    if (width === 2) {
       identBeforeUnderscores = false;
+      out += noLinks.slice(i, i + 2);
+    } else {
+      const code = noLinks.charCodeAt(i);
+      if ((code >= 48 && code <= 57) || (code >= 65 && code <= 90) || (code >= 97 && code <= 122)) {
+        identBeforeUnderscores = true;
+      } else if (code !== 95 && code !== 92) {
+        identBeforeUnderscores = false;
+      }
+      out += noLinks[i];
     }
-    out += noLinks[i];
-    i++;
+    i += width;
   }
   return out;
 }
@@ -458,12 +860,17 @@ function stripPrivateUrls(text) {
 function buildNewsData(payload) {
   const input = isRecord(payload) ? payload : {};
   const isPrivate = input.isPrivateSource === true;
-  const projected = projectText(input, { headline: 500, articleMarkdown: 12_000, url: MAX_URL, sourceUrl: MAX_URL, quality: 40, date: 32,
+  // Scrub private evidence BEFORE clipping to field limits so boundary-straddling URLs/credentials cannot survive.
+  const scrubbedInput = isPrivate ? {
+    ...input,
+    ...(typeof input.articleMarkdown === 'string' ? { articleMarkdown: stripPrivateUrls(input.articleMarkdown, { maxOutputChars: 12_000 }) } : {}),
+    ...(typeof input.summaryExcerpt === 'string' ? { summaryExcerpt: stripPrivateUrls(input.summaryExcerpt, { maxOutputChars: 1000 }) } : {}),
+    ...(typeof input.context === 'string' ? { context: stripPrivateUrls(input.context, { maxOutputChars: 3000 }) } : {}),
+    ...(typeof input.briefContext === 'string' ? { briefContext: stripPrivateUrls(input.briefContext, { maxOutputChars: 3000 }) } : {}),
+    ...(typeof input.tldr === 'string' ? { tldr: stripPrivateUrls(input.tldr, { maxOutputChars: 400 }) } : {}),
+  } : input;
+  const projected = projectText(scrubbedInput, { headline: 500, articleMarkdown: 12_000, url: MAX_URL, sourceUrl: MAX_URL, quality: 40, date: 32,
     question: 500, topic: 300, topicName: 300, query: 300, tldr: 400, context: 3000, briefContext: 3000, summaryExcerpt: 1000 });
-  if (isPrivate) {
-    if (projected.articleMarkdown) projected.articleMarkdown = stripPrivateUrls(projected.articleMarkdown);
-    if (projected.summaryExcerpt) projected.summaryExcerpt = stripPrivateUrls(projected.summaryExcerpt);
-  }
   return {
     ...projected,
     ...(input.keywords ? { keywords: (Array.isArray(input.keywords) ? take(input.keywords, 12) : [input.keywords])
@@ -471,19 +878,31 @@ function buildNewsData(payload) {
     ...(!isPrivate && Array.isArray(input.media) ? { media: take(input.media, 12).map(mediaItem).filter(Boolean) } : {}),
     ...(Array.isArray(input.communityComments) ? { communityComments: take(input.communityComments, 24).map(commentItem).filter(Boolean) } : {}),
     sources: take(input.sources, 12).map(source => {
-      const evidence = projectEvidence(source, 1000);
-      if (isPrivate && isRecord(evidence) && evidence.summaryExcerpt) {
-        evidence.summaryExcerpt = stripPrivateUrls(evidence.summaryExcerpt);
-      }
+      const scrubbedSource = isPrivate && isRecord(source) ? {
+        ...source,
+        ...(typeof source.summaryExcerpt === 'string' ? { summaryExcerpt: stripPrivateUrls(source.summaryExcerpt, { maxOutputChars: 1000 }) } : {}),
+        ...(typeof source.excerpt === 'string' ? { excerpt: stripPrivateUrls(source.excerpt, { maxOutputChars: 1000 }) } : {}),
+        ...(typeof source.summary === 'string' ? { summary: stripPrivateUrls(source.summary, { maxOutputChars: 1000 }) } : {}),
+      } : source;
+      const evidence = projectEvidence(scrubbedSource, 1000);
       return !isPrivate && Array.isArray(source?.media) && isRecord(evidence)
         ? { ...evidence, media: take(source.media, 8).map(mediaItem).filter(Boolean) } : evidence;
     }),
     domains: take(input.domains, 8).map(domain => ({
       ...projectText(domain, { id: 100, domainId: 100, domain: 150, name: 150, title: 150, nameZh: 150, nameEn: 150 }),
-      stories: take(domain?.stories, 8).map(story => ({
-        ...projectEvidence(typeof story === 'string' ? { headline: story } : story, 500),
-        sourceNames: take(story?.sourceNames, 4).map(name => boundedText(typeof name === 'string' ? name.slice(0, 200) : name, 100)),
-      })),
+      stories: take(domain?.stories, 8).map(story => {
+        const storyObj = typeof story === 'string' ? { headline: story } : story;
+        const scrubbedStory = (isPrivate || storyObj?.isPrivateSource === true) && isRecord(storyObj) ? {
+          ...storyObj,
+          ...(typeof storyObj.summaryExcerpt === 'string' ? { summaryExcerpt: stripPrivateUrls(storyObj.summaryExcerpt, { maxOutputChars: 500 }) } : {}),
+          ...(typeof storyObj.excerpt === 'string' ? { excerpt: stripPrivateUrls(storyObj.excerpt, { maxOutputChars: 500 }) } : {}),
+          ...(typeof storyObj.summary === 'string' ? { summary: stripPrivateUrls(storyObj.summary, { maxOutputChars: 500 }) } : {}),
+        } : storyObj;
+        return {
+          ...projectEvidence(scrubbedStory, 500),
+          sourceNames: take(story?.sourceNames, 4).map(name => boundedText(typeof name === 'string' ? name.slice(0, 200) : name, 100)),
+        };
+      }),
     })),
   };
 }
@@ -626,11 +1045,22 @@ function groundedComments(items, evidence) {
   return result;
 }
 
-function normalizeOutput(parsed, mode, language, news, evidence, schemaVersion = 2) {
+function normalizeOutput(parsed, mode, language, news, evidence, schemaVersion = 2, {
+  includeExcerptProvenance = false,
+  includeBriefContextProvenance = false,
+  isPrivate = false,
+} = {}) {
   const daily = mode === 'daily_briefing';
   const followUp = mode === 'follow_up';
   const legacyV1Story = schemaVersion === 1 && (mode === 'brief' || mode === 'synthesize');
-  const bullet = value => plainProseText(value, 500);
+  const privateProse = (value, max) => {
+    if (!isPrivate) return plainProseText(value, max);
+    if (typeof value !== 'string') throw invalidOutput();
+    const normalized = value.replace(/\r\n/g, '\n').trim();
+    if (!normalized) throw invalidOutput();
+    return plainProseText(stripPrivateUrls(normalized, { maxOutputChars: max, failClosedTruncatedSchemeRelative: true }), max);
+  };
+  const bullet = value => privateProse(value, 500);
   const question = value => plainProseText(value, daily ? 320 : 120);
   const { observedMediaUrls, observedPageUrls, searchPageUrls, deliveredSourceUrls, searchCount } = evidence;
   const evidenceCount = deliveredSourceUrls.size;
@@ -641,7 +1071,14 @@ function normalizeOutput(parsed, mode, language, news, evidence, schemaVersion =
     const items = groundedItems(parsed.items, 15, item => {
       const url = normalizedUrl(item?.url);
       if (!searchPageUrls.has(url)) return;
-      const fields = projectText(item, { title: 500, sourceName: 100, summaryExcerpt: 1000, publishedAt: 64 });
+      // Redact URLs/credentials BEFORE enforcing the 1,000-char excerpt cap and fail closed on ambiguous truncated // prefixes.
+      const normalizedExcerpt = typeof item?.summaryExcerpt === 'string'
+        ? item.summaryExcerpt.replace(/\r\n/g, '\n').trim()
+        : '';
+      const scrubbedExcerpt = normalizedExcerpt
+        ? stripPrivateUrls(normalizedExcerpt, { maxOutputChars: 1000, failClosedTruncatedSchemeRelative: true })
+        : '';
+      const fields = projectText({ ...item, summaryExcerpt: scrubbedExcerpt }, { title: 500, sourceName: 100, summaryExcerpt: 1000, publishedAt: 64 });
       if (!fields.title || !fields.sourceName) return;
       fields.summaryExcerpt ??= '';
       if (!Number.isSafeInteger(fields.publishedAt) || fields.publishedAt < 0) {
@@ -650,7 +1087,7 @@ function normalizeOutput(parsed, mode, language, news, evidence, schemaVersion =
       const mediaUrl = normalizedUrl(item.mediaUrl);
       return { ...fields, url, ...(observedMediaUrls.has(mediaUrl) ? { mediaUrl } : {}) };
     });
-    return { items, searchCount };
+    return { items, searchCount, ...(includeExcerptProvenance ? { excerptVersion: PRIVATE_EXCERPT_VERSION } : {}) };
   }
 
   onlyKeys(parsed, daily
@@ -692,9 +1129,9 @@ function normalizeOutput(parsed, mode, language, news, evidence, schemaVersion =
   } else if (legacyV1Story) {
     // Emit the exact 5-key v1 contract expected by older Servers (reverse mixed-version compatibility).
     const bullets = outputList(parsed.bullets, 3, 5, bullet);
-    const impact = plainProseText(parsed.impact, 1000);
+    const impact = privateProse(parsed.impact, 1000);
     const followUps = outputList(parsed.followUps, 2, 3, question);
-    result = { tldr: plainProseText(parsed.tldr, 400), bullets, impact, followUps };
+    result = { tldr: privateProse(parsed.tldr, 400), bullets, impact, followUps };
     if (Object.hasOwn(parsed, 'fullMarkdown') && typeof parsed.fullMarkdown !== 'string') throw invalidOutput();
     const markdown = boundedText(parsed.fullMarkdown, MAX_MARKDOWN_CHARS);
     if (markdown && !hasUnsafeMarkdown(markdown)) return { ...result, fullMarkdown: markdown };
@@ -703,24 +1140,28 @@ function normalizeOutput(parsed, mode, language, news, evidence, schemaVersion =
     return { ...result, fullMarkdown };
   } else {
     const bullets = outputList(parsed.bullets, 2, 6, bullet);
-    const impact = plainProseText(parsed.impact, 1000);
+    const impact = privateProse(parsed.impact, 1000);
     const zh = language !== 'English';
     const sections = parsed.sections === undefined
-      ? [{ heading: zh ? '核心细节与数据' : 'Key details', body: plainProseText(bullets.join('\n'), 2000) },
+      ? [{ heading: zh ? '核心细节与数据' : 'Key details', body: privateProse(bullets.join('\n'), 2000) },
         { heading: zh ? '影响与看点' : 'Impact', body: impact }]
       : outputList(parsed.sections, 1, 6, section => {
         onlyKeys(section, ['heading', 'body']);
-        return { heading: plainProseText(section.heading, 120), body: plainProseText(section.body, 2000) };
+        return { heading: plainProseText(section.heading, 120), body: privateProse(section.body, 2000) };
       });
-    result = { tldr: plainProseText(parsed.tldr, 400), sections, bullets, impact, ...rich(),
+    // Redact private TLDR BEFORE enforcing the 400-char cap so follow-up briefContext never receives clipped credentials.
+    result = { tldr: privateProse(parsed.tldr, 400), sections, bullets, impact, ...rich(),
       communityHighlights: groundedComments(parsed.communityHighlights, evidence), followUps: outputList(parsed.followUps, 2, 3, question) };
   }
+  const provenance = !daily && !legacyV1Story && includeBriefContextProvenance
+    ? { briefContextVersion: PRIVATE_BRIEF_CONTEXT_VERSION }
+    : {};
   if (Object.hasOwn(parsed, 'fullMarkdown') && typeof parsed.fullMarkdown !== 'string') throw invalidOutput();
   const markdown = boundedText(parsed.fullMarkdown, daily ? 12_000 : MAX_MARKDOWN_CHARS);
-  if (markdown && !hasUnsafeMarkdown(markdown)) return { ...result, fullMarkdown: markdown };
+  if (markdown && !hasUnsafeMarkdown(markdown)) return { ...result, fullMarkdown: markdown, ...provenance };
   const fullMarkdown = buildMarkdown(result, daily, language);
   if (hasUnsafeMarkdown(fullMarkdown)) throw invalidOutput();
-  return { ...result, fullMarkdown };
+  return { ...result, fullMarkdown, ...provenance };
 }
 
 // Resolve inside the actual HTTP connector so that the address checked is the
@@ -999,13 +1440,33 @@ const WEB_FETCH = {
 
 const frame = (tag, value) => `<${tag}>\n${JSON.stringify(value).replace(/[<>]/g, char => char === '<' ? '\\u003c' : '\\u003e')}\n</${tag}>`;
 
-function searchImages(value) {
-  return [value?.image, value?.imageUrl, value?.image_url, value?.thumbnail, value?.thumbnailUrl,
-    value?.thumbnail_url, ...take(value?.images, 12), ...take(value?.media, 12)]
-    .map(item => mediaItem(typeof item === 'string' || item?.url ? item : item?.src)).filter(Boolean);
+function scrubRadarField(value, maxChars, { upstreamTruncated = false } = {}) {
+  if (typeof value !== 'string') return value;
+  let normalized = value.replace(/\r\n/g, '\n').trim();
+  if (!normalized) return '';
+  if (upstreamTruncated) normalized = dropTrailingToken(normalized).trimEnd();
+  if (!normalized) return '';
+  return stripPrivateUrls(normalized, {
+    maxOutputChars: maxChars,
+    failClosedTruncatedSchemeRelative: true,
+  }).trim();
 }
 
-function harvestResult(raw, name, input, evidence) {
+function searchImages(value, { redactForRadar = false, upstreamTruncated = false } = {}) {
+  return [value?.image, value?.imageUrl, value?.image_url, value?.thumbnail, value?.thumbnailUrl,
+    value?.thumbnail_url, ...take(value?.images, 12), ...take(value?.media, 12)]
+    .map(item => {
+      const raw = typeof item === 'string' || item?.url ? item : item?.src;
+      if (!redactForRadar || !isRecord(raw)) return mediaItem(raw);
+      return mediaItem({
+        ...raw,
+        ...(typeof raw.caption === 'string' ? { caption: scrubRadarField(raw.caption, 300, { upstreamTruncated }) } : {}),
+        ...(typeof raw.sourceName === 'string' ? { sourceName: scrubRadarField(raw.sourceName, 100, { upstreamTruncated }) } : {}),
+      });
+    }).filter(Boolean);
+}
+
+function harvestResult(raw, name, input, evidence, { redactForRadar = false } = {}) {
   const data = typeof raw === 'string' ? JSON.parse(raw) : raw;
   if (!isRecord(data) || data.error) return { error: 'No usable web result' };
   const observeMedia = items => {
@@ -1014,15 +1475,41 @@ function harvestResult(raw, name, input, evidence) {
   };
   if (name === 'WebSearch') {
     if (!Array.isArray(data.results)) return { error: 'Invalid search result' };
+    const dataTruncated = data.truncated === true;
     const results = take(data.results, input.limit).flatMap(item => {
       const url = normalizedUrl(item?.url);
       if (!url) return [];
       evidence.observedPageUrls.add(url);
       evidence.searchPageUrls.add(url);
-      return [{ ...projectEvidence(item, 1500), ...projectText(item, { snippet: 1500 }), url, media: observeMedia(searchImages(item)) }];
+      const itemTruncated = dataTruncated || item?.truncated === true || item?.snippetTruncated === true;
+      // For Topic Radar, redact URLs/credentials BEFORE the first 1,500/500/100-char field cap and fail closed on
+      // upstream-truncated ambiguous trailing tokens so the Radar model never sees and quotes clipped credential fragments.
+      const safeItem = redactForRadar && isRecord(item) ? {
+        ...item,
+        ...(typeof item.headline === 'string' ? { headline: scrubRadarField(item.headline, 500, { upstreamTruncated: itemTruncated }) } : {}),
+        ...(typeof item.title === 'string' ? { title: scrubRadarField(item.title, 500, { upstreamTruncated: itemTruncated }) } : {}),
+        ...(typeof item.sourceName === 'string' ? { sourceName: scrubRadarField(item.sourceName, 100, { upstreamTruncated: itemTruncated }) } : {}),
+        ...(typeof item.name === 'string' ? { name: scrubRadarField(item.name, 100, { upstreamTruncated: itemTruncated }) } : {}),
+        ...(typeof item.sourceId === 'string' ? { sourceId: scrubRadarField(item.sourceId, 100, { upstreamTruncated: itemTruncated }) } : {}),
+        ...(typeof item.excerpt === 'string' ? { excerpt: scrubRadarField(item.excerpt, 1500, { upstreamTruncated: itemTruncated }) } : {}),
+        ...(typeof item.summaryExcerpt === 'string' ? { summaryExcerpt: scrubRadarField(item.summaryExcerpt, 1500, { upstreamTruncated: itemTruncated }) } : {}),
+        ...(typeof item.summary === 'string' ? { summary: scrubRadarField(item.summary, 1500, { upstreamTruncated: itemTruncated }) } : {}),
+        ...(typeof item.snippet === 'string' ? { snippet: scrubRadarField(item.snippet, 1500, { upstreamTruncated: itemTruncated }) } : {}),
+      } : item;
+      return [{
+        ...projectEvidence(safeItem, 1500),
+        ...projectText(safeItem, { snippet: 1500 }),
+        url,
+        media: observeMedia(searchImages(item, { redactForRadar, upstreamTruncated: itemTruncated })),
+      }];
     });
-    const media = observeMedia(searchImages(data));
-    return { ...projectText(data, { provider: 80, answer: 1500 }), results, media };
+    const media = observeMedia(searchImages(data, { redactForRadar, upstreamTruncated: dataTruncated }));
+    const safeData = redactForRadar ? {
+      ...data,
+      ...(typeof data.provider === 'string' ? { provider: scrubRadarField(data.provider, 80, { upstreamTruncated: dataTruncated }) } : {}),
+      ...(typeof data.answer === 'string' ? { answer: scrubRadarField(data.answer, 1500, { upstreamTruncated: dataTruncated }) } : {}),
+    } : data;
+    return { ...projectText(safeData, { provider: 80, answer: 1500 }), results, media };
   }
   const url = publicWebUrl(data.url || input.url);
   if (!url) return { error: 'Invalid fetch result' };
@@ -1104,7 +1591,7 @@ async function researchBriefing({ mode, stream, finalCall, params, news, evidenc
         : (toolExecutors?.WebFetch ?? fetchPublicPage);
       const raw = await execute(args, ctx);
       ctx.signal.throwIfAborted();
-      return harvestResult(raw, name, args, evidence);
+      return harvestResult(raw, name, args, evidence, { redactForRadar: radar });
     } catch {
       ctx.signal.throwIfAborted();
       return { error: 'Web research tool failed' };
@@ -1263,10 +1750,13 @@ export async function runCosmicWebBriefing({ mode, perspective = 'balanced', lan
   const call = typeof requestAdapter?.call === 'function' ? requestAdapter.call.bind(requestAdapter) : undefined;
   if (!stream && !call) throw new BriefingError('Cosmic Web briefing provider unavailable');
   const effectiveSchema = schemaVersion === 1 && (mode === 'brief' || mode === 'synthesize') ? 1 : 2;
-  // Research is opt-in (payload.research === true) and strictly blocked for owner-private feeds and v1 servers.
+  // Research is opt-in (payload.research === true) and strictly blocked for owner-private feeds/stories and v1 servers.
+  const hasPrivateDomainStory = Array.isArray(payload?.domains)
+    && payload.domains.some(domain => Array.isArray(domain?.stories) && domain.stories.some(story => story?.isPrivateSource === true));
   const research = effectiveSchema === 2
     && Boolean(stream)
     && payload?.isPrivateSource !== true
+    && !hasPrivateDomainStory
     && (mode === 'topic_radar' || payload?.research === true);
   const skill = loadCosmicWebSkillGuidance({ yeaftDir: yeaftDir || config?.dir, bundledSkillsDir });
   const outputLanguage = languageFor(language || config?.language);
@@ -1291,8 +1781,15 @@ export async function runCosmicWebBriefing({ mode, perspective = 'balanced', lan
   if (typeof response?.text !== 'string' || response.text.length > MAX_RESPONSE_CHARS || response.toolCalls?.length
     || ['tool_use', 'content_filter', 'refusal', 'pause_turn', 'model_context_window_exceeded'].includes(response.stopReason)) throw invalidOutput();
   const parsed = parseDecisionJsonObject(response.text);
+  const isPrivate = payload?.isPrivateSource === true;
+  const includeExcerptProvenance = payload?.excerptProvenance === true;
+  const includeBriefContextProvenance = isPrivate && payload?.briefContextProvenance === true && (mode === 'brief' || mode === 'synthesize');
   return {
-    result: normalizeOutput(parsed, mode, outputLanguage, news, evidence, effectiveSchema),
+    result: normalizeOutput(parsed, mode, outputLanguage, news, evidence, effectiveSchema, {
+      includeExcerptProvenance,
+      includeBriefContextProvenance,
+      isPrivate,
+    }),
     meta: { model, skillSource: skill.source, durationMs: Math.round(performance.now() - started) },
   };
 }
