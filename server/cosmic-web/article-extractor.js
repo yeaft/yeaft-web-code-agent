@@ -20,168 +20,189 @@ function fenceFor(code, minWidth) {
   return '`'.repeat(width);
 }
 
-function hasVisiblePieces(pieces) {
-  for (const p of pieces) {
-    if (p.kind === 'syn') {
-      if (p.md.trim().length > 0) return true;
-    } else if (p.kind === 'code' || p.kind === 'pre' || p.kind === 'src') {
-      if (p.text.trim().length > 0) return true;
-    }
-  }
-  return false;
-}
+/**
+ * Linear O(N) private piece-stream emitter mirroring `markdown(node)` (with `<a href>` stripped):
+ * - Appends directly into a single flat `pieces` array (ZERO O(depth × N) array copying).
+ * - Tracks `quoteDepth` and `listIndent` as integer metadata on newline `'sep'` pieces (ZERO O(depth × lines)
+ *   prefix-piece multiplication before the 40,000-char output cap).
+ * - Edge trimming operates in O(1) amortized via `firstIdx` and tail pops, preserving exact `markdown()`
+ *   rendered whitespace semantics across nested blocks inside `<em>`/`<strong>` and surviving `'sep'` placeholders.
+ */
+function renderPrivatePieces(rootNode, cutoffSet) {
+  const pieces = [];
 
-/** Trim leading/trailing rendered whitespace (exact mirror of `text.trim()` in `markdown()`). */
-function trimPieces(pieces, { start = true, end = true } = {}) {
-  const out = pieces.slice();
-  if (start) {
-    while (out.length) {
-      const p = out[0];
-      if (p.kind === 'sep') { out.shift(); continue; }
+  function trimLeadingRange(startIdx) {
+    let idx = startIdx;
+    while (idx < pieces.length) {
+      const p = pieces[idx];
+      if (!p || p.kind === 'sep') { pieces[idx] = null; idx++; continue; }
       if (p.kind === 'src') {
         const trimmed = p.text.trimStart();
-        if (!trimmed) { out.shift(); continue; }
-        out[0] = { ...p, text: trimmed };
+        if (!trimmed) { pieces[idx] = null; idx++; continue; }
+        pieces[idx] = { ...p, text: trimmed };
         break;
       }
       break;
     }
+    return idx;
   }
-  if (end) {
-    while (out.length) {
-      const p = out[out.length - 1];
-      if (p.kind === 'sep') { out.pop(); continue; }
+
+  function trimTrailingRange(minIdx) {
+    while (pieces.length > minIdx) {
+      const p = pieces[pieces.length - 1];
+      if (!p || p.kind === 'sep') { pieces.pop(); continue; }
       if (p.kind === 'src') {
         const trimmed = p.text.trimEnd();
-        if (!trimmed) { out.pop(); continue; }
-        out[out.length - 1] = { ...p, text: trimmed };
+        if (!trimmed) { pieces.pop(); continue; }
+        pieces[pieces.length - 1] = { ...p, text: trimmed };
         break;
       }
       break;
     }
   }
-  return out;
-}
 
-/**
- * Render `node` into tagged pieces mirroring `markdown(node)` (with `<a href>` stripped):
- * - `{ kind: 'src', text }`  : decoded text leaf (`\s+` collapsed to `' '`)
- * - `{ kind: 'code', text }` : inline `<code>` body (no synthetic spaces in logical token stream)
- * - `{ kind: 'pre', text }`  : `<pre>` body (wrapped with `'syn'` fences + `'sep'` newlines)
- * - `{ kind: 'sep', text }`  : surviving rendered whitespace separator (`'\n'` or `'\n\n'`)
- * - `{ kind: 'syn', md }`    : pure Markdown syntax (`'*'`, `'**'`, `'# '`, `'> '`, `'- '`, `` '```' ``)
- *
- * Edge trimming (`trimPieces`) operates on the actual rendered stream (so nested blocks inside `<em>`/`<strong>`
- * whose edge newlines are stripped by `markdown()`'s `.trim()` never create phantom separators), while surviving
- * `'sep'` placeholders remain intact even when an inner block's text is completely redacted away.
- */
-function renderPrivatePieces(node, cutoffSet) {
-  if (typeof node === 'string') {
-    const text = node.replace(/\s+/gu, ' ');
-    return text ? [{ kind: 'src', text }] : [];
+  function pushSep(text, quoteDepth, listIndent) {
+    pieces.push({ kind: 'sep', text, quoteDepth, listIndent });
   }
-  const { tag, children } = node;
-  if (tag === 'head' || tag === 'title') return [];
-  if (tag === 'br') return [{ kind: 'sep', text: '\n' }];
-  const openAtCutoff = cutoffSet.has(node);
 
-  if (tag === 'pre') {
-    const code = plainVisible(node).trimEnd();
-    const fence = fenceFor(code, 3);
-    const pieces = [{ kind: 'sep', text: '\n\n' }, { kind: 'syn', md: fence }, { kind: 'sep', text: '\n' }];
-    if (code) pieces.push({ kind: 'pre', text: code });
-    if (!openAtCutoff) pieces.push({ kind: 'sep', text: '\n' }, { kind: 'syn', md: fence }, { kind: 'sep', text: '\n\n' });
-    return pieces;
-  }
-  if (tag === 'code') {
-    const code = plainVisible(node).trimEnd().replace(/\n/g, ' ');
-    if (!code.trim()) return [];
-    return [{ kind: 'code', text: code }];
-  }
-  if (tag === 'ul' || tag === 'ol') {
-    const liNodes = children.filter(n => n.tag === 'li');
-    const out = [{ kind: 'sep', text: '\n\n' }];
-    for (let i = 0; i < liNodes.length; i++) {
-      const li = liNodes[i];
-      const marker = tag === 'ul' ? '- ' : `${i + 1}. `;
-      const liInner = trimPieces(renderPrivatePieces(li, cutoffSet), { start: true, end: !cutoffSet.has(li) });
-      if (i > 0) out.push({ kind: 'sep', text: '\n' });
-      out.push({ kind: 'syn', md: marker });
-      for (const p of liInner) {
-        if (p.kind === 'sep' && p.text.includes('\n')) {
-          const parts = p.text.split('\n');
-          for (let j = 0; j < parts.length; j++) {
-            if (j > 0) {
-              out.push({ kind: 'sep', text: '\n' });
-              out.push({ kind: 'syn', md: ' '.repeat(marker.length) });
-            }
-            if (parts[j]) out.push({ kind: 'sep', text: parts[j] });
-          }
-        } else {
-          out.push(p);
-        }
-      }
+  function emit(node, quoteDepth, listIndent) {
+    if (typeof node === 'string') {
+      const text = node.replace(/\s+/gu, ' ');
+      if (!text) return { visible: false, firstIdx: pieces.length };
+      const idx = pieces.length;
+      pieces.push({ kind: 'src', text });
+      return { visible: text.trim().length > 0, firstIdx: idx };
     }
-    if (!openAtCutoff) out.push({ kind: 'sep', text: '\n\n' });
-    return out;
-  }
-
-  const rawInner = [];
-  for (const child of children) {
-    for (const p of renderPrivatePieces(child, cutoffSet)) rawInner.push(p);
-  }
-  if (!hasVisiblePieces(rawInner)) return [];
-
-  if (/^h[1-6]$/.test(tag)) {
-    const inner = trimPieces(rawInner, { start: true, end: !openAtCutoff });
-    return [
-      { kind: 'sep', text: '\n\n' },
-      { kind: 'syn', md: `${'#'.repeat(Number(tag[1]))} ` },
-      ...inner,
-      ...(openAtCutoff ? [] : [{ kind: 'sep', text: '\n\n' }]),
-    ];
-  }
-  if (tag === 'blockquote') {
-    const inner = trimPieces(rawInner, { start: true, end: !openAtCutoff });
-    const out = [{ kind: 'sep', text: '\n\n' }, { kind: 'syn', md: '> ' }];
-    for (const p of inner) {
-      if (p.kind === 'sep' && p.text.includes('\n')) {
-        const parts = p.text.split('\n');
-        for (let j = 0; j < parts.length; j++) {
-          if (j > 0) {
-            out.push({ kind: 'sep', text: '\n' });
-            out.push({ kind: 'syn', md: '> ' });
-          }
-          if (parts[j]) out.push({ kind: 'sep', text: parts[j] });
-        }
-      } else {
-        out.push(p);
-      }
+    const { tag, children } = node;
+    if (tag === 'head' || tag === 'title') return { visible: false, firstIdx: pieces.length };
+    if (tag === 'br') {
+      const idx = pieces.length;
+      pushSep('\n', quoteDepth, listIndent);
+      return { visible: false, firstIdx: idx };
     }
-    if (!openAtCutoff) out.push({ kind: 'sep', text: '\n\n' });
-    return out;
+    const openAtCutoff = cutoffSet.has(node);
+
+    if (tag === 'pre') {
+      const code = plainVisible(node).trimEnd();
+      const fence = fenceFor(code, 3);
+      const firstIdx = pieces.length;
+      pushSep('\n\n', quoteDepth, listIndent);
+      pieces.push({ kind: 'syn', md: fence });
+      pushSep('\n', quoteDepth, listIndent);
+      if (code) pieces.push({ kind: 'pre', text: code, quoteDepth, listIndent });
+      if (!openAtCutoff) {
+        pushSep('\n', quoteDepth, listIndent);
+        pieces.push({ kind: 'syn', md: fence });
+        pushSep('\n\n', quoteDepth, listIndent);
+      }
+      return { visible: true, firstIdx };
+    }
+    if (tag === 'code') {
+      const code = plainVisible(node).trimEnd().replace(/\n/g, ' ');
+      if (!code.trim()) return { visible: false, firstIdx: pieces.length };
+      const idx = pieces.length;
+      pieces.push({ kind: 'code', text: code });
+      return { visible: true, firstIdx: idx };
+    }
+    if (tag === 'ul' || tag === 'ol') {
+      const liNodes = children.filter(n => n.tag === 'li');
+      const firstIdx = pieces.length;
+      pushSep('\n\n', quoteDepth, listIndent);
+      let visible = false;
+      for (let i = 0; i < liNodes.length; i++) {
+        const li = liNodes[i];
+        const marker = tag === 'ul' ? '- ' : `${i + 1}. `;
+        if (i > 0) pushSep('\n', quoteDepth, listIndent);
+        pieces.push({ kind: 'syn', md: marker });
+        visible = true;
+        const liStart = pieces.length;
+        const liOpen = cutoffSet.has(li);
+        let liFirst = liStart;
+        let liSetFirst = false;
+        for (const child of li.children) {
+          const res = emit(child, quoteDepth, listIndent + marker.length);
+          if (!liSetFirst && res.firstIdx < pieces.length) { liFirst = res.firstIdx; liSetFirst = true; }
+        }
+        trimLeadingRange(liFirst);
+        if (!liOpen) trimTrailingRange(liStart);
+      }
+      if (!openAtCutoff) pushSep('\n\n', quoteDepth, listIndent);
+      return { visible, firstIdx };
+    }
+
+    const startIdx = pieces.length;
+    const isHeading = /^h[1-6]$/.test(tag);
+    const isBlockquote = tag === 'blockquote';
+    const isEm = tag === 'em' || tag === 'i';
+    const isStrong = tag === 'strong' || tag === 'b';
+    const isBlock = !isHeading && !isBlockquote && !isEm && !isStrong && tag !== 'a' && blocks.has(tag);
+
+    let openSepIdx = -1;
+    let openSynIdx = -1;
+    if (isHeading || isBlockquote || isBlock) {
+      openSepIdx = pieces.length;
+      pushSep('\n\n', quoteDepth, listIndent);
+    }
+    if (isHeading || isBlockquote || isEm || isStrong) {
+      openSynIdx = pieces.length;
+      pieces.push(null); // Reserve O(1) slot for opening syntax token
+    }
+
+    const innerStart = pieces.length;
+    const childQuoteDepth = isBlockquote ? quoteDepth + 1 : quoteDepth;
+    let visible = false;
+    let firstChildIdx = innerStart;
+    let hasFirst = false;
+    for (const child of children) {
+      const res = emit(child, childQuoteDepth, listIndent);
+      if (res.visible) visible = true;
+      if (!hasFirst && res.firstIdx < pieces.length) { firstChildIdx = res.firstIdx; hasFirst = true; }
+    }
+    if (!visible) {
+      pieces.length = startIdx;
+      return { visible: false, firstIdx: startIdx };
+    }
+
+    if (isHeading || isBlockquote || isBlock) {
+      trimLeadingRange(firstChildIdx);
+      if (!openAtCutoff) trimTrailingRange(innerStart);
+    } else if (isEm || isStrong) {
+      trimLeadingRange(firstChildIdx);
+      trimTrailingRange(innerStart);
+    }
+
+    if (isHeading) {
+      pieces[openSynIdx] = { kind: 'syn', md: `${'#'.repeat(Number(tag[1]))} ` };
+      if (!openAtCutoff) pushSep('\n\n', quoteDepth, listIndent);
+      return { visible: true, firstIdx: openSepIdx };
+    }
+    if (isBlockquote) {
+      pieces[openSynIdx] = { kind: 'syn', md: '> ' };
+      if (!openAtCutoff) pushSep('\n\n', quoteDepth, listIndent);
+      return { visible: true, firstIdx: openSepIdx };
+    }
+    if (isEm) {
+      pieces[openSynIdx] = { kind: 'syn', md: '*' };
+      if (!openAtCutoff) pieces.push({ kind: 'syn', md: '*' });
+      return { visible: true, firstIdx: openSynIdx };
+    }
+    if (isStrong) {
+      pieces[openSynIdx] = { kind: 'syn', md: '**' };
+      if (!openAtCutoff) pieces.push({ kind: 'syn', md: '**' });
+      return { visible: true, firstIdx: openSynIdx };
+    }
+    if (isBlock) {
+      if (!openAtCutoff) pushSep('\n\n', quoteDepth, listIndent);
+      return { visible: true, firstIdx: openSepIdx };
+    }
+    // `a` (href stripped) and other inline elements
+    return { visible: true, firstIdx: firstChildIdx };
   }
-  if (tag === 'em' || tag === 'i') {
-    const inner = trimPieces(rawInner, { start: true, end: true });
-    return [{ kind: 'syn', md: '*' }, ...inner, ...(openAtCutoff ? [] : [{ kind: 'syn', md: '*' }])];
-  }
-  if (tag === 'strong' || tag === 'b') {
-    const inner = trimPieces(rawInner, { start: true, end: true });
-    return [{ kind: 'syn', md: '**' }, ...inner, ...(openAtCutoff ? [] : [{ kind: 'syn', md: '**' }])];
-  }
-  if (tag === 'a') {
-    // Strip href in private AI projection so markdown never emits ](<url>).
-    return rawInner;
-  }
-  if (blocks.has(tag)) {
-    const inner = trimPieces(rawInner, { start: true, end: !openAtCutoff });
-    return [
-      { kind: 'sep', text: '\n\n' },
-      ...inner,
-      ...(openAtCutoff ? [] : [{ kind: 'sep', text: '\n\n' }]),
-    ];
-  }
-  return rawInner;
+
+  emit(rootNode, 0, 0);
+  const compact = [];
+  for (const p of pieces) if (p) compact.push(p);
+  return compact;
 }
 
 /**
@@ -268,51 +289,67 @@ function redactPrivatePieces(pieces) {
   return out;
 }
 
+function linePrefixFor(quoteDepth, listIndent) {
+  let prefix = '';
+  if (quoteDepth > 0) prefix += '> '.repeat(quoteDepth);
+  if (listIndent > 0) prefix += ' '.repeat(listIndent);
+  return prefix;
+}
+
 function renderPieceMd(p) {
   if (p.kind === 'src') return escapeMd(p.text);
-  if (p.kind === 'sep') return p.text;
+  if (p.kind === 'sep') {
+    const prefix = linePrefixFor(p.quoteDepth ?? 0, p.listIndent ?? 0);
+    return prefix && p.text.includes('\n') ? p.text.replace(/\n/g, `\n${prefix}`) : p.text;
+  }
   if (p.kind === 'syn') return p.md;
   if (p.kind === 'code') {
     const fence = fenceFor(p.text, 1);
     return `${fence} ${p.text} ${fence}`;
   }
-  return p.text; // 'pre' body
+  const prefix = linePrefixFor(p.quoteDepth ?? 0, p.listIndent ?? 0);
+  return prefix && p.text.includes('\n') ? p.text.replace(/\n/g, `\n${prefix}`) : p.text; // 'pre' body
 }
 
 function formatBoundedPieces(pieces, maxChars = 40_000) {
-  const full = pieces.map(renderPieceMd).join('').trim();
-  if (full.length <= maxChars) return full;
+  // Single bounded O(maxChars) forward pass — never expands prefixes past `maxChars`.
   let out = '';
   let lastSafeLen = 0;
+  let exceeded = false;
   for (const p of pieces) {
     const chunk = renderPieceMd(p);
     if (!chunk) continue;
+    // Drop leading whitespace before any content so leading `\n\n` doesn't consume output budget.
+    const effectiveChunk = !out ? chunk.trimStart() : chunk;
+    if (!effectiveChunk) continue;
     if (p.kind === 'sep') {
-      if (out.length + chunk.length <= maxChars) {
-        out += chunk;
+      if (out.length + effectiveChunk.length <= maxChars) {
+        out += effectiveChunk;
         lastSafeLen = out.length;
       } else {
+        exceeded = true;
         break;
       }
       continue;
     }
     if (p.kind === 'syn') {
-      if (out.length + chunk.length <= maxChars) out += chunk;
-      else break;
+      if (out.length + effectiveChunk.length <= maxChars) out += effectiveChunk;
+      else { exceeded = true; break; }
       continue;
     }
-    if (out.length + chunk.length <= maxChars) {
-      out += chunk;
+    if (out.length + effectiveChunk.length <= maxChars) {
+      out += effectiveChunk;
       if (/\s/u.test(p.text)) {
-        let ws = chunk.length - 1;
-        while (ws >= 0 && !/\s/u.test(chunk[ws])) ws--;
-        if (ws >= 0) lastSafeLen = out.length - chunk.length + ws + 1;
+        let ws = effectiveChunk.length - 1;
+        while (ws >= 0 && !/\s/u.test(effectiveChunk[ws])) ws--;
+        if (ws >= 0) lastSafeLen = out.length - effectiveChunk.length + ws + 1;
       }
       continue;
     }
+    exceeded = true;
     const remaining = maxChars - out.length;
     if (remaining > 0 && p.kind !== 'code') {
-      const slice = chunk.slice(0, remaining);
+      const slice = effectiveChunk.slice(0, remaining);
       let ws = slice.length - 1;
       while (ws >= 0 && !/\s/u.test(slice[ws])) ws--;
       if (ws >= 0) {
@@ -322,7 +359,7 @@ function formatBoundedPieces(pieces, maxChars = 40_000) {
     }
     break;
   }
-  return out.slice(0, lastSafeLen).trim();
+  return (exceeded ? out.slice(0, lastSafeLen) : out).trim();
 }
 
 function renderPrivateAiMarkdown(best, openStack, bestWasTruncated, maxChars = 40_000) {

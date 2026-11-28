@@ -212,12 +212,22 @@ export function* scanMarkup(input, { xml = false, rawTags = new Set(), rcdataTag
   let i = 0, tags = 0, raw = null, rcdata = null;
   const skipStack = [];
   const foreignStack = [];
+  const foreignPos = { svg: [], math: [] };
+  const truncateForeign = targetLen => {
+    while (foreignStack.length > targetLen) {
+      const popped = foreignStack.pop();
+      foreignPos[popped].pop();
+    }
+  };
   const updateForeignStack = (name, closing, selfClosing, floor = 0) => {
     if (!foreignTags.has(name)) return;
-    if (!closing && !selfClosing) foreignStack.push(name);
-    else if (closing) {
-      const at = foreignStack.lastIndexOf(name);
-      if (at >= floor) foreignStack.length = at;
+    if (!closing && !selfClosing) {
+      foreignPos[name].push(foreignStack.length);
+      foreignStack.push(name);
+    } else if (closing) {
+      const positions = foreignPos[name];
+      const at = positions.length ? positions[positions.length - 1] : -1;
+      if (at >= floor) truncateForeign(at);
     }
   };
   while (i < str.length) {
@@ -343,7 +353,7 @@ export function* scanMarkup(input, { xml = false, rawTags = new Set(), rcdataTag
       }
       if (skipTags.has(name)) {
         if (closing) {
-          if (skipStack.at(-1).name === name) foreignStack.length = skipStack.pop().foreignDepth;
+          if (skipStack.at(-1).name === name) truncateForeign(skipStack.pop().foreignDepth);
         } else {
           skipStack.push({ name, foreignDepth: foreignStack.length });
         }

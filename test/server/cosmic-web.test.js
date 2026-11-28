@@ -2942,6 +2942,25 @@ describe('2.0 graph and AI contracts', () => {
     expect(r11RssParsed[0].summaryExcerpt).toContain('//R11DESC99@intranet:8080/a');
     expect(r11RssParsed[0].summaryExcerpt).toContain('//R11NBSP99@intranet:8080/b');
 
+    // Round 33 (PR #2032 Round 12): O(1) per-namespace foreign end-tag tracking & O(N) nested-blockquote private projection scaling
+    const svgCloseBomb = `${'<svg>'.repeat(12_000)}${'</math>'.repeat(12_000)}Safe tail`;
+    const rssBomb = `<rss><channel>
+      <item><title>Bomb 1</title><link>https://private.example/b1</link><description><![CDATA[${svgCloseBomb}]]></description></item>
+      <item><title>Bomb 2</title><link>https://private.example/b2</link><description><![CDATA[${svgCloseBomb}]]></description></item>
+      <item><title>Bomb 3</title><link>https://private.example/b3</link><description><![CDATA[${svgCloseBomb}]]></description></item>
+    </channel></rss>`;
+    const tForeign0 = performance.now();
+    const bombItems = parseFeedXml(rssBomb, 'https://private.example/feed.xml', { sanitizeExcerpt: raw => raw });
+    expect(performance.now() - tForeign0).toBeLessThan(600);
+    expect(bombItems).toHaveLength(3);
+    expect(bombItems[0].summaryExcerpt).toBe('Safe tail');
+    const deepBqHtml = `<article>${'<blockquote>'.repeat(100)}${'<p>Quoted line</p>'.repeat(3000)}${'</blockquote>'.repeat(100)}</article>`;
+    const tDeepBq0 = performance.now();
+    const deepBqArt = extractCleanArticle(deepBqHtml, 'https://private.example/bq');
+    expect(performance.now() - tDeepBq0).toBeLessThan(1500);
+    expect(deepBqArt.aiMarkdown.length).toBeLessThanOrEqual(40_000);
+    expect(deepBqArt.aiMarkdown).toContain('> >');
+
     // Mixed public/private dailyBriefing carries per-story isPrivateSource: true on private stories (enabling Agent defense-in-depth) while keeping public stories clean.
     const mixedDailyReqAi = vi.fn(async () => dailyResult);
     const mixedDailySvc = makeService({ requestAi: mixedDailyReqAi });
