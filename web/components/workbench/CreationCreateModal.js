@@ -10,7 +10,6 @@ import { useChatStore } from '../../stores/chat.js';
 import { useSessionsStore } from '../../stores/sessions.js';
 import {
   creationSessionsForAgent,
-  isAmbiguousRpcResult,
   newCreationAttemptKey,
   useCreationsStore,
 } from '../../stores/creations.js';
@@ -158,9 +157,9 @@ export default {
                 <div
                   class="creation-dropzone creation-dropzone-compact"
                   role="button"
-                  :tabindex="(submitting || workspaceCommitted) ? -1 : 0"
-                  :aria-disabled="submitting || workspaceCommitted"
-                  :class="{ 'is-dragover': dragOver && !workspaceCommitted, 'is-disabled': submitting || workspaceCommitted }"
+                  :tabindex="(submitting || workspaceLockedForRetry) ? -1 : 0"
+                  :aria-disabled="submitting || workspaceLockedForRetry"
+                  :class="{ 'is-dragover': dragOver && !workspaceLockedForRetry, 'is-disabled': submitting || workspaceLockedForRetry }"
                   @dragover.prevent="onDropzoneDragOver"
                   @dragleave="dragOver = false"
                   @drop.prevent="onFileDrop"
@@ -173,7 +172,7 @@ export default {
                     type="file"
                     multiple
                     class="creation-hidden-file-input"
-                    :disabled="submitting || workspaceCommitted"
+                    :disabled="submitting || workspaceLockedForRetry"
                     @change="onFileInputChange"
                   />
                   <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
@@ -185,6 +184,9 @@ export default {
                 <p v-if="workspaceCommitted" class="creation-create-hint" role="status">
                   {{ tr('creation.create.workspaceCommittedHint', 'Workspace folder and initial files are already saved; retry will finish linking Session and Project.') }}
                 </p>
+                <p v-else-if="workspaceOutcomePending" class="creation-create-hint" role="status">
+                  {{ tr('creation.create.workspacePendingHint', 'Workspace creation outcome is pending confirmation; retry will reconcile the original folder and files.') }}
+                </p>
 
                 <ul v-if="form.files.length > 0" class="creation-file-list">
                   <li v-for="(file, idx) in form.files" :key="file.name + '-' + idx" class="creation-file-item">
@@ -193,7 +195,7 @@ export default {
                     <button
                       type="button"
                       class="creation-file-remove"
-                      :disabled="submitting || workspaceCommitted"
+                      :disabled="submitting || workspaceLockedForRetry"
                       :aria-label="tr('common.remove', 'Remove')"
                       @click="removeFile(idx)"
                     >
@@ -361,11 +363,14 @@ export default {
                       type="text"
                       class="creation-create-input creation-create-mono"
                       autocomplete="off"
-                      :disabled="submitting || workspaceCommitted"
+                      :disabled="submitting || workspaceLockedForRetry"
                       :placeholder="tr('creation.create.folderPlaceholder', 'Leave blank to auto-create inside Agent workspace')"
                     />
                     <p v-if="workspaceCommitted" class="creation-create-hint">
                       {{ tr('creation.create.workspaceCommittedHint', 'Workspace folder and initial files are already saved; retry will finish linking Session and Project.') }}
+                    </p>
+                    <p v-else-if="workspaceOutcomePending" class="creation-create-hint">
+                      {{ tr('creation.create.workspacePendingHint', 'Workspace creation outcome is pending confirmation; retry will reconcile the original folder and files.') }}
                     </p>
                   </div>
                 </div>
@@ -530,10 +535,13 @@ export default {
       Boolean(selectedAgentOption.value?.eligible)
     ));
 
-    const workspaceLockedForRetry = Vue.computed(() => (
-      Boolean(resumeState.value?.creationId || resumeState.value?.createAttempted)
+    const workspaceCommitted = Vue.computed(() => Boolean(resumeState.value?.creationId));
+    const workspaceOutcomePending = Vue.computed(() => (
+      !workspaceCommitted.value && resumeState.value?.workspaceCreateOutcome === 'ambiguous'
     ));
-    const workspaceCommitted = workspaceLockedForRetry;
+    const workspaceLockedForRetry = Vue.computed(() => (
+      workspaceCommitted.value || workspaceOutcomePending.value
+    ));
 
     const settingsSummaryText = Vue.computed(() => {
       const ag = selectedAgentOption.value;
@@ -551,7 +559,7 @@ export default {
       !hasEligibleAgent.value
       || !selectedAgentOption.value?.eligible
       || Boolean(props.initialRootDir || props.initialProjectId || props.initialSessionMode === 'existing')
-      || Boolean(resumeState.value?.creationId || resumeState.value?.createAttempted || unassignedResult.value || projectNameError.value)
+      || Boolean(workspaceLockedForRetry.value || unassignedResult.value || projectNameError.value)
     );
 
     const canSubmit = Vue.computed(() => {
@@ -618,13 +626,13 @@ export default {
     }, { immediate: true });
 
     Vue.watch(
-      [hasEligibleAgent, selectedAgentEligible, workspaceCommitted, unassignedResult, projectNameError],
+      [hasEligibleAgent, selectedAgentEligible, workspaceLockedForRetry, unassignedResult, projectNameError],
       () => {
         if (!props.visible) return;
         if (
           !hasEligibleAgent.value
           || !selectedAgentEligible.value
-          || workspaceCommitted.value
+          || workspaceLockedForRetry.value
           || Boolean(unassignedResult.value)
           || Boolean(projectNameError.value)
         ) {
@@ -676,17 +684,17 @@ export default {
     };
 
     const triggerFilePicker = () => {
-      if (submitting.value || workspaceCommitted.value) return;
+      if (submitting.value || workspaceLockedForRetry.value) return;
       fileInputRef.value?.click();
     };
 
     const onDropzoneDragOver = () => {
-      if (submitting.value || workspaceCommitted.value) return;
+      if (submitting.value || workspaceLockedForRetry.value) return;
       dragOver.value = true;
     };
 
     const addFiles = (fileList) => {
-      if (workspaceCommitted.value || !fileList || !fileList.length) return;
+      if (workspaceLockedForRetry.value || !fileList || !fileList.length) return;
       for (const file of fileList) {
         if (!file) continue;
         const duplicate = form.files.some(
@@ -697,18 +705,18 @@ export default {
     };
 
     const onFileInputChange = (event) => {
-      if (!workspaceCommitted.value) addFiles(event.target?.files);
+      if (!workspaceLockedForRetry.value) addFiles(event.target?.files);
       if (event.target) event.target.value = '';
     };
 
     const onFileDrop = (event) => {
       dragOver.value = false;
-      if (submitting.value || workspaceCommitted.value) return;
+      if (submitting.value || workspaceLockedForRetry.value) return;
       addFiles(event.dataTransfer?.files);
     };
 
     const removeFile = (index) => {
-      if (submitting.value || workspaceCommitted.value) return;
+      if (submitting.value || workspaceLockedForRetry.value) return;
       form.files.splice(index, 1);
     };
 
@@ -766,12 +774,12 @@ export default {
       || (form.sessionMode === 'existing' && !form.existingSessionId)
       || Boolean(
         state?.creationId
-        || state?.createAttempted
+        || state?.workspaceCreateOutcome === 'ambiguous'
         || state?.projectId
         || state?.sessionId
         || state?.projectAttempted
         || state?.sessionAttempted
-        || err?.createAttempted
+        || err?.workspaceCreateOutcome === 'ambiguous'
         || err?.partialCreation
         || err?.partialCreationId
         || err?.partialProjectId
@@ -790,6 +798,7 @@ export default {
           newProjectNameSnapshot: newProjectName.value,
           creationId: '',
           sessionId: '',
+          workspaceCreateOutcome: 'not_sent',
           createAttempted: false,
           projectAttempted: false,
           sessionAttempted: false,
@@ -830,6 +839,10 @@ export default {
           state.projectId = result.requestedProjectId || result.partialProjectId || result.projectId || state.projectId || form.projectId;
           state.creationId = result.creation?.id || state.creationId;
           state.sessionId = result.sessionId || result.creation?.sessionId || state.sessionId;
+          if (state.creationId) {
+            state.workspaceCreateOutcome = 'committed';
+            state.createAttempted = true;
+          }
           unassignedResult.value = result;
           errorMessage.value = warning.message || warning;
           settingsExpanded.value = true;
@@ -841,13 +854,16 @@ export default {
         state.projectId = err?.partialProjectId || state.projectId;
         state.creationId = err?.partialCreation?.id || err?.partialCreationId || state.creationId;
         state.sessionId = err?.partialSessionId || state.sessionId;
-        state.createAttempted = Boolean(
-          state.createAttempted
-          || err?.createAttempted === true
-          || err?.partialCreation?.id
-          || err?.partialCreationId
-          || isAmbiguousRpcResult(err)
-        );
+        if (state.creationId) {
+          state.workspaceCreateOutcome = 'committed';
+        } else if (err?.workspaceCreateOutcome) {
+          state.workspaceCreateOutcome = err.workspaceCreateOutcome;
+        } else if (err?.createAttempted === true) {
+          state.workspaceCreateOutcome = 'ambiguous';
+        } else {
+          state.workspaceCreateOutcome = 'not_sent';
+        }
+        state.createAttempted = state.workspaceCreateOutcome === 'ambiguous' || state.workspaceCreateOutcome === 'committed';
         state.projectAttempted = err?.projectAttempted ?? state.projectAttempted;
         state.sessionAttempted = err?.sessionAttempted ?? state.sessionAttempted;
         state.baselineProjectIds = err?.baselineProjectIds ?? state.baselineProjectIds;
@@ -880,6 +896,7 @@ export default {
       settingsSummaryText,
       workspaceLockedForRetry,
       workspaceCommitted,
+      workspaceOutcomePending,
       agentOptions,
       hasEligibleAgent,
       projectOptions,

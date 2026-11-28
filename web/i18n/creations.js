@@ -400,6 +400,7 @@ export const zhCN = {
   'creation.create.existingSessionShort': '已有会话',
   'creation.create.settingsSummary': '工作区配置',
   'creation.create.workspaceCommittedHint': '工作区目录与初始文件已保存，重试将仅完成会话与项目绑定',
+  'creation.create.workspacePendingHint': '工作区创建结果待确认，重试将优先恢复原工作区目录与素材',
 
   // Canvas Slim Toolbar & Feedback
   'creation.canvas.typography': '排版',
@@ -476,8 +477,12 @@ export const zhCN = {
   'creation.ai.reconnected': '连接已中断，请重试',
   'creation.review.supersededNotice': '已有更新的审稿结果，本次旧结果已失效',
   'creation.review.rollbackFailed': '保存批注状态失败，且文档已被修改，无法自动回滚，请手动核对',
-  'creation.review.reopenFailed': '撤销了正文修改，但未能重新打开批注状态，请刷新后核对',
+  'creation.review.reopenFailed': '未能重新打开批注状态，已取消本次撤销，正文修改已保留',
   'creation.review.refreshing': '正在同步最新审稿状态…',
+  'creation.review.saveBeforeFinal': '请先保存当前文档再标记定稿',
+  'creation.review.refreshFailed': '未能同步最新审稿状态，请重新同步后再操作',
+  'creation.review.retryRefresh': '重新同步',
+  'creation.review.committing': '提交中…',
 
   // Review Lenses (18 pairs across 6 categories)
   'creation.review.lens.logic_continuity': '逻辑与连贯',
@@ -917,6 +922,7 @@ export const en = {
   'creation.create.existingSessionShort': 'Existing Session',
   'creation.create.settingsSummary': 'Workspace settings',
   'creation.create.workspaceCommittedHint': 'Workspace folder and initial files are already saved; retry will finish linking Session and Project.',
+  'creation.create.workspacePendingHint': 'Workspace creation outcome is pending confirmation; retry will reconcile the original folder and files.',
 
   // Canvas Slim Toolbar & Feedback
   'creation.canvas.typography': 'Typography',
@@ -993,8 +999,12 @@ export const en = {
   'creation.ai.reconnected': 'Connection interrupted; please retry.',
   'creation.review.supersededNotice': 'A newer review superseded this run.',
   'creation.review.rollbackFailed': 'Failed to save annotation status and document changed; please verify manually.',
-  'creation.review.reopenFailed': 'Text edit was undone, but reopening annotation status failed; please refresh.',
+  'creation.review.reopenFailed': 'Could not reopen annotation status; Undo was cancelled and the text edit remains.',
   'creation.review.refreshing': 'Syncing latest review state…',
+  'creation.review.saveBeforeFinal': 'Save the document before marking it final.',
+  'creation.review.refreshFailed': 'Failed to sync latest review state; retry sync before continuing.',
+  'creation.review.retryRefresh': 'Retry sync',
+  'creation.review.committing': 'Committing…',
 
   // Review Lenses (18 pairs across 6 categories)
   'creation.review.lens.logic_continuity': 'Logic & Continuity',

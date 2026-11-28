@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { loadConfig } from '../../../../agent/yeaft/config.js';
 import { createLLMAdapter } from '../../../../agent/yeaft/llm/adapter.js';
+import { AdapterRouter } from '../../../../agent/yeaft/llm/router.js';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { CREATION_CATEGORIES, createCreationAiAssistant, createCreationService, MAX_CONCURRENT_JOBS, QUICK_EDIT_PRESETS, QUICK_EDIT_PRESETS_BY_CATEGORY,
   REVIEW_LENSES, REVIEW_LENSES_BY_CATEGORY, resolveReviewLenses } from '../../../../agent/yeaft/creations/index.js';
@@ -383,6 +384,37 @@ describe('Creation AI assistant', () => {
       expect(params).not.toHaveProperty('effort');
       expect(params).not.toHaveProperty('effortSource');
     } else expect(params).toMatchObject({ effort: 'high', effortSource: 'user' });
+  });
+
+  it.each([
+    [2048, 'max', undefined],
+    [2048, 'medium', 1024],
+    [2048, undefined, undefined],
+  ])('keeps serialized Anthropic max_tokens at %s (explicit effort: %s)', async (maxOutputTokens, effort, budget) => {
+    const model = 'gateway/custom-model';
+    const adapter = new AdapterRouter({ providers: [{ name: 'gateway', protocol: 'anthropic',
+      baseUrl: 'https://anthropic.example', apiKey: 'test-key', models: [
+        { id: 'custom-model', thinkingProtocol: 'anthropic', maxBudgetTokens: effort === 'medium' ? 1024 : 8192 },
+      ] }] });
+    createLLMAdapter.mockResolvedValueOnce(adapter);
+    loadConfig.mockReturnValueOnce({ model, maxOutputTokens });
+    const sse = [
+      { type: 'message_start', message: { id: 'msg_1', model: 'custom-model', content: [], usage: { input_tokens: 10, output_tokens: 0 } } },
+      { type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } },
+      { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'edited' } },
+      { type: 'content_block_stop', index: 0 },
+      { type: 'message_delta', delta: { stop_reason: 'end_turn' }, usage: { output_tokens: 1 } },
+      { type: 'message_stop' },
+    ].map(event => `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`).join('');
+    const fetch = vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(new Response(sse, { headers: { 'Content-Type': 'text/event-stream' } }));
+    assistant = createCreationAiAssistant();
+    const { jobId } = assistant.startInlineEdit({ ...editing, effort });
+    expect(await assistant.waitForJob(jobId)).toMatchObject({ status: 'completed', revisedText: 'edited' });
+    expect(fetch).toHaveBeenCalledTimes(1);
+    const body = JSON.parse(fetch.mock.calls[0][1].body);
+    expect(body).toMatchObject({ model: 'custom-model', max_tokens: maxOutputTokens });
+    if (budget === undefined) expect(body).not.toHaveProperty('thinking');
+    else expect(body.thinking).toMatchObject({ type: 'enabled', budget_tokens: budget });
   });
 
   it('allows standalone FilesTab canvas requests with empty creationId and absolute paths while still rejecting traversal', async () => {

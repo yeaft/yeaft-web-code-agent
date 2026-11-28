@@ -108,11 +108,13 @@ export default {
     quickReviewRequest: { type: Object, default: null },
     reopenedAnnotation: { type: Object, default: null },
     reopenedAnnotationEvent: { type: Object, default: null },
-    rollbackAnnotationFix: { type: Function, default: null },
+    previewAnnotationFix: { type: Function, default: null },
+    isDirty: { type: Boolean, default: false },
+    hasDiskConflict: { type: Boolean, default: false },
     applyAnnotationFix: { type: Function, default: null },
     stageAnnotationsToSession: { type: Function, default: null },
   },
-  emits: ['close', 'apply-annotation', 'jump-to-line', 'send-to-session', 'update:doc-status'],
+  emits: ['close', 'jump-to-line', 'send-to-session', 'update:doc-status'],
   template: `
     <aside
       v-if="visible"
@@ -218,6 +220,12 @@ export default {
 
         <div v-if="isReviewRefreshing" class="canvas-inline-status" role="status">
           {{ tr('creation.review.refreshing', 'Syncing latest review state…') }}
+        </div>
+        <div v-if="isReviewStale" class="canvas-review-conflict-banner" role="alert">
+          <span>{{ tr('creation.review.refreshFailed', 'Failed to sync latest review state; retry sync before continuing.') }}</span>
+          <button type="button" class="btn-secondary" :disabled="isReviewRefreshing || retryingSync" @click="loadPersistedReview()">
+            {{ tr('creation.review.retryRefresh', 'Retry sync') }}
+          </button>
         </div>
         <div v-if="supersededNotice" class="canvas-review-superseded-banner" role="status">
           {{ tr('creation.review.supersededNotice', 'A newer review superseded this run.') }}
@@ -362,14 +370,14 @@ export default {
                   v-if="ann.suggestedReplacement"
                   type="button"
                   class="btn-primary"
-                  :disabled="actionsLocked || Boolean(resolvingId)"
+                  :disabled="actionsLocked || Boolean(resolvingId || committingAnnotationId)"
                   :title="actionsLocked ? tr('creation.review.waitComplete', 'Actions unlock once review completes') : undefined"
                   @click="acceptAnnotation(ann)"
                 >{{ tr('creation.review.acceptFix', 'Accept fix') }}</button>
                 <button
                   type="button"
                   class="btn-ghost"
-                  :disabled="actionsLocked || Boolean(resolvingId)"
+                  :disabled="actionsLocked || Boolean(resolvingId || committingAnnotationId)"
                   :title="actionsLocked ? tr('creation.review.waitComplete', 'Actions unlock once review completes') : undefined"
                   @click="dismissAnnotation(ann)"
                 >{{ tr('creation.review.dismiss', 'Dismiss') }}</button>
@@ -386,7 +394,7 @@ export default {
       </div>
 
       <!-- Bulk action footer -->
-      <footer v-if="checkedOpenAnnotations.length > 0 || canMarkFinal" class="canvas-review-bulk-bar">
+      <footer v-if="checkedOpenAnnotations.length > 0 || canMarkFinal || showSaveBeforeFinal" class="canvas-review-bulk-bar">
         <button
           v-if="checkedOpenAnnotations.length > 0"
           type="button"
@@ -394,6 +402,7 @@ export default {
           @click="sendSelectedToSession"
         >✦ {{ tr('creation.review.sendToSession', 'Add to session draft (' + checkedOpenAnnotations.length + ')', { count: checkedOpenAnnotations.length }) }}</button>
 
+        <span v-if="showSaveBeforeFinal">{{ tr('creation.review.saveBeforeFinal', 'Save the document before marking it final.') }}</span>
         <button
           v-if="canMarkFinal"
           type="button"
@@ -437,6 +446,10 @@ export default {
     const localError = Vue.ref('');
     const actionError = Vue.ref('');
     const resolvingId = Vue.ref('');
+    const committingAnnotationId = Vue.ref('');
+    const retryingSync = Vue.ref(false);
+    const refreshFailed = Vue.ref(false);
+    let mounted = true;
     const severityFilter = Vue.ref('all');
     const lensFilter = Vue.ref('all');
     const checkedIds = Vue.ref([]);
@@ -495,14 +508,17 @@ export default {
     ));
 
     const isCurrentDurableReview = Vue.computed(() => Boolean(
-      canPersistDocReview.value && persistedReview.value
+      canPersistDocReview.value && persistedReview.value && reviewScope.value !== 'selection'
       && (!activeJob.value || activeJob.value.superseded || activeJob.value.jobId === persistedReview.value.jobId)
     ));
     const isReviewRefreshing = Vue.computed(() => Boolean(
       canPersistDocReview.value
       && creationsStore?.isDocReviewRefreshing?.(props.agentId, props.creationId, effectivePersistedDocPath.value)
     ));
-    const actionsLocked = Vue.computed(() => isRunning.value || isReviewRefreshing.value);
+    const isReviewStale = Vue.computed(() => Boolean(canPersistDocReview.value
+      && (refreshFailed.value || creationsStore?.isDocReviewStale?.(props.agentId, props.creationId, effectivePersistedDocPath.value))));
+    const actionsLocked = Vue.computed(() => isRunning.value || isReviewRefreshing.value
+      || retryingSync.value || (isReviewStale.value && reviewScope.value !== 'selection'));
 
     const errorMessage = Vue.computed(() => {
       const failedJob = activeJob.value?.status === 'failed' ? activeJob.value : null;
@@ -572,16 +588,24 @@ export default {
       return Boolean(accepted && accepted.reviewJobId === rev.jobId && accepted.hash === cur);
     });
 
-    const canMarkFinal = Vue.computed(() => (
+    const reviewAllowsFinal = Vue.computed(() => (
       Boolean(props.creationId && effectivePersistedDocPath.value)
       && props.docStatus !== 'final'
       && !isRunning.value
       && !isReviewRefreshing.value
+      && !isReviewStale.value
+      && !retryingSync.value
+      && !committingAnnotationId.value
+      && !resolvingId.value
       && Boolean(persistedReview.value)
       && ['completed', 'partial'].includes(persistedReview.value.status)
       && persistedOpenBlockerCount.value === 0
       && contentMatchesDurableReview.value
     ));
+
+    const finalSaveBlocked = Vue.computed(() => props.isDirty || props.hasDiskConflict);
+    const canMarkFinal = Vue.computed(() => reviewAllowsFinal.value && !finalSaveBlocked.value);
+    const showSaveBeforeFinal = Vue.computed(() => reviewAllowsFinal.value && finalSaveBlocked.value);
 
     const canStartReview = Vue.computed(() => (
       aiAvailable.value
@@ -681,11 +705,13 @@ export default {
     };
 
     const startReview = async (overrides = {}) => {
+      if (committingAnnotationId.value || resolvingId.value) return;
       if (!aiAvailable.value) {
         localError.value = tr('creation.review.unavailable', 'AI review is unavailable.');
         return;
       }
       const scope = overrides.scope || 'document';
+      if (scope === 'selection' && (!overrides.selection || overrides.selection.content !== props.content || overrides.selection.docPath !== props.filePath)) return;
       const lensIds = Array.isArray(overrides.lensIds) ? overrides.lensIds : [...selectedLensIds.value];
       const promptText = scope === 'selection' ? '' : customPrompt.value.trim();
       if (lensIds.length === 0 && !promptText) return;
@@ -713,6 +739,7 @@ export default {
         filePath: capturedFilePath,
         persistedDocPath: capturedPersistedDocPath,
         scope,
+        selection: overrides.selection,
       };
       pendingStart.value = true;
       supersededNotice.value = false;
@@ -776,64 +803,92 @@ export default {
       checkedIds.value = checkedIds.value.filter(checkedId => checkedId !== id);
     };
 
-    const persistResolution = async (ann, status, result = null, wasReviewedContent = false) => {
-      if (!isCurrentDurableReview.value) {
-        localAnnotationStatuses[ann.id] = status;
-        uncheckAnnotation(ann.id);
-        return;
-      }
-
-      const capturedFileVersion = fileVersion;
-      const reviewJobId = persistedReview.value.jobId;
-      resolvingId.value = ann.id;
-      try {
-        await creationsStore.resolveReviewAnnotation(
-          props.agentId, props.creationId, effectivePersistedDocPath.value, ann.id, status,
-        );
-        if (fileVersion !== capturedFileVersion || persistedReview.value?.jobId !== reviewJobId) return;
-        // A fix can extend a reviewed revision, but cannot bless unrelated edits already present.
-        if (status === 'accepted' && wasReviewedContent && typeof result?.nextContent === 'string') {
-          acceptedPostFixDigest.value = { reviewJobId, hash: sha256Hex(result.nextContent) };
-        }
-        uncheckAnnotation(ann.id);
-      } catch (err) {
-        if (fileVersion !== capturedFileVersion) return;
-        const rb = status === 'accepted' && props.rollbackAnnotationFix?.({
-          prevContent: result?.prevContent,
-          expectedPostContent: result?.nextContent,
-          annotationId: ann.id,
-        });
-        actionError.value = { message: rb?.rolledBack === false
-          ? tr('creation.review.rollbackFailed', 'Failed to save annotation status and document changed; please verify manually.')
-          : err?.message || tr('creation.review.failed', 'Review failed') };
-      } finally {
-        if (fileVersion === capturedFileVersion) resolvingId.value = '';
-      }
+    const reportApplyConflict = () => {
+      actionError.value = {
+        conflict: true,
+        message: tr('creation.canvas.applyConflict', 'Document changed since review; cannot safely apply this suggestion.'),
+      };
     };
 
     const acceptAnnotation = async (ann) => {
-      if (!ann?.id || actionsLocked.value || resolvingId.value) return;
+      if (!ann?.id || actionsLocked.value || resolvingId.value || committingAnnotationId.value) return;
       actionError.value = '';
-      const wasReviewedContent = isCurrentDurableReview.value && contentMatchesDurableReview.value;
-      const result = props.applyAnnotationFix ? props.applyAnnotationFix(ann, {
-        isDurable: isCurrentDurableReview.value,
-        reviewJobId: currentReview.value?.jobId || '',
-      }) : null;
-      if (result?.applied === false) {
-        actionError.value = {
-          conflict: true,
-          message: tr('creation.canvas.applyConflict', 'Document changed since review; cannot safely apply this suggestion.'),
-        };
+      if (!isCurrentDurableReview.value) {
+        const selection = activeJobMeta.value?.selection;
+        if (reviewScope.value === 'selection' && !selection) return reportApplyConflict();
+        const result = props.applyAnnotationFix?.(ann, {
+          isDurable: false, reviewJobId: currentReview.value?.jobId || '', selection,
+        });
+        if (!result?.applied) return reportApplyConflict();
+        localAnnotationStatuses[ann.id] = 'accepted';
+        uncheckAnnotation(ann.id);
         return;
       }
-      if (!props.applyAnnotationFix) emit('apply-annotation', ann);
-      await persistResolution(ann, 'accepted', result, wasReviewedContent);
+
+      const startAgentId = props.agentId;
+      const startCreationId = props.creationId;
+      const startDocPath = effectivePersistedDocPath.value;
+      const startReviewJobId = persistedReview.value.jobId;
+      const capturedFileVersion = fileVersion;
+      const sameDocument = () => mounted && capturedFileVersion === fileVersion
+        && props.agentId === startAgentId && props.creationId === startCreationId
+        && effectivePersistedDocPath.value === startDocPath;
+      const preview = props.previewAnnotationFix?.(ann);
+      if (!preview?.applied) return reportApplyConflict();
+      const wasReviewedContent = contentMatchesDurableReview.value;
+      const resolve = status => creationsStore.resolveReviewAnnotation(
+        startAgentId, startCreationId, startDocPath, ann.id, status,
+      );
+      committingAnnotationId.value = ann.id;
+      try {
+        await resolve('accepted');
+        if (sameDocument() && props.content === preview.prevContent && persistedReview.value?.jobId === startReviewJobId) {
+          const result = props.applyAnnotationFix?.(ann, {
+            isDurable: true, reviewJobId: startReviewJobId, precomputed: preview,
+          });
+          if (result?.applied) {
+            // A fix cannot bless unrelated edits that were already in the buffer.
+            if (wasReviewedContent) {
+              acceptedPostFixDigest.value = { reviewJobId: startReviewJobId, hash: sha256Hex(preview.nextContent) };
+            }
+            uncheckAnnotation(ann.id);
+            return;
+          }
+        }
+        await resolve('open').catch(() => {});
+        if (mounted) {
+          actionError.value = {
+            conflict: true,
+            message: tr('creation.review.rollbackFailed', 'The document changed before the fix could be applied; please verify the review status.'),
+          };
+        }
+      } catch (err) {
+        if (sameDocument()) actionError.value = { message: err?.message || tr('creation.review.failed', 'Review failed') };
+      } finally {
+        committingAnnotationId.value = '';
+      }
     };
 
     const dismissAnnotation = async (ann) => {
-      if (!ann?.id || actionsLocked.value || resolvingId.value) return;
+      if (!ann?.id || actionsLocked.value || resolvingId.value || committingAnnotationId.value) return;
       actionError.value = '';
-      await persistResolution(ann, 'dismissed');
+      if (!isCurrentDurableReview.value) {
+        localAnnotationStatuses[ann.id] = 'dismissed';
+        uncheckAnnotation(ann.id);
+        return;
+      }
+      const capturedFileVersion = fileVersion;
+      resolvingId.value = ann.id;
+      try {
+        await creationsStore.resolveReviewAnnotation(
+          props.agentId, props.creationId, effectivePersistedDocPath.value, ann.id, 'dismissed',
+        );
+        if (fileVersion === capturedFileVersion) uncheckAnnotation(ann.id);
+      } catch (err) {
+        if (fileVersion === capturedFileVersion) actionError.value = { message: err?.message || tr('creation.review.failed', 'Review failed') };
+      } finally {
+        if (fileVersion === capturedFileVersion) resolvingId.value = '';
+      }
     };
 
     const toggleCheck = (annId) => {
@@ -867,34 +922,26 @@ export default {
       checkedIds.value = [];
     };
 
-    const loadPersisted = async () => {
-      if (!props.visible || !canPersistDocReview.value) return;
+    const loadPersistedReview = async () => {
+      if (!props.visible || !canPersistDocReview.value || isReviewRefreshing.value || retryingSync.value) return;
       if (typeof creationsStore?.loadDocReview !== 'function') return;
       const capturedAgentId = props.agentId;
       const capturedCreationId = props.creationId;
       const capturedDocPath = effectivePersistedDocPath.value;
+      const ownsLoad = () => mounted && props.agentId === capturedAgentId
+        && props.creationId === capturedCreationId && effectivePersistedDocPath.value === capturedDocPath;
+      retryingSync.value = true;
       try {
         const res = await creationsStore.loadDocReview(capturedAgentId, capturedCreationId, capturedDocPath);
-        if (
-          props.agentId !== capturedAgentId
-          || props.creationId !== capturedCreationId
-          || effectivePersistedDocPath.value !== capturedDocPath
-        ) {
-          return;
-        }
-        if (res?.review && !activeJobId.value) {
-          showConfigurator.value = false;
-        }
+        if (!ownsLoad()) return;
+        refreshFailed.value = false;
+        if (res?.review && !activeJobId.value) showConfigurator.value = false;
       } catch {
-        // non-fatal
+        if (ownsLoad()) refreshFailed.value = true;
+      } finally {
+        if (ownsLoad()) retryingSync.value = false;
       }
     };
-
-    Vue.watch(
-      () => [props.visible, props.agentId, props.creationId, effectivePersistedDocPath.value],
-      () => { loadPersisted(); },
-      { immediate: true },
-    );
 
     Vue.watch(
       () => [props.agentId, props.creationId, props.filePath, effectivePersistedDocPath.value],
@@ -911,6 +958,8 @@ export default {
         localError.value = '';
         actionError.value = '';
         resolvingId.value = '';
+        retryingSync.value = false;
+        refreshFailed.value = false;
         checkedIds.value = [];
         severityFilter.value = 'all';
         lensFilter.value = 'all';
@@ -924,6 +973,12 @@ export default {
       },
     );
 
+    Vue.watch(
+      () => [props.visible, props.agentId, props.creationId, effectivePersistedDocPath.value],
+      () => { loadPersistedReview(); },
+      { immediate: true },
+    );
+
     Vue.watch(() => props.quickReviewRequest?.nonce, (nonce) => {
       if (!nonce || !props.quickReviewRequest?.selectedText) return;
       const req = props.quickReviewRequest;
@@ -932,6 +987,7 @@ export default {
         scope: 'selection',
         lensIds,
         selectedText: req.selectedText,
+        selection: req,
         lineStart: req.lineStart,
         lineEnd: req.lineEnd,
       });
@@ -944,6 +1000,17 @@ export default {
 
     Vue.watch(() => props.reopenedAnnotationEvent, (ev) => {
       if (ev?.annotationId) localAnnotationStatuses[ev.annotationId] = 'open';
+    });
+
+    Vue.watch([persistedReview, isReviewRefreshing, isReviewStale, activeJob], ([review, refreshing, stale, job]) => {
+      const removed = activeJobId.value && !job;
+      if (!removed && job?.retired !== true && !(canPersistDocReview.value && reviewScope.value === 'document'
+        && job?.status === 'failed' && job.errorCode === 'connection_interrupted' && !refreshing && !stale && review)) return;
+      const retiredId = activeJobId.value;
+      activeJobId.value = '';
+      activeJobMeta.value = null;
+      showConfigurator.value = !review;
+      if (!removed) creationsStore.clearAiJob?.(retiredId);
     });
 
     Vue.watch(activeJob, (job) => {
@@ -975,6 +1042,7 @@ export default {
     }, { flush: 'sync' });
 
     Vue.onBeforeUnmount(() => {
+      mounted = false;
       requestSeq += 1;
       fileVersion += 1;
       const priorJobId = activeJobId.value;
@@ -997,6 +1065,11 @@ export default {
       currentReview,
       truncatedEndLine,
       isReviewRefreshing,
+      isReviewStale,
+      retryingSync,
+      loadPersistedReview,
+      committingAnnotationId,
+      showSaveBeforeFinal,
       supersededNotice,
       staleConflict,
       isRunning,

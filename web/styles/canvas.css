@@ -1011,6 +1011,7 @@
 .canvas-review-body {
   flex: 1;
   min-height: 0;
+  overflow-x: hidden;
   overflow-y: auto;
   display: flex;
   flex-direction: column;
@@ -1124,10 +1125,19 @@
   gap: var(--space-2-5);
 }
 
+.canvas-review-summary {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
 .canvas-review-card {
   display: flex;
   flex-direction: column;
   gap: var(--space-2);
+  min-width: 0;
+  overflow-wrap: anywhere;
+  word-break: break-word;
   padding: var(--space-3);
   border-radius: var(--radius-md);
   border: 1px solid var(--border-light);
@@ -1179,6 +1189,7 @@
 
 .canvas-review-quote {
   margin: 0;
+  min-width: 0;
   padding: var(--space-1-5) var(--space-2-5);
   border-left: 2px solid var(--border-color);
   background: var(--bg-sidebar);
@@ -1187,10 +1198,19 @@
   font-size: var(--font-size-xs);
   line-height: var(--line-height-normal);
   white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.canvas-review-comment {
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
   word-break: break-word;
 }
 
 .canvas-review-suggestion {
+  min-width: 0;
   padding: var(--space-1-5) var(--space-2-5);
   border-radius: var(--radius-sm);
   background: var(--creation-diff-add-bg);
@@ -1198,6 +1218,7 @@
   font-size: var(--font-size-xs);
   line-height: var(--line-height-normal);
   white-space: pre-wrap;
+  overflow-wrap: anywhere;
   word-break: break-word;
 }
 

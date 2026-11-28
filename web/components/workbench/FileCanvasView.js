@@ -238,47 +238,6 @@ function extractHeadings(markdown) {
   return headings;
 }
 
-function findLineRangeForSnippet(content, snippet) {
-  const src = String(content || '');
-  const needle = String(snippet || '').trim();
-  if (!src || !needle) return { lineStart: undefined, lineEnd: undefined };
-
-  const lines = src.split(/\r?\n/);
-  // Direct substring search first
-  const directIdx = src.indexOf(needle);
-  if (directIdx >= 0) {
-    const lineStart = src.slice(0, directIdx).split(/\r?\n/).length;
-    const lineSpan = needle.split(/\r?\n/).length;
-    return { lineStart, lineEnd: lineStart + lineSpan - 1 };
-  }
-
-  // Fallback: match first & last non-empty lines of selection (handles rendered markdown stripping syntax)
-  const snippetLines = needle.split(/\r?\n/).map(s => s.trim()).filter(Boolean);
-  if (snippetLines.length === 0) return { lineStart: undefined, lineEnd: undefined };
-
-  const firstProbe = snippetLines[0].slice(0, 60);
-  const lastProbe = snippetLines[snippetLines.length - 1].slice(0, 60);
-  let startIdx = -1;
-  for (let i = 0; i < lines.length; i += 1) {
-    if (lines[i].includes(firstProbe)) {
-      startIdx = i;
-      break;
-    }
-  }
-  if (startIdx < 0) return { lineStart: undefined, lineEnd: undefined };
-
-  let endIdx = startIdx;
-  if (snippetLines.length > 1) {
-    for (let i = startIdx; i < lines.length; i += 1) {
-      if (lines[i].includes(lastProbe)) {
-        endIdx = i;
-        break;
-      }
-    }
-  }
-  return { lineStart: startIdx + 1, lineEnd: endIdx + 1 };
-}
-
 /**
  * Map a DOM `<textarea>` LF-normalized character offset back to the exact
  * character index in a raw string that may contain CRLF (`\r\n`) or CR (`\r`).
@@ -384,103 +343,83 @@ function findNormalizedOccurrences(src, needle, { maxMatches = Infinity, rawOffs
  * @param {number} rawEnd
  * @returns {boolean}
  */
-function isInsideHiddenMarkdownSyntax(rawContent, rawStart, rawEnd) {
-  const src = String(rawContent ?? '');
+export function isInsideHiddenMarkdownSyntax(src, rawStart, rawEnd) {
   if (!src || rawStart < 0 || rawEnd <= rawStart || rawEnd > src.length) return false;
 
-  // Determine the containing line(s) for [rawStart, rawEnd)
-  let lineStart = rawStart;
-  while (lineStart > 0 && src[lineStart - 1] !== '\n' && src[lineStart - 1] !== '\r') {
-    lineStart -= 1;
-  }
-  let lineEnd = rawEnd;
-  while (lineEnd < src.length && src[lineEnd] !== '\n' && src[lineEnd] !== '\r') {
-    lineEnd += 1;
-  }
-
-  const line = src.slice(lineStart, lineEnd);
-  const relStart = rawStart - lineStart;
-  const relEnd = rawEnd - lineStart;
-
-  // Reference-style link definition line: `[id]: https://... "title"`
-  if (/^\s{0,3}\[[^\]]+\]:\s+/.test(line)) {
-    return true;
-  }
-
-  // Scan the line for Markdown link/image destinations `](...)`, HTML comments, and HTML tags
-  let i = 0;
-  while (i < line.length) {
-    const ch = line[i];
-    if (ch === '\\') {
-      i += 2;
+  const limit = 2048;
+  const left = Math.max(0, rawStart - limit);
+  const right = Math.min(src.length, rawEnd + limit);
+  const window = src.slice(left, right);
+  const start = rawStart - left;
+  const end = rawEnd - left;
+  // Visit each character once. In particular, never scan ahead from each `](`:
+  // only a matching close can establish that a span is hidden.
+  const parens = [];
+  let linkDepth = 0;
+  let titleQuote = '';
+  let tagStart = -1;
+  let tagQuote = '';
+  let comment = false;
+  let priorBracket = false;
+  let lineStart = 0;
+  for (let i = 0; i < window.length; i += 1) {
+    const ch = window[i];
+    if (ch === '\n' || ch === '\r') {
+      const crlf = ch === '\r' && window[i + 1] === '\n';
+      if (i === lineStart) {
+        parens.length = 0;
+        linkDepth = 0;
+        titleQuote = '';
+        tagStart = -1;
+        tagQuote = '';
+        comment = false;
+      }
+      if (crlf) i += 1;
+      lineStart = i + 1;
+    }
+    if (ch === '\\' && !comment && /[\x21-\x2f\x3a-\x40\x5b-\x60\x7b-\x7e]/.test(window[i + 1] || '')) {
+      i += 1;
+      priorBracket = false;
       continue;
     }
-    // Skip inline code spans so literal `](` in code does not false-positive
-    if (ch === '`') {
-      let tickLen = 1;
-      while (i + tickLen < line.length && line[i + tickLen] === '`') tickLen += 1;
-      const closeTick = line.indexOf('`'.repeat(tickLen), i + tickLen);
-      if (closeTick >= 0) {
-        i = closeTick + tickLen;
-        continue;
+    if (tagStart !== -1) {
+      if (comment ? window.startsWith('-->', i) : ch === '>' && !tagQuote) {
+        const close = i + (comment ? 3 : 1);
+        if (tagStart < start && end <= close) return true;
+        i = close - 1;
+        tagStart = -1;
+        comment = false;
+      } else if (!comment && tagQuote) {
+        if (ch === tagQuote) tagQuote = '';
+      } else if (!comment && (ch === '"' || ch === "'")) {
+        tagQuote = ch;
       }
-      i += tickLen;
       continue;
     }
-    // HTML comment `<!-- ... -->`
-    if (ch === '<' && line.startsWith('<!--', i)) {
-      const commentClose = line.indexOf('-->', i + 4);
-      const spanEnd = commentClose >= 0 ? commentClose + 3 : line.length;
-      if (relStart < spanEnd && relEnd > i) return true;
-      i = spanEnd;
+    if (titleQuote) {
+      if (ch === titleQuote) titleQuote = '';
       continue;
     }
-    // HTML tag `<tag ...>`
-    if (ch === '<' && /[A-Za-z/!]/.test(line[i + 1] || '')) {
-      const tagClose = line.indexOf('>', i + 1);
-      if (tagClose >= 0) {
-        if (relStart < tagClose + 1 && relEnd > i) return true;
-        i = tagClose + 1;
-        continue;
+    if (linkDepth && (ch === '"' || ch === "'") && /\s/.test(window[i - 1] || '')) {
+      titleQuote = ch;
+    } else if (ch === '<' && /[A-Za-z/!]/.test(window[i + 1] || '')) {
+      tagStart = i;
+      comment = window.startsWith('<!--', i);
+    } else if (ch === '(' && (priorBracket || linkDepth)) {
+      parens.push(priorBracket ? i : -1);
+      if (priorBracket) linkDepth += 1;
+    } else if (ch === ')' && parens.length) {
+      const open = parens.pop();
+      if (open !== -1) {
+        linkDepth -= 1;
+        if (open < start && end <= i) return true;
       }
     }
-    // Markdown link/image destination & optional title: `](...)`
-    if (ch === ']' && line[i + 1] === '(') {
-      const destStart = i + 2;
-      let j = destStart;
-      let depth = 1;
-      let quote = '';
-      while (j < line.length && depth > 0) {
-        const c = line[j];
-        if (c === '\\') {
-          j += 2;
-          continue;
-        }
-        if (quote) {
-          if (c === quote) quote = '';
-        } else if (c === '"' || c === '\'') {
-          quote = c;
-        } else if (c === '(') {
-          depth += 1;
-        } else if (c === ')') {
-          depth -= 1;
-          if (depth === 0) break;
-        }
-        j += 1;
-      }
-      if (depth === 0) {
-        const destEnd = j;
-        if (relStart < destEnd && relEnd > destStart) {
-          return true;
-        }
-        i = j + 1;
-        continue;
-      }
-    }
-    i += 1;
+    priorBracket = ch === ']';
   }
-
-  return false;
+  // Match a reference definition only on the line where the candidate starts.
+  const line = window.slice(Math.max(window.lastIndexOf('\n', start - 1), window.lastIndexOf('\r', start - 1)) + 1, start + 1);
+  return /^ {0,3}\[[^\]\r\n]+\]:\s/.test(line);
 }
 
 function lineRangeFromOffsets(content, startOffset, endOffset) {
@@ -506,7 +445,7 @@ function useSafeCreationsStore() {
  *
  * Mode A: Exact raw offsets (`rawStart`, `rawEnd`) must verify against `originalText`.
  * Mode B: Quote + optional 1-based inclusive `[lineStart..lineEnd]` window;
- *         falls back to a globally unique match unless it crosses the window end.
+ *         uses a globally unique match only when no window is supplied.
  *
  * @param {string} content
  * @param {{ originalText: string, revisedText: string, rawStart?: number|null, rawEnd?: number|null, lineStart?: number, lineEnd?: number }} anchor
@@ -539,16 +478,17 @@ export function applyTextReplacement(content, anchor) {
 
   // Mode B: Quote + optional 1-based inclusive line range
   const hasLineStart = Number.isInteger(anchor?.lineStart) && anchor.lineStart >= 1;
-  let winRawStart = -1;
-  let winRawEnd = -1;
+  if (anchor?.rawStart != null || anchor?.rawEnd != null) {
+    return { applied: false, content: src, reason: 'stale' };
+  }
   if (hasLineStart) {
     const lineStart = anchor.lineStart;
     const lineEnd = Number.isInteger(anchor?.lineEnd) && anchor.lineEnd >= lineStart
       ? anchor.lineEnd
       : lineStart;
     const lineStarts = buildLineOffsets(src);
-    winRawStart = lineStart <= lineStarts.length ? lineStarts[lineStart - 1] : src.length;
-    winRawEnd = lineEnd < lineStarts.length ? lineStarts[lineEnd] : src.length;
+    const winRawStart = lineStart <= lineStarts.length ? lineStarts[lineStart - 1] : src.length;
+    const winRawEnd = lineEnd < lineStarts.length ? lineStarts[lineEnd] : src.length;
 
     const windowSlice = src.slice(winRawStart, winRawEnd);
     const inWindow = findNormalizedOccurrences(windowSlice, orig, {
@@ -563,9 +503,7 @@ export function applyTextReplacement(content, anchor) {
         content: src.slice(0, match.rawStart) + rev + src.slice(match.rawEnd),
       };
     }
-    if (inWindow.length > 1) {
-      return { applied: false, content: src, reason: 'ambiguous' };
-    }
+    return { applied: false, content: src, reason: inWindow.length > 1 ? 'ambiguous' : 'stale' };
   }
 
   const globalMatches = findNormalizedOccurrences(src, orig, { maxMatches: 2 });
@@ -574,10 +512,6 @@ export function applyTextReplacement(content, anchor) {
   }
   if (globalMatches.length === 1) {
     const match = globalMatches[0];
-    // A quote that starts in the reviewed window may not consume unreviewed lines.
-    if (match.rawStart >= winRawStart && match.rawStart < winRawEnd && match.rawEnd > winRawEnd) {
-      return { applied: false, content: src, reason: 'stale' };
-    }
     return {
       applied: true,
       content: src.slice(0, match.rawStart) + rev + src.slice(match.rawEnd),
@@ -714,6 +648,8 @@ export default {
                   role="menuitem"
                   class="canvas-tool-btn"
                   :class="{ active: normalizedDocStatus === st }"
+                  :disabled="st === 'final' && finalSaveBlocked"
+                  :title="st === 'final' && finalSaveBlocked ? tr('creation.review.saveBeforeFinal', 'Save the document before marking it final.') : undefined"
                   @click="selectDocStatus(st)"
                 >{{ docStatusLabel(st) }}</button>
               </div>
@@ -823,7 +759,7 @@ export default {
           <button
             type="button"
             class="btn-secondary"
-            :disabled="undoPending"
+            :disabled="undoInFlight"
             @click="undoLastReplacement"
           >{{ tr('creation.canvas.undoReplace', 'Undo') }}</button>
           <button
@@ -940,10 +876,11 @@ export default {
             :reopened-annotation="reopenedAnnotation"
             :reopened-annotation-event="reopenedAnnotation"
             :apply-annotation-fix="applyReviewAnnotation"
-            :rollback-annotation-fix="rollbackReviewAnnotationFix"
+            :preview-annotation-fix="previewReviewAnnotationFix"
+            :is-dirty="Boolean(file.isDirty)"
+            :has-disk-conflict="hasDiskConflict"
             :stage-annotations-to-session="stageReviewAnnotationsToSession"
             @close="reviewOpen = false"
-            @apply-annotation="applyReviewAnnotation"
             @jump-to-line="jumpToLine"
             @send-to-session="sendReviewAnnotationsToSession"
             @update:doc-status="$emit('update:doc-status', $event)"
@@ -1272,8 +1209,10 @@ export default {
       : 'The file on disk changed since you started editing. Reloading discards your draft; overwriting replaces the version on disk.');
     const reloadFromDiskLabel = Vue.computed(() => isChinese.value ? '从磁盘重新加载' : 'Reload from disk');
     const overwriteDiskLabel = Vue.computed(() => isChinese.value ? '覆盖磁盘文件' : 'Overwrite disk');
-    const saveBlocked = Vue.computed(() => props.saving || props.file?.diskChangedToBinary
-      || props.file?.diskChangedOnDisk || props.file?.probingDisk);
+    const hasDiskConflict = Vue.computed(() => Boolean(props.file?.diskChangedToBinary
+      || props.file?.diskChangedOnDisk || props.file?.probingDisk));
+    const saveBlocked = Vue.computed(() => props.saving || hasDiskConflict.value);
+    const finalSaveBlocked = Vue.computed(() => props.file?.isDirty || hasDiskConflict.value);
     const canvasKind = Vue.computed(() => isCanvasSupportedFile(props.file));
     const binaryDocument = Vue.computed(() => canvasKind.value === 'doc' && (props.isBinary || isBinaryDocument(props.file)));
     const isMarkdown = Vue.computed(() => MARKDOWN_EXTS.has(getExtension(props.file)));
@@ -1313,6 +1252,7 @@ export default {
 
     const selectDocStatus = (status) => {
       closeAllMenus();
+      if (status === 'final' && finalSaveBlocked.value) return;
       if (status && status !== normalizedDocStatus.value) {
         emit('update:doc-status', status);
       }
@@ -1339,7 +1279,8 @@ export default {
     const reviewOpen = Vue.ref(false);
     const quickReviewRequest = Vue.ref(null);
     const undoSnapshot = Vue.ref(null);
-    const undoPending = Vue.ref(false);
+    const undoInFlight = Vue.ref(false);
+    let mounted = true;
     const applyConflictNotice = Vue.ref('');
     const reopenedAnnotation = Vue.ref(null);
     const popoverLocked = Vue.ref(false);
@@ -1675,7 +1616,7 @@ export default {
           rawStart = null;
           rawEnd = null;
         } else {
-          ({ lineStart, lineEnd } = findLineRangeForSnippet(rawContent, text));
+          ambiguous = true;
         }
 
         // Guard against Read-mode Markdown selections matching hidden link/image
@@ -1688,8 +1629,12 @@ export default {
           && isInsideHiddenMarkdownSyntax(rawContent, rawStart, rawEnd)
         ) {
           ambiguous = true;
+        }
+        if (ambiguous) {
           rawStart = null;
           rawEnd = null;
+          lineStart = undefined;
+          lineEnd = undefined;
           resolvedText = text;
         }
 
@@ -1710,9 +1655,7 @@ export default {
     const quoteReaderSelection = () => {
       const snippet = selectionBar.text.trim();
       if (!snippet) return;
-      const { lineStart, lineEnd } = selectionBar.lineStart
-        ? { lineStart: selectionBar.lineStart, lineEnd: selectionBar.lineEnd }
-        : findLineRangeForSnippet(props.file?.content || '', snippet);
+      const { lineStart, lineEnd } = selectionBar;
       const ref = addCanvasContextRef(props.routeKey, {
         kind: 'doc',
         filePath: props.file?.path || '',
@@ -1842,40 +1785,64 @@ export default {
       }
     });
 
-    const applyContentMutation = (anchor, meta = {}) => {
-      if (binaryDocument.value) {
+    const previewContentMutation = (anchor, selection) => {
+      const prevContent = props.file?.content || '';
+      const docPath = reviewFilePath.value;
+      const stale = { applied: false, reason: 'stale', prevContent, docPath };
+      if (binaryDocument.value) return stale;
+      if (selection && (selection.content !== prevContent || selection.docPath !== docPath)) return stale;
+      // Intersect both constraints: search only in the verified selection, and on
+      // the annotation's document lines (adjusted to that selection's origin).
+      const searchContent = selection ? prevContent.slice(selection.rawStart, selection.rawEnd) : prevContent;
+      if (selection && Number.isInteger(anchor.lineStart) && anchor.lineStart < selection.lineStart) return stale;
+      const searchAnchor = selection && Number.isInteger(anchor.lineStart) ? {
+        ...anchor,
+        lineStart: anchor.lineStart - selection.lineStart + 1,
+        lineEnd: Number.isInteger(anchor.lineEnd) ? anchor.lineEnd - selection.lineStart + 1 : undefined,
+      } : anchor;
+      const result = applyTextReplacement(searchContent, searchAnchor);
+      if (!result.applied) return { ...stale, reason: result.reason };
+      const nextContent = selection
+        ? prevContent.slice(0, selection.rawStart) + result.content + prevContent.slice(selection.rawEnd)
+        : result.content;
+      return { applied: true, prevContent, nextContent, docPath };
+    };
+
+    const publishContentMutation = (preview, meta = {}) => {
+      if (!preview.applied) return preview;
+      const { prevContent, nextContent, docPath } = preview;
+      if (!mounted || binaryDocument.value || docPath !== reviewFilePath.value || prevContent !== (props.file?.content || '')) {
         return { applied: false, reason: 'stale' };
       }
-      const prevContent = props.file?.content || '';
-      const result = applyTextReplacement(prevContent, anchor);
-      if (!result.applied) {
-        return { applied: false, reason: result.reason || 'stale' };
-      }
       applyConflictNotice.value = '';
-      if (result.content !== prevContent) {
+      if (nextContent !== prevContent) {
         undoSnapshot.value = {
+          docPath,
+          persistedDocPath: persistedDocKey.value,
+          agentId: props.agentId,
+          creationId: props.creationId,
           prevContent,
-          expectedPostContent: result.content,
+          expectedPostContent: nextContent,
           annotationId: meta.annotationId || null,
           isDurable: Boolean(meta.isDurable),
           reviewJobId: meta.reviewJobId || '',
-          label: meta.label || tr('creation.canvas.replacedNotice', 'Passage replaced'),
+          label: tr('creation.canvas.replacedNotice', 'Passage replaced'),
         };
-        emit('update:content', result.content);
+        emit('update:content', nextContent);
       }
-      return { applied: true, prevContent, nextContent: result.content };
+      return preview;
     };
 
     const applyInlineReplacement = (payload) => {
       if (!payload) return { applied: false, reason: 'stale' };
-      const res = applyContentMutation({
+      const res = publishContentMutation(previewContentMutation({
         originalText: payload.originalText,
         revisedText: payload.revisedText,
         rawStart: payload.rawStart,
         rawEnd: payload.rawEnd,
         lineStart: payload.lineStart,
         lineEnd: payload.lineEnd,
-      });
+      }));
       if (!res.applied) {
         applyConflictNotice.value = tr(
           'creation.canvas.applyConflict',
@@ -1891,88 +1858,57 @@ export default {
       return res;
     };
 
-    const applyReviewAnnotation = (ann, { isDurable = false, reviewJobId = '' } = {}) => {
-      if (!ann || !ann.suggestedReplacement) {
-        return { applied: false, reason: 'stale' };
-      }
-      return applyContentMutation(
-        {
-          originalText: ann.quote || '',
-          revisedText: ann.suggestedReplacement,
-          lineStart: ann.lineStart,
-          lineEnd: ann.lineEnd,
-        },
-        {
-          annotationId: ann.id || null,
-          isDurable: Boolean(isDurable),
-          reviewJobId: reviewJobId || '',
-        },
-      );
-    };
+    const previewReviewAnnotationFix = (ann, selection) => previewContentMutation({
+      originalText: ann?.suggestedReplacement ? ann.quote : '',
+      revisedText: ann?.suggestedReplacement,
+      lineStart: ann?.lineStart,
+      lineEnd: ann?.lineEnd,
+    }, selection);
 
-    const rollbackReviewAnnotationFix = ({ prevContent, expectedPostContent } = {}) => {
-      if ((props.file?.content || '') !== expectedPostContent) {
-        return { rolledBack: false };
-      }
-      undoSnapshot.value = null;
-      emit('update:content', prevContent);
-      return { rolledBack: true };
-    };
+    const applyReviewAnnotation = (ann, { precomputed, selection, ...meta } = {}) => (
+      publishContentMutation(precomputed || previewReviewAnnotationFix(ann, selection), {
+        ...meta,
+        annotationId: ann?.id,
+      })
+    );
 
     const undoLastReplacement = async () => {
       const snap = undoSnapshot.value;
-      if (!snap || undoPending.value) return;
-      if ((props.file?.content || '') !== snap.expectedPostContent) {
+      if (!snap || undoInFlight.value) return;
+      const sameDocument = () => mounted && reviewFilePath.value === snap.docPath
+        && persistedDocKey.value === snap.persistedDocPath
+        && props.agentId === snap.agentId && props.creationId === snap.creationId;
+      const canRestore = () => sameDocument() && undoSnapshot.value === snap
+        && props.file?.content === snap.expectedPostContent;
+      if (!canRestore()) {
         undoSnapshot.value = null;
         return;
       }
-
-      if (snap.annotationId && snap.isDurable && props.agentId && props.creationId && persistedDocKey.value) {
-        if (typeof creationsStore?.resolveReviewAnnotation !== 'function') {
-          applyConflictNotice.value = tr(
-            'creation.review.reopenFailed',
-            'Could not reopen review item; undo cancelled to keep status in sync.',
-          );
-          return;
-        }
-        undoPending.value = true;
-        try {
-          await creationsStore.resolveReviewAnnotation(
-            props.agentId,
-            props.creationId,
-            persistedDocKey.value,
-            snap.annotationId,
-            'open',
-          );
-        } catch {
-          applyConflictNotice.value = tr(
-            'creation.review.reopenFailed',
-            'Could not reopen review item; undo cancelled to keep status in sync.',
-          );
-          return;
-        } finally {
-          undoPending.value = false;
-        }
-
-        // Verify content did not diverge while awaiting durable reopen
-        if ((props.file?.content || '') !== snap.expectedPostContent) {
-          undoSnapshot.value = null;
-          return;
-        }
+      const restore = () => {
         undoSnapshot.value = null;
         emit('update:content', snap.prevContent);
-        reopenedAnnotation.value = {
-          id: snap.annotationId,
-          annotationId: snap.annotationId,
-          nonce: Date.now() + Math.random(),
-        };
+      };
+
+      if (snap.isDurable && snap.annotationId) {
+        const resolve = status => creationsStore.resolveReviewAnnotation(
+          snap.agentId, snap.creationId, snap.persistedDocPath, snap.annotationId, status,
+        );
+        undoInFlight.value = true;
+        try {
+          await resolve('open');
+          if (canRestore()) restore();
+          else await resolve('accepted').catch(() => {});
+        } catch {
+          if (sameDocument()) {
+            applyConflictNotice.value = tr('creation.review.reopenFailed', 'Could not reopen the review item. Undo was cancelled; the text is unchanged.');
+          }
+        } finally {
+          undoInFlight.value = false;
+        }
         return;
       }
 
-      // Strictly local undo (inline edit, selection-only review, or standalone FilesTab):
-      // NEVER call resolveReviewAnnotation RPC.
-      undoSnapshot.value = null;
-      emit('update:content', snap.prevContent);
+      restore();
       if (snap.annotationId) {
         reopenedAnnotation.value = {
           id: snap.annotationId,
@@ -1983,14 +1919,16 @@ export default {
     };
 
     const onQuickReview = (payload) => {
-      if (!payload || !payload.selectedText) return;
+      if (!payload || activePopoverAmbiguous.value) return;
+      const { rawStart, rawEnd, selectedText, lensId } = payload;
+      const content = props.file?.content || '';
+      if (!Number.isInteger(rawStart) || !Number.isInteger(rawEnd) || rawStart < 0
+        || rawEnd <= rawStart || rawEnd > content.length || content.slice(rawStart, rawEnd) !== selectedText) return;
       reviewOpen.value = true;
       quickReviewRequest.value = {
-        nonce: Date.now() + Math.random(),
-        lensId: payload.lensId,
-        selectedText: payload.selectedText,
-        lineStart: payload.lineStart,
-        lineEnd: payload.lineEnd,
+        nonce: Date.now() + Math.random(), lensId, selectedText, rawStart, rawEnd, content,
+        docPath: reviewFilePath.value,
+        ...lineRangeFromOffsets(content, rawStart, rawEnd),
       };
       hideSelectionBar();
       editorSelection.visible = false;
@@ -2003,20 +1941,21 @@ export default {
       const loc = ann.lineStart ? `[L${ann.lineStart}] ` : '';
       const title = ann.title ? `${ann.title}: ` : '';
       const detail = ann.comment || ann.quote || '';
-      return `${idx + 1}. ${loc}${title}${detail}`.trim();
+      return `${idx + 1}. ${loc}${title}${detail}`;
     };
 
-    const splitTextIntoLosslessParts = (fullText, maxLen) => {
-      let k = Math.max(2, Math.ceil(fullText.length / Math.max(1, maxLen - 14)));
+    const splitLosslessChunks = (fullText, maxLen = MAX_REF_SNIPPET_CHARS) => {
+      const chars = Array.from(fullText);
+      let k = Math.max(2, Math.ceil(chars.length / Math.max(1, maxLen - 14)));
       while (true) {
         const maxHeaderLen = `[Part ${k}/${k}] `.length;
         const bodyCap = maxLen - maxHeaderLen;
         if (bodyCap <= 0) return null;
-        const needed = Math.ceil(fullText.length / bodyCap);
+        const needed = Math.ceil(chars.length / bodyCap);
         if (needed <= k) {
           const parts = [];
           for (let p = 0; p < needed; p += 1) {
-            const slice = fullText.slice(p * bodyCap, (p + 1) * bodyCap);
+            const slice = chars.slice(p * bodyCap, (p + 1) * bodyCap).join('');
             parts.push(`[Part ${p + 1}/${needed}] ${slice}`);
           }
           return parts;
@@ -2045,13 +1984,15 @@ export default {
         const fullText = formatAnnotationFull(ann, i);
         if (!fullText) continue;
 
-        if (fullText.length <= MAX_REF_SNIPPET_CHARS) {
-          if (currentBatch && currentBatch.text.length + 1 + fullText.length <= MAX_REF_SNIPPET_CHARS) {
+        const length = Array.from(fullText).length;
+        if (length <= MAX_REF_SNIPPET_CHARS) {
+          if (currentBatch && currentBatch.length + 1 + length <= MAX_REF_SNIPPET_CHARS) {
+            currentBatch.length += 1 + length;
             currentBatch.anns.push(ann);
             currentBatch.text = `${currentBatch.text}\n${fullText}`;
           } else if (remainingSlots > 0) {
             remainingSlots -= 1;
-            currentBatch = { anns: [ann], text: fullText };
+            currentBatch = { anns: [ann], text: fullText, length };
             plannedRefs.push(currentBatch);
           } else if (ann.id) {
             remainingIds.push(ann.id);
@@ -2060,7 +2001,7 @@ export default {
           // Annotation exceeds single-ref budget: split losslessly into `[Part 1/k] ...` chunks
           // and stage ALL chunks atomically only if enough route slots remain.
           currentBatch = null;
-          const parts = splitTextIntoLosslessParts(fullText, MAX_REF_SNIPPET_CHARS);
+          const parts = splitLosslessChunks(fullText);
           if (parts && parts.length <= remainingSlots) {
             remainingSlots -= parts.length;
             for (const partText of parts) {
@@ -2086,6 +2027,7 @@ export default {
           filePath,
           fileName,
           snippet: chunk.text,
+          preserveWhitespace: true,
           ...(lineStart !== undefined ? { lineStart, lineEnd } : {}),
         });
         emit('referenced', ref);
@@ -2312,7 +2254,6 @@ export default {
       hideSelectionBar();
       hideEditorSelection();
       undoSnapshot.value = null;
-      undoPending.value = false;
       applyConflictNotice.value = '';
       quickReviewRequest.value = null;
       setImageFit();
@@ -2320,9 +2261,10 @@ export default {
       currentTime.value = 0;
       duration.value = 0;
       videoMarkers.value = [];
-    });
+    }, { flush: 'sync' });
 
     const cleanup = () => {
+      mounted = false;
       closeLightbox();
       if (typeof document !== 'undefined') {
         document.removeEventListener('click', onDocumentClick);
@@ -2364,7 +2306,7 @@ export default {
       persistedDocKey,
       quickReviewRequest,
       undoSnapshot,
-      undoPending,
+      undoInFlight,
       applyConflictNotice,
       reopenedAnnotation,
       popoverLocked,
@@ -2403,7 +2345,9 @@ export default {
       onEditorSelectionChange,
       applyInlineReplacement,
       applyReviewAnnotation,
-      rollbackReviewAnnotationFix,
+      previewReviewAnnotationFix,
+      hasDiskConflict,
+      finalSaveBlocked,
       undoLastReplacement,
       onQuickReview,
       stageReviewAnnotationsToSession,

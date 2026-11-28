@@ -5,6 +5,7 @@
 
 const FALLBACK_ROUTE_KEY = '__active__';
 const MAX_REFS_PER_ROUTE = 6;
+const MAX_SNIPPET_LENGTH = 800;
 
 const contextMap = (typeof Vue !== 'undefined' && typeof Vue.reactive === 'function')
   ? Vue.reactive({})
@@ -55,8 +56,10 @@ function normalizeRef(ref = {}) {
   const kind = ref.kind === 'image' || ref.kind === 'video' ? ref.kind : 'doc';
   const filePath = String(ref.filePath || '').trim();
   const fileName = String(ref.fileName || '').trim() || basenameOf(filePath) || 'untitled';
-  const rawSnippet = typeof ref.snippet === 'string' ? ref.snippet.trim() : '';
-  const snippet = rawSnippet ? rawSnippet.slice(0, 800) : undefined;
+  const rawSnippet = typeof ref.snippet === 'string' ? ref.snippet : '';
+  const snippet = ref.preserveWhitespace === true
+    ? Array.from(rawSnippet.replace(/\0/g, '')).slice(0, MAX_SNIPPET_LENGTH).join('')
+    : rawSnippet.trim().slice(0, MAX_SNIPPET_LENGTH);
 
   const lineStartNum = Number(ref.lineStart);
   const lineEndNum = Number(ref.lineEnd);

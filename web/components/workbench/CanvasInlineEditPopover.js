@@ -135,6 +135,7 @@ export default {
             <button
               type="button"
               class="btn-secondary"
+              v-if="effectiveCandidate !== ''"
               @click="startRefine"
             >↻ {{ tr('creation.inlineEdit.refine', 'Refine') }}</button>
             <button
@@ -167,14 +168,14 @@ export default {
               type="button"
               class="canvas-inline-preset-btn"
               :class="{ active: reviewMenuOpen }"
-              :disabled="!aiAvailable"
-              :aria-expanded="reviewMenuOpen"
+              :disabled="!aiAvailable || ambiguous"
+              :aria-expanded="reviewMenuOpen && !ambiguous"
               :title="aiAvailable ? tr('creation.inlineEdit.quickReview', 'Quick review') : tr('creation.inlineEdit.unavailable', 'AI unavailable')"
               @mousedown.prevent
               @click="reviewMenuOpen = !reviewMenuOpen"
             >{{ tr('creation.inlineEdit.quickReview', 'Quick review') }} ▾</button>
 
-            <div v-if="reviewMenuOpen" class="canvas-inline-review-menu" role="menu">
+            <div v-if="reviewMenuOpen && !ambiguous" class="canvas-inline-review-menu" role="menu">
               <button
                 v-for="lens in lenses"
                 :key="lens.id"
@@ -595,10 +596,13 @@ export default {
     };
 
     const triggerQuickReview = (lensId) => {
+      if (props.ambiguous || !aiAvailable.value) return;
       reviewMenuOpen.value = false;
       emit('quick-review', {
         lensId,
         selectedText: props.selectedText || '',
+        rawStart: props.rawStart,
+        rawEnd: props.rawEnd,
         lineStart: props.lineStart,
         lineEnd: props.lineEnd,
       });

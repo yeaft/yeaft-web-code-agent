@@ -1,7 +1,9 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { setImmediate } from 'node:timers/promises';
 import { boundedText, fail, safeId } from './constants.js';
-import { normalizeDocFilePath } from './store.js';
+import { bindingRevOf, normalizeDocFilePath } from './store.js';
+import { applyAnthropicThinking } from '../llm/anthropic.js';
+import { normalizeModelEntry } from '../llm/router.js';
 import { buildInlineEditPrompts, buildReviewPrompts, inferCategoryFromKind, normalizeCategory, QUICK_EDIT_PRESETS, resolveReviewLenses } from './categories.js';
 import { parseDecisionJsonObject } from '../decision/prompts/shared.js';
 
@@ -66,7 +68,7 @@ function commonOptions(payload, store) {
   const locale = optionalText(payload.locale === '' ? undefined : payload.locale, 32, 'locale', { required: true });
   if (locale !== undefined && !['zh-CN', 'en'].includes(locale)) fail('INVALID_REQUEST', 'Invalid locale');
   return { creationId, expectedIncarnation: creation?.incarnation ?? creation?.createdAt, expectedRootDir: creation?.rootDir ?? null,
-    category, filePath, fileName, lineStart, lineEnd, locale,
+    expectedWorkspaceBindingRevision: creation && bindingRevOf(creation), category, filePath, fileName, lineStart, lineEnd, locale,
     model: optionalText(payload.model === '' ? undefined : payload.model, 512, 'model', { required: true }),
     effort: optionalText(payload.effort === '' ? undefined : payload.effort, 32, 'effort', { required: true }) };
 }
@@ -237,12 +239,28 @@ async function abortable(signal, run) {
   } finally { signal.removeEventListener('abort', abort); }
 }
 
+function boundedEffort(adapter, model, effort, maxTokens) {
+  if (!effort || maxTokens < 1024) return {};
+  if (adapter.getProtocolForModel?.(model) === 'anthropic') {
+    // The router supplies model-level thinking settings. The legacy direct
+    // Anthropic adapter defaults to adaptive thinking, which doesn't widen max_tokens.
+    const provider = adapter.getProviderForModel(model);
+    const entries = provider?.models?.map(entry => normalizeModelEntry(entry, provider.protocol)).filter(Boolean) ?? [];
+    const entry = entries.find(entry => provider.name && `${provider.name}/${entry.id}` === model)
+      ?? entries.find(entry => entry.id === model);
+    const body = { max_tokens: maxTokens };
+    applyAnthropicThinking(body, entry?.id ?? model, effort, entry);
+    if (body.max_tokens > maxTokens) return {};
+  }
+  return { effort, effortSource: 'user' };
+}
+
 async function modelText({ adapter, model, maxOutputFor }, options, prompts, signal, onDelta) {
   model = options.model ?? model;
   const resolvedMaxOutput = maxOutputFor?.(model);
   const maxTokens = resolvedMaxOutput > 0 ? Math.min(MAX_OUTPUT_TOKENS, resolvedMaxOutput) : MAX_OUTPUT_TOKENS;
   const params = { model, system: prompts.system, messages: [{ role: 'user', content: prompts.user }],
-    tools: [], maxTokens, signal, ...(options.effort && maxTokens >= 1024 ? { effort: options.effort, effortSource: 'user' } : {}) };
+    tools: [], maxTokens, signal, ...boundedEffort(adapter, model, options.effort, maxTokens) };
   let output = '', bytes = 0;
   const append = delta => {
     signal.throwIfAborted();
@@ -299,8 +317,8 @@ export function createCreationAiAssistant({ yeaftDir, store, emitEvent = () => {
   const publish = event => {
     try { Promise.resolve(emitEvent(event)).catch(() => {}); } catch { /* transport is best effort */ }
   };
-  function assertCanStart({ targetClientId, isOriginActive }) {
-    const cancelledAt = cancelledClients.get(targetClientId);
+  function assertCanStart({ targetClientId, originSocket, isOriginActive }) {
+    const cancelledAt = originSocket ? undefined : cancelledClients.get(targetClientId);
     if (cancelledAt !== undefined && Date.now() - cancelledAt < CANCELLED_CLIENT_TTL_MS) {
       fail('STALE', 'Client connection was cancelled');
     }
@@ -308,7 +326,7 @@ export function createCreationAiAssistant({ yeaftDir, store, emitEvent = () => {
     if (closing) fail('INVALID_STATE', 'Creation AI assistant is closed');
     if (activeJobs.size >= MAX_CONCURRENT_JOBS) fail('BUSY', 'Too many active creation AI jobs');
   }
-  function launch(options, { targetClientId, originSocket, isOriginActive }, work) {
+  function launch(options, { targetClientId, originSocket, isOriginActive }, work, onSettled) {
     const jobId = randomUUID();
     const controller = new AbortController();
     const emit = (type, fields) => {
@@ -318,7 +336,10 @@ export function createCreationAiAssistant({ yeaftDir, store, emitEvent = () => {
     };
     // Defer provider work until after the bridge can acknowledge the job ID.
     const promise = setImmediate().then(() => work({ jobId, signal: controller.signal, emit }))
-      .finally(() => activeJobs.delete(jobId));
+      .finally(() => {
+        try { onSettled?.(); }
+        finally { activeJobs.delete(jobId); }
+      });
     activeJobs.set(jobId, { controller, targetClientId, originSocket, isOriginActive, creationId: options.creationId, promise });
     return jobId;
   }
@@ -367,7 +388,7 @@ export function createCreationAiAssistant({ yeaftDir, store, emitEvent = () => {
     startReview(payload, meta = {}) {
       assertCanStart(meta);
       const options = commonOptions(payload, store);
-      const { creationId, expectedIncarnation, expectedRootDir, filePath, category, locale } = options;
+      const { creationId, expectedIncarnation, expectedRootDir, expectedWorkspaceBindingRevision, filePath, category, locale } = options;
       const { isOriginActive } = meta;
       const scope = payload.scope ?? 'document';
       if (!['document', 'selection'].includes(scope)) fail('INVALID_REQUEST', 'Invalid review scope');
@@ -380,8 +401,9 @@ export function createCreationAiAssistant({ yeaftDir, store, emitEvent = () => {
       const snapshot = scope === 'selection' ? createReviewSnapshot(selection, options.lineStart ?? 1, selection.length)
         : createReviewSnapshot(content, 1, MAX_DOCUMENT_CHARS);
       const durable = creationId && filePath && scope === 'document';
-      const expectedCreation = { expectedIncarnation, expectedRootDir };
-      const attemptId = durable ? store.beginDocReviewAttempt?.(creationId, filePath, expectedCreation)?.attemptId : undefined;
+      const expectedCreation = { expectedIncarnation, expectedRootDir, expectedWorkspaceBindingRevision };
+      const attemptToken = durable ? store.beginDocReviewAttempt?.(creationId, filePath, expectedCreation)?.attemptToken : undefined;
+      let didCommit = false;
       // Minimal mock stores may not implement the SQLite attempt allocator.
       const mockKey = durable && !store.beginDocReviewAttempt ? `${creationId}\0${filePath}` : undefined;
       const mockAttempt = mockKey && Symbol();
@@ -395,8 +417,10 @@ export function createCreationAiAssistant({ yeaftDir, store, emitEvent = () => {
           let result;
           try {
             // Share the adapter, not any messages or provider response state.
-            adapter ??= abortable(overallSignal, () => adapterFactory({ yeaftDir }));
-            const configured = await abortable(lensSignal, () => adapter);
+            const configured = await abortable(lensSignal, () => {
+              adapter ??= abortable(overallSignal, () => adapterFactory({ yeaftDir }));
+              return adapter;
+            });
             const prompts = buildReviewPrompts({ ...options, lens, scope, numberedText: snapshot.numberedText,
               lineStart: snapshot.start, lineEnd: snapshot.end });
             const text = await modelText(configured, options, prompts, lensSignal);
@@ -436,7 +460,7 @@ export function createCreationAiAssistant({ yeaftDir, store, emitEvent = () => {
               if (mockKey && latestMockReviewAttempt.get(mockKey) !== mockAttempt) {
                 fail('STALE', 'Document review was superseded by a newer review');
               }
-              const saved = store.saveDocReview(creationId, filePath, review, { ...expectedCreation, attemptId });
+              const saved = store.saveDocReview(creationId, filePath, review, { ...expectedCreation, attemptToken });
               const current = store.getDocState(creationId, filePath);
               const state = !current || current.status === 'draft' ? store.setDocState(creationId, filePath, 'review') : null;
               return { saved, state };
@@ -444,6 +468,7 @@ export function createCreationAiAssistant({ yeaftDir, store, emitEvent = () => {
             const committed = store.transaction ? store.transaction(persist) : persist();
             if (!committed) review.status = 'cancelled';
             else {
+              didCommit = true;
               publish({ type: 'doc_review_updated', creationId, filePath, review: committed.saved });
               if (committed.state) publish({ type: 'doc_state_updated', creationId, ...committed.state });
             }
@@ -455,9 +480,14 @@ export function createCreationAiAssistant({ yeaftDir, store, emitEvent = () => {
             }
           }
         }
-        if (mockKey && latestMockReviewAttempt.get(mockKey) === mockAttempt) latestMockReviewAttempt.delete(mockKey);
         emit('review_complete', review);
         return review;
+      }, () => {
+        if (mockKey && latestMockReviewAttempt.get(mockKey) === mockAttempt) latestMockReviewAttempt.delete(mockKey);
+        if (!didCommit && attemptToken != null) {
+          try { store.clearDocReviewAttempt?.(creationId, filePath, attemptToken); }
+          catch { /* The creation or store may already be gone; remaining attempts expire. */ }
+        }
       });
       return { jobId, status: 'running', scope, category, lenses: lenses.map(({ id, label }) => ({ id, label })) };
     },
@@ -469,8 +499,12 @@ export function createCreationAiAssistant({ yeaftDir, store, emitEvent = () => {
       if (cancelled) job.controller.abort();
       return { jobId, cancelled };
     },
-    cancelClientJobs(targetClientId) {
+    cancelClientJobs(targetClientId, { originSocket } = {}) {
       if (typeof targetClientId !== 'string' || !targetClientId.length) return { cancelledCount: 0 };
+      if (originSocket) {
+        // Socket-scoped tombstones are owned by the bridge, not this runtime.
+        return cancelMatchingJobs(job => job.targetClientId === targetClientId && job.originSocket === originSocket);
+      }
       const now = Date.now();
       for (const [clientId, cancelledAt] of cancelledClients) {
         if (now - cancelledAt >= CANCELLED_CLIENT_TTL_MS) cancelledClients.delete(clientId);

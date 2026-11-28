@@ -22,7 +22,7 @@ CREATE TABLE IF NOT EXISTS creation_doc_reviews (
   PRIMARY KEY (creation_id, file_path));
 CREATE TABLE IF NOT EXISTS creation_doc_review_attempts (
   creation_id TEXT NOT NULL REFERENCES creations ON DELETE CASCADE,
-  file_path TEXT NOT NULL, attempt_id INTEGER NOT NULL, updated_at TEXT NOT NULL,
+  file_path TEXT NOT NULL, attempt_token TEXT NOT NULL, expires_at INTEGER NOT NULL, updated_at TEXT NOT NULL,
   PRIMARY KEY (creation_id, file_path));
 -- External and ambiguous folder history is retained independently of the Creation.
 -- A freshly generated workspace has a recorded directory identity instead.
@@ -100,6 +100,7 @@ CREATE TABLE IF NOT EXISTS creation_runs (
 CREATE UNIQUE INDEX IF NOT EXISTS creation_run_running ON creation_runs(creation_id) WHERE status='running';
 `;
 const now = () => new Date().toISOString();
+export const bindingRevOf = rec => rec.workspaceBindingRevision ?? rec.incarnation ?? rec.createdAt;
 const json = value => JSON.stringify(value);
 const PAGE_BYTES = 1.5 * 1024 * 1024;
 const jsonBytes = value => Buffer.byteLength(json(value));
@@ -379,6 +380,10 @@ export class CreationStore {
       if (!readOnly) {
         this.db.exec('PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL;');
         this.transaction(() => {
+          if (this.all('PRAGMA table_info(creation_doc_review_attempts)').some(column => column.name === 'attempt_id')) {
+            // Pre-release schema: attempt counters are transient, not durable reviews.
+            this.db.exec('DROP TABLE creation_doc_review_attempts');
+          }
           this.db.exec(SCHEMA);
           if (!this.all('PRAGMA table_info(creations)').some(column => column.name === 'cache_dir')) {
             this.db.exec('ALTER TABLE creations ADD COLUMN cache_dir TEXT');
@@ -593,7 +598,8 @@ export class CreationStore {
       }
       const index = this.one('SELECT COUNT(*) AS count FROM creations').count;
       const createdAt = now();
-      const record = this.#creationFields({ id, kind, category, modality, createdAt, incarnation: randomUUID(), title: 'Untitled creation',
+      const record = this.#creationFields({ id, kind, category, modality, createdAt, incarnation: randomUUID(),
+        workspaceBindingRevision: randomUUID(), title: 'Untitled creation',
         mission: '', description: '', status: 'draft', readingNodeId: null, readingOffset: 0,
         sessionId: null, projectId: null, rootDir: null, placement: defaultCelestialPlacement(kind, index) }, input);
       const externalRoot = input.initializeFolder === true && record.rootDir;
@@ -702,6 +708,7 @@ export class CreationStore {
       const previousRoot = record.rootDir ?? null;
       this.#creationFields(record, patch);
       if (own(patch, 'rootDir')) {
+        if ((record.rootDir ?? null) !== previousRoot) record.workspaceBindingRevision = randomUUID();
         const journal = this.one('SELECT temp_files_json FROM creation_materialization_journal WHERE creation_id=?', id);
         if ((record.rootDir ?? null) !== previousRoot || (record.rootDir == null && (journal || record.pendingBindTarget))) {
           this.run('DELETE FROM creation_materialization_journal WHERE creation_id=?', id);
@@ -745,13 +752,11 @@ export class CreationStore {
 
   #checkDocPathQuota(creationId, filePath) {
     if (this.getDocState(creationId, filePath)
-      || this.one('SELECT 1 FROM creation_doc_reviews WHERE creation_id=? AND file_path=?', creationId, filePath)
-      || this.one('SELECT 1 FROM creation_doc_review_attempts WHERE creation_id=? AND file_path=?', creationId, filePath)) return;
+      || this.one('SELECT 1 FROM creation_doc_reviews WHERE creation_id=? AND file_path=?', creationId, filePath)) return;
     const { count } = this.one(`SELECT COUNT(*) AS count FROM (
       SELECT file_path FROM creation_doc_states WHERE creation_id=?
       UNION SELECT file_path FROM creation_doc_reviews WHERE creation_id=?
-      UNION SELECT file_path FROM creation_doc_review_attempts WHERE creation_id=?
-    )`, creationId, creationId, creationId);
+    )`, creationId, creationId);
     if (count >= LIMITS.docStates) fail('LIMIT_EXCEEDED', 'Document workflow state limit reached');
   }
 
@@ -774,7 +779,7 @@ export class CreationStore {
     return data(this.one('SELECT data FROM creation_doc_reviews WHERE creation_id=? AND file_path=?', creationId, normalizeDocFilePath(filePath)));
   }
 
-  #checkDocReviewCreation(creationId, expectedIncarnation, expectedRootDir) {
+  #checkDocReviewCreation(creationId, expectedIncarnation, expectedRootDir, expectedWorkspaceBindingRevision) {
     const rec = data(this.#creation(creationId));
     if (expectedIncarnation !== undefined && (rec.incarnation ?? rec.createdAt) !== expectedIncarnation) {
       fail('STALE', 'Creation changed before review completed');
@@ -782,28 +787,45 @@ export class CreationStore {
     if (expectedRootDir !== undefined && (rec.rootDir ?? null) !== expectedRootDir) {
       fail('STALE', 'Creation workspace changed before review completed');
     }
+    if (expectedWorkspaceBindingRevision !== undefined && bindingRevOf(rec) !== expectedWorkspaceBindingRevision) {
+      fail('STALE', 'Creation workspace binding changed before review completed');
+    }
   }
 
-  beginDocReviewAttempt(creationId, filePath, { expectedIncarnation, expectedRootDir } = {}) {
+  beginDocReviewAttempt(creationId, filePath, {
+    expectedIncarnation, expectedRootDir, expectedWorkspaceBindingRevision, ttlMs = 15 * 60_000,
+  } = {}) {
     filePath = normalizeDocFilePath(filePath);
     return this.transaction(() => {
-      this.#checkDocReviewCreation(creationId, expectedIncarnation, expectedRootDir);
-      this.#checkDocPathQuota(creationId, filePath);
-      const { attempt_id: attemptId } = this.one(`INSERT INTO creation_doc_review_attempts
-        (creation_id,file_path,attempt_id,updated_at) VALUES (?,?,1,?)
-        ON CONFLICT(creation_id,file_path) DO UPDATE SET attempt_id=attempt_id+1,updated_at=excluded.updated_at
-        RETURNING attempt_id`, creationId, filePath, now());
-      return { attemptId };
+      this.#checkDocReviewCreation(creationId, expectedIncarnation, expectedRootDir, expectedWorkspaceBindingRevision);
+      const startedAt = Date.now();
+      this.run('DELETE FROM creation_doc_review_attempts WHERE creation_id=? AND expires_at <= ?', creationId, startedAt);
+      const pending = this.one(`SELECT COUNT(*) AS count FROM creation_doc_review_attempts
+        WHERE creation_id=? AND file_path<>?`, creationId, filePath);
+      if (pending.count >= LIMITS.docStates) fail('LIMIT_EXCEEDED', 'Pending document review limit reached');
+      const attemptToken = randomUUID();
+      this.run(`INSERT INTO creation_doc_review_attempts
+        (creation_id,file_path,attempt_token,expires_at,updated_at) VALUES (?,?,?,?,?)
+        ON CONFLICT(creation_id,file_path) DO UPDATE SET attempt_token=excluded.attempt_token,
+          expires_at=excluded.expires_at,updated_at=excluded.updated_at`, creationId, filePath, attemptToken, startedAt + ttlMs, now());
+      return { attemptToken };
     });
   }
 
-  saveDocReview(creationId, filePath, review, { expectedIncarnation, expectedRootDir, attemptId } = {}) {
+  clearDocReviewAttempt(creationId, filePath, attemptToken) {
+    this.run('DELETE FROM creation_doc_review_attempts WHERE creation_id=? AND file_path=? AND attempt_token=?',
+      safeId(creationId), normalizeDocFilePath(filePath), attemptToken);
+  }
+
+  saveDocReview(creationId, filePath, review, {
+    expectedIncarnation, expectedRootDir, expectedWorkspaceBindingRevision, attemptToken,
+  } = {}) {
     filePath = normalizeDocFilePath(filePath);
     return this.transaction(() => {
-      this.#checkDocReviewCreation(creationId, expectedIncarnation, expectedRootDir);
-      if (attemptId != null) {
-        const row = this.one('SELECT attempt_id FROM creation_doc_review_attempts WHERE creation_id=? AND file_path=?', creationId, filePath);
-        if (row?.attempt_id !== attemptId) fail('STALE', 'Document review was superseded by a newer review');
+      this.#checkDocReviewCreation(creationId, expectedIncarnation, expectedRootDir, expectedWorkspaceBindingRevision);
+      if (attemptToken != null) {
+        const row = this.one('SELECT attempt_token FROM creation_doc_review_attempts WHERE creation_id=? AND file_path=?', creationId, filePath);
+        if (row?.attempt_token !== attemptToken) fail('STALE', 'Document review was superseded by a newer review');
       }
       this.#checkDocPathQuota(creationId, filePath);
       let encoded;
@@ -813,6 +835,7 @@ export class CreationStore {
       this.run(`INSERT INTO creation_doc_reviews (creation_id,file_path,updated_at,data) VALUES (?,?,?,?)
         ON CONFLICT(creation_id,file_path) DO UPDATE SET updated_at=excluded.updated_at,data=excluded.data`,
       creationId, filePath, now(), encoded);
+      if (attemptToken != null) this.clearDocReviewAttempt(creationId, filePath, attemptToken);
       return JSON.parse(encoded);
     });
   }
@@ -1616,6 +1639,7 @@ export class CreationStore {
           fail('CONFLICT', 'Incomplete external materialization output remains unresolved');
         }
         current.rootDir = root;
+        current.workspaceBindingRevision = randomUUID();
         current.boundRootIdentity = rootIdentity;
         delete current.pendingBindTarget;
         delete current.pendingBindIdentity;
@@ -1663,6 +1687,7 @@ export class CreationStore {
         fail('CONFLICT', 'Resume materialization in the original target folder');
       }
       this.#initializeWorkspace(current, { materialize: true });
+      current.workspaceBindingRevision = randomUUID();
       this.run('UPDATE creations SET updated_at=?,data=? WHERE id=?', now(), json(current), id);
       return { creation: this.getCreation(id), rootDir: current.rootDir, materialized: true };
     });

@@ -1,4 +1,4 @@
-import { compactProposal, createCreationStore, normalizeDocFilePath } from './store.js';
+import { bindingRevOf, compactProposal, createCreationStore, normalizeDocFilePath } from './store.js';
 import { createCreationAiAssistant } from './ai-assistant.js';
 import { createCreationRunner } from './runner.js';
 import { readMediaChunk } from './media.js';
@@ -95,9 +95,9 @@ export function createCreationService({ yeaftDir, storageRoot, namespaceKey, nam
     },
     get_creation: id => detail(id),
     ensure_workspace: (id, { rootDir }) => {
-      const previousRoot = store.getCreation(id).rootDir ?? null;
+      const previousBinding = bindingRevOf(store.getCreation(id));
       const result = store.ensureWorkspace(id, { rootDir });
-      if (result.materialized || (result.creation?.rootDir ?? null) !== previousRoot) aiAssistant.cancelCreationJobs(id);
+      if (bindingRevOf(result.creation) !== previousBinding) aiAssistant.cancelCreationJobs(id);
       if (result.materialized) emit('creation_upserted', id, { creation: result.creation });
       return result;
     },
@@ -105,9 +105,9 @@ export function createCreationService({ yeaftDir, storageRoot, namespaceKey, nam
     update_creation: (id, p) => {
       const patch = p.patch == null ? p : object(p.patch, 'creation patch');
       const checksRoot = Object.hasOwn(patch, 'rootDir');
-      const previousRoot = checksRoot ? (store.getCreation(id).rootDir ?? null) : undefined;
+      const previousBinding = checksRoot ? bindingRevOf(store.getCreation(id)) : undefined;
       const creation = store.updateCreation(id, patch);
-      if (checksRoot && (creation.rootDir ?? null) !== previousRoot) aiAssistant.cancelCreationJobs(id);
+      if (checksRoot && bindingRevOf(creation) !== previousBinding) aiAssistant.cancelCreationJobs(id);
       emit('creation_upserted', id, { creation });
       return { creation };
     },
@@ -123,7 +123,7 @@ export function createCreationService({ yeaftDir, storageRoot, namespaceKey, nam
     inline_edit: (id, p, meta) => aiAssistant.startInlineEdit({ ...p, creationId: id }, meta),
     review_document: (id, p, meta) => aiAssistant.startReview({ ...p, creationId: id }, meta),
     cancel_ai_job: (_, p, meta) => aiAssistant.cancelJob(p.jobId, meta),
-    cancel_client_ai_jobs: (_, p, meta) => aiAssistant.cancelClientJobs(meta?.targetClientId || p.targetClientId),
+    cancel_client_ai_jobs: (_, p, meta) => aiAssistant.cancelClientJobs(meta?.targetClientId || p.targetClientId, meta),
     get_doc_states: id => ({ states: store.listDocStates(id) }),
     set_doc_state: (id, p) => {
       const state = store.setDocState(id, p.filePath, p.status);

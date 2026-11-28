@@ -356,6 +356,7 @@ export const useCreationsStore = defineStore('creations', {
     docStatesByKey: {},
     docReviewsByKey: {},
     refreshingReviewKeys: {},
+    reviewRefreshErrorKeys: {},
     inlineEditJobs: {},
     reviewJobs: {},
     activeCreation: null,
@@ -924,7 +925,10 @@ export const useCreationsStore = defineStore('creations', {
       let createRes = null;
       let uploadedFilesThisCall = [];
       let unconfirmedFiles = [];
-      let didAttemptCreate = Boolean(createAttempted);
+      let workspaceCreateOutcome = trimmedResumeId
+        ? 'committed'
+        : (createAttempted ? 'ambiguous' : 'not_sent');
+      let didAttemptCreate = workspaceCreateOutcome === 'ambiguous' || workspaceCreateOutcome === 'committed';
       let didAttemptProject = projectAttempted;
       let didAttemptSession = sessionAttempted;
       const projectRows = () => chatStore?.yeaftProjects || chatStore?.sessionProjects || [];
@@ -950,7 +954,8 @@ export const useCreationsStore = defineStore('creations', {
           projectId: targetProjectId || resume.projectId,
           creationId: created?.id || trimmedResumeId || resume.creationId,
           sessionId: targetSessionId || resume.sessionId,
-          createAttempted: didAttemptCreate,
+          workspaceCreateOutcome,
+          createAttempted: workspaceCreateOutcome === 'ambiguous' || workspaceCreateOutcome === 'committed',
           projectAttempted: didAttemptProject,
           sessionAttempted: didAttemptSession,
           baselineProjectIds: capturedBaselineProjects,
@@ -1012,26 +1017,44 @@ export const useCreationsStore = defineStore('creations', {
           }
         } else {
           const filesToSubmit = Array.isArray(rawFiles) ? rawFiles.slice() : [];
+          let uploadedAttachments = [];
+          if (filesToSubmit.length > 0) {
+            uploadedAttachments = await this.uploadRawFiles(filesToSubmit);
+            ensureSameStore();
+          }
+          workspaceCreateOutcome = 'ambiguous';
           didAttemptCreate = true;
           checkpointResume();
-          createRes = await this.createCreation(targetId, {
-            ...(trimmedTitle ? { title: trimmedTitle } : {}),
-            kind,
-            ...(category ? { category } : {}),
-            mission: prompt || '',
-            prompt: prompt || '',
-            ...(trimmedRootDir ? { rootDir: trimmedRootDir } : {}),
-            initializeFolder: true,
-            autoPlan: false,
-            ...(attemptKey ? { importKey: attemptKey } : {}),
-            ...(celestial ? { celestial } : {}),
-            ...(filesToSubmit.length ? { rawFiles: filesToSubmit } : {}),
-          });
+          try {
+            createRes = await this.createCreation(targetId, {
+              ...(trimmedTitle ? { title: trimmedTitle } : {}),
+              kind,
+              ...(category ? { category } : {}),
+              mission: prompt || '',
+              prompt: prompt || '',
+              ...(trimmedRootDir ? { rootDir: trimmedRootDir } : {}),
+              initializeFolder: true,
+              autoPlan: false,
+              ...(attemptKey ? { importKey: attemptKey } : {}),
+              ...(celestial ? { celestial } : {}),
+              ...(uploadedAttachments.length ? { attachments: uploadedAttachments } : {}),
+            });
+          } catch (createErr) {
+            if (!isAmbiguousRpcResult(createErr)) {
+              workspaceCreateOutcome = 'rejected_definite';
+              didAttemptCreate = false;
+            }
+            throw createErr;
+          }
           created = createRes?.creation || (createRes?.id ? createRes : null);
           ensureSameStore();
           if (!created?.id) {
+            workspaceCreateOutcome = 'rejected_definite';
+            didAttemptCreate = false;
             throw new Error('Failed to create Creation');
           }
+          workspaceCreateOutcome = 'committed';
+          didAttemptCreate = true;
           if (created.deduplicated || createRes?.deduplicated) {
             // importKey deduplication happens before attachment ingestion. Only
             // consume files that the Agent confirms were already attached.
@@ -1193,7 +1216,8 @@ export const useCreationsStore = defineStore('creations', {
         wrapped.partialProjectId = targetProjectId || null;
         wrapped.partialCreation = created || (trimmedResumeId ? { id: trimmedResumeId } : null);
         wrapped.partialSessionId = targetSessionId;
-        wrapped.createAttempted = didAttemptCreate;
+        wrapped.workspaceCreateOutcome = workspaceCreateOutcome;
+        wrapped.createAttempted = workspaceCreateOutcome === 'ambiguous' || workspaceCreateOutcome === 'committed';
         wrapped.projectAttempted = didAttemptProject;
         wrapped.sessionAttempted = didAttemptSession;
         wrapped.baselineProjectIds = capturedBaselineProjects;
@@ -1788,6 +1812,7 @@ export const useCreationsStore = defineStore('creations', {
       deleteKeysWithPrefix(this.threadMessagesByKey, prefix);
       deleteKeysWithPrefix(this.docReviewsByKey, prefix);
       deleteKeysWithPrefix(this.refreshingReviewKeys, prefix);
+      deleteKeysWithPrefix(this.reviewRefreshErrorKeys, prefix);
 
       if (this.activeCreation?.agentId === agentId && this.activeCreation?.creationId === creationId) {
         this.activeCreation = null;
@@ -2527,11 +2552,42 @@ export const useCreationsStore = defineStore('creations', {
       return data;
     },
 
+    _retireDisconnectedReviewJobs(agentId, creationId, filePath) {
+      if (!agentId || !creationId || !filePath) return;
+      for (const [jobId, job] of Object.entries(this.reviewJobs)) {
+        if (!job) continue;
+        if (
+          job.scope === 'document'
+          && job.errorCode === 'connection_interrupted'
+          && job.agentId === agentId
+          && job.creationId === creationId
+          && job.filePath === filePath
+        ) {
+          clearAiJobTimer(jobId);
+          delete this.reviewJobs[jobId];
+        }
+      }
+    },
+
     async loadDocReview(agentId, creationId, filePath) {
       const targetId = String(agentId || this.selectedAgentId || '').trim();
       if (!targetId || !creationId || !filePath) return null;
       const gen = storeGeneration;
-      const data = await this.request(targetId, 'get_doc_review', { creationId, filePath });
+      const submittedKey = creationDocReviewKey(targetId, creationId, filePath);
+      let data;
+      try {
+        data = await this.request(targetId, 'get_doc_review', { creationId, filePath });
+      } catch (err) {
+        if (
+          gen === storeGeneration
+          && (this.docReviewsByKey[submittedKey]
+            || this.refreshingReviewKeys[submittedKey]
+            || this.reviewRefreshErrorKeys[submittedKey])
+        ) {
+          this.reviewRefreshErrorKeys[submittedKey] = true;
+        }
+        throw err;
+      }
       if (gen !== storeGeneration) return data;
       const canonicalPath = (typeof data?.filePath === 'string' && data.filePath) ? data.filePath : filePath;
       const rKey = creationDocReviewKey(targetId, creationId, canonicalPath);
@@ -2539,6 +2595,12 @@ export const useCreationsStore = defineStore('creations', {
         this.docReviewsByKey[rKey] = data.review;
       } else {
         delete this.docReviewsByKey[rKey];
+      }
+      delete this.reviewRefreshErrorKeys[submittedKey];
+      delete this.reviewRefreshErrorKeys[rKey];
+      this._retireDisconnectedReviewJobs(targetId, creationId, filePath);
+      if (canonicalPath !== filePath) {
+        this._retireDisconnectedReviewJobs(targetId, creationId, canonicalPath);
       }
       if (data?.docState && typeof data.docState === 'object') {
         const dKey = creationDetailKey(targetId, creationId);
@@ -2559,6 +2621,11 @@ export const useCreationsStore = defineStore('creations', {
     isDocReviewRefreshing(agentId, creationId, filePath) {
       if (!agentId || !creationId || !filePath) return false;
       return Boolean(this.refreshingReviewKeys[creationDocReviewKey(agentId, creationId, filePath)]);
+    },
+
+    isDocReviewStale(agentId, creationId, filePath) {
+      if (!agentId || !creationId || !filePath) return false;
+      return Boolean(this.reviewRefreshErrorKeys[creationDocReviewKey(agentId, creationId, filePath)]);
     },
 
     async resolveReviewAnnotation(agentId, creationId, filePath, annotationId, status) {
@@ -3166,6 +3233,7 @@ export const useCreationsStore = defineStore('creations', {
           const relPath = payload.filePath;
           if (!creationId || !relPath) return;
           const rKey = creationDocReviewKey(agentId, creationId, relPath);
+          delete this.reviewRefreshErrorKeys[rKey];
           let nextReview = payload.review || null;
           if (!nextReview && payload.annotationId && this.docReviewsByKey[rKey]) {
             const prev = this.docReviewsByKey[rKey];
@@ -3228,7 +3296,22 @@ export const useCreationsStore = defineStore('creations', {
         const rKey = creationDocReviewKey(aId, cId, filePath);
         docReviewReloadTargets.set(rKey, { agentId: aId, creationId: cId, filePath });
       }
+      for (const key of Object.keys(this.reviewRefreshErrorKeys)) {
+        const firstSep = key.indexOf(KEY_SEP);
+        if (firstSep <= 0) continue;
+        const secondSep = key.indexOf(KEY_SEP, firstSep + KEY_SEP.length);
+        if (secondSep <= firstSep + KEY_SEP.length) continue;
+        const aId = key.slice(0, firstSep);
+        const cId = key.slice(firstSep + KEY_SEP.length, secondSep);
+        const filePath = key.slice(secondSep + KEY_SEP.length);
+        if (!aId || !cId || !filePath) continue;
+        if (filterAgentId && aId !== filterAgentId) continue;
+        docReviewReloadTargets.set(key, { agentId: aId, creationId: cId, filePath });
+      }
 
+      for (const rKey of docReviewReloadTargets.keys()) {
+        this.refreshingReviewKeys[rKey] = true;
+      }
       this.settleDisconnectedAiJobs(filterAgentId);
       const tasks = [];
 
@@ -3256,12 +3339,17 @@ export const useCreationsStore = defineStore('creations', {
       }
 
       for (const [rKey, { agentId: aId, creationId: cId, filePath }] of docReviewReloadTargets.entries()) {
-        this.refreshingReviewKeys[rKey] = true;
         tasks.push((async () => {
           try {
             await this.loadDocReview(aId, cId, filePath);
+            if (gen === storeGeneration) {
+              delete this.reviewRefreshErrorKeys[rKey];
+              this._retireDisconnectedReviewJobs(aId, cId, filePath);
+            }
           } catch {
-            // non-fatal during reconnect reconciliation
+            if (gen === storeGeneration) {
+              this.reviewRefreshErrorKeys[rKey] = true;
+            }
           } finally {
             if (gen === storeGeneration) {
               delete this.refreshingReviewKeys[rKey];
@@ -3372,6 +3460,7 @@ export const useCreationsStore = defineStore('creations', {
       this.docStatesByKey = {};
       this.docReviewsByKey = {};
       this.refreshingReviewKeys = {};
+      this.reviewRefreshErrorKeys = {};
       this.inlineEditJobs = {};
       this.reviewJobs = {};
       this.activeCreation = null;

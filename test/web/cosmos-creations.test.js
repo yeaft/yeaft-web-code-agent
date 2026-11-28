@@ -1289,7 +1289,8 @@ describe('Cosmos Creations — End-to-End Web Store <-> Server Relay <-> Agent S
       expect(dropzone().attributes('aria-disabled')).toBe('true');
       expect(dropzone().attributes('tabindex')).toBe('-1');
       expect(dropzone().get('input[type="file"]').element.disabled).toBe(true);
-      expect(modal.text()).toContain(t('creation.create.workspaceCommittedHint'));
+      expect(modal.text()).toContain(t('creation.create.workspacePendingHint'));
+      expect(modal.text()).not.toContain(t('creation.create.workspaceCommittedHint'));
       await modal.get('#creation-create-title').setValue('Revised slides');
       await button(modal, t('creation.category.deck'), '.creation-create-category-title').trigger('click');
       modal.get('button[type="submit"]').element.click();
@@ -2942,8 +2943,9 @@ function projectAck(chat, request, fields) {
 
 function deferred() {
   let resolve;
-  const promise = new Promise(res => { resolve = res; });
-  return { promise, resolve };
+  let reject;
+  const promise = new Promise((res, rej) => { resolve = res; reject = rej; });
+  return { promise, resolve, reject };
 }
 
 function fireWindowEvent(type, detail) {
@@ -3251,6 +3253,14 @@ describe('File Canvas and route-scoped composer references', () => {
     await flushPromises();
     expect(editor.value).toBe('First line\nApprove the plan\nLast line');
     expect(blocker.classes()).toContain('is-accepted');
+    file.isDirty = true;
+    await Vue.nextTick();
+    expect(markFinal()).toBeUndefined();
+    expect(panel.get('.canvas-review-bulk-bar').text()).toContain(t('creation.review.saveBeforeFinal'));
+    await wrapper.get('.canvas-save-btn').trigger('click');
+    expect(wrapper.emitted('save')).toEqual([[]]);
+    file.isDirty = false;
+    await Vue.nextTick();
     expect(markFinal()).toBeDefined();
     const dismiss = card('Add background');
     await dismiss.get('input').setValue(true);
@@ -3273,7 +3283,7 @@ describe('File Canvas and route-scoped composer references', () => {
   });
 
   it('offers Mark as Final when a completed review has no annotations', async () => {
-    const { wrapper } = await canvasAiFixture(({ op }) => (
+    const { wrapper, file } = await canvasAiFixture(({ op }) => (
       op === 'get_doc_review' ? { review: { jobId: 'clean-review', scope: 'document', status: 'completed', annotations: [], contentHash: contentHash(originalContent) } } : {}
     ));
     await wrapper.get('.canvas-review-trigger').trigger('click');
@@ -3281,6 +3291,23 @@ describe('File Canvas and route-scoped composer references', () => {
     const panel = wrapper.get('.canvas-review-panel');
     expect(panel.findAll('.canvas-review-card')).toHaveLength(0);
     expect(panel.get('.canvas-review-list').text()).toContain(t('creation.review.noIssues'));
+    const status = wrapper.get('.canvas-status-pill');
+    for (const flag of ['isDirty', 'diskChangedOnDisk', 'diskChangedToBinary', 'probingDisk']) {
+      file[flag] = true;
+      await Vue.nextTick();
+      expect(hasMarkFinal(wrapper)).toBe(false);
+      expect(panel.get('.canvas-review-bulk-bar').text()).toContain(t('creation.review.saveBeforeFinal'));
+      await status.trigger('click');
+      const final = button(wrapper, t('creation.docStatus.final'), '[role="menuitem"]');
+      expect(final.element.disabled, flag).toBe(true);
+      expect(final.attributes('title')).toBe(t('creation.review.saveBeforeFinal'));
+      await final.trigger('click');
+      expect(wrapper.emitted('update:doc-status')).toBeUndefined();
+      await status.trigger('click');
+      file[flag] = false;
+    }
+    await status.trigger('click');
+    expect(button(wrapper, t('creation.docStatus.final'), '[role="menuitem"]').element.disabled).toBe(false);
     await button(panel, `✓ ${t('creation.docStatus.markFinal')}`).trigger('click');
     expect(wrapper.emitted('update:doc-status')).toEqual([['final']]);
   });
@@ -3450,16 +3477,15 @@ describe('File Canvas and route-scoped composer references', () => {
     } else {
       await store.reconcileAfterReconnect(route.agentId);
       expect(store.inlineEditJobs.inline_edit.status).toBe('failed');
-      expect(store.reviewJobs.review_document.status).toBe('failed');
+      expect(store.reviewJobs.review_document).toBeUndefined();
     }
     const inline = store.inlineEditJobs.inline_edit;
-    const review = store.reviewJobs.review_document;
     event('inline_edit_delta', { jobId: 'inline_edit', delta: 'Late text' });
     event('inline_edit_complete', { jobId: 'inline_edit', status: 'completed', revisedText: 'Late rewrite' });
     event('review_complete', { jobId: 'review_document', status: 'completed', annotations: [blocker] });
     if (transition === 'reconnect') {
       expect(store.inlineEditJobs.inline_edit).toBe(inline);
-      expect(store.reviewJobs.review_document).toBe(review);
+      expect(store.reviewJobs.review_document).toBeUndefined();
       expect(inline.revisedText).toBe('');
     } else {
       expect(store.inlineEditJobs).toEqual({});
@@ -3561,7 +3587,7 @@ describe('File Canvas and route-scoped composer references', () => {
     expect(panel.get('[role="alert"]').text()).toContain(interpolateTranslation('creation.review.addPartialWarning', { count: 1 }));
   });
 
-  it('F1: bounds repetitive anchor lookup and rejects quotes spilling past the reviewed window', async () => {
+  it('R3-1: bounds repetitive lookup and never matches outside the reviewed window', async () => {
     const { applyTextReplacement } = await import('../../web/components/workbench/FileCanvasView.js');
     const repetitive = 'a'.repeat(256 * 1024);
     const start = performance.now();
@@ -3573,10 +3599,18 @@ describe('File Canvas and route-scoped composer references', () => {
     const anchor = { originalText: 'First line\nSecond line', revisedText: 'Replacement', lineStart: 1 };
     expect(applyTextReplacement(content, { ...anchor, lineEnd: 1 })).toEqual({ applied: false, content, reason: 'stale' });
     expect(applyTextReplacement(content, { ...anchor, lineEnd: 2 })).toEqual({ applied: true, content: 'Replacement\nThird line' });
+    const restricted = 'prior\nReviewed\nother';
+    for (const originalText of ['prior\nReviewed', 'prior\nReviewed\nother', 'prior', 'other']) {
+      expect(applyTextReplacement(restricted, { originalText, revisedText: 'replacement', lineStart: 2 }))
+        .toEqual({ applied: false, reason: 'stale', content: restricted });
+    }
+    expect(applyTextReplacement(restricted, { originalText: 'prior', revisedText: 'replacement' }))
+      .toEqual({ applied: true, content: 'replacement\nReviewed\nother' });
+
   });
 
-  it('F1: does not anchor visible Markdown prose to a hidden link title', async () => {
-    const content = '[link](https://example.test "A B")\n\n**A** B';
+  it.each(['[link](https://example.test\n"A B")', '<a title="A B">label</a>'])('R3-2: rejects hidden source matches in %s', async markup => {
+    const content = `${markup}\n\n**A** B`;
     const { wrapper, file, wire } = await canvasAiFixture(() => ({}), content);
     const paragraph = wrapper.get('.canvas-doc-content p:last-child');
     const anchorNode = paragraph.get('strong').element.firstChild;
@@ -3591,6 +3625,13 @@ describe('File Canvas and route-scoped composer references', () => {
       const popover = wrapper.get('.canvas-inline-popover');
       expect(popover.text()).toContain(t('creation.canvas.ambiguousSelection'));
       expect(button(popover, t('creation.inlineEdit.polish')).element.disabled).toBe(true);
+      const quickReview = button(popover, `${t('creation.inlineEdit.quickReview')} ▾`);
+      expect(quickReview.element.disabled).toBe(true);
+      await quickReview.trigger('click');
+      expect(popover.find('[role="menu"]').exists()).toBe(false);
+      const inlinePopover = wrapper.findComponent({ name: 'CanvasInlineEditPopover' });
+      expect(inlinePopover.props()).toMatchObject({ rawStart: null, rawEnd: null, lineStart: undefined, lineEnd: undefined });
+      expect(popover.get('.canvas-ref-btn').element.disabled).toBe(false);
       expect(file.content).toBe(content);
       expect(wire).not.toHaveBeenCalled();
     } finally {
@@ -3598,36 +3639,110 @@ describe('File Canvas and route-scoped composer references', () => {
     }
   });
 
-  it.each([false, true])('F2: rolls back failed durable Accept unless the text changed mid-flight (%s)', async diverged => {
+  it('R3-2: checks repeated unclosed link candidates without rescanning suffixes', async () => {
+    const { isInsideHiddenMarkdownSyntax } = await import('../../web/components/workbench/FileCanvasView.js');
+    const content = `${']('.repeat(65536)}A B`;
+    const start = performance.now();
+    expect(isInsideHiddenMarkdownSyntax(content, content.length - 3, content.length)).toBe(false);
+    expect(performance.now() - start).toBeLessThan(100);
+    const escaped = '[label](https://example.test/a\\)b\n"A B (title)")';
+    expect(isInsideHiddenMarkdownSyntax(escaped, escaped.indexOf('A B'), escaped.indexOf('A B') + 3)).toBe(true);
+    const blankLine = '[label](url\n\n"A B")';
+    expect(isInsideHiddenMarkdownSyntax(blankLine, blankLine.indexOf('A B'), blankLine.indexOf('A B') + 3)).toBe(false);
+  });
+
+  it.each(['save', 'navigate', 'unmount'])('R3-3: failed durable Accept never publishes provisional text during %s', async action => {
     const review = { jobId: 'durable', scope: 'document', status: 'completed', annotations: [blocker],
       contentHash: contentHash(originalContent) };
-    const { wrapper, store, wire, file } = await canvasAiFixture(({ op }) => op === 'get_doc_review' ? { review } : {});
+    const saved = vi.fn();
+    const { wrapper, store, file } = await canvasAiFixture(({ op }) => op === 'get_doc_review' ? { review } : {},
+      originalContent, { onSave: () => saved(file.content) });
     const response = deferred();
-    const send = wire.getMockImplementation();
-    wire.mockImplementation(request => {
-      if (request.op !== 'update_review_annotation') return send(request);
-      void response.promise.then(() => store.handleCreationResponse({
-        ...request, type: 'creation_response', ok: false, error: 'Could not save acceptance',
-      }));
-      return true;
-    });
+    const resolve = vi.spyOn(store, 'resolveReviewAnnotation').mockReturnValueOnce(response.promise);
+    file.isDirty = true;
     await wrapper.get('.canvas-review-trigger').trigger('click');
     await flushPromises();
     const card = wrapper.get('.canvas-review-card');
-    await button(card, t('creation.review.acceptFix')).trigger('click');
-    expect(file.content).toBe(originalContent.replace(blocker.quote, blocker.suggestedReplacement));
-    if (diverged) file.content += '\nTyped during the request';
-    const pendingContent = file.content;
+    const accept = button(card, t('creation.review.acceptFix'));
+    await accept.trigger('click');
+    expect(accept.element.disabled).toBe(true);
+    expect(resolve).toHaveBeenCalledTimes(1);
+    expect(file.content).toBe(originalContent);
+    expect(wrapper.emitted('update:content')).toBeUndefined();
+    if (action === 'save') {
+      await wrapper.get('.canvas-save-btn').trigger('click');
+      expect(saved).toHaveBeenCalledExactlyOnceWith(originalContent);
+    } else if (action === 'navigate') {
+      await wrapper.setProps({ file: { ...file, path: 'docs/other.md' } });
+    } else {
+      wrapper.unmount();
+    }
+    response.reject(new Error('Could not save acceptance'));
+    await flushPromises();
+    expect(file.content).toBe(originalContent);
+    expect(wrapper.emitted('update:content')).toBeUndefined();
+    if (action === 'save') {
+      expect(wrapper.find('.canvas-undo-toast').exists()).toBe(false);
+      expect(card.classes()).toContain('is-open');
+      expect(wrapper.get('.canvas-review-panel [role="alert"] span').text()).toBe('Could not save acceptance');
+    }
+  });
+
+  it('R3-3: reopens a committed acceptance without overwriting text typed while it was pending', async () => {
+    const review = { jobId: 'durable', scope: 'document', status: 'completed', annotations: [blocker] };
+    const { wrapper, store, file } = await canvasAiFixture(({ op }) => op === 'get_doc_review' ? { review } : {});
+    const response = deferred();
+    const resolve = vi.spyOn(store, 'resolveReviewAnnotation').mockReturnValueOnce(response.promise);
+    await wrapper.get('.canvas-review-trigger').trigger('click');
+    await flushPromises();
+    await button(wrapper, t('creation.review.acceptFix')).trigger('click');
+    file.content += '\nTyped during the request';
     await Vue.nextTick();
     response.resolve();
     await flushPromises();
-    expect(file.content).toBe(diverged ? pendingContent : originalContent);
-    expect(wrapper.find('.canvas-undo-toast').exists()).toBe(false);
-    expect(card.classes()).toContain('is-open');
-    expect(hasMarkFinal(wrapper)).toBe(false);
-    expect(wrapper.get('.canvas-review-panel [role="alert"] span').text()).toBe(
-      diverged ? t('creation.review.rollbackFailed') : 'Could not save acceptance',
-    );
+    expect(file.content).toBe(`${originalContent}\nTyped during the request`);
+    expect(resolve.mock.calls).toEqual(['accepted', 'open'].map(status => [route.agentId, 'atlas', file.path, blocker.id, status]));
+    expect(wrapper.get('.canvas-review-conflict-banner').exists()).toBe(true);
+  });
+
+  it.each(['different doc with identical content', 'new typing', 'open failure'])('R3-4: durable Undo preserves the buffer on %s', async scenario => {
+    const review = { jobId: 'durable', scope: 'document', status: 'completed', annotations: [blocker] };
+    const { wrapper, store, file } = await canvasAiFixture(({ op }) => op === 'get_doc_review' ? { review } : {});
+    const resolve = vi.spyOn(store, 'resolveReviewAnnotation');
+    await wrapper.get('.canvas-review-trigger').trigger('click');
+    await flushPromises();
+    await button(wrapper, t('creation.review.acceptFix')).trigger('click');
+    await flushPromises();
+    const post = originalContent.replace(blocker.quote, blocker.suggestedReplacement);
+    expect(file.content).toBe(post);
+    const response = deferred();
+    resolve.mockReturnValueOnce(response.promise);
+    const undo = button(wrapper, t('creation.canvas.undoReplace'));
+    await undo.trigger('click');
+    expect(undo.element.disabled).toBe(true);
+    await wrapper.vm.undoLastReplacement();
+    expect(resolve.mock.calls.map(args => args[4])).toEqual(['accepted', 'open']);
+    const newFile = { ...file, path: 'docs/other.md' };
+    if (scenario === 'different doc with identical content') {
+      await wrapper.setProps({ file: newFile });
+      expect(wrapper.find('.canvas-undo-toast').exists()).toBe(false);
+    } else if (scenario === 'new typing') {
+      file.content += '\nMore text';
+      await Vue.nextTick();
+    }
+    if (scenario === 'open failure') response.reject(new Error('Unable to reopen'));
+    else response.resolve();
+    await flushPromises();
+    expect(wrapper.emitted('update:content')).toEqual([[post]]);
+    if (scenario === 'open failure') {
+      expect(file.content).toBe(post);
+      expect(wrapper.get('.canvas-undo-toast[role="alert"]').text()).toContain(t('creation.review.reopenFailed'));
+      expect(resolve).toHaveBeenCalledTimes(2);
+    } else {
+      expect(resolve.mock.calls.slice(1)).toEqual(['open', 'accepted'].map(status => [route.agentId, 'atlas', file.path, blocker.id, status]));
+      expect(newFile.content).toBe(post);
+      expect(file.content).toBe(scenario === 'new typing' ? `${post}\nMore text` : post);
+    }
   });
 
   async function startSelectionReview(selectPassage, wrapper) {
@@ -3665,6 +3780,19 @@ describe('File Canvas and route-scoped composer references', () => {
     expect(resolve).not.toHaveBeenCalled();
     expect(wire.mock.calls.some(([request]) => request.op === 'update_review_annotation')).toBe(false);
     expect(store.getDocReview(route.agentId, 'atlas', file.path)).toEqual(review);
+  });
+
+  it('R3-2: a selection review cannot replace text outside the verified offsets on the same line', async () => {
+    const { wrapper, event, file, selectPassage } = await canvasAiFixture(({ op }) => (
+      op === 'review_document' ? { jobId: 'selection', scope: 'selection', status: 'running' } : {}
+    ), 'First line\nOld passage and untouched text\nLast line');
+    await startSelectionReview(selectPassage, wrapper);
+    expect(wrapper.vm.quickReviewRequest).toMatchObject({ rawStart: 11, rawEnd: 22, lineStart: 2, lineEnd: 2 });
+    event('review_complete', { jobId: 'selection', scope: 'selection', annotations: [{ ...blocker, quote: 'untouched text' }] });
+    await Vue.nextTick();
+    await button(wrapper, t('creation.review.acceptFix')).trigger('click');
+    expect(wrapper.get('.canvas-review-conflict-banner').exists()).toBe(true);
+    expect(file.content).toContain('Old passage and untouched text');
   });
 
   it('F5: retires a superseded run and shows the latest durable review', async () => {
@@ -3719,14 +3847,18 @@ describe('File Canvas and route-scoped composer references', () => {
   it('F6: reconnect refreshes cached and running durable review targets before allowing Final', async () => {
     const initial = { jobId: 'cached', scope: 'document', status: 'completed', annotations: [], contentHash: contentHash(originalContent) };
     const runningPath = 'docs/appendix.md';
-    const { wrapper, store, wire, file } = await canvasAiFixture(({ op }) => {
+    const { wrapper, store, wire, file } = await canvasAiFixture(({ op, payload }) => {
       if (op === 'get_doc_review') return { review: initial };
-      if (op === 'review_document') return { jobId: 'running-appendix', status: 'running' };
+      if (op === 'review_document') return { jobId: payload.filePath === runningPath ? 'running-appendix' : 'running-chapter', status: 'running' };
       return {};
     });
     await wrapper.get('.canvas-review-trigger').trigger('click');
     await flushPromises();
     expect(hasMarkFinal(wrapper)).toBe(true);
+    await button(wrapper, t('creation.review.reRun')).trigger('click');
+    await button(wrapper, t('creation.review.start')).trigger('click');
+    await flushPromises();
+    expect(store.reviewJobs['running-chapter'].status).toBe('running');
     await store.startDocumentReview(route.agentId, { creationId: 'atlas', filePath: runningPath, scope: 'document', content: originalContent });
     expect(store.getDocReview(route.agentId, 'atlas', runningPath)).toBeNull();
     const pending = new Map();
@@ -3754,10 +3886,45 @@ describe('File Canvas and route-scoped composer references', () => {
     expect(wrapper.get('.canvas-review-card-title').text()).toBe(blocker.title);
     expect(hasMarkFinal(wrapper)).toBe(false);
     expect(store.getDocReview(route.agentId, 'atlas', runningPath)?.jobId).toBe('running-appendix');
+    expect(store.reviewJobs['running-chapter']).toBeUndefined();
+  });
+
+  it('R3-5: failed reconnect refresh locks persisted actions until Retry sync succeeds', async () => {
+    const suggestion = { ...blocker, severity: 'suggestion' };
+    const review = { jobId: 'cached', scope: 'document', status: 'completed', annotations: [suggestion],
+      contentHash: contentHash(originalContent) };
+    const { wrapper, store } = await canvasAiFixture(({ op }) => op === 'get_doc_review' ? { review } : {});
+    await wrapper.get('.canvas-review-trigger').trigger('click');
+    await flushPromises();
+    expect(hasMarkFinal(wrapper)).toBe(true);
+    const { request } = store;
+    let fail = true;
+    vi.spyOn(store, 'request').mockImplementation((agentId, op, payload) => {
+      if (fail && op === 'get_doc_review') {
+        fail = false;
+        return Promise.reject(new Error('Reload failed'));
+      }
+      return request(agentId, op, payload);
+    });
+    await store.reconcileAfterReconnect(route.agentId);
+    await Vue.nextTick();
+    const docStale = () => store.isDocReviewStale(route.agentId, 'atlas', 'docs/chapter.md');
+    expect(docStale()).toBe(true);
+    const banner = wrapper.get('.canvas-review-conflict-banner');
+    expect(banner.text()).toContain(t('creation.review.refreshFailed'));
+    expect(button(wrapper, t('creation.review.acceptFix')).element.disabled).toBe(true);
+    expect(button(wrapper, t('creation.review.dismiss')).element.disabled).toBe(true);
+    expect(hasMarkFinal(wrapper)).toBe(false);
+    await button(banner, t('creation.review.retryRefresh')).trigger('click');
+    await flushPromises();
+    expect(docStale()).toBe(false);
+    expect(wrapper.find('.canvas-review-conflict-banner').exists()).toBe(false);
+    expect(button(wrapper, t('creation.review.acceptFix')).element.disabled).toBe(false);
+    expect(hasMarkFinal(wrapper)).toBe(true);
   });
 
   it.each([true, false])('F9: stages a long note losslessly or not at all (enough slots: %s)', async fits => {
-    const comment = `${'0123456789'.repeat(100)}END`;
+    const comment = `${'🚀'.repeat(600)}${' '.repeat(130)}\n${'👨‍👩‍👧‍👦'.repeat(40)}END  \n  `;
     const annotations = [{ id: 'long', title: 'Long note', comment, lineStart: 1, status: 'open' }];
     const { wrapper } = await canvasAiFixture(({ op }) => op === 'get_doc_review'
       ? { review: { jobId: 'durable', scope: 'document', status: 'completed', annotations } } : {});
@@ -3776,7 +3943,7 @@ describe('File Canvas and route-scoped composer references', () => {
     const after = context.getCanvasContextRefs(routeKey);
     if (fits) {
       expect(after).toHaveLength(2);
-      expect(after.every(ref => ref.snippet.length <= 760)).toBe(true);
+      expect(after.every(ref => Array.from(ref.snippet).length <= 760 && ref.snippet.isWellFormed())).toBe(true);
       expect(after.map(ref => ref.snippet.replace(/^\[Part \d+\/2\] /, '')).join('')).toBe(`1. [L1] Long note: ${comment}`);
       expect(checkbox.element.checked).toBe(false);
     } else {
@@ -3787,35 +3954,23 @@ describe('File Canvas and route-scoped composer references', () => {
     }
   });
 
-  it('F8: keeps an empty rewrite as a deletion through refine and retry', async () => {
-    let jobs = 0;
-    const { wrapper, file, event, wire, selectPassage } = await canvasAiFixture(({ op }) => (
-      op === 'inline_edit' ? { jobId: `delete-${++jobs}`, status: 'running' } : {}
+  it('R3-9: hides Refine for an empty rewrite but keeps Replace and Discard enabled', async () => {
+    const { wrapper, file, event, selectPassage } = await canvasAiFixture(({ op }) => (
+      op === 'inline_edit' ? { jobId: 'delete', status: 'running' } : {}
     ));
     await selectPassage();
     const popover = wrapper.get('.canvas-inline-popover');
-    const replace = () => button(popover, `✓ ${t('creation.inlineEdit.replace')}`);
     await button(popover, t('creation.inlineEdit.polish')).trigger('click');
     await flushPromises();
-    event('inline_edit_complete', { jobId: 'delete-1', revisedText: '' });
+    event('inline_edit_complete', { jobId: 'delete', revisedText: '' });
     await Vue.nextTick();
     expect(popover.get('.canvas-diff-del').text()).toBe('Old passage');
     expect(popover.find('.canvas-diff-add').exists()).toBe(false);
-    expect(replace().element.disabled).toBe(false);
-    await button(popover, `↻ ${t('creation.inlineEdit.refine')}`).trigger('click');
-    const input = popover.get('input');
-    await input.setValue('Keep the deletion');
-    await input.trigger('keydown.enter');
-    await flushPromises();
-    event('inline_edit_complete', { jobId: 'delete-2', status: 'failed', error: 'Refine unavailable' });
-    await Vue.nextTick();
-    await button(popover, 'Retry').trigger('click');
-    await flushPromises();
-    const edits = wire.mock.calls.map(([request]) => request).filter(request => request.op === 'inline_edit');
-    expect(edits.map(({ payload }) => payload.selectedText)).toEqual(['Old passage', '', '']);
-    event('inline_edit_complete', { jobId: 'delete-3', revisedText: '' });
-    await Vue.nextTick();
-    await replace().trigger('click');
+    expect(popover.findAll('button').some(item => item.text().includes(t('creation.inlineEdit.refine')))).toBe(false);
+    const replace = button(popover, `✓ ${t('creation.inlineEdit.replace')}`);
+    expect(replace.element.disabled).toBe(false);
+    expect(button(popover, `✕ ${t('creation.inlineEdit.discard')}`).element.disabled).toBe(false);
+    await replace.trigger('click');
     expect(file.content).toBe('First line\n\nLast line');
   });
 
@@ -5927,6 +6082,39 @@ describe('Creation launchers in Classic and Cosmos', () => {
     }));
     expect(wrapper.emitted('created')[0][0]).toMatchObject({ agentId: alpha.id, creation: atlas });
   });
+
+  it.each(['upload failure', 'invalid-folder rejection', 'Project-phase timeout'])(
+    'R3-8: unlocks workspace inputs after %s', async scenario => {
+      const wrapper = render(CreationCreateModal, { props: { initialRootDir: rootDir }, stubs: { Teleport: true } });
+      await wrapper.get('#creation-create-title').setValue('Retryable atlas');
+      const folder = wrapper.get('#creation-create-folder');
+      const dropzone = wrapper.get('.creation-dropzone');
+      const fileInput = dropzone.get('input[type="file"]');
+      const rpc = vi.spyOn(creations, 'request').mockRejectedValue(new Error('Invalid folder'));
+      if (scenario === 'upload failure') {
+        vi.spyOn(creations, 'uploadRawFiles').mockRejectedValue(new Error('Upload failed'));
+        Object.defineProperty(fileInput.element, 'files', { configurable: true, value: [new File(['draft'], 'draft.md')] });
+        await fileInput.trigger('change');
+      } else if (scenario === 'Project-phase timeout') {
+        vi.spyOn(chat, 'mutateProject').mockResolvedValue({ ok: false, error: 'Project timed out' });
+        await wrapper.get('.creation-create-inline-toggle').trigger('click');
+        await wrapper.get('input#creation-create-project').setValue('New Project');
+      }
+      await wrapper.get('form').trigger('submit');
+      await flushPromises();
+      expect(wrapper.get('[role="alert"]').text()).toContain({
+        'upload failure': 'Upload failed', 'invalid-folder rejection': 'Invalid folder', 'Project-phase timeout': 'Project timed out',
+      }[scenario]);
+      expect(rpc.mock.calls.filter(([, op]) => op === 'create_creation')).toHaveLength(scenario === 'invalid-folder rejection' ? 1 : 0);
+      expect(folder.element.disabled).toBe(false);
+      await folder.setValue(`${rootDir}/changed`);
+      expect(folder.element.value).toBe(`${rootDir}/changed`);
+      expect(dropzone.attributes('aria-disabled')).toBe('false');
+      expect(fileInput.element.disabled).toBe(false);
+      expect(wrapper.text()).not.toContain(t('creation.create.workspacePendingHint'));
+      expect(wrapper.text()).not.toContain(t('creation.create.workspaceCommittedHint'));
+    },
+  );
 
   it('F10: locks the committed folder and uploads on retry but accepts revised linkage and metadata', async () => {
     const create = vi.spyOn(creations, 'createWorkspaceCreation')

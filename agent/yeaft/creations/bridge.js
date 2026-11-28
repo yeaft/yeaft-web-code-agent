@@ -5,6 +5,8 @@ import { safeId, fail, PRIVATE_AI_EVENT_TYPES } from './constants.js';
 import { readMediaChunk } from './media.js';
 
 const MAX_NAMESPACES = 4;
+const MAX_CANCELLED_CLIENTS = 1024;
+const CANCELLED_CLIENT_TTL_MS = 5 * 60_000;
 const validTargetClientId = value => typeof value === 'string' && /^[A-Za-z0-9_-]{1,128}$/.test(value);
 const PUBLIC_ERRORS = new Set(['INVALID_REQUEST', 'INVALID_STATE', 'LIMIT_EXCEEDED', 'INVALID_PATH', 'INVALID_RANGE',
   'BUSY', 'NOT_FOUND', 'CONFLICT', 'REVIEW_REQUIRED', 'LOCKED', 'UNSUPPORTED', 'STALE']);
@@ -18,6 +20,24 @@ function safeError(error) {
 export function createCreationBridge({ context = ctx, send = sendToServer,
   createService = async options => (await import('./service.js')).createCreationService(options) } = {}) {
   const scopes = new Map();
+  const cancelledClientsBySocket = new WeakMap();
+  const clientKey = (ownerId, targetClientId) => `${ownerId}\0${targetClientId}`;
+  function recordClientCancellation(socket, ownerId, targetClientId) {
+    if (!socket) return;
+    let cancelled = cancelledClientsBySocket.get(socket);
+    if (!cancelled) cancelledClientsBySocket.set(socket, cancelled = new Map());
+    const now = Date.now();
+    for (const [key, expiresAt] of cancelled) {
+      if (expiresAt > now) break;
+      cancelled.delete(key);
+    }
+    const key = clientKey(ownerId, targetClientId);
+    cancelled.delete(key);
+    if (cancelled.size >= MAX_CANCELLED_CLIENTS) cancelled.delete(cancelled.keys().next().value);
+    cancelled.set(key, now + CANCELLED_CLIENT_TTL_MS);
+  }
+  const isClientCancelled = (socket, ownerId, targetClientId) => targetClientId !== undefined
+    && cancelledClientsBySocket.get(socket)?.get(clientKey(ownerId, targetClientId)) > Date.now();
   let cacheIdentity;
   let closed = false;
   let pending = Promise.resolve();
@@ -130,6 +150,9 @@ export function createCreationBridge({ context = ctx, send = sendToServer,
     return typeof msg.requestId === 'string' && msg.requestId.length > 0 && msg.requestId.length <= 128 ? msg.requestId : null;
   }
   const bridge = {
+    cancelSocketJobs(socket) {
+      for (const { runtime } of scopes.values()) runtime.aiAssistant?.cancelSocketJobs?.(socket);
+    },
     async resolveWorkspaceBinding(ownerId, creationId) {
       if (!validOwner(ownerId)) return null;
       try {
@@ -166,11 +189,27 @@ export function createCreationBridge({ context = ctx, send = sendToServer,
         if ((targetClientId !== undefined || response.op === 'cancel_client_ai_jobs') && !validTargetClientId(targetClientId)) {
           fail('INVALID_REQUEST', 'Invalid target client identifier');
         }
+        const { op } = response;
         const current = readIdentity(ownerId);
+        if (op === 'cancel_client_ai_jobs') recordClientCancellation(originSocket, ownerId, targetClientId);
+        const checkClient = () => {
+          if ((op === 'inline_edit' || op === 'review_document') && isClientCancelled(originSocket, ownerId, targetClientId)) {
+            fail('STALE', 'Client connection was cancelled');
+          }
+        };
+        checkClient();
         response.data = await serialize(async () => {
+          if (op === 'cancel_client_ai_jobs') {
+            assertCurrent(current, originSocket);
+            const scope = cacheIdentity && sameAgent(cacheIdentity, current) && scopes.get(ownerId);
+            return scope ? scope.runtime.request({ op, payload: msg.payload ?? {}, meta: { targetClientId, originSocket } })
+              : { cancelledCount: 0 };
+          }
+          checkClient();
           const scope = await serviceForOwner(current, originSocket);
           if (closed) fail('INVALID_STATE', 'Creations is closed');
-          return scope.runtime.request({ op: response.op, payload: msg.payload ?? {},
+          checkClient(); // Cancellation may arrive while the namespace is opening.
+          return scope.runtime.request({ op, payload: msg.payload ?? {},
             meta: { targetClientId, originSocket, isOriginActive: () => isScopeSocketActive(ownerId, scope, current, originSocket) } });
         });
         response.ok = true;
@@ -224,4 +263,5 @@ export async function resolveCreationWorkspaceRoot(ownerId, creationId, options)
 const bridge = createCreationBridge();
 export const handleCreationRequest = msg => bridge.request(msg);
 export const handleCreationMediaRead = msg => bridge.mediaRead(msg);
+export const cancelCreationsForSocket = socket => ctx.creationBridge?.cancelSocketJobs?.(socket);
 export const shutdownCreations = () => bridge.close();
