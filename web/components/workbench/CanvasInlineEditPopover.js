@@ -90,7 +90,7 @@ export default {
 
       <!-- Completed / Diff Review state -->
       <template v-else-if="isCompleted">
-        <div v-if="!hasActualChange" class="canvas-inline-status">
+        <div v-if="isNoChange" class="canvas-inline-status">
           <span>{{ tr('creation.inlineEdit.noChange', 'No changes suggested.') }}</span>
           <button
             type="button"
@@ -266,6 +266,7 @@ export default {
     const pendingStart = Vue.ref(false);
     const anchorOriginalText = Vue.ref('');
     const lastCandidateText = Vue.ref('');
+    const hasCandidate = Vue.ref(false);
     const instruction = Vue.ref('');
     const refineMode = Vue.ref(false);
     const reviewMenuOpen = Vue.ref(false);
@@ -302,24 +303,21 @@ export default {
     const isRunning = Vue.computed(() => pendingStart.value || job.value?.status === 'running');
 
     const errorMessage = Vue.computed(() => {
-      if (localError.value) return localError.value;
-      if (job.value?.status === 'failed') {
-        return job.value.error || tr('creation.inlineEdit.failed', 'Quick edit failed');
-      }
-      return '';
+      const failedJob = job.value?.status === 'failed' ? job.value : null;
+      const code = localError.value || failedJob?.errorCode || failedJob?.error;
+      if (code === 'client_timeout') return tr('creation.ai.timeout', 'AI request timed out; please retry.');
+      if (code === 'connection_interrupted') return tr('creation.ai.reconnected', 'Connection interrupted; please retry.');
+      return localError.value || (failedJob ? failedJob.error || tr('creation.inlineEdit.failed', 'Quick edit failed') : '');
     });
 
-    const effectiveCandidate = Vue.computed(() => {
-      if (typeof job.value?.revisedText === 'string' && job.value.revisedText.length > 0) {
-        return job.value.revisedText;
-      }
-      return lastCandidateText.value || '';
-    });
+    const effectiveCandidate = Vue.computed(() => (
+      job.value?.status === 'completed' && typeof job.value.revisedText === 'string'
+        ? job.value.revisedText
+        : (hasCandidate.value ? lastCandidateText.value : null)
+    ));
 
     const isCompleted = Vue.computed(() => (
-      !isRunning.value
-      && !errorMessage.value
-      && (job.value?.status === 'completed' || Boolean(lastCandidateText.value))
+      !isRunning.value && !errorMessage.value && effectiveCandidate.value !== null
     ));
 
     const diffHunks = Vue.computed(() => {
@@ -341,16 +339,15 @@ export default {
       return rev ? [{ type: 'add', text: rev }] : [];
     });
 
-    const hasActualChange = Vue.computed(() => {
-      const orig = String(anchorOriginalText.value || props.selectedText || '');
-      const rev = String(effectiveCandidate.value || '');
-      return rev.length > 0 && rev !== orig;
-    });
+    const isNoChange = Vue.computed(() => (
+      effectiveCandidate.value !== null && effectiveCandidate.value === anchorOriginalText.value
+    ));
 
     Vue.watch(
       () => [job.value?.status, job.value?.revisedText],
       ([status, revisedText]) => {
-        if (status === 'completed' && typeof revisedText === 'string' && revisedText.length > 0) {
+        if (status === 'completed' && typeof revisedText === 'string') {
+          hasCandidate.value = true;
           lastCandidateText.value = revisedText;
         }
       },
@@ -378,6 +375,7 @@ export default {
     const resetSessionState = () => {
       activeRequest.value = null;
       anchorOriginalText.value = '';
+      hasCandidate.value = false;
       lastCandidateText.value = '';
       lastRequest.value = null;
       instruction.value = '';
@@ -423,7 +421,7 @@ export default {
       const trimmedInstruction = String(customInstruction || '').trim();
       if (!preset && !trimmedInstruction) return;
 
-      const isRefining = refineMode.value && Boolean(lastCandidateText.value);
+      const isRefining = refineMode.value && hasCandidate.value;
       const reuseFrozenAnchor = (isRefining || isRetry) && Boolean(activeRequest.value?.anchor);
       const originalAnchor = reuseFrozenAnchor
         ? { ...activeRequest.value.anchor }
@@ -437,16 +435,13 @@ export default {
 
       if (!reuseFrozenAnchor) {
         anchorOriginalText.value = originalAnchor.originalText;
+        hasCandidate.value = false;
         lastCandidateText.value = '';
       }
 
-      let baseText = originalAnchor.originalText;
-      if (isRetry && lastRequest.value?.baseText) {
-        baseText = lastRequest.value.baseText;
-      } else if (isRefining && lastCandidateText.value) {
-        baseText = lastCandidateText.value;
-      }
-      if (!baseText.trim()) return;
+      const baseText = (isRefining || isRetry) && hasCandidate.value
+        ? lastCandidateText.value : anchorOriginalText.value;
+      if (!hasCandidate.value && !baseText.trim()) return;
 
       const capturedAgentId = props.agentId;
       const capturedCreationId = props.creationId;
@@ -617,7 +612,10 @@ export default {
       }
     });
 
-    Vue.watch(() => [props.agentId, props.filePath], () => {
+    Vue.watch(() => [
+      props.agentId, props.creationId, props.filePath, props.selectedText,
+      props.rawStart, props.rawEnd, props.lineStart, props.lineEnd,
+    ], () => {
       cancelEdit();
       resetSessionState();
     });
@@ -638,7 +636,7 @@ export default {
       errorMessage,
       effectiveCandidate,
       diffHunks,
-      hasActualChange,
+      isNoChange,
       instruction,
       refineMode,
       reviewMenuOpen,

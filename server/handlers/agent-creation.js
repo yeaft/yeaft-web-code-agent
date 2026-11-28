@@ -13,7 +13,7 @@ export async function handleAgentCreation(agentId, agent, msg) {
       if (agent.capabilities?.includes('creations')) {
         const { ownerId, targetClientId, event } = msg;
         const targeted = PRIVATE_AI_EVENT_TYPES.has(event?.type) || targetClientId != null;
-        if (targeted && (typeof targetClientId !== 'string' || !targetClientId.length)) return true;
+        if (targeted && (typeof targetClientId !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/.test(targetClientId))) return true;
         await forwardAgentEvent(agentId, { type: 'creation_event', agentId, event },
           client => (CONFIG.skipAuth || (typeof ownerId === 'string' && ownerId.length > 0 && client.userId === ownerId))
             && (!targeted || hasClientRelayId(client, targetClientId)));

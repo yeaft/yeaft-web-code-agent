@@ -20,6 +20,10 @@ CREATE TABLE IF NOT EXISTS creation_doc_reviews (
   creation_id TEXT NOT NULL REFERENCES creations ON DELETE CASCADE,
   file_path TEXT NOT NULL, updated_at TEXT NOT NULL, data TEXT NOT NULL,
   PRIMARY KEY (creation_id, file_path));
+CREATE TABLE IF NOT EXISTS creation_doc_review_attempts (
+  creation_id TEXT NOT NULL REFERENCES creations ON DELETE CASCADE,
+  file_path TEXT NOT NULL, attempt_id INTEGER NOT NULL, updated_at TEXT NOT NULL,
+  PRIMARY KEY (creation_id, file_path));
 -- External and ambiguous folder history is retained independently of the Creation.
 -- A freshly generated workspace has a recorded directory identity instead.
 CREATE TABLE IF NOT EXISTS protected_workspaces (root_dir TEXT PRIMARY KEY NOT NULL);
@@ -547,7 +551,7 @@ export class CreationStore {
   getCreation(id) { return this.#summary(this.#creation(id)); }
   // Prepare related records in the same transaction as the Creation and its inputs.
   // External publication runs only after that transaction commits.
-  createCreation(input, { prepare } = {}) {
+  createCreation(input, { prepare, onWorkspaceMaterialized } = {}) {
     const nested = Boolean(this.tx);
     let newlyCreatedJournalToken;
     let retryBindTarget;
@@ -633,7 +637,8 @@ export class CreationStore {
         if (input.initializeFolder === true && input.rootDir != null && folderPath(input.rootDir) !== target) {
           fail('CONFLICT', 'Resume materialization in the original target folder');
         }
-        const { creation } = this.ensureWorkspace(result.id, { rootDir: target, newlyCreatedJournalToken });
+        const { creation, materialized } = this.ensureWorkspace(result.id, { rootDir: target, newlyCreatedJournalToken });
+        if (result.deduplicated && (materialized || (creation.rootDir ?? null) !== (result.rootDir ?? null))) onWorkspaceMaterialized?.(result.id);
         return result.deduplicated ? { ...creation, deduplicated: true } : creation;
       }
     }
@@ -740,11 +745,13 @@ export class CreationStore {
 
   #checkDocPathQuota(creationId, filePath) {
     if (this.getDocState(creationId, filePath)
-      || this.one('SELECT 1 FROM creation_doc_reviews WHERE creation_id=? AND file_path=?', creationId, filePath)) return;
+      || this.one('SELECT 1 FROM creation_doc_reviews WHERE creation_id=? AND file_path=?', creationId, filePath)
+      || this.one('SELECT 1 FROM creation_doc_review_attempts WHERE creation_id=? AND file_path=?', creationId, filePath)) return;
     const { count } = this.one(`SELECT COUNT(*) AS count FROM (
       SELECT file_path FROM creation_doc_states WHERE creation_id=?
       UNION SELECT file_path FROM creation_doc_reviews WHERE creation_id=?
-    )`, creationId, creationId);
+      UNION SELECT file_path FROM creation_doc_review_attempts WHERE creation_id=?
+    )`, creationId, creationId, creationId);
     if (count >= LIMITS.docStates) fail('LIMIT_EXCEEDED', 'Document workflow state limit reached');
   }
 
@@ -767,24 +774,41 @@ export class CreationStore {
     return data(this.one('SELECT data FROM creation_doc_reviews WHERE creation_id=? AND file_path=?', creationId, normalizeDocFilePath(filePath)));
   }
 
-  saveDocReview(creationId, filePath, review, { expectedIncarnation, attemptSeq } = {}) {
+  #checkDocReviewCreation(creationId, expectedIncarnation, expectedRootDir) {
+    const rec = data(this.#creation(creationId));
+    if (expectedIncarnation !== undefined && (rec.incarnation ?? rec.createdAt) !== expectedIncarnation) {
+      fail('STALE', 'Creation changed before review completed');
+    }
+    if (expectedRootDir !== undefined && (rec.rootDir ?? null) !== expectedRootDir) {
+      fail('STALE', 'Creation workspace changed before review completed');
+    }
+  }
+
+  beginDocReviewAttempt(creationId, filePath, { expectedIncarnation, expectedRootDir } = {}) {
     filePath = normalizeDocFilePath(filePath);
     return this.transaction(() => {
-      const rec = data(this.#creation(creationId));
-      if (expectedIncarnation != null && (rec.incarnation ?? rec.createdAt) !== expectedIncarnation) {
-        fail('STALE', 'Creation changed before review completed');
-      }
-      if (attemptSeq != null) {
-        const existing = data(this.one('SELECT data FROM creation_doc_reviews WHERE creation_id=? AND file_path=?', creationId, filePath));
-        if (typeof existing?.attemptSeq === 'number' && existing.attemptSeq > attemptSeq) {
-          fail('STALE', 'Document review was superseded by a newer review');
-        }
+      this.#checkDocReviewCreation(creationId, expectedIncarnation, expectedRootDir);
+      this.#checkDocPathQuota(creationId, filePath);
+      const { attempt_id: attemptId } = this.one(`INSERT INTO creation_doc_review_attempts
+        (creation_id,file_path,attempt_id,updated_at) VALUES (?,?,1,?)
+        ON CONFLICT(creation_id,file_path) DO UPDATE SET attempt_id=attempt_id+1,updated_at=excluded.updated_at
+        RETURNING attempt_id`, creationId, filePath, now());
+      return { attemptId };
+    });
+  }
+
+  saveDocReview(creationId, filePath, review, { expectedIncarnation, expectedRootDir, attemptId } = {}) {
+    filePath = normalizeDocFilePath(filePath);
+    return this.transaction(() => {
+      this.#checkDocReviewCreation(creationId, expectedIncarnation, expectedRootDir);
+      if (attemptId != null) {
+        const row = this.one('SELECT attempt_id FROM creation_doc_review_attempts WHERE creation_id=? AND file_path=?', creationId, filePath);
+        if (row?.attempt_id !== attemptId) fail('STALE', 'Document review was superseded by a newer review');
       }
       this.#checkDocPathQuota(creationId, filePath);
       let encoded;
       try { encoded = json(review); } catch { fail('INVALID_REQUEST', 'Invalid document review'); }
       if (!encoded?.startsWith('{')) fail('INVALID_REQUEST', 'Invalid document review');
-      if (attemptSeq != null) encoded = json({ ...JSON.parse(encoded), attemptSeq });
       if (Buffer.byteLength(encoded) > 512 * 1024) fail('LIMIT_EXCEEDED', 'Document review is too large');
       this.run(`INSERT INTO creation_doc_reviews (creation_id,file_path,updated_at,data) VALUES (?,?,?,?)
         ON CONFLICT(creation_id,file_path) DO UPDATE SET updated_at=excluded.updated_at,data=excluded.data`,

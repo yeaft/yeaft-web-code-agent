@@ -8,7 +8,12 @@
  */
 import { useChatStore } from '../../stores/chat.js';
 import { useSessionsStore } from '../../stores/sessions.js';
-import { creationSessionsForAgent, newCreationAttemptKey, useCreationsStore } from '../../stores/creations.js';
+import {
+  creationSessionsForAgent,
+  isAmbiguousRpcResult,
+  newCreationAttemptKey,
+  useCreationsStore,
+} from '../../stores/creations.js';
 import {
   CREATION_CATEGORIES,
   defaultKindForCategory,
@@ -525,9 +530,10 @@ export default {
       Boolean(selectedAgentOption.value?.eligible)
     ));
 
-    const workspaceCommitted = Vue.computed(() => (
-      Boolean(resumeState.value?.creationId)
+    const workspaceLockedForRetry = Vue.computed(() => (
+      Boolean(resumeState.value?.creationId || resumeState.value?.createAttempted)
     ));
+    const workspaceCommitted = workspaceLockedForRetry;
 
     const settingsSummaryText = Vue.computed(() => {
       const ag = selectedAgentOption.value;
@@ -545,7 +551,7 @@ export default {
       !hasEligibleAgent.value
       || !selectedAgentOption.value?.eligible
       || Boolean(props.initialRootDir || props.initialProjectId || props.initialSessionMode === 'existing')
-      || Boolean(resumeState.value?.creationId || unassignedResult.value || projectNameError.value)
+      || Boolean(resumeState.value?.creationId || resumeState.value?.createAttempted || unassignedResult.value || projectNameError.value)
     );
 
     const canSubmit = Vue.computed(() => {
@@ -760,10 +766,12 @@ export default {
       || (form.sessionMode === 'existing' && !form.existingSessionId)
       || Boolean(
         state?.creationId
+        || state?.createAttempted
         || state?.projectId
         || state?.sessionId
         || state?.projectAttempted
         || state?.sessionAttempted
+        || err?.createAttempted
         || err?.partialCreation
         || err?.partialCreationId
         || err?.partialProjectId
@@ -782,6 +790,7 @@ export default {
           newProjectNameSnapshot: newProjectName.value,
           creationId: '',
           sessionId: '',
+          createAttempted: false,
           projectAttempted: false,
           sessionAttempted: false,
           baselineProjectIds: [],
@@ -809,6 +818,7 @@ export default {
           resumeProjectId: state.projectId || undefined,
           resumeCreationId: state.creationId || undefined,
           resumeSessionId: state.sessionId || undefined,
+          createAttempted: state.createAttempted,
           projectAttempted: state.projectAttempted,
           sessionAttempted: state.sessionAttempted,
           baselineProjectIds: state.baselineProjectIds,
@@ -831,6 +841,13 @@ export default {
         state.projectId = err?.partialProjectId || state.projectId;
         state.creationId = err?.partialCreation?.id || err?.partialCreationId || state.creationId;
         state.sessionId = err?.partialSessionId || state.sessionId;
+        state.createAttempted = Boolean(
+          state.createAttempted
+          || err?.createAttempted === true
+          || err?.partialCreation?.id
+          || err?.partialCreationId
+          || isAmbiguousRpcResult(err)
+        );
         state.projectAttempted = err?.projectAttempted ?? state.projectAttempted;
         state.sessionAttempted = err?.sessionAttempted ?? state.sessionAttempted;
         state.baselineProjectIds = err?.baselineProjectIds ?? state.baselineProjectIds;
@@ -861,6 +878,7 @@ export default {
       folderExpanded,
       settingsExpanded,
       settingsSummaryText,
+      workspaceLockedForRetry,
       workspaceCommitted,
       agentOptions,
       hasEligibleAgent,

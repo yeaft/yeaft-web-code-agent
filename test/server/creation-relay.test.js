@@ -659,7 +659,8 @@ describe('Creation WebSocket relay', () => {
     const event = { type };
     const envelope = { type: 'creation_event', ownerId: 'user-a', event };
     const disconnected = browser('user-a');
-    const targetIds = [undefined, null, '', 7, {}, 'unknown', getClientRelayId(disconnected)];
+    const targetIds = [undefined, null, '', 7, {}, 'unknown', ` ${getClientRelayId(client)}`,
+      `${getClientRelayId(client)}\n`, 'x'.repeat(129), 'invalid.token', getClientRelayId(disconnected)];
     const prior = CONFIG.skipAuth;
     try {
       for (const skipAuth of [false, true]) {

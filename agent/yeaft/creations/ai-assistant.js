@@ -13,7 +13,8 @@ const MAX_DOCUMENT_CHARS = 48_000;
 const MAX_SELECTION_BYTES = 32 * 1024;
 const MAX_DOCUMENT_BYTES = 256 * 1024;
 const MAX_OUTPUT_TOKENS = 8192;
-let reviewSeq = 0;
+const CANCELLED_CLIENT_TTL_MS = 5 * 60_000;
+const MAX_CANCELLED_CLIENTS = 1024;
 const SEVERITIES = ['blocker', 'suggestion', 'praise'];
 
 async function defaultAdapterFactory({ yeaftDir }) {
@@ -64,7 +65,7 @@ function commonOptions(payload, store) {
   if (lineEnd !== undefined && lineEnd < (lineStart ?? 1)) fail('INVALID_REQUEST', 'Invalid line range');
   const locale = optionalText(payload.locale === '' ? undefined : payload.locale, 32, 'locale', { required: true });
   if (locale !== undefined && !['zh-CN', 'en'].includes(locale)) fail('INVALID_REQUEST', 'Invalid locale');
-  return { creationId, expectedIncarnation: creation?.incarnation ?? creation?.createdAt,
+  return { creationId, expectedIncarnation: creation?.incarnation ?? creation?.createdAt, expectedRootDir: creation?.rootDir ?? null,
     category, filePath, fileName, lineStart, lineEnd, locale,
     model: optionalText(payload.model === '' ? undefined : payload.model, 512, 'model', { required: true }),
     effort: optionalText(payload.effort === '' ? undefined : payload.effort, 32, 'effort', { required: true }) };
@@ -211,11 +212,12 @@ function parseLensResponse(raw, { jobId, lens, snapshot }) {
     const exactQuote = [quote, quote.replaceAll('\n', '\r\n'), quote.replaceAll('\n', '\r')]
       .find(candidate => jsonSize(candidate) <= 1024 && snapshot.text.includes(candidate));
     if (!exactQuote) return [];
+    const replacement = annotation.suggestedReplacement;
     return [{ id: `${jobId}:${lens.id}:${idx}`, lensId: lens.id,
       severity: SEVERITIES.includes(annotation.severity) ? annotation.severity : 'suggestion',
       title: compactText(annotation.title, 192), comment: compactText(annotation.comment, 768),
       quote: exactQuote, ...quoteLines(exactQuote, annotation.lineStart, snapshot),
-      suggestedReplacement: compactText(annotation.suggestedReplacement, 1024), status: 'open' }];
+      suggestedReplacement: typeof replacement === 'string' && jsonSize(replacement) <= 1024 ? replacement : '', status: 'open' }];
   });
   return { summary: compactText(parsed.summary, 1024), annotations };
 }
@@ -237,9 +239,10 @@ async function abortable(signal, run) {
 
 async function modelText({ adapter, model, maxOutputFor }, options, prompts, signal, onDelta) {
   model = options.model ?? model;
-  const maxTokens = Math.min(MAX_OUTPUT_TOKENS, Math.max(256, maxOutputFor?.(model) || MAX_OUTPUT_TOKENS));
+  const resolvedMaxOutput = maxOutputFor?.(model);
+  const maxTokens = resolvedMaxOutput > 0 ? Math.min(MAX_OUTPUT_TOKENS, resolvedMaxOutput) : MAX_OUTPUT_TOKENS;
   const params = { model, system: prompts.system, messages: [{ role: 'user', content: prompts.user }],
-    tools: [], maxTokens, signal, ...(options.effort ? { effort: options.effort, effortSource: 'user' } : {}) };
+    tools: [], maxTokens, signal, ...(options.effort && maxTokens >= 1024 ? { effort: options.effort, effortSource: 'user' } : {}) };
   let output = '', bytes = 0;
   const append = delta => {
     signal.throwIfAborted();
@@ -290,22 +293,33 @@ const modelError = (error, signal) => signal.aborted
 
 export function createCreationAiAssistant({ yeaftDir, store, emitEvent = () => {}, adapterFactory = defaultAdapterFactory } = {}) {
   const activeJobs = new Map();
-  const latestReviewAttempt = new Map();
+  const cancelledClients = new Map();
+  const latestMockReviewAttempt = new Map();
   let closing;
   const publish = event => {
     try { Promise.resolve(emitEvent(event)).catch(() => {}); } catch { /* transport is best effort */ }
   };
-  function launch(options, targetClientId, work) {
+  function assertCanStart({ targetClientId, isOriginActive }) {
+    const cancelledAt = cancelledClients.get(targetClientId);
+    if (cancelledAt !== undefined && Date.now() - cancelledAt < CANCELLED_CLIENT_TTL_MS) {
+      fail('STALE', 'Client connection was cancelled');
+    }
+    if (typeof isOriginActive === 'function' && !isOriginActive()) fail('STALE', 'Agent connection changed');
     if (closing) fail('INVALID_STATE', 'Creation AI assistant is closed');
     if (activeJobs.size >= MAX_CONCURRENT_JOBS) fail('BUSY', 'Too many active creation AI jobs');
+  }
+  function launch(options, { targetClientId, originSocket, isOriginActive }, work) {
     const jobId = randomUUID();
     const controller = new AbortController();
-    const emit = (type, fields) => publish({ type, jobId, creationId: options.creationId, filePath: options.filePath,
-      ...fields, ...(targetClientId ? { _targetClientId: targetClientId } : {}) });
+    const emit = (type, fields) => {
+      if (typeof isOriginActive === 'function' && !isOriginActive()) return;
+      publish({ type, jobId, creationId: options.creationId, filePath: options.filePath,
+        ...fields, ...(targetClientId ? { _targetClientId: targetClientId } : {}) });
+    };
     // Defer provider work until after the bridge can acknowledge the job ID.
     const promise = setImmediate().then(() => work({ jobId, signal: controller.signal, emit }))
       .finally(() => activeJobs.delete(jobId));
-    activeJobs.set(jobId, { controller, targetClientId, creationId: options.creationId, promise });
+    activeJobs.set(jobId, { controller, targetClientId, originSocket, isOriginActive, creationId: options.creationId, promise });
     return jobId;
   }
   function cancelMatchingJobs(matches) {
@@ -319,7 +333,8 @@ export function createCreationAiAssistant({ yeaftDir, store, emitEvent = () => {
     return { cancelledCount };
   }
   return {
-    startInlineEdit(payload, { targetClientId } = {}) {
+    startInlineEdit(payload, meta = {}) {
+      assertCanStart(meta);
       const options = commonOptions(payload, store);
       const selectedText = boundedText(payload.selectedText, MAX_SELECTION_BYTES, 'selected text', { required: true });
       const fullContent = optionalText(payload.fullContent, MAX_DOCUMENT_BYTES, 'full content');
@@ -331,7 +346,7 @@ export function createCreationAiAssistant({ yeaftDir, store, emitEvent = () => {
       if (preset == null && !instruction?.trim()) fail('INVALID_REQUEST', 'An edit preset or instruction is required');
       const prompts = buildInlineEditPrompts({ ...options, preset, instruction, selectedText,
         ...inlineContext(fullContent, selectedText, options.lineStart ?? 1) });
-      const jobId = launch(options, targetClientId, async ({ signal, emit }) => {
+      const jobId = launch(options, meta, async ({ signal, emit }) => {
         const requestSignal = AbortSignal.any([signal, AbortSignal.timeout(MODEL_TIMEOUT_MS)]);
         let result;
         try {
@@ -349,9 +364,11 @@ export function createCreationAiAssistant({ yeaftDir, store, emitEvent = () => {
       });
       return { jobId, status: 'running' };
     },
-    startReview(payload, { targetClientId } = {}) {
+    startReview(payload, meta = {}) {
+      assertCanStart(meta);
       const options = commonOptions(payload, store);
-      const { creationId, expectedIncarnation, filePath, category, locale } = options;
+      const { creationId, expectedIncarnation, expectedRootDir, filePath, category, locale } = options;
+      const { isOriginActive } = meta;
       const scope = payload.scope ?? 'document';
       if (!['document', 'selection'].includes(scope)) fail('INVALID_REQUEST', 'Invalid review scope');
       const content = scope === 'document' ? boundedText(payload.content, MAX_DOCUMENT_BYTES, 'document content', { required: true })
@@ -362,11 +379,14 @@ export function createCreationAiAssistant({ yeaftDir, store, emitEvent = () => {
       const lenses = resolveReviewLenses(category, payload.lensIds, customPrompt, locale);
       const snapshot = scope === 'selection' ? createReviewSnapshot(selection, options.lineStart ?? 1, selection.length)
         : createReviewSnapshot(content, 1, MAX_DOCUMENT_CHARS);
-      const key = creationId && filePath && scope === 'document' ? `${creationId}\0${filePath}` : undefined;
-      // Resume above the persisted sequence after a process restart.
-      const previousAttempt = key && store.getDocReview?.(creationId, filePath)?.attemptSeq;
-      let attemptSeq;
-      const jobId = launch(options, targetClientId, async ({ jobId, signal, emit }) => {
+      const durable = creationId && filePath && scope === 'document';
+      const expectedCreation = { expectedIncarnation, expectedRootDir };
+      const attemptId = durable ? store.beginDocReviewAttempt?.(creationId, filePath, expectedCreation)?.attemptId : undefined;
+      // Minimal mock stores may not implement the SQLite attempt allocator.
+      const mockKey = durable && !store.beginDocReviewAttempt ? `${creationId}\0${filePath}` : undefined;
+      const mockAttempt = mockKey && Symbol();
+      if (mockKey) latestMockReviewAttempt.set(mockKey, mockAttempt);
+      const jobId = launch(options, meta, async ({ jobId, signal, emit }) => {
         const overallSignal = AbortSignal.any([signal, AbortSignal.timeout(REVIEW_TIMEOUT_MS)]);
         let adapter;
         const runLens = async lens => {
@@ -408,19 +428,25 @@ export function createCreationAiAssistant({ yeaftDir, store, emitEvent = () => {
           : undefined;
         const review = { jobId, creationId, filePath, scope, category, contentHash: snapshot.contentHash, status, overallSummary, lensResults, annotations,
           truncated: snapshot.truncated, reviewedLines: { start: snapshot.start, end: snapshot.end },
-          ...(attemptSeq != null ? { attemptSeq } : {}), ...(failureError ? { error: failureError } : {}) };
-        if (key && !signal.aborted && ['completed', 'partial'].includes(status)) {
+          ...(failureError ? { error: failureError } : {}) };
+        if (durable && ['completed', 'partial'].includes(status)) {
           try {
-            if (latestReviewAttempt.get(key) !== attemptSeq) fail('STALE', 'Document review was superseded by a newer review');
             const persist = () => {
-              const saved = store.saveDocReview(creationId, filePath, review, { expectedIncarnation, attemptSeq });
+              if (signal.aborted || (typeof isOriginActive === 'function' && !isOriginActive())) return null;
+              if (mockKey && latestMockReviewAttempt.get(mockKey) !== mockAttempt) {
+                fail('STALE', 'Document review was superseded by a newer review');
+              }
+              const saved = store.saveDocReview(creationId, filePath, review, { ...expectedCreation, attemptId });
               const current = store.getDocState(creationId, filePath);
               const state = !current || current.status === 'draft' ? store.setDocState(creationId, filePath, 'review') : null;
               return { saved, state };
             };
-            const { saved, state } = store.transaction ? store.transaction(persist) : persist();
-            publish({ type: 'doc_review_updated', creationId, filePath, review: saved });
-            if (state) publish({ type: 'doc_state_updated', creationId, ...state });
+            const committed = store.transaction ? store.transaction(persist) : persist();
+            if (!committed) review.status = 'cancelled';
+            else {
+              publish({ type: 'doc_review_updated', creationId, filePath, review: committed.saved });
+              if (committed.state) publish({ type: 'doc_state_updated', creationId, ...committed.state });
+            }
           } catch (error) {
             if (error?.code === 'STALE' || error?.code === 'NOT_FOUND') review.superseded = true;
             else {
@@ -429,14 +455,10 @@ export function createCreationAiAssistant({ yeaftDir, store, emitEvent = () => {
             }
           }
         }
-        if (key && latestReviewAttempt.get(key) === attemptSeq) latestReviewAttempt.delete(key);
+        if (mockKey && latestMockReviewAttempt.get(mockKey) === mockAttempt) latestMockReviewAttempt.delete(mockKey);
         emit('review_complete', review);
         return review;
       });
-      if (key) {
-        attemptSeq = reviewSeq = Math.max(reviewSeq, Number.isSafeInteger(previousAttempt) ? previousAttempt : 0) + 1;
-        latestReviewAttempt.set(key, attemptSeq);
-      }
       return { jobId, status: 'running', scope, category, lenses: lenses.map(({ id, label }) => ({ id, label })) };
     },
     cancelJob(jobId, { targetClientId } = {}) {
@@ -449,7 +471,18 @@ export function createCreationAiAssistant({ yeaftDir, store, emitEvent = () => {
     },
     cancelClientJobs(targetClientId) {
       if (typeof targetClientId !== 'string' || !targetClientId.length) return { cancelledCount: 0 };
+      const now = Date.now();
+      for (const [clientId, cancelledAt] of cancelledClients) {
+        if (now - cancelledAt >= CANCELLED_CLIENT_TTL_MS) cancelledClients.delete(clientId);
+      }
+      // Refresh insertion order so capacity eviction always drops the oldest tombstone.
+      cancelledClients.delete(targetClientId);
+      if (cancelledClients.size >= MAX_CANCELLED_CLIENTS) cancelledClients.delete(cancelledClients.keys().next().value);
+      cancelledClients.set(targetClientId, now);
       return cancelMatchingJobs(job => job.targetClientId === targetClientId);
+    },
+    cancelSocketJobs(socket) {
+      return cancelMatchingJobs(job => job.originSocket === socket);
     },
     cancelCreationJobs(creationId) {
       return cancelMatchingJobs(job => job.creationId === creationId);

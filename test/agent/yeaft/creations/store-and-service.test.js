@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { EventEmitter } from 'node:events';
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { chmodSync, constants, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, unlinkSync, utimesSync, writeFileSync } from 'node:fs';
@@ -2359,8 +2360,9 @@ describe('Creation categories and document review workflow', () => {
     }
     expect(() => store.saveDocReview(id, filePath, { text: 'x'.repeat(512 * 1024) })).toThrow(err('LIMIT_EXCEEDED'));
     expect(() => store.listDocStates('unknown')).toThrow(err('NOT_FOUND'));
+    store.beginDocReviewAttempt(id, filePath);
     req('delete_creation', { creationId });
-    for (const table of ['creation_doc_states', 'creation_doc_reviews']) {
+    for (const table of ['creation_doc_states', 'creation_doc_reviews', 'creation_doc_review_attempts']) {
       expect(store.one(`SELECT COUNT(*) AS count FROM ${table} WHERE creation_id=?`, creationId).count).toBe(0);
     }
   });
@@ -2372,7 +2374,11 @@ describe('Creation categories and document review workflow', () => {
     store.saveDocReview(id, reviewOnly, { annotations: [{ status: 'open' }, { status: 'accepted' }] });
     expect(store.getDocState(id, reviewOnly)).toBeNull();
     expect(store.listDocStates(id)[reviewOnly]).toEqual({ status: 'draft', updatedAt: expect.any(String), openReviewCount: 1 });
-    for (let i = 0; i < 499; i++) store.setDocState(id, `docs/${i}.md`, 'draft');
+    for (let i = 0; i < 498; i++) store.setDocState(id, `docs/${i}.md`, 'draft');
+    const pending = store.beginDocReviewAttempt(id, 'pending.md');
+    expect(store.beginDocReviewAttempt(id, 'pending.md').attemptId).toBe(pending.attemptId + 1);
+    expect(() => store.beginDocReviewAttempt(id, 'overflow.md')).toThrow(err('LIMIT_EXCEEDED'));
+    store.setDocState(id, 'pending.md', 'draft');
     expect(() => store.setDocState(id, 'overflow.md', 'draft')).toThrow(err('LIMIT_EXCEEDED'));
     expect(() => store.saveDocReview(id, 'overflow.md', {})).toThrow(err('LIMIT_EXCEEDED'));
     const updated = store.setDocState(id, reviewOnly, 'final');
@@ -2391,16 +2397,96 @@ describe('Creation categories and document review workflow', () => {
     const { creation: { id } } = req('create_creation');
     const valid = 'chapter/draft.md';
     const state = store.setDocState(id, valid, 'draft');
-    const review = store.saveDocReview(id, valid, { annotations: [] }, { attemptSeq: 20 });
+    const first = store.beginDocReviewAttempt(id, valid);
+    const second = store.beginDocReviewAttempt(id, valid);
+    const review = store.saveDocReview(id, valid, { annotations: [] }, second);
     for (const filePath of ['chapter\\draft.md', '/chapter/draft.md', '//host/chapter/draft.md',
       '\\\\host\\chapter\\draft.md', 'C:chapter/draft.md', './chapter/draft.md', 'bad\uD800.md']) {
       expect(() => store.setDocState(id, filePath, 'final')).toThrow(err('INVALID_REQUEST'));
       expect(() => store.saveDocReview(id, filePath, {})).toThrow(err('INVALID_REQUEST'));
+      expect(() => store.beginDocReviewAttempt(id, filePath)).toThrow(err('INVALID_REQUEST'));
     }
-    expect(() => store.saveDocReview(id, valid, {}, { attemptSeq: 19 })).toThrow(err('STALE'));
+    expect(() => store.saveDocReview(id, valid, {}, first)).toThrow(err('STALE'));
+    expect(() => store.saveDocReview(id, valid, {}, { attemptId: second.attemptId + 1 })).toThrow(err('STALE'));
+    expect(() => store.saveDocReview(id, 'missing-attempt.md', {}, second)).toThrow(err('STALE'));
     expect(store.getDocState(id, valid)).toEqual(state);
     expect(store.getDocReview(id, valid)).toEqual(review);
     expect(Object.keys(store.listDocStates(id))).toEqual([valid]);
+  });
+
+  it.each(['close', 'replacement', 'commit fence before replacement is observed'])('fences reviews on Agent socket %s', async mode => {
+    const origin = new EventEmitter();
+    const context = { CONFIG: { yeaftDir: dir, serverUrl: 'wss://reviews.example' }, agentId: 'agent:1', ws: origin };
+    const sent = [];
+    let runtime;
+    let finish;
+    const call = vi.fn(() => new Promise(resolve => { finish = resolve; }));
+    const bridge = createCreationBridge({ context, send: message => sent.push(message), createService: options => {
+      return runtime = createCreationService({ ...options, adapterFactory: () => ({ adapter: { call } }) });
+    } });
+    const request = async (op, payload) => {
+      await bridge.request({ type: 'creation_request', requestId: op, ownerId: 'owner', op, payload, targetClientId: 'tab-a' });
+      return sent.find(message => message.requestId === op);
+    };
+    try {
+      const { data: { creation: { id: creationId } } } = await request('create_creation', {});
+      const filePath = 'doc.md';
+      const { data: { jobId } } = await request('review_document', { creationId, filePath, content: 'Draft.', lensIds: ['chief_editor'] });
+      const done = runtime.aiAssistant.waitForJob(jobId);
+      await vi.waitFor(() => expect(call).toHaveBeenCalledTimes(1));
+      expect(origin.listenerCount('close')).toBe(1);
+      if (mode === 'close') origin.emit('close');
+      else context.ws = new EventEmitter();
+      if (mode === 'replacement') await request('get_creation', { creationId });
+      if (mode !== 'commit fence before replacement is observed') {
+        expect(call.mock.calls[0][0].signal.aborted).toBe(true);
+        expect(origin.listenerCount('close')).toBe(0);
+      }
+      finish({ text: '{"summary":"late","annotations":[]}' });
+      expect(await done).toMatchObject({ status: 'cancelled' });
+      expect(runtime.store.getDocReview(creationId, filePath)).toBeNull();
+      expect(runtime.store.getDocState(creationId, filePath)).toBeNull();
+      expect(sent.some(message => message.event?.type.startsWith('doc_'))).toBe(false);
+    } finally { await bridge.close(); }
+    expect(origin.listenerCount('close')).toBe(0);
+    expect(context.ws.listenerCount('close')).toBe(0);
+  });
+
+  it.each([true, false])('supersedes reviews across SQLite connections (newer commits first: %s)', async newerCommitsFirst => {
+    const pending = [];
+    const startRuntime = bootId => createCreationService({ yeaftDir: dir, bootId,
+      adapterFactory: () => ({ adapter: { call: () => new Promise(resolve => pending.push(resolve)) } }),
+    });
+    const first = startRuntime('review-a');
+    let second;
+    try {
+      const { id: creationId } = first.store.createCreation({});
+      const filePath = 'doc.md';
+      const start = runtime => {
+        const { jobId } = runtime.request({ op: 'review_document', payload: { creationId, filePath, content: 'Draft.', lensIds: ['chief_editor'] } });
+        return runtime.aiAssistant.waitForJob(jobId);
+      };
+      const older = start(first);
+      await vi.waitFor(() => expect(pending).toHaveLength(1));
+      second = startRuntime('review-b');
+      const newer = start(second);
+      await vi.waitFor(() => expect(pending).toHaveLength(2));
+      const complete = (index, summary) => pending[index]({ text: JSON.stringify({ summary, annotations: [] }) });
+      if (newerCommitsFirst) {
+        complete(1, 'newer');
+        await newer;
+      }
+      complete(0, 'older');
+      expect(await older).toMatchObject({ superseded: true });
+      if (!newerCommitsFirst) {
+        expect(first.store.getDocReview(creationId, filePath)).toBeNull();
+        complete(1, 'newer');
+      }
+      const result = await newer;
+      expect(result).toMatchObject({ status: 'completed', overallSummary: expect.stringContaining('newer') });
+      expect(first.store.getDocReview(creationId, filePath)).toEqual(result);
+      expect(second.store.getDocReview(creationId, filePath)).toEqual(result);
+    } finally { await Promise.all([first.close(), second?.close()]); }
   });
 
   it('acknowledges bridge jobs without blocking, protects private events, and broadcasts only durable review changes', async () => {
@@ -2425,12 +2511,13 @@ describe('Creation categories and document review workflow', () => {
       const creationId = created.data.creation.id;
       const before = sent.length;
       for (const type of ['inline_edit_delta', 'inline_edit_complete', 'review_lens_complete', 'review_complete']) {
-        for (const _targetClientId of [undefined, '', 123]) emitEvent({ type, _targetClientId });
+        for (const _targetClientId of [undefined, '', 123, ' tab-a', 'tab-a\n', 'x'.repeat(129)]) emitEvent({ type, _targetClientId });
       }
       expect(sent).toHaveLength(before);
       const filePath = 'doc.md';
       const path = { creationId, filePath };
       const content = 'Line one\nLine two';
+      expect(await request('review_document', { ...path, content }, 'bad id')).toMatchObject({ ok: false, errorCode: 'invalid_request' });
       const started = await request('review_document', { ...path, content, lensIds: ['chief_editor'], targetClientId: 'tab-b' });
       expect(started).toMatchObject({ ok: true, data: { status: 'running', category: 'article' } });
       const { jobId } = started.data;

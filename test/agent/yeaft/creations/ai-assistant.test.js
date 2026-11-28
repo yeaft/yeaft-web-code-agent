@@ -275,16 +275,21 @@ describe('Creation AI assistant', () => {
     expect(events.some(event => event.type.startsWith('doc_'))).toBe(false);
   });
 
-  it.each(['delete_creation', 'update_creation'])('cancels active Creation AI jobs on %s', async op => {
+  it.each(['delete_creation', 'update_creation', 'ensure_workspace'])('cancels active Creation AI jobs on %s', async op => {
     const call = vi.fn(() => new Promise(() => {}));
-    const { creationId, events, review } = createServiceWithProvider(call);
+    const { store, creationId, events, review } = createServiceWithProvider(call);
+    expect(store.getCreation(creationId).rootDir).toBeNull();
     const done = [assistant.startReview(review), assistant.startInlineEdit({ ...editing, creationId })]
       .map(({ jobId }) => assistant.waitForJob(jobId));
     await vi.waitFor(() => expect(call).toHaveBeenCalledTimes(2));
     const rootDir = join(dir, 'workspace');
     mkdirSync(rootDir);
-    service.request({ op, payload: { creationId, ...(op === 'update_creation' ? { rootDir } : {}) } });
+    service.request({ op, payload: { creationId, ...(op !== 'delete_creation' ? { rootDir } : {}) } });
     expect(await Promise.all(done)).toMatchObject([{ status: 'cancelled' }, { status: 'cancelled' }]);
+    if (op !== 'delete_creation') {
+      expect(store.getCreation(creationId).rootDir).toBe(rootDir);
+      expect(store.getDocReview(creationId, review.filePath)).toBeNull();
+    }
     expect(call.mock.calls.every(([params]) => params.signal.aborted)).toBe(true);
     expect(events.some(event => event.type.startsWith('doc_'))).toBe(false);
   });
@@ -304,9 +309,65 @@ describe('Creation AI assistant', () => {
     expect(await done[2]).toMatchObject({ status: 'cancelled' });
   });
 
+  it('fences late-decoded starts after a client cancellation, before calling the provider or writing SQLite', () => {
+    const call = vi.fn();
+    const { store, creationId, events, review } = createServiceWithProvider(call);
+    const allocate = vi.spyOn(store, 'beginDocReviewAttempt');
+    const meta = { targetClientId: 'revoked' };
+    expect(assistant.cancelClientJobs(meta.targetClientId)).toEqual({ cancelledCount: 0 });
+    expect(() => assistant.startReview(review, meta)).toThrow(errorCode('STALE'));
+    expect(() => assistant.startInlineEdit({ ...editing, creationId }, meta)).toThrow('Client connection was cancelled');
+    expect(assistant.hasActiveWork()).toBe(false);
+    expect(allocate).not.toHaveBeenCalled();
+    expect(call).not.toHaveBeenCalled();
+    expect(store.getDocReview(creationId, review.filePath)).toBeNull();
+    expect(events).toHaveLength(0);
+  });
+
+  it('expires client tombstones and evicts the oldest at capacity', () => {
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(0);
+    create({ call: vi.fn() });
+    assistant.cancelClientJobs('oldest');
+    for (let i = 0; i < 1024; i++) assistant.cancelClientJobs(`tab-${i}`);
+    expect(assistant.startInlineEdit(editing, { targetClientId: 'oldest' }).status).toBe('running');
+    clock.mockReturnValue(5 * 60_000 - 1);
+    expect(() => assistant.startInlineEdit(editing, { targetClientId: 'tab-0' })).toThrow(errorCode('STALE'));
+    clock.mockReturnValue(5 * 60_000);
+    expect(assistant.startInlineEdit(editing, { targetClientId: 'tab-0' }).status).toBe('running');
+  });
+
+  it('does not offer partial replacements when the serialized suggestion is over budget', async () => {
+    const comment = 'Keep this comment';
+    const call = vi.fn(async () => json('findings', [
+      { quote: 'Draft.', comment, suggestedReplacement: '\n'.repeat(512) },
+      { quote: 'Draft.', comment, suggestedReplacement: 'x'.repeat(1022) },
+    ]));
+    const { review } = createServiceWithProvider(call);
+    const { jobId } = assistant.startReview(review);
+    expect(await assistant.waitForJob(jobId)).toMatchObject({ annotations: [
+      { quote: 'Draft.', comment, suggestedReplacement: '' },
+      { quote: 'Draft.', comment, suggestedReplacement: 'x'.repeat(1022) },
+    ] });
+  });
+
+  it('checks the workspace snapshot at commit even if binding bypasses local cancellation', async () => {
+    let finish;
+    const { store, creationId, events, review } = createServiceWithProvider(() => new Promise(resolve => { finish = resolve; }));
+    const { jobId } = assistant.startReview(review);
+    const done = assistant.waitForJob(jobId);
+    await vi.waitFor(() => expect(finish).toBeTypeOf('function'));
+    const rootDir = join(dir, 'workspace');
+    mkdirSync(rootDir);
+    expect(store.ensureWorkspace(creationId, { rootDir }).creation.rootDir).toBe(rootDir);
+    finish(json('stale'));
+    expect(await done).toMatchObject({ superseded: true });
+    expect(store.getDocReview(creationId, review.filePath)).toBeNull();
+    expect(events.some(event => event.type.startsWith('doc_'))).toBe(false);
+  });
+
   it.each([
     [undefined, undefined, undefined, 8192], [32000, undefined, undefined, 8192],
-    [1200, undefined, undefined, 1200], [125, undefined, undefined, 256],
+    [1200, undefined, undefined, 1200], [125, undefined, undefined, 125],
     [16000, 2048, 'provider/picked', 2048], [1024, 2048, 'provider/picked', 1024],
   ])('enforces the provider output budget (config=%s, model limit=%s, selected=%s)', async (maxOutputTokens, maxOutput, model, expected) => {
     const call = vi.fn().mockResolvedValue({ text: 'edited' });
@@ -314,9 +375,14 @@ describe('Creation AI assistant', () => {
     loadConfig.mockReturnValueOnce({ model: 'default-model', maxOutputTokens,
       availableModels: [{ ref: 'other/picked', id: 'picked', maxOutput: 512 }, { ref: 'provider/picked', id: 'picked', maxOutput }] });
     assistant = createCreationAiAssistant();
-    const { jobId } = assistant.startInlineEdit({ ...editing, model });
+    const { jobId } = assistant.startInlineEdit({ ...editing, model, effort: 'high' });
     expect(await assistant.waitForJob(jobId)).toMatchObject({ status: 'completed' });
-    expect(call).toHaveBeenCalledWith(expect.objectContaining({ model: model ?? 'default-model', maxTokens: expected }));
+    const [[params]] = call.mock.calls;
+    expect(params).toMatchObject({ model: model ?? 'default-model', maxTokens: expected });
+    if (expected < 1024) {
+      expect(params).not.toHaveProperty('effort');
+      expect(params).not.toHaveProperty('effortSource');
+    } else expect(params).toMatchObject({ effort: 'high', effortSource: 'user' });
   });
 
   it('allows standalone FilesTab canvas requests with empty creationId and absolute paths while still rejecting traversal', async () => {

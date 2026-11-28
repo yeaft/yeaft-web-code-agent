@@ -472,6 +472,12 @@ export const zhCN = {
   'creation.review.addPartialWarning': '部分批注超出上下文上限未加入，已保留勾选 {count} 条',
   'creation.review.applying': '应用中…',
   'creation.review.waitComplete': '审稿完成后可采纳或忽略',
+  'creation.ai.timeout': 'AI 请求超时，请重试',
+  'creation.ai.reconnected': '连接已中断，请重试',
+  'creation.review.supersededNotice': '已有更新的审稿结果，本次旧结果已失效',
+  'creation.review.rollbackFailed': '保存批注状态失败，且文档已被修改，无法自动回滚，请手动核对',
+  'creation.review.reopenFailed': '撤销了正文修改，但未能重新打开批注状态，请刷新后核对',
+  'creation.review.refreshing': '正在同步最新审稿状态…',
 
   // Review Lenses (18 pairs across 6 categories)
   'creation.review.lens.logic_continuity': '逻辑与连贯',
@@ -983,6 +989,12 @@ export const en = {
   'creation.review.addPartialWarning': 'Some notes exceeded context limit and remain selected ({count}).',
   'creation.review.applying': 'Applying…',
   'creation.review.waitComplete': 'Actions unlock once review completes',
+  'creation.ai.timeout': 'AI request timed out; please retry.',
+  'creation.ai.reconnected': 'Connection interrupted; please retry.',
+  'creation.review.supersededNotice': 'A newer review superseded this run.',
+  'creation.review.rollbackFailed': 'Failed to save annotation status and document changed; please verify manually.',
+  'creation.review.reopenFailed': 'Text edit was undone, but reopening annotation status failed; please refresh.',
+  'creation.review.refreshing': 'Syncing latest review state…',
 
   // Review Lenses (18 pairs across 6 categories)
   'creation.review.lens.logic_continuity': 'Logic & Continuity',

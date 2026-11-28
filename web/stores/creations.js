@@ -59,10 +59,10 @@ function ackErrorMessage(res, fallback) {
   return fallback;
 }
 
-function isAmbiguousRpcResult(res) {
+export function isAmbiguousRpcResult(res) {
   return !res || res.ambiguous === true
-    || ['timeout', 'disconnected', 'connection_closed', 'offline'].includes(res.error?.code)
-    || /timed?\s*out|disconnect|connection\s+closed|offline/i.test(String(res.error?.message || res.error || ''));
+    || ['timeout', 'disconnected', 'connection_closed', 'offline'].includes(res.error?.code || res.code)
+    || /timed?\s*out|disconnect|connection\s+closed|offline/i.test(String(res.error?.message || res.message || res.error || ''));
 }
 
 function extractSessionId(res) {
@@ -355,6 +355,7 @@ export const useCreationsStore = defineStore('creations', {
     threadMessagesByKey: {},
     docStatesByKey: {},
     docReviewsByKey: {},
+    refreshingReviewKeys: {},
     inlineEditJobs: {},
     reviewJobs: {},
     activeCreation: null,
@@ -906,6 +907,7 @@ export const useCreationsStore = defineStore('creations', {
       attemptKey = null,
       baselineProjectIds,
       baselineSessionIds,
+      createAttempted = false,
       projectAttempted = false,
       sessionAttempted = false,
     }) {
@@ -921,6 +923,8 @@ export const useCreationsStore = defineStore('creations', {
       let created = null;
       let createRes = null;
       let uploadedFilesThisCall = [];
+      let unconfirmedFiles = [];
+      let didAttemptCreate = Boolean(createAttempted);
       let didAttemptProject = projectAttempted;
       let didAttemptSession = sessionAttempted;
       const projectRows = () => chatStore?.yeaftProjects || chatStore?.sessionProjects || [];
@@ -946,6 +950,7 @@ export const useCreationsStore = defineStore('creations', {
           projectId: targetProjectId || resume.projectId,
           creationId: created?.id || trimmedResumeId || resume.creationId,
           sessionId: targetSessionId || resume.sessionId,
+          createAttempted: didAttemptCreate,
           projectAttempted: didAttemptProject,
           sessionAttempted: didAttemptSession,
           baselineProjectIds: capturedBaselineProjects,
@@ -1007,6 +1012,8 @@ export const useCreationsStore = defineStore('creations', {
           }
         } else {
           const filesToSubmit = Array.isArray(rawFiles) ? rawFiles.slice() : [];
+          didAttemptCreate = true;
+          checkpointResume();
           createRes = await this.createCreation(targetId, {
             ...(trimmedTitle ? { title: trimmedTitle } : {}),
             kind,
@@ -1049,6 +1056,12 @@ export const useCreationsStore = defineStore('creations', {
                 uploadedFilesThisCall.push(file);
               }
               ensureSameStore();
+            }
+            if (filesToSubmit.length > 0) {
+              unconfirmedFiles = filesToSubmit
+                .filter(file => !uploadedFilesThisCall.includes(file))
+                .map(file => file?.name)
+                .filter(Boolean);
             }
           } else {
             uploadedFilesThisCall = filesToSubmit;
@@ -1168,6 +1181,7 @@ export const useCreationsStore = defineStore('creations', {
           sessionId: targetSessionId,
           projectId: appliedProjectId,
           ...(projectWarning ? { projectWarning, requestedProjectId: targetProjectId } : {}),
+          ...(unconfirmedFiles.length ? { unconfirmedFiles } : {}),
           rootDir: updated?.rootDir || created.rootDir || trimmedRootDir || '',
           prompt,
           _submittedSnapshot: {
@@ -1179,6 +1193,7 @@ export const useCreationsStore = defineStore('creations', {
         wrapped.partialProjectId = targetProjectId || null;
         wrapped.partialCreation = created || (trimmedResumeId ? { id: trimmedResumeId } : null);
         wrapped.partialSessionId = targetSessionId;
+        wrapped.createAttempted = didAttemptCreate;
         wrapped.projectAttempted = didAttemptProject;
         wrapped.sessionAttempted = didAttemptSession;
         wrapped.baselineProjectIds = capturedBaselineProjects;
@@ -1772,6 +1787,7 @@ export const useCreationsStore = defineStore('creations', {
       deleteKeysWithPrefix(this.nodeContentsByKey, prefix);
       deleteKeysWithPrefix(this.threadMessagesByKey, prefix);
       deleteKeysWithPrefix(this.docReviewsByKey, prefix);
+      deleteKeysWithPrefix(this.refreshingReviewKeys, prefix);
 
       if (this.activeCreation?.agentId === agentId && this.activeCreation?.creationId === creationId) {
         this.activeCreation = null;
@@ -2331,7 +2347,8 @@ export const useCreationsStore = defineStore('creations', {
         bucket[jobId] = {
           ...job,
           status: 'failed',
-          error: 'Request timed out; please retry',
+          errorCode: 'client_timeout',
+          error: 'client_timeout',
         };
       }, timeoutMs);
       aiJobTimers.set(jobId, timer);
@@ -2408,6 +2425,10 @@ export const useCreationsStore = defineStore('creations', {
           contentHash: sameGenExisting?.contentHash || '',
           truncated: Boolean(data?.truncated ?? sameGenExisting?.truncated),
           truncatedEndLine: data?.truncatedEndLine ?? sameGenExisting?.truncatedEndLine ?? null,
+          reviewedLines: data?.reviewedLines && typeof data.reviewedLines === 'object'
+            ? { start: data.reviewedLines.start, end: data.reviewedLines.end }
+            : (sameGenExisting?.reviewedLines ? { start: sameGenExisting.reviewedLines.start, end: sameGenExisting.reviewedLines.end } : null),
+          errorCode: sameGenExisting?.errorCode ?? null,
           error: sameGenExisting?.error ?? null,
         };
         if (status === 'running') {
@@ -2440,8 +2461,9 @@ export const useCreationsStore = defineStore('creations', {
       delete this.reviewJobs[jobId];
     },
 
-    failStaleAiJobs(agentId = null, reason = 'Connection interrupted; please retry') {
+    failStaleAiJobs(agentId = null, reason = 'connection_interrupted', errorCode = null) {
       const filterAgentId = agentId ? String(agentId).trim() : null;
+      const resolvedCode = errorCode || (reason === 'connection_interrupted' || reason === 'client_timeout' ? reason : null);
       for (const [jobId, job] of Object.entries(this.inlineEditJobs)) {
         if (!job || job.status !== 'running') continue;
         if (filterAgentId && job.agentId !== filterAgentId) continue;
@@ -2449,6 +2471,7 @@ export const useCreationsStore = defineStore('creations', {
         this.inlineEditJobs[jobId] = {
           ...job,
           status: 'failed',
+          ...(resolvedCode ? { errorCode: resolvedCode } : {}),
           error: reason,
         };
       }
@@ -2459,13 +2482,14 @@ export const useCreationsStore = defineStore('creations', {
         this.reviewJobs[jobId] = {
           ...job,
           status: 'failed',
+          ...(resolvedCode ? { errorCode: resolvedCode } : {}),
           error: reason,
         };
       }
     },
 
     settleDisconnectedAiJobs(agentId = null) {
-      this.failStaleAiJobs(agentId, 'Connection interrupted; please retry');
+      this.failStaleAiJobs(agentId, 'connection_interrupted', 'connection_interrupted');
     },
 
     async loadDocStates(agentId, creationId) {
@@ -2530,6 +2554,11 @@ export const useCreationsStore = defineStore('creations', {
     getDocReview(agentId, creationId, filePath) {
       if (!agentId || !creationId || !filePath) return null;
       return this.docReviewsByKey[creationDocReviewKey(agentId, creationId, filePath)] || null;
+    },
+
+    isDocReviewRefreshing(agentId, creationId, filePath) {
+      if (!agentId || !creationId || !filePath) return false;
+      return Boolean(this.refreshingReviewKeys[creationDocReviewKey(agentId, creationId, filePath)]);
     },
 
     async resolveReviewAnnotation(agentId, creationId, filePath, annotationId, status) {
@@ -3031,6 +3060,21 @@ export const useCreationsStore = defineStore('creations', {
           }
           clearAiJobTimer(jobId);
           const nextStatus = payload.status || (payload.error ? 'failed' : 'completed');
+          const rawReviewedLines = payload.reviewedLines && typeof payload.reviewedLines === 'object'
+            ? payload.reviewedLines
+            : (payload.review?.reviewedLines && typeof payload.review.reviewedLines === 'object'
+              ? payload.review.reviewedLines
+              : prev.reviewedLines);
+          const reviewedLines = rawReviewedLines && typeof rawReviewedLines === 'object'
+            ? { start: rawReviewedLines.start, end: rawReviewedLines.end }
+            : null;
+          const truncated = payload.truncated !== undefined
+            ? Boolean(payload.truncated)
+            : Boolean(payload.review?.truncated ?? prev.truncated);
+          const truncatedEndLine = payload.truncatedEndLine !== undefined
+            ? payload.truncatedEndLine
+            : (prev.truncatedEndLine ?? reviewedLines?.end ?? null);
+          const superseded = Boolean(payload.superseded);
           const nextJob = {
             ...prev,
             creationId: creationId || prev.creationId,
@@ -3038,40 +3082,52 @@ export const useCreationsStore = defineStore('creations', {
             scope: payload.scope || prev.scope,
             category: payload.category || prev.category,
             status: nextStatus,
-            superseded: Boolean(payload.superseded),
+            superseded,
             overallSummary: payload.overallSummary !== undefined ? payload.overallSummary : prev.overallSummary,
             lensResults: Array.isArray(payload.lensResults) ? payload.lensResults : prev.lensResults,
             annotations: Array.isArray(payload.annotations) ? payload.annotations : prev.annotations,
             contentHash: payload.contentHash !== undefined ? payload.contentHash : prev.contentHash,
-            truncated: payload.truncated !== undefined ? Boolean(payload.truncated) : Boolean(prev.truncated),
-            truncatedEndLine: payload.truncatedEndLine !== undefined ? payload.truncatedEndLine : (prev.truncatedEndLine ?? null),
+            truncated,
+            truncatedEndLine,
+            reviewedLines,
+            errorCode: payload.errorCode ?? null,
             error: payload.error ?? null,
           };
           this.reviewJobs[jobId] = nextJob;
 
           if (
-            !payload.superseded
+            !superseded
             && nextJob.creationId
             && nextJob.filePath
             && nextJob.scope === 'document'
             && (nextStatus === 'completed' || nextStatus === 'partial')
           ) {
             const rKey = creationDocReviewKey(agentId, nextJob.creationId, nextJob.filePath);
-            const reviewRecord = payload.review || {
-              jobId,
-              creationId: nextJob.creationId,
-              filePath: nextJob.filePath,
-              scope: nextJob.scope,
-              category: nextJob.category,
-              status: nextStatus,
-              overallSummary: nextJob.overallSummary,
-              lensResults: nextJob.lensResults,
-              annotations: nextJob.annotations,
-              contentHash: nextJob.contentHash,
-              truncated: nextJob.truncated,
-              truncatedEndLine: nextJob.truncatedEndLine,
-              updatedAt: payload.updatedAt || Date.now(),
-            };
+            const reviewRecord = payload.review
+              ? {
+                  ...payload.review,
+                  truncated: nextJob.truncated,
+                  truncatedEndLine: nextJob.truncatedEndLine,
+                  reviewedLines: nextJob.reviewedLines,
+                  superseded: nextJob.superseded,
+                }
+              : {
+                  jobId,
+                  creationId: nextJob.creationId,
+                  filePath: nextJob.filePath,
+                  scope: nextJob.scope,
+                  category: nextJob.category,
+                  status: nextStatus,
+                  overallSummary: nextJob.overallSummary,
+                  lensResults: nextJob.lensResults,
+                  annotations: nextJob.annotations,
+                  contentHash: nextJob.contentHash,
+                  truncated: nextJob.truncated,
+                  truncatedEndLine: nextJob.truncatedEndLine,
+                  reviewedLines: nextJob.reviewedLines,
+                  superseded: nextJob.superseded,
+                  updatedAt: payload.updatedAt || Date.now(),
+                };
             this.docReviewsByKey[rKey] = reviewRecord;
             const dKey = creationDetailKey(agentId, nextJob.creationId);
             const prevBucket = this.docStatesByKey[dKey] || {};
@@ -3146,6 +3202,33 @@ export const useCreationsStore = defineStore('creations', {
     async reconcileAfterReconnect(agentId = null) {
       const gen = storeGeneration;
       const filterAgentId = agentId ? String(agentId).trim() : null;
+
+      // Collect cached and in-flight document review keys BEFORE settling
+      // disconnected running reviewJobs so open review panels sync latest state.
+      const docReviewReloadTargets = new Map();
+      for (const key of Object.keys(this.docReviewsByKey)) {
+        const firstSep = key.indexOf(KEY_SEP);
+        if (firstSep <= 0) continue;
+        const secondSep = key.indexOf(KEY_SEP, firstSep + KEY_SEP.length);
+        if (secondSep <= firstSep + KEY_SEP.length) continue;
+        const aId = key.slice(0, firstSep);
+        const cId = key.slice(firstSep + KEY_SEP.length, secondSep);
+        const filePath = key.slice(secondSep + KEY_SEP.length);
+        if (!aId || !cId || !filePath) continue;
+        if (filterAgentId && aId !== filterAgentId) continue;
+        docReviewReloadTargets.set(key, { agentId: aId, creationId: cId, filePath });
+      }
+      for (const job of Object.values(this.reviewJobs)) {
+        if (!job || job.status !== 'running' || job.scope !== 'document') continue;
+        const aId = job.agentId;
+        const cId = job.creationId;
+        const filePath = job.filePath;
+        if (!aId || !cId || !filePath) continue;
+        if (filterAgentId && aId !== filterAgentId) continue;
+        const rKey = creationDocReviewKey(aId, cId, filePath);
+        docReviewReloadTargets.set(rKey, { agentId: aId, creationId: cId, filePath });
+      }
+
       this.settleDisconnectedAiJobs(filterAgentId);
       const tasks = [];
 
@@ -3170,6 +3253,21 @@ export const useCreationsStore = defineStore('creations', {
       }
       for (const { agentId: aId, creationId: cId } of docStateReloadTargets.values()) {
         tasks.push(this.loadDocStates(aId, cId).catch(() => {}));
+      }
+
+      for (const [rKey, { agentId: aId, creationId: cId, filePath }] of docReviewReloadTargets.entries()) {
+        this.refreshingReviewKeys[rKey] = true;
+        tasks.push((async () => {
+          try {
+            await this.loadDocReview(aId, cId, filePath);
+          } catch {
+            // non-fatal during reconnect reconciliation
+          } finally {
+            if (gen === storeGeneration) {
+              delete this.refreshingReviewKeys[rKey];
+            }
+          }
+        })());
       }
 
       if (active && active.agentId && active.creationId && (!filterAgentId || active.agentId === filterAgentId)) {
@@ -3273,6 +3371,7 @@ export const useCreationsStore = defineStore('creations', {
       this.threadMessagesByKey = {};
       this.docStatesByKey = {};
       this.docReviewsByKey = {};
+      this.refreshingReviewKeys = {};
       this.inlineEditJobs = {};
       this.reviewJobs = {};
       this.activeCreation = null;

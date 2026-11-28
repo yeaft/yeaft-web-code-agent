@@ -75,7 +75,7 @@ export function createCreationService({ yeaftDir, storageRoot, namespaceKey, nam
         thread = store.getThread(id);
         const starter = input.starterNode;
         if (starter != null && starter !== false) store.createNode(id, starter === true ? {} : object(starter, 'starter node'));
-      } });
+      }, onWorkspaceMaterialized: id => aiAssistant.cancelCreationJobs(id) });
       const { id } = creation;
       if (creation.deduplicated) return { ...detail(id), deduplicated: true };
       const sources = store.listSources(id).map(source => media(source, 'source'));
@@ -95,7 +95,9 @@ export function createCreationService({ yeaftDir, storageRoot, namespaceKey, nam
     },
     get_creation: id => detail(id),
     ensure_workspace: (id, { rootDir }) => {
+      const previousRoot = store.getCreation(id).rootDir ?? null;
       const result = store.ensureWorkspace(id, { rootDir });
+      if (result.materialized || (result.creation?.rootDir ?? null) !== previousRoot) aiAssistant.cancelCreationJobs(id);
       if (result.materialized) emit('creation_upserted', id, { creation: result.creation });
       return result;
     },
@@ -103,9 +105,9 @@ export function createCreationService({ yeaftDir, storageRoot, namespaceKey, nam
     update_creation: (id, p) => {
       const patch = p.patch == null ? p : object(p.patch, 'creation patch');
       const checksRoot = Object.hasOwn(patch, 'rootDir');
-      const previousRoot = checksRoot ? store.getCreation(id).rootDir : undefined;
+      const previousRoot = checksRoot ? (store.getCreation(id).rootDir ?? null) : undefined;
       const creation = store.updateCreation(id, patch);
-      if (checksRoot && creation.rootDir !== previousRoot) aiAssistant.cancelCreationJobs(id);
+      if (checksRoot && (creation.rootDir ?? null) !== previousRoot) aiAssistant.cancelCreationJobs(id);
       emit('creation_upserted', id, { creation });
       return { creation };
     },
@@ -263,7 +265,7 @@ export function createCreationService({ yeaftDir, storageRoot, namespaceKey, nam
       if (closing) fail('INVALID_STATE', 'Creations is closed');
       if (typeof op !== 'string' || !Object.hasOwn(ops, op)) fail('UNSUPPORTED', 'Unknown Creations operation');
       object(payload, 'Creations payload');
-      return boundedResponse(ops[op](payload.creationId ?? (op === 'create_creation' ? undefined : payload.id), payload, { targetClientId: meta?.targetClientId }));
+      return boundedResponse(ops[op](payload.creationId ?? (op === 'create_creation' ? undefined : payload.id), payload, meta));
     },
     handleMediaRead(msg) {
       if (closing) fail('INVALID_STATE', 'Creations is closed');

@@ -1251,7 +1251,7 @@ describe('Cosmos Creations — End-to-End Web Store <-> Server Relay <-> Agent S
     }
   });
 
-  it('R3-F5: patches the importKey-deduplicated Creation with edits made after its lost ACK', async () => {
+  it('F10/R3-F5: locks workspace inputs after a lost create ACK and retries revised metadata', async () => {
     await registerBrowserStores();
     const { default: CreationCreateModal } = await import('../../web/components/workbench/CreationCreateModal.js');
     chatStore.currentAgent = route.agentId;
@@ -1266,7 +1266,15 @@ describe('Cosmos Creations — End-to-End Web Store <-> Server Relay <-> Agent S
       return true;
     });
     const workspace = vi.spyOn(creationsStore, 'createWorkspaceCreation');
-    const modal = render(CreationCreateModal, { stubs: { Teleport: true }, attachTo: document.body });
+    const rootDir = join(tempDirA, 'lost-ack-workspace');
+    mkdirSync(rootDir);
+    const modal = render(CreationCreateModal, {
+      props: { initialRootDir: rootDir }, stubs: { Teleport: true }, attachTo: document.body,
+    });
+    const folder = () => modal.get('#creation-create-folder');
+    const dropzone = () => modal.get('.creation-dropzone');
+    expect(folder().element.disabled).toBe(false);
+    expect(dropzone().attributes('aria-disabled')).toBe('false');
     await modal.get('#creation-create-title').setValue('Original atlas');
     vi.useFakeTimers();
     try {
@@ -1276,11 +1284,17 @@ describe('Cosmos Creations — End-to-End Web Store <-> Server Relay <-> Agent S
       await vi.advanceTimersByTimeAsync(45_000);
       expect(modal.get('[role="alert"]').text()).toContain('timed out');
       expect(modal.emitted('created')).toBeUndefined();
+      expect(folder().element.disabled).toBe(true);
+      expect(folder().element.value).toBe(rootDir);
+      expect(dropzone().attributes('aria-disabled')).toBe('true');
+      expect(dropzone().attributes('tabindex')).toBe('-1');
+      expect(dropzone().get('input[type="file"]').element.disabled).toBe(true);
+      expect(modal.text()).toContain(t('creation.create.workspaceCommittedHint'));
       await modal.get('#creation-create-title').setValue('Revised slides');
       await button(modal, t('creation.category.deck'), '.creation-create-category-title').trigger('click');
       modal.get('button[type="submit"]').element.click();
       await flushPromises();
-      expect(workspace).toHaveBeenLastCalledWith(expect.objectContaining({ resumeCreationId: undefined, title: 'Revised slides', kind: 'deck', category: 'deck' }));
+      expect(workspace).toHaveBeenLastCalledWith(expect.objectContaining({ resumeCreationId: undefined, createAttempted: true, rootDir, title: 'Revised slides', kind: 'deck', category: 'deck' }));
       const creates = send.mock.calls.map(([msg]) => msg).filter(msg => msg.op === 'create_creation');
       expect(creates).toHaveLength(2);
       expect(creates[0].payload.importKey).toBeTruthy();
@@ -3032,7 +3046,12 @@ describe('File Canvas and route-scoped composer references', () => {
     vi.unstubAllGlobals();
   });
 
-  async function canvasAiFixture(reply, content = 'First line\nOld passage\nLast line') {
+  const originalContent = 'First line\nOld passage\nLast line';
+  const contentHash = content => createHash('sha256').update(content).digest('hex');
+  const hasMarkFinal = wrapper => wrapper.findAll('.canvas-review-bulk-bar button')
+    .some(item => item.text().includes(t('creation.docStatus.markFinal')));
+
+  async function canvasAiFixture(reply, content = originalContent, props = {}) {
     const { chat } = await registerBrowserStores();
     const { useCreationsStore } = await import('../../web/stores/creations.js');
     const store = useCreationsStore();
@@ -3044,10 +3063,10 @@ describe('File Canvas and route-scoped composer references', () => {
       }));
       return true;
     });
-    const file = Vue.reactive({ name: 'chapter.md', path: '/atlas/chapter.md', content });
+    const file = Vue.reactive({ name: 'chapter.md', path: 'docs/chapter.md', content });
     const wrapper = render(FileCanvasView, { translate: interpolateTranslation, props: {
       routeKey, file, agentId: route.agentId, creationId: 'atlas',
-      'onUpdate:content': content => { file.content = content; },
+      'onUpdate:content': content => { file.content = content; }, ...props,
     } });
     const event = (type, fields) => store.handleCreationEvent({
       agentId: route.agentId, event: { type, creationId: 'atlas', filePath: file.path, ...fields },
@@ -3174,7 +3193,8 @@ describe('File Canvas and route-scoped composer references', () => {
     const { store, wire, file, wrapper, event } = await canvasAiFixture(({ op, payload }) => {
       if (op === 'review_document') return { jobId: 'review', status: 'running', lenses };
       if (op === 'update_review_annotation') {
-        return { review: { status: 'partial', annotations: store.getDocReview(route.agentId, 'atlas', file.path).annotations
+        const review = store.getDocReview(route.agentId, 'atlas', file.path);
+        return { review: { ...review, annotations: review.annotations
           .map(ann => ann.id === payload.annotationId ? { ...ann, status: payload.status } : ann) } };
       }
       return {};
@@ -3201,7 +3221,8 @@ describe('File Canvas and route-scoped composer references', () => {
     expect(progress()[0].classes()).toContain('active');
     expect(progress()[1].text()).toContain('…');
     expect(progress()[2].classes()).toContain('is-failed');
-    event('review_complete', { jobId: 'review', status: 'partial', lensResults, annotations, overallSummary: 'Improve clarity' });
+    event('review_complete', { jobId: 'review', status: 'partial', lensResults, annotations, overallSummary: 'Improve clarity',
+      contentHash: contentHash(file.content) });
     await Vue.nextTick();
     expect(progress()).toHaveLength(0);
     expect(panel.get('[role="status"]').text()).toContain(t('creation.review.partialWarning'));
@@ -3253,7 +3274,7 @@ describe('File Canvas and route-scoped composer references', () => {
 
   it('offers Mark as Final when a completed review has no annotations', async () => {
     const { wrapper } = await canvasAiFixture(({ op }) => (
-      op === 'get_doc_review' ? { review: { scope: 'document', status: 'completed', annotations: [] } } : {}
+      op === 'get_doc_review' ? { review: { jobId: 'clean-review', scope: 'document', status: 'completed', annotations: [], contentHash: contentHash(originalContent) } } : {}
     ));
     await wrapper.get('.canvas-review-trigger').trigger('click');
     await flushPromises();
@@ -3386,6 +3407,34 @@ describe('File Canvas and route-scoped composer references', () => {
     expect(wrapper.get('.canvas-review-panel').text()).not.toContain(t('creation.review.running'));
   });
 
+  it('F3: a late cancel receipt cannot reopen the configurator after a new review completes', async () => {
+    let jobs = 0;
+    const { wrapper, store, wire, event } = await canvasAiFixture(({ op }) => (
+      op === 'review_document' ? { jobId: `cancel-race-${++jobs}`, status: 'running' } : {}
+    ), originalContent, { creationId: '', persistedDocPath: '' });
+    const cancelAck = deferred();
+    const send = wire.getMockImplementation();
+    wire.mockImplementation(request => {
+      if (request.op !== 'cancel_ai_job') return send(request);
+      void cancelAck.promise.then(() => store.handleCreationResponse({
+        ...request, type: 'creation_response', ok: true, data: {},
+      }));
+      return true;
+    });
+    await wrapper.get('.canvas-review-trigger').trigger('click');
+    await button(wrapper, t('creation.review.start')).trigger('click');
+    await flushPromises();
+    await button(wrapper, t('creation.review.cancel')).trigger('click');
+    await button(wrapper, t('creation.review.start')).trigger('click');
+    await flushPromises();
+    event('review_complete', { creationId: '', jobId: 'cancel-race-2', overallSummary: 'New results' });
+    await Vue.nextTick();
+    cancelAck.resolve();
+    await flushPromises();
+    expect(wrapper.find('.canvas-review-lens-grid').exists()).toBe(false);
+    expect(wrapper.get('.canvas-review-summary').text()).toContain('New results');
+  });
+
   it.each(['clearAll', 'clearAiJob', 'reconnect'])('F4/B6: fences AI events after %s', async transition => {
     const { store, event, file } = await canvasAiFixture(({ op }) => ({ jobId: op, status: 'running' }));
     const payload = { creationId: 'atlas', filePath: file.path };
@@ -3422,7 +3471,7 @@ describe('File Canvas and route-scoped composer references', () => {
 
   it.each(['open blocker', 'edited content'])('F5: a clean selection review does not finalize a document with %s', async reason => {
     const documentReview = { jobId: 'document-review', scope: 'document', status: 'completed',
-      annotations: reason === 'open blocker' ? [blocker] : [] };
+      annotations: reason === 'open blocker' ? [blocker] : [], contentHash: contentHash(originalContent) };
     const { wrapper, file, store, event, selectPassage } = await canvasAiFixture(({ op }) => {
       if (op === 'get_doc_review') return { review: documentReview };
       if (op === 'review_document') return { jobId: 'selection-review', status: 'running', scope: 'selection' };
@@ -3431,8 +3480,7 @@ describe('File Canvas and route-scoped composer references', () => {
     await wrapper.get('.canvas-review-trigger').trigger('click');
     await flushPromises();
     const panel = wrapper.get('.canvas-review-panel');
-    const hasMarkFinal = () => panel.findAll('button').some(item => item.text().includes(t('creation.docStatus.markFinal')));
-    expect(hasMarkFinal()).toBe(reason === 'edited content');
+    expect(hasMarkFinal(panel)).toBe(reason === 'edited content');
     if (reason === 'edited content') file.content += '\nUnreviewed edit';
     await selectPassage();
     const popover = wrapper.get('.canvas-inline-popover');
@@ -3442,7 +3490,7 @@ describe('File Canvas and route-scoped composer references', () => {
     event('review_complete', { jobId: 'selection-review', scope: 'selection', status: 'completed', annotations: [] });
     await Vue.nextTick();
     expect(panel.get('.canvas-review-list').text()).toContain(t('creation.review.noIssues'));
-    expect(hasMarkFinal()).toBe(false);
+    expect(hasMarkFinal(panel)).toBe(false);
     expect(wrapper.emitted('update:doc-status')).toBeUndefined();
     expect(store.getDocReview(route.agentId, 'atlas', file.path)).toEqual(documentReview);
   });
@@ -3512,6 +3560,296 @@ describe('File Canvas and route-scoped composer references', () => {
       .toEqual(['note-7']);
     expect(panel.get('[role="alert"]').text()).toContain(interpolateTranslation('creation.review.addPartialWarning', { count: 1 }));
   });
+
+  it('F1: bounds repetitive anchor lookup and rejects quotes spilling past the reviewed window', async () => {
+    const { applyTextReplacement } = await import('../../web/components/workbench/FileCanvasView.js');
+    const repetitive = 'a'.repeat(256 * 1024);
+    const start = performance.now();
+    const result = applyTextReplacement(repetitive, { originalText: 'aa', revisedText: 'b' });
+    expect(performance.now() - start).toBeLessThan(100);
+    expect(result).toEqual({ applied: false, content: repetitive, reason: 'ambiguous' });
+
+    const content = 'First line\nSecond line\nThird line';
+    const anchor = { originalText: 'First line\nSecond line', revisedText: 'Replacement', lineStart: 1 };
+    expect(applyTextReplacement(content, { ...anchor, lineEnd: 1 })).toEqual({ applied: false, content, reason: 'stale' });
+    expect(applyTextReplacement(content, { ...anchor, lineEnd: 2 })).toEqual({ applied: true, content: 'Replacement\nThird line' });
+  });
+
+  it('F1: does not anchor visible Markdown prose to a hidden link title', async () => {
+    const content = '[link](https://example.test "A B")\n\n**A** B';
+    const { wrapper, file, wire } = await canvasAiFixture(() => ({}), content);
+    const paragraph = wrapper.get('.canvas-doc-content p:last-child');
+    const anchorNode = paragraph.get('strong').element.firstChild;
+    const focusNode = paragraph.element.lastChild;
+    expect(paragraph.text()).toBe('A B');
+    const selection = vi.spyOn(window, 'getSelection').mockReturnValue({
+      isCollapsed: false, anchorNode, focusNode, toString: () => 'A B',
+      getRangeAt: () => ({ getBoundingClientRect: () => ({ top: 0, left: 0, width: 20 }) }),
+    });
+    try {
+      await wrapper.get('.canvas-doc-page').trigger('mouseup');
+      const popover = wrapper.get('.canvas-inline-popover');
+      expect(popover.text()).toContain(t('creation.canvas.ambiguousSelection'));
+      expect(button(popover, t('creation.inlineEdit.polish')).element.disabled).toBe(true);
+      expect(file.content).toBe(content);
+      expect(wire).not.toHaveBeenCalled();
+    } finally {
+      selection.mockRestore();
+    }
+  });
+
+  it.each([false, true])('F2: rolls back failed durable Accept unless the text changed mid-flight (%s)', async diverged => {
+    const review = { jobId: 'durable', scope: 'document', status: 'completed', annotations: [blocker],
+      contentHash: contentHash(originalContent) };
+    const { wrapper, store, wire, file } = await canvasAiFixture(({ op }) => op === 'get_doc_review' ? { review } : {});
+    const response = deferred();
+    const send = wire.getMockImplementation();
+    wire.mockImplementation(request => {
+      if (request.op !== 'update_review_annotation') return send(request);
+      void response.promise.then(() => store.handleCreationResponse({
+        ...request, type: 'creation_response', ok: false, error: 'Could not save acceptance',
+      }));
+      return true;
+    });
+    await wrapper.get('.canvas-review-trigger').trigger('click');
+    await flushPromises();
+    const card = wrapper.get('.canvas-review-card');
+    await button(card, t('creation.review.acceptFix')).trigger('click');
+    expect(file.content).toBe(originalContent.replace(blocker.quote, blocker.suggestedReplacement));
+    if (diverged) file.content += '\nTyped during the request';
+    const pendingContent = file.content;
+    await Vue.nextTick();
+    response.resolve();
+    await flushPromises();
+    expect(file.content).toBe(diverged ? pendingContent : originalContent);
+    expect(wrapper.find('.canvas-undo-toast').exists()).toBe(false);
+    expect(card.classes()).toContain('is-open');
+    expect(hasMarkFinal(wrapper)).toBe(false);
+    expect(wrapper.get('.canvas-review-panel [role="alert"] span').text()).toBe(
+      diverged ? t('creation.review.rollbackFailed') : 'Could not save acceptance',
+    );
+  });
+
+  async function startSelectionReview(selectPassage, wrapper) {
+    await selectPassage();
+    const popover = wrapper.get('.canvas-inline-popover');
+    await button(popover, `${t('creation.inlineEdit.quickReview')} ▾`).trigger('click');
+    await button(popover, t('creation.review.lens.prose_craft'), '[role="menuitem"]').trigger('click');
+    await flushPromises();
+  }
+
+  it('F2/F6: accepting and undoing a selection fix stays local and cannot authorize changed content', async () => {
+    const review = { jobId: 'durable', scope: 'document', status: 'completed', annotations: [],
+      contentHash: contentHash(originalContent) };
+    const { wrapper, store, wire, file, event, selectPassage } = await canvasAiFixture(({ op }) => {
+      if (op === 'get_doc_review') return { review };
+      if (op === 'review_document') return { jobId: 'selection', status: 'running' };
+      return {};
+    });
+    const resolve = vi.spyOn(store, 'resolveReviewAnnotation');
+    await wrapper.get('.canvas-review-trigger').trigger('click');
+    await flushPromises();
+    expect(hasMarkFinal(wrapper)).toBe(true);
+    await startSelectionReview(selectPassage, wrapper);
+    event('review_complete', { jobId: 'selection', scope: 'selection', annotations: [blocker] });
+    await Vue.nextTick();
+    const card = wrapper.get('.canvas-review-card');
+    await button(card, t('creation.review.acceptFix')).trigger('click');
+    expect(file.content).toBe(originalContent.replace(blocker.quote, blocker.suggestedReplacement));
+    expect(card.classes()).toContain('is-accepted');
+    expect(hasMarkFinal(wrapper)).toBe(false);
+    await button(wrapper.get('.canvas-undo-toast'), t('creation.canvas.undoReplace')).trigger('click');
+    expect(file.content).toBe(originalContent);
+    expect(card.classes()).toContain('is-open');
+    expect(hasMarkFinal(wrapper)).toBe(true);
+    expect(resolve).not.toHaveBeenCalled();
+    expect(wire.mock.calls.some(([request]) => request.op === 'update_review_annotation')).toBe(false);
+    expect(store.getDocReview(route.agentId, 'atlas', file.path)).toEqual(review);
+  });
+
+  it('F5: retires a superseded run and shows the latest durable review', async () => {
+    const { wrapper, store, event } = await canvasAiFixture(({ op }) => (
+      op === 'review_document' ? { jobId: 'older', status: 'running' } : {}
+    ));
+    await wrapper.get('.canvas-review-trigger').trigger('click');
+    await flushPromises();
+    await button(wrapper, t('creation.review.start')).trigger('click');
+    await flushPromises();
+    const latest = { jobId: 'newer', scope: 'document', status: 'completed', annotations: [],
+      overallSummary: 'Newer review', contentHash: contentHash(originalContent) };
+    event('doc_review_updated', { review: latest });
+    event('review_complete', { jobId: 'older', superseded: true, overallSummary: 'Stale review', annotations: [blocker] });
+    await Vue.nextTick();
+    expect(wrapper.get('.canvas-review-superseded-banner').text()).toBe(t('creation.review.supersededNotice'));
+    expect(wrapper.get('.canvas-review-summary').text()).toContain('Newer review');
+    expect(wrapper.find('.canvas-review-card').exists()).toBe(false);
+    expect(store.reviewJobs.older).toBeUndefined();
+    expect(hasMarkFinal(wrapper)).toBe(true);
+  });
+
+  it('F6: mounting against a cached review authorizes only the matching UTF-8 revision', async () => {
+    const revisionA = `${originalContent}\r\n${'Résumé 🌱 '.repeat(15)}`;
+    const revisionB = `${revisionA}\nUnreviewed copy`;
+    const review = { jobId: 'durable', scope: 'document', status: 'completed', annotations: [], contentHash: contentHash(revisionA) };
+    const { wrapper, file } = await canvasAiFixture(({ op }) => op === 'get_doc_review' ? { review } : {}, revisionB);
+    await wrapper.get('.canvas-review-trigger').trigger('click');
+    await flushPromises();
+    expect(wrapper.get('.canvas-review-list').text()).toContain(t('creation.review.noIssues'));
+    expect(hasMarkFinal(wrapper)).toBe(false);
+    file.content = revisionA;
+    await Vue.nextTick();
+    expect(hasMarkFinal(wrapper)).toBe(true);
+  });
+
+  it('F6: a durable fix cannot authorize unrelated edits already in the document', async () => {
+    const review = { jobId: 'durable', scope: 'document', status: 'completed', annotations: [blocker],
+      contentHash: contentHash(originalContent) };
+    const { wrapper, file } = await canvasAiFixture(({ op }) => op === 'get_doc_review' ? { review } : {},
+      `${originalContent}\nUnreviewed edits`);
+    await wrapper.get('.canvas-review-trigger').trigger('click');
+    await flushPromises();
+    const card = wrapper.get('.canvas-review-card');
+    await button(card, t('creation.review.acceptFix')).trigger('click');
+    await flushPromises();
+    expect(card.classes()).toContain('is-accepted');
+    expect(file.content).toContain(blocker.suggestedReplacement);
+    expect(hasMarkFinal(wrapper)).toBe(false);
+  });
+
+  it('F6: reconnect refreshes cached and running durable review targets before allowing Final', async () => {
+    const initial = { jobId: 'cached', scope: 'document', status: 'completed', annotations: [], contentHash: contentHash(originalContent) };
+    const runningPath = 'docs/appendix.md';
+    const { wrapper, store, wire, file } = await canvasAiFixture(({ op }) => {
+      if (op === 'get_doc_review') return { review: initial };
+      if (op === 'review_document') return { jobId: 'running-appendix', status: 'running' };
+      return {};
+    });
+    await wrapper.get('.canvas-review-trigger').trigger('click');
+    await flushPromises();
+    expect(hasMarkFinal(wrapper)).toBe(true);
+    await store.startDocumentReview(route.agentId, { creationId: 'atlas', filePath: runningPath, scope: 'document', content: originalContent });
+    expect(store.getDocReview(route.agentId, 'atlas', runningPath)).toBeNull();
+    const pending = new Map();
+    const send = wire.getMockImplementation();
+    wire.mockImplementation(request => {
+      if (request.op !== 'get_doc_review') return send(request);
+      pending.set(request.payload.filePath, request);
+      return true;
+    });
+    const reconnect = store.reconcileAfterReconnect(route.agentId);
+    await Vue.nextTick();
+    expect([...pending.keys()].sort()).toEqual([runningPath, file.path].sort());
+    expect(store.isDocReviewRefreshing(route.agentId, 'atlas', file.path)).toBe(true);
+    expect(wrapper.get('.canvas-review-panel').text()).toContain(t('creation.review.refreshing'));
+    expect(hasMarkFinal(wrapper)).toBe(false);
+    const refreshed = { ...initial, jobId: 'new-durable', annotations: [blocker] };
+    for (const [filePath, request] of pending) {
+      store.handleCreationResponse({ ...request, type: 'creation_response', ok: true,
+        data: { filePath, review: filePath === file.path ? refreshed : { ...initial, jobId: 'running-appendix' } } });
+    }
+    await reconnect;
+    await Vue.nextTick();
+    expect(store.isDocReviewRefreshing(route.agentId, 'atlas', file.path)).toBe(false);
+    expect(wrapper.get('.canvas-review-panel').text()).not.toContain(t('creation.review.refreshing'));
+    expect(wrapper.get('.canvas-review-card-title').text()).toBe(blocker.title);
+    expect(hasMarkFinal(wrapper)).toBe(false);
+    expect(store.getDocReview(route.agentId, 'atlas', runningPath)?.jobId).toBe('running-appendix');
+  });
+
+  it.each([true, false])('F9: stages a long note losslessly or not at all (enough slots: %s)', async fits => {
+    const comment = `${'0123456789'.repeat(100)}END`;
+    const annotations = [{ id: 'long', title: 'Long note', comment, lineStart: 1, status: 'open' }];
+    const { wrapper } = await canvasAiFixture(({ op }) => op === 'get_doc_review'
+      ? { review: { jobId: 'durable', scope: 'document', status: 'completed', annotations } } : {});
+    if (!fits) {
+      for (let i = 0; i < 5; i += 1) {
+        context.addCanvasContextRef(routeKey, { kind: 'doc', filePath: `docs/existing-${i}.md`, snippet: `Reference ${i}` });
+      }
+    }
+    const before = [...context.getCanvasContextRefs(routeKey)];
+    await wrapper.get('.canvas-review-trigger').trigger('click');
+    await flushPromises();
+    const panel = wrapper.get('.canvas-review-panel');
+    const checkbox = panel.get('.canvas-review-card input');
+    await checkbox.setValue(true);
+    await button(panel, `✦ ${interpolateTranslation('creation.review.sendToSession', { count: 1 })}`).trigger('click');
+    const after = context.getCanvasContextRefs(routeKey);
+    if (fits) {
+      expect(after).toHaveLength(2);
+      expect(after.every(ref => ref.snippet.length <= 760)).toBe(true);
+      expect(after.map(ref => ref.snippet.replace(/^\[Part \d+\/2\] /, '')).join('')).toBe(`1. [L1] Long note: ${comment}`);
+      expect(checkbox.element.checked).toBe(false);
+    } else {
+      expect(before).toHaveLength(5);
+      expect(after).toEqual(before);
+      expect(checkbox.element.checked).toBe(true);
+      expect(panel.get('[role="alert"]').text()).toContain(interpolateTranslation('creation.review.addPartialWarning', { count: 1 }));
+    }
+  });
+
+  it('F8: keeps an empty rewrite as a deletion through refine and retry', async () => {
+    let jobs = 0;
+    const { wrapper, file, event, wire, selectPassage } = await canvasAiFixture(({ op }) => (
+      op === 'inline_edit' ? { jobId: `delete-${++jobs}`, status: 'running' } : {}
+    ));
+    await selectPassage();
+    const popover = wrapper.get('.canvas-inline-popover');
+    const replace = () => button(popover, `✓ ${t('creation.inlineEdit.replace')}`);
+    await button(popover, t('creation.inlineEdit.polish')).trigger('click');
+    await flushPromises();
+    event('inline_edit_complete', { jobId: 'delete-1', revisedText: '' });
+    await Vue.nextTick();
+    expect(popover.get('.canvas-diff-del').text()).toBe('Old passage');
+    expect(popover.find('.canvas-diff-add').exists()).toBe(false);
+    expect(replace().element.disabled).toBe(false);
+    await button(popover, `↻ ${t('creation.inlineEdit.refine')}`).trigger('click');
+    const input = popover.get('input');
+    await input.setValue('Keep the deletion');
+    await input.trigger('keydown.enter');
+    await flushPromises();
+    event('inline_edit_complete', { jobId: 'delete-2', status: 'failed', error: 'Refine unavailable' });
+    await Vue.nextTick();
+    await button(popover, 'Retry').trigger('click');
+    await flushPromises();
+    const edits = wire.mock.calls.map(([request]) => request).filter(request => request.op === 'inline_edit');
+    expect(edits.map(({ payload }) => payload.selectedText)).toEqual(['Old passage', '', '']);
+    event('inline_edit_complete', { jobId: 'delete-3', revisedText: '' });
+    await Vue.nextTick();
+    await replace().trigger('click');
+    expect(file.content).toBe('First line\n\nLast line');
+  });
+
+  it('M4: displays the standalone reviewed line range from the completion event', async () => {
+    const { wrapper, event, wire } = await canvasAiFixture(({ op }) => (
+      op === 'review_document' ? { jobId: 'standalone', status: 'running' } : {}
+    ), originalContent, { creationId: '', persistedDocPath: '' });
+    await wrapper.get('.canvas-review-trigger').trigger('click');
+    await button(wrapper, t('creation.review.start')).trigger('click');
+    await flushPromises();
+    event('review_complete', { jobId: 'standalone', creationId: '', truncated: true, reviewedLines: { start: 1, end: 42 } });
+    await Vue.nextTick();
+    expect(wrapper.get('.canvas-review-truncated-banner').text()).toBe(interpolateTranslation('creation.review.truncatedWarning', { end: 42 }));
+    expect(wire.mock.calls.map(([request]) => request.op)).not.toContain('get_doc_review');
+  });
+
+  it.each([['client_timeout', 'timeout'], ['connection_interrupted', 'reconnected']])(
+    'M4: localizes %s in review and inline edit', async (code, key) => {
+      const { wrapper, store, selectPassage } = await canvasAiFixture(({ op }) => ({ jobId: op, status: 'running' }),
+        originalContent, { creationId: '', persistedDocPath: '' });
+      await wrapper.get('.canvas-review-trigger').trigger('click');
+      await button(wrapper, t('creation.review.start')).trigger('click');
+      await flushPromises();
+      await selectPassage();
+      await button(wrapper.get('.canvas-inline-popover'), t('creation.inlineEdit.polish')).trigger('click');
+      await flushPromises();
+      store.failStaleAiJobs(route.agentId, code);
+      await Vue.nextTick();
+      for (const selector of ['.canvas-review-panel', '.canvas-inline-popover']) {
+        expect(wrapper.get(`${selector} [role="alert"]`).text()).toContain(t(`creation.ai.${key}`));
+        expect(wrapper.get(selector).text()).not.toContain(code);
+      }
+    },
+  );
 
   it('deduplicates references, dispatches the canonical reference, and evicts only the oldest item on the same route', () => {
     const { addCanvasContextRef, getCanvasContextRefs, removeCanvasContextRef, clearCanvasContextRefs } = context;
