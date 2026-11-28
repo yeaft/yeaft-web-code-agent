@@ -68,6 +68,7 @@ export default {
         aria-modal="true"
         :aria-label="tr('creation.create.modalTitle', 'New Creation')"
         @click.self="onBackdropClick"
+        @keydown.esc.stop="requestClose"
       >
         <div class="modal creation-create-modal" ref="modalEl">
           <header class="creation-create-header">
@@ -151,18 +152,23 @@ export default {
 
                 <div
                   class="creation-dropzone creation-dropzone-compact"
-                  :class="{ 'is-dragover': dragOver }"
-                  @dragover.prevent="dragOver = true"
+                  role="button"
+                  :tabindex="(submitting || workspaceCommitted) ? -1 : 0"
+                  :aria-disabled="submitting || workspaceCommitted"
+                  :class="{ 'is-dragover': dragOver && !workspaceCommitted, 'is-disabled': submitting || workspaceCommitted }"
+                  @dragover.prevent="onDropzoneDragOver"
                   @dragleave="dragOver = false"
                   @drop.prevent="onFileDrop"
                   @click="triggerFilePicker"
+                  @keydown.enter.prevent="triggerFilePicker"
+                  @keydown.space.prevent="triggerFilePicker"
                 >
                   <input
                     ref="fileInputRef"
                     type="file"
                     multiple
                     class="creation-hidden-file-input"
-                    :disabled="submitting"
+                    :disabled="submitting || workspaceCommitted"
                     @change="onFileInputChange"
                   />
                   <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
@@ -171,6 +177,10 @@ export default {
                   <span>{{ tr('creation.create.dropFilesHint', 'Drop files here or click to browse') }}</span>
                 </div>
 
+                <p v-if="workspaceCommitted" class="creation-create-hint" role="status">
+                  {{ tr('creation.create.workspaceCommittedHint', 'Workspace folder and initial files are already saved; retry will finish linking Session and Project.') }}
+                </p>
+
                 <ul v-if="form.files.length > 0" class="creation-file-list">
                   <li v-for="(file, idx) in form.files" :key="file.name + '-' + idx" class="creation-file-item">
                     <span class="creation-file-name" :title="file.name">{{ file.name }}</span>
@@ -178,7 +188,7 @@ export default {
                     <button
                       type="button"
                       class="creation-file-remove"
-                      :disabled="submitting"
+                      :disabled="submitting || workspaceCommitted"
                       :aria-label="tr('common.remove', 'Remove')"
                       @click="removeFile(idx)"
                     >
@@ -346,9 +356,12 @@ export default {
                       type="text"
                       class="creation-create-input creation-create-mono"
                       autocomplete="off"
-                      :disabled="submitting"
+                      :disabled="submitting || workspaceCommitted"
                       :placeholder="tr('creation.create.folderPlaceholder', 'Leave blank to auto-create inside Agent workspace')"
                     />
+                    <p v-if="workspaceCommitted" class="creation-create-hint">
+                      {{ tr('creation.create.workspaceCommittedHint', 'Workspace folder and initial files are already saved; retry will finish linking Session and Project.') }}
+                    </p>
                   </div>
                 </div>
               </div>
@@ -504,12 +517,20 @@ export default {
         : ''
     ));
 
+    const selectedAgentOption = Vue.computed(() => (
+      agentOptions.value.find(a => a.id === form.agentId) || null
+    ));
+
     const selectedAgentEligible = Vue.computed(() => (
-      agentOptions.value.some(a => a.id === form.agentId && a.eligible)
+      Boolean(selectedAgentOption.value?.eligible)
+    ));
+
+    const workspaceCommitted = Vue.computed(() => (
+      Boolean(resumeState.value?.creationId)
     ));
 
     const settingsSummaryText = Vue.computed(() => {
-      const ag = agentOptions.value.find((a) => a.id === form.agentId);
+      const ag = selectedAgentOption.value;
       const agentLabel = ag ? ag.label : tr('creation.create.noAgents', 'No agents available');
       const projectLabel = form.creatingProject
         ? (form.newProjectName.trim() || tr('creation.create.newProject', 'New Project'))
@@ -522,9 +543,9 @@ export default {
 
     const shouldAutoExpandSettings = () => (
       !hasEligibleAgent.value
-      || Boolean(props.initialRootDir)
-      || Boolean(props.initialProjectId)
-      || props.initialSessionMode === 'existing'
+      || !selectedAgentOption.value?.eligible
+      || Boolean(props.initialRootDir || props.initialProjectId || props.initialSessionMode === 'existing')
+      || Boolean(resumeState.value?.creationId || unassignedResult.value || projectNameError.value)
     );
 
     const canSubmit = Vue.computed(() => {
@@ -559,14 +580,52 @@ export default {
       resetResumeState();
     };
 
-    Vue.watch(() => props.visible, (isVisible) => {
+    let previouslyFocusedEl = null;
+
+    const captureFocus = () => {
+      if (typeof document !== 'undefined' && document.activeElement instanceof HTMLElement) {
+        previouslyFocusedEl = document.activeElement;
+      } else {
+        previouslyFocusedEl = null;
+      }
+    };
+
+    const restoreFocus = () => {
+      const el = previouslyFocusedEl;
+      previouslyFocusedEl = null;
+      if (el && typeof el.focus === 'function' && el.isConnected !== false) {
+        Vue.nextTick(() => {
+          if (el.isConnected !== false) el.focus();
+        });
+      }
+    };
+
+    Vue.watch(() => props.visible, (isVisible, wasVisible) => {
       if (isVisible) {
+        if (!wasVisible) captureFocus();
         syncInitialState();
         Vue.nextTick(() => titleInputRef.value?.focus());
       } else {
         resetResumeState();
+        if (wasVisible) restoreFocus();
       }
     }, { immediate: true });
+
+    Vue.watch(
+      [hasEligibleAgent, selectedAgentEligible, workspaceCommitted, unassignedResult, projectNameError],
+      () => {
+        if (!props.visible) return;
+        if (
+          !hasEligibleAgent.value
+          || !selectedAgentEligible.value
+          || workspaceCommitted.value
+          || Boolean(unassignedResult.value)
+          || Boolean(projectNameError.value)
+        ) {
+          settingsExpanded.value = true;
+        }
+      },
+    );
 
     Vue.watch([projectSelection, newProjectName], ([selection, name]) => {
       const state = resumeState.value;
@@ -611,12 +670,17 @@ export default {
     };
 
     const triggerFilePicker = () => {
-      if (submitting.value) return;
+      if (submitting.value || workspaceCommitted.value) return;
       fileInputRef.value?.click();
     };
 
+    const onDropzoneDragOver = () => {
+      if (submitting.value || workspaceCommitted.value) return;
+      dragOver.value = true;
+    };
+
     const addFiles = (fileList) => {
-      if (!fileList || !fileList.length) return;
+      if (workspaceCommitted.value || !fileList || !fileList.length) return;
       for (const file of fileList) {
         if (!file) continue;
         const duplicate = form.files.some(
@@ -627,17 +691,18 @@ export default {
     };
 
     const onFileInputChange = (event) => {
-      addFiles(event.target?.files);
+      if (!workspaceCommitted.value) addFiles(event.target?.files);
       if (event.target) event.target.value = '';
     };
 
     const onFileDrop = (event) => {
       dragOver.value = false;
-      if (submitting.value) return;
+      if (submitting.value || workspaceCommitted.value) return;
       addFiles(event.dataTransfer?.files);
     };
 
     const removeFile = (index) => {
+      if (submitting.value || workspaceCommitted.value) return;
       form.files.splice(index, 1);
     };
 
@@ -665,6 +730,7 @@ export default {
 
     Vue.onUnmounted(() => {
       resetResumeState();
+      restoreFocus();
       document.removeEventListener('keydown', handleKeydown);
     });
 
@@ -688,11 +754,22 @@ export default {
       if (!submitting.value && unassignedResult.value) completeCreation(unassignedResult.value);
     };
 
-    const maybeExpandSettingsForError = (msg) => {
-      if (/agent|project|session|folder|dir/i.test(String(msg || ''))) {
-        settingsExpanded.value = true;
-      }
-    };
+    const shouldExpandSettingsOnSubmitError = (state, err) => (
+      !form.agentId
+      || !selectedAgentOption.value?.eligible
+      || (form.sessionMode === 'existing' && !form.existingSessionId)
+      || Boolean(
+        state?.creationId
+        || state?.projectId
+        || state?.sessionId
+        || state?.projectAttempted
+        || state?.sessionAttempted
+        || err?.partialCreation
+        || err?.partialCreationId
+        || err?.partialProjectId
+        || err?.partialSessionId
+      )
+    );
 
     const handleSubmit = async () => {
       if (!canSubmit.value) return;
@@ -759,7 +836,9 @@ export default {
         state.baselineProjectIds = err?.baselineProjectIds ?? state.baselineProjectIds;
         state.baselineSessionIds = err?.baselineSessionIds ?? state.baselineSessionIds;
         errorMessage.value = err?.message || tr('creation.create.failed', 'Failed to create Creation');
-        maybeExpandSettingsForError(errorMessage.value);
+        if (shouldExpandSettingsOnSubmitError(state, err)) {
+          settingsExpanded.value = true;
+        }
       } finally {
         if (resumeState.value === state) submitting.value = false;
       }
@@ -782,6 +861,7 @@ export default {
       folderExpanded,
       settingsExpanded,
       settingsSummaryText,
+      workspaceCommitted,
       agentOptions,
       hasEligibleAgent,
       projectOptions,
@@ -792,6 +872,7 @@ export default {
       selectCategory,
       toggleNewProject,
       triggerFilePicker,
+      onDropzoneDragOver,
       onFileInputChange,
       onFileDrop,
       removeFile,

@@ -12,12 +12,20 @@ const REVIEW_TIMEOUT_MS = 90_000;
 const MAX_DOCUMENT_CHARS = 48_000;
 const MAX_SELECTION_BYTES = 32 * 1024;
 const MAX_DOCUMENT_BYTES = 256 * 1024;
+const MAX_OUTPUT_TOKENS = 8192;
+let reviewSeq = 0;
 const SEVERITIES = ['blocker', 'suggestion', 'praise'];
 
 async function defaultAdapterFactory({ yeaftDir }) {
   const [{ loadConfig }, { createLLMAdapter }] = await Promise.all([import('../config.js'), import('../llm/adapter.js')]);
   const config = loadConfig({ dir: yeaftDir });
-  return { adapter: await createLLMAdapter(config), model: config.model };
+  const catalog = config.availableModels ?? [];
+  const maxOutputFor = model => {
+    const entry = catalog.find(entry => entry.ref === model) ?? catalog.find(entry => entry.id === model);
+    const limit = value => Number.isFinite(value) && value > 0 ? value : MAX_OUTPUT_TOKENS;
+    return Math.min(limit(config.maxOutputTokens), limit(entry?.maxOutput));
+  };
+  return { adapter: await createLLMAdapter(config), model: config.model, maxOutputFor };
 }
 
 const optionalText = (value, limit, name, options) => value == null ? undefined : boundedText(value, limit, name, options);
@@ -56,7 +64,8 @@ function commonOptions(payload, store) {
   if (lineEnd !== undefined && lineEnd < (lineStart ?? 1)) fail('INVALID_REQUEST', 'Invalid line range');
   const locale = optionalText(payload.locale === '' ? undefined : payload.locale, 32, 'locale', { required: true });
   if (locale !== undefined && !['zh-CN', 'en'].includes(locale)) fail('INVALID_REQUEST', 'Invalid locale');
-  return { creationId, category, filePath, fileName, lineStart, lineEnd, locale,
+  return { creationId, expectedIncarnation: creation?.incarnation ?? creation?.createdAt,
+    category, filePath, fileName, lineStart, lineEnd, locale,
     model: optionalText(payload.model === '' ? undefined : payload.model, 512, 'model', { required: true }),
     effort: optionalText(payload.effort === '' ? undefined : payload.effort, 32, 'effort', { required: true }) };
 }
@@ -151,6 +160,7 @@ function createReviewSnapshot(text, start, maxChars) {
   const lines = splitLines(excerpt);
   const numbered = lines.map((line, index) => `${start + index}: ${line}`).join('\n');
   return { text: excerpt, starts: lineOffsets(excerpt), start, end: start + lines.length - 1,
+    truncated: excerpt !== text,
     // Hash the full submitted text to distinguish revisions even beyond the reviewable excerpt.
     contentHash: createHash('sha256').update(text).digest('hex'),
     numberedText: excerpt === text ? numbered : `${numbered}\n[Document truncated; remaining text is not in this snapshot.]` };
@@ -225,9 +235,11 @@ async function abortable(signal, run) {
   } finally { signal.removeEventListener('abort', abort); }
 }
 
-async function modelText({ adapter, model }, options, prompts, signal, onDelta) {
-  const params = { model: options.model ?? model, system: prompts.system, messages: [{ role: 'user', content: prompts.user }],
-    tools: [], maxTokens: 8192, signal, ...(options.effort ? { effort: options.effort, effortSource: 'user' } : {}) };
+async function modelText({ adapter, model, maxOutputFor }, options, prompts, signal, onDelta) {
+  model = options.model ?? model;
+  const maxTokens = Math.min(MAX_OUTPUT_TOKENS, Math.max(256, maxOutputFor?.(model) || MAX_OUTPUT_TOKENS));
+  const params = { model, system: prompts.system, messages: [{ role: 'user', content: prompts.user }],
+    tools: [], maxTokens, signal, ...(options.effort ? { effort: options.effort, effortSource: 'user' } : {}) };
   let output = '', bytes = 0;
   const append = delta => {
     signal.throwIfAborted();
@@ -278,6 +290,7 @@ const modelError = (error, signal) => signal.aborted
 
 export function createCreationAiAssistant({ yeaftDir, store, emitEvent = () => {}, adapterFactory = defaultAdapterFactory } = {}) {
   const activeJobs = new Map();
+  const latestReviewAttempt = new Map();
   let closing;
   const publish = event => {
     try { Promise.resolve(emitEvent(event)).catch(() => {}); } catch { /* transport is best effort */ }
@@ -292,8 +305,18 @@ export function createCreationAiAssistant({ yeaftDir, store, emitEvent = () => {
     // Defer provider work until after the bridge can acknowledge the job ID.
     const promise = setImmediate().then(() => work({ jobId, signal: controller.signal, emit }))
       .finally(() => activeJobs.delete(jobId));
-    activeJobs.set(jobId, { controller, targetClientId, promise });
+    activeJobs.set(jobId, { controller, targetClientId, creationId: options.creationId, promise });
     return jobId;
+  }
+  function cancelMatchingJobs(matches) {
+    let cancelledCount = 0;
+    for (const job of activeJobs.values()) {
+      if (matches(job) && !job.controller.signal.aborted) {
+        job.controller.abort();
+        cancelledCount++;
+      }
+    }
+    return { cancelledCount };
   }
   return {
     startInlineEdit(payload, { targetClientId } = {}) {
@@ -328,7 +351,7 @@ export function createCreationAiAssistant({ yeaftDir, store, emitEvent = () => {
     },
     startReview(payload, { targetClientId } = {}) {
       const options = commonOptions(payload, store);
-      const { creationId, filePath, category, locale } = options;
+      const { creationId, expectedIncarnation, filePath, category, locale } = options;
       const scope = payload.scope ?? 'document';
       if (!['document', 'selection'].includes(scope)) fail('INVALID_REQUEST', 'Invalid review scope');
       const content = scope === 'document' ? boundedText(payload.content, MAX_DOCUMENT_BYTES, 'document content', { required: true })
@@ -339,6 +362,10 @@ export function createCreationAiAssistant({ yeaftDir, store, emitEvent = () => {
       const lenses = resolveReviewLenses(category, payload.lensIds, customPrompt, locale);
       const snapshot = scope === 'selection' ? createReviewSnapshot(selection, options.lineStart ?? 1, selection.length)
         : createReviewSnapshot(content, 1, MAX_DOCUMENT_CHARS);
+      const key = creationId && filePath && scope === 'document' ? `${creationId}\0${filePath}` : undefined;
+      // Resume above the persisted sequence after a process restart.
+      const previousAttempt = key && store.getDocReview?.(creationId, filePath)?.attemptSeq;
+      let attemptSeq;
       const jobId = launch(options, targetClientId, async ({ jobId, signal, emit }) => {
         const overallSignal = AbortSignal.any([signal, AbortSignal.timeout(REVIEW_TIMEOUT_MS)]);
         let adapter;
@@ -379,27 +406,37 @@ export function createCreationAiAssistant({ yeaftDir, store, emitEvent = () => {
         const failureError = status === 'failed'
           ? (overallSignal.aborted ? 'Model request timed out' : (lensResults.find(result => result.error)?.error || 'Review failed'))
           : undefined;
-        const review = { jobId, creationId, filePath, scope, category, contentHash: snapshot.contentHash, status, overallSummary, lensResults, annotations, ...(failureError ? { error: failureError } : {}) };
-        if (creationId && filePath && scope === 'document' && ['completed', 'partial'].includes(status)) {
+        const review = { jobId, creationId, filePath, scope, category, contentHash: snapshot.contentHash, status, overallSummary, lensResults, annotations,
+          truncated: snapshot.truncated, reviewedLines: { start: snapshot.start, end: snapshot.end },
+          ...(attemptSeq != null ? { attemptSeq } : {}), ...(failureError ? { error: failureError } : {}) };
+        if (key && !signal.aborted && ['completed', 'partial'].includes(status)) {
           try {
+            if (latestReviewAttempt.get(key) !== attemptSeq) fail('STALE', 'Document review was superseded by a newer review');
             const persist = () => {
-              const saved = store.saveDocReview(creationId, filePath, review);
-              const states = store.listDocStates(creationId);
-              const state = !Object.hasOwn(states, filePath) || states[filePath].status === 'draft'
-                ? store.setDocState(creationId, filePath, 'review') : null;
+              const saved = store.saveDocReview(creationId, filePath, review, { expectedIncarnation, attemptSeq });
+              const current = store.getDocState(creationId, filePath);
+              const state = !current || current.status === 'draft' ? store.setDocState(creationId, filePath, 'review') : null;
               return { saved, state };
             };
             const { saved, state } = store.transaction ? store.transaction(persist) : persist();
             publish({ type: 'doc_review_updated', creationId, filePath, review: saved });
             if (state) publish({ type: 'doc_state_updated', creationId, ...state });
-          } catch {
-            review.status = 'failed';
-            review.error = 'Could not save document review';
+          } catch (error) {
+            if (error?.code === 'STALE' || error?.code === 'NOT_FOUND') review.superseded = true;
+            else {
+              review.status = 'failed';
+              review.error = 'Could not save document review';
+            }
           }
         }
+        if (key && latestReviewAttempt.get(key) === attemptSeq) latestReviewAttempt.delete(key);
         emit('review_complete', review);
         return review;
       });
+      if (key) {
+        attemptSeq = reviewSeq = Math.max(reviewSeq, Number.isSafeInteger(previousAttempt) ? previousAttempt : 0) + 1;
+        latestReviewAttempt.set(key, attemptSeq);
+      }
       return { jobId, status: 'running', scope, category, lenses: lenses.map(({ id, label }) => ({ id, label })) };
     },
     cancelJob(jobId, { targetClientId } = {}) {
@@ -409,6 +446,13 @@ export function createCreationAiAssistant({ yeaftDir, store, emitEvent = () => {
       const cancelled = !!job && !job.controller.signal.aborted;
       if (cancelled) job.controller.abort();
       return { jobId, cancelled };
+    },
+    cancelClientJobs(targetClientId) {
+      if (typeof targetClientId !== 'string' || !targetClientId.length) return { cancelledCount: 0 };
+      return cancelMatchingJobs(job => job.targetClientId === targetClientId);
+    },
+    cancelCreationJobs(creationId) {
+      return cancelMatchingJobs(job => job.creationId === creationId);
     },
     hasActiveWork: () => activeJobs.size > 0,
     waitForJob: jobId => activeJobs.get(jobId)?.promise,

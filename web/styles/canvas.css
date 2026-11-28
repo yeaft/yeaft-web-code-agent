@@ -744,7 +744,7 @@
 .canvas-status-pill.is-final {
   background: var(--tag-low-bg);
   border-color: color-mix(in srgb, var(--creation-status-ready) 40%, transparent);
-  color: var(--creation-status-ready);
+  color: var(--creation-diff-add-text);
 }
 
 .canvas-status-pill:focus-visible,
@@ -840,7 +840,8 @@
 .canvas-inline-popover {
   position: absolute;
   z-index: 35;
-  width: min(420px, calc(100% - var(--space-4)));
+  width: min(420px, calc(100% - 16px));
+  max-width: min(420px, calc(100% - 16px));
   padding: var(--space-2-5);
   border-radius: var(--radius-lg);
   border: 1px solid var(--border-color);
@@ -1007,6 +1008,37 @@
   flex-shrink: 0;
 }
 
+.canvas-review-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-2-5, var(--space-2));
+}
+
+.canvas-review-conflict-banner,
+.canvas-review-truncated-banner,
+.canvas-inline-warning {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-1-5);
+  padding: var(--space-1-5) var(--space-2);
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-color);
+  background: var(--warn-bg);
+  color: var(--warn-text);
+  font-size: var(--font-size-xs);
+  line-height: var(--line-height-normal);
+}
+
+.canvas-review-conflict-banner {
+  border-color: var(--error);
+  background: var(--error-bg);
+  color: var(--error);
+}
+
 .canvas-review-lenses {
   display: flex;
   flex-wrap: wrap;
@@ -1086,10 +1118,6 @@
 }
 
 .canvas-review-list {
-  flex: 1;
-  min-height: 0;
-  overflow-y: auto;
-  padding: var(--space-3);
   display: flex;
   flex-direction: column;
   gap: var(--space-2-5);
@@ -1136,7 +1164,7 @@
 
 .canvas-review-severity.is-praise {
   background: var(--tag-low-bg);
-  color: var(--creation-status-ready);
+  color: var(--creation-diff-add-text);
 }
 
 .canvas-review-quote {
@@ -1259,7 +1287,8 @@
     width: 100%;
     min-width: 0;
     max-width: 100%;
-    max-height: 46%;
+    max-height: 55%;
+    min-height: 180px;
     border-left: none;
     border-top: 1px solid var(--border-light);
   }
@@ -1305,13 +1334,15 @@
     width: 100%;
     min-width: 0;
     max-width: 100%;
-    max-height: 50%;
+    max-height: 55%;
+    min-height: 180px;
     border-left: none;
     border-top: 1px solid var(--border-light);
   }
 
   .canvas-inline-popover {
-    width: calc(100% - var(--space-3));
+    width: calc(100% - 16px);
+    max-width: calc(100% - 16px);
   }
 }
 

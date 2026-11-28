@@ -129,6 +129,23 @@ export function isPathInsideRoot(candidatePath, rootDir) {
   return normCandidate.startsWith(prefix);
 }
 
+/**
+ * Verify that a relative document path is safe and collision-free for persisted
+ * Creation doc state / review metadata. Rejects backslashes (so POSIX filenames
+ * containing `\` never collide with `/` paths), absolute paths, drive prefixes,
+ * empty segments, `.`, and `..`.
+ * @param {string} relPath
+ * @returns {boolean}
+ */
+export function isPersistableDocPath(relPath) {
+  return typeof relPath === 'string'
+    && relPath.length > 0
+    && !relPath.includes('\\')
+    && !relPath.startsWith('/')
+    && !/^[a-z]:/i.test(relPath)
+    && !relPath.split('/').some((s) => !s || s === '.' || s === '..');
+}
+
 function getExt(name) {
   const str = String(name || '');
   const dot = str.lastIndexOf('.');
@@ -656,6 +673,7 @@ export default {
               :creation-id="activeCreation?.id || ''"
               :category="activeCategory"
               :doc-status="activeDocStatus"
+              :persisted-doc-path="activePersistableDocPath"
               :saving="Boolean(activeDocFile.saving)"
               :show-header="true"
               :show-open-in-files="false"
@@ -1120,18 +1138,23 @@ export default {
 
     const docStatusForRelPath = (relPath) => {
       const cid = activeCreation.value?.id;
-      if (!cid || !relPath || typeof creationsStore.getDocState !== 'function') return 'draft';
+      if (!cid || !isPersistableDocPath(relPath) || typeof creationsStore.getDocState !== 'function') return 'draft';
       return creationsStore.getDocState(props.agentId, cid, relPath)?.status || 'draft';
     };
 
+    const activePersistableDocPath = Vue.computed(() => {
+      const rel = activeDocFile.value?.relPath || '';
+      return isPersistableDocPath(rel) ? rel : '';
+    });
+
     const activeDocStatus = Vue.computed(() => {
-      const rel = activeDocFile.value?.relPath;
+      const rel = activePersistableDocPath.value;
       return rel ? docStatusForRelPath(rel) : 'draft';
     });
 
     const onDocStatusChange = async (nextStatus) => {
       const cid = activeCreation.value?.id;
-      const rel = activeDocFile.value?.relPath;
+      const rel = activePersistableDocPath.value;
       if (!cid || !rel || typeof creationsStore.setDocState !== 'function') return;
       try {
         await creationsStore.setDocState(props.agentId, cid, rel, nextStatus);
@@ -2728,6 +2751,7 @@ export default {
       docDrafts,
       activeDocPath,
       activeDocFile,
+      activePersistableDocPath,
       activeDocDraft,
       selectedImagePath,
       activeImageIndex,

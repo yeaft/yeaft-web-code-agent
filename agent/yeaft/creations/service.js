@@ -101,7 +101,11 @@ export function createCreationService({ yeaftDir, storageRoot, namespaceKey, nam
     },
     find_by_folder: (_, { rootDir }) => store.findByFolder(rootDir),
     update_creation: (id, p) => {
-      const creation = store.updateCreation(id, p.patch == null ? p : object(p.patch, 'creation patch'));
+      const patch = p.patch == null ? p : object(p.patch, 'creation patch');
+      const checksRoot = Object.hasOwn(patch, 'rootDir');
+      const previousRoot = checksRoot ? store.getCreation(id).rootDir : undefined;
+      const creation = store.updateCreation(id, patch);
+      if (checksRoot && creation.rootDir !== previousRoot) aiAssistant.cancelCreationJobs(id);
       emit('creation_upserted', id, { creation });
       return { creation };
     },
@@ -110,12 +114,14 @@ export function createCreationService({ yeaftDir, storageRoot, namespaceKey, nam
         fail('INVALID_REQUEST', 'purgeWorkspace must be a boolean');
       }
       const result = store.deleteCreation(id, { purgeWorkspace: p.purgeWorkspace === true });
+      aiAssistant.cancelCreationJobs(id);
       emit('creation_deleted', id, result);
       return result;
     },
     inline_edit: (id, p, meta) => aiAssistant.startInlineEdit({ ...p, creationId: id }, meta),
     review_document: (id, p, meta) => aiAssistant.startReview({ ...p, creationId: id }, meta),
     cancel_ai_job: (_, p, meta) => aiAssistant.cancelJob(p.jobId, meta),
+    cancel_client_ai_jobs: (_, p, meta) => aiAssistant.cancelClientJobs(meta?.targetClientId || p.targetClientId),
     get_doc_states: id => ({ states: store.listDocStates(id) }),
     set_doc_state: (id, p) => {
       const state = store.setDocState(id, p.filePath, p.status);

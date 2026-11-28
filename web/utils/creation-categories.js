@@ -135,8 +135,8 @@ export function reviewLensesForCategory(categoryId) {
   }));
 }
 
-// Tokenize into CJK single characters, Latin/alphanumeric words, newlines, whitespace runs, or punctuation.
-const INLINE_TOKEN_RE = /(\r?\n|[ \t]+|[\u4e00-\u9fff\u3400-\u4dbf\u3000-\u303f\uff00-\uffef]|[A-Za-z0-9_'-]+|.)/g;
+// Tokenize into CJK single characters, Latin/alphanumeric words, newlines, whitespace runs, or any single code unit fallback.
+const INLINE_TOKEN_RE = /(\r?\n|[ \t]+|[\u4e00-\u9fff\u3400-\u4dbf\u3000-\u303f\uff00-\uffef]|[A-Za-z0-9_'-]+|[\s\S])/g;
 const MAX_LCS_CELLS = 160000;
 
 function tokenizeInline(text) {

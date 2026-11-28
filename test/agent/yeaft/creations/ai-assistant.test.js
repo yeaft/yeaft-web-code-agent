@@ -1,10 +1,24 @@
 import { createHash } from 'node:crypto';
+import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { loadConfig } from '../../../../agent/yeaft/config.js';
+import { createLLMAdapter } from '../../../../agent/yeaft/llm/adapter.js';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { CREATION_CATEGORIES, createCreationAiAssistant, MAX_CONCURRENT_JOBS, QUICK_EDIT_PRESETS, QUICK_EDIT_PRESETS_BY_CATEGORY,
+import { CREATION_CATEGORIES, createCreationAiAssistant, createCreationService, MAX_CONCURRENT_JOBS, QUICK_EDIT_PRESETS, QUICK_EDIT_PRESETS_BY_CATEGORY,
   REVIEW_LENSES, REVIEW_LENSES_BY_CATEGORY, resolveReviewLenses } from '../../../../agent/yeaft/creations/index.js';
 
-let assistant;
-afterEach(async () => { await assistant?.close(); vi.restoreAllMocks(); });
+vi.mock('../../../../agent/yeaft/config.js', async importOriginal => ({ ...await importOriginal(), loadConfig: vi.fn() }));
+vi.mock('../../../../agent/yeaft/llm/adapter.js', async importOriginal => ({ ...await importOriginal(), createLLMAdapter: vi.fn() }));
+
+let assistant, service, dir;
+afterEach(async () => {
+  await assistant?.close();
+  await service?.close();
+  if (dir) rmSync(dir, { recursive: true, force: true });
+  assistant = service = dir = undefined;
+  vi.restoreAllMocks();
+});
 const errorCode = code => expect.objectContaining({ code });
 const hash = text => createHash('sha256').update(text).digest('hex');
 const json = (summary = '', annotations = []) => ({ text: JSON.stringify({ summary, annotations }) });
@@ -14,6 +28,16 @@ const create = (adapter, store) => {
   const adapterFactory = vi.fn(async () => ({ adapter, model: 'default-model' }));
   assistant = createCreationAiAssistant({ adapterFactory, store, emitEvent: event => events.push(event) });
   return { events, adapterFactory };
+};
+
+const createServiceWithProvider = call => {
+  dir = mkdtempSync(join(tmpdir(), 'yeaft-ai-review-'));
+  const events = [];
+  service = createCreationService({ yeaftDir: join(dir, 'agent-data'), adapterFactory: async () => ({ adapter: { call } }), emitEvent: event => events.push(event) });
+  assistant = service.aiAssistant;
+  const { store } = service;
+  const creationId = store.createCreation({ id: 'reviewed' }).id;
+  return { store, creationId, events, review: { creationId, filePath: 'docs/ch1.md', content: 'Draft.', lensIds: ['chief_editor'] } };
 };
 
 describe('Creation AI assistant', () => {
@@ -40,7 +64,7 @@ describe('Creation AI assistant', () => {
     const stream = vi.fn();
     const store = { getCreation: vi.fn(() => ({ category: 'article' })) };
     const { events, adapterFactory } = create({ captureStream, stream }, store);
-    const payload = { ...editing, selectedText: 'A cat.\r\nNext', creationId: 'made', filePath: './notes\\chapter.md',
+    const payload = { ...editing, selectedText: 'A cat.\r\nNext', creationId: 'made', filePath: 'notes/chapter.md',
       lineStart: 4, fullContent: 'A cat.\r\nNext\r\nRight before\r\nA cat.\r\nNext\r\nRight after', model: 'picked', effort: 'low' };
     const ack = assistant.startInlineEdit(payload, { targetClientId: 'tab-1' });
     expect(ack).toEqual({ jobId: expect.any(String), status: 'running' });
@@ -159,16 +183,18 @@ describe('Creation AI assistant', () => {
   it('marks truncation without exposing an unseen suffix or splitting a surrogate pair', async () => {
     const content = `start\n${'x'.repeat(47993)}🌟\nunseen suffix`;
     const call = vi.fn(async () => json('truncated', [{ quote: 'unseen suffix' }, { quote: 'start' }]));
-    create({ call });
-    const { jobId } = assistant.startReview({ content, lensIds: ['chief_editor'] });
+    const { events, store, creationId } = createServiceWithProvider(call);
+    const { jobId } = assistant.startReview({ creationId, filePath: 'doc.md', content, lensIds: ['chief_editor'] });
     const result = await assistant.waitForJob(jobId);
     const prompt = call.mock.calls[0][0].messages[0].content;
     expect(prompt).toContain('1: start\n2: xxx');
     expect(prompt).toContain('[Document truncated;');
     expect(prompt).not.toContain('unseen suffix');
     expect(prompt.isWellFormed()).toBe(true);
-    expect(result.contentHash).toBe(hash(content));
+    expect(result).toMatchObject({ contentHash: hash(content), truncated: true, reviewedLines: { start: 1, end: 2 } });
+    expect(events.at(-1)).toMatchObject({ type: 'review_complete', truncated: true, reviewedLines: { start: 1, end: 2 } });
     expect(result.annotations).toMatchObject([{ quote: 'start', lineStart: 1 }]);
+    expect(store.getDocReview(creationId, 'doc.md')).toEqual(result);
   });
 
   it('times out a single lens without aborting its peers, and fails when every lens fails', async () => {
@@ -210,6 +236,87 @@ describe('Creation AI assistant', () => {
     expect(await done).toMatchObject({ status: 'failed', error: 'Model request timed out' });
     expect(events.filter(event => event.type === 'review_lens_complete')).toMatchObject(Array.from({ length: 3 }, () => ({ status: 'failed', error: 'Model request timed out' })));
     expect(store.saveDocReview).not.toHaveBeenCalled();
+  });
+
+  it('does not overwrite a newer review when the older provider finishes last', async () => {
+    const pending = [];
+    const { store, creationId, events, review } = createServiceWithProvider(() => new Promise(resolve => pending.push(resolve)));
+    const list = vi.spyOn(store, 'listDocStates');
+    const first = assistant.startReview(review);
+    const firstDone = assistant.waitForJob(first.jobId);
+    await vi.waitFor(() => expect(pending).toHaveLength(1));
+    const second = assistant.startReview(review);
+    const secondDone = assistant.waitForJob(second.jobId);
+    await vi.waitFor(() => expect(pending).toHaveLength(2));
+    pending[1](json('newer'));
+    const newer = await secondDone;
+    pending[0](json('older'));
+    expect(await firstDone).toMatchObject({ superseded: true });
+    expect(store.getDocReview(creationId, review.filePath)).toEqual(newer);
+    expect(events.filter(event => event.type.startsWith('doc_')).map(event => event.type)).toEqual(['doc_review_updated', 'doc_state_updated']);
+    expect(events.at(-1)).toMatchObject({ type: 'review_complete', jobId: first.jobId, superseded: true });
+    expect(list).not.toHaveBeenCalled();
+  });
+
+  it('rejects a late review even when the deleted Creation ID is reused', async () => {
+    let finish;
+    const { store, creationId, events, review } = createServiceWithProvider(() => new Promise(resolve => { finish = resolve; }));
+    const old = store.getCreation(creationId);
+    const { jobId } = assistant.startReview(review);
+    const done = assistant.waitForJob(jobId);
+    await vi.waitFor(() => expect(finish).toBeTypeOf('function'));
+    // Bypass service cancellation to exercise the persistence fence itself.
+    store.deleteCreation(creationId);
+    const recreated = store.createCreation({ id: creationId, incarnation: old.incarnation });
+    expect(recreated.incarnation).not.toBe(old.incarnation);
+    finish(json('stale'));
+    expect(await done).toMatchObject({ superseded: true });
+    expect(store.getDocReview(creationId, review.filePath)).toBeNull();
+    expect(events.some(event => event.type.startsWith('doc_'))).toBe(false);
+  });
+
+  it.each(['delete_creation', 'update_creation'])('cancels active Creation AI jobs on %s', async op => {
+    const call = vi.fn(() => new Promise(() => {}));
+    const { creationId, events, review } = createServiceWithProvider(call);
+    const done = [assistant.startReview(review), assistant.startInlineEdit({ ...editing, creationId })]
+      .map(({ jobId }) => assistant.waitForJob(jobId));
+    await vi.waitFor(() => expect(call).toHaveBeenCalledTimes(2));
+    const rootDir = join(dir, 'workspace');
+    mkdirSync(rootDir);
+    service.request({ op, payload: { creationId, ...(op === 'update_creation' ? { rootDir } : {}) } });
+    expect(await Promise.all(done)).toMatchObject([{ status: 'cancelled' }, { status: 'cancelled' }]);
+    expect(call.mock.calls.every(([params]) => params.signal.aborted)).toBe(true);
+    expect(events.some(event => event.type.startsWith('doc_'))).toBe(false);
+  });
+
+  it('cancels all jobs belonging to exactly the revoked client', async () => {
+    const call = vi.fn(() => new Promise(() => {}));
+    create({ call });
+    const done = [assistant.startInlineEdit(editing, { targetClientId: 'revoked' }),
+      assistant.startReview({ content: 'text', lensIds: ['chief_editor'] }, { targetClientId: 'revoked' }),
+      assistant.startInlineEdit(editing, { targetClientId: 'peer' })].map(({ jobId }) => assistant.waitForJob(jobId));
+    await vi.waitFor(() => expect(call).toHaveBeenCalledTimes(3));
+    expect(assistant.cancelClientJobs('revoked')).toEqual({ cancelledCount: 2 });
+    expect(assistant.cancelClientJobs('revoked')).toEqual({ cancelledCount: 0 });
+    expect(await Promise.all(done.slice(0, 2))).toMatchObject([{ status: 'cancelled' }, { status: 'cancelled' }]);
+    expect(assistant.hasActiveWork()).toBe(true);
+    expect(assistant.cancelClientJobs('peer')).toEqual({ cancelledCount: 1 });
+    expect(await done[2]).toMatchObject({ status: 'cancelled' });
+  });
+
+  it.each([
+    [undefined, undefined, undefined, 8192], [32000, undefined, undefined, 8192],
+    [1200, undefined, undefined, 1200], [125, undefined, undefined, 256],
+    [16000, 2048, 'provider/picked', 2048], [1024, 2048, 'provider/picked', 1024],
+  ])('enforces the provider output budget (config=%s, model limit=%s, selected=%s)', async (maxOutputTokens, maxOutput, model, expected) => {
+    const call = vi.fn().mockResolvedValue({ text: 'edited' });
+    createLLMAdapter.mockResolvedValueOnce({ call });
+    loadConfig.mockReturnValueOnce({ model: 'default-model', maxOutputTokens,
+      availableModels: [{ ref: 'other/picked', id: 'picked', maxOutput: 512 }, { ref: 'provider/picked', id: 'picked', maxOutput }] });
+    assistant = createCreationAiAssistant();
+    const { jobId } = assistant.startInlineEdit({ ...editing, model });
+    expect(await assistant.waitForJob(jobId)).toMatchObject({ status: 'completed' });
+    expect(call).toHaveBeenCalledWith(expect.objectContaining({ model: model ?? 'default-model', maxTokens: expected }));
   });
 
   it('allows standalone FilesTab canvas requests with empty creationId and absolute paths while still rejecting traversal', async () => {

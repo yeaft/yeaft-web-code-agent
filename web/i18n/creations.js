@@ -399,6 +399,7 @@ export const zhCN = {
   'creation.create.newSessionShort': '新建会话',
   'creation.create.existingSessionShort': '已有会话',
   'creation.create.settingsSummary': '工作区配置',
+  'creation.create.workspaceCommittedHint': '工作区目录与初始文件已保存，重试将仅完成会话与项目绑定',
 
   // Canvas Slim Toolbar & Feedback
   'creation.canvas.typography': '排版',
@@ -407,6 +408,8 @@ export const zhCN = {
   'creation.canvas.undoReplace': '撤销替换',
   'creation.canvas.replacedNotice': '已替换选中内容',
   'creation.canvas.backToGrid': '返回列表',
+  'creation.canvas.applyConflict': '原文已发生变化，无法安全应用该建议，请手动核对或重新审稿',
+  'creation.canvas.ambiguousSelection': '该选区在源码中出现多次，请切到编辑模式精确选中后再改写',
 
   // Inline Quick Edit Popover
   'creation.inlineEdit.polish': '润色',
@@ -433,6 +436,7 @@ export const zhCN = {
   'creation.inlineEdit.failed': '局部改写失败',
   'creation.inlineEdit.unavailable': '当前 Agent 不支持局部改写',
   'creation.inlineEdit.isolatedHint': '独立上下文改写，不影响主会话历史',
+  'creation.inlineEdit.retry': '重试',
 
   // Multi-Perspective Document Review Panel
   'creation.review.title': '审阅',
@@ -454,7 +458,7 @@ export const zhCN = {
   'creation.review.accepted': '已采纳',
   'creation.review.dismiss': '忽略',
   'creation.review.dismissed': '已忽略',
-  'creation.review.sendToSession': '发给会话处理',
+  'creation.review.sendToSession': '加入会话草稿 ({count})',
   'creation.review.noIssues': '未发现明显问题，整体表现良好。',
   'creation.review.partialWarning': '部分视角未能完成，已展示已完成视角的结果。',
   'creation.review.failed': '审阅失败',
@@ -463,6 +467,11 @@ export const zhCN = {
   'creation.review.unavailable': '当前 Agent 不支持文档审阅',
   'creation.review.lensFailed': '该视角审阅失败',
   'creation.review.summaryTitle': '总体评价',
+  'creation.review.truncatedWarning': '文稿较长，本次审稿仅覆盖第 1–{end} 行',
+  'creation.review.staleForFinal': '文稿已修改，请重新审稿后再标记定稿',
+  'creation.review.addPartialWarning': '部分批注超出上下文上限未加入，已保留勾选 {count} 条',
+  'creation.review.applying': '应用中…',
+  'creation.review.waitComplete': '审稿完成后可采纳或忽略',
 
   // Review Lenses (18 pairs across 6 categories)
   'creation.review.lens.logic_continuity': '逻辑与连贯',
@@ -901,6 +910,7 @@ export const en = {
   'creation.create.newSessionShort': 'New Session',
   'creation.create.existingSessionShort': 'Existing Session',
   'creation.create.settingsSummary': 'Workspace settings',
+  'creation.create.workspaceCommittedHint': 'Workspace folder and initial files are already saved; retry will finish linking Session and Project.',
 
   // Canvas Slim Toolbar & Feedback
   'creation.canvas.typography': 'Typography',
@@ -909,6 +919,8 @@ export const en = {
   'creation.canvas.undoReplace': 'Undo',
   'creation.canvas.replacedNotice': 'Selection replaced',
   'creation.canvas.backToGrid': 'Back to Grid',
+  'creation.canvas.applyConflict': 'Document changed since review; cannot safely apply this suggestion.',
+  'creation.canvas.ambiguousSelection': 'Selection appears multiple times in source; switch to Edit mode to target it precisely.',
 
   // Inline Quick Edit Popover
   'creation.inlineEdit.polish': 'Polish',
@@ -935,6 +947,7 @@ export const en = {
   'creation.inlineEdit.failed': 'Inline edit failed',
   'creation.inlineEdit.unavailable': 'This Agent does not support inline edit yet',
   'creation.inlineEdit.isolatedHint': 'Isolated edit — does not pollute Session history',
+  'creation.inlineEdit.retry': 'Retry',
 
   // Multi-Perspective Document Review Panel
   'creation.review.title': 'Review',
@@ -956,7 +969,7 @@ export const en = {
   'creation.review.accepted': 'Accepted',
   'creation.review.dismiss': 'Dismiss',
   'creation.review.dismissed': 'Dismissed',
-  'creation.review.sendToSession': 'Send to Session',
+  'creation.review.sendToSession': 'Add to session draft ({count})',
   'creation.review.noIssues': 'No significant issues found. Looking solid.',
   'creation.review.partialWarning': 'Some lenses did not complete; showing available results.',
   'creation.review.failed': 'Review failed',
@@ -965,6 +978,11 @@ export const en = {
   'creation.review.unavailable': 'This Agent does not support document review yet',
   'creation.review.lensFailed': 'This lens failed',
   'creation.review.summaryTitle': 'Overall summary',
+  'creation.review.truncatedWarning': 'Long document truncated; this review covered lines 1–{end}.',
+  'creation.review.staleForFinal': 'Document changed since review; re-run review before marking final.',
+  'creation.review.addPartialWarning': 'Some notes exceeded context limit and remain selected ({count}).',
+  'creation.review.applying': 'Applying…',
+  'creation.review.waitComplete': 'Actions unlock once review completes',
 
   // Review Lenses (18 pairs across 6 categories)
   'creation.review.lens.logic_continuity': 'Logic & Continuity',

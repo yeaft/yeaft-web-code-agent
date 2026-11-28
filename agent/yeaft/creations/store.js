@@ -125,13 +125,11 @@ export function boundedList(value, max, name) {
 
 export function normalizeDocFilePath(filePath) {
   boundedText(filePath, 1024, 'document file path', { required: true });
-  if (!filePath.isWellFormed() || /\p{Cc}/u.test(filePath)) fail('INVALID_REQUEST', 'Invalid document file path');
-  const path = filePath.replaceAll('\\', '/').replace(/^(?:\/|\.\/)+/, '');
-  const segments = path.split('/');
-  if (segments.some(segment => !segment || segment === '.' || segment === '..') || /^[a-z]:/i.test(path)) {
+  if (!filePath.isWellFormed() || /\p{Cc}/u.test(filePath) || filePath.includes('\\') || /^[a-z]:/i.test(filePath)
+    || filePath.split('/').some(segment => !segment || segment === '.' || segment === '..')) {
     fail('INVALID_REQUEST', 'Invalid document file path');
   }
-  return path;
+  return filePath;
 }
 
 function contains(root, path) {
@@ -591,7 +589,7 @@ export class CreationStore {
       }
       const index = this.one('SELECT COUNT(*) AS count FROM creations').count;
       const createdAt = now();
-      const record = this.#creationFields({ id, kind, category, modality, createdAt, title: 'Untitled creation',
+      const record = this.#creationFields({ id, kind, category, modality, createdAt, incarnation: randomUUID(), title: 'Untitled creation',
         mission: '', description: '', status: 'draft', readingNodeId: null, readingOffset: 0,
         sessionId: null, projectId: null, rootDir: null, placement: defaultCelestialPlacement(kind, index) }, input);
       const externalRoot = input.initializeFolder === true && record.rootDir;
@@ -717,25 +715,51 @@ export class CreationStore {
   }
   listDocStates(creationId) {
     this.#creation(creationId);
-    const rows = this.all(`SELECT s.file_path, s.status, s.updated_at,
-      (SELECT COUNT(*) FROM json_each(r.data, '$.annotations') a
+    const rows = this.all(`SELECT file_path, status, updated_at,
+      (SELECT COUNT(*) FROM json_each(review_data, '$.annotations') a
         WHERE a.type='object' AND a.value ->> 'status' = 'open') AS open_count
-      FROM creation_doc_states s LEFT JOIN creation_doc_reviews r USING (creation_id, file_path)
-      WHERE s.creation_id=? ORDER BY s.file_path`, creationId);
+      FROM (
+        SELECT s.file_path, s.status, s.updated_at, r.data AS review_data
+        FROM creation_doc_states s LEFT JOIN creation_doc_reviews r USING (creation_id, file_path)
+        WHERE s.creation_id=?
+        UNION ALL
+        SELECT r.file_path, 'draft', r.updated_at, r.data
+        FROM creation_doc_reviews r LEFT JOIN creation_doc_states s USING (creation_id, file_path)
+        WHERE r.creation_id=? AND s.file_path IS NULL
+      ) ORDER BY file_path`, creationId, creationId);
     return Object.fromEntries(rows.map(row => [row.file_path, {
       status: row.status, updatedAt: row.updated_at, openReviewCount: row.open_count,
     }]));
   }
 
+  getDocState(creationId, filePath) {
+    const row = this.one('SELECT file_path, status, updated_at FROM creation_doc_states WHERE creation_id=? AND file_path=?',
+      safeId(creationId), normalizeDocFilePath(filePath));
+    return row ? { filePath: row.file_path, status: row.status, updatedAt: row.updated_at } : null;
+  }
+
+  #checkDocPathQuota(creationId, filePath) {
+    if (this.getDocState(creationId, filePath)
+      || this.one('SELECT 1 FROM creation_doc_reviews WHERE creation_id=? AND file_path=?', creationId, filePath)) return;
+    const { count } = this.one(`SELECT COUNT(*) AS count FROM (
+      SELECT file_path FROM creation_doc_states WHERE creation_id=?
+      UNION SELECT file_path FROM creation_doc_reviews WHERE creation_id=?
+    )`, creationId, creationId);
+    if (count >= LIMITS.docStates) fail('LIMIT_EXCEEDED', 'Document workflow state limit reached');
+  }
+
   setDocState(creationId, filePath, status) {
-    this.#creation(creationId);
     filePath = normalizeDocFilePath(filePath);
     pick(status, DOC_WORKFLOW_STATUSES, 'document workflow status');
-    const updatedAt = now();
-    this.run(`INSERT INTO creation_doc_states (creation_id,file_path,status,updated_at) VALUES (?,?,?,?)
-      ON CONFLICT(creation_id,file_path) DO UPDATE SET status=excluded.status,updated_at=excluded.updated_at`,
-    creationId, filePath, status, updatedAt);
-    return { filePath, status, updatedAt };
+    return this.transaction(() => {
+      this.#creation(creationId);
+      this.#checkDocPathQuota(creationId, filePath);
+      const updatedAt = now();
+      this.run(`INSERT INTO creation_doc_states (creation_id,file_path,status,updated_at) VALUES (?,?,?,?)
+        ON CONFLICT(creation_id,file_path) DO UPDATE SET status=excluded.status,updated_at=excluded.updated_at`,
+      creationId, filePath, status, updatedAt);
+      return { filePath, status, updatedAt };
+    });
   }
 
   getDocReview(creationId, filePath) {
@@ -743,17 +767,30 @@ export class CreationStore {
     return data(this.one('SELECT data FROM creation_doc_reviews WHERE creation_id=? AND file_path=?', creationId, normalizeDocFilePath(filePath)));
   }
 
-  saveDocReview(creationId, filePath, review) {
-    this.#creation(creationId);
+  saveDocReview(creationId, filePath, review, { expectedIncarnation, attemptSeq } = {}) {
     filePath = normalizeDocFilePath(filePath);
-    let encoded;
-    try { encoded = json(review); } catch { fail('INVALID_REQUEST', 'Invalid document review'); }
-    if (!encoded?.startsWith('{')) fail('INVALID_REQUEST', 'Invalid document review');
-    if (Buffer.byteLength(encoded) > 512 * 1024) fail('LIMIT_EXCEEDED', 'Document review is too large');
-    this.run(`INSERT INTO creation_doc_reviews (creation_id,file_path,updated_at,data) VALUES (?,?,?,?)
-      ON CONFLICT(creation_id,file_path) DO UPDATE SET updated_at=excluded.updated_at,data=excluded.data`,
-    creationId, filePath, now(), encoded);
-    return JSON.parse(encoded);
+    return this.transaction(() => {
+      const rec = data(this.#creation(creationId));
+      if (expectedIncarnation != null && (rec.incarnation ?? rec.createdAt) !== expectedIncarnation) {
+        fail('STALE', 'Creation changed before review completed');
+      }
+      if (attemptSeq != null) {
+        const existing = data(this.one('SELECT data FROM creation_doc_reviews WHERE creation_id=? AND file_path=?', creationId, filePath));
+        if (typeof existing?.attemptSeq === 'number' && existing.attemptSeq > attemptSeq) {
+          fail('STALE', 'Document review was superseded by a newer review');
+        }
+      }
+      this.#checkDocPathQuota(creationId, filePath);
+      let encoded;
+      try { encoded = json(review); } catch { fail('INVALID_REQUEST', 'Invalid document review'); }
+      if (!encoded?.startsWith('{')) fail('INVALID_REQUEST', 'Invalid document review');
+      if (attemptSeq != null) encoded = json({ ...JSON.parse(encoded), attemptSeq });
+      if (Buffer.byteLength(encoded) > 512 * 1024) fail('LIMIT_EXCEEDED', 'Document review is too large');
+      this.run(`INSERT INTO creation_doc_reviews (creation_id,file_path,updated_at,data) VALUES (?,?,?,?)
+        ON CONFLICT(creation_id,file_path) DO UPDATE SET updated_at=excluded.updated_at,data=excluded.data`,
+      creationId, filePath, now(), encoded);
+      return JSON.parse(encoded);
+    });
   }
 
   updateDocReviewAnnotation(creationId, filePath, annotationId, status) {

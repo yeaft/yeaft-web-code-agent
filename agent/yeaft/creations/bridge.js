@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import ctx from '../../context.js';
 import { sendToServer } from '../../connection/buffer.js';
-import { safeId, fail } from './constants.js';
+import { safeId, fail, PRIVATE_AI_EVENT_TYPES } from './constants.js';
 import { readMediaChunk } from './media.js';
 
 const MAX_NAMESPACES = 4;
@@ -80,7 +80,9 @@ export function createCreationBridge({ context = ctx, send = sendToServer,
         const isCurrentEvent = () => scopes.get(ownerId) === scope && isCurrent(current, eventSocket);
         if (isCurrentEvent()) {
           const { _targetClientId: targetClientId, ...body } = event;
-          return send({ type: 'creation_event', ownerId, ...(targetClientId ? { targetClientId } : {}), event: body }, { isCurrent: isCurrentEvent });
+          const privateEvent = PRIVATE_AI_EVENT_TYPES.has(body.type);
+          if (privateEvent && (typeof targetClientId !== 'string' || !targetClientId.length)) return;
+          return send({ type: 'creation_event', ownerId, ...(privateEvent ? { targetClientId } : {}), event: body }, { isCurrent: isCurrentEvent });
         }
       },
       mediaUrlFor: (creationId, mediaKind, mediaId) =>

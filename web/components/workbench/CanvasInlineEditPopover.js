@@ -48,6 +48,10 @@ export default {
     left: { type: Number, default: 0 },
     selectedText: { type: String, default: '' },
     fullContent: { type: String, default: '' },
+    rawStart: { type: Number, default: null },
+    rawEnd: { type: Number, default: null },
+    ambiguous: { type: Boolean, default: false },
+    canPersist: { type: Boolean, default: true },
     lineStart: { type: Number, default: undefined },
     lineEnd: { type: Number, default: undefined },
     filePath: { type: String, default: '' },
@@ -57,15 +61,17 @@ export default {
     category: { type: String, default: 'book' },
     routeKey: { type: String, default: '' },
   },
-  emits: ['close', 'apply-replacement', 'quote-to-session', 'quick-review'],
+  emits: ['close', 'apply-replacement', 'quote-to-session', 'quick-review', 'busy-change'],
   template: `
     <div
       v-if="visible"
       class="canvas-inline-popover"
       :style="{ top: top + 'px', left: left + 'px' }"
       role="dialog"
+      tabindex="-1"
       :aria-label="tr('creation.inlineEdit.placeholder', 'How should this passage change?')"
       @mousedown.stop
+      @keydown.esc.stop="handleEscape"
     >
       <!-- Running state -->
       <template v-if="isRunning">
@@ -109,7 +115,6 @@ export default {
               class="canvas-inline-input"
               :placeholder="tr('creation.inlineEdit.refinePlaceholder', 'Tweak one more thing...')"
               @keydown.enter.prevent="submitInstruction"
-              @keydown.escape.prevent="refineMode = false"
             />
             <button
               type="button"
@@ -149,8 +154,10 @@ export default {
             :key="preset.id"
             type="button"
             class="canvas-inline-preset-btn"
-            :disabled="!aiAvailable"
-            :title="aiAvailable ? tr(preset.labelKey, preset.id) : tr('creation.inlineEdit.unavailable', 'AI unavailable')"
+            :disabled="!aiAvailable || ambiguous"
+            :title="ambiguous
+              ? tr('creation.canvas.ambiguousSelection', 'Multiple matches found. Switch to Edit mode to select an exact range.')
+              : (aiAvailable ? tr(preset.labelKey, preset.id) : tr('creation.inlineEdit.unavailable', 'AI unavailable'))"
             @mousedown.prevent
             @click="runEdit({ preset: preset.id })"
           >{{ tr(preset.labelKey, preset.id) }}</button>
@@ -191,23 +198,28 @@ export default {
           >✦ {{ tr('creation.canvas.quoteToSession', 'Quote to session') }}</button>
         </div>
 
+        <div v-if="ambiguous" class="canvas-inline-status" role="status">
+          <span>{{ tr('creation.canvas.ambiguousSelection', 'Multiple matches found. Switch to Edit mode to select an exact range.') }}</span>
+        </div>
+
         <div class="canvas-inline-input-row">
           <input
             ref="inputRef"
             v-model="instruction"
             type="text"
             class="canvas-inline-input"
-            :disabled="!aiAvailable"
-            :placeholder="aiAvailable
-              ? tr('creation.inlineEdit.placeholder', 'How should this passage change?')
-              : tr('creation.inlineEdit.unavailable', 'AI unavailable')"
+            :disabled="!aiAvailable || ambiguous"
+            :placeholder="ambiguous
+              ? tr('creation.canvas.ambiguousSelection', 'Multiple matches found. Switch to Edit mode to select an exact range.')
+              : (aiAvailable
+                ? tr('creation.inlineEdit.placeholder', 'How should this passage change?')
+                : tr('creation.inlineEdit.unavailable', 'AI unavailable'))"
             @keydown.enter.prevent="submitInstruction"
-            @keydown.escape.prevent="$emit('close')"
           />
           <button
             type="button"
             class="canvas-inline-preset-btn"
-            :disabled="!aiAvailable || !instruction.trim()"
+            :disabled="!aiAvailable || ambiguous || !instruction.trim()"
             :title="tr('creation.inlineEdit.submit', 'Submit')"
             :aria-label="tr('creation.inlineEdit.submit', 'Submit')"
             @click="submitInstruction"
@@ -217,10 +229,11 @@ export default {
         <div v-if="errorMessage" class="canvas-inline-status" role="alert">
           <span>{{ errorMessage }}</span>
           <button
+            v-if="lastRequest"
             type="button"
             class="btn-ghost"
             @click="retryLastEdit"
-          >{{ tr('creation.inlineEdit.refine', 'Retry') }}</button>
+          >{{ tr('creation.inlineEdit.retry', 'Retry') }}</button>
           <button
             type="button"
             class="btn-ghost"
@@ -247,7 +260,12 @@ export default {
     const creationsStore = useSafeCreationsStore();
     const chatStore = useSafeChatStore();
 
+    let requestSeq = 0;
     const activeJobId = Vue.ref('');
+    const activeRequest = Vue.ref(null);
+    const pendingStart = Vue.ref(false);
+    const anchorOriginalText = Vue.ref('');
+    const lastCandidateText = Vue.ref('');
     const instruction = Vue.ref('');
     const refineMode = Vue.ref(false);
     const reviewMenuOpen = Vue.ref(false);
@@ -281,8 +299,7 @@ export default {
         : null
     ));
 
-    const isRunning = Vue.computed(() => job.value?.status === 'running');
-    const isCompleted = Vue.computed(() => job.value?.status === 'completed');
+    const isRunning = Vue.computed(() => pendingStart.value || job.value?.status === 'running');
 
     const errorMessage = Vue.computed(() => {
       if (localError.value) return localError.value;
@@ -292,13 +309,32 @@ export default {
       return '';
     });
 
+    const effectiveCandidate = Vue.computed(() => {
+      if (typeof job.value?.revisedText === 'string' && job.value.revisedText.length > 0) {
+        return job.value.revisedText;
+      }
+      return lastCandidateText.value || '';
+    });
+
+    const isCompleted = Vue.computed(() => (
+      !isRunning.value
+      && !errorMessage.value
+      && (job.value?.status === 'completed' || Boolean(lastCandidateText.value))
+    ));
+
     const diffHunks = Vue.computed(() => {
-      if (!job.value) return [];
-      if (Array.isArray(job.value.diffHunks) && job.value.diffHunks.length > 0) {
+      const orig = anchorOriginalText.value || props.selectedText || '';
+      const rev = effectiveCandidate.value || '';
+      if (!orig && !rev) return [];
+      if (
+        job.value
+        && Array.isArray(job.value.diffHunks)
+        && job.value.diffHunks.length > 0
+        && job.value.originalText === orig
+        && job.value.revisedText === rev
+      ) {
         return job.value.diffHunks;
       }
-      const orig = job.value.originalText ?? props.selectedText ?? '';
-      const rev = job.value.revisedText ?? '';
       if (typeof computeInlineDiff === 'function') {
         return computeInlineDiff(orig, rev);
       }
@@ -306,35 +342,80 @@ export default {
     });
 
     const hasActualChange = Vue.computed(() => {
-      if (!job.value) return false;
-      const orig = String(job.value.originalText ?? props.selectedText ?? '');
-      const rev = String(job.value.revisedText ?? '');
+      const orig = String(anchorOriginalText.value || props.selectedText || '');
+      const rev = String(effectiveCandidate.value || '');
       return rev.length > 0 && rev !== orig;
     });
 
-    const clearCurrentJob = () => {
-      const id = activeJobId.value;
-      activeJobId.value = '';
-      if (id && typeof creationsStore?.clearAiJob === 'function') {
-        creationsStore.clearAiJob(id);
-      }
-    };
+    Vue.watch(
+      () => [job.value?.status, job.value?.revisedText],
+      ([status, revisedText]) => {
+        if (status === 'completed' && typeof revisedText === 'string' && revisedText.length > 0) {
+          lastCandidateText.value = revisedText;
+        }
+      },
+    );
 
-    const cancelEdit = async () => {
-      const id = activeJobId.value;
-      if (id && props.agentId && typeof creationsStore?.cancelAiJob === 'function') {
+    const isBusy = Vue.computed(() => Boolean(pendingStart.value || isRunning.value || isCompleted.value));
+    Vue.watch(isBusy, (val) => {
+      emit('busy-change', val);
+    }, { immediate: true });
+
+    const cancelAndClearCaptured = (capturedAgentId, capturedJobId) => {
+      if (!capturedJobId) return;
+      if (capturedAgentId && typeof creationsStore?.cancelAiJob === 'function') {
         try {
-          await creationsStore.cancelAiJob(props.agentId, id);
+          Promise.resolve(creationsStore.cancelAiJob(capturedAgentId, capturedJobId)).catch(() => {});
         } catch {
           // ignore cancel errors
         }
       }
-      clearCurrentJob();
+      if (typeof creationsStore?.clearAiJob === 'function') {
+        creationsStore.clearAiJob(capturedJobId);
+      }
+    };
+
+    const resetSessionState = () => {
+      activeRequest.value = null;
+      anchorOriginalText.value = '';
+      lastCandidateText.value = '';
+      lastRequest.value = null;
+      instruction.value = '';
       refineMode.value = false;
+      reviewMenuOpen.value = false;
       localError.value = '';
     };
 
-    const runEdit = async ({ preset = '', instruction: customInstruction = '' } = {}) => {
+    const cancelEdit = async () => {
+      requestSeq += 1;
+      const id = activeJobId.value;
+      const ag = activeRequest.value?.agentId || props.agentId;
+      activeJobId.value = '';
+      pendingStart.value = false;
+      refineMode.value = false;
+      localError.value = '';
+      if (id) {
+        if (ag && typeof creationsStore?.cancelAiJob === 'function') {
+          try {
+            await creationsStore.cancelAiJob(ag, id);
+          } catch {
+            // ignore cancel errors
+          }
+        }
+        if (typeof creationsStore?.clearAiJob === 'function') {
+          creationsStore.clearAiJob(id);
+        }
+      }
+    };
+
+    const runEdit = async ({ preset = '', instruction: customInstruction = '', isRetry = false } = {}) => {
+      if (props.ambiguous) {
+        localError.value = tr(
+          'creation.canvas.ambiguousSelection',
+          'Multiple matches found. Switch to Edit mode to select an exact range.',
+        );
+        return;
+      }
       if (!aiAvailable.value) {
         localError.value = tr('creation.inlineEdit.unavailable', 'AI unavailable');
         return;
@@ -342,31 +423,88 @@ export default {
       const trimmedInstruction = String(customInstruction || '').trim();
       if (!preset && !trimmedInstruction) return;
 
-      const baseText = (refineMode.value && job.value?.revisedText)
-        ? job.value.revisedText
-        : (props.selectedText || '');
+      const isRefining = refineMode.value && Boolean(lastCandidateText.value);
+      const reuseFrozenAnchor = (isRefining || isRetry) && Boolean(activeRequest.value?.anchor);
+      const originalAnchor = reuseFrozenAnchor
+        ? { ...activeRequest.value.anchor }
+        : {
+          originalText: props.selectedText || '',
+          rawStart: Number.isInteger(props.rawStart) ? props.rawStart : null,
+          rawEnd: Number.isInteger(props.rawEnd) ? props.rawEnd : null,
+          lineStart: props.lineStart,
+          lineEnd: props.lineEnd,
+        };
+
+      if (!reuseFrozenAnchor) {
+        anchorOriginalText.value = originalAnchor.originalText;
+        lastCandidateText.value = '';
+      }
+
+      let baseText = originalAnchor.originalText;
+      if (isRetry && lastRequest.value?.baseText) {
+        baseText = lastRequest.value.baseText;
+      } else if (isRefining && lastCandidateText.value) {
+        baseText = lastCandidateText.value;
+      }
       if (!baseText.trim()) return;
 
-      lastRequest.value = { preset, instruction: trimmedInstruction };
+      const capturedAgentId = props.agentId;
+      const capturedCreationId = props.creationId;
+      const capturedFilePath = props.filePath;
+      const capturedFileName = props.fileName;
+
+      // Cancel/clear any prior active job using its own captured ownership BEFORE launching
+      const priorJobId = activeJobId.value;
+      const priorAgentId = activeRequest.value?.agentId || capturedAgentId;
+      activeJobId.value = '';
+      if (priorJobId) {
+        cancelAndClearCaptured(priorAgentId, priorJobId);
+      }
+
+      const token = ++requestSeq;
+      activeRequest.value = {
+        token,
+        agentId: capturedAgentId,
+        creationId: capturedCreationId,
+        filePath: capturedFilePath,
+        anchor: originalAnchor,
+        baseText,
+        preset,
+        instruction: trimmedInstruction,
+      };
+      lastRequest.value = { preset, instruction: trimmedInstruction, baseText };
+      pendingStart.value = true;
       reviewMenuOpen.value = false;
       localError.value = '';
       refineMode.value = false;
-      clearCurrentJob();
 
       try {
-        const res = await creationsStore.startInlineEdit(props.agentId, {
-          ...(props.creationId ? { creationId: props.creationId } : {}),
+        const res = await creationsStore.startInlineEdit(capturedAgentId, {
+          ...(capturedCreationId && props.canPersist ? { creationId: capturedCreationId } : {}),
           category: props.category || 'book',
-          ...(props.filePath ? { filePath: props.filePath } : {}),
-          ...(props.fileName ? { fileName: props.fileName } : {}),
+          ...(capturedFilePath ? { filePath: capturedFilePath } : {}),
+          ...(capturedFileName ? { fileName: capturedFileName } : {}),
           fullContent: props.fullContent || '',
           selectedText: baseText,
-          ...(props.lineStart > 0 ? { lineStart: props.lineStart } : {}),
-          ...(props.lineEnd > 0 ? { lineEnd: props.lineEnd } : {}),
+          ...(originalAnchor.lineStart > 0 ? { lineStart: originalAnchor.lineStart } : {}),
+          ...(originalAnchor.lineEnd > 0 ? { lineEnd: originalAnchor.lineEnd } : {}),
           preset: preset || undefined,
           instruction: trimmedInstruction || undefined,
           locale: getLocale(),
         });
+
+        const stale = token !== requestSeq
+          || !props.visible
+          || props.agentId !== capturedAgentId
+          || props.filePath !== capturedFilePath;
+        if (stale) {
+          if (res?.jobId) {
+            cancelAndClearCaptured(capturedAgentId, res.jobId);
+          }
+          return;
+        }
+
+        pendingStart.value = false;
         if (res?.jobId) {
           activeJobId.value = res.jobId;
           instruction.value = '';
@@ -374,6 +512,8 @@ export default {
           localError.value = res?.error || tr('creation.inlineEdit.failed', 'Quick edit failed');
         }
       } catch (err) {
+        if (token !== requestSeq) return;
+        pendingStart.value = false;
         localError.value = err?.message || tr('creation.inlineEdit.failed', 'Quick edit failed');
       }
     };
@@ -386,7 +526,7 @@ export default {
 
     const retryLastEdit = () => {
       if (lastRequest.value) {
-        runEdit(lastRequest.value);
+        runEdit({ ...lastRequest.value, isRetry: true });
       } else {
         localError.value = '';
       }
@@ -395,22 +535,39 @@ export default {
     const clearError = () => {
       localError.value = '';
       if (job.value?.status === 'failed') {
-        clearCurrentJob();
+        const id = activeJobId.value;
+        activeJobId.value = '';
+        if (id && typeof creationsStore?.clearAiJob === 'function') {
+          creationsStore.clearAiJob(id);
+        }
       }
     };
 
     const applyReplacement = () => {
-      const revisedText = job.value?.revisedText ?? '';
-      emit('apply-replacement', {
+      const anchor = activeRequest.value?.anchor || {
         originalText: props.selectedText || '',
-        revisedText,
+        rawStart: Number.isInteger(props.rawStart) ? props.rawStart : null,
+        rawEnd: Number.isInteger(props.rawEnd) ? props.rawEnd : null,
         lineStart: props.lineStart,
         lineEnd: props.lineEnd,
+      };
+      const revisedText = effectiveCandidate.value;
+      emit('apply-replacement', {
+        originalText: anchor.originalText,
+        rawStart: anchor.rawStart,
+        rawEnd: anchor.rawEnd,
+        lineStart: anchor.lineStart,
+        lineEnd: anchor.lineEnd,
+        revisedText,
       });
-      clearCurrentJob();
-      instruction.value = '';
-      refineMode.value = false;
-      localError.value = '';
+      requestSeq += 1;
+      const id = activeJobId.value;
+      activeJobId.value = '';
+      pendingStart.value = false;
+      if (id && typeof creationsStore?.clearAiJob === 'function') {
+        creationsStore.clearAiJob(id);
+      }
+      resetSessionState();
       emit('close');
     };
 
@@ -421,11 +578,25 @@ export default {
     };
 
     const discardEdit = () => {
-      clearCurrentJob();
-      instruction.value = '';
-      refineMode.value = false;
-      localError.value = '';
+      cancelEdit();
+      resetSessionState();
       emit('close');
+    };
+
+    const handleEscape = () => {
+      if (refineMode.value) {
+        refineMode.value = false;
+        return;
+      }
+      if (reviewMenuOpen.value) {
+        reviewMenuOpen.value = false;
+        return;
+      }
+      if (isRunning.value) {
+        cancelEdit();
+        return;
+      }
+      discardEdit();
     };
 
     const triggerQuickReview = (lensId) => {
@@ -441,24 +612,19 @@ export default {
 
     Vue.watch(() => props.visible, (nextVisible) => {
       if (!nextVisible) {
-        reviewMenuOpen.value = false;
-        refineMode.value = false;
-        instruction.value = '';
-        localError.value = '';
-        if (isRunning.value) {
-          cancelEdit();
-        } else if (activeJobId.value) {
-          clearCurrentJob();
-        }
+        cancelEdit();
+        resetSessionState();
       }
     });
 
+    Vue.watch(() => [props.agentId, props.filePath], () => {
+      cancelEdit();
+      resetSessionState();
+    });
+
     Vue.onBeforeUnmount(() => {
-      if (isRunning.value) {
-        cancelEdit();
-      } else if (activeJobId.value) {
-        clearCurrentJob();
-      }
+      cancelEdit();
+      resetSessionState();
     });
 
     return {
@@ -470,11 +636,13 @@ export default {
       isRunning,
       isCompleted,
       errorMessage,
+      effectiveCandidate,
       diffHunks,
       hasActualChange,
       instruction,
       refineMode,
       reviewMenuOpen,
+      lastRequest,
       inputRef,
       runEdit,
       submitInstruction,
@@ -484,6 +652,7 @@ export default {
       applyReplacement,
       startRefine,
       discardEdit,
+      handleEscape,
       triggerQuickReview,
     };
   },

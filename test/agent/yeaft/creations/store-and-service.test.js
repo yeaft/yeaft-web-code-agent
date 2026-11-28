@@ -2341,11 +2341,11 @@ describe('Creation categories and document review workflow', () => {
     const filePath = 'docs/chapter.md';
     expect(req('get_doc_states', { creationId })).toEqual({ states: {} });
     expect(req('get_doc_review', { creationId, filePath })).toEqual({ review: null });
-    expect(req('set_doc_state', { creationId, filePath: './docs\\chapter.md', status: 'draft' }))
+    expect(req('set_doc_state', { creationId, filePath, status: 'draft' }))
       .toEqual({ filePath, status: 'draft', updatedAt: expect.any(String) });
     store.setDocState(id, '__proto__', 'final');
     const annotation = { id: 'a', status: 'open' };
-    store.saveDocReview(id, `/./${filePath}`, { annotations: [annotation, { id: 'b', status: 'dismissed' }], lensResults: [{ annotations: [annotation] }] });
+    store.saveDocReview(id, filePath, { annotations: [annotation, { id: 'b', status: 'dismissed' }], lensResults: [{ annotations: [annotation] }] });
     expect(req('get_doc_states', { creationId }).states[filePath]).toMatchObject({ status: 'draft', openReviewCount: 1 });
     expect(Object.hasOwn(store.listDocStates(id), '__proto__')).toBe(true);
     expect(req('update_review_annotation', { creationId, filePath, annotationId: 'a', status: 'accepted' }).review.lensResults[0].annotations[0].status).toBe('accepted');
@@ -2365,13 +2365,55 @@ describe('Creation categories and document review workflow', () => {
     }
   });
 
+  it('caps the union of workflow paths while keeping existing paths writable', () => {
+    const { creation: { id } } = req('create_creation');
+    const { creation: { id: otherId } } = req('create_creation');
+    const reviewOnly = 'review-only.md';
+    store.saveDocReview(id, reviewOnly, { annotations: [{ status: 'open' }, { status: 'accepted' }] });
+    expect(store.getDocState(id, reviewOnly)).toBeNull();
+    expect(store.listDocStates(id)[reviewOnly]).toEqual({ status: 'draft', updatedAt: expect.any(String), openReviewCount: 1 });
+    for (let i = 0; i < 499; i++) store.setDocState(id, `docs/${i}.md`, 'draft');
+    expect(() => store.setDocState(id, 'overflow.md', 'draft')).toThrow(err('LIMIT_EXCEEDED'));
+    expect(() => store.saveDocReview(id, 'overflow.md', {})).toThrow(err('LIMIT_EXCEEDED'));
+    const updated = store.setDocState(id, reviewOnly, 'final');
+    store.saveDocReview(id, 'docs/0.md', { annotations: [] });
+    store.saveDocReview(id, reviewOnly, { annotations: [] });
+    expect(Object.keys(store.listDocStates(id))).toHaveLength(500);
+    expect(store.setDocState(otherId, 'overflow.md', 'draft')).toMatchObject({ status: 'draft' });
+    const one = vi.spyOn(store, 'one');
+    const all = vi.spyOn(store, 'all');
+    expect(store.getDocState(id, reviewOnly)).toEqual(updated);
+    expect(one).toHaveBeenCalledExactlyOnceWith(expect.stringMatching(/WHERE creation_id=\? AND file_path=\?/), id, reviewOnly);
+    expect(all).not.toHaveBeenCalled();
+  });
+
+  it('uses only canonical relative paths as persisted workflow keys', () => {
+    const { creation: { id } } = req('create_creation');
+    const valid = 'chapter/draft.md';
+    const state = store.setDocState(id, valid, 'draft');
+    const review = store.saveDocReview(id, valid, { annotations: [] }, { attemptSeq: 20 });
+    for (const filePath of ['chapter\\draft.md', '/chapter/draft.md', '//host/chapter/draft.md',
+      '\\\\host\\chapter\\draft.md', 'C:chapter/draft.md', './chapter/draft.md', 'bad\uD800.md']) {
+      expect(() => store.setDocState(id, filePath, 'final')).toThrow(err('INVALID_REQUEST'));
+      expect(() => store.saveDocReview(id, filePath, {})).toThrow(err('INVALID_REQUEST'));
+    }
+    expect(() => store.saveDocReview(id, valid, {}, { attemptSeq: 19 })).toThrow(err('STALE'));
+    expect(store.getDocState(id, valid)).toEqual(state);
+    expect(store.getDocReview(id, valid)).toEqual(review);
+    expect(Object.keys(store.listDocStates(id))).toEqual([valid]);
+  });
+
   it('acknowledges bridge jobs without blocking, protects private events, and broadcasts only durable review changes', async () => {
     const sent = [];
     let runtime;
+    let emitEvent;
     let finish;
     const call = vi.fn(() => new Promise(resolve => { finish = resolve; }));
     const bridge = createCreationBridge({ context: { CONFIG: { yeaftDir: dir, serverUrl: 'wss://reviews.example' }, agentId: 'agent:1' },
-      send: message => sent.push(message), createService: options => runtime = createCreationService({ ...options, adapterFactory: () => ({ adapter: { call } }) }) });
+      send: message => sent.push(message), createService: options => {
+        emitEvent = options.emitEvent;
+        return runtime = createCreationService({ ...options, adapterFactory: () => ({ adapter: { call } }) });
+      } });
     let sequence = 0;
     const request = async (op, payload, targetClientId = 'tab-a') => {
       const requestId = `req-${++sequence}`;
@@ -2381,6 +2423,11 @@ describe('Creation categories and document review workflow', () => {
     try {
       const created = await request('create_creation', { category: 'article' });
       const creationId = created.data.creation.id;
+      const before = sent.length;
+      for (const type of ['inline_edit_delta', 'inline_edit_complete', 'review_lens_complete', 'review_complete']) {
+        for (const _targetClientId of [undefined, '', 123]) emitEvent({ type, _targetClientId });
+      }
+      expect(sent).toHaveLength(before);
       const filePath = 'doc.md';
       const path = { creationId, filePath };
       const content = 'Line one\nLine two';
@@ -2411,6 +2458,11 @@ describe('Creation categories and document review workflow', () => {
       expect(runtime.store.listDocStates(creationId)[filePath]).toMatchObject({ status: 'final', openReviewCount: 0 });
       expect(sent.filter(message => message.event?.type === 'doc_state_updated')).toHaveLength(2);
       expect(runtime.store.listRuns(creationId)).toHaveLength(0);
+      const edit = await request('inline_edit', { ...path, selectedText: 'Line one', preset: 'polish' });
+      const editDone = runtime.aiAssistant.waitForJob(edit.data.jobId);
+      await vi.waitFor(() => expect(call).toHaveBeenCalledTimes(3));
+      expect(await request('cancel_client_ai_jobs', { targetClientId: 'tab-b' })).toMatchObject({ ok: true, data: { cancelledCount: 1 } });
+      expect(await editDone).toMatchObject({ status: 'cancelled' });
     } finally { await bridge.close(); }
   });
 });
