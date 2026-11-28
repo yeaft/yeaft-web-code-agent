@@ -455,16 +455,16 @@ describe('Cosmic Web bounded research', () => {
     expect(legacyRes.excerptVersion).toBeUndefined();
     expect(legacyRes.items[0].summaryExcerpt).toContain('Safe radar');
     expect(legacyRes.items[0].summaryExcerpt).not.toContain('RADARAGENTCLIP99');
-    // With excerptProvenance: true (current Server): scrubs pre-clip and emits excerptVersion: 5
-    const { result: v5Res } = await run({
+    // With excerptProvenance: true (current Server): scrubs pre-clip and emits excerptVersion: 6
+    const { result: v6Res } = await run({
       mode: 'topic_radar',
       payload: { topic: 'Radar', excerptProvenance: true },
       adapter: makeRadarAdapter(),
       toolExecutors: { WebSearch },
     });
-    expect(v5Res.excerptVersion).toBe(5);
-    expect(v5Res.items[0].summaryExcerpt).toContain('Safe radar');
-    expect(v5Res.items[0].summaryExcerpt).not.toContain('RADARAGENTCLIP99');
+    expect(v6Res.excerptVersion).toBe(6);
+    expect(v6Res.items[0].summaryExcerpt).toContain('Safe radar');
+    expect(v6Res.items[0].summaryExcerpt).not.toContain('RADARAGENTCLIP99');
   });
 
   it('redacts Radar WebSearch evidence before the 1,500-char cap and fails closed on upstream-truncated ambiguous tokens', async () => {
@@ -473,7 +473,7 @@ describe('Cosmic Web bounded research', () => {
     const explicitTruncUrl = 'https://radar.example/search-explicit-trunc';
     const split1500Snippet = `${'s'.repeat(1474)} Safe1500 //SEARCH1500USER99@intranet:8080/api`;
     const split1500Answer = `${'a'.repeat(1476)} Ans1500 //ANS1500USER99@intranet:8080/api`;
-    const upstreamTruncSnippet = `Safe upstream //UPSTREAM1500ELLIPSIS99... mid //UPSTREAM1500SPACE99 ... //UPSTREAM1500ATTBRK99[...] //UPSTREAM1500ATTUNI99[…] //UPSTREAM1500ATTPAR99(…) //UPSTREAM1500SPDOT99[. . .] //UPSTREAM1500PAD1799[${' '.repeat(17)}...] next (//UPSTREAM1500PAREN99…) tail //UPSTREAM1500EOF99`;
+    const upstreamTruncSnippet = `Safe upstream "//UPSTREAM1500QUOTESP99" . . . //UPSTREAM1500ELLIPSIS99... mid //UPSTREAM1500SPACE99 ... //UPSTREAM1500ATTBRK99[...] //UPSTREAM1500ATTUNI99[…] //UPSTREAM1500ATTPAR99(…) //UPSTREAM1500SPDOT99[. . .] //UPSTREAM1500PAD1799[${' '.repeat(17)}...] next (//UPSTREAM1500PAREN99…) tail //M`;
     const WebSearch = vi.fn().mockResolvedValue({
       provider: 'generic',
       answer: split1500Answer,
@@ -513,17 +513,17 @@ describe('Cosmic Web bounded research', () => {
       adapter,
       toolExecutors: { WebSearch },
     });
-    expect(result.excerptVersion).toBe(5);
+    expect(result.excerptVersion).toBe(6);
     const promptSentToRadarModel = observedFinalPrompts[0];
     expect(promptSentToRadarModel).toContain('Safe1500');
     expect(promptSentToRadarModel).toContain('Ans1500');
     expect(promptSentToRadarModel).toContain('Safe upstream');
     expect(promptSentToRadarModel).toContain('Safe explicit');
     for (const secret of [
-      'SEARCH1500', 'ANS1500', 'UPSTREAM1500ELLIPSIS99',
+      'SEARCH1500', 'ANS1500', 'UPSTREAM1500QUOTESP99', 'UPSTREAM1500ELLIPSIS99',
       'UPSTREAM1500SPACE99', 'UPSTREAM1500ATTBRK99', 'UPSTREAM1500ATTUNI99', 'UPSTREAM1500ATTPAR99',
       'UPSTREAM1500SPDOT99', 'UPSTREAM1500PAD1799',
-      'UPSTREAM1500PAREN99', 'UPSTREAM1500EOF99', 'EXPLICITTRUNC99',
+      'UPSTREAM1500PAREN99', '//M', 'EXPLICITTRUNC99',
     ]) {
       expect(promptSentToRadarModel).not.toContain(secret);
       expect(JSON.stringify(result.items)).not.toContain(secret);
@@ -531,7 +531,7 @@ describe('Cosmic Web bounded research', () => {
   });
 
   it('redacts private brief TLDR before the 400-char cap and emits briefContextVersion only when requested on v2 schema', async () => {
-    const boundaryTldr = `${'t'.repeat(300)} SafeTldr //TLDRATTPAR99(…) //TLDRATTBRK99[…] //TLDRSPDOT99[. . .] //TLDRPAD1799[${' '.repeat(17)}...] next //TLDRCLIP400USER99@intranet:8080/api`;
+    const boundaryTldr = `${'t'.repeat(260)} SafeTldr "//TLDRQUOTESP99" . . . //TLDRATTPAR99(…) //TLDRATTBRK99[…] //TLDRSPDOT99[. . .] //TLDRPAD1799[${' '.repeat(17)}...] next //TLDRCLIP400USER99@intranet:8080/api`;
     const makeBriefAdapter = () => stubAdapter({
       ...story,
       tldr: boundaryTldr,
@@ -545,7 +545,7 @@ describe('Cosmic Web bounded research', () => {
     });
     expect(legacyServerRes.briefContextVersion).toBeUndefined();
     expect(legacyServerRes.tldr).toContain('SafeTldr');
-    for (const secret of ['TLDRCLIP400', 'TLDRATTPAR99', 'TLDRATTBRK99', 'TLDRSPDOT99', 'TLDRPAD1799']) {
+    for (const secret of ['TLDRCLIP400', 'TLDRQUOTESP99', 'TLDRATTPAR99', 'TLDRATTBRK99', 'TLDRSPDOT99', 'TLDRPAD1799']) {
       expect(legacyServerRes.tldr).not.toContain(secret);
     }
     // With schemaVersion: 1 (reverse mixed-version v1 Server): scrubs pre-clip and emits exact 5-key v1 contract
@@ -556,20 +556,28 @@ describe('Cosmic Web bounded research', () => {
       adapter: makeBriefAdapter(),
     });
     expect(Object.keys(v1Res).sort()).toEqual(['bullets', 'followUps', 'fullMarkdown', 'impact', 'tldr']);
-    for (const secret of ['TLDRCLIP400', 'TLDRATTPAR99', 'TLDRSPDOT99', 'TLDRPAD1799']) {
+    for (const secret of ['TLDRCLIP400', 'TLDRQUOTESP99', 'TLDRATTPAR99', 'TLDRSPDOT99', 'TLDRPAD1799']) {
       expect(v1Res.tldr).not.toContain(secret);
     }
-    // With briefContextProvenance: true on v2 schema: scrubs pre-clip and emits briefContextVersion: 5
-    const { result: v5BriefRes } = await run({
+    // With briefContextProvenance: true on v2 schema: scrubs pre-clip and emits briefContextVersion: 6
+    const { result: v6BriefRes } = await run({
       mode: 'brief',
-      payload: { isPrivateSource: true, briefContextProvenance: true, headline: 'Priv TLDR v5' },
+      payload: { isPrivateSource: true, briefContextProvenance: true, headline: 'Priv TLDR v6' },
       adapter: makeBriefAdapter(),
     });
-    expect(v5BriefRes.briefContextVersion).toBe(5);
-    expect(v5BriefRes.tldr).toContain('SafeTldr');
-    for (const secret of ['TLDRCLIP400', 'TLDRATTPAR99', 'TLDRATTBRK99', 'TLDRSPDOT99', 'TLDRPAD1799']) {
-      expect(v5BriefRes.tldr).not.toContain(secret);
+    expect(v6BriefRes.briefContextVersion).toBe(6);
+    expect(v6BriefRes.tldr).toContain('SafeTldr');
+    for (const secret of ['TLDRCLIP400', 'TLDRQUOTESP99', 'TLDRATTPAR99', 'TLDRATTBRK99', 'TLDRSPDOT99', 'TLDRPAD1799']) {
+      expect(v6BriefRes.tldr).not.toContain(secret);
     }
+    // Single-character //M at literal EOF in private TLDR is also stripped
+    const { result: oneCharRes } = await run({
+      mode: 'brief',
+      payload: { isPrivateSource: true, briefContextProvenance: true, headline: 'One char EOF' },
+      adapter: stubAdapter({ ...story, tldr: 'Safe context //M' }),
+    });
+    expect(oneCharRes.briefContextVersion).toBe(6);
+    expect(oneCharRes.tldr).toBe('Safe context');
   });
 
   it.each([['daily_briefing', {}, daily], ['brief', { research: false }, story], ['follow_up', { research: false }, { answer: 'Yes', question: 'ARM?' }]])

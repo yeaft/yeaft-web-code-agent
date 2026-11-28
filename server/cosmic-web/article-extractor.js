@@ -1,10 +1,11 @@
 import { decodeEntities, parseAttributesLinear, resolveHttpUrl, scanMarkup } from './rss-parser.js';
 import { createRedactionBudget, redactPrivateTextMask } from './private-redactor.js';
 
-export const ARTICLE_EXTRACTOR_VERSION = 5;
+export const ARTICLE_EXTRACTOR_VERSION = 6;
 
 const discard = new Set('script style noscript svg nav header footer aside form iframe template button noembed noframes xmp textarea'.split(' '));
 const rawTags = new Set(['script', 'style', 'iframe', 'noembed', 'noframes', 'xmp', 'textarea']);
+const rcdataTags = new Set(['title']);
 const skipTags = new Set(['template', 'noscript']);
 const voidTags = new Set('area base br col embed hr img input link meta param source track wbr'.split(' '));
 const noise = /(?:^|[\s_-])(?:ad|ads|advert(?:isement|ising)?|sidebar|cookie(?:-banner)?|related-posts|social-share|newsletter|breadcrumbs)(?=$|[\s_-])/i;
@@ -335,7 +336,7 @@ function renderPrivateAiMarkdown(best, openStack, bestWasTruncated, maxChars = 4
 function tree(html, scanMeta) {
   const root = { tag: 'root', attrs: {}, children: [] };
   const stack = [root];
-  for (const token of scanMarkup(html, { rawTags, skipTags, meta: scanMeta })) {
+  for (const token of scanMarkup(html, { rawTags, rcdataTags, skipTags, meta: scanMeta })) {
     if (token.type !== 'tag') {
       if (!stack.at(-1).hidden) {
         stack.at(-1).children.push(token.type === 'cdata' ? token.text : decodeEntities(token.text));
@@ -428,7 +429,7 @@ export function extractCleanArticle(html, sourceUrl, fallbackTitle = '') {
   const wall = /(?:sign in|log in|subscribe) to (?:read|continue|view)|登录后(?:查看|阅读|继续)|请先登录|verify you are human|access denied|captcha/i;
   const blockedTitle = wall.test(title) || (wall.test(text) && text.length < 500);
   const fullRendered = markdown(best, url).trim();
-  const hiddenOpenAtEof = openStack.some(n => n.hidden);
+  const hiddenOpenAtEof = openStack.some(n => n.hidden || n.tag === 'head' || n.tag === 'title');
   const sourceTruncated = scanMeta.truncated || hiddenOpenAtEof;
   const bestWasTruncated = sourceTruncated && openStack.includes(best);
   const truncated = !blockedTitle && (fullRendered.length > 40_000 || sourceTruncated);

@@ -2675,6 +2675,246 @@ describe('2.0 graph and AI contracts', () => {
     });
     expect(r9AgentAi.mock.lastCall[0].payload.briefContext).toBeUndefined();
 
+    // Round 31 (PR #2032 Round 10) Blocker #1/#2/#3 isolated end-to-end regressions:
+    // (1) Unclosed `<title>` RCDATA (and `<head>`) in article extraction reports `truncated: true` and rewinds trailing credential fragments,
+    //     while normal `<head><title>...</title></head>` preserves display metadata; pre-fix v5 caches are rejected.
+    // (2) HTML5 unquoted attribute ending in `/` (`<svg data-x=x/>`) and HTML5 double-escaped script state (`<script><!--<script></script></template>...</script>`)
+    //     never prematurely exit `<template>` in EITHER text OR media extraction; pre-fix v5 excerpts are omitted.
+    // (3) Quote-wrapped spaced dots (`Safe context "//R10LONGREVIEW99" . . . next fact.`) and 1-char EOF (`Safe context //M`) are stripped
+    //     in BOTH private TLDR -> cross-Agent HMAC followUp AND real Radar WebSearch -> SQLite -> private aiBrief; v5 provenance rejected.
+    const r10TitleTruncHtml = '<article><p>Safe r10 title prose //R10TITLEMARKER99<title>unclosed';
+    const r10HeadTruncHtml = '<article><p>Safe r10 head prose //R10HEADMARKER99<head>unclosed';
+    const r10UnquotedTpl = '<template><svg data-x=x/><![CDATA[ > </template> ]]></svg>discarded <img src="https://secret.example/r10-unq.png"></template>';
+    const r10DoubleEscTpl = '<template><script><!--<script></script></template>discarded <img src="https://secret.example/r10-ds.png"> --></script></template>';
+    const r10FeedRss = `<rss><channel>
+      <item><title>Mu Unclosed Title Rcdata</title><link>https://private.example/r10-title-trunc</link><description>Title trunc desc</description></item>
+      <item><title>Nu Unclosed Head Trunc</title><link>https://private.example/r10-head-trunc</link><description>Head trunc desc</description></item>
+      <item><title>Xi Unquoted Slash Svg Template</title><link>https://private.example/r10-unq-slash</link><description>Safe r10 unq //R10UNQ99&lt;wbr&gt;&lt;template&gt;&lt;svg data-x=x/&gt;&lt;![CDATA[ &gt; &lt;/template&gt; ]]&gt;&lt;/svg&gt;discarded &lt;img src="https://secret.example/r10-unq.png"&gt;&lt;/template&gt;@intranet:8080/a end.</description></item>
+      <item><title>Omicron Double Escaped Script Template</title><link>https://private.example/r10-double-esc</link><description><![CDATA[Safe r10 ds //R10DS99<wbr>${r10DoubleEscTpl}@intranet:8080/b end.]]></description></item>
+    </channel></rss>`;
+    // Paired media check: neither unquoted-slash SVG CDATA nor double-escaped script inside `<template>` leaks media
+    const r10MediaCheck = extractMarkupMedia(
+      `${r10UnquotedTpl}${r10DoubleEscTpl}<img src="https://public.example/r10-ok.png">`,
+      'https://public.example/',
+    );
+    expect(r10MediaCheck.map(m => m.url)).toEqual(['https://public.example/r10-ok.png']);
+
+    const r10Prompts = [];
+    const r10RadarUrl = 'https://radar.example/r10-quoted';
+    let r10BriefVariant = 'quoted';
+    const r10AgentAi = vi.fn(async ({ mode, perspective, language, payload }) => {
+      if (mode === 'topic_radar') {
+        const WebSearch = vi.fn().mockResolvedValue({
+          provider: 'generic',
+          results: [{
+            url: r10RadarUrl,
+            title: 'R10 Quoted & 1-Char Radar',
+            snippet: 'SafeR10Radar "//R10RADARQUOTED99" . . . "//50%增长" next fact //M',
+          }],
+        });
+        const radarAdapter = {
+          captureStream: vi.fn()
+            .mockImplementationOnce(async function* () { yield { type: 'tool_call', id: 'r10tc1', name: 'WebSearch', input: { query: 'r10', limit: 5 } }; })
+            .mockImplementationOnce(async function* () {}),
+          call: vi.fn().mockImplementation(async req => {
+            r10Prompts.push(JSON.stringify(req));
+            const toolMsg = req.messages.find(m => m.role === 'tool')?.content ?? '';
+            const parsedTool = JSON.parse(toolMsg.replace(/^<untrusted_web_result>\n|\n<\/untrusted_web_result>$/g, ''));
+            return {
+              text: JSON.stringify({
+                items: parsedTool.results.map(r => ({
+                  title: r.title, url: r.url, sourceName: 'R10Wire', summaryExcerpt: r.snippet,
+                })),
+                searchCount: 1,
+              }),
+            };
+          }),
+        };
+        const { result } = await runCosmicWebBriefing({
+          mode, perspective, language, payload,
+          config: { fastModel: 'test/fast', defaultModel: 'test/fast' },
+          adapter: radarAdapter, toolExecutors: { WebSearch },
+        });
+        return result;
+      }
+      const adapter = {
+        async call(req) {
+          r10Prompts.push(JSON.stringify(req));
+          if (mode === 'follow_up') {
+            return { text: JSON.stringify({ question: 'q', answer: 'ok', bullets: ['one'], followUps: ['q1'] }) };
+          }
+          const tldr = r10BriefVariant === 'onechar'
+            ? 'SafeR10OneChar //M'
+            : 'SafeR10Context "//R10LONGREVIEW99" . . . "//50%增长" next fact.';
+          return {
+            text: JSON.stringify({
+              tldr,
+              bullets: ['Safe bullet one', 'Safe bullet two'],
+              impact: 'Safe impact',
+              followUps: ['q1', 'q2'],
+            }),
+          };
+        },
+      };
+      const { result } = await runCosmicWebBriefing({
+        mode, perspective, language, payload,
+        config: { fastModel: 'test/fast', defaultModel: 'test/fast' },
+        adapter,
+      });
+      return result;
+    });
+    const r10FeedUrl = 'https://private.example/r10.xml';
+    const r10Clock = NOW + 800_000;
+    const r10Svc = makeService({
+      fetcher: async url => {
+        if (url === r10FeedUrl) return { status: 200, url, text: async () => r10FeedRss };
+        if (url.endsWith('/r10-title-trunc')) return { status: 200, url, text: async () => r10TitleTruncHtml };
+        if (url.endsWith('/r10-head-trunc')) return { status: 200, url, text: async () => r10HeadTruncHtml };
+        return { status: 200, url, text: async () => '<article><p>ok</p></article>' };
+      },
+      requestAi: r10AgentAi,
+      now: () => r10Clock,
+    });
+    await r10Svc.savePreferences('omar', {
+      enabledDomainIds: [],
+      customDomains: [
+        { id: 'priv-r10', name: 'Priv R10', colorToken: 'cyan', enabled: true, keywords: [], rssUrls: [r10FeedUrl] },
+        { id: 'radar-r10', name: 'Radar R10', colorToken: 'gold', enabled: true, keywords: ['r10'], aiRadar: true, rssUrls: [] },
+      ],
+    });
+    await r10Svc.refresh('omar', { domainId: 'priv-r10', force: true });
+    agents.set('v6-omar-a', {
+      ownerId: 'omar', name: 'v6-omar-a',
+      capabilities: ['cosmic_web_briefing', 'cosmic_web_follow_up', 'cosmic_web_radar', 'cosmic_web_research'],
+      encryptOutbound: false, ws: { readyState: 1, send: () => {} },
+    });
+    agents.set('v6-omar-b', {
+      ownerId: 'omar', name: 'v6-omar-b',
+      capabilities: ['cosmic_web_briefing', 'cosmic_web_follow_up'],
+      encryptOutbound: false, ws: { readyState: 1, send: () => {} },
+    });
+    const omarFeed = r10Svc.feed('omar', { domainId: 'priv-r10' });
+    const r10TitleCluster = omarFeed.clusters.find(c => c.headline === 'Mu Unclosed Title Rcdata');
+    const r10HeadCluster = omarFeed.clusters.find(c => c.headline === 'Nu Unclosed Head Trunc');
+    const r10UnqCluster = omarFeed.clusters.find(c => c.headline === 'Xi Unquoted Slash Svg Template');
+    const r10DsCluster = omarFeed.clusters.find(c => c.headline === 'Omicron Double Escaped Script Template');
+
+    // (1a) Unclosed `<title>` RCDATA & `<head>`: `truncated: true`, rewound in `aiMarkdown` and absent from model prompt
+    const r10TitleArt = await r10Svc.article('omar', r10TitleCluster.id);
+    expect(r10TitleArt.truncated).toBe(true);
+    expect(r10TitleArt.extractorVersion).toBe(ARTICLE_EXTRACTOR_VERSION);
+    await r10Svc.aiBrief('omar', 'user', r10TitleCluster.id, { agentId: 'v6-omar-a', research: true });
+    expect(r10Prompts.at(-1)).toContain('Safe r10 title prose');
+    expect(r10Prompts.at(-1)).not.toContain('R10TITLEMARKER99');
+    await r10Svc.aiBrief('omar', 'user', r10HeadCluster.id, { agentId: 'v6-omar-a', research: true });
+    expect(r10Prompts.at(-1)).toContain('Safe r10 head prose');
+    expect(r10Prompts.at(-1)).not.toContain('R10HEADMARKER99');
+    // (1b) Pre-fix v5 (`extractorVersion: 5`) cached article row is rejected by private `aiBrief`
+    db.setArticleCache('omar', r10TitleArt.itemId, {
+      title: 'Old v5', markdown: 'Old v5 //OLDV5TITLE99', aiMarkdown: 'Old v5 //OLDV5TITLE99',
+      extractorVersion: 5, truncated: false, quality: 'full', itemId: r10TitleArt.itemId, clusterId: r10TitleCluster.id, summaryExcerpt: 'Old',
+    }, r10Clock + HOUR);
+    await r10Svc.aiBrief('omar', 'user', r10TitleCluster.id, { skipArticleFetch: true, agentId: 'v6-omar-a', research: true, force: true });
+    expect(r10AgentAi.mock.lastCall[0].payload.articleMarkdown).toBeUndefined();
+    expect(r10Prompts.at(-1)).not.toContain('OLDV5TITLE99');
+
+    // (2) Unquoted-slash `<svg data-x=x/>` CDATA and double-escaped `<script>` inside `<template>`:
+    //     ZERO template text or credential fragments persisted or forwarded to model prompt
+    expect(r10UnqCluster.summaryExcerpt).toContain('Safe r10 unq');
+    expect(r10UnqCluster.summaryExcerpt).not.toContain('R10UNQ99');
+    expect(r10UnqCluster.summaryExcerpt).not.toContain('discarded');
+    expect(r10DsCluster.summaryExcerpt).toContain('Safe r10 ds');
+    expect(r10DsCluster.summaryExcerpt).not.toContain('R10DS99');
+    expect(r10DsCluster.summaryExcerpt).not.toContain('discarded');
+    await r10Svc.aiBrief('omar', 'user', r10UnqCluster.id, { skipArticleFetch: true, agentId: 'v6-omar-a', research: true });
+    expect(r10Prompts.at(-1)).toContain('Safe r10 unq');
+    expect(r10Prompts.at(-1)).not.toContain('R10UNQ99');
+    expect(r10Prompts.at(-1)).not.toContain('discarded');
+    await r10Svc.aiBrief('omar', 'user', r10DsCluster.id, { skipArticleFetch: true, agentId: 'v6-omar-a', research: true });
+    expect(r10Prompts.at(-1)).toContain('Safe r10 ds');
+    expect(r10Prompts.at(-1)).not.toContain('R10DS99');
+    expect(r10Prompts.at(-1)).not.toContain('discarded');
+
+    // (3a) Quote-wrapped spaced dots (`"//R10LONGREVIEW99" . . .`) AND 1-char literal EOF (`//M`) in private TLDR -> cross-Agent HMAC followUp
+    r10BriefVariant = 'quoted';
+    const r10QuotedBrief = await r10Svc.aiBrief('omar', 'user', r10UnqCluster.id, { skipArticleFetch: true, agentId: 'v6-omar-a', research: true, force: true });
+    expect(r10QuotedBrief.briefContextVersion).toBe(PRIVATE_BRIEF_CONTEXT_VERSION);
+    expect(r10QuotedBrief.tldr).toContain('SafeR10Context');
+    expect(r10QuotedBrief.tldr).toContain('//50%增长');
+    expect(r10QuotedBrief.tldr).not.toContain('R10LONGREVIEW99');
+    await r10Svc.followUp('omar', 'user', r10UnqCluster.id, {
+      question: 'Quoted spaced follow-up?',
+      briefContext: r10QuotedBrief.tldr,
+      briefContextToken: r10QuotedBrief.briefContextToken,
+      agentId: 'v6-omar-b',
+      research: true,
+    });
+    expect(r10Prompts.at(-1)).toContain('SafeR10Context');
+    expect(r10Prompts.at(-1)).toContain('//50%增长');
+    expect(r10Prompts.at(-1)).not.toContain('R10LONGREVIEW99');
+
+    r10BriefVariant = 'onechar';
+    const r10OneCharBrief = await r10Svc.aiBrief('omar', 'user', r10DsCluster.id, { skipArticleFetch: true, agentId: 'v6-omar-a', research: true, force: true });
+    expect(r10OneCharBrief.tldr).toBe('SafeR10OneChar');
+    await r10Svc.followUp('omar', 'user', r10DsCluster.id, {
+      question: 'One char follow-up?',
+      briefContext: r10OneCharBrief.tldr,
+      briefContextToken: r10OneCharBrief.briefContextToken,
+      agentId: 'v6-omar-b',
+      research: true,
+    });
+    expect(r10Prompts.at(-1)).toContain('SafeR10OneChar');
+    expect(r10Prompts.at(-1)).not.toContain('//M');
+
+    // (3b) Real Radar WebSearch with quote-wrapped spaced dots & 1-char EOF -> scrubbed before Radar model & v6 DB
+    const r10RadarRes = await r10Svc.radarScan('omar', 'user', 'radar-r10');
+    expect(r10RadarRes.added).toBe(1);
+    const r10RadarCluster = r10Svc.feed('omar', { domainId: 'radar-r10' }).clusters.find(c => c.headline === 'R10 Quoted & 1-Char Radar');
+    expect(r10RadarCluster.summaryExcerpt).toContain('SafeR10Radar');
+    expect(r10RadarCluster.summaryExcerpt).toContain('//50%增长');
+    expect(r10RadarCluster.summaryExcerpt).not.toContain('R10RADARQUOTED99');
+    expect(r10RadarCluster.summaryExcerpt).not.toContain('//M');
+    await r10Svc.aiBrief('omar', 'user', r10RadarCluster.id, { skipArticleFetch: true, agentId: 'v6-omar-a', research: true });
+    expect(r10Prompts.at(-1)).toContain('SafeR10Radar');
+    expect(r10Prompts.at(-1)).not.toContain('R10RADARQUOTED99');
+    expect(r10Prompts.at(-1)).not.toContain('//M');
+
+    // (3c) Pre-fix v5 (`excerptVersion: 5`, `briefContextVersion: 5`) provenance is rejected/omitted!
+    const oldV5ReqAi = vi.fn(async req => {
+      if (req.mode === 'topic_radar') {
+        return {
+          items: [{ title: 'Old V5 Radar Story', url: 'https://radar.example/old-v5-radar', sourceName: 'V5Radar', summaryExcerpt: 'Old v5 radar display' }],
+          searchCount: 1,
+          excerptVersion: 5,
+        };
+      }
+      if (req.mode === 'brief') {
+        return {
+          tldr: 'Old v5 uncertified TLDR "//OLDV5TLDR99" . . . next',
+          sections: [{ heading: 'H', body: 'Body' }],
+          bullets: ['b1', 'b2'], impact: 'ok', media: [], communityHighlights: [], citations: [],
+          followUps: ['q1', 'q2'], researched: false, searchCount: 0, evidenceCount: 0, fullMarkdown: 'Safe md',
+          briefContextVersion: 5,
+        };
+      }
+      return r10AgentAi(req);
+    });
+    const oldV5Svc = makeService({ requestAi: oldV5ReqAi, now: () => r10Clock + 180_000 });
+    await oldV5Svc.radarScan('omar', 'user', 'radar-r10');
+    const oldV5RadarCluster = oldV5Svc.feed('omar', { domainId: 'radar-r10' }).clusters.find(c => c.headline === 'Old V5 Radar Story');
+    await oldV5Svc.aiBrief('omar', 'user', oldV5RadarCluster.id, { skipArticleFetch: true, agentId: 'v6-omar-a', research: true });
+    expect(oldV5ReqAi.mock.lastCall[0].payload.summaryExcerpt).toBe('');
+    const oldV5BriefRes = await oldV5Svc.aiBrief('omar', 'user', r10HeadCluster.id, { skipArticleFetch: true, agentId: 'v6-omar-b', research: true, force: true });
+    expect(oldV5BriefRes.briefContextToken).toBeUndefined();
+    expect(oldV5BriefRes.briefContextVersion).toBeUndefined();
+    await oldV5Svc.followUp('omar', 'user', r10HeadCluster.id, {
+      question: 'Follow up after old v5 brief?',
+      briefContext: oldV5BriefRes.tldr,
+      agentId: 'v6-omar-b',
+      research: true,
+    });
+    expect(r10AgentAi.mock.lastCall[0].payload.briefContext).toBeUndefined();
+
     // Mixed public/private dailyBriefing carries per-story isPrivateSource: true on private stories (enabling Agent defense-in-depth) while keeping public stories clean.
     const mixedDailyReqAi = vi.fn(async () => dailyResult);
     const mixedDailySvc = makeService({ requestAi: mixedDailyReqAi });

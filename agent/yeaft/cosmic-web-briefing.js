@@ -21,8 +21,8 @@ export const COSMIC_WEB_FOLLOW_UP_CAPABILITY = 'cosmic_web_follow_up';
 export const COSMIC_WEB_RADAR_CAPABILITY = 'cosmic_web_radar';
 export const COSMIC_WEB_CANCEL_CAPABILITY = 'cosmic_web_cancel';
 
-const PRIVATE_EXCERPT_VERSION = 5;
-const PRIVATE_BRIEF_CONTEXT_VERSION = 5;
+const PRIVATE_EXCERPT_VERSION = 6;
+const PRIVATE_BRIEF_CONTEXT_VERSION = 6;
 
 const BUNDLED_SKILLS_DIR = fileURLToPath(new URL('../skills/', import.meta.url));
 const SKILL_PATH = 'cosmic-web/SKILL.md';
@@ -237,7 +237,8 @@ const PERCENT_WHATWG_DOT_RE = /%(?:2e|e3%80%82|ef%bc%8e|ef%bd%a1)/i;
 const ELLIPSIS_RE = /(?:\\?\.\\?\.|…|⋯)/u;
 const AMBIGUOUS_OPENER_MAP = { '[': ']', '(': ')', '{': '}', '【': '】', '（': '）' };
 const ATTACHED_OPEN_TAIL_RE = /(?:\\?([\[(\{【（]))((?:\\?\.|…|⋯)*)$/u;
-const IS_TRAIL_CLOSER_RE = /^[\s"'>)\]}”’」』】》〉]$/u;
+const IS_TRAIL_CLOSER_RE = /^[\s"'>)\]}”’」』】》〉`*_~]$/u;
+const TRAIL_WRAPPER_TRIM_RE = /["'>)\]}”’」』】》〉`*_~]+$/u;
 
 function findAmbiguousTruncationEnd(str, offset, tokenEnd, budget) {
   const len = str.length;
@@ -287,26 +288,29 @@ function findAmbiguousTruncationEnd(str, offset, tokenEnd, budget) {
   // 2. Attached compact ellipsis/abbreviation inside the scanned token (e.g. //M..., //M…, //M[...], //M[…], //M(…)).
   if (ELLIPSIS_RE.test(tokenBody)) return tokenEnd;
 
-  // 3. Whitespace-separated lookahead within shared budget (no fixed short character window).
+  // 3. Wrapper- and whitespace-aware lookahead within shared budget (no fixed short character window):
+  //    skip closing quotes/brackets/emphasis wrappers (e.g. `"//MARKER" . . .`, `'//MARKER' ...`, `“//MARKER” [...]`)
+  //    before testing effective EOF, bare/spaced ellipses, or balanced abbreviation brackets.
   let p = tokenEnd;
-  while (p < len && /\s/u.test(str[p])) {
+  while (p < len) {
     if (bumpStep()) return -1;
-    p++;
+    if (str[p] === '\\' && p + 1 < len && IS_TRAIL_CLOSER_RE.test(str[p + 1])) {
+      p += 2;
+      continue;
+    }
+    if (IS_TRAIL_CLOSER_RE.test(str[p])) {
+      p++;
+      continue;
+    }
+    break;
   }
   if (p >= len) return tokenEnd;
 
-  // 3a. Effective EOF (only whitespace and closing quotes/brackets remain).
-  let q = p;
-  while (q < len && IS_TRAIL_CLOSER_RE.test(str[q])) {
-    if (bumpStep()) return -1;
-    q++;
-  }
-  if (q >= len) return tokenEnd;
-
-  // 3b. Bare ellipsis or spaced dots after whitespace (... / … / . . . / attached '.' + ' .').
+  // 3a. Bare ellipsis or spaced dots after whitespace/closing wrappers (... / … / . . . / attached '.' + ' .').
   if (str[p] === '…' || str[p] === '⋯') return tokenEnd;
   if (str[p] === '.' || (str[p] === '\\' && str[p + 1] === '.')) {
-    let dots = tokenBody.endsWith('.') ? 1 : 0;
+    const coreBody = tokenBody.replace(TRAIL_WRAPPER_TRIM_RE, '');
+    let dots = coreBody.endsWith('.') ? 1 : 0;
     let r = p;
     while (r < len) {
       if (bumpStep()) return -1;
@@ -320,7 +324,7 @@ function findAmbiguousTruncationEnd(str, offset, tokenEnd, budget) {
     if (dots >= 2) return tokenEnd;
   }
 
-  // 3c. Whitespace-separated balanced abbreviation wrapper ([...], [. . .], [   ...], ( … ), { … }, 【…】, （…）).
+  // 3b. Whitespace/wrapper-separated balanced abbreviation wrapper ([...], [. . .], [   ...], ( … ), { … }, 【…】, （…）).
   let openCh = str[p];
   let r = p + 1;
   if (openCh === '\\' && p + 1 < len && Object.hasOwn(AMBIGUOUS_OPENER_MAP, str[p + 1])) {
@@ -600,7 +604,7 @@ function matchUrlStartAt(str, offset, identBeforeUnderscores = false, budget = n
   // reserves structural IPv6/port cuts independently of heuristic punctuation cuts, scans by full Unicode code point
   // within a shared global CPU/validation budget, snapshots per-cut bracket/paren counts,
   // and fails closed on truncated EOF fragments, lookahead caps, or cut-bucket overflow.
-  if (!prevIsAlnum && offset + 3 < len && c0 === 47 && str.charCodeAt(offset + 1) === 47 && prev !== 58 && prev !== 47) {
+  if (!prevIsAlnum && offset + 2 < len && c0 === 47 && str.charCodeAt(offset + 1) === 47 && prev !== 58 && prev !== 47) {
     const next = str[offset + 2];
     if (next && next !== '/' && !isBareUrlStop(next)) {
       let k = offset + 2;
